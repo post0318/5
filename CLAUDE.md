@@ -10,26 +10,47 @@
 
 ## 기술 스택
 
-- Next.js (App Router) + TypeScript
-- Tailwind CSS + shadcn/ui (다크/라이트 모드)
-- TanStack Table (테이블), TanStack Query 또는 Next.js fetch 캐싱
-- Recharts (차트)
-- Postgres (Neon 등, Vercel Marketplace) — 유니버스 저장
-- date-fns (날짜)
-- 배포: Vercel
+- Next.js 16 (App Router) + TypeScript, Turbopack
+- Tailwind CSS 4 + shadcn/ui (radix-nova preset), next-themes 다크/라이트
+- TanStack Query (클라이언트 패칭), TanStack Table v8
+- Recharts (차트 — 아직 미사용)
+- Drizzle ORM + libSQL(SQLite, `data/app.db`) — 개인용. 확장 시 Postgres 이식
+- date-fns, zod
+- yahoo-finance2 (서버 전용, `serverExternalPackages` 등록됨)
+
+## 코드 구조
+
+```
+src/lib/format.ts              숫자·통화 포맷 (콤마, trunc)
+src/lib/dates.ts               날짜 방어 (연도 완성 판정, 루프 상한)
+src/lib/db/                    Drizzle 스키마 + 클라이언트
+src/lib/markets/
+  types.ts                    MarketAdapter 인터페이스 + DTO
+  registry.ts                 market → adapter
+  service.ts                  getStockOverview (L1~L4 병렬 집계)
+  deeplinks.ts                L4/L5 딥링크 URL 빌더
+  multiples.ts                L3 트레일링 멀티플 계산
+  us/edgar.ts                 미국 L1 (SEC EDGAR)
+  kr/opendart.ts jp/edinet.ts 골격 (키 발급 후 구현)
+  quote/                      Stooq + yahoo EOD, 오케스트레이터
+src/lib/universe/repo.ts       유니버스 CRUD + 일괄 파서
+src/app/api/                   Route Handlers
+src/components/                UI (num.tsx=포맷 표시, financials-table 등)
+```
 
 ## 명령어
 
-> 프로젝트 스캐폴딩 후 채울 것.
-
 ```
-# 개발 서버
-npm run dev
-
-# 빌드 / 타입체크 / 린트
-npm run build
-npm run lint
+npm run dev          # 개발 서버 (Turbopack)
+npm run build        # 프로덕션 빌드 (타입체크 포함)
+npm run typecheck    # tsc --noEmit
+npm run lint         # eslint
+npm run db:generate  # 스키마 변경 후 마이그레이션 생성
+npm run db:migrate   # 마이그레이션 적용 (로컬 data/app.db)
+npm run db:studio    # drizzle studio
 ```
+
+커밋 전 `npm run build` 와 `npm run lint` 통과 확인.
 
 ## 아키텍처 규칙
 

@@ -269,13 +269,27 @@
 - [ ] L4/L5 딥링크 **URL 패턴** 확정 (대상 사이트는 §4.6 초안 완료)
 - [ ] MarketScreener 무료 열람 제한 범위 확인
 
-## 13. 다음 단계
+## 13. 진행 상황
 
-1. Next.js + shadcn/ui 스캐폴딩
-2. Postgres 스키마 (유니버스, 종목 마스터, 시세, 재무, 공시·컨센서스 캐시)
-3. 데이터 소스 어댑터 인터페이스 정의 (`lib/markets/`, 소스 교체 지점 격리)
-4. L1 어댑터 3종 (OpenDART / EDGAR / EDINET) + Route Handler
-5. L2 Stooq 커넥터 (+ yahoo-finance2 보조) + Cron 배치
-6. L4 yahoo-finance2 `quoteSummary` 커넥터 + 딥링크 URL 빌더
-7. 공통 유틸 (`formatCurrency`, 날짜 방어)
-8. 화면: 시장 탭 → 종목분석 → 유니버스 통합 뷰 → 유니버스 관리
+### 완료 (v0.1 스캐폴드)
+- [x] Next.js 16 + TS + Tailwind 4 + shadcn/ui 스캐폴딩
+- [x] 데이터 소스 어댑터 인터페이스 (`src/lib/markets/types.ts`, `registry.ts`)
+- [x] L1 미국 어댑터 (SEC EDGAR — 회사정보·재무제표·공시, 키 불필요)
+- [x] L1 한국/일본 어댑터 골격 (키 발급 후 구현 대기 — NotConfiguredError + 딥링크 동작)
+- [x] L2 시세 (Stooq 주 → yahoo-finance2 폴백)
+- [x] L3 트레일링 멀티플 자체 계산 (현재 최근 연간 기준)
+- [x] L4 포워드 컨센서스 (yahoo-finance2, 개인용) + 딥링크 병행
+- [x] L5 뉴스 딥링크
+- [x] 공통 유틸 `format.ts` (콤마·trunc), `dates.ts` (연도 방어·루프 상한)
+- [x] DB: Drizzle + libSQL(SQLite), `universe_items` 스키마 + 마이그레이션
+- [x] 유니버스 관리 (개별 등록 / 일괄 업로드 파서 / 활성 토글 / 삭제)
+- [x] 화면: 시장 탭 · 종목분석(개요/재무제표/공시) · 유니버스 통합 뷰 · 유니버스 관리
+- [x] 다크/라이트 모드, tabular-nums, 마이너스 빨간색, 강조행 배경색
+
+### 다음
+1. 한국(OpenDART) 어댑터 구현 — corp_code 매핑(zip) + 재무제표/공시/기업개황
+2. 일본(EDINET) 어댑터 구현 — 문서목록 + XBRL 파싱
+3. 정확한 TTM 멀티플 (EDGAR 분기 start/end 구간 판별)
+4. 배치 수집 → DB 캐시 + Vercel Cron (prd.md §4.5)
+5. §12 미결 사항 확정 (강조 계정, 음수/null 표기, 인증, 그룹/태그 UI)
+6. 재무제표 차트(Recharts), 종목 검색 자동완성
