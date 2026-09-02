@@ -30,9 +30,12 @@ src/lib/markets/
   service.ts                  getStockOverview (L1~L4 병렬 집계)
   deeplinks.ts                L4/L5 딥링크 URL 빌더
   multiples.ts                L3 트레일링 멀티플 계산
-  us/edgar.ts                 미국 L1 (SEC EDGAR)
-  kr/opendart.ts jp/edinet.ts 골격 (키 발급 후 구현)
-  quote/                      Stooq + yahoo EOD, 오케스트레이터
+  search.ts                   종목명·코드 검색 (시장별)
+  us/edgar.ts                 미국 L1 (SEC EDGAR) + searchEdgarTickers
+  kr/opendart.ts              한국 L1 (OpenDART)
+  kr/corpcode.ts              corpCode.xml(zip) → stock_code↔corp_code, 이름 검색
+  jp/edinet.ts                골격 (EDINET 키 발급 후 구현)
+  quote/                      Stooq + yahoo EOD(.KS/.KQ 폴백), 오케스트레이터
 src/lib/universe/repo.ts       유니버스 CRUD + 일괄 파서
 src/app/api/                   Route Handlers
 src/components/                UI (num.tsx=포맷 표시, financials-table 등)

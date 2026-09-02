@@ -2,13 +2,13 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Search, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import type { MarketId } from "@/lib/markets/types";
 import type { StockOverview } from "@/lib/markets/service";
 import type { FinancialStatement, Filing } from "@/lib/markets/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -21,22 +21,22 @@ import { ChangePercent, Money, Multiple, NumberText } from "@/components/num";
 import { FinancialsTable } from "@/components/financials-table";
 import { DeepLinkList } from "@/components/deep-links";
 
-const PLACEHOLDER: Record<MarketId, string> = {
-  kr: "예: 005930",
-  us: "예: AAPL",
-  jp: "예: 7203",
-};
-
 export function StockAnalysis({ market }: { market: MarketId }) {
-  const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState<string | null>(null);
+  const [yahooOverride, setYahooOverride] = useState<string | null>(null);
   const [period, setPeriod] = useState<"annual" | "quarter">("annual");
 
+  function pick(hit: SymbolHit) {
+    setSymbol(hit.symbol);
+    setYahooOverride(hit.yahooSymbol ?? null);
+  }
+
   const overview = useQuery({
-    queryKey: ["overview", market, symbol],
+    queryKey: ["overview", market, symbol, yahooOverride],
     queryFn: () =>
       apiFetch<StockOverview>(
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/overview`,
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/overview` +
+          (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
       ),
     enabled: Boolean(symbol),
   });
@@ -69,36 +69,20 @@ export function StockAnalysis({ market }: { market: MarketId }) {
           market,
           symbol,
           name: overview.data?.profile?.name ?? undefined,
+          yahooSymbol: yahooOverride ?? undefined,
         }),
       }),
   });
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const v = input.trim();
-    if (v) setSymbol(v);
-  }
 
   const ov = overview.data;
 
   return (
     <div className="space-y-6">
-      <form onSubmit={submit} className="flex max-w-md gap-2">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={PLACEHOLDER[market]}
-          aria-label="종목코드"
-        />
-        <Button type="submit">
-          <Search className="size-4" />
-          조회
-        </Button>
-      </form>
+      <SymbolSearch market={market} onSelect={pick} />
 
       {!symbol && (
         <p className="text-muted-foreground text-sm">
-          종목코드를 입력하고 조회하세요.
+          종목명 또는 코드로 검색하세요.
         </p>
       )}
 

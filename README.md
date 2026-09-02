@@ -18,15 +18,16 @@ npm run dev                    # http://localhost:3000
 
 | 레이어 | 한국 | 미국 | 일본 |
 |--------|------|------|------|
-| L1 회사정보·재무제표·공시 | ⏳ 골격 (DART_API_KEY 필요) | ✅ SEC EDGAR (키 불필요) | ⏳ 골격 (EDINET_API_KEY 필요) |
-| L2 EOD 시세 | ✅ Stooq → Yahoo 폴백 | ✅ | ✅ |
+| L1 회사정보·재무제표·공시 | ✅ OpenDART (DART_API_KEY 필요) | ✅ SEC EDGAR (키 불필요) | ⏳ 골격 (EDINET_API_KEY 필요) |
+| L2 EOD 시세 | ✅ Stooq → Yahoo(.KS/.KQ) 폴백 | ✅ | ✅ |
 | L3 트레일링 멀티플 | ✅ 자체 계산 | ✅ | ✅ |
 | L4 포워드 컨센서스 | ✅ yahoo-finance2(개인용) + 딥링크 | ✅ | ✅ |
 | L5 뉴스 | ✅ 딥링크 | ✅ 딥링크 | ✅ 딥링크 |
 
-- **미국은 API 키 없이 바로 동작.** 한국·일본은 각 기관에서 무료 키 발급 후 어댑터 구현 필요
-  (`src/lib/markets/kr/opendart.ts`, `src/lib/markets/jp/edinet.ts`).
-- 트레일링 멀티플은 현재 **최근 연간 재무 기준** (정확한 TTM은 후속 과제 — EDGAR 분기 누적값 판별 필요).
+- **종목 검색: 이름·코드 모두 지원** (한국=DART corpCode, 미국=EDGAR 티커맵, 일본=Yahoo search).
+- 일본 L1 은 EDINET 키 발급 후 어댑터 구현 필요 (`src/lib/markets/jp/edinet.ts`).
+- 트레일링 멀티플은 현재 **최근 연간 재무 기준** (정확한 TTM은 후속 과제).
+- 한국 시세는 yahoo `.KS/.KQ` 폴백 사용 — 값 정확도는 소스 의존. 공공데이터포털 폴백은 후속(prd §4.4).
 
 ## 화면
 

@@ -286,10 +286,16 @@
 - [x] 화면: 시장 탭 · 종목분석(개요/재무제표/공시) · 유니버스 통합 뷰 · 유니버스 관리
 - [x] 다크/라이트 모드, tabular-nums, 마이너스 빨간색, 강조행 배경색
 
+### 완료 (v0.2)
+- [x] 한국(OpenDART) 어댑터 — corpCode 매핑(zip 파싱) + 기업개황 + 전체 재무제표(연/분기) + 공시목록
+- [x] 종목 검색 (이름·코드) — 한국 DART corpCode / 미국 EDGAR 티커맵 / 일본·공통 Yahoo search
+- [x] 검색 자동완성 UI (debounce, 키보드 네비)
+- [x] 한국 시세 Yahoo `.KS/.KQ` 자동 폴백
+
 ### 다음
-1. 한국(OpenDART) 어댑터 구현 — corp_code 매핑(zip) + 재무제표/공시/기업개황
-2. 일본(EDINET) 어댑터 구현 — 문서목록 + XBRL 파싱
-3. 정확한 TTM 멀티플 (EDGAR 분기 start/end 구간 판별)
-4. 배치 수집 → DB 캐시 + Vercel Cron (prd.md §4.5)
+1. 일본(EDINET) 어댑터 구현 — 문서목록 + XBRL 파싱
+2. 정확한 TTM 멀티플 (EDGAR 분기 start/end 구간 판별)
+3. 한국 시세 정확도 — 공공데이터포털/KRX 폴백 추가 (§4.4)
+4. 배치 수집 → DB 캐시 + Vercel Cron (§4.5)
 5. §12 미결 사항 확정 (강조 계정, 음수/null 표기, 인증, 그룹/태그 UI)
-6. 재무제표 차트(Recharts), 종목 검색 자동완성
+6. 재무제표 차트(Recharts)

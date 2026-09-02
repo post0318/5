@@ -69,31 +69,46 @@ function isoDate(d: Date | string): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** KR은 KOSPI(.KS)/KOSDAQ(.KQ) 구분이 필요 → override 없으면 둘 다 시도 */
+function candidateSymbols(market: MarketId, symbol: string, override?: string | null): string[] {
+  if (override) return [override];
+  if (market === "kr") {
+    const code = symbol.replace(/[^0-9]/g, "").padStart(6, "0").slice(-6);
+    return [`${code}.KS`, `${code}.KQ`];
+  }
+  return [yahooSymbol(market, symbol)];
+}
+
 export async function fetchYahooEod(
   market: MarketId,
   symbol: string,
   opts: { from?: string; to?: string; yahooOverride?: string | null } = {},
 ): Promise<QuoteBar[]> {
-  const s = yahooSymbol(market, symbol, opts.yahooOverride);
-  try {
-    const res = await yf().chart(s, {
-      period1: opts.from ?? "2019-01-01",
-      period2: opts.to ?? isoDate(new Date()),
-      interval: "1d",
-    });
-    return res.quotes
-      .filter((q) => q.close != null)
-      .map((q) => ({
-        date: isoDate(q.date),
-        open: q.open ?? null,
-        high: q.high ?? null,
-        low: q.low ?? null,
-        close: q.close ?? null,
-        volume: q.volume ?? null,
-      }));
-  } catch (err) {
-    throw new AdapterError(`Yahoo 시세 조회 실패: ${s}`, { cause: err });
+  const candidates = candidateSymbols(market, symbol, opts.yahooOverride);
+  let lastErr: unknown;
+  for (const s of candidates) {
+    try {
+      const res = await yf().chart(s, {
+        period1: opts.from ?? "2019-01-01",
+        period2: opts.to ?? isoDate(new Date()),
+        interval: "1d",
+      });
+      const bars = res.quotes
+        .filter((q) => q.close != null)
+        .map((q) => ({
+          date: isoDate(q.date),
+          open: q.open ?? null,
+          high: q.high ?? null,
+          low: q.low ?? null,
+          close: q.close ?? null,
+          volume: q.volume ?? null,
+        }));
+      if (bars.length) return bars;
+    } catch (err) {
+      lastErr = err;
+    }
   }
+  throw new AdapterError(`Yahoo 시세 조회 실패: ${candidates.join(", ")}`, { cause: lastErr });
 }
 
 export async function fetchForwardConsensus(
@@ -101,14 +116,21 @@ export async function fetchForwardConsensus(
   symbol: string,
   yahooOverride?: string | null,
 ): Promise<ForwardConsensus> {
-  const s = yahooSymbol(market, symbol, yahooOverride);
-  let qs: QuoteSummaryResult;
-  try {
-    qs = await yf().quoteSummary(s, {
-      modules: ["summaryDetail", "defaultKeyStatistics", "financialData", "earningsTrend"],
-    });
-  } catch (err) {
-    throw new AdapterError(`Yahoo 컨센서스 조회 실패: ${s}`, { cause: err });
+  const candidates = candidateSymbols(market, symbol, yahooOverride);
+  let qs: QuoteSummaryResult | null = null;
+  let lastErr: unknown;
+  for (const s of candidates) {
+    try {
+      qs = await yf().quoteSummary(s, {
+        modules: ["summaryDetail", "defaultKeyStatistics", "financialData", "earningsTrend"],
+      });
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!qs) {
+    throw new AdapterError(`Yahoo 컨센서스 조회 실패: ${candidates.join(", ")}`, { cause: lastErr });
   }
 
   const fd = qs.financialData ?? {};

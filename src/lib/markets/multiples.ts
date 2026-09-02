@@ -11,13 +11,16 @@ import type {
 } from "./types";
 import { MARKET_CURRENCY } from "./types";
 
-/** 재무제표에서 특정 계정의 가장 최근 값을 찾는다. */
+const norm = (s: string) => s.replace(/\s/g, "");
+
+/** 재무제표에서 특정 계정의 가장 최근 값을 찾는다. (공백 무시 매칭) */
 function latestValue(fs: FinancialStatement, accountIds: string[]): number | null {
+  const targets = new Set(accountIds.map(norm));
   const periodLabels = fs.periods.map((p) => p.label);
   for (const section of fs.sections) {
     for (const item of section.items) {
-      const key = item.accountId ?? item.accountName;
-      if (!accountIds.includes(key)) continue;
+      const key = norm(item.accountId ?? item.accountName);
+      if (!targets.has(key)) continue;
       for (const label of periodLabels) {
         const v = item.values[label];
         if (v != null) return v;
@@ -64,27 +67,49 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   const epsDiluted = flowValue(annual, quarterly, [
     "EarningsPerShareDiluted",
     "EPS (Diluted)",
+    "희석주당이익",
+    "희석주당순이익",
+    "주당이익",
+    "기본주당이익",
   ]);
-  const netIncome = flowValue(annual, quarterly, ["NetIncomeLoss", "Net Income"]);
+  const netIncome = flowValue(annual, quarterly, [
+    "NetIncomeLoss",
+    "Net Income",
+    "당기순이익",
+    "당기순이익(손실)",
+    "분기순이익",
+    "반기순이익",
+    "연결당기순이익",
+  ]);
   const revenue = flowValue(annual, quarterly, [
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     "Revenues",
+    "매출액",
+    "수익(매출액)",
+    "매출",
+    "영업수익",
   ]);
   const equity = latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
     "StockholdersEquity",
     "Stockholders' Equity",
+    "자본총계",
   ]);
   const totalLiabilities = latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
     "Liabilities",
     "Total Liabilities",
+    "부채총계",
   ]);
   const cash = latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
     "CashAndCashEquivalentsAtCarryingValue",
     "Cash & Equivalents",
+    "현금및현금성자산",
+    "기말현금및현금성자산",
   ]);
   const opIncome = flowValue(annual, quarterly, [
     "OperatingIncomeLoss",
     "Operating Income",
+    "영업이익",
+    "영업이익(손실)",
   ]);
 
   const shares =

@@ -56,6 +56,28 @@ async function resolveCik(symbol: string): Promise<{ cik: string; row: TickerRow
   return { cik: cik10(row.cik_str), row };
 }
 
+/** 티커 또는 회사명으로 EDGAR 상장사 검색 */
+export async function searchEdgarTickers(
+  query: string,
+): Promise<{ ticker: string; title: string }[]> {
+  const map = await loadTickerMap();
+  const q = query.trim().toUpperCase();
+  if (!q) return [];
+  const starts: { ticker: string; title: string }[] = [];
+  const contains: { ticker: string; title: string }[] = [];
+  for (const row of map.values()) {
+    const ticker = row.ticker.toUpperCase();
+    const title = row.title.toUpperCase();
+    if (ticker === q || title.startsWith(q)) {
+      starts.push({ ticker: row.ticker, title: row.title });
+    } else if (ticker.startsWith(q) || title.includes(q)) {
+      contains.push({ ticker: row.ticker, title: row.title });
+    }
+    if (starts.length >= 8) break;
+  }
+  return [...starts, ...contains].slice(0, 8);
+}
+
 // ---- submissions (프로필 + 공시) ----------------------------------------
 
 interface SubmissionsResponse {
