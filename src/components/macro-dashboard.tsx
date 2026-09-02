@@ -641,14 +641,6 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       activeDot={{ r: 3, strokeWidth: 0 }}
                     />
                   )}
-                  {chartData.length > 0 && (
-                    <ReferenceLine
-                      x={chartData[chartData.length - 1].date}
-                      stroke="var(--muted-foreground)"
-                      strokeDasharray="1 3"
-                      strokeOpacity={0.4}
-                    />
-                  )}
                 </AreaChart>
               </ResponsiveContainer>
             </div>
