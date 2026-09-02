@@ -131,6 +131,10 @@ export interface EodQuote {
   changePct: number | null;
   bars: QuoteBar[];
   source: string;
+  /** 상장주식수 (제공 소스에서만 — KRX 등) */
+  sharesOutstanding?: number | null;
+  /** 시가총액 (제공 소스에서만) */
+  marketCap?: number | null;
 }
 
 /** 트레일링 멀티플 (L3, 자체 계산). */

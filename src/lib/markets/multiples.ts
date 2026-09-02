@@ -63,6 +63,7 @@ export interface MultiplesInput {
 export function computeTrailingMultiples(input: MultiplesInput): TrailingMultiples {
   const { market, symbol, quote, annual, quarterly, sharesOutstanding } = input;
   const price = quote.last;
+  const quotedMarketCap = quote.marketCap ?? null;
 
   const epsDiluted = flowValue(annual, quarterly, [
     "EarningsPerShareDiluted",
@@ -124,7 +125,8 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   const shares =
     sharesOutstanding ??
     (netIncome != null && epsDiluted ? netIncome / epsDiluted : null);
-  const marketCap = price != null && shares != null ? price * shares : null;
+  const marketCap =
+    quotedMarketCap ?? (price != null && shares != null ? price * shares : null);
 
   const per = price != null && epsDiluted ? price / epsDiluted : null;
   const bps = equity != null && shares ? equity / shares : null;

@@ -65,6 +65,7 @@ export async function getStockOverview(
       quote,
       annual: annual as FinancialStatement | null,
       quarterly: quarterly as FinancialStatement | null,
+      sharesOutstanding: quote.sharesOutstanding ?? null,
     });
   }
 

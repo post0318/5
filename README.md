@@ -19,14 +19,14 @@ npm run dev                    # http://localhost:3000
 | 레이어 | 한국 | 미국 | 일본 |
 |--------|------|------|------|
 | L1 회사정보·재무제표·공시 | ✅ OpenDART (DART_API_KEY) | ✅ SEC EDGAR (키 불필요) | ✅ EDINET (EDINET_API_KEY) — 연간 5기 요약 |
-| L2 EOD 시세 | ✅ Stooq → Yahoo(.KS/.KQ) 폴백 | ✅ | ✅ |
+| L2 EOD 시세 | ✅ KRX OPEN API (KRX_API_KEY) → Stooq → Yahoo | ✅ Stooq → Yahoo | ✅ Stooq → Yahoo |
 | L3 트레일링 멀티플 | ✅ 자체 계산 | ✅ | ✅ |
 | L4 포워드 컨센서스 | ✅ yahoo-finance2(개인용) + 딥링크 | ✅ | ✅ |
 | L5 뉴스 | ✅ 딥링크 | ✅ 딥링크 | ✅ 딥링크 |
 
 - **종목 검색: 이름·코드 모두 지원** (한국=DART corpCode, 미국=EDGAR 티커맵, 일본=EDINET 코드목록).
 - 트레일링 멀티플은 현재 **최근 연간 재무 기준** (정확한 TTM은 후속 과제).
-- 한국 시세는 yahoo `.KS/.KQ` 폴백 사용 — 값 정확도는 소스 의존. 공공데이터포털 폴백은 후속(prd §4.4).
+- 한국 시세는 KRX 공식 API (OHLCV + 상장주식수 + 시가총액). 키 없으면 Stooq/Yahoo 폴백.
 - 일본 재무는 有価証券報告書의 **경영지표(5기) 요약**. IFRS 제출사는 요약에 매출/영업이익이 없어 공란일 수 있음.
   분기 재무 미지원(四半期報告書 폐지). 첫 조회 시 최대 400일 EDINET 스캔(이후 캐시).
 
