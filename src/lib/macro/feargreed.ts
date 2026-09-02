@@ -34,14 +34,14 @@ const RATING_KO: Record<string, string> = {
   "extreme greed": "극도의 탐욕",
 };
 
-const COMPONENT_LABELS: { key: string; label: string }[] = [
-  { key: "market_momentum_sp125", label: "시장 모멘텀 (S&P vs 125일선)" },
-  { key: "stock_price_strength", label: "주가 강도 (신고가/신저가)" },
-  { key: "stock_price_breadth", label: "주가 폭 (거래량 확산)" },
-  { key: "put_call_options", label: "풋/콜 옵션" },
-  { key: "market_volatility_vix", label: "변동성 (VIX)" },
-  { key: "safe_haven_demand", label: "안전자산 선호" },
-  { key: "junk_bond_demand", label: "정크본드 수요" },
+const COMPONENT_LABELS: { key: string; label: string; valueLabel: string }[] = [
+  { key: "market_momentum_sp125", label: "시장 모멘텀 (S&P vs 125일선)", valueLabel: "S&P500 125일 이동평균" },
+  { key: "stock_price_strength", label: "주가 강도 (신고가/신저가)", valueLabel: "52주 신고가 − 신저가 (순비율)" },
+  { key: "stock_price_breadth", label: "주가 폭 (거래량 확산)", valueLabel: "McClellan 거래량 지표" },
+  { key: "put_call_options", label: "풋/콜 옵션", valueLabel: "5일 풋/콜 비율" },
+  { key: "market_volatility_vix", label: "변동성 (VIX)", valueLabel: "VIX" },
+  { key: "safe_haven_demand", label: "안전자산 선호", valueLabel: "주식 − 국채 20일 수익률차 (%p)" },
+  { key: "junk_bond_demand", label: "정크본드 수요", valueLabel: "정크본드 − 투자등급 스프레드 (%p)" },
 ];
 
 export interface FearGreed {
@@ -54,7 +54,15 @@ export interface FearGreed {
   prev1m: number;
   prev1y: number;
   history: { date: string; value: number }[];
-  components: { label: string; score: number | null; rating: string | null }[];
+  components: {
+    key: string;
+    label: string;
+    valueLabel: string;
+    score: number | null;
+    rating: string | null;
+    /** 원본 지표 추이 (정규화 전 실제 값) */
+    history: { date: string; value: number }[];
+  }[];
   source: string;
   deepLink: string;
 }
@@ -93,12 +101,20 @@ export async function getFearGreed(): Promise<FearGreed | null> {
     .slice(-180)
     .map((d) => ({ date: new Date(d.x).toISOString().slice(0, 10), value: Math.round(d.y * 100) / 100 }));
 
-  const components = COMPONENT_LABELS.map(({ key, label }) => {
-    const c = raw[key] as { score?: number; rating?: string } | undefined;
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const components = COMPONENT_LABELS.map(({ key, label, valueLabel }) => {
+    const c = raw[key] as
+      | { score?: number; rating?: string; data?: { x: number; y: number }[] }
+      | undefined;
     return {
+      key,
       label,
+      valueLabel,
       score: typeof c?.score === "number" ? Math.round(c.score * 10) / 10 : null,
       rating: c?.rating ?? null,
+      history: (c?.data ?? [])
+        .slice(-180)
+        .map((d) => ({ date: new Date(d.x).toISOString().slice(0, 10), value: round2(d.y) })),
     };
   });
 

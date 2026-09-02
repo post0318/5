@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Line,
@@ -59,7 +59,14 @@ interface FearGreed {
   prev1m: number;
   prev1y: number;
   history: { date: string; value: number }[];
-  components: { label: string; score: number | null; rating: string | null }[];
+  components: {
+    key: string;
+    label: string;
+    valueLabel: string;
+    score: number | null;
+    rating: string | null;
+    history: { date: string; value: number }[];
+  }[];
   source: string;
   deepLink: string;
 }
@@ -342,13 +349,34 @@ function FearGreedGauge({
   );
 }
 
+const SHORT_COMPONENT: Record<string, string> = {
+  market_momentum_sp125: "모멘텀",
+  stock_price_strength: "주가강도",
+  stock_price_breadth: "주가폭",
+  put_call_options: "풋/콜",
+  market_volatility_vix: "변동성",
+  safe_haven_demand: "안전자산",
+  junk_bond_demand: "정크본드",
+};
+
 function FearGreedCard({ fg }: { fg: FearGreed }) {
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const selected = fg.components.find((c) => c.key === selectedKey) ?? null;
+
   const trend = (label: string, val: number) => (
     <span className="text-muted-foreground">
       {label}{" "}
       <b className={cn(val > fg.score ? "text-down" : val < fg.score ? "text-up" : "")}>{val}</b>
     </span>
   );
+
+  // 현재 점수가 속한 25단위 구간
+  const zone = Math.min(3, Math.floor(fg.score / 25)); // 0..3
+  const zoneFill = (idx: number, base: string) =>
+    idx === zone ? { fill: base, fillOpacity: 0.22 } : { fill: base, fillOpacity: 0.05 };
+
+  const chartData = selected ? selected.history : fg.history;
+
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -383,31 +411,53 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
           {/* 오른쪽: 추이 라인차트 */}
           <div className="space-y-1">
             <div className="text-muted-foreground flex items-center justify-between text-xs">
-              <span>F&amp;G 추이</span>
-              <span className="flex gap-3">
-                {trend("전일", fg.prevClose)}
-                {trend("1주", fg.prev1w)}
-                {trend("1개월", fg.prev1m)}
-                {trend("1년", fg.prev1y)}
+              <span className="text-foreground font-medium">
+                {selected ? selected.label : "F&G 종합"}
               </span>
+              {selected ? (
+                <button
+                  className="hover:text-foreground underline underline-offset-2"
+                  onClick={() => setSelectedKey(null)}
+                >
+                  ← 종합으로
+                </button>
+              ) : (
+                <span className="flex gap-3">
+                  {trend("전일", fg.prevClose)}
+                  {trend("1주", fg.prev1w)}
+                  {trend("1개월", fg.prev1m)}
+                  {trend("1년", fg.prev1y)}
+                </span>
+              )}
             </div>
+            {selected && (
+              <div className="text-muted-foreground text-[11px]">{selected.valueLabel} · 원본 값</div>
+            )}
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={fg.history} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                <LineChart data={chartData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
                   <XAxis
                     dataKey="date"
                     tick={{ fontSize: 10 }}
                     minTickGap={40}
                     tickFormatter={(d: string) => d.slice(2, 7)}
                   />
-                  <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 10 }} width={26} />
-                  <ReferenceArea y1={0} y2={25} fill="oklch(0.58 0.2 25)" fillOpacity={0.09} />
-                  <ReferenceArea y1={25} y2={50} fill="oklch(0.72 0.17 55)" fillOpacity={0.06} />
-                  <ReferenceArea y1={50} y2={75} fill="oklch(0.8 0.16 135)" fillOpacity={0.06} />
-                  <ReferenceArea y1={75} y2={100} fill="oklch(0.64 0.17 150)" fillOpacity={0.09} />
+                  {selected ? (
+                    <YAxis domain={["auto", "auto"]} tick={{ fontSize: 10 }} width={40} />
+                  ) : (
+                    <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 10 }} width={26} />
+                  )}
+                  {!selected && (
+                    <>
+                      <ReferenceArea y1={0} y2={25} {...zoneFill(0, "oklch(0.58 0.2 25)")} />
+                      <ReferenceArea y1={25} y2={50} {...zoneFill(1, "oklch(0.72 0.17 55)")} />
+                      <ReferenceArea y1={50} y2={75} {...zoneFill(2, "oklch(0.8 0.16 135)")} />
+                      <ReferenceArea y1={75} y2={100} {...zoneFill(3, "oklch(0.64 0.17 150)")} />
+                    </>
+                  )}
                   <Tooltip
                     contentStyle={{ fontSize: 11, padding: "4px 8px" }}
-                    formatter={(v) => [String(v), "F&G"]}
+                    formatter={(v) => [String(v), selected ? selected.valueLabel : "F&G"]}
                   />
                   <Line
                     type="monotone"
@@ -422,20 +472,37 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
           </div>
         </div>
 
-        <div className="grid gap-x-4 gap-y-1 border-t pt-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
-          {fg.components
-            .filter((c) => c.score != null)
-            .map((c) => (
-              <div key={c.label} className="flex items-center justify-between gap-2">
-                <span className="text-muted-foreground truncate">{c.label}</span>
-                <span className="tnum shrink-0" style={{ color: fgColor(c.score!) }}>
-                  {c.score}
+        {/* 세부지표 — 한 줄, 클릭 시 위 차트에 원본 추이 */}
+        <div className="grid grid-cols-2 gap-1.5 border-t pt-3 sm:grid-cols-4 lg:grid-cols-7">
+          {fg.components.map((c) => {
+            const active = c.key === selectedKey;
+            return (
+              <button
+                key={c.key}
+                onClick={() => setSelectedKey(active ? null : c.key)}
+                title={c.label}
+                className={cn(
+                  "flex flex-col items-center gap-0.5 rounded-md border px-1.5 py-1.5 text-center transition-colors",
+                  active
+                    ? "border-primary bg-secondary"
+                    : "border-border hover:bg-muted/50",
+                )}
+              >
+                <span className="text-muted-foreground w-full truncate text-[10px] leading-tight">
+                  {SHORT_COMPONENT[c.key] ?? c.label}
                 </span>
-              </div>
-            ))}
+                <span
+                  className="tnum text-sm font-semibold"
+                  style={{ color: c.score != null ? fgColor(c.score) : undefined }}
+                >
+                  {c.score ?? "-"}
+                </span>
+              </button>
+            );
+          })}
         </div>
         <p className="text-muted-foreground/80 text-[11px]">
-          {fg.asOf} · {fg.source} · 낮을수록 공포(저점 매수 관점), 높을수록 탐욕(과열 경계)
+          {fg.asOf} · {fg.source} · 세부지표 클릭 시 원본 값 추이 · 낮을수록 공포, 높을수록 탐욕
         </p>
       </CardContent>
     </Card>
