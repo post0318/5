@@ -433,8 +433,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     {
       threshold: number;
       aboveIsBad: boolean;
-      aboveLabel: string;
-      belowLabel: string;
+      aboveLabel?: string;
+      belowLabel?: string;
       refLabel?: string;
       /** Y축 눈금 간격 */
       tickStep?: number;
@@ -451,10 +451,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     market_volatility_vix: {
       threshold: 19.5, // VIX 장기(1990~) 평균 ≈ 19.5
       aboveIsBad: true,
-      aboveLabel: "▲ 역사적 평균 상회 · 변동성 확대",
-      belowLabel: "▼ 역사적 평균 하회 · 안정",
       refLabel: "역사적 평균 19.50",
-      tickStep: 0.5,
+      tickStep: 5, // 라벨은 5 단위
       domainSnap: 5,
     },
   };
@@ -598,28 +596,32 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                   )}
                   {divCfg && divDomain && (
                     <>
-                      <ReferenceArea
-                        y1={divCfg.threshold}
-                        y2={divDomain[1]}
-                        fillOpacity={0}
-                        label={{
-                          value: divCfg.aboveLabel,
-                          position: "insideTopLeft",
-                          fontSize: 9,
-                          fill: "var(--muted-foreground)",
-                        }}
-                      />
-                      <ReferenceArea
-                        y1={divDomain[0]}
-                        y2={divCfg.threshold}
-                        fillOpacity={0}
-                        label={{
-                          value: divCfg.belowLabel,
-                          position: "insideBottomLeft",
-                          fontSize: 9,
-                          fill: "var(--muted-foreground)",
-                        }}
-                      />
+                      {divCfg.aboveLabel && (
+                        <ReferenceArea
+                          y1={divCfg.threshold}
+                          y2={divDomain[1]}
+                          fillOpacity={0}
+                          label={{
+                            value: divCfg.aboveLabel,
+                            position: "insideTopLeft",
+                            fontSize: 9,
+                            fill: "var(--muted-foreground)",
+                          }}
+                        />
+                      )}
+                      {divCfg.belowLabel && (
+                        <ReferenceArea
+                          y1={divDomain[0]}
+                          y2={divCfg.threshold}
+                          fillOpacity={0}
+                          label={{
+                            value: divCfg.belowLabel,
+                            position: "insideBottomLeft",
+                            fontSize: 9,
+                            fill: "var(--muted-foreground)",
+                          }}
+                        />
+                      )}
                       <ReferenceLine
                         y={divCfg.threshold}
                         stroke="var(--muted-foreground)"
@@ -629,7 +631,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                           divCfg.refLabel
                             ? {
                                 value: divCfg.refLabel,
-                                position: "right",
+                                position: "insideTopRight",
                                 fontSize: 9,
                                 fill: "var(--muted-foreground)",
                               }
