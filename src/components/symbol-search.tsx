@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Search } from "lucide-react";
+import { toast } from "sonner";
 import { apiFetch } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import type { MarketId } from "@/lib/markets/types";
@@ -59,6 +60,7 @@ export function SymbolSearch({
   });
 
   const hits = q.data?.hits ?? [];
+  const [submitting, setSubmitting] = useState(false);
 
   function choose(hit: SymbolHit) {
     setInput("");
@@ -67,12 +69,41 @@ export function SymbolSearch({
     onSelect(hit);
   }
 
-  function submitRaw() {
+  /** 시장별 "코드 직접 입력"으로 볼 수 있는 패턴 */
+  function looksLikeCode(v: string): boolean {
+    if (market === "kr") return /^[A-Za-z]?\d{4,6}$/.test(v);
+    if (market === "jp") return /^\d{4}[A-Za-z]?$/.test(v);
+    return /^[A-Za-z][A-Za-z.\-]{0,6}$/.test(v); // us 티커
+  }
+
+  async function submit() {
     const v = input.trim();
     if (!v) return;
-    if (open && hits[active]) return choose(hits[active]);
-    // 자유 입력(코드 직접): 시장 어댑터가 정규화
-    choose({ symbol: v, name: v });
+
+    // 1) 이미 결과가 있으면 (하이라이트 → 없으면 첫 항목)
+    if (hits.length > 0) {
+      return choose(hits[active] ?? hits[0]);
+    }
+    // 2) 코드처럼 보이면 그대로 조회 (어댑터가 정규화)
+    if (looksLikeCode(v)) {
+      return choose({ symbol: v, name: v });
+    }
+    // 3) 이름 입력인데 디바운스/로딩이 아직이면 즉시 검색해서 첫 결과 선택
+    setSubmitting(true);
+    try {
+      const res = await apiFetch<{ hits: SymbolHit[] }>(
+        `/api/markets/${market}/search?q=${encodeURIComponent(v)}`,
+      );
+      if (res.hits.length > 0) {
+        choose(res.hits[0]);
+      } else {
+        toast.error(`"${v}" 검색 결과가 없습니다. 종목코드를 입력해 보세요.`);
+      }
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -95,7 +126,7 @@ export function SymbolSearch({
               setActive((a) => Math.max(a - 1, 0));
             } else if (e.key === "Enter") {
               e.preventDefault();
-              submitRaw();
+              void submit();
             } else if (e.key === "Escape") {
               setOpen(false);
             }
@@ -104,8 +135,8 @@ export function SymbolSearch({
           aria-label="종목 검색"
           autoComplete="off"
         />
-        <Button type="button" onClick={submitRaw}>
-          <Search className="size-4" />
+        <Button type="button" onClick={() => void submit()} disabled={submitting}>
+          {submitting ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
           조회
         </Button>
       </div>
