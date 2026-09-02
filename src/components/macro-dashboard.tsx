@@ -400,11 +400,11 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     minTickGap={40}
                     tickFormatter={(d: string) => d.slice(2, 7)}
                   />
-                  <YAxis domain={[0, 100]} ticks={[0, 25, 45, 55, 75, 100]} tick={{ fontSize: 10 }} width={26} />
-                  <ReferenceArea y1={0} y2={25} fill="oklch(0.58 0.2 25)" fillOpacity={0.06} />
-                  <ReferenceArea y1={25} y2={45} fill="oklch(0.72 0.17 55)" fillOpacity={0.06} />
-                  <ReferenceArea y1={55} y2={75} fill="oklch(0.8 0.16 135)" fillOpacity={0.06} />
-                  <ReferenceArea y1={75} y2={100} fill="oklch(0.64 0.17 150)" fillOpacity={0.06} />
+                  <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 10 }} width={26} />
+                  <ReferenceArea y1={0} y2={25} fill="oklch(0.58 0.2 25)" fillOpacity={0.09} />
+                  <ReferenceArea y1={25} y2={50} fill="oklch(0.72 0.17 55)" fillOpacity={0.06} />
+                  <ReferenceArea y1={50} y2={75} fill="oklch(0.8 0.16 135)" fillOpacity={0.06} />
+                  <ReferenceArea y1={75} y2={100} fill="oklch(0.64 0.17 150)" fillOpacity={0.09} />
                   <Tooltip
                     contentStyle={{ fontSize: 11, padding: "4px 8px" }}
                     formatter={(v) => [String(v), "F&G"]}
