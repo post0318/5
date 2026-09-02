@@ -563,9 +563,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       <ReferenceLine
                         y={0}
                         stroke="var(--muted-foreground)"
-                        strokeWidth={1}
-                        strokeOpacity={0.35}
-                        strokeDasharray="4 3"
+                        strokeDasharray="1 3"
+                        strokeOpacity={0.4}
                       />
                     </>
                   )}
@@ -646,8 +645,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     <ReferenceLine
                       x={chartData[chartData.length - 1].date}
                       stroke="var(--muted-foreground)"
-                      strokeDasharray="3 3"
-                      strokeOpacity={0.5}
+                      strokeDasharray="1 3"
+                      strokeOpacity={0.4}
                     />
                   )}
                 </AreaChart>
