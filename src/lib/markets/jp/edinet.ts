@@ -23,6 +23,7 @@ import {
 } from "../types";
 import { resolveEdinetByTicker } from "./edinetcode";
 import { fetchEdinetSummary } from "./financials";
+import { fetchJQuantsFinancials, hasJQuants } from "./jquants";
 
 const HINT =
   "일본(EDINET) 공시 연결에는 API 키가 필요합니다. " +
@@ -159,14 +160,25 @@ export const jpEdinetAdapter: MarketAdapter = {
   },
 
   async getFinancials(symbol, periodType): Promise<FinancialStatement> {
-    const apiKey = key();
-    if (!apiKey) throw new NotConfiguredError(HINT);
+    // 1순위: J-Quants (분기·연간 모두, 깔끔한 JSON) — 네트워크/자격증명 실패 시 폴백
+    if (hasJQuants()) {
+      try {
+        const jq = await fetchJQuantsFinancials(symbol, periodType);
+        if (jq) return jq;
+      } catch {
+        // J-Quants 실패 → EDINET
+      }
+    }
+
+    // 2순위: EDINET 有価証券報告書 (연간만)
     if (periodType === "quarter") {
       throw new AdapterError(
-        "일본 분기 재무는 준비 중입니다 (四半期報告書 폐지 → 半期報告書/決算短信). 연간 또는 딥링크를 이용하세요.",
+        "일본 분기 재무는 J-Quants 연결 시 제공됩니다. 연간 또는 딥링크를 이용하세요.",
         { status: 501 },
       );
     }
+    const apiKey = key();
+    if (!apiKey) throw new NotConfiguredError(HINT);
     const e = await resolveEdinetByTicker(symbol);
     const doc = await findLatestAnnual(apiKey, e.edinetCode);
     if (!doc) {

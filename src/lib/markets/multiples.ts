@@ -73,6 +73,7 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "주당이익",
     "기본주당이익",
     "基本的1株当たり当期利益 (円)",
+    "1株当たり当期純利益 (円)",
   ]);
   const netIncome = flowValue(annual, quarterly, [
     "NetIncomeLoss",
@@ -101,6 +102,7 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "자본총계",
     "純資産額",
     "親会社の所有者に帰属する持分",
+    "純資産 / 自己資本",
   ]);
   const totalLiabilities = latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
     "Liabilities",
