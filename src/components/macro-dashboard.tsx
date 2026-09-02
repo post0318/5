@@ -3,9 +3,13 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Area,
+  AreaChart,
+  CartesianGrid,
   Line,
   LineChart,
   ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -22,6 +26,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 type Verdict = "positive" | "negative" | "neutral";
 type Direction = "up" | "down" | "flat";
+
+// ── 공통 차트 스타일 ──────────────────────────────────────────────
+const AXIS_TICK = { fontSize: 10, fill: "var(--muted-foreground)" } as const;
+const TOOLTIP_STYLE = {
+  contentStyle: {
+    fontSize: 11,
+    padding: "6px 10px",
+    background: "var(--popover)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    color: "var(--popover-foreground)",
+  },
+  labelStyle: { color: "var(--muted-foreground)", marginBottom: 2, fontSize: 10 },
+  cursor: { stroke: "var(--border)", strokeWidth: 1 },
+} as const;
 
 interface Indicator {
   id: string;
@@ -435,38 +454,66 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
             )}
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fontSize: 10 }}
-                    minTickGap={40}
-                    tickFormatter={(d: string) => d.slice(2, 7)}
+                <AreaChart data={chartData} margin={{ top: 8, right: 10, bottom: 0, left: 0 }}>
+                  <defs>
+                    <linearGradient id="fgFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--foreground)" stopOpacity={0.14} />
+                      <stop offset="100%" stopColor="var(--foreground)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid
+                    stroke="var(--border)"
+                    strokeDasharray="2 4"
+                    strokeOpacity={0.6}
+                    syncWithTicks
                   />
-                  {selected ? (
-                    <YAxis domain={["auto", "auto"]} tick={{ fontSize: 10 }} width={40} />
-                  ) : (
-                    <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 10 }} width={26} />
-                  )}
                   {!selected && (
                     <>
-                      <ReferenceArea y1={0} y2={25} {...zoneFill(0, "oklch(0.55 0.21 27)")} />
-                      <ReferenceArea y1={25} y2={50} {...zoneFill(1, "oklch(0.70 0.18 50)")} />
-                      <ReferenceArea y1={50} y2={75} {...zoneFill(2, "oklch(0.86 0.12 150)")} />
-                      <ReferenceArea y1={75} y2={100} {...zoneFill(3, "oklch(0.50 0.16 166)")} />
+                      <ReferenceArea y1={0} y2={25} {...zoneFill(0, "oklch(0.55 0.21 27)")} ifOverflow="hidden" />
+                      <ReferenceArea y1={25} y2={50} {...zoneFill(1, "oklch(0.70 0.18 50)")} ifOverflow="hidden" />
+                      <ReferenceArea y1={50} y2={75} {...zoneFill(2, "oklch(0.86 0.12 150)")} ifOverflow="hidden" />
+                      <ReferenceArea y1={75} y2={100} {...zoneFill(3, "oklch(0.50 0.16 166)")} ifOverflow="hidden" />
                     </>
                   )}
+                  <XAxis
+                    dataKey="date"
+                    tick={AXIS_TICK}
+                    axisLine={false}
+                    tickLine={false}
+                    minTickGap={44}
+                    tickMargin={8}
+                    tickFormatter={(d: string) => d.slice(2, 7)}
+                  />
+                  <YAxis
+                    tick={AXIS_TICK}
+                    axisLine={false}
+                    tickLine={false}
+                    width={selected ? 40 : 28}
+                    domain={selected ? ["auto", "auto"] : [0, 100]}
+                    ticks={selected ? undefined : [0, 25, 50, 75, 100]}
+                  />
                   <Tooltip
-                    contentStyle={{ fontSize: 11, padding: "4px 8px" }}
+                    {...TOOLTIP_STYLE}
                     formatter={(v) => [String(v), selected ? selected.valueLabel : "F&G"]}
                   />
-                  <Line
+                  <Area
                     type="monotone"
                     dataKey="value"
                     stroke="var(--foreground)"
-                    strokeWidth={1.5}
+                    strokeWidth={1.75}
+                    fill="url(#fgFill)"
                     dot={false}
+                    activeDot={{ r: 3, strokeWidth: 0 }}
                   />
-                </LineChart>
+                  {chartData.length > 0 && (
+                    <ReferenceLine
+                      x={chartData[chartData.length - 1].date}
+                      stroke="var(--muted-foreground)"
+                      strokeDasharray="3 3"
+                      strokeOpacity={0.5}
+                    />
+                  )}
+                </AreaChart>
               </ResponsiveContainer>
             </div>
           </div>
