@@ -82,6 +82,6 @@ export async function getStockOverview(
       news: newsDeepLinks(market, symbol),
       filings: adapter.filingsDeepLink(symbol),
     },
-    warnings,
+    warnings: [...new Set(warnings)],
   };
 }

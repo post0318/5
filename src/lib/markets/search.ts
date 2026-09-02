@@ -83,6 +83,21 @@ async function edgarSearch(query: string): Promise<SearchHit[]> {
   }));
 }
 
+/** 일본: EDINET 코드 목록에서 일문/영문/코드로 검색 (키 불필요) */
+async function edinetSearch(query: string): Promise<SearchHit[]> {
+  try {
+    const { searchEdinet } = await import("./jp/edinetcode");
+    return (await searchEdinet(query)).map((e) => ({
+      symbol: e.ticker,
+      name: e.name,
+      exchange: "JPX",
+      yahooSymbol: `${e.ticker}.T`,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 /** 한국: OpenDART corpCode 목록에서 한글/영문/코드로 검색 */
 async function dartSearch(query: string): Promise<SearchHit[]> {
   const apiKey = process.env.DART_API_KEY;
@@ -108,6 +123,8 @@ export async function searchSymbols(market: MarketId, rawQuery: string): Promise
     results.push(...(await edgarSearch(query)));
   } else if (market === "kr") {
     results.push(...(await dartSearch(query)));
+  } else if (market === "jp") {
+    results.push(...(await edinetSearch(query)));
   }
   const yahoo = await yahooSearch(market, query);
 

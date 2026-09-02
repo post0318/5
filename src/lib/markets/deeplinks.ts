@@ -97,10 +97,9 @@ export function filingsDeepLink(market: MarketId, symbol: string): DeepLink | nu
       };
     }
     case "jp": {
-      const { code } = jpParts(symbol);
       return {
         label: "EDINET — 書類検索",
-        url: `https://disclosure2.edinet-fsa.go.jp/week0010.aspx?uc=1&_=${code}`,
+        url: "https://disclosure2.edinet-fsa.go.jp/week0010.aspx",
       };
     }
   }
