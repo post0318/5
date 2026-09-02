@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, LineChart, Settings2 } from "lucide-react";
+import { BarChart3, Globe, LineChart, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MARKETS, isMarketId } from "@/lib/markets/types";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -18,6 +18,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const market = parts[0] && isMarketId(parts[0]) ? parts[0] : "kr";
   const sub = parts[1] === "universe" ? "universe" : "analysis";
   const onManage = parts[0] === "manage";
+  const onMacro = parts[0] === "macro";
 
   return (
     <div className="flex min-h-full flex-col">
@@ -53,6 +54,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           <div className="ml-auto flex items-center gap-1">
             <Link
+              href="/macro"
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                onMacro
+                  ? "bg-secondary text-secondary-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Globe className="size-4" />
+              <span className="hidden sm:inline">거시경제</span>
+            </Link>
+            <Link
               href="/manage"
               className={cn(
                 "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
@@ -69,7 +82,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* 서브 내비 */}
-        {!onManage && (
+        {!onManage && !onMacro && (
           <div className="mx-auto max-w-[1400px] px-4">
             <div className="flex gap-4">
               {SUBNAV.map((s) => {
