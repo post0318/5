@@ -560,7 +560,13 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                           fill: "var(--muted-foreground)",
                         }}
                       />
-                      <ReferenceLine y={0} stroke="var(--muted-foreground)" strokeWidth={1} />
+                      <ReferenceLine
+                        y={0}
+                        stroke="var(--muted-foreground)"
+                        strokeWidth={1}
+                        strokeOpacity={0.35}
+                        strokeDasharray="4 3"
+                      />
                     </>
                   )}
                   <XAxis
