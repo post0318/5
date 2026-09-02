@@ -71,6 +71,7 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "희석주당순이익",
     "주당이익",
     "기본주당이익",
+    "基本的1株当たり当期利益 (円)",
   ]);
   const netIncome = flowValue(annual, quarterly, [
     "NetIncomeLoss",
@@ -80,6 +81,8 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "분기순이익",
     "반기순이익",
     "연결당기순이익",
+    "当期利益（親会社の所有者帰属）",
+    "当期純利益",
   ]);
   const revenue = flowValue(annual, quarterly, [
     "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -88,11 +91,15 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "수익(매출액)",
     "매출",
     "영업수익",
+    "売上高",
+    "営業収益 (IFRS)",
   ]);
   const equity = latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
     "StockholdersEquity",
     "Stockholders' Equity",
     "자본총계",
+    "純資産額",
+    "親会社の所有者に帰属する持分",
   ]);
   const totalLiabilities = latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
     "Liabilities",
@@ -110,6 +117,8 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "Operating Income",
     "영업이익",
     "영업이익(손실)",
+    "営業利益",
+    "営業利益 (IFRS)",
   ]);
 
   const shares =
