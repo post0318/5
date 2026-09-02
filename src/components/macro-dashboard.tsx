@@ -424,13 +424,23 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     for (let i = 0; i <= n; i++) {
       ticks.push(Math.round((min + i * yStep) * 1e6) / 1e6);
     }
-    // y=0 이 도메인에서 차지하는 위치 (0=상단, 1=하단) — 다이버징 면적 색상용
-    const zeroOffset =
-      max <= 0 ? 0 : min >= 0 ? 1 : max / (max - min);
-    return { domain: [min, max] as [number, number], ticks, zeroOffset };
+    return { domain: [min, max] as [number, number], ticks };
   }, [selected, yStep]);
 
-  const diverging = selected?.key === "safe_haven_demand" && yAxis;
+  const diverging = selected?.key === "safe_haven_demand" && !!yAxis;
+
+  // 다이버징(안전자산 선호): 0 기준으로 위/아래를 분리한 면적 데이터
+  const divergingData = useMemo(
+    () =>
+      diverging
+        ? chartData.map((d) => ({
+            ...d,
+            pos: d.value >= 0 ? d.value : 0,
+            neg: d.value < 0 ? d.value : 0,
+          }))
+        : chartData,
+    [diverging, chartData],
+  );
 
   // 세로 눈금 — F&G 종합은 월 단위, 세부지표는 분기(3개월) 단위
   const gridTicks = useMemo(() => {
@@ -505,18 +515,12 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
             )}
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ top: 8, right: 10, bottom: 0, left: 0 }}>
+                <AreaChart data={divergingData} margin={{ top: 8, right: 10, bottom: 0, left: 0 }}>
                   <defs>
                     <linearGradient id="fgFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="var(--foreground)" stopOpacity={0.14} />
                       <stop offset="100%" stopColor="var(--foreground)" stopOpacity={0} />
                     </linearGradient>
-                    {diverging && (
-                      <linearGradient id="shdSplit" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset={yAxis!.zeroOffset} stopColor="oklch(0.70 0.18 150)" stopOpacity={0.28} />
-                        <stop offset={yAxis!.zeroOffset} stopColor="oklch(0.58 0.21 27)" stopOpacity={0.28} />
-                      </linearGradient>
-                    )}
                   </defs>
                   <CartesianGrid
                     stroke="var(--muted-foreground)"
@@ -583,16 +587,53 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     {...TOOLTIP_STYLE}
                     formatter={(v) => [fmtVal(v as number), selected ? selected.valueLabel : "F&G"]}
                   />
-                  <Area
-                    type="monotone"
-                    dataKey="value"
-                    stroke="var(--foreground)"
-                    strokeWidth={1.75}
-                    fill={diverging ? "url(#shdSplit)" : "url(#fgFill)"}
-                    {...(diverging ? { baseValue: 0 } : {})}
-                    dot={false}
-                    activeDot={{ r: 3, strokeWidth: 0 }}
-                  />
+                  {diverging ? (
+                    <>
+                      <Area
+                        type="monotone"
+                        dataKey="pos"
+                        baseValue={0}
+                        isAnimationActive={false}
+                        tooltipType="none"
+                        stroke="none"
+                        fill="oklch(0.70 0.18 150)"
+                        fillOpacity={0.25}
+                        dot={false}
+                        activeDot={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="neg"
+                        baseValue={0}
+                        isAnimationActive={false}
+                        tooltipType="none"
+                        stroke="none"
+                        fill="oklch(0.58 0.21 27)"
+                        fillOpacity={0.25}
+                        dot={false}
+                        activeDot={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="value"
+                        stroke="var(--foreground)"
+                        strokeWidth={1.75}
+                        fill="none"
+                        dot={false}
+                        activeDot={{ r: 3, strokeWidth: 0 }}
+                      />
+                    </>
+                  ) : (
+                    <Area
+                      type="monotone"
+                      dataKey="value"
+                      stroke="var(--foreground)"
+                      strokeWidth={1.75}
+                      fill="url(#fgFill)"
+                      dot={false}
+                      activeDot={{ r: 3, strokeWidth: 0 }}
+                    />
+                  )}
                   {chartData.length > 0 && (
                     <ReferenceLine
                       x={chartData[chartData.length - 1].date}
