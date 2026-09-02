@@ -379,6 +379,30 @@ const SHORT_COMPONENT: Record<string, string> = {
   junk_bond_demand: "정크본드",
 };
 
+/** 원본 값이 오를 때 F&G 점수(탐욕)도 오르는가? (false면 역방향) */
+const HIGHER_RAW_IS_GREEDY: Record<string, boolean> = {
+  market_momentum_sp125: true,
+  stock_price_strength: true,
+  stock_price_breadth: true,
+  put_call_options: false, // 풋 많음 = 공포
+  market_volatility_vix: false, // VIX 높음 = 공포
+  safe_haven_demand: true, // 주식 > 채권 = 위험선호
+  junk_bond_demand: false, // 스프레드 확대 = 공포
+};
+
+/** 세부지표의 최근(약 1개월) 점수 방향: 1=상승(탐욕쪽), -1=하락, 0=변화없음 */
+function componentScoreDir(key: string, history: { value: number }[]): -1 | 0 | 1 {
+  if (history.length < 4) return 0;
+  const now = history[history.length - 1].value;
+  const then = history[Math.max(0, history.length - 21)].value;
+  if (!Number.isFinite(now) || !Number.isFinite(then) || then === 0) return 0;
+  const chgPct = Math.abs((now - then) / Math.abs(then));
+  if (chgPct < 0.01) return 0;
+  const rawUp = now > then;
+  const greedy = HIGHER_RAW_IS_GREEDY[key] ? rawUp : !rawUp;
+  return greedy ? 1 : -1;
+}
+
 function FearGreedCard({ fg }: { fg: FearGreed }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const selected = fg.components.find((c) => c.key === selectedKey) ?? null;
@@ -739,11 +763,12 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         <div className="grid grid-cols-2 gap-1.5 border-t pt-3 sm:grid-cols-4 lg:grid-cols-7">
           {fg.components.map((c) => {
             const active = c.key === selectedKey;
+            const dir = componentScoreDir(c.key, c.history);
             return (
               <button
                 key={c.key}
                 onClick={() => setSelectedKey(active ? null : c.key)}
-                title={c.label}
+                title={`${c.label}\n최근 약 1개월 ${dir === 1 ? "상승(탐욕쪽)" : dir === -1 ? "하락(공포쪽)" : "보합"}`}
                 className={cn(
                   "flex flex-col items-center gap-0.5 rounded-md border px-1.5 py-1.5 text-center transition-colors",
                   active
@@ -754,11 +779,23 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 <span className="text-muted-foreground w-full truncate text-[10px] leading-tight">
                   {SHORT_COMPONENT[c.key] ?? c.label}
                 </span>
-                <span
-                  className="tnum text-sm font-semibold"
-                  style={{ color: c.score != null ? fgColor(c.score) : undefined }}
-                >
-                  {c.score ?? "-"}
+                <span className="flex items-center gap-0.5">
+                  <span
+                    className="tnum text-sm font-semibold"
+                    style={{ color: c.score != null ? fgColor(c.score) : undefined }}
+                  >
+                    {c.score ?? "-"}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-[10px] leading-none",
+                      dir === 1 && "text-up",
+                      dir === -1 && "text-down",
+                      dir === 0 && "text-muted-foreground",
+                    )}
+                  >
+                    {dir === 1 ? "▲" : dir === -1 ? "▼" : "–"}
+                  </span>
                 </span>
               </button>
             );
