@@ -403,6 +403,26 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     return Number.isInteger(n) ? String(n) : n.toFixed(2);
   };
 
+  // 세부지표별 Y축 고정 눈금 간격 (정크본드=0.1 단위 등)
+  const stepByKey: Record<string, number> = {
+    junk_bond_demand: 0.1,
+    safe_haven_demand: 5, // 5%p 단위
+    put_call_options: 0.1,
+  };
+  const yStep = selected ? stepByKey[selected.key] : undefined;
+  const yAxis = useMemo(() => {
+    if (!yStep || !selected) return null;
+    const vals = selected.history.map((d) => d.value).filter(Number.isFinite);
+    if (!vals.length) return null;
+    const min = Math.floor(Math.min(...vals) / yStep) * yStep;
+    const max = Math.ceil(Math.max(...vals) / yStep) * yStep;
+    const ticks: number[] = [];
+    for (let v = min; v <= max + yStep / 2; v += yStep) {
+      ticks.push(Math.round(v / yStep) * yStep);
+    }
+    return { domain: [min, max] as [number, number], ticks };
+  }, [selected, yStep]);
+
   // 세로 눈금 — F&G 종합은 월 단위, 세부지표는 분기(3개월) 단위
   const gridTicks = useMemo(() => {
     const seen = new Set<string>();
@@ -512,9 +532,10 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     axisLine={false}
                     tickLine={false}
                     width={selected ? 46 : 30}
-                    domain={selected ? ["auto", "auto"] : [0, 100]}
-                    ticks={selected ? undefined : [0, 25, 50, 75, 100]}
-                    tickFormatter={fmtVal}
+                    domain={yAxis ? yAxis.domain : selected ? ["auto", "auto"] : [0, 100]}
+                    ticks={yAxis ? yAxis.ticks : selected ? undefined : [0, 25, 50, 75, 100]}
+                    tickFormatter={yAxis ? (v: number) => v.toFixed(2) : fmtVal}
+                    allowDecimals
                   />
                   <Tooltip
                     {...TOOLTIP_STYLE}
