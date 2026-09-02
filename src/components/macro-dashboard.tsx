@@ -202,12 +202,90 @@ export function MacroDashboard() {
   );
 }
 
+const FG_SEGMENTS = [
+  { from: 0, to: 25, color: "oklch(0.58 0.20 25)", label: "극도의 공포" },
+  { from: 25, to: 45, color: "oklch(0.72 0.16 55)", label: "공포" },
+  { from: 45, to: 55, color: "oklch(0.80 0.12 95)", label: "중립" },
+  { from: 55, to: 75, color: "oklch(0.75 0.15 150)", label: "탐욕" },
+  { from: 75, to: 100, color: "oklch(0.62 0.17 155)", label: "극도의 탐욕" },
+] as const;
+
 function fgColor(score: number): string {
-  if (score < 25) return "var(--down)";
-  if (score < 45) return "color-mix(in oklch, var(--down) 60%, var(--muted-foreground))";
-  if (score <= 55) return "var(--muted-foreground)";
-  if (score <= 75) return "color-mix(in oklch, var(--up) 60%, var(--muted-foreground))";
-  return "var(--up)";
+  return (FG_SEGMENTS.find((s) => score < s.to) ?? FG_SEGMENTS[FG_SEGMENTS.length - 1]).color;
+}
+
+/** CNN 스타일 반원 게이지 */
+function FearGreedGauge({ score }: { score: number }) {
+  const CX = 100;
+  const CY = 95;
+  const R = 74;
+  const SW = 16;
+  const clamped = Math.min(100, Math.max(0, score));
+  const needleAngle = -90 + clamped * 1.8;
+
+  return (
+    <svg viewBox="0 0 200 118" className="w-full max-w-[280px]" role="img" aria-label={`Fear & Greed ${score}`}>
+      {/* 배경 트랙 */}
+      <circle
+        cx={CX}
+        cy={CY}
+        r={R}
+        pathLength={100}
+        fill="none"
+        stroke="var(--muted)"
+        strokeWidth={SW}
+        strokeDasharray="50 100"
+        strokeLinecap="butt"
+        transform={`rotate(180 ${CX} ${CY})`}
+      />
+      {/* 색상 세그먼트 */}
+      {FG_SEGMENTS.map((s) => (
+        <circle
+          key={s.from}
+          cx={CX}
+          cy={CY}
+          r={R}
+          pathLength={100}
+          fill="none"
+          stroke={s.color}
+          strokeWidth={SW}
+          strokeDasharray={`${(s.to - s.from) / 2 - 0.6} 100`}
+          strokeDashoffset={-(s.from / 2)}
+          strokeLinecap="butt"
+          transform={`rotate(180 ${CX} ${CY})`}
+        />
+      ))}
+      {/* 눈금 */}
+      {[0, 25, 50, 75, 100].map((t) => {
+        const a = ((-90 + t * 1.8) * Math.PI) / 180;
+        const x1 = CX + (R - SW / 2 - 2) * Math.sin(a);
+        const y1 = CY - (R - SW / 2 - 2) * Math.cos(a);
+        const x2 = CX + (R + SW / 2 + 2) * Math.sin(a);
+        const y2 = CY - (R + SW / 2 + 2) * Math.cos(a);
+        return <line key={t} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--background)" strokeWidth={2} />;
+      })}
+      {/* 바늘 */}
+      <g transform={`rotate(${needleAngle} ${CX} ${CY})`}>
+        <polygon
+          points={`${CX - 5},${CY} ${CX + 5},${CY} ${CX},${CY - R - 4}`}
+          fill="var(--foreground)"
+        />
+        <circle cx={CX} cy={CY} r={7} fill="var(--foreground)" />
+        <circle cx={CX} cy={CY} r={3} fill="var(--background)" />
+      </g>
+      {/* 중앙 값 */}
+      <text
+        x={CX}
+        y={CY - 16}
+        textAnchor="middle"
+        fontSize="26"
+        fontWeight="700"
+        fill={fgColor(score)}
+      >
+        {score}
+      </text>
+    </svg>
+  );
 }
 
 function FearGreedCard({ fg }: { fg: FearGreed }) {
@@ -233,37 +311,19 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
-          <div className="flex items-baseline gap-2">
-            <span
-              className="tnum text-4xl font-bold"
-              style={{ color: fgColor(fg.score) }}
-            >
-              {fg.score}
-            </span>
-            <span className="text-sm font-medium" style={{ color: fgColor(fg.score) }}>
+        <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-center sm:gap-6">
+          <FearGreedGauge score={fg.score} />
+          <div className="space-y-2">
+            <div className="text-lg font-semibold" style={{ color: fgColor(fg.score) }}>
               {fg.ratingKo}
-            </span>
+            </div>
+            <div className="flex flex-col gap-1 text-xs">
+              {trend("전일", fg.prevClose)}
+              {trend("1주 전", fg.prev1w)}
+              {trend("1개월 전", fg.prev1m)}
+              {trend("1년 전", fg.prev1y)}
+            </div>
           </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-            {trend("전일", fg.prevClose)}
-            {trend("1주", fg.prev1w)}
-            {trend("1개월", fg.prev1m)}
-            {trend("1년", fg.prev1y)}
-          </div>
-        </div>
-
-        {/* 0-100 게이지 */}
-        <div className="relative h-2 overflow-hidden rounded-full bg-[linear-gradient(90deg,var(--down),var(--muted-foreground),var(--up))]">
-          <div
-            className="bg-foreground absolute top-1/2 size-3 -translate-y-1/2 rounded-full border-2 border-[var(--background)]"
-            style={{ left: `calc(${Math.min(100, Math.max(0, fg.score))}% - 6px)` }}
-          />
-        </div>
-        <div className="text-muted-foreground flex justify-between text-[10px]">
-          <span>0 극도의 공포</span>
-          <span>50</span>
-          <span>극도의 탐욕 100</span>
         </div>
 
         <div className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
