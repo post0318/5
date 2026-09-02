@@ -210,13 +210,13 @@ export function MacroDashboard() {
   );
 }
 
-// CNN 스타일 색상 스톱 (value → oklch)
+// 색상 스톱 (value → oklch). 공포=빨강/주황, 중립=금색, 탐욕=녹색(밝→진)
 const FG_STOPS: { at: number; l: number; c: number; h: number }[] = [
-  { at: 0, l: 0.58, c: 0.2, h: 25 }, // 빨강
-  { at: 25, l: 0.72, c: 0.17, h: 55 }, // 주황
-  { at: 50, l: 0.86, c: 0.15, h: 95 }, // 노랑
-  { at: 75, l: 0.8, c: 0.16, h: 135 }, // 연두
-  { at: 100, l: 0.64, c: 0.17, h: 150 }, // 초록
+  { at: 0, l: 0.55, c: 0.21, h: 27 }, // 극도의 공포 — 진한 빨강
+  { at: 25, l: 0.7, c: 0.18, h: 50 }, // 공포 — 주황
+  { at: 50, l: 0.84, c: 0.16, h: 88 }, // 중립 — 금색/황
+  { at: 75, l: 0.82, c: 0.13, h: 150 }, // 탐욕 — 연한 녹색
+  { at: 100, l: 0.5, c: 0.16, h: 166 }, // 극도의 탐욕 — 진한 청록
 ];
 
 function fgColor(score: number): string {
@@ -449,10 +449,10 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                   )}
                   {!selected && (
                     <>
-                      <ReferenceArea y1={0} y2={25} {...zoneFill(0, "oklch(0.58 0.2 25)")} />
-                      <ReferenceArea y1={25} y2={50} {...zoneFill(1, "oklch(0.72 0.17 55)")} />
-                      <ReferenceArea y1={50} y2={75} {...zoneFill(2, "oklch(0.8 0.16 135)")} />
-                      <ReferenceArea y1={75} y2={100} {...zoneFill(3, "oklch(0.64 0.17 150)")} />
+                      <ReferenceArea y1={0} y2={25} {...zoneFill(0, "oklch(0.55 0.21 27)")} />
+                      <ReferenceArea y1={25} y2={50} {...zoneFill(1, "oklch(0.70 0.18 50)")} />
+                      <ReferenceArea y1={50} y2={75} {...zoneFill(2, "oklch(0.86 0.12 150)")} />
+                      <ReferenceArea y1={75} y2={100} {...zoneFill(3, "oklch(0.50 0.16 166)")} />
                     </>
                   )}
                   <Tooltip
