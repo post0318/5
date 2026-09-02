@@ -521,6 +521,35 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       <ReferenceArea y1={75} y2={100} {...zoneFill(3, "oklch(0.50 0.16 166)")} ifOverflow="hidden" />
                     </>
                   )}
+                  {selected?.key === "safe_haven_demand" && yAxis && (
+                    <>
+                      <ReferenceArea
+                        y1={0}
+                        y2={yAxis.domain[1]}
+                        fill="oklch(0.70 0.18 150)"
+                        fillOpacity={0.06}
+                        label={{
+                          value: "▲ 주식성과가 채권을 능가",
+                          position: "insideTopLeft",
+                          fontSize: 9,
+                          fill: "var(--muted-foreground)",
+                        }}
+                      />
+                      <ReferenceArea
+                        y1={yAxis.domain[0]}
+                        y2={0}
+                        fill="oklch(0.58 0.21 27)"
+                        fillOpacity={0.06}
+                        label={{
+                          value: "▼ 채권성과가 주식을 능가",
+                          position: "insideBottomLeft",
+                          fontSize: 9,
+                          fill: "var(--muted-foreground)",
+                        }}
+                      />
+                      <ReferenceLine y={0} stroke="var(--muted-foreground)" strokeWidth={1} />
+                    </>
+                  )}
                   <XAxis
                     dataKey="date"
                     tick={AXIS_TICK}
