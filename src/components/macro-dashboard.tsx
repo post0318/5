@@ -38,10 +38,21 @@ interface Indicator {
   verdictReason: string;
   series: { date: string; value: number }[];
 }
+interface IndexQuote {
+  key: string;
+  name: string;
+  region: "kr" | "us" | "jp";
+  value: number | null;
+  change: number | null;
+  changePct: number | null;
+  asOf: string | null;
+  source: string;
+}
 interface Dashboard {
   asOf: string;
   indicators: Indicator[];
   summary: { positive: number; negative: number; neutral: number };
+  indices: IndexQuote[];
 }
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -95,6 +106,31 @@ export function MacroDashboard() {
         </div>
       )}
       {q.isError && <p className="text-destructive text-sm">{(q.error as Error).message}</p>}
+
+      {q.data && q.data.indices.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {q.data.indices.map((ix) => (
+            <div key={ix.key} className="border-border rounded-lg border p-3">
+              <div className="text-muted-foreground text-xs">{ix.name}</div>
+              <div className="tnum mt-1 text-lg font-semibold">
+                {ix.value != null ? formatNumber(ix.value, 2) : "-"}
+              </div>
+              <div
+                className={cn(
+                  "tnum text-xs",
+                  ix.changePct != null && ix.changePct > 0 && "text-up",
+                  ix.changePct != null && ix.changePct < 0 && "text-down",
+                  (ix.changePct == null || ix.changePct === 0) && "text-muted-foreground",
+                )}
+              >
+                {ix.changePct != null
+                  ? `${ix.changePct > 0 ? "+" : ""}${formatNumber(ix.changePct, 2)}%`
+                  : "-"}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {q.data && (
         <>
