@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Line,
   LineChart,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -202,87 +203,140 @@ export function MacroDashboard() {
   );
 }
 
-const FG_SEGMENTS = [
-  { from: 0, to: 25, color: "oklch(0.58 0.20 25)", label: "극도의 공포" },
-  { from: 25, to: 45, color: "oklch(0.72 0.16 55)", label: "공포" },
-  { from: 45, to: 55, color: "oklch(0.80 0.12 95)", label: "중립" },
-  { from: 55, to: 75, color: "oklch(0.75 0.15 150)", label: "탐욕" },
-  { from: 75, to: 100, color: "oklch(0.62 0.17 155)", label: "극도의 탐욕" },
-] as const;
+// CNN 스타일 색상 스톱 (value → oklch)
+const FG_STOPS: { at: number; l: number; c: number; h: number }[] = [
+  { at: 0, l: 0.58, c: 0.2, h: 25 }, // 빨강
+  { at: 25, l: 0.72, c: 0.17, h: 55 }, // 주황
+  { at: 50, l: 0.86, c: 0.15, h: 95 }, // 노랑
+  { at: 75, l: 0.8, c: 0.16, h: 135 }, // 연두
+  { at: 100, l: 0.64, c: 0.17, h: 150 }, // 초록
+];
 
 function fgColor(score: number): string {
-  return (FG_SEGMENTS.find((s) => score < s.to) ?? FG_SEGMENTS[FG_SEGMENTS.length - 1]).color;
+  const v = Math.min(100, Math.max(0, score));
+  let a = FG_STOPS[0];
+  let b = FG_STOPS[FG_STOPS.length - 1];
+  for (let i = 0; i < FG_STOPS.length - 1; i++) {
+    if (v >= FG_STOPS[i].at && v <= FG_STOPS[i + 1].at) {
+      a = FG_STOPS[i];
+      b = FG_STOPS[i + 1];
+      break;
+    }
+  }
+  const t = b.at === a.at ? 0 : (v - a.at) / (b.at - a.at);
+  const lerp = (x: number, y: number) => x + (y - x) * t;
+  return `oklch(${lerp(a.l, b.l).toFixed(3)} ${lerp(a.c, b.c).toFixed(3)} ${lerp(a.h, b.h).toFixed(1)})`;
 }
 
-/** CNN 스타일 반원 게이지 */
-function FearGreedGauge({ score }: { score: number }) {
-  const CX = 100;
-  const CY = 95;
-  const R = 74;
-  const SW = 16;
-  const clamped = Math.min(100, Math.max(0, score));
-  const needleAngle = -90 + clamped * 1.8;
+const RATING_KO_OF = (score: number): string => {
+  if (score < 25) return "극도의 공포";
+  if (score < 45) return "공포";
+  if (score <= 55) return "중립";
+  if (score <= 75) return "탐욕";
+  return "극도의 탐욕";
+};
+
+/** CNN Fear & Greed 원본 스타일 게이지 (약 200° 아크 + 그라데이션 + 아크 위 포인터) */
+function FearGreedGauge({
+  score,
+  history,
+}: {
+  score: number;
+  history?: { label: string; value: number }[];
+}) {
+  const CX = 130;
+  const CY = 118;
+  const R = 96;
+  const SW = 18;
+  const SWEEP = 200; // 전체 각도
+  const START = -SWEEP / 2; // 위(12시) 기준
+
+  // value(0-100) → 각도(위 기준, 시계방향 +)
+  const angleOf = (v: number) => START + (Math.min(100, Math.max(0, v)) / 100) * SWEEP;
+  const pt = (v: number, r: number) => {
+    const rad = (angleOf(v) * Math.PI) / 180;
+    return { x: CX + r * Math.sin(rad), y: CY - r * Math.cos(rad) };
+  };
+
+  const N = 60;
+  const segs = Array.from({ length: N }, (_, i) => {
+    const v1 = (i / N) * 100;
+    const v2 = ((i + 1) / N) * 100;
+    const p1 = pt(v1, R);
+    const p2 = pt(v2, R);
+    return { d: `M ${p1.x} ${p1.y} A ${R} ${R} 0 0 1 ${p2.x} ${p2.y}`, color: fgColor((v1 + v2) / 2) };
+  });
+
+  const zoneLabels = [
+    { at: 12.5, text: "극도의 공포" },
+    { at: 35, text: "공포" },
+    { at: 50, text: "중립" },
+    { at: 65, text: "탐욕" },
+    { at: 87.5, text: "극도의 탐욕" },
+  ];
+
+  const marker = pt(score, R);
+  const markerAngle = angleOf(score);
 
   return (
-    <svg viewBox="0 0 200 118" className="w-full max-w-[280px]" role="img" aria-label={`Fear & Greed ${score}`}>
-      {/* 배경 트랙 */}
-      <circle
-        cx={CX}
-        cy={CY}
-        r={R}
-        pathLength={100}
-        fill="none"
-        stroke="var(--muted)"
-        strokeWidth={SW}
-        strokeDasharray="50 100"
-        strokeLinecap="butt"
-        transform={`rotate(180 ${CX} ${CY})`}
-      />
-      {/* 색상 세그먼트 */}
-      {FG_SEGMENTS.map((s) => (
-        <circle
-          key={s.from}
-          cx={CX}
-          cy={CY}
-          r={R}
-          pathLength={100}
-          fill="none"
-          stroke={s.color}
-          strokeWidth={SW}
-          strokeDasharray={`${(s.to - s.from) / 2 - 0.6} 100`}
-          strokeDashoffset={-(s.from / 2)}
-          strokeLinecap="butt"
-          transform={`rotate(180 ${CX} ${CY})`}
-        />
+    <svg
+      viewBox="0 0 260 176"
+      className="w-full max-w-[340px]"
+      role="img"
+      aria-label={`Fear & Greed ${score}`}
+    >
+      {/* 그라데이션 아크 */}
+      {segs.map((s, i) => (
+        <path key={i} d={s.d} stroke={s.color} strokeWidth={SW} fill="none" strokeLinecap="butt" />
       ))}
-      {/* 눈금 */}
-      {[0, 25, 50, 75, 100].map((t) => {
-        const a = ((-90 + t * 1.8) * Math.PI) / 180;
-        const x1 = CX + (R - SW / 2 - 2) * Math.sin(a);
-        const y1 = CY - (R - SW / 2 - 2) * Math.cos(a);
-        const x2 = CX + (R + SW / 2 + 2) * Math.sin(a);
-        const y2 = CY - (R + SW / 2 + 2) * Math.cos(a);
-        return <line key={t} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--background)" strokeWidth={2} />;
+
+      {/* 구간 라벨 */}
+      {zoneLabels.map((z) => {
+        const p = pt(z.at, R + SW / 2 + 9);
+        return (
+          <text
+            key={z.text}
+            x={p.x}
+            y={p.y}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize="8"
+            fill="var(--muted-foreground)"
+          >
+            {z.text}
+          </text>
+        );
       })}
-      {/* 바늘 */}
-      <g transform={`rotate(${needleAngle} ${CX} ${CY})`}>
+
+      {/* 과거값 점 */}
+      {(history ?? []).map((h) => {
+        const p = pt(h.value, R);
+        return (
+          <g key={h.label}>
+            <circle cx={p.x} cy={p.y} r={2.6} fill="var(--background)" stroke="var(--muted-foreground)" strokeWidth={1.4} />
+          </g>
+        );
+      })}
+
+      {/* 현재값 포인터 (아크 위 삼각형, 안쪽을 가리킴) */}
+      <g transform={`rotate(${markerAngle} ${marker.x} ${marker.y})`}>
         <polygon
-          points={`${CX - 5},${CY} ${CX + 5},${CY} ${CX},${CY - R - 4}`}
+          points={`${marker.x - 6},${marker.y + SW / 2 + 7} ${marker.x + 6},${marker.y + SW / 2 + 7} ${marker.x},${marker.y - SW / 2 - 1}`}
           fill="var(--foreground)"
+          stroke="var(--background)"
+          strokeWidth={1.5}
         />
-        <circle cx={CX} cy={CY} r={7} fill="var(--foreground)" />
-        <circle cx={CX} cy={CY} r={3} fill="var(--background)" />
       </g>
-      {/* 중앙 값 */}
-      <text
-        x={CX}
-        y={CY - 16}
-        textAnchor="middle"
-        fontSize="26"
-        fontWeight="700"
-        fill={fgColor(score)}
-      >
-        {score}
+
+      {/* 중앙: 점수 + 등급 */}
+      <text x={CX} y={CY - 30} textAnchor="middle" fontSize="40" fontWeight="800" fill={fgColor(score)}>
+        {Math.round(score)}
+      </text>
+      <text x={CX} y={CY - 8} textAnchor="middle" fontSize="12" fontWeight="600" fill="var(--foreground)">
+        {RATING_KO_OF(score)}
+      </text>
+      <text x={CX} y={CY + 40} textAnchor="middle" fontSize="8" fill="var(--muted-foreground)">
+        지금 시장을 움직이는 감정
       </text>
     </svg>
   );
@@ -311,22 +365,63 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-center sm:gap-6">
-          <FearGreedGauge score={fg.score} />
-          <div className="space-y-2">
-            <div className="text-lg font-semibold" style={{ color: fgColor(fg.score) }}>
-              {fg.ratingKo}
+        <div className="grid items-center gap-4 lg:grid-cols-[minmax(240px,320px)_1fr]">
+          {/* 왼쪽: 게이지 */}
+          <div className="flex justify-center">
+            <FearGreedGauge
+              score={fg.score}
+              history={[
+                { label: "전일", value: fg.prevClose },
+                { label: "1주", value: fg.prev1w },
+                { label: "1개월", value: fg.prev1m },
+                { label: "1년", value: fg.prev1y },
+              ]}
+            />
+          </div>
+
+          {/* 오른쪽: 추이 라인차트 */}
+          <div className="space-y-1">
+            <div className="text-muted-foreground flex items-center justify-between text-xs">
+              <span>F&amp;G 추이</span>
+              <span className="flex gap-3">
+                {trend("전일", fg.prevClose)}
+                {trend("1주", fg.prev1w)}
+                {trend("1개월", fg.prev1m)}
+                {trend("1년", fg.prev1y)}
+              </span>
             </div>
-            <div className="flex flex-col gap-1 text-xs">
-              {trend("전일", fg.prevClose)}
-              {trend("1주 전", fg.prev1w)}
-              {trend("1개월 전", fg.prev1m)}
-              {trend("1년 전", fg.prev1y)}
+            <div className="h-40">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={fg.history} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 10 }}
+                    minTickGap={40}
+                    tickFormatter={(d: string) => d.slice(2, 7)}
+                  />
+                  <YAxis domain={[0, 100]} ticks={[0, 25, 45, 55, 75, 100]} tick={{ fontSize: 10 }} width={26} />
+                  <ReferenceArea y1={0} y2={25} fill="oklch(0.58 0.2 25)" fillOpacity={0.06} />
+                  <ReferenceArea y1={25} y2={45} fill="oklch(0.72 0.17 55)" fillOpacity={0.06} />
+                  <ReferenceArea y1={55} y2={75} fill="oklch(0.8 0.16 135)" fillOpacity={0.06} />
+                  <ReferenceArea y1={75} y2={100} fill="oklch(0.64 0.17 150)" fillOpacity={0.06} />
+                  <Tooltip
+                    contentStyle={{ fontSize: 11, padding: "4px 8px" }}
+                    formatter={(v) => [String(v), "F&G"]}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="value"
+                    stroke="var(--foreground)"
+                    strokeWidth={1.5}
+                    dot={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </div>
         </div>
 
-        <div className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+        <div className="grid gap-x-4 gap-y-1 border-t pt-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
           {fg.components
             .filter((c) => c.score != null)
             .map((c) => (
