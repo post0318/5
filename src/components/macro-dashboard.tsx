@@ -390,17 +390,33 @@ const HIGHER_RAW_IS_GREEDY: Record<string, boolean> = {
   junk_bond_demand: false, // 스프레드 확대 = 공포
 };
 
-/** 세부지표의 최근(약 1개월) 점수 방향: 1=상승(탐욕쪽), -1=하락, 0=변화없음 */
+/**
+ * 세부지표의 최근(약 1개월) 점수 방향: 1=상승(탐욕쪽), -1=하락, 0=변화없음
+ *
+ * 원본 값을 가용 히스토리 전체 구간에서 0~100으로 정규화(min-max)한 뒤
+ * (역방향 지표는 100 − normalize), 현재 점수와 약 21틱(≈1개월) 전 점수를 비교.
+ * 정규화 후 비교라 지표별 스케일 차이(지수 7000 vs 스프레드 1.3)에 무관하게
+ * 일관된 임계값(2점)을 쓸 수 있다.
+ * (CNN 히스토리는 약 9개월치 → 3년 윈도우는 불가, 가용 구간 전체 사용)
+ */
 function componentScoreDir(key: string, history: { value: number }[]): -1 | 0 | 1 {
-  if (history.length < 4) return 0;
-  const now = history[history.length - 1].value;
-  const then = history[Math.max(0, history.length - 21)].value;
-  if (!Number.isFinite(now) || !Number.isFinite(then) || then === 0) return 0;
-  const chgPct = Math.abs((now - then) / Math.abs(then));
-  if (chgPct < 0.01) return 0;
-  const rawUp = now > then;
-  const greedy = HIGHER_RAW_IS_GREEDY[key] ? rawUp : !rawUp;
-  return greedy ? 1 : -1;
+  const vals = history.map((h) => h.value).filter(Number.isFinite);
+  if (vals.length < 10) return 0;
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  if (max === min) return 0;
+
+  const invert = !HIGHER_RAW_IS_GREEDY[key];
+  const score = (v: number) => {
+    const n = ((v - min) / (max - min)) * 100;
+    return invert ? 100 - n : n;
+  };
+
+  const now = score(vals[vals.length - 1]);
+  const then = score(vals[Math.max(0, vals.length - 21)]);
+  const diff = now - then;
+  if (Math.abs(diff) < 2) return 0;
+  return diff > 0 ? 1 : -1;
 }
 
 function FearGreedCard({ fg }: { fg: FearGreed }) {
