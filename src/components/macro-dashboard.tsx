@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { ArrowDownRight, ArrowRight, ArrowUpRight, RefreshCw } from "lucide-react";
+import { ArrowDownRight, ArrowRight, ArrowUpRight, ExternalLink, RefreshCw } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { formatNumber } from "@/lib/format";
@@ -352,17 +352,18 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm">CNN Fear &amp; Greed — 시장 심리·위험</CardTitle>
+        <CardTitle className="text-sm">
           <a
             href={fg.deepLink}
             target="_blank"
             rel="noreferrer"
-            className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
+            className="hover:text-primary inline-flex items-center gap-1 underline-offset-2 hover:underline"
           >
-            CNN 원본
+            CNN Fear &amp; Greed
+            <ExternalLink className="size-3" />
           </a>
-        </div>
+          <span className="text-muted-foreground font-normal"> — 시장 심리·위험</span>
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid items-center gap-4 lg:grid-cols-[minmax(240px,320px)_1fr]">
@@ -390,7 +391,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 {trend("1년", fg.prev1y)}
               </span>
             </div>
-            <div className="h-40">
+            <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={fg.history} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
                   <XAxis
