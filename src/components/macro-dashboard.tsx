@@ -451,6 +451,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     market_volatility_vix: {
       threshold: 19.5, // VIX 장기(1990~) 평균 ≈ 19.5
       aboveIsBad: true,
+      aboveLabel: "▲ 역사적 평균 상회 · 변동성 확대",
+      belowLabel: "▼ 역사적 평균 하회 · 안정",
       refLabel: "역사적 평균 19.50",
       tickStep: 5, // 라벨은 5 단위
       domainSnap: 5,
@@ -625,15 +627,18 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       <ReferenceLine
                         y={divCfg.threshold}
                         stroke="var(--muted-foreground)"
-                        strokeDasharray="1 3"
-                        strokeOpacity={0.5}
+                        strokeWidth={1}
+                        strokeDasharray="4 3"
+                        strokeOpacity={0.7}
                         label={
                           divCfg.refLabel
                             ? {
                                 value: divCfg.refLabel,
-                                position: "insideTopRight",
-                                fontSize: 9,
-                                fill: "var(--muted-foreground)",
+                                position: "insideLeft",
+                                fontSize: 10,
+                                fontWeight: 600,
+                                fill: "var(--foreground)",
+                                dy: -5,
                               }
                             : undefined
                         }
