@@ -403,20 +403,20 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     return Number.isInteger(n) ? String(n) : n.toFixed(2);
   };
 
-  // 3개월(분기) 단위 세로 눈금 — 각 분기의 첫 데이터 날짜
-  const quarterTicks = useMemo(() => {
+  // 세로 눈금 — F&G 종합은 월 단위, 세부지표는 분기(3개월) 단위
+  const gridTicks = useMemo(() => {
     const seen = new Set<string>();
     const ticks: string[] = [];
     for (const d of chartData) {
       const [y, m] = d.date.split("-").map(Number);
-      const q = `${y}-${Math.floor((m - 1) / 3)}`;
-      if (!seen.has(q)) {
-        seen.add(q);
+      const bucket = selected ? `${y}-${Math.floor((m - 1) / 3)}` : `${y}-${m}`;
+      if (!seen.has(bucket)) {
+        seen.add(bucket);
         ticks.push(d.date);
       }
     }
     return ticks;
-  }, [chartData]);
+  }, [chartData, selected]);
 
   return (
     <Card>
@@ -502,7 +502,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     tick={AXIS_TICK}
                     axisLine={false}
                     tickLine={false}
-                    ticks={quarterTicks}
+                    ticks={gridTicks}
                     interval={0}
                     tickMargin={8}
                     tickFormatter={(d: string) => d.slice(0, 7)}
