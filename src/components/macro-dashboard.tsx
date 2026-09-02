@@ -414,11 +414,15 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     if (!yStep || !selected) return null;
     const vals = selected.history.map((d) => d.value).filter(Number.isFinite);
     if (!vals.length) return null;
-    const min = Math.floor(Math.min(...vals) / yStep) * yStep;
-    const max = Math.ceil(Math.max(...vals) / yStep) * yStep;
+    // 부동소수 오차 보정 후 step 배수로 스냅
+    const snapDown = (x: number) => Math.round(Math.floor(x / yStep + 1e-9) * yStep * 1e6) / 1e6;
+    const snapUp = (x: number) => Math.round(Math.ceil(x / yStep - 1e-9) * yStep * 1e6) / 1e6;
+    const min = snapDown(Math.min(...vals));
+    const max = snapUp(Math.max(...vals));
     const ticks: number[] = [];
-    for (let v = min; v <= max + yStep / 2; v += yStep) {
-      ticks.push(Math.round(v / yStep) * yStep);
+    const n = Math.round((max - min) / yStep);
+    for (let i = 0; i <= n; i++) {
+      ticks.push(Math.round((min + i * yStep) * 1e6) / 1e6);
     }
     return { domain: [min, max] as [number, number], ticks };
   }, [selected, yStep]);
