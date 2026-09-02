@@ -88,6 +88,7 @@ interface FearGreed {
   }[];
   source: string;
   deepLink: string;
+  vixHistoricalAvg?: number | null;
 }
 interface Dashboard {
   asOf: string;
@@ -449,11 +450,12 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       belowLabel: "▼ 채권성과가 주식을 능가",
     },
     market_volatility_vix: {
-      threshold: 19.5, // VIX 장기(1990~) 평균 ≈ 19.5
+      // FRED VIXCLS(1990~) 장기 평균 — 매일 갱신되어 값이 조금씩 변함
+      threshold: fg.vixHistoricalAvg ?? 19.43,
       aboveIsBad: true,
       aboveLabel: "▲ 역사적 평균 상회 · 변동성 확대",
       belowLabel: "▼ 역사적 평균 하회 · 안정",
-      refLabel: "역사적 평균 19.50",
+      refLabel: `역사적 평균 ${(fg.vixHistoricalAvg ?? 19.43).toFixed(2)}`,
       tickStep: 5, // 라벨은 5 단위
       domainSnap: 5,
     },
@@ -627,9 +629,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       <ReferenceLine
                         y={divCfg.threshold}
                         stroke="var(--muted-foreground)"
-                        strokeWidth={1}
-                        strokeDasharray="4 3"
-                        strokeOpacity={0.7}
+                        strokeDasharray="1 3"
+                        strokeOpacity={0.4}
                         label={
                           divCfg.refLabel
                             ? {
@@ -638,7 +639,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                                 fontSize: 10,
                                 fontWeight: 600,
                                 fill: "var(--foreground)",
-                                dy: -5,
+                                dy: -10,
                               }
                             : undefined
                         }

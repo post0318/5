@@ -210,6 +210,38 @@ async function fetchSeries(id: string): Promise<MacroPoint[]> {
   return out;
 }
 
+/**
+ * 특정 FRED 시리즈의 장기 평균 (지정 시작일부터 현재까지).
+ * VIX 역사적 평균 등에 사용 — 매일 새 데이터가 반영되어 값이 조금씩 변함.
+ */
+export async function getSeriesLongTermMean(
+  id: string,
+  since = "1990-01-01",
+): Promise<{ mean: number; n: number; latest: MacroPoint | null } | null> {
+  try {
+    const csv = await fetchText(
+      `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}&cosd=${since}`,
+      { headers: { "user-agent": "Mozilla/5.0", accept: "text/csv" }, revalidate: 60 * 60 * 24 },
+    );
+    const lines = csv.trim().split(/\r?\n/);
+    const vals: number[] = [];
+    let latest: MacroPoint | null = null;
+    for (let i = 1; i < lines.length; i++) {
+      const [date, raw] = lines[i].split(",");
+      if (!raw || raw === ".") continue;
+      const v = Number(raw);
+      if (!Number.isFinite(v)) continue;
+      vals.push(v);
+      latest = { date, value: v };
+    }
+    if (vals.length === 0) return null;
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    return { mean: Math.round(mean * 100) / 100, n: vals.length, latest };
+  } catch {
+    return null;
+  }
+}
+
 /** 원계열 → 전년동기대비 % 계열 */
 function toYoY(series: MacroPoint[]): MacroPoint[] {
   const out: MacroPoint[] = [];
