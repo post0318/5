@@ -396,6 +396,21 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
 
   const chartData = selected ? selected.history : fg.history;
 
+  // 3개월(분기) 단위 세로 눈금 — 각 분기의 첫 데이터 날짜
+  const quarterTicks = useMemo(() => {
+    const seen = new Set<string>();
+    const ticks: string[] = [];
+    for (const d of chartData) {
+      const [y, m] = d.date.split("-").map(Number);
+      const q = `${y}-${Math.floor((m - 1) / 3)}`;
+      if (!seen.has(q)) {
+        seen.add(q);
+        ticks.push(d.date);
+      }
+    }
+    return ticks;
+  }, [chartData]);
+
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -462,9 +477,9 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     </linearGradient>
                   </defs>
                   <CartesianGrid
-                    stroke="var(--border)"
-                    strokeDasharray="2 4"
-                    strokeOpacity={0.6}
+                    stroke="var(--muted-foreground)"
+                    strokeDasharray="1 3"
+                    strokeOpacity={0.4}
                     syncWithTicks
                   />
                   {!selected && (
@@ -480,9 +495,10 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     tick={AXIS_TICK}
                     axisLine={false}
                     tickLine={false}
-                    minTickGap={44}
+                    ticks={quarterTicks}
+                    interval={0}
                     tickMargin={8}
-                    tickFormatter={(d: string) => d.slice(2, 7)}
+                    tickFormatter={(d: string) => d.slice(0, 7)}
                   />
                   <YAxis
                     tick={AXIS_TICK}
