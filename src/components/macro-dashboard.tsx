@@ -396,6 +396,13 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
 
   const chartData = selected ? selected.history : fg.history;
 
+  // 소수가 있으면 2자리로 (14.6 → 14.60), 정수는 그대로
+  const fmtVal = (v: number | string) => {
+    const n = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(n)) return String(v);
+    return Number.isInteger(n) ? String(n) : n.toFixed(2);
+  };
+
   // 3개월(분기) 단위 세로 눈금 — 각 분기의 첫 데이터 날짜
   const quarterTicks = useMemo(() => {
     const seen = new Set<string>();
@@ -504,13 +511,14 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     tick={AXIS_TICK}
                     axisLine={false}
                     tickLine={false}
-                    width={selected ? 40 : 28}
+                    width={selected ? 46 : 30}
                     domain={selected ? ["auto", "auto"] : [0, 100]}
                     ticks={selected ? undefined : [0, 25, 50, 75, 100]}
+                    tickFormatter={fmtVal}
                   />
                   <Tooltip
                     {...TOOLTIP_STYLE}
-                    formatter={(v) => [String(v), selected ? selected.valueLabel : "F&G"]}
+                    formatter={(v) => [fmtVal(v as number), selected ? selected.valueLabel : "F&G"]}
                   />
                   <Area
                     type="monotone"
