@@ -518,7 +518,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 <AreaChart data={divergingData} margin={{ top: 8, right: 10, bottom: 0, left: 0 }}>
                   <defs>
                     <linearGradient id="fgFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="var(--foreground)" stopOpacity={0.14} />
+                      <stop offset="0%" stopColor="var(--foreground)" stopOpacity={0.10} />
                       <stop offset="100%" stopColor="var(--foreground)" stopOpacity={0} />
                     </linearGradient>
                   </defs>
@@ -597,7 +597,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         tooltipType="none"
                         stroke="none"
                         fill="oklch(0.70 0.18 150)"
-                        fillOpacity={0.25}
+                        fillOpacity={0.13}
                         dot={false}
                         activeDot={false}
                       />
@@ -609,7 +609,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         tooltipType="none"
                         stroke="none"
                         fill="oklch(0.58 0.21 27)"
-                        fillOpacity={0.25}
+                        fillOpacity={0.13}
                         dot={false}
                         activeDot={false}
                       />
@@ -617,7 +617,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         type="monotone"
                         dataKey="value"
                         stroke="var(--foreground)"
-                        strokeWidth={1.75}
+                        strokeWidth={1.4}
                         fill="none"
                         dot={false}
                         activeDot={{ r: 3, strokeWidth: 0 }}
@@ -628,7 +628,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       type="monotone"
                       dataKey="value"
                       stroke="var(--foreground)"
-                      strokeWidth={1.75}
+                      strokeWidth={1.4}
                       fill="url(#fgFill)"
                       dot={false}
                       activeDot={{ r: 3, strokeWidth: 0 }}
