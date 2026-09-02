@@ -617,7 +617,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         type="monotone"
                         dataKey="value"
                         stroke="var(--foreground)"
-                        strokeWidth={1.4}
+                        strokeWidth={1}
+                        strokeOpacity={0.7}
                         fill="none"
                         dot={false}
                         activeDot={{ r: 3, strokeWidth: 0 }}
@@ -628,7 +629,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       type="monotone"
                       dataKey="value"
                       stroke="var(--foreground)"
-                      strokeWidth={1.4}
+                      strokeWidth={1}
+                        strokeOpacity={0.7}
                       fill="url(#fgFill)"
                       dot={false}
                       activeDot={{ r: 3, strokeWidth: 0 }}
