@@ -430,7 +430,17 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   // 기준선 대비 위/아래를 분리해 색을 다르게 칠하는 지표 설정
   const DIVERGING_CFG: Record<
     string,
-    { threshold: number; aboveIsBad: boolean; aboveLabel: string; belowLabel: string; refLabel?: string }
+    {
+      threshold: number;
+      aboveIsBad: boolean;
+      aboveLabel: string;
+      belowLabel: string;
+      refLabel?: string;
+      /** Y축 눈금 간격 */
+      tickStep?: number;
+      /** 도메인 경계 스냅 단위 */
+      domainSnap?: number;
+    }
   > = {
     safe_haven_demand: {
       threshold: 0,
@@ -443,7 +453,9 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       aboveIsBad: true,
       aboveLabel: "▲ 역사적 평균 상회 · 변동성 확대",
       belowLabel: "▼ 역사적 평균 하회 · 안정",
-      refLabel: "역사적 평균 ≈ 19.5",
+      refLabel: "역사적 평균 19.50",
+      tickStep: 0.5,
+      domainSnap: 5,
     },
   };
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
@@ -461,19 +473,34 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     [divCfg, chartData],
   );
 
-  // 다이버징 차트 Y 도메인 (데이터 + 기준선 포함, 약간 여유)
-  const divDomain = useMemo(() => {
+  // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
+  const divAxis = useMemo(() => {
     if (!divCfg) return null;
     const vals = chartData.map((d) => d.value).filter(Number.isFinite);
     if (!vals.length) return null;
-    const lo = Math.min(...vals, divCfg.threshold);
-    const hi = Math.max(...vals, divCfg.threshold);
-    const pad = (hi - lo) * 0.1 || 1;
-    return [
-      Math.round((lo - pad) * 100) / 100,
-      Math.round((hi + pad) * 100) / 100,
-    ] as [number, number];
+    const rawLo = Math.min(...vals, divCfg.threshold);
+    const rawHi = Math.max(...vals, divCfg.threshold);
+    const snap = divCfg.domainSnap;
+    let lo: number, hi: number;
+    if (snap) {
+      lo = Math.floor(rawLo / snap) * snap;
+      hi = Math.ceil(rawHi / snap) * snap;
+    } else {
+      const pad = (rawHi - rawLo) * 0.1 || 1;
+      lo = Math.round((rawLo - pad) * 100) / 100;
+      hi = Math.round((rawHi + pad) * 100) / 100;
+    }
+    let ticks: number[] | undefined;
+    if (divCfg.tickStep) {
+      ticks = [];
+      const n = Math.round((hi - lo) / divCfg.tickStep);
+      for (let i = 0; i <= n; i++) {
+        ticks.push(Math.round((lo + i * divCfg.tickStep) * 100) / 100);
+      }
+    }
+    return { domain: [lo, hi] as [number, number], ticks };
   }, [divCfg, chartData]);
+  const divDomain = divAxis?.domain ?? null;
 
   // 세로 눈금 — F&G 종합은 월 단위, 세부지표는 분기(3개월) 단위
   const gridTicks = useMemo(() => {
@@ -627,10 +654,18 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     tickLine={false}
                     width={selected ? 46 : 30}
                     domain={
-                      divDomain ?? (yAxis ? yAxis.domain : selected ? ["auto", "auto"] : [0, 100])
+                      divAxis?.domain ?? (yAxis ? yAxis.domain : selected ? ["auto", "auto"] : [0, 100])
                     }
-                    ticks={divDomain ? undefined : yAxis ? yAxis.ticks : selected ? undefined : [0, 25, 50, 75, 100]}
-                    tickFormatter={yAxis || divDomain ? (v: number) => v.toFixed(2) : fmtVal}
+                    ticks={
+                      divAxis
+                        ? divAxis.ticks
+                        : yAxis
+                          ? yAxis.ticks
+                          : selected
+                            ? undefined
+                            : [0, 25, 50, 75, 100]
+                    }
+                    tickFormatter={yAxis || divAxis ? (v: number) => v.toFixed(2) : fmtVal}
                     allowDecimals
                   />
                   <Tooltip
