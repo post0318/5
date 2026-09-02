@@ -427,20 +427,53 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     return { domain: [min, max] as [number, number], ticks };
   }, [selected, yStep]);
 
-  const diverging = selected?.key === "safe_haven_demand" && !!yAxis;
+  // 기준선 대비 위/아래를 분리해 색을 다르게 칠하는 지표 설정
+  const DIVERGING_CFG: Record<
+    string,
+    { threshold: number; aboveIsBad: boolean; aboveLabel: string; belowLabel: string; refLabel?: string }
+  > = {
+    safe_haven_demand: {
+      threshold: 0,
+      aboveIsBad: false,
+      aboveLabel: "▲ 주식성과가 채권을 능가",
+      belowLabel: "▼ 채권성과가 주식을 능가",
+    },
+    market_volatility_vix: {
+      threshold: 19.5, // VIX 장기(1990~) 평균 ≈ 19.5
+      aboveIsBad: true,
+      aboveLabel: "▲ 역사적 평균 상회 · 변동성 확대",
+      belowLabel: "▼ 역사적 평균 하회 · 안정",
+      refLabel: "역사적 평균 ≈ 19.5",
+    },
+  };
+  const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
-  // 다이버징(안전자산 선호): 0 기준으로 위/아래를 분리한 면적 데이터
+  // 기준선 기준으로 위/아래 분리한 면적 데이터
   const divergingData = useMemo(
     () =>
-      diverging
+      divCfg
         ? chartData.map((d) => ({
             ...d,
-            pos: d.value >= 0 ? d.value : 0,
-            neg: d.value < 0 ? d.value : 0,
+            above: Math.max(d.value, divCfg.threshold),
+            below: Math.min(d.value, divCfg.threshold),
           }))
         : chartData,
-    [diverging, chartData],
+    [divCfg, chartData],
   );
+
+  // 다이버징 차트 Y 도메인 (데이터 + 기준선 포함, 약간 여유)
+  const divDomain = useMemo(() => {
+    if (!divCfg) return null;
+    const vals = chartData.map((d) => d.value).filter(Number.isFinite);
+    if (!vals.length) return null;
+    const lo = Math.min(...vals, divCfg.threshold);
+    const hi = Math.max(...vals, divCfg.threshold);
+    const pad = (hi - lo) * 0.1 || 1;
+    return [
+      Math.round((lo - pad) * 100) / 100,
+      Math.round((hi + pad) * 100) / 100,
+    ] as [number, number];
+  }, [divCfg, chartData]);
 
   // 세로 눈금 — F&G 종합은 월 단위, 세부지표는 분기(3개월) 단위
   const gridTicks = useMemo(() => {
@@ -536,35 +569,45 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       <ReferenceArea y1={75} y2={100} {...zoneFill(3, "oklch(0.50 0.16 166)")} ifOverflow="hidden" />
                     </>
                   )}
-                  {diverging && (
+                  {divCfg && divDomain && (
                     <>
                       <ReferenceArea
-                        y1={0}
-                        y2={yAxis!.domain[1]}
+                        y1={divCfg.threshold}
+                        y2={divDomain[1]}
                         fillOpacity={0}
                         label={{
-                          value: "▲ 주식성과가 채권을 능가",
+                          value: divCfg.aboveLabel,
                           position: "insideTopLeft",
                           fontSize: 9,
                           fill: "var(--muted-foreground)",
                         }}
                       />
                       <ReferenceArea
-                        y1={yAxis!.domain[0]}
-                        y2={0}
+                        y1={divDomain[0]}
+                        y2={divCfg.threshold}
                         fillOpacity={0}
                         label={{
-                          value: "▼ 채권성과가 주식을 능가",
+                          value: divCfg.belowLabel,
                           position: "insideBottomLeft",
                           fontSize: 9,
                           fill: "var(--muted-foreground)",
                         }}
                       />
                       <ReferenceLine
-                        y={0}
+                        y={divCfg.threshold}
                         stroke="var(--muted-foreground)"
                         strokeDasharray="1 3"
-                        strokeOpacity={0.4}
+                        strokeOpacity={0.5}
+                        label={
+                          divCfg.refLabel
+                            ? {
+                                value: divCfg.refLabel,
+                                position: "right",
+                                fontSize: 9,
+                                fill: "var(--muted-foreground)",
+                              }
+                            : undefined
+                        }
                       />
                     </>
                   )}
@@ -583,37 +626,39 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     axisLine={false}
                     tickLine={false}
                     width={selected ? 46 : 30}
-                    domain={yAxis ? yAxis.domain : selected ? ["auto", "auto"] : [0, 100]}
-                    ticks={yAxis ? yAxis.ticks : selected ? undefined : [0, 25, 50, 75, 100]}
-                    tickFormatter={yAxis ? (v: number) => v.toFixed(2) : fmtVal}
+                    domain={
+                      divDomain ?? (yAxis ? yAxis.domain : selected ? ["auto", "auto"] : [0, 100])
+                    }
+                    ticks={divDomain ? undefined : yAxis ? yAxis.ticks : selected ? undefined : [0, 25, 50, 75, 100]}
+                    tickFormatter={yAxis || divDomain ? (v: number) => v.toFixed(2) : fmtVal}
                     allowDecimals
                   />
                   <Tooltip
                     {...TOOLTIP_STYLE}
                     formatter={(v) => [fmtVal(v as number), selected ? selected.valueLabel : "F&G"]}
                   />
-                  {diverging ? (
+                  {divCfg ? (
                     <>
                       <Area
                         type="monotone"
-                        dataKey="pos"
-                        baseValue={0}
+                        dataKey="above"
+                        baseValue={divCfg.threshold}
                         isAnimationActive={false}
                         tooltipType="none"
                         stroke="none"
-                        fill="oklch(0.70 0.18 150)"
+                        fill={divCfg.aboveIsBad ? "oklch(0.58 0.21 27)" : "oklch(0.70 0.18 150)"}
                         fillOpacity={0.13}
                         dot={false}
                         activeDot={false}
                       />
                       <Area
                         type="monotone"
-                        dataKey="neg"
-                        baseValue={0}
+                        dataKey="below"
+                        baseValue={divCfg.threshold}
                         isAnimationActive={false}
                         tooltipType="none"
                         stroke="none"
-                        fill="oklch(0.58 0.21 27)"
+                        fill={divCfg.aboveIsBad ? "oklch(0.70 0.18 150)" : "oklch(0.58 0.21 27)"}
                         fillOpacity={0.13}
                         dot={false}
                         activeDot={false}
