@@ -48,11 +48,26 @@ interface IndexQuote {
   asOf: string | null;
   source: string;
 }
+interface FearGreed {
+  score: number;
+  rating: string;
+  ratingKo: string;
+  asOf: string;
+  prevClose: number;
+  prev1w: number;
+  prev1m: number;
+  prev1y: number;
+  history: { date: string; value: number }[];
+  components: { label: string; score: number | null; rating: string | null }[];
+  source: string;
+  deepLink: string;
+}
 interface Dashboard {
   asOf: string;
   indicators: Indicator[];
   summary: { positive: number; negative: number; neutral: number };
   indices: IndexQuote[];
+  fearGreed: FearGreed | null;
 }
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -153,6 +168,8 @@ export function MacroDashboard() {
             </CardContent>
           </Card>
 
+          {q.data.fearGreed && <FearGreedCard fg={q.data.fearGreed} />}
+
           <section className="space-y-3">
             <h2 className="text-sm font-semibold">핵심 거시지표</h2>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -182,6 +199,90 @@ export function MacroDashboard() {
         </>
       )}
     </div>
+  );
+}
+
+function fgColor(score: number): string {
+  if (score < 25) return "var(--down)";
+  if (score < 45) return "color-mix(in oklch, var(--down) 60%, var(--muted-foreground))";
+  if (score <= 55) return "var(--muted-foreground)";
+  if (score <= 75) return "color-mix(in oklch, var(--up) 60%, var(--muted-foreground))";
+  return "var(--up)";
+}
+
+function FearGreedCard({ fg }: { fg: FearGreed }) {
+  const trend = (label: string, val: number) => (
+    <span className="text-muted-foreground">
+      {label}{" "}
+      <b className={cn(val > fg.score ? "text-down" : val < fg.score ? "text-up" : "")}>{val}</b>
+    </span>
+  );
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm">CNN Fear &amp; Greed — 시장 심리·위험</CardTitle>
+          <a
+            href={fg.deepLink}
+            target="_blank"
+            rel="noreferrer"
+            className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
+          >
+            CNN 원본
+          </a>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
+          <div className="flex items-baseline gap-2">
+            <span
+              className="tnum text-4xl font-bold"
+              style={{ color: fgColor(fg.score) }}
+            >
+              {fg.score}
+            </span>
+            <span className="text-sm font-medium" style={{ color: fgColor(fg.score) }}>
+              {fg.ratingKo}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            {trend("전일", fg.prevClose)}
+            {trend("1주", fg.prev1w)}
+            {trend("1개월", fg.prev1m)}
+            {trend("1년", fg.prev1y)}
+          </div>
+        </div>
+
+        {/* 0-100 게이지 */}
+        <div className="relative h-2 overflow-hidden rounded-full bg-[linear-gradient(90deg,var(--down),var(--muted-foreground),var(--up))]">
+          <div
+            className="bg-foreground absolute top-1/2 size-3 -translate-y-1/2 rounded-full border-2 border-[var(--background)]"
+            style={{ left: `calc(${Math.min(100, Math.max(0, fg.score))}% - 6px)` }}
+          />
+        </div>
+        <div className="text-muted-foreground flex justify-between text-[10px]">
+          <span>0 극도의 공포</span>
+          <span>50</span>
+          <span>극도의 탐욕 100</span>
+        </div>
+
+        <div className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+          {fg.components
+            .filter((c) => c.score != null)
+            .map((c) => (
+              <div key={c.label} className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground truncate">{c.label}</span>
+                <span className="tnum shrink-0" style={{ color: fgColor(c.score!) }}>
+                  {c.score}
+                </span>
+              </div>
+            ))}
+        </div>
+        <p className="text-muted-foreground/80 text-[11px]">
+          {fg.asOf} · {fg.source} · 낮을수록 공포(저점 매수 관점), 높을수록 탐욕(과열 경계)
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
