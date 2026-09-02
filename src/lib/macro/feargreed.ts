@@ -113,7 +113,7 @@ export async function getFearGreed(): Promise<FearGreed | null> {
     prev1y: Math.round(fg.previous_1_year * 10) / 10,
     history,
     components,
-    source: "CNN Business (비공식)",
+    source: "CNN Business",
     deepLink: CNN_DEEPLINK,
   };
 }
