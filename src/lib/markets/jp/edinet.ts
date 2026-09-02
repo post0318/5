@@ -23,7 +23,7 @@ import {
 } from "../types";
 import { resolveEdinetByTicker } from "./edinetcode";
 import { fetchEdinetSummary } from "./financials";
-import { fetchJQuantsFinancials, hasJQuants } from "./jquants";
+import { fetchJQuantsMaster } from "./jquants";
 
 const HINT =
   "일본(EDINET) 공시 연결에는 API 키가 필요합니다. " +
@@ -145,35 +145,38 @@ export const jpEdinetAdapter: MarketAdapter = {
 
   async getCompanyProfile(symbol): Promise<CompanyProfile> {
     const e = await resolveEdinetByTicker(symbol);
+    const master = await fetchJQuantsMaster(symbol).catch(() => null);
+
+    const identifiers: Record<string, string> = {
+      EDINETコード: e.edinetCode,
+      証券コード: e.secCode,
+      ticker: e.ticker,
+    };
+    if (master?.scaleCategory) identifiers["規模区分"] = master.scaleCategory;
+    if (master?.marketName) identifiers["市場区分"] = master.marketName;
+
     return {
       symbol,
       market: "jp",
-      name: e.nameEng || e.name,
-      nameLocal: e.name,
-      identifiers: { EDINETコード: e.edinetCode, 証券コード: e.secCode, ticker: e.ticker },
-      industry: e.industry,
+      name: master?.nameEn || e.nameEng || e.name,
+      nameLocal: master?.name || e.name,
+      identifiers,
+      industry: master?.sector33 || e.industry,
       address: e.address,
-      description: `決算期: ${e.fiscalMonthDay}${e.consolidated ? " · 連結" : ""}`,
-      source: "EDINET (Edinetcode)",
+      description:
+        `決算期: ${e.fiscalMonthDay}${e.consolidated ? " · 連結" : ""}` +
+        (master?.sector17 ? ` · ${master.sector17}` : ""),
+      source: master ? "EDINET + J-Quants" : "EDINET (Edinetcode)",
       sourceUrl: filingsDeepLink("jp", symbol)?.url,
     };
   },
 
   async getFinancials(symbol, periodType): Promise<FinancialStatement> {
-    // 1순위: J-Quants (분기·연간 모두, 깔끔한 JSON) — 네트워크/자격증명 실패 시 폴백
-    if (hasJQuants()) {
-      try {
-        const jq = await fetchJQuantsFinancials(symbol, periodType);
-        if (jq) return jq;
-      } catch {
-        // J-Quants 실패 → EDINET
-      }
-    }
-
-    // 2순위: EDINET 有価証券報告書 (연간만)
+    // JP 재무 = EDINET 有価証券報告書 (연간 경영지표 5기).
+    // J-Quants /fins/details 는 유료 플랜 전용이라 미사용.
     if (periodType === "quarter") {
       throw new AdapterError(
-        "일본 분기 재무는 J-Quants 연결 시 제공됩니다. 연간 또는 딥링크를 이용하세요.",
+        "일본 분기 재무는 미지원입니다 (四半期報告書 폐지, J-Quants 재무는 유료). 연간 또는 딥링크를 이용하세요.",
         { status: 501 },
       );
     }
