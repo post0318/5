@@ -424,8 +424,13 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     for (let i = 0; i <= n; i++) {
       ticks.push(Math.round((min + i * yStep) * 1e6) / 1e6);
     }
-    return { domain: [min, max] as [number, number], ticks };
+    // y=0 이 도메인에서 차지하는 위치 (0=상단, 1=하단) — 다이버징 면적 색상용
+    const zeroOffset =
+      max <= 0 ? 0 : min >= 0 ? 1 : max / (max - min);
+    return { domain: [min, max] as [number, number], ticks, zeroOffset };
   }, [selected, yStep]);
+
+  const diverging = selected?.key === "safe_haven_demand" && yAxis;
 
   // 세로 눈금 — F&G 종합은 월 단위, 세부지표는 분기(3개월) 단위
   const gridTicks = useMemo(() => {
@@ -506,6 +511,12 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       <stop offset="0%" stopColor="var(--foreground)" stopOpacity={0.14} />
                       <stop offset="100%" stopColor="var(--foreground)" stopOpacity={0} />
                     </linearGradient>
+                    {diverging && (
+                      <linearGradient id="shdSplit" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset={yAxis!.zeroOffset} stopColor="oklch(0.70 0.18 150)" stopOpacity={0.28} />
+                        <stop offset={yAxis!.zeroOffset} stopColor="oklch(0.58 0.21 27)" stopOpacity={0.28} />
+                      </linearGradient>
+                    )}
                   </defs>
                   <CartesianGrid
                     stroke="var(--muted-foreground)"
@@ -521,13 +532,12 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       <ReferenceArea y1={75} y2={100} {...zoneFill(3, "oklch(0.50 0.16 166)")} ifOverflow="hidden" />
                     </>
                   )}
-                  {selected?.key === "safe_haven_demand" && yAxis && (
+                  {diverging && (
                     <>
                       <ReferenceArea
                         y1={0}
-                        y2={yAxis.domain[1]}
-                        fill="oklch(0.70 0.18 150)"
-                        fillOpacity={0.06}
+                        y2={yAxis!.domain[1]}
+                        fillOpacity={0}
                         label={{
                           value: "▲ 주식성과가 채권을 능가",
                           position: "insideTopLeft",
@@ -536,10 +546,9 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         }}
                       />
                       <ReferenceArea
-                        y1={yAxis.domain[0]}
+                        y1={yAxis!.domain[0]}
                         y2={0}
-                        fill="oklch(0.58 0.21 27)"
-                        fillOpacity={0.06}
+                        fillOpacity={0}
                         label={{
                           value: "▼ 채권성과가 주식을 능가",
                           position: "insideBottomLeft",
@@ -579,7 +588,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     dataKey="value"
                     stroke="var(--foreground)"
                     strokeWidth={1.75}
-                    fill="url(#fgFill)"
+                    fill={diverging ? "url(#shdSplit)" : "url(#fgFill)"}
+                    {...(diverging ? { baseValue: 0 } : {})}
                     dot={false}
                     activeDot={{ r: 3, strokeWidth: 0 }}
                   />
