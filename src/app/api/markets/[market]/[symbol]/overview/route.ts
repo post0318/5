@@ -2,6 +2,8 @@ import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
 import { getStockOverview } from "@/lib/markets/service";
 
+export const maxDuration = 60;
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ market: string; symbol: string }> },

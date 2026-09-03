@@ -3,6 +3,8 @@ import { isMarketId, type MarketId } from "@/lib/markets/types";
 import { getStockOverview } from "@/lib/markets/service";
 import { listUniverse } from "@/lib/universe/repo";
 
+export const maxDuration = 60;
+
 /**
  * 유니버스 통합 뷰 데이터 (prd.md §5.3)
  * 등록 종목들의 시세·멀티플·컨센서스 요약을 한 번에.

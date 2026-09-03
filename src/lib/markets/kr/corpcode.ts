@@ -1,11 +1,21 @@
 import "server-only";
-import { strFromU8, unzipSync } from "fflate";
 import { AdapterError } from "../types";
+import corpcodesRaw from "./data/corpcodes.json";
 
 /**
- * OpenDART corpCode.xml (ZIP) → stock_code ↔ corp_code 매핑.
- * 약 28MB XML, 10만+ 법인. 프로세스 메모리에 캐시 (24h).
+ * OpenDART 상장사 corp_code 매핑.
+ *
+ * 원본 corpCode.xml(28MB, 11만+ 법인)은 서버리스에서 파싱 부담이 커서,
+ * 상장사(약 3,900개)만 추출한 사전 빌드 JSON(`data/corpcodes.json`)을 사용한다.
+ * 갱신: `node scripts/build-kr-corpcodes.mjs` 실행 후 커밋.
  */
+
+interface RawEntry {
+  c: string; // corp_code
+  s: string; // stock_code
+  n: string; // 한글명
+  e: string; // 영문명
+}
 
 export interface CorpEntry {
   corpCode: string;
@@ -14,92 +24,39 @@ export interface CorpEntry {
   stockCode: string;
 }
 
-interface CorpIndex {
-  byStock: Map<string, CorpEntry>;
-  byName: { name: string; entry: CorpEntry }[];
-  loadedAt: number;
+const entries: RawEntry[] = corpcodesRaw as RawEntry[];
+
+const byStock = new Map<string, CorpEntry>();
+const nameIndex: { name: string; entry: CorpEntry }[] = [];
+
+for (const r of entries) {
+  const entry: CorpEntry = {
+    corpCode: r.c,
+    stockCode: r.s,
+    corpName: r.n,
+    corpEngName: r.e,
+  };
+  byStock.set(r.s, entry);
+  nameIndex.push({ name: r.n.toLowerCase(), entry });
+  if (r.e) nameIndex.push({ name: r.e.toLowerCase(), entry });
 }
 
-let index: CorpIndex | null = null;
-const TTL = 1000 * 60 * 60 * 24;
-
-const LIST_RE =
-  /<list>\s*<corp_code>([^<]*)<\/corp_code>\s*<corp_name>([^<]*)<\/corp_name>\s*<corp_eng_name>([^<]*)<\/corp_eng_name>\s*<stock_code>([^<]*)<\/stock_code>/g;
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .trim();
-}
-
-async function build(apiKey: string): Promise<CorpIndex> {
-  const res = await fetch(
-    `https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=${apiKey}`,
-    { signal: AbortSignal.timeout(30_000) },
-  );
-  if (!res.ok) {
-    throw new AdapterError(`corpCode 다운로드 실패 (${res.status})`, { status: 502 });
-  }
-  const buf = new Uint8Array(await res.arrayBuffer());
-  // 응답이 실제로는 JSON 에러(키 오류 등)일 수 있음
-  if (buf[0] === 0x7b) {
-    throw new AdapterError("OpenDART corpCode 응답 오류 — API 키를 확인하세요", { status: 401 });
-  }
-  const files = unzipSync(buf);
-  const xmlName = Object.keys(files).find((n) => n.toLowerCase().endsWith(".xml"));
-  if (!xmlName) throw new AdapterError("corpCode ZIP에 XML이 없습니다", { status: 502 });
-  const xml = strFromU8(files[xmlName]);
-
-  const byStock = new Map<string, CorpEntry>();
-  const byName: CorpIndex["byName"] = [];
-  let m: RegExpExecArray | null;
-  LIST_RE.lastIndex = 0;
-  while ((m = LIST_RE.exec(xml))) {
-    const stockCode = m[4].trim();
-    const entry: CorpEntry = {
-      corpCode: m[1].trim(),
-      corpName: decodeEntities(m[2]),
-      corpEngName: decodeEntities(m[3]),
-      stockCode,
-    };
-    if (stockCode && /^\d{6}$/.test(stockCode)) {
-      byStock.set(stockCode, entry);
-      byName.push({ name: entry.corpName.toLowerCase(), entry });
-      if (entry.corpEngName) {
-        byName.push({ name: entry.corpEngName.toLowerCase(), entry });
-      }
-    }
-  }
-  return { byStock, byName, loadedAt: Date.now() };
-}
-
-export async function getCorpIndex(apiKey: string): Promise<CorpIndex> {
-  if (index && Date.now() - index.loadedAt < TTL) return index;
-  index = await build(apiKey);
-  return index;
-}
-
-export async function resolveCorpCode(apiKey: string, stockCode: string): Promise<CorpEntry> {
-  const idx = await getCorpIndex(apiKey);
-  const entry = idx.byStock.get(stockCode);
+export function resolveCorpCode(_apiKey: string, stockCode: string): CorpEntry {
+  const code = stockCode.replace(/[^0-9]/g, "").padStart(6, "0").slice(-6);
+  const entry = byStock.get(code);
   if (!entry) {
-    throw new AdapterError(`DART에서 종목코드를 찾을 수 없습니다: ${stockCode}`, { status: 404 });
+    throw new AdapterError(`DART 상장사 목록에 없는 종목코드: ${stockCode}`, { status: 404 });
   }
   return entry;
 }
 
-export async function searchCorps(apiKey: string, query: string): Promise<CorpEntry[]> {
-  const idx = await getCorpIndex(apiKey);
+export function searchCorps(_apiKey: string, query: string): CorpEntry[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const starts: CorpEntry[] = [];
   const contains: CorpEntry[] = [];
   const seen = new Set<string>();
-  for (const { name, entry } of idx.byName) {
+  for (const { name, entry } of nameIndex) {
     if (seen.has(entry.stockCode)) continue;
     if (name.startsWith(q) || entry.stockCode === q) {
       starts.push(entry);
