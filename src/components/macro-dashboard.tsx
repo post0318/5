@@ -518,7 +518,26 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     }
     if (overlay) {
       const omap = new Map(overlay.history.map((p) => [p.date, p.value]));
-      data = data.map((d) => ({ ...d, overlayValue: omap.get(d.date as string) ?? null }));
+      const withOv = data.map((d) => ({
+        ...d,
+        overlayValue: omap.get(d.date) ?? null,
+      }));
+      // 지수(overlayValue) 가 이동평균(value) 위면 녹색, 아래면 적색으로 선 분리
+      // (교차점은 양쪽 시리즈에 포함해 선이 끊기지 않게)
+      data = withOv.map((d, i) => {
+        const rel = (r?: (typeof withOv)[number]) =>
+          r && r.overlayValue != null ? r.overlayValue >= r.value : null;
+        const here = rel(withOv[i]);
+        const prev = rel(withOv[i - 1]);
+        const next = rel(withOv[i + 1]);
+        const above = here === true || prev === true || next === true;
+        const below = here === false || prev === false || next === false;
+        return {
+          ...d,
+          ovAbove: above && d.overlayValue != null ? d.overlayValue : null,
+          ovBelow: below && d.overlayValue != null ? d.overlayValue : null,
+        };
+      });
     }
     if (showNorm) {
       const vals = chartData.map((d) => d.value).filter(Number.isFinite);
@@ -667,7 +686,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 )}
                 {overlay && (
                   <span className="ml-2">
-                    · <span className="text-foreground">실선 {overlay.label}</span> vs 점선 이동평균 (지수 &gt; 평균 = 위험선호)
+                    · {overlay.label} 실선 (<span className="text-up">평균 위=녹색</span> /{" "}
+                    <span className="text-down">아래=적색</span>) · 점선 = 125일 이동평균
                   </span>
                 )}
               </div>
@@ -840,7 +860,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     </>
                   ) : overlay ? (
                     <>
-                      {/* value = 이동평균 (점선), overlayValue = 실제 지수 (실선) */}
+                      {/* value = 이동평균 (점선 회색) */}
                       <Area
                         type="monotone"
                         dataKey="value"
@@ -852,17 +872,30 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         dot={false}
                         activeDot={false}
                       />
+                      {/* 지수: 평균 위 = 녹색, 아래 = 적색 */}
                       <Area
                         type="monotone"
-                        dataKey="overlayValue"
+                        dataKey="ovAbove"
                         name={overlay.label}
-                        stroke="var(--foreground)"
-                        strokeWidth={1.5}
-                        strokeOpacity={1}
+                        stroke="oklch(0.62 0.17 150)"
+                        strokeWidth={1.6}
                         fill="none"
-                        connectNulls
+                        connectNulls={false}
                         dot={false}
                         activeDot={{ r: 3, strokeWidth: 0 }}
+                        isAnimationActive={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="ovBelow"
+                        name={overlay.label}
+                        stroke="oklch(0.58 0.21 27)"
+                        strokeWidth={1.6}
+                        fill="none"
+                        connectNulls={false}
+                        dot={false}
+                        activeDot={{ r: 3, strokeWidth: 0 }}
+                        isAnimationActive={false}
                       />
                     </>
                   ) : (
