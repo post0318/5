@@ -136,12 +136,22 @@ const SPECS: IndicatorSpec[] = [
     name: "장단기 금리차 (10Y-2Y)",
     category: "leading",
     unit: "%p",
-    note: "역전(음수)은 대표적 침체 선행 신호. 재정상화(가팔라짐)는 회복 신호.",
+    note: "역전(음수)은 대표적 침체 선행 신호. 역전 해소 직후가 실제 침체 구간인 경우가 많다.",
     goodDirection: "up",
     frequency: "daily",
-    levelVerdict: (v, dir) => {
+    levelVerdict: (v, dir, ctx) => {
       if (v < 0) return { verdict: "negative", reason: `${v.toFixed(2)}%p — 수익률 곡선 역전(침체 선행)` };
-      if (v < 0.3) return { verdict: dir === "down" ? "negative" : "neutral", reason: `${v.toFixed(2)}%p — 매우 평탄` };
+      // 최근 1년 내 역전 → 지금 플러스여도 "역전 해소 국면" 경계 (역사적으로 침체는 이 직후)
+      if (ctx.low12m < -0.1)
+        return {
+          verdict: "negative",
+          reason: `${v.toFixed(2)}%p — 역전 해소 국면(최근 1년 내 역전), 침체는 대개 이 직후`,
+        };
+      if (v < 0.3)
+        return {
+          verdict: dir === "down" ? "negative" : "neutral",
+          reason: `${v.toFixed(2)}%p — 매우 평탄`,
+        };
       if (v < 0.8) return { verdict: "neutral", reason: `${v.toFixed(2)}%p — 완만한 우상향` };
       return { verdict: "positive", reason: `${v.toFixed(2)}%p — 정상(우상향)` };
     },
@@ -343,7 +353,16 @@ function buildIndicator(spec: IndicatorSpec, rawSeries: MacroPoint[]): MacroIndi
   const seriesVals = series.map((p) => p.value);
   const seriesMax = seriesVals.length ? Math.max(...seriesVals) : 0;
   const seriesMin = seriesVals.length ? Math.min(...seriesVals) : 0;
-  const last12 = seriesVals.slice(-12);
+  // 최근 ~1년치 (빈도별 관측 수)
+  const perYear =
+    spec.frequency === "daily"
+      ? 260
+      : spec.frequency === "weekly"
+        ? 52
+        : spec.frequency === "quarterly"
+          ? 4
+          : 12;
+  const last12 = seriesVals.slice(-perYear);
   const low12m = last12.length ? Math.min(...last12) : seriesMin;
   const high12m = last12.length ? Math.max(...last12) : seriesMax;
 
