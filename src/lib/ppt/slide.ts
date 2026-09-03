@@ -1,7 +1,13 @@
 import "server-only";
-import pptxgen from "pptxgenjs";
+import { createRequire } from "node:module";
+import type PptxGenJS from "pptxgenjs";
 import { formatNumber, formatPercent } from "@/lib/format";
 import type { StockSlideData } from "./slide-data";
+
+// Next/turbopack가 pptxgenjs를 ESM으로 오해해 "Cannot use import statement outside a module"
+// 오류가 나므로, CJS require 로 강제 로드한다 (package exports 의 require 조건 → cjs 빌드).
+const nodeRequire = createRequire(import.meta.url);
+const pptxgen = nodeRequire("pptxgenjs") as typeof PptxGenJS;
 
 /**
  * 종목 소개 PPT (4:3, 종목당 1슬라이드).
@@ -17,7 +23,7 @@ const INK = "222222";
 const num = (v: number | null, d = 0) => (v == null ? "-" : formatNumber(v, d));
 const pctf = (v: number | null) => (v == null ? "-" : formatPercent(v, { alreadyPercent: false }));
 
-function addSlide(pptx: pptxgen, d: StockSlideData) {
+function addSlide(pptx: PptxGenJS, d: StockSlideData) {
   const s = pptx.addSlide();
   s.background = { color: "FFFFFF" };
 
@@ -55,7 +61,7 @@ function addSlide(pptx: pptxgen, d: StockSlideData) {
   });
 
   const f = d.fin;
-  const rows: pptxgen.TableRow[] = [
+  const rows: PptxGenJS.TableRow[] = [
     ["구분", ...f.years].map((t) => ({
       text: t,
       options: { bold: true, color: "FFFFFF", fill: { color: NAVY }, align: "center" as const, fontSize: 9 },
@@ -112,7 +118,7 @@ function addSlide(pptx: pptxgen, d: StockSlideData) {
   );
 }
 
-function mkRow(label: string, cells: string[], highlight = false): pptxgen.TableRow {
+function mkRow(label: string, cells: string[], highlight = false): PptxGenJS.TableRow {
   return [
     { text: label, options: { bold: highlight, fill: highlight ? { color: "FFF3E9" } : undefined } },
     ...cells.map((c) => ({
