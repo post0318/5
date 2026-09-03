@@ -44,6 +44,7 @@ export async function getStockOverview(
   market: MarketId,
   rawSymbol: string,
   yahooOverride?: string | null,
+  opts: { skipQuarterly?: boolean } = {},
 ): Promise<StockOverview> {
   const adapter = getAdapter(market);
   const symbol = adapter.normalizeSymbol(rawSymbol);
@@ -53,7 +54,9 @@ export async function getStockOverview(
     safe(adapter.getCompanyProfile(symbol), warnings, "회사정보"),
     safe(getEodQuote(market, symbol, { yahooOverride }), warnings, "시세"),
     safe(adapter.getFinancials(symbol, "annual"), warnings, "연간 재무제표"),
-    safe(adapter.getFinancials(symbol, "quarter"), warnings, "분기 재무제표"),
+    opts.skipQuarterly
+      ? Promise.resolve(null)
+      : safe(adapter.getFinancials(symbol, "quarter"), warnings, "분기 재무제표"),
     safe(fetchForwardConsensus(market, symbol, yahooOverride), warnings, "포워드 컨센서스"),
   ]);
 

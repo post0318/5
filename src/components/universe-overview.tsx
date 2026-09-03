@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import type { MarketId } from "@/lib/markets/types";
@@ -41,6 +41,8 @@ export function UniverseOverview({ market }: { market: MarketId }) {
   const q = useQuery({
     queryKey: ["universe-overview", market],
     queryFn: () => apiFetch<{ rows: Row[] }>(`/api/universe/overview?market=${market}`),
+    staleTime: 10 * 60_000,
+    placeholderData: keepPreviousData,
   });
   const capUnit = CAP_UNIT[market];
   const revUnit = REV_UNIT[market];

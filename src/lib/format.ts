@@ -120,8 +120,8 @@ export function formatCompactKRW(value: number | null | undefined, opts: FormatO
 }
 
 /**
- * 시가총액 표시 — 시장별 축약 단위.
- * 한국: 십억원(÷1e9, 정수), 미국: 십억$(÷1e9, 2자리), 일본: 억엔(÷1e8, 정수).
+ * 시가총액 축약값 (단위는 헤더/라벨에 별도 표기).
+ * 한국·미국: ÷1e9 (십억원 / 십억$), 일본: ÷1e8 (억엔). 미국만 소수 2자리.
  */
 export function formatMarketCap(
   value: number | null | undefined,
@@ -130,14 +130,13 @@ export function formatMarketCap(
 ): string {
   const { fallback = "-" } = opts;
   if (value === null || value === undefined || !Number.isFinite(value)) return fallback;
-  if (market === "kr") return `${formatNumber(value / 1e9, 0)} 십억원`;
-  if (market === "jp") return `${formatNumber(value / 1e8, 0)} 억엔`;
-  return `${formatNumber(value / 1e9, 2)} 십억$`;
+  if (market === "jp") return formatNumber(value / 1e8, 0);
+  return formatNumber(value / 1e9, market === "us" ? 2 : 0);
 }
 
 /**
- * 매출액 등 대형 손익 항목 표시 — 시장별 축약 단위.
- * 한국: 억원(÷1e8), 일본: 천만엔(÷1e7), 미국: 백만불(÷1e6). 모두 정수·버림.
+ * 매출액 등 대형 손익 항목 축약값 (단위는 헤더/라벨에 별도 표기).
+ * 한국: ÷1e8 (억원), 일본: ÷1e7 (천만엔), 미국: ÷1e6 (백만$). 정수·버림.
  */
 export function formatBigAmount(
   value: number | null | undefined,

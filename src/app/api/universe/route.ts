@@ -1,3 +1,4 @@
+import { updateTag } from "next/cache";
 import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
 import { listUniverse, upsertUniverseItem } from "@/lib/universe/repo";
@@ -19,6 +20,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const item = await upsertUniverseItem(body);
+    updateTag("universe-overview");
     return ok({ item }, { status: 201 });
   } catch (err) {
     return jsonError(err);

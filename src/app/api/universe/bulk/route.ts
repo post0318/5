@@ -1,3 +1,4 @@
+import { updateTag } from "next/cache";
 import { z } from "zod";
 import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
@@ -19,6 +20,7 @@ export async function POST(request: Request) {
       return ok({ preview: parsed.ok, errors: parsed.errors, inserted: 0 });
     }
     const inserted = await bulkUpsert(parsed.ok);
+    updateTag("universe-overview");
     return ok({ preview: parsed.ok, errors: parsed.errors, inserted });
   } catch (err) {
     return jsonError(err);
