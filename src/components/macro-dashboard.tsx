@@ -510,11 +510,21 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     type Row = { date: string; value: number } & Record<string, unknown>;
     let data: Row[] = chartData as Row[];
     if (divCfg) {
-      data = chartData.map((d) => ({
-        ...d,
-        above: Math.max(d.value, divCfg.threshold),
-        below: Math.min(d.value, divCfg.threshold),
-      }));
+      // 기준선 위/아래로 선을 분리 (교차점은 양쪽 포함해 끊김 방지)
+      const th = divCfg.threshold;
+      data = chartData.map((d, i) => {
+        const rel = (v?: number) => (v == null ? null : v >= th);
+        const here = rel(chartData[i]?.value);
+        const prev = rel(chartData[i - 1]?.value);
+        const next = rel(chartData[i + 1]?.value);
+        const isUp = here === true || prev === true || next === true;
+        const isDown = here === false || prev === false || next === false;
+        return {
+          ...d,
+          divUp: isUp ? d.value : null,
+          divDown: isDown ? d.value : null,
+        };
+      });
     }
     if (overlay) {
       const omap = new Map(overlay.history.map((p) => [p.date, p.value]));
@@ -823,39 +833,30 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                   />
                   {divCfg ? (
                     <>
+                      {/* 기준선 위/아래로 선 색 분리 */}
                       <Area
                         type="monotone"
-                        dataKey="above"
-                        baseValue={divCfg.threshold}
-                        isAnimationActive={false}
-                        tooltipType="none"
-                        stroke="none"
-                        fill={divCfg.aboveIsBad ? "oklch(0.58 0.21 27)" : "oklch(0.70 0.18 150)"}
-                        fillOpacity={0.13}
-                        dot={false}
-                        activeDot={false}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="below"
-                        baseValue={divCfg.threshold}
-                        isAnimationActive={false}
-                        tooltipType="none"
-                        stroke="none"
-                        fill={divCfg.aboveIsBad ? "oklch(0.70 0.18 150)" : "oklch(0.58 0.21 27)"}
-                        fillOpacity={0.13}
-                        dot={false}
-                        activeDot={false}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="value"
-                        stroke="var(--foreground)"
-                        strokeWidth={1}
-                        strokeOpacity={0.7}
+                        dataKey="divUp"
+                        name={selected?.valueLabel ?? "값"}
+                        stroke={divCfg.aboveIsBad ? "oklch(0.58 0.21 27)" : "oklch(0.62 0.17 150)"}
+                        strokeWidth={1.6}
                         fill="none"
+                        connectNulls={false}
                         dot={false}
                         activeDot={{ r: 3, strokeWidth: 0 }}
+                        isAnimationActive={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="divDown"
+                        name={selected?.valueLabel ?? "값"}
+                        stroke={divCfg.aboveIsBad ? "oklch(0.62 0.17 150)" : "oklch(0.58 0.21 27)"}
+                        strokeWidth={1.6}
+                        fill="none"
+                        connectNulls={false}
+                        dot={false}
+                        activeDot={{ r: 3, strokeWidth: 0 }}
+                        isAnimationActive={false}
                       />
                     </>
                   ) : overlay ? (
