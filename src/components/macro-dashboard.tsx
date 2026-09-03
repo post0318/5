@@ -540,18 +540,25 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     return data;
   }, [divCfg, chartData, showNorm]);
 
-  // 정규화 점수가 최근 구간(≈10틱) 대비 20점 이상 급락한 지점 (에피소드당 1개)
+  // 정규화 점수가 짧은 구간(≤3틱)에 20점 이상 급락(스파이크)한 지점
   const normDropDots = useMemo(() => {
     if (!showNorm) return [];
-    const LB = 10;
+    const LB = 3;
     const pts = divergingData as { date: string; norm?: number }[];
-    const out: { date: string; norm: number }[] = [];
+    const out: { date: string; y: number; drop: number }[] = [];
     let lastIdx = -99;
     for (let i = LB; i < pts.length; i++) {
       const cur = pts[i].norm;
-      const prev = pts[i - LB].norm;
-      if (cur != null && prev != null && cur <= prev - 20) {
-        if (i - lastIdx > 5) out.push({ date: pts[i].date, norm: cur });
+      // 직전 3틱 중 최고점 대비 급락 폭
+      let peak = -Infinity;
+      for (let j = i - LB; j < i; j++) {
+        const v = pts[j].norm;
+        if (v != null && v > peak) peak = v;
+      }
+      if (cur == null || !Number.isFinite(peak)) continue;
+      const drop = peak - cur;
+      if (drop >= 20 && i - lastIdx > 4) {
+        out.push({ date: pts[i].date, y: (peak + cur) / 2, drop: Math.round(drop) });
         lastIdx = i;
       }
     }
@@ -867,13 +874,25 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                           key={d.date}
                           yAxisId="norm"
                           x={d.date}
-                          y={d.norm}
-                          r={12}
-                          fill="oklch(0.82 0.16 85)"
-                          fillOpacity={0.28}
-                          stroke="oklch(0.72 0.16 70)"
-                          strokeWidth={1.5}
-                          strokeOpacity={0.8}
+                          y={d.y}
+                          r={1}
+                          ifOverflow="extendDomain"
+                          shape={(props: { cx?: number; cy?: number }) =>
+                            props.cx != null && props.cy != null ? (
+                              <ellipse
+                                cx={props.cx}
+                                cy={props.cy}
+                                rx={11}
+                                ry={34}
+                                fill="oklch(0.62 0.22 25)"
+                                fillOpacity={0.08}
+                                stroke="oklch(0.55 0.22 25)"
+                                strokeWidth={1.5}
+                              />
+                            ) : (
+                              <g />
+                            )
+                          }
                         />
                       ))}
                     </>
