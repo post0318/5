@@ -134,13 +134,13 @@ const SPECS: IndicatorSpec[] = [
   },
   // ── 핵심 거시지표 ──────────────────────────────────────────────
   {
-    id: "FEDFUNDS",
-    name: "기준금리 (실효 연방기금금리)",
+    id: "DFEDTARU",
+    name: "기준금리 (목표범위 상단)",
     category: "core",
     unit: "%",
-    note: "통화정책 스탠스. 인하는 완화(성장 우호), 인상은 긴축.",
+    note: "FOMC 목표범위 상단. 실효금리(중앙값)가 아닌 상단값. 인하=완화, 인상=긴축.",
     goodDirection: "down",
-    frequency: "monthly",
+    frequency: "daily",
   },
   {
     id: "CPIAUCSL",
@@ -346,8 +346,13 @@ function buildIndicator(spec: IndicatorSpec, rawSeries: MacroPoint[]): MacroIndi
     verdict,
     verdictReason,
     // 일간 계열은 최근 ~1년(260거래일), 월간·분기는 최근 60포인트.
-    // 나스닥은 모든 카드(월간 5년·GDP 15년)에 오버레이로 재사용되므로 자르지 않는다.
-    series: spec.id === "NASDAQCOM" ? series : series.slice(spec.frequency === "daily" ? -260 : -60),
+    // 나스닥은 오버레이로 재사용되므로 안 자르고, 기준금리(계단형)는 맥락상 5년 유지.
+    series:
+      spec.id === "NASDAQCOM"
+        ? series
+        : spec.id === "DFEDTARU"
+          ? series.slice(-1300)
+          : series.slice(spec.frequency === "daily" ? -260 : -60),
   };
 }
 

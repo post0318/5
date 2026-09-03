@@ -662,7 +662,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       data = split.map((d) => ({ ...d, normUp: d.divGood, normDown: d.divBad }));
     }
     if (showMa) {
-      // 원본값에 단순이동평균 20·60 을 얹고, MA20≥MA60 이면 원본선 녹색 / 아니면 적색
+      // 원본값에 단순이동평균 20 을 얹고, 원본이 MA20 위면 녹색 / 아래면 적색
       const sma = (period: number) => {
         const out: (number | null)[] = [];
         let sum = 0;
@@ -674,9 +674,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         return out;
       };
       const ma20 = sma(20);
-      const ma60 = sma(60);
-      const dir = data.map((_, k) =>
-        ma20[k] != null && ma60[k] != null ? (ma20[k] as number) >= (ma60[k] as number) : null,
+      const dir = data.map((d, k) =>
+        ma20[k] != null ? (d as { value: number }).value >= (ma20[k] as number) : null,
       );
       data = data.map((d, i) => {
         const v = (d as { value: number }).value;
@@ -685,10 +684,9 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         return {
           ...d,
           ma20: ma20[i],
-          ma60: ma60[i],
           maGood: inClass(true) ? v : null,
           maBad: inClass(false) ? v : null,
-          maBase: inClass(null) ? v : null, // MA60 산출 전(초기 구간)
+          maBase: inClass(null) ? v : null, // MA20 산출 전(초기 구간)
         };
       });
     }
@@ -1093,17 +1091,6 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         connectNulls
                         isAnimationActive={false}
                       />
-                      <Line
-                        type="monotone"
-                        dataKey="ma60"
-                        name="MA60"
-                        stroke="var(--muted-foreground)"
-                        strokeWidth={1}
-                        strokeDasharray="4 3"
-                        dot={false}
-                        connectNulls
-                        isAnimationActive={false}
-                      />
                     </>
                   ) : (
                     <Area
@@ -1244,8 +1231,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
 }
 
 // 나스닥 리베이스 오버레이를 숨길 지표
-//  - FEDFUNDS: 첫 값이 ~0(제로금리기)이라 리베이스 시 바닥에 눌려 의미 없음
-const HIDE_NASDAQ_OVERLAY = new Set(["FEDFUNDS"]);
+//  - DFEDTARU(기준금리): 첫 값이 ~0(제로금리기)이라 리베이스 시 바닥에 눌려 의미 없음
+const HIDE_NASDAQ_OVERLAY = new Set(["DFEDTARU"]);
 
 function IndicatorCard({ ind, nasdaq: nasdaqRaw }: { ind: Indicator; nasdaq: Indicator | null }) {
   const nasdaq = HIDE_NASDAQ_OVERLAY.has(ind.id) ? null : nasdaqRaw;
