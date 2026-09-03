@@ -494,6 +494,14 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       refLabel: "기준선 0",
       refColor: "oklch(0.78 0.08 250)",
     },
+    stock_price_strength: {
+      threshold: 0,
+      aboveIsBad: false,
+      aboveLabel: "▲ 신고가 우위 (강세)",
+      belowLabel: "▼ 신저가 우위 (약세)",
+      refLabel: "기준선 0",
+      refColor: "oklch(0.78 0.08 250)",
+    },
     market_volatility_vix: {
       // FRED VIXCLS(1990~) 장기 평균 — 매일 갱신되어 값이 조금씩 변함
       threshold: fg.vixHistoricalAvg ?? 19.43,
@@ -509,7 +517,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
   // 원본 값 + 정규화(0~100) 점수를 함께 보여주는 지표
-  const NORM_KEYS = new Set(["junk_bond_demand", "stock_price_strength"]);
+  const NORM_KEYS = new Set(["junk_bond_demand"]);
   const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
   const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
   const showDropMarkers = selected?.key === "junk_bond_demand";
