@@ -478,6 +478,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       aboveLabel?: string;
       belowLabel?: string;
       refLabel?: string;
+      /** 기준선 색 (지정 시 실선) */
+      refColor?: string;
       /** Y축 눈금 간격 */
       tickStep?: number;
       /** 도메인 경계 스냅 단위 */
@@ -489,6 +491,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       aboveIsBad: false,
       aboveLabel: "▲ 주식성과가 채권을 능가",
       belowLabel: "▼ 채권성과가 주식을 능가",
+      refLabel: "기준선 0",
+      refColor: "oklch(0.55 0.19 255)",
     },
     market_volatility_vix: {
       // FRED VIXCLS(1990~) 장기 평균 — 매일 갱신되어 값이 조금씩 변함
@@ -497,6 +501,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       aboveLabel: "▲ 역사적 평균 상회 · 변동성 확대",
       belowLabel: "▼ 역사적 평균 하회 · 안정",
       refLabel: `역사적 평균 ${(fg.vixHistoricalAvg ?? 19.43).toFixed(2)}`,
+      refColor: "oklch(0.55 0.19 255)",
       tickStep: 5, // 라벨은 5 단위
       domainSnap: 5,
     },
@@ -755,9 +760,10 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       )}
                       <ReferenceLine
                         y={divCfg.threshold}
-                        stroke="var(--muted-foreground)"
-                        strokeDasharray="1 3"
-                        strokeOpacity={0.4}
+                        stroke={divCfg.refColor ?? "var(--muted-foreground)"}
+                        strokeWidth={divCfg.refColor ? 1.5 : 1}
+                        strokeDasharray={divCfg.refColor ? undefined : "1 3"}
+                        strokeOpacity={divCfg.refColor ? 0.9 : 0.4}
                         label={
                           divCfg.refLabel
                             ? {
@@ -765,7 +771,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                                 position: "insideLeft",
                                 fontSize: 10,
                                 fontWeight: 600,
-                                fill: "var(--foreground)",
+                                fill: divCfg.refColor ?? "var(--foreground)",
                                 dy: -10,
                               }
                             : undefined
