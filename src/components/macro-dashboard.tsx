@@ -562,21 +562,21 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
   // 원본 값 + 정규화(0~100) 점수를 함께 보여주는 지표
-  const NORM_KEYS = new Set(["junk_bond_demand", "stock_price_breadth"]);
+  const NORM_KEYS = new Set(["junk_bond_demand"]);
   const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
   const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
-  // 정규화 점수가 threshold 이상 급락한 구간 강조
-  //  - ellipse: 급락 지점에 빨간 타원 (정크본드)
-  //  - line   : 급락 구간을 빨간선으로 (주가 폭)
-  const DROP_CFG: Record<string, { threshold: number; style: "ellipse" | "line" }> = {
+  // 정규화 점수가 threshold 이상(직전 대비) 급락한 지점에 빨간 세로 타원 (정크본드)
+  const DROP_CFG: Record<string, { threshold: number; style: "ellipse" }> = {
     junk_bond_demand: { threshold: 20, style: "ellipse" },
-    stock_price_breadth: { threshold: 10, style: "line" },
   };
   const dropCfg = selected ? DROP_CFG[selected.key] : undefined;
   const dropThreshold = dropCfg?.threshold;
   const dropStyle = dropCfg?.style;
   // 정규화선 색: "direction" = 상승 녹/하락 적, 그 외 = 50 기준 위 녹/아래 적
   const normColorByDirection = selected?.key === "junk_bond_demand";
+  // 원본 값에 이동평균선(20·60)을 얹는 지표
+  const MA_KEYS = new Set(["stock_price_breadth"]);
+  const showMa = selected ? MA_KEYS.has(selected.key) : false;
   const overlay = selected?.overlay ?? null;
   const divergingData = useMemo(() => {
     type Row = { date: string; value: number } & Record<string, unknown>;
@@ -622,25 +622,18 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         return { ...d, norm: Math.round((normInvert ? 100 - raw : raw) * 10) / 10 };
       });
 
-      // 직전 대비 dropThreshold 이상 급락한 구간 감지
-      const dropIdx = new Set<number>(); // line 스타일: 급락 구간 인덱스
-      const dropInfo = new Map<number, { mid: number; span: number }>(); // ellipse 스타일
+      // 직전 대비 dropThreshold 이상 급락한 지점 → 빨간 세로 타원 (정크본드)
+      const dropInfo = new Map<number, { mid: number; span: number }>();
       if (dropThreshold != null) {
         for (let i = 1; i < normed.length; i++) {
           const span = normed[i - 1].norm - normed[i].norm; // 직전 대비 하락폭
-          if (span < dropThreshold) continue;
-          if (dropStyle === "ellipse") {
+          if (span >= dropThreshold) {
             dropInfo.set(i, { mid: (normed[i - 1].norm + normed[i].norm) / 2, span });
-          } else {
-            dropIdx.add(i - 1);
-            dropIdx.add(i);
           }
         }
       }
-
       const marked = normed.map((d, i) => ({
         ...d,
-        isDrop: dropIdx.has(i),
         dropMid: dropInfo.get(i)?.mid ?? null,
         dropSpan: dropInfo.get(i)?.span ?? 0,
       }));
@@ -659,7 +652,6 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
           };
         });
       } else {
-        // 정규화 50 기준: 위 녹색 / 아래 적색 (교차점 보간으로 겹침 방지)
         split = splitByThreshold(
           marked.map((d) => ({ ...d, splitVal: d.norm })),
           50,
@@ -667,19 +659,41 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         );
       }
 
-      data = split.map((d) => {
-        const drop = "isDrop" in d && (d as { isDrop?: boolean }).isDrop;
+      data = split.map((d) => ({ ...d, normUp: d.divGood, normDown: d.divBad }));
+    }
+    if (showMa) {
+      // 원본값에 단순이동평균 20·60 을 얹고, MA20≥MA60 이면 원본선 녹색 / 아니면 적색
+      const sma = (period: number) => {
+        const out: (number | null)[] = [];
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          sum += (data[i] as { value: number }).value;
+          if (i >= period) sum -= (data[i - period] as { value: number }).value;
+          out.push(i >= period - 1 ? Math.round((sum / period) * 100) / 100 : null);
+        }
+        return out;
+      };
+      const ma20 = sma(20);
+      const ma60 = sma(60);
+      const dir = data.map((_, k) =>
+        ma20[k] != null && ma60[k] != null ? (ma20[k] as number) >= (ma60[k] as number) : null,
+      );
+      data = data.map((d, i) => {
+        const v = (d as { value: number }).value;
+        // 점 또는 이웃이 해당 상태면 포함 → 전환점에서 선이 끊기지 않음
+        const inClass = (c: boolean | null) => dir[i] === c || dir[i - 1] === c || dir[i + 1] === c;
         return {
           ...d,
-          // line 스타일 급락 구간은 위/아래 색선을 끊고 별도 빨간선(normDrop)으로
-          normUp: drop ? null : d.divGood,
-          normDown: drop ? null : d.divBad,
-          normDrop: drop ? d.norm : null,
+          ma20: ma20[i],
+          ma60: ma60[i],
+          maGood: inClass(true) ? v : null,
+          maBad: inClass(false) ? v : null,
+          maBase: inClass(null) ? v : null, // MA60 산출 전(초기 구간)
         };
       });
     }
     return data;
-  }, [divCfg, chartData, showNorm, normInvert, overlay, dropThreshold, dropStyle, normColorByDirection]);
+  }, [divCfg, chartData, showNorm, normInvert, overlay, dropThreshold, normColorByDirection, showMa]);
 
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
@@ -784,24 +798,15 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 {showNorm && (
                   <span className="ml-2">
                     · 점선 = 자체 정규화 0~100 (최근 1년 min-max, CNN 점수와 다름 · 우측축,{" "}
-                    {normColorByDirection ? (
-                      <>
-                        <span className="text-up">상승=녹색</span> /{" "}
-                        <span className="text-down">하락=적색</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-up">50 위=녹색</span> /{" "}
-                        <span className="text-down">아래=적색</span>
-                      </>
-                    )}
-                    )
-                    {dropStyle === "line" && (
-                      <span>
-                        {" "}
-                        · <span className="text-down">급락(−{dropThreshold}p)=빨간선</span>
-                      </span>
-                    )}
+                    <span className="text-up">상승=녹색</span> /{" "}
+                    <span className="text-down">하락=적색</span>)
+                  </span>
+                )}
+                {showMa && (
+                  <span className="ml-2">
+                    · <span style={{ color: "oklch(0.62 0.13 250)" }}>실선 MA20</span> / 점선 MA60 ·
+                    원본선 <span className="text-up">MA20≥MA60=녹색</span> /{" "}
+                    <span className="text-down">아래=적색</span>
                   </span>
                 )}
                 {overlay && (
@@ -1028,6 +1033,78 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         isAnimationActive={false}
                       />
                     </>
+                  ) : showMa ? (
+                    <>
+                      {/* 원본선: MA20 ≥ MA60 = 녹색 / 아래 = 적색 */}
+                      <Area
+                        type="monotone"
+                        dataKey="value"
+                        name={selected?.valueLabel ?? "값"}
+                        stroke="none"
+                        fill="none"
+                        dot={false}
+                        activeDot={false}
+                        isAnimationActive={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="maBase"
+                        tooltipType="none"
+                        stroke="var(--foreground)"
+                        strokeWidth={1.4}
+                        strokeOpacity={0.6}
+                        fill="none"
+                        connectNulls={false}
+                        dot={false}
+                        activeDot={false}
+                        isAnimationActive={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="maGood"
+                        tooltipType="none"
+                        stroke="oklch(0.62 0.17 150)"
+                        strokeWidth={1.6}
+                        fill="none"
+                        connectNulls={false}
+                        dot={false}
+                        activeDot={{ r: 3, strokeWidth: 0 }}
+                        isAnimationActive={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="maBad"
+                        tooltipType="none"
+                        stroke="oklch(0.58 0.21 27)"
+                        strokeWidth={1.6}
+                        fill="none"
+                        connectNulls={false}
+                        dot={false}
+                        activeDot={{ r: 3, strokeWidth: 0 }}
+                        isAnimationActive={false}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="ma20"
+                        name="MA20"
+                        stroke="oklch(0.62 0.13 250)"
+                        strokeWidth={1.1}
+                        dot={false}
+                        connectNulls
+                        isAnimationActive={false}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="ma60"
+                        name="MA60"
+                        stroke="var(--muted-foreground)"
+                        strokeWidth={1}
+                        strokeDasharray="4 3"
+                        dot={false}
+                        connectNulls
+                        isAnimationActive={false}
+                      />
+                    </>
                   ) : (
                     <Area
                       type="monotone"
@@ -1067,21 +1144,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         isAnimationActive={false}
                         name="norm"
                       />
-                      {/* 주가 폭: 급락(10p 이상) 구간을 빨간선으로 강조 */}
-                      {dropStyle === "line" && (
-                        <Line
-                          yAxisId="norm"
-                          type="monotone"
-                          dataKey="normDrop"
-                          stroke="oklch(0.55 0.22 27)"
-                          strokeWidth={2.4}
-                          dot={false}
-                          connectNulls={false}
-                          isAnimationActive={false}
-                          name="norm"
-                        />
-                      )}
-                      {/* 정크본드: 급락(20p 이상) 지점에 빨간 세로 타원 */}
+                      {/* 정크본드: 급락(직전 대비 20p 이상) 지점에 빨간 세로 타원 */}
                       {dropStyle === "ellipse" && (
                         <Line
                           yAxisId="norm"
