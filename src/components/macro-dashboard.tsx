@@ -562,7 +562,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
   // 원본 값 + 정규화(0~100) 점수를 함께 보여주는 지표
-  const NORM_KEYS = new Set(["junk_bond_demand"]);
+  const NORM_KEYS = new Set(["junk_bond_demand", "put_call_options"]);
   const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
   const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
   // 정규화 점수가 threshold 이상(직전 대비) 급락한 지점에 빨간 세로 타원 (정크본드)
@@ -796,8 +796,18 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 {showNorm && (
                   <span className="ml-2">
                     · 점선 = 자체 정규화 0~100 (최근 1년 min-max, CNN 점수와 다름 · 우측축,{" "}
-                    <span className="text-up">상승=녹색</span> /{" "}
-                    <span className="text-down">하락=적색</span>)
+                    {normColorByDirection ? (
+                      <>
+                        <span className="text-up">상승=녹색</span> /{" "}
+                        <span className="text-down">하락=적색</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-up">50 위=녹색</span> /{" "}
+                        <span className="text-down">아래=적색</span>
+                      </>
+                    )}
+                    )
                   </span>
                 )}
                 {showMa && (
@@ -1108,6 +1118,22 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                   )}
                   {showNorm && (
                     <>
+                      <ReferenceLine
+                        yAxisId="norm"
+                        y={50}
+                        stroke="oklch(0.78 0.08 250)"
+                        strokeWidth={1.25}
+                        strokeDasharray="4 3"
+                        strokeOpacity={0.85}
+                        label={{
+                          value: "정규화 50",
+                          position: "insideLeft",
+                          fontSize: 10,
+                          fontWeight: 600,
+                          fill: "oklch(0.78 0.08 250)",
+                          dy: -10,
+                        }}
+                      />
                       <Line
                         yAxisId="norm"
                         type="monotone"
