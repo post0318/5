@@ -119,6 +119,37 @@ export function formatCompactKRW(value: number | null | undefined, opts: FormatO
   return formatNumber(value, 0);
 }
 
+/**
+ * 시가총액 표시 — 시장별 축약 단위.
+ * 한국: 십억원(÷1e9, 정수), 미국: 십억$(÷1e9, 2자리), 일본: 억엔(÷1e8, 정수).
+ */
+export function formatMarketCap(
+  value: number | null | undefined,
+  market: "kr" | "us" | "jp",
+  opts: FormatOptions = {},
+): string {
+  const { fallback = "-" } = opts;
+  if (value === null || value === undefined || !Number.isFinite(value)) return fallback;
+  if (market === "kr") return `${formatNumber(value / 1e9, 0)} 십억원`;
+  if (market === "jp") return `${formatNumber(value / 1e8, 0)} 억엔`;
+  return `${formatNumber(value / 1e9, 2)} 십억$`;
+}
+
+/**
+ * 매출액 등 대형 손익 항목 표시 — 시장별 축약 단위.
+ * 한국: 억원(÷1e8), 일본: 천만엔(÷1e7), 미국: 백만불(÷1e6). 모두 정수·버림.
+ */
+export function formatBigAmount(
+  value: number | null | undefined,
+  market: "kr" | "us" | "jp",
+  opts: FormatOptions = {},
+): string {
+  const { fallback = "-" } = opts;
+  if (value === null || value === undefined || !Number.isFinite(value)) return fallback;
+  const div = market === "kr" ? 1e8 : market === "jp" ? 1e7 : 1e6;
+  return formatNumber(value / div, 0);
+}
+
 /** 값이 음수인지 (표시 색상 판단용). prd.md §6: 마이너스는 빨간색. */
 export function isNegative(value: number | null | undefined): boolean {
   return typeof value === "number" && Number.isFinite(value) && value < 0;
