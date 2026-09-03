@@ -21,7 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface Item {
-  id: number;
+  id: string;
   market: MarketId;
   symbol: string;
   name: string | null;

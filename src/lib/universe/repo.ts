@@ -1,10 +1,15 @@
 import "server-only";
-import { and, asc, eq } from "drizzle-orm";
+import { ObjectId, type WithId } from "mongodb";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { universeItems, type UniverseItem } from "@/lib/db/schema";
+import { universeCol } from "@/lib/db";
+import type { UniverseItem, UniverseItemDoc } from "@/lib/db/schema";
 import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId, type MarketId } from "@/lib/markets/types";
+
+function toItem(doc: WithId<UniverseItemDoc>): UniverseItem {
+  const { _id, ...rest } = doc;
+  return { id: _id.toHexString(), ...rest };
+}
 
 export const marketSchema = z.enum(["kr", "us", "jp"]);
 
@@ -29,60 +34,52 @@ export async function listUniverse(filter?: {
   market?: MarketId;
   activeOnly?: boolean;
 }): Promise<UniverseItem[]> {
-  const conds = [];
-  if (filter?.market) conds.push(eq(universeItems.market, filter.market));
-  if (filter?.activeOnly) conds.push(eq(universeItems.active, true));
-  return db
-    .select()
-    .from(universeItems)
-    .where(conds.length ? and(...conds) : undefined)
-    .orderBy(asc(universeItems.market), asc(universeItems.symbol));
+  const col = await universeCol();
+  const q: Record<string, unknown> = {};
+  if (filter?.market) q.market = filter.market;
+  if (filter?.activeOnly) q.active = true;
+  const docs = await col.find(q).sort({ market: 1, symbol: 1 }).toArray();
+  return docs.map(toItem);
 }
 
 export async function upsertUniverseItem(raw: UniverseInput): Promise<UniverseItem> {
   const input = normalize(universeInputSchema.parse(raw));
-  const now = new Date().toISOString().replace("T", " ").slice(0, 19);
-  const [row] = await db
-    .insert(universeItems)
-    .values({
-      market: input.market,
-      symbol: input.symbol,
-      name: input.name ?? null,
-      yahooSymbol: input.yahooSymbol ?? null,
-      groupName: input.groupName ?? null,
-      tags: input.tags ?? [],
-      active: input.active ?? true,
-      note: input.note ?? null,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: [universeItems.market, universeItems.symbol],
-      set: {
-        name: input.name ?? null,
-        yahooSymbol: input.yahooSymbol ?? null,
-        groupName: input.groupName ?? null,
-        tags: input.tags ?? [],
-        active: input.active ?? true,
-        note: input.note ?? null,
-        updatedAt: now,
-      },
-    })
-    .returning();
-  return row;
+  const col = await universeCol();
+  const now = new Date().toISOString();
+  const set = {
+    name: input.name ?? null,
+    yahooSymbol: input.yahooSymbol ?? null,
+    groupName: input.groupName ?? null,
+    tags: input.tags ?? [],
+    active: input.active ?? true,
+    note: input.note ?? null,
+    updatedAt: now,
+  };
+  const doc = await col.findOneAndUpdate(
+    { market: input.market, symbol: input.symbol },
+    { $set: set, $setOnInsert: { createdAt: now } },
+    { upsert: true, returnDocument: "after" },
+  );
+  if (!doc) throw new Error("유니버스 저장 실패");
+  return toItem(doc);
 }
 
-export async function deleteUniverseItem(id: number): Promise<boolean> {
-  const res = await db.delete(universeItems).where(eq(universeItems.id, id)).returning();
-  return res.length > 0;
+export async function deleteUniverseItem(id: string): Promise<boolean> {
+  if (!ObjectId.isValid(id)) return false;
+  const col = await universeCol();
+  const res = await col.deleteOne({ _id: new ObjectId(id) });
+  return res.deletedCount > 0;
 }
 
-export async function setActive(id: number, active: boolean): Promise<UniverseItem | null> {
-  const [row] = await db
-    .update(universeItems)
-    .set({ active })
-    .where(eq(universeItems.id, id))
-    .returning();
-  return row ?? null;
+export async function setActive(id: string, active: boolean): Promise<UniverseItem | null> {
+  if (!ObjectId.isValid(id)) return null;
+  const col = await universeCol();
+  const doc = await col.findOneAndUpdate(
+    { _id: new ObjectId(id) },
+    { $set: { active, updatedAt: new Date().toISOString() } },
+    { returnDocument: "after" },
+  );
+  return doc ? toItem(doc) : null;
 }
 
 /**

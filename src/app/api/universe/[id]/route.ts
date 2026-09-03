@@ -11,7 +11,7 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = patchSchema.parse(await request.json());
-    const item = await setActive(Number(id), body.active);
+    const item = await setActive(id, body.active);
     if (!item) return Response.json({ error: "없는 항목" }, { status: 404 });
     return ok({ item });
   } catch (err) {
@@ -25,7 +25,7 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const deleted = await deleteUniverseItem(Number(id));
+    const deleted = await deleteUniverseItem(id);
     if (!deleted) return Response.json({ error: "없는 항목" }, { status: 404 });
     return ok({ deleted: true });
   } catch (err) {

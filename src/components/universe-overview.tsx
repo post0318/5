@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { ChangePercent, Money, Multiple } from "@/components/num";
 
 interface Row {
-  id: number;
+  id: string;
   market: MarketId;
   symbol: string;
   name: string | null;

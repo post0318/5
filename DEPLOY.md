@@ -3,29 +3,20 @@
 Vercel CLI는 설치·로그인(post0318) 완료 상태. 아래는 사용자가 직접 실행해야 하는 단계
 (자동 승인 정책이 `vercel link` / `vercel deploy` / `git push` 를 막음).
 
-## 1. 데이터베이스 — Turso (libSQL 클라우드)
+## 1. 데이터베이스 — MongoDB Atlas
 
-로컬은 `file:./data/app.db` SQLite. Vercel 서버리스는 파일 쓰기 불가 →
-**Turso** 로 전환 (코드 변경 없음, 환경변수만).
+유니버스 저장소는 MongoDB `universe_items` 컬렉션.
 
-```bash
-# Turso CLI 설치 (한 번)
-curl -sSfL https://get.tur.so/install.sh | bash    # 또는 Windows: irm https://get.tur.so/install.ps1 | iex
+1. cloud.mongodb.com 에서 무료 M0 클러스터 생성
+2. **Network Access** → `0.0.0.0/0` 추가 (Vercel IP는 동적)
+3. **Database Access** → 사용자 생성, 접속 문자열 복사
+   `mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/?appName=Cluster0`
+4. `MONGODB_URI` 환경변수로 등록 (§3)
 
-turso auth signup            # 또는 turso auth login
-turso db create market-research
-turso db show market-research --url          # → DATABASE_URL (libsql://...)
-turso db tokens create market-research       # → DATABASE_AUTH_TOKEN
-```
+인덱스(시장+심볼 유니크)는 앱이 첫 요청 때 자동 생성.
 
-스키마 적용 (로컬에서 원격 Turso 대상):
-
-```bash
-DATABASE_URL="libsql://..." DATABASE_AUTH_TOKEN="..." npx drizzle-kit migrate
-```
-
-> Turso 없이 배포해도 **거시경제·종목분석·지수·F&G 는 정상 동작**.
-> `유니버스 관리`·`유니버스 통합 뷰` 두 화면만 DB 필요 → 그 화면에서 에러 표시.
+> MongoDB 없이 배포해도 **거시경제·종목분석·지수·F&G 는 정상 동작**.
+> `유니버스 관리`·`유니버스 통합 뷰` 두 화면만 DB 필요.
 
 ## 2. Vercel 프로젝트 연결
 
@@ -37,8 +28,7 @@ vercel link            # 대화형: post0318 스코프 선택, 프로젝트명 �
 ## 3. 환경변수 등록
 
 ```bash
-vercel env add DATABASE_URL production          # libsql://... (Turso)
-vercel env add DATABASE_AUTH_TOKEN production    # Turso 토큰
+vercel env add MONGODB_URI production   # mongodb+srv://...
 vercel env add DART_API_KEY production           # .env.local 값 그대로
 vercel env add EDINET_API_KEY production
 vercel env add KRX_API_KEY production
