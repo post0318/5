@@ -91,8 +91,8 @@ function addSlide(pptx: PptxGenJS, d: StockSlideData) {
   const ovY = 1.05;
   const ovLines = d.overview ? d.overview.split(/\r?\n/).map((x) => x.trim()).filter(Boolean) : [];
   const ovH = 1.0;
-  s.addShape("roundRect", {
-    x: MX, y: ovY, w: W - MX * 2, h: ovH, rectRadius: 0.02,
+  s.addShape("rect", {
+    x: MX, y: ovY, w: W - MX * 2, h: ovH,
     fill: { color: "FBF6F0" }, line: { color: GOLD, width: 1 },
   });
   s.addText(
@@ -231,8 +231,8 @@ function drawPriceChart(
   const plotW = w - pl - pr;
   const plotH = h - ptop - pbot;
 
-  const A = downsample(d.price, 110);
-  const B = d.bench.length >= 5 ? downsample(d.bench, 110) : [];
+  const A = downsample(d.price, 70);
+  const B = d.bench.length >= 5 ? downsample(d.bench, 70) : [];
   const a0 = A[0].close;
   const b0 = B.length ? B[0].close : 1;
   // 좌축 = 종목의 (3년) 저가~고가. 시작시점 비율(=1)을 좌우 공통 기준으로 삼아
@@ -265,25 +265,23 @@ function drawPriceChart(
     }
   }
 
-  // 나스닥 (회색)
-  if (B.length) {
-    const bPts: NonNullable<PptxGenJS.ShapeProps["points"]> = B.map((p, i) => ({
-      x: cx(i, B.length), y: cyR(p.close / b0), ...(i === 0 ? { moveTo: true } : {}),
-    }));
-    s.addShape("custGeom" as PptxGenJS.SHAPE_NAME, { x, y, w, h, points: bPts, fill: { type: "none" }, line: { color: "9AA3AF", width: 1 } });
-  }
-
-  // 종목 (네이비) — 영역 + 선
-  const aPts: NonNullable<PptxGenJS.ShapeProps["points"]> = A.map((p, i) => ({
-    x: cx(i, A.length), y: cyR(p.close / a0), ...(i === 0 ? { moveTo: true } : {}),
-  }));
-  s.addShape("custGeom" as PptxGenJS.SHAPE_NAME, {
-    x, y, w, h,
-    points: [...aPts, { x: cx(A.length - 1, A.length), y: ptop + plotH }, { x: cx(0, A.length), y: ptop + plotH }, { close: true }],
-    fill: { color: NAVY, transparency: 90 },
-    line: { type: "none" },
-  });
-  s.addShape("custGeom" as PptxGenJS.SHAPE_NAME, { x, y, w, h, points: aPts, fill: { type: "none" }, line: { color: NAVY, width: 1.75 } });
+  // 폴리라인을 직선 세그먼트 도형으로 그림 (custGeom 미사용 → PowerPoint 2007 호환)
+  const polyline = (rows: { close: number }[], base: number, color: string, wpt: number) => {
+    for (let i = 1; i < rows.length; i++) {
+      const x1 = x + cx(i - 1, rows.length);
+      const y1 = y + cyR(rows[i - 1].close / base);
+      const x2 = x + cx(i, rows.length);
+      const y2 = y + cyR(rows[i].close / base);
+      s.addShape("line", {
+        x: Math.min(x1, x2), y: Math.min(y1, y2),
+        w: Math.abs(x2 - x1) || 0.001, h: Math.abs(y2 - y1) || 0.001,
+        flipV: y2 < y1,
+        line: { color, width: wpt },
+      });
+    }
+  };
+  if (B.length) polyline(B, b0, "9AA3AF", 1);
+  polyline(A, a0, NAVY, 1.75);
 
   // x축 라벨
   const dl = (i: number) => A[i].date.slice(2).replace(/-/g, ".");
