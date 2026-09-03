@@ -562,7 +562,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
   // 원본 값 + 정규화(0~100) 점수를 함께 보여주는 지표
-  const NORM_KEYS = new Set(["junk_bond_demand"]);
+  const NORM_KEYS = new Set(["junk_bond_demand", "stock_price_breadth"]);
   const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
   const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
   const showDropMarkers = selected?.key === "junk_bond_demand";
@@ -742,8 +742,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 {selected.valueLabel} · 원본 값
                 {showNorm && (
                   <span className="ml-2">
-                    · 점선 = 정규화 점수 0~100 (우측축, <span className="text-up">50 위=녹색</span> /{" "}
-                    <span className="text-down">아래=적색</span>)
+                    · 점선 = 자체 정규화 0~100 (최근 1년 min-max, CNN 점수와 다름 · 우측축,{" "}
+                    <span className="text-up">50 위=녹색</span> / <span className="text-down">아래=적색</span>)
                   </span>
                 )}
                 {overlay && (
