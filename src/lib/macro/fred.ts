@@ -47,8 +47,12 @@ interface IndicatorSpec {
   goodDirection: "up" | "down" | "none";
   frequency: "daily" | "weekly" | "monthly" | "quarterly";
   transform?: "level" | "yoy";
-  /** 레벨 기반 추가 해석 (선택) */
-  levelVerdict?: (latest: number, dir: SignalDirection) => { verdict: SignalVerdict; reason: string } | null;
+  /** 레벨 기반 추가 해석 (선택). ctx: 수집 구간(2015~) 통계 */
+  levelVerdict?: (
+    latest: number,
+    dir: SignalDirection,
+    ctx: { max: number; min: number },
+  ) => { verdict: SignalVerdict; reason: string } | null;
 }
 
 const SPECS: IndicatorSpec[] = [
@@ -182,7 +186,9 @@ const SPECS: IndicatorSpec[] = [
     note: "장기 금리 벤치마크. 상승은 밸류에이션·차입비용 부담, 하락은 금융환경 완화.",
     goodDirection: "down",
     frequency: "daily",
-    levelVerdict: (v, dir) => {
+    levelVerdict: (v, dir, ctx) => {
+      if (v >= ctx.max - 1e-9)
+        return { verdict: "negative", reason: `${v.toFixed(2)}% — 최고치 경신(2015~), 밸류에이션 압박` };
       if (dir === "up")
         return { verdict: "negative", reason: `${v.toFixed(2)}% — 장기금리 상승, 밸류에이션·차입비용 부담` };
       if (dir === "down")
@@ -311,10 +317,14 @@ function buildIndicator(spec: IndicatorSpec, rawSeries: MacroPoint[]): MacroIndi
         ? "up"
         : "down";
 
+  const seriesVals = series.map((p) => p.value);
+  const seriesMax = seriesVals.length ? Math.max(...seriesVals) : 0;
+  const seriesMin = seriesVals.length ? Math.min(...seriesVals) : 0;
+
   let verdict: SignalVerdict = "neutral";
   let verdictReason = "";
   if (spec.levelVerdict && latest) {
-    const lv = spec.levelVerdict(latest.value, direction6m);
+    const lv = spec.levelVerdict(latest.value, direction6m, { max: seriesMax, min: seriesMin });
     if (lv) {
       verdict = lv.verdict;
       verdictReason = lv.reason;
