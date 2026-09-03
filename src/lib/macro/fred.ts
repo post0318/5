@@ -47,11 +47,11 @@ interface IndicatorSpec {
   goodDirection: "up" | "down" | "none";
   frequency: "daily" | "weekly" | "monthly" | "quarterly";
   transform?: "level" | "yoy";
-  /** 레벨 기반 추가 해석 (선택). ctx: 수집 구간(2015~) 통계 */
+  /** 레벨 기반 추가 해석 (선택). ctx: max/min = 수집구간(2015~), low12m/high12m = 최근 12관측 */
   levelVerdict?: (
     latest: number,
     dir: SignalDirection,
-    ctx: { max: number; min: number },
+    ctx: { max: number; min: number; low12m: number; high12m: number },
   ) => { verdict: SignalVerdict; reason: string } | null;
 }
 
@@ -204,6 +204,19 @@ const SPECS: IndicatorSpec[] = [
     note: "침체에 후행, 회복에 동행. 저점에서 반등 시작이 경고(삼의 법칙).",
     goodDirection: "down",
     frequency: "monthly",
+    levelVerdict: (v, dir, ctx) => {
+      const sahm = Math.round((v - ctx.low12m) * 100) / 100; // 최근 1년 저점 대비 상승폭
+      if (sahm >= 0.5)
+        return {
+          verdict: "negative",
+          reason: `${v.toFixed(1)}% — 1년 저점 대비 +${sahm.toFixed(1)}%p, 삼의 법칙(침체) 신호`,
+        };
+      if (sahm >= 0.3 || dir === "up")
+        return { verdict: "negative", reason: `${v.toFixed(1)}% — 저점서 반등(+${sahm.toFixed(1)}%p), 노동시장 둔화` };
+      if (dir === "down")
+        return { verdict: "positive", reason: `${v.toFixed(1)}% — 하락 추세, 노동시장 견조` };
+      return { verdict: "positive", reason: `${v.toFixed(1)}% — 저점권 안정 (완전고용 수준)` };
+    },
   },
 ];
 
@@ -320,11 +333,19 @@ function buildIndicator(spec: IndicatorSpec, rawSeries: MacroPoint[]): MacroIndi
   const seriesVals = series.map((p) => p.value);
   const seriesMax = seriesVals.length ? Math.max(...seriesVals) : 0;
   const seriesMin = seriesVals.length ? Math.min(...seriesVals) : 0;
+  const last12 = seriesVals.slice(-12);
+  const low12m = last12.length ? Math.min(...last12) : seriesMin;
+  const high12m = last12.length ? Math.max(...last12) : seriesMax;
 
   let verdict: SignalVerdict = "neutral";
   let verdictReason = "";
   if (spec.levelVerdict && latest) {
-    const lv = spec.levelVerdict(latest.value, direction6m, { max: seriesMax, min: seriesMin });
+    const lv = spec.levelVerdict(latest.value, direction6m, {
+      max: seriesMax,
+      min: seriesMin,
+      low12m,
+      high12m,
+    });
     if (lv) {
       verdict = lv.verdict;
       verdictReason = lv.reason;
