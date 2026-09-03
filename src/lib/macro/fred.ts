@@ -100,12 +100,22 @@ const SPECS: IndicatorSpec[] = [
   },
   {
     id: "M2SL",
-    name: "M2 통화량",
+    name: "M2 통화량 (전년비)",
     category: "leading",
-    unit: "$B",
-    note: "시중 유동성. 증가는 완화적, 급감은 긴축 위험.",
+    unit: "% YoY",
+    note: "시중 유동성 증가율. 정상 5% 안팎. 마이너스는 긴축·침체 위험, 두 자릿수는 과잉 유동성.",
     goodDirection: "up",
     frequency: "monthly",
+    transform: "yoy",
+    levelVerdict: (v) => {
+      if (v < 0)
+        return { verdict: "negative", reason: `${v.toFixed(1)}% — 유동성 수축(마이너스), 긴축·침체 위험` };
+      if (v < 2) return { verdict: "negative", reason: `${v.toFixed(1)}% — 유동성 증가 둔화` };
+      if (v > 8)
+        return { verdict: "negative", reason: `${v.toFixed(1)}% — 과잉 유동성, 인플레 압력` };
+      if (v > 6) return { verdict: "neutral", reason: `${v.toFixed(1)}% — 유동성 공급 다소 빠름` };
+      return { verdict: "positive", reason: `${v.toFixed(1)}% — 정상 유동성 공급` };
+    },
   },
   {
     id: "BAMLH0A0HYM2",
