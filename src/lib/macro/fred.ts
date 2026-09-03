@@ -179,9 +179,16 @@ const SPECS: IndicatorSpec[] = [
     name: "미국채 10년물 금리",
     category: "core",
     unit: "%",
-    note: "장기 금리 벤치마크. 자산 밸류에이션·모기지 금리에 직결.",
-    goodDirection: "none",
+    note: "장기 금리 벤치마크. 상승은 밸류에이션·차입비용 부담, 하락은 금융환경 완화.",
+    goodDirection: "down",
     frequency: "daily",
+    levelVerdict: (v, dir) => {
+      if (dir === "up")
+        return { verdict: "negative", reason: `${v.toFixed(2)}% — 장기금리 상승, 밸류에이션·차입비용 부담` };
+      if (dir === "down")
+        return { verdict: "positive", reason: `${v.toFixed(2)}% — 장기금리 하락, 금융환경 완화` };
+      return { verdict: "neutral", reason: `${v.toFixed(2)}% — 최근 6개월 큰 변화 없음` };
+    },
   },
   {
     id: "UNRATE",
