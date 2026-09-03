@@ -1,8 +1,5 @@
-import { z } from "zod";
 import { jsonError, ok } from "@/lib/api";
-import { deleteUniverseItem, setActive } from "@/lib/universe/repo";
-
-const patchSchema = z.object({ active: z.boolean() });
+import { deleteUniverseItem, universePatchSchema, updateUniverseItem } from "@/lib/universe/repo";
 
 export async function PATCH(
   request: Request,
@@ -10,8 +7,8 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const body = patchSchema.parse(await request.json());
-    const item = await setActive(id, body.active);
+    const body = universePatchSchema.parse(await request.json());
+    const item = await updateUniverseItem(id, body);
     if (!item) return Response.json({ error: "없는 항목" }, { status: 404 });
     return ok({ item });
   } catch (err) {

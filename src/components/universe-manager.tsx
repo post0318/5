@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2, Upload } from "lucide-react";
+import { Check, Pencil, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/query";
 import { MARKETS, type MarketId } from "@/lib/markets/types";
@@ -97,13 +97,31 @@ export function UniverseManager() {
 }
 
 function Row({ item, onChange }: { item: Item; onChange: () => void }) {
-  const toggle = useMutation({
-    mutationFn: (active: boolean) =>
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(item.name ?? "");
+  const [groupName, setGroupName] = useState(item.groupName ?? "");
+
+  const patch = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
       apiFetch(`/api/universe/${item.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ active }),
+        body: JSON.stringify(body),
       }),
     onSuccess: onChange,
+    onError: (e) => toast.error((e as Error).message),
+  });
+  const save = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/universe/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: name || null, groupName: groupName || null }),
+      }),
+    onSuccess: () => {
+      toast.success(`${item.symbol} 수정됨`);
+      setEditing(false);
+      onChange();
+    },
+    onError: (e) => toast.error((e as Error).message),
   });
   const del = useMutation({
     mutationFn: () => apiFetch(`/api/universe/${item.id}`, { method: "DELETE" }),
@@ -113,37 +131,90 @@ function Row({ item, onChange }: { item: Item; onChange: () => void }) {
     },
   });
 
+  const startEdit = () => {
+    setName(item.name ?? "");
+    setGroupName(item.groupName ?? "");
+    setEditing(true);
+  };
+
   return (
     <tr>
       <td className="px-3 py-2">
         <Badge variant="outline">{MARKETS.find((m) => m.id === item.market)?.label}</Badge>
       </td>
       <td className="tnum px-3 py-2">{item.symbol}</td>
-      <td className="px-3 py-2">{item.name ?? "-"}</td>
-      <td className="px-3 py-2">{item.groupName ?? "-"}</td>
+      <td className="px-3 py-2">
+        {editing ? (
+          <Input
+            className="h-8"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="이름"
+          />
+        ) : (
+          (item.name ?? "-")
+        )}
+      </td>
+      <td className="px-3 py-2">
+        {editing ? (
+          <Input
+            className="h-8"
+            value={groupName}
+            onChange={(e) => setGroupName(e.target.value)}
+            placeholder="그룹"
+          />
+        ) : (
+          (item.groupName ?? "-")
+        )}
+      </td>
       <td className="px-3 py-2">
         <button
           className={
-            item.active
-              ? "text-up text-xs font-medium"
-              : "text-muted-foreground text-xs"
+            item.active ? "text-up text-xs font-medium" : "text-muted-foreground text-xs"
           }
-          onClick={() => toggle.mutate(!item.active)}
-          disabled={toggle.isPending}
+          onClick={() => patch.mutate({ active: !item.active })}
+          disabled={patch.isPending || editing}
         >
           {item.active ? "활성" : "비활성"}
         </button>
       </td>
-      <td className="px-3 py-2 text-right">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => del.mutate()}
-          disabled={del.isPending}
-          aria-label="삭제"
-        >
-          <Trash2 className="size-4" />
-        </Button>
+      <td className="px-3 py-2 text-right whitespace-nowrap">
+        {editing ? (
+          <>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => save.mutate()}
+              disabled={save.isPending}
+              aria-label="저장"
+            >
+              <Check className="size-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setEditing(false)}
+              aria-label="취소"
+            >
+              <X className="size-4" />
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="ghost" size="icon" onClick={startEdit} aria-label="수정">
+              <Pencil className="size-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => del.mutate()}
+              disabled={del.isPending}
+              aria-label="삭제"
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </>
+        )}
       </td>
     </tr>
   );

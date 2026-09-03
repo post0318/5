@@ -71,12 +71,30 @@ export async function deleteUniverseItem(id: string): Promise<boolean> {
   return res.deletedCount > 0;
 }
 
-export async function setActive(id: string, active: boolean): Promise<UniverseItem | null> {
+export const universePatchSchema = z.object({
+  name: z.string().max(120).optional().nullable(),
+  groupName: z.string().max(60).optional().nullable(),
+  tags: z.array(z.string().max(40)).max(20).optional(),
+  note: z.string().max(500).optional().nullable(),
+  active: z.boolean().optional(),
+});
+export type UniversePatch = z.infer<typeof universePatchSchema>;
+
+export async function updateUniverseItem(
+  id: string,
+  patch: UniversePatch,
+): Promise<UniverseItem | null> {
   if (!ObjectId.isValid(id)) return null;
   const col = await universeCol();
+  const set: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  if ("name" in patch) set.name = patch.name?.trim() || null;
+  if ("groupName" in patch) set.groupName = patch.groupName?.trim() || null;
+  if ("tags" in patch && patch.tags) set.tags = patch.tags;
+  if ("note" in patch) set.note = patch.note?.trim() || null;
+  if (patch.active !== undefined) set.active = patch.active;
   const doc = await col.findOneAndUpdate(
     { _id: new ObjectId(id) },
-    { $set: { active, updatedAt: new Date().toISOString() } },
+    { $set: set },
     { returnDocument: "after" },
   );
   return doc ? toItem(doc) : null;
