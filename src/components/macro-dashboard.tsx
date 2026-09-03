@@ -296,10 +296,13 @@ export function MacroDashboard() {
 const GREEN = "oklch(0.62 0.17 150)";
 const RED = "oklch(0.58 0.21 27)";
 
+const CHART_YEARS = [1, 3, 5, 10] as const;
+
 function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => void }) {
+  const [years, setYears] = useState<(typeof CHART_YEARS)[number]>(1);
   const q = useQuery({
-    queryKey: ["index-chart", idxKey],
-    queryFn: () => apiFetch<IndexChartResp>(`/api/macro/index-chart/${idxKey}`),
+    queryKey: ["index-chart", idxKey, years],
+    queryFn: () => apiFetch<IndexChartResp>(`/api/macro/index-chart/${idxKey}?y=${years}`),
     staleTime: 60 * 60_000,
   });
 
@@ -317,16 +320,34 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
         <CardTitle className="text-sm">
-          {q.data?.name ?? idxKey} · 최근 3년 (일봉) · 볼린저밴드(20, ±2σ) · MACD(12/26/9)
+          {q.data?.name ?? idxKey} · 일봉 · 볼린저밴드(20, ±2σ) · MACD(12/26/9)
         </CardTitle>
-        <button
-          onClick={onClose}
-          className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
-        >
-          닫기
-        </button>
+        <div className="flex items-center gap-1">
+          <div className="border-border flex overflow-hidden rounded-md border text-xs">
+            {CHART_YEARS.map((y) => (
+              <button
+                key={y}
+                onClick={() => setYears(y)}
+                className={cn(
+                  "px-2 py-0.5 transition-colors",
+                  years === y
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted text-muted-foreground",
+                )}
+              >
+                {y}년
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground ml-1 text-xs underline underline-offset-2"
+          >
+            닫기
+          </button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-1">
         {q.isLoading && <Skeleton className="h-72 w-full" />}

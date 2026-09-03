@@ -2,7 +2,7 @@ import "server-only";
 import YahooFinancePkg from "yahoo-finance2";
 
 /**
- * 주요 지수·원자재 장기 차트 (최근 3년, 일봉) + 기술적 지표.
+ * 주요 지수·원자재 차트 (최근 1년, 일봉) + 기술적 지표.
  * yahoo-finance2 (개인용/비상업 한정 — prd.md §4.3).
  */
 
@@ -75,12 +75,16 @@ function ema(values: number[], period: number): (number | null)[] {
   return out;
 }
 
-export async function getIndexChart(key: string): Promise<IndexChart | null> {
+export const CHART_YEARS = [1, 3, 5, 10] as const;
+export type ChartYears = (typeof CHART_YEARS)[number];
+
+export async function getIndexChart(key: string, years: ChartYears = 1): Promise<IndexChart | null> {
   const spec = SYMBOLS[key];
   if (!spec) return null;
 
+  // 지표 워밍업(BB20·MACD26+9)용으로 요청 기간 + 3개월 더 받아서 잘라낸다
   const from = new Date();
-  from.setFullYear(from.getFullYear() - 3);
+  from.setMonth(from.getMonth() - (years * 12 + 3));
 
   let quotes: RawBar[];
   try {
@@ -142,5 +146,6 @@ export async function getIndexChart(key: string): Promise<IndexChart | null> {
     };
   });
 
-  return { key, name: spec.name, rows };
+  // 요청 기간(약 252거래일/년)만 반환 — 앞부분은 지표 워밍업용
+  return { key, name: spec.name, rows: rows.slice(-(years * 252)) };
 }
