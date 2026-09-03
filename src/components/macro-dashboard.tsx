@@ -9,7 +9,6 @@ import {
   Line,
   LineChart,
   ReferenceArea,
-  ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -545,11 +544,10 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     if (!showNorm) return [];
     const LB = 3;
     const pts = divergingData as { date: string; norm?: number }[];
-    const out: { date: string; y: number; drop: number }[] = [];
+    const out: { x1: string; x2: string; lo: number; hi: number; drop: number }[] = [];
     let lastIdx = -99;
     for (let i = LB; i < pts.length; i++) {
       const cur = pts[i].norm;
-      // 직전 3틱 중 최고점 대비 급락 폭
       let peak = -Infinity;
       for (let j = i - LB; j < i; j++) {
         const v = pts[j].norm;
@@ -558,7 +556,13 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       if (cur == null || !Number.isFinite(peak)) continue;
       const drop = peak - cur;
       if (drop >= 20 && i - lastIdx > 4) {
-        out.push({ date: pts[i].date, y: (peak + cur) / 2, drop: Math.round(drop) });
+        out.push({
+          x1: pts[Math.max(0, i - 2)].date,
+          x2: pts[Math.min(pts.length - 1, i + 1)].date,
+          lo: Math.max(0, cur - 6),
+          hi: Math.min(100, peak + 6),
+          drop: Math.round(drop),
+        });
         lastIdx = i;
       }
     }
@@ -869,30 +873,37 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         isAnimationActive={false}
                         name="norm"
                       />
-                      {normDropDots.map((d) => (
-                        <ReferenceDot
-                          key={d.date}
+                      {normDropDots.map((d, i) => (
+                        <ReferenceArea
+                          key={`${d.x1}-${i}`}
                           yAxisId="norm"
-                          x={d.date}
-                          y={d.y}
-                          r={1}
-                          ifOverflow="extendDomain"
-                          shape={(props: { cx?: number; cy?: number }) =>
-                            props.cx != null && props.cy != null ? (
+                          x1={d.x1}
+                          x2={d.x2}
+                          y1={d.lo}
+                          y2={d.hi}
+                          ifOverflow="visible"
+                          fill="none"
+                          stroke="none"
+                          shape={(props: {
+                            x?: number;
+                            y?: number;
+                            width?: number;
+                            height?: number;
+                          }) => {
+                            const { x = 0, y = 0, width = 0, height = 0 } = props;
+                            return (
                               <ellipse
-                                cx={props.cx}
-                                cy={props.cy}
-                                rx={11}
-                                ry={34}
+                                cx={x + width / 2}
+                                cy={y + height / 2}
+                                rx={Math.max(width / 2 + 7, 12)}
+                                ry={height / 2 + 6}
                                 fill="oklch(0.62 0.22 25)"
-                                fillOpacity={0.08}
+                                fillOpacity={0.07}
                                 stroke="oklch(0.55 0.22 25)"
                                 strokeWidth={1.5}
                               />
-                            ) : (
-                              <g />
-                            )
-                          }
+                            );
+                          }}
                         />
                       ))}
                     </>
