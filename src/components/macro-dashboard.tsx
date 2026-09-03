@@ -5,7 +5,9 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Area,
   AreaChart,
+  Bar,
   CartesianGrid,
+  ComposedChart,
   Line,
   LineChart,
   ReferenceArea,
@@ -152,7 +154,24 @@ function DirIcon({ dir }: { dir: Direction }) {
   return <I className="size-3.5" />;
 }
 
+interface IndexChartRow {
+  date: string;
+  close: number;
+  bbU: number | null;
+  bbM: number | null;
+  bbL: number | null;
+  macd: number | null;
+  signal: number | null;
+  hist: number | null;
+}
+interface IndexChartResp {
+  key: string;
+  name: string;
+  rows: IndexChartRow[];
+}
+
 export function MacroDashboard() {
+  const [selIdx, setSelIdx] = useState<string | null>(null);
   const q = useQuery({
     queryKey: ["macro"],
     queryFn: () => apiFetch<Dashboard>("/api/macro"),
@@ -188,27 +207,41 @@ export function MacroDashboard() {
       {q.isError && <p className="text-destructive text-sm">{(q.error as Error).message}</p>}
 
       {q.data && q.data.indices.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
-          {q.data.indices.map((ix) => (
-            <div key={ix.key} className="border-border rounded-lg border p-3">
-              <div className="text-muted-foreground text-xs">{ix.name}</div>
-              <div className="tnum mt-1 text-lg font-semibold">
-                {ix.value != null ? formatNumber(ix.value, 2) : "-"}
-              </div>
-              <div
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+            {q.data.indices.map((ix) => (
+              <button
+                key={ix.key}
+                onClick={() => setSelIdx((k) => (k === ix.key ? null : ix.key))}
                 className={cn(
-                  "tnum text-xs",
-                  ix.changePct != null && ix.changePct > 0 && "text-up",
-                  ix.changePct != null && ix.changePct < 0 && "text-down",
-                  (ix.changePct == null || ix.changePct === 0) && "text-muted-foreground",
+                  "rounded-lg border p-3 text-left transition-colors",
+                  selIdx === ix.key
+                    ? "border-primary bg-secondary"
+                    : "border-border hover:bg-muted/50",
                 )}
               >
-                {ix.changePct != null
-                  ? `${ix.changePct > 0 ? "+" : ""}${formatNumber(ix.changePct, 2)}%`
-                  : "-"}
-              </div>
-            </div>
-          ))}
+                <div className="text-muted-foreground text-xs">{ix.name}</div>
+                <div className="tnum mt-1 text-lg font-semibold">
+                  {ix.value != null ? formatNumber(ix.value, 2) : "-"}
+                </div>
+                <div
+                  className={cn(
+                    "tnum text-xs",
+                    ix.changePct != null && ix.changePct > 0 && "text-up",
+                    ix.changePct != null && ix.changePct < 0 && "text-down",
+                    (ix.changePct == null || ix.changePct === 0) && "text-muted-foreground",
+                  )}
+                >
+                  {ix.changePct != null
+                    ? `${ix.changePct > 0 ? "+" : ""}${formatNumber(ix.changePct, 2)}%`
+                    : "-"}
+                </div>
+              </button>
+            ))}
+          </div>
+          {selIdx && (
+            <IndexChartPanel idxKey={selIdx} onClose={() => setSelIdx(null)} />
+          )}
         </div>
       )}
 
@@ -258,6 +291,97 @@ export function MacroDashboard() {
       )}
     </div>
    </TooltipProvider>
+  );
+}
+
+const GREEN = "oklch(0.62 0.17 150)";
+const RED = "oklch(0.58 0.21 27)";
+
+function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => void }) {
+  const q = useQuery({
+    queryKey: ["index-chart", idxKey],
+    queryFn: () => apiFetch<IndexChartResp>(`/api/macro/index-chart/${idxKey}`),
+    staleTime: 60 * 60_000,
+  });
+
+  const rows = useMemo(() => {
+    const r = q.data?.rows ?? [];
+    return r.map((d) => ({
+      ...d,
+      histUp: d.hist != null && d.hist >= 0 ? d.hist : null,
+      histDown: d.hist != null && d.hist < 0 ? d.hist : null,
+    }));
+  }, [q.data]);
+
+  const fmt = (v: number | string) => formatNumber(typeof v === "number" ? v : Number(v), 2);
+  const xTick = (d: string) => d.slice(2, 7);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+        <CardTitle className="text-sm">
+          {q.data?.name ?? idxKey} · 최근 5년 (주봉) · 볼린저밴드(20, ±2σ) · MACD(12/26/9)
+        </CardTitle>
+        <button
+          onClick={onClose}
+          className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
+        >
+          닫기
+        </button>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        {q.isLoading && <Skeleton className="h-72 w-full" />}
+        {q.isError && (
+          <p className="text-destructive text-xs">{(q.error as Error).message}</p>
+        )}
+        {q.data && rows.length > 0 && (
+          <>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={rows} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid stroke="var(--muted-foreground)" strokeDasharray="1 3" strokeOpacity={0.35} />
+                  <XAxis dataKey="date" tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={xTick} minTickGap={40} />
+                  <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={54} domain={["auto", "auto"]} tickFormatter={fmt} />
+                  <Tooltip {...TOOLTIP_STYLE} labelFormatter={(l) => String(l)} formatter={(v, n) => [fmt(v as number), String(n)]} />
+                  <Area
+                    type="monotone"
+                    dataKey={["bbL", "bbU"] as unknown as string}
+                    name="볼린저밴드"
+                    stroke="none"
+                    fill="var(--foreground)"
+                    fillOpacity={0.07}
+                    isAnimationActive={false}
+                    connectNulls
+                  />
+                  <Line type="monotone" dataKey="bbU" name="상단" stroke="var(--muted-foreground)" strokeWidth={0.8} strokeOpacity={0.6} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="bbL" name="하단" stroke="var(--muted-foreground)" strokeWidth={0.8} strokeOpacity={0.6} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="bbM" name="중심(20)" stroke="var(--muted-foreground)" strokeWidth={0.9} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="close" name={q.data.name} stroke="oklch(0.62 0.13 250)" strokeWidth={1.6} dot={false} isAnimationActive={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="h-28">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid stroke="var(--muted-foreground)" strokeDasharray="1 3" strokeOpacity={0.35} />
+                  <XAxis dataKey="date" tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={xTick} minTickGap={40} />
+                  <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={54} tickFormatter={(v: number) => v.toFixed(1)} />
+                  <Tooltip {...TOOLTIP_STYLE} labelFormatter={(l) => String(l)} formatter={(v, n) => [Number(v).toFixed(3), String(n)]} />
+                  <ReferenceLine y={0} stroke="var(--muted-foreground)" strokeOpacity={0.5} />
+                  <Bar dataKey="histUp" name="히스토그램" fill={GREEN} fillOpacity={0.5} isAnimationActive={false} />
+                  <Bar dataKey="histDown" name="히스토그램" fill={RED} fillOpacity={0.5} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="macd" name="MACD" stroke="oklch(0.62 0.13 250)" strokeWidth={1.2} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="signal" name="시그널" stroke="oklch(0.70 0.16 50)" strokeWidth={1.2} dot={false} isAnimationActive={false} connectNulls />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="text-muted-foreground/80 text-[11px]">
+              Yahoo Finance · 개인용. 가격선(파랑) / 볼린저 중심선(점선) · 하단 MACD 12/26/9
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
