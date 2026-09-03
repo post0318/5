@@ -6,7 +6,6 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
-  Customized,
   Line,
   LineChart,
   ReferenceArea,
@@ -420,43 +419,6 @@ function componentScoreDir(key: string, history: { value: number }[]): -1 | 0 | 
   return diff > 0 ? 1 : -1;
 }
 
-/** 정규화 급락 구간을 세로 타원으로 오버레이 (Customized 로 스케일 접근) */
-function NormDropOverlay(props: {
-  drops?: { date: string; lo: number; hi: number; drop: number }[];
-  xAxisMap?: Record<string, { scale: (v: unknown) => number | undefined; bandSize?: number }>;
-  yAxisMap?: Record<string, { scale: (v: number) => number | undefined }>;
-}) {
-  const { drops = [], xAxisMap, yAxisMap } = props;
-  const xa = xAxisMap ? Object.values(xAxisMap)[0] : undefined;
-  const ya = yAxisMap?.["norm"];
-  if (!xa || !ya) return null;
-  const band = xa.bandSize ?? 0;
-
-  return (
-    <g>
-      {drops.map((d, i) => {
-        const xp = xa.scale(d.date);
-        const yHi = ya.scale(d.hi);
-        const yLo = ya.scale(d.lo);
-        if (xp == null || yHi == null || yLo == null) return null;
-        return (
-          <ellipse
-            key={i}
-            cx={xp + band / 2}
-            cy={(yHi + yLo) / 2}
-            rx={13}
-            ry={Math.abs(yLo - yHi) / 2 + 8}
-            fill="oklch(0.62 0.22 25)"
-            fillOpacity={0.07}
-            stroke="oklch(0.55 0.22 25)"
-            strokeWidth={1.5}
-          />
-        );
-      })}
-    </g>
-  );
-}
-
 function FearGreedCard({ fg }: { fg: FearGreed }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const selected = fg.components.find((c) => c.key === selectedKey) ?? null;
@@ -559,52 +521,39 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         ...d,
         norm: Math.round((100 - ((d.value - min) / range) * 100) * 10) / 10,
       }));
-      // 상승 구간은 녹색선, 하락 구간은 적색선으로 분리 (방향 전환점은 양쪽에 포함)
+
+      // 짧은 구간(≤3틱)에 20점 이상 급락한 지점 → 타원 마커 데이터
+      const LB = 3;
+      const dropInfo = new Map<number, { mid: number; span: number }>();
+      let lastIdx = -99;
+      for (let i = LB; i < normed.length; i++) {
+        const cur = normed[i].norm;
+        let peak = -Infinity;
+        for (let j = i - LB; j < i; j++) if (normed[j].norm > peak) peak = normed[j].norm;
+        if (!Number.isFinite(peak)) continue;
+        if (peak - cur >= 20 && i - lastIdx > 4) {
+          dropInfo.set(i, { mid: (peak + cur) / 2, span: peak - cur });
+          lastIdx = i;
+        }
+      }
+
       data = normed.map((d, i) => {
         const p = normed[i - 1]?.norm;
         const n = normed[i + 1]?.norm;
-        const segIn = p == null ? null : d.norm >= p;
-        const segOut = n == null ? null : n >= d.norm;
-        const inUp = segIn === true || segOut === true;
-        const inDown = segIn === false || segOut === false;
+        const inUp = (p != null && d.norm >= p) || (n != null && n >= d.norm);
+        const inDown = (p != null && d.norm < p) || (n != null && n < d.norm);
+        const dm = dropInfo.get(i);
         return {
           ...d,
           normUp: inUp ? d.norm : null,
           normDown: inDown ? d.norm : null,
+          dropMid: dm ? dm.mid : null,
+          dropSpan: dm ? dm.span : 0,
         };
       });
     }
     return data;
   }, [divCfg, chartData, showNorm]);
-
-  // 정규화 점수가 짧은 구간(≤3틱)에 20점 이상 급락(스파이크)한 지점
-  const normDropDots = useMemo(() => {
-    if (!showNorm) return [];
-    const LB = 3;
-    const pts = divergingData as { date: string; norm?: number }[];
-    const out: { date: string; lo: number; hi: number; drop: number }[] = [];
-    let lastIdx = -99;
-    for (let i = LB; i < pts.length; i++) {
-      const cur = pts[i].norm;
-      let peak = -Infinity;
-      for (let j = i - LB; j < i; j++) {
-        const v = pts[j].norm;
-        if (v != null && v > peak) peak = v;
-      }
-      if (cur == null || !Number.isFinite(peak)) continue;
-      const drop = peak - cur;
-      if (drop >= 20 && i - lastIdx > 4) {
-        out.push({
-          date: pts[i].date,
-          lo: Math.max(0, cur - 4),
-          hi: Math.min(100, peak + 4),
-          drop: Math.round(drop),
-        });
-        lastIdx = i;
-      }
-    }
-    return out;
-  }, [showNorm, divergingData]);
 
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
@@ -910,9 +859,44 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         isAnimationActive={false}
                         name="norm"
                       />
-                      {normDropDots.length > 0 && (
-                        <Customized component={<NormDropOverlay drops={normDropDots} />} />
-                      )}
+                      {/* 급락 구간 세로 타원 마커 — Line 의 dot 렌더러로 (좌표는 recharts 가 계산) */}
+                      <Line
+                        yAxisId="norm"
+                        dataKey="dropMid"
+                        stroke="none"
+                        legendType="none"
+                        tooltipType="none"
+                        isAnimationActive={false}
+                        connectNulls={false}
+                        activeDot={false}
+                        dot={(p: {
+                          cx?: number;
+                          cy?: number;
+                          payload?: { dropMid?: number | null; dropSpan?: number };
+                          yAxis?: { scale?: (v: number) => number };
+                        }) => {
+                          const { cx, cy, payload } = p;
+                          if (cx == null || cy == null || payload?.dropMid == null) return <g key="e" />;
+                          const scale = p.yAxis?.scale;
+                          const spanPx =
+                            scale && payload.dropSpan
+                              ? Math.abs(scale(0)! - scale(payload.dropSpan)!)
+                              : 40;
+                          return (
+                            <ellipse
+                              key={`${cx}-${cy}`}
+                              cx={cx}
+                              cy={cy}
+                              rx={20}
+                              ry={spanPx / 2 + 16}
+                              fill="oklch(0.62 0.22 25)"
+                              fillOpacity={0.07}
+                              stroke="oklch(0.55 0.22 25)"
+                              strokeWidth={1.75}
+                            />
+                          );
+                        }}
+                      />
                     </>
                   )}
                 </AreaChart>
