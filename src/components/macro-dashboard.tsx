@@ -5,7 +5,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Area,
   AreaChart,
-  Bar,
   CartesianGrid,
   ComposedChart,
   Line,
@@ -320,7 +319,7 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
         <CardTitle className="text-sm">
-          {q.data?.name ?? idxKey} · 최근 5년 (주봉) · 볼린저밴드(20, ±2σ) · MACD(12/26/9)
+          {q.data?.name ?? idxKey} · 최근 5년 (일봉) · 볼린저밴드(20, ±2σ) · MACD(12/26/9)
         </CardTitle>
         <button
           onClick={onClose}
@@ -368,15 +367,16 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
                   <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={54} tickFormatter={(v: number) => v.toFixed(1)} />
                   <Tooltip {...TOOLTIP_STYLE} labelFormatter={(l) => String(l)} formatter={(v, n) => [Number(v).toFixed(3), String(n)]} />
                   <ReferenceLine y={0} stroke="var(--muted-foreground)" strokeOpacity={0.5} />
-                  <Bar dataKey="histUp" name="히스토그램" fill={GREEN} fillOpacity={0.5} isAnimationActive={false} />
-                  <Bar dataKey="histDown" name="히스토그램" fill={RED} fillOpacity={0.5} isAnimationActive={false} />
+                  <Area type="monotone" dataKey="histUp" name="오실레이터" stroke={GREEN} strokeWidth={0.8} fill={GREEN} fillOpacity={0.25} isAnimationActive={false} connectNulls={false} />
+                  <Area type="monotone" dataKey="histDown" name="오실레이터" stroke={RED} strokeWidth={0.8} fill={RED} fillOpacity={0.25} isAnimationActive={false} connectNulls={false} />
                   <Line type="monotone" dataKey="macd" name="MACD" stroke="oklch(0.62 0.13 250)" strokeWidth={1.2} dot={false} isAnimationActive={false} connectNulls />
                   <Line type="monotone" dataKey="signal" name="시그널" stroke="oklch(0.70 0.16 50)" strokeWidth={1.2} dot={false} isAnimationActive={false} connectNulls />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
             <p className="text-muted-foreground/80 text-[11px]">
-              Yahoo Finance · 개인용. 가격선(파랑) / 볼린저 중심선(점선) · 하단 MACD 12/26/9
+              Yahoo Finance · 개인용. 가격선(파랑) / 볼린저 중심선(점선) · 하단 MACD 오실레이터(12/26/9,
+              히스토그램=MACD−시그널)
             </p>
           </>
         )}
