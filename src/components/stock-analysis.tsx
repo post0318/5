@@ -17,8 +17,7 @@ import {
 } from "@/components/ui/toggle-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { ChangePercent, Money, Multiple, NumberText, Percent } from "@/components/num";
-import { formatBigAmount, formatMarketCap } from "@/lib/format";
+import { ChangePercent, Money, Multiple, NumberText } from "@/components/num";
 import { FinancialsTable } from "@/components/financials-table";
 import { DeepLinkList } from "@/components/deep-links";
 
@@ -154,47 +153,6 @@ export function StockAnalysis({ market }: { market: MarketId }) {
                 <Stat label="전일 대비">
                   <ChangePercent value={ov.quote?.changePct} />
                 </Stat>
-                <Stat
-                  label={
-                    market === "kr"
-                      ? "시가총액 (십억원)"
-                      : market === "jp"
-                        ? "시가총액 (억엔)"
-                        : "시가총액 (십억$)"
-                  }
-                >
-                  <span className="tnum">{formatMarketCap(ov.multiples?.marketCap, market)}</span>
-                </Stat>
-                <Stat
-                  label={
-                    market === "kr"
-                      ? "최근년도 매출액 (억원)"
-                      : market === "jp"
-                        ? "최근년도 매출액 (천만엔)"
-                        : "최근년도 매출액 (백만$)"
-                  }
-                >
-                  <span className="tnum">
-                    {formatBigAmount(ov.multiples?.inputs?.revenueAnnual, market)}
-                  </span>
-                </Stat>
-                {(() => {
-                  const rev = ov.multiples?.inputs?.revenueAnnual ?? null;
-                  const op = ov.multiples?.inputs?.opIncomeAnnual ?? null;
-                  const ni = ov.multiples?.inputs?.netIncomeAnnual ?? null;
-                  const ratio = (n: number | null) =>
-                    n != null && rev ? n / rev : null;
-                  return (
-                    <>
-                      <Stat label="EBITDA 이익률(근사)">
-                        <Percent value={ratio(op)} />
-                      </Stat>
-                      <Stat label="순이익률">
-                        <Percent value={ratio(ni)} />
-                      </Stat>
-                    </>
-                  );
-                })()}
                 <Stat label="PER (최근 연간)">
                   <Multiple value={ov.multiples?.per} />
                 </Stat>
@@ -206,6 +164,12 @@ export function StockAnalysis({ market }: { market: MarketId }) {
                 </Stat>
                 <Stat label="EV/EBITDA(근사)">
                   <Multiple value={ov.multiples?.evEbitda} />
+                </Stat>
+                <Stat label="시가총액">
+                  <Money
+                    value={ov.multiples?.marketCap}
+                    currency={ov.quote?.currency ?? "USD"}
+                  />
                 </Stat>
                 <Stat label="Forward PER">
                   <Multiple value={ov.consensus?.forwardPer} />

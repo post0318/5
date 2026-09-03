@@ -21,6 +21,10 @@ export async function GET(request: Request) {
     const rows = await mapWithConcurrency(items, 4, async (item) => {
       try {
         const ov = await getStockOverview(item.market as MarketId, item.symbol, item.yahooSymbol);
+        const inp = ov.multiples?.inputs;
+        const rev = inp?.revenueAnnual ?? null;
+        const margin = (n: number | null | undefined) =>
+          n != null && rev ? n / rev : null;
         return {
           id: item.id,
           market: item.market,
@@ -37,6 +41,9 @@ export async function GET(request: Request) {
           targetMeanPrice: ov.consensus?.targetMeanPrice ?? null,
           recommendationKey: ov.consensus?.recommendationKey ?? null,
           marketCap: ov.multiples?.marketCap ?? null,
+          revenueAnnual: rev,
+          ebitdaMargin: margin(inp?.opIncomeAnnual),
+          netMargin: margin(inp?.netIncomeAnnual),
           warnings: ov.warnings,
         };
       } catch (err) {

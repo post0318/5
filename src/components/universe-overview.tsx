@@ -8,7 +8,8 @@ import type { MarketId } from "@/lib/markets/types";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { ChangePercent, Money, Multiple } from "@/components/num";
+import { ChangePercent, Money, Multiple, Percent } from "@/components/num";
+import { formatBigAmount, formatMarketCap } from "@/lib/format";
 
 interface Row {
   id: string;
@@ -26,6 +27,9 @@ interface Row {
   targetMeanPrice?: number | null;
   recommendationKey?: string | null;
   marketCap?: number | null;
+  revenueAnnual?: number | null;
+  ebitdaMargin?: number | null;
+  netMargin?: number | null;
   warnings?: string[];
   error?: string;
 }
@@ -43,6 +47,9 @@ export function UniverseOverview({ market }: { market: MarketId }) {
           <h1 className="text-xl font-semibold">유니버스 통합 뷰</h1>
           <p className="text-muted-foreground text-sm">
             등록 종목의 시세 · 트레일링 멀티플 · 포워드 컨센서스 요약
+          </p>
+          <p className="text-muted-foreground/80 mt-0.5 text-xs">
+            시총·매출 단위 — 한국: 십억원·억원 / 미국: 십억$·백만$ / 일본: 억엔·천만엔 (최근 연간)
           </p>
         </div>
         <Button
@@ -73,13 +80,17 @@ export function UniverseOverview({ market }: { market: MarketId }) {
 
       {q.data && q.data.rows.length > 0 && (
         <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full min-w-[820px] text-sm">
+          <table className="w-full min-w-[1080px] text-sm">
             <thead>
               <tr className="bg-muted/50 text-muted-foreground text-left">
                 <th className="px-3 py-2 font-medium">종목</th>
                 <th className="px-3 py-2 font-medium">그룹</th>
                 <th className="px-3 py-2 text-right font-medium">종가</th>
                 <th className="px-3 py-2 text-right font-medium">등락</th>
+                <th className="px-3 py-2 text-right font-medium">시가총액</th>
+                <th className="px-3 py-2 text-right font-medium">매출액</th>
+                <th className="px-3 py-2 text-right font-medium">EBITDA%</th>
+                <th className="px-3 py-2 text-right font-medium">순이익%</th>
                 <th className="px-3 py-2 text-right font-medium">PER</th>
                 <th className="px-3 py-2 text-right font-medium">PBR</th>
                 <th className="px-3 py-2 text-right font-medium">Fwd PER</th>
@@ -107,7 +118,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                     )}
                   </td>
                   {r.error ? (
-                    <td colSpan={7} className="text-muted-foreground px-3 py-2 text-xs">
+                    <td colSpan={11} className="text-muted-foreground px-3 py-2 text-xs">
                       {r.error}
                     </td>
                   ) : (
@@ -117,6 +128,18 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                       </td>
                       <td className="px-3 py-2 text-right">
                         <ChangePercent value={r.changePct} />
+                      </td>
+                      <td className="tnum px-3 py-2 text-right">
+                        {formatMarketCap(r.marketCap, r.market)}
+                      </td>
+                      <td className="tnum px-3 py-2 text-right">
+                        {formatBigAmount(r.revenueAnnual, r.market)}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <Percent value={r.ebitdaMargin} />
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <Percent value={r.netMargin} />
                       </td>
                       <td className="px-3 py-2 text-right">
                         <Multiple value={r.per} />
