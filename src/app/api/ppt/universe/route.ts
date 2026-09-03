@@ -21,18 +21,16 @@ export async function POST(req: Request) {
     if (ids?.length) items = items.filter((i) => ids.includes(i.id));
     if (items.length === 0) throw new Error("대상 종목이 없습니다");
 
-    // note 필드를 개요 불릿으로 사용 (줄바꿈 분리)
+    // note 필드를 회사 개요로 사용 (첫 줄 = 개요, 나머지 = 주요 사업)
     const slides = [];
     for (const it of items) {
       try {
-        const bullets = (it.note ?? "")
-          .split(/\r?\n/)
-          .map((x) => x.trim())
-          .filter(Boolean);
+        const noteLines = (it.note ?? "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
         slides.push(
           await getStockSlideData(it.market as MarketId, it.symbol, {
             yahoo: it.yahooSymbol,
-            bullets,
+            overview: noteLines[0] ?? "",
+            business: noteLines.slice(1),
           }),
         );
       } catch {

@@ -95,10 +95,17 @@ export interface StockSlideData {
   symbol: string;
   name: string;
   currency: string;
+  sector: string | null;
   /** 재무 축약 단위 라벨 (한국 억원 / 미국 백만$ / 일본 천만엔) */
   unitLabel: string;
-  bullets: string[];
+  /** 사용자 입력 */
+  overview: string;
+  business: string[];
+  marketShare: string[];
   price: { date: string; close: number }[];
+  /** 벤치마크(나스닥) — 우측 축 비교용 */
+  bench: { date: string; close: number }[];
+  benchLabel: string;
   priceLabel: string;
   fin: SlideFin;
   asOf: string;
@@ -108,10 +115,19 @@ export interface StockSlideData {
 const UNIT_DIV: Record<MarketId, number> = { kr: 1e8, us: 1e6, jp: 1e7 };
 const UNIT_LABEL: Record<MarketId, string> = { kr: "억원", us: "백만$", jp: "천만엔" };
 
+const lines = (v?: string | string[]) =>
+  (Array.isArray(v) ? v : (v ?? "").split(/\r?\n/)).map((x) => x.trim()).filter(Boolean);
+
 export async function getStockSlideData(
   market: MarketId,
   symbol: string,
-  opts: { yahoo?: string | null; bullets?: string[]; priceYears?: number } = {},
+  opts: {
+    yahoo?: string | null;
+    overview?: string;
+    business?: string[] | string;
+    marketShare?: string[] | string;
+    priceYears?: number;
+  } = {},
 ): Promise<StockSlideData> {
   const ov = await getStockOverview(market, symbol, opts.yahoo, { skipQuarterly: true });
 
@@ -133,10 +149,11 @@ export async function getStockSlideData(
 
   const shares = ov.multiples?.inputs?.shares ?? null;
   const price = ov.quote?.last ?? null;
-  // yahoo 어댑터가 period 라벨을 한국어로 변환함: "당해년도(FY)" / "차년도(FY+1)" / "FY+2"
+  // yahoo 어댑터가 period 라벨을 변환함: "당해년도(FY)" / "차년도(FY+1)" / "FY+2"
   const est = ov.consensus?.estimates ?? [];
   const est0 = est.find((e) => e.period.includes("당해") || e.period === "FY");
   const est1 = est.find((e) => e.period.includes("차년") || e.period === "FY+1");
+  const est2 = est.find((e) => e.period === "FY+2" || e.period.includes("+2"));
 
   const div = UNIT_DIV[market];
   const scale = (v: number | null | undefined) => (v == null ? null : v / div);
@@ -145,60 +162,73 @@ export async function getStockSlideData(
   const perOf = (eps: number | null) => (price != null && eps != null && eps !== 0 ? price / eps : null);
   const niFromEps = (eps: number | null) => (eps != null && shares ? eps * shares : null);
 
-  const rev0 = lastRev?.value ?? null;
-  const rev1 = est0?.revenueAvg ?? null;
-  const rev2 = est1?.revenueAvg ?? null;
-  const ni0 = lastNi?.value ?? null;
-  const ni1 = niFromEps(est0?.epsAvg ?? null);
-  const ni2 = niFromEps(est1?.epsAvg ?? null);
-  const eps0 = lastEps?.value ?? ov.multiples?.inputs?.epsDiluted ?? null;
-  const eps1 = est0?.epsAvg ?? null;
-  const eps2 = est1?.epsAvg ?? null;
+  // 4개년: 전년(실적) · 올해(E) · 예상(E) · 예상(E)
+  const revenue = [
+    lastRev?.value ?? null,
+    est0?.revenueAvg ?? null,
+    est1?.revenueAvg ?? null,
+    est2?.revenueAvg ?? null,
+  ];
+  const eps = [
+    lastEps?.value ?? ov.multiples?.inputs?.epsDiluted ?? null,
+    est0?.epsAvg ?? null,
+    est1?.epsAvg ?? null,
+    est2?.epsAvg ?? null,
+  ];
+  const netIncome = [lastNi?.value ?? null, niFromEps(eps[1]), niFromEps(eps[2]), niFromEps(eps[3])];
 
   const fin: SlideFin = {
-    years: [`FY${baseYear}`, `FY${baseYear + 1}(E)`, `FY${baseYear + 2}(E)`],
-    revenue: [scale(rev0), scale(rev1), scale(rev2)],
-    revenueGrowth: [pct(rev0, prevRev?.value ?? null), pct(rev1, rev0), pct(rev2, rev1)],
-    netIncome: [scale(ni0), scale(ni1), scale(ni2)],
-    netMargin: [
-      ni0 != null && rev0 ? ni0 / rev0 : null,
-      ni1 != null && rev1 ? ni1 / rev1 : null,
-      ni2 != null && rev2 ? ni2 / rev2 : null,
+    years: [
+      `FY${baseYear}`,
+      `FY${baseYear + 1}(E)`,
+      `FY${baseYear + 2}(E)`,
+      `FY${baseYear + 3}(E)`,
     ],
-    eps: [eps0, eps1, eps2],
-    per: [perOf(eps0), perOf(eps1), perOf(eps2)],
+    revenue: revenue.map(scale),
+    revenueGrowth: revenue.map((v, i) =>
+      i === 0 ? pct(v, prevRev?.value ?? null) : pct(v, revenue[i - 1]),
+    ),
+    netIncome: netIncome.map(scale),
+    netMargin: netIncome.map((v, i) => (v != null && revenue[i] ? v / (revenue[i] as number) : null)),
+    eps,
+    per: eps.map(perOf),
   };
 
-  // 주가 차트 (yahoo 일봉)
-  const years = opts.priceYears ?? 1;
+  // 주가 차트 (yahoo 일봉) — 종목 + 나스닥 벤치마크. 기본 최근 3년
+  const years = opts.priceYears ?? 3;
   const from = new Date();
   from.setMonth(from.getMonth() - years * 12);
+  const period1 = from.toISOString().slice(0, 10);
   const ysym = opts.yahoo ?? yahooGuess(market, nsym);
-  let priceRows: { date: string; close: number }[] = [];
-  try {
-    const res = await yfi().chart(ysym, {
-      period1: from.toISOString().slice(0, 10),
-      interval: "1d",
-    });
-    priceRows = (res.quotes ?? [])
-      .map((q) => ({
-        date: (q.date instanceof Date ? q.date : new Date(q.date)).toISOString().slice(0, 10),
-        close: (q.adjclose ?? q.close) ?? NaN,
-      }))
-      .filter((p) => Number.isFinite(p.close));
-  } catch {
-    priceRows = [];
-  }
+  const dailySeries = async (sym: string) => {
+    try {
+      const res = await yfi().chart(sym, { period1, interval: "1d" });
+      return (res.quotes ?? [])
+        .map((q) => ({
+          date: (q.date instanceof Date ? q.date : new Date(q.date)).toISOString().slice(0, 10),
+          close: (q.adjclose ?? q.close) ?? NaN,
+        }))
+        .filter((p) => Number.isFinite(p.close));
+    } catch {
+      return [];
+    }
+  };
+  const [priceRows, benchRows] = await Promise.all([dailySeries(ysym), dailySeries("^IXIC")]);
 
   return {
     market,
     symbol: nsym,
     name: ov.profile?.name ?? nsym,
     currency: ov.quote?.currency ?? ov.multiples?.currency ?? "USD",
+    sector: ov.profile?.industry ?? ov.profile?.sector ?? null,
     unitLabel: UNIT_LABEL[market],
-    bullets: (opts.bullets ?? []).filter((b) => b.trim()),
+    overview: (opts.overview ?? "").trim(),
+    business: lines(opts.business),
+    marketShare: lines(opts.marketShare),
     price: priceRows,
-    priceLabel: `주가 (최근 ${years}년, ${ov.quote?.currency ?? ""})`,
+    bench: benchRows,
+    benchLabel: "나스닥 (우)",
+    priceLabel: `주가 추이 (최근 ${years}년)`,
     fin,
     asOf: ov.quote?.lastDate ?? new Date().toISOString().slice(0, 10),
     sources: {

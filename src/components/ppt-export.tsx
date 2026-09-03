@@ -37,6 +37,9 @@ async function downloadPptx(url: string, body: unknown, fallbackName: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+const TA =
+  "border-input focus-visible:ring-ring/50 w-full rounded-md border bg-transparent px-3 py-2 text-sm focus-visible:ring-[3px] focus-visible:outline-none";
+
 export function StockPptButton({
   market,
   symbol,
@@ -49,7 +52,9 @@ export function StockPptButton({
   name?: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const [bullets, setBullets] = useState("");
+  const [overview, setOverview] = useState("");
+  const [business, setBusiness] = useState("");
+  const [marketShare, setMarketShare] = useState("");
   const [busy, setBusy] = useState(false);
 
   const run = async () => {
@@ -57,15 +62,7 @@ export function StockPptButton({
     try {
       await downloadPptx(
         "/api/ppt/stock",
-        {
-          market,
-          symbol,
-          yahoo: yahoo ?? undefined,
-          bullets: bullets
-            .split(/\r?\n/)
-            .map((s) => s.trim())
-            .filter(Boolean),
-        },
+        { market, symbol, yahoo: yahoo ?? undefined, overview, business, marketShare },
         `${symbol}.pptx`,
       );
       toast.success("PPT를 내려받았습니다");
@@ -89,16 +86,39 @@ export function StockPptButton({
         <DialogHeader>
           <DialogTitle>{name ?? symbol} · 종목 소개 PPT</DialogTitle>
           <DialogDescription>
-            개요 문구를 한 줄에 하나씩 입력하세요 (최대 4줄, 비워도 됨). 재무·주가는 자동
+            아래 항목은 한 줄에 하나씩 입력하세요 (비워도 됨). 재무제표·주가 추이는 자동
             채워집니다.
           </DialogDescription>
         </DialogHeader>
-        <textarea
-          className="border-input focus-visible:ring-ring/50 min-h-[120px] w-full rounded-md border bg-transparent px-3 py-2 text-sm focus-visible:ring-[3px] focus-visible:outline-none"
-          value={bullets}
-          onChange={(e) => setBullets(e.target.value)}
-          placeholder={"2010년 설립된 중국 배달 1위 기업\n요식업 외 영화예매·여행 등으로 사업 확장\n생성형 AI 기업 인수로 서비스 고도화"}
-        />
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <span className="text-xs font-medium">회사 설명 (상단 밴드)</span>
+            <textarea
+              className={`${TA} min-h-[60px]`}
+              value={overview}
+              onChange={(e) => setOverview(e.target.value)}
+              placeholder={"2010년 설립된 중국 배달 1위 기업, 알리바바와 시장 양분"}
+            />
+          </div>
+          <div className="space-y-1">
+            <span className="text-xs font-medium">주요 사업</span>
+            <textarea
+              className={`${TA} min-h-[80px]`}
+              value={business}
+              onChange={(e) => setBusiness(e.target.value)}
+              placeholder={"음식 배달·매장 예약\n호텔·여행, 영화 예매\n신선식품 배송, 클라우드 ERP"}
+            />
+          </div>
+          <div className="space-y-1">
+            <span className="text-xs font-medium">핵심 시장점유율 · 경쟁 구도</span>
+            <textarea
+              className={`${TA} min-h-[70px]`}
+              value={marketShare}
+              onChange={(e) => setMarketShare(e.target.value)}
+              placeholder={"중국 배달시장 M/S 67% (1위)\n2위 어러머(알리바바) 31%"}
+            />
+          </div>
+        </div>
         <DialogFooter>
           <Button onClick={run} disabled={busy}>
             {busy ? "생성 중…" : "PPT 생성"}
