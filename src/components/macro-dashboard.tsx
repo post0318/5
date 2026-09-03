@@ -85,6 +85,7 @@ interface FearGreed {
     score: number | null;
     rating: string | null;
     history: { date: string; value: number }[];
+    overlay?: { label: string; history: { date: string; value: number }[] };
   }[];
   source: string;
   deepLink: string;
@@ -504,14 +505,20 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
 
   // 기준선 기준으로 위/아래 분리한 면적 데이터 (+ 정크본드는 정규화 점수)
   const showNorm = selected?.key === "junk_bond_demand";
+  const overlay = selected?.overlay ?? null;
   const divergingData = useMemo(() => {
-    let data = chartData;
+    type Row = { date: string; value: number } & Record<string, unknown>;
+    let data: Row[] = chartData as Row[];
     if (divCfg) {
       data = chartData.map((d) => ({
         ...d,
         above: Math.max(d.value, divCfg.threshold),
         below: Math.min(d.value, divCfg.threshold),
       }));
+    }
+    if (overlay) {
+      const omap = new Map(overlay.history.map((p) => [p.date, p.value]));
+      data = data.map((d) => ({ ...d, overlayValue: omap.get(d.date as string) ?? null }));
     }
     if (showNorm) {
       const vals = chartData.map((d) => d.value).filter(Number.isFinite);
@@ -553,7 +560,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       });
     }
     return data;
-  }, [divCfg, chartData, showNorm]);
+  }, [divCfg, chartData, showNorm, overlay]);
 
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
@@ -657,6 +664,11 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 {selected.valueLabel} · 원본 값
                 {showNorm && (
                   <span className="ml-2">· 점선 = 정규화 점수(우측축, 스프레드 확대 시 하락)</span>
+                )}
+                {overlay && (
+                  <span className="ml-2">
+                    · <span className="text-foreground">실선 {overlay.label}</span> vs 점선 이동평균 (지수 &gt; 평균 = 위험선호)
+                  </span>
                 )}
               </div>
             )}
@@ -775,14 +787,19 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                   )}
                   <Tooltip
                     {...TOOLTIP_STYLE}
-                    formatter={(v, name) => [
-                      fmtVal(v as number),
-                      name === "norm"
-                        ? "정규화 점수 (0~100)"
-                        : selected
-                          ? selected.valueLabel
-                          : "F&G",
-                    ]}
+                    formatter={(v, name) => {
+                      const n =
+                        name === "norm"
+                          ? "정규화 점수 (0~100)"
+                          : name === "value" || name == null
+                            ? overlay
+                              ? "이동평균"
+                              : selected
+                                ? selected.valueLabel
+                                : "F&G"
+                            : String(name);
+                      return [fmtVal(v as number), n];
+                    }}
                   />
                   {divCfg ? (
                     <>
@@ -817,6 +834,33 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         strokeWidth={1}
                         strokeOpacity={0.7}
                         fill="none"
+                        dot={false}
+                        activeDot={{ r: 3, strokeWidth: 0 }}
+                      />
+                    </>
+                  ) : overlay ? (
+                    <>
+                      {/* value = 이동평균 (점선), overlayValue = 실제 지수 (실선) */}
+                      <Area
+                        type="monotone"
+                        dataKey="value"
+                        name="이동평균"
+                        stroke="var(--muted-foreground)"
+                        strokeWidth={1}
+                        strokeDasharray="4 3"
+                        fill="none"
+                        dot={false}
+                        activeDot={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="overlayValue"
+                        name={overlay.label}
+                        stroke="var(--foreground)"
+                        strokeWidth={1.5}
+                        strokeOpacity={1}
+                        fill="none"
+                        connectNulls
                         dot={false}
                         activeDot={{ r: 3, strokeWidth: 0 }}
                       />

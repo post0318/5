@@ -62,6 +62,8 @@ export interface FearGreed {
     rating: string | null;
     /** 원본 지표 추이 (정규화 전 실제 값) */
     history: { date: string; value: number }[];
+    /** 보조 시리즈 (예: 모멘텀 차트의 S&P 500 지수) */
+    overlay?: { label: string; history: { date: string; value: number }[] };
   }[];
   source: string;
   deepLink: string;
@@ -102,19 +104,31 @@ export async function getFearGreed(): Promise<FearGreed | null> {
     .map((d) => ({ date: new Date(d.x).toISOString().slice(0, 10), value: Math.round(d.y * 100) / 100 }));
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
+  const toSeries = (data?: { x: number; y: number }[]) =>
+    (data ?? [])
+      .slice(-180)
+      .map((d) => ({ date: new Date(d.x).toISOString().slice(0, 10), value: round2(d.y) }));
+
   const components = COMPONENT_LABELS.map(({ key, label, valueLabel }) => {
     const c = raw[key] as
       | { score?: number; rating?: string; data?: { x: number; y: number }[] }
       | undefined;
+
+    // 모멘텀: sp125(=125일 이동평균) 차트에 실제 S&P 500 지수를 같이 표시
+    let overlay: { label: string; history: { date: string; value: number }[] } | undefined;
+    if (key === "market_momentum_sp125") {
+      const sp = raw["market_momentum_sp500"] as { data?: { x: number; y: number }[] } | undefined;
+      if (sp?.data?.length) overlay = { label: "S&P 500", history: toSeries(sp.data) };
+    }
+
     return {
       key,
       label,
       valueLabel,
       score: typeof c?.score === "number" ? Math.round(c.score * 10) / 10 : null,
       rating: c?.rating ?? null,
-      history: (c?.data ?? [])
-        .slice(-180)
-        .map((d) => ({ date: new Date(d.x).toISOString().slice(0, 10), value: round2(d.y) })),
+      history: toSeries(c?.data),
+      overlay,
     };
   });
 
