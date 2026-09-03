@@ -517,10 +517,24 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       const vals = chartData.map((d) => d.value).filter(Number.isFinite);
       const min = Math.min(...vals);
       const range = Math.max(...vals) - min || 1;
-      data = data.map((d) => ({
+      const normed = data.map((d) => ({
         ...d,
         norm: Math.round((100 - ((d.value - min) / range) * 100) * 10) / 10,
       }));
+      // 상승 구간은 녹색선, 하락 구간은 적색선으로 분리 (방향 전환점은 양쪽에 포함)
+      data = normed.map((d, i) => {
+        const p = normed[i - 1]?.norm;
+        const n = normed[i + 1]?.norm;
+        const segIn = p == null ? null : d.norm >= p;
+        const segOut = n == null ? null : n >= d.norm;
+        const inUp = segIn === true || segOut === true;
+        const inDown = segIn === false || segOut === false;
+        return {
+          ...d,
+          normUp: inUp ? d.norm : null,
+          normDown: inDown ? d.norm : null,
+        };
+      });
     }
     return data;
   }, [divCfg, chartData, showNorm]);
@@ -804,16 +818,32 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     />
                   )}
                   {showNorm && (
-                    <Line
-                      yAxisId="norm"
-                      type="monotone"
-                      dataKey="norm"
-                      stroke="var(--muted-foreground)"
-                      strokeWidth={1}
-                      strokeDasharray="4 3"
-                      dot={false}
-                      isAnimationActive={false}
-                    />
+                    <>
+                      <Line
+                        yAxisId="norm"
+                        type="monotone"
+                        dataKey="normUp"
+                        stroke="oklch(0.62 0.17 150)"
+                        strokeWidth={1.4}
+                        strokeDasharray="4 3"
+                        dot={false}
+                        connectNulls={false}
+                        isAnimationActive={false}
+                        name="norm"
+                      />
+                      <Line
+                        yAxisId="norm"
+                        type="monotone"
+                        dataKey="normDown"
+                        stroke="oklch(0.58 0.21 27)"
+                        strokeWidth={1.4}
+                        strokeDasharray="4 3"
+                        dot={false}
+                        connectNulls={false}
+                        isAnimationActive={false}
+                        name="norm"
+                      />
+                    </>
                   )}
                 </AreaChart>
               </ResponsiveContainer>
