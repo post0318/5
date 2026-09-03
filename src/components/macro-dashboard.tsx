@@ -956,9 +956,10 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       type="monotone"
                       dataKey="value"
                       stroke="var(--foreground)"
-                      strokeWidth={selected ? 1.5 : 1}
-                      strokeOpacity={selected ? 1 : 0.7}
-                      fill={showNorm ? "none" : "url(#fgFill)"}
+                      strokeWidth={selected ? 1.5 : 2}
+                      strokeOpacity={selected ? 1 : 0.9}
+                      // F&G 종합은 배경 채움 없이 선만 (조금 두껍게)
+                      fill={showNorm || !selected ? "none" : "url(#fgFill)"}
                       dot={false}
                       activeDot={{ r: 3, strokeWidth: 0 }}
                     />
