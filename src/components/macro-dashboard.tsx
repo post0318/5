@@ -622,25 +622,18 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         return { ...d, norm: Math.round((normInvert ? 100 - raw : raw) * 10) / 10 };
       });
 
-      // 짧은 구간(≤3틱)에 dropThreshold 이상 급락 감지
-      const LB = 3;
+      // 직전 대비 dropThreshold 이상 급락한 구간 감지
       const dropIdx = new Set<number>(); // line 스타일: 급락 구간 인덱스
       const dropInfo = new Map<number, { mid: number; span: number }>(); // ellipse 스타일
-      let lastIdx = -99;
       if (dropThreshold != null) {
-        for (let i = LB; i < normed.length; i++) {
-          const cur = normed[i].norm;
-          let peakJ = i - LB;
-          for (let j = i - LB; j < i; j++) if (normed[j].norm > normed[peakJ].norm) peakJ = j;
-          const span = normed[peakJ].norm - cur;
+        for (let i = 1; i < normed.length; i++) {
+          const span = normed[i - 1].norm - normed[i].norm; // 직전 대비 하락폭
           if (span < dropThreshold) continue;
           if (dropStyle === "ellipse") {
-            if (i - lastIdx > 4) {
-              dropInfo.set(i, { mid: (normed[peakJ].norm + cur) / 2, span });
-              lastIdx = i;
-            }
+            dropInfo.set(i, { mid: (normed[i - 1].norm + normed[i].norm) / 2, span });
           } else {
-            for (let k = peakJ; k <= i; k++) dropIdx.add(k);
+            dropIdx.add(i - 1);
+            dropIdx.add(i);
           }
         }
       }
