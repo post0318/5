@@ -319,7 +319,7 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
         <CardTitle className="text-sm">
-          {q.data?.name ?? idxKey} · 최근 5년 (일봉) · 볼린저밴드(20, ±2σ) · MACD(12/26/9)
+          {q.data?.name ?? idxKey} · 최근 3년 (일봉) · 볼린저밴드(20, ±2σ) · MACD(12/26/9)
         </CardTitle>
         <button
           onClick={onClose}

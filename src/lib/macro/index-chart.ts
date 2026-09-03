@@ -2,7 +2,7 @@ import "server-only";
 import YahooFinancePkg from "yahoo-finance2";
 
 /**
- * 주요 지수·원자재 장기 차트 (최근 5년, 일봉) + 기술적 지표.
+ * 주요 지수·원자재 장기 차트 (최근 3년, 일봉) + 기술적 지표.
  * yahoo-finance2 (개인용/비상업 한정 — prd.md §4.3).
  */
 
@@ -80,7 +80,7 @@ export async function getIndexChart(key: string): Promise<IndexChart | null> {
   if (!spec) return null;
 
   const from = new Date();
-  from.setFullYear(from.getFullYear() - 5);
+  from.setFullYear(from.getFullYear() - 3);
 
   let quotes: RawBar[];
   try {
