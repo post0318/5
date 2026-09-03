@@ -9,6 +9,7 @@ import {
   Line,
   LineChart,
   ReferenceArea,
+  ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -539,6 +540,24 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     return data;
   }, [divCfg, chartData, showNorm]);
 
+  // 정규화 점수가 최근 구간(≈10틱) 대비 20점 이상 급락한 지점 (에피소드당 1개)
+  const normDropDots = useMemo(() => {
+    if (!showNorm) return [];
+    const LB = 10;
+    const pts = divergingData as { date: string; norm?: number }[];
+    const out: { date: string; norm: number }[] = [];
+    let lastIdx = -99;
+    for (let i = LB; i < pts.length; i++) {
+      const cur = pts[i].norm;
+      const prev = pts[i - LB].norm;
+      if (cur != null && prev != null && cur <= prev - 20) {
+        if (i - lastIdx > 5) out.push({ date: pts[i].date, norm: cur });
+        lastIdx = i;
+      }
+    }
+    return out;
+  }, [showNorm, divergingData]);
+
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
     if (!divCfg) return null;
@@ -843,6 +862,19 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         isAnimationActive={false}
                         name="norm"
                       />
+                      {normDropDots.map((d) => (
+                        <ReferenceDot
+                          key={d.date}
+                          yAxisId="norm"
+                          x={d.date}
+                          y={d.norm}
+                          r={5}
+                          fill="oklch(0.58 0.21 27)"
+                          fillOpacity={0.25}
+                          stroke="oklch(0.58 0.21 27)"
+                          strokeOpacity={0.7}
+                        />
+                      ))}
                     </>
                   )}
                 </AreaChart>
