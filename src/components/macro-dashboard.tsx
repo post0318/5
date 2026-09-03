@@ -812,7 +812,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       stroke="var(--foreground)"
                       strokeWidth={1}
                       strokeOpacity={0.7}
-                      fill="url(#fgFill)"
+                      fill={showNorm ? "none" : "url(#fgFill)"}
                       dot={false}
                       activeDot={{ r: 3, strokeWidth: 0 }}
                     />
