@@ -508,8 +508,10 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   };
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
-  // 기준선 기준으로 위/아래 분리한 면적 데이터 (+ 정크본드는 정규화 점수)
-  const showNorm = selected?.key === "junk_bond_demand";
+  // 원본 값 + 정규화(0~100) 점수를 함께 보여주는 지표
+  const NORM_KEYS = new Set(["junk_bond_demand", "stock_price_strength"]);
+  const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
+  const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
   const overlay = selected?.overlay ?? null;
   const divergingData = useMemo(() => {
     type Row = { date: string; value: number } & Record<string, unknown>;
@@ -558,10 +560,10 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       const vals = chartData.map((d) => d.value).filter(Number.isFinite);
       const min = Math.min(...vals);
       const range = Math.max(...vals) - min || 1;
-      const normed = data.map((d) => ({
-        ...d,
-        norm: Math.round((100 - ((d.value - min) / range) * 100) * 10) / 10,
-      }));
+      const normed = data.map((d) => {
+        const raw = ((d.value - min) / range) * 100;
+        return { ...d, norm: Math.round((normInvert ? 100 - raw : raw) * 10) / 10 };
+      });
 
       // 짧은 구간(≤3틱)에 20점 이상 급락한 지점 → 타원 마커 데이터
       const LB = 3;
@@ -578,11 +580,14 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         }
       }
 
+      // 정규화 50 기준: 위면 녹색, 아래면 적색 (교차점 양쪽 포함)
+      const rel = (v?: number) => (v == null ? null : v >= 50);
       data = normed.map((d, i) => {
-        const p = normed[i - 1]?.norm;
-        const n = normed[i + 1]?.norm;
-        const inUp = (p != null && d.norm >= p) || (n != null && n >= d.norm);
-        const inDown = (p != null && d.norm < p) || (n != null && n < d.norm);
+        const here = rel(normed[i]?.norm);
+        const p = rel(normed[i - 1]?.norm);
+        const n = rel(normed[i + 1]?.norm);
+        const inUp = here === true || p === true || n === true;
+        const inDown = here === false || p === false || n === false;
         const dm = dropInfo.get(i);
         return {
           ...d,
@@ -594,7 +599,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       });
     }
     return data;
-  }, [divCfg, chartData, showNorm, overlay]);
+  }, [divCfg, chartData, showNorm, normInvert, overlay]);
 
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
@@ -697,7 +702,10 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
               <div className="text-muted-foreground text-[11px]">
                 {selected.valueLabel} · 원본 값
                 {showNorm && (
-                  <span className="ml-2">· 점선 = 정규화 점수(우측축, 스프레드 확대 시 하락)</span>
+                  <span className="ml-2">
+                    · 점선 = 정규화 점수 0~100 (우측축, <span className="text-up">50 위=녹색</span> /{" "}
+                    <span className="text-down">아래=적색</span>)
+                  </span>
                 )}
                 {overlay && (
                   <span className="ml-2">
