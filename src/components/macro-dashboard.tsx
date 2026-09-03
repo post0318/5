@@ -502,18 +502,28 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   };
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
-  // 기준선 기준으로 위/아래 분리한 면적 데이터
-  const divergingData = useMemo(
-    () =>
-      divCfg
-        ? chartData.map((d) => ({
-            ...d,
-            above: Math.max(d.value, divCfg.threshold),
-            below: Math.min(d.value, divCfg.threshold),
-          }))
-        : chartData,
-    [divCfg, chartData],
-  );
+  // 기준선 기준으로 위/아래 분리한 면적 데이터 (+ 정크본드는 정규화 점수)
+  const showNorm = selected?.key === "junk_bond_demand";
+  const divergingData = useMemo(() => {
+    let data = chartData;
+    if (divCfg) {
+      data = chartData.map((d) => ({
+        ...d,
+        above: Math.max(d.value, divCfg.threshold),
+        below: Math.min(d.value, divCfg.threshold),
+      }));
+    }
+    if (showNorm) {
+      const vals = chartData.map((d) => d.value).filter(Number.isFinite);
+      const min = Math.min(...vals);
+      const range = Math.max(...vals) - min || 1;
+      data = data.map((d) => ({
+        ...d,
+        norm: Math.round((100 - ((d.value - min) / range) * 100) * 10) / 10,
+      }));
+    }
+    return data;
+  }, [divCfg, chartData, showNorm]);
 
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
@@ -613,7 +623,12 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
               )}
             </div>
             {selected && (
-              <div className="text-muted-foreground text-[11px]">{selected.valueLabel} · 원본 값</div>
+              <div className="text-muted-foreground text-[11px]">
+                {selected.valueLabel} · 원본 값
+                {showNorm && (
+                  <span className="ml-2">· 점선 = 정규화 점수(우측축, 스프레드 확대 시 하락)</span>
+                )}
+              </div>
             )}
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
@@ -716,9 +731,28 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     tickFormatter={yAxis || divAxis ? (v: number) => v.toFixed(2) : fmtVal}
                     allowDecimals
                   />
+                  {showNorm && (
+                    <YAxis
+                      yAxisId="norm"
+                      orientation="right"
+                      tick={AXIS_TICK}
+                      axisLine={false}
+                      tickLine={false}
+                      width={28}
+                      domain={[0, 100]}
+                      ticks={[0, 25, 50, 75, 100]}
+                    />
+                  )}
                   <Tooltip
                     {...TOOLTIP_STYLE}
-                    formatter={(v) => [fmtVal(v as number), selected ? selected.valueLabel : "F&G"]}
+                    formatter={(v, name) => [
+                      fmtVal(v as number),
+                      name === "norm"
+                        ? "정규화 점수 (0~100)"
+                        : selected
+                          ? selected.valueLabel
+                          : "F&G",
+                    ]}
                   />
                   {divCfg ? (
                     <>
@@ -763,10 +797,22 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       dataKey="value"
                       stroke="var(--foreground)"
                       strokeWidth={1}
-                        strokeOpacity={0.7}
+                      strokeOpacity={0.7}
                       fill="url(#fgFill)"
                       dot={false}
                       activeDot={{ r: 3, strokeWidth: 0 }}
+                    />
+                  )}
+                  {showNorm && (
+                    <Line
+                      yAxisId="norm"
+                      type="monotone"
+                      dataKey="norm"
+                      stroke="var(--muted-foreground)"
+                      strokeWidth={1}
+                      strokeDasharray="4 3"
+                      dot={false}
+                      isAnimationActive={false}
                     />
                   )}
                 </AreaChart>
