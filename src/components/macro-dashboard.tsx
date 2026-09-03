@@ -478,7 +478,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       aboveLabel?: string;
       belowLabel?: string;
       refLabel?: string;
-      /** 기준선 색 (지정 시 실선) */
+      /** 기준선 색 (파스텔 점선) */
       refColor?: string;
       /** Y축 눈금 간격 */
       tickStep?: number;
@@ -492,7 +492,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       aboveLabel: "▲ 주식성과가 채권을 능가",
       belowLabel: "▼ 채권성과가 주식을 능가",
       refLabel: "기준선 0",
-      refColor: "oklch(0.55 0.19 255)",
+      refColor: "oklch(0.78 0.08 250)",
     },
     market_volatility_vix: {
       // FRED VIXCLS(1990~) 장기 평균 — 매일 갱신되어 값이 조금씩 변함
@@ -501,7 +501,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       aboveLabel: "▲ 역사적 평균 상회 · 변동성 확대",
       belowLabel: "▼ 역사적 평균 하회 · 안정",
       refLabel: `역사적 평균 ${(fg.vixHistoricalAvg ?? 19.43).toFixed(2)}`,
-      refColor: "oklch(0.55 0.19 255)",
+      refColor: "oklch(0.78 0.08 250)",
       tickStep: 5, // 라벨은 5 단위
       domainSnap: 5,
     },
@@ -761,9 +761,9 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                       <ReferenceLine
                         y={divCfg.threshold}
                         stroke={divCfg.refColor ?? "var(--muted-foreground)"}
-                        strokeWidth={divCfg.refColor ? 1.5 : 1}
-                        strokeDasharray={divCfg.refColor ? undefined : "1 3"}
-                        strokeOpacity={divCfg.refColor ? 0.9 : 0.4}
+                        strokeWidth={1.25}
+                        strokeDasharray="4 3"
+                        strokeOpacity={divCfg.refColor ? 0.85 : 0.4}
                         label={
                           divCfg.refLabel
                             ? {
