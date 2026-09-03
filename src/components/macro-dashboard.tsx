@@ -481,6 +481,21 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     safe_haven_demand: 5, // 5%p 단위
     put_call_options: 0.1,
   };
+  // 세부지표별 Y축 고정 범위·눈금 (원시값 스케일이 커서 auto 여백이 과한 경우)
+  const fixedAxisByKey: Record<string, { domain: [number, number]; step: number }> = {
+    stock_price_breadth: { domain: [800, 1400], step: 200 },
+  };
+  const fixedAxis = useMemo(() => {
+    if (!selected) return null;
+    const cfg = fixedAxisByKey[selected.key];
+    if (!cfg) return null;
+    const [min, max] = cfg.domain;
+    const ticks: number[] = [];
+    for (let v = min; v <= max + 1e-9; v += cfg.step) ticks.push(Math.round(v));
+    return { domain: cfg.domain, ticks };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+
   const yStep = selected ? stepByKey[selected.key] : undefined;
   const yAxis = useMemo(() => {
     if (!yStep || !selected) return null;
@@ -827,16 +842,20 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                     tickLine={false}
                     width={selected ? 46 : 30}
                     domain={
-                      divAxis?.domain ?? (yAxis ? yAxis.domain : selected ? ["auto", "auto"] : [0, 100])
+                      divAxis?.domain ??
+                      fixedAxis?.domain ??
+                      (yAxis ? yAxis.domain : selected ? ["auto", "auto"] : [0, 100])
                     }
                     ticks={
                       divAxis
                         ? divAxis.ticks
-                        : yAxis
-                          ? yAxis.ticks
-                          : selected
-                            ? undefined
-                            : [0, 25, 50, 75, 100]
+                        : fixedAxis
+                          ? fixedAxis.ticks
+                          : yAxis
+                            ? yAxis.ticks
+                            : selected
+                              ? undefined
+                              : [0, 25, 50, 75, 100]
                     }
                     tickFormatter={yAxis || divAxis ? (v: number) => v.toFixed(2) : fmtVal}
                     allowDecimals
