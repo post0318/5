@@ -1259,7 +1259,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
 
 // 나스닥 리베이스 오버레이를 숨길 지표
 //  - DFEDTARU(기준금리): 첫 값이 ~0(제로금리기)이라 리베이스 시 바닥에 눌려 의미 없음
-const HIDE_NASDAQ_OVERLAY = new Set(["DFEDTARU"]);
+//  - M2SL(M2 통화량): 우상향 추세가 나스닥과 거의 겹쳐 비교 의미 적음
+const HIDE_NASDAQ_OVERLAY = new Set(["DFEDTARU", "M2SL"]);
 
 function IndicatorCard({ ind, nasdaq: nasdaqRaw }: { ind: Indicator; nasdaq: Indicator | null }) {
   const nasdaq = HIDE_NASDAQ_OVERLAY.has(ind.id) ? null : nasdaqRaw;
