@@ -526,14 +526,22 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     type Row = { date: string; value: number } & Record<string, unknown>;
     let data: Row[] = chartData as Row[];
     if (divCfg) {
-      // 기준선 위/아래로 색 분리. 회색 기준선(value)이 전체 형태를 유지하고
-      // 그 위에 녹/적 세그먼트를 덧그린다 (스파이크 교차점 중복 방지).
+      // 기준선 대비 "좋음/나쁨" 으로 선 색 분리.
+      //  - 일반: 기준선 위 = 좋음(녹)  · VIX(aboveIsBad): 위 = 나쁨(적)
+      // 교차 구간은 양쪽에 포함해 선이 끊기지 않게 한다.
       const th = divCfg.threshold;
-      data = chartData.map((d) => ({
-        ...d,
-        divUp: d.value >= th ? d.value : null,
-        divDown: d.value < th ? d.value : null,
-      }));
+      const bad = divCfg.aboveIsBad;
+      const good = (v: number) => (v >= th) !== bad; // 좋은 상태인가
+      data = chartData.map((d, i) => {
+        const g = good(d.value);
+        const gp = i > 0 ? good(chartData[i - 1].value) : g;
+        const gn = i < chartData.length - 1 ? good(chartData[i + 1].value) : g;
+        return {
+          ...d,
+          divGood: g || gp || gn ? d.value : null,
+          divBad: !g || !gp || !gn ? d.value : null,
+        };
+      });
     }
     if (overlay) {
       const omap = new Map(overlay.history.map((p) => [p.date, p.value]));
@@ -849,25 +857,24 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                   />
                   {divCfg ? (
                     <>
-                      {/* 회색 기준선(전체 형태 유지) + 녹/적 세그먼트 오버레이 */}
+                      {/* 툴팁용 투명 기준선 */}
                       <Area
                         type="monotone"
                         dataKey="value"
                         name={selected?.valueLabel ?? "값"}
-                        stroke="var(--muted-foreground)"
-                        strokeWidth={0.75}
-                        strokeOpacity={0.35}
+                        stroke="none"
                         fill="none"
                         dot={false}
                         activeDot={false}
                         isAnimationActive={false}
                       />
+                      {/* 좋은 구간 = 녹색 */}
                       <Area
                         type="monotone"
-                        dataKey="divUp"
+                        dataKey="divGood"
                         name={selected?.valueLabel ?? "값"}
                         tooltipType="none"
-                        stroke={divCfg.aboveIsBad ? "oklch(0.58 0.21 27)" : "oklch(0.62 0.17 150)"}
+                        stroke="oklch(0.62 0.17 150)"
                         strokeWidth={1.6}
                         fill="none"
                         connectNulls={false}
@@ -875,12 +882,13 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         activeDot={{ r: 3, strokeWidth: 0 }}
                         isAnimationActive={false}
                       />
+                      {/* 나쁜 구간 = 적색 */}
                       <Area
                         type="monotone"
-                        dataKey="divDown"
+                        dataKey="divBad"
                         name={selected?.valueLabel ?? "값"}
                         tooltipType="none"
-                        stroke={divCfg.aboveIsBad ? "oklch(0.62 0.17 150)" : "oklch(0.58 0.21 27)"}
+                        stroke="oklch(0.58 0.21 27)"
                         strokeWidth={1.6}
                         fill="none"
                         connectNulls={false}
