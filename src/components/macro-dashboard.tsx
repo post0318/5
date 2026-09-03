@@ -512,6 +512,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   const NORM_KEYS = new Set(["junk_bond_demand", "stock_price_strength"]);
   const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
   const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
+  const showDropMarkers = selected?.key === "junk_bond_demand";
   const overlay = selected?.overlay ?? null;
   const divergingData = useMemo(() => {
     type Row = { date: string; value: number } & Record<string, unknown>;
@@ -951,7 +952,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         isAnimationActive={false}
                         name="norm"
                       />
-                      {/* 급락 구간 세로 타원 마커 — Line 의 dot 렌더러로 (좌표는 recharts 가 계산) */}
+                      {/* 급락 구간 세로 타원 마커 (정크본드만) */}
+                      {showDropMarkers && (
                       <Line
                         yAxisId="norm"
                         dataKey="dropMid"
@@ -989,6 +991,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                           );
                         }}
                       />
+                      )}
                     </>
                   )}
                 </AreaChart>
