@@ -6,6 +6,7 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
+  Customized,
   Line,
   LineChart,
   ReferenceArea,
@@ -419,6 +420,43 @@ function componentScoreDir(key: string, history: { value: number }[]): -1 | 0 | 
   return diff > 0 ? 1 : -1;
 }
 
+/** 정규화 급락 구간을 세로 타원으로 오버레이 (Customized 로 스케일 접근) */
+function NormDropOverlay(props: {
+  drops?: { date: string; lo: number; hi: number; drop: number }[];
+  xAxisMap?: Record<string, { scale: (v: unknown) => number | undefined; bandSize?: number }>;
+  yAxisMap?: Record<string, { scale: (v: number) => number | undefined }>;
+}) {
+  const { drops = [], xAxisMap, yAxisMap } = props;
+  const xa = xAxisMap ? Object.values(xAxisMap)[0] : undefined;
+  const ya = yAxisMap?.["norm"];
+  if (!xa || !ya) return null;
+  const band = xa.bandSize ?? 0;
+
+  return (
+    <g>
+      {drops.map((d, i) => {
+        const xp = xa.scale(d.date);
+        const yHi = ya.scale(d.hi);
+        const yLo = ya.scale(d.lo);
+        if (xp == null || yHi == null || yLo == null) return null;
+        return (
+          <ellipse
+            key={i}
+            cx={xp + band / 2}
+            cy={(yHi + yLo) / 2}
+            rx={13}
+            ry={Math.abs(yLo - yHi) / 2 + 8}
+            fill="oklch(0.62 0.22 25)"
+            fillOpacity={0.07}
+            stroke="oklch(0.55 0.22 25)"
+            strokeWidth={1.5}
+          />
+        );
+      })}
+    </g>
+  );
+}
+
 function FearGreedCard({ fg }: { fg: FearGreed }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const selected = fg.components.find((c) => c.key === selectedKey) ?? null;
@@ -544,7 +582,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     if (!showNorm) return [];
     const LB = 3;
     const pts = divergingData as { date: string; norm?: number }[];
-    const out: { x1: string; x2: string; lo: number; hi: number; drop: number }[] = [];
+    const out: { date: string; lo: number; hi: number; drop: number }[] = [];
     let lastIdx = -99;
     for (let i = LB; i < pts.length; i++) {
       const cur = pts[i].norm;
@@ -557,10 +595,9 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       const drop = peak - cur;
       if (drop >= 20 && i - lastIdx > 4) {
         out.push({
-          x1: pts[Math.max(0, i - 2)].date,
-          x2: pts[Math.min(pts.length - 1, i + 1)].date,
-          lo: Math.max(0, cur - 6),
-          hi: Math.min(100, peak + 6),
+          date: pts[i].date,
+          lo: Math.max(0, cur - 4),
+          hi: Math.min(100, peak + 4),
           drop: Math.round(drop),
         });
         lastIdx = i;
@@ -873,39 +910,9 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         isAnimationActive={false}
                         name="norm"
                       />
-                      {normDropDots.map((d, i) => (
-                        <ReferenceArea
-                          key={`${d.x1}-${i}`}
-                          yAxisId="norm"
-                          x1={d.x1}
-                          x2={d.x2}
-                          y1={d.lo}
-                          y2={d.hi}
-                          ifOverflow="visible"
-                          fill="none"
-                          stroke="none"
-                          shape={(props: {
-                            x?: number;
-                            y?: number;
-                            width?: number;
-                            height?: number;
-                          }) => {
-                            const { x = 0, y = 0, width = 0, height = 0 } = props;
-                            return (
-                              <ellipse
-                                cx={x + width / 2}
-                                cy={y + height / 2}
-                                rx={Math.max(width / 2 + 7, 12)}
-                                ry={height / 2 + 6}
-                                fill="oklch(0.62 0.22 25)"
-                                fillOpacity={0.07}
-                                stroke="oklch(0.55 0.22 25)"
-                                strokeWidth={1.5}
-                              />
-                            );
-                          }}
-                        />
-                      ))}
+                      {normDropDots.length > 0 && (
+                        <Customized component={<NormDropOverlay drops={normDropDots} />} />
+                      )}
                     </>
                   )}
                 </AreaChart>
