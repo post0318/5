@@ -110,6 +110,36 @@ const VERDICT_CLASS: Record<Verdict, string> = {
   neutral: "bg-muted text-muted-foreground border-border",
 };
 
+/**
+ * 시계열을 기준선 기준으로 좋음(divGood)/나쁨(divBad) 두 색 선으로 분리.
+ * 교차 구간엔 정확히 y=기준선인 보간점을 삽입해 색이 겹치지 않고 이어지게 한다.
+ */
+function splitByThreshold<T extends { date: string }>(
+  rows: (T & { splitVal: number })[],
+  threshold: number,
+  goodWhenAbove: boolean,
+): (T & { divGood: number | null; divBad: number | null })[] {
+  const isGood = (v: number) => (goodWhenAbove ? v >= threshold : v < threshold);
+  const out: (T & { divGood: number | null; divBad: number | null })[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const cur = rows[i];
+    if (i > 0) {
+      const prev = rows[i - 1];
+      const crossed = prev.splitVal >= threshold !== (cur.splitVal >= threshold);
+      if (crossed && cur.splitVal !== prev.splitVal) {
+        const t = (threshold - prev.splitVal) / (cur.splitVal - prev.splitVal);
+        const d1 = Date.parse(prev.date);
+        const d2 = Date.parse(cur.date);
+        const midDate = new Date(d1 + (d2 - d1) * Math.min(Math.max(t, 0), 1)).toISOString();
+        out.push({ ...cur, date: midDate, divGood: threshold, divBad: threshold });
+      }
+    }
+    const g = isGood(cur.splitVal);
+    out.push({ ...cur, divGood: g ? cur.splitVal : null, divBad: g ? null : cur.splitVal });
+  }
+  return out;
+}
+
 function DirIcon({ dir }: { dir: Direction }) {
   const I = dir === "up" ? ArrowUpRight : dir === "down" ? ArrowDownRight : ArrowRight;
   return <I className="size-3.5" />;
@@ -526,22 +556,13 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     type Row = { date: string; value: number } & Record<string, unknown>;
     let data: Row[] = chartData as Row[];
     if (divCfg) {
-      // 기준선 대비 "좋음/나쁨" 으로 선 색 분리.
-      //  - 일반: 기준선 위 = 좋음(녹)  · VIX(aboveIsBad): 위 = 나쁨(적)
-      // 교차 구간은 양쪽에 포함해 선이 끊기지 않게 한다.
-      const th = divCfg.threshold;
-      const bad = divCfg.aboveIsBad;
-      const good = (v: number) => (v >= th) !== bad; // 좋은 상태인가
-      data = chartData.map((d, i) => {
-        const g = good(d.value);
-        const gp = i > 0 ? good(chartData[i - 1].value) : g;
-        const gn = i < chartData.length - 1 ? good(chartData[i + 1].value) : g;
-        return {
-          ...d,
-          divGood: g || gp || gn ? d.value : null,
-          divBad: !g || !gp || !gn ? d.value : null,
-        };
-      });
+      // 기준선 대비 좋음(녹)/나쁨(적) 두 색 선. 교차점 보간으로 겹침 방지.
+      //  - 일반: 기준선 위 = 좋음  · VIX(aboveIsBad): 위 = 나쁨
+      data = splitByThreshold(
+        chartData.map((d) => ({ ...d, splitVal: d.value })),
+        divCfg.threshold,
+        !divCfg.aboveIsBad,
+      );
     }
     if (overlay) {
       const omap = new Map(overlay.history.map((p) => [p.date, p.value]));
@@ -590,23 +611,16 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         }
       }
 
-      // 정규화 50 기준: 위면 녹색, 아래면 적색 (교차점 양쪽 포함)
-      const rel = (v?: number) => (v == null ? null : v >= 50);
-      data = normed.map((d, i) => {
-        const here = rel(normed[i]?.norm);
-        const p = rel(normed[i - 1]?.norm);
-        const n = rel(normed[i + 1]?.norm);
-        const inUp = here === true || p === true || n === true;
-        const inDown = here === false || p === false || n === false;
+      // 정규화 50 기준: 위 녹색 / 아래 적색 (교차점 보간으로 겹침 방지)
+      const withDrop = normed.map((d, i) => {
         const dm = dropInfo.get(i);
-        return {
-          ...d,
-          normUp: inUp ? d.norm : null,
-          normDown: inDown ? d.norm : null,
-          dropMid: dm ? dm.mid : null,
-          dropSpan: dm ? dm.span : 0,
-        };
+        return { ...d, dropMid: dm ? dm.mid : null, dropSpan: dm ? dm.span : 0 };
       });
+      data = splitByThreshold(
+        withDrop.map((d) => ({ ...d, splitVal: d.norm })),
+        50,
+        true,
+      ).map((d) => ({ ...d, normUp: d.divGood, normDown: d.divBad }));
     }
     return data;
   }, [divCfg, chartData, showNorm, normInvert, overlay]);
