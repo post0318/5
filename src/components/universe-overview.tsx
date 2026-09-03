@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { ChangePercent, Money, Multiple, Percent } from "@/components/num";
+import { UniversePptButton } from "@/components/ppt-export";
 import { formatBigAmount, formatMarketCap } from "@/lib/format";
 
 interface Row {
@@ -56,15 +57,18 @@ export function UniverseOverview({ market }: { market: MarketId }) {
             등록 종목의 시세 · 트레일링 멀티플 · 포워드 컨센서스 요약
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => q.refetch()}
-          disabled={q.isFetching}
-        >
-          <RefreshCw className={q.isFetching ? "size-4 animate-spin" : "size-4"} />
-          새로고침
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {q.data && q.data.rows.length > 0 && <UniversePptButton market={market} />}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => q.refetch()}
+            disabled={q.isFetching}
+          >
+            <RefreshCw className={q.isFetching ? "size-4 animate-spin" : "size-4"} />
+            새로고침
+          </Button>
+        </div>
       </div>
 
       {q.isLoading && <Skeleton className="h-64 w-full" />}

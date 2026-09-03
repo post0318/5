@@ -18,6 +18,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { ChangePercent, Money, Multiple, NumberText } from "@/components/num";
+import { StockPptButton } from "@/components/ppt-export";
 import { FinancialsTable } from "@/components/financials-table";
 import { DeepLinkList } from "@/components/deep-links";
 
@@ -121,14 +122,22 @@ export function StockAnalysis({ market }: { market: MarketId }) {
                 )}
               </div>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={addToUniverse.isPending || addToUniverse.isSuccess}
-              onClick={() => addToUniverse.mutate()}
-            >
-              {addToUniverse.isSuccess ? "유니버스에 추가됨" : "유니버스에 추가"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <StockPptButton
+                market={market}
+                symbol={ov.symbol}
+                yahoo={yahooOverride}
+                name={ov.profile?.name}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={addToUniverse.isPending || addToUniverse.isSuccess}
+                onClick={() => addToUniverse.mutate()}
+              >
+                {addToUniverse.isSuccess ? "유니버스에 추가됨" : "유니버스에 추가"}
+              </Button>
+            </div>
           </div>
 
           <Tabs defaultValue="overview">
