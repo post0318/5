@@ -153,7 +153,8 @@ const SPECS: IndicatorSpec[] = [
     transform: "yoy",
     levelVerdict: (v) => {
       if (v > 4) return { verdict: "negative", reason: `${v.toFixed(1)}% — 고물가(4% 초과), 긴축 압력` };
-      if (v > 3) return { verdict: "neutral", reason: `${v.toFixed(1)}% — 목표 상회` };
+      if (v > 3) return { verdict: "negative", reason: `${v.toFixed(1)}% — 목표(2%) 상회, 물가 부담` };
+      if (v > 2.5) return { verdict: "neutral", reason: `${v.toFixed(1)}% — 목표 소폭 상회` };
       if (v < 1) return { verdict: "neutral", reason: `${v.toFixed(1)}% — 저물가(디플레 경계)` };
       return { verdict: "positive", reason: `${v.toFixed(1)}% — 목표(2%) 부근` };
     },
