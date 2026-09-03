@@ -28,17 +28,22 @@ interface Row {
   recommendationKey?: string | null;
   marketCap?: number | null;
   revenueAnnual?: number | null;
-  ebitdaMargin?: number | null;
+  opMargin?: number | null;
   netMargin?: number | null;
   warnings?: string[];
   error?: string;
 }
+
+const CAP_UNIT: Record<MarketId, string> = { kr: "십억원", us: "십억$", jp: "억엔" };
+const REV_UNIT: Record<MarketId, string> = { kr: "억원", us: "백만$", jp: "천만엔" };
 
 export function UniverseOverview({ market }: { market: MarketId }) {
   const q = useQuery({
     queryKey: ["universe-overview", market],
     queryFn: () => apiFetch<{ rows: Row[] }>(`/api/universe/overview?market=${market}`),
   });
+  const capUnit = CAP_UNIT[market];
+  const revUnit = REV_UNIT[market];
 
   return (
     <div className="space-y-4">
@@ -47,9 +52,6 @@ export function UniverseOverview({ market }: { market: MarketId }) {
           <h1 className="text-xl font-semibold">유니버스 통합 뷰</h1>
           <p className="text-muted-foreground text-sm">
             등록 종목의 시세 · 트레일링 멀티플 · 포워드 컨센서스 요약
-          </p>
-          <p className="text-muted-foreground/80 mt-0.5 text-xs">
-            시총·매출 단위 — 한국: 십억원·억원 / 미국: 십억$·백만$ / 일본: 억엔·천만엔 (최근 연간)
           </p>
         </div>
         <Button
@@ -87,10 +89,10 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                 <th className="px-3 py-2 font-medium">그룹</th>
                 <th className="px-3 py-2 text-right font-medium">종가</th>
                 <th className="px-3 py-2 text-right font-medium">등락</th>
-                <th className="px-3 py-2 text-right font-medium">시가총액</th>
-                <th className="px-3 py-2 text-right font-medium">매출액</th>
-                <th className="px-3 py-2 text-right font-medium">EBITDA%</th>
-                <th className="px-3 py-2 text-right font-medium">순이익%</th>
+                <th className="px-3 py-2 text-right font-medium">시가총액({capUnit})</th>
+                <th className="px-3 py-2 text-right font-medium">매출액({revUnit})</th>
+                <th className="px-3 py-2 text-right font-medium">영업이익률</th>
+                <th className="px-3 py-2 text-right font-medium">순이익률</th>
                 <th className="px-3 py-2 text-right font-medium">PER</th>
                 <th className="px-3 py-2 text-right font-medium">PBR</th>
                 <th className="px-3 py-2 text-right font-medium">Fwd PER</th>
@@ -136,7 +138,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                         {formatBigAmount(r.revenueAnnual, r.market)}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <Percent value={r.ebitdaMargin} />
+                        <Percent value={r.opMargin} />
                       </td>
                       <td className="px-3 py-2 text-right">
                         <Percent value={r.netMargin} />

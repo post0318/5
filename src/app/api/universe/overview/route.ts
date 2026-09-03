@@ -42,7 +42,7 @@ export async function GET(request: Request) {
           recommendationKey: ov.consensus?.recommendationKey ?? null,
           marketCap: ov.multiples?.marketCap ?? null,
           revenueAnnual: rev,
-          ebitdaMargin: margin(inp?.opIncomeAnnual),
+          opMargin: margin(inp?.opIncomeAnnual),
           netMargin: margin(inp?.netIncomeAnnual),
           warnings: ov.warnings,
         };
