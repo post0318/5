@@ -575,6 +575,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   const dropCfg = selected ? DROP_CFG[selected.key] : undefined;
   const dropThreshold = dropCfg?.threshold;
   const dropStyle = dropCfg?.style;
+  // 정규화선 색: "direction" = 상승 녹/하락 적, 그 외 = 50 기준 위 녹/아래 적
+  const normColorByDirection = selected?.key === "junk_bond_demand";
   const overlay = selected?.overlay ?? null;
   const divergingData = useMemo(() => {
     type Row = { date: string; value: number } & Record<string, unknown>;
@@ -643,18 +645,36 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         }
       }
 
-      // 정규화 50 기준: 위 녹색 / 아래 적색 (교차점 보간으로 겹침 방지)
       const marked = normed.map((d, i) => ({
         ...d,
         isDrop: dropIdx.has(i),
         dropMid: dropInfo.get(i)?.mid ?? null,
         dropSpan: dropInfo.get(i)?.span ?? 0,
       }));
-      data = splitByThreshold(
-        marked.map((d) => ({ ...d, splitVal: d.norm })),
-        50,
-        true,
-      ).map((d) => {
+
+      let split: (typeof marked[number] & { divGood: number | null; divBad: number | null })[];
+      if (normColorByDirection) {
+        // 상승 구간 = 녹색 / 하락 구간 = 적색 (전환점은 양쪽에 포함해 끊김 방지)
+        split = marked.map((d, i) => {
+          const endUp =
+            i > 0 ? d.norm >= marked[i - 1].norm : marked[i + 1] ? marked[i + 1].norm >= d.norm : true;
+          const startUp = marked[i + 1] ? marked[i + 1].norm >= d.norm : endUp;
+          return {
+            ...d,
+            divGood: endUp || startUp ? d.norm : null,
+            divBad: !endUp || !startUp ? d.norm : null,
+          };
+        });
+      } else {
+        // 정규화 50 기준: 위 녹색 / 아래 적색 (교차점 보간으로 겹침 방지)
+        split = splitByThreshold(
+          marked.map((d) => ({ ...d, splitVal: d.norm })),
+          50,
+          true,
+        );
+      }
+
+      data = split.map((d) => {
         const drop = "isDrop" in d && (d as { isDrop?: boolean }).isDrop;
         return {
           ...d,
@@ -666,7 +686,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       });
     }
     return data;
-  }, [divCfg, chartData, showNorm, normInvert, overlay, dropThreshold, dropStyle]);
+  }, [divCfg, chartData, showNorm, normInvert, overlay, dropThreshold, dropStyle, normColorByDirection]);
 
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
@@ -771,7 +791,18 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 {showNorm && (
                   <span className="ml-2">
                     · 점선 = 자체 정규화 0~100 (최근 1년 min-max, CNN 점수와 다름 · 우측축,{" "}
-                    <span className="text-up">50 위=녹색</span> / <span className="text-down">아래=적색</span>)
+                    {normColorByDirection ? (
+                      <>
+                        <span className="text-up">상승=녹색</span> /{" "}
+                        <span className="text-down">하락=적색</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-up">50 위=녹색</span> /{" "}
+                        <span className="text-down">아래=적색</span>
+                      </>
+                    )}
+                    )
                     {dropStyle === "line" && (
                       <span>
                         {" "}
