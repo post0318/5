@@ -802,8 +802,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                 )}
                 {showMa && (
                   <span className="ml-2">
-                    · <span style={{ color: "oklch(0.62 0.13 250)" }}>실선 MA20</span> / 점선 MA60 ·
-                    원본선 <span className="text-up">MA20≥MA60=녹색</span> /{" "}
+                    · <span style={{ color: "oklch(0.62 0.13 250)" }}>점선 = MA20</span> · 원본선{" "}
+                    <span className="text-up">MA20 위=녹색</span> /{" "}
                     <span className="text-down">아래=적색</span>
                   </span>
                 )}
@@ -1087,6 +1087,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         name="MA20"
                         stroke="oklch(0.62 0.13 250)"
                         strokeWidth={1.1}
+                        strokeDasharray="4 3"
                         dot={false}
                         connectNulls
                         isAnimationActive={false}
