@@ -17,6 +17,13 @@ export interface MacroPoint {
 
 export type MacroCategory = "market" | "leading" | "core";
 
+/** 지표 판정 기준 한 줄 (툴팁 표) */
+export interface GuideRow {
+  when: string;
+  verdict: SignalVerdict;
+  note?: string;
+}
+
 export interface MacroIndicator {
   id: string;
   name: string;
@@ -35,6 +42,8 @@ export interface MacroIndicator {
   direction6m: SignalDirection;
   verdict: SignalVerdict;
   verdictReason: string;
+  /** 판정 기준 표 (툴팁). 지표별로 읽는 법이 달라 개별 명시 */
+  guide: GuideRow[];
   series: MacroPoint[];
 }
 
@@ -44,6 +53,8 @@ interface IndicatorSpec {
   category: MacroCategory;
   unit: string;
   note: string;
+  /** 판정 기준 표 (툴팁). 지표별로 읽는 법이 달라 개별 명시 */
+  guide?: GuideRow[];
   goodDirection: "up" | "down" | "none";
   frequency: "daily" | "weekly" | "monthly" | "quarterly";
   transform?: "level" | "yoy";
@@ -62,6 +73,7 @@ const SPECS: IndicatorSpec[] = [
     category: "market",
     unit: "pt",
     note: "미국 증시 대표 지수. 다른 지표와 겹쳐 본다.",
+    guide: [{ when: "판정 대상 아님", verdict: "neutral", note: "다른 지표에 겹쳐 보는 기준선" }],
     goodDirection: "up",
     frequency: "daily",
   },
@@ -72,6 +84,11 @@ const SPECS: IndicatorSpec[] = [
     category: "leading",
     unit: "건",
     note: "경기 악화 시 후행, 회복 시 선행. 낮을수록 고용 견조.",
+    guide: [
+      { when: "6개월 증가", verdict: "negative", note: "고용 악화" },
+      { when: "6개월 감소", verdict: "positive", note: "고용 견조" },
+      { when: "큰 변화 없음", verdict: "neutral" },
+    ],
     goodDirection: "down",
     frequency: "weekly",
   },
@@ -81,6 +98,12 @@ const SPECS: IndicatorSpec[] = [
     category: "leading",
     unit: "idx",
     note: "100 기준. 침체 전 먼저 하락하는 경향(선행).",
+    guide: [
+      { when: "70 미만", verdict: "negative", note: "위축 국면" },
+      { when: "70~85, 하락 중", verdict: "negative" },
+      { when: "70~85, 상승 중", verdict: "neutral" },
+      { when: "85 이상", verdict: "positive", note: "양호" },
+    ],
     goodDirection: "up",
     frequency: "monthly",
     levelVerdict: (v, dir) => {
@@ -95,6 +118,11 @@ const SPECS: IndicatorSpec[] = [
     category: "leading",
     unit: "천호",
     note: "주택시장 활력. 침체 전 먼저 꺾이는 경향(선행).",
+    guide: [
+      { when: "6개월 증가", verdict: "positive" },
+      { when: "6개월 감소", verdict: "negative" },
+      { when: "큰 변화 없음", verdict: "neutral" },
+    ],
     goodDirection: "up",
     frequency: "monthly",
   },
@@ -104,6 +132,13 @@ const SPECS: IndicatorSpec[] = [
     category: "leading",
     unit: "% YoY",
     note: "시중 유동성 증가율. 정상 5% 안팎. 마이너스는 긴축·침체 위험, 두 자릿수는 과잉 유동성.",
+    guide: [
+      { when: "< 0%", verdict: "negative", note: "유동성 수축" },
+      { when: "0~2%", verdict: "negative", note: "둔화" },
+      { when: "2~6%", verdict: "positive", note: "정상" },
+      { when: "6~8%", verdict: "neutral" },
+      { when: "> 8%", verdict: "negative", note: "과잉·인플레 압력" },
+    ],
     goodDirection: "up",
     frequency: "monthly",
     transform: "yoy",
@@ -123,6 +158,11 @@ const SPECS: IndicatorSpec[] = [
     category: "leading",
     unit: "%p",
     note: "신용 위험 프리미엄. 낮으면 위험선호, 급등은 스트레스 신호.",
+    guide: [
+      { when: "< 4%p", verdict: "positive", note: "안정" },
+      { when: "4~5%p", verdict: "neutral", note: "경계 (상승 중이면 부정)" },
+      { when: "≥ 5%p", verdict: "negative", note: "신용 스트레스" },
+    ],
     goodDirection: "down",
     frequency: "daily",
     levelVerdict: (v, dir) => {
@@ -137,6 +177,13 @@ const SPECS: IndicatorSpec[] = [
     category: "leading",
     unit: "%p",
     note: "역전(음수)은 대표적 침체 선행 신호. 역전 해소 직후가 실제 침체 구간인 경우가 많다.",
+    guide: [
+      { when: "음수 (역전)", verdict: "negative", note: "침체 선행" },
+      { when: "최근 1년 내 역전 이력", verdict: "negative", note: "역전 해소 국면 — 침체는 대개 직후" },
+      { when: "0~0.3%p", verdict: "neutral", note: "매우 평탄 (하락 중이면 부정)" },
+      { when: "0.3~0.8%p", verdict: "neutral", note: "완만한 우상향" },
+      { when: "> 0.8%p", verdict: "positive", note: "정상 우상향" },
+    ],
     goodDirection: "up",
     frequency: "daily",
     levelVerdict: (v, dir, ctx) => {
@@ -163,6 +210,11 @@ const SPECS: IndicatorSpec[] = [
     category: "core",
     unit: "%",
     note: "FOMC 목표범위 상단. 실효금리(중앙값)가 아닌 상단값. 인하=완화, 인상=긴축.",
+    guide: [
+      { when: "6개월 인상", verdict: "negative", note: "긴축" },
+      { when: "6개월 인하", verdict: "positive", note: "완화" },
+      { when: "동결", verdict: "neutral" },
+    ],
     goodDirection: "down",
     frequency: "daily",
   },
@@ -172,6 +224,13 @@ const SPECS: IndicatorSpec[] = [
     category: "core",
     unit: "% YoY",
     note: "헤드라인 인플레이션. 연준 목표 2% 부근이 이상적.",
+    guide: [
+      { when: "> 4%", verdict: "negative", note: "고물가" },
+      { when: "3~4%", verdict: "negative", note: "목표 상회" },
+      { when: "2.5~3%", verdict: "neutral" },
+      { when: "1~2.5%", verdict: "positive", note: "목표(2%) 부근" },
+      { when: "< 1%", verdict: "neutral", note: "디플레 경계" },
+    ],
     goodDirection: "down",
     frequency: "monthly",
     transform: "yoy",
@@ -189,6 +248,11 @@ const SPECS: IndicatorSpec[] = [
     category: "core",
     unit: "% YoY",
     note: "미국 명목 GDP(계절조정 연율)의 전년동기 대비 성장률.",
+    guide: [
+      { when: "< 0%", verdict: "negative", note: "역성장" },
+      { when: "0~3%", verdict: "neutral", note: "저성장" },
+      { when: "≥ 3%", verdict: "positive", note: "성장 지속" },
+    ],
     goodDirection: "up",
     frequency: "quarterly",
     transform: "yoy",
@@ -204,6 +268,12 @@ const SPECS: IndicatorSpec[] = [
     category: "core",
     unit: "%",
     note: "장기 금리 벤치마크. 상승은 밸류에이션·차입비용 부담, 하락은 금융환경 완화.",
+    guide: [
+      { when: "2015년 이후 최고치 경신", verdict: "negative", note: "밸류에이션 압박" },
+      { when: "6개월 상승", verdict: "negative", note: "차입비용·밸류에이션 부담" },
+      { when: "6개월 하락", verdict: "positive", note: "금융환경 완화" },
+      { when: "큰 변화 없음", verdict: "neutral" },
+    ],
     goodDirection: "down",
     frequency: "daily",
     levelVerdict: (v, dir, ctx) => {
@@ -222,6 +292,12 @@ const SPECS: IndicatorSpec[] = [
     category: "core",
     unit: "%",
     note: "침체에 후행, 회복에 동행. 저점에서 반등 시작이 경고(삼의 법칙).",
+    guide: [
+      { when: "1년 저점 대비 +0.5%p↑", verdict: "negative", note: "삼의 법칙 (침체)" },
+      { when: "+0.3%p↑ 또는 상승세", verdict: "negative", note: "노동시장 둔화" },
+      { when: "하락세", verdict: "positive", note: "노동시장 견조" },
+      { when: "저점권 안정", verdict: "positive", note: "완전고용" },
+    ],
     goodDirection: "down",
     frequency: "monthly",
     levelVerdict: (v, dir, ctx) => {
@@ -412,6 +488,7 @@ function buildIndicator(spec: IndicatorSpec, rawSeries: MacroPoint[]): MacroIndi
     direction6m,
     verdict,
     verdictReason,
+    guide: spec.guide ?? [],
     // 일간 계열은 최근 ~1년(260거래일), 월간·분기는 최근 60포인트.
     // 나스닥은 오버레이로 재사용되므로 안 자르고, 기준금리(계단형)는 맥락상 5년 유지.
     series:

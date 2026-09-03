@@ -30,7 +30,7 @@ function yfi(): YF {
 export interface IndexQuote {
   key: string;
   name: string;
-  region: "kr" | "us" | "jp";
+  region: "kr" | "us" | "jp" | "cm";
   value: number | null;
   change: number | null;
   changePct: number | null;
@@ -106,11 +106,13 @@ export async function getIndices(): Promise<IndexQuote[]> {
   }
 
   // 미국·일본 (yahoo)
-  const yhSpecs: { sym: string; key: string; name: string; region: "us" | "jp" }[] = [
+  const yhSpecs: { sym: string; key: string; name: string; region: "us" | "jp" | "cm" }[] = [
     { sym: "^GSPC", key: "SPX", name: "S&P 500", region: "us" },
     { sym: "^IXIC", key: "IXIC", name: "나스닥 종합", region: "us" },
     { sym: "^DJI", key: "DJI", name: "다우존스", region: "us" },
     { sym: "^N225", key: "N225", name: "닛케이 225", region: "jp" },
+    { sym: "GC=F", key: "GOLD", name: "금 (Gold)", region: "cm" },
+    { sym: "CL=F", key: "WTI", name: "WTI 원유", region: "cm" },
   ];
   try {
     const quotes = await yfi().quote(yhSpecs.map((s) => s.sym));

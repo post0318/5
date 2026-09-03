@@ -23,6 +23,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Tooltip as UITooltip,
+  TooltipContent as UITooltipContent,
+  TooltipProvider,
+  TooltipTrigger as UITooltipTrigger,
+} from "@/components/ui/tooltip";
 
 type Verdict = "positive" | "negative" | "neutral";
 type Direction = "up" | "down" | "flat";
@@ -56,12 +62,13 @@ interface Indicator {
   direction6m: Direction;
   verdict: Verdict;
   verdictReason: string;
+  guide: { when: string; verdict: Verdict; note?: string }[];
   series: { date: string; value: number }[];
 }
 interface IndexQuote {
   key: string;
   name: string;
-  region: "kr" | "us" | "jp";
+  region: "kr" | "us" | "jp" | "cm";
   value: number | null;
   change: number | null;
   changePct: number | null;
@@ -158,13 +165,12 @@ export function MacroDashboard() {
   );
 
   return (
+   <TooltipProvider delayDuration={0}>
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">거시경제 · 경기 선행지표</h1>
-          <p className="text-muted-foreground text-sm">
-            FRED 기준 · {q.data?.asOf ?? "-"} · 나스닥 종합과 비교
-          </p>
+          <h1 className="text-xl font-semibold">주요 핵심 지표</h1>
+          <p className="text-muted-foreground text-sm">FRED 기준 · {q.data?.asOf ?? "-"}</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => q.refetch()} disabled={q.isFetching}>
           <RefreshCw className={q.isFetching ? "size-4 animate-spin" : "size-4"} />
@@ -182,7 +188,7 @@ export function MacroDashboard() {
       {q.isError && <p className="text-destructive text-sm">{(q.error as Error).message}</p>}
 
       {q.data && q.data.indices.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
           {q.data.indices.map((ix) => (
             <div key={ix.key} className="border-border rounded-lg border p-3">
               <div className="text-muted-foreground text-xs">{ix.name}</div>
@@ -208,29 +214,22 @@ export function MacroDashboard() {
 
       {q.data && (
         <>
+          {q.data.fearGreed && <FearGreedCard fg={q.data.fearGreed} />}
+
           <Card>
             <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2 py-4 text-sm">
               <span className="font-medium">종합 신호</span>
               <span className="text-up">긍정 {q.data.summary.positive}</span>
               <span className="text-down">부정 {q.data.summary.negative}</span>
               <span className="text-muted-foreground">중립 {q.data.summary.neutral}</span>
-              <span className="text-muted-foreground">
-                (나스닥 6M{" "}
-                {nasdaq?.change6m != null
-                  ? `${nasdaq.change6m > 0 ? "+" : ""}${formatNumber(nasdaq.change6m, 1)}%`
-                  : "-"}
-                )
-              </span>
               <span className="text-muted-foreground ml-auto text-xs">
-                지표 다수가 긍정이면 확장 국면, 스프레드·심리가 악화되면 후퇴 경계
+                아래 지표들의 자동 판정 집계 · 다수 긍정이면 확장 국면, 스프레드·심리 악화면 후퇴 경계
               </span>
             </CardContent>
           </Card>
 
-          {q.data.fearGreed && <FearGreedCard fg={q.data.fearGreed} />}
-
           <section className="space-y-3">
-            <h2 className="text-sm font-semibold">핵심 거시지표</h2>
+            <h2 className="text-sm font-semibold">핵심 지표</h2>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {q.data.indicators
                 .filter((i) => i.category === "core")
@@ -258,6 +257,7 @@ export function MacroDashboard() {
         </>
       )}
     </div>
+   </TooltipProvider>
   );
 }
 
@@ -1302,10 +1302,49 @@ function IndicatorCard({ ind, nasdaq: nasdaqRaw }: { ind: Indicator; nasdaq: Ind
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-sm leading-snug">{ind.name}</CardTitle>
-          <Badge variant="outline" className={cn("shrink-0 gap-1", VERDICT_CLASS[ind.verdict])}>
-            <DirIcon dir={ind.direction6m} />
-            {VERDICT_LABEL[ind.verdict]}
-          </Badge>
+          <UITooltip>
+            <UITooltipTrigger asChild>
+              <Badge
+                variant="outline"
+                className={cn("shrink-0 cursor-help gap-1", VERDICT_CLASS[ind.verdict])}
+              >
+                <DirIcon dir={ind.direction6m} />
+                {VERDICT_LABEL[ind.verdict]}
+              </Badge>
+            </UITooltipTrigger>
+            <UITooltipContent
+              side="left"
+              className="text-popover-foreground bg-popover max-w-none items-start border p-0 shadow-md"
+            >
+              <div className="space-y-1.5 p-2.5">
+                <div className="text-[11px] leading-snug font-medium">
+                  현재: {ind.verdictReason || VERDICT_LABEL[ind.verdict]}
+                </div>
+                {ind.guide.length > 0 && (
+                  <table className="border-separate border-spacing-x-2 border-spacing-y-0.5 text-[11px]">
+                    <tbody>
+                      {ind.guide.map((g, i) => (
+                        <tr key={i}>
+                          <td className="whitespace-nowrap text-right opacity-80">{g.when}</td>
+                          <td
+                            className={cn(
+                              "font-medium",
+                              g.verdict === "positive" && "text-up",
+                              g.verdict === "negative" && "text-down",
+                              g.verdict === "neutral" && "opacity-70",
+                            )}
+                          >
+                            {VERDICT_LABEL[g.verdict]}
+                          </td>
+                          <td className="opacity-70">{g.note ?? ""}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </UITooltipContent>
+          </UITooltip>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
