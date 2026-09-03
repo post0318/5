@@ -565,7 +565,16 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   const NORM_KEYS = new Set(["junk_bond_demand", "stock_price_breadth"]);
   const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
   const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
-  const showDropMarkers = selected?.key === "junk_bond_demand";
+  // 정규화 점수가 threshold 이상 급락한 구간 강조
+  //  - ellipse: 급락 지점에 빨간 타원 (정크본드)
+  //  - line   : 급락 구간을 빨간선으로 (주가 폭)
+  const DROP_CFG: Record<string, { threshold: number; style: "ellipse" | "line" }> = {
+    junk_bond_demand: { threshold: 20, style: "ellipse" },
+    stock_price_breadth: { threshold: 10, style: "line" },
+  };
+  const dropCfg = selected ? DROP_CFG[selected.key] : undefined;
+  const dropThreshold = dropCfg?.threshold;
+  const dropStyle = dropCfg?.style;
   const overlay = selected?.overlay ?? null;
   const divergingData = useMemo(() => {
     type Row = { date: string; value: number } & Record<string, unknown>;
@@ -611,34 +620,53 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
         return { ...d, norm: Math.round((normInvert ? 100 - raw : raw) * 10) / 10 };
       });
 
-      // 짧은 구간(≤3틱)에 20점 이상 급락한 지점 → 타원 마커 데이터
+      // 짧은 구간(≤3틱)에 dropThreshold 이상 급락 감지
       const LB = 3;
-      const dropInfo = new Map<number, { mid: number; span: number }>();
+      const dropIdx = new Set<number>(); // line 스타일: 급락 구간 인덱스
+      const dropInfo = new Map<number, { mid: number; span: number }>(); // ellipse 스타일
       let lastIdx = -99;
-      for (let i = LB; i < normed.length; i++) {
-        const cur = normed[i].norm;
-        let peak = -Infinity;
-        for (let j = i - LB; j < i; j++) if (normed[j].norm > peak) peak = normed[j].norm;
-        if (!Number.isFinite(peak)) continue;
-        if (peak - cur >= 20 && i - lastIdx > 4) {
-          dropInfo.set(i, { mid: (peak + cur) / 2, span: peak - cur });
-          lastIdx = i;
+      if (dropThreshold != null) {
+        for (let i = LB; i < normed.length; i++) {
+          const cur = normed[i].norm;
+          let peakJ = i - LB;
+          for (let j = i - LB; j < i; j++) if (normed[j].norm > normed[peakJ].norm) peakJ = j;
+          const span = normed[peakJ].norm - cur;
+          if (span < dropThreshold) continue;
+          if (dropStyle === "ellipse") {
+            if (i - lastIdx > 4) {
+              dropInfo.set(i, { mid: (normed[peakJ].norm + cur) / 2, span });
+              lastIdx = i;
+            }
+          } else {
+            for (let k = peakJ; k <= i; k++) dropIdx.add(k);
+          }
         }
       }
 
       // 정규화 50 기준: 위 녹색 / 아래 적색 (교차점 보간으로 겹침 방지)
-      const withDrop = normed.map((d, i) => {
-        const dm = dropInfo.get(i);
-        return { ...d, dropMid: dm ? dm.mid : null, dropSpan: dm ? dm.span : 0 };
-      });
+      const marked = normed.map((d, i) => ({
+        ...d,
+        isDrop: dropIdx.has(i),
+        dropMid: dropInfo.get(i)?.mid ?? null,
+        dropSpan: dropInfo.get(i)?.span ?? 0,
+      }));
       data = splitByThreshold(
-        withDrop.map((d) => ({ ...d, splitVal: d.norm })),
+        marked.map((d) => ({ ...d, splitVal: d.norm })),
         50,
         true,
-      ).map((d) => ({ ...d, normUp: d.divGood, normDown: d.divBad }));
+      ).map((d) => {
+        const drop = "isDrop" in d && (d as { isDrop?: boolean }).isDrop;
+        return {
+          ...d,
+          // line 스타일 급락 구간은 위/아래 색선을 끊고 별도 빨간선(normDrop)으로
+          normUp: drop ? null : d.divGood,
+          normDown: drop ? null : d.divBad,
+          normDrop: drop ? d.norm : null,
+        };
+      });
     }
     return data;
-  }, [divCfg, chartData, showNorm, normInvert, overlay]);
+  }, [divCfg, chartData, showNorm, normInvert, overlay, dropThreshold, dropStyle]);
 
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
@@ -744,6 +772,12 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                   <span className="ml-2">
                     · 점선 = 자체 정규화 0~100 (최근 1년 min-max, CNN 점수와 다름 · 우측축,{" "}
                     <span className="text-up">50 위=녹색</span> / <span className="text-down">아래=적색</span>)
+                    {dropStyle === "line" && (
+                      <span>
+                        {" "}
+                        · <span className="text-down">급락(−{dropThreshold}p)=빨간선</span>
+                      </span>
+                    )}
                   </span>
                 )}
                 {overlay && (
@@ -1009,45 +1043,60 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                         isAnimationActive={false}
                         name="norm"
                       />
-                      {/* 급락 구간 세로 타원 마커 (정크본드만) */}
-                      {showDropMarkers && (
-                      <Line
-                        yAxisId="norm"
-                        dataKey="dropMid"
-                        stroke="none"
-                        legendType="none"
-                        tooltipType="none"
-                        isAnimationActive={false}
-                        connectNulls={false}
-                        activeDot={false}
-                        dot={(p: {
-                          cx?: number;
-                          cy?: number;
-                          payload?: { dropMid?: number | null; dropSpan?: number };
-                          yAxis?: { scale?: (v: number) => number };
-                        }) => {
-                          const { cx, cy, payload } = p;
-                          if (cx == null || cy == null || payload?.dropMid == null) return <g key="e" />;
-                          const scale = p.yAxis?.scale;
-                          const spanPx =
-                            scale && payload.dropSpan
-                              ? Math.abs(scale(0)! - scale(payload.dropSpan)!)
-                              : 40;
-                          return (
-                            <ellipse
-                              key={`${cx}-${cy}`}
-                              cx={cx}
-                              cy={cy}
-                              rx={20}
-                              ry={spanPx / 2 + 16}
-                              fill="oklch(0.62 0.22 25)"
-                              fillOpacity={0.07}
-                              stroke="oklch(0.55 0.22 25)"
-                              strokeWidth={1.75}
-                            />
-                          );
-                        }}
-                      />
+                      {/* 주가 폭: 급락(10p 이상) 구간을 빨간선으로 강조 */}
+                      {dropStyle === "line" && (
+                        <Line
+                          yAxisId="norm"
+                          type="monotone"
+                          dataKey="normDrop"
+                          stroke="oklch(0.55 0.22 27)"
+                          strokeWidth={2.4}
+                          dot={false}
+                          connectNulls={false}
+                          isAnimationActive={false}
+                          name="norm"
+                        />
+                      )}
+                      {/* 정크본드: 급락(20p 이상) 지점에 빨간 세로 타원 */}
+                      {dropStyle === "ellipse" && (
+                        <Line
+                          yAxisId="norm"
+                          dataKey="dropMid"
+                          stroke="none"
+                          legendType="none"
+                          tooltipType="none"
+                          isAnimationActive={false}
+                          connectNulls={false}
+                          activeDot={false}
+                          dot={(p: {
+                            cx?: number;
+                            cy?: number;
+                            payload?: { dropMid?: number | null; dropSpan?: number };
+                            yAxis?: { scale?: (v: number) => number };
+                          }) => {
+                            const { cx, cy, payload } = p;
+                            if (cx == null || cy == null || payload?.dropMid == null)
+                              return <g key="e" />;
+                            const scale = p.yAxis?.scale;
+                            const spanPx =
+                              scale && payload.dropSpan
+                                ? Math.abs(scale(0)! - scale(payload.dropSpan)!)
+                                : 40;
+                            return (
+                              <ellipse
+                                key={`${cx}-${cy}`}
+                                cx={cx}
+                                cy={cy}
+                                rx={20}
+                                ry={spanPx / 2 + 16}
+                                fill="oklch(0.62 0.22 25)"
+                                fillOpacity={0.07}
+                                stroke="oklch(0.55 0.22 25)"
+                                strokeWidth={1.75}
+                              />
+                            );
+                          }}
+                        />
                       )}
                     </>
                   )}
