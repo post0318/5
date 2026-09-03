@@ -868,11 +868,12 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                           yAxisId="norm"
                           x={d.date}
                           y={d.norm}
-                          r={5}
-                          fill="oklch(0.58 0.21 27)"
-                          fillOpacity={0.25}
-                          stroke="oklch(0.58 0.21 27)"
-                          strokeOpacity={0.7}
+                          r={12}
+                          fill="oklch(0.82 0.16 85)"
+                          fillOpacity={0.28}
+                          stroke="oklch(0.72 0.16 70)"
+                          strokeWidth={1.5}
+                          strokeOpacity={0.8}
                         />
                       ))}
                     </>
