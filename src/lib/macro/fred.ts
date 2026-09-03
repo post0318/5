@@ -345,7 +345,9 @@ function buildIndicator(spec: IndicatorSpec, rawSeries: MacroPoint[]): MacroIndi
     direction6m,
     verdict,
     verdictReason,
-    series: series.slice(spec.frequency === "daily" ? -260 : -60),
+    // 일간 계열은 최근 ~1년(260거래일), 월간·분기는 최근 60포인트.
+    // 나스닥은 모든 카드(월간 5년·GDP 15년)에 오버레이로 재사용되므로 자르지 않는다.
+    series: spec.id === "NASDAQCOM" ? series : series.slice(spec.frequency === "daily" ? -260 : -60),
   };
 }
 

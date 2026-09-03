@@ -1087,19 +1087,43 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   );
 }
 
-function IndicatorCard({ ind, nasdaq }: { ind: Indicator; nasdaq: Indicator | null }) {
+// 나스닥 리베이스 오버레이를 숨길 지표
+//  - FEDFUNDS: 첫 값이 ~0(제로금리기)이라 리베이스 시 바닥에 눌려 의미 없음
+const HIDE_NASDAQ_OVERLAY = new Set(["FEDFUNDS"]);
+
+function IndicatorCard({ ind, nasdaq: nasdaqRaw }: { ind: Indicator; nasdaq: Indicator | null }) {
+  const nasdaq = HIDE_NASDAQ_OVERLAY.has(ind.id) ? null : nasdaqRaw;
   // 나스닥을 같은 기간으로 정규화해 오버레이
   const merged = useMemo(() => {
-    const nMap = new Map(nasdaq?.series.map((p) => [p.date, p.value]) ?? []);
+    // 나스닥은 일간, 지표는 월간일 수 있어 날짜가 정확히 안 맞는다 →
+    // 각 지표 시점에 대해 "그 날짜 이하의 가장 최근 나스닥 값"을 사용.
+    const nSeries = [...(nasdaq?.series ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+    const nAsOf = (date: string): number | null => {
+      let lo = 0;
+      let hi = nSeries.length - 1;
+      let ans: number | null = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (nSeries[mid].date <= date) {
+          ans = nSeries[mid].value;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      return ans;
+    };
     const first = ind.series[0]?.value ?? 1;
-    const nFirstDate = ind.series[0]?.date;
-    const nFirst = nFirstDate ? (nMap.get(nFirstDate) ?? nasdaq?.series[0]?.value ?? 1) : 1;
-    return ind.series.map((p) => ({
-      date: p.date,
-      value: p.value,
-      // 나스닥을 지표 첫 값 스케일로 리베이스
-      nasdaq: nMap.has(p.date) ? (nMap.get(p.date)! / nFirst) * first : null,
-    }));
+    const nFirst = ind.series[0] ? (nAsOf(ind.series[0].date) ?? nSeries[0]?.value ?? 1) : 1;
+    return ind.series.map((p) => {
+      const n = nAsOf(p.date);
+      return {
+        date: p.date,
+        value: p.value,
+        // 나스닥을 지표 첫 값 스케일로 리베이스
+        nasdaq: n != null ? (n / nFirst) * first : null,
+      };
+    });
   }, [ind.series, nasdaq]);
 
   return (
