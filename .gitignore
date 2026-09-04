@@ -47,3 +47,6 @@ darttest.mjs
 
 .vercel
 .env*
+
+# oh-my-claudecode operational state
+/.omc/
