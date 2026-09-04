@@ -122,8 +122,8 @@ const COMPONENTS: Comp[] = [
   },
   {
     key: "kr_breadth",
-    label: "주가 폭 (McClellan Volume Summation Index)",
-    valueLabel: "AV−DV의 McClellan 오실레이터 누적 (CNN과 동일 산식)",
+    label: "주가 폭 (McClellan Volume 오실레이터)",
+    valueLabel: "AV−DV McClellan 오실레이터 + 1000 (CNN과 동일 산식) — 누적 없음",
     higherIsGreedy: true,
     series: (all) => {
       // (AV−DV)/(AV+DV) ×1000 — 규모 정규화된 순거래량 (RANV: 시장 규모 변동에 견고)
@@ -134,19 +134,12 @@ const COMPONENTS: Comp[] = [
       });
       const t10 = emaSeries(rn, 0.1); // ≈ EMA19
       const t5 = emaSeries(rn, 0.05); // ≈ EMA39
-      const osc = rn.map((_, i) =>
-        t10[i] != null && t5[i] != null ? (t10[i] as number) - (t5[i] as number) : null,
+      // 오실레이터 = EMA19 − EMA39. 여기에 누적 없이 매일 +1000 만 더해서
+      // 표시 (맥클렐런 표준 밴드 0=극단 침체 · 1000=중립 · 2000=극단 과열).
+      // 누적합이 아니므로 구조적으로 그 근처를 벗어나지 않음 (CNN 실측과 일치).
+      return rn.map((_, i) =>
+        t10[i] != null && t5[i] != null ? 1000 + ((t10[i] as number) - (t5[i] as number)) : null,
       );
-      // Summation Index = 오실레이터 누적합. 맥클렐런 원형 표준 밴드
-      // (0=극단 침체, 1000=중립, 2000=극단 과열)에 맞춰 1000에서 시작.
-      let sum = 1000;
-      let started = false;
-      return osc.map((o) => {
-        if (o == null) return started ? sum : null;
-        sum += o;
-        started = true;
-        return sum;
-      });
     },
   },
   {
