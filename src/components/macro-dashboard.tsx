@@ -99,6 +99,7 @@ interface FearGreed {
   deepLink: string;
   vixHistoricalAvg?: number | null;
   vkospiAvg?: number | null;
+  creditAvg?: number | null;
 }
 interface Dashboard {
   asOf: string;
@@ -107,7 +108,7 @@ interface Dashboard {
   indices: IndexQuote[];
   fearGreed: FearGreed | null;
   krFearGreed:
-    | (FearGreed & { ready?: boolean; componentsReady?: number; vkospiAvg?: number | null })
+    | (FearGreed & { ready?: boolean; componentsReady?: number; vkospiAvg?: number | null; creditAvg?: number | null })
     | null;
 }
 
@@ -768,12 +769,14 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       refColor: "oklch(0.78 0.08 250)",
     },
     kr_credit: {
-      threshold: 0,
+      threshold: fg.creditAvg ?? 6,
       aboveIsBad: true,
       aboveLabel: "▲ 스프레드 확대 · 신용 경계 (공포)",
       belowLabel: "▼ 스프레드 축소 · 위험선호 (탐욕)",
-      refLabel: "0%p",
+      refLabel: `장기 평균 ${(fg.creditAvg ?? 6).toFixed(2)}`,
       refColor: "oklch(0.78 0.08 250)",
+      tickStep: 0.1,
+      domainSnap: 0.1,
     },
     kr_safehaven: {
       threshold: 0,

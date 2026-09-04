@@ -237,14 +237,22 @@ function normalize(
 }
 
 export async function getKrFearGreed(): Promise<
-  (FearGreed & { ready: boolean; componentsReady: number; vkospiAvg: number | null }) | null
+  (FearGreed & { ready: boolean; componentsReady: number; vkospiAvg: number | null; creditAvg: number | null }) | null
 > {
   const all = await getKrFgHistory().catch(() => []);
   if (all.length < 5) return null;
 
-  // VKOSPI 장기 평균 (전 구간) — 세부차트 기준선
-  const vkVals = all.map((d) => d.vkospi).filter((v): v is number => v != null && Number.isFinite(v));
-  const vkospiAvg = vkVals.length ? Math.round((vkVals.reduce((a, b) => a + b, 0) / vkVals.length) * 100) / 100 : null;
+  const mean = (xs: number[]) =>
+    xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) / 100 : null;
+  // 세부차트 기준선용 장기 평균
+  const vkospiAvg = mean(
+    all.map((d) => d.vkospi).filter((v): v is number => v != null && Number.isFinite(v)),
+  );
+  const creditAvg = mean(
+    all
+      .map((d) => (d.corpBBB != null && d.corpAA != null ? d.corpBBB - d.corpAA : null))
+      .filter((v): v is number => v != null && Number.isFinite(v)),
+  );
 
   const compScored = COMPONENTS.map((c) => {
     const s = c.series(all);
@@ -304,5 +312,6 @@ export async function getKrFearGreed(): Promise<
     ready: componentsReady >= 5,
     componentsReady,
     vkospiAvg,
+    creditAvg,
   };
 }
