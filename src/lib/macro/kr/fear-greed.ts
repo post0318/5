@@ -21,6 +21,11 @@ type Comp = {
   /** 0~100 환산 시 비교할 과거 거래일 수 (미지정 시 기본 3년) */
   normWindow?: number;
   /**
+   * 역사적 범위 대신 고정 기준으로 환산 [점수100 값, 점수0 값].
+   * 시장 구조가 CNN과 달라 절대 수준 비교가 필요할 때 (풋/콜 등).
+   */
+  fixedRange?: [number, number];
+  /**
    * 차트에 점수 시계열 대신 "기준선(dashed) + 오버레이(실선)"를 그릴 때.
    * CNN 모멘텀 차트(S&P + 125일선)와 동일 표현.
    */
@@ -137,9 +142,11 @@ const COMPONENTS: Comp[] = [
     label: "풋/콜 옵션 (5일 평균)",
     valueLabel: "코스피200 옵션 풋/콜 거래대금비 5일 이동평균 — 1 초과 = 공포",
     higherIsGreedy: false,
-    normWindow: 250, // CNN: 과거 1년(~250영업일)
+    // CNN 기준선(0.7~0.8=공포 진입, 0.5~0.6 이하=탐욕)에 맞춰 고정 환산:
+    // 0.45 → 점수 100(극탐욕), 0.95 → 점수 0(극공포). 우리 역사 스파이크 무관.
+    fixedRange: [0.45, 0.95],
     series: (all) => {
-      // CNN 방식: 거래대금 기준(개인 투기 쏠림 완화) + 5일 이동평균으로 노이즈 제거
+      // 거래대금 기준(개인 투기 쏠림 완화) + 5일 이동평균으로 노이즈 제거
       const pc = all.map((d) => d.putCallVal ?? d.putCall);
       return smaSeries(pc, 5);
     },
@@ -218,13 +225,26 @@ function ratingEn(score: number): string {
  * 시계열을 최근 창의 "역사적 범위"로 0~100 정규화 (invert 옵션).
  * 단순 min-max 는 극단값 1개에 범위가 늘어나 왜곡 → 5~95 백분위로 클립 후 스케일.
  */
-function normalize(series: Row[], invert: boolean, window = NORM_WINDOW): Row[] {
+function normalize(
+  series: Row[],
+  invert: boolean,
+  window = NORM_WINDOW,
+  fixedRange?: [number, number],
+): Row[] {
+  if (fixedRange) {
+    // fixedRange = [점수100 값, 점수0 값]. invert 무시 (부호는 범위 방향으로 반영)
+    const [gVal, fVal] = fixedRange;
+    return series.map((r) => {
+      const s = Math.max(0, Math.min(100, ((fVal - r.value) / (fVal - gVal)) * 100));
+      return { date: r.date, value: Math.round(s * 10) / 10 };
+    });
+  }
   const win = series.slice(-window);
   const vals = win.map((r) => r.value).filter(Number.isFinite).sort((a, b) => a - b);
   if (vals.length < 10) return [];
   const pct = (p: number) => vals[Math.min(vals.length - 1, Math.max(0, Math.round((vals.length - 1) * p)))];
-  const lo = pct(0.05);
-  const hi = pct(0.95);
+  const lo = pct(0.02);
+  const hi = pct(0.98);
   const range = hi - lo || 1;
   return series.map((r) => {
     let s = ((r.value - lo) / range) * 100;
@@ -246,7 +266,7 @@ export async function getKrFearGreed(): Promise<
       const v = s[i];
       if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: Math.round(v * 1000) / 1000 });
     });
-    const scored = normalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW);
+    const scored = normalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW, c.fixedRange);
     return { c, raw, scored };
   });
 
