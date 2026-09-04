@@ -73,8 +73,10 @@ export async function GET(req: Request) {
     while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
     const ymd = d.toISOString().slice(0, 10).replace(/-/g, "");
     const res = await runKrFgBatch(ymd);
-    // 히스토리 미완이면 딥백필 한 청크 이어받기 (2021~ 자동 구축)
-    const deep = await deepBackfillAuto(90).catch(() => null);
+    // 히스토리 딥백필은 토·일에만 한 청크씩 이어받기 (2021~ 자동 구축)
+    const dow = new Date().getUTCDay();
+    const deep =
+      dow === 6 || dow === 0 ? await deepBackfillAuto(90).catch(() => null) : null;
     return ok({ mode: "daily", ...res, deep });
   } catch (err) {
     return jsonError(err);
