@@ -834,7 +834,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
   const dropThreshold = dropCfg?.threshold;
   const dropStyle = dropCfg?.style;
   // 정규화선 색: "direction" = 상승 녹/하락 적, 그 외 = 50 기준 위 녹/아래 적
-  const normColorByDirection = selected?.key === "junk_bond_demand";
+  const normColorByDirection = selected?.key === "junk_bond_demand" || selected?.key === "kr_credit";
   // 원본 값에 이동평균선(20·60)을 얹는 지표
   const MA_KEYS = new Set(["stock_price_breadth"]);
   const showMa = selected ? MA_KEYS.has(selected.key) : false;
