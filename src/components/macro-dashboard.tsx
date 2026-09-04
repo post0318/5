@@ -772,14 +772,15 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
       refColor: "oklch(0.78 0.08 250)",
     },
     kr_credit: {
-      // 장기 평균이 최근 데이터 범위와 크게 떨어져 있어 도메인 계산에서
-      // 제외(domainDataOnly) — 표시 구간의 고점/저점 기준으로 자동 스냅.
+      // 장기 평균이 표시 구간과 크게 떨어져 있어 도메인 계산에서 제외
+      // (domainDataOnly) — 표시 구간의 고점/저점 기준 자동 패딩.
+      // 스프레드 변동폭이 계속 바뀌므로 고정 스텝 대신 자동 눈금 사용
+      // (고정 스텝을 쓰면 범위가 넓어졌을 때 눈금이 수십~수백 개로
+      // 폭발해 축이 깨짐 — 실제로 한 번 발생했던 버그).
       // 장기 평균 기준선/라벨은 표시하지 않음.
       threshold: fg.creditAvg ?? 6,
       aboveIsBad: true,
       domainDataOnly: true,
-      domainSnap: 0.02,
-      tickStep: 0.02,
     },
     kr_safehaven: {
       threshold: 0,
