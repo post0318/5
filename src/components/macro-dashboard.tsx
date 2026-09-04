@@ -635,6 +635,15 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
     idx === zone ? { fill: base, fillOpacity: 0.22 } : { fill: base, fillOpacity: 0.05 };
 
   const chartData = selected ? selected.history : fg.history;
+  // kr_breadth 는 서버가 MA20 워밍업용으로 20일 더 보내므로(200일),
+  // 축·눈금·렌더 모두 미국과 같은 최근 180일만 쓰도록 트리밍.
+  // MA 계산 자체는 chartData(200일 전체)로 하고 마지막에만 자름.
+  const DISPLAY_LIMIT: Record<string, number> = { kr_breadth: 180 };
+  const displayLimit = selected ? DISPLAY_LIMIT[selected.key] : undefined;
+  const displayChartData = useMemo(
+    () => (displayLimit && chartData.length > displayLimit ? chartData.slice(-displayLimit) : chartData),
+    [chartData, displayLimit],
+  );
 
   // 소수가 있으면 2자리로 (14.6 → 14.60), 정수는 그대로
   const fmtVal = (v: number | string) => {
@@ -669,7 +678,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
   const yStep = selected ? stepByKey[selected.key] : undefined;
   const yAxis = useMemo(() => {
     if (!yStep || !selected) return null;
-    const vals = selected.history.map((d) => d.value).filter(Number.isFinite);
+    const vals = displayChartData.map((d) => d.value).filter(Number.isFinite);
     if (!vals.length) return null;
     // 부동소수 오차 보정 후 step 배수로 스냅
     const snapDown = (x: number) => Math.round(Math.floor(x / yStep + 1e-9) * yStep * 1e6) / 1e6;
@@ -682,7 +691,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
       ticks.push(Math.round((min + i * yStep) * 1e6) / 1e6);
     }
     return { domain: [min, max] as [number, number], ticks };
-  }, [selected, yStep]);
+  }, [selected, yStep, displayChartData]);
 
   // 기준선 대비 위/아래를 분리해 색을 다르게 칠하는 지표 설정
   const DIVERGING_CFG: Record<
@@ -923,13 +932,14 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
         };
       });
     }
-    return data;
-  }, [divCfg, chartData, showNorm, normInvert, overlay, dropThreshold, normColorByDirection, showMa]);
+    // 워밍업용으로 더 받은 앞부분(예: kr_breadth MA20용 20일)은 렌더링에서 잘라냄
+    return displayLimit && data.length > displayLimit ? data.slice(-displayLimit) : data;
+  }, [divCfg, chartData, showNorm, normInvert, overlay, dropThreshold, normColorByDirection, showMa, displayLimit]);
 
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
     if (!divCfg) return null;
-    const vals = chartData.map((d) => d.value).filter(Number.isFinite);
+    const vals = displayChartData.map((d) => d.value).filter(Number.isFinite);
     if (!vals.length) return null;
     let lo: number, hi: number;
     if (divCfg.fixedDomain) {
@@ -956,14 +966,14 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
       }
     }
     return { domain: [lo, hi] as [number, number], ticks };
-  }, [divCfg, chartData]);
+  }, [divCfg, displayChartData]);
   const divDomain = divAxis?.domain ?? null;
 
   // 세로 눈금 — F&G 종합은 월 단위, 세부지표는 분기(3개월) 단위
   const gridTicks = useMemo(() => {
     const seen = new Set<string>();
     const ticks: string[] = [];
-    for (const d of chartData) {
+    for (const d of displayChartData) {
       const [y, m] = d.date.split("-").map(Number);
       const bucket = selected ? `${y}-${Math.floor((m - 1) / 3)}` : `${y}-${m}`;
       if (!seen.has(bucket)) {
@@ -972,7 +982,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
       }
     }
     return ticks;
-  }, [chartData, selected]);
+  }, [displayChartData, selected]);
 
   return (
     <div className="space-y-2">

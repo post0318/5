@@ -64,6 +64,22 @@ function emaSeries(arr: (number | null)[], alpha: number): (number | null)[] {
   return out;
 }
 
+/**
+ * 맥클렐런 오실레이터 공통 계산 — up/down 두 시계열(거래량이든 종목수든)을
+ * 비율조정(RA) 후 19일·39일 EMA差 + 1000. 누적 없이 매일 스냅샷.
+ */
+function mcclellanOsc(up: (number | null)[], down: (number | null)[]): (number | null)[] {
+  const rn = up.map((u, i) => {
+    const d = down[i];
+    return u != null && d != null && u + d > 0 ? ((u - d) / (u + d)) * 1000 : null;
+  });
+  const t10 = emaSeries(rn, 0.1); // ≈ EMA19
+  const t5 = emaSeries(rn, 0.05); // ≈ EMA39
+  return rn.map((_, i) =>
+    t10[i] != null && t5[i] != null ? 1000 + ((t10[i] as number) - (t5[i] as number)) : null,
+  );
+}
+
 const COMPONENTS: Comp[] = [
   {
     key: "kr_momentum",
@@ -125,21 +141,21 @@ const COMPONENTS: Comp[] = [
     label: "주가 폭 (McClellan Volume 오실레이터)",
     valueLabel: "AV−DV McClellan 오실레이터 + 1000 (CNN과 동일 산식) — 누적 없음",
     higherIsGreedy: true,
-    series: (all) => {
-      // (AV−DV)/(AV+DV) ×1000 — 규모 정규화된 순거래량 (RANV: 시장 규모 변동에 견고)
-      const rn = all.map((d) => {
-        const u = d.upVolume ?? null;
-        const dn = d.downVolume ?? null;
-        return u != null && dn != null && u + dn > 0 ? ((u - dn) / (u + dn)) * 1000 : null;
+    series: (all) => mcclellanOsc(all.map((d) => (d.upVolume ?? null) as number | null), all.map((d) => (d.downVolume ?? null) as number | null)),
+    plot: (all) => {
+      // 거래량 가중 오실레이터(원래 지표) + 종목수 기준 MO 오실레이터(교차검증용,
+      // 초대형주 거래량 쏠림 영향 없음) 를 같은 차트에 겹쳐 보여줌.
+      const mvo = mcclellanOsc(all.map((d) => (d.upVolume ?? null) as number | null), all.map((d) => (d.downVolume ?? null) as number | null));
+      const mo = mcclellanOsc(all.map((d) => (d.advancers ?? null) as number | null), all.map((d) => (d.decliners ?? null) as number | null));
+      const mvoRows: { date: string; value: number }[] = [];
+      const moRows: { date: string; value: number }[] = [];
+      all.forEach((d, i) => {
+        if (mvo[i] != null) mvoRows.push({ date: d._id, value: Math.round((mvo[i] as number) * 100) / 100 });
+        if (mo[i] != null) moRows.push({ date: d._id, value: Math.round((mo[i] as number) * 100) / 100 });
       });
-      const t10 = emaSeries(rn, 0.1); // ≈ EMA19
-      const t5 = emaSeries(rn, 0.05); // ≈ EMA39
-      // 오실레이터 = EMA19 − EMA39. 여기에 누적 없이 매일 +1000 만 더해서
-      // 표시 (맥클렐런 표준 밴드 0=극단 침체 · 1000=중립 · 2000=극단 과열).
-      // 누적합이 아니므로 구조적으로 그 근처를 벗어나지 않음 (CNN 실측과 일치).
-      return rn.map((_, i) =>
-        t10[i] != null && t5[i] != null ? 1000 + ((t10[i] as number) - (t5[i] as number)) : null,
-      );
+      return mvoRows.length
+        ? { history: mvoRows, overlay: { label: "MO (종목수 기준, 대형주 영향 없음)", history: moRows } }
+        : null;
     },
   },
   {
