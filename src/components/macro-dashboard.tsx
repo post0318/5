@@ -700,6 +700,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       domainSnap?: number;
       /** Y축 도메인 고정 [min, max] (데이터 무관) */
       fixedDomain?: [number, number];
+      /** true 면 도메인 계산에 threshold 를 섞지 않고 데이터 고점/저점만 사용 */
+      domainDataOnly?: boolean;
     }
   > = {
     safe_haven_demand: {
@@ -769,14 +771,14 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       refColor: "oklch(0.78 0.08 250)",
     },
     kr_credit: {
+      // 장기 평균이 최근 데이터 범위와 크게 떨어져 있어 도메인 계산에서
+      // 제외(domainDataOnly) — 표시 구간의 고점/저점 기준으로 자동 스냅.
+      // 장기 평균 기준선/라벨은 표시하지 않음.
       threshold: fg.creditAvg ?? 6,
       aboveIsBad: true,
-      aboveLabel: "▲ 스프레드 확대 · 신용 경계 (공포)",
-      belowLabel: "▼ 스프레드 축소 · 위험선호 (탐욕)",
-      refLabel: `장기 평균 ${(fg.creditAvg ?? 6).toFixed(2)}`,
-      refColor: "oklch(0.78 0.08 250)",
-      tickStep: 0.1,
-      domainSnap: 0.1,
+      domainDataOnly: true,
+      domainSnap: 0.05,
+      tickStep: 0.05,
     },
     kr_safehaven: {
       threshold: 0,
@@ -930,8 +932,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     if (divCfg.fixedDomain) {
       [lo, hi] = divCfg.fixedDomain;
     } else {
-    const rawLo = Math.min(...vals, divCfg.threshold);
-    const rawHi = Math.max(...vals, divCfg.threshold);
+    const rawLo = divCfg.domainDataOnly ? Math.min(...vals) : Math.min(...vals, divCfg.threshold);
+    const rawHi = divCfg.domainDataOnly ? Math.max(...vals) : Math.max(...vals, divCfg.threshold);
     const snap = divCfg.domainSnap;
     if (snap) {
       lo = Math.floor(rawLo / snap) * snap;
