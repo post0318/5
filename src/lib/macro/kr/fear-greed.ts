@@ -49,6 +49,29 @@ function smaSeries(arr: (number | null)[], p: number): (number | null)[] {
   });
 }
 
+/**
+ * smaSeries 를 결측(휴장일 등)에 견고하게 — 값이 있는 날짜만 추려서 이동평균을
+ * 계산한 뒤 원래 위치로 되돌린다. 그냥 smaSeries 를 쓰면 창(window) 안에 결측이
+ * 하루만 있어도 그 뒤 p거래일 전체가 null 로 전파되는 버그가 있음
+ * (모멘텀 125일선·VKOSPI 50일선에서 실제로 발생했던 문제).
+ */
+function smaSeriesSkipNulls(arr: (number | null)[], p: number): (number | null)[] {
+  const idx: number[] = [];
+  const vals: number[] = [];
+  arr.forEach((v, i) => {
+    if (v != null) {
+      idx.push(i);
+      vals.push(v);
+    }
+  });
+  const ma = smaSeries(vals, p);
+  const out: (number | null)[] = new Array(arr.length).fill(null);
+  idx.forEach((origI, k) => {
+    out[origI] = ma[k];
+  });
+  return out;
+}
+
 /** 지수이동평균 (alpha 지정). null 은 이전값 유지, 시드 전엔 null */
 function emaSeries(arr: (number | null)[], alpha: number): (number | null)[] {
   const out: (number | null)[] = [];
@@ -186,12 +209,12 @@ const COMPONENTS: Comp[] = [
     // 차트 표시는 원본 VKOSPI 값 그대로(plot).
     series: (all) => {
       const vk = all.map((x) => x.vkospi);
-      const ma50 = smaSeries(vk, 50);
+      const ma50 = smaSeriesSkipNulls(vk, 50);
       return vk.map((v, i) => (v != null && ma50[i] != null ? v - (ma50[i] as number) : null));
     },
     plot: (all) => {
       const vk = all.map((x) => x.vkospi);
-      const ma50 = smaSeries(vk, 50);
+      const ma50 = smaSeriesSkipNulls(vk, 50);
       const rows: { date: string; value: number }[] = [];
       const maRows: { date: string; value: number }[] = [];
       all.forEach((d, i) => {
