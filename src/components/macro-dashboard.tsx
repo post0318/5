@@ -834,9 +834,11 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
           ovAbove: above && d.overlayValue != null ? d.overlayValue : null,
           ovBelow: below && d.overlayValue != null ? d.overlayValue : null,
           // 본선(value) 자체를 overlay 대비 위/아래로 분리 (변동성처럼 지표 자체를
-          // 색칠하고 이동평균은 점선 기준선으로만 쓰고 싶을 때)
-          valAbove: above ? d.value : null,
-          valBelow: below ? d.value : null,
+          // 색칠하고 이동평균은 점선 기준선으로만 쓰고 싶을 때).
+          // above/below 는 "overlay 가 value 보다 위/아래"라는 뜻이라 반대로 씀:
+          // value(지표)가 overlay(이동평균) 보다 위 = overlay 가 아래(below) 인 경우
+          valAbove: below ? d.value : null,
+          valBelow: above ? d.value : null,
         };
       });
     }
