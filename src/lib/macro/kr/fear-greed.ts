@@ -138,23 +138,26 @@ const COMPONENTS: Comp[] = [
   },
   {
     key: "kr_breadth",
-    label: "주가 폭 (McClellan Volume 오실레이터)",
-    valueLabel: "AV−DV McClellan 오실레이터 + 1000 (CNN과 동일 산식) — 누적 없음",
+    label: "주가 폭 (McClellan 오실레이터 · 종목수 기준)",
+    valueLabel: "AD−DC McClellan 오실레이터 + 1000 (종목수 기준) — 누적 없음",
     higherIsGreedy: true,
-    series: (all) => mcclellanOsc(all.map((d) => (d.upVolume ?? null) as number | null), all.map((d) => (d.downVolume ?? null) as number | null)),
+    // 종목수(advancers/decliners) 기준을 메인으로 사용. 거래량 가중(upVolume/
+    // downVolume)은 코스피 특성상 삼성전자 등 소수 초대형주 거래량이 압도적이라
+    // 대다수 종목이 하락해도 지표가 왜곡되는 문제가 실측으로 확인됨. 참고
+    // 사이트(goldkimp.com)도 "상승/하락 종목수 비율" 기준으로 동일하게 계산.
+    series: (all) => mcclellanOsc(all.map((d) => (d.advancers ?? null) as number | null), all.map((d) => (d.decliners ?? null) as number | null)),
     plot: (all) => {
-      // 거래량 가중 오실레이터(원래 지표) + 종목수 기준 MO 오실레이터(교차검증용,
-      // 초대형주 거래량 쏠림 영향 없음) 를 같은 차트에 겹쳐 보여줌.
-      const mvo = mcclellanOsc(all.map((d) => (d.upVolume ?? null) as number | null), all.map((d) => (d.downVolume ?? null) as number | null));
+      // 메인 = 종목수 기준(MO), 보조선 = 거래량 가중(MVO, 대형주 쏠림 참고용)
       const mo = mcclellanOsc(all.map((d) => (d.advancers ?? null) as number | null), all.map((d) => (d.decliners ?? null) as number | null));
-      const mvoRows: { date: string; value: number }[] = [];
+      const mvo = mcclellanOsc(all.map((d) => (d.upVolume ?? null) as number | null), all.map((d) => (d.downVolume ?? null) as number | null));
       const moRows: { date: string; value: number }[] = [];
+      const mvoRows: { date: string; value: number }[] = [];
       all.forEach((d, i) => {
-        if (mvo[i] != null) mvoRows.push({ date: d._id, value: Math.round((mvo[i] as number) * 100) / 100 });
         if (mo[i] != null) moRows.push({ date: d._id, value: Math.round((mo[i] as number) * 100) / 100 });
+        if (mvo[i] != null) mvoRows.push({ date: d._id, value: Math.round((mvo[i] as number) * 100) / 100 });
       });
-      return mvoRows.length
-        ? { history: mvoRows, overlay: { label: "MO (종목수 기준, 대형주 영향 없음)", history: moRows } }
+      return moRows.length
+        ? { history: moRows, overlay: { label: "MVO (거래량 가중, 대형주 영향 참고)", history: mvoRows } }
         : null;
     },
   },
