@@ -79,6 +79,45 @@ export async function GET(req: Request) {
         byMonth,
       });
     }
+    if (sp.get("debug") === "momentum") {
+      const { getKrFgHistory } = await import("@/lib/db/kr-fg");
+      const all = await getKrFgHistory();
+      const closes = all.map((x) => x.kospiClose);
+      // null 위치 구간 찾기
+      const nullRuns: string[] = [];
+      let runStart: string | null = null;
+      all.forEach((d, i) => {
+        if (closes[i] == null) {
+          if (!runStart) runStart = String(d._id);
+        } else if (runStart) {
+          nullRuns.push(`${runStart}..${String(all[i - 1]._id)}`);
+          runStart = null;
+        }
+      });
+      if (runStart) nullRuns.push(`${runStart}..(end)`);
+      // 125일 SMA 유효 구간
+      const p = 125;
+      let firstValid: string | null = null;
+      let validCount = 0;
+      for (let i = p - 1; i < closes.length; i++) {
+        let okWin = true;
+        for (let k = i - p + 1; k <= i; k++) if (closes[k] == null) { okWin = false; break; }
+        if (okWin) {
+          validCount++;
+          if (!firstValid) firstValid = String(all[i]._id);
+        }
+      }
+      return ok({
+        mode: "debug-momentum",
+        allLen: all.length,
+        allFirst: String(all[0]?._id),
+        allLast: String(all.at(-1)?._id),
+        closeNonNull: closes.filter((c) => c != null).length,
+        nullRuns,
+        sma125FirstValid: firstValid,
+        sma125ValidDays: validCount,
+      });
+    }
     if (sp.get("deep") === "auto") {
       const md = Number(sp.get("days")) || 120;
       return ok({ mode: "deep-auto", ...(await deepBackfillAuto(md)) });
