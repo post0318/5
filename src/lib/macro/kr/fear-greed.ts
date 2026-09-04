@@ -137,8 +137,9 @@ const COMPONENTS: Comp[] = [
       const osc = rn.map((_, i) =>
         t10[i] != null && t5[i] != null ? (t10[i] as number) - (t5[i] as number) : null,
       );
-      // Summation Index = 오실레이터 누적합
-      let sum = 0;
+      // Summation Index = 오실레이터 누적합. 맥클렐런 원형 표준 밴드
+      // (0=극단 침체, 1000=중립, 2000=극단 과열)에 맞춰 1000에서 시작.
+      let sum = 1000;
       let started = false;
       return osc.map((o) => {
         if (o == null) return started ? sum : null;
