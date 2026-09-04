@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import type { MarketId } from "@/lib/markets/types";
@@ -33,6 +33,7 @@ export function StockAnalysis({
   initialYahoo?: string | null;
   initialName?: string | null;
 }) {
+  const qc = useQueryClient();
   const [symbol, setSymbol] = useState<string | null>(initialSymbol);
   const [yahooOverride, setYahooOverride] = useState<string | null>(initialYahoo);
   const [period, setPeriod] = useState<"annual" | "quarter">("annual");
@@ -72,6 +73,16 @@ export function StockAnalysis({
     retry: false,
   });
 
+  const universe = useQuery({
+    queryKey: ["universe"],
+    queryFn: () =>
+      apiFetch<{ items: { market: string; symbol: string }[] }>("/api/universe"),
+  });
+  const inUniverse = Boolean(
+    symbol &&
+      universe.data?.items.some((i) => i.market === market && i.symbol === symbol),
+  );
+
   const addToUniverse = useMutation({
     mutationFn: () =>
       apiFetch(`/api/universe`, {
@@ -83,6 +94,10 @@ export function StockAnalysis({
           yahooSymbol: yahooOverride ?? undefined,
         }),
       }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["universe"] });
+      qc.invalidateQueries({ queryKey: ["universe-overview"] });
+    },
   });
 
   const ov = overview.data;
@@ -154,10 +169,14 @@ export function StockAnalysis({
               <Button
                 variant="outline"
                 size="sm"
-                disabled={addToUniverse.isPending || addToUniverse.isSuccess}
+                disabled={
+                  inUniverse || addToUniverse.isPending || addToUniverse.isSuccess
+                }
                 onClick={() => addToUniverse.mutate()}
               >
-                {addToUniverse.isSuccess ? "유니버스에 추가됨" : "유니버스에 추가"}
+                {inUniverse || addToUniverse.isSuccess
+                  ? "유니버스에 있음"
+                  : "유니버스에 추가"}
               </Button>
             </div>
           </div>
