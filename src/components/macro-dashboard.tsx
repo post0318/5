@@ -191,9 +191,9 @@ export function MacroDashboard() {
    <TooltipProvider delayDuration={0}>
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">주요 핵심 지표</h1>
-          <p className="text-muted-foreground text-sm">FRED 기준 · {q.data?.asOf ?? "-"}</p>
+        <div className="flex items-baseline gap-2">
+          <h1 className="text-xl font-semibold">글로벌 시장 지수</h1>
+          <span className="text-muted-foreground text-sm">{q.data?.asOf ?? "-"}</span>
         </div>
         <Button variant="outline" size="sm" onClick={() => q.refetch()} disabled={q.isFetching}>
           <RefreshCw className={q.isFetching ? "size-4 animate-spin" : "size-4"} />
@@ -792,12 +792,13 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
   // 원본 값 + 정규화(0~100) 점수를 함께 보여주는 지표
-  const NORM_KEYS = new Set(["junk_bond_demand"]);
+  const NORM_KEYS = new Set(["junk_bond_demand", "kr_credit"]);
   const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
   const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
   // 정규화 점수가 threshold 이상(직전 대비) 급락한 지점에 빨간 세로 타원 (정크본드)
   const DROP_CFG: Record<string, { threshold: number; style: "ellipse" }> = {
     junk_bond_demand: { threshold: 20, style: "ellipse" },
+    kr_credit: { threshold: 20, style: "ellipse" },
   };
   const dropCfg = selected ? DROP_CFG[selected.key] : undefined;
   const dropThreshold = dropCfg?.threshold;
@@ -972,7 +973,9 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   }, [chartData, selected]);
 
   return (
-    <Card>
+    <div className="space-y-2">
+      <h2 className="text-muted-foreground text-sm font-medium">시장 심리·위험</h2>
+      <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm">
           <a
@@ -984,7 +987,6 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
             {fg.source}
             <ExternalLink className="size-3" />
           </a>
-          <span className="text-muted-foreground font-normal"> — 시장 심리·위험</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -1492,7 +1494,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
           {fg.asOf} · {fg.source} · 세부지표 클릭 시 원본 값 추이 · 낮을수록 공포, 높을수록 탐욕
         </p>
       </CardContent>
-    </Card>
+      </Card>
+    </div>
   );
 }
 

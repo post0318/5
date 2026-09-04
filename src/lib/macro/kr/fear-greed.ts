@@ -323,7 +323,7 @@ export async function getKrFearGreed(): Promise<
         ...(p ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-180) } } : {}),
       };
     }),
-    source: "한국 공포·탐욕 지수",
+    source: "K-공포탐욕지수",
     deepLink: "https://data.krx.co.kr",
     ready: componentsReady >= 5,
     componentsReady,
