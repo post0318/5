@@ -62,11 +62,19 @@ export async function fetchAllStocks(basDd: string): Promise<DayStockRow[]> {
   return [...map(kospi, "KOSPI"), ...map(kosdaq, "KOSDAQ")];
 }
 
-/** KOSPI 200 변동성지수(VKOSPI) */
+/** KOSPI 200 변동성지수(VKOSPI). KRX 파생지수 응답에 옵션지수가 간헐적으로 빠져 재시도 */
 export async function fetchVkospi(basDd: string): Promise<number | null> {
-  const rows = await krx("idx/drvprod_dd_trd", { basDd });
-  const v = rows.find((r) => (r.IDX_NM ?? "").includes("변동성지수"));
-  return v ? n(v.CLSPRC_IDX) : null;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const rows = await krx("idx/drvprod_dd_trd", { basDd });
+      const v = rows.find((r) => (r.IDX_NM ?? "").includes("변동성지수"));
+      if (v) return n(v.CLSPRC_IDX);
+    } catch {
+      // 재시도
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  return null;
 }
 
 /** KOSPI 지수 종가 (해당일) */

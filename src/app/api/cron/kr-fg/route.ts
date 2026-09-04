@@ -4,6 +4,7 @@ import {
   backfillRange,
   bootstrapKospiHistory,
   deepBackfill,
+  importVkospi,
   resetKrStockRoll,
   runKrFgBatch,
 } from "@/lib/macro/kr/batch";
@@ -19,6 +20,19 @@ function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return true; // 미설정 시 열어둠 (개발)
   return req.headers.get("authorization") === `Bearer ${secret}`;
+}
+
+/** VKOSPI 과거치 주입: body = { vkospi: [{date:"YYYY-MM-DD", vkospi:number}] } */
+export async function POST(req: Request) {
+  try {
+    if (!authorized(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
+    if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
+    const body = (await req.json()) as { vkospi?: { date: string; vkospi: number }[] };
+    if (!Array.isArray(body.vkospi)) return Response.json({ error: "vkospi 배열 필요" }, { status: 400 });
+    return ok({ mode: "import-vkospi", ...(await importVkospi(body.vkospi)) });
+  } catch (err) {
+    return jsonError(err);
+  }
 }
 
 export async function GET(req: Request) {

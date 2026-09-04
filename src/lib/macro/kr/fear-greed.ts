@@ -153,26 +153,13 @@ const COMPONENTS: Comp[] = [
   },
   {
     key: "kr_vkospi",
-    label: "변동성 (KOSPI 실현변동성, 50일선 대비)",
-    valueLabel: "20일 실현변동성(연율) ÷ 50일 이동평균 — CNN VIX/MA50 산식 대응",
+    label: "변동성 (VKOSPI, 50일선 대비)",
+    valueLabel: "VKOSPI ÷ 50일 이동평균 — CNN VIX/MA50 산식과 동일",
     higherIsGreedy: false,
     series: (all) => {
-      // VKOSPI 히스토리는 KRX API가 최근분만 제공 → KOSPI 종가로 실현변동성 산출.
-      const closes = all.map((x) => x.kospiClose);
-      const rets = closes.map((c, i) => {
-        const p = closes[i - 1];
-        return c != null && p != null && p !== 0 ? Math.log(c / p) : null;
-      });
-      const rv: (number | null)[] = closes.map((_, i) => {
-        if (i < 20) return null;
-        const w = rets.slice(i - 19, i + 1);
-        if (w.some((x) => x == null)) return null;
-        const m = (w as number[]).reduce((a, b) => a + b, 0) / 20;
-        const varc = (w as number[]).reduce((a, b) => a + (b - m) ** 2, 0) / 20;
-        return Math.sqrt(varc) * Math.sqrt(252) * 100;
-      });
-      const ma = smaSeries(rv, 50);
-      return rv.map((x, i) => (x != null && ma[i] ? x / (ma[i] as number) : null));
+      const v = all.map((x) => x.vkospi);
+      const ma = smaSeries(v, 50);
+      return v.map((x, i) => (x != null && ma[i] ? x / (ma[i] as number) : null));
     },
   },
   {

@@ -170,6 +170,36 @@ function thinDoc(): Partial<KrFgDailyDoc> {
   };
 }
 
+/** VKOSPI 과거 시계열 주입 (KRX OPEN API가 옵션지수를 불안정하게 제공 → 외부 CSV/XLSX 사용) */
+export async function importVkospi(
+  rows: { date: string; vkospi: number }[],
+): Promise<{ upserted: number }> {
+  const col = await krFgDailyCol();
+  const ops: AnyBulkWriteOperation<KrFgDailyDoc>[] = rows
+    .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date) && Number.isFinite(r.vkospi))
+    .map((r) => ({
+      updateOne: {
+        filter: { _id: r.date },
+        update: {
+          $set: { vkospi: r.vkospi, updatedAt: new Date().toISOString() },
+          $setOnInsert: thinDocNoVkospi(),
+        },
+        upsert: true,
+      },
+    }));
+  if (ops.length) await col.bulkWrite(ops, { ordered: false });
+  return { upserted: ops.length };
+}
+
+function thinDocNoVkospi(): Partial<KrFgDailyDoc> {
+  return {
+    kospiClose: null,
+    advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
+    newHigh52: null, newLow52: null, totalWithHistory: null,
+    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null,
+  };
+}
+
 /** 롤링창 초기화 (대량 백필 전 순서 꼬임 방지) */
 export async function resetKrStockRoll(): Promise<{ deleted: number }> {
   const col = await krStockRollCol();
