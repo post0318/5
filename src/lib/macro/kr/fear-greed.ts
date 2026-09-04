@@ -90,15 +90,19 @@ const COMPONENTS: Comp[] = [
   {
     key: "kr_strength",
     label: "주가 강도 (52주 신고가/신저가)",
-    valueLabel: "KOSPI 52주 신고가 − 신저가 종목수 (순개수) · CNN과 동일",
+    valueLabel: "KOSPI 52주 (신고가 − 신저가) / 대상종목 · 5일 평균 (순비율 %)",
     higherIsGreedy: true,
     normWindow: 500, // CNN: 과거 2년(~500영업일)
-    series: (all) =>
-      all.map((d) =>
+    series: (all) => {
+      // 순개수는 일별 스파이크가 커서 CNN처럼 매끄러운 선이 안 됨
+      //  → 대상종목 대비 순비율(%) + 5일 이동평균으로 노이즈 제거
+      const net = all.map((d) =>
         d.newHigh52 != null && d.newLow52 != null && d.totalWithHistory
-          ? d.newHigh52 - d.newLow52
+          ? ((d.newHigh52 - d.newLow52) / d.totalWithHistory) * 100
           : null,
-      ),
+      );
+      return smaSeries(net, 5);
+    },
   },
   {
     key: "kr_breadth",
