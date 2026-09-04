@@ -179,7 +179,7 @@ export function MacroDashboard() {
   const q = useQuery({
     queryKey: ["macro"],
     queryFn: () => apiFetch<Dashboard>("/api/macro"),
-    staleTime: 60 * 60_000,
+    staleTime: 60_000, // 1분 — 예전엔 1시간이라 배포해도 브라우저가 계속 옛 데이터를 보여줬음
   });
 
   const nasdaq = useMemo(
