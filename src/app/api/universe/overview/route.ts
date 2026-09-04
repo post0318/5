@@ -59,7 +59,7 @@ async function buildRows(market: MarketId | undefined) {
 
 const cachedRows = (market: MarketId | undefined) =>
   unstable_cache(() => buildRows(market), ["universe-overview", market ?? "all"], {
-    revalidate: 900,
+    revalidate: 300,
     tags: ["universe-overview"],
   })();
 

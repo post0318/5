@@ -20,7 +20,7 @@ export async function POST(request: Request) {
       return ok({ preview: parsed.ok, errors: parsed.errors, inserted: 0 });
     }
     const inserted = await bulkUpsert(parsed.ok);
-    try { revalidateTag("universe-overview", "max"); } catch {}
+    revalidateTag("universe-overview", { expire: 0 });
     return ok({ preview: parsed.ok, errors: parsed.errors, inserted });
   } catch (err) {
     return jsonError(err);

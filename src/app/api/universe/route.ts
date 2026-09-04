@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const item = await upsertUniverseItem(body);
-    try { revalidateTag("universe-overview", "max"); } catch {}
+    revalidateTag("universe-overview", { expire: 0 });
     return ok({ item }, { status: 201 });
   } catch (err) {
     return jsonError(err);
