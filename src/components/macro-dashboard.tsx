@@ -611,10 +611,11 @@ function componentScoreDir(key: string, history: { value: number }[]): -1 | 0 | 
     return invert ? 100 - n : n;
   };
 
+  // 직전(바로 전날) 대비 — 상승 시 ▲, 하락 시 ▼, 변화 없으면 –
   const now = score(vals[vals.length - 1]);
-  const then = score(vals[Math.max(0, vals.length - 21)]);
+  const then = score(vals[vals.length - 2]);
   const diff = now - then;
-  if (Math.abs(diff) < 2) return 0;
+  if (diff === 0) return 0;
   return diff > 0 ? 1 : -1;
 }
 

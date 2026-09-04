@@ -31,7 +31,7 @@ type Comp = {
    */
   plot?: (all: KrFgDailyDoc[]) => {
     history: { date: string; value: number }[];
-    overlay: { label: string; history: { date: string; value: number }[] };
+    overlay?: { label: string; history: { date: string; value: number }[] };
   } | null;
 };
 
@@ -180,7 +180,22 @@ const COMPONENTS: Comp[] = [
     label: "변동성 (VKOSPI)",
     valueLabel: "코스피200 변동성지수 (VKOSPI)",
     higherIsGreedy: false,
-    series: (all) => all.map((x) => x.vkospi),
+    // 점수 산출은 CNN 방법론(VIX 절대 수치가 아니라 "VIX − 50일 이동평균"
+    // 스프레드를 역사적 분포로 정규화)과 동일 구조로 계산 — 국면(저변동성기/
+    // 고변동성기)에 따라 절대 레벨의 의미가 달라지는 문제를 피함.
+    // 차트 표시는 원본 VKOSPI 값 그대로(plot).
+    series: (all) => {
+      const vk = all.map((x) => x.vkospi);
+      const ma50 = smaSeries(vk, 50);
+      return vk.map((v, i) => (v != null && ma50[i] != null ? v - (ma50[i] as number) : null));
+    },
+    plot: (all) => {
+      const rows: { date: string; value: number }[] = [];
+      all.forEach((d) => {
+        if (d.vkospi != null) rows.push({ date: d._id, value: d.vkospi });
+      });
+      return rows.length ? { history: rows } : null;
+    },
   },
   {
     key: "kr_safehaven",
@@ -334,7 +349,7 @@ export async function getKrFearGreed(): Promise<
         score: scored.length ? Math.round(scored[scored.length - 1].value * 10) / 10 : null,
         rating: scored.length ? ratingEn(scored[scored.length - 1].value) : null,
         history: (p?.history ?? raw).slice(-win),
-        ...(p ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-win) } } : {}),
+        ...(p?.overlay ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-win) } } : {}),
       };
     }),
     source: "K-공포탐욕지수",
