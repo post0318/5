@@ -130,16 +130,23 @@ function empty(date: string): BatchResult {
 /**
  * 모멘텀(125일선)용 KOSPI 종가 히스토리를 yahoo(^KS11)에서 부트스트랩.
  * kr_fg_daily 의 kospiClose 만 채운다 (없는 날짜는 thin 문서 생성).
+ * sinceIso 지정 시 해당일부터, 미지정 시 최근 420일만.
  */
-export async function bootstrapKospiHistory(): Promise<{ upserted: number }> {
+export async function bootstrapKospiHistory(sinceIso?: string): Promise<{ upserted: number }> {
   const YF = (YahooFinancePkg as { default?: unknown }).default ?? YahooFinancePkg;
   const C = YF as new (o: Record<string, unknown>) => {
     chart: (s: string, o: Record<string, unknown>) => Promise<{ quotes: { date: Date | string; close?: number | null }[] }>;
   };
   const yf = new C({ suppressNotices: ["yahooSurvey"], validation: { logErrors: false } });
-  const from = new Date();
-  from.setDate(from.getDate() - 420);
-  const res = await yf.chart("^KS11", { period1: from.toISOString().slice(0, 10), interval: "1d" });
+  let fromStr: string;
+  if (sinceIso) {
+    fromStr = sinceIso;
+  } else {
+    const from = new Date();
+    from.setDate(from.getDate() - 420);
+    fromStr = from.toISOString().slice(0, 10);
+  }
+  const res = await yf.chart("^KS11", { period1: fromStr, interval: "1d" });
   const rows = (res.quotes ?? [])
     .map((q) => ({
       date: (q.date instanceof Date ? q.date : new Date(q.date)).toISOString().slice(0, 10),
@@ -480,4 +487,84 @@ export async function backfillRange(
     else failed++;
   }
   return { done, skipped, failed, lastDate };
+}
+
+/**
+ * McClellan(주가폭) 계산용 과거 이력 확장 — advancers/decliners/upVolume/downVolume
+ * 만 채운다. deepBackfill 과 달리 kr_stock_roll(52주 신고/신저용 롤링창)은
+ * 절대 건드리지 않는다 — 그 롤링창은 2021~ 현재 상태를 이미 정확히 담고
+ * 있어서, 여기서 과거로 되돌려 재구성하면 최신 상태가 깨진다.
+ * 기존 문서의 다른 필드($set 대상 외)는 그대로 보존(upsert 는 $set 만 적용).
+ */
+export async function extendBreadthHistory(
+  fromIso: string,
+  toIso: string,
+): Promise<{ done: number; failed: number; lastDate: string | null }> {
+  const dates: string[] = [];
+  const d = new Date(`${fromIso}T00:00:00Z`);
+  const end = new Date(`${toIso}T00:00:00Z`);
+  let guard = 0;
+  while (d <= end && guard++ < 5000) {
+    const dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6) dates.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+
+  const col = await krFgDailyCol();
+  let done = 0;
+  let failed = 0;
+  let lastDate: string | null = null;
+  for (const iso of dates) {
+    const ymd = iso.replace(/-/g, "");
+    let stocks: Awaited<ReturnType<typeof fetchAllStocks>>;
+    try {
+      stocks = await fetchAllStocks(ymd);
+    } catch {
+      failed++;
+      continue;
+    }
+    if (stocks.length < 100) {
+      failed++;
+      continue;
+    }
+    let advancers = 0;
+    let decliners = 0;
+    let unchanged = 0;
+    let upVolume = 0;
+    let downVolume = 0;
+    for (const s of stocks) {
+      const c = s.changePrc ?? 0;
+      const v = s.volume ?? 0;
+      if (c > 0) {
+        advancers++;
+        upVolume += v;
+      } else if (c < 0) {
+        decliners++;
+        downVolume += v;
+      } else unchanged++;
+    }
+    await col.updateOne(
+      { _id: iso },
+      {
+        $set: { advancers, decliners, unchanged, upVolume, downVolume, updatedAt: new Date().toISOString() },
+        $setOnInsert: {
+          kospiClose: null,
+          newHigh52: null,
+          newLow52: null,
+          totalWithHistory: null,
+          vkospi: null,
+          gov3y: null,
+          gov10y: null,
+          corpAA: null,
+          corpBBB: null,
+          putCall: null,
+          putCallVal: null,
+        },
+      },
+      { upsert: true },
+    );
+    lastDate = iso;
+    done++;
+  }
+  return { done, failed, lastDate };
 }

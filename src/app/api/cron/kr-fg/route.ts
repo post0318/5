@@ -7,6 +7,7 @@ import {
   bootstrapKospiHistory,
   deepBackfill,
   deepBackfillAuto,
+  extendBreadthHistory,
   importVkospi,
   resetKrStockRoll,
   runKrFgBatch,
@@ -46,7 +47,13 @@ export async function GET(req: Request) {
 
     const sp = new URL(req.url).searchParams;
     if (sp.get("bootstrap") === "kospi") {
-      return ok({ mode: "bootstrap-kospi", ...(await bootstrapKospiHistory()) });
+      return ok({ mode: "bootstrap-kospi", ...(await bootstrapKospiHistory(sp.get("since") ?? undefined)) });
+    }
+    if (sp.get("extend") === "breadth") {
+      const from = sp.get("from");
+      const to = sp.get("to");
+      if (!from || !to) return Response.json({ error: "from/to 필요" }, { status: 400 });
+      return ok({ mode: "extend-breadth", ...(await extendBreadthHistory(from, to)) });
     }
     if (sp.get("reset") === "roll") {
       return ok({ mode: "reset-roll", ...(await resetKrStockRoll()) });
