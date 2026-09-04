@@ -1,6 +1,7 @@
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
 import {
+  backfillEcosRates,
   backfillRange,
   bootstrapKospiHistory,
   deepBackfill,
@@ -46,6 +47,9 @@ export async function GET(req: Request) {
     }
     if (sp.get("reset") === "roll") {
       return ok({ mode: "reset-roll", ...(await resetKrStockRoll()) });
+    }
+    if (sp.get("ecos") === "1") {
+      return ok({ mode: "ecos-backfill", ...(await backfillEcosRates(sp.get("start") ?? undefined)) });
     }
     const from = sp.get("from");
     const to = sp.get("to");

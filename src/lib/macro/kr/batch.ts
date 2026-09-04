@@ -200,6 +200,54 @@ function thinDocNoVkospi(): Partial<KrFgDailyDoc> {
   };
 }
 
+/** ECOS 금리 4종을 지정 시작일부터 오늘까지 백필 (정규화 창을 넓히기 위해) */
+export async function backfillEcosRates(startIso = "2020-01-01"): Promise<{ upserted: number }> {
+  const { fetchRateSeries } = await import("./ecos");
+  const start = startIso.replace(/-/g, "");
+  const end = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const [g3, g10, aa, bbb] = await Promise.all([
+    fetchRateSeries("gov3y", start, end).catch(() => []),
+    fetchRateSeries("gov10y", start, end).catch(() => []),
+    fetchRateSeries("corpAA", start, end).catch(() => []),
+    fetchRateSeries("corpBBB", start, end).catch(() => []),
+  ]);
+  const byDate = new Map<string, Partial<KrFgDailyDoc>>();
+  const put = (rows: { date: string; value: number }[], key: keyof KrFgDailyDoc) => {
+    for (const r of rows) {
+      const cur = byDate.get(r.date) ?? {};
+      (cur as Record<string, number>)[key] = r.value;
+      byDate.set(r.date, cur);
+    }
+  };
+  put(g3, "gov3y");
+  put(g10, "gov10y");
+  put(aa, "corpAA");
+  put(bbb, "corpBBB");
+
+  const col = await krFgDailyCol();
+  const ops: AnyBulkWriteOperation<KrFgDailyDoc>[] = [...byDate.entries()].map(([date, rates]) => ({
+    updateOne: {
+      filter: { _id: date },
+      update: {
+        $set: { ...rates, updatedAt: new Date().toISOString() },
+        $setOnInsert: thinDocRates(),
+      },
+      upsert: true,
+    },
+  }));
+  if (ops.length) await col.bulkWrite(ops, { ordered: false });
+  return { upserted: ops.length };
+}
+
+function thinDocRates(): Partial<KrFgDailyDoc> {
+  return {
+    kospiClose: null,
+    advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
+    newHigh52: null, newLow52: null, totalWithHistory: null, vkospi: null,
+    putCall: null, putCallVal: null,
+  };
+}
+
 /** 롤링창 초기화 (대량 백필 전 순서 꼬임 방지) */
 export async function resetKrStockRoll(): Promise<{ deleted: number }> {
   const col = await krStockRollCol();

@@ -30,7 +30,7 @@ export async function fetchRateSeries(
   startYmd: string,
   endYmd: string,
 ): Promise<RatePoint[]> {
-  const url = `https://ecos.bok.or.kr/api/StatisticSearch/${key()}/json/kr/1/900/817Y002/D/${startYmd}/${endYmd}/${ITEMS[item]}`;
+  const url = `https://ecos.bok.or.kr/api/StatisticSearch/${key()}/json/kr/1/5000/817Y002/D/${startYmd}/${endYmd}/${ITEMS[item]}`;
   const res = await fetch(url, {
     signal: AbortSignal.timeout(15_000),
     next: { revalidate: 60 * 60 * 12 },
