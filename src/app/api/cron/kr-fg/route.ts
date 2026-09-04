@@ -55,39 +55,6 @@ export async function GET(req: Request) {
       if (!from || !to) return Response.json({ error: "from/to 필요" }, { status: 400 });
       return ok({ mode: "extend-breadth", ...(await extendBreadthHistory(from, to)) });
     }
-    if (sp.get("debug") === "credit") {
-      const { krFgDailyCol } = await import("@/lib/db/kr-fg");
-      const col = await krFgDailyCol();
-      const days = Number(sp.get("days")) || 180;
-      const docs = await col
-        .find({}, { projection: { gov3y: 1, corpAA: 1, corpBBB: 1 } })
-        .sort({ _id: -1 })
-        .limit(days)
-        .toArray();
-      const rows = docs.reverse();
-      const stats = (vals: number[]) =>
-        vals.length ? { min: Math.min(...vals), max: Math.max(...vals), range: Math.max(...vals) - Math.min(...vals), last: vals.at(-1) } : null;
-      const bbbAa = rows.map((d) => (d.corpBBB != null && d.corpAA != null ? d.corpBBB - d.corpAA : null)).filter((v): v is number => v != null);
-      const bbbGov = rows.map((d) => (d.corpBBB != null && d.gov3y != null ? d.corpBBB - d.gov3y : null)).filter((v): v is number => v != null);
-      const aaGov = rows.map((d) => (d.corpAA != null && d.gov3y != null ? d.corpAA - d.gov3y : null)).filter((v): v is number => v != null);
-      return ok({
-        mode: "debug-credit",
-        n: rows.length,
-        "BBB-AA": stats(bbbAa),
-        "BBB-gov3y": stats(bbbGov),
-        "AA-gov3y": stats(aaGov),
-      });
-    }
-    if (sp.get("debug") === "strength") {
-      const { krFgDailyCol } = await import("@/lib/db/kr-fg");
-      const col = await krFgDailyCol();
-      const docs = await col
-        .find({}, { projection: { newHigh52: 1, newLow52: 1, totalWithHistory: 1, advancers: 1, decliners: 1 } })
-        .sort({ _id: -1 })
-        .limit(15)
-        .toArray();
-      return ok({ mode: "debug-strength", rows: docs.reverse() });
-    }
     if (sp.get("reset") === "roll") {
       return ok({ mode: "reset-roll", ...(await resetKrStockRoll()) });
     }

@@ -249,13 +249,15 @@ const COMPONENTS: Comp[] = [
   },
   {
     key: "kr_credit",
-    label: "정크본드 수요 (BBB− − AA− 회사채)",
-    valueLabel: "BBB− − AA− 회사채 3년 스프레드 (%p) — 확대 = 공포",
+    label: "정크본드 수요 (AA− 회사채 − 국고채)",
+    valueLabel: "AA− 회사채 3년 − 국고채 3년 스프레드 (%p) — 확대 = 공포",
     higherIsGreedy: false,
-    // CNN(정크yield − 투자등급yield)과 동일 구조: 등급간 스프레드 + 역사적 백분위 정규화.
-    // 국내 공개 금리로는 BBB− 가 최하단(사실상 정크 프록시), AA− 가 투자등급 기준.
+    // BBB−AA(등급간)는 국내 데이터 특성상 3년 변동폭이 너무 좁아(0.72%p)
+    // 백분위 정규화가 과민 반응. AA−국고채(안전 회사채조차 무위험 대비
+    // 얼마나 더 받는가)가 변동폭이 더 크고 신용시장 전반의 위험회피 심리를
+    // 더 잘 반영한다고 판단해 채택.
     series: (all) =>
-      all.map((d) => (d.corpBBB != null && d.corpAA != null ? d.corpBBB - d.corpAA : null)),
+      all.map((d) => (d.corpAA != null && d.gov3y != null ? d.corpAA - d.gov3y : null)),
   },
 ];
 
@@ -320,7 +322,7 @@ export async function getKrFearGreed(): Promise<
   );
   const creditAvg = mean(
     all
-      .map((d) => (d.corpBBB != null && d.corpAA != null ? d.corpBBB - d.corpAA : null))
+      .map((d) => (d.corpAA != null && d.gov3y != null ? d.corpAA - d.gov3y : null))
       .filter((v): v is number => v != null && Number.isFinite(v)),
   );
 
