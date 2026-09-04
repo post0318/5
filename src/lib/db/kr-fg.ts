@@ -24,7 +24,8 @@ export interface KrFgDailyDoc {
   gov10y: number | null;
   corpAA: number | null;
   corpBBB: number | null;
-  putCall: number | null;
+  putCall: number | null; // 거래량 기준 (참고)
+  putCallVal: number | null; // 거래대금 기준 (점수 산출에 사용)
   updatedAt: string;
 }
 

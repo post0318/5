@@ -249,20 +249,7 @@ export function MacroDashboard() {
         <>
           {q.data.fearGreed && <FearGreedCard fg={q.data.fearGreed} />}
 
-          {q.data.krFearGreed && (
-            <div className="space-y-1">
-              <div className="flex items-baseline gap-2">
-                <h2 className="text-sm font-semibold">한국 공포·탐욕 지수</h2>
-                <span className="text-muted-foreground text-xs">
-                  KRX·한국은행 자체 산출
-                  {q.data.krFearGreed.componentsReady != null &&
-                    ` · ${q.data.krFearGreed.componentsReady}/7 지표`}
-                  {q.data.krFearGreed.ready === false && " · 히스토리 축적 중"}
-                </span>
-              </div>
-              <FearGreedCard fg={q.data.krFearGreed} />
-            </div>
-          )}
+          {q.data.krFearGreed && <FearGreedCard fg={q.data.krFearGreed} />}
 
           <Card>
             <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2 py-4 text-sm">
@@ -690,6 +677,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       tickStep?: number;
       /** 도메인 경계 스냅 단위 */
       domainSnap?: number;
+      /** Y축 도메인 고정 [min, max] (데이터 무관) */
+      fixedDomain?: [number, number];
     }
   > = {
     safe_haven_demand: {
@@ -719,13 +708,29 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       tickStep: 5, // 라벨은 5 단위
       domainSnap: 5,
     },
-    // ── 한국 F&G ──
-    kr_momentum: {
+    // ── 한국 F&G ── (모멘텀은 overlay 방식: KOSPI + 125일선)
+    kr_strength: {
       threshold: 0,
       aboveIsBad: false,
-      aboveLabel: "▲ 125일선 상회 · 양(+) 모멘텀 (탐욕)",
-      belowLabel: "▼ 125일선 하회 · 음(−) 모멘텀 (공포)",
-      refLabel: "125일선 (0%)",
+      aboveLabel: "▲ 신고가 우위 (강세)",
+      belowLabel: "▼ 신저가 우위 (약세)",
+      refLabel: "기준선 0",
+      refColor: "oklch(0.78 0.08 250)",
+    },
+    kr_credit: {
+      threshold: 0,
+      aboveIsBad: true,
+      aboveLabel: "▲ 스프레드 확대 · 신용 경계 (공포)",
+      belowLabel: "▼ 스프레드 축소 · 위험선호 (탐욕)",
+      refLabel: "0%p",
+      refColor: "oklch(0.78 0.08 250)",
+    },
+    kr_safehaven: {
+      threshold: 0,
+      aboveIsBad: false,
+      aboveLabel: "▲ 주식성과가 채권을 능가",
+      belowLabel: "▼ 채권성과가 주식을 능가",
+      refLabel: "기준선 0",
       refColor: "oklch(0.78 0.08 250)",
     },
     kr_putcall: {
@@ -735,6 +740,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       belowLabel: "▼ 콜 우위 · 낙관",
       refLabel: "기준선 1.00",
       refColor: "oklch(0.78 0.08 250)",
+      fixedDomain: [0.6, 1.4],
+      tickStep: 0.4,
     },
   };
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
@@ -876,10 +883,13 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     if (!divCfg) return null;
     const vals = chartData.map((d) => d.value).filter(Number.isFinite);
     if (!vals.length) return null;
+    let lo: number, hi: number;
+    if (divCfg.fixedDomain) {
+      [lo, hi] = divCfg.fixedDomain;
+    } else {
     const rawLo = Math.min(...vals, divCfg.threshold);
     const rawHi = Math.max(...vals, divCfg.threshold);
     const snap = divCfg.domainSnap;
-    let lo: number, hi: number;
     if (snap) {
       lo = Math.floor(rawLo / snap) * snap;
       hi = Math.ceil(rawHi / snap) * snap;
@@ -887,6 +897,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       const pad = (rawHi - rawLo) * 0.1 || 1;
       lo = Math.round((rawLo - pad) * 100) / 100;
       hi = Math.round((rawHi + pad) * 100) / 100;
+    }
     }
     let ticks: number[] | undefined;
     if (divCfg.tickStep) {

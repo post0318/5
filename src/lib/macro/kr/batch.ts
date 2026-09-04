@@ -27,7 +27,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       fetchAllStocks(ymd),
       fetchVkospi(ymd).catch(() => null),
       fetchKospiIndex(ymd).catch(() => null),
-      fetchPutCall(ymd).catch(() => null),
+      fetchPutCall(ymd).catch(() => ({ byVolume: null, byValue: null })),
       fetchLatestRates(ymd).catch(() => ({ gov3y: null, gov10y: null, corpAA: null, corpBBB: null })),
     ]);
 
@@ -102,7 +102,8 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       gov10y: rates.gov10y,
       corpAA: rates.corpAA,
       corpBBB: rates.corpBBB,
-      putCall,
+      putCall: putCall.byVolume,
+      putCallVal: putCall.byValue,
       updatedAt: new Date().toISOString(),
     };
     const col = await krFgDailyCol();
@@ -165,15 +166,155 @@ function thinDoc(): Partial<KrFgDailyDoc> {
   return {
     advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
     newHigh52: null, newLow52: null, totalWithHistory: null, vkospi: null,
-    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null,
+    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null,
   };
 }
 
-/** 롤링창 초기화 (200일 백필 전 순서 꼬임 방지) */
+/** 롤링창 초기화 (대량 백필 전 순서 꼬임 방지) */
 export async function resetKrStockRoll(): Promise<{ deleted: number }> {
   const col = await krStockRollCol();
   const r = await col.deleteMany({});
   return { deleted: r.deletedCount };
+}
+
+/**
+ * 대량 과거 백필 — 롤링창을 메모리에 유지하며 범위를 한 번에 처리.
+ * runKrFgBatch(일별) 는 매 호출마다 roll 컬렉션 전체를 읽어 느림 → 이 함수는
+ * 시작 시 1회 읽고, 끝에 1회 저장. ECOS 금리는 범위 전체를 항목당 1콜로 미리 확보.
+ */
+export async function deepBackfill(
+  fromIso: string,
+  toIso: string,
+): Promise<{ done: number; failed: number; firstReadyDate: string | null; carriedRoll: number }> {
+  const rollCol = await krStockRollCol();
+  const dailyCol = await krFgDailyCol();
+
+  // 시작 롤 상태 → 메모리
+  const roll = new Map<string, number[]>();
+  for (const r of await rollCol.find({}).toArray()) roll.set(r._id, r.closes);
+
+  // ECOS 금리: 범위 전체 시계열 미리
+  const from = fromIso.replace(/-/g, "");
+  const to = toIso.replace(/-/g, "");
+  const { fetchRateSeries } = await import("./ecos");
+  const [g3, g10, aa, bbb] = await Promise.all([
+    fetchRateSeries("gov3y", from, to).catch(() => []),
+    fetchRateSeries("gov10y", from, to).catch(() => []),
+    fetchRateSeries("corpAA", from, to).catch(() => []),
+    fetchRateSeries("corpBBB", from, to).catch(() => []),
+  ]);
+  const rateAt = (s: { date: string; value: number }[], iso: string): number | null => {
+    let v: number | null = null;
+    for (const p of s) {
+      if (p.date <= iso) v = p.value;
+      else break;
+    }
+    return v;
+  };
+
+  const dates: string[] = [];
+  const d = new Date(`${fromIso}T00:00:00Z`);
+  const end = new Date(`${toIso}T00:00:00Z`);
+  let guard = 0;
+  while (d <= end && guard++ < 2000) {
+    const dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6) dates.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+
+  let done = 0;
+  let failed = 0;
+  let firstReadyDate: string | null = null;
+
+  for (const iso of dates) {
+    const ymd = iso.replace(/-/g, "");
+    let stocks: Awaited<ReturnType<typeof fetchAllStocks>>;
+    try {
+      stocks = await fetchAllStocks(ymd);
+    } catch {
+      failed++;
+      continue;
+    }
+    if (stocks.length < 100) {
+      failed++;
+      continue;
+    }
+    const [vkospi, kospiClose, putCall] = await Promise.all([
+      fetchVkospi(ymd).catch(() => null),
+      fetchKospiIndex(ymd).catch(() => null),
+      fetchPutCall(ymd).catch(() => ({ byVolume: null, byValue: null })),
+    ]);
+
+    let advancers = 0;
+    let decliners = 0;
+    let unchanged = 0;
+    let upVolume = 0;
+    let downVolume = 0;
+    let newHigh52 = 0;
+    let newLow52 = 0;
+    let totalWithHistory = 0;
+
+    for (const s of stocks) {
+      const c = s.changePrc ?? 0;
+      const v = s.volume ?? 0;
+      if (c > 0) {
+        advancers++;
+        upVolume += v;
+      } else if (c < 0) {
+        decliners++;
+        downVolume += v;
+      } else unchanged++;
+
+      if (s.close == null || !s.code) continue;
+      const w = roll.get(s.code) ?? [];
+      if (w.length >= MIN_HISTORY) {
+        totalWithHistory++;
+        if (s.close >= Math.max(...w)) newHigh52++;
+        else if (s.close <= Math.min(...w)) newLow52++;
+      }
+      w.push(s.close);
+      if (w.length > WINDOW) w.splice(0, w.length - WINDOW);
+      roll.set(s.code, w);
+    }
+
+    if (totalWithHistory > 0 && !firstReadyDate) firstReadyDate = iso;
+
+    const dailyDoc: KrFgDailyDoc = {
+        _id: iso,
+        kospiClose,
+        advancers,
+        decliners,
+        unchanged,
+        upVolume,
+        downVolume,
+        newHigh52,
+        newLow52,
+        totalWithHistory: totalWithHistory || null,
+        vkospi,
+        gov3y: rateAt(g3, iso),
+        gov10y: rateAt(g10, iso),
+        corpAA: rateAt(aa, iso),
+        corpBBB: rateAt(bbb, iso),
+        putCall: putCall.byVolume,
+        putCallVal: putCall.byValue,
+        updatedAt: new Date().toISOString(),
+    };
+    await dailyCol.replaceOne({ _id: iso }, dailyDoc, { upsert: true });
+    done++;
+  }
+
+  // 최종 롤 상태 저장 (1회 bulkWrite)
+  const lastDate = dates.at(-1) ?? new Date().toISOString().slice(0, 10);
+  const ops: AnyBulkWriteOperation<KrStockRollDoc>[] = [...roll.entries()].map(([code, closes]) => ({
+    updateOne: {
+      filter: { _id: code },
+      update: { $set: { closes, lastDate } },
+      upsert: true,
+    },
+  }));
+  if (ops.length) await rollCol.bulkWrite(ops, { ordered: false });
+
+  return { done, failed, firstReadyDate, carriedRoll: roll.size };
 }
 
 /**

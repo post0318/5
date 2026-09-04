@@ -14,10 +14,18 @@ type Comp = {
   key: string;
   label: string;
   valueLabel: string;
-  /** 전체 히스토리 → 컴포넌트 원시 시계열 (null = 해당일 산출 불가) */
+  /** 점수 산출용 원시 시계열 (null = 해당일 산출 불가) */
   series: (all: KrFgDailyDoc[]) => (number | null)[];
   /** 원시값이 높을수록 탐욕이면 true */
   higherIsGreedy: boolean;
+  /**
+   * 차트에 점수 시계열 대신 "기준선(dashed) + 오버레이(실선)"를 그릴 때.
+   * CNN 모멘텀 차트(S&P + 125일선)와 동일 표현.
+   */
+  plot?: (all: KrFgDailyDoc[]) => {
+    history: { date: string; value: number }[];
+    overlay: { label: string; history: { date: string; value: number }[] };
+  } | null;
 };
 
 /** 이동평균(단순). i < p-1 이거나 창에 null 있으면 null */
@@ -53,7 +61,7 @@ const COMPONENTS: Comp[] = [
   {
     key: "kr_momentum",
     label: "시장 모멘텀 (KOSPI vs 125일선)",
-    valueLabel: "KOSPI − 125일 이동평균 이격도 (%)",
+    valueLabel: "KOSPI 125일 이동평균",
     higherIsGreedy: true,
     series: (all) => {
       const closes = all.map((x) => x.kospiClose);
@@ -62,6 +70,19 @@ const COMPONENTS: Comp[] = [
         const m = ma[i];
         return c != null && m != null ? ((c - m) / m) * 100 : null;
       });
+    },
+    plot: (all) => {
+      const closes = all.map((x) => x.kospiClose);
+      const ma = smaSeries(closes, 125);
+      const maRows: { date: string; value: number }[] = [];
+      const kospiRows: { date: string; value: number }[] = [];
+      all.forEach((d, i) => {
+        if (ma[i] != null && closes[i] != null) {
+          maRows.push({ date: d._id, value: Math.round((ma[i] as number) * 100) / 100 });
+          kospiRows.push({ date: d._id, value: Math.round((closes[i] as number) * 100) / 100 });
+        }
+      });
+      return maRows.length ? { history: maRows, overlay: { label: "KOSPI", history: kospiRows } } : null;
     },
   },
   {
@@ -159,10 +180,14 @@ const COMPONENTS: Comp[] = [
   },
   {
     key: "kr_putcall",
-    label: "풋/콜 옵션",
-    valueLabel: "코스피200 옵션 풋/콜 거래량비 — 높을수록 공포",
+    label: "풋/콜 옵션 (5일 평균)",
+    valueLabel: "코스피200 옵션 풋/콜 거래대금비 5일 이동평균 — 1 초과 = 공포",
     higherIsGreedy: false,
-    series: (all) => all.map((d) => d.putCall),
+    series: (all) => {
+      // CNN 방식: 거래대금 기준(개인 투기 쏠림 완화) + 5일 이동평균으로 노이즈 제거
+      const pc = all.map((d) => d.putCallVal ?? d.putCall);
+      return smaSeries(pc, 5);
+    },
   },
 ];
 
@@ -243,15 +268,19 @@ export async function getKrFearGreed(): Promise<
     prev1m: Math.round(at(21) * 10) / 10,
     prev1y: Math.round(at(252) * 10) / 10,
     history: history.slice(-180),
-    components: compScored.map(({ c, raw, scored }) => ({
-      key: c.key,
-      label: c.label,
-      valueLabel: c.valueLabel,
-      score: scored.length ? Math.round(scored[scored.length - 1].value * 10) / 10 : null,
-      rating: scored.length ? ratingEn(scored[scored.length - 1].value) : null,
-      history: raw.slice(-180),
-    })),
-    source: "KRX · 한국은행 ECOS (자체 산출)",
+    components: compScored.map(({ c, raw, scored }) => {
+      const p = c.plot?.(all) ?? null;
+      return {
+        key: c.key,
+        label: c.label,
+        valueLabel: c.valueLabel,
+        score: scored.length ? Math.round(scored[scored.length - 1].value * 10) / 10 : null,
+        rating: scored.length ? ratingEn(scored[scored.length - 1].value) : null,
+        history: (p?.history ?? raw).slice(-180),
+        ...(p ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-180) } } : {}),
+      };
+    }),
+    source: "한국 공포·탐욕 지수",
     deepLink: "https://data.krx.co.kr",
     ready: componentsReady >= 5,
     componentsReady,

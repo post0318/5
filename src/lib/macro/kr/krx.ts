@@ -76,17 +76,34 @@ export async function fetchKospiIndex(basDd: string): Promise<number | null> {
   return v ? n(v.CLSPRC_IDX) : null;
 }
 
-/** 코스피200 계열 옵션 풋/콜 거래량 비율 */
-export async function fetchPutCall(basDd: string): Promise<number | null> {
+/**
+ * 코스피200 계열 옵션 풋/콜 비율.
+ *  - byVolume: 거래량(계약수) 기준
+ *  - byValue : 거래대금 기준 (개인 투기 쏠림이 덜 반영 → 메이저 심리에 더 정확, 권장)
+ */
+export async function fetchPutCall(
+  basDd: string,
+): Promise<{ byVolume: number | null; byValue: number | null }> {
   const rows = await krx("drv/opt_bydd_trd", { basDd });
-  let call = 0;
-  let put = 0;
+  let callVol = 0;
+  let putVol = 0;
+  let callVal = 0;
+  let putVal = 0;
   for (const r of rows) {
     const prod = r.PROD_NM ?? "";
     if (!prod.includes("코스피200") && !prod.includes("코스피 200")) continue;
     const vol = n(r.ACC_TRDVOL) ?? 0;
-    if (r.RGHT_TP_NM === "CALL") call += vol;
-    else if (r.RGHT_TP_NM === "PUT") put += vol;
+    const val = n(r.ACC_TRDVAL) ?? 0;
+    if (r.RGHT_TP_NM === "CALL") {
+      callVol += vol;
+      callVal += val;
+    } else if (r.RGHT_TP_NM === "PUT") {
+      putVol += vol;
+      putVal += val;
+    }
   }
-  return call > 0 ? put / call : null;
+  return {
+    byVolume: callVol > 0 ? putVol / callVol : null,
+    byValue: callVal > 0 ? putVal / callVal : null,
+  };
 }

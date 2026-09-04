@@ -3,6 +3,7 @@ import { isDbConfigured } from "@/lib/db";
 import {
   backfillRange,
   bootstrapKospiHistory,
+  deepBackfill,
   resetKrStockRoll,
   runKrFgBatch,
 } from "@/lib/macro/kr/batch";
@@ -35,6 +36,9 @@ export async function GET(req: Request) {
     const from = sp.get("from");
     const to = sp.get("to");
     if (from && to) {
+      if (sp.get("deep") === "1") {
+        return ok({ mode: "deep-backfill", ...(await deepBackfill(from, to)) });
+      }
       const force = sp.get("force") === "1";
       return ok({ mode: "backfill-range", ...(await backfillRange(from, to, !force)) });
     }
