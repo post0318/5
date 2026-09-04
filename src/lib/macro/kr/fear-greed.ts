@@ -138,8 +138,8 @@ const COMPONENTS: Comp[] = [
   },
   {
     key: "kr_breadth",
-    label: "주가 폭 (McClellan 오실레이터 · 종목수 기준)",
-    valueLabel: "AD−DC McClellan 오실레이터 + 1000 (종목수 기준) — 누적 없음",
+    label: "주가 폭 (종목수기준)",
+    valueLabel: "McClellan 거래량 지표",
     higherIsGreedy: true,
     // 종목수(advancers/decliners) 기준을 메인으로 사용. 거래량 가중(upVolume/
     // downVolume)은 코스피 특성상 삼성전자 등 소수 초대형주 거래량이 압도적이라
@@ -325,11 +325,8 @@ export async function getKrFearGreed(): Promise<
     history: history.slice(-180),
     components: compScored.map(({ c, raw, scored }) => {
       const p = c.plot?.(all) ?? null;
-      // 세부차트 표시 구간: 미국(CNN) 컴포넌트 차트와 동일하게 최근 180 거래일.
-      // kr_breadth는 클라이언트에서 MA20을 얹는데, 우리는 과거 데이터를
-      // 다 갖고 있으니 20거래일 더 보내 표시 구간 첫날부터 MA20이 바로
-      // 나오게 함 (워밍업 공백 없음).
-      const win = c.key === "kr_breadth" ? 200 : 180;
+      // 세부차트 표시 구간: 미국(CNN) 컴포넌트 차트와 동일하게 최근 180 거래일
+      const win = 180;
       return {
         key: c.key,
         label: c.label,

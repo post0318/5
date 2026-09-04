@@ -635,10 +635,9 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
     idx === zone ? { fill: base, fillOpacity: 0.22 } : { fill: base, fillOpacity: 0.05 };
 
   const chartData = selected ? selected.history : fg.history;
-  // kr_breadth 는 서버가 MA20 워밍업용으로 20일 더 보내므로(200일),
-  // 축·눈금·렌더 모두 미국과 같은 최근 180일만 쓰도록 트리밍.
-  // MA 계산 자체는 chartData(200일 전체)로 하고 마지막에만 자름.
-  const DISPLAY_LIMIT: Record<string, number> = { kr_breadth: 180 };
+  // 지표별로 서버가 표시 구간보다 더 긴 워밍업 구간을 보낼 때, 축·눈금·
+  // 렌더를 표시 구간만으로 트리밍하기 위한 용도 (현재 해당 지표 없음).
+  const DISPLAY_LIMIT: Record<string, number> = {};
   const displayLimit = selected ? DISPLAY_LIMIT[selected.key] : undefined;
   const displayChartData = useMemo(
     () => (displayLimit && chartData.length > displayLimit ? chartData.slice(-displayLimit) : chartData),
@@ -817,7 +816,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
   // 정규화선 색: "direction" = 상승 녹/하락 적, 그 외 = 50 기준 위 녹/아래 적
   const normColorByDirection = selected?.key === "junk_bond_demand";
   // 원본 값에 이동평균선(20·60)을 얹는 지표
-  const MA_KEYS = new Set(["stock_price_breadth", "kr_breadth"]);
+  const MA_KEYS = new Set(["stock_price_breadth"]);
   const showMa = selected ? MA_KEYS.has(selected.key) : false;
   const overlay = selected?.overlay ?? null;
   const divergingData = useMemo(() => {
