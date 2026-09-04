@@ -195,6 +195,11 @@ const COMPONENTS: Comp[] = [
     label: "정크본드 수요 (BBB− 회사채 − 국고채)",
     valueLabel: "BBB− 회사채 3년 − 국고채 3년 스프레드 (%p) — 확대 = 공포",
     higherIsGreedy: false,
+    // 역사적 백분위 대신 실무 판단선(bp)으로 고정 환산:
+    //  · 평시 적정 600~700bp — 6.00 → 점수 100(극탐욕)
+    //  · 경계/위축 750~800bp, 신용경색 위험선 850bp↑ — 8.50 → 점수 0(극공포)
+    // (700→60 탐욕권, 750→40 공포권, 800→20 극도의 공포권 진입)
+    fixedRange: [6.0, 8.5],
     series: (all) =>
       all.map((d) => (d.corpBBB != null && d.gov3y != null ? d.corpBBB - d.gov3y : null)),
   },
