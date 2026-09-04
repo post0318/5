@@ -250,7 +250,7 @@ const COMPONENTS: Comp[] = [
   {
     key: "kr_credit",
     label: "정크본드 수요 (AA− 회사채 − 국고채)",
-    valueLabel: "AA− 회사채 3년 − 국고채 3년 스프레드 (%p) — 확대 = 공포",
+    valueLabel: "AA- 회사채 - 국고채 3년 스프레드 (%p)",
     higherIsGreedy: false,
     // BBB−AA(등급간)는 국내 데이터 특성상 3년 변동폭이 너무 좁아(0.72%p)
     // 백분위 정규화가 과민 반응. AA−국고채(안전 회사채조차 무위험 대비
