@@ -628,6 +628,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
     junk_bond_demand: 0.1,
     safe_haven_demand: 5, // 5%p 단위
     put_call_options: 0.1,
+    kr_putcall: 0.1,
   };
   // 세부지표별 Y축 고정 범위·눈금 (원시값 스케일이 커서 auto 여백이 과한 경우)
   const fixedAxisByKey: Record<string, { domain: [number, number]; step: number }> = {
@@ -733,21 +734,11 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       refLabel: "기준선 0",
       refColor: "oklch(0.78 0.08 250)",
     },
-    kr_putcall: {
-      threshold: 1,
-      aboveIsBad: true,
-      aboveLabel: "▲ 풋 우위 · 공포",
-      belowLabel: "▼ 콜 우위 · 낙관",
-      refLabel: "기준선 1.00",
-      refColor: "oklch(0.78 0.08 250)",
-      fixedDomain: [0.6, 1.4],
-      tickStep: 0.4,
-    },
   };
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
   // 원본 값 + 정규화(0~100) 점수를 함께 보여주는 지표
-  const NORM_KEYS = new Set(["junk_bond_demand", "put_call_options"]);
+  const NORM_KEYS = new Set(["junk_bond_demand", "put_call_options", "kr_putcall"]);
   const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
   const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
   // 정규화 점수가 threshold 이상(직전 대비) 급락한 지점에 빨간 세로 타원 (정크본드)
