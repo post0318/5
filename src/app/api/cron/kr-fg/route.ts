@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
 import {
@@ -70,5 +71,9 @@ export async function GET(req: Request) {
     return ok({ mode: "daily", ...res });
   } catch (err) {
     return jsonError(err);
+  } finally {
+    // 배치/백필 후 지수 캐시 무효화
+    revalidatePath("/api/macro");
+    revalidatePath("/api/macro/kr-fg");
   }
 }
