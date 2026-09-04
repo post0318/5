@@ -190,11 +190,17 @@ const COMPONENTS: Comp[] = [
       return vk.map((v, i) => (v != null && ma50[i] != null ? v - (ma50[i] as number) : null));
     },
     plot: (all) => {
+      const vk = all.map((x) => x.vkospi);
+      const ma50 = smaSeries(vk, 50);
       const rows: { date: string; value: number }[] = [];
-      all.forEach((d) => {
-        if (d.vkospi != null) rows.push({ date: d._id, value: d.vkospi });
+      const maRows: { date: string; value: number }[] = [];
+      all.forEach((d, i) => {
+        if (vk[i] != null) rows.push({ date: d._id, value: vk[i] as number });
+        if (ma50[i] != null) maRows.push({ date: d._id, value: Math.round((ma50[i] as number) * 100) / 100 });
       });
-      return rows.length ? { history: rows } : null;
+      return rows.length
+        ? { history: rows, overlay: { label: "50일 이동평균", history: maRows } }
+        : null;
     },
   },
   {
