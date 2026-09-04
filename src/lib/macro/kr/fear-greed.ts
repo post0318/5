@@ -305,8 +305,9 @@ export async function getKrFearGreed(): Promise<
         valueLabel: c.valueLabel,
         score: scored.length ? Math.round(scored[scored.length - 1].value * 10) / 10 : null,
         rating: scored.length ? ratingEn(scored[scored.length - 1].value) : null,
-        history: (p?.history ?? raw).slice(-400),
-        ...(p ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-400) } } : {}),
+        // 세부차트 표시 구간: 미국(CNN) 컴포넌트 차트와 동일하게 최근 180 거래일
+        history: (p?.history ?? raw).slice(-180),
+        ...(p ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-180) } } : {}),
       };
     }),
     source: "한국 공포·탐욕 지수",
