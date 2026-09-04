@@ -733,6 +733,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       refLabel: "패리티 0.70",
       refColor: "oklch(0.78 0.08 250)",
       tickStep: 0.1,
+      domainSnap: 0.1,
     },
     // ── 한국 F&G ── (모멘텀은 overlay 방식: KOSPI + 125일선)
     kr_putcall: {
@@ -743,6 +744,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       refLabel: "패리티 0.70",
       refColor: "oklch(0.78 0.08 250)",
       tickStep: 0.1,
+      domainSnap: 0.1,
     },
     kr_strength: {
       threshold: 0,
@@ -1142,7 +1144,11 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
                               ? undefined
                               : [0, 25, 50, 75, 100]
                     }
-                    tickFormatter={yAxis || divAxis ? (v: number) => v.toFixed(2) : fmtVal}
+                    tickFormatter={
+                      yAxis || divAxis
+                        ? (v: number) => String(Math.round(v * 100) / 100)
+                        : fmtVal
+                    }
                     allowDecimals
                   />
                   {showNorm && (
