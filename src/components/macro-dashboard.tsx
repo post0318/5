@@ -658,6 +658,8 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
     safe_haven_demand: 5, // 5%p 단위
     put_call_options: 0.1,
     kr_putcall: 0.1,
+    market_volatility_vix: 5,
+    kr_vkospi: 5,
   };
   // 세부지표별 Y축 고정 범위·눈금 (원시값 스케일이 커서 auto 여백이 과한 경우)
   const fixedAxisByKey: Record<string, { domain: [number, number]; step: number }> = {
@@ -729,17 +731,6 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
       refLabel: "기준선 0",
       refColor: "oklch(0.78 0.08 250)",
     },
-    market_volatility_vix: {
-      // FRED VIXCLS(1990~) 장기 평균 — 매일 갱신되어 값이 조금씩 변함
-      threshold: fg.vixHistoricalAvg ?? 19.43,
-      aboveIsBad: true,
-      aboveLabel: "▲ 역사적 평균 상회 · 변동성 확대",
-      belowLabel: "▼ 역사적 평균 하회 · 안정",
-      refLabel: `역사적 평균 ${(fg.vixHistoricalAvg ?? 19.43).toFixed(2)}`,
-      refColor: "oklch(0.78 0.08 250)",
-      tickStep: 5, // 라벨은 5 단위
-      domainSnap: 5,
-    },
     put_call_options: {
       threshold: 0.7,
       aboveIsBad: true,
@@ -751,16 +742,6 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
       domainSnap: 0.1,
     },
     // ── 한국 F&G ── (모멘텀은 overlay 방식: KOSPI + 125일선)
-    kr_vkospi: {
-      threshold: fg.vkospiAvg ?? 20,
-      aboveIsBad: true,
-      aboveLabel: "▲ 평균 상회 · 변동성 확대 (공포)",
-      belowLabel: "▼ 평균 하회 · 안정 (탐욕)",
-      refLabel: `장기 평균 ${(fg.vkospiAvg ?? 20).toFixed(1)}`,
-      refColor: "oklch(0.78 0.08 250)",
-      tickStep: 5,
-      domainSnap: 5,
-    },
     kr_putcall: {
       threshold: 0.7,
       aboveIsBad: true,
@@ -779,17 +760,6 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
       refLabel: "기준선 0",
       refColor: "oklch(0.78 0.08 250)",
     },
-    kr_credit: {
-      // 장기 평균이 표시 구간과 크게 떨어져 있어 도메인 계산에서 제외
-      // (domainDataOnly) — 표시 구간의 고점/저점 기준 자동 패딩.
-      // 스프레드 변동폭이 계속 바뀌므로 고정 스텝 대신 자동 눈금 사용
-      // (고정 스텝을 쓰면 범위가 넓어졌을 때 눈금이 수십~수백 개로
-      // 폭발해 축이 깨짐 — 실제로 한 번 발생했던 버그).
-      // 장기 평균 기준선/라벨은 표시하지 않음.
-      threshold: fg.creditAvg ?? 6,
-      aboveIsBad: true,
-      domainDataOnly: true,
-    },
     kr_safehaven: {
       threshold: 0,
       aboveIsBad: false,
@@ -803,6 +773,8 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
       threshold: 1000,
       aboveIsBad: false,
       domainDataOnly: true,
+      tickStep: 50,
+      domainSnap: 50,
     },
   };
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
@@ -825,6 +797,10 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
   const MA_KEYS = new Set(["stock_price_breadth"]);
   const showMa = selected ? MA_KEYS.has(selected.key) : false;
   const overlay = selected?.overlay ?? null;
+  // 변동성류: 본선(지표 자체)을 이동평균 대비 위=적색/아래=녹색으로 칠하고,
+  // 이동평균은 점선 기준선으로만 표시 (모멘텀류는 반대: 지수가 색칠 대상)
+  const VOL_OVERLAY_KEYS = new Set(["market_volatility_vix", "kr_vkospi"]);
+  const volOverlay = selected ? VOL_OVERLAY_KEYS.has(selected.key) : false;
   const divergingData = useMemo(() => {
     type Row = { date: string; value: number } & Record<string, unknown>;
     let data: Row[] = chartData as Row[];
@@ -857,6 +833,10 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
           ...d,
           ovAbove: above && d.overlayValue != null ? d.overlayValue : null,
           ovBelow: below && d.overlayValue != null ? d.overlayValue : null,
+          // 본선(value) 자체를 overlay 대비 위/아래로 분리 (변동성처럼 지표 자체를
+          // 색칠하고 이동평균은 점선 기준선으로만 쓰고 싶을 때)
+          valAbove: above ? d.value : null,
+          valBelow: below ? d.value : null,
         };
       });
     }
@@ -1075,11 +1055,20 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
                     <span className="text-down">아래=적색</span>
                   </span>
                 )}
-                {overlay && (
+                {overlay && volOverlay && (
+                  <span className="ml-2">
+                    · 점선 = {overlay.label} · 본선 위=<span className="text-down">적색(공포)</span> /{" "}
+                    아래=<span className="text-up">녹색(안정)</span>
+                  </span>
+                )}
+                {overlay && !volOverlay && !divCfg && !showMa && (
                   <span className="ml-2">
                     · {overlay.label} 실선 (<span className="text-up">평균 위=녹색</span> /{" "}
-                    <span className="text-down">아래=적색</span>) · 점선 = 125일 이동평균
+                    <span className="text-down">아래=적색</span>) · 점선 = {selected?.valueLabel ?? "값"}
                   </span>
+                )}
+                {overlay && !volOverlay && divCfg && (
+                  <span className="ml-2">· 점선 = {overlay.label} (참고용)</span>
                 )}
               </div>
             )}
@@ -1272,12 +1261,54 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
                           strokeWidth={1.25}
                           strokeDasharray="4 3"
                           fill="none"
-                          connectNulls={false}
+                          connectNulls
                           dot={false}
                           activeDot={{ r: 3, strokeWidth: 0 }}
                           isAnimationActive={false}
                         />
                       )}
+                    </>
+                  ) : volOverlay && overlay ? (
+                    <>
+                      {/* 본선(지표 자체): 50일선 위=적색(공포)/아래=녹색(안정) */}
+                      <Area
+                        type="monotone"
+                        dataKey="valAbove"
+                        name={selected?.valueLabel ?? "값"}
+                        stroke="oklch(0.58 0.21 27)"
+                        strokeWidth={1.6}
+                        fill="none"
+                        connectNulls
+                        dot={false}
+                        activeDot={{ r: 3, strokeWidth: 0 }}
+                        isAnimationActive={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="valBelow"
+                        name={selected?.valueLabel ?? "값"}
+                        stroke="oklch(0.62 0.17 150)"
+                        strokeWidth={1.6}
+                        fill="none"
+                        connectNulls
+                        dot={false}
+                        activeDot={{ r: 3, strokeWidth: 0 }}
+                        isAnimationActive={false}
+                      />
+                      {/* 50일 이동평균: 점선 기준선 */}
+                      <Area
+                        type="monotone"
+                        dataKey="overlayValue"
+                        name={overlay.label}
+                        stroke="var(--muted-foreground)"
+                        strokeWidth={1.25}
+                        strokeDasharray="4 3"
+                        fill="none"
+                        connectNulls
+                        dot={false}
+                        activeDot={{ r: 3, strokeWidth: 0 }}
+                        isAnimationActive={false}
+                      />
                     </>
                   ) : overlay ? (
                     <>

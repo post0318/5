@@ -108,6 +108,18 @@ export async function getFearGreed(): Promise<FearGreed | null> {
     (data ?? [])
       .slice(-180)
       .map((d) => ({ date: new Date(d.x).toISOString().slice(0, 10), value: round2(d.y) }));
+  /** 단순이동평균(SMA). i < p-1 이거나 창에 결측 있으면 null */
+  const smaSeries = (arr: (number | null)[], p: number): (number | null)[] =>
+    arr.map((_, i) => {
+      if (i < p - 1) return null;
+      let s = 0;
+      for (let k = i - p + 1; k <= i; k++) {
+        const v = arr[k];
+        if (v == null) return null;
+        s += v;
+      }
+      return s / p;
+    });
 
   const components = COMPONENT_LABELS.map(({ key, label, valueLabel }) => {
     const c = raw[key] as
@@ -119,6 +131,20 @@ export async function getFearGreed(): Promise<FearGreed | null> {
     if (key === "market_momentum_sp125") {
       const sp = raw["market_momentum_sp500"] as { data?: { x: number; y: number }[] } | undefined;
       if (sp?.data?.length) overlay = { label: "S&P 500", history: toSeries(sp.data) };
+    }
+    // 변동성(VIX): 역사적 평균 고정선 대신 자체 50일 이동평균을 점선으로 표시
+    // (전체 구간으로 계산 후 표시 구간만 잘라 워밍업 공백 없앰 — CNN 방법론과 동일 기준)
+    if (key === "market_volatility_vix" && c?.data?.length) {
+      const pts = c.data.map((d) => ({ date: new Date(d.x).toISOString().slice(0, 10), close: d.y }));
+      const ma50 = smaSeries(
+        pts.map((p) => p.close),
+        50,
+      );
+      const maRows = pts
+        .map((p, i) => (ma50[i] != null ? { date: p.date, value: round2(ma50[i] as number) } : null))
+        .filter((r): r is { date: string; value: number } => r != null)
+        .slice(-180);
+      if (maRows.length) overlay = { label: "50일 이동평균", history: maRows };
     }
 
     return {
