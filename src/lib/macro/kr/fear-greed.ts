@@ -14,40 +14,54 @@ type Comp = {
   key: string;
   label: string;
   valueLabel: string;
-  raw: (d: KrFgDailyDoc, i: number, all: KrFgDailyDoc[]) => number | null;
-  /** raw 가 높을수록 탐욕이면 true */
+  /** 전체 히스토리 → 컴포넌트 원시 시계열 (null = 해당일 산출 불가) */
+  series: (all: KrFgDailyDoc[]) => (number | null)[];
+  /** 원시값이 높을수록 탐욕이면 true */
   higherIsGreedy: boolean;
 };
 
-const sma = (arr: (number | null)[], i: number, p: number): number | null => {
-  if (i < p - 1) return null;
-  let s = 0;
-  for (let k = i - p + 1; k <= i; k++) {
-    const v = arr[k];
-    if (v == null) return null;
-    s += v;
-  }
-  return s / p;
-};
+/** 이동평균(단순). i < p-1 이거나 창에 null 있으면 null */
+function smaSeries(arr: (number | null)[], p: number): (number | null)[] {
+  return arr.map((_, i) => {
+    if (i < p - 1) return null;
+    let s = 0;
+    for (let k = i - p + 1; k <= i; k++) {
+      const v = arr[k];
+      if (v == null) return null;
+      s += v;
+    }
+    return s / p;
+  });
+}
 
-const ret = (arr: (number | null)[], i: number, p: number): number | null => {
-  if (i < p) return null;
-  const a = arr[i];
-  const b = arr[i - p];
-  return a != null && b != null && b !== 0 ? (a - b) / b : null;
-};
+/** 지수이동평균 (alpha 지정). null 은 이전값 유지, 시드 전엔 null */
+function emaSeries(arr: (number | null)[], alpha: number): (number | null)[] {
+  const out: (number | null)[] = [];
+  let prev: number | null = null;
+  for (const v of arr) {
+    if (v == null) {
+      out.push(prev);
+      continue;
+    }
+    prev = prev == null ? v : alpha * v + (1 - alpha) * prev;
+    out.push(prev);
+  }
+  return out;
+}
 
 const COMPONENTS: Comp[] = [
   {
     key: "kr_momentum",
     label: "시장 모멘텀 (KOSPI vs 125일선)",
-    valueLabel: "KOSPI − 125일 이동평균 (%)",
+    valueLabel: "KOSPI − 125일 이동평균 이격도 (%)",
     higherIsGreedy: true,
-    raw: (_d, i, all) => {
+    series: (all) => {
       const closes = all.map((x) => x.kospiClose);
-      const m = sma(closes, i, 125);
-      const c = closes[i];
-      return m != null && c != null ? ((c - m) / m) * 100 : null;
+      const ma = smaSeries(closes, 125);
+      return closes.map((c, i) => {
+        const m = ma[i];
+        return c != null && m != null ? ((c - m) / m) * 100 : null;
+      });
     },
   },
   {
@@ -55,60 +69,100 @@ const COMPONENTS: Comp[] = [
     label: "주가 강도 (52주 신고가/신저가)",
     valueLabel: "(신고가 − 신저가) / 대상종목 (%)",
     higherIsGreedy: true,
-    raw: (d) =>
-      d.newHigh52 != null && d.newLow52 != null && d.totalWithHistory
-        ? ((d.newHigh52 - d.newLow52) / d.totalWithHistory) * 100
-        : null,
+    series: (all) =>
+      all.map((d) =>
+        d.newHigh52 != null && d.newLow52 != null && d.totalWithHistory
+          ? ((d.newHigh52 - d.newLow52) / d.totalWithHistory) * 100
+          : null,
+      ),
   },
   {
     key: "kr_breadth",
-    label: "주가 폭 (등락 거래량)",
-    valueLabel: "(상승 − 하락) 거래량 비율 (%)",
+    label: "주가 폭 (McClellan Volume Summation Index)",
+    valueLabel: "AV−DV의 McClellan 오실레이터 누적 (CNN과 동일 산식)",
     higherIsGreedy: true,
-    raw: (d) => {
-      const u = d.upVolume ?? 0;
-      const dn = d.downVolume ?? 0;
-      return u + dn > 0 ? ((u - dn) / (u + dn)) * 100 : null;
+    series: (all) => {
+      // (AV−DV)/(AV+DV) ×1000 — 규모 정규화된 순거래량 (RANV: 시장 규모 변동에 견고)
+      const rn = all.map((d) => {
+        const u = d.upVolume ?? null;
+        const dn = d.downVolume ?? null;
+        return u != null && dn != null && u + dn > 0 ? ((u - dn) / (u + dn)) * 1000 : null;
+      });
+      const t10 = emaSeries(rn, 0.1); // ≈ EMA19
+      const t5 = emaSeries(rn, 0.05); // ≈ EMA39
+      const osc = rn.map((_, i) =>
+        t10[i] != null && t5[i] != null ? (t10[i] as number) - (t5[i] as number) : null,
+      );
+      // Summation Index = 오실레이터 누적합
+      let sum = 0;
+      let started = false;
+      return osc.map((o) => {
+        if (o == null) return started ? sum : null;
+        sum += o;
+        started = true;
+        return sum;
+      });
     },
   },
   {
     key: "kr_vkospi",
-    label: "변동성 (VKOSPI)",
-    valueLabel: "코스피200 변동성지수",
+    label: "변동성 (KOSPI 실현변동성, 50일선 대비)",
+    valueLabel: "20일 실현변동성(연율) ÷ 50일 이동평균 — CNN VIX/MA50 산식 대응",
     higherIsGreedy: false,
-    raw: (d) => d.vkospi,
+    series: (all) => {
+      // VKOSPI 히스토리는 KRX API가 최근분만 제공 → KOSPI 종가로 실현변동성 산출.
+      const closes = all.map((x) => x.kospiClose);
+      const rets = closes.map((c, i) => {
+        const p = closes[i - 1];
+        return c != null && p != null && p !== 0 ? Math.log(c / p) : null;
+      });
+      const rv: (number | null)[] = closes.map((_, i) => {
+        if (i < 20) return null;
+        const w = rets.slice(i - 19, i + 1);
+        if (w.some((x) => x == null)) return null;
+        const m = (w as number[]).reduce((a, b) => a + b, 0) / 20;
+        const varc = (w as number[]).reduce((a, b) => a + (b - m) ** 2, 0) / 20;
+        return Math.sqrt(varc) * Math.sqrt(252) * 100;
+      });
+      const ma = smaSeries(rv, 50);
+      return rv.map((x, i) => (x != null && ma[i] ? x / (ma[i] as number) : null));
+    },
   },
   {
     key: "kr_safehaven",
     label: "안전자산 선호 (주식 − 채권 20일)",
     valueLabel: "KOSPI 20일 − 국채 20일 수익률차 (%p)",
     higherIsGreedy: true,
-    raw: (_d, i, all) => {
+    series: (all) => {
       const closes = all.map((x) => x.kospiClose);
       const g10 = all.map((x) => x.gov10y);
-      const stk = ret(closes, i, 20);
-      if (stk == null) return null;
-      // 채권 총수익 근사: −Δ수익률 × 듀레이션(≈8)
-      const y = g10[i];
-      const y0 = g10[i - 20];
-      if (y == null || y0 == null) return null;
-      const bond = -(y - y0) * 8;
-      return stk * 100 - bond;
+      return all.map((_d, i) => {
+        if (i < 20) return null;
+        const a = closes[i];
+        const b = closes[i - 20];
+        const y = g10[i];
+        const y0 = g10[i - 20];
+        if (a == null || b == null || b === 0 || y == null || y0 == null) return null;
+        const stk = ((a - b) / b) * 100;
+        const bond = -(y - y0) * 8; // 채권 총수익 근사: −Δ수익률 × 듀레이션(≈8)
+        return stk - bond;
+      });
     },
   },
   {
     key: "kr_credit",
-    label: "신용 스프레드 (BBB− − AA− 회사채)",
-    valueLabel: "BBB− − AA− 회사채 3년 (%p) — CNN 정크·우량 비교와 동일",
+    label: "정크본드 수요 (BBB− − AA− 회사채)",
+    valueLabel: "BBB− − AA− 회사채 3년 스프레드 (%p) — 확대 = 공포",
     higherIsGreedy: false,
-    raw: (d) => (d.corpBBB != null && d.corpAA != null ? d.corpBBB - d.corpAA : null),
+    series: (all) =>
+      all.map((d) => (d.corpBBB != null && d.corpAA != null ? d.corpBBB - d.corpAA : null)),
   },
   {
     key: "kr_putcall",
     label: "풋/콜 옵션",
-    valueLabel: "코스피200 옵션 풋/콜 거래량비",
+    valueLabel: "코스피200 옵션 풋/콜 거래량비 — 높을수록 공포",
     higherIsGreedy: false,
-    raw: (d) => d.putCall,
+    series: (all) => all.map((d) => d.putCall),
   },
 ];
 
@@ -149,9 +203,10 @@ export async function getKrFearGreed(): Promise<
   if (all.length < 5) return null;
 
   const compScored = COMPONENTS.map((c) => {
+    const s = c.series(all);
     const raw: Row[] = [];
     all.forEach((d, i) => {
-      const v = c.raw(d, i, all);
+      const v = s[i];
       if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: Math.round(v * 1000) / 1000 });
     });
     const scored = normalize(raw, !c.higherIsGreedy);

@@ -169,37 +169,56 @@ function thinDoc(): Partial<KrFgDailyDoc> {
   };
 }
 
-/**
- * 최근 N 거래일 백필. 롤링 창을 올바른 순서로 쌓기 위해 **오래된 날짜 → 최신** 순으로 처리.
- * 이미 저장된 날짜는 건너뛴다.
- */
-export async function backfillKrFg(days: number): Promise<{ done: number; skipped: number; failed: number }> {
-  const col = await krFgDailyCol();
-  const existing = new Set((await col.find({}, { projection: { _id: 1 } }).toArray()).map((d) => d._id));
+/** 롤링창 초기화 (200일 백필 전 순서 꼬임 방지) */
+export async function resetKrStockRoll(): Promise<{ deleted: number }> {
+  const col = await krStockRollCol();
+  const r = await col.deleteMany({});
+  return { deleted: r.deletedCount };
+}
 
-  // days 거래일 전부터 어제까지의 영업일 목록 (오름차순)
+/**
+ * 날짜 범위(YYYY-MM-DD, 포함)를 **오름차순**으로 처리. skipExisting=true 면
+ * 이미 있는 날짜는 건너뜀(일상 백필), false 면 덮어씀(전체 재구축).
+ */
+export async function backfillRange(
+  fromIso: string,
+  toIso: string,
+  skipExisting = true,
+): Promise<{ done: number; skipped: number; failed: number; lastDate: string | null }> {
+  const col = await krFgDailyCol();
+  const existing = skipExisting
+    ? new Set(
+        (
+          await col
+            .find({ _id: { $gte: fromIso, $lte: toIso } }, { projection: { _id: 1 } })
+            .toArray()
+        ).map((d) => d._id),
+      )
+    : new Set<string>();
+
   const dates: string[] = [];
-  const d = new Date();
-  d.setDate(d.getDate() - 1); // 어제까지
+  const d = new Date(`${fromIso}T00:00:00Z`);
+  const end = new Date(`${toIso}T00:00:00Z`);
   let guard = 0;
-  while (dates.length < days && guard++ < days * 2 + 20) {
-    const dow = d.getDay();
+  while (d <= end && guard++ < 1000) {
+    const dow = d.getUTCDay();
     if (dow !== 0 && dow !== 6) dates.push(d.toISOString().slice(0, 10));
-    d.setDate(d.getDate() - 1);
+    d.setUTCDate(d.getUTCDate() + 1);
   }
-  dates.reverse();
 
   let done = 0;
   let skipped = 0;
   let failed = 0;
+  let lastDate: string | null = null;
   for (const iso of dates) {
     if (existing.has(iso)) {
       skipped++;
       continue;
     }
     const r = await runKrFgBatch(iso.replace(/-/g, ""));
+    lastDate = iso;
     if (r.ok) done++;
     else failed++;
   }
-  return { done, skipped, failed };
+  return { done, skipped, failed, lastDate };
 }

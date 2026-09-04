@@ -1,6 +1,11 @@
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
-import { backfillKrFg, bootstrapKospiHistory, runKrFgBatch } from "@/lib/macro/kr/batch";
+import {
+  backfillRange,
+  bootstrapKospiHistory,
+  resetKrStockRoll,
+  runKrFgBatch,
+} from "@/lib/macro/kr/batch";
 
 export const maxDuration = 300;
 
@@ -22,13 +27,16 @@ export async function GET(req: Request) {
 
     const sp = new URL(req.url).searchParams;
     if (sp.get("bootstrap") === "kospi") {
-      const r = await bootstrapKospiHistory();
-      return ok({ mode: "bootstrap-kospi", ...r });
+      return ok({ mode: "bootstrap-kospi", ...(await bootstrapKospiHistory()) });
     }
-    const backfill = Number(sp.get("backfill"));
-    if (backfill > 0) {
-      const r = await backfillKrFg(Math.min(backfill, 300));
-      return ok({ mode: "backfill", ...r });
+    if (sp.get("reset") === "roll") {
+      return ok({ mode: "reset-roll", ...(await resetKrStockRoll()) });
+    }
+    const from = sp.get("from");
+    const to = sp.get("to");
+    if (from && to) {
+      const force = sp.get("force") === "1";
+      return ok({ mode: "backfill-range", ...(await backfillRange(from, to, !force)) });
     }
 
     // 직전 영업일
