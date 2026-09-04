@@ -556,6 +556,14 @@ const SHORT_COMPONENT: Record<string, string> = {
   market_volatility_vix: "변동성",
   safe_haven_demand: "안전자산",
   junk_bond_demand: "정크본드",
+  // 한국 F&G
+  kr_momentum: "모멘텀",
+  kr_strength: "주가강도",
+  kr_breadth: "주가폭",
+  kr_vkospi: "변동성",
+  kr_safehaven: "안전자산",
+  kr_credit: "정크본드",
+  kr_putcall: "풋/콜",
 };
 
 /** 원본 값이 오를 때 F&G 점수(탐욕)도 오르는가? (false면 역방향) */
@@ -567,6 +575,14 @@ const HIGHER_RAW_IS_GREEDY: Record<string, boolean> = {
   market_volatility_vix: false, // VIX 높음 = 공포
   safe_haven_demand: true, // 주식 > 채권 = 위험선호
   junk_bond_demand: false, // 스프레드 확대 = 공포
+  // 한국 F&G
+  kr_momentum: true,
+  kr_strength: true,
+  kr_breadth: true,
+  kr_vkospi: false, // 변동성 높음 = 공포
+  kr_safehaven: true,
+  kr_credit: false, // 스프레드 확대 = 공포
+  kr_putcall: false, // 풋 우위 = 공포
 };
 
 /**
