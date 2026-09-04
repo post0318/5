@@ -306,15 +306,19 @@ export async function getKrFearGreed(): Promise<
     history: history.slice(-180),
     components: compScored.map(({ c, raw, scored }) => {
       const p = c.plot?.(all) ?? null;
+      // 세부차트 표시 구간: 미국(CNN) 컴포넌트 차트와 동일하게 최근 180 거래일.
+      // kr_breadth는 클라이언트에서 MA20을 얹는데, 우리는 과거 데이터를
+      // 다 갖고 있으니 20거래일 더 보내 표시 구간 첫날부터 MA20이 바로
+      // 나오게 함 (워밍업 공백 없음).
+      const win = c.key === "kr_breadth" ? 200 : 180;
       return {
         key: c.key,
         label: c.label,
         valueLabel: c.valueLabel,
         score: scored.length ? Math.round(scored[scored.length - 1].value * 10) / 10 : null,
         rating: scored.length ? ratingEn(scored[scored.length - 1].value) : null,
-        // 세부차트 표시 구간: 미국(CNN) 컴포넌트 차트와 동일하게 최근 180 거래일
-        history: (p?.history ?? raw).slice(-180),
-        ...(p ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-180) } } : {}),
+        history: (p?.history ?? raw).slice(-win),
+        ...(p ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-win) } } : {}),
       };
     }),
     source: "K-공포탐욕지수",

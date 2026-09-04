@@ -55,6 +55,16 @@ export async function GET(req: Request) {
       if (!from || !to) return Response.json({ error: "from/to 필요" }, { status: 400 });
       return ok({ mode: "extend-breadth", ...(await extendBreadthHistory(from, to)) });
     }
+    if (sp.get("debug") === "strength") {
+      const { krFgDailyCol } = await import("@/lib/db/kr-fg");
+      const col = await krFgDailyCol();
+      const docs = await col
+        .find({}, { projection: { newHigh52: 1, newLow52: 1, totalWithHistory: 1, advancers: 1, decliners: 1 } })
+        .sort({ _id: -1 })
+        .limit(15)
+        .toArray();
+      return ok({ mode: "debug-strength", rows: docs.reverse() });
+    }
     if (sp.get("reset") === "roll") {
       return ok({ mode: "reset-roll", ...(await resetKrStockRoll()) });
     }
