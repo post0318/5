@@ -105,6 +105,7 @@ interface Dashboard {
   summary: { positive: number; negative: number; neutral: number };
   indices: IndexQuote[];
   fearGreed: FearGreed | null;
+  krFearGreed: (FearGreed & { ready?: boolean; componentsReady?: number }) | null;
 }
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -247,6 +248,21 @@ export function MacroDashboard() {
       {q.data && (
         <>
           {q.data.fearGreed && <FearGreedCard fg={q.data.fearGreed} />}
+
+          {q.data.krFearGreed && (
+            <div className="space-y-1">
+              <div className="flex items-baseline gap-2">
+                <h2 className="text-sm font-semibold">한국 공포·탐욕 지수</h2>
+                <span className="text-muted-foreground text-xs">
+                  KRX·한국은행 자체 산출
+                  {q.data.krFearGreed.componentsReady != null &&
+                    ` · ${q.data.krFearGreed.componentsReady}/7 지표`}
+                  {q.data.krFearGreed.ready === false && " · 히스토리 축적 중"}
+                </span>
+              </div>
+              <FearGreedCard fg={q.data.krFearGreed} />
+            </div>
+          )}
 
           <Card>
             <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2 py-4 text-sm">
@@ -892,7 +908,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
             rel="noreferrer"
             className="hover:text-primary inline-flex items-center gap-1 underline-offset-2 hover:underline"
           >
-            CNN Fear &amp; Greed
+            {fg.source}
             <ExternalLink className="size-3" />
           </a>
           <span className="text-muted-foreground font-normal"> — 시장 심리·위험</span>

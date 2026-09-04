@@ -1,0 +1,44 @@
+import { jsonError, ok } from "@/lib/api";
+import { isDbConfigured } from "@/lib/db";
+import { backfillKrFg, bootstrapKospiHistory, runKrFgBatch } from "@/lib/macro/kr/batch";
+
+export const maxDuration = 300;
+
+/**
+ * 한국 F&G 일일 배치. Vercel Cron 이 호출 (매 영업일 장 마감 후).
+ *  - 기본: 직전 영업일 1일치 수집
+ *  - ?backfill=N : 최근 N 거래일 백필 (초기 히스토리 구축용, 수동 호출)
+ */
+function authorized(req: Request): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return true; // 미설정 시 열어둠 (개발)
+  return req.headers.get("authorization") === `Bearer ${secret}`;
+}
+
+export async function GET(req: Request) {
+  try {
+    if (!authorized(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
+    if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
+
+    const sp = new URL(req.url).searchParams;
+    if (sp.get("bootstrap") === "kospi") {
+      const r = await bootstrapKospiHistory();
+      return ok({ mode: "bootstrap-kospi", ...r });
+    }
+    const backfill = Number(sp.get("backfill"));
+    if (backfill > 0) {
+      const r = await backfillKrFg(Math.min(backfill, 300));
+      return ok({ mode: "backfill", ...r });
+    }
+
+    // 직전 영업일
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+    const ymd = d.toISOString().slice(0, 10).replace(/-/g, "");
+    const res = await runKrFgBatch(ymd);
+    return ok({ mode: "daily", ...res });
+  } catch (err) {
+    return jsonError(err);
+  }
+}
