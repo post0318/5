@@ -769,12 +769,11 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       refColor: "oklch(0.78 0.08 250)",
     },
     kr_credit: {
-      // 평시 적정 6.00~7.00%p · 경계/위축 7.50~8.00%p · 신용경색 위험선 8.50%p↑
-      threshold: 7.5,
+      threshold: fg.creditAvg ?? 2,
       aboveIsBad: true,
-      aboveLabel: "▲ 경계·위축권(7.50%p↑) · 850bp↑ 신용경색",
-      belowLabel: "▼ 평시 적정권(6.00~7.00%p)",
-      refLabel: "경계 진입 7.50%p",
+      aboveLabel: "▲ 스프레드 확대 · 신용 경계 (공포)",
+      belowLabel: "▼ 스프레드 축소 · 위험선호 (탐욕)",
+      refLabel: `장기 평균 ${(fg.creditAvg ?? 2).toFixed(2)}`,
       refColor: "oklch(0.78 0.08 250)",
       tickStep: 0.2,
       domainSnap: 0.2,
