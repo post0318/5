@@ -70,23 +70,34 @@ const COMPONENTS: Comp[] = [
     label: "시장 모멘텀 (KOSPI vs 125일선)",
     valueLabel: "KOSPI 125일 이동평균",
     higherIsGreedy: true,
+    // 125일선은 "거래일(kospiClose 존재)"만 추려 계산한다. 연말 휴장일 등
+    // 중간 결측이 smaSeries 특성상 이후 125거래일 MA 를 통째로 null 로
+    // 만들어 6개월씩 데이터가 사라지는 문제 방지 (휴장일은 거래일이 아님).
     series: (all) => {
-      const closes = all.map((x) => x.kospiClose);
-      const ma = smaSeries(closes, 125);
-      return closes.map((c, i) => {
-        const m = ma[i];
-        return c != null && m != null ? ((c - m) / m) * 100 : null;
+      const pts = all
+        .map((d, i) => ({ i, c: d.kospiClose }))
+        .filter((p): p is { i: number; c: number } => p.c != null);
+      const ma = smaSeries(
+        pts.map((p) => p.c),
+        125,
+      );
+      const out: (number | null)[] = new Array(all.length).fill(null);
+      pts.forEach((p, k) => {
+        const m = ma[k];
+        if (m != null) out[p.i] = ((p.c - m) / m) * 100;
       });
+      return out;
     },
     plot: (all) => {
-      const closes = all.map((x) => x.kospiClose);
+      const rows = all.filter((d) => d.kospiClose != null);
+      const closes = rows.map((d) => d.kospiClose as number);
       const ma = smaSeries(closes, 125);
       const maRows: { date: string; value: number }[] = [];
       const kospiRows: { date: string; value: number }[] = [];
-      all.forEach((d, i) => {
-        if (ma[i] != null && closes[i] != null) {
-          maRows.push({ date: d._id, value: Math.round((ma[i] as number) * 100) / 100 });
-          kospiRows.push({ date: d._id, value: Math.round((closes[i] as number) * 100) / 100 });
+      rows.forEach((d, k) => {
+        if (ma[k] != null) {
+          maRows.push({ date: d._id, value: Math.round((ma[k] as number) * 100) / 100 });
+          kospiRows.push({ date: d._id, value: Math.round(closes[k] * 100) / 100 });
         }
       });
       return maRows.length ? { history: maRows, overlay: { label: "KOSPI", history: kospiRows } } : null;
@@ -181,11 +192,11 @@ const COMPONENTS: Comp[] = [
   },
   {
     key: "kr_credit",
-    label: "정크본드 수요 (BBB− − AA− 회사채)",
-    valueLabel: "BBB− − AA− 회사채 3년 스프레드 (%p) — 확대 = 공포",
+    label: "정크본드 수요 (BBB− 회사채 − 국고채)",
+    valueLabel: "BBB− 회사채 3년 − 국고채 3년 스프레드 (%p) — 확대 = 공포",
     higherIsGreedy: false,
     series: (all) =>
-      all.map((d) => (d.corpBBB != null && d.corpAA != null ? d.corpBBB - d.corpAA : null)),
+      all.map((d) => (d.corpBBB != null && d.gov3y != null ? d.corpBBB - d.gov3y : null)),
   },
 ];
 
@@ -250,7 +261,7 @@ export async function getKrFearGreed(): Promise<
   );
   const creditAvg = mean(
     all
-      .map((d) => (d.corpBBB != null && d.corpAA != null ? d.corpBBB - d.corpAA : null))
+      .map((d) => (d.corpBBB != null && d.gov3y != null ? d.corpBBB - d.gov3y : null))
       .filter((v): v is number => v != null && Number.isFinite(v)),
   );
 

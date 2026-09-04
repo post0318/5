@@ -57,67 +57,6 @@ export async function GET(req: Request) {
     if (sp.get("overview") === "1") {
       return ok({ mode: "overview-refresh", count: (await refreshUniverseOverview()).count });
     }
-    if (sp.get("debug") === "coverage") {
-      const { krFgDailyCol } = await import("@/lib/db/kr-fg");
-      const col = await krFgDailyCol();
-      const docs = await col.find({}, { projection: { kospiClose: 1, vkospi: 1, putCallVal: 1, corpBBB: 1 } }).sort({ _id: 1 }).toArray();
-      const byMonth: Record<string, { docs: number; kospi: number; vkospi: number; putCall: number; credit: number }> = {};
-      for (const d of docs) {
-        const m = String(d._id).slice(0, 7);
-        const b = (byMonth[m] ??= { docs: 0, kospi: 0, vkospi: 0, putCall: 0, credit: 0 });
-        b.docs++;
-        if (d.kospiClose != null) b.kospi++;
-        if (d.vkospi != null) b.vkospi++;
-        if (d.putCallVal != null) b.putCall++;
-        if (d.corpBBB != null) b.credit++;
-      }
-      return ok({
-        mode: "debug-coverage",
-        totalDocs: docs.length,
-        firstId: docs[0]?._id ?? null,
-        lastId: docs.at(-1)?._id ?? null,
-        byMonth,
-      });
-    }
-    if (sp.get("debug") === "momentum") {
-      const { getKrFgHistory } = await import("@/lib/db/kr-fg");
-      const all = await getKrFgHistory();
-      const closes = all.map((x) => x.kospiClose);
-      // null 위치 구간 찾기
-      const nullRuns: string[] = [];
-      let runStart: string | null = null;
-      all.forEach((d, i) => {
-        if (closes[i] == null) {
-          if (!runStart) runStart = String(d._id);
-        } else if (runStart) {
-          nullRuns.push(`${runStart}..${String(all[i - 1]._id)}`);
-          runStart = null;
-        }
-      });
-      if (runStart) nullRuns.push(`${runStart}..(end)`);
-      // 125일 SMA 유효 구간
-      const p = 125;
-      let firstValid: string | null = null;
-      let validCount = 0;
-      for (let i = p - 1; i < closes.length; i++) {
-        let okWin = true;
-        for (let k = i - p + 1; k <= i; k++) if (closes[k] == null) { okWin = false; break; }
-        if (okWin) {
-          validCount++;
-          if (!firstValid) firstValid = String(all[i]._id);
-        }
-      }
-      return ok({
-        mode: "debug-momentum",
-        allLen: all.length,
-        allFirst: String(all[0]?._id),
-        allLast: String(all.at(-1)?._id),
-        closeNonNull: closes.filter((c) => c != null).length,
-        nullRuns,
-        sma125FirstValid: firstValid,
-        sma125ValidDays: validCount,
-      });
-    }
     if (sp.get("deep") === "auto") {
       const md = Number(sp.get("days")) || 120;
       return ok({ mode: "deep-auto", ...(await deepBackfillAuto(md)) });
