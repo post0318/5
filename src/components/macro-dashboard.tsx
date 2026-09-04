@@ -98,6 +98,7 @@ interface FearGreed {
   source: string;
   deepLink: string;
   vixHistoricalAvg?: number | null;
+  vkospiAvg?: number | null;
 }
 interface Dashboard {
   asOf: string;
@@ -105,7 +106,9 @@ interface Dashboard {
   summary: { positive: number; negative: number; neutral: number };
   indices: IndexQuote[];
   fearGreed: FearGreed | null;
-  krFearGreed: (FearGreed & { ready?: boolean; componentsReady?: number }) | null;
+  krFearGreed:
+    | (FearGreed & { ready?: boolean; componentsReady?: number; vkospiAvg?: number | null })
+    | null;
 }
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -736,6 +739,16 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       domainSnap: 0.1,
     },
     // ── 한국 F&G ── (모멘텀은 overlay 방식: KOSPI + 125일선)
+    kr_vkospi: {
+      threshold: fg.vkospiAvg ?? 20,
+      aboveIsBad: true,
+      aboveLabel: "▲ 평균 상회 · 변동성 확대 (공포)",
+      belowLabel: "▼ 평균 하회 · 안정 (탐욕)",
+      refLabel: `장기 평균 ${(fg.vkospiAvg ?? 20).toFixed(1)}`,
+      refColor: "oklch(0.78 0.08 250)",
+      tickStep: 5,
+      domainSnap: 5,
+    },
     kr_putcall: {
       threshold: 0.7,
       aboveIsBad: true,

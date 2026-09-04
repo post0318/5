@@ -153,14 +153,10 @@ const COMPONENTS: Comp[] = [
   },
   {
     key: "kr_vkospi",
-    label: "변동성 (VKOSPI, 50일선 대비)",
-    valueLabel: "VKOSPI ÷ 50일 이동평균 — CNN VIX/MA50 산식과 동일",
+    label: "변동성 (VKOSPI)",
+    valueLabel: "코스피200 변동성지수 (VKOSPI) — 평균 상회 = 공포",
     higherIsGreedy: false,
-    series: (all) => {
-      const v = all.map((x) => x.vkospi);
-      const ma = smaSeries(v, 50);
-      return v.map((x, i) => (x != null && ma[i] ? x / (ma[i] as number) : null));
-    },
+    series: (all) => all.map((x) => x.vkospi),
   },
   {
     key: "kr_safehaven",
@@ -241,10 +237,14 @@ function normalize(
 }
 
 export async function getKrFearGreed(): Promise<
-  (FearGreed & { ready: boolean; componentsReady: number }) | null
+  (FearGreed & { ready: boolean; componentsReady: number; vkospiAvg: number | null }) | null
 > {
   const all = await getKrFgHistory().catch(() => []);
   if (all.length < 5) return null;
+
+  // VKOSPI 장기 평균 (전 구간) — 세부차트 기준선
+  const vkVals = all.map((d) => d.vkospi).filter((v): v is number => v != null && Number.isFinite(v));
+  const vkospiAvg = vkVals.length ? Math.round((vkVals.reduce((a, b) => a + b, 0) / vkVals.length) * 100) / 100 : null;
 
   const compScored = COMPONENTS.map((c) => {
     const s = c.series(all);
@@ -303,5 +303,6 @@ export async function getKrFearGreed(): Promise<
     deepLink: "https://data.krx.co.kr",
     ready: componentsReady >= 5,
     componentsReady,
+    vkospiAvg,
   };
 }
