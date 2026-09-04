@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd \\\"C:/Users/post0/5\\\" && node -e \\\"\\nconst YF = require('yahoo-finance2').default;\\n(async () => {\\n  const from = new Date(); from.setDate(from.getDate() - 420);\\n  const p1 = from.toIS...",
+  "error": "Exit code 1\nperiod1 = 2025-07-11\nERR Call `const yahooFinance = new YahooFinance()` first.  Upgrading from v2?  See https://github.com/gadicc/yahoo-finance2/blob/dev/docs/UPGRADING.md.",
+  "timestamp": "2026-09-04T12:48:07.572Z",
+  "retry_count": 1
+}

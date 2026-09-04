@@ -57,6 +57,28 @@ export async function GET(req: Request) {
     if (sp.get("overview") === "1") {
       return ok({ mode: "overview-refresh", count: (await refreshUniverseOverview()).count });
     }
+    if (sp.get("debug") === "coverage") {
+      const { krFgDailyCol } = await import("@/lib/db/kr-fg");
+      const col = await krFgDailyCol();
+      const docs = await col.find({}, { projection: { kospiClose: 1, vkospi: 1, putCallVal: 1, corpBBB: 1 } }).sort({ _id: 1 }).toArray();
+      const byMonth: Record<string, { docs: number; kospi: number; vkospi: number; putCall: number; credit: number }> = {};
+      for (const d of docs) {
+        const m = String(d._id).slice(0, 7);
+        const b = (byMonth[m] ??= { docs: 0, kospi: 0, vkospi: 0, putCall: 0, credit: 0 });
+        b.docs++;
+        if (d.kospiClose != null) b.kospi++;
+        if (d.vkospi != null) b.vkospi++;
+        if (d.putCallVal != null) b.putCall++;
+        if (d.corpBBB != null) b.credit++;
+      }
+      return ok({
+        mode: "debug-coverage",
+        totalDocs: docs.length,
+        firstId: docs[0]?._id ?? null,
+        lastId: docs.at(-1)?._id ?? null,
+        byMonth,
+      });
+    }
     if (sp.get("deep") === "auto") {
       const md = Number(sp.get("days")) || 120;
       return ok({ mode: "deep-auto", ...(await deepBackfillAuto(md)) });
