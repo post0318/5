@@ -153,6 +153,48 @@ function splitByThreshold<T extends { date: string }>(
   return out;
 }
 
+/**
+ * splitByThreshold 와 동일한 로직이지만 기준선이 고정값이 아니라 날마다 움직이는
+ * 값(예: 50일 이동평균)일 때 사용. 단일 라인을 지점마다 재색칠 + 교차점 정확히 보간
+ * (splitByThreshold 방식 그대로) — overlay-vs-value 비교의 above/below 중복 포함
+ * 방식과 달리 데이터를 두 계열로 나누지 않아 겹침 아티팩트가 없음.
+ */
+function splitByMovingThreshold<T extends { date: string }>(
+  rows: (T & { splitVal: number; refVal: number | null })[],
+  goodWhenAbove: boolean,
+): (T & { divGood: number | null; divBad: number | null })[] {
+  const isGood = (v: number, ref: number) => (goodWhenAbove ? v >= ref : v < ref);
+  const out: (T & { divGood: number | null; divBad: number | null })[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const cur = rows[i];
+    if (i > 0) {
+      const prev = rows[i - 1];
+      if (prev.refVal != null && cur.refVal != null) {
+        const crossed = prev.splitVal >= prev.refVal !== cur.splitVal >= cur.refVal;
+        if (crossed && cur.splitVal !== prev.splitVal) {
+          // 두 직선(값의 변화, 기준선의 변화)의 교차점을 근사 — 기준선도 그 구간에서
+          // 선형 변화한다고 보고 값-기준선 차이가 0 되는 지점을 찾음
+          const prevDiff = prev.splitVal - prev.refVal;
+          const curDiff = cur.splitVal - cur.refVal;
+          const t = prevDiff / (prevDiff - curDiff || 1);
+          const d1 = Date.parse(prev.date);
+          const d2 = Date.parse(cur.date);
+          const midDate = new Date(d1 + (d2 - d1) * Math.min(Math.max(t, 0), 1)).toISOString();
+          const midVal = prev.splitVal + (cur.splitVal - prev.splitVal) * Math.min(Math.max(t, 0), 1);
+          out.push({ ...cur, date: midDate, divGood: midVal, divBad: midVal });
+        }
+      }
+    }
+    if (cur.refVal == null) {
+      out.push({ ...cur, divGood: null, divBad: null });
+      continue;
+    }
+    const g = isGood(cur.splitVal, cur.refVal);
+    out.push({ ...cur, divGood: g ? cur.splitVal : null, divBad: g ? null : cur.splitVal });
+  }
+  return out;
+}
+
 function DirIcon({ dir }: { dir: Direction }) {
   const I = dir === "up" ? ArrowUpRight : dir === "down" ? ArrowDownRight : ArrowRight;
   return <I className="size-3.5" />;
@@ -819,28 +861,32 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
         ...d,
         overlayValue: omap.get(d.date) ?? null,
       }));
-      // 지수(overlayValue) 가 이동평균(value) 위면 녹색, 아래면 적색으로 선 분리
-      // (교차점은 양쪽 시리즈에 포함해 선이 끊기지 않게)
-      data = withOv.map((d, i) => {
-        const rel = (r?: (typeof withOv)[number]) =>
-          r && r.overlayValue != null ? r.overlayValue >= r.value : null;
-        const here = rel(withOv[i]);
-        const prev = rel(withOv[i - 1]);
-        const next = rel(withOv[i + 1]);
-        const above = here === true || prev === true || next === true;
-        const below = here === false || prev === false || next === false;
-        return {
-          ...d,
-          ovAbove: above && d.overlayValue != null ? d.overlayValue : null,
-          ovBelow: below && d.overlayValue != null ? d.overlayValue : null,
-          // 본선(value) 자체를 overlay 대비 위/아래로 분리 (변동성처럼 지표 자체를
-          // 색칠하고 이동평균은 점선 기준선으로만 쓰고 싶을 때).
-          // above/below 는 "overlay 가 value 보다 위/아래"라는 뜻이라 반대로 씀:
-          // value(지표)가 overlay(이동평균) 보다 위 = overlay 가 아래(below) 인 경우
-          valAbove: below ? d.value : null,
-          valBelow: above ? d.value : null,
-        };
-      });
+      if (volOverlay) {
+        // 변동성: breadth 와 동일하게 "단일 라인 지점별 재색칠 + 교차점 보간"
+        // 방식(splitByMovingThreshold). 기준선(50일선)이 날마다 움직인다는 것만 다름.
+        // 위(공포)=적색이므로 goodWhenAbove=false (아래=안정=녹색이 "good")
+        data = splitByMovingThreshold(
+          withOv.map((d) => ({ ...d, splitVal: d.value, refVal: d.overlayValue })),
+          false,
+        );
+      } else {
+        // 지수(overlayValue) 가 이동평균(value) 위면 녹색, 아래면 적색으로 선 분리
+        // (교차점은 양쪽 시리즈에 포함해 선이 끊기지 않게)
+        data = withOv.map((d, i) => {
+          const rel = (r?: (typeof withOv)[number]) =>
+            r && r.overlayValue != null ? r.overlayValue >= r.value : null;
+          const here = rel(withOv[i]);
+          const prev = rel(withOv[i - 1]);
+          const next = rel(withOv[i + 1]);
+          const above = here === true || prev === true || next === true;
+          const below = here === false || prev === false || next === false;
+          return {
+            ...d,
+            ovAbove: above && d.overlayValue != null ? d.overlayValue : null,
+            ovBelow: below && d.overlayValue != null ? d.overlayValue : null,
+          };
+        });
+      }
     }
     if (showNorm) {
       const vals = chartData.map((d) => d.value).filter(Number.isFinite);
@@ -921,7 +967,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
     }
     // 워밍업용으로 더 받은 앞부분(예: kr_breadth MA20용 20일)은 렌더링에서 잘라냄
     return displayLimit && data.length > displayLimit ? data.slice(-displayLimit) : data;
-  }, [divCfg, chartData, showNorm, normInvert, overlay, dropThreshold, normColorByDirection, showMa, displayLimit]);
+  }, [divCfg, chartData, showNorm, normInvert, overlay, dropThreshold, normColorByDirection, showMa, displayLimit, volOverlay]);
 
   // 다이버징 차트 Y축 (도메인 + 눈금). 데이터 + 기준선 포함.
   const divAxis = useMemo(() => {
@@ -1272,27 +1318,30 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
                     </>
                   ) : volOverlay && overlay ? (
                     <>
-                      {/* 본선(지표 자체): 50일선 위=적색(공포)/아래=녹색(안정) */}
+                      {/* 본선(지표 자체) — breadth 와 동일한 단일라인 재색칠 방식.
+                          50일선 위=적색(공포)/아래=녹색(안정), 교차점 정확히 보간 */}
                       <Area
                         type="monotone"
-                        dataKey="valAbove"
+                        dataKey="divGood"
                         name={selected?.valueLabel ?? "값"}
-                        stroke="oklch(0.58 0.21 27)"
+                        tooltipType="none"
+                        stroke="oklch(0.62 0.17 150)"
                         strokeWidth={1.6}
                         fill="none"
-                        connectNulls
+                        connectNulls={false}
                         dot={false}
                         activeDot={{ r: 3, strokeWidth: 0 }}
                         isAnimationActive={false}
                       />
                       <Area
                         type="monotone"
-                        dataKey="valBelow"
+                        dataKey="divBad"
                         name={selected?.valueLabel ?? "값"}
-                        stroke="oklch(0.62 0.17 150)"
+                        tooltipType="none"
+                        stroke="oklch(0.58 0.21 27)"
                         strokeWidth={1.6}
                         fill="none"
-                        connectNulls
+                        connectNulls={false}
                         dot={false}
                         activeDot={{ r: 3, strokeWidth: 0 }}
                         isAnimationActive={false}
