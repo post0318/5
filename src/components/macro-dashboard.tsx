@@ -657,7 +657,6 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
     safe_haven_demand: 5, // 5%p 단위
     put_call_options: 0.1,
     kr_putcall: 0.1,
-    kr_breadth: 50, // 미국처럼 고정범위 대신 우리나라 표시구간 고점/저점 기준 자동 스냅
   };
   // 세부지표별 Y축 고정 범위·눈금 (원시값 스케일이 커서 auto 여백이 과한 경우)
   const fixedAxisByKey: Record<string, { domain: [number, number]; step: number }> = {
@@ -797,6 +796,12 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
       belowLabel: "▼ 채권성과가 주식을 능가",
       refLabel: "기준선 0",
       refColor: "oklch(0.78 0.08 250)",
+    },
+    kr_breadth: {
+      // 1000 = 중립. 위(탐욕)=녹색 / 아래(공포)=적색, 교차 시점 보간
+      threshold: 1000,
+      aboveIsBad: false,
+      domainDataOnly: true,
     },
   };
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
@@ -1256,6 +1261,22 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
                         activeDot={{ r: 3, strokeWidth: 0 }}
                         isAnimationActive={false}
                       />
+                      {/* 보조선(overlay, 예: MVO) — 점선으로 구분 */}
+                      {overlay && (
+                        <Area
+                          type="monotone"
+                          dataKey="overlayValue"
+                          name={overlay.label}
+                          stroke="var(--muted-foreground)"
+                          strokeWidth={1.25}
+                          strokeDasharray="4 3"
+                          fill="none"
+                          connectNulls={false}
+                          dot={false}
+                          activeDot={{ r: 3, strokeWidth: 0 }}
+                          isAnimationActive={false}
+                        />
+                      )}
                     </>
                   ) : overlay ? (
                     <>
