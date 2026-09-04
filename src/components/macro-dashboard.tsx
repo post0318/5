@@ -776,9 +776,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       belowLabel: "▼ 평시 적정권(6.00~7.00%p)",
       refLabel: "경계 진입 7.50%p",
       refColor: "oklch(0.78 0.08 250)",
-      fixedDomain: [5.5, 9.5],
-      tickStep: 0.5,
-      domainSnap: 0.5,
+      tickStep: 0.2,
+      domainSnap: 0.2,
     },
     kr_safehaven: {
       threshold: 0,
