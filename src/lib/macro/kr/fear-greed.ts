@@ -133,6 +133,18 @@ const COMPONENTS: Comp[] = [
     },
   },
   {
+    key: "kr_putcall",
+    label: "풋/콜 옵션 (5일 평균)",
+    valueLabel: "코스피200 옵션 풋/콜 거래대금비 5일 이동평균 — 1 초과 = 공포",
+    higherIsGreedy: false,
+    normWindow: 250, // CNN: 과거 1년(~250영업일)
+    series: (all) => {
+      // CNN 방식: 거래대금 기준(개인 투기 쏠림 완화) + 5일 이동평균으로 노이즈 제거
+      const pc = all.map((d) => d.putCallVal ?? d.putCall);
+      return smaSeries(pc, 5);
+    },
+  },
+  {
     key: "kr_vkospi",
     label: "변동성 (KOSPI 실현변동성, 50일선 대비)",
     valueLabel: "20일 실현변동성(연율) ÷ 50일 이동평균 — CNN VIX/MA50 산식 대응",
@@ -184,18 +196,6 @@ const COMPONENTS: Comp[] = [
     higherIsGreedy: false,
     series: (all) =>
       all.map((d) => (d.corpBBB != null && d.corpAA != null ? d.corpBBB - d.corpAA : null)),
-  },
-  {
-    key: "kr_putcall",
-    label: "풋/콜 옵션 (5일 평균)",
-    valueLabel: "코스피200 옵션 풋/콜 거래대금비 5일 이동평균 — 1 초과 = 공포",
-    higherIsGreedy: false,
-    normWindow: 250, // CNN: 과거 1년(~250영업일)
-    series: (all) => {
-      // CNN 방식: 거래대금 기준(개인 투기 쏠림 완화) + 5일 이동평균으로 노이즈 제거
-      const pc = all.map((d) => d.putCallVal ?? d.putCall);
-      return smaSeries(pc, 5);
-    },
   },
 ];
 
