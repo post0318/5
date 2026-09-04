@@ -1008,7 +1008,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
             </div>
             {selected && (
               <div className="text-muted-foreground text-[11px]">
-                {selected.valueLabel} · 원본 값
+                {selected.valueLabel}
+                {showNorm && " · 원본 값"}
                 {showNorm && (
                   <span className="ml-2">
                     · 점선 = 자체 정규화 0~100 (최근 1년 min-max, CNN 점수와 다름 · 우측축,{" "}
