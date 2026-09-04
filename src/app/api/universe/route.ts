@@ -1,7 +1,8 @@
-import { revalidateTag } from "next/cache";
+import { after } from "next/server";
 import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
 import { listUniverse, upsertUniverseItem } from "@/lib/universe/repo";
+import { refreshOverviewItem } from "@/lib/universe/overview";
 
 export async function GET(request: Request) {
   try {
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const item = await upsertUniverseItem(body);
-    revalidateTag("universe-overview", { expire: 0 });
+    after(() => refreshOverviewItem(item).catch(() => {}));
     return ok({ item }, { status: 201 });
   } catch (err) {
     return jsonError(err);

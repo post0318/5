@@ -1,8 +1,9 @@
-import { revalidateTag } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
 import { bulkUpsert, parseBulk } from "@/lib/universe/repo";
+import { refreshUniverseOverview } from "@/lib/universe/overview";
 
 const schema = z.object({
   text: z.string().min(1).max(100_000),
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
       return ok({ preview: parsed.ok, errors: parsed.errors, inserted: 0 });
     }
     const inserted = await bulkUpsert(parsed.ok);
-    revalidateTag("universe-overview", { expire: 0 });
+    after(() => refreshUniverseOverview().catch(() => {}));
     return ok({ preview: parsed.ok, errors: parsed.errors, inserted });
   } catch (err) {
     return jsonError(err);

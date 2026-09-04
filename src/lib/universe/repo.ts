@@ -64,11 +64,11 @@ export async function upsertUniverseItem(raw: UniverseInput): Promise<UniverseIt
   return toItem(doc);
 }
 
-export async function deleteUniverseItem(id: string): Promise<boolean> {
-  if (!ObjectId.isValid(id)) return false;
+export async function deleteUniverseItem(id: string): Promise<UniverseItem | null> {
+  if (!ObjectId.isValid(id)) return null;
   const col = await universeCol();
-  const res = await col.deleteOne({ _id: new ObjectId(id) });
-  return res.deletedCount > 0;
+  const doc = await col.findOneAndDelete({ _id: new ObjectId(id) });
+  return doc ? toItem(doc) : null;
 }
 
 export const universePatchSchema = z.object({

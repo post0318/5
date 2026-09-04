@@ -11,6 +11,7 @@ import {
   resetKrStockRoll,
   runKrFgBatch,
 } from "@/lib/macro/kr/batch";
+import { refreshUniverseOverview } from "@/lib/universe/overview";
 
 export const maxDuration = 300;
 
@@ -53,6 +54,9 @@ export async function GET(req: Request) {
     if (sp.get("ecos") === "1") {
       return ok({ mode: "ecos-backfill", ...(await backfillEcosRates(sp.get("start") ?? undefined)) });
     }
+    if (sp.get("overview") === "1") {
+      return ok({ mode: "overview-refresh", count: (await refreshUniverseOverview()).count });
+    }
     if (sp.get("deep") === "auto") {
       const md = Number(sp.get("days")) || 120;
       return ok({ mode: "deep-auto", ...(await deepBackfillAuto(md)) });
@@ -73,11 +77,15 @@ export async function GET(req: Request) {
     while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
     const ymd = d.toISOString().slice(0, 10).replace(/-/g, "");
     const res = await runKrFgBatch(ymd);
+    // 유니버스 통합 뷰 사전 계산 (조회는 DB 우선)
+    const overview = await refreshUniverseOverview()
+      .then((r) => r.count)
+      .catch(() => null);
     // 히스토리 딥백필은 토·일에만 한 청크씩 이어받기 (2021~ 자동 구축)
     const dow = new Date().getUTCDay();
     const deep =
       dow === 6 || dow === 0 ? await deepBackfillAuto(90).catch(() => null) : null;
-    return ok({ mode: "daily", ...res, deep });
+    return ok({ mode: "daily", ...res, overview, deep });
   } catch (err) {
     return jsonError(err);
   } finally {

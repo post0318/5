@@ -43,7 +43,10 @@ export function UniverseManager() {
     queryFn: () => apiFetch<{ items: Item[] }>("/api/universe"),
   });
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["universe"] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["universe"] });
+    qc.invalidateQueries({ queryKey: ["universe-overview"] });
+  };
 
   return (
     <div className="space-y-6">

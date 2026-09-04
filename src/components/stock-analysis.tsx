@@ -22,9 +22,19 @@ import { StockPptButton } from "@/components/ppt-export";
 import { FinancialsTable } from "@/components/financials-table";
 import { DeepLinkList } from "@/components/deep-links";
 
-export function StockAnalysis({ market }: { market: MarketId }) {
-  const [symbol, setSymbol] = useState<string | null>(null);
-  const [yahooOverride, setYahooOverride] = useState<string | null>(null);
+export function StockAnalysis({
+  market,
+  initialSymbol = null,
+  initialYahoo = null,
+  initialName = null,
+}: {
+  market: MarketId;
+  initialSymbol?: string | null;
+  initialYahoo?: string | null;
+  initialName?: string | null;
+}) {
+  const [symbol, setSymbol] = useState<string | null>(initialSymbol);
+  const [yahooOverride, setYahooOverride] = useState<string | null>(initialYahoo);
   const [period, setPeriod] = useState<"annual" | "quarter">("annual");
 
   function pick(hit: SymbolHit) {
@@ -87,7 +97,19 @@ export function StockAnalysis({ market }: { market: MarketId }) {
         </p>
       )}
 
-      {symbol && overview.isLoading && <OverviewSkeleton />}
+      {symbol && overview.isLoading && (
+        <>
+          {initialName && (
+            <h1 className="text-xl font-semibold">
+              {initialName}{" "}
+              <span className="text-muted-foreground tnum text-sm font-normal">
+                {symbol}
+              </span>
+            </h1>
+          )}
+          <OverviewSkeleton />
+        </>
+      )}
 
       {symbol && overview.isError && (
         <ErrorBox message={(overview.error as Error).message} />
