@@ -154,7 +154,7 @@ const COMPONENTS: Comp[] = [
   {
     key: "kr_vkospi",
     label: "변동성 (VKOSPI)",
-    valueLabel: "코스피200 변동성지수 (VKOSPI) — 평균 상회 = 공포",
+    valueLabel: "코스피200 변동성지수 (VKOSPI)",
     higherIsGreedy: false,
     series: (all) => all.map((x) => x.vkospi),
   },
