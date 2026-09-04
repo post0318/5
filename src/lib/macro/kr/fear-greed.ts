@@ -90,7 +90,7 @@ const COMPONENTS: Comp[] = [
   {
     key: "kr_strength",
     label: "주가 강도 (52주 신고가/신저가)",
-    valueLabel: "KOSPI 52주 (신고가 − 신저가) / 대상종목 · 5일 평균 (순비율 %)",
+    valueLabel: "52주 (신고가 − 신저가) / 대상종목 · 5일 평균 (순비율 %)",
     higherIsGreedy: true,
     normWindow: 500, // CNN: 과거 2년(~500영업일)
     series: (all) => {
