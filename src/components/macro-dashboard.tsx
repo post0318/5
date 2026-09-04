@@ -253,7 +253,7 @@ export function MacroDashboard() {
         <>
           {q.data.fearGreed && <FearGreedCard fg={q.data.fearGreed} />}
 
-          {q.data.krFearGreed && <FearGreedCard fg={q.data.krFearGreed} />}
+          {q.data.krFearGreed && <FearGreedCard fg={q.data.krFearGreed} showLink={false} />}
 
           <Card>
             <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2 py-4 text-sm">
@@ -618,7 +618,7 @@ function componentScoreDir(key: string, history: { value: number }[]): -1 | 0 | 
   return diff > 0 ? 1 : -1;
 }
 
-function FearGreedCard({ fg }: { fg: FearGreed }) {
+function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: boolean }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const selected = fg.components.find((c) => c.key === selectedKey) ?? null;
 
@@ -978,15 +978,19 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm">
-          <a
-            href={fg.deepLink}
-            target="_blank"
-            rel="noreferrer"
-            className="hover:text-primary inline-flex items-center gap-1 underline-offset-2 hover:underline"
-          >
-            {fg.source}
-            <ExternalLink className="size-3" />
-          </a>
+          {showLink ? (
+            <a
+              href={fg.deepLink}
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-primary inline-flex items-center gap-1 underline-offset-2 hover:underline"
+            >
+              {fg.source}
+              <ExternalLink className="size-3" />
+            </a>
+          ) : (
+            fg.source
+          )}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
