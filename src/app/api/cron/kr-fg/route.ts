@@ -6,6 +6,7 @@ import {
   backfillRange,
   bootstrapKospiHistory,
   deepBackfill,
+  deepBackfillAuto,
   importVkospi,
   resetKrStockRoll,
   runKrFgBatch,
@@ -52,6 +53,10 @@ export async function GET(req: Request) {
     if (sp.get("ecos") === "1") {
       return ok({ mode: "ecos-backfill", ...(await backfillEcosRates(sp.get("start") ?? undefined)) });
     }
+    if (sp.get("deep") === "auto") {
+      const md = Number(sp.get("days")) || 120;
+      return ok({ mode: "deep-auto", ...(await deepBackfillAuto(md)) });
+    }
     const from = sp.get("from");
     const to = sp.get("to");
     if (from && to) {
@@ -68,7 +73,9 @@ export async function GET(req: Request) {
     while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
     const ymd = d.toISOString().slice(0, 10).replace(/-/g, "");
     const res = await runKrFgBatch(ymd);
-    return ok({ mode: "daily", ...res });
+    // 히스토리 미완이면 딥백필 한 청크 이어받기 (2021~ 자동 구축)
+    const deep = await deepBackfillAuto(90).catch(() => null);
+    return ok({ mode: "daily", ...res, deep });
   } catch (err) {
     return jsonError(err);
   } finally {

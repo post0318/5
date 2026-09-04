@@ -46,6 +46,20 @@ export async function krStockRollCol(): Promise<Collection<KrStockRollDoc>> {
   return col;
 }
 
+interface KrMetaDoc {
+  _id: string;
+  value: string;
+}
+export async function getMeta(key: string): Promise<string | null> {
+  const col = (await getDb()).collection<KrMetaDoc>("kr_fg_meta");
+  const d = await col.findOne({ _id: key });
+  return d?.value ?? null;
+}
+export async function setMeta(key: string, value: string): Promise<void> {
+  const col = (await getDb()).collection<KrMetaDoc>("kr_fg_meta");
+  await col.updateOne({ _id: key }, { $set: { value } }, { upsert: true });
+}
+
 export async function getKrFgHistory(limitDays = 260 * 6): Promise<KrFgDailyDoc[]> {
   const col = await krFgDailyCol();
   const docs = await col.find({}).sort({ _id: 1 }).toArray();

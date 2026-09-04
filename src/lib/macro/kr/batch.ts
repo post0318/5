@@ -395,6 +395,46 @@ export async function deepBackfill(
   return { done, failed, firstReadyDate, carriedRoll: roll.size };
 }
 
+const DEEP_START = "2021-01-04";
+
+/**
+ * 커서 기반 자동 딥백필. 매 호출마다 DEEP_START 부터 오늘까지를 maxDays 씩 순차 처리.
+ * 첫 호출 시 롤링창을 초기화하고 처음부터 시작 (순서 보장). "done" 이면 즉시 반환.
+ */
+export async function deepBackfillAuto(
+  maxDays = 120,
+): Promise<{ status: string; from?: string; to?: string; done?: number; failed?: number; cursor: string }> {
+  const { getMeta, setMeta } = await import("@/lib/db/kr-fg");
+  let cursor = await getMeta("deepCursor");
+  const today = new Date().toISOString().slice(0, 10);
+
+  if (cursor === "done") return { status: "done", cursor: "done" };
+  if (!cursor) {
+    await resetKrStockRoll();
+    cursor = DEEP_START;
+    await setMeta("deepCursor", cursor);
+  }
+  if (cursor >= today) {
+    await setMeta("deepCursor", "done");
+    return { status: "completed", cursor: "done" };
+  }
+
+  // cursor 부터 maxDays 영업일 뒤까지
+  const start = cursor;
+  const d = new Date(`${cursor}T00:00:00Z`);
+  let biz = 0;
+  while (biz < maxDays) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) biz++;
+    if (d.toISOString().slice(0, 10) >= today) break;
+  }
+  const end = d.toISOString().slice(0, 10);
+  const r = await deepBackfill(start, end < today ? end : today);
+  const next = end >= today ? "done" : end;
+  await setMeta("deepCursor", next);
+  return { status: "chunk", from: start, to: end, done: r.done, failed: r.failed, cursor: next };
+}
+
 /**
  * 날짜 범위(YYYY-MM-DD, 포함)를 **오름차순**으로 처리. skipExisting=true 면
  * 이미 있는 날짜는 건너뜀(일상 백필), false 면 덮어씀(전체 재구축).
