@@ -214,13 +214,17 @@ function ratingEn(score: number): string {
   return "extreme greed";
 }
 
-/** 시계열을 최근 창 min-max로 0~100 정규화 (invert 옵션) */
+/**
+ * 시계열을 최근 창의 "역사적 범위"로 0~100 정규화 (invert 옵션).
+ * 단순 min-max 는 극단값 1개에 범위가 늘어나 왜곡 → 5~95 백분위로 클립 후 스케일.
+ */
 function normalize(series: Row[], invert: boolean, window = NORM_WINDOW): Row[] {
   const win = series.slice(-window);
-  const vals = win.map((r) => r.value).filter(Number.isFinite);
+  const vals = win.map((r) => r.value).filter(Number.isFinite).sort((a, b) => a - b);
   if (vals.length < 10) return [];
-  const lo = Math.min(...vals);
-  const hi = Math.max(...vals);
+  const pct = (p: number) => vals[Math.min(vals.length - 1, Math.max(0, Math.round((vals.length - 1) * p)))];
+  const lo = pct(0.05);
+  const hi = pct(0.95);
   const range = hi - lo || 1;
   return series.map((r) => {
     let s = ((r.value - lo) / range) * 100;
