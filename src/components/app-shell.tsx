@@ -8,15 +8,15 @@ import { MARKETS, isMarketId } from "@/lib/markets/types";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const SUBNAV = [
-  { seg: "analysis", label: "종목분석", icon: BarChart3 },
   { seg: "universe", label: "유니버스 통합 뷰", icon: LineChart },
+  { seg: "analysis", label: "종목분석", icon: BarChart3 },
 ] as const;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const parts = pathname.split("/").filter(Boolean);
   const market = parts[0] && isMarketId(parts[0]) ? parts[0] : "kr";
-  const sub = parts[1] === "universe" ? "universe" : "analysis";
+  const sub = parts[1] === "analysis" ? "analysis" : "universe";
   const onManage = parts[0] === "manage";
   const onMacro = parts[0] === "macro";
 
@@ -24,7 +24,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-full flex-col">
       <header className="bg-background/80 sticky top-0 z-30 border-b backdrop-blur">
         <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-6 px-4">
-          <Link href="/kr/analysis" className="flex items-center gap-2 font-semibold">
+          <Link href="/kr/universe" className="flex items-center gap-2 font-semibold">
             <span className="bg-primary text-primary-foreground grid size-6 place-items-center rounded text-xs">
               G
             </span>
