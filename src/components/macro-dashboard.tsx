@@ -649,11 +649,11 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
     safe_haven_demand: 5, // 5%p 단위
     put_call_options: 0.1,
     kr_putcall: 0.1,
+    kr_breadth: 50, // 미국처럼 고정범위 대신 우리나라 표시구간 고점/저점 기준 자동 스냅
   };
   // 세부지표별 Y축 고정 범위·눈금 (원시값 스케일이 커서 auto 여백이 과한 경우)
   const fixedAxisByKey: Record<string, { domain: [number, number]; step: number }> = {
     stock_price_breadth: { domain: [800, 1400], step: 200 },
-    kr_breadth: { domain: [800, 1400], step: 200 },
   };
   const fixedAxis = useMemo(() => {
     if (!selected) return null;
