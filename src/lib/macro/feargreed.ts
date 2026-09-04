@@ -132,10 +132,12 @@ export async function getFearGreed(): Promise<FearGreed | null> {
     };
   });
 
+  // CNN 홈페이지는 점수를 정수로 반올림해 표시하고 등급도 그 정수 기준 → 동일하게
+  const scoreInt = Math.round(fg.score);
   return {
-    score: Math.round(fg.score * 10) / 10,
-    rating: fg.rating || ratingOf(fg.score),
-    ratingKo: RATING_KO[fg.rating || ratingOf(fg.score)] ?? fg.rating,
+    score: scoreInt,
+    rating: ratingOf(scoreInt),
+    ratingKo: RATING_KO[ratingOf(scoreInt)] ?? fg.rating,
     asOf: fg.timestamp?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
     prevClose: Math.round(fg.previous_close * 10) / 10,
     prev1w: Math.round(fg.previous_1_week * 10) / 10,

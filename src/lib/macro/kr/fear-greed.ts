@@ -285,15 +285,17 @@ export async function getKrFearGreed(): Promise<
   const at = (daysBack: number) => history[Math.max(0, history.length - 1 - daysBack)]?.value ?? latest.value;
   const componentsReady = compScored.filter((x) => x.scored.length > 0).length;
 
+  // CNN 홈페이지와 동일: 점수 정수 반올림 후 등급 판정
+  const scoreInt = Math.round(latest.value);
   return {
-    score: Math.round(latest.value * 10) / 10,
-    rating: ratingEn(latest.value),
-    ratingKo: ratingKo(latest.value),
+    score: scoreInt,
+    rating: ratingEn(scoreInt),
+    ratingKo: ratingKo(scoreInt),
     asOf: latest.date,
-    prevClose: Math.round(at(1) * 10) / 10,
-    prev1w: Math.round(at(5) * 10) / 10,
-    prev1m: Math.round(at(21) * 10) / 10,
-    prev1y: Math.round(at(252) * 10) / 10,
+    prevClose: Math.round(at(1)),
+    prev1w: Math.round(at(5)),
+    prev1m: Math.round(at(21)),
+    prev1y: Math.round(at(252)),
     history: history.slice(-180),
     components: compScored.map(({ c, raw, scored }) => {
       const p = c.plot?.(all) ?? null;
