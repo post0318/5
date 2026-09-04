@@ -719,6 +719,23 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       tickStep: 5, // 라벨은 5 단위
       domainSnap: 5,
     },
+    // ── 한국 F&G ──
+    kr_momentum: {
+      threshold: 0,
+      aboveIsBad: false,
+      aboveLabel: "▲ 125일선 상회 · 양(+) 모멘텀 (탐욕)",
+      belowLabel: "▼ 125일선 하회 · 음(−) 모멘텀 (공포)",
+      refLabel: "125일선 (0%)",
+      refColor: "oklch(0.78 0.08 250)",
+    },
+    kr_putcall: {
+      threshold: 1,
+      aboveIsBad: true,
+      aboveLabel: "▲ 풋 우위 · 공포",
+      belowLabel: "▼ 콜 우위 · 낙관",
+      refLabel: "기준선 1.00",
+      refColor: "oklch(0.78 0.08 250)",
+    },
   };
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
