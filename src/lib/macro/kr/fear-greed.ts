@@ -90,13 +90,13 @@ const COMPONENTS: Comp[] = [
   {
     key: "kr_strength",
     label: "주가 강도 (52주 신고가/신저가)",
-    valueLabel: "52주 신고가 − 신저가 (순비율) · 원본 값",
+    valueLabel: "KOSPI 52주 신고가 − 신저가 종목수 (순개수) · CNN과 동일",
     higherIsGreedy: true,
     normWindow: 500, // CNN: 과거 2년(~500영업일)
     series: (all) =>
       all.map((d) =>
         d.newHigh52 != null && d.newLow52 != null && d.totalWithHistory
-          ? ((d.newHigh52 - d.newLow52) / d.totalWithHistory) * 100
+          ? d.newHigh52 - d.newLow52
           : null,
       ),
   },

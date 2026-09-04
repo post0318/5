@@ -66,7 +66,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
     for (const s of stocks) {
       if (s.close == null || !s.code) continue;
       const prev = rollMap.get(s.code);
-      if (prev && prev.closes.length >= MIN_HISTORY) {
+      if (s.market === "KOSPI" && prev && prev.closes.length >= MIN_HISTORY) {
         totalWithHistory++;
         const hi = Math.max(...prev.closes);
         const lo = Math.min(...prev.closes);
@@ -267,7 +267,7 @@ export async function deepBackfill(
 
       if (s.close == null || !s.code) continue;
       const w = roll.get(s.code) ?? [];
-      if (w.length >= MIN_HISTORY) {
+      if (s.market === "KOSPI" && w.length >= MIN_HISTORY) {
         totalWithHistory++;
         if (s.close >= Math.max(...w)) newHigh52++;
         else if (s.close <= Math.min(...w)) newLow52++;
