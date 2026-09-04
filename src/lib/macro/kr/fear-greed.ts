@@ -18,6 +18,8 @@ type Comp = {
   series: (all: KrFgDailyDoc[]) => (number | null)[];
   /** 원시값이 높을수록 탐욕이면 true */
   higherIsGreedy: boolean;
+  /** 0~100 환산 시 비교할 과거 거래일 수 (미지정 시 기본 3년) */
+  normWindow?: number;
   /**
    * 차트에 점수 시계열 대신 "기준선(dashed) + 오버레이(실선)"를 그릴 때.
    * CNN 모멘텀 차트(S&P + 125일선)와 동일 표현.
@@ -88,8 +90,9 @@ const COMPONENTS: Comp[] = [
   {
     key: "kr_strength",
     label: "주가 강도 (52주 신고가/신저가)",
-    valueLabel: "(신고가 − 신저가) / 대상종목 (%)",
+    valueLabel: "52주 신고가 − 신저가 (순비율) · 원본 값",
     higherIsGreedy: true,
+    normWindow: 500, // CNN: 과거 2년(~500영업일)
     series: (all) =>
       all.map((d) =>
         d.newHigh52 != null && d.newLow52 != null && d.totalWithHistory
@@ -183,6 +186,7 @@ const COMPONENTS: Comp[] = [
     label: "풋/콜 옵션 (5일 평균)",
     valueLabel: "코스피200 옵션 풋/콜 거래대금비 5일 이동평균 — 1 초과 = 공포",
     higherIsGreedy: false,
+    normWindow: 250, // CNN: 과거 1년(~250영업일)
     series: (all) => {
       // CNN 방식: 거래대금 기준(개인 투기 쏠림 완화) + 5일 이동평균으로 노이즈 제거
       const pc = all.map((d) => d.putCallVal ?? d.putCall);
@@ -207,8 +211,8 @@ function ratingEn(score: number): string {
 }
 
 /** 시계열을 최근 창 min-max로 0~100 정규화 (invert 옵션) */
-function normalize(series: Row[], invert: boolean): Row[] {
-  const win = series.slice(-NORM_WINDOW);
+function normalize(series: Row[], invert: boolean, window = NORM_WINDOW): Row[] {
+  const win = series.slice(-window);
   const vals = win.map((r) => r.value).filter(Number.isFinite);
   if (vals.length < 10) return [];
   const lo = Math.min(...vals);
@@ -234,7 +238,7 @@ export async function getKrFearGreed(): Promise<
       const v = s[i];
       if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: Math.round(v * 1000) / 1000 });
     });
-    const scored = normalize(raw, !c.higherIsGreedy);
+    const scored = normalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW);
     return { c, raw, scored };
   });
 
