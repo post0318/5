@@ -653,6 +653,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
   // 세부지표별 Y축 고정 범위·눈금 (원시값 스케일이 커서 auto 여백이 과한 경우)
   const fixedAxisByKey: Record<string, { domain: [number, number]; step: number }> = {
     stock_price_breadth: { domain: [800, 1400], step: 200 },
+    kr_breadth: { domain: [800, 1400], step: 200 },
   };
   const fixedAxis = useMemo(() => {
     if (!selected) return null;
@@ -806,7 +807,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
   // 정규화선 색: "direction" = 상승 녹/하락 적, 그 외 = 50 기준 위 녹/아래 적
   const normColorByDirection = selected?.key === "junk_bond_demand";
   // 원본 값에 이동평균선(20·60)을 얹는 지표
-  const MA_KEYS = new Set(["stock_price_breadth"]);
+  const MA_KEYS = new Set(["stock_price_breadth", "kr_breadth"]);
   const showMa = selected ? MA_KEYS.has(selected.key) : false;
   const overlay = selected?.overlay ?? null;
   const divergingData = useMemo(() => {
