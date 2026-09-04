@@ -296,6 +296,8 @@ export async function getKrFearGreed(): Promise<
         score: scored.length ? Math.round(scored[scored.length - 1].value * 10) / 10 : null,
         rating: scored.length ? ratingEn(scored[scored.length - 1].value) : null,
         history: (p?.history ?? raw).slice(-180),
+        rawLen: raw.length,
+        rawFirst: raw[0]?.date ?? null,
         ...(p ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-180) } } : {}),
       };
     }),
