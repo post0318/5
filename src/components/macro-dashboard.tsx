@@ -725,7 +725,25 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       tickStep: 5, // 라벨은 5 단위
       domainSnap: 5,
     },
+    put_call_options: {
+      threshold: 0.7,
+      aboveIsBad: true,
+      aboveLabel: "▲ 풋 우위 · 공포",
+      belowLabel: "▼ 콜 우위 · 낙관",
+      refLabel: "패리티 0.70",
+      refColor: "oklch(0.78 0.08 250)",
+      tickStep: 0.1,
+    },
     // ── 한국 F&G ── (모멘텀은 overlay 방식: KOSPI + 125일선)
+    kr_putcall: {
+      threshold: 0.7,
+      aboveIsBad: true,
+      aboveLabel: "▲ 풋 우위 · 공포",
+      belowLabel: "▼ 콜 우위 · 낙관",
+      refLabel: "패리티 0.70",
+      refColor: "oklch(0.78 0.08 250)",
+      tickStep: 0.1,
+    },
     kr_strength: {
       threshold: 0,
       aboveIsBad: false,
@@ -754,7 +772,7 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
   const divCfg = selected ? DIVERGING_CFG[selected.key] : undefined;
 
   // 원본 값 + 정규화(0~100) 점수를 함께 보여주는 지표
-  const NORM_KEYS = new Set(["junk_bond_demand", "put_call_options", "kr_putcall"]);
+  const NORM_KEYS = new Set(["junk_bond_demand"]);
   const showNorm = selected ? NORM_KEYS.has(selected.key) : false;
   const normInvert = selected ? !HIGHER_RAW_IS_GREEDY[selected.key] : false;
   // 정규화 점수가 threshold 이상(직전 대비) 급락한 지점에 빨간 세로 타원 (정크본드)
