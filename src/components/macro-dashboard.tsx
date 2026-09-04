@@ -777,8 +777,8 @@ function FearGreedCard({ fg }: { fg: FearGreed }) {
       threshold: fg.creditAvg ?? 6,
       aboveIsBad: true,
       domainDataOnly: true,
-      domainSnap: 0.05,
-      tickStep: 0.05,
+      domainSnap: 0.02,
+      tickStep: 0.02,
     },
     kr_safehaven: {
       threshold: 0,
