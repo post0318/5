@@ -42,10 +42,18 @@ function num(v: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-async function fetchService(service: string, basDd: string): Promise<KrxRow[]> {
+async function fetchService(
+  service: string,
+  basDd: string,
+  isPast: boolean,
+): Promise<KrxRow[]> {
   const res = await fetch(`${BASE}/${service}?basDd=${basDd}`, {
     headers: { AUTH_KEY: key()! },
     signal: AbortSignal.timeout(15_000),
+    // 과거 영업일 데이터는 불변 → 오래 캐시(Next Data Cache, 인스턴스·배포 간 공유).
+    // 당일치만 1시간. 이게 없으면 종목 조회마다 전체 시장 일별 스냅샷 수십 개를
+    // 매번 새로 내려받아 개요가 10초 넘게 걸림.
+    next: { revalidate: isPast ? 60 * 60 * 24 * 30 : 60 * 60 },
   });
   if (!res.ok) throw new AdapterError(`KRX ${service} 실패 (${res.status})`, { status: res.status });
   const j = (await res.json()) as { OutBlock_1?: KrxRow[] };
@@ -57,17 +65,19 @@ async function getDay(basDd: string): Promise<Map<string, KrxRow>> {
   const cached = dayCache.get(basDd);
   if (cached) return cached;
 
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const isPast = basDd !== today;
+
   const [kospi, kosdaq] = await Promise.all([
-    fetchService("stk_bydd_trd", basDd).catch(() => [] as KrxRow[]),
-    fetchService("ksq_bydd_trd", basDd).catch(() => [] as KrxRow[]),
+    fetchService("stk_bydd_trd", basDd, isPast).catch(() => [] as KrxRow[]),
+    fetchService("ksq_bydd_trd", basDd, isPast).catch(() => [] as KrxRow[]),
   ]);
   const map = new Map<string, KrxRow>();
   for (const r of [...kospi, ...kosdaq]) {
     if (r.ISU_CD) map.set(r.ISU_CD.trim(), r);
   }
   // 휴장일이면 빈 맵 — 캐시하되 오늘 날짜는 캐시하지 않음
-  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  if (basDd !== today) dayCache.set(basDd, map);
+  if (isPast) dayCache.set(basDd, map);
   return map;
 }
 
@@ -97,8 +107,12 @@ export interface KrxQuoteResult {
   market: string | null;
 }
 
-/** 종목의 최근 `days` 영업일 시세 + 상장주식수/시총. */
-export async function fetchKrxEod(code: string, days = 40): Promise<KrxQuoteResult> {
+/**
+ * 종목의 최근 `days` 영업일 시세 + 상장주식수/시총.
+ * 날짜별로 전체 시장 스냅샷을 받아오므로 days 를 키우면 그만큼 무거워진다.
+ * 개요/멀티플은 최근 종가·전일 대비만 필요해 기본값을 작게 둔다(공휴일 여유 포함).
+ */
+export async function fetchKrxEod(code: string, days = 10): Promise<KrxQuoteResult> {
   if (!key()) throw new AdapterError("KRX API 키가 없습니다", { status: 501 });
   const short = code.replace(/[^0-9]/g, "").padStart(6, "0").slice(-6);
   const dates = businessDaysBack(days);
