@@ -455,53 +455,6 @@ function normalize(
   });
 }
 
-/**
- * (검토용, 임시) 점수화 방식 비교. 이번 세션에서 방식을 바꾼 컴포넌트 +
- * 외국인 선물 수급에 대해 3가지(min-max / 백분위 순위 / z-선형)를 모두
- * 같은 750일 창으로 계산해 나란히 반환. 각 컴포넌트의 현재 배포 방식도 표시.
- */
-const COMPARE_KEYS = ["kr_strength", "kr_putcall", "kr_vkospi", "kr_safehaven", "kr_credit", "kr_foreign_fut"];
-export async function debugScoringBeforeAfter(): Promise<
-  Record<
-    string,
-    {
-      current: string;
-      rows: { date: string; minmax: number | null; pctRank: number | null; zLinear: number | null }[];
-    }
-  >
-> {
-  const all = await getKrFgHistory();
-  const W = 750;
-  const out: Record<
-    string,
-    { current: string; rows: { date: string; minmax: number | null; pctRank: number | null; zLinear: number | null }[] }
-  > = {};
-  for (const c of COMPONENTS) {
-    if (!COMPARE_KEYS.includes(c.key)) continue;
-    const s = c.series(all);
-    const raw: Row[] = [];
-    all.forEach((d, i) => {
-      const v = s[i];
-      if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: Math.round(v * 1000) / 1000 });
-    });
-    const inv = !c.higherIsGreedy;
-    const mm = new Map(normalize(raw, inv, W).map((r) => [r.date, r.value]));
-    const pr = new Map(percentileRankNormalize(raw, inv, W).map((r) => [r.date, r.value]));
-    const zl = new Map(zLinearNormalize(raw, inv, W).map((r) => [r.date, r.value]));
-    const dates = [...new Set([...mm.keys(), ...pr.keys(), ...zl.keys()])].sort();
-    out[c.key] = {
-      current: c.fixedRange ? "fixedRange" : (c.scoring ?? "minmax"),
-      rows: dates.map((date) => ({
-        date,
-        minmax: mm.get(date) ?? null,
-        pctRank: pr.get(date) ?? null,
-        zLinear: zl.get(date) ?? null,
-      })),
-    };
-  }
-  return out;
-}
-
 export async function getKrFearGreed(): Promise<
   (FearGreed & { ready: boolean; componentsReady: number; vkospiAvg: number | null; creditAvg: number | null }) | null
 > {
