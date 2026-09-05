@@ -21,7 +21,9 @@ export async function GET(
     // 분기 데이터는 "재무제표" 탭이 별도 엔드포인트로 가져온다.
     let timings: Record<string, number> | undefined;
     const data = await getStockOverview(market, decodeURIComponent(symbol), yahooOverride, {
-      skipQuarterly: true,
+      // 멀티플은 클라이언트가 "재무제표" 탭 데이터(annual)로 직접 계산한다.
+      // OpenDART 전체 재무제표 호출(6~15초)이 개요 지연의 유일한 원인이었음.
+      skipFinancials: true,
       captureTimings: (t) => {
         timings = t;
       },

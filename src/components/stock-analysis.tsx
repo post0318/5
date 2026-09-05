@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import type { MarketId } from "@/lib/markets/types";
 import type { StockOverview } from "@/lib/markets/service";
+import { computeTrailingMultiples } from "@/lib/markets/multiples";
 import type { FinancialStatement, Filing } from "@/lib/markets/types";
 import { Button } from "@/components/ui/button";
 import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
@@ -63,6 +64,18 @@ export function StockAnalysis({
     retry: false,
   });
 
+  // 멀티플용 연간 재무제표 — period 탭과 무관하게 항상 연간. period가 "annual"이면
+  // 위 financials 쿼리와 키가 같아 자동 중복 제거된다.
+  const annualForMultiples = useQuery({
+    queryKey: ["financials", market, symbol, "annual"],
+    queryFn: () =>
+      apiFetch<FinancialStatement>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?period=annual`,
+      ),
+    enabled: Boolean(symbol),
+    retry: false,
+  });
+
   const filings = useQuery({
     queryKey: ["filings", market, symbol],
     queryFn: () =>
@@ -101,6 +114,21 @@ export function StockAnalysis({
   });
 
   const ov = overview.data;
+
+  // 개요 엔드포인트는 속도를 위해 재무제표를 안 받아온다 → 멀티플은 여기서 계산.
+  const multiples = useMemo(() => {
+    if (!ov?.quote || !annualForMultiples.data) return ov?.multiples ?? null;
+    return computeTrailingMultiples({
+      market,
+      symbol: ov.symbol,
+      quote: ov.quote,
+      annual: annualForMultiples.data,
+      quarterly: null,
+      sharesOutstanding: ov.quote.sharesOutstanding ?? null,
+    });
+  }, [ov, annualForMultiples.data, market]);
+  const multiplesFallback =
+    annualForMultiples.isLoading ? "…" : annualForMultiples.isError ? "n/a" : "-";
 
   return (
     <div className="space-y-6">
@@ -204,20 +232,20 @@ export function StockAnalysis({
                   <ChangePercent value={ov.quote?.changePct} />
                 </Stat>
                 <Stat label="PER (최근 연간)">
-                  <Multiple value={ov.multiples?.per} />
+                  <Multiple value={multiples?.per} fallback={multiplesFallback} />
                 </Stat>
                 <Stat label="PBR">
-                  <Multiple value={ov.multiples?.pbr} />
+                  <Multiple value={multiples?.pbr} fallback={multiplesFallback} />
                 </Stat>
                 <Stat label="PSR">
-                  <Multiple value={ov.multiples?.psr} />
+                  <Multiple value={multiples?.psr} fallback={multiplesFallback} />
                 </Stat>
                 <Stat label="EV/EBITDA(근사)">
-                  <Multiple value={ov.multiples?.evEbitda} />
+                  <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} />
                 </Stat>
                 <Stat label="시가총액">
                   <Money
-                    value={ov.multiples?.marketCap}
+                    value={multiples?.marketCap ?? ov.quote?.marketCap}
                     currency={ov.quote?.currency ?? "USD"}
                   />
                 </Stat>

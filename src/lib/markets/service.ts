@@ -58,7 +58,17 @@ export async function getStockOverview(
   market: MarketId,
   rawSymbol: string,
   yahooOverride?: string | null,
-  opts: { skipQuarterly?: boolean; captureTimings?: (t: Record<string, number>) => void } = {},
+  opts: {
+    skipQuarterly?: boolean;
+    /**
+     * 재무제표(연간·분기)를 아예 조회하지 않는다 → multiples = null.
+     * OpenDART 전체 재무제표 호출이 6~15초로 개요 화면의 유일한 병목이라,
+     * 인터랙티브 화면에서는 이걸 건너뛰고 클라이언트가 "재무제표" 탭 데이터로
+     * 멀티플을 직접 계산한다(그 요청은 어차피 병렬로 나가고 있음).
+     */
+    skipFinancials?: boolean;
+    captureTimings?: (t: Record<string, number>) => void;
+  } = {},
 ): Promise<StockOverview> {
   const adapter = getAdapter(market);
   const symbol = adapter.normalizeSymbol(rawSymbol);
@@ -72,17 +82,21 @@ export async function getStockOverview(
     });
   };
 
+  const wantAnnual = !opts.skipFinancials;
+  const wantQuarterly = !opts.skipFinancials && !opts.skipQuarterly;
   const [profile, quote, annual, quarterly, consensus] = await Promise.all([
     safe(timed("profile", withTimeout(adapter.getCompanyProfile(symbol), 10_000, "회사정보")), warnings, "회사정보"),
     safe(timed("quote", withTimeout(getEodQuote(market, symbol, { yahooOverride }), 12_000, "시세")), warnings, "시세"),
-    safe(timed("annual", withTimeout(adapter.getFinancials(symbol, "annual"), 15_000, "연간 재무제표")), warnings, "연간 재무제표"),
-    opts.skipQuarterly
-      ? Promise.resolve(null)
-      : safe(
+    wantAnnual
+      ? safe(timed("annual", withTimeout(adapter.getFinancials(symbol, "annual"), 15_000, "연간 재무제표")), warnings, "연간 재무제표")
+      : Promise.resolve(null),
+    wantQuarterly
+      ? safe(
           timed("quarterly", withTimeout(adapter.getFinancials(symbol, "quarter"), 15_000, "분기 재무제표")),
           warnings,
           "분기 재무제표",
-        ),
+        )
+      : Promise.resolve(null),
     safe(
       timed("consensus", withTimeout(fetchForwardConsensus(market, symbol, yahooOverride), 8_000, "포워드 컨센서스")),
       warnings,
