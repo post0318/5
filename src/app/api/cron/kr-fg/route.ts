@@ -57,6 +57,16 @@ export async function GET(req: Request) {
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
 
     const sp = new URL(req.url).searchParams;
+    if (sp.get("debug") === "futures") {
+      const { fetchFuturesRaw, fetchKospi200Index, fetchKospiIndex } = await import("@/lib/macro/kr/krx");
+      const basDd = sp.get("basDd") ?? new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const [rows, k200, kospi] = await Promise.all([
+        fetchFuturesRaw(basDd).catch((e) => [{ error: String(e) }]),
+        fetchKospi200Index(basDd).catch((e) => String(e)),
+        fetchKospiIndex(basDd).catch((e) => String(e)),
+      ]);
+      return ok({ mode: "debug-futures", basDd, kospi200: k200, kospi, rowCount: rows.length, sample: rows.slice(0, 10) });
+    }
     if (sp.get("bootstrap") === "kospi") {
       return ok({ mode: "bootstrap-kospi", ...(await bootstrapKospiHistory(sp.get("since") ?? undefined)) });
     }

@@ -84,6 +84,21 @@ export async function fetchKospiIndex(basDd: string): Promise<number | null> {
   return v ? n(v.CLSPRC_IDX) : null;
 }
 
+/** 코스피200 지수(현물) 종가 — 베이시스 계산용 */
+export async function fetchKospi200Index(basDd: string): Promise<number | null> {
+  const rows = await krx("idx/kospi_dd_trd", { basDd });
+  const v = rows.find((r) => {
+    const nm = (r.IDX_NM ?? "").trim();
+    return nm === "코스피 200" || nm === "코스피200";
+  });
+  return v ? n(v.CLSPRC_IDX) : null;
+}
+
+/** 임시 진단용 — 선물 일별매매 원본 행 그대로 반환 (필드명 확인용) */
+export async function fetchFuturesRaw(basDd: string): Promise<Record<string, string>[]> {
+  return krx("drv/fut_bydd_trd", { basDd });
+}
+
 /**
  * 코스피200 계열 옵션 풋/콜 비율.
  *  - byVolume: 거래량(계약수) 기준
