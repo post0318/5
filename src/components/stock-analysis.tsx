@@ -131,6 +131,16 @@ export function StockAnalysis({
     annualForMultiples.isLoading ? "…" : annualForMultiples.isError ? "n/a" : "-";
   const ccy = ov?.quote?.currency ?? "USD";
 
+  // 추정 EPS(당해년도) / 추정 PER — yahoo earningsTrend 컨센서스
+  const fwdEps =
+    ov?.consensus?.estimates?.find((e) => e.period.startsWith("당해"))?.epsAvg ??
+    ov?.consensus?.estimates?.[0]?.epsAvg ??
+    null;
+  const fwdPer =
+    ov?.quote?.last != null && fwdEps != null && fwdEps > 0
+      ? ov.quote.last / fwdEps
+      : (ov?.consensus?.forwardPer ?? null);
+
   // 현재가의 52주 범위 내 위치
   const week52Pos = useMemo(() => {
     const hi = ov?.consensus?.fiftyTwoWeekHigh;
@@ -270,6 +280,10 @@ export function StockAnalysis({
                   <Stat label="PER (최근 연간)">
                     <Multiple value={multiples?.per} fallback={multiplesFallback} />
                   </Stat>
+                  <Stat label="추정 PER (당해)">
+                    <Multiple value={fwdPer} />
+                    <div className="text-muted-foreground mt-1 text-xs">현재가 ÷ 추정 EPS · yahoo</div>
+                  </Stat>
                   <Stat label="PBR">
                     <Multiple value={multiples?.pbr} fallback={multiplesFallback} />
                   </Stat>
@@ -278,6 +292,10 @@ export function StockAnalysis({
                   </Stat>
                   <Stat label="EPS (희석)">
                     <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} />
+                  </Stat>
+                  <Stat label="추정 EPS (당해)">
+                    <Money value={fwdEps} currency={ccy} fallback="-" />
+                    <div className="text-muted-foreground mt-1 text-xs">개인용 · yahoo 컨센서스</div>
                   </Stat>
                   <Stat label="BPS">
                     <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} />
@@ -297,9 +315,9 @@ export function StockAnalysis({
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold">참고 지표</h3>
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <Stat label="Forward PER">
+                  <Stat label="Forward PER (yahoo)">
                     <Multiple value={ov.consensus?.forwardPer} />
-                    <div className="text-muted-foreground mt-1 text-xs">개인용 · yahoo</div>
+                    <div className="text-muted-foreground mt-1 text-xs">yahoo 산출(대략 차년도 기준)</div>
                   </Stat>
                   <Stat label="베타">
                     <NumberText value={ov.consensus?.beta} digits={2} />
