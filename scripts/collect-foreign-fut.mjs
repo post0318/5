@@ -72,12 +72,27 @@ function loadEnvLocal() {
 }
 const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
-const DRY_RUN = ARGS.includes("--dry-run");
-const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 40;
+const STATUS = ARGS.includes("--status"); // 조회만 하고 앱 전송 안 함 + 앱 현황 출력
+const DRY_RUN = ARGS.includes("--dry-run") || STATUS;
+const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || (STATUS ? 15 : 40);
 
 const COOKIE = (ENV.KRX_COOKIE || "").trim();
 const IMPORT_URL = (ENV.KR_FG_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/kr-fg").trim();
+const MACRO_URL = (ENV.KR_FG_MACRO_URL || "https://5-topaz-five.vercel.app/api/macro/kr-fg").trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+
+if (STATUS) {
+  // 앱에 반영된 마지막 날짜 조회
+  try {
+    const r = await fetch(MACRO_URL);
+    const j = await r.json();
+    const ff = j?.krFearGreed?.components?.find((c) => c.key === "kr_foreign_fut");
+    const last = ff?.history?.at(-1);
+    console.log(`앱 kr_foreign_fut: 점수 ${ff?.score}, 마지막 반영일 ${last?.date ?? "?"}`);
+  } catch {
+    console.log("앱 현황 조회 실패 (네트워크?)");
+  }
+}
 
 if (!COOKIE) {
   console.error("✗ .env.local 에 KRX_COOKIE 를 설정하세요. (브라우저에서 KRX 로그인 후 쿠키 복사 — 파일 상단 주석 참고)");
@@ -252,6 +267,10 @@ if (series.length === 0) {
 console.log(`\n✔ 파싱 완료: ${series.length}건  (${series[0].date} ~ ${series.at(-1).date})`);
 console.log("  최근 5건:", series.slice(-5));
 
+if (STATUS) {
+  console.log(`\n✔ 쿠키 정상. KRX 최신 거래일: ${series.at(-1).date}`);
+  process.exit(0);
+}
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);
