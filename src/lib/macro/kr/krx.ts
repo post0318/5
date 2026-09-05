@@ -1,4 +1,5 @@
 import "server-only";
+import iconv from "iconv-lite";
 
 /**
  * KRX 정보데이터시스템 OPEN API — 한국판 공포·탐욕 지수용 원자료.
@@ -14,14 +15,15 @@ function authKey(): string {
 }
 
 /**
- * charset 지정 시 원문 바이트를 해당 인코딩으로 디코딩 후 JSON.parse.
- * (KRX OPEN API가 서비스마다 응답 인코딩이 다름 — 대부분 UTF-8 이지만
- * 선물 일별매매(drv/fut_bydd_trd)는 EUC-KR 로 확인됨.)
+ * charset="cp949" 지정 시 원문 바이트를 CP949(확장 EUC-KR)로 디코딩 후
+ * JSON.parse. (KRX OPEN API가 서비스마다 응답 인코딩이 다름 — 대부분
+ * UTF-8 이지만 선물 일별매매(drv/fut_bydd_trd)는 CP949 로 확인됨.
+ * Node TextDecoder가 cp949를 지원 안 해 iconv-lite 사용.)
  */
 async function krx<T = Record<string, string>>(
   path: string,
   params: Record<string, string>,
-  charset?: string,
+  charset?: "cp949",
 ): Promise<T[]> {
   const qs = new URLSearchParams(params).toString();
   const res = await fetch(`${BASE}/${path}?${qs}`, {
@@ -31,9 +33,9 @@ async function krx<T = Record<string, string>>(
   });
   if (!res.ok) throw new Error(`KRX ${path} ${res.status}`);
   let j: { OutBlock_1?: T[] };
-  if (charset) {
-    const buf = await res.arrayBuffer();
-    const text = new TextDecoder(charset).decode(buf);
+  if (charset === "cp949") {
+    const buf = Buffer.from(await res.arrayBuffer());
+    const text = iconv.decode(buf, "cp949");
     j = JSON.parse(text) as { OutBlock_1?: T[] };
   } else {
     j = (await res.json()) as { OutBlock_1?: T[] };
