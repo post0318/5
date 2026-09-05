@@ -36,13 +36,17 @@ import { readFileSync, writeFileSync } from "node:fs";
 // 1차 실행 후 실제 응답 구조를 보고 필요하면 여기만 고치면 된다.
 // null 이면 자동 탐지 시도.
 const MAPPING = {
-  /** 날짜 필드명 (예: "TRD_DD"). null = 자동 탐지 */
-  dateKey: null,
+  /** 날짜 필드명. MDCSTAT13102 wide 응답 = "TRD_DD" */
+  dateKey: "TRD_DD",
   /**
-   * 외국인 순매수 필드명 (wide 포맷: 한 행 = 하루, 투자자별 컬럼).
-   * null = 자동 탐지
+   * 외국인 순매수 필드명. MDCSTAT13102 응답 컬럼:
+   *   A07 = 기관 합계, A08 = 기타법인, A09 = 개인, A12 = 외국인 합계
+   * (2026-09-04 수동 다운로드 xlsx 와 값이 정확히 일치해 확정)
+   * A07+A08+A09+A12 = 0 (zero-sum) 으로 검증.
    */
-  foreignKey: null,
+  foreignKey: "A12",
+  /** zero-sum 검증용 나머지 투자자 컬럼 */
+  wideAllInvestorKeys: ["A07", "A08", "A09", "A12"],
   /**
    * long 포맷(한 행 = 하루×투자자)일 때, 외국인 행을 고르는 이름 조각과
    * 순매수 값 필드명.
@@ -216,10 +220,23 @@ if (isLong) {
     process.exit(1);
   }
   console.log(`\n포맷=wide  dateKey=${dateKey}  foreignKey=${foreignKey}`);
+  let zeroSumFail = 0;
   for (const r of rows) {
     const iso = toIso(r[dateKey]);
     const v = num(r[foreignKey]);
-    if (iso != null && v != null) series.push({ date: iso, value: v });
+    if (iso == null || v == null) continue;
+    // zero-sum 검증 (모든 투자자 컬럼이 있을 때)
+    const allKeys = MAPPING.wideAllInvestorKeys?.filter((k) => k in r) ?? [];
+    if (allKeys.length >= 2) {
+      const s = allKeys.reduce((acc, k) => acc + (num(r[k]) ?? 0), 0);
+      if (Math.abs(s) > 0.5) zeroSumFail++;
+    }
+    series.push({ date: iso, value: v });
+  }
+  if (zeroSumFail > 0) {
+    console.error(`✗ zero-sum 검증 실패 ${zeroSumFail}건 — 컬럼 매핑이 바뀌었을 수 있음. 중단.`);
+    writeFileSync(new URL("./.krx-last-response.json", import.meta.url), text);
+    process.exit(1);
   }
 }
 
