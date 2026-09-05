@@ -26,28 +26,41 @@ const PLACEHOLDER: Record<MarketId, string> = {
 export function SymbolSearch({
   market,
   onSelect,
+  initialLabel = "",
 }: {
   market: MarketId;
   onSelect: (hit: SymbolHit) => void;
+  /** 이미 선택된 종목이 있으면 그 표시 문자열 (검색창 초기값) */
+  initialLabel?: string;
 }) {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialLabel);
+  // 마지막으로 "확정된" 선택의 표시 문자열. 조회를 안 누르고 벗어나면 여기로 되돌림
+  const [committed, setCommitted] = useState(initialLabel);
   const [debounced, setDebounced] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const boxRef = useRef<HTMLDivElement>(null);
+  // 방금 선택했거나 되돌린 직후엔 그 라벨로 재검색하지 않는다 (드롭다운 다시 뜨는 것 방지)
+  const skipSearch = useRef(false);
 
   useEffect(() => {
+    if (skipSearch.current) {
+      skipSearch.current = false;
+      return;
+    }
     const t = setTimeout(() => setDebounced(input.trim()), 250);
     return () => clearTimeout(t);
   }, [input]);
 
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+  /** 확정되지 않은 편집을 마지막 선택 상태로 되돌린다 (없으면 빈칸) */
+  function revert() {
+    if (input !== committed) {
+      skipSearch.current = true;
+      setInput(committed);
     }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
+    setDebounced("");
+    setOpen(false);
+  }
 
   const q = useQuery({
     queryKey: ["symbol-search", market, debounced],
@@ -62,8 +75,17 @@ export function SymbolSearch({
   const hits = q.data?.hits ?? [];
   const [submitting, setSubmitting] = useState(false);
 
+  /** 선택 확정 시 검색창에 남길 표시 문자열 */
+  function pickedLabel(hit: SymbolHit): string {
+    return !hit.name || hit.name === hit.symbol ? hit.symbol : `${hit.name} (${hit.symbol})`;
+  }
+
   function choose(hit: SymbolHit) {
-    setInput("");
+    // 정상 선택 → 무엇을 골랐는지 검색창에 유지 + 확정값으로 기억
+    const label = pickedLabel(hit);
+    skipSearch.current = true;
+    setInput(label);
+    setCommitted(label);
     setDebounced("");
     setOpen(false);
     onSelect(hit);
@@ -80,6 +102,11 @@ export function SymbolSearch({
     const v = input.trim();
     if (!v) return;
 
+    // 0) 현재 확정된 선택 그대로면 아무것도 안 함 (드롭다운만 닫기)
+    if (v === committed.trim()) {
+      setOpen(false);
+      return;
+    }
     // 1) 이미 결과가 있으면 (하이라이트 → 없으면 첫 항목)
     if (hits.length > 0) {
       return choose(hits[active] ?? hits[0]);
@@ -98,9 +125,11 @@ export function SymbolSearch({
         choose(res.hits[0]);
       } else {
         toast.error(`"${v}" 검색 결과가 없습니다. 종목코드를 입력해 보세요.`);
+        revert(); // 오류 → 마지막 선택(없으면 빈칸)으로 복귀
       }
     } catch (err) {
       toast.error((err as Error).message);
+      revert();
     } finally {
       setSubmitting(false);
     }
@@ -116,7 +145,17 @@ export function SymbolSearch({
             setOpen(true);
             setActive(0);
           }}
-          onFocus={() => setOpen(true)}
+          onFocus={(e) => {
+            // 클릭하면 백스페이스 없이 바로 새로 입력할 수 있게 전체 선택
+            e.target.select();
+            setOpen(true);
+          }}
+          onBlur={(e) => {
+            // 드롭다운 항목이나 "조회" 버튼으로 포커스가 넘어가면 그대로 둔다
+            if (boxRef.current?.contains(e.relatedTarget as Node)) return;
+            // 조회 안 누르고 벗어남 → 마지막 선택으로 복귀
+            revert();
+          }}
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {
               e.preventDefault();
@@ -128,14 +167,21 @@ export function SymbolSearch({
               e.preventDefault();
               void submit();
             } else if (e.key === "Escape") {
-              setOpen(false);
+              e.preventDefault();
+              revert();
+              e.currentTarget.blur();
             }
           }}
           placeholder={PLACEHOLDER[market]}
           aria-label="종목 검색"
           autoComplete="off"
         />
-        <Button type="button" onClick={() => void submit()} disabled={submitting}>
+        <Button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => void submit()}
+          disabled={submitting}
+        >
           {submitting ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
           조회
         </Button>
@@ -163,6 +209,7 @@ export function SymbolSearch({
                 i === active ? "bg-accent" : "hover:bg-accent/50",
               )}
               onMouseEnter={() => setActive(i)}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => choose(h)}
             >
               <span className="truncate">{h.name}</span>

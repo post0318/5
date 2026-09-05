@@ -132,7 +132,17 @@ export function StockAnalysis({
 
   return (
     <div className="space-y-6">
-      <SymbolSearch market={market} onSelect={pick} />
+      <SymbolSearch
+        market={market}
+        onSelect={pick}
+        initialLabel={
+          initialSymbol
+            ? initialName
+              ? `${initialName} (${initialSymbol})`
+              : initialSymbol
+            : ""
+        }
+      />
 
       {!symbol && (
         <p className="text-muted-foreground text-sm">
