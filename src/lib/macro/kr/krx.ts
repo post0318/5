@@ -144,19 +144,6 @@ export async function fetchKospi200Futures(
   return { close, spot, basis: close != null && spot != null ? close - spot : null };
 }
 
-/** 임시 진단용 — 종가가 코스피200 지수 근처인 선물 행만 걸러 반환 */
-export async function fetchFuturesRawNear(basDd: string): Promise<Record<string, string>[]> {
-  const [rows, k200] = await Promise.all([
-    krx("drv/fut_bydd_trd", { basDd }, "cp949"),
-    fetchKospi200Index(basDd),
-  ]);
-  if (k200 == null) return [];
-  return rows.filter((r) => {
-    const close = n(r.TDD_CLSPRC);
-    return close != null && Math.abs(close - k200) < k200 * 0.15;
-  });
-}
-
 /**
  * 코스피200 계열 옵션 풋/콜 비율.
  *  - byVolume: 거래량(계약수) 기준
