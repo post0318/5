@@ -8,6 +8,7 @@ import {
   deepBackfill,
   deepBackfillAuto,
   extendBreadthHistory,
+  importForeignFuturesNet,
   importVkospi,
   resetKrStockRoll,
   runKrFgBatch,
@@ -27,13 +28,23 @@ function authorized(req: Request): boolean {
   return req.headers.get("authorization") === `Bearer ${secret}`;
 }
 
-/** VKOSPI 과거치 주입: body = { vkospi: [{date:"YYYY-MM-DD", vkospi:number}] } */
+/**
+ * 수동 데이터 주입.
+ *  body = { vkospi: [{date, vkospi}] } 또는
+ *  body = { foreignFutNet: [{date, value}] } (외국인 KOSPI200 선물 순매수, 계약수)
+ */
 export async function POST(req: Request) {
   try {
     if (!authorized(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
-    const body = (await req.json()) as { vkospi?: { date: string; vkospi: number }[] };
-    if (!Array.isArray(body.vkospi)) return Response.json({ error: "vkospi 배열 필요" }, { status: 400 });
+    const body = (await req.json()) as {
+      vkospi?: { date: string; vkospi: number }[];
+      foreignFutNet?: { date: string; value: number }[];
+    };
+    if (Array.isArray(body.foreignFutNet)) {
+      return ok({ mode: "import-foreign-fut", ...(await importForeignFuturesNet(body.foreignFutNet)) });
+    }
+    if (!Array.isArray(body.vkospi)) return Response.json({ error: "vkospi 또는 foreignFutNet 배열 필요" }, { status: 400 });
     return ok({ mode: "import-vkospi", ...(await importVkospi(body.vkospi)) });
   } catch (err) {
     return jsonError(err);

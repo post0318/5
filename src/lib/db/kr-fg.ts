@@ -26,6 +26,7 @@ export interface KrFgDailyDoc {
   corpBBB: number | null;
   putCall: number | null; // 거래량 기준 (참고)
   putCallVal: number | null; // 거래대금 기준 (점수 산출에 사용)
+  foreignFutNet: number | null; // 외국인 KOSPI200 선물 순매수(계약수, 일별) — 수동 업로드
   updatedAt: string;
 }
 

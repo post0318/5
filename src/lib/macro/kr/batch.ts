@@ -86,6 +86,10 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
     }
     if (ops.length) await rollCol.bulkWrite(ops, { ordered: false });
 
+    const col = await krFgDailyCol();
+    // foreignFutNet 은 이 배치가 안 채우는 필드(별도 수동 업로드) — replaceOne이라
+    // 기존 값을 지우지 않게 미리 읽어서 보존
+    const existing = await col.findOne({ _id: date }, { projection: { foreignFutNet: 1 } });
     const doc: KrFgDailyDoc = {
       _id: date,
       kospiClose,
@@ -104,9 +108,9 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       corpBBB: rates.corpBBB,
       putCall: putCall.byVolume,
       putCallVal: putCall.byValue,
+      foreignFutNet: existing?.foreignFutNet ?? null,
       updatedAt: new Date().toISOString(),
     };
-    const col = await krFgDailyCol();
     await col.replaceOne({ _id: date }, doc, { upsert: true });
 
     return {
@@ -173,7 +177,7 @@ function thinDoc(): Partial<KrFgDailyDoc> {
   return {
     advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
     newHigh52: null, newLow52: null, totalWithHistory: null, vkospi: null,
-    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null,
+    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null, foreignFutNet: null,
   };
 }
 
@@ -203,6 +207,40 @@ function thinDocNoVkospi(): Partial<KrFgDailyDoc> {
     kospiClose: null,
     advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
     newHigh52: null, newLow52: null, totalWithHistory: null,
+    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null, foreignFutNet: null,
+  };
+}
+
+/**
+ * 외국인 KOSPI200 선물 순매수(계약수, 일별) 수동 업로드 — KRX [15007] 화면
+ * "투자자별 거래실적" 에서 사람이 직접 다운로드한 엑셀을 사람이 파싱해 넣음
+ * (KRX 내부 웹 엔드포인트는 인증키 없는 비공식 API라 자동 수집 대상에서 제외).
+ */
+export async function importForeignFuturesNet(
+  rows: { date: string; value: number }[],
+): Promise<{ upserted: number }> {
+  const col = await krFgDailyCol();
+  const ops: AnyBulkWriteOperation<KrFgDailyDoc>[] = rows
+    .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date) && Number.isFinite(r.value))
+    .map((r) => ({
+      updateOne: {
+        filter: { _id: r.date },
+        update: {
+          $set: { foreignFutNet: r.value, updatedAt: new Date().toISOString() },
+          $setOnInsert: thinDocNoForeignFut(),
+        },
+        upsert: true,
+      },
+    }));
+  if (ops.length) await col.bulkWrite(ops, { ordered: false });
+  return { upserted: ops.length };
+}
+
+function thinDocNoForeignFut(): Partial<KrFgDailyDoc> {
+  return {
+    kospiClose: null,
+    advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
+    newHigh52: null, newLow52: null, totalWithHistory: null, vkospi: null,
     gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null,
   };
 }
@@ -251,7 +289,7 @@ function thinDocRates(): Partial<KrFgDailyDoc> {
     kospiClose: null,
     advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
     newHigh52: null, newLow52: null, totalWithHistory: null, vkospi: null,
-    putCall: null, putCallVal: null,
+    putCall: null, putCallVal: null, foreignFutNet: null,
   };
 }
 
@@ -364,6 +402,9 @@ export async function deepBackfill(
 
     if (totalWithHistory > 0 && !firstReadyDate) firstReadyDate = iso;
 
+    // foreignFutNet 은 이 함수가 안 채우는 필드(별도 수동 업로드) — replaceOne이라
+    // 기존 값을 지우지 않게 미리 읽어서 보존
+    const existingFf = await dailyCol.findOne({ _id: iso }, { projection: { foreignFutNet: 1 } });
     const dailyDoc: KrFgDailyDoc = {
         _id: iso,
         kospiClose,
@@ -382,6 +423,7 @@ export async function deepBackfill(
         corpBBB: rateAt(bbb, iso),
         putCall: putCall.byVolume,
         putCallVal: putCall.byValue,
+        foreignFutNet: existingFf?.foreignFutNet ?? null,
         updatedAt: new Date().toISOString(),
     };
     await dailyCol.replaceOne({ _id: iso }, dailyDoc, { upsert: true });
