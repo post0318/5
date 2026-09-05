@@ -22,6 +22,7 @@ import { ChangePercent, Money, Multiple, NumberText, Percent } from "@/component
 import { StockPptButton } from "@/components/ppt-export";
 import { FinancialsTable } from "@/components/financials-table";
 import { DeepLinkList } from "@/components/deep-links";
+import { ConsensusPanel } from "@/components/consensus-panel";
 
 export function StockAnalysis({
   market,
@@ -373,41 +374,11 @@ export function StockAnalysis({
                         </span>
                       </Stat>
                     </div>
-
-                    {ov.consensus.estimates.length > 0 && (
-                      <div className="overflow-x-auto">
-                        <table className="w-full min-w-[420px] text-sm">
-                          <thead>
-                            <tr className="text-muted-foreground border-b text-left">
-                              <th className="py-2 font-medium">기간</th>
-                              <th className="py-2 text-right font-medium">EPS 평균</th>
-                              <th className="py-2 text-right font-medium">EPS 범위</th>
-                              <th className="py-2 text-right font-medium">매출 평균</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {ov.consensus.estimates.map((e) => (
-                              <tr key={e.period} className="border-b">
-                                <td className="py-1.5">{e.period}</td>
-                                <td className="tnum py-1.5 text-right">
-                                  <NumberText value={e.epsAvg} digits={2} />
-                                </td>
-                                <td className="tnum text-muted-foreground py-1.5 text-right text-xs">
-                                  <NumberText value={e.epsLow} digits={2} /> ~{" "}
-                                  <NumberText value={e.epsHigh} digits={2} />
-                                </td>
-                                <td className="tnum py-1.5 text-right">
-                                  <NumberText value={e.revenueAvg} digits={0} />
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
                   </CardContent>
                 </Card>
               )}
+
+              <ConsensusPanel market={market} symbol={ov.symbol} yahoo={yahooOverride} />
 
               <div className="grid gap-6 sm:grid-cols-3">
                 <DeepLinkList

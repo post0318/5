@@ -52,15 +52,159 @@ interface QuoteSummaryResult {
     targetLowPrice?: number;
     numberOfAnalystOpinions?: number;
     recommendationKey?: string;
+    recommendationMean?: number;
     currentRatio?: number;
   };
   earningsTrend?: {
     trend?: {
       period?: string;
       endDate?: string | null;
-      earningsEstimate?: { avg?: number | null; low?: number | null; high?: number | null };
-      revenueEstimate?: { avg?: number | null };
+      earningsEstimate?: {
+        avg?: number | null;
+        low?: number | null;
+        high?: number | null;
+        numberOfAnalysts?: number | null;
+        yearAgoEps?: number | null;
+      };
+      revenueEstimate?: {
+        avg?: number | null;
+        low?: number | null;
+        high?: number | null;
+        numberOfAnalysts?: number | null;
+        yearAgoRevenue?: number | null;
+      };
+      epsTrend?: {
+        current?: number | null;
+        "7daysAgo"?: number | null;
+        "30daysAgo"?: number | null;
+        "60daysAgo"?: number | null;
+        "90daysAgo"?: number | null;
+      };
     }[];
+  };
+  earningsHistory?: {
+    history?: {
+      epsActual?: number | null;
+      epsEstimate?: number | null;
+      epsDifference?: number | null;
+      surprisePercent?: number | null;
+      quarter?: string | Date | null;
+      period?: string | null;
+    }[];
+  };
+}
+
+/** 컨센서스 패널용 상세 추정 데이터 (개인용 · yahoo). */
+export interface YahooEstimates {
+  currency: string;
+  recommendationMean: number | null;
+  targetMeanPrice: number | null;
+  /** 회계연도(및 분기) 추정: period 는 "0y" | "+1y" | "+2y" | "0q" | "+1q" */
+  periods: {
+    period: string;
+    endDate: string | null;
+    epsAvg: number | null;
+    epsLow: number | null;
+    epsHigh: number | null;
+    epsAnalysts: number | null;
+    revenueAvg: number | null;
+    revenueLow: number | null;
+    revenueHigh: number | null;
+    /** EPS 추정치 리비전: 현재 / 7일전 / 30일전 / 60일전 / 90일전 */
+    epsTrend: {
+      current: number | null;
+      d7: number | null;
+      d30: number | null;
+      d60: number | null;
+      d90: number | null;
+    };
+  }[];
+  /** 최근 분기 어닝 서프라이즈 (오래된 것 → 최신) */
+  surprises: {
+    period: string;
+    epsEstimate: number | null;
+    epsActual: number | null;
+    surprisePct: number | null;
+  }[];
+}
+
+export async function fetchYahooEstimates(
+  market: MarketId,
+  symbol: string,
+  yahooOverride?: string | null,
+): Promise<YahooEstimates> {
+  const candidates = candidateSymbols(market, symbol, yahooOverride);
+  let qs: QuoteSummaryResult | null = null;
+  let lastErr: unknown;
+  for (const s of candidates) {
+    try {
+      qs = await yf().quoteSummary(s, {
+        modules: ["earningsTrend", "earningsHistory", "financialData"],
+      });
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!qs) {
+    throw new AdapterError(`Yahoo 추정 조회 실패: ${candidates.join(", ")}`, { cause: lastErr });
+  }
+  const iso = (d: string | Date | null | undefined): string | null => {
+    if (!d) return null;
+    const dt = typeof d === "string" ? new Date(d) : d;
+    return Number.isNaN(dt.getTime()) ? null : dt.toISOString().slice(0, 10);
+  };
+  const n = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+  const trend = qs.earningsTrend?.trend ?? [];
+  const periods = trend
+    .filter((t) => ["0y", "+1y", "+2y", "0q", "+1q"].includes(t.period ?? ""))
+    .map((t) => {
+      const e = t.earningsEstimate ?? {};
+      const r = t.revenueEstimate ?? {};
+      const et = t.epsTrend ?? {};
+      return {
+        period: t.period as string,
+        endDate: iso(t.endDate),
+        epsAvg: n(e.avg),
+        epsLow: n(e.low),
+        epsHigh: n(e.high),
+        epsAnalysts: n(e.numberOfAnalysts),
+        revenueAvg: n(r.avg),
+        revenueLow: n(r.low),
+        revenueHigh: n(r.high),
+        epsTrend: {
+          current: n(et.current),
+          d7: n(et["7daysAgo"]),
+          d30: n(et["30daysAgo"]),
+          d60: n(et["60daysAgo"]),
+          d90: n(et["90daysAgo"]),
+        },
+      };
+    });
+
+  const surprises = (qs.earningsHistory?.history ?? [])
+    .map((h) => ({
+      period: iso(h.quarter) ?? String(h.period ?? ""),
+      epsEstimate: n(h.epsEstimate),
+      epsActual: n(h.epsActual),
+      surprisePct:
+        n(h.surprisePercent) != null
+          ? (n(h.surprisePercent) as number) * 100
+          : n(h.epsEstimate) && n(h.epsActual) != null
+            ? (((n(h.epsActual) as number) - (n(h.epsEstimate) as number)) /
+                Math.abs(n(h.epsEstimate) as number)) *
+              100
+            : null,
+    }))
+    .sort((a, b) => a.period.localeCompare(b.period));
+
+  return {
+    currency: MARKET_CURRENCY[market],
+    recommendationMean: n(qs.financialData?.recommendationMean),
+    targetMeanPrice: n(qs.financialData?.targetMeanPrice),
+    periods,
+    surprises,
   };
 }
 

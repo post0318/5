@@ -108,6 +108,35 @@ export interface KrxQuoteResult {
 }
 
 /**
+ * 특정 일자(YYYYMMDD) 부근의 종가. 그 날이 휴장이면 최대 7일 앞으로 거슬러
+ * 마지막 거래일 종가를 찾는다. 컨센서스 표의 "각 연말 시점 주가" 용도.
+ */
+export async function fetchKrxCloseOn(code: string, dateYmd: string): Promise<number | null> {
+  if (!key()) return null;
+  const short = code.replace(/[^0-9]/g, "").padStart(6, "0").slice(-6);
+  const d = new Date(
+    Number(dateYmd.slice(0, 4)),
+    Number(dateYmd.slice(4, 6)) - 1,
+    Number(dateYmd.slice(6, 8)),
+  );
+  for (let i = 0; i < 7; i++) {
+    const basDd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(
+      d.getDate(),
+    ).padStart(2, "0")}`;
+    try {
+      const day = await getDay(basDd);
+      const r = day.get(short);
+      const c = r ? num(r.TDD_CLSPRC) : null;
+      if (c != null) return c;
+    } catch {
+      // 다음 날짜 시도
+    }
+    d.setDate(d.getDate() - 1);
+  }
+  return null;
+}
+
+/**
  * 종목의 최근 `days` 영업일 시세 + 상장주식수/시총.
  * 날짜별로 전체 시장 스냅샷을 받아오므로 days 를 키우면 그만큼 무거워진다.
  * 개요/멀티플은 최근 종가·전일 대비만 필요해 기본값을 작게 둔다(공휴일 여유 포함).
