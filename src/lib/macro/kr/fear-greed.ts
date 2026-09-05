@@ -73,6 +73,20 @@ function smaSeriesSkipNulls(arr: (number | null)[], p: number): (number | null)[
 }
 
 /**
+ * 베이시스(선물종가−현물) 가중치. 시장베이시스가 마이너스(백워데이션)로
+ * 깊어질수록 프로그램 매도차익거래(선물 매도+현물 매수 청산) 유발 압력이
+ * 커져, 외국인 선물 매매가 패닉 전이 신호로 증폭되는 경향이 있음. 콘탱고
+ * (basis>=0)·결측은 가중 없음(1.0배), 백워데이션이 깊어질수록 선형으로
+ * 1.0→1.5배. 코스피200 선물 베이시스는 평상시 ±1~2p 내외로 움직이므로
+ * -3p를 "깊은 백워데이션"의 캡 기준으로 사용(그 이상은 1.5배로 고정).
+ */
+function futBasisWeight(basis: number | null): number {
+  if (basis == null || basis >= 0) return 1.0;
+  const depth = Math.min(-basis / 3, 1); // 0~1
+  return 1.0 + depth * 0.5; // 1.0~1.5배
+}
+
+/**
  * 이동 합계(rolling sum) — 결측(거래 없는 날 등)은 건너뛰고 값 있는 날짜만으로
  * 누적. smaSeriesSkipNulls 와 동일한 결측-견고 패턴.
  */
@@ -295,7 +309,15 @@ const COMPONENTS: Comp[] = [
     // 20거래일 누적 포지션으로 추세를 본다. 데이터는 KRX [15007] 화면에서
     // 수동 다운로드해 업로드(비공식 내부 API라 자동 수집 대상 아님) — 2020년
     // 이후만 있고, 없는 날짜(주로 최근 미업로드 구간)는 null.
-    series: (all) => rollingSumSkipNulls(all.map((d) => d.foreignFutNet), 20),
+    // 베이시스 결합: 일별 순매수에 그날의 futBasisWeight(백워데이션 심화 시
+    // 1.0~1.5배)를 먼저 곱한 뒤 20일 누적 — 베이시스 붕괴가 겹친 매매일의
+    // 비중을 키워 프로그램 매도발 패닉 전이를 더 민감하게 포착.
+    series: (all) => {
+      const weighted = all.map((d) =>
+        d.foreignFutNet != null ? d.foreignFutNet * futBasisWeight(d.futBasis) : null,
+      );
+      return rollingSumSkipNulls(weighted, 20);
+    },
   },
 ];
 
