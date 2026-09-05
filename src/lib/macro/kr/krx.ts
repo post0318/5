@@ -132,8 +132,13 @@ export async function fetchKospi200Futures(
     return close != null && Math.abs(close - k200) < k200 * 0.15;
   });
   if (!candidates.length) return { close: null, spot: null, basis: null };
+  // 미결제약정은 주간/야간이 같은 계약을 공유해 거의 동일 — 이걸로는 종목(ISU_CD)만
+  // 특정하고, 주간(거래량이 훨씬 큼) 선택은 거래량으로 별도 판단
   candidates.sort((a, b) => (n(b.ACC_OPNINT_QTY) ?? 0) - (n(a.ACC_OPNINT_QTY) ?? 0));
-  const best = candidates[0];
+  const nearCode = candidates[0].ISU_CD;
+  const sameCode = candidates.filter((r) => r.ISU_CD === nearCode);
+  sameCode.sort((a, b) => (n(b.ACC_TRDVOL) ?? 0) - (n(a.ACC_TRDVOL) ?? 0));
+  const best = sameCode[0];
   const close = n(best.TDD_CLSPRC);
   const spot = n(best.SPOT_PRC) ?? k200;
   return { close, spot, basis: close != null && spot != null ? close - spot : null };
