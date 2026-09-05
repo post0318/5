@@ -526,6 +526,8 @@ export async function getKrFearGreed(): Promise<
         key: c.key,
         label: c.label,
         valueLabel: c.valueLabel,
+        scoring: c.fixedRange ? "fixedRange" : (c.scoring ?? "minmax"),
+        normWindow: c.fixedRange ? null : (c.normWindow ?? NORM_WINDOW),
         score: scored.length ? Math.round(scored[scored.length - 1].value * 10) / 10 : null,
         rating: scored.length ? ratingEn(scored[scored.length - 1].value) : null,
         history: (p?.history ?? raw).slice(-win),
