@@ -218,6 +218,7 @@ interface IndexChartResp {
 
 export function MacroDashboard() {
   const [selIdx, setSelIdx] = useState<string | null>(null);
+  const [fgRegion, setFgRegion] = useState<"us" | "kr">("us");
   const q = useQuery({
     queryKey: ["macro"],
     queryFn: () => apiFetch<Dashboard>("/api/macro"),
@@ -293,9 +294,38 @@ export function MacroDashboard() {
 
       {q.data && (
         <>
-          {q.data.fearGreed && <FearGreedCard fg={q.data.fearGreed} />}
-
-          {q.data.krFearGreed && <FearGreedCard fg={q.data.krFearGreed} showLink={false} />}
+          {(q.data.fearGreed || q.data.krFearGreed) && (
+            <section className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold">시장 심리·위험</h2>
+                {q.data.fearGreed && q.data.krFearGreed && (
+                  <div className="ml-1 flex gap-1">
+                    {(["us", "kr"] as const).map((r) => (
+                      <button
+                        key={r}
+                        onClick={() => setFgRegion(r)}
+                        className={cn(
+                          "rounded px-2 py-0.5 text-xs transition-colors",
+                          fgRegion === r
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:bg-muted",
+                        )}
+                      >
+                        {r === "us" ? "미국" : "한국"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {fgRegion === "kr" && q.data.krFearGreed ? (
+                <FearGreedCard fg={q.data.krFearGreed} showLink={false} />
+              ) : q.data.fearGreed ? (
+                <FearGreedCard fg={q.data.fearGreed} />
+              ) : (
+                q.data.krFearGreed && <FearGreedCard fg={q.data.krFearGreed} showLink={false} />
+              )}
+            </section>
+          )}
 
           <Card>
             <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2 py-4 text-sm">
@@ -1020,9 +1050,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
   }, [displayChartData, selected]);
 
   return (
-    <div className="space-y-2">
-      <h2 className="text-muted-foreground text-sm font-medium">시장 심리·위험</h2>
-      <Card>
+    <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm">
           {showLink ? (
@@ -1615,8 +1643,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
           {fg.asOf} · {fg.source} · 세부지표 클릭 시 원본 값 추이 · 낮을수록 공포, 높을수록 탐욕
         </p>
       </CardContent>
-      </Card>
-    </div>
+    </Card>
   );
 }
 
