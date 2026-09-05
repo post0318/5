@@ -19,18 +19,11 @@ export async function GET(
     // 연간이 아예 없을 때만 쓰는 폴백). 분기 조회는 최악의 경우 OpenDART 를
     // 십수 번 순차 호출해 초기 렌더를 크게 지연시키므로 여기선 건너뛴다.
     // 분기 데이터는 "재무제표" 탭이 별도 엔드포인트로 가져온다.
-    let timings: Record<string, number> | undefined;
     const data = await getStockOverview(market, decodeURIComponent(symbol), yahooOverride, {
       // 멀티플은 클라이언트가 "재무제표" 탭 데이터(annual)로 직접 계산한다.
       // OpenDART 전체 재무제표 호출(6~15초)이 개요 지연의 유일한 원인이었음.
       skipFinancials: true,
-      captureTimings: (t) => {
-        timings = t;
-      },
     });
-    if (searchParams.get("debug") === "timing") {
-      return Response.json({ timings, warnings: data.warnings, quoteSource: data.quote?.source });
-    }
     return ok(data, {
       headers: {
         // EOD 대시보드 — 반복 조회는 CDN에서 즉시, 백그라운드 갱신

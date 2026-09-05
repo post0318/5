@@ -67,44 +67,33 @@ export async function getStockOverview(
      * 멀티플을 직접 계산한다(그 요청은 어차피 병렬로 나가고 있음).
      */
     skipFinancials?: boolean;
-    captureTimings?: (t: Record<string, number>) => void;
   } = {},
 ): Promise<StockOverview> {
   const adapter = getAdapter(market);
   const symbol = adapter.normalizeSymbol(rawSymbol);
   const warnings: string[] = [];
-  const t0 = Date.now();
-  const timings: Record<string, number> = {};
-  const timed = <T>(label: string, p: Promise<T>): Promise<T> => {
-    const s = Date.now();
-    return p.finally(() => {
-      timings[label] = Date.now() - s;
-    });
-  };
 
   const wantAnnual = !opts.skipFinancials;
   const wantQuarterly = !opts.skipFinancials && !opts.skipQuarterly;
   const [profile, quote, annual, quarterly, consensus] = await Promise.all([
-    safe(timed("profile", withTimeout(adapter.getCompanyProfile(symbol), 10_000, "회사정보")), warnings, "회사정보"),
-    safe(timed("quote", withTimeout(getEodQuote(market, symbol, { yahooOverride }), 12_000, "시세")), warnings, "시세"),
+    safe(withTimeout(adapter.getCompanyProfile(symbol), 10_000, "회사정보"), warnings, "회사정보"),
+    safe(withTimeout(getEodQuote(market, symbol, { yahooOverride }), 12_000, "시세"), warnings, "시세"),
     wantAnnual
-      ? safe(timed("annual", withTimeout(adapter.getFinancials(symbol, "annual"), 15_000, "연간 재무제표")), warnings, "연간 재무제표")
+      ? safe(withTimeout(adapter.getFinancials(symbol, "annual"), 15_000, "연간 재무제표"), warnings, "연간 재무제표")
       : Promise.resolve(null),
     wantQuarterly
       ? safe(
-          timed("quarterly", withTimeout(adapter.getFinancials(symbol, "quarter"), 15_000, "분기 재무제표")),
+          withTimeout(adapter.getFinancials(symbol, "quarter"), 15_000, "분기 재무제표"),
           warnings,
           "분기 재무제표",
         )
       : Promise.resolve(null),
     safe(
-      timed("consensus", withTimeout(fetchForwardConsensus(market, symbol, yahooOverride), 8_000, "포워드 컨센서스")),
+      withTimeout(fetchForwardConsensus(market, symbol, yahooOverride), 8_000, "포워드 컨센서스"),
       warnings,
       "포워드 컨센서스",
     ),
   ]);
-  timings.total = Date.now() - t0;
-  if (opts.captureTimings) opts.captureTimings(timings);
 
   let multiples: TrailingMultiples | null = null;
   if (quote) {
