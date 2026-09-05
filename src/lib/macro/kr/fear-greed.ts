@@ -242,9 +242,12 @@ const COMPONENTS: Comp[] = [
     label: "풋/콜 옵션",
     valueLabel: "코스피200 옵션 풋/콜 거래대금비 5일 이동평균",
     higherIsGreedy: false,
-    // CNN 기준선(0.7~0.8=공포 진입, 0.5~0.6 이하=탐욕)에 맞춰 고정 환산:
-    // 0.45 → 점수 100(극탐욕), 0.95 → 점수 0(극공포). 우리 역사 스파이크 무관.
-    fixedRange: [0.45, 0.95],
+    // CNN 원자료(CBOE 풋/콜 비율)로 역산 시 750일 창 + 백분위 순위가 CNN
+    // 실제 점수에 거의 정확히 일치(오차 0.1). 이전엔 CNN 기준선을 그대로
+    // 가져온 고정 환산(fixedRange)이었는데 국내 풋/콜 분포와 안 맞아 56%의
+    // 날짜가 0점에 눌러붙는 문제가 있었음.
+    normWindow: 750,
+    scoring: "percentileRank",
     series: (all) => {
       // 거래대금 기준(개인 투기 쏠림 완화) + 5일 이동평균으로 노이즈 제거
       const pc = all.map((d) => d.putCallVal ?? d.putCall);
