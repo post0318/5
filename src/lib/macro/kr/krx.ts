@@ -13,9 +13,15 @@ function authKey(): string {
   return k;
 }
 
+/**
+ * charset 지정 시 원문 바이트를 해당 인코딩으로 디코딩 후 JSON.parse.
+ * (KRX OPEN API가 서비스마다 응답 인코딩이 다름 — 대부분 UTF-8 이지만
+ * 선물 일별매매(drv/fut_bydd_trd)는 EUC-KR 로 확인됨.)
+ */
 async function krx<T = Record<string, string>>(
   path: string,
   params: Record<string, string>,
+  charset?: string,
 ): Promise<T[]> {
   const qs = new URLSearchParams(params).toString();
   const res = await fetch(`${BASE}/${path}?${qs}`, {
@@ -24,7 +30,14 @@ async function krx<T = Record<string, string>>(
     next: { revalidate: 60 * 60 * 12 },
   });
   if (!res.ok) throw new Error(`KRX ${path} ${res.status}`);
-  const j = (await res.json()) as { OutBlock_1?: T[] };
+  let j: { OutBlock_1?: T[] };
+  if (charset) {
+    const buf = await res.arrayBuffer();
+    const text = new TextDecoder(charset).decode(buf);
+    j = JSON.parse(text) as { OutBlock_1?: T[] };
+  } else {
+    j = (await res.json()) as { OutBlock_1?: T[] };
+  }
   return j.OutBlock_1 ?? [];
 }
 
@@ -96,7 +109,7 @@ export async function fetchKospi200Index(basDd: string): Promise<number | null> 
 
 /** 임시 진단용 — 선물 일별매매 원본 행 그대로 반환 (필드명·경로 확인용) */
 export async function fetchFuturesRaw(basDd: string, path: string): Promise<Record<string, string>[]> {
-  return krx(path, { basDd });
+  return krx(path, { basDd }, "euc-kr");
 }
 
 /**
