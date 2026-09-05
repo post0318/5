@@ -306,11 +306,15 @@ export const krOpenDartAdapter: MarketAdapter = {
 
     if (periodType === "annual") {
       for (const fsDiv of ["CFS", "OFS"] as const) {
-        const yearRows: { year: number; rows: FnlttRow[] }[] = [];
-        for (const year of [y - 1, y - 2]) {
-          const rows = await fetchFnlttYear(entry.corpCode, year, "11011", fsDiv);
-          if (rows) yearRows.push({ year, rows });
-        }
+        // 당기/전기 두 해를 병렬 조회 (순차 시 왕복 지연이 2배)
+        const results = await Promise.all(
+          [y - 1, y - 2].map((year) =>
+            fetchFnlttYear(entry.corpCode, year, "11011", fsDiv).then((rows) => ({ year, rows })),
+          ),
+        );
+        const yearRows = results
+          .filter((r): r is { year: number; rows: FnlttRow[] } => r.rows != null)
+          .sort((a, b) => b.year - a.year);
         if (yearRows.length) {
           return rowsToStatement(symbol, "annual", fsDiv, yearRows);
         }
@@ -318,17 +322,30 @@ export const krOpenDartAdapter: MarketAdapter = {
       throw new AdapterError("연간 재무제표를 찾을 수 없습니다", { status: 404 });
     }
 
-    // 분기: 가장 최근 가용 분기 보고서 1건
-    const quarterCodes = ["11014", "11012", "11013", "11011"];
+    // 분기: 가장 최근 가용 분기 보고서 1건. (fsDiv, year) 조합마다 4개 보고서
+    // 코드를 병렬 조회하고 데이터가 있는 것 중 최신 분기를 고른다 (순차 루프는
+    // 연초처럼 대부분 "데이터 없음"일 때 십수 번 왕복해 매우 느림).
+    const quarterRank: Record<string, number> = {
+      "11014": 3, // 3분기
+      "11012": 2, // 반기
+      "11013": 1, // 1분기
+      "11011": 0, // 사업보고서
+    };
+    const quarterCodes = Object.keys(quarterRank);
     for (const fsDiv of ["CFS", "OFS"] as const) {
       for (const year of [y, y - 1]) {
-        for (const code of quarterCodes) {
-          const rows = await fetchFnlttYear(entry.corpCode, year, code, fsDiv);
-          if (rows && rows.length) {
-            const st = rowsToStatement(symbol, "quarter", fsDiv, [{ year, rows }]);
-            st.source += ` · ${year} ${QUARTER_LABEL[code]}`;
-            return st;
-          }
+        const found = await Promise.all(
+          quarterCodes.map((code) =>
+            fetchFnlttYear(entry.corpCode, year, code, fsDiv).then((rows) => ({ code, rows })),
+          ),
+        );
+        const hit = found
+          .filter((f) => f.rows && f.rows.length)
+          .sort((a, b) => quarterRank[b.code] - quarterRank[a.code])[0];
+        if (hit) {
+          const st = rowsToStatement(symbol, "quarter", fsDiv, [{ year, rows: hit.rows! }]);
+          st.source += ` · ${year} ${QUARTER_LABEL[hit.code]}`;
+          return st;
         }
       }
     }

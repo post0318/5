@@ -20,7 +20,11 @@ export async function GET(
       adapter.normalizeSymbol(decodeURIComponent(symbol)),
       period,
     );
-    return ok(statement);
+    return ok(statement, {
+      headers: {
+        "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400",
+      },
+    });
   } catch (err) {
     return jsonError(err);
   }
