@@ -455,6 +455,47 @@ function normalize(
   });
 }
 
+/**
+ * (검토용, 임시) 이번 세션에서 점수화 방식을 바꾼 컴포넌트에 대해
+ * "기존(세션 이전) 방식" vs "현재(배포된) 방식" 점수를 나란히 계산해 비교.
+ */
+const PRE_SESSION_METHOD: Record<string, { window: number; fixedRange?: [number, number] }> = {
+  kr_strength: { window: 500 },
+  kr_putcall: { window: NORM_WINDOW, fixedRange: [0.45, 0.95] },
+  kr_vkospi: { window: NORM_WINDOW },
+  kr_safehaven: { window: NORM_WINDOW },
+  kr_credit: { window: NORM_WINDOW },
+};
+export async function debugScoringBeforeAfter(): Promise<
+  Record<string, { date: string; before: number | null; after: number | null }[]>
+> {
+  const all = await getKrFgHistory();
+  const out: Record<string, { date: string; before: number | null; after: number | null }[]> = {};
+  for (const c of COMPONENTS) {
+    const pre = PRE_SESSION_METHOD[c.key];
+    if (!pre) continue;
+    const s = c.series(all);
+    const raw: Row[] = [];
+    all.forEach((d, i) => {
+      const v = s[i];
+      if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: Math.round(v * 1000) / 1000 });
+    });
+    const win = c.normWindow ?? NORM_WINDOW;
+    const after =
+      c.scoring === "percentileRank"
+        ? percentileRankNormalize(raw, !c.higherIsGreedy, win)
+        : c.scoring === "zLinear"
+          ? zLinearNormalize(raw, !c.higherIsGreedy, win)
+          : normalize(raw, !c.higherIsGreedy, win, c.fixedRange);
+    const before = normalize(raw, !c.higherIsGreedy, pre.window, pre.fixedRange);
+    const bMap = new Map(before.map((r) => [r.date, r.value]));
+    const aMap = new Map(after.map((r) => [r.date, r.value]));
+    const dates = [...new Set([...bMap.keys(), ...aMap.keys()])].sort();
+    out[c.key] = dates.map((date) => ({ date, before: bMap.get(date) ?? null, after: aMap.get(date) ?? null }));
+  }
+  return out;
+}
+
 export async function getKrFearGreed(): Promise<
   (FearGreed & { ready: boolean; componentsReady: number; vkospiAvg: number | null; creditAvg: number | null }) | null
 > {
