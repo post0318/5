@@ -27,13 +27,14 @@ type Comp = {
   fixedRange?: [number, number];
   /**
    * 점수화 공식. 미지정 시 기본 min-max(2~98퍼센타일 구간을 0~100 눈금
-   * 끝점으로 놓고 직선 비례배분). "percentileRank" 는 CNN 원문의 경험적
-   * 백분위 순위(현재값보다 작거나 같은 과거 표본 비율)를 그대로 점수로
-   * 사용 — 분포가 한쪽으로 쏠린 지표(변동성처럼 오른쪽 꼬리가 긴 경우)에서
-   * min-max 방식이 극단 구간에 0/100으로 오래 눌러붙어 미세한 변화가
-   * 안 보이는 문제를 완화.
+   * 끝점으로 놓고 직선 비례배분).
+   *  - "percentileRank": CNN 원문의 경험적 백분위 순위(현재값보다 작거나 같은
+   *    과거 표본 비율)를 그대로 점수로 사용. CNN 원자료로 역산 시 "주가 강도"가
+   *    이 방식에 가장 근접(750일 창).
+   *  - "zLinear": Z점수를 선형 매핑(z=0→50, z=±3σ→0/100, 클램프). CNN 원자료
+   *    역산 시 "변동성"이 min-max·백분위보다 이쪽에 근접.
    */
-  scoring?: "minmax" | "percentileRank";
+  scoring?: "minmax" | "percentileRank" | "zLinear";
   /**
    * 차트에 점수 시계열 대신 "기준선(dashed) + 오버레이(실선)"를 그릴 때.
    * CNN 모멘텀 차트(S&P + 125일선)와 동일 표현.
@@ -196,7 +197,10 @@ const COMPONENTS: Comp[] = [
     label: "주가 강도 (52주 신고가/신저가)",
     valueLabel: "52주 (신고가 − 신저가) / 대상종목 · 5일 평균 (순비율 %)",
     higherIsGreedy: true,
-    normWindow: 500, // CNN: 과거 2년(~500영업일)
+    // CNN 원자료(52주 신고−신저)로 역산해보니 750일 창 + 백분위 순위가 CNN
+    // 실제 점수에 가장 근접(오차 ~3점). min-max 는 15점 이상 벗어남.
+    normWindow: 750,
+    scoring: "percentileRank",
     series: (all) => {
       // 순개수는 일별 스파이크가 커서 CNN처럼 매끄러운 선이 안 됨
       //  → 대상종목 대비 순비율(%) + 5일 이동평균으로 노이즈 제거
@@ -256,11 +260,11 @@ const COMPONENTS: Comp[] = [
     // 스프레드를 역사적 분포로 정규화)과 동일 구조로 계산 — 국면(저변동성기/
     // 고변동성기)에 따라 절대 레벨의 의미가 달라지는 문제를 피함.
     // 차트 표시는 원본 VKOSPI 값 그대로(plot).
-    // 정규화 공식은 CNN 원문대로 경험적 백분위 순위 사용 — 변동성 괴리율
-    // 분포가 한쪽으로 쏠려(오른쪽 꼬리 긴 분포) min-max 방식이면 극단 구간에서
-    // 점수가 100/0에 오래 눌러붙어(예: 12거래일 연속 정확히 100.0) 그 안에서
-    // 더 심해지는지 구분이 안 되는 문제가 있었음.
-    scoring: "percentileRank",
+    // 정규화 공식: Z점수 선형 매핑. CNN 원자료(VIX−50일선)로 역산 시 min-max·
+    // 백분위보다 z-선형이 CNN 실제 점수에 가장 근접. min-max 는 극단 구간에서
+    // 100/0에 오래 눌러붙는 문제도 있었는데, z-선형은 그 안에서도 "평균 대비
+    // 몇 σ"로 계속 움직여 변별력이 유지됨.
+    scoring: "zLinear",
     series: (all) => {
       const vk = all.map((x) => x.vkospi);
       const ma50 = smaSeriesSkipNulls(vk, 50);
@@ -391,6 +395,26 @@ function percentileRankNormalize(series: Row[], invert: boolean, window = NORM_W
   });
 }
 
+/**
+ * Z점수 선형 매핑 — 창의 평균·표준편차로 z=(x−μ)/σ 를 구해 z=0→50점,
+ * z=±3σ→0/100점으로 직선 대응(범위 밖은 클램프). 백분위 순위와 달리 분포를
+ * 균등하게 펴지 않아 "지금이 평균에서 몇 σ 떨어졌나"라는 절대적 이탈 정보가
+ * 유지됨. CNN 원자료 역산에서 변동성 지표가 이 방식에 가장 근접.
+ */
+function zLinearNormalize(series: Row[], invert: boolean, window = NORM_WINDOW): Row[] {
+  const win = series.slice(-window);
+  const vals = win.map((r) => r.value).filter(Number.isFinite);
+  const n = vals.length;
+  if (n < 10) return [];
+  const mean = vals.reduce((a, b) => a + b, 0) / n;
+  const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / n) || 1;
+  return series.map((r) => {
+    const z = (r.value - mean) / sd;
+    const s = Math.max(0, Math.min(100, 50 + z * (50 / 3)));
+    return { date: r.date, value: Math.round((invert ? 100 - s : s) * 10) / 10 };
+  });
+}
+
 function normalize(
   series: Row[],
   invert: boolean,
@@ -419,34 +443,6 @@ function normalize(
   });
 }
 
-/**
- * (검토용, 임시) kr_vkospi 를 제외한 나머지 컴포넌트 전체에 대해
- * 현재 방식(fixedRange 있으면 그대로, 없으면 min-max) vs 백분위 순위(CDF)
- * 두 점수를 나란히 계산해 비교. 실제 채택 전 영향도 파악용.
- */
-export async function debugScoreCompareRest(): Promise<
-  Record<string, { date: string; oldScore: number | null; newScore: number | null }[]>
-> {
-  const all = await getKrFgHistory();
-  const out: Record<string, { date: string; oldScore: number | null; newScore: number | null }[]> = {};
-  for (const c of COMPONENTS) {
-    if (c.key === "kr_vkospi") continue; // 이미 전환 완료
-    const s = c.series(all);
-    const raw: Row[] = [];
-    all.forEach((d, i) => {
-      const v = s[i];
-      if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: v });
-    });
-    const oldScored = normalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW, c.fixedRange);
-    const newScored = percentileRankNormalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW);
-    const oldMap = new Map(oldScored.map((r) => [r.date, r.value]));
-    const newMap = new Map(newScored.map((r) => [r.date, r.value]));
-    const dates = [...new Set([...oldMap.keys(), ...newMap.keys()])].sort();
-    out[c.key] = dates.map((date) => ({ date, oldScore: oldMap.get(date) ?? null, newScore: newMap.get(date) ?? null }));
-  }
-  return out;
-}
-
 export async function getKrFearGreed(): Promise<
   (FearGreed & { ready: boolean; componentsReady: number; vkospiAvg: number | null; creditAvg: number | null }) | null
 > {
@@ -472,10 +468,13 @@ export async function getKrFearGreed(): Promise<
       const v = s[i];
       if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: Math.round(v * 1000) / 1000 });
     });
+    const win = c.normWindow ?? NORM_WINDOW;
     const scored =
       c.scoring === "percentileRank"
-        ? percentileRankNormalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW)
-        : normalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW, c.fixedRange);
+        ? percentileRankNormalize(raw, !c.higherIsGreedy, win)
+        : c.scoring === "zLinear"
+          ? zLinearNormalize(raw, !c.higherIsGreedy, win)
+          : normalize(raw, !c.higherIsGreedy, win, c.fixedRange);
     return { c, raw, scored };
   });
 
