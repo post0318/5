@@ -58,6 +58,16 @@ export async function GET(req: Request) {
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
 
     const sp = new URL(req.url).searchParams;
+    if (sp.get("debug") === "basisraw") {
+      const { fetchKospi200Index, fetchKospi200Futures, fetchFuturesRawNear } = await import("@/lib/macro/kr/krx");
+      const basDd = sp.get("basDd") ?? "20220601";
+      const [k200, result, near] = await Promise.all([
+        fetchKospi200Index(basDd).catch((e) => String(e)),
+        fetchKospi200Futures(basDd).catch((e) => String(e)),
+        fetchFuturesRawNear(basDd).catch((e) => String(e)),
+      ]);
+      return ok({ mode: "debug-basisraw", basDd, kospi200: k200, result, near });
+    }
     if (sp.get("extend") === "basis") {
       const from = sp.get("from");
       const to = sp.get("to");
