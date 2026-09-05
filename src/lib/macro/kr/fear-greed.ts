@@ -340,6 +340,63 @@ function ratingEn(score: number): string {
  * 시계열을 최근 창의 "역사적 범위"로 0~100 정규화 (invert 옵션).
  * 단순 min-max 는 극단값 1개에 범위가 늘어나 왜곡 → 5~95 백분위로 클립 후 스케일.
  */
+/**
+ * (검토용, 임시) CNN 원문의 "경험적 백분위 순위(empirical CDF)" 방식 —
+ * 과거 분포에서 현재값보다 작거나 같은 표본의 비율을 그대로 점수로 사용.
+ * 기존 normalize()는 2~98퍼센타일 값 두 개를 0/100 눈금 끝점으로 놓고
+ * 그 사이를 직선 비례배분하는 min-max 방식이라, 분포가 한쪽으로 쏠려있으면
+ * (변동성처럼 오른쪽 꼬리가 긴 경우) 점수가 0/100 근처에 몰리기 쉬움.
+ * 동일한 3년 창을 쓰되 공식만 바꿔 비교.
+ */
+function percentileRankNormalize(series: Row[], invert: boolean, window = NORM_WINDOW): Row[] {
+  const win = series.slice(-window);
+  const vals = win.map((r) => r.value).filter(Number.isFinite).sort((a, b) => a - b);
+  const n = vals.length;
+  if (n < 10) return [];
+  const rankOf = (v: number) => {
+    let lo = 0;
+    let hi = n;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (vals[m] < v) lo = m + 1;
+      else hi = m;
+    }
+    const lb = lo;
+    lo = 0;
+    hi = n;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (vals[m] <= v) lo = m + 1;
+      else hi = m;
+    }
+    const ub = lo;
+    return ((lb + ub) / 2 / n) * 100; // 동률은 평균 순위
+  };
+  return series.map((r) => {
+    const s = Math.max(0, Math.min(100, rankOf(r.value)));
+    return { date: r.date, value: Math.round((invert ? 100 - s : s) * 10) / 10 };
+  });
+}
+
+/** (검토용, 임시) kr_vkospi 원시 시계열에 old(min-max)/new(백분위 순위) 두 방식을 모두 계산해 비교 */
+export async function debugVkospiScoreCompare(): Promise<{ date: string; oldScore: number | null; newScore: number | null }[]> {
+  const all = await getKrFgHistory();
+  const comp = COMPONENTS.find((c) => c.key === "kr_vkospi");
+  if (!comp) return [];
+  const s = comp.series(all);
+  const raw: Row[] = [];
+  all.forEach((d, i) => {
+    const v = s[i];
+    if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: v });
+  });
+  const oldScored = normalize(raw, !comp.higherIsGreedy, comp.normWindow ?? NORM_WINDOW, comp.fixedRange);
+  const newScored = percentileRankNormalize(raw, !comp.higherIsGreedy, comp.normWindow ?? NORM_WINDOW);
+  const oldMap = new Map(oldScored.map((r) => [r.date, r.value]));
+  const newMap = new Map(newScored.map((r) => [r.date, r.value]));
+  const dates = [...new Set([...oldMap.keys(), ...newMap.keys()])].sort();
+  return dates.map((date) => ({ date, oldScore: oldMap.get(date) ?? null, newScore: newMap.get(date) ?? null }));
+}
+
 function normalize(
   series: Row[],
   invert: boolean,
