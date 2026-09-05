@@ -53,3 +53,5 @@ darttest.mjs
 
 # 로컬 KRX 수집기 임시 응답 덤프
 scripts/.krx-last-response.json
+
+scripts/.krx-collect.log
