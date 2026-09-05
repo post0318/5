@@ -292,6 +292,10 @@ const COMPONENTS: Comp[] = [
     label: "안전자산 선호 (주식 − 채권 20일)",
     valueLabel: "KOSPI 20일 − 국채 20일 수익률차 (%p)",
     higherIsGreedy: true,
+    // CNN 원자료(20일 주식수익률 − 20일 채권수익률)로 역산 시 750일 창 +
+    // 백분위 순위가 CNN 실제 점수에 최근접(오차 3.7). min-max 는 22점 벗어남.
+    normWindow: 750,
+    scoring: "percentileRank",
     series: (all) => {
       const closes = all.map((x) => x.kospiClose);
       const g10 = all.map((x) => x.gov10y);
