@@ -109,7 +109,7 @@ export async function fetchKospi200Index(basDd: string): Promise<number | null> 
 
 /** 임시 진단용 — 선물 일별매매 원본 행 그대로 반환 (필드명·경로 확인용) */
 export async function fetchFuturesRaw(basDd: string, path: string): Promise<Record<string, string>[]> {
-  return krx(path, { basDd }, "euc-kr");
+  return krx(path, { basDd }, "cp949");
 }
 
 /**
