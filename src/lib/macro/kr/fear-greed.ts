@@ -419,6 +419,34 @@ function normalize(
   });
 }
 
+/**
+ * (검토용, 임시) kr_vkospi 를 제외한 나머지 컴포넌트 전체에 대해
+ * 현재 방식(fixedRange 있으면 그대로, 없으면 min-max) vs 백분위 순위(CDF)
+ * 두 점수를 나란히 계산해 비교. 실제 채택 전 영향도 파악용.
+ */
+export async function debugScoreCompareRest(): Promise<
+  Record<string, { date: string; oldScore: number | null; newScore: number | null }[]>
+> {
+  const all = await getKrFgHistory();
+  const out: Record<string, { date: string; oldScore: number | null; newScore: number | null }[]> = {};
+  for (const c of COMPONENTS) {
+    if (c.key === "kr_vkospi") continue; // 이미 전환 완료
+    const s = c.series(all);
+    const raw: Row[] = [];
+    all.forEach((d, i) => {
+      const v = s[i];
+      if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: v });
+    });
+    const oldScored = normalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW, c.fixedRange);
+    const newScored = percentileRankNormalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW);
+    const oldMap = new Map(oldScored.map((r) => [r.date, r.value]));
+    const newMap = new Map(newScored.map((r) => [r.date, r.value]));
+    const dates = [...new Set([...oldMap.keys(), ...newMap.keys()])].sort();
+    out[c.key] = dates.map((date) => ({ date, oldScore: oldMap.get(date) ?? null, newScore: newMap.get(date) ?? null }));
+  }
+  return out;
+}
+
 export async function getKrFearGreed(): Promise<
   (FearGreed & { ready: boolean; componentsReady: number; vkospiAvg: number | null; creditAvg: number | null }) | null
 > {
