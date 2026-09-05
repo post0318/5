@@ -61,19 +61,28 @@ export async function GET(req: Request) {
       const { fetchFuturesRaw, fetchKospi200Index, fetchKospiIndex } = await import("@/lib/macro/kr/krx");
       const basDd = sp.get("basDd") ?? new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const paths = (sp.get("paths") ?? "drv/fut_bydd_trd").split(",");
-      const results: Record<string, unknown> = {};
-      for (const p of paths) {
-        try {
-          const rows = await fetchFuturesRaw(basDd, p);
-          results[p] = { rowCount: rows.length, sample: rows.slice(0, 5) };
-        } catch (e) {
-          results[p] = { error: String(e) };
-        }
-      }
       const [k200, kospi] = await Promise.all([
         fetchKospi200Index(basDd).catch((e) => String(e)),
         fetchKospiIndex(basDd).catch((e) => String(e)),
       ]);
+      const results: Record<string, unknown> = {};
+      for (const p of paths) {
+        try {
+          const rows = await fetchFuturesRaw(basDd, p);
+          // 한글 인코딩이 불안정해서 이름 대신 종가가 코스피200 지수 근처인
+          // 행만 걸러서 확인 (인코딩 무관하게 정확)
+          const near =
+            typeof k200 === "number"
+              ? rows.filter((r) => {
+                  const close = Number(r.TDD_CLSPRC);
+                  return Number.isFinite(close) && Math.abs(close - k200) < k200 * 0.15;
+                })
+              : [];
+          results[p] = { rowCount: rows.length, nearKospi200: near, sample: rows.slice(0, 3) };
+        } catch (e) {
+          results[p] = { error: String(e) };
+        }
+      }
       return ok({ mode: "debug-futures", basDd, kospi200: k200, kospi, results });
     }
     if (sp.get("bootstrap") === "kospi") {
