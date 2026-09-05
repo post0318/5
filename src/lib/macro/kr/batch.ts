@@ -2,7 +2,7 @@ import "server-only";
 import type { AnyBulkWriteOperation } from "mongodb";
 import YahooFinancePkg from "yahoo-finance2";
 import { krFgDailyCol, krStockRollCol, type KrFgDailyDoc, type KrStockRollDoc } from "@/lib/db/kr-fg";
-import { fetchAllStocks, fetchKospiIndex, fetchPutCall, fetchVkospi } from "./krx";
+import { fetchAllStocks, fetchKospi200Futures, fetchKospiIndex, fetchPutCall, fetchVkospi } from "./krx";
 import { fetchLatestRates } from "./ecos";
 
 const WINDOW = 252; // 52주(거래일)
@@ -23,12 +23,15 @@ export interface BatchResult {
 export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
   const date = `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`;
   try {
-    const [stocks, vkospi, kospiClose, putCall, rates] = await Promise.all([
+    const [stocks, vkospi, kospiClose, putCall, rates, futBasis] = await Promise.all([
       fetchAllStocks(ymd),
       fetchVkospi(ymd).catch(() => null),
       fetchKospiIndex(ymd).catch(() => null),
       fetchPutCall(ymd).catch(() => ({ byVolume: null, byValue: null })),
       fetchLatestRates(ymd).catch(() => ({ gov3y: null, gov10y: null, corpAA: null, corpBBB: null })),
+      fetchKospi200Futures(ymd)
+        .then((r) => r.basis)
+        .catch(() => null),
     ]);
 
     if (stocks.length < 100) {
@@ -109,6 +112,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       putCall: putCall.byVolume,
       putCallVal: putCall.byValue,
       foreignFutNet: existing?.foreignFutNet ?? null,
+      futBasis,
       updatedAt: new Date().toISOString(),
     };
     await col.replaceOne({ _id: date }, doc, { upsert: true });
@@ -177,7 +181,7 @@ function thinDoc(): Partial<KrFgDailyDoc> {
   return {
     advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
     newHigh52: null, newLow52: null, totalWithHistory: null, vkospi: null,
-    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null, foreignFutNet: null,
+    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null, foreignFutNet: null, futBasis: null,
   };
 }
 
@@ -207,7 +211,7 @@ function thinDocNoVkospi(): Partial<KrFgDailyDoc> {
     kospiClose: null,
     advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
     newHigh52: null, newLow52: null, totalWithHistory: null,
-    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null, foreignFutNet: null,
+    gov3y: null, gov10y: null, corpAA: null, corpBBB: null, putCall: null, putCallVal: null, foreignFutNet: null, futBasis: null,
   };
 }
 
@@ -289,7 +293,7 @@ function thinDocRates(): Partial<KrFgDailyDoc> {
     kospiClose: null,
     advancers: null, decliners: null, unchanged: null, upVolume: null, downVolume: null,
     newHigh52: null, newLow52: null, totalWithHistory: null, vkospi: null,
-    putCall: null, putCallVal: null, foreignFutNet: null,
+    putCall: null, putCallVal: null, foreignFutNet: null, futBasis: null,
   };
 }
 
@@ -402,9 +406,9 @@ export async function deepBackfill(
 
     if (totalWithHistory > 0 && !firstReadyDate) firstReadyDate = iso;
 
-    // foreignFutNet 은 이 함수가 안 채우는 필드(별도 수동 업로드) — replaceOne이라
+    // foreignFutNet/futBasis 는 이 함수가 안 채우는 필드 — replaceOne이라
     // 기존 값을 지우지 않게 미리 읽어서 보존
-    const existingFf = await dailyCol.findOne({ _id: iso }, { projection: { foreignFutNet: 1 } });
+    const existingFf = await dailyCol.findOne({ _id: iso }, { projection: { foreignFutNet: 1, futBasis: 1 } });
     const dailyDoc: KrFgDailyDoc = {
         _id: iso,
         kospiClose,
@@ -424,6 +428,7 @@ export async function deepBackfill(
         putCall: putCall.byVolume,
         putCallVal: putCall.byValue,
         foreignFutNet: existingFf?.foreignFutNet ?? null,
+        futBasis: existingFf?.futBasis ?? null,
         updatedAt: new Date().toISOString(),
     };
     await dailyCol.replaceOne({ _id: iso }, dailyDoc, { upsert: true });
@@ -601,12 +606,67 @@ export async function extendBreadthHistory(
           corpBBB: null,
           putCall: null,
           putCallVal: null,
+          foreignFutNet: null,
+          futBasis: null,
         },
       },
       { upsert: true },
     );
     lastDate = iso;
     done++;
+  }
+  return { done, failed, lastDate };
+}
+
+/**
+ * 코스피200 선물 베이시스(근월물 종가−현물) 과거 이력 확장 — KRX OPEN API가
+ * 2010-01-04 부터 제공(별도 서비스 구독 필요). futBasis 필드만 채움,
+ * 다른 필드는 건드리지 않음.
+ */
+export async function extendFutBasisHistory(
+  fromIso: string,
+  toIso: string,
+): Promise<{ done: number; failed: number; lastDate: string | null }> {
+  const dates: string[] = [];
+  const d = new Date(`${fromIso}T00:00:00Z`);
+  const end = new Date(`${toIso}T00:00:00Z`);
+  let guard = 0;
+  while (d <= end && guard++ < 5000) {
+    const dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6) dates.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+
+  const col = await krFgDailyCol();
+  let done = 0;
+  let failed = 0;
+  let lastDate: string | null = null;
+  for (const iso of dates) {
+    const ymd = iso.replace(/-/g, "");
+    try {
+      const { basis } = await fetchKospi200Futures(ymd);
+      if (basis == null) {
+        failed++;
+        continue;
+      }
+      await col.updateOne(
+        { _id: iso },
+        {
+          $set: { futBasis: basis, updatedAt: new Date().toISOString() },
+          $setOnInsert: {
+            kospiClose: null, advancers: null, decliners: null, unchanged: null,
+            upVolume: null, downVolume: null, newHigh52: null, newLow52: null,
+            totalWithHistory: null, vkospi: null, gov3y: null, gov10y: null,
+            corpAA: null, corpBBB: null, putCall: null, putCallVal: null, foreignFutNet: null,
+          },
+        },
+        { upsert: true },
+      );
+      lastDate = iso;
+      done++;
+    } catch {
+      failed++;
+    }
   }
   return { done, failed, lastDate };
 }

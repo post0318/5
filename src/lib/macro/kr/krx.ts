@@ -109,9 +109,27 @@ export async function fetchKospi200Index(basDd: string): Promise<number | null> 
   return v ? n(v.CLSPRC_IDX) : null;
 }
 
-/** 임시 진단용 — 선물 일별매매 원본 행 그대로 반환 (필드명·경로 확인용) */
-export async function fetchFuturesRaw(basDd: string, path: string): Promise<Record<string, string>[]> {
-  return krx(path, { basDd }, "cp949");
+/**
+ * 코스피200 선물(표준, 미니 제외) 근월물 베이시스.
+ * drv/fut_bydd_trd 응답은 CP949 인코딩 + 한글 필드가 상품별로 깨질 수 있어
+ * 이름 매칭 대신 구조로 특정: ISU_CD "A016" 접두사 = 표준 코스피200 선물
+ * ("A056" = 미니코스피200, 제외). 미결제약정 최대 종목 = 근월물, 그 안에서
+ * 거래량 최대 행 = 정규장(주간, 야간 제외).
+ */
+export async function fetchKospi200Futures(
+  basDd: string,
+): Promise<{ close: number | null; spot: number | null; basis: number | null }> {
+  const rows = await krx("drv/fut_bydd_trd", { basDd }, "cp949");
+  const candidates = rows.filter((r) => (r.ISU_CD ?? "").startsWith("A016") && n(r.TDD_CLSPRC) != null);
+  if (!candidates.length) return { close: null, spot: null, basis: null };
+  candidates.sort((a, b) => (n(b.ACC_OPNINT_QTY) ?? 0) - (n(a.ACC_OPNINT_QTY) ?? 0));
+  const nearCode = candidates[0].ISU_CD;
+  const sameCode = candidates.filter((r) => r.ISU_CD === nearCode);
+  sameCode.sort((a, b) => (n(b.ACC_TRDVOL) ?? 0) - (n(a.ACC_TRDVOL) ?? 0));
+  const best = sameCode[0];
+  const close = n(best.TDD_CLSPRC);
+  const spot = n(best.SPOT_PRC);
+  return { close, spot, basis: close != null && spot != null ? close - spot : null };
 }
 
 /**
