@@ -94,9 +94,9 @@ export async function fetchKospi200Index(basDd: string): Promise<number | null> 
   return v ? n(v.CLSPRC_IDX) : null;
 }
 
-/** 임시 진단용 — 선물 일별매매 원본 행 그대로 반환 (필드명 확인용) */
-export async function fetchFuturesRaw(basDd: string): Promise<Record<string, string>[]> {
-  return krx("drv/fut_bydd_trd", { basDd });
+/** 임시 진단용 — 선물 일별매매 원본 행 그대로 반환 (필드명·경로 확인용) */
+export async function fetchFuturesRaw(basDd: string, path: string): Promise<Record<string, string>[]> {
+  return krx(path, { basDd });
 }
 
 /**

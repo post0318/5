@@ -60,12 +60,21 @@ export async function GET(req: Request) {
     if (sp.get("debug") === "futures") {
       const { fetchFuturesRaw, fetchKospi200Index, fetchKospiIndex } = await import("@/lib/macro/kr/krx");
       const basDd = sp.get("basDd") ?? new Date().toISOString().slice(0, 10).replace(/-/g, "");
-      const [rows, k200, kospi] = await Promise.all([
-        fetchFuturesRaw(basDd).catch((e) => [{ error: String(e) }]),
+      const paths = (sp.get("paths") ?? "drv/fut_bydd_trd").split(",");
+      const results: Record<string, unknown> = {};
+      for (const p of paths) {
+        try {
+          const rows = await fetchFuturesRaw(basDd, p);
+          results[p] = { rowCount: rows.length, sample: rows.slice(0, 5) };
+        } catch (e) {
+          results[p] = { error: String(e) };
+        }
+      }
+      const [k200, kospi] = await Promise.all([
         fetchKospi200Index(basDd).catch((e) => String(e)),
         fetchKospiIndex(basDd).catch((e) => String(e)),
       ]);
-      return ok({ mode: "debug-futures", basDd, kospi200: k200, kospi, rowCount: rows.length, sample: rows.slice(0, 10) });
+      return ok({ mode: "debug-futures", basDd, kospi200: k200, kospi, results });
     }
     if (sp.get("bootstrap") === "kospi") {
       return ok({ mode: "bootstrap-kospi", ...(await bootstrapKospiHistory(sp.get("since") ?? undefined)) });
