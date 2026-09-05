@@ -72,6 +72,32 @@ function smaSeriesSkipNulls(arr: (number | null)[], p: number): (number | null)[
   return out;
 }
 
+/**
+ * 이동 합계(rolling sum) — 결측(거래 없는 날 등)은 건너뛰고 값 있는 날짜만으로
+ * 누적. smaSeriesSkipNulls 와 동일한 결측-견고 패턴.
+ */
+function rollingSumSkipNulls(arr: (number | null)[], p: number): (number | null)[] {
+  const idx: number[] = [];
+  const vals: number[] = [];
+  arr.forEach((v, i) => {
+    if (v != null) {
+      idx.push(i);
+      vals.push(v);
+    }
+  });
+  const sums: (number | null)[] = vals.map((_, i) => {
+    if (i < p - 1) return null;
+    let s = 0;
+    for (let k = i - p + 1; k <= i; k++) s += vals[k];
+    return s;
+  });
+  const out: (number | null)[] = new Array(arr.length).fill(null);
+  idx.forEach((origI, k) => {
+    out[origI] = sums[k];
+  });
+  return out;
+}
+
 /** 지수이동평균 (alpha 지정). null 은 이전값 유지, 시드 전엔 null */
 function emaSeries(arr: (number | null)[], alpha: number): (number | null)[] {
   const out: (number | null)[] = [];
@@ -258,6 +284,18 @@ const COMPONENTS: Comp[] = [
     // 더 잘 반영한다고 판단해 채택.
     series: (all) =>
       all.map((d) => (d.corpAA != null && d.gov3y != null ? d.corpAA - d.gov3y : null)),
+  },
+  {
+    key: "kr_foreign_fut",
+    label: "외국인 코스피200 선물 수급",
+    valueLabel: "외국인 코스피200 선물 20일 누적 순매수 (계약)",
+    higherIsGreedy: true,
+    // 외국인 선물 순매수는 현물보다 선행성·즉시성이 커서 위험회피 심리를 빠르게
+    // 반영(레버리지, 프로그램 매매 트리거 역할). 하루 값은 노이즈가 커서
+    // 20거래일 누적 포지션으로 추세를 본다. 데이터는 KRX [15007] 화면에서
+    // 수동 다운로드해 업로드(비공식 내부 API라 자동 수집 대상 아님) — 2020년
+    // 이후만 있고, 없는 날짜(주로 최근 미업로드 구간)는 null.
+    series: (all) => rollingSumSkipNulls(all.map((d) => d.foreignFutNet), 20),
   },
 ];
 

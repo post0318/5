@@ -610,6 +610,7 @@ const SHORT_COMPONENT: Record<string, string> = {
   kr_safehaven: "안전자산",
   kr_credit: "정크본드",
   kr_putcall: "풋/콜",
+  kr_foreign_fut: "외국인 선물",
 };
 
 /** 원본 값이 오를 때 F&G 점수(탐욕)도 오르는가? (false면 역방향) */
@@ -629,6 +630,7 @@ const HIGHER_RAW_IS_GREEDY: Record<string, boolean> = {
   kr_safehaven: true,
   kr_credit: false, // 스프레드 확대 = 공포
   kr_putcall: false, // 풋 우위 = 공포
+  kr_foreign_fut: true, // 외국인 순매수 누적 = 위험선호
 };
 
 /**
