@@ -317,6 +317,11 @@ const COMPONENTS: Comp[] = [
     // 백분위 정규화가 과민 반응. AA−국고채(안전 회사채조차 무위험 대비
     // 얼마나 더 받는가)가 변동폭이 더 크고 신용시장 전반의 위험회피 심리를
     // 더 잘 반영한다고 판단해 채택.
+    // 점수화는 z-선형. CNN 원자료(정크−IG 스프레드, 역방향)로 역산 시 이 지표는
+    // z-선형/750일이 CNN 실제 점수에 최근접(오차 1.0). min-max 는 스프레드가
+    // 장기간 평평한 국내 데이터 특성상 27% 날짜가 0점에 눌러붙었음.
+    normWindow: 750,
+    scoring: "zLinear",
     series: (all) =>
       all.map((d) => (d.corpAA != null && d.gov3y != null ? d.corpAA - d.gov3y : null)),
   },
