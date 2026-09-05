@@ -26,6 +26,15 @@ type Comp = {
    */
   fixedRange?: [number, number];
   /**
+   * 점수화 공식. 미지정 시 기본 min-max(2~98퍼센타일 구간을 0~100 눈금
+   * 끝점으로 놓고 직선 비례배분). "percentileRank" 는 CNN 원문의 경험적
+   * 백분위 순위(현재값보다 작거나 같은 과거 표본 비율)를 그대로 점수로
+   * 사용 — 분포가 한쪽으로 쏠린 지표(변동성처럼 오른쪽 꼬리가 긴 경우)에서
+   * min-max 방식이 극단 구간에 0/100으로 오래 눌러붙어 미세한 변화가
+   * 안 보이는 문제를 완화.
+   */
+  scoring?: "minmax" | "percentileRank";
+  /**
    * 차트에 점수 시계열 대신 "기준선(dashed) + 오버레이(실선)"를 그릴 때.
    * CNN 모멘텀 차트(S&P + 125일선)와 동일 표현.
    */
@@ -247,6 +256,11 @@ const COMPONENTS: Comp[] = [
     // 스프레드를 역사적 분포로 정규화)과 동일 구조로 계산 — 국면(저변동성기/
     // 고변동성기)에 따라 절대 레벨의 의미가 달라지는 문제를 피함.
     // 차트 표시는 원본 VKOSPI 값 그대로(plot).
+    // 정규화 공식은 CNN 원문대로 경험적 백분위 순위 사용 — 변동성 괴리율
+    // 분포가 한쪽으로 쏠려(오른쪽 꼬리 긴 분포) min-max 방식이면 극단 구간에서
+    // 점수가 100/0에 오래 눌러붙어(예: 12거래일 연속 정확히 100.0) 그 안에서
+    // 더 심해지는지 구분이 안 되는 문제가 있었음.
+    scoring: "percentileRank",
     series: (all) => {
       const vk = all.map((x) => x.vkospi);
       const ma50 = smaSeriesSkipNulls(vk, 50);
@@ -338,15 +352,14 @@ function ratingEn(score: number): string {
 
 /**
  * 시계열을 최근 창의 "역사적 범위"로 0~100 정규화 (invert 옵션).
- * 단순 min-max 는 극단값 1개에 범위가 늘어나 왜곡 → 5~95 백분위로 클립 후 스케일.
+ * 단순 min-max 는 극단값 1개에 범위가 늘어나 왜곡 → 2~98 백분위로 클립 후 스케일.
  */
 /**
- * (검토용, 임시) CNN 원문의 "경험적 백분위 순위(empirical CDF)" 방식 —
- * 과거 분포에서 현재값보다 작거나 같은 표본의 비율을 그대로 점수로 사용.
- * 기존 normalize()는 2~98퍼센타일 값 두 개를 0/100 눈금 끝점으로 놓고
- * 그 사이를 직선 비례배분하는 min-max 방식이라, 분포가 한쪽으로 쏠려있으면
- * (변동성처럼 오른쪽 꼬리가 긴 경우) 점수가 0/100 근처에 몰리기 쉬움.
- * 동일한 3년 창을 쓰되 공식만 바꿔 비교.
+ * CNN 원문의 "경험적 백분위 순위(empirical CDF)" 방식 — 과거 분포에서
+ * 현재값보다 작거나 같은 표본의 비율을 그대로 점수로 사용. 위 normalize()의
+ * min-max 방식은 분포가 한쪽으로 쏠려있으면(변동성처럼 오른쪽 꼬리가 긴 경우)
+ * 극단 구간에서 점수가 0/100에 오래 눌러붙어 그 안에서의 정도 차이가 안 보임 —
+ * kr_vkospi 실측 비교(2026-08-12~09-04, 12거래일 연속 정확히 100.0)로 확인.
  */
 function percentileRankNormalize(series: Row[], invert: boolean, window = NORM_WINDOW): Row[] {
   const win = series.slice(-window);
@@ -376,25 +389,6 @@ function percentileRankNormalize(series: Row[], invert: boolean, window = NORM_W
     const s = Math.max(0, Math.min(100, rankOf(r.value)));
     return { date: r.date, value: Math.round((invert ? 100 - s : s) * 10) / 10 };
   });
-}
-
-/** (검토용, 임시) kr_vkospi 원시 시계열에 old(min-max)/new(백분위 순위) 두 방식을 모두 계산해 비교 */
-export async function debugVkospiScoreCompare(): Promise<{ date: string; oldScore: number | null; newScore: number | null }[]> {
-  const all = await getKrFgHistory();
-  const comp = COMPONENTS.find((c) => c.key === "kr_vkospi");
-  if (!comp) return [];
-  const s = comp.series(all);
-  const raw: Row[] = [];
-  all.forEach((d, i) => {
-    const v = s[i];
-    if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: v });
-  });
-  const oldScored = normalize(raw, !comp.higherIsGreedy, comp.normWindow ?? NORM_WINDOW, comp.fixedRange);
-  const newScored = percentileRankNormalize(raw, !comp.higherIsGreedy, comp.normWindow ?? NORM_WINDOW);
-  const oldMap = new Map(oldScored.map((r) => [r.date, r.value]));
-  const newMap = new Map(newScored.map((r) => [r.date, r.value]));
-  const dates = [...new Set([...oldMap.keys(), ...newMap.keys()])].sort();
-  return dates.map((date) => ({ date, oldScore: oldMap.get(date) ?? null, newScore: newMap.get(date) ?? null }));
 }
 
 function normalize(
@@ -450,7 +444,10 @@ export async function getKrFearGreed(): Promise<
       const v = s[i];
       if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: Math.round(v * 1000) / 1000 });
     });
-    const scored = normalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW, c.fixedRange);
+    const scored =
+      c.scoring === "percentileRank"
+        ? percentileRankNormalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW)
+        : normalize(raw, !c.higherIsGreedy, c.normWindow ?? NORM_WINDOW, c.fixedRange);
     return { c, raw, scored };
   });
 
