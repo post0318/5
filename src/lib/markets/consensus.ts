@@ -32,9 +32,11 @@ const ACCT = {
     "営業利益", "営業利益 (IFRS)",
   ],
   netIncome: [
-    // 지배주주 귀속분 우선 (FnGuide 방식)
-    "지배기업의 소유주에게 귀속되는 당기순이익", "지배기업 소유주지분",
-    "지배기업의소유주에게귀속되는당기순이익", "당기순이익(지배)",
+    // 지배주주 귀속분 우선 (FnGuide 방식). "지배기업 소유주지분"(자본 계정)과
+    // 혼동 금지 — 반드시 "순이익"이 붙은 계정만.
+    "지배기업의 소유주에게 귀속되는 당기순이익",
+    "지배기업의소유주에게귀속되는당기순이익",
+    "지배기업지분순이익", "지배기업소유주지분순이익", "당기순이익(지배)",
     "Net income attributable to owners of parent", "当期利益（親会社の所有者帰属）",
     // fallback: 전체
     "당기순이익", "당기순이익(손실)", "연결당기순이익",
@@ -203,7 +205,9 @@ export async function getConsensusData(
 
     const per = yePrice != null && eps ? yePrice / eps : null;
     const pbr = yePrice != null && bps ? yePrice / bps : null;
-    const roe = netIncome != null && equity ? (netIncome / equity) * 100 : null;
+    let roe = netIncome != null && equity ? (netIncome / equity) * 100 : null;
+    // netIncome 이 자본 계정과 잘못 매칭되면 ROE≈100 → 숨김
+    if (roe != null && (Math.abs(roe - 100) < 0.001 || roe > 100 || roe < -100)) roe = null;
     const mcap = yePrice != null && shares ? yePrice * shares : null;
     const ev = mcap != null ? mcap + (liab ?? 0) - (cash ?? 0) : null;
     // EBITDA = 영업이익 + 감가상각비(+무형상각). 상각비 계정을 못 찾으면 영업이익 근사.
