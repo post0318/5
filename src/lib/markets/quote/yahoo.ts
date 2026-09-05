@@ -36,14 +36,23 @@ interface RawBar {
 }
 
 interface QuoteSummaryResult {
-  summaryDetail?: { forwardPE?: number; dividendYield?: number };
-  defaultKeyStatistics?: { forwardPE?: number };
+  summaryDetail?: {
+    forwardPE?: number;
+    dividendYield?: number;
+    dividendRate?: number;
+    trailingAnnualDividendRate?: number;
+    beta?: number;
+    fiftyTwoWeekHigh?: number;
+    fiftyTwoWeekLow?: number;
+  };
+  defaultKeyStatistics?: { forwardPE?: number; beta?: number; "52WeekChange"?: number };
   financialData?: {
     targetMeanPrice?: number;
     targetHighPrice?: number;
     targetLowPrice?: number;
     numberOfAnalystOpinions?: number;
     recommendationKey?: string;
+    currentRatio?: number;
   };
   earningsTrend?: {
     trend?: {
@@ -134,6 +143,7 @@ export async function fetchForwardConsensus(
   }
 
   const fd = qs.financialData ?? {};
+  const sd = qs.summaryDetail ?? {};
   const trend = (qs.earningsTrend?.trend ?? []).filter(
     (t) => t.period === "0y" || t.period === "+1y" || t.period === "+2y",
   );
@@ -142,12 +152,20 @@ export async function fetchForwardConsensus(
     symbol,
     market,
     currency: MARKET_CURRENCY[market],
-    forwardPer: qs.defaultKeyStatistics?.forwardPE ?? qs.summaryDetail?.forwardPE ?? null,
+    forwardPer: qs.defaultKeyStatistics?.forwardPE ?? sd.forwardPE ?? null,
     targetMeanPrice: fd.targetMeanPrice ?? null,
     targetHighPrice: fd.targetHighPrice ?? null,
     targetLowPrice: fd.targetLowPrice ?? null,
     numberOfAnalysts: fd.numberOfAnalystOpinions ?? null,
     recommendationKey: fd.recommendationKey ?? null,
+    // 부수 요약 지표 (yahoo summaryDetail/financialData). 컨센서스와 무관하지만
+    // 같은 quoteSummary 호출로 이미 받아온 값이라 추가 비용 없이 노출.
+    fiftyTwoWeekHigh: sd.fiftyTwoWeekHigh ?? null,
+    fiftyTwoWeekLow: sd.fiftyTwoWeekLow ?? null,
+    beta: sd.beta ?? qs.defaultKeyStatistics?.beta ?? null,
+    currentRatio: fd.currentRatio ?? null,
+    dividendPerShare: sd.dividendRate ?? sd.trailingAnnualDividendRate ?? null,
+    dividendYield: sd.dividendYield ?? null, // yahoo: 소수(0.021 = 2.1%)
     estimates: trend.map((t) => ({
       period: t.period === "0y" ? "당해년도(FY)" : t.period === "+1y" ? "차년도(FY+1)" : "FY+2",
       epsAvg: t.earningsEstimate?.avg ?? null,

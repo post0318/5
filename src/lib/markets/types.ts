@@ -146,6 +146,10 @@ export interface TrailingMultiples {
   pbr: number | null;
   psr: number | null;
   evEbitda: number | null;
+  /** 주당순이익 (희석) */
+  eps: number | null;
+  /** 주당순자산 */
+  bps: number | null;
   dividendYield: number | null;
   marketCap: number | null;
   currency: Currency;
@@ -164,6 +168,14 @@ export interface ForwardConsensus {
   targetLowPrice: number | null;
   numberOfAnalysts: number | null;
   recommendationKey: string | null;
+  /** 부수 요약 지표 (yahoo summaryDetail — 컨센서스는 아니지만 같은 호출로 확보) */
+  fiftyTwoWeekHigh: number | null;
+  fiftyTwoWeekLow: number | null;
+  beta: number | null;
+  currentRatio: number | null;
+  dividendPerShare: number | null;
+  /** 배당수익률 (소수: 0.021 = 2.1%) */
+  dividendYield: number | null;
   /** 회계연도별 EPS/매출 추정 */
   estimates: {
     period: string;

@@ -150,6 +150,8 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     pbr: finite(pbr),
     psr: finite(psr),
     evEbitda: finite(evEbitda),
+    eps: finite(epsDiluted),
+    bps: finite(bps),
     dividendYield: null,
     marketCap: finite(marketCap),
     currency: MARKET_CURRENCY[market],

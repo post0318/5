@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/toggle-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { ChangePercent, Money, Multiple, NumberText } from "@/components/num";
+import { ChangePercent, Money, Multiple, NumberText, Percent } from "@/components/num";
 import { StockPptButton } from "@/components/ppt-export";
 import { FinancialsTable } from "@/components/financials-table";
 import { DeepLinkList } from "@/components/deep-links";
@@ -129,6 +129,17 @@ export function StockAnalysis({
   }, [ov, annualForMultiples.data, market]);
   const multiplesFallback =
     annualForMultiples.isLoading ? "…" : annualForMultiples.isError ? "n/a" : "-";
+  const ccy = ov?.quote?.currency ?? "USD";
+
+  // 현재가의 52주 범위 내 위치
+  const week52Pos = useMemo(() => {
+    const hi = ov?.consensus?.fiftyTwoWeekHigh;
+    const lo = ov?.consensus?.fiftyTwoWeekLow;
+    const px = ov?.quote?.last;
+    if (hi == null || lo == null || px == null || hi <= lo) return "개인용 · yahoo";
+    const pct = Math.round(((px - lo) / (hi - lo)) * 100);
+    return `현재가 52주 구간의 ${Math.max(0, Math.min(100, pct))}%`;
+  }, [ov]);
 
   return (
     <div className="space-y-6">
@@ -228,12 +239,10 @@ export function StockAnalysis({
 
             {/* 개요 */}
             <TabsContent value="overview" className="space-y-6 pt-4">
+              {/* 시세 */}
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Stat label="종가">
-                  <Money
-                    value={ov.quote?.last}
-                    currency={ov.quote?.currency ?? "USD"}
-                  />
+                  <Money value={ov.quote?.last} currency={ccy} />
                   <div className="text-muted-foreground mt-1 text-xs">
                     {ov.quote?.lastDate ?? "-"} · {ov.quote?.source ?? ""}
                   </div>
@@ -241,29 +250,70 @@ export function StockAnalysis({
                 <Stat label="전일 대비">
                   <ChangePercent value={ov.quote?.changePct} />
                 </Stat>
-                <Stat label="PER (최근 연간)">
-                  <Multiple value={multiples?.per} fallback={multiplesFallback} />
-                </Stat>
-                <Stat label="PBR">
-                  <Multiple value={multiples?.pbr} fallback={multiplesFallback} />
-                </Stat>
-                <Stat label="PSR">
-                  <Multiple value={multiples?.psr} fallback={multiplesFallback} />
-                </Stat>
-                <Stat label="EV/EBITDA(근사)">
-                  <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} />
-                </Stat>
                 <Stat label="시가총액">
-                  <Money
-                    value={multiples?.marketCap ?? ov.quote?.marketCap}
-                    currency={ov.quote?.currency ?? "USD"}
-                  />
+                  <Money value={multiples?.marketCap ?? ov.quote?.marketCap} currency={ccy} />
                 </Stat>
-                <Stat label="Forward PER">
-                  <Multiple value={ov.consensus?.forwardPer} />
-                  <div className="text-muted-foreground mt-1 text-xs">개인용 · yahoo</div>
+                <Stat label="52주 최고 / 최저">
+                  <span className="tnum text-base">
+                    <Money value={ov.consensus?.fiftyTwoWeekHigh} currency={ccy} fallback="-" />
+                    {" / "}
+                    <Money value={ov.consensus?.fiftyTwoWeekLow} currency={ccy} fallback="-" />
+                  </span>
+                  <div className="text-muted-foreground mt-1 text-xs">{week52Pos}</div>
                 </Stat>
               </div>
+
+              {/* 펀더멘털 */}
+              <section className="space-y-3">
+                <h3 className="text-sm font-semibold">펀더멘털</h3>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <Stat label="PER (최근 연간)">
+                    <Multiple value={multiples?.per} fallback={multiplesFallback} />
+                  </Stat>
+                  <Stat label="PBR">
+                    <Multiple value={multiples?.pbr} fallback={multiplesFallback} />
+                  </Stat>
+                  <Stat label="EV/EBITDA (근사)">
+                    <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} />
+                  </Stat>
+                  <Stat label="EPS (희석)">
+                    <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} />
+                  </Stat>
+                  <Stat label="BPS">
+                    <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} />
+                  </Stat>
+                  <Stat label="DPS">
+                    <Money value={ov.consensus?.dividendPerShare} currency={ccy} fallback="-" />
+                    <div className="text-muted-foreground mt-1 text-xs">최근 12개월 · yahoo</div>
+                  </Stat>
+                  <Stat label="배당수익률">
+                    <Percent value={ov.consensus?.dividendYield} alreadyPercent={false} fallback="-" />
+                    <div className="text-muted-foreground mt-1 text-xs">yahoo</div>
+                  </Stat>
+                </div>
+              </section>
+
+              {/* 참고 지표 */}
+              <section className="space-y-3">
+                <h3 className="text-sm font-semibold">참고 지표</h3>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <Stat label="Forward PER">
+                    <Multiple value={ov.consensus?.forwardPer} />
+                    <div className="text-muted-foreground mt-1 text-xs">개인용 · yahoo</div>
+                  </Stat>
+                  <Stat label="베타">
+                    <NumberText value={ov.consensus?.beta} digits={2} />
+                    <div className="text-muted-foreground mt-1 text-xs">yahoo 기준</div>
+                  </Stat>
+                  <Stat label="유동비율">
+                    <NumberText value={ov.consensus?.currentRatio} digits={2} />
+                    <div className="text-muted-foreground mt-1 text-xs">유동자산/유동부채 · yahoo</div>
+                  </Stat>
+                  <Stat label="PSR">
+                    <Multiple value={multiples?.psr} fallback={multiplesFallback} />
+                  </Stat>
+                </div>
+              </section>
 
               {ov.consensus && (
                 <Card>
