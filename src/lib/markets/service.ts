@@ -58,29 +58,39 @@ export async function getStockOverview(
   market: MarketId,
   rawSymbol: string,
   yahooOverride?: string | null,
-  opts: { skipQuarterly?: boolean } = {},
+  opts: { skipQuarterly?: boolean; captureTimings?: (t: Record<string, number>) => void } = {},
 ): Promise<StockOverview> {
   const adapter = getAdapter(market);
   const symbol = adapter.normalizeSymbol(rawSymbol);
   const warnings: string[] = [];
+  const t0 = Date.now();
+  const timings: Record<string, number> = {};
+  const timed = <T>(label: string, p: Promise<T>): Promise<T> => {
+    const s = Date.now();
+    return p.finally(() => {
+      timings[label] = Date.now() - s;
+    });
+  };
 
   const [profile, quote, annual, quarterly, consensus] = await Promise.all([
-    safe(withTimeout(adapter.getCompanyProfile(symbol), 10_000, "회사정보"), warnings, "회사정보"),
-    safe(withTimeout(getEodQuote(market, symbol, { yahooOverride }), 12_000, "시세"), warnings, "시세"),
-    safe(withTimeout(adapter.getFinancials(symbol, "annual"), 15_000, "연간 재무제표"), warnings, "연간 재무제표"),
+    safe(timed("profile", withTimeout(adapter.getCompanyProfile(symbol), 10_000, "회사정보")), warnings, "회사정보"),
+    safe(timed("quote", withTimeout(getEodQuote(market, symbol, { yahooOverride }), 12_000, "시세")), warnings, "시세"),
+    safe(timed("annual", withTimeout(adapter.getFinancials(symbol, "annual"), 15_000, "연간 재무제표")), warnings, "연간 재무제표"),
     opts.skipQuarterly
       ? Promise.resolve(null)
       : safe(
-          withTimeout(adapter.getFinancials(symbol, "quarter"), 15_000, "분기 재무제표"),
+          timed("quarterly", withTimeout(adapter.getFinancials(symbol, "quarter"), 15_000, "분기 재무제표")),
           warnings,
           "분기 재무제표",
         ),
     safe(
-      withTimeout(fetchForwardConsensus(market, symbol, yahooOverride), 8_000, "포워드 컨센서스"),
+      timed("consensus", withTimeout(fetchForwardConsensus(market, symbol, yahooOverride), 8_000, "포워드 컨센서스")),
       warnings,
       "포워드 컨센서스",
     ),
   ]);
+  timings.total = Date.now() - t0;
+  if (opts.captureTimings) opts.captureTimings(timings);
 
   let multiples: TrailingMultiples | null = null;
   if (quote) {
