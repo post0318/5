@@ -79,6 +79,11 @@ npm run db:studio    # drizzle studio
 
 - **크롤링은 어떤 시나리오에서도 금지**: FnGuide(`robots.txt Disallow: /`),
   stockanalysis·MarketScreener(ToS) → 딥링크만.
+  - **예외 1건 (개인용, 사용자 승인)**: 외국인 코스피200 선물 순매수(투자자별
+    거래실적)는 어떤 공식 무료 API에도 없고 KRX 화면은 로그인 필수라, 배포된 앱이
+    아니라 **로컬 전용 스크립트**(`scripts/collect-foreign-fut.mjs`)가 사용자의
+    KRX 로그인 세션으로 주 1회 수집해 `/api/cron/kr-fg` 로 POST 한다. 앱 배포본에는
+    크롤링 코드가 없다.
 - `yahoo-finance2` / yfinance / Finnhub·FMP·Polygon 무료 = **개인용 한정.**
   팀/대외 확장 시 인앱 중단 → 딥링크 또는 정식 라이선스 (prd.md §4.3).
 - L1(공식 API)·L3(자체 계산)은 모든 시나리오에서 안전.
