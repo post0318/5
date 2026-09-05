@@ -1,7 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
-import { getKrFgHistory } from "@/lib/db/kr-fg";
 import {
   backfillEcosRates,
   backfillRange,
@@ -59,14 +58,6 @@ export async function GET(req: Request) {
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
 
     const sp = new URL(req.url).searchParams;
-    if (sp.get("debug") === "foreignfut") {
-      const all = await getKrFgHistory();
-      const rows = all
-        .filter((d) => d.foreignFutNet != null)
-        .slice(-500)
-        .map((d) => ({ date: d._id, foreignFutNet: d.foreignFutNet, futBasis: d.futBasis }));
-      return ok({ mode: "debug-foreignfut", count: rows.length, rows });
-    }
     if (sp.get("extend") === "basis") {
       const from = sp.get("from");
       const to = sp.get("to");
