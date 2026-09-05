@@ -111,24 +111,31 @@ export async function fetchKospi200Index(basDd: string): Promise<number | null> 
 
 /**
  * 코스피200 선물(표준, 미니 제외) 근월물 베이시스.
- * drv/fut_bydd_trd 응답은 CP949 인코딩 + 한글 필드가 상품별로 깨질 수 있어
- * 이름 매칭 대신 구조로 특정: ISU_CD "A016" 접두사 = 표준 코스피200 선물
- * ("A056" = 미니코스피200, 제외). 미결제약정 최대 종목 = 근월물, 그 안에서
- * 거래량 최대 행 = 정규장(주간, 야간 제외).
+ * drv/fut_bydd_trd 응답은 CP949 인코딩 + 한글 필드가 상품별로 깨질 수 있고,
+ * ISU_CD 접두사 체계도 시기별로 KRX가 바꿔서(예: 2022년 표준="101"/미니="105",
+ * 2026년 표준="A016"/미니="A056") 접두사 하드코딩은 못 씀.
+ * 대신 이름과 무관하게: ① 종가가 코스피200 지수 ±15% 이내인 선물만 추리면
+ * 채권·업종 선물 등은 자동 제외되고, ② 그 중 미결제약정(ACC_OPNINT_QTY)이
+ * 가장 큰 행 = 코스피200 "표준" 선물의 근월·정규장 (미니는 항상 표준보다
+ * 유동성이 훨씬 작아 자연히 걸러짐).
  */
 export async function fetchKospi200Futures(
   basDd: string,
 ): Promise<{ close: number | null; spot: number | null; basis: number | null }> {
-  const rows = await krx("drv/fut_bydd_trd", { basDd }, "cp949");
-  const candidates = rows.filter((r) => (r.ISU_CD ?? "").startsWith("A016") && n(r.TDD_CLSPRC) != null);
+  const [rows, k200] = await Promise.all([
+    krx("drv/fut_bydd_trd", { basDd }, "cp949"),
+    fetchKospi200Index(basDd),
+  ]);
+  if (k200 == null) return { close: null, spot: null, basis: null };
+  const candidates = rows.filter((r) => {
+    const close = n(r.TDD_CLSPRC);
+    return close != null && Math.abs(close - k200) < k200 * 0.15;
+  });
   if (!candidates.length) return { close: null, spot: null, basis: null };
   candidates.sort((a, b) => (n(b.ACC_OPNINT_QTY) ?? 0) - (n(a.ACC_OPNINT_QTY) ?? 0));
-  const nearCode = candidates[0].ISU_CD;
-  const sameCode = candidates.filter((r) => r.ISU_CD === nearCode);
-  sameCode.sort((a, b) => (n(b.ACC_TRDVOL) ?? 0) - (n(a.ACC_TRDVOL) ?? 0));
-  const best = sameCode[0];
+  const best = candidates[0];
   const close = n(best.TDD_CLSPRC);
-  const spot = n(best.SPOT_PRC);
+  const spot = n(best.SPOT_PRC) ?? k200;
   return { close, spot, basis: close != null && spot != null ? close - spot : null };
 }
 
