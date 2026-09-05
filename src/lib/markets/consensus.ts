@@ -32,12 +32,21 @@ const ACCT = {
     "営業利益", "営業利益 (IFRS)",
   ],
   netIncome: [
+    // 지배주주 귀속분 우선 (FnGuide 방식)
+    "지배기업의 소유주에게 귀속되는 당기순이익", "지배기업 소유주지분",
+    "지배기업의소유주에게귀속되는당기순이익", "당기순이익(지배)",
+    "Net income attributable to owners of parent", "当期利益（親会社の所有者帰属）",
+    // fallback: 전체
     "당기순이익", "당기순이익(손실)", "연결당기순이익",
-    "NetIncomeLoss", "Net Income", "当期利益（親会社の所有者帰属）", "当期純利益",
+    "NetIncomeLoss", "Net Income", "当期純利益",
   ],
   equity: [
-    "자본총계", "StockholdersEquity", "Stockholders' Equity",
-    "純資産額", "親会社の所有者に帰属する持分",
+    // 지배주주 지분 우선
+    "지배기업의 소유주에게 귀속되는 자본", "지배기업 소유주지분", "지배기업소유주지분",
+    "지배기업의소유주에게귀속되는자본",
+    "Equity attributable to owners of parent", "親会社の所有者に帰属する持分",
+    // fallback: 전체
+    "자본총계", "StockholdersEquity", "Stockholders' Equity", "純資産額",
   ],
   liabilities: ["부채총계", "Liabilities", "Total Liabilities"],
   cash: [
@@ -49,6 +58,13 @@ const ACCT = {
     "EarningsPerShareDiluted", "EarningsPerShareBasic", "EPS (Diluted)",
     "基本的1株当たり当期利益 (円)", "1株当たり当期純利益 (円)",
   ],
+  depreciation: [
+    "감가상각비", "유형자산감가상각비", "유형자산 감가상각비",
+    "감가상각비와상각비", "감가상각비 및 상각비",
+    "무형자산상각비", "무형자산 상각비",
+    "DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
+    "減価償却費", "減価償却費及び償却費",
+  ],
 };
 
 function valueForYear(
@@ -57,12 +73,15 @@ function valueForYear(
   accountIds: string[],
 ): number | null {
   const label = `FY${fy}`;
-  const targets = new Set(accountIds.map(norm));
-  for (const sec of fs.sections) {
-    for (const it of sec.items) {
-      if (!targets.has(norm(it.accountId ?? it.accountName))) continue;
-      const v = it.values[label];
-      if (v != null) return v;
+  // accountIds 우선순위대로: 먼저 나오는 이름이 값이 있으면 그걸 채택
+  for (const wanted of accountIds) {
+    const w = norm(wanted);
+    for (const sec of fs.sections) {
+      for (const it of sec.items) {
+        if (norm(it.accountId ?? it.accountName) !== w) continue;
+        const v = it.values[label];
+        if (v != null) return v;
+      }
     }
   }
   return null;
@@ -187,7 +206,12 @@ export async function getConsensusData(
     const roe = netIncome != null && equity ? (netIncome / equity) * 100 : null;
     const mcap = yePrice != null && shares ? yePrice * shares : null;
     const ev = mcap != null ? mcap + (liab ?? 0) - (cash ?? 0) : null;
-    const evEbitda = ev != null && opIncome ? ev / opIncome : null;
+    // EBITDA = 영업이익 + 감가상각비(+무형상각). 상각비 계정을 못 찾으면 영업이익 근사.
+    const dep = valueForYear(annual, fy, ACCT.depreciation);
+    const ebitda = opIncome != null ? opIncome + Math.abs(dep ?? 0) : null;
+    let evEbitda = ev != null && ebitda && ebitda > 0 ? ev / ebitda : null;
+    // 영업이익이 급감한 해 등 비정상값은 숨김
+    if (evEbitda != null && (evEbitda > 40 || evEbitda < 0)) evEbitda = null;
 
     actualRows.push({
       fy,
