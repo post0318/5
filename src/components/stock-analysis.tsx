@@ -485,7 +485,7 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-/** 52주 고점=100 기준 현재가 위치를 가로 바로. 100 미만 파랑 / 초과 빨강 그라데이션. */
+/** 52주 고점=100 기준 현재가 위치를 가로 바로. 고점比 마이너스(고점 미달)=하락색 / 고점 초과=상승색. */
 function Week52Bar({
   price,
   high,
@@ -508,8 +508,8 @@ function Week52Bar({
           style={{
             width: `${over ? 100 : fill}%`,
             background: over
-              ? "linear-gradient(90deg, oklch(0.7 0.12 250), oklch(0.6 0.21 27))"
-              : "linear-gradient(90deg, oklch(0.72 0.1 250), oklch(0.55 0.15 250))",
+              ? "linear-gradient(90deg, oklch(0.78 0.1 145), oklch(0.6 0.17 145))"
+              : "linear-gradient(90deg, oklch(0.82 0.08 27), oklch(0.58 0.2 27))",
           }}
         />
       </div>
