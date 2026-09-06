@@ -144,16 +144,6 @@ export function StockAnalysis({
       ? ov.quote.last / fwdEps
       : (ov?.consensus?.forwardPer ?? null);
 
-  // 현재가의 52주 범위 내 위치
-  const week52Pos = useMemo(() => {
-    const hi = ov?.consensus?.fiftyTwoWeekHigh;
-    const lo = ov?.consensus?.fiftyTwoWeekLow;
-    const px = ov?.quote?.last;
-    if (hi == null || lo == null || px == null || hi <= lo) return "개인용 · yahoo";
-    const pct = Math.max(0, Math.min(100, Math.round(((px - lo) / (hi - lo)) * 100)));
-    return `52주 밴드 내 위치 ${pct}% (0=저점·100=고점)`;
-  }, [ov]);
-
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
   const metrics: { label: string; node: React.ReactNode; hint?: string }[] = [
     { label: "PER (최근 연간)", node: <Multiple value={multiples?.per} fallback={multiplesFallback} /> },
@@ -304,7 +294,11 @@ export function StockAnalysis({
                       <Money value={ov.consensus?.fiftyTwoWeekLow} currency={ccy} fallback="-" />
                     </span>
                   </span>
-                  <div className="text-muted-foreground mt-1 text-xs">{week52Pos}</div>
+                  <Week52Bar
+                    price={ov.quote?.last ?? null}
+                    high={ov.consensus?.fiftyTwoWeekHigh ?? null}
+                    low={ov.consensus?.fiftyTwoWeekLow ?? null}
+                  />
                 </Stat>
               </div>
 
@@ -475,6 +469,42 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
     <div className="border-border rounded-lg border p-3">
       <div className="text-muted-foreground text-xs">{label}</div>
       <div className="mt-1 text-lg font-semibold">{children}</div>
+    </div>
+  );
+}
+
+/** 52주 고점=100 기준 현재가 위치를 가로 바로. 100 미만 파랑 / 초과 빨강 그라데이션. */
+function Week52Bar({
+  price,
+  high,
+  low,
+}: {
+  price: number | null;
+  high: number | null;
+  low: number | null;
+}) {
+  if (price == null || high == null || high <= 0) return null;
+  const pct = (price / high) * 100; // 고점 대비 %
+  const over = pct > 100;
+  const fill = Math.max(0, Math.min(100, pct));
+  const lowPct = low != null && low > 0 ? (price / low - 1) * 100 : null;
+  return (
+    <div className="mt-1.5">
+      <div className="bg-muted relative h-1.5 w-full overflow-hidden rounded-full">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full"
+          style={{
+            width: `${over ? 100 : fill}%`,
+            background: over
+              ? "linear-gradient(90deg, oklch(0.7 0.12 250), oklch(0.6 0.21 27))"
+              : "linear-gradient(90deg, oklch(0.72 0.1 250), oklch(0.55 0.15 250))",
+          }}
+        />
+      </div>
+      <div className="text-muted-foreground tnum mt-0.5 flex justify-between text-[10px]">
+        <span>{lowPct != null ? `저점比 +${lowPct.toFixed(0)}%` : " "}</span>
+        <span className={over ? "text-up font-medium" : "text-down"}>고점比 {pct.toFixed(0)}%</span>
+      </div>
     </div>
   );
 }
