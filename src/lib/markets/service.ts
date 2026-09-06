@@ -4,6 +4,7 @@ import { getEodQuote } from "./quote";
 import { fetchForwardConsensus } from "./quote/yahoo";
 import { computeTrailingMultiples } from "./multiples";
 import { newsDeepLinks } from "./deeplinks";
+import { isHighDividendKr } from "./kr/high-dividend";
 import {
   AdapterError,
   type CompanyProfile,
@@ -22,6 +23,8 @@ export interface StockOverview {
   quote: Awaited<ReturnType<typeof getEodQuote>> | null;
   multiples: TrailingMultiples | null;
   consensus: ForwardConsensus | null;
+  /** KRX 고배당기업 명단 대상 여부 (한국만) */
+  highDividend: boolean;
   deepLinks: {
     consensus: { label: string; url: string }[];
     news: { label: string; url: string }[];
@@ -116,6 +119,7 @@ export async function getStockOverview(
     quote,
     multiples,
     consensus,
+    highDividend: market === "kr" && isHighDividendKr(symbol),
     deepLinks: {
       consensus: adapter.consensusDeepLinks(symbol),
       news: newsDeepLinks(market, symbol),
