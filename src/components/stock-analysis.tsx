@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import { apiFetch } from "@/lib/query";
@@ -94,9 +94,15 @@ export function StockAnalysis({
     queryFn: () =>
       apiFetch<{ items: { market: string; symbol: string }[] }>("/api/universe"),
   });
+  const normSym = (s: string) => {
+    const d = s.replace(/[^0-9]/g, "");
+    return d.length >= 4 && d.length <= 6 ? d.padStart(6, "0") : s.toUpperCase();
+  };
   const inUniverse = Boolean(
     symbol &&
-      universe.data?.items.some((i) => i.market === market && i.symbol === symbol),
+      universe.data?.items.some(
+        (i) => i.market === market && normSym(i.symbol) === normSym(symbol),
+      ),
   );
 
   const addToUniverse = useMutation({
@@ -115,6 +121,11 @@ export function StockAnalysis({
       qc.invalidateQueries({ queryKey: ["universe-overview"] });
     },
   });
+  // 페이지 내에서 다른 종목을 조회하면 "추가됨" 상태가 남지 않도록 초기화
+  useEffect(() => {
+    addToUniverse.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol]);
 
   const ov = overview.data;
 

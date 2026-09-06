@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
 
 interface Item {
   id: string;
@@ -225,8 +226,7 @@ function Row({ item, onChange }: { item: Item; onChange: () => void }) {
 
 function SingleForm({ onDone }: { onDone: () => void }) {
   const [market, setMarket] = useState<MarketId>("kr");
-  const [symbol, setSymbol] = useState("");
-  const [name, setName] = useState("");
+  const [picked, setPicked] = useState<SymbolHit | null>(null);
   const [groupName, setGroupName] = useState("");
 
   const add = useMutation({
@@ -235,59 +235,78 @@ function SingleForm({ onDone }: { onDone: () => void }) {
         method: "POST",
         body: JSON.stringify({
           market,
-          symbol,
-          name: name || undefined,
+          symbol: picked!.symbol,
+          name: picked!.name || undefined,
+          yahooSymbol: picked!.yahooSymbol || undefined,
           groupName: groupName || undefined,
         }),
       }),
     onSuccess: () => {
-      toast.success(`${symbol} 추가됨`);
-      setSymbol("");
-      setName("");
+      toast.success(`${picked?.name ?? picked?.symbol} 추가됨`);
+      setPicked(null);
+      setGroupName("");
       onDone();
     },
     onError: (e) => toast.error((e as Error).message),
   });
 
   return (
-    <form
-      className="grid gap-3 sm:grid-cols-[120px_1fr_1fr_1fr_auto] sm:items-end"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (symbol.trim()) add.mutate();
-      }}
-    >
-      <div className="space-y-1">
-        <Label>시장</Label>
-        <Select value={market} onValueChange={(v) => setMarket(v as MarketId)}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {MARKETS.map((m) => (
-              <SelectItem key={m.id} value={m.id}>
-                {m.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="space-y-1">
+          <Label>시장</Label>
+          <Select
+            value={market}
+            onValueChange={(v) => {
+              setMarket(v as MarketId);
+              setPicked(null);
+            }}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MARKETS.map((m) => (
+                <SelectItem key={m.id} value={m.id}>
+                  {m.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="min-w-[260px] flex-1 space-y-1">
+          <Label>종목 검색</Label>
+          {/* 종목분석과 동일한 조회 UI. 조회되면 그 종목을 추가. */}
+          <SymbolSearch key={market} market={market} onSelect={setPicked} />
+        </div>
+        <div className="space-y-1">
+          <Label>그룹 (선택)</Label>
+          <Input
+            className="w-32"
+            value={groupName}
+            onChange={(e) => setGroupName(e.target.value)}
+          />
+        </div>
       </div>
-      <div className="space-y-1">
-        <Label>종목코드</Label>
-        <Input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="005930 / AAPL / 7203" />
-      </div>
-      <div className="space-y-1">
-        <Label>이름 (선택)</Label>
-        <Input value={name} onChange={(e) => setName(e.target.value)} />
-      </div>
-      <div className="space-y-1">
-        <Label>그룹 (선택)</Label>
-        <Input value={groupName} onChange={(e) => setGroupName(e.target.value)} />
-      </div>
-      <Button type="submit" disabled={add.isPending}>
-        추가
-      </Button>
-    </form>
+
+      {picked && (
+        <div className="bg-muted/30 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border p-3 text-sm">
+          <span className="font-medium">{picked.name ?? picked.symbol}</span>
+          <span className="text-muted-foreground tnum text-xs">
+            {picked.symbol}
+            {picked.exchange ? ` · ${picked.exchange}` : ""}
+          </span>
+          <Button
+            className="ml-auto"
+            size="sm"
+            onClick={() => add.mutate()}
+            disabled={add.isPending}
+          >
+            유니버스에 추가
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
