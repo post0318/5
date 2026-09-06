@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import Link from "next/link";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
@@ -7,7 +8,6 @@ import { apiFetch } from "@/lib/query";
 import type { MarketId } from "@/lib/markets/types";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
 import { ChangePercent, Money, Multiple, Percent } from "@/components/num";
 import { UniversePptButton } from "@/components/ppt-export";
 import { formatBigAmount, formatMarketCap } from "@/lib/format";
@@ -78,6 +78,23 @@ export function UniverseOverview({ market }: { market: MarketId }) {
     undefined,
   );
 
+  // 같은 그룹끼리 묶고, 그룹 내에서는 종목코드순
+  const groups = useMemo(() => {
+    const byGroup = new Map<string, Row[]>();
+    for (const r of q.data?.rows ?? []) {
+      const g = r.groupName ?? "";
+      (byGroup.get(g) ?? byGroup.set(g, []).get(g)!).push(r);
+    }
+    const out = [...byGroup.entries()].map(([name, rs]) => ({
+      name,
+      rows: [...rs].sort((a, b) => a.symbol.localeCompare(b.symbol)),
+    }));
+    out.sort((a, b) =>
+      a.name === "" ? 1 : b.name === "" ? -1 : a.name.localeCompare(b.name, "ko"),
+    );
+    return out;
+  }, [q.data]);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -125,7 +142,6 @@ export function UniverseOverview({ market }: { market: MarketId }) {
             <thead>
               <tr className="bg-muted/50 text-muted-foreground text-left">
                 <th className="px-3 py-2 font-medium">종목</th>
-                <th className="px-3 py-2 font-medium">그룹</th>
                 <th className="px-3 py-2 text-right font-medium">종가</th>
                 <th className="px-3 py-2 text-right font-medium">등락</th>
                 <th className="px-3 py-2 text-right font-medium">시가총액({capUnit})</th>
@@ -138,8 +154,18 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                 <th className="px-3 py-2 font-medium">의견</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
-              {q.data.rows.map((r) => (
+            {groups.map((g) => (
+              <tbody key={g.name || "_none"} className="divide-y">
+                <tr className="bg-muted/30">
+                  <td
+                    colSpan={11}
+                    className="text-muted-foreground px-3 py-1.5 text-xs font-semibold"
+                  >
+                    {g.name || "미분류"}
+                    <span className="ml-1.5 font-normal opacity-70">({g.rows.length})</span>
+                  </td>
+                </tr>
+                {g.rows.map((r) => (
                 <tr key={r.itemId} className="hover:bg-muted/30">
                   <td className="px-3 py-2">
                     <Link
@@ -149,13 +175,6 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                       {r.name ?? r.symbol}
                     </Link>
                     <div className="text-muted-foreground tnum text-xs">{r.symbol}</div>
-                  </td>
-                  <td className="px-3 py-2">
-                    {r.groupName && (
-                      <Badge variant="secondary" className="text-xs">
-                        {r.groupName}
-                      </Badge>
-                    )}
                   </td>
                   {r.error ? (
                     <td colSpan={10} className="text-muted-foreground px-3 py-2 text-xs">
@@ -199,8 +218,9 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                     </>
                   )}
                 </tr>
-              ))}
-            </tbody>
+                ))}
+              </tbody>
+            ))}
           </table>
         </div>
       )}
