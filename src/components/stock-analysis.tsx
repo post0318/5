@@ -515,9 +515,7 @@ function Week52Bar({
       </div>
       <div className="text-muted-foreground tnum mt-0.5 flex justify-between text-[10px]">
         <span className="text-up">{lowPct != null ? `저점比 +${lowPct.toFixed(0)}%` : " "}</span>
-        <span className="text-emerald-600 dark:text-emerald-400">
-          고점比 −{Math.max(0, 100 - pct).toFixed(0)}%
-        </span>
+        <span className="text-down">고점比 −{Math.max(0, 100 - pct).toFixed(0)}%</span>
       </div>
     </div>
   );
