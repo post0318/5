@@ -107,6 +107,38 @@ export function formatPercent(
   return `${groupWithCommas(truncateToDigits(pct, 2), 2)}%`;
 }
 
+/**
+ * 시가총액 등 큰 금액을 단위를 명시해 표기.
+ *  kr: "1,493조 7,240억원"  jp: "1,493兆 7,240億円"  us: "$1.49T"
+ */
+export function formatMoneyWithUnits(
+  value: number | null | undefined,
+  market: "kr" | "us" | "jp",
+  opts: FormatOptions = {},
+): string {
+  const { fallback = "-" } = opts;
+  if (value === null || value === undefined || !Number.isFinite(value)) return fallback;
+  const neg = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  if (market === "us") {
+    if (abs >= 1e12) return `${neg}$${formatNumber(abs / 1e12, 2)}T`;
+    if (abs >= 1e9) return `${neg}$${formatNumber(abs / 1e9, 2)}B`;
+    if (abs >= 1e6) return `${neg}$${formatNumber(abs / 1e6, 2)}M`;
+    return `${neg}$${formatNumber(abs, 0)}`;
+  }
+  const [big, small, cur] =
+    market === "jp" ? [1e12, 1e8, "円"] : [1e12, 1e8, "원"];
+  const bigUnit = market === "jp" ? "兆" : "조";
+  const smallUnit = market === "jp" ? "億" : "억";
+  const b = Math.floor(abs / big);
+  const s = Math.floor((abs % big) / small);
+  if (b > 0) {
+    return `${neg}${formatNumber(b, 0)}${bigUnit}${s > 0 ? ` ${formatNumber(s, 0)}${smallUnit}` : ""}${cur}`;
+  }
+  if (s > 0) return `${neg}${formatNumber(s, 0)}${smallUnit}${cur}`;
+  return `${neg}${formatNumber(abs, 0)}${cur}`;
+}
+
 /** 큰 금액을 조/억/백만 단위로 축약 (통화 무관, 한국식 단위). */
 export function formatCompactKRW(value: number | null | undefined, opts: FormatOptions = {}): string {
   const { fallback = "-" } = opts;

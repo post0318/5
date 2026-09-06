@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import { cn } from "@/lib/utils";
-import { formatMarketCap } from "@/lib/format";
+import { formatMoneyWithUnits } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
 import type { StockOverview } from "@/lib/markets/service";
 import { computeTrailingMultiples } from "@/lib/markets/multiples";
@@ -145,23 +145,23 @@ export function StockAnalysis({
       : (ov?.consensus?.forwardPer ?? null);
 
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
-  const metrics: { label: string; node: React.ReactNode; hint?: string }[] = [
-    { label: "PER (최근 연간)", node: <Multiple value={multiples?.per} fallback={multiplesFallback} /> },
-    { label: "추정 PER (당해)", node: <Multiple value={fwdPer} />, hint: "현재가 ÷ 추정 EPS" },
+  const metrics: { label: string; node: React.ReactNode }[] = [
+    { label: "PER", node: <Multiple value={multiples?.per} fallback={multiplesFallback} /> },
+    { label: "PER(E)", node: <Multiple value={fwdPer} /> },
+    { label: "Fwd PER", node: <Multiple value={ov?.consensus?.forwardPer} /> },
     { label: "PBR", node: <Multiple value={multiples?.pbr} fallback={multiplesFallback} /> },
     { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
-    { label: "EV/EBITDA (근사)", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
-    { label: "Forward PER", node: <Multiple value={ov?.consensus?.forwardPer} />, hint: "yahoo · 대략 차년도" },
-    { label: "EPS (희석)", node: <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} /> },
-    { label: "추정 EPS (당해)", node: <Money value={fwdEps} currency={ccy} fallback="-" />, hint: "yahoo 컨센서스" },
+    { label: "EV/EBITDA", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
+    { label: "베타", node: <NumberText value={ov?.consensus?.beta} digits={2} /> },
+    { label: "EPS", node: <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} /> },
+    { label: "EPS(E)", node: <Money value={fwdEps} currency={ccy} fallback="-" /> },
     { label: "BPS", node: <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} /> },
-    { label: "DPS", node: <Money value={ov?.consensus?.dividendPerShare} currency={ccy} fallback="-" />, hint: "최근 12개월" },
+    { label: "유동비율", node: <NumberText value={ov?.consensus?.currentRatio} digits={2} /> },
+    { label: "DPS", node: <Money value={ov?.consensus?.dividendPerShare} currency={ccy} fallback="-" /> },
     { label: "배당수익률", node: <Percent value={ov?.consensus?.dividendYield} fallback="-" /> },
-    { label: "베타", node: <NumberText value={ov?.consensus?.beta} digits={2} />, hint: "yahoo" },
-    { label: "유동비율", node: <NumberText value={ov?.consensus?.currentRatio} digits={2} />, hint: "유동자산/유동부채" },
   ];
   const metricRows: (typeof metrics)[] = [];
-  for (let i = 0; i < metrics.length; i += 2) metricRows.push(metrics.slice(i, i + 2));
+  for (let i = 0; i < metrics.length; i += 4) metricRows.push(metrics.slice(i, i + 4));
 
   return (
     <div className="space-y-6">
@@ -277,12 +277,10 @@ export function StockAnalysis({
                 <Stat label="전일 대비">
                   <ChangePercent value={ov.quote?.changePct} />
                 </Stat>
-                <Stat
-                  label={`시가총액 (단위 : ${
-                    market === "jp" ? "억엔" : market === "us" ? "십억$" : "십억원"
-                  })`}
-                >
-                  {formatMarketCap(multiples?.marketCap ?? ov.quote?.marketCap, market)}
+                <Stat label="시가총액">
+                  <span className="text-base">
+                    {formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
+                  </span>
                 </Stat>
                 <Stat label="52주 최고 / 최저">
                   <span className="tnum text-base">
@@ -306,14 +304,17 @@ export function StockAnalysis({
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold">투자지표</h3>
                 <div className="overflow-x-auto rounded-lg border">
-                  <table className="w-full min-w-[560px] text-sm">
+                  <table className="w-full min-w-[820px] text-sm">
                     <tbody>
-                      {metricRows.map((pair, i) => (
+                      {metricRows.map((row, i) => (
                         <tr key={i} className="border-b last:border-b-0">
-                          {pair.map((m, j) => (
+                          {row.map((m, j) => (
                             <MetricCells key={j} m={m} first={j === 0} />
                           ))}
-                          {pair.length === 1 && <td colSpan={2} className="border-l" />}
+                          {row.length < 4 &&
+                            Array.from({ length: 4 - row.length }).map((_, k) => (
+                              <td key={`f${k}`} colSpan={2} className="border-l" />
+                            ))}
                         </tr>
                       ))}
                     </tbody>
@@ -502,8 +503,10 @@ function Week52Bar({
         />
       </div>
       <div className="text-muted-foreground tnum mt-0.5 flex justify-between text-[10px]">
-        <span>{lowPct != null ? `저점比 +${lowPct.toFixed(0)}%` : " "}</span>
-        <span className={over ? "text-up font-medium" : "text-down"}>고점比 {pct.toFixed(0)}%</span>
+        <span className="text-up">{lowPct != null ? `저점比 +${lowPct.toFixed(0)}%` : " "}</span>
+        <span className="text-emerald-600 dark:text-emerald-400">
+          고점比 −{Math.max(0, 100 - pct).toFixed(0)}%
+        </span>
       </div>
     </div>
   );
@@ -513,21 +516,20 @@ function MetricCells({
   m,
   first,
 }: {
-  m: { label: string; node: React.ReactNode; hint?: string };
+  m: { label: string; node: React.ReactNode };
   first: boolean;
 }) {
   return (
     <>
       <th
         className={cn(
-          "text-muted-foreground bg-muted/30 w-px px-3 py-2 text-left text-xs font-medium whitespace-nowrap",
+          "text-muted-foreground bg-muted/30 px-3 py-2 text-left text-xs font-medium whitespace-nowrap",
           !first && "border-l",
         )}
       >
         {m.label}
-        {m.hint && <span className="ml-1 opacity-70">· {m.hint}</span>}
       </th>
-      <td className="tnum px-3 py-2 font-medium">{m.node}</td>
+      <td className="tnum px-3 py-2 text-right font-medium">{m.node}</td>
     </>
   );
 }
