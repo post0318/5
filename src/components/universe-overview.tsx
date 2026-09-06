@@ -187,13 +187,13 @@ export function UniverseOverview({ market }: { market: MarketId }) {
             </thead>
             {visibleGroups.map((g) => (
               <tbody key={g.name || "_none"} className="divide-y">
-                <tr className="bg-muted/30">
+                <tr className="bg-muted/70">
                   <td
                     colSpan={11}
-                    className="text-muted-foreground px-3 py-1.5 text-xs font-semibold"
+                    className="text-foreground px-3 py-1.5 text-sm font-bold"
                   >
                     {g.name || "미분류"}
-                    <span className="ml-1.5 font-normal opacity-70">({g.rows.length})</span>
+                    <span className="ml-1.5 text-xs font-normal opacity-70">({g.rows.length})</span>
                   </td>
                 </tr>
                 {g.rows.map((r) => (
