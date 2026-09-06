@@ -513,8 +513,10 @@ function fgColor(score: number): string {
 
 const RATING_KO_OF = (score: number): string => {
   if (score < 25) return "극도의 공포";
-  if (score < 45) return "공포";
+  if (score < 40) return "공포";
+  if (score < 45) return "공포 진입";
   if (score <= 55) return "중립";
+  if (score <= 60) return "탐욕 진입";
   if (score <= 75) return "탐욕";
   return "극도의 탐욕";
 };
