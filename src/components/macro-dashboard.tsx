@@ -235,7 +235,7 @@ export function MacroDashboard() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-baseline gap-2">
-          <h1 className="text-xl font-semibold">글로벌 시장 지수</h1>
+          <h1 className="text-xl font-semibold">글로벌 핵심지표</h1>
           <span className="text-muted-foreground text-sm">{q.data?.asOf ?? "-"}</span>
         </div>
         <Button variant="outline" size="sm" onClick={() => q.refetch()} disabled={q.isFetching}>
@@ -254,7 +254,8 @@ export function MacroDashboard() {
       {q.isError && <p className="text-destructive text-sm">{(q.error as Error).message}</p>}
 
       {q.data && q.data.indices.length > 0 && (
-        <div className="space-y-3">
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold">글로벌 시장지수</h2>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
             {q.data.indices.map((ix) => (
               <button
@@ -289,7 +290,7 @@ export function MacroDashboard() {
           {selIdx && (
             <IndexChartPanel idxKey={selIdx} onClose={() => setSelIdx(null)} />
           )}
-        </div>
+        </section>
       )}
 
       {q.data && (
@@ -327,14 +328,14 @@ export function MacroDashboard() {
             </section>
           )}
 
-          <Card>
-            <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2 py-4 text-sm">
+          <Card className="py-2">
+            <CardContent className="flex flex-wrap items-center gap-x-5 gap-y-1 py-1 text-sm">
               <span className="font-medium">종합 신호</span>
               <span className="text-up">긍정 {q.data.summary.positive}</span>
               <span className="text-down">부정 {q.data.summary.negative}</span>
               <span className="text-muted-foreground">중립 {q.data.summary.neutral}</span>
               <span className="text-muted-foreground ml-auto text-xs">
-                아래 지표들의 자동 판정 집계 · 다수 긍정이면 확장 국면, 스프레드·심리 악화면 후퇴 경계
+                아래 지표 자동 판정 집계 · 다수 긍정=확장, 스프레드·심리 악화=후퇴 경계
               </span>
             </CardContent>
           </Card>
