@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import { apiFetch } from "@/lib/query";
+import { cn } from "@/lib/utils";
+import { formatMarketCap } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
 import type { StockOverview } from "@/lib/markets/service";
 import { computeTrailingMultiples } from "@/lib/markets/multiples";
@@ -148,9 +150,28 @@ export function StockAnalysis({
     const lo = ov?.consensus?.fiftyTwoWeekLow;
     const px = ov?.quote?.last;
     if (hi == null || lo == null || px == null || hi <= lo) return "개인용 · yahoo";
-    const pct = Math.round(((px - lo) / (hi - lo)) * 100);
-    return `현재가 52주 구간의 ${Math.max(0, Math.min(100, pct))}%`;
+    const pct = Math.max(0, Math.min(100, Math.round(((px - lo) / (hi - lo)) * 100)));
+    return `52주 밴드 내 위치 ${pct}% (0=저점·100=고점)`;
   }, [ov]);
+
+  // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
+  const metrics: { label: string; node: React.ReactNode; hint?: string }[] = [
+    { label: "PER (최근 연간)", node: <Multiple value={multiples?.per} fallback={multiplesFallback} /> },
+    { label: "추정 PER (당해)", node: <Multiple value={fwdPer} />, hint: "현재가 ÷ 추정 EPS" },
+    { label: "PBR", node: <Multiple value={multiples?.pbr} fallback={multiplesFallback} /> },
+    { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
+    { label: "EV/EBITDA (근사)", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
+    { label: "Forward PER", node: <Multiple value={ov?.consensus?.forwardPer} />, hint: "yahoo · 대략 차년도" },
+    { label: "EPS (희석)", node: <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} /> },
+    { label: "추정 EPS (당해)", node: <Money value={fwdEps} currency={ccy} fallback="-" />, hint: "yahoo 컨센서스" },
+    { label: "BPS", node: <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} /> },
+    { label: "DPS", node: <Money value={ov?.consensus?.dividendPerShare} currency={ccy} fallback="-" />, hint: "최근 12개월" },
+    { label: "배당수익률", node: <Percent value={ov?.consensus?.dividendYield} fallback="-" /> },
+    { label: "베타", node: <NumberText value={ov?.consensus?.beta} digits={2} />, hint: "yahoo" },
+    { label: "유동비율", node: <NumberText value={ov?.consensus?.currentRatio} digits={2} />, hint: "유동자산/유동부채" },
+  ];
+  const metricRows: (typeof metrics)[] = [];
+  for (let i = 0; i < metrics.length; i += 2) metricRows.push(metrics.slice(i, i + 2));
 
   return (
     <div className="space-y-6">
@@ -261,77 +282,47 @@ export function StockAnalysis({
                 <Stat label="전일 대비">
                   <ChangePercent value={ov.quote?.changePct} />
                 </Stat>
-                <Stat label="시가총액">
-                  <Money value={multiples?.marketCap ?? ov.quote?.marketCap} currency={ccy} />
+                <Stat
+                  label={`시가총액 (단위 : ${
+                    market === "jp" ? "억엔" : market === "us" ? "십억$" : "십억원"
+                  })`}
+                >
+                  {formatMarketCap(multiples?.marketCap ?? ov.quote?.marketCap, market)}
                 </Stat>
                 <Stat label="52주 최고 / 최저">
                   <span className="tnum text-base">
-                    <Money value={ov.consensus?.fiftyTwoWeekHigh} currency={ccy} fallback="-" />
+                    <span className="text-up">
+                      <Money value={ov.consensus?.fiftyTwoWeekHigh} currency={ccy} fallback="-" />
+                    </span>
                     {" / "}
-                    <Money value={ov.consensus?.fiftyTwoWeekLow} currency={ccy} fallback="-" />
+                    <span className="text-down">
+                      <Money value={ov.consensus?.fiftyTwoWeekLow} currency={ccy} fallback="-" />
+                    </span>
                   </span>
                   <div className="text-muted-foreground mt-1 text-xs">{week52Pos}</div>
                 </Stat>
               </div>
 
-              {/* 펀더멘털 */}
+              {/* 투자지표 (펀더멘털 + 참고) */}
               <section className="space-y-3">
-                <h3 className="text-sm font-semibold">펀더멘털</h3>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <Stat label="PER (최근 연간)">
-                    <Multiple value={multiples?.per} fallback={multiplesFallback} />
-                  </Stat>
-                  <Stat label="추정 PER (당해)">
-                    <Multiple value={fwdPer} />
-                    <div className="text-muted-foreground mt-1 text-xs">현재가 ÷ 추정 EPS · yahoo</div>
-                  </Stat>
-                  <Stat label="PBR">
-                    <Multiple value={multiples?.pbr} fallback={multiplesFallback} />
-                  </Stat>
-                  <Stat label="EV/EBITDA (근사)">
-                    <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} />
-                  </Stat>
-                  <Stat label="EPS (희석)">
-                    <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} />
-                  </Stat>
-                  <Stat label="추정 EPS (당해)">
-                    <Money value={fwdEps} currency={ccy} fallback="-" />
-                    <div className="text-muted-foreground mt-1 text-xs">개인용 · yahoo 컨센서스</div>
-                  </Stat>
-                  <Stat label="BPS">
-                    <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} />
-                  </Stat>
-                  <Stat label="DPS">
-                    <Money value={ov.consensus?.dividendPerShare} currency={ccy} fallback="-" />
-                    <div className="text-muted-foreground mt-1 text-xs">최근 12개월 · yahoo</div>
-                  </Stat>
-                  <Stat label="배당수익률">
-                    <Percent value={ov.consensus?.dividendYield} alreadyPercent={false} fallback="-" />
-                    <div className="text-muted-foreground mt-1 text-xs">yahoo</div>
-                  </Stat>
+                <h3 className="text-sm font-semibold">투자지표</h3>
+                <div className="overflow-x-auto rounded-lg border">
+                  <table className="w-full min-w-[560px] text-sm">
+                    <tbody>
+                      {metricRows.map((pair, i) => (
+                        <tr key={i} className="border-b last:border-b-0">
+                          {pair.map((m, j) => (
+                            <MetricCells key={j} m={m} first={j === 0} />
+                          ))}
+                          {pair.length === 1 && <td colSpan={2} className="border-l" />}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              </section>
-
-              {/* 참고 지표 */}
-              <section className="space-y-3">
-                <h3 className="text-sm font-semibold">참고 지표</h3>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <Stat label="Forward PER (yahoo)">
-                    <Multiple value={ov.consensus?.forwardPer} />
-                    <div className="text-muted-foreground mt-1 text-xs">yahoo 산출(대략 차년도 기준)</div>
-                  </Stat>
-                  <Stat label="베타">
-                    <NumberText value={ov.consensus?.beta} digits={2} />
-                    <div className="text-muted-foreground mt-1 text-xs">yahoo 기준</div>
-                  </Stat>
-                  <Stat label="유동비율">
-                    <NumberText value={ov.consensus?.currentRatio} digits={2} />
-                    <div className="text-muted-foreground mt-1 text-xs">유동자산/유동부채 · yahoo</div>
-                  </Stat>
-                  <Stat label="PSR">
-                    <Multiple value={multiples?.psr} fallback={multiplesFallback} />
-                  </Stat>
-                </div>
+                <p className="text-muted-foreground/80 text-[11px]">
+                  PER/PBR/EPS/BPS/EV·EBITDA = 최근 연간 공시 재무 + 현재가 자체 계산 · 추정·베타·유동비율·배당 = yahoo 개인용
+                </p>
               </section>
 
               {ov.consensus && (
@@ -480,6 +471,29 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
       <div className="text-muted-foreground text-xs">{label}</div>
       <div className="mt-1 text-lg font-semibold">{children}</div>
     </div>
+  );
+}
+
+function MetricCells({
+  m,
+  first,
+}: {
+  m: { label: string; node: React.ReactNode; hint?: string };
+  first: boolean;
+}) {
+  return (
+    <>
+      <th
+        className={cn(
+          "text-muted-foreground bg-muted/30 w-px px-3 py-2 text-left text-xs font-medium whitespace-nowrap",
+          !first && "border-l",
+        )}
+      >
+        {m.label}
+        {m.hint && <span className="ml-1 opacity-70">· {m.hint}</span>}
+      </th>
+      <td className="tnum px-3 py-2 font-medium">{m.node}</td>
+    </>
   );
 }
 
