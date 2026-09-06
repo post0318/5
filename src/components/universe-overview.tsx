@@ -133,7 +133,6 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                 <th className="px-3 py-2 text-right font-medium">영업이익률</th>
                 <th className="px-3 py-2 text-right font-medium">순이익률</th>
                 <th className="px-3 py-2 text-right font-medium">PER</th>
-                <th className="px-3 py-2 text-right font-medium">PBR</th>
                 <th className="px-3 py-2 text-right font-medium">Fwd PER</th>
                 <th className="px-3 py-2 text-right font-medium">목표주가</th>
                 <th className="px-3 py-2 font-medium">의견</th>
@@ -159,7 +158,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                     )}
                   </td>
                   {r.error ? (
-                    <td colSpan={11} className="text-muted-foreground px-3 py-2 text-xs">
+                    <td colSpan={10} className="text-muted-foreground px-3 py-2 text-xs">
                       {r.error}
                     </td>
                   ) : (
@@ -184,9 +183,6 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                       </td>
                       <td className="px-3 py-2 text-right">
                         <Multiple value={r.per} />
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <Multiple value={r.pbr} />
                       </td>
                       <td className="px-3 py-2 text-right">
                         <Multiple value={r.forwardPer} />
