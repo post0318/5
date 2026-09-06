@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
@@ -67,6 +67,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
   });
   const capUnit = CAP_UNIT[market];
   const revUnit = REV_UNIT[market];
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 
   const refresh = async () => {
     await apiFetch<{ rows: Row[] }>(`/api/universe/overview?market=${market}&refresh=1`);
@@ -94,6 +95,12 @@ export function UniverseOverview({ market }: { market: MarketId }) {
     );
     return out;
   }, [q.data]);
+
+  // 선택된 그룹만 표시 (없거나 사라진 그룹이면 전체)
+  const visibleGroups =
+    selectedGroup != null && groups.some((g) => g.name === selectedGroup)
+      ? groups.filter((g) => g.name === selectedGroup)
+      : groups;
 
   return (
     <div className="space-y-4">
@@ -136,6 +143,30 @@ export function UniverseOverview({ market }: { market: MarketId }) {
         </p>
       )}
 
+      {q.data && q.data.rows.length > 0 && groups.length > 1 && (
+        <div className="flex flex-wrap gap-1.5">
+          <Button
+            variant={selectedGroup == null ? "default" : "outline"}
+            size="sm"
+            onClick={() => setSelectedGroup(null)}
+          >
+            전체
+            <span className="ml-1 opacity-70">({q.data.rows.length})</span>
+          </Button>
+          {groups.map((g) => (
+            <Button
+              key={g.name || "_none"}
+              variant={selectedGroup === g.name ? "default" : "outline"}
+              size="sm"
+              onClick={() => setSelectedGroup(g.name)}
+            >
+              {g.name || "미분류"}
+              <span className="ml-1 opacity-70">({g.rows.length})</span>
+            </Button>
+          ))}
+        </div>
+      )}
+
       {q.data && q.data.rows.length > 0 && (
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full min-w-[1080px] text-sm">
@@ -154,7 +185,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                 <th className="px-3 py-2 font-medium">의견</th>
               </tr>
             </thead>
-            {groups.map((g) => (
+            {visibleGroups.map((g) => (
               <tbody key={g.name || "_none"} className="divide-y">
                 <tr className="bg-muted/30">
                   <td
