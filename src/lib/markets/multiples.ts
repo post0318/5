@@ -61,10 +61,13 @@ export interface MultiplesInput {
   sharesOutstanding?: number | null;
   /** TTM(최근 4분기) 플로우 — 트레일링PER 계산용 */
   ttm?: TtmFlows | null;
+  /** 감가상각비 + 무형자산상각비 (연간, EV/EBITDA 정확 산출용). 없으면 EV/EBIT 근사. */
+  depreciationAmortisation?: number | null;
 }
 
 export function computeTrailingMultiples(input: MultiplesInput): TrailingMultiples {
   const { market, symbol, quote, annual, quarterly, sharesOutstanding, ttm } = input;
+  const da = input.depreciationAmortisation ?? null;
   const price = quote.last;
   const quotedMarketCap = quote.marketCap ?? null;
 
@@ -150,8 +153,10 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     marketCap != null
       ? marketCap + (totalLiabilities ?? 0) - (cash ?? 0)
       : null;
-  // EBITDA 근사: 영업이익 (감가상각 별도 데이터 없을 때)
-  const evEbitda = ev != null && opIncome ? ev / opIncome : null;
+  // EBITDA = 영업이익 + 감가상각비 + 무형자산상각비 (D&A 없으면 EV/EBIT 근사)
+  const ebitda = opIncome != null ? opIncome + (da ?? 0) : null;
+  const evEbitda = ev != null && ebitda ? ev / ebitda : null;
+  const evEbitdaIsApprox = da == null;
 
   return {
     symbol,
@@ -162,6 +167,7 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     pbr: finite(pbr),
     psr: finite(psr),
     evEbitda: finite(evEbitda),
+    evEbitdaIsApprox,
     eps: finite(epsDiluted),
     bps: finite(bps),
     dividendYield: null,

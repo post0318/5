@@ -92,9 +92,11 @@ export function StockAnalysis({
   const ttmQ = useQuery({
     queryKey: ["ttm", market, symbol],
     queryFn: () =>
-      apiFetch<{ ttm: TtmFlows | null }>(
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm`,
-      ),
+      apiFetch<{
+        ttm: TtmFlows | null;
+        da: { depreciation: number | null; amortisation: number | null } | null;
+        dividend: { dps: number; year: number } | null;
+      }>(`/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm`),
     enabled: Boolean(symbol),
     retry: false,
   });
@@ -177,6 +179,11 @@ export function StockAnalysis({
   const ov = overview.data;
 
   // 개요 엔드포인트는 속도를 위해 재무제표를 안 받아온다 → 멀티플은 여기서 계산.
+  const da = ttmQ.data?.da ?? null;
+  const daTotal =
+    da && (da.depreciation != null || da.amortisation != null)
+      ? (da.depreciation ?? 0) + (da.amortisation ?? 0)
+      : null;
   const multiples = useMemo(() => {
     if (!ov?.quote || !annualForMultiples.data) return ov?.multiples ?? null;
     return computeTrailingMultiples({
@@ -186,8 +193,9 @@ export function StockAnalysis({
       annual: annualForMultiples.data,
       quarterly: null,
       sharesOutstanding: ov.quote.sharesOutstanding ?? null,
+      depreciationAmortisation: daTotal,
     });
-  }, [ov, annualForMultiples.data, market]);
+  }, [ov, annualForMultiples.data, market, daTotal]);
   const multiplesFallback =
     annualForMultiples.isLoading ? "…" : annualForMultiples.isError ? "n/a" : "-";
   const ccy = ov?.quote?.currency ?? "USD";
@@ -222,6 +230,19 @@ export function StockAnalysis({
         ? price / yhEstEps
         : (ov?.consensus?.forwardPer ?? null);
 
+  // DPS / 배당수익률 — 국내는 금융위 배당정보 API, 해외는 yahoo
+  const dps =
+    market === "kr"
+      ? (ttmQ.data?.dividend?.dps ?? null)
+      : (ov?.consensus?.dividendPerShare ?? null);
+  // 소수 비율(0.012 = 1.2%)로 통일 — <Percent> 가 ×100 해서 표시
+  const divYield =
+    market === "kr"
+      ? price != null && dps != null && price > 0
+        ? dps / price
+        : null
+      : ((ov?.consensus?.dividendYield ?? null) as number | null);
+
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
   const metrics: { label: string; node: React.ReactNode }[] = [
     { label: "PER", node: <Multiple value={multiples?.per} fallback={multiplesFallback} /> },
@@ -235,9 +256,18 @@ export function StockAnalysis({
     { label: "EPS(TTM)", node: <Money value={ttmEps} currency={ccy} fallback="-" /> },
     { label: "", node: null },
     { label: "BPS", node: <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} /> },
-    { label: "DPS", node: <Money value={ov?.consensus?.dividendPerShare} currency={ccy} fallback="-" /> },
-    { label: "배당수익률", node: <Percent value={ov?.consensus?.dividendYield} fallback="-" /> },
-    { label: "EV/EBITDA", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
+    {
+      label: "DPS",
+      node: <Money value={dps} currency={ccy} fallback="-" />,
+    },
+    {
+      label: "배당수익률",
+      node: <Percent value={divYield} fallback="-" />,
+    },
+    {
+      label: multiples?.evEbitdaIsApprox ? "EV/EBIT" : "EV/EBITDA",
+      node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} />,
+    },
     { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
   ];
   const metricRows: (typeof metrics)[] = [];

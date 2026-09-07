@@ -148,6 +148,8 @@ export interface TrailingMultiples {
   pbr: number | null;
   psr: number | null;
   evEbitda: number | null;
+  /** EV/EBITDA 가 D&A 없이 EV/EBIT 로 근사된 경우 true */
+  evEbitdaIsApprox: boolean;
   /** 주당순이익 (희석) */
   eps: number | null;
   /** 주당순자산 */

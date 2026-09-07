@@ -87,6 +87,37 @@ async function fetchDividendMap(crno: string): Promise<Map<string, number>> {
   return map;
 }
 
+/** 최근 "완결된" 회계연도의 보통주 주당 배당금 합계 (분기·중간배당 포함) */
+export async function fetchKrAnnualDps(
+  crno: string | null,
+): Promise<{ dps: number; year: number } | null> {
+  if (!isConfigured() || !crno) return null;
+  let rows: Record<string, string>[];
+  try {
+    rows = await fetchTail("GetStocDiviInfoService_V2", "getDiviInfo_V2", crno, 400);
+  } catch {
+    return null;
+  }
+  // 배당기준일 연도별로 보통주 주당 배당금 합산
+  const byYear = new Map<number, number>();
+  for (const r of rows) {
+    const isCommon = r.scrsItmsKcd === "0101" || (r.scrsItmsKcdNm ?? "").includes("보통");
+    if (!isCommon) continue;
+    const amt = num(r.stckGenrDvdnAmt);
+    const bd = String(r.dvdnBasDt ?? "").replace(/\D/g, "");
+    if (bd.length !== 8 || amt == null || amt <= 0) continue;
+    const y = Number(bd.slice(0, 4));
+    byYear.set(y, (byYear.get(y) ?? 0) + amt);
+  }
+  const thisYear = new Date().getFullYear();
+  // 올해는 아직 진행 중일 수 있어 직전연도 우선, 없으면 올해
+  for (const y of [thisYear - 1, thisYear, thisYear - 2]) {
+    const v = byYear.get(y);
+    if (v) return { dps: Math.round(v * 100) / 100, year: y };
+  }
+  return null;
+}
+
 // ── 배당수익률용 종가 ────────────────────────────────────────────────
 
 async function fetchCloseMap(
