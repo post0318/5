@@ -90,12 +90,16 @@ export async function fetchKrRightsSchedule(
   cutoff.setFullYear(cutoff.getFullYear() - 1);
   const lo = cutoff.toISOString().slice(0, 10);
 
+  // 배당/분배 · 무상증자/유상증자 · 액면분할/병합 · 감자 만 (총회·명세통지 등 제외)
+  const KEEP = /배당|분배|증자|액면|감자|병합|분할/;
+
   // (기준일 + 권리사유) 로 묶고 세부 일정 수집
   const groups = new Map<string, KrRightEvent>();
   for (const r of tail.rows) {
     const basDt = dash(r.basDt);
     if (!basDt || basDt < lo) continue;
     const reason = (r.stckIssuRcdNm ?? "권리행사").trim();
+    if (!KEEP.test(reason)) continue;
     const gk = `${basDt}|${reason}`;
     if (!groups.has(gk)) {
       groups.set(gk, {
