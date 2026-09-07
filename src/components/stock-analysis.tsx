@@ -341,10 +341,10 @@ export function StockAnalysis({
             <TabsList>
               <TabsTrigger value="overview">개요</TabsTrigger>
               <TabsTrigger value="financials">재무제표</TabsTrigger>
-              <TabsTrigger value="filings">공시</TabsTrigger>
               {market === "kr" && (
                 <TabsTrigger value="rights">권리일정</TabsTrigger>
               )}
+              <TabsTrigger value="filings">공시</TabsTrigger>
             </TabsList>
 
             {/* 개요 */}
