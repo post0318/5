@@ -183,7 +183,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                 <th className="px-3 py-2 text-right font-medium">매출액({revUnit})</th>
                 <th className="px-3 py-2 text-right font-medium">영업이익률</th>
                 <th className="px-3 py-2 text-right font-medium">순이익률</th>
-                <th className="px-3 py-2 text-right font-medium">트레일링PER</th>
+                <th className="px-3 py-2 text-right font-medium">PER(TTM)</th>
                 <th className="px-3 py-2 text-right font-medium">추정PER</th>
                 <th className="px-3 py-2 text-right font-medium">목표주가</th>
                 <th className="px-3 py-2 font-medium">의견</th>

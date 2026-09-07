@@ -229,7 +229,7 @@ export function StockAnalysis({
   const metrics: { label: string; node: React.ReactNode }[] = [
     { label: "PER", node: <Multiple value={multiples?.per} fallback={multiplesFallback} /> },
     {
-      label: "트레일링PER",
+      label: "PER(TTM)",
       node: <Multiple value={trailingPer} fallback={ttmQ.isLoading ? "…" : "-"} />,
     },
     { label: "추정PER", node: <Multiple value={estPer} fallback="-" /> },
@@ -421,7 +421,7 @@ export function StockAnalysis({
                   </table>
                 </div>
                 <p className="text-muted-foreground/80 text-[11px]">
-                  PER/PBR/EPS/BPS/EV·EBITDA = 최근 연간 공시 재무 + 현재가 자체 계산 · 트레일링PER = TTM(국내 DART·해외 yahoo) · 추정PER/유동비율/배당 = yahoo 개인용
+                  PER/PBR/EPS/BPS/EV·EBITDA = 최근 연간 공시 재무 + 현재가 자체 계산 · PER(TTM) = 최근 4분기(국내 DART·해외 yahoo) · 추정PER/유동비율/배당 = yahoo 개인용
                 </p>
               </section>
 
