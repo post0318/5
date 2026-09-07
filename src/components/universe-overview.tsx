@@ -227,7 +227,9 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                         {formatMarketCap(r.marketCap, r.market)}
                       </td>
                       <td className="tnum text-muted-foreground px-3 py-2 text-right">
-                        {r.foreignRatio != null ? `${r.foreignRatio.toFixed(2)}%` : "-"}
+                        {r.market === "kr" && r.foreignRatio != null
+                          ? `${r.foreignRatio.toFixed(2)}%`
+                          : "-"}
                       </td>
                       <td className="tnum px-3 py-2 text-right">
                         {formatBigAmount(r.revenueAnnual, r.market)}
