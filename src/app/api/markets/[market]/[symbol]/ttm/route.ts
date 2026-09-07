@@ -3,12 +3,13 @@ import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
+import { computeKr52wBeta } from "@/lib/markets/kr/beta";
 
 export const maxDuration = 60;
 
 /**
- * TTM(최근 4분기) 플로우 + 감가상각비(연결, XBRL) — 트레일링PER·EV/EBITDA 계산용.
- * 미구현 시장은 { ttm: null, da: null }.
+ * TTM(최근 4분기) 플로우 + 국내 보조지표(주당배당금, 52주 베타).
+ * 미구현 시장은 { ttm: null, dividend: null, beta: null }.
  */
 export async function GET(
   request: Request,
@@ -21,16 +22,20 @@ export async function GET(
     }
     const adapter = getAdapter(market);
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
-    const [ttm, dividend] = await Promise.all([
+    const yahoo = new URL(request.url).searchParams.get("yahoo");
+    const [ttm, dividend, beta] = await Promise.all([
       adapter.getTtm ? adapter.getTtm(sym) : Promise.resolve(null),
       market === "kr"
         ? getKrJurirNo(sym)
             .then((crno) => fetchKrAnnualDps(crno))
             .catch(() => null)
         : Promise.resolve(null),
+      market === "kr"
+        ? computeKr52wBeta(sym, yahoo).catch(() => null)
+        : Promise.resolve(null),
     ]);
     return ok(
-      { ttm, dividend },
+      { ttm, dividend, beta },
       {
         headers: {
           "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400",

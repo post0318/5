@@ -90,12 +90,16 @@ export function StockAnalysis({
   });
 
   const ttmQ = useQuery({
-    queryKey: ["ttm", market, symbol],
+    queryKey: ["ttm", market, symbol, yahooOverride],
     queryFn: () =>
       apiFetch<{
         ttm: TtmFlows | null;
         dividend: { dps: number; year: number } | null;
-      }>(`/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm`),
+        beta: { beta: number; n: number } | null;
+      }>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm` +
+          (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
+      ),
     enabled: Boolean(symbol),
     retry: false,
   });
@@ -415,8 +419,19 @@ export function StockAnalysis({
                 </Stat>
                 <Stat label="52주 베타">
                   <span className="tnum text-base">
-                    <NumberText value={ov.consensus?.beta} digits={2} fallback="-" />
+                    <NumberText
+                      value={
+                        market === "kr"
+                          ? (ttmQ.data?.beta?.beta ?? null)
+                          : (ov.consensus?.beta ?? null)
+                      }
+                      digits={2}
+                      fallback="-"
+                    />
                   </span>
+                  {market !== "kr" && ov.consensus?.beta != null && (
+                    <div className="text-muted-foreground mt-1 text-[11px]">yahoo · 5년 월간</div>
+                  )}
                 </Stat>
                 <Stat label="52주 최고 / 최저">
                   <span className="tnum text-base">
@@ -443,9 +458,15 @@ export function StockAnalysis({
                   <table className="w-full min-w-[820px] text-sm">
                     <tbody>
                       {metricRows.map((row, i) => (
-                        <tr key={i} className="border-b last:border-b-0">
+                        <tr
+                          key={i}
+                          className={cn(
+                            "border-b last:border-b-0",
+                            i === 1 && "bg-muted/70",
+                          )}
+                        >
                           {row.map((m, j) => (
-                            <MetricCells key={j} m={m} first={j === 0} />
+                            <MetricCells key={j} m={m} first={j === 0} shaded={i === 1} />
                           ))}
                           {row.length < 4 &&
                             Array.from({ length: 4 - row.length }).map((_, k) => (
@@ -456,8 +477,13 @@ export function StockAnalysis({
                     </tbody>
                   </table>
                 </div>
-                <p className="text-muted-foreground/80 text-[11px]">
-                  PER/PBR/EPS/BPS/EV·EBITDA = 최근 연간 공시 재무 + 현재가 자체 계산 · PER(TTM) = 최근 4분기(국내 DART·해외 yahoo) · 추정PER/유동비율/배당 = yahoo 개인용
+                <p className="text-muted-foreground/80 text-[11px] leading-relaxed">
+                  PER·PBR·PSR·EPS·BPS = 최근 연간 공시 재무(DART/EDGAR/EDINET) + 현재가 자체 계산 ·
+                  PER(TTM)·EPS(TTM) = 최근 4분기(국내 DART 분기누적, 해외 yahoo) ·
+                  EV/EBITDA = (시총+부채−현금) ÷ (영업이익+감가상각비), 국내 감가상각비는 DART XBRL(TTM); 없으면 EV/EBIT 근사 ·
+                  추정PER = 당해 컨센서스(국내 FnGuide/네이버, 해외 yahoo) ·
+                  DPS·배당수익률 = 국내 금융위 주식배당정보 API, 해외 yahoo ·
+                  52주 베타 = 국내 KOSPI 대비 일간수익률 자체 계산, 해외 yahoo(5년 월간)
                 </p>
               </section>
 
@@ -668,7 +694,7 @@ export function StockAnalysis({
                   </div>
                 )}
                 <p className="text-muted-foreground/80 text-[11px]">
-                  출처: 금융위원회_주식권리일정정보 (공공데이터포털) · 익영업일 13시 이후 갱신
+                  출처: 금융위원회_주식권리일정정보 (공공데이터포털) · 익영업일 오전 8시 갱신
                 </p>
               </TabsContent>
             )}
@@ -727,15 +753,18 @@ function Week52Bar({
 function MetricCells({
   m,
   first,
+  shaded,
 }: {
   m: { label: string; node: React.ReactNode };
   first: boolean;
+  shaded?: boolean;
 }) {
   return (
     <>
       <th
         className={cn(
-          "text-muted-foreground bg-muted/30 px-3 py-2 text-left text-xs font-medium whitespace-nowrap",
+          "text-muted-foreground px-3 py-2 text-left text-xs font-medium whitespace-nowrap",
+          shaded ? "bg-muted/80" : "bg-muted/30",
           !first && "border-l",
         )}
       >

@@ -7,7 +7,7 @@ import "server-only";
  *  시세     : GetStockSecuritiesInfoService/getStockPriceInfo (배당수익률 계산용 종가)
  *  DATA_GO_KR_KEY 필요 (Encoding 인증키 — 이미 URL 인코딩된 문자열).
  *
- * 종목 필터는 법인등록번호(crno). 일 1회 갱신(익영업일 13시 이후).
+ * 종목 필터는 법인등록번호(crno). 일 1회 갱신(익영업일 오전 8시).
  */
 
 const KEY = () => process.env.DATA_GO_KR_KEY ?? "";
