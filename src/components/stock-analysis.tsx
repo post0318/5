@@ -301,8 +301,6 @@ export function StockAnalysis({
     },
     { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
   ];
-  const metricRows: (typeof metrics)[] = [];
-  for (let i = 0; i < metrics.length; i += 4) metricRows.push(metrics.slice(i, i + 4));
 
   return (
     <div className="space-y-6">
@@ -411,8 +409,9 @@ export function StockAnalysis({
             {/* 개요 */}
             <TabsContent value="overview" className="space-y-6 pt-4">
               {/* 시세 */}
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <Stat label="종가">
+              {/* 모바일 2열: 1·4 / 2·3 → sm 이상은 원래 순서 */}
+              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                <Stat label="종가" className="order-1">
                   <span className="inline-flex items-baseline gap-1.5">
                     <Money value={ov.quote?.last} currency={ccy} />
                     {ov.quote?.changePct != null && (
@@ -425,7 +424,7 @@ export function StockAnalysis({
                     {ov.quote?.lastDate ?? "-"} · {ov.quote?.source ?? ""}
                   </div>
                 </Stat>
-                <Stat label="시가총액">
+                <Stat label="시가총액" className="order-3 lg:order-none">
                   <span className="text-base">
                     {formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
                   </span>
@@ -435,7 +434,7 @@ export function StockAnalysis({
                     </div>
                   )}
                 </Stat>
-                <Stat label="52주 베타">
+                <Stat label="52주 베타" className="order-4 lg:order-none">
                   <span className="tnum text-base">
                     <NumberText
                       value={
@@ -464,7 +463,7 @@ export function StockAnalysis({
                     <div className="text-muted-foreground mt-1 text-[11px]">yahoo · 5년 월간</div>
                   )}
                 </Stat>
-                <Stat label="52주 최고 / 최저">
+                <Stat label="52주 최고 / 최저" className="order-2 lg:order-none">
                   {(() => {
                     const hi52 =
                       market === "kr"
@@ -492,31 +491,27 @@ export function StockAnalysis({
                 </Stat>
               </div>
 
-              {/* 투자지표 (펀더멘털 + 참고) */}
+              {/* 투자지표 — 모바일 2개/행, 데스크톱 4개/행 */}
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold">투자지표</h3>
-                <div className="overflow-x-auto rounded-lg border">
-                  <table className="w-full min-w-[820px] text-sm">
-                    <tbody>
-                      {metricRows.map((row, i) => (
-                        <tr
-                          key={i}
-                          className={cn(
-                            "border-b last:border-b-0",
-                            i === 1 && "bg-muted/70",
-                          )}
-                        >
-                          {row.map((m, j) => (
-                            <MetricCells key={j} m={m} first={j === 0} shaded={i === 1} />
-                          ))}
-                          {row.length < 4 &&
-                            Array.from({ length: 4 - row.length }).map((_, k) => (
-                              <td key={`f${k}`} colSpan={2} className="border-l" />
-                            ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="grid grid-cols-2 overflow-hidden rounded-lg border text-sm lg:grid-cols-4">
+                  {metrics.map((m, i) => {
+                    const shaded = Math.floor(i / 4) === 1; // 5~8번 강조
+                    return (
+                      <div
+                        key={i}
+                        className={cn(
+                          "flex items-center justify-between gap-2 border-b border-l px-3 py-2 [&:nth-child(2n+1)]:border-l-0 lg:[&:nth-child(2n+1)]:border-l lg:[&:nth-child(4n+1)]:border-l-0",
+                          shaded && "bg-muted/70",
+                        )}
+                      >
+                        <span className="text-muted-foreground text-xs font-medium whitespace-nowrap">
+                          {m.label}
+                        </span>
+                        <span className="tnum text-right font-medium">{m.node}</span>
+                      </div>
+                    );
+                  })}
                 </div>
                 <p className="text-muted-foreground/80 text-[11px] leading-relaxed">
                   {market === "kr" ? (
@@ -752,9 +747,17 @@ export function StockAnalysis({
   );
 }
 
-function Stat({ label, children }: { label: string; children: React.ReactNode }) {
+function Stat({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <div className="border-border rounded-lg border p-3">
+    <div className={cn("border-border rounded-lg border p-3", className)}>
       <div className="text-muted-foreground text-xs">{label}</div>
       <div className="mt-1 text-lg font-semibold">{children}</div>
     </div>
@@ -797,30 +800,6 @@ function Week52Bar({
   );
 }
 
-function MetricCells({
-  m,
-  first,
-  shaded,
-}: {
-  m: { label: string; node: React.ReactNode };
-  first: boolean;
-  shaded?: boolean;
-}) {
-  return (
-    <>
-      <th
-        className={cn(
-          "text-muted-foreground px-3 py-2 text-left text-xs font-medium whitespace-nowrap",
-          shaded ? "bg-muted/80" : "bg-muted/30",
-          !first && "border-l",
-        )}
-      >
-        {m.label}
-      </th>
-      <td className="tnum px-3 py-2 text-right font-medium">{m.node}</td>
-    </>
-  );
-}
 
 function OverviewSkeleton() {
   return (
