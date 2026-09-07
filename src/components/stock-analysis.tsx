@@ -179,28 +179,15 @@ export function StockAnalysis({
   const trailingPer =
     market === "kr" ? ownTtmPer : (ov?.consensus?.trailingPer ?? ownTtmPer);
 
-  // ── 추정PER (당해년도 컨센서스) ─────────────────────────────────
-  // 국내는 야후 컨센서스를 쓰지 않는다. 미국은 당해 추정치, 없으면 forwardPE.
-  const rawEstEps =
-    market === "kr"
-      ? null
-      : (ov?.consensus?.estimates?.find((e) => e.period.startsWith("당해"))?.epsAvg ??
-        ov?.consensus?.estimates?.[0]?.epsAvg ??
-        null);
-  // 비정상 추정치 필터 (직전 실적 EPS의 3배 초과 = 스케일 오류로 간주)
+  // ── 추정PER (원래 PER(E) 로직) — 당해년도 컨센서스 추정 EPS 기준 ──
   const estEps =
-    rawEstEps != null &&
-    multiples?.eps != null &&
-    multiples.eps !== 0 &&
-    Math.abs(rawEstEps) > Math.abs(multiples.eps) * 3
-      ? null
-      : rawEstEps;
+    ov?.consensus?.estimates?.find((e) => e.period.startsWith("당해"))?.epsAvg ??
+    ov?.consensus?.estimates?.[0]?.epsAvg ??
+    null;
   const estPer =
     price != null && estEps != null && estEps > 0
       ? price / estEps
-      : market === "kr"
-        ? null
-        : (ov?.consensus?.forwardPer ?? null);
+      : (ov?.consensus?.forwardPer ?? null);
 
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
   const metrics: { label: string; node: React.ReactNode }[] = [
@@ -213,7 +200,6 @@ export function StockAnalysis({
     { label: "PBR", node: <Multiple value={multiples?.pbr} fallback={multiplesFallback} /> },
     { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
     { label: "EV/EBITDA", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
-    { label: "베타", node: <NumberText value={ov?.consensus?.beta} digits={2} /> },
     { label: "EPS", node: <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} /> },
     { label: "EPS(TTM)", node: <Money value={ttmEps} currency={ccy} fallback="-" /> },
     { label: "BPS", node: <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} /> },
@@ -345,11 +331,13 @@ export function StockAnalysis({
                   {market === "kr" && foreignQ.data?.foreign && (
                     <div className="text-muted-foreground mt-1 text-xs">
                       외국인 {foreignQ.data.foreign.ratio.toFixed(2)}%
-                      <span className="ml-1 opacity-70">
-                        ({foreignQ.data.foreign.asOf})
-                      </span>
                     </div>
                   )}
+                </Stat>
+                <Stat label="베타">
+                  <span className="tnum text-base">
+                    <NumberText value={ov.consensus?.beta} digits={2} fallback="-" />
+                  </span>
                 </Stat>
                 <Stat label="52주 최고 / 최저">
                   <span className="tnum text-base">
@@ -390,7 +378,7 @@ export function StockAnalysis({
                   </table>
                 </div>
                 <p className="text-muted-foreground/80 text-[11px]">
-                  PER/PBR/EPS/BPS/EV·EBITDA = 최근 연간 공시 재무 + 현재가 자체 계산 · 추정·베타·유동비율·배당 = yahoo 개인용
+                  PER/PBR/EPS/BPS/EV·EBITDA = 최근 연간 공시 재무 + 현재가 자체 계산 · 트레일링PER = TTM(국내 DART·해외 yahoo) · 추정PER/유동비율/배당 = yahoo 개인용
                 </p>
               </section>
 
