@@ -53,8 +53,9 @@ async function callApi(params: Record<string, string>): Promise<Record<string, u
   // serviceKey 는 이미 인코딩돼 있으므로 직접 이어붙인다
   const url = `${EP}?serviceKey=${key()}&${qs}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-  if (!res.ok) throw new Error(`권리일정 API ${res.status}`);
   const text = await res.text();
+  if (!res.ok)
+    throw new Error(`권리일정 API ${res.status}: ${text.slice(0, 300).replace(/\s+/g, " ")}`);
   if (text.includes("NO_OPENAPI_SERVICE_ERROR"))
     throw new Error("권리일정 API 미승인/전파대기 (NO_OPENAPI_SERVICE)");
   let j: unknown;
