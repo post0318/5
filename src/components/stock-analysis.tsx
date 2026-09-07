@@ -105,6 +105,8 @@ export function StockAnalysis({
       apiFetch<{
         events: {
           basDt: string;
+          exRightsDate: string | null;
+          payoutDate: string | null;
           reason: string;
           parValue: string | null;
           items: { kind: string; start: string | null; end: string | null }[];
@@ -575,6 +577,8 @@ export function StockAnalysis({
                       <thead>
                         <tr className="bg-muted/50 text-muted-foreground text-left">
                           <th className="px-3 py-2 font-medium">기준일</th>
+                          <th className="px-3 py-2 font-medium">권리락일</th>
+                          <th className="px-3 py-2 font-medium">배당금지급일</th>
                           <th className="px-3 py-2 font-medium">권리사유</th>
                           <th className="px-3 py-2 font-medium">세부 일정</th>
                         </tr>
@@ -583,6 +587,12 @@ export function StockAnalysis({
                         {rightsQ.data.events.map((e, i) => (
                           <tr key={i} className="hover:bg-muted/30 align-top">
                             <td className="tnum px-3 py-2 whitespace-nowrap">{e.basDt || "-"}</td>
+                            <td className="tnum px-3 py-2 whitespace-nowrap">
+                              {e.exRightsDate ?? "-"}
+                            </td>
+                            <td className="tnum px-3 py-2 whitespace-nowrap">
+                              {e.payoutDate ?? "-"}
+                            </td>
                             <td className="px-3 py-2 whitespace-nowrap">{e.reason}</td>
                             <td className="px-3 py-2">
                               <div className="space-y-0.5">

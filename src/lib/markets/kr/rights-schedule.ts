@@ -16,11 +16,15 @@ const EP =
 export interface KrRightEvent {
   /** 기준일 YYYY-MM-DD */
   basDt: string;
+  /** 권리락일 YYYY-MM-DD */
+  exRightsDate: string | null;
+  /** 배당금지급일 YYYY-MM-DD (1차) */
+  payoutDate: string | null;
   /** 권리사유 — 예: 현금배당, 무상증자, 유상증자, 임시총회, 주식분할 */
   reason: string;
   /** 액면가 */
   parValue: string | null;
-  /** 세부 일정 (기준일 / 명부폐쇄기간 / 총회개최일 등) */
+  /** 세부 일정 (명부폐쇄기간 등 — 기준일·권리락일·배당금지급일 제외) */
   items: { kind: string; start: string | null; end: string | null }[];
 }
 
@@ -104,16 +108,27 @@ export async function fetchKrRightsSchedule(
     if (!groups.has(gk)) {
       groups.set(gk, {
         basDt,
+        exRightsDate: null,
+        payoutDate: null,
         reason,
         parValue: r.stckParPrc ? String(Number(r.stckParPrc)) : null,
         items: [],
       });
     }
+    const g = groups.get(gk)!;
     const kind = (r.rgtExertRcdNm ?? "").trim();
-    if (kind === "기준일") continue; // 기준일 컬럼에 이미 표시
     const start = dash(r.rgtExertSttgDt) ?? dash(r.nmlsLckSttgDt);
     const end = dash(r.rgtExertEdDt) ?? dash(r.nmlsLckEdDt);
-    if (kind || start) groups.get(gk)!.items.push({ kind: kind || "일정", start, end });
+    if (kind === "기준일") continue; // 기준일 컬럼에 이미 표시
+    if (kind === "권리락일") {
+      g.exRightsDate = start;
+      continue; // 별도 컬럼
+    }
+    if (kind.startsWith("배당금지급일")) {
+      if (!g.payoutDate) g.payoutDate = start;
+      continue; // 별도 컬럼
+    }
+    if (kind || start) g.items.push({ kind: kind || "일정", start, end });
   }
 
   return [...groups.values()].sort((a, b) => b.basDt.localeCompare(a.basDt));
