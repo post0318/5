@@ -438,7 +438,7 @@ export function StockAnalysis({
                         )}
                       >
                         ({ttmQ.data.beta.change > 0 ? "+" : ""}
-                        {ttmQ.data.beta.change.toFixed(2)})
+                        {ttmQ.data.beta.change.toFixed(3)})
                       </span>
                     )}
                   </span>
