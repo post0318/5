@@ -17,6 +17,7 @@ import {
   type FinancialPeriodType,
   type FinancialStatement,
   type MarketAdapter,
+  type TtmFlows,
 } from "../types";
 import { resolveCorpCode } from "./corpcode";
 
@@ -101,8 +102,10 @@ interface FnlttRow {
   account_detail: string;
   thstrm_nm: string;
   thstrm_amount: string;
+  thstrm_add_amount?: string; // 당기 누적 (분기·반기 보고서)
   frmtrm_nm: string;
   frmtrm_amount: string;
+  frmtrm_add_amount?: string; // 전기 누적 (분기·반기 보고서)
   bfefrmtrm_nm?: string;
   bfefrmtrm_amount?: string;
   ord: string;
@@ -253,6 +256,125 @@ function rowsToStatement(
   };
 }
 
+// ── TTM (최근 4분기) ─────────────────────────────────────────────────
+
+const TTM_ACCOUNTS = {
+  netIncome: ["당기순이익", "당기순이익(손실)", "분기순이익", "반기순이익", "연결당기순이익"],
+  revenue: ["매출액", "수익(매출액)", "매출", "영업수익", "매출및지분법손익"],
+  opIncome: ["영업이익", "영업이익(손실)"],
+  eps: [
+    "희석주당이익",
+    "희석주당순이익",
+    "희석주당이익(손실)",
+    "기본주당이익",
+    "기본주당순이익",
+    "기본주당이익(손실)",
+    "주당이익",
+  ],
+} as const;
+
+const norm = (s: string) => s.replace(/\s/g, "");
+
+/** 손익/포괄손익 계정에서 값 추출. col: 당기누적 | 전기동기누적 | 연간(당기) */
+function isValue(
+  rows: FnlttRow[],
+  names: readonly string[],
+  col: "cumCur" | "cumPrior" | "annual",
+): number | null {
+  const set = new Set(names.map(norm));
+  for (const r of rows) {
+    if (r.sj_div !== "IS" && r.sj_div !== "CIS") continue;
+    if (!set.has(norm(r.account_nm ?? ""))) continue;
+    if (col === "annual") return parseAmount(r.thstrm_amount);
+    if (col === "cumCur")
+      return parseAmount(r.thstrm_add_amount) ?? parseAmount(r.thstrm_amount);
+    return parseAmount(r.frmtrm_add_amount) ?? parseAmount(r.frmtrm_amount);
+  }
+  return null;
+}
+
+const INTERIM_RANK: Record<string, number> = { "11014": 3, "11012": 2, "11013": 1 };
+
+async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
+  const y = new Date().getFullYear();
+
+  // 1) 최근 가용 당기 분기/반기 보고서
+  let interim:
+    | { year: number; code: string; rows: FnlttRow[]; fsDiv: "CFS" | "OFS" }
+    | null = null;
+  for (const fsDiv of ["CFS", "OFS"] as const) {
+    for (const year of [y, y - 1]) {
+      const found = await Promise.all(
+        Object.keys(INTERIM_RANK).map((code) =>
+          fetchFnlttYear(corpCode, year, code, fsDiv).then((rows) => ({ code, rows })),
+        ),
+      );
+      const hit = found
+        .filter((f) => f.rows && f.rows.length)
+        .sort((a, b) => INTERIM_RANK[b.code] - INTERIM_RANK[a.code])[0];
+      if (hit) {
+        interim = { year, code: hit.code, rows: hit.rows!, fsDiv };
+        break;
+      }
+    }
+    if (interim) break;
+  }
+  if (!interim) return null;
+
+  // 2) 직전 사업보고서
+  let annualRows: FnlttRow[] | null = null;
+  let annualYear = 0;
+  const fsOrder: ("CFS" | "OFS")[] =
+    interim.fsDiv === "CFS" ? ["CFS", "OFS"] : ["OFS", "CFS"];
+  for (const fsDiv of fsOrder) {
+    for (const yr of [interim.year - 1, interim.year - 2]) {
+      const rows = await fetchFnlttYear(corpCode, yr, "11011", fsDiv);
+      if (rows && rows.length) {
+        annualRows = rows;
+        annualYear = yr;
+        break;
+      }
+    }
+    if (annualRows) break;
+  }
+  if (!annualRows) return null;
+
+  // 3) 전년 동기 누적이 보고서에 없으면, 전년 동일 보고서를 따로 조회
+  let priorInterimRows: FnlttRow[] | null = null;
+  const needPriorFetch = isValue(interim.rows, TTM_ACCOUNTS.netIncome, "cumPrior") == null;
+  if (needPriorFetch) {
+    for (const fsDiv of fsOrder) {
+      const rows = await fetchFnlttYear(corpCode, interim.year - 1, interim.code, fsDiv);
+      if (rows && rows.length) {
+        priorInterimRows = rows;
+        break;
+      }
+    }
+  }
+
+  const ttm = (key: keyof typeof TTM_ACCOUNTS): number | null => {
+    const names = TTM_ACCOUNTS[key];
+    const annual = isValue(annualRows!, names, "annual");
+    const cur = isValue(interim!.rows, names, "cumCur");
+    let prior = isValue(interim!.rows, names, "cumPrior");
+    if (prior == null && priorInterimRows)
+      prior = isValue(priorInterimRows, names, "cumCur");
+    if (annual == null) return null;
+    if (cur == null || prior == null) return annual; // 분기 데이터 부족 → 연간값
+    return annual + cur - prior;
+  };
+
+  const eps = ttm("eps");
+  const q = QUARTER_LABEL[interim.code] ?? "분기";
+  return {
+    periodLabel: `FY${annualYear} + ${interim.year} ${q} − ${interim.year - 1} ${q}`,
+    netIncome: ttm("netIncome"),
+    revenue: ttm("revenue"),
+    opIncome: ttm("opIncome"),
+    eps: eps != null && eps > 0 ? eps : null,
+  };
+}
+
 // ── 어댑터 ───────────────────────────────────────────────────────────
 
 export const krOpenDartAdapter: MarketAdapter = {
@@ -350,6 +472,15 @@ export const krOpenDartAdapter: MarketAdapter = {
       }
     }
     throw new AdapterError("분기 재무제표를 찾을 수 없습니다", { status: 404 });
+  },
+
+  async getTtm(symbol): Promise<TtmFlows | null> {
+    const entry = await resolveCorpCode(key(), symbol);
+    try {
+      return await getKrTtm(entry.corpCode);
+    } catch {
+      return null;
+    }
   },
 
   async getFilings(symbol, opts): Promise<Filing[]> {

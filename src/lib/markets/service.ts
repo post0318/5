@@ -12,6 +12,7 @@ import {
   type ForwardConsensus,
   type MarketId,
   type TrailingMultiples,
+  type TtmFlows,
 } from "./types";
 
 export interface StockOverview {
@@ -23,6 +24,7 @@ export interface StockOverview {
   quote: Awaited<ReturnType<typeof getEodQuote>> | null;
   multiples: TrailingMultiples | null;
   consensus: ForwardConsensus | null;
+  ttm: TtmFlows | null;
   /** KRX 고배당기업 명단 대상 여부 (한국만) */
   highDividend: boolean;
   deepLinks: {
@@ -78,7 +80,7 @@ export async function getStockOverview(
 
   const wantAnnual = !opts.skipFinancials;
   const wantQuarterly = !opts.skipFinancials && !opts.skipQuarterly;
-  const [profile, quote, annual, quarterly, consensus] = await Promise.all([
+  const [profile, quote, annual, quarterly, consensus, ttm] = await Promise.all([
     safe(withTimeout(adapter.getCompanyProfile(symbol), 10_000, "회사정보"), warnings, "회사정보"),
     safe(withTimeout(getEodQuote(market, symbol, { yahooOverride }), 12_000, "시세"), warnings, "시세"),
     wantAnnual
@@ -96,6 +98,9 @@ export async function getStockOverview(
       warnings,
       "포워드 컨센서스",
     ),
+    wantAnnual && adapter.getTtm
+      ? safe(withTimeout(adapter.getTtm(symbol), 15_000, "TTM 재무"), warnings, "TTM 재무")
+      : Promise.resolve(null),
   ]);
 
   let multiples: TrailingMultiples | null = null;
@@ -107,6 +112,7 @@ export async function getStockOverview(
       annual: annual as FinancialStatement | null,
       quarterly: quarterly as FinancialStatement | null,
       sharesOutstanding: quote.sharesOutstanding ?? null,
+      ttm: ttm as TtmFlows | null,
     });
   }
 
@@ -119,6 +125,7 @@ export async function getStockOverview(
     quote,
     multiples,
     consensus,
+    ttm: ttm as TtmFlows | null,
     highDividend: market === "kr" && isHighDividendKr(symbol),
     deepLinks: {
       consensus: adapter.consensusDeepLinks(symbol),

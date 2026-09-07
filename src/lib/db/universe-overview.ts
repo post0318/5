@@ -22,6 +22,7 @@ export interface UniverseOverviewDoc {
   changePct: number | null;
   currency: "KRW" | "USD" | "JPY" | null;
   per: number | null;
+  perTtm: number | null;
   pbr: number | null;
   forwardPer: number | null;
   targetMeanPrice: number | null;

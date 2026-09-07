@@ -24,6 +24,7 @@ interface Row {
   changePct?: number | null;
   currency?: "KRW" | "USD" | "JPY" | null;
   per?: number | null;
+  perTtm?: number | null;
   pbr?: number | null;
   forwardPer?: number | null;
   targetMeanPrice?: number | null;
@@ -180,7 +181,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                 <th className="px-3 py-2 text-right font-medium">영업이익률</th>
                 <th className="px-3 py-2 text-right font-medium">순이익률</th>
                 <th className="px-3 py-2 text-right font-medium">PER</th>
-                <th className="px-3 py-2 text-right font-medium">Fwd PER</th>
+                <th className="px-3 py-2 text-right font-medium">트레일링PER</th>
                 <th className="px-3 py-2 text-right font-medium">목표주가</th>
                 <th className="px-3 py-2 font-medium">의견</th>
               </tr>
@@ -235,7 +236,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                         <Multiple value={r.per} />
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <Multiple value={r.forwardPer} />
+                        <Multiple value={r.perTtm} />
                       </td>
                       <td className="px-3 py-2 text-right">
                         <Money

@@ -8,6 +8,7 @@ import type {
   FinancialStatement,
   MarketId,
   TrailingMultiples,
+  TtmFlows,
 } from "./types";
 import { MARKET_CURRENCY } from "./types";
 
@@ -58,10 +59,12 @@ export interface MultiplesInput {
   quarterly: FinancialStatement | null;
   /** 상장주식수 (있으면 시가총액 계산에 사용) */
   sharesOutstanding?: number | null;
+  /** TTM(최근 4분기) 플로우 — 트레일링PER 계산용 */
+  ttm?: TtmFlows | null;
 }
 
 export function computeTrailingMultiples(input: MultiplesInput): TrailingMultiples {
-  const { market, symbol, quote, annual, quarterly, sharesOutstanding } = input;
+  const { market, symbol, quote, annual, quarterly, sharesOutstanding, ttm } = input;
   const price = quote.last;
   const quotedMarketCap = quote.marketCap ?? null;
 
@@ -131,6 +134,14 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     quotedMarketCap ?? (price != null && shares != null ? price * shares : null);
 
   const per = price != null && epsDiluted ? price / epsDiluted : null;
+  // TTM EPS 우선 자체 산출값 → 없으면 순이익/주식수, 그것도 없으면 null
+  const epsTtm =
+    ttm?.eps != null && ttm.eps > 0
+      ? ttm.eps
+      : ttm?.netIncome != null && shares
+        ? ttm.netIncome / shares
+        : null;
+  const perTtm = price != null && epsTtm ? price / epsTtm : null;
   const bps = equity != null && shares ? equity / shares : null;
   const pbr = price != null && bps ? price / bps : null;
   const psr =
@@ -147,6 +158,7 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     market,
     asOf: quote.lastDate ?? new Date().toISOString().slice(0, 10),
     per: finite(per),
+    perTtm: finite(perTtm),
     pbr: finite(pbr),
     psr: finite(psr),
     evEbitda: finite(evEbitda),
@@ -163,6 +175,9 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
       equity: finite(equity),
       shares: finite(shares),
       opIncomeAnnual: finite(opIncome),
+      epsTtm: finite(epsTtm),
+      netIncomeTtm: finite(ttm?.netIncome),
+      revenueTtm: finite(ttm?.revenue),
     },
   };
 }

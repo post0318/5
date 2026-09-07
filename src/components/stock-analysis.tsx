@@ -9,7 +9,7 @@ import { formatMoneyWithUnits } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
 import type { StockOverview } from "@/lib/markets/service";
 import { computeTrailingMultiples } from "@/lib/markets/multiples";
-import type { FinancialStatement, Filing } from "@/lib/markets/types";
+import type { FinancialStatement, Filing, TtmFlows } from "@/lib/markets/types";
 import { Button } from "@/components/ui/button";
 import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -89,6 +89,16 @@ export function StockAnalysis({
     retry: false,
   });
 
+  const ttmQ = useQuery({
+    queryKey: ["ttm", market, symbol],
+    queryFn: () =>
+      apiFetch<{ ttm: TtmFlows | null }>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm`,
+      ),
+    enabled: Boolean(symbol),
+    retry: false,
+  });
+
   const universe = useQuery({
     queryKey: ["universe"],
     queryFn: () =>
@@ -144,28 +154,58 @@ export function StockAnalysis({
   const multiplesFallback =
     annualForMultiples.isLoading ? "…" : annualForMultiples.isError ? "n/a" : "-";
   const ccy = ov?.quote?.currency ?? "USD";
+  const price = ov?.quote?.last ?? null;
 
-  // 추정 EPS(당해년도) / 추정 PER — yahoo earningsTrend 컨센서스
-  const fwdEps =
-    ov?.consensus?.estimates?.find((e) => e.period.startsWith("당해"))?.epsAvg ??
-    ov?.consensus?.estimates?.[0]?.epsAvg ??
-    null;
-  const fwdPer =
-    ov?.quote?.last != null && fwdEps != null && fwdEps > 0
-      ? ov.quote.last / fwdEps
-      : (ov?.consensus?.forwardPer ?? null);
+  // ── 트레일링PER (TTM) ────────────────────────────────────────────
+  // 국내: DART 자체 TTM. 미국: Yahoo trailingPE, 없으면 자체 TTM.
+  const ttm = ttmQ.data?.ttm ?? null;
+  const ttmEps =
+    ttm?.eps != null && ttm.eps > 0
+      ? ttm.eps
+      : ttm?.netIncome != null && multiples?.inputs.shares
+        ? ttm.netIncome / multiples.inputs.shares
+        : null;
+  const ownTtmPer = price != null && ttmEps ? price / ttmEps : null;
+  const trailingPer =
+    market === "kr" ? ownTtmPer : (ov?.consensus?.trailingPer ?? ownTtmPer);
+
+  // ── 추정PER (당해년도 컨센서스) ─────────────────────────────────
+  // 국내는 야후 컨센서스를 쓰지 않는다. 미국은 당해 추정치, 없으면 forwardPE.
+  const rawEstEps =
+    market === "kr"
+      ? null
+      : (ov?.consensus?.estimates?.find((e) => e.period.startsWith("당해"))?.epsAvg ??
+        ov?.consensus?.estimates?.[0]?.epsAvg ??
+        null);
+  // 비정상 추정치 필터 (직전 실적 EPS의 3배 초과 = 스케일 오류로 간주)
+  const estEps =
+    rawEstEps != null &&
+    multiples?.eps != null &&
+    multiples.eps !== 0 &&
+    Math.abs(rawEstEps) > Math.abs(multiples.eps) * 3
+      ? null
+      : rawEstEps;
+  const estPer =
+    price != null && estEps != null && estEps > 0
+      ? price / estEps
+      : market === "kr"
+        ? null
+        : (ov?.consensus?.forwardPer ?? null);
 
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
   const metrics: { label: string; node: React.ReactNode }[] = [
     { label: "PER", node: <Multiple value={multiples?.per} fallback={multiplesFallback} /> },
-    { label: "추정PER (당해예상)", node: <Multiple value={fwdPer} /> },
-    { label: "FWD PER (차년예상)", node: <Multiple value={ov?.consensus?.forwardPer} /> },
+    {
+      label: "트레일링PER",
+      node: <Multiple value={trailingPer} fallback={ttmQ.isLoading ? "…" : "-"} />,
+    },
+    { label: "추정PER", node: <Multiple value={estPer} fallback="-" /> },
     { label: "PBR", node: <Multiple value={multiples?.pbr} fallback={multiplesFallback} /> },
     { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
     { label: "EV/EBITDA", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
     { label: "베타", node: <NumberText value={ov?.consensus?.beta} digits={2} /> },
     { label: "EPS", node: <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} /> },
-    { label: "EPS(E)", node: <Money value={fwdEps} currency={ccy} fallback="-" /> },
+    { label: "EPS(TTM)", node: <Money value={ttmEps} currency={ccy} fallback="-" /> },
     { label: "BPS", node: <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} /> },
     { label: "유동비율", node: <NumberText value={ov?.consensus?.currentRatio} digits={2} /> },
     { label: "DPS", node: <Money value={ov?.consensus?.dividendPerShare} currency={ccy} fallback="-" /> },

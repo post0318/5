@@ -38,6 +38,7 @@ interface RawBar {
 interface QuoteSummaryResult {
   summaryDetail?: {
     forwardPE?: number;
+    trailingPE?: number;
     dividendYield?: number;
     dividendRate?: number;
     trailingAnnualDividendRate?: number;
@@ -297,6 +298,7 @@ export async function fetchForwardConsensus(
     market,
     currency: MARKET_CURRENCY[market],
     forwardPer: qs.defaultKeyStatistics?.forwardPE ?? sd.forwardPE ?? null,
+    trailingPer: sd.trailingPE ?? null,
     targetMeanPrice: fd.targetMeanPrice ?? null,
     targetHighPrice: fd.targetHighPrice ?? null,
     targetLowPrice: fd.targetLowPrice ?? null,

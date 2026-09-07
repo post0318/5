@@ -143,6 +143,8 @@ export interface TrailingMultiples {
   market: MarketId;
   asOf: string;
   per: number | null;
+  /** TTM(최근 4분기) 기준 PER. 분기 데이터가 없으면 null. */
+  perTtm: number | null;
   pbr: number | null;
   psr: number | null;
   evEbitda: number | null;
@@ -157,12 +159,25 @@ export interface TrailingMultiples {
   inputs: Record<string, number | null>;
 }
 
+/** TTM(최근 4분기 누적) 플로우 지표. */
+export interface TtmFlows {
+  /** 계산 기준 라벨 (예: "FY2025 + 2026 반기 − 2025 반기") */
+  periodLabel: string;
+  netIncome: number | null;
+  revenue: number | null;
+  opIncome: number | null;
+  /** 주당순이익 (희석 우선, 없으면 기본) */
+  eps: number | null;
+}
+
 /** 포워드 컨센서스 (L4). 개인용: yahoo-finance2. */
 export interface ForwardConsensus {
   symbol: string;
   market: MarketId;
   currency: Currency;
   forwardPer: number | null;
+  /** Yahoo summaryDetail.trailingPE (TTM). 국내는 신뢰도 낮아 미사용. */
+  trailingPer: number | null;
   targetMeanPrice: number | null;
   targetHighPrice: number | null;
   targetLowPrice: number | null;
@@ -217,6 +232,13 @@ export interface MarketAdapter {
   getCompanyProfile(symbol: string): Promise<CompanyProfile>;
   getFinancials(symbol: string, periodType: FinancialPeriodType): Promise<FinancialStatement>;
   getFilings(symbol: string, opts?: { limit?: number }): Promise<Filing[]>;
+
+  /**
+   * TTM(최근 4분기) 플로우 지표 — 트레일링 멀티플용.
+   * 분기 누적데이터로 `직전연간 + 당기누적 − 전년동기누적` 계산.
+   * 구현하지 않은 어댑터는 생략 (그 시장은 트레일링PER 미표시).
+   */
+  getTtm?(symbol: string): Promise<TtmFlows | null>;
 
   /** L4/L5 딥링크 빌더 */
   consensusDeepLinks(symbol: string): DeepLink[];
