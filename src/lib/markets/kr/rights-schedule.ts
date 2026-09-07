@@ -110,6 +110,7 @@ export async function fetchKrRightsSchedule(
       });
     }
     const kind = (r.rgtExertRcdNm ?? "").trim();
+    if (kind === "기준일") continue; // 기준일 컬럼에 이미 표시
     const start = dash(r.rgtExertSttgDt) ?? dash(r.nmlsLckSttgDt);
     const end = dash(r.rgtExertEdDt) ?? dash(r.nmlsLckEdDt);
     if (kind || start) groups.get(gk)!.items.push({ kind: kind || "일정", start, end });
