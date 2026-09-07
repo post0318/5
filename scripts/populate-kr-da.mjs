@@ -119,23 +119,32 @@ async function ttmDA(corp) {
     } catch {}
   }
 
-  let dep = annualDep, amo = annualAmo, basis = "annual", label = `FY${annualYear}`, year = annualYear;
+  // EV/EBITDA 는 연간 기준(PER 과 동일) → 저장값은 최근 사업보고서 연간 D&A.
+  // 분기·반기 XBRL 로 TTM 도 함께 계산해 참고 필드로 보관.
+  let ttmDep = null, ttmAmo = null, ttmLabel = null;
   const cur = interimX ? currentCum(interimX) : null;
-  if (cur && cur.year >= annualYear) {
+  if (cur && cur.year >= annualYear && annualDep != null) {
     const priorP = cur.prefix.replace(`CFY${cur.year}`, `PFY${cur.year - 1}`);
     const curD = pick(interimX, CONCEPTS_DEP, cur.prefix);
     const priD = pick(interimX, CONCEPTS_DEP, priorP);
     const curA = pick(interimX, CONCEPTS_AMO, cur.prefix);
     const priA = pick(interimX, CONCEPTS_AMO, priorP);
-    if (curD != null && priD != null && annualDep != null) {
-      dep = annualDep + curD - priD;
-      amo = annualAmo != null && curA != null && priA != null ? annualAmo + curA - priA : annualAmo;
-      basis = "ttm";
-      year = cur.year;
-      label = `FY${annualYear} + ${cur.year}${cur.prefix.replace(/^CFY\d+d/, "")} − ${cur.year - 1}동기`;
+    if (curD != null && priD != null) {
+      ttmDep = annualDep + curD - priD;
+      ttmAmo = annualAmo != null && curA != null && priA != null ? annualAmo + curA - priA : null;
+      ttmLabel = `FY${annualYear} + ${cur.year}${cur.prefix.replace(/^CFY\d+d/, "")} − ${cur.year - 1}동기`;
     }
   }
-  return { year, depreciation: dep, amortisation: amo, basis, label };
+  return {
+    year: annualYear,
+    depreciation: annualDep,
+    amortisation: annualAmo,
+    basis: "annual",
+    label: `FY${annualYear}`,
+    ttmDepreciation: ttmDep,
+    ttmAmortisation: ttmAmo,
+    ttmLabel,
+  };
 }
 
 /** 특정 연도의 사업보고서 접수번호 */

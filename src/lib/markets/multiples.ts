@@ -153,10 +153,9 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     marketCap != null
       ? marketCap + (totalLiabilities ?? 0) - (cash ?? 0)
       : null;
-  // EBITDA = 영업이익 + 감가상각비 + 무형자산상각비.
-  // D&A(kr_da)가 TTM 이면 영업이익도 TTM 으로 맞춤. 없으면 EV/EBIT 근사.
-  const opForEbitda = da != null && ttm?.opIncome != null ? ttm.opIncome : opIncome;
-  const ebitda = opForEbitda != null ? opForEbitda + (da ?? 0) : null;
+  // EBITDA = 최근 연간 영업이익 + 감가상각비 + 무형자산상각비 (연간 기준, PER 과 동일).
+  // D&A 없으면 EV/EBIT 근사.
+  const ebitda = opIncome != null ? opIncome + (da ?? 0) : null;
   const evEbitda = ev != null && ebitda ? ev / ebitda : null;
   const evEbitdaIsApprox = da == null;
 
