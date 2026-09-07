@@ -411,7 +411,7 @@ export function StockAnalysis({
               {/* 시세 */}
               {/* 모바일 2열: 1·4 / 2·3 → sm 이상은 원래 순서 */}
               <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                <Stat label="종가" className="order-1">
+                <Stat label="종가" className="order-1 lg:order-none">
                   <span className="inline-flex items-baseline gap-1.5">
                     <Money value={ov.quote?.last} currency={ccy} />
                     {ov.quote?.changePct != null && (
