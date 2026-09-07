@@ -14,21 +14,38 @@ import { MARKET_CURRENCY } from "./types";
 
 const norm = (s: string) => s.replace(/\s/g, "");
 
-/** 재무제표에서 특정 계정의 가장 최근 값을 찾는다. (공백 무시 매칭) */
-function latestValue(fs: FinancialStatement, accountIds: string[]): number | null {
+/**
+ * 재무제표에서 특정 계정의 가장 최근 값. 공백 무시 정확 매칭 → 없으면 loose 정규식.
+ * loose 는 배당조정·부문 항목을 피하려 완전한 항목명이 아닌 계정을 우선.
+ */
+function latestValue(
+  fs: FinancialStatement,
+  accountIds: string[],
+  loose?: RegExp,
+): number | null {
   const targets = new Set(accountIds.map(norm));
   const periodLabels = fs.periods.map((p) => p.label);
+  const valueOf = (item: FinancialStatement["sections"][number]["items"][number]) => {
+    for (const label of periodLabels) {
+      const v = item.values[label];
+      if (v != null) return v;
+    }
+    return null;
+  };
+  let looseHit: number | null = null;
   for (const section of fs.sections) {
     for (const item of section.items) {
-      const key = norm(item.accountId ?? item.accountName);
-      if (!targets.has(key)) continue;
-      for (const label of periodLabels) {
-        const v = item.values[label];
+      const nm = norm(item.accountId ?? item.accountName);
+      if (targets.has(nm)) {
+        const v = valueOf(item);
         if (v != null) return v;
+      }
+      if (loose && looseHit == null && loose.test(nm) && !/[-·]/.test(item.accountName)) {
+        looseHit = valueOf(item);
       }
     }
   }
-  return null;
+  return looseHit;
 }
 
 /**
@@ -42,9 +59,10 @@ function flowValue(
   annual: FinancialStatement | null,
   quarterly: FinancialStatement | null,
   accountIds: string[],
+  loose?: RegExp,
 ): number | null {
   if (annual) {
-    const v = latestValue(annual, accountIds);
+    const v = latestValue(annual, accountIds, loose);
     if (v != null) return v;
   }
   if (quarterly) return latestValue(quarterly, accountIds);
@@ -71,16 +89,25 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   const price = quote.last;
   const quotedMarketCap = quote.marketCap ?? null;
 
-  const epsDiluted = flowValue(annual, quarterly, [
-    "EarningsPerShareDiluted",
-    "EPS (Diluted)",
-    "희석주당이익",
-    "희석주당순이익",
-    "주당이익",
-    "기본주당이익",
-    "基本的1株当たり当期利益 (円)",
-    "1株当たり当期純利益 (円)",
-  ]);
+  const epsDiluted = flowValue(
+    annual,
+    quarterly,
+    [
+      "EarningsPerShareDiluted",
+      "EPS (Diluted)",
+      "희석주당이익",
+      "희석주당순이익",
+      "희석주당이익(손실)",
+      "기본주당이익",
+      "기본주당이익(손실)",
+      "기본희석주당이익",
+      "주당이익",
+      "주당순이익",
+      "基本的1株当たり当期利益 (円)",
+      "1株当たり当期純利益 (円)",
+    ],
+    /주당(순)?이익/,
+  );
   const netIncome = flowValue(annual, quarterly, [
     "NetIncomeLoss",
     "Net Income",
