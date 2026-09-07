@@ -25,15 +25,24 @@ export async function GET(
     const code = decodeURIComponent(symbol);
     const name = new URL(request.url).searchParams.get("name");
     const isin = await resolveKrIsin(code);
-    const events = (await fetchKrRightsSchedule(name, isin)) ?? [];
-    return ok(
-      { events },
-      {
-        headers: {
-          "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400",
+    try {
+      const events = (await fetchKrRightsSchedule(name, isin)) ?? [];
+      return ok(
+        { events },
+        {
+          headers: {
+            "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400",
+          },
         },
-      },
-    );
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // API 미승인/전파대기는 500 대신 안내 상태로
+      if (msg.includes("NO_OPENAPI") || msg.includes("전파대기") || msg.includes("미승인")) {
+        return ok({ events: [], pending: true, detail: msg });
+      }
+      throw err;
+    }
   } catch (err) {
     return jsonError(err);
   }

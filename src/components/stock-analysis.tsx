@@ -111,6 +111,7 @@ export function StockAnalysis({
           closeStartDt: string | null;
           closeEndDt: string | null;
         }[];
+        pending?: boolean;
       }>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/rights` +
           (overview.data?.profile?.name
@@ -565,7 +566,12 @@ export function StockAnalysis({
                 {rightsQ.isError && (
                   <ErrorBox message={(rightsQ.error as Error).message} />
                 )}
-                {rightsQ.data && rightsQ.data.events.length === 0 && (
+                {rightsQ.data?.pending && (
+                  <p className="text-muted-foreground text-sm">
+                    권리일정 API 전파 대기 중입니다 (공공데이터포털 승인 직후 최대 1영업일).
+                  </p>
+                )}
+                {rightsQ.data && !rightsQ.data.pending && rightsQ.data.events.length === 0 && (
                   <p className="text-muted-foreground text-sm">
                     최근 1년 ~ 향후 등록된 권리일정이 없습니다.
                   </p>
