@@ -521,9 +521,8 @@ export function StockAnalysis({
                 <p className="text-muted-foreground/80 text-[11px] leading-relaxed">
                   {market === "kr" ? (
                     <>
-                      PER·PBR·PSR·EPS·BPS·PER(TTM)·EPS(TTM)·EV/EBITDA : DART / 추정PER : FnGuide(네이버)
-                      {" / "}DPS·DPS(TTM)·배당수익률 : 금융위원회 주식배당정보 / 52주 베타 : KOSPI 대비
-                      일간수익률 자체 계산
+                      PER·PBR·PSR·EPS·BPS·PER(TTM)·EPS(TTM)·EV/EBITDA : DART / DPS·DPS(TTM)·배당수익률 :
+                      금융위원회 주식배당정보
                     </>
                   ) : (
                     <>
