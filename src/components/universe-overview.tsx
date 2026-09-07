@@ -25,6 +25,7 @@ interface Row {
   currency?: "KRW" | "USD" | "JPY" | null;
   per?: number | null;
   perTtm?: number | null;
+  estPer?: number | null;
   pbr?: number | null;
   forwardPer?: number | null;
   targetMeanPrice?: number | null;
@@ -178,12 +179,12 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                 <th className="px-3 py-2 text-right font-medium">종가</th>
                 <th className="px-3 py-2 text-right font-medium">등락</th>
                 <th className="px-3 py-2 text-right font-medium">시가총액({capUnit})</th>
-                <th className="px-3 py-2 text-right font-medium">외국인</th>
+                <th className="px-3 py-2 text-right font-medium">외국인지분율</th>
                 <th className="px-3 py-2 text-right font-medium">매출액({revUnit})</th>
                 <th className="px-3 py-2 text-right font-medium">영업이익률</th>
                 <th className="px-3 py-2 text-right font-medium">순이익률</th>
-                <th className="px-3 py-2 text-right font-medium">PER</th>
                 <th className="px-3 py-2 text-right font-medium">트레일링PER</th>
+                <th className="px-3 py-2 text-right font-medium">추정PER</th>
                 <th className="px-3 py-2 text-right font-medium">목표주가</th>
                 <th className="px-3 py-2 font-medium">의견</th>
               </tr>
@@ -238,10 +239,10 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                         <Percent value={r.netMargin} />
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <Multiple value={r.per} />
+                        <Multiple value={r.perTtm} />
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <Multiple value={r.perTtm} />
+                        <Multiple value={r.estPer} />
                       </td>
                       <td className="px-3 py-2 text-right">
                         <Money

@@ -99,12 +99,19 @@ export function StockAnalysis({
     retry: false,
   });
 
-  const foreignQ = useQuery({
-    queryKey: ["foreign", market, symbol],
+  const naverQ = useQuery({
+    queryKey: ["kr-naver", market, symbol],
     queryFn: () =>
-      apiFetch<{ foreign: { ratio: number; asOf: string } | null }>(
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/foreign`,
-      ),
+      apiFetch<{
+        foreign: { ratio: number; asOf: string } | null;
+        consensus: {
+          estYear: number | null;
+          estEps: number | null;
+          estPer: number | null;
+          targetMean: number | null;
+          recommMean: number | null;
+        } | null;
+      }>(`/api/markets/${market}/${encodeURIComponent(symbol!)}/foreign`),
     enabled: Boolean(symbol) && market === "kr",
     retry: false,
   });
@@ -179,15 +186,21 @@ export function StockAnalysis({
   const trailingPer =
     market === "kr" ? ownTtmPer : (ov?.consensus?.trailingPer ?? ownTtmPer);
 
-  // ── 추정PER (원래 PER(E) 로직) — 당해년도 컨센서스 추정 EPS 기준 ──
-  const estEps =
+  // ── 추정PER — 당해년도 컨센서스 추정 EPS 기준 ──
+  // 국내: 네이버(FnGuide) 컨센서스. 해외: 야후 earningsTrend, 폴백 forwardPE.
+  const nvCons = naverQ.data?.consensus ?? null;
+  const yhEstEps =
     ov?.consensus?.estimates?.find((e) => e.period.startsWith("당해"))?.epsAvg ??
     ov?.consensus?.estimates?.[0]?.epsAvg ??
     null;
+  const estEps = market === "kr" ? nvCons?.estEps ?? null : yhEstEps;
   const estPer =
-    price != null && estEps != null && estEps > 0
-      ? price / estEps
-      : (ov?.consensus?.forwardPer ?? null);
+    market === "kr"
+      ? nvCons?.estPer ??
+        (price != null && estEps != null && estEps > 0 ? price / estEps : null)
+      : price != null && yhEstEps != null && yhEstEps > 0
+        ? price / yhEstEps
+        : (ov?.consensus?.forwardPer ?? null);
 
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
   const metrics: { label: string; node: React.ReactNode }[] = [
@@ -328,9 +341,9 @@ export function StockAnalysis({
                   <span className="text-base">
                     {formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
                   </span>
-                  {market === "kr" && foreignQ.data?.foreign && (
+                  {market === "kr" && naverQ.data?.foreign && (
                     <div className="text-muted-foreground mt-1 text-xs">
-                      외국인 {foreignQ.data.foreign.ratio.toFixed(2)}%
+                      외국인지분율 {naverQ.data.foreign.ratio.toFixed(2)}%
                     </div>
                   )}
                 </Stat>

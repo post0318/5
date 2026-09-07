@@ -1,7 +1,7 @@
 import "server-only";
 import type { MarketId } from "@/lib/markets/types";
 import { getStockOverview } from "@/lib/markets/service";
-import { fetchKrForeignOwnership } from "@/lib/markets/kr/foreign-ownership";
+import { fetchKrForeignOwnership, fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 import { listUniverse } from "@/lib/universe/repo";
 import type { UniverseItem } from "@/lib/db/schema";
 import {
@@ -26,12 +26,15 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
     updatedAt: new Date().toISOString(),
   };
   try {
-    const [ov, foreign] = await Promise.all([
+    const [ov, foreign, krCons] = await Promise.all([
       getStockOverview(item.market as MarketId, item.symbol, item.yahooSymbol, {
         skipQuarterly: true,
       }),
       item.market === "kr"
         ? fetchKrForeignOwnership(item.symbol).catch(() => null)
+        : Promise.resolve(null),
+      item.market === "kr"
+        ? fetchKrNaverConsensus(item.symbol).catch(() => null)
         : Promise.resolve(null),
     ]);
     const inp = ov.multiples?.inputs;
@@ -45,6 +48,10 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       currency: ov.quote?.currency ?? null,
       per: ov.multiples?.per ?? null,
       perTtm: ov.multiples?.perTtm ?? null,
+      estPer:
+        item.market === "kr"
+          ? krCons?.estPer ?? null
+          : ov.consensus?.forwardPer ?? null,
       pbr: ov.multiples?.pbr ?? null,
       forwardPer: ov.consensus?.forwardPer ?? null,
       targetMeanPrice: ov.consensus?.targetMeanPrice ?? null,
@@ -66,6 +73,7 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       currency: null,
       per: null,
       perTtm: null,
+      estPer: null,
       pbr: null,
       forwardPer: null,
       targetMeanPrice: null,

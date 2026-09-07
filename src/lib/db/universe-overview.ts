@@ -23,6 +23,8 @@ export interface UniverseOverviewDoc {
   currency: "KRW" | "USD" | "JPY" | null;
   per: number | null;
   perTtm: number | null;
+  /** 추정PER — 국내: 네이버 FnGuide 컨센서스, 해외: 야후 forwardPE */
+  estPer: number | null;
   pbr: number | null;
   forwardPer: number | null;
   targetMeanPrice: number | null;
