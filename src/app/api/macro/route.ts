@@ -1,8 +1,10 @@
+import { after } from "next/server";
 import { jsonError, ok } from "@/lib/api";
 import { getMacroDashboard, getSeriesLongTermMean } from "@/lib/macro/fred";
 import { getIndices } from "@/lib/macro/indices";
 import { getFearGreed } from "@/lib/macro/feargreed";
 import { getKrFearGreed } from "@/lib/macro/kr/fear-greed";
+import { autoBackfillKrFg } from "@/lib/macro/kr/batch";
 
 export const revalidate = 3600;
 
@@ -15,6 +17,7 @@ export async function GET() {
       getSeriesLongTermMean("VIXCLS", "1990-01-01").catch(() => null),
       getKrFearGreed().catch(() => null),
     ]);
+    after(() => autoBackfillKrFg(krFearGreed?.asOf ?? null));
     return ok({
       ...dashboard,
       indices,

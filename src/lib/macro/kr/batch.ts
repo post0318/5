@@ -1,7 +1,14 @@
 import "server-only";
 import type { AnyBulkWriteOperation } from "mongodb";
 import YahooFinancePkg from "yahoo-finance2";
-import { krFgDailyCol, krStockRollCol, type KrFgDailyDoc, type KrStockRollDoc } from "@/lib/db/kr-fg";
+import {
+  getMeta,
+  krFgDailyCol,
+  krStockRollCol,
+  setMeta,
+  type KrFgDailyDoc,
+  type KrStockRollDoc,
+} from "@/lib/db/kr-fg";
 import { fetchAllStocks, fetchKospi200Futures, fetchKospiIndex, fetchPutCall, fetchVkospi } from "./krx";
 import { fetchLatestRates } from "./ecos";
 
@@ -17,6 +24,28 @@ export interface BatchResult {
   rollTracked: number;
   ok: boolean;
   error?: string;
+}
+
+/** 직전 영업일 (KRX EOD 가 있어야 정상인 최신일) */
+function lastBusinessDayIso(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * 조회 시 최신 영업일 데이터가 빠져 있으면 백그라운드로 보충.
+ * 크론이 놓쳤을 때 자가 치유. 10분 쿨다운.
+ */
+export async function autoBackfillKrFg(asOf: string | null | undefined): Promise<void> {
+  const expected = lastBusinessDayIso();
+  if (!asOf || asOf >= expected) return;
+  const now = Date.now();
+  const last = Number((await getMeta("autoBackfillAt").catch(() => "0")) ?? 0);
+  if (now - last < 10 * 60_000) return;
+  await setMeta("autoBackfillAt", String(now)).catch(() => {});
+  await backfillRange(asOf, expected, true).catch(() => {});
 }
 
 /** 특정 거래일(YYYYMMDD) 1일치 수집·집계·저장 */
