@@ -505,11 +505,11 @@ export function StockAnalysis({
                 <p className="text-muted-foreground/80 text-[11px] leading-relaxed">
                   {market === "kr" ? (
                     <>
-                      PER·PBR·PSR·EPS·BPS = 최근 연간 DART 공시 재무 + 현재가 자체 계산 ·
-                      PER(TTM)·EPS(TTM) = 최근 4분기(DART 분기 누적 환산) ·
-                      EV/EBITDA = (시총+부채−현금) ÷ (영업이익+감가상각비, DART XBRL); 없으면 EV/EBIT 근사 ·
-                      추정PER = 당해년도 컨센서스(FnGuide, 네이버 경유) ·
-                      DPS·배당수익률 = 금융위원회 주식배당정보 · 52주 베타 = KOSPI 대비 일간수익률 자체 계산
+                      PER·PBR·PSR·EPS·BPS·PER(TTM)·EPS(TTM)·EV/EBITDA = DART (재무 + 현재가 자체 계산,
+                      EV/EBITDA 는 감가상각비 없으면 EV/EBIT 근사) ·
+                      추정PER = FnGuide(네이버 경유) ·
+                      DPS·DPS(TTM)·배당수익률 = 금융위원회 주식배당정보 ·
+                      52주 베타 = KOSPI 대비 일간수익률 자체 계산
                     </>
                   ) : (
                     <>
