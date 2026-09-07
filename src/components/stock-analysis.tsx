@@ -98,7 +98,13 @@ export function StockAnalysis({
           annual: { dps: number; year: number } | null;
           ttm: { dps: number; from: string; to: string } | null;
         } | null;
-        beta: { beta: number; change: number | null; n: number } | null;
+        beta: {
+          beta: number;
+          change: number | null;
+          n: number;
+          high52: number | null;
+          low52: number | null;
+        } | null;
       }>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm` +
           (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
@@ -459,20 +465,30 @@ export function StockAnalysis({
                   )}
                 </Stat>
                 <Stat label="52주 최고 / 최저">
-                  <span className="tnum text-base">
-                    <span className="text-up">
-                      <Money value={ov.consensus?.fiftyTwoWeekHigh} currency={ccy} fallback="-" />
-                    </span>
-                    {" / "}
-                    <span className="text-down">
-                      <Money value={ov.consensus?.fiftyTwoWeekLow} currency={ccy} fallback="-" />
-                    </span>
-                  </span>
-                  <Week52Bar
-                    price={ov.quote?.last ?? null}
-                    high={ov.consensus?.fiftyTwoWeekHigh ?? null}
-                    low={ov.consensus?.fiftyTwoWeekLow ?? null}
-                  />
+                  {(() => {
+                    const hi52 =
+                      market === "kr"
+                        ? (ttmQ.data?.beta?.high52 ?? ov.consensus?.fiftyTwoWeekHigh ?? null)
+                        : (ov.consensus?.fiftyTwoWeekHigh ?? null);
+                    const lo52 =
+                      market === "kr"
+                        ? (ttmQ.data?.beta?.low52 ?? ov.consensus?.fiftyTwoWeekLow ?? null)
+                        : (ov.consensus?.fiftyTwoWeekLow ?? null);
+                    return (
+                      <>
+                        <span className="tnum text-base">
+                          <span className="text-up">
+                            <Money value={hi52} currency={ccy} fallback="-" />
+                          </span>
+                          {" / "}
+                          <span className="text-down">
+                            <Money value={lo52} currency={ccy} fallback="-" />
+                          </span>
+                        </span>
+                        <Week52Bar price={ov.quote?.last ?? null} high={hi52} low={lo52} />
+                      </>
+                    );
+                  })()}
                 </Stat>
               </div>
 

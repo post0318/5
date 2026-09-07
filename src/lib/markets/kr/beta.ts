@@ -50,6 +50,9 @@ export interface Kr52wBeta {
   n: number;
   from: string;
   to: string;
+  /** 최근 252거래일 종가 최고/최저 */
+  high52: number | null;
+  low52: number | null;
 }
 
 /** 두 수익률 배열에서 β = Cov/Var */
@@ -115,6 +118,12 @@ export async function computeKr52wBeta(
   }
   const r3 = (v: number) => Math.round(v * 1000) / 1000;
   const used = dates.slice(-(take + 1));
+
+  // 52주 고가/저가 — 최근 252거래일 종가
+  const closes = dates.slice(-252).map((d) => stock.get(d)!).filter((v) => v > 0);
+  const high52 = closes.length ? Math.max(...closes) : null;
+  const low52 = closes.length ? Math.min(...closes) : null;
+
   return {
     beta: r3(beta),
     prevBeta: prevBeta != null ? r3(prevBeta) : null,
@@ -122,5 +131,7 @@ export async function computeKr52wBeta(
     n: take,
     from: used[0] ?? dates[0],
     to: used[used.length - 1] ?? dates[dates.length - 1],
+    high52,
+    low52,
   };
 }
