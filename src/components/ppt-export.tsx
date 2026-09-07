@@ -52,9 +52,10 @@ export function StockPptButton({
   name?: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const [slideNo, setSlideNo] = useState("02");
+  const [brand, setBrand] = useState("");
   const [overview, setOverview] = useState("");
   const [business, setBusiness] = useState("");
-  const [marketShare, setMarketShare] = useState("");
   const [busy, setBusy] = useState(false);
 
   const run = async () => {
@@ -62,7 +63,7 @@ export function StockPptButton({
     try {
       await downloadPptx(
         "/api/ppt/stock",
-        { market, symbol, yahoo: yahoo ?? undefined, overview, business, marketShare },
+        { market, symbol, yahoo: yahoo ?? undefined, slideNo, brand, overview, business },
         `${symbol}.pptx`,
       );
       toast.success("PPT를 내려받았습니다");
@@ -91,6 +92,26 @@ export function StockPptButton({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          <div className="flex gap-3">
+            <div className="w-24 space-y-1">
+              <span className="text-xs font-medium">슬라이드 번호</span>
+              <input
+                className={TA}
+                value={slideNo}
+                onChange={(e) => setSlideNo(e.target.value)}
+                placeholder="02"
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <span className="text-xs font-medium">브랜드 문구 (우측 하단, 선택)</span>
+              <input
+                className={TA}
+                value={brand}
+                onChange={(e) => setBrand(e.target.value)}
+                placeholder="비워두면 표시 안 함"
+              />
+            </div>
+          </div>
           <div className="space-y-1">
             <span className="text-xs font-medium">회사 설명 (상단 밴드)</span>
             <textarea
@@ -101,7 +122,7 @@ export function StockPptButton({
             />
           </div>
           <div className="space-y-1">
-            <span className="text-xs font-medium">주요 사업</span>
+            <span className="text-xs font-medium">주요 사업 (한 줄에 하나)</span>
             <textarea
               className={`${TA} min-h-[80px]`}
               value={business}
@@ -109,15 +130,10 @@ export function StockPptButton({
               placeholder={"음식 배달·매장 예약\n호텔·여행, 영화 예매\n신선식품 배송, 클라우드 ERP"}
             />
           </div>
-          <div className="space-y-1">
-            <span className="text-xs font-medium">핵심 시장점유율 · 경쟁 구도</span>
-            <textarea
-              className={`${TA} min-h-[70px]`}
-              value={marketShare}
-              onChange={(e) => setMarketShare(e.target.value)}
-              placeholder={"중국 배달시장 M/S 67% (1위)\n2위 어러머(알리바바) 31%"}
-            />
-          </div>
+          <p className="text-muted-foreground text-xs">
+            제목·로고·재무제표·주가차트는 자동 생성됩니다. 시장점유율 영역은 빈 칸으로 두니
+            내보낸 뒤 직접 채우세요.
+          </p>
         </div>
         <DialogFooter>
           <Button onClick={run} disabled={busy}>

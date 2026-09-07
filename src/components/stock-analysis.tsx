@@ -94,7 +94,7 @@ export function StockAnalysis({
     queryFn: () =>
       apiFetch<{
         ttm: TtmFlows | null;
-        dividend: { dps: number; year: number } | null;
+        dividend: { dps: number; from: string; to: string; count: number } | null;
         beta: { beta: number; change: number | null; n: number } | null;
       }>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm` +

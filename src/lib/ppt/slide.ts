@@ -20,18 +20,17 @@ const SZ_TITLE = 22;
 const SZ_SECTION = 18;
 const SZ_BODY = 12;
 
-const NAVY = "1B3A6B";
-const ORANGE = "E8720C";
-const GOLD = "F5A623";
+// 예시.pptx 팔레트
+const ORANGE = "F37320";
 const INK = "1A1A1A";
-const SUB = "6E6E6E";
-const RULE = "CFD6E0";
-const HEADFILL = "EDEFF3";
-const KEYFILL = "F3F1E7";
+const SUB = "8B8B8B";
+const RULE = "D6D6D6";
+const HEADFILL = "F4EEE7";
+const LINE = "333333"; // 주가선
+const KEYFILL = "FBF3EA";
 
 const W = 10;
 const H = 7.5;
-const MX = 0.4;
 
 const numf = (v: number | null, d = 0) => (v == null ? "–" : formatNumber(v, d));
 const pctf = (v: number | null) => (v == null ? "–" : formatPercent(v, { alreadyPercent: false }));
@@ -76,82 +75,91 @@ function addSlide(pptx: PptxGenJS, d: StockSlideData) {
   const s = pptx.addSlide();
   s.background = { color: "FFFFFF" };
 
-  // ── 헤더 ─────────────────────────────────────────────
-  s.addText("종목", {
-    x: MX, y: 0.22, w: 1.0, h: 0.6, valign: "middle", align: "center",
-    color: "FFFFFF", fontFace: F_TITLE, fontSize: 20, bold: true, fill: { color: NAVY },
-  });
-  s.addShape("rect", { x: MX, y: 0.84, w: 1.0, h: 0.05, fill: { color: NAVY } });
-  s.addText(`투자종목  ${d.name}  (${d.symbol})`, {
-    x: MX + 1.2, y: 0.22, w: W - MX * 2 - 1.2, h: 0.6, valign: "middle",
-    color: NAVY, fontFace: F_TITLE, fontSize: SZ_TITLE, bold: true,
-  });
-
-  // ── 회사 개요 밴드 ──────────────────────────────────
-  const ovY = 1.05;
-  const ovLines = d.overview ? d.overview.split(/\r?\n/).map((x) => x.trim()).filter(Boolean) : [];
-  const ovH = 1.0;
-  s.addShape("rect", {
-    x: MX, y: ovY, w: W - MX * 2, h: ovH,
-    fill: { color: "FBF6F0" }, line: { color: GOLD, width: 1 },
+  // ── 헤더 (예시.pptx 좌표) ────────────────────────────
+  s.addText(d.slideNo, {
+    x: 0.3, y: 0.24, w: 0.62, h: 0.56, valign: "middle", align: "left",
+    color: ORANGE, fontFace: F_TITLE, fontSize: 30, bold: true,
   });
   s.addText(
-    (ovLines.length ? ovLines : ["(회사 설명을 입력하세요)"]).map((t) => ({
-      text: t,
-      options: {
-        bullet: { code: "2013", indent: 12 },
-        breakLine: true,
-        color: ovLines.length ? INK : SUB,
-        italic: !ovLines.length,
-      },
-    })),
+    [
+      { text: d.name, options: { bold: true, color: INK } },
+      { text: d.sector ? `  ·  ${d.sector}` : "", options: { color: SUB, fontSize: 14 } },
+      { text: `  (${d.symbol})`, options: { color: SUB, fontSize: 14 } },
+    ],
     {
-      x: MX + 0.22, y: ovY + 0.1, w: W - MX * 2 - 0.44, h: ovH - 0.2, valign: "middle",
-      fontFace: F_BODY, fontSize: SZ_BODY, lineSpacingMultiple: 1.2,
+      x: 0.96, y: 0.3, w: 6.6, h: 0.5, valign: "middle",
+      fontFace: F_TITLE, fontSize: SZ_TITLE,
     },
   );
+  if (d.logo) {
+    s.addImage({ data: d.logo, x: 8.02, y: 0.3, w: 1.6, h: 0.62, sizing: { type: "contain", w: 1.6, h: 0.62 } });
+  }
 
-  // ── 2×2 그리드 ──────────────────────────────────────
-  const gridTop = ovY + ovH + 0.3;
-  const gap = 0.3;
-  const colW = (W - MX * 2 - gap) / 2;
-  const leftX = MX;
-  const rightX = MX + colW + gap;
-  const rowH = 2.32;
-  const r1 = gridTop;
-  const r2 = gridTop + rowH + 0.34;
-  const boxOff = 0.46; // 영역제목 높이
+  // ── 회사 개요 밴드 (0.43, 1.02, 9.22×0.91) ──────────
+  const ovY = 1.02;
+  const ovH = 0.91;
+  const ovText = d.overview.trim();
+  s.addShape("rect", {
+    x: 0.43, y: ovY, w: 9.22, h: ovH,
+    fill: { color: "FBF3EA" }, line: { color: ORANGE, width: 1 },
+  });
+  s.addText(ovText || "(회사 설명을 입력하세요)", {
+    x: 0.62, y: ovY + 0.06, w: 8.84, h: ovH - 0.12, valign: "middle",
+    fontFace: F_BODY, fontSize: SZ_BODY, color: ovText ? INK : SUB, italic: !ovText,
+    lineSpacingMultiple: 1.15,
+  });
 
-  // TL — 주요 사업
-  sectionTitle(s, leftX, r1, colW, "주요 사업");
-  bulletBox(s, leftX, r1 + boxOff, colW, rowH - boxOff, d.business, "(주요 사업 내용을 입력하세요)");
+  // ── 영역 제목 (y≈2.55) + 본문 (y≈3.04) ──────────────
+  const secY = 2.55;
+  const bodyY = 3.04;
+  const leftX = 0.49;
+  const rightX = 5.14;
+  const leftW = 4.4;
+  const rightW = 4.5;
 
-  // TR — 핵심 시장점유율
-  sectionTitle(s, rightX, r1, colW, "핵심 시장점유율 · 경쟁 구도");
-  bulletBox(s, rightX, r1 + boxOff, colW, rowH - boxOff, d.marketShare, "(시장 점유율·경쟁 구도를 입력하세요)");
+  // 좌: 주요 사업 (텍스트)
+  sectionTitle(s, leftX, secY, leftW, "주요 사업");
+  bulletBox(s, leftX, bodyY, leftW, 2.56, d.business, "(주요 사업 내용을 입력하세요)");
 
-  // BL — 재무제표
-  sectionTitle(s, leftX, r2, colW, `재무제표  (단위: ${d.unitLabel})`);
-  drawFinTable(s, d, leftX, r2 + boxOff, colW);
+  // 우: 핵심 시장점유율 — 빈 영역(라벨만)
+  sectionTitle(s, rightX, secY, rightW, "핵심 시장점유율 · 경쟁 구도");
+  s.addShape("rect", {
+    x: rightX, y: bodyY, w: rightW, h: 1.62,
+    fill: { color: "FFFFFF" }, line: { color: RULE, width: 1, dashType: "dash" },
+  });
+  s.addText("직접 작성 영역", {
+    x: rightX, y: bodyY + 0.66, w: rightW, h: 0.3, align: "center",
+    color: SUB, fontFace: F_BODY, fontSize: 9, italic: true,
+  });
 
-  // BR — 주가
-  sectionTitle(s, rightX, r2, colW, d.priceLabel);
-  drawPriceChart(s, d, rightX, r2 + boxOff + 0.06, colW, rowH - boxOff - 0.2);
+  // ── 하단: 재무제표(좌) / 주가차트(우) ───────────────
+  const botSecY = 4.78;
+  const botBodyY = 5.24;
+  sectionTitle(s, leftX, botSecY - 0.02, leftW, `재무제표  (단위: ${d.unitLabel})`);
+  drawFinTable(s, d, leftX, botBodyY, leftW);
 
-  // ── 푸터 ─────────────────────────────────────────────
+  sectionTitle(s, rightX, botSecY - 0.02, rightW, d.priceLabel);
+  drawPriceChart(s, d, rightX, botBodyY, rightW, 1.78);
+
+  // ── 푸터 (예시 좌표) ────────────────────────────────
   const srcs = [
     `실적 ${d.sources.financials}`,
     d.sources.consensus ? `추정 ${d.sources.consensus}` : null,
     `주가 ${d.sources.price}`,
   ].filter(Boolean).join("  ·  ");
-  s.addShape("rect", { x: 0, y: H - 0.5, w: W, h: 0.012, fill: { color: RULE } });
   s.addText(`※ 출처 — ${srcs}`, {
-    x: MX, y: H - 0.46, w: W - MX * 2, h: 0.18, color: SUB, fontFace: F_BODY, fontSize: 7,
+    x: 0.42, y: 7.02, w: 6.5, h: 0.2, color: SUB, fontFace: F_BODY, fontSize: 7.5,
   });
   s.addText(
-    "본 자료는 이해를 돕기 위한 참고용이며 투자 조언이 아닙니다. 추정치는 시장 컨센서스로 실제와 다를 수 있습니다.",
-    { x: MX, y: H - 0.28, w: W - MX * 2, h: 0.2, color: SUB, fontFace: F_BODY, fontSize: 7, italic: true },
+    "본 자료는 참고용이며 투자 조언이 아닙니다. 추정치는 시장 컨센서스로 실제와 다를 수 있습니다.",
+    { x: 0.37, y: 7.24, w: 7.4, h: 0.18, color: SUB, fontFace: F_TITLE, fontSize: 7 },
   );
+  if (d.brand) {
+    s.addText(d.brand, {
+      x: 7.6, y: 7.24, w: 2.0, h: 0.18, align: "right",
+      color: SUB, fontFace: F_BODY, fontSize: 7.5,
+    });
+  }
 }
 
 function drawFinTable(s: PptxGenJS.Slide, d: StockSlideData, x: number, y: number, w: number) {
@@ -255,7 +263,7 @@ function drawPriceChart(
     });
     s.addText(formatNumber(a0 * r, 0), {
       x: x + 0.02, y: y + gy - 0.1, w: pl - 0.06, h: 0.2,
-      align: "right", color: NAVY, fontFace: F_BODY, fontSize: 7,
+      align: "right", color: LINE, fontFace: F_BODY, fontSize: 7,
     });
     if (B.length) {
       s.addText(formatNumber(b0 * r, 0), {
@@ -281,7 +289,7 @@ function drawPriceChart(
     }
   };
   if (B.length) polyline(B, b0, "9AA3AF", 1);
-  polyline(A, a0, NAVY, 1.75);
+  polyline(A, a0, LINE, 1.75);
 
   // x축 라벨
   const dl = (i: number) => A[i].date.slice(2).replace(/-/g, ".");
@@ -300,7 +308,7 @@ function drawPriceChart(
   const chg = first ? (last - first) / first : 0;
   s.addText(
     [
-      { text: "■ ", options: { color: NAVY, fontSize: 8 } },
+      { text: "■ ", options: { color: LINE, fontSize: 8 } },
       { text: `${d.name}   `, options: { color: INK, fontSize: 7.5 } },
       { text: "■ ", options: { color: "9AA3AF", fontSize: 8 } },
       { text: d.benchLabel, options: { color: SUB, fontSize: 7.5 } },

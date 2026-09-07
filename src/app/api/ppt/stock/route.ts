@@ -10,9 +10,10 @@ const schema = z.object({
   market: z.enum(["kr", "us", "jp"]),
   symbol: z.string().min(1).max(20),
   yahoo: z.string().max(20).nullable().optional(),
+  slideNo: z.string().max(8).optional(),
+  brand: z.string().max(60).optional(),
   overview: z.string().max(1500).optional(),
   business: z.string().max(2000).optional(),
-  marketShare: z.string().max(2000).optional(),
   priceYears: z.union([z.literal(1), z.literal(3), z.literal(5), z.literal(10)]).optional(),
 });
 
@@ -22,9 +23,10 @@ export async function POST(req: Request) {
     if (!isMarketId(b.market)) throw new Error("시장 오류");
     const data = await getStockSlideData(b.market as MarketId, b.symbol, {
       yahoo: b.yahoo ?? null,
+      slideNo: b.slideNo,
+      brand: b.brand,
       overview: b.overview,
       business: b.business,
-      marketShare: b.marketShare,
       priceYears: b.priceYears,
     });
     const buf = await buildStockPptx([data]);

@@ -23,12 +23,15 @@ export async function POST(req: Request) {
 
     // note 필드를 회사 개요로 사용 (첫 줄 = 개요, 나머지 = 주요 사업)
     const slides = [];
+    let n = 0;
     for (const it of items) {
+      n += 1;
       try {
         const noteLines = (it.note ?? "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
         slides.push(
           await getStockSlideData(it.market as MarketId, it.symbol, {
             yahoo: it.yahooSymbol,
+            slideNo: String(n).padStart(2, "0"),
             overview: noteLines[0] ?? "",
             business: noteLines.slice(1),
           }),

@@ -98,6 +98,12 @@ export interface StockSlideData {
   sector: string | null;
   /** 재무 축약 단위 라벨 (한국 억원 / 미국 백만$ / 일본 천만엔) */
   unitLabel: string;
+  /** 슬라이드 번호 표기 (기본 "02") */
+  slideNo: string;
+  /** 우측 하단 브랜드 문구 (기본 공란) */
+  brand: string;
+  /** 회사 로고 (data URI) — 도메인 기반 자동 조회 */
+  logo: string | null;
   /** 사용자 입력 */
   overview: string;
   business: string[];
@@ -118,6 +124,38 @@ const UNIT_LABEL: Record<MarketId, string> = { kr: "억원", us: "백만$", jp: 
 const lines = (v?: string | string[]) =>
   (Array.isArray(v) ? v : (v ?? "").split(/\r?\n/)).map((x) => x.trim()).filter(Boolean);
 
+/** 홈페이지 도메인 → 로고 data URI (Clearbit → Google 파비콘 폴백) */
+async function fetchLogo(homepage?: string | null): Promise<string | null> {
+  if (!homepage) return null;
+  let domain: string;
+  try {
+    domain = new URL(homepage.startsWith("http") ? homepage : `https://${homepage}`).hostname.replace(
+      /^www\./,
+      "",
+    );
+  } catch {
+    return null;
+  }
+  const urls = [
+    `https://logo.clearbit.com/${domain}?size=200`,
+    `https://www.google.com/s2/favicons?domain=${domain}&sz=128`,
+  ];
+  for (const u of urls) {
+    try {
+      const res = await fetch(u, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) continue;
+      const ct = res.headers.get("content-type") ?? "image/png";
+      if (!ct.startsWith("image/")) continue;
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length < 100) continue;
+      return `data:${ct};base64,${buf.toString("base64")}`;
+    } catch {
+      /* 다음 소스 */
+    }
+  }
+  return null;
+}
+
 export async function getStockSlideData(
   market: MarketId,
   symbol: string,
@@ -127,6 +165,8 @@ export async function getStockSlideData(
     business?: string[] | string;
     marketShare?: string[] | string;
     priceYears?: number;
+    slideNo?: string;
+    brand?: string;
   } = {},
 ): Promise<StockSlideData> {
   const ov = await getStockOverview(market, symbol, opts.yahoo, { skipQuarterly: true });
@@ -213,7 +253,11 @@ export async function getStockSlideData(
       return [];
     }
   };
-  const [priceRows, benchRows] = await Promise.all([dailySeries(ysym), dailySeries("^IXIC")]);
+  const [priceRows, benchRows, logo] = await Promise.all([
+    dailySeries(ysym),
+    dailySeries("^IXIC"),
+    fetchLogo(ov.profile?.homepage).catch(() => null),
+  ]);
 
   return {
     market,
@@ -222,6 +266,9 @@ export async function getStockSlideData(
     currency: ov.quote?.currency ?? ov.multiples?.currency ?? "USD",
     sector: ov.profile?.industry ?? ov.profile?.sector ?? null,
     unitLabel: UNIT_LABEL[market],
+    slideNo: (opts.slideNo ?? "02").trim() || "02",
+    brand: (opts.brand ?? "").trim(),
+    logo,
     overview: (opts.overview ?? "").trim(),
     business: lines(opts.business),
     marketShare: lines(opts.marketShare),
