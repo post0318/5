@@ -1,6 +1,7 @@
 import "server-only";
 import YahooFinancePkg from "yahoo-finance2";
 import { fetchKrIndexDaily } from "./kr/fsc-index";
+import { getKrIndexHistory } from "@/lib/db/kr-index";
 
 /**
  * 주요 지수·원자재 차트 (최근 1년, 일봉) + 기술적 지표.
@@ -76,7 +77,7 @@ function ema(values: number[], period: number): (number | null)[] {
   return out;
 }
 
-export const CHART_YEARS = [1, 3, 5, 10] as const;
+export const CHART_YEARS = [0.25, 0.5, 1, 3, 5, 10] as const;
 export type ChartYears = (typeof CHART_YEARS)[number];
 
 export async function getIndexChart(key: string, years: ChartYears = 1): Promise<IndexChart | null> {
@@ -88,15 +89,22 @@ export async function getIndexChart(key: string, years: ChartYears = 1): Promise
   from.setMonth(from.getMonth() - (years * 12 + 3));
   const fromIso = from.toISOString().slice(0, 10);
 
-  // KOSPI·KOSDAQ 은 금융위 지수시세(KRX) 우선. 데이터 부족 시 Yahoo 폴백.
+  // KOSPI·KOSDAQ 은 KRX 데이터 우선: DB 과거분(2015~2020) + 금융위 지수시세(2020~) 병합.
+  // 부족하면 Yahoo 폴백.
   const KR_IDX: Record<string, string> = { KOSPI: "코스피", KOSDAQ: "코스닥" };
   let pts: { date: string; close: number }[] = [];
   if (KR_IDX[key]) {
-    pts = await fetchKrIndexDaily(
-      KR_IDX[key],
-      fromIso.replace(/-/g, ""),
-      new Date().toISOString().slice(0, 10).replace(/-/g, ""),
-    );
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const [hist, fsc] = await Promise.all([
+      getKrIndexHistory(key as "KOSPI" | "KOSDAQ", fromIso, todayIso),
+      fetchKrIndexDaily(KR_IDX[key], fromIso.replace(/-/g, ""), todayIso.replace(/-/g, "")),
+    ]);
+    const merged = new Map<string, number>();
+    for (const p of hist) merged.set(p.date, p.close);
+    for (const p of fsc) merged.set(p.date, p.close); // 겹치면 금융위(최근)가 우선
+    pts = [...merged.entries()]
+      .map(([date, close]) => ({ date, close }))
+      .sort((a, b) => a.date.localeCompare(b.date));
   }
 
   if (pts.length < 30) {
@@ -158,5 +166,5 @@ export async function getIndexChart(key: string, years: ChartYears = 1): Promise
   });
 
   // 요청 기간(약 252거래일/년)만 반환 — 앞부분은 지표 워밍업용
-  return { key, name: spec.name, rows: rows.slice(-(years * 252)) };
+  return { key, name: spec.name, rows: rows.slice(-Math.round(years * 252)) };
 }

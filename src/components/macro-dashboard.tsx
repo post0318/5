@@ -376,7 +376,8 @@ export function MacroDashboard() {
 const GREEN = "oklch(0.62 0.17 150)";
 const RED = "oklch(0.58 0.21 27)";
 
-const CHART_YEARS = [1, 3, 5, 10] as const;
+const CHART_YEARS = [0.25, 0.5, 1, 3, 5, 10] as const;
+const chartRangeLabel = (y: number) => (y < 1 ? `${Math.round(y * 12)}개월` : `${y}년`);
 
 function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => void }) {
   const [years, setYears] = useState<(typeof CHART_YEARS)[number]>(1);
@@ -417,7 +418,7 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
                     : "hover:bg-muted text-muted-foreground",
                 )}
               >
-                {y}년
+                {chartRangeLabel(y)}
               </button>
             ))}
           </div>
