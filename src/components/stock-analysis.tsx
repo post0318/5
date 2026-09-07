@@ -267,19 +267,19 @@ export function StockAnalysis({
     { label: "PBR", node: <Multiple value={multiples?.pbr} fallback={multiplesFallback} /> },
     { label: "EPS", node: <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} /> },
     { label: "EPS(TTM)", node: <Money value={ttmEps} currency={ccy} fallback="-" /> },
-    { label: "", node: null },
+    {
+      label: multiples?.evEbitdaIsApprox ? "EV/EBIT" : "EV/EBITDA",
+      node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} />,
+    },
     { label: "BPS", node: <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} /> },
     {
       label: "DPS",
       node: <Money value={dps} currency={ccy} fallback="-" />,
     },
+    { label: "", node: null },
     {
       label: "배당수익률",
       node: <Percent value={divYield} fallback="-" />,
-    },
-    {
-      label: multiples?.evEbitdaIsApprox ? "EV/EBIT" : "EV/EBITDA",
-      node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} />,
     },
     { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
   ];
