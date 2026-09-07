@@ -158,8 +158,8 @@ export function StockAnalysis({
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
   const metrics: { label: string; node: React.ReactNode }[] = [
     { label: "PER", node: <Multiple value={multiples?.per} fallback={multiplesFallback} /> },
-    { label: "PER(E)", node: <Multiple value={fwdPer} /> },
-    { label: "Fwd PER", node: <Multiple value={ov?.consensus?.forwardPer} /> },
+    { label: "추정PER (당해예상)", node: <Multiple value={fwdPer} /> },
+    { label: "FWD PER (차년예상)", node: <Multiple value={ov?.consensus?.forwardPer} /> },
     { label: "PBR", node: <Multiple value={multiples?.pbr} fallback={multiplesFallback} /> },
     { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
     { label: "EV/EBITDA", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
