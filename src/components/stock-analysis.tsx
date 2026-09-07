@@ -108,8 +108,10 @@ export function StockAnalysis({
           exRightsDate: string | null;
           payoutDate: string | null;
           reason: string;
-          parValue: string | null;
-          items: { kind: string; start: string | null; end: string | null }[];
+          dividendPerShare: number | null;
+          dividendYield: number | null;
+          filing: { title: string; url: string; date: string } | null;
+          note: string | null;
         }[];
         pending?: boolean;
       }>(`/api/markets/${market}/${encodeURIComponent(symbol!)}/rights`),
@@ -580,7 +582,7 @@ export function StockAnalysis({
                           <th className="px-3 py-2 font-medium">권리락일</th>
                           <th className="px-3 py-2 font-medium">배당금지급일</th>
                           <th className="px-3 py-2 font-medium">권리사유</th>
-                          <th className="px-3 py-2 font-medium">세부 일정</th>
+                          <th className="px-3 py-2 font-medium">세부 내역</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
@@ -594,18 +596,31 @@ export function StockAnalysis({
                               {e.payoutDate ?? "-"}
                             </td>
                             <td className="px-3 py-2 whitespace-nowrap">{e.reason}</td>
-                            <td className="px-3 py-2">
-                              <div className="space-y-0.5">
-                                {e.items.map((it, j) => (
-                                  <div key={j} className="text-xs">
-                                    <span className="text-muted-foreground">{it.kind}</span>{" "}
-                                    <span className="tnum">
-                                      {it.start ?? ""}
-                                      {it.end && it.end !== it.start ? ` ~ ${it.end}` : ""}
+                            <td className="px-3 py-2 text-xs">
+                              {e.dividendPerShare != null ? (
+                                <span className="tnum">
+                                  주당 {e.dividendPerShare.toLocaleString()}원
+                                  {e.dividendYield != null && (
+                                    <span className="text-muted-foreground">
+                                      {" "}
+                                      · 수익률 {e.dividendYield}%
                                     </span>
-                                  </div>
-                                ))}
-                              </div>
+                                  )}
+                                </span>
+                              ) : e.filing ? (
+                                <a
+                                  href={e.filing.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-primary underline underline-offset-2"
+                                >
+                                  {e.filing.title}
+                                </a>
+                              ) : (
+                                <span className="text-muted-foreground">
+                                  {e.note ?? "-"}
+                                </span>
+                              )}
                             </td>
                           </tr>
                         ))}
