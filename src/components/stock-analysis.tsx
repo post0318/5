@@ -496,13 +496,15 @@ export function StockAnalysis({
                 <h3 className="text-sm font-semibold">투자지표</h3>
                 <div className="grid grid-cols-2 overflow-hidden rounded-lg border text-sm lg:grid-cols-4">
                   {metrics.map((m, i) => {
-                    const shaded = Math.floor(i / 4) === 1; // 5~8번 강조
+                    const mobShade = Math.floor(i / 2) % 2 === 1; // 모바일 2·4·6행
+                    const deskShade = Math.floor(i / 4) === 1; // 데스크톱 2행(5~8번)
                     return (
                       <div
                         key={i}
                         className={cn(
                           "flex items-center justify-between gap-2 border-b border-l px-3 py-2 [&:nth-child(2n+1)]:border-l-0 lg:[&:nth-child(2n+1)]:border-l lg:[&:nth-child(4n+1)]:border-l-0",
-                          shaded && "bg-muted/70",
+                          mobShade && "bg-muted/70",
+                          deskShade ? "lg:bg-muted/70" : "lg:bg-transparent",
                         )}
                       >
                         <span className="text-muted-foreground text-xs font-medium whitespace-nowrap">
