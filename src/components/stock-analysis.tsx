@@ -106,18 +106,11 @@ export function StockAnalysis({
         events: {
           basDt: string;
           reason: string;
-          startDt: string | null;
-          endDt: string | null;
-          closeStartDt: string | null;
-          closeEndDt: string | null;
+          parValue: string | null;
+          items: { kind: string; start: string | null; end: string | null }[];
         }[];
         pending?: boolean;
-      }>(
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/rights` +
-          (overview.data?.profile?.name
-            ? `?name=${encodeURIComponent(overview.data.profile.name)}`
-            : ""),
-      ),
+      }>(`/api/markets/${market}/${encodeURIComponent(symbol!)}/rights`),
     enabled: Boolean(symbol) && market === "kr",
     retry: false,
   });
@@ -583,22 +576,26 @@ export function StockAnalysis({
                         <tr className="bg-muted/50 text-muted-foreground text-left">
                           <th className="px-3 py-2 font-medium">기준일</th>
                           <th className="px-3 py-2 font-medium">권리사유</th>
-                          <th className="px-3 py-2 font-medium">권리행사 시작</th>
-                          <th className="px-3 py-2 font-medium">권리행사 종료</th>
-                          <th className="px-3 py-2 font-medium">명부폐쇄</th>
+                          <th className="px-3 py-2 font-medium">세부 일정</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
                         {rightsQ.data.events.map((e, i) => (
-                          <tr key={i} className="hover:bg-muted/30">
-                            <td className="tnum px-3 py-2">{e.basDt || "-"}</td>
-                            <td className="px-3 py-2">{e.reason}</td>
-                            <td className="tnum px-3 py-2">{e.startDt ?? "-"}</td>
-                            <td className="tnum px-3 py-2">{e.endDt ?? "-"}</td>
-                            <td className="tnum text-muted-foreground px-3 py-2 text-xs">
-                              {e.closeStartDt
-                                ? `${e.closeStartDt} ~ ${e.closeEndDt ?? ""}`
-                                : "-"}
+                          <tr key={i} className="hover:bg-muted/30 align-top">
+                            <td className="tnum px-3 py-2 whitespace-nowrap">{e.basDt || "-"}</td>
+                            <td className="px-3 py-2 whitespace-nowrap">{e.reason}</td>
+                            <td className="px-3 py-2">
+                              <div className="space-y-0.5">
+                                {e.items.map((it, j) => (
+                                  <div key={j} className="text-xs">
+                                    <span className="text-muted-foreground">{it.kind}</span>{" "}
+                                    <span className="tnum">
+                                      {it.start ?? ""}
+                                      {it.end && it.end !== it.start ? ` ~ ${it.end}` : ""}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
                             </td>
                           </tr>
                         ))}

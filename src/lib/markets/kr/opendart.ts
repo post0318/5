@@ -72,6 +72,22 @@ interface CompanyResponse extends DartEnvelope {
   ind_cd: string;
   est_dt: string; // YYYYMMDD
   acc_mt: string; // 결산월
+  jurir_no: string; // 법인등록번호 (13자리)
+}
+
+/** 종목코드 → 법인등록번호 (금융위 권리일정 API `crno` 파라미터용) */
+export async function getKrJurirNo(symbol: string): Promise<string | null> {
+  try {
+    const entry = await resolveCorpCode(key(), symbol);
+    const res = await fetchJson<CompanyResponse>(
+      `${BASE}/company.json?crtfc_key=${key()}&corp_code=${entry.corpCode}`,
+      { revalidate: 60 * 60 * 24 },
+    );
+    const jn = (res.jurir_no ?? "").replace(/\D/g, "");
+    return jn.length === 13 ? jn : null;
+  } catch {
+    return null;
+  }
 }
 
 const CORP_CLS_LABEL: Record<string, string> = {
