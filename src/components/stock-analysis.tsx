@@ -239,7 +239,6 @@ export function StockAnalysis({
     { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
     { label: "BPS", node: <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} /> },
     { label: "EV/EBITDA", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
-    { label: "유동비율", node: <NumberText value={ov?.consensus?.currentRatio} digits={2} /> },
     { label: "DPS", node: <Money value={ov?.consensus?.dividendPerShare} currency={ccy} fallback="-" /> },
     { label: "배당수익률", node: <Percent value={ov?.consensus?.dividendYield} fallback="-" /> },
   ];
