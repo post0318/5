@@ -1,9 +1,12 @@
 import "server-only";
 import YahooFinancePkg from "yahoo-finance2";
+import { fetchKrDailyCloses } from "./fsc-price";
+import { getKrFgHistory } from "@/lib/db/kr-fg";
 
 /**
  * 52주 베타 자체 계산 — β = Cov(종목 일간수익률, KOSPI 일간수익률) / Var(KOSPI).
- * yahoo-finance2 일봉 (개인용/비상업 한정 — prd.md §4.3).
+ * 종목 일봉 = 금융위 주식시세(KRX EOD), KOSPI = MongoDB kr_fg_daily(2021~ 매일 적재).
+ * 둘 다 실패 시 yahoo-finance2 로 폴백.
  * Yahoo 제공 베타(5년 월간)는 국내 종목에서 누락·부정확이 잦아 대체.
  */
 
@@ -23,7 +26,7 @@ function yfi(): YF {
   return yf;
 }
 
-async function dailyCloses(sym: string, fromMs: number): Promise<Map<string, number>> {
+async function yahooCloses(sym: string, fromMs: number): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   try {
     const { quotes } = await yfi().chart(sym, {
@@ -39,6 +42,9 @@ async function dailyCloses(sym: string, fromMs: number): Promise<Map<string, num
   }
   return map;
 }
+
+const dashYmd = (ymd8: string) =>
+  `${ymd8.slice(0, 4)}-${ymd8.slice(4, 6)}-${ymd8.slice(6, 8)}`;
 
 export interface Kr52wBeta {
   beta: number;
@@ -75,18 +81,34 @@ export async function computeKr52wBeta(
   yahooOverride?: string | null,
 ): Promise<Kr52wBeta | null> {
   const digits = code.replace(/\D/g, "").padStart(6, "0");
-  const from = Date.now() - 400 * 864e5; // 여유롭게 400일 받아 최근 252거래일 사용
+  const fromMs = Date.now() - 400 * 864e5; // 여유롭게 400일 받아 최근 252거래일 사용
+  const beginYmd = new Date(fromMs).toISOString().slice(0, 10).replace(/-/g, "");
+  const endYmd = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
-  // 종목: override → .KS → .KQ
-  const candidates = [yahooOverride, `${digits}.KS`, `${digits}.KQ`].filter(Boolean) as string[];
+  // 종목 일봉: 금융위 주식시세 → 실패 시 Yahoo(.KS/.KQ)
   let stock = new Map<string, number>();
-  for (const c of candidates) {
-    stock = await dailyCloses(c, from);
-    if (stock.size > 60) break;
+  const fsc = await fetchKrDailyCloses(digits, beginYmd, endYmd);
+  for (const [k, v] of fsc) stock.set(dashYmd(k), v);
+  if (stock.size < 60) {
+    for (const c of [yahooOverride, `${digits}.KS`, `${digits}.KQ`].filter(Boolean) as string[]) {
+      stock = await yahooCloses(c, fromMs);
+      if (stock.size > 60) break;
+    }
   }
   if (stock.size < 60) return null;
 
-  const kospi = await dailyCloses("^KS11", from);
+  // KOSPI 일봉: MongoDB kr_fg_daily → 실패 시 Yahoo(^KS11)
+  const kospi = new Map<string, number>();
+  try {
+    const hist = await getKrFgHistory(400);
+    for (const d of hist) if (d.kospiClose != null && d.kospiClose > 0) kospi.set(d._id, d.kospiClose);
+  } catch {
+    /* Mongo 실패 */
+  }
+  if (kospi.size < 60) {
+    const y = await yahooCloses("^KS11", fromMs);
+    for (const [k, v] of y) kospi.set(k, v);
+  }
   if (kospi.size < 60) return null;
 
   // 공통 날짜 정렬 → 일간 로그수익률
