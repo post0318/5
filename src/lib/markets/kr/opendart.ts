@@ -285,28 +285,39 @@ const TTM_ACCOUNTS = {
     "기본주당이익",
     "기본주당순이익",
     "기본주당이익(손실)",
+    "기본희석주당이익",
+    "기본및희석주당이익",
     "주당이익",
+    "주당순이익",
   ],
 } as const;
 
 const norm = (s: string) => s.replace(/\s/g, "");
+// EPS 계정명은 회사·보고서별 편차가 커서 부분일치 허용
+const EPS_LOOSE = /주당(순)?이익/;
 
 /** 손익/포괄손익 계정에서 값 추출. col: 당기누적 | 전기동기누적 | 연간(당기) */
 function isValue(
   rows: FnlttRow[],
   names: readonly string[],
   col: "cumCur" | "cumPrior" | "annual",
+  loose?: RegExp,
 ): number | null {
   const set = new Set(names.map(norm));
-  for (const r of rows) {
-    if (r.sj_div !== "IS" && r.sj_div !== "CIS") continue;
-    if (!set.has(norm(r.account_nm ?? ""))) continue;
+  const pick = (r: FnlttRow) => {
     if (col === "annual") return parseAmount(r.thstrm_amount);
     if (col === "cumCur")
       return parseAmount(r.thstrm_add_amount) ?? parseAmount(r.thstrm_amount);
     return parseAmount(r.frmtrm_add_amount) ?? parseAmount(r.frmtrm_amount);
+  };
+  let looseHit: number | null = null;
+  for (const r of rows) {
+    if (r.sj_div !== "IS" && r.sj_div !== "CIS") continue;
+    const nm = norm(r.account_nm ?? "");
+    if (set.has(nm)) return pick(r);
+    if (loose && looseHit == null && loose.test(nm)) looseHit = pick(r);
   }
-  return null;
+  return looseHit;
 }
 
 const INTERIM_RANK: Record<string, number> = { "11014": 3, "11012": 2, "11013": 1 };
@@ -370,11 +381,12 @@ async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
 
   const ttm = (key: keyof typeof TTM_ACCOUNTS): { v: number | null; ttm: boolean } => {
     const names = TTM_ACCOUNTS[key];
-    const annual = isValue(annualRows!, names, "annual");
-    const cur = isValue(interim!.rows, names, "cumCur");
-    let prior = isValue(interim!.rows, names, "cumPrior");
+    const lz = key === "eps" ? EPS_LOOSE : undefined;
+    const annual = isValue(annualRows!, names, "annual", lz);
+    const cur = isValue(interim!.rows, names, "cumCur", lz);
+    let prior = isValue(interim!.rows, names, "cumPrior", lz);
     if (prior == null && priorInterimRows)
-      prior = isValue(priorInterimRows, names, "cumCur");
+      prior = isValue(priorInterimRows, names, "cumCur", lz);
     if (annual == null) return { v: null, ttm: false };
     if (cur == null || prior == null) return { v: annual, ttm: false }; // 분기 데이터 부족 → 연간값
     return { v: annual + cur - prior, ttm: true };
@@ -389,7 +401,7 @@ async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
   let eps = epsR.ttm && epsR.v && epsR.v > 0 ? epsR.v : null;
   if (eps == null && ni.ttm && ni.v != null) {
     const annualNi = isValue(annualRows!, TTM_ACCOUNTS.netIncome, "annual");
-    const annualEps = isValue(annualRows!, TTM_ACCOUNTS.eps, "annual");
+    const annualEps = isValue(annualRows!, TTM_ACCOUNTS.eps, "annual", EPS_LOOSE);
     if (annualNi && annualEps && annualEps > 0) {
       const shares = annualNi / annualEps;
       if (shares > 0) eps = Math.round((ni.v / shares) * 100) / 100;
