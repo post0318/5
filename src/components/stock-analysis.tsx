@@ -238,9 +238,9 @@ export function StockAnalysis({
     { label: "EPS(TTM)", node: <Money value={ttmEps} currency={ccy} fallback="-" /> },
     { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
     { label: "BPS", node: <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} /> },
-    { label: "EV/EBITDA", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
     { label: "DPS", node: <Money value={ov?.consensus?.dividendPerShare} currency={ccy} fallback="-" /> },
     { label: "배당수익률", node: <Percent value={ov?.consensus?.dividendYield} fallback="-" /> },
+    { label: "EV/EBITDA", node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} /> },
   ];
   const metricRows: (typeof metrics)[] = [];
   for (let i = 0; i < metrics.length; i += 4) metricRows.push(metrics.slice(i, i + 4));
