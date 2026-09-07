@@ -187,7 +187,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
             </thead>
             {visibleGroups.map((g) => (
               <tbody key={g.name || "_none"} className="divide-y">
-                <tr className="bg-muted/70">
+                <tr className="bg-[oklch(0.94_0.045_67)] dark:bg-[oklch(0.32_0.05_55)]">
                   <td
                     colSpan={11}
                     className="text-foreground px-3 py-1.5 text-sm font-bold"
