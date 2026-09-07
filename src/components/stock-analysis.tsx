@@ -377,7 +377,7 @@ export function StockAnalysis({
                     </div>
                   )}
                 </Stat>
-                <Stat label="베타">
+                <Stat label="52주 베타">
                   <span className="tnum text-base">
                     <NumberText value={ov.consensus?.beta} digits={2} fallback="-" />
                   </span>
