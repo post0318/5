@@ -31,11 +31,17 @@ interface ListRow {
 async function annualReportRcpNo(corpCode: string, year: number): Promise<string | null> {
   const res = await fetchJson<{ status: string; list?: ListRow[] }>(
     `${BASE}/list.json?crtfc_key=${key()}&corp_code=${corpCode}` +
-      `&bgn_de=${year + 1}0101&end_de=${year + 1}0630&pblntf_ty=A&page_count=50`,
+      `&bgn_de=${year + 1}0101&end_de=${year + 1}0930&pblntf_detail_ty=A001&page_count=100`,
     { revalidate: 60 * 60 * 24 },
   );
-  const hit = (res.list ?? []).find((r) => /사업보고서/.test(r.report_nm));
-  return hit?.rcept_no ?? null;
+  const hit = (res.list ?? []).find(
+    (r) => /사업보고서/.test(r.report_nm) && !/기재정정/.test(r.report_nm),
+  );
+  // 정정본이 있으면 최신(가장 큰 rcept_no) 우선
+  const revised = (res.list ?? [])
+    .filter((r) => /사업보고서/.test(r.report_nm))
+    .sort((a, b) => b.rcept_no.localeCompare(a.rcept_no))[0];
+  return revised?.rcept_no ?? hit?.rcept_no ?? null;
 }
 
 export interface KrDA {
