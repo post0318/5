@@ -99,6 +99,28 @@ export function StockAnalysis({
     retry: false,
   });
 
+  const rightsQ = useQuery({
+    queryKey: ["rights", market, symbol],
+    queryFn: () =>
+      apiFetch<{
+        events: {
+          basDt: string;
+          reason: string;
+          startDt: string | null;
+          endDt: string | null;
+          closeStartDt: string | null;
+          closeEndDt: string | null;
+        }[];
+      }>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/rights` +
+          (overview.data?.profile?.name
+            ? `?name=${encodeURIComponent(overview.data.profile.name)}`
+            : ""),
+      ),
+    enabled: Boolean(symbol) && market === "kr",
+    retry: false,
+  });
+
   const naverQ = useQuery({
     queryKey: ["kr-naver", market, symbol],
     queryFn: () =>
@@ -322,6 +344,9 @@ export function StockAnalysis({
               <TabsTrigger value="overview">개요</TabsTrigger>
               <TabsTrigger value="financials">재무제표</TabsTrigger>
               <TabsTrigger value="filings">공시</TabsTrigger>
+              {market === "kr" && (
+                <TabsTrigger value="rights">권리일정</TabsTrigger>
+              )}
             </TabsList>
 
             {/* 개요 */}
@@ -329,13 +354,17 @@ export function StockAnalysis({
               {/* 시세 */}
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Stat label="종가">
-                  <Money value={ov.quote?.last} currency={ccy} />
+                  <span className="inline-flex items-baseline gap-1.5">
+                    <Money value={ov.quote?.last} currency={ccy} />
+                    {ov.quote?.changePct != null && (
+                      <span className="text-sm font-normal">
+                        (<ChangePercent value={ov.quote.changePct} />)
+                      </span>
+                    )}
+                  </span>
                   <div className="text-muted-foreground mt-1 text-xs">
                     {ov.quote?.lastDate ?? "-"} · {ov.quote?.source ?? ""}
                   </div>
-                </Stat>
-                <Stat label="전일 대비">
-                  <ChangePercent value={ov.quote?.changePct} />
                 </Stat>
                 <Stat label="시가총액">
                   <span className="text-base">
@@ -528,6 +557,54 @@ export function StockAnalysis({
                 </ul>
               )}
             </TabsContent>
+
+            {/* 권리일정 (한국) */}
+            {market === "kr" && (
+              <TabsContent value="rights" className="space-y-3 pt-4">
+                {rightsQ.isLoading && <Skeleton className="h-48 w-full" />}
+                {rightsQ.isError && (
+                  <ErrorBox message={(rightsQ.error as Error).message} />
+                )}
+                {rightsQ.data && rightsQ.data.events.length === 0 && (
+                  <p className="text-muted-foreground text-sm">
+                    최근 1년 ~ 향후 등록된 권리일정이 없습니다.
+                  </p>
+                )}
+                {rightsQ.data && rightsQ.data.events.length > 0 && (
+                  <div className="overflow-x-auto rounded-lg border">
+                    <table className="w-full min-w-[560px] text-sm">
+                      <thead>
+                        <tr className="bg-muted/50 text-muted-foreground text-left">
+                          <th className="px-3 py-2 font-medium">기준일</th>
+                          <th className="px-3 py-2 font-medium">권리사유</th>
+                          <th className="px-3 py-2 font-medium">권리행사 시작</th>
+                          <th className="px-3 py-2 font-medium">권리행사 종료</th>
+                          <th className="px-3 py-2 font-medium">명부폐쇄</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {rightsQ.data.events.map((e, i) => (
+                          <tr key={i} className="hover:bg-muted/30">
+                            <td className="tnum px-3 py-2">{e.basDt || "-"}</td>
+                            <td className="px-3 py-2">{e.reason}</td>
+                            <td className="tnum px-3 py-2">{e.startDt ?? "-"}</td>
+                            <td className="tnum px-3 py-2">{e.endDt ?? "-"}</td>
+                            <td className="tnum text-muted-foreground px-3 py-2 text-xs">
+                              {e.closeStartDt
+                                ? `${e.closeStartDt} ~ ${e.closeEndDt ?? ""}`
+                                : "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="text-muted-foreground/80 text-[11px]">
+                  출처: 금융위원회_주식권리일정정보 (공공데이터포털) · 익영업일 13시 이후 갱신
+                </p>
+              </TabsContent>
+            )}
           </Tabs>
         </>
       )}
