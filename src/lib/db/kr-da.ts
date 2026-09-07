@@ -12,6 +12,9 @@ export interface KrDaDoc {
   year: number;
   depreciation: number | null;
   amortisation: number | null;
+  /** "ttm" (직전연간 + 당기누적 − 전년동기) | "annual" */
+  basis?: "ttm" | "annual";
+  label?: string;
   updatedAt: string;
 }
 
