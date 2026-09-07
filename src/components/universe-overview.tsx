@@ -190,10 +190,10 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                 <tr className="bg-[oklch(0.94_0.045_67)] dark:bg-[oklch(0.32_0.05_55)]">
                   <td
                     colSpan={11}
-                    className="text-foreground px-3 py-1.5 text-sm font-bold"
+                    className="text-foreground px-3 py-1.5 text-xs font-semibold"
                   >
                     {g.name || "미분류"}
-                    <span className="ml-1.5 text-xs font-normal opacity-70">({g.rows.length})</span>
+                    <span className="ml-1.5 font-normal opacity-70">({g.rows.length})</span>
                   </td>
                 </tr>
                 {g.rows.map((r) => (
