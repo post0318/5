@@ -94,10 +94,19 @@ export function StockAnalysis({
     queryFn: () =>
       apiFetch<{
         ttm: TtmFlows | null;
-        da: { depreciation: number | null; amortisation: number | null } | null;
         dividend: { dps: number; year: number } | null;
       }>(`/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm`),
     enabled: Boolean(symbol),
+    retry: false,
+  });
+
+  const daQ = useQuery({
+    queryKey: ["da", market, symbol],
+    queryFn: () =>
+      apiFetch<{
+        da: { depreciation: number | null; amortisation: number | null } | null;
+      }>(`/api/markets/${market}/${encodeURIComponent(symbol!)}/da`),
+    enabled: Boolean(symbol) && market === "kr",
     retry: false,
   });
 
@@ -179,7 +188,7 @@ export function StockAnalysis({
   const ov = overview.data;
 
   // 개요 엔드포인트는 속도를 위해 재무제표를 안 받아온다 → 멀티플은 여기서 계산.
-  const da = ttmQ.data?.da ?? null;
+  const da = daQ.data?.da ?? null;
   const daTotal =
     da && (da.depreciation != null || da.amortisation != null)
       ? (da.depreciation ?? 0) + (da.amortisation ?? 0)

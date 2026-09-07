@@ -94,10 +94,9 @@ export async function fetchKrDA(symbol: string, year: number): Promise<KrDA | nu
   const rcpNo = await annualReportRcpNo(corpCode, year);
   if (!rcpNo) throw new Error(`사업보고서 없음 (${year})`);
 
-  let xml: string;
   const res = await fetch(
     `${BASE}/fnlttXbrl.xml?crtfc_key=${key()}&rcept_no=${rcpNo}&reprt_code=11011`,
-    { signal: AbortSignal.timeout(25_000) },
+    { signal: AbortSignal.timeout(45_000) },
   );
   if (!res.ok) throw new Error(`fnlttXbrl ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
@@ -105,7 +104,7 @@ export async function fetchKrDA(symbol: string, year: number): Promise<KrDA | nu
   const files = unzipSync(buf);
   const name = Object.keys(files).find((n) => n.endsWith(".xbrl"));
   if (!name) throw new Error(`xbrl file not in zip: ${Object.keys(files).join(",")}`);
-  xml = strFromU8(files[name]);
+  const xml = strFromU8(files[name]);
 
   const dep =
     pickFact(xml, ["AdjustmentsForDepreciationExpense"], year) ??

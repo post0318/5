@@ -1,7 +1,6 @@
 import { jsonError, ok } from "@/lib/api";
 import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
-import { fetchKrDA } from "@/lib/markets/kr/xbrl";
 import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
 
@@ -22,19 +21,8 @@ export async function GET(
     }
     const adapter = getAdapter(market);
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
-    const fy = new Date().getFullYear() - 1;
-    const [ttm, da, dividend] = await Promise.all([
+    const [ttm, dividend] = await Promise.all([
       adapter.getTtm ? adapter.getTtm(sym) : Promise.resolve(null),
-      market === "kr"
-        ? fetchKrDA(sym, fy)
-            .then((r) => r ?? fetchKrDA(sym, fy - 1))
-            .catch((e) => ({
-              year: 0,
-              depreciation: null,
-              amortisation: null,
-              source: `err: ${e instanceof Error ? e.message : String(e)}`,
-            }))
-        : Promise.resolve(null),
       market === "kr"
         ? getKrJurirNo(sym)
             .then((crno) => fetchKrAnnualDps(crno))
@@ -42,7 +30,7 @@ export async function GET(
         : Promise.resolve(null),
     ]);
     return ok(
-      { ttm, da, dividend },
+      { ttm, dividend },
       {
         headers: {
           "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400",
