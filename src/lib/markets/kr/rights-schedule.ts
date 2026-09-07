@@ -97,7 +97,7 @@ async function fetchCloseMap(
   const map = new Map<string, number>();
   try {
     const { rows } = await callApi(
-      "GetStockSecuritiesInfoService/getStockPriceInfo",
+      "service/GetStockSecuritiesInfoService/getStockPriceInfo",
       {
         resultType: "json",
         numOfRows: "400",
@@ -230,7 +230,16 @@ export async function fetchKrRightsSchedule(
   if (divEvents.length > 0) {
     const divMap = await fetchDividendMap(crno);
     const dates = divEvents.map((e) => e.basDt.replace(/-/g, "")).sort();
-    const closeMap = await fetchCloseMap(srtnCd, dates[0], dates[dates.length - 1]);
+    const widen = (ymd: string, days: number) => {
+      const d = new Date(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().slice(0, 10).replace(/-/g, "");
+    };
+    const closeMap = await fetchCloseMap(
+      srtnCd,
+      widen(dates[0], -10),
+      widen(dates[dates.length - 1], 2),
+    );
     for (const e of divEvents) {
       const ymd = e.basDt.replace(/-/g, "");
       const dps = divMap.get(ymd) ?? null;
