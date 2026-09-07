@@ -88,12 +88,14 @@ async function fetchDividendMap(crno: string): Promise<Map<string, number>> {
 }
 
 /**
- * TTM 주당 배당금 — 최근 12개월 내 배당기준일의 보통주 주당배당금 합계.
- * 분기·반기·연배당 빈도와 무관하게 "최근 1년간 받은 배당".
+ * 주당 배당금 — 보통주 기준.
+ *  - annual : 최근 "완결" 회계연도(캘린더연도) 배당기준일 합계
+ *  - ttm    : 최근 12개월(366일) 내 배당기준일 합계
  */
-export async function fetchKrAnnualDps(
-  crno: string | null,
-): Promise<{ dps: number; from: string; to: string; count: number } | null> {
+export async function fetchKrAnnualDps(crno: string | null): Promise<{
+  annual: { dps: number; year: number } | null;
+  ttm: { dps: number; from: string; to: string } | null;
+} | null> {
   if (!isConfigured() || !crno) return null;
   let rows: Record<string, string>[];
   try {
@@ -101,29 +103,48 @@ export async function fetchKrAnnualDps(
   } catch {
     return null;
   }
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 366);
-  const lo = cutoff.toISOString().slice(0, 10).replace(/-/g, "");
 
-  const hits: { bd: string; amt: number }[] = [];
+  const events: { bd: string; amt: number }[] = [];
   for (const r of rows) {
     const isCommon = r.scrsItmsKcd === "0101" || (r.scrsItmsKcdNm ?? "").includes("보통");
     if (!isCommon) continue;
     const amt = num(r.stckGenrDvdnAmt);
     const bd = String(r.dvdnBasDt ?? "").replace(/\D/g, "");
-    if (bd.length !== 8 || amt == null || amt <= 0 || bd < lo) continue;
-    hits.push({ bd, amt });
+    if (bd.length !== 8 || amt == null || amt <= 0) continue;
+    events.push({ bd, amt });
   }
-  if (hits.length === 0) return null;
-  hits.sort((a, b) => a.bd.localeCompare(b.bd));
-  const dps = hits.reduce((s, h) => s + h.amt, 0);
+  if (events.length === 0) return { annual: null, ttm: null };
+  events.sort((a, b) => a.bd.localeCompare(b.bd));
   const ymd = (b: string) => `${b.slice(0, 4)}-${b.slice(4, 6)}-${b.slice(6, 8)}`;
-  return {
-    dps: Math.round(dps * 100) / 100,
-    from: ymd(hits[0].bd),
-    to: ymd(hits[hits.length - 1].bd),
-    count: hits.length,
-  };
+
+  // annual: 연도별 합산 → 직전연도 우선
+  const byYear = new Map<number, number>();
+  for (const e of events) byYear.set(+e.bd.slice(0, 4), (byYear.get(+e.bd.slice(0, 4)) ?? 0) + e.amt);
+  const yy = new Date().getFullYear();
+  let annual: { dps: number; year: number } | null = null;
+  for (const y of [yy - 1, yy, yy - 2]) {
+    const v = byYear.get(y);
+    if (v) {
+      annual = { dps: Math.round(v * 100) / 100, year: y };
+      break;
+    }
+  }
+
+  // ttm: 최근 366일
+  const cut = new Date();
+  cut.setDate(cut.getDate() - 366);
+  const lo = cut.toISOString().slice(0, 10).replace(/-/g, "");
+  const t = events.filter((e) => e.bd >= lo);
+  const ttm =
+    t.length > 0
+      ? {
+          dps: Math.round(t.reduce((s, e) => s + e.amt, 0) * 100) / 100,
+          from: ymd(t[0].bd),
+          to: ymd(t[t.length - 1].bd),
+        }
+      : null;
+
+  return { annual, ttm };
 }
 
 // ── 배당수익률용 종가 ────────────────────────────────────────────────

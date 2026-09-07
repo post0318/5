@@ -94,7 +94,10 @@ export function StockAnalysis({
     queryFn: () =>
       apiFetch<{
         ttm: TtmFlows | null;
-        dividend: { dps: number; from: string; to: string; count: number } | null;
+        dividend: {
+          annual: { dps: number; year: number } | null;
+          ttm: { dps: number; from: string; to: string } | null;
+        } | null;
         beta: { beta: number; change: number | null; n: number } | null;
       }>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm` +
@@ -243,16 +246,17 @@ export function StockAnalysis({
         ? price / yhEstEps
         : (ov?.consensus?.forwardPer ?? null);
 
-  // DPS / 배당수익률 — 국내는 금융위 배당정보 API, 해외는 yahoo
+  // DPS — 국내는 금융위 배당정보 API (전년 회계연도), DPS(TTM)은 최근 12개월. 해외는 yahoo
   const dps =
     market === "kr"
-      ? (ttmQ.data?.dividend?.dps ?? null)
+      ? (ttmQ.data?.dividend?.annual?.dps ?? null)
       : (ov?.consensus?.dividendPerShare ?? null);
-  // 소수 비율(0.012 = 1.2%)로 통일 — <Percent> 가 ×100 해서 표시
+  const dpsTtm = market === "kr" ? (ttmQ.data?.dividend?.ttm?.dps ?? null) : null;
+  // 배당수익률 = TTM 주당배당금 / 현재가. 소수 비율(0.012 = 1.2%)로 통일 (<Percent>가 ×100)
   const divYield =
     market === "kr"
-      ? price != null && dps != null && price > 0
-        ? dps / price
+      ? price != null && dpsTtm != null && price > 0
+        ? dpsTtm / price
         : null
       : ((ov?.consensus?.dividendYield ?? null) as number | null);
 
@@ -276,7 +280,15 @@ export function StockAnalysis({
       label: "DPS",
       node: <Money value={dps} currency={ccy} fallback="-" />,
     },
-    { label: "", node: null },
+    {
+      label: "DPS(TTM)",
+      node:
+        market === "kr" ? (
+          <Money value={dpsTtm} currency={ccy} fallback="-" />
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        ),
+    },
     {
       label: "배당수익률",
       node: <Percent value={divYield} fallback="-" />,
