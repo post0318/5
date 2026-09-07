@@ -669,7 +669,7 @@ export function StockAnalysis({
                 )}
                 {rightsQ.data && !rightsQ.data.pending && rightsQ.data.events.length === 0 && (
                   <p className="text-muted-foreground text-sm">
-                    최근 1년 ~ 향후 등록된 권리일정이 없습니다.
+                    최근 4개 분기 ~ 향후 등록된 권리일정이 없습니다.
                   </p>
                 )}
                 {rightsQ.data && rightsQ.data.events.length > 0 && (

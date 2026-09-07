@@ -251,8 +251,9 @@ export async function fetchKrRightsSchedule(
   const rows = await fetchTail(EP_RIGHTS, OP_RIGHTS, crno, 300);
   if (rows.length === 0) return [];
 
+  // 조회일 기준 최근 4분기(+버퍼) — 분기 경계 근처에서도 4건이 잡히도록 15개월
   const cutoff = new Date();
-  cutoff.setFullYear(cutoff.getFullYear() - 1);
+  cutoff.setMonth(cutoff.getMonth() - 15);
   const lo = cutoff.toISOString().slice(0, 10);
 
   const groups = new Map<string, KrRightEvent>();
