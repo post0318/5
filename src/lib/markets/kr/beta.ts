@@ -42,10 +42,29 @@ async function dailyCloses(sym: string, fromMs: number): Promise<Map<string, num
 
 export interface Kr52wBeta {
   beta: number;
+  /** 직전 거래일까지의 베타 (같은 창 길이, 하루 전) */
+  prevBeta: number | null;
+  /** beta − prevBeta */
+  change: number | null;
   /** 표본 일수 */
   n: number;
   from: string;
   to: string;
+}
+
+/** 두 수익률 배열에서 β = Cov/Var */
+function betaOf(s: number[], m: number[]): number | null {
+  if (s.length < 30 || s.length !== m.length) return null;
+  const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+  const sm = mean(s);
+  const mm = mean(m);
+  let cov = 0;
+  let varM = 0;
+  for (let i = 0; i < s.length; i++) {
+    cov += (s[i] - sm) * (m[i] - mm);
+    varM += (m[i] - mm) ** 2;
+  }
+  return varM === 0 ? null : cov / varM;
 }
 
 export async function computeKr52wBeta(
@@ -81,28 +100,26 @@ export async function computeKr52wBeta(
       mr.push(Math.log(m1 / m0));
     }
   }
-  // 최근 252개
-  const take = 252;
+  if (sr.length < 60) return null;
+  const take = Math.min(252, sr.length);
+
+  // 오늘 창 (마지막 take개) vs 전일 창 (하루 전에 끝나는 take개)
   const s = sr.slice(-take);
   const m = mr.slice(-take);
-  if (s.length < 60) return null;
+  const beta = betaOf(s, m);
+  if (beta == null) return null;
 
-  const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
-  const sm = mean(s);
-  const mm = mean(m);
-  let cov = 0;
-  let varM = 0;
-  for (let i = 0; i < s.length; i++) {
-    cov += (s[i] - sm) * (m[i] - mm);
-    varM += (m[i] - mm) ** 2;
+  let prevBeta: number | null = null;
+  if (sr.length >= take + 1) {
+    prevBeta = betaOf(sr.slice(-(take + 1), -1), mr.slice(-(take + 1), -1));
   }
-  if (varM === 0) return null;
-  const beta = cov / varM;
-
-  const used = dates.slice(-(s.length + 1));
+  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  const used = dates.slice(-(take + 1));
   return {
-    beta: Math.round(beta * 1000) / 1000,
-    n: s.length,
+    beta: r3(beta),
+    prevBeta: prevBeta != null ? r3(prevBeta) : null,
+    change: prevBeta != null ? r3(beta - prevBeta) : null,
+    n: take,
     from: used[0] ?? dates[0],
     to: used[used.length - 1] ?? dates[dates.length - 1],
   };

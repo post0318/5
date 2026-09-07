@@ -95,7 +95,7 @@ export function StockAnalysis({
       apiFetch<{
         ttm: TtmFlows | null;
         dividend: { dps: number; year: number } | null;
-        beta: { beta: number; n: number } | null;
+        beta: { beta: number; change: number | null; n: number } | null;
       }>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm` +
           (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
@@ -428,6 +428,19 @@ export function StockAnalysis({
                       digits={2}
                       fallback="-"
                     />
+                    {market === "kr" && ttmQ.data?.beta?.change != null && (
+                      <span
+                        className={cn(
+                          "tnum ml-1 text-sm font-normal",
+                          ttmQ.data.beta.change > 0 && "text-up",
+                          ttmQ.data.beta.change < 0 && "text-down",
+                          ttmQ.data.beta.change === 0 && "text-muted-foreground",
+                        )}
+                      >
+                        ({ttmQ.data.beta.change > 0 ? "+" : ""}
+                        {ttmQ.data.beta.change.toFixed(2)})
+                      </span>
+                    )}
                   </span>
                   {market !== "kr" && ov.consensus?.beta != null && (
                     <div className="text-muted-foreground mt-1 text-[11px]">yahoo · 5년 월간</div>
