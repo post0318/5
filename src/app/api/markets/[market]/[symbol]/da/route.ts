@@ -14,11 +14,7 @@ const cached = (sym: string) =>
   unstable_cache(
     async () => {
       const fy = new Date().getFullYear() - 1;
-      try {
-        return (await fetchKrDA(sym, fy)) ?? (await fetchKrDA(sym, fy - 1));
-      } catch {
-        return null;
-      }
+      return (await fetchKrDA(sym, fy)) ?? (await fetchKrDA(sym, fy - 1));
     },
     ["kr-da", sym],
     { revalidate: 60 * 60 * 24 * 7, tags: ["kr-da"] },
@@ -32,9 +28,16 @@ export async function GET(
   if (!isMarketId(market)) return Response.json({ error: "알 수 없는 시장" }, { status: 404 });
   if (market !== "kr") return ok({ da: null });
   const sym = getAdapter("kr").normalizeSymbol(decodeURIComponent(symbol));
-  const da = await cached(sym).catch(() => null);
+  const t0 = Date.now();
+  let da = null;
+  let err: string | null = null;
+  try {
+    da = await cached(sym);
+  } catch (e) {
+    err = e instanceof Error ? e.message : String(e);
+  }
   return ok(
-    { da },
+    { da, err, ms: Date.now() - t0 },
     { headers: { "Cache-Control": "public, s-maxage=604800, stale-while-revalidate=86400" } },
   );
 }
