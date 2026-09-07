@@ -31,6 +31,9 @@ export interface UniverseOverviewDoc {
   revenueAnnual: number | null;
   opMargin: number | null;
   netMargin: number | null;
+  /** 외국인 보유비율 (%) — 한국 종목만, 네이버 일 1회 배치 */
+  foreignRatio: number | null;
+  foreignRatioAsOf: string | null;
   warnings: string[];
   error: string | null;
   updatedAt: string;

@@ -1,6 +1,7 @@
 import "server-only";
 import type { MarketId } from "@/lib/markets/types";
 import { getStockOverview } from "@/lib/markets/service";
+import { fetchKrForeignOwnership } from "@/lib/markets/kr/foreign-ownership";
 import { listUniverse } from "@/lib/universe/repo";
 import type { UniverseItem } from "@/lib/db/schema";
 import {
@@ -25,9 +26,14 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
     updatedAt: new Date().toISOString(),
   };
   try {
-    const ov = await getStockOverview(item.market as MarketId, item.symbol, item.yahooSymbol, {
-      skipQuarterly: true,
-    });
+    const [ov, foreign] = await Promise.all([
+      getStockOverview(item.market as MarketId, item.symbol, item.yahooSymbol, {
+        skipQuarterly: true,
+      }),
+      item.market === "kr"
+        ? fetchKrForeignOwnership(item.symbol).catch(() => null)
+        : Promise.resolve(null),
+    ]);
     const inp = ov.multiples?.inputs;
     const rev = inp?.revenueAnnual ?? null;
     const margin = (n: number | null | undefined) => (n != null && rev ? n / rev : null);
@@ -47,6 +53,8 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       revenueAnnual: rev,
       opMargin: margin(inp?.opIncomeAnnual),
       netMargin: margin(inp?.netIncomeAnnual),
+      foreignRatio: foreign?.ratio ?? null,
+      foreignRatioAsOf: foreign?.asOf ?? null,
       warnings: ov.warnings,
       error: null,
     };
@@ -66,6 +74,8 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       revenueAnnual: null,
       opMargin: null,
       netMargin: null,
+      foreignRatio: null,
+      foreignRatioAsOf: null,
       warnings: [],
       error: err instanceof Error ? err.message : "조회 실패",
     };

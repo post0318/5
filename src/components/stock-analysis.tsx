@@ -99,6 +99,16 @@ export function StockAnalysis({
     retry: false,
   });
 
+  const foreignQ = useQuery({
+    queryKey: ["foreign", market, symbol],
+    queryFn: () =>
+      apiFetch<{ foreign: { ratio: number; asOf: string } | null }>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/foreign`,
+      ),
+    enabled: Boolean(symbol) && market === "kr",
+    retry: false,
+  });
+
   const universe = useQuery({
     queryKey: ["universe"],
     queryFn: () =>
@@ -332,6 +342,14 @@ export function StockAnalysis({
                   <span className="text-base">
                     {formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
                   </span>
+                  {market === "kr" && foreignQ.data?.foreign && (
+                    <div className="text-muted-foreground mt-1 text-xs">
+                      외국인 {foreignQ.data.foreign.ratio.toFixed(2)}%
+                      <span className="ml-1 opacity-70">
+                        ({foreignQ.data.foreign.asOf})
+                      </span>
+                    </div>
+                  )}
                 </Stat>
                 <Stat label="52주 최고 / 최저">
                   <span className="tnum text-base">

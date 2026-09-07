@@ -30,6 +30,7 @@ interface Row {
   targetMeanPrice?: number | null;
   recommendationKey?: string | null;
   marketCap?: number | null;
+  foreignRatio?: number | null;
   revenueAnnual?: number | null;
   opMargin?: number | null;
   netMargin?: number | null;
@@ -170,13 +171,14 @@ export function UniverseOverview({ market }: { market: MarketId }) {
 
       {q.data && q.data.rows.length > 0 && (
         <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full min-w-[1080px] text-sm">
+          <table className="w-full min-w-[1180px] text-sm">
             <thead>
               <tr className="bg-muted/50 text-muted-foreground text-left">
                 <th className="px-3 py-2 font-medium">종목</th>
                 <th className="px-3 py-2 text-right font-medium">종가</th>
                 <th className="px-3 py-2 text-right font-medium">등락</th>
                 <th className="px-3 py-2 text-right font-medium">시가총액({capUnit})</th>
+                <th className="px-3 py-2 text-right font-medium">외국인</th>
                 <th className="px-3 py-2 text-right font-medium">매출액({revUnit})</th>
                 <th className="px-3 py-2 text-right font-medium">영업이익률</th>
                 <th className="px-3 py-2 text-right font-medium">순이익률</th>
@@ -190,7 +192,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
               <tbody key={g.name || "_none"} className="divide-y">
                 <tr className="bg-[oklch(0.94_0.045_67)] dark:bg-[oklch(0.32_0.05_55)]">
                   <td
-                    colSpan={11}
+                    colSpan={12}
                     className="text-foreground px-3 py-1.5 text-xs font-semibold"
                   >
                     {g.name || "미분류"}
@@ -209,7 +211,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                     <div className="text-muted-foreground tnum text-xs">{r.symbol}</div>
                   </td>
                   {r.error ? (
-                    <td colSpan={10} className="text-muted-foreground px-3 py-2 text-xs">
+                    <td colSpan={11} className="text-muted-foreground px-3 py-2 text-xs">
                       {r.error}
                     </td>
                   ) : (
@@ -222,6 +224,9 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                       </td>
                       <td className="tnum px-3 py-2 text-right">
                         {formatMarketCap(r.marketCap, r.market)}
+                      </td>
+                      <td className="tnum text-muted-foreground px-3 py-2 text-right">
+                        {r.foreignRatio != null ? `${r.foreignRatio.toFixed(2)}%` : "-"}
                       </td>
                       <td className="tnum px-3 py-2 text-right">
                         {formatBigAmount(r.revenueAnnual, r.market)}
