@@ -1,5 +1,6 @@
 import "server-only";
 import YahooFinancePkg from "yahoo-finance2";
+import { fetchKrIndexDaily } from "./kr/fsc-index";
 
 /**
  * 주요 지수·원자재 차트 (최근 1년, 일봉) + 기술적 지표.
@@ -85,24 +86,34 @@ export async function getIndexChart(key: string, years: ChartYears = 1): Promise
   // 지표 워밍업(BB20·MACD26+9)용으로 요청 기간 + 3개월 더 받아서 잘라낸다
   const from = new Date();
   from.setMonth(from.getMonth() - (years * 12 + 3));
+  const fromIso = from.toISOString().slice(0, 10);
 
-  let quotes: RawBar[];
-  try {
-    const res = await yfi().chart(spec.symbol, {
-      period1: from.toISOString().slice(0, 10),
-      interval: "1d",
-    });
-    quotes = res.quotes ?? [];
-  } catch {
-    return null;
+  // KOSPI·KOSDAQ 은 금융위 지수시세(KRX) 우선. 데이터 부족 시 Yahoo 폴백.
+  const KR_IDX: Record<string, string> = { KOSPI: "코스피", KOSDAQ: "코스닥" };
+  let pts: { date: string; close: number }[] = [];
+  if (KR_IDX[key]) {
+    pts = await fetchKrIndexDaily(
+      KR_IDX[key],
+      fromIso.replace(/-/g, ""),
+      new Date().toISOString().slice(0, 10).replace(/-/g, ""),
+    );
   }
 
-  const pts = quotes
-    .map((q) => ({
-      date: (q.date instanceof Date ? q.date : new Date(q.date)).toISOString().slice(0, 10),
-      close: (q.adjclose ?? q.close) ?? NaN,
-    }))
-    .filter((p) => Number.isFinite(p.close));
+  if (pts.length < 30) {
+    let quotes: RawBar[] = [];
+    try {
+      const res = await yfi().chart(spec.symbol, { period1: fromIso, interval: "1d" });
+      quotes = res.quotes ?? [];
+    } catch {
+      return null;
+    }
+    pts = quotes
+      .map((q) => ({
+        date: (q.date instanceof Date ? q.date : new Date(q.date)).toISOString().slice(0, 10),
+        close: (q.adjclose ?? q.close) ?? NaN,
+      }))
+      .filter((p) => Number.isFinite(p.close));
+  }
   if (pts.length < 30) return null;
 
   const closes = pts.map((p) => p.close);
