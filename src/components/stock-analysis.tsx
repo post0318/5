@@ -478,12 +478,21 @@ export function StockAnalysis({
                   </table>
                 </div>
                 <p className="text-muted-foreground/80 text-[11px] leading-relaxed">
-                  PER·PBR·PSR·EPS·BPS = 최근 연간 공시 재무(DART/EDGAR/EDINET) + 현재가 자체 계산 ·
-                  PER(TTM)·EPS(TTM) = 최근 4분기(국내 DART 분기누적, 해외 yahoo) ·
-                  EV/EBITDA = (시총+부채−현금) ÷ (영업이익+감가상각비), 국내 감가상각비는 DART XBRL(TTM); 없으면 EV/EBIT 근사 ·
-                  추정PER = 당해 컨센서스(국내 FnGuide/네이버, 해외 yahoo) ·
-                  DPS·배당수익률 = 국내 금융위 주식배당정보 API, 해외 yahoo ·
-                  52주 베타 = 국내 KOSPI 대비 일간수익률 자체 계산, 해외 yahoo(5년 월간)
+                  {market === "kr" ? (
+                    <>
+                      PER·PBR·PSR·EPS·BPS = 최근 연간 DART 공시 재무 + 현재가 자체 계산 ·
+                      PER(TTM)·EPS(TTM) = 최근 4분기(DART 분기 누적 환산) ·
+                      EV/EBITDA = (시총+부채−현금) ÷ (영업이익+감가상각비, DART XBRL); 없으면 EV/EBIT 근사 ·
+                      추정PER = 당해년도 컨센서스(FnGuide, 네이버 경유) ·
+                      DPS·배당수익률 = 금융위원회 주식배당정보 · 52주 베타 = KOSPI 대비 일간수익률 자체 계산
+                    </>
+                  ) : (
+                    <>
+                      PER·PBR·PSR·EPS·BPS = 최근 연간 공시 재무(SEC EDGAR / EDINET) + 현재가 자체 계산 ·
+                      PER(TTM)·EPS(TTM)·추정PER·DPS·배당수익률·52주 베타 = yahoo-finance2 (개인용) ·
+                      EV/EBITDA = EV/EBIT 근사
+                    </>
+                  )}
                 </p>
               </section>
 
