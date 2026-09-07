@@ -91,24 +91,21 @@ export async function fetchKrDA(symbol: string, year: number): Promise<KrDA | nu
   } catch {
     return null;
   }
-  const rcpNo = await annualReportRcpNo(corpCode, year).catch(() => null);
-  if (!rcpNo) return null;
+  const rcpNo = await annualReportRcpNo(corpCode, year);
+  if (!rcpNo) throw new Error(`사업보고서 없음 (${year})`);
 
   let xml: string;
-  try {
-    const res = await fetch(
-      `${BASE}/fnlttXbrl.xml?crtfc_key=${key()}&rcept_no=${rcpNo}&reprt_code=11011`,
-      { signal: AbortSignal.timeout(20_000) },
-    );
-    if (!res.ok) return null;
-    const buf = new Uint8Array(await res.arrayBuffer());
-    const files = unzipSync(buf);
-    const name = Object.keys(files).find((n) => n.endsWith(".xbrl"));
-    if (!name) return null;
-    xml = strFromU8(files[name]);
-  } catch {
-    return null;
-  }
+  const res = await fetch(
+    `${BASE}/fnlttXbrl.xml?crtfc_key=${key()}&rcept_no=${rcpNo}&reprt_code=11011`,
+    { signal: AbortSignal.timeout(25_000) },
+  );
+  if (!res.ok) throw new Error(`fnlttXbrl ${res.status}`);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (buf.length < 100) throw new Error(`xbrl empty (${buf.length}B)`);
+  const files = unzipSync(buf);
+  const name = Object.keys(files).find((n) => n.endsWith(".xbrl"));
+  if (!name) throw new Error(`xbrl file not in zip: ${Object.keys(files).join(",")}`);
+  xml = strFromU8(files[name]);
 
   const dep =
     pickFact(xml, ["AdjustmentsForDepreciationExpense"], year) ??

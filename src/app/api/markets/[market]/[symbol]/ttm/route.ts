@@ -28,7 +28,12 @@ export async function GET(
       market === "kr"
         ? fetchKrDA(sym, fy)
             .then((r) => r ?? fetchKrDA(sym, fy - 1))
-            .catch(() => null)
+            .catch((e) => ({
+              year: 0,
+              depreciation: null,
+              amortisation: null,
+              source: `err: ${e instanceof Error ? e.message : String(e)}`,
+            }))
         : Promise.resolve(null),
       market === "kr"
         ? getKrJurirNo(sym)
