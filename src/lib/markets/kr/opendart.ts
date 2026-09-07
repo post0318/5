@@ -368,25 +368,40 @@ async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
     }
   }
 
-  const ttm = (key: keyof typeof TTM_ACCOUNTS): number | null => {
+  const ttm = (key: keyof typeof TTM_ACCOUNTS): { v: number | null; ttm: boolean } => {
     const names = TTM_ACCOUNTS[key];
     const annual = isValue(annualRows!, names, "annual");
     const cur = isValue(interim!.rows, names, "cumCur");
     let prior = isValue(interim!.rows, names, "cumPrior");
     if (prior == null && priorInterimRows)
       prior = isValue(priorInterimRows, names, "cumCur");
-    if (annual == null) return null;
-    if (cur == null || prior == null) return annual; // 분기 데이터 부족 → 연간값
-    return annual + cur - prior;
+    if (annual == null) return { v: null, ttm: false };
+    if (cur == null || prior == null) return { v: annual, ttm: false }; // 분기 데이터 부족 → 연간값
+    return { v: annual + cur - prior, ttm: true };
   };
 
-  const eps = ttm("eps");
+  const ni = ttm("netIncome");
+  const rev = ttm("revenue");
+  const op = ttm("opIncome");
+  const epsR = ttm("eps");
+
+  // EPS 분기데이터가 없으면 TTM 순이익 / (연간 순이익 ÷ 연간 EPS) 로 환산
+  let eps = epsR.ttm && epsR.v && epsR.v > 0 ? epsR.v : null;
+  if (eps == null && ni.ttm && ni.v != null) {
+    const annualNi = isValue(annualRows!, TTM_ACCOUNTS.netIncome, "annual");
+    const annualEps = isValue(annualRows!, TTM_ACCOUNTS.eps, "annual");
+    if (annualNi && annualEps && annualEps > 0) {
+      const shares = annualNi / annualEps;
+      if (shares > 0) eps = Math.round((ni.v / shares) * 100) / 100;
+    }
+  }
+
   const q = QUARTER_LABEL[interim.code] ?? "분기";
   return {
     periodLabel: `FY${annualYear} + ${interim.year} ${q} − ${interim.year - 1} ${q}`,
-    netIncome: ttm("netIncome"),
-    revenue: ttm("revenue"),
-    opIncome: ttm("opIncome"),
+    netIncome: ni.v,
+    revenue: rev.v,
+    opIncome: op.v,
     eps: eps != null && eps > 0 ? eps : null,
   };
 }
