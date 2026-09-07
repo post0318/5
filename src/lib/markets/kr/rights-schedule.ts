@@ -68,24 +68,37 @@ async function fetchTail(
 
 // ── 배당 (주당 배당금) ───────────────────────────────────────────────
 
-/** 배당기준일(YYYYMMDD) → 보통주 주당 배당금 */
-async function fetchDividendMap(crno: string): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
+interface DivRecord {
+  ymd: string; // 배당기준일 YYYYMMDD
+  amt: number; // 보통주 주당 배당금
+  payYmd: string | null; // 현금배당지급일
+}
+
+/** 보통주 배당 내역 (배당기준일·주당배당금·지급일) */
+async function fetchDividendList(crno: string): Promise<DivRecord[]> {
   try {
-    const rows = await fetchTail("GetStocDiviInfoService_V2", "getDiviInfo_V2", crno, 300);
+    const rows = await fetchTail("GetStocDiviInfoService_V2", "getDiviInfo_V2", crno, 400);
+    const out: DivRecord[] = [];
     for (const r of rows) {
-      // 보통주(0101) 우선. 우선주만 있으면 그대로.
       const isCommon = r.scrsItmsKcd === "0101" || (r.scrsItmsKcdNm ?? "").includes("보통");
+      if (!isCommon) continue;
       const amt = num(r.stckGenrDvdnAmt);
       const bd = String(r.dvdnBasDt ?? "").replace(/\D/g, "");
       if (bd.length !== 8 || amt == null || amt <= 0) continue;
-      if (isCommon || !map.has(bd)) map.set(bd, amt);
+      const pd = String(r.cashDvdnPayDt ?? "").replace(/\D/g, "");
+      out.push({ ymd: bd, amt, payYmd: pd.length === 8 ? pd : null });
     }
+    return out.sort((a, b) => a.ymd.localeCompare(b.ymd));
   } catch {
-    /* 배당 없으면 스킵 */
+    return [];
   }
-  return map;
 }
+
+const daysBetween = (a: string, b: string) => {
+  const t = (y: string) =>
+    Date.UTC(+y.slice(0, 4), +y.slice(4, 6) - 1, +y.slice(6, 8));
+  return Math.round((t(a) - t(b)) / 864e5);
+};
 
 /**
  * 주당 배당금 — 보통주 기준.
@@ -283,32 +296,69 @@ export async function fetchKrRightsSchedule(
     else if (kind.startsWith("배당금지급일") && !g.payoutDate) g.payoutDate = start;
   }
 
-  const events = [...groups.values()].sort((a, b) => b.basDt.localeCompare(a.basDt));
+  let events = [...groups.values()].sort((a, b) => b.basDt.localeCompare(a.basDt));
   if (events.length === 0) return [];
 
-  // 배당 이벤트에 주당 배당금 + 수익률 부착
+  // 배당 이벤트에 주당 배당금 + 지급일 + 수익률 부착
   const divEvents = events.filter((e) => /배당|분배/.test(e.reason));
   if (divEvents.length > 0) {
-    const divMap = await fetchDividendMap(crno);
-    const dates = divEvents.map((e) => e.basDt.replace(/-/g, "")).sort();
+    const divList = await fetchDividendList(crno);
+    // 각 배당 이벤트를 가장 가까운 배당기준일(±80일)에 매칭
+    const matchedRec = new Map<KrRightEvent, DivRecord>();
+    for (const e of divEvents) {
+      const ey = e.basDt.replace(/-/g, "");
+      let best: DivRecord | null = null;
+      let bestGap = 81;
+      for (const rec of divList) {
+        const gap = Math.abs(daysBetween(rec.ymd, ey));
+        if (gap < bestGap) {
+          bestGap = gap;
+          best = rec;
+        }
+      }
+      if (best) matchedRec.set(e, best);
+    }
+    // 같은 배당 레코드에 여러 이벤트가 붙으면 금액 있는 쪽만 남김
+    const byRec = new Map<DivRecord, KrRightEvent[]>();
+    for (const [e, rec] of matchedRec) byRec.set(rec, [...(byRec.get(rec) ?? []), e]);
+    const drop = new Set<KrRightEvent>();
+    for (const [rec, es] of byRec) {
+      if (es.length < 2) continue;
+      // 배당기준일과 basDt가 가장 가까운 것을 대표로
+      es.sort(
+        (a, b) =>
+          Math.abs(daysBetween(rec.ymd, a.basDt.replace(/-/g, ""))) -
+          Math.abs(daysBetween(rec.ymd, b.basDt.replace(/-/g, ""))),
+      );
+      es.slice(1).forEach((e) => drop.add(e));
+    }
+    events = events.filter((e) => !drop.has(e));
+
+    // 종가 조회 창
+    const ys = divEvents
+      .filter((e) => !drop.has(e))
+      .map((e) => e.basDt.replace(/-/g, ""))
+      .sort();
     const widen = (ymd: string, days: number) => {
       const d = new Date(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00Z`);
       d.setUTCDate(d.getUTCDate() + days);
       return d.toISOString().slice(0, 10).replace(/-/g, "");
     };
-    const closeMap = await fetchCloseMap(
-      srtnCd,
-      widen(dates[0], -10),
-      widen(dates[dates.length - 1], 2),
-    );
+    const closeMap = ys.length
+      ? await fetchCloseMap(srtnCd, widen(ys[0], -10), widen(ys[ys.length - 1], 2))
+      : new Map<string, number>();
+
     for (const e of divEvents) {
-      const ymd = e.basDt.replace(/-/g, "");
-      const dps = divMap.get(ymd) ?? null;
-      e.dividendPerShare = dps;
-      if (dps != null) {
-        const close = closeMap.get(ymd) ?? closeAtOrBefore(closeMap, ymd);
-        if (close && close > 0) e.dividendYield = Math.round((dps / close) * 10000) / 100;
+      if (drop.has(e)) continue;
+      const rec = matchedRec.get(e);
+      if (!rec) continue;
+      e.dividendPerShare = rec.amt;
+      if (!e.payoutDate && rec.payYmd) {
+        e.payoutDate = `${rec.payYmd.slice(0, 4)}-${rec.payYmd.slice(4, 6)}-${rec.payYmd.slice(6, 8)}`;
       }
+      const ymd = e.basDt.replace(/-/g, "");
+      const close = closeMap.get(ymd) ?? closeAtOrBefore(closeMap, ymd);
+      if (close && close > 0) e.dividendYield = Math.round((rec.amt / close) * 10000) / 100;
     }
   }
 
