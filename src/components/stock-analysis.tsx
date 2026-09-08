@@ -151,8 +151,11 @@ export function StockAnalysis({
           note: string | null;
         }[];
         pending?: boolean;
-      }>(`/api/markets/${market}/${encodeURIComponent(symbol!)}/rights`),
-    enabled: Boolean(symbol) && market === "kr",
+      }>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/rights` +
+          (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
+      ),
+    enabled: Boolean(symbol) && (market === "kr" || market === "us"),
     retry: false,
   });
 
@@ -439,7 +442,7 @@ export function StockAnalysis({
             <TabsList>
               <TabsTrigger value="overview">개요</TabsTrigger>
               <TabsTrigger value="financials">재무제표</TabsTrigger>
-              {market === "kr" && (
+              {(market === "kr" || market === "us") && (
                 <TabsTrigger value="rights">권리일정</TabsTrigger>
               )}
               <TabsTrigger value="filings">공시</TabsTrigger>
@@ -707,8 +710,8 @@ export function StockAnalysis({
               )}
             </TabsContent>
 
-            {/* 권리일정 (한국) */}
-            {market === "kr" && (
+            {/* 권리일정 (한국·미국) */}
+            {(market === "kr" || market === "us") && (
               <TabsContent value="rights" className="space-y-3 pt-4">
                 {rightsQ.isLoading && <Skeleton className="h-48 w-full" />}
                 {rightsQ.isError && (
@@ -750,12 +753,18 @@ export function StockAnalysis({
                             <td className="px-3 py-2 text-xs">
                               {e.dividendPerShare != null ? (
                                 <span className="tnum">
-                                  주당 {e.dividendPerShare.toLocaleString()}원
+                                  {market === "us"
+                                    ? `주당 $${e.dividendPerShare.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                    : `주당 ${e.dividendPerShare.toLocaleString()}원`}
                                   {e.dividendYield != null && (
                                     <span className="text-muted-foreground">
                                       {" "}
                                       · 수익률 {e.dividendYield}%
+                                      {market === "us" ? " (연환산)" : ""}
                                     </span>
+                                  )}
+                                  {e.note && (
+                                    <span className="text-muted-foreground"> · {e.note}</span>
                                   )}
                                 </span>
                               ) : e.filing ? (
@@ -780,7 +789,9 @@ export function StockAnalysis({
                   </div>
                 )}
                 <p className="text-muted-foreground/80 text-[11px]">
-                  출처: 금융위원회_주식권리일정정보 (공공데이터포털) · 익영업일 오전 8시 갱신
+                  {market === "us"
+                    ? "출처: yahoo-finance2 배당·분할 이벤트 + calendarEvents · 최근 15개월 ~ 향후"
+                    : "출처: 금융위원회_주식권리일정정보 (공공데이터포털) · 익영업일 오전 8시 갱신"}
                 </p>
               </TabsContent>
             )}
