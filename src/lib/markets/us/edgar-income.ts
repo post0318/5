@@ -42,17 +42,17 @@ const EPS_DIL = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"];
 const NONOP = ["NonoperatingIncomeExpense", "OtherNonoperatingIncomeExpense"];
 const INT_EXP = [
   "InterestExpense",
-  "InterestExpenseDebt",
   "InterestExpenseNonoperating",
   "InterestAndDebtExpense",
+  "InterestExpenseDebt",
 ];
 const INT_INC = [
+  "InvestmentIncomeInterestAndDividend",
   "InvestmentIncomeInterest",
-  "InterestIncomeOperating",
   "InterestAndDividendIncomeOperating",
+  "InterestIncomeOperating",
   "InterestIncomeNonoperating",
 ];
-const INT_NET = ["InterestIncomeExpenseNet", "InterestIncomeExpenseNonoperatingNet"];
 const DA = [
   "DepreciationDepletionAndAmortization",
   "DepreciationAmortizationAndAccretionNet",
@@ -159,23 +159,30 @@ export function buildUsIncome(
     return diff(base, sga, rnd);
   })();
   const pretax = val(PRETAX);
-  const nonOp = (() => {
-    const n = val(NONOP);
-    // 없으면 세전 − 영업이익
+  // (−)영업외손익 = 영업외 순손실 (양수 = 손실 → 세전이익에서 차감, 음수 = 이익)
+  const nonOpLoss = (() => {
+    const n = val(NONOP); // EDGAR: 양수 = 순이익
     for (const l of labels)
       if (n[l] == null && pretax[l] != null && opIncome[l] != null)
         n[l] = pretax[l]! - opIncome[l]!;
-    return n;
+    const out = blank();
+    for (const l of labels) if (n[l] != null) out[l] = -n[l]!;
+    return out;
   })();
+  // 순이자손익(−) = 이자비용 − 이자수익 (양수 = 순이자 부담, 음수 = 순이자 이익)
   const intInc = val(INT_INC);
   const intExp = val(INT_EXP);
-  const intNetRaw = val(INT_NET); // 수익 − 비용 (순비용이면 음수)
-  for (const l of labels)
-    if (intNetRaw[l] == null && (intInc[l] != null || intExp[l] != null))
-      intNetRaw[l] = (intInc[l] ?? 0) - (intExp[l] ?? 0);
-  // 표시는 "순이자손익(−)" = 순이자비용 → 부호 반전(순비용을 양수로)
   const netIntCost = blank();
-  for (const l of labels) if (intNetRaw[l] != null) netIntCost[l] = -intNetRaw[l]!;
+  for (const l of labels) {
+    if (intExp[l] == null && intInc[l] == null) continue;
+    netIntCost[l] = (intExp[l] ?? 0) - (intInc[l] ?? 0);
+  }
+  // 최근 데이터가 없으면(예: 회사가 이자 항목 별도 표시 중단) LTM 공란
+  const recentIso = new Date(Date.now() - 500 * 864e5).toISOString().slice(0, 10);
+  const intFresh = [...INT_EXP, ...INT_INC].some((c) =>
+    firstConcept(facts, [c]).some((e) => e.end >= recentIso),
+  );
+  if (!intFresh && LTM in netIntCost) netIntCost[LTM] = null;
   const hasInterest = labels.some((l) => netIntCost[l] != null);
   const tax = val(TAX);
   const contOps = diff(pretax, tax);
@@ -229,7 +236,7 @@ export function buildUsIncome(
     row("(−) 연구개발비", rnd),
     row("(−) 기타 영업비용", otherOpex),
     row("영업이익", opIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
-    row("영업외손익", nonOp),
+    row("(−) 영업외손익", nonOpLoss),
     ...(hasInterest ? [row("순이자손익(−)", netIntCost, { depth: 2 })] : []),
     row("세전이익", pretax, { depth: 0, isSubtotal: true }),
     row("(−) 법인세비용", tax),
