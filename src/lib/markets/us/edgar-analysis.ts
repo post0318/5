@@ -587,13 +587,10 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("자본지출", yoy1(capexRaw, capexFull), "pct"),
     R("잉여현금흐름", yoy1(fcf, fcfFull), "pct"),
     SP("6"),
-    HEAD("성장률 (CAGR)"),
-    R("매출액 3년", cagr(revFull, 3, revenue[LTM]), "pct"),
-    R("매출액 5년", cagr(revFull, 5, revenue[LTM]), "pct"),
-    R("EPS 3년", cagr(epsFull, 3, eps[LTM]), "pct"),
-    R("EPS 5년", cagr(epsFull, 5, eps[LTM]), "pct"),
-    R("주당배당금 3년", cagr(dpsFull, 3, dps[LTM]), "pct"),
-    R("주당배당금 5년", cagr(dpsFull, 5, dps[LTM]), "pct"),
+    HEAD("성장률 (3년 CAGR)"),
+    R("매출액", cagr(revFull, 3, revenue[LTM]), "pct"),
+    R("EPS", cagr(epsFull, 3, eps[LTM]), "pct"),
+    R("주당배당금", cagr(dpsFull, 3, dps[LTM]), "pct"),
   ];
 
   return {
