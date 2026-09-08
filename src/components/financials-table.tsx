@@ -29,6 +29,7 @@ export function FinancialsTable({
   statement,
   detailedCf,
   detailedIs,
+  detailedBs,
   period,
   onPeriodChange,
 }: {
@@ -37,6 +38,8 @@ export function FinancialsTable({
   detailedCf?: FinancialStatement | null;
   /** 미국 표준화 상세 손익계산서 */
   detailedIs?: FinancialStatement | null;
+  /** 미국 표준화 상세 재무상태표 */
+  detailedBs?: FinancialStatement | null;
   period?: "annual" | "quarter";
   onPeriodChange?: (p: "annual" | "quarter") => void;
 }) {
@@ -45,14 +48,20 @@ export function FinancialsTable({
   const has = useMemo(() => {
     const s = new Set(statement.sections.map((x) => groupOf(x.title)));
     return {
-      bs: s.has("bs"),
+      bs: s.has("bs") || Boolean(detailedBs),
       is: s.has("is") || Boolean(detailedIs),
       cf: s.has("cf") || Boolean(detailedCf),
     };
-  }, [statement.sections, detailedCf, detailedIs]);
+  }, [statement.sections, detailedCf, detailedIs, detailedBs]);
 
   const detail =
-    view === "cf" && detailedCf ? detailedCf : view === "is" && detailedIs ? detailedIs : null;
+    view === "cf" && detailedCf
+      ? detailedCf
+      : view === "is" && detailedIs
+        ? detailedIs
+        : view === "bs" && detailedBs
+          ? detailedBs
+          : null;
   const useDetail = detail != null;
   const periods = useDetail ? detail.periods : statement.periods;
 

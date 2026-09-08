@@ -76,11 +76,19 @@ export function StockAnalysis({
     retry: false,
   });
   const isDetailQ = useQuery({
-    queryKey: ["financials-is", market, symbol, period, yahooOverride],
+    queryKey: ["financials-is", market, symbol, period],
     queryFn: () =>
       apiFetch<FinancialStatement>(
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=is&period=${period}` +
-          (yahooOverride ? `&yahoo=${encodeURIComponent(yahooOverride)}` : ""),
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=is&period=${period}`,
+      ),
+    enabled: Boolean(symbol) && market === "us",
+    retry: false,
+  });
+  const bsDetailQ = useQuery({
+    queryKey: ["financials-bs", market, symbol, period],
+    queryFn: () =>
+      apiFetch<FinancialStatement>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=bs&period=${period}`,
       ),
     enabled: Boolean(symbol) && market === "us",
     retry: false,
@@ -686,6 +694,7 @@ export function StockAnalysis({
                   statement={financials.data}
                   detailedCf={market === "us" ? (cfDetailQ.data ?? null) : null}
                   detailedIs={market === "us" ? (isDetailQ.data ?? null) : null}
+                  detailedBs={market === "us" ? (bsDetailQ.data ?? null) : null}
                   period={period}
                   onPeriodChange={setPeriod}
                 />

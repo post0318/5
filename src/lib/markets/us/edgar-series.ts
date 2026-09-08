@@ -45,6 +45,55 @@ export function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
   return new Map([...m].map(([y, v]) => [y, v.val]));
 }
 
+/** 재무상태표(instant) — 사업연도말 값 Map<year, val>. */
+export function instantByYear(entries: FactUnitEntry[]): Map<number, number> {
+  const m = new Map<number, { val: number; end: string }>();
+  for (const e of entries) {
+    if (e.start || !ANNUAL_FORMS.includes(e.form)) continue;
+    const y = Number(e.end.slice(0, 4));
+    const prev = m.get(y);
+    if (!prev || e.end > prev.end) m.set(y, { val: e.val, end: e.end });
+  }
+  return new Map([...m].map(([y, v]) => [y, v.val]));
+}
+
+/** 재무상태표 — 가장 최근 instant 값 (분기 포함). */
+export function latestInstant(entries: FactUnitEntry[]): number | null {
+  let best: { val: number; end: string } | null = null;
+  for (const e of entries) {
+    if (e.start) continue;
+    if (!best || e.end > best.end) best = { val: e.val, end: e.end };
+  }
+  return best?.val ?? null;
+}
+
+/** 재무상태표 — 특정 기준일(정확 일치 ±6일)의 instant 값. */
+export function instantOn(entries: FactUnitEntry[], end: string): number | null {
+  let best: { val: number; d: number } | null = null;
+  for (const e of entries) {
+    if (e.start) continue;
+    const dd = Math.abs(days(end, e.end));
+    if (dd > 6) continue;
+    if (!best || dd < best.d) best = { val: e.val, d: dd };
+  }
+  return best?.val ?? null;
+}
+
+/** 최근 n개 분기말 (instant 기준). */
+export function recentInstantQuarters(entries: FactUnitEntry[], n = 5): string[] {
+  const ends = new Set<string>();
+  for (const e of entries) {
+    if (e.start || !INTERIM_FORMS.includes(e.form)) continue;
+    ends.add(e.end);
+  }
+  // 10-K 기말도 포함 (연말 분기)
+  for (const e of entries) {
+    if (e.start || !ANNUAL_FORMS.includes(e.form)) continue;
+    ends.add(e.end);
+  }
+  return [...ends].sort().reverse().slice(0, n);
+}
+
 /** 사업연도 종료일 Map<year, endDate>. */
 export function annualEnds(entries: FactUnitEntry[]): Map<number, string> {
   const m = new Map<number, string>();
