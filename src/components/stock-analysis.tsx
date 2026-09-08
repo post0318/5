@@ -478,7 +478,7 @@ export function StockAnalysis({
             <TabsList>
               <TabsTrigger value="overview">개요</TabsTrigger>
               <TabsTrigger value="financials">재무제표</TabsTrigger>
-              {market === "us" && <TabsTrigger value="analysis">분석</TabsTrigger>}
+              {market === "us" && <TabsTrigger value="analysis">재무분석</TabsTrigger>}
               {(market === "kr" || market === "us") && (
                 <TabsTrigger value="rights">권리일정</TabsTrigger>
               )}

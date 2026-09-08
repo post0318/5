@@ -114,6 +114,13 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const curLiab = stock(["LiabilitiesCurrent"]);
   const debt = stockSum(DEBT_C);
   const cash = stockSum(CASH_C);
+  const ar = stock(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]);
+  const inv = stock(["InventoryNet"]);
+  const ap = stock(["AccountsPayableCurrent"]);
+  const retained = stock(["RetainedEarningsAccumulatedDeficit"]);
+  const cogs = flow(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
+  const wc = blank(); // 운전자본 = 유동자산 − 유동부채
+  for (const l of labels) if (curAssets[l] != null && curLiab[l] != null) wc[l] = curAssets[l]! - curLiab[l]!;
   const sharesDei = (() => {
     const e = (facts.facts.dei?.["EntityCommonStockSharesOutstanding"]?.units?.shares ??
       []) as FactUnitEntry[];
@@ -188,6 +195,25 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     for (const l of labels) o[l] = l === LTM ? curMktcap : mktcap[l];
     return o;
   };
+  const yoy1 = (a: Record<string, number | null>) => {
+    const o = blank();
+    for (let i = 1; i < labels.length; i++) {
+      const c = a[labels[i]];
+      const p = a[labels[i - 1]];
+      if (c != null && p != null && p !== 0) o[labels[i]] = ((c - p) / Math.abs(p)) * 100;
+    }
+    return o;
+  };
+  const combine3 = (
+    a: Record<string, number | null>,
+    b: Record<string, number | null>,
+    c: Record<string, number | null>,
+  ) => {
+    const o = blank();
+    for (const l of labels)
+      if (a[l] != null && b[l] != null && c[l] != null) o[l] = a[l]! + b[l]! - c[l]!;
+    return o;
+  };
 
   const R = (
     label: string,
@@ -245,6 +271,63 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   for (const l of labels)
     if (per[l] != null && epsGrowth[l] && epsGrowth[l]! > 0) peg[l] = per[l]! / epsGrowth[l]!;
 
+  const effTax = ratio(taxExp, pretax, 100);
+  const payoutR = (() => {
+    const o = blank();
+    for (const l of labels)
+      if (dividends[l] != null && netIncome[l]) o[l] = Math.abs(dividends[l]!) / netIncome[l]!;
+    return o;
+  })();
+  const roeR = ratio(netIncome, equity);
+  const sgr = (() => {
+    const o = blank();
+    for (const l of labels)
+      if (roeR[l] != null && payoutR[l] != null) o[l] = roeR[l]! * (1 - payoutR[l]!) * 100;
+    return o;
+  })();
+  const quick = (() => {
+    const o = blank();
+    for (const l of labels)
+      if (curAssets[l] != null && inv[l] != null && curLiab[l])
+        o[l] = (curAssets[l]! - inv[l]!) / curLiab[l]!;
+    return o;
+  })();
+  const cogsAbs = (() => {
+    const o = blank();
+    for (const l of labels) if (cogs[l] != null) o[l] = Math.abs(cogs[l]!);
+    return o;
+  })();
+  const dso = (() => {
+    const o = blank();
+    for (const l of labels) if (ar[l] != null && revenue[l]) o[l] = (ar[l]! / revenue[l]!) * 365;
+    return o;
+  })();
+  const dio = ratio(inv, cogsAbs, 365);
+  const dpo = ratio(ap, cogsAbs, 365);
+  const ccc = combine3(dso, dio, dpo);
+  const altZ = (() => {
+    const o = blank();
+    for (const l of labels) {
+      const mc = l === LTM ? curMktcap : mktcap[l];
+      if (
+        assets[l] &&
+        wc[l] != null &&
+        retained[l] != null &&
+        opIncome[l] != null &&
+        mc != null &&
+        liabTotal[l] &&
+        revenue[l] != null
+      )
+        o[l] =
+          1.2 * (wc[l]! / assets[l]!) +
+          1.4 * (retained[l]! / assets[l]!) +
+          3.3 * (opIncome[l]! / assets[l]!) +
+          0.6 * (mc / liabTotal[l]!) +
+          1.0 * (revenue[l]! / assets[l]!);
+    }
+    return o;
+  })();
+
   const items: FinancialLineItem[] = [
     HEAD("밸류에이션"),
     R("PER", per, "mult"),
@@ -260,6 +343,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("매출총이익률 (%)", ratio(grossProfit, revenue, 100), "pct"),
     R("영업이익률 (%)", ratio(opIncome, revenue, 100), "pct"),
     R("순이익률 (%)", ratio(netIncome, revenue, 100), "pct"),
+    R("유효세율 (%)", effTax, "pct"),
+    R("지속가능 성장률 (%)", sgr, "pct"),
     SP("2"),
     HEAD("현금창출"),
     R("잉여현금흐름 (FCF)", fcf),
@@ -271,10 +356,24 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     SP("3"),
     HEAD("재무건전성"),
     R("순부채 / EBITDA", ratio(netDebt, ebitda), "mult"),
-    R("이자보상배율", ratio(opIncome, intExp), "mult"),
-    R("유동비율", ratio(curAssets, curLiab), "mult"),
     R("부채비율 (%)", ratio(liabTotal, equity, 100), "pct"),
+    R("이자보상배율 (EBIT/이자)", ratio(opIncome, intExp), "mult"),
+    R("EBITDA / 이자비용", ratio(ebitda, intExp), "mult"),
+    R("CFO / 총부채", ratio(ocf, liabTotal), "mult"),
+    R("FCF / 총차입금", ratio(fcf, debt), "mult"),
+    R("알트만 Z-스코어", altZ, "eps"),
     SP("4"),
+    HEAD("유동성"),
+    R("유동비율", ratio(curAssets, curLiab), "mult"),
+    R("당좌비율", quick, "mult"),
+    R("현금비율", ratio(cash, curLiab), "mult"),
+    SP("4b"),
+    HEAD("운전자본"),
+    R("매출채권 회전일수 (DSO)", dso, "eps"),
+    R("재고자산 회전일수 (DIO)", dio, "eps"),
+    R("매입채무 회전일수 (DPO)", dpo, "eps"),
+    R("현금전환주기 (CCC)", ccc, "eps"),
+    SP("4c"),
     HEAD("주주환원"),
     R("배당수익률 (%)", (() => {
       const o = blank();
@@ -304,7 +403,15 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
       return o;
     })(), "pct"),
     SP("5"),
-    HEAD("성장성 (CAGR)"),
+    HEAD("성장률 (1년 YoY)"),
+    R("매출", yoy1(revenue), "pct"),
+    R("EBITDA", yoy1(ebitda), "pct"),
+    R("영업이익", yoy1(opIncome), "pct"),
+    R("순이익", yoy1(netIncome), "pct"),
+    R("희석 EPS", yoy1(eps), "pct"),
+    R("잉여현금흐름", yoy1(fcf), "pct"),
+    SP("6"),
+    HEAD("성장률 (CAGR)"),
     R("매출 3년", cagr(revFull, 3), "pct"),
     R("매출 5년", cagr(revFull, 5), "pct"),
     R("EPS 3년", cagr(epsFull, 3), "pct"),

@@ -2,14 +2,12 @@ import "server-only";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import {
-  annualByYear,
   annualEnds,
   firstConcept,
   instantByYear,
   instantOn,
   latestInstant,
   recentInstantQuarters,
-  ttmOf,
 } from "./edgar-series";
 
 /**
@@ -268,22 +266,6 @@ export function buildUsBalance(
   items.push({ accountName: "", accountId: "bs:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() });
   items.push({ accountName: "[ 주석 항목 ]", accountId: "bs:note", depth: 0, isSubtotal: true, isHighlight: false, values: blank() });
 
-  // 당기순이익 (ROE·ROA용): 연간=FY값, LTM=TTM. 분기 모드는 직전 FY값으로 근사.
-  const niEntries = firstConcept(facts, ["NetIncomeLoss", "ProfitLoss"]);
-  const niAnnual = annualByYear(niEntries);
-  const niTtm = ttmOf(niEntries);
-  const netInc = blank();
-  for (const p of periods) {
-    if (p.label === LTM) netInc[p.label] = niTtm;
-    else netInc[p.label] = niAnnual.get(p.fiscalYear) ?? niAnnual.get(p.fiscalYear - 1) ?? null;
-  }
-  const roe = blank();
-  const roa = blank();
-  for (const l of labels) {
-    if (netInc[l] != null && eqTotal[l]) roe[l] = (netInc[l]! / eqTotal[l]!) * 100;
-    if (netInc[l] != null && aTotal[l]) roa[l] = (netInc[l]! / aTotal[l]!) * 100;
-  }
-
   const debt = (() => {
     const o = blank();
     for (const c of DEBT) {
@@ -303,19 +285,8 @@ export function buildUsBalance(
   const netDebt = blank();
   for (const l of labels)
     if (debt[l] != null || cashLike[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashLike[l] ?? 0);
-  const currentRatio = blank();
-  for (const l of labels) if (curTotal[l] && lcurTotal[l]) currentRatio[l] = curTotal[l]! / lcurTotal[l]!;
   const ndToEq = blank();
   for (const l of labels) if (netDebt[l] != null && eqTotal[l]) ndToEq[l] = (netDebt[l]! / eqTotal[l]!) * 100;
-  // 배당성향 = 지급배당금 / 당기순이익
-  const divPaid = firstConcept(facts, ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
-  const divAnnual = annualByYear(divPaid);
-  const divTtm = ttmOf(divPaid);
-  const payout = blank();
-  for (const p of periods) {
-    const dv = p.label === LTM ? divTtm : divAnnual.get(p.fiscalYear) ?? null;
-    if (dv != null && netInc[p.label]) payout[p.label] = (Math.abs(dv) / netInc[p.label]!) * 100;
-  }
 
   const nrow = (label: string, values: Record<string, number | null>, nf?: FinancialLineItem["numberFormat"]): FinancialLineItem => ({
     accountName: label,
@@ -328,11 +299,7 @@ export function buildUsBalance(
   });
   items.push(nrow("총차입금", debt));
   items.push(nrow("순부채", netDebt));
-  items.push(nrow("유동비율", currentRatio, "eps"));
   items.push(nrow("순부채/자본 (%)", ndToEq, "pct"));
-  items.push(nrow("ROE (%)", roe, "pct"));
-  items.push(nrow("ROA (%)", roa, "pct"));
-  items.push(nrow("배당성향 (%)", payout, "pct"));
 
   return {
     symbol: "",

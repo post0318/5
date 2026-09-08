@@ -168,7 +168,7 @@ export function FinancialsTable({
                 ))}
               </colgroup>
               <thead>
-                {useDetail && (
+                {useDetail && !standalone && (
                   <tr>
                     <th className="bg-background sticky left-0 z-10" />
                     <th
