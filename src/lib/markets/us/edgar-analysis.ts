@@ -248,6 +248,27 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
       sharesEnd[l] ??
       (l === LTM ? latestWavg : wavgAt(Number(l.replace("Y", ""))));
 
+  // 주당배당금 (DPS) — 배당 총액 ÷ 주식수, 액면분할 보정. 성장률 계산용.
+  const DIV_C = ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"];
+  const dps = adjPerShare(
+    (() => {
+      const o = blank();
+      for (const l of labels)
+        if (dividends[l] != null && shares[l]) o[l] = Math.abs(dividends[l]!) / shares[l]!;
+      return o;
+    })(),
+  );
+  const dpsFull = adjMap(
+    (() => {
+      const m = new Map<number, number>();
+      for (const [y, v] of fullAnnual(DIV_C)) {
+        const sh = wavgAt(y);
+        if (sh) m.set(y, Math.abs(v) / sh);
+      }
+      return m;
+    })(),
+  );
+
   // 파생
   const ebitda = blank();
   for (const l of labels) if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
@@ -539,16 +560,19 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     })(), "pct"),
     SP("5"),
     HEAD("성장률 (1년 YoY)"),
-    R("매출", yoy1(revenue, revFull), "pct"),
+    R("매출액", yoy1(revenue, revFull), "pct"),
     R("EBITDA", yoy1(ebitda, ebitdaFull), "pct"),
     R("영업이익", yoy1(opIncome, opIncFull), "pct"),
     R("순이익", yoy1(netIncome, niFull), "pct"),
     R("희석 EPS", yoy1(eps, epsFull), "pct"),
+    R("주당배당금", yoy1(dps, dpsFull), "pct"),
+    R("영업활동 현금흐름", yoy1(ocf, ocfFull), "pct"),
+    R("자본지출", yoy1(capexRaw, capexFull), "pct"),
     R("잉여현금흐름", yoy1(fcf, fcfFull), "pct"),
     SP("6"),
     HEAD("성장률 (CAGR)"),
-    R("매출 3년", cagr(revFull, 3), "pct"),
-    R("매출 5년", cagr(revFull, 5), "pct"),
+    R("매출액 3년", cagr(revFull, 3), "pct"),
+    R("매출액 5년", cagr(revFull, 5), "pct"),
     R("EPS 3년", cagr(epsFull, 3), "pct"),
     R("EPS 5년", cagr(epsFull, 5), "pct"),
   ];
