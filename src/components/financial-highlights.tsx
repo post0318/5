@@ -1,7 +1,11 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import type { FinancialHighlights } from "@/lib/markets/us/edgar-highlights";
+import type {
+  FinancialHighlights,
+  HighlightColumn,
+  HighlightRow,
+} from "@/lib/markets/us/edgar-highlights";
 
 function fmt(v: number | null, format: "money" | "pct" | "eps"): string {
   if (v == null || !Number.isFinite(v)) return "–";
@@ -18,18 +22,18 @@ function fmt(v: number | null, format: "money" | "pct" | "eps"): string {
   });
 }
 
-export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }) {
-  const { columns, rows } = data;
-
+function HighlightGrid({
+  title,
+  columns,
+  rows,
+}: {
+  title: string;
+  columns: HighlightColumn[];
+  rows: HighlightRow[];
+}) {
   return (
-    <section className="space-y-2">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h2 className="text-base font-semibold">재무 하이라이트</h2>
-        <span className="text-muted-foreground text-xs">
-          단위: {data.unitLabel} · 12개월 결산 · 현재/LTM {data.asOfLtm}
-        </span>
-      </div>
-
+    <div className="space-y-1.5">
+      <h3 className="text-muted-foreground text-xs font-semibold">{title}</h3>
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full min-w-[760px] border-separate border-spacing-0 text-[15px]">
           <thead>
@@ -61,6 +65,7 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
                   </tr>
                 );
               }
+              const emBg = "bg-[oklch(0.94_0.045_67)] dark:bg-[oklch(0.32_0.05_55)]";
               return (
                 <tr
                   key={r.key}
@@ -68,8 +73,8 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
                 >
                   <td
                     className={cn(
-                      "bg-background sticky left-0 z-10 px-3 py-1.5 whitespace-nowrap",
-                      r.emphasis && "border-t",
+                      "sticky left-0 z-10 px-3 py-1.5 whitespace-nowrap",
+                      r.emphasis ? `${emBg} border-t` : "bg-background",
                       r.indent
                         ? "text-muted-foreground/80 pl-6 text-sm"
                         : "text-foreground/90",
@@ -82,10 +87,10 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
                       key={i}
                       className={cn(
                         "tnum px-3 py-1.5 text-right whitespace-nowrap",
-                        r.emphasis && "border-t",
+                        r.emphasis && `${emBg} border-t`,
                         r.indent && "text-muted-foreground/70 text-[13px]",
                         columns[i]?.kind === "estimate" && "text-muted-foreground/60 italic",
-                        columns[i]?.kind === "ltm" && "bg-muted/20",
+                        columns[i]?.kind === "ltm" && !r.emphasis && "bg-muted/20",
                         v != null && v < 0 && !r.indent && "text-destructive",
                       )}
                     >
@@ -98,6 +103,31 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }) {
+  const { columns, rows } = data;
+
+  // 첫 spacer 기준으로 EV 브릿지 / 손익·현금흐름 분리
+  const splitAt = rows.findIndex((r) => r.spacer);
+  const evRows = splitAt >= 0 ? rows.slice(0, splitAt) : rows;
+  const flowRows = splitAt >= 0 ? rows.slice(splitAt + 1) : [];
+
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h2 className="text-base font-semibold">재무 하이라이트</h2>
+        <span className="text-muted-foreground text-xs">
+          단위: {data.unitLabel} · 12개월 결산 · 현재/LTM {data.asOfLtm}
+        </span>
+      </div>
+
+      <HighlightGrid title="기업가치 (EV 브릿지)" columns={columns} rows={evRows} />
+      {flowRows.length > 0 && (
+        <HighlightGrid title="손익 · 현금흐름" columns={columns} rows={flowRows} />
+      )}
 
       <ul className="text-muted-foreground/70 space-y-0.5 text-xs">
         {data.notes.map((n, i) => (
