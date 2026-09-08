@@ -426,10 +426,13 @@ export function buildUsHighlights(
   // ── 투자지표 (밸류에이션) ───────────────────────────────────────
   const ltmIdx = columns.findIndex((c) => c.kind === "ltm");
   const curMcap = ltmIdx >= 0 ? marketCap[ltmIdx] : null;
+  const curPrice = ltmIdx >= 0 ? priceByCol[ltmIdx] : null;
   const ratio = (num: number | null, den: number | null): number | null =>
     num != null && den != null && den > 0 ? num / den : null;
+  // PER = 회계연도말 종가 ÷ 보고 희석 EPS (컨센서스 표와 동일 기준).
+  // 예상 열은 현재가 ÷ 추정 EPS.
   const per = columns.map((col, i) =>
-    ratio(col.kind === "estimate" ? curMcap : marketCap[i], netIncome[i]),
+    ratio(col.kind === "estimate" ? curPrice : priceByCol[i], eps[i]),
   );
   const pbr = columns.map((col, i) =>
     col.kind === "estimate" ? null : ratio(marketCap[i], equity[i]),

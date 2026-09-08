@@ -190,16 +190,15 @@ export async function getConsensusData(
     const eps = epsStmt ?? (netIncome != null && shares ? netIncome / shares : null);
     const bps = equity != null && shares ? equity / shares : null;
 
-    // 연말(결산월 말일) 시점 주가
-    const endYmd = `${fy}${String(fiscalMonth).padStart(2, "0")}31`;
+    // 해당 회계연도의 실제 마감일 시점 주가 (없으면 결산월 28일로 근사)
+    const periodEnd =
+      annual.periods.find((p) => p.fiscalYear === fy)?.endDate ??
+      `${fy}-${String(fiscalMonth).padStart(2, "0")}-28`;
     let yePrice: number | null = null;
     if (market === "kr") {
-      yePrice = await fetchKrxCloseOn(symbol, endYmd).catch(() => null);
+      yePrice = await fetchKrxCloseOn(symbol, periodEnd.replace(/-/g, "")).catch(() => null);
     } else if (quote?.bars?.length) {
-      yePrice = closeFromBars(
-        quote.bars,
-        `${fy}-${String(fiscalMonth).padStart(2, "0")}-31`,
-      );
+      yePrice = closeFromBars(quote.bars, periodEnd);
     }
     yePrice = yePrice ?? price; // 못 구하면 현재가로 대체
 
