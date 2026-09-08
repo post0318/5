@@ -321,8 +321,6 @@ export function StockAnalysis({
     },
     { label: "추정PER", node: <Multiple value={estPer} fallback="-" /> },
     { label: "PBR", node: <Multiple value={pbrVal} fallback={multiplesFallback} /> },
-    { label: "EPS", node: <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} /> },
-    { label: "EPS(TTM)", node: <Money value={ttmEps} currency={ccy} fallback="-" /> },
     {
       label: evEbitdaApprox ? "EV/EBIT" : "EV/EBITDA",
       node: <Multiple value={evEbitdaVal} fallback={multiplesFallback} />,
@@ -560,20 +558,20 @@ export function StockAnalysis({
                 <p className="text-muted-foreground/80 text-[11px] leading-relaxed">
                   {market === "kr" ? (
                     <>
-                      PER·PBR·PSR·EPS·BPS·PER(TTM)·EPS(TTM)·EV/EBITDA : DART / DPS·DPS(TTM)·배당수익률 :
+                      PER·PBR·PSR·BPS·PER(TTM)·EV/EBITDA : DART / DPS·DPS(TTM)·배당수익률 :
                       금융위원회 주식배당정보
                     </>
                   ) : market === "us" ? (
                     <>
-                      PER·EPS = 최근 연간 공시(SEC EDGAR) + 현재가 자체 계산 ·
-                      PER(TTM)·EPS(TTM)·PBR·BPS·PSR·EV/EBITDA·DPS·DPS(TTM)·배당수익률 = SEC EDGAR
+                      PER = 최근 연간 공시(SEC EDGAR) + 현재가 자체 계산 ·
+                      PER(TTM)·PBR·BPS·PSR·EV/EBITDA·DPS·DPS(TTM)·배당수익률 = SEC EDGAR
                       (최근 분기 재무상태표 + TTM, 한국과 동일 누적 방식) · 추정PER(차기 회계연도) =
                       yahoo-finance2 (개인용)
                     </>
                   ) : (
                     <>
-                      PER·EPS = 최근 연간 공시(EDINET) + 현재가 자체 계산 ·
-                      PBR·BPS·PSR·EV/EBITDA·PER(TTM)·EPS(TTM)·추정PER(차기 회계연도)·DPS·DPS(TTM)·배당수익률 =
+                      PER = 최근 연간 공시(EDINET) + 현재가 자체 계산 ·
+                      PBR·BPS·PSR·EV/EBITDA·PER(TTM)·추정PER(차기 회계연도)·DPS·DPS(TTM)·배당수익률 =
                       yahoo-finance2 (개인용) — 일본은 무료 분기 공시가 없어 TTM·최근분기 지표는 Yahoo 제공치
                     </>
                   )}
