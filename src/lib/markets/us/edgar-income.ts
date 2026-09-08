@@ -185,8 +185,12 @@ export function buildUsIncome(
   if (!intFresh && LTM in netIntCost) netIntCost[LTM] = null;
   const hasInterest = labels.some((l) => netIntCost[l] != null);
   const tax = val(TAX);
-  const contOps = diff(pretax, tax);
   const netIncome = val(NET_INCOME);
+  // (−) 기타 = (세전이익 − 법인세비용) − 공시 당기순이익 (중단사업·소수주주지분 등)
+  const otherToNi = blank();
+  for (const l of labels)
+    if (pretax[l] != null && tax[l] != null && netIncome[l] != null)
+      otherToNi[l] = Math.round(pretax[l]! - tax[l]! - netIncome[l]!);
   const epsBasic = val(EPS_BASIC, "USD/shares");
   const epsDil = val(EPS_DIL, "USD/shares");
 
@@ -240,7 +244,7 @@ export function buildUsIncome(
     ...(hasInterest ? [row("순이자손익(−)", netIntCost, { depth: 2 })] : []),
     row("세전이익", pretax, { depth: 0, isSubtotal: true }),
     row("(−) 법인세비용", tax),
-    row("계속사업이익", contOps, { depth: 0, isSubtotal: true }),
+    row("(−) 기타", otherToNi),
     row("당기순이익", netIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("기본 EPS", epsBasic, { numberFormat: "eps" }),
     row("희석 EPS", epsDil, { numberFormat: "eps" }),
