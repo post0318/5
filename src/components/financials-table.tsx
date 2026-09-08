@@ -1,9 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { formatNumber } from "@/lib/format";
 import type { FinancialLineItem, FinancialStatement } from "@/lib/markets/types";
+
+function useIsMobile(): boolean {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 640px)");
+    const on = () => setMobile(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return mobile;
+}
 
 type View = "all" | "bs" | "is" | "cf";
 
@@ -19,11 +31,16 @@ const groupOf = (title: string): Exclude<View, "all"> | "other" =>
 
 const EM_BG = "bg-[oklch(0.94_0.045_67)] dark:bg-[oklch(0.32_0.05_55)]";
 
-function fmtDetail(v: number, kind?: FinancialLineItem["numberFormat"]): string {
+function fmtDetail(
+  v: number,
+  kind: FinancialLineItem["numberFormat"] | undefined,
+  billion = false,
+): string {
   if (kind === "eps" || kind === "pct") return formatNumber(v, 2);
   if (kind === "mult") return `${formatNumber(v, 2)}x`;
-  if (kind === "shares") return formatNumber(v / 1e6, 1); // 백만주, 소수 1
-  return formatNumber(v / 1e6, 0); // 통화 → 백만, 정수
+  if (kind === "shares") return formatNumber(v / (billion ? 1e9 : 1e6), billion ? 2 : 1);
+  // 통화 → 데스크톱 백만(정수) / 모바일 10억(소수 2) — 개요와 통일
+  return billion ? formatNumber(v / 1e9, 2) : formatNumber(v / 1e6, 0);
 }
 
 export function FinancialsTable({
@@ -73,7 +90,11 @@ export function FinancialsTable({
             ? detailedBs
             : null;
   const useDetail = detail != null;
-  const periods = useDetail ? detail.periods : statement.periods;
+  const mobile = useIsMobile();
+  // 모바일 재무제표 탭: 현재 기준 최근 3기(현재+전년+전전년)만, 통화 10억 단위
+  const mobileDetail = mobile && useDetail && !standalone;
+  const allPeriods = useDetail ? detail.periods : statement.periods;
+  const periods = mobileDetail ? allPeriods.slice(-3) : allPeriods;
 
   const tabs: { key: View; label: string }[] = [
     { key: "all", label: "총괄" },
@@ -163,11 +184,16 @@ export function FinancialsTable({
           return (
           <div key={section.title} className="overflow-x-auto">
             <table
-              className="w-full table-fixed border-separate border-spacing-0 text-sm"
-              style={{ minWidth: `${232 + periods.length * 96}px` }}
+              className={cn(
+                "w-full table-fixed border-separate border-spacing-0",
+                mobileDetail ? "text-[13px]" : "text-sm",
+              )}
+              style={{
+                minWidth: mobileDetail ? undefined : `${232 + periods.length * 96}px`,
+              }}
             >
               <colgroup>
-                <col style={{ width: "232px" }} />
+                <col style={{ width: mobileDetail ? "40%" : "232px" }} />
                 {periods.map((p) => (
                   <col key={p.label} />
                 ))}
@@ -180,7 +206,7 @@ export function FinancialsTable({
                       colSpan={periods.length}
                       className="text-muted-foreground px-3 pt-1 pb-0.5 text-right text-xs font-normal"
                     >
-                      단위: {detail.unit || "USD"} 백만
+                      단위: {detail.unit || "USD"} {mobileDetail ? "10억" : "백만"}
                     </th>
                   </tr>
                 )}
@@ -292,11 +318,11 @@ export function FinancialsTable({
                                 : item.paren
                                   ? `(${
                                       useDetail
-                                        ? fmtDetail(v, item.numberFormat)
+                                        ? fmtDetail(v, item.numberFormat, mobileDetail)
                                         : formatNumber(v, perShare ? 2 : 0)
                                     })`
                                   : useDetail
-                                    ? fmtDetail(v, item.numberFormat)
+                                    ? fmtDetail(v, item.numberFormat, mobileDetail)
                                     : formatNumber(v, perShare ? 2 : 0)}
                           </td>
                         );
