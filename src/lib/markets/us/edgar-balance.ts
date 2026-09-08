@@ -111,6 +111,8 @@ const CASH_LIKE = [
   "CashAndCashEquivalentsAtCarryingValue",
   "MarketableSecuritiesCurrent",
   "ShortTermInvestments",
+  "MarketableSecuritiesNoncurrent",
+  "LongTermInvestments",
 ];
 const SHARES = ["EntityCommonStockSharesOutstanding", "CommonStockSharesOutstanding"];
 
