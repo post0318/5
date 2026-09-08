@@ -5,6 +5,7 @@ import type { QuoteBar } from "../types";
 import {
   annualByYear,
   annualEnds,
+  entriesOf,
   firstConcept,
   instantByYear,
   latestInstant,
@@ -72,6 +73,36 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   /** 전체 연도 시계열 (CAGR용). */
   const fullAnnual = (concepts: string[], unit = "USD") =>
     annualByYear(firstConcept(facts, concepts, unit));
+  // 연도별 병합: 개념마다 태깅이 끊기는 경우(메타 InterestExpense→InterestExpenseNonoperating,
+  // AccountsPayableCurrent→AccountsPayableTradeCurrent 등) 연도별로 첫 유효값을 채운다.
+  const flowM = (concepts: string[], unit = "USD"): Record<string, number | null> => {
+    const maps = concepts.map((c) => annualByYear(entriesOf(facts, c, unit)));
+    const o = blank();
+    for (const y of years)
+      for (const m of maps) {
+        const v = m.get(y);
+        if (v != null) { o[`${y}Y`] = v; break; }
+      }
+    for (const c of concepts) {
+      const t = ttmOf(entriesOf(facts, c, unit));
+      if (t != null) { o[LTM] = t; break; }
+    }
+    return o;
+  };
+  const stockM = (concepts: string[]): Record<string, number | null> => {
+    const maps = concepts.map((c) => instantByYear(entriesOf(facts, c)));
+    const o = blank();
+    for (const y of years)
+      for (const m of maps) {
+        const v = m.get(y);
+        if (v != null) { o[`${y}Y`] = v; break; }
+      }
+    for (const c of concepts) {
+      const l = latestInstant(entriesOf(facts, c));
+      if (l != null) { o[LTM] = l; break; }
+    }
+    return o;
+  };
   // 잔액값: FY말 → 그 해, LTM → 최신
   const stock = (concepts: string[]): Record<string, number | null> => {
     const e = firstConcept(facts, concepts);
@@ -91,7 +122,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   };
 
   const revenue = flow(REV);
-  const grossProfit = flow(["GrossProfit"]);
+  const grossProfitRaw = flow(["GrossProfit"]);
   const opIncome = flow(["OperatingIncomeLoss"]);
   const netIncome = flow(["NetIncomeLoss"]);
   const eps = flow(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares");
@@ -102,7 +133,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const capexRaw = flow(["PaymentsToAcquirePropertyPlantAndEquipment"]);
   const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
-  const intExp = flow(INT_EXP);
+  const intExp = flowM(INT_EXP);
   const taxExp = flow(["IncomeTaxExpenseBenefit"]);
   const pretax = flow([
     "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
@@ -114,11 +145,21 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const curLiab = stock(["LiabilitiesCurrent"]);
   const debt = stockSum(DEBT_C);
   const cash = stockSum(CASH_C);
-  const ar = stock(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]);
+  const ar = stockM(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]);
   const inv = stock(["InventoryNet"]);
-  const ap = stock(["AccountsPayableCurrent"]);
+  const ap = stockM([
+    "AccountsPayableCurrent",
+    "AccountsPayableTradeCurrent",
+    "AccountsPayableAndAccruedLiabilitiesCurrent",
+  ]);
   const retained = stock(["RetainedEarningsAccumulatedDeficit"]);
-  const cogs = flow(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
+  const cogs = flowM(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
+  // 매출총이익: 공시 태그(GrossProfit) 없으면 매출 − 매출원가 (메타 등)
+  const grossProfit = blank();
+  for (const l of labels)
+    grossProfit[l] =
+      grossProfitRaw[l] ??
+      (revenue[l] != null && cogs[l] != null ? revenue[l]! - Math.abs(cogs[l]!) : null);
   const wc = blank(); // 운전자본 = 유동자산 − 유동부채
   for (const l of labels) if (curAssets[l] != null && curLiab[l] != null) wc[l] = curAssets[l]! - curLiab[l]!;
   const sharesDei = (() => {
@@ -293,6 +334,14 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return o;
   })();
   const roeR = ratio(netIncome, equity);
+  // 듀퐁 3단계 분해: ROE = 순이익률 × 총자산회전율 × 재무레버리지 (모두 기말 기준)
+  const duMargin = ratio(netIncome, revenue);
+  const duTurnover = ratio(revenue, assets);
+  const duLeverage = ratio(assets, equity);
+  const dupontRoe = blank();
+  for (const l of labels)
+    if (duMargin[l] != null && duTurnover[l] != null && duLeverage[l] != null)
+      dupontRoe[l] = duMargin[l]! * duTurnover[l]! * duLeverage[l]! * 100;
   const sgr = (() => {
     const o = blank();
     for (const l of labels)
@@ -301,9 +350,10 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   })();
   const quick = (() => {
     const o = blank();
+    // 재고 태그가 없는 업종(플랫폼·서비스)은 재고 0 으로 간주 → 사실상 유동비율과 근접
     for (const l of labels)
-      if (curAssets[l] != null && inv[l] != null && curLiab[l])
-        o[l] = (curAssets[l]! - inv[l]!) / curLiab[l]!;
+      if (curAssets[l] != null && curLiab[l])
+        o[l] = (curAssets[l]! - (inv[l] ?? 0)) / curLiab[l]!;
     return o;
   })();
   const cogsAbs = (() => {
@@ -316,7 +366,12 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     for (const l of labels) if (ar[l] != null && revenue[l]) o[l] = (ar[l]! / revenue[l]!) * 365;
     return o;
   })();
-  const dio = ratio(inv, cogsAbs, 365);
+  // 재고 태그가 없으면 재고 0 (플랫폼·서비스) → DIO 0, CCC 계산 가능
+  const dio = (() => {
+    const o = blank();
+    for (const l of labels) if (cogsAbs[l]) o[l] = ((inv[l] ?? 0) / cogsAbs[l]!) * 365;
+    return o;
+  })();
   const dpo = ratio(ap, cogsAbs, 365);
   const ccc = combine3(dso, dio, dpo);
   const altZ = (() => {
@@ -359,6 +414,12 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("순이익률 (%)", ratio(netIncome, revenue, 100), "pct"),
     R("유효세율 (%)", effTax, "pct"),
     R("지속가능 성장률 (%)", sgr, "pct"),
+    SP("2a"),
+    HEAD("듀퐁 분석 (ROE 분해)"),
+    R("순이익률 (%)", ratio(netIncome, revenue, 100), "pct"),
+    R("총자산회전율 (회)", duTurnover, "mult"),
+    R("재무레버리지 (배)", duLeverage, "mult"),
+    R("= ROE (%)", dupontRoe, "pct", { isHighlight: true }),
     SP("2"),
     HEAD("현금창출"),
     R("잉여현금흐름 (FCF)", fcf),
