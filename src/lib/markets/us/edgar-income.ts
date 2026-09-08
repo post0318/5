@@ -241,7 +241,9 @@ export function buildUsIncome(
     row("(−) 기타 영업비용", otherOpex),
     row("영업이익", opIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("(−) 영업외손익", nonOpLoss),
-    ...(hasInterest ? [row("순이자손익(−)", netIntCost, { depth: 2 })] : []),
+    ...(hasInterest
+      ? [row("순이자비용", netIntCost, { depth: 2, italic: true })]
+      : []),
     row("세전이익", pretax, { depth: 0, isSubtotal: true }),
     row("(−) 법인세비용", tax),
     row("(−) 기타", otherToNi),

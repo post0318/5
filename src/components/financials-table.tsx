@@ -215,6 +215,7 @@ export function FinancialsTable({
                       className={cn(
                         emphasis && (useDetail ? EM_BG : "bg-highlight-row"),
                         item.isSubtotal && "font-semibold",
+                        item.italic && "text-muted-foreground italic",
                       )}
                     >
                       <td

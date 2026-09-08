@@ -56,6 +56,8 @@ export interface FinancialLineItem {
   values: Record<string, number | null>;
   /** 표준화 상세표(CF·IS)의 값 표시 방식. 미지정 시 통화(백만). */
   numberFormat?: "money" | "shares" | "eps" | "pct";
+  /** 참고성 라인 — 기울임꼴로 표시 */
+  italic?: boolean;
 }
 
 export interface FinancialStatement {
