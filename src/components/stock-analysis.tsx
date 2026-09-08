@@ -790,7 +790,7 @@ export function StockAnalysis({
                 )}
                 <p className="text-muted-foreground/80 text-[11px]">
                   {market === "us"
-                    ? "출처: yahoo-finance2 배당·분할 이벤트 + calendarEvents · 최근 15개월 ~ 향후"
+                    ? "출처: Polygon.io(Massive) 배당 이력(선언·권리락·기준·지급일) + yahoo-finance2 분할 · 최근 15개월 ~ 향후"
                     : "출처: 금융위원회_주식권리일정정보 (공공데이터포털) · 익영업일 오전 8시 갱신"}
                 </p>
               </TabsContent>
