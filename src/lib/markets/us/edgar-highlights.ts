@@ -348,7 +348,6 @@ export function buildUsHighlights(
       ? (estCols.find((e) => `FY${e.year}E` === col.key)?.period.revenueAvg ?? null)
       : flowVal(S.revenue, E.revenue, col),
   );
-  const grossProfit = columns.map((col) => flowVal(S.grossProfit, E.grossProfit, col));
   const ebitda = columns.map((col) => {
     if (col.kind === "fy") {
       const y = Number(col.key.slice(2));
@@ -407,8 +406,6 @@ export function buildUsHighlights(
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
     { key: "revenue", label: "매출액", format: "money", values: revenue },
     { key: "revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(revenue) },
-    { key: "gp", label: "매출총이익", format: "money", values: grossProfit },
-    { key: "gp_m", label: "마진 %", format: "pct", indent: true, values: grossProfit.map((v, i) => margin(v, revenue[i])) },
     { key: "ebitda", label: "EBITDA", format: "money", values: ebitda },
     { key: "ebitda_m", label: "마진 %", format: "pct", indent: true, values: ebitda.map((v, i) => margin(v, revenue[i])) },
     { key: "ni", label: "순이익", format: "money", values: netIncome },
