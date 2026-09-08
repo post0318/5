@@ -242,7 +242,7 @@ export function FinancialsTable({
                               "tnum border-b px-3 py-1.5 text-right whitespace-nowrap",
                               neg && "text-down",
                               v == null && "text-muted-foreground",
-                              ltm && !emphasis && "bg-foreground/10",
+                              ltm && !emphasis && !labelOnly && "bg-foreground/10",
                             )}
                           >
                             {labelOnly
