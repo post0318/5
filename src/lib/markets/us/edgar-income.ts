@@ -50,6 +50,19 @@ const WA_DIL = [
 const EPS_BASIC = ["EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted"];
 const EPS_DIL = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"];
 const NONOP = ["NonoperatingIncomeExpense", "OtherNonoperatingIncomeExpense"];
+const INT_EXP = [
+  "InterestExpense",
+  "InterestExpenseDebt",
+  "InterestExpenseNonoperating",
+  "InterestAndDebtExpense",
+];
+const INT_INC = [
+  "InvestmentIncomeInterest",
+  "InterestIncomeOperating",
+  "InterestAndDividendIncomeOperating",
+  "InterestIncomeNonoperating",
+];
+const INT_NET = ["InterestIncomeExpenseNet", "InterestIncomeExpenseNonoperatingNet"];
 const DA = [
   "DepreciationDepletionAndAmortization",
   "DepreciationAmortizationAndAccretionNet",
@@ -164,6 +177,13 @@ export function buildUsIncome(
         n[l] = pretax[l]! - opIncome[l]!;
     return n;
   })();
+  const intInc = val(INT_INC);
+  const intExp = val(INT_EXP);
+  const intNet = val(INT_NET);
+  for (const l of labels)
+    if (intNet[l] == null && (intInc[l] != null || intExp[l] != null))
+      intNet[l] = (intInc[l] ?? 0) - (intExp[l] ?? 0);
+  const hasInterest = labels.some((l) => intNet[l] != null);
   const tax = val(TAX);
   const contOps = diff(pretax, tax);
   const disc = val(DISC_OPS);
@@ -209,6 +229,13 @@ export function buildUsIncome(
     row("(−) 기타 영업비용", otherOpex),
     row("영업이익", opIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("영업외손익", nonOp),
+    ...(hasInterest
+      ? [
+          row("순이자손익", intNet, { depth: 2 }),
+          row("이자수익", intInc, { depth: 3 }),
+          row("(−) 이자비용", intExp, { depth: 3 }),
+        ]
+      : []),
     row("세전이익", pretax, { depth: 0, isSubtotal: true }),
     row("(−) 법인세비용", tax),
     row("계속사업이익", contOps, { depth: 0, isSubtotal: true }),
