@@ -195,10 +195,13 @@ export function FinancialsTable({
                   const perShare =
                     /PerShare/i.test(item.accountId ?? "") ||
                     /주당|1株当たり|per share/i.test(item.accountName);
+                  const labelOnly =
+                    item.isSubtotal &&
+                    periods.every((p) => item.values[p.label] == null);
                   const emphasis = item.isHighlight;
                   return (
                     <tr
-                      key={item.accountId ?? item.accountName}
+                      key={`${idx}-${item.accountId ?? item.accountName}`}
                       className={cn(
                         emphasis && (useDetail ? EM_BG : "bg-highlight-row"),
                         item.isSubtotal && "font-semibold",
@@ -231,11 +234,13 @@ export function FinancialsTable({
                               ltm && !emphasis && "bg-foreground/10",
                             )}
                           >
-                            {v == null
-                              ? "-"
-                              : useDetail
-                                ? fmtDetail(v, item.numberFormat)
-                                : formatNumber(v, perShare ? 2 : 0)}
+                            {labelOnly
+                              ? ""
+                              : v == null
+                                ? "-"
+                                : useDetail
+                                  ? fmtDetail(v, item.numberFormat)
+                                  : formatNumber(v, perShare ? 2 : 0)}
                           </td>
                         );
                       })}
