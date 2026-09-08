@@ -588,6 +588,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("매출액 5년", cagr(revFull, 5), "pct"),
     R("EPS 3년", cagr(epsFull, 3), "pct"),
     R("EPS 5년", cagr(epsFull, 5), "pct"),
+    R("주당배당금 3년", cagr(dpsFull, 3), "pct"),
+    R("주당배당금 5년", cagr(dpsFull, 5), "pct"),
   ];
 
   return {
