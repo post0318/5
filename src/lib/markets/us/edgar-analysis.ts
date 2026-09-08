@@ -61,14 +61,17 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const blank = (): Record<string, number | null> => Object.fromEntries(labels.map((l) => [l, null]));
 
   // 흐름값: FY → 연간, LTM → TTM
-  const flow = (concepts: string[]): Record<string, number | null> => {
-    const e = firstConcept(facts, concepts);
+  const flow = (concepts: string[], unit = "USD"): Record<string, number | null> => {
+    const e = firstConcept(facts, concepts, unit);
     const ann = annualByYear(e);
     const o = blank();
     for (const y of years) o[`${y}Y`] = ann.get(y) ?? null;
     o[LTM] = ttmOf(e);
     return o;
   };
+  /** 전체 연도 시계열 (CAGR용). */
+  const fullAnnual = (concepts: string[], unit = "USD") =>
+    annualByYear(firstConcept(facts, concepts, unit));
   // 잔액값: FY말 → 그 해, LTM → 최신
   const stock = (concepts: string[]): Record<string, number | null> => {
     const e = firstConcept(facts, concepts);
@@ -91,7 +94,9 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const grossProfit = flow(["GrossProfit"]);
   const opIncome = flow(["OperatingIncomeLoss"]);
   const netIncome = flow(["NetIncomeLoss"]);
-  const eps = flow(["EarningsPerShareDiluted"]);
+  const eps = flow(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares");
+  const epsFull = fullAnnual(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares");
+  const revFull = fullAnnual(REV);
   const da = flow(DA);
   const ocf = flow(["NetCashProvidedByUsedInOperatingActivities"]);
   const capexRaw = flow(["PaymentsToAcquirePropertyPlantAndEquipment"]);
@@ -140,10 +145,10 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     const rate = pretax[l] && taxExp[l] != null ? taxExp[l]! / pretax[l]! : 0.21;
     nopat[l] = opIncome[l]! * (1 - Math.min(Math.max(rate, 0), 0.4));
   }
-  const investedCap = blank();
+  const investedCap = blank(); // 총차입금 + 자본 (순현금 기업 대비 음수 방지)
   for (const l of labels)
-    if (debt[l] != null && equity[l] != null)
-      investedCap[l] = debt[l]! + equity[l]! - (cash[l] ?? 0);
+    if (debt[l] != null && equity[l] != null) investedCap[l] = debt[l]! + equity[l]!;
+  const liabTotal = stock(["Liabilities"]);
 
   // 주가·시총
   const price = blank();
@@ -166,13 +171,15 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     for (const l of labels) if (a[l] != null && shares[l]) o[l] = a[l]! / shares[l]!;
     return o;
   };
-  const cagr = (a: Record<string, number | null>, n: number) => {
+  // CAGR: 전체 연도 시계열에서 각 컬럼 대비 n년 전 값
+  const cagr = (full: Map<number, number>, n: number) => {
     const o = blank();
-    for (let i = 0; i < labels.length; i++) {
-      const cur = a[labels[i]];
-      const base = a[labels[i - n]];
+    for (const p of periods) {
+      const endY = p.label === LTM ? (years.at(-1) ?? 0) : p.fiscalYear;
+      const cur = full.get(endY);
+      const base = full.get(endY - n);
       if (cur != null && base != null && base > 0 && cur > 0)
-        o[labels[i]] = (Math.pow(cur / base, 1 / n) - 1) * 100;
+        o[p.label] = (Math.pow(cur / base, 1 / n) - 1) * 100;
     }
     return o;
   };
@@ -266,7 +273,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("순부채 / EBITDA", ratio(netDebt, ebitda), "mult"),
     R("이자보상배율", ratio(opIncome, intExp), "mult"),
     R("유동비율", ratio(curAssets, curLiab), "mult"),
-    R("부채비율 (%)", ratio(debt, equity, 100), "pct"),
+    R("부채비율 (%)", ratio(liabTotal, equity, 100), "pct"),
     SP("4"),
     HEAD("주주환원"),
     R("배당수익률 (%)", (() => {
@@ -298,11 +305,10 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     })(), "pct"),
     SP("5"),
     HEAD("성장성 (CAGR)"),
-    R("매출 3년", cagr(revenue, 3), "pct"),
-    R("매출 5년", cagr(revenue, 5), "pct"),
-    R("EPS 3년", cagr(eps, 3), "pct"),
-    R("EPS 5년", cagr(eps, 5), "pct"),
-    R("FCF 3년", cagr(fcf, 3), "pct"),
+    R("매출 3년", cagr(revFull, 3), "pct"),
+    R("매출 5년", cagr(revFull, 5), "pct"),
+    R("EPS 3년", cagr(epsFull, 3), "pct"),
+    R("EPS 5년", cagr(epsFull, 5), "pct"),
   ];
 
   return {
