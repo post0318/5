@@ -523,7 +523,7 @@ export function StockAnalysis({
                     <>
                       PER·EPS = 최근 연간 공시(SEC EDGAR) + 현재가 자체 계산 ·
                       PER(TTM)·EPS(TTM)·PBR·BPS·PSR·EV/EBITDA·DPS·DPS(TTM)·배당수익률 = SEC EDGAR
-                      (최근 분기 재무상태표 + TTM, 한국과 동일 누적 방식) · 추정PER(차기 회계연도)·목표주가·투자의견 =
+                      (최근 분기 재무상태표 + TTM, 한국과 동일 누적 방식) · 추정PER(차기 회계연도) =
                       yahoo-finance2 (개인용)
                     </>
                   ) : (
