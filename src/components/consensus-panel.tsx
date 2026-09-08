@@ -54,6 +54,7 @@ export function ConsensusPanel({
   const bigUnit = market === "jp" ? "천만엔" : market === "us" ? "백만$" : "억원";
   const won = (v: number | null) => (v == null ? "-" : formatNumber(v, market === "kr" ? 0 : 2));
   const mult = (v: number | null) => (v == null ? "-" : `${formatNumber(v, 2)}x`);
+  const pct = (v: number | null) => (v == null ? "-" : `${v > 0 ? "+" : ""}${formatNumber(v, 2)}%`);
 
   const chartData = d.rows.map((r) => ({
     label: r.label,
