@@ -36,8 +36,6 @@ const PRETAX = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
 ];
 const TAX = ["IncomeTaxExpenseBenefit"];
-const DISC_OPS = ["IncomeLossFromDiscontinuedOperationsNetOfTax"];
-const NCI = ["NetIncomeLossAttributableToNoncontrollingInterest"];
 const NET_INCOME = ["NetIncomeLoss"];
 const EPS_BASIC = ["EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted"];
 const EPS_DIL = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"];
@@ -171,15 +169,16 @@ export function buildUsIncome(
   })();
   const intInc = val(INT_INC);
   const intExp = val(INT_EXP);
-  const intNet = val(INT_NET);
+  const intNetRaw = val(INT_NET); // 수익 − 비용 (순비용이면 음수)
   for (const l of labels)
-    if (intNet[l] == null && (intInc[l] != null || intExp[l] != null))
-      intNet[l] = (intInc[l] ?? 0) - (intExp[l] ?? 0);
-  const hasInterest = labels.some((l) => intNet[l] != null);
+    if (intNetRaw[l] == null && (intInc[l] != null || intExp[l] != null))
+      intNetRaw[l] = (intInc[l] ?? 0) - (intExp[l] ?? 0);
+  // 표시는 "순이자손익(−)" = 순이자비용 → 부호 반전(순비용을 양수로)
+  const netIntCost = blank();
+  for (const l of labels) if (intNetRaw[l] != null) netIntCost[l] = -intNetRaw[l]!;
+  const hasInterest = labels.some((l) => netIntCost[l] != null);
   const tax = val(TAX);
   const contOps = diff(pretax, tax);
-  const disc = val(DISC_OPS);
-  const nci = val(NCI);
   const netIncome = val(NET_INCOME);
   const epsBasic = val(EPS_BASIC, "USD/shares");
   const epsDil = val(EPS_DIL, "USD/shares");
@@ -232,18 +231,10 @@ export function buildUsIncome(
     row("(−) 기타 영업비용", otherOpex),
     row("영업이익", opIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("영업외손익", nonOp),
-    ...(hasInterest
-      ? [
-          row("순이자손익", intNet, { depth: 2 }),
-          row("이자수익", intInc, { depth: 3 }),
-          row("(−) 이자비용", intExp, { depth: 3 }),
-        ]
-      : []),
+    ...(hasInterest ? [row("순이자손익(−)", netIntCost, { depth: 2 })] : []),
     row("세전이익", pretax, { depth: 0, isSubtotal: true }),
     row("(−) 법인세비용", tax),
     row("계속사업이익", contOps, { depth: 0, isSubtotal: true }),
-    row("중단사업손익", disc),
-    row("소수주주지분", nci),
     row("당기순이익", netIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("기본 EPS", epsBasic, { numberFormat: "eps" }),
     row("희석 EPS", epsDil, { numberFormat: "eps" }),
