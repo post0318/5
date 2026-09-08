@@ -160,7 +160,6 @@ export function FinancialsTable({
                       className="text-muted-foreground px-3 pt-1 pb-0.5 text-right text-xs font-normal"
                     >
                       단위: {detail.unit || "USD"} 백만
-                      {view === "is" ? " (EPS·비율 제외)" : ""}
                     </th>
                   </tr>
                 )}
