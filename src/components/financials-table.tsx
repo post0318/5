@@ -135,7 +135,11 @@ export function FinancialsTable({
       </div>
 
       <div className="space-y-6">
-        {shown.map((section) => (
+        {shown.map((section) => {
+          const noteStart = section.items.findIndex(
+            (i) => i.accountName === "[ 주석 항목 ]",
+          );
+          return (
           <div key={section.title} className="overflow-x-auto">
             <table
               className="w-full table-fixed border-separate border-spacing-0 text-sm"
@@ -209,11 +213,17 @@ export function FinancialsTable({
                     item.isSubtotal &&
                     periods.every((p) => item.values[p.label] == null);
                   const emphasis = item.isHighlight;
+                  // 주석 항목: EBITDA 행부터 홀수행 옅은 배경
+                  const zebra =
+                    noteStart >= 0 &&
+                    idx > noteStart &&
+                    (idx - noteStart - 1) % 2 === 0;
                   return (
                     <tr
                       key={`${idx}-${item.accountId ?? item.accountName}`}
                       className={cn(
                         emphasis && (useDetail ? EM_BG : "bg-highlight-row"),
+                        !emphasis && zebra && "bg-muted/40",
                         item.isSubtotal && "font-semibold",
                         item.italic && "text-muted-foreground italic",
                       )}
@@ -225,7 +235,9 @@ export function FinancialsTable({
                             ? useDetail
                               ? EM_BG
                               : "bg-highlight-row"
-                            : "bg-background",
+                            : zebra
+                              ? "bg-muted/40"
+                              : "bg-background",
                         )}
                         style={{ paddingLeft: `${0.75 + item.depth * 0.85}rem` }}
                       >
@@ -242,7 +254,10 @@ export function FinancialsTable({
                               "tnum border-b px-3 py-1.5 text-right whitespace-nowrap",
                               neg && "text-down",
                               v == null && "text-muted-foreground",
-                              ltm && !emphasis && !labelOnly && "bg-foreground/10",
+                              ltm &&
+                                !emphasis &&
+                                !labelOnly &&
+                                "border-b-white/60 bg-foreground/10",
                             )}
                           >
                             {labelOnly
@@ -267,7 +282,8 @@ export function FinancialsTable({
               </tbody>
             </table>
           </div>
-        ))}
+          );
+        })}
         {shown.length === 0 && (
           <p className="text-muted-foreground text-sm">해당 재무제표가 없습니다.</p>
         )}

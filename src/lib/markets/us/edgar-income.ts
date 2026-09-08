@@ -259,9 +259,9 @@ export function buildUsIncome(
     row("매출총이익률", pct(grossProfit), { numberFormat: "pct" }),
     row("영업이익률", pct(opIncome), { numberFormat: "pct" }),
     row("순이익률", pct(netIncome), { numberFormat: "pct" }),
+    row("감가상각비", da),
     row("배당금 총액", divPaid),
     row("성장률 (YoY)", yoy(divPaid), { numberFormat: "pct", depth: 2 }),
-    row("감가상각비", da),
   ];
 
   return {
