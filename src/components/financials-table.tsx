@@ -181,6 +181,22 @@ export function FinancialsTable({
           const noteStart = section.items.findIndex(
             (i) => i.accountName === "[ 주석 항목 ]",
           );
+          // 재무분석(standalone): 그룹(헤더)별로 본문 짝수행에 옅은 배경
+          const zebraSet = new Set<number>();
+          if (standalone) {
+            let n = 0;
+            section.items.forEach((it, i) => {
+              if (!it.accountName) return; // 공백행
+              const isHead =
+                it.isSubtotal && periods.every((p) => it.values[p.label] == null);
+              if (isHead) {
+                n = 0; // 그룹 헤더 → 카운터 리셋
+                return;
+              }
+              n += 1;
+              if (n % 2 === 0) zebraSet.add(i);
+            });
+          }
           return (
           <div key={section.title} className="overflow-x-auto">
             <table
@@ -261,11 +277,13 @@ export function FinancialsTable({
                   const emphasis = item.isHighlight;
                   // 총괄 요약: 모든 본문 짝수행 옅은 배경 / 주석 항목: EBITDA 행부터
                   const isSummary = detailedSummary != null && detail === detailedSummary;
-                  const zebra = isSummary
-                    ? idx % 2 === 1
-                    : noteStart >= 0 &&
-                      idx > noteStart &&
-                      (idx - noteStart - 1) % 2 === 0;
+                  const zebra = standalone
+                    ? zebraSet.has(idx)
+                    : isSummary
+                      ? idx % 2 === 1
+                      : noteStart >= 0 &&
+                        idx > noteStart &&
+                        (idx - noteStart - 1) % 2 === 0;
                   return (
                     <tr
                       key={`${idx}-${item.accountId ?? item.accountName}`}

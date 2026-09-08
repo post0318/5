@@ -236,18 +236,6 @@ export function buildUsIncome(
     if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
   const divPaid = val(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
 
-  // 전기 대비 증가율 (연간 모드만 — 분기 QoQ 는 의미 약함)
-  const yoy = (a: Record<string, number | null>): Record<string, number | null> => {
-    const out = blank();
-    if (quarterly) return out;
-    for (let i = 1; i < labels.length; i++) {
-      const c = a[labels[i]];
-      const p = a[labels[i - 1]];
-      if (c != null && p != null && p !== 0) out[labels[i]] = ((c - p) / Math.abs(p)) * 100;
-    }
-    return out;
-  };
-
   const row = (
     label: string,
     values: Record<string, number | null>,
@@ -283,12 +271,8 @@ export function buildUsIncome(
     { accountName: "", accountId: "is:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() },
     row("[ 주석 항목 ]", blank(), { depth: 0, isSubtotal: true }),
     row("EBITDA", ebitda),
-    row("성장률 (YoY)", yoy(ebitda), { numberFormat: "pct", depth: 2 }),
-    row("EBIT (영업이익)", opIncome),
-    row("성장률 (YoY)", yoy(opIncome), { numberFormat: "pct", depth: 2 }),
     row("감가상각비", da),
     row("배당금 총액", divPaid),
-    row("성장률 (YoY)", yoy(divPaid), { numberFormat: "pct", depth: 2 }),
   ];
 
   return {

@@ -781,9 +781,6 @@ export function StockAnalysis({
                     })
                     .map((f) => (
                     <li key={f.id} className="flex items-center gap-3 py-2 text-sm">
-                      <Badge variant="secondary" className="tnum shrink-0">
-                        {f.type}
-                      </Badge>
                       <span className="text-muted-foreground tnum shrink-0 text-xs">
                         {f.date}
                       </span>

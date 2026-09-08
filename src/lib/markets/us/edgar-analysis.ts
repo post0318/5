@@ -5,10 +5,12 @@ import type { QuoteBar } from "../types";
 import {
   annualByYear,
   annualEnds,
+  days,
   entriesOf,
   firstConcept,
   instantByYear,
   latestInstant,
+  shiftYear,
   splitFactorsByYear,
   ttmOf,
 } from "./edgar-series";
@@ -104,21 +106,6 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const flowM = flow;
   /** 전체 연도 시계열 (CAGR용). */
   const fullAnnual = (concepts: string[], unit = "USD") => mergedAnnual(concepts, unit);
-  // 잔액값: FY말 → 그 해(개념 병합), LTM → 최신(개념 병합)
-  const stockM = (concepts: string[]): Record<string, number | null> => {
-    const maps = concepts.map((c) => instantByYear(entriesOf(facts, c)));
-    const o = blank();
-    for (const y of years)
-      for (const m of maps) {
-        const v = m.get(y);
-        if (v != null) { o[`${y}Y`] = v; break; }
-      }
-    for (const c of concepts) {
-      const l = latestInstant(entriesOf(facts, c));
-      if (l != null) { o[LTM] = l; break; }
-    }
-    return o;
-  };
   // 잔액값 (단일 개념 우선 목록)
   const stock = (concepts: string[]): Record<string, number | null> => {
     const e = firstConcept(facts, concepts);
@@ -198,13 +185,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const curLiab = stock(["LiabilitiesCurrent"]);
   const debt = stockSum(DEBT_C);
   const cash = stockSum(CASH_C);
-  const ar = stockM(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]);
   const inv = stock(["InventoryNet"]);
-  const ap = stockM([
-    "AccountsPayableCurrent",
-    "AccountsPayableTradeCurrent",
-    "AccountsPayableAndAccruedLiabilitiesCurrent",
-  ]);
   const retained = stock(["RetainedEarningsAccumulatedDeficit"]);
   const cogs = flowM(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
   // 매출총이익: 공시 태그(GrossProfit) 없으면 매출 − 매출원가 (메타 등)
@@ -440,18 +421,50 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     for (const l of labels) if (cogs[l] != null) o[l] = Math.abs(cogs[l]!);
     return o;
   })();
+  // 회전일수용 잔액 = (기초 + 기말) / 2 평균 — 블룸버그 방식.
+  // FY: 전년말·당해말 평균 / LTM: 최근 분기말·1년 전 동시점 평균 (TTM 흐름과 짝).
+  const avgStock = (concepts: string[]): Record<string, number | null> => {
+    const full = new Map<number, number>();
+    for (const c of concepts)
+      for (const [y, v] of instantByYear(entriesOf(facts, c)))
+        if (!full.has(y)) full.set(y, v);
+    const o = blank();
+    for (const y of years) {
+      const cur = full.get(y);
+      const prev = full.get(y - 1);
+      o[`${y}Y`] = cur != null && prev != null ? (cur + prev) / 2 : (cur ?? null);
+    }
+    const insts = concepts
+      .flatMap((c) => entriesOf(facts, c))
+      .filter((e) => !e.start)
+      .sort((a, b) => (a.end < b.end ? 1 : -1));
+    if (insts.length) {
+      const latest = insts[0];
+      const target = shiftYear(latest.end, -1);
+      const prevE = insts.find((e) => Math.abs(days(e.end, target)) <= 25);
+      o[LTM] = prevE ? (latest.val + prevE.val) / 2 : latest.val;
+    }
+    return o;
+  };
+  const arAvg = avgStock(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]);
+  const invAvg = avgStock(["InventoryNet"]);
+  const apAvg = avgStock([
+    "AccountsPayableCurrent",
+    "AccountsPayableTradeCurrent",
+    "AccountsPayableAndAccruedLiabilitiesCurrent",
+  ]);
   const dso = (() => {
     const o = blank();
-    for (const l of labels) if (ar[l] != null && revenue[l]) o[l] = (ar[l]! / revenue[l]!) * 365;
+    for (const l of labels) if (arAvg[l] != null && revenue[l]) o[l] = (arAvg[l]! / revenue[l]!) * 365;
     return o;
   })();
   // 재고 태그가 없으면 재고 0 (플랫폼·서비스) → DIO 0, CCC 계산 가능
   const dio = (() => {
     const o = blank();
-    for (const l of labels) if (cogsAbs[l]) o[l] = ((inv[l] ?? 0) / cogsAbs[l]!) * 365;
+    for (const l of labels) if (cogsAbs[l]) o[l] = ((invAvg[l] ?? 0) / cogsAbs[l]!) * 365;
     return o;
   })();
-  const dpo = ratio(ap, cogsAbs, 365);
+  const dpo = ratio(apAvg, cogsAbs, 365);
   const ccc = combine3(dso, dio, dpo);
   const altZ = (() => {
     const o = blank();
