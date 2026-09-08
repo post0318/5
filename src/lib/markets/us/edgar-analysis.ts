@@ -166,10 +166,24 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const revFull = fullAnnual(REV);
   const da = flow(DA);
   const ocf = flow(["NetCashProvidedByUsedInOperatingActivities"]);
-  const capexRaw = flow([
+  const CAPEX_C = [
     "PaymentsToAcquirePropertyPlantAndEquipment",
     "PaymentsToAcquireProductiveAssets",
-  ]);
+  ];
+  const capexRaw = flow(CAPEX_C);
+  // 1년 성장률 첫 해(표시 첫 컬럼) 보정용 전체 시계열 — 전년 값 소스
+  const opIncFull = fullAnnual(["OperatingIncomeLoss"]);
+  const niFull = fullAnnual(["NetIncomeLoss"]);
+  const daFull = fullAnnual(DA);
+  const ocfFull = fullAnnual(["NetCashProvidedByUsedInOperatingActivities"]);
+  const capexFull = fullAnnual(CAPEX_C);
+  const ebitdaFull = new Map<number, number>();
+  for (const [y, v] of opIncFull) ebitdaFull.set(y, v + (daFull.get(y) ?? 0));
+  const fcfFull = new Map<number, number>();
+  for (const [y, v] of ocfFull) {
+    const cx = capexFull.get(y);
+    if (cx != null) fcfFull.set(y, v - Math.abs(cx));
+  }
   const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const intExp = flowM(INT_EXP);
@@ -290,11 +304,16 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     for (const l of labels) o[l] = l === LTM ? curMktcap : mktcap[l];
     return o;
   };
-  const yoy1 = (a: Record<string, number | null>) => {
+  // 1년 성장률: 표시 첫 해(예 2021)는 직전 컬럼이 없으므로
+  // companyfacts 전체 시계열(이미 받아온 payload)에서 전년(2020) 값을 끌어와 채운다.
+  const yoy1 = (a: Record<string, number | null>, full?: Map<number, number>) => {
     const o = blank();
-    for (let i = 1; i < labels.length; i++) {
+    for (let i = 0; i < labels.length; i++) {
       const c = a[labels[i]];
-      const p = a[labels[i - 1]];
+      let p = i >= 1 ? a[labels[i - 1]] : null;
+      if (p == null && full && labels[i] !== LTM) {
+        p = full.get(Number(labels[i].replace("Y", "")) - 1) ?? null;
+      }
       if (c != null && p != null && p !== 0) o[labels[i]] = ((c - p) / Math.abs(p)) * 100;
     }
     return o;
@@ -520,12 +539,12 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     })(), "pct"),
     SP("5"),
     HEAD("성장률 (1년 YoY)"),
-    R("매출", yoy1(revenue), "pct"),
-    R("EBITDA", yoy1(ebitda), "pct"),
-    R("영업이익", yoy1(opIncome), "pct"),
-    R("순이익", yoy1(netIncome), "pct"),
-    R("희석 EPS", yoy1(eps), "pct"),
-    R("잉여현금흐름", yoy1(fcf), "pct"),
+    R("매출", yoy1(revenue, revFull), "pct"),
+    R("EBITDA", yoy1(ebitda, ebitdaFull), "pct"),
+    R("영업이익", yoy1(opIncome, opIncFull), "pct"),
+    R("순이익", yoy1(netIncome, niFull), "pct"),
+    R("희석 EPS", yoy1(eps, epsFull), "pct"),
+    R("잉여현금흐름", yoy1(fcf, fcfFull), "pct"),
     SP("6"),
     HEAD("성장률 (CAGR)"),
     R("매출 3년", cagr(revFull, 3), "pct"),
