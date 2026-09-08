@@ -232,6 +232,7 @@ export function FinancialsTable({
                       className={cn(
                         emphasis && (useDetail ? EM_BG : "bg-highlight-row"),
                         !emphasis && zebra && "bg-muted/40",
+                        !emphasis && !zebra && item.isSubtotal && !labelOnly && "bg-muted/50",
                         item.isSubtotal && "font-semibold",
                         item.italic && "text-muted-foreground italic",
                       )}
@@ -245,7 +246,9 @@ export function FinancialsTable({
                               : "bg-highlight-row"
                             : zebra
                               ? "bg-muted/40"
-                              : "bg-background",
+                              : item.isSubtotal && !labelOnly
+                                ? "bg-muted/50"
+                                : "bg-background",
                         )}
                         style={{ paddingLeft: `${0.75 + item.depth * 0.85}rem` }}
                       >
