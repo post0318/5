@@ -97,14 +97,24 @@ export function FinancialsTable({
           <div key={section.title} className="overflow-x-auto">
             <table className="w-full min-w-[640px] border-separate border-spacing-0 text-sm">
               <thead>
-                <tr>
-                  <th className="bg-muted/50 text-muted-foreground sticky left-0 z-10 border-b px-3 py-2 text-left font-medium">
+                <tr className={cn(useCfDetail && "bg-muted")}>
+                  <th
+                    className={cn(
+                      "sticky left-0 z-10 border-b px-3 py-2 text-left font-medium",
+                      useCfDetail
+                        ? "text-foreground bg-muted"
+                        : "text-muted-foreground bg-muted/50",
+                    )}
+                  >
                     {section.title}
                   </th>
                   {periods.map((p) => (
                     <th
                       key={p.label}
-                      className="text-muted-foreground border-b px-3 py-2 text-right font-medium whitespace-nowrap"
+                      className={cn(
+                        "border-b px-3 py-2 text-right font-medium whitespace-nowrap",
+                        useCfDetail ? "text-foreground" : "text-muted-foreground",
+                      )}
                     >
                       {p.label}
                     </th>
