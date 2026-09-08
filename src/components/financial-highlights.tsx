@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import type {
   FinancialHighlights,
@@ -7,7 +8,9 @@ import type {
   HighlightRow,
 } from "@/lib/markets/us/edgar-highlights";
 
-function fmt(v: number | null, format: "money" | "pct" | "eps"): string {
+type Scale = "million" | "billion";
+
+function fmt(v: number | null, format: "money" | "pct" | "eps", scale: Scale): string {
   if (v == null || !Number.isFinite(v)) return "–";
   if (format === "eps") {
     return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -15,105 +18,140 @@ function fmt(v: number | null, format: "money" | "pct" | "eps"): string {
   if (format === "pct") {
     return v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   }
-  // money — 백만 단위
-  return (v / 1e6).toLocaleString("en-US", {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
+  const div = scale === "billion" ? 1e9 : 1e6;
+  return (v / div).toLocaleString("en-US", {
+    minimumFractionDigits: scale === "billion" ? 2 : 1,
+    maximumFractionDigits: scale === "billion" ? 2 : 1,
   });
+}
+
+function useIsMobile(): boolean {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 640px)");
+    const on = () => setMobile(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return mobile;
 }
 
 function HighlightGrid({
   columns,
   rows,
   showHeader = true,
+  scale,
+  mobile,
 }: {
   columns: HighlightColumn[];
   rows: HighlightRow[];
   showHeader?: boolean;
+  scale: Scale;
+  mobile: boolean;
 }) {
+  const emBg = "bg-[oklch(0.94_0.045_67)] dark:bg-[oklch(0.32_0.05_55)]";
   return (
-    <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-[15px]">
-        <colgroup>
-          <col className="w-[150px]" />
-          {columns.map((c) => (
-            <col key={c.key} />
-          ))}
-        </colgroup>
-        {showHeader && (
-          <thead>
-            <tr>
-              <th className="bg-muted/50 sticky left-0 z-10 border-b px-3 py-2 text-left" />
-              {columns.map((c) => (
-                <th
-                  key={c.key}
+    <table
+      className={cn(
+        "w-full table-fixed border-separate border-spacing-0",
+        mobile ? "text-[13px]" : "min-w-[1040px] text-[15px]",
+      )}
+    >
+      <colgroup>
+        <col className={mobile ? "w-[38%]" : "w-[150px]"} />
+        {columns.map((c) => (
+          <col key={c.key} />
+        ))}
+      </colgroup>
+      {showHeader && (
+        <thead>
+          <tr>
+            <th className="bg-muted/50 sticky left-0 z-10 border-b px-2 py-2 text-left sm:px-3" />
+            {columns.map((c) => (
+              <th
+                key={c.key}
+                className={cn(
+                  "text-muted-foreground border-b px-2 py-2 text-right font-medium whitespace-nowrap sm:px-3",
+                  c.kind === "estimate" && "text-muted-foreground/70 italic",
+                  c.kind === "ltm" && "bg-muted/40",
+                )}
+              >
+                <div>{c.label}</div>
+                <div className="text-muted-foreground/60 text-[10px] font-normal sm:text-xs">
+                  {c.date.replace(/-/g, "/").slice(2)}
+                </div>
+              </th>
+            ))}
+          </tr>
+        </thead>
+      )}
+      <tbody>
+        {rows.map((r) => {
+          if (r.spacer) {
+            return (
+              <tr key={r.key}>
+                <td colSpan={columns.length + 1} className="h-2.5" />
+              </tr>
+            );
+          }
+          return (
+            <tr
+              key={r.key}
+              className={cn(r.emphasis && "font-semibold", !r.indent && "hover:bg-muted/20")}
+            >
+              <td
+                className={cn(
+                  "sticky left-0 z-10 px-2 py-1.5 sm:px-3",
+                  mobile ? "leading-tight" : "whitespace-nowrap",
+                  r.emphasis ? `${emBg} border-t` : "bg-background",
+                  r.indent
+                    ? "text-muted-foreground/80 pl-4 text-[12px] sm:pl-6 sm:text-sm"
+                    : "text-foreground/90",
+                )}
+              >
+                {r.label}
+              </td>
+              {r.values.map((v, i) => (
+                <td
+                  key={i}
                   className={cn(
-                    "text-muted-foreground border-b px-3 py-2 text-right font-medium whitespace-nowrap",
-                    c.kind === "estimate" && "text-muted-foreground/70 italic",
-                    c.kind === "ltm" && "bg-muted/40",
+                    "tnum px-2 py-1.5 text-right whitespace-nowrap sm:px-3",
+                    r.emphasis && `${emBg} border-t`,
+                    r.indent && "text-muted-foreground/70 text-[12px] sm:text-[13px]",
+                    columns[i]?.kind === "estimate" && "text-muted-foreground/60 italic",
+                    columns[i]?.kind === "ltm" && !r.emphasis && "bg-muted/20",
+                    v != null && v < 0 && !r.indent && "text-destructive",
                   )}
                 >
-                  <div>{c.label}</div>
-                  <div className="text-muted-foreground/60 text-xs font-normal">
-                    {c.date.replace(/-/g, "/").slice(2)}
-                  </div>
-                </th>
+                  {fmt(v, r.format, scale)}
+                </td>
               ))}
             </tr>
-          </thead>
-        )}
-        <tbody>
-            {rows.map((r) => {
-              if (r.spacer) {
-                return (
-                  <tr key={r.key}>
-                    <td colSpan={columns.length + 1} className="h-2.5" />
-                  </tr>
-                );
-              }
-              const emBg = "bg-[oklch(0.94_0.045_67)] dark:bg-[oklch(0.32_0.05_55)]";
-              return (
-                <tr
-                  key={r.key}
-                  className={cn(r.emphasis && "font-semibold", !r.indent && "hover:bg-muted/20")}
-                >
-                  <td
-                    className={cn(
-                      "sticky left-0 z-10 px-3 py-1.5 whitespace-nowrap",
-                      r.emphasis ? `${emBg} border-t` : "bg-background",
-                      r.indent
-                        ? "text-muted-foreground/80 pl-6 text-sm"
-                        : "text-foreground/90",
-                    )}
-                  >
-                    {r.label}
-                  </td>
-                  {r.values.map((v, i) => (
-                    <td
-                      key={i}
-                      className={cn(
-                        "tnum px-3 py-1.5 text-right whitespace-nowrap",
-                        r.emphasis && `${emBg} border-t`,
-                        r.indent && "text-muted-foreground/70 text-[13px]",
-                        columns[i]?.kind === "estimate" && "text-muted-foreground/60 italic",
-                        columns[i]?.kind === "ltm" && !r.emphasis && "bg-muted/20",
-                        v != null && v < 0 && !r.indent && "text-destructive",
-                      )}
-                    >
-                      {fmt(v, r.format)}
-                    </td>
-                  ))}
-                </tr>
-              );
-            })}
-        </tbody>
-      </table>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 
 export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }) {
-  const { columns, rows } = data;
+  const mobile = useIsMobile();
+  const scale: Scale = mobile ? "billion" : "million";
+  const unitLabel = mobile ? "USD 10억" : data.unitLabel;
 
-  // 첫 spacer 기준으로 EV 브릿지 / 손익·현금흐름 분리
+  // 모바일: 전년(직전 FY) · 현재(LTM) · 차년(첫 추정) 3개 컬럼만
+  let columns = data.columns;
+  let rows = data.rows;
+  if (mobile) {
+    const lastFy = data.columns.map((c, i) => (c.kind === "fy" ? i : -1)).filter((i) => i >= 0).pop();
+    const ltm = data.columns.findIndex((c) => c.kind === "ltm");
+    const est = data.columns.findIndex((c) => c.kind === "estimate");
+    const pick = [lastFy, ltm, est].filter((i): i is number => i != null && i >= 0);
+    columns = pick.map((i) => data.columns[i]);
+    rows = data.rows.map((r) => ({ ...r, values: pick.map((i) => r.values[i]) }));
+  }
+
   const splitAt = rows.findIndex((r) => r.spacer);
   const evRows = splitAt >= 0 ? rows.slice(0, splitAt) : rows;
   const flowRows = splitAt >= 0 ? rows.slice(splitAt + 1) : [];
@@ -123,16 +161,22 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h2 className="text-base font-semibold">재무 하이라이트</h2>
         <span className="text-muted-foreground text-xs">
-          단위: {data.unitLabel} · 12개월 결산 · 현재/LTM {data.asOfLtm}
+          단위: {unitLabel} · 12개월 결산 · 현재/LTM {data.asOfLtm}
         </span>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border">
-        <HighlightGrid columns={columns} rows={evRows} />
+      <div className={cn("rounded-lg border", !mobile && "overflow-x-auto")}>
+        <HighlightGrid columns={columns} rows={evRows} scale={scale} mobile={mobile} />
         {flowRows.length > 0 && (
           <>
-            <div className="bg-muted/40 h-2 min-w-[1040px]" />
-            <HighlightGrid columns={columns} rows={flowRows} showHeader={false} />
+            <div className={cn("bg-muted/40 h-2", !mobile && "min-w-[1040px]")} />
+            <HighlightGrid
+              columns={columns}
+              rows={flowRows}
+              showHeader={false}
+              scale={scale}
+              mobile={mobile}
+            />
           </>
         )}
       </div>
