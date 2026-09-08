@@ -170,6 +170,27 @@ export interface TtmFlows {
   opIncome: number | null;
   /** 주당순이익 (희석 우선, 없으면 기본) */
   eps: number | null;
+  /**
+   * 미국(EDGAR) 확장 필드 — 최근 분기(MRQ) 재무상태표 스냅샷 + D&A + 주당배당금.
+   * 시장/야후는 최근 분기 재무상태표 + TTM 흐름으로 멀티플을 계산하는데
+   * 우리 기본 로직은 최근 "연간"만 써서 BPS·PBR·PSR·EV 가 최대 11개월 낡는다.
+   */
+  snapshot?: {
+    /** 스냅샷 기준일 (예: "2026-06-27") */
+    label: string;
+    equity: number | null;
+    liabilities: number | null;
+    cash: number | null;
+    shares: number | null;
+  } | null;
+  /** 감가상각비+무형자산상각비 — 최근 사업연도(연간, PER 과 동일 기준) */
+  daAnnual?: number | null;
+  /** D&A TTM (참고) */
+  daTtm?: number | null;
+  /** 주당배당금 — 최근 사업연도 */
+  dpsAnnual?: { dps: number; label: string } | null;
+  /** 주당배당금 — 최근 12개월(TTM) */
+  dpsTtm?: { dps: number; from: string; to: string } | null;
 }
 
 /** 포워드 컨센서스 (L4). 개인용: yahoo-finance2. */

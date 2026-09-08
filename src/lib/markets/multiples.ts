@@ -85,7 +85,10 @@ export interface MultiplesInput {
 
 export function computeTrailingMultiples(input: MultiplesInput): TrailingMultiples {
   const { market, symbol, quote, annual, quarterly, sharesOutstanding, ttm } = input;
-  const da = input.depreciationAmortisation ?? null;
+  // 미국(EDGAR): 최근분기 재무상태표 스냅샷·D&A 가 있으면 우선 사용.
+  // 없으면(국내 등) 종전대로 최근 "연간" 재무제표에서 뽑는다.
+  const snap = ttm?.snapshot ?? null;
+  const da = input.depreciationAmortisation ?? ttm?.daAnnual ?? null;
   const price = quote.last;
   const quotedMarketCap = quote.marketCap ?? null;
 
@@ -129,25 +132,31 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "売上高",
     "営業収益 (IFRS)",
   ]);
-  const equity = latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
-    "StockholdersEquity",
-    "Stockholders' Equity",
-    "자본총계",
-    "純資産額",
-    "親会社の所有者に帰属する持分",
-    "純資産 / 自己資本",
-  ]);
-  const totalLiabilities = latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
-    "Liabilities",
-    "Total Liabilities",
-    "부채총계",
-  ]);
-  const cash = latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
-    "CashAndCashEquivalentsAtCarryingValue",
-    "Cash & Equivalents",
-    "현금및현금성자산",
-    "기말현금및현금성자산",
-  ]);
+  const equity =
+    snap?.equity ??
+    latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
+      "StockholdersEquity",
+      "Stockholders' Equity",
+      "자본총계",
+      "純資産額",
+      "親会社の所有者に帰属する持分",
+      "純資産 / 自己資本",
+    ]);
+  const totalLiabilities =
+    snap?.liabilities ??
+    latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
+      "Liabilities",
+      "Total Liabilities",
+      "부채총계",
+    ]);
+  const cash =
+    snap?.cash ??
+    latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
+      "CashAndCashEquivalentsAtCarryingValue",
+      "Cash & Equivalents",
+      "현금및현금성자산",
+      "기말현금및현금성자산",
+    ]);
   const opIncome = flowValue(annual, quarterly, [
     "OperatingIncomeLoss",
     "Operating Income",
@@ -159,6 +168,7 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
 
   const shares =
     sharesOutstanding ??
+    snap?.shares ??
     (netIncome != null && epsDiluted ? netIncome / epsDiluted : null);
   const marketCap =
     quotedMarketCap ?? (price != null && shares != null ? price * shares : null);

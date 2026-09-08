@@ -23,7 +23,7 @@ export async function GET(
     const adapter = getAdapter(market);
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
     const yahoo = new URL(request.url).searchParams.get("yahoo");
-    const [ttm, dividend, beta] = await Promise.all([
+    const [ttm, krDividend, beta] = await Promise.all([
       adapter.getTtm ? adapter.getTtm(sym) : Promise.resolve(null),
       market === "kr"
         ? getKrJurirNo(sym)
@@ -34,6 +34,22 @@ export async function GET(
         ? computeKr52wBeta(sym, yahoo).catch(() => null)
         : Promise.resolve(null),
     ]);
+
+    // 미국(EDGAR)은 주당배당금도 TTM 페이로드에 실려 온다 → 국내와 동일 형태로 변환.
+    let dividend = krDividend as {
+      annual: { dps: number; year: number } | null;
+      ttm: { dps: number; from: string; to: string } | null;
+    } | null;
+    if (!dividend && ttm?.dpsAnnual) {
+      dividend = {
+        annual: {
+          dps: ttm.dpsAnnual.dps,
+          year: Number(ttm.dpsAnnual.label.match(/FY(\d{4})/)?.[1]) || 0,
+        },
+        ttm: ttm.dpsTtm ?? null,
+      };
+    }
+
     return ok(
       { ttm, dividend, beta },
       {

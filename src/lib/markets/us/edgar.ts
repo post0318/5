@@ -16,7 +16,9 @@ import {
   type FinancialPeriodType,
   type FinancialStatement,
   type MarketAdapter,
+  type TtmFlows,
 } from "../types";
+import { type FactEntry, latestInstant, ttmFlow } from "./edgar-fundamentals";
 
 const UA =
   process.env.SEC_USER_AGENT ??
@@ -143,6 +145,102 @@ interface CompanyFacts {
       string,
       { label?: string; description?: string; units: Record<string, FactUnitEntry[]> }
     >;
+    dei?: Record<
+      string,
+      { label?: string; description?: string; units: Record<string, FactUnitEntry[]> }
+    >;
+  };
+}
+
+/** companyfacts 에서 개념 후보 중 먼저 존재하는 것의 unit 배열. */
+function factEntries(
+  facts: CompanyFacts,
+  ns: "us-gaap" | "dei",
+  names: string[],
+  units: string[],
+): FactEntry[] | undefined {
+  const bag = facts.facts[ns];
+  if (!bag) return undefined;
+  for (const n of names) {
+    const node = bag[n];
+    if (!node) continue;
+    for (const u of units) if (node.units[u]?.length) return node.units[u] as FactEntry[];
+  }
+  return undefined;
+}
+
+/**
+ * TTM 흐름 + 최근분기 재무상태표 스냅샷 + D&A + 주당배당금 (EDGAR companyfacts).
+ * prd.md §4.1 — 공식 무료 API, 라이선스 무관.
+ */
+function buildUsTtm(facts: CompanyFacts): TtmFlows {
+  const eps = ttmFlow(
+    factEntries(facts, "us-gaap", ["EarningsPerShareDiluted", "EarningsPerShareBasic"], [
+      "USD/shares",
+    ]),
+  );
+  const revenue = ttmFlow(
+    factEntries(
+      facts,
+      "us-gaap",
+      [
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "RevenueFromContractWithCustomerIncludingAssessedTax",
+        "Revenues",
+      ],
+      ["USD"],
+    ),
+  );
+  const netIncome = ttmFlow(factEntries(facts, "us-gaap", ["NetIncomeLoss"], ["USD"]));
+  const opIncome = ttmFlow(factEntries(facts, "us-gaap", ["OperatingIncomeLoss"], ["USD"]));
+  const da = ttmFlow(
+    factEntries(
+      facts,
+      "us-gaap",
+      [
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAmortizationAndAccretionNet",
+        "DepreciationAndAmortization",
+      ],
+      ["USD"],
+    ),
+  );
+  const dps = ttmFlow(
+    factEntries(facts, "us-gaap", ["CommonStockDividendsPerShareDeclared"], ["USD/shares"]),
+  );
+
+  const equity = latestInstant(factEntries(facts, "us-gaap", ["StockholdersEquity"], ["USD"]));
+  const liabilities = latestInstant(factEntries(facts, "us-gaap", ["Liabilities"], ["USD"]));
+  const cash = latestInstant(
+    factEntries(facts, "us-gaap", ["CashAndCashEquivalentsAtCarryingValue"], ["USD"]),
+  );
+  const shares = latestInstant(
+    factEntries(facts, "dei", ["EntityCommonStockSharesOutstanding"], ["shares"]),
+  );
+  const snapLabel =
+    [equity?.end, liabilities?.end, cash?.end].filter(Boolean).sort().pop() ?? "";
+
+  return {
+    periodLabel: eps.ttmLabel || netIncome.ttmLabel || "",
+    netIncome: netIncome.ttm,
+    revenue: revenue.ttm,
+    opIncome: opIncome.ttm,
+    eps: eps.ttm,
+    snapshot: {
+      label: snapLabel,
+      equity: equity?.val ?? null,
+      liabilities: liabilities?.val ?? null,
+      cash: cash?.val ?? null,
+      shares: shares?.val ?? null,
+    },
+    daAnnual: da.annual,
+    daTtm: da.ttm,
+    dpsAnnual:
+      dps.annual != null ? { dps: dps.annual, label: dps.annualLabel } : null,
+    dpsTtm:
+      dps.ttm != null && dps.from && dps.to
+        ? { dps: dps.ttm, from: dps.from, to: dps.to }
+        : null,
   };
 }
 
@@ -321,6 +419,16 @@ export const usEdgarAdapter: MarketAdapter = {
       source: "SEC EDGAR (XBRL companyfacts)",
       sourceUrl: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cik}&type=10-K`,
     };
+  },
+
+  async getTtm(symbol): Promise<TtmFlows | null> {
+    try {
+      const { cik } = await resolveCik(symbol);
+      const facts = await getCompanyFacts(cik);
+      return buildUsTtm(facts);
+    } catch {
+      return null;
+    }
   },
 
   async getFilings(symbol, opts): Promise<Filing[]> {

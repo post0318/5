@@ -206,6 +206,7 @@ export function StockAnalysis({
     da && (da.depreciation != null || da.amortisation != null)
       ? (da.depreciation ?? 0) + (da.amortisation ?? 0)
       : null;
+  const ttmForMultiples = ttmQ.data?.ttm ?? null;
   const multiples = useMemo(() => {
     if (!ov?.quote || !annualForMultiples.data) return ov?.multiples ?? null;
     return computeTrailingMultiples({
@@ -216,15 +217,17 @@ export function StockAnalysis({
       quarterly: null,
       sharesOutstanding: ov.quote.sharesOutstanding ?? null,
       depreciationAmortisation: daTotal,
+      // 미국(EDGAR): 최근분기 재무상태표·D&A·EPS(TTM) 스냅샷 → BPS·PBR·PSR·EV 정확도
+      ttm: ttmForMultiples,
     });
-  }, [ov, annualForMultiples.data, market, daTotal]);
+  }, [ov, annualForMultiples.data, market, daTotal, ttmForMultiples]);
   const multiplesFallback =
     annualForMultiples.isLoading ? "…" : annualForMultiples.isError ? "n/a" : "-";
   const ccy = ov?.quote?.currency ?? "USD";
   const price = ov?.quote?.last ?? null;
 
-  // ── 트레일링PER (TTM) ────────────────────────────────────────────
-  // 국내: DART 자체 TTM. 미국: Yahoo trailingPE, 없으면 자체 TTM.
+  // ── PER(TTM) · EPS(TTM) ─────────────────────────────────────────
+  // 국내: DART 자체 TTM(직전연간 + 당기누적 − 전년동기). 미국: EDGAR 동일 방식.
   const ttm = ttmQ.data?.ttm ?? null;
   const ttmEps =
     ttm?.eps != null && ttm.eps > 0
@@ -233,38 +236,38 @@ export function StockAnalysis({
         ? ttm.netIncome / multiples.inputs.shares
         : null;
   const ownTtmPer = price != null && ttmEps ? price / ttmEps : null;
-  const trailingPer =
-    market === "kr" ? ownTtmPer : (ov?.consensus?.trailingPer ?? ownTtmPer);
+  const trailingPer = ownTtmPer ?? ov?.consensus?.trailingPer ?? null;
 
-  // ── 추정PER — 당해년도 컨센서스 추정 EPS 기준 ──
-  // 국내: 네이버(FnGuide) 컨센서스. 해외: 야후 earningsTrend, 폴백 forwardPE.
+  // ── 추정PER ─────────────────────────────────────────────────────
+  // 국내: 네이버(FnGuide) 당해년도 컨센서스. 미국: 야후 차기 회계연도(Forward).
+  //   (미국은 당해 추정 EPS ≈ TTM 이라 당해 기준이면 PER(TTM)과 중복되어 차기로 잡음)
   const nvCons = naverQ.data?.consensus ?? null;
-  const yhEstEps =
-    ov?.consensus?.estimates?.find((e) => e.period.startsWith("당해"))?.epsAvg ??
-    ov?.consensus?.estimates?.[0]?.epsAvg ??
+  const fwdEstEps =
+    ov?.consensus?.estimates?.find((e) => e.period.startsWith("차년"))?.epsAvg ??
     null;
-  const estEps = market === "kr" ? nvCons?.estEps ?? null : yhEstEps;
+  const estEps = market === "kr" ? (nvCons?.estEps ?? null) : fwdEstEps;
   const estPer =
     market === "kr"
-      ? nvCons?.estPer ??
-        (price != null && estEps != null && estEps > 0 ? price / estEps : null)
-      : price != null && yhEstEps != null && yhEstEps > 0
-        ? price / yhEstEps
-        : (ov?.consensus?.forwardPer ?? null);
+      ? (nvCons?.estPer ??
+        (price != null && estEps != null && estEps > 0 ? price / estEps : null))
+      : (ov?.consensus?.forwardPer ??
+        (price != null && fwdEstEps != null && fwdEstEps > 0
+          ? price / fwdEstEps
+          : null));
 
-  // DPS — 국내는 금융위 배당정보 API (전년 회계연도), DPS(TTM)은 최근 12개월. 해외는 yahoo
+  // DPS — 국내: 금융위 배당정보 API. 미국: EDGAR CommonStockDividendsPerShareDeclared.
+  //   둘 다 DPS(전년 회계연도) + DPS(TTM, 최근 12개월).
   const dps =
-    market === "kr"
-      ? (ttmQ.data?.dividend?.annual?.dps ?? null)
-      : (ov?.consensus?.dividendPerShare ?? null);
-  const dpsTtm = market === "kr" ? (ttmQ.data?.dividend?.ttm?.dps ?? null) : null;
+    (ttmQ.data?.dividend?.annual?.dps ?? null) ??
+    (market !== "kr" ? (ov?.consensus?.dividendPerShare ?? null) : null);
+  const dpsTtm = ttmQ.data?.dividend?.ttm?.dps ?? null;
   // 배당수익률 = TTM 주당배당금 / 현재가. 소수 비율(0.012 = 1.2%)로 통일 (<Percent>가 ×100)
   const divYield =
-    market === "kr"
-      ? price != null && dpsTtm != null && price > 0
-        ? dpsTtm / price
-        : null
-      : ((ov?.consensus?.dividendYield ?? null) as number | null);
+    price != null && dpsTtm != null && price > 0
+      ? dpsTtm / price
+      : market !== "kr"
+        ? ((ov?.consensus?.dividendYield ?? null) as number | null)
+        : null;
 
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
   const metrics: { label: string; node: React.ReactNode }[] = [
@@ -288,12 +291,7 @@ export function StockAnalysis({
     },
     {
       label: "DPS(TTM)",
-      node:
-        market === "kr" ? (
-          <Money value={dpsTtm} currency={ccy} fallback="-" />
-        ) : (
-          <span className="text-muted-foreground">-</span>
-        ),
+      node: <Money value={dpsTtm} currency={ccy} fallback="-" />,
     },
     {
       label: "배당수익률",
@@ -521,10 +519,17 @@ export function StockAnalysis({
                       PER·PBR·PSR·EPS·BPS·PER(TTM)·EPS(TTM)·EV/EBITDA : DART / DPS·DPS(TTM)·배당수익률 :
                       금융위원회 주식배당정보
                     </>
+                  ) : market === "us" ? (
+                    <>
+                      PER·EPS = 최근 연간 공시(SEC EDGAR) + 현재가 자체 계산 ·
+                      PER(TTM)·EPS(TTM)·PBR·BPS·PSR·EV/EBITDA·DPS·DPS(TTM)·배당수익률 = SEC EDGAR
+                      (최근 분기 재무상태표 + TTM, 한국과 동일 누적 방식) · 추정PER(차기 회계연도)·목표주가·투자의견 =
+                      yahoo-finance2 (개인용)
+                    </>
                   ) : (
                     <>
-                      PER·PBR·PSR·EPS·BPS = 최근 연간 공시 재무(SEC EDGAR / EDINET) + 현재가 자체 계산 ·
-                      PER(TTM)·EPS(TTM)·추정PER·DPS·배당수익률·52주 베타 = yahoo-finance2 (개인용) ·
+                      PER·PBR·PSR·EPS·BPS = 최근 연간 공시 재무(EDINET) + 현재가 자체 계산 ·
+                      PER(TTM)·EPS(TTM)·추정PER·DPS·배당수익률 = yahoo-finance2 (개인용) ·
                       EV/EBITDA = EV/EBIT 근사
                     </>
                   )}
