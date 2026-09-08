@@ -91,8 +91,8 @@ export function FinancialsTable({
             : null;
   const useDetail = detail != null;
   const mobile = useIsMobile();
-  // 모바일 재무제표 탭: 현재 기준 최근 3기(현재+전년+전전년)만, 통화 10억 단위
-  const mobileDetail = mobile && useDetail && !standalone;
+  // 모바일 재무제표·재무분석: 최근 3기(현재+전년+전전년)만, 가로 스크롤 없이 열 축소
+  const mobileDetail = mobile && useDetail;
   const allPeriods = useDetail ? detail.periods : statement.periods;
   const periods = mobileDetail ? allPeriods.slice(-3) : allPeriods;
 
