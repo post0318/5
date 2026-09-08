@@ -289,12 +289,15 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     for (const l of labels) if (a[l] != null && shares[l]) o[l] = a[l]! / shares[l]!;
     return adjPerShare(o); // 분모(주식수)가 소급 재작성 안 된 과거 연도 → 분할 계수로 환산
   };
-  // CAGR: 전체 연도 시계열에서 각 컬럼 대비 n년 전 값
-  const cagr = (full: Map<number, number>, n: number) => {
+  // CAGR: 전체 연도 시계열에서 각 컬럼 대비 n년 전 값.
+  // 현재/LTM 컬럼은 분자를 최근 FY 가 아닌 TTM 값으로 (없으면 최근 FY) → 마지막 FY 열과 중복 방지.
+  const cagr = (full: Map<number, number>, n: number, ltm?: number | null) => {
     const o = blank();
+    const lastY = years.at(-1) ?? 0;
     for (const p of periods) {
-      const endY = p.label === LTM ? (years.at(-1) ?? 0) : p.fiscalYear;
-      const cur = full.get(endY);
+      const isLtm = p.label === LTM;
+      const endY = isLtm ? lastY : p.fiscalYear;
+      const cur = isLtm ? (ltm ?? full.get(endY) ?? null) : (full.get(endY) ?? null);
       const base = full.get(endY - n);
       if (cur != null && base != null && base > 0 && cur > 0)
         o[p.label] = (Math.pow(cur / base, 1 / n) - 1) * 100;
@@ -378,8 +381,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   }
   const evEbitda = ratio(evV, ebitda);
   // PEG: 분모는 3년(부족 시 2년) EPS CAGR% — 1년 YoY 는 변동이 커 왜곡 심함
-  const epsCagr3 = cagr(epsFull, 3);
-  const epsCagr2 = cagr(epsFull, 2);
+  const epsCagr3 = cagr(epsFull, 3, eps[LTM]);
+  const epsCagr2 = cagr(epsFull, 2, eps[LTM]);
   const peg = blank();
   for (const l of labels) {
     const g = epsCagr3[l] ?? epsCagr2[l];
@@ -584,12 +587,12 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("잉여현금흐름", yoy1(fcf, fcfFull), "pct"),
     SP("6"),
     HEAD("성장률 (CAGR)"),
-    R("매출액 3년", cagr(revFull, 3), "pct"),
-    R("매출액 5년", cagr(revFull, 5), "pct"),
-    R("EPS 3년", cagr(epsFull, 3), "pct"),
-    R("EPS 5년", cagr(epsFull, 5), "pct"),
-    R("주당배당금 3년", cagr(dpsFull, 3), "pct"),
-    R("주당배당금 5년", cagr(dpsFull, 5), "pct"),
+    R("매출액 3년", cagr(revFull, 3, revenue[LTM]), "pct"),
+    R("매출액 5년", cagr(revFull, 5, revenue[LTM]), "pct"),
+    R("EPS 3년", cagr(epsFull, 3, eps[LTM]), "pct"),
+    R("EPS 5년", cagr(epsFull, 5, eps[LTM]), "pct"),
+    R("주당배당금 3년", cagr(dpsFull, 3, dps[LTM]), "pct"),
+    R("주당배당금 5년", cagr(dpsFull, 5, dps[LTM]), "pct"),
   ];
 
   return {
