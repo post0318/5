@@ -387,7 +387,7 @@ export function buildUsHighlights(
     { key: "debt", label: "+ 총부채", format: "money", values: debt },
     { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
-    { key: "revenue", label: "수익", format: "money", values: revenue },
+    { key: "revenue", label: "매출액", format: "money", values: revenue },
     { key: "revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(revenue) },
     { key: "gp", label: "매출총이익", format: "money", values: grossProfit },
     { key: "gp_m", label: "마진 %", format: "pct", indent: true, values: grossProfit.map((v, i) => margin(v, revenue[i])) },
