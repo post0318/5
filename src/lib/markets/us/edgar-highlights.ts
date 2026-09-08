@@ -19,7 +19,7 @@ export interface HighlightColumn {
 export interface HighlightRow {
   key: string;
   label: string;
-  format: "money" | "pct" | "eps";
+  format: "money" | "pct" | "eps" | "mult";
   /** 마진%/증가율% 등 들여쓴 보조행 */
   indent?: boolean;
   /** 소계 강조 (기업가치) */
@@ -34,6 +34,8 @@ export interface FinancialHighlights {
   asOfLtm: string;
   columns: HighlightColumn[];
   rows: HighlightRow[];
+  /** 투자지표(밸류에이션) — 동일 컬럼 */
+  valuationRows: HighlightRow[];
   notes: string[];
   source: string;
 }
@@ -235,6 +237,9 @@ export function buildUsHighlights(
     capex: annualSeries(
       unitEntries(facts, "PaymentsToAcquirePropertyPlantAndEquipment", "USD"),
     ),
+    dps: annualSeries(
+      unitEntries(facts, "CommonStockDividendsPerShareDeclared", "USD/shares"),
+    ),
   };
   const E = {
     revenue: entriesAny(facts, REVENUE),
@@ -249,8 +254,10 @@ export function buildUsHighlights(
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
     ocf: unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
     capex: unitEntries(facts, "PaymentsToAcquirePropertyPlantAndEquipment", "USD"),
+    dps: unitEntries(facts, "CommonStockDividendsPerShareDeclared", "USD/shares"),
   };
   const cashE = unitEntries(facts, "CashAndCashEquivalentsAtCarryingValue", "USD");
+  const equityE = unitEntries(facts, "StockholdersEquity", "USD");
   const mSecCurE = entriesAny(facts, ["MarketableSecuritiesCurrent", "ShortTermInvestments"]);
   const mSecNonCurE = entriesAny(facts, [
     "MarketableSecuritiesNoncurrent",
@@ -285,12 +292,16 @@ export function buildUsHighlights(
   const preferred = blank();
   const debt = blank();
   const ev = blank();
+  const equity = blank();
+  const priceByCol = blank();
 
   columns.forEach((col, i) => {
     if (col.kind === "estimate") return;
     const asOf = col.date; // 재무상태표 기준일 (LTM = 최근 분기말)
     const isLtm = col.kind === "ltm";
     const price = isLtm ? (lastBar?.close ?? null) : closeOnOrBefore(bars, asOf);
+    priceByCol[i] = price;
+    equity[i] = instantAt(equityE, asOf);
     // 시총용 주식수: LTM 은 현재(가장 최근) 발행주식수, 과거는 기말 주식수
     const shares = isLtm
       ? (instantAt(sharesDeiE, priceDate) ??
@@ -367,6 +378,14 @@ export function buildUsHighlights(
     if (col.kind === "ltm") return ttm(E.eps);
     return annualAt(S.eps, Number(col.key.slice(2)));
   });
+  const dps = columns.map((col) => {
+    if (col.kind === "estimate") return null;
+    if (col.kind === "ltm") return ttm(E.dps);
+    return annualAt(S.dps, Number(col.key.slice(2)));
+  });
+  const divYield = dps.map((d, i) =>
+    d != null && priceByCol[i] != null && priceByCol[i]! > 0 ? (d / priceByCol[i]!) * 100 : null,
+  );
 
   // ── 현금흐름 ────────────────────────────────────────────────────
   const ocf = columns.map((col) => flowVal(S.ocf, E.ocf, col));
@@ -396,10 +415,36 @@ export function buildUsHighlights(
     { key: "ni_m", label: "마진 %", format: "pct", indent: true, values: netIncome.map((v, i) => margin(v, revenue[i])) },
     { key: "eps", label: "EPS (희석)", format: "eps", values: eps },
     { key: "eps_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(eps) },
+    { key: "dps", label: "DPS", format: "eps", values: dps },
+    { key: "divyield", label: "배당수익률 %", format: "pct", indent: true, values: divYield },
     { key: "sp2", label: "", format: "money", spacer: true, values: blank() },
     { key: "ocf", label: "영업활동 현금흐름", format: "money", values: ocf },
     { key: "capex", label: "자본지출", format: "money", values: capex },
     { key: "fcf", label: "잉여현금흐름", format: "money", values: fcf },
+  ];
+
+  // ── 투자지표 (밸류에이션) ───────────────────────────────────────
+  const ltmIdx = columns.findIndex((c) => c.kind === "ltm");
+  const curMcap = ltmIdx >= 0 ? marketCap[ltmIdx] : null;
+  const ratio = (num: number | null, den: number | null): number | null =>
+    num != null && den != null && den > 0 ? num / den : null;
+  const per = columns.map((col, i) =>
+    ratio(col.kind === "estimate" ? curMcap : marketCap[i], netIncome[i]),
+  );
+  const pbr = columns.map((col, i) =>
+    col.kind === "estimate" ? null : ratio(marketCap[i], equity[i]),
+  );
+  const psr = columns.map((col, i) =>
+    ratio(col.kind === "estimate" ? curMcap : marketCap[i], revenue[i]),
+  );
+  const evEbitda = columns.map((col, i) =>
+    col.kind === "estimate" ? null : ratio(ev[i], ebitda[i]),
+  );
+  const valuationRows: HighlightRow[] = [
+    { key: "per", label: "PER", format: "mult", values: per },
+    { key: "pbr", label: "PBR", format: "mult", values: pbr },
+    { key: "psr", label: "PSR", format: "mult", values: psr },
+    { key: "ev_ebitda", label: "EV/EBITDA", format: "mult", values: evEbitda },
   ];
 
   notes.push("실적·재무상태표·현금흐름: SEC EDGAR companyfacts (GAAP 보고치)");
@@ -415,6 +460,7 @@ export function buildUsHighlights(
     asOfLtm: ltmDate,
     columns,
     rows,
+    valuationRows,
     notes,
     source: "SEC EDGAR + yahoo-finance2",
   };

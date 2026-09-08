@@ -10,9 +10,13 @@ import type {
 
 type Scale = "million" | "billion";
 
-function fmt(v: number | null, format: "money" | "pct" | "eps", scale: Scale): string {
+function fmt(
+  v: number | null,
+  format: "money" | "pct" | "eps" | "mult",
+  scale: Scale,
+): string {
   if (v == null || !Number.isFinite(v)) return "–";
-  if (format === "eps") {
+  if (format === "eps" || format === "mult") {
     return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   if (format === "pct") {
@@ -145,13 +149,19 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
   // 모바일: 전년(직전 FY) · 현재(LTM) · 차년(첫 추정) 3개 컬럼만
   let columns = data.columns;
   let rows = data.rows;
+  let valuationRows = data.valuationRows;
   if (mobile) {
     const lastFy = data.columns.map((c, i) => (c.kind === "fy" ? i : -1)).filter((i) => i >= 0).pop();
     const ltm = data.columns.findIndex((c) => c.kind === "ltm");
     const est = data.columns.findIndex((c) => c.kind === "estimate");
     const pick = [lastFy, ltm, est].filter((i): i is number => i != null && i >= 0);
+    const slice = <T extends { values: (number | null)[] }>(r: T) => ({
+      ...r,
+      values: pick.map((i) => r.values[i]),
+    });
     columns = pick.map((i) => data.columns[i]);
-    rows = data.rows.map((r) => ({ ...r, values: pick.map((i) => r.values[i]) }));
+    rows = data.rows.map(slice);
+    valuationRows = data.valuationRows.map(slice);
   }
 
   const splitAt = rows.findIndex((r) => r.spacer);
@@ -182,6 +192,20 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
           </>
         )}
       </div>
+
+      {valuationRows.length > 0 && (
+        <div className="space-y-1.5">
+          <h2 className="text-base font-semibold">투자지표</h2>
+          <div className={cn("rounded-lg border", !mobile && "overflow-x-auto")}>
+            <HighlightGrid
+              columns={columns}
+              rows={valuationRows}
+              scale={scale}
+              mobile={mobile}
+            />
+          </div>
+        </div>
+      )}
 
       <ul className="text-muted-foreground/70 space-y-0.5 text-xs">
         {data.notes.map((n, i) => (

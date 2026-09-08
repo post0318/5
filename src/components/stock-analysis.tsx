@@ -531,7 +531,8 @@ export function StockAnalysis({
                 <FinancialHighlightsTable data={highlightsQ.data.highlights} />
               )}
 
-              {/* 투자지표 — 모바일 2개/행, 데스크톱 4개/행 */}
+              {/* 투자지표 — 미국은 재무 하이라이트의 연도별 표로 대체 */}
+              {market !== "us" && (
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold">투자지표</h3>
                 <div className="grid grid-cols-2 overflow-hidden rounded-lg border text-sm lg:grid-cols-4">
@@ -561,13 +562,6 @@ export function StockAnalysis({
                       PER·PBR·PSR·BPS·PER(TTM)·EV/EBITDA : DART / DPS·DPS(TTM)·배당수익률 :
                       금융위원회 주식배당정보
                     </>
-                  ) : market === "us" ? (
-                    <>
-                      PER = 최근 연간 공시(SEC EDGAR) + 현재가 자체 계산 ·
-                      PER(TTM)·PBR·BPS·PSR·EV/EBITDA·DPS·DPS(TTM)·배당수익률 = SEC EDGAR
-                      (최근 분기 재무상태표 + TTM, 한국과 동일 누적 방식) · 추정PER(차기 회계연도) =
-                      yahoo-finance2 (개인용)
-                    </>
                   ) : (
                     <>
                       PER = 최근 연간 공시(EDINET) + 현재가 자체 계산 ·
@@ -577,6 +571,7 @@ export function StockAnalysis({
                   )}
                 </p>
               </section>
+              )}
 
               {ov.consensus && (
                 <Card>
