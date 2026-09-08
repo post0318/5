@@ -229,7 +229,7 @@ function rowsToStatement(
 
   const periods = [...periodMap.values()]
     .sort((a, b) => b.fiscalYear - a.fiscalYear)
-    .slice(0, 6);
+    .slice(0, 5);
   const periodYears = periods.map((p) => p.fiscalYear);
 
   const sections = SECTION_ORDER.map((title) => {

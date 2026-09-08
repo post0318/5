@@ -381,10 +381,10 @@ export const usEdgarAdapter: MarketAdapter = {
       }
     }
 
-    // 2) 최근 기간 우선, 최대 8개
+    // 2) 최근 기간 우선, 최대 5개 (개요·재무 하이라이트와 동일)
     const periods = [...periodMeta.values()]
       .sort((a, b) => (b.endDate ?? "").localeCompare(a.endDate ?? ""))
-      .slice(0, 8);
+      .slice(0, 5);
     const periodLabels = periods.map((p) => p.label);
 
     // 3) 섹션별 라인 구성

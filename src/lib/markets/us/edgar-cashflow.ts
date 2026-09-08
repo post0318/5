@@ -188,7 +188,7 @@ export function buildUsCashFlow(facts: CompanyFacts): FinancialStatement {
   // 컬럼: 최근 8개 사업연도 + LTM
   const opEntries = firstConcept(facts, BLOCKS[0].total.concepts);
   const fyMap = annualByYear(opEntries);
-  const years = [...fyMap.keys()].sort((a, b) => a - b).slice(-8);
+  const years = [...fyMap.keys()].sort((a, b) => a - b).slice(-5);
   const opAnnualEnds = new Map<number, string>();
   for (const e of opEntries)
     if (e.fp === "FY" && e.start && ANNUAL_FORMS.includes(e.form))
