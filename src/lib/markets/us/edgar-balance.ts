@@ -100,7 +100,6 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
       { label: "이익잉여금(결손금)", concepts: ["RetainedEarningsAccumulatedDeficit"], depth: 1 },
       { label: "기타포괄손익누계액", concepts: ["AccumulatedOtherComprehensiveIncomeLossNetOfTax"], depth: 1 },
       { label: "자기주식", concepts: ["TreasuryStockCommonValue", "TreasuryStockValue"], depth: 1 },
-      { label: "비지배지분", concepts: ["MinorityInterest"], depth: 1 },
       { label: "기타 (자본)", depth: 1, plugOf: "eq" },
       { label: "자본 총계", depth: 0, kind: "total", highlight: true, concepts: EQ },
       { label: "부채와 자본 총계", depth: 0, kind: "total", highlight: true, concepts: LE_TOTAL },
