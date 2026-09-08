@@ -80,7 +80,7 @@ function HighlightGrid({
                 className={cn(
                   "text-muted-foreground border-b px-2 py-2 text-right font-medium whitespace-nowrap sm:px-3",
                   c.kind === "estimate" && "text-muted-foreground/70 italic",
-                  c.kind === "ltm" && "bg-muted/40",
+                  c.kind === "ltm" && "bg-muted text-foreground",
                 )}
               >
                 <div>{c.label}</div>
@@ -126,7 +126,7 @@ function HighlightGrid({
                     r.emphasis && `${emBg} border-t`,
                     r.indent && "text-muted-foreground/70 text-[12px] sm:text-[13px]",
                     columns[i]?.kind === "estimate" && "text-muted-foreground/60 italic",
-                    columns[i]?.kind === "ltm" && !r.emphasis && "bg-muted/20",
+                    columns[i]?.kind === "ltm" && !r.emphasis && "bg-muted/60",
                     v != null && v < 0 && !r.indent && "text-destructive",
                   )}
                 >
