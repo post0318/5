@@ -226,17 +226,47 @@ export function StockAnalysis({
   const ccy = ov?.quote?.currency ?? "USD";
   const price = ov?.quote?.last ?? null;
 
+  const cons = ov?.consensus ?? null;
+
+  // ── 일본: 무료 분기 공시가 없어(四半期報告書 폐지·J-Quants 재무 유료) 자체 TTM 불가.
+  //    지표 정의는 미국과 동일(TTM·최근분기·차기추정)하되 값은 Yahoo 제공치 사용.
+  const jpY =
+    market === "jp" && cons
+      ? {
+          trailingEps: cons.trailingEps,
+          pbr: price != null && cons.bookValue ? price / cons.bookValue : null,
+          bps: cons.bookValue,
+          psr:
+            cons.marketCap != null && cons.revenueTtm
+              ? cons.marketCap / cons.revenueTtm
+              : null,
+          evEbitda:
+            cons.enterpriseValue != null && cons.ebitdaTtm
+              ? cons.enterpriseValue / cons.ebitdaTtm
+              : null,
+          dpsTtm: cons.trailingAnnualDividendRate,
+        }
+      : null;
+
   // ── PER(TTM) · EPS(TTM) ─────────────────────────────────────────
-  // 국내: DART 자체 TTM(직전연간 + 당기누적 − 전년동기). 미국: EDGAR 동일 방식.
+  // 국내: DART 자체 TTM(직전연간 + 당기누적 − 전년동기). 미국: EDGAR 동일 방식. 일본: Yahoo.
   const ttm = ttmQ.data?.ttm ?? null;
   const ttmEps =
-    ttm?.eps != null && ttm.eps > 0
-      ? ttm.eps
-      : ttm?.netIncome != null && multiples?.inputs.shares
-        ? ttm.netIncome / multiples.inputs.shares
-        : null;
+    jpY
+      ? (jpY.trailingEps ?? null)
+      : ttm?.eps != null && ttm.eps > 0
+        ? ttm.eps
+        : ttm?.netIncome != null && multiples?.inputs.shares
+          ? ttm.netIncome / multiples.inputs.shares
+          : null;
   const ownTtmPer = price != null && ttmEps ? price / ttmEps : null;
-  const trailingPer = ownTtmPer ?? ov?.consensus?.trailingPer ?? null;
+  const trailingPer = ownTtmPer ?? cons?.trailingPer ?? null;
+
+  const pbrVal = jpY?.pbr ?? multiples?.pbr ?? null;
+  const bpsVal = jpY?.bps ?? multiples?.bps ?? null;
+  const psrVal = jpY?.psr ?? multiples?.psr ?? null;
+  const evEbitdaVal = jpY?.evEbitda ?? multiples?.evEbitda ?? null;
+  const evEbitdaApprox = jpY ? false : (multiples?.evEbitdaIsApprox ?? true);
 
   // ── 추정PER ─────────────────────────────────────────────────────
   // 국내: 네이버(FnGuide) 당해년도 컨센서스. 미국: 야후 차기 회계연도(Forward).
@@ -259,14 +289,14 @@ export function StockAnalysis({
   //   둘 다 DPS(전년 회계연도) + DPS(TTM, 최근 12개월).
   const dps =
     (ttmQ.data?.dividend?.annual?.dps ?? null) ??
-    (market !== "kr" ? (ov?.consensus?.dividendPerShare ?? null) : null);
-  const dpsTtm = ttmQ.data?.dividend?.ttm?.dps ?? null;
+    (market !== "kr" ? (cons?.dividendPerShare ?? null) : null);
+  const dpsTtm = (ttmQ.data?.dividend?.ttm?.dps ?? null) ?? jpY?.dpsTtm ?? null;
   // 배당수익률 = TTM 주당배당금 / 현재가. 소수 비율(0.012 = 1.2%)로 통일 (<Percent>가 ×100)
   const divYield =
     price != null && dpsTtm != null && price > 0
       ? dpsTtm / price
       : market !== "kr"
-        ? ((ov?.consensus?.dividendYield ?? null) as number | null)
+        ? ((cons?.dividendYield ?? null) as number | null)
         : null;
 
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
@@ -277,14 +307,14 @@ export function StockAnalysis({
       node: <Multiple value={trailingPer} fallback={ttmQ.isLoading ? "…" : "-"} />,
     },
     { label: "추정PER", node: <Multiple value={estPer} fallback="-" /> },
-    { label: "PBR", node: <Multiple value={multiples?.pbr} fallback={multiplesFallback} /> },
+    { label: "PBR", node: <Multiple value={pbrVal} fallback={multiplesFallback} /> },
     { label: "EPS", node: <Money value={multiples?.eps} currency={ccy} fallback={multiplesFallback} /> },
     { label: "EPS(TTM)", node: <Money value={ttmEps} currency={ccy} fallback="-" /> },
     {
-      label: multiples?.evEbitdaIsApprox ? "EV/EBIT" : "EV/EBITDA",
-      node: <Multiple value={multiples?.evEbitda} fallback={multiplesFallback} />,
+      label: evEbitdaApprox ? "EV/EBIT" : "EV/EBITDA",
+      node: <Multiple value={evEbitdaVal} fallback={multiplesFallback} />,
     },
-    { label: "BPS", node: <Money value={multiples?.bps} currency={ccy} fallback={multiplesFallback} /> },
+    { label: "BPS", node: <Money value={bpsVal} currency={ccy} fallback={multiplesFallback} /> },
     {
       label: "DPS",
       node: <Money value={dps} currency={ccy} fallback="-" />,
@@ -297,7 +327,7 @@ export function StockAnalysis({
       label: "배당수익률",
       node: <Percent value={divYield} fallback="-" />,
     },
-    { label: "PSR", node: <Multiple value={multiples?.psr} fallback={multiplesFallback} /> },
+    { label: "PSR", node: <Multiple value={psrVal} fallback={multiplesFallback} /> },
   ];
 
   return (
@@ -528,9 +558,9 @@ export function StockAnalysis({
                     </>
                   ) : (
                     <>
-                      PER·PBR·PSR·EPS·BPS = 최근 연간 공시 재무(EDINET) + 현재가 자체 계산 ·
-                      PER(TTM)·EPS(TTM)·추정PER·DPS·배당수익률 = yahoo-finance2 (개인용) ·
-                      EV/EBITDA = EV/EBIT 근사
+                      PER·EPS = 최근 연간 공시(EDINET) + 현재가 자체 계산 ·
+                      PBR·BPS·PSR·EV/EBITDA·PER(TTM)·EPS(TTM)·추정PER(차기 회계연도)·DPS·DPS(TTM)·배당수익률 =
+                      yahoo-finance2 (개인용) — 일본은 무료 분기 공시가 없어 TTM·최근분기 지표는 Yahoo 제공치
                     </>
                   )}
                 </p>

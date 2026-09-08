@@ -45,8 +45,21 @@ interface QuoteSummaryResult {
     beta?: number;
     fiftyTwoWeekHigh?: number;
     fiftyTwoWeekLow?: number;
+    marketCap?: number;
   };
-  defaultKeyStatistics?: { forwardPE?: number; beta?: number; "52WeekChange"?: number };
+  defaultKeyStatistics?: {
+    forwardPE?: number;
+    beta?: number;
+    "52WeekChange"?: number;
+    trailingEps?: number;
+    forwardEps?: number;
+    bookValue?: number;
+    priceToBook?: number;
+    sharesOutstanding?: number;
+    enterpriseValue?: number;
+    enterpriseToEbitda?: number;
+  };
+  price?: { marketCap?: number };
   financialData?: {
     targetMeanPrice?: number;
     targetHighPrice?: number;
@@ -55,6 +68,8 @@ interface QuoteSummaryResult {
     recommendationKey?: string;
     recommendationMean?: number;
     currentRatio?: number;
+    totalRevenue?: number;
+    ebitda?: number;
   };
   earningsTrend?: {
     trend?: {
@@ -276,7 +291,13 @@ export async function fetchForwardConsensus(
   for (const s of candidates) {
     try {
       qs = await yf().quoteSummary(s, {
-        modules: ["summaryDetail", "defaultKeyStatistics", "financialData", "earningsTrend"],
+        modules: [
+          "summaryDetail",
+          "defaultKeyStatistics",
+          "financialData",
+          "earningsTrend",
+          "price",
+        ],
       });
       break;
     } catch (err) {
@@ -312,6 +333,15 @@ export async function fetchForwardConsensus(
     currentRatio: fd.currentRatio ?? null,
     dividendPerShare: sd.dividendRate ?? sd.trailingAnnualDividendRate ?? null,
     dividendYield: sd.dividendYield ?? null, // yahoo: 소수(0.021 = 2.1%)
+    // TTM/최근분기 지표 (일본 등 무료 분기 공시가 없는 시장에서 사용)
+    trailingEps: qs.defaultKeyStatistics?.trailingEps ?? null,
+    trailingAnnualDividendRate: sd.trailingAnnualDividendRate ?? null,
+    bookValue: qs.defaultKeyStatistics?.bookValue ?? null,
+    sharesOutstanding: qs.defaultKeyStatistics?.sharesOutstanding ?? null,
+    marketCap: qs.price?.marketCap ?? sd.marketCap ?? null,
+    revenueTtm: fd.totalRevenue ?? null,
+    ebitdaTtm: fd.ebitda ?? null,
+    enterpriseValue: qs.defaultKeyStatistics?.enterpriseValue ?? null,
     estimates: trend.map((t) => ({
       period: t.period === "0y" ? "당해년도(FY)" : t.period === "+1y" ? "차년도(FY+1)" : "FY+2",
       epsAvg: t.earningsEstimate?.avg ?? null,

@@ -214,6 +214,18 @@ export interface ForwardConsensus {
   dividendPerShare: number | null;
   /** 배당수익률 (소수: 0.021 = 2.1%) */
   dividendYield: number | null;
+  /**
+   * TTM/최근분기 지표 (Yahoo). 무료 분기 공시가 없는 일본에서 PER(TTM)·EPS(TTM)·
+   * PBR·BPS·PSR·EV/EBITDA·DPS(TTM) 산출에 사용. 미국(EDGAR)·한국(DART)은 자체 계산.
+   */
+  trailingEps: number | null;
+  trailingAnnualDividendRate: number | null;
+  bookValue: number | null;
+  sharesOutstanding: number | null;
+  marketCap: number | null;
+  revenueTtm: number | null;
+  ebitdaTtm: number | null;
+  enterpriseValue: number | null;
   /** 회계연도별 EPS/매출 추정 */
   estimates: {
     period: string;
