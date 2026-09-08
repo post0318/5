@@ -137,7 +137,16 @@ export function FinancialsTable({
       <div className="space-y-6">
         {shown.map((section) => (
           <div key={section.title} className="overflow-x-auto">
-            <table className="w-full min-w-[640px] border-separate border-spacing-0 text-sm">
+            <table
+              className="w-full table-fixed border-separate border-spacing-0 text-sm"
+              style={{ minWidth: `${232 + periods.length * 96}px` }}
+            >
+              <colgroup>
+                <col style={{ width: "232px" }} />
+                {periods.map((p) => (
+                  <col key={p.label} />
+                ))}
+              </colgroup>
               <thead>
                 {useDetail && (
                   <tr>
@@ -210,7 +219,7 @@ export function FinancialsTable({
                     >
                       <td
                         className={cn(
-                          "sticky left-0 z-10 border-b px-3 py-1.5 whitespace-nowrap",
+                          "sticky left-0 z-10 border-b px-3 py-1.5 leading-tight",
                           emphasis
                             ? useDetail
                               ? EM_BG
