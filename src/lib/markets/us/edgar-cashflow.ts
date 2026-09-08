@@ -308,14 +308,35 @@ export function buildUsCashFlow(facts: CompanyFacts): FinancialStatement {
     });
   }
 
-  // 환율효과 · 순증감
+  // 순증감 · 환율효과(= 순증감 − 3개 구간 합, 미보고 시 잔여)
+  const netChange = valOf(NET_CHANGE);
+  const fxReported = valOf(FX);
+  const sect = (i: number) => {
+    const it = items.find((x) => x.accountId === `cf:total:${BLOCKS[i].title}`);
+    return it?.values ?? {};
+  };
+  const fx: Record<string, number | null> = {};
+  for (const lbl of labels) {
+    if (fxReported[lbl] != null) {
+      fx[lbl] = fxReported[lbl];
+      continue;
+    }
+    const nc = netChange[lbl];
+    const s0 = sect(0)[lbl];
+    const s1 = sect(1)[lbl];
+    const s2 = sect(2)[lbl];
+    fx[lbl] =
+      nc != null && s0 != null && s1 != null && s2 != null
+        ? Math.round(nc - s0 - s1 - s2)
+        : null;
+  }
   items.push({
     accountName: "환율변동 효과",
     accountId: "cf:fx",
     depth: 0,
     isSubtotal: false,
     isHighlight: false,
-    values: valOf(FX),
+    values: fx,
   });
   items.push({
     accountName: "현금및현금성자산 순증감",
@@ -323,7 +344,7 @@ export function buildUsCashFlow(facts: CompanyFacts): FinancialStatement {
     depth: 0,
     isSubtotal: true,
     isHighlight: true,
-    values: valOf(NET_CHANGE),
+    values: netChange,
   });
   // 보충 정보
   const tax = valOf(TAX_PAID);
