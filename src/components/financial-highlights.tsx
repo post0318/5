@@ -25,14 +25,21 @@ function fmt(v: number | null, format: "money" | "pct" | "eps"): string {
 function HighlightGrid({
   columns,
   rows,
+  showHeader = true,
 }: {
   columns: HighlightColumn[];
   rows: HighlightRow[];
+  showHeader?: boolean;
 }) {
   return (
-    <div className="space-y-1.5">
-      <div className="overflow-x-auto rounded-lg border">
-        <table className="w-full min-w-[760px] border-separate border-spacing-0 text-[15px]">
+    <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-[15px]">
+        <colgroup>
+          <col className="w-[150px]" />
+          {columns.map((c) => (
+            <col key={c.key} />
+          ))}
+        </colgroup>
+        {showHeader && (
           <thead>
             <tr>
               <th className="bg-muted/50 sticky left-0 z-10 border-b px-3 py-2 text-left" />
@@ -53,7 +60,8 @@ function HighlightGrid({
               ))}
             </tr>
           </thead>
-          <tbody>
+        )}
+        <tbody>
             {rows.map((r) => {
               if (r.spacer) {
                 return (
@@ -97,10 +105,8 @@ function HighlightGrid({
                 </tr>
               );
             })}
-          </tbody>
-        </table>
-      </div>
-    </div>
+        </tbody>
+      </table>
   );
 }
 
@@ -121,8 +127,15 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
         </span>
       </div>
 
-      <HighlightGrid columns={columns} rows={evRows} />
-      {flowRows.length > 0 && <HighlightGrid columns={columns} rows={flowRows} />}
+      <div className="overflow-x-auto rounded-lg border">
+        <HighlightGrid columns={columns} rows={evRows} />
+        {flowRows.length > 0 && (
+          <>
+            <div className="bg-muted/40 h-2 min-w-[1040px]" />
+            <HighlightGrid columns={columns} rows={flowRows} showHeader={false} />
+          </>
+        )}
+      </div>
 
       <ul className="text-muted-foreground/70 space-y-0.5 text-xs">
         {data.notes.map((n, i) => (

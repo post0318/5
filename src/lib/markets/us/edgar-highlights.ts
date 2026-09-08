@@ -383,7 +383,6 @@ export function buildUsHighlights(
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap },
     { key: "cash", label: "− 현금 및 현금등물", format: "money", values: cash.map((v) => (v == null ? null : -v)) },
-    { key: "pref", label: "+ 우선주자본금 & 기타", format: "money", values: preferred },
     { key: "debt", label: "+ 총부채", format: "money", values: debt },
     { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
