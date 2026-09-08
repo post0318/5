@@ -512,6 +512,11 @@ export function StockAnalysis({
                       외국인지분율 {naverQ.data.foreign.ratio.toFixed(2)}%
                     </div>
                   )}
+                  {market === "us" && ov.consensus?.shortPercentSharesOut != null && (
+                    <div className="text-muted-foreground mt-1 text-xs">
+                      공매도/발행주식 {(ov.consensus.shortPercentSharesOut * 100).toFixed(2)}%
+                    </div>
+                  )}
                 </Stat>
                 <Stat label="52주 베타" className="order-4 lg:order-none">
                   <span className="tnum text-base">
@@ -568,11 +573,7 @@ export function StockAnalysis({
 
               {/* 재무 하이라이트 (EV 브릿지 + 5개년 + LTM + 추정) — 현재 미국만 */}
               {highlightsQ.data?.highlights && (
-                <FinancialHighlightsTable
-                  data={highlightsQ.data.highlights}
-                  shortRatio={ov.consensus?.shortRatio ?? null}
-                  shortPercent={ov.consensus?.shortPercentSharesOut ?? null}
-                />
+                <FinancialHighlightsTable data={highlightsQ.data.highlights} />
               )}
 
               {/* 투자지표 — 미국은 재무 하이라이트의 연도별 표로 대체 */}
