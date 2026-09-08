@@ -57,8 +57,17 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
     title: "부채",
     lines: [
       { label: "매입채무", concepts: ["AccountsPayableCurrent"], depth: 1 },
-      { label: "단기 차입금", combine: ["CommercialPaper", "ShortTermBorrowings"], depth: 1 },
-      { label: "유동성 장기부채", concepts: ["LongTermDebtCurrent"], depth: 1 },
+      {
+        label: "단기부채",
+        combine: [
+          "CommercialPaper",
+          "ShortTermBorrowings",
+          "LongTermDebtCurrent",
+          "FinanceLeaseLiabilityCurrent",
+          "OperatingLeaseLiabilityCurrent",
+        ],
+        depth: 1,
+      },
       { label: "이연수익 (유동)", concepts: ["ContractWithCustomerLiabilityCurrent", "DeferredRevenueCurrent"], depth: 1 },
       { label: "기타 유동부채", concepts: ["OtherLiabilitiesCurrent"], depth: 1 },
       { label: "기타 (유동부채)", depth: 1, plugOf: "lcur" },
