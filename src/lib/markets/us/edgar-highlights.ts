@@ -274,6 +274,18 @@ export function buildUsHighlights(
   const prefE = unitEntries(facts, "PreferredStockValue", "USD");
   const sharesEndE = unitEntries(facts, "CommonStockSharesOutstanding", "shares");
   const sharesDeiE = deiEntries(facts, "EntityCommonStockSharesOutstanding");
+  // 이중 클래스(메타 등)는 기말 발행주식수를 클래스별로만 태깅해 undimensioned 값이
+  // 없다 → 가중평균 희석주식수(연간)로 대체해 시총·EV 를 근사한다.
+  const sharesWavgDil = annualSeries(
+    unitEntries(facts, "WeightedAverageNumberOfDilutedSharesOutstanding", "shares"),
+  );
+  const sharesWavgBasic = annualSeries(
+    unitEntries(facts, "WeightedAverageNumberOfSharesOutstandingBasic", "shares"),
+  );
+  const wavgSharesAt = (year: number): number | null =>
+    annualAt(sharesWavgDil, year) ?? annualAt(sharesWavgBasic, year);
+  const latestWavgShares = (): number | null =>
+    sharesWavgDil.at(-1)?.val ?? sharesWavgBasic.at(-1)?.val ?? null;
 
   // 컬럼별 helper
   const flowVal = (
@@ -306,8 +318,11 @@ export function buildUsHighlights(
     const shares = isLtm
       ? (instantAt(sharesDeiE, priceDate) ??
         instantAt(sharesEndE, priceDate) ??
-        instantAt(sharesDeiE, asOf))
-      : (instantAt(sharesEndE, asOf) ?? instantAt(sharesDeiE, asOf));
+        instantAt(sharesDeiE, asOf) ??
+        latestWavgShares())
+      : (instantAt(sharesEndE, asOf) ??
+        instantAt(sharesDeiE, asOf) ??
+        wavgSharesAt(Number(col.key.slice(2))));
     const mc = price != null && shares != null ? price * shares : null;
     marketCap[i] = mc;
 
@@ -363,7 +378,9 @@ export function buildUsHighlights(
     return null;
   });
   const currentShares =
-    instantAt(sharesDeiE, priceDate) ?? instantAt(sharesEndE, priceDate);
+    instantAt(sharesDeiE, priceDate) ??
+    instantAt(sharesEndE, priceDate) ??
+    latestWavgShares();
   const netIncome = columns.map((col) => {
     if (col.kind === "estimate") {
       const eps = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
@@ -448,7 +465,9 @@ export function buildUsHighlights(
   ];
 
   notes.push("실적·재무상태표·현금흐름: SEC EDGAR companyfacts (GAAP 보고치)");
-  notes.push("과거 시가총액: 각 회계연도말 종가 × 기말 발행주식수");
+  notes.push(
+    "과거 시가총액: 각 회계연도말 종가 × 기말 발행주식수 (클래스별로만 태깅된 종목은 가중평균 희석주식수로 근사)",
+  );
   notes.push("총부채 = 차입금(장·단기) + CP + 리스부채");
   if (estCols.length)
     notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
