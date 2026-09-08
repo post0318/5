@@ -29,26 +29,35 @@ export async function GET(
     if (url.searchParams.get("debug") === "polygon") {
       const names = ["POLYGON_API_KEY", "MASSIVE_API_KEY", "POLYGON_KEY", "POLYGONIO_API_KEY"];
       const present = Object.fromEntries(names.map((n) => [n, Boolean(process.env[n])]));
-      const key = process.env.POLYGON_API_KEY;
-      let probe: unknown = "no POLYGON_API_KEY";
-      if (key) {
-        const s = sym.replace(/[^A-Za-z.]/g, "").toUpperCase();
-        const r = await fetch(
-          `https://api.polygon.io/v3/reference/dividends?ticker=${s}&limit=5&order=desc&sort=ex_dividend_date&apiKey=${key}`,
-          { signal: AbortSignal.timeout(10_000) },
-        ).catch((e) => ({ ok: false, status: 0, text: () => String(e), json: () => null }) as unknown as Response);
-        const body = (await r.json().catch(() => null)) as {
-          status?: string;
-          results?: { ex_dividend_date?: string; pay_date?: string; cash_amount?: number }[];
-          error?: string;
-        } | null;
-        probe = {
-          httpStatus: r.status,
-          apiStatus: body?.status,
-          error: body?.error,
-          count: body?.results?.length ?? 0,
-          sample: body?.results?.slice(0, 3),
-        };
+      const key = (process.env.POLYGON_API_KEY ?? "").trim();
+      const s = sym.replace(/[^A-Za-z.]/g, "").toUpperCase();
+      const path = `/v3/reference/dividends?ticker=${s}&limit=5&order=desc&sort=ex_dividend_date`;
+      const attempts: { label: string; url: string; headers?: Record<string, string> }[] = [
+        { label: "polygon.io ?apiKey", url: `https://api.polygon.io${path}&apiKey=${key}` },
+        { label: "polygon.io Bearer", url: `https://api.polygon.io${path}`, headers: { Authorization: `Bearer ${key}` } },
+        { label: "massive.com ?apiKey", url: `https://api.massive.com${path}&apiKey=${key}` },
+        { label: "massive.com Bearer", url: `https://api.massive.com${path}`, headers: { Authorization: `Bearer ${key}` } },
+      ];
+      const probe: Record<string, unknown> = { keyLen: key.length };
+      for (const a of attempts) {
+        try {
+          const r = await fetch(a.url, { headers: a.headers, signal: AbortSignal.timeout(10_000) });
+          const body = (await r.json().catch(() => null)) as {
+            status?: string;
+            results?: { ex_dividend_date?: string; pay_date?: string }[];
+            error?: string;
+            message?: string;
+          } | null;
+          probe[a.label] = {
+            http: r.status,
+            apiStatus: body?.status,
+            error: body?.error ?? body?.message,
+            count: body?.results?.length ?? 0,
+            firstPayDate: body?.results?.[0]?.pay_date,
+          };
+        } catch (e) {
+          probe[a.label] = { fetchError: String(e) };
+        }
       }
       return ok({ envPresent: present, probe });
     }
