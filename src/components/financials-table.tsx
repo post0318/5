@@ -233,11 +233,13 @@ export function FinancialsTable({
                     item.isSubtotal &&
                     periods.every((p) => item.values[p.label] == null);
                   const emphasis = item.isHighlight;
-                  // 주석 항목: EBITDA 행부터 홀수행 옅은 배경
-                  const zebra =
-                    noteStart >= 0 &&
-                    idx > noteStart &&
-                    (idx - noteStart - 1) % 2 === 0;
+                  // 총괄 요약: 모든 본문 짝수행 옅은 배경 / 주석 항목: EBITDA 행부터
+                  const isSummary = detailedSummary != null && detail === detailedSummary;
+                  const zebra = isSummary
+                    ? idx % 2 === 1
+                    : noteStart >= 0 &&
+                      idx > noteStart &&
+                      (idx - noteStart - 1) % 2 === 0;
                   return (
                     <tr
                       key={`${idx}-${item.accountId ?? item.accountName}`}

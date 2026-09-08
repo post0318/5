@@ -8,7 +8,16 @@ import {
   instantOn,
   latestInstant,
   recentInstantQuarters,
+  recentQuarters,
 } from "./edgar-series";
+
+/** 분기 컬럼 달력용 (duration 개념 — instant 개념엔 분기 기간이 없음). */
+const REVENUE_CAL = [
+  "RevenueFromContractWithCustomerExcludingAssessedTax",
+  "RevenueFromContractWithCustomerIncludingAssessedTax",
+  "Revenues",
+  "SalesRevenueNet",
+];
 
 /**
  * 미국 상세 재무상태표 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 B/S 근사).
@@ -131,18 +140,26 @@ export function buildUsBalance(
   let value: (concepts: string[]) => Record<string, number | null>;
 
   if (mode === "quarter") {
-    const qEnds = recentInstantQuarters(anchor, 5); // 최신→과거
-    const chron = [...qEnds].reverse();
-    periods = chron.map((end) => ({
-      label: end,
-      fiscalYear: Number(end.slice(0, 4)),
-      fiscalQuarter: null,
-      endDate: end,
+    // 분기 라벨·기말은 IS/CF 와 동일하게 (duration 개념 달력 기준)
+    const cal = [...recentQuarters(firstConcept(facts, REVENUE_CAL), 5)].reverse();
+    const fallback =
+      cal.length === 0
+        ? [...recentInstantQuarters(anchor, 5)].reverse().map((end) => ({
+            label: end,
+            end,
+            fyStartApprox: end,
+          }))
+        : cal;
+    periods = fallback.map((q) => ({
+      label: q.label,
+      fiscalYear: Number(q.label.slice(0, 4)),
+      fiscalQuarter: Number(q.label.slice(-1)) || null,
+      endDate: q.end,
     }));
     value = (concepts) => {
       const e = firstConcept(facts, concepts);
       const out: Record<string, number | null> = {};
-      for (const end of chron) out[end] = instantOn(e, end);
+      for (const q of fallback) out[q.label] = instantOn(e, q.end);
       return out;
     };
   } else {
