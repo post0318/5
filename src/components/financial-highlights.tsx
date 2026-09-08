@@ -194,16 +194,13 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
       </div>
 
       {valuationRows.length > 0 && (
-        <div className="space-y-1.5">
-          <h2 className="text-base font-semibold">투자지표</h2>
-          <div className={cn("rounded-lg border", !mobile && "overflow-x-auto")}>
-            <HighlightGrid
-              columns={columns}
-              rows={valuationRows}
-              scale={scale}
-              mobile={mobile}
-            />
-          </div>
+        <div className={cn("rounded-lg border", !mobile && "overflow-x-auto")}>
+          <HighlightGrid
+            columns={columns}
+            rows={valuationRows}
+            scale={scale}
+            mobile={mobile}
+          />
         </div>
       )}
 
