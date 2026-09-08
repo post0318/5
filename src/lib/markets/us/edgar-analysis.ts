@@ -290,15 +290,16 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return adjPerShare(o); // 분모(주식수)가 소급 재작성 안 된 과거 연도 → 분할 계수로 환산
   };
   // CAGR: 전체 연도 시계열에서 각 컬럼 대비 n년 전 값.
-  // 현재/LTM 컬럼은 분자를 최근 FY 가 아닌 TTM 값으로 (없으면 최근 FY) → 마지막 FY 열과 중복 방지.
+  // 현재/LTM 은 최근 FY 보다 약 1년 뒤 시점 → 분자는 TTM 값, 기준연도도 1 앞으로
+  // (예: 5년 CAGR 이면 마지막 FY 열은 FY-5, LTM 열은 FY-4 를 기준으로).
   const cagr = (full: Map<number, number>, n: number, ltm?: number | null) => {
     const o = blank();
     const lastY = years.at(-1) ?? 0;
     for (const p of periods) {
       const isLtm = p.label === LTM;
-      const endY = isLtm ? lastY : p.fiscalYear;
-      const cur = isLtm ? (ltm ?? full.get(endY) ?? null) : (full.get(endY) ?? null);
-      const base = full.get(endY - n);
+      const anchorY = isLtm ? lastY + 1 : p.fiscalYear;
+      const cur = isLtm ? (ltm ?? full.get(lastY) ?? null) : (full.get(anchorY) ?? null);
+      const base = full.get(anchorY - n);
       if (cur != null && base != null && base > 0 && cur > 0)
         o[p.label] = (Math.pow(cur / base, 1 / n) - 1) * 100;
     }
