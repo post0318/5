@@ -478,15 +478,11 @@ export function StockAnalysis({
                 <Stat label="52주 베타" className="order-4 lg:order-none">
                   <span className="tnum text-base">
                     <NumberText
-                      value={
-                        market === "kr"
-                          ? (ttmQ.data?.beta?.beta ?? null)
-                          : (ov.consensus?.beta ?? null)
-                      }
+                      value={ttmQ.data?.beta?.beta ?? ov.consensus?.beta ?? null}
                       digits={2}
                       fallback="-"
                     />
-                    {market === "kr" && ttmQ.data?.beta?.change != null && (
+                    {ttmQ.data?.beta?.change != null && (
                       <span
                         className={cn(
                           "tnum ml-1 text-sm font-normal",
@@ -500,20 +496,20 @@ export function StockAnalysis({
                       </span>
                     )}
                   </span>
-                  {market !== "kr" && ov.consensus?.beta != null && (
+                  {ttmQ.data?.beta?.beta != null ? (
+                    <div className="text-muted-foreground mt-1 text-[11px]">
+                      {market === "kr" ? "KOSPI" : "S&P 500"} · 52주 일간
+                    </div>
+                  ) : ov.consensus?.beta != null ? (
                     <div className="text-muted-foreground mt-1 text-[11px]">yahoo · 5년 월간</div>
-                  )}
+                  ) : null}
                 </Stat>
                 <Stat label="52주 최고 / 최저" className="order-2 lg:order-none">
                   {(() => {
                     const hi52 =
-                      market === "kr"
-                        ? (ttmQ.data?.beta?.high52 ?? ov.consensus?.fiftyTwoWeekHigh ?? null)
-                        : (ov.consensus?.fiftyTwoWeekHigh ?? null);
+                      ttmQ.data?.beta?.high52 ?? ov.consensus?.fiftyTwoWeekHigh ?? null;
                     const lo52 =
-                      market === "kr"
-                        ? (ttmQ.data?.beta?.low52 ?? ov.consensus?.fiftyTwoWeekLow ?? null)
-                        : (ov.consensus?.fiftyTwoWeekLow ?? null);
+                      ttmQ.data?.beta?.low52 ?? ov.consensus?.fiftyTwoWeekLow ?? null;
                     return (
                       <>
                         <span className="tnum text-base">

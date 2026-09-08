@@ -4,6 +4,7 @@ import { isMarketId } from "@/lib/markets/types";
 import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
 import { computeKr52wBeta } from "@/lib/markets/kr/beta";
+import { computeUs52wBeta } from "@/lib/markets/us/beta";
 
 export const maxDuration = 60;
 
@@ -32,7 +33,9 @@ export async function GET(
         : Promise.resolve(null),
       market === "kr"
         ? computeKr52wBeta(sym, yahoo).catch(() => null)
-        : Promise.resolve(null),
+        : market === "us"
+          ? computeUs52wBeta(sym, yahoo).catch(() => null)
+          : Promise.resolve(null),
     ]);
 
     // 미국(EDGAR)은 주당배당금도 TTM 페이로드에 실려 온다 → 국내와 동일 형태로 변환.

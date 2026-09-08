@@ -127,7 +127,7 @@ export async function getIndices(): Promise<IndexQuote[]> {
         change: q?.regularMarketChange ?? null,
         changePct: q?.regularMarketChangePercent ?? null,
         asOf: isoTime(q?.regularMarketTime),
-        source: "Yahoo · 개인용",
+        source: "Yahoo Finance",
       });
     }
   } catch {

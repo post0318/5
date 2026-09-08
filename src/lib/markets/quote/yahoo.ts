@@ -349,7 +349,7 @@ export async function fetchForwardConsensus(
       epsHigh: t.earningsEstimate?.high ?? null,
       revenueAvg: t.revenueEstimate?.avg ?? null,
     })),
-    source: "Yahoo Finance (yahoo-finance2) · 개인용",
+    source: "Yahoo Finance",
     deepLinks: consensusDeepLinks(market, symbol),
   };
 }

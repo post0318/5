@@ -70,5 +70,5 @@ export async function getEodQuote(
   }
 
   const bars = await fetchYahooEod(market, symbol, opts);
-  return buildQuote(market, symbol, bars, "Yahoo Finance · 개인용");
+  return buildQuote(market, symbol, bars, "Yahoo Finance");
 }
