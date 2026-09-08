@@ -16,10 +16,6 @@ import { Button } from "@/components/ui/button";
 import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import {
-  ToggleGroup,
-  ToggleGroupItem,
-} from "@/components/ui/toggle-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { ChangePercent, Money, Multiple, NumberText, Percent } from "@/components/num";
@@ -666,17 +662,6 @@ export function StockAnalysis({
 
             {/* 재무제표 */}
             <TabsContent value="financials" className="space-y-4 pt-4">
-              <ToggleGroup
-                type="single"
-                value={period}
-                onValueChange={(v) => v && setPeriod(v as "annual" | "quarter")}
-                variant="outline"
-                size="sm"
-              >
-                <ToggleGroupItem value="annual">연간</ToggleGroupItem>
-                <ToggleGroupItem value="quarter">분기</ToggleGroupItem>
-              </ToggleGroup>
-
               {financials.isLoading && <Skeleton className="h-64 w-full" />}
               {financials.isError && (
                 <ErrorBox message={(financials.error as Error).message} />
@@ -690,6 +675,8 @@ export function StockAnalysis({
                 <FinancialsTable
                   statement={financials.data}
                   detailedCf={market === "us" ? (cfDetailQ.data ?? null) : null}
+                  period={period}
+                  onPeriodChange={setPeriod}
                 />
               )}
             </TabsContent>

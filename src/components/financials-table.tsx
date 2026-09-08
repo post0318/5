@@ -20,10 +20,14 @@ const groupOf = (title: string): Exclude<View, "all"> | "other" =>
 export function FinancialsTable({
   statement,
   detailedCf,
+  period,
+  onPeriodChange,
 }: {
   statement: FinancialStatement;
   /** 미국 표준화 상세 현금흐름표 (CF 탭에서 총괄 대신 표시) */
   detailedCf?: FinancialStatement | null;
+  period?: "annual" | "quarter";
+  onPeriodChange?: (p: "annual" | "quarter") => void;
 }) {
   const [view, setView] = useState<View>("all");
 
@@ -73,24 +77,47 @@ export function FinancialsTable({
         )}
       </div>
 
-      {tabs.length > 1 && (
-        <div className="border-border flex overflow-hidden rounded-md border text-sm">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setView(t.key)}
-              className={cn(
-                "px-3 py-1 transition-colors",
-                view === t.key
-                  ? "bg-primary text-primary-foreground"
-                  : "hover:bg-muted text-muted-foreground",
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {tabs.length > 1 && (
+          <div className="border-border flex overflow-hidden rounded-md border text-sm">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setView(t.key)}
+                className={cn(
+                  "px-3 py-1 transition-colors",
+                  view === t.key
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted text-muted-foreground",
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {period && onPeriodChange && !useCfDetail && (
+          <div className="border-border flex overflow-hidden rounded-md border text-sm">
+            {(["annual", "quarter"] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => onPeriodChange(p)}
+                className={cn(
+                  "px-3 py-1 transition-colors",
+                  period === p
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted text-muted-foreground",
+                )}
+              >
+                {p === "annual" ? "연간" : "분기"}
+              </button>
+            ))}
+          </div>
+        )}
+        {useCfDetail && (
+          <span className="text-muted-foreground text-xs">연간 + 최근 12개월</span>
+        )}
+      </div>
 
       <div className="space-y-6">
         {shown.map((section) => (
