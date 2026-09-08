@@ -136,8 +136,23 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return o;
   })();
   const sharesEnd = stock(["CommonStockSharesOutstanding"]);
+  // 이중 클래스(메타 등)는 기말 발행주식수를 클래스별로만 태깅 → undimensioned 값 없음.
+  // 가중평균 희석주식수(연간)로 대체해 시총·PBR·EV 를 근사.
+  const wavgDil = fullAnnual(["WeightedAverageNumberOfDilutedSharesOutstanding"], "shares");
+  const wavgBasic = fullAnnual(["WeightedAverageNumberOfSharesOutstandingBasic"], "shares");
+  const wavgAt = (y: number): number | null => wavgDil.get(y) ?? wavgBasic.get(y) ?? null;
+  const latestWavg = (() => {
+    const ys = [...wavgDil.keys(), ...wavgBasic.keys()];
+    if (!ys.length) return null;
+    const my = Math.max(...ys);
+    return wavgDil.get(my) ?? wavgBasic.get(my) ?? null;
+  })();
   const shares = blank();
-  for (const l of labels) shares[l] = sharesDei[l] ?? sharesEnd[l];
+  for (const l of labels)
+    shares[l] =
+      sharesDei[l] ??
+      sharesEnd[l] ??
+      (l === LTM ? latestWavg : wavgAt(Number(l.replace("Y", ""))));
 
   // 파생
   const ebitda = blank();
