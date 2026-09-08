@@ -24,28 +24,28 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h2 className="text-sm font-semibold">재무 하이라이트</h2>
-        <span className="text-muted-foreground text-[11px]">
+        <h2 className="text-base font-semibold">재무 하이라이트</h2>
+        <span className="text-muted-foreground text-xs">
           단위: {data.unitLabel} · 12개월 결산 · 현재/LTM {data.asOfLtm}
         </span>
       </div>
 
       <div className="overflow-x-auto rounded-lg border">
-        <table className="w-full min-w-[720px] border-separate border-spacing-0 text-sm">
+        <table className="w-full min-w-[760px] border-separate border-spacing-0 text-[15px]">
           <thead>
             <tr>
-              <th className="bg-muted/50 sticky left-0 z-10 border-b px-3 py-1.5 text-left" />
+              <th className="bg-muted/50 sticky left-0 z-10 border-b px-3 py-2 text-left" />
               {columns.map((c) => (
                 <th
                   key={c.key}
                   className={cn(
-                    "text-muted-foreground border-b px-3 py-1.5 text-right font-medium whitespace-nowrap",
+                    "text-muted-foreground border-b px-3 py-2 text-right font-medium whitespace-nowrap",
                     c.kind === "estimate" && "text-muted-foreground/70 italic",
                     c.kind === "ltm" && "bg-muted/40",
                   )}
                 >
                   <div>{c.label}</div>
-                  <div className="text-muted-foreground/60 text-[10px] font-normal">
+                  <div className="text-muted-foreground/60 text-xs font-normal">
                     {c.date.replace(/-/g, "/").slice(2)}
                   </div>
                 </th>
@@ -57,7 +57,7 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
               if (r.spacer) {
                 return (
                   <tr key={r.key}>
-                    <td colSpan={columns.length + 1} className="h-2" />
+                    <td colSpan={columns.length + 1} className="h-2.5" />
                   </tr>
                 );
               }
@@ -68,11 +68,11 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
                 >
                   <td
                     className={cn(
-                      "bg-background sticky left-0 z-10 px-3 py-1 whitespace-nowrap",
+                      "bg-background sticky left-0 z-10 px-3 py-1.5 whitespace-nowrap",
                       r.emphasis && "border-t",
                       r.indent
-                        ? "text-muted-foreground/70 pl-6 text-[11px]"
-                        : "text-muted-foreground text-xs",
+                        ? "text-muted-foreground/80 pl-6 text-sm"
+                        : "text-foreground/90",
                     )}
                   >
                     {r.label}
@@ -81,9 +81,9 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
                     <td
                       key={i}
                       className={cn(
-                        "tnum px-3 py-1 text-right whitespace-nowrap",
+                        "tnum px-3 py-1.5 text-right whitespace-nowrap",
                         r.emphasis && "border-t",
-                        r.indent && "text-muted-foreground/70 text-[11px]",
+                        r.indent && "text-muted-foreground/70 text-[13px]",
                         columns[i]?.kind === "estimate" && "text-muted-foreground/60 italic",
                         columns[i]?.kind === "ltm" && "bg-muted/20",
                         v != null && v < 0 && !r.indent && "text-destructive",
@@ -99,7 +99,7 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
         </table>
       </div>
 
-      <ul className="text-muted-foreground/70 space-y-0.5 text-[11px]">
+      <ul className="text-muted-foreground/70 space-y-0.5 text-xs">
         {data.notes.map((n, i) => (
           <li key={i}>· {n}</li>
         ))}
