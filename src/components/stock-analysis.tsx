@@ -820,46 +820,66 @@ export function StockAnalysis({
                   </p>
                 )}
                 {rightsQ.data && rightsQ.data.events.length > 0 && (
-                  <div className="rounded-lg border">
-                    <table className="w-full table-fixed text-sm">
-                      <thead>
-                        <tr className="bg-muted text-muted-foreground text-left text-[11px] sm:text-sm">
-                          <th className="px-1.5 py-2 font-medium sm:px-3">기준일</th>
-                          <th className="px-1.5 py-2 font-medium sm:px-3">권리락일</th>
-                          <th className="px-1.5 py-2 font-medium sm:px-3">지급일</th>
-                          <th className="px-1.5 py-2 font-medium sm:px-3">권리사유</th>
-                          <th className="px-1.5 py-2 font-medium sm:px-3">세부 내역</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {rightsQ.data.events.map((e, i) => (
-                          <tr
-                            key={i}
-                            className={cn(
-                              "hover:bg-muted/30 align-top",
-                              i % 2 === 1 && "bg-muted/30",
-                            )}
-                          >
-                            <td className="tnum px-1.5 py-2 text-[10px] tabular-nums sm:px-3 sm:text-sm">
-                              {e.basDt || "-"}
-                            </td>
-                            <td className="tnum px-1.5 py-2 text-[10px] sm:px-3 sm:text-sm">
-                              {e.exRightsDate ?? "-"}
-                            </td>
-                            <td className="tnum px-1.5 py-2 text-[10px] sm:px-3 sm:text-sm">
-                              {e.payoutDate ?? "-"}
-                            </td>
-                            <td className="px-1.5 py-2 text-[11px] break-words sm:px-3 sm:text-sm">
-                              {e.reason}
-                            </td>
-                            <td className="px-1.5 py-2 text-[11px] break-words sm:px-3 sm:text-xs">
-                              <RightsDetail e={e} market={market} />
-                            </td>
+                  <>
+                    {/* 모바일: 카드 목록 (가로 스크롤 없이 한 화면) */}
+                    <ul className="space-y-2 sm:hidden">
+                      {rightsQ.data.events.map((e, i) => (
+                        <li key={i} className="rounded-lg border p-3 text-sm">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className="font-medium">{e.reason}</span>
+                            <span className="tnum text-muted-foreground text-xs whitespace-nowrap">
+                              기준 {e.basDt || "-"}
+                            </span>
+                          </div>
+                          <div className="text-muted-foreground tnum mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
+                            <span>권리락 {e.exRightsDate ?? "-"}</span>
+                            <span>지급 {e.payoutDate ?? "-"}</span>
+                          </div>
+                          <div className="mt-1.5 text-xs leading-snug break-words">
+                            <RightsDetail e={e} market={market} />
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+
+                    {/* 데스크톱: 표 */}
+                    <div className="hidden overflow-x-auto rounded-lg border sm:block">
+                      <table className="w-full min-w-[560px] text-sm">
+                        <thead>
+                          <tr className="bg-muted text-muted-foreground text-left">
+                            <th className="px-3 py-2 font-medium">기준일</th>
+                            <th className="px-3 py-2 font-medium">권리락일</th>
+                            <th className="px-3 py-2 font-medium">배당금지급일</th>
+                            <th className="px-3 py-2 font-medium">권리사유</th>
+                            <th className="px-3 py-2 font-medium">세부 내역</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y">
+                          {rightsQ.data.events.map((e, i) => (
+                            <tr
+                              key={i}
+                              className={cn(
+                                "hover:bg-muted/30 align-top",
+                                i % 2 === 1 && "bg-muted/30",
+                              )}
+                            >
+                              <td className="tnum px-3 py-2 whitespace-nowrap">{e.basDt || "-"}</td>
+                              <td className="tnum px-3 py-2 whitespace-nowrap">
+                                {e.exRightsDate ?? "-"}
+                              </td>
+                              <td className="tnum px-3 py-2 whitespace-nowrap">
+                                {e.payoutDate ?? "-"}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">{e.reason}</td>
+                              <td className="px-3 py-2 text-xs">
+                                <RightsDetail e={e} market={market} />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
                 <p className="text-muted-foreground/80 text-[11px]">
                   {market === "us"
