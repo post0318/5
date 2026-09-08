@@ -19,6 +19,7 @@ import {
   type TtmFlows,
 } from "../types";
 import { type FactEntry, latestInstant, ttmFlow } from "./edgar-fundamentals";
+import { splitFactorsByYear } from "./edgar-series";
 
 const UA =
   process.env.SEC_USER_AGENT ??
@@ -145,6 +146,8 @@ export interface FactUnitEntry {
   fp: string; // "FY" | "Q1".."Q4"
   form: string; // "10-K" | "10-Q" | ...
   frame?: string;
+  /** 공시(제출)일 YYYY-MM-DD. 같은 기간의 재작성(액면분할 소급 등)은 최신 filed 우선. */
+  filed?: string;
 }
 export interface CompanyFacts {
   entityName: string;
@@ -295,7 +298,9 @@ const CONCEPTS: ConceptSpec[] = [
 ];
 
 function periodKey(e: FactUnitEntry): string {
-  return e.fp === "FY" ? `FY${e.fy}` : `${e.fy} ${e.fp}`;
+  // 연간은 종료 연도로 키를 잡는다 → 최신 10-K 의 재작성된 비교연도(액면분할 소급 등)를
+  // 원 공시값 대신 채택할 수 있다. (e.fy 는 "공시" 회계연도라 비교연도 값이 엉뚱한 키로 감)
+  return e.fp === "FY" ? `FY${e.end.slice(0, 4)}` : `${e.fy} ${e.fp}`;
 }
 
 function pickEntries(
@@ -308,10 +313,20 @@ function pickEntries(
     if (periodType === "annual" && e.fp !== "FY") continue;
     if (periodType === "quarter" && e.fp === "FY") continue;
     if (!wanted.includes(e.form)) continue;
+    // 90일 분기에도 fp="FY" 를 붙이는 기업(NVIDIA) → 연간은 duration 으로 거른다
+    if (periodType === "annual" && e.start) {
+      const dur = Math.round((Date.parse(e.end) - Date.parse(e.start)) / 86_400_000);
+      if (dur < 300 || dur > 400) continue;
+    }
     const key = periodKey(e);
-    // 같은 기간 중복이면 최신 end 우선
+    // 같은 기간 중복이면 최신 end, 동률이면 최신 공시(액면분할 소급 재작성) 우선
     const prev = byPeriod.get(key);
-    if (!prev || e.end > prev.end) byPeriod.set(key, e);
+    if (
+      !prev ||
+      e.end > prev.end ||
+      (e.end === prev.end && (e.filed ?? "") >= (prev.filed ?? ""))
+    )
+      byPeriod.set(key, e);
   }
   return byPeriod;
 }
@@ -373,7 +388,7 @@ export const usEdgarAdapter: MarketAdapter = {
         if (!periodMeta.has(key)) {
           periodMeta.set(key, {
             label: key,
-            fiscalYear: e.fy,
+            fiscalYear: e.fp === "FY" ? Number(e.end.slice(0, 4)) : e.fy,
             fiscalQuarter: e.fp === "FY" ? null : Number(e.fp.replace("Q", "")),
             endDate: e.end,
           });
@@ -387,6 +402,11 @@ export const usEdgarAdapter: MarketAdapter = {
       .slice(0, 5);
     const periodLabels = periods.map((p) => p.label);
 
+    // 액면분할 보정: 소급 재작성 안 된 과거 연도의 주당 지표를 최신 연도 기준으로 환산
+    const splitF =
+      periodType === "annual" ? splitFactorsByYear(facts) : new Map<number, number>();
+    const yearByLabel = new Map(periodLabels.map((l) => [l, periodMeta.get(l)?.fiscalYear ?? 0]));
+
     // 3) 섹션별 라인 구성
     const sectionsOrder = ["손익계산서", "재무상태표", "현금흐름표"] as const;
     const sections = sectionsOrder.map((title) => {
@@ -395,11 +415,13 @@ export const usEdgarAdapter: MarketAdapter = {
         if (spec.section !== title) continue;
         const picked = periodEntries.get(spec.concept);
         if (!picked || picked.size === 0) continue;
+        const isPerShare = /EarningsPerShare/.test(spec.concept);
         const values: Record<string, number | null> = {};
         let hasAny = false;
         for (const label of periodLabels) {
           const e = picked.get(label);
-          values[label] = e ? e.val : null;
+          const f = isPerShare ? (splitF.get(yearByLabel.get(label) ?? 0) ?? 1) : 1;
+          values[label] = e ? e.val * f : null;
           if (e) hasAny = true;
         }
         if (!hasAny) continue;

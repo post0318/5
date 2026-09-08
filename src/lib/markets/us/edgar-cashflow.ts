@@ -15,6 +15,10 @@ const INTERIM_FORMS = ["10-Q", "10-Q/A"];
 function days(a: string, b: string) {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
 }
+/** 온전한 1개 회계연도(약 300~400일)인지 — 90일 분기에도 fp="FY" 붙이는 기업(NVIDIA) 대응. */
+function isFullYear(e: FactUnitEntry): boolean {
+  return Boolean(e.start) && days(e.start!, e.end) >= 300 && days(e.start!, e.end) <= 400;
+}
 function shiftYear(iso: string, n: number) {
   const [y, m, d] = iso.split("-");
   return `${Number(y) + n}-${m}-${d}`;
@@ -34,7 +38,7 @@ function firstConcept(facts: CompanyFacts, concepts: string[]): FactUnitEntry[] 
 function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
   const m = new Map<number, { val: number; end: string }>();
   for (const e of entries) {
-    if (e.fp !== "FY" || !e.start || !ANNUAL_FORMS.includes(e.form)) continue;
+    if (e.fp !== "FY" || !isFullYear(e) || !ANNUAL_FORMS.includes(e.form)) continue;
     const y = Number(e.end.slice(0, 4));
     const prev = m.get(y);
     if (!prev || e.end > prev.end) m.set(y, { val: e.val, end: e.end });
@@ -45,7 +49,7 @@ function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
 /** 흐름 TTM = 최근 FY + 당기누적 − 전년동기누적. */
 function ttmOf(entries: FactUnitEntry[]): number | null {
   const annuals = entries
-    .filter((e) => e.fp === "FY" && e.start && ANNUAL_FORMS.includes(e.form))
+    .filter((e) => e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form))
     .sort((a, b) => b.end.localeCompare(a.end));
   const fy = annuals[0];
   if (!fy?.start) return null;
@@ -217,8 +221,10 @@ export function buildUsCashFlow(
     const years = [...annualByYear(opEntries).keys()].sort((a, b) => a - b).slice(-5);
     const opAnnualEnds = new Map<number, string>();
     for (const e of opEntries)
-      if (e.fp === "FY" && e.start && ANNUAL_FORMS.includes(e.form))
-        opAnnualEnds.set(Number(e.end.slice(0, 4)), e.end);
+      if (e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form)) {
+        const y = Number(e.end.slice(0, 4));
+        if (!opAnnualEnds.has(y) || e.end > opAnnualEnds.get(y)!) opAnnualEnds.set(y, e.end);
+      }
     periods = years.map((y) => ({
       label: fyKey(y),
       fiscalYear: y,

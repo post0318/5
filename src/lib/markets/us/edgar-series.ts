@@ -33,26 +33,42 @@ export function firstConcept(
   return [];
 }
 
+/**
+ * 온전한 1개 회계연도 기간인지 (약 300~400일).
+ * 일부 기업(NVIDIA 등)은 90일 분기 값에도 fp="FY" 를 붙여 태깅한다 → duration 으로 걸러야 한다.
+ */
+export function isFullYearDuration(e: FactUnitEntry): boolean {
+  if (!e.start) return false;
+  const d = days(e.start, e.end);
+  return d >= 300 && d <= 400;
+}
+
+/** 같은 회계기간의 두 값 중 채택할 것 — 최신 종료일, 동률이면 최신 공시(재작성) 우선. */
+function preferNewer(cand: FactUnitEntry, prev: { end: string; filed?: string }): boolean {
+  if (cand.end !== prev.end) return cand.end > prev.end;
+  return (cand.filed ?? "") >= (prev.filed ?? "");
+}
+
 /** 사업연도(FY, 10-K) duration 값 Map<year, val>. */
 export function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
-  const m = new Map<number, { val: number; end: string }>();
+  const m = new Map<number, { val: number; end: string; filed?: string }>();
   for (const e of entries) {
-    if (e.fp !== "FY" || !e.start || !ANNUAL_FORMS.includes(e.form)) continue;
+    if (e.fp !== "FY" || !isFullYearDuration(e) || !ANNUAL_FORMS.includes(e.form)) continue;
     const y = Number(e.end.slice(0, 4));
     const prev = m.get(y);
-    if (!prev || e.end > prev.end) m.set(y, { val: e.val, end: e.end });
+    if (!prev || preferNewer(e, prev)) m.set(y, { val: e.val, end: e.end, filed: e.filed });
   }
   return new Map([...m].map(([y, v]) => [y, v.val]));
 }
 
 /** 재무상태표(instant) — 사업연도말 값 Map<year, val>. */
 export function instantByYear(entries: FactUnitEntry[]): Map<number, number> {
-  const m = new Map<number, { val: number; end: string }>();
+  const m = new Map<number, { val: number; end: string; filed?: string }>();
   for (const e of entries) {
     if (e.start || !ANNUAL_FORMS.includes(e.form)) continue;
     const y = Number(e.end.slice(0, 4));
     const prev = m.get(y);
-    if (!prev || e.end > prev.end) m.set(y, { val: e.val, end: e.end });
+    if (!prev || preferNewer(e, prev)) m.set(y, { val: e.val, end: e.end, filed: e.filed });
   }
   return new Map([...m].map(([y, v]) => [y, v.val]));
 }
@@ -98,7 +114,7 @@ export function recentInstantQuarters(entries: FactUnitEntry[], n = 5): string[]
 export function annualEnds(entries: FactUnitEntry[]): Map<number, string> {
   const m = new Map<number, string>();
   for (const e of entries) {
-    if (e.fp !== "FY" || !e.start || !ANNUAL_FORMS.includes(e.form)) continue;
+    if (e.fp !== "FY" || !isFullYearDuration(e) || !ANNUAL_FORMS.includes(e.form)) continue;
     const y = Number(e.end.slice(0, 4));
     if (!m.has(y) || e.end > m.get(y)!) m.set(y, e.end);
   }
@@ -172,10 +188,70 @@ export function singleQuarter(
   return cur.val - prev.val;
 }
 
+/**
+ * 액면분할 보정 계수 Map<year, factor>. 보고된 주당 지표(EPS·BPS·DPS)에 곱하면
+ * 최신 연도 기준으로 환산된다. 가중평균 희석주식수(최신 공시 기준) 시계열에서
+ * 인접 연도 배수가 크고 매출 배수는 ~1 인 지점을 분할로 판정한다.
+ * NVIDIA(10:1, FY2025) 등 소급 재작성 안 된 과거 연도 대응.
+ */
+export function splitFactorsByYear(
+  facts: CompanyFacts,
+  shareConcepts: string[] = [
+    "WeightedAverageNumberOfDilutedSharesOutstanding",
+    "WeightedAverageNumberOfSharesOutstandingBasic",
+  ],
+  revenueConcepts: string[] = [
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "Revenues",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+  ],
+): Map<number, number> {
+  const merge = (concepts: string[], unit = "USD") => {
+    const out = new Map<number, number>();
+    for (const c of concepts)
+      for (const [y, v] of annualByYear(entriesOf(facts, c, unit))) if (!out.has(y)) out.set(y, v);
+    return out;
+  };
+  const sh = merge(shareConcepts, "shares");
+  const rev = merge(revenueConcepts);
+  const years = [...sh.keys()].sort((a, b) => a - b);
+  const factor = new Map<number, number>();
+  if (!years.length) return factor;
+  factor.set(years[years.length - 1], 1);
+  const SPLITS = [2, 3, 4, 5, 6, 7, 8, 10, 15, 20];
+  for (let i = years.length - 1; i > 0; i--) {
+    const yNew = years[i];
+    const yOld = years[i - 1];
+    const f = factor.get(yNew) ?? 1;
+    const sNew = sh.get(yNew);
+    const sOld = sh.get(yOld);
+    let step = 1;
+    if (sNew != null && sOld != null && sOld > 0) {
+      const r = sNew / sOld;
+      const rvNew = rev.get(yNew);
+      const rvOld = rev.get(yOld);
+      const revStable = rvNew != null && rvOld != null && rvOld > 0
+        ? rvNew / rvOld > 0.4 && rvNew / rvOld < 2.5
+        : true;
+      if (revStable) {
+        if (r >= 1.6) {
+          const k = SPLITS.reduce((best, c) => (Math.abs(c - r) < Math.abs(best - r) ? c : best), SPLITS[0]);
+          if (Math.abs(k - r) / k < 0.15) step = 1 / k; // 정방향 분할
+        } else if (r <= 1 / 1.6) {
+          const k = SPLITS.reduce((best, c) => (Math.abs(c - 1 / r) < Math.abs(best - 1 / r) ? c : best), SPLITS[0]);
+          if (Math.abs(k - 1 / r) / k < 0.15) step = k; // 병합
+        }
+      }
+    }
+    factor.set(yOld, f * step);
+  }
+  return factor;
+}
+
 /** 흐름 TTM = 최근 FY + 당기누적 − 전년동기누적. */
 export function ttmOf(entries: FactUnitEntry[]): number | null {
   const annuals = entries
-    .filter((e) => e.fp === "FY" && e.start && ANNUAL_FORMS.includes(e.form))
+    .filter((e) => e.fp === "FY" && isFullYearDuration(e) && ANNUAL_FORMS.includes(e.form))
     .sort((a, b) => b.end.localeCompare(a.end));
   const fy = annuals[0];
   if (!fy?.start) return null;

@@ -9,6 +9,7 @@
 
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
+import { splitFactorsByYear } from "./edgar-series";
 
 export interface HighlightColumn {
   key: string;
@@ -54,10 +55,26 @@ const REVENUE = [
   "RevenueFromContractWithCustomerExcludingAssessedTax",
   "RevenueFromContractWithCustomerIncludingAssessedTax",
   "Revenues",
+  "SalesRevenueNet",
+];
+const DA_CONCEPTS = [
+  "DepreciationDepletionAndAmortization",
+  "DepreciationAmortizationAndAccretionNet",
+  "DepreciationAndAmortization",
+];
+const CAPEX_CONCEPTS = [
+  "PaymentsToAcquirePropertyPlantAndEquipment",
+  "PaymentsToAcquireProductiveAssets",
 ];
 
 function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+}
+/** 온전한 1개 회계연도(약 300~400일)인지 — 90일 분기에도 fp="FY" 붙이는 기업(NVIDIA) 대응. */
+function isFullYear(e: FactUnitEntry): boolean {
+  if (!e.start) return false;
+  const d = daysBetween(e.start, e.end);
+  return d >= 300 && d <= 400;
 }
 function shiftYear(iso: string, n: number): string {
   const [y, m, d] = iso.split("-");
@@ -82,10 +99,13 @@ function deiEntries(facts: CompanyFacts, concept: string): FactUnitEntry[] {
 function annualSeries(entries: FactUnitEntry[]): { year: number; val: number; end: string }[] {
   const m = new Map<number, { val: number; end: string; filed: string }>();
   for (const e of entries) {
-    if (e.fp !== "FY" || !e.start || !ANNUAL_FORMS.includes(e.form)) continue;
+    if (e.fp !== "FY" || !isFullYear(e) || !ANNUAL_FORMS.includes(e.form)) continue;
     const year = Number(e.end.slice(0, 4));
     const prev = m.get(year);
-    if (!prev || e.end > prev.end) m.set(year, { val: e.val, end: e.end, filed: "" });
+    const filed = e.filed ?? "";
+    // 최신 종료일, 동률이면 최신 공시(액면분할 등 소급 재작성) 우선
+    if (!prev || e.end > prev.end || (e.end === prev.end && filed >= prev.filed))
+      m.set(year, { val: e.val, end: e.end, filed });
   }
   return [...m.entries()]
     .map(([year, v]) => ({ year, val: v.val, end: v.end }))
@@ -93,6 +113,18 @@ function annualSeries(entries: FactUnitEntry[]): { year: number; val: number; en
 }
 function annualAt(series: { year: number; val: number }[], year: number): number | null {
   return series.find((s) => s.year === year)?.val ?? null;
+}
+/** 여러 개념을 연도별로 병합 (앞 개념 우선) — 태그가 시기별로 바뀌는 기업(NVIDIA) 대응. */
+function annualSeriesMerged(
+  facts: CompanyFacts,
+  concepts: string[],
+  unit = "USD",
+): { year: number; val: number; end: string }[] {
+  const byYear = new Map<number, { year: number; val: number; end: string }>();
+  for (const c of concepts)
+    for (const s of annualSeries(unitEntries(facts, c, unit)))
+      if (!byYear.has(s.year)) byYear.set(s.year, s);
+  return [...byYear.values()].sort((a, b) => a.year - b.year);
 }
 
 /**
@@ -127,7 +159,7 @@ function latestInstantEnd(entries: FactUnitEntry[]): string | null {
 /** 흐름 계정 TTM = 최근 FY + 당기누적 − 전년동기누적. */
 function ttm(entries: FactUnitEntry[]): number | null {
   const annuals = entries
-    .filter((e) => e.fp === "FY" && e.start && ANNUAL_FORMS.includes(e.form))
+    .filter((e) => e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form))
     .sort((a, b) => b.end.localeCompare(a.end));
   const fy = annuals[0];
   if (!fy?.start) return null;
@@ -175,7 +207,7 @@ export function buildUsHighlights(
   const notes: string[] = [];
 
   // ── 컬럼 구성 ────────────────────────────────────────────────────
-  const revSeries = annualSeries(entriesAny(facts, REVENUE));
+  const revSeries = annualSeriesMerged(facts, REVENUE);
   const fyYears = revSeries.map((s) => s.year).slice(-5);
   const fyEndByYear = new Map(revSeries.map((s) => [s.year, s.end]));
   const lastFy = fyYears[fyYears.length - 1] ?? new Date().getFullYear();
@@ -218,42 +250,32 @@ export function buildUsHighlights(
   const blank = (): (number | null)[] => Array(nCol).fill(null);
 
   // ── 계정 시리즈 ──────────────────────────────────────────────────
+  const concat = (concepts: string[], unit = "USD"): FactUnitEntry[] =>
+    concepts.flatMap((c) => unitEntries(facts, c, unit));
   const S = {
-    revenue: annualSeries(entriesAny(facts, REVENUE)),
+    revenue: annualSeriesMerged(facts, REVENUE),
     grossProfit: annualSeries(unitEntries(facts, "GrossProfit", "USD")),
     opIncome: annualSeries(unitEntries(facts, "OperatingIncomeLoss", "USD")),
-    da: annualSeries(
-      entriesAny(facts, [
-        "DepreciationDepletionAndAmortization",
-        "DepreciationAmortizationAndAccretionNet",
-        "DepreciationAndAmortization",
-      ]),
-    ),
+    da: annualSeriesMerged(facts, DA_CONCEPTS),
     netIncome: annualSeries(unitEntries(facts, "NetIncomeLoss", "USD")),
     eps: annualSeries(unitEntries(facts, "EarningsPerShareDiluted", "USD/shares")),
     ocf: annualSeries(
       unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
     ),
-    capex: annualSeries(
-      unitEntries(facts, "PaymentsToAcquirePropertyPlantAndEquipment", "USD"),
-    ),
+    capex: annualSeriesMerged(facts, CAPEX_CONCEPTS),
     dps: annualSeries(
       unitEntries(facts, "CommonStockDividendsPerShareDeclared", "USD/shares"),
     ),
   };
   const E = {
-    revenue: entriesAny(facts, REVENUE),
+    revenue: concat(REVENUE),
     grossProfit: unitEntries(facts, "GrossProfit", "USD"),
     opIncome: unitEntries(facts, "OperatingIncomeLoss", "USD"),
-    da: entriesAny(facts, [
-      "DepreciationDepletionAndAmortization",
-      "DepreciationAmortizationAndAccretionNet",
-      "DepreciationAndAmortization",
-    ]),
+    da: concat(DA_CONCEPTS),
     netIncome: unitEntries(facts, "NetIncomeLoss", "USD"),
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
     ocf: unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
-    capex: unitEntries(facts, "PaymentsToAcquirePropertyPlantAndEquipment", "USD"),
+    capex: concat(CAPEX_CONCEPTS),
     dps: unitEntries(facts, "CommonStockDividendsPerShareDeclared", "USD/shares"),
   };
   const cashE = unitEntries(facts, "CashAndCashEquivalentsAtCarryingValue", "USD");
@@ -388,16 +410,23 @@ export function buildUsHighlights(
     }
     return flowVal(S.netIncome, E.netIncome, col);
   });
+  // 액면분할 보정 (소급 재작성 안 된 과거 연도 주당 지표를 최신 기준으로 환산)
+  const splitF = splitFactorsByYear(facts);
+  const sf = (y: number) => splitF.get(y) ?? 1;
   const eps = columns.map((col) => {
     if (col.kind === "estimate")
       return estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
     if (col.kind === "ltm") return ttm(E.eps);
-    return annualAt(S.eps, Number(col.key.slice(2)));
+    const y = Number(col.key.slice(2));
+    const v = annualAt(S.eps, y);
+    return v == null ? null : v * sf(y);
   });
   const dps = columns.map((col) => {
     if (col.kind === "estimate") return null;
     if (col.kind === "ltm") return ttm(E.dps);
-    return annualAt(S.dps, Number(col.key.slice(2)));
+    const y = Number(col.key.slice(2));
+    const v = annualAt(S.dps, y);
+    return v == null ? null : v * sf(y);
   });
   const divYield = dps.map((d, i) =>
     d != null && priceByCol[i] != null && priceByCol[i]! > 0 ? (d / priceByCol[i]!) * 100 : null,

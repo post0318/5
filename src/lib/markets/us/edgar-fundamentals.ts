@@ -20,6 +20,10 @@ const INTERIM_FORMS = ["10-Q", "10-Q/A"];
 function days(a: string, b: string): number {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
 }
+/** 온전한 1개 회계연도(약 300~400일)인지 — 90일 분기에도 fp="FY" 붙이는 기업(NVIDIA) 대응. */
+function isFullYear(e: FactEntry): boolean {
+  return Boolean(e.start) && days(e.start!, e.end) >= 300 && days(e.start!, e.end) <= 400;
+}
 function shiftYear(iso: string, n: number): string {
   const [y, m, d] = iso.split("-");
   return `${Number(y) + n}-${m}-${d}`;
@@ -64,7 +68,7 @@ export function ttmFlow(entries: FactEntry[] | undefined): TtmResult {
 
   // 1) 최근 사업연도 (FY, 10-K)
   const annuals = entries.filter(
-    (e) => e.fp === "FY" && e.start && ANNUAL_FORMS.includes(e.form) && e.val != null,
+    (e) => e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form) && e.val != null,
   );
   annuals.sort((a, b) => b.end.localeCompare(a.end));
   const fy = annuals[0];

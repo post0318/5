@@ -4,9 +4,11 @@ import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../
 import {
   annualByYear,
   annualEnds,
+  entriesOf,
   firstConcept,
   recentQuarters,
   singleQuarter,
+  splitFactorsByYear,
   ttmOf,
 } from "./edgar-series";
 
@@ -66,14 +68,28 @@ export function buildUsIncome(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
 ): FinancialStatement {
-  const revEntries = firstConcept(facts, REVENUE);
   const quarterly = mode === "quarter";
 
-  const years = [...annualByYear(revEntries).keys()].sort((a, b) => a - b).slice(-5);
-  const ends = annualEnds(revEntries);
+  // 개념 태그가 시기별로 바뀌는 기업(NVIDIA 등) → 나열 개념을 연도별로 병합
+  const mergedAnnual = (concepts: string[], unit = "USD"): Map<number, number> => {
+    const out = new Map<number, number>();
+    for (const c of concepts)
+      for (const [y, v] of annualByYear(entriesOf(facts, c, unit))) if (!out.has(y)) out.set(y, v);
+    return out;
+  };
+  const mergedEnds = (concepts: string[]): Map<number, string> => {
+    const out = new Map<number, string>();
+    for (const c of concepts)
+      for (const [y, d] of annualEnds(entriesOf(facts, c))) if (!out.has(y)) out.set(y, d);
+    return out;
+  };
+  const allRevEntries = REVENUE.flatMap((c) => entriesOf(facts, c));
+
+  const years = [...mergedAnnual(REVENUE).keys()].sort((a, b) => a - b).slice(-5);
+  const ends = mergedEnds(REVENUE);
   const lastFy = years[years.length - 1] ?? new Date().getFullYear();
   // 6개 확보 → 가장 오래된 1개는 YTD 차감용 prev 로만 쓰고 표시는 5개
-  const qCols = quarterly ? [...recentQuarters(revEntries, 6)].reverse() : [];
+  const qCols = quarterly ? [...recentQuarters(allRevEntries, 6)].reverse() : [];
   const qShow = qCols.slice(-5);
 
   let periods: FinancialPeriod[];
@@ -104,18 +120,27 @@ export function buildUsIncome(
     Object.fromEntries(labels.map((l) => [l, null]));
 
   const val = (concepts: string[], unit = "USD"): Record<string, number | null> => {
-    const e = firstConcept(facts, concepts, unit);
     const out = blank();
     if (quarterly) {
       qCols.forEach((q, i) => {
         if (i === 0) return; // prev 전용
-        out[q.label] = singleQuarter(e, q, qCols[i - 1]);
+        for (const c of concepts) {
+          const v = singleQuarter(entriesOf(facts, c, unit), q, qCols[i - 1]);
+          if (v != null) { out[q.label] = v; break; }
+        }
       });
       return out;
     }
-    const ann = annualByYear(e);
+    const ann = mergedAnnual(concepts, unit);
     for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-    out[LTM] = ttmOf(e);
+    // 가장 최근 데이터가 있는 개념의 TTM (태그 이전 후 과거 개념 옛 FY값 방지)
+    let ttmEnd = "";
+    for (const c of concepts) {
+      const es = entriesOf(facts, c, unit);
+      if (!es.length) continue;
+      const maxEnd = es.reduce((m, e) => (e.end > m ? e.end : m), "");
+      if (maxEnd > ttmEnd) { ttmEnd = maxEnd; out[LTM] = ttmOf(es); }
+    }
     return out;
   };
   const diff = (
@@ -191,8 +216,19 @@ export function buildUsIncome(
   for (const l of labels)
     if (pretax[l] != null && tax[l] != null && netIncome[l] != null)
       otherToNi[l] = Math.round(pretax[l]! - tax[l]! - netIncome[l]!);
-  const epsBasic = val(EPS_BASIC, "USD/shares");
-  const epsDil = val(EPS_DIL, "USD/shares");
+  // 액면분할 보정: 소급 재작성 안 된 과거 연도 EPS 를 최신 연도 기준으로 환산
+  const splitF = splitFactorsByYear(facts);
+  const adjEps = (o: Record<string, number | null>): Record<string, number | null> => {
+    if (quarterly) return o;
+    const r = { ...o };
+    for (const y of years) {
+      const f = splitF.get(y);
+      if (f != null && f !== 1 && r[fyKey(y)] != null) r[fyKey(y)] = r[fyKey(y)]! * f;
+    }
+    return r;
+  };
+  const epsBasic = adjEps(val(EPS_BASIC, "USD/shares"));
+  const epsDil = adjEps(val(EPS_DIL, "USD/shares"));
 
   const da = val(DA);
   const ebitda = blank();

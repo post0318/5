@@ -9,6 +9,7 @@ import {
   firstConcept,
   instantByYear,
   latestInstant,
+  splitFactorsByYear,
   ttmOf,
 } from "./edgar-series";
 
@@ -45,9 +46,24 @@ function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
 }
 
 export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): FinancialStatement {
-  const revEntries = firstConcept(facts, REV);
-  const years = [...annualByYear(revEntries).keys()].sort((a, b) => a - b).slice(-5);
-  const ends = annualEnds(revEntries);
+  // 개념 태그가 시기에 따라 바뀌는 기업(NVIDIA: RevenueFromContract…→Revenues,
+  // 메타: InterestExpense→InterestExpenseNonoperating 등)이 많아, 단일 개념이 아니라
+  // 나열된 개념들을 "연도별로 첫 유효값" 규칙으로 병합한다.
+  const mergedAnnual = (concepts: string[], unit = "USD"): Map<number, number> => {
+    const maps = concepts.map((c) => annualByYear(entriesOf(facts, c, unit)));
+    const out = new Map<number, number>();
+    for (const m of maps) for (const [y, v] of m) if (!out.has(y)) out.set(y, v);
+    return out;
+  };
+  const mergedEnds = (concepts: string[], unit = "USD"): Map<number, string> => {
+    const out = new Map<number, string>();
+    for (const c of concepts)
+      for (const [y, d] of annualEnds(entriesOf(facts, c, unit))) if (!out.has(y)) out.set(y, d);
+    return out;
+  };
+
+  const years = [...mergedAnnual(REV).keys()].sort((a, b) => a - b).slice(-5);
+  const ends = mergedEnds(REV);
   const lastBar = [...bars].reverse().find((b) => b.close != null);
   const nowIso = lastBar?.date ?? new Date().toISOString().slice(0, 10);
 
@@ -61,34 +77,34 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const labels = periods.map((p) => p.label);
   const blank = (): Record<string, number | null> => Object.fromEntries(labels.map((l) => [l, null]));
 
-  // 흐름값: FY → 연간, LTM → TTM
+  // 여러 개념 중 가장 최근 데이터가 있는 개념의 TTM (태그 이전 후 과거 개념의 옛 FY값이
+  // 잡히는 것 방지 — NVIDIA RevenueFromContract… 는 FY2022 에서 끊김)
+  const bestTtm = (concepts: string[], unit = "USD"): number | null => {
+    let best: number | null = null;
+    let bestEnd = "";
+    for (const c of concepts) {
+      const es = entriesOf(facts, c, unit);
+      if (!es.length) continue;
+      const maxEnd = es.reduce((m, e) => (e.end > m ? e.end : m), "");
+      if (maxEnd > bestEnd) {
+        bestEnd = maxEnd;
+        best = ttmOf(es);
+      }
+    }
+    return best;
+  };
+  // 흐름값: FY → 연간(개념 병합), LTM → TTM(최근 개념)
   const flow = (concepts: string[], unit = "USD"): Record<string, number | null> => {
-    const e = firstConcept(facts, concepts, unit);
-    const ann = annualByYear(e);
+    const ann = mergedAnnual(concepts, unit);
     const o = blank();
     for (const y of years) o[`${y}Y`] = ann.get(y) ?? null;
-    o[LTM] = ttmOf(e);
+    o[LTM] = bestTtm(concepts, unit);
     return o;
   };
+  const flowM = flow;
   /** 전체 연도 시계열 (CAGR용). */
-  const fullAnnual = (concepts: string[], unit = "USD") =>
-    annualByYear(firstConcept(facts, concepts, unit));
-  // 연도별 병합: 개념마다 태깅이 끊기는 경우(메타 InterestExpense→InterestExpenseNonoperating,
-  // AccountsPayableCurrent→AccountsPayableTradeCurrent 등) 연도별로 첫 유효값을 채운다.
-  const flowM = (concepts: string[], unit = "USD"): Record<string, number | null> => {
-    const maps = concepts.map((c) => annualByYear(entriesOf(facts, c, unit)));
-    const o = blank();
-    for (const y of years)
-      for (const m of maps) {
-        const v = m.get(y);
-        if (v != null) { o[`${y}Y`] = v; break; }
-      }
-    for (const c of concepts) {
-      const t = ttmOf(entriesOf(facts, c, unit));
-      if (t != null) { o[LTM] = t; break; }
-    }
-    return o;
-  };
+  const fullAnnual = (concepts: string[], unit = "USD") => mergedAnnual(concepts, unit);
+  // 잔액값: FY말 → 그 해(개념 병합), LTM → 최신(개념 병합)
   const stockM = (concepts: string[]): Record<string, number | null> => {
     const maps = concepts.map((c) => instantByYear(entriesOf(facts, c)));
     const o = blank();
@@ -103,7 +119,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     }
     return o;
   };
-  // 잔액값: FY말 → 그 해, LTM → 최신
+  // 잔액값 (단일 개념 우선 목록)
   const stock = (concepts: string[]): Record<string, number | null> => {
     const e = firstConcept(facts, concepts);
     const ann = instantByYear(e);
@@ -121,16 +137,39 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return o;
   };
 
+  // 액면분할 보정 계수 (소급 재작성 안 된 과거 연도의 주당 지표를 최신 연도 기준으로 환산)
+  const splitF = splitFactorsByYear(facts);
+  const adjPerShare = (o: Record<string, number | null>): Record<string, number | null> => {
+    const r = { ...o };
+    for (const y of years) {
+      const f = splitF.get(y);
+      if (f != null && f !== 1 && r[`${y}Y`] != null) r[`${y}Y`] = r[`${y}Y`]! * f;
+    }
+    return r;
+  };
+  const adjMap = (m: Map<number, number>): Map<number, number> => {
+    const out = new Map<number, number>();
+    for (const [y, v] of m) out.set(y, v * (splitF.get(y) ?? 1));
+    return out;
+  };
+
   const revenue = flow(REV);
   const grossProfitRaw = flow(["GrossProfit"]);
   const opIncome = flow(["OperatingIncomeLoss"]);
   const netIncome = flow(["NetIncomeLoss"]);
-  const eps = flow(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares");
-  const epsFull = fullAnnual(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares");
+  const eps = adjPerShare(
+    flow(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares"),
+  );
+  const epsFull = adjMap(
+    fullAnnual(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares"),
+  );
   const revFull = fullAnnual(REV);
   const da = flow(DA);
   const ocf = flow(["NetCashProvidedByUsedInOperatingActivities"]);
-  const capexRaw = flow(["PaymentsToAcquirePropertyPlantAndEquipment"]);
+  const capexRaw = flow([
+    "PaymentsToAcquirePropertyPlantAndEquipment",
+    "PaymentsToAcquireProductiveAssets",
+  ]);
   const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const intExp = flowM(INT_EXP);
@@ -232,7 +271,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const perShare = (a: Record<string, number | null>) => {
     const o = blank();
     for (const l of labels) if (a[l] != null && shares[l]) o[l] = a[l]! / shares[l]!;
-    return o;
+    return adjPerShare(o); // 분모(주식수)가 소급 재작성 안 된 과거 연도 → 분할 계수로 환산
   };
   // CAGR: 전체 연도 시계열에서 각 컬럼 대비 n년 전 값
   const cagr = (full: Map<number, number>, n: number) => {
@@ -453,7 +492,9 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("배당수익률 (%)", (() => {
       const o = blank();
       for (const l of labels) {
-        const dps = dividends[l] != null && shares[l] ? Math.abs(dividends[l]!) / shares[l]! : null;
+        const raw = dividends[l] != null && shares[l] ? Math.abs(dividends[l]!) / shares[l]! : null;
+        const y = l === LTM ? years.at(-1) : Number(l.replace("Y", ""));
+        const dps = raw != null ? raw * (splitF.get(y ?? 0) ?? 1) : null;
         if (dps != null && price[l]) o[l] = (dps / price[l]!) * 100;
       }
       return o;
