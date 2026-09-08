@@ -241,6 +241,8 @@ export function buildUsCashFlow(
     };
   }
   const labels = periods.map((p) => p.label);
+  const blank = (): Record<string, number | null> =>
+    Object.fromEntries(labels.map((l) => [l, null]));
   const combineVals = (parts: [string, boolean][]): Record<string, number | null> => {
     const out: Record<string, number | null> = {};
     for (const lbl of labels) out[lbl] = null;
@@ -371,12 +373,23 @@ export function buildUsCashFlow(
     isHighlight: true,
     values: netChange,
   });
-  // 보충 정보
+  // ── 주석 항목 ──
+  items.push({ accountName: "", accountId: "cf:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() });
+  items.push({ accountName: "[ 주석 항목 ]", accountId: "cf:note", depth: 0, isSubtotal: true, isHighlight: false, values: blank() });
+
+  const capex = valOf(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"]);
+  const opCf = sect(0);
+  const fcf: Record<string, number | null> = {};
+  for (const l of labels)
+    if (opCf[l] != null && capex[l] != null) fcf[l] = Math.round(opCf[l]! - Math.abs(capex[l]!));
+  items.push({ accountName: "자본적지출 (CapEx)", accountId: "cf:note:capex", depth: 1, isSubtotal: false, isHighlight: false, values: capex });
+  items.push({ accountName: "잉여현금흐름 (FCF)", accountId: "cf:note:fcf", depth: 1, isSubtotal: false, isHighlight: false, values: fcf });
+
   const tax = valOf(TAX_PAID);
   const intp = valOf(INT_PAID);
   if (labels.some((l) => tax[l] != null))
     items.push({
-      accountName: "(보충) 법인세 납부액",
+      accountName: "법인세 납부액",
       accountId: "cf:taxpaid",
       depth: 1,
       isSubtotal: false,
@@ -385,7 +398,7 @@ export function buildUsCashFlow(
     });
   if (labels.some((l) => intp[l] != null))
     items.push({
-      accountName: "(보충) 이자 지급액",
+      accountName: "이자 지급액",
       accountId: "cf:intpaid",
       depth: 1,
       isSubtotal: false,
