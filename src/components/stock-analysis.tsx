@@ -752,7 +752,7 @@ export function StockAnalysis({
                   <div className="overflow-x-auto rounded-lg border">
                     <table className="w-full min-w-[560px] text-sm">
                       <thead>
-                        <tr className="bg-muted/50 text-muted-foreground text-left">
+                        <tr className="bg-muted text-muted-foreground text-left">
                           <th className="px-3 py-2 font-medium">기준일</th>
                           <th className="px-3 py-2 font-medium">권리락일</th>
                           <th className="px-3 py-2 font-medium">배당금지급일</th>
@@ -762,7 +762,13 @@ export function StockAnalysis({
                       </thead>
                       <tbody className="divide-y">
                         {rightsQ.data.events.map((e, i) => (
-                          <tr key={i} className="hover:bg-muted/30 align-top">
+                          <tr
+                            key={i}
+                            className={cn(
+                              "hover:bg-muted/30 align-top",
+                              i % 2 === 1 && "bg-muted/30",
+                            )}
+                          >
                             <td className="tnum px-3 py-2 whitespace-nowrap">{e.basDt || "-"}</td>
                             <td className="tnum px-3 py-2 whitespace-nowrap">
                               {e.exRightsDate ?? "-"}

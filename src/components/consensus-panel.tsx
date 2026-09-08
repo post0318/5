@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import { apiFetch } from "@/lib/query";
 import { cn } from "@/lib/utils";
-import { formatBigAmount, formatNumber } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
 import type { ConsensusData } from "@/lib/markets/consensus";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,10 +52,8 @@ export function ConsensusPanel({
     return <p className="text-muted-foreground text-sm">표시할 컨센서스 데이터가 없습니다.</p>;
 
   const bigUnit = market === "jp" ? "천만엔" : market === "us" ? "백만$" : "억원";
-  const big = (v: number | null) => (v == null ? "-" : formatBigAmount(v, market));
   const won = (v: number | null) => (v == null ? "-" : formatNumber(v, market === "kr" ? 0 : 2));
   const mult = (v: number | null) => (v == null ? "-" : `${formatNumber(v, 2)}x`);
-  const pct = (v: number | null) => (v == null ? "-" : `${v > 0 ? "+" : ""}${formatNumber(v, 2)}%`);
 
   const chartData = d.rows.map((r) => ({
     label: r.label,
@@ -137,58 +135,9 @@ export function ConsensusPanel({
           </ResponsiveContainer>
         </div>
 
-        {/* 연간 실적 + 추정 표 */}
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
-            <thead>
-              <tr className="text-muted-foreground border-b text-right">
-                <th className="py-2 text-left font-medium">재무연월</th>
-                <th className="py-2 font-medium">매출액<span className="text-[10px]"> ({bigUnit})</span></th>
-                <th className="py-2 font-medium">YoY</th>
-                <th className="py-2 font-medium">영업이익</th>
-                <th className="py-2 font-medium">순이익</th>
-                <th className="py-2 font-medium">EPS</th>
-                <th className="py-2 font-medium">BPS</th>
-                <th className="py-2 font-medium">PER</th>
-                <th className="py-2 font-medium">PBR</th>
-                <th className="py-2 font-medium">ROE</th>
-                <th className="py-2 font-medium">EV/EBITDA</th>
-              </tr>
-            </thead>
-            <tbody className="tnum">
-              {d.rows.map((r) => (
-                <tr
-                  key={r.fy}
-                  className={cn("border-b text-right", r.isEstimate && "bg-muted/40")}
-                >
-                  <td className="py-1.5 text-left">
-                    {r.label}
-                    <span className="text-muted-foreground ml-1 text-[11px]">
-                      {r.isEstimate ? "(E)" : "(A)"}
-                    </span>
-                  </td>
-                  <td className="py-1.5">{big(r.revenue)}</td>
-                  <td className={cn("py-1.5", r.revenueYoY != null && r.revenueYoY < 0 && "text-down")}>
-                    {r.revenueYoY == null ? "-" : pct(r.revenueYoY)}
-                  </td>
-                  <td className="py-1.5">{big(r.opIncome)}</td>
-                  <td className="py-1.5">{big(r.netIncome)}</td>
-                  <td className="py-1.5">{won(r.eps)}</td>
-                  <td className="py-1.5">{won(r.bps)}</td>
-                  <td className="py-1.5">{mult(r.per)}</td>
-                  <td className="py-1.5">{mult(r.pbr)}</td>
-                  <td className="py-1.5">{r.roe == null ? "-" : `${formatNumber(r.roe, 2)}%`}</td>
-                  <td className="py-1.5">{mult(r.evEbitda)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="text-muted-foreground/80 text-[11px]">
-          (A) 공시 실적 · (E) yahoo 추정. 연도별 PER/PBR 은 각 결산월 말 주가 기준(추정행은 현재가).
-          영업이익·순이익·ROE 추정치는 무료 소스에 없어 공란 — 상세는 아래 원본 링크.
-          {d.notes.length > 0 && ` · ${d.notes.join(" · ")}`}
-        </p>
+        {d.notes.length > 0 && (
+          <p className="text-muted-foreground/80 text-[11px]">{d.notes.join(" · ")}</p>
+        )}
 
         {/* EPS 컨센서스 추이 + 어닝 서프라이즈 */}
         <div className="grid gap-6 md:grid-cols-2">
