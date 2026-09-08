@@ -39,14 +39,6 @@ const TAX = ["IncomeTaxExpenseBenefit"];
 const DISC_OPS = ["IncomeLossFromDiscontinuedOperationsNetOfTax"];
 const NCI = ["NetIncomeLossAttributableToNoncontrollingInterest"];
 const NET_INCOME = ["NetIncomeLoss"];
-const WA_BASIC = [
-  "WeightedAverageNumberOfSharesOutstandingBasic",
-  "WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
-];
-const WA_DIL = [
-  "WeightedAverageNumberOfDilutedSharesOutstanding",
-  "WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
-];
 const EPS_BASIC = ["EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted"];
 const EPS_DIL = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"];
 const NONOP = ["NonoperatingIncomeExpense", "OtherNonoperatingIncomeExpense"];
@@ -189,8 +181,6 @@ export function buildUsIncome(
   const disc = val(DISC_OPS);
   const nci = val(NCI);
   const netIncome = val(NET_INCOME);
-  const waBasic = val(WA_BASIC, "shares");
-  const waDil = val(WA_DIL, "shares");
   const epsBasic = val(EPS_BASIC, "USD/shares");
   const epsDil = val(EPS_DIL, "USD/shares");
 
@@ -242,9 +232,7 @@ export function buildUsIncome(
     row("중단사업손익", disc),
     row("소수주주지분", nci),
     row("당기순이익", netIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
-    row("기본 가중평균주식수", waBasic, { numberFormat: "shares" }),
     row("기본 EPS", epsBasic, { numberFormat: "eps" }),
-    row("희석 가중평균주식수", waDil, { numberFormat: "shares" }),
     row("희석 EPS", epsDil, { numberFormat: "eps" }),
     { accountName: "", accountId: "is:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() },
     row("EBITDA", ebitda),
