@@ -77,13 +77,15 @@ export function buildUsIncome(
   const years = [...annualByYear(revEntries).keys()].sort((a, b) => a - b).slice(-5);
   const ends = annualEnds(revEntries);
   const lastFy = years[years.length - 1] ?? new Date().getFullYear();
-  const qCols = quarterly ? [...recentQuarters(revEntries, 5)].reverse() : [];
+  // 6개 확보 → 가장 오래된 1개는 YTD 차감용 prev 로만 쓰고 표시는 5개
+  const qCols = quarterly ? [...recentQuarters(revEntries, 6)].reverse() : [];
+  const qShow = qCols.slice(-5);
 
   let periods: FinancialPeriod[];
   let estCols: { year: number; p: IncomeEstimatePeriod }[] = [];
 
   if (quarterly) {
-    periods = qCols.map((q) => ({
+    periods = qShow.map((q) => ({
       label: q.label,
       fiscalYear: Number(q.label.slice(0, 4)),
       fiscalQuarter: Number(q.label.slice(-1)) || null,
@@ -128,7 +130,8 @@ export function buildUsIncome(
     const out = blank();
     if (quarterly) {
       qCols.forEach((q, i) => {
-        out[q.label] = singleQuarter(e, q, i > 0 ? qCols[i - 1] : undefined);
+        if (i === 0) return; // prev 전용
+        out[q.label] = singleQuarter(e, q, qCols[i - 1]);
       });
       return out;
     }

@@ -198,9 +198,8 @@ export function buildUsCashFlow(
   let valOf: (concepts: string[]) => Record<string, number | null>;
 
   if (mode === "quarter") {
-    const qs = recentQuarters(opEntries, 5); // 최신→과거
-    const chron = [...qs].reverse();
-    periods = chron.map((q) => ({
+    const chron = [...recentQuarters(opEntries, 6)].reverse(); // 6개 (0번은 prev 전용)
+    periods = chron.slice(-5).map((q) => ({
       label: q.label,
       fiscalYear: Number(q.label.slice(0, 4)),
       fiscalQuarter: Number(q.label.slice(-1)) || null,
@@ -210,7 +209,7 @@ export function buildUsCashFlow(
       const e = firstConcept(facts, concepts);
       const out: Record<string, number | null> = {};
       chron.forEach((q, i) => {
-        out[q.label] = singleQuarter(e, q, i > 0 ? chron[i - 1] : undefined);
+        if (i > 0) out[q.label] = singleQuarter(e, q, chron[i - 1]);
       });
       return out;
     };
