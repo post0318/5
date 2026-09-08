@@ -187,7 +187,6 @@ export function buildUsIncome(
   const ebitda = blank();
   for (const l of labels)
     if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
-  const dps = val(["CommonStockDividendsPerShareDeclared"], "USD/shares");
   const divPaid = val(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
 
   const pct = (a: Record<string, number | null>) => {
@@ -245,11 +244,9 @@ export function buildUsIncome(
     row("EBITDA 마진", pct(ebitda), { numberFormat: "pct", depth: 2 }),
     row("EBIT (영업이익)", opIncome),
     row("성장률 (YoY)", yoy(opIncome), { numberFormat: "pct", depth: 2 }),
-    row("매출총이익률", pct(grossProfit), { numberFormat: "pct", depth: 2 }),
-    row("영업이익률", pct(opIncome), { numberFormat: "pct", depth: 2 }),
-    row("순이익률", pct(netIncome), { numberFormat: "pct", depth: 2 }),
-    row("주당 배당 (DPS)", dps, { numberFormat: "eps" }),
-    row("성장률 (YoY)", yoy(dps), { numberFormat: "pct", depth: 2 }),
+    row("매출총이익률", pct(grossProfit), { numberFormat: "pct" }),
+    row("영업이익률", pct(opIncome), { numberFormat: "pct" }),
+    row("순이익률", pct(netIncome), { numberFormat: "pct" }),
     row("배당금 총액", divPaid),
     row("성장률 (YoY)", yoy(divPaid), { numberFormat: "pct", depth: 2 }),
     row("감가상각비·무형자산상각비", da),
