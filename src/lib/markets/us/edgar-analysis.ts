@@ -261,15 +261,14 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     if (mc != null && netDebt[l] != null) evV[l] = mc + netDebt[l]!;
   }
   const evEbitda = ratio(evV, ebitda);
-  const epsGrowth = blank();
-  for (let i = 1; i < labels.length; i++) {
-    const c = eps[labels[i]];
-    const p = eps[labels[i - 1]];
-    if (c != null && p && p > 0) epsGrowth[labels[i]] = ((c - p) / p) * 100;
-  }
+  // PEG: 분모는 3년(부족 시 2년) EPS CAGR% — 1년 YoY 는 변동이 커 왜곡 심함
+  const epsCagr3 = cagr(epsFull, 3);
+  const epsCagr2 = cagr(epsFull, 2);
   const peg = blank();
-  for (const l of labels)
-    if (per[l] != null && epsGrowth[l] && epsGrowth[l]! > 0) peg[l] = per[l]! / epsGrowth[l]!;
+  for (const l of labels) {
+    const g = epsCagr3[l] ?? epsCagr2[l];
+    if (per[l] != null && per[l]! > 0 && g != null && g >= 1) peg[l] = per[l]! / g;
+  }
 
   const effTax = ratio(taxExp, pretax, 100);
   const payoutR = (() => {
@@ -334,7 +333,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("PBR", pbrV, "mult"),
     R("PSR", psrV, "mult"),
     R("EV/EBITDA", evEbitda, "mult"),
-    R("PEG", peg, "mult"),
+    R("PEG (EPS 3Y CAGR)", peg, "mult"),
     SP("1"),
     HEAD("수익성"),
     R("ROE (%)", ratio(netIncome, equity, 100), "pct"),
