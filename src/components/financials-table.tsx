@@ -114,7 +114,7 @@ export function FinancialsTable({
             ))}
           </div>
         )}
-        {period && onPeriodChange && !useDetail && (
+        {period && onPeriodChange && (
           <div className="border-border flex overflow-hidden rounded-md border text-sm">
             {(["annual", "quarter"] as const).map((p) => (
               <button

@@ -1,7 +1,14 @@
 import "server-only";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { annualByYear, annualEnds, firstConcept, ttmOf } from "./edgar-series";
+import {
+  annualByYear,
+  annualEnds,
+  firstConcept,
+  recentQuarters,
+  singleQuarter,
+  ttmOf,
+} from "./edgar-series";
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
@@ -62,51 +69,71 @@ const estKey = (y: number) => `${y}Y 예상`;
 export function buildUsIncome(
   facts: CompanyFacts,
   estimates: IncomeEstimatePeriod[],
+  mode: "annual" | "quarter" = "annual",
 ): FinancialStatement {
   const revEntries = firstConcept(facts, REVENUE);
+  const quarterly = mode === "quarter";
+
   const years = [...annualByYear(revEntries).keys()].sort((a, b) => a - b).slice(-5);
   const ends = annualEnds(revEntries);
   const lastFy = years[years.length - 1] ?? new Date().getFullYear();
+  const qCols = quarterly ? [...recentQuarters(revEntries, 5)].reverse() : [];
 
-  const periods: FinancialPeriod[] = years.map((y) => ({
-    label: fyKey(y),
-    fiscalYear: y,
-    fiscalQuarter: null,
-    endDate: ends.get(y) ?? `${y}-12-31`,
-  }));
-  periods.push({
-    label: LTM,
-    fiscalYear: lastFy + 1,
-    fiscalQuarter: null,
-    endDate: new Date().toISOString().slice(0, 10),
-  });
-  const estCols: { year: number; p: IncomeEstimatePeriod }[] = [];
-  for (const p of estimates) {
-    if (!["0y", "+1y", "+2y"].includes(p.period)) continue;
-    const y = p.endDate ? Number(p.endDate.slice(0, 4)) : null;
-    if (y == null || y <= lastFy || estCols.some((e) => e.year === y)) continue;
-    estCols.push({ year: y, p });
-  }
-  estCols.sort((a, b) => a.year - b.year);
-  for (const e of estCols.slice(0, 2))
-    periods.push({
-      label: estKey(e.year),
-      fiscalYear: e.year,
+  let periods: FinancialPeriod[];
+  let estCols: { year: number; p: IncomeEstimatePeriod }[] = [];
+
+  if (quarterly) {
+    periods = qCols.map((q) => ({
+      label: q.label,
+      fiscalYear: Number(q.label.slice(0, 4)),
+      fiscalQuarter: Number(q.label.slice(-1)) || null,
+      endDate: q.end,
+    }));
+  } else {
+    periods = years.map((y) => ({
+      label: fyKey(y),
+      fiscalYear: y,
       fiscalQuarter: null,
-      endDate: e.p.endDate,
+      endDate: ends.get(y) ?? `${y}-12-31`,
+    }));
+    periods.push({
+      label: LTM,
+      fiscalYear: lastFy + 1,
+      fiscalQuarter: null,
+      endDate: new Date().toISOString().slice(0, 10),
     });
+    for (const p of estimates) {
+      if (!["0y", "+1y", "+2y"].includes(p.period)) continue;
+      const y = p.endDate ? Number(p.endDate.slice(0, 4)) : null;
+      if (y == null || y <= lastFy || estCols.some((e) => e.year === y)) continue;
+      estCols.push({ year: y, p });
+    }
+    estCols.sort((a, b) => a.year - b.year);
+    estCols = estCols.slice(0, 2);
+    for (const e of estCols)
+      periods.push({
+        label: estKey(e.year),
+        fiscalYear: e.year,
+        fiscalQuarter: null,
+        endDate: e.p.endDate,
+      });
+  }
   const labels = periods.map((p) => p.label);
 
   const blank = (): Record<string, number | null> =>
     Object.fromEntries(labels.map((l) => [l, null]));
 
-  /** FY + LTM 값 (추정 컬럼은 null). */
   const val = (concepts: string[], unit = "USD"): Record<string, number | null> => {
     const e = firstConcept(facts, concepts, unit);
-    const ann = annualByYear(e);
     const out = blank();
+    if (quarterly) {
+      qCols.forEach((q, i) => {
+        out[q.label] = singleQuarter(e, q, i > 0 ? qCols[i - 1] : undefined);
+      });
+      return out;
+    }
+    const ann = annualByYear(e);
     for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-    // 순간값(EPS 등)은 ttmOf 가 FY 폴백 → 무방
     out[LTM] = ttmOf(e);
     return out;
   };

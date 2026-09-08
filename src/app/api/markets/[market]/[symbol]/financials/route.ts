@@ -34,7 +34,7 @@ export async function GET(
       ]);
       const stmt =
         detailView === "cf"
-          ? buildUsCashFlow(facts)
+          ? buildUsCashFlow(facts, period)
           : buildUsIncome(
               facts,
               (est?.periods ?? []).map((p) => ({
@@ -43,6 +43,7 @@ export async function GET(
                 epsAvg: p.epsAvg,
                 revenueAvg: p.revenueAvg,
               })),
+              period,
             );
       stmt.symbol = sym;
       return ok(stmt, {

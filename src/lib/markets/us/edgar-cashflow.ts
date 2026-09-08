@@ -1,6 +1,7 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
+import { recentQuarters, singleQuarter } from "./edgar-series";
 
 /**
  * 미국 상세 현금흐름표 — SEC EDGAR companyfacts 를 정규화 라인으로 재분류.
@@ -187,38 +188,60 @@ const INT_PAID = ["InterestPaidNet", "InterestPaid"];
 const LTM = "현재/LTM";
 const fyKey = (y: number) => `${y}Y`;
 
-export function buildUsCashFlow(facts: CompanyFacts): FinancialStatement {
-  // 컬럼: 최근 5개 사업연도 + LTM
+export function buildUsCashFlow(
+  facts: CompanyFacts,
+  mode: "annual" | "quarter" = "annual",
+): FinancialStatement {
   const opEntries = firstConcept(facts, BLOCKS[0].total.concepts);
-  const fyMap = annualByYear(opEntries);
-  const years = [...fyMap.keys()].sort((a, b) => a - b).slice(-5);
-  const opAnnualEnds = new Map<number, string>();
-  for (const e of opEntries)
-    if (e.fp === "FY" && e.start && ANNUAL_FORMS.includes(e.form))
-      opAnnualEnds.set(Number(e.end.slice(0, 4)), e.end);
 
-  const periods: FinancialPeriod[] = years.map((y) => ({
-    label: fyKey(y),
-    fiscalYear: y,
-    fiscalQuarter: null,
-    endDate: opAnnualEnds.get(y) ?? `${y}-12-31`,
-  }));
-  periods.push({
-    label: LTM,
-    fiscalYear: (years[years.length - 1] ?? new Date().getFullYear()) + 1,
-    fiscalQuarter: null,
-    endDate: new Date().toISOString().slice(0, 10),
-  });
+  let periods: FinancialPeriod[];
+  let valOf: (concepts: string[]) => Record<string, number | null>;
+
+  if (mode === "quarter") {
+    const qs = recentQuarters(opEntries, 5); // 최신→과거
+    const chron = [...qs].reverse();
+    periods = chron.map((q) => ({
+      label: q.label,
+      fiscalYear: Number(q.label.slice(0, 4)),
+      fiscalQuarter: Number(q.label.slice(-1)) || null,
+      endDate: q.end,
+    }));
+    valOf = (concepts) => {
+      const e = firstConcept(facts, concepts);
+      const out: Record<string, number | null> = {};
+      chron.forEach((q, i) => {
+        out[q.label] = singleQuarter(e, q, i > 0 ? chron[i - 1] : undefined);
+      });
+      return out;
+    };
+  } else {
+    const years = [...annualByYear(opEntries).keys()].sort((a, b) => a - b).slice(-5);
+    const opAnnualEnds = new Map<number, string>();
+    for (const e of opEntries)
+      if (e.fp === "FY" && e.start && ANNUAL_FORMS.includes(e.form))
+        opAnnualEnds.set(Number(e.end.slice(0, 4)), e.end);
+    periods = years.map((y) => ({
+      label: fyKey(y),
+      fiscalYear: y,
+      fiscalQuarter: null,
+      endDate: opAnnualEnds.get(y) ?? `${y}-12-31`,
+    }));
+    periods.push({
+      label: LTM,
+      fiscalYear: (years[years.length - 1] ?? new Date().getFullYear()) + 1,
+      fiscalQuarter: null,
+      endDate: new Date().toISOString().slice(0, 10),
+    });
+    valOf = (concepts) => {
+      const entries = firstConcept(facts, concepts);
+      const ann = annualByYear(entries);
+      const out: Record<string, number | null> = {};
+      for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
+      out[LTM] = ttmOf(entries);
+      return out;
+    };
+  }
   const labels = periods.map((p) => p.label);
-
-  const valOf = (concepts: string[]): Record<string, number | null> => {
-    const entries = firstConcept(facts, concepts);
-    const ann = annualByYear(entries);
-    const out: Record<string, number | null> = {};
-    for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-    out[LTM] = ttmOf(entries);
-    return out;
-  };
   const combineVals = (parts: [string, boolean][]): Record<string, number | null> => {
     const out: Record<string, number | null> = {};
     for (const lbl of labels) out[lbl] = null;

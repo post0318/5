@@ -67,19 +67,19 @@ export function StockAnalysis({
 
   // 미국 표준화 상세표 (CF·IS 하위탭)
   const cfDetailQ = useQuery({
-    queryKey: ["financials-cf", market, symbol],
+    queryKey: ["financials-cf", market, symbol, period],
     queryFn: () =>
       apiFetch<FinancialStatement>(
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=cf`,
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=cf&period=${period}`,
       ),
     enabled: Boolean(symbol) && market === "us",
     retry: false,
   });
   const isDetailQ = useQuery({
-    queryKey: ["financials-is", market, symbol, yahooOverride],
+    queryKey: ["financials-is", market, symbol, period, yahooOverride],
     queryFn: () =>
       apiFetch<FinancialStatement>(
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=is` +
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=is&period=${period}` +
           (yahooOverride ? `&yahoo=${encodeURIComponent(yahooOverride)}` : ""),
       ),
     enabled: Boolean(symbol) && market === "us",
