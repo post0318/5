@@ -722,7 +722,7 @@ export function StockAnalysis({
                             : "hover:bg-muted text-muted-foreground",
                         )}
                       >
-                        {v === "core" ? "핵심 공시" : "전체"}
+                        {v === "core" ? "주요 공시" : "전체"}
                       </button>
                     ))}
                   </div>
