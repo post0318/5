@@ -253,7 +253,6 @@ export function buildUsIncome(
     row("배당금 총액", divPaid),
     row("성장률 (YoY)", yoy(divPaid), { numberFormat: "pct", depth: 2 }),
     row("감가상각비·무형자산상각비", da),
-    row("성장률 (YoY)", yoy(da), { numberFormat: "pct", depth: 2 }),
   ];
 
   return {
