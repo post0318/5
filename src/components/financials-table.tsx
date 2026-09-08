@@ -56,7 +56,7 @@ export function FinancialsTable({
   return (
     <div className="space-y-4">
       <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-        <span>단위: {meta.unit || "원본"}{useCfDetail ? " (백만)" : ""}</span>
+        {!useCfDetail && <span>단위: {meta.unit || "원본"}</span>}
         <span>
           {meta.consolidation === "consolidated"
             ? "연결"
@@ -124,6 +124,17 @@ export function FinancialsTable({
           <div key={section.title} className="overflow-x-auto">
             <table className="w-full min-w-[640px] border-separate border-spacing-0 text-sm">
               <thead>
+                {useCfDetail && (
+                  <tr>
+                    <th className="bg-background sticky left-0 z-10" />
+                    <th
+                      colSpan={periods.length}
+                      className="text-muted-foreground px-3 pt-1 pb-0.5 text-right text-xs font-normal"
+                    >
+                      단위: {meta.unit || "USD"} 백만
+                    </th>
+                  </tr>
+                )}
                 <tr className={cn(useCfDetail && "bg-muted")}>
                   <th
                     className={cn(
@@ -135,17 +146,21 @@ export function FinancialsTable({
                   >
                     {section.title}
                   </th>
-                  {periods.map((p) => (
-                    <th
-                      key={p.label}
-                      className={cn(
-                        "border-b px-3 py-2 text-right font-medium whitespace-nowrap",
-                        useCfDetail ? "text-foreground" : "text-muted-foreground",
-                      )}
-                    >
-                      {p.label}
-                    </th>
-                  ))}
+                  {periods.map((p) => {
+                    const ltm = p.label === "최근 12개월";
+                    return (
+                      <th
+                        key={p.label}
+                        className={cn(
+                          "border-b px-3 py-2 text-right font-medium whitespace-nowrap",
+                          useCfDetail ? "text-foreground" : "text-muted-foreground",
+                          ltm && "bg-foreground/10",
+                        )}
+                      >
+                        {p.label}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -173,6 +188,7 @@ export function FinancialsTable({
                     {periods.map((p) => {
                       const v = item.values[p.label];
                       const neg = typeof v === "number" && v < 0;
+                      const ltm = p.label === "최근 12개월";
                       return (
                         <td
                           key={p.label}
@@ -180,6 +196,7 @@ export function FinancialsTable({
                             "tnum border-b px-3 py-1.5 text-right whitespace-nowrap",
                             neg && "text-down",
                             v == null && "text-muted-foreground",
+                            ltm && !item.isHighlight && "bg-foreground/10",
                           )}
                         >
                           {v == null
