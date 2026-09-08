@@ -248,7 +248,6 @@ export function buildUsIncome(
     row("[ 주석 항목 ]", blank(), { depth: 0, isSubtotal: true }),
     row("EBITDA", ebitda),
     row("성장률 (YoY)", yoy(ebitda), { numberFormat: "pct", depth: 2 }),
-    row("EBITDA 마진", pct(ebitda), { numberFormat: "pct", depth: 2 }),
     row("EBIT (영업이익)", opIncome),
     row("성장률 (YoY)", yoy(opIncome), { numberFormat: "pct", depth: 2 }),
     row("매출총이익률", pct(grossProfit), { numberFormat: "pct" }),
@@ -256,7 +255,7 @@ export function buildUsIncome(
     row("순이익률", pct(netIncome), { numberFormat: "pct" }),
     row("배당금 총액", divPaid),
     row("성장률 (YoY)", yoy(divPaid), { numberFormat: "pct", depth: 2 }),
-    row("감가상각비·무형자산상각비", da),
+    row("감가상각비", da),
   ];
 
   return {
