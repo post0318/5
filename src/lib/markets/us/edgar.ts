@@ -127,9 +127,17 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
   return data;
 }
 
+/** 하이라이트/외부 계산용 raw companyfacts (+ CIK). */
+export async function fetchUsCompanyFacts(
+  symbol: string,
+): Promise<{ cik: string; facts: CompanyFacts }> {
+  const { cik } = await resolveCik(symbol);
+  return { cik, facts: await getCompanyFacts(cik) };
+}
+
 // ---- companyfacts (재무제표) -------------------------------------------
 
-interface FactUnitEntry {
+export interface FactUnitEntry {
   start?: string;
   end: string;
   val: number;
@@ -138,7 +146,7 @@ interface FactUnitEntry {
   form: string; // "10-K" | "10-Q" | ...
   frame?: string;
 }
-interface CompanyFacts {
+export interface CompanyFacts {
   entityName: string;
   facts: {
     "us-gaap"?: Record<

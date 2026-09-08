@@ -1,0 +1,109 @@
+"use client";
+
+import { cn } from "@/lib/utils";
+import type { FinancialHighlights } from "@/lib/markets/us/edgar-highlights";
+
+function fmt(v: number | null, format: "money" | "pct" | "eps"): string {
+  if (v == null || !Number.isFinite(v)) return "–";
+  if (format === "eps") {
+    return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  if (format === "pct") {
+    return v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  }
+  // money — 백만 단위
+  return (v / 1e6).toLocaleString("en-US", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+}
+
+export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }) {
+  const { columns, rows } = data;
+
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h2 className="text-sm font-semibold">재무 하이라이트</h2>
+        <span className="text-muted-foreground text-[11px]">
+          단위: {data.unitLabel} · 12개월 결산 · 현재/LTM {data.asOfLtm}
+        </span>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border">
+        <table className="w-full min-w-[720px] border-separate border-spacing-0 text-sm">
+          <thead>
+            <tr>
+              <th className="bg-muted/50 sticky left-0 z-10 border-b px-3 py-1.5 text-left" />
+              {columns.map((c) => (
+                <th
+                  key={c.key}
+                  className={cn(
+                    "text-muted-foreground border-b px-3 py-1.5 text-right font-medium whitespace-nowrap",
+                    c.kind === "estimate" && "text-muted-foreground/70 italic",
+                    c.kind === "ltm" && "bg-muted/40",
+                  )}
+                >
+                  <div>{c.label}</div>
+                  <div className="text-muted-foreground/60 text-[10px] font-normal">
+                    {c.date.replace(/-/g, "/").slice(2)}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              if (r.spacer) {
+                return (
+                  <tr key={r.key}>
+                    <td colSpan={columns.length + 1} className="h-2" />
+                  </tr>
+                );
+              }
+              return (
+                <tr
+                  key={r.key}
+                  className={cn(r.emphasis && "font-semibold", !r.indent && "hover:bg-muted/20")}
+                >
+                  <td
+                    className={cn(
+                      "bg-background sticky left-0 z-10 px-3 py-1 whitespace-nowrap",
+                      r.emphasis && "border-t",
+                      r.indent
+                        ? "text-muted-foreground/70 pl-6 text-[11px]"
+                        : "text-muted-foreground text-xs",
+                    )}
+                  >
+                    {r.label}
+                  </td>
+                  {r.values.map((v, i) => (
+                    <td
+                      key={i}
+                      className={cn(
+                        "tnum px-3 py-1 text-right whitespace-nowrap",
+                        r.emphasis && "border-t",
+                        r.indent && "text-muted-foreground/70 text-[11px]",
+                        columns[i]?.kind === "estimate" && "text-muted-foreground/60 italic",
+                        columns[i]?.kind === "ltm" && "bg-muted/20",
+                        v != null && v < 0 && !r.indent && "text-destructive",
+                      )}
+                    >
+                      {fmt(v, r.format)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <ul className="text-muted-foreground/70 space-y-0.5 text-[11px]">
+        {data.notes.map((n, i) => (
+          <li key={i}>· {n}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}

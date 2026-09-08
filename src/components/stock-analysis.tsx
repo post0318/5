@@ -10,6 +10,8 @@ import type { MarketId } from "@/lib/markets/types";
 import type { StockOverview } from "@/lib/markets/service";
 import { computeTrailingMultiples } from "@/lib/markets/multiples";
 import type { FinancialStatement, Filing, TtmFlows } from "@/lib/markets/types";
+import type { FinancialHighlights } from "@/lib/markets/us/edgar-highlights";
+import { FinancialHighlightsTable } from "@/components/financial-highlights";
 import { Button } from "@/components/ui/button";
 import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -120,6 +122,17 @@ export function StockAnalysis({
         da: { depreciation: number | null; amortisation: number | null } | null;
       }>(`/api/markets/${market}/${encodeURIComponent(symbol!)}/da`),
     enabled: Boolean(symbol) && market === "kr",
+    retry: false,
+  });
+
+  const highlightsQ = useQuery({
+    queryKey: ["highlights", market, symbol, yahooOverride],
+    queryFn: () =>
+      apiFetch<{ highlights: FinancialHighlights | null }>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/highlights` +
+          (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
+      ),
+    enabled: Boolean(symbol) && market === "us",
     retry: false,
   });
 
@@ -518,6 +531,11 @@ export function StockAnalysis({
                   })()}
                 </Stat>
               </div>
+
+              {/* 재무 하이라이트 (EV 브릿지 + 5개년 + LTM + 추정) — 현재 미국만 */}
+              {highlightsQ.data?.highlights && (
+                <FinancialHighlightsTable data={highlightsQ.data.highlights} />
+              )}
 
               {/* 투자지표 — 모바일 2개/행, 데스크톱 4개/행 */}
               <section className="space-y-3">
