@@ -28,7 +28,8 @@ interface RawResult {
 }
 
 export async function fetchPolygonDividends(ticker: string): Promise<PolygonDividend[]> {
-  const key = process.env.POLYGON_API_KEY;
+  // 붙여넣기 사고 방지: 공백·따옴표·비ASCII(터미널 프롬프트 기호 등) 제거
+  const key = (process.env.POLYGON_API_KEY ?? "").replace(/[^\x21-\x7e]/g, "").replace(/^["']|["']$/g, "");
   if (!key) return [];
   const sym = ticker.replace(/[^A-Za-z.]/g, "").toUpperCase();
   const url =
