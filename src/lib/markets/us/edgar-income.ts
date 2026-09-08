@@ -244,7 +244,7 @@ export function buildUsIncome(
     ...(hasInterest
       ? [row("(순이자비용)", netIntCost, { depth: 2, italic: true, paren: true })]
       : []),
-    row("세전이익", pretax, { depth: 0, isSubtotal: true }),
+    row("세전이익", pretax, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("(−) 법인세비용", tax),
     row("(−) 기타", otherToNi),
     row("당기순이익", netIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
