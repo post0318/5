@@ -104,6 +104,15 @@ export function StockAnalysis({
     enabled: Boolean(symbol) && market === "us",
     retry: false,
   });
+  const summaryQ = useQuery({
+    queryKey: ["financials-summary", market, symbol, period],
+    queryFn: () =>
+      apiFetch<FinancialStatement>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=summary&period=${period}`,
+      ),
+    enabled: Boolean(symbol) && market === "us",
+    retry: false,
+  });
 
   // 멀티플용 연간 재무제표 — period 탭과 무관하게 항상 연간. period가 "annual"이면
   // 위 financials 쿼리와 키가 같아 자동 중복 제거된다.
@@ -712,6 +721,7 @@ export function StockAnalysis({
                   detailedCf={market === "us" ? (cfDetailQ.data ?? null) : null}
                   detailedIs={market === "us" ? (isDetailQ.data ?? null) : null}
                   detailedBs={market === "us" ? (bsDetailQ.data ?? null) : null}
+                  detailedSummary={market === "us" ? (summaryQ.data ?? null) : null}
                   period={period}
                   onPeriodChange={setPeriod}
                 />

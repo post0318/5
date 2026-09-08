@@ -31,6 +31,7 @@ export function FinancialsTable({
   detailedCf,
   detailedIs,
   detailedBs,
+  detailedSummary,
   period,
   onPeriodChange,
   standalone,
@@ -42,6 +43,8 @@ export function FinancialsTable({
   detailedIs?: FinancialStatement | null;
   /** 미국 표준화 상세 재무상태표 */
   detailedBs?: FinancialStatement | null;
+  /** 미국 공시기준 요약 (총괄 탭) */
+  detailedSummary?: FinancialStatement | null;
   period?: "annual" | "quarter";
   onPeriodChange?: (p: "annual" | "quarter") => void;
   /** 이 statement 하나를 상세 스타일로만 렌더 (하위탭·토글 없음) */
@@ -60,13 +63,15 @@ export function FinancialsTable({
 
   const detail = standalone
     ? statement
-    : view === "cf" && detailedCf
-      ? detailedCf
-      : view === "is" && detailedIs
-        ? detailedIs
-        : view === "bs" && detailedBs
-          ? detailedBs
-          : null;
+    : view === "all" && detailedSummary
+      ? detailedSummary
+      : view === "cf" && detailedCf
+        ? detailedCf
+        : view === "is" && detailedIs
+          ? detailedIs
+          : view === "bs" && detailedBs
+            ? detailedBs
+            : null;
   const useDetail = detail != null;
   const periods = useDetail ? detail.periods : statement.periods;
 

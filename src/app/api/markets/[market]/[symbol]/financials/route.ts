@@ -6,6 +6,7 @@ import { buildUsCashFlow } from "@/lib/markets/us/edgar-cashflow";
 import { buildUsIncome } from "@/lib/markets/us/edgar-income";
 import { buildUsBalance } from "@/lib/markets/us/edgar-balance";
 import { buildUsAnalysis } from "@/lib/markets/us/edgar-analysis";
+import { buildUsSummary } from "@/lib/markets/us/edgar-summary";
 import { getEodQuote } from "@/lib/markets/quote";
 
 export const maxDuration = 60;
@@ -31,7 +32,8 @@ export async function GET(
       (detailView === "cf" ||
         detailView === "is" ||
         detailView === "bs" ||
-        detailView === "analysis")
+        detailView === "analysis" ||
+        detailView === "summary")
     ) {
       const yahoo = searchParams.get("yahoo");
       const [{ facts }, quote] = await Promise.all([
@@ -47,7 +49,9 @@ export async function GET(
             ? buildUsIncome(facts, period)
             : detailView === "bs"
               ? buildUsBalance(facts, period)
-              : buildUsAnalysis(facts, quote?.bars ?? []);
+              : detailView === "summary"
+                ? buildUsSummary(facts, period)
+                : buildUsAnalysis(facts, quote?.bars ?? []);
       stmt.symbol = sym;
       return ok(stmt, {
         headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },
