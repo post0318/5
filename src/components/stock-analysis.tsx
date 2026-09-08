@@ -39,6 +39,7 @@ export function StockAnalysis({
   const [symbol, setSymbol] = useState<string | null>(initialSymbol);
   const [yahooOverride, setYahooOverride] = useState<string | null>(initialYahoo);
   const [period, setPeriod] = useState<"annual" | "quarter">("annual");
+  const [filingScope, setFilingScope] = useState<"core" | "all">("core");
 
   function pick(hit: SymbolHit) {
     setSymbol(hit.symbol);
@@ -708,8 +709,38 @@ export function StockAnalysis({
                 <ErrorBox message={(filings.error as Error).message} />
               )}
               {filings.data && (
+                <>
+                  <div className="border-border flex w-fit overflow-hidden rounded-md border text-sm">
+                    {(["core", "all"] as const).map((v) => (
+                      <button
+                        key={v}
+                        onClick={() => setFilingScope(v)}
+                        className={cn(
+                          "px-3 py-1 transition-colors",
+                          filingScope === v
+                            ? "bg-primary text-primary-foreground"
+                            : "hover:bg-muted text-muted-foreground",
+                        )}
+                      >
+                        {v === "core" ? "핵심 공시" : "전체"}
+                      </button>
+                    ))}
+                  </div>
+                  {market === "us" && filingScope === "core" && (
+                    <p className="text-muted-foreground/80 text-[11px]">
+                      10-K(연차)·10-Q(분기)·8-K(수시)·DEF 14A(위임장)·S/424B(증권발행) 만.
+                      Form 4(내부자 거래)·SC 13D/G(대량보유) 등은 &ldquo;전체&rdquo;에서.
+                    </p>
+                  )}
                 <ul className="divide-y">
-                  {filings.data.filings.map((f) => (
+                  {filings.data.filings
+                    .filter((f) => {
+                      if (filingScope === "all" || market !== "us") return true;
+                      return /^(10-[KQ]|8-K|20-F|6-K|DEF ?A?14A|DEFA14A|S-\d|424B|F-\d|40-F|11-K)/i.test(
+                        f.type.trim(),
+                      );
+                    })
+                    .map((f) => (
                     <li key={f.id} className="flex items-center gap-3 py-2 text-sm">
                       <Badge variant="secondary" className="tnum shrink-0">
                         {f.type}
@@ -728,6 +759,7 @@ export function StockAnalysis({
                     </li>
                   ))}
                 </ul>
+                </>
               )}
             </TabsContent>
 
