@@ -104,6 +104,16 @@ function instantAt(entries: FactUnitEntry[], asOf: string): number | null {
   return best?.val ?? null;
 }
 
+/** instant 엔트리 중 가장 최근 end 날짜 (최근 분기 기준일). */
+function latestInstantEnd(entries: FactUnitEntry[]): string | null {
+  let best: string | null = null;
+  for (const e of entries) {
+    if (e.start) continue;
+    if (!best || e.end > best) best = e.end;
+  }
+  return best;
+}
+
 /** 흐름 계정 TTM = 최근 FY + 당기누적 − 전년동기누적. */
 function ttm(entries: FactUnitEntry[]): number | null {
   const annuals = entries
@@ -161,7 +171,12 @@ export function buildUsHighlights(
   const lastFy = fyYears[fyYears.length - 1] ?? new Date().getFullYear();
 
   const lastBar = [...bars].reverse().find((b) => b.close != null);
-  const ltmDate = lastBar?.date ?? new Date().toISOString().slice(0, 10);
+  const priceDate = lastBar?.date ?? new Date().toISOString().slice(0, 10);
+  // LTM 컬럼 기준일 = 최근 분기 재무상태표 기준일 (블룸버그 표기와 동일)
+  const mrqEnd =
+    latestInstantEnd(unitEntries(facts, "CashAndCashEquivalentsAtCarryingValue", "USD")) ??
+    priceDate;
+  const ltmDate = mrqEnd;
 
   const columns: HighlightColumn[] = fyYears.map((y) => ({
     key: `FY${y}`,
@@ -236,6 +251,11 @@ export function buildUsHighlights(
   const debtNonCurE = unitEntries(facts, "LongTermDebtNoncurrent", "USD");
   const debtCurE = unitEntries(facts, "LongTermDebtCurrent", "USD");
   const cpE = unitEntries(facts, "CommercialPaper", "USD");
+  const opLeaseNcE = unitEntries(facts, "OperatingLeaseLiabilityNoncurrent", "USD");
+  const opLeaseCurE = unitEntries(facts, "OperatingLeaseLiabilityCurrent", "USD");
+  const opLeaseTotE = unitEntries(facts, "OperatingLeaseLiability", "USD");
+  const finLeaseNcE = unitEntries(facts, "FinanceLeaseLiabilityNoncurrent", "USD");
+  const finLeaseCurE = unitEntries(facts, "FinanceLeaseLiabilityCurrent", "USD");
   const prefE = unitEntries(facts, "PreferredStockValue", "USD");
   const sharesEndE = unitEntries(facts, "CommonStockSharesOutstanding", "shares");
   const sharesDeiE = deiEntries(facts, "EntityCommonStockSharesOutstanding");
@@ -260,13 +280,15 @@ export function buildUsHighlights(
 
   columns.forEach((col, i) => {
     if (col.kind === "estimate") return;
-    const asOf = col.date;
-    const price =
-      col.kind === "ltm" ? (lastBar?.close ?? null) : closeOnOrBefore(bars, asOf);
-    const shares =
-      col.kind === "ltm"
-        ? (instantAt(sharesDeiE, asOf) ?? instantAt(sharesEndE, asOf))
-        : (instantAt(sharesEndE, asOf) ?? instantAt(sharesDeiE, asOf));
+    const asOf = col.date; // 재무상태표 기준일 (LTM = 최근 분기말)
+    const isLtm = col.kind === "ltm";
+    const price = isLtm ? (lastBar?.close ?? null) : closeOnOrBefore(bars, asOf);
+    // 시총용 주식수: LTM 은 현재(가장 최근) 발행주식수, 과거는 기말 주식수
+    const shares = isLtm
+      ? (instantAt(sharesDeiE, priceDate) ??
+        instantAt(sharesEndE, priceDate) ??
+        instantAt(sharesDeiE, asOf))
+      : (instantAt(sharesEndE, asOf) ?? instantAt(sharesDeiE, asOf));
     const mc = price != null && shares != null ? price * shares : null;
     marketCap[i] = mc;
 
@@ -280,7 +302,19 @@ export function buildUsHighlights(
     const dn = instantAt(debtNonCurE, asOf);
     const dc = instantAt(debtCurE, asOf);
     const cp = instantAt(cpE, asOf);
-    debt[i] = dn != null || dc != null || cp != null ? (dn ?? 0) + (dc ?? 0) + (cp ?? 0) : null;
+    const termDebt =
+      dn != null || dc != null || cp != null ? (dn ?? 0) + (dc ?? 0) + (cp ?? 0) : null;
+    // 리스부채 (블룸버그 총부채는 리스 포함). 최근 분기에 태깅이 없으면 0.
+    const oln = instantAt(opLeaseNcE, asOf);
+    const olc = instantAt(opLeaseCurE, asOf);
+    const opLease =
+      oln != null || olc != null ? (oln ?? 0) + (olc ?? 0) : instantAt(opLeaseTotE, asOf);
+    const fln = instantAt(finLeaseNcE, asOf);
+    const flc = instantAt(finLeaseCurE, asOf);
+    const finLease = fln != null || flc != null ? (fln ?? 0) + (flc ?? 0) : null;
+    const leases = (opLease ?? 0) + (finLease ?? 0);
+    debt[i] =
+      termDebt != null ? termDebt + leases : leases > 0 ? leases : null;
 
     ev[i] =
       mc != null ? mc - (cash[i] ?? 0) + (preferred[i] ?? 0) + (debt[i] ?? 0) : null;
@@ -307,7 +341,8 @@ export function buildUsHighlights(
     }
     return null;
   });
-  const currentShares = instantAt(sharesDeiE, ltmDate) ?? instantAt(sharesEndE, ltmDate);
+  const currentShares =
+    instantAt(sharesDeiE, priceDate) ?? instantAt(sharesEndE, priceDate);
   const netIncome = columns.map((col) => {
     if (col.kind === "estimate") {
       const eps = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
@@ -359,6 +394,7 @@ export function buildUsHighlights(
 
   notes.push("실적·재무상태표·현금흐름: SEC EDGAR companyfacts (GAAP 보고치)");
   notes.push("과거 시가총액: 각 회계연도말 종가 × 기말 발행주식수");
+  notes.push("총부채 = 차입금(장·단기) + CP + 리스부채");
   if (estCols.length)
     notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
   notes.push("EBITDA = 보고 영업이익 + 감가상각비·무형자산상각비 (블룸버그 '조정'과 다를 수 있음)");
