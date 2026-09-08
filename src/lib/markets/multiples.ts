@@ -184,17 +184,22 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   const perTtm = price != null && epsTtm ? price / epsTtm : null;
   const bps = equity != null && shares ? equity / shares : null;
   const pbr = price != null && bps ? price / bps : null;
+  // PSR·EV/EBITDA: 분자(시가총액·EV)가 현재가 기준이므로 분모도 TTM 으로 맞춘다.
+  // 미국(snapshot 존재)은 EDGAR TTM 사용, 그 외(국내 등)는 종전대로 최근 "연간".
+  const revenueForPsr = snap && ttm?.revenue != null ? ttm.revenue : revenue;
   const psr =
-    marketCap != null && revenue ? marketCap / revenue : null;
+    marketCap != null && revenueForPsr ? marketCap / revenueForPsr : null;
   const ev =
     marketCap != null
       ? marketCap + (totalLiabilities ?? 0) - (cash ?? 0)
       : null;
-  // EBITDA = 최근 연간 영업이익 + 감가상각비 + 무형자산상각비 (연간 기준, PER 과 동일).
-  // D&A 없으면 EV/EBIT 근사.
-  const ebitda = opIncome != null ? opIncome + (da ?? 0) : null;
+  // EBITDA = 영업이익 + 감가상각비 + 무형자산상각비. D&A 없으면 EV/EBIT 근사.
+  const ebitdaOpIncome = snap && ttm?.opIncome != null ? ttm.opIncome : opIncome;
+  const ebitdaDa = snap && ttm?.daTtm != null ? ttm.daTtm : da;
+  const ebitda =
+    ebitdaOpIncome != null ? ebitdaOpIncome + (ebitdaDa ?? 0) : null;
   const evEbitda = ev != null && ebitda ? ev / ebitda : null;
-  const evEbitdaIsApprox = da == null;
+  const evEbitdaIsApprox = (snap ? ttm?.daTtm : da) == null;
 
   return {
     symbol,
