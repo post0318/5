@@ -21,6 +21,7 @@ const EM_BG = "bg-[oklch(0.94_0.045_67)] dark:bg-[oklch(0.32_0.05_55)]";
 
 function fmtDetail(v: number, kind?: FinancialLineItem["numberFormat"]): string {
   if (kind === "eps" || kind === "pct") return formatNumber(v, 2);
+  if (kind === "mult") return `${formatNumber(v, 2)}x`;
   if (kind === "shares") return formatNumber(v / 1e6, 1); // 백만주, 소수 1
   return formatNumber(v / 1e6, 0); // 통화 → 백만, 정수
 }
@@ -32,6 +33,7 @@ export function FinancialsTable({
   detailedBs,
   period,
   onPeriodChange,
+  standalone,
 }: {
   statement: FinancialStatement;
   /** 미국 표준화 상세 현금흐름표 */
@@ -42,6 +44,8 @@ export function FinancialsTable({
   detailedBs?: FinancialStatement | null;
   period?: "annual" | "quarter";
   onPeriodChange?: (p: "annual" | "quarter") => void;
+  /** 이 statement 하나를 상세 스타일로만 렌더 (하위탭·토글 없음) */
+  standalone?: boolean;
 }) {
   const [view, setView] = useState<View>("all");
 
@@ -54,8 +58,9 @@ export function FinancialsTable({
     };
   }, [statement.sections, detailedCf, detailedIs, detailedBs]);
 
-  const detail =
-    view === "cf" && detailedCf
+  const detail = standalone
+    ? statement
+    : view === "cf" && detailedCf
       ? detailedCf
       : view === "is" && detailedIs
         ? detailedIs
@@ -104,6 +109,7 @@ export function FinancialsTable({
         </div>
       )}
 
+      {!standalone && (
       <div className="flex flex-wrap items-center gap-2">
         {tabs.length > 1 && (
           <div className="border-border flex overflow-hidden rounded-md border text-sm">
@@ -142,6 +148,7 @@ export function FinancialsTable({
           </div>
         )}
       </div>
+      )}
 
       <div className="space-y-6">
         {shown.map((section) => {

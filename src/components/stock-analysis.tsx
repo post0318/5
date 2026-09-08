@@ -94,6 +94,16 @@ export function StockAnalysis({
     enabled: Boolean(symbol) && market === "us",
     retry: false,
   });
+  const analysisQ = useQuery({
+    queryKey: ["financials-analysis", market, symbol, yahooOverride],
+    queryFn: () =>
+      apiFetch<FinancialStatement>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=analysis` +
+          (yahooOverride ? `&yahoo=${encodeURIComponent(yahooOverride)}` : ""),
+      ),
+    enabled: Boolean(symbol) && market === "us",
+    retry: false,
+  });
 
   // 멀티플용 연간 재무제표 — period 탭과 무관하게 항상 연간. period가 "annual"이면
   // 위 financials 쿼리와 키가 같아 자동 중복 제거된다.
@@ -468,6 +478,7 @@ export function StockAnalysis({
             <TabsList>
               <TabsTrigger value="overview">개요</TabsTrigger>
               <TabsTrigger value="financials">재무제표</TabsTrigger>
+              {market === "us" && <TabsTrigger value="analysis">분석</TabsTrigger>}
               {(market === "kr" || market === "us") && (
                 <TabsTrigger value="rights">권리일정</TabsTrigger>
               )}
@@ -705,6 +716,19 @@ export function StockAnalysis({
                 />
               )}
             </TabsContent>
+
+            {/* 분석 (미국) */}
+            {market === "us" && (
+              <TabsContent value="analysis" className="space-y-4 pt-4">
+                {analysisQ.isLoading && <Skeleton className="h-64 w-full" />}
+                {analysisQ.isError && (
+                  <ErrorBox message={(analysisQ.error as Error).message} />
+                )}
+                {analysisQ.data && (
+                  <FinancialsTable statement={analysisQ.data} standalone />
+                )}
+              </TabsContent>
+            )}
 
             {/* 공시 */}
             <TabsContent value="filings" className="space-y-3 pt-4">

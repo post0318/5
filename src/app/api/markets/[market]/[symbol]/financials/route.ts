@@ -5,6 +5,8 @@ import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
 import { buildUsCashFlow } from "@/lib/markets/us/edgar-cashflow";
 import { buildUsIncome } from "@/lib/markets/us/edgar-income";
 import { buildUsBalance } from "@/lib/markets/us/edgar-balance";
+import { buildUsAnalysis } from "@/lib/markets/us/edgar-analysis";
+import { getEodQuote } from "@/lib/markets/quote";
 
 export const maxDuration = 60;
 
@@ -26,15 +28,26 @@ export async function GET(
     const detailView = searchParams.get("view");
     if (
       market === "us" &&
-      (detailView === "cf" || detailView === "is" || detailView === "bs")
+      (detailView === "cf" ||
+        detailView === "is" ||
+        detailView === "bs" ||
+        detailView === "analysis")
     ) {
-      const { facts } = await fetchUsCompanyFacts(sym);
+      const yahoo = searchParams.get("yahoo");
+      const [{ facts }, quote] = await Promise.all([
+        fetchUsCompanyFacts(sym),
+        detailView === "analysis"
+          ? getEodQuote("us", sym, { yahooOverride: yahoo }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
       const stmt =
         detailView === "cf"
           ? buildUsCashFlow(facts, period)
           : detailView === "is"
             ? buildUsIncome(facts, period)
-            : buildUsBalance(facts, period);
+            : detailView === "bs"
+              ? buildUsBalance(facts, period)
+              : buildUsAnalysis(facts, quote?.bars ?? []);
       stmt.symbol = sym;
       return ok(stmt, {
         headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },
