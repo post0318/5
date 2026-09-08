@@ -54,6 +54,8 @@ export interface FinancialLineItem {
   isHighlight: boolean;
   /** period.label -> 값. 원본 단위 유지 */
   values: Record<string, number | null>;
+  /** 표준화 상세표(CF·IS)의 값 표시 방식. 미지정 시 통화(백만). */
+  numberFormat?: "money" | "shares" | "eps" | "pct";
 }
 
 export interface FinancialStatement {

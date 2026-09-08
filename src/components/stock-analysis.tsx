@@ -65,12 +65,22 @@ export function StockAnalysis({
     retry: false,
   });
 
-  // 미국 표준화 상세 현금흐름표 (CF 하위탭)
+  // 미국 표준화 상세표 (CF·IS 하위탭)
   const cfDetailQ = useQuery({
     queryKey: ["financials-cf", market, symbol],
     queryFn: () =>
       apiFetch<FinancialStatement>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=cf`,
+      ),
+    enabled: Boolean(symbol) && market === "us",
+    retry: false,
+  });
+  const isDetailQ = useQuery({
+    queryKey: ["financials-is", market, symbol, yahooOverride],
+    queryFn: () =>
+      apiFetch<FinancialStatement>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=is` +
+          (yahooOverride ? `&yahoo=${encodeURIComponent(yahooOverride)}` : ""),
       ),
     enabled: Boolean(symbol) && market === "us",
     retry: false,
@@ -675,6 +685,7 @@ export function StockAnalysis({
                 <FinancialsTable
                   statement={financials.data}
                   detailedCf={market === "us" ? (cfDetailQ.data ?? null) : null}
+                  detailedIs={market === "us" ? (isDetailQ.data ?? null) : null}
                   period={period}
                   onPeriodChange={setPeriod}
                 />

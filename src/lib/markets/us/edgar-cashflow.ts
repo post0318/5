@@ -184,8 +184,11 @@ const NET_CHANGE = [
 const TAX_PAID = ["IncomeTaxesPaidNet", "IncomeTaxesPaid"];
 const INT_PAID = ["InterestPaidNet", "InterestPaid"];
 
+const LTM = "현재/LTM";
+const fyKey = (y: number) => `${y}Y`;
+
 export function buildUsCashFlow(facts: CompanyFacts): FinancialStatement {
-  // 컬럼: 최근 8개 사업연도 + LTM
+  // 컬럼: 최근 5개 사업연도 + LTM
   const opEntries = firstConcept(facts, BLOCKS[0].total.concepts);
   const fyMap = annualByYear(opEntries);
   const years = [...fyMap.keys()].sort((a, b) => a - b).slice(-5);
@@ -195,13 +198,13 @@ export function buildUsCashFlow(facts: CompanyFacts): FinancialStatement {
       opAnnualEnds.set(Number(e.end.slice(0, 4)), e.end);
 
   const periods: FinancialPeriod[] = years.map((y) => ({
-    label: `FY${y}`,
+    label: fyKey(y),
     fiscalYear: y,
     fiscalQuarter: null,
     endDate: opAnnualEnds.get(y) ?? `${y}-12-31`,
   }));
   periods.push({
-    label: "최근 12개월",
+    label: LTM,
     fiscalYear: (years[years.length - 1] ?? new Date().getFullYear()) + 1,
     fiscalQuarter: null,
     endDate: new Date().toISOString().slice(0, 10),
@@ -212,8 +215,8 @@ export function buildUsCashFlow(facts: CompanyFacts): FinancialStatement {
     const entries = firstConcept(facts, concepts);
     const ann = annualByYear(entries);
     const out: Record<string, number | null> = {};
-    for (const y of years) out[`FY${y}`] = ann.get(y) ?? null;
-    out["최근 12개월"] = ttmOf(entries);
+    for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
+    out[LTM] = ttmOf(entries);
     return out;
   };
   const combineVals = (parts: [string, boolean][]): Record<string, number | null> => {
@@ -377,6 +380,6 @@ export function buildUsCashFlow(facts: CompanyFacts): FinancialStatement {
     consolidation: "consolidated",
     periods,
     sections: [{ title: "현금흐름표", items }],
-    source: "SEC EDGAR (XBRL companyfacts) · 표준화 재분류",
+    source: "SEC EDGAR · 표준화 재분류",
   };
 }
