@@ -4,7 +4,6 @@ import { isMarketId } from "@/lib/markets/types";
 import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
 import { buildUsCashFlow } from "@/lib/markets/us/edgar-cashflow";
 import { buildUsIncome } from "@/lib/markets/us/edgar-income";
-import { fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
 
 export const maxDuration = 60;
 
@@ -25,26 +24,11 @@ export async function GET(
     // 미국 상세 현금흐름표 / 손익계산서 (표준화 재분류 + LTM)
     const detailView = searchParams.get("view");
     if (market === "us" && (detailView === "cf" || detailView === "is")) {
-      const yahoo = searchParams.get("yahoo");
-      const [{ facts }, est] = await Promise.all([
-        fetchUsCompanyFacts(sym),
-        detailView === "is"
-          ? fetchYahooEstimates("us", sym, yahoo).catch(() => null)
-          : Promise.resolve(null),
-      ]);
+      const { facts } = await fetchUsCompanyFacts(sym);
       const stmt =
         detailView === "cf"
           ? buildUsCashFlow(facts, period)
-          : buildUsIncome(
-              facts,
-              (est?.periods ?? []).map((p) => ({
-                period: p.period,
-                endDate: p.endDate,
-                epsAvg: p.epsAvg,
-                revenueAvg: p.revenueAvg,
-              })),
-              period,
-            );
+          : buildUsIncome(facts, period);
       stmt.symbol = sym;
       return ok(stmt, {
         headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },

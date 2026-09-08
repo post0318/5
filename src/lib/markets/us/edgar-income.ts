@@ -12,8 +12,9 @@ import {
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
- * 컬럼: 최근 5개 사업연도 + 최근 12개월 + 차기 2개년(수익·EPS 만).
+ * 컬럼: 최근 5개 사업연도 + 최근 12개월 (분기 모드는 최근 5분기).
  * 계산 라인('기타 영업비용' 등)은 (구간값 − 매핑 라인)으로 자동 정합.
+ * 예상치는 재무 하이라이트(개요)에서 제공 → 여기선 실적만.
  */
 
 const REVENUE = [
@@ -55,20 +56,11 @@ const DA = [
   "DepreciationAndAmortization",
 ];
 
-export interface IncomeEstimatePeriod {
-  period: string;
-  endDate: string | null;
-  epsAvg: number | null;
-  revenueAvg: number | null;
-}
-
 const LTM = "현재/LTM";
 const fyKey = (y: number) => `${y}Y`;
-const estKey = (y: number) => `${y}Y 예상`;
 
 export function buildUsIncome(
   facts: CompanyFacts,
-  estimates: IncomeEstimatePeriod[],
   mode: "annual" | "quarter" = "annual",
 ): FinancialStatement {
   const revEntries = firstConcept(facts, REVENUE);
@@ -82,8 +74,6 @@ export function buildUsIncome(
   const qShow = qCols.slice(-5);
 
   let periods: FinancialPeriod[];
-  let estCols: { year: number; p: IncomeEstimatePeriod }[] = [];
-
   if (quarterly) {
     periods = qShow.map((q) => ({
       label: q.label,
@@ -104,21 +94,6 @@ export function buildUsIncome(
       fiscalQuarter: null,
       endDate: new Date().toISOString().slice(0, 10),
     });
-    for (const p of estimates) {
-      if (!["0y", "+1y", "+2y"].includes(p.period)) continue;
-      const y = p.endDate ? Number(p.endDate.slice(0, 4)) : null;
-      if (y == null || y <= lastFy || estCols.some((e) => e.year === y)) continue;
-      estCols.push({ year: y, p });
-    }
-    estCols.sort((a, b) => a.year - b.year);
-    estCols = estCols.slice(0, 2);
-    for (const e of estCols)
-      periods.push({
-        label: estKey(e.year),
-        fiscalYear: e.year,
-        fiscalQuarter: null,
-        endDate: e.p.endDate,
-      });
   }
   const labels = periods.map((p) => p.label);
 
@@ -162,9 +137,6 @@ export function buildUsIncome(
   };
 
   const revenue = val(REVENUE);
-  // 추정 매출
-  for (const e of estCols.slice(0, 2)) revenue[estKey(e.year)] = e.p.revenueAvg ?? null;
-
   const cogs = val(COGS);
   const grossProfit = (() => {
     const g = val(["GrossProfit"]);
@@ -197,19 +169,10 @@ export function buildUsIncome(
   const disc = val(DISC_OPS);
   const nci = val(NCI);
   const netIncome = val(NET_INCOME);
-  for (const e of estCols.slice(0, 2)) {
-    // 추정 순이익 = EPS × 희석주식수(최근)
-    const sh = val(WA_DIL, "shares")[LTM];
-    if (e.p.epsAvg != null && sh) netIncome[estKey(e.year)] = e.p.epsAvg * sh;
-  }
   const waBasic = val(WA_BASIC, "shares");
   const waDil = val(WA_DIL, "shares");
   const epsBasic = val(EPS_BASIC, "USD/shares");
   const epsDil = val(EPS_DIL, "USD/shares");
-  for (const e of estCols.slice(0, 2)) {
-    epsBasic[estKey(e.year)] = e.p.epsAvg ?? null;
-    epsDil[estKey(e.year)] = e.p.epsAvg ?? null;
-  }
 
   const da = val(DA);
   const ebitda = blank();
@@ -273,6 +236,6 @@ export function buildUsIncome(
     consolidation: "consolidated",
     periods,
     sections: [{ title: "손익계산서", items }],
-    source: "SEC EDGAR · 표준화 재분류 · 추정 yahoo-finance2",
+    source: "SEC EDGAR · 표준화 재분류",
   };
 }
