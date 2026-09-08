@@ -23,17 +23,14 @@ function fmt(v: number | null, format: "money" | "pct" | "eps"): string {
 }
 
 function HighlightGrid({
-  title,
   columns,
   rows,
 }: {
-  title: string;
   columns: HighlightColumn[];
   rows: HighlightRow[];
 }) {
   return (
     <div className="space-y-1.5">
-      <h3 className="text-muted-foreground text-xs font-semibold">{title}</h3>
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full min-w-[760px] border-separate border-spacing-0 text-[15px]">
           <thead>
@@ -124,10 +121,8 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
         </span>
       </div>
 
-      <HighlightGrid title="기업가치 (EV 브릿지)" columns={columns} rows={evRows} />
-      {flowRows.length > 0 && (
-        <HighlightGrid title="손익 · 현금흐름" columns={columns} rows={flowRows} />
-      )}
+      <HighlightGrid columns={columns} rows={evRows} />
+      {flowRows.length > 0 && <HighlightGrid columns={columns} rows={flowRows} />}
 
       <ul className="text-muted-foreground/70 space-y-0.5 text-xs">
         {data.notes.map((n, i) => (
