@@ -93,12 +93,20 @@ function annualAt(series: { year: number; val: number }[], year: number): number
   return series.find((s) => s.year === year)?.val ?? null;
 }
 
-/** instant(재무상태표) 값 중 end ≤ asOf 이면서 가장 가까운 것. */
-function instantAt(entries: FactUnitEntry[], asOf: string): number | null {
+/**
+ * instant(재무상태표) 값 중 end ≤ asOf 이면서 가장 가까운 것.
+ * maxStaleDays 지정 시 그보다 오래된 값은 무시 (분기마다 태깅되지 않는 계정용 — 리스 등).
+ */
+function instantAt(
+  entries: FactUnitEntry[],
+  asOf: string,
+  maxStaleDays?: number,
+): number | null {
   let best: { val: number; end: string } | null = null;
   for (const e of entries) {
     if (e.start) continue; // duration 제외
     if (e.end > asOf) continue;
+    if (maxStaleDays != null && daysBetween(e.end, asOf) > maxStaleDays) continue;
     if (!best || e.end > best.end) best = { val: e.val, end: e.end };
   }
   return best?.val ?? null;
@@ -304,13 +312,16 @@ export function buildUsHighlights(
     const cp = instantAt(cpE, asOf);
     const termDebt =
       dn != null || dc != null || cp != null ? (dn ?? 0) + (dc ?? 0) + (cp ?? 0) : null;
-    // 리스부채 (블룸버그 총부채는 리스 포함). 최근 분기에 태깅이 없으면 0.
-    const oln = instantAt(opLeaseNcE, asOf);
-    const olc = instantAt(opLeaseCurE, asOf);
+    // 리스부채 (블룸버그 총부채는 리스 포함). 매 분기 태깅되지 않으므로 ~100일 이내 값만.
+    const FRESH = 100;
+    const oln = instantAt(opLeaseNcE, asOf, FRESH);
+    const olc = instantAt(opLeaseCurE, asOf, FRESH);
     const opLease =
-      oln != null || olc != null ? (oln ?? 0) + (olc ?? 0) : instantAt(opLeaseTotE, asOf);
-    const fln = instantAt(finLeaseNcE, asOf);
-    const flc = instantAt(finLeaseCurE, asOf);
+      oln != null || olc != null
+        ? (oln ?? 0) + (olc ?? 0)
+        : instantAt(opLeaseTotE, asOf, FRESH);
+    const fln = instantAt(finLeaseNcE, asOf, FRESH);
+    const flc = instantAt(finLeaseCurE, asOf, FRESH);
     const finLease = fln != null || flc != null ? (fln ?? 0) + (flc ?? 0) : null;
     const leases = (opLease ?? 0) + (finLease ?? 0);
     debt[i] =
