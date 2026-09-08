@@ -69,6 +69,17 @@ export function StockAnalysis({
     retry: false,
   });
 
+  // 미국 표준화 상세 현금흐름표 (CF 하위탭)
+  const cfDetailQ = useQuery({
+    queryKey: ["financials-cf", market, symbol],
+    queryFn: () =>
+      apiFetch<FinancialStatement>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=cf`,
+      ),
+    enabled: Boolean(symbol) && market === "us",
+    retry: false,
+  });
+
   // 멀티플용 연간 재무제표 — period 탭과 무관하게 항상 연간. period가 "annual"이면
   // 위 financials 쿼리와 키가 같아 자동 중복 제거된다.
   const annualForMultiples = useQuery({
@@ -676,7 +687,10 @@ export function StockAnalysis({
                 </p>
               )}
               {financials.data && financials.data.sections.length > 0 && (
-                <FinancialsTable statement={financials.data} />
+                <FinancialsTable
+                  statement={financials.data}
+                  detailedCf={market === "us" ? (cfDetailQ.data ?? null) : null}
+                />
               )}
             </TabsContent>
 

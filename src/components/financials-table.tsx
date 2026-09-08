@@ -17,14 +17,23 @@ const GROUP: Record<string, Exclude<View, "all">> = {
 const groupOf = (title: string): Exclude<View, "all"> | "other" =>
   GROUP[title] ?? "other";
 
-export function FinancialsTable({ statement }: { statement: FinancialStatement }) {
-  const periods = statement.periods;
+export function FinancialsTable({
+  statement,
+  detailedCf,
+}: {
+  statement: FinancialStatement;
+  /** 미국 표준화 상세 현금흐름표 (CF 탭에서 총괄 대신 표시) */
+  detailedCf?: FinancialStatement | null;
+}) {
   const [view, setView] = useState<View>("all");
 
   const has = useMemo(() => {
     const s = new Set(statement.sections.map((x) => groupOf(x.title)));
-    return { bs: s.has("bs"), is: s.has("is"), cf: s.has("cf") };
-  }, [statement.sections]);
+    return { bs: s.has("bs"), is: s.has("is"), cf: s.has("cf") || Boolean(detailedCf) };
+  }, [statement.sections, detailedCf]);
+
+  const useCfDetail = view === "cf" && detailedCf != null;
+  const periods = useCfDetail ? detailedCf!.periods : statement.periods;
 
   const tabs: { key: View; label: string }[] = [
     { key: "all", label: "총괄" },
@@ -33,26 +42,28 @@ export function FinancialsTable({ statement }: { statement: FinancialStatement }
     ...(has.cf ? [{ key: "cf" as View, label: "CF" }] : []),
   ];
 
-  const shown =
-    view === "all"
+  const shown = useCfDetail
+    ? detailedCf!.sections
+    : view === "all"
       ? statement.sections
       : statement.sections.filter((s) => groupOf(s.title) === view);
 
+  const meta = useCfDetail ? detailedCf! : statement;
   return (
     <div className="space-y-4">
       <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-        <span>단위: {statement.unit || "원본"}</span>
+        <span>단위: {meta.unit || "원본"}{useCfDetail ? " (백만)" : ""}</span>
         <span>
-          {statement.consolidation === "consolidated"
+          {meta.consolidation === "consolidated"
             ? "연결"
-            : statement.consolidation === "separate"
+            : meta.consolidation === "separate"
               ? "별도"
               : "구분 미상"}
         </span>
-        <span>출처: {statement.source}</span>
-        {statement.sourceUrl && (
+        <span>출처: {meta.source}</span>
+        {meta.sourceUrl && (
           <a
-            href={statement.sourceUrl}
+            href={meta.sourceUrl}
             target="_blank"
             rel="noreferrer"
             className="text-primary underline underline-offset-2"
@@ -134,7 +145,11 @@ export function FinancialsTable({ statement }: { statement: FinancialStatement }
                             v == null && "text-muted-foreground",
                           )}
                         >
-                          {v == null ? "-" : formatNumber(v, perShare ? 2 : 0)}
+                          {v == null
+                            ? "-"
+                            : useCfDetail
+                              ? formatNumber(v / 1e6, 1)
+                              : formatNumber(v, perShare ? 2 : 0)}
                         </td>
                       );
                     })}
