@@ -249,9 +249,15 @@ export function FinancialsTable({
                               ? ""
                               : v == null
                                 ? "-"
-                                : useDetail
-                                  ? fmtDetail(v, item.numberFormat)
-                                  : formatNumber(v, perShare ? 2 : 0)}
+                                : item.paren
+                                  ? `(${
+                                      useDetail
+                                        ? fmtDetail(v, item.numberFormat)
+                                        : formatNumber(v, perShare ? 2 : 0)
+                                    })`
+                                  : useDetail
+                                    ? fmtDetail(v, item.numberFormat)
+                                    : formatNumber(v, perShare ? 2 : 0)}
                           </td>
                         );
                       })}

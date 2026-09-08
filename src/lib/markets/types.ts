@@ -58,6 +58,8 @@ export interface FinancialLineItem {
   numberFormat?: "money" | "shares" | "eps" | "pct";
   /** 참고성 라인 — 기울임꼴로 표시 */
   italic?: boolean;
+  /** 값을 괄호로 감싸 표시 (참고/내역 라인) */
+  paren?: boolean;
 }
 
 export interface FinancialStatement {
