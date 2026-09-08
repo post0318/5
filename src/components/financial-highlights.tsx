@@ -141,15 +141,51 @@ function HighlightGrid({
   );
 }
 
-export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }) {
+export function FinancialHighlightsTable({
+  data,
+  shortRatio,
+  shortPercent,
+}: {
+  data: FinancialHighlights;
+  /** 공매도 회전일수 (현재값, LTM 열에 표시) */
+  shortRatio?: number | null;
+  /** 공매도 잔고 / 발행주식수 (소수) */
+  shortPercent?: number | null;
+}) {
   const mobile = useIsMobile();
   const scale: Scale = mobile ? "billion" : "million";
   const unitLabel = mobile ? "USD 10억" : data.unitLabel;
 
+  // 공매도 지표를 현재/LTM 열에만 채운 행으로 추가
+  const ltmIdx = data.columns.findIndex((c) => c.kind === "ltm");
+  const shortRows =
+    ltmIdx < 0
+      ? []
+      : (
+          [
+            shortRatio != null
+              ? { key: "shortratio", label: "공매도 회전일수", format: "mult" as const, ratio: shortRatio }
+              : null,
+            shortPercent != null
+              ? {
+                  key: "shortpct",
+                  label: "공매도 / 발행주식 %",
+                  format: "pct" as const,
+                  ratio: shortPercent * 100,
+                }
+              : null,
+          ].filter(Boolean) as { key: string; label: string; format: "mult" | "pct"; ratio: number }[]
+        ).map((s) => ({
+          key: s.key,
+          label: s.label,
+          format: s.format,
+          values: data.columns.map((_, i) => (i === ltmIdx ? s.ratio : null)),
+        }));
+
   // 모바일: 전년(직전 FY) · 현재(LTM) · 차년(첫 추정) 3개 컬럼만
   let columns = data.columns;
   let rows = data.rows;
-  let valuationRows = data.valuationRows;
+  let valuationRows = [...data.valuationRows, ...shortRows];
   if (mobile) {
     const lastFy = data.columns.map((c, i) => (c.kind === "fy" ? i : -1)).filter((i) => i >= 0).pop();
     const ltm = data.columns.findIndex((c) => c.kind === "ltm");
@@ -161,7 +197,7 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
     });
     columns = pick.map((i) => data.columns[i]);
     rows = data.rows.map(slice);
-    valuationRows = data.valuationRows.map(slice);
+    valuationRows = valuationRows.map(slice);
   }
 
   const splitAt = rows.findIndex((r) => r.spacer);

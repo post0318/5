@@ -232,6 +232,10 @@ export interface ForwardConsensus {
   revenueTtm: number | null;
   ebitdaTtm: number | null;
   enterpriseValue: number | null;
+  /** 공매도 잔고 회전일수 (yahoo shortRatio) */
+  shortRatio: number | null;
+  /** 공매도 잔고 / 발행주식수 (소수: 0.008 = 0.8%) */
+  shortPercentSharesOut: number | null;
   /** 회계연도별 EPS/매출 추정 */
   estimates: {
     period: string;

@@ -58,6 +58,9 @@ interface QuoteSummaryResult {
     sharesOutstanding?: number;
     enterpriseValue?: number;
     enterpriseToEbitda?: number;
+    shortRatio?: number;
+    sharesPercentSharesOut?: number;
+    shortPercentOfFloat?: number;
   };
   price?: { marketCap?: number };
   financialData?: {
@@ -342,6 +345,8 @@ export async function fetchForwardConsensus(
     revenueTtm: fd.totalRevenue ?? null,
     ebitdaTtm: fd.ebitda ?? null,
     enterpriseValue: qs.defaultKeyStatistics?.enterpriseValue ?? null,
+    shortRatio: qs.defaultKeyStatistics?.shortRatio ?? null,
+    shortPercentSharesOut: qs.defaultKeyStatistics?.sharesPercentSharesOut ?? null,
     estimates: trend.map((t) => ({
       period: t.period === "0y" ? "당해년도(FY)" : t.period === "+1y" ? "차년도(FY+1)" : "FY+2",
       epsAvg: t.earningsEstimate?.avg ?? null,

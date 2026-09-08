@@ -307,6 +307,15 @@ export function buildUsBalance(
   for (const l of labels) if (curTotal[l] && lcurTotal[l]) currentRatio[l] = curTotal[l]! / lcurTotal[l]!;
   const ndToEq = blank();
   for (const l of labels) if (netDebt[l] != null && eqTotal[l]) ndToEq[l] = (netDebt[l]! / eqTotal[l]!) * 100;
+  // 배당성향 = 지급배당금 / 당기순이익
+  const divPaid = firstConcept(facts, ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
+  const divAnnual = annualByYear(divPaid);
+  const divTtm = ttmOf(divPaid);
+  const payout = blank();
+  for (const p of periods) {
+    const dv = p.label === LTM ? divTtm : divAnnual.get(p.fiscalYear) ?? null;
+    if (dv != null && netInc[p.label]) payout[p.label] = (Math.abs(dv) / netInc[p.label]!) * 100;
+  }
 
   const nrow = (label: string, values: Record<string, number | null>, nf?: FinancialLineItem["numberFormat"]): FinancialLineItem => ({
     accountName: label,
@@ -323,6 +332,7 @@ export function buildUsBalance(
   items.push(nrow("순부채/자본 (%)", ndToEq, "pct"));
   items.push(nrow("ROE (%)", roe, "pct"));
   items.push(nrow("ROA (%)", roa, "pct"));
+  items.push(nrow("배당성향 (%)", payout, "pct"));
 
   return {
     symbol: "",

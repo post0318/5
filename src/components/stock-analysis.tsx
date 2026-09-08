@@ -557,7 +557,11 @@ export function StockAnalysis({
 
               {/* 재무 하이라이트 (EV 브릿지 + 5개년 + LTM + 추정) — 현재 미국만 */}
               {highlightsQ.data?.highlights && (
-                <FinancialHighlightsTable data={highlightsQ.data.highlights} />
+                <FinancialHighlightsTable
+                  data={highlightsQ.data.highlights}
+                  shortRatio={ov.consensus?.shortRatio ?? null}
+                  shortPercent={ov.consensus?.shortPercentSharesOut ?? null}
+                />
               )}
 
               {/* 투자지표 — 미국은 재무 하이라이트의 연도별 표로 대체 */}
