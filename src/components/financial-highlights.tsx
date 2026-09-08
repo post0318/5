@@ -16,12 +16,14 @@ function fmt(v: number | null, format: "money" | "pct" | "eps", scale: Scale): s
     return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   if (format === "pct") {
-    return v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+  // 백만 단위는 정수(소수점 없음), 10억(모바일) 단위는 소수 2자리
   const div = scale === "billion" ? 1e9 : 1e6;
+  const frac = scale === "billion" ? 2 : 0;
   return (v / div).toLocaleString("en-US", {
-    minimumFractionDigits: scale === "billion" ? 2 : 1,
-    maximumFractionDigits: scale === "billion" ? 2 : 1,
+    minimumFractionDigits: frac,
+    maximumFractionDigits: frac,
   });
 }
 
