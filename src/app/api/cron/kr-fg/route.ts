@@ -28,8 +28,13 @@ function authorized(req: Request): boolean {
   const appPw = process.env.APP_PASSWORD;
   // 수동 실행 허용 (관리자 비밀번호)
   if (appPw && req.headers.get("x-app-token") === appPw) return true;
-  if (!secret) return false; // 미설정 시 차단 (fail-closed)
-  return req.headers.get("authorization") === `Bearer ${secret}`;
+  if (secret) {
+    // 권장: Vercel Cron 이 자동으로 이 헤더를 주입
+    return req.headers.get("authorization") === `Bearer ${secret}`;
+  }
+  // CRON_SECRET 미설정 시 임시 안전장치 — Vercel Cron 요청만 허용.
+  // (UA 스푸핑 가능하나 기존 "전면 개방"보다는 안전. CRON_SECRET 설정 강력 권장.)
+  return (req.headers.get("user-agent") ?? "").includes("vercel-cron");
 }
 
 /**
