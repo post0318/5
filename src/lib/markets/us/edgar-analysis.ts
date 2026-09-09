@@ -33,7 +33,8 @@ const DA = [
 ];
 const INT_EXP = ["InterestExpense", "InterestExpenseNonoperating", "InterestAndDebtExpense"];
 const DEBT_C = ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "CommercialPaper", "ShortTermBorrowings"];
-// 총부채 = 이자부 차입금 + 리스부채 (블룸버그 'Total Debt' 기준, IFRS16/ASC842)
+// 총차입금 = 이자부 차입금 + 리스부채 (블룸버그 'Total Debt' 기준, IFRS16/ASC842).
+// ※ 한국식 '부채비율'의 부채총계(Liabilities)와 다름 — 이건 이자 내는 빚만.
 const DEBT_TOTAL_C = [
   ...DEBT_C,
   "OperatingLeaseLiabilityNoncurrent",
@@ -540,7 +541,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const ebitdaLessCapex = blank();
   for (const l of labels)
     if (ebitda[l] != null && capexAbs[l] != null) ebitdaLessCapex[l] = ebitda[l]! - capexAbs[l]!;
-  const debtPlusEquity = blank(); // 총자본 = 총부채(리스포함) + 자기자본
+  const debtPlusEquity = blank(); // 총자본 = 총차입금(리스포함) + 자기자본
   for (const l of labels)
     if (debtTotal[l] != null && equity[l] != null) debtPlusEquity[l] = debtTotal[l]! + equity[l]!;
   const ltPlusEquity = blank();
@@ -583,30 +584,30 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     SP("3"),
     HEAD("레버리지"),
     R("부채비율 (부채총계/자기자본) (%)", ratio(liabTotal, equity, 100), "pct"),
-    R("총부채 / 자기자본 (%)", ratio(debtTotal, equity, 100), "pct"),
-    R("총부채 / 자본 (%)", ratio(debtTotal, debtPlusEquity, 100), "pct"),
-    R("총부채 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
-    R("장기부채 / 자기자본 (%)", ratio(ltDebt, equity, 100), "pct"),
-    R("장기부채 / 자본 (%)", ratio(ltDebt, ltPlusEquity, 100), "pct"),
-    R("장기부채 / 총자산 (%)", ratio(ltDebt, assets, 100), "pct"),
+    R("총차입금 / 자기자본 (%)", ratio(debtTotal, equity, 100), "pct"),
+    R("총차입금 / 자본 (%)", ratio(debtTotal, debtPlusEquity, 100), "pct"),
+    R("총차입금 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
+    R("장기차입금 / 자기자본 (%)", ratio(ltDebt, equity, 100), "pct"),
+    R("장기차입금 / 자본 (%)", ratio(ltDebt, ltPlusEquity, 100), "pct"),
+    R("장기차입금 / 총자산 (%)", ratio(ltDebt, assets, 100), "pct"),
     R("순부채 / 자기자본 (%)", ratio(netDebtT, equity, 100), "pct"),
     R("순부채 / 자본 (%)", ratio(netDebtT, netDebtPlusEquity, 100), "pct"),
     R("보통주 / 총자산 (%)", ratio(equity, assets, 100), "pct"),
     R("재무레버리지 정도 (DFL)", dfl, "mult"),
     SP("4"),
     HEAD("부채 상환력"),
-    R("총부채 / EBITDA", ratio(debtTotal, ebitda), "mult"),
+    R("총차입금 / EBITDA", ratio(debtTotal, ebitda), "mult"),
     R("순부채 / EBITDA", ratio(netDebtT, ebitda), "mult"),
-    R("총부채 / EBIT", ratio(debtTotal, opIncome), "mult"),
+    R("총차입금 / EBIT", ratio(debtTotal, opIncome), "mult"),
     R("순부채 / EBIT", ratio(netDebtT, opIncome), "mult"),
-    R("영업이익 / 총부채", ratio(opIncome, debtTotal), "mult"),
+    R("영업이익 / 총차입금", ratio(opIncome, debtTotal), "mult"),
     R("이자보상배율 (EBIT/이자)", ratio(opIncome, intExp), "mult"),
     R("EBITDA / 이자비용", ratio(ebitda, intExp), "mult"),
     R("(EBITDA−CapEx) / 이자비용", ratio(ebitdaLessCapex, intExp), "mult"),
     R("EBIT / 현금이자", ratio(opIncome, intPaid), "mult"),
     R("EBITDA / 현금이자", ratio(ebitda, intPaid), "mult"),
-    R("CFO / 총부채", ratio(ocf, debtTotal), "mult"),
-    R("FCF / 총부채", ratio(fcf, debtTotal), "mult"),
+    R("CFO / 총차입금", ratio(ocf, debtTotal), "mult"),
+    R("FCF / 총차입금", ratio(fcf, debtTotal), "mult"),
     R("알트만 Z-스코어", altZ, "eps"),
     SP("4a"),
     HEAD("유동성"),
@@ -622,11 +623,6 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("현금전환주기 (CCC)", ccc, "eps"),
     SP("4c"),
     HEAD("주주환원"),
-    R("배당금 총액", (() => {
-      const o = blank();
-      for (const l of labels) if (dividends[l] != null) o[l] = Math.abs(dividends[l]!);
-      return o;
-    })()),
     R("배당성향 (%)", (() => {
       const o = blank();
       for (const l of labels)
