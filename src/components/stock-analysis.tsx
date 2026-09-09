@@ -714,8 +714,8 @@ export function StockAnalysis({
                   );
                 })()}
 
-              {/* 투자지표 — 미국은 재무 하이라이트의 연도별 표로 대체 */}
-              {market !== "us" && (
+              {/* 투자지표 — 미국·한국은 재무 하이라이트의 연도별 표로 대체 */}
+              {market !== "us" && market !== "kr" && (
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold">투자지표</h3>
                 <div className="grid grid-cols-2 overflow-hidden rounded-lg border text-sm lg:grid-cols-4">
@@ -740,18 +740,9 @@ export function StockAnalysis({
                   })}
                 </div>
                 <p className="text-muted-foreground/80 text-[11px] leading-relaxed">
-                  {market === "kr" ? (
-                    <>
-                      PER·PBR·PSR·BPS·PER(TTM)·EV/EBITDA : DART / DPS·DPS(TTM)·배당수익률 :
-                      금융위원회 주식배당정보
-                    </>
-                  ) : (
-                    <>
-                      PER = 최근 연간 공시(EDINET) + 현재가 자체 계산 ·
-                      PBR·BPS·PSR·EV/EBITDA·PER(TTM)·추정PER(차기 회계연도)·DPS·DPS(TTM)·배당수익률 =
-                      yahoo-finance2 (개인용) — 일본은 무료 분기 공시가 없어 TTM·최근분기 지표는 Yahoo 제공치
-                    </>
-                  )}
+                  PER = 최근 연간 공시(EDINET) + 현재가 자체 계산 ·
+                  PBR·BPS·PSR·EV/EBITDA·PER(TTM)·추정PER(차기 회계연도)·DPS·DPS(TTM)·배당수익률 =
+                  yahoo-finance2 (개인용) — 일본은 무료 분기 공시가 없어 TTM·최근분기 지표는 Yahoo 제공치
                 </p>
               </section>
               )}

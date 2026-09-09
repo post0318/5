@@ -196,8 +196,11 @@ async function loadAnnual(corpCode: string): Promise<KrFacts | null> {
     }
     if (!latestRows) continue;
 
-    // 그 3년 전 호출로 6개년 확보
-    const olderRows = await fetchAll(corpCode, latestYear - 3, REPRT.FY, fsDiv);
+    // 과거 호출로 최대 9개년 확보 (표시는 5개년이지만 3년 성장률·CAGR 산출에 이전 연도 필요)
+    const [olderRows, oldestRows] = await Promise.all([
+      fetchAll(corpCode, latestYear - 3, REPRT.FY, fsDiv),
+      fetchAll(corpCode, latestYear - 6, REPRT.FY, fsDiv),
+    ]);
 
     const keyer = makeKeyer();
     const series = new Map<string, Map<number, number>>();
@@ -226,8 +229,9 @@ async function loadAnnual(corpCode: string): Promise<KrFacts | null> {
     // 최신 보고서를 먼저 ingest → 계정명 별칭의 대표는 최신 표기(당기순이익 등)
     ingest(latestRows, latestYear);
     if (olderRows) ingest(olderRows, latestYear - 3);
+    if (oldestRows) ingest(oldestRows, latestYear - 6);
 
-    const years = [...endByYear.keys()].sort((a, b) => b - a).slice(0, 6).sort((a, b) => a - b);
+    const years = [...endByYear.keys()].sort((a, b) => b - a).slice(0, 9).sort((a, b) => a - b);
     if (years.length === 0) continue;
     const showYears = years.slice(-5);
     const periods: KrPeriod[] = showYears.map((y) => ({
