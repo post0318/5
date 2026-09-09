@@ -80,6 +80,8 @@ export interface KrPeriod {
 
 export interface KrFactLine {
   accountId: string;
+  /** 연도별로 태그가 바뀐 경우 관측된 모든 account_id */
+  accountIds: string[];
   accountName: string;
   sjDiv: string; // BS | IS | CIS | CF
   ord: number;
@@ -128,17 +130,18 @@ async function loadAnnual(corpCode: string): Promise<KrFacts | null> {
     // 그 3년 전 호출로 6개년 확보
     const olderRows = await fetchAll(corpCode, latestYear - 3, REPRT.FY, fsDiv);
 
-    // account -> year -> val
+    // account -> year -> val. 키는 항상 `sj|정규화명` (연도별 account_id 변경 대응).
     const series = new Map<string, Map<number, number>>();
-    const meta = new Map<string, { id: string; name: string; sj: string; ord: number }>();
+    const meta = new Map<string, { ids: Set<string>; name: string; sj: string; ord: number }>();
     const endByYear = new Map<number, string>();
 
     const ingest = (rows: RawRow[], baseYear: number) => {
       for (const r of rows) {
         const id = r.account_id && r.account_id !== "-표준계정코드 미사용-" ? r.account_id : "";
-        const k = id || `${r.sj_div}|${norm(r.account_nm)}`;
-        if (!meta.has(k))
-          meta.set(k, { id, name: r.account_nm, sj: r.sj_div, ord: Number(r.ord) || 0 });
+        const k = `${r.sj_div}|${norm(r.account_nm)}`;
+        const m = meta.get(k) ?? { ids: new Set<string>(), name: r.account_nm, sj: r.sj_div, ord: Number(r.ord) || 0 };
+        if (id) m.ids.add(id);
+        meta.set(k, m);
         const s = series.get(k) ?? new Map<number, number>();
         series.set(k, s);
         const cols: [number, string | undefined][] = [
@@ -176,18 +179,20 @@ async function loadAnnual(corpCode: string): Promise<KrFacts | null> {
         const v = s.get(y);
         if (v != null) byPeriod.set(`FY${y}`, v);
       }
-      lines.push({ accountId: m.id, accountName: m.name, sjDiv: m.sj, ord: m.ord, byPeriod });
+      const ids = [...m.ids];
+      lines.push({ accountId: ids[0] ?? "", accountIds: ids, accountName: m.name, sjDiv: m.sj, ord: m.ord, byPeriod });
     }
     lines.sort((a, b) => a.ord - b.ord);
 
     const byId = new Map<string, KrFactLine>();
     const byName = new Map<string, KrFactLine>();
     for (const l of lines) {
-      if (l.accountId && !byId.has(l.accountId)) byId.set(l.accountId, l);
+      for (const id of l.accountIds) if (!byId.has(id)) byId.set(id, l);
       const nk = `${l.sjDiv}|${norm(l.accountName)}`;
       if (!byName.has(nk)) byName.set(nk, l);
     }
 
+    // annual 맵 키를 `sj|정규화명` 으로 통일 (annualSeries 헬퍼가 name 폴백 시 사용)
     return {
       mode: "annual",
       fsDiv,
@@ -252,8 +257,7 @@ async function loadQuarter(corpCode: string): Promise<KrFacts | null> {
         const ytd = new Map<string, number>();
         const snap = new Map<string, number>(); // BS 기말
         for (const r of rows) {
-          const id = r.account_id && r.account_id !== "-표준계정코드 미사용-" ? r.account_id : "";
-          const k = id || `${r.sj_div}|${norm(r.account_nm)}`;
+          const k = `${r.sj_div}|${norm(r.account_nm)}`;
           if (r.sj_div === "BS") {
             const v = num(r.thstrm_amount);
             if (v != null && !snap.has(k)) snap.set(k, v);
@@ -272,13 +276,14 @@ async function loadQuarter(corpCode: string): Promise<KrFacts | null> {
     if (quarters.length === 0) continue;
 
     // 단일분기 = YTD[n] − YTD[n-1] (같은 연도 내에서만; qi=1 은 그대로)
-    const metaAll = new Map<string, { id: string; name: string; sj: string; ord: number }>();
+    const metaAll = new Map<string, { ids: Set<string>; name: string; sj: string; ord: number }>();
     for (const rows of fetched.values())
       for (const r of rows) {
         const id = r.account_id && r.account_id !== "-표준계정코드 미사용-" ? r.account_id : "";
-        const k = id || `${r.sj_div}|${norm(r.account_nm)}`;
-        if (!metaAll.has(k))
-          metaAll.set(k, { id, name: r.account_nm, sj: r.sj_div, ord: Number(r.ord) || 0 });
+        const k = `${r.sj_div}|${norm(r.account_nm)}`;
+        const m = metaAll.get(k) ?? { ids: new Set<string>(), name: r.account_nm, sj: r.sj_div, ord: Number(r.ord) || 0 };
+        if (id) m.ids.add(id);
+        metaAll.set(k, m);
       }
 
     const single: { year: number; qi: number; end: string; vals: Map<string, number> }[] = [];
@@ -319,14 +324,16 @@ async function loadQuarter(corpCode: string): Promise<KrFacts | null> {
         const v = s.vals.get(k);
         if (v != null) byPeriod.set(`${s.year} Q${s.qi}`, v);
       }
-      if (byPeriod.size) lines.push({ accountId: meta.id, accountName: meta.name, sjDiv: meta.sj, ord: meta.ord, byPeriod });
+      if (!byPeriod.size) continue;
+      const ids = [...meta.ids];
+      lines.push({ accountId: ids[0] ?? "", accountIds: ids, accountName: meta.name, sjDiv: meta.sj, ord: meta.ord, byPeriod });
     }
     lines.sort((a, b) => a.ord - b.ord);
 
     const byId = new Map<string, KrFactLine>();
     const byName = new Map<string, KrFactLine>();
     for (const l of lines) {
-      if (l.accountId && !byId.has(l.accountId)) byId.set(l.accountId, l);
+      for (const id of l.accountIds) if (!byId.has(id)) byId.set(id, l);
       const nk = `${l.sjDiv}|${norm(l.accountName)}`;
       if (!byName.has(nk)) byName.set(nk, l);
     }
@@ -419,22 +426,57 @@ export function sumOf(
   return out;
 }
 
-/** 연간 전체 시계열(연도→값) — account_id 우선 병합. 재무분석 CAGR·평균잔액용. */
+/** 연간 전체 시계열(연도→값) — 개념 병합. 재무분석 CAGR·평균잔액용. */
 export function annualSeries(
   facts: KrFacts,
   ids: string[],
   names: string[] = [],
+  sj?: string,
 ): Map<number, number> {
   const out = new Map<number, number>();
-  const keys: string[] = [...ids];
-  for (const nm of names) {
-    // byName 은 모드별 5기만 → annual 맵은 원본 키(id 또는 "SJ|정규화명")로 접근
-    for (const [k] of facts.annual) if (k.endsWith(`|${norm(nm)}`)) keys.push(k);
+  const seenLines = new Set<KrFactLine>();
+  const linesFor: KrFactLine[] = [];
+  for (const id of ids) {
+    const l = facts.byId.get(id);
+    if (l && (!sj || l.sjDiv === sj) && !seenLines.has(l)) {
+      seenLines.add(l);
+      linesFor.push(l);
+    }
   }
-  for (const k of keys) {
-    const s = facts.annual.get(k);
+  for (const nm of names)
+    for (const div of sj ? [sj] : ["IS", "CIS", "BS", "CF"]) {
+      const l = facts.byName.get(`${div}|${norm(nm)}`);
+      if (l && !seenLines.has(l)) {
+        seenLines.add(l);
+        linesFor.push(l);
+      }
+    }
+  for (const l of linesFor) {
+    const s = facts.annual.get(`${l.sjDiv}|${norm(l.accountName)}`);
     if (!s) continue;
     for (const [y, v] of s) if (!out.has(y)) out.set(y, v);
+  }
+  return out;
+}
+
+/** 여러 개념 그룹의 연간 시계열 합산. */
+export function annualSum(
+  facts: KrFacts,
+  groups: { ids: string[]; names?: string[]; negate?: boolean }[],
+  sj?: string,
+): Map<number, number> {
+  const out = new Map<number, number>();
+  const years = new Set<number>();
+  const perGroup = groups.map((g) => annualSeries(facts, g.ids, g.names ?? [], sj));
+  for (const m of perGroup) for (const y of m.keys()) years.add(y);
+  for (const y of years) {
+    let acc: number | null = null;
+    groups.forEach((g, i) => {
+      const v = perGroup[i].get(y);
+      if (v == null) return;
+      acc = (acc ?? 0) + (g.negate ? -v : v);
+    });
+    if (acc != null) out.set(y, acc);
   }
   return out;
 }
