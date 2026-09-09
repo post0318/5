@@ -560,17 +560,17 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("현금전환주기 (CCC)", ccc, "eps"),
     SP("4c"),
     HEAD("주주환원"),
+    R("배당금 총액", (() => {
+      const o = blank();
+      for (const l of labels) if (dividends[l] != null) o[l] = Math.abs(dividends[l]!);
+      return o;
+    })()),
     R("배당성향 (%)", (() => {
       const o = blank();
       for (const l of labels)
         if (dividends[l] != null && netIncome[l]) o[l] = (Math.abs(dividends[l]!) / netIncome[l]!) * 100;
       return o;
     })(), "pct"),
-    R("자사주 매입", (() => {
-      const o = blank();
-      for (const l of labels) if (buyback[l] != null) o[l] = -Math.abs(buyback[l]!);
-      return o;
-    })()),
     R("총주주환원율 (%)", (() => {
       const o = blank();
       for (const l of labels) {

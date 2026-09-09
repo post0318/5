@@ -234,7 +234,6 @@ export function buildUsIncome(
   const ebitda = blank();
   for (const l of labels)
     if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
-  const divPaid = val(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
 
   const row = (
     label: string,
@@ -272,7 +271,6 @@ export function buildUsIncome(
     row("[ 주석 항목 ]", blank(), { depth: 0, isSubtotal: true }),
     row("EBITDA", ebitda),
     row("감가상각비", da),
-    row("배당금 총액", divPaid),
   ];
 
   return {
