@@ -391,10 +391,6 @@ export function buildUsCashFlow(
   items.push({ accountName: "자본적지출 (CapEx)", accountId: "cf:note:capex", depth: 1, isSubtotal: false, isHighlight: false, values: capex });
   items.push({ accountName: "잉여현금흐름 (FCF)", accountId: "cf:note:fcf", depth: 1, isSubtotal: false, isHighlight: false, values: fcf });
 
-  const buyback = valOf(["PaymentsForRepurchaseOfCommonStock"]);
-  if (labels.some((l) => buyback[l] != null))
-    items.push({ accountName: "자사주 매입액", accountId: "cf:note:buyback", depth: 1, isSubtotal: false, isHighlight: false, values: buyback });
-
   const tax = valOf(TAX_PAID);
   const intp = valOf(INT_PAID);
   if (labels.some((l) => tax[l] != null))
