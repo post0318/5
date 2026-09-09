@@ -3,10 +3,10 @@ import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import {
   annualEnds,
+  days,
   firstConcept,
   instantByYear,
   instantOn,
-  latestInstant,
   recentInstantQuarters,
   recentQuarters,
 } from "./edgar-series";
@@ -198,7 +198,12 @@ export function buildUsBalance(
       const ann = instantByYear(e);
       const out: Record<string, number | null> = {};
       for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-      out[LTM] = instantOn(e, latestEnd) ?? latestInstant(e);
+      // LTM: 최근 분기말 값. 없으면 최근 재무상태표 값(단, 너무 오래된 건 제외 —
+      // 회사가 해당 라인 보고를 중단한 경우 옛 값이 잔존하지 않도록)
+      const latest = e.filter((x) => !x.start).sort((a, b) => (a.end < b.end ? 1 : -1))[0];
+      const fresh =
+        latest && Math.abs(days(latest.end, latestEnd)) <= 400 ? latest.val : null;
+      out[LTM] = instantOn(e, latestEnd) ?? fresh;
       return out;
     };
   }
