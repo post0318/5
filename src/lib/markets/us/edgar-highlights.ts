@@ -319,7 +319,10 @@ export function buildUsHighlights(
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
     ocf: unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
     capex: concat(CAPEX_CONCEPTS),
-    dps: unitEntries(facts, "CommonStockDividendsPerShareDeclared", "USD/shares"),
+    dps: concat(
+      ["CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"],
+      "USD/shares",
+    ),
   };
   const cashE = unitEntries(facts, "CashAndCashEquivalentsAtCarryingValue", "USD");
   const equityE = unitEntries(facts, "StockholdersEquity", "USD");
