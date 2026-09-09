@@ -580,7 +580,6 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("장기차입금 / 자기자본 (%)", ratio(ltDebt, equity, 100), "pct"),
     R("장기차입금 / 총자산 (%)", ratio(ltDebt, assets, 100), "pct"),
     R("순부채 / 자기자본 (%)", ratio(netDebtT, equity, 100), "pct"),
-    R("보통주 / 총자산 (%)", ratio(equity, assets, 100), "pct"),
     R("재무레버리지 정도 (DFL)", dfl, "mult"),
     SP("4"),
     HEAD("재무건전성"),
