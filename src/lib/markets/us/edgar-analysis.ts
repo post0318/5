@@ -191,7 +191,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   }
   const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
-  const intPaid = flow(["InterestPaidNet", "InterestPaid"]); // 현금 이자 지급액
+  const INT_PAID_C = ["InterestPaidNet", "InterestPaid"];
+  const intPaid = flow(INT_PAID_C); // 현금 이자 지급액
   const ltDebt = stockSum([
     "LongTermDebtNoncurrent",
     "OperatingLeaseLiabilityNoncurrent",
@@ -202,11 +203,14 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   // 오래된 값으로 비율 왜곡 방지 → 해당 컬럼 공란
   {
     const recentIso = new Date(Date.now() - 500 * 864e5).toISOString().slice(0, 10);
-    const fresh = INT_EXP.some((c) =>
-      entriesOf(facts, c).some((e) => e.end >= recentIso),
-    );
-    if (!fresh) intExp[LTM] = null;
+    const freshOf = (cs: string[]) =>
+      cs.some((c) => entriesOf(facts, c).some((e) => e.end >= recentIso));
+    if (!freshOf(INT_EXP)) intExp[LTM] = null;
+    if (!freshOf(INT_PAID_C)) intPaid[LTM] = null;
   }
+  // 현금이자 미공시 기간은 발생주의 이자비용으로 대체 (NVIDIA FY2026~ 등)
+  const intCash = blank();
+  for (const l of labels) intCash[l] = intPaid[l] ?? intExp[l];
   const taxExp = flow(["IncomeTaxExpenseBenefit"]);
   const pretax = flow([
     "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
@@ -592,8 +596,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("이자보상배율 (EBIT/이자)", ratio(opIncome, intExp), "mult"),
     R("EBITDA / 이자비용", ratio(ebitda, intExp), "mult"),
     R("(EBITDA−CapEx) / 이자비용", ratio(ebitdaLessCapex, intExp), "mult"),
-    R("EBIT / 현금이자", ratio(opIncome, intPaid), "mult"),
-    R("EBITDA / 현금이자", ratio(ebitda, intPaid), "mult"),
+    R("EBIT / 현금이자", ratio(opIncome, intCash), "mult"),
+    R("EBITDA / 현금이자", ratio(ebitda, intCash), "mult"),
     R("CFO / 총차입금", ratio(ocf, debtTotal), "mult"),
     R("FCF / 총차입금", ratio(fcf, debtTotal), "mult"),
     R("알트만 Z-스코어", altZ, "eps"),
