@@ -21,16 +21,28 @@ export function entriesOf(
 ): FactUnitEntry[] {
   return facts.facts["us-gaap"]?.[concept]?.units?.[unit] ?? [];
 }
+/**
+ * 나열된 개념(대체 태그)을 우선순위대로 병합한 엔트리 배열.
+ * 같은 보고기간(start·end·form)은 앞선 개념 값을 쓰고, 없는 기간만 뒤 개념이 채운다.
+ * → 회사가 연도에 따라 태그를 바꾼 경우(NVIDIA 등) 시계열이 끊기지 않음.
+ */
 export function firstConcept(
   facts: CompanyFacts,
   concepts: string[],
   unit = "USD",
 ): FactUnitEntry[] {
+  if (concepts.length === 1) return entriesOf(facts, concepts[0], unit);
+  const out: FactUnitEntry[] = [];
+  const seen = new Set<string>();
   for (const c of concepts) {
-    const e = entriesOf(facts, c, unit);
-    if (e.length) return e;
+    for (const e of entriesOf(facts, c, unit)) {
+      const key = `${e.start ?? ""}|${e.end}|${e.form}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(e);
+    }
   }
-  return [];
+  return out;
 }
 
 /**

@@ -50,7 +50,16 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
     title: "자산",
     lines: [
       { label: "현금·현금성자산", concepts: ["CashAndCashEquivalentsAtCarryingValue"], depth: 1 },
-      { label: "단기 투자자산", concepts: ["MarketableSecuritiesCurrent", "ShortTermInvestments"], depth: 1 },
+      {
+        label: "단기 투자자산",
+        concepts: [
+          "MarketableSecuritiesCurrent",
+          "ShortTermInvestments",
+          "DebtSecuritiesCurrent",
+          "AvailableForSaleSecuritiesCurrent",
+        ],
+        depth: 1,
+      },
       { label: "매출채권", concepts: ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"], depth: 1 },
       { label: "재고자산", concepts: ["InventoryNet"], depth: 1 },
       { label: "기타 유동자산", depth: 1, plugOf: "cur" },

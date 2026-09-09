@@ -46,14 +46,17 @@ const CASH_C = [
   "CashAndCashEquivalentsAtCarryingValue",
   "MarketableSecuritiesCurrent",
   "ShortTermInvestments",
+  "DebtSecuritiesCurrent",
   "MarketableSecuritiesNoncurrent",
   "LongTermInvestments",
+  "DebtSecuritiesNoncurrent",
 ];
 // 유동성 지표용 현금 (장기 투자자산 제외 — 순부채용 CASH_C 와 다름)
 const CASH_CUR = [
   "CashAndCashEquivalentsAtCarryingValue",
   "MarketableSecuritiesCurrent",
   "ShortTermInvestments",
+  "DebtSecuritiesCurrent",
 ];
 
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {

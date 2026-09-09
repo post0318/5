@@ -26,12 +26,20 @@ function shiftYear(iso: string, n: number) {
 function entriesOf(facts: CompanyFacts, concept: string): FactUnitEntry[] {
   return facts.facts["us-gaap"]?.[concept]?.units?.["USD"] ?? [];
 }
+// 대체 태그를 우선순위대로 병합 (같은 보고기간은 앞 개념 우선, 빈 기간만 뒤 개념이 채움).
 function firstConcept(facts: CompanyFacts, concepts: string[]): FactUnitEntry[] {
+  if (concepts.length === 1) return entriesOf(facts, concepts[0]);
+  const out: FactUnitEntry[] = [];
+  const seen = new Set<string>();
   for (const c of concepts) {
-    const e = entriesOf(facts, c);
-    if (e.length) return e;
+    for (const e of entriesOf(facts, c)) {
+      const key = `${e.start ?? ""}|${e.end}|${e.form}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(e);
+    }
   }
-  return [];
+  return out;
 }
 
 /** 사업연도별 duration 값. */
