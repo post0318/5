@@ -585,6 +585,41 @@ export function StockAnalysis({
                 <FinancialHighlightsTable data={highlightsQ.data.highlights} />
               )}
 
+              {/* 요약 칩 (FCF 마진 / PEG) — 재무 하이라이트와 컨센서스 사이 */}
+              {market === "us" &&
+                analysisQ.data &&
+                (() => {
+                  const its = analysisQ.data.sections[0]?.items ?? [];
+                  const pick = (name: string) =>
+                    its.find((x) => x.accountName === name)?.values?.["현재/LTM"] ??
+                    null;
+                  const fcfM = pick("FCF 마진 (%)");
+                  const peg = pick("PEG (EPS 3Y CAGR)");
+                  if (fcfM == null && peg == null) return null;
+                  return (
+                    <div className="flex flex-wrap gap-2">
+                      {fcfM != null && (
+                        <MetricChip
+                          label="FCF 마진"
+                          value={`${fcfM.toFixed(1)}%`}
+                          hint="20%↑ 우수 · 0~20% 보통 · 0%↓ 취약"
+                          verdict={fcfM >= 20 ? "우수" : fcfM >= 0 ? "보통" : "취약"}
+                          tone={fcfM >= 20 ? "good" : fcfM >= 0 ? "mid" : "bad"}
+                        />
+                      )}
+                      {peg != null && (
+                        <MetricChip
+                          label="PEG"
+                          value={`${peg.toFixed(2)}x`}
+                          hint="1미만 저평가 · 1~1.5 적정 · 1.5↑ 고평가 (EPS 3년 CAGR 기준)"
+                          verdict={peg < 1 ? "저평가" : peg < 1.5 ? "적정" : "고평가"}
+                          tone={peg < 1 ? "good" : peg < 1.5 ? "mid" : "bad"}
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
+
               {/* 투자지표 — 미국은 재무 하이라이트의 연도별 표로 대체 */}
               {market !== "us" && (
               <section className="space-y-3">
@@ -948,6 +983,45 @@ function Stat({
     <div className={cn("border-border rounded-lg border p-3", className)}>
       <div className="text-muted-foreground text-xs">{label}</div>
       <div className="mt-1 text-lg font-semibold">{children}</div>
+    </div>
+  );
+}
+
+type ChipTone = "good" | "mid" | "bad";
+const CHIP_TONE: Record<ChipTone, string> = {
+  good: "bg-up/10 text-up border-up/30",
+  mid: "border-border bg-muted text-muted-foreground",
+  bad: "bg-down/10 text-down border-down/30",
+};
+
+function MetricChip({
+  label,
+  value,
+  verdict,
+  tone,
+  hint,
+}: {
+  label: string;
+  value: string;
+  verdict: string;
+  tone: ChipTone;
+  hint?: string;
+}) {
+  return (
+    <div
+      className="border-border flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+      title={hint}
+    >
+      <span className="text-muted-foreground text-xs font-medium">{label}</span>
+      <span className="tnum font-semibold">{value}</span>
+      <span
+        className={cn(
+          "rounded-md border px-1.5 py-0.5 text-[11px] font-medium",
+          CHIP_TONE[tone],
+        )}
+      >
+        {verdict}
+      </span>
     </div>
   );
 }
