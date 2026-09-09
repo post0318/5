@@ -66,7 +66,15 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
       { label: "재고자산", concepts: ["InventoryNet"], depth: 1 },
       { label: "기타 유동자산", depth: 1, plugOf: "cur" },
       { label: "유동자산 총계", depth: 0, kind: "subtotal", concepts: A_CUR },
-      { label: "유형자산 (순)", concepts: ["PropertyPlantAndEquipmentNet"], depth: 1 },
+      {
+        label: "유형자산 (순)",
+        concepts: [
+          "PropertyPlantAndEquipmentNet",
+          "PropertyPlantAndEquipmentExcludingLessorAssetUnderOperatingLeaseAfterAccumulatedDepreciation",
+          "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+        ],
+        depth: 1,
+      },
       { label: "장기 투자자산", concepts: ["MarketableSecuritiesNoncurrent", "LongTermInvestments"], depth: 1 },
       { label: "기타 비유동자산", depth: 1, plugOf: "noncur" },
       { label: "비유동자산 총계", depth: 0, kind: "subtotal", plugOf: "noncurTotal" },

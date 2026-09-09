@@ -89,6 +89,8 @@ interface Line {
   negate?: boolean;
   /** 여러 개념 합산 (각 [concept, negate]) */
   combine?: [string, boolean][];
+  /** concepts 로 값이 안 나온 기간을 이 합산으로 보충 */
+  fallbackCombine?: [string, boolean][];
   /** (구간 총계 − 이 앞의 형제 라인 합)으로 계산되는 잔여 라인 */
   plug?: boolean;
 }
@@ -111,6 +113,8 @@ const BLOCKS: Block[] = [
       {
         label: "감가상각비·무형자산상각비",
         concepts: ["DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet", "DepreciationAndAmortization"],
+        // 통합 태그 없으면 감가상각 + 무형자산상각 합산 (IBM 등)
+        fallbackCombine: [["Depreciation", false], ["AmortizationOfIntangibleAssets", false]],
         depth: 1,
       },
       { label: "주식보상비용", concepts: ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], depth: 1 },
@@ -287,6 +291,10 @@ export function buildUsCashFlow(
       let v: Record<string, number | null>;
       if (line.combine) v = combineVals(line.combine);
       else v = valOf(line.concepts ?? []);
+      if (line.fallbackCombine && labels.some((l) => v[l] == null)) {
+        const fb = combineVals(line.fallbackCombine);
+        for (const l of labels) if (v[l] == null && fb[l] != null) v[l] = fb[l];
+      }
       if (line.negate) v = applyNegate(v);
       resolved[line.label] = v;
     }
