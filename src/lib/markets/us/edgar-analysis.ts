@@ -653,7 +653,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return o;
   })();
   const arAvg = avgStock(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]);
-  const invAvg = avgStock(["InventoryNet"]);
+  const invAvg = avgStock(["InventoryNet", "AirlineRelatedInventoryNet", "EnergyRelatedInventory", "RetailRelatedInventoryMerchandise"]);
   const apAvg = avgStock([
     "AccountsPayableCurrent",
     "AccountsPayableTradeCurrent",

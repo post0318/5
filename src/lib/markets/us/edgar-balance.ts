@@ -64,7 +64,7 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
         depth: 1,
       },
       { label: "매출채권", concepts: ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"], depth: 1 },
-      { label: "재고자산", concepts: ["InventoryNet"], depth: 1 },
+      { label: "재고자산", concepts: ["InventoryNet", "AirlineRelatedInventoryNet", "EnergyRelatedInventory", "RetailRelatedInventoryMerchandise", "OtherInventoryNetOfReserves"], depth: 1 },
       { label: "기타 유동자산", depth: 1, plugOf: "cur" },
       { label: "유동자산 총계", depth: 0, kind: "subtotal", concepts: A_CUR },
       {
