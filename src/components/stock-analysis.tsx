@@ -66,14 +66,15 @@ export function StockAnalysis({
     retry: false,
   });
 
-  // 미국 표준화 상세표 (CF·IS 하위탭)
+  // 표준화 상세표 (총괄·BS·IS·CF 하위탭) — 미국·한국
+  const hasDetail = market === "us" || market === "kr";
   const cfDetailQ = useQuery({
     queryKey: ["financials-cf", market, symbol, period],
     queryFn: () =>
       apiFetch<FinancialStatement>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=cf&period=${period}`,
       ),
-    enabled: Boolean(symbol) && market === "us",
+    enabled: Boolean(symbol) && hasDetail,
     retry: false,
   });
   const isDetailQ = useQuery({
@@ -82,7 +83,7 @@ export function StockAnalysis({
       apiFetch<FinancialStatement>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=is&period=${period}`,
       ),
-    enabled: Boolean(symbol) && market === "us",
+    enabled: Boolean(symbol) && hasDetail,
     retry: false,
   });
   const bsDetailQ = useQuery({
@@ -91,7 +92,7 @@ export function StockAnalysis({
       apiFetch<FinancialStatement>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=bs&period=${period}`,
       ),
-    enabled: Boolean(symbol) && market === "us",
+    enabled: Boolean(symbol) && hasDetail,
     retry: false,
   });
   const analysisQ = useQuery({
@@ -110,7 +111,7 @@ export function StockAnalysis({
       apiFetch<FinancialStatement>(
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=summary&period=${period}`,
       ),
-    enabled: Boolean(symbol) && market === "us",
+    enabled: Boolean(symbol) && hasDetail,
     retry: false,
   });
 
@@ -846,10 +847,10 @@ export function StockAnalysis({
               {financials.data && financials.data.sections.length > 0 && (
                 <FinancialsTable
                   statement={financials.data}
-                  detailedCf={market === "us" ? (cfDetailQ.data ?? null) : null}
-                  detailedIs={market === "us" ? (isDetailQ.data ?? null) : null}
-                  detailedBs={market === "us" ? (bsDetailQ.data ?? null) : null}
-                  detailedSummary={market === "us" ? (summaryQ.data ?? null) : null}
+                  detailedCf={hasDetail ? (cfDetailQ.data ?? null) : null}
+                  detailedIs={hasDetail ? (isDetailQ.data ?? null) : null}
+                  detailedBs={hasDetail ? (bsDetailQ.data ?? null) : null}
+                  detailedSummary={hasDetail ? (summaryQ.data ?? null) : null}
                   period={period}
                   onPeriodChange={setPeriod}
                 />

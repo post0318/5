@@ -8,6 +8,12 @@ import { buildUsBalance } from "@/lib/markets/us/edgar-balance";
 import { buildUsAnalysis } from "@/lib/markets/us/edgar-analysis";
 import { buildUsSummary } from "@/lib/markets/us/edgar-summary";
 import { getEodQuote } from "@/lib/markets/quote";
+import { resolveCorpCode } from "@/lib/markets/kr/corpcode";
+import { fetchKrFacts } from "@/lib/markets/kr/dart-facts";
+import { buildKrIncome } from "@/lib/markets/kr/dart-income";
+import { buildKrBalance } from "@/lib/markets/kr/dart-balance";
+import { buildKrCashFlow } from "@/lib/markets/kr/dart-cashflow";
+import { buildKrSummary } from "@/lib/markets/kr/dart-summary";
 
 export const maxDuration = 60;
 
@@ -25,16 +31,36 @@ export async function GET(
     const adapter = getAdapter(market);
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
 
-    // 미국 상세 현금흐름표 / 손익계산서 (표준화 재분류 + LTM)
+    // 상세 재분류 뷰 (미국·한국)
     const detailView = searchParams.get("view");
-    if (
-      market === "us" &&
-      (detailView === "cf" ||
-        detailView === "is" ||
-        detailView === "bs" ||
-        detailView === "analysis" ||
-        detailView === "summary")
-    ) {
+    const isDetail =
+      detailView === "cf" ||
+      detailView === "is" ||
+      detailView === "bs" ||
+      detailView === "analysis" ||
+      detailView === "summary";
+
+    if (market === "kr" && isDetail && detailView !== "analysis") {
+      const { corpCode } = resolveCorpCode("", sym);
+      const facts = await fetchKrFacts(corpCode, period);
+      if (!facts) {
+        return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });
+      }
+      const stmt =
+        detailView === "cf"
+          ? buildKrCashFlow(facts)
+          : detailView === "is"
+            ? buildKrIncome(facts)
+            : detailView === "bs"
+              ? buildKrBalance(facts)
+              : buildKrSummary(facts);
+      stmt.symbol = sym;
+      return ok(stmt, {
+        headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },
+      });
+    }
+
+    if (market === "us" && isDetail) {
       const yahoo = searchParams.get("yahoo");
       const [{ facts }, quote] = await Promise.all([
         fetchUsCompanyFacts(sym),

@@ -35,11 +35,15 @@ function fmtDetail(
   v: number,
   kind: FinancialLineItem["numberFormat"] | undefined,
   billion = false,
+  currency = "USD",
 ): string {
-  if (kind === "eps" || kind === "pct") return formatNumber(v, 2);
+  const krw = currency === "KRW";
+  if (kind === "eps") return formatNumber(v, krw ? 0 : 2);
+  if (kind === "pct") return formatNumber(v, 2);
   if (kind === "mult") return `${formatNumber(v, 2)}x`;
   if (kind === "shares") return formatNumber(v / (billion ? 1e9 : 1e6), billion ? 2 : 1);
-  // 통화 → 데스크톱 백만(정수) / 모바일 10억(소수 2) — 개요와 통일
+  // 통화 → 원화는 십억원(정수), 그 외는 데스크톱 백만(정수)/모바일 10억(소수 2) — 개요와 통일
+  if (krw) return formatNumber(v / 1e9, 0);
   return billion ? formatNumber(v / 1e9, 2) : formatNumber(v / 1e6, 0);
 }
 
@@ -222,7 +226,10 @@ export function FinancialsTable({
                       colSpan={periods.length}
                       className="text-muted-foreground px-3 pt-1 pb-0.5 text-right text-xs font-normal"
                     >
-                      단위: {detail.unit || "USD"} {mobileDetail ? "10억" : "백만"}
+                      단위:{" "}
+                      {detail.currency === "KRW"
+                        ? "십억원"
+                        : `${detail.unit || "USD"} ${mobileDetail ? "10억" : "백만"}`}
                     </th>
                   </tr>
                 )}
@@ -336,11 +343,11 @@ export function FinancialsTable({
                                 : item.paren
                                   ? `(${
                                       useDetail
-                                        ? fmtDetail(v, item.numberFormat, mobileDetail)
+                                        ? fmtDetail(v, item.numberFormat, mobileDetail, detail.currency)
                                         : formatNumber(v, perShare ? 2 : 0)
                                     })`
                                   : useDetail
-                                    ? fmtDetail(v, item.numberFormat, mobileDetail)
+                                    ? fmtDetail(v, item.numberFormat, mobileDetail, detail.currency)
                                     : formatNumber(v, perShare ? 2 : 0)}
                           </td>
                         );
