@@ -302,8 +302,6 @@ export function buildUsBalance(
   const netDebt = blank();
   for (const l of labels)
     if (debt[l] != null || cashLike[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashLike[l] ?? 0);
-  const ndToEq = blank();
-  for (const l of labels) if (netDebt[l] != null && eqTotal[l]) ndToEq[l] = (netDebt[l]! / eqTotal[l]!) * 100;
 
   const nrow = (label: string, values: Record<string, number | null>, nf?: FinancialLineItem["numberFormat"]): FinancialLineItem => ({
     accountName: label,
@@ -315,8 +313,7 @@ export function buildUsBalance(
     numberFormat: nf,
   });
   items.push(nrow("총차입금", debt));
-  items.push(nrow("순부채", netDebt));
-  items.push(nrow("순부채/자본 (%)", ndToEq, "pct"));
+  items.push(nrow("순차입금", netDebt));
 
   return {
     symbol: "",
