@@ -612,7 +612,7 @@ export function StockAnalysis({
                   )
                     return null;
                   return (
-                    <div className="flex flex-wrap gap-2">
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                       {fcfM != null && (
                         <MetricChip
                           label="FCF 마진"
@@ -1089,19 +1089,23 @@ function MetricChip({
 }) {
   return (
     <div
-      className="border-border flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+      className="border-border flex flex-col gap-1 rounded-lg border px-3 py-2"
       title={hint}
     >
-      <span className="text-muted-foreground text-xs font-medium">{label}</span>
-      <span className="tnum font-semibold">{value}</span>
-      <span
-        className={cn(
-          "rounded-md border px-1.5 py-0.5 text-[11px] font-medium",
-          CHIP_TONE[tone],
-        )}
-      >
-        {verdict}
+      <span className="text-muted-foreground truncate text-xs font-medium">
+        {label}
       </span>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="tnum text-sm font-semibold">{value}</span>
+        <span
+          className={cn(
+            "shrink-0 rounded-md border px-1.5 py-0.5 text-[11px] font-medium",
+            CHIP_TONE[tone],
+          )}
+        >
+          {verdict}
+        </span>
+      </div>
     </div>
   );
 }
