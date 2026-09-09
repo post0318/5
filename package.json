@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "build:kr-corpcodes": "node scripts/build-kr-corpcodes.mjs"
+    "build:kr-corpcodes": "node scripts/build-kr-corpcodes.mjs",
+    "batch:kr-da": "node scripts/populate-kr-da.mjs",
+    "batch:nightly": "node scripts/nightly.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.102.8",
