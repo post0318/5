@@ -300,11 +300,20 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   };
   const equityAvg = avgStock(["StockholdersEquity"]);
   const assetsAvg = avgStock(["Assets"]);
-  const debtAvg = avgStockSum(DEBT_C);
+  // 투하자본 = 총자산 − 비이자 유동부채 (= 총차입금 + 자기자본 + 비유동 비이자부채).
+  // 블룸버그 ROIC 기준. 순현금 기업이라도 음수화 안 됨.
+  const curLiabAvg = avgStock(["LiabilitiesCurrent"]);
+  const curDebtAvg = avgStockSum([
+    "LongTermDebtCurrent",
+    "CommercialPaper",
+    "ShortTermBorrowings",
+    "FinanceLeaseLiabilityCurrent",
+  ]);
   const investedCapAvg = blank();
-  for (const l of labels)
-    if (debtAvg[l] != null && equityAvg[l] != null)
-      investedCapAvg[l] = debtAvg[l]! + equityAvg[l]!;
+  for (const l of labels) {
+    if (assetsAvg[l] == null || curLiabAvg[l] == null) continue;
+    investedCapAvg[l] = assetsAvg[l]! - (curLiabAvg[l]! - (curDebtAvg[l] ?? 0));
+  }
 
   // 주가·시총
   const price = blank();
@@ -429,22 +438,9 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   }
 
   const effTax = ratio(taxExp, pretax, 100);
-  const payoutR = (() => {
-    const o = blank();
-    for (const l of labels)
-      if (dividends[l] != null && netIncome[l]) o[l] = Math.abs(dividends[l]!) / netIncome[l]!;
-    return o;
-  })();
-  const roeR = ratio(netIncome, equityAvg);
   // 듀퐁 분해: ROE(%) = 순이익률(%) × 총자산회전율 × 재무레버리지 (잔액은 평균)
   const duTurnover = ratio(revenue, assetsAvg);
   const duLeverage = ratio(assetsAvg, equityAvg);
-  const sgr = (() => {
-    const o = blank();
-    for (const l of labels)
-      if (roeR[l] != null && payoutR[l] != null) o[l] = roeR[l]! * (1 - payoutR[l]!) * 100;
-    return o;
-  })();
   const quick = (() => {
     const o = blank();
     // 재고 태그가 없는 업종(플랫폼·서비스)은 재고 0 으로 간주 → 사실상 유동비율과 근접
@@ -519,7 +515,6 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("매출총이익률 (%)", ratio(grossProfit, revenue, 100), "pct"),
     R("영업이익률 (%)", ratio(opIncome, revenue, 100), "pct"),
     R("유효세율 (%)", effTax, "pct"),
-    R("지속가능 성장률 (%)", sgr, "pct"),
     SP("2"),
     HEAD("현금창출"),
     R("잉여현금흐름 (FCF)", fcf),
