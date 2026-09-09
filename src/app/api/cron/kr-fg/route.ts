@@ -25,7 +25,10 @@ export const maxDuration = 300;
  */
 function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return true; // 미설정 시 열어둠 (개발)
+  const appPw = process.env.APP_PASSWORD;
+  // 수동 실행 허용 (관리자 비밀번호)
+  if (appPw && req.headers.get("x-app-token") === appPw) return true;
+  if (!secret) return false; // 미설정 시 차단 (fail-closed)
   return req.headers.get("authorization") === `Bearer ${secret}`;
 }
 
