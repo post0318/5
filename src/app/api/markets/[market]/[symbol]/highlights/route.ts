@@ -9,7 +9,7 @@ import { resolveCorpCode } from "@/lib/markets/kr/corpcode";
 import { fetchKrFacts, fetchKrDps } from "@/lib/markets/kr/dart-facts";
 import { buildKrHighlights } from "@/lib/markets/kr/dart-highlights";
 import { fetchStooqEod } from "@/lib/markets/quote/stooq";
-import { fetchKrxEod } from "@/lib/markets/quote/krx";
+import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 
 export const revalidate = 3600;
@@ -45,9 +45,21 @@ export async function GET(
         fetchKrNaverConsensus(sym).catch(() => null),
       ]);
       if (!facts) return ok({ highlights: null });
+      // 회계연도말 종가 — Stooq 커버리지가 부족하면 KRX 로 개별 조회
+      const fyCloseByYear = new Map<number, number>();
+      const needYears = facts.periods
+        .map((p) => p.year)
+        .filter((y) => !bars.some((b) => b.date <= `${y}-12-31` && b.date >= `${y}-11-01` && b.close != null));
+      await Promise.all(
+        needYears.map(async (y) => {
+          const c = await fetchKrxCloseOn(sym, `${y}1231`).catch(() => null);
+          if (c != null) fyCloseByYear.set(y, c);
+        }),
+      );
       const highlights = buildKrHighlights({
         facts,
         bars,
+        fyCloseByYear,
         sharesOutstanding: krx?.listedShares ?? null,
         currentMarketCap: krx?.marketCap ?? null,
         currentPrice: krx?.bars.at(-1)?.close ?? bars.at(-1)?.close ?? null,

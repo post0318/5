@@ -34,6 +34,7 @@ const DEBT_GROUPS = [
 export interface KrHighlightInput {
   facts: KrFacts; // annual
   bars: QuoteBar[]; // Stooq (다년) — 회계연도말 종가
+  fyCloseByYear?: Map<number, number>; // KRX 회계연도말 종가 폴백
   sharesOutstanding: number | null; // KRX 현재 상장주식수
   currentMarketCap: number | null;
   currentPrice: number | null;
@@ -62,7 +63,7 @@ const ratio = (n: number | null, d: number | null): number | null =>
   n != null && d != null && d > 0 ? n / d : null;
 
 export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights {
-  const { facts, bars, sharesOutstanding: shares, currentMarketCap, currentPrice, ttm, dpsByYear, consensus } = input;
+  const { facts, bars, fyCloseByYear, sharesOutstanding: shares, currentMarketCap, currentPrice, ttm, dpsByYear, consensus } = input;
 
   const fyYears = facts.periods.map((p) => p.year);
   const lastFy = fyYears[fyYears.length - 1] ?? new Date().getFullYear();
@@ -98,7 +99,11 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
 
   // ── 컬럼별 값 ──
   const priceByCol = columns.map((c) =>
-    c.kind === "ltm" ? (currentPrice ?? lastBar?.close ?? null) : c.kind === "estimate" ? (currentPrice ?? null) : closeOnOrBefore(bars, c.date),
+    c.kind === "ltm"
+      ? (currentPrice ?? lastBar?.close ?? null)
+      : c.kind === "estimate"
+        ? (currentPrice ?? null)
+        : (closeOnOrBefore(bars, c.date) ?? fyCloseByYear?.get(cy(c)) ?? null),
   );
   const marketCap = columns.map((c, i) => {
     if (c.kind === "ltm") return currentMarketCap ?? (priceByCol[i] != null && shares != null ? priceByCol[i]! * shares : null);
@@ -140,7 +145,13 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   });
   const fcf = columns.map((_, i) => (ocf[i] != null && capex[i] != null ? ocf[i]! + capex[i]! : null));
 
-  const seq = (a: (number | null)[]) => a.map((v, i) => (i > 0 ? yoy(v, a[i - 1]) : null));
+  const firstFy = columns[0]?.kind === "fy" ? cy(columns[0]) : null;
+  const seq = (a: (number | null)[], src?: Map<number, number>) =>
+    a.map((v, i) => {
+      if (i > 0) return yoy(v, a[i - 1]);
+      if (firstFy != null && src) return yoy(v, src.get(firstFy - 1) ?? null);
+      return null;
+    });
 
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap },
@@ -149,13 +160,13 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
     { key: "revenue", label: "매출액", format: "money", values: revenue },
-    { key: "revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(revenue) },
+    { key: "revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(revenue, aRev) },
     { key: "opinc", label: "영업이익", format: "money", values: opInc },
     { key: "opinc_m", label: "마진 %", format: "pct", indent: true, values: opInc.map((v, i) => margin(v, revenue[i])) },
     { key: "ni", label: "순이익", format: "money", values: netIncome },
     { key: "ni_m", label: "마진 %", format: "pct", indent: true, values: netIncome.map((v, i) => margin(v, revenue[i])) },
     { key: "eps", label: "EPS (희석)", format: "eps", values: eps },
-    { key: "eps_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(eps) },
+    { key: "eps_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(eps, aEps) },
     { key: "dps", label: "DPS", format: "eps", values: dps },
     { key: "divyield", label: "배당수익률 %", format: "pct", indent: true, values: divYield },
     { key: "sp2", label: "", format: "money", spacer: true, values: blank() },
