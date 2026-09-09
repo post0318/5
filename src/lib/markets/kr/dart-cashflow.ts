@@ -119,7 +119,36 @@ export function buildKrCashFlow(facts: KrFacts): FinancialStatement {
   const items: FinancialLineItem[] = [];
   const sectionTotals: Record<string, Record<string, number | null>> = {};
 
-  for (const block of BLOCKS) {
+  // SK하이닉스 등은 CF 를 "영업에서 창출된 현금" 출발점으로만 축약 공시 (당기순이익→조정 내역은 주석) →
+  // 그 경우 영업활동 블록 라인을 교체
+  const opStartNi = seriesOf(facts, ["ifrs-full_ProfitLoss"], ["당기순이익", "분기순이익", "반기순이익"], "CF");
+  const hasNiLine = labels.some((l) => opStartNi[l] != null);
+  const blocks: Block[] = hasNiLine
+    ? BLOCKS
+    : [
+        {
+          title: "영업활동 현금흐름",
+          total: BLOCKS[0].total,
+          lines: [
+            {
+              label: "영업에서 창출된 현금",
+              ids: ["ifrs-full_CashFlowsFromUsedInOperations"],
+              names: ["영업으로부터 창출된 현금흐름", "영업에서 창출된 현금흐름", "영업으로부터창출된현금"],
+              depth: 1,
+              sign: "raw",
+            },
+            { label: "이자 수취", ids: ["ifrs-full_InterestReceivedClassifiedAsOperatingActivities"], names: ["이자의 수취"], depth: 1, sign: "in" },
+            { label: "배당금 수취", ids: ["ifrs-full_DividendsReceivedClassifiedAsOperatingActivities"], names: ["배당금의 수취", "배당금 수입"], depth: 1, sign: "in" },
+            { label: "이자 지급", ids: ["ifrs-full_InterestPaidClassifiedAsOperatingActivities"], names: ["이자의 지급"], depth: 1, sign: "out" },
+            { label: "법인세 납부", ids: ["ifrs-full_IncomeTaxesPaidRefundClassifiedAsOperatingActivities"], names: ["법인세 납부액", "법인세의 납부", "법인세납부"], depth: 1, sign: "out" },
+            { label: "기타 영업활동", depth: 1, plug: true },
+          ],
+        },
+        BLOCKS[1],
+        BLOCKS[2],
+      ];
+
+  for (const block of blocks) {
     const totalVals = seriesOf(facts, block.total.ids, block.total.names, "CF");
     sectionTotals[block.title] = totalVals;
 
