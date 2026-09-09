@@ -33,6 +33,14 @@ const DA = [
 ];
 const INT_EXP = ["InterestExpense", "InterestExpenseNonoperating", "InterestAndDebtExpense"];
 const DEBT_C = ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "CommercialPaper", "ShortTermBorrowings"];
+// 총부채 = 이자부 차입금 + 리스부채 (블룸버그 'Total Debt' 기준, IFRS16/ASC842)
+const DEBT_TOTAL_C = [
+  ...DEBT_C,
+  "OperatingLeaseLiabilityNoncurrent",
+  "OperatingLeaseLiabilityCurrent",
+  "FinanceLeaseLiabilityNoncurrent",
+  "FinanceLeaseLiabilityCurrent",
+];
 const CASH_C = [
   "CashAndCashEquivalentsAtCarryingValue",
   "MarketableSecuritiesCurrent",
@@ -199,9 +207,10 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const curAssets = stock(["AssetsCurrent"]);
   const curLiab = stock(["LiabilitiesCurrent"]);
   const debt = stockSum(DEBT_C);
+  const debtTotal = stockSum(DEBT_TOTAL_C); // 차입금 + 리스부채
   const cash = stockSum(CASH_C);
-  const cashCur = stockSum(CASH_CUR); // 유동성 지표용
-  const inv = stock(["InventoryNet"]);
+  const cashCur = stockSum(CASH_CUR); // 유동성 지표용 (장기투자 제외)
+  const ar = stock(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]); // 매출채권(당좌비율용)
   const retained = stock(["RetainedEarningsAccumulatedDeficit"]);
   const cogs = flowM(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
   // 매출총이익: 공시 태그(GrossProfit) 없으면 매출 − 매출원가 (메타 등)
@@ -273,6 +282,10 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   for (const l of labels) if (ocf[l] != null && capexRaw[l] != null) fcf[l] = ocf[l]! - Math.abs(capexRaw[l]!);
   const netDebt = blank();
   for (const l of labels) if (debt[l] != null || cash[l] != null) netDebt[l] = (debt[l] ?? 0) - (cash[l] ?? 0);
+  // 순부채(리스 포함) — 블룸버그 신용지표 기준
+  const netDebtT = blank();
+  for (const l of labels)
+    if (debtTotal[l] != null || cash[l] != null) netDebtT[l] = (debtTotal[l] ?? 0) - (cash[l] ?? 0);
   const nopat = blank();
   for (const l of labels) {
     if (opIncome[l] == null) continue;
@@ -457,12 +470,14 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   // 듀퐁 분해: ROE(%) = 순이익률(%) × 총자산회전율 × 재무레버리지 (잔액은 평균)
   const duTurnover = ratio(revenue, assetsAvg);
   const duLeverage = ratio(assetsAvg, equityAvg);
+  // 당좌비율 = (현금·현금성 + 단기투자 + 매출채권) / 유동부채 (엄격 정의, 블룸버그와 동일)
   const quick = (() => {
     const o = blank();
-    // 재고 태그가 없는 업종(플랫폼·서비스)은 재고 0 으로 간주 → 사실상 유동비율과 근접
-    for (const l of labels)
-      if (curAssets[l] != null && curLiab[l])
-        o[l] = (curAssets[l]! - (inv[l] ?? 0)) / curLiab[l]!;
+    for (const l of labels) {
+      if (!curLiab[l]) continue;
+      const qa = (cashCur[l] ?? 0) + (ar[l] ?? 0);
+      if (qa > 0) o[l] = qa / curLiab[l]!;
+    }
     return o;
   })();
   const cogsAbs = (() => {
@@ -540,18 +555,21 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("주당 FCF", perShare(fcf), "eps"),
     SP("3"),
     HEAD("재무건전성"),
-    R("순부채 / EBITDA", ratio(netDebt, ebitda), "mult"),
-    R("부채비율 (%)", ratio(liabTotal, equity, 100), "pct"),
+    R("총부채 / EBITDA", ratio(debtTotal, ebitda), "mult"),
+    R("순부채 / EBITDA", ratio(netDebtT, ebitda), "mult"),
+    R("총부채 / 자기자본 (%)", ratio(debtTotal, equity, 100), "pct"),
+    R("총부채 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
     R("이자보상배율 (EBIT/이자)", ratio(opIncome, intExp), "mult"),
     R("EBITDA / 이자비용", ratio(ebitda, intExp), "mult"),
-    R("CFO / 총부채", ratio(ocf, liabTotal), "mult"),
-    R("FCF / 총차입금", ratio(fcf, debt), "mult"),
+    R("CFO / 총부채", ratio(ocf, debtTotal), "mult"),
+    R("FCF / 총부채", ratio(fcf, debtTotal), "mult"),
     R("알트만 Z-스코어", altZ, "eps"),
     SP("4"),
     HEAD("유동성"),
     R("유동비율", ratio(curAssets, curLiab), "mult"),
     R("당좌비율", quick, "mult"),
     R("현금비율", ratio(cashCur, curLiab), "mult"),
+    R("CFO / 유동부채", ratio(ocf, curLiabAvg), "mult"),
     SP("4b"),
     HEAD("운전자본"),
     R("매출채권 회전일수 (DSO)", dso, "eps"),
