@@ -891,10 +891,21 @@ export function StockAnalysis({
                       Form 4(내부자 거래)·SC 13D/G(대량보유) 등은 &ldquo;전체&rdquo;에서.
                     </p>
                   )}
+                  {market === "kr" && filingScope === "core" && (
+                    <p className="text-muted-foreground/80 text-[11px]">
+                      정기보고서(사업·반기·분기)·감사보고서·주요사항보고서·실적공시·배당/자기주식·
+                      증자/감자·사채발행·대형 공급계약·합병/분할 만.
+                    </p>
+                  )}
                 <ul className="divide-y">
                   {filings.data.filings
                     .filter((f) => {
-                      if (filingScope === "all" || market !== "us") return true;
+                      if (filingScope === "all") return true;
+                      if (market === "kr")
+                        return /사업보고서|반기보고서|분기보고서|감사보고서|검토보고서|주요사항보고서|잠정실적|영업실적|손익구조|매출액|배당결정|배당에관한|자기주식|유상증자|무상증자|감자결정|전환사채|신주인수권부사채|교환사채|공급계약|공급계약체결|액면분할|액면병합|합병|분할|영업양수|영업양도|자산양수|자산양도|주식소각/.test(
+                          f.title.replace(/\s+/g, ""),
+                        );
+                      if (market !== "us") return true;
                       return /^(10-[KQ]|8-K|20-F|6-K|DEF ?A?14A|DEFA14A|S-\d|424B|F-\d|40-F|11-K)/i.test(
                         f.type.trim(),
                       );
