@@ -585,8 +585,6 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     HEAD("재무건전성"),
     R("총차입금 / EBITDA", ratio(debtTotal, ebitda), "mult"),
     R("순부채 / EBITDA", ratio(netDebtT, ebitda), "mult"),
-    R("총차입금 / EBIT", ratio(debtTotal, opIncome), "mult"),
-    R("순부채 / EBIT", ratio(netDebtT, opIncome), "mult"),
     R("영업이익 / 총차입금", ratio(opIncome, debtTotal), "mult"),
     R("이자보상배율 (EBIT/이자)", ratio(opIncome, intExp), "mult"),
     R("EBITDA / 이자비용", ratio(ebitda, intExp), "mult"),
