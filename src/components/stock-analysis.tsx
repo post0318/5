@@ -597,6 +597,7 @@ export function StockAnalysis({
                   const peg = pick("PEG (EPS 3Y CAGR)");
                   const ndEbitda = pick("순부채 / EBITDA");
                   const curRatio = pick("유동비율");
+                  const dToE = pick("총차입금 / 자기자본 (%)");
                   const icov =
                     pick("이자보상배율 (EBIT/이자)") ?? pick("EBIT / 현금이자");
                   const altZ = pick("알트만 Z-스코어");
@@ -605,6 +606,7 @@ export function StockAnalysis({
                     peg == null &&
                     ndEbitda == null &&
                     curRatio == null &&
+                    dToE == null &&
                     icov == null &&
                     altZ == null
                   )
@@ -653,6 +655,17 @@ export function StockAnalysis({
                           tone={
                             curRatio >= 2 ? "good" : curRatio >= 1 ? "mid" : "bad"
                           }
+                        />
+                      )}
+                      {dToE != null && (
+                        <MetricChip
+                          label="총차입금/자기자본"
+                          value={`${dToE.toFixed(0)}%`}
+                          hint="100% 미만 우수 · 100~200% 주의 · 200% 이상 위험 (차입금+리스 기준)"
+                          verdict={
+                            dToE < 100 ? "우수" : dToE < 200 ? "주의" : "위험"
+                          }
+                          tone={dToE < 100 ? "good" : dToE < 200 ? "mid" : "bad"}
                         />
                       )}
                       {icov != null && (
