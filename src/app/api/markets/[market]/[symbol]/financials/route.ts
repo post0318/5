@@ -8,6 +8,7 @@ import { buildUsBalance } from "@/lib/markets/us/edgar-balance";
 import { buildUsAnalysis } from "@/lib/markets/us/edgar-analysis";
 import { buildUsSummary } from "@/lib/markets/us/edgar-summary";
 import { getEodQuote } from "@/lib/markets/quote";
+import { fetchForwardConsensus } from "@/lib/markets/quote/yahoo";
 import { resolveCorpCode } from "@/lib/markets/kr/corpcode";
 import { fetchKrFacts } from "@/lib/markets/kr/dart-facts";
 import { buildKrIncome } from "@/lib/markets/kr/dart-income";
@@ -99,22 +100,35 @@ export async function GET(
 
     if (market === "us" && isDetail) {
       const yahoo = searchParams.get("yahoo");
-      const [{ facts }, quote] = await Promise.all([
+      const needsShares =
+        detailView === "analysis" || detailView === "is" || detailView === "summary";
+      const [{ facts }, quote, consensus] = await Promise.all([
         fetchUsCompanyFacts(sym),
-        detailView === "analysis"
+        needsShares
           ? getEodQuote("us", sym, { yahooOverride: yahoo }).catch(() => null)
           : Promise.resolve(null),
+        needsShares
+          ? fetchForwardConsensus("us", sym, yahoo).catch(() => null)
+          : Promise.resolve(null),
       ]);
+      // 현재 발행주식수 근사(클래스별로만 공시하는 Visa 등의 EPS·PBR 계산용):
+      // 시가총액÷주가(전 클래스 경제적 주식수) 우선, 없으면 yahoo sharesOutstanding.
+      const mcap = consensus?.marketCap ?? quote?.marketCap ?? null;
+      const sharesHint =
+        (mcap != null && quote?.last ? mcap / quote.last : null) ??
+        consensus?.sharesOutstanding ??
+        quote?.sharesOutstanding ??
+        null;
       const stmt =
         detailView === "cf"
           ? buildUsCashFlow(facts, period)
           : detailView === "is"
-            ? buildUsIncome(facts, period)
+            ? buildUsIncome(facts, period, { sharesHint })
             : detailView === "bs"
               ? buildUsBalance(facts, period)
               : detailView === "summary"
-                ? buildUsSummary(facts, period)
-                : buildUsAnalysis(facts, quote?.bars ?? []);
+                ? buildUsSummary(facts, period, { sharesHint })
+                : buildUsAnalysis(facts, quote?.bars ?? [], { sharesHint });
       stmt.symbol = sym;
       return ok(stmt, {
         headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },

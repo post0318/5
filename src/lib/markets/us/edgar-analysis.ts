@@ -82,7 +82,15 @@ function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   return best;
 }
 
-export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): FinancialStatement {
+export function buildUsAnalysis(
+  facts: CompanyFacts,
+  bars: QuoteBar[],
+  opts: { sharesHint?: number | null } = {},
+): FinancialStatement {
+  // EPS·발행주식수를 클래스별로만 태깅해 undimensioned 값이 없는 기업(Visa 등)은
+  // 현재 시가총액÷주가(또는 quote.sharesOutstanding)를 "현재 주식수" 근사로 사용.
+  const sharesHint = opts.sharesHint ?? null;
+  let approxPerShare = false;
   // 개념 태그가 시기에 따라 바뀌는 기업(NVIDIA: RevenueFromContract…→Revenues,
   // 메타: InterestExpense→InterestExpenseNonoperating 등)이 많아, 단일 개념이 아니라
   // 나열된 개념들을 "연도별로 첫 유효값" 규칙으로 병합한다.
@@ -229,8 +237,11 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
       if (o[l] != null) continue;
       const y = l === LTM ? (years.at(-1) ?? 0) : Number(l.replace("Y", ""));
       const ni = l === LTM ? netIncome[LTM] : niF.get(y);
-      const sh = dilSharesF.get(y);
-      if (ni != null && sh) o[l] = ni / sh;
+      const sh = dilSharesF.get(y) ?? sharesHint;
+      if (ni != null && sh) {
+        o[l] = ni / sh;
+        if (dilSharesF.get(y) == null) approxPerShare = true;
+      }
     }
     return o;
   })();
@@ -240,7 +251,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     const niF = fullAnnual(NI_C);
     const out = new Map<number, number>();
     for (const [y, ni] of niF) {
-      const sh = dilSharesF.get(y);
+      const sh = dilSharesF.get(y) ?? sharesHint;
       if (sh) out.set(y, ni / sh);
     }
     return out;
@@ -384,7 +395,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
         const dd = Math.abs(Date.parse(p.endDate ?? "") - Date.parse(x.end));
         if (!best || dd < best.d) best = { v: x.val, d: dd };
       }
-      o[p.label] = best?.v ?? null;
+      // 550일 넘게 떨어진 값은 무시 (Visa: dei 주식수가 2010년치만 태깅돼 있음)
+      o[p.label] = best && best.d <= 550 * 864e5 ? best.v : null;
     }
     return o;
   })();
@@ -401,11 +413,14 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return wavgDil.get(my) ?? wavgBasic.get(my) ?? null;
   })();
   const shares = blank();
-  for (const l of labels)
-    shares[l] =
+  for (const l of labels) {
+    const s =
       sharesDei[l] ??
       sharesEnd[l] ??
       (l === LTM ? latestWavg : wavgAt(Number(l.replace("Y", ""))));
+    shares[l] = s ?? sharesHint; // 최후: 공시 주식수 전무 시 현재 주식수(quote) 근사
+    if (s == null && sharesHint != null) approxPerShare = true;
+  }
 
   // 주당배당금 (DPS) — 배당 총액 ÷ 주식수, 액면분할 보정. 성장률 계산용.
   const DIV_C = ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"];
@@ -799,6 +814,18 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("EPS", cagr(epsFull, 3, eps[LTM]), "pct"),
     R("주당배당금", cagr(dpsFull, 3, dps[LTM]), "pct"),
   ];
+
+  if (approxPerShare) {
+    items.push(SP("note"));
+    items.push(
+      R(
+        "※ EPS·주당·PER: 발행주식수를 클래스별로만 공시(Visa 등) → 현재 주식수 기준 근사",
+        blank(),
+        undefined,
+        { italic: true },
+      ),
+    );
+  }
 
   return {
     symbol: "",

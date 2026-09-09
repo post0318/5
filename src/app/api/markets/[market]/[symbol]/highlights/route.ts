@@ -83,6 +83,13 @@ export async function GET(
       fetchForwardConsensus(market, sym, yahoo).catch(() => null),
     ]);
 
+    const mcap = consensus?.marketCap ?? quote?.marketCap ?? null;
+    const sharesHint =
+      (mcap != null && quote?.last ? mcap / quote.last : null) ??
+      consensus?.sharesOutstanding ??
+      quote?.sharesOutstanding ??
+      null;
+
     const highlights = buildUsHighlights(
       factsRes.facts,
       quote?.bars ?? [],
@@ -92,7 +99,7 @@ export async function GET(
         epsAvg: p.epsAvg,
         revenueAvg: p.revenueAvg,
       })),
-      consensus?.sharesOutstanding ?? null,
+      sharesHint,
     );
 
     return ok(

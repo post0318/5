@@ -336,6 +336,16 @@ export function buildUsHighlights(
       "USD",
     ),
   ];
+  const assetsForEqE = unitEntries(facts, "Assets", "USD");
+  const liabForEqE = unitEntries(facts, "Liabilities", "USD");
+  // 자본을 클래스별로만 태깅하는 기업(Visa) → 자산 − 부채로 보정
+  const equityAt = (asOf: string): number | null => {
+    const e = instantAt(equityE, asOf);
+    if (e != null) return e;
+    const a = instantAt(assetsForEqE, asOf);
+    const l = instantAt(liabForEqE, asOf);
+    return a != null && l != null ? a - l : null;
+  };
   const mSecCurE = entriesAny(facts, ["MarketableSecuritiesCurrent", "ShortTermInvestments"]);
   const mSecNonCurE = entriesAny(facts, [
     "MarketableSecuritiesNoncurrent",
@@ -384,6 +394,8 @@ export function buildUsHighlights(
   const ev = blank();
   const equity = blank();
   const priceByCol = blank();
+  const sharesByCol = blank();
+  let approxPerShare = false;
 
   columns.forEach((col, i) => {
     if (col.kind === "estimate") return;
@@ -391,19 +403,21 @@ export function buildUsHighlights(
     const isLtm = col.kind === "ltm";
     const price = isLtm ? (lastBar?.close ?? null) : closeOnOrBefore(bars, asOf);
     priceByCol[i] = price;
-    equity[i] = instantAt(equityE, asOf);
+    equity[i] = equityAt(asOf);
     // 시총용 주식수: LTM 은 현재(가장 최근) 발행주식수, 과거는 기말 주식수
     // 발행주식수는 550일 이상 오래된 태그(중단된 dei 값 등)는 무시
     const SS = 550;
-    const shares = isLtm
+    const disclosed = isLtm
       ? (instantAt(sharesDeiE, priceDate, SS) ??
         instantAt(sharesEndE, priceDate, SS) ??
         instantAt(sharesDeiE, asOf, SS) ??
-        latestWavgShares() ??
-        (fallbackShares ?? null))
+        latestWavgShares())
       : (instantAt(sharesEndE, asOf, SS) ??
         instantAt(sharesDeiE, asOf, SS) ??
         wavgSharesAt(Number(col.key.slice(2))));
+    const shares = disclosed ?? (fallbackShares ?? null);
+    if (disclosed == null && fallbackShares != null) approxPerShare = true;
+    sharesByCol[i] = shares;
     const mc = price != null && shares != null ? price * shares : null;
     marketCap[i] = mc;
 
@@ -471,9 +485,10 @@ export function buildUsHighlights(
     return null;
   });
   const currentShares =
-    instantAt(sharesDeiE, priceDate) ??
-    instantAt(sharesEndE, priceDate) ??
-    latestWavgShares();
+    instantAt(sharesDeiE, priceDate, 550) ??
+    instantAt(sharesEndE, priceDate, 550) ??
+    latestWavgShares() ??
+    (fallbackShares ?? null);
   const netIncome = columns.map((col) => {
     if (col.kind === "estimate") {
       const eps = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
@@ -484,13 +499,21 @@ export function buildUsHighlights(
   // 액면분할 보정 (소급 재작성 안 된 과거 연도 주당 지표를 최신 기준으로 환산)
   const splitF = splitFactorsByYear(facts);
   const sf = (y: number) => splitF.get(y) ?? 1;
-  const eps = columns.map((col) => {
+  const eps = columns.map((col, i) => {
     if (col.kind === "estimate")
       return estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
-    if (col.kind === "ltm") return ttm(E.eps);
+    const derive = (): number | null => {
+      const sh = col.kind === "ltm" ? currentShares : sharesByCol[i];
+      if (netIncome[i] != null && sh) {
+        approxPerShare = true;
+        return netIncome[i]! / sh;
+      }
+      return null;
+    };
+    if (col.kind === "ltm") return ttm(E.eps) ?? derive();
     const y = Number(col.key.slice(2));
     const v = annualAt(S.eps, y);
-    return v == null ? null : v * sf(y);
+    return v == null ? derive() : v * sf(y);
   });
   const dps = columns.map((col) => {
     if (col.kind === "estimate") return null;
@@ -583,6 +606,10 @@ export function buildUsHighlights(
   if (estCols.length)
     notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
   notes.push("EBITDA = 보고 영업이익 + 감가상각비·무형자산상각비 (블룸버그 '조정'과 다를 수 있음)");
+  if (approxPerShare)
+    notes.push(
+      "EPS·시가총액·PER·PBR: 발행주식수를 클래스별로만 공시(Visa 등) → 현재 주식수(시총÷주가) 기준 근사",
+    );
 
   return {
     currency: "USD",

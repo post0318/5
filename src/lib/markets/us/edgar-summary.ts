@@ -13,8 +13,9 @@ import { buildUsCashFlow } from "./edgar-cashflow";
 export function buildUsSummary(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
+  opts: { sharesHint?: number | null } = {},
 ): FinancialStatement {
-  const is = buildUsIncome(facts, mode);
+  const is = buildUsIncome(facts, mode, opts);
   const bs = buildUsBalance(facts, mode);
   const cf = buildUsCashFlow(facts, mode);
 

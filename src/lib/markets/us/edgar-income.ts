@@ -67,8 +67,10 @@ const fyKey = (y: number) => `${y}Y`;
 export function buildUsIncome(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
+  opts: { sharesHint?: number | null } = {},
 ): FinancialStatement {
   const quarterly = mode === "quarter";
+  const sharesHint = opts.sharesHint ?? null;
 
   // 개념 태그가 시기별로 바뀌는 기업(NVIDIA 등) → 나열 개념을 연도별로 병합
   const mergedAnnual = (concepts: string[], unit = "USD"): Map<number, number> => {
@@ -218,7 +220,7 @@ export function buildUsIncome(
   if (!intFresh && LTM in netIntCost) netIntCost[LTM] = null;
   const hasInterest = labels.some((l) => netIntCost[l] != null);
   const tax = val(TAX);
-  const netIncome = val(NET_INCOME);
+  const netIncome = val([...NET_INCOME, "ProfitLoss"]);
   // (−) 기타 = (세전이익 − 법인세비용) − 공시 당기순이익 (중단사업·소수주주지분 등)
   const otherToNi = blank();
   for (const l of labels)
@@ -235,8 +237,26 @@ export function buildUsIncome(
     }
     return r;
   };
-  const epsBasic = adjEps(val(EPS_BASIC, "USD/shares"));
-  const epsDil = adjEps(val(EPS_DIL, "USD/shares"));
+  // EPS: 공시 태그 우선. 클래스별로만 태깅하는 기업(Visa)은 순이익÷주식수로 산출.
+  const wavgShares = val(
+    ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"],
+    "shares",
+  );
+  let epsApprox = false;
+  const deriveEps = (o: Record<string, number | null>): Record<string, number | null> => {
+    const r = { ...o };
+    for (const l of labels) {
+      if (r[l] != null) continue;
+      const sh = wavgShares[l] ?? sharesHint;
+      if (netIncome[l] != null && sh) {
+        r[l] = netIncome[l]! / sh;
+        epsApprox = true;
+      }
+    }
+    return r;
+  };
+  const epsBasic = deriveEps(adjEps(val(EPS_BASIC, "USD/shares")));
+  const epsDil = deriveEps(adjEps(val(EPS_DIL, "USD/shares")));
 
   const da = (() => {
     const o = val(DA);
@@ -304,6 +324,14 @@ export function buildUsIncome(
     row("EBITDA", ebitda),
     row("감가상각비", da),
   ];
+
+  if (epsApprox && !quarterly)
+    items.push(
+      row("※ EPS: 클래스별로만 공시(Visa 등) → 순이익÷주식수 근사", blank(), {
+        depth: 1,
+        italic: true,
+      }),
+    );
 
   return {
     symbol: "",
