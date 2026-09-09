@@ -293,7 +293,7 @@ export function buildUsHighlights(
     grossProfit: gpS,
     opIncome: opIncS,
     da: daS,
-    netIncome: annualSeries(unitEntries(facts, "NetIncomeLoss", "USD")),
+    netIncome: annualSeries(concat(["NetIncomeLoss","ProfitLoss","NetIncomeLossAvailableToCommonStockholdersBasic"])),
     eps: annualSeries(unitEntries(facts, "EarningsPerShareDiluted", "USD/shares")),
     ocf: annualSeries(
       unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
@@ -315,7 +315,7 @@ export function buildUsHighlights(
     grossProfit: unitEntries(facts, "GrossProfit", "USD"),
     opIncome: unitEntries(facts, "OperatingIncomeLoss", "USD"),
     da: concat(DA_CONCEPTS),
-    netIncome: unitEntries(facts, "NetIncomeLoss", "USD"),
+    netIncome: concat(["NetIncomeLoss","ProfitLoss","NetIncomeLossAvailableToCommonStockholdersBasic"]),
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
     ocf: unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
     capex: concat(CAPEX_CONCEPTS),

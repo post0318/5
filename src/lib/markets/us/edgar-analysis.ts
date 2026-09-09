@@ -26,6 +26,12 @@ const REV = [
   "RevenueFromContractWithCustomerIncludingAssessedTax",
   "Revenues",
 ];
+// 당기순이익 — CAT 등은 NetIncomeLoss 대신 ProfitLoss 사용
+const NI_C = [
+  "NetIncomeLoss",
+  "ProfitLoss",
+  "NetIncomeLossAvailableToCommonStockholdersBasic",
+];
 const DA = [
   "DepreciationDepletionAndAmortization",
   "DepreciationAmortizationAndAccretionNet",
@@ -204,7 +210,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     }
     return o;
   })();
-  const netIncome = flow(["NetIncomeLoss"]);
+  const netIncome = flow(NI_C);
   const EPS_C = [
     "EarningsPerShareDiluted",
     "IncomeLossFromContinuingOperationsPerDilutedShare",
@@ -218,7 +224,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   );
   const eps = (() => {
     const o = adjPerShare(flow(EPS_C, "USD/shares"));
-    const niF = fullAnnual(["NetIncomeLoss"]);
+    const niF = fullAnnual(NI_C);
     for (const l of labels) {
       if (o[l] != null) continue;
       const y = l === LTM ? (years.at(-1) ?? 0) : Number(l.replace("Y", ""));
@@ -231,7 +237,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const epsFull = (() => {
     const m = adjMap(fullAnnual(EPS_C, "USD/shares"));
     if (m.size) return m;
-    const niF = fullAnnual(["NetIncomeLoss"]);
+    const niF = fullAnnual(NI_C);
     const out = new Map<number, number>();
     for (const [y, ni] of niF) {
       const sh = dilSharesF.get(y);
@@ -268,7 +274,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     for (const [y, v] of gp) if (s.has(y) || r.has(y)) out.set(y, v - (s.get(y) ?? 0) - (r.get(y) ?? 0));
     return out;
   })();
-  const niFull = fullAnnual(["NetIncomeLoss"]);
+  const niFull = fullAnnual(NI_C);
   const daFull = (() => {
     const m = fullAnnual(DA);
     if (m.size) return m;

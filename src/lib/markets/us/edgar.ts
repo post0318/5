@@ -217,7 +217,14 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
       ["USD"],
     ),
   );
-  const netIncome = ttmFlow(factEntries(facts, "us-gaap", ["NetIncomeLoss"], ["USD"]));
+  const netIncome = ttmFlow(
+    factEntries(
+      facts,
+      "us-gaap",
+      ["NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"],
+      ["USD"],
+    ),
+  );
   let opIncome = ttmFlow(factEntries(facts, "us-gaap", ["OperatingIncomeLoss"], ["USD"]));
   if (opIncome.ttm == null) {
     // 파생: 매출총이익 − 판관비 − 연구개발비 (IBM 등)
@@ -272,8 +279,26 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
     factEntries(facts, "us-gaap", ["CommonStockDividendsPerShareDeclared"], ["USD/shares"]),
   );
 
-  const equity = latestInstant(factEntries(facts, "us-gaap", ["StockholdersEquity"], ["USD"]));
-  const liabilities = latestInstant(factEntries(facts, "us-gaap", ["Liabilities"], ["USD"]));
+  const liabAndEq = latestInstant(
+    factEntries(facts, "us-gaap", ["LiabilitiesAndStockholdersEquity"], ["USD"]),
+  );
+  const assetsL = latestInstant(factEntries(facts, "us-gaap", ["Assets"], ["USD"]));
+  let equity = latestInstant(
+    factEntries(
+      facts,
+      "us-gaap",
+      ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
+      ["USD"],
+    ),
+  );
+  let liabilities = latestInstant(factEntries(facts, "us-gaap", ["Liabilities"], ["USD"]));
+  // 파생: 자기자본 ↔ 부채총계 상호 보완 (CAT·MCD 등 한쪽 미태깅)
+  const base = liabAndEq ?? assetsL;
+  const syn = (val: number, ref: FactEntry): FactEntry => ({ end: ref.end, val, fp: ref.fp, form: ref.form });
+  if (equity == null && base != null && liabilities != null)
+    equity = syn(base.val - liabilities.val, base);
+  if (liabilities == null && base != null && equity != null)
+    liabilities = syn(base.val - equity.val, base);
   const cash = latestInstant(
     factEntries(facts, "us-gaap", ["CashAndCashEquivalentsAtCarryingValue"], ["USD"]),
   );

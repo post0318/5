@@ -38,7 +38,7 @@ const PRETAX = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
 ];
 const TAX = ["IncomeTaxExpenseBenefit"];
-const NET_INCOME = ["NetIncomeLoss"];
+const NET_INCOME = ["NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"];
 const EPS_BASIC = ["EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted"];
 const EPS_DIL = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"];
 const NONOP = ["NonoperatingIncomeExpense", "OtherNonoperatingIncomeExpense"];
