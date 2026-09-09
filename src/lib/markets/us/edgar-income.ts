@@ -175,7 +175,14 @@ export function buildUsIncome(
   const sga = val(SGA);
   const rnd = val(RND);
   const opex = val(OPEX);
-  const opIncome = val(OP_INCOME);
+  // 영업이익: 공시 태그 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등)
+  const opIncome = (() => {
+    const o = val(OP_INCOME);
+    for (const l of labels)
+      if (o[l] == null && grossProfit[l] != null && (sga[l] != null || rnd[l] != null))
+        o[l] = Math.round(grossProfit[l]! - (sga[l] ?? 0) - (rnd[l] ?? 0));
+    return o;
+  })();
   // 기타 영업비용 = OPEX − SGA − RND, 없으면 GrossProfit − OpIncome − SGA − RND
   const otherOpex = (() => {
     const base = labels.some((l) => opex[l] != null)
@@ -230,7 +237,17 @@ export function buildUsIncome(
   const epsBasic = adjEps(val(EPS_BASIC, "USD/shares"));
   const epsDil = adjEps(val(EPS_DIL, "USD/shares"));
 
-  const da = val(DA);
+  const da = (() => {
+    const o = val(DA);
+    // 통합 태그 없으면 감가상각 + 무형자산상각 합산 (IBM 등)
+    if (labels.every((l) => o[l] == null)) {
+      const dep = val(["Depreciation"]);
+      const am = val(["AmortizationOfIntangibleAssets"]);
+      for (const l of labels)
+        if (dep[l] != null || am[l] != null) o[l] = (dep[l] ?? 0) + (am[l] ?? 0);
+    }
+    return o;
+  })();
   const ebitda = blank();
   for (const l of labels)
     if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);

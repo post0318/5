@@ -126,6 +126,20 @@ function annualSeriesMerged(
       if (!byYear.has(s.year)) byYear.set(s.year, s);
   return [...byYear.values()].sort((a, b) => a.year - b.year);
 }
+/** 여러 개념을 연도별로 합산 (Depreciation + AmortizationOfIntangibleAssets 등). */
+function annualSeriesSum(
+  facts: CompanyFacts,
+  concepts: string[],
+  unit = "USD",
+): { year: number; val: number; end: string }[] {
+  const byYear = new Map<number, { year: number; val: number; end: string }>();
+  for (const c of concepts)
+    for (const s of annualSeries(unitEntries(facts, c, unit))) {
+      const cur = byYear.get(s.year);
+      byYear.set(s.year, { year: s.year, val: (cur?.val ?? 0) + s.val, end: s.end });
+    }
+  return [...byYear.values()].sort((a, b) => a.year - b.year);
+}
 
 /**
  * instant(재무상태표) 값 중 end ≤ asOf 이면서 가장 가까운 것.
@@ -252,20 +266,49 @@ export function buildUsHighlights(
   // ── 계정 시리즈 ──────────────────────────────────────────────────
   const concat = (concepts: string[], unit = "USD"): FactUnitEntry[] =>
     concepts.flatMap((c) => unitEntries(facts, c, unit));
+  const SGA_C = [
+    "SellingGeneralAndAdministrativeExpense",
+    "GeneralAndAdministrativeExpense",
+  ];
+  const gpS = annualSeries(unitEntries(facts, "GrossProfit", "USD"));
+  const sgaS = annualSeriesMerged(facts, SGA_C);
+  const rndS = annualSeries(unitEntries(facts, "ResearchAndDevelopmentExpense", "USD"));
+  const opIncS = (() => {
+    const direct = annualSeries(unitEntries(facts, "OperatingIncomeLoss", "USD"));
+    if (direct.length) return direct;
+    // 파생: 매출총이익 − 판관비 − 연구개발비 (IBM 등)
+    return gpS.map((g) => ({
+      year: g.year,
+      end: g.end,
+      val: g.val - (annualAt(sgaS, g.year) ?? 0) - (annualAt(rndS, g.year) ?? 0),
+    }));
+  })();
+  const daS = (() => {
+    const direct = annualSeriesMerged(facts, DA_CONCEPTS);
+    if (direct.length) return direct;
+    return annualSeriesSum(facts, ["Depreciation", "AmortizationOfIntangibleAssets"]);
+  })();
   const S = {
     revenue: annualSeriesMerged(facts, REVENUE),
-    grossProfit: annualSeries(unitEntries(facts, "GrossProfit", "USD")),
-    opIncome: annualSeries(unitEntries(facts, "OperatingIncomeLoss", "USD")),
-    da: annualSeriesMerged(facts, DA_CONCEPTS),
+    grossProfit: gpS,
+    opIncome: opIncS,
+    da: daS,
     netIncome: annualSeries(unitEntries(facts, "NetIncomeLoss", "USD")),
     eps: annualSeries(unitEntries(facts, "EarningsPerShareDiluted", "USD/shares")),
     ocf: annualSeries(
       unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
     ),
     capex: annualSeriesMerged(facts, CAPEX_CONCEPTS),
-    dps: annualSeries(
-      unitEntries(facts, "CommonStockDividendsPerShareDeclared", "USD/shares"),
-    ),
+    dps: (() => {
+      const a = annualSeries(
+        unitEntries(facts, "CommonStockDividendsPerShareDeclared", "USD/shares"),
+      );
+      return a.length
+        ? a
+        : annualSeries(
+            unitEntries(facts, "CommonStockDividendsPerShareCashPaid", "USD/shares"),
+          );
+    })(),
   };
   const E = {
     revenue: concat(REVENUE),
@@ -393,8 +436,20 @@ export function buildUsHighlights(
       return oi != null ? oi + (d ?? 0) : null;
     }
     if (col.kind === "ltm") {
-      const oi = ttm(E.opIncome);
-      const d = ttm(E.da);
+      let oi = ttm(E.opIncome);
+      if (oi == null) {
+        const gp = ttm(E.grossProfit);
+        if (gp != null)
+          oi =
+            gp -
+            (ttm(concat(SGA_C)) ?? 0) -
+            (ttm(concat(["ResearchAndDevelopmentExpense"])) ?? 0);
+      }
+      let d = ttm(E.da);
+      if (d == null)
+        d =
+          (ttm(concat(["Depreciation"])) ?? 0) +
+          (ttm(concat(["AmortizationOfIntangibleAssets"])) ?? 0) || null;
       return oi != null ? oi + (d ?? 0) : null;
     }
     return null;

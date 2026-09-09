@@ -158,9 +158,41 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return out;
   };
 
+  // 여러 개념을 기간별로 합산 (Depreciation + AmortizationOfIntangibleAssets 등).
+  const combineFlow = (concepts: string[], unit = "USD") => {
+    const o = blank();
+    for (const c of concepts) {
+      const v = flow([c], unit);
+      for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
+    }
+    return o;
+  };
+
   const revenue = flow(REV);
   const grossProfitRaw = flow(["GrossProfit"]);
-  const opIncome = flow(["OperatingIncomeLoss"]);
+  const cogs0 = flowM(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
+  const sga = flow([
+    "SellingGeneralAndAdministrativeExpense",
+    "GeneralAndAdministrativeExpense",
+    "SellingGeneralAndAdministrativeExpenses",
+  ]);
+  const rnd = flow(["ResearchAndDevelopmentExpense"]);
+  const grossProfit0 = blank();
+  for (const l of labels)
+    grossProfit0[l] =
+      grossProfitRaw[l] ??
+      (revenue[l] != null && cogs0[l] != null ? revenue[l]! - Math.abs(cogs0[l]!) : null);
+  // 영업이익: 공시 태그 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등)
+  const opIncome = (() => {
+    const primary = flow(["OperatingIncomeLoss", "OperatingIncomeLossBeforeUnusualItems"]);
+    const o = blank();
+    for (const l of labels) {
+      if (primary[l] != null) { o[l] = primary[l]; continue; }
+      if (grossProfit0[l] != null && (sga[l] != null || rnd[l] != null))
+        o[l] = grossProfit0[l]! - (sga[l] ?? 0) - (rnd[l] ?? 0);
+    }
+    return o;
+  })();
   const netIncome = flow(["NetIncomeLoss"]);
   const eps = adjPerShare(
     flow(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares"),
@@ -169,7 +201,14 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     fullAnnual(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares"),
   );
   const revFull = fullAnnual(REV);
-  const da = flow(DA);
+  // D&A: 통합 태그 없으면 감가상각 + 무형자산상각 합산 (IBM 등)
+  const da = (() => {
+    const primary = flow(DA);
+    const fb = combineFlow(["Depreciation", "AmortizationOfIntangibleAssets"]);
+    const o = blank();
+    for (const l of labels) o[l] = primary[l] ?? (fb[l] ?? null);
+    return o;
+  })();
   const ocf = flow(["NetCashProvidedByUsedInOperatingActivities"]);
   const CAPEX_C = [
     "PaymentsToAcquirePropertyPlantAndEquipment",
@@ -177,9 +216,27 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   ];
   const capexRaw = flow(CAPEX_C);
   // 1년 성장률 첫 해(표시 첫 컬럼) 보정용 전체 시계열 — 전년 값 소스
-  const opIncFull = fullAnnual(["OperatingIncomeLoss"]);
+  const opIncFull = (() => {
+    const m = fullAnnual(["OperatingIncomeLoss"]);
+    if (m.size) return m;
+    // 파생: GrossProfit − SG&A − R&D
+    const gp = fullAnnual(["GrossProfit"]);
+    const s = fullAnnual(["SellingGeneralAndAdministrativeExpense", "GeneralAndAdministrativeExpense"]);
+    const r = fullAnnual(["ResearchAndDevelopmentExpense"]);
+    const out = new Map<number, number>();
+    for (const [y, v] of gp) if (s.has(y) || r.has(y)) out.set(y, v - (s.get(y) ?? 0) - (r.get(y) ?? 0));
+    return out;
+  })();
   const niFull = fullAnnual(["NetIncomeLoss"]);
-  const daFull = fullAnnual(DA);
+  const daFull = (() => {
+    const m = fullAnnual(DA);
+    if (m.size) return m;
+    const dep = fullAnnual(["Depreciation"]);
+    const am = fullAnnual(["AmortizationOfIntangibleAssets"]);
+    const out = new Map<number, number>();
+    for (const y of new Set([...dep.keys(), ...am.keys()])) out.set(y, (dep.get(y) ?? 0) + (am.get(y) ?? 0));
+    return out;
+  })();
   const ocfFull = fullAnnual(["NetCashProvidedByUsedInOperatingActivities"]);
   const capexFull = fullAnnual(CAPEX_C);
   const ebitdaFull = new Map<number, number>();
@@ -226,13 +283,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const cashCur = stockSum(CASH_CUR); // 유동성 지표용 (장기투자 제외)
   const ar = stock(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]); // 매출채권(당좌비율용)
   const retained = stock(["RetainedEarningsAccumulatedDeficit"]);
-  const cogs = flowM(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
-  // 매출총이익: 공시 태그(GrossProfit) 없으면 매출 − 매출원가 (메타 등)
-  const grossProfit = blank();
-  for (const l of labels)
-    grossProfit[l] =
-      grossProfitRaw[l] ??
-      (revenue[l] != null && cogs[l] != null ? revenue[l]! - Math.abs(cogs[l]!) : null);
+  const cogs = cogs0;
+  const grossProfit = grossProfit0;
   const wc = blank(); // 운전자본 = 유동자산 − 유동부채
   for (const l of labels) if (curAssets[l] != null && curLiab[l] != null) wc[l] = curAssets[l]! - curLiab[l]!;
   const sharesDei = (() => {
