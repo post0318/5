@@ -289,7 +289,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   for (const l of labels) if (ocf[l] != null && capexRaw[l] != null) fcf[l] = ocf[l]! - Math.abs(capexRaw[l]!);
   const netDebt = blank();
   for (const l of labels) if (debt[l] != null || cash[l] != null) netDebt[l] = (debt[l] ?? 0) - (cash[l] ?? 0);
-  // 순부채(리스 포함) — 블룸버그 신용지표 기준
+  // 순차입금(총차입금 − 현금·투자) — 블룸버그 신용지표 기준
   const netDebtT = blank();
   for (const l of labels)
     if (debtTotal[l] != null || cash[l] != null) netDebtT[l] = (debtTotal[l] ?? 0) - (cash[l] ?? 0);
@@ -579,12 +579,12 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("총차입금 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
     R("장기차입금 / 자기자본 (%)", ratio(ltDebt, equity, 100), "pct"),
     R("장기차입금 / 총자산 (%)", ratio(ltDebt, assets, 100), "pct"),
-    R("순부채 / 자기자본 (%)", ratio(netDebtT, equity, 100), "pct"),
+    R("순차입금 / 자기자본 (%)", ratio(netDebtT, equity, 100), "pct"),
     R("재무레버리지 정도 (DFL)", dfl, "mult"),
     SP("4"),
     HEAD("재무건전성"),
     R("총차입금 / EBITDA", ratio(debtTotal, ebitda), "mult"),
-    R("순부채 / EBITDA", ratio(netDebtT, ebitda), "mult"),
+    R("순차입금 / EBITDA", ratio(netDebtT, ebitda), "mult"),
     R("영업이익 / 총차입금", ratio(opIncome, debtTotal), "mult"),
     R("이자보상배율 (EBIT/이자)", ratio(opIncome, intExp), "mult"),
     R("EBITDA / 이자비용", ratio(ebitda, intExp), "mult"),

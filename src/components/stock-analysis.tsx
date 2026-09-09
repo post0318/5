@@ -595,7 +595,7 @@ export function StockAnalysis({
                     null;
                   const fcfM = pick("FCF 마진 (%)");
                   const peg = pick("PEG (EPS 3Y CAGR)");
-                  const ndEbitda = pick("순부채 / EBITDA");
+                  const ndEbitda = pick("순차입금 / EBITDA");
                   const curRatio = pick("유동비율");
                   const dToE = pick("총차입금 / 자기자본 (%)");
                   const icov =
@@ -633,7 +633,7 @@ export function StockAnalysis({
                       )}
                       {ndEbitda != null && (
                         <MetricChip
-                          label="순부채/EBITDA"
+                          label="순차입금/EBITDA"
                           value={`${ndEbitda.toFixed(2)}x`}
                           hint="2배 미만 안전 · 2~5배 주의 · 5배↑ 위험"
                           verdict={
