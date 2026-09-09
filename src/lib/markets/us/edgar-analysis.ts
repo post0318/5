@@ -40,6 +40,12 @@ const CASH_C = [
   "MarketableSecuritiesNoncurrent",
   "LongTermInvestments",
 ];
+// 유동성 지표용 현금 (장기 투자자산 제외 — 순부채용 CASH_C 와 다름)
+const CASH_CUR = [
+  "CashAndCashEquivalentsAtCarryingValue",
+  "MarketableSecuritiesCurrent",
+  "ShortTermInvestments",
+];
 
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   let best: number | null = null;
@@ -174,6 +180,15 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const intExp = flowM(INT_EXP);
+  // 이자비용 개념이 최근 500일 내 태깅이 끊긴 경우(예: AAPL FY2024~ 별도표시 중단)
+  // 오래된 값으로 비율 왜곡 방지 → 해당 컬럼 공란
+  {
+    const recentIso = new Date(Date.now() - 500 * 864e5).toISOString().slice(0, 10);
+    const fresh = INT_EXP.some((c) =>
+      entriesOf(facts, c).some((e) => e.end >= recentIso),
+    );
+    if (!fresh) intExp[LTM] = null;
+  }
   const taxExp = flow(["IncomeTaxExpenseBenefit"]);
   const pretax = flow([
     "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
@@ -185,6 +200,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const curLiab = stock(["LiabilitiesCurrent"]);
   const debt = stockSum(DEBT_C);
   const cash = stockSum(CASH_C);
+  const cashCur = stockSum(CASH_CUR); // 유동성 지표용
   const inv = stock(["InventoryNet"]);
   const retained = stock(["RetainedEarningsAccumulatedDeficit"]);
   const cogs = flowM(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
@@ -535,7 +551,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     HEAD("유동성"),
     R("유동비율", ratio(curAssets, curLiab), "mult"),
     R("당좌비율", quick, "mult"),
-    R("현금비율", ratio(cash, curLiab), "mult"),
+    R("현금비율", ratio(cashCur, curLiab), "mult"),
     SP("4b"),
     HEAD("운전자본"),
     R("매출채권 회전일수 (DSO)", dso, "eps"),
@@ -544,16 +560,6 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("현금전환주기 (CCC)", ccc, "eps"),
     SP("4c"),
     HEAD("주주환원"),
-    R("배당수익률 (%)", (() => {
-      const o = blank();
-      for (const l of labels) {
-        const raw = dividends[l] != null && shares[l] ? Math.abs(dividends[l]!) / shares[l]! : null;
-        const y = l === LTM ? years.at(-1) : Number(l.replace("Y", ""));
-        const dps = raw != null ? raw * (splitF.get(y ?? 0) ?? 1) : null;
-        if (dps != null && price[l]) o[l] = (dps / price[l]!) * 100;
-      }
-      return o;
-    })(), "pct"),
     R("배당성향 (%)", (() => {
       const o = blank();
       for (const l of labels)
