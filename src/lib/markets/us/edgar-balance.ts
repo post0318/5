@@ -281,11 +281,24 @@ export function buildUsBalance(
     for (const line of block.lines) {
       let values: Record<string, number | null>;
       if (line.kind === "subtotal" || line.kind === "total") {
-        values = line.concepts
-          ? value(line.concepts)
-          : line.plugOf
-            ? totalOf[line.plugOf.replace(/Total$/, "")]
-            : blank();
+        const direct = line.concepts ? value(line.concepts) : null;
+        // 태그 미제공 시 파생값으로 보충 (DAL·CAT 등)
+        const derived: Record<string, number | null> | null =
+          line.label === "부채 총계"
+            ? lTotal
+            : line.label === "자본 총계"
+              ? eqTotal
+              : line.label === "부채와 자본 총계"
+                ? (() => {
+                    const o = blank();
+                    for (const l of labels) o[l] = leTotal[l] ?? aTotal[l] ?? null;
+                    return o;
+                  })()
+                : null;
+        const plug = line.plugOf ? totalOf[line.plugOf.replace(/Total$/, "")] : null;
+        values = blank();
+        for (const l of labels)
+          values[l] = direct?.[l] ?? derived?.[l] ?? plug?.[l] ?? null;
       } else if (line.plugOf) {
         // (구간 총계 − 직전 소계 이후 ~ 이 라인 이전의 depth1 item 합)
         const tot = totalOf[line.plugOf.replace(/Total$/, "")];
