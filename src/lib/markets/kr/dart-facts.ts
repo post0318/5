@@ -407,6 +407,49 @@ export async function fetchKrFacts(
   return mode === "quarter" ? loadQuarter(corpCode) : loadAnnual(corpCode);
 }
 
+// ── 배당 (alotMatter — 3개년/호출) ─────────────────────────────────
+
+interface AlotRow {
+  se: string; // 항목명
+  thstrm?: string;
+  frmtrm?: string;
+  lwfr?: string;
+  stock_knd?: string;
+}
+
+/** 연도별 주당 현금배당금(보통주, 원) + 현금배당성향(%). */
+export async function fetchKrDps(
+  corpCode: string,
+): Promise<{ dpsByYear: Map<number, number>; payoutByYear: Map<number, number> }> {
+  const dpsByYear = new Map<number, number>();
+  const payoutByYear = new Map<number, number>();
+  const cy = new Date().getFullYear();
+  for (const y of [cy - 1, cy - 4]) {
+    try {
+      const res = await fetchJson<{ status: string; list?: AlotRow[] }>(
+        `${BASE}/alotMatter.json?crtfc_key=${key()}&corp_code=${corpCode}&bsns_year=${y}&reprt_code=${REPRT.FY}`,
+        { revalidate: CACHE },
+      );
+      if (res.status !== "000" || !res.list) continue;
+      const cols: [number, keyof AlotRow][] = [[y, "thstrm"], [y - 1, "frmtrm"], [y - 2, "lwfr"]];
+      for (const r of res.list) {
+        const isDps = /주당\s*현금배당금/.test(r.se) && (r.stock_knd ?? "").includes("보통");
+        const isPayout = /현금배당성향/.test(r.se);
+        if (!isDps && !isPayout) continue;
+        for (const [yr, f] of cols) {
+          const v = num(r[f]);
+          if (v == null) continue;
+          if (isDps && !dpsByYear.has(yr)) dpsByYear.set(yr, v);
+          if (isPayout && !payoutByYear.has(yr)) payoutByYear.set(yr, v);
+        }
+      }
+    } catch {
+      // skip
+    }
+  }
+  return { dpsByYear, payoutByYear };
+}
+
 // ── 조회 헬퍼 ───────────────────────────────────────────────────────
 
 type Sj = string | string[] | undefined;

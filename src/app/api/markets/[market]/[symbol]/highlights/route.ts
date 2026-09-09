@@ -5,13 +5,19 @@ import { getEodQuote } from "@/lib/markets/quote";
 import { fetchForwardConsensus, fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
 import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
 import { buildUsHighlights } from "@/lib/markets/us/edgar-highlights";
+import { resolveCorpCode } from "@/lib/markets/kr/corpcode";
+import { fetchKrFacts, fetchKrDps } from "@/lib/markets/kr/dart-facts";
+import { buildKrHighlights } from "@/lib/markets/kr/dart-highlights";
+import { fetchStooqEod } from "@/lib/markets/quote/stooq";
+import { fetchKrxEod } from "@/lib/markets/quote/krx";
+import { fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 
 export const revalidate = 3600;
-export const maxDuration = 30;
+export const maxDuration = 45;
 
 /**
  * 재무 하이라이트 표 (EV 브릿지 + 5개년 손익·현금흐름 + 현재/LTM + 차기 추정).
- * 현재는 미국(SEC EDGAR)만 지원. 그 외 시장은 { highlights: null }.
+ * 미국(SEC EDGAR) · 한국(OpenDART). 그 외 시장은 { highlights: null }.
  */
 export async function GET(
   request: Request,
@@ -22,11 +28,41 @@ export async function GET(
     if (!isMarketId(market)) {
       return Response.json({ error: "알 수 없는 시장" }, { status: 404 });
     }
-    if (market !== "us") return ok({ highlights: null });
+    if (market !== "us" && market !== "kr") return ok({ highlights: null });
 
     const adapter = getAdapter(market);
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
     const yahoo = new URL(request.url).searchParams.get("yahoo");
+
+    if (market === "kr") {
+      const { corpCode } = resolveCorpCode("", sym);
+      const [facts, dps, krx, bars, ttm, consensus] = await Promise.all([
+        fetchKrFacts(corpCode, "annual"),
+        fetchKrDps(corpCode),
+        fetchKrxEod(sym).catch(() => null),
+        fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
+        adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
+        fetchKrNaverConsensus(sym).catch(() => null),
+      ]);
+      if (!facts) return ok({ highlights: null });
+      const highlights = buildKrHighlights({
+        facts,
+        bars,
+        sharesOutstanding: krx?.listedShares ?? null,
+        currentMarketCap: krx?.marketCap ?? null,
+        currentPrice: krx?.bars.at(-1)?.close ?? bars.at(-1)?.close ?? null,
+        ttm: ttm ?? null,
+        dpsByYear: dps.dpsByYear,
+        payoutByYear: dps.payoutByYear,
+        consensus: consensus
+          ? { estYear: consensus.estYear, estEps: consensus.estEps, estPer: consensus.estPer, estPbr: consensus.estPbr }
+          : null,
+      });
+      return ok(
+        { highlights },
+        { headers: { "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400" } },
+      );
+    }
 
     const [factsRes, quote, estimates, consensus] = await Promise.all([
       fetchUsCompanyFacts(sym),

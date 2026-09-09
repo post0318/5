@@ -9,7 +9,7 @@ import type {
   HighlightRow,
 } from "@/lib/markets/us/edgar-highlights";
 
-type Scale = "million" | "billion";
+type Scale = "million" | "billion" | "krwBillion";
 
 // 전 화면 공통 규칙: 소수 자리 버림(trunc). 재무분석 탭과 값이 일치해야 함.
 function fmt(
@@ -18,10 +18,10 @@ function fmt(
   scale: Scale,
 ): string {
   if (v == null || !Number.isFinite(v)) return "–";
-  if (format === "eps" || format === "pct" || format === "mult") {
-    return formatNumber(v, 2);
-  }
-  // 백만 단위는 정수, 10억(모바일) 단위는 소수 2자리
+  if (format === "pct" || format === "mult") return formatNumber(v, 2);
+  if (format === "eps") return formatNumber(v, scale === "krwBillion" ? 0 : 2);
+  // 백만 단위는 정수, 10억(모바일) 단위는 소수 2자리, 원화 십억은 정수
+  if (scale === "krwBillion") return formatNumber(v / 1e9, 0);
   const div = scale === "billion" ? 1e9 : 1e6;
   return formatNumber(v / div, scale === "billion" ? 2 : 0);
 }
@@ -138,8 +138,9 @@ function HighlightGrid({
 
 export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }) {
   const mobile = useIsMobile();
-  const scale: Scale = mobile ? "billion" : "million";
-  const unitLabel = mobile ? "USD 10억" : data.unitLabel;
+  const krw = data.currency === "KRW";
+  const scale: Scale = krw ? "krwBillion" : mobile ? "billion" : "million";
+  const unitLabel = krw ? "KRW 십억" : mobile ? "USD 10억" : data.unitLabel;
 
   // 모바일: 전년(직전 FY) · 현재(LTM) · 차년(첫 추정) 3개 컬럼만
   let columns = data.columns;

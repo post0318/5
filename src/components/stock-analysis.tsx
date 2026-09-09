@@ -178,7 +178,7 @@ export function StockAnalysis({
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/highlights` +
           (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
       ),
-    enabled: Boolean(symbol) && market === "us",
+    enabled: Boolean(symbol) && (market === "us" || market === "kr"),
     retry: false,
   });
 
