@@ -56,6 +56,7 @@ const CASH_C = [
   "MarketableSecuritiesCurrent",
   "ShortTermInvestments",
   "DebtSecuritiesCurrent",
+  "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent",
   "MarketableSecuritiesNoncurrent",
   "LongTermInvestments",
   "DebtSecuritiesNoncurrent",
@@ -66,6 +67,7 @@ const CASH_CUR = [
   "MarketableSecuritiesCurrent",
   "ShortTermInvestments",
   "DebtSecuritiesCurrent",
+  "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent",
 ];
 
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {

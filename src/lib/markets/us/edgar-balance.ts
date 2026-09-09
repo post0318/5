@@ -56,6 +56,7 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
           "MarketableSecuritiesCurrent",
           "ShortTermInvestments",
           "DebtSecuritiesCurrent",
+          "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent", // IBM
           "AvailableForSaleSecuritiesCurrent",
           // NVIDIA FY2026~: AFS 채무증권 전액 단기 분류, 10-K 는 이 태그만
           "AvailableForSaleSecuritiesDebtSecurities",
