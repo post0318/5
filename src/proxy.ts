@@ -43,14 +43,19 @@ export function proxy(req: NextRequest) {
   if (!isProtected || authed(req)) return NextResponse.next();
 
   if (pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { error: "unauthorized" },
+      { status: 401, headers: { "Cache-Control": "no-store" } },
+    );
   }
 
   const url = req.nextUrl.clone();
   url.pathname = "/login";
   url.search = "";
   url.searchParams.set("next", pathname);
-  return NextResponse.redirect(url);
+  const res = NextResponse.redirect(url);
+  res.headers.set("Cache-Control", "no-store");
+  return res;
 }
 
 export const config = {

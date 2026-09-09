@@ -1,14 +1,14 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 function LoginForm() {
-  const router = useRouter();
   const params = useSearchParams();
-  const next = params.get("next") || "/manage";
+  const raw = params.get("next") || "/manage";
+  const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/manage";
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -26,13 +26,13 @@ function LoginForm() {
       if (!res.ok) {
         const j = (await res.json().catch(() => null)) as { error?: string } | null;
         setError(j?.error ?? "로그인 실패");
+        setBusy(false);
         return;
       }
-      router.replace(next.startsWith("/") ? next : "/manage");
-      router.refresh();
+      // 전체 페이지 로드 — 라우터 캐시에 남은 리다이렉트를 우회
+      window.location.assign(next);
     } catch {
       setError("네트워크 오류");
-    } finally {
       setBusy(false);
     }
   }
