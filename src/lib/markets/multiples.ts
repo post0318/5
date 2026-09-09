@@ -114,6 +114,7 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   const netIncome = flowValue(annual, quarterly, [
     "NetIncomeLoss",
     "Net Income",
+    "Net Income (incl. NCI)",
     "당기순이익",
     "당기순이익(손실)",
     "분기순이익",

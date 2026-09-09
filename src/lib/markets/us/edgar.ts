@@ -357,6 +357,7 @@ const CONCEPTS: ConceptSpec[] = [
   { concept: "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", label: "Pretax Income", section: "손익계산서", depth: 0, isSubtotal: true, isHighlight: false },
   { concept: "IncomeTaxExpenseBenefit", label: "Income Tax Expense", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
   { concept: "NetIncomeLoss", label: "Net Income", section: "손익계산서", depth: 0, isSubtotal: true, isHighlight: true },
+  { concept: "ProfitLoss", label: "Net Income (incl. NCI)", section: "손익계산서", depth: 0, isSubtotal: true, isHighlight: false },
   { concept: "EarningsPerShareBasic", label: "EPS (Basic)", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
   { concept: "EarningsPerShareDiluted", label: "EPS (Diluted)", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: true },
   // 재무상태표
