@@ -595,7 +595,20 @@ export function StockAnalysis({
                     null;
                   const fcfM = pick("FCF 마진 (%)");
                   const peg = pick("PEG (EPS 3Y CAGR)");
-                  if (fcfM == null && peg == null) return null;
+                  const ndEbitda = pick("순부채 / EBITDA");
+                  const deRatio = pick("부채비율 (부채총계/자기자본) (%)");
+                  const icov =
+                    pick("이자보상배율 (EBIT/이자)") ?? pick("EBIT / 현금이자");
+                  const altZ = pick("알트만 Z-스코어");
+                  if (
+                    fcfM == null &&
+                    peg == null &&
+                    ndEbitda == null &&
+                    deRatio == null &&
+                    icov == null &&
+                    altZ == null
+                  )
+                    return null;
                   return (
                     <div className="flex flex-wrap gap-2">
                       {fcfM != null && (
@@ -614,6 +627,60 @@ export function StockAnalysis({
                           hint="1미만 저평가 · 1~1.5 적정 · 1.5↑ 고평가 (EPS 3년 CAGR 기준)"
                           verdict={peg < 1 ? "저평가" : peg < 1.5 ? "적정" : "고평가"}
                           tone={peg < 1 ? "good" : peg < 1.5 ? "mid" : "bad"}
+                        />
+                      )}
+                      {ndEbitda != null && (
+                        <MetricChip
+                          label="순부채/EBITDA"
+                          value={`${ndEbitda.toFixed(2)}x`}
+                          hint="2배 미만 안전 · 2~5배 주의 · 5배↑ 위험"
+                          verdict={
+                            ndEbitda < 2 ? "안전" : ndEbitda < 5 ? "주의" : "위험"
+                          }
+                          tone={
+                            ndEbitda < 2 ? "good" : ndEbitda < 5 ? "mid" : "bad"
+                          }
+                        />
+                      )}
+                      {deRatio != null && (
+                        <MetricChip
+                          label="부채비율"
+                          value={`${deRatio.toFixed(0)}%`}
+                          hint="100% 이하 우수 · 100~200% 적정 · 200% 초과 위험 (부채총계/자기자본)"
+                          verdict={
+                            deRatio <= 100 ? "우수" : deRatio <= 200 ? "적정" : "위험"
+                          }
+                          tone={
+                            deRatio <= 100 ? "good" : deRatio <= 200 ? "mid" : "bad"
+                          }
+                        />
+                      )}
+                      {icov != null && (
+                        <MetricChip
+                          label="이자보상배율"
+                          value={`${icov.toFixed(1)}x`}
+                          hint="1배 미만 위험 · 1~2배 주의 · 2~5배 안정 · 5배↑ 우수"
+                          verdict={
+                            icov < 1
+                              ? "위험"
+                              : icov < 2
+                                ? "주의"
+                                : icov < 5
+                                  ? "안정"
+                                  : "우수"
+                          }
+                          tone={icov < 1 ? "bad" : icov < 2 ? "mid" : "good"}
+                        />
+                      )}
+                      {altZ != null && (
+                        <MetricChip
+                          label="알트만 Z"
+                          value={altZ.toFixed(2)}
+                          hint="3.0 이상 안전 · 1.81~2.99 회색지대 · 1.81 미만 위험"
+                          verdict={
+                            altZ >= 3 ? "안전" : altZ >= 1.81 ? "회색" : "위험"
+                          }
+                          tone={altZ >= 3 ? "good" : altZ >= 1.81 ? "mid" : "bad"}
                         />
                       )}
                     </div>

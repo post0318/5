@@ -582,6 +582,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("주당 FCF", perShare(fcf), "eps"),
     SP("3"),
     HEAD("레버리지"),
+    R("부채비율 (부채총계/자기자본) (%)", ratio(liabTotal, equity, 100), "pct"),
     R("총부채 / 자기자본 (%)", ratio(debtTotal, equity, 100), "pct"),
     R("총부채 / 자본 (%)", ratio(debtTotal, debtPlusEquity, 100), "pct"),
     R("총부채 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
