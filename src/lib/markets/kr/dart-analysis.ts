@@ -235,9 +235,9 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
       o[`${y}Y`] = cur != null && prev != null && prev !== 0 ? ((cur - prev) / Math.abs(prev)) * 100 : null;
     }
     const lastY = years[years.length - 1];
-    const cur = ltm ?? m.get(lastY);
     const prev = m.get(lastY);
-    o[LTM] = cur != null && prev != null && prev !== 0 ? ((cur - prev) / Math.abs(prev)) * 100 : null;
+    // LTM YoY 는 별도 TTM 값이 있을 때만 (없으면 최근 FY 와 동일 → 0% 표시 방지)
+    o[LTM] = ltm != null && prev != null && prev !== 0 ? ((ltm - prev) / Math.abs(prev)) * 100 : null;
     return o;
   };
   const cagrN = (m: Map<number, number>, n: number, ltm?: number | null): Record<string, number | null> => {
