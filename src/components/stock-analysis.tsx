@@ -131,7 +131,8 @@ export function StockAnalysis({
     queryKey: ["filings", market, symbol],
     queryFn: () =>
       apiFetch<{ filings: Filing[] }>(
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/filings?limit=30`,
+        // 한국은 임원·주요주주 소유상황보고서가 많아 '주요공시' 필터용으로 더 넓게 조회
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/filings?limit=${market === "kr" ? 90 : 30}`,
       ),
     enabled: Boolean(symbol),
     retry: false,
