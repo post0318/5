@@ -583,7 +583,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("보통주 / 총자산 (%)", ratio(equity, assets, 100), "pct"),
     R("재무레버리지 정도 (DFL)", dfl, "mult"),
     SP("4"),
-    HEAD("부채 상환력"),
+    HEAD("재무건전성"),
     R("총차입금 / EBITDA", ratio(debtTotal, ebitda), "mult"),
     R("순부채 / EBITDA", ratio(netDebtT, ebitda), "mult"),
     R("총차입금 / EBIT", ratio(debtTotal, opIncome), "mult"),
