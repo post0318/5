@@ -517,7 +517,6 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("유효세율 (%)", effTax, "pct"),
     SP("2"),
     HEAD("현금창출"),
-    R("잉여현금흐름 (FCF)", fcf),
     R("FCF 마진 (%)", ratio(fcf, revenue, 100), "pct"),
     R("FCF 수익률 (%)", ratio(fcf, fwdMktcap(), 100), "pct"),
     R("주가 / FCF", ratio(fwdMktcap(), fcf), "mult"),
