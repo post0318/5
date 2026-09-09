@@ -409,23 +409,22 @@ export async function fetchKrFacts(
 
 // ── 조회 헬퍼 ───────────────────────────────────────────────────────
 
+type Sj = string | string[] | undefined;
+const ALL_DIVS = ["IS", "CIS", "BS", "CF"];
+const divsOf = (sj: Sj): string[] => (sj == null ? ALL_DIVS : Array.isArray(sj) ? sj : [sj]);
+const sjOk = (div: string, sj: Sj): boolean => sj == null || divsOf(sj).includes(div);
+
 /** account_id 우선, 없으면 한글 계정명(정규화) 폴백으로 라인 찾기. */
-export function pick(
-  facts: KrFacts,
-  ids: string[],
-  names: string[] = [],
-  sj?: string,
-): KrFactLine | null {
+export function pick(facts: KrFacts, ids: string[], names: string[] = [], sj?: Sj): KrFactLine | null {
   for (const id of ids) {
     const l = facts.byId.get(id);
-    if (l && (!sj || l.sjDiv === sj)) return l;
+    if (l && sjOk(l.sjDiv, sj)) return l;
   }
-  for (const nm of names) {
-    for (const div of sj ? [sj] : ["IS", "CIS", "BS", "CF"]) {
+  for (const nm of names)
+    for (const div of divsOf(sj)) {
       const l = facts.byName.get(`${div}|${norm(nm)}`);
       if (l) return l;
     }
-  }
   return null;
 }
 
@@ -434,17 +433,17 @@ export function seriesOf(
   facts: KrFacts,
   ids: string[],
   names: string[] = [],
-  sj?: string,
+  sj?: Sj,
 ): Record<string, number | null> {
   const out: Record<string, number | null> = {};
   for (const p of facts.periods) out[p.label] = null;
   const candidates: KrFactLine[] = [];
   for (const id of ids) {
     const l = facts.byId.get(id);
-    if (l && (!sj || l.sjDiv === sj)) candidates.push(l);
+    if (l && sjOk(l.sjDiv, sj) && !candidates.includes(l)) candidates.push(l);
   }
   for (const nm of names)
-    for (const div of sj ? [sj] : ["IS", "CIS", "BS", "CF"]) {
+    for (const div of divsOf(sj)) {
       const l = facts.byName.get(`${div}|${norm(nm)}`);
       if (l && !candidates.includes(l)) candidates.push(l);
     }
@@ -458,7 +457,7 @@ export function seriesOf(
 export function sumOf(
   facts: KrFacts,
   groups: { ids: string[]; names?: string[]; negate?: boolean }[],
-  sj?: string,
+  sj?: Sj,
 ): Record<string, number | null> {
   const out: Record<string, number | null> = {};
   for (const p of facts.periods) out[p.label] = null;
@@ -478,20 +477,20 @@ export function annualSeries(
   facts: KrFacts,
   ids: string[],
   names: string[] = [],
-  sj?: string,
+  sj?: Sj,
 ): Map<number, number> {
   const out = new Map<number, number>();
   const seenLines = new Set<KrFactLine>();
   const linesFor: KrFactLine[] = [];
   for (const id of ids) {
     const l = facts.byId.get(id);
-    if (l && (!sj || l.sjDiv === sj) && !seenLines.has(l)) {
+    if (l && sjOk(l.sjDiv, sj) && !seenLines.has(l)) {
       seenLines.add(l);
       linesFor.push(l);
     }
   }
   for (const nm of names)
-    for (const div of sj ? [sj] : ["IS", "CIS", "BS", "CF"]) {
+    for (const div of divsOf(sj)) {
       const l = facts.byName.get(`${div}|${norm(nm)}`);
       if (l && !seenLines.has(l)) {
         seenLines.add(l);
@@ -510,7 +509,7 @@ export function annualSeries(
 export function annualSum(
   facts: KrFacts,
   groups: { ids: string[]; names?: string[]; negate?: boolean }[],
-  sj?: string,
+  sj?: Sj,
 ): Map<number, number> {
   const out = new Map<number, number>();
   const years = new Set<number>();

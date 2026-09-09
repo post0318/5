@@ -25,8 +25,14 @@ const C = {
   tax: { ids: ["ifrs-full_IncomeTaxExpenseContinuingOperations", "ifrs-full_IncomeTaxExpenseBenefit"], names: ["법인세비용", "법인세비용(수익)"] },
   netIncome: { ids: ["ifrs-full_ProfitLoss"], names: ["당기순이익", "당기순이익(손실)", "분기순이익", "반기순이익"] },
   niParent: { ids: ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], names: ["지배기업 소유주지분", "지배기업의 소유주지분"] },
-  epsBasic: { ids: ["ifrs-full_BasicEarningsLossPerShare"], names: ["기본주당이익", "기본주당이익(손실)", "기본및희석주당이익"] },
-  epsDil: { ids: ["ifrs-full_DilutedEarningsLossPerShare"], names: ["희석주당이익", "희석주당이익(손실)"] },
+  epsBasic: {
+    ids: ["ifrs-full_BasicEarningsLossPerShare"],
+    names: ["기본주당이익", "기본주당이익(손실)", "기본주당순이익", "기본주당순이익(손실)", "기본및희석주당이익"],
+  },
+  epsDil: {
+    ids: ["ifrs-full_DilutedEarningsLossPerShare"],
+    names: ["희석주당이익", "희석주당이익(손실)", "희석주당순이익", "희석주당순이익(손실)"],
+  },
   // 감가상각비: CF 조정 라인에서. 회사별 편차 큼.
   da: {
     ids: [
@@ -41,17 +47,18 @@ const C = {
 export function buildKrIncome(facts: KrFacts): FinancialStatement {
   const labels = facts.periods.map((p) => p.label);
   const blank = (): Record<string, number | null> => Object.fromEntries(labels.map((l) => [l, null]));
-  const S = (c: { ids: string[]; names: string[] }, sj?: string) => seriesOf(facts, c.ids, c.names, sj);
+  const IS = ["IS", "CIS"];
+  const S = (c: { ids: string[]; names: string[] }) => seriesOf(facts, c.ids, c.names, IS);
 
-  const revenue = S(C.revenue, "IS");
-  const cogs = S(C.cogs, "IS");
+  const revenue = S(C.revenue);
+  const cogs = S(C.cogs);
   const gross = (() => {
-    const g = S(C.gross, "IS");
+    const g = S(C.gross);
     for (const l of labels) if (g[l] == null && revenue[l] != null && cogs[l] != null) g[l] = revenue[l]! - cogs[l]!;
     return g;
   })();
-  const sga = S(C.sga, "IS");
-  const opIncome = S(C.opIncome, "IS");
+  const sga = S(C.sga);
+  const opIncome = S(C.opIncome);
   // 기타 영업비용 = 매출총이익 − 판관비 − 영업이익
   const otherOpex = (() => {
     const o = blank();
@@ -60,7 +67,7 @@ export function buildKrIncome(facts: KrFacts): FinancialStatement {
         o[l] = Math.round(gross[l]! - sga[l]! - opIncome[l]!);
     return o;
   })();
-  const pretax = S(C.pretax, "IS");
+  const pretax = S(C.pretax);
   // (−)영업외손익 = 세전이익 − 영업이익 (부호 반전)
   const nonOpLoss = (() => {
     const o = blank();
@@ -68,22 +75,22 @@ export function buildKrIncome(facts: KrFacts): FinancialStatement {
     return o;
   })();
   // 순이자비용(−) = 금융비용 − 금융수익
-  const finInc = S(C.finInc, "IS");
-  const finCost = S(C.finCost, "IS");
+  const finInc = S(C.finInc);
+  const finCost = S(C.finCost);
   const netIntCost = blank();
   for (const l of labels)
     if (finInc[l] != null || finCost[l] != null) netIntCost[l] = (finCost[l] ?? 0) - (finInc[l] ?? 0);
   const hasInterest = labels.some((l) => netIntCost[l] != null);
-  const tax = S(C.tax, "IS");
-  const netIncome = S(C.netIncome, "IS");
-  const niParent = S(C.niParent, "IS");
+  const tax = S(C.tax);
+  const netIncome = S(C.netIncome);
+  const niParent = S(C.niParent);
   const otherToNi = blank();
   for (const l of labels)
     if (pretax[l] != null && tax[l] != null && netIncome[l] != null)
       otherToNi[l] = Math.round(pretax[l]! - tax[l]! - netIncome[l]!);
 
-  const epsBasic = S(C.epsBasic, "IS");
-  const epsDil = S(C.epsDil, "IS");
+  const epsBasic = S(C.epsBasic);
+  const epsDil = S(C.epsDil);
 
   const da = (() => {
     const d = seriesOf(facts, C.da.ids, C.da.names);
