@@ -18,6 +18,7 @@ import { buildKrSummary } from "@/lib/markets/kr/dart-summary";
 import { buildKrAnalysis } from "@/lib/markets/kr/dart-analysis";
 import { fetchStooqEod } from "@/lib/markets/quote/stooq";
 import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
+import { getKrDaDoc } from "@/lib/db/kr-da";
 
 export const maxDuration = 60;
 
@@ -48,11 +49,12 @@ export async function GET(
       const { corpCode } = resolveCorpCode("", sym);
 
       if (detailView === "analysis") {
-        const [facts, krx, bars, ttm] = await Promise.all([
+        const [facts, krx, bars, ttm, daDoc] = await Promise.all([
           fetchKrFacts(corpCode, "annual"),
           fetchKrxEod(sym).catch(() => null),
           fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
           adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
+          getKrDaDoc(sym).catch(() => null),
         ]);
         if (!facts) return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });
         const fyCloseByYear = new Map<number, number>();
@@ -73,6 +75,7 @@ export async function GET(
           currentPrice: krx?.bars.at(-1)?.close ?? bars.at(-1)?.close ?? null,
           currentMarketCap: krx?.marketCap ?? null,
           ttm: ttm ?? null,
+          daDoc: daDoc ?? null,
         });
         stmt.symbol = sym;
         return ok(stmt, {
@@ -80,7 +83,12 @@ export async function GET(
         });
       }
 
-      const facts = await fetchKrFacts(corpCode, period);
+      const [facts, daDoc] = await Promise.all([
+        fetchKrFacts(corpCode, period),
+        detailView === "is" || detailView === "summary"
+          ? getKrDaDoc(sym).catch(() => null)
+          : Promise.resolve(null),
+      ]);
       if (!facts) {
         return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });
       }
@@ -88,10 +96,10 @@ export async function GET(
         detailView === "cf"
           ? buildKrCashFlow(facts)
           : detailView === "is"
-            ? buildKrIncome(facts)
+            ? buildKrIncome(facts, daDoc)
             : detailView === "bs"
               ? buildKrBalance(facts)
-              : buildKrSummary(facts);
+              : buildKrSummary(facts, daDoc);
       stmt.symbol = sym;
       return ok(stmt, {
         headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },

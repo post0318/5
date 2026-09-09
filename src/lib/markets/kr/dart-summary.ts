@@ -1,6 +1,6 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem } from "../types";
-import type { KrFacts } from "./dart-facts";
+import type { KrFacts, KrDaInput } from "./dart-facts";
 import { buildKrIncome } from "./dart-income";
 import { buildKrBalance } from "./dart-balance";
 import { buildKrCashFlow } from "./dart-cashflow";
@@ -9,8 +9,8 @@ import { buildKrCashFlow } from "./dart-cashflow";
  * 한국 공시기준 요약 (총괄) — `edgar-summary.ts` 미러.
  * IS·BS·CF 상세표에서 핵심 행만 추려 한 화면에. 컬럼·단위는 상세표와 동일.
  */
-export function buildKrSummary(facts: KrFacts): FinancialStatement {
-  const is = buildKrIncome(facts);
+export function buildKrSummary(facts: KrFacts, daDoc: KrDaInput | null = null): FinancialStatement {
+  const is = buildKrIncome(facts, daDoc);
   const bs = buildKrBalance(facts);
   const cf = buildKrCashFlow(facts);
   const periods = is.periods;

@@ -1,6 +1,6 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem, QuoteBar, TtmFlows } from "../types";
-import { type KrFacts, annualSeries, annualSum } from "./dart-facts";
+import { type KrFacts, type KrDaInput, annualSeries, annualSum, daAndAmortSeries } from "./dart-facts";
 
 /**
  * 한국 분석 지표 — `edgar-analysis.ts` 미러 (섹션·라벨 동일, 개요 요약칩 호환).
@@ -62,10 +62,11 @@ export interface KrAnalysisInput {
   currentPrice: number | null;
   currentMarketCap: number | null;
   ttm: TtmFlows | null;
+  daDoc?: KrDaInput | null;
 }
 
 export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
-  const { facts, bars, fyCloseByYear, sharesOutstanding: shares, currentPrice, currentMarketCap, ttm } = input;
+  const { facts, bars, fyCloseByYear, sharesOutstanding: shares, currentPrice, currentMarketCap, ttm, daDoc = null } = input;
   const years = facts.periods.map((p) => p.year);
   const labels = [...years.map((y) => `${y}Y`), LTM];
   const blank = (): Record<string, number | null> => Object.fromEntries(labels.map((l) => [l, null]));
@@ -93,11 +94,8 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const ar0 = A(C.ar, "BS");
   const inv0 = A(C.inv, "BS");
   const ap0 = A(C.ap, "BS");
-  const ppe0 = A(C.ppe, "BS");
-  const intang0 = A(C.intang, "BS");
   const ocf0 = A(C.ocf, "CF");
   const capex0 = A(C.capex, "CF");
-  const intangAcq0 = A(C.intangAcq, "CF");
   const intPaid0 = A(C.intPaid, "CF");
   const divPaid0 = A(C.divPaid, "CF");
 
@@ -148,21 +146,11 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const netDebt = blank();
   for (const l of labels) if (debt[l] != null || cashTot[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashTot[l] ?? 0);
 
-  // 감가상각비 근사 (유·무형자산 롤포워드): 기초 + 취득 − 기말, 음수는 0
+  // 감가상각비: 사업보고서 XBRL 주석 실측(daDoc) + 이전 연도는 유·무형자산 롤포워드 보정
+  const daS = daAndAmortSeries(facts, daDoc);
   const daEst = blank();
-  for (let i = 0; i < years.length; i++) {
-    const y = years[i];
-    const begPpe = ppe0.get(y - 1);
-    const begInt = intang0.get(y - 1);
-    const endPpe = ppe0.get(y);
-    const endInt = intang0.get(y);
-    const cx = capex0.get(y);
-    const ix = intangAcq0.get(y);
-    if (begPpe == null || endPpe == null) continue;
-    const d = (begPpe + (begInt ?? 0) + (cx ?? 0) + (ix ?? 0)) - (endPpe + (endInt ?? 0));
-    daEst[`${y}Y`] = d > 0 ? d : null;
-  }
-  daEst[LTM] = daEst[`${years[years.length - 1]}Y`];
+  for (const y of years) daEst[`${y}Y`] = daS.byYear.get(y) ?? null;
+  daEst[LTM] = daS.ltm;
   const ebitda = blank();
   for (const l of labels) if (opInc[l] != null && daEst[l] != null) ebitda[l] = opInc[l]! + daEst[l]!;
 

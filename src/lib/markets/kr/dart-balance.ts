@@ -43,7 +43,7 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
       { label: "재고자산", ids: ["ifrs-full_Inventories"], names: ["재고자산"], depth: 1 },
       { label: "기타 유동자산", depth: 1, plugOf: "cur" },
       { label: "유동자산 총계", depth: 0, kind: "subtotal", ids: A_CUR.ids, names: A_CUR.names },
-      { label: "유형자산 (순)", ids: ["ifrs-full_PropertyPlantAndEquipment"], names: ["유형자산"], depth: 1 },
+      { label: "유형자산", ids: ["ifrs-full_PropertyPlantAndEquipment"], names: ["유형자산"], depth: 1 },
       { label: "무형자산", ids: ["ifrs-full_IntangibleAssetsAndGoodwill", "ifrs-full_IntangibleAssetsOtherThanGoodwill"], names: ["무형자산"], depth: 1 },
       { label: "관계기업 투자", ids: ["ifrs-full_InvestmentAccountedForUsingEquityMethod"], names: ["관계기업 및 공동기업 투자", "관계기업및공동기업투자"], depth: 1 },
       { label: "기타 비유동자산", depth: 1, plugOf: "noncur" },
@@ -90,9 +90,7 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
         depth: 1,
       },
       { label: "이익잉여금(결손금)", ids: ["ifrs-full_RetainedEarnings"], names: ["이익잉여금", "이익잉여금(결손금)"], depth: 1 },
-      { label: "기타 (자본)", depth: 1, plugOf: "eq" },
-      { label: "지배주주 지분", ids: ["ifrs-full_EquityAttributableToOwnersOfParent"], names: ["지배기업 소유주지분", "지배기업의 소유주지분"], depth: 1 },
-      { label: "비지배지분", ids: ["ifrs-full_NoncontrollingInterests"], names: ["비지배지분"], depth: 1 },
+      { label: "기타 자본 (비지배 포함)", depth: 1, plugOf: "eq" },
       { label: "자본 총계", depth: 0, kind: "total", highlight: true, ids: EQ.ids, names: EQ.names },
       { label: "부채와 자본 총계", depth: 0, kind: "total", highlight: true, ids: LE_TOTAL.ids, names: LE_TOTAL.names },
     ],
@@ -196,9 +194,15 @@ export function buildKrBalance(facts: KrFacts): FinancialStatement {
     }
   }
 
-  // ── 주석 항목: 총차입금 / 순차입금 ──
+  // ── 주석 항목: 지배/비지배 지분 · 총차입금 / 순차입금 ──
   items.push({ accountName: "", accountId: "bs:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() });
   items.push({ accountName: "[ 주석 항목 ]", accountId: "bs:note", depth: 0, isSubtotal: true, isHighlight: false, values: blank() });
+
+  const parentEq = val({
+    ids: ["ifrs-full_EquityAttributableToOwnersOfParent"],
+    names: ["지배기업 소유주지분", "지배기업의 소유주지분"],
+  });
+  const nciEq = val({ ids: ["ifrs-full_NoncontrollingInterests"], names: ["비지배지분"] });
 
   const debt = sumOf(
     facts,
@@ -233,6 +237,8 @@ export function buildKrBalance(facts: KrFacts): FinancialStatement {
     isHighlight: false,
     values,
   });
+  if (labels.some((l) => parentEq[l] != null)) items.push(nrow("지배주주 지분", parentEq));
+  if (labels.some((l) => nciEq[l] != null)) items.push(nrow("비지배지분", nciEq));
   items.push(nrow("총차입금", debt));
   items.push(nrow("순차입금", netDebt));
 

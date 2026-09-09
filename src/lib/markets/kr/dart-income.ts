@@ -1,6 +1,6 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem } from "../types";
-import { type KrFacts, annualSeries, seriesOf, sumOf } from "./dart-facts";
+import { type KrFacts, type KrDaInput, daAndAmortSeries, seriesOf, sumOf } from "./dart-facts";
 
 /**
  * 한국 상세 손익계산서 — DART `fnlttSinglAcntAll` 정규화 재분류.
@@ -24,7 +24,6 @@ const C = {
   },
   tax: { ids: ["ifrs-full_IncomeTaxExpenseContinuingOperations", "ifrs-full_IncomeTaxExpenseBenefit"], names: ["법인세비용", "법인세비용(수익)"] },
   netIncome: { ids: ["ifrs-full_ProfitLoss"], names: ["당기순이익", "당기순이익(손실)", "분기순이익", "반기순이익"] },
-  niParent: { ids: ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], names: ["지배기업 소유주지분", "지배기업의 소유주지분"] },
   epsBasic: {
     ids: ["ifrs-full_BasicEarningsLossPerShare"],
     names: ["기본주당이익", "기본주당이익(손실)", "기본주당순이익", "기본주당순이익(손실)", "기본및희석주당이익"],
@@ -44,7 +43,7 @@ const C = {
   },
 };
 
-export function buildKrIncome(facts: KrFacts): FinancialStatement {
+export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): FinancialStatement {
   const labels = facts.periods.map((p) => p.label);
   const blank = (): Record<string, number | null> => Object.fromEntries(labels.map((l) => [l, null]));
   const IS = ["IS", "CIS"];
@@ -83,7 +82,6 @@ export function buildKrIncome(facts: KrFacts): FinancialStatement {
   const hasInterest = labels.some((l) => netIntCost[l] != null);
   const tax = S(C.tax);
   const netIncome = S(C.netIncome);
-  const niParent = S(C.niParent);
   const otherToNi = blank();
   for (const l of labels)
     if (pretax[l] != null && tax[l] != null && netIncome[l] != null)
@@ -104,39 +102,14 @@ export function buildKrIncome(facts: KrFacts): FinancialStatement {
       ]);
       for (const l of labels) if (alt[l] != null) d[l] = alt[l];
     }
-    // 폴백 2: 유·무형자산 롤포워드 근사 (기초 + 취득 − 기말)
+    // 폴백 2: 사업보고서 XBRL 주석(daDoc) 실측 + 나머지 연도 롤포워드 보정
     if (labels.every((l) => d[l] == null)) {
-      const ppe = annualSeries(facts, ["ifrs-full_PropertyPlantAndEquipment"], ["유형자산"], "BS");
-      const intang = annualSeries(
-        facts,
-        ["ifrs-full_IntangibleAssetsAndGoodwill", "ifrs-full_IntangibleAssetsOtherThanGoodwill"],
-        ["무형자산"],
-        "BS",
-      );
-      const capex = annualSeries(
-        facts,
-        ["ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"],
-        ["유형자산의 취득"],
-        "CF",
-      );
-      const intAcq = annualSeries(
-        facts,
-        ["ifrs-full_PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities"],
-        ["무형자산의 취득"],
-        "CF",
-      );
+      const { byYear, ltm, exactYear } = daAndAmortSeries(facts, daDoc);
       for (const p of facts.periods) {
-        const y = p.year;
-        const beg = ppe.get(y - 1);
-        const end = ppe.get(y);
-        if (beg == null || end == null) continue;
-        const v =
-          beg + (intang.get(y - 1) ?? 0) + Math.abs(capex.get(y) ?? 0) + Math.abs(intAcq.get(y) ?? 0) -
-          (end + (intang.get(y) ?? 0));
-        if (v > 0) {
-          d[p.label] = Math.round(v);
-          daApprox = true;
-        }
+        const v = p.kind === "ltm" ? ltm : byYear.get(p.year) ?? null;
+        if (v == null) continue;
+        d[p.label] = v;
+        if (p.kind !== "ltm" && p.year !== exactYear) daApprox = true;
       }
     }
     return d;
@@ -182,13 +155,12 @@ export function buildKrIncome(facts: KrFacts): FinancialStatement {
     row("(−) 법인세비용", tax),
     row("(−) 기타", otherToNi),
     row("당기순이익", netIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
-    ...(labels.some((l) => niParent[l] != null) ? [row("(지배주주 귀속)", niParent, { depth: 2, italic: true, paren: true })] : []),
     row("기본 EPS", epsBasic, { numberFormat: "eps" }),
     row("희석 EPS", epsDil, { numberFormat: "eps" }),
     { accountName: "", accountId: "is:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() },
     row("[ 주석 항목 ]", blank(), { depth: 0, isSubtotal: true }),
-    row(daApprox ? "EBITDA (근사)" : "EBITDA", ebitda),
-    row(daApprox ? "감가상각비 (근사)" : "감가상각비", da),
+    row("EBITDA", ebitda),
+    row("감가상각비·무형자산상각비", da),
   ];
 
   return {
@@ -208,6 +180,8 @@ export function buildKrIncome(facts: KrFacts): FinancialStatement {
     source:
       facts.source +
       " · 표준화 재분류" +
-      (daApprox ? " · EBITDA·감가상각비는 유·무형자산 증감 기반 근사" : ""),
+      (daApprox
+        ? " · 감가상각비: 최근연도는 사업보고서 주석 실측, 이전 연도는 유·무형자산 증감 기반 근사"
+        : ""),
   };
 }

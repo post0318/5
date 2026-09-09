@@ -15,6 +15,10 @@ export interface KrDaDoc {
   /** "ttm" (직전연간 + 당기누적 − 전년동기) | "annual" */
   basis?: "ttm" | "annual";
   label?: string;
+  /** 최근 12개월(직전연간 + 당기누적 − 전년동기) 참고값 */
+  ttmDepreciation?: number | null;
+  ttmAmortisation?: number | null;
+  ttmLabel?: string | null;
   updatedAt: string;
 }
 
