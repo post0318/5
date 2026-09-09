@@ -105,13 +105,26 @@ export async function getStockOverview(
 
   let multiples: TrailingMultiples | null = null;
   if (quote) {
+    // 듀얼클래스(V 등)는 EDGAR·Yahoo 시세에 undimensioned 주식수·시총이 없다 →
+    // Yahoo 컨센서스(quoteSummary)의 값으로 폴백.
+    const cShares = (consensus as { sharesOutstanding?: number | null } | null)?.sharesOutstanding ?? null;
+    const cMktCap = (consensus as { marketCap?: number | null } | null)?.marketCap ?? null;
+    const quoteForMultiples =
+      (quote.sharesOutstanding == null && cShares != null) ||
+      (quote.marketCap == null && cMktCap != null)
+        ? {
+            ...quote,
+            sharesOutstanding: quote.sharesOutstanding ?? cShares,
+            marketCap: quote.marketCap ?? cMktCap,
+          }
+        : quote;
     multiples = computeTrailingMultiples({
       market,
       symbol,
-      quote,
+      quote: quoteForMultiples,
       annual: annual as FinancialStatement | null,
       quarterly: quarterly as FinancialStatement | null,
-      sharesOutstanding: quote.sharesOutstanding ?? null,
+      sharesOutstanding: quoteForMultiples.sharesOutstanding ?? null,
       ttm: ttm as TtmFlows | null,
     });
   }
