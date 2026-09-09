@@ -52,9 +52,24 @@ async function loadTickerMap(): Promise<Map<string, TickerRow>> {
   return map;
 }
 
+/**
+ * company_tickers.json 이 잘못된 엔티티로 매핑하는 티커 보정.
+ * XOM: 신설 지주사 "ExxonMobil Holdings Corp"(2115436, XBRL 재무 없음) → 영업회사 Exxon Mobil Corp.
+ */
+const CIK_OVERRIDE: Record<string, number> = {
+  XOM: 34088,
+};
+
 async function resolveCik(symbol: string): Promise<{ cik: string; row: TickerRow }> {
   const map = await loadTickerMap();
-  const row = map.get(symbol.toUpperCase());
+  const sym = symbol.toUpperCase();
+  const row = map.get(sym);
+  const override = CIK_OVERRIDE[sym];
+  if (override != null)
+    return {
+      cik: cik10(override),
+      row: row ?? { cik_str: override, ticker: sym, title: sym },
+    };
   if (!row) throw new AdapterError(`EDGAR에서 티커를 찾을 수 없습니다: ${symbol}`, { status: 404 });
   return { cik: cik10(row.cik_str), row };
 }
