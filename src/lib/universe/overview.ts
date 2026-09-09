@@ -145,14 +145,21 @@ export async function getUniverseOverview(market?: MarketId): Promise<{
   rows: UniverseOverviewDoc[];
   stale: boolean;
 }> {
-  const rows = await readOverview(market);
-  if (rows.length === 0) {
-    const items = await listUniverse({ market, activeOnly: true });
+  const [cached, items] = await Promise.all([
+    readOverview(market),
+    listUniverse({ market, activeOnly: true }),
+  ]);
+  if (cached.length === 0) {
     if (items.length === 0) return { rows: [], stale: false };
     const built = await refreshUniverseOverview(market);
     return { rows: built.rows, stale: false };
   }
-  const oldest = rows.reduce((m, r) => (r.updatedAt < m ? r.updatedAt : m), rows[0].updatedAt);
+  // 유니버스에서 이미 빠진 종목(삭제 후 프룬 지연분)은 통합뷰에서 즉시 제외
+  const valid = new Set(items.map((i) => `${i.market}:${i.symbol}`));
+  const rows = cached.filter((r) => valid.has(r._id));
+  const oldest = rows.length
+    ? rows.reduce((m, r) => (r.updatedAt < m ? r.updatedAt : m), rows[0].updatedAt)
+    : new Date().toISOString();
   const ageMs = Date.now() - new Date(oldest).getTime();
-  return { rows, stale: ageMs > 18 * 3600_000 };
+  return { rows, stale: ageMs > 18 * 3600_000 || rows.length < items.length };
 }
