@@ -191,14 +191,15 @@ export function buildUsIncome(
     return diff(base, sga, rnd);
   })();
   const pretax = val(PRETAX);
-  // (−)영업외손익 = 영업외 순손실 (양수 = 손실 → 세전이익에서 차감, 음수 = 이익)
+  // (−)영업외손익 = 세전이익 − 영업이익 (부호 반전). 워터폴 정합을 위해 항상 이 정의 우선.
+  // NonoperatingIncomeExpense 태그는 일부 항목만 담는 기업(IBM 등)이 많아 사용 안 함.
   const nonOpLoss = (() => {
-    const n = val(NONOP); // EDGAR: 양수 = 순이익
-    for (const l of labels)
-      if (n[l] == null && pretax[l] != null && opIncome[l] != null)
-        n[l] = pretax[l]! - opIncome[l]!;
+    const nonop = val(NONOP);
     const out = blank();
-    for (const l of labels) if (n[l] != null) out[l] = -n[l]!;
+    for (const l of labels) {
+      if (pretax[l] != null && opIncome[l] != null) out[l] = -(pretax[l]! - opIncome[l]!);
+      else if (nonop[l] != null) out[l] = -nonop[l]!;
+    }
     return out;
   })();
   // 순이자손익(−) = 이자비용 − 이자수익 (양수 = 순이자 부담, 음수 = 순이자 이익)
