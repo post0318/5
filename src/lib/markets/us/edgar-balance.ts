@@ -223,8 +223,17 @@ export function buildUsBalance(
   const curTotal = value(A_CUR);
   const aTotal = value(A_TOTAL);
   const lcurTotal = value(L_CUR);
-  const lTotal = value(L_TOTAL);
-  const eqTotal = value(EQ);
+  const leTotal = value(LE_TOTAL); // 부채와 자본 총계 (= 자산 총계)
+  const eqRaw = value(["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]);
+  const lRaw = value(L_TOTAL);
+  // 자기자본·부채총계 한쪽이라도 미태깅이면 (부채와자본총계 or 자산총계) 로 상호 파생
+  const eqTotal = blank();
+  const lTotal = blank();
+  for (const l of labels) {
+    const be = leTotal[l] ?? aTotal[l] ?? null;
+    eqTotal[l] = eqRaw[l] ?? (be != null && lRaw[l] != null ? be - lRaw[l]! : null);
+    lTotal[l] = lRaw[l] ?? (be != null && eqTotal[l] != null ? be - eqTotal[l]! : null);
+  }
   const totalOf: Record<string, Record<string, number | null>> = {
     cur: curTotal,
     lcur: lcurTotal,
