@@ -500,7 +500,18 @@ export function buildUsHighlights(
     ocf[i] != null && capex[i] != null ? ocf[i]! + capex[i]! : null,
   );
 
-  const seq = (a: (number | null)[]) => a.map((v, i) => (i === 0 ? null : yoy(v, a[i - 1])));
+  // 첫 FY 컬럼(예 2021)의 YoY 는 직전 컬럼이 없으므로 companyfacts 전체 시계열의
+  // 전년(2020) 값을 끌어와 계산.
+  const firstFy = columns[0]?.kind === "fy" ? Number(columns[0].key.slice(2)) : null;
+  const seq = (
+    a: (number | null)[],
+    series?: { year: number; val: number }[],
+  ) =>
+    a.map((v, i) => {
+      if (i > 0) return yoy(v, a[i - 1]);
+      if (firstFy == null || !series) return null;
+      return yoy(v, annualAt(series, firstFy - 1));
+    });
 
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap },
@@ -509,13 +520,13 @@ export function buildUsHighlights(
     { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
     { key: "revenue", label: "매출액", format: "money", values: revenue },
-    { key: "revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(revenue) },
+    { key: "revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(revenue, S.revenue) },
     { key: "ebitda", label: "EBITDA", format: "money", values: ebitda },
     { key: "ebitda_m", label: "마진 %", format: "pct", indent: true, values: ebitda.map((v, i) => margin(v, revenue[i])) },
     { key: "ni", label: "순이익", format: "money", values: netIncome },
     { key: "ni_m", label: "마진 %", format: "pct", indent: true, values: netIncome.map((v, i) => margin(v, revenue[i])) },
     { key: "eps", label: "EPS (희석)", format: "eps", values: eps },
-    { key: "eps_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(eps) },
+    { key: "eps_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(eps, S.eps) },
     { key: "dps", label: "DPS", format: "eps", values: dps },
     { key: "divyield", label: "배당수익률 %", format: "pct", indent: true, values: divYield },
     { key: "sp2", label: "", format: "money", spacer: true, values: blank() },
