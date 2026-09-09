@@ -598,7 +598,6 @@ export function StockAnalysis({
                   const ndEbitda = pick("순부채 / EBITDA");
                   const curRatio = pick("유동비율");
                   const dToE = pick("총차입금 / 자기자본 (%)");
-                  const ndToE = pick("순부채 / 자기자본 (%)");
                   const icov =
                     pick("이자보상배율 (EBIT/이자)") ?? pick("EBIT / 현금이자");
                   const altZ = pick("알트만 Z-스코어");
@@ -608,7 +607,6 @@ export function StockAnalysis({
                     ndEbitda == null &&
                     curRatio == null &&
                     dToE == null &&
-                    ndToE == null &&
                     icov == null &&
                     altZ == null
                   )
@@ -668,17 +666,6 @@ export function StockAnalysis({
                             dToE < 100 ? "우수" : dToE < 200 ? "주의" : "위험"
                           }
                           tone={dToE < 100 ? "good" : dToE < 200 ? "mid" : "bad"}
-                        />
-                      )}
-                      {ndToE != null && (
-                        <MetricChip
-                          label="순부채/자기자본"
-                          value={`${ndToE.toFixed(0)}%`}
-                          hint="0% 이하(순현금) 우수 · 0~100% 적정 · 100% 초과 위험"
-                          verdict={
-                            ndToE <= 0 ? "우수" : ndToE <= 100 ? "적정" : "위험"
-                          }
-                          tone={ndToE <= 0 ? "good" : ndToE <= 100 ? "mid" : "bad"}
                         />
                       )}
                       {icov != null && (
