@@ -75,7 +75,15 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
         ],
         depth: 1,
       },
-      { label: "장기 투자자산", concepts: ["MarketableSecuritiesNoncurrent", "LongTermInvestments"], depth: 1 },
+      {
+        label: "사용권자산 (리스)",
+        concepts: [
+          "OperatingLeaseRightOfUseAsset",
+          "OperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+        ],
+        depth: 1,
+      },
+      { label: "장기 투자자산", concepts: ["MarketableSecuritiesNoncurrent", "LongTermInvestments", "LongTermInvestmentsAndReceivablesNet"], depth: 1 },
       { label: "기타 비유동자산", depth: 1, plugOf: "noncur" },
       { label: "비유동자산 총계", depth: 0, kind: "subtotal", plugOf: "noncurTotal" },
       { label: "자산 총계", depth: 0, kind: "total", highlight: true, concepts: A_TOTAL },
