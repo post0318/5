@@ -217,6 +217,8 @@ export function buildUsHighlights(
   facts: CompanyFacts,
   bars: QuoteBar[],
   estimates: HighlightEstimatePeriod[],
+  /** 듀얼클래스 종목(EDGAR 에 undimensioned 주식수 없음)용 Yahoo 컨센서스 발행주식수 — LTM 컬럼 폴백. */
+  fallbackShares?: number | null,
 ): FinancialHighlights {
   const notes: string[] = [];
 
@@ -325,7 +327,15 @@ export function buildUsHighlights(
     ),
   };
   const cashE = unitEntries(facts, "CashAndCashEquivalentsAtCarryingValue", "USD");
-  const equityE = unitEntries(facts, "StockholdersEquity", "USD");
+  // 자기자본: 태그가 시기별로 바뀌는 종목(V 는 2012년부터 …IncludingNCI 만) 대응해 병합
+  const equityE = [
+    ...unitEntries(facts, "StockholdersEquity", "USD"),
+    ...unitEntries(
+      facts,
+      "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+      "USD",
+    ),
+  ];
   const mSecCurE = entriesAny(facts, ["MarketableSecuritiesCurrent", "ShortTermInvestments"]);
   const mSecNonCurE = entriesAny(facts, [
     "MarketableSecuritiesNoncurrent",
@@ -383,13 +393,16 @@ export function buildUsHighlights(
     priceByCol[i] = price;
     equity[i] = instantAt(equityE, asOf);
     // 시총용 주식수: LTM 은 현재(가장 최근) 발행주식수, 과거는 기말 주식수
+    // 발행주식수는 550일 이상 오래된 태그(중단된 dei 값 등)는 무시
+    const SS = 550;
     const shares = isLtm
-      ? (instantAt(sharesDeiE, priceDate) ??
-        instantAt(sharesEndE, priceDate) ??
-        instantAt(sharesDeiE, asOf) ??
-        latestWavgShares())
-      : (instantAt(sharesEndE, asOf) ??
-        instantAt(sharesDeiE, asOf) ??
+      ? (instantAt(sharesDeiE, priceDate, SS) ??
+        instantAt(sharesEndE, priceDate, SS) ??
+        instantAt(sharesDeiE, asOf, SS) ??
+        latestWavgShares() ??
+        (fallbackShares ?? null))
+      : (instantAt(sharesEndE, asOf, SS) ??
+        instantAt(sharesDeiE, asOf, SS) ??
         wavgSharesAt(Number(col.key.slice(2))));
     const mc = price != null && shares != null ? price * shares : null;
     marketCap[i] = mc;

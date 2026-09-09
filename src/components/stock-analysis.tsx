@@ -270,13 +270,26 @@ export function StockAnalysis({
   const ttmForMultiples = ttmQ.data?.ttm ?? null;
   const multiples = useMemo(() => {
     if (!ov?.quote || !annualForMultiples.data) return ov?.multiples ?? null;
+    // 듀얼클래스(V·비자 등)는 발행주식수·EPS 를 EDGAR 에 클래스별로만 태깅 →
+    // undimensioned 값이 없다. Yahoo 컨센서스의 주식수·시가총액으로 폴백.
+    const cShares = ov.consensus?.sharesOutstanding ?? null;
+    const cMktCap = ov.consensus?.marketCap ?? null;
+    const quote =
+      (ov.quote.sharesOutstanding == null && cShares != null) ||
+      (ov.quote.marketCap == null && cMktCap != null)
+        ? {
+            ...ov.quote,
+            sharesOutstanding: ov.quote.sharesOutstanding ?? cShares,
+            marketCap: ov.quote.marketCap ?? cMktCap,
+          }
+        : ov.quote;
     return computeTrailingMultiples({
       market,
       symbol: ov.symbol,
-      quote: ov.quote,
+      quote,
       annual: annualForMultiples.data,
       quarterly: null,
-      sharesOutstanding: ov.quote.sharesOutstanding ?? null,
+      sharesOutstanding: quote.sharesOutstanding ?? null,
       depreciationAmortisation: daTotal,
       // 미국(EDGAR): 최근분기 재무상태표·D&A·EPS(TTM) 스냅샷 → BPS·PBR·PSR·EV 정확도
       ttm: ttmForMultiples,

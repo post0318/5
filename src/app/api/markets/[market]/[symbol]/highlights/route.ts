@@ -2,7 +2,7 @@ import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
 import { getAdapter } from "@/lib/markets/registry";
 import { getEodQuote } from "@/lib/markets/quote";
-import { fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
+import { fetchForwardConsensus, fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
 import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
 import { buildUsHighlights } from "@/lib/markets/us/edgar-highlights";
 
@@ -28,10 +28,11 @@ export async function GET(
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
     const yahoo = new URL(request.url).searchParams.get("yahoo");
 
-    const [factsRes, quote, estimates] = await Promise.all([
+    const [factsRes, quote, estimates, consensus] = await Promise.all([
       fetchUsCompanyFacts(sym),
       getEodQuote(market, sym, { yahooOverride: yahoo }).catch(() => null),
       fetchYahooEstimates(market, sym, yahoo).catch(() => null),
+      fetchForwardConsensus(market, sym, yahoo).catch(() => null),
     ]);
 
     const highlights = buildUsHighlights(
@@ -43,6 +44,7 @@ export async function GET(
         epsAvg: p.epsAvg,
         revenueAvg: p.revenueAvg,
       })),
+      consensus?.sharesOutstanding ?? null,
     );
 
     return ok(

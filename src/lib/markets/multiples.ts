@@ -137,7 +137,9 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     snap?.equity ??
     latestValue(annual ?? quarterly ?? emptyFs(market, symbol), [
       "StockholdersEquity",
+      "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
       "Stockholders' Equity",
+      "Stockholders' Equity (incl. NCI)",
       "자본총계",
       "純資産額",
       "親会社の所有者に帰属する持分",

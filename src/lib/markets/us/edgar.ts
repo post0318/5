@@ -196,6 +196,40 @@ function factEntries(
 }
 
 /**
+ * 여러 개념의 instant(재무상태표·주식수) 엔트리를 병합해 가장 최근 end 값.
+ * refEnd 지정 시 그보다 550일 이상 오래된 값은 버린다 —
+ * 태그가 시기별로 바뀌거나(StockholdersEquity → …IncludingNCI) 오래전에 중단된
+ * dei:EntityCommonStockSharesOutstanding(듀얼클래스 종목) 같은 유령값 방지.
+ */
+function latestInstantMerged(
+  facts: CompanyFacts,
+  ns: "us-gaap" | "dei",
+  names: string[],
+  units: string[],
+  refEnd?: string,
+): FactEntry | null {
+  const bag = facts.facts[ns];
+  if (!bag) return null;
+  let best: FactEntry | null = null;
+  for (const n of names) {
+    const node = bag[n];
+    if (!node) continue;
+    for (const u of units) {
+      for (const e of (node.units[u] ?? []) as (FactEntry & { start?: string })[]) {
+        if (e.val == null || !e.end || e.start) continue;
+        if (
+          refEnd &&
+          (Date.parse(refEnd) - Date.parse(e.end)) / 86_400_000 > 550
+        )
+          continue;
+        if (!best || e.end > best.end) best = e;
+      }
+    }
+  }
+  return best;
+}
+
+/**
  * TTM 흐름 + 최근분기 재무상태표 스냅샷 + D&A + 주당배당금 (EDGAR companyfacts).
  * prd.md §4.1 — 공식 무료 API, 라이선스 무관.
  */
@@ -283,15 +317,26 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
     factEntries(facts, "us-gaap", ["LiabilitiesAndStockholdersEquity"], ["USD"]),
   );
   const assetsL = latestInstant(factEntries(facts, "us-gaap", ["Assets"], ["USD"]));
-  let equity = latestInstant(
-    factEntries(
-      facts,
-      "us-gaap",
-      ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
-      ["USD"],
-    ),
+  const cash = latestInstant(
+    factEntries(facts, "us-gaap", ["CashAndCashEquivalentsAtCarryingValue"], ["USD"]),
   );
-  let liabilities = latestInstant(factEntries(facts, "us-gaap", ["Liabilities"], ["USD"]));
+  // 최근 재무상태표 기준일 — 자기자본·주식수의 유령(과거 태그) 값을 거를 기준
+  const refEnd =
+    [liabAndEq?.end, assetsL?.end, cash?.end].filter(Boolean).sort().pop() ?? undefined;
+  let equity = latestInstantMerged(
+    facts,
+    "us-gaap",
+    ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
+    ["USD"],
+    refEnd,
+  );
+  let liabilities = latestInstantMerged(
+    facts,
+    "us-gaap",
+    ["Liabilities"],
+    ["USD"],
+    refEnd,
+  );
   // 파생: 자기자본 ↔ 부채총계 상호 보완 (CAT·MCD 등 한쪽 미태깅)
   const base = liabAndEq ?? assetsL;
   const syn = (val: number, ref: FactEntry): FactEntry => ({ end: ref.end, val, fp: ref.fp, form: ref.form });
@@ -299,12 +344,21 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
     equity = syn(base.val - liabilities.val, base);
   if (liabilities == null && base != null && equity != null)
     liabilities = syn(base.val - equity.val, base);
-  const cash = latestInstant(
-    factEntries(facts, "us-gaap", ["CashAndCashEquivalentsAtCarryingValue"], ["USD"]),
-  );
-  const shares = latestInstant(
-    factEntries(facts, "dei", ["EntityCommonStockSharesOutstanding"], ["shares"]),
-  );
+  const shares =
+    latestInstantMerged(
+      facts,
+      "dei",
+      ["EntityCommonStockSharesOutstanding"],
+      ["shares"],
+      refEnd,
+    ) ??
+    latestInstantMerged(
+      facts,
+      "us-gaap",
+      ["CommonStockSharesOutstanding"],
+      ["shares"],
+      refEnd,
+    );
   const snapLabel =
     [equity?.end, liabilities?.end, cash?.end].filter(Boolean).sort().pop() ?? "";
 
@@ -367,6 +421,7 @@ const CONCEPTS: ConceptSpec[] = [
   { concept: "LiabilitiesCurrent", label: "Current Liabilities", section: "재무상태표", depth: 0, isSubtotal: true, isHighlight: false },
   { concept: "Liabilities", label: "Total Liabilities", section: "재무상태표", depth: 0, isSubtotal: true, isHighlight: true },
   { concept: "StockholdersEquity", label: "Stockholders' Equity", section: "재무상태표", depth: 0, isSubtotal: true, isHighlight: true },
+  { concept: "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", label: "Stockholders' Equity (incl. NCI)", section: "재무상태표", depth: 0, isSubtotal: true, isHighlight: false },
   { concept: "LongTermDebtNoncurrent", label: "Long-term Debt", section: "재무상태표", depth: 1, isSubtotal: false, isHighlight: false },
   // 현금흐름표
   { concept: "NetCashProvidedByUsedInOperatingActivities", label: "Operating Cash Flow", section: "현금흐름표", depth: 0, isSubtotal: true, isHighlight: true },
