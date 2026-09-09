@@ -541,15 +541,6 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const ebitdaLessCapex = blank();
   for (const l of labels)
     if (ebitda[l] != null && capexAbs[l] != null) ebitdaLessCapex[l] = ebitda[l]! - capexAbs[l]!;
-  const debtPlusEquity = blank(); // 총자본 = 총차입금(리스포함) + 자기자본
-  for (const l of labels)
-    if (debtTotal[l] != null && equity[l] != null) debtPlusEquity[l] = debtTotal[l]! + equity[l]!;
-  const ltPlusEquity = blank();
-  for (const l of labels)
-    if (ltDebt[l] != null && equity[l] != null) ltPlusEquity[l] = ltDebt[l]! + equity[l]!;
-  const netDebtPlusEquity = blank();
-  for (const l of labels)
-    if (netDebtT[l] != null && equity[l] != null) netDebtPlusEquity[l] = netDebtT[l]! + equity[l]!;
   // 재무레버리지 정도 (DFL) = EBIT / (EBIT − 이자비용). 이자비용 없으면 공란.
   const dfl = blank();
   for (const l of labels)
@@ -585,13 +576,10 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     HEAD("레버리지"),
     R("부채비율 (부채총계/자기자본) (%)", ratio(liabTotal, equity, 100), "pct"),
     R("총차입금 / 자기자본 (%)", ratio(debtTotal, equity, 100), "pct"),
-    R("총차입금 / 자본 (%)", ratio(debtTotal, debtPlusEquity, 100), "pct"),
     R("총차입금 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
     R("장기차입금 / 자기자본 (%)", ratio(ltDebt, equity, 100), "pct"),
-    R("장기차입금 / 자본 (%)", ratio(ltDebt, ltPlusEquity, 100), "pct"),
     R("장기차입금 / 총자산 (%)", ratio(ltDebt, assets, 100), "pct"),
     R("순부채 / 자기자본 (%)", ratio(netDebtT, equity, 100), "pct"),
-    R("순부채 / 자본 (%)", ratio(netDebtT, netDebtPlusEquity, 100), "pct"),
     R("보통주 / 총자산 (%)", ratio(equity, assets, 100), "pct"),
     R("재무레버리지 정도 (DFL)", dfl, "mult"),
     SP("4"),
