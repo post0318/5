@@ -436,6 +436,18 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return o;
   })();
   const roeR = ratio(netIncome, equityAvg);
+  // 총자본이익률 (Return on Capital) = (순이익 + 세후이자비용) / 평균 총자본
+  // ROIC 와 달리 분자가 순이익 기반(비영업손익 포함), 이자비용만 자본제공자 몫으로 환원.
+  const rotc = blank();
+  for (const l of labels) {
+    if (netIncome[l] == null || !investedCapAvg[l]) continue;
+    const rate =
+      pretax[l] && taxExp[l] != null
+        ? Math.min(Math.max(taxExp[l]! / pretax[l]!, 0), 0.4)
+        : 0.21;
+    const afterTaxInt = (intExp[l] ?? 0) * (1 - rate);
+    rotc[l] = ((netIncome[l]! + afterTaxInt) / investedCapAvg[l]!) * 100;
+  }
   // 듀퐁 3단계 분해: ROE = 순이익률 × 총자산회전율 × 재무레버리지
   // (잔액은 평균 — 블룸버그와 동일)
   const duMargin = ratio(netIncome, revenue);
@@ -519,6 +531,7 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("ROE (%)", ratio(netIncome, equityAvg, 100), "pct"),
     R("ROA (%)", ratio(netIncome, assetsAvg, 100), "pct"),
     R("ROIC (%)", ratio(nopat, investedCapAvg, 100), "pct"),
+    R("총자본이익률 (%)", rotc, "pct"),
     R("매출총이익률 (%)", ratio(grossProfit, revenue, 100), "pct"),
     R("영업이익률 (%)", ratio(opIncome, revenue, 100), "pct"),
     R("순이익률 (%)", ratio(netIncome, revenue, 100), "pct"),
