@@ -31,7 +31,15 @@ const DA = [
   "DepreciationAmortizationAndAccretionNet",
   "DepreciationAndAmortization",
 ];
-const INT_EXP = ["InterestExpense", "InterestExpenseNonoperating", "InterestAndDebtExpense"];
+const INT_EXP = [
+  "InterestExpense",
+  "InterestExpenseNonoperating",
+  "InterestExpenseOperating",
+  "InterestAndDebtExpense",
+  "InterestExpenseNet",
+  "InterestIncomeExpenseNonoperatingNet",
+  "InterestExpenseDebt",
+];
 const DEBT_C = ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "CommercialPaper", "ShortTermBorrowings"];
 // 총차입금 = 이자부 차입금 + 리스부채 (블룸버그 'Total Debt' 기준, IFRS16/ASC842).
 // ※ 한국식 '부채비율'의 부채총계(Liabilities)와 다름 — 이건 이자 내는 빚만.
@@ -256,6 +264,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     "FinanceLeaseLiabilityNoncurrent",
   ]); // 장기 부채(비유동 차입금 + 비유동 리스) — 블룸버그 '장기채무'
   const intExp = flowM(INT_EXP);
+  // 순이자 개념이 잡혀 음수(순이자수익)면 이자보상 지표에 무의미 → 공란
+  for (const l of labels) if (intExp[l] != null && intExp[l]! <= 0) intExp[l] = null;
   // 이자비용 개념이 최근 500일 내 태깅이 끊긴 경우(예: AAPL FY2024~ 별도표시 중단)
   // 오래된 값으로 비율 왜곡 방지 → 해당 컬럼 공란
   {
@@ -269,20 +279,52 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const intCash = blank();
   for (const l of labels) intCash[l] = intPaid[l] ?? intExp[l];
   const taxExp = flow(["IncomeTaxExpenseBenefit"]);
-  const pretax = flow([
-    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-  ]);
+  const pretax = (() => {
+    const o = flow([
+      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesAndExtraordinaryItemsNoncontrollingInterest",
+      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndEquityMethodInvestments",
+    ]);
+    // 최후 폴백: 당기순이익 + 법인세비용
+    for (const l of labels)
+      if (o[l] == null && netIncome[l] != null && taxExp[l] != null)
+        o[l] = netIncome[l]! + taxExp[l]!;
+    return o;
+  })();
+  // 영업이익도 못 구했으면 세전이익으로 근사 (통합 정유사·금융 등 — 이자 미미)
+  for (const l of labels) if (opIncome[l] == null && pretax[l] != null) opIncome[l] = pretax[l];
 
-  const equity = stock(["StockholdersEquity"]);
   const assets = stock(["Assets"]);
+  const liabAndEquity = stock(["LiabilitiesAndStockholdersEquity"]);
+  const equity = (() => {
+    const o = stock([
+      "StockholdersEquity",
+      "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    ]);
+    // 파생: 자산 − 부채총계
+    const liab0 = stock(["Liabilities"]);
+    for (const l of labels)
+      if (o[l] == null && (liabAndEquity[l] ?? assets[l]) != null && liab0[l] != null)
+        o[l] = (liabAndEquity[l] ?? assets[l])! - liab0[l]!;
+    return o;
+  })();
   const curAssets = stock(["AssetsCurrent"]);
   const curLiab = stock(["LiabilitiesCurrent"]);
   const debt = stockSum(DEBT_C);
   const debtTotal = stockSum(DEBT_TOTAL_C); // 차입금 + 리스부채
   const cash = stockSum(CASH_C);
   const cashCur = stockSum(CASH_CUR); // 유동성 지표용 (장기투자 제외)
-  const ar = stock(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]); // 매출채권(당좌비율용)
-  const retained = stock(["RetainedEarningsAccumulatedDeficit"]);
+  const ar = stock([
+    "AccountsReceivableNetCurrent",
+    "ReceivablesNetCurrent",
+    "AccountsAndOtherReceivablesNetCurrent",
+    "AccountsAndNotesReceivableNet",
+  ]); // 매출채권(당좌비율용)
+  const retained = stock([
+    "RetainedEarningsAccumulatedDeficit",
+    "RetainedEarningsAppropriated",
+  ]);
   const cogs = cogs0;
   const grossProfit = grossProfit0;
   const wc = blank(); // 운전자본 = 유동자산 − 유동부채
@@ -358,7 +400,14 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     const rate = pretax[l] && taxExp[l] != null ? taxExp[l]! / pretax[l]! : 0.21;
     nopat[l] = opIncome[l]! * (1 - Math.min(Math.max(rate, 0), 0.4));
   }
-  const liabTotal = stock(["Liabilities"]);
+  const liabTotal = (() => {
+    const o = stock(["Liabilities"]);
+    // 파생: (부채와자본 총계 또는 자산) − 자기자본
+    for (const l of labels)
+      if (o[l] == null && (liabAndEquity[l] ?? assets[l]) != null && equity[l] != null)
+        o[l] = (liabAndEquity[l] ?? assets[l])! - equity[l]!;
+    return o;
+  })();
 
   // 잔액 평균 = (기초 + 기말) / 2 — 블룸버그 ROE·ROA·회전율 방식.
   // FY: 전년말·당해말 평균 / LTM: 최근 분기말·1년 전 동시점 평균 (TTM 흐름과 짝).
@@ -393,7 +442,14 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     }
     return o;
   };
-  const equityAvg = avgStock(["StockholdersEquity"]);
+  const equityAvg = (() => {
+    const o = avgStock([
+      "StockholdersEquity",
+      "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    ]);
+    for (const l of labels) if (o[l] == null && equity[l] != null) o[l] = equity[l];
+    return o;
+  })();
   const assetsAvg = avgStock(["Assets"]);
   // 투하자본 = 총자산 − 비이자 유동부채 (= 총차입금 + 자기자본 + 비유동 비이자부채).
   // 블룸버그 ROIC 기준. 순현금 기업이라도 음수화 안 됨.
