@@ -37,9 +37,10 @@ const INT_EXP = [
   "InterestExpenseOperating",
   "InterestAndDebtExpense",
   "InterestExpenseNet",
-  "InterestIncomeExpenseNonoperatingNet",
   "InterestExpenseDebt",
 ];
+// 총이자 개념이 없을 때 현금 이자지급액을 대용 (DAL·CAT 등)
+const INT_EXP_PROXY = ["InterestPaidNet", "InterestPaid"];
 const DEBT_C = ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "CommercialPaper", "ShortTermBorrowings"];
 // 총차입금 = 이자부 차입금 + 리스부채 (블룸버그 'Total Debt' 기준, IFRS16/ASC842).
 // ※ 한국식 '부채비율'의 부채총계(Liabilities)와 다름 — 이건 이자 내는 빚만.
@@ -202,12 +203,40 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return o;
   })();
   const netIncome = flow(["NetIncomeLoss"]);
-  const eps = adjPerShare(
-    flow(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares"),
+  const EPS_C = [
+    "EarningsPerShareDiluted",
+    "IncomeLossFromContinuingOperationsPerDilutedShare",
+    "EarningsPerShareBasicAndDiluted",
+    "EarningsPerShareBasic",
+  ];
+  // 희석주식수 (EPS 태그가 클래스 차원에만 있는 기업[Visa 등] 파생용)
+  const dilSharesF = fullAnnual(
+    ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"],
+    "shares",
   );
-  const epsFull = adjMap(
-    fullAnnual(["EarningsPerShareDiluted", "EarningsPerShareBasic"], "USD/shares"),
-  );
+  const eps = (() => {
+    const o = adjPerShare(flow(EPS_C, "USD/shares"));
+    const niF = fullAnnual(["NetIncomeLoss"]);
+    for (const l of labels) {
+      if (o[l] != null) continue;
+      const y = l === LTM ? (years.at(-1) ?? 0) : Number(l.replace("Y", ""));
+      const ni = l === LTM ? netIncome[LTM] : niF.get(y);
+      const sh = dilSharesF.get(y);
+      if (ni != null && sh) o[l] = ni / sh;
+    }
+    return o;
+  })();
+  const epsFull = (() => {
+    const m = adjMap(fullAnnual(EPS_C, "USD/shares"));
+    if (m.size) return m;
+    const niF = fullAnnual(["NetIncomeLoss"]);
+    const out = new Map<number, number>();
+    for (const [y, ni] of niF) {
+      const sh = dilSharesF.get(y);
+      if (sh) out.set(y, ni / sh);
+    }
+    return out;
+  })();
   const revFull = fullAnnual(REV);
   // D&A: 통합 태그 없으면 감가상각 + 무형자산상각 합산 (IBM 등)
   const da = (() => {
@@ -221,6 +250,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const CAPEX_C = [
     "PaymentsToAcquirePropertyPlantAndEquipment",
     "PaymentsToAcquireProductiveAssets",
+    "PaymentsForCapitalImprovements",
+    "PaymentsToAcquireOtherProductiveAssets",
   ];
   const capexRaw = flow(CAPEX_C);
   // 1년 성장률 첫 해(표시 첫 컬럼) 보정용 전체 시계열 — 전년 값 소스
@@ -266,6 +297,12 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const intExp = flowM(INT_EXP);
   // 순이자 개념이 잡혀 음수(순이자수익)면 이자보상 지표에 무의미 → 공란
   for (const l of labels) if (intExp[l] != null && intExp[l]! <= 0) intExp[l] = null;
+  // 총이자 태그 없는 기간은 현금이자지급액(절대값)으로 대용
+  {
+    const proxy = flowM(INT_EXP_PROXY);
+    for (const l of labels)
+      if (intExp[l] == null && proxy[l] != null && proxy[l]! > 0) intExp[l] = Math.abs(proxy[l]!);
+  }
   // 이자비용 개념이 최근 500일 내 태깅이 끊긴 경우(예: AAPL FY2024~ 별도표시 중단)
   // 오래된 값으로 비율 왜곡 방지 → 해당 컬럼 공란
   {
