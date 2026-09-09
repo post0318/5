@@ -276,7 +276,10 @@ export interface MarketAdapter {
 
   getCompanyProfile(symbol: string): Promise<CompanyProfile>;
   getFinancials(symbol: string, periodType: FinancialPeriodType): Promise<FinancialStatement>;
-  getFilings(symbol: string, opts?: { limit?: number }): Promise<Filing[]>;
+  getFilings(
+    symbol: string,
+    opts?: { limit?: number; scope?: "core" | "all" },
+  ): Promise<Filing[]>;
 
   /**
    * TTM(최근 4분기) 플로우 지표 — 트레일링 멀티플용.

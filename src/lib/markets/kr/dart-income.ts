@@ -1,6 +1,6 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem } from "../types";
-import { type KrFacts, seriesOf, sumOf } from "./dart-facts";
+import { type KrFacts, annualSeries, seriesOf, sumOf } from "./dart-facts";
 
 /**
  * 한국 상세 손익계산서 — DART `fnlttSinglAcntAll` 정규화 재분류.
@@ -92,16 +92,52 @@ export function buildKrIncome(facts: KrFacts): FinancialStatement {
   const epsBasic = S(C.epsBasic);
   const epsDil = S(C.epsDil);
 
+  let daApprox = false;
   const da = (() => {
     const d = seriesOf(facts, C.da.ids, C.da.names);
-    // 폴백: CF 조정 세부 라인 합 시도
+    // 폴백 1: CF 조정 세부 라인 합
     if (labels.every((l) => d[l] == null)) {
       const alt = sumOf(facts, [
-        { ids: [], names: ["유형자산 감가상각비", "유형자산의 감가상각비"] },
-        { ids: [], names: ["무형자산 상각비", "무형자산의 상각비"] },
+        { ids: [], names: ["유형자산 감가상각비", "유형자산의 감가상각비", "감가상각비"] },
+        { ids: [], names: ["무형자산 상각비", "무형자산의 상각비", "무형자산상각비"] },
         { ids: [], names: ["사용권자산 감가상각비"] },
       ]);
       for (const l of labels) if (alt[l] != null) d[l] = alt[l];
+    }
+    // 폴백 2: 유·무형자산 롤포워드 근사 (기초 + 취득 − 기말)
+    if (labels.every((l) => d[l] == null)) {
+      const ppe = annualSeries(facts, ["ifrs-full_PropertyPlantAndEquipment"], ["유형자산"], "BS");
+      const intang = annualSeries(
+        facts,
+        ["ifrs-full_IntangibleAssetsAndGoodwill", "ifrs-full_IntangibleAssetsOtherThanGoodwill"],
+        ["무형자산"],
+        "BS",
+      );
+      const capex = annualSeries(
+        facts,
+        ["ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"],
+        ["유형자산의 취득"],
+        "CF",
+      );
+      const intAcq = annualSeries(
+        facts,
+        ["ifrs-full_PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities"],
+        ["무형자산의 취득"],
+        "CF",
+      );
+      for (const p of facts.periods) {
+        const y = p.year;
+        const beg = ppe.get(y - 1);
+        const end = ppe.get(y);
+        if (beg == null || end == null) continue;
+        const v =
+          beg + (intang.get(y - 1) ?? 0) + Math.abs(capex.get(y) ?? 0) + Math.abs(intAcq.get(y) ?? 0) -
+          (end + (intang.get(y) ?? 0));
+        if (v > 0) {
+          d[p.label] = Math.round(v);
+          daApprox = true;
+        }
+      }
     }
     return d;
   })();
@@ -151,8 +187,8 @@ export function buildKrIncome(facts: KrFacts): FinancialStatement {
     row("희석 EPS", epsDil, { numberFormat: "eps" }),
     { accountName: "", accountId: "is:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() },
     row("[ 주석 항목 ]", blank(), { depth: 0, isSubtotal: true }),
-    row("EBITDA", ebitda),
-    row("감가상각비", da),
+    row(daApprox ? "EBITDA (근사)" : "EBITDA", ebitda),
+    row(daApprox ? "감가상각비 (근사)" : "감가상각비", da),
   ];
 
   return {
@@ -169,6 +205,9 @@ export function buildKrIncome(facts: KrFacts): FinancialStatement {
       endDate: p.endDate,
     })),
     sections: [{ title: "손익계산서", items }],
-    source: facts.source + " · 표준화 재분류",
+    source:
+      facts.source +
+      " · 표준화 재분류" +
+      (daApprox ? " · EBITDA·감가상각비는 유·무형자산 증감 기반 근사" : ""),
   };
 }

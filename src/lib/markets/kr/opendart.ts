@@ -99,14 +99,15 @@ const CORP_CLS_LABEL: Record<string, string> = {
 
 // ── 공시목록 ─────────────────────────────────────────────────────────
 
+interface FilingRow {
+  rcept_no: string;
+  rcept_dt: string; // YYYYMMDD
+  report_nm: string;
+  flr_nm: string;
+  corp_name: string;
+}
 interface ListResponse extends DartEnvelope {
-  list?: {
-    rcept_no: string;
-    rcept_dt: string; // YYYYMMDD
-    report_nm: string;
-    flr_nm: string;
-    corp_name: string;
-  }[];
+  list?: FilingRow[];
 }
 
 // ── 전체 재무제표 ────────────────────────────────────────────────────
@@ -530,18 +531,55 @@ export const krOpenDartAdapter: MarketAdapter = {
     const entry = await resolveCorpCode(key(), symbol);
     const now = new Date();
     const end = now.toISOString().slice(0, 10).replace(/-/g, "");
-    const begin = new Date(now.getTime() - 365 * 24 * 3600 * 1000)
+    const core = opts?.scope === "core";
+    // 주요공시는 분기·사업보고서가 드물게 나와 2년 창으로 넓힌다
+    const spanDays = core ? 730 : 365;
+    const begin = new Date(now.getTime() - spanDays * 24 * 3600 * 1000)
       .toISOString()
       .slice(0, 10)
       .replace(/-/g, "");
-    const res = await fetchJson<ListResponse>(
-      `${BASE}/list.json?crtfc_key=${key()}&corp_code=${entry.corpCode}` +
-        `&bgn_de=${begin}&end_de=${end}&page_count=${Math.min(opts?.limit ?? 30, 100)}`,
-      { revalidate: 60 * 30 },
-    );
-    if (res.status === "013") return [];
-    checkStatus(res, "공시목록");
-    return (res.list ?? []).map((r) => ({
+    const pageCount = Math.min(opts?.limit ?? 30, 100);
+
+    const listOf = async (pblntfTy?: string): Promise<FilingRow[]> => {
+      const res = await fetchJson<ListResponse>(
+        `${BASE}/list.json?crtfc_key=${key()}&corp_code=${entry.corpCode}` +
+          `&bgn_de=${begin}&end_de=${end}&page_count=${pageCount}` +
+          (pblntfTy ? `&pblntf_ty=${pblntfTy}` : ""),
+        { revalidate: 60 * 30 },
+      );
+      if (res.status === "013") return [];
+      checkStatus(res, "공시목록");
+      return res.list ?? [];
+    };
+
+    let rows: FilingRow[];
+    if (core) {
+      // A 정기공시 · B 주요사항보고 · F 외부감사(감사보고서) · C 발행공시 · I 거래소공시(실적·자기주식·공급계약 등)
+      const [a, b, f, c, i] = await Promise.all([
+        listOf("A"),
+        listOf("B"),
+        listOf("F"),
+        listOf("C"),
+        listOf("I"),
+      ]);
+      const iCore = /실적|잠정|손익구조|매출액|자기주식|공급계약|주식소각/;
+      const cCore = /증자|사채|감자|주식배당|합병|분할|양수|양도/;
+      const seen = new Set<string>();
+      rows = [
+        ...a,
+        ...b,
+        ...f,
+        ...c.filter((r) => cCore.test(r.report_nm)),
+        ...i.filter((r) => iCore.test(r.report_nm)),
+      ]
+        .filter((r) => (seen.has(r.rcept_no) ? false : (seen.add(r.rcept_no), true)))
+        .sort((x, y) => (x.rcept_dt < y.rcept_dt ? 1 : -1))
+        .slice(0, pageCount);
+    } else {
+      rows = await listOf();
+    }
+
+    return rows.map((r) => ({
       id: r.rcept_no,
       symbol,
       market: "kr" as const,

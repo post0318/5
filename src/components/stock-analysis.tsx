@@ -128,11 +128,11 @@ export function StockAnalysis({
   });
 
   const filings = useQuery({
-    queryKey: ["filings", market, symbol],
+    queryKey: ["filings", market, symbol, market === "kr" ? filingScope : "all"],
     queryFn: () =>
       apiFetch<{ filings: Filing[] }>(
-        // 한국은 임원·주요주주 소유상황보고서가 많아 '주요공시' 필터용으로 더 넓게 조회
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/filings?limit=${market === "kr" ? 90 : 30}`,
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/filings?limit=${market === "kr" ? 60 : 30}` +
+          (market === "kr" && filingScope === "core" ? "&scope=core" : ""),
       ),
     enabled: Boolean(symbol),
     retry: false,
@@ -902,10 +902,8 @@ export function StockAnalysis({
                   {filings.data.filings
                     .filter((f) => {
                       if (filingScope === "all") return true;
-                      if (market === "kr")
-                        return /사업보고서|반기보고서|분기보고서|감사보고서|검토보고서|주요사항보고서|잠정실적|영업실적|손익구조|매출액|배당결정|배당에관한|자기주식|유상증자|무상증자|감자결정|전환사채|신주인수권부사채|교환사채|공급계약|공급계약체결|액면분할|액면병합|합병|분할|영업양수|영업양도|자산양수|자산양도|주식소각/.test(
-                          f.title.replace(/\s+/g, ""),
-                        );
+                      // 한국은 서버(DART pblntf_ty)에서 이미 주요공시만 조회
+                      if (market === "kr") return true;
                       if (market !== "us") return true;
                       return /^(10-[KQ]|8-K|20-F|6-K|DEF ?A?14A|DEFA14A|S-\d|424B|F-\d|40-F|11-K)/i.test(
                         f.type.trim(),

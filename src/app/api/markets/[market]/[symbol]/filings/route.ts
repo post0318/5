@@ -15,10 +15,11 @@ export async function GET(
     }
     const { searchParams } = new URL(request.url);
     const limit = Math.min(Number(searchParams.get("limit") ?? 20) || 20, 100);
+    const scope = searchParams.get("scope") === "core" ? "core" : "all";
     const adapter = getAdapter(market);
     const filings = await adapter.getFilings(
       adapter.normalizeSymbol(decodeURIComponent(symbol)),
-      { limit },
+      { limit, scope },
     );
     return ok(
       { filings },
