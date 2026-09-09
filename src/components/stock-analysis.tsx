@@ -596,7 +596,7 @@ export function StockAnalysis({
                   const fcfM = pick("FCF 마진 (%)");
                   const peg = pick("PEG (EPS 3Y CAGR)");
                   const ndEbitda = pick("순부채 / EBITDA");
-                  const deRatio = pick("부채비율 (부채총계/자기자본) (%)");
+                  const curRatio = pick("유동비율");
                   const icov =
                     pick("이자보상배율 (EBIT/이자)") ?? pick("EBIT / 현금이자");
                   const altZ = pick("알트만 Z-스코어");
@@ -604,7 +604,7 @@ export function StockAnalysis({
                     fcfM == null &&
                     peg == null &&
                     ndEbitda == null &&
-                    deRatio == null &&
+                    curRatio == null &&
                     icov == null &&
                     altZ == null
                   )
@@ -642,16 +642,16 @@ export function StockAnalysis({
                           }
                         />
                       )}
-                      {deRatio != null && (
+                      {curRatio != null && (
                         <MetricChip
-                          label="부채비율"
-                          value={`${deRatio.toFixed(0)}%`}
-                          hint="100% 이하 우수 · 100~200% 적정 · 200% 초과 위험 (부채총계/자기자본)"
+                          label="유동비율"
+                          value={`${curRatio.toFixed(2)}x`}
+                          hint="2배 이상 우수 · 1~2배 적정 · 1배 미만 취약"
                           verdict={
-                            deRatio <= 100 ? "우수" : deRatio <= 200 ? "적정" : "위험"
+                            curRatio >= 2 ? "우수" : curRatio >= 1 ? "적정" : "취약"
                           }
                           tone={
-                            deRatio <= 100 ? "good" : deRatio <= 200 ? "mid" : "bad"
+                            curRatio >= 2 ? "good" : curRatio >= 1 ? "mid" : "bad"
                           }
                         />
                       )}
