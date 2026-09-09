@@ -436,15 +436,9 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return o;
   })();
   const roeR = ratio(netIncome, equityAvg);
-  // 듀퐁 3단계 분해: ROE = 순이익률 × 총자산회전율 × 재무레버리지
-  // (잔액은 평균 — 블룸버그와 동일)
-  const duMargin = ratio(netIncome, revenue);
+  // 듀퐁 분해: ROE(%) = 순이익률(%) × 총자산회전율 × 재무레버리지 (잔액은 평균)
   const duTurnover = ratio(revenue, assetsAvg);
   const duLeverage = ratio(assetsAvg, equityAvg);
-  const dupontRoe = blank();
-  for (const l of labels)
-    if (duMargin[l] != null && duTurnover[l] != null && duLeverage[l] != null)
-      dupontRoe[l] = duMargin[l]! * duTurnover[l]! * duLeverage[l]! * 100;
   const sgr = (() => {
     const o = blank();
     for (const l of labels)
@@ -517,19 +511,15 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     SP("1"),
     HEAD("수익성"),
     R("ROE (%)", ratio(netIncome, equityAvg, 100), "pct"),
+    R("순이익률 (%)", ratio(netIncome, revenue, 100), "pct", { depth: 2 }),
+    R("× 총자산회전율 (회)", duTurnover, "mult", { depth: 2 }),
+    R("× 재무레버리지 (배)", duLeverage, "mult", { depth: 2 }),
     R("ROA (%)", ratio(netIncome, assetsAvg, 100), "pct"),
     R("ROIC (%)", ratio(nopat, investedCapAvg, 100), "pct"),
     R("매출총이익률 (%)", ratio(grossProfit, revenue, 100), "pct"),
     R("영업이익률 (%)", ratio(opIncome, revenue, 100), "pct"),
-    R("순이익률 (%)", ratio(netIncome, revenue, 100), "pct"),
     R("유효세율 (%)", effTax, "pct"),
     R("지속가능 성장률 (%)", sgr, "pct"),
-    SP("2a"),
-    HEAD("듀퐁 분석 (ROE 분해)"),
-    R("순이익률 (%)", ratio(netIncome, revenue, 100), "pct"),
-    R("총자산회전율 (회)", duTurnover, "mult"),
-    R("재무레버리지 (배)", duLeverage, "mult"),
-    R("= ROE (%)", dupontRoe, "pct", { isHighlight: true }),
     SP("2"),
     HEAD("현금창출"),
     R("잉여현금흐름 (FCF)", fcf),
