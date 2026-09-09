@@ -51,6 +51,9 @@ darttest.mjs
 # oh-my-claudecode operational state
 /.omc/
 
+# 로컬 전용 노트 (보안 점검 결과 등 — git 커밋 안 함)
+*.local.md
+
 # 로컬 KRX 수집기 임시 응답 덤프
 scripts/.krx-last-response.json
 
