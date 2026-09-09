@@ -24,6 +24,7 @@ const C = {
   },
   tax: { ids: ["ifrs-full_IncomeTaxExpenseContinuingOperations", "ifrs-full_IncomeTaxExpenseBenefit"], names: ["법인세비용", "법인세비용(수익)"] },
   netIncome: { ids: ["ifrs-full_ProfitLoss"], names: ["당기순이익", "당기순이익(손실)", "분기순이익", "반기순이익"] },
+  niParent: { ids: ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], names: ["지배기업 소유주지분", "지배기업의 소유주지분"] },
   epsBasic: {
     ids: ["ifrs-full_BasicEarningsLossPerShare"],
     names: ["기본주당이익", "기본주당이익(손실)", "기본주당순이익", "기본주당순이익(손실)", "기본및희석주당이익"],
@@ -82,6 +83,7 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   const hasInterest = labels.some((l) => netIntCost[l] != null);
   const tax = S(C.tax);
   const netIncome = S(C.netIncome);
+  const niParent = S(C.niParent);
   const otherToNi = blank();
   for (const l of labels)
     if (pretax[l] != null && tax[l] != null && netIncome[l] != null)
@@ -155,6 +157,9 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     row("(−) 법인세비용", tax),
     row("(−) 기타", otherToNi),
     row("당기순이익", netIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
+    ...(labels.some((l) => niParent[l] != null)
+      ? [row("(지배주주 귀속)", niParent, { depth: 2, italic: true, paren: true })]
+      : []),
     row("기본 EPS", epsBasic, { numberFormat: "eps" }),
     row("희석 EPS", epsDil, { numberFormat: "eps" }),
     { accountName: "", accountId: "is:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() },
