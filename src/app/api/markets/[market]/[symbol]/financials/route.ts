@@ -14,6 +14,9 @@ import { buildKrIncome } from "@/lib/markets/kr/dart-income";
 import { buildKrBalance } from "@/lib/markets/kr/dart-balance";
 import { buildKrCashFlow } from "@/lib/markets/kr/dart-cashflow";
 import { buildKrSummary } from "@/lib/markets/kr/dart-summary";
+import { buildKrAnalysis } from "@/lib/markets/kr/dart-analysis";
+import { fetchStooqEod } from "@/lib/markets/quote/stooq";
+import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 
 export const maxDuration = 60;
 
@@ -40,8 +43,42 @@ export async function GET(
       detailView === "analysis" ||
       detailView === "summary";
 
-    if (market === "kr" && isDetail && detailView !== "analysis") {
+    if (market === "kr" && isDetail) {
       const { corpCode } = resolveCorpCode("", sym);
+
+      if (detailView === "analysis") {
+        const [facts, krx, bars, ttm] = await Promise.all([
+          fetchKrFacts(corpCode, "annual"),
+          fetchKrxEod(sym).catch(() => null),
+          fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
+          adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
+        ]);
+        if (!facts) return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });
+        const fyCloseByYear = new Map<number, number>();
+        const needYears = facts.periods
+          .map((p) => p.year)
+          .filter((y) => !bars.some((b) => b.date <= `${y}-12-31` && b.date >= `${y}-11-01` && b.close != null));
+        await Promise.all(
+          needYears.map(async (y) => {
+            const c = await fetchKrxCloseOn(sym, `${y}1231`).catch(() => null);
+            if (c != null) fyCloseByYear.set(y, c);
+          }),
+        );
+        const stmt = buildKrAnalysis({
+          facts,
+          bars,
+          fyCloseByYear,
+          sharesOutstanding: krx?.listedShares ?? null,
+          currentPrice: krx?.bars.at(-1)?.close ?? bars.at(-1)?.close ?? null,
+          currentMarketCap: krx?.marketCap ?? null,
+          ttm: ttm ?? null,
+        });
+        stmt.symbol = sym;
+        return ok(stmt, {
+          headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },
+        });
+      }
+
       const facts = await fetchKrFacts(corpCode, period);
       if (!facts) {
         return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });

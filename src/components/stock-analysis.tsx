@@ -102,7 +102,7 @@ export function StockAnalysis({
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=analysis` +
           (yahooOverride ? `&yahoo=${encodeURIComponent(yahooOverride)}` : ""),
       ),
-    enabled: Boolean(symbol) && market === "us",
+    enabled: Boolean(symbol) && (market === "us" || market === "kr"),
     retry: false,
   });
   const summaryQ = useQuery({
@@ -501,7 +501,7 @@ export function StockAnalysis({
             <TabsList>
               <TabsTrigger value="overview">개요</TabsTrigger>
               <TabsTrigger value="financials">재무제표</TabsTrigger>
-              {market === "us" && <TabsTrigger value="analysis">재무분석</TabsTrigger>}
+              {(market === "us" || market === "kr") && <TabsTrigger value="analysis">재무분석</TabsTrigger>}
               {(market === "kr" || market === "us") && (
                 <TabsTrigger value="rights">권리일정</TabsTrigger>
               )}
@@ -600,7 +600,7 @@ export function StockAnalysis({
               )}
 
               {/* 요약 칩 (FCF 마진 / PEG) — 재무 하이라이트와 컨센서스 사이 */}
-              {market === "us" &&
+              {(market === "us" || market === "kr") &&
                 analysisQ.data &&
                 (() => {
                   const its = analysisQ.data.sections[0]?.items ?? [];
@@ -857,8 +857,8 @@ export function StockAnalysis({
               )}
             </TabsContent>
 
-            {/* 분석 (미국) */}
-            {market === "us" && (
+            {/* 분석 (미국·한국) */}
+            {(market === "us" || market === "kr") && (
               <TabsContent value="analysis" className="space-y-4 pt-4">
                 {analysisQ.isLoading && <Skeleton className="h-64 w-full" />}
                 {analysisQ.isError && (
