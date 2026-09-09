@@ -107,6 +107,75 @@ function yearEnd(year: number): string {
   return `${year}-12-31`;
 }
 
+/**
+ * 계정 키 결정기. 같은 계정이 연도별로
+ *  (a) account_id 는 그대로인데 계정명이 바뀌거나(분기순이익→반기순이익→당기순이익)
+ *  (b) 계정명은 그대로인데 account_id 가 바뀌거나 사라지는(단기차입금)
+ * 두 경우를 모두 하나로 병합한다.
+ *  - real id 가 있고 이미 본 id 면 → 그 id 의 최초 키(sj|정규화명) 재사용
+ *  - 아니면 sj|정규화명 을 키로, real id 는 그 키에 등록
+ * 키마다 관측된 모든 정규화명을 모아 byName 에 별칭 등록.
+ */
+function makeKeyer() {
+  const idToKey = new Map<string, string>();
+  const namesByKey = new Map<string, Set<string>>();
+  const idsByKey = new Map<string, Set<string>>();
+  return {
+    key(r: { sj_div: string; account_id?: string; account_nm: string }): string {
+      const id = r.account_id && r.account_id !== "-표준계정코드 미사용-" ? r.account_id : "";
+      const nk = `${r.sj_div}|${norm(r.account_nm)}`;
+      let k = nk;
+      if (id && idToKey.has(id)) k = idToKey.get(id)!;
+      else if (id) idToKey.set(id, nk);
+      const ns = namesByKey.get(k) ?? new Set<string>();
+      ns.add(norm(r.account_nm));
+      namesByKey.set(k, ns);
+      if (id) {
+        const is = idsByKey.get(k) ?? new Set<string>();
+        is.add(id);
+        idsByKey.set(k, is);
+      }
+      return k;
+    },
+    namesByKey,
+    idsByKey,
+  };
+}
+
+function buildIndex(
+  meta: Map<string, { name: string; sj: string; ord: number }>,
+  keyer: ReturnType<typeof makeKeyer>,
+  periodLabels: string[],
+  valueFor: (k: string, periodLabel: string) => number | null,
+): { lines: KrFactLine[]; byId: Map<string, KrFactLine>; byName: Map<string, KrFactLine> } {
+  const lines: KrFactLine[] = [];
+  const lineByKey = new Map<string, KrFactLine>();
+  for (const [k, m] of meta) {
+    const byPeriod = new Map<string, number>();
+    for (const pl of periodLabels) {
+      const v = valueFor(k, pl);
+      if (v != null) byPeriod.set(pl, v);
+    }
+    const ids = [...(keyer.idsByKey.get(k) ?? [])];
+    const line: KrFactLine = { accountId: ids[0] ?? "", accountIds: ids, accountName: m.name, sjDiv: m.sj, ord: m.ord, byPeriod };
+    lines.push(line);
+    lineByKey.set(k, line);
+  }
+  lines.sort((a, b) => a.ord - b.ord);
+
+  const byId = new Map<string, KrFactLine>();
+  const byName = new Map<string, KrFactLine>();
+  for (const [k, m] of meta) {
+    const line = lineByKey.get(k)!;
+    for (const id of keyer.idsByKey.get(k) ?? []) if (!byId.has(id)) byId.set(id, line);
+    for (const nm of keyer.namesByKey.get(k) ?? []) {
+      const nk = `${m.sj}|${nm}`;
+      if (!byName.has(nk)) byName.set(nk, line);
+    }
+  }
+  return { lines, byId, byName };
+}
+
 // ── 연간 로드 ───────────────────────────────────────────────────────
 
 async function loadAnnual(corpCode: string): Promise<KrFacts | null> {
@@ -130,18 +199,15 @@ async function loadAnnual(corpCode: string): Promise<KrFacts | null> {
     // 그 3년 전 호출로 6개년 확보
     const olderRows = await fetchAll(corpCode, latestYear - 3, REPRT.FY, fsDiv);
 
-    // account -> year -> val. 키는 항상 `sj|정규화명` (연도별 account_id 변경 대응).
+    const keyer = makeKeyer();
     const series = new Map<string, Map<number, number>>();
-    const meta = new Map<string, { ids: Set<string>; name: string; sj: string; ord: number }>();
+    const meta = new Map<string, { name: string; sj: string; ord: number }>();
     const endByYear = new Map<number, string>();
 
     const ingest = (rows: RawRow[], baseYear: number) => {
       for (const r of rows) {
-        const id = r.account_id && r.account_id !== "-표준계정코드 미사용-" ? r.account_id : "";
-        const k = `${r.sj_div}|${norm(r.account_nm)}`;
-        const m = meta.get(k) ?? { ids: new Set<string>(), name: r.account_nm, sj: r.sj_div, ord: Number(r.ord) || 0 };
-        if (id) m.ids.add(id);
-        meta.set(k, m);
+        const k = keyer.key(r);
+        if (!meta.has(k)) meta.set(k, { name: r.account_nm, sj: r.sj_div, ord: Number(r.ord) || 0 });
         const s = series.get(k) ?? new Map<number, number>();
         series.set(k, s);
         const cols: [number, string | undefined][] = [
@@ -157,8 +223,9 @@ async function loadAnnual(corpCode: string): Promise<KrFacts | null> {
         }
       }
     };
-    if (olderRows) ingest(olderRows, latestYear - 3);
+    // 최신 보고서를 먼저 ingest → 계정명 별칭의 대표는 최신 표기(당기순이익 등)
     ingest(latestRows, latestYear);
+    if (olderRows) ingest(olderRows, latestYear - 3);
 
     const years = [...endByYear.keys()].sort((a, b) => b - a).slice(0, 6).sort((a, b) => a - b);
     if (years.length === 0) continue;
@@ -171,28 +238,16 @@ async function loadAnnual(corpCode: string): Promise<KrFacts | null> {
       kind: "fy",
     }));
 
-    const lines: KrFactLine[] = [];
-    for (const [k, m] of meta) {
-      const s = series.get(k)!;
-      const byPeriod = new Map<string, number>();
-      for (const y of showYears) {
-        const v = s.get(y);
-        if (v != null) byPeriod.set(`FY${y}`, v);
-      }
-      const ids = [...m.ids];
-      lines.push({ accountId: ids[0] ?? "", accountIds: ids, accountName: m.name, sjDiv: m.sj, ord: m.ord, byPeriod });
-    }
-    lines.sort((a, b) => a.ord - b.ord);
+    const { lines, byId, byName } = buildIndex(
+      meta,
+      keyer,
+      showYears.map((y) => `FY${y}`),
+      (k, pl) => series.get(k)?.get(Number(pl.slice(2))) ?? null,
+    );
+    // annual: 키 → (연도 → 값) — annualSeries 헬퍼용 (전체 6개년)
+    const annual = new Map<string, Map<number, number>>();
+    for (const [k, s] of series) annual.set(k, new Map(s));
 
-    const byId = new Map<string, KrFactLine>();
-    const byName = new Map<string, KrFactLine>();
-    for (const l of lines) {
-      for (const id of l.accountIds) if (!byId.has(id)) byId.set(id, l);
-      const nk = `${l.sjDiv}|${norm(l.accountName)}`;
-      if (!byName.has(nk)) byName.set(nk, l);
-    }
-
-    // annual 맵 키를 `sj|정규화명` 으로 통일 (annualSeries 헬퍼가 name 폴백 시 사용)
     return {
       mode: "annual",
       fsDiv,
@@ -200,7 +255,7 @@ async function loadAnnual(corpCode: string): Promise<KrFacts | null> {
       lines,
       byId,
       byName,
-      annual: series,
+      annual,
       annualEndByYear: endByYear,
       source: `OpenDART 전체 재무제표 (${fsDiv === "CFS" ? "연결" : "별도"})`,
     };
@@ -247,7 +302,21 @@ async function loadQuarter(corpCode: string): Promise<KrFacts | null> {
     );
     if (fetched.size === 0) continue;
 
-    // 각 (연도, 분기)의 YTD 맵 만들기
+    // 계정 키 결정기 — 최신 보고서부터 ingest (대표 계정명 = 최신 표기)
+    const keyer = makeKeyer();
+    const meta = new Map<string, { name: string; sj: string; ord: number }>();
+    const orderedReports: [number, keyof typeof REPRT][] = [];
+    for (const yr of [baseYear, baseYear - 1]) for (const q of ["FY", "Q3", "H1", "Q1"] as const) orderedReports.push([yr, q]);
+    for (const [yr, q] of orderedReports) {
+      const rows = fetched.get(`${yr}:${q}`);
+      if (!rows) continue;
+      for (const r of rows) {
+        const k = keyer.key(r);
+        if (!meta.has(k)) meta.set(k, { name: r.account_nm, sj: r.sj_div, ord: Number(r.ord) || 0 });
+      }
+    }
+
+    // 각 (연도, 분기)의 YTD/기말 맵 (키는 keyer 키)
     type QT = { year: number; qi: number; end: string; ytd: Map<string, number>; snap: Map<string, number> };
     const quarters: QT[] = [];
     for (const yr of reportYears) {
@@ -255,9 +324,9 @@ async function loadQuarter(corpCode: string): Promise<KrFacts | null> {
         const rows = fetched.get(`${yr}:${q}`);
         if (!rows) continue;
         const ytd = new Map<string, number>();
-        const snap = new Map<string, number>(); // BS 기말
+        const snap = new Map<string, number>();
         for (const r of rows) {
-          const k = `${r.sj_div}|${norm(r.account_nm)}`;
+          const k = keyer.key(r);
           if (r.sj_div === "BS") {
             const v = num(r.thstrm_amount);
             if (v != null && !snap.has(k)) snap.set(k, v);
@@ -267,31 +336,20 @@ async function loadQuarter(corpCode: string): Promise<KrFacts | null> {
           }
         }
         const qi = Q_NUM[q];
-        const end =
-          qi === 4 ? yearEnd(yr) : `${yr}-${String(qi * 3).padStart(2, "0")}-${qi === 1 ? "31" : qi === 2 ? "30" : "30"}`;
+        const end = qi === 4 ? yearEnd(yr) : `${yr}-${String(qi * 3).padStart(2, "0")}-${qi === 2 || qi === 3 ? "30" : "31"}`;
         quarters.push({ year: yr, qi, end, ytd, snap });
       }
     }
     quarters.sort((a, b) => a.year - b.year || a.qi - b.qi);
     if (quarters.length === 0) continue;
 
-    // 단일분기 = YTD[n] − YTD[n-1] (같은 연도 내에서만; qi=1 은 그대로)
-    const metaAll = new Map<string, { ids: Set<string>; name: string; sj: string; ord: number }>();
-    for (const rows of fetched.values())
-      for (const r of rows) {
-        const id = r.account_id && r.account_id !== "-표준계정코드 미사용-" ? r.account_id : "";
-        const k = `${r.sj_div}|${norm(r.account_nm)}`;
-        const m = metaAll.get(k) ?? { ids: new Set<string>(), name: r.account_nm, sj: r.sj_div, ord: Number(r.ord) || 0 };
-        if (id) m.ids.add(id);
-        metaAll.set(k, m);
-      }
-
+    // 단일분기 = YTD[n] − YTD[n-1] (같은 연도 내; qi=1 은 그대로). BS 는 기말값.
     const single: { year: number; qi: number; end: string; vals: Map<string, number> }[] = [];
     for (const qt of quarters) {
       const prev = quarters.find((x) => x.year === qt.year && x.qi === qt.qi - 1);
       const vals = new Map<string, number>();
-      for (const [k, meta] of metaAll) {
-        if (meta.sj === "BS") {
+      for (const [k, m] of meta) {
+        if (m.sj === "BS") {
           const v = qt.snap.get(k);
           if (v != null) vals.set(k, v);
           continue;
@@ -316,27 +374,16 @@ async function loadQuarter(corpCode: string): Promise<KrFacts | null> {
       endDate: s.end,
       kind: "quarter",
     }));
+    const plLabels = show.map((s) => `${s.year} Q${s.qi}`);
+    const valAt = new Map<string, number>(); // `${k}@@${label}` -> v
+    for (const s of show) for (const [k, v] of s.vals) valAt.set(`${k}@@${s.year} Q${s.qi}`, v);
 
-    const lines: KrFactLine[] = [];
-    for (const [k, meta] of metaAll) {
-      const byPeriod = new Map<string, number>();
-      for (const s of show) {
-        const v = s.vals.get(k);
-        if (v != null) byPeriod.set(`${s.year} Q${s.qi}`, v);
-      }
-      if (!byPeriod.size) continue;
-      const ids = [...meta.ids];
-      lines.push({ accountId: ids[0] ?? "", accountIds: ids, accountName: meta.name, sjDiv: meta.sj, ord: meta.ord, byPeriod });
-    }
-    lines.sort((a, b) => a.ord - b.ord);
-
-    const byId = new Map<string, KrFactLine>();
-    const byName = new Map<string, KrFactLine>();
-    for (const l of lines) {
-      for (const id of l.accountIds) if (!byId.has(id)) byId.set(id, l);
-      const nk = `${l.sjDiv}|${norm(l.accountName)}`;
-      if (!byName.has(nk)) byName.set(nk, l);
-    }
+    const { lines, byId, byName } = buildIndex(
+      meta,
+      keyer,
+      plLabels,
+      (k, pl) => valAt.get(`${k}@@${pl}`) ?? null,
+    );
 
     return {
       mode: "quarter",
