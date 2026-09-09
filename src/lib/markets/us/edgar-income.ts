@@ -267,13 +267,27 @@ export function buildUsIncome(
     ...opts,
   });
 
+  // 매출원가·매출총이익 구조가 없는 업종(항공·호텔·서비스·정유 등)은
+  // 매출액 → (−)영업비용 총계 → 영업이익 으로 축약
+  const hasGross = labels.some((l) => grossProfit[l] != null);
+  const totalOpex = (() => {
+    const o = blank();
+    for (const l of labels)
+      if (revenue[l] != null && opIncome[l] != null) o[l] = revenue[l]! - opIncome[l]!;
+    return o;
+  })();
+
   const items: FinancialLineItem[] = [
     row("매출액", revenue, { depth: 0, isSubtotal: true, isHighlight: true }),
-    row("(−) 매출원가", cogs),
-    row("매출총이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
-    row("(−) 판매관리비", sga),
-    row("(−) 연구개발비", rnd),
-    row("(−) 기타 영업비용", otherOpex),
+    ...(hasGross
+      ? [
+          row("(−) 매출원가", cogs),
+          row("매출총이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
+          row("(−) 판매관리비", sga),
+          row("(−) 연구개발비", rnd),
+          row("(−) 기타 영업비용", otherOpex),
+        ]
+      : [row("(−) 영업비용", totalOpex)]),
     row("영업이익", opIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("(−) 영업외손익", nonOpLoss),
     ...(hasInterest
