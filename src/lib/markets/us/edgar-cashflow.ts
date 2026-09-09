@@ -135,7 +135,7 @@ const BLOCKS: Block[] = [
       { label: "운전자본 변동", depth: 1, kind: "subtotal" },
       { label: "매출채권 증감", concepts: ["IncreaseDecreaseInAccountsReceivable", "IncreaseDecreaseInReceivables", "IncreaseDecreaseInAccountsAndOtherReceivables"], depth: 2, negate: true },
       { label: "재고자산 증감", concepts: ["IncreaseDecreaseInInventories"], depth: 2, negate: true },
-      { label: "매입채무 증감", concepts: ["IncreaseDecreaseInAccountsPayable", "IncreaseDecreaseInAccountsPayableTrade"], depth: 2 },
+      { label: "매입채무 증감", concepts: ["IncreaseDecreaseInAccountsPayable", "IncreaseDecreaseInAccountsPayableTrade", "IncreaseDecreaseInAccountsPayableAndAccruedLiabilities"], depth: 2 },
       { label: "기타 영업활동", depth: 1, plug: true },
     ],
   },
@@ -154,6 +154,9 @@ const BLOCKS: Block[] = [
           ["ProceedsFromSaleOfAvailableForSaleSecuritiesDebt", false],
           ["ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities", false],
           ["ProceedsFromSaleMaturityAndCollectionsOfInvestments", false],
+          ["ProceedsFromSaleMaturityAndCollectionOfShorttermInvestments", false],
+          ["ProceedsFromSaleAndMaturityOfMarketableSecurities", false],
+          ["ProceedsFromSaleOfShortTermInvestments", false],
         ],
       },
       {
@@ -163,6 +166,9 @@ const BLOCKS: Block[] = [
         combine: [
           ["PaymentsToAcquireAvailableForSaleSecuritiesDebt", false],
           ["PaymentsToAcquireInvestments", false],
+          ["PaymentsToAcquireShortTermInvestments", false],
+          ["PaymentsToAcquireLongtermInvestments", false],
+          ["PaymentsToAcquireMarketableSecurities", false],
         ],
       },
       { label: "사업 인수 (순현금)", concepts: ["PaymentsToAcquireBusinessesNetOfCashAcquired"], depth: 1, negate: true },
