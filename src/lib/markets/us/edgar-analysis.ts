@@ -188,7 +188,11 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const intPaid = flow(["InterestPaidNet", "InterestPaid"]); // 현금 이자 지급액
-  const ltDebt = stockSum(["LongTermDebtNoncurrent"]); // 장기 차입금(비유동)
+  const ltDebt = stockSum([
+    "LongTermDebtNoncurrent",
+    "OperatingLeaseLiabilityNoncurrent",
+    "FinanceLeaseLiabilityNoncurrent",
+  ]); // 장기 부채(비유동 차입금 + 비유동 리스) — 블룸버그 '장기채무'
   const intExp = flowM(INT_EXP);
   // 이자비용 개념이 최근 500일 내 태깅이 끊긴 경우(예: AAPL FY2024~ 별도표시 중단)
   // 오래된 값으로 비율 왜곡 방지 → 해당 컬럼 공란
