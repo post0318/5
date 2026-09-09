@@ -187,6 +187,8 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
   }
   const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
+  const intPaid = flow(["InterestPaidNet", "InterestPaid"]); // 현금 이자 지급액
+  const ltDebt = stockSum(["LongTermDebtNoncurrent"]); // 장기 차입금(비유동)
   const intExp = flowM(INT_EXP);
   // 이자비용 개념이 최근 500일 내 태깅이 끊긴 경우(예: AAPL FY2024~ 별도표시 중단)
   // 오래된 값으로 비율 왜곡 방지 → 해당 컬럼 공란
@@ -528,6 +530,27 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     return o;
   })();
 
+  // ── 레버리지·커버리지 파생 ──
+  const capexAbs = blank();
+  for (const l of labels) if (capexRaw[l] != null) capexAbs[l] = Math.abs(capexRaw[l]!);
+  const ebitdaLessCapex = blank();
+  for (const l of labels)
+    if (ebitda[l] != null && capexAbs[l] != null) ebitdaLessCapex[l] = ebitda[l]! - capexAbs[l]!;
+  const debtPlusEquity = blank(); // 총자본 = 총부채(리스포함) + 자기자본
+  for (const l of labels)
+    if (debtTotal[l] != null && equity[l] != null) debtPlusEquity[l] = debtTotal[l]! + equity[l]!;
+  const ltPlusEquity = blank();
+  for (const l of labels)
+    if (ltDebt[l] != null && equity[l] != null) ltPlusEquity[l] = ltDebt[l]! + equity[l]!;
+  const netDebtPlusEquity = blank();
+  for (const l of labels)
+    if (netDebtT[l] != null && equity[l] != null) netDebtPlusEquity[l] = netDebtT[l]! + equity[l]!;
+  // 재무레버리지 정도 (DFL) = EBIT / (EBIT − 이자비용). 이자비용 없으면 공란.
+  const dfl = blank();
+  for (const l of labels)
+    if (opIncome[l] != null && intExp[l] != null && opIncome[l]! - intExp[l]! !== 0)
+      dfl[l] = opIncome[l]! / (opIncome[l]! - intExp[l]!);
+
   const items: FinancialLineItem[] = [
     HEAD("밸류에이션"),
     R("PER", per, "mult"),
@@ -554,17 +577,33 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("영업현금흐름 / 순이익", ratio(ocf, netIncome), "mult"),
     R("주당 FCF", perShare(fcf), "eps"),
     SP("3"),
-    HEAD("재무건전성"),
+    HEAD("레버리지"),
+    R("총부채 / 자기자본 (%)", ratio(debtTotal, equity, 100), "pct"),
+    R("총부채 / 자본 (%)", ratio(debtTotal, debtPlusEquity, 100), "pct"),
+    R("총부채 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
+    R("장기부채 / 자기자본 (%)", ratio(ltDebt, equity, 100), "pct"),
+    R("장기부채 / 자본 (%)", ratio(ltDebt, ltPlusEquity, 100), "pct"),
+    R("장기부채 / 총자산 (%)", ratio(ltDebt, assets, 100), "pct"),
+    R("순부채 / 자기자본 (%)", ratio(netDebtT, equity, 100), "pct"),
+    R("순부채 / 자본 (%)", ratio(netDebtT, netDebtPlusEquity, 100), "pct"),
+    R("보통주 / 총자산 (%)", ratio(equity, assets, 100), "pct"),
+    R("재무레버리지 정도 (DFL)", dfl, "mult"),
+    SP("4"),
+    HEAD("부채 상환력"),
     R("총부채 / EBITDA", ratio(debtTotal, ebitda), "mult"),
     R("순부채 / EBITDA", ratio(netDebtT, ebitda), "mult"),
-    R("총부채 / 자기자본 (%)", ratio(debtTotal, equity, 100), "pct"),
-    R("총부채 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
+    R("총부채 / EBIT", ratio(debtTotal, opIncome), "mult"),
+    R("순부채 / EBIT", ratio(netDebtT, opIncome), "mult"),
+    R("영업이익 / 총부채", ratio(opIncome, debtTotal), "mult"),
     R("이자보상배율 (EBIT/이자)", ratio(opIncome, intExp), "mult"),
     R("EBITDA / 이자비용", ratio(ebitda, intExp), "mult"),
+    R("(EBITDA−CapEx) / 이자비용", ratio(ebitdaLessCapex, intExp), "mult"),
+    R("EBIT / 현금이자", ratio(opIncome, intPaid), "mult"),
+    R("EBITDA / 현금이자", ratio(ebitda, intPaid), "mult"),
     R("CFO / 총부채", ratio(ocf, debtTotal), "mult"),
     R("FCF / 총부채", ratio(fcf, debtTotal), "mult"),
     R("알트만 Z-스코어", altZ, "eps"),
-    SP("4"),
+    SP("4a"),
     HEAD("유동성"),
     R("유동비율", ratio(curAssets, curLiab), "mult"),
     R("당좌비율", quick, "mult"),
