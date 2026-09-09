@@ -203,8 +203,28 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
     ),
   );
   const netIncome = ttmFlow(factEntries(facts, "us-gaap", ["NetIncomeLoss"], ["USD"]));
-  const opIncome = ttmFlow(factEntries(facts, "us-gaap", ["OperatingIncomeLoss"], ["USD"]));
-  const da = ttmFlow(
+  let opIncome = ttmFlow(factEntries(facts, "us-gaap", ["OperatingIncomeLoss"], ["USD"]));
+  if (opIncome.ttm == null) {
+    // 파생: 매출총이익 − 판관비 − 연구개발비 (IBM 등)
+    const gp = ttmFlow(factEntries(facts, "us-gaap", ["GrossProfit"], ["USD"]));
+    const sg = ttmFlow(
+      factEntries(
+        facts,
+        "us-gaap",
+        ["SellingGeneralAndAdministrativeExpense", "GeneralAndAdministrativeExpense"],
+        ["USD"],
+      ),
+    );
+    const rd = ttmFlow(factEntries(facts, "us-gaap", ["ResearchAndDevelopmentExpense"], ["USD"]));
+    if (gp.ttm != null && (sg.ttm != null || rd.ttm != null))
+      opIncome = {
+        ...gp,
+        ttm: gp.ttm - (sg.ttm ?? 0) - (rd.ttm ?? 0),
+        annual:
+          gp.annual != null ? gp.annual - (sg.annual ?? 0) - (rd.annual ?? 0) : null,
+      };
+  }
+  let da = ttmFlow(
     factEntries(
       facts,
       "us-gaap",
@@ -216,6 +236,23 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
       ["USD"],
     ),
   );
+  if (da.ttm == null) {
+    const dep = ttmFlow(factEntries(facts, "us-gaap", ["Depreciation"], ["USD"]));
+    const am = ttmFlow(
+      factEntries(facts, "us-gaap", ["AmortizationOfIntangibleAssets"], ["USD"]),
+    );
+    if (dep.ttm != null || am.ttm != null) {
+      const base = dep.ttm != null ? dep : am;
+      da = {
+        ...base,
+        ttm: (dep.ttm ?? 0) + (am.ttm ?? 0),
+        annual:
+          dep.annual != null || am.annual != null
+            ? (dep.annual ?? 0) + (am.annual ?? 0)
+            : null,
+      };
+    }
+  }
   const dps = ttmFlow(
     factEntries(facts, "us-gaap", ["CommonStockDividendsPerShareDeclared"], ["USD/shares"]),
   );
