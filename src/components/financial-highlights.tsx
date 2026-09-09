@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { formatNumber } from "@/lib/format";
 import type {
   FinancialHighlights,
   HighlightColumn,
@@ -10,25 +11,19 @@ import type {
 
 type Scale = "million" | "billion";
 
+// 전 화면 공통 규칙: 소수 자리 버림(trunc). 재무분석 탭과 값이 일치해야 함.
 function fmt(
   v: number | null,
   format: "money" | "pct" | "eps" | "mult",
   scale: Scale,
 ): string {
   if (v == null || !Number.isFinite(v)) return "–";
-  if (format === "eps" || format === "mult") {
-    return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (format === "eps" || format === "pct" || format === "mult") {
+    return formatNumber(v, 2);
   }
-  if (format === "pct") {
-    return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-  // 백만 단위는 정수(소수점 없음), 10억(모바일) 단위는 소수 2자리
+  // 백만 단위는 정수, 10억(모바일) 단위는 소수 2자리
   const div = scale === "billion" ? 1e9 : 1e6;
-  const frac = scale === "billion" ? 2 : 0;
-  return (v / div).toLocaleString("en-US", {
-    minimumFractionDigits: frac,
-    maximumFractionDigits: frac,
-  });
+  return formatNumber(v / div, scale === "billion" ? 2 : 0);
 }
 
 function useIsMobile(): boolean {

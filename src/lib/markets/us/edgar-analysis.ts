@@ -263,10 +263,48 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     const rate = pretax[l] && taxExp[l] != null ? taxExp[l]! / pretax[l]! : 0.21;
     nopat[l] = opIncome[l]! * (1 - Math.min(Math.max(rate, 0), 0.4));
   }
-  const investedCap = blank(); // 총차입금 + 자본 (순현금 기업 대비 음수 방지)
-  for (const l of labels)
-    if (debt[l] != null && equity[l] != null) investedCap[l] = debt[l]! + equity[l]!;
   const liabTotal = stock(["Liabilities"]);
+
+  // 잔액 평균 = (기초 + 기말) / 2 — 블룸버그 ROE·ROA·회전율 방식.
+  // FY: 전년말·당해말 평균 / LTM: 최근 분기말·1년 전 동시점 평균 (TTM 흐름과 짝).
+  const avgStock = (concepts: string[]): Record<string, number | null> => {
+    const full = new Map<number, number>();
+    for (const c of concepts)
+      for (const [y, v] of instantByYear(entriesOf(facts, c)))
+        if (!full.has(y)) full.set(y, v);
+    const o = blank();
+    for (const y of years) {
+      const cur = full.get(y);
+      const prev = full.get(y - 1);
+      o[`${y}Y`] = cur != null && prev != null ? (cur + prev) / 2 : (cur ?? null);
+    }
+    const insts = concepts
+      .flatMap((c) => entriesOf(facts, c))
+      .filter((e) => !e.start)
+      .sort((a, b) => (a.end < b.end ? 1 : -1));
+    if (insts.length) {
+      const latest = insts[0];
+      const target = shiftYear(latest.end, -1);
+      const prevE = insts.find((e) => Math.abs(days(e.end, target)) <= 25);
+      o[LTM] = prevE ? (latest.val + prevE.val) / 2 : latest.val;
+    }
+    return o;
+  };
+  const avgStockSum = (concepts: string[]): Record<string, number | null> => {
+    const o = blank();
+    for (const c of concepts) {
+      const a = avgStock([c]);
+      for (const l of labels) if (a[l] != null) o[l] = (o[l] ?? 0) + a[l]!;
+    }
+    return o;
+  };
+  const equityAvg = avgStock(["StockholdersEquity"]);
+  const assetsAvg = avgStock(["Assets"]);
+  const debtAvg = avgStockSum(DEBT_C);
+  const investedCapAvg = blank();
+  for (const l of labels)
+    if (debtAvg[l] != null && equityAvg[l] != null)
+      investedCapAvg[l] = debtAvg[l]! + equityAvg[l]!;
 
   // 주가·시총
   const price = blank();
@@ -397,11 +435,12 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
       if (dividends[l] != null && netIncome[l]) o[l] = Math.abs(dividends[l]!) / netIncome[l]!;
     return o;
   })();
-  const roeR = ratio(netIncome, equity);
-  // 듀퐁 3단계 분해: ROE = 순이익률 × 총자산회전율 × 재무레버리지 (모두 기말 기준)
+  const roeR = ratio(netIncome, equityAvg);
+  // 듀퐁 3단계 분해: ROE = 순이익률 × 총자산회전율 × 재무레버리지
+  // (잔액은 평균 — 블룸버그와 동일)
   const duMargin = ratio(netIncome, revenue);
-  const duTurnover = ratio(revenue, assets);
-  const duLeverage = ratio(assets, equity);
+  const duTurnover = ratio(revenue, assetsAvg);
+  const duLeverage = ratio(assetsAvg, equityAvg);
   const dupontRoe = blank();
   for (const l of labels)
     if (duMargin[l] != null && duTurnover[l] != null && duLeverage[l] != null)
@@ -425,31 +464,6 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     for (const l of labels) if (cogs[l] != null) o[l] = Math.abs(cogs[l]!);
     return o;
   })();
-  // 회전일수용 잔액 = (기초 + 기말) / 2 평균 — 블룸버그 방식.
-  // FY: 전년말·당해말 평균 / LTM: 최근 분기말·1년 전 동시점 평균 (TTM 흐름과 짝).
-  const avgStock = (concepts: string[]): Record<string, number | null> => {
-    const full = new Map<number, number>();
-    for (const c of concepts)
-      for (const [y, v] of instantByYear(entriesOf(facts, c)))
-        if (!full.has(y)) full.set(y, v);
-    const o = blank();
-    for (const y of years) {
-      const cur = full.get(y);
-      const prev = full.get(y - 1);
-      o[`${y}Y`] = cur != null && prev != null ? (cur + prev) / 2 : (cur ?? null);
-    }
-    const insts = concepts
-      .flatMap((c) => entriesOf(facts, c))
-      .filter((e) => !e.start)
-      .sort((a, b) => (a.end < b.end ? 1 : -1));
-    if (insts.length) {
-      const latest = insts[0];
-      const target = shiftYear(latest.end, -1);
-      const prevE = insts.find((e) => Math.abs(days(e.end, target)) <= 25);
-      o[LTM] = prevE ? (latest.val + prevE.val) / 2 : latest.val;
-    }
-    return o;
-  };
   const arAvg = avgStock(["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"]);
   const invAvg = avgStock(["InventoryNet"]);
   const apAvg = avgStock([
@@ -502,9 +516,9 @@ export function buildUsAnalysis(facts: CompanyFacts, bars: QuoteBar[]): Financia
     R("PEG (EPS 3Y CAGR)", peg, "mult"),
     SP("1"),
     HEAD("수익성"),
-    R("ROE (%)", ratio(netIncome, equity, 100), "pct"),
-    R("ROA (%)", ratio(netIncome, assets, 100), "pct"),
-    R("ROIC (%)", ratio(nopat, investedCap, 100), "pct"),
+    R("ROE (%)", ratio(netIncome, equityAvg, 100), "pct"),
+    R("ROA (%)", ratio(netIncome, assetsAvg, 100), "pct"),
+    R("ROIC (%)", ratio(nopat, investedCapAvg, 100), "pct"),
     R("매출총이익률 (%)", ratio(grossProfit, revenue, 100), "pct"),
     R("영업이익률 (%)", ratio(opIncome, revenue, 100), "pct"),
     R("순이익률 (%)", ratio(netIncome, revenue, 100), "pct"),
