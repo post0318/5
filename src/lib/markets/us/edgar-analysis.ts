@@ -243,18 +243,29 @@ export function buildUsAnalysis(
     const niF = fullAnnual(NI_C);
     for (const l of labels) {
       if (o[l] != null) continue;
-      const y = l === LTM ? (years.at(-1) ?? 0) : Number(l.replace("Y", ""));
+      if (l === LTM) {
+        // LTM 은 TTM 순이익 ÷ 최신 주식수 (Class A as-converted 우선)
+        const ni = netIncome[LTM];
+        const dcl =
+          dilSharesF.get(years.at(-1) ?? 0) ?? classALatest(classFacts)?.dilShares ?? null;
+        const sh = dcl ?? sharesHint;
+        if (ni != null && sh) {
+          o[l] = ni / sh;
+          if (dcl == null) approxPerShare = true;
+        }
+        continue;
+      }
+      const y = Number(l.replace("Y", ""));
       // Class A 공시 EPS (실측) — 근사 아님
       const ca = classAEps(classFacts, y, "diluted");
       if (ca != null) {
         o[l] = ca;
         continue;
       }
-      const ni = l === LTM ? netIncome[LTM] : niF.get(y);
       const dcl = dilSharesF.get(y) ?? classAShares(classFacts, y);
       const sh = dcl ?? sharesHint;
-      if (ni != null && sh) {
-        o[l] = ni / sh;
+      if (niF.get(y) != null && sh) {
+        o[l] = niF.get(y)! / sh;
         if (dcl == null) approxPerShare = true;
       }
     }

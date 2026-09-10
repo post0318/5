@@ -40,19 +40,18 @@ export type ClassAFacts = Map<number, ClassAYear>;
  */
 export function needsClassAFacts(facts: CompanyFacts): boolean {
   const g = facts.facts["us-gaap"] ?? {};
-  const dei = facts.facts.dei ?? {};
   const has = (node?: { units?: Record<string, unknown[]> }) =>
     !!node && Object.values(node.units ?? {}).some((a) => Array.isArray(a) && a.length > 0);
-  const hasEps =
-    has(g["EarningsPerShareDiluted"]) ||
-    has(g["EarningsPerShareBasic"]) ||
-    has(g["EarningsPerShareBasicAndDiluted"]);
-  const hasShares =
-    has(g["WeightedAverageNumberOfDilutedSharesOutstanding"]) ||
-    has(g["WeightedAverageNumberOfSharesOutstandingBasic"]) ||
-    has(g["CommonStockSharesOutstanding"]) ||
-    has(dei["EntityCommonStockSharesOutstanding"]);
-  return !hasEps && !hasShares;
+  const hasEps = [
+    "EarningsPerShareDiluted",
+    "EarningsPerShareBasic",
+    "EarningsPerShareBasicAndDiluted",
+    "IncomeLossFromContinuingOperationsPerDilutedShare",
+    "IncomeLossFromContinuingOperationsPerBasicShare",
+  ].some((t) => has(g[t]));
+  // us-gaap 재무를 보고하는데(순이익 존재) EPS 만 통째로 없다 = 클래스별 태깅(Visa)
+  const hasUsGaapNi = has(g["NetIncomeLoss"]) || has(g["ProfitLoss"]);
+  return hasUsGaapNi && !hasEps;
 }
 
 // ── XBRL 인스턴스 파싱 ────────────────────────────────────────────────

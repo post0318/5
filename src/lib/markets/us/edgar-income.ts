@@ -11,7 +11,12 @@ import {
   splitFactorsByYear,
   ttmOf,
 } from "./edgar-series";
-import { classAEps, classAShares, type ClassAFacts } from "./edgar-classfacts";
+import {
+  classAEps,
+  classALatest,
+  classAShares,
+  type ClassAFacts,
+} from "./edgar-classfacts";
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
@@ -259,7 +264,13 @@ export function buildUsIncome(
         r[l] = ca;
         continue;
       }
-      const dcl = wavgShares[l] ?? (quarterly ? null : classAShares(classFacts, yearOf(l)));
+      const dcl =
+        wavgShares[l] ??
+        (quarterly
+          ? null
+          : l === LTM
+            ? (classALatest(classFacts)?.dilShares ?? null)
+            : classAShares(classFacts, yearOf(l)));
       const sh = dcl ?? sharesHint;
       if (netIncome[l] != null && sh) {
         r[l] = netIncome[l]! / sh;
