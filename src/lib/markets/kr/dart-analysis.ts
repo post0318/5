@@ -1,7 +1,6 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem, QuoteBar, TtmFlows } from "../types";
-import { type KrFacts, type KrDaInput, annualSeries, annualSum, daAndAmortSeries } from "./dart-facts";
-import { SHORT_DEBT, LONG_DEBT } from "./dart-balance";
+import { type KrFacts, type KrDaInput, annualSeries, annualSumByPattern, daAndAmortSeries } from "./dart-facts";
 
 /**
  * 한국 분석 지표 — `edgar-analysis.ts` 미러 (섹션·라벨 동일, 개요 요약칩 호환).
@@ -48,7 +47,6 @@ const C = {
   intPaid: { ids: ["ifrs-full_InterestPaidClassifiedAsOperatingActivities"], names: ["이자의 지급"] },
   divPaid: { ids: ["ifrs-full_DividendsPaidClassifiedAsFinancingActivities"], names: ["배당금의지급", "배당금지급"] },
 };
-const DEBT_GROUPS = [...SHORT_DEBT, ...LONG_DEBT];
 
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   let best: number | null = null;
@@ -75,7 +73,7 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
 
   const A = (c: { ids: string[]; names: string[] }, sj?: string | string[]) =>
     annualSeries(facts, c.ids, c.names, sj);
-  const aDebt = annualSum(facts, DEBT_GROUPS, "BS");
+  const aDebt = annualSumByPattern(facts, /차입금|사채|리스부채/, "BS", /리스채권|투자|자산|받을|대여/);
 
   // 연간 시계열 (6개년) → 라벨 맵 (5개년 + LTM)
   const rev0 = A(C.rev, IS);

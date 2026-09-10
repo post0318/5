@@ -1,6 +1,6 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem } from "../types";
-import { type KrFacts, seriesOf, sumOf } from "./dart-facts";
+import { type KrFacts, seriesOf, sumByPattern, sumOf } from "./dart-facts";
 
 /**
  * 한국 상세 재무상태표 — DART `fnlttSinglAcntAll` 정규화 재분류.
@@ -232,7 +232,8 @@ export function buildKrBalance(facts: KrFacts): FinancialStatement {
   });
   const nciEq = val({ ids: ["ifrs-full_NoncontrollingInterests"], names: ["비지배지분"] });
 
-  const debt = sumOf(facts, [...SHORT_DEBT, ...LONG_DEBT], "BS");
+  // 총차입금 = BS 부채 중 차입금·사채·리스부채 전부 (계정명 편차·동명 유동/비유동 대응)
+  const debt = sumByPattern(facts, /차입금|사채|리스부채/, "BS", /리스채권|투자|자산|받을|대여/);
   const cashLike = sumOf(
     facts,
     [

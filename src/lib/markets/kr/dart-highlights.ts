@@ -5,8 +5,7 @@ import type {
   HighlightColumn,
   HighlightRow,
 } from "../us/edgar-highlights";
-import { type KrFacts, annualSeries, annualSum } from "./dart-facts";
-import { SHORT_DEBT, LONG_DEBT } from "./dart-balance";
+import { type KrFacts, annualSeries, annualSumByPattern } from "./dart-facts";
 
 /**
  * 한국 재무 하이라이트 (개요) — `edgar-highlights.ts` 미러.
@@ -33,7 +32,6 @@ const CASH = { ids: ["ifrs-full_CashAndCashEquivalents"], names: ["현금및현�
 const STINV = { ids: ["ifrs-full_ShorttermDepositsNotClassifiedAsCashEquivalents"], names: ["단기금융상품"] };
 const EQUITY = { ids: ["ifrs-full_Equity"], names: ["자본총계"] };
 
-const DEBT_GROUPS = [...SHORT_DEBT, ...LONG_DEBT];
 
 export interface KrHighlightInput {
   facts: KrFacts; // annual
@@ -96,7 +94,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   const aCash = annualSeries(facts, CASH.ids, CASH.names, "BS");
   const aStInv = annualSeries(facts, STINV.ids, STINV.names, "BS");
   const aEquity = annualSeries(facts, EQUITY.ids, EQUITY.names, "BS");
-  const aDebt = annualSum(facts, DEBT_GROUPS, "BS");
+  const aDebt = annualSumByPattern(facts, /차입금|사채|리스부채/, "BS", /리스채권|투자|자산|받을|대여/);
 
   const at = (m: Map<number, number>, y: number): number | null => m.get(y) ?? null;
   const cy = (c: HighlightColumn): number => Number(c.key.replace(/[^0-9]/g, ""));
