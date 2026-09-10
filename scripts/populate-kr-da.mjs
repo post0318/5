@@ -1,9 +1,10 @@
 /**
- * 한국 종목 감가상각비·무형자산상각비(연결)를 DART XBRL 에서 파싱해 MongoDB(kr_da)에 적재.
- * TTM 기준: 직전 사업보고서(연간) + 당기 누적(최신 분기·반기) − 전년 동기 누적.
+ * 한국 종목 감가상각비·무형자산상각비(연결)를 DART 사업보고서 XBRL 에서 파싱해
+ * MongoDB(kr_da)에 연도별로 적재. 하나의 사업보고서 XBRL 은 당기+전기 2개년을 담으므로
+ * 2년 간격으로 3건 조회해 ~6개년을 모은다.
  *
  * OpenDART XBRL 엔드포인트는 클라우드 IP(Vercel)를 차단하므로 로컬/개인 IP 에서 실행.
- * 분기·반기 보고서가 나올 때마다(연 4회) 재실행 권장.
+ * 분기·반기·사업보고서가 나올 때마다 재실행 권장 (야간배치 nightly.mjs 에 포함됨).
  *   node scripts/populate-kr-da.mjs [005930 000660 ...]
  * 인자 없으면 universe_items 의 한국 종목 전체.
  */
@@ -34,25 +35,21 @@ const corpOf = (code) => {
   const row = corpMap.find((r) => (r.s ?? r.stock_code) === d);
   return row ? (row.c ?? row.corp_code) : null;
 };
-
 const jget = (url) => fetch(url).then((r) => r.json());
 
-/** 최근 보고서 접수번호. detailTy: A001 사업 / A002 반기 / A003 분기 */
-async function latestRcp(corp, detailTy) {
-  const now = new Date();
-  const from = `${now.getFullYear() - 1}0101`;
-  const to = `${now.getFullYear()}1231`;
+/** 특정 사업연도 사업보고서 접수번호 (정정본 우선). */
+async function annualRcp(corp, year) {
   const j = await jget(
-    `${B}/list.json?crtfc_key=${DART}&corp_code=${corp}&bgn_de=${from}&end_de=${to}` +
-      `&pblntf_detail_ty=${detailTy}&page_count=100`,
+    `${B}/list.json?crtfc_key=${DART}&corp_code=${corp}` +
+      `&bgn_de=${year + 1}0101&end_de=${year + 1}0930&pblntf_detail_ty=A001&page_count=100`,
   );
-  const list = (j.list ?? []).filter((r) => /보고서/.test(r.report_nm));
-  list.sort((a, b) => b.rcept_no.localeCompare(a.rcept_no));
-  return list[0]?.rcept_no ?? null;
+  const rows = (j.list ?? []).filter((r) => /사업보고서/.test(r.report_nm));
+  rows.sort((a, b) => b.rcept_no.localeCompare(a.rcept_no));
+  return rows[0]?.rcept_no ?? null;
 }
 
-async function loadXbrl(rcpNo, reprtCode) {
-  const res = await fetch(`${B}/fnlttXbrl.xml?crtfc_key=${DART}&rcept_no=${rcpNo}&reprt_code=${reprtCode}`);
+async function loadXbrl(rcpNo) {
+  const res = await fetch(`${B}/fnlttXbrl.xml?crtfc_key=${DART}&rcept_no=${rcpNo}&reprt_code=11011`);
   if (!res.ok) throw new Error(`xbrl ${res.status}`);
   const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
   const name = Object.keys(files).find((n) => n.endsWith(".xbrl"));
@@ -60,102 +57,59 @@ async function loadXbrl(rcpNo, reprtCode) {
   return strFromU8(files[name]);
 }
 
-const CONCEPTS_DEP = ["AdjustmentsForDepreciationExpense", "AdjustmentsForDepreciationAndAmortisationExpense"];
-const CONCEPTS_AMO = ["AdjustmentsForAmortisationExpense"];
+const DEP_C = ["AdjustmentsForDepreciationExpense", "AdjustmentsForDepreciationAndAmortisationExpense"];
+const AMO_C = ["AdjustmentsForAmortisationExpense"];
 
-/** prefix 예: "CFY2025dFY", "CFY2026dHYA", "PFY2025dHYA" */
+function ctxOk(ctx, prefix) {
+  if (!ctx.startsWith(prefix + "_") && ctx !== prefix) return false;
+  if (!ctx.includes("_ConsolidatedMember")) return false;
+  if (/SegmentConsolidationItemsAxis|OperatingSegments|ClassesOfAssets|ClassesOfPropertyPlantAndEquipment|ClassesOfIntangibleAssets/.test(ctx))
+    return false;
+  return /ConsolidatedMember$/.test(ctx) || /ReportedAmountMember$/.test(ctx);
+}
 function pick(xml, concepts, prefix) {
   for (const c of concepts) {
-    const re = new RegExp(`<(?:ifrs-full|dart):${c}\\b[^>]*contextRef="([^"]+)"[^>]*>(-?\\d+)</`, "g");
+    const re = new RegExp(`<(?:ifrs-full|dart):${c}\\b[^>]*contextRef="([^"]+)"[^>]*>(-?\\d+(?:\\.\\d+)?)</`, "g");
     let m;
-    while ((m = re.exec(xml))) {
-      const ctx = m[1];
-      if (!ctx.startsWith(prefix + "_")) continue;
-      if (!ctx.includes("_ConsolidatedMember")) continue;
-      if (/SegmentConsolidationItemsAxis|OperatingSegments|ClassesOfAssets/.test(ctx)) continue;
-      if (/ConsolidatedMember$/.test(ctx) || /ReportedAmountMember$/.test(ctx)) return Number(m[2]);
-    }
+    while ((m = re.exec(xml))) if (ctxOk(m[1], prefix)) return Number(m[2]);
   }
   return null;
 }
 
-/** 최신 당기 누적 컨텍스트 (dFY 제외, 최근 연도). 예: {year:2026, prefix:"CFY2026dHYA"} */
-function currentCum(xml) {
-  const re = /contextRef="CFY(\d{4})d([A-Z0-9]+)_/g;
-  let best = null;
-  let m;
-  while ((m = re.exec(xml))) {
-    if (m[2] === "FY") continue;
-    const year = Number(m[1]);
-    if (!best || year > best.year) best = { year, prefix: `CFY${year}d${m[2]}` };
+/** 한 보고서에서 당기·전기 2개년. */
+function fromReport(xml, year) {
+  const out = {};
+  for (const [y, prefix] of [
+    [year, `CFY${year}dFY`],
+    [year - 1, `PFY${year - 1}dFY`],
+  ]) {
+    const d = pick(xml, DEP_C, prefix);
+    const a = pick(xml, AMO_C, prefix);
+    if (d != null || a != null) out[y] = { depreciation: d, amortisation: a };
   }
-  return best;
+  return out;
 }
 
-async function ttmDA(corp) {
-  const y = new Date().getFullYear();
-  // 1) 직전 사업보고서 (연간)
-  let annualDep = null, annualAmo = null, annualYear = null;
-  for (const yr of [y - 1, y - 2]) {
-    const rcp = await latestRcpForYear(corp, "A001", yr);
+async function daByYear(corp) {
+  const now = new Date();
+  // 최신 확정 사업연도 탐색
+  let latest = 0;
+  for (const y of [now.getFullYear() - 1, now.getFullYear() - 2]) {
+    if (await annualRcp(corp, y)) { latest = y; break; }
+  }
+  if (!latest) return null;
+  const byYear = {};
+  for (let y = latest; y >= latest - 5; y -= 2) {
+    const rcp = await annualRcp(corp, y);
     if (!rcp) continue;
     try {
-      const x = await loadXbrl(rcp, "11011");
-      const d = pick(x, CONCEPTS_DEP, `CFY${yr}dFY`);
-      const a = pick(x, CONCEPTS_AMO, `CFY${yr}dFY`);
-      if (d != null || a != null) { annualDep = d; annualAmo = a; annualYear = yr; break; }
-    } catch {}
-  }
-  if (annualYear == null) return null;
-
-  // 2) 최신 분기·반기 → 당기누적 & 전년동기누적
-  let interimX = null;
-  for (const [ty, rc] of [["A002", "11012"], ["A003", "11014"], ["A003", "11013"]]) {
-    const rcp = await latestRcp(corp, ty);
-    if (!rcp) continue;
-    try {
-      interimX = await loadXbrl(rcp, rc);
-      break;
-    } catch {}
-  }
-
-  // EV/EBITDA 는 연간 기준(PER 과 동일) → 저장값은 최근 사업보고서 연간 D&A.
-  // 분기·반기 XBRL 로 TTM 도 함께 계산해 참고 필드로 보관.
-  let ttmDep = null, ttmAmo = null, ttmLabel = null;
-  const cur = interimX ? currentCum(interimX) : null;
-  if (cur && cur.year >= annualYear && annualDep != null) {
-    const priorP = cur.prefix.replace(`CFY${cur.year}`, `PFY${cur.year - 1}`);
-    const curD = pick(interimX, CONCEPTS_DEP, cur.prefix);
-    const priD = pick(interimX, CONCEPTS_DEP, priorP);
-    const curA = pick(interimX, CONCEPTS_AMO, cur.prefix);
-    const priA = pick(interimX, CONCEPTS_AMO, priorP);
-    if (curD != null && priD != null) {
-      ttmDep = annualDep + curD - priD;
-      ttmAmo = annualAmo != null && curA != null && priA != null ? annualAmo + curA - priA : null;
-      ttmLabel = `FY${annualYear} + ${cur.year}${cur.prefix.replace(/^CFY\d+d/, "")} − ${cur.year - 1}동기`;
+      const part = fromReport(await loadXbrl(rcp), y);
+      for (const [k, v] of Object.entries(part)) if (!(k in byYear)) byYear[k] = v;
+    } catch (e) {
+      console.log(`    (${y} 보고서 실패: ${e.message})`);
     }
   }
-  return {
-    year: annualYear,
-    depreciation: annualDep,
-    amortisation: annualAmo,
-    basis: "annual",
-    label: `FY${annualYear}`,
-    ttmDepreciation: ttmDep,
-    ttmAmortisation: ttmAmo,
-    ttmLabel,
-  };
-}
-
-/** 특정 연도의 사업보고서 접수번호 */
-async function latestRcpForYear(corp, detailTy, year) {
-  const j = await jget(
-    `${B}/list.json?crtfc_key=${DART}&corp_code=${corp}` +
-      `&bgn_de=${year + 1}0101&end_de=${year + 1}0930&pblntf_detail_ty=${detailTy}&page_count=100`,
-  );
-  const list = (j.list ?? []).filter((r) => /사업보고서/.test(r.report_nm));
-  list.sort((a, b) => b.rcept_no.localeCompare(a.rcept_no));
-  return list[0]?.rcept_no ?? null;
+  return Object.keys(byYear).length ? byYear : null;
 }
 
 const cli = new MongoClient(URI);
@@ -170,15 +124,17 @@ const t = (n) => (n == null ? "-" : (n / 1e12).toFixed(2) + "조");
 for (const sym of symbols) {
   const corp = corpOf(sym);
   if (!corp) { console.log(`  ${sym}: corp_code 없음`); continue; }
-  let da = null;
-  try { da = await ttmDA(corp); } catch (e) { console.log(`  ${sym}: ${e.message}`); }
-  if (!da || (da.depreciation == null && da.amortisation == null)) { console.log(`  ${sym}: D&A 없음`); continue; }
+  let byYear = null;
+  try { byYear = await daByYear(corp); } catch (e) { console.log(`  ${sym}: ${e.message}`); }
+  if (!byYear) { console.log(`  ${sym}: D&A 없음`); continue; }
   await db.collection("kr_da").replaceOne(
     { _id: sym },
-    { _id: sym, ...da, updatedAt: new Date().toISOString() },
+    { _id: sym, byYear, updatedAt: new Date().toISOString() },
     { upsert: true },
   );
-  console.log(`  ${sym} [${da.basis}] 감가 ${t(da.depreciation)} / 무형 ${t(da.amortisation)}  (${da.label})`);
+  const yrs = Object.keys(byYear).map(Number).sort((a, b) => b - a);
+  const y = yrs[0];
+  console.log(`  ${sym}  ${yrs.length}개년 (${yrs.at(-1)}~${y})  최근: 감가 ${t(byYear[y].depreciation)} / 무형 ${t(byYear[y].amortisation)}`);
 }
 await cli.close();
 console.log("완료");

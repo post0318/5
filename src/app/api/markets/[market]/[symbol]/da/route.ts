@@ -21,19 +21,22 @@ export async function GET(
   const sym = getAdapter("kr").normalizeSymbol(decodeURIComponent(symbol));
 
   const doc = await getKrDaDoc(sym);
-  if (doc) {
+  if (doc?.byYear && Object.keys(doc.byYear).length) {
+    const yrs = Object.keys(doc.byYear).map(Number).sort((a, b) => b - a);
+    const latest = doc.byYear[yrs[0]];
     return ok(
-      { da: { year: doc.year, depreciation: doc.depreciation, amortisation: doc.amortisation } },
+      { da: { year: yrs[0], depreciation: latest.depreciation, amortisation: latest.amortisation, byYear: doc.byYear } },
       { headers: { "Cache-Control": "public, s-maxage=604800, stale-while-revalidate=86400" } },
     );
   }
 
   const fy = new Date().getFullYear() - 1;
-  const da = await fetchKrDA(sym, fy)
-    .then((r) => r ?? fetchKrDA(sym, fy - 1))
-    .catch(() => null);
+  const r = await fetchKrDA(sym, fy).catch(() => null);
+  if (!r) return ok({ da: null });
+  const yrs = Object.keys(r.byYear).map(Number).sort((a, b) => b - a);
+  const latest = r.byYear[yrs[0]];
   return ok(
-    { da },
+    { da: { year: yrs[0], depreciation: latest.depreciation, amortisation: latest.amortisation, byYear: r.byYear } },
     { headers: { "Cache-Control": "public, s-maxage=86400, stale-while-revalidate=86400" } },
   );
 }
