@@ -75,7 +75,7 @@ npm run db:studio    # drizzle studio
 | L2 EOD 시세 | Stooq (주), `yahoo-finance2` (보조). 한국 부족 시 공공데이터포털/KRX 폴백 | 인앱 |
 | L3 트레일링 멀티플 | 자체 계산 (L1+L2) | 인앱 |
 | L4 포워드 컨센서스 | `yahoo-finance2` `quoteSummary` (개인용) + 딥링크 병행 | 인앱 + 딥링크 |
-| L5 뉴스 | `yahoo-finance2` `search` / 규제기관 공시 + 딥링크 | 인앱 목록 + 딥링크 |
+| L5 뉴스 | `yahoo-finance2` `search` / 규제기관 공시 + 딥링크 / Google 뉴스 RSS(제목·출처·링크, 무료 번역) | 인앱 목록 + 딥링크 |
 
 - **크롤링은 어떤 시나리오에서도 금지**: FnGuide(`robots.txt Disallow: /`),
   stockanalysis·MarketScreener(ToS) → 딥링크만.
@@ -88,6 +88,11 @@ npm run db:studio    # drizzle studio
       상황). 오너가 "개인용·하루 1회·단일 소형 페이지" 조건으로 예외 승인.
       **빈번한 폴링 금지.**
     - 앱 배포본에는 크롤링 코드가 없다. 이 스크립트는 로컬 도구.
+- **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
+  공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
+  구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로
+  한국어 번역한다. LLM 요약 없음(비용·본문 소스 미확보로 보류). `post0318/4`
+  프로젝트의 `src/lib/server/{brazilNews,translate}.ts` 와 동일 패턴을 이식.
 - `yahoo-finance2` / yfinance / Finnhub·FMP·Polygon 무료 = **개인용 한정.**
   팀/대외 확장 시 인앱 중단 → 딥링크 또는 정식 라이선스 (prd.md §4.3).
 - L1(공식 API)·L3(자체 계산)은 모든 시나리오에서 안전.
