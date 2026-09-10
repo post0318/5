@@ -2,6 +2,7 @@ import "server-only";
 import type { MarketId } from "@/lib/markets/types";
 import { getStockOverview } from "@/lib/markets/service";
 import { fetchKrForeignOwnership, fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
+import { computeKrOverviewMetrics } from "@/lib/markets/kr/overview-metrics";
 import { listUniverse } from "@/lib/universe/repo";
 import type { UniverseItem } from "@/lib/db/schema";
 import {
@@ -26,19 +27,20 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
     updatedAt: new Date().toISOString(),
   };
   try {
-    const [ov, foreign, krCons] = await Promise.all([
+    const isKr = item.market === "kr";
+    const [ov, foreign, krCons, krMetrics] = await Promise.all([
       getStockOverview(item.market as MarketId, item.symbol, item.yahooSymbol, {
         skipQuarterly: true,
+        // 한국은 아래 dart-facts 기반 경로로 대체 — adapter.getFinancials(rowsToStatement)
+        // 왕복을 줄인다 (multiples.ts 문자열 매칭은 계정명 편차로 구멍이 많았음)
+        skipFinancials: isKr,
       }),
-      item.market === "kr"
-        ? fetchKrForeignOwnership(item.symbol).catch(() => null)
-        : Promise.resolve(null),
-      item.market === "kr"
-        ? fetchKrNaverConsensus(item.symbol).catch(() => null)
-        : Promise.resolve(null),
+      isKr ? fetchKrForeignOwnership(item.symbol).catch(() => null) : Promise.resolve(null),
+      isKr ? fetchKrNaverConsensus(item.symbol).catch(() => null) : Promise.resolve(null),
+      isKr ? computeKrOverviewMetrics(item.symbol).catch(() => null) : Promise.resolve(null),
     ]);
     const inp = ov.multiples?.inputs;
-    const rev = inp?.revenueAnnual ?? null;
+    const rev = isKr ? (krMetrics?.revenueAnnual ?? null) : (inp?.revenueAnnual ?? null);
     const margin = (n: number | null | undefined) => (n != null && rev ? n / rev : null);
     return {
       ...base,
@@ -46,20 +48,20 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       last: ov.quote?.last ?? null,
       changePct: ov.quote?.changePct ?? null,
       currency: ov.quote?.currency ?? null,
-      per: ov.multiples?.per ?? null,
-      perTtm: ov.multiples?.perTtm ?? null,
+      per: isKr ? null : (ov.multiples?.per ?? null),
+      perTtm: isKr ? (krMetrics?.perTtm ?? null) : (ov.multiples?.perTtm ?? null),
       estPer:
         item.market === "kr"
           ? krCons?.estPer ?? null
           : ov.consensus?.forwardPer ?? null,
-      pbr: ov.multiples?.pbr ?? null,
+      pbr: isKr ? (krMetrics?.pbr ?? null) : (ov.multiples?.pbr ?? null),
       forwardPer: ov.consensus?.forwardPer ?? null,
       targetMeanPrice: ov.consensus?.targetMeanPrice ?? null,
       recommendationKey: ov.consensus?.recommendationKey ?? null,
-      marketCap: ov.multiples?.marketCap ?? null,
+      marketCap: isKr ? (krMetrics?.marketCap ?? null) : (ov.multiples?.marketCap ?? null),
       revenueAnnual: rev,
-      opMargin: margin(inp?.opIncomeAnnual),
-      netMargin: margin(inp?.netIncomeAnnual),
+      opMargin: isKr ? (krMetrics?.opMargin ?? null) : margin(inp?.opIncomeAnnual),
+      netMargin: isKr ? (krMetrics?.netMargin ?? null) : margin(inp?.netIncomeAnnual),
       foreignRatio: foreign?.ratio ?? null,
       foreignRatioAsOf: foreign?.asOf ?? null,
       warnings: ov.warnings,
