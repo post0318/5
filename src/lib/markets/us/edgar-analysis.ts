@@ -17,6 +17,8 @@ import {
 import {
   classAEps,
   classALatest,
+  classAOutstanding,
+  classAOutstandingLatest,
   classAShares,
   type ClassAFacts,
 } from "./edgar-classfacts";
@@ -434,7 +436,17 @@ export function buildUsAnalysis(
     }
     return o;
   })();
-  const sharesEnd = stock(["CommonStockSharesOutstanding"]);
+  // 기말 발행주식수 (unit="shares"). instantByYear = 최신 종료일·동률이면 최신
+  // 공시(액면분할 소급 재작성본) 우선 → AMZN·GOOG 분할 전 잔존 태그 회피.
+  const sharesEndByYear = instantByYear(
+    entriesOf(facts, "CommonStockSharesOutstanding", "shares"),
+  );
+  const sharesEnd = (() => {
+    const o = blank();
+    for (const y of years) o[`${y}Y`] = sharesEndByYear.get(y) ?? null;
+    o[LTM] = latestInstant(entriesOf(facts, "CommonStockSharesOutstanding", "shares"));
+    return o;
+  })();
   // 이중 클래스(메타 등)는 기말 발행주식수를 클래스별로만 태깅 → undimensioned 값 없음.
   // 가중평균 희석주식수(연간)로 대체해 시총·PBR·EV 를 근사.
   const wavgDil = fullAnnual(["WeightedAverageNumberOfDilutedSharesOutstanding"], "shares");

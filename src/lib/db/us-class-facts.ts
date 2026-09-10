@@ -17,6 +17,7 @@ export interface UsClassFactsDoc {
   epsBasic: number | null;
   dilShares: number | null;
   basicShares: number | null;
+  sharesOutstanding: number | null;
   sourceAccn: string;
   updatedAt: string;
 }
@@ -44,6 +45,7 @@ export async function getClassAFactsFromDb(cik: string | number): Promise<ClassA
         epsBasic: d.epsBasic,
         dilShares: d.dilShares,
         basicShares: d.basicShares,
+        sharesOutstanding: d.sharesOutstanding ?? null,
         sourceAccn: d.sourceAccn,
       };
       out.set(d.fy, y);
@@ -74,6 +76,7 @@ export async function saveClassAFactsToDb(
           epsBasic: y.epsBasic,
           dilShares: y.dilShares,
           basicShares: y.basicShares,
+          sharesOutstanding: y.sharesOutstanding,
           sourceAccn: y.sourceAccn,
           updatedAt: now,
         },

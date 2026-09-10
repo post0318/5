@@ -138,6 +138,62 @@ const EPS_BASIC_TAGS = ["EarningsPerShareBasic", "EarningsPerShareBasicAndDilute
 const DIL_SHARE_TAGS = ["WeightedAverageNumberOfDilutedSharesOutstanding"];
 const BASIC_SHARE_TAGS = ["WeightedAverageNumberOfSharesOutstandingBasic"];
 
+/**
+ * 기말 유통주식수 (instant) — 전 클래스 합.
+ * Visa 는 `StatementEquityComponentsAxis=CommonStockIncludingAdditionalPaidInCapital`
+ * 차원에 전 클래스 합계를 태깅한다. 없으면 클래스별 `CommonStockSharesOutstanding`
+ * 집계 멤버(A / B / B1AndB2 / C)를 합산.
+ */
+function instantSharesOutstanding(
+  xml: string,
+  ctxs: Map<string, Ctx>,
+): Map<number, { end: string; val: number }> {
+  const re = /<us-gaap:CommonStockSharesOutstanding\b([^>]*)>([^<]+)<\/us-gaap:CommonStockSharesOutstanding>/g;
+  // fy → { total?: number; classSum: Map<memberLocal, val>; end }
+  const acc = new Map<number, { end: string; total?: number; parts: Map<string, number> }>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml))) {
+    const cref = /contextRef="([^"]+)"/.exec(m[1])?.[1];
+    if (!cref) continue;
+    const ctx = ctxs.get(cref);
+    if (!ctx || !ctx.end || ctx.start) continue; // instant 만
+    const val = Number(m[2].trim());
+    if (!Number.isFinite(val)) continue;
+    const fy = Number(ctx.end.slice(0, 4));
+    const cur = acc.get(fy) ?? { end: ctx.end, parts: new Map<string, number>() };
+    const equityDim = ctx.dims.find(([axis]) => axis === "StatementEquityComponentsAxis");
+    const classDim = ctx.dims.find(([axis]) => axis === "StatementClassOfStockAxis");
+    if (
+      ctx.dims.length === 1 &&
+      equityDim &&
+      /CommonStockIncludingAdditionalPaidInCapital/i.test(equityDim[1])
+    ) {
+      cur.total = val;
+    } else if (ctx.dims.length === 1 && classDim) {
+      const mem = classDim[1].replace(/Member$/, "");
+      if (/^Common(Stock)?Class([ABC]|B1AndB2|B[12])$/i.test(mem)) cur.parts.set(mem, val);
+    }
+    acc.set(fy, cur);
+  }
+  const out = new Map<number, { end: string; val: number }>();
+  for (const [fy, a] of acc) {
+    let total = a.total ?? null;
+    if (total == null && a.parts.size) {
+      // 집계 멤버만 합산 (B1AndB2 있으면 B1·B2 제외)
+      const keys = [...a.parts.keys()];
+      const hasB1AndB2 = keys.some((k) => /B1AndB2$/i.test(k));
+      let sum = 0;
+      for (const [k, v] of a.parts) {
+        if (hasB1AndB2 && /B[12]$/i.test(k)) continue;
+        sum += v;
+      }
+      total = sum > 0 ? sum : null;
+    }
+    if (total != null) out.set(fy, { end: a.end, val: total });
+  }
+  return out;
+}
+
 function pick(xml: string, ctxs: Map<string, Ctx>, tags: string[]): Map<number, number> {
   // 태그 우선순위대로, 없는 연도만 다음 태그로 보충
   const out = new Map<number, number>();
@@ -156,16 +212,24 @@ function parseInstance(xml: string, accn: string): ClassAYear[] {
   const endByFy = new Map<number, string>();
   for (const t of [...EPS_DIL_TAGS, ...DIL_SHARE_TAGS])
     for (const f of facts(xml, ctxs, t)) if (!endByFy.has(f.fy)) endByFy.set(f.fy, f.end);
-  const years = new Set([...epsD.keys(), ...epsB.keys(), ...shD.keys(), ...shB.keys()]);
+  const shOut = instantSharesOutstanding(xml, ctxs);
+  const years = new Set([
+    ...epsD.keys(),
+    ...epsB.keys(),
+    ...shD.keys(),
+    ...shB.keys(),
+    ...shOut.keys(),
+  ]);
   const out: ClassAYear[] = [];
   for (const fy of years) {
     out.push({
       fy,
-      endDate: endByFy.get(fy) ?? `${fy}-12-31`,
+      endDate: endByFy.get(fy) ?? shOut.get(fy)?.end ?? `${fy}-12-31`,
       epsDiluted: epsD.get(fy) ?? null,
       epsBasic: epsB.get(fy) ?? null,
       dilShares: shD.get(fy) ?? null,
       basicShares: shB.get(fy) ?? null,
+      sharesOutstanding: shOut.get(fy)?.val ?? null,
       sourceAccn: accn,
     });
   }
@@ -260,6 +324,7 @@ export async function fetchClassAFacts(cik: string | number, maxFilings = 4): Pr
             epsBasic: prev.epsBasic ?? y.epsBasic,
             dilShares: prev.dilShares ?? y.dilShares,
             basicShares: prev.basicShares ?? y.basicShares,
+            sharesOutstanding: prev.sharesOutstanding ?? y.sharesOutstanding,
           });
         }
       }
@@ -293,4 +358,18 @@ export function classAShares(
 export function classALatest(cf: ClassAFacts | null | undefined): ClassAYear | null {
   if (!cf || cf.size === 0) return null;
   return [...cf.values()].sort((a, b) => b.fy - a.fy)[0];
+}
+
+/** 회계연도 기말 유통주식수 (전 클래스 as-converted 합) — 시총·PBR·PSR 분모용. */
+export function classAOutstanding(
+  cf: ClassAFacts | null | undefined,
+  year: number,
+): number | null {
+  return cf?.get(year)?.sharesOutstanding ?? null;
+}
+
+/** 가장 최근 회계연도 기말 유통주식수. */
+export function classAOutstandingLatest(cf: ClassAFacts | null | undefined): number | null {
+  const y = classALatest(cf);
+  return y?.sharesOutstanding ?? null;
 }

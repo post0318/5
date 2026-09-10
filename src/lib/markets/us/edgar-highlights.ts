@@ -13,6 +13,7 @@ import { splitFactorsByYear } from "./edgar-series";
 import {
   classAEps,
   classALatest,
+  classAOutstanding,
   classAShares,
   type ClassAFacts,
 } from "./edgar-classfacts";
@@ -429,8 +430,10 @@ export function buildUsHighlights(
       ? (instantAt(sharesDeiE, priceDate, SS) ??
         instantAt(sharesEndE, priceDate, SS) ??
         instantAt(sharesDeiE, asOf, SS) ??
+        classALatest(cf)?.sharesOutstanding ??
         latestWavgShares())
       : (instantAt(sharesEndE, asOf, SS) ??
+        classAOutstanding(cf, Number(col.key.slice(2))) ??
         instantAt(sharesDeiE, asOf, SS) ??
         wavgSharesAt(Number(col.key.slice(2))));
     const shares = disclosed ?? (fallbackShares ?? null);
@@ -505,6 +508,7 @@ export function buildUsHighlights(
   const currentShares =
     instantAt(sharesDeiE, priceDate, 550) ??
     instantAt(sharesEndE, priceDate, 550) ??
+    classALatest(cf)?.sharesOutstanding ??
     latestWavgShares() ??
     (fallbackShares ?? null);
   const netIncome = columns.map((col) => {
