@@ -203,8 +203,10 @@ export function buildUsIncome(
   const sga = val(SGA);
   const rnd = val(RND);
   const opex = val(OPEX);
+  const pretax = val(PRETAX);
   // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 공시 태그,
-  // 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등)
+  // 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등), 그래도 없으면 세전이익으로
+  // 근사(XOM 등 영업이익 태그 자체가 없는 회사 — 비영업 손익 포함될 수 있음)
   const opIncome = (() => {
     if (isFin) {
       const o = blank();
@@ -213,9 +215,14 @@ export function buildUsIncome(
       return o;
     }
     const o = val(OP_INCOME);
-    for (const l of labels)
-      if (o[l] == null && grossProfit[l] != null && (sga[l] != null || rnd[l] != null))
+    for (const l of labels) {
+      if (o[l] != null) continue;
+      if (grossProfit[l] != null && (sga[l] != null || rnd[l] != null)) {
         o[l] = Math.round(grossProfit[l]! - (sga[l] ?? 0) - (rnd[l] ?? 0));
+        continue;
+      }
+      if (pretax[l] != null) o[l] = pretax[l];
+    }
     return o;
   })();
   // 기타 영업비용 = OPEX − SGA − RND, 없으면 GrossProfit − OpIncome − SGA − RND
@@ -225,7 +232,6 @@ export function buildUsIncome(
       : diff(grossProfit, opIncome);
     return diff(base, sga, rnd);
   })();
-  const pretax = val(PRETAX);
   // (−)영업외손익 = 세전이익 − 영업이익 (부호 반전). 워터폴 정합을 위해 항상 이 정의 우선.
   // NonoperatingIncomeExpense 태그는 일부 항목만 담는 기업(IBM 등)이 많아 사용 안 함.
   const nonOpLoss = (() => {

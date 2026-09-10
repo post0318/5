@@ -105,8 +105,9 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
     lines: [
       {
         label: "매입채무",
-        concepts: ["AccountsPayableCurrent"],
-        fallback: ["AccountsPayableCurrentAndNoncurrent"], // 유동/비유동 미분류 회사(AXP 등)
+        concepts: ["AccountsPayableCurrent", "AccountsPayableTradeCurrent"],
+        // 유동/비유동 미분류 회사(AXP 등) 또는 매입채무·미지급비용 통합 태깅 회사(XOM 등)
+        fallback: ["AccountsPayableCurrentAndNoncurrent", "AccountsPayableAndAccruedLiabilitiesCurrent"],
         depth: 1,
       },
       {

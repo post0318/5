@@ -69,6 +69,13 @@ const DA_CONCEPTS = [
   "DepreciationAmortizationAndAccretionNet",
   "DepreciationAndAmortization",
 ];
+// 영업이익 태그 자체가 없는 회사(XOM 등 — 매출→세전이익 구조) 최후 폴백.
+const PRETAX_CONCEPTS = [
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesAndExtraordinaryItemsNoncontrollingInterest",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndEquityMethodInvestments",
+];
 const CAPEX_CONCEPTS = [
   "PaymentsToAcquirePropertyPlantAndEquipment",
   "PaymentsToAcquireProductiveAssets",
@@ -288,15 +295,26 @@ export function buildUsHighlights(
   const gpS = annualSeries(unitEntries(facts, "GrossProfit", "USD"));
   const sgaS = annualSeriesMerged(facts, SGA_C);
   const rndS = annualSeries(unitEntries(facts, "ResearchAndDevelopmentExpense", "USD"));
+  let usedPretaxAsOpIncome = false;
   const opIncS = (() => {
     const direct = annualSeries(unitEntries(facts, "OperatingIncomeLoss", "USD"));
-    if (direct.length) return direct;
     // 파생: 매출총이익 − 판관비 − 연구개발비 (IBM 등)
-    return gpS.map((g) => ({
-      year: g.year,
-      end: g.end,
-      val: g.val - (annualAt(sgaS, g.year) ?? 0) - (annualAt(rndS, g.year) ?? 0),
-    }));
+    const withDerived = direct.length
+      ? direct
+      : gpS.map((g) => ({
+          year: g.year,
+          end: g.end,
+          val: g.val - (annualAt(sgaS, g.year) ?? 0) - (annualAt(rndS, g.year) ?? 0),
+        }));
+    // 그래도 못 구한 연도는 세전이익으로 근사 (XOM 등 영업이익 태그 자체가 없는 회사)
+    const pretaxS = annualSeriesMerged(facts, PRETAX_CONCEPTS);
+    const byYear = new Map(withDerived.map((s) => [s.year, s]));
+    for (const p of pretaxS)
+      if (!byYear.has(p.year)) {
+        byYear.set(p.year, p);
+        usedPretaxAsOpIncome = true;
+      }
+    return [...byYear.values()].sort((a, b) => a.year - b.year);
   })();
   const daS = (() => {
     const direct = annualSeriesMerged(facts, DA_CONCEPTS);
@@ -329,6 +347,7 @@ export function buildUsHighlights(
     revenue: concat(REVENUE),
     grossProfit: unitEntries(facts, "GrossProfit", "USD"),
     opIncome: unitEntries(facts, "OperatingIncomeLoss", "USD"),
+    pretax: concat(PRETAX_CONCEPTS),
     da: concat(DA_CONCEPTS),
     netIncome: concat(["NetIncomeLoss","ProfitLoss","NetIncomeLossAvailableToCommonStockholdersBasic"]),
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
@@ -496,6 +515,11 @@ export function buildUsHighlights(
             (ttm(concat(SGA_C)) ?? 0) -
             (ttm(concat(["ResearchAndDevelopmentExpense"])) ?? 0);
       }
+      // 영업이익 태그 자체가 없는 회사(XOM 등) 최후 폴백
+      if (oi == null) {
+        oi = ttm(E.pretax);
+        if (oi != null) usedPretaxAsOpIncome = true;
+      }
       let d = ttm(E.da);
       if (d == null)
         d =
@@ -629,6 +653,8 @@ export function buildUsHighlights(
   if (estCols.length)
     notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
   notes.push("EBITDA = 보고 영업이익 + 감가상각비·무형자산상각비 (블룸버그 '조정'과 다를 수 있음)");
+  if (usedPretaxAsOpIncome)
+    notes.push("영업이익 태그가 없는 회사(XOM 등) — 세전이익으로 근사(비영업 손익 포함 가능)");
   if (approxPerShare)
     notes.push(
       "EPS·시가총액·PER·PBR: 발행주식수를 클래스별로만 공시(Visa 등) → 현재 주식수(시총÷주가) 기준 근사",
