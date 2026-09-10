@@ -1,7 +1,7 @@
 import { jsonError, ok } from "@/lib/api";
 import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
-import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
+import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
 import { buildUsCashFlow } from "@/lib/markets/us/edgar-cashflow";
 import { buildUsIncome } from "@/lib/markets/us/edgar-income";
@@ -112,7 +112,7 @@ export async function GET(
       const needsShares =
         detailView === "analysis" || detailView === "is" || detailView === "summary";
       const { cik, facts } = await fetchUsCompanyFacts(sym);
-      const [quote, consensus, classFacts] = await Promise.all([
+      const [quote, consensus, classFacts, sic] = await Promise.all([
         needsShares
           ? getEodQuote("us", sym, { yahooOverride: yahoo }).catch(() => null)
           : Promise.resolve(null),
@@ -122,6 +122,7 @@ export async function GET(
         needsShares
           ? loadClassAFacts(cik, facts).catch(() => null)
           : Promise.resolve(null),
+        fetchUsSic(sym).catch(() => null),
       ]);
       // 현재 발행주식수 근사(클래스별로만 공시하는 Visa 등의 EPS·PBR 계산용):
       // 시가총액÷주가(전 클래스 경제적 주식수) 우선, 없으면 yahoo sharesOutstanding.
@@ -135,12 +136,12 @@ export async function GET(
         detailView === "cf"
           ? buildUsCashFlow(facts, period)
           : detailView === "is"
-            ? buildUsIncome(facts, period, { sharesHint, classFacts })
+            ? buildUsIncome(facts, period, { sharesHint, classFacts, sic })
             : detailView === "bs"
               ? buildUsBalance(facts, period)
               : detailView === "summary"
-                ? buildUsSummary(facts, period, { sharesHint, classFacts })
-                : buildUsAnalysis(facts, quote?.bars ?? [], { sharesHint, classFacts });
+                ? buildUsSummary(facts, period, { sharesHint, classFacts, sic })
+                : buildUsAnalysis(facts, quote?.bars ?? [], { sharesHint, classFacts, sic });
       stmt.symbol = sym;
       return ok(stmt, {
         headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },

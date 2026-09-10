@@ -14,9 +14,13 @@ import type { ClassAFacts } from "./edgar-classfacts";
 export function buildUsSummary(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
-  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null } = {},
+  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null; sic?: string | null } = {},
 ): FinancialStatement {
   const is = buildUsIncome(facts, mode, opts);
+  // 금융회사(은행·카드사)는 IS 상세표가 "매출액" 대신 "순수익" 행을 쓴다 — 라벨 맞춰 조회.
+  const isFin = is.sections[0]?.items.some((it) => it.accountName === "순수익") ?? false;
+  const revLabel = isFin ? "순수익" : "매출액";
+  const opCostLabel = isFin ? "총이자외비용+대손충당금" : "영업비용";
   const bs = buildUsBalance(facts, mode);
   const cf = buildUsCashFlow(facts, mode);
 
@@ -58,9 +62,9 @@ export function buildUsSummary(
     values,
   });
 
-  // ── 손익계산서: 매출액 / 영업비용 / 영업이익 / 당기순이익 ──
-  const isr = rowsFrom(is, ["매출액", "영업이익", "당기순이익"]);
-  const rev = isr.get("매출액");
+  // ── 손익계산서: 매출액(순수익) / 영업비용 / 영업이익 / 당기순이익 ──
+  const isr = rowsFrom(is, [revLabel, "영업이익", "당기순이익"]);
+  const rev = isr.get(revLabel);
   const op = isr.get("영업이익");
   const ni = isr.get("당기순이익");
   const opCost: Record<string, number | null> = {};
@@ -70,8 +74,8 @@ export function buildUsSummary(
     opCost[tl] = r != null && o != null ? Math.round(r - o) : null;
   }
   const isItems: FinancialLineItem[] = [];
-  if (rev) isItems.push(mkItem("매출액", rev, "sum:is:rev"));
-  isItems.push(mkItem("영업비용", opCost, "sum:is:opcost"));
+  if (rev) isItems.push(mkItem(revLabel, rev, "sum:is:rev"));
+  isItems.push(mkItem(opCostLabel, opCost, "sum:is:opcost"));
   if (op) isItems.push(mkItem("영업이익", op, "sum:is:op"));
   if (ni) isItems.push(mkItem("당기순이익", ni, "sum:is:ni"));
 

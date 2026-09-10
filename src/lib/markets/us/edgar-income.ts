@@ -17,6 +17,12 @@ import {
   classAShares,
   type ClassAFacts,
 } from "./edgar-classfacts";
+import {
+  FIN_NET_REVENUE,
+  FIN_NONINTEREST_EXPENSE,
+  FIN_PROVISION,
+  isFinancialCompany,
+} from "./edgar-financial";
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
@@ -73,11 +79,14 @@ const fyKey = (y: number) => `${y}Y`;
 export function buildUsIncome(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
-  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null } = {},
+  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null; sic?: string | null } = {},
 ): FinancialStatement {
   const quarterly = mode === "quarter";
   const sharesHint = opts.sharesHint ?? null;
   const classFacts = opts.classFacts ?? null;
+  // 금융회사(은행·카드사) — 매출 대신 순수익(이자비용 차감), 매출총이익 대신 충당금전이익.
+  const isFin = isFinancialCompany(facts, opts.sic ?? null);
+  const revConcepts = isFin ? FIN_NET_REVENUE : REVENUE;
 
   // 개념 태그가 시기별로 바뀌는 기업(NVIDIA 등) → 나열 개념을 연도별로 병합
   const mergedAnnual = (concepts: string[], unit = "USD"): Map<number, number> => {
@@ -92,10 +101,10 @@ export function buildUsIncome(
       for (const [y, d] of annualEnds(entriesOf(facts, c))) if (!out.has(y)) out.set(y, d);
     return out;
   };
-  const allRevEntries = REVENUE.flatMap((c) => entriesOf(facts, c));
+  const allRevEntries = revConcepts.flatMap((c) => entriesOf(facts, c));
 
-  const years = [...mergedAnnual(REVENUE).keys()].sort((a, b) => a - b).slice(-5);
-  const ends = mergedEnds(REVENUE);
+  const years = [...mergedAnnual(revConcepts).keys()].sort((a, b) => a - b).slice(-5);
+  const ends = mergedEnds(revConcepts);
   const lastFy = years[years.length - 1] ?? new Date().getFullYear();
   // 6개 확보 → 가장 오래된 1개는 YTD 차감용 prev 로만 쓰고 표시는 5개
   const qCols = quarterly ? [...recentQuarters(allRevEntries, 6)].reverse() : [];
@@ -173,9 +182,19 @@ export function buildUsIncome(
     return out;
   };
 
-  const revenue = val(REVENUE);
+  const revenue = val(revConcepts);
   const cogs = val(COGS);
+  // 금융회사: 매출총이익 대신 충당금전이익(=순수익 − 총이자외비용), 대손충당금 별도.
+  const finNoninterestExpense = val(FIN_NONINTEREST_EXPENSE);
+  const finProvision = val(FIN_PROVISION);
   const grossProfit = (() => {
+    if (isFin) {
+      const g = blank();
+      for (const l of labels)
+        if (revenue[l] != null && finNoninterestExpense[l] != null)
+          g[l] = revenue[l]! - finNoninterestExpense[l]!;
+      return g;
+    }
     const g = val(["GrossProfit"]);
     for (const l of labels)
       if (g[l] == null && revenue[l] != null && cogs[l] != null) g[l] = revenue[l]! - cogs[l]!;
@@ -184,8 +203,15 @@ export function buildUsIncome(
   const sga = val(SGA);
   const rnd = val(RND);
   const opex = val(OPEX);
-  // 영업이익: 공시 태그 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등)
+  // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 공시 태그,
+  // 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등)
   const opIncome = (() => {
+    if (isFin) {
+      const o = blank();
+      for (const l of labels)
+        if (grossProfit[l] != null) o[l] = Math.round(grossProfit[l]! - (finProvision[l] ?? 0));
+      return o;
+    }
     const o = val(OP_INCOME);
     for (const l of labels)
       if (o[l] == null && grossProfit[l] != null && (sga[l] != null || rnd[l] != null))
@@ -211,13 +237,17 @@ export function buildUsIncome(
     }
     return out;
   })();
-  // 순이자손익(−) = 이자비용 − 이자수익 (양수 = 순이자 부담, 음수 = 순이자 이익)
+  // 순이자손익(−) = 이자비용 − 이자수익 (양수 = 순이자 부담, 음수 = 순이자 이익).
+  // 금융회사는 이자비용이 이미 순수익(매출)에 반영된 영업비용이라 영업외손익 하위
+  // 각주로 표시하지 않는다(이중계상 오인 방지).
   const intInc = val(INT_INC);
   const intExp = val(INT_EXP);
   const netIntCost = blank();
-  for (const l of labels) {
-    if (intExp[l] == null && intInc[l] == null) continue;
-    netIntCost[l] = (intExp[l] ?? 0) - (intInc[l] ?? 0);
+  if (!isFin) {
+    for (const l of labels) {
+      if (intExp[l] == null && intInc[l] == null) continue;
+      netIntCost[l] = (intExp[l] ?? 0) - (intInc[l] ?? 0);
+    }
   }
   // 최근 데이터가 없으면(예: 회사가 이자 항목 별도 표시 중단) LTM 공란
   const recentIso = new Date(Date.now() - 500 * 864e5).toISOString().slice(0, 10);
@@ -225,7 +255,7 @@ export function buildUsIncome(
     firstConcept(facts, [c]).some((e) => e.end >= recentIso),
   );
   if (!intFresh && LTM in netIntCost) netIntCost[LTM] = null;
-  const hasInterest = labels.some((l) => netIntCost[l] != null);
+  const hasInterest = !isFin && labels.some((l) => netIntCost[l] != null);
   const tax = val(TAX);
   const netIncome = val([...NET_INCOME, "ProfitLoss"]);
   // (−) 기타 = (세전이익 − 법인세비용) − 공시 당기순이익 (중단사업·소수주주지분 등)
@@ -322,16 +352,22 @@ export function buildUsIncome(
   })();
 
   const items: FinancialLineItem[] = [
-    row("매출액", revenue, { depth: 0, isSubtotal: true, isHighlight: true }),
-    ...(hasGross
+    row(isFin ? "순수익" : "매출액", revenue, { depth: 0, isSubtotal: true, isHighlight: true }),
+    ...(isFin
       ? [
-          row("(−) 매출원가", cogs),
-          row("매출총이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
-          row("(−) 판매관리비", sga),
-          row("(−) 연구개발비", rnd),
-          row("(−) 기타 영업비용", otherOpex),
+          row("(−) 총이자외비용", finNoninterestExpense),
+          row("충당금전이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
+          row("(−) 대손충당금", finProvision),
         ]
-      : [row("(−) 영업비용", totalOpex)]),
+      : hasGross
+        ? [
+            row("(−) 매출원가", cogs),
+            row("매출총이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
+            row("(−) 판매관리비", sga),
+            row("(−) 연구개발비", rnd),
+            row("(−) 기타 영업비용", otherOpex),
+          ]
+        : [row("(−) 영업비용", totalOpex)]),
     row("영업이익", opIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("(−) 영업외손익", nonOpLoss),
     ...(hasInterest

@@ -17,27 +17,19 @@
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import type { FinancialHighlights, HighlightColumn, HighlightRow, HighlightEstimatePeriod } from "./edgar-highlights";
+import {
+  FIN_NET_REVENUE as NET_REVENUE,
+  FIN_NONINTEREST_EXPENSE as NONINTEREST_EXPENSE,
+  FIN_PROVISION as PROVISION,
+  FIN_NET_INCOME as NET_INCOME,
+  isFinancialCompany,
+} from "./edgar-financial";
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
 const INTERIM_FORMS = ["10-Q", "10-Q/A"];
-
-// 순수익(GAAP) — 은행·카드사는 이자비용을 매출에서 차감한 순액으로 표시.
-const NET_REVENUE = ["RevenuesNetOfInterestExpense"];
-const NONINTEREST_EXPENSE = ["NoninterestExpense"];
-const PROVISION = [
-  "ProvisionForLoanLossesExpensed",
-  "ProvisionForLoanAndLeaseLosses",
-  "ProvisionForLoanLeaseAndOtherLosses",
-];
 const DEPOSITS = ["Deposits"];
-// 보통주 귀속 순이익(우선주 배당 차감 후) — BBG "순이익, 조정"/"보통주 순이익, GAAP" 과 일치.
-// 우선주가 없는 회사는 이 개념이 없으므로 NetIncomeLoss 로 폴백.
-const NET_INCOME = [
-  "NetIncomeLossAvailableToCommonStockholdersDiluted",
-  "NetIncomeLossAvailableToCommonStockholdersBasic",
-  "NetIncomeLoss",
-  "ProfitLoss",
-];
+
+export { isFinancialCompany };
 
 function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
@@ -139,11 +131,6 @@ function margin(part: number | null, whole: number | null): number | null {
 }
 
 /** 금융회사(은행·카드사) 판정 — SIC 60xx(예금기관)·61xx(비예금 신용기관) + NoninterestExpense 태깅 여부. */
-export function isFinancialCompany(facts: CompanyFacts, sic: string | null): boolean {
-  if (!sic || !/^6[01]/.test(sic)) return false;
-  return unitEntries(facts, "NoninterestExpense", "USD").length > 0;
-}
-
 export function buildUsBankHighlights(
   facts: CompanyFacts,
   bars: QuoteBar[],

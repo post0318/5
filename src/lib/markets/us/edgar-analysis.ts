@@ -22,6 +22,12 @@ import {
   classAShares,
   type ClassAFacts,
 } from "./edgar-classfacts";
+import {
+  FIN_NET_REVENUE,
+  FIN_NONINTEREST_EXPENSE,
+  FIN_PROVISION,
+  isFinancialCompany,
+} from "./edgar-financial";
 
 /**
  * 미국 분석 지표 — 밸류에이션·수익성·현금창출·재무건전성·주주환원·성장성.
@@ -45,6 +51,12 @@ const DA = [
   "DepreciationAmortizationAndAccretionNet",
   "DepreciationAndAmortization",
 ];
+const PRETAX_C = [
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesAndExtraordinaryItemsNoncontrollingInterest",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndEquityMethodInvestments",
+];
 const INT_EXP = [
   "InterestExpense",
   "InterestExpenseNonoperating",
@@ -55,16 +67,9 @@ const INT_EXP = [
 ];
 // 총이자 개념이 없을 때 현금 이자지급액을 대용 (DAL·CAT 등)
 const INT_EXP_PROXY = ["InterestPaidNet", "InterestPaid"];
-const DEBT_C = ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "CommercialPaper", "ShortTermBorrowings"];
 // 총차입금 = 이자부 차입금 + 리스부채 (블룸버그 'Total Debt' 기준, IFRS16/ASC842).
 // ※ 한국식 '부채비율'의 부채총계(Liabilities)와 다름 — 이건 이자 내는 빚만.
-const DEBT_TOTAL_C = [
-  ...DEBT_C,
-  "OperatingLeaseLiabilityNoncurrent",
-  "OperatingLeaseLiabilityCurrent",
-  "FinanceLeaseLiabilityNoncurrent",
-  "FinanceLeaseLiabilityCurrent",
-];
+// (실제 개념 목록은 debtComponent/sumParts 로 유동·비유동 분리/미분류 폴백 처리)
 const CASH_C = [
   "CashAndCashEquivalentsAtCarryingValue",
   "MarketableSecuritiesCurrent",
@@ -93,13 +98,16 @@ function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
 export function buildUsAnalysis(
   facts: CompanyFacts,
   bars: QuoteBar[],
-  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null } = {},
+  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null; sic?: string | null } = {},
 ): FinancialStatement {
   // EPS·발행주식수를 클래스별로만 태깅해 undimensioned 값이 없는 기업(Visa 등)은
   // 10-K XBRL 인스턴스에서 뽑은 Class A 실측값(classFacts) 우선, 없으면
   // 현재 시가총액÷주가(또는 quote.sharesOutstanding)를 "현재 주식수" 근사로 사용.
   const sharesHint = opts.sharesHint ?? null;
   const classFacts = opts.classFacts ?? null;
+  // 금융회사(은행·카드사) — 매출 대신 순수익(이자비용 차감), 매출총이익 대신 충당금전이익 사용.
+  const isFin = isFinancialCompany(facts, opts.sic ?? null);
+  const revConcepts = isFin ? FIN_NET_REVENUE : REV;
   let approxPerShare = false;
   // 개념 태그가 시기에 따라 바뀌는 기업(NVIDIA: RevenueFromContract…→Revenues,
   // 메타: InterestExpense→InterestExpenseNonoperating 등)이 많아, 단일 개념이 아니라
@@ -117,8 +125,8 @@ export function buildUsAnalysis(
     return out;
   };
 
-  const years = [...mergedAnnual(REV).keys()].sort((a, b) => a - b).slice(-5);
-  const ends = mergedEnds(REV);
+  const years = [...mergedAnnual(revConcepts).keys()].sort((a, b) => a - b).slice(-5);
+  const ends = mergedEnds(revConcepts);
   const lastBar = [...bars].reverse().find((b) => b.close != null);
   const nowIso = lastBar?.date ?? new Date().toISOString().slice(0, 10);
 
@@ -176,6 +184,21 @@ export function buildUsAnalysis(
     }
     return o;
   };
+  /**
+   * 유동/비유동으로 분리 태깅하는 회사는 분리값 합, 미분류(단일 총액)로만 태깅하는
+   * 회사(금융사 등 — LongTermDebt·OperatingLeaseLiability 단일 라인)는 그 총액으로 폴백.
+   * 기간별로 독립 판정 — 같은 회사도 연도에 따라 태깅 방식이 바뀔 수 있어서.
+   */
+  const debtComponent = (
+    splitConcepts: string[],
+    unclassifiedConcept: string,
+  ): Record<string, number | null> => {
+    const split = stockSum(splitConcepts);
+    const total = stock([unclassifiedConcept]);
+    const o = blank();
+    for (const l of labels) o[l] = split[l] ?? total[l];
+    return o;
+  };
 
   // 액면분할 보정 계수 (소급 재작성 안 된 과거 연도의 주당 지표를 최신 연도 기준으로 환산)
   const splitF = splitFactorsByYear(facts);
@@ -203,7 +226,7 @@ export function buildUsAnalysis(
     return o;
   };
 
-  const revenue = flow(REV);
+  const revenue = flow(revConcepts);
   const grossProfitRaw = flow(["GrossProfit"]);
   const cogs0 = flowM(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
   const sga = flow([
@@ -212,15 +235,27 @@ export function buildUsAnalysis(
     "SellingGeneralAndAdministrativeExpenses",
   ]);
   const rnd = flow(["ResearchAndDevelopmentExpense"]);
+  // 금융회사(은행·카드사): 매출총이익 대신 충당금전이익(=순수익 − 총이자외비용).
+  const finNoninterestExpense = flow(FIN_NONINTEREST_EXPENSE);
+  const finProvision = flow(FIN_PROVISION);
   const grossProfit0 = blank();
   for (const l of labels)
-    grossProfit0[l] =
-      grossProfitRaw[l] ??
-      (revenue[l] != null && cogs0[l] != null ? revenue[l]! - Math.abs(cogs0[l]!) : null);
-  // 영업이익: 공시 태그 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등)
+    grossProfit0[l] = isFin
+      ? (revenue[l] != null && finNoninterestExpense[l] != null
+          ? revenue[l]! - finNoninterestExpense[l]!
+          : null)
+      : (grossProfitRaw[l] ??
+        (revenue[l] != null && cogs0[l] != null ? revenue[l]! - Math.abs(cogs0[l]!) : null));
+  // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 공시 태그,
+  // 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등)
   const opIncome = (() => {
-    const primary = flow(["OperatingIncomeLoss", "OperatingIncomeLossBeforeUnusualItems"]);
     const o = blank();
+    if (isFin) {
+      for (const l of labels)
+        if (grossProfit0[l] != null) o[l] = grossProfit0[l]! - (finProvision[l] ?? 0);
+      return o;
+    }
+    const primary = flow(["OperatingIncomeLoss", "OperatingIncomeLossBeforeUnusualItems"]);
     for (const l of labels) {
       if (primary[l] != null) { o[l] = primary[l]; continue; }
       if (grossProfit0[l] != null && (sga[l] != null || rnd[l] != null))
@@ -289,7 +324,7 @@ export function buildUsAnalysis(
     }
     return out;
   })();
-  const revFull = fullAnnual(REV);
+  const revFull = fullAnnual(revConcepts);
   // D&A: 통합 태그 없으면 감가상각 + 무형자산상각 합산 (IBM 등)
   const da = (() => {
     const primary = flow(DA);
@@ -308,6 +343,15 @@ export function buildUsAnalysis(
   const capexRaw = flow(CAPEX_C);
   // 1년 성장률 첫 해(표시 첫 컬럼) 보정용 전체 시계열 — 전년 값 소스
   const opIncFull = (() => {
+    if (isFin) {
+      // 금융회사: 순수익 − 총이자외비용 − 대손충당금 (전체 연도)
+      const rev = fullAnnual(FIN_NET_REVENUE);
+      const nie = fullAnnual(FIN_NONINTEREST_EXPENSE);
+      const prov = fullAnnual(FIN_PROVISION);
+      const out = new Map<number, number>();
+      for (const [y, v] of rev) if (nie.has(y)) out.set(y, v - nie.get(y)! - (prov.get(y) ?? 0));
+      return out;
+    }
     const m = fullAnnual(["OperatingIncomeLoss"]);
     if (m.size) return m;
     // 파생: GrossProfit − SG&A − R&D
@@ -341,11 +385,26 @@ export function buildUsAnalysis(
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const INT_PAID_C = ["InterestPaidNet", "InterestPaid"];
   const intPaid = flow(INT_PAID_C); // 현금 이자 지급액
-  const ltDebt = stockSum([
-    "LongTermDebtNoncurrent",
-    "OperatingLeaseLiabilityNoncurrent",
-    "FinanceLeaseLiabilityNoncurrent",
-  ]); // 장기 부채(비유동 차입금 + 비유동 리스) — 블룸버그 '장기채무'
+  // 차입금·리스 구성요소 — 분리(유동/비유동) 우선, 없으면 미분류 총액 폴백 (AXP 등 금융사).
+  const ltdComp = debtComponent(["LongTermDebtNoncurrent", "LongTermDebtCurrent"], "LongTermDebt");
+  const opLeaseComp = debtComponent(
+    ["OperatingLeaseLiabilityNoncurrent", "OperatingLeaseLiabilityCurrent"],
+    "OperatingLeaseLiability",
+  );
+  const finLeaseComp = debtComponent(
+    ["FinanceLeaseLiabilityNoncurrent", "FinanceLeaseLiabilityCurrent"],
+    "FinanceLeaseLiability",
+  );
+  const sumParts = (...parts: Record<string, number | null>[]): Record<string, number | null> => {
+    const o = blank();
+    for (const l of labels) {
+      const vs = parts.map((p) => p[l]).filter((v): v is number => v != null);
+      if (vs.length) o[l] = vs.reduce((s, v) => s + v, 0);
+    }
+    return o;
+  };
+  // 장기 부채(비유동 차입금 + 비유동 리스, 미분류 회사는 총액) — 블룸버그 '장기채무'
+  const ltDebt = sumParts(ltdComp, opLeaseComp, finLeaseComp);
   const intExp = flowM(INT_EXP);
   // 순이자 개념이 잡혀 음수(순이자수익)면 이자보상 지표에 무의미 → 공란
   for (const l of labels) if (intExp[l] != null && intExp[l]! <= 0) intExp[l] = null;
@@ -369,12 +428,7 @@ export function buildUsAnalysis(
   for (const l of labels) intCash[l] = intPaid[l] ?? intExp[l];
   const taxExp = flow(["IncomeTaxExpenseBenefit"]);
   const pretax = (() => {
-    const o = flow([
-      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
-      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesAndExtraordinaryItemsNoncontrollingInterest",
-      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndEquityMethodInvestments",
-    ]);
+    const o = flow(PRETAX_C);
     // 최후 폴백: 당기순이익 + 법인세비용
     for (const l of labels)
       if (o[l] == null && netIncome[l] != null && taxExp[l] != null)
@@ -383,6 +437,21 @@ export function buildUsAnalysis(
   })();
   // 영업이익도 못 구했으면 세전이익으로 근사 (통합 정유사·금융 등 — 이자 미미)
   for (const l of labels) if (opIncome[l] == null && pretax[l] != null) opIncome[l] = pretax[l];
+  // opIncFull(전체 연도 시계열 — 첫 표시연도 YoY 의 "전년" 소스)도 동일 폴백 반영.
+  // 위 for 문은 표시 컬럼(labels)만 패치하므로, 전체 시계열이 비어 있으면(OperatingIncomeLoss
+  // 미태깅 기업 — 금융사 등) 첫 컬럼 성장률이 항상 공란이 되는 버그가 있었다.
+  {
+    const taxFull = fullAnnual(["IncomeTaxExpenseBenefit"]);
+    const pretaxFull = (() => {
+      const m = fullAnnual(PRETAX_C);
+      if (m.size) return m;
+      const out = new Map<number, number>();
+      for (const [y, v] of niFull) if (taxFull.has(y)) out.set(y, v + taxFull.get(y)!);
+      return out;
+    })();
+    for (const [y, v] of pretaxFull) if (!opIncFull.has(y)) opIncFull.set(y, v);
+    for (const [y, v] of opIncFull) if (!ebitdaFull.has(y)) ebitdaFull.set(y, v + (daFull.get(y) ?? 0));
+  }
 
   const assets = stock(["Assets"]);
   const liabAndEquity = stock(["LiabilitiesAndStockholdersEquity"]);
@@ -400,8 +469,9 @@ export function buildUsAnalysis(
   })();
   const curAssets = stock(["AssetsCurrent"]);
   const curLiab = stock(["LiabilitiesCurrent"]);
-  const debt = stockSum(DEBT_C);
-  const debtTotal = stockSum(DEBT_TOTAL_C); // 차입금 + 리스부채
+  // 이자부 차입금 — 장기(분리/미분류 폴백) + 단기(CP·단기차입금)
+  const debt = sumParts(ltdComp, stockSum(["CommercialPaper", "ShortTermBorrowings"]));
+  const debtTotal = sumParts(debt, opLeaseComp, finLeaseComp); // 차입금 + 리스부채
   const cash = stockSum(CASH_C);
   const cashCur = stockSum(CASH_CUR); // 유동성 지표용 (장기투자 제외)
   const ar = stock([
@@ -798,7 +868,7 @@ export function buildUsAnalysis(
     R("ROA (%)", ratio(netIncome, assetsAvg, 100), "pct"),
     R("ROIC (%)", ratio(nopat, investedCapAvg, 100), "pct"),
     R("FCF 마진 (%)", ratio(fcf, revenue, 100), "pct"),
-    R("매출총이익률 (%)", ratio(grossProfit, revenue, 100), "pct"),
+    R(isFin ? "충당금전이익률 (%)" : "매출총이익률 (%)", ratio(grossProfit, revenue, 100), "pct"),
     R("영업이익률 (%)", ratio(opIncome, revenue, 100), "pct"),
     R("유효세율 (%)", effTax, "pct"),
     SP("2"),
