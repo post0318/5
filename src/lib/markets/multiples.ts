@@ -180,6 +180,18 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     if (gp != null && (sgaV != null || rndV != null))
       opIncome = gp - (sgaV ?? 0) - (rndV ?? 0);
   }
+  // 그래도 없으면 세전이익으로 근사 (XOM·AXP 등 영업이익 태그 자체가 없는 회사 —
+  // 비영업 손익이 포함될 수 있음. 하이라이트/재무분석/IS 상세와 동일한 최후 폴백).
+  if (opIncome == null) {
+    opIncome = flowValue(annual, quarterly, [
+      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+      "Pretax Income",
+      "세전이익",
+      "세전이익(손실)",
+      "법인세비용차감전순이익",
+      "税引前当期純利益",
+    ]);
+  }
 
   const shares =
     sharesOutstanding ??
