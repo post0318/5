@@ -134,7 +134,7 @@ export async function GET(
         null;
       const stmt =
         detailView === "cf"
-          ? buildUsCashFlow(facts, period)
+          ? buildUsCashFlow(facts, period, sic)
           : detailView === "is"
             ? buildUsIncome(facts, period, { sharesHint, classFacts, sic })
             : detailView === "bs"

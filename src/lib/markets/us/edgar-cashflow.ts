@@ -2,6 +2,7 @@ import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import { recentQuarters, singleQuarter } from "./edgar-series";
+import { isFinancialCompany } from "./edgar-financial";
 
 /**
  * 미국 상세 현금흐름표 — SEC EDGAR companyfacts 를 정규화 라인으로 재분류.
@@ -101,7 +102,18 @@ interface Block {
   lines: Line[];
 }
 
-const BLOCKS: Block[] = [
+/**
+ * 금융회사(은행·카드사)는 대손충당금(Provision)이 크고 개별 태깅도 깔끔해서
+ * BBG 도 별도 행으로 보여준다 — 그 외 회사는 이 개념이 애초에 없어 자동으로 빈 값.
+ */
+const FIN_PROVISION_LINE: Line = {
+  label: "대손충당금",
+  concepts: ["ProvisionForLoanLossesExpensed", "ProvisionForLoanAndLeaseLosses", "ProvisionForLoanLeaseAndOtherLosses"],
+  depth: 1,
+};
+
+function getBlocks(isFin: boolean): Block[] {
+  return [
   {
     title: "영업활동 현금흐름",
     total: {
@@ -118,6 +130,7 @@ const BLOCKS: Block[] = [
         depth: 1,
       },
       { label: "주식보상비용", concepts: ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], depth: 1 },
+      ...(isFin ? [FIN_PROVISION_LINE] : []),
       {
         label: "기타 비현금 조정",
         depth: 1,
@@ -199,7 +212,8 @@ const BLOCKS: Block[] = [
       { label: "기타 재무활동", depth: 1, plug: true },
     ],
   },
-];
+  ];
+}
 
 const FX = ["EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "EffectOfExchangeRateOnCashAndCashEquivalents"];
 const NET_CHANGE = [
@@ -215,7 +229,10 @@ const fyKey = (y: number) => `${y}Y`;
 export function buildUsCashFlow(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
+  sic?: string | null,
 ): FinancialStatement {
+  const isFin = isFinancialCompany(facts, sic ?? null);
+  const BLOCKS = getBlocks(isFin);
   const opEntries = firstConcept(facts, BLOCKS[0].total.concepts);
 
   let periods: FinancialPeriod[];
