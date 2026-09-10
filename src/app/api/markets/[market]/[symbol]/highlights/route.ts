@@ -3,8 +3,9 @@ import { isMarketId } from "@/lib/markets/types";
 import { getAdapter } from "@/lib/markets/registry";
 import { getEodQuote } from "@/lib/markets/quote";
 import { fetchForwardConsensus, fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
-import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
+import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
 import { buildUsHighlights } from "@/lib/markets/us/edgar-highlights";
+import { buildUsBankHighlights, isFinancialCompany } from "@/lib/markets/us/edgar-highlights-bank";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
 import { resolveCorpCode } from "@/lib/markets/kr/corpcode";
 import { fetchKrFacts, fetchKrDps } from "@/lib/markets/kr/dart-facts";
@@ -78,11 +79,12 @@ export async function GET(
     }
 
     const factsRes = await fetchUsCompanyFacts(sym);
-    const [quote, estimates, consensus, classFacts] = await Promise.all([
+    const [quote, estimates, consensus, classFacts, sic] = await Promise.all([
       getEodQuote(market, sym, { yahooOverride: yahoo }).catch(() => null),
       fetchYahooEstimates(market, sym, yahoo).catch(() => null),
       fetchForwardConsensus(market, sym, yahoo).catch(() => null),
       loadClassAFacts(factsRes.cik, factsRes.facts).catch(() => null),
+      fetchUsSic(sym).catch(() => null),
     ]);
 
     const mcap = consensus?.marketCap ?? quote?.marketCap ?? null;
@@ -92,18 +94,16 @@ export async function GET(
       quote?.sharesOutstanding ??
       null;
 
-    const highlights = buildUsHighlights(
-      factsRes.facts,
-      quote?.bars ?? [],
-      (estimates?.periods ?? []).map((p) => ({
-        period: p.period,
-        endDate: p.endDate,
-        epsAvg: p.epsAvg,
-        revenueAvg: p.revenueAvg,
-      })),
-      sharesHint,
-      classFacts,
-    );
+    const estCols = (estimates?.periods ?? []).map((p) => ({
+      period: p.period,
+      endDate: p.endDate,
+      epsAvg: p.epsAvg,
+      revenueAvg: p.revenueAvg,
+    }));
+
+    const highlights = isFinancialCompany(factsRes.facts, sic)
+      ? buildUsBankHighlights(factsRes.facts, quote?.bars ?? [], estCols, sharesHint)
+      : buildUsHighlights(factsRes.facts, quote?.bars ?? [], estCols, sharesHint, classFacts);
 
     return ok(
       { highlights },

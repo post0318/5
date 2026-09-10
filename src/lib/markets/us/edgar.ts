@@ -151,6 +151,13 @@ export async function fetchUsCompanyFacts(
   return { cik, facts: await getCompanyFacts(cik) };
 }
 
+/** SIC 코드 (은행·카드사 등 금융회사 레이아웃 분기 판정용). */
+export async function fetchUsSic(symbol: string): Promise<string | null> {
+  const { cik } = await resolveCik(symbol);
+  const sub = await getSubmissions(cik);
+  return sub.sic ?? null;
+}
+
 // ---- companyfacts (재무제표) -------------------------------------------
 
 export interface FactUnitEntry {
