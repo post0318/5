@@ -26,12 +26,12 @@ const C = {
   netIncome: { ids: ["ifrs-full_ProfitLoss"], names: ["당기순이익", "당기순이익(손실)", "분기순이익", "반기순이익"] },
   niParent: { ids: ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], names: ["지배기업 소유주지분", "지배기업의 소유주지분"] },
   epsBasic: {
-    ids: ["ifrs-full_BasicEarningsLossPerShare"],
-    names: ["기본주당이익", "기본주당이익(손실)", "기본주당순이익", "기본주당순이익(손실)", "기본및희석주당이익"],
+    ids: ["ifrs-full_BasicEarningsLossPerShare", "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations"],
+    names: ["기본주당이익", "기본주당순이익", "기본및희석주당이익", "보통주기본주당이익", "계속영업기본주당이익", "계속영업 기본주당이익"],
   },
   epsDil: {
-    ids: ["ifrs-full_DilutedEarningsLossPerShare"],
-    names: ["희석주당이익", "희석주당이익(손실)", "희석주당순이익", "희석주당순이익(손실)"],
+    ids: ["ifrs-full_DilutedEarningsLossPerShare", "ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations"],
+    names: ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "계속영업희석주당이익", "계속영업 희석주당이익"],
   },
   // 감가상각비: CF 조정 라인에서. 회사별 편차 큼.
   da: {

@@ -67,7 +67,12 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
         ],
         depth: 1,
       },
-      { label: "매출채권", ids: ["ifrs-full_CurrentTradeReceivables"], names: ["매출채권"], depth: 1 },
+      {
+        label: "매출채권",
+        ids: ["ifrs-full_CurrentTradeReceivables", "ifrs-full_TradeAndOtherCurrentReceivables", "dart_ShortTermTradeReceivable"],
+        names: ["매출채권", "매출채권및기타채권", "매출채권및기타유동채권"],
+        depth: 1,
+      },
       { label: "재고자산", ids: ["ifrs-full_Inventories"], names: ["재고자산"], depth: 1 },
       { label: "기타 유동자산", depth: 1, plugOf: "cur" },
       { label: "유동자산 총계", depth: 0, kind: "subtotal", ids: A_CUR.ids, names: A_CUR.names },
@@ -82,7 +87,16 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
   {
     title: "부채",
     lines: [
-      { label: "매입채무", ids: ["ifrs-full_TradeAndOtherCurrentPayablesToTradeSuppliers", "dart_ShortTermTradePayables"], names: ["매입채무"], depth: 1 },
+      {
+        label: "매입채무",
+        ids: [
+          "ifrs-full_TradeAndOtherCurrentPayablesToTradeSuppliers",
+          "ifrs-full_TradeAndOtherCurrentPayables",
+          "dart_ShortTermTradePayables",
+        ],
+        names: ["매입채무", "매입채무및기타채무", "매입채무및기타유동채무"],
+        depth: 1,
+      },
       { label: "단기차입금·유동성장기부채", combine: SHORT_DEBT, depth: 1 },
       { label: "기타 유동부채", depth: 1, plugOf: "lcur" },
       { label: "유동부채 총계", depth: 0, kind: "subtotal", ids: L_CUR.ids, names: L_CUR.names },

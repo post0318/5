@@ -18,7 +18,15 @@ const IS = ["IS", "CIS"];
 const REV = { ids: ["ifrs-full_Revenue", "dart_Revenue"], names: ["매출액", "수익(매출액)", "영업수익"] };
 const OPI = { ids: ["dart_OperatingIncomeLoss", "ifrs-full_ProfitLossFromOperatingActivities"], names: ["영업이익"] };
 const NI = { ids: ["ifrs-full_ProfitLoss"], names: ["당기순이익", "분기순이익", "반기순이익"] };
-const EPS = { ids: ["ifrs-full_DilutedEarningsLossPerShare", "ifrs-full_BasicEarningsLossPerShare"], names: ["희석주당이익", "희석주당순이익", "기본주당이익", "기본주당순이익"] };
+const EPS = {
+  ids: [
+    "ifrs-full_DilutedEarningsLossPerShare",
+    "ifrs-full_BasicEarningsLossPerShare",
+    "ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations",
+    "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations",
+  ],
+  names: ["희석주당이익", "희석주당순이익", "기본주당이익", "기본주당순이익", "보통주기본주당이익", "계속영업기본주당이익"],
+};
 const OCF = { ids: ["ifrs-full_CashFlowsFromUsedInOperatingActivities"], names: ["영업활동현금흐름"] };
 const CAPEX = { ids: ["ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"], names: ["유형자산의 취득"] };
 const CASH = { ids: ["ifrs-full_CashAndCashEquivalents"], names: ["현금및현금성자산"] };
