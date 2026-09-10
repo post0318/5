@@ -4,6 +4,7 @@ import type { FinancialStatement, FinancialLineItem } from "../types";
 import { buildUsIncome } from "./edgar-income";
 import { buildUsBalance } from "./edgar-balance";
 import { buildUsCashFlow } from "./edgar-cashflow";
+import type { ClassAFacts } from "./edgar-classfacts";
 
 /**
  * 미국 공시기준 요약 (총괄) — IS·BS·CF 상세표에서 핵심 행만 추려 한 화면에.
@@ -13,7 +14,7 @@ import { buildUsCashFlow } from "./edgar-cashflow";
 export function buildUsSummary(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
-  opts: { sharesHint?: number | null } = {},
+  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null } = {},
 ): FinancialStatement {
   const is = buildUsIncome(facts, mode, opts);
   const bs = buildUsBalance(facts, mode);

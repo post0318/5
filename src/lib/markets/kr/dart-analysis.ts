@@ -1,6 +1,7 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem, QuoteBar, TtmFlows } from "../types";
 import { type KrFacts, type KrDaInput, annualSeries, annualSum, daAndAmortSeries } from "./dart-facts";
+import { SHORT_DEBT, LONG_DEBT } from "./dart-balance";
 
 /**
  * 한국 분석 지표 — `edgar-analysis.ts` 미러 (섹션·라벨 동일, 개요 요약칩 호환).
@@ -39,14 +40,7 @@ const C = {
   intPaid: { ids: ["ifrs-full_InterestPaidClassifiedAsOperatingActivities"], names: ["이자의 지급"] },
   divPaid: { ids: ["ifrs-full_DividendsPaidClassifiedAsFinancingActivities"], names: ["배당금의지급", "배당금지급"] },
 };
-const DEBT_GROUPS = [
-  { ids: [], names: ["단기차입금"] },
-  { ids: ["ifrs-full_CurrentPortionOfLongtermBorrowings"], names: ["유동성장기부채"] },
-  { ids: ["ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued"], names: ["사채"] },
-  { ids: ["ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived", "ifrs-full_LongtermBorrowings"], names: ["장기차입금"] },
-  { ids: ["ifrs-full_ShorttermLeaseLiabilities"], names: ["단기 리스부채", "유동리스부채"] },
-  { ids: ["ifrs-full_NoncurrentLeaseLiabilities"], names: ["장기 리스부채", "비유동리스부채"] },
-];
+const DEBT_GROUPS = [...SHORT_DEBT, ...LONG_DEBT];
 
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   let best: number | null = null;

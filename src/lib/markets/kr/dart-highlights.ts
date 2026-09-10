@@ -6,6 +6,7 @@ import type {
   HighlightRow,
 } from "../us/edgar-highlights";
 import { type KrFacts, annualSeries, annualSum } from "./dart-facts";
+import { SHORT_DEBT, LONG_DEBT } from "./dart-balance";
 
 /**
  * 한국 재무 하이라이트 (개요) — `edgar-highlights.ts` 미러.
@@ -24,12 +25,7 @@ const CASH = { ids: ["ifrs-full_CashAndCashEquivalents"], names: ["현금및현�
 const STINV = { ids: ["ifrs-full_ShorttermDepositsNotClassifiedAsCashEquivalents"], names: ["단기금융상품"] };
 const EQUITY = { ids: ["ifrs-full_Equity"], names: ["자본총계"] };
 
-const DEBT_GROUPS = [
-  { ids: [], names: ["단기차입금"] },
-  { ids: ["ifrs-full_CurrentPortionOfLongtermBorrowings"], names: ["유동성장기부채"] },
-  { ids: ["ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued"], names: ["사채"] },
-  { ids: ["ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived", "ifrs-full_LongtermBorrowings"], names: ["장기차입금"] },
-];
+const DEBT_GROUPS = [...SHORT_DEBT, ...LONG_DEBT];
 
 export interface KrHighlightInput {
   facts: KrFacts; // annual

@@ -14,6 +14,12 @@ import {
   splitFactorsByYear,
   ttmOf,
 } from "./edgar-series";
+import {
+  classAEps,
+  classALatest,
+  classAShares,
+  type ClassAFacts,
+} from "./edgar-classfacts";
 
 /**
  * 미국 분석 지표 — 밸류에이션·수익성·현금창출·재무건전성·주주환원·성장성.
@@ -85,11 +91,13 @@ function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
 export function buildUsAnalysis(
   facts: CompanyFacts,
   bars: QuoteBar[],
-  opts: { sharesHint?: number | null } = {},
+  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null } = {},
 ): FinancialStatement {
   // EPS·발행주식수를 클래스별로만 태깅해 undimensioned 값이 없는 기업(Visa 등)은
+  // 10-K XBRL 인스턴스에서 뽑은 Class A 실측값(classFacts) 우선, 없으면
   // 현재 시가총액÷주가(또는 quote.sharesOutstanding)를 "현재 주식수" 근사로 사용.
   const sharesHint = opts.sharesHint ?? null;
+  const classFacts = opts.classFacts ?? null;
   let approxPerShare = false;
   // 개념 태그가 시기에 따라 바뀌는 기업(NVIDIA: RevenueFromContract…→Revenues,
   // 메타: InterestExpense→InterestExpenseNonoperating 등)이 많아, 단일 개념이 아니라
@@ -236,11 +244,18 @@ export function buildUsAnalysis(
     for (const l of labels) {
       if (o[l] != null) continue;
       const y = l === LTM ? (years.at(-1) ?? 0) : Number(l.replace("Y", ""));
+      // Class A 공시 EPS (실측) — 근사 아님
+      const ca = classAEps(classFacts, y, "diluted");
+      if (ca != null) {
+        o[l] = ca;
+        continue;
+      }
       const ni = l === LTM ? netIncome[LTM] : niF.get(y);
-      const sh = dilSharesF.get(y) ?? sharesHint;
+      const dcl = dilSharesF.get(y) ?? classAShares(classFacts, y);
+      const sh = dcl ?? sharesHint;
       if (ni != null && sh) {
         o[l] = ni / sh;
-        if (dilSharesF.get(y) == null) approxPerShare = true;
+        if (dcl == null) approxPerShare = true;
       }
     }
     return o;
@@ -251,7 +266,12 @@ export function buildUsAnalysis(
     const niF = fullAnnual(NI_C);
     const out = new Map<number, number>();
     for (const [y, ni] of niF) {
-      const sh = dilSharesF.get(y) ?? sharesHint;
+      const ca = classAEps(classFacts, y, "diluted");
+      if (ca != null) {
+        out.set(y, ca);
+        continue;
+      }
+      const sh = dilSharesF.get(y) ?? classAShares(classFacts, y) ?? sharesHint;
       if (sh) out.set(y, ni / sh);
     }
     return out;
@@ -405,12 +425,15 @@ export function buildUsAnalysis(
   // 가중평균 희석주식수(연간)로 대체해 시총·PBR·EV 를 근사.
   const wavgDil = fullAnnual(["WeightedAverageNumberOfDilutedSharesOutstanding"], "shares");
   const wavgBasic = fullAnnual(["WeightedAverageNumberOfSharesOutstandingBasic"], "shares");
-  const wavgAt = (y: number): number | null => wavgDil.get(y) ?? wavgBasic.get(y) ?? null;
+  const wavgAt = (y: number): number | null =>
+    wavgDil.get(y) ?? wavgBasic.get(y) ?? classAShares(classFacts, y) ?? null;
   const latestWavg = (() => {
     const ys = [...wavgDil.keys(), ...wavgBasic.keys()];
-    if (!ys.length) return null;
-    const my = Math.max(...ys);
-    return wavgDil.get(my) ?? wavgBasic.get(my) ?? null;
+    if (ys.length) {
+      const my = Math.max(...ys);
+      return wavgDil.get(my) ?? wavgBasic.get(my) ?? null;
+    }
+    return classALatest(classFacts)?.dilShares ?? classALatest(classFacts)?.basicShares ?? null;
   })();
   const shares = blank();
   for (const l of labels) {

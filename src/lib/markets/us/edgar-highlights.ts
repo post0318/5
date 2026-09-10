@@ -10,6 +10,12 @@
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { splitFactorsByYear } from "./edgar-series";
+import {
+  classAEps,
+  classALatest,
+  classAShares,
+  type ClassAFacts,
+} from "./edgar-classfacts";
 
 export interface HighlightColumn {
   key: string;
@@ -219,7 +225,10 @@ export function buildUsHighlights(
   estimates: HighlightEstimatePeriod[],
   /** 듀얼클래스 종목(EDGAR 에 undimensioned 주식수 없음)용 Yahoo 컨센서스 발행주식수 — LTM 컬럼 폴백. */
   fallbackShares?: number | null,
+  /** 10-K XBRL 인스턴스에서 뽑은 Class A EPS·주식수 실측(Visa 등). */
+  classFacts?: ClassAFacts | null,
 ): FinancialHighlights {
+  const cf = classFacts ?? null;
   const notes: string[] = [];
 
   // ── 컬럼 구성 ────────────────────────────────────────────────────
@@ -371,9 +380,15 @@ export function buildUsHighlights(
     unitEntries(facts, "WeightedAverageNumberOfSharesOutstandingBasic", "shares"),
   );
   const wavgSharesAt = (year: number): number | null =>
-    annualAt(sharesWavgDil, year) ?? annualAt(sharesWavgBasic, year);
+    annualAt(sharesWavgDil, year) ??
+    annualAt(sharesWavgBasic, year) ??
+    classAShares(cf, year);
   const latestWavgShares = (): number | null =>
-    sharesWavgDil.at(-1)?.val ?? sharesWavgBasic.at(-1)?.val ?? null;
+    sharesWavgDil.at(-1)?.val ??
+    sharesWavgBasic.at(-1)?.val ??
+    classALatest(cf)?.dilShares ??
+    classALatest(cf)?.basicShares ??
+    null;
 
   // 컬럼별 helper
   const flowVal = (
@@ -510,10 +525,11 @@ export function buildUsHighlights(
       }
       return null;
     };
-    if (col.kind === "ltm") return ttm(E.eps) ?? derive();
+    if (col.kind === "ltm") return ttm(E.eps) ?? derive() ?? classALatest(cf)?.epsDiluted ?? null;
     const y = Number(col.key.slice(2));
     const v = annualAt(S.eps, y);
-    return v == null ? derive() : v * sf(y);
+    if (v != null) return v * sf(y);
+    return classAEps(cf, y, "diluted") ?? derive();
   });
   const dps = columns.map((col) => {
     if (col.kind === "estimate") return null;

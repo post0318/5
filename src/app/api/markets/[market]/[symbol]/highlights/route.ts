@@ -5,6 +5,7 @@ import { getEodQuote } from "@/lib/markets/quote";
 import { fetchForwardConsensus, fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
 import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
 import { buildUsHighlights } from "@/lib/markets/us/edgar-highlights";
+import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
 import { resolveCorpCode } from "@/lib/markets/kr/corpcode";
 import { fetchKrFacts, fetchKrDps } from "@/lib/markets/kr/dart-facts";
 import { buildKrHighlights } from "@/lib/markets/kr/dart-highlights";
@@ -76,11 +77,12 @@ export async function GET(
       );
     }
 
-    const [factsRes, quote, estimates, consensus] = await Promise.all([
-      fetchUsCompanyFacts(sym),
+    const factsRes = await fetchUsCompanyFacts(sym);
+    const [quote, estimates, consensus, classFacts] = await Promise.all([
       getEodQuote(market, sym, { yahooOverride: yahoo }).catch(() => null),
       fetchYahooEstimates(market, sym, yahoo).catch(() => null),
       fetchForwardConsensus(market, sym, yahoo).catch(() => null),
+      loadClassAFacts(factsRes.cik, factsRes.facts).catch(() => null),
     ]);
 
     const mcap = consensus?.marketCap ?? quote?.marketCap ?? null;
@@ -100,6 +102,7 @@ export async function GET(
         revenueAvg: p.revenueAvg,
       })),
       sharesHint,
+      classFacts,
     );
 
     return ok(

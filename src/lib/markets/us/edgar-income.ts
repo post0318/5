@@ -11,6 +11,7 @@ import {
   splitFactorsByYear,
   ttmOf,
 } from "./edgar-series";
+import { classAEps, classAShares, type ClassAFacts } from "./edgar-classfacts";
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
@@ -67,10 +68,11 @@ const fyKey = (y: number) => `${y}Y`;
 export function buildUsIncome(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
-  opts: { sharesHint?: number | null } = {},
+  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null } = {},
 ): FinancialStatement {
   const quarterly = mode === "quarter";
   const sharesHint = opts.sharesHint ?? null;
+  const classFacts = opts.classFacts ?? null;
 
   // 개념 태그가 시기별로 바뀌는 기업(NVIDIA 등) → 나열 개념을 연도별로 병합
   const mergedAnnual = (concepts: string[], unit = "USD"): Map<number, number> => {
@@ -243,20 +245,31 @@ export function buildUsIncome(
     "shares",
   );
   let epsApprox = false;
-  const deriveEps = (o: Record<string, number | null>): Record<string, number | null> => {
+  const yearOf = (l: string): number => Number(l.replace(/[^0-9]/g, "")) || 0;
+  const deriveEps = (
+    o: Record<string, number | null>,
+    kind: "basic" | "diluted",
+  ): Record<string, number | null> => {
     const r = { ...o };
     for (const l of labels) {
       if (r[l] != null) continue;
-      const sh = wavgShares[l] ?? sharesHint;
+      // Class A 공시값(실측) 우선 — 근사 아님
+      const ca = quarterly ? null : classAEps(classFacts, yearOf(l), kind);
+      if (ca != null) {
+        r[l] = ca;
+        continue;
+      }
+      const dcl = wavgShares[l] ?? (quarterly ? null : classAShares(classFacts, yearOf(l)));
+      const sh = dcl ?? sharesHint;
       if (netIncome[l] != null && sh) {
         r[l] = netIncome[l]! / sh;
-        epsApprox = true;
+        if (dcl == null) epsApprox = true;
       }
     }
     return r;
   };
-  const epsBasic = deriveEps(adjEps(val(EPS_BASIC, "USD/shares")));
-  const epsDil = deriveEps(adjEps(val(EPS_DIL, "USD/shares")));
+  const epsBasic = deriveEps(adjEps(val(EPS_BASIC, "USD/shares")), "basic");
+  const epsDil = deriveEps(adjEps(val(EPS_DIL, "USD/shares")), "diluted");
 
   const da = (() => {
     const o = val(DA);

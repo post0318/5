@@ -14,6 +14,34 @@ const L_CUR = { ids: ["ifrs-full_CurrentLiabilities"], names: ["유동부채"] }
 const EQ = { ids: ["ifrs-full_Equity"], names: ["자본총계"] };
 const LE_TOTAL = { ids: ["ifrs-full_EquityAndLiabilities"], names: ["부채와자본총계", "자본과부채총계"] };
 
+// 차입금 개념은 회사·연도별 편차가 커 id 위주로 넓게 잡는다 (SK하이닉스는 유동·비유동 모두 "차입금" 명칭 → id 필수).
+export const SHORT_DEBT: { ids: string[]; names?: string[] }[] = [
+  {
+    ids: [
+      "ifrs-full_ShorttermBorrowings",
+      "ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings",
+      "dart_ShortTermBorrowings",
+    ],
+    names: ["단기차입금"],
+  },
+  { ids: ["ifrs-full_CurrentPortionOfLongtermBorrowings", "dart_CurrentPortionOfLongTermDebt"], names: ["유동성장기부채", "유동성장기차입금"] },
+  { ids: ["ifrs-full_ShorttermLeaseLiabilities", "ifrs-full_CurrentLeaseLiabilities", "dart_ShortTermLeaseLiability"], names: ["유동리스부채"] },
+];
+export const LONG_DEBT: { ids: string[]; names?: string[] }[] = [
+  { ids: ["ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued", "dart_BondsIssued"], names: ["사채"] },
+  {
+    ids: [
+      "ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived",
+      "ifrs-full_LongtermBorrowings",
+      "ifrs-full_NoncurrentBorrowings",
+      "dart_LongTermBorrowingsGross",
+      "dart_LongTermBorrowings",
+    ],
+    names: ["장기차입금"],
+  },
+  { ids: ["ifrs-full_NoncurrentLeaseLiabilities", "dart_LongTermLeaseLiability"], names: ["비유동리스부채"] },
+];
+
 interface Line {
   label: string;
   ids?: string[];
@@ -54,25 +82,11 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
   {
     title: "부채",
     lines: [
-      { label: "매입채무", ids: ["ifrs-full_TradeAndOtherCurrentPayablesToTradeSuppliers"], names: ["매입채무"], depth: 1 },
-      {
-        label: "단기차입금",
-        combine: [
-          { ids: [], names: ["단기차입금"] },
-          { ids: ["ifrs-full_CurrentPortionOfLongtermBorrowings"], names: ["유동성장기부채"] },
-        ],
-        depth: 1,
-      },
+      { label: "매입채무", ids: ["ifrs-full_TradeAndOtherCurrentPayablesToTradeSuppliers", "dart_ShortTermTradePayables"], names: ["매입채무"], depth: 1 },
+      { label: "단기차입금·유동성장기부채", combine: SHORT_DEBT, depth: 1 },
       { label: "기타 유동부채", depth: 1, plugOf: "lcur" },
       { label: "유동부채 총계", depth: 0, kind: "subtotal", ids: L_CUR.ids, names: L_CUR.names },
-      {
-        label: "장기차입금·사채",
-        combine: [
-          { ids: ["ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued"], names: ["사채"] },
-          { ids: ["ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived", "ifrs-full_LongtermBorrowings"], names: ["장기차입금"] },
-        ],
-        depth: 1,
-      },
+      { label: "장기차입금·사채", combine: LONG_DEBT, depth: 1 },
       { label: "기타 장기부채", depth: 1, plugOf: "lnoncur" },
       { label: "비유동부채 총계", depth: 0, kind: "subtotal", plugOf: "lnoncurTotal" },
       { label: "부채 총계", depth: 0, kind: "total", highlight: true, ids: L_TOTAL.ids, names: L_TOTAL.names },
@@ -204,18 +218,7 @@ export function buildKrBalance(facts: KrFacts): FinancialStatement {
   });
   const nciEq = val({ ids: ["ifrs-full_NoncontrollingInterests"], names: ["비지배지분"] });
 
-  const debt = sumOf(
-    facts,
-    [
-      { ids: [], names: ["단기차입금"] },
-      { ids: ["ifrs-full_CurrentPortionOfLongtermBorrowings"], names: ["유동성장기부채"] },
-      { ids: ["ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued"], names: ["사채"] },
-      { ids: ["ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived", "ifrs-full_LongtermBorrowings"], names: ["장기차입금"] },
-      { ids: ["ifrs-full_ShorttermLeaseLiabilities", "dart_ShortTermLeaseLiability"], names: ["단기 리스부채", "유동리스부채"] },
-      { ids: ["ifrs-full_NoncurrentLeaseLiabilities", "dart_LongTermLeaseLiability"], names: ["장기 리스부채", "비유동리스부채"] },
-    ],
-    "BS",
-  );
+  const debt = sumOf(facts, [...SHORT_DEBT, ...LONG_DEBT], "BS");
   const cashLike = sumOf(
     facts,
     [
