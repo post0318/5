@@ -30,6 +30,14 @@ const PROVISION = [
   "ProvisionForLoanLeaseAndOtherLosses",
 ];
 const DEPOSITS = ["Deposits"];
+// 보통주 귀속 순이익(우선주 배당 차감 후) — BBG "순이익, 조정"/"보통주 순이익, GAAP" 과 일치.
+// 우선주가 없는 회사는 이 개념이 없으므로 NetIncomeLoss 로 폴백.
+const NET_INCOME = [
+  "NetIncomeLossAvailableToCommonStockholdersDiluted",
+  "NetIncomeLossAvailableToCommonStockholdersBasic",
+  "NetIncomeLoss",
+  "ProfitLoss",
+];
 
 function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
@@ -187,14 +195,14 @@ export function buildUsBankHighlights(
     netRevenue: revSeries,
     noninterestExpense: annualSeries(firstEntries(facts, NONINTEREST_EXPENSE)),
     provision: annualSeries(firstEntries(facts, PROVISION)),
-    netIncome: annualSeries(firstEntries(facts, ["NetIncomeLoss", "ProfitLoss"])),
+    netIncome: annualSeries(firstEntries(facts, NET_INCOME)),
     eps: annualSeries(unitEntries(facts, "EarningsPerShareDiluted", "USD/shares")),
   };
   const E = {
     netRevenue: firstEntries(facts, NET_REVENUE),
     noninterestExpense: firstEntries(facts, NONINTEREST_EXPENSE),
     provision: firstEntries(facts, PROVISION),
-    netIncome: firstEntries(facts, ["NetIncomeLoss", "ProfitLoss"]),
+    netIncome: firstEntries(facts, NET_INCOME),
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
   };
   const equityE = unitEntries(facts, "StockholdersEquity", "USD");
@@ -306,6 +314,7 @@ export function buildUsBankHighlights(
 
   notes.push("금융회사(은행·카드사) 전용 레이아웃 — 순수익=매출−이자비용(GAAP RevenuesNetOfInterestExpense)");
   notes.push("충당금전이익 = 순수익 − 총이자외비용, 영업이익 = 충당금전이익 − 대손충당금");
+  notes.push("순이익 = 보통주 귀속 순이익(우선주배당 차감 후, GAAP) — 우선주 없는 회사는 당기순이익과 동일");
   notes.push(
     "총대출채권·Tier1/총자본비율은 SEC EDGAR companyfacts 에 세그먼트 차원(Card Member loans 등)으로만 태깅되어 있어 " +
       "무차원 API 로는 조회 불가 — 이 표에서 제공하지 않음 (구조적 한계)",
