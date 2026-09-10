@@ -421,10 +421,13 @@ export function buildUsAnalysis(
       []) as FactUnitEntry[];
     const o = blank();
     for (const p of periods) {
-      let best: { v: number; d: number } | null = null;
+      let best: { v: number; d: number; filed: string } | null = null;
       for (const x of e) {
         const dd = Math.abs(Date.parse(p.endDate ?? "") - Date.parse(x.end));
-        if (!best || dd < best.d) best = { v: x.val, d: dd };
+        const filed = x.filed ?? "";
+        // 가까운 기준일, 동률이면 최신 공시(소급 재작성본) 우선
+        if (!best || dd < best.d || (dd === best.d && filed >= best.filed))
+          best = { v: x.val, d: dd, filed };
       }
       // 550일 넘게 떨어진 값은 무시 (Visa: dei 주식수가 2010년치만 태깅돼 있음)
       o[p.label] = best && best.d <= 550 * 864e5 ? best.v : null;
@@ -448,10 +451,20 @@ export function buildUsAnalysis(
   })();
   const shares = blank();
   for (const l of labels) {
+    // 과거 FY: 재무상태표 기말주식수(소급 재작성본) 우선 — 액면분할 전 태그가
+    //          잔존하는 dei 보다 신뢰도 높음. Visa 는 classFacts 기말주식수.
+    // LTM/현재: 최근 dei(현재 시점) 우선.
+    const y = l === LTM ? 0 : Number(l.replace("Y", ""));
     const s =
-      sharesDei[l] ??
-      sharesEnd[l] ??
-      (l === LTM ? latestWavg : wavgAt(Number(l.replace("Y", ""))));
+      l === LTM
+        ? (sharesDei[l] ??
+          sharesEnd[l] ??
+          classAOutstandingLatest(classFacts) ??
+          latestWavg)
+        : (sharesEnd[l] ??
+          classAOutstanding(classFacts, y) ??
+          sharesDei[l] ??
+          wavgAt(y));
     shares[l] = s ?? sharesHint; // 최후: 공시 주식수 전무 시 현재 주식수(quote) 근사
     if (s == null && sharesHint != null) approxPerShare = true;
   }

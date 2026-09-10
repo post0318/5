@@ -156,12 +156,15 @@ function instantAt(
   asOf: string,
   maxStaleDays?: number,
 ): number | null {
-  let best: { val: number; end: string } | null = null;
+  let best: { val: number; end: string; filed: string } | null = null;
   for (const e of entries) {
     if (e.start) continue; // duration 제외
     if (e.end > asOf) continue;
     if (maxStaleDays != null && daysBetween(e.end, asOf) > maxStaleDays) continue;
-    if (!best || e.end > best.end) best = { val: e.val, end: e.end };
+    const filed = e.filed ?? "";
+    // 최신 종료일, 동률이면 최신 공시(액면분할 등 소급 재작성본) 우선
+    if (!best || e.end > best.end || (e.end === best.end && filed >= best.filed))
+      best = { val: e.val, end: e.end, filed };
   }
   return best?.val ?? null;
 }

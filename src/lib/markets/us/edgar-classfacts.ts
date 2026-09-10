@@ -26,9 +26,11 @@ export interface ClassAYear {
   endDate: string;
   epsDiluted: number | null;
   epsBasic: number | null;
-  /** 희석 가중평균주식수 (Class A, as-converted) */
+  /** 희석 가중평균주식수 (Class A, as-converted) — EPS 분모용 */
   dilShares: number | null;
   basicShares: number | null;
+  /** 기말 유통주식수 (전 클래스 as-converted 합) — 시총·PBR·PSR 분모용 */
+  sharesOutstanding: number | null;
   /** 출처 10-K accession */
   sourceAccn: string;
 }
