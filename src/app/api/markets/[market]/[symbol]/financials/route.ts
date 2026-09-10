@@ -138,7 +138,7 @@ export async function GET(
           : detailView === "is"
             ? buildUsIncome(facts, period, { sharesHint, classFacts, sic })
             : detailView === "bs"
-              ? buildUsBalance(facts, period)
+              ? buildUsBalance(facts, period, sic)
               : detailView === "summary"
                 ? buildUsSummary(facts, period, { sharesHint, classFacts, sic })
                 : buildUsAnalysis(facts, quote?.bars ?? [], { sharesHint, classFacts, sic });

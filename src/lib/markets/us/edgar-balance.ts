@@ -10,6 +10,7 @@ import {
   recentInstantQuarters,
   recentQuarters,
 } from "./edgar-series";
+import { isFinancialCompany } from "./edgar-financial";
 
 /** 분기 컬럼 달력용 (duration 개념 — instant 개념엔 분기 기간이 없음). */
 const REVENUE_CAL = [
@@ -160,6 +161,64 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
   },
 ];
 
+/**
+ * 금융회사(은행·카드사) 재무상태표 — 제조업 유동/비유동 분류가 안 맞아 별도 구성.
+ * AXP 등은 카드회원 대출·채권(Card Member loans/receivables)을 세그먼트 차원으로만
+ * 태깅해(companyfacts 무차원 API로 조회 불가 — highlights 의 "총대출채권"과 동일한
+ * 구조적 한계) 단일 "투자·대출채권 등 (순액)" 플러그 행으로 묶는다(자산총계 − 나머지).
+ * 부채 쪽은 예금·매입채무·단기·장기차입금이 대부분의 회사에서 개별 태깅되므로
+ * "기타부채"만 플러그.
+ */
+const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
+  {
+    title: "자산",
+    lines: [
+      {
+        label: "현금·현금성자산",
+        concepts: ["CashAndCashEquivalentsAtCarryingValue"],
+        fallback: ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+        depth: 1,
+      },
+      {
+        label: "유형자산 (순)",
+        concepts: [
+          "PropertyPlantAndEquipmentNet",
+          "PropertyPlantAndEquipmentExcludingLessorAssetUnderOperatingLeaseAfterAccumulatedDepreciation",
+        ],
+        depth: 1,
+      },
+      { label: "기타자산", concepts: ["OtherAssets"], depth: 1 },
+      { label: "투자·대출채권 등 (순액)", depth: 1, plugOf: "finA" },
+      { label: "자산 총계", depth: 0, kind: "total", highlight: true, concepts: A_TOTAL },
+    ],
+  },
+  {
+    title: "부채",
+    lines: [
+      { label: "예수금", concepts: ["Deposits"], depth: 1 },
+      {
+        label: "매입채무",
+        concepts: ["AccountsPayableCurrent"],
+        fallback: ["AccountsPayableCurrentAndNoncurrent"],
+        depth: 1,
+      },
+      {
+        label: "단기차입금",
+        combine: ["CommercialPaper", "ShortTermBorrowings", "LongTermDebtCurrent"],
+        depth: 1,
+      },
+      {
+        label: "장기부채",
+        combine: ["LongTermDebtNoncurrent", "FinanceLeaseLiabilityNoncurrent", "OperatingLeaseLiabilityNoncurrent"],
+        fallback: ["LongTermDebt"],
+        depth: 1,
+      },
+      { label: "기타부채", depth: 1, plugOf: "finL" },
+      { label: "부채 총계", depth: 0, kind: "total", highlight: true, concepts: L_TOTAL },
+    ],
+  },
+];
+
 const DEBT = [
   "LongTermDebtNoncurrent",
   "LongTermDebtCurrent",
@@ -177,7 +236,9 @@ const CASH_LIKE = [
 export function buildUsBalance(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
+  sic?: string | null,
 ): FinancialStatement {
+  const isFin = isFinancialCompany(facts, sic ?? null);
   const anchor = firstConcept(facts, A_TOTAL);
 
   let periods: FinancialPeriod[];
@@ -274,10 +335,14 @@ export function buildUsBalance(
       for (const l of labels) if (lTotal[l] != null && lcurTotal[l] != null) o[l] = lTotal[l]! - lcurTotal[l]!;
       return o;
     })(),
+    // 금융회사 전용 — 플러그 기준 총계는 그냥 자산/부채 총계 자체.
+    finA: aTotal,
+    finL: lTotal,
   };
 
   const items: FinancialLineItem[] = [];
-  for (const block of BLOCKS) {
+  const blocks = isFin ? [FIN_BLOCKS[0], FIN_BLOCKS[1], BLOCKS[2]] : BLOCKS;
+  for (const block of blocks) {
     // 매핑된 depth1 라인 (플러그 제외)
     const resolved: Record<string, Record<string, number | null>> = {};
     for (const line of block.lines) {
