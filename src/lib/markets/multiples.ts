@@ -17,35 +17,46 @@ const norm = (s: string) => s.replace(/\s/g, "");
 /**
  * 재무제표에서 특정 계정의 가장 최근 값. 공백 무시 정확 매칭 → 없으면 loose 정규식.
  * loose 는 배당조정·부문 항목을 피하려 완전한 항목명이 아닌 계정을 우선.
+ *
+ * 기간(최신순) 을 바깥 루프로, accountIds(우선순위) 를 안쪽 루프로 돈다 — 회사가
+ * 도중에 개념 태그를 바꾼 경우(XOM 의 RevenueFromContractWithCustomerExcludingAssessedTax
+ * 가 2021년 이후 끊기고 Revenues 로 전환 등) 먼저 나열된 개념이 옛 연도에만 값이
+ * 있다고 그 옛 값을 최신 값보다 앞세우는 걸 막는다 — 최신 연도부터 훑으며 그 연도에
+ * 값이 있는 첫 우선순위 개념을 쓴다.
  */
 function latestValue(
   fs: FinancialStatement,
   accountIds: string[],
   loose?: RegExp,
 ): number | null {
-  const targets = new Set(accountIds.map(norm));
   const periodLabels = fs.periods.map((p) => p.label);
-  const valueOf = (item: FinancialStatement["sections"][number]["items"][number]) => {
-    for (const label of periodLabels) {
-      const v = item.values[label];
-      if (v != null) return v;
-    }
-    return null;
-  };
-  let looseHit: number | null = null;
+  const itemByTarget = new Map<string, FinancialStatement["sections"][number]["items"][number]>();
+  let looseItem: FinancialStatement["sections"][number]["items"][number] | null = null;
   for (const section of fs.sections) {
     for (const item of section.items) {
       const nm = norm(item.accountId ?? item.accountName);
-      if (targets.has(nm)) {
-        const v = valueOf(item);
-        if (v != null) return v;
+      for (const id of accountIds) {
+        const key = norm(id);
+        if (nm === key && !itemByTarget.has(key)) itemByTarget.set(key, item);
       }
-      if (loose && looseHit == null && loose.test(nm) && !/[-·]/.test(item.accountName)) {
-        looseHit = valueOf(item);
+      if (loose && looseItem == null && loose.test(nm) && !/[-·]/.test(item.accountName)) {
+        looseItem = item;
       }
     }
   }
-  return looseHit;
+  for (const label of periodLabels) {
+    for (const id of accountIds) {
+      const v = itemByTarget.get(norm(id))?.values[label];
+      if (v != null) return v;
+    }
+  }
+  if (looseItem) {
+    for (const label of periodLabels) {
+      const v = looseItem.values[label];
+      if (v != null) return v;
+    }
+  }
+  return null;
 }
 
 /**
