@@ -39,6 +39,9 @@ interface Line {
   label: string;
   concepts?: string[];
   combine?: string[]; // 합산
+  /** concepts/combine 결과가 없는 기(period)만 이 개념으로 대체 — 유동/비유동 분리 없이
+   * 미분류 총액 하나로만 공시하는 회사(AXP 등 금융사) 대응. */
+  fallback?: string[];
   depth: number;
   kind?: "item" | "subtotal" | "total";
   plugOf?: string; // 이 구간 총계 개념군의 키 → (총계 − 앞선 depth1 형제합)
@@ -49,7 +52,13 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
   {
     title: "자산",
     lines: [
-      { label: "현금·현금성자산", concepts: ["CashAndCashEquivalentsAtCarryingValue"], depth: 1 },
+      {
+        label: "현금·현금성자산",
+        concepts: ["CashAndCashEquivalentsAtCarryingValue"],
+        // 제한현금 포함 총액 하나로만 공시하는 회사(AXP 등) 폴백
+        fallback: ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+        depth: 1,
+      },
       {
         label: "단기 투자자산",
         concepts: [
@@ -93,7 +102,12 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
   {
     title: "부채",
     lines: [
-      { label: "매입채무", concepts: ["AccountsPayableCurrent"], depth: 1 },
+      {
+        label: "매입채무",
+        concepts: ["AccountsPayableCurrent"],
+        fallback: ["AccountsPayableCurrentAndNoncurrent"], // 유동/비유동 미분류 회사(AXP 등)
+        depth: 1,
+      },
       {
         label: "단기부채",
         combine: [
@@ -114,6 +128,8 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
           "FinanceLeaseLiabilityNoncurrent",
           "OperatingLeaseLiabilityNoncurrent",
         ],
+        // 유동/비유동 분리 없이 미분류 총액(LongTermDebt) 하나로만 공시하는 회사(AXP 등) 폴백
+        fallback: ["LongTermDebt"],
         depth: 1,
       },
       { label: "기타 장기부채", depth: 1, plugOf: "lnoncur" },
@@ -276,6 +292,11 @@ export function buildUsBalance(
             return o;
           })()
         : value(line.concepts ?? []);
+      if (line.fallback) {
+        const fb = value(line.fallback);
+        for (const l of labels)
+          if (resolved[line.label][l] == null && fb[l] != null) resolved[line.label][l] = fb[l];
+      }
     }
 
     for (const line of block.lines) {
@@ -344,6 +365,14 @@ export function buildUsBalance(
       const v = value([c]);
       for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
     }
+    // 장기차입금을 유동/비유동 분리 없이 미분류 총액(LongTermDebt)으로만 태깅하는
+    // 회사(AXP 등) — 분리 태그가 둘 다 없는 기(period)만 폴백으로 더한다.
+    const ltdNc = value(["LongTermDebtNoncurrent"]);
+    const ltdCur = value(["LongTermDebtCurrent"]);
+    const ltdTotal = value(["LongTermDebt"]);
+    for (const l of labels)
+      if (ltdNc[l] == null && ltdCur[l] == null && ltdTotal[l] != null)
+        o[l] = (o[l] ?? 0) + ltdTotal[l]!;
     return o;
   })();
   const cashLike = (() => {
@@ -352,6 +381,11 @@ export function buildUsBalance(
       const v = value([c]);
       for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
     }
+    // 제한현금 포함 총액 하나로만 공시하는 회사(AXP 등) 폴백
+    const cashPrimary = value(["CashAndCashEquivalentsAtCarryingValue"]);
+    const cashTotal = value(["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]);
+    for (const l of labels)
+      if (cashPrimary[l] == null && cashTotal[l] != null) o[l] = (o[l] ?? 0) + cashTotal[l]!;
     return o;
   })();
   const netDebt = blank();
