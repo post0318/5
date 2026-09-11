@@ -206,8 +206,11 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                     <span className="ml-1.5 font-normal opacity-70">({g.rows.length})</span>
                   </td>
                 </tr>
-                {g.rows.map((r) => (
-                <tr key={r.itemId} className="hover:bg-muted/30">
+                {g.rows.map((r, i) => (
+                <tr
+                  key={r.itemId}
+                  className={`hover:bg-muted/30 ${i % 2 === 1 ? "bg-muted/20" : ""}`}
+                >
                   <td className="px-3 py-2">
                     <Link
                       href={analysisHref(r)}
@@ -215,8 +218,12 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                     >
                       {r.name ?? r.symbol}
                       {r.highDividend && (
-                        <Badge variant="secondary" className="text-[10px] font-medium">
-                          고배당기업
+                        <Badge
+                          variant="secondary"
+                          className="size-4 justify-center p-0 text-[10px] font-medium"
+                          title="고배당기업"
+                        >
+                          고
                         </Badge>
                       )}
                     </Link>
