@@ -31,6 +31,8 @@ function fmtAgo(iso: string): string {
  * 체크한 기사만 본문 번역+요약(LLM, 월 과금 상한 있음) → "요약/번역"에서 조회.
  */
 export function StockNews({ market, symbol }: { market: MarketId; symbol: string }) {
+  // 한국 기사는 이미 한국어라 번역·요약 대상이 아님 — 체크박스·요약뷰 없이 목록만.
+  const isKr = market === "kr";
   const [view, setView] = useState<"all" | "saved">("all");
   const qc = useQueryClient();
 
@@ -77,25 +79,28 @@ export function StockNews({ market, symbol }: { market: MarketId; symbol: string
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <p className="text-muted-foreground/80 text-[11px]">
-          공신력 있는 언론사·3개월 이내 기사만 표시합니다. 헤드라인은 무료 자동
-          번역, 체크한 기사만 본문 번역·요약(LLM, 예산 한도 있음)이 저장됩니다.
+          {isKr
+            ? "공신력 있는 언론사·3개월 이내 기사만 표시합니다."
+            : "공신력 있는 언론사·3개월 이내 기사만 표시합니다. 헤드라인은 무료 자동 번역, 체크한 기사만 본문 번역·요약(LLM, 예산 한도 있음)이 저장됩니다."}
         </p>
-        <div className="flex shrink-0 gap-1">
-          <Button
-            size="sm"
-            variant={view === "all" ? "secondary" : "ghost"}
-            onClick={() => setView("all")}
-          >
-            전체
-          </Button>
-          <Button
-            size="sm"
-            variant={view === "saved" ? "secondary" : "ghost"}
-            onClick={() => setView("saved")}
-          >
-            요약/번역
-          </Button>
-        </div>
+        {!isKr && (
+          <div className="flex shrink-0 gap-1">
+            <Button
+              size="sm"
+              variant={view === "all" ? "secondary" : "ghost"}
+              onClick={() => setView("all")}
+            >
+              전체
+            </Button>
+            <Button
+              size="sm"
+              variant={view === "saved" ? "secondary" : "ghost"}
+              onClick={() => setView("saved")}
+            >
+              요약/번역
+            </Button>
+          </div>
+        )}
       </div>
 
       {q.isLoading && <Skeleton className="h-48 w-full" />}
@@ -105,7 +110,7 @@ export function StockNews({ market, symbol }: { market: MarketId; symbol: string
         </p>
       )}
 
-      {q.data && view === "all" && (
+      {q.data && (isKr || view === "all") && (
         <ul className="divide-y">
           {q.data.items.length === 0 && (
             <p className="text-muted-foreground py-4 text-sm">
@@ -114,14 +119,16 @@ export function StockNews({ market, symbol }: { market: MarketId; symbol: string
           )}
           {q.data.items.map((it) => (
             <li key={it.id} className="flex items-start gap-2.5 py-2.5 first:pt-0 last:pb-0">
-              <input
-                type="checkbox"
-                checked={it.saved}
-                disabled={summarize.isPending || unsave.isPending}
-                onChange={(e) => (e.target.checked ? summarize.mutate(it) : unsave.mutate(it.url))}
-                className="mt-1 size-4 shrink-0 cursor-pointer"
-                title="체크하면 본문 번역·요약을 저장합니다"
-              />
+              {!isKr && (
+                <input
+                  type="checkbox"
+                  checked={it.saved}
+                  disabled={summarize.isPending || unsave.isPending}
+                  onChange={(e) => (e.target.checked ? summarize.mutate(it) : unsave.mutate(it.url))}
+                  className="mt-1 size-4 shrink-0 cursor-pointer"
+                  title="체크하면 본문 번역·요약을 저장합니다"
+                />
+              )}
               <a
                 href={it.naverUrl ?? it.url}
                 target="_blank"
