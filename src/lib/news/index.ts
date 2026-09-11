@@ -3,6 +3,7 @@ import type { MarketId } from "@/lib/markets/types";
 import { listUniverse } from "@/lib/universe/repo";
 import { fetchGoogleNewsRss, googleNewsUrl, NOISE, type RawNewsItem } from "./googleNews";
 import { translateTitles } from "./translate";
+import { fetchStockNews as fetchCredibleStockNews } from "@/lib/markets/news";
 
 export interface NewsItem {
   titleKo: string;
@@ -44,13 +45,6 @@ const LOCALE: Record<MarketId, MarketLocale> = {
     macroQuery: "(日銀 OR 金利 OR 為替 OR 物価 OR 日経平均 OR 株式市場)",
   },
 };
-
-function stockQuery(market: MarketId, name: string | null, symbol: string): string {
-  const key = name ? `"${name}"` : symbol;
-  if (market === "kr") return `${key} (주가 OR 실적 OR 공시)`;
-  if (market === "jp") return `${key} (株価 OR 決算)`;
-  return `${key} (stock OR earnings OR shares)`;
-}
 
 async function toNewsItems(
   raw: RawNewsItem[],
@@ -97,32 +91,16 @@ export async function fetchMacroNews(market: MarketId, limit = 20): Promise<News
     .slice(0, limit);
 }
 
-/** 특정 한 종목의 뉴스 (종목분석 "주요 코멘트" 탭용). */
-export async function fetchStockNews(
-  market: MarketId,
-  symbol: string,
-  name: string | null,
-  limit = 10,
-): Promise<NewsItem[]> {
-  const cfg = LOCALE[market];
-  const raw = await fetchGoogleNewsRss(
-    googleNewsUrl(`search?q=${encodeURIComponent(stockQuery(market, name, symbol))}`, cfg.locale),
-  );
-  const items = dedupe(await toNewsItems(raw, cfg.sl, { symbol, name: name ?? undefined }));
-  return items
-    .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
-    .slice(0, limit);
-}
-
 /**
- * 유니버스 전체 종목 뉴스 — 종목별로 라운드로빈해 한쪽 종목이 몰리지 않게 섞는다.
- * 동시성·시간예산을 제한해(POOL·DEADLINE) 종목이 많아도 라우트가 오래 걸리지 않게 한다.
+ * 유니버스 전체 종목 뉴스 — 공신력 있는 언론사(한국: NAVER 뉴스검색, 미국·일본:
+ * Yahoo Finance, src/lib/markets/news.ts) 기반. 종목별로 라운드로빈해 한쪽
+ * 종목이 몰리지 않게 섞는다. 동시성·시간예산을 제한해(POOL·DEADLINE) 종목이
+ * 많아도 라우트가 오래 걸리지 않게 한다.
  */
 export async function fetchUniverseNews(market: MarketId, limit = 20): Promise<NewsItem[]> {
   const universe = (await listUniverse({ market, activeOnly: true })).slice(0, 30);
   if (universe.length === 0) return [];
 
-  const cfg = LOCALE[market];
   const perStock: NewsItem[][] = new Array(universe.length).fill(null).map(() => []);
   const POOL = 6;
   const DEADLINE_MS = 15000;
@@ -133,15 +111,18 @@ export async function fetchUniverseNews(market: MarketId, limit = 20): Promise<N
     while (next < universe.length && Date.now() < deadline) {
       const i = next++;
       const u = universe[i];
-      const raw = await fetchGoogleNewsRss(
-        googleNewsUrl(
-          `search?q=${encodeURIComponent(stockQuery(market, u.name ?? null, u.symbol))}`,
-          cfg.locale,
-        ),
-      );
-      perStock[i] = dedupe(
-        await toNewsItems(raw.slice(0, 6), cfg.sl, { symbol: u.symbol, name: u.name ?? undefined }),
-      );
+      const items = await fetchCredibleStockNews(market, u.symbol, u.name ?? null).catch(() => []);
+      perStock[i] = items.slice(0, 6).map((it) => ({
+        titleKo: it.titleKo,
+        titleOrig: it.title,
+        isKorean: market === "kr",
+        translationOk: true,
+        link: it.naverUrl ?? it.url,
+        source: it.publisher,
+        publishedAt: it.publishedAt,
+        symbol: it.symbol,
+        name: u.name ?? undefined,
+      }));
     }
   }
   await Promise.all(Array.from({ length: Math.min(POOL, universe.length) }, worker));

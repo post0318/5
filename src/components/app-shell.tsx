@@ -9,8 +9,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 const SUBNAV = [
   { seg: "universe", label: "유니버스 통합 뷰", icon: LineChart },
+  { seg: "news", label: "유니버스통합 뉴스", icon: Newspaper },
   { seg: "analysis", label: "종목분석", icon: BarChart3 },
-  { seg: "news", label: "종목뉴스", icon: Newspaper },
 ] as const;
 
 export function AppShell({ children }: { children: React.ReactNode }) {

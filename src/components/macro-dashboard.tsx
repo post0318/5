@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { MacroNewsPanel } from "@/components/macro-news-panel";
 import {
   Tooltip as UITooltip,
   TooltipContent as UITooltipContent,
@@ -327,6 +328,8 @@ export function MacroDashboard() {
               )}
             </section>
           )}
+
+          <MacroNewsPanel />
 
           <Card className="py-2">
             <CardContent className="flex flex-wrap items-center gap-x-5 gap-y-1 py-1 text-sm">

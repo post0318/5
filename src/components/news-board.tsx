@@ -61,28 +61,20 @@ export function NewsBoard({ market }: { market: MarketId }) {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold">종목뉴스</h1>
+        <h1 className="text-xl font-semibold">유니버스통합 뉴스</h1>
         <p className="text-muted-foreground text-sm">
-          Google 뉴스 공개 피드 기반. 원문 제목은 한국어로 자동 번역(무료 번역
-          API) — 본문 요약이 아닌 헤드라인 수준이며, 정확한 내용은 원문 링크에서
-          확인하세요.
+          유니버스 등록 종목 관련 뉴스 — 공신력 있는 언론사만(한국: NAVER 뉴스검색,
+          미국·일본: Yahoo Finance), 헤드라인은 한국어 자동 번역. 정확한 내용은
+          원문 링크에서 확인하세요.
         </p>
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <NewsSection
-          title="시장"
-          hint="글로벌 매크로 · 금리·물가·환율·증시 관련"
-          queryKey={["news-market", market]}
-          url={`/api/news/market?market=${market}`}
-        />
-        <NewsSection
-          title="종목"
-          hint="유니버스 등록 종목 관련 뉴스"
-          queryKey={["news-universe", market]}
-          url={`/api/news/universe?market=${market}`}
-          showStock
-        />
-      </div>
+      <NewsSection
+        title="종목"
+        hint="유니버스 등록 종목 관련 뉴스"
+        queryKey={["news-universe", market]}
+        url={`/api/news/universe?market=${market}`}
+        showStock
+      />
     </div>
   );
 }
