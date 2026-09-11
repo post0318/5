@@ -532,8 +532,8 @@ export const krOpenDartAdapter: MarketAdapter = {
     const now = new Date();
     const end = now.toISOString().slice(0, 10).replace(/-/g, "");
     const core = opts?.scope === "core";
-    // 주요공시는 분기·사업보고서가 드물게 나와 2년 창으로 넓힌다
-    const spanDays = core ? 730 : 365;
+    // 주요공시도 최근 1년 이내로 제한
+    const spanDays = 365;
     const begin = new Date(now.getTime() - spanDays * 24 * 3600 * 1000)
       .toISOString()
       .slice(0, 10)
