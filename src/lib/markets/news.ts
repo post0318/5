@@ -3,7 +3,6 @@ import YahooFinancePkg from "yahoo-finance2";
 import { fetchJson } from "./http";
 import type { MarketId } from "./types";
 import { translateTitles } from "../news/translate";
-import { filterCompanySpecific } from "../news/relevance";
 
 /**
  * 종목뉴스(선택 번역·요약용) — 한국·미국·일본.
@@ -219,9 +218,12 @@ export async function fetchStockNews(
   const query = companyName || symbol;
   const items =
     market === "kr" ? await fetchKrNews(symbol, query) : await fetchUsJpNews(market, symbol, query);
-  // 제목에 회사명이 실제로 없는 시황·타사 기사(검색은 본문 매치로도 걸림) 제외.
-  const relevant = await filterCompanySpecific(items, companyName);
-  return withTranslatedTitles(market, relevant);
+  // "제목에 회사명 포함" 필터는 비활성화 — 실측 결과 한국 뉴스 제목은 정식
+  // 회사명을 잘 반복하지 않아(예: "삼성전자" 최신 기사 5건 중 제목에 포함된 건
+  // 0건, "삼전"류 줄임말·본문 언급뿐) 관련 기사까지 대부분 걸러져 버림.
+  // filterCompanySpecific(relevance.ts)는 이후 LLM 기반 판정으로 교체할 때
+  // 재사용 — 지금은 미적용.
+  return withTranslatedTitles(market, items);
 }
 
 /** 서버가 기사 1건을 재검증(클라이언트값 신뢰 안 함) — summarize 라우트에서 사용. */

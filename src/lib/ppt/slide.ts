@@ -279,33 +279,36 @@ function drawPriceChart(
   const B = d.bench.length >= 5 ? downsample(d.bench, 60) : [];
   const dl = (iso: string) => iso.slice(2).replace(/-/g, ".");
 
-  const series: PptxGenJS.IChartMulti[] = [
-    {
-      type: "line" as PptxGenJS.CHART_NAME,
-      data: [{ name: d.name, labels: A.map((p) => dl(p.date)), values: A.map((p) => p.close) }],
-      options: { chartColors: [LINE], lineSize: 1.75, lineDataSymbol: "none" } as PptxGenJS.IChartOpts,
-    },
+  // pptxgenjs 4.0.1의 콤보(이중축) 차트는 라이브러리 자체 버그로 write() 시
+  // "(colorStr || "").replace is not a function" 에러를 낸다(옵션과 무관 —
+  // 가장 단순한 2-시리즈 콤보도 재현됨). 단일축 라인차트로 우회: 두 시리즈를
+  // 시작일=100 지수로 정규화해 같은 축에 놓는다(네이티브 차트라 데이터는 그대로 유지).
+  const a0 = A[0].close;
+  const b0 = B.length ? B[0].close : 1;
+  const idxA = A.map((p) => (p.close / a0) * 100);
+  const chartSeries = [
+    { name: d.name, labels: A.map((p) => dl(p.date)), values: idxA },
   ];
   if (B.length) {
-    series.push({
-      type: "line" as PptxGenJS.CHART_NAME,
-      data: [{ name: d.benchLabel, labels: B.map((p) => dl(p.date)), values: B.map((p) => p.close) }],
-      options: {
-        chartColors: ["9AA3AF"], lineSize: 1, lineDataSymbol: "none",
-        secondaryValAxis: true, secondaryCatAxis: true,
-      } as PptxGenJS.IChartOpts,
+    chartSeries.push({
+      name: d.benchLabel,
+      labels: B.map((p) => dl(p.date)),
+      values: B.map((p) => (p.close / b0) * 100),
     });
   }
 
-  s.addChart(series, [], {
+  s.addChart("line" as PptxGenJS.CHART_NAME, chartSeries, {
     x, y: y + calloutH, w, h: h - calloutH,
+    chartColors: [LINE, "9AA3AF"],
+    lineSize: 1.5,
+    lineDataSymbol: "none",
     showLegend: true, legendPos: "t", legendFontFace: F_BODY, legendFontSize: 7,
     catAxisLabelFontFace: F_BODY, catAxisLabelFontSize: 7, catAxisLabelColor: SUB,
-    valAxisLabelFontFace: F_BODY, valAxisLabelFontSize: 7, valAxisLabelColor: LINE,
-    valAxisLabelFormatCode: "#,##0",
-    catAxisOrientation: "minMax",
+    valAxisLabelFontFace: F_BODY, valAxisLabelFontSize: 7, valAxisLabelColor: SUB,
+    valAxisTitle: "시작일=100",
+    showValAxisTitle: true,
+    valAxisTitleFontSize: 7,
     dataLabelFontSize: 0,
-    lineDataSymbol: "none",
     valGridLine: { style: "dash", color: RULE, size: 0.5 },
   });
 
