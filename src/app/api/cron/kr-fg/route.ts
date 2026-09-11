@@ -19,8 +19,13 @@ import { refreshUniverseOverview } from "@/lib/universe/overview";
 export const maxDuration = 300;
 
 /**
- * 한국 F&G 일일 배치. Vercel Cron 이 호출 (매 영업일 장 마감 후).
- *  - 기본: 직전 영업일 1일치 수집
+ * 한국 F&G 일일 배치. Vercel Cron 이 호출 — 09:30 UTC(18:30 KST, 장마감 15:30
+ * KST 로부터 3시간 뒤. 공공데이터 API 종가 반영 시차 감안한 여유)에 그날 KST
+ * 거래일 데이터를 곧바로 수집한다("직전 영업일"이 아니라 "오늘"을 목표로 함 —
+ * 예전엔 UTC 기준 하루를 통째로 더 빼서 실제로는 이틀 전 데이터를 모으고
+ * 있었음, KST 는 UTC+9 라 크론 실행 시각(UTC)의 날짜가 이미 그날 KST 거래일과
+ * 같은 날짜라 추가로 뺄 필요가 없었던 것).
+ *  - 기본: 오늘(KST) 거래일 1일치 수집 (주말이면 직전 금요일)
  *  - ?backfill=N : 최근 N 거래일 백필 (초기 히스토리 구축용, 수동 호출)
  */
 function authorized(req: Request): boolean {
@@ -104,10 +109,10 @@ export async function GET(req: Request) {
       return ok({ mode: "backfill-range", ...(await backfillRange(from, to, !force)) });
     }
 
-    // 직전 영업일
+    // 오늘(KST 거래일 — 크론이 18:30 KST 에 도는 동안 UTC 날짜는 이미 같은 KST
+    // 거래일과 일치하므로 추가로 하루를 빼지 않는다). 주말이면 직전 금요일.
     const d = new Date();
-    d.setDate(d.getDate() - 1);
-    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+    while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);
     const ymd = d.toISOString().slice(0, 10).replace(/-/g, "");
     const res = await runKrFgBatch(ymd);
     // 유니버스 통합 뷰 사전 계산 (조회는 DB 우선)
