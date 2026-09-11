@@ -137,7 +137,10 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     if (c.kind === "estimate") return consensus?.estEps ?? null;
     return at(aEps, cy(c));
   });
-  const dps = columns.map((c) => (c.kind === "fy" ? (dpsByYear.get(cy(c)) ?? null) : null));
+  // 분기 배당 데이터 미보유(DART alotMatter 는 사업연도 단위) → LTM 컬럼은 최근 사업연도값
+  const dps = columns.map((c) =>
+    c.kind === "fy" ? (dpsByYear.get(cy(c)) ?? null) : c.kind === "ltm" ? (dpsByYear.get(lastFy) ?? null) : null,
+  );
   const divYield = dps.map((d, i) => (d != null && priceByCol[i] ? (d / priceByCol[i]!) * 100 : null));
   // OCF/CapEx 는 TTM 미보유 → LTM 컬럼은 최근 사업연도값
   const ocf = columns.map((c) => (c.kind === "ltm" ? at(aOcf, lastFy) : c.kind === "estimate" ? null : at(aOcf, cy(c))));
