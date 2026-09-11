@@ -42,7 +42,10 @@ export interface NewsItem {
   /** 헤드라인 한국어 번역(무료 번역 API, 요약 아님) — 한국 기사는 title 과 동일. */
   titleKo: string;
   publisher: string;
+  /** 원문(발행사) 링크 — 화이트리스트 판정·본문 fetch·DB 키 전부 이 값 기준. */
   url: string;
+  /** 네이버뉴스에도 게재된 기사면 그 링크(가독성 좋음) — 클릭 시 이 값을 우선 사용. */
+  naverUrl?: string;
   publishedAt: string; // ISO
   market: MarketId;
   symbol: string;
@@ -172,11 +175,13 @@ async function fetchKrNews(symbol: string, query: string): Promise<Omit<NewsItem
   const cutoff = Date.now() - THREE_MONTHS_MS;
   const items: Omit<NewsItem, "titleKo">[] = [];
   for (const n of res.items ?? []) {
-    const link = n.originallink || n.link;
-    if (!n.title || !link) continue;
+    // 화이트리스트 판정은 항상 원문(발행사) 링크 기준 — link 는 네이버뉴스
+    // 재게재본일 수 있어 도메인이 news.naver.com 이라 판정에 쓰면 안 됨.
+    const origLink = n.originallink || n.link;
+    if (!n.title || !origLink) continue;
     let host: string;
     try {
-      host = new URL(link).hostname.replace(/^www\./, "");
+      host = new URL(origLink).hostname.replace(/^www\./, "");
     } catch {
       continue;
     }
@@ -184,11 +189,19 @@ async function fetchKrNews(symbol: string, query: string): Promise<Omit<NewsItem
     if (!publisher) continue; // 화이트리스트 밖 도메인 — 목록에 안 보여줌
     const t = Date.parse(n.pubDate);
     if (!Number.isFinite(t) || t < cutoff) continue;
+    // 네이버뉴스에도 게재됐으면(link 가 naver.com) 클릭 시 그쪽으로 — 가독성 좋음.
+    let naverUrl: string | undefined;
+    try {
+      if (n.link && /(^|\.)naver\.com$/.test(new URL(n.link).hostname)) naverUrl = n.link;
+    } catch {
+      // ignore
+    }
     items.push({
-      id: link,
+      id: origLink,
       title: stripHtml(n.title),
       publisher,
-      url: link,
+      url: origLink,
+      naverUrl,
       publishedAt: new Date(t).toISOString(),
       market: "kr",
       symbol,

@@ -123,7 +123,7 @@ export function StockNews({ market, symbol }: { market: MarketId; symbol: string
                 title="체크하면 본문 번역·요약을 저장합니다"
               />
               <a
-                href={it.url}
+                href={it.naverUrl ?? it.url}
                 target="_blank"
                 rel="noreferrer"
                 className="group flex min-w-0 flex-1 items-start gap-2"
