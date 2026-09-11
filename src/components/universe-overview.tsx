@@ -216,7 +216,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                       {r.name ?? r.symbol}
                       {r.highDividend && (
                         <Badge variant="secondary" className="text-[10px] font-medium">
-                          고배당
+                          고배당기업
                         </Badge>
                       )}
                     </Link>
