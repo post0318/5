@@ -24,6 +24,7 @@ import { FinancialsTable } from "@/components/financials-table";
 import { DeepLinkList } from "@/components/deep-links";
 import { ConsensusPanel } from "@/components/consensus-panel";
 import { StockNews } from "@/components/stock-news";
+import { PriceChartPanel } from "@/components/price-chart-panel";
 
 export function StockAnalysis({
   market,
@@ -41,6 +42,7 @@ export function StockAnalysis({
   const [yahooOverride, setYahooOverride] = useState<string | null>(initialYahoo);
   const [period, setPeriod] = useState<"annual" | "quarter">("annual");
   const [filingScope, setFilingScope] = useState<"core" | "all">("core");
+  const [showPriceChart, setShowPriceChart] = useState(false);
 
   function pick(hit: SymbolHit) {
     setSymbol(hit.symbol);
@@ -521,7 +523,11 @@ export function StockAnalysis({
                   ov.consensus ? "lg:grid-cols-5" : "lg:grid-cols-4",
                 )}
               >
-                <Stat label="종가" className="order-1 lg:order-none">
+                <Stat
+                  label="종가"
+                  className="order-1 lg:order-none"
+                  onClick={() => setShowPriceChart((v) => !v)}
+                >
                   <span className="inline-flex items-baseline gap-1.5">
                     <Money value={ov.quote?.last} currency={ccy} />
                     {ov.quote?.changePct != null && (
@@ -534,7 +540,11 @@ export function StockAnalysis({
                     {ov.quote?.lastDate ?? "-"} · {ov.quote?.source ?? ""}
                   </div>
                 </Stat>
-                <Stat label="시가총액" className="order-3 lg:order-none">
+                <Stat
+                  label="시가총액"
+                  className="order-3 lg:order-none"
+                  onClick={() => setShowPriceChart((v) => !v)}
+                >
                   <span className="text-base">
                     {formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
                   </span>
@@ -601,11 +611,27 @@ export function StockAnalysis({
                   })()}
                 </Stat>
                 {ov.consensus && (
-                  <Stat label="목표주가(평균)" className="order-5 lg:order-none">
+                  <Stat label="목표주가" className="order-5 lg:order-none">
                     <Money value={ov.consensus.targetMeanPrice} currency={ov.consensus.currency} />
+                    <div className="text-muted-foreground mt-1 text-xs">
+                      <Money value={ov.consensus.targetLowPrice} currency={ov.consensus.currency} />
+                      {" ~ "}
+                      <Money value={ov.consensus.targetHighPrice} currency={ov.consensus.currency} />
+                      {" · Yahoo Finance"}
+                    </div>
                   </Stat>
                 )}
               </div>
+
+              {showPriceChart && symbol && (
+                <PriceChartPanel
+                  market={market}
+                  symbol={ov.symbol}
+                  yahoo={yahooOverride}
+                  currency={ccy}
+                  onClose={() => setShowPriceChart(false)}
+                />
+              )}
 
               {/* 재무 하이라이트 (EV 브릿지 + 5개년 + LTM + 추정) — 현재 미국만 */}
               {highlightsQ.data?.highlights && (
@@ -771,20 +797,7 @@ export function StockAnalysis({
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="grid gap-4 sm:grid-cols-3">
-                      <Stat label="목표주가(범위)">
-                        <span className="tnum text-sm">
-                          <Money
-                            value={ov.consensus.targetLowPrice}
-                            currency={ov.consensus.currency}
-                          />
-                          {" ~ "}
-                          <Money
-                            value={ov.consensus.targetHighPrice}
-                            currency={ov.consensus.currency}
-                          />
-                        </span>
-                      </Stat>
+                    <div className="grid gap-4 sm:grid-cols-2">
                       <Stat label="애널리스트 수">
                         <NumberText value={ov.consensus.numberOfAnalysts} />
                       </Stat>
@@ -1080,13 +1093,25 @@ function Stat({
   label,
   children,
   className,
+  onClick,
 }: {
   label: string;
   children: React.ReactNode;
   className?: string;
+  onClick?: () => void;
 }) {
   return (
-    <div className={cn("border-border rounded-lg border p-3", className)}>
+    <div
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={onClick ? (e) => (e.key === "Enter" || e.key === " ") && onClick() : undefined}
+      className={cn(
+        "border-border rounded-lg border p-3",
+        onClick && "hover:border-primary/50 cursor-pointer transition-colors",
+        className,
+      )}
+    >
       <div className="text-muted-foreground text-xs">{label}</div>
       <div className="mt-1 text-lg font-semibold">{children}</div>
     </div>
