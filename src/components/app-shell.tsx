@@ -25,7 +25,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-full flex-col">
       <header className="bg-background/80 sticky top-0 z-30 border-b backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-6 px-4">
+        <div className="mx-auto flex min-h-14 max-w-[1400px] flex-wrap items-center gap-x-6 gap-y-1 px-4 py-2">
           <Link href="/kr/universe" className="flex items-center gap-2 font-semibold">
             <span className="bg-primary text-primary-foreground grid size-6 place-items-center rounded text-xs">
               G
@@ -85,8 +85,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* 서브 내비 */}
         {!onManage && !onMacro && (
-          <div className="mx-auto max-w-[1400px] px-4">
-            <div className="flex gap-4">
+          <div className="mx-auto max-w-[1400px] overflow-x-auto px-4">
+            <div className="flex w-max min-w-full gap-4">
               {SUBNAV.map((s) => {
                 const active = s.seg === sub;
                 return (

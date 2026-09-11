@@ -515,7 +515,12 @@ export function StockAnalysis({
             <TabsContent value="overview" className="space-y-6 pt-4">
               {/* 시세 */}
               {/* 모바일 2열: 1·4 / 2·3 → sm 이상은 원래 순서 */}
-              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <div
+                className={cn(
+                  "grid grid-cols-2 gap-4",
+                  ov.consensus ? "lg:grid-cols-5" : "lg:grid-cols-4",
+                )}
+              >
                 <Stat label="종가" className="order-1 lg:order-none">
                   <span className="inline-flex items-baseline gap-1.5">
                     <Money value={ov.quote?.last} currency={ccy} />
@@ -595,6 +600,11 @@ export function StockAnalysis({
                     );
                   })()}
                 </Stat>
+                {ov.consensus && (
+                  <Stat label="목표주가(평균)" className="order-5 lg:order-none">
+                    <Money value={ov.consensus.targetMeanPrice} currency={ov.consensus.currency} />
+                  </Stat>
+                )}
               </div>
 
               {/* 재무 하이라이트 (EV 브릿지 + 5개년 + LTM + 추정) — 현재 미국만 */}
@@ -761,13 +771,7 @@ export function StockAnalysis({
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="grid gap-4 sm:grid-cols-4">
-                      <Stat label="목표주가(평균)">
-                        <Money
-                          value={ov.consensus.targetMeanPrice}
-                          currency={ov.consensus.currency}
-                        />
-                      </Stat>
+                    <div className="grid gap-4 sm:grid-cols-3">
                       <Stat label="목표주가(범위)">
                         <span className="tnum text-sm">
                           <Money
