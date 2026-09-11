@@ -22,8 +22,9 @@ const TOOLTIP_STYLE = {
   },
 } as const;
 
-/** 볼린저밴드·MACD 없이 종가만 — 기본 1개월(0.25년). */
-const PERIODS = [0.25, 0.5, 1, 3, 5, 10] as const;
+/** 볼린저밴드·MACD 없이 종가만 — 기본 1개월. */
+const PERIODS = [1 / 12, 0.25, 0.5, 1, 3, 5, 10] as const;
+const DEFAULT_YEARS: number = PERIODS[0];
 const periodLabel = (y: number) => (y < 1 ? `${Math.round(y * 12)}개월` : `${y}년`);
 
 interface PriceChartResp {
@@ -44,7 +45,7 @@ export function PriceChartPanel({
   currency?: string | null;
   onClose: () => void;
 }) {
-  const [years, setYears] = useState<number>(0.25);
+  const [years, setYears] = useState<number>(DEFAULT_YEARS);
   const q = useQuery({
     queryKey: ["price-chart", market, symbol, yahoo],
     queryFn: () =>
@@ -67,7 +68,7 @@ export function PriceChartPanel({
     }
     const lastY = opts.at(-1)?.y ?? 0;
     if (maxYears > lastY + 0.01) opts.push({ y: maxYears, label: "최대" });
-    return opts.length ? opts : [{ y: maxYears || 0.25, label: "최대" }];
+    return opts.length ? opts : [{ y: maxYears || DEFAULT_YEARS, label: "최대" }];
   }, [maxYears]);
 
   const rows = useMemo(() => {
