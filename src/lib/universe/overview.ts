@@ -4,6 +4,7 @@ import { getStockOverview } from "@/lib/markets/service";
 import { fetchKrForeignOwnership, fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 import { computeKrOverviewMetrics } from "@/lib/markets/kr/overview-metrics";
 import { listUniverse } from "@/lib/universe/repo";
+import { isHighDividendKr } from "@/lib/markets/kr/high-dividend";
 import type { UniverseItem } from "@/lib/db/schema";
 import {
   deleteOverview,
@@ -64,6 +65,7 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       netMargin: isKr ? (krMetrics?.netMargin ?? null) : margin(inp?.netIncomeAnnual),
       foreignRatio: foreign?.ratio ?? null,
       foreignRatioAsOf: foreign?.asOf ?? null,
+      highDividend: isKr && isHighDividendKr(item.symbol),
       warnings: ov.warnings,
       error: null,
     };
@@ -86,6 +88,7 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       netMargin: null,
       foreignRatio: null,
       foreignRatioAsOf: null,
+      highDividend: item.market === "kr" && isHighDividendKr(item.symbol),
       warnings: [],
       error: err instanceof Error ? err.message : "조회 실패",
     };

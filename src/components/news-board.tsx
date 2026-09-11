@@ -64,11 +64,9 @@ export function NewsBoard({ market }: { market: MarketId }) {
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">유니버스통합 뉴스</h1>
-        <p className="text-muted-foreground text-sm">
-          유니버스 등록 종목 관련 뉴스. 정확한 내용은 원문 링크에서 확인하세요.
-        </p>
       </div>
       <NewsSection
+        hint="유니버스 등록 종목 관련 뉴스. 정확한 내용은 원문 링크에서 확인하세요."
         queryKey={["news-universe", market]}
         url={`/api/news/universe?market=${market}`}
         showStock

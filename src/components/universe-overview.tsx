@@ -6,6 +6,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import type { MarketId } from "@/lib/markets/types";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChangePercent, Money, Multiple, Percent } from "@/components/num";
@@ -38,6 +39,7 @@ interface Row {
   warnings?: string[];
   error?: string | null;
   updatedAt?: string;
+  highDividend?: boolean;
 }
 
 const CAP_UNIT: Record<MarketId, string> = { kr: "십억원", us: "십억$", jp: "억엔" };
@@ -209,9 +211,14 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                   <td className="px-3 py-2">
                     <Link
                       href={analysisHref(r)}
-                      className="hover:text-primary font-medium"
+                      className="hover:text-primary inline-flex items-center gap-1.5 font-medium"
                     >
                       {r.name ?? r.symbol}
+                      {r.highDividend && (
+                        <Badge variant="secondary" className="text-[10px] font-medium">
+                          고배당
+                        </Badge>
+                      )}
                     </Link>
                     <div className="text-muted-foreground tnum text-xs">{r.symbol}</div>
                   </td>
