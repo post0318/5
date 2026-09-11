@@ -124,35 +124,16 @@ const UNIT_LABEL: Record<MarketId, string> = { kr: "억원", us: "백만$", jp: 
 const lines = (v?: string | string[]) =>
   (Array.isArray(v) ? v : (v ?? "").split(/\r?\n/)).map((x) => x.trim()).filter(Boolean);
 
-/** 홈페이지 도메인 → 로고 data URI (Clearbit → Google 파비콘 폴백) */
-async function fetchLogo(homepage?: string | null): Promise<string | null> {
-  if (!homepage) return null;
-  let domain: string;
-  try {
-    domain = new URL(homepage.startsWith("http") ? homepage : `https://${homepage}`).hostname.replace(
-      /^www\./,
-      "",
-    );
-  } catch {
-    return null;
-  }
-  const urls = [
-    `https://logo.clearbit.com/${domain}?size=200`,
-    `https://www.google.com/s2/favicons?domain=${domain}&sz=128`,
-  ];
-  for (const u of urls) {
-    try {
-      const res = await fetch(u, { signal: AbortSignal.timeout(6000) });
-      if (!res.ok) continue;
-      const ct = res.headers.get("content-type") ?? "image/png";
-      if (!ct.startsWith("image/")) continue;
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length < 100) continue;
-      return `data:${ct};base64,${buf.toString("base64")}`;
-    } catch {
-      /* 다음 소스 */
-    }
-  }
+/**
+ * 로고 자동 조회는 쓰지 않는다 — Clearbit Logo API는 서비스 종료(DNS 응답
+ * 없음)됐고, 폴백으로 쓰던 Google 파비콘 서비스는 실제 파비콘을 못 찾으면
+ * 도메인 첫 글자로 만든 가짜 아이콘을 정상 이미지처럼 반환해(예: samsung.com
+ * → 진짜 삼성 로고가 아니라 파란 바탕에 "S" 아이콘) 틀린 로고가 그대로
+ * PPT에 들어가는 문제가 있었다. 틀린 로고보다 로고 없음이 낫다고 판단해
+ * 자동 조회를 제거 — 로고가 필요하면 사용자가 직접 이미지를 준비해 붙여야
+ * 한다(현재 다이얼로그에는 업로드 필드 없음).
+ */
+async function fetchLogo(_homepage?: string | null): Promise<string | null> {
   return null;
 }
 
