@@ -94,6 +94,9 @@ export async function fetchMacroNews(market: MarketId, limit = 20): Promise<News
 /** 이 그룹명을 가진 종목들을 목록 맨 앞으로 (표시 순서 고정 요청). */
 const PINNED_GROUP = "더블S";
 
+/** 유니버스통합뉴스는 최신 정보만 — 30일 넘은 기사는 정보가치 없다고 보고 제외. */
+const UNIVERSE_NEWS_MAX_AGE_MS = 30 * 24 * 3600_000;
+
 /**
  * 유니버스 전체 종목 뉴스 — 공신력 있는 언론사(한국: NAVER 뉴스검색, 미국·일본:
  * Yahoo Finance, src/lib/markets/news.ts) 기반. 종목마다 최신 1건씩, 전 종목을
@@ -121,6 +124,7 @@ export async function fetchUniverseNews(market: MarketId): Promise<NewsItem[]> {
       const items = await fetchCredibleStockNews(market, u.symbol, u.name ?? null).catch(() => []);
       const latest = [...items].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))[0];
       if (!latest) continue;
+      if (Date.now() - new Date(latest.publishedAt).getTime() > UNIVERSE_NEWS_MAX_AGE_MS) continue;
       perStock[i] = {
         titleKo: latest.titleKo,
         titleOrig: latest.title,

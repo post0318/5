@@ -11,9 +11,9 @@ function fmtAgo(iso: string): string {
   return `${Math.round(hrs / 24)}일 전`;
 }
 
-/** 좌/우 분할 개수 — 절반을 5의 배수로 올림, 좌측이 더 많이(또는 같게) 가져간다. */
+/** 좌/우 분할 개수 — 단순 반반(좌측이 홀수일 때 1개 더 가져감). */
 function splitCounts(total: number): [number, number] {
-  const left = Math.min(total, Math.ceil(total / 2 / 5) * 5);
+  const left = Math.ceil(total / 2);
   return [left, total - left];
 }
 
