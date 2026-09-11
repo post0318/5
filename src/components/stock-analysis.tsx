@@ -23,7 +23,7 @@ import { StockPptButton } from "@/components/ppt-export";
 import { FinancialsTable } from "@/components/financials-table";
 import { DeepLinkList } from "@/components/deep-links";
 import { ConsensusPanel } from "@/components/consensus-panel";
-import { StockComments } from "@/components/stock-comments";
+import { StockNews } from "@/components/stock-news";
 
 export function StockAnalysis({
   market,
@@ -508,7 +508,7 @@ export function StockAnalysis({
                 <TabsTrigger value="rights">권리일정</TabsTrigger>
               )}
               <TabsTrigger value="filings">공시</TabsTrigger>
-              <TabsTrigger value="comments">주요 코멘트</TabsTrigger>
+              <TabsTrigger value="news">종목뉴스</TabsTrigger>
             </TabsList>
 
             {/* 개요 */}
@@ -931,9 +931,9 @@ export function StockAnalysis({
               )}
             </TabsContent>
 
-            {/* 주요 코멘트 (뉴스) */}
-            <TabsContent value="comments" className="pt-4">
-              <StockComments market={market} symbol={ov.symbol} name={ov.profile?.name} />
+            {/* 종목뉴스 */}
+            <TabsContent value="news" className="pt-4">
+              <StockNews market={market} symbol={ov.symbol} />
             </TabsContent>
 
             {/* 권리일정 (한국·미국) */}

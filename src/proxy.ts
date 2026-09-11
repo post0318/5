@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
  *     *      /api/universe/[id]              (PATCH·DELETE)
  *     POST   /api/universe/bulk
  *     GET    /api/universe/overview?refresh=1 (캐시 조회는 공개)
+ *     *      /api/markets/[market]/[symbol]/news/summarize (LLM 비용 발생 — 비로그인 남용 방지)
  * - /api/cron/* 은 자체 CRON_SECRET 검증 → 여기서 제외
  */
 
@@ -38,7 +39,8 @@ export function proxy(req: NextRequest) {
     pathname === "/api/universe/bulk" ||
     (pathname === "/api/universe/overview" &&
       searchParams.get("refresh") === "1") ||
-    /^\/api\/universe\/(?!overview$|bulk$)[^/]+$/.test(pathname); // /api/universe/[id]
+    /^\/api\/universe\/(?!overview$|bulk$)[^/]+$/.test(pathname) || // /api/universe/[id]
+    /^\/api\/markets\/[^/]+\/[^/]+\/news\/summarize$/.test(pathname);
 
   if (!isProtected || authed(req)) return NextResponse.next();
 
@@ -59,5 +61,5 @@ export function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/manage", "/api/universe/:path*"],
+  matcher: ["/manage", "/api/universe/:path*", "/api/markets/:path*"],
 };

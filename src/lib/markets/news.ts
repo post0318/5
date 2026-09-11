@@ -1,13 +1,15 @@
 import "server-only";
 import YahooFinancePkg from "yahoo-finance2";
+import { fetchJson } from "./http";
 import type { MarketId } from "./types";
+import { translateTitles } from "../news/translate";
 
 /**
- * 종목뉴스(선택 번역·요약용) — 미국·일본만. 한국은 기존 "관련 뉴스" 딥링크
- * 유지(네이버 뉴스 검색이 2026-06 유료 종량제 NAVER API HUB 로 이관되며
- * 무료로 깔끔하게 쓸 소스가 없어짐 — 카카오 Daum 검색 API는 뉴스 검색 자체가
- * 없음). yahoo-finance2 는 이미 이 프로젝트가 쓰는 무료 소스라 신규 계정·
- * 비용 이슈 없음(prd.md §4.3).
+ * 종목뉴스(선택 번역·요약용) — 한국·미국·일본.
+ * 미국·일본: yahoo-finance2 뉴스 검색(이미 이 프로젝트가 쓰는 무료 소스).
+ * 한국: NAVER API HUB 검색(뉴스) — 2026-06 "openapi.naver.com" 에서 이관,
+ * 요금표 확인 결과 검색 API 자체는 무료(일 25,000건 한도). 발행사명이
+ * 없어 원문 링크 도메인으로 화이트리스트 매칭.
  */
 
 const YF = (YahooFinancePkg as { default?: unknown }).default ?? YahooFinancePkg;
@@ -35,8 +37,10 @@ function yf(): YFInstance {
 }
 
 export interface NewsItem {
-  id: string; // uuid
+  id: string;
   title: string;
+  /** 헤드라인 한국어 번역(무료 번역 API, 요약 아님) — 한국 기사는 title 과 동일. */
+  titleKo: string;
   publisher: string;
   url: string;
   publishedAt: string; // ISO
@@ -44,9 +48,21 @@ export interface NewsItem {
   symbol: string;
 }
 
-/** 공신력 있는 언론사만 — yahoo `publisher` 필드 정확 매칭(대소문자 무시). */
+const SOURCE_LANG: Record<MarketId, "ko" | "en" | "ja"> = { kr: "ko", us: "en", jp: "ja" };
+
+/** 헤드라인만 무료로 번역(체크 전엔 LLM 비용 없음) — src/lib/news/translate.ts 재사용. */
+async function withTranslatedTitles(
+  market: MarketId,
+  items: Omit<NewsItem, "titleKo">[],
+): Promise<NewsItem[]> {
+  const translated = await translateTitles(items, SOURCE_LANG[market], (it) => it.title);
+  return items.map((it, i) => ({ ...it, titleKo: translated[i].titleKo }));
+}
+
+/** 공신력 있는 언론사만 — 미국·일본은 yahoo `publisher` 필드, 한국은 도메인 매칭 결과(아래 맵의 값). */
 const ALLOWED_PUBLISHERS = new Set(
   [
+    // 미국
     "Reuters",
     "Bloomberg",
     "Associated Press",
@@ -60,21 +76,47 @@ const ALLOWED_PUBLISHERS = new Set(
     "Yahoo Finance",
     "Dow Jones Newswires",
     "Investor's Business Daily", // 실측: yahoo 검색 결과 빈도 높음
+    // 일본
     "Nikkei Asia",
     "The Japan Times",
     "Kyodo News",
+    // 한국 (도메인 매칭 결과 값 — KR_PUBLISHER_BY_DOMAIN 과 동일 목록 유지)
+    "연합뉴스",
+    "한국경제",
+    "매일경제",
+    "서울경제",
+    "조선비즈",
+    "머니투데이",
+    "이데일리",
+    "파이낸셜뉴스",
+    "한국일보",
   ].map((p) => p.toLowerCase()),
 );
 
+/** 한국 뉴스 원문 링크 도메인 → 언론사명. 없는 도메인은 화이트리스트 밖으로 처리. */
+const KR_PUBLISHER_BY_DOMAIN: Record<string, string> = {
+  "yna.co.kr": "연합뉴스",
+  "hankyung.com": "한국경제",
+  "mk.co.kr": "매일경제",
+  "sedaily.com": "서울경제",
+  "biz.chosun.com": "조선비즈",
+  "mt.co.kr": "머니투데이",
+  "edaily.co.kr": "이데일리",
+  "fnnews.com": "파이낸셜뉴스",
+  "hankookilbo.com": "한국일보",
+};
+
 const THREE_MONTHS_MS = 90 * 24 * 3600_000;
 
-export async function fetchStockNews(
+function stripHtml(s: string): string {
+  return s.replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&amp;/g, "&").trim();
+}
+
+async function fetchUsJpNews(
   market: MarketId,
   symbol: string,
-  companyName?: string | null,
-): Promise<NewsItem[]> {
-  if (market === "kr") return []; // 한국은 기존 딥링크만 — 이 함수 자체를 호출하지 않는 게 정상 경로
-  const query = companyName || symbol;
+  query: string,
+): Promise<Omit<NewsItem, "titleKo">[]> {
   let res: { news?: RawNews[] };
   try {
     res = await yf().search(query, { newsCount: 20, quotesCount: 0 });
@@ -82,7 +124,7 @@ export async function fetchStockNews(
     return [];
   }
   const cutoff = Date.now() - THREE_MONTHS_MS;
-  const items: NewsItem[] = [];
+  const items: Omit<NewsItem, "titleKo">[] = [];
   for (const n of res.news ?? []) {
     if (!n.title || !n.link || !n.publisher) continue;
     if (!ALLOWED_PUBLISHERS.has(n.publisher.toLowerCase())) continue;
@@ -101,10 +143,98 @@ export async function fetchStockNews(
   return items;
 }
 
+interface NaverNewsItem {
+  title: string;
+  originallink: string;
+  link: string;
+  pubDate: string; // RFC822
+}
+interface NaverNewsResponse {
+  items?: NaverNewsItem[];
+}
+
+async function fetchKrNews(symbol: string, query: string): Promise<Omit<NewsItem, "titleKo">[]> {
+  const keyId = process.env.NAVER_APIHUB_KEY_ID;
+  const keySecret = process.env.NAVER_APIHUB_KEY_SECRET;
+  if (!keyId || !keySecret) return [];
+  let res: NaverNewsResponse;
+  try {
+    res = await fetchJson<NaverNewsResponse>(
+      `https://naverapihub.apigw.ntruss.com/search/v1/news?query=${encodeURIComponent(query)}&display=20&sort=date`,
+      {
+        headers: { "X-NCP-APIGW-API-KEY-ID": keyId, "X-NCP-APIGW-API-KEY": keySecret },
+        revalidate: 900,
+      },
+    );
+  } catch {
+    return [];
+  }
+  const cutoff = Date.now() - THREE_MONTHS_MS;
+  const items: Omit<NewsItem, "titleKo">[] = [];
+  for (const n of res.items ?? []) {
+    const link = n.originallink || n.link;
+    if (!n.title || !link) continue;
+    let host: string;
+    try {
+      host = new URL(link).hostname.replace(/^www\./, "");
+    } catch {
+      continue;
+    }
+    const publisher = KR_PUBLISHER_BY_DOMAIN[host];
+    if (!publisher) continue; // 화이트리스트 밖 도메인 — 목록에 안 보여줌
+    const t = Date.parse(n.pubDate);
+    if (!Number.isFinite(t) || t < cutoff) continue;
+    items.push({
+      id: link,
+      title: stripHtml(n.title),
+      publisher,
+      url: link,
+      publishedAt: new Date(t).toISOString(),
+      market: "kr",
+      symbol,
+    });
+  }
+  return items;
+}
+
+export async function fetchStockNews(
+  market: MarketId,
+  symbol: string,
+  companyName?: string | null,
+): Promise<NewsItem[]> {
+  const query = companyName || symbol;
+  const items =
+    market === "kr" ? await fetchKrNews(symbol, query) : await fetchUsJpNews(market, symbol, query);
+  return withTranslatedTitles(market, items);
+}
+
 /** 서버가 기사 1건을 재검증(클라이언트값 신뢰 안 함) — summarize 라우트에서 사용. */
 export function isAllowedArticle(publisher: string, publishedAt: string): boolean {
   if (!ALLOWED_PUBLISHERS.has(publisher.toLowerCase())) return false;
   const t = Date.parse(publishedAt);
   if (!Number.isFinite(t)) return false;
   return t >= Date.now() - THREE_MONTHS_MS;
+}
+
+/**
+ * 체크한 기사 1건의 본문을 온디맨드로 가져와 텍스트만 추출(배치·주기적 수집 아님).
+ * 완전한 본문 파싱은 아님 — 태그 제거 정도의 거친 추출이라 광고·내비 텍스트가
+ * 섞일 수 있지만, LLM 이 번역·요약 시 자연스럽게 걸러낸다.
+ */
+export async function fetchArticleBody(url: string): Promise<string> {
+  const res = await fetch(url, {
+    headers: { "user-agent": "Mozilla/5.0 (compatible; research-bot)" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`기사 본문 요청 실패 ${res.status}`);
+  const html = await res.text();
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
 }
