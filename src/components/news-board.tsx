@@ -16,12 +16,14 @@ function NewsSection({
   queryKey,
   url,
   showStock,
+  split,
 }: {
-  title: string;
-  hint: string;
+  title?: string;
+  hint?: string;
   queryKey: unknown[];
   url: string;
   showStock?: boolean;
+  split?: boolean;
 }) {
   const q = useQuery({
     queryKey,
@@ -33,8 +35,8 @@ function NewsSection({
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2">
         <div>
-          <CardTitle className="text-sm">{title}</CardTitle>
-          <p className="text-muted-foreground mt-0.5 text-xs">{hint}</p>
+          {title && <CardTitle className="text-sm">{title}</CardTitle>}
+          {hint && <p className="text-muted-foreground mt-0.5 text-xs">{hint}</p>}
         </div>
         <Button
           variant="ghost"
@@ -51,7 +53,7 @@ function NewsSection({
         {q.isError && (
           <p className="text-destructive text-sm">{(q.error as Error).message}</p>
         )}
-        {q.data && <NewsList items={q.data.items} showStock={showStock} />}
+        {q.data && <NewsList items={q.data.items} showStock={showStock} split={split} />}
       </CardContent>
     </Card>
   );
@@ -63,18 +65,19 @@ export function NewsBoard({ market }: { market: MarketId }) {
       <div>
         <h1 className="text-xl font-semibold">유니버스통합 뉴스</h1>
         <p className="text-muted-foreground text-sm">
-          유니버스 등록 종목 관련 뉴스 — 공신력 있는 언론사만(한국: NAVER 뉴스검색,
-          미국·일본: Yahoo Finance), 헤드라인은 한국어 자동 번역. 정확한 내용은
-          원문 링크에서 확인하세요.
+          유니버스 등록 종목 관련 뉴스. 정확한 내용은 원문 링크에서 확인하세요.
         </p>
       </div>
       <NewsSection
-        title="종목"
-        hint="유니버스 등록 종목 관련 뉴스"
         queryKey={["news-universe", market]}
         url={`/api/news/universe?market=${market}`}
         showStock
+        split
       />
+      <p className="text-muted-foreground text-xs">
+        출처: 공신력 있는 언론사만(한국: NAVER 뉴스검색, 미국·일본: Yahoo Finance), 헤드라인은
+        한국어 자동 번역.
+      </p>
     </div>
   );
 }

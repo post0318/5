@@ -91,19 +91,26 @@ export async function fetchMacroNews(market: MarketId, limit = 20): Promise<News
     .slice(0, limit);
 }
 
+/** 이 그룹명을 가진 종목들을 목록 맨 앞으로 (표시 순서 고정 요청). */
+const PINNED_GROUP = "더블S";
+
 /**
  * 유니버스 전체 종목 뉴스 — 공신력 있는 언론사(한국: NAVER 뉴스검색, 미국·일본:
- * Yahoo Finance, src/lib/markets/news.ts) 기반. 종목별로 라운드로빈해 한쪽
- * 종목이 몰리지 않게 섞는다. 동시성·시간예산을 제한해(POOL·DEADLINE) 종목이
- * 많아도 라우트가 오래 걸리지 않게 한다.
+ * Yahoo Finance, src/lib/markets/news.ts) 기반. 종목마다 최신 1건씩, 전 종목을
+ * 빠짐없이 담는다(개수 제한 없음 — 화면 2분할 레이아웃이 종목수 기준으로
+ * 나눠 표시). 순서는 유니버스 그룹 단위 유지 + PINNED_GROUP 을 맨 앞으로.
+ * 동시성·시간예산을 제한해(POOL·DEADLINE) 종목이 많아도 오래 걸리지 않게 한다.
  */
-export async function fetchUniverseNews(market: MarketId, limit = 20): Promise<NewsItem[]> {
-  const universe = (await listUniverse({ market, activeOnly: true })).slice(0, 30);
+export async function fetchUniverseNews(market: MarketId): Promise<NewsItem[]> {
+  const all = await listUniverse({ market, activeOnly: true });
+  const pinned = all.filter((u) => u.groupName === PINNED_GROUP);
+  const rest = all.filter((u) => u.groupName !== PINNED_GROUP);
+  const universe = [...pinned, ...rest];
   if (universe.length === 0) return [];
 
-  const perStock: NewsItem[][] = new Array(universe.length).fill(null).map(() => []);
+  const perStock: (NewsItem | null)[] = new Array(universe.length).fill(null);
   const POOL = 6;
-  const DEADLINE_MS = 15000;
+  const DEADLINE_MS = 20000;
   const deadline = Date.now() + DEADLINE_MS;
   let next = 0;
 
@@ -112,37 +119,22 @@ export async function fetchUniverseNews(market: MarketId, limit = 20): Promise<N
       const i = next++;
       const u = universe[i];
       const items = await fetchCredibleStockNews(market, u.symbol, u.name ?? null).catch(() => []);
-      perStock[i] = items.slice(0, 6).map((it) => ({
-        titleKo: it.titleKo,
-        titleOrig: it.title,
+      const latest = [...items].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))[0];
+      if (!latest) continue;
+      perStock[i] = {
+        titleKo: latest.titleKo,
+        titleOrig: latest.title,
         isKorean: market === "kr",
         translationOk: true,
-        link: it.naverUrl ?? it.url,
-        source: it.publisher,
-        publishedAt: it.publishedAt,
-        symbol: it.symbol,
+        link: latest.naverUrl ?? latest.url,
+        source: latest.publisher,
+        publishedAt: latest.publishedAt,
+        symbol: latest.symbol,
         name: u.name ?? undefined,
-      }));
+      };
     }
   }
   await Promise.all(Array.from({ length: Math.min(POOL, universe.length) }, worker));
 
-  // 라운드로빈으로 종목 간 균형 있게 뽑는다
-  const queues = perStock.map((list) => [...list].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)));
-  const seenLink = new Set<string>();
-  const picked: NewsItem[] = [];
-  let progressed = true;
-  while (picked.length < limit && progressed) {
-    progressed = false;
-    for (const q of queues) {
-      if (picked.length >= limit) break;
-      const item = q.shift();
-      if (!item) continue;
-      progressed = true;
-      if (seenLink.has(item.link)) continue;
-      seenLink.add(item.link);
-      picked.push(item);
-    }
-  }
-  return picked;
+  return perStock.filter((it): it is NewsItem => it != null);
 }

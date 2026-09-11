@@ -3,6 +3,7 @@ import YahooFinancePkg from "yahoo-finance2";
 import { fetchJson } from "./http";
 import type { MarketId } from "./types";
 import { translateTitles } from "../news/translate";
+import { filterCompanySpecific } from "../news/relevance";
 
 /**
  * 종목뉴스(선택 번역·요약용) — 한국·미국·일본.
@@ -218,7 +219,9 @@ export async function fetchStockNews(
   const query = companyName || symbol;
   const items =
     market === "kr" ? await fetchKrNews(symbol, query) : await fetchUsJpNews(market, symbol, query);
-  return withTranslatedTitles(market, items);
+  // 제목에 회사명이 실제로 없는 시황·타사 기사(검색은 본문 매치로도 걸림) 제외.
+  const relevant = await filterCompanySpecific(items, companyName);
+  return withTranslatedTitles(market, relevant);
 }
 
 /** 서버가 기사 1건을 재검증(클라이언트값 신뢰 안 함) — summarize 라우트에서 사용. */

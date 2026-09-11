@@ -121,16 +121,9 @@ function addSlide(pptx: PptxGenJS, d: StockSlideData) {
   sectionTitle(s, leftX, secY, leftW, "주요 사업");
   bulletBox(s, leftX, bodyY, leftW, 2.56, d.business, "(주요 사업 내용을 입력하세요)");
 
-  // 우: 핵심 시장점유율 — 빈 영역(라벨만)
+  // 우: 핵심 시장점유율 — 실제 데이터 있으면 도넛차트(편집 가능한 네이티브 차트)
   sectionTitle(s, rightX, secY, rightW, "핵심 시장점유율 · 경쟁 구도");
-  s.addShape("rect", {
-    x: rightX, y: bodyY, w: rightW, h: 1.62,
-    fill: { color: "FFFFFF" }, line: { color: RULE, width: 1, dashType: "dash" },
-  });
-  s.addText("직접 작성 영역", {
-    x: rightX, y: bodyY + 0.66, w: rightW, h: 0.3, align: "center",
-    color: SUB, fontFace: F_BODY, fontSize: 9, italic: true,
-  });
+  drawMarketShare(s, d, rightX, bodyY, rightW, 2.56);
 
   // ── 하단: 재무제표(좌) / 주가차트(우) ───────────────
   const botSecY = 4.78;
@@ -160,6 +153,54 @@ function addSlide(pptx: PptxGenJS, d: StockSlideData) {
       color: SUB, fontFace: F_BODY, fontSize: 7.5,
     });
   }
+}
+
+const SHARE_RE = /^(.+?)\s+([\d.]+)\s*%?$/;
+const SHARE_COLORS = [ORANGE, "4A4A4A", "C9C9C9", "F0B27A", "9AA3AF"];
+
+/** "삼성전자 36.0%" 같은 줄을 파싱해 도넛차트로 — 네이티브 차트라 PPT에서 값 수정 가능. */
+function drawMarketShare(
+  s: PptxGenJS.Slide,
+  d: StockSlideData,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
+  const rows = d.marketShare
+    .map((line) => line.match(SHARE_RE))
+    .filter((m): m is RegExpMatchArray => m != null)
+    .map((m) => ({ name: m[1].trim(), value: Number(m[2]) }))
+    .filter((r) => Number.isFinite(r.value));
+
+  if (rows.length === 0) {
+    s.addShape("rect", {
+      x, y, w, h, fill: { color: "FFFFFF" }, line: { color: RULE, width: 1, dashType: "dash" },
+    });
+    s.addText("직접 작성 영역", {
+      x, y: y + h / 2 - 0.15, w, h: 0.3, align: "center",
+      color: SUB, fontFace: F_BODY, fontSize: 9, italic: true,
+    });
+    return;
+  }
+
+  s.addChart(
+    "doughnut" as PptxGenJS.CHART_NAME,
+    [{ name: "시장점유율", labels: rows.map((r) => r.name), values: rows.map((r) => r.value) }],
+    {
+      x, y, w, h,
+      chartColors: SHARE_COLORS,
+      showLegend: true,
+      legendPos: "r",
+      legendFontFace: F_BODY,
+      legendFontSize: 8,
+      dataLabelColor: "FFFFFF",
+      showValue: true,
+      showPercent: false,
+      dataLabelFontSize: 9,
+      dataLabelFormatCode: "0.0",
+    },
+  );
 }
 
 function drawFinTable(s: PptxGenJS.Slide, d: StockSlideData, x: number, y: number, w: number) {
@@ -216,7 +257,7 @@ const downsample = <T,>(a: T[], n: number) => {
   return out;
 };
 
-/** 주가(좌축) + 나스닥(우축) 이중축 라인차트를 도형으로 직접 그림 (2007 호환) */
+/** 주가(좌축) + 나스닥(우축) 이중축 라인차트 — 네이티브 차트(PPT에서 데이터 수정 가능). */
 function drawPriceChart(
   s: PptxGenJS.Slide,
   d: StockSlideData,
@@ -225,96 +266,53 @@ function drawPriceChart(
   w: number,
   h: number,
 ) {
-  s.addShape("rect", { x, y, w, h, fill: { color: "FFFFFF" }, line: { color: RULE, width: 1 } });
   if (d.price.length < 5) {
+    s.addShape("rect", { x, y, w, h, fill: { color: "FFFFFF" }, line: { color: RULE, width: 1 } });
     s.addText("주가 데이터 없음", {
       x, y: y + h / 2 - 0.2, w, h: 0.4, align: "center", color: SUB, fontFace: F_BODY, fontSize: 9,
     });
     return;
   }
-  const pl = 0.5;
-  const pr = 0.55;
-  const ptop = 0.3;
-  const pbot = 0.34;
-  const plotW = w - pl - pr;
-  const plotH = h - ptop - pbot;
 
-  const A = downsample(d.price, 70);
-  const B = d.bench.length >= 5 ? downsample(d.bench, 70) : [];
-  const a0 = A[0].close;
-  const b0 = B.length ? B[0].close : 1;
-  // 좌축 = 종목의 (3년) 저가~고가. 시작시점 비율(=1)을 좌우 공통 기준으로 삼아
-  // 나스닥도 동일 비율축에 얹는다(범위 밖은 클램프).
-  const aRatios = A.map((p) => p.close / a0);
-  const rLo = Math.min(...aRatios);
-  const rHi = Math.max(...aRatios);
-  const rRange = rHi - rLo || 1;
-  const cx = (i: number, n: number) => pl + (i / (n - 1)) * plotW;
-  const clamp = (v: number) => Math.min(ptop + plotH, Math.max(ptop, v));
-  const cyR = (r: number) => clamp(ptop + (1 - (r - rLo) / rRange) * plotH);
+  const calloutH = 0.22;
+  const A = downsample(d.price, 60);
+  const B = d.bench.length >= 5 ? downsample(d.bench, 60) : [];
+  const dl = (iso: string) => iso.slice(2).replace(/-/g, ".");
 
-  // 가로 가이드 3줄 — 같은 비율선에 좌(주가)·우(나스닥) 값 각각 표기
-  for (let g = 0; g <= 2; g++) {
-    const r = rLo + (rRange * g) / 2;
-    const gy = cyR(r);
-    s.addShape("line", {
-      x: x + pl, y: y + gy, w: plotW, h: 0,
-      line: { color: RULE, width: 0.5, dashType: "dash" },
+  const series: PptxGenJS.IChartMulti[] = [
+    {
+      type: "line" as PptxGenJS.CHART_NAME,
+      data: [{ name: d.name, labels: A.map((p) => dl(p.date)), values: A.map((p) => p.close) }],
+      options: { chartColors: [LINE], lineSize: 1.75, lineDataSymbol: "none" } as PptxGenJS.IChartOpts,
+    },
+  ];
+  if (B.length) {
+    series.push({
+      type: "line" as PptxGenJS.CHART_NAME,
+      data: [{ name: d.benchLabel, labels: B.map((p) => dl(p.date)), values: B.map((p) => p.close) }],
+      options: {
+        chartColors: ["9AA3AF"], lineSize: 1, lineDataSymbol: "none",
+        secondaryValAxis: true, secondaryCatAxis: true,
+      } as PptxGenJS.IChartOpts,
     });
-    s.addText(formatNumber(a0 * r, 0), {
-      x: x + 0.02, y: y + gy - 0.1, w: pl - 0.06, h: 0.2,
-      align: "right", color: LINE, fontFace: F_BODY, fontSize: 7,
-    });
-    if (B.length) {
-      s.addText(formatNumber(b0 * r, 0), {
-        x: x + w - pr + 0.03, y: y + gy - 0.1, w: pr - 0.05, h: 0.2,
-        align: "left", color: SUB, fontFace: F_BODY, fontSize: 7,
-      });
-    }
   }
 
-  // 폴리라인을 직선 세그먼트 도형으로 그림 (custGeom 미사용 → PowerPoint 2007 호환)
-  const polyline = (rows: { close: number }[], base: number, color: string, wpt: number) => {
-    for (let i = 1; i < rows.length; i++) {
-      const x1 = x + cx(i - 1, rows.length);
-      const y1 = y + cyR(rows[i - 1].close / base);
-      const x2 = x + cx(i, rows.length);
-      const y2 = y + cyR(rows[i].close / base);
-      s.addShape("line", {
-        x: Math.min(x1, x2), y: Math.min(y1, y2),
-        w: Math.abs(x2 - x1) || 0.001, h: Math.abs(y2 - y1) || 0.001,
-        flipV: y2 < y1,
-        line: { color, width: wpt },
-      });
-    }
-  };
-  if (B.length) polyline(B, b0, "9AA3AF", 1);
-  polyline(A, a0, LINE, 1.75);
+  s.addChart(series, [], {
+    x, y: y + calloutH, w, h: h - calloutH,
+    showLegend: true, legendPos: "t", legendFontFace: F_BODY, legendFontSize: 7,
+    catAxisLabelFontFace: F_BODY, catAxisLabelFontSize: 7, catAxisLabelColor: SUB,
+    valAxisLabelFontFace: F_BODY, valAxisLabelFontSize: 7, valAxisLabelColor: LINE,
+    valAxisLabelFormatCode: "#,##0",
+    catAxisOrientation: "minMax",
+    dataLabelFontSize: 0,
+    lineDataSymbol: "none",
+    valGridLine: { style: "dash", color: RULE, size: 0.5 },
+  });
 
-  // x축 라벨
-  const dl = (i: number) => A[i].date.slice(2).replace(/-/g, ".");
-  s.addText(
-    [
-      { text: dl(0), options: { align: "left" } },
-      { text: dl(Math.floor(A.length / 2)), options: { align: "center" } },
-      { text: dl(A.length - 1), options: { align: "right" } },
-    ],
-    { x: x + pl, y: y + h - pbot + 0.04, w: plotW, h: 0.16, color: SUB, fontFace: F_BODY, fontSize: 7 },
-  );
-
-  // 상단: 현재가·등락 + 범례
+  // 상단: 현재가·등락
   const last = d.price[d.price.length - 1].close;
   const first = d.price[0].close;
   const chg = first ? (last - first) / first : 0;
-  s.addText(
-    [
-      { text: "■ ", options: { color: LINE, fontSize: 8 } },
-      { text: `${d.name}   `, options: { color: INK, fontSize: 7.5 } },
-      { text: "■ ", options: { color: "9AA3AF", fontSize: 8 } },
-      { text: d.benchLabel, options: { color: SUB, fontSize: 7.5 } },
-    ],
-    { x: x + pl, y: y + 0.04, w: plotW * 0.6, h: 0.2, fontFace: F_BODY, align: "left" },
-  );
   s.addText(
     [
       { text: `${formatNumber(last, 2)} ${d.currency}  `, options: { bold: true, color: INK, fontSize: 9 } },
@@ -323,7 +321,7 @@ function drawPriceChart(
         options: { color: chg >= 0 ? "1F8A4C" : "C0392B", fontSize: 8 },
       },
     ],
-    { x: x + pl + plotW * 0.4, y: y + 0.04, w: plotW * 0.6, h: 0.2, fontFace: F_BODY, align: "right" },
+    { x, y, w, h: calloutH, fontFace: F_BODY, align: "right" },
   );
 }
 
