@@ -82,7 +82,9 @@ isLikelyGenuine 판단 기준: 실제 언론사(${publisher})가 작성한 정�
     reason?: string;
   };
   try {
-    const match = raw.match(/\{[\s\S]*\}/);
+    // 비탐욕(non-greedy) 매칭 — 모델이 JSON 뒤에 설명 텍스트를 덧붙이면(지시를
+    // 어김) 탐욕적 매칭이 그 안의 {}/[] 까지 삼켜서 파싱이 깨지는 문제 실측 확인.
+    const match = raw.match(/\{[\s\S]*?\}/);
     parsed = JSON.parse(match ? match[0] : raw);
   } catch {
     // 파싱 실패 — 안전하게 실패로 처리(저장하지 않도록 false)
@@ -121,11 +123,18 @@ export interface RelevanceCandidate {
   publisher?: string;
 }
 
+export interface RelevanceResult {
+  relevantIds: Set<string>;
+  /** 서로 다른 매체가 문구만 다르게 보도한 같은 사건 그룹(각 배열 원소 2개 이상) — id 기준. */
+  duplicateGroups: string[][];
+  costUsd: number;
+}
+
 export async function judgeNewsRelevance(
   companyName: string,
   items: RelevanceCandidate[],
-): Promise<{ relevantIds: Set<string>; costUsd: number }> {
-  if (items.length === 0) return { relevantIds: new Set(), costUsd: 0 };
+): Promise<RelevanceResult> {
+  if (items.length === 0) return { relevantIds: new Set(), duplicateGroups: [], costUsd: 0 };
 
   const numbered = items
     .map(
@@ -136,23 +145,36 @@ export async function judgeNewsRelevance(
   const system = `당신은 금융 뉴스 관련성·신뢰도 판정 도우미입니다. 아래 번호 매겨진 기사 목록
 (각 줄 맨 앞 [ ]는 발행 매체) 중 아래 두 조건을 모두 만족하는 기사만 골라주세요:
 
-A. 관련성 — 실제로 "${companyName}"에 관한 기사이거나 투자 판단에 참고가 되는 기사:
+A. 관련성 — 실제로 "${companyName}"에 관한 기사이거나 투자 판단에 참고가 되는 기사. 다음
+중 하나에 해당하면 포함하세요:
 1) 그 회사의 실적·사업·주가·경영진 행보 등을 직접 다루는 기사
 2) 이름이 명시된 직접 경쟁사에 대한 기사로, 그 회사의 경쟁 지위에 참고가 될 만한 내용
    (예: 반도체 파운드리 경쟁사의 점유율 변화는 삼성전자에 참고가 됨)
-같은 그룹 계열사 전체를 다루거나, 회사명이 스쳐 지나가듯 언급만 되거나(예: 채용 통계·인물
-동정 기사에서 소속으로만 언급), 업종/시장 전반을 다루면서 예시로만 등장하는 경우는 제외하세요.
+3) 그 회사의 핵심 사업이 속한 산업/업종 자체를 깊이 있게 다루는 기사 — 회사 이름이 없어도
+   됨(예: 반도체 업황·공급망·수요 전망, 방산 수출 동향 등 그 산업에 실질적으로 종사하는
+   회사의 사업에 참고가 되는 심층 기사)
+
+다음은 제외하세요:
+- 여러 종목·업종을 나열하며 시황(주가 등락·금리·유가 등)을 설명하는 기사에서 그 회사가
+  예시 중 하나로만 스쳐 지나가는 경우(예: "오늘 강세 종목: A, B, C…" 식 나열이나 "금리
+  인상에 A·B·C 등락"처럼 여러 종목을 함께 설명하며 하나로만 언급)
+- 같은 그룹 계열사 전체를 다루거나, 채용 통계·인물 동정 기사에서 소속으로만 언급되는 경우
 
 B. 신뢰도 — 매체명·제목·요약을 보고 정상적인 보도로 보이는지 판단하세요. 매체명이 알려진
 언론사가 아니어도 괜찮지만(전문지·지역지 등 정당한 매체일 수 있음), 광고/스팸/어뷰징성
 매체로 보이거나 제목이 확인되지 않은 루머·자극적 낚시성으로 보이면 제외하세요.
 
-오직 JSON 배열 하나만 출력하세요(다른 텍스트 없이) — 관련 있는 기사 번호만 담은 배열, 예:
-[0,3,5]. 관련 기사가 없으면 [].`;
+C. 중복 — 위에서 관련 있다고 고른 기사들 중, 서로 다른 매체가 문구만 다르게 써서 사실상
+같은 사건을 보도한 것들이 있으면(예: "팀 쿡이 갤럭시폰으로 바꿨습니다"와 "팀 쿡도 갤럭시로
+바꿨다"는 같은 사건) 번호를 그룹으로 묶어주세요. 단독 기사는 그룹에 넣지 마세요.
+
+오직 아래 형식의 JSON 객체 하나만 출력하세요(다른 텍스트 없이):
+{"relevant": [0,3,5], "duplicates": [[3,5]]}
+relevant: 관련 있는 기사 번호 배열(없으면 []). duplicates: 중복 그룹 배열(없으면 []).`;
 
   const response = await anthropic().messages.create({
     model: MODEL,
-    max_tokens: 500,
+    max_tokens: 600,
     system,
     messages: [{ role: "user", content: numbered }],
   });
@@ -163,19 +185,28 @@ B. 신뢰도 — 매체명·제목·요약을 보고 정상적인 보도로 보�
     response.usage.input_tokens * PRICE_PER_TOKEN.input +
     response.usage.output_tokens * PRICE_PER_TOKEN.output;
 
-  let indices: unknown;
+  let parsed: { relevant?: unknown; duplicates?: unknown } = {};
   try {
-    const match = raw.match(/\[[\s\S]*\]/);
-    indices = JSON.parse(match ? match[0] : raw);
+    // 비탐욕(non-greedy) 매칭 — 모델이 JSON 뒤에 분석 텍스트를 덧붙이면(지시를
+    // 어김, 실측 확인) 탐욕적 매칭이 그 안의 중괄호까지 삼켜 파싱이 깨짐.
+    const match = raw.match(/\{[\s\S]*?\}/);
+    parsed = JSON.parse(match ? match[0] : raw);
   } catch {
-    indices = [];
+    parsed = {};
   }
-  const relevantIds = new Set(
-    Array.isArray(indices)
-      ? indices
-          .filter((i): i is number => Number.isInteger(i) && i >= 0 && i < items.length)
-          .map((i) => items[i].id)
-      : [],
-  );
-  return { relevantIds, costUsd };
+
+  const isValidIndex = (i: unknown): i is number =>
+    Number.isInteger(i) && (i as number) >= 0 && (i as number) < items.length;
+
+  const relevantIndices = Array.isArray(parsed.relevant) ? parsed.relevant.filter(isValidIndex) : [];
+  const relevantIds = new Set(relevantIndices.map((i) => items[i].id));
+
+  const duplicateGroups = Array.isArray(parsed.duplicates)
+    ? parsed.duplicates
+        .filter((g): g is unknown[] => Array.isArray(g))
+        .map((g) => g.filter(isValidIndex).map((i) => items[i].id))
+        .filter((g) => g.length > 1)
+    : [];
+
+  return { relevantIds, duplicateGroups, costUsd };
 }
