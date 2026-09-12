@@ -8,13 +8,15 @@
  * (`searchMonth=3`)를 통째로 받아오므로 페이지네이션이 불필요하다.
  *
  * 응답에 종목명+코드가 합쳐진 제목("종목명 (코드)")과 부제(실제 헤드라인),
- * 투자의견(`recomm`, 영문 Buy/Hold/Sell 등), PDF 직링크(`urlLink`)가 모두
- * 들어있다. **PDF는 실측 결과 로그인 없이 그대로 다운로드된다**(오너가
- * "kb는 pdf는 로그인해야하나 본문은 가능하다"고 전달했던 것과 달리, 최소
- * "산업/기업" 게시판은 로그인 불필요로 확인됨 — 필요시 재확인). 종목코드 없이
- * 업종명만 있는 리포트(대표 종목코드가 임의로 붙어있는 경우 포함, 예:
- * "반도체"·"유틸리티" 제목에 삼성전자/한국전력 코드가 딸려오는 경우)는
- * 제목이 "종목명 (코드)" 패턴이 아니므로 걸러진다.
+ * 투자의견(`recomm`, 영문 Buy/Hold/Sell 등), **목표주가(`tp`, 예: "600000.0000")**,
+ * PDF 직링크(`urlLink`)가 모두 들어있다 — `tp`는 PDF 본문에 그날 다시
+ * 언급 안 해도(속보성 노트라 흔함) 항상 채워져 있어 PDF 정규식 추측보다
+ * 정확하다(오너 지적으로 확인, 2026-09). **PDF는 실측 결과 로그인 없이
+ * 그대로 다운로드된다**(오너가 "kb는 pdf는 로그인해야하나 본문은
+ * 가능하다"고 전달했던 것과 달리, 최소 "산업/기업" 게시판은 로그인 불필요로
+ * 확인됨 — 필요시 재확인). 종목코드 없이 업종명만 있는 리포트(대표 종목코드가
+ * 임의로 붙어있는 경우 포함, 예: "반도체"·"유틸리티" 제목에 삼성전자/한국전력
+ * 코드가 딸려오는 경우)는 제목이 "종목명 (코드)" 패턴이 아니므로 걸러진다.
  *
  * ⚠️ www.kbsec.com, rdata.kbsec.com 모두 robots.txt 자체가 없음(404/302) —
  *    지금까지 중 가장 깨끗한 케이스. 그래도 다른 예외들과 동일하게
@@ -98,17 +100,8 @@ function excerptFromPdfText(text, stockName, symbol) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// "투자의견 Buy, 목표주가 300,000원 유지" 처럼 붙어 있는 경우가 많지만,
-// 만원 단위("~만원")로 쓰는 리포트도 있어 둘 다 처리한다.
-function extractTargetPrice(text) {
-  const m = text.match(/목표주가\s*([\d,]+)\s*(만)?원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
 async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
-  if (!pdfUrl) return { summary: "", targetPrice: null };
+  if (!pdfUrl) return "";
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -116,11 +109,16 @@ async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return { summary: excerptFromPdfText(text, stockName, symbol), targetPrice: extractTargetPrice(text) };
+    return excerptFromPdfText(text, stockName, symbol);
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", targetPrice: null };
+    return "";
   }
+}
+
+function parseTargetPrice(tp) {
+  const n = Number(tp);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
 }
 
 async function fetchList() {
@@ -167,6 +165,7 @@ for (const r of rows) {
     symbol: tm[2],
     analyst: r.analystNm ?? "",
     opinion: r.recomm ?? "",
+    targetPrice: parseTargetPrice(r.tp),
     summary: "",
     pdfUrl: r.urlLink || null,
     views: null,
@@ -186,9 +185,7 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, targetPrice } = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
-  it.summary = summary;
-  it.targetPrice = targetPrice;
+  it.summary = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
   if (it.pdfUrl && !it.summary) excerptFailCount++;
   await sleep(400);
 }
