@@ -179,6 +179,18 @@ function excerptFromPdfText(text) {
   const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
+// 목록의 "적정가격" 컬럼이 0/공백인 경우(브로커가 그 값을 안 채웠거나, 목표가
+// 대신 "적정주가" 같은 자기들만의 표현을 써서 한경 쪽 정형 컬럼에 안 잡힌
+// 경우 — 메리츠증권 실측) PDF 본문에서 라벨을 폭넓게 잡아 폴백으로 뽑는다.
+function extractTargetPriceFallback(text) {
+  const m = text.match(
+    /(?:목표주가|목표가|적정주가|적정가격|TP)(?:를|는|가)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?\s*원/,
+  );
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 async function extractPdfExcerpt(pdfUrl) {
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
@@ -187,10 +199,10 @@ async function extractPdfExcerpt(pdfUrl) {
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return excerptFromPdfText(text);
+    return { summary: excerptFromPdfText(text), targetPriceFallback: extractTargetPriceFallback(text) };
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return "";
+    return { summary: "", targetPriceFallback: null };
   }
 }
 
@@ -220,7 +232,9 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  it.summary = await extractPdfExcerpt(it.pdfUrl);
+  const { summary, targetPriceFallback } = await extractPdfExcerpt(it.pdfUrl);
+  it.summary = summary;
+  if (it.targetPrice == null) it.targetPrice = targetPriceFallback;
   if (!it.summary) excerptFailCount++;
   await sleep(400);
 }

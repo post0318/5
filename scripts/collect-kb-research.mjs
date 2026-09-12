@@ -100,8 +100,15 @@ function excerptFromPdfText(text, stockName, symbol) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
+// API의 tp(현재 유지 목표주가)는 컨퍼런스콜 후기처럼 본문에 목표주가 얘기가
+// 아예 없는 리포트에도 항상 채워져 있어, 본문에 실제 언급된 경우만 쓰기로
+// 함(오너 확인, 2026-09) — "목표주가"란 말이 PDF 어딘가에 있는지만 검증.
+function mentionsTargetPrice(text) {
+  return /목표주가/.test(text);
+}
+
 async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
-  if (!pdfUrl) return "";
+  if (!pdfUrl) return { summary: "", hasTargetMention: false };
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -109,10 +116,13 @@ async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return excerptFromPdfText(text, stockName, symbol);
+    return {
+      summary: excerptFromPdfText(text, stockName, symbol),
+      hasTargetMention: mentionsTargetPrice(text),
+    };
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return "";
+    return { summary: "", hasTargetMention: false };
   }
 }
 
@@ -185,7 +195,9 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  it.summary = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
+  const { summary, hasTargetMention } = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
+  it.summary = summary;
+  if (!hasTargetMention) it.targetPrice = null; // 본문에 언급 없으면 tp 메타데이터도 버림
   if (it.pdfUrl && !it.summary) excerptFailCount++;
   await sleep(400);
 }

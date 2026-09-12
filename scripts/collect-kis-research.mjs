@@ -86,8 +86,11 @@ function excerpt(text) {
   return text.length > EXCERPT_LEN ? `${text.slice(0, EXCERPT_LEN)}…` : text;
 }
 
+// "투자의견 매수"(라벨이 먼저)와 "매수 의견"(단어가 먼저) 둘 다 나온다.
 function extractOpinion(text) {
-  const m = text.match(/(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated)|(매수|매도|중립|비중확대|비중축소)\s*의견/);
+  const m = text.match(
+    /투자의견\s*[:：]?\s*(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated|매수|매도|중립|비중확대|비중축소)|(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated|매수|매도|중립|비중확대|비중축소)\s*의견/,
+  );
   return m ? (m[1] || m[2]) : "";
 }
 function extractTargetPrice(text) {
