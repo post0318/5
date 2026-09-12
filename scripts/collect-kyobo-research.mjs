@@ -215,7 +215,8 @@ console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
   const { pdfUrl, summary, opinion, targetPrice } = await extractExcerpt(it.id);
-  it.pdfUrl = pdfUrl ?? `https://www.iprovest.com/weblogic/RSReportServlet?scr_id=32&mode=detail&menuCode=1&pageNum=1&sno=${it.id}`;
+  // rno=1 없으면 "서비스 이용에 불편을 드려 죄송합니다" 에러 페이지로 감(실측 확인).
+  it.pdfUrl = pdfUrl ?? `https://www.iprovest.com/weblogic/RSReportServlet?scr_id=32&mode=detail&menuCode=1&pageNum=1&sno=${it.id}&rno=1`;
   it.summary = summary;
   it.opinion = opinion;
   it.targetPrice = targetPrice;
