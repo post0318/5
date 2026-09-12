@@ -28,6 +28,10 @@ interface RawItem {
   date: string;
   title: string;
   stockName: string;
+  /** 수집기가 제목 등에서 이미 6자리 종목코드를 뽑아낸 경우(예: 하나증권 —
+   * 제목이 "종목명(코드.거래소/의견)" 형식이라 이름 검색 없이 바로 나옴).
+   * 있으면 이름 검색을 건너뛰고 그대로 쓴다. */
+  symbol?: string | null;
   analyst: string;
   opinion: string;
   summary: string;
@@ -59,7 +63,7 @@ export async function POST(req: Request) {
       date: it.date,
       title: it.title,
       stockName: it.stockName,
-      symbol: resolveSymbol(it.stockName),
+      symbol: it.symbol ?? resolveSymbol(it.stockName),
       analyst: it.analyst,
       opinion: it.opinion,
       summary: it.summary,

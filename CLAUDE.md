@@ -122,7 +122,29 @@ npm run db:studio    # drizzle studio
       화면(`/WEB-APP/wts/main/index.cmd?screen=3501`)이 더 나은 단일 소스일
       수 있어 확인했으나, 레거시 WTS(트레이딩 단말) 모듈이라 단순 JSON API가
       아닐 가능성이 높음 — 다음 작업 시 이 경로부터 파봐서 실제 데이터 접근
-      방식을 확인할 것. 그 전까지는 신한투자증권 단일 소스로 운영.
+      방식을 확인할 것.
+    - **하나증권 추가(오너 확인, 2026-09)**: `www.hanaw.com` 리서치센터
+      (`/main/research/research/list.cmd?pid=3&cid=2&curPage=N`)는 로그인 없이
+      서버렌더링 HTML로 그대로 나온다(신한과 달리 JSON API 역추적 불필요 —
+      평범한 GET 쿼리스트링 페이지네이션). 제목이 "종목명(종목코드.거래소/
+      투자의견): 제목" 형식으로 고정돼 있어 이름 검색 없이 제목에서 바로
+      종목코드를 뽑는다. `robots.txt` 는 `Disallow: /`(Googlebot·Yeti 제외) —
+      동일 조건으로 예외 승인. **로컬 스크립트**
+      (`scripts/collect-hana-research.mjs`, GitHub Actions
+      `.github/workflows/hana-research.yml`, 하루 1회)가 같은
+      `/api/cron/shinhan-research` 라우트를 `source: "하나증권"` 으로 재사용.
+    - **대신증권(오너 언급, 미확인)**: `www.daishin.com` 의 "기업분석"·
+      "글로벌 기업분석" 메뉴는 둘 다 `money2.daishin.com/E5/ResearchCenter`로
+      가려다 로그인 페이지로 리다이렉트됨(직접 URL 진입도 동일). 이 사이트가
+      맞다면 로그인 없이 보이는 정확한 화면 URL을 오너에게 다시 확인해야
+      진행 가능 — 지금은 보류.
+    - **교보증권(오너 확인, 진행 중)**: `www.iprovest.com` → "기업분석"은
+      로그인 없이 실제 목록(날짜·제목·종목명·구분·글쓴이)이 보인다(확인됨).
+      다만 구조가 `iframe` 4중 중첩(`UsrFull` → `UsrMain` → `UsrBody` →
+      `/weblogic/RSReportServlet`)이라 페이지네이션·검색이 단순 GET 링크가
+      아닐 가능성이 높음(레거시 웹로직 프레임워크) — 실제 데이터 요청 방식은
+      다음 작업에서 이어서 확인할 것. 종목명은 코드 없이 이름만 나오므로
+      확보되면 `corpcode.ts` 이름 검색 필요.
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로
