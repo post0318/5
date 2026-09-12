@@ -107,11 +107,22 @@ npm run db:studio    # drizzle studio
     다른 항목과 동일 조건(개인용·로컬 실행·저빈도)으로 예외 승인.
     **로컬 전용 스크립트** (`scripts/collect-shinhan-research.mjs`, 하루 1회
     GitHub Actions `.github/workflows/shinhan-research.yml`)가 최근 N일치를
-    수집해 `/api/cron/shinhan-research` 로 POST → MongoDB(`shinhan_research`)
+    수집해 `/api/cron/shinhan-research` 로 POST → MongoDB(`kr_research`)
     저장. 원본 PDF·전체 본문은 저장하지 않고 목록에 이미 노출되는 요약 발췌만
-    저장(용량 관리). 앱 배포본은 DB 조회만(`/api/markets/kr/[symbol]/research`)
-    — 크롤링 코드가 배포본에 없다는 원칙은 동일. 종목명→종목코드 매핑은
-    `lib/markets/kr/corpcode.ts`(정적 데이터, DART_API_KEY 불필요) 재사용.
+    저장(용량 관리, 180일 보관 후 정리). 앱 배포본은 DB 조회만
+    (`/api/markets/kr/[symbol]/research`) — 크롤링 코드가 배포본에 없다는
+    원칙은 동일. 종목명→종목코드 매핑은 `lib/markets/kr/corpcode.ts`(정적
+    데이터, DART_API_KEY 불필요) 재사용.
+    - **한 증권사로 한정하지 않음(오너 지적, 2026-09)**: 스키마(`ShinhanResearchDoc`)에
+      `source` 필드를 두고 `_id`도 `${source}:게시글번호`로 네임스페이스,
+      `/api/cron/shinhan-research`도 body의 `source`를 그대로 받아 저장하므로
+      다른 증권사 수집 스크립트를 추가해도 같은 라우트·컬렉션을 재사용 가능.
+      화면(`ShinhanResearch` 컴포넌트)도 항목마다 출처 배지를 표시하도록
+      이미 대응. **미결**: 신한 사이트 자체에 있는 "전 증권사 리포트" 통합
+      화면(`/WEB-APP/wts/main/index.cmd?screen=3501`)이 더 나은 단일 소스일
+      수 있어 확인했으나, 레거시 WTS(트레이딩 단말) 모듈이라 단순 JSON API가
+      아닐 가능성이 높음 — 다음 작업 시 이 경로부터 파봐서 실제 데이터 접근
+      방식을 확인할 것. 그 전까지는 신한투자증권 단일 소스로 운영.
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로

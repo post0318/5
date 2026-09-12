@@ -246,16 +246,47 @@ export async function fetchStockNews(
  * 시장별 단일 소스·90일·20건)는 동작 그대로 둔다.
  */
 /**
- * 종목명이 제목·요약 어디에도 없으면 걸러낸다(네이버 검색이 종목명을 본문 어딘가에만
- * 언급한, 사실상 무관한 기사까지 끌고 오는 사례가 있음 — 예: "삼성전자" 검색인데
- * "집살게요"류 제목의 부동산·생활기사). 회사명을 모르면(심볼 폴백) 과잉 차단을
- * 피하기 위해 필터를 건너뛴다. 해외(영문) 기사는 한국어 회사명이 원문에 나올 수
- * 없으므로 이 필터 대상이 아니다.
+ * 실측 결과, 정식 회사명("삼성전자")은 사실상 모든 검색 결과의 본문·요약
+ * 어딘가에 등장한다(부동산·지역 뉴스가 "삼성전자 인근"처럼 지나가는 말로도
+ * 언급) — 즉 요약문에 이름이 있는지만 보면 걸러내는 힘이 거의 없다. 반대로
+ * 제목에 회사명 "그대로"만 요구하면(예전 방식) 한국 기사는 축약형("삼전",
+ * "삼성")·계열사 통칭("삼성")을 즐겨 써서 대부분 걸러져 버린다(실측: 삼성전자
+ * 최신 20건 중 정식명 그대로 제목에 있던 건 소수).
+ *
+ * 그래서: (a) 주요 대기업은 실제 통용되는 축약형 별칭 목록으로 "제목"을 검사
+ * (제목은 편집자가 고른 핵심 주어라 정확도가 높음), (b) 그 외/별칭 없는
+ * 종목은 "회사명(종목코드)" 표기(예: "삼성전자(005930)")가 제목·요약 어디든
+ * 있으면 통과 — 이 표기는 시황·산업 기사가 종목을 구체적으로 지목할 때 쓰는
+ * 관용구라 정확도가 높다. 이 두 신호 중 하나도 없으면 탈락.
+ * 별칭 목록에 없는 회사는 정식명이 제목에 있어야 통과(과거와 동일, 안전한 쪽).
  */
-function isDomesticRelevant(companyName: string | null | undefined, title: string, excerpt?: string): boolean {
+const KR_COMPANY_ALIASES: Record<string, string[]> = {
+  삼성전자: ["삼성전자", "삼성", "삼전"],
+  "SK하이닉스": ["SK하이닉스", "하이닉스"],
+  LG전자: ["LG전자"],
+  "LG에너지솔루션": ["LG에너지솔루션", "LG엔솔"],
+  현대차: ["현대차", "현대자동차"],
+  기아: ["기아", "기아차"],
+  삼성바이오로직스: ["삼성바이오로직스", "삼성바이오"],
+  "삼성SDI": ["삼성SDI"],
+  "NAVER": ["네이버", "NAVER"],
+  카카오: ["카카오"],
+  셀트리온: ["셀트리온"],
+  "POSCO홀딩스": ["포스코"],
+};
+
+function isDomesticRelevant(
+  companyName: string | null | undefined,
+  symbol: string,
+  title: string,
+  excerpt?: string,
+): boolean {
   const name = companyName?.trim();
   if (!name) return true;
-  return title.includes(name) || (excerpt != null && excerpt.includes(name));
+  const aliases = KR_COMPANY_ALIASES[name] ?? [name];
+  if (aliases.some((a) => title.includes(a))) return true;
+  const codeTag = `(${symbol})`;
+  return title.includes(codeTag) || (excerpt != null && excerpt.includes(codeTag));
 }
 
 export async function fetchStockNewsBySide(
@@ -269,10 +300,13 @@ export async function fetchStockNewsBySide(
     fetchUsJpNews(market, symbol, query, { cutoffMs: ONE_WEEK_MS, newsCount: 30 }),
   ]);
   const domesticFiltered = domesticRaw.filter((it) =>
-    isDomesticRelevant(companyName, it.title, it.excerpt),
+    isDomesticRelevant(companyName, symbol, it.title, it.excerpt),
   );
+  // 안전장치: 휴리스틱이 전부 걸러내 버리면(오탐으로 0건) 필터 없이 보여준다 —
+  // "관련 기사 없음"보다 "관련성 낮은 기사 섞임"이 훨씬 나은 실패 모드.
+  const domesticSafe = domesticFiltered.length > 0 || domesticRaw.length === 0 ? domesticFiltered : domesticRaw;
   const [domestic, overseas] = await Promise.all([
-    withTranslatedTitles("ko", domesticFiltered),
+    withTranslatedTitles("ko", domesticSafe),
     withTranslatedTitles("en", overseasRaw),
   ]);
   return { domestic, overseas };

@@ -132,7 +132,11 @@ if (DRY_RUN) {
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = `Bearer ${CRON_SECRET}`;
-const up = await fetch(IMPORT_URL, { method: "POST", headers, body: JSON.stringify({ items }) });
+const up = await fetch(IMPORT_URL, {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ items, source: "신한투자증권" }),
+});
 const upBody = await up.text();
 if (!up.ok) {
   console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);

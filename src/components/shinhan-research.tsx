@@ -23,8 +23,9 @@ const OPINION_CLASS: Record<string, string> = {
 };
 
 /**
- * 신한투자증권 "기업분석" 리포트 — 한국 종목만, DB만 읽음(로컬 스크립트가 수집,
- * CLAUDE.md 예외 참고). 종목뉴스 탭 오른쪽에 표시.
+ * 증권사 리서치(기업분석) 리포트 — 한국 종목만, DB만 읽음(로컬 스크립트가 수집,
+ * CLAUDE.md 예외 참고). 지금은 신한투자증권만 수집돼 있지만 여러 증권사를
+ * 합쳐 보여주는 걸 전제로 만들어서 항목마다 출처(source)를 표시한다.
  */
 export function ShinhanResearch({ symbol }: { symbol: string }) {
   const q = useQuery({
@@ -41,10 +42,10 @@ export function ShinhanResearch({ symbol }: { symbol: string }) {
     <Card className="min-w-0">
       <CardHeader className="pb-2">
         <CardTitle className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
-          신한투자증권 리서치
+          증권사 리서치
           {q.data && <span className="text-muted-foreground text-xs font-normal">({q.data.items.length})</span>}
           <span className="text-muted-foreground ml-auto text-[11px] font-normal">
-            최근 30일 · 개인용 참고자료
+            최근 30일(없으면 최신순) · 개인용 참고자료
           </span>
         </CardTitle>
       </CardHeader>
@@ -56,7 +57,7 @@ export function ShinhanResearch({ symbol }: { symbol: string }) {
         </p>
       )}
       {q.data && q.data.items.length === 0 && (
-        <p className="text-muted-foreground py-4 text-sm">최근 30일 내 리포트가 없습니다.</p>
+        <p className="text-muted-foreground py-4 text-sm">아직 수집된 리포트가 없습니다.</p>
       )}
       {q.data && q.data.items.length > 0 && (
         <ul className="divide-y">
@@ -76,6 +77,7 @@ export function ShinhanResearch({ symbol }: { symbol: string }) {
                     {it.summary}
                   </p>
                   <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 text-xs">
+                    <span className="bg-muted rounded px-1.5 py-0.5 font-medium">{it.source}</span>
                     <span className={cn("font-medium", OPINION_CLASS[it.opinion] ?? "")}>
                       {it.opinion}
                     </span>

@@ -6,11 +6,14 @@ import { searchCorps } from "@/lib/markets/kr/corpcode";
 export const maxDuration = 60;
 
 /**
- * 신한투자증권 "기업분석" 리포트 수집 — 로컬 스크립트(scripts/collect-shinhan-
- * research.mjs) 전용 수신처. bbs2.shinhansec.com/robots.txt 가 Disallow: / 라
- * 다른 예외들과 동일하게 개인용·로컬 실행 조건으로 오너 승인(CLAUDE.md 참조).
- * 이 라우트 자체는 크롤링을 하지 않는다 — 로컬에서 이미 수집된 결과를 받아
- * DB에 적재만 한다(배포된 앱은 DB 조회만 함).
+ * 증권사 리서치 리포트 수집 수신처 — 신한투자증권 로컬 스크립트(scripts/
+ * collect-shinhan-research.mjs)가 쓰지만, `source`를 body에 실어 보내면 다른
+ * 증권사 수집 스크립트도 이 라우트를 그대로 재사용할 수 있게 만들었다(증권사
+ * 하나로 한정하지 않음 — 스키마·라우트 모두 다중 소스 대비).
+ * bbs2.shinhansec.com/robots.txt 가 Disallow: / 라 다른 예외들과 동일하게
+ * 개인용·로컬 실행 조건으로 오너 승인(CLAUDE.md 참조). 이 라우트 자체는
+ * 크롤링을 하지 않는다 — 로컬에서 이미 수집된 결과를 받아 DB에 적재만 한다
+ * (배포된 앱은 DB 조회만 함).
  */
 function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
@@ -45,12 +48,14 @@ export async function POST(req: Request) {
     if (!authorized(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
 
-    const body = (await req.json()) as { items?: RawItem[] };
+    const body = (await req.json()) as { items?: RawItem[]; source?: string };
     if (!Array.isArray(body.items)) return Response.json({ error: "items 배열 필요" }, { status: 400 });
+    const source = body.source?.trim() || "신한투자증권";
 
     const now = new Date().toISOString();
     const docs: ShinhanResearchDoc[] = body.items.map((it) => ({
-      _id: it.id,
+      _id: `${source}:${it.id}`,
+      source,
       date: it.date,
       title: it.title,
       stockName: it.stockName,
