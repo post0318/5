@@ -154,17 +154,15 @@ export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbo
               return (
                 <li key={it._id} className="py-2.5 first:pt-0 last:pb-0">
                   <a href={it.pdfUrl ?? undefined} target="_blank" rel="noreferrer" className="group block">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="group-hover:text-primary text-sm leading-snug font-medium">
-                        {it.title}
-                        {it.targetPrice != null && (
-                          <span className="text-muted-foreground tnum ml-1.5 text-xs font-normal">
-                            목표주가 {formatNumber(Math.trunc(it.targetPrice / 10000), 0)}만원
-                          </span>
-                        )}
-                      </div>
+                    <div className="group-hover:text-primary text-sm leading-snug font-medium">
+                      {it.title}
+                      {it.targetPrice != null && (
+                        <span className="tnum ml-1.5 text-xs font-normal text-orange-600 dark:text-orange-400">
+                          목표주가 {formatNumber(Math.trunc(it.targetPrice / 10000), 0)}만원
+                        </span>
+                      )}
                       {opinion && (
-                        <span className={cn("shrink-0 text-xs font-semibold", opinionClass(opinion, market))}>
+                        <span className={cn("ml-1.5 text-xs font-semibold", opinionClass(opinion, market))}>
                           {opinion}
                         </span>
                       )}
