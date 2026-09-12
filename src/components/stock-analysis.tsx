@@ -1097,7 +1097,7 @@ function RightsDetail({ e, market }: { e: RightsEvent; market: MarketId }) {
 }
 
 /** Yahoo recommendationKey → 한글 표기 + 매수/매도 색상. market="kr"이면 상승(매수)=빨강·하락(매도)=파랑으로 반전. */
-function recommendationKo(key: string, market?: MarketId): { label: string; className: string } {
+export function recommendationKo(key: string, market?: MarketId): { label: string; className: string } {
   const k = key.toLowerCase();
   const buy = stockDirClass(true, market);
   const sell = stockDirClass(false, market);

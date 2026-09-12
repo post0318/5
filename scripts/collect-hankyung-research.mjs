@@ -194,6 +194,16 @@ function extractTargetPriceFallback(text) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// 목록의 "적정가격"·"투자의견" 컬럼도 KB증권의 tp/recomm처럼 리포트 본문과
+// 무관하게 채워진 값일 위험이 있어(오너 지적, 2026-09 — 모든 소스에 공통
+// 적용하기로 함), 본문에 실제 언급이 있는 경우에만 쓰기로 한다.
+function mentionsTargetPrice(text) {
+  return /목표주가|목표가|적정주가|적정가격|\bTP\b/.test(text);
+}
+function mentionsOpinion(text) {
+  return /투자의견/.test(text);
+}
+
 async function extractPdfExcerpt(pdfUrl) {
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
@@ -202,10 +212,15 @@ async function extractPdfExcerpt(pdfUrl) {
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return { summary: excerptFromPdfText(text), targetPriceFallback: extractTargetPriceFallback(text) };
+    return {
+      summary: excerptFromPdfText(text),
+      targetPriceFallback: extractTargetPriceFallback(text),
+      hasTargetMention: mentionsTargetPrice(text),
+      hasOpinionMention: mentionsOpinion(text),
+    };
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", targetPriceFallback: null };
+    return { summary: "", targetPriceFallback: null, hasTargetMention: false, hasOpinionMention: false };
   }
 }
 
@@ -235,9 +250,11 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, targetPriceFallback } = await extractPdfExcerpt(it.pdfUrl);
+  const { summary, targetPriceFallback, hasTargetMention, hasOpinionMention } = await extractPdfExcerpt(it.pdfUrl);
   it.summary = summary;
   if (it.targetPrice == null) it.targetPrice = targetPriceFallback;
+  if (it.targetPrice != null && !hasTargetMention) it.targetPrice = null; // 표 값이 본문에 없으면 버림
+  if (it.opinion && !hasOpinionMention) it.opinion = "";
   if (!it.summary) excerptFailCount++;
   await sleep(400);
 }

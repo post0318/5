@@ -12,6 +12,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ChangePercent, Money, Multiple, Percent } from "@/components/num";
 import { UniversePptButton } from "@/components/ppt-export";
 import { formatBigAmount, formatMarketCap } from "@/lib/format";
+import { recommendationKo } from "@/components/stock-analysis";
+import { cn } from "@/lib/utils";
 
 interface Row {
   itemId: string;
@@ -192,7 +194,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                 <th className="px-3 py-2 text-right font-medium">PER(TTM)</th>
                 <th className="px-3 py-2 text-right font-medium">PER(Fwd)</th>
                 <th className="px-3 py-2 text-right font-medium">목표주가</th>
-                <th className="px-3 py-2 font-medium">의견</th>
+                <th className="px-3 py-2 font-medium">투자의견</th>
               </tr>
             </thead>
             {visibleGroups.map((g) => (
@@ -270,8 +272,14 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                           currency={r.currency ?? "USD"}
                         />
                       </td>
-                      <td className="text-muted-foreground px-3 py-2 text-xs">
-                        {r.recommendationKey ?? "-"}
+                      <td className="px-3 py-2 text-xs">
+                        {r.recommendationKey ? (
+                          <span className={cn("font-medium", recommendationKo(r.recommendationKey, r.market).className)}>
+                            {recommendationKo(r.recommendationKey, r.market).label}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
                       </td>
                     </>
                   )}
