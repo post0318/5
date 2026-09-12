@@ -1,0 +1,23 @@
+name: 미래에셋증권 기업분석 리포트 수집
+
+# CLAUDE.md 방침(오너 승인 예외): securities.miraeasset.com 리서치 목록을
+# 하루 1회, 개인용으로만 조회한다. robots.txt 에 다른 UA를 막는 규칙이
+# 없는 가장 깨끗한 케이스 — 다른 예외들과 동일한 조건(개인용·로컬 실행
+# (GitHub Actions 개인 자동화)·저빈도)으로 승인됨.
+
+on:
+  schedule:
+    - cron: "15 0 * * *" # 00:15 UTC = 09:15 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/collect-mirae-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

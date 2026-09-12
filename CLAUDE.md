@@ -200,6 +200,19 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-nh-research.mjs`, GitHub Actions
       `.github/workflows/nh-research.yml`, 하루 1회)가 같은 라우트를
       `source: "NH투자증권"` 으로 재사용.
+    - **미래에셋증권 추가(오너 확인, 2026-09)**: `securities.miraeasset.com` 도
+      레거시 frameset 사이트지만 목록 자체(`/bbs/board/message/list.do?
+      categoryId=1800&curPage=N`, categoryId 는 "투자정보 > 리서치 리포트 >
+      기업분석" 메뉴의 `javascript:openHp(...)` 링크를 역추적해 확인)는
+      평범한 서버렌더링 HTML(EUC-KR)이라 GET으로 바로 받는다. 국내(6자리
+      코드)·해외(예: "IONQ US") 리포트가 한 목록에 섞여 있어 6자리 숫자
+      코드가 아닌 항목은 건너뜀. 제목·종목명·코드·투자의견·PDF 직링크
+      (`downConfirm(...)` 첫 인자, 로그인 없이 다운로드 확인)가 모두 목록에
+      있어 이름 검색 불필요. `robots.txt` 에 `Disallow` 규칙 자체가 없어
+      지금까지 중 가장 깨끗한 케이스. **로컬 스크립트**
+      (`scripts/collect-mirae-research.mjs`, GitHub Actions
+      `.github/workflows/mirae-research.yml`, 하루 1회)가 같은 라우트를
+      `source: "미래에셋증권"` 으로 재사용.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
