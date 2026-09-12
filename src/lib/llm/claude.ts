@@ -105,3 +105,61 @@ isLikelyGenuine 판단 기준: 실제 언론사(${publisher})가 작성한 정�
     costUsd,
   };
 }
+
+/**
+ * 종목뉴스 목록의 "이 기사가 진짜 이 종목 얘기인가" 판정 — 순수 키워드 매칭으로는
+ * 판단 불가(회사명이 요약에 스치듯 언급만 돼도 통과되거나, 반대로 축약형만 써서
+ * 걸러지는 문제 반복 확인됨). 국내+해외 후보를 한 번의 호출로 함께 판정해
+ * 종목 조회 1회당 LLM 호출 1회로 비용을 묶는다.
+ */
+export interface RelevanceCandidate {
+  id: string;
+  title: string;
+  excerpt?: string;
+}
+
+export async function judgeNewsRelevance(
+  companyName: string,
+  items: RelevanceCandidate[],
+): Promise<{ relevantIds: Set<string>; costUsd: number }> {
+  if (items.length === 0) return { relevantIds: new Set(), costUsd: 0 };
+
+  const numbered = items
+    .map((it, i) => `${i}. ${it.title}${it.excerpt ? ` — ${it.excerpt}` : ""}`)
+    .join("\n");
+  const system = `당신은 금융 뉴스 관련성 판정 도우미입니다. 아래 번호 매겨진 기사 목록 중
+실제로 "${companyName}"에 관한 기사(그 회사의 실적·사업·주가·경영진 행보 등을 다루는 기사)만
+골라주세요. 같은 그룹 계열사 전체를 다루거나, 회사명이 스쳐 지나가듯 언급만 되거나(예: 채용
+통계·인물 동정 기사에서 소속으로만 언급), 업종/시장 전반을 다루면서 예시로만 등장하는 경우는
+제외하세요. 오직 JSON 배열 하나만 출력하세요(다른 텍스트 없이) — 관련 있는 기사 번호만 담은
+배열, 예: [0,3,5]. 관련 기사가 없으면 [].`;
+
+  const response = await anthropic().messages.create({
+    model: MODEL,
+    max_tokens: 500,
+    system,
+    messages: [{ role: "user", content: numbered }],
+  });
+
+  const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+  const raw = textBlock?.text ?? "";
+  const costUsd =
+    response.usage.input_tokens * PRICE_PER_TOKEN.input +
+    response.usage.output_tokens * PRICE_PER_TOKEN.output;
+
+  let indices: unknown;
+  try {
+    const match = raw.match(/\[[\s\S]*\]/);
+    indices = JSON.parse(match ? match[0] : raw);
+  } catch {
+    indices = [];
+  }
+  const relevantIds = new Set(
+    Array.isArray(indices)
+      ? indices
+          .filter((i): i is number => Number.isInteger(i) && i >= 0 && i < items.length)
+          .map((i) => items[i].id)
+      : [],
+  );
+  return { relevantIds, costUsd };
+}

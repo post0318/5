@@ -4,6 +4,8 @@ import { fetchJson } from "./http";
 import type { MarketId } from "./types";
 import { translateTitles } from "../news/translate";
 import { resolveCorpCode } from "./kr/corpcode";
+import { judgeNewsRelevance } from "../llm/claude";
+import { isBudgetExceeded, incUsage } from "../db/llm-usage";
 
 /**
  * 종목뉴스(선택 번역·요약용) — 한국·미국·일본.
@@ -335,6 +337,42 @@ function overseasQuery(market: MarketId, symbol: string, companyName: string): s
   }
 }
 
+type RawNewsItem = Omit<NewsItem, "titleKo">;
+
+/**
+ * LLM(Haiku) 관련성 판정 — 국내+해외 후보를 한 번의 호출로 함께 판정해 종목
+ * 조회 1회당 호출 1회로 비용을 묶는다(라우트 자체가 30분 캐시라 실질 호출은
+ * 더 뜸함). ANTHROPIC_API_KEY 미설정·예산 초과·호출 실패 시 null 반환 →
+ * 호출부가 기존 키워드 매칭으로 폴백(뉴스 기능 자체가 죽지 않게).
+ */
+async function tryLlmRelevanceFilter(
+  companyName: string,
+  domesticRaw: RawNewsItem[],
+  overseasRaw: RawNewsItem[],
+): Promise<{ domestic: RawNewsItem[]; overseas: RawNewsItem[] } | null> {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  if (domesticRaw.length === 0 && overseasRaw.length === 0) return { domestic: [], overseas: [] };
+  try {
+    if (await isBudgetExceeded()) return null;
+    const candidates = [
+      ...domesticRaw.map((it) => ({ id: `d:${it.id}`, title: it.title, excerpt: it.excerpt })),
+      ...overseasRaw.map((it) => ({ id: `o:${it.id}`, title: it.title })),
+    ];
+    const { relevantIds, costUsd } = await judgeNewsRelevance(companyName, candidates);
+    await incUsage(costUsd);
+    const domestic = domesticRaw.filter((it) => relevantIds.has(`d:${it.id}`));
+    const overseas = overseasRaw.filter((it) => relevantIds.has(`o:${it.id}`));
+    // 안전장치: LLM이 전부 걸러내 버리면(원본은 있는데 결과 0건) 필터 없이 보여준다 —
+    // "관련 기사 없음"보다 "관련성 낮은 기사 섞임"이 훨씬 나은 실패 모드.
+    return {
+      domestic: domestic.length > 0 || domesticRaw.length === 0 ? domestic : domesticRaw,
+      overseas: overseas.length > 0 || overseasRaw.length === 0 ? overseas : overseasRaw,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchStockNewsBySide(
   market: MarketId,
   symbol: string,
@@ -348,15 +386,27 @@ export async function fetchStockNewsBySide(
       newsCount: 30,
     }),
   ]);
-  const domesticFiltered = domesticRaw.filter((it) =>
-    isDomesticRelevant(companyName, symbol, it.title, it.excerpt),
-  );
-  // 안전장치: 휴리스틱이 전부 걸러내 버리면(오탐으로 0건) 필터 없이 보여준다 —
-  // "관련 기사 없음"보다 "관련성 낮은 기사 섞임"이 훨씬 나은 실패 모드.
-  const domesticSafe = domesticFiltered.length > 0 || domesticRaw.length === 0 ? domesticFiltered : domesticRaw;
+
+  const name = companyName?.trim();
+  const llmResult = name ? await tryLlmRelevanceFilter(name, domesticRaw, overseasRaw) : null;
+
+  let domesticSafe: RawNewsItem[];
+  let overseasSafe: RawNewsItem[];
+  if (llmResult) {
+    ({ domestic: domesticSafe, overseas: overseasSafe } = llmResult);
+  } else {
+    // 폴백: 기존 키워드 매칭(국내만 — 해외는 원래도 무필터였음).
+    const domesticFiltered = domesticRaw.filter((it) =>
+      isDomesticRelevant(companyName, symbol, it.title, it.excerpt),
+    );
+    domesticSafe =
+      domesticFiltered.length > 0 || domesticRaw.length === 0 ? domesticFiltered : domesticRaw;
+    overseasSafe = overseasRaw;
+  }
+
   const [domestic, overseas] = await Promise.all([
     withTranslatedTitles("ko", domesticSafe),
-    withTranslatedTitles("en", overseasRaw),
+    withTranslatedTitles("en", overseasSafe),
   ]);
   return { domestic, overseas };
 }
