@@ -19,13 +19,21 @@
  *    있어(오너 지시, 2026-09) 여기서는 제외한다 — 같은 리포트가 두 소스로
  *    중복 수집되는 걸 막기 위함(다른 증권사는 한경에만 있어 중복 문제 없음).
  *
- * 본문 발췌(2026-09 추가): PDF를 내려받아 `pdf-parse`로 텍스트를 뽑는다.
- * 이 사이트는 14곳 넘는 증권사 리포트가 섞여 있어 브로커마다 PDF 템플릿이
- * 전혀 달라, 유안타·NH·KB처럼 고정 앵커 문구를 쓸 수 없다. 대신 "긴 줄(20자
- * 이상)이면서 한글 비율이 40% 이상인 줄만" 프로즈로 간주해 이어붙이는 범용
- * 방식을 쓴다 — 재무 표(숫자 나열)·이메일·짧은 라벨은 한글 비율이 낮아
- * 자연히 걸러지고, 실제 문장 위주로 150자 내외가 뽑힌다(완벽하진 않지만
- * 실측 결과 대부분 읽을 만한 수준). PDF 원문·전체 본문은 저장하지 않음.
+ * 투자의견/목표주가(2026-09 갱신): 처음엔 PDF 본문에서 정규식으로 추측했으나,
+ * 검색폼 파라미터 `report_type=CO`("기업" 탭 — 사이트 UI에서 종목 검색 시
+ * 자동으로 붙는 값, `_text_change('2','CO','기업')`에서 역추적)를 목록
+ * 요청에 그대로 붙이면 목록 자체에 "적정가격"·"투자의견" 컬럼이 추가로
+ * 나온다(오너가 실제 사이트 화면에서 이 컬럼을 보고 지적, 2026-09).
+ * PDF를 열 필요 없이 구조화된 값을 그대로 쓸 수 있어 훨씬 정확하다.
+ *
+ * 본문 발췌(2026-09 추가): 위 컬럼과 별개로, 본문 요약은 여전히 PDF를
+ * 내려받아 `pdf-parse`로 텍스트를 뽑는다. 이 사이트는 14곳 넘는 증권사
+ * 리포트가 섞여 있어 브로커마다 PDF 템플릿이 전혀 달라, 유안타·NH·KB처럼
+ * 고정 앵커 문구를 쓸 수 없다. 대신 "긴 줄(20자 이상)이면서 한글 비율이
+ * 40% 이상인 줄만" 프로즈로 간주해 이어붙이는 범용 방식을 쓴다 — 재무 표
+ * (숫자 나열)·이메일·짧은 라벨은 한글 비율이 낮아 자연히 걸러지고, 실제
+ * 문장 위주로 150자 내외가 뽑힌다(완벽하진 않지만 실측 결과 대부분 읽을
+ * 만한 수준). PDF 원문·전체 본문은 저장하지 않음.
  *
  * ⚠️ 서버가 보낸 항목을 통째로 replace하므로, --days 기본값을 7 → 3으로
  *    좁혀 PDF를 매일 다시 받는 범위를 최소화했다(유안타증권과 동일 이유).
@@ -92,35 +100,63 @@ async function fetchPage(page, sdate, edate) {
   url.searchParams.set("edate", edate);
   url.searchParams.set("now_page", String(page));
   url.searchParams.set("pagenum", String(PAGE_SIZE));
+  url.searchParams.set("report_type", "CO"); // "기업" 탭 — 적정가격/투자의견 컬럼이 추가로 나옴
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
 }
 
-// 행 하나 = 일자, 분류, 제목(+report_idx), ...(레이어팝업)..., 작성자, 제공출처.
-const ROW_RE =
-  /<td[^>]*class="[^"]*txt_number[^"]*">(\d{4}-\d{2}-\d{2})<\/td>\s*<td>([^<]*)<\/td>\s*<td class="text_l">\s*<a href="\/analysis\/downpdf\?report_idx=(\d+)"[^>]*>([^<]+)<\/a>[\s\S]{0,600}?<\/td>\s*<td>([^<]*)<\/td>\s*<td>([^<]*)<\/td>/g;
+// 행 단위로 잘라 필드별로 매칭한다(느슨한 구간 뒤 선택 그룹을 바로 붙이면
+// 정규식이 아무것도 건너뛰지 않고 즉시 매칭을 끝내버리는 문제가 있었음 —
+// 유안타증권 스크립트에서 겪은 것과 동일한 함정, 여기선 처음부터 회피).
+const DATE_RE = /<td[^>]*class="[^"]*txt_number[^"]*">(\d{4}-\d{2}-\d{2})<\/td>/;
+const TITLE_RE = /<a href="\/analysis\/downpdf\?report_idx=(\d+)"[^>]*>([^<]+)<\/a>/;
+const TARGET_RE = /<td class="text_r txt_number">([\d,]+)<\/td>/;
+// 종목명(코드) 형식 — 산업/시장 등 종목 무관 리포트는 report_type=CO 필터로
+// 이미 걸러지지만 혹시 모를 예외 대비 그대로 유지.
+const STOCK_TITLE_RE = /^(.+?)\((\d{6})\)\s*(.*)$/;
 
-// 기업 리포트 제목: "종목명(코드) 나머지 제목" — 산업/시장/파생/경제는 코드 없음.
-const TITLE_RE = /^(.+?)\((\d{6})\)\s*(.*)$/;
+function parseOpinion(text) {
+  const t = text.trim();
+  return t === "투자의견없음" ? "" : t;
+}
 
 function parseItems(html) {
   const items = [];
-  for (const m of html.matchAll(ROW_RE)) {
-    const [, date, category, reportIdx, rawTitle, analyst, source] = m;
-    if (!category.includes("기업")) continue; // 산업/시장/파생/경제 등 종목 아닌 리포트 제외
-    const sourceName = stripHtml(source);
-    if (sourceName.includes("유안타")) continue; // 자체 스크립트가 이미 수집 — 중복 방지
+  for (const rowHtml of html.split(/<tr[^>]*>/).slice(1)) {
+    const dateM = rowHtml.match(DATE_RE);
+    const titleM = rowHtml.match(TITLE_RE);
+    if (!dateM || !titleM) continue;
+    const [, reportIdx, rawTitle] = titleM;
     const title = stripHtml(rawTitle);
-    const tm = title.match(TITLE_RE);
+    const tm = title.match(STOCK_TITLE_RE);
     if (!tm) continue; // 종목코드 형식이 아니면(드묾) 건너뜀
+
+    const targetM = rowHtml.match(TARGET_RE);
+    let opinion = "";
+    let analyst = "";
+    let source = "";
+    let targetPrice = null;
+    if (targetM) {
+      const n = Number(targetM[1].replace(/,/g, ""));
+      targetPrice = Number.isFinite(n) && n > 0 ? n : null;
+      const rest = rowHtml.slice(targetM.index + targetM[0].length);
+      const cells = [...rest.matchAll(/<td[^>]*>\s*([^<]*?)\s*<\/td>/g)].slice(0, 3).map((m) => stripHtml(m[1]));
+      [opinion, analyst, source] = cells.map((c) => c ?? "");
+      opinion = parseOpinion(opinion);
+    }
+    const sourceName = source;
+    if (sourceName.includes("유안타")) continue; // 자체 스크립트가 이미 수집 — 중복 방지
+
     items.push({
       id: reportIdx,
-      date,
+      date: dateM[1],
       title,
       stockName: tm[1].trim(),
       symbolHint: tm[2],
-      analyst: stripHtml(analyst),
+      opinion,
+      targetPrice,
+      analyst,
       source: sourceName,
       pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
     });
@@ -143,18 +179,6 @@ function excerptFromPdfText(text) {
   const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
-// 브로커마다 표기가 제각각이라 흔한 등급 표현만 느슨하게 매칭(최선 노력 —
-// 못 찾으면 null, 다른 소스처럼 강제로 채우지 않는다).
-function extractOpinion(text) {
-  const m = text.match(/(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated|Positive|Negative|Neutral)|(강력매수|매수|중립|매도|비중확대|비중축소)/);
-  return m ? (m[1] || m[2]) : "";
-}
-function extractTargetPrice(text) {
-  const m = text.match(/목표주가\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?\s*원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
 async function extractPdfExcerpt(pdfUrl) {
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
@@ -163,14 +187,10 @@ async function extractPdfExcerpt(pdfUrl) {
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return {
-      summary: excerptFromPdfText(text),
-      opinion: extractOpinion(text),
-      targetPrice: extractTargetPrice(text),
-    };
+    return excerptFromPdfText(text);
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", opinion: "", targetPrice: null };
+    return "";
   }
 }
 
@@ -200,10 +220,7 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, opinion, targetPrice } = await extractPdfExcerpt(it.pdfUrl);
-  it.summary = summary;
-  it.opinion = opinion;
-  it.targetPrice = targetPrice;
+  it.summary = await extractPdfExcerpt(it.pdfUrl);
   if (!it.summary) excerptFailCount++;
   await sleep(400);
 }
