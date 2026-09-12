@@ -43,7 +43,7 @@ export function StockAnalysis({
   const [yahooOverride, setYahooOverride] = useState<string | null>(initialYahoo);
   const [period, setPeriod] = useState<"annual" | "quarter">("annual");
   const [filingScope, setFilingScope] = useState<"core" | "all">("core");
-  const [chartMode, setChartMode] = useState<"price" | "marketcap" | null>(null);
+  const [showPriceChart, setShowPriceChart] = useState(false);
 
   function pick(hit: SymbolHit) {
     setSymbol(hit.symbol);
@@ -528,7 +528,7 @@ export function StockAnalysis({
                 <Stat
                   label="종가"
                   className="order-1 lg:order-none"
-                  onClick={() => setChartMode((m) => (m === "price" ? null : "price"))}
+                  onClick={() => setShowPriceChart((v) => !v)}
                 >
                   <span className="inline-flex items-baseline gap-1.5">
                     <Money value={ov.quote?.last} currency={ccy} />
@@ -542,11 +542,7 @@ export function StockAnalysis({
                     {ov.quote?.lastDate ?? "-"} · {ov.quote?.source ?? ""}
                   </div>
                 </Stat>
-                <Stat
-                  label="시가총액"
-                  className="order-3 lg:order-none"
-                  onClick={() => setChartMode((m) => (m === "marketcap" ? null : "marketcap"))}
-                >
+                <Stat label="시가총액" className="order-3 lg:order-none">
                   <span className="text-base">
                     {formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
                   </span>
@@ -650,15 +646,13 @@ export function StockAnalysis({
                 )}
               </div>
 
-              {chartMode && symbol && (
+              {showPriceChart && symbol && (
                 <PriceChartPanel
                   market={market}
                   symbol={ov.symbol}
                   yahoo={yahooOverride}
                   currency={ccy}
-                  mode={chartMode}
-                  sharesOutstanding={ov.quote?.sharesOutstanding ?? ov.consensus?.sharesOutstanding ?? null}
-                  onClose={() => setChartMode(null)}
+                  onClose={() => setShowPriceChart(false)}
                 />
               )}
 

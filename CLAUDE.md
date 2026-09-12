@@ -133,18 +133,53 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-hana-research.mjs`, GitHub Actions
       `.github/workflows/hana-research.yml`, 하루 1회)가 같은
       `/api/cron/shinhan-research` 라우트를 `source: "하나증권"` 으로 재사용.
+    - **한화투자증권 추가(오너 확인, 2026-09)**: `www.hanwhawm.com` 기업분석
+      (`/main/research/main/list.cmd?depth3_id=anls1&p=N`)은 로그인 없이
+      서버렌더링 HTML. **robots.txt 가 이 경로를 막지 않음**(다른 항목과 달리
+      `Disallow: /` 아님 — 좁은 경로 몇 개만 차단) — 별도 예외 승인이 딱히
+      필요 없는 가장 깨끗한 소스. 제목이 "[업종] 종목명[코드/의견] 제목"
+      형식이라 제목에서 종목코드를 뽑는다. 목록에 PDF 직링크가 없어 상세보기
+      URL(`view.cmd?...&seq=N`)을 대신 연결. **로컬 스크립트**
+      (`scripts/collect-hanwha-research.mjs`, GitHub Actions
+      `.github/workflows/hanwha-research.yml`)가 같은 라우트를
+      `source: "한화투자증권"` 으로 재사용.
+    - **유안타증권 추가(오너 확인, 2026-09)**: `www.myasset.com` 기업분석
+      (`/myasset/research/rs_list/rs_list.cmd?cd007=RE01&page=N&pgCnt=30`)은
+      로그인 없이 서버렌더링 HTML(표 형식). robots.txt 자체가 없는 사이트라
+      다른 예외들과 동일 조건으로 승인. `data-jongcode="(코드)"` 속성에
+      종목코드가 그대로 있어 이름 검색 불필요. **미해결**: 개별 리포트 PDF의
+      정확한 다운로드 URL을 못 찾아 `pdfUrl` 은 비워둠(제목·종목·의견·
+      애널리스트·날짜는 정상 수집) — 다음에 실제 브라우저 네트워크 요청을
+      봐서 채울 것. **로컬 스크립트**
+      (`scripts/collect-yuanta-research.mjs`, GitHub Actions
+      `.github/workflows/yuanta-research.yml`)가 같은 라우트를
+      `source: "유안타증권"` 으로 재사용.
+    - **교보증권 추가(오너 확인, 2026-09)**: `www.iprovest.com` 화면은 iframe
+      4중 중첩(레거시 웹로직)이지만, 실제 데이터를 뿌리는 서블릿
+      (`/weblogic/RSReportServlet?scr_id=32&menuCode=1&pageNum=N`)은 로그인 없이
+      평범한 GET으로 직접 열림(오너가 실제 사이트에서 확인해 링크를 알려줘서
+      역추적 성공). 응답이 **EUC-KR 인코딩**이라 `TextDecoder("euc-kr")` 로
+      변환 필요(Node 기본 지원 확인됨). "최신리포트" 게시판에 기업분석·
+      산업분석이 섞여 있어 구분 컬럼으로 기업분석만 필터링. 종목명은 코드
+      없이 이름만 나와 `corpcode.ts` 이름 검색으로 매핑. PDF는 로그인이
+      필요해(오너 확인) 상세보기 링크(로그인 없이 본문 열람 가능, 오너 확인)를
+      대신 연결. robots.txt 확인이 애매해(4중 프레임 구조) 보수적으로 다른
+      예외와 동일 조건 적용. **로컬 스크립트**
+      (`scripts/collect-kyobo-research.mjs`, GitHub Actions
+      `.github/workflows/kyobo-research.yml`)가 같은 라우트를
+      `source: "교보증권"` 으로 재사용.
     - **대신증권(오너 언급, 미확인)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴는 둘 다 `money2.daishin.com/E5/ResearchCenter`로
       가려다 로그인 페이지로 리다이렉트됨(직접 URL 진입도 동일). 이 사이트가
       맞다면 로그인 없이 보이는 정확한 화면 URL을 오너에게 다시 확인해야
       진행 가능 — 지금은 보류.
-    - **교보증권(오너 확인, 진행 중)**: `www.iprovest.com` → "기업분석"은
-      로그인 없이 실제 목록(날짜·제목·종목명·구분·글쓴이)이 보인다(확인됨).
-      다만 구조가 `iframe` 4중 중첩(`UsrFull` → `UsrMain` → `UsrBody` →
-      `/weblogic/RSReportServlet`)이라 페이지네이션·검색이 단순 GET 링크가
-      아닐 가능성이 높음(레거시 웹로직 프레임워크) — 실제 데이터 요청 방식은
-      다음 작업에서 이어서 확인할 것. 종목명은 코드 없이 이름만 나오므로
-      확보되면 `corpcode.ts` 이름 검색 필요.
+    - **미확인(오너 언급, 2026-09, 다음 작업 대상)**: KB증권(PDF는 로그인
+      필요·본문은 가능하다고 오너 언급 — Shinhan/Kyobo와 유사 패턴일 가능성),
+      NH투자증권, 미래에셋증권, 한국투자증권. **로그인이 필요한 증권사(예:
+      한화투자증권 계정 로그인)는 이 프로젝트 방식 대상이 아님** — 실거래
+      계좌 자격증명을 자동화 스크립트/CI 시크릿에 두는 것은 지금까지의
+      "공개 페이지 개인용 크롤링" 예외와 성격이 전혀 다른(데이터센터 IP
+      자동 로그인은 이상거래탐지·계정잠김 위험) 별개 문제라 진행하지 않음.
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로

@@ -246,19 +246,17 @@ export async function fetchStockNews(
  * 시장별 단일 소스·90일·20건)는 동작 그대로 둔다.
  */
 /**
- * 실측 결과, 정식 회사명("삼성전자")은 사실상 모든 검색 결과의 본문·요약
- * 어딘가에 등장한다(부동산·지역 뉴스가 "삼성전자 인근"처럼 지나가는 말로도
- * 언급) — 즉 요약문에 이름이 있는지만 보면 걸러내는 힘이 거의 없다. 반대로
- * 제목에 회사명 "그대로"만 요구하면(예전 방식) 한국 기사는 축약형("삼전",
- * "삼성")·계열사 통칭("삼성")을 즐겨 써서 대부분 걸러져 버린다(실측: 삼성전자
- * 최신 20건 중 정식명 그대로 제목에 있던 건 소수).
- *
- * 그래서: (a) 주요 대기업은 실제 통용되는 축약형 별칭 목록으로 "제목"을 검사
- * (제목은 편집자가 고른 핵심 주어라 정확도가 높음), (b) 그 외/별칭 없는
- * 종목은 "회사명(종목코드)" 표기(예: "삼성전자(005930)")가 제목·요약 어디든
- * 있으면 통과 — 이 표기는 시황·산업 기사가 종목을 구체적으로 지목할 때 쓰는
- * 관용구라 정확도가 높다. 이 두 신호 중 하나도 없으면 탈락.
- * 별칭 목록에 없는 회사는 정식명이 제목에 있어야 통과(과거와 동일, 안전한 쪽).
+ * 순수 텍스트 매칭으로는 "이 기사가 그 회사에 관한 것인가"를 정확히 판정할
+ * 수 없다는 게 두 번의 실측으로 확인됐다: 요약에 정식명이 있는지만 보면
+ * 부동산·지역 뉴스까지 다 통과(예: "삼성전자 인근 아파트")해 노이즈가 많고,
+ * 반대로 "제목에 정식명·축약형이 있어야 함"으로 좁히면 대형주는 하루에도
+ * 기사가 수십 건씩 나오는데 제목 조건 하나로 3건까지 떨어져 커버리지가
+ * 너무 부실해진다(둘 다 실측 확인). 진짜 해결책은 LLM 기반 주제 판정인데
+ * (relevance.ts 주석 참고) 아직 붙이지 않았으므로, 그때까지는:
+ *  - 별칭 목록에 있는 대형주(뉴스량이 많아 약간의 노이즈보다 커버리지 부족이
+ *    더 나쁨): 제목·요약 어디든 별칭이 있으면 통과 — recall 우선.
+ *  - 그 외 종목(뉴스량이 적어 노이즈 허용치가 낮음): 제목에 정식명이 있거나
+ *    "회사명(종목코드)" 표기가 제목·요약 어디든 있어야 통과 — precision 우선.
  */
 const KR_COMPANY_ALIASES: Record<string, string[]> = {
   삼성전자: ["삼성전자", "삼성", "삼전"],
@@ -283,8 +281,12 @@ function isDomesticRelevant(
 ): boolean {
   const name = companyName?.trim();
   if (!name) return true;
-  const aliases = KR_COMPANY_ALIASES[name] ?? [name];
-  if (aliases.some((a) => title.includes(a))) return true;
+  const aliases = KR_COMPANY_ALIASES[name];
+  if (aliases) {
+    const hay = `${title} ${excerpt ?? ""}`;
+    return aliases.some((a) => hay.includes(a));
+  }
+  if (title.includes(name)) return true;
   const codeTag = `(${symbol})`;
   return title.includes(codeTag) || (excerpt != null && excerpt.includes(codeTag));
 }

@@ -14,7 +14,7 @@ import {
 } from "recharts";
 import { apiFetch } from "@/lib/query";
 import { cn } from "@/lib/utils";
-import { formatCurrency, formatMoneyWithUnits, type CurrencyCode } from "@/lib/format";
+import { formatCurrency, type CurrencyCode } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,7 +29,7 @@ const TOOLTIP_CONTENT_STYLE = {
   color: "var(--popover-foreground)",
 } as const;
 
-/** 볼린저밴드·MACD 없이 종가(또는 시가총액)만 — 기본 1개월. */
+/** 볼린저밴드·MACD 없이 종가만 — 기본 1개월. */
 const PERIODS = [1 / 12, 0.25, 0.5, 1, 3, 5, 10] as const;
 const DEFAULT_YEARS: number = PERIODS[0];
 const periodLabel = (y: number) => (y < 1 ? `${Math.round(y * 12)}개월` : `${y}년`);
@@ -94,17 +94,12 @@ export function PriceChartPanel({
   symbol,
   yahoo,
   currency,
-  mode,
-  sharesOutstanding,
   onClose,
 }: {
   market: MarketId;
   symbol: string;
   yahoo?: string | null;
   currency?: CurrencyCode | null;
-  /** "price": 종가 추이 · "marketcap": 시가총액 추이(종가 × 현재 상장주식수 근사치) */
-  mode: "price" | "marketcap";
-  sharesOutstanding?: number | null;
   onClose: () => void;
 }) {
   const [years, setYears] = useState<number>(DEFAULT_YEARS);
@@ -145,33 +140,16 @@ export function PriceChartPanel({
             cutoff.setMonth(cutoff.getMonth() - Math.round(years * 12));
             return r.date >= cutoff.toISOString().slice(0, 10);
           });
-    const mult = mode === "marketcap" ? sharesOutstanding : null;
-    const scaled =
-      mult == null
-        ? sliced
-        : sliced.map((r) => ({
-            date: r.date,
-            open: r.open * mult,
-            high: r.high * mult,
-            low: r.low * mult,
-            close: r.close * mult,
-          }));
-    return scaled.map((r) => ({ ...r, hl: [r.low, r.high] as [number, number], market }));
-  }, [q.data, years, maxYears, mode, sharesOutstanding, market]);
+    return sliced.map((r) => ({ ...r, hl: [r.low, r.high] as [number, number], market }));
+  }, [q.data, years, maxYears, market]);
 
-  // 시가총액 추이는 과거 상장주식수 이력이 없어 현재 주식수로 근사(다른 화면의
-  // 과거 시가총액 근사와 동일한 관례 — dart-highlights.ts 참고).
-  const noMarketCap = mode === "marketcap" && sharesOutstanding == null;
-
-  const fmt = (v: number) =>
-    mode === "marketcap" ? formatMoneyWithUnits(v, market) : formatCurrency(v, currency ?? "USD");
+  const fmt = (v: number) => formatCurrency(v, currency ?? "USD");
   const xTick = (d: string) => d.slice(2, 7);
-  const seriesName = mode === "marketcap" ? "시가총액" : "종가";
 
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
-        <CardTitle className="text-sm">{mode === "marketcap" ? "시가총액 추이" : "가격 추이"}</CardTitle>
+        <CardTitle className="text-sm">가격 추이</CardTitle>
         <div className="flex items-center gap-1">
           <div className="border-border flex overflow-hidden rounded-md border text-xs">
             {options.map((o) => (
@@ -215,16 +193,9 @@ export function PriceChartPanel({
         </div>
       </CardHeader>
       <CardContent>
-        {noMarketCap && (
-          <p className="text-muted-foreground text-xs">
-            발행주식수 정보가 없어 시가총액 추이를 계산할 수 없습니다.
-          </p>
-        )}
-        {!noMarketCap && q.isLoading && <Skeleton className="h-56 w-full" />}
-        {!noMarketCap && q.isError && (
-          <p className="text-destructive text-xs">{(q.error as Error).message}</p>
-        )}
-        {!noMarketCap && q.data && rows.length > 0 && (
+        {q.isLoading && <Skeleton className="h-56 w-full" />}
+        {q.isError && <p className="text-destructive text-xs">{(q.error as Error).message}</p>}
+        {q.data && rows.length > 0 && (
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={rows} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
@@ -245,7 +216,7 @@ export function PriceChartPanel({
                   tick={AXIS_TICK}
                   axisLine={false}
                   tickLine={false}
-                  width={mode === "marketcap" ? 100 : 54}
+                  width={54}
                   domain={["auto", "auto"]}
                   tickFormatter={fmt}
                 />
@@ -267,8 +238,8 @@ export function PriceChartPanel({
                           </div>
                         ) : (
                           <div>
-                            {seriesName} {fmt(row.close)}
-                            {mode === "price" && currency ? ` ${currency}` : ""}
+                            종가 {fmt(row.close)}
+                            {currency ? ` ${currency}` : ""}
                           </div>
                         )}
                       </div>
@@ -279,20 +250,20 @@ export function PriceChartPanel({
                   <Line
                     type="monotone"
                     dataKey="close"
-                    name={seriesName}
+                    name="종가"
                     stroke="oklch(0.62 0.13 250)"
                     strokeWidth={1.6}
                     dot={false}
                     isAnimationActive={false}
                   />
                 ) : (
-                  <Bar dataKey="hl" name={seriesName} shape={CandleShape} isAnimationActive={false} />
+                  <Bar dataKey="hl" name="종가" shape={CandleShape} isAnimationActive={false} />
                 )}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
         )}
-        {!noMarketCap && q.data && rows.length === 0 && (
+        {q.data && rows.length === 0 && (
           <p className="text-muted-foreground text-xs">가격 데이터가 없습니다.</p>
         )}
       </CardContent>
