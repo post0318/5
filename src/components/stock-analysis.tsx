@@ -512,6 +512,7 @@ export function StockAnalysis({
               )}
               <TabsTrigger value="filings">공시</TabsTrigger>
               <TabsTrigger value="news">종목뉴스</TabsTrigger>
+              {market === "kr" && <TabsTrigger value="research">리서치</TabsTrigger>}
             </TabsList>
 
             {/* 개요 */}
@@ -951,17 +952,17 @@ export function StockAnalysis({
               )}
             </TabsContent>
 
-            {/* 종목뉴스 (+ 한국은 신한투자증권 리서치를 오른쪽에 병렬 표시) */}
+            {/* 종목뉴스 */}
             <TabsContent value="news" className="pt-4">
-              {market === "kr" ? (
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
-                  <StockNews market={market} symbol={ov.symbol} />
-                  <ShinhanResearch symbol={ov.symbol} />
-                </div>
-              ) : (
-                <StockNews market={market} symbol={ov.symbol} />
-              )}
+              <StockNews market={market} symbol={ov.symbol} />
             </TabsContent>
+
+            {/* 리서치 (신한투자증권, 한국만) */}
+            {market === "kr" && (
+              <TabsContent value="research" className="pt-4">
+                <ShinhanResearch symbol={ov.symbol} />
+              </TabsContent>
+            )}
 
             {/* 권리일정 (한국·미국) */}
             {(market === "kr" || market === "us") && (
