@@ -22,6 +22,17 @@ interface NewsResponse {
 const PAGE_SIZE = 10;
 const MAX_PAGES = 3;
 
+/** 요약 없는 항목(해외뉴스)의 자리 채움 — line-clamp-2 가 실제로 계산하는 두 줄
+ * 높이와 정확히 같아지도록 줄바꿈 포함 두 줄을 그대로 렌더링(em/rem 추정치
+ * 방식은 실제 높이와 어긋나는 문제가 실측 확인됨). */
+const blankTwoLines = (
+  <>
+    {" "}
+    <br />
+    {" "}
+  </>
+);
+
 function fmtAgo(iso: string): string {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   if (mins < 1) return "방금";
@@ -116,11 +127,13 @@ function NewsColumn({
                     <div className="text-muted-foreground mt-0.5 truncate text-xs">
                       {it.titleKo !== it.title ? it.title : " "}
                     </div>
-                    {/* 국내는 실제 요약, 해외는 API에 스니펫이 없어 빈 자리만(높이 통일 —
-                        min-height만 쓰고 고정 height는 안 씀 — line-clamp과 함께 쓰면
-                        2번째 줄이 말줄임 없이 뚝 잘려 보이는 문제가 있었음). */}
-                    <p className="text-muted-foreground mt-1 line-clamp-2 min-h-[2.3em] text-xs leading-snug">
-                      {it.excerpt || " "}
+                    {/* 국내는 실제 요약, 해외는 API에 스니펫이 없어 빈 자리만(행 높이 통일
+                        목적). em/rem 값으로 2줄 높이를 추정한 min-height는 실측 결과
+                        실제 2줄보다 작게 잡혀 어긋났음(오너 스크린샷 확인) — 대신 빈
+                        경우 줄바꿈 포함 두 줄을 그대로 채워 line-clamp-2 가 계산하는
+                        실제 높이와 항상 정확히 같아지게 한다. */}
+                    <p className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-snug">
+                      {it.excerpt ? it.excerpt : blankTwoLines}
                     </p>
                     <div className="text-muted-foreground mt-1 flex items-center gap-x-2 text-xs">
                       <span>{it.publisher}</span>
