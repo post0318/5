@@ -345,15 +345,23 @@ type RawNewsItem = Omit<NewsItem, "titleKo">;
  * 더 뜸함). ANTHROPIC_API_KEY 미설정·예산 초과·호출 실패 시 null 반환 →
  * 호출부가 기존 키워드 매칭으로 폴백(뉴스 기능 자체가 죽지 않게).
  */
+/** Vercel 대시보드 로그 확인이 번거로워 응답 자체에 진단 사유를 실어 curl로 바로 확인. */
+export type LlmFallbackReason = "no_api_key" | "budget_exceeded" | "call_failed";
+
 async function tryLlmRelevanceFilter(
   companyName: string,
   domesticRaw: RawNewsItem[],
   overseasRaw: RawNewsItem[],
-): Promise<{ domestic: RawNewsItem[]; overseas: RawNewsItem[] } | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
-  if (domesticRaw.length === 0 && overseasRaw.length === 0) return { domestic: [], overseas: [] };
+): Promise<
+  | { domestic: RawNewsItem[]; overseas: RawNewsItem[]; fallback: null }
+  | { domestic: null; overseas: null; fallback: LlmFallbackReason }
+> {
+  if (!process.env.ANTHROPIC_API_KEY) return { domestic: null, overseas: null, fallback: "no_api_key" };
+  if (domesticRaw.length === 0 && overseasRaw.length === 0) {
+    return { domestic: [], overseas: [], fallback: null };
+  }
   try {
-    if (await isBudgetExceeded()) return null;
+    if (await isBudgetExceeded()) return { domestic: null, overseas: null, fallback: "budget_exceeded" };
     const candidates = [
       ...domesticRaw.map((it) => ({ id: `d:${it.id}`, title: it.title, excerpt: it.excerpt })),
       ...overseasRaw.map((it) => ({ id: `o:${it.id}`, title: it.title })),
@@ -367,12 +375,11 @@ async function tryLlmRelevanceFilter(
     return {
       domestic: domestic.length > 0 || domesticRaw.length === 0 ? domestic : domesticRaw,
       overseas: overseas.length > 0 || overseasRaw.length === 0 ? overseas : overseasRaw,
+      fallback: null,
     };
   } catch (err) {
-    // 조용히 폴백하되 원인은 Vercel 함수 로그에 남긴다 — 그동안 catch{ return null }
-    // 로 완전히 삼켜져서 키 누락/무효/예산초과를 겉으로 구분할 방법이 없었음.
     console.error("[news] LLM 관련성 판정 실패, 키워드 매칭으로 폴백:", err);
-    return null;
+    return { domestic: null, overseas: null, fallback: "call_failed" };
   }
 }
 
@@ -380,7 +387,11 @@ export async function fetchStockNewsBySide(
   market: MarketId,
   symbol: string,
   companyName?: string | null,
-): Promise<{ domestic: NewsItem[]; overseas: NewsItem[] }> {
+): Promise<{
+  domestic: NewsItem[];
+  overseas: NewsItem[];
+  debug: { rawDomestic: number; rawOverseas: number; relevance: "llm" | LlmFallbackReason | "no_company_name" };
+}> {
   const query = companyName || symbol;
   const [domesticRaw, overseasRaw] = await Promise.all([
     fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30 }),
@@ -395,8 +406,15 @@ export async function fetchStockNewsBySide(
 
   let domesticSafe: RawNewsItem[];
   let overseasSafe: RawNewsItem[];
-  if (llmResult) {
-    ({ domestic: domesticSafe, overseas: overseasSafe } = llmResult);
+  let relevance: "llm" | LlmFallbackReason | "no_company_name";
+  if (!name) {
+    domesticSafe = domesticRaw;
+    overseasSafe = overseasRaw;
+    relevance = "no_company_name";
+  } else if (llmResult && llmResult.fallback === null) {
+    domesticSafe = llmResult.domestic;
+    overseasSafe = llmResult.overseas;
+    relevance = "llm";
   } else {
     // 폴백: 기존 키워드 매칭(국내만 — 해외는 원래도 무필터였음).
     const domesticFiltered = domesticRaw.filter((it) =>
@@ -405,13 +423,18 @@ export async function fetchStockNewsBySide(
     domesticSafe =
       domesticFiltered.length > 0 || domesticRaw.length === 0 ? domesticFiltered : domesticRaw;
     overseasSafe = overseasRaw;
+    relevance = llmResult?.fallback ?? "no_api_key";
   }
 
   const [domestic, overseas] = await Promise.all([
     withTranslatedTitles("ko", domesticSafe),
     withTranslatedTitles("en", overseasSafe),
   ]);
-  return { domestic, overseas };
+  return {
+    domestic,
+    overseas,
+    debug: { rawDomestic: domesticRaw.length, rawOverseas: overseasRaw.length, relevance },
+  };
 }
 
 /** 국내(이미 한국어) 언론사인지 — 번역·요약 대상 여부 판정(종목의 상장 시장이 아니라 기사 언론사 기준). */
