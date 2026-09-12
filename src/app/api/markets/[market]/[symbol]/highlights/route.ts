@@ -15,6 +15,7 @@ import { fetchStooqEod } from "@/lib/markets/quote/stooq";
 import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
+import { getKrDaDoc } from "@/lib/db/kr-da";
 
 export const revalidate = 3600;
 export const maxDuration = 45;
@@ -40,7 +41,7 @@ export async function GET(
 
     if (market === "kr") {
       const { corpCode } = resolveCorpCode("", sym);
-      const [facts, dps, krx, bars, ttm, consensus, dpsTtm] = await Promise.all([
+      const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daDoc] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
         fetchKrDps(corpCode),
         fetchKrxEod(sym).catch(() => null),
@@ -50,6 +51,7 @@ export async function GET(
         getKrJurirNo(sym)
           .then((crno) => fetchKrAnnualDps(crno))
           .catch(() => null),
+        getKrDaDoc(sym).catch(() => null),
       ]);
       if (!facts) return ok({ highlights: null });
       // 회계연도말 종가 — Stooq 커버리지가 부족하면 KRX 로 개별 조회
@@ -74,6 +76,7 @@ export async function GET(
         dpsByYear: dps.dpsByYear,
         payoutByYear: dps.payoutByYear,
         dpsTtm: dpsTtm?.ttm?.dps ?? null,
+        daDoc,
         consensus: consensus
           ? {
               estYear: consensus.estYear,

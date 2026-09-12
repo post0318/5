@@ -5,12 +5,12 @@ import type {
   HighlightColumn,
   HighlightRow,
 } from "../us/edgar-highlights";
-import { type KrFacts, annualSeries, annualSumByPattern } from "./dart-facts";
+import { type KrFacts, type KrDaInput, annualSeries, annualSumByPattern, daAndAmortSeries } from "./dart-facts";
 
 /**
  * 한국 재무 하이라이트 (개요) — `edgar-highlights.ts` 미러.
  * EV 브릿지 + 5개년 손익·현금흐름 + LTM + 차기 추정 1개년(네이버 컨센서스) + 투자지표.
- * EBITDA 는 DART 전체재무제표에 감가상각이 분리되지 않아 대신 영업이익을 쓴다.
+ * EBITDA = 영업이익 + 감가상각비(사업보고서 XBRL 주석 실측, daDoc — dart-analysis.ts 와 동일 로직).
  */
 
 const IS = ["IS", "CIS"];
@@ -46,6 +46,8 @@ export interface KrHighlightInput {
   payoutByYear: Map<number, number>; // 배당성향 %
   /** 최근 12개월(366일) 배당기준일 합산 주당배당금 — 있으면 LTM 열에 우선 사용. */
   dpsTtm?: number | null;
+  /** 감가상각비 실측(사업보고서 XBRL 주석) — 있으면 EBITDA = 영업이익 + 감가상각비. */
+  daDoc?: KrDaInput | null;
   consensus: {
     estYear: number | null;
     /** 네이버 컨센서스 매출액·영업이익·순이익 (억원, 네이버 표시 단위 그대로) */
@@ -75,7 +77,7 @@ const ratio = (n: number | null, d: number | null): number | null =>
   n != null && d != null && d > 0 ? n / d : null;
 
 export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights {
-  const { facts, bars, fyCloseByYear, sharesOutstanding: shares, currentMarketCap, currentPrice, ttm, dpsByYear, dpsTtm, consensus } = input;
+  const { facts, bars, fyCloseByYear, sharesOutstanding: shares, currentMarketCap, currentPrice, ttm, dpsByYear, dpsTtm, daDoc, consensus } = input;
 
   const fyYears = facts.periods.map((p) => p.year);
   const lastFy = fyYears[fyYears.length - 1] ?? new Date().getFullYear();
@@ -182,6 +184,14 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
       return null;
     });
 
+  // 감가상각비 실측(사업보고서 XBRL 주석) — EBITDA = 영업이익 + 감가상각비
+  const daS = daAndAmortSeries(facts, daDoc ?? null);
+  const ebitda = columns.map((c, i) => {
+    if (opInc[i] == null) return null;
+    const da = c.kind === "fy" ? (daS.byYear.get(cy(c)) ?? null) : c.kind === "ltm" ? daS.ltm : null;
+    return da != null ? opInc[i]! + da : null;
+  });
+
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap },
     { key: "cash", label: "− 현금 및 단기금융상품", format: "money", values: cashCol.map((v) => (v == null ? null : -v)) },
@@ -192,6 +202,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     { key: "revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(revenue, aRev) },
     { key: "opinc", label: "영업이익", format: "money", values: opInc },
     { key: "opinc_m", label: "마진 %", format: "pct", indent: true, values: opInc.map((v, i) => margin(v, revenue[i])) },
+    { key: "ebitda", label: "EBITDA", format: "money", values: ebitda },
     { key: "ni", label: "순이익", format: "money", values: netIncome },
     { key: "ni_m", label: "마진 %", format: "pct", indent: true, values: netIncome.map((v, i) => margin(v, revenue[i])) },
     { key: "eps", label: "EPS (희석)", format: "eps", values: eps },
@@ -218,13 +229,13 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   const psr = columns.map((c, i) =>
     c.kind === "estimate" ? ratio(estMarketCap, revenue[i]) : ratio(marketCap[i], revenue[i]),
   );
-  const evEbit = columns.map((c, i) => (c.kind === "estimate" ? null : ratio(ev[i], opInc[i])));
+  const evEbitda = columns.map((c, i) => (c.kind === "estimate" ? null : ratio(ev[i], ebitda[i])));
 
   const valuationRows: HighlightRow[] = [
     { key: "per", label: "PER", format: "mult", values: per },
     { key: "pbr", label: "PBR", format: "mult", values: pbr },
     { key: "psr", label: "PSR", format: "mult", values: psr },
-    { key: "ev_ebit", label: "EV/영업이익", format: "mult", values: evEbit },
+    { key: "ev_ebitda", label: "EV/EBITDA", format: "mult", values: evEbitda },
   ];
 
   const notes = [

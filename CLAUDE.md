@@ -94,6 +94,12 @@ npm run db:studio    # drizzle studio
       이 저장소 소유자만 쓰는 개인 자동화이고 앱 배포본(Vercel)에는 여전히
       크롤링 코드가 안 들어간다는 점은 동일. 로컬 스크립트는 수동/백업용으로
       계속 둔다.
+  - **예외 2건 (개인용, 오너 명시 승인, 2026-09)**: `stock.naver.com`(및
+    `m.stock.naver.com`)의 종목 리서치(애널리스트 리포트) 페이지
+    (`/domestic/stock/{code}/research`). robots.txt 가 `Disallow: /` 라
+    다른 항목과 동일하게 예외 승인 필요 — 승인은 됐으나 실제 로딩에 쓰는
+    JSON 엔드포인트를 아직 못 찾음(추정 경로 시도 실패). 다음 작업 시
+    실제 API 경로부터 확인할 것.
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로

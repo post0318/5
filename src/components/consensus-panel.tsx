@@ -150,7 +150,7 @@ export function ConsensusPanel({
                   <th className="py-1.5 text-left font-medium">시점</th>
                   <th className="py-1.5 font-medium">당해 EPS(E)</th>
                   <th className="py-1.5 font-medium">당해 PER(E)</th>
-                  <th className="py-1.5 font-medium">
+                  <th className="border-l border-dashed py-1.5 pl-3 font-medium">
                     {d.epsRevision.nextFy ? `${d.epsRevision.nextFy} EPS(E)` : "차년도 EPS(E)"}
                   </th>
                   <th className="py-1.5 font-medium">
@@ -160,11 +160,16 @@ export function ConsensusPanel({
               </thead>
               <tbody className="tnum">
                 {d.epsRevision.asOf.map((t, i) => (
-                  <tr key={t} className="border-b text-right">
+                  <tr
+                    key={t}
+                    className={cn("border-b text-right", i % 2 === 1 && "bg-muted/40")}
+                  >
                     <td className="py-1.5 text-left">{t}</td>
                     <td className="py-1.5">{won(d.epsRevision!.eps[i])}</td>
                     <td className="py-1.5">{mult(d.epsRevision!.per[i])}</td>
-                    <td className="py-1.5">{won(d.epsRevision!.epsNext[i])}</td>
+                    <td className="border-l border-dashed py-1.5 pl-3">
+                      {won(d.epsRevision!.epsNext[i])}
+                    </td>
                     <td className="py-1.5">{mult(d.epsRevision!.perNext[i])}</td>
                   </tr>
                 ))}

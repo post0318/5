@@ -629,14 +629,11 @@ export function StockAnalysis({
                         (() => {
                           const rec = recommendationKo(ov.consensus.recommendationKey);
                           return (
-                            <Badge
-                              variant="secondary"
-                              className={cn("text-[10px] font-medium", rec.className)}
-                            >
+                            <span className={cn("text-sm font-medium", rec.className)}>
                               {rec.label}
                               {ov.consensus.recommendationMean != null &&
-                                ` (${formatNumber(ov.consensus.recommendationMean, 2)})`}
-                            </Badge>
+                                `(${formatNumber(ov.consensus.recommendationMean, 2)})`}
+                            </span>
                           );
                         })()}
                     </span>
@@ -811,31 +808,6 @@ export function StockAnalysis({
                   yahoo-finance2 (개인용) — 일본은 무료 분기 공시가 없어 TTM·최근분기 지표는 Yahoo 제공치
                 </p>
               </section>
-              )}
-
-              {ov.consensus && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-sm">
-                      포워드 컨센서스{" "}
-                      <span className="text-muted-foreground font-normal">
-                        · {ov.consensus.source}
-                      </span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <Stat label="애널리스트 수">
-                        <NumberText value={ov.consensus.numberOfAnalysts} />
-                      </Stat>
-                      <Stat label="투자의견">
-                        <span className="text-sm">
-                          {ov.consensus.recommendationKey ?? "-"}
-                        </span>
-                      </Stat>
-                    </div>
-                  </CardContent>
-                </Card>
               )}
 
               <ConsensusPanel market={market} symbol={ov.symbol} yahoo={yahooOverride} />
