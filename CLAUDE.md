@@ -185,6 +185,21 @@ npm run db:studio    # drizzle studio
       않고 보완 — 같은 리포트가 두 소스에 중복 저장될 수 있으나 `_id` 가
       소스별로 네임스페이스돼 있어 기능상 문제 없음(화면엔 중복 카드로만
       보일 수 있음, 추후 정리 여지).
+    - **NH투자증권 추가(오너 확인, 2026-09)**: `www.nhsec.com` 은 레거시
+      frameset 사이트라 실제 콘텐츠는 `/main.html` 프레임 안에 있고, 화면이
+      호출하는 내부 TR(트랜잭션) API `/research/boardCommonTrAjax.action`
+      (`trName=H3211`)을 직접 역추적해 호출한다(DOM 스크레이핑 아님). 로그인
+      불필요, 응답은 EUC-KR 인코딩 JSON. 페이지네이션은 번호가 아니라 커서
+      방식(마지막 행의 `rsh_ppr_no`/일시를 다음 요청에 그대로 실어 보냄),
+      `rmt_cnt`를 아무리 크게 줘도 서버가 최대 20건으로 잘라 응답(실측
+      확인). 응답에 종목코드(`rsh_ppr_iem_cd_pcl`, 산업 리포트는 콤마로 여러
+      개)와 PDF 직링크(`hpge_fle_url_cts`)가 이미 들어있어 제목 파싱·이름
+      검색이 불필요 — 종목명은 표시용으로만 `corpcodes.json` 역조회.
+      `robots.txt` 는 `Disallow: /`(Googlebot 등 예외) — 다른 항목과 동일
+      조건으로 예외 승인. **로컬 스크립트**
+      (`scripts/collect-nh-research.mjs`, GitHub Actions
+      `.github/workflows/nh-research.yml`, 하루 1회)가 같은 라우트를
+      `source: "NH투자증권"` 으로 재사용.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
