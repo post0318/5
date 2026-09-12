@@ -227,6 +227,22 @@ npm run db:studio    # drizzle studio
       승인. **로컬 스크립트** (`scripts/collect-kis-research.mjs`, GitHub
       Actions `.github/workflows/kis-research.yml`, 하루 1회)가 같은 라우트를
       `source: "한국투자증권"` 으로 재사용.
+    - **KB증권 추가(오너 확인, 2026-09)**: `www.kbsec.com` 리서치보고서
+      "산업/기업" 탭이 호출하는 내부 TR API(`/go.able?linkcd=s040203010001`,
+      POST, `tab=5`)를 직접 역추적해 호출한다. 로그인 불필요, 응답은 UTF-8
+      JSON. `searchMonth=3` 하나로 최근 3개월치를 한 번에 받아 와 다른
+      브로커와 달리 페이지네이션 자체가 불필요. 제목이 "종목명 (코드)" +
+      별도 부제(`docTitleSub`, 실제 헤드라인) 필드로 깔끔히 분리돼 있고
+      투자의견(`recomm`, 영문)·PDF 직링크(`urlLink`)도 목록에 포함. 종목코드
+      없이 업종명만 있는 리포트(대표 종목코드가 임의로 딸려있는 경우 포함)는
+      제목이 "종목명 (코드)" 패턴이 아니므로 자동으로 걸러짐. **PDF도 실측
+      결과 로그인 없이 다운로드됨**(오너가 "kb는 pdf는 로그인해야하나 본문은
+      가능하다"고 전달했던 것과 달리, 최소 "산업/기업" 게시판 PDF는 로그인
+      불필요로 확인됨). `www.kbsec.com`·`rdata.kbsec.com` 모두 robots.txt
+      자체가 없음(가장 깨끗한 케이스) — 그래도 다른 예외들과 동일 조건으로
+      승인. **로컬 스크립트** (`scripts/collect-kb-research.mjs`, GitHub
+      Actions `.github/workflows/kb-research.yml`, 하루 1회)가 같은 라우트를
+      `source: "KB증권"` 으로 재사용.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
