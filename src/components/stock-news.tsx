@@ -113,12 +113,13 @@ function NewsColumn({
                     <div className="group-hover:text-primary text-sm leading-snug font-medium">
                       {it.titleKo}
                     </div>
-                    {it.titleKo !== it.title && (
-                      <div className="text-muted-foreground mt-0.5 truncate text-xs">{it.title}</div>
-                    )}
+                    <div className="text-muted-foreground mt-0.5 truncate text-xs">
+                      {it.titleKo !== it.title ? it.title : " "}
+                    </div>
                     {/* 국내는 실제 요약, 해외는 API에 스니펫이 없어 빈 자리만(높이 통일 —
-                        국내/해외 행 높이가 다르면 2열 레이아웃이 들쭉날쭉해 보임). */}
-                    <p className="text-muted-foreground mt-1 line-clamp-2 h-[2.3em] text-xs leading-snug">
+                        min-height만 쓰고 고정 height는 안 씀 — line-clamp과 함께 쓰면
+                        2번째 줄이 말줄임 없이 뚝 잘려 보이는 문제가 있었음). */}
+                    <p className="text-muted-foreground mt-1 line-clamp-2 min-h-[2.3em] text-xs leading-snug">
                       {it.excerpt || " "}
                     </p>
                     <div className="text-muted-foreground mt-1 flex items-center gap-x-2 text-xs">
