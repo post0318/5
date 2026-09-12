@@ -94,7 +94,9 @@ const ALLOWED_PUBLISHERS = new Set(
     "GuruFocus",
     "Insider Monkey",
     "Kiplinger",
-    "MT Newswires",
+    // "MT Newswires" 제외(오너 확인, 2026-09) — 실측: 링크가 회원가입 필요한
+    // Yahoo Finance Premium 페이지로 연결됨, 제목도 미확인 소문("Market
+    // Chatter:") 형식이 잦음. 둘 다 이 소스 특유의 반복 패턴으로 확인됨.
     "Seeking Alpha",
     "Benzinga",
     "Zacks",
