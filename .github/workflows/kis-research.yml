@@ -1,0 +1,22 @@
+name: 한국투자증권 기업/산업분석 리포트 수집
+
+# CLAUDE.md 방침(오너 승인 예외): securities.koreainvestment.com 리서치
+# 목록을 하루 1회, 개인용으로만 조회한다. robots.txt가 Disallow: / 라
+# 다른 예외들과 동일한 조건(개인용·로컬 실행·저빈도)으로 승인됨.
+
+on:
+  schedule:
+    - cron: "45 0 * * *" # 00:45 UTC = 09:45 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/collect-kis-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

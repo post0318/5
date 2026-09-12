@@ -213,6 +213,20 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-mirae-research.mjs`, GitHub Actions
       `.github/workflows/mirae-research.yml`, 하루 1회)가 같은 라우트를
       `source: "미래에셋증권"` 으로 재사용.
+    - **한국투자증권 추가(오너 확인, 2026-09)**: `securities.koreainvestment.com`
+      은 모던 사이트라 목록(`/main/research/research/Strategy.jsp?jkGubun=10
+      &category1=05&category2=01&rowsPerPages=50&currentPage=N`)이 평범한
+      서버렌더링 HTML(UTF-8)로 바로 나온다. 상세 페이지도 로그인 없이 전체
+      본문이 보이지만(실측 확인) 이 프로젝트 방침상 목록의 요약 발췌만
+      저장. **PDF 원문은 로그인 필요**(`prePdfFileView()`가 비로그인 시
+      `login.jsp`로 리다이렉트, 실측 확인) — 교보증권과 동일 패턴으로 로그인
+      없이 열리는 상세 페이지 URL을 대신 연결. 제목이 "종목명 (코드):제목"
+      (일부는 앞에 "AIR 스몰캡" 같은 태그가 더 붙어 지저분함) 형식이라 코드만
+      뽑고, 종목명은 `corpcodes.json` 역조회로 깔끔하게 대체. `robots.txt`
+      는 `Disallow: /`(Googlebot 등 예외) — 다른 항목과 동일 조건으로 예외
+      승인. **로컬 스크립트** (`scripts/collect-kis-research.mjs`, GitHub
+      Actions `.github/workflows/kis-research.yml`, 하루 1회)가 같은 라우트를
+      `source: "한국투자증권"` 으로 재사용.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
