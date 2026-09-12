@@ -16,6 +16,9 @@ export interface RawNewsItem {
   title: string;
   link: string;
   source: string;
+  /** <source url="..."> 속성의 도메인 — source 텍스트 표기가 "Bloomberg.com"/
+   * "reuters.com"처럼 일관되지 않아, 매체 화이트리스트 판정엔 이 도메인이 더 안정적. */
+  sourceDomain: string | null;
   publishedAt: string;
 }
 
@@ -52,6 +55,13 @@ export async function fetchGoogleNewsRss(url: string): Promise<RawNewsItem[]> {
         const link = tag("link", b);
         if (!rawTitle || !link) return null;
         const source = tag("source", b) ?? "Google 뉴스";
+        const sourceUrlMatch = b.match(/<source\s+url="([^"]*)"/i);
+        let sourceDomain: string | null = null;
+        try {
+          sourceDomain = sourceUrlMatch ? new URL(decode(sourceUrlMatch[1])).hostname.replace(/^www\./, "") : null;
+        } catch {
+          sourceDomain = null;
+        }
         // "헤드라인 - 매체" 형식에서 매체명 꼬리 제거
         const title = rawTitle.replace(new RegExp(`\\s*[-–]\\s*${source}\\s*$`), "").trim();
         const pub = tag("pubDate", b);
@@ -60,6 +70,7 @@ export async function fetchGoogleNewsRss(url: string): Promise<RawNewsItem[]> {
           title,
           link,
           source,
+          sourceDomain,
           publishedAt: d && !Number.isNaN(d.getTime()) ? d.toISOString() : new Date().toISOString(),
         };
       })

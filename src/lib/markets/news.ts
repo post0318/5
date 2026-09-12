@@ -3,6 +3,7 @@ import YahooFinancePkg from "yahoo-finance2";
 import { fetchJson } from "./http";
 import type { MarketId } from "./types";
 import { translateTitles } from "../news/translate";
+import { fetchGoogleNewsRss, googleNewsUrl } from "../news/googleNews";
 import { resolveCorpCode } from "./kr/corpcode";
 import { judgeNewsRelevance } from "../llm/claude";
 import { isBudgetExceeded, incUsage } from "../db/llm-usage";
@@ -100,6 +101,7 @@ const ALLOWED_PUBLISHERS = new Set(
     "Seeking Alpha",
     "Benzinga",
     "Zacks",
+    "CNN Business", // 오너 요청(2026-09) — Google 뉴스 경유로만 나옴(야후엔 없음)
     // 일본
     "Nikkei Asia",
     "The Japan Times",
@@ -172,6 +174,67 @@ async function fetchUsJpNews(
       market,
       symbol,
     });
+  }
+  return items;
+}
+
+/**
+ * 해외뉴스 도메인 → 매체명 — Google 뉴스 RSS 의 <source> 텍스트 표기가 일관되지
+ * 않아서(실측: "Bloomberg.com"/"reuters.com" 처럼 도메인 그대로 나오기도 함)
+ * <source url="..."> 속성의 도메인으로 판정한다(googleNews.ts 의 sourceDomain).
+ */
+const OVERSEAS_PUBLISHER_BY_DOMAIN: Record<string, string> = {
+  "reuters.com": "Reuters",
+  "bloomberg.com": "Bloomberg",
+  "apnews.com": "AP News",
+  "wsj.com": "The Wall Street Journal",
+  "ft.com": "Financial Times",
+  "cnbc.com": "CNBC",
+  "barrons.com": "Barron's",
+  "marketwatch.com": "MarketWatch",
+  "finance.yahoo.com": "Yahoo Finance",
+  "investors.com": "Investor's Business Daily",
+  "thestreet.com": "TheStreet",
+  "fool.com": "The Motley Fool",
+  "gurufocus.com": "GuruFocus.com",
+  "insidermonkey.com": "Insider Monkey",
+  "kiplinger.com": "Kiplinger",
+  "seekingalpha.com": "Seeking Alpha",
+  "benzinga.com": "Benzinga",
+  "zacks.com": "Zacks",
+  "cnn.com": "CNN Business",
+  "edition.cnn.com": "CNN Business",
+  "money.cnn.com": "CNN Business",
+  "asia.nikkei.com": "Nikkei Asia",
+  "japantimes.co.jp": "The Japan Times",
+  "kyodonews.net": "Kyodo News",
+};
+
+/**
+ * 해외뉴스 2차 소스(2026-09, 오너 요청) — 야후 검색 하나만으로는 커버리지가
+ * 너무 좁아서(블룸버그·WSJ·CNN 등이 야후 검색 결과에 잘 안 잡힘) Google 뉴스
+ * RSS(공개 신디케이션 피드, 이미 거시경제 뉴스 기능이 쓰는 것과 동일 인프라)를
+ * 병행 조회한다. 같은 도메인 화이트리스트 철학 유지 — 매체명이 아니라
+ * <source url> 도메인으로 판정(Google 표기가 일관되지 않아서).
+ */
+async function fetchGoogleOverseasNews(
+  market: MarketId,
+  symbol: string,
+  query: string,
+  opts?: { cutoffMs?: number; limit?: number },
+): Promise<Omit<NewsItem, "titleKo">[]> {
+  const url = googleNewsUrl(`search?q=${encodeURIComponent(query)}`, "hl=en-US&gl=US&ceid=US:en");
+  const raw = await fetchGoogleNewsRss(url);
+  const cutoff = Date.now() - (opts?.cutoffMs ?? THREE_MONTHS_MS);
+  const limit = opts?.limit ?? 20;
+  const items: Omit<NewsItem, "titleKo">[] = [];
+  for (const n of raw) {
+    const publisher = n.sourceDomain ? OVERSEAS_PUBLISHER_BY_DOMAIN[n.sourceDomain] : undefined;
+    if (!publisher) continue;
+    const t = new Date(n.publishedAt).getTime();
+    if (!Number.isFinite(t) || t < cutoff) continue;
+    items.push({ id: n.link, title: n.title, publisher, url: n.link, publishedAt: n.publishedAt, market, symbol });
+    if (items.length >= limit) break;
   }
   return items;
 }
@@ -471,13 +534,20 @@ export async function fetchStockNewsBySide(
   debug: { rawDomestic: number; rawOverseas: number; relevance: "llm" | LlmFallbackReason | "no_company_name" };
 }> {
   const query = companyName || symbol;
-  const [domesticRaw, overseasRaw] = await Promise.all([
+  const oQuery = overseasQuery(market, symbol, query);
+  const [domesticRaw, yahooOverseas, googleOverseas] = await Promise.all([
     fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30 }),
-    fetchUsJpNews(market, symbol, overseasQuery(market, symbol, query), {
-      cutoffMs: ONE_WEEK_MS,
-      newsCount: 30,
-    }),
+    fetchUsJpNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, newsCount: 30 }),
+    fetchGoogleOverseasNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, limit: 30 }).catch(() => []),
   ]);
+  // 야후·구글 두 소스에서 같은 기사(URL 동일)가 겹칠 수 있어 합치기 전 URL 기준
+  // 1차 정리(문구만 다른 별도 기사의 중복은 LLM 판정 단계에서 그룹으로 잡음).
+  const seenUrls = new Set<string>();
+  const overseasRaw = [...yahooOverseas, ...googleOverseas].filter((it) => {
+    if (seenUrls.has(it.url)) return false;
+    seenUrls.add(it.url);
+    return true;
+  });
 
   const name = companyName?.trim();
   const llmResult = name ? await tryLlmRelevanceFilter(name, domesticRaw, overseasRaw) : null;
