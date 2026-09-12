@@ -954,7 +954,7 @@ export function StockAnalysis({
             {/* 종목뉴스 (+ 한국은 신한투자증권 리서치를 오른쪽에 병렬 표시) */}
             <TabsContent value="news" className="pt-4">
               {market === "kr" ? (
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-[2fr_1fr]">
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
                   <StockNews market={market} symbol={ov.symbol} />
                   <ShinhanResearch symbol={ov.symbol} />
                 </div>

@@ -5,6 +5,7 @@ import { ExternalLink } from "lucide-react";
 import { apiFetch, ApiError } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ShinhanResearchDoc } from "@/lib/db/shinhan-research";
 
 function fmtAgo(iso: string): string {
@@ -37,12 +38,17 @@ export function ShinhanResearch({ symbol }: { symbol: string }) {
   });
 
   return (
-    <div className="min-w-0">
-      <h4 className="mb-2 text-xs font-semibold">
-        신한투자증권 리서치{" "}
-        {q.data && <span className="text-muted-foreground font-normal">({q.data.items.length})</span>}
-      </h4>
-      <p className="text-muted-foreground/70 mb-2 text-[11px]">최근 30일 · 개인용 참고자료</p>
+    <Card className="min-w-0">
+      <CardHeader className="pb-2">
+        <CardTitle className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+          신한투자증권 리서치
+          {q.data && <span className="text-muted-foreground text-xs font-normal">({q.data.items.length})</span>}
+          <span className="text-muted-foreground ml-auto text-[11px] font-normal">
+            최근 30일 · 개인용 참고자료
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
       {q.isLoading && <Skeleton className="h-40 w-full" />}
       {q.isError && (
         <p className="text-destructive text-xs">
@@ -87,6 +93,7 @@ export function ShinhanResearch({ symbol }: { symbol: string }) {
           ))}
         </ul>
       )}
-    </div>
+      </CardContent>
+    </Card>
   );
 }

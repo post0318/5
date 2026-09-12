@@ -108,7 +108,7 @@ export function PriceChartPanel({
   onClose: () => void;
 }) {
   const [years, setYears] = useState<number>(DEFAULT_YEARS);
-  const [chartType, setChartType] = useState<"line" | "bar">("line");
+  const [chartType, setChartType] = useState<"line" | "bar">("bar");
   const q = useQuery({
     queryKey: ["price-chart", market, symbol, yahoo],
     queryFn: () =>
