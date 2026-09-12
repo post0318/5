@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Bar,
   ComposedChart,
+  Legend,
   Line,
   ResponsiveContainer,
   Tooltip,
@@ -90,7 +91,7 @@ export function ConsensusPanel({
       </CardHeader>
       <CardContent className="space-y-6">
         {/* 매출·EPS 추이 차트 */}
-        <div className="h-56 w-full">
+        <div className="h-64 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
@@ -99,7 +100,7 @@ export function ConsensusPanel({
                 tick={{ fontSize: 10 }}
                 tickLine={false}
                 axisLine={false}
-                width={48}
+                width={68}
                 tickFormatter={(v: number) => formatNumber(v, 0)}
               />
               <YAxis
@@ -108,13 +109,14 @@ export function ConsensusPanel({
                 tick={{ fontSize: 10 }}
                 tickLine={false}
                 axisLine={false}
-                width={44}
+                width={60}
                 tickFormatter={(v: number) => formatNumber(v, 0)}
               />
               <Tooltip
                 contentStyle={{ fontSize: 12 }}
                 formatter={(value) => formatNumber(Number(value), 0)}
               />
+              <Legend verticalAlign="top" height={28} wrapperStyle={{ fontSize: 11 }} />
               <Bar
                 yAxisId="rev"
                 dataKey="revenue"
@@ -144,7 +146,14 @@ export function ConsensusPanel({
         {d.epsRevision && (
           <div>
             <h4 className="mb-2 text-xs font-semibold">EPS 컨센서스 추이</h4>
-            <table className="w-full text-sm">
+            <table className="w-full table-fixed text-sm">
+              <colgroup>
+                <col style={{ width: "16%" }} />
+                <col style={{ width: "21%" }} />
+                <col style={{ width: "21%" }} />
+                <col style={{ width: "21%" }} />
+                <col style={{ width: "21%" }} />
+              </colgroup>
               <thead>
                 <tr className="text-muted-foreground border-b text-right">
                   <th className="py-1.5 text-left font-medium">시점</th>
