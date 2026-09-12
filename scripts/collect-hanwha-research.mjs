@@ -61,7 +61,7 @@ function stripHtml(s) {
 }
 
 function extractTargetPrice(text) {
-  const m = String(text ?? "").match(/목표주가\s*[:：]?\s*([\d,]+)\s*(만)?원/);
+  const m = String(text ?? "").match(/목표주가(?:를|는|가)?\s*[:：]?\s*([\d,]+)\s*(만)?원/);
   if (!m) return null;
   const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
   return Number.isFinite(n) && n > 0 ? n : null;

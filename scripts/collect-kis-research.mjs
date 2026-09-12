@@ -91,7 +91,7 @@ function extractOpinion(text) {
   return m ? (m[1] || m[2]) : "";
 }
 function extractTargetPrice(text) {
-  const m = text.match(/목표주가\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?\s*원/);
+  const m = text.match(/목표주가(?:를|는|가)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?\s*원/);
   if (!m) return null;
   const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
   return Number.isFinite(n) && n > 0 ? n : null;

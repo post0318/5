@@ -10,8 +10,17 @@
  *    동일하게 "개인용·로컬 실행·저빈도" 조건으로 오너 승인(CLAUDE.md 참조).
  *    앱 배포본(Vercel)에는 이 수집 코드가 없다 — DB 적재 라우트는 결과만 받는다.
  *
+ * 목표주가(2026-09 추가): 목록 요약(rawBody)에는 목표주가가 거의 안 나온다
+ * (오너 확인 — 실적 속보성 문단이라 재언급 안 함). 대신 PDF 표지 옆
+ * "BUY (유지)\n목표주가(12M) 220,000원\n현재주가(9.11) 119,300원" 블록에
+ * 항상 있어(pdf-parse 추출 순서상 본문 뒤쪽에 나옴, 실측 확인) PDF를 내려받아
+ * 그 값을 우선 사용한다(목록 요약에서 먼저 찾아보고 없으면 PDF로 폴백).
+ * PDF 다운로드가 매번 비용이 드는 작업이라 --days 기본값을 14 → 3으로
+ * 좁혔다(다른 PDF 기반 수집기와 동일 이유 — 서버가 통째로 replace하므로
+ * 넓게 잡으면 매일 옛 PDF까지 재다운로드하게 됨).
+ *
  * ── 실행 ────────────────────────────────────────────────────────────
- *   node scripts/collect-hana-research.mjs             # 최근 14일, 최대 5페이지
+ *   node scripts/collect-hana-research.mjs             # 최근 3일, 최대 5페이지
  *   node scripts/collect-hana-research.mjs --days=30 --pages=10
  *   node scripts/collect-hana-research.mjs --dry-run   # 전송 안 하고 파싱 결과만
  *
@@ -22,6 +31,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { PDFParse } from "pdf-parse";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -39,7 +49,7 @@ function loadEnvLocal() {
 const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
-const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 14;
+const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
@@ -71,11 +81,30 @@ function excerpt(text) {
 }
 
 // 실적 속보성 리포트는 목표주가 언급이 없는 경우가 많음 — 있으면만 뽑는다.
+// PDF 표지의 "목표주가(12M) 220,000원"처럼 라벨 뒤에 괄호 주석이 붙기도 함.
 function extractTargetPrice(text) {
-  const m = String(text ?? "").match(/목표주가\s*[:：]?\s*([\d,]+)\s*(만)?원/);
+  const m = String(text ?? "").match(
+    /목표주가(?:를|는|가)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?원/,
+  );
   if (!m) return null;
   const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+async function extractTargetPriceFromPdf(pdfUrl) {
+  if (!pdfUrl) return null;
+  try {
+    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const parser = new PDFParse({ data: buf });
+    const { text } = await parser.getText();
+    await parser.destroy();
+    return extractTargetPrice(text);
+  } catch (err) {
+    console.warn(`  ⚠ PDF 목표주가 추출 실패 (${pdfUrl}): ${err.message}`);
+    return null;
+  }
 }
 
 function stripHtml(s) {
@@ -156,6 +185,18 @@ console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log(
   "  최근 3건:",
   collected.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbolHint}) — ${i.title}`),
+);
+
+console.log(`▶ 목표주가 보강 중 (${collected.length}건)...`);
+for (const it of collected) {
+  if (it.targetPrice == null) {
+    it.targetPrice = await extractTargetPriceFromPdf(it.pdfUrl);
+    await sleep(400);
+  }
+}
+console.log(
+  "  예시:",
+  collected.find((it) => it.targetPrice != null)?.targetPrice ?? "(없음)",
 );
 
 if (DRY_RUN) {
