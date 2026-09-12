@@ -99,7 +99,7 @@ function NewsColumn({
                   className="group flex min-w-0 flex-1 items-start gap-2"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="group-hover:text-primary text-sm leading-snug font-medium">
+                    <div className="group-hover:text-primary line-clamp-1 text-sm leading-snug font-medium">
                       {it.titleKo}
                     </div>
                     <div className="text-muted-foreground mt-0.5 truncate text-xs">

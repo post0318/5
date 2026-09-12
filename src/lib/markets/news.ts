@@ -120,7 +120,10 @@ const ALLOWED_PUBLISHERS = new Set(
   ].map((p) => p.toLowerCase()),
 );
 
-/** 한국 뉴스 원문 링크 도메인 → 언론사명. 없는 도메인은 화이트리스트 밖으로 처리. */
+/** 한국 뉴스 원문 링크 도메인 → 언론사명. 없는 도메인은 화이트리스트 밖으로 처리.
+ * 세계일보 등 메이저 종합일간지가 누락돼 있던 문제가 반복 확인돼(오너 지적,
+ * 2026-09) 주요 종합일간지·경제지를 폭넓게 보강 — "노이즈" 문제는 극소수
+ * 초유명 대기업(별칭 목록으로 대응)에서만 발생하니 recall 우선 원칙 유지. */
 const KR_PUBLISHER_BY_DOMAIN: Record<string, string> = {
   "yna.co.kr": "연합뉴스",
   "newsis.com": "뉴시스",
@@ -131,6 +134,18 @@ const KR_PUBLISHER_BY_DOMAIN: Record<string, string> = {
   "mt.co.kr": "머니투데이",
   "edaily.co.kr": "이데일리",
   "fnnews.com": "파이낸셜뉴스",
+  "segye.com": "세계일보",
+  "heraldcorp.com": "헤럴드경제",
+  "asiae.co.kr": "아시아경제",
+  "news1.kr": "뉴스1",
+  "kmib.co.kr": "국민일보",
+  "munhwa.com": "문화일보",
+  "seoul.co.kr": "서울신문",
+  "khan.co.kr": "경향신문",
+  "joongang.co.kr": "중앙일보",
+  "joins.com": "중앙일보",
+  "donga.com": "동아일보",
+  "magazine.hankyung.com": "한경비즈니스",
   "hankookilbo.com": "한국일보",
 };
 
@@ -239,6 +254,81 @@ async function fetchGoogleOverseasNews(
   return items;
 }
 
+interface NaverStockNewsItem {
+  id: string;
+  officeName: string;
+  datetime: string; // "YYYYMMDDHHmm", KST
+  title: string;
+  body?: string;
+  mobileNewsUrl: string;
+}
+type NaverStockNewsGroup = { total: number; items: NaverStockNewsItem[] };
+
+/** "YYYYMMDDHHmm"(KST, UTC+9) → UTC epoch ms. */
+function parseNaverStockDatetime(s: string): number {
+  const y = Number(s.slice(0, 4));
+  const mo = Number(s.slice(4, 6)) - 1;
+  const d = Number(s.slice(6, 8));
+  const h = Number(s.slice(8, 10));
+  const mi = Number(s.slice(10, 12));
+  return Date.UTC(y, mo, d, h, mi) - 9 * 3600_000;
+}
+
+/**
+ * 한국 종목의 국내뉴스 — 네이버 뉴스 검색 API(키워드 매칭) 대신 네이버 증권이
+ * 종목코드별로 이미 태깅해둔 전용 API(`m.stock.naver.com/api/news/stock/{코드}`)
+ * 를 쓴다(오너가 stock.naver.com 종목뉴스 페이지에서 직접 확인해 발견,
+ * 2026-09). 검색 API + 소수 도메인 화이트리스트 조합은 실제로 관련 있는
+ * 기사(예: 방산 전문지·경제 매거진 보도)를 반복적으로 놓쳤음(실측: 현대로템
+ * 검색 결과 0건이었는데 이 API엔 정확히 관련 기사가 있었음) — 네이버가 이미
+ * 종목-기사 매칭을 편집·알고리즘으로 해뒀으므로 도메인 화이트리스트도, LLM
+ * 관련성 판정도 필요 없어짐(비용도 절감). CLAUDE.md 예외 2건(stock.naver.com,
+ * 오너 명시 승인, robots.txt Disallow: /)의 실제 JSON 엔드포인트를 이번에
+ * 찾음 — 미국 등 비 KR 티커는 빈 배열만 반환해 한국 종목 전용.
+ */
+async function fetchKrStockTaggedNews(
+  symbol: string,
+  opts?: { cutoffMs?: number; pageSize?: number; maxPages?: number },
+): Promise<Omit<NewsItem, "titleKo">[]> {
+  const pageSize = opts?.pageSize ?? 20;
+  const maxPages = opts?.maxPages ?? 2;
+  const cutoff = Date.now() - (opts?.cutoffMs ?? THREE_MONTHS_MS);
+  const items: Omit<NewsItem, "titleKo">[] = [];
+  let stop = false;
+  for (let page = 1; page <= maxPages && !stop; page++) {
+    let groups: NaverStockNewsGroup[];
+    try {
+      groups = await fetchJson<NaverStockNewsGroup[]>(
+        `https://m.stock.naver.com/api/news/stock/${symbol}?pageSize=${pageSize}&page=${page}`,
+        { headers: { "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)" }, revalidate: 900 },
+      );
+    } catch {
+      break;
+    }
+    if (!Array.isArray(groups) || groups.length === 0) break;
+    for (const g of groups) {
+      const it = g.items?.[0];
+      if (!it) continue;
+      const t = parseNaverStockDatetime(it.datetime);
+      if (!Number.isFinite(t) || t < cutoff) {
+        stop = true;
+        break;
+      }
+      items.push({
+        id: it.id,
+        title: stripHtml(it.title),
+        publisher: it.officeName,
+        url: it.mobileNewsUrl,
+        publishedAt: new Date(t).toISOString(),
+        market: "kr",
+        symbol,
+        excerpt: it.body ? stripHtml(it.body) : undefined,
+      });
+    }
+  }
+  return items;
+}
+
 interface NaverNewsItem {
   title: string;
   originallink: string;
@@ -250,7 +340,9 @@ interface NaverNewsResponse {
   items?: NaverNewsItem[];
 }
 
-async function fetchKrNews(
+/** 비 KR 종목(미국·일본)의 "국내(한국어 언론)" 커버리지 — 네이버 뉴스 검색
+ * API(키워드 매칭). KR 종목은 fetchKrStockTaggedNews 를 대신 쓴다. */
+async function fetchKrNewsBySearch(
   symbol: string,
   query: string,
   opts?: { cutoffMs?: number; display?: number; requireWhitelist?: boolean },
@@ -322,13 +414,10 @@ export async function fetchStockNews(
   companyName?: string | null,
 ): Promise<NewsItem[]> {
   const query = companyName || symbol;
+  // KR은 네이버 증권의 종목코드별 태깅 API(fetchKrStockTaggedNews)를 써서
+  // 애초에 검색·필터 자체가 불필요 — 나머지 시장은 기존 야후 검색 유지.
   const items =
-    market === "kr" ? await fetchKrNews(symbol, query) : await fetchUsJpNews(market, symbol, query);
-  // "제목에 회사명 포함" 필터는 비활성화 — 실측 결과 한국 뉴스 제목은 정식
-  // 회사명을 잘 반복하지 않아(예: "삼성전자" 최신 기사 5건 중 제목에 포함된 건
-  // 0건, "삼전"류 줄임말·본문 언급뿐) 관련 기사까지 대부분 걸러져 버림.
-  // filterCompanySpecific(relevance.ts)는 이후 LLM 기반 판정으로 교체할 때
-  // 재사용 — 지금은 미적용.
+    market === "kr" ? await fetchKrStockTaggedNews(symbol) : await fetchUsJpNews(market, symbol, query);
   return withTranslatedTitles(SOURCE_LANG[market], items);
 }
 
@@ -410,6 +499,47 @@ function overseasQuery(market: MarketId, symbol: string, companyName: string): s
   } catch {
     return companyName;
   }
+}
+
+/**
+ * 미국·일본 종목의 국내(네이버) 검색어 — 영문명 그대로 넣으면 네이버가 회사와
+ * 무관한 콘텐츠를 반환한다(실측: "Apple" 검색 결과 전부 뉴욕타임스 칼럼 등
+ * 무관한 영어 콘텐츠, "애플"은 전부 정확히 관련). 잘 알려진 대형주만 한글
+ * 표기로 치환 — 없으면 영문 그대로(오너 확인, 2026-09).
+ */
+const US_COMPANY_KO_ALIAS: Record<string, string> = {
+  Apple: "애플",
+  Tesla: "테슬라",
+  NVIDIA: "엔비디아",
+  Microsoft: "마이크로소프트",
+  Amazon: "아마존",
+  "Amazon.com": "아마존",
+  Alphabet: "구글",
+  Google: "구글",
+  Meta: "메타",
+  "Meta Platforms": "메타",
+  Netflix: "넷플릭스",
+  Broadcom: "브로드컴",
+  Qualcomm: "퀄컴",
+  Intel: "인텔",
+  "Advanced Micro Devices": "AMD",
+  Oracle: "오라클",
+  Salesforce: "세일즈포스",
+  Boeing: "보잉",
+  Nike: "나이키",
+  Starbucks: "스타벅스",
+  "Coca-Cola": "코카콜라",
+  "The Coca-Cola Company": "코카콜라",
+  Disney: "디즈니",
+  "Walt Disney": "디즈니",
+  "JPMorgan Chase": "JP모건",
+  "Berkshire Hathaway": "버크셔 해서웨이",
+};
+
+function domesticQuery(market: MarketId, companyName: string): string {
+  if (market === "kr") return companyName;
+  const stripped = stripLegalSuffix(companyName);
+  return US_COMPANY_KO_ALIAS[companyName.trim()] ?? US_COMPANY_KO_ALIAS[stripped] ?? companyName;
 }
 
 type RawNewsItem = Omit<NewsItem, "titleKo">;
@@ -502,6 +632,10 @@ async function tryLlmRelevanceFilter(
   companyName: string,
   domesticRaw: RawNewsItem[],
   overseasRaw: RawNewsItem[],
+  /** KR 종목의 국내뉴스는 네이버가 이미 종목코드로 태깅해준 신뢰 가능한
+   * 소스(fetchKrStockTaggedNews)라 LLM 판정이 불필요 — 그대로 통과시킨다
+   * (호출 1회 줄어 비용도 절감). */
+  skipDomestic: boolean,
 ): Promise<
   | { domestic: RawNewsItem[]; overseas: RawNewsItem[]; fallback: null }
   | { domestic: null; overseas: null; fallback: LlmFallbackReason }
@@ -513,7 +647,7 @@ async function tryLlmRelevanceFilter(
   try {
     if (await isBudgetExceeded()) return { domestic: null, overseas: null, fallback: "budget_exceeded" };
     const [domesticResult, overseasResult] = await Promise.all([
-      filterOneSide(companyName, domesticRaw),
+      skipDomestic ? { items: domesticRaw, costUsd: 0 } : filterOneSide(companyName, domesticRaw),
       filterOneSide(companyName, overseasRaw),
     ]);
     await incUsage(domesticResult.costUsd + overseasResult.costUsd);
@@ -535,8 +669,11 @@ export async function fetchStockNewsBySide(
 }> {
   const query = companyName || symbol;
   const oQuery = overseasQuery(market, symbol, query);
+  const isKr = market === "kr";
   const [domesticRaw, yahooOverseas, googleOverseas] = await Promise.all([
-    fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30 }),
+    isKr
+      ? fetchKrStockTaggedNews(symbol, { cutoffMs: ONE_WEEK_MS, pageSize: 20, maxPages: 2 })
+      : fetchKrNewsBySearch(symbol, domesticQuery(market, query), { cutoffMs: ONE_WEEK_MS, display: 30 }),
     fetchUsJpNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, newsCount: 30 }),
     fetchGoogleOverseasNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, limit: 30 }).catch(() => []),
   ]);
@@ -550,20 +687,27 @@ export async function fetchStockNewsBySide(
   });
 
   const name = companyName?.trim();
-  const llmResult = name ? await tryLlmRelevanceFilter(name, domesticRaw, overseasRaw) : null;
+  const llmResult = name ? await tryLlmRelevanceFilter(name, domesticRaw, overseasRaw, isKr) : null;
 
   let domesticSafe: RawNewsItem[];
   let overseasSafe: RawNewsItem[];
   let relevance: "llm" | LlmFallbackReason | "no_company_name";
-  if (llmResult && llmResult.fallback === null) {
-    // LLM 경로: 신뢰도 판정을 모델이 직접 하므로 도메인 화이트리스트 없이도 안전.
+  if (isKr) {
+    // KR 국내뉴스는 네이버가 이미 종목코드로 태깅해준 소스라 화이트리스트도
+    // LLM 판정도 불필요 — 통신사 재게재 중복 정리만 적용.
+    domesticSafe = domesticRaw;
+    overseasSafe = llmResult && llmResult.fallback === null ? llmResult.overseas : overseasRaw;
+    relevance = llmResult && llmResult.fallback === null ? "llm" : (llmResult?.fallback ?? "no_api_key");
+  } else if (llmResult && llmResult.fallback === null) {
+    // LLM 경로(비KR 종목의 국내 언론 커버리지): 신뢰도 판정을 모델이 직접 하므로
+    // 도메인 화이트리스트 없이도 안전.
     domesticSafe = llmResult.domestic;
     overseasSafe = llmResult.overseas;
     relevance = "llm";
   } else {
     // 폴백(이름 미확인·LLM 미사용·예산초과·호출실패 공통): 신뢰도를 대신 판정해줄
-    // 수단이 없으므로 사전 큐레이션된 화이트리스트로 되돌리고(requireWhitelist=
-    // true 였을 때와 동일 효과), 이름이 있으면 그 안에서 키워드 매칭까지 적용.
+    // 수단이 없으므로 사전 큐레이션된 화이트리스트로 되돌리고, 이름이 있으면
+    // 그 안에서 키워드 매칭까지 적용.
     const whitelisted = domesticRaw.filter((it) => DOMESTIC_PUBLISHERS.has(it.publisher));
     if (name) {
       const domesticFiltered = whitelisted.filter((it) =>
