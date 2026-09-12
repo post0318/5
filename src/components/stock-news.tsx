@@ -1,22 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import type { MarketId } from "@/lib/markets/types";
 import type { NewsItem } from "@/lib/markets/news";
-import type { NewsSavedDoc } from "@/lib/db/news-saved";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
-
-type Item = NewsItem & { saved: boolean };
 
 interface NewsResponse {
-  domestic: Item[];
-  overseas: Item[];
-  saved: NewsSavedDoc[];
+  domestic: NewsItem[];
+  overseas: NewsItem[];
 }
 
 const PAGE_SIZE = 5;
@@ -77,16 +71,10 @@ function NewsColumn({
   title,
   items,
   emptyText,
-  showCheckbox,
-  summarize,
-  unsave,
 }: {
   title: string;
-  items: Item[];
+  items: NewsItem[];
   emptyText: string;
-  showCheckbox: boolean;
-  summarize: UseMutationResult<unknown, unknown, Item, unknown>;
-  unsave: UseMutationResult<unknown, unknown, string, unknown>;
 }) {
   const [page, setPage] = useState(1);
   const pageCount = Math.min(MAX_PAGES, Math.ceil(items.length / PAGE_SIZE)) || 1;
@@ -103,17 +91,7 @@ function NewsColumn({
         <>
           <ul className="divide-y">
             {paged.map((it) => (
-              <li key={it.id} className="flex items-start gap-2.5 py-2.5 first:pt-0 last:pb-0">
-                {showCheckbox && (
-                  <input
-                    type="checkbox"
-                    checked={it.saved}
-                    disabled={summarize.isPending || unsave.isPending}
-                    onChange={(e) => (e.target.checked ? summarize.mutate(it) : unsave.mutate(it.url))}
-                    className="mt-1 size-4 shrink-0 cursor-pointer"
-                    title="체크하면 본문 번역·요약을 저장합니다"
-                  />
-                )}
+              <li key={it.id} className="py-2.5 first:pt-0 last:pb-0">
                 <a
                   href={it.naverUrl ?? it.url}
                   target="_blank"
@@ -154,16 +132,13 @@ function NewsColumn({
 
 /**
  * 종목뉴스 탭 — 좌: 국내(한국어 언론, 요약 발췌 포함) · 우: 해외(영미권 등 외국
- * 언론, 화이트리스트). 종목의 상장 시장과 무관하게 항상 둘 다 조회한다(예: 한국
- * 종목도 로이터·블룸버그 보도가 있으면 우측에 표시). 공신력 있는 언론사 + 최근
- * 1주일 기사만, 각 최대 10개씩 페이지(최대 3페이지). 국내 기사는 이미 한국어라
- * 체크박스·요약 대상이 아니고, 해외 기사만 체크 시 본문 번역·요약(LLM, 월 과금
- * 상한 있음)이 저장된다 → "요약/번역" 탭에서 조회.
+ * 언론, 화이트리스트+LLM 관련성 판정). 종목의 상장 시장과 무관하게 항상 둘 다
+ * 조회한다(예: 한국 종목도 로이터·블룸버그 보도가 있으면 우측에 표시). 공신력
+ * 있는 언론사 + 최근 1주일 기사만, 각 최대 5개씩 페이지. 본문 번역·요약 저장
+ * 기능은 여기서 제거(오너 결정, 2026-09 — 비용 부담. 대신 거시경제 뉴스 쪽에
+ * 반영하기로 함) — 헤드라인 무료 자동 번역만 유지.
  */
 export function StockNews({ market, symbol }: { market: MarketId; symbol: string }) {
-  const [view, setView] = useState<"all" | "saved">("all");
-  const qc = useQueryClient();
-
   const q = useQuery({
     queryKey: ["stock-news", market, symbol],
     queryFn: () =>
@@ -172,60 +147,11 @@ export function StockNews({ market, symbol }: { market: MarketId; symbol: string
     staleTime: 30 * 60_000,
   });
 
-  const summarize = useMutation({
-    mutationFn: (item: Item) =>
-      apiFetch(`/api/markets/${market}/${encodeURIComponent(symbol)}/news/summarize`, {
-        method: "POST",
-        body: JSON.stringify({
-          url: item.url,
-          title: item.title,
-          publisher: item.publisher,
-          publishedAt: item.publishedAt,
-        }),
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["stock-news", market, symbol] }),
-    onError: (err) => {
-      toast.error(err instanceof ApiError ? err.message : "요약 요청 실패");
-    },
-  });
-
-  const unsave = useMutation({
-    mutationFn: (url: string) =>
-      apiFetch(
-        `/api/markets/${market}/${encodeURIComponent(symbol)}/news/summarize?url=${encodeURIComponent(url)}`,
-        { method: "DELETE" },
-      ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["stock-news", market, symbol] }),
-    onError: (err) => {
-      toast.error(err instanceof ApiError ? err.message : "삭제 요청 실패");
-    },
-  });
-
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-muted-foreground/80 text-[11px]">
-          공신력 있는 언론사·최근 1주일 기사만 표시합니다(국내는 30분마다 갱신, 요약
-          발췌 포함 / 해외는 헤드라인 무료 자동 번역, 체크한 기사만 본문 번역·요약이
-          저장됩니다).
-        </p>
-        <div className="flex shrink-0 gap-1">
-          <Button
-            size="sm"
-            variant={view === "all" ? "secondary" : "ghost"}
-            onClick={() => setView("all")}
-          >
-            전체
-          </Button>
-          <Button
-            size="sm"
-            variant={view === "saved" ? "secondary" : "ghost"}
-            onClick={() => setView("saved")}
-          >
-            요약/번역
-          </Button>
-        </div>
-      </div>
+      <p className="text-muted-foreground/80 text-[11px]">
+        공신력 있는 언론사·최근 1주일 기사만 표시합니다(헤드라인 무료 자동 번역).
+      </p>
 
       {q.isLoading && <Skeleton className="h-48 w-full" />}
       {q.isError && (
@@ -234,68 +160,19 @@ export function StockNews({ market, symbol }: { market: MarketId; symbol: string
         </p>
       )}
 
-      {q.data && view === "all" && (
+      {q.data && (
         <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2">
           <NewsColumn
             title="국내뉴스"
             items={q.data.domestic}
             emptyText="최근 1주일 내 화이트리스트 언론사 기사가 없습니다."
-            showCheckbox={false}
-            summarize={summarize}
-            unsave={unsave}
           />
           <NewsColumn
             title="해외뉴스"
             items={q.data.overseas}
             emptyText="최근 1주일 내 화이트리스트 언론사 기사가 없습니다."
-            showCheckbox
-            summarize={summarize}
-            unsave={unsave}
           />
         </div>
-      )}
-
-      {q.data && view === "saved" && (
-        <ul className="space-y-3">
-          {q.data.saved.length === 0 && (
-            <p className="text-muted-foreground py-4 text-sm">
-              체크해서 저장한 기사가 없습니다. &ldquo;전체&rdquo; 탭에서 해외뉴스를 체크해보세요.
-            </p>
-          )}
-          {q.data.saved.map((s) => (
-            <li key={s._id} className="rounded-md border p-3">
-              <div className="flex items-start justify-between gap-2">
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="hover:text-primary text-sm leading-snug font-medium"
-                >
-                  {s.translatedTitle || s.title}
-                </a>
-                <Button size="sm" variant="ghost" onClick={() => unsave.mutate(s.url)}>
-                  해제
-                </Button>
-              </div>
-              <div className="text-muted-foreground mt-1 text-xs">
-                {s.publisher} · {fmtAgo(s.publishedAt)}
-              </div>
-              {s.summary && (
-                <p className="mt-2 text-sm leading-relaxed whitespace-pre-line">{s.summary}</p>
-              )}
-              {s.translatedText && (
-                <details className="mt-2">
-                  <summary className="text-muted-foreground hover:text-foreground cursor-pointer text-xs">
-                    본문 번역 전체 보기
-                  </summary>
-                  <p className="mt-1.5 text-sm leading-relaxed whitespace-pre-line">
-                    {s.translatedText}
-                  </p>
-                </details>
-              )}
-            </li>
-          ))}
-        </ul>
       )}
     </div>
   );
