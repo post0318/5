@@ -203,6 +203,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     { key: "opinc", label: "영업이익", format: "money", values: opInc },
     { key: "opinc_m", label: "마진 %", format: "pct", indent: true, values: opInc.map((v, i) => margin(v, revenue[i])) },
     { key: "ebitda", label: "EBITDA", format: "money", values: ebitda },
+    { key: "ebitda_m", label: "마진 %", format: "pct", indent: true, values: ebitda.map((v, i) => margin(v, revenue[i])) },
     { key: "ni", label: "순이익", format: "money", values: netIncome },
     { key: "ni_m", label: "마진 %", format: "pct", indent: true, values: netIncome.map((v, i) => margin(v, revenue[i])) },
     { key: "eps", label: "EPS (희석)", format: "eps", values: eps },
