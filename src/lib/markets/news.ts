@@ -247,16 +247,17 @@ export async function fetchStockNews(
  */
 /**
  * 순수 텍스트 매칭으로는 "이 기사가 그 회사에 관한 것인가"를 정확히 판정할
- * 수 없다는 게 두 번의 실측으로 확인됐다: 요약에 정식명이 있는지만 보면
- * 부동산·지역 뉴스까지 다 통과(예: "삼성전자 인근 아파트")해 노이즈가 많고,
- * 반대로 "제목에 정식명·축약형이 있어야 함"으로 좁히면 대형주는 하루에도
- * 기사가 수십 건씩 나오는데 제목 조건 하나로 3건까지 떨어져 커버리지가
- * 너무 부실해진다(둘 다 실측 확인). 진짜 해결책은 LLM 기반 주제 판정인데
- * (relevance.ts 주석 참고) 아직 붙이지 않았으므로, 그때까지는:
- *  - 별칭 목록에 있는 대형주(뉴스량이 많아 약간의 노이즈보다 커버리지 부족이
- *    더 나쁨): 제목·요약 어디든 별칭이 있으면 통과 — recall 우선.
- *  - 그 외 종목(뉴스량이 적어 노이즈 허용치가 낮음): 제목에 정식명이 있거나
- *    "회사명(종목코드)" 표기가 제목·요약 어디든 있어야 통과 — precision 우선.
+ * 수 없다는 게 여러 번의 실측으로 확인됐다: 요약에 정식명이 있는지만 보면
+ * 부동산·지역 뉴스까지 다 통과(예: "삼성전자 인근 아파트")해 노이즈가 생기고,
+ * "제목에 정식명·축약형이 있어야 함"으로 좁히면 대형주조차 3건까지 떨어지고
+ * (실측) 나머지 대다수 종목은 뉴스량 자체가 적어 "제목에 정식명"·"(종목코드)"
+ * 표기 조건까지 겹치면 사실상 전부 걸러져 "기사 없음"이 되어 버린다(오너 확인:
+ * 삼성전자 외 거의 모든 종목이 그랬음). "부동산 랜드마크로 언급되는" 문제는
+ * 실질적으로 삼성전자·SK·현대차 등 극히 유명한 대기업 몇 곳에서만 벌어지고,
+ * 나머지 종목은 이름이 요약에 등장하면 거의 확실히 그 회사 얘기다. 그래서
+ * 진짜 LLM 기반 주제 판정(relevance.ts 참고, 아직 미적용) 전까지는 전 종목
+ * 공통으로 "제목·요약 어디든 이름(또는 별칭)이 있으면 통과" — recall 우선.
+ * 별칭 목록은 그 소수의 유명 대기업이 즐겨 쓰는 축약형/계열사 통칭만 보강.
  */
 const KR_COMPANY_ALIASES: Record<string, string[]> = {
   삼성전자: ["삼성전자", "삼성", "삼전"],
@@ -275,20 +276,15 @@ const KR_COMPANY_ALIASES: Record<string, string[]> = {
 
 function isDomesticRelevant(
   companyName: string | null | undefined,
-  symbol: string,
+  _symbol: string,
   title: string,
   excerpt?: string,
 ): boolean {
   const name = companyName?.trim();
   if (!name) return true;
-  const aliases = KR_COMPANY_ALIASES[name];
-  if (aliases) {
-    const hay = `${title} ${excerpt ?? ""}`;
-    return aliases.some((a) => hay.includes(a));
-  }
-  if (title.includes(name)) return true;
-  const codeTag = `(${symbol})`;
-  return title.includes(codeTag) || (excerpt != null && excerpt.includes(codeTag));
+  const aliases = KR_COMPANY_ALIASES[name] ?? [name];
+  const hay = `${title} ${excerpt ?? ""}`;
+  return aliases.some((a) => hay.includes(a));
 }
 
 export async function fetchStockNewsBySide(
