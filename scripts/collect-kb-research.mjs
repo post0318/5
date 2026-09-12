@@ -21,12 +21,24 @@
  *    "개인용·로컬 실행·저빈도" 조건으로 오너 승인(CLAUDE.md 참조, 오너가
  *    "kb는 pdf는 로그인해야하나 본문은 가능하다" 직접 확인).
  *
+ * 본문 발췌(2026-09 추가): PDF를 내려받아 `pdf-parse`(무료 오픈소스, 로컬
+ * 처리)로 텍스트를 뽑는다. KB 리포트는 템플릿이 제각각이라(플래시노트/
+ * 정식 커버리지 등) 고정 앵커 문구 대신, PDF 본문에 그대로 박혀 있는
+ * "종목명 (코드)" 제목 줄을 찾아 그 다음 줄(부제)까지 건너뛰고, 이메일·
+ * 애널리스트 소속·날짜 같은 상단 메타 정보 줄을 걸러낸 뒤 남는 문장만
+ * 150자 내외로 짧게 저장한다. PDF 원문·전체 본문은 저장하지 않음.
+ *
+ * ⚠️ 서버가 보낸 항목을 통째로 replace하므로, --days 기본값을 30 → 3으로
+ *    좁혀 PDF를 매일 다시 받는 범위를 최소화했다(유안타증권과 동일 이유).
+ *    백필은 --days=30 등으로 수동 실행.
+ *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-kb-research.mjs
- *   node scripts/collect-kb-research.mjs --days=14 --dry-run
+ *   node scripts/collect-kb-research.mjs --days=30 --dry-run
  */
 
 import { readFileSync } from "node:fs";
+import { PDFParse } from "pdf-parse";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -44,7 +56,7 @@ function loadEnvLocal() {
 const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
-const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 30;
+const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/shinhan-research"
@@ -53,9 +65,54 @@ const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const AJAX_URL = "https://www.kbsec.com/go.able?linkcd=s040203010001";
 const TITLE_RE = /^(.+?)\s*\((\d{6})\)$/;
+
+const EXCERPT_LEN = 150;
+function isMetaLine(l) {
+  return (
+    l === "www.kbsec.com" ||
+    /@/.test(l) ||
+    /Analyst|연구원|리서치본부장/.test(l) ||
+    /^\d{4}년\s*\d{1,2}월\s*\d{1,2}일/.test(l) ||
+    /^[A-Z\s]{3,}$/.test(l) // "F I R S T", "T O", "T H E" 등 스페이싱된 배너 문구
+  );
+}
+
+function excerptFromPdfText(text, stockName, symbol) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const titleLine = `${stockName} (${symbol})`;
+  const anchor = lines.findIndex((l) => l === titleLine);
+  const rest = anchor >= 0 ? lines.slice(anchor + 2) : lines;
+  const flat = rest
+    .filter((l) => !isMetaLine(l) && l.length >= 10)
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!flat) return "";
+  if (flat.length <= EXCERPT_LEN) return flat;
+  const cut = flat.slice(0, EXCERPT_LEN);
+  const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
+  return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
+}
+
+async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
+  if (!pdfUrl) return "";
+  try {
+    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const parser = new PDFParse({ data: buf });
+    const { text } = await parser.getText();
+    await parser.destroy();
+    return excerptFromPdfText(text, stockName, symbol);
+  } catch (err) {
+    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
+    return "";
+  }
+}
 
 async function fetchList() {
   const body = new URLSearchParams({
@@ -116,6 +173,17 @@ console.log(
   "  최근 5건:",
   collected.slice(0, 5).map((i) => `${i.date} ${i.stockName}(${i.symbol}) — ${i.title}`),
 );
+
+console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
+let excerptFailCount = 0;
+for (const it of collected) {
+  it.summary = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
+  if (it.pdfUrl && !it.summary) excerptFailCount++;
+  await sleep(400);
+}
+console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+console.log("  예시:", collected[0]?.summary || "(없음)");
+
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);

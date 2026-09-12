@@ -15,9 +15,21 @@
  * 코드가 아닌 항목(해외종목)은 건너뛴다. PDF는 `downConfirm(...)` 첫 인자
  * URL을 로그인 없이 그대로 GET 가능(실측: `Content-Type: application/pdf`).
  *
+ * 본문 발췌(2026-09 추가): 국내 리포트 PDF는 텍스트가 커브(윤곽선)로 변환돼
+ * 있어 `pdf-parse`로 뽑히지 않는다(실측 — 차트 축 숫자 몇 개만 나오고 본문은
+ * 전혀 없음). 대신 목록의 `view('messageId','messageNumber')` 두 값으로
+ * 상세 페이지(`/bbs/board/message/view.do?messageId=..&messageNumber=..&
+ * categoryId=1800`)를 받으면 `#messageContentsDiv`에 리포트 요약 본문이
+ * 이미 HTML로 들어있다(오너 확인, 2026-09 — PDF보다 오히려 나은 소스).
+ * 여기서 태그를 벗기고 150자 내외만 짧게 저장 — 전체 본문은 저장하지 않음.
+ *
+ * ⚠️ 서버가 보낸 항목을 통째로 replace하므로, --days 기본값을 14 → 3으로
+ *    좁혀 상세 페이지를 매일 다시 받는 범위를 최소화했다(유안타증권과 동일
+ *    이유). 백필은 --days=30 등으로 수동 실행.
+ *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-mirae-research.mjs
- *   node scripts/collect-mirae-research.mjs --days=14 --pages=10 --dry-run
+ *   node scripts/collect-mirae-research.mjs --days=30 --pages=10 --dry-run
  */
 
 import { readFileSync } from "node:fs";
@@ -38,7 +50,7 @@ function loadEnvLocal() {
 const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
-const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 14;
+const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
@@ -73,13 +85,14 @@ function parseItems(html) {
       /<a href="javascript:view\('(\d+)','(\d+)'\)"[^>]*><b>([^<]+)<\/b><br\/>([^<]*)<\/a>/,
     );
     if (!dateM || !subjectM) continue;
-    const [, id, , rawTitle, rawSummary] = subjectM;
+    const [, id, messageNumber, rawTitle, rawSummary] = subjectM;
     const tm = rawTitle.trim().match(TITLE_RE);
     if (!tm) continue; // 해외종목(코드가 6자리 숫자 아님) — 건너뜀
     const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
     const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
     items.push({
       id,
+      messageNumber,
       date: dateM[1],
       title: rawSummary.trim() || rawTitle.trim(),
       stockName: tm[1].trim(),
@@ -90,6 +103,40 @@ function parseItems(html) {
     });
   }
   return items;
+}
+
+const DETAIL_URL = "https://securities.miraeasset.com/bbs/board/message/view.do";
+const EXCERPT_LEN = 150;
+
+function excerptFromHtml(html) {
+  const m = html.match(/id="messageContentsDiv"[^>]*>([\s\S]*?)<\/div>\s*<\/td>/);
+  if (!m) return "";
+  const flat = stripHtml(m[1]).replace(/\s{2,}/g, " ").trim();
+  if (!flat) return "";
+  if (flat.length <= EXCERPT_LEN) return flat;
+  const cut = flat.slice(0, EXCERPT_LEN);
+  const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
+  return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
+}
+
+function stripHtml(s) {
+  return s.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim();
+}
+
+async function extractDetailExcerpt(id, messageNumber) {
+  try {
+    const url = new URL(DETAIL_URL);
+    url.searchParams.set("messageId", id);
+    url.searchParams.set("messageNumber", messageNumber);
+    url.searchParams.set("categoryId", CATEGORY_ID);
+    const res = await fetch(url, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = new TextDecoder("euc-kr").decode(await res.arrayBuffer());
+    return excerptFromHtml(html);
+  } catch (err) {
+    console.warn(`  ⚠ 본문 발췌 실패 (id=${id}): ${err.message}`);
+    return "";
+  }
 }
 
 console.log(`▶ 미래에셋증권 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -119,6 +166,17 @@ console.log(
   "  최근 5건:",
   collected.slice(0, 5).map((i) => `${i.date} ${i.stockName}(${i.symbolHint}) — ${i.title}`),
 );
+
+console.log(`▶ 본문 발췌 중 (${collected.length}건)...`);
+let excerptFailCount = 0;
+for (const it of collected) {
+  it.summary = await extractDetailExcerpt(it.id, it.messageNumber);
+  if (!it.summary) excerptFailCount++;
+  await sleep(400);
+}
+console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+console.log("  예시:", collected[0]?.summary || "(없음)");
+
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);
@@ -132,7 +190,7 @@ const items = collected.map((it) => ({
   symbol: it.symbolHint,
   analyst: it.analyst,
   opinion: it.opinion,
-  summary: "",
+  summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,
 }));

@@ -15,12 +15,29 @@
  *    재가공한 3자 편집 서비스라는 점이 다른 예외들과 다름 — 오너가 이 차이를
  *    인지한 상태로 "개인용·로컬 실행·저빈도" 조건 예외 승인(CLAUDE.md 참조).
  *
+ * ⚠️ 유안타증권은 자체 스크립트(collect-yuanta-research.mjs)가 이미 다루고
+ *    있어(오너 지시, 2026-09) 여기서는 제외한다 — 같은 리포트가 두 소스로
+ *    중복 수집되는 걸 막기 위함(다른 증권사는 한경에만 있어 중복 문제 없음).
+ *
+ * 본문 발췌(2026-09 추가): PDF를 내려받아 `pdf-parse`로 텍스트를 뽑는다.
+ * 이 사이트는 14곳 넘는 증권사 리포트가 섞여 있어 브로커마다 PDF 템플릿이
+ * 전혀 달라, 유안타·NH·KB처럼 고정 앵커 문구를 쓸 수 없다. 대신 "긴 줄(20자
+ * 이상)이면서 한글 비율이 40% 이상인 줄만" 프로즈로 간주해 이어붙이는 범용
+ * 방식을 쓴다 — 재무 표(숫자 나열)·이메일·짧은 라벨은 한글 비율이 낮아
+ * 자연히 걸러지고, 실제 문장 위주로 150자 내외가 뽑힌다(완벽하진 않지만
+ * 실측 결과 대부분 읽을 만한 수준). PDF 원문·전체 본문은 저장하지 않음.
+ *
+ * ⚠️ 서버가 보낸 항목을 통째로 replace하므로, --days 기본값을 7 → 3으로
+ *    좁혀 PDF를 매일 다시 받는 범위를 최소화했다(유안타증권과 동일 이유).
+ *    백필은 --days=30 등으로 수동 실행.
+ *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-hankyung-research.mjs
- *   node scripts/collect-hankyung-research.mjs --days=14 --pages=10 --dry-run
+ *   node scripts/collect-hankyung-research.mjs --days=30 --pages=10 --dry-run
  */
 
 import { readFileSync } from "node:fs";
+import { PDFParse } from "pdf-parse";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -38,7 +55,7 @@ function loadEnvLocal() {
 const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
-const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 7;
+const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
@@ -92,6 +109,8 @@ function parseItems(html) {
   for (const m of html.matchAll(ROW_RE)) {
     const [, date, category, reportIdx, rawTitle, analyst, source] = m;
     if (!category.includes("기업")) continue; // 산업/시장/파생/경제 등 종목 아닌 리포트 제외
+    const sourceName = stripHtml(source);
+    if (sourceName.includes("유안타")) continue; // 자체 스크립트가 이미 수집 — 중복 방지
     const title = stripHtml(rawTitle);
     const tm = title.match(TITLE_RE);
     if (!tm) continue; // 종목코드 형식이 아니면(드묾) 건너뜀
@@ -102,11 +121,41 @@ function parseItems(html) {
       stockName: tm[1].trim(),
       symbolHint: tm[2],
       analyst: stripHtml(analyst),
-      source: stripHtml(source),
+      source: sourceName,
       pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
     });
   }
   return items;
+}
+
+const EXCERPT_LEN = 150;
+function hangulRatio(l) {
+  const h = (l.match(/[가-힣]/g) || []).length;
+  return l.length ? h / l.length : 0;
+}
+function excerptFromPdfText(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const prose = lines.filter((l) => l.length >= 20 && hangulRatio(l) >= 0.4);
+  const flat = prose.join(" ").replace(/\s{2,}/g, " ").trim();
+  if (!flat) return "";
+  if (flat.length <= EXCERPT_LEN) return flat;
+  const cut = flat.slice(0, EXCERPT_LEN);
+  const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
+  return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
+}
+async function extractPdfExcerpt(pdfUrl) {
+  try {
+    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const parser = new PDFParse({ data: buf });
+    const { text } = await parser.getText();
+    await parser.destroy();
+    return excerptFromPdfText(text);
+  } catch (err) {
+    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
+    return "";
+  }
 }
 
 console.log(`▶ 한경 컨센서스 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -131,6 +180,17 @@ console.log(
   "  최근 5건:",
   collected.slice(0, 5).map((i) => `${i.date} ${i.stockName}(${i.symbolHint}) [${i.source}] — ${i.title}`),
 );
+
+console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
+let excerptFailCount = 0;
+for (const it of collected) {
+  it.summary = await extractPdfExcerpt(it.pdfUrl);
+  if (!it.summary) excerptFailCount++;
+  await sleep(400);
+}
+console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+console.log("  예시:", collected[0]?.summary || "(없음)");
+
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);
@@ -157,7 +217,7 @@ for (const it of collected) {
     symbol: it.symbolHint,
     analyst: it.analyst,
     opinion: "",
-    summary: "",
+    summary: it.summary,
     pdfUrl: it.pdfUrl,
     views: null,
   });

@@ -23,12 +23,23 @@
  *    (CLAUDE.md 참조, 오너가 "NH투자증권도 로그인없이 가능하다" 직접 확인).
  *    앱 배포본(Vercel)에는 이 수집 코드가 없다.
  *
+ * 본문 발췌(2026-09 추가, 유안타증권과 동일 접근): PDF를 내려받아 `pdf-parse`
+ * (무료 오픈소스, 로컬 처리)로 텍스트를 뽑는다. NH 리포트는 항상
+ * "Industry Note│날짜" 또는 "Company Note│날짜" 줄 다음 2줄(산업명/종목명 +
+ * 제목)을 지나면 바로 본문(실측 결과 이미 1~2문장 티저로 시작)이 나와, 그
+ * 지점부터 150자 내외만 짧게 저장한다. PDF 원문·전체 본문은 저장하지 않음.
+ *
+ * ⚠️ 서버가 보낸 항목을 통째로 replace하므로, --days 기본값을 14 → 3으로
+ *    좁혀 PDF를 매일 다시 받는 범위를 최소화했다(유안타증권과 동일 이유).
+ *    백필은 --days=30 등으로 수동 실행.
+ *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-nh-research.mjs
- *   node scripts/collect-nh-research.mjs --days=14 --pages=10 --dry-run
+ *   node scripts/collect-nh-research.mjs --days=30 --pages=10 --dry-run
  */
 
 import { readFileSync } from "node:fs";
+import { PDFParse } from "pdf-parse";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -46,7 +57,7 @@ function loadEnvLocal() {
 const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
-const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 14;
+const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
@@ -71,6 +82,39 @@ const nameByCode = new Map(corpcodes.map((c) => [c.s, c.n]));
 function isoDate(yyyymmdd) {
   const m = String(yyyymmdd).match(/^(\d{4})(\d{2})(\d{2})$/);
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+const EXCERPT_LEN = 150;
+function excerptFromPdfText(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const anchor = lines.findIndex((l) => /Note\s*[│|]/.test(l));
+  const bodyLines = anchor >= 0 ? lines.slice(anchor + 3) : lines.slice(4);
+  const flat = bodyLines
+    .filter((l) => l.length >= 10)
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!flat) return "";
+  if (flat.length <= EXCERPT_LEN) return flat;
+  const cut = flat.slice(0, EXCERPT_LEN);
+  const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
+  return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
+}
+
+async function extractPdfExcerpt(pdfUrl) {
+  if (!pdfUrl) return "";
+  try {
+    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const parser = new PDFParse({ data: buf });
+    const { text } = await parser.getText();
+    await parser.destroy();
+    return excerptFromPdfText(text);
+  } catch (err) {
+    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
+    return "";
+  }
 }
 
 async function fetchPage(cursor) {
@@ -160,6 +204,24 @@ console.log(
   "  최근 5건:",
   collected.slice(0, 5).map((i) => `${i.date} ${i.stockName}(${i.symbol}) — ${i.title}`),
 );
+
+// 산업 리포트는 종목코드마다 항목을 복제하지만 PDF는 하나라, pdfUrl 기준으로
+// 캐시해서 같은 PDF를 여러 번 받지 않는다.
+console.log(`▶ PDF 본문 발췌 중...`);
+const excerptCache = new Map();
+let excerptFailCount = 0;
+for (const it of collected) {
+  if (!it.pdfUrl) continue;
+  if (!excerptCache.has(it.pdfUrl)) {
+    excerptCache.set(it.pdfUrl, await extractPdfExcerpt(it.pdfUrl));
+    await sleep(500);
+  }
+  it.summary = excerptCache.get(it.pdfUrl);
+  if (!it.summary) excerptFailCount++;
+}
+console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건, PDF ${excerptCache.size}개)`);
+console.log("  예시:", collected[0]?.summary || "(없음)");
+
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);

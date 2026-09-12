@@ -12,12 +12,24 @@
  *    표준 경로가 애매) — 다른 예외들과 동일하게 "개인용·로컬 실행·저빈도"
  *    조건으로 오너 승인(CLAUDE.md 참조).
  *
+ * PDF/본문 발췌(2026-09 갱신): 이전엔 "PDF는 로그인 필요"로 기록돼 있었으나
+ * 실측 결과 상세 페이지(`mode=detail&sno=..&rno=1`)의 `fileDown('/weblogic/
+ * RSDownloadServlet?filePath=..pdf')` 링크는 로그인 없이 그대로 받아진다
+ * (오너 확인, 2026-09). 상세 페이지 자체의 "본문"은 이미지(png)라 텍스트
+ * 추출이 안 되지만, 이 실제 PDF는 유안타증권과 동일하게 "주가수익률(%) ..."
+ * 통계 블록(헤더+절대주가/상대주가 2줄) 다음부터 `pdf-parse`로 150자 내외를
+ * 발췌한다. PDF 원문·전체 본문은 저장하지 않음. 목록→상세 페이지→PDF 순으로
+ * 항목당 두 번 더 요청이 늘어 --days 기본값을 14 → 3으로 좁혔다(서버가
+ * 통째로 replace하는 구조라 매일 재다운로드 범위를 최소화 — 유안타증권과
+ * 동일 이유). 백필은 --days=30 등으로 수동 실행.
+ *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-kyobo-research.mjs
  *   node scripts/collect-kyobo-research.mjs --days=30 --pages=10 --dry-run
  */
 
 import { readFileSync } from "node:fs";
+import { PDFParse } from "pdf-parse";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -35,7 +47,7 @@ function loadEnvLocal() {
 const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
-const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 14;
+const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
@@ -103,6 +115,58 @@ function parseItems(html) {
   return items;
 }
 
+const DETAIL_URL = "https://www.iprovest.com/weblogic/RSReportServlet";
+const FILEDOWN_RE = /fileDown\('(\/weblogic\/RSDownloadServlet\?filePath=[^']+)'\)/;
+const EXCERPT_LEN = 150;
+
+async function fetchPdfUrl(sno) {
+  const url = new URL(DETAIL_URL);
+  url.searchParams.set("scr_id", "32");
+  url.searchParams.set("mode", "detail");
+  url.searchParams.set("menuCode", "1");
+  url.searchParams.set("pageNum", "1");
+  url.searchParams.set("sno", sno);
+  url.searchParams.set("rno", "1");
+  const res = await fetch(url, { headers: { "User-Agent": UA, Referer: DETAIL_URL } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const html = eucKr.decode(await res.arrayBuffer());
+  const m = html.match(FILEDOWN_RE);
+  return m ? `https://www.iprovest.com${m[1]}` : null;
+}
+
+function excerptFromPdfText(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const anchor = lines.findIndex((l) => l.startsWith("주가수익률"));
+  const bodyLines = anchor >= 0 ? lines.slice(anchor + 3) : lines.slice(20);
+  const flat = bodyLines
+    .filter((l) => l.length >= 10)
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!flat) return "";
+  if (flat.length <= EXCERPT_LEN) return flat;
+  const cut = flat.slice(0, EXCERPT_LEN);
+  const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
+  return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
+}
+
+async function extractExcerpt(sno) {
+  try {
+    const pdfUrl = await fetchPdfUrl(sno);
+    if (!pdfUrl) return { pdfUrl: null, summary: "" };
+    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const parser = new PDFParse({ data: buf });
+    const { text } = await parser.getText();
+    await parser.destroy();
+    return { pdfUrl, summary: excerptFromPdfText(text) };
+  } catch (err) {
+    console.warn(`  ⚠ PDF 본문 추출 실패 (sno=${sno}): ${err.message}`);
+    return { pdfUrl: null, summary: "" };
+  }
+}
+
 console.log(`▶ 교보증권 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
 const cutoff = new Date(Date.now() - DAYS * 86_400_000);
 const collected = [];
@@ -127,6 +191,19 @@ if (collected.length === 0) {
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log("  최근 3건:", collected.slice(0, 3).map((i) => `${i.date} ${i.stockName} — ${i.title}`));
+
+console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
+let excerptFailCount = 0;
+for (const it of collected) {
+  const { pdfUrl, summary } = await extractExcerpt(it.id);
+  it.pdfUrl = pdfUrl ?? `https://www.iprovest.com/weblogic/RSReportServlet?scr_id=32&mode=detail&menuCode=1&pageNum=1&sno=${it.id}`;
+  it.summary = summary;
+  if (!summary) excerptFailCount++;
+  await sleep(400);
+}
+console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+console.log("  예시:", collected[0]?.summary || "(없음)");
+
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);
@@ -140,8 +217,8 @@ const items = collected.map((it) => ({
   symbol: null, // 서버가 corpcode.ts 이름 검색으로 매핑
   analyst: "",
   opinion: "",
-  summary: "",
-  pdfUrl: `https://www.iprovest.com/weblogic/RSReportServlet?scr_id=32&mode=detail&menuCode=1&pageNum=1&sno=${it.id}`,
+  summary: it.summary,
+  pdfUrl: it.pdfUrl,
   views: null,
 }));
 
