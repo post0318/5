@@ -19,8 +19,8 @@ interface NewsResponse {
   saved: NewsSavedDoc[];
 }
 
-const PAGE_SIZE = 10;
-const MAX_PAGES = 3;
+const PAGE_SIZE = 5;
+const MAX_PAGES = 6; // PAGE_SIZE 변경(10→5) 시에도 총 노출 건수(최대 30건)는 유지
 
 /** 요약 없는 항목(해외뉴스)의 자리 채움 — line-clamp-2 가 실제로 계산하는 두 줄
  * 높이와 정확히 같아지도록 줄바꿈 포함 두 줄을 그대로 렌더링(em/rem 추정치
