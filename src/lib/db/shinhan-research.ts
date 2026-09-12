@@ -46,9 +46,18 @@ export async function upsertShinhanResearch(
 ): Promise<{ upserted: number; pruned: number }> {
   const col = await shinhanResearchCol();
   let upserted = 0;
-  for (const d of docs) {
-    const r = await col.replaceOne({ _id: d._id }, d, { upsert: true });
-    if (r.upsertedCount || r.modifiedCount) upserted++;
+  if (docs.length > 0) {
+    // 문서 수가 많을 때(예: 초기 백필) 건별 replaceOne 순차 호출은 Vercel
+    // 서버리스 함수 60초 제한을 넘겨 FUNCTION_INVOCATION_TIMEOUT 이 났다
+    // (실측: KB·신한·하나 각 68~391건 배치에서 재현). bulkWrite 로 한 번에
+    // 보내 라운드트립을 줄인다.
+    const result = await col.bulkWrite(
+      docs.map((d) => ({
+        replaceOne: { filter: { _id: d._id }, replacement: d, upsert: true },
+      })),
+      { ordered: false },
+    );
+    upserted = result.upsertedCount + result.modifiedCount;
   }
   const cutoff = new Date(Date.now() - MAX_AGE_MS).toISOString().slice(0, 10);
   const del = await col.deleteMany({ date: { $lt: cutoff } });

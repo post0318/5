@@ -63,11 +63,18 @@ function stripHtml(s) {
     .trim();
 }
 
+// 사이트 기본 pagenum(20/페이지)은 하루치도 못 채울 만큼 작다(실측: 하루
+// 평균 20~40건 전체 리포트) — 90일 백필 시 기본값으로는 MAX_PAGES 안에서
+// 최근 며칠치만 훑고 끝나버려 특정 종목(예: 삼성전자)이 통째로 빠질 수
+// 있었다(실측 확인). 500으로 키워 페이지당 실제 며칠씩 커버되게 한다.
+const PAGE_SIZE = 500;
+
 async function fetchPage(page, sdate, edate) {
   const url = new URL(LIST_URL);
   url.searchParams.set("sdate", sdate);
   url.searchParams.set("edate", edate);
   url.searchParams.set("now_page", String(page));
+  url.searchParams.set("pagenum", String(PAGE_SIZE));
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();

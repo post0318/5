@@ -250,7 +250,7 @@ export function StockNews({ market, symbol }: { market: MarketId; symbol: string
             emptyText="최근 1주일 내 화이트리스트 언론사 기사가 없습니다."
             showExcerpt={false}
             showCheckbox
-            showLinkIcon
+            showLinkIcon={false}
             summarize={summarize}
             unsave={unsave}
           />
