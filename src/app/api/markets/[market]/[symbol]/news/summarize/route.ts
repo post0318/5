@@ -1,7 +1,7 @@
 import { jsonError, ok } from "@/lib/api";
 import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
-import { isAllowedArticle, fetchArticleBody } from "@/lib/markets/news";
+import { isAllowedArticle, isDomesticPublisher, fetchArticleBody } from "@/lib/markets/news";
 import { urlHash, saveNewsSummary, deleteNewsSummary } from "@/lib/db/news-saved";
 import { isBudgetExceeded, incUsage, claimAlertSlot, getMonthUsage } from "@/lib/db/llm-usage";
 import { summarizeArticle } from "@/lib/llm/claude";
@@ -29,11 +29,6 @@ export async function POST(
     if (!isMarketId(market)) {
       return Response.json({ error: "알 수 없는 시장" }, { status: 404 });
     }
-    // 한국 기사는 이미 한국어라 번역·요약 불필요 — 체크박스 자체를 안 보여줌(UI),
-    // 서버도 방어적으로 거부.
-    if (market === "kr") {
-      return Response.json({ error: "한국 기사는 번역·요약 대상이 아닙니다" }, { status: 400 });
-    }
     if (!process.env.ANTHROPIC_API_KEY) {
       return Response.json(
         { error: "번역·요약 기능이 아직 설정되지 않았습니다 (ANTHROPIC_API_KEY 미등록)" },
@@ -47,6 +42,12 @@ export async function POST(
     // 서버가 다시 검증 — 클라이언트값 신뢰 안 함
     if (!isAllowedArticle(body.publisher, body.publishedAt)) {
       return Response.json({ error: "화이트리스트·기간 조건에 맞지 않는 기사입니다" }, { status: 400 });
+    }
+    // 국내(이미 한국어) 언론사 기사는 번역·요약 불필요 — 체크박스 자체를 안 보여줌(UI),
+    // 서버도 방어적으로 거부. (종목의 상장 시장이 아니라 기사 언론사 기준 — 한국
+    // 종목의 해외(로이터 등) 보도는 통과되어야 함)
+    if (isDomesticPublisher(body.publisher)) {
+      return Response.json({ error: "국내 기사는 번역·요약 대상이 아닙니다" }, { status: 400 });
     }
 
     if (await isBudgetExceeded()) {
@@ -70,7 +71,7 @@ export async function POST(
       title: body.title,
       bodyText,
       publisher: body.publisher,
-      needsTranslation: true, // 이 라우트는 위에서 kr 를 걸러내 항상 미국·일본(외국어)만 남음
+      needsTranslation: true, // 위에서 국내(한국어) 언론사를 걸러내 항상 외국어 기사만 남음
     });
     await incUsage(result.costUsd);
 

@@ -49,16 +49,18 @@ export interface NewsItem {
   publishedAt: string; // ISO
   market: MarketId;
   symbol: string;
+  /** 기사 일부(발췌) — 국내(네이버 검색 API 요약문)만 제공. 해외는 API 응답에 스니펫이 없어 미제공. */
+  excerpt?: string;
 }
 
 const SOURCE_LANG: Record<MarketId, "ko" | "en" | "ja"> = { kr: "ko", us: "en", jp: "ja" };
 
 /** 헤드라인만 무료로 번역(체크 전엔 LLM 비용 없음) — src/lib/news/translate.ts 재사용. */
 async function withTranslatedTitles(
-  market: MarketId,
+  lang: "ko" | "en" | "ja",
   items: Omit<NewsItem, "titleKo">[],
 ): Promise<NewsItem[]> {
-  const translated = await translateTitles(items, SOURCE_LANG[market], (it) => it.title);
+  const translated = await translateTitles(items, lang, (it) => it.title);
   return items.map((it, i) => ({ ...it, titleKo: translated[i].titleKo }));
 }
 
@@ -110,6 +112,7 @@ const KR_PUBLISHER_BY_DOMAIN: Record<string, string> = {
 };
 
 const THREE_MONTHS_MS = 90 * 24 * 3600_000;
+const ONE_WEEK_MS = 7 * 24 * 3600_000;
 
 function stripHtml(s: string): string {
   return s.replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&amp;/g, "&").trim();
@@ -119,14 +122,16 @@ async function fetchUsJpNews(
   market: MarketId,
   symbol: string,
   query: string,
+  opts?: { cutoffMs?: number; newsCount?: number },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
+  const newsCount = opts?.newsCount ?? 20;
   let res: { news?: RawNews[] };
   try {
-    res = await yf().search(query, { newsCount: 20, quotesCount: 0 });
+    res = await yf().search(query, { newsCount, quotesCount: 0 });
   } catch {
     return [];
   }
-  const cutoff = Date.now() - THREE_MONTHS_MS;
+  const cutoff = Date.now() - (opts?.cutoffMs ?? THREE_MONTHS_MS);
   const items: Omit<NewsItem, "titleKo">[] = [];
   for (const n of res.news ?? []) {
     if (!n.title || !n.link || !n.publisher) continue;
@@ -151,19 +156,25 @@ interface NaverNewsItem {
   originallink: string;
   link: string;
   pubDate: string; // RFC822
+  description?: string;
 }
 interface NaverNewsResponse {
   items?: NaverNewsItem[];
 }
 
-async function fetchKrNews(symbol: string, query: string): Promise<Omit<NewsItem, "titleKo">[]> {
+async function fetchKrNews(
+  symbol: string,
+  query: string,
+  opts?: { cutoffMs?: number; display?: number },
+): Promise<Omit<NewsItem, "titleKo">[]> {
   const keyId = process.env.NAVER_APIHUB_KEY_ID;
   const keySecret = process.env.NAVER_APIHUB_KEY_SECRET;
   if (!keyId || !keySecret) return [];
+  const display = opts?.display ?? 20;
   let res: NaverNewsResponse;
   try {
     res = await fetchJson<NaverNewsResponse>(
-      `https://naverapihub.apigw.ntruss.com/search/v1/news?query=${encodeURIComponent(query)}&display=20&sort=date`,
+      `https://naverapihub.apigw.ntruss.com/search/v1/news?query=${encodeURIComponent(query)}&display=${display}&sort=date`,
       {
         headers: { "X-NCP-APIGW-API-KEY-ID": keyId, "X-NCP-APIGW-API-KEY": keySecret },
         revalidate: 900,
@@ -172,7 +183,7 @@ async function fetchKrNews(symbol: string, query: string): Promise<Omit<NewsItem
   } catch {
     return [];
   }
-  const cutoff = Date.now() - THREE_MONTHS_MS;
+  const cutoff = Date.now() - (opts?.cutoffMs ?? THREE_MONTHS_MS);
   const items: Omit<NewsItem, "titleKo">[] = [];
   for (const n of res.items ?? []) {
     // 화이트리스트 판정은 항상 원문(발행사) 링크 기준 — link 는 네이버뉴스
@@ -205,6 +216,7 @@ async function fetchKrNews(symbol: string, query: string): Promise<Omit<NewsItem
       publishedAt: new Date(t).toISOString(),
       market: "kr",
       symbol,
+      excerpt: n.description ? stripHtml(n.description) : undefined,
     });
   }
   return items;
@@ -223,7 +235,37 @@ export async function fetchStockNews(
   // 0건, "삼전"류 줄임말·본문 언급뿐) 관련 기사까지 대부분 걸러져 버림.
   // filterCompanySpecific(relevance.ts)는 이후 LLM 기반 판정으로 교체할 때
   // 재사용 — 지금은 미적용.
-  return withTranslatedTitles(market, items);
+  return withTranslatedTitles(SOURCE_LANG[market], items);
+}
+
+/**
+ * 종목분석 페이지 "종목뉴스" 탭 전용 — 국내(한국어 언론)·해외(영미권 등 외국 언론)
+ * 를 종목의 실제 상장 시장과 무관하게 항상 함께 가져온다(예: 한국 종목도 로이터·
+ * 블룸버그 보도가 있으면 해외란에 표시). 조회기간 1주일, 페이지네이션(10개×3페이지)
+ * 대비 최대 30건까지 확보. 기존 fetchStockNews(유니버스통합뉴스 등에서 사용,
+ * 시장별 단일 소스·90일·20건)는 동작 그대로 둔다.
+ */
+export async function fetchStockNewsBySide(
+  market: MarketId,
+  symbol: string,
+  companyName?: string | null,
+): Promise<{ domestic: NewsItem[]; overseas: NewsItem[] }> {
+  const query = companyName || symbol;
+  const [domesticRaw, overseasRaw] = await Promise.all([
+    fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30 }),
+    fetchUsJpNews(market, symbol, query, { cutoffMs: ONE_WEEK_MS, newsCount: 30 }),
+  ]);
+  const [domestic, overseas] = await Promise.all([
+    withTranslatedTitles("ko", domesticRaw),
+    withTranslatedTitles("en", overseasRaw),
+  ]);
+  return { domestic, overseas };
+}
+
+/** 국내(이미 한국어) 언론사인지 — 번역·요약 대상 여부 판정(종목의 상장 시장이 아니라 기사 언론사 기준). */
+const DOMESTIC_PUBLISHERS = new Set(Object.values(KR_PUBLISHER_BY_DOMAIN));
+export function isDomesticPublisher(publisher: string): boolean {
+  return DOMESTIC_PUBLISHERS.has(publisher);
 }
 
 /** 서버가 기사 1건을 재검증(클라이언트값 신뢰 안 함) — summarize 라우트에서 사용. */
@@ -231,7 +273,7 @@ export function isAllowedArticle(publisher: string, publishedAt: string): boolea
   if (!ALLOWED_PUBLISHERS.has(publisher.toLowerCase())) return false;
   const t = Date.parse(publishedAt);
   if (!Number.isFinite(t)) return false;
-  return t >= Date.now() - THREE_MONTHS_MS;
+  return t >= Date.now() - ONE_WEEK_MS;
 }
 
 /**
