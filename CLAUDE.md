@@ -164,6 +164,12 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-yuanta-research.mjs`, GitHub Actions
       `.github/workflows/yuanta-research.yml`)가 같은 라우트를
       `source: "유안타증권"` 으로 재사용.
+      **중단(오너 지시, 2026-09)**: myasset.com 직접 스크래핑이 발췌·
+      목표주가·투자의견 추출에서 계속 실패해 한경 컨센서스 경유(아래
+      항목, `report_type=CO` 구조화 컬럼 — 훨씬 안정적)로 전환. 이 워크플로
+      스케줄은 비활성화(`workflow_dispatch`만 남김), 스크립트 파일은 참고용
+      보존. 유안타 데이터는 이제 한경 스크립트가 `source: "유안타증권"`으로
+      계속 수집(제외 필터 제거함).
     - **교보증권 추가(오너 확인, 2026-09)**: `www.iprovest.com` 화면은 iframe
       4중 중첩(레거시 웹로직)이지만, 실제 데이터를 뿌리는 서블릿
       (`/weblogic/RSReportServlet?scr_id=32&menuCode=1&pageNum=N`)은 로그인 없이
@@ -193,8 +199,11 @@ npm run db:studio    # drizzle studio
       작성 증권사명을 `source` 로 그룹핑해 같은 라우트에 나눠 전송(라우트는
       호출당 source 하나만 받으므로). 개별 증권사 스크립트들을 대체하진
       않고 보완 — 같은 리포트가 두 소스에 중복 저장될 수 있으나 `_id` 가
-      소스별로 네임스페이스돼 있어 기능상 문제 없음(화면엔 중복 카드로만
-      보일 수 있음, 추후 정리 여지).
+      소스별로 네임스페이스돼 있고, 읽기 단계(`getShinhanResearchBySymbol`)
+      에서 같은 출처(source)+제목이 완전히 같으면 하나만 보여주는 dedupe도
+      있어 기능상 문제 없음. **유안타증권은 여기서 제외하지 않는다**(2026-09
+      결정 — 자체 스크립트의 myasset.com 스크래핑이 계속 불안정해 한경 경유
+      `report_type=CO` 구조화 컬럼 쪽을 신뢰).
     - **NH투자증권 추가(오너 확인, 2026-09)**: `www.nhsec.com` 은 레거시
       frameset 사이트라 실제 콘텐츠는 `/main.html` 프레임 안에 있고, 화면이
       호출하는 내부 TR(트랜잭션) API `/research/boardCommonTrAjax.action`

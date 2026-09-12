@@ -15,9 +15,13 @@
  *    재가공한 3자 편집 서비스라는 점이 다른 예외들과 다름 — 오너가 이 차이를
  *    인지한 상태로 "개인용·로컬 실행·저빈도" 조건 예외 승인(CLAUDE.md 참조).
  *
- * ⚠️ 유안타증권은 자체 스크립트(collect-yuanta-research.mjs)가 이미 다루고
- *    있어(오너 지시, 2026-09) 여기서는 제외한다 — 같은 리포트가 두 소스로
- *    중복 수집되는 걸 막기 위함(다른 증권사는 한경에만 있어 중복 문제 없음).
+ * ⚠️ 유안타증권 재포함(오너 지시, 2026-09): 처음엔 자체 스크립트
+ *    (collect-yuanta-research.mjs)와 중복을 막으려고 여기서 제외했으나,
+ *    myasset.com 자체 스크래핑이 발췌·목표주가·투자의견 추출에서 계속
+ *    실패해(오너 확인) 한경 경유(구조화된 적정가격/투자의견 컬럼 + PDF 발췌)
+ *    로 전환한다. 같은 리포트가 유안타 자체 스크립트와 중복 저장될 수 있지만
+ *    _id가 소스별로 네임스페이스돼 있고 읽기 단계에서 제목 기준 dedupe도
+ *    되어 있어(getShinhanResearchBySymbol) 기능상 문제 없음.
  *
  * 투자의견/목표주가(2026-09 갱신): 처음엔 PDF 본문에서 정규식으로 추측했으나,
  * 검색폼 파라미터 `report_type=CO`("기업" 탭 — 사이트 UI에서 종목 검색 시
@@ -146,7 +150,6 @@ function parseItems(html) {
       opinion = parseOpinion(opinion);
     }
     const sourceName = source;
-    if (sourceName.includes("유안타")) continue; // 자체 스크립트가 이미 수집 — 중복 방지
 
     items.push({
       id: reportIdx,

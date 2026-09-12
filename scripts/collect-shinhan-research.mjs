@@ -38,7 +38,10 @@ const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 14;
-const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
+// 페이지당 실제로 넘어가는 항목 수가 적어(실측: 60일치 커버하는 데 23페이지
+// 필요) 기본값 5는 14일 기본 조회 기간도 못 채우고 끊길 수 있었다(실측
+// 확인 — HD현대일렉트릭 7/29자 리포트가 누락됐었음). 여유 있게 10으로 상향.
+const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/shinhan-research"

@@ -1,12 +1,16 @@
-name: 유안타증권 기업분석 리포트 수집
+name: 유안타증권 기업분석 리포트 수집 (중단됨)
 
 # CLAUDE.md 방침(오너 승인 예외): www.myasset.com 기업분석 목록을 하루 1회,
 # 개인용으로만 조회한다. robots.txt 자체가 없는 사이트 — 명시적 Disallow는
 # 없지만 다른 예외들과 동일한 조건(개인용·로컬 실행·저빈도)으로 승인됨.
+#
+# ⚠️ 2026-09 중단(오너 지시): myasset.com 직접 스크래핑이 발췌·목표주가·
+#    투자의견 추출에서 계속 실패해 한경 컨센서스 경유(collect-hankyung-
+#    research.mjs, report_type=CO 구조화 컬럼)로 전환. 이 워크플로는
+#    스케줄 비활성화(workflow_dispatch로 수동 실행만 가능) — 스크립트
+#    파일은 참고용으로 남겨둠.
 
 on:
-  schedule:
-    - cron: "30 0 * * *" # 00:30 UTC = 09:30 KST
   workflow_dispatch: {}
 
 jobs:
