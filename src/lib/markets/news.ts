@@ -368,7 +368,10 @@ async function tryLlmRelevanceFilter(
       domestic: domestic.length > 0 || domesticRaw.length === 0 ? domestic : domesticRaw,
       overseas: overseas.length > 0 || overseasRaw.length === 0 ? overseas : overseasRaw,
     };
-  } catch {
+  } catch (err) {
+    // 조용히 폴백하되 원인은 Vercel 함수 로그에 남긴다 — 그동안 catch{ return null }
+    // 로 완전히 삼켜져서 키 누락/무효/예산초과를 겉으로 구분할 방법이 없었음.
+    console.error("[news] LLM 관련성 판정 실패, 키워드 매칭으로 폴백:", err);
     return null;
   }
 }
