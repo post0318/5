@@ -18,6 +18,12 @@
  * 상장사 목록) 역조회해 깔끔한 이름을 쓴다. 코드가 6자리 숫자가 아닌 항목
  * (드물게 존재, 우선주 등)과 종목 코드 자체가 없는 산업/섹터 리포트는 건너뜀.
  *
+ * 투자의견/목표주가(2026-09 추가): 목록 요약은 잘려 있어 안 보이지만, 상세
+ * 페이지 본문(`v_info_body`) 안에 "매수 의견과 목표주가 1,000,000원을
+ * 유지한다"처럼 문장으로 들어있다(오너 확인). 본문 저장 정책은 그대로 두고
+ * (summary는 계속 목록 발췌만), 상세 페이지를 한 번 더 받아 이 두 값만
+ * 뽑아 저장한다 — 항목당 요청이 하나 늘어 --days 기본값을 14 → 3으로 좁힘.
+ *
  * ⚠️ securities.koreainvestment.com/robots.txt 는 `Disallow: /`(Googlebot 등
  *    예외)다. 다른 예외들과 동일하게 "개인용·로컬 실행·저빈도" 조건으로
  *    오너 승인(CLAUDE.md 참조, 오너가 "한국투자증권도 로그인없이 가능하다"
@@ -25,7 +31,7 @@
  *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-kis-research.mjs
- *   node scripts/collect-kis-research.mjs --days=14 --pages=5 --dry-run
+ *   node scripts/collect-kis-research.mjs --days=30 --pages=5 --dry-run
  */
 
 import { readFileSync } from "node:fs";
@@ -46,7 +52,7 @@ function loadEnvLocal() {
 const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
-const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 14;
+const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 6;
 
 const IMPORT_URL = (
@@ -78,6 +84,31 @@ function stripHtml(s) {
 const EXCERPT_LEN = 300;
 function excerpt(text) {
   return text.length > EXCERPT_LEN ? `${text.slice(0, EXCERPT_LEN)}…` : text;
+}
+
+function extractOpinion(text) {
+  const m = text.match(/(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated)|(매수|매도|중립|비중확대|비중축소)\s*의견/);
+  return m ? (m[1] || m[2]) : "";
+}
+function extractTargetPrice(text) {
+  const m = text.match(/목표주가\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?\s*원/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+async function fetchOpinionAndTarget(detailUrl) {
+  try {
+    const res = await fetch(detailUrl, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    const bodyText = [...html.matchAll(/<div class='v_info_(?:head|body)'>([\s\S]*?)<\/div>/g)]
+      .map((m) => stripHtml(m[1]))
+      .join(" ");
+    return { opinion: extractOpinion(bodyText), targetPrice: extractTargetPrice(bodyText) };
+  } catch (err) {
+    console.warn(`  ⚠ 상세 본문 조회 실패 (${detailUrl}): ${err.message}`);
+    return { opinion: "", targetPrice: null };
+  }
 }
 
 async function fetchPage(page) {
@@ -147,6 +178,15 @@ console.log(
     .slice(0, 5)
     .map((i) => `${i.date} ${nameByCode.get(i.symbolHint) ?? i.symbolHint}(${i.symbolHint}) — ${i.title}`),
 );
+console.log(`▶ 투자의견/목표주가 조회 중 (${collected.length}건)...`);
+for (const it of collected) {
+  const { opinion, targetPrice } = await fetchOpinionAndTarget(it.detailUrl);
+  it.opinion = opinion;
+  it.targetPrice = targetPrice;
+  await sleep(400);
+}
+console.log("  예시:", collected[0] && `${collected[0].opinion || "(없음)"} / ${collected[0].targetPrice ?? "(없음)"}`);
+
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);
@@ -159,7 +199,8 @@ const items = collected.map((it) => ({
   stockName: nameByCode.get(it.symbolHint) ?? it.symbolHint,
   symbol: it.symbolHint,
   analyst: it.analyst,
-  opinion: "",
+  opinion: it.opinion,
+  targetPrice: it.targetPrice,
   summary: it.summary,
   pdfUrl: it.detailUrl,
   views: null,

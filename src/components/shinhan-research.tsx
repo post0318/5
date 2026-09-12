@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import type { ShinhanResearchDoc } from "@/lib/db/shinhan-research";
-import { formatCurrency } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
 
 const PAGE_SIZE = 10;
 
@@ -157,17 +157,15 @@ export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbo
                     <div className="flex items-start justify-between gap-2">
                       <div className="group-hover:text-primary text-sm leading-snug font-medium">
                         {it.title}
+                        {it.targetPrice != null && (
+                          <span className="text-muted-foreground tnum ml-1.5 text-xs font-normal">
+                            목표주가 {formatNumber(Math.trunc(it.targetPrice / 10000), 0)}만원
+                          </span>
+                        )}
                       </div>
-                      {(it.targetPrice || opinion) && (
-                        <span className="shrink-0 text-xs font-semibold">
-                          {it.targetPrice != null && (
-                            <span className="tnum text-muted-foreground font-normal">
-                              {formatCurrency(it.targetPrice, "KRW")}원{" "}
-                            </span>
-                          )}
-                          {opinion && (
-                            <span className={cn(opinionClass(opinion, market))}>{opinion}</span>
-                          )}
+                      {opinion && (
+                        <span className={cn("shrink-0 text-xs font-semibold", opinionClass(opinion, market))}>
+                          {opinion}
                         </span>
                       )}
                     </div>
