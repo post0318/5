@@ -82,6 +82,20 @@ const ALLOWED_PUBLISHERS = new Set(
     "Yahoo Finance",
     "Dow Jones Newswires",
     "Investor's Business Daily", // 실측: yahoo 검색 결과 빈도 높음
+    // 미국 — 2차 티어 금융매체(2026-09 확장, 오너 승인: 상위 통신사만으로는
+    // 한국 종목의 영문명 검색 결과가 대부분 화이트리스트 밖이라 해외뉴스가
+    // 자주 0건으로 보이는 문제 — recall 우선으로 완화)
+    "TheStreet",
+    "The Motley Fool",
+    "Motley Fool",
+    "GuruFocus.com",
+    "GuruFocus",
+    "Insider Monkey",
+    "Kiplinger",
+    "MT Newswires",
+    "Seeking Alpha",
+    "Benzinga",
+    "Zacks",
     // 일본
     "Nikkei Asia",
     "The Japan Times",
