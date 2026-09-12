@@ -44,13 +44,23 @@ export interface KrHighlightInput {
   /** 연도별 주당배당금 (원). alotMatter. */
   dpsByYear: Map<number, number>;
   payoutByYear: Map<number, number>; // 배당성향 %
+  /** 최근 12개월(366일) 배당기준일 합산 주당배당금 — 있으면 LTM 열에 우선 사용. */
+  dpsTtm?: number | null;
   consensus: {
     estYear: number | null;
+    /** 네이버 컨센서스 매출액·영업이익·순이익 (억원, 네이버 표시 단위 그대로) */
+    estRevenue?: number | null;
+    estOpIncome?: number | null;
+    estNetIncome?: number | null;
     estEps: number | null;
     estPer: number | null;
     estPbr: number | null;
   } | null;
 }
+
+/** 네이버 컨센서스는 억원 단위 — 이 파일의 원(KRW) 단위로 환산. */
+const fromEokwon = (v: number | null | undefined): number | null =>
+  v == null ? null : v * 1e8;
 
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   let best: number | null = null;
@@ -65,7 +75,7 @@ const ratio = (n: number | null, d: number | null): number | null =>
   n != null && d != null && d > 0 ? n / d : null;
 
 export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights {
-  const { facts, bars, fyCloseByYear, sharesOutstanding: shares, currentMarketCap, currentPrice, ttm, dpsByYear, consensus } = input;
+  const { facts, bars, fyCloseByYear, sharesOutstanding: shares, currentMarketCap, currentPrice, ttm, dpsByYear, dpsTtm, consensus } = input;
 
   const fyYears = facts.periods.map((p) => p.year);
   const lastFy = fyYears[fyYears.length - 1] ?? new Date().getFullYear();
@@ -125,11 +135,24 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     marketCap[i] != null ? marketCap[i]! - (cashCol[i] ?? 0) + (debtCol[i] ?? 0) : null,
   );
 
-  const revenue = columns.map((c) => (c.kind === "ltm" ? (ttm?.revenue ?? null) : c.kind === "estimate" ? null : at(aRev, cy(c))));
-  const opInc = columns.map((c) => (c.kind === "ltm" ? (ttm?.opIncome ?? null) : c.kind === "estimate" ? null : at(aOpi, cy(c))));
+  // 추정(estimate) 열은 네이버 컨센서스 매출액·영업이익·순이익을 그대로 쓴다(우선순위)
+  // — 예전엔 순이익을 "추정 EPS × 발행주식수"로 역산했는데, 애널리스트 순이익
+  // 컨센서스는 EPS 컨센서스와 독립 집계라 두 값이 달라(주식수 가정 차이 등)
+  // 역산값이 실제 네이버 순이익 컨센서스와 10%대 오차가 났다.
+  const revenue = columns.map((c) =>
+    c.kind === "ltm" ? (ttm?.revenue ?? null) : c.kind === "estimate" ? fromEokwon(consensus?.estRevenue) : at(aRev, cy(c)),
+  );
+  const opInc = columns.map((c) =>
+    c.kind === "ltm" ? (ttm?.opIncome ?? null) : c.kind === "estimate" ? fromEokwon(consensus?.estOpIncome) : at(aOpi, cy(c)),
+  );
   const netIncome = columns.map((c) => {
     if (c.kind === "ltm") return ttm?.netIncome ?? null;
-    if (c.kind === "estimate") return consensus?.estEps != null && shares != null ? consensus.estEps * shares : null;
+    if (c.kind === "estimate") {
+      return (
+        fromEokwon(consensus?.estNetIncome) ??
+        (consensus?.estEps != null && shares != null ? consensus.estEps * shares : null)
+      );
+    }
     return at(aNi, cy(c));
   });
   const eps = columns.map((c) => {
@@ -137,9 +160,10 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     if (c.kind === "estimate") return consensus?.estEps ?? null;
     return at(aEps, cy(c));
   });
-  // 분기 배당 데이터 미보유(DART alotMatter 는 사업연도 단위) → LTM 컬럼은 최근 사업연도값
+  // LTM 배당금 = 최근 12개월(366일) 배당기준일 합산(공공데이터포털 배당정보,
+  // rights-schedule.ts fetchKrAnnualDps) — 없으면 최근 완결 사업연도값으로 폴백.
   const dps = columns.map((c) =>
-    c.kind === "fy" ? (dpsByYear.get(cy(c)) ?? null) : c.kind === "ltm" ? (dpsByYear.get(lastFy) ?? null) : null,
+    c.kind === "fy" ? (dpsByYear.get(cy(c)) ?? null) : c.kind === "ltm" ? (dpsTtm ?? dpsByYear.get(lastFy) ?? null) : null,
   );
   const divYield = dps.map((d, i) => (d != null && priceByCol[i] ? (d / priceByCol[i]!) * 100 : null));
   // OCF/CapEx 는 TTM 미보유 → LTM 컬럼은 최근 사업연도값

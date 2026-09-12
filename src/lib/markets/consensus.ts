@@ -124,9 +124,16 @@ export interface ConsensusData {
   targetPrice: number | null;
   recommendationMean: number | null;
   rows: ConsensusRow[];
-  /** 당해년도 EPS 추정치 리비전 (현재/1주전/1개월전/3개월전) + 각 PER */
+  /** EPS 추정치 리비전 (현재/1주전/1개월전/3개월전) — 당해년도 + 차년도 각각 EPS·PER */
   epsRevision:
-    | { asOf: string[]; eps: (number | null)[]; per: (number | null)[] }
+    | {
+        asOf: string[];
+        eps: (number | null)[];
+        per: (number | null)[];
+        epsNext: (number | null)[];
+        perNext: (number | null)[];
+        nextFy: number | null;
+      }
     | null;
   /** 최근 분기 EPS 어닝 서프라이즈 */
   earningsSurprise: {
@@ -273,16 +280,23 @@ export async function getConsensusData(
     }
   }
 
-  // ── EPS 리비전 (당해년도) ───────────────────────────────────────
+  // ── EPS 리비전 (당해년도 + 차년도) ───────────────────────────────
   let epsRevision: ConsensusData["epsRevision"] = null;
   const cy = estimates?.periods.find((p) => p.period === "0y");
+  const ny = estimates?.periods.find((p) => p.period === "+1y");
   if (cy?.epsTrend) {
     const t = cy.epsTrend;
     const eps = [t.current, t.d7, t.d30, t.d90];
+    const nt = ny?.epsTrend;
+    const epsNext = nt ? [nt.current, nt.d7, nt.d30, nt.d90] : eps.map(() => null);
+    const perOf = (e: number | null) => (price != null && e ? Math.round((price / e) * 100) / 100 : null);
     epsRevision = {
       asOf: ["현재", "1주 전", "1개월 전", "3개월 전"],
       eps,
-      per: eps.map((e) => (price != null && e ? Math.round((price / e) * 100) / 100 : null)),
+      per: eps.map(perOf),
+      epsNext,
+      perNext: epsNext.map(perOf),
+      nextFy: ny?.endDate ? Number(ny.endDate.slice(0, 4)) : null,
     };
   }
 

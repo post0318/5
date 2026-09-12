@@ -68,6 +68,12 @@ export async function fetchKrForeignOwnership(
 export interface KrNaverConsensus {
   /** 추정 회계연도 (예: 2026) */
   estYear: number | null;
+  /** 추정 매출액 (억원, 네이버 표시 단위 그대로) */
+  estRevenue: number | null;
+  /** 추정 영업이익 (억원) */
+  estOpIncome: number | null;
+  /** 추정 당기순이익 (억원) */
+  estNetIncome: number | null;
   /** 추정 EPS (원) */
   estEps: number | null;
   /** 추정 PER (네이버 표시값 — 현재가 ÷ 추정 EPS) */
@@ -112,6 +118,9 @@ export async function fetchKrNaverConsensus(
 
   return {
     estYear: consKey ? Number(consKey.slice(0, 4)) : null,
+    estRevenue: rowVal("매출액"),
+    estOpIncome: rowVal("영업이익"),
+    estNetIncome: rowVal("당기순이익"),
     estEps: rowVal("EPS"),
     estPer: rowVal("PER"),
     estPbr: rowVal("PBR"),

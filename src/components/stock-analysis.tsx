@@ -612,12 +612,25 @@ export function StockAnalysis({
                 </Stat>
                 {ov.consensus && (
                   <Stat label="목표주가" className="order-5 lg:order-none">
-                    <Money value={ov.consensus.targetMeanPrice} currency={ov.consensus.currency} />
+                    <span className="inline-flex items-baseline gap-1.5">
+                      <Money value={ov.consensus.targetMeanPrice} currency={ov.consensus.currency} />
+                      {ov.quote?.last != null && ov.consensus.targetMeanPrice != null && (
+                        <span className="text-sm font-normal">
+                          (
+                          <ChangePercent
+                            value={
+                              ((ov.consensus.targetMeanPrice - ov.quote.last) / ov.quote.last) * 100
+                            }
+                          />
+                          )
+                        </span>
+                      )}
+                    </span>
                     <div className="text-muted-foreground mt-1 text-xs">
+                      목표주가 범위{" "}
                       <Money value={ov.consensus.targetLowPrice} currency={ov.consensus.currency} />
                       {" ~ "}
                       <Money value={ov.consensus.targetHighPrice} currency={ov.consensus.currency} />
-                      {" · Yahoo Finance"}
                     </div>
                   </Stat>
                 )}

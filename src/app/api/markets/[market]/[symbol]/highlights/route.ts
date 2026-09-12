@@ -8,11 +8,13 @@ import { buildUsHighlights } from "@/lib/markets/us/edgar-highlights";
 import { buildUsBankHighlights, isFinancialCompany } from "@/lib/markets/us/edgar-highlights-bank";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
 import { resolveCorpCode } from "@/lib/markets/kr/corpcode";
+import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrFacts, fetchKrDps } from "@/lib/markets/kr/dart-facts";
 import { buildKrHighlights } from "@/lib/markets/kr/dart-highlights";
 import { fetchStooqEod } from "@/lib/markets/quote/stooq";
 import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
+import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
 
 export const revalidate = 3600;
 export const maxDuration = 45;
@@ -38,13 +40,16 @@ export async function GET(
 
     if (market === "kr") {
       const { corpCode } = resolveCorpCode("", sym);
-      const [facts, dps, krx, bars, ttm, consensus] = await Promise.all([
+      const [facts, dps, krx, bars, ttm, consensus, dpsTtm] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
         fetchKrDps(corpCode),
         fetchKrxEod(sym).catch(() => null),
         fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
         adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
         fetchKrNaverConsensus(sym).catch(() => null),
+        getKrJurirNo(sym)
+          .then((crno) => fetchKrAnnualDps(crno))
+          .catch(() => null),
       ]);
       if (!facts) return ok({ highlights: null });
       // 회계연도말 종가 — Stooq 커버리지가 부족하면 KRX 로 개별 조회
@@ -68,8 +73,17 @@ export async function GET(
         ttm: ttm ?? null,
         dpsByYear: dps.dpsByYear,
         payoutByYear: dps.payoutByYear,
+        dpsTtm: dpsTtm?.ttm?.dps ?? null,
         consensus: consensus
-          ? { estYear: consensus.estYear, estEps: consensus.estEps, estPer: consensus.estPer, estPbr: consensus.estPbr }
+          ? {
+              estYear: consensus.estYear,
+              estRevenue: consensus.estRevenue,
+              estOpIncome: consensus.estOpIncome,
+              estNetIncome: consensus.estNetIncome,
+              estEps: consensus.estEps,
+              estPer: consensus.estPer,
+              estPbr: consensus.estPbr,
+            }
           : null,
       });
       return ok(
