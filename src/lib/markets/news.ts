@@ -164,8 +164,9 @@ async function fetchUsJpNews(
   market: MarketId,
   symbol: string,
   query: string,
-  opts?: { cutoffMs?: number; newsCount?: number },
+  opts?: { cutoffMs?: number; newsCount?: number; requireWhitelist?: boolean },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
+  const requireWhitelist = opts?.requireWhitelist ?? true;
   const newsCount = opts?.newsCount ?? 20;
   let res: { news?: RawNews[] };
   try {
@@ -177,7 +178,11 @@ async function fetchUsJpNews(
   const items: Omit<NewsItem, "titleKo">[] = [];
   for (const n of res.news ?? []) {
     if (!n.title || !n.link || !n.publisher) continue;
-    if (!ALLOWED_PUBLISHERS.has(n.publisher.toLowerCase())) continue;
+    // 종목뉴스 탭(requireWhitelist=false)은 화이트리스트로 미리 걸러내지 않고
+    // LLM 관련성 판정이 신뢰성까지 함께 판단하게 한다(오너 확인, 2026-09 —
+    // 고정 목록을 신뢰할 수 없다는 지적). 유니버스 통합뉴스(fetchStockNews,
+    // 기본값 true)는 LLM 후처리가 없어 화이트리스트를 그대로 유지.
+    if (requireWhitelist && !ALLOWED_PUBLISHERS.has(n.publisher.toLowerCase())) continue;
     const t = new Date(n.providerPublishTime).getTime();
     if (!Number.isFinite(t) || t < cutoff) continue;
     items.push({
@@ -229,8 +234,11 @@ const OVERSEAS_PUBLISHER_BY_DOMAIN: Record<string, string> = {
  * 해외뉴스 2차 소스(2026-09, 오너 요청) — 야후 검색 하나만으로는 커버리지가
  * 너무 좁아서(블룸버그·WSJ·CNN 등이 야후 검색 결과에 잘 안 잡힘) Google 뉴스
  * RSS(공개 신디케이션 피드, 이미 거시경제 뉴스 기능이 쓰는 것과 동일 인프라)를
- * 병행 조회한다. 같은 도메인 화이트리스트 철학 유지 — 매체명이 아니라
- * <source url> 도메인으로 판정(Google 표기가 일관되지 않아서).
+ * 병행 조회한다. 고정 도메인 화이트리스트는 걸지 않는다(오너 확인, 2026-09
+ * — 고정 목록을 신뢰할 수 없다는 지적, 국내뉴스 전환과 같은 방향) — LLM
+ * 관련성 판정이 신뢰성까지 함께 판단. 화이트리스트 맵(OVERSEAS_PUBLISHER_
+ * BY_DOMAIN)은 표시용 매체명 정리 목적으로만 남기고, 없는 도메인은 Google
+ * 이 준 원문 매체명이나 도메인 자체를 그대로 쓴다.
  */
 async function fetchGoogleOverseasNews(
   market: MarketId,
@@ -244,7 +252,11 @@ async function fetchGoogleOverseasNews(
   const limit = opts?.limit ?? 20;
   const items: Omit<NewsItem, "titleKo">[] = [];
   for (const n of raw) {
-    const publisher = n.sourceDomain ? OVERSEAS_PUBLISHER_BY_DOMAIN[n.sourceDomain] : undefined;
+    const publisher =
+      (n.sourceDomain ? OVERSEAS_PUBLISHER_BY_DOMAIN[n.sourceDomain] : undefined) ??
+      n.source ??
+      n.sourceDomain ??
+      undefined;
     if (!publisher) continue;
     const t = new Date(n.publishedAt).getTime();
     if (!Number.isFinite(t) || t < cutoff) continue;
@@ -674,7 +686,7 @@ export async function fetchStockNewsBySide(
     isKr
       ? fetchKrStockTaggedNews(symbol, { cutoffMs: ONE_WEEK_MS, pageSize: 20, maxPages: 2 })
       : fetchKrNewsBySearch(symbol, domesticQuery(market, query), { cutoffMs: ONE_WEEK_MS, display: 30 }),
-    fetchUsJpNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, newsCount: 30 }),
+    fetchUsJpNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, newsCount: 30, requireWhitelist: false }),
     fetchGoogleOverseasNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, limit: 30 }).catch(() => []),
   ]);
   // 야후·구글 두 소스에서 같은 기사(URL 동일)가 겹칠 수 있어 합치기 전 URL 기준
@@ -687,25 +699,28 @@ export async function fetchStockNewsBySide(
   });
 
   const name = companyName?.trim();
-  const llmResult = name ? await tryLlmRelevanceFilter(name, domesticRaw, overseasRaw, isKr) : null;
+  // KR도 LLM 판정을 항상 시도 — 네이버 태깅이 검색 방식보다 훨씬 정확하지만
+  // 완전히 회사 전용은 아님(실측: 현대로템 태깅 31건 중 "경남 일자리 종합박람회"
+  // "삼성전자 브랜드가치" 등 무관한 업종 뉴스 소수 섞임). LLM이 남은 노이즈만
+  // 걷어내되(skipDomestic=false), LLM 미사용시엔 신뢰 가능한 원본 그대로 둔다.
+  const llmResult = name ? await tryLlmRelevanceFilter(name, domesticRaw, overseasRaw, false) : null;
 
   let domesticSafe: RawNewsItem[];
   let overseasSafe: RawNewsItem[];
   let relevance: "llm" | LlmFallbackReason | "no_company_name";
-  if (isKr) {
-    // KR 국내뉴스는 네이버가 이미 종목코드로 태깅해준 소스라 화이트리스트도
-    // LLM 판정도 불필요 — 통신사 재게재 중복 정리만 적용.
-    domesticSafe = domesticRaw;
-    overseasSafe = llmResult && llmResult.fallback === null ? llmResult.overseas : overseasRaw;
-    relevance = llmResult && llmResult.fallback === null ? "llm" : (llmResult?.fallback ?? "no_api_key");
-  } else if (llmResult && llmResult.fallback === null) {
-    // LLM 경로(비KR 종목의 국내 언론 커버리지): 신뢰도 판정을 모델이 직접 하므로
-    // 도메인 화이트리스트 없이도 안전.
+  if (llmResult && llmResult.fallback === null) {
+    // LLM 경로: 신뢰도 판정을 모델이 직접 하므로 도메인 화이트리스트 없이도 안전.
     domesticSafe = llmResult.domestic;
     overseasSafe = llmResult.overseas;
     relevance = "llm";
+  } else if (isKr) {
+    // KR + LLM 미사용(키 없음·예산초과·호출실패): 네이버가 이미 종목코드로
+    // 태깅해준 소스라 화이트리스트·키워드 매칭 없이 그대로 신뢰.
+    domesticSafe = domesticRaw;
+    overseasSafe = overseasRaw;
+    relevance = !name ? "no_company_name" : (llmResult?.fallback ?? "no_api_key");
   } else {
-    // 폴백(이름 미확인·LLM 미사용·예산초과·호출실패 공통): 신뢰도를 대신 판정해줄
+    // 폴백(비KR 종목, 이름 미확인·LLM 미사용 공통): 신뢰도를 대신 판정해줄
     // 수단이 없으므로 사전 큐레이션된 화이트리스트로 되돌리고, 이름이 있으면
     // 그 안에서 키워드 매칭까지 적용.
     const whitelisted = domesticRaw.filter((it) => DOMESTIC_PUBLISHERS.has(it.publisher));
