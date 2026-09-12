@@ -3,6 +3,7 @@ import YahooFinancePkg from "yahoo-finance2";
 import { fetchJson } from "./http";
 import type { MarketId } from "./types";
 import { translateTitles } from "../news/translate";
+import { resolveCorpCode } from "./kr/corpcode";
 
 /**
  * 종목뉴스(선택 번역·요약용) — 한국·미국·일본.
@@ -287,6 +288,23 @@ function isDomesticRelevant(
   return aliases.some((a) => hay.includes(a));
 }
 
+/**
+ * 해외(야후) 검색어는 한국어 회사명을 그대로 넣으면 안 됨 — 실측(Yahoo Finance
+ * search API) 결과 한글 쿼리("삼성전자")는 "Invalid Search Query" 에러로 아예
+ * 실패(빈 배열로 조용히 폴백돼 "해외 뉴스 없음"처럼 보였던 원인). 영문명
+ * ("Samsung Electronics")이나 티커로 바꾸면 정상 응답한다. `corpcode.ts` 의
+ * 정적 상장사 목록(DART_API_KEY 불필요)에서 영문명을 찾아 대체.
+ */
+function overseasQuery(market: MarketId, symbol: string, companyName: string): string {
+  if (market !== "kr") return companyName;
+  try {
+    const eng = resolveCorpCode("", symbol).corpEngName;
+    return eng || companyName;
+  } catch {
+    return companyName;
+  }
+}
+
 export async function fetchStockNewsBySide(
   market: MarketId,
   symbol: string,
@@ -295,7 +313,10 @@ export async function fetchStockNewsBySide(
   const query = companyName || symbol;
   const [domesticRaw, overseasRaw] = await Promise.all([
     fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30 }),
-    fetchUsJpNews(market, symbol, query, { cutoffMs: ONE_WEEK_MS, newsCount: 30 }),
+    fetchUsJpNews(market, symbol, overseasQuery(market, symbol, query), {
+      cutoffMs: ONE_WEEK_MS,
+      newsCount: 30,
+    }),
   ]);
   const domesticFiltered = domesticRaw.filter((it) =>
     isDomesticRelevant(companyName, symbol, it.title, it.excerpt),

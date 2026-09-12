@@ -8,7 +8,7 @@ import { getDb } from "./index";
  * `source`를 두고 `_id`도 `${source}:${게시글번호}`로 네임스페이스했다(증권사별
  * ID 체계가 달라 충돌 방지). 원문 PDF·전체 본문은 저장하지 않고 목록에 이미
  * 노출되는 요약(summary)·메타만 저장한다(용량: 건당 1~2KB 수준). 180일 지난
- * 리포트는 수집 시점마다 정리한다(표시는 최근 30일 우선, 없으면 더 오래된
+ * 리포트는 수집 시점마다 정리한다(표시는 최근 3개월 우선, 없으면 더 오래된
  * 것으로 확대 — getShinhanResearchBySymbol).
  */
 export interface ShinhanResearchDoc {
@@ -29,10 +29,10 @@ export interface ShinhanResearchDoc {
 }
 
 // 저장 자체는 넉넉하게 보관(건당 1~2KB라 용량 문제 없음) — 짧게 지우면 커버리지가
-// 뜸한 종목은 "최근 것"이 아예 없어져 버린다. 화면의 "최근 30일" 우선 표시는
+// 뜸한 종목은 "최근 것"이 아예 없어져 버린다. 화면의 "최근 3개월" 우선 표시는
 // getShinhanResearchBySymbol 의 조회 단계에서 처리(없으면 그보다 오래된 것도 폴백).
 const MAX_AGE_MS = 180 * 24 * 3600_000;
-const RECENT_WINDOW_MS = 30 * 24 * 3600_000;
+const RECENT_WINDOW_MS = 90 * 24 * 3600_000;
 
 export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDoc>> {
   const db = await getDb();
@@ -56,7 +56,7 @@ export async function upsertShinhanResearch(
 }
 
 /**
- * 최근 30일 내 리포트를 우선 반환하고, 없으면(커버리지가 뜸한 종목) 기간
+ * 최근 3개월 내 리포트를 우선 반환하고, 없으면(커버리지가 뜸한 종목) 기간
  * 제한 없이 가장 최근 것으로 확대해서 보여준다 — "없음"보다 "오래됐지만
  * 있는 것"이 낫다는 원칙.
  */

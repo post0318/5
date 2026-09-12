@@ -45,7 +45,7 @@ export function ShinhanResearch({ symbol }: { symbol: string }) {
           증권사 리서치
           {q.data && <span className="text-muted-foreground text-xs font-normal">({q.data.items.length})</span>}
           <span className="text-muted-foreground ml-auto text-[11px] font-normal">
-            최근 30일(없으면 최신순) · 개인용 참고자료
+            최근 3개월(없으면 최신순) · 개인용 참고자료
           </span>
         </CardTitle>
       </CardHeader>
