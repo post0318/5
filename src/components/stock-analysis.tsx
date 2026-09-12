@@ -606,7 +606,7 @@ export function StockAnalysis({
                             <Money value={lo52} currency={ccy} fallback="-" />
                           </span>
                         </span>
-                        <Week52Bar price={ov.quote?.last ?? null} high={hi52} low={lo52} />
+                        <Week52Bar price={ov.quote?.last ?? null} high={hi52} low={lo52} market={market} />
                       </>
                     );
                   })()}
@@ -1190,10 +1190,12 @@ function Week52Bar({
   price,
   high,
   low,
+  market,
 }: {
   price: number | null;
   high: number | null;
   low: number | null;
+  market?: MarketId;
 }) {
   if (price == null || high == null || high <= 0) return null;
   const pct = (price / high) * 100; // 고점 대비 %
@@ -1214,8 +1216,8 @@ function Week52Bar({
         />
       </div>
       <div className="text-muted-foreground tnum mt-0.5 flex justify-between text-[10px]">
-        <span className="text-up">{lowPct != null ? `저점比 +${lowPct.toFixed(0)}%` : " "}</span>
-        <span className="text-down">고점比 −{Math.max(0, 100 - pct).toFixed(0)}%</span>
+        <span className={stockDirClass(true, market)}>{lowPct != null ? `저점比 +${lowPct.toFixed(0)}%` : " "}</span>
+        <span className={stockDirClass(false, market)}>고점比 −{Math.max(0, 100 - pct).toFixed(0)}%</span>
       </div>
     </div>
   );

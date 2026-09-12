@@ -19,6 +19,7 @@ import type { ConsensusData } from "@/lib/markets/consensus";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DeepLinkList } from "@/components/deep-links";
+import { stockDirClass } from "@/components/num";
 
 export function ConsensusPanel({
   market,
@@ -109,7 +110,7 @@ export function ConsensusPanel({
                 yAxisId="eps"
                 dataKey="eps"
                 name="EPS"
-                stroke="oklch(0.62 0.19 30)"
+                stroke="var(--muted-foreground)"
                 strokeWidth={2}
                 dot={{ r: 3 }}
                 connectNulls
@@ -189,8 +190,12 @@ export function ConsensusPanel({
                     <td
                       className={cn(
                         "py-1.5",
-                        s.surprisePct != null && s.surprisePct > 0 && "text-up",
-                        s.surprisePct != null && s.surprisePct < 0 && "text-down",
+                        s.surprisePct != null &&
+                          s.surprisePct > 0 &&
+                          stockDirClass(true, market),
+                        s.surprisePct != null &&
+                          s.surprisePct < 0 &&
+                          stockDirClass(false, market),
                       )}
                     >
                       {s.surprisePct == null ? "-" : pct(s.surprisePct)}
