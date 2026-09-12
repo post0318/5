@@ -98,8 +98,17 @@ function excerptFromPdfText(text, stockName, symbol) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
+// "투자의견 Buy, 목표주가 300,000원 유지" 처럼 붙어 있는 경우가 많지만,
+// 만원 단위("~만원")로 쓰는 리포트도 있어 둘 다 처리한다.
+function extractTargetPrice(text) {
+  const m = text.match(/목표주가\s*([\d,]+)\s*(만)?원/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
-  if (!pdfUrl) return "";
+  if (!pdfUrl) return { summary: "", targetPrice: null };
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -107,10 +116,10 @@ async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return excerptFromPdfText(text, stockName, symbol);
+    return { summary: excerptFromPdfText(text, stockName, symbol), targetPrice: extractTargetPrice(text) };
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return "";
+    return { summary: "", targetPrice: null };
   }
 }
 
@@ -177,7 +186,9 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  it.summary = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
+  const { summary, targetPrice } = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
+  it.summary = summary;
+  it.targetPrice = targetPrice;
   if (it.pdfUrl && !it.summary) excerptFailCount++;
   await sleep(400);
 }

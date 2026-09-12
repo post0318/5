@@ -26,6 +26,8 @@ export interface ShinhanResearchDoc {
   symbol: string | null;
   analyst: string;
   opinion: string;
+  /** 목표주가(원) — 소스에 없거나 못 뽑으면 null(예: Not Rated 리포트). */
+  targetPrice: number | null;
   summary: string;
   pdfUrl: string | null;
   views: number | null;
@@ -73,6 +75,25 @@ export async function upsertShinhanResearch(
 }
 
 /**
+ * 같은 증권사가 제목까지 완전히 같은 리포트를 두 게시글 번호로 중복 게시한
+ * 경우(실측: 신한투자증권, 2026-09 — 인접한 두 sno에 동일 리포트) 화면엔
+ * 하나만 보여준다. source가 다르면(예: 유안타증권 자체 수집 vs 한경 컨센서스
+ * 경유 유안타증권) 의도적으로 별개 카드로 남겨둔다(CLAUDE.md 참고 — 기능상
+ * 문제 없는 것으로 이미 합의된 트레이드오프).
+ */
+function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
+  const seen = new Set<string>();
+  const result: ShinhanResearchDoc[] = [];
+  for (const d of docs) {
+    const key = `${d.source}|${d.title.trim()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(d);
+  }
+  return result;
+}
+
+/**
  * 최근 3개월 내 리포트를 우선 반환하고, 없으면(커버리지가 뜸한 종목) 기간
  * 제한 없이 가장 최근 것으로 확대해서 보여준다 — "없음"보다 "오래됐지만
  * 있는 것"이 낫다는 원칙.
@@ -90,15 +111,18 @@ export async function getShinhanResearchBySymbol(
   const marketFilter =
     market === "kr" ? { $or: [{ market }, { market: { $exists: false } }] } : { market };
   const recentCutoff = new Date(Date.now() - RECENT_WINDOW_MS).toISOString().slice(0, 10);
+  // 중복 제거로 개수가 줄어들 수 있어 limit보다 넉넉히 가져온 뒤 잘라낸다.
+  const fetchLimit = limit + 10;
   const recent = await col
     .find({ ...marketFilter, symbol, date: { $gte: recentCutoff } })
     .sort({ date: -1 })
-    .limit(limit)
+    .limit(fetchLimit)
     .toArray();
-  if (recent.length > 0) return recent;
-  return col
+  if (recent.length > 0) return dedupeBySourceTitle(recent).slice(0, limit);
+  const fallback = await col
     .find({ ...marketFilter, symbol })
     .sort({ date: -1 })
-    .limit(Math.min(limit, 3))
+    .limit(fetchLimit)
     .toArray();
+  return dedupeBySourceTitle(fallback).slice(0, Math.min(limit, 3));
 }

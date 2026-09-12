@@ -92,8 +92,16 @@ function excerptFromPdfText(text) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
+// 통계 블록 첫 줄이 항상 "목표주가 470,000원 (D)" 또는 미제시 시 "목표주가 -원 (M)".
+function extractTargetPrice(text) {
+  const m = text.match(/목표주가\s*([\d,]+|-)\s*원/);
+  if (!m || m[1] === "-") return null;
+  const n = Number(m[1].replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
 async function extractPdfExcerpt(pdfUrl) {
-  if (!pdfUrl) return "";
+  if (!pdfUrl) return { summary: "", targetPrice: null };
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -101,10 +109,10 @@ async function extractPdfExcerpt(pdfUrl) {
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return excerptFromPdfText(text);
+    return { summary: excerptFromPdfText(text), targetPrice: extractTargetPrice(text) };
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return "";
+    return { summary: "", targetPrice: null };
   }
 }
 
@@ -187,7 +195,7 @@ console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 const items = [];
 let excerptFailCount = 0;
 for (const it of collected) {
-  const summary = await extractPdfExcerpt(it.pdfUrl);
+  const { summary, targetPrice } = await extractPdfExcerpt(it.pdfUrl);
   if (it.pdfUrl && !summary) excerptFailCount++;
   items.push({
     id: it.id,
@@ -197,6 +205,7 @@ for (const it of collected) {
     symbol: it.symbolHint,
     analyst: "",
     opinion: it.opinion,
+    targetPrice,
     summary,
     pdfUrl: it.pdfUrl,
     views: null,

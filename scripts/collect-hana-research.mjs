@@ -70,6 +70,14 @@ function excerpt(text) {
   return flat.length > EXCERPT_LEN ? `${flat.slice(0, EXCERPT_LEN)}…` : flat;
 }
 
+// 실적 속보성 리포트는 목표주가 언급이 없는 경우가 많음 — 있으면만 뽑는다.
+function extractTargetPrice(text) {
+  const m = String(text ?? "").match(/목표주가\s*[:：]?\s*([\d,]+)\s*(만)?원/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function stripHtml(s) {
   return s
     .replace(/<[^>]+>/g, "")
@@ -111,6 +119,7 @@ function parseItems(html) {
       stockName: tm ? tm[1].trim() : title,
       symbolHint: tm ? tm[2].slice(0, 6) : null,
       opinion: tm ? tm[3].trim() : "",
+      targetPrice: extractTargetPrice(rawBody),
       summary: excerpt(stripHtml(rawBody)),
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
     });
@@ -165,6 +174,7 @@ const items = collected.map((it) => ({
   symbol: it.symbolHint,
   analyst: "",
   opinion: it.opinion,
+  targetPrice: it.targetPrice,
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,

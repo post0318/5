@@ -150,20 +150,39 @@ function excerptFromPdfText(text) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
+// 교보는 "Buy\t상향" + "TP 380,000 원\t상향" 처럼 다른 증권사와 다른 라벨을
+// 쓴다("목표주가"가 아니라 "TP"). "Spot Brief"·"탐방노트" 등 약식 리포트는
+// 이 헤더 자체가 없어 null.
+function extractOpinion(text) {
+  const m = text.match(/^(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated)\b/m);
+  return m ? m[1] : "";
+}
+function extractTargetPrice(text) {
+  const m = text.match(/\bTP\s*([\d,]+)\s*원/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 async function extractExcerpt(sno) {
   try {
     const pdfUrl = await fetchPdfUrl(sno);
-    if (!pdfUrl) return { pdfUrl: null, summary: "" };
+    if (!pdfUrl) return { pdfUrl: null, summary: "", opinion: "", targetPrice: null };
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const buf = Buffer.from(await res.arrayBuffer());
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return { pdfUrl, summary: excerptFromPdfText(text) };
+    return {
+      pdfUrl,
+      summary: excerptFromPdfText(text),
+      opinion: extractOpinion(text),
+      targetPrice: extractTargetPrice(text),
+    };
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (sno=${sno}): ${err.message}`);
-    return { pdfUrl: null, summary: "" };
+    return { pdfUrl: null, summary: "", opinion: "", targetPrice: null };
   }
 }
 
@@ -195,9 +214,11 @@ console.log("  최근 3건:", collected.slice(0, 3).map((i) => `${i.date} ${i.st
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { pdfUrl, summary } = await extractExcerpt(it.id);
+  const { pdfUrl, summary, opinion, targetPrice } = await extractExcerpt(it.id);
   it.pdfUrl = pdfUrl ?? `https://www.iprovest.com/weblogic/RSReportServlet?scr_id=32&mode=detail&menuCode=1&pageNum=1&sno=${it.id}`;
   it.summary = summary;
+  it.opinion = opinion;
+  it.targetPrice = targetPrice;
   if (!summary) excerptFailCount++;
   await sleep(400);
 }
@@ -216,7 +237,8 @@ const items = collected.map((it) => ({
   stockName: it.stockName,
   symbol: null, // 서버가 corpcode.ts 이름 검색으로 매핑
   analyst: "",
-  opinion: "",
+  opinion: it.opinion,
+  targetPrice: it.targetPrice,
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,

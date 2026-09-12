@@ -108,10 +108,11 @@ function parseItems(html) {
 const DETAIL_URL = "https://securities.miraeasset.com/bbs/board/message/view.do";
 const EXCERPT_LEN = 150;
 
-function excerptFromHtml(html) {
-  const m = html.match(/id="messageContentsDiv"[^>]*>([\s\S]*?)<\/div>\s*<\/td>/);
-  if (!m) return "";
-  const flat = stripHtml(m[1]).replace(/\s{2,}/g, " ").trim();
+function stripHtml(s) {
+  return s.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim();
+}
+
+function excerptFromFlat(flat) {
   if (!flat) return "";
   if (flat.length <= EXCERPT_LEN) return flat;
   const cut = flat.slice(0, EXCERPT_LEN);
@@ -119,11 +120,15 @@ function excerptFromHtml(html) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-function stripHtml(s) {
-  return s.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim();
+// 본문에 "목표주가를 310만원(기존 280만원)으로" 처럼 만원 단위로도 등장한다.
+function extractTargetPrice(flatText) {
+  const m = flatText.match(/목표주가(?:를|는|가)?\s*([\d,]+)\s*(만)?원/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-async function extractDetailExcerpt(id, messageNumber) {
+async function extractDetail(id, messageNumber) {
   try {
     const url = new URL(DETAIL_URL);
     url.searchParams.set("messageId", id);
@@ -132,10 +137,12 @@ async function extractDetailExcerpt(id, messageNumber) {
     const res = await fetch(url, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = new TextDecoder("euc-kr").decode(await res.arrayBuffer());
-    return excerptFromHtml(html);
+    const m = html.match(/id="messageContentsDiv"[^>]*>([\s\S]*?)<\/div>\s*<\/td>/);
+    const flat = m ? stripHtml(m[1]).replace(/\s{2,}/g, " ").trim() : "";
+    return { summary: excerptFromFlat(flat), targetPrice: extractTargetPrice(flat) };
   } catch (err) {
     console.warn(`  ⚠ 본문 발췌 실패 (id=${id}): ${err.message}`);
-    return "";
+    return { summary: "", targetPrice: null };
   }
 }
 
@@ -170,7 +177,9 @@ console.log(
 console.log(`▶ 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  it.summary = await extractDetailExcerpt(it.id, it.messageNumber);
+  const { summary, targetPrice } = await extractDetail(it.id, it.messageNumber);
+  it.summary = summary;
+  it.targetPrice = targetPrice;
   if (!it.summary) excerptFailCount++;
   await sleep(400);
 }
@@ -190,6 +199,7 @@ const items = collected.map((it) => ({
   symbol: it.symbolHint,
   analyst: it.analyst,
   opinion: it.opinion,
+  targetPrice: it.targetPrice,
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,

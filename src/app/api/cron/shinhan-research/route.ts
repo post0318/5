@@ -35,6 +35,7 @@ interface RawItem {
   symbol?: string | null;
   analyst: string;
   opinion: string;
+  targetPrice?: number | null;
   summary: string;
   pdfUrl: string | null;
   views: number | null;
@@ -71,6 +72,7 @@ export async function POST(req: Request) {
       symbol: it.symbol ?? (market === "kr" ? resolveSymbol(it.stockName) : null),
       analyst: it.analyst,
       opinion: it.opinion,
+      targetPrice: it.targetPrice ?? null,
       summary: it.summary,
       pdfUrl: it.pdfUrl,
       views: it.views,

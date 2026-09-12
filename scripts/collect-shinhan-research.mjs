@@ -69,6 +69,16 @@ function excerpt(text) {
   return flat.length > EXCERPT_LEN ? `${flat.slice(0, EXCERPT_LEN)}…` : flat;
 }
 
+// 본문(f7) 뒷부분에 "매수 의견과 목표주가 65만원 유지" 처럼 만원 단위로
+// 섞여 나온다 — excerpt()로 자르기 전 원문 전체에서 뽑는다(300자 넘어가는
+// 경우가 많음).
+function extractTargetPrice(text) {
+  const m = String(text ?? "").match(/목표주가\s*([\d,]+)\s*(만)?원/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 async function fetchPage(curPage, startId) {
   const url = new URL(BASE);
   url.searchParams.set("v", String(Date.now()));
@@ -107,6 +117,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       stockName: it.f2,
       analyst: it.f4,
       opinion: it.f6,
+      targetPrice: extractTargetPrice(it.f7),
       summary: excerpt(it.f7),
       pdfUrl: it.f3 || null,
       views: Number(it.f5) || null,

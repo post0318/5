@@ -101,8 +101,21 @@ function excerptFromPdfText(text) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
+// 헤더 블록에 "Buy(유지)" 같은 등급 줄과 "목표주가 30,000원 (상향)" 줄이
+// 고정으로 등장한다(Yuanta·KB와 동일 계열 템플릿).
+function extractOpinion(text) {
+  const m = text.match(/^(Strong Buy|Buy|Hold|Sell|매수|중립|매도)\s*[\(（]/m);
+  return m ? m[1] : "";
+}
+function extractTargetPrice(text) {
+  const m = text.match(/목표주가\s*([\d,]+)\s*원/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
 async function extractPdfExcerpt(pdfUrl) {
-  if (!pdfUrl) return "";
+  if (!pdfUrl) return { summary: "", opinion: "", targetPrice: null };
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -110,10 +123,14 @@ async function extractPdfExcerpt(pdfUrl) {
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return excerptFromPdfText(text);
+    return {
+      summary: excerptFromPdfText(text),
+      opinion: extractOpinion(text),
+      targetPrice: extractTargetPrice(text),
+    };
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return "";
+    return { summary: "", opinion: "", targetPrice: null };
   }
 }
 
@@ -216,7 +233,10 @@ for (const it of collected) {
     excerptCache.set(it.pdfUrl, await extractPdfExcerpt(it.pdfUrl));
     await sleep(500);
   }
-  it.summary = excerptCache.get(it.pdfUrl);
+  const { summary, opinion, targetPrice } = excerptCache.get(it.pdfUrl);
+  it.summary = summary;
+  it.opinion = opinion;
+  it.targetPrice = targetPrice;
   if (!it.summary) excerptFailCount++;
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건, PDF ${excerptCache.size}개)`);

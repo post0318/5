@@ -143,6 +143,18 @@ function excerptFromPdfText(text) {
   const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
+// 브로커마다 표기가 제각각이라 흔한 등급 표현만 느슨하게 매칭(최선 노력 —
+// 못 찾으면 null, 다른 소스처럼 강제로 채우지 않는다).
+function extractOpinion(text) {
+  const m = text.match(/(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated|Positive|Negative|Neutral)|(강력매수|매수|중립|매도|비중확대|비중축소)/);
+  return m ? (m[1] || m[2]) : "";
+}
+function extractTargetPrice(text) {
+  const m = text.match(/목표주가\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?\s*원/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 async function extractPdfExcerpt(pdfUrl) {
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
@@ -151,10 +163,14 @@ async function extractPdfExcerpt(pdfUrl) {
     const parser = new PDFParse({ data: buf });
     const { text } = await parser.getText();
     await parser.destroy();
-    return excerptFromPdfText(text);
+    return {
+      summary: excerptFromPdfText(text),
+      opinion: extractOpinion(text),
+      targetPrice: extractTargetPrice(text),
+    };
   } catch (err) {
     console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return "";
+    return { summary: "", opinion: "", targetPrice: null };
   }
 }
 
@@ -184,7 +200,10 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  it.summary = await extractPdfExcerpt(it.pdfUrl);
+  const { summary, opinion, targetPrice } = await extractPdfExcerpt(it.pdfUrl);
+  it.summary = summary;
+  it.opinion = opinion;
+  it.targetPrice = targetPrice;
   if (!it.summary) excerptFailCount++;
   await sleep(400);
 }
@@ -216,7 +235,8 @@ for (const it of collected) {
     stockName: it.stockName,
     symbol: it.symbolHint,
     analyst: it.analyst,
-    opinion: "",
+    opinion: it.opinion,
+    targetPrice: it.targetPrice,
     summary: it.summary,
     pdfUrl: it.pdfUrl,
     views: null,

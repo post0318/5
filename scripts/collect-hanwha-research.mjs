@@ -60,6 +60,13 @@ function stripHtml(s) {
   return s.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim();
 }
 
+function extractTargetPrice(text) {
+  const m = String(text ?? "").match(/목표주가\s*[:：]?\s*([\d,]+)\s*(만)?원/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 // 제목 형식: "[업종] 종목명[코드/의견] 나머지" — 업종 태그는 매칭 전에 먼저 떼어낸다.
 const SECTOR_TAG_RE = /^\[[^\]]+\]\s*/;
 const TITLE_RE = /^(.+?)\[(\d{6}[A-Z0-9]*)\/([^\]]+)\]\s*(.+)$/;
@@ -95,6 +102,7 @@ function parseItems(html) {
       symbolHint: tm ? tm[2].slice(0, 6) : null,
       opinion: tm ? tm[3].trim() : "",
       analyst: analyst.trim(),
+      targetPrice: extractTargetPrice(rawSummary),
       summary: excerpt(stripHtml(rawSummary)),
       pdfUrl: `https://www.hanwhawm.com/main/research/main/view.cmd?depth3_id=${depth3}&mode=&seq=${seq}&p=`,
     });
@@ -142,6 +150,7 @@ const items = collected.map((it) => ({
   symbol: it.symbolHint,
   analyst: it.analyst,
   opinion: it.opinion,
+  targetPrice: it.targetPrice,
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,
