@@ -102,6 +102,7 @@ const ALLOWED_PUBLISHERS = new Set(
     "Kyodo News",
     // 한국 (도메인 매칭 결과 값 — KR_PUBLISHER_BY_DOMAIN 과 동일 목록 유지)
     "연합뉴스",
+    "뉴시스", // 연합뉴스급 정식 통신사인데 누락돼 있었음(2026-09, 오너 확인)
     "한국경제",
     "매일경제",
     "서울경제",
@@ -116,6 +117,7 @@ const ALLOWED_PUBLISHERS = new Set(
 /** 한국 뉴스 원문 링크 도메인 → 언론사명. 없는 도메인은 화이트리스트 밖으로 처리. */
 const KR_PUBLISHER_BY_DOMAIN: Record<string, string> = {
   "yna.co.kr": "연합뉴스",
+  "newsis.com": "뉴시스",
   "hankyung.com": "한국경제",
   "mk.co.kr": "매일경제",
   "sedaily.com": "서울경제",
