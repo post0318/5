@@ -45,6 +45,7 @@ const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/shinhan-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -129,7 +130,8 @@ if (DRY_RUN) {
 }
 
 const headers = { "Content-Type": "application/json" };
-if (CRON_SECRET) headers.Authorization = `Bearer ${CRON_SECRET}`;
+if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
 // /api/cron/shinhan-research 는 body 최상위 하나의 source만 받아 그 안의 모든
 // items에 적용한다. 이 스크립트는 항목마다 작성 증권사(제공출처)가 달라서,
