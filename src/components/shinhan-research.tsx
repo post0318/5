@@ -29,14 +29,18 @@ function normalizeOpinion(raw: string): string {
   return s; // Not Rated 등은 원문 그대로(색상 없음)
 }
 
-/** 한국 종목 전용 기능이라 등락 색상 관행(상승=빨강·하락=파랑)을 그대로 매수/매도에 적용. */
-const OPINION_CLASS: Record<string, string> = {
-  강력매수: "text-kr-up",
-  매수: "text-kr-up",
-  중립: "text-muted-foreground",
-  매도: "text-kr-down",
-  강력매도: "text-kr-down",
-};
+/** 시장별 등락 색상 관행 그대로 매수/매도에 적용(한국=상승 빨강·하락 파랑,
+ * 미국=상승 초록·하락 빨강 — components/num.tsx 의 stockDirClass 와 동일 규칙). */
+function opinionClass(opinion: string, market: "kr" | "us"): string {
+  if (opinion === "강력매수" || opinion === "매수") {
+    return market === "kr" ? "text-kr-up" : "text-up";
+  }
+  if (opinion === "강력매도" || opinion === "매도") {
+    return market === "kr" ? "text-kr-down" : "text-down";
+  }
+  if (opinion === "중립") return "text-muted-foreground";
+  return "";
+}
 
 function Pager({
   page,
@@ -72,20 +76,21 @@ function Pager({
 type Category = "전체" | "기업" | "산업";
 
 /**
- * 증권사 리서치(기업분석) 리포트 — 한국 종목만, DB만 읽음(로컬 스크립트가 수집,
- * CLAUDE.md 예외 참고). 여러 증권사를 합쳐 보여주는 걸 전제로 만들어서 항목마다
+ * 증권사 리서치(기업분석) 리포트 — 한국(다수 증권사)·미국(GlobalMonitor 경유
+ * 다수 증권사, 2026-09 추가) 종목, DB만 읽음(로컬 스크립트가 수집, CLAUDE.md
+ * 예외 참고). 여러 증권사를 합쳐 보여주는 걸 전제로 만들어서 항목마다
  * 출처(source)를 표시한다. 기업/산업 구분(2026-09 추가) — 현재 모든 수집기가
  * 기업분석만 수집해 "산업" 탭은 당장은 항상 비어있음(수집기 확장은 후속 과제).
  */
-export function ShinhanResearch({ symbol }: { symbol: string }) {
+export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbol: string }) {
   const [category, setCategory] = useState<Category>("전체");
   const [page, setPage] = useState(1);
 
   const q = useQuery({
-    queryKey: ["shinhan-research", symbol],
+    queryKey: ["shinhan-research", market, symbol],
     queryFn: () =>
       apiFetch<{ items: ShinhanResearchDoc[] }>(
-        `/api/markets/kr/${encodeURIComponent(symbol)}/research`,
+        `/api/markets/${market}/${encodeURIComponent(symbol)}/research`,
       ),
     enabled: Boolean(symbol),
     staleTime: 30 * 60_000,
@@ -153,7 +158,7 @@ export function ShinhanResearch({ symbol }: { symbol: string }) {
                         {it.title}
                       </div>
                       {opinion && (
-                        <span className={cn("shrink-0 text-xs font-semibold", OPINION_CLASS[opinion] ?? "")}>
+                        <span className={cn("shrink-0 text-xs font-semibold", opinionClass(opinion, market))}>
                           {opinion}
                         </span>
                       )}

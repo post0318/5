@@ -1,24 +1,28 @@
 import "server-only";
 import type { Collection } from "mongodb";
 import { getDb } from "./index";
+import type { MarketId } from "../markets/types";
 
 /**
  * 증권사 리서치(기업분석) 리포트 — 개인용 로컬 수집 (CLAUDE.md 예외 참고).
- * 지금은 신한투자증권 한 곳만 수집하지만, 여러 증권사를 붙일 걸 감안해 스키마에
- * `source`를 두고 `_id`도 `${source}:${게시글번호}`로 네임스페이스했다(증권사별
- * ID 체계가 달라 충돌 방지). 원문 PDF·전체 본문은 저장하지 않고 목록에 이미
- * 노출되는 요약(summary)·메타만 저장한다(용량: 건당 1~2KB 수준). 180일 지난
- * 리포트는 수집 시점마다 정리한다(표시는 최근 3개월 우선, 없으면 더 오래된
- * 것으로 확대 — getShinhanResearchBySymbol).
+ * 여러 증권사를 붙일 걸 감안해 스키마에 `source`를 두고 `_id`도
+ * `${source}:${게시글번호}`로 네임스페이스했다(증권사별 ID 체계가 달라 충돌
+ * 방지). 원문 PDF·전체 본문은 저장하지 않고 목록에 이미 노출되는 요약
+ * (summary)·메타만 저장한다(용량: 건당 1~2KB 수준). 180일 지난 리포트는
+ * 수집 시점마다 정리한다(표시는 최근 3개월 우선, 없으면 더 오래된 것으로
+ * 확대 — getShinhanResearchBySymbol).
  */
 export interface ShinhanResearchDoc {
   _id: string; // `${source}:${증권사 게시글 번호}`
-  /** 증권사명 — 지금은 "신한투자증권"만. 추가 증권사 연동 대비 필드. */
+  /** 증권사명 — "신한투자증권" 등. 여러 증권사 연동 대비 필드. */
   source: string;
+  /** 종목의 상장 시장(2026-09 추가, GlobalMonitor의 미국주식 리포트 수집으로
+   * 한국 전용이 아니게 됨) — 컬렉션 이름(kr_research)은 유지하되 필드로 구분. */
+  market: MarketId;
   date: string; // ISO (YYYY-MM-DD)
   title: string;
   stockName: string;
-  /** 종목명 → 6자리 종목코드 매핑 실패 시 null (필터링 대상에서 제외됨). */
+  /** 종목명 → 종목코드 매핑 실패 시 null (필터링 대상에서 제외됨). */
   symbol: string | null;
   analyst: string;
   opinion: string;
@@ -41,7 +45,7 @@ const RECENT_WINDOW_MS = 90 * 24 * 3600_000;
 export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDoc>> {
   const db = await getDb();
   const col = db.collection<ShinhanResearchDoc>("kr_research");
-  await col.createIndex({ symbol: 1, date: -1 }).catch(() => {});
+  await col.createIndex({ market: 1, symbol: 1, date: -1 }).catch(() => {});
   return col;
 }
 
@@ -74,16 +78,27 @@ export async function upsertShinhanResearch(
  * 있는 것"이 낫다는 원칙.
  */
 export async function getShinhanResearchBySymbol(
+  market: MarketId,
   symbol: string,
   limit = 20,
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
+  // market 필드는 2026-09 미국주식 리서치(GlobalMonitor) 추가 시 도입됨 — 그
+  // 이전 문서(전부 한국 브로커 수집분)는 이 필드 자체가 없다. market="kr" 조회
+  // 시에만 필드 없는 레거시 문서도 함께 매칭(하위호환), 다른 시장은 필드가
+  // 명시적으로 있는 문서만 — DB 마이그레이션 없이도 기존 데이터가 안 사라짐.
+  const marketFilter =
+    market === "kr" ? { $or: [{ market }, { market: { $exists: false } }] } : { market };
   const recentCutoff = new Date(Date.now() - RECENT_WINDOW_MS).toISOString().slice(0, 10);
   const recent = await col
-    .find({ symbol, date: { $gte: recentCutoff } })
+    .find({ ...marketFilter, symbol, date: { $gte: recentCutoff } })
     .sort({ date: -1 })
     .limit(limit)
     .toArray();
   if (recent.length > 0) return recent;
-  return col.find({ symbol }).sort({ date: -1 }).limit(Math.min(limit, 3)).toArray();
+  return col
+    .find({ ...marketFilter, symbol })
+    .sort({ date: -1 })
+    .limit(Math.min(limit, 3))
+    .toArray();
 }

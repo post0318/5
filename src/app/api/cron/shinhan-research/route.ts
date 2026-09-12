@@ -2,6 +2,7 @@ import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
 import { upsertShinhanResearch, type ShinhanResearchDoc } from "@/lib/db/shinhan-research";
 import { searchCorps } from "@/lib/markets/kr/corpcode";
+import { isMarketId } from "@/lib/markets/types";
 
 export const maxDuration = 60;
 
@@ -54,18 +55,20 @@ export async function POST(req: Request) {
     if (!authorized(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
 
-    const body = (await req.json()) as { items?: RawItem[]; source?: string };
+    const body = (await req.json()) as { items?: RawItem[]; source?: string; market?: string };
     if (!Array.isArray(body.items)) return Response.json({ error: "items 배열 필요" }, { status: 400 });
     const source = body.source?.trim() || "신한투자증권";
+    const market = body.market && isMarketId(body.market) ? body.market : "kr";
 
     const now = new Date().toISOString();
     const docs: ShinhanResearchDoc[] = body.items.map((it) => ({
       _id: `${source}:${it.id}`,
       source,
+      market,
       date: it.date,
       title: it.title,
       stockName: it.stockName,
-      symbol: it.symbol ?? resolveSymbol(it.stockName),
+      symbol: it.symbol ?? (market === "kr" ? resolveSymbol(it.stockName) : null),
       analyst: it.analyst,
       opinion: it.opinion,
       summary: it.summary,
