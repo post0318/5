@@ -294,12 +294,26 @@ function isDomesticRelevant(
  * 실패(빈 배열로 조용히 폴백돼 "해외 뉴스 없음"처럼 보였던 원인). 영문명
  * ("Samsung Electronics")이나 티커로 바꾸면 정상 응답한다. `corpcode.ts` 의
  * 정적 상장사 목록(DART_API_KEY 불필요)에서 영문명을 찾아 대체.
+ *
+ * `corpEngName` 은 DART 등록 정식 법인명이라 "CO,.LTD"/"Inc." 같은 법인격
+ * 접미사가 붙어있는데, 실측 결과 이 접미사가 있으면 야후 검색 품질이 다시
+ * 나빠진다("SAMSUNG ELECTRONICS CO,.LTD" 는 무관한 결과 1건, "Samsung
+ * Electronics" 는 관련 결과 10건). 접미사를 제거한 짧은 이름으로 검색한다.
  */
+const LEGAL_SUFFIXES = new Set(["CO", "LTD", "INC", "CORP", "CORPORATION", "LIMITED", "COMPANY", "PLC"]);
+function stripLegalSuffix(engName: string): string {
+  const words = engName.split(/[\s,.]+/).filter(Boolean);
+  while (words.length > 1 && LEGAL_SUFFIXES.has(words[words.length - 1].toUpperCase())) {
+    words.pop();
+  }
+  return words.join(" ");
+}
+
 function overseasQuery(market: MarketId, symbol: string, companyName: string): string {
   if (market !== "kr") return companyName;
   try {
     const eng = resolveCorpCode("", symbol).corpEngName;
-    return eng || companyName;
+    return eng ? stripLegalSuffix(eng) : companyName;
   } catch {
     return companyName;
   }
