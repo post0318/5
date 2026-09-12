@@ -64,30 +64,10 @@ export function ConsensusPanel({
     est: r.isEstimate,
   }));
 
-  const recTxt =
-    d.recommendationMean == null
-      ? null
-      : d.recommendationMean <= 2
-        ? "매수 우위"
-        : d.recommendationMean <= 3
-          ? "중립"
-          : "매도 우위";
-
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
-          컨센서스
-          <span className="text-muted-foreground text-xs font-normal">
-            실적: 공시 재무제표 · 추정: yahoo 개인용
-          </span>
-          {d.targetPrice != null && (
-            <span className="text-muted-foreground ml-auto text-xs font-normal">
-              목표주가 {won(d.targetPrice)} · 투자의견{" "}
-              {d.recommendationMean != null ? `${formatNumber(d.recommendationMean, 2)} (${recTxt})` : "-"}
-            </span>
-          )}
-        </CardTitle>
+        <CardTitle className="text-sm">컨센서스</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
         {/* 매출·EPS 추이 차트 */}
@@ -122,8 +102,8 @@ export function ConsensusPanel({
                 dataKey="revenue"
                 name={`매출액(${bigUnit})`}
                 radius={[3, 3, 0, 0]}
-                fill="oklch(0.72 0.11 250)"
-                fillOpacity={0.75}
+                fill="oklch(0.80 0.09 55)"
+                fillOpacity={0.85}
               />
               <Line
                 yAxisId="eps"
@@ -229,6 +209,8 @@ export function ConsensusPanel({
             hint="영업이익·순이익 컨센서스, 추정치 리비전 이력은 원본에서 확인"
           />
         )}
+
+        <p className="text-muted-foreground/70 text-[11px]">출처: Yahoo Finance</p>
       </CardContent>
     </Card>
   );

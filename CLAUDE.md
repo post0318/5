@@ -100,6 +100,18 @@ npm run db:studio    # drizzle studio
     다른 항목과 동일하게 예외 승인 필요 — 승인은 됐으나 실제 로딩에 쓰는
     JSON 엔드포인트를 아직 못 찾음(추정 경로 시도 실패). 다음 작업 시
     실제 API 경로부터 확인할 것.
+  - **예외 3건 (개인용, 오너 명시 승인, 2026-09)**: 신한투자증권 "기업분석"
+    리포트 — `bbs2.shinhansec.com/bbs/list/gicompanyanalyst` (로그인 불필요
+    JSON API, 페이지 소스엔 없고 클라이언트 JS가 호출하는 내부 엔드포인트를
+    역추적해 확인). `bbs2.shinhansec.com/robots.txt` 가 `Disallow: /` 라
+    다른 항목과 동일 조건(개인용·로컬 실행·저빈도)으로 예외 승인.
+    **로컬 전용 스크립트** (`scripts/collect-shinhan-research.mjs`, 하루 1회
+    GitHub Actions `.github/workflows/shinhan-research.yml`)가 최근 N일치를
+    수집해 `/api/cron/shinhan-research` 로 POST → MongoDB(`shinhan_research`)
+    저장. 원본 PDF·전체 본문은 저장하지 않고 목록에 이미 노출되는 요약 발췌만
+    저장(용량 관리). 앱 배포본은 DB 조회만(`/api/markets/kr/[symbol]/research`)
+    — 크롤링 코드가 배포본에 없다는 원칙은 동일. 종목명→종목코드 매핑은
+    `lib/markets/kr/corpcode.ts`(정적 데이터, DART_API_KEY 불필요) 재사용.
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로
@@ -148,7 +160,12 @@ npm run db:studio    # drizzle studio
 
 - 세련된 금융 대시보드. 정보 밀도 높되 정돈된 그리드, 카드 기반.
 - 뉴트럴 베이스 + 포인트 컬러 절제. 다크/라이트 모드.
-- 등락 색상은 시장 관행 (옵션화).
+- 등락 색상은 시장 관행: **한국은 상승=빨강·하락=파랑, 미국/일본은 상승=녹색·
+  하락=적색**(2026-09 확정). `--kr-up`/`--kr-down`(globals.css) +
+  `stockDirClass(positive, market)`(`components/num.tsx`)로 구현. 적용 대상은
+  **주가·투자의견과 직접 연계된 표시만**(종가·목표주가 등락률, 52주 최고/최저,
+  Yahoo 추천의견, 캔들차트) — 재무제표의 마이너스 값(빨간 텍스트)·성장률%
+  등에는 적용하지 않는다(그쪽은 시장 무관 고정 규칙, 별개).
 - 차트·테이블도 동일 디자인 토큰 공유.
 
 ## 대화

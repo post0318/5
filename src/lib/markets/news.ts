@@ -245,6 +245,19 @@ export async function fetchStockNews(
  * 대비 최대 30건까지 확보. 기존 fetchStockNews(유니버스통합뉴스 등에서 사용,
  * 시장별 단일 소스·90일·20건)는 동작 그대로 둔다.
  */
+/**
+ * 종목명이 제목·요약 어디에도 없으면 걸러낸다(네이버 검색이 종목명을 본문 어딘가에만
+ * 언급한, 사실상 무관한 기사까지 끌고 오는 사례가 있음 — 예: "삼성전자" 검색인데
+ * "집살게요"류 제목의 부동산·생활기사). 회사명을 모르면(심볼 폴백) 과잉 차단을
+ * 피하기 위해 필터를 건너뛴다. 해외(영문) 기사는 한국어 회사명이 원문에 나올 수
+ * 없으므로 이 필터 대상이 아니다.
+ */
+function isDomesticRelevant(companyName: string | null | undefined, title: string, excerpt?: string): boolean {
+  const name = companyName?.trim();
+  if (!name) return true;
+  return title.includes(name) || (excerpt != null && excerpt.includes(name));
+}
+
 export async function fetchStockNewsBySide(
   market: MarketId,
   symbol: string,
@@ -255,8 +268,11 @@ export async function fetchStockNewsBySide(
     fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30 }),
     fetchUsJpNews(market, symbol, query, { cutoffMs: ONE_WEEK_MS, newsCount: 30 }),
   ]);
+  const domesticFiltered = domesticRaw.filter((it) =>
+    isDomesticRelevant(companyName, it.title, it.excerpt),
+  );
   const [domestic, overseas] = await Promise.all([
-    withTranslatedTitles("ko", domesticRaw),
+    withTranslatedTitles("ko", domesticFiltered),
     withTranslatedTitles("en", overseasRaw),
   ]);
   return { domestic, overseas };

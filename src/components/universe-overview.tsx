@@ -239,7 +239,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                         <Money value={r.last} currency={r.currency ?? "USD"} />
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <ChangePercent value={r.changePct} />
+                        <ChangePercent value={r.changePct} market={r.market} />
                       </td>
                       <td className="tnum px-3 py-2 text-right">
                         {formatMarketCap(r.marketCap, r.market)}

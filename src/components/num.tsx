@@ -75,15 +75,28 @@ export function Percent({
   return wrap(formatPercent(value, { alreadyPercent, fallback }), value, rest);
 }
 
-/** 등락률: 부호에 따라 up/down 색상 (음수만 빨강이 아니라 양수도 녹색) */
+/**
+ * 등락 방향 색상 클래스. 기본(미국 등)은 상승 녹색·하락 적색, market="kr"이면
+ * 상승 빨강·하락 파랑(국내 관행)으로 뒤집는다. 주가·투자의견 등 "등락" 표시에만
+ * 쓰고, 재무제표 마이너스 표기(Money 등의 colorNegative)에는 적용하지 않는다.
+ */
+export function stockDirClass(positive: boolean, market?: "kr" | "us" | "jp" | string): string {
+  if (market === "kr") return positive ? "text-kr-up" : "text-kr-down";
+  return positive ? "text-up" : "text-down";
+}
+
+/** 등락률: 부호에 따라 up/down 색상 (음수만 빨강이 아니라 양수도 녹색). market="kr"이면 색상 반전. */
 export function ChangePercent({
   value,
   className,
   fallback = "-",
+  market,
 }: {
   value: number | null | undefined;
   className?: string;
   fallback?: string;
+  /** "kr"이면 상승=빨강·하락=파랑(국내 관행)으로 색상 반전. 미지정 시 기본(상승 녹색·하락 적색). */
+  market?: "kr" | "us" | "jp" | string;
 }) {
   if (value == null || !Number.isFinite(value)) {
     return <span className={cn("tnum text-muted-foreground", className)}>{fallback}</span>;
@@ -93,8 +106,8 @@ export function ChangePercent({
     <span
       className={cn(
         "tnum",
-        value > 0 && "text-up",
-        value < 0 && "text-down",
+        value > 0 && stockDirClass(true, market),
+        value < 0 && stockDirClass(false, market),
         value === 0 && "text-muted-foreground",
         className,
       )}

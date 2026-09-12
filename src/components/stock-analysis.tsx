@@ -18,12 +18,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { ChangePercent, Money, Multiple, NumberText, Percent } from "@/components/num";
+import { ChangePercent, Money, Multiple, NumberText, Percent, stockDirClass } from "@/components/num";
 import { StockPptButton } from "@/components/ppt-export";
 import { FinancialsTable } from "@/components/financials-table";
 import { DeepLinkList } from "@/components/deep-links";
 import { ConsensusPanel } from "@/components/consensus-panel";
 import { StockNews } from "@/components/stock-news";
+import { ShinhanResearch } from "@/components/shinhan-research";
 import { PriceChartPanel } from "@/components/price-chart-panel";
 
 export function StockAnalysis({
@@ -42,7 +43,7 @@ export function StockAnalysis({
   const [yahooOverride, setYahooOverride] = useState<string | null>(initialYahoo);
   const [period, setPeriod] = useState<"annual" | "quarter">("annual");
   const [filingScope, setFilingScope] = useState<"core" | "all">("core");
-  const [showPriceChart, setShowPriceChart] = useState(false);
+  const [chartMode, setChartMode] = useState<"price" | "marketcap" | null>(null);
 
   function pick(hit: SymbolHit) {
     setSymbol(hit.symbol);
@@ -526,13 +527,13 @@ export function StockAnalysis({
                 <Stat
                   label="종가"
                   className="order-1 lg:order-none"
-                  onClick={() => setShowPriceChart((v) => !v)}
+                  onClick={() => setChartMode((m) => (m === "price" ? null : "price"))}
                 >
                   <span className="inline-flex items-baseline gap-1.5">
                     <Money value={ov.quote?.last} currency={ccy} />
                     {ov.quote?.changePct != null && (
                       <span className="text-sm font-normal">
-                        (<ChangePercent value={ov.quote.changePct} />)
+                        (<ChangePercent value={ov.quote.changePct} market={market} />)
                       </span>
                     )}
                   </span>
@@ -543,7 +544,7 @@ export function StockAnalysis({
                 <Stat
                   label="시가총액"
                   className="order-3 lg:order-none"
-                  onClick={() => setShowPriceChart((v) => !v)}
+                  onClick={() => setChartMode((m) => (m === "marketcap" ? null : "marketcap"))}
                 >
                   <span className="text-base">
                     {formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
@@ -597,11 +598,11 @@ export function StockAnalysis({
                     return (
                       <>
                         <span className="tnum text-base">
-                          <span className="text-up">
+                          <span className={stockDirClass(true, market)}>
                             <Money value={hi52} currency={ccy} fallback="-" />
                           </span>
                           {" / "}
-                          <span className="text-down">
+                          <span className={stockDirClass(false, market)}>
                             <Money value={lo52} currency={ccy} fallback="-" />
                           </span>
                         </span>
@@ -621,13 +622,14 @@ export function StockAnalysis({
                             value={
                               ((ov.consensus.targetMeanPrice - ov.quote.last) / ov.quote.last) * 100
                             }
+                            market={market}
                           />
                           )
                         </span>
                       )}
                       {ov.consensus.recommendationKey &&
                         (() => {
-                          const rec = recommendationKo(ov.consensus.recommendationKey);
+                          const rec = recommendationKo(ov.consensus.recommendationKey, market);
                           return (
                             <span className={cn("text-sm font-medium", rec.className)}>
                               {rec.label}
@@ -647,13 +649,15 @@ export function StockAnalysis({
                 )}
               </div>
 
-              {showPriceChart && symbol && (
+              {chartMode && symbol && (
                 <PriceChartPanel
                   market={market}
                   symbol={ov.symbol}
                   yahoo={yahooOverride}
                   currency={ccy}
-                  onClose={() => setShowPriceChart(false)}
+                  mode={chartMode}
+                  sharesOutstanding={ov.quote?.sharesOutstanding ?? ov.consensus?.sharesOutstanding ?? null}
+                  onClose={() => setChartMode(null)}
                 />
               )}
 
@@ -947,9 +951,16 @@ export function StockAnalysis({
               )}
             </TabsContent>
 
-            {/* 종목뉴스 */}
+            {/* 종목뉴스 (+ 한국은 신한투자증권 리서치를 오른쪽에 병렬 표시) */}
             <TabsContent value="news" className="pt-4">
-              <StockNews market={market} symbol={ov.symbol} />
+              {market === "kr" ? (
+                <div className="grid grid-cols-1 gap-6 xl:grid-cols-[2fr_1fr]">
+                  <StockNews market={market} symbol={ov.symbol} />
+                  <ShinhanResearch symbol={ov.symbol} />
+                </div>
+              ) : (
+                <StockNews market={market} symbol={ov.symbol} />
+              )}
             </TabsContent>
 
             {/* 권리일정 (한국·미국) */}
@@ -1088,14 +1099,16 @@ function RightsDetail({ e, market }: { e: RightsEvent; market: MarketId }) {
   return <span className="text-muted-foreground">{e.note ?? "-"}</span>;
 }
 
-/** Yahoo recommendationKey → 한글 표기 + 매수/매도 색상. */
-function recommendationKo(key: string): { label: string; className: string } {
+/** Yahoo recommendationKey → 한글 표기 + 매수/매도 색상. market="kr"이면 상승(매수)=빨강·하락(매도)=파랑으로 반전. */
+function recommendationKo(key: string, market?: MarketId): { label: string; className: string } {
   const k = key.toLowerCase();
-  if (k.includes("strong_buy") || k === "strongbuy") return { label: "강력매수", className: "text-up" };
-  if (k.includes("buy")) return { label: "매수", className: "text-up" };
+  const buy = stockDirClass(true, market);
+  const sell = stockDirClass(false, market);
+  if (k.includes("strong_buy") || k === "strongbuy") return { label: "강력매수", className: buy };
+  if (k.includes("buy")) return { label: "매수", className: buy };
   if (k.includes("strong_sell") || k === "strongsell")
-    return { label: "강력매도", className: "text-down" };
-  if (k.includes("sell") || k.includes("underperform")) return { label: "매도", className: "text-down" };
+    return { label: "강력매도", className: sell };
+  if (k.includes("sell") || k.includes("underperform")) return { label: "매도", className: sell };
   if (k.includes("hold") || k.includes("neutral")) return { label: "중립", className: "text-muted-foreground" };
   return { label: key.replace(/_/g, " "), className: "" };
 }
