@@ -396,6 +396,43 @@ function dedupeByMajorPublisher(items: RawNewsItem[]): RawNewsItem[] {
 /** Vercel 대시보드 로그 확인이 번거로워 응답 자체에 진단 사유를 실어 curl로 바로 확인. */
 export type LlmFallbackReason = "no_api_key" | "budget_exceeded" | "call_failed";
 
+/**
+ * 한쪽(국내 또는 해외)만 판정 — 국내+해외를 한 배치로 합치면(실측 재현: 17건
+ * 배치에서 국내는 8→5로 정확히 걸러졌는데 해외 9건은 전부 통과) 모델이 후반부
+ * 항목 판정을 덜 엄격하게 하는 경향이 확인돼, 배치를 쪼개 각각 더 일관되게
+ * 판정하게 한다(비용은 호출 2회로 늘지만 여전히 무시할 수준).
+ */
+async function filterOneSide(
+  companyName: string,
+  raw: RawNewsItem[],
+): Promise<{ items: RawNewsItem[]; costUsd: number }> {
+  if (raw.length === 0) return { items: [], costUsd: 0 };
+  const candidates = raw.map((it, i) => ({
+    id: String(i),
+    title: it.title,
+    excerpt: it.excerpt,
+    publisher: it.publisher,
+  }));
+  const { relevantIds, duplicateGroups, costUsd } = await judgeNewsRelevance(companyName, candidates);
+
+  const keep = new Set(relevantIds);
+  for (const group of duplicateGroups) {
+    const members = group.filter((id) => keep.has(id));
+    if (members.length <= 1) continue;
+    const sorted = members
+      .map((id) => ({ id, item: raw[Number(id)] }))
+      .sort((a, b) => new Date(b.item.publishedAt).getTime() - new Date(a.item.publishedAt).getTime());
+    const chosen = sorted.find((m) => DOMESTIC_PUBLISHERS.has(m.item.publisher)) ?? sorted[0];
+    for (const id of members) if (id !== chosen.id) keep.delete(id);
+  }
+
+  const filtered = raw.filter((_, i) => keep.has(String(i)));
+  // 안전장치: LLM이 전부 걸러내 버리면(원본은 있는데 결과 0건) 필터 없이 보여준다 —
+  // "관련 기사 없음"보다 "관련성 낮은 기사 섞임"이 훨씬 나은 실패 모드.
+  const items = filtered.length > 0 || raw.length === 0 ? filtered : raw;
+  return { items, costUsd };
+}
+
 async function tryLlmRelevanceFilter(
   companyName: string,
   domesticRaw: RawNewsItem[],
@@ -410,44 +447,12 @@ async function tryLlmRelevanceFilter(
   }
   try {
     if (await isBudgetExceeded()) return { domestic: null, overseas: null, fallback: "budget_exceeded" };
-
-    const tagged = [
-      ...domesticRaw.map((it) => ({ pid: `d:${it.id}`, item: it })),
-      ...overseasRaw.map((it) => ({ pid: `o:${it.id}`, item: it })),
-    ];
-    const candidates = tagged.map((t) => ({
-      id: t.pid,
-      title: t.item.title,
-      excerpt: t.item.excerpt,
-      publisher: t.item.publisher,
-    }));
-    const { relevantIds, duplicateGroups, costUsd } = await judgeNewsRelevance(companyName, candidates);
-    await incUsage(costUsd);
-
-    // 중복 그룹 정리: 그룹 내 사전 큐레이션된 주요 언론사가 있으면 그것만, 없으면
-    // 최신순 첫 번째만 남긴다(문구가 달라 단순 텍스트 비교로는 못 잡는 중복도
-    // LLM 이 같은 배치에서 함께 판단해 알려줌 — 오너 지적, 2026-09).
-    const byPid = new Map(tagged.map((t) => [t.pid, t.item]));
-    const keep = new Set(relevantIds);
-    for (const group of duplicateGroups) {
-      const members = group.filter((pid) => keep.has(pid));
-      if (members.length <= 1) continue;
-      const sorted = members
-        .map((pid) => ({ pid, item: byPid.get(pid)! }))
-        .sort((a, b) => new Date(b.item.publishedAt).getTime() - new Date(a.item.publishedAt).getTime());
-      const chosen = sorted.find((m) => DOMESTIC_PUBLISHERS.has(m.item.publisher)) ?? sorted[0];
-      for (const pid of members) if (pid !== chosen.pid) keep.delete(pid);
-    }
-
-    const domestic = domesticRaw.filter((it) => keep.has(`d:${it.id}`));
-    const overseas = overseasRaw.filter((it) => keep.has(`o:${it.id}`));
-    // 안전장치: LLM이 전부 걸러내 버리면(원본은 있는데 결과 0건) 필터 없이 보여준다 —
-    // "관련 기사 없음"보다 "관련성 낮은 기사 섞임"이 훨씬 나은 실패 모드.
-    return {
-      domestic: domestic.length > 0 || domesticRaw.length === 0 ? domestic : domesticRaw,
-      overseas: overseas.length > 0 || overseasRaw.length === 0 ? overseas : overseasRaw,
-      fallback: null,
-    };
+    const [domesticResult, overseasResult] = await Promise.all([
+      filterOneSide(companyName, domesticRaw),
+      filterOneSide(companyName, overseasRaw),
+    ]);
+    await incUsage(domesticResult.costUsd + overseasResult.costUsd);
+    return { domestic: domesticResult.items, overseas: overseasResult.items, fallback: null };
   } catch (err) {
     console.error("[news] LLM 관련성 판정 실패, 키워드 매칭으로 폴백:", err);
     return { domestic: null, overseas: null, fallback: "call_failed" };
