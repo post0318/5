@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import { cn } from "@/lib/utils";
-import { formatMoneyWithUnits } from "@/lib/format";
+import { formatMoneyWithUnits, formatNumber } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
 import type { StockOverview } from "@/lib/markets/service";
 import { computeTrailingMultiples } from "@/lib/markets/multiples";
@@ -612,7 +612,7 @@ export function StockAnalysis({
                 </Stat>
                 {ov.consensus && (
                   <Stat label="목표주가" className="order-5 lg:order-none">
-                    <span className="inline-flex items-baseline gap-1.5">
+                    <span className="inline-flex flex-wrap items-baseline gap-1.5">
                       <Money value={ov.consensus.targetMeanPrice} currency={ov.consensus.currency} />
                       {ov.quote?.last != null && ov.consensus.targetMeanPrice != null && (
                         <span className="text-sm font-normal">
@@ -625,6 +625,20 @@ export function StockAnalysis({
                           )
                         </span>
                       )}
+                      {ov.consensus.recommendationKey &&
+                        (() => {
+                          const rec = recommendationKo(ov.consensus.recommendationKey);
+                          return (
+                            <Badge
+                              variant="secondary"
+                              className={cn("text-[10px] font-medium", rec.className)}
+                            >
+                              {rec.label}
+                              {ov.consensus.recommendationMean != null &&
+                                ` (${formatNumber(ov.consensus.recommendationMean, 2)})`}
+                            </Badge>
+                          );
+                        })()}
                     </span>
                     <div className="text-muted-foreground mt-1 text-xs">
                       목표주가 범위{" "}
@@ -1100,6 +1114,18 @@ function RightsDetail({ e, market }: { e: RightsEvent; market: MarketId }) {
     );
   }
   return <span className="text-muted-foreground">{e.note ?? "-"}</span>;
+}
+
+/** Yahoo recommendationKey → 한글 표기 + 매수/매도 색상. */
+function recommendationKo(key: string): { label: string; className: string } {
+  const k = key.toLowerCase();
+  if (k.includes("strong_buy") || k === "strongbuy") return { label: "강력매수", className: "text-up" };
+  if (k.includes("buy")) return { label: "매수", className: "text-up" };
+  if (k.includes("strong_sell") || k === "strongsell")
+    return { label: "강력매도", className: "text-down" };
+  if (k.includes("sell") || k.includes("underperform")) return { label: "매도", className: "text-down" };
+  if (k.includes("hold") || k.includes("neutral")) return { label: "중립", className: "text-muted-foreground" };
+  return { label: key.replace(/_/g, " "), className: "" };
 }
 
 function Stat({

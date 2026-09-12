@@ -328,6 +328,7 @@ export async function fetchForwardConsensus(
     targetLowPrice: fd.targetLowPrice ?? null,
     numberOfAnalysts: fd.numberOfAnalystOpinions ?? null,
     recommendationKey: fd.recommendationKey ?? null,
+    recommendationMean: fd.recommendationMean ?? null,
     // 부수 요약 지표 (yahoo summaryDetail/financialData). 컨센서스와 무관하지만
     // 같은 quoteSummary 호출로 이미 받아온 값이라 추가 비용 없이 노출.
     fiftyTwoWeekHigh: sd.fiftyTwoWeekHigh ?? null,

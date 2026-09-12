@@ -212,6 +212,8 @@ export interface ForwardConsensus {
   targetLowPrice: number | null;
   numberOfAnalysts: number | null;
   recommendationKey: string | null;
+  /** Yahoo financialData.recommendationMean (1=Strong Buy ~ 5=Sell 평균 점수) */
+  recommendationMean: number | null;
   /** 부수 요약 지표 (yahoo summaryDetail — 컨센서스는 아니지만 같은 호출로 확보) */
   fiftyTwoWeekHigh: number | null;
   fiftyTwoWeekLow: number | null;

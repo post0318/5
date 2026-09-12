@@ -212,7 +212,12 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     if (c.kind === "estimate") return consensus?.estPbr ?? null;
     return ratio(marketCap[i], equityCol[i]);
   });
-  const psr = columns.map((_, i) => ratio(marketCap[i], revenue[i]));
+  // 추정 열은 marketCap 이 null(현금·부채 미보유라 EV 계열은 계산 안 함)이라
+  // PSR 만 현재 시가총액 기준으로 별도 산출(원가/부채 불필요 — 매출액만 있으면 됨).
+  const estMarketCap = currentMarketCap ?? (currentPrice != null && shares != null ? currentPrice * shares : null);
+  const psr = columns.map((c, i) =>
+    c.kind === "estimate" ? ratio(estMarketCap, revenue[i]) : ratio(marketCap[i], revenue[i]),
+  );
   const evEbit = columns.map((c, i) => (c.kind === "estimate" ? null : ratio(ev[i], opInc[i])));
 
   const valuationRows: HighlightRow[] = [
