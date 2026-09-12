@@ -447,7 +447,7 @@ export async function fetchStockNewsBySide(
 }> {
   const query = companyName || symbol;
   const [domesticRaw, overseasRaw] = await Promise.all([
-    fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30, requireWhitelist: false }),
+    fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30 }),
     fetchUsJpNews(market, symbol, overseasQuery(market, symbol, query), {
       cutoffMs: ONE_WEEK_MS,
       newsCount: 30,
