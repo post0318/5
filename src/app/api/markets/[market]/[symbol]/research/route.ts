@@ -22,7 +22,9 @@ export async function GET(
     if (market !== "kr" || !isDbConfigured()) return ok({ items: [] });
 
     const sym = getAdapter(market).normalizeSymbol(decodeURIComponent(symbol));
-    const items = await getShinhanResearchBySymbol(sym);
+    const raw = await getShinhanResearchBySymbol(sym);
+    // category 필드 추가(2026-09) 이전에 적재된 기존 문서엔 없을 수 있음 — 기본값 처리.
+    const items = raw.map((it) => ({ ...it, category: it.category ?? "기업" }));
     return ok(
       { items },
       { headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" } },

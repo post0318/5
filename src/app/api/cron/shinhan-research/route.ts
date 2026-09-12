@@ -37,6 +37,8 @@ interface RawItem {
   summary: string;
   pdfUrl: string | null;
   views: number | null;
+  /** 없으면 "기업"(현재 모든 수집기가 기업분석만 수집 — 산업분석 수집은 추후 과제). */
+  category?: "기업" | "산업";
 }
 
 function resolveSymbol(stockName: string): string | null {
@@ -70,6 +72,7 @@ export async function POST(req: Request) {
       pdfUrl: it.pdfUrl,
       views: it.views,
       collectedAt: now,
+      category: it.category ?? "기업",
     }));
 
     const result = await upsertShinhanResearch(docs);

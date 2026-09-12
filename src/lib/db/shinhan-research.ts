@@ -26,6 +26,10 @@ export interface ShinhanResearchDoc {
   pdfUrl: string | null;
   views: number | null;
   collectedAt: string;
+  /** 기업분석/산업분석 구분(2026-09 추가) — 현재 모든 수집기가 기업분석만
+   * 수집하므로 기존 데이터·미지정 시 "기업"으로 취급(라우트에서 기본값 처리).
+   * 산업분석 수집은 추후 과제. */
+  category: "기업" | "산업";
 }
 
 // 저장 자체는 넉넉하게 보관(건당 1~2KB라 용량 문제 없음) — 짧게 지우면 커버리지가

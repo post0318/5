@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
-import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch, ApiError } from "@/lib/query";
 import { cn } from "@/lib/utils";
@@ -67,18 +66,14 @@ function NewsColumn({
   title,
   items,
   emptyText,
-  showExcerpt,
   showCheckbox,
-  showLinkIcon,
   summarize,
   unsave,
 }: {
   title: string;
   items: Item[];
   emptyText: string;
-  showExcerpt: boolean;
   showCheckbox: boolean;
-  showLinkIcon: boolean;
   summarize: UseMutationResult<unknown, unknown, Item, unknown>;
   unsave: UseMutationResult<unknown, unknown, string, unknown>;
 }) {
@@ -121,24 +116,17 @@ function NewsColumn({
                     {it.titleKo !== it.title && (
                       <div className="text-muted-foreground mt-0.5 truncate text-xs">{it.title}</div>
                     )}
-                    {showExcerpt && it.excerpt && (
-                      <p className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-snug">
-                        {it.excerpt}
-                      </p>
-                    )}
+                    {/* 국내는 실제 요약, 해외는 API에 스니펫이 없어 빈 자리만(높이 통일 —
+                        국내/해외 행 높이가 다르면 2열 레이아웃이 들쭉날쭉해 보임). */}
+                    <p className="text-muted-foreground mt-1 line-clamp-2 h-[2.3em] text-xs leading-snug">
+                      {it.excerpt || " "}
+                    </p>
                     <div className="text-muted-foreground mt-1 flex items-center gap-x-2 text-xs">
                       <span>{it.publisher}</span>
                       <span>·</span>
                       <span className="tnum">{fmtAgo(it.publishedAt)}</span>
                     </div>
                   </div>
-                  {showLinkIcon && (
-                    <ExternalLink
-                      className={cn(
-                        "text-muted-foreground group-hover:text-primary mt-0.5 size-3.5 shrink-0",
-                      )}
-                    />
-                  )}
                 </a>
               </li>
             ))}
@@ -238,9 +226,7 @@ export function StockNews({ market, symbol }: { market: MarketId; symbol: string
             title="국내뉴스"
             items={q.data.domestic}
             emptyText="최근 1주일 내 화이트리스트 언론사 기사가 없습니다."
-            showExcerpt
             showCheckbox={false}
-            showLinkIcon={false}
             summarize={summarize}
             unsave={unsave}
           />
@@ -248,9 +234,7 @@ export function StockNews({ market, symbol }: { market: MarketId; symbol: string
             title="해외뉴스"
             items={q.data.overseas}
             emptyText="최근 1주일 내 화이트리스트 언론사 기사가 없습니다."
-            showExcerpt={false}
             showCheckbox
-            showLinkIcon={false}
             summarize={summarize}
             unsave={unsave}
           />
