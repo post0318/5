@@ -611,7 +611,7 @@ export function StockAnalysis({
                   })()}
                 </Stat>
                 {ov.consensus && (
-                  <Stat label="목표주가" className="order-5 lg:order-none">
+                  <Stat label="목표주가(Yahoo)" className="order-5 lg:order-none">
                     <span className="inline-flex flex-wrap items-baseline gap-1.5">
                       <Money value={ov.consensus.targetMeanPrice} currency={ov.consensus.currency} />
                       {ov.quote?.last != null && ov.consensus.targetMeanPrice != null && (

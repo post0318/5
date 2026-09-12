@@ -155,8 +155,8 @@ export function ConsensusPanel({
                 <col style={{ width: "21%" }} />
               </colgroup>
               <thead>
-                <tr className="text-muted-foreground border-b text-right">
-                  <th className="py-1.5 text-left font-medium">시점</th>
+                <tr className="text-muted-foreground border-b text-center">
+                  <th className="py-1.5 font-medium">시점</th>
                   <th className="py-1.5 font-medium">당해 EPS(E)</th>
                   <th className="py-1.5 pr-3 font-medium">당해 PER(E)</th>
                   <th className="border-l border-dashed py-1.5 pl-3 font-medium">

@@ -243,9 +243,8 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     "실적·재무상태표·현금흐름: OpenDART 전체 재무제표 (연결)",
     "과거 시가총액: 각 회계연도말 종가 × 현재 상장주식수 (기간별 주식수 미반영 — 근사)",
     "총차입금 = 단기차입금 + 유동성장기부채 + 사채 + 장기차입금",
-    "EBITDA 대신 영업이익 사용 (DART 전체재무제표에 감가상각비 미분리)",
+    "EBITDA = 영업이익 + 감가상각비 (사업보고서 XBRL 주석 실측)",
   ];
-  if (estYear) notes.push("예상: 네이버(FnGuide) 컨센서스 · 추정 EPS 기준");
 
   return {
     currency: "KRW",
