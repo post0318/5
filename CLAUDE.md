@@ -243,6 +243,26 @@ npm run db:studio    # drizzle studio
       승인. **로컬 스크립트** (`scripts/collect-kb-research.mjs`, GitHub
       Actions `.github/workflows/kb-research.yml`, 하루 1회)가 같은 라우트를
       `source: "KB증권"` 으로 재사용.
+    - **GlobalMonitor(einfomax) 미국주식 리포트 추가(오너 확인, 2026-09)**:
+      `globalmonitor.einfomax.co.kr` — 연합인포맥스가 운영하는 증권사 리서치
+      통합 열람 서비스로, 키움·신한·유진·대신·한화·유안타·DB·현대차증권 등
+      다수 증권사의 "미국주식" 분류 리포트를 한곳에 모아준다(한경 컨센서스가
+      국내주식을 모아주는 것과 같은 성격, 3자 편집 서비스). 오너가 실제 화면
+      URL(`ds_mobile_new.html#/USA/6/01`)을 제시해 발견 — AngularJS 레거시
+      SPA라 내부 JS 번들에서 카테고리 코드(lscCd/sscCd, module_constants_base_
+      bundle.js)와 실제 호출 파라미터(module_controller_m_bundle.js)를
+      역추적해 확인. 로그인 없이 POST(`/bizrpt/reportlist`) 하나로 목록,
+      PDF도 로그인 없이 바로 열림(`rreport.einfomax.co.kr/report/{secureId}.pdf`,
+      확인됨). 제목이 "[종목명 (거래소:티커)] 제목" 형식이라 티커를 바로
+      뽑는다(이름 검색 불필요) — 종목코드 없는 채권/경제/시황 리포트는 건너뜀.
+      summary 필드에 정리된 한국어 요약 문단이 이미 있어 다른 소스보다 품질
+      좋음. `globalmonitor.einfomax.co.kr` 은 robots.txt 자체가 없음(가장
+      깨끗한 케이스). 이 소스로 리서치 기능이 **미국 종목까지 확장**됨
+      (DB 스키마에 `market` 필드 추가, 기존 한국 전용 문서는 하위호환 처리).
+      **로컬 스크립트** (`scripts/collect-globalmonitor-research.mjs`,
+      GitHub Actions `.github/workflows/globalmonitor-research.yml`, 하루
+      1회)가 같은 라우트를 `market: "us"` 로 재사용, 항목별 실제 작성
+      증권사명(auth)을 `source` 로 그룹핑해 나눠 전송.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.

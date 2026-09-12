@@ -1,0 +1,22 @@
+name: GlobalMonitor 미국주식 리포트 수집
+
+# CLAUDE.md 방침(오너 승인 예외): globalmonitor.einfomax.co.kr 의 미국주식
+# 리포트 통합 목록을 하루 1회, 개인용으로만 조회한다. robots.txt 자체가
+# 없는 케이스 — 오너가 URL을 직접 제시하며 사용을 지시해 승인됨.
+
+on:
+  schedule:
+    - cron: "55 0 * * *" # 00:55 UTC = 09:55 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/collect-globalmonitor-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
