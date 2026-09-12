@@ -116,6 +116,9 @@ export interface RelevanceCandidate {
   id: string;
   title: string;
   excerpt?: string;
+  /** 발행 도메인/언론사명 — 고정 화이트리스트를 안 거친 후보도 섞여 있어
+   * 신뢰도 판단에 참고(예: 유명 신문사 도메인 vs 낯선 도메인). */
+  publisher?: string;
 }
 
 export async function judgeNewsRelevance(
@@ -125,15 +128,25 @@ export async function judgeNewsRelevance(
   if (items.length === 0) return { relevantIds: new Set(), costUsd: 0 };
 
   const numbered = items
-    .map((it, i) => `${i}. ${it.title}${it.excerpt ? ` — ${it.excerpt}` : ""}`)
+    .map(
+      (it, i) =>
+        `${i}. [${it.publisher ?? "?"}] ${it.title}${it.excerpt ? ` — ${it.excerpt}` : ""}`,
+    )
     .join("\n");
-  const system = `당신은 금융 뉴스 관련성 판정 도우미입니다. 아래 번호 매겨진 기사 목록 중
-실제로 "${companyName}"에 관한 기사이거나 투자 판단에 참고가 되는 기사만 골라주세요:
+  const system = `당신은 금융 뉴스 관련성·신뢰도 판정 도우미입니다. 아래 번호 매겨진 기사 목록
+(각 줄 맨 앞 [ ]는 발행 매체) 중 아래 두 조건을 모두 만족하는 기사만 골라주세요:
+
+A. 관련성 — 실제로 "${companyName}"에 관한 기사이거나 투자 판단에 참고가 되는 기사:
 1) 그 회사의 실적·사업·주가·경영진 행보 등을 직접 다루는 기사
 2) 이름이 명시된 직접 경쟁사에 대한 기사로, 그 회사의 경쟁 지위에 참고가 될 만한 내용
    (예: 반도체 파운드리 경쟁사의 점유율 변화는 삼성전자에 참고가 됨)
 같은 그룹 계열사 전체를 다루거나, 회사명이 스쳐 지나가듯 언급만 되거나(예: 채용 통계·인물
 동정 기사에서 소속으로만 언급), 업종/시장 전반을 다루면서 예시로만 등장하는 경우는 제외하세요.
+
+B. 신뢰도 — 매체명·제목·요약을 보고 정상적인 보도로 보이는지 판단하세요. 매체명이 알려진
+언론사가 아니어도 괜찮지만(전문지·지역지 등 정당한 매체일 수 있음), 광고/스팸/어뷰징성
+매체로 보이거나 제목이 확인되지 않은 루머·자극적 낚시성으로 보이면 제외하세요.
+
 오직 JSON 배열 하나만 출력하세요(다른 텍스트 없이) — 관련 있는 기사 번호만 담은 배열, 예:
 [0,3,5]. 관련 기사가 없으면 [].`;
 

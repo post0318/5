@@ -130,6 +130,10 @@ const KR_PUBLISHER_BY_DOMAIN: Record<string, string> = {
   "hankookilbo.com": "한국일보",
 };
 
+/** 이 도메인 맵에 있는(=사전 큐레이션된 주요 언론사) 발행사명 집합 — 중복기사
+ * 정리 시 "메이저" 판단, 요약 대상 판정에도 재사용. */
+const DOMESTIC_PUBLISHERS = new Set(Object.values(KR_PUBLISHER_BY_DOMAIN));
+
 const THREE_MONTHS_MS = 90 * 24 * 3600_000;
 const ONE_WEEK_MS = 7 * 24 * 3600_000;
 
@@ -184,8 +188,9 @@ interface NaverNewsResponse {
 async function fetchKrNews(
   symbol: string,
   query: string,
-  opts?: { cutoffMs?: number; display?: number },
+  opts?: { cutoffMs?: number; display?: number; requireWhitelist?: boolean },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
+  const requireWhitelist = opts?.requireWhitelist ?? true;
   const keyId = process.env.NAVER_APIHUB_KEY_ID;
   const keySecret = process.env.NAVER_APIHUB_KEY_SECRET;
   if (!keyId || !keySecret) return [];
@@ -215,7 +220,12 @@ async function fetchKrNews(
     } catch {
       continue;
     }
-    const publisher = KR_PUBLISHER_BY_DOMAIN[host];
+    // 종목뉴스 탭(requireWhitelist=false)은 도메인 화이트리스트로 미리 걸러내지
+    // 않고 LLM 관련성 판정이 신뢰성·진위까지 함께 판단하게 한다(오너 확인,
+    // 2026-09) — 고정된 소수 도메인 목록보다 커버리지가 넓어짐(실측: 방산
+    // 전문지 등 정당한 매체가 목록에 없어 빠지던 문제). 유니버스 통합뉴스
+    // (fetchStockNews, requireWhitelist 기본값 true)는 기존 그대로 유지.
+    const publisher = KR_PUBLISHER_BY_DOMAIN[host] ?? (requireWhitelist ? undefined : host);
     if (!publisher) continue; // 화이트리스트 밖 도메인 — 목록에 안 보여줌
     const t = Date.parse(n.pubDate);
     if (!Number.isFinite(t) || t < cutoff) continue;
@@ -339,6 +349,44 @@ function overseasQuery(market: MarketId, symbol: string, companyName: string): s
 
 type RawNewsItem = Omit<NewsItem, "titleKo">;
 
+/** 통신사발 기사가 여러 매체에 그대로 재게재될 때 붙는 흔한 꼬리표(속보 단계 표기 등). */
+const WIRE_SUFFIX_RE = /[（(][^)）]{0,10}[)）]\s*$/;
+function normalizeTitleForDedup(title: string): string {
+  return title
+    .replace(WIRE_SUFFIX_RE, "")
+    .replace(/[\s"'“”‘’.,·]/g, "")
+    .toLowerCase();
+}
+
+/**
+ * 같은 내용(제목 사실상 동일)이 통신사발로 여러 매체에 재게재된 경우 대표 1건만
+ * 남긴다(오너 지적, 2026-09) — 화이트리스트 도메인 요건을 완화(requireWhitelist
+ * =false)하면서 같은 기사가 여러 매체 이름으로 중복 노출되는 문제가 부각됨.
+ * 그룹 내 사전 큐레이션된 주요 언론사(DOMESTIC_PUBLISHERS) 소속이 있으면 그걸
+ * 우선하고, 없으면 최신순으로 첫 번째를 남긴다.
+ */
+function dedupeByMajorPublisher(items: RawNewsItem[]): RawNewsItem[] {
+  const groups = new Map<string, RawNewsItem[]>();
+  for (const it of items) {
+    const key = normalizeTitleForDedup(it.title);
+    const group = groups.get(key);
+    if (group) group.push(it);
+    else groups.set(key, [it]);
+  }
+  const result: RawNewsItem[] = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      result.push(group[0]);
+      continue;
+    }
+    const sorted = [...group].sort(
+      (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
+    );
+    result.push(sorted.find((it) => DOMESTIC_PUBLISHERS.has(it.publisher)) ?? sorted[0]);
+  }
+  return result.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+}
+
 /**
  * LLM(Haiku) 관련성 판정 — 국내+해외 후보를 한 번의 호출로 함께 판정해 종목
  * 조회 1회당 호출 1회로 비용을 묶는다(라우트 자체가 30분 캐시라 실질 호출은
@@ -363,8 +411,13 @@ async function tryLlmRelevanceFilter(
   try {
     if (await isBudgetExceeded()) return { domestic: null, overseas: null, fallback: "budget_exceeded" };
     const candidates = [
-      ...domesticRaw.map((it) => ({ id: `d:${it.id}`, title: it.title, excerpt: it.excerpt })),
-      ...overseasRaw.map((it) => ({ id: `o:${it.id}`, title: it.title })),
+      ...domesticRaw.map((it) => ({
+        id: `d:${it.id}`,
+        title: it.title,
+        excerpt: it.excerpt,
+        publisher: it.publisher,
+      })),
+      ...overseasRaw.map((it) => ({ id: `o:${it.id}`, title: it.title, publisher: it.publisher })),
     ];
     const { relevantIds, costUsd } = await judgeNewsRelevance(companyName, candidates);
     await incUsage(costUsd);
@@ -394,7 +447,7 @@ export async function fetchStockNewsBySide(
 }> {
   const query = companyName || symbol;
   const [domesticRaw, overseasRaw] = await Promise.all([
-    fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30 }),
+    fetchKrNews(symbol, query, { cutoffMs: ONE_WEEK_MS, display: 30, requireWhitelist: false }),
     fetchUsJpNews(market, symbol, overseasQuery(market, symbol, query), {
       cutoffMs: ONE_WEEK_MS,
       newsCount: 30,
@@ -407,24 +460,29 @@ export async function fetchStockNewsBySide(
   let domesticSafe: RawNewsItem[];
   let overseasSafe: RawNewsItem[];
   let relevance: "llm" | LlmFallbackReason | "no_company_name";
-  if (!name) {
-    domesticSafe = domesticRaw;
-    overseasSafe = overseasRaw;
-    relevance = "no_company_name";
-  } else if (llmResult && llmResult.fallback === null) {
+  if (llmResult && llmResult.fallback === null) {
+    // LLM 경로: 신뢰도 판정을 모델이 직접 하므로 도메인 화이트리스트 없이도 안전.
     domesticSafe = llmResult.domestic;
     overseasSafe = llmResult.overseas;
     relevance = "llm";
   } else {
-    // 폴백: 기존 키워드 매칭(국내만 — 해외는 원래도 무필터였음).
-    const domesticFiltered = domesticRaw.filter((it) =>
-      isDomesticRelevant(companyName, symbol, it.title, it.excerpt),
-    );
-    domesticSafe =
-      domesticFiltered.length > 0 || domesticRaw.length === 0 ? domesticFiltered : domesticRaw;
-    overseasSafe = overseasRaw;
-    relevance = llmResult?.fallback ?? "no_api_key";
+    // 폴백(이름 미확인·LLM 미사용·예산초과·호출실패 공통): 신뢰도를 대신 판정해줄
+    // 수단이 없으므로 사전 큐레이션된 화이트리스트로 되돌리고(requireWhitelist=
+    // true 였을 때와 동일 효과), 이름이 있으면 그 안에서 키워드 매칭까지 적용.
+    const whitelisted = domesticRaw.filter((it) => DOMESTIC_PUBLISHERS.has(it.publisher));
+    if (name) {
+      const domesticFiltered = whitelisted.filter((it) =>
+        isDomesticRelevant(companyName, symbol, it.title, it.excerpt),
+      );
+      domesticSafe =
+        domesticFiltered.length > 0 || whitelisted.length === 0 ? domesticFiltered : whitelisted;
+    } else {
+      domesticSafe = whitelisted;
+    }
+    overseasSafe = overseasRaw; // 해외는 fetchUsJpNews 단계에서 이미 ALLOWED_PUBLISHERS로 걸러짐
+    relevance = !name ? "no_company_name" : (llmResult?.fallback ?? "no_api_key");
   }
+  domesticSafe = dedupeByMajorPublisher(domesticSafe);
 
   const [domestic, overseas] = await Promise.all([
     withTranslatedTitles("ko", domesticSafe),
@@ -438,7 +496,6 @@ export async function fetchStockNewsBySide(
 }
 
 /** 국내(이미 한국어) 언론사인지 — 번역·요약 대상 여부 판정(종목의 상장 시장이 아니라 기사 언론사 기준). */
-const DOMESTIC_PUBLISHERS = new Set(Object.values(KR_PUBLISHER_BY_DOMAIN));
 export function isDomesticPublisher(publisher: string): boolean {
   return DOMESTIC_PUBLISHERS.has(publisher);
 }
