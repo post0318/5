@@ -2,6 +2,8 @@ import "server-only";
 import type { MarketId } from "@/lib/markets/types";
 import { listUniverse } from "@/lib/universe/repo";
 import { fetchStockNews as fetchCredibleStockNews } from "@/lib/markets/news";
+import { findUniverseNewsDuplicates } from "@/lib/llm/claude";
+import { isBudgetExceeded, incUsage } from "@/lib/db/llm-usage";
 
 export interface NewsItem {
   titleKo: string;
@@ -67,5 +69,45 @@ export async function fetchUniverseNews(market: MarketId): Promise<NewsItem[]> {
   }
   await Promise.all(Array.from({ length: Math.min(POOL, universe.length) }, worker));
 
-  return perStock.filter((it): it is NewsItem => it != null);
+  // 종목마다 최신 1건씩만 뽑아도, 같은 사건(계열사 공동 이슈·여러 종목이 함께
+  // 언급된 시황 기사 등)이 서로 다른 종목의 "최신 기사"로 각각 집계되면
+  // 사실상 같은 내용이 여러 줄로 중복 노출된다(오너 지적, 2026-09). 먼저
+  // 원문 링크가 완전히 같은 경우를 무료로 정리하고, 남은 건 LLM으로 같은
+  // 사건인지 판정해 묶는다.
+  const seenLinks = new Set<string>();
+  const linkDeduped = perStock.filter((it): it is NewsItem => {
+    if (it == null) return false;
+    if (seenLinks.has(it.link)) return false;
+    seenLinks.add(it.link);
+    return true;
+  });
+
+  return dedupeUniverseNewsWithLlm(linkDeduped);
+}
+
+/** LLM로 같은 사건 중복을 묶어 대표 1건만 남긴다. 키 미설정·예산초과·호출
+ * 실패 시 조용히 원본 그대로 반환(뉴스 기능 자체가 죽지 않게 — 다른 LLM
+ * 폴백들과 동일 원칙). */
+async function dedupeUniverseNewsWithLlm(items: NewsItem[]): Promise<NewsItem[]> {
+  if (items.length < 2 || !process.env.ANTHROPIC_API_KEY) return items;
+  try {
+    if (await isBudgetExceeded()) return items;
+    const candidates = items.map((it, i) => ({
+      id: String(i),
+      title: it.titleKo,
+      stockName: it.name,
+    }));
+    const { duplicateGroups, costUsd } = await findUniverseNewsDuplicates(candidates);
+    await incUsage(costUsd);
+    if (duplicateGroups.length === 0) return items;
+    const drop = new Set<number>();
+    for (const group of duplicateGroups) {
+      const indices = group.map(Number).sort((a, b) => a - b);
+      for (const idx of indices.slice(1)) drop.add(idx); // 그룹 내 첫 항목(유니버스 순서상 앞선 것)만 남김
+    }
+    return items.filter((_, i) => !drop.has(i));
+  } catch (err) {
+    console.error("[news] 유니버스통합뉴스 LLM 중복 판정 실패, 원본 그대로 표시:", err);
+    return items;
+  }
 }

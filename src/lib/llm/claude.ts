@@ -222,3 +222,84 @@ relevant: 관련 있는 기사 번호 배열(없으면 []). duplicates: 중복 �
 
   return { relevantIds, duplicateGroups, costUsd };
 }
+
+/**
+ * 유니버스통합뉴스(여러 종목의 "최신 기사 1건씩"을 한 화면에 모은 목록) 전용
+ * 중복 판정 — 종목별로는 이미 1건씩만 뽑혀 있어도, 같은 사건(예: 계열사 공동
+ * 투자 발표, 여러 종목이 함께 언급된 시황 기사)이 서로 다른 종목의 "최신
+ * 기사"로 각각 집계돼 사실상 같은 내용이 여러 줄로 중복 노출되는 문제(오너
+ * 지적, 2026-09: "미국 유니버스통합 뉴스 중복 뉴스가 많다"). judgeNewsRelevance
+ * 와 달리 관련성 판정은 필요 없고(이미 종목별로 확정된 기사들) 순수 중복
+ * 그룹 판정만 한다 — 종목명이 다르면 대개 다른 사건이니, 실제로 같은 사건을
+ * 다른 매체가 다르게 표현한 경우만 좁게 묶는다(예: "오라클 실적 발표"와
+ * "브로드컴 실적 발표"는 둘 다 실적 기사여도 별개 사건 — 절대 묶지 않음).
+ */
+export interface UniverseDupCandidate {
+  id: string;
+  title: string;
+  /** 어느 종목 기사인지 — 같은 사건인지 판단에 참고(자회사·계열사 공동 이슈 등). */
+  stockName?: string;
+}
+
+export async function findUniverseNewsDuplicates(
+  items: UniverseDupCandidate[],
+): Promise<{ duplicateGroups: string[][]; costUsd: number }> {
+  if (items.length < 2) return { duplicateGroups: [], costUsd: 0 };
+
+  const numbered = items
+    .map((it, i) => `${i}. [${it.stockName ?? "?"}] ${it.title}`)
+    .join("\n");
+  const system = `당신은 금융 뉴스 중복 판정 도우미입니다. 아래는 서로 다른 종목의 "최신 기사"
+목록입니다(각 줄 맨 앞 [ ]는 그 기사가 대표로 뽑힌 종목명, 번호는 기사 순번). 이 중 실제로
+같은 사건을 보도한 기사들만 번호로 그룹핑하세요 — 예: 계열사 공동 투자·합병 발표처럼 여러
+종목에 동시에 영향을 주는 사건이 각 종목의 "최신 기사"로 따로 집계된 경우, 또는 같은 기사가
+검색 중복으로 다른 종목명 아래 다르게 잡힌 경우.
+
+다음은 절대 묶지 마세요:
+- 종목이 다르고 사건도 다른 경우(예: "A사 실적 발표"와 "B사 실적 발표"는 둘 다 실적 기사여도
+  서로 다른 회사의 서로 다른 사건 — 절대 묶지 않음)
+- 같은 산업/섹터를 다룬다는 이유만으로 묶지 않음(사건 자체가 같아야 함)
+
+오직 아래 형식의 JSON 객체 하나만 출력하세요(다른 텍스트 없이):
+{"duplicates": [[3,7]]}
+duplicates: 같은 사건인 기사 번호 그룹 배열(각 그룹 2개 이상, 없으면 []).`;
+
+  const maxTokens = Math.min(3000, 300 + items.length * 15);
+  const response = await anthropic().messages.create({
+    model: MODEL,
+    max_tokens: maxTokens,
+    system,
+    messages: [{ role: "user", content: numbered }],
+  });
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      `findUniverseNewsDuplicates: 응답이 max_tokens(${maxTokens})에서 잘림 — 후보 ${items.length}건`,
+    );
+  }
+
+  const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+  const raw = textBlock?.text ?? "";
+  const costUsd =
+    response.usage.input_tokens * PRICE_PER_TOKEN.input +
+    response.usage.output_tokens * PRICE_PER_TOKEN.output;
+
+  let parsed: { duplicates?: unknown };
+  try {
+    const match = raw.match(/\{[\s\S]*?\}/);
+    parsed = JSON.parse(match ? match[0] : raw);
+  } catch {
+    throw new Error(`findUniverseNewsDuplicates: JSON 파싱 실패 — ${raw.slice(0, 120)}`);
+  }
+
+  const isValidIndex = (i: unknown): i is number =>
+    Number.isInteger(i) && (i as number) >= 0 && (i as number) < items.length;
+
+  const duplicateGroups = Array.isArray(parsed.duplicates)
+    ? parsed.duplicates
+        .filter((g): g is unknown[] => Array.isArray(g))
+        .map((g) => g.filter(isValidIndex).map((i) => items[i].id))
+        .filter((g) => g.length > 1)
+    : [];
+
+  return { duplicateGroups, costUsd };
+}
