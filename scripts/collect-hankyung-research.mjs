@@ -275,9 +275,20 @@ else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 // 실제 출처가 정확히 표시되도록(예: "iM증권") 증권사별로 그룹핑해 나눠 보낸다.
 // _id 충돌 방지를 위해 접두어를 "한경:" 로 네임스페이스(원 증권사 스크립트의
 // _id 체계와 겹치지 않게).
+// 자체 수집기가 사이트 전체를 훨씬 넓게 긁는 증권사는 여기서 뺀다 — 한경은
+// 선별 게재라 커버리지가 좁다(실측 2026-09: 상상인 한경 90일 12건 vs 자체
+// 수집기 126건). 오너 지시로 상상인 제외.
+const SKIP_SOURCES = new Set(["상상인증권"]);
+
+// 자체 수집기가 훨씬 많이 가져오는 증권사는 여기서 뺀다 — 상상인증권은 한경
+// 경유 90일 12건인데 자사 API 로는 같은 기간 126건(전체 4,466건)이다(오너 지시).
+const EXCLUDED_SOURCES = new Set(["상상인증권"]);
+
 const bySource = new Map();
 for (const it of collected) {
+  if (EXCLUDED_SOURCES.has((it.source || "").trim())) continue;
   const key = it.source || "한경컨센서스";
+  if (SKIP_SOURCES.has(key)) continue;
   if (!bySource.has(key)) bySource.set(key, []);
   bySource.get(key).push({
     id: `한경:${it.id}`,

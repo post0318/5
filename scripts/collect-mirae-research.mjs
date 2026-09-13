@@ -65,8 +65,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const LIST_URL = "https://securities.miraeasset.com/bbs/board/message/list.do";
 const CATEGORY_ID = "1800"; // 기업분석
 
-// "종목명 (코드/의견)" — 코드가 6자리 숫자가 아니면(해외 티커) 건너뜀.
+// "종목명 (코드/의견)" — 국내는 6자리 숫자 코드.
 const TITLE_RE = /^(.+?)\s*\((\d{6})\/([^)]+)\)$/;
+// 해외는 "종목명 (TICKER US/의견)" 형식. US 만 받는다(IN·HK 등 다른 시장 제외).
+// 제목에 투자의견이 같이 있어 다른 미국 소스와 달리 등급을 공짜로 얻는다.
+const TITLE_US_RE = /^(.+?)\s*\(([A-Z][A-Z.]{0,5})\s+US\/([^)]+)\)$/;
 
 async function fetchPage(page) {
   const url = new URL(LIST_URL);
@@ -86,8 +89,10 @@ function parseItems(html) {
     );
     if (!dateM || !subjectM) continue;
     const [, id, messageNumber, rawTitle, rawSummary] = subjectM;
-    const tm = rawTitle.trim().match(TITLE_RE);
-    if (!tm) continue; // 해외종목(코드가 6자리 숫자 아님) — 건너뜀
+    const title = rawTitle.trim();
+    const tm = title.match(TITLE_RE);
+    const um = tm ? null : title.match(TITLE_US_RE);
+    if (!tm && !um) continue; // 종목 없는 리포트 또는 US 외 해외시장
     const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
     const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
     items.push({
@@ -95,9 +100,10 @@ function parseItems(html) {
       messageNumber,
       date: dateM[1],
       title: rawSummary.trim() || rawTitle.trim(),
-      stockName: tm[1].trim(),
-      symbolHint: tm[2],
-      opinion: tm[3].trim(),
+      market: tm ? "kr" : "us",
+      stockName: (tm ?? um)[1].trim(),
+      symbolHint: tm ? tm[2] : um[2].toUpperCase(),
+      opinion: (tm ?? um)[3].trim(),
       analyst: analystM ? analystM[1].trim() : "",
       pdfUrl: pdfM ? pdfM[1] : null,
     });
@@ -195,6 +201,7 @@ if (DRY_RUN) {
 }
 
 const items = collected.map((it) => ({
+  market: it.market ?? "kr",
   id: it.id,
   date: it.date,
   title: it.title,
@@ -211,14 +218,19 @@ const items = collected.map((it) => ({
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const up = await fetch(IMPORT_URL, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ items, source: "미래에셋증권" }),
-});
-const upBody = await up.text();
-if (!up.ok) {
-  console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+// 국내·해외를 시장별로 나눠 보낸다 — 라우트가 호출당 market 하나만 받는다.
+for (const market of ["kr", "us"]) {
+  const bucket = items.filter((it) => (it.market ?? "kr") === market);
+  if (bucket.length === 0) continue;
+  const up = await fetch(IMPORT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ items: bucket, source: "미래에셋증권", market }),
+  });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ [${market}] 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 200)}`);
+    continue;
+  }
+  console.log(`✔ [${market}] ${bucket.length}건 전송: ${upBody}`);
 }
-console.log(`\n✔ 앱 전송 완료: ${upBody}`);
