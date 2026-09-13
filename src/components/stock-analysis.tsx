@@ -827,12 +827,6 @@ export function StockAnalysis({
                   ))}
                 </div>
               )}
-
-              {ov.profile?.address && (
-                <p className="text-muted-foreground text-xs">
-                  {ov.profile.address}
-                </p>
-              )}
             </TabsContent>
 
             {/* 재무제표 */}
