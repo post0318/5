@@ -39,9 +39,18 @@ interface AnalystForecast {
 }
 
 /** Yahoo 등급 문자열 → 매수/중립/매도 3분류. 증권사마다 표현이 달라 소문자 포함 검사. */
-function gradeTone(grade: string | null): "buy" | "hold" | "sell" | null {
+/** "Reiterated: Buy" 처럼 액션이 접두어로 붙어 오는 경우 등급만 남긴다. */
+function cleanGrade(grade: string | null): string | null {
   if (!grade) return null;
-  const g = grade.toLowerCase();
+  const i = grade.indexOf(":");
+  const g = (i >= 0 ? grade.slice(i + 1) : grade).trim();
+  return g || null;
+}
+
+function gradeTone(grade: string | null): "buy" | "hold" | "sell" | null {
+  const cleaned = cleanGrade(grade);
+  if (!cleaned) return null;
+  const g = cleaned.toLowerCase();
   if (/(strong buy|conviction buy|^buy|outperform|overweight|accumulate|^add|positive|long-term buy)/.test(g))
     return "buy";
   if (/(strong sell|^sell|underperform|underweight|reduce|negative)/.test(g)) return "sell";
@@ -57,8 +66,8 @@ function actionLabel(action: string | null): { text: string; dir: 1 | -1 | 0 } {
       return { text: "하향", dir: -1 };
     case "init":
       return { text: "신규", dir: 0 };
+    // reit(Reiterated)·main 둘 다 등급을 그대로 둔 것 → "유지"로 통일(오너 확인).
     case "reit":
-      return { text: "재확인", dir: 0 };
     case "main":
       return { text: "유지", dir: 0 };
     default:
@@ -72,8 +81,8 @@ function saActionLabel(action: string): { text: string; dir: 1 | -1 | 0 } {
   if (a.includes("upgrade")) return { text: "상향", dir: 1 };
   if (a.includes("downgrade")) return { text: "하향", dir: -1 };
   if (a.includes("initiate")) return { text: "신규", dir: 0 };
-  if (a.includes("reiterate")) return { text: "재확인", dir: 0 };
-  if (a.includes("maintain")) return { text: "유지", dir: 0 };
+  // Reiterates·Maintains 둘 다 등급 변경 없음 → "유지".
+  if (a.includes("maintain") || a.includes("reiterate")) return { text: "유지", dir: 0 };
   return { text: action || "-", dir: 0 };
 }
 
@@ -87,6 +96,7 @@ function targetDir(now: number | null, prior: number | null): 1 | -1 | 0 {
 
 function GradeBadge({ grade }: { grade: string | null }) {
   const tone = gradeTone(grade);
+  const label = cleanGrade(grade);
   return (
     <span
       className={cn(
@@ -96,7 +106,7 @@ function GradeBadge({ grade }: { grade: string | null }) {
         tone === "hold" && "text-muted-foreground bg-muted",
       )}
     >
-      {grade || "-"}
+      {label || "-"}
     </span>
   );
 }
