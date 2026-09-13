@@ -327,19 +327,19 @@ export function BrokerRatings({
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left align-bottom font-medium">애널리스트</th>
                     <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
-                    <th className="border-l py-1.5 pl-3 text-left align-bottom font-medium">적중률</th>
+                    <th className="py-1.5 pl-3 text-left align-bottom font-medium">적중률</th>
                     <th className="py-1.5 text-right align-bottom font-medium">순위</th>
-                    <th className="border-l py-1.5 pl-3 text-right align-bottom font-medium">
+                    <th className="bg-muted/50 py-1.5 pl-3 text-right align-bottom font-medium">
                       현종목
                       <br />
                       적중률
                     </th>
-                    <th className="py-1.5 text-right align-bottom font-medium">
+                    <th className="bg-muted/50 py-1.5 pr-3 text-right align-bottom font-medium">
                       현종목
                       <br />
                       수익률
                     </th>
-                    <th className="border-l py-1.5 pl-3 text-left font-medium">투자의견</th>
+                    <th className="py-1.5 pl-3 text-left font-medium">투자의견</th>
                     <th className="py-1.5 text-left font-medium">등급조정</th>
                     <th className="py-1.5 text-right font-medium">목표주가</th>
                     <th className="py-1.5 text-right font-medium">상승여력</th>
@@ -381,19 +381,19 @@ export function BrokerRatings({
                           </div>
                         </td>
                         <td className="text-muted-foreground py-1.5 pr-3 text-left">{f.firm}</td>
-                        <td className="border-l py-1.5 pr-3 pl-3 text-left">
+                        <td className="py-1.5 pr-3 pl-3 text-left">
                           <ScoreBar value={f.score ?? f.successRate} />
                         </td>
                         <td className="py-1.5 text-right">
                           <Rank rank={f.analystRank} />
                         </td>
-                        <td className="border-l py-1.5 pl-3 text-right">
+                        <td className="bg-muted/50 py-1.5 pl-3 text-right">
                           <Pct value={f.stockSuccessRate} />
                         </td>
-                        <td className="py-1.5 text-right">
+                        <td className="bg-muted/50 py-1.5 pr-3 text-right">
                           <ReturnPct value={f.stockAvgReturn} market={market} />
                         </td>
-                        <td className="border-l py-1.5 pr-3 pl-3 text-left">
+                        <td className="py-1.5 pr-3 pl-3 text-left">
                           <GradeBadge grade={f.rating} />
                         </td>
                         <td
@@ -535,19 +535,19 @@ export function BrokerRatings({
                 <thead>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
-                    <th className="border-l py-1.5 pl-3 text-left align-bottom font-medium">적중률</th>
+                    <th className="py-1.5 pl-3 text-left align-bottom font-medium">적중률</th>
                     <th className="py-1.5 text-right align-bottom font-medium">순위</th>
-                    <th className="border-l py-1.5 pl-3 text-right align-bottom font-medium">
+                    <th className="bg-muted/50 py-1.5 pl-3 text-right align-bottom font-medium">
                       현종목
                       <br />
                       적중률
                     </th>
-                    <th className="py-1.5 text-right align-bottom font-medium">
+                    <th className="bg-muted/50 py-1.5 pr-3 text-right align-bottom font-medium">
                       현종목
                       <br />
                       수익률
                     </th>
-                    <th className="border-l py-1.5 pl-3 text-left font-medium">투자의견</th>
+                    <th className="py-1.5 pl-3 text-left font-medium">투자의견</th>
                     <th className="py-1.5 text-right font-medium">목표주가</th>
                     <th className="py-1.5 text-right font-medium">상승여력</th>
                   </tr>
@@ -566,19 +566,19 @@ export function BrokerRatings({
                           </span>
                         )}
                       </td>
-                      <td className="border-l py-1.5 pr-3 pl-3 text-left">
+                      <td className="py-1.5 pr-3 pl-3 text-left">
                         <ScoreBar value={f.score ?? f.successRate} />
                       </td>
                       <td className="py-1.5 text-right">
                         <Rank rank={f.bestRank} />
                       </td>
-                      <td className="border-l py-1.5 pl-3 text-right">
+                      <td className="bg-muted/50 py-1.5 pl-3 text-right">
                         <Pct value={f.stockSuccessRate} />
                       </td>
-                      <td className="py-1.5 text-right">
+                      <td className="bg-muted/50 py-1.5 pr-3 text-right">
                         <ReturnPct value={f.stockAvgReturn} market={market} />
                       </td>
-                      <td className="border-l py-1.5 pr-3 pl-3 text-left">
+                      <td className="py-1.5 pr-3 pl-3 text-left">
                         <GradeBadge grade={f.rating} />
                       </td>
                       <td className="py-1.5 text-right font-medium whitespace-nowrap">
