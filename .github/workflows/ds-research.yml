@@ -1,0 +1,26 @@
+name: DS투자증권 리서치 수집
+
+# CLAUDE.md 방침(오너 승인 예외): www.ds-sec.co.kr 게시판을 하루 1회, 개인용으로만
+# 조회한다. 그누보드라 로그인 없이 서버렌더 HTML 이 나온다.
+#   sub03_02 기업분석(국내) / sub03_03 투자전략·경제분석(미국 섞임)
+# 종목코드가 제목에 없어 국내는 corpcodes.json 이름 매칭, 미국은 네이버 해외종목
+# 자동완성으로 티커를 해석한다.
+
+on:
+  schedule:
+    - cron: "55 0 * * *" # 00:55 UTC = 09:55 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/collect-ds-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
