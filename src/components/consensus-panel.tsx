@@ -123,89 +123,91 @@ export function ConsensusPanel({
           <p className="text-muted-foreground/80 text-[11px]">{d.notes.join(" · ")}</p>
         )}
 
-        {/* EPS 컨센서스 추이 (당해년도 + 차년도) */}
-        {d.epsRevision && (
-          <div>
-            <h4 className="mb-2 text-xs font-semibold">EPS 컨센서스 추이</h4>
-            <table className="w-full table-fixed text-sm">
-              <colgroup>
-                <col style={{ width: "16%" }} />
-                <col style={{ width: "21%" }} />
-                <col style={{ width: "21%" }} />
-                <col style={{ width: "21%" }} />
-                <col style={{ width: "21%" }} />
-              </colgroup>
-              <thead>
-                <tr className="text-muted-foreground border-b text-center">
-                  <th className="py-1.5 font-medium">시점</th>
-                  <th className="py-1.5 font-medium">당해 EPS(E)</th>
-                  <th className="py-1.5 pr-3 font-medium">당해 PER(E)</th>
-                  <th className="border-l border-dashed py-1.5 pl-3 font-medium">
-                    {d.epsRevision.nextFy ? `${d.epsRevision.nextFy} EPS(E)` : "차년도 EPS(E)"}
-                  </th>
-                  <th className="py-1.5 font-medium">
-                    {d.epsRevision.nextFy ? `${d.epsRevision.nextFy} PER(E)` : "차년도 PER(E)"}
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="tnum">
-                {d.epsRevision.asOf.map((t, i) => (
-                  <tr
-                    key={t}
-                    className={cn("border-b text-right", i % 2 === 1 && "bg-muted/40")}
-                  >
-                    <td className="py-1.5 text-left">{t}</td>
-                    <td className="py-1.5">{won(d.epsRevision!.eps[i])}</td>
-                    <td className="py-1.5 pr-3">{mult(d.epsRevision!.per[i])}</td>
-                    <td className="border-l border-dashed py-1.5 pl-3">
-                      {won(d.epsRevision!.epsNext[i])}
-                    </td>
-                    <td className="py-1.5">{mult(d.epsRevision!.perNext[i])}</td>
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* EPS 컨센서스 추이 (당해년도 + 차년도) */}
+          {d.epsRevision && (
+            <div>
+              <h4 className="mb-2 text-xs font-semibold">EPS 컨센서스 추이</h4>
+              <table className="w-full table-fixed text-sm">
+                <colgroup>
+                  <col style={{ width: "16%" }} />
+                  <col style={{ width: "21%" }} />
+                  <col style={{ width: "21%" }} />
+                  <col style={{ width: "21%" }} />
+                  <col style={{ width: "21%" }} />
+                </colgroup>
+                <thead>
+                  <tr className="text-muted-foreground border-b text-center">
+                    <th className="py-1.5 font-medium">시점</th>
+                    <th className="py-1.5 font-medium">당해 EPS(E)</th>
+                    <th className="py-1.5 pr-3 font-medium">당해 PER(E)</th>
+                    <th className="py-1.5 pl-3 font-medium">
+                      {d.epsRevision.nextFy ? `${d.epsRevision.nextFy} EPS(E)` : "차년도 EPS(E)"}
+                    </th>
+                    <th className="py-1.5 font-medium">
+                      {d.epsRevision.nextFy ? `${d.epsRevision.nextFy} PER(E)` : "차년도 PER(E)"}
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* 어닝 서프라이즈 — EPS 컨센서스 추이 하단 */}
-        {d.earningsSurprise.length > 0 && (
-          <div>
-            <h4 className="mb-2 text-xs font-semibold">EPS 어닝 서프라이즈</h4>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-muted-foreground border-b text-right">
-                  <th className="py-1.5 text-left font-medium">분기</th>
-                  <th className="py-1.5 font-medium">컨센서스</th>
-                  <th className="py-1.5 font-medium">실제</th>
-                  <th className="py-1.5 font-medium">서프라이즈</th>
-                </tr>
-              </thead>
-              <tbody className="tnum">
-                {d.earningsSurprise.map((s) => (
-                  <tr key={s.period} className="border-b text-right">
-                    <td className="py-1.5 text-left">{s.period.slice(0, 7)}</td>
-                    <td className="py-1.5">{won(s.epsEstimate)}</td>
-                    <td className="py-1.5">{won(s.epsActual)}</td>
-                    <td
-                      className={cn(
-                        "py-1.5",
-                        s.surprisePct != null &&
-                          s.surprisePct > 0 &&
-                          stockDirClass(true, market),
-                        s.surprisePct != null &&
-                          s.surprisePct < 0 &&
-                          stockDirClass(false, market),
-                      )}
+                </thead>
+                <tbody className="tnum">
+                  {d.epsRevision.asOf.map((t, i) => (
+                    <tr
+                      key={t}
+                      className={cn("border-b text-right", i % 2 === 1 && "bg-muted/40")}
                     >
-                      {s.surprisePct == null ? "-" : pct(s.surprisePct)}
-                    </td>
+                      <td className="py-1.5 text-left">{t}</td>
+                      <td className="py-1.5">{won(d.epsRevision!.eps[i])}</td>
+                      <td className="py-1.5 pr-3">{mult(d.epsRevision!.per[i])}</td>
+                      <td className="py-1.5 pl-3">
+                        {won(d.epsRevision!.epsNext[i])}
+                      </td>
+                      <td className="py-1.5">{mult(d.epsRevision!.perNext[i])}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* 어닝 서프라이즈 — EPS 컨센서스 추이 우측 (모바일은 하단) */}
+          {d.earningsSurprise.length > 0 && (
+            <div>
+              <h4 className="mb-2 text-xs font-semibold">EPS 어닝 서프라이즈</h4>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-muted-foreground border-b text-right">
+                    <th className="py-1.5 text-left font-medium">분기</th>
+                    <th className="py-1.5 font-medium">컨센서스</th>
+                    <th className="py-1.5 font-medium">실제</th>
+                    <th className="py-1.5 font-medium">서프라이즈</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody className="tnum">
+                  {[...d.earningsSurprise].reverse().map((s) => (
+                    <tr key={s.period} className="border-b text-right">
+                      <td className="py-1.5 text-left">{s.period.slice(0, 7)}</td>
+                      <td className="py-1.5">{won(s.epsEstimate)}</td>
+                      <td className="py-1.5">{won(s.epsActual)}</td>
+                      <td
+                        className={cn(
+                          "py-1.5",
+                          s.surprisePct != null &&
+                            s.surprisePct > 0 &&
+                            stockDirClass(true, market),
+                          s.surprisePct != null &&
+                            s.surprisePct < 0 &&
+                            stockDirClass(false, market),
+                        )}
+                      >
+                        {s.surprisePct == null ? "-" : pct(s.surprisePct)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
         {d.deepLinks.length > 0 && (
           <DeepLinkList
