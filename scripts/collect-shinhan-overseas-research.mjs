@@ -1,6 +1,16 @@
 /**
  * 신한투자증권 "해외 산업 및 기업분석" 리포트 수집기 (미국 종목).
  *
+ * 산업분석/투자전략(2026-09 추가, 오너 지시 — "한국과 미국 모두 동일하게
+ * 수집 기반 구축"): 종목코드가 아예 없는(f2 필드가 "-") "글로벌 전략;
+ * Global Portfolio (날짜)" 시리즈가 이 게시판에 섞여 있는데 지금까지
+ * TITLE_US_RE 에 안 걸려 통째로 버려지고 있었다(실측: 80건 중 29건이
+ * ticker 매칭 실패, 그중 다수가 이 시리즈). 이 시리즈는 종목 없는 전략
+ * 노트라 category:"산업"으로 별도 수집한다(symbol 항상 null). 그 외
+ * 매칭 실패 항목(일본·중국·독일 등 다른 시장 티커)은 이 프로젝트가 다루는
+ * 종목분석/산업분석 탭 범위 밖이라 계속 건너뜀(KB/한경과 달리 이 게시판은
+ * 여러 나라가 섞여 있어 "종목 없음"과 "다른 나라 종목"을 구분해야 함).
+ *
  * 국내 수집기(collect-shinhan-research.mjs)와 같은 API 베이스(bbs2.shinhansec.com)
  * 인데 게시판만 다르다 — 화면(투자정보 > 투자전략 > 해외 산업 및 기업분석,
  * /siw/insights/global/foreignstock/view.do)의 Knockout.js 바인딩에 찍힌
@@ -116,13 +126,35 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       break;
     }
     rawTotal++;
-    const tm = String(it.f2 ?? "").match(TITLE_US_RE);
-    if (!tm) continue; // 미국 외 시장(JP/SH/DE 등) 또는 종목 없는 전략/위클리 리포트
+    const stockField = String(it.f2 ?? "").trim();
+    const tm = stockField.match(TITLE_US_RE);
+    if (!tm) {
+      // 종목 없는 전략 노트("글로벌 전략; Global Portfolio" 등, f2 === "-")만
+      // 산업분석/투자전략으로 수집. 다른 나라 종목(JP/SH/DE 티커)은 이 탭의
+      // 대상이 아니라 계속 건너뜀.
+      if (stockField === "-" || stockField === "") {
+        collected.push({
+          id: String(it.fn),
+          date,
+          title: it.f1,
+          stockName: "글로벌전략",
+          symbol: null,
+          analyst: it.f4 ?? "",
+          opinion: "",
+          targetPrice: null,
+          summary: excerpt(it.f7),
+          pdfUrl: it.f3 || null,
+          views: Number(it.f5) || null,
+          category: "산업",
+        });
+      }
+      continue;
+    }
     collected.push({
       id: String(it.fn),
       date,
       title: it.f1,
-      stockName: String(it.f2 ?? "").replace(TITLE_US_RE, "").trim(),
+      stockName: stockField.replace(TITLE_US_RE, "").trim(),
       symbol: tm[1],
       analyst: it.f4 ?? "",
       opinion: "",
@@ -130,6 +162,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       summary: excerpt(it.f7),
       pdfUrl: it.f3 || null,
       views: Number(it.f5) || null,
+      category: "기업",
     });
   }
   const pages = data.pageInfo?.pages ?? [];
@@ -142,13 +175,18 @@ if (collected.length === 0) {
   console.error(`✗ 종목 매핑 결과 0건(원본 ${rawTotal}건). 게시판 구조가 바뀌었을 수 있음.`);
   process.exit(1);
 }
-console.log(`✔ 파싱 완료: ${collected.length}건 (원본 ${rawTotal}건 중 미국 종목만)`);
+const companyCount = collected.filter((i) => i.category === "기업").length;
+console.log(
+  `✔ 파싱 완료: ${collected.length}건 (원본 ${rawTotal}건 중 기업 ${companyCount}건 + 산업/전략 ${collected.length - companyCount}건)`,
+);
 console.log(
   "  최근 3건:",
   collected.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbol}) — ${i.title}`),
 );
 
-await enrichUsResearch(collected);
+// 산업/전략 노트는 특정 종목 얘기가 아니라 목표주가·투자의견 개념이 없음 —
+// PDF에 우연히 등장하는 숫자를 잘못 채우지 않게 기업(종목) 항목만 보강한다.
+await enrichUsResearch(collected.filter((it) => it.category === "기업"));
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
@@ -167,6 +205,7 @@ const items = collected.map((it) => ({
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: it.views,
+  category: it.category,
 }));
 
 const headers = { "Content-Type": "application/json" };

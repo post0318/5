@@ -71,6 +71,21 @@ function isoDate(yyyymmdd) {
 // 제목 분리. "Spot" 처럼 분류 뒤에 태그가 더 붙는 경우도 있어 유연하게 받는다.
 const TITLE_RE = /^\[해외기업분석(?:\s+\S+)?\s*\/\s*([^\]]+)\]\s*(.+)$/;
 
+// 산업분석/투자전략(2026-09 추가, 오너 지시 — "한국과 미국 모두 동일하게
+// 수집 기반 구축"): "[전략 인사이드/미국] 미국 중간선거, 표적이 된 데이터센터"
+// 처럼 종목 없이 국가·주제별 전략을 다루는 시리즈, "[글로벌 사이버보안 산업]
+// 사이버보안, 구조적 성장 국면"처럼 슬래시 없이 업종명만 있는 리포트가 이
+// 게시판에 섞여 있다(실측, dit_cd=03). 둘 다 종목코드 필드가 비어 있어
+// TITLE_RE 에 안 걸리고 지금까지 버려졌다. "전략 인사이드"는 국가별로 도는
+// 시리즈라(중국·일본 등도 나옴) 미국과 무관한 회차는 건너뛰고, 그 외
+// 슬래시 없는 업종/주제 리포트는 이 수집기가 이미 미국 종목만 다루는
+// 맥락이라 그대로 미국 산업분석으로 편입한다.
+const STRATEGY_INSIDE_RE = /^\[전략\s*인사이드\/([^\]]+)\]\s*(.+)$/;
+const GENERIC_BRACKET_RE = /^\[([^\]]+)\]\s*(.+)$/;
+// "전략 인사이드" 태그가 명시적으로 다른 나라를 가리키면 제외(이 수집기는
+// 미국 전용) — 프로젝트가 다루는 나머지 시장(한국·일본)은 각자의 수집기가 있음.
+const NON_US_COUNTRY_RE = /중국|일본|유럽|홍콩|대만|동남아|한국|인도/;
+
 async function fetchPage(ditCd, cursor) {
   const body = new URLSearchParams({
     trName: "H3211",
@@ -151,7 +166,7 @@ for (const ditCd of ["03", "01"]) {
         stop = true;
         break;
       }
-      rawRows.push(r);
+      rawRows.push({ ...r, __ditCd: ditCd });
     }
     const last = rows[rows.length - 1];
     cursor = { no: last.rsh_ppr_no, date: last.rsh_ppr_dru_dt, time: last.rsh_ppr_dru_tm };
@@ -162,36 +177,90 @@ for (const ditCd of ["03", "01"]) {
 console.log(`  목록 ${rawRows.length}건 중 해외기업분석 매핑 시도...`);
 const collected = [];
 for (const r of rawRows) {
-  const tm = String(r.rsh_ppr_til_cts ?? "").match(TITLE_RE);
-  if (!tm) continue; // 국내 리포트·업종 리포트 등 — 건너뜀
-  const hit = await resolveUsTicker(tm[1]);
-  if (!hit) continue; // 티커 해석 실패(미국 외 시장 등)
-  collected.push({
-    id: r.rsh_ppr_no,
-    date: isoDate(r.rsh_ppr_dru_dt),
-    title: tm[2].trim(),
-    stockName: hit.stockName,
-    symbol: hit.symbol,
-    analyst: r.rsh_ppr_dru_emp_fnm ?? "",
-    opinion: "",
-    targetPrice: null,
-    summary: "",
-    pdfUrl: r.hpge_fle_url_cts || null,
-    views: null,
-  });
+  const rawTitle = String(r.rsh_ppr_til_cts ?? "");
+  const tm = rawTitle.match(TITLE_RE);
+  if (tm) {
+    const hit = await resolveUsTicker(tm[1]);
+    if (!hit) continue; // 티커 해석 실패(미국 외 시장 등)
+    collected.push({
+      id: r.rsh_ppr_no,
+      date: isoDate(r.rsh_ppr_dru_dt),
+      title: tm[2].trim(),
+      stockName: hit.stockName,
+      symbol: hit.symbol,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "기업",
+    });
+    continue;
+  }
+
+  // 산업/전략 폴백은 "해외주식" 전용 게시판(03)에서만 — 국내 게시판(01)은
+  // 평범한 국내 종목 리포트도 "[종목명] 헤드라인" 대괄호 형식을 쓰기 때문에
+  // (예: "[대우건설] 팀코리아 대표 시공 파트너") 여기서 걸러내지 않으면
+  // 국내 종목이 "미국 산업분석"으로 잘못 편입된다(실측으로 확인한 버그).
+  if (r.__ditCd !== "03") continue;
+
+  const sm = rawTitle.match(STRATEGY_INSIDE_RE);
+  if (sm) {
+    if (NON_US_COUNTRY_RE.test(sm[1])) continue; // 미국 외 국가 회차 — 건너뜀
+    collected.push({
+      id: r.rsh_ppr_no,
+      date: isoDate(r.rsh_ppr_dru_dt),
+      title: sm[2].trim(),
+      stockName: "투자전략",
+      symbol: null,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "산업",
+    });
+    continue;
+  }
+
+  const gm = rawTitle.match(GENERIC_BRACKET_RE);
+  if (gm && !NON_US_COUNTRY_RE.test(gm[1])) {
+    collected.push({
+      id: r.rsh_ppr_no,
+      date: isoDate(r.rsh_ppr_dru_dt),
+      title: gm[2].trim(),
+      stockName: gm[1].trim(),
+      symbol: null,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "산업",
+    });
+  }
+  // 대괄호 자체가 없는 국내·업종·비관련 리포트는 계속 건너뜀.
 }
 
 if (collected.length === 0) {
   console.error(`✗ 종목 매핑 결과 0건(원본 ${rawRows.length}건). 게시판 구조가 바뀌었을 수 있음.`);
   process.exit(1);
 }
-console.log(`✔ 파싱 완료: ${collected.length}건 (원본 ${rawRows.length}건 중 미국 종목만)`);
+const companyCount = collected.filter((i) => i.category === "기업").length;
+console.log(
+  `✔ 파싱 완료: ${collected.length}건 (원본 ${rawRows.length}건 중 기업 ${companyCount}건 + 산업/전략 ${collected.length - companyCount}건)`,
+);
 console.log(
   "  최근 3건:",
   collected.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbol}) — ${i.title}`),
 );
 
-await enrichUsResearch(collected);
+// 산업/전략 노트는 특정 종목 얘기가 아니라 목표주가·투자의견 개념이 없음 —
+// PDF에 우연히 등장하는 숫자를 잘못 채우지 않게 기업(종목) 항목만 보강한다.
+await enrichUsResearch(collected.filter((it) => it.category === "기업"));
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
