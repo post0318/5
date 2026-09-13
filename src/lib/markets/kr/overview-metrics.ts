@@ -38,27 +38,19 @@ export async function computeKrOverviewMetrics(
   symbol: string,
   yahooOverride?: string | null,
 ): Promise<KrOverviewMetrics> {
-  const empty: KrOverviewMetrics = {
-    marketCap: null,
-    perTtm: null,
-    pbr: null,
-    revenueAnnual: null,
-    opMargin: null,
-    netMargin: null,
-    last: null,
-    changePct: null,
-    currency: null,
-  };
   const adapter = getAdapter("kr");
-  let corpCode: string;
+  // corp_code 는 DART(재무제표) 조회에만 필요 — 시세는 corp_code 와 무관하므로
+  // DART 상장사 목록에 없는 종목(ETF·우선주·최근 상장/합병 등)이어도 시세는
+  // 계속 조회한다(과거엔 여기서 던지면 함수 전체가 empty 로 빠져 시세까지 비었음).
+  let corpCode: string | null;
   try {
     corpCode = resolveCorpCode("", symbol).corpCode;
   } catch {
-    return empty;
+    corpCode = null;
   }
 
   const [facts, quote, ttm] = await Promise.all([
-    fetchKrFacts(corpCode, "annual").catch(() => null),
+    corpCode ? fetchKrFacts(corpCode, "annual").catch(() => null) : Promise.resolve(null),
     // KRX 가 실패해도 getEodQuote 내부에서 Stooq → Yahoo 로 자동 폴백된다
     // (fetchKrxEod 를 직접 쓰면 KRX 실패 = 시세 전부 없음).
     getEodQuote("kr", symbol, { yahooOverride }).catch(() => null),
