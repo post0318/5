@@ -77,7 +77,9 @@ function ema(values: number[], period: number): (number | null)[] {
   return out;
 }
 
-export const CHART_YEARS = [0.25, 0.5, 1, 3, 5, 10] as const;
+// 0.0833 ≈ 1/12년(1개월). `as const` 가 리터럴 타입을 유지하도록 분수식(1/12)
+// 대신 소수 리터럴로 둔다 — 식으로 쓰면 ChartYears 가 number 로 넓어진다.
+export const CHART_YEARS = [0.0833, 0.25, 0.5, 1, 3, 5, 10] as const;
 export type ChartYears = (typeof CHART_YEARS)[number];
 
 export async function getIndexChart(key: string, years: ChartYears = 1): Promise<IndexChart | null> {

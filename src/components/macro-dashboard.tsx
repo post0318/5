@@ -379,7 +379,9 @@ export function MacroDashboard() {
 const GREEN = "oklch(0.62 0.17 150)";
 const RED = "oklch(0.58 0.21 27)";
 
-const CHART_YEARS = [0.25, 0.5, 1, 3, 5, 10] as const;
+// lib/macro/index-chart.ts 의 CHART_YEARS 와 같은 값이어야 한다(서버가 이 목록으로
+// y 파라미터를 검증하고, 목록 밖 값은 1년으로 폴백). 0.0833 ≈ 1개월.
+const CHART_YEARS = [0.0833, 0.25, 0.5, 1, 3, 5, 10] as const;
 const chartRangeLabel = (y: number) => (y < 1 ? `${Math.round(y * 12)}개월` : `${y}년`);
 
 function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => void }) {
@@ -400,7 +402,8 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
   }, [q.data]);
 
   const fmt = (v: number | string) => formatNumber(typeof v === "number" ? v : Number(v), 2);
-  const xTick = (d: string) => d.slice(2, 7);
+  // 1개월 구간은 "YY-MM" 이면 눈금이 전부 같은 값이 돼버려 월-일로 표기.
+  const xTick = (d: string) => (years < 0.25 ? d.slice(5) : d.slice(2, 7));
 
   return (
     <Card>
