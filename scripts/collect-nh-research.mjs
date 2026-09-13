@@ -18,6 +18,15 @@
  * 한경 컨센서스와 동일한 트레이드오프, 기능상 문제 없음). 해외종목만 다루는
  * 리포트(코드 없음, 예: "[해외기업분석/Apple]")는 건너뜀.
  *
+ * 산업분석/투자전략(2026-09 추가, 오너 지시 — "한국과 미국 모두 동일하게
+ * 수집 기반 구축", 도메스틱은 "한경에서 받아오는 회사는 제외"): 응답에
+ * `rsh_ppr_ser_cd_nm` 필드가 이미 "기업"/"산업"을 명시적으로 구분해준다(브라
+ * 켓 제목을 추측할 필요가 없음, 실측 확인). 종목코드가 0개인 항목 중
+ * `ser_cd_nm === "산업"`인 것만 category:"산업"으로 별도 수집한다(코드 0개
+ * + "기업"인 항목은 미상장·코드 매칭 실패라 기존과 동일하게 건너뜀). 제목의
+ * "[분류/세부]" 형식은 "/" 뒤쪽을 업종 라벨로 쓴다(예: "[Spot Comment/
+ * 자동차산업]" → "자동차산업"), "/" 없으면 대괄호 안 전체를 그대로 라벨로.
+ *
  * ⚠️ www.nhsec.com/robots.txt 는 `Disallow: /`(Googlebot 등 주요 크롤러만 예외)다.
  *    다른 예외들과 동일하게 "개인용·로컬 실행·저빈도" 조건으로 오너 승인
  *    (CLAUDE.md 참조, 오너가 "NH투자증권도 로그인없이 가능하다" 직접 확인).
@@ -82,6 +91,14 @@ const nameByCode = new Map(corpcodes.map((c) => [c.s, c.n]));
 function isoDate(yyyymmdd) {
   const m = String(yyyymmdd).match(/^(\d{4})(\d{2})(\d{2})$/);
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+const GENERIC_BRACKET_RE = /^\[([^\]]+)\]\s*(.*)$/;
+function sectorLabelAndTitle(rawTitle) {
+  const m = String(rawTitle ?? "").match(GENERIC_BRACKET_RE);
+  if (!m) return { sector: "산업", title: rawTitle };
+  const parts = m[1].split("/");
+  return { sector: parts[parts.length - 1].trim(), title: m[2].trim() || m[1].trim() };
 }
 
 const EXCERPT_LEN = 150;
@@ -189,25 +206,46 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       stop = true;
       break;
     }
+    if (!date) continue;
     const codes = String(r.rsh_ppr_iem_cd_pcl ?? "")
       .split(",")
       .map((c) => c.trim())
       .filter((c) => /^\d{6}$/.test(c));
-    if (!date || codes.length === 0) continue; // 코드 없음(해외종목만 다룸) — 건너뜀
-    for (const code of codes) {
-      collected.push({
-        id: `${r.rsh_ppr_no}:${code}`,
-        date,
-        title: r.rsh_ppr_til_cts,
-        stockName: nameByCode.get(code) ?? code,
-        symbol: code,
-        analyst: r.rsh_ppr_dru_emp_fnm ?? "",
-        opinion: "",
-        summary: "",
-        pdfUrl: r.hpge_fle_url_cts || null,
-        views: null,
-      });
+    if (codes.length > 0) {
+      for (const code of codes) {
+        collected.push({
+          id: `${r.rsh_ppr_no}:${code}`,
+          date,
+          title: r.rsh_ppr_til_cts,
+          stockName: nameByCode.get(code) ?? code,
+          symbol: code,
+          analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+          opinion: "",
+          summary: "",
+          pdfUrl: r.hpge_fle_url_cts || null,
+          views: null,
+          category: "기업",
+        });
+      }
+      continue;
     }
+    // 코드 0개 — ser_cd_nm 이 "산업"이면 산업분석/투자전략으로 수집, 그 외
+    // ("기업"인데 코드 매칭 실패, 해외종목만 다룸 등)는 기존처럼 건너뜀.
+    if (r.rsh_ppr_ser_cd_nm !== "산업") continue;
+    const { sector, title } = sectorLabelAndTitle(r.rsh_ppr_til_cts);
+    collected.push({
+      id: r.rsh_ppr_no,
+      date,
+      title,
+      stockName: sector,
+      symbol: null,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "산업",
+    });
   }
 
   const last = rows[rows.length - 1];
@@ -238,8 +276,12 @@ for (const it of collected) {
   }
   const { summary, opinion, targetPrice } = excerptCache.get(it.pdfUrl);
   it.summary = summary;
-  it.opinion = opinion;
-  it.targetPrice = targetPrice;
+  // 산업분석은 특정 종목 얘기가 아니므로 목표주가·투자의견 개념이 없음 —
+  // 본문 발췌(summary)는 유지하되 등급·목표가는 채우지 않는다.
+  if (it.category !== "산업") {
+    it.opinion = opinion;
+    it.targetPrice = targetPrice;
+  }
   if (!it.summary) excerptFailCount++;
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건, PDF ${excerptCache.size}개)`);

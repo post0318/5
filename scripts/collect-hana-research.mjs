@@ -63,8 +63,14 @@ const UA =
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const LIST_URL = "https://www.hanaw.com/main/research/research/list.cmd";
-// pid=3&cid=2 = 산업/기업 > 기업분석 게시판.
+// pid=3&cid=2 = 산업/기업 > 기업분석 게시판, cid=1 = 같은 메뉴의 산업분석
+// 게시판(2026-09 추가, 오너 지시 — "한국과 미국 모두 동일하게 수집 기반
+// 구축"). 제목이 "업종명(투자의견): 제목"(괄호 생략되는 경우도 있음, 예:
+// "에너지/화학: Weekly Monitor: ...") 형식이라 종목 제목과 다른 정규식
+// (INDUSTRY_TITLE_RE)으로 업종명만 뽑는다 — 특정 종목이 아니므로 symbol
+// 항상 null, 목표주가·투자의견 추출도 건너뜀.
 const BASE_PARAMS = { pid: "3", cid: "2", srchTitle: "", srchWord: "", startDate: "1900-01-01", endDate: "9999-12-31" };
+const INDUSTRY_TITLE_RE = /^(.+?)(?:\([^)]*\))?\s*:\s*(.+)$/;
 
 const isoDate = (s) => {
   const m = String(s).trim().match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
@@ -120,9 +126,10 @@ function stripHtml(s) {
 // (뒤에 영문 붙는 스팩/우선주 등은 그대로 두되 앞 6자리만 씀).
 const TITLE_RE = /^(.+?)\((\d{6}[A-Z0-9]*)\.[A-Z]+\s*\/\s*([^)]+)\)\s*:\s*(.+)$/;
 
-async function fetchPage(page) {
+async function fetchPage(page, cid = "2") {
   const url = new URL(LIST_URL);
   for (const [k, v] of Object.entries(BASE_PARAMS)) url.searchParams.set(k, v);
+  url.searchParams.set("cid", cid);
   url.searchParams.set("curPage", String(page));
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -151,6 +158,31 @@ function parseItems(html) {
       targetPrice: extractTargetPrice(rawBody),
       summary: excerpt(stripHtml(rawBody)),
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
+      category: "기업",
+    });
+  }
+  return items;
+}
+
+function parseIndustryItems(html) {
+  const items = [];
+  for (const m of html.matchAll(ITEM_RE)) {
+    const [, bbsCd, bbsSeq, rawTitle, rawDate, rawBody] = m;
+    const title = stripHtml(rawTitle);
+    const date = isoDate(rawDate);
+    if (!date) continue;
+    const tm = title.match(INDUSTRY_TITLE_RE);
+    items.push({
+      id: `${bbsCd}_${bbsSeq}`,
+      date,
+      title: tm ? tm[2].trim() : title,
+      stockName: tm ? tm[1].trim() : "산업",
+      symbolHint: null,
+      opinion: "",
+      targetPrice: null,
+      summary: excerpt(stripHtml(rawBody)),
+      pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
+      category: "산업",
     });
   }
   return items;
@@ -166,8 +198,23 @@ const collected = [];
 let stop = false;
 
 for (let page = 1; page <= MAX_PAGES && !stop; page++) {
-  const html = await fetchPage(page);
+  const html = await fetchPage(page, "2");
   const items = parseItems(html);
+  if (items.length === 0) break;
+  for (const it of items) {
+    if (new Date(it.date) < cutoff) {
+      stop = true;
+      break;
+    }
+    collected.push(it);
+  }
+  await sleep(400); // 예의상 간격
+}
+
+stop = false;
+for (let page = 1; page <= MAX_PAGES && !stop; page++) {
+  const html = await fetchPage(page, "1");
+  const items = parseIndustryItems(html);
   if (items.length === 0) break;
   for (const it of items) {
     if (new Date(it.date) < cutoff) {
@@ -192,7 +239,8 @@ console.log(
 
 console.log(`▶ 목표주가 보강 중 (${collected.length}건)...`);
 for (const it of collected) {
-  if (it.targetPrice == null) {
+  // 산업분석은 특정 종목 얘기가 아니므로 목표주가 개념이 없음 — 건너뜀.
+  if (it.category !== "산업" && it.targetPrice == null) {
     it.targetPrice = await extractTargetPriceFromPdf(it.pdfUrl);
     await sleep(400);
   }
@@ -222,6 +270,7 @@ const items = collected.map((it) => ({
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,
+  category: it.category,
 }));
 
 const headers = { "Content-Type": "application/json" };

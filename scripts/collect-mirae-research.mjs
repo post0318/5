@@ -64,6 +64,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const LIST_URL = "https://securities.miraeasset.com/bbs/board/message/list.do";
 const CATEGORY_ID = "1800"; // 기업분석
+// 산업분석/투자전략(2026-09 추가, 오너 지시 — "한국과 미국 모두 동일하게
+// 수집 기반 구축"). 기업분석(1800)과 형제 메뉴 — 검색엔진에 색인된 사이트
+// 자체 메뉴명(제목 태그)으로 확인: categoryId=1525 "산업분석", 1527
+// "투자전략". 목록 항목이 이미 "<b>주제명</b><br/>헤드라인" 구조라 종목
+// 리포트처럼 제목에서 코드/티커를 뽑을 필요가 없음 — 굵은 글씨 부분을
+// 그대로 업종/전략 라벨(stockName)로 쓴다.
+const INDUSTRY_CATEGORY_IDS = ["1525", "1527"];
 
 // "종목명 (코드/의견)" — 국내는 6자리 숫자 코드.
 const TITLE_RE = /^(.+?)\s*\((\d{6})\/([^)]+)\)$/;
@@ -71,9 +78,9 @@ const TITLE_RE = /^(.+?)\s*\((\d{6})\/([^)]+)\)$/;
 // 제목에 투자의견이 같이 있어 다른 미국 소스와 달리 등급을 공짜로 얻는다.
 const TITLE_US_RE = /^(.+?)\s*\(([A-Z][A-Z.]{0,5})\s+US\/([^)]+)\)$/;
 
-async function fetchPage(page) {
+async function fetchPage(page, categoryId = CATEGORY_ID) {
   const url = new URL(LIST_URL);
-  url.searchParams.set("categoryId", CATEGORY_ID);
+  url.searchParams.set("categoryId", categoryId);
   url.searchParams.set("curPage", String(page));
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -106,6 +113,38 @@ function parseItems(html) {
       opinion: (tm ?? um)[3].trim(),
       analyst: analystM ? analystM[1].trim() : "",
       pdfUrl: pdfM ? pdfM[1] : null,
+      category: "기업",
+    });
+  }
+  return items;
+}
+
+// 산업분석(1525)·투자전략(1527) 게시판 — 목록 항목이 이미 "<b>주제명</b>
+// <br/>헤드라인" 구조라 종목코드/티커 매칭이 필요 없음(코드가 아예 없음).
+function parseIndustryItems(html, categoryId) {
+  const items = [];
+  for (const rowHtml of html.split(/<tr[^>]*>/).slice(1)) {
+    const dateM = rowHtml.match(/<td\s*>\s*(\d{4}-\d{2}-\d{2})\s*<\/td>/);
+    const subjectM = rowHtml.match(
+      /<a href="javascript:view\('(\d+)','(\d+)'\)"[^>]*><b>([^<]+)<\/b><br\/>([^<]*)<\/a>/,
+    );
+    if (!dateM || !subjectM) continue;
+    const [, id, messageNumber, rawTitle, rawSummary] = subjectM;
+    const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
+    const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
+    items.push({
+      id,
+      messageNumber,
+      srcCategoryId: categoryId,
+      date: dateM[1],
+      title: rawSummary.trim() || rawTitle.trim(),
+      market: "kr",
+      stockName: rawTitle.trim(),
+      symbolHint: null,
+      opinion: "",
+      analyst: analystM ? analystM[1].trim() : "",
+      pdfUrl: pdfM ? pdfM[1] : null,
+      category: "산업",
     });
   }
   return items;
@@ -134,12 +173,12 @@ function extractTargetPrice(flatText) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-async function extractDetail(id, messageNumber) {
+async function extractDetail(id, messageNumber, categoryId = CATEGORY_ID) {
   try {
     const url = new URL(DETAIL_URL);
     url.searchParams.set("messageId", id);
     url.searchParams.set("messageNumber", messageNumber);
-    url.searchParams.set("categoryId", CATEGORY_ID);
+    url.searchParams.set("categoryId", categoryId);
     const res = await fetch(url, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = new TextDecoder("euc-kr").decode(await res.arrayBuffer());
@@ -173,6 +212,23 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   await sleep(400);
 }
 
+for (const categoryId of INDUSTRY_CATEGORY_IDS) {
+  stop = false;
+  for (let page = 1; page <= MAX_PAGES && !stop; page++) {
+    const html = await fetchPage(page, categoryId);
+    const items = parseIndustryItems(html, categoryId);
+    if (items.length === 0) break;
+    for (const it of items) {
+      if (new Date(it.date) < cutoff) {
+        stop = true;
+        break;
+      }
+      collected.push(it);
+    }
+    await sleep(400);
+  }
+}
+
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
@@ -186,9 +242,10 @@ console.log(
 console.log(`▶ 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, targetPrice } = await extractDetail(it.id, it.messageNumber);
+  const { summary, targetPrice } = await extractDetail(it.id, it.messageNumber, it.srcCategoryId);
   it.summary = summary;
-  it.targetPrice = targetPrice;
+  // 산업분석/투자전략은 특정 종목 얘기가 아니므로 목표주가 개념이 없음.
+  it.targetPrice = it.category === "산업" ? null : targetPrice;
   if (!it.summary) excerptFailCount++;
   await sleep(400);
 }
@@ -213,6 +270,7 @@ const items = collected.map((it) => ({
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,
+  category: it.category,
 }));
 
 const headers = { "Content-Type": "application/json" };

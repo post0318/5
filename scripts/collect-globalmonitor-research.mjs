@@ -16,10 +16,23 @@
  *    케이스. 오너가 URL을 직접 제시하며 사용을 지시해 예외 승인(CLAUDE.md 참조).
  *
  * 제목이 "[종목명 (거래소:티커)] 제목" 형식(예: "[오라클 (NYS:ORCL)] 내 돈
- * 말고, 고객 돈으로")이라 티커를 바로 뽑는다 — 이름 검색 불필요. 이 형식이
- * 아닌 항목(채권/경제/시황 등 종목 무관 리포트, 예: "DB Morning Express",
- * "미국 주식 데일리 뉴스")은 건너뜀. summary 필드에 이미 정리된 한국어 요약
- * 문단이 있어(다른 소스 대비 품질 좋음) 그대로 저장.
+ * 말고, 고객 돈으로")이라 티커를 바로 뽑는다 — 이름 검색 불필요. summary
+ * 필드에 이미 정리된 한국어 요약 문단이 있어(다른 소스 대비 품질 좋음) 그대로
+ * 저장.
+ *
+ * 산업분석/투자전략(2026-09 추가, 오너 지시 — "한국과 미국 모두 동일하게
+ * 수집 기반 구축", "해외는 GM에서 받아오는 회사는 제외"): 위 종목 티커
+ * 형식이 아닌 항목(채권/경제/시황 등, 예: "DB Morning Express", "미국 주식
+ * 데일리 뉴스", "[AI Economist] ...", "[미국은 지금] ...")을 예전엔 통째로
+ * 버렸는데, 실측 결과(2026-09) 300건 중 175건이 이런 산업분석/투자전략
+ * 콘텐츠였다 — 이미 이 한 게시판에 키움·한화·유안타·DB·대신·LS·SK·iM·
+ * 상상인·하나증권 등 다수 증권사가 다 모여 있어(auth 필드), 이걸 그대로
+ * category:"산업"으로 추가 수집하면 그 증권사들을 하나하나 새로 붙일
+ * 필요가 없다(오너 지시의 "GM에서 받아오는 회사는 제외" 조건이 바로 이
+ * 의미 — 각 증권사 자체 산업분석 게시판을 따로 안 붙여도 됨). 제목이
+ * "[라벨] 헤드라인" 형식이면 대괄호를 라벨로, 아니면 제목 전체를 헤드라인
+ * 삼아 라벨은 "산업"으로 둔다. 신한투자증권은 기존처럼 계속 제외(자체
+ * 해외 게시판이 이미 산업분석까지 다룸, EXCLUDED_SOURCES 참고).
  *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-globalmonitor-research.mjs
@@ -106,28 +119,58 @@ async function fetchPage(page, startDate) {
   return json.reportlist ?? [];
 }
 
+// "[라벨] 나머지" 에서 대괄호 머리말을 라벨로 뽑는다. 대괄호가 없거나 뒤에
+// 남는 게 없으면(예: 라벨만 있고 본문이 없는 경우) 라벨을 "산업"으로 두고
+// 원래 텍스트를 그대로 headline 으로 쓴다.
+function bracketLabelAndRest(title) {
+  const m = title.match(/^\[([^\]]*)\]\s*(.*)$/);
+  if (!m) return { label: "산업", rest: title.trim() };
+  const rest = m[2].trim();
+  return rest ? { label: m[1].trim(), rest } : { label: "산업", rest: m[1].trim() };
+}
+
 function parseItems(rows) {
   const items = [];
   for (const r of rows) {
-    const tm = String(r.title ?? "").match(TITLE_RE);
-    if (!tm) continue; // 종목코드 없는 채권/경제/시황 리포트 — 건너뜀
-    const [, stockName, , ticker, headline] = tm;
     const dateM = String(r.writeDate ?? "").match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
     if (!dateM) continue;
+    const date = `${dateM[1]}-${dateM[2]}-${dateM[3]}`;
+    const tm = String(r.title ?? "").match(TITLE_RE);
+    if (tm) {
+      const [, stockName, , ticker, headline] = tm;
+      items.push({
+        id: r.rptId,
+        date,
+        title: headline.trim() || stockName.trim(),
+        stockName: stockName.trim(),
+        symbolHint: ticker,
+        analyst: r.writer ?? "",
+        source: r.auth ?? "",
+        // 응답에 투자의견 필드가 있다(빈 값인 행도 많음) — 있으면 그대로 쓰고,
+        // 없으면 뒤의 enrichUsResearch 가 본문·PDF 에서 찾는다.
+        opinion: String(r.rptopninvest ?? "").trim(),
+        targetPrice: null,
+        summary: excerpt(r.summary),
+        pdfUrl: r.secureId ? `https://rreport.einfomax.co.kr/report/${r.secureId}.pdf` : null,
+        category: "기업",
+      });
+      continue;
+    }
+    // 종목코드 없는 채권/경제/시황/전략 리포트 — 산업분석/투자전략으로 수집.
+    const { label, rest } = bracketLabelAndRest(String(r.title ?? ""));
     items.push({
       id: r.rptId,
-      date: `${dateM[1]}-${dateM[2]}-${dateM[3]}`,
-      title: headline.trim() || stockName.trim(),
-      stockName: stockName.trim(),
-      symbolHint: ticker,
+      date,
+      title: rest,
+      stockName: label,
+      symbolHint: null,
       analyst: r.writer ?? "",
       source: r.auth ?? "",
-      // 응답에 투자의견 필드가 있다(빈 값인 행도 많음) — 있으면 그대로 쓰고,
-      // 없으면 뒤의 enrichUsResearch 가 본문·PDF 에서 찾는다.
-      opinion: String(r.rptopninvest ?? "").trim(),
+      opinion: "",
       targetPrice: null,
       summary: excerpt(r.summary),
       pdfUrl: r.secureId ? `https://rreport.einfomax.co.kr/report/${r.secureId}.pdf` : null,
+      category: "산업",
     });
   }
   return items;
@@ -164,7 +207,9 @@ console.log(
   "  최근 5건:",
   collected.slice(0, 5).map((i) => `${i.date} [${i.source}] ${i.stockName}(${i.symbolHint}) — ${i.title}`),
 );
-await enrichUsResearch(collected);
+// 산업분석/투자전략은 특정 종목 얘기가 아니므로 목표주가·투자의견 개념이
+// 없음 — PDF에 우연히 등장하는 숫자를 잘못 채우지 않게 기업(종목) 항목만 보강.
+await enrichUsResearch(collected.filter((it) => it.category === "기업"));
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
@@ -196,6 +241,7 @@ for (const it of collected) {
     summary: it.summary,
     pdfUrl: it.pdfUrl,
     views: null,
+    category: it.category,
   });
 }
 

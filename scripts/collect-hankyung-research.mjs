@@ -183,7 +183,7 @@ const INDUSTRY_REPORT_TYPES = [
 ];
 const BRACKET_RE = /^\[([^\]]+)\]\s*(.*)$/;
 
-function parseIndustryItems(html, label) {
+function parseIndustryItems(html, label, reportCode) {
   const items = [];
   for (const rowHtml of html.split(/<tr[^>]*>/).slice(1)) {
     const dateM = rowHtml.match(DATE_RE);
@@ -193,10 +193,13 @@ function parseIndustryItems(html, label) {
     const title = stripHtml(rawTitle);
     // 행 전체에서 단순 텍스트 <td>만 순서대로 매칭 — 중첩 태그가 있는 셀
     // (제목의 팝업 레이어, 차트·첨부파일 링크)은 [^<]* 패턴에 안 걸려 자연히
-    // 건너뛰어지므로 [작성일, 투자의견, 작성자, 제공출처] 순서로만 잡힌다.
+    // 건너뛰어지므로 [작성일, (투자의견,) 작성자, 제공출처] 순서로만 잡힌다.
+    // ⚠️ IN(산업)은 헤더에 "투자의견" 칸이 있어 4칸[작성일/투자의견/작성자/
+    // 제공출처]인데, MA(시장)는 그 칸이 아예 없어 3칸[작성일/작성자/제공출처]
+    // 이다(실측 확인) — 하나로 취급하면 MA 항목의 작성자·제공출처가 밀려서
+    // 뒤바뀐다(실제로 배포된 채 발견한 버그).
     const cells = [...rowHtml.matchAll(/<td[^>]*>\s*([^<]*?)\s*<\/td>/g)].map((m) => stripHtml(m[1]));
-    const analyst = cells[2] ?? "";
-    const source = cells[3] ?? "";
+    const [analyst, source] = reportCode === "MA" ? [cells[1] ?? "", cells[2] ?? ""] : [cells[2] ?? "", cells[3] ?? ""];
     const bm = title.match(BRACKET_RE);
     const sector = bm ? bm[1].trim() : label;
     const restTitle = bm && bm[2].trim() ? bm[2].trim() : title;
@@ -291,7 +294,7 @@ for (let page = 1; page <= MAX_PAGES; page++) {
 for (const { code, label } of INDUSTRY_REPORT_TYPES) {
   for (let page = 1; page <= MAX_PAGES; page++) {
     const html = await fetchPage(page, sdate, edate, code);
-    const items = parseIndustryItems(html, label);
+    const items = parseIndustryItems(html, label, code);
     if (items.length === 0) break;
     collected.push(...items);
     await sleep(400);

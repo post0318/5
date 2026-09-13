@@ -6,7 +6,10 @@
  * 없이 평범한 GET으로 직접 열린다(오너가 실제 사이트에서 확인해 알려준 링크로
  * 역추적). 응답이 EUC-KR 인코딩이라 TextDecoder로 변환한다. 페이지네이션도
  * 평범한 GET(`&pageNum=N`). 종목명은 코드 없이 이름만 나와 corpcode.ts 이름
- * 검색으로 매핑한다. "산업분석"(구분 컬럼) 행은 종목이 아니라 업종이라 제외.
+ * 검색으로 매핑한다. "산업분석"(구분 컬럼) 행은 종목이 아니라 업종인데,
+ * 예전엔 통째로 버렸으나(2026-09 추가, 오너 지시 — "한국과 미국 모두
+ * 동일하게 수집 기반 구축") category:"산업"으로 별도 수집한다(symbol 항상
+ * null, stockName 은 종목/업종 컬럼 값 그대로 — 산업분석 행엔 업종명이 담김).
  *
  * ⚠️ www.iprovest.com/robots.txt 확인 안 됨(사이트 자체가 4중 프레임이라
  *    표준 경로가 애매) — 다른 예외들과 동일하게 "개인용·로컬 실행·저빈도"
@@ -104,12 +107,14 @@ function parseItems(html) {
     const [, rawDate, sno, rawTitle, rawStock, category] = m;
     const date = isoDate(rawDate);
     if (!date) continue;
-    if (!category.includes("기업분석")) continue; // 산업분석 등 종목 아닌 리포트 제외
+    const isIndustry = category.includes("산업분석");
+    if (!category.includes("기업분석") && !isIndustry) continue; // 그 외 분류(경제분석 등)는 제외
     items.push({
       id: sno,
       date,
       title: stripHtml(rawTitle),
       stockName: stripHtml(rawStock),
+      category: isIndustry ? "산업" : "기업",
     });
   }
   return items;
@@ -221,8 +226,11 @@ for (const it of collected) {
   // rno=1 없으면 "서비스 이용에 불편을 드려 죄송합니다" 에러 페이지로 감(실측 확인).
   it.pdfUrl = pdfUrl ?? `https://www.iprovest.com/weblogic/RSReportServlet?scr_id=32&mode=detail&menuCode=1&pageNum=1&sno=${it.id}&rno=1`;
   it.summary = summary;
-  it.opinion = opinion;
-  it.targetPrice = targetPrice;
+  // 산업분석은 특정 종목 얘기가 아니므로 목표주가·투자의견 개념이 없음.
+  if (it.category !== "산업") {
+    it.opinion = opinion;
+    it.targetPrice = targetPrice;
+  }
   if (!summary) excerptFailCount++;
   await sleep(400);
 }
@@ -246,6 +254,7 @@ const items = collected.map((it) => ({
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,
+  category: it.category,
 }));
 
 const headers = { "Content-Type": "application/json" };

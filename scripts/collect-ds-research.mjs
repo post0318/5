@@ -123,6 +123,18 @@ function stripBracket(title) {
   return m ? m[1].trim() : title.trim();
 }
 
+/** 산업분석/투자전략(2026-09 추가, 오너 지시 — "한국과 미국 모두 동일하게
+ * 수집 기반 구축"): 종목 매칭에 실패한 나머지(Defense Daily·Macro Issue·
+ * 투자전략·퀀트 노트 등)를 버리지 않고 대괄호 태그를 업종/주제 라벨로 써서
+ * 수집한다. "[미국 데이터센터 ...균열]"처럼 본문 전체가 대괄호 안에 있어
+ * 태그 뒤에 남는 게 없으면 라벨을 "산업"으로 두고 대괄호 안 전체를 제목으로 쓴다. */
+function bracketLabelAndRest(title) {
+  const m = title.match(/^\[([^\]]*)\]\s*(.*)$/);
+  if (!m) return { label: "산업", rest: title.trim() };
+  const rest = m[2].trim();
+  return rest ? { label: m[1].trim(), rest } : { label: "산업", rest: m[1].trim() };
+}
+
 console.log(`▶ DS투자증권 리서치 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
 
@@ -152,43 +164,89 @@ const krItems = [];
 for (const r of krRows) {
   const body = stripBracket(r.title);
   const hit = resolveKrStock(body);
-  if (!hit) continue; // Defense Daily·Macro 등 종목 리포트가 아닌 것
+  if (hit) {
+    krItems.push({
+      id: r.id,
+      date: r.date,
+      title: body.slice(hit.stockName.length).replace(/^[\s\-–—:,]+/, "").trim() || body,
+      stockName: hit.stockName,
+      symbol: hit.symbol,
+      analyst: "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_02&wr_id=${r.id}`,
+      views: null,
+      category: "기업",
+    });
+    continue;
+  }
+  // Defense Daily·거버넌스 시리즈·섹터 전략 노트 등 종목 리포트가 아닌 것 —
+  // 산업분석/투자전략으로 별도 수집(symbol 항상 null).
+  const { label, rest } = bracketLabelAndRest(r.title);
   krItems.push({
     id: r.id,
     date: r.date,
-    title: body.slice(hit.stockName.length).replace(/^[\s\-–—:,]+/, "").trim() || body,
-    stockName: hit.stockName,
-    symbol: hit.symbol,
+    title: rest,
+    stockName: label,
+    symbol: null,
     analyst: "",
     opinion: "",
     targetPrice: null,
     summary: "",
     pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_02&wr_id=${r.id}`,
     views: null,
+    category: "산업",
   });
 }
 
 const usItems = [];
+// 산업분석/투자전략(2026-09 추가): 이 게시판은 원래 이름 그대로 "투자전략/
+// 경제분석"이라 종목 매칭에 실패한(또는 애초에 종목 얘기가 아닌) 대다수
+// 글이 Macro Issue·투자전략·퀀트 노트 등 산업분석/투자전략 콘텐츠다(오너가
+// 애초에 "ds는 종목리서치는 gm으로, 산업분석은 ds검색기로" 결정한 이유와도
+// 부합). "미국주식/글로벌주식" 태그가 있으면 미국 산업분석(market:"us"),
+// 그 외(국내 매크로·전략)는 한국 산업분석(market:"kr")으로 분류한다.
 for (const r of usRows) {
-  // "[DS 미국주식] 엔비디아: 제목" / "[DS 미국주식 이규원] GPT-6 ..." 형태
-  if (!/미국주식|글로벌주식/.test(r.title)) continue;
-  const body = stripBracket(r.title);
-  const nameM = body.match(/^([^:：]{2,20})\s*[:：]\s*(.+)$/);
-  if (!nameM) continue; // 종목명 없이 주제만 있는 글
-  const hit = await resolveUsTicker(nameM[1]);
-  if (!hit) continue;
+  const isUsTagged = /미국주식|글로벌주식/.test(r.title);
+  if (isUsTagged) {
+    const body = stripBracket(r.title);
+    const nameM = body.match(/^([^:：]{2,20})\s*[:：]\s*(.+)$/);
+    const hit = nameM ? await resolveUsTicker(nameM[1]) : null;
+    if (hit) {
+      usItems.push({
+        id: r.id,
+        date: r.date,
+        title: nameM[2].trim(),
+        stockName: hit.stockName,
+        symbol: hit.symbol,
+        analyst: "",
+        opinion: "",
+        targetPrice: null,
+        summary: "",
+        pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_03&wr_id=${r.id}`,
+        views: null,
+        category: "기업",
+        market: "us",
+      });
+      continue;
+    }
+  }
+  const { label, rest } = bracketLabelAndRest(r.title);
   usItems.push({
     id: r.id,
     date: r.date,
-    title: nameM[2].trim(),
-    stockName: hit.stockName,
-    symbol: hit.symbol,
+    title: rest,
+    stockName: label,
+    symbol: null,
     analyst: "",
     opinion: "",
     targetPrice: null,
     summary: "",
     pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_03&wr_id=${r.id}`,
     views: null,
+    category: "산업",
+    market: isUsTagged ? "us" : "kr",
   });
 }
 
@@ -209,7 +267,15 @@ const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
-for (const [market, items] of [["kr", krItems], ["us", usItems]]) {
+// usRows(sub03_03)에서 나온 항목은 market이 "kr"/"us" 로 섞여 있을 수 있어
+// (투자전략/경제분석 게시판이 국내 매크로도 다룸) 실제 market 값 기준으로
+// 재구성한다. krItems(sub03_02)는 항상 국내다.
+const usOnly = usItems.filter((it) => it.market === "us");
+const krFromUsBoard = usItems.filter((it) => it.market !== "us");
+for (const [market, items] of [
+  ["kr", [...krItems, ...krFromUsBoard]],
+  ["us", usOnly],
+]) {
   if (items.length === 0) continue;
   const up = await fetch(IMPORT_URL, {
     method: "POST",

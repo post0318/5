@@ -45,6 +45,13 @@ const DAYS = Number(arg("days")) || 14;
 const MAX_PAGES = Number(arg("pages")) || 5;
 
 const LIST_URL = "https://www.bnkfn.co.kr/research/analysingCompany.jspx";
+// 산업분석/투자전략(2026-09 추가, 오너 지시 — "한국과 미국 모두 동일하게
+// 수집 기반 구축"): 같은 사이트의 형제 게시판(오너가 URL 제시 방식과 동일
+// 하게 목록 페이지 링크를 역추적해 확인) — analysingIssue.jspx(업종분석,
+// 제목이 기업분석과 똑같은 "[업종명] 헤드라인" 형식이라 같은 TITLE_RE 로
+// 파싱 가능), economyAnalyse.jspx(경제분석/투자전략, 대괄호 없는 평문 제목).
+const ISSUE_URL = "https://www.bnkfn.co.kr/research/analysingIssue.jspx";
+const ECON_URL = "https://www.bnkfn.co.kr/research/economyAnalyse.jspx";
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/shinhan-research"
 ).trim();
@@ -75,8 +82,8 @@ function extractTargetPrice(text) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-async function fetchPage(page) {
-  const url = new URL(LIST_URL);
+async function fetchPage(page, listUrl = LIST_URL) {
+  const url = new URL(listUrl);
   if (page > 1) url.searchParams.set("pageIndex", String(page));
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -103,6 +110,59 @@ function parseItems(html) {
       // /uploads/{글번호}/1/{파일명} — 목록의 onclick 인자를 그대로 조립.
       pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
       targetPrice: null,
+      category: "기업",
+    });
+  }
+  return items;
+}
+
+// analysingIssue.jspx(업종분석) — 제목이 기업분석과 같은 "[업종명] 헤드라인"
+// 형식이라 같은 TITLE_RE 재사용, category만 "산업"으로 다르게 태그.
+function parseIssueItems(html) {
+  const items = [];
+  for (const row of html.split(/<tr[^>]*>/).slice(1)) {
+    const idM = row.match(/viewAction\(this,\s*'(\d+)',\s*'([^']*)',\s*'([^']*)'\)/);
+    const titleM = row.match(/viewAction\([^)]*\)[^>]*>([^<]+)</);
+    const dateM = row.match(/<td>(\d{4})\.(\d{2})\.(\d{2})<\/td>/);
+    const analystM = row.match(/<\/td><td>([^<]{2,12})<\/td>/);
+    if (!idM || !titleM || !dateM) continue;
+    const tm = stripHtml(titleM[1]).match(TITLE_RE);
+    if (!tm) continue;
+    items.push({
+      id: idM[1],
+      date: `${dateM[1]}-${dateM[2]}-${dateM[3]}`,
+      title: tm[3].trim(),
+      stockName: tm[1].trim(),
+      opinion: "",
+      analyst: analystM ? analystM[1].trim() : "",
+      pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
+      targetPrice: null,
+      category: "산업",
+    });
+  }
+  return items;
+}
+
+// economyAnalyse.jspx(경제분석/투자전략) — 대괄호 없는 평문 제목이라 업종
+// 라벨을 뽑을 수 없음. 제목 전체를 title 로, stockName 은 "산업"으로 고정.
+function parseEconItems(html) {
+  const items = [];
+  for (const row of html.split(/<tr[^>]*>/).slice(1)) {
+    const idM = row.match(/viewAction\(this,\s*'(\d+)',\s*'([^']*)',\s*'([^']*)'\)/);
+    const titleM = row.match(/viewAction\([^)]*\)[^>]*>([^<]+)</);
+    const dateM = row.match(/<td>(\d{4})\.(\d{2})\.(\d{2})<\/td>/);
+    const analystM = row.match(/<\/td><td>([^<]{2,12})<\/td>/);
+    if (!idM || !titleM || !dateM) continue;
+    items.push({
+      id: idM[1],
+      date: `${dateM[1]}-${dateM[2]}-${dateM[3]}`,
+      title: stripHtml(titleM[1]).trim(),
+      stockName: "산업",
+      opinion: "",
+      analyst: analystM ? analystM[1].trim() : "",
+      pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
+      targetPrice: null,
+      category: "산업",
     });
   }
   return items;
@@ -140,6 +200,25 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   await sleep(400);
 }
 
+for (const [listUrl, parser] of [
+  [ISSUE_URL, parseIssueItems],
+  [ECON_URL, parseEconItems],
+]) {
+  stop = false;
+  for (let page = 1; page <= MAX_PAGES && !stop; page++) {
+    const items = parser(await fetchPage(page, listUrl));
+    if (items.length === 0) break;
+    for (const it of items) {
+      if (new Date(it.date) < cutoff) {
+        stop = true;
+        break;
+      }
+      collected.push(it);
+    }
+    await sleep(400);
+  }
+}
+
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
@@ -152,7 +231,8 @@ console.log(
 
 console.log(`▶ 목표주가 추출 중 (${collected.length}건)...`);
 for (const it of collected) {
-  it.targetPrice = await targetPriceFromPdf(it.pdfUrl);
+  // 산업분석/투자전략은 특정 종목 얘기가 아니므로 목표주가 개념이 없음.
+  if (it.category !== "산업") it.targetPrice = await targetPriceFromPdf(it.pdfUrl);
   await sleep(300);
 }
 console.log(`✔ 목표주가 ${collected.filter((i) => i.targetPrice != null).length}/${collected.length}건`);
@@ -175,6 +255,7 @@ const items = collected.map((it) => ({
   summary: "",
   pdfUrl: it.pdfUrl,
   views: null,
+  category: it.category,
 }));
 
 const headers = { "Content-Type": "application/json" };

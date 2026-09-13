@@ -73,6 +73,12 @@ const corpcodes = JSON.parse(
 const nameByCode = new Map(corpcodes.map((c) => [c.s, c.n]));
 
 const TITLE_RE = /\((\d{6})\):\s*(.*)$/;
+// 산업분석/투자전략(2026-09 추가, 오너 지시 — "한국과 미국 모두 동일하게
+// 수집 기반 구축"): 같은 게시판(category2 값과 무관하게 서버가 동일 피드를
+// 반환 — 실측 확인, 별도 게시판이 아님)에 종목코드 없는 "업종명:헤드라인"
+// 형식(예: "화장품:예견된 조정, 조정 후 반등을 대비하자")이 섞여 있는데
+// TITLE_RE 에 안 걸려 지금까지 버려졌다. 콜론 앞부분을 업종 라벨로 쓴다.
+const INDUSTRY_TITLE_RE = /^([^:()]+):\s*(.*)$/;
 
 function isoDate(dotted) {
   const m = String(dotted).trim().match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
@@ -134,19 +140,35 @@ function parseItems(html) {
     const summaryM = chunk.match(/<span class="body_sub">\s*([\s\S]*?)\s*<\/span>/);
     const analystM = chunk.match(/<em>([^<]*)<\/em>\s*<em>([\d.]+)<\/em>/);
     if (!idM || !titleM || !analystM) continue;
-    const tm = titleM[1].match(TITLE_RE);
-    if (!tm) continue; // 종목코드 없는 산업/섹터 리포트 — 건너뜀
-    const [, code, headline] = tm;
     const date = isoDate(analystM[2]);
     if (!date) continue;
+    const tm = titleM[1].match(TITLE_RE);
+    if (tm) {
+      const [, code, headline] = tm;
+      items.push({
+        id: idM[1],
+        date,
+        title: headline.trim(),
+        symbolHint: code,
+        analyst: analystM[1].trim(),
+        summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
+        detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=10&id=${idM[1]}`,
+        category: "기업",
+      });
+      continue;
+    }
+    const im = titleM[1].match(INDUSTRY_TITLE_RE);
+    if (!im) continue; // 콜론 형식도 아닌 예외적 제목 — 건너뜀
     items.push({
       id: idM[1],
       date,
-      title: headline.trim(),
-      symbolHint: code,
+      title: im[2].trim() || titleM[1].trim(),
+      stockNameOverride: im[1].trim(),
+      symbolHint: null,
       analyst: analystM[1].trim(),
       summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
       detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=10&id=${idM[1]}`,
+      category: "산업",
     });
   }
   return items;
@@ -182,10 +204,15 @@ console.log(
   "  최근 5건:",
   collected
     .slice(0, 5)
-    .map((i) => `${i.date} ${nameByCode.get(i.symbolHint) ?? i.symbolHint}(${i.symbolHint}) — ${i.title}`),
+    .map(
+      (i) =>
+        `${i.date} ${i.stockNameOverride ?? nameByCode.get(i.symbolHint) ?? i.symbolHint}(${i.symbolHint}) — ${i.title}`,
+    ),
 );
 console.log(`▶ 투자의견/목표주가 조회 중 (${collected.length}건)...`);
 for (const it of collected) {
+  // 산업분석은 특정 종목 얘기가 아니므로 투자의견·목표주가 개념이 없음.
+  if (it.category === "산업") continue;
   const { opinion, targetPrice } = await fetchOpinionAndTarget(it.detailUrl);
   it.opinion = opinion;
   it.targetPrice = targetPrice;
@@ -202,7 +229,7 @@ const items = collected.map((it) => ({
   id: it.id,
   date: it.date,
   title: it.title,
-  stockName: nameByCode.get(it.symbolHint) ?? it.symbolHint,
+  stockName: it.stockNameOverride ?? nameByCode.get(it.symbolHint) ?? it.symbolHint,
   symbol: it.symbolHint,
   analyst: it.analyst,
   opinion: it.opinion,
@@ -210,6 +237,7 @@ const items = collected.map((it) => ({
   summary: it.summary,
   pdfUrl: it.detailUrl,
   views: null,
+  category: it.category,
 }));
 
 const headers = { "Content-Type": "application/json" };

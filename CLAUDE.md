@@ -159,6 +159,12 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-hana-research.mjs`, GitHub Actions
       `.github/workflows/hana-research.yml`, 하루 1회)가 같은
       `/api/cron/shinhan-research` 라우트를 `source: "하나증권"` 으로 재사용.
+      - **산업분석 추가(오너 지시, 2026-09 — "한국과 미국 모두 동일하게
+        수집 기반 구축")**: 같은 메뉴의 형제 게시판(`cid=1`, 기업분석은
+        `cid=2`)이 업종분석 — 제목이 "업종명(투자의견): 제목"(괄호가 없는
+        경우도 있음, 예: "에너지/화학: Weekly Monitor: ...") 형식이라 별도
+        정규식(`INDUSTRY_TITLE_RE`)으로 업종명만 뽑는다. `category:"산업"`,
+        symbol 항상 null, 목표주가 추출도 건너뜀.
     - **한화투자증권 추가(오너 확인, 2026-09)**: `www.hanwhawm.com` 기업분석
       (`/main/research/main/list.cmd?depth3_id=anls1&p=N`)은 로그인 없이
       서버렌더링 HTML. **robots.txt 가 이 경로를 막지 않음**(다른 항목과 달리
@@ -212,6 +218,11 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-kyobo-research.mjs`, GitHub Actions
       `.github/workflows/kyobo-research.yml`)가 같은 라우트를
       `source: "교보증권"` 으로 재사용.
+      - **산업분석 수집 추가(오너 지시, 2026-09 — "한국과 미국 모두 동일하게
+        수집 기반 구축")**: "구분" 컬럼이 "산업분석"인 행은 종목이 아니라
+        업종이라 예전엔 통째로 버렸는데, `category:"산업"`으로 별도 수집
+        (symbol 항상 null, stockName 은 종목/업종 컬럼 값 그대로 — 산업분석
+        행엔 업종명이 들어있음). 목표주가·투자의견 추출도 건너뜀.
     - **한경 컨센서스 추가(오너 확인, 2026-09)**: `consensus.hankyung.com` —
       개별 증권사 자사 사이트가 아니라 **한국경제신문이 거의 모든 증권사의
       리포트를 한곳에 모아 재가공한 3자 편집 서비스**라는 점이 위 항목들과
@@ -243,6 +254,12 @@ npm run db:studio    # drizzle studio
         그대로 씀. `category:"산업"`, `symbol` 항상 null로 전송(KB와 동일
         라우트 안전장치 재사용). **미결**: 업종→종목 매칭·탭 UI는 KB와
         마찬가지로 다음 과제.
+        - **버그 수정(2026-09)**: MA(시장) 분류는 "투자의견" 컬럼 자체가
+          없어(헤더가 작성일/제목/작성자/제공출처 4칸뿐 — IN은 5칸) IN과
+          같은 셀 인덱스로 읽으면 작성자·제공출처가 한 칸씩 밀려 뒤바뀐다
+          (실측으로 발견 — MA 항목 전원의 제공출처가 빈 값으로 저장되고
+          있었음). `parseIndustryItems`에 `reportCode`를 넘겨 MA/IN 컬럼
+          수를 구분해서 읽도록 수정.
     - **NH투자증권 추가(오너 확인, 2026-09)**: `www.nhsec.com` 은 레거시
       frameset 사이트라 실제 콘텐츠는 `/main.html` 프레임 안에 있고, 화면이
       호출하는 내부 TR(트랜잭션) API `/research/boardCommonTrAjax.action`
@@ -258,6 +275,12 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-nh-research.mjs`, GitHub Actions
       `.github/workflows/nh-research.yml`, 하루 1회)가 같은 라우트를
       `source: "NH투자증권"` 으로 재사용.
+      - **산업분석 수집 추가(오너 지시, 2026-09 — "한국과 미국 모두 동일하게
+        수집 기반 구축")**: 응답 필드 `rsh_ppr_ser_cd_nm`이 이미 "기업"/"산업"
+        을 명시적으로 구분해준다(실측 확인, 브라켓 제목을 추측할 필요 없음).
+        종목코드 0개 + `ser_cd_nm==="산업"`인 항목만 `category:"산업"`으로
+        수집(코드 0개 + "기업"인 항목은 미상장·코드 매칭 실패라 기존처럼
+        건너뜀). 목표주가·투자의견 추출도 건너뜀.
     - **NH투자증권 해외기업분석(미국 종목) 추가(오너 확인, 2026-09)**: 같은
       TR(H3211)을 게시판 코드(`rsh_ppr_dit_cd`) "01"(기업/산업분석, 국내
       수집기와 동일)로 스캔하면 종목코드가 비어 있는 "[해외기업분석/회사명]"
@@ -301,6 +324,14 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-mirae-research.mjs`, GitHub Actions
       `.github/workflows/mirae-research.yml`, 하루 1회)가 같은 라우트를
       `source: "미래에셋증권"` 으로 재사용.
+      - **산업분석/투자전략 수집 추가(오너 지시, 2026-09 — "한국과 미국 모두
+        동일하게 수집 기반 구축")**: 검색엔진 색인으로 형제 게시판을 확인
+        (categoryId 를 브루트포스로 못 찾아 웹 검색으로 발견) —
+        `categoryId=1525`(산업분석, 국내/해외 혼재)·`1527`(투자전략). 목록
+        항목이 이미 "&lt;b&gt;주제명&lt;/b&gt;&lt;br/&gt;헤드라인" 구조라
+        종목처럼 코드/티커를 뽑을 필요 없이 굵은 글씨 부분을 그대로 라벨로
+        쓴다. `category:"산업"`, market 기본 "kr"(업종 혼재 특성상 KR/US
+        분리 신호가 없어 보수적 기본값), 목표주가 추출은 건너뜀.
     - **한국투자증권 추가(오너 확인, 2026-09)**: `securities.koreainvestment.com`
       은 모던 사이트라 목록(`/main/research/research/Strategy.jsp?jkGubun=10
       &category1=05&category2=01&rowsPerPages=50&currentPage=N`)이 평범한
@@ -315,6 +346,13 @@ npm run db:studio    # drizzle studio
       승인. **로컬 스크립트** (`scripts/collect-kis-research.mjs`, GitHub
       Actions `.github/workflows/kis-research.yml`, 하루 1회)가 같은 라우트를
       `source: "한국투자증권"` 으로 재사용.
+      - **산업분석 수집 추가(오너 지시, 2026-09 — "한국과 미국 모두 동일하게
+        수집 기반 구축")**: `category2` 파라미터 값(01/02/03)을 바꿔도 서버가
+        같은 통합 피드를 반환한다(실측 확인 — 별도 게시판이 아님). 종목코드
+        없는 "업종명:헤드라인" 형식(예: "화장품:예견된 조정...")이 이미 같은
+        피드에 섞여 있는데 `TITLE_RE`(코드 필요)에 안 걸려 버려지고 있었다 —
+        `INDUSTRY_TITLE_RE`로 콜론 앞부분을 업종 라벨로 뽑아 `category:"산업"`
+        으로 수집(symbol 항상 null, 투자의견·목표주가 조회도 건너뜀).
     - **KB증권 추가(오너 확인, 2026-09)**: `www.kbsec.com` 리서치보고서
       "산업/기업" 탭이 호출하는 내부 TR API(`/go.able?linkcd=s040203010001`,
       POST, `tab=5`)를 직접 역추적해 호출한다. 로그인 불필요, 응답은 UTF-8
@@ -365,6 +403,53 @@ npm run db:studio    # drizzle studio
       GitHub Actions `.github/workflows/globalmonitor-research.yml`, 하루
       1회)가 같은 라우트를 `market: "us"` 로 재사용, 항목별 실제 작성
       증권사명(auth)을 `source` 로 그룹핑해 나눠 전송.
+      - **산업분석/투자전략 수집 추가(오너 지시, 2026-09 — "한국과 미국 모두
+        동일하게 수집 기반 구축", "해외는 GM에서 받아오는 회사는 제외")**:
+        종목 티커 형식이 아닌 항목(채권/경제/시황 등, 예: "DB Morning
+        Express", "[AI Economist] ...")을 예전엔 통째로 버렸는데, 실측
+        결과(2026-09) 300건 중 175건이 이런 콘텐츠였다 — 이미 이 한 게시판에
+        키움·한화·유안타·DB·대신·LS·SK·iM·상상인·하나증권 등 다수 증권사가
+        다 모여 있어(auth 필드), `category:"산업"`으로 추가 수집하면 그
+        증권사들 각자의 산업분석 게시판을 따로 안 붙여도 된다(오너 지시의
+        "GM에서 받아오는 회사는 제외" 조건이 바로 이 의미). 제목이 "[라벨]
+        헤드라인" 형식이면 대괄호를 라벨로, 아니면 라벨을 "산업"으로 고정.
+        신한투자증권은 기존처럼 계속 제외(자체 해외 게시판이 이미 산업분석
+        까지 다룸).
+    - **DS투자증권 추가(오너 확인, 2026-09)**: `www.ds-sec.co.kr` 은 그누보드
+      게시판이라 로그인 없이 서버렌더 HTML이 그대로 나온다(오너가 URL
+      제시). 게시판 두 곳 — `sub03_02`(기업분석, 국내), `sub03_03`(투자전략/
+      경제분석, 미국 종목이 섞여 있음). 종목 식별이 까다로운 소스라(제목에
+      코드·티커가 아예 없음) 국내는 `corpcodes.json`(3,930개)에서 "제목이 그
+      이름으로 시작하는 것 중 가장 긴 이름"을 찾고, 미국은 "[DS 미국주식]
+      엔비디아: 제목"처럼 한글 종목명만 있어 네이버 해외종목 자동완성으로
+      티커를 해석한다(뉴스 기능이 이미 쓰는 엔드포인트 재사용). **로컬
+      스크립트** (`scripts/collect-ds-research.mjs`, GitHub Actions
+      `.github/workflows/ds-research.yml`)가 같은 라우트를 `source: "DS투자
+      증권"` 으로 재사용, 국내/미국을 market 별로 나눠 전송.
+      - **산업리서치는 DS, 종목리서치(미국)는 GM(오너 결정, 2026-09)**:
+        `sub03_03`은 게시판 이름 그대로 "투자전략/경제분석"이라 애초에
+        종목보다 산업분석/투자전략 콘텐츠가 대다수다 — 종목명 매칭에 실패한
+        (또는 애초에 종목 얘기가 아닌) 글을 `category:"산업"`으로 수집한다.
+        "미국주식/글로벌주식" 태그가 있으면 market:"us", 그 외(국내 매크로·
+        전략)는 market:"kr". `sub03_02`(국내 기업분석 게시판)도 종목 매칭에
+        실패한 Defense Daily·거버넌스 시리즈·섹터 전략 노트 등을 같은 방식
+        으로 `category:"산업"` 수집.
+    - **BNK투자증권 추가(오너 확인, 2026-09)**: `www.bnkfn.co.kr` 리서치
+      메뉴는 로그인 없이 평범한 GET으로 서버렌더 HTML이 그대로 나온다(지금
+      까지 붙인 소스 중 구조가 가장 단순한 축). 제목이 "[종목명/투자의견]
+      제목" 형식으로 고정돼 있어 종목명·투자의견을 함께 뽑는다. 종목코드는
+      목록에 없어 라우트의 이름 검색(corpcode)에 맡긴다. PDF는 로그인 없이
+      받아진다(`/uploads/{글번호}/1/{파일명}.pdf`). **로컬 스크립트**
+      (`scripts/collect-bnk-research.mjs`, GitHub Actions
+      `.github/workflows/bnk-research.yml`)가 같은 라우트를 `source: "BNK투자
+      증권"` 으로 재사용.
+      - **산업분석/투자전략 수집 추가(오너 지시, 2026-09 — "한국과 미국 모두
+        동일하게 수집 기반 구축")**: 같은 사이트의 형제 게시판을 확인 —
+        `analysingIssue.jspx`(업종분석, 제목이 기업분석과 똑같은 "[업종명]
+        헤드라인" 형식이라 같은 정규식으로 파싱 가능), `economyAnalyse.jspx`
+        (경제분석/투자전략, 대괄호 없는 평문 제목이라 라벨을 "산업"으로
+        고정). 둘 다 `category:"산업"`, symbol 항상 null, 목표주가 추출도
+        건너뜀.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
