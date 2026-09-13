@@ -71,53 +71,56 @@ export function ConsensusPanel({
         <CardTitle className="text-sm">컨센서스</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* 매출·EPS 추이 차트 */}
-        <div className="h-64 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-              <YAxis
-                yAxisId="rev"
-                tick={{ fontSize: 10 }}
-                tickLine={false}
-                axisLine={false}
-                width={68}
-                tickFormatter={(v: number) => formatNumber(v, 0)}
-              />
-              <YAxis
-                yAxisId="eps"
-                orientation="right"
-                tick={{ fontSize: 10 }}
-                tickLine={false}
-                axisLine={false}
-                width={60}
-                tickFormatter={(v: number) => formatNumber(v, 0)}
-              />
-              <Tooltip
-                contentStyle={{ fontSize: 12 }}
-                formatter={(value) => formatNumber(Number(value), 0)}
-              />
-              <Legend verticalAlign="top" height={28} wrapperStyle={{ fontSize: 11 }} />
-              <Bar
-                yAxisId="rev"
-                dataKey="revenue"
-                name={`매출액(${bigUnit})`}
-                radius={[3, 3, 0, 0]}
-                fill="oklch(0.80 0.09 55)"
-                fillOpacity={0.85}
-              />
-              <Line
-                yAxisId="eps"
-                dataKey="eps"
-                name="EPS"
-                stroke="var(--muted-foreground)"
-                strokeWidth={2}
-                dot={{ r: 3 }}
-                connectNulls
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
+        {/* 매출·EPS 추이 차트 — 미국은 재무 하이라이트 표에 같은 내용이
+            연도별로 다 있어 중복이라 생략한다(오너 지시, 2026-09). */}
+        {market !== "us" && (
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+                <YAxis
+                  yAxisId="rev"
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={68}
+                  tickFormatter={(v: number) => formatNumber(v, 0)}
+                />
+                <YAxis
+                  yAxisId="eps"
+                  orientation="right"
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={60}
+                  tickFormatter={(v: number) => formatNumber(v, 0)}
+                />
+                <Tooltip
+                  contentStyle={{ fontSize: 12 }}
+                  formatter={(value) => formatNumber(Number(value), 0)}
+                />
+                <Legend verticalAlign="top" height={28} wrapperStyle={{ fontSize: 11 }} />
+                <Bar
+                  yAxisId="rev"
+                  dataKey="revenue"
+                  name={`매출액(${bigUnit})`}
+                  radius={[3, 3, 0, 0]}
+                  fill="oklch(0.80 0.09 55)"
+                  fillOpacity={0.85}
+                />
+                <Line
+                  yAxisId="eps"
+                  dataKey="eps"
+                  name="EPS"
+                  stroke="var(--muted-foreground)"
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                  connectNulls
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        )}
 
         {d.notes.length > 0 && (
           <p className="text-muted-foreground/80 text-[11px]">{d.notes.join(" · ")}</p>

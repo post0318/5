@@ -23,7 +23,11 @@ const YahooFinance = (YahooFinancePkg as { default?: unknown }).default ?? Yahoo
 
 type YFInstance = {
   chart: (s: string, o: Record<string, unknown>) => Promise<{ quotes: RawBar[] }>;
-  quoteSummary: (s: string, o: Record<string, unknown>) => Promise<QuoteSummaryResult>;
+  quoteSummary: (
+    s: string,
+    o: Record<string, unknown>,
+    m?: Record<string, unknown>,
+  ) => Promise<QuoteSummaryResult>;
 };
 
 interface RawBar {
@@ -121,6 +125,20 @@ interface QuoteSummaryResult {
       strongSell?: number;
     }[];
   };
+  upgradeDowngradeHistory?: {
+    history?: {
+      epochGradeDate?: string | Date | null;
+      firm?: string | null;
+      toGrade?: string | null;
+      fromGrade?: string | null;
+      /** "up" | "down" | "init" | "main" | "reit" */
+      action?: string | null;
+      /** "Raises" | "Lowers" | "Maintains" | "Announces" | "" */
+      priceTargetAction?: string | null;
+      currentPriceTarget?: number | null;
+      priorPriceTarget?: number | null;
+    }[];
+  };
 }
 
 /** financialData.recommendationKey 가 없거나(문자열 "none"도 포함 — 실측
@@ -176,6 +194,23 @@ export interface YahooEstimates {
     epsActual: number | null;
     surprisePct: number | null;
   }[];
+  /** 증권사별 투자의견 이력 (최신 → 과거). 미국만 실질적으로 채워진다. */
+  ratings: AnalystRating[];
+}
+
+/** Yahoo upgradeDowngradeHistory 1건. */
+export interface AnalystRating {
+  /** YYYY-MM-DD */
+  date: string | null;
+  firm: string;
+  grade: string | null;
+  fromGrade: string | null;
+  /** up=상향 · down=하향 · init=신규 · main/reit=유지 */
+  action: string | null;
+  /** Raises · Lowers · Maintains · Announces */
+  priceTargetAction: string | null;
+  priceTarget: number | null;
+  priorPriceTarget: number | null;
 }
 
 export async function fetchYahooEstimates(
@@ -249,13 +284,59 @@ export async function fetchYahooEstimates(
     }))
     .sort((a, b) => a.period.localeCompare(b.period));
 
+  // 증권사별 투자의견 이력은 별도 호출로 분리한다. yahoo-finance2 의 스키마가
+  // priceTargetAction 의 "Removes" 값을 모르는 탓에(실측: NFLX 952건 중 2건)
+  // 같은 호출에 묶으면 추정치까지 통째로 검증 실패한다 → validateResult:false
+  // 로 따로 받고, 실패해도 추정치는 살린다.
+  const history = await fetchUpgradeDowngradeHistory(candidates);
+
+  // 목표주가 0 은 "제시 안 함"이라 null 로 정규화한다(실측 확인).
+  const ratings: AnalystRating[] = history
+    .map((h) => {
+      const target = n(h.currentPriceTarget);
+      const prior = n(h.priorPriceTarget);
+      return {
+        date: iso(h.epochGradeDate),
+        firm: (h.firm ?? "").trim(),
+        grade: h.toGrade?.trim() || null,
+        fromGrade: h.fromGrade?.trim() || null,
+        action: h.action?.trim() || null,
+        priceTargetAction: h.priceTargetAction?.trim() || null,
+        priceTarget: target ? target : null,
+        priorPriceTarget: prior ? prior : null,
+      };
+    })
+    .filter((r) => r.firm !== "" && r.date != null)
+    .sort((a, b) => (b.date as string).localeCompare(a.date as string));
+
   return {
     currency: MARKET_CURRENCY[market],
     recommendationMean: n(qs.financialData?.recommendationMean),
     targetMeanPrice: n(qs.financialData?.targetMeanPrice),
     periods,
     surprises,
+    ratings,
   };
+}
+
+/** upgradeDowngradeHistory 전용 호출. 실패하면 빈 배열(투자의견 박스만 숨겨진다). */
+async function fetchUpgradeDowngradeHistory(
+  candidates: string[],
+): Promise<NonNullable<NonNullable<QuoteSummaryResult["upgradeDowngradeHistory"]>["history"]>> {
+  for (const s of candidates) {
+    try {
+      const qs = await yf().quoteSummary(
+        s,
+        { modules: ["upgradeDowngradeHistory"] },
+        { validateResult: false },
+      );
+      const h = qs.upgradeDowngradeHistory?.history;
+      if (h?.length) return h;
+    } catch {
+      // 다음 후보 심볼로
+    }
+  }
+  return [];
 }
 
 let instance: YFInstance | null = null;

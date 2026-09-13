@@ -2,7 +2,7 @@ import "server-only";
 import { getAdapter } from "./registry";
 import { getEodQuote } from "./quote";
 import { fetchKrxCloseOn } from "./quote/krx";
-import { fetchYahooEstimates } from "./quote/yahoo";
+import { fetchYahooEstimates, type AnalystRating } from "./quote/yahoo";
 import { consensusDeepLinks } from "./deeplinks";
 import {
   AdapterError,
@@ -142,6 +142,8 @@ export interface ConsensusData {
     epsActual: number | null;
     surprisePct: number | null;
   }[];
+  /** 증권사별 투자의견 이력 (최신 → 과거). Yahoo 특성상 미국만 실질적으로 채워진다. */
+  analystRatings: AnalystRating[];
   deepLinks: DeepLink[];
   asOf: string;
   notes: string[];
@@ -172,7 +174,6 @@ export async function getConsensusData(
   const shares =
     quote?.sharesOutstanding ??
     (quote?.marketCap != null && price ? quote.marketCap / price : null);
-  if (shares == null) notes.push("상장주식수 미확인 — EPS·BPS 일부 공란");
 
   const fiscalMonth = annual.periods[0]?.endDate
     ? Number(annual.periods[0].endDate.slice(5, 7)) || 12
@@ -310,6 +311,7 @@ export async function getConsensusData(
     rows,
     epsRevision,
     earningsSurprise: (estimates?.surprises ?? []).slice(-4),
+    analystRatings: estimates?.ratings ?? [],
     deepLinks: consensusDeepLinks(market, symbol),
     asOf: quote?.lastDate ?? new Date().toISOString().slice(0, 10),
     notes: [...new Set(notes)],

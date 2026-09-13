@@ -303,8 +303,10 @@ function parseNaverStockDatetime(s: string): number {
  */
 async function fetchKrStockTaggedNews(
   symbol: string,
-  opts?: { cutoffMs?: number; pageSize?: number; maxPages?: number },
+  opts?: { cutoffMs?: number; pageSize?: number; maxPages?: number; code?: string },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
+  // KR 은 종목코드 그대로, 해외는 네이버 reutersCode(예: NFLX.O / KO / CPNG.K).
+  const code = opts?.code ?? symbol;
   const pageSize = opts?.pageSize ?? 20;
   const maxPages = opts?.maxPages ?? 2;
   const cutoff = Date.now() - (opts?.cutoffMs ?? THREE_MONTHS_MS);
@@ -314,8 +316,8 @@ async function fetchKrStockTaggedNews(
     let groups: NaverStockNewsGroup[];
     try {
       groups = await fetchJson<NaverStockNewsGroup[]>(
-        `https://m.stock.naver.com/api/news/stock/${symbol}?pageSize=${pageSize}&page=${page}`,
-        { headers: { "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)" }, revalidate: 900 },
+        `https://m.stock.naver.com/api/news/stock/${encodeURIComponent(code)}?pageSize=${pageSize}&page=${page}`,
+        { headers: { "user-agent": NAVER_UA }, revalidate: 900 },
       );
     } catch {
       break;
@@ -342,6 +344,42 @@ async function fetchKrStockTaggedNews(
     }
   }
   return items;
+}
+
+/** 네이버 해외종목 자동완성 응답 1건. */
+interface NaverAcItem {
+  code?: string;
+  name?: string;
+  reutersCode?: string;
+  nationCode?: string;
+  typeCode?: string;
+}
+
+/**
+ * 미국·일본 티커 → 네이버 해외종목 코드(reutersCode)와 한국어 종목명.
+ * 나스닥은 "NFLX.O", 뉴욕은 접미사 없음("KO") 또는 ".K"(예: CPNG.K)로 제각각이라
+ * 접미사를 추측하지 않고 자동완성 API(ac.stock.naver.com)로 정확히 해석한다
+ * (오너가 stock.naver.com 해외종목 뉴스 화면을 짚어줘 발견, 2026-09).
+ * 종목명("넷플릭스")은 국내뉴스 검색어로도 그대로 쓴다 — 하드코딩 별칭 맵보다
+ * 커버리지가 넓다.
+ */
+async function resolveNaverWorldStock(
+  symbol: string,
+): Promise<{ code: string; koreanName: string | null } | null> {
+  let res: { items?: NaverAcItem[] };
+  try {
+    res = await fetchJson<{ items?: NaverAcItem[] }>(
+      `https://ac.stock.naver.com/ac?q=${encodeURIComponent(symbol)}&target=stock`,
+      { headers: { "user-agent": NAVER_UA }, revalidate: 86400 },
+    );
+  } catch {
+    return null;
+  }
+  const items = res.items ?? [];
+  const hit =
+    items.find((i) => i.code?.toUpperCase() === symbol.toUpperCase()) ?? null;
+  if (!hit?.reutersCode) return null;
+  return { code: hit.reutersCode, koreanName: hit.name?.trim() || null };
 }
 
 interface NaverNewsItem {
@@ -522,6 +560,8 @@ function overseasQuery(market: MarketId, symbol: string, companyName: string): s
  * 무관한 영어 콘텐츠, "애플"은 전부 정확히 관련). 잘 알려진 대형주만 한글
  * 표기로 치환 — 없으면 영문 그대로(오너 확인, 2026-09).
  */
+const NAVER_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)";
+
 const US_COMPANY_KO_ALIAS: Record<string, string> = {
   Apple: "애플",
   Tesla: "테슬라",
@@ -551,10 +591,17 @@ const US_COMPANY_KO_ALIAS: Record<string, string> = {
   "Berkshire Hathaway": "버크셔 해서웨이",
 };
 
+/** 별칭 맵을 소문자 키로 미리 펼쳐둔다 — SEC EDGAR 회사명은 전부 대문자로
+ * 오기 때문에("NETFLIX INC") 대소문자를 구분하면 전부 미스가 난다(실측). */
+const US_COMPANY_KO_ALIAS_LC: Record<string, string> = Object.fromEntries(
+  Object.entries(US_COMPANY_KO_ALIAS).map(([k, v]) => [k.toLowerCase(), v]),
+);
+
 function domesticQuery(market: MarketId, companyName: string): string {
   if (market === "kr") return companyName;
-  const stripped = stripLegalSuffix(companyName);
-  return US_COMPANY_KO_ALIAS[companyName.trim()] ?? US_COMPANY_KO_ALIAS[stripped] ?? companyName;
+  const raw = companyName.trim().toLowerCase();
+  const stripped = stripLegalSuffix(companyName).toLowerCase();
+  return US_COMPANY_KO_ALIAS_LC[raw] ?? US_COMPANY_KO_ALIAS_LC[stripped] ?? companyName;
 }
 
 type RawNewsItem = Omit<NewsItem, "titleKo">;
@@ -685,13 +732,49 @@ export async function fetchStockNewsBySide(
   const query = companyName || symbol;
   const oQuery = overseasQuery(market, symbol, query);
   const isKr = market === "kr";
-  const [domesticRaw, yahooOverseas, googleOverseas] = await Promise.all([
+  // 해외종목도 네이버가 종목-기사 태깅을 해준다(예: NFLX.O). 접미사 규칙이
+  // 거래소마다 달라 자동완성 API 로 코드를 먼저 해석한다. 한국어 종목명도 같이
+  // 얻어 검색 폴백의 질의어로 쓴다("NETFLIX INC" 로는 국내 기사가 안 잡힘).
+  const naver = isKr ? null : await resolveNaverWorldStock(symbol);
+  const searchQuery = isKr ? query : (naver?.koreanName ?? domesticQuery(market, query));
+
+  const [domesticTagged, domesticSearched, yahooOverseas, googleOverseas] = await Promise.all([
     isKr
       ? fetchKrStockTaggedNews(symbol, { cutoffMs: ONE_WEEK_MS, pageSize: 20, maxPages: 2 })
-      : fetchKrNewsBySearch(symbol, domesticQuery(market, query), { cutoffMs: ONE_WEEK_MS, display: 30 }),
+      : naver
+        ? fetchKrStockTaggedNews(symbol, {
+            cutoffMs: ONE_WEEK_MS,
+            pageSize: 20,
+            maxPages: 2,
+            code: naver.code,
+          })
+        : Promise.resolve([]),
+    // 비 KR 은 태깅 뉴스만으로는 커버리지가 들쭉날쭉해(실측: NFLX·TSLA 는 많고
+    // JPM·PLTR 은 0건) 한국어 종목명 검색을 함께 돌려 보완한다. 주가 기사뿐
+    // 아니라 사업·콘텐츠 관련 기사까지 나오도록 도메인 화이트리스트는 걸지
+    // 않고(오너 지시, 2026-09) 뒤의 LLM 관련성 판정에 맡긴다.
+    isKr
+      ? Promise.resolve([])
+      : fetchKrNewsBySearch(symbol, searchQuery, {
+          cutoffMs: ONE_WEEK_MS,
+          display: 30,
+          requireWhitelist: false,
+        }),
     fetchUsJpNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, newsCount: 30, requireWhitelist: false }),
     fetchGoogleOverseasNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, limit: 30 }).catch(() => []),
   ]);
+
+  // 네이버가 직접 태깅한 기사는 관련성이 이미 보장된 소스 — LLM 미사용 폴백에서
+  // 화이트리스트·키워드 매칭을 건너뛰게 표시해둔다(KR 경로와 같은 취급).
+  const taggedUrls = new Set(domesticTagged.map((it) => it.url));
+  const seenDomestic = new Set<string>();
+  const domesticRaw = [...domesticTagged, ...domesticSearched]
+    .filter((it) => {
+      if (seenDomestic.has(it.url)) return false;
+      seenDomestic.add(it.url);
+      return true;
+    })
+    .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
   // 야후·구글 두 소스에서 같은 기사(URL 동일)가 겹칠 수 있어 합치기 전 URL 기준
   // 1차 정리(문구만 다른 별도 기사의 중복은 LLM 판정 단계에서 그룹으로 잡음).
   const seenUrls = new Set<string>();
@@ -726,10 +809,14 @@ export async function fetchStockNewsBySide(
     // 폴백(비KR 종목, 이름 미확인·LLM 미사용 공통): 신뢰도를 대신 판정해줄
     // 수단이 없으므로 사전 큐레이션된 화이트리스트로 되돌리고, 이름이 있으면
     // 그 안에서 키워드 매칭까지 적용.
-    const whitelisted = domesticRaw.filter((it) => DOMESTIC_PUBLISHERS.has(it.publisher));
+    const whitelisted = domesticRaw.filter(
+      (it) => taggedUrls.has(it.url) || DOMESTIC_PUBLISHERS.has(it.publisher),
+    );
     if (name) {
-      const domesticFiltered = whitelisted.filter((it) =>
-        isDomesticRelevant(companyName, symbol, it.title, it.excerpt),
+      const domesticFiltered = whitelisted.filter(
+        (it) =>
+          taggedUrls.has(it.url) ||
+          isDomesticRelevant(companyName, symbol, it.title, it.excerpt),
       );
       domesticSafe =
         domesticFiltered.length > 0 || whitelisted.length === 0 ? domesticFiltered : whitelisted;

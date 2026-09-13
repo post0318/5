@@ -21,8 +21,8 @@ import { Badge } from "@/components/ui/badge";
 import { ChangePercent, Money, Multiple, NumberText, Percent, stockDirClass } from "@/components/num";
 import { StockPptButton } from "@/components/ppt-export";
 import { FinancialsTable } from "@/components/financials-table";
-import { DeepLinkList } from "@/components/deep-links";
 import { ConsensusPanel } from "@/components/consensus-panel";
+import { BrokerRatings } from "@/components/broker-ratings";
 import { StockNews } from "@/components/stock-news";
 import { ShinhanResearch } from "@/components/shinhan-research";
 import { PriceChartPanel } from "@/components/price-chart-panel";
@@ -813,18 +813,9 @@ export function StockAnalysis({
 
               <ConsensusPanel market={market} symbol={ov.symbol} yahoo={yahooOverride} />
 
-              <div className="grid gap-6 sm:grid-cols-3">
-                <DeepLinkList
-                  title="포워드 컨센서스 (원본 확인)"
-                  links={ov.deepLinks.consensus}
-                  hint="인앱 수치는 개인용. 상세·검증은 원본에서."
-                />
-                <DeepLinkList title="관련 뉴스" links={ov.deepLinks.news} />
-                <DeepLinkList
-                  title="공시"
-                  links={ov.deepLinks.filings ? [ov.deepLinks.filings] : []}
-                />
-              </div>
+              {market === "us" && (
+                <BrokerRatings market={market} symbol={ov.symbol} yahoo={yahooOverride} />
+              )}
 
               {ov.warnings.length > 0 && (
                 <div className="text-muted-foreground space-y-1 text-xs">
