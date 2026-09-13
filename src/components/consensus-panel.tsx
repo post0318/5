@@ -18,7 +18,6 @@ import type { MarketId } from "@/lib/markets/types";
 import type { ConsensusData } from "@/lib/markets/consensus";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DeepLinkList } from "@/components/deep-links";
 import { stockDirClass } from "@/components/num";
 
 export function ConsensusPanel({
@@ -215,14 +214,6 @@ export function ConsensusPanel({
             </div>
           )}
         </div>
-
-        {d.deepLinks.length > 0 && (
-          <DeepLinkList
-            title="컨센서스 원본 (영업이익 추정 등 상세)"
-            links={d.deepLinks}
-            hint="영업이익·순이익 컨센서스, 추정치 리비전 이력은 원본에서 확인"
-          />
-        )}
 
         <p className="text-muted-foreground/70 text-[11px]">출처: Yahoo Finance</p>
       </CardContent>
