@@ -102,8 +102,9 @@ function GradeBadge({ grade }: { grade: string | null }) {
 }
 
 /**
- * 0~100 점수를 막대+숫자로. StockAnalysis 의 Top Analysts 표와 같은 읽는 법
- * (높을수록 좋음). 70 이상 녹색 · 50~70 황색 · 그 미만 회색.
+ * 적중률(0~100%)을 막대+숫자로. StockAnalysis 의 score 는 success_rate 와 같은
+ * 값이라(실측: 56/56, 56.1/56.1 …) 두 열을 따로 두지 않고 이 하나로 쓴다.
+ * 70 이상 녹색 · 50~70 황색 · 그 미만 회색.
  */
 function ScoreBar({ value }: { value: number | null }) {
   if (value == null) return <span className="text-muted-foreground">-</span>;
@@ -119,7 +120,7 @@ function ScoreBar({ value }: { value: number | null }) {
           style={{ width: `${pct}%` }}
         />
       </span>
-      <span className="tnum">{formatNumber(value, 0)}</span>
+      <span className="tnum">{formatNumber(value, 0)}%</span>
     </span>
   );
 }
@@ -286,11 +287,11 @@ export function BrokerRatings({
               <SourceLink href={saUrl} label="전체 보기" />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1180px] text-sm">
+              <table className="w-full min-w-[1100px] text-sm">
                 <thead>
                   <tr className="text-muted-foreground/70 border-b text-[11px]">
                     <th className="pb-0.5" colSpan={2} />
-                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={4}>
+                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={3}>
                       전체 실적
                     </th>
                     <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={2}>
@@ -303,8 +304,7 @@ export function BrokerRatings({
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left font-medium">애널리스트</th>
                     <th className="py-1.5 text-left font-medium">증권사</th>
-                    <th className="border-l py-1.5 pl-3 text-left font-medium">점수</th>
-                    <th className="py-1.5 text-right font-medium">적중률</th>
+                    <th className="border-l py-1.5 pl-3 text-left font-medium">적중률</th>
                     <th className="py-1.5 text-right font-medium">평균수익</th>
                     <th className="py-1.5 text-right font-medium">순위</th>
                     <th className="border-l py-1.5 pl-3 text-right font-medium">적중률</th>
@@ -350,10 +350,7 @@ export function BrokerRatings({
                           {f.firm}
                         </td>
                         <td className="border-l py-1.5 pr-3 pl-3 text-left">
-                          <ScoreBar value={f.score} />
-                        </td>
-                        <td className="py-1.5 text-right">
-                          <Pct value={f.successRate} />
+                          <ScoreBar value={f.score ?? f.successRate} />
                         </td>
                         <td className="py-1.5 text-right">
                           <ChangePercent value={f.avgReturn} market={market} />
@@ -499,11 +496,11 @@ export function BrokerRatings({
               <SourceLink href={saUrl} label="전체 보기" />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] text-sm">
+              <table className="w-full min-w-[820px] text-sm">
                 <thead>
                   <tr className="text-muted-foreground/70 border-b text-[11px]">
                     <th className="pb-0.5" />
-                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={4}>
+                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={3}>
                       전체 실적
                     </th>
                     <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={2}>
@@ -515,8 +512,7 @@ export function BrokerRatings({
                   </tr>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left font-medium">증권사</th>
-                    <th className="border-l py-1.5 pl-3 text-left font-medium">점수</th>
-                    <th className="py-1.5 text-right font-medium">적중률</th>
+                    <th className="border-l py-1.5 pl-3 text-left font-medium">적중률</th>
                     <th className="py-1.5 text-right font-medium">평균수익</th>
                     <th className="py-1.5 text-right font-medium">순위</th>
                     <th className="border-l py-1.5 pl-3 text-right font-medium">적중률</th>
@@ -541,10 +537,7 @@ export function BrokerRatings({
                         )}
                       </td>
                       <td className="border-l py-1.5 pr-3 pl-3 text-left">
-                        <ScoreBar value={f.score} />
-                      </td>
-                      <td className="py-1.5 text-right">
-                        <Pct value={f.successRate} />
+                        <ScoreBar value={f.score ?? f.successRate} />
                       </td>
                       <td className="py-1.5 text-right">
                         <ChangePercent value={f.avgReturn} market={market} />
