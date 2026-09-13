@@ -120,7 +120,10 @@ async function fetchPage(curPage, startId) {
 
 console.log(`▶ 신한투자증권 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
 
-const cutoff = new Date(Date.now() - DAYS * 86_400_000);
+// 항목 날짜가 'YYYY-MM-DD'(=UTC 자정)라 컷오프도 자정으로 맞춘다.
+// Date.now() 기준 그대로 두면 '정확히 DAYS일 전' 리포트가 시:분 차이로
+// 매번 잘려나간다(실측 2026-09: 미래에셋 최신 리포트가 3시간 차이로 탈락).
+const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
 const items = [];
 let startId = undefined;
 let stop = false;
