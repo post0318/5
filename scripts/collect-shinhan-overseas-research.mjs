@@ -49,7 +49,10 @@ const ARGS = process.argv.slice(2);
 const arg = (n) => ARGS.find((a) => a.startsWith(`--${n}=`))?.split("=")[1];
 const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(arg("days")) || 14;
-const MAX_PAGES = Number(arg("pages")) || 10;
+// 이 게시판은 게시량이 많아(위클리·매크로·개별종목 뒤섞임) 10페이지로는
+// 며칠치도 못 채운다(실측: pages=10 → 최근 65건이 90일에 한참 못 미침,
+// pages=30 → 180건). 하루 1회 배치라 기본값을 넉넉히 잡는다.
+const MAX_PAGES = Number(arg("pages")) || 30;
 
 const BASE = "https://bbs2.shinhansec.com/bbs/list/foreignstock";
 const IMPORT_URL = (
