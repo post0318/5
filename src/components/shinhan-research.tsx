@@ -1,12 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import type { ShinhanResearchDoc } from "@/lib/db/shinhan-research";
 import { formatNumber } from "@/lib/format";
 
@@ -74,17 +73,15 @@ function Pager({
   );
 }
 
-type Category = "전체" | "기업" | "산업";
-
 /**
  * 증권사 리서치(기업분석) 리포트 — 한국(다수 증권사)·미국(GlobalMonitor 경유
  * 다수 증권사, 2026-09 추가) 종목, DB만 읽음(로컬 스크립트가 수집, CLAUDE.md
  * 예외 참고). 여러 증권사를 합쳐 보여주는 걸 전제로 만들어서 항목마다
- * 출처(source)를 표시한다. 기업/산업 구분(2026-09 추가) — 현재 모든 수집기가
- * 기업분석만 수집해 "산업" 탭은 당장은 항상 비어있음(수집기 확장은 후속 과제).
+ * 출처(source)를 표시한다. 전체/기업/산업 구분 버튼은 제거했다(오너 지시,
+ * 2026-09) — 모든 수집기가 기업분석만 모아서 "산업"이 항상 비어 있었다.
+ * 한국·미국 공통.
  */
 export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbol: string }) {
-  const [category, setCategory] = useState<Category>("전체");
   const [page, setPage] = useState(1);
 
   const q = useQuery({
@@ -97,18 +94,10 @@ export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbo
     staleTime: 30 * 60_000,
   });
 
-  const filtered = useMemo(() => {
-    const items = q.data?.items ?? [];
-    return category === "전체" ? items : items.filter((it) => it.category === category);
-  }, [q.data, category]);
+  const filtered = q.data?.items ?? [];
 
   const pageCount = Math.ceil(filtered.length / PAGE_SIZE) || 1;
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-  function changeCategory(c: Category) {
-    setCategory(c);
-    setPage(1);
-  }
 
   return (
     <Card className="min-w-0">
@@ -120,19 +109,6 @@ export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbo
             최근 3개월(없으면 최신순) · 개인용 참고자료
           </span>
         </CardTitle>
-        <div className="flex gap-1 pt-1">
-          {(["전체", "기업", "산업"] as const).map((c) => (
-            <Button
-              key={c}
-              size="sm"
-              variant={category === c ? "secondary" : "ghost"}
-              className="h-6 px-2 text-xs"
-              onClick={() => changeCategory(c)}
-            >
-              {c}
-            </Button>
-          ))}
-        </div>
       </CardHeader>
       <CardContent>
       {q.isLoading && <Skeleton className="h-40 w-full" />}
@@ -143,7 +119,7 @@ export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbo
       )}
       {q.data && filtered.length === 0 && (
         <p className="text-muted-foreground py-4 text-sm">
-          {category === "산업" ? "산업분석은 아직 수집하지 않습니다." : "아직 수집된 리포트가 없습니다."}
+          아직 수집된 리포트가 없습니다.
         </p>
       )}
       {q.data && filtered.length > 0 && (

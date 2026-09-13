@@ -9,8 +9,8 @@
  * 섞여 있어 .US 만 골라 미국 종목으로 저장한다(실측: AVGO.US, GEV.US,
  * SNOW.US, PONY.US / 600183.SH, 0992.HK, NEX.FP).
  *
- * 목표주가는 뽑지 않는다 — 국내 수집기의 추출 로직이 "목표주가 N원" 기준이라
- * 달러 표기에 안 맞고, PDF 를 건별로 내려받는 비용도 크다.
+ * 투자의견·목표주가는 제목에 없어 본문 → PDF 순으로 추출한다
+ * (scripts/lib/us-research-extract.mjs — 달러 표기 대응).
  *
  * ⚠️ 접근 조건은 국내 수집기와 동일(CLAUDE.md 하나증권 항목): robots.txt 가
  *    Disallow: / 라 개인용·로컬 실행·하루 1회 조건으로 오너 승인.
@@ -21,6 +21,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { enrichUsResearch } from "./lib/us-research-extract.mjs";
 import { PDFParse } from "pdf-parse";
 
 function loadEnvLocal() {
@@ -181,6 +182,8 @@ console.log(
   collected.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbolHint}) — ${i.title}`),
 );
 
+
+await enrichUsResearch(collected);
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

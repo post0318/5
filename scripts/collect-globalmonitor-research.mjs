@@ -27,6 +27,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { enrichUsResearch } from "./lib/us-research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -121,6 +122,10 @@ function parseItems(rows) {
       symbolHint: ticker,
       analyst: r.writer ?? "",
       source: r.auth ?? "",
+      // 응답에 투자의견 필드가 있다(빈 값인 행도 많음) — 있으면 그대로 쓰고,
+      // 없으면 뒤의 enrichUsResearch 가 본문·PDF 에서 찾는다.
+      opinion: String(r.rptopninvest ?? "").trim(),
+      targetPrice: null,
       summary: excerpt(r.summary),
       pdfUrl: r.secureId ? `https://rreport.einfomax.co.kr/report/${r.secureId}.pdf` : null,
     });
@@ -159,6 +164,8 @@ console.log(
   "  최근 5건:",
   collected.slice(0, 5).map((i) => `${i.date} [${i.source}] ${i.stockName}(${i.symbolHint}) — ${i.title}`),
 );
+await enrichUsResearch(collected);
+
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);
@@ -177,7 +184,8 @@ for (const it of collected) {
     stockName: it.stockName,
     symbol: it.symbolHint,
     analyst: it.analyst,
-    opinion: "",
+    opinion: it.opinion,
+    targetPrice: it.targetPrice,
     summary: it.summary,
     pdfUrl: it.pdfUrl,
     views: null,
