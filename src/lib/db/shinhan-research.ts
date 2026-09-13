@@ -127,8 +127,14 @@ export type ResearchTopic = "산업분석" | "투자전략";
  * 완전하지 않음). 하나증권처럼 소스가 이미 "글로벌 투자전략"/"글로벌
  * 산업분석"으로 라벨링한 경우는 이 키워드만으로도 정확히 갈린다.
  */
+// 일간/위클리/데일리/모닝 등 주기성 코멘트는 특정 업종 심층분석이 아니라
+// 시황·종목 단신을 짧은 주기로 묶어내는 성격이라 투자전략으로 분류한다
+// (오너 지시, 2026-09 — "미국부터 정리하자. 산업분석에서 일간, 위클리,
+// 데일리, 모닝 등은 투자전략으로 분류"). "Weekly"/"Daily"/"Morning"은 제목에
+// 자주 그대로 영문으로 붙어 있어(예: "Tech&Stock Weekly", "HANA US Weekly")
+// 한글 표기(위클리/데일리/모닝)와 함께 넓게 잡는다.
 const STRATEGY_HINT_RE =
-  /전략|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|Weekly Letter|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?/i;
+  /전략|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|일간|위클리|데일리|모닝|\bWeekly\b|\bDaily\b|\bMorning\b/i;
 
 export function classifyResearchTopic(doc: Pick<ShinhanResearchDoc, "stockName" | "title">): ResearchTopic {
   const hay = `${doc.stockName ?? ""} ${doc.title}`;
