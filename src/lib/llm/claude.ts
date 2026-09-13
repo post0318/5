@@ -172,12 +172,22 @@ C. 중복 — 위에서 관련 있다고 고른 기사들 중, 서로 다른 매
 {"relevant": [0,3,5], "duplicates": [[3,5]]}
 relevant: 관련 있는 기사 번호 배열(없으면 []). duplicates: 중복 그룹 배열(없으면 []).`;
 
+  // 출력은 번호 배열이라 후보 수에 비례해 커진다. 600 고정이던 시절
+  // 후보 69건(넷플릭스 국내뉴스, 실측)에서 JSON이 잘려 파싱이 깨졌고, 그러면
+  // relevant 가 빈 배열이 되면서 호출부의 "전부 걸러냈으면 원본 그대로"
+  // 안전장치가 발동해 관련성 판정도 중복 제거도 없이 통과해 버렸다.
+  const maxTokens = Math.min(4000, 400 + items.length * 20);
   const response = await anthropic().messages.create({
     model: MODEL,
-    max_tokens: 600,
+    max_tokens: maxTokens,
     system,
     messages: [{ role: "user", content: numbered }],
   });
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      `judgeNewsRelevance: 응답이 max_tokens(${maxTokens})에서 잘림 — 후보 ${items.length}건`,
+    );
+  }
 
   const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
   const raw = textBlock?.text ?? "";
@@ -185,14 +195,16 @@ relevant: 관련 있는 기사 번호 배열(없으면 []). duplicates: 중복 �
     response.usage.input_tokens * PRICE_PER_TOKEN.input +
     response.usage.output_tokens * PRICE_PER_TOKEN.output;
 
-  let parsed: { relevant?: unknown; duplicates?: unknown } = {};
+  let parsed: { relevant?: unknown; duplicates?: unknown };
   try {
     // 비탐욕(non-greedy) 매칭 — 모델이 JSON 뒤에 분석 텍스트를 덧붙이면(지시를
     // 어김, 실측 확인) 탐욕적 매칭이 그 안의 중괄호까지 삼켜 파싱이 깨짐.
     const match = raw.match(/\{[\s\S]*?\}/);
     parsed = JSON.parse(match ? match[0] : raw);
   } catch {
-    parsed = {};
+    // 조용히 {} 로 넘기면 "관련 기사 0건" → 안전장치 → 필터 없이 전부 통과가
+    // 되면서 실패가 relevance:"llm" 으로 위장된다. 호출부가 폴백을 타도록 던진다.
+    throw new Error(`judgeNewsRelevance: JSON 파싱 실패 — ${raw.slice(0, 120)}`);
   }
 
   const isValidIndex = (i: unknown): i is number =>
