@@ -1,0 +1,24 @@
+name: 한국투자증권 해외 기업분석 수집
+
+# CLAUDE.md 방침(오너 승인 예외): securities.koreainvestment.com 목록을 하루
+# 1회, 개인용으로만 조회한다. 국내 수집기와 같은 페이지이고 분류만 다르다
+# (jkGubun=10 → 7). PDF 는 로그인 필요라 상세 페이지 URL 만 저장한다.
+
+on:
+  schedule:
+    - cron: "50 0 * * *" # 00:50 UTC = 09:50 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/collect-kis-global-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

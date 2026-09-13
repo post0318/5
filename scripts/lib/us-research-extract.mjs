@@ -85,13 +85,18 @@ export async function readPdfText(pdfUrl) {
  * 항목 배열을 돌며 비어 있는 opinion·targetPrice 를 본문 → PDF 순으로 채운다.
  * items 를 제자리에서 수정한다.
  */
-export async function enrichUsResearch(items, { sleepMs = 400, log = console.log } = {}) {
+export async function enrichUsResearch(
+  items,
+  { sleepMs = 400, log = console.log, usePdf = true } = {},
+) {
   for (const it of items) {
     const body = `${it.summary ?? ""} ${it.title ?? ""}`;
     if (!it.opinion) it.opinion = extractOpinion(body);
     if (it.targetPrice == null) it.targetPrice = extractTargetPrice(body);
   }
-  const missing = items.filter((it) => !it.opinion || it.targetPrice == null);
+  const missing = usePdf
+    ? items.filter((it) => !it.opinion || it.targetPrice == null)
+    : [];
   if (missing.length > 0) {
     log(`▶ PDF 확인 ${missing.length}건 (본문에서 못 찾은 항목만)...`);
     for (const it of missing) {
