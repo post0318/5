@@ -753,11 +753,12 @@ export async function fetchStockNewsBySide(
 }
 
 /**
- * 거시경제(시황) 뉴스 — 종목뉴스 탭과 동일한 소스 전략(공신력 있는 언론사
- * 화이트리스트 + 국내는 발췌 포함)과 레이아웃을 공유하되, 특정 종목이 아니라
- * 시장 전반의 화제를 검색어로 쓴다(오너 확인, 2026-09 — 거시경제 페이지의
- * "시장 뉴스" 섹션이 옛 Google 뉴스 RSS 헤드라인-only 방식이라 종목뉴스 탭과
- * 구성이 어긋나 있던 문제 수정).
+ * 거시경제(시황) 뉴스 — 종목뉴스 탭과 레이아웃·발췌 방식(국내는 요약 포함)은
+ * 공유하되, 특정 종목이 아니라 시장 전반의 화제를 검색어로 쓴다(오너 확인,
+ * 2026-09 — 거시경제 페이지의 "시장 뉴스" 섹션이 옛 Google 뉴스 RSS
+ * 헤드라인-only 방식이라 종목뉴스 탭과 구성이 어긋나 있던 문제 수정).
+ * 해외 신뢰도 판정은 종목뉴스용 매체 화이트리스트 대신 주제 적합성 필터를
+ * 쓴다(아래 filterMacroRelevant 참고, 오너 지적 반영) — 이유는 그 아래 주석.
  *
  * NAVER 뉴스검색·Yahoo Finance 검색 모두 boolean OR 질의를 지원하지 않아(둘 다
  * 단순 키워드 매칭) Google 뉴스 RSS의 "(A OR B OR C)" 질의 하나로 대체할 수
@@ -776,6 +777,13 @@ const US_MACRO_GOOGLE_QUERY =
  * 하나도 없으면 시황 기사가 아니라고 보고 제외(LLM 없이 싼 값에 필터링).
  * 전부 걸러지면(원본은 있는데 0건) 필터 없이 원본을 그대로 보여준다 — 다른
  * 곳의 "관련 기사 없음보다 노이즈 섞임이 낫다" 안전장치와 동일 원칙.
+ *
+ * 이 주제 필터가 진짜 품질 게이트라, 해외 Google 뉴스 RSS 쪽엔 종목뉴스용
+ * 화이트리스트(ALLOWED_PUBLISHERS/OVERSEAS_PUBLISHER_BY_DOMAIN)를 강제하지
+ * 않는다(오너 지적, 2026-09) — 그 목록은 "종목 콕 집어 다루는" 매체 위주라
+ * Chase Bank·Fortune·AFR·Il Sole 24 Ore·SMH.com.au 처럼 거시경제·시황을
+ * 폭넓게 다루는 유용한 매체를 걸러내 버렸다. 도메인이 아니라 주제 적합성으로
+ * 신뢰도를 판단한다.
  */
 const MACRO_RELEVANT_KO =
   /코스피|코스닥|증시|환율|금리|물가|수출|경기|경제|한국은행|기준금리|달러|주가지수|성장률|무역|수지|인플레이션|연준|투자자/;
@@ -809,7 +817,6 @@ export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
       fetchGoogleOverseasNews("us", symbol, US_MACRO_GOOGLE_QUERY, {
         cutoffMs: ONE_WEEK_MS,
         limit: 30,
-        requireWhitelist: true,
       }),
     ]);
     raw = filterMacroRelevant([...yahooResults.flat(), ...google], MACRO_RELEVANT_EN);
