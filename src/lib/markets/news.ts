@@ -244,19 +244,22 @@ async function fetchGoogleOverseasNews(
   market: MarketId,
   symbol: string,
   query: string,
-  opts?: { cutoffMs?: number; limit?: number },
+  opts?: { cutoffMs?: number; limit?: number; requireWhitelist?: boolean },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
   const url = googleNewsUrl(`search?q=${encodeURIComponent(query)}`, "hl=en-US&gl=US&ceid=US:en");
   const raw = await fetchGoogleNewsRss(url);
   const cutoff = Date.now() - (opts?.cutoffMs ?? THREE_MONTHS_MS);
   const limit = opts?.limit ?? 20;
+  const requireWhitelist = opts?.requireWhitelist ?? false;
   const items: Omit<NewsItem, "titleKo">[] = [];
   for (const n of raw) {
-    const publisher =
-      (n.sourceDomain ? OVERSEAS_PUBLISHER_BY_DOMAIN[n.sourceDomain] : undefined) ??
-      n.source ??
-      n.sourceDomain ??
-      undefined;
+    const mapped = n.sourceDomain ? OVERSEAS_PUBLISHER_BY_DOMAIN[n.sourceDomain] : undefined;
+    // 종목뉴스 탭은 LLM 관련성 판정이 신뢰도까지 함께 보므로 화이트리스트 밖
+    // 매체도 표시용 이름을 그대로 써서 통과시킨다(requireWhitelist 기본 false).
+    // 거시경제 뉴스는 LLM 판정이 없어 화이트리스트 밖 매체를 걸러내야 한다
+    // (requireWhitelist=true로 호출, fetchMacroNews 참고).
+    if (requireWhitelist && !mapped) continue;
+    const publisher = mapped ?? n.source ?? n.sourceDomain ?? undefined;
     if (!publisher) continue;
     const t = new Date(n.publishedAt).getTime();
     if (!Number.isFinite(t) || t < cutoff) continue;
@@ -747,6 +750,79 @@ export async function fetchStockNewsBySide(
     overseas,
     debug: { rawDomestic: domesticRaw.length, rawOverseas: overseasRaw.length, relevance },
   };
+}
+
+/**
+ * 거시경제(시황) 뉴스 — 종목뉴스 탭과 동일한 소스 전략(공신력 있는 언론사
+ * 화이트리스트 + 국내는 발췌 포함)과 레이아웃을 공유하되, 특정 종목이 아니라
+ * 시장 전반의 화제를 검색어로 쓴다(오너 확인, 2026-09 — 거시경제 페이지의
+ * "시장 뉴스" 섹션이 옛 Google 뉴스 RSS 헤드라인-only 방식이라 종목뉴스 탭과
+ * 구성이 어긋나 있던 문제 수정).
+ *
+ * NAVER 뉴스검색·Yahoo Finance 검색 모두 boolean OR 질의를 지원하지 않아(둘 다
+ * 단순 키워드 매칭) Google 뉴스 RSS의 "(A OR B OR C)" 질의 하나로 대체할 수
+ * 없다 — 대신 핵심 주제별로 여러 번 조회해 합치는 방식으로 같은 효과를 낸다.
+ */
+const KR_MACRO_TOPICS = ["코스피 마감", "한국은행 기준금리", "원달러 환율", "수출 반도체 업황"];
+const US_MACRO_TOPICS = ["Federal Reserve interest rate", "S&P 500 Nasdaq stock market", "inflation jobs report"];
+/** Google 뉴스 RSS는 실제 boolean 검색을 지원해 해외 쪽은 이 질의 하나로 폭넓게 커버. */
+const US_MACRO_GOOGLE_QUERY =
+  '(Fed OR "interest rate" OR inflation OR "stock market" OR "S&P 500" OR Nasdaq OR "Wall Street" OR earnings season) markets';
+
+/**
+ * Yahoo Finance 검색은 주제 질의("S&P 500 Nasdaq stock market")를 줘도 개별
+ * 종목 단신(예: "AtriCure CTO Sells Shares")까지 섞어 보낸다(실측, 2026-09) —
+ * 화이트리스트·번역만으론 이 노이즈를 못 거른다. 거시경제 화제어가 제목에
+ * 하나도 없으면 시황 기사가 아니라고 보고 제외(LLM 없이 싼 값에 필터링).
+ * 전부 걸러지면(원본은 있는데 0건) 필터 없이 원본을 그대로 보여준다 — 다른
+ * 곳의 "관련 기사 없음보다 노이즈 섞임이 낫다" 안전장치와 동일 원칙.
+ */
+const MACRO_RELEVANT_KO =
+  /코스피|코스닥|증시|환율|금리|물가|수출|경기|경제|한국은행|기준금리|달러|주가지수|성장률|무역|수지|인플레이션|연준|투자자/;
+const MACRO_RELEVANT_EN =
+  /\b(fed|federal reserve|interest rate|rate hike|rate cut|inflation|cpi|ppi|gdp|jobs report|unemployment|stock market|s&p|nasdaq|dow jones|treasury|yield|recession|economy|economic|tariff|trade war|fomc|wall street|markets?)\b/i;
+function filterMacroRelevant(raw: RawNewsItem[], re: RegExp): RawNewsItem[] {
+  const filtered = raw.filter((it) => re.test(it.title));
+  return filtered.length > 0 || raw.length === 0 ? filtered : raw;
+}
+
+export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
+  const symbol = "MACRO";
+  let raw: RawNewsItem[];
+  let lang: "ko" | "en";
+  if (region === "kr") {
+    lang = "ko";
+    const results = await Promise.all(
+      KR_MACRO_TOPICS.map((q) =>
+        fetchKrNewsBySearch(symbol, q, { cutoffMs: ONE_WEEK_MS, display: 15 }),
+      ),
+    );
+    raw = filterMacroRelevant(results.flat(), MACRO_RELEVANT_KO);
+  } else {
+    lang = "en";
+    const [yahooResults, google] = await Promise.all([
+      Promise.all(
+        US_MACRO_TOPICS.map((q) =>
+          fetchUsJpNews("us", symbol, q, { cutoffMs: ONE_WEEK_MS, newsCount: 15 }),
+        ),
+      ),
+      fetchGoogleOverseasNews("us", symbol, US_MACRO_GOOGLE_QUERY, {
+        cutoffMs: ONE_WEEK_MS,
+        limit: 30,
+        requireWhitelist: true,
+      }),
+    ]);
+    raw = filterMacroRelevant([...yahooResults.flat(), ...google], MACRO_RELEVANT_EN);
+  }
+  const seenUrls = new Set<string>();
+  const deduped = raw.filter((it) => {
+    if (seenUrls.has(it.url)) return false;
+    seenUrls.add(it.url);
+    return true;
+  });
+  const merged = dedupeByMajorPublisher(deduped);
+  const items = await withTranslatedTitles(lang, merged);
+  return items.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)).slice(0, 30);
 }
 
 /** 국내(이미 한국어) 언론사인지 — 번역·요약 대상 여부 판정(종목의 상장 시장이 아니라 기사 언론사 기준). */

@@ -1,8 +1,6 @@
 import "server-only";
 import type { MarketId } from "@/lib/markets/types";
 import { listUniverse } from "@/lib/universe/repo";
-import { fetchGoogleNewsRss, googleNewsUrl, NOISE, type RawNewsItem } from "./googleNews";
-import { translateTitles } from "./translate";
 import { fetchStockNews as fetchCredibleStockNews } from "@/lib/markets/news";
 
 export interface NewsItem {
@@ -18,77 +16,6 @@ export interface NewsItem {
   /** 종목 뉴스일 때만: 어느 종목 기사인지 */
   symbol?: string;
   name?: string;
-}
-
-interface MarketLocale {
-  locale: string; // hl=..&gl=..&ceid=..
-  sl: "ko" | "en" | "ja";
-  macroQuery: string;
-}
-
-const LOCALE: Record<MarketId, MarketLocale> = {
-  kr: {
-    locale: "hl=ko&gl=KR&ceid=KR:ko",
-    sl: "ko",
-    macroQuery:
-      '(코스피 OR 금리 OR 한국은행 OR 원달러 환율 OR 물가 OR 수출 OR 반도체 업황 OR 증시)',
-  },
-  us: {
-    locale: "hl=en-US&gl=US&ceid=US:en",
-    sl: "en",
-    macroQuery:
-      '(Fed OR "interest rate" OR inflation OR "stock market" OR "S&P 500" OR Nasdaq OR "Wall Street" OR earnings season) markets',
-  },
-  jp: {
-    locale: "hl=ja&gl=JP&ceid=JP:ja",
-    sl: "ja",
-    macroQuery: "(日銀 OR 金利 OR 為替 OR 物価 OR 日経平均 OR 株式市場)",
-  },
-};
-
-async function toNewsItems(
-  raw: RawNewsItem[],
-  sl: "ko" | "en" | "ja",
-  extra?: { symbol?: string; name?: string },
-): Promise<NewsItem[]> {
-  const filtered = raw.filter((r) => !NOISE.test(r.title));
-  const translated = await translateTitles(filtered, sl, (r) => r.title);
-  return filtered.map((r, i) => ({
-    titleKo: translated[i].titleKo,
-    titleOrig: r.title,
-    isKorean: sl === "ko",
-    translationOk: translated[i].translationOk,
-    link: r.link,
-    source: r.source,
-    publishedAt: r.publishedAt,
-    ...extra,
-  }));
-}
-
-function dedupe(items: NewsItem[]): NewsItem[] {
-  const seenLink = new Set<string>();
-  const seenTitle = new Set<string>();
-  const out: NewsItem[] = [];
-  for (const it of items) {
-    const tkey = it.titleOrig.toLowerCase().slice(0, 40);
-    if (seenLink.has(it.link) || seenTitle.has(tkey)) continue;
-    seenLink.add(it.link);
-    seenTitle.add(tkey);
-    out.push(it);
-  }
-  return out;
-}
-
-/** 시장(매크로) 뉴스. Google 뉴스 RSS(공개 피드) — 본문 없이 제목·출처·링크만. */
-export async function fetchMacroNews(market: MarketId, limit = 20): Promise<NewsItem[]> {
-  const cfg = LOCALE[market];
-  const raw = await fetchGoogleNewsRss(
-    googleNewsUrl(`search?q=${encodeURIComponent(cfg.macroQuery)}`, cfg.locale),
-  );
-  const items = dedupe(await toNewsItems(raw, cfg.sl));
-  return items
-    .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
-    .slice(0, limit);
 }
 
 /** 이 그룹명을 가진 종목들을 목록 맨 앞으로 (표시 순서 고정 요청). */
