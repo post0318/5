@@ -1,0 +1,24 @@
+name: BNK투자증권 기업분석 수집
+
+# CLAUDE.md 방침(오너 승인 예외): www.bnkfn.co.kr 리서치 목록을 하루 1회,
+# 개인용으로만 조회한다. 로그인 없이 서버렌더 HTML 이 나오고 PDF 도 직링크로
+# 받아진다. 종목코드는 목록에 없어 서버 라우트의 이름 검색에 맡긴다.
+
+on:
+  schedule:
+    - cron: "5 0 * * *" # 00:05 UTC = 09:05 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/collect-bnk-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
