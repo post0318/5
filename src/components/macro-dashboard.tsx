@@ -198,6 +198,15 @@ function splitByMovingThreshold<T extends { date: string }>(
   return out;
 }
 
+/** 분기 지표는 "YYYY-MM-DD"(분기 시작월, FRED 관례) 대신 "YYYY Q#" 로 표기 — 안 그러면 "4월" 처럼 보여 월간 지표로 오인하기 쉽다. */
+function formatIndicatorDate(ind: Indicator): string {
+  const date = ind.latest?.date;
+  if (!date) return "데이터 없음";
+  if (ind.frequency !== "quarterly") return date;
+  const [y, m] = date.split("-").map(Number);
+  return `${y} Q${Math.floor((m - 1) / 3) + 1}`;
+}
+
 function DirIcon({ dir }: { dir: Direction }) {
   const I = dir === "up" ? ArrowUpRight : dir === "down" ? ArrowDownRight : ArrowRight;
   return <I className="size-3.5" />;
@@ -1818,7 +1827,7 @@ function IndicatorCard({ ind, nasdaq: nasdaqRaw }: { ind: Indicator; nasdaq: Ind
                   {ind.latest ? formatNumber(ind.latest.value, digits) : "-"}
                 </span>
                 <span className="text-muted-foreground text-xs">{ind.unit}</span>
-                <span className="text-muted-foreground ml-auto text-xs">{ind.latest?.date ?? "데이터 없음"}</span>
+                <span className="text-muted-foreground ml-auto text-xs">{formatIndicatorDate(ind)}</span>
               </div>
               <div className="text-muted-foreground flex gap-3 text-xs">
                 <span>
