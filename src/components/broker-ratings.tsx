@@ -131,7 +131,7 @@ export function BrokerRatings({
     staleTime: 30 * 60_000,
   });
 
-  // 개별 애널리스트 의견(StockAnalysis 수집분, 종목당 5건). 미수집 종목이면
+  // 개별 애널리스트 의견(StockAnalysis 수집분, 종목당 최대 8건). 미수집 종목이면
   // 빈 배열이 와서 Yahoo 증권사 단위 표로 폴백한다.
   const saq = useQuery({
     queryKey: ["analyst-forecasts", market, symbol],
@@ -173,7 +173,7 @@ export function BrokerRatings({
         <CardTitle className="text-sm">종목 투자의견</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* 최근 투자의견 — 애널리스트 개인 단위(StockAnalysis 수집분, 5건) */}
+        {/* 최근 투자의견 — 애널리스트 개인 단위(StockAnalysis 수집분, 최대 8건) */}
         {forecasts.length > 0 ? (
           <div>
             <div className="mb-2 flex items-baseline justify-between gap-2">

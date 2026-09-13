@@ -4,7 +4,8 @@ import { getDb } from "./index";
 import type { MarketId } from "../markets/types";
 
 /**
- * 개별 애널리스트 투자의견 — StockAnalysis.com "Latest Forecasts" 상위 5명.
+ * 개별 애널리스트 투자의견 — StockAnalysis.com 종목별 애널리스트 평가
+ * (종목당 최대 8건 — 무료로 받을 수 있는 소스 상한, 실측).
  * 개인용 로컬 수집(CLAUDE.md 예외 참고): 로컬 스크립트/GitHub Actions 가
  * 하루 1회 모아 `/api/cron/analyst-forecasts` 로 보내고, 배포된 앱은 DB 조회만
  * 한다. 원문 본문·차트는 저장하지 않고 목록에 이미 노출되는 행 정보(애널리스트명·
@@ -12,7 +13,7 @@ import type { MarketId } from "../markets/types";
  * 출처 명시 조건으로 허용하는 범위(전문 재게시만 금지).
  *
  * Yahoo `upgradeDowngradeHistory`(증권사 단위, 무제한 이력)와 상호보완:
- * 이쪽은 애널리스트 개인명·정확도가 있는 대신 종목당 최신 5건뿐이다.
+ * 이쪽은 애널리스트 개인명·정확도가 있는 대신 종목당 최신 8건뿐이다.
  */
 export interface AnalystForecastDoc {
   /** `${market}:${symbol}:${date}:${analystSlug || firm}` */
@@ -49,8 +50,8 @@ export async function analystForecastCol(): Promise<Collection<AnalystForecastDo
 }
 
 /**
- * 종목 단위 스냅샷 교체. 저장하는 것이 "현재 상위 5건"이라 누적이 아니라
- * 대체가 맞다 — 옛 문서를 남겨두면 5건에서 밀려난 항목이 계속 쌓인다.
+ * 종목 단위 스냅샷 교체. 저장하는 것이 "현재 상위 8건" 스냅샷이라 누적이 아니라
+ * 대체가 맞다 — 옛 문서를 남겨두면 상한에서 밀려난 항목이 계속 쌓인다.
  * 수집 실패한 종목은 애초에 호출되지 않으므로 기존 데이터가 지워질 일은 없다.
  */
 export async function replaceAnalystForecasts(
@@ -74,7 +75,7 @@ export async function replaceAnalystForecasts(
 export async function getAnalystForecasts(
   market: MarketId,
   symbol: string,
-  limit = 5,
+  limit = 8,
 ): Promise<AnalystForecastDoc[]> {
   const col = await analystForecastCol();
   return col.find({ market, symbol }).sort({ date: -1 }).limit(limit).toArray();
