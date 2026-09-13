@@ -130,6 +130,27 @@ function Pct({ value }: { value: number | null }) {
   return <span className="tnum">{formatNumber(value, 0)}%</span>;
 }
 
+/**
+ * 수익률 — 소수점 1자리(오너 지시). 공용 ChangePercent 는 formatPercent 가
+ * 2자리 고정이라 전역을 건드리지 않으려고 여기서만 따로 그린다.
+ */
+function ReturnPct({ value, market }: { value: number | null; market: MarketId }) {
+  if (value == null) return <span className="text-muted-foreground">-</span>;
+  return (
+    <span
+      className={cn(
+        "tnum",
+        value > 0 && stockDirClass(true, market),
+        value < 0 && stockDirClass(false, market),
+        value === 0 && "text-muted-foreground",
+      )}
+    >
+      {value > 0 ? "+" : ""}
+      {formatNumber(value, 1)}%
+    </span>
+  );
+}
+
 /** 순위 — "495 / 12,502". 모집단은 작게. */
 function Rank({ rank, total }: { rank: number | null; total: number | null }) {
   if (rank == null) return <span className="text-muted-foreground">-</span>;
@@ -353,7 +374,7 @@ export function BrokerRatings({
                           <ScoreBar value={f.score ?? f.successRate} />
                         </td>
                         <td className="py-1.5 text-right">
-                          <ChangePercent value={f.avgReturn} market={market} />
+                          <ReturnPct value={f.avgReturn} market={market} />
                         </td>
                         <td className="py-1.5 text-right">
                           <Rank rank={f.analystRank} total={f.rankedExperts} />
@@ -362,7 +383,7 @@ export function BrokerRatings({
                           <Pct value={f.stockSuccessRate} />
                         </td>
                         <td className="py-1.5 text-right">
-                          <ChangePercent value={f.stockAvgReturn} market={market} />
+                          <ReturnPct value={f.stockAvgReturn} market={market} />
                         </td>
                         <td className="border-l py-1.5 pr-3 pl-3 text-left">
                           <GradeBadge grade={f.rating} />
@@ -540,7 +561,7 @@ export function BrokerRatings({
                         <ScoreBar value={f.score ?? f.successRate} />
                       </td>
                       <td className="py-1.5 text-right">
-                        <ChangePercent value={f.avgReturn} market={market} />
+                        <ReturnPct value={f.avgReturn} market={market} />
                       </td>
                       <td className="py-1.5 text-right">
                         <Rank rank={f.bestRank} total={f.rankedExperts} />
@@ -549,7 +570,7 @@ export function BrokerRatings({
                         <Pct value={f.stockSuccessRate} />
                       </td>
                       <td className="py-1.5 text-right">
-                        <ChangePercent value={f.stockAvgReturn} market={market} />
+                        <ReturnPct value={f.stockAvgReturn} market={market} />
                       </td>
                       <td className="border-l py-1.5 pr-3 pl-3 text-left">
                         <GradeBadge grade={f.rating} />
