@@ -171,11 +171,18 @@ if (DRY_RUN) {
   process.exit(0);
 }
 
+// 자체 수집기가 훨씬 많이(그리고 미국 외 시장까지) 가져오는 증권사는 여기서
+// 뺀다 — 신한투자증권 자체 게시판(collect-shinhan-overseas-research.mjs)이
+// 같은 14일 기준 8건 대비 34건, 미국 외에 일본·중국·유럽까지 커버한다(오너
+// 지시, 2026-09).
+const EXCLUDED_SOURCES = new Set(["신한투자증권"]);
+
 // 증권사(제공출처)별로 그룹핑해 나눠 전송 — 라우트가 body당 source 하나만 받음
 // (한경 컨센서스 스크립트와 동일 패턴).
 const bySource = new Map();
 for (const it of collected) {
   const key = it.source || "GlobalMonitor";
+  if (EXCLUDED_SOURCES.has(key)) continue;
   if (!bySource.has(key)) bySource.set(key, []);
   bySource.get(key).push({
     id: `GM:${it.id}`,
