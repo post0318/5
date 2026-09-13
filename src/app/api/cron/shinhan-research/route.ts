@@ -1,6 +1,10 @@
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
-import { upsertShinhanResearch, type ShinhanResearchDoc } from "@/lib/db/shinhan-research";
+import {
+  shinhanResearchCol,
+  upsertShinhanResearch,
+  type ShinhanResearchDoc,
+} from "@/lib/db/shinhan-research";
 import { searchCorps } from "@/lib/markets/kr/corpcode";
 import { isMarketId } from "@/lib/markets/types";
 
@@ -83,6 +87,36 @@ export async function POST(req: Request) {
     const result = await upsertShinhanResearch(docs);
     const unresolved = docs.filter((d) => d.symbol == null).length;
     return ok({ received: docs.length, unresolved, ...result });
+  } catch (err) {
+    return jsonError(err);
+  }
+}
+
+/**
+ * 소스 전환에 따른 정리용 — GlobalMonitor 를 거쳐 저장된 문서를 자체 수집기로
+ * 대체한 뒤(예: 신한투자증권 해외, 2026-09) 옛 GM 경유 문서가 남아 같은
+ * 종목·날짜가 두 번 뜨는 문제(실측: AVGO 신한투자증권 2건)를 지운다.
+ * `_id` 가 `${source}:GM:${원본id}` 로 네임스페이스돼 있어 `source`+`idPrefix`
+ * 로 안전하게 좁혀서만 삭제한다.
+ */
+export async function DELETE(req: Request) {
+  try {
+    if (!authorized(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
+    if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
+
+    const body = (await req.json().catch(() => ({}))) as { source?: string; idPrefix?: string };
+    const source = body.source?.trim();
+    const idPrefix = body.idPrefix?.trim();
+    if (!source || !idPrefix) {
+      return Response.json({ error: "source, idPrefix 필요" }, { status: 400 });
+    }
+
+    const col = await shinhanResearchCol();
+    const result = await col.deleteMany({
+      source,
+      _id: { $regex: `^${source}:${idPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}` },
+    });
+    return ok({ source, idPrefix, deleted: result.deletedCount ?? 0 });
   } catch (err) {
     return jsonError(err);
   }
