@@ -53,8 +53,12 @@ interface PriceChartResp {
   maxYears: number;
 }
 
-/** 캔들스틱 — 몸통(시가~종가 박스) + 위아래 꼬리(고가~저가 선), HTS 표준 모양. */
-function CandleShape(props: {
+/**
+ * 캔들스틱 — 몸통(시가~종가 박스) + 위아래 꼬리(고가~저가 선), HTS 표준 모양.
+ * 거시경제 지수 차트(macro-dashboard.tsx)도 같은 모양을 쓰므로 export.
+ * `payload.market` 으로 등락 색상 관행을 가른다(한국=상승 빨강, 그 외=상승 녹색).
+ */
+export function CandleShape(props: {
   x?: number;
   y?: number;
   width?: number;

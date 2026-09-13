@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Area,
   AreaChart,
+  Bar,
   CartesianGrid,
   ComposedChart,
   Line,
@@ -25,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MacroNewsPanel } from "@/components/macro-news-panel";
+import { CandleShape } from "@/components/price-chart-panel";
 import {
   Tooltip as UITooltip,
   TooltipContent as UITooltipContent,
@@ -204,6 +206,9 @@ function DirIcon({ dir }: { dir: Direction }) {
 interface IndexChartRow {
   date: string;
   close: number;
+  open: number | null;
+  high: number | null;
+  low: number | null;
   bbU: number | null;
   bbM: number | null;
   bbL: number | null;
@@ -384,8 +389,12 @@ const RED = "oklch(0.58 0.21 27)";
 const CHART_YEARS = [0.0833, 0.25, 0.5, 1, 3, 5, 10] as const;
 const chartRangeLabel = (y: number) => (y < 1 ? `${Math.round(y * 12)}개월` : `${y}년`);
 
+/** 이 기간 이상은 봉이 너무 촘촘해 캔들이 뭉개지므로 라인만 제공 (오너 결정, 2026-09). */
+const CANDLE_MAX_YEARS = 3;
+
 function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => void }) {
-  const [years, setYears] = useState<(typeof CHART_YEARS)[number]>(1);
+  const [years, setYears] = useState<(typeof CHART_YEARS)[number]>(0.25); // 기본 3개월
+  const [chartType, setChartType] = useState<"line" | "candle">("line");
   const q = useQuery({
     queryKey: ["index-chart", idxKey, years],
     queryFn: () => apiFetch<IndexChartResp>(`/api/macro/index-chart/${idxKey}?y=${years}`),
@@ -394,12 +403,24 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
 
   const rows = useMemo(() => {
     const r = q.data?.rows ?? [];
+    // 한국 지수만 등락 색상이 반대(상승=빨강) — CandleShape 가 payload.market 으로 가른다.
+    const market = idxKey === "KOSPI" || idxKey === "KOSDAQ" ? "kr" : "us";
     return r.map((d) => ({
       ...d,
       histUp: d.hist != null && d.hist >= 0 ? d.hist : null,
       histDown: d.hist != null && d.hist < 0 ? d.hist : null,
+      // Recharts 범위(플로팅) 바용 [저가, 고가]. OHLC 없는 봉은 캔들을 그리지 않음.
+      hl:
+        d.open != null && d.high != null && d.low != null
+          ? ([d.low, d.high] as [number, number])
+          : null,
+      market,
     }));
-  }, [q.data]);
+  }, [q.data, idxKey]);
+
+  const hasOhlc = rows.some((r) => r.hl != null);
+  // 기간을 3년 이상으로 바꾸면 선택 상태와 무관하게 라인으로 그린다(되돌아오면 캔들 복원).
+  const showCandle = chartType === "candle" && years < CANDLE_MAX_YEARS && hasOhlc;
 
   const fmt = (v: number | string) => formatNumber(typeof v === "number" ? v : Number(v), 2);
   // 1개월 구간은 "YY-MM" 이면 눈금이 전부 같은 값이 돼버려 월-일로 표기.
@@ -428,6 +449,25 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
               </button>
             ))}
           </div>
+          {years < CANDLE_MAX_YEARS && hasOhlc && (
+            <div className="border-border flex overflow-hidden rounded-md border text-xs">
+              {(["line", "candle"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setChartType(t)}
+                  className={cn(
+                    "px-2 py-0.5 transition-colors",
+                    chartType === t
+                      ? "bg-primary text-primary-foreground"
+                      : "hover:bg-muted text-muted-foreground",
+                  )}
+                  title={t === "candle" ? "시가·고가·저가·종가(OHLC) 캔들차트" : undefined}
+                >
+                  {t === "line" ? "라인" : "캔들"}
+                </button>
+              ))}
+            </div>
+          )}
           <button
             onClick={onClose}
             className="text-muted-foreground hover:text-foreground ml-1 text-xs underline underline-offset-2"
@@ -449,7 +489,21 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
                   <CartesianGrid stroke="var(--muted-foreground)" strokeDasharray="1 3" strokeOpacity={0.35} />
                   <XAxis dataKey="date" tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={xTick} minTickGap={40} />
                   <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={54} domain={["auto", "auto"]} tickFormatter={fmt} />
-                  <Tooltip {...TOOLTIP_STYLE} labelFormatter={(l) => String(l)} formatter={(v, n) => [fmt(v as number), String(n)]} />
+                  <Tooltip
+                    {...TOOLTIP_STYLE}
+                    labelFormatter={(l) => String(l)}
+                    formatter={(v, n, item) => {
+                      // 캔들(hl)은 [저가, 고가] 배열이라 그대로 두면 숫자 포맷이 깨진다 — OHLC 로 풀어서 표기.
+                      if (Array.isArray(v)) {
+                        const r = item?.payload as IndexChartRow;
+                        return [
+                          `시 ${fmt(r.open ?? 0)} · 고 ${fmt(r.high ?? 0)} · 저 ${fmt(r.low ?? 0)} · 종 ${fmt(r.close)}`,
+                          "OHLC",
+                        ];
+                      }
+                      return [fmt(v as number), String(n)];
+                    }}
+                  />
                   <Area
                     type="monotone"
                     dataKey={["bbL", "bbU"] as unknown as string}
@@ -463,7 +517,11 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
                   <Line type="monotone" dataKey="bbU" name="상단" stroke="var(--muted-foreground)" strokeWidth={0.8} strokeOpacity={0.6} dot={false} isAnimationActive={false} connectNulls />
                   <Line type="monotone" dataKey="bbL" name="하단" stroke="var(--muted-foreground)" strokeWidth={0.8} strokeOpacity={0.6} dot={false} isAnimationActive={false} connectNulls />
                   <Line type="monotone" dataKey="bbM" name="중심(20)" stroke="var(--muted-foreground)" strokeWidth={0.9} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
-                  <Line type="monotone" dataKey="close" name={q.data.name} stroke="oklch(0.62 0.13 250)" strokeWidth={1.6} dot={false} isAnimationActive={false} />
+                  {showCandle ? (
+                    <Bar dataKey="hl" name="OHLC" shape={CandleShape} isAnimationActive={false} />
+                  ) : (
+                    <Line type="monotone" dataKey="close" name={q.data.name} stroke="oklch(0.62 0.13 250)" strokeWidth={1.6} dot={false} isAnimationActive={false} />
+                  )}
                 </ComposedChart>
               </ResponsiveContainer>
             </div>

@@ -21,20 +21,35 @@ export async function krIndexCol(): Promise<Collection<KrIndexDoc>> {
   return (await getDb()).collection<KrIndexDoc>("kr_index_daily");
 }
 
-/** market 의 [fromIso, toIso] 구간 일별 종가 (오름차순). */
+/** market 의 [fromIso, toIso] 구간 일봉 (오름차순). 시·고·저는 캔들차트용(없으면 null). */
 export async function getKrIndexHistory(
   market: "KOSPI" | "KOSDAQ",
   fromIso: string,
   toIso: string,
-): Promise<{ date: string; close: number }[]> {
+): Promise<{ date: string; close: number; open: number | null; high: number | null; low: number | null }[]> {
   try {
     const col = await krIndexCol();
     const docs = await col
       .find({ market, date: { $gte: fromIso, $lte: toIso } })
-      .project<{ date: string; close: number }>({ _id: 0, date: 1, close: 1 })
+      .project<Pick<KrIndexDoc, "date" | "close" | "open" | "high" | "low">>({
+        _id: 0,
+        date: 1,
+        close: 1,
+        open: 1,
+        high: 1,
+        low: 1,
+      })
       .sort({ date: 1 })
       .toArray();
-    return docs.filter((d) => Number.isFinite(d.close) && d.close > 0);
+    return docs
+      .filter((d) => Number.isFinite(d.close) && d.close > 0)
+      .map((d) => ({
+        date: d.date,
+        close: d.close,
+        open: d.open ?? null,
+        high: d.high ?? null,
+        low: d.low ?? null,
+      }));
   } catch {
     return [];
   }

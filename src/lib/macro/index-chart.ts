@@ -13,6 +13,9 @@ const YahooFinance = (YahooFinancePkg as { default?: unknown }).default ?? Yahoo
 type YF = { chart: (s: string, o: Record<string, unknown>) => Promise<{ quotes: RawBar[] }> };
 interface RawBar {
   date: Date | string;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
   close?: number | null;
   adjclose?: number | null;
 }
@@ -40,6 +43,10 @@ const SYMBOLS: Record<string, { symbol: string; name: string }> = {
 export interface IndexChartRow {
   date: string;
   close: number;
+  /** 캔들차트용 — 소스에 없으면 null(그 구간은 캔들을 그리지 않는다). */
+  open: number | null;
+  high: number | null;
+  low: number | null;
   /** 볼린저밴드 (20기간, ±2σ) */
   bbU: number | null;
   bbM: number | null;
@@ -54,6 +61,9 @@ export interface IndexChart {
   name: string;
   rows: IndexChartRow[];
 }
+
+/** 소스(금융위·DB·Yahoo)에서 받아온 일봉 — 지표 계산 전 공통 형태. */
+type Bar = { date: string; close: number; open: number | null; high: number | null; low: number | null };
 
 function ema(values: number[], period: number): (number | null)[] {
   const k = 2 / (period + 1);
@@ -94,19 +104,17 @@ export async function getIndexChart(key: string, years: ChartYears = 1): Promise
   // KOSPI·KOSDAQ 은 KRX 데이터 우선: DB 과거분(2015~2020) + 금융위 지수시세(2020~) 병합.
   // 부족하면 Yahoo 폴백.
   const KR_IDX: Record<string, string> = { KOSPI: "코스피", KOSDAQ: "코스닥" };
-  let pts: { date: string; close: number }[] = [];
+  let pts: Bar[] = [];
   if (KR_IDX[key]) {
     const todayIso = new Date().toISOString().slice(0, 10);
     const [hist, fsc] = await Promise.all([
       getKrIndexHistory(key as "KOSPI" | "KOSDAQ", fromIso, todayIso),
       fetchKrIndexDaily(KR_IDX[key], fromIso.replace(/-/g, ""), todayIso.replace(/-/g, "")),
     ]);
-    const merged = new Map<string, number>();
-    for (const p of hist) merged.set(p.date, p.close);
-    for (const p of fsc) merged.set(p.date, p.close); // 겹치면 금융위(최근)가 우선
-    pts = [...merged.entries()]
-      .map(([date, close]) => ({ date, close }))
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const merged = new Map<string, Bar>();
+    for (const p of hist) merged.set(p.date, p);
+    for (const p of fsc) merged.set(p.date, p); // 겹치면 금융위(최근)가 우선
+    pts = [...merged.values()].sort((a, b) => a.date.localeCompare(b.date));
   }
 
   if (pts.length < 30) {
@@ -117,10 +125,15 @@ export async function getIndexChart(key: string, years: ChartYears = 1): Promise
     } catch {
       return null;
     }
+    // 종가는 기존대로 adjclose 우선, 시·고·저는 원본. 지수·선물은 배당·액면분할
+    // 보정이 없어 adjclose 와 close 가 같으므로 캔들 몸통이 어긋나지 않는다.
     pts = quotes
       .map((q) => ({
         date: (q.date instanceof Date ? q.date : new Date(q.date)).toISOString().slice(0, 10),
         close: (q.adjclose ?? q.close) ?? NaN,
+        open: q.open ?? null,
+        high: q.high ?? null,
+        low: q.low ?? null,
       }))
       .filter((p) => Number.isFinite(p.close));
   }
@@ -158,6 +171,9 @@ export async function getIndexChart(key: string, years: ChartYears = 1): Promise
     return {
       date: p.date,
       close: round(p.close) as number,
+      open: round(p.open),
+      high: round(p.high),
+      low: round(p.low),
       bbU: round(bb[i].u),
       bbM: round(bb[i].m),
       bbL: round(bb[i].l),

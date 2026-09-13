@@ -19,10 +19,10 @@ export async function fetchKrIndexDaily(
   idxNm: string,
   beginYmd: string,
   endYmd: string,
-): Promise<{ date: string; close: number }[]> {
+): Promise<{ date: string; close: number; open: number | null; high: number | null; low: number | null }[]> {
   const key = process.env.DATA_GO_KR_KEY ?? "";
   if (!key) return [];
-  const out: { date: string; close: number }[] = [];
+  const out: { date: string; close: number; open: number | null; high: number | null; low: number | null }[] = [];
   try {
     for (let page = 1; page <= 8; page++) {
       const url =
@@ -42,7 +42,14 @@ export async function fetchKrIndexDaily(
         const d = String(r.basDt ?? "").replace(/\D/g, "");
         const c = num(r.clpr);
         if (d.length === 8 && c != null && c > 0) {
-          out.push({ date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`, close: c });
+          // mkp·hipr·lopr = 시가·고가·저가 (캔들차트용, 없으면 null)
+          out.push({
+            date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`,
+            close: c,
+            open: num(r.mkp),
+            high: num(r.hipr),
+            low: num(r.lopr),
+          });
         }
       }
       if (rows.length < 1000) break;
