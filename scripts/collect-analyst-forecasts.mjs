@@ -60,6 +60,7 @@ const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 /**
  * devalue 평탄화 배열 → 원래 객체. arr[0] 이 루트이고, 모든 값이 배열 인덱스로
@@ -120,9 +121,17 @@ async function fetchForecast(symbol) {
       priceTarget: typeof r.pt_now === "number" ? r.pt_now : null,
       priceTargetOld: typeof r.pt_old === "number" ? r.pt_old : null,
       currency: r.curr ?? "USD",
-      stars: typeof r.scores?.stars === "number" ? r.scores.stars : null,
-      successRate: typeof r.scores?.success_rate === "number" ? r.scores.success_rate : null,
-      avgReturn: typeof r.scores?.avg_return === "number" ? r.scores.avg_return : null,
+      // 정확도 지표. stock_* 는 "이 애널리스트가 이 종목을 얼마나 맞혔나"라
+      // Top Analysts(Pro 전용)의 종목별 점수와 성격이 같다.
+      score: num(r.scores?.score),
+      stars: num(r.scores?.stars),
+      successRate: num(r.scores?.success_rate),
+      avgReturn: num(r.scores?.avg_return),
+      analystRank: num(r.scores?.analyst_rank),
+      rankedExperts: num(r.scores?.number_of_ranked_experts),
+      totalRatings: num(r.scores?.total),
+      stockSuccessRate: num(r.scores?.stock_success_rate),
+      stockAvgReturn: num(r.scores?.stock_avg_return),
     }));
 }
 

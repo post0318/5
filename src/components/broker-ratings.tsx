@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import { cn } from "@/lib/utils";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatNumber } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
 import type { ConsensusData } from "@/lib/markets/consensus";
 import type { AnalystRating } from "@/lib/markets/quote/yahoo";
@@ -27,9 +27,15 @@ interface AnalystForecast {
   priceTarget: number | null;
   priceTargetOld: number | null;
   currency: string;
+  score: number | null;
   stars: number | null;
   successRate: number | null;
   avgReturn: number | null;
+  analystRank: number | null;
+  rankedExperts: number | null;
+  totalRatings: number | null;
+  stockSuccessRate: number | null;
+  stockAvgReturn: number | null;
 }
 
 /** Yahoo 등급 문자열 → 매수/중립/매도 3분류. 증권사마다 표현이 달라 소문자 포함 검사. */
@@ -95,6 +101,34 @@ function GradeBadge({ grade }: { grade: string | null }) {
   );
 }
 
+/**
+ * 0~100 점수를 막대+숫자로. StockAnalysis 의 Top Analysts 표와 같은 읽는 법
+ * (높을수록 좋음). 70 이상 녹색 · 50~70 황색 · 그 미만 회색.
+ */
+function ScoreBar({ value }: { value: number | null }) {
+  if (value == null) return <span className="text-muted-foreground">-</span>;
+  const pct = Math.max(0, Math.min(100, value));
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="bg-muted h-1.5 w-10 shrink-0 overflow-hidden rounded-full">
+        <span
+          className={cn(
+            "block h-full rounded-full",
+            pct >= 70 ? "bg-up" : pct >= 50 ? "bg-amber-400" : "bg-muted-foreground/50",
+          )}
+          style={{ width: `${pct}%` }}
+        />
+      </span>
+      <span className="tnum">{formatNumber(value, 0)}</span>
+    </span>
+  );
+}
+
+function Pct({ value }: { value: number | null }) {
+  if (value == null) return <span className="text-muted-foreground">-</span>;
+  return <span className="tnum">{formatNumber(value, 0)}%</span>;
+}
+
 function SourceLink({ href, label }: { href: string; label: string }) {
   return (
     <a
@@ -107,6 +141,50 @@ function SourceLink({ href, label }: { href: string; label: string }) {
       <ExternalLink className="size-3" />
     </a>
   );
+}
+
+/** 증권사 단위 집계 — 같은 증권사에 애널리스트가 여러 명이면 평균낸다. */
+interface FirmRow {
+  firm: string;
+  analysts: number;
+  score: number | null;
+  successRate: number | null;
+  stockSuccessRate: number | null;
+  rating: string;
+  priceTarget: number | null;
+  date: string;
+}
+
+function avg(values: (number | null)[]): number | null {
+  const nums = values.filter((v): v is number => v != null);
+  return nums.length === 0 ? null : nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+function byFirm(forecasts: AnalystForecast[]): FirmRow[] {
+  const groups = new Map<string, AnalystForecast[]>();
+  for (const f of forecasts) {
+    const key = f.firm.toLowerCase();
+    const list = groups.get(key);
+    if (list) list.push(f);
+    else groups.set(key, [f]);
+  }
+  const rows: FirmRow[] = [];
+  for (const list of groups.values()) {
+    // forecasts 는 최신순 → 첫 항목이 그 증권사의 최신 의견.
+    const latest = list[0];
+    rows.push({
+      firm: latest.firm,
+      analysts: list.length,
+      score: avg(list.map((f) => f.score)),
+      successRate: avg(list.map((f) => f.successRate)),
+      stockSuccessRate: avg(list.map((f) => f.stockSuccessRate)),
+      rating: latest.rating,
+      priceTarget: latest.priceTarget,
+      date: latest.date,
+    });
+  }
+  // Top Analysts 와 같은 정렬 — 점수 높은 순, 점수 없으면 뒤로.
+  return rows.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
 }
 
 export function BrokerRatings({
@@ -162,6 +240,7 @@ export function BrokerRatings({
   // StockAnalysis 수집분이 없을 때만 Yahoo 로 "최근 투자의견"을 만든다
   // (목표주가를 제시한 건만 — Price Target 열이 이 표의 핵심).
   const yahooLatest = ratings.filter((r) => r.priceTarget != null).slice(0, OVERVIEW_ROWS);
+  const firms = byFirm(forecasts);
 
   const saSlug = symbol.toLowerCase().replace(/\./g, "-");
   const saUrl = `https://stockanalysis.com/stocks/${saSlug}/forecast/`;
@@ -181,12 +260,15 @@ export function BrokerRatings({
               <SourceLink href={saUrl} label="전체 보기" />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
+              <table className="w-full min-w-[980px] text-sm">
                 <thead>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left font-medium">애널리스트</th>
                     <th className="py-1.5 text-left font-medium">증권사</th>
-                    <th className="py-1.5 text-left font-medium">투자의견</th>
+                    <th className="py-1.5 text-left font-medium">점수</th>
+                    <th className="py-1.5 text-right font-medium">적중률</th>
+                    <th className="py-1.5 text-right font-medium">본종목</th>
+                    <th className="py-1.5 pl-3 text-left font-medium">투자의견</th>
                     <th className="py-1.5 text-left font-medium">등급조정</th>
                     <th className="py-1.5 text-right font-medium">목표주가</th>
                     <th className="py-1.5 text-right font-medium">상승여력</th>
@@ -203,29 +285,39 @@ export function BrokerRatings({
                         className={cn("border-b", i % 2 === 1 && "bg-muted/40")}
                       >
                         <td className="py-1.5 pr-3 text-left">
-                          <div className="flex flex-col">
+                          <div className="flex items-baseline gap-1.5">
                             {f.analystSlug ? (
                               <a
                                 href={`https://stockanalysis.com/analysts/${f.analystSlug}/`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="font-medium hover:underline"
+                                className="font-medium whitespace-nowrap hover:underline"
                               >
                                 {f.analyst || "-"}
                               </a>
                             ) : (
-                              <span className="font-medium">{f.analyst || "-"}</span>
+                              <span className="font-medium whitespace-nowrap">{f.analyst || "-"}</span>
                             )}
                             {f.stars != null && (
                               <span className="text-muted-foreground text-[11px] whitespace-nowrap">
                                 ★ {f.stars.toFixed(1)}
-                                {f.successRate != null && ` · 적중 ${f.successRate.toFixed(0)}%`}
                               </span>
                             )}
                           </div>
                         </td>
-                        <td className="text-muted-foreground py-1.5 pr-3 text-left">{f.firm}</td>
+                        <td className="text-muted-foreground py-1.5 pr-3 text-left whitespace-nowrap">
+                          {f.firm}
+                        </td>
                         <td className="py-1.5 pr-3 text-left">
+                          <ScoreBar value={f.score} />
+                        </td>
+                        <td className="py-1.5 text-right">
+                          <Pct value={f.successRate} />
+                        </td>
+                        <td className="py-1.5 text-right">
+                          <Pct value={f.stockSuccessRate} />
+                        </td>
+                        <td className="py-1.5 pr-3 pl-3 text-left">
                           <GradeBadge grade={f.rating} />
                         </td>
                         <td
@@ -266,6 +358,10 @@ export function BrokerRatings({
                 </tbody>
               </table>
             </div>
+            <p className="text-muted-foreground/70 mt-1.5 text-[11px]">
+              점수·적중률은 애널리스트의 과거 예측 정확도(StockAnalysis 산출) · 본종목 = 이 종목에
+              한정한 적중률
+            </p>
           </div>
         ) : (
           yahooLatest.length > 0 && (
@@ -339,6 +435,70 @@ export function BrokerRatings({
               </div>
             </div>
           )
+        )}
+
+        {/* 증권사별 점수 — StockAnalysis 의 Top Analysts 는 Pro 전용이라, 수집한
+            애널리스트를 증권사로 묶어 같은 읽는 법(점수 높은 순)으로 재구성한다. */}
+        {firms.length > 0 && (
+          <div>
+            <div className="mb-2 flex items-baseline justify-between gap-2">
+              <h4 className="text-xs font-semibold">
+                증권사별 점수
+                <span className="text-muted-foreground ml-2 font-normal">{firms.length}개사</span>
+              </h4>
+              <SourceLink href={saUrl} label="전체 보기" />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[620px] text-sm">
+                <thead>
+                  <tr className="text-muted-foreground border-b">
+                    <th className="py-1.5 text-left font-medium">증권사</th>
+                    <th className="py-1.5 text-left font-medium">점수</th>
+                    <th className="py-1.5 text-right font-medium">적중률</th>
+                    <th className="py-1.5 text-right font-medium">본종목</th>
+                    <th className="py-1.5 pl-3 text-left font-medium">최신 의견</th>
+                    <th className="py-1.5 text-right font-medium">목표주가</th>
+                    <th className="py-1.5 text-right font-medium">상승여력</th>
+                  </tr>
+                </thead>
+                <tbody className="tnum">
+                  {firms.map((f, i) => (
+                    <tr
+                      key={f.firm}
+                      className={cn("border-b", i % 2 === 1 && "bg-muted/40")}
+                    >
+                      <td className="py-1.5 pr-3 text-left font-medium whitespace-nowrap">
+                        {f.firm}
+                        {f.analysts > 1 && (
+                          <span className="text-muted-foreground ml-1 text-[11px] font-normal">
+                            {f.analysts}명 평균
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1.5 pr-3 text-left">
+                        <ScoreBar value={f.score} />
+                      </td>
+                      <td className="py-1.5 text-right">
+                        <Pct value={f.successRate} />
+                      </td>
+                      <td className="py-1.5 text-right">
+                        <Pct value={f.stockSuccessRate} />
+                      </td>
+                      <td className="py-1.5 pr-3 pl-3 text-left">
+                        <GradeBadge grade={f.rating} />
+                      </td>
+                      <td className="py-1.5 text-right font-medium whitespace-nowrap">
+                        {money(f.priceTarget)}
+                      </td>
+                      <td className="py-1.5 text-right">
+                        <ChangePercent value={upside(f.priceTarget)} market={market} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
 
         {/* 투자의견 변경 이력 (증권사 단위, Yahoo) */}

@@ -36,9 +36,18 @@ export interface AnalystForecastDoc {
   priceTargetOld: number | null;
   currency: string;
   /** 애널리스트 정확도 지표 (StockAnalysis 산출). 없으면 null. */
+  score: number | null;
   stars: number | null;
   successRate: number | null;
   avgReturn: number | null;
+  /** 전체 애널리스트 중 순위 / 모집단 크기. */
+  analystRank: number | null;
+  rankedExperts: number | null;
+  /** 이 애널리스트의 총 평가 건수. */
+  totalRatings: number | null;
+  /** 이 종목에 한정한 적중률·평균수익률 — 종목별 신뢰도 판단에 가장 직접적. */
+  stockSuccessRate: number | null;
+  stockAvgReturn: number | null;
   collectedAt: string;
 }
 

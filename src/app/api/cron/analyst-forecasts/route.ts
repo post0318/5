@@ -33,9 +33,15 @@ interface RawItem {
   priceTarget?: number | null;
   priceTargetOld?: number | null;
   currency?: string | null;
+  score?: number | null;
   stars?: number | null;
   successRate?: number | null;
   avgReturn?: number | null;
+  analystRank?: number | null;
+  rankedExperts?: number | null;
+  totalRatings?: number | null;
+  stockSuccessRate?: number | null;
+  stockAvgReturn?: number | null;
 }
 
 const num = (v: unknown): number | null =>
@@ -75,9 +81,15 @@ export async function POST(req: Request) {
         priceTarget: num(it.priceTarget),
         priceTargetOld: num(it.priceTargetOld),
         currency: it.currency?.trim() || "USD",
+        score: num(it.score),
         stars: num(it.stars),
         successRate: num(it.successRate),
         avgReturn: num(it.avgReturn),
+        analystRank: num(it.analystRank),
+        rankedExperts: num(it.rankedExperts),
+        totalRatings: num(it.totalRatings),
+        stockSuccessRate: num(it.stockSuccessRate),
+        stockAvgReturn: num(it.stockAvgReturn),
         collectedAt: now,
       }));
 
