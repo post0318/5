@@ -11,6 +11,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const PAGE_SIZE = 10;
 
+const TOPICS = [
+  { key: "all", label: "전체" },
+  { key: "산업분석", label: "산업분석" },
+  { key: "투자전략", label: "투자전략" },
+] as const;
+type TopicKey = (typeof TOPICS)[number]["key"];
+
 function fmtAgo(iso: string): string {
   const days = Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000);
   if (days <= 0) return "오늘";
@@ -57,16 +64,26 @@ function Pager({
  */
 export function IndustryResearchBoard({ market }: { market: MarketId }) {
   const [page, setPage] = useState(1);
+  const [topic, setTopic] = useState<TopicKey>("all");
 
   const q = useQuery({
-    queryKey: ["industry-research", market],
-    queryFn: () => apiFetch<{ items: ShinhanResearchDoc[] }>(`/api/research/industry?market=${market}`),
+    queryKey: ["industry-research", market, topic],
+    queryFn: () =>
+      apiFetch<{ items: ShinhanResearchDoc[] }>(
+        `/api/research/industry?market=${market}${topic === "all" ? "" : `&topic=${encodeURIComponent(topic)}`}`,
+      ),
     staleTime: 30 * 60_000,
   });
 
   const items = q.data?.items ?? [];
   const pageCount = Math.ceil(items.length / PAGE_SIZE) || 1;
-  const paged = items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const clampedPage = Math.min(page, pageCount);
+  const paged = items.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+
+  function selectTopic(t: TopicKey) {
+    setTopic(t);
+    setPage(1);
+  }
 
   return (
     <div className="space-y-3">
@@ -78,12 +95,34 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
         </p>
       </div>
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
           <CardTitle className="text-sm">
             {market === "kr" ? "국내" : "해외"} 산업분석·투자전략
             {q.data && <span className="text-muted-foreground ml-1.5 text-xs font-normal">({items.length})</span>}
           </CardTitle>
+          <div className="flex gap-1">
+            {TOPICS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => selectTopic(t.key)}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                  topic === t.key
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:bg-muted",
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </CardHeader>
+        {topic !== "all" && (
+          <p className="text-muted-foreground/80 -mt-1 px-6 text-[11px]">
+            제목·라벨 키워드로 자동 구분한 결과라 완전히 정확하지 않을 수 있습니다.
+          </p>
+        )}
         <CardContent>
           {q.isLoading && <Skeleton className="h-64 w-full" />}
           {q.isError && (
@@ -121,7 +160,7 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
                   </li>
                 ))}
               </ul>
-              <Pager page={page} pageCount={pageCount} onChange={setPage} />
+              <Pager page={clampedPage} pageCount={pageCount} onChange={setPage} />
             </>
           )}
         </CardContent>

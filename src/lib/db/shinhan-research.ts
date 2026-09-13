@@ -39,8 +39,12 @@ export interface ShinhanResearchDoc {
 
 // 리서치 자료는 3개월(90일)까지만 수집·보관한다(오너 최종 확정, 2026-09
 // — 각 수집기의 백필 범위도 90일, 90일 지난 문서는 DB에서 지워도 무방).
+// 단, "산업" 카테고리 중 투자전략으로 분류되는 문서는 휘발성이 강해(오너
+// 지시, 2026-09 — "투자전략은 7일... 오래 가져갈 내용은 아니다") 7일만
+// 보관한다. 기업분석·산업분석은 기존 90일 그대로.
 const MAX_AGE_MS = 90 * 24 * 3600_000;
 const RECENT_WINDOW_MS = 90 * 24 * 3600_000;
+const STRATEGY_MAX_AGE_MS = 7 * 24 * 3600_000;
 
 export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDoc>> {
   const db = await getDb();
@@ -69,7 +73,26 @@ export async function upsertShinhanResearch(
   }
   const cutoff = new Date(Date.now() - MAX_AGE_MS).toISOString().slice(0, 10);
   const del = await col.deleteMany({ date: { $lt: cutoff } });
-  return { upserted, pruned: del.deletedCount ?? 0 };
+
+  // 투자전략 7일 정리 — topic 은 DB 필드가 아니라 classifyResearchTopic() 의
+  // 계산 결과라 deleteMany 조건절에 바로 못 넣는다. 7일~90일 사이의 "산업"
+  // 카테고리 문서만 후보로 가져와(전체 대비 소수) JS 에서 분류 후 투자전략인
+  // 것만 id로 골라 지운다 — 기업분석·산업분석은 그대로 90일 유지.
+  const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
+  const staleIndustryCandidates = await col
+    .find({ category: "산업", date: { $lt: strategyCutoff } })
+    .project<{ _id: string; stockName: string; title: string }>({ stockName: 1, title: 1 })
+    .toArray();
+  const staleStrategyIds = staleIndustryCandidates
+    .filter((d) => classifyResearchTopic(d) === "투자전략")
+    .map((d) => d._id);
+  let prunedStrategy = 0;
+  if (staleStrategyIds.length > 0) {
+    const del2 = await col.deleteMany({ _id: { $in: staleStrategyIds } });
+    prunedStrategy = del2.deletedCount ?? 0;
+  }
+
+  return { upserted, pruned: (del.deletedCount ?? 0) + prunedStrategy };
 }
 
 /**
@@ -91,26 +114,53 @@ function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
   return result;
 }
 
+export type ResearchTopic = "산업분석" | "투자전략";
+
+/**
+ * "산업" 카테고리 문서를 산업분석/투자전략으로 다시 나눈다(오너 지시, 2026-09
+ * — "전체/산업분석/투자전략으로 구분"). DB 스키마엔 이 구분을 담는 별도
+ * 필드가 없다 — 수집기 15곳 이상을 전부 고쳐 소스별로 정확히 태깅하는 대신,
+ * 이미 있는 stockName(카테고리 라벨/업종명)·title 텍스트에 대한 키워드
+ * 추측으로 화면단에서 나눈다(미래에셋 market 분류와 동일한 트레이드오프 —
+ * 완전하지 않음). 하나증권처럼 소스가 이미 "글로벌 투자전략"/"글로벌
+ * 산업분석"으로 라벨링한 경우는 이 키워드만으로도 정확히 갈린다.
+ */
+const STRATEGY_HINT_RE =
+  /전략|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|Weekly Letter|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?/i;
+
+export function classifyResearchTopic(doc: Pick<ShinhanResearchDoc, "stockName" | "title">): ResearchTopic {
+  const hay = `${doc.stockName ?? ""} ${doc.title}`;
+  return STRATEGY_HINT_RE.test(hay) ? "투자전략" : "산업분석";
+}
+
 /**
  * 산업분석/투자전략 리포트(종목 무관, `symbol: null`) — 시장 전체용 화면
  * (`/[market]/research`)에서 사용. `getShinhanResearchBySymbol`(종목별
  * 기업분석)과 달리 symbol 로 좁히지 않고 market+category="산업"으로만
  * 조회한다. 2026-09 기준 KB·미래에셋·한투·NH·하나·DS·BNK·GlobalMonitor·
  * 한경컨센서스 등 다수 소스가 이미 이 카테고리로 수집 중(수집기부터 먼저
- * 구축, 화면 연동은 이번에 처음).
+ * 구축, 화면 연동은 이번에 처음). `topic` 을 주면 classifyResearchTopic()
+ * 기준으로 한 번 더 걸러낸다 — DB 필드가 아니라 후처리 필터라, 필터링 후에도
+ * limit 만큼 채우려고 원본을 넉넉히 가져온다.
  */
 export async function getIndustryResearch(
   market: MarketId,
   limit = 30,
+  topic?: ResearchTopic,
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
-  const fetchLimit = limit + 20; // dedupe 로 줄어들 수 있어 넉넉히
+  // topic 필터가 있으면 DB에서 걸러낼 수 없어(계산 필드) 후보를 훨씬 넉넉히
+  // 가져와야 limit 만큼 채워진다 — 최근 200건 중 한쪽 topic이 몰려 있어도
+  // 안전하도록 여유있게.
+  const fetchLimit = topic ? Math.max(limit * 6, 200) : limit + 20;
   const docs = await col
     .find({ market, category: "산업" })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
-  return dedupeBySourceTitle(docs).slice(0, limit);
+  const deduped = dedupeBySourceTitle(docs);
+  const filtered = topic ? deduped.filter((d) => classifyResearchTopic(d) === topic) : deduped;
+  return filtered.slice(0, limit);
 }
 
 /**
