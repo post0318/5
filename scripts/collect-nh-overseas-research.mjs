@@ -1,13 +1,16 @@
 /**
  * NH투자증권 "해외기업분석" 리포트 수집기 (미국 종목).
  *
- * 국내 수집기(collect-nh-research.mjs)와 완전히 같은 TR 을 호출한다
- * (rsh_ppr_dit_cd=01 "기업/산업분석", trName=H3211) — 별도 해외 메뉴가
- * 없고, 해외 리포트가 같은 목록에 섞여 나오는데 종목코드 필드
- * (rsh_ppr_iem_cd_pcl)가 비어 있어 국내 수집기가 그냥 건너뛰고 있었다.
- * 실측 확인: 제목이 "[해외기업분석/Apple] 아이폰18, 균형 잡힌 전략" 처럼
- * 대괄호 안에 "해외기업분석/회사명"이 들어있는 경우가 바로 그 리포트다
- * (다른 no-code 항목은 국내 비상장사·업종 리포트라 이 패턴에 안 걸림).
+ * 같은 TR(H3211)을 두 게시판 코드(rsh_ppr_dit_cd)로 스캔한다:
+ *   - "03" = 메뉴상 "해외주식" 전용 게시판(오너 지적으로 재확인, 2026-09).
+ *     실측: 90일치 95건 중 60건이 아래 브라켓 패턴에 매칭 — 진짜 주력 소스.
+ *   - "01" = 국내 수집기(collect-nh-research.mjs)와 같은 "기업/산업분석"
+ *     게시판. 해외 리포트가 드물게 섞여 나오기도 해(90일 3건) 놓치지 않게
+ *     계속 같이 스캔한다.
+ * 두 게시판 모두 종목코드 필드(rsh_ppr_iem_cd_pcl)가 해외 리포트에서는
+ * 항상 비어 있어, 제목이 "[해외기업분석/Apple] 아이폰18, 균형 잡힌 전략"
+ * 처럼 대괄호 안에 "해외기업분석/회사명"이 들어있는 경우로 골라낸다
+ * (다른 no-code 항목은 국내 비상장사·업종·전략 리포트라 이 패턴에 안 걸림).
  *
  * 회사명(영문/한글 혼용, 예: "Apple")을 네이버 해외종목 자동완성으로 티커
  * 해석한다(DS투자증권 수집기와 동일 방식).
@@ -68,12 +71,12 @@ function isoDate(yyyymmdd) {
 // 제목 분리. "Spot" 처럼 분류 뒤에 태그가 더 붙는 경우도 있어 유연하게 받는다.
 const TITLE_RE = /^\[해외기업분석(?:\s+\S+)?\s*\/\s*([^\]]+)\]\s*(.+)$/;
 
-async function fetchPage(cursor) {
+async function fetchPage(ditCd, cursor) {
   const body = new URLSearchParams({
     trName: "H3211",
     output: "json",
     isNext: cursor ? "true" : "false",
-    rsh_ppr_dit_cd: "01",
+    rsh_ppr_dit_cd: ditCd,
     rsh_ppr_ser_cd: "",
     rmt_cnt: String(PAGE_SIZE),
     rsh_ppr_no: cursor?.no ?? "",
@@ -88,7 +91,7 @@ async function fetchPage(cursor) {
       "User-Agent": UA,
       "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
       "X-Requested-With": "XMLHttpRequest",
-      Referer: "https://www.nhsec.com/research/boardList.action?rsh_ppr_dit_cd=01",
+      Referer: `https://www.nhsec.com/research/boardList.action?rsh_ppr_dit_cd=${ditCd}`,
     },
     body: body.toString(),
   });
@@ -130,28 +133,30 @@ async function resolveUsTicker(name) {
   return hit;
 }
 
-console.log(`▶ NH투자증권 해외기업분석 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+console.log(`▶ NH투자증권 해외기업분석 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지 (게시판 03+01)`);
 // 항목 날짜가 'YYYY-MM-DD'(=UTC 자정)라 컷오프도 자정으로 맞춘다.
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
 const rawRows = [];
-let cursor = null;
-let stop = false;
-
-for (let page = 1; page <= MAX_PAGES && !stop; page++) {
-  const json = await fetchPage(cursor);
-  const rows = parseRows(json);
-  if (rows.length === 0) break;
-  for (const r of rows) {
-    const date = isoDate(r.rsh_ppr_dru_dt);
-    if (date && new Date(date) < cutoff) {
-      stop = true;
-      break;
+// "03"(해외주식 전용 게시판, 주력 소스) + "01"(기업/산업분석, 드물게 해외 리포트 섞임) 둘 다 스캔.
+for (const ditCd of ["03", "01"]) {
+  let cursor = null;
+  let stop = false;
+  for (let page = 1; page <= MAX_PAGES && !stop; page++) {
+    const json = await fetchPage(ditCd, cursor);
+    const rows = parseRows(json);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const date = isoDate(r.rsh_ppr_dru_dt);
+      if (date && new Date(date) < cutoff) {
+        stop = true;
+        break;
+      }
+      rawRows.push(r);
     }
-    rawRows.push(r);
+    const last = rows[rows.length - 1];
+    cursor = { no: last.rsh_ppr_no, date: last.rsh_ppr_dru_dt, time: last.rsh_ppr_dru_tm };
+    await sleep(400);
   }
-  const last = rows[rows.length - 1];
-  cursor = { no: last.rsh_ppr_no, date: last.rsh_ppr_dru_dt, time: last.rsh_ppr_dru_tm };
-  await sleep(400);
 }
 
 console.log(`  목록 ${rawRows.length}건 중 해외기업분석 매핑 시도...`);

@@ -228,6 +228,23 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-nh-research.mjs`, GitHub Actions
       `.github/workflows/nh-research.yml`, 하루 1회)가 같은 라우트를
       `source: "NH투자증권"` 으로 재사용.
+    - **NH투자증권 해외기업분석(미국 종목) 추가(오너 확인, 2026-09)**: 같은
+      TR(H3211)을 게시판 코드(`rsh_ppr_dit_cd`) "01"(기업/산업분석, 국내
+      수집기와 동일)로 스캔하면 종목코드가 비어 있는 "[해외기업분석/회사명]"
+      형식 리포트가 드물게 섞여 나온다(90일 3건). **오너가 "nh투자증권
+      해외주식에 있는데?"라고 지적**해 메뉴를 다시 확인한 결과, 별도로
+      "해외주식" 전용 게시판(`rsh_ppr_dit_cd=03`)이 존재함을 확인 — 같은
+      대괄호 제목 형식을 훨씬 높은 밀도로 담고 있다(90일 95건 중 60건
+      매칭, 실측). 두 게시판 모두 종목코드 필드는 비어 있어 여전히 제목
+      패턴으로 걸러야 하고, 회사명(영문/한글)은 네이버 해외종목 자동완성으로
+      티커 해석(DS투자증권 수집기와 동일 방식). **로컬 스크립트**
+      (`scripts/collect-nh-overseas-research.mjs`, GitHub Actions
+      `.github/workflows/nh-overseas-research.yml`, 하루 1회)가 "03"과 "01"
+      둘 다 스캔해 합친 뒤 같은 라우트를 `source: "NH투자증권", market: "us"`
+      로 재사용. 목표주가는 공용 추출기(`us-research-extract.mjs`)의
+      컨센서스 패턴으로 PDF에서 보강(90일 백필 46건 중 42건 확보). **미결**:
+      투자의견(등급)은 현재 0건 추출 — NH 리포트 PDF의 등급 표기 위치/형식이
+      다른 브로커와 달라 보이며, 우선순위 낮아 추후 재확인 필요.
     - **미래에셋증권 추가(오너 확인, 2026-09)**: `securities.miraeasset.com` 도
       레거시 frameset 사이트지만 목록 자체(`/bbs/board/message/list.do?
       categoryId=1800&curPage=N`, categoryId 는 "투자정보 > 리서치 리포트 >
