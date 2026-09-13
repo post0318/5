@@ -119,8 +119,31 @@ function parseItems(html) {
   return items;
 }
 
-// 산업분석(1525)·투자전략(1527) 게시판 — 목록 항목이 이미 "<b>주제명</b>
-// <br/>헤드라인" 구조라 종목코드/티커 매칭이 필요 없음(코드가 아예 없음).
+// 산업분석(1525)·투자전략(1527) 게시판 — "산업분석(국내/해외)"란 이름대로
+// 국내·해외 콘텐츠가 섞여 있는데, 목록 응답에 국가를 구분할 구조적 필드가
+// 전혀 없다(KB의 foldertemplate 같은 게 없음 — 실측 확인). GM(GlobalMonitor)
+// 에도 미래에셋 데이터가 아예 없어(실측 확인, auth 목록에 없음) 대체도 안
+// 되므로, 오너 지시(2026-09)에 따라 제목·헤드라인 키워드로 추측 분류한다:
+//  - 중국/인도/일본 등 미국·한국이 아닌 특정 국가가 명시되면 이 프로젝트가
+//    다루는 시장이 아니므로 건너뜀.
+//  - "글로벌"/"Global"/"해외"/"미국"/"US"/"나스닥"/"Nasdaq" 등 신호가 있으면
+//    market:"us".
+//  - 그 외(업종명+비중확대/축소 등 국내 브로커 관행, 국가 신호 없음)는
+//    기존처럼 market:"kr" 기본값.
+// 완벽한 분류는 아니다(예: "AI Infra Signal"처럼 영문명이어도 신호 키워드가
+// 없으면 kr로 남음) — 전수 정확도보다 "타국 콘텐츠가 국내로 잘못 들어가지
+// 않는 것"과 "명백한 해외 콘텐츠는 us로 건너가는 것" 두 가지를 우선한다.
+const EXCLUDE_COUNTRY_RE = /중국|인도|인디아|일본|홍콩|대만|베트남|동남아/;
+const US_HINT_RE = /글로벌|Global|해외|미국|\bUS\b|나스닥|Nasdaq|S&P|다우존스|연준|\bFed\b/i;
+function classifyMarket(label, headline) {
+  const hay = `${label} ${headline}`;
+  if (EXCLUDE_COUNTRY_RE.test(hay)) return null; // 이 프로젝트 대상 시장 아님
+  if (US_HINT_RE.test(hay)) return "us";
+  return "kr";
+}
+
+// 목록 항목이 이미 "<b>주제명</b><br/>헤드라인" 구조라 종목코드/티커
+// 매칭이 필요 없음(코드가 아예 없음).
 function parseIndustryItems(html, categoryId) {
   const items = [];
   for (const rowHtml of html.split(/<tr[^>]*>/).slice(1)) {
@@ -130,6 +153,9 @@ function parseIndustryItems(html, categoryId) {
     );
     if (!dateM || !subjectM) continue;
     const [, id, messageNumber, rawTitle, rawSummary] = subjectM;
+    const title = rawSummary.trim() || rawTitle.trim();
+    const market = classifyMarket(rawTitle.trim(), title);
+    if (!market) continue; // 중국/인도 등 이 프로젝트가 다루지 않는 시장
     const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
     const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
     items.push({
@@ -137,8 +163,8 @@ function parseIndustryItems(html, categoryId) {
       messageNumber,
       srcCategoryId: categoryId,
       date: dateM[1],
-      title: rawSummary.trim() || rawTitle.trim(),
-      market: "kr",
+      title,
+      market,
       stockName: rawTitle.trim(),
       symbolHint: null,
       opinion: "",

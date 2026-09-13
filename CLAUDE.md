@@ -347,8 +347,20 @@ npm run db:studio    # drizzle studio
         `categoryId=1525`(산업분석, 국내/해외 혼재)·`1527`(투자전략). 목록
         항목이 이미 "&lt;b&gt;주제명&lt;/b&gt;&lt;br/&gt;헤드라인" 구조라
         종목처럼 코드/티커를 뽑을 필요 없이 굵은 글씨 부분을 그대로 라벨로
-        쓴다. `category:"산업"`, market 기본 "kr"(업종 혼재 특성상 KR/US
-        분리 신호가 없어 보수적 기본값), 목표주가 추출은 건너뜀.
+        쓴다. `category:"산업"`, 목표주가 추출은 건너뜀.
+        - **KR/US 분류 — 키워드 추측(오너 지시, 2026-09 — "kb 미래에셋
+          미국 산업과 투자전략은?")**: KB의 `foldertemplate` 같은 국가 구분
+          필드가 이 게시판엔 전혀 없고, GM(GlobalMonitor)에도 미래에셋
+          데이터가 아예 없어(실측 확인 — auth 목록에 없음) 대체도 안 된다.
+          오너가 "정확한 분류"보다 "키워드 추측" 쪽을 선택(대안: 전부 kr
+          유지, 또는 브라우저로 직접 확인)해 `classifyMarket()`으로 제목·
+          라벨을 검사한다 — 중국/인도/일본 등 타국이 명시되면 건너뛰고,
+          "글로벌/Global/해외/미국/US/나스닥/연준" 등 신호가 있으면 us,
+          그 외(업종명+비중확대 등 국내 관행)는 kr. **완전하지 않음** —
+          실측으로 확인된 오분류 사례: "자동차/모빌리티... 미국 Ford 넘어
+          3위"(내수 얘기인데 us로 분류됨), "AI Infra Signal... 델과 HPE"
+          (미국 얘기인데 신호어가 없어 kr로 남음). 정밀 분류가 필요해지면
+          브라우저로 실제 사이트를 봐야 할 수도 있음.
     - **한국투자증권 추가(오너 확인, 2026-09)**: `securities.koreainvestment.com`
       은 모던 사이트라 목록(`/main/research/research/Strategy.jsp?jkGubun=10
       &category1=05&category2=01&rowsPerPages=50&currentPage=N`)이 평범한
