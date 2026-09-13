@@ -93,7 +93,15 @@ async function fetchPage(page, startDate) {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json();
-  if (!json.res) throw new Error(`API 응답 실패: ${JSON.stringify(json).slice(0, 200)}`);
+  // 날짜 필터(startDate)에 걸리는 항목이 요청한 페이지보다 적으면 서버가
+  // res:false + reportlist:[] 로 응답한다(실측 2026-09: nav.totalPage 는 19인데
+  // 5페이지가 빈 응답). 목록 끝으로 보고 조용히 멈춘다 — 여기서 throw 하면
+  // 앞 페이지에서 이미 모은 것까지 통째로 버려진다. 단 1페이지부터 이러면
+  // 진짜 실패이므로 그대로 던진다.
+  if (!json.res) {
+    if (page > 1) return null;
+    throw new Error(`API 응답 실패: ${JSON.stringify(json).slice(0, 200)}`);
+  }
   return json.reportlist ?? [];
 }
 
@@ -127,7 +135,7 @@ const collected = [];
 let stop = false;
 for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   const rows = await fetchPage(page, startDate);
-  if (rows.length === 0) break;
+  if (rows === null || rows.length === 0) break;
   const items = parseItems(rows);
   for (const it of items) {
     if (new Date(it.date) < cutoff) {
