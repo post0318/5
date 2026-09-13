@@ -176,12 +176,23 @@ npm run db:studio    # drizzle studio
         추출은 이미 공용 모듈이 정상 수행 중이었고, DB에 남아있던 옛 null
         값만 재수집으로 갱신. **로컬 스크립트**
         (`scripts/collect-hana-global-research.mjs`)가 같은 라우트를
-        `source: "하나증권", market: "us"` 로 재사용. **미결**: 산업분석/
-        투자전략 전용 메뉴("글로벌리서치" > "글로벌 산업분석"
-        `pid=8&cid=2`/"글로벌 투자전략" `pid=8&cid=1`)가 따로 있음을
-        확인했으나, 국내 목록과 달리 모던 그리드(WEB-APP) 컴포넌트라 정적
-        HTML에 데이터가 없고 별도 AJAX 데이터 엔드포인트를 못 찾음(로그인
-        세션/CSRF 필요 추정) — 브라우저 네트워크 탭으로 직접 확인 필요.
+        `source: "하나증권", market: "us"` 로 재사용.
+      - **글로벌 산업분석/투자전략 게시판 해결(오너 지시, 2026-09 — "하나증권의
+        문제는 그러면서 해결해보자")**: 이전 조사에서 "글로벌리서치 > 글로벌
+        산업분석"(`pid=8&cid=2`)/"글로벌 투자전략"(`pid=8&cid=1`) 메뉴가
+        "모던 그리드(WEB-APP) 컴포넌트라 정적 HTML에 데이터가 없다"고 미결로
+        남겨뒀었는데, **그 판단이 잘못됐던 것으로 확인됨** — 직접 다시
+        확인한 결과 다른 하나증권 게시판(글로벌 기업분석 등)과 완전히 같은
+        서버렌더링 HTML 목록이었다. "해외주식 > {카테고리}" 라벨이 목록에
+        그대로 있어 산업분석/투자전략 구분도 파싱만으로 바로 됨. 다만 이
+        두 게시판은 "해외주식" 산하이면서도 중국·인도·신흥국 등 미국 외
+        내용이 섞여 있어(실측), 미국/글로벌 매크로 신호어가 있는 항목만
+        market:"us"로 수집하고 나머지는 건너뛴다(키워드 추측, 미래에셋과
+        동일한 트레이드오프 — 완전하지 않음). **로컬 스크립트**
+        (`scripts/collect-hana-global-industry-research.mjs`, GitHub
+        Actions `.github/workflows/hana-global-industry-research.yml`,
+        하루 1회)가 같은 라우트를 `source: "하나증권", category:"산업"` 으로
+        재사용.
     - **한화투자증권 추가(오너 확인, 2026-09)**: `www.hanwhawm.com` 기업분석
       (`/main/research/main/list.cmd?depth3_id=anls1&p=N`)은 로그인 없이
       서버렌더링 HTML. **robots.txt 가 이 경로를 막지 않음**(다른 항목과 달리
@@ -543,6 +554,20 @@ npm run db:studio    # drizzle studio
     실패 시 조용히 생략(해당 컴포넌트만 빠짐, 대시보드 전체 에러 아님) +
     딥링크(cnn.com/markets/fear-and-greed) 병행. 어댑터 격리(`lib/macro/`
     하위)도 이미 되어 있어 소스 교체 시 파일 단위로 영향 최소화.
+- **산업분석 탭 (`/[market]/research`, 종목분석 옆 최상위 탭, 오너 지시
+  2026-09)**: `kr_research` 의 `category:"산업"`(symbol 항상 null, 여러
+  증권사가 이미 수집 중이었지만 종목별 조회(`getShinhanResearchBySymbol`)
+  로는 화면에 전혀 노출되지 않던 데이터) 문서를 시장 전체용으로 보여준다
+  (`getIndustryResearch()`, `/api/research/industry?market=&topic=`).
+  **전체/산업분석/투자전략 세그먼트**(오너 지시)는 DB에 이 구분을 담는
+  필드가 없어 `classifyResearchTopic()`이 stockName/title 키워드("전략",
+  "추천종목", "포트폴리오" 등)로 화면단에서 후처리 분류한다 — 미래에셋
+  market 분류와 동일한 트레이드오프, 완전하지 않음. **투자전략은 7일만
+  보관**(오너 지시 — "휘발성이 강해서 오래 가져갈 내용은 아니다"), 산업분석·
+  기업분석은 기존 90일 유지 — `upsertShinhanResearch()`의 정리 단계에서
+  "산업" 카테고리 중 7~90일 사이 문서만 후보로 가져와 분류 후 투자전략인
+  것만 추가로 삭제(수집기 자체의 `--days` 백필 범위는 안 건드림 — 어차피
+  다음 정리 때 지워지므로).
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로
