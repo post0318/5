@@ -76,17 +76,24 @@ export async function upsertShinhanResearch(
   const cutoff = new Date(Date.now() - MAX_AGE_MS).toISOString().slice(0, 10);
   const del = await col.deleteMany({ date: { $lt: cutoff } });
 
-  // 투자전략 7일 정리 — topic 은 DB 필드가 아니라 classifyResearchTopic() 의
-  // 계산 결과라 deleteMany 조건절에 바로 못 넣는다. 7일~90일 사이의 "산업"
-  // 카테고리 문서만 후보로 가져와(전체 대비 소수) JS 에서 분류 후 투자전략인
-  // 것만 id로 골라 지운다 — 기업분석·산업분석은 그대로 90일 유지.
+  // 투자전략·시황 조기 정리 — topic 은 DB 필드가 아니라 classifyResearchTopic()
+  // 의 계산 결과라 deleteMany 조건절에 바로 못 넣는다. 컷오프~90일 사이의
+  // "산업" 카테고리 문서만 후보로 가져와(전체 대비 소수) JS 에서 분류 후
+  // 투자전략·시황인 것만 id로 골라 지운다 — 산업분석은 그대로 90일 유지.
+  // 시황도 투자전략과 같은 컷오프 적용(둘 다 "휘발성 강함"이 분리 이유였던
+  // 같은 카테고리에서 갈라져 나온 것이라 동일 취급 — 오너가 다르게 정하면 조정).
   const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
   const staleIndustryCandidates = await col
     .find({ category: "산업", date: { $lt: strategyCutoff } })
-    .project<{ _id: string; stockName: string; title: string }>({ stockName: 1, title: 1 })
+    .project<{ _id: string; stockName: string; title: string; source: string; market: MarketId }>({
+      stockName: 1,
+      title: 1,
+      source: 1,
+      market: 1,
+    })
     .toArray();
   const staleStrategyIds = staleIndustryCandidates
-    .filter((d) => classifyResearchTopic(d) === "투자전략")
+    .filter((d) => classifyResearchTopic(d) !== "산업분석")
     .map((d) => d._id);
   let prunedStrategy = 0;
   if (staleStrategyIds.length > 0) {
@@ -116,30 +123,61 @@ function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
   return result;
 }
 
-export type ResearchTopic = "산업분석" | "투자전략";
+export type ResearchTopic = "산업분석" | "투자전략" | "시황";
 
 /**
- * "산업" 카테고리 문서를 산업분석/투자전략으로 다시 나눈다(오너 지시, 2026-09
- * — "전체/산업분석/투자전략으로 구분"). DB 스키마엔 이 구분을 담는 별도
- * 필드가 없다 — 수집기 15곳 이상을 전부 고쳐 소스별로 정확히 태깅하는 대신,
- * 이미 있는 stockName(카테고리 라벨/업종명)·title 텍스트에 대한 키워드
+ * "산업" 카테고리 문서를 산업분석/투자전략/시황 세 갈래로 나눈다(오너 지시,
+ * 2026-09 — "전체/산업분석/투자전략으로 구분" → 이후 "투자전략도 투자전략과
+ * 시황으로 분리...전체/산업분석/투자전략/시황"). DB 스키마엔 이 구분을 담는
+ * 별도 필드가 없다 — 수집기 15곳 이상을 전부 고쳐 소스별로 정확히 태깅하는
+ * 대신, 이미 있는 stockName(카테고리 라벨/업종명)·title 텍스트에 대한 키워드
  * 추측으로 화면단에서 나눈다(미래에셋 market 분류와 동일한 트레이드오프 —
- * 완전하지 않음). 하나증권처럼 소스가 이미 "글로벌 투자전략"/"글로벌
- * 산업분석"으로 라벨링한 경우는 이 키워드만으로도 정확히 갈린다.
+ * 완전하지 않음).
+ *
+ * 판정 순서: **시황(주기성) 신호를 먼저 본다.** "일간/위클리/데일리/모닝/
+ * 브리핑/마감/시황" 등은 특정 업종 심층분석이 아니라 시황·종목 단신을 짧은
+ * 주기로 묶어내는 성격이라 시황으로 분류한다(오너 지시, 2026-09 — "투자전략에서
+ * 시황, 마감, 브리핑, 위클리 등은 시황으로 분류" + "데일리, 모닝, 일간도
+ * 시황으로 분류"). 이 신호를 먼저 보는 이유: 하나증권처럼 소스가 게시판
+ * 자체를 "글로벌 투자전략"으로 라벨링해둔 경우(stockName에 "전략"이 그대로
+ * 들어있음) 그 라벨이 개별 항목의 실제 형식("Tech&Stock Weekly" 같은
+ * 정기물)을 가려버리는 문제가 실측됐음 — 제목 자체의 주기성 신호가 더
+ * 신뢰도 높은 판단 근거라 우선한다. "Weekly"/"Daily"/"Morning"은 제목에
+ * 자주 그대로 영문으로 붙어 있어(예: "Tech&Stock Weekly", "HANA US Weekly")
+ * 한글 표기(위클리/데일리/모닝)와 함께 넓게 잡는다.
+ *
+ * stockName 시리즈명 강제 분류: GlobalMonitor(einfomax) 경유 리포트는 목록
+ * API가 헤드라인만 줘서 정기물 표시("데일리"/"Monitor" 등 브랜드명)가 PDF
+ * 본문에만 있고 목록 헤드라인 텍스트엔 전혀 없는 경우가 있다(오너 실측 확인,
+ * 2026-09 — PDF를 직접 열어 확인. 예: KB증권 "KB Global Tracker+"는 PDF
+ * 제목이 "데일리"인데 목록 헤드라인엔 "데일리"가 없음, 상상인증권은 "모니터"
+ * 라는 자체 브랜드를 씀). 이런 시리즈는 stockName(=GlobalMonitor의 리포트
+ * 시리즈명 필드, 종목명이 아니라 상품명이 들어있음)으로 통째로 시황 강제.
+ *
+ * source+market 조합 강제 분류: LS증권은 "산업" 카테고리 안에서도 국내(kr)는
+ * 정상적인 개별 테마 심층분석("AI시대 조선 산업의 변화" 등)인데 해외(us)는
+ * 전부 시리즈명 없이 매일 지수·유가·금리 동향만 요약하는 시황 단신이었다
+ * (실측 확인, 2026-09 — market:"us" 27건 전수 확인, 예외 없음). stockName
+ * 이 다른 소스처럼 시리즈명을 안 주고 그냥 "산업"(기본값)이라 stockName
+ * 으로는 못 가리므로 source+market 조합으로 강제 — **국내(kr)는 절대
+ * 포함하지 않는다**(같은 소스라도 시장에 따라 성격이 다름).
  */
-// 일간/위클리/데일리/모닝/브리핑/마감 등 주기성 코멘트는 특정 업종 심층분석이
-// 아니라 시황·종목 단신을 짧은 주기로 묶어내는 성격이라 투자전략으로 분류한다
-// (오너 지시, 2026-09 — "미국부터 정리하자. 산업분석에서 일간, 위클리,
-// 데일리, 모닝 등은 투자전략으로 분류" + 추가 지시 "브리핑, 마감도 투자전략으로").
-// "Weekly"/"Daily"/"Morning"은 제목에 자주 그대로 영문으로 붙어 있어(예:
-// "Tech&Stock Weekly", "HANA US Weekly") 한글 표기(위클리/데일리/모닝)와
-// 함께 넓게 잡는다.
 const STRATEGY_HINT_RE =
-  /전략|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|일간|위클리|데일리|모닝|브리핑|마감|\bWeekly\b|\bDaily\b|\bMorning\b/i;
+  /전략|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?/i;
+const MARKET_CONDITION_RE =
+  /시황|마감|브리핑|일간|위클리|데일리|모닝|\bWeekly\b|\bDaily\b|\bMorning\b/i;
+const MARKET_CONDITION_STOCKNAMES = new Set(["KB Global Tracker+", "상상인 US Monitor"]);
+const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 
-export function classifyResearchTopic(doc: Pick<ShinhanResearchDoc, "stockName" | "title">): ResearchTopic {
+export function classifyResearchTopic(
+  doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market">,
+): ResearchTopic {
+  if (MARKET_CONDITION_STOCKNAMES.has(doc.stockName)) return "시황";
+  if (MARKET_CONDITION_SOURCE_MARKETS.has(`${doc.source}:${doc.market}`)) return "시황";
   const hay = `${doc.stockName ?? ""} ${doc.title}`;
-  return STRATEGY_HINT_RE.test(hay) ? "투자전략" : "산업분석";
+  if (MARKET_CONDITION_RE.test(hay)) return "시황";
+  if (STRATEGY_HINT_RE.test(hay)) return "투자전략";
+  return "산업분석";
 }
 
 /**
