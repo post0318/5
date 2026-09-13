@@ -40,11 +40,13 @@ export interface ShinhanResearchDoc {
 // 리서치 자료는 3개월(90일)까지만 수집·보관한다(오너 최종 확정, 2026-09
 // — 각 수집기의 백필 범위도 90일, 90일 지난 문서는 DB에서 지워도 무방).
 // 단, "산업" 카테고리 중 투자전략으로 분류되는 문서는 휘발성이 강해(오너
-// 지시, 2026-09 — "투자전략은 7일... 오래 가져갈 내용은 아니다") 7일만
-// 보관한다. 기업분석·산업분석은 기존 90일 그대로.
+// 지시, 2026-09 — "투자전략은 7일... 오래 가져갈 내용은 아니다") 원래 7일로
+// 정했으나, classifyResearchTopic() 분류 품질을 먼저 검증할 시간이 필요해
+// (오너 지시, 2026-09 — "일단 자료 검증을 위해 30일로 유지한다") 30일로
+// 임시 상향. 검증 끝나면 7일로 되돌릴 것. 기업분석·산업분석은 기존 90일 그대로.
 const MAX_AGE_MS = 90 * 24 * 3600_000;
 const RECENT_WINDOW_MS = 90 * 24 * 3600_000;
-const STRATEGY_MAX_AGE_MS = 7 * 24 * 3600_000;
+const STRATEGY_MAX_AGE_MS = 30 * 24 * 3600_000;
 
 export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDoc>> {
   const db = await getDb();
