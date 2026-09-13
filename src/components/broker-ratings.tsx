@@ -129,6 +129,19 @@ function Pct({ value }: { value: number | null }) {
   return <span className="tnum">{formatNumber(value, 0)}%</span>;
 }
 
+/** 순위 — "495 / 12,502". 모집단은 작게. */
+function Rank({ rank, total }: { rank: number | null; total: number | null }) {
+  if (rank == null) return <span className="text-muted-foreground">-</span>;
+  return (
+    <span className="tnum whitespace-nowrap">
+      {formatNumber(rank, 0)}
+      {total != null && (
+        <span className="text-muted-foreground/70 text-[11px]"> / {formatNumber(total, 0)}</span>
+      )}
+    </span>
+  );
+}
+
 function SourceLink({ href, label }: { href: string; label: string }) {
   return (
     <a
@@ -149,7 +162,12 @@ interface FirmRow {
   analysts: number;
   score: number | null;
   successRate: number | null;
+  avgReturn: number | null;
+  /** 소속 애널리스트 중 가장 높은(=숫자가 작은) 순위. */
+  bestRank: number | null;
+  rankedExperts: number | null;
   stockSuccessRate: number | null;
+  stockAvgReturn: number | null;
   rating: string;
   priceTarget: number | null;
   date: string;
@@ -177,7 +195,15 @@ function byFirm(forecasts: AnalystForecast[]): FirmRow[] {
       analysts: list.length,
       score: avg(list.map((f) => f.score)),
       successRate: avg(list.map((f) => f.successRate)),
+      avgReturn: avg(list.map((f) => f.avgReturn)),
+      // 순위는 평균이 의미 없어(등수 평균은 해석이 애매) 최고 순위를 쓴다.
+      bestRank: (() => {
+        const ranks = list.map((f) => f.analystRank).filter((v): v is number => v != null);
+        return ranks.length === 0 ? null : Math.min(...ranks);
+      })(),
+      rankedExperts: list.find((f) => f.rankedExperts != null)?.rankedExperts ?? null,
       stockSuccessRate: avg(list.map((f) => f.stockSuccessRate)),
+      stockAvgReturn: avg(list.map((f) => f.stockAvgReturn)),
       rating: latest.rating,
       priceTarget: latest.priceTarget,
       date: latest.date,
@@ -260,15 +286,30 @@ export function BrokerRatings({
               <SourceLink href={saUrl} label="전체 보기" />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-sm">
+              <table className="w-full min-w-[1180px] text-sm">
                 <thead>
+                  <tr className="text-muted-foreground/70 border-b text-[11px]">
+                    <th className="pb-0.5" colSpan={2} />
+                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={4}>
+                      전체 실적
+                    </th>
+                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={2}>
+                      이 종목
+                    </th>
+                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={5}>
+                      이번 의견
+                    </th>
+                  </tr>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left font-medium">애널리스트</th>
                     <th className="py-1.5 text-left font-medium">증권사</th>
-                    <th className="py-1.5 text-left font-medium">점수</th>
+                    <th className="border-l py-1.5 pl-3 text-left font-medium">점수</th>
                     <th className="py-1.5 text-right font-medium">적중률</th>
-                    <th className="py-1.5 text-right font-medium">본종목</th>
-                    <th className="py-1.5 pl-3 text-left font-medium">투자의견</th>
+                    <th className="py-1.5 text-right font-medium">평균수익</th>
+                    <th className="py-1.5 text-right font-medium">순위</th>
+                    <th className="border-l py-1.5 pl-3 text-right font-medium">적중률</th>
+                    <th className="py-1.5 text-right font-medium">평균수익</th>
+                    <th className="border-l py-1.5 pl-3 text-left font-medium">투자의견</th>
                     <th className="py-1.5 text-left font-medium">등급조정</th>
                     <th className="py-1.5 text-right font-medium">목표주가</th>
                     <th className="py-1.5 text-right font-medium">상승여력</th>
@@ -308,16 +349,25 @@ export function BrokerRatings({
                         <td className="text-muted-foreground py-1.5 pr-3 text-left whitespace-nowrap">
                           {f.firm}
                         </td>
-                        <td className="py-1.5 pr-3 text-left">
+                        <td className="border-l py-1.5 pr-3 pl-3 text-left">
                           <ScoreBar value={f.score} />
                         </td>
                         <td className="py-1.5 text-right">
                           <Pct value={f.successRate} />
                         </td>
                         <td className="py-1.5 text-right">
+                          <ChangePercent value={f.avgReturn} market={market} />
+                        </td>
+                        <td className="py-1.5 text-right">
+                          <Rank rank={f.analystRank} total={f.rankedExperts} />
+                        </td>
+                        <td className="border-l py-1.5 pl-3 text-right">
                           <Pct value={f.stockSuccessRate} />
                         </td>
-                        <td className="py-1.5 pr-3 pl-3 text-left">
+                        <td className="py-1.5 text-right">
+                          <ChangePercent value={f.stockAvgReturn} market={market} />
+                        </td>
+                        <td className="border-l py-1.5 pr-3 pl-3 text-left">
                           <GradeBadge grade={f.rating} />
                         </td>
                         <td
@@ -359,8 +409,8 @@ export function BrokerRatings({
               </table>
             </div>
             <p className="text-muted-foreground/70 mt-1.5 text-[11px]">
-              점수·적중률은 애널리스트의 과거 예측 정확도(StockAnalysis 산출) · 본종목 = 이 종목에
-              한정한 적중률
+              전체 실적 = 애널리스트의 모든 종목 예측 정확도 · 이 종목 = 해당 종목에 한정한
+              실적 · 순위는 전체 애널리스트 중 등수 (StockAnalysis 산출)
             </p>
           </div>
         ) : (
@@ -449,14 +499,29 @@ export function BrokerRatings({
               <SourceLink href={saUrl} label="전체 보기" />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[620px] text-sm">
+              <table className="w-full min-w-[900px] text-sm">
                 <thead>
+                  <tr className="text-muted-foreground/70 border-b text-[11px]">
+                    <th className="pb-0.5" />
+                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={4}>
+                      전체 실적
+                    </th>
+                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={2}>
+                      이 종목
+                    </th>
+                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={3}>
+                      최신 의견
+                    </th>
+                  </tr>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left font-medium">증권사</th>
-                    <th className="py-1.5 text-left font-medium">점수</th>
+                    <th className="border-l py-1.5 pl-3 text-left font-medium">점수</th>
                     <th className="py-1.5 text-right font-medium">적중률</th>
-                    <th className="py-1.5 text-right font-medium">본종목</th>
-                    <th className="py-1.5 pl-3 text-left font-medium">최신 의견</th>
+                    <th className="py-1.5 text-right font-medium">평균수익</th>
+                    <th className="py-1.5 text-right font-medium">순위</th>
+                    <th className="border-l py-1.5 pl-3 text-right font-medium">적중률</th>
+                    <th className="py-1.5 text-right font-medium">평균수익</th>
+                    <th className="border-l py-1.5 pl-3 text-left font-medium">투자의견</th>
                     <th className="py-1.5 text-right font-medium">목표주가</th>
                     <th className="py-1.5 text-right font-medium">상승여력</th>
                   </tr>
@@ -475,16 +540,25 @@ export function BrokerRatings({
                           </span>
                         )}
                       </td>
-                      <td className="py-1.5 pr-3 text-left">
+                      <td className="border-l py-1.5 pr-3 pl-3 text-left">
                         <ScoreBar value={f.score} />
                       </td>
                       <td className="py-1.5 text-right">
                         <Pct value={f.successRate} />
                       </td>
                       <td className="py-1.5 text-right">
+                        <ChangePercent value={f.avgReturn} market={market} />
+                      </td>
+                      <td className="py-1.5 text-right">
+                        <Rank rank={f.bestRank} total={f.rankedExperts} />
+                      </td>
+                      <td className="border-l py-1.5 pl-3 text-right">
                         <Pct value={f.stockSuccessRate} />
                       </td>
-                      <td className="py-1.5 pr-3 pl-3 text-left">
+                      <td className="py-1.5 text-right">
+                        <ChangePercent value={f.stockAvgReturn} market={market} />
+                      </td>
+                      <td className="border-l py-1.5 pr-3 pl-3 text-left">
                         <GradeBadge grade={f.rating} />
                       </td>
                       <td className="py-1.5 text-right font-medium whitespace-nowrap">

@@ -133,18 +133,18 @@ export function ConsensusPanel({
               <h4 className="mb-2 text-xs font-semibold">EPS 컨센서스 추이</h4>
               <table className="w-full table-fixed text-sm">
                 <colgroup>
-                  <col style={{ width: "16%" }} />
-                  <col style={{ width: "21%" }} />
-                  <col style={{ width: "21%" }} />
-                  <col style={{ width: "21%" }} />
-                  <col style={{ width: "21%" }} />
+                  <col style={{ width: "20%" }} />
+                  <col style={{ width: "20%" }} />
+                  <col style={{ width: "20%" }} />
+                  <col style={{ width: "20%" }} />
+                  <col style={{ width: "20%" }} />
                 </colgroup>
                 <thead>
                   <tr className="text-muted-foreground border-b text-center">
                     <th className="py-1.5 font-medium">시점</th>
                     <th className="py-1.5 font-medium">당해 EPS(E)</th>
-                    <th className="py-1.5 pr-3 font-medium">당해 PER(E)</th>
-                    <th className="py-1.5 pl-3 font-medium">
+                    <th className="py-1.5 font-medium">당해 PER(E)</th>
+                    <th className="py-1.5 font-medium">
                       {d.epsRevision.nextFy ? `${d.epsRevision.nextFy} EPS(E)` : "차년도 EPS(E)"}
                     </th>
                     <th className="py-1.5 font-medium">
@@ -160,10 +160,8 @@ export function ConsensusPanel({
                     >
                       <td className="py-1.5 text-left">{t}</td>
                       <td className="py-1.5">{won(d.epsRevision!.eps[i])}</td>
-                      <td className="py-1.5 pr-3">{mult(d.epsRevision!.per[i])}</td>
-                      <td className="py-1.5 pl-3">
-                        {won(d.epsRevision!.epsNext[i])}
-                      </td>
+                      <td className="py-1.5">{mult(d.epsRevision!.per[i])}</td>
+                      <td className="py-1.5">{won(d.epsRevision!.epsNext[i])}</td>
                       <td className="py-1.5">{mult(d.epsRevision!.perNext[i])}</td>
                     </tr>
                   ))}
@@ -176,7 +174,13 @@ export function ConsensusPanel({
           {d.earningsSurprise.length > 0 && (
             <div>
               <h4 className="mb-2 text-xs font-semibold">EPS 어닝 서프라이즈</h4>
-              <table className="w-full text-sm">
+              <table className="w-full table-fixed text-sm">
+                <colgroup>
+                  <col style={{ width: "25%" }} />
+                  <col style={{ width: "25%" }} />
+                  <col style={{ width: "25%" }} />
+                  <col style={{ width: "25%" }} />
+                </colgroup>
                 <thead>
                   <tr className="text-muted-foreground border-b text-right">
                     <th className="py-1.5 text-left font-medium">분기</th>
