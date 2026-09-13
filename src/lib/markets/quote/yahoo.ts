@@ -111,6 +111,37 @@ interface QuoteSummaryResult {
       period?: string | null;
     }[];
   };
+  recommendationTrend?: {
+    trend?: {
+      period?: string;
+      strongBuy?: number;
+      buy?: number;
+      hold?: number;
+      sell?: number;
+      strongSell?: number;
+    }[];
+  };
+}
+
+/** financialData.recommendationKey 가 없거나(문자열 "none"도 포함 — 실측
+ * 확인, Netflix 등) recommendationTrend 의 최신 집계(strongBuy~strongSell
+ * 건수)로 직접 계산한다. Yahoo 웹사이트의 "Latest Rating" 요약이 바로 이
+ * 표를 근거로 하는 것과 동일한 방식(1~5점 가중평균, 낮을수록 매수 우세). */
+function deriveRecommendation(
+  fd: QuoteSummaryResult["financialData"],
+  trendModule: QuoteSummaryResult["recommendationTrend"],
+): { key: string | null; mean: number | null } {
+  const rawKey = fd?.recommendationKey;
+  if (rawKey && rawKey !== "none") return { key: rawKey, mean: fd?.recommendationMean ?? null };
+  const t = trendModule?.trend?.[0];
+  if (!t) return { key: null, mean: null };
+  const counts = [t.strongBuy ?? 0, t.buy ?? 0, t.hold ?? 0, t.sell ?? 0, t.strongSell ?? 0];
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (total === 0) return { key: null, mean: null };
+  const mean = counts.reduce((sum, c, i) => sum + c * (i + 1), 0) / total;
+  const key =
+    mean <= 1.5 ? "strong_buy" : mean <= 2.5 ? "buy" : mean <= 3.5 ? "hold" : mean <= 4.5 ? "underperform" : "sell";
+  return { key, mean };
 }
 
 /** 컨센서스 패널용 상세 추정 데이터 (개인용 · yahoo). */
@@ -300,6 +331,7 @@ export async function fetchForwardConsensus(
           "financialData",
           "earningsTrend",
           "price",
+          "recommendationTrend",
         ],
       });
       break;
@@ -316,6 +348,7 @@ export async function fetchForwardConsensus(
   const trend = (qs.earningsTrend?.trend ?? []).filter(
     (t) => t.period === "0y" || t.period === "+1y" || t.period === "+2y",
   );
+  const recommendation = deriveRecommendation(qs.financialData, qs.recommendationTrend);
 
   return {
     symbol,
@@ -327,8 +360,8 @@ export async function fetchForwardConsensus(
     targetHighPrice: fd.targetHighPrice ?? null,
     targetLowPrice: fd.targetLowPrice ?? null,
     numberOfAnalysts: fd.numberOfAnalystOpinions ?? null,
-    recommendationKey: fd.recommendationKey ?? null,
-    recommendationMean: fd.recommendationMean ?? null,
+    recommendationKey: recommendation.key,
+    recommendationMean: recommendation.mean,
     // 부수 요약 지표 (yahoo summaryDetail/financialData). 컨센서스와 무관하지만
     // 같은 quoteSummary 호출로 이미 받아온 값이라 추가 비용 없이 노출.
     fiftyTwoWeekHigh: sd.fiftyTwoWeekHigh ?? null,
