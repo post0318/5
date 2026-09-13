@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ShinhanResearchDoc } from "@/lib/db/shinhan-research";
-import { formatNumber } from "@/lib/format";
+import { formatCurrency, formatNumber } from "@/lib/format";
 
 const PAGE_SIZE = 10;
 
@@ -134,7 +134,14 @@ export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbo
                       {it.title}
                       {it.targetPrice != null && (
                         <span className="tnum ml-1.5 text-xs font-normal text-orange-600 dark:text-orange-400">
-                          목표주가 {formatNumber(Math.trunc(it.targetPrice / 10000), 0)}만원
+                          {/* 한국은 원 단위를 만원으로 축약 표시, 해외(미국)는
+                              달러·센트 그대로(formatCurrency 가 소수 2자리·버림
+                              처리) — 미국 리포트를 만원 단위로 나눠 보여주던
+                              버그 수정(예: $248.8 → 잘못 "0만원"). */}
+                          목표주가{" "}
+                          {market === "kr"
+                            ? `${formatNumber(Math.trunc(it.targetPrice / 10000), 0)}만원`
+                            : `$${formatCurrency(it.targetPrice, "USD")}`}
                         </span>
                       )}
                       {opinion && (

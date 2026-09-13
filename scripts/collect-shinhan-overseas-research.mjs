@@ -16,11 +16,9 @@
  * 제목 형식 "종목명(TICKER.US)" 에서 티커를 뽑는다. PDF 표지에 "목표주가
  * (LSEG, 컨센서스) 248.8 달러"·"투자판단 ★★★★★" 처럼 실려 있다 — 후자는
  * 매수/매도 텍스트가 아니라 별점이라 등급 필드엔 못 쓰지만(실측 확인 — 전문에
- * 매수/매도 문구 자체가 없음), 전자는 LSEG(Refinitiv/LSEG) 라는 출처가 명시된
- * 정식 컨센서스라 목표주가로 채택한다(오너 확인, 2026-09) — 공용 추출기는
- * "컨센서스"라고 적힌 값을 안전하게 걸러내는데(다른 브로커가 자사 목표가처럼
- * 잘못 표기하는 사례 방지용), 이 게시판은 반대로 그 라벨이 있는 값만 신뢰할
- * 수 있는 유일한 목표주가라 전용 정규식(LSEG_TARGET_RE)으로 따로 뽑는다.
+ * 매수/매도 문구 자체가 없음), 전자는 공용 추출기(us-research-extract.mjs)의
+ * 컨센서스 목표가 패턴으로 그대로 잡힌다 — "해외는 자사 목표가가 아니어도
+ * 컨센서스가 있으면 표시"라는 정책(오너 확인, 2026-09)이 공용 모듈에 있다.
  *
  * ⚠️ bbs2.shinhansec.com/robots.txt 는 `Disallow: /` — 국내 수집기와 동일 조건
  *    (개인용·로컬 실행·저빈도)으로 예외 승인(CLAUDE.md 참조).
@@ -31,7 +29,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch, readPdfText, extractOpinion } from "./lib/us-research-extract.mjs";
+import { enrichUsResearch } from "./lib/us-research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -147,34 +145,7 @@ console.log(
   collected.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbol}) — ${i.title}`),
 );
 
-// "목표주가 (LSEG, 컨센서스) 248.8 달러" — LSEG 출처가 명시된 컨센서스라
-// 이 게시판에 한해 목표주가로 채택한다(위 주석 참고). 공용 extractTargetPrice
-// 는 "컨센서스" 라벨을 안전상 걸러내므로 여기서만 전용 패턴으로 뽑는다.
-const LSEG_TARGET_RE = /목표\s*주가\s*\(\s*LSEG[^)]*\)\s*([\d,]+(?:\.\d+)?)\s*달러/i;
-function extractLsegTarget(text) {
-  const m = String(text ?? "").match(LSEG_TARGET_RE);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, ""));
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-await enrichUsResearch(collected, { usePdf: false }); // 본문(f7)만 우선 확인
-const stillMissing = collected.filter((it) => it.targetPrice == null && it.pdfUrl);
-if (stillMissing.length > 0) {
-  console.log(`▶ LSEG 목표주가 확인 (${stillMissing.length}건, PDF)...`);
-  for (const it of stillMissing) {
-    const text = await readPdfText(it.pdfUrl);
-    if (text) {
-      it.targetPrice = extractLsegTarget(text);
-      if (!it.opinion) it.opinion = extractOpinion(text);
-    }
-    await sleep(300);
-  }
-}
-console.log(
-  `✔ 보강 완료 — 등급 ${collected.filter((i) => i.opinion).length}/${collected.length}` +
-    ` · 목표주가(LSEG 컨센서스) ${collected.filter((i) => i.targetPrice != null).length}/${collected.length}`,
-);
+await enrichUsResearch(collected);
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

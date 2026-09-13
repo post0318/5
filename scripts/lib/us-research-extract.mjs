@@ -6,12 +6,16 @@
  *  - 자체 등급·목표주가를 아예 안 내는 경우가 많다(하나증권 글로벌 기업분석은
  *    PDF 전문 8천여 자에 관련 키워드 0건).
  *  - 키움: "목표주가 컨센서스: $243.41" — 자사 목표가가 아니라 시장 컨센서스.
+ *  - 신한: "목표주가 (LSEG, 컨센서스) 248.8 달러" — 출처(LSEG)가 명시된 컨센서스.
  *  - 유진: "투자의견 NR" — 명시적 무등급.
  *  - 한화: 목표주가·투자의견이 면책 문구에만 등장("…의견을 제시합니다").
  *
- * 그래서 (1) 컨센서스 수치는 자사 목표가로 쓰지 않고, (2) 면책·방법론 안내
- * 구간은 잘라내고, (3) 라벨 바로 뒤에 오는 값만 인정한다 — 틀린 등급·목표가를
- * 보여주는 것보다 빈칸이 낫다.
+ * 목표주가 정책(오너 확인, 2026-09): "해외는 본인들의 목표주가가 아니어도
+ * 내용중 컨센서스가격이 존재하면 해당 가격을 표시" — 자사 목표가를 최우선
+ * 으로 찾되, 없으면 컨센서스로 표기된 값이라도 채택한다(예전엔 컨센서스를
+ * 아예 제외했었다). 다만 (1) 면책·방법론 안내 구간은 잘라내고 (2) 라벨
+ * 바로 뒤에 오는 값만 인정한다 — 틀린 등급·아무 숫자나 줍는 것보다 빈칸이
+ * 낫다는 원칙은 유지.
  *
  * PDF 는 건당 다운로드 비용이 있으므로 본문에서 못 찾은 항목에만 시도한다.
  */
@@ -31,30 +35,47 @@ function withoutDisclaimer(text) {
   return m && m.index != null ? t.slice(0, m.index) : t;
 }
 
-/** 목표주가 — 달러 표기만. "컨센서스" 가 붙은 값은 자사 목표가가 아니라 제외. */
-const TARGET_PATTERNS = [
+/** 자사 목표가 — 라벨 바로 뒤에 값이 오고 "컨센서스" 언급이 없는 경우만. */
+const OWN_TARGET_PATTERNS = [
   /목표\s*주가\s*\(?\$?\)?\s*[:：]?\s*\$\s*([\d,]+(?:\.\d+)?)/,
   /목표\s*주가[^\d$]{0,10}([\d,]+(?:\.\d+)?)\s*(?:달러|USD)/i,
   /(?:target\s*price|TP)\s*[:：]?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
+];
+
+/**
+ * 컨센서스 목표가 — 자사 목표가를 못 찾았을 때만 폴백으로 쓴다. 실측으로
+ * 확인된 표기 형태들만 좁게 인정한다(엉뚱한 숫자를 줍지 않도록 "컨센서스"
+ * 라는 단어가 패턴 안에 반드시 들어있게 설계).
+ */
+const CONSENSUS_TARGET_PATTERNS = [
+  // "목표주가 컨센서스: $243.41" (키움)
+  /목표\s*주가\s*컨센서스\s*[:：]?\s*\$\s*([\d,]+(?:\.\d+)?)/i,
+  // "목표주가 (LSEG, 컨센서스) 248.8 달러" (신한)
+  /목표\s*주가\s*\([^)]*컨센서스[^)]*\)\s*\$?\s*([\d,]+(?:\.\d+)?)\s*(?:달러|USD)?/i,
+  // "컨센서스 목표주가: $243.41" / "컨센서스 목표주가 243.41달러"
+  /컨센서스\s*목표\s*주가\s*[:：]?\s*\$?\s*([\d,]+(?:\.\d+)?)\s*(?:달러|USD)?/i,
+  // "Target Price (Consensus): $243.41"
+  /target\s*price\s*\(?\s*consensus\s*\)?\s*[:：]?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
 ];
 
 /** 투자의견 — 한글·영문·NR. 라벨 바로 뒤에 오는 값만 인정. */
 const OPINION_RE =
   /투자의견\s*[:：]?\s*(N\.?R\.?|Not\s*Rated|적극매수|매수|매도|중립|보유|비중확대|비중축소|Strong\s*Buy|Buy|Sell|Hold|Neutral|Overweight|Underweight|Outperform|Market\s*Perform|Sector\s*Perform)/i;
 
-export function extractTargetPrice(text) {
-  const t = withoutDisclaimer(text);
-  if (!t) return null;
-  for (const re of TARGET_PATTERNS) {
-    const m = t.match(re);
-    if (!m || m.index == null) continue;
-    // "목표주가 컨센서스: $243" 처럼 컨센서스 수치는 자사 목표가가 아니다.
-    const around = t.slice(Math.max(0, m.index - 12), m.index + m[0].length + 12);
-    if (/컨센서스|consensus/i.test(around)) continue;
+function matchFirst(patterns, text) {
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (!m) continue;
     const n = Number(m[1].replace(/,/g, ""));
     if (Number.isFinite(n) && n > 0 && n < 100_000) return n;
   }
   return null;
+}
+
+export function extractTargetPrice(text) {
+  const t = withoutDisclaimer(text);
+  if (!t) return null;
+  return matchFirst(OWN_TARGET_PATTERNS, t) ?? matchFirst(CONSENSUS_TARGET_PATTERNS, t);
 }
 
 export function extractOpinion(text) {
