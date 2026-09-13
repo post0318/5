@@ -253,29 +253,43 @@ export function BrokerRatings({
                 <colgroup>
                   {/* 애널리스트는 줄이고 증권사는 이름이 한 줄에 들어가게 넓힌다
                       (오너 지시 — "Bank of America Securities" 기준).
-                      나머지 9개 수치 열은 같은 폭. */}
+                      나머지 9개 수치 열은 같은 폭. 모바일에서는 증권사·적중률·
+                      순위·현종목적중률·현종목수익률 열을 숨긴다(오너 지시) —
+                      <col> 자체도 숨겨야 그 만큼의 폭이 빈 공간으로 안 남는다. */}
                   <col style={{ width: "18%" }} />
-                  <col style={{ width: "13%" }} />
-                  {Array.from({ length: 9 }, (_, i) => (
-                    <col key={i} style={{ width: "7.78%" }} />
-                  ))}
+                  <col className="hidden sm:table-column" style={{ width: "13%" }} />
+                  <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
+                  <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
+                  <col style={{ width: "7.78%" }} />
+                  <col style={{ width: "7.78%" }} />
+                  <col style={{ width: "7.78%" }} />
+                  <col style={{ width: "7.78%" }} />
+                  <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
+                  <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
+                  <col style={{ width: "7.78%" }} />
                 </colgroup>
                 <thead>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left align-bottom font-medium">애널리스트</th>
-                    <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
-                    <th className="py-1.5 text-center align-bottom font-medium">적중률</th>
-                    <th className="py-1.5 text-center align-bottom font-medium">순위</th>
+                    <th className="hidden py-1.5 text-left align-bottom font-medium sm:table-cell">
+                      증권사
+                    </th>
+                    <th className="hidden py-1.5 text-center align-bottom font-medium sm:table-cell">
+                      적중률
+                    </th>
+                    <th className="hidden py-1.5 text-center align-bottom font-medium sm:table-cell">
+                      순위
+                    </th>
                     <th className="py-1.5 text-center align-bottom font-medium">투자의견</th>
                     <th className="py-1.5 text-center align-bottom font-medium">등급조정</th>
                     <th className="py-1.5 text-center align-bottom font-medium">목표주가</th>
                     <th className="py-1.5 text-center align-bottom font-medium">상승여력</th>
-                    <th className="py-1.5 text-center align-bottom font-medium">
+                    <th className="hidden py-1.5 text-center align-bottom font-medium sm:table-cell">
                       현종목
                       <br />
                       적중률
                     </th>
-                    <th className="py-1.5 text-center align-bottom font-medium">
+                    <th className="hidden py-1.5 text-center align-bottom font-medium sm:table-cell">
                       현종목
                       <br />
                       수익률
@@ -317,11 +331,13 @@ export function BrokerRatings({
                             )}
                           </div>
                         </td>
-                        <td className="text-muted-foreground py-1.5 pr-3 text-left whitespace-nowrap">{f.firm}</td>
-                        <td className="py-1.5 pr-3 pl-3 text-center">
+                        <td className="text-muted-foreground hidden py-1.5 pr-3 text-left whitespace-nowrap sm:table-cell">
+                          {f.firm}
+                        </td>
+                        <td className="hidden py-1.5 pr-3 pl-3 text-center sm:table-cell">
                           <ScoreBar value={f.score ?? f.successRate} />
                         </td>
-                        <td className="py-1.5 text-right">
+                        <td className="hidden py-1.5 text-right sm:table-cell">
                           <Rank rank={f.analystRank} />
                         </td>
                         <td className="py-1.5 pr-3 pl-3 text-center">
@@ -356,10 +372,10 @@ export function BrokerRatings({
                         <td className="py-1.5 text-right">
                           <ChangePercent value={upside(f.priceTarget)} market={market} />
                         </td>
-                        <td className="py-1.5 pl-3 text-right">
+                        <td className="hidden py-1.5 pl-3 text-right sm:table-cell">
                           <Pct value={f.stockSuccessRate} />
                         </td>
-                        <td className="py-1.5 pr-3 text-right">
+                        <td className="hidden py-1.5 pr-3 text-right sm:table-cell">
                           <ReturnPct value={f.stockAvgReturn} market={market} />
                         </td>
                         <td className="text-muted-foreground py-1.5 text-right whitespace-nowrap">

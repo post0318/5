@@ -22,7 +22,6 @@
 
 import { readFileSync } from "node:fs";
 import { enrichUsResearch } from "./lib/us-research-extract.mjs";
-import { PDFParse } from "pdf-parse";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -69,33 +68,6 @@ function excerpt(text) {
     .replace(/\s{2,}/g, " ")
     .trim();
   return flat.length > EXCERPT_LEN ? `${flat.slice(0, EXCERPT_LEN)}…` : flat;
-}
-
-// 실적 속보성 리포트는 목표주가 언급이 없는 경우가 많음 — 있으면만 뽑는다.
-// PDF 표지의 "목표주가(12M) 220,000원"처럼 라벨 뒤에 괄호 주석이 붙기도 함.
-function extractTargetPrice(text) {
-  const m = String(text ?? "").match(
-    /목표주가(?:를|는|가)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?원/,
-  );
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-async function extractTargetPriceFromPdf(pdfUrl) {
-  if (!pdfUrl) return null;
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return extractTargetPrice(text);
-  } catch (err) {
-    console.warn(`  ⚠ PDF 목표주가 추출 실패 (${pdfUrl}): ${err.message}`);
-    return null;
-  }
 }
 
 function stripHtml(s) {
