@@ -306,18 +306,15 @@ export function BrokerRatings({
         {/* 최근 투자의견 — 애널리스트 개인 단위(StockAnalysis 수집분, 최대 8건) */}
         {forecasts.length > 0 ? (
           <div>
-            <div className="mb-2 flex items-baseline justify-between gap-2">
-              <h4 className="text-xs font-semibold">최근 투자의견</h4>
-              <SourceLink href={saUrl} label="전체 보기" />
-            </div>
+            <h4 className="mb-2 text-xs font-semibold">최근 투자의견</h4>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1320px] table-fixed text-sm">
+              <table className="w-full table-fixed text-xs">
                 <colgroup>
                   {/* 애널리스트는 줄이고 증권사는 이름이 한 줄에 들어가게 넓힌다
                       (오너 지시 — "Bank of America Securities" 기준).
                       나머지 9개 수치 열은 같은 폭. */}
-                  <col style={{ width: "14%" }} />
-                  <col style={{ width: "16%" }} />
+                  <col style={{ width: "18%" }} />
+                  <col style={{ width: "13%" }} />
                   {Array.from({ length: 9 }, (_, i) => (
                     <col key={i} style={{ width: "7.78%" }} />
                   ))}
@@ -328,16 +325,6 @@ export function BrokerRatings({
                     <th className="py-1.5 text-center align-bottom font-medium">증권사</th>
                     <th className="py-1.5 pl-3 text-center align-bottom font-medium">적중률</th>
                     <th className="py-1.5 text-center align-bottom font-medium">순위</th>
-                    <th className="bg-muted/50 py-1.5 pl-3 text-center align-bottom font-medium">
-                      현종목
-                      <br />
-                      적중률
-                    </th>
-                    <th className="bg-muted/50 py-1.5 pr-3 text-center align-bottom font-medium">
-                      현종목
-                      <br />
-                      수익률
-                    </th>
                     <th className="py-1.5 pl-3 text-center font-medium">투자의견</th>
                     <th className="py-1.5 text-center font-medium">등급조정</th>
                     <th className="py-1.5 text-center font-medium">목표주가</th>
@@ -386,12 +373,6 @@ export function BrokerRatings({
                         <td className="py-1.5 text-right">
                           <Rank rank={f.analystRank} />
                         </td>
-                        <td className="bg-muted/50 py-1.5 pl-3 text-right">
-                          <Pct value={f.stockSuccessRate} />
-                        </td>
-                        <td className="bg-muted/50 py-1.5 pr-3 text-right">
-                          <ReturnPct value={f.stockAvgReturn} market={market} />
-                        </td>
                         <td className="py-1.5 pr-3 pl-3 text-center">
                           <GradeBadge grade={f.rating} />
                         </td>
@@ -423,6 +404,12 @@ export function BrokerRatings({
                         </td>
                         <td className="py-1.5 text-right">
                           <ChangePercent value={upside(f.priceTarget)} market={market} />
+                        </td>
+                        <td className="bg-muted/50 py-1.5 pl-3 text-right">
+                          <Pct value={f.stockSuccessRate} />
+                        </td>
+                        <td className="bg-muted/50 py-1.5 pr-3 text-right">
+                          <ReturnPct value={f.stockAvgReturn} market={market} />
                         </td>
                         <td className="text-muted-foreground py-1.5 text-right whitespace-nowrap">
                           {f.date}
@@ -456,6 +443,16 @@ export function BrokerRatings({
                       <th className="py-1.5 text-left font-medium">등급조정</th>
                       <th className="py-1.5 text-right font-medium">목표주가</th>
                       <th className="py-1.5 text-right font-medium">상승여력</th>
+                    <th className="bg-muted/50 py-1.5 pl-3 text-center align-bottom font-medium">
+                      현종목
+                      <br />
+                      적중률
+                    </th>
+                    <th className="bg-muted/50 py-1.5 pr-3 text-center align-bottom font-medium">
+                      현종목
+                      <br />
+                      수익률
+                    </th>
                       <th className="py-1.5 text-right align-bottom font-medium">
                       최근
                       <br />
@@ -530,7 +527,7 @@ export function BrokerRatings({
               <SourceLink href={saUrl} label="전체 보기" />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[740px] text-sm">
+              <table className="w-full table-fixed text-xs">
                 <thead>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
@@ -571,12 +568,6 @@ export function BrokerRatings({
                       <td className="py-1.5 text-right">
                         <Rank rank={f.bestRank} />
                       </td>
-                      <td className="bg-muted/50 py-1.5 pl-3 text-right">
-                        <Pct value={f.stockSuccessRate} />
-                      </td>
-                      <td className="bg-muted/50 py-1.5 pr-3 text-right">
-                        <ReturnPct value={f.stockAvgReturn} market={market} />
-                      </td>
                       <td className="py-1.5 pr-3 pl-3 text-center">
                         <GradeBadge grade={f.rating} />
                       </td>
@@ -585,6 +576,12 @@ export function BrokerRatings({
                       </td>
                       <td className="py-1.5 text-right">
                         <ChangePercent value={upside(f.priceTarget)} market={market} />
+                      </td>
+                      <td className="bg-muted/50 py-1.5 pl-3 text-right">
+                        <Pct value={f.stockSuccessRate} />
+                      </td>
+                      <td className="bg-muted/50 py-1.5 pr-3 text-right">
+                        <ReturnPct value={f.stockAvgReturn} market={market} />
                       </td>
                     </tr>
                   ))}
