@@ -7,7 +7,7 @@ name: 텔레그램 채널 게시물 수집
 
 on:
   schedule:
-    - cron: "10 1 * * *" # 01:10 UTC = 10:10 KST
+    - cron: " 0 */3 * * *" # 01:10 UTC = 10:10 KST
   workflow_dispatch: {}
 
 jobs:
