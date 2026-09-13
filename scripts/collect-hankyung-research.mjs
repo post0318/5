@@ -98,13 +98,13 @@ function stripHtml(s) {
 // 있었다(실측 확인). 500으로 키워 페이지당 실제 며칠씩 커버되게 한다.
 const PAGE_SIZE = 500;
 
-async function fetchPage(page, sdate, edate) {
+async function fetchPage(page, sdate, edate, reportType = "CO") {
   const url = new URL(LIST_URL);
   url.searchParams.set("sdate", sdate);
   url.searchParams.set("edate", edate);
   url.searchParams.set("now_page", String(page));
   url.searchParams.set("pagenum", String(PAGE_SIZE));
-  url.searchParams.set("report_type", "CO"); // "기업" 탭 — 적정가격/투자의견 컬럼이 추가로 나옴
+  url.searchParams.set("report_type", reportType); // CO=기업(적정가격/투자의견 컬럼 추가), IN=산업, MA=시장
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
@@ -162,6 +162,57 @@ function parseItems(html) {
       analyst,
       source: sourceName,
       pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
+      category: "기업",
+    });
+  }
+  return items;
+}
+
+// 산업분석/투자전략 리포트(2026-09 추가, 오너 지시 — "산업분석/투자전략" 탭
+// 준비, 수집기부터 구축). 사이트 분류선택 드롭다운을 확인해 발견한 값:
+// report_type=IN("산업"), MA("시장") — 둘 다 "종목명(코드)" 제목 패턴이 아니라
+// parseItems 의 STOCK_TITLE_RE 에 안 걸려 지금까지 통째로 버려지고 있었다.
+// 이 두 분류는 적정가격 컬럼이 아예 없고(특정 종목 얘기가 아니므로) 컬럼
+// 순서가 작성일/제목/투자의견/작성자/제공출처로 하나 앞당겨진다. 제목이
+// "[업종명] 헤드라인" 형식이면 대괄호를 업종명(stockName 자리)으로 뽑고,
+// 아니면 분류 라벨("산업"/"시장")을 그대로 stockName 으로 둔다. symbol 은
+// 항상 null(라우트가 category:"산업" 이면 이름 검색을 아예 건너뜀).
+const INDUSTRY_REPORT_TYPES = [
+  { code: "IN", label: "산업" },
+  { code: "MA", label: "시장" },
+];
+const BRACKET_RE = /^\[([^\]]+)\]\s*(.*)$/;
+
+function parseIndustryItems(html, label) {
+  const items = [];
+  for (const rowHtml of html.split(/<tr[^>]*>/).slice(1)) {
+    const dateM = rowHtml.match(DATE_RE);
+    const titleM = rowHtml.match(TITLE_RE);
+    if (!dateM || !titleM) continue;
+    const [, reportIdx, rawTitle] = titleM;
+    const title = stripHtml(rawTitle);
+    // 행 전체에서 단순 텍스트 <td>만 순서대로 매칭 — 중첩 태그가 있는 셀
+    // (제목의 팝업 레이어, 차트·첨부파일 링크)은 [^<]* 패턴에 안 걸려 자연히
+    // 건너뛰어지므로 [작성일, 투자의견, 작성자, 제공출처] 순서로만 잡힌다.
+    const cells = [...rowHtml.matchAll(/<td[^>]*>\s*([^<]*?)\s*<\/td>/g)].map((m) => stripHtml(m[1]));
+    const analyst = cells[2] ?? "";
+    const source = cells[3] ?? "";
+    const bm = title.match(BRACKET_RE);
+    const sector = bm ? bm[1].trim() : label;
+    const restTitle = bm && bm[2].trim() ? bm[2].trim() : title;
+
+    items.push({
+      id: reportIdx,
+      date: dateM[1],
+      title: restTitle,
+      stockName: sector,
+      symbolHint: null,
+      opinion: "",
+      targetPrice: null,
+      analyst,
+      source,
+      pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
+      category: "산업",
     });
   }
   return items;
@@ -237,6 +288,16 @@ for (let page = 1; page <= MAX_PAGES; page++) {
   await sleep(400);
 }
 
+for (const { code, label } of INDUSTRY_REPORT_TYPES) {
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const html = await fetchPage(page, sdate, edate, code);
+    const items = parseIndustryItems(html, label);
+    if (items.length === 0) break;
+    collected.push(...items);
+    await sleep(400);
+  }
+}
+
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
@@ -252,9 +313,13 @@ let excerptFailCount = 0;
 for (const it of collected) {
   const { summary, targetPriceFallback, hasTargetMention, hasOpinionMention } = await extractPdfExcerpt(it.pdfUrl);
   it.summary = summary;
-  if (it.targetPrice == null) it.targetPrice = targetPriceFallback;
-  if (it.targetPrice != null && !hasTargetMention) it.targetPrice = null; // 표 값이 본문에 없으면 버림
-  if (it.opinion && !hasOpinionMention) it.opinion = "";
+  // 산업/시장 분류는 특정 종목 얘기가 아니라 목표주가·투자의견 개념 자체가
+  // 없음 — PDF에 우연히 등장하는 숫자를 목표주가로 잘못 채우지 않게 건너뜀.
+  if (it.category !== "산업") {
+    if (it.targetPrice == null) it.targetPrice = targetPriceFallback;
+    if (it.targetPrice != null && !hasTargetMention) it.targetPrice = null; // 표 값이 본문에 없으면 버림
+    if (it.opinion && !hasOpinionMention) it.opinion = "";
+  }
   if (!it.summary) excerptFailCount++;
   await sleep(400);
 }
@@ -302,6 +367,7 @@ for (const it of collected) {
     summary: it.summary,
     pdfUrl: it.pdfUrl,
     views: null,
+    category: it.category,
   });
 }
 
