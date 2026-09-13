@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, TriangleAlert } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import type { MarketId } from "@/lib/markets/types";
 import { Badge } from "@/components/ui/badge";
@@ -227,6 +227,11 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                         >
                           고
                         </Badge>
+                      )}
+                      {r.warnings != null && r.warnings.length > 0 && (
+                        <span title={r.warnings.join(" · ")}>
+                          <TriangleAlert className="size-3.5 text-amber-600 dark:text-amber-500" />
+                        </span>
                       )}
                     </Link>
                     <div className="text-muted-foreground tnum text-xs">{r.symbol}</div>

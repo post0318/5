@@ -72,6 +72,12 @@ export async function getStockOverview(
      * 멀티플을 직접 계산한다(그 요청은 어차피 병렬로 나가고 있음).
      */
     skipFinancials?: boolean;
+    /**
+     * 시세(getEodQuote)를 아예 호출하지 않는다 → quote = null, multiples = null.
+     * 호출자가 이미 시세를 따로 확보한 경우(예: 한국 유니버스 개요는
+     * computeKrOverviewMetrics 가 별도로 시세를 받는다) 중복 호출을 피한다.
+     */
+    skipQuote?: boolean;
   } = {},
 ): Promise<StockOverview> {
   const adapter = getAdapter(market);
@@ -82,7 +88,9 @@ export async function getStockOverview(
   const wantQuarterly = !opts.skipFinancials && !opts.skipQuarterly;
   const [profile, quote, annual, quarterly, consensus, ttm] = await Promise.all([
     safe(withTimeout(adapter.getCompanyProfile(symbol), 10_000, "회사정보"), warnings, "회사정보"),
-    safe(withTimeout(getEodQuote(market, symbol, { yahooOverride }), 12_000, "시세"), warnings, "시세"),
+    opts.skipQuote
+      ? Promise.resolve(null)
+      : safe(withTimeout(getEodQuote(market, symbol, { yahooOverride }), 12_000, "시세"), warnings, "시세"),
     wantAnnual
       ? safe(withTimeout(adapter.getFinancials(symbol, "annual"), 15_000, "연간 재무제표"), warnings, "연간 재무제표")
       : Promise.resolve(null),

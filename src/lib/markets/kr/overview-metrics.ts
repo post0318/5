@@ -2,7 +2,7 @@ import "server-only";
 import { getAdapter } from "../registry";
 import { resolveCorpCode } from "./corpcode";
 import { type KrFacts, fetchKrFacts, annualSeries } from "./dart-facts";
-import { fetchKrxEod } from "../quote/krx";
+import { getEodQuote } from "../quote";
 
 /**
  * 유니버스 통합뷰용 한국 종목 지표 — DART(account_id 기반, dart-facts) + KRX 시세.
@@ -16,6 +16,9 @@ export interface KrOverviewMetrics {
   revenueAnnual: number | null; // TTM
   opMargin: number | null; // 0~1
   netMargin: number | null; // 0~1
+  last: number | null;
+  changePct: number | null;
+  currency: "KRW" | null;
 }
 
 const EQUITY = { ids: ["ifrs-full_Equity"], names: ["자본총계"] };
@@ -31,7 +34,10 @@ function latestOf(facts: KrFacts, ids: string[], names: string[], sj: string[]):
   return years.length ? (s.get(years[0]) ?? null) : null;
 }
 
-export async function computeKrOverviewMetrics(symbol: string): Promise<KrOverviewMetrics> {
+export async function computeKrOverviewMetrics(
+  symbol: string,
+  yahooOverride?: string | null,
+): Promise<KrOverviewMetrics> {
   const empty: KrOverviewMetrics = {
     marketCap: null,
     perTtm: null,
@@ -39,6 +45,9 @@ export async function computeKrOverviewMetrics(symbol: string): Promise<KrOvervi
     revenueAnnual: null,
     opMargin: null,
     netMargin: null,
+    last: null,
+    changePct: null,
+    currency: null,
   };
   const adapter = getAdapter("kr");
   let corpCode: string;
@@ -48,15 +57,17 @@ export async function computeKrOverviewMetrics(symbol: string): Promise<KrOvervi
     return empty;
   }
 
-  const [facts, krx, ttm] = await Promise.all([
+  const [facts, quote, ttm] = await Promise.all([
     fetchKrFacts(corpCode, "annual").catch(() => null),
-    fetchKrxEod(symbol).catch(() => null),
+    // KRX 가 실패해도 getEodQuote 내부에서 Stooq → Yahoo 로 자동 폴백된다
+    // (fetchKrxEod 를 직접 쓰면 KRX 실패 = 시세 전부 없음).
+    getEodQuote("kr", symbol, { yahooOverride }).catch(() => null),
     adapter.getTtm?.(symbol).catch(() => null) ?? Promise.resolve(null),
   ]);
 
-  const price = krx?.bars.at(-1)?.close ?? null;
-  const shares = krx?.listedShares ?? null;
-  const marketCap = krx?.marketCap ?? (price != null && shares != null ? price * shares : null);
+  const price = quote?.last ?? quote?.bars.at(-1)?.close ?? null;
+  const shares = quote?.sharesOutstanding ?? null;
+  const marketCap = quote?.marketCap ?? (price != null && shares != null ? price * shares : null);
 
   let equity: number | null = null;
   if (facts) {
@@ -81,5 +92,15 @@ export async function computeKrOverviewMetrics(symbol: string): Promise<KrOvervi
   const opMargin = revenue && opIncome != null ? opIncome / revenue : null;
   const netMargin = revenue && netIncome != null ? netIncome / revenue : null;
 
-  return { marketCap, perTtm, pbr, revenueAnnual: revenue, opMargin, netMargin };
+  return {
+    marketCap,
+    perTtm,
+    pbr,
+    revenueAnnual: revenue,
+    opMargin,
+    netMargin,
+    last: price,
+    changePct: quote?.changePct ?? null,
+    currency: quote ? "KRW" : null,
+  };
 }
