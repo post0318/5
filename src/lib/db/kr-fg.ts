@@ -28,6 +28,7 @@ export interface KrFgDailyDoc {
   putCallVal: number | null; // 거래대금 기준 (점수 산출에 사용)
   foreignFutNet: number | null; // 외국인 KOSPI200 선물 순매수(계약수, 일별) — 수동 업로드
   futBasis: number | null; // 코스피200 선물(근월물) 종가 − 현물 스프레드 (콘탱고 +/백워데이션 -)
+  closed?: boolean; // 휴장일 확인 마커(전종목 데이터 없음) — 백필 재시도 무한루프 방지용
   updatedAt: string;
 }
 
@@ -62,8 +63,35 @@ export async function setMeta(key: string, value: string): Promise<void> {
   await col.updateOne({ _id: key }, { $set: { value } }, { upsert: true });
 }
 
+/**
+ * 쿨다운 락을 원자적으로 획득. `key` 문서가 없거나 `value`(ms epoch)가
+ * cooldownMs 이전이면 now 로 갱신하고 true, 그 외(쿨다운 중)엔 false.
+ * getMeta 로 읽고 setMeta 로 쓰는 두 단계로는 동시 요청 시 둘 다 통과하는
+ * race 가 있어(2026-09 발견) findOneAndUpdate 단일 원자 연산으로 대체.
+ */
+export async function tryAcquireCooldown(key: string, cooldownMs: number): Promise<boolean> {
+  const col = (await getDb()).collection<KrMetaDoc>("kr_fg_meta");
+  const now = Date.now();
+  const cutoff = String(now - cooldownMs);
+  try {
+    await col.findOneAndUpdate(
+      { _id: key, $or: [{ value: { $exists: false } }, { value: { $lt: cutoff } }] },
+      { $set: { value: String(now) } },
+      { upsert: true },
+    );
+    return true;
+  } catch {
+    // _id 는 있지만 필터($or)에 안 걸림 → upsert 가 시도한 insert 가 중복키 에러
+    // = 쿨다운 중이라는 뜻(락 획득 실패). 다른 원인의 에러도 안전 측(락 없음)으로 처리.
+    return false;
+  }
+}
+
 export async function getKrFgHistory(limitDays = 260 * 6): Promise<KrFgDailyDoc[]> {
   const col = await krFgDailyCol();
-  const docs = await col.find({}).sort({ _id: 1 }).toArray();
-  return docs.slice(-limitDays);
+  // 컬렉션 전체를 읽어 JS 에서 slice(-limitDays) 하던 것을 DB 단에서
+  // sort+limit 하도록 변경 — 문서가 늘어날수록(영구 보관 컬렉션) 매 호출이
+  // 필요 이상으로 전체를 실어 나르던 비용 제거 (2026-09 수정)
+  const docs = await col.find({}).sort({ _id: -1 }).limit(limitDays).toArray();
+  return docs.reverse();
 }

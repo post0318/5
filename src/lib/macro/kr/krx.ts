@@ -24,12 +24,15 @@ async function krx<T = Record<string, string>>(
   path: string,
   params: Record<string, string>,
   charset?: "cp949",
+  // 재시도 시 true — 첫 시도와 같은 캐시를 또 맞으면 재시도가 무의미해짐(아래
+  // fetchVkospi 참고, 2026-09 수정)
+  noStore?: boolean,
 ): Promise<T[]> {
   const qs = new URLSearchParams(params).toString();
   const res = await fetch(`${BASE}/${path}?${qs}`, {
     headers: { AUTH_KEY: authKey() },
     signal: AbortSignal.timeout(20_000),
-    next: { revalidate: 60 * 60 * 12 },
+    ...(noStore ? { cache: "no-store" as const } : { next: { revalidate: 60 * 60 * 12 } }),
   });
   if (!res.ok) throw new Error(`KRX ${path} ${res.status}`);
   let j: { OutBlock_1?: T[] };
@@ -77,11 +80,16 @@ export async function fetchAllStocks(basDd: string): Promise<DayStockRow[]> {
   return [...map(kospi, "KOSPI"), ...map(kosdaq, "KOSDAQ")];
 }
 
-/** KOSPI 200 변동성지수(VKOSPI). KRX 파생지수 응답에 옵션지수가 간헐적으로 빠져 재시도 */
+/**
+ * KOSPI 200 변동성지수(VKOSPI). KRX 파생지수 응답에 옵션지수가 간헐적으로 빠져
+ * 재시도. 응답이 200이면 Next Data Cache 에 그대로 저장되므로, 첫 시도가
+ * "옵션지수 누락" 상태로 캐시되면 2·3번째 시도도 같은 캐시만 받아 재시도가
+ * 무의미해짐(2026-09 발견) — 2번째 시도부터는 캐시를 우회.
+ */
 export async function fetchVkospi(basDd: string): Promise<number | null> {
   for (let i = 0; i < 3; i++) {
     try {
-      const rows = await krx("idx/drvprod_dd_trd", { basDd });
+      const rows = await krx("idx/drvprod_dd_trd", { basDd }, undefined, i > 0);
       const v = rows.find((r) => (r.IDX_NM ?? "").includes("변동성지수"));
       if (v) return n(v.CLSPRC_IDX);
     } catch {

@@ -9,7 +9,7 @@ import { AdapterError, type QuoteBar } from "../types";
  * 과거 날짜 데이터는 불변이므로 영구 캐시.
  */
 
-const BASE = "http://data-dbg.krx.co.kr/svc/apis/sto";
+const BASE = "https://data-dbg.krx.co.kr/svc/apis/sto";
 
 function key(): string | null {
   return process.env.KRX_API_KEY ?? null;

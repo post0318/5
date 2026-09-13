@@ -1,16 +1,15 @@
 import "server-only";
 import type { AnyBulkWriteOperation } from "mongodb";
-import YahooFinancePkg from "yahoo-finance2";
 import {
-  getMeta,
   krFgDailyCol,
   krStockRollCol,
-  setMeta,
+  tryAcquireCooldown,
   type KrFgDailyDoc,
   type KrStockRollDoc,
 } from "@/lib/db/kr-fg";
 import { fetchAllStocks, fetchKospi200Futures, fetchKospiIndex, fetchPutCall, fetchVkospi } from "./krx";
 import { fetchLatestRates } from "./ecos";
+import { getYahooFinance } from "../yf-client";
 
 const WINDOW = 252; // 52주(거래일)
 const MIN_HISTORY = 200; // 신고/신저 판정 최소 히스토리
@@ -41,10 +40,11 @@ function lastBusinessDayIso(): string {
 export async function autoBackfillKrFg(asOf: string | null | undefined): Promise<void> {
   const expected = lastBusinessDayIso();
   if (!asOf || asOf >= expected) return;
-  const now = Date.now();
-  const last = Number((await getMeta("autoBackfillAt").catch(() => "0")) ?? 0);
-  if (now - last < 10 * 60_000) return;
-  await setMeta("autoBackfillAt", String(now)).catch(() => {});
+  // getMeta 로 읽고 setMeta 로 쓰는 방식은 동시 요청(서버리스 인스턴스 2개 등) 시
+  // 둘 다 쿨다운을 통과해 같은 날짜 배치가 중복 실행되는 race 가 있었음(2026-09
+  // 발견 — kr_stock_roll 중복 push 버그의 실제 트리거) → 원자적 락으로 대체
+  const acquired = await tryAcquireCooldown("autoBackfillAt", 10 * 60_000).catch(() => false);
+  if (!acquired) return;
   await backfillRange(asOf, expected, true).catch(() => {});
 }
 
@@ -64,6 +64,11 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
     ]);
 
     if (stocks.length < 100) {
+      // 휴장일(설/추석 등 평일 공휴일)로 판단 — 마커 문서를 남겨 backfillRange의
+      // skipExisting 이 이 날짜를 "처리됨"으로 보게 함. 마커가 없으면 공휴일이
+      // asOf(kospiClose 가 실제로 찍힌 최신일)를 영원히 못 앞지르게 만들어
+      // autoBackfillKrFg 가 10분마다 무한 재시도(KRX 쿼터 소진)하게 됨(2026-09 발견).
+      await markClosed(date);
       return { ...empty(date), ok: false, error: `거래 데이터 없음 (${stocks.length}건) — 휴장일?` };
     }
 
@@ -95,23 +100,37 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
     let totalWithHistory = 0;
     const ops: AnyBulkWriteOperation<KrStockRollDoc>[] = [];
 
+    // 신고/신저 판정은 KOSPI 만 사용 — KOSDAQ 종목까지 롤링창에 저장하면
+    // kr_stock_roll 문서 수·find({}) 스캔 비용이 쓰지도 않는 데이터로 약 2배가
+    // 됨 (2026-09 정리). KOSDAQ 은 애초에 매칭도 안 되므로 저장할 필요가 없음.
     for (const s of stocks) {
-      if (s.close == null || !s.code) continue;
+      if (s.close == null || !s.code || s.market !== "KOSPI") continue;
       const prev = rollMap.get(s.code);
-      if (s.market === "KOSPI" && prev && prev.closes.length >= MIN_HISTORY) {
+      if (prev && prev.closes.length >= MIN_HISTORY) {
         totalWithHistory++;
         const hi = Math.max(...prev.closes);
         const lo = Math.min(...prev.closes);
         if (s.close >= hi) newHigh52++;
         else if (s.close <= lo) newLow52++;
       }
+      // lastDate 가드로 멱등화: 같은 날짜로 재실행/동시실행돼도 closes 에 같은
+      // 종가가 중복 push 되지 않음(중복 push 시 52주 신고/신저 판정이 오염되던
+      // 버그 수정, 2026-09). 기존 문서 갱신과 신규 종목 생성을 분리:
+      //  1) 문서가 있고 아직 이 날짜로 안 찍혔으면 push
+      //  2) 문서가 없으면(신규 상장 등) 1건짜리로 생성 — 이미 있으면 아무것도 안 함
       ops.push({
         updateOne: {
-          filter: { _id: s.code },
+          filter: { _id: s.code, lastDate: { $ne: date } },
           update: {
             $set: { lastDate: date },
             $push: { closes: { $each: [s.close], $slice: -WINDOW } },
           },
+        },
+      });
+      ops.push({
+        updateOne: {
+          filter: { _id: s.code },
+          update: { $setOnInsert: { closes: [s.close], lastDate: date } },
           upsert: true,
         },
       });
@@ -119,9 +138,13 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
     if (ops.length) await rollCol.bulkWrite(ops, { ordered: false });
 
     const col = await krFgDailyCol();
-    // foreignFutNet 은 이 배치가 안 채우는 필드(별도 수동 업로드) — replaceOne이라
-    // 기존 값을 지우지 않게 미리 읽어서 보존
-    const existing = await col.findOne({ _id: date }, { projection: { foreignFutNet: 1 } });
+    // foreignFutNet 은 이 배치가 안 채우는 필드(별도 수동 업로드), vkospi/futBasis 는
+    // KRX API가 간헐적으로 값을 빼먹어 fetch 가 null 을 반환할 수 있음 — 세 경우 모두
+    // replaceOne 이 기존 값을 지우지 않도록 미리 읽어서 보존/병합 (2026-09 수정)
+    const existing = await col.findOne(
+      { _id: date },
+      { projection: { foreignFutNet: 1, vkospi: 1, futBasis: 1 } },
+    );
     const doc: KrFgDailyDoc = {
       _id: date,
       kospiClose,
@@ -133,7 +156,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       newHigh52,
       newLow52,
       totalWithHistory: totalWithHistory || null,
-      vkospi,
+      vkospi: vkospi ?? existing?.vkospi ?? null,
       gov3y: rates.gov3y,
       gov10y: rates.gov10y,
       corpAA: rates.corpAA,
@@ -141,7 +164,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       putCall: putCall.byVolume,
       putCallVal: putCall.byValue,
       foreignFutNet: existing?.foreignFutNet ?? null,
-      futBasis,
+      futBasis: futBasis ?? existing?.futBasis ?? null,
       updatedAt: new Date().toISOString(),
     };
     await col.replaceOne({ _id: date }, doc, { upsert: true });
@@ -164,17 +187,25 @@ function empty(date: string): BatchResult {
   return { date, advancers: 0, decliners: 0, newHigh52: 0, newLow52: 0, rollTracked: 0, ok: false };
 }
 
+/** 휴장일 마커 기록 — 기존 값(수동 업로드분 등)은 건드리지 않고 closed 플래그만 세움 */
+async function markClosed(date: string): Promise<void> {
+  const col = await krFgDailyCol();
+  await col.updateOne(
+    { _id: date },
+    {
+      $set: { closed: true, updatedAt: new Date().toISOString() },
+      $setOnInsert: { kospiClose: null, ...thinDoc() },
+    },
+    { upsert: true },
+  );
+}
+
 /**
  * 모멘텀(125일선)용 KOSPI 종가 히스토리를 yahoo(^KS11)에서 부트스트랩.
  * kr_fg_daily 의 kospiClose 만 채운다 (없는 날짜는 thin 문서 생성).
  * sinceIso 지정 시 해당일부터, 미지정 시 최근 420일만.
  */
 export async function bootstrapKospiHistory(sinceIso?: string): Promise<{ upserted: number }> {
-  const YF = (YahooFinancePkg as { default?: unknown }).default ?? YahooFinancePkg;
-  const C = YF as new (o: Record<string, unknown>) => {
-    chart: (s: string, o: Record<string, unknown>) => Promise<{ quotes: { date: Date | string; close?: number | null }[] }>;
-  };
-  const yf = new C({ suppressNotices: ["yahooSurvey"], validation: { logErrors: false } });
   let fromStr: string;
   if (sinceIso) {
     fromStr = sinceIso;
@@ -183,7 +214,7 @@ export async function bootstrapKospiHistory(sinceIso?: string): Promise<{ upsert
     from.setDate(from.getDate() - 420);
     fromStr = from.toISOString().slice(0, 10);
   }
-  const res = await yf.chart("^KS11", { period1: fromStr, interval: "1d" });
+  const res = await getYahooFinance().chart("^KS11", { period1: fromStr, interval: "1d" });
   const rows = (res.quotes ?? [])
     .map((q) => ({
       date: (q.date instanceof Date ? q.date : new Date(q.date)).toISOString().slice(0, 10),
@@ -393,6 +424,7 @@ export async function deepBackfill(
     }
     if (stocks.length < 100) {
       failed++;
+      await markClosed(iso).catch(() => {});
       continue;
     }
     const [vkospi, kospiClose, putCall] = await Promise.all([
@@ -421,9 +453,11 @@ export async function deepBackfill(
         downVolume += v;
       } else unchanged++;
 
-      if (s.close == null || !s.code) continue;
+      // 신고/신저 판정은 KOSPI 만 사용 — KOSDAQ 은 롤링창에 아예 안 올림
+      // (runKrFgBatch 와 동일 정리, 2026-09)
+      if (s.close == null || !s.code || s.market !== "KOSPI") continue;
       const w = roll.get(s.code) ?? [];
-      if (s.market === "KOSPI" && w.length >= MIN_HISTORY) {
+      if (w.length >= MIN_HISTORY) {
         totalWithHistory++;
         if (s.close >= Math.max(...w)) newHigh52++;
         else if (s.close <= Math.min(...w)) newLow52++;
@@ -435,9 +469,15 @@ export async function deepBackfill(
 
     if (totalWithHistory > 0 && !firstReadyDate) firstReadyDate = iso;
 
-    // foreignFutNet/futBasis 는 이 함수가 안 채우는 필드 — replaceOne이라
-    // 기존 값을 지우지 않게 미리 읽어서 보존
-    const existingFf = await dailyCol.findOne({ _id: iso }, { projection: { foreignFutNet: 1, futBasis: 1 } });
+    // foreignFutNet/futBasis 는 이 함수가 안 채우는 필드, vkospi 는 KRX API가
+    // 간헐적으로 값을 빼먹어 fetch 가 null 을 반환할 수 있음 — 세 경우 모두
+    // replaceOne 이 기존 값을 지우지 않도록 미리 읽어서 보존/병합 (2026-09 수정:
+    // 이전엔 vkospi 를 projection 에서 빼먹어 수동 주입한 VKOSPI 히스토리가
+    // 주말 자동 딥백필마다 null 로 덮여 사라지는 버그가 있었음)
+    const existingFf = await dailyCol.findOne(
+      { _id: iso },
+      { projection: { foreignFutNet: 1, futBasis: 1, vkospi: 1 } },
+    );
     const dailyDoc: KrFgDailyDoc = {
         _id: iso,
         kospiClose,
@@ -449,7 +489,7 @@ export async function deepBackfill(
         newHigh52,
         newLow52,
         totalWithHistory: totalWithHistory || null,
-        vkospi,
+        vkospi: vkospi ?? existingFf?.vkospi ?? null,
         gov3y: rateAt(g3, iso),
         gov10y: rateAt(g10, iso),
         corpAA: rateAt(aa, iso),

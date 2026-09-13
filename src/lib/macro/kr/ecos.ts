@@ -30,6 +30,10 @@ export async function fetchRateSeries(
   startYmd: string,
   endYmd: string,
 ): Promise<RatePoint[]> {
+  // ECOS API 는 인증키를 헤더가 아니라 URL 경로 세그먼트로 요구함(API 자체 설계,
+  // 우회 불가). 에러/로그 메시지에 이 url 을 절대 포함시키지 말 것 — 키가 그대로
+  // 노출됨. lib/markets/http.ts 의 fetchText/fetchJson 처럼 URL을 에러에 넣는
+  // 공용 헬퍼로 나중에 바꾸면 키가 로그로 샐 수 있음 (2026-09 점검).
   const url = `https://ecos.bok.or.kr/api/StatisticSearch/${key()}/json/kr/1/5000/817Y002/D/${startYmd}/${endYmd}/${ITEMS[item]}`;
   const res = await fetch(url, {
     signal: AbortSignal.timeout(15_000),
@@ -60,7 +64,9 @@ export async function fetchLatestRates(endYmd: string): Promise<Record<EcosItem,
 }
 
 function ymdMinusDays(ymd: string, days: number): string {
-  const d = new Date(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`);
-  d.setDate(d.getDate() - days);
+  // UTC 로 파싱 + UTC 산술로 통일 — 로컬 파싱(Date 생성자)과 UTC 산술을 섞으면
+  // 음수 오프셋 타임존(로컬 개발 환경)에서 ±1일 오차가 생김 (2026-09 수정)
+  const d = new Date(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - days);
   return d.toISOString().slice(0, 10).replace(/-/g, "");
 }

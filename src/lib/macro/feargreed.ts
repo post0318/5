@@ -1,5 +1,6 @@
 import "server-only";
 import { AdapterError } from "@/lib/markets/types";
+import { smaSeriesSkipNulls } from "@/lib/macro/series-utils";
 
 /**
  * CNN Business — Fear & Greed Index (시장 심리 / 위험 지표)
@@ -26,14 +27,6 @@ interface RawFG {
   [k: string]: unknown;
 }
 
-const RATING_KO: Record<string, string> = {
-  "extreme fear": "극도의 공포",
-  fear: "공포",
-  neutral: "중립",
-  greed: "탐욕",
-  "extreme greed": "극도의 탐욕",
-};
-
 const COMPONENT_LABELS: { key: string; label: string; valueLabel: string }[] = [
   { key: "market_momentum_sp125", label: "시장 모멘텀 (S&P vs 125일선)", valueLabel: "S&P500 125일 이동평균" },
   { key: "stock_price_strength", label: "주가 강도 (신고가/신저가)", valueLabel: "52주 신고가 − 신저가 (순비율)" },
@@ -46,8 +39,6 @@ const COMPONENT_LABELS: { key: string; label: string; valueLabel: string }[] = [
 
 export interface FearGreed {
   score: number;
-  rating: string;
-  ratingKo: string;
   asOf: string;
   prevClose: number;
   prev1w: number;
@@ -59,7 +50,6 @@ export interface FearGreed {
     label: string;
     valueLabel: string;
     score: number | null;
-    rating: string | null;
     /** 원본 지표 추이 (정규화 전 실제 값) */
     history: { date: string; value: number }[];
     /** 보조 시리즈 (예: 모멘텀 차트의 S&P 500 지수) */
@@ -67,14 +57,6 @@ export interface FearGreed {
   }[];
   source: string;
   deepLink: string;
-}
-
-function ratingOf(score: number): string {
-  if (score < 25) return "extreme fear";
-  if (score < 45) return "fear";
-  if (score <= 55) return "neutral";
-  if (score <= 75) return "greed";
-  return "extreme greed";
 }
 
 export async function getFearGreed(): Promise<FearGreed | null> {
@@ -108,18 +90,6 @@ export async function getFearGreed(): Promise<FearGreed | null> {
     (data ?? [])
       .slice(-180)
       .map((d) => ({ date: new Date(d.x).toISOString().slice(0, 10), value: round2(d.y) }));
-  /** 단순이동평균(SMA). i < p-1 이거나 창에 결측 있으면 null */
-  const smaSeries = (arr: (number | null)[], p: number): (number | null)[] =>
-    arr.map((_, i) => {
-      if (i < p - 1) return null;
-      let s = 0;
-      for (let k = i - p + 1; k <= i; k++) {
-        const v = arr[k];
-        if (v == null) return null;
-        s += v;
-      }
-      return s / p;
-    });
 
   const components = COMPONENT_LABELS.map(({ key, label, valueLabel }) => {
     const c = raw[key] as
@@ -136,7 +106,10 @@ export async function getFearGreed(): Promise<FearGreed | null> {
     // (전체 구간으로 계산 후 표시 구간만 잘라 워밍업 공백 없앰 — CNN 방법론과 동일 기준)
     if (key === "market_volatility_vix" && c?.data?.length) {
       const pts = c.data.map((d) => ({ date: new Date(d.x).toISOString().slice(0, 10), close: d.y }));
-      const ma50 = smaSeries(
+      // 결측(거래 없는 날 등) 하루만 있어도 그 뒤 50거래일 전체가 null 로
+      // 전파되는 smaSeries 버그를 피해 결측-견고판을 사용 (2026-09 수정, KR
+      // 쪽(kr/fear-greed.ts)에는 이미 있던 대응을 US 쪽에도 동일 적용)
+      const ma50 = smaSeriesSkipNulls(
         pts.map((p) => p.close),
         50,
       );
@@ -152,7 +125,6 @@ export async function getFearGreed(): Promise<FearGreed | null> {
       label,
       valueLabel,
       score: typeof c?.score === "number" ? Math.round(c.score * 10) / 10 : null,
-      rating: c?.rating ?? null,
       history: toSeries(c?.data),
       overlay,
     };
@@ -162,8 +134,6 @@ export async function getFearGreed(): Promise<FearGreed | null> {
   const scoreInt = Math.round(fg.score);
   return {
     score: scoreInt,
-    rating: ratingOf(scoreInt),
-    ratingKo: RATING_KO[ratingOf(scoreInt)] ?? fg.rating,
     asOf: fg.timestamp?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
     prevClose: Math.round(fg.previous_close * 10) / 10,
     prev1w: Math.round(fg.previous_1_week * 10) / 10,

@@ -76,7 +76,11 @@ function NewsColumn({
 }) {
   const [page, setPage] = useState(1);
   const pageCount = Math.min(MAX_PAGES, Math.ceil(items.length / PAGE_SIZE)) || 1;
-  const paged = items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // items 가 바뀌어(재조회로 건수가 줄어드는 등) page 가 더는 유효하지 않게 되면
+  // pageCount 로 클램프 — 안 하면 빈 목록이 뜨면서 존재하지 않는 페이지 번호가
+  // 계속 하이라이트된 채로 남음 (2026-09 수정)
+  const clampedPage = Math.min(page, pageCount);
+  const paged = items.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
 
   return (
     <div className="min-w-0">
@@ -116,7 +120,7 @@ function NewsColumn({
               </li>
             ))}
           </ul>
-          <Pager page={page} pageCount={pageCount} onChange={setPage} />
+          <Pager page={clampedPage} pageCount={pageCount} onChange={setPage} />
         </>
       )}
     </div>

@@ -28,6 +28,14 @@ export const maxDuration = 300;
  *  - 기본: 오늘(KST) 거래일 1일치 수집 (주말이면 직전 금요일)
  *  - ?backfill=N : 최근 N 거래일 백필 (초기 히스토리 구축용, 수동 호출)
  */
+// from/to 를 검증 없이 new Date() 에 넘기면 오타(예: "2021-13-40")가 Invalid
+// Date 가 되어 다운스트림 날짜 루프가 조용히 0건만 처리하고 끝남 — 에러 없이
+// "성공"처럼 보여 오타를 알아채기 어려움 (2026-09 수정)
+function isValidIsoDate(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  return Number.isFinite(new Date(`${s}T00:00:00Z`).getTime());
+}
+
 function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   const appPw = process.env.APP_PASSWORD;
@@ -43,13 +51,30 @@ function authorized(req: Request): boolean {
 }
 
 /**
+ * 관리자 전용 작업(파괴적 삭제·대량 백필 등) 게이트 — authorized() 의 UA
+ * 스푸핑 폴백은 여기서 인정하지 않는다. `user-agent: vercel-cron` 헤더는
+ * curl 한 줄로 위조 가능해서, CRON_SECRET 을 안 설정한 상태로는 `?reset=roll`
+ * (kr_stock_roll 전체 삭제) 같은 파괴적 쿼리 파라미터가 그대로 노출돼 있었음
+ * (2026-09 수정). x-app-token 또는 Bearer CRON_SECRET 로만 통과.
+ */
+function isPrivileged(req: Request): boolean {
+  const secret = process.env.CRON_SECRET;
+  const appPw = process.env.APP_PASSWORD;
+  if (appPw && req.headers.get("x-app-token") === appPw) return true;
+  if (secret && req.headers.get("authorization") === `Bearer ${secret}`) return true;
+  return false;
+}
+
+/**
  * 수동 데이터 주입.
  *  body = { vkospi: [{date, vkospi}] } 또는
  *  body = { foreignFutNet: [{date, value}] } (외국인 KOSPI200 선물 순매수, 계약수)
  */
 export async function POST(req: Request) {
   try {
-    if (!authorized(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
+    // 수동 데이터 주입은 Vercel Cron 이 호출할 일이 없는 관리자 전용 작업이라
+    // UA 스푸핑 폴백을 인정하지 않음 (2026-09 수정)
+    if (!isPrivileged(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
     const body = (await req.json()) as {
       vkospi?: { date: string; vkospi: number }[];
@@ -71,10 +96,19 @@ export async function GET(req: Request) {
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
 
     const sp = new URL(req.url).searchParams;
+    // 쿼리 파라미터가 하나라도 있으면 전부 수동 관리자 작업(파괴적 삭제·대량
+    // 백필 포함)이다 — Vercel Cron 은 파라미터 없이 매일 호출하므로, 파라미터가
+    // 있는 요청은 UA 스푸핑 폴백을 인정하지 않는 isPrivileged() 로 재검증
+    // (2026-09 수정)
+    if ([...sp.keys()].length > 0 && !isPrivileged(req)) {
+      return Response.json({ error: "관리자 인증 필요 (파괴적/백필 작업)" }, { status: 403 });
+    }
     if (sp.get("extend") === "basis") {
       const from = sp.get("from");
       const to = sp.get("to");
       if (!from || !to) return Response.json({ error: "from/to 필요" }, { status: 400 });
+      if (!isValidIsoDate(from) || !isValidIsoDate(to))
+        return Response.json({ error: "from/to 는 YYYY-MM-DD 형식이어야 합니다" }, { status: 400 });
       return ok({ mode: "extend-basis", ...(await extendFutBasisHistory(from, to)) });
     }
     if (sp.get("bootstrap") === "kospi") {
@@ -84,6 +118,8 @@ export async function GET(req: Request) {
       const from = sp.get("from");
       const to = sp.get("to");
       if (!from || !to) return Response.json({ error: "from/to 필요" }, { status: 400 });
+      if (!isValidIsoDate(from) || !isValidIsoDate(to))
+        return Response.json({ error: "from/to 는 YYYY-MM-DD 형식이어야 합니다" }, { status: 400 });
       return ok({ mode: "extend-breadth", ...(await extendBreadthHistory(from, to)) });
     }
     if (sp.get("reset") === "roll") {
@@ -102,6 +138,8 @@ export async function GET(req: Request) {
     const from = sp.get("from");
     const to = sp.get("to");
     if (from && to) {
+      if (!isValidIsoDate(from) || !isValidIsoDate(to))
+        return Response.json({ error: "from/to 는 YYYY-MM-DD 형식이어야 합니다" }, { status: 400 });
       if (sp.get("deep") === "1") {
         return ok({ mode: "deep-backfill", ...(await deepBackfill(from, to)) });
       }
@@ -127,8 +165,8 @@ export async function GET(req: Request) {
   } catch (err) {
     return jsonError(err);
   } finally {
-    // 배치/백필 후 지수 캐시 무효화
+    // 배치/백필 후 지수 캐시 무효화 (/api/macro/kr-fg 는 호출자가 없는 죽은
+    // 라우트라 삭제함 — 2026-09)
     revalidatePath("/api/macro");
-    revalidatePath("/api/macro/kr-fg");
   }
 }

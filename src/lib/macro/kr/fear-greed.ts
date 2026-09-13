@@ -1,6 +1,7 @@
 import "server-only";
 import { getKrFgHistory, type KrFgDailyDoc } from "@/lib/db/kr-fg";
 import type { FearGreed } from "@/lib/macro/feargreed";
+import { emaSeries, rollingSumSkipNulls, smaSeries, smaSeriesSkipNulls } from "@/lib/macro/series-utils";
 
 /**
  * 한국판 공포·탐욕 지수 — kr_fg_daily 히스토리에서 7개 컴포넌트를 산출·정규화·종합.
@@ -45,43 +46,6 @@ type Comp = {
   } | null;
 };
 
-/** 이동평균(단순). i < p-1 이거나 창에 null 있으면 null */
-function smaSeries(arr: (number | null)[], p: number): (number | null)[] {
-  return arr.map((_, i) => {
-    if (i < p - 1) return null;
-    let s = 0;
-    for (let k = i - p + 1; k <= i; k++) {
-      const v = arr[k];
-      if (v == null) return null;
-      s += v;
-    }
-    return s / p;
-  });
-}
-
-/**
- * smaSeries 를 결측(휴장일 등)에 견고하게 — 값이 있는 날짜만 추려서 이동평균을
- * 계산한 뒤 원래 위치로 되돌린다. 그냥 smaSeries 를 쓰면 창(window) 안에 결측이
- * 하루만 있어도 그 뒤 p거래일 전체가 null 로 전파되는 버그가 있음
- * (모멘텀 125일선·VKOSPI 50일선에서 실제로 발생했던 문제).
- */
-function smaSeriesSkipNulls(arr: (number | null)[], p: number): (number | null)[] {
-  const idx: number[] = [];
-  const vals: number[] = [];
-  arr.forEach((v, i) => {
-    if (v != null) {
-      idx.push(i);
-      vals.push(v);
-    }
-  });
-  const ma = smaSeries(vals, p);
-  const out: (number | null)[] = new Array(arr.length).fill(null);
-  idx.forEach((origI, k) => {
-    out[origI] = ma[k];
-  });
-  return out;
-}
-
 /**
  * 베이시스(선물종가−현물) 가중치. 시장베이시스가 마이너스(백워데이션)로
  * 깊어질수록 프로그램 매도차익거래(선물 매도+현물 매수 청산) 유발 압력이
@@ -97,47 +61,6 @@ function futBasisWeight(basis: number | null): number {
 }
 
 /**
- * 이동 합계(rolling sum) — 결측(거래 없는 날 등)은 건너뛰고 값 있는 날짜만으로
- * 누적. smaSeriesSkipNulls 와 동일한 결측-견고 패턴.
- */
-function rollingSumSkipNulls(arr: (number | null)[], p: number): (number | null)[] {
-  const idx: number[] = [];
-  const vals: number[] = [];
-  arr.forEach((v, i) => {
-    if (v != null) {
-      idx.push(i);
-      vals.push(v);
-    }
-  });
-  const sums: (number | null)[] = vals.map((_, i) => {
-    if (i < p - 1) return null;
-    let s = 0;
-    for (let k = i - p + 1; k <= i; k++) s += vals[k];
-    return s;
-  });
-  const out: (number | null)[] = new Array(arr.length).fill(null);
-  idx.forEach((origI, k) => {
-    out[origI] = sums[k];
-  });
-  return out;
-}
-
-/** 지수이동평균 (alpha 지정). null 은 이전값 유지, 시드 전엔 null */
-function emaSeries(arr: (number | null)[], alpha: number): (number | null)[] {
-  const out: (number | null)[] = [];
-  let prev: number | null = null;
-  for (const v of arr) {
-    if (v == null) {
-      out.push(prev);
-      continue;
-    }
-    prev = prev == null ? v : alpha * v + (1 - alpha) * prev;
-    out.push(prev);
-  }
-  return out;
-}
-
-/**
  * 맥클렐런 오실레이터 공통 계산 — up/down 두 시계열(거래량이든 종목수든)을
  * 비율조정(RA) 후 19일·39일 EMA差 + 1000. 누적 없이 매일 스냅샷.
  */
@@ -148,8 +71,11 @@ function mcclellanOsc(up: (number | null)[], down: (number | null)[]): (number |
   });
   const t10 = emaSeries(rn, 0.1); // ≈ EMA19
   const t5 = emaSeries(rn, 0.05); // ≈ EMA39
-  return rn.map((_, i) =>
-    t10[i] != null && t5[i] != null ? 1000 + ((t10[i] as number) - (t5[i] as number)) : null,
+  // t10/t5 는 emaSeries 가 결측일에 직전 EMA 를 캐리포워드하므로 null 이 되는 일이
+  // 거의 없음 — 결측 여부는 rn[i] 로 판단해야 함(2026-09 수정: 이 조건이 없으면
+  // 결측일에도 직전 EMA 차이가 그대로 노출돼 유령 데이터가 생성됨)
+  return rn.map((v, i) =>
+    v != null && t10[i] != null && t5[i] != null ? 1000 + ((t10[i] as number) - (t5[i] as number)) : null,
   );
 }
 
@@ -351,43 +277,43 @@ const COMPONENTS: Comp[] = [
   },
 ];
 
-function ratingKo(score: number): string {
-  if (score < 25) return "극도의 공포";
-  if (score < 45) return "공포";
-  if (score <= 55) return "중립";
-  if (score <= 75) return "탐욕";
-  return "극도의 탐욕";
-}
-function ratingEn(score: number): string {
-  if (score < 25) return "extreme fear";
-  if (score < 45) return "fear";
-  if (score <= 55) return "neutral";
-  if (score <= 75) return "greed";
-  return "extreme greed";
+/**
+ * i번째 시점까지의 point-in-time 창 — 직전 window개(부족하면 처음부터 i까지).
+ * 세 정규화 함수 모두 이걸로 매 시점마다 창을 다시 잡는다. 예전엔 series 끝
+ * (오늘)에서 한 번만 창을 잘라 그 하나의 분포로 과거 전체를 채점했는데, 그러면
+ * 어제 본 "2023년 3월 점수"와 오늘 본 "2023년 3월 점수"가 달라진다(오늘 분포로
+ * 계속 소급 재계산됨, look-ahead bias) — CNN 은 각 시점마다 그 시점까지의
+ * 데이터로만 채점하므로 그 방식과 다름. 2026-09, 오너 확인 후 CNN 방식으로 수정.
+ */
+function windowUpTo<T>(arr: T[], i: number, window: number): T[] {
+  return arr.slice(Math.max(0, i - window + 1), i + 1);
 }
 
 /**
- * 시계열을 최근 창의 "역사적 범위"로 0~100 정규화 (invert 옵션).
+ * 시계열을 각 시점까지의 창의 "역사적 범위"로 0~100 정규화 (invert 옵션).
  * 단순 min-max 는 극단값 1개에 범위가 늘어나 왜곡 → 2~98 백분위로 클립 후 스케일.
  */
 /**
- * CNN 원문의 "경험적 백분위 순위(empirical CDF)" 방식 — 과거 분포에서
- * 현재값보다 작거나 같은 표본의 비율을 그대로 점수로 사용. 위 normalize()의
- * min-max 방식은 분포가 한쪽으로 쏠려있으면(변동성처럼 오른쪽 꼬리가 긴 경우)
- * 극단 구간에서 점수가 0/100에 오래 눌러붙어 그 안에서의 정도 차이가 안 보임 —
- * kr_vkospi 실측 비교(2026-08-12~09-04, 12거래일 연속 정확히 100.0)로 확인.
+ * CNN 원문의 "경험적 백분위 순위(empirical CDF)" 방식 — 각 시점까지의 과거
+ * 분포에서 그 시점 값보다 작거나 같은 표본의 비율을 그대로 점수로 사용. 위
+ * normalize()의 min-max 방식은 분포가 한쪽으로 쏠려있으면(변동성처럼 오른쪽
+ * 꼬리가 긴 경우) 극단 구간에서 점수가 0/100에 오래 눌러붙어 그 안에서의 정도
+ * 차이가 안 보임 — kr_vkospi 실측 비교(2026-08-12~09-04, 12거래일 연속 정확히
+ * 100.0)로 확인.
  */
 function percentileRankNormalize(series: Row[], invert: boolean, window = NORM_WINDOW): Row[] {
-  const win = series.slice(-window);
-  const vals = win.map((r) => r.value).filter(Number.isFinite).sort((a, b) => a - b);
-  const n = vals.length;
-  if (n < 10) return [];
-  const rankOf = (v: number) => {
+  const vals = series.map((r) => r.value);
+  const out: Row[] = [];
+  for (let i = 0; i < series.length; i++) {
+    const win = windowUpTo(vals, i, window).filter(Number.isFinite).sort((a, b) => a - b);
+    const n = win.length;
+    if (n < 10) continue; // 아직 창이 안 찬 초반 구간만 스킵(전체를 버리지 않음)
+    const v = vals[i];
     let lo = 0;
     let hi = n;
     while (lo < hi) {
       const m = (lo + hi) >> 1;
-      if (vals[m] < v) lo = m + 1;
+      if (win[m] < v) lo = m + 1;
       else hi = m;
     }
     const lb = lo;
@@ -395,36 +321,36 @@ function percentileRankNormalize(series: Row[], invert: boolean, window = NORM_W
     hi = n;
     while (lo < hi) {
       const m = (lo + hi) >> 1;
-      if (vals[m] <= v) lo = m + 1;
+      if (win[m] <= v) lo = m + 1;
       else hi = m;
     }
     const ub = lo;
-    return ((lb + ub) / 2 / n) * 100; // 동률은 평균 순위
-  };
-  return series.map((r) => {
-    const s = Math.max(0, Math.min(100, rankOf(r.value)));
-    return { date: r.date, value: Math.round((invert ? 100 - s : s) * 10) / 10 };
-  });
+    const s = Math.max(0, Math.min(100, ((lb + ub) / 2 / n) * 100)); // 동률은 평균 순위
+    out.push({ date: series[i].date, value: Math.round((invert ? 100 - s : s) * 10) / 10 });
+  }
+  return out;
 }
 
 /**
- * Z점수 선형 매핑 — 창의 평균·표준편차로 z=(x−μ)/σ 를 구해 z=0→50점,
- * z=±3σ→0/100점으로 직선 대응(범위 밖은 클램프). 백분위 순위와 달리 분포를
- * 균등하게 펴지 않아 "지금이 평균에서 몇 σ 떨어졌나"라는 절대적 이탈 정보가
- * 유지됨. CNN 원자료 역산에서 변동성 지표가 이 방식에 가장 근접.
+ * Z점수 선형 매핑 — 각 시점까지의 창의 평균·표준편차로 z=(x−μ)/σ 를 구해
+ * z=0→50점, z=±3σ→0/100점으로 직선 대응(범위 밖은 클램프). 백분위 순위와
+ * 달리 분포를 균등하게 펴지 않아 "지금이 평균에서 몇 σ 떨어졌나"라는 절대적
+ * 이탈 정보가 유지됨. CNN 원자료 역산에서 변동성 지표가 이 방식에 가장 근접.
  */
 function zLinearNormalize(series: Row[], invert: boolean, window = NORM_WINDOW): Row[] {
-  const win = series.slice(-window);
-  const vals = win.map((r) => r.value).filter(Number.isFinite);
-  const n = vals.length;
-  if (n < 10) return [];
-  const mean = vals.reduce((a, b) => a + b, 0) / n;
-  const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / n) || 1;
-  return series.map((r) => {
-    const z = (r.value - mean) / sd;
+  const vals = series.map((r) => r.value);
+  const out: Row[] = [];
+  for (let i = 0; i < series.length; i++) {
+    const win = windowUpTo(vals, i, window).filter(Number.isFinite);
+    const n = win.length;
+    if (n < 10) continue;
+    const mean = win.reduce((a, b) => a + b, 0) / n;
+    const sd = Math.sqrt(win.reduce((a, b) => a + (b - mean) ** 2, 0) / n) || 1;
+    const z = (vals[i] - mean) / sd;
     const s = Math.max(0, Math.min(100, 50 + z * (50 / 3)));
-    return { date: r.date, value: Math.round((invert ? 100 - s : s) * 10) / 10 };
-  });
+    out.push({ date: series[i].date, value: Math.round((invert ? 100 - s : s) * 10) / 10 });
+  }
+  return out;
 }
 
 function normalize(
@@ -435,24 +361,28 @@ function normalize(
 ): Row[] {
   if (fixedRange) {
     // fixedRange = [점수100 값, 점수0 값]. invert 무시 (부호는 범위 방향으로 반영)
+    // 절대 고정 기준이라 시점과 무관 — point-in-time 이슈 대상 아님.
     const [gVal, fVal] = fixedRange;
     return series.map((r) => {
       const s = Math.max(0, Math.min(100, ((fVal - r.value) / (fVal - gVal)) * 100));
       return { date: r.date, value: Math.round(s * 10) / 10 };
     });
   }
-  const win = series.slice(-window);
-  const vals = win.map((r) => r.value).filter(Number.isFinite).sort((a, b) => a - b);
-  if (vals.length < 10) return [];
-  const pct = (p: number) => vals[Math.min(vals.length - 1, Math.max(0, Math.round((vals.length - 1) * p)))];
-  const lo = pct(0.02);
-  const hi = pct(0.98);
-  const range = hi - lo || 1;
-  return series.map((r) => {
-    let s = ((r.value - lo) / range) * 100;
+  const vals = series.map((r) => r.value);
+  const out: Row[] = [];
+  for (let i = 0; i < series.length; i++) {
+    const win = windowUpTo(vals, i, window).filter(Number.isFinite).sort((a, b) => a - b);
+    const n = win.length;
+    if (n < 10) continue;
+    const pct = (p: number) => win[Math.min(n - 1, Math.max(0, Math.round((n - 1) * p)))];
+    const lo = pct(0.02);
+    const hi = pct(0.98);
+    const range = hi - lo || 1;
+    let s = ((vals[i] - lo) / range) * 100;
     s = Math.max(0, Math.min(100, s));
-    return { date: r.date, value: Math.round((invert ? 100 - s : s) * 10) / 10 };
-  });
+    out.push({ date: series[i].date, value: Math.round((invert ? 100 - s : s) * 10) / 10 });
+  }
+  return out;
 }
 
 export async function getKrFearGreed(): Promise<
@@ -507,15 +437,17 @@ export async function getKrFearGreed(): Promise<
   if (history.length === 0) return null;
 
   const latest = history[history.length - 1];
-  const at = (daysBack: number) => history[Math.max(0, history.length - 1 - daysBack)]?.value ?? latest.value;
+  // Math.max(0, ...) 로 인덱스를 0에 클램프하면 히스토리가 daysBack 보다 짧을 때
+  // "최초값"이 "N일 전" 으로 둔갑해 표시됨(예: 히스토리가 100일뿐인데 1년 전
+  // 칸에 첫날 점수가 찍힘). 클램프를 없애 범위 밖이면 latest.value(변화 없음
+  // 취급)로 안전하게 폴백 (2026-09 수정).
+  const at = (daysBack: number) => history[history.length - 1 - daysBack]?.value ?? latest.value;
   const componentsReady = compScored.filter((x) => x.scored.length > 0).length;
 
   // CNN 홈페이지와 동일: 점수 정수 반올림 후 등급 판정
   const scoreInt = Math.round(latest.value);
   return {
     score: scoreInt,
-    rating: ratingEn(scoreInt),
-    ratingKo: ratingKo(scoreInt),
     asOf: latest.date,
     prevClose: Math.round(at(1)),
     prev1w: Math.round(at(5)),
@@ -533,7 +465,6 @@ export async function getKrFearGreed(): Promise<
         scoring: c.fixedRange ? "fixedRange" : (c.scoring ?? "minmax"),
         normWindow: c.fixedRange ? null : (c.normWindow ?? NORM_WINDOW),
         score: scored.length ? Math.round(scored[scored.length - 1].value * 10) / 10 : null,
-        rating: scored.length ? ratingEn(scored[scored.length - 1].value) : null,
         history: (p?.history ?? raw).slice(-win),
         ...(p?.overlay ? { overlay: { label: p.overlay.label, history: p.overlay.history.slice(-win) } } : {}),
       };

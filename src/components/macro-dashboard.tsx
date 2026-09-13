@@ -21,11 +21,13 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight, ExternalLink, RefreshCw } fro
 import { apiFetch } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { formatNumber } from "@/lib/format";
+import { stockDirClass } from "@/components/num";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MacroNewsPanel } from "@/components/macro-news-panel";
+import { InfluencerPanel } from "@/components/influencer-panel";
 import { CandleShape } from "@/components/price-chart-panel";
 import {
   Tooltip as UITooltip,
@@ -34,7 +36,7 @@ import {
   TooltipTrigger as UITooltipTrigger,
 } from "@/components/ui/tooltip";
 
-type Verdict = "positive" | "negative" | "neutral";
+type Verdict = "positive" | "negative" | "neutral" | "unknown";
 type Direction = "up" | "down" | "flat";
 
 // ── 공통 차트 스타일 ──────────────────────────────────────────────
@@ -81,8 +83,6 @@ interface IndexQuote {
 }
 interface FearGreed {
   score: number;
-  rating: string;
-  ratingKo: string;
   asOf: string;
   prevClose: number;
   prev1w: number;
@@ -94,7 +94,6 @@ interface FearGreed {
     label: string;
     valueLabel: string;
     score: number | null;
-    rating: string | null;
     history: { date: string; value: number }[];
     overlay?: { label: string; history: { date: string; value: number }[] };
   }[];
@@ -119,11 +118,15 @@ const VERDICT_LABEL: Record<Verdict, string> = {
   positive: "긍정",
   negative: "부정",
   neutral: "중립",
+  unknown: "데이터 없음",
 };
 const VERDICT_CLASS: Record<Verdict, string> = {
   positive: "bg-up/15 text-up border-up/30",
   negative: "bg-down/15 text-down border-down/30",
   neutral: "bg-muted text-muted-foreground border-border",
+  // "중립"(6개월 변화 없음, 판정 내림)과 구분되게 점선 테두리로 표시 —
+  // 수집 실패로 판정 자체를 못 내린 상태 (2026-09 추가)
+  unknown: "bg-muted/40 text-muted-foreground border-border border-dashed",
 };
 
 /**
@@ -146,7 +149,10 @@ function splitByThreshold<T extends { date: string }>(
         const t = (threshold - prev.splitVal) / (cur.splitVal - prev.splitVal);
         const d1 = Date.parse(prev.date);
         const d2 = Date.parse(cur.date);
-        const midDate = new Date(d1 + (d2 - d1) * Math.min(Math.max(t, 0), 1)).toISOString();
+        // 다른 행과 날짜 형식(YYYY-MM-DD)을 맞춤 — 전체 datetime 문자열을 쓰면
+        // XAxis(카테고리 축)에서 교차마다 슬롯이 하나씩 더 생겨 x축 간격이
+        // 미세하게 어긋남 (2026-09 수정)
+        const midDate = new Date(d1 + (d2 - d1) * Math.min(Math.max(t, 0), 1)).toISOString().slice(0, 10);
         out.push({ ...cur, date: midDate, divGood: threshold, divBad: threshold });
       }
     }
@@ -182,7 +188,7 @@ function splitByMovingThreshold<T extends { date: string }>(
           const t = prevDiff / (prevDiff - curDiff || 1);
           const d1 = Date.parse(prev.date);
           const d2 = Date.parse(cur.date);
-          const midDate = new Date(d1 + (d2 - d1) * Math.min(Math.max(t, 0), 1)).toISOString();
+          const midDate = new Date(d1 + (d2 - d1) * Math.min(Math.max(t, 0), 1)).toISOString().slice(0, 10);
           const midVal = prev.splitVal + (cur.splitVal - prev.splitVal) * Math.min(Math.max(t, 0), 1);
           out.push({ ...cur, date: midDate, divGood: midVal, divBad: midVal });
         }
@@ -229,6 +235,7 @@ interface IndexChartResp {
   key: string;
   name: string;
   rows: IndexChartRow[];
+  source: string;
 }
 
 export function MacroDashboard() {
@@ -290,9 +297,9 @@ export function MacroDashboard() {
                 <div
                   className={cn(
                     "tnum text-xs",
-                    ix.changePct != null && ix.changePct > 0 && "text-up",
-                    ix.changePct != null && ix.changePct < 0 && "text-down",
-                    (ix.changePct == null || ix.changePct === 0) && "text-muted-foreground",
+                    ix.changePct != null && ix.changePct !== 0
+                      ? stockDirClass(ix.changePct > 0, ix.region === "kr" ? "kr" : ix.region)
+                      : "text-muted-foreground",
                   )}
                 >
                   {ix.changePct != null
@@ -333,17 +340,24 @@ export function MacroDashboard() {
                   </div>
                 )}
               </div>
+              {/* key={fgRegion} 로 지역 전환 시 강제 리마운트 — 안 하면 US/KR 이
+                  같은 컴포넌트 인스턴스를 재사용해 세부지표 선택 state(selectedKey)가
+                  그대로 넘어가고, 두 지역 키 네임스페이스가 달라(예:
+                  market_volatility_vix vs kr_vkospi) 선택이 조용히 풀리며
+                  종합 차트로 되돌아가는 것처럼 보임 (2026-09 수정) */}
               {fgRegion === "kr" && q.data.krFearGreed ? (
-                <FearGreedCard fg={q.data.krFearGreed} showLink={false} />
+                <FearGreedCard key="kr" fg={q.data.krFearGreed} showLink={false} />
               ) : q.data.fearGreed ? (
-                <FearGreedCard fg={q.data.fearGreed} />
+                <FearGreedCard key="us" fg={q.data.fearGreed} />
               ) : (
-                q.data.krFearGreed && <FearGreedCard fg={q.data.krFearGreed} showLink={false} />
+                q.data.krFearGreed && <FearGreedCard key="kr" fg={q.data.krFearGreed} showLink={false} />
               )}
             </section>
           )}
 
           <MacroNewsPanel />
+
+          <InfluencerPanel />
 
           <Card className="py-2">
             <CardContent className="flex flex-wrap items-center gap-x-5 gap-y-1 py-1 text-sm">
@@ -539,8 +553,8 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
                 <ComposedChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                   <CartesianGrid stroke="var(--muted-foreground)" strokeDasharray="1 3" strokeOpacity={0.35} />
                   <XAxis dataKey="date" tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={xTick} minTickGap={40} />
-                  <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={54} tickFormatter={(v: number) => v.toFixed(1)} />
-                  <Tooltip {...TOOLTIP_STYLE} labelFormatter={(l) => String(l)} formatter={(v, n) => [Number(v).toFixed(3), String(n)]} />
+                  <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={54} tickFormatter={(v: number) => formatNumber(v, 1)} />
+                  <Tooltip {...TOOLTIP_STYLE} labelFormatter={(l) => String(l)} formatter={(v, n) => [formatNumber(Number(v), 3), String(n)]} />
                   <ReferenceLine y={0} stroke="var(--muted-foreground)" strokeOpacity={0.5} />
                   <Area type="monotone" dataKey="histUp" name="오실레이터" stroke={GREEN} strokeWidth={0.8} fill={GREEN} fillOpacity={0.25} isAnimationActive={false} connectNulls={false} />
                   <Area type="monotone" dataKey="histDown" name="오실레이터" stroke={RED} strokeWidth={0.8} fill={RED} fillOpacity={0.25} isAnimationActive={false} connectNulls={false} />
@@ -550,7 +564,7 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
               </ResponsiveContainer>
             </div>
             <p className="text-muted-foreground/80 text-[11px]">
-              Yahoo Finance · 개인용. 가격선(파랑) / 볼린저 중심선(점선) · 하단 MACD 오실레이터(12/26/9,
+              {q.data.source}. 가격선(파랑) / 볼린저 중심선(점선) · 하단 MACD 오실레이터(12/26/9,
               히스토그램=MACD−시그널)
             </p>
           </>
@@ -740,6 +754,14 @@ const HIGHER_RAW_IS_GREEDY: Record<string, boolean> = {
   kr_foreign_fut: true, // 외국인 순매수 누적 = 위험선호
 };
 
+// 모멘텀류 컴포넌트는 history 가 "점수"가 아니라 125일 이동평균선 자체(절대
+// 가격)라서, 이동평균선의 완만한 추이만 보고 방향을 판정하면 지수가 급락한
+// 날에도 화살표가 ▲(탐욕쪽)로 뜰 수 있음(이동평균은 관성 때문에 며칠 더
+// 올라감) — 실제 CNN/자체 채점 공식과 동일하게 (현재가−이동평균)/이동평균
+// 를 계산해 그 방향으로 판정하도록 수정 (2026-09). overlay(실제 지수) 가
+// 같이 오는 경우에만 적용, 없으면 기존 방식 유지.
+const MOMENTUM_KEYS = new Set(["kr_momentum", "market_momentum_sp125"]);
+
 /**
  * 세부지표의 최근(약 1개월) 점수 방향: 1=상승(탐욕쪽), -1=하락, 0=변화없음
  *
@@ -749,8 +771,23 @@ const HIGHER_RAW_IS_GREEDY: Record<string, boolean> = {
  * 일관된 임계값(2점)을 쓸 수 있다.
  * (CNN 히스토리는 약 9개월치 → 3년 윈도우는 불가, 가용 구간 전체 사용)
  */
-function componentScoreDir(key: string, history: { value: number }[]): -1 | 0 | 1 {
-  const vals = history.map((h) => h.value).filter(Number.isFinite);
+function componentScoreDir(
+  key: string,
+  history: { date: string; value: number }[],
+  overlay?: { date: string; value: number }[],
+): -1 | 0 | 1 {
+  const vals =
+    MOMENTUM_KEYS.has(key) && overlay && overlay.length >= 10
+      ? (() => {
+          const ovMap = new Map(overlay.map((o) => [o.date, o.value]));
+          return history
+            .map((h) => {
+              const ov = ovMap.get(h.date);
+              return ov != null && h.value ? ((ov - h.value) / h.value) * 100 : NaN;
+            })
+            .filter(Number.isFinite);
+        })()
+      : history.map((h) => h.value).filter(Number.isFinite);
   if (vals.length < 10) return 0;
   const min = Math.min(...vals);
   const max = Math.max(...vals);
@@ -762,11 +799,15 @@ function componentScoreDir(key: string, history: { value: number }[]): -1 | 0 | 
     return invert ? 100 - n : n;
   };
 
-  // 직전(바로 전날) 대비 — 상승 시 ▲, 하락 시 ▼, 변화 없으면 –
+  // 약 21틱(≈1개월) 전 대비 — 위 JSDoc·툴팁 문구("최근 약 1개월")와 일치시킴.
+  // 전일 대비로 계산하면 노이즈로 화살표가 매일 뒤집혀 "1개월 추세" 라는 문구와
+  // 안 맞았음 (2026-09 수정). 히스토리가 21틱보다 짧으면 가용 구간 중 가장
+  // 오래된 값과 비교.
+  const LOOKBACK = 21;
   const now = score(vals[vals.length - 1]);
-  const then = score(vals[vals.length - 2]);
+  const then = score(vals[Math.max(0, vals.length - 1 - LOOKBACK)]);
   const diff = now - then;
-  if (diff === 0) return 0;
+  if (Math.abs(diff) < 2) return 0; // 정규화 후 임계값 2점 미만은 "변화없음"
   return diff > 0 ? 1 : -1;
 }
 
@@ -796,11 +837,11 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
     [chartData, displayLimit],
   );
 
-  // 소수가 있으면 2자리로 (14.6 → 14.60), 정수는 그대로
+  // 소수가 있으면 2자리로 버림 표시(14.567 → 14.56, 반올림 아님), 정수는 그대로
   const fmtVal = (v: number | string) => {
     const n = typeof v === "number" ? v : Number(v);
     if (!Number.isFinite(n)) return String(v);
-    return Number.isInteger(n) ? String(n) : n.toFixed(2);
+    return Number.isInteger(n) ? String(n) : formatNumber(n, 2);
   };
 
   // 세부지표별 Y축 고정 눈금 간격 (정크본드=0.1 단위 등)
@@ -1188,7 +1229,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
                 {showNorm && " · 원본 값"}
                 {showNorm && (
                   <span className="ml-2">
-                    · 점선 = 자체 정규화 0~100 (최근 1년 min-max, CNN 점수와 다름 · 우측축,{" "}
+                    · 점선 = 자체 정규화 0~100 (최근 180거래일 min-max, CNN 점수와 다름 · 우측축,{" "}
                     {normColorByDirection ? (
                       <>
                         <span className="text-up">상승=녹색</span> /{" "}
@@ -1678,7 +1719,7 @@ function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: bool
         <div className="grid grid-cols-2 gap-1.5 border-t pt-3 sm:grid-cols-4 lg:grid-cols-7">
           {fg.components.map((c) => {
             const active = c.key === selectedKey;
-            const dir = componentScoreDir(c.key, c.history);
+            const dir = componentScoreDir(c.key, c.history, c.overlay?.history);
             return (
               <button
                 key={c.key}
@@ -1832,7 +1873,7 @@ function IndicatorCard({ ind, nasdaq: nasdaqRaw }: { ind: Indicator; nasdaq: Ind
               <div className="text-muted-foreground flex gap-3 text-xs">
                 <span>
                   6M{" "}
-                  <b className={cn(ind.change6m != null && ind.change6m > 0 ? "text-up" : "text-down")}>
+                  <b className={cn(ind.change6m == null || ind.change6m === 0 ? "" : ind.change6m > 0 ? "text-up" : "text-down")}>
                     {ind.change6m != null
                       ? `${ind.change6m > 0 ? "+" : ""}${formatNumber(ind.change6m, 1)}${chgSuffix}`
                       : "-"}
@@ -1840,7 +1881,7 @@ function IndicatorCard({ ind, nasdaq: nasdaqRaw }: { ind: Indicator; nasdaq: Ind
                 </span>
                 <span>
                   12M{" "}
-                  <b className={cn(ind.change12m != null && ind.change12m > 0 ? "text-up" : "text-down")}>
+                  <b className={cn(ind.change12m == null || ind.change12m === 0 ? "" : ind.change12m > 0 ? "text-up" : "text-down")}>
                     {ind.change12m != null
                       ? `${ind.change12m > 0 ? "+" : ""}${formatNumber(ind.change12m, 1)}${chgSuffix}`
                       : "-"}

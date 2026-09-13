@@ -28,7 +28,10 @@ export async function fetchKrIndexDaily(
       const url =
         `${EP}?serviceKey=${key}&resultType=json&numOfRows=1000&pageNo=${page}` +
         `&beginBasDt=${beginYmd}&endBasDt=${endYmd}&idxNm=${encodeURIComponent(idxNm)}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      // 과거 구간(beginYmd~endYmd)은 불변 데이터라 캐시 가능 — 다른 어댑터
+      // (kr/krx.ts, markets/http.ts)와 동일 컨벤션. 없으면 차트 요청마다(연도별
+      // 선택 등) 매번 최대 8페이지 순차 호출이 그대로 반복됨 (2026-09 수정)
+      const res = await fetch(url, { signal: AbortSignal.timeout(10_000), next: { revalidate: 60 * 60 * 12 } });
       if (!res.ok) break;
       const text = await res.text();
       if (text.includes("OpenAPI_ServiceResponse")) break;

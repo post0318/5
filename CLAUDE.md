@@ -391,6 +391,15 @@ npm run db:studio    # drizzle studio
       "공개 페이지 개인용 크롤링" 예외와 성격이 전혀 다른(데이터센터 IP
       자동 로그인은 이상거래탐지·계정잠김 위험) 별개 문제라 진행하지 않음
       (오너가 실계좌 로그인 자동화를 요청했을 때 설명·거절한 사례 있음).
+  - **예외 3건 (개인용, 오너 명시 승인, 2026-09)**: 거시경제 대시보드의 CNN
+    Fear & Greed Index — `production.dataviz.cnn.io` 의 비공식 엔드포인트를
+    `src/lib/macro/feargreed.ts` 가 호출한다(CNN 소유 지표, 공개 API 미제공).
+    브라우저 User-Agent 위장 + `referer: https://www.cnn.com/` 헤더로 접근.
+    감사 중 이 소스가 위 예외 목록에 문서화되지 않은 채 사용 중임이 드러나
+    (2026-09) 오너가 개인용 조건으로 소급 승인. 다른 예외들과 동일 원칙 —
+    실패 시 조용히 생략(해당 컴포넌트만 빠짐, 대시보드 전체 에러 아님) +
+    딥링크(cnn.com/markets/fear-and-greed) 병행. 어댑터 격리(`lib/macro/`
+    하위)도 이미 되어 있어 소스 교체 시 파일 단위로 영향 최소화.
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로

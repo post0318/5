@@ -1,4 +1,5 @@
 import "server-only";
+import { subMonths } from "date-fns";
 import { fetchText } from "@/lib/markets/http";
 import { AdapterError } from "@/lib/markets/types";
 
@@ -8,7 +9,8 @@ import { AdapterError } from "@/lib/markets/types";
  */
 
 export type SignalDirection = "up" | "down" | "flat";
-export type SignalVerdict = "positive" | "negative" | "neutral";
+/** unknown = 수집 실패로 latest 자체가 없음(6개월 변화 없음과는 다름) */
+export type SignalVerdict = "positive" | "negative" | "neutral" | "unknown";
 
 export interface MacroPoint {
   date: string;
@@ -391,13 +393,15 @@ function toYoY(series: MacroPoint[]): MacroPoint[] {
 function valueAsOfMonthsAgo(series: MacroPoint[], months: number): MacroPoint | null {
   const last = series.at(-1);
   if (!last) return null;
-  const cutoff = new Date(last.date);
-  cutoff.setMonth(cutoff.getMonth() - months);
-  const iso = cutoff.toISOString().slice(0, 10);
+  const iso = subMonths(new Date(`${last.date}T00:00:00Z`), months).toISOString().slice(0, 10);
   for (let i = series.length - 1; i >= 0; i--) {
     if (series[i].date <= iso) return series[i];
   }
-  return series[0];
+  // series 전체가 cutoff 보다 짧으면(신규 시리즈 등) "N개월 전" 데이터가 아직
+  // 없다는 뜻 — series[0](최초값)을 대신 쓰면 "N개월 변화"가 실제로는 "전체
+  // 기간 변화"로 둔갑해 변화율이 과장됨. null 로 반환해 상위에서 change 를
+  // 계산하지 않게 한다 (2026-09 수정).
+  return null;
 }
 
 function pct(a: number, b: number): number | null {
@@ -444,6 +448,29 @@ function buildIndicator(spec: IndicatorSpec, rawSeries: MacroPoint[]): MacroIndi
 
   let verdict: SignalVerdict = "neutral";
   let verdictReason = "";
+  // latest 가 없으면(수집 실패 — fetchSeries 에러 또는 빈 시리즈) "6개월 변화
+  // 없음"이라는 중립 판정을 절대 내리지 않음 — 실패와 무변화는 다른 상태인데
+  // 구분 없이 같은 문구가 나가던 버그 수정 (2026-09).
+  if (!latest) {
+    return {
+      id: spec.id,
+      name: spec.name,
+      category: spec.category,
+      unit: spec.unit,
+      note: spec.note,
+      goodDirection: spec.goodDirection,
+      frequency: spec.frequency,
+      transform,
+      latest: null,
+      change6m: null,
+      change12m: null,
+      direction6m: "flat",
+      verdict: "unknown",
+      verdictReason: "데이터 없음 (수집 실패)",
+      guide: spec.guide ?? [],
+      series: [],
+    };
+  }
   if (spec.levelVerdict && latest) {
     const lv = spec.levelVerdict(latest.value, direction6m, {
       max: seriesMax,
@@ -512,7 +539,9 @@ export async function getMacroDashboard(): Promise<MacroDashboard> {
       try {
         const series = await fetchSeries(spec.id);
         return buildIndicator(spec, series);
-      } catch {
+      } catch (err) {
+        // 조용한 실패는 운영 중 감지가 불가능함 — 최소한 로그는 남김 (2026-09)
+        console.error(`FRED ${spec.id} 수집 실패:`, err instanceof Error ? err.message : err);
         return buildIndicator(spec, []);
       }
     }),
