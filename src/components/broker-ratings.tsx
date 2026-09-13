@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ExternalLink } from "lucide-react";
 import { apiFetch } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
@@ -12,7 +12,25 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChangePercent, stockDirClass } from "@/components/num";
 
-const PAGE = 10;
+/** 개요에 노출할 최대 건수. 그 이상은 원본 사이트 링크로 넘긴다(오너 지시). */
+const OVERVIEW_ROWS = 10;
+
+/** /api/markets/us/[symbol]/analyst-forecasts 응답 1건 (StockAnalysis 수집분). */
+interface AnalystForecast {
+  date: string;
+  analyst: string;
+  analystSlug: string | null;
+  firm: string;
+  rating: string;
+  ratingOld: string | null;
+  action: string;
+  priceTarget: number | null;
+  priceTargetOld: number | null;
+  currency: string;
+  stars: number | null;
+  successRate: number | null;
+  avgReturn: number | null;
+}
 
 /** Yahoo 등급 문자열 → 매수/중립/매도 3분류. 증권사마다 표현이 달라 소문자 포함 검사. */
 function gradeTone(grade: string | null): "buy" | "hold" | "sell" | null {
@@ -42,12 +60,53 @@ function actionLabel(action: string | null): { text: string; dir: 1 | -1 | 0 } {
   }
 }
 
-/** 목표주가 변경 방향. Yahoo priceTargetAction 이 비어도 prior/current 로 판정. */
-function targetDir(r: AnalystRating): 1 | -1 | 0 {
-  if (r.priceTarget == null || r.priorPriceTarget == null) return 0;
-  if (r.priceTarget > r.priorPriceTarget) return 1;
-  if (r.priceTarget < r.priorPriceTarget) return -1;
+/** StockAnalysis 의 영문 action → 화면 라벨. */
+function saActionLabel(action: string): { text: string; dir: 1 | -1 | 0 } {
+  const a = action.toLowerCase();
+  if (a.includes("upgrade")) return { text: "상향", dir: 1 };
+  if (a.includes("downgrade")) return { text: "하향", dir: -1 };
+  if (a.includes("initiate")) return { text: "신규", dir: 0 };
+  if (a.includes("reiterate")) return { text: "재확인", dir: 0 };
+  if (a.includes("maintain")) return { text: "유지", dir: 0 };
+  return { text: action || "-", dir: 0 };
+}
+
+/** 목표주가 변경 방향. 직전 목표주가가 없으면 "변경 없음"으로 본다. */
+function targetDir(now: number | null, prior: number | null): 1 | -1 | 0 {
+  if (now == null || prior == null) return 0;
+  if (now > prior) return 1;
+  if (now < prior) return -1;
   return 0;
+}
+
+function GradeBadge({ grade }: { grade: string | null }) {
+  const tone = gradeTone(grade);
+  return (
+    <span
+      className={cn(
+        "rounded-md px-1.5 py-0.5 text-xs font-medium",
+        tone === "buy" && "bg-up/10 text-up",
+        tone === "sell" && "bg-down/10 text-down",
+        tone === "hold" && "text-muted-foreground bg-muted",
+      )}
+    >
+      {grade || "-"}
+    </span>
+  );
+}
+
+function SourceLink({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[11px] font-normal"
+    >
+      {label}
+      <ExternalLink className="size-3" />
+    </a>
+  );
 }
 
 export function BrokerRatings({
@@ -59,8 +118,6 @@ export function BrokerRatings({
   symbol: string;
   yahoo?: string | null;
 }) {
-  const [expanded, setExpanded] = useState(false);
-
   // ConsensusPanel 과 동일한 queryKey → 캐시를 공유하므로 추가 요청이 없다.
   const q = useQuery({
     queryKey: ["consensus", market, symbol, yahoo],
@@ -74,12 +131,26 @@ export function BrokerRatings({
     staleTime: 30 * 60_000,
   });
 
+  // 개별 애널리스트 의견(StockAnalysis 수집분, 종목당 5건). 미수집 종목이면
+  // 빈 배열이 와서 Yahoo 증권사 단위 표로 폴백한다.
+  const saq = useQuery({
+    queryKey: ["analyst-forecasts", market, symbol],
+    queryFn: () =>
+      apiFetch<{ items: AnalystForecast[] }>(
+        `/api/markets/${market}/${encodeURIComponent(symbol)}/analyst-forecasts`,
+      ),
+    enabled: Boolean(symbol),
+    retry: false,
+    staleTime: 30 * 60_000,
+  });
+
   if (q.isLoading) return <Skeleton className="h-64 w-full" />;
   if (q.isError) return null; // 컨센서스 카드에서 이미 에러를 안내한다.
 
   const d = q.data;
   const ratings = d?.analystRatings ?? [];
-  if (ratings.length === 0) return null;
+  const forecasts = saq.data?.items ?? [];
+  if (ratings.length === 0 && forecasts.length === 0) return null;
 
   const price = d?.price ?? null;
   const currency = d?.currency ?? "USD";
@@ -87,59 +158,75 @@ export function BrokerRatings({
   const upside = (t: number | null) =>
     t != null && price != null && price !== 0 ? ((t - price) / price) * 100 : null;
 
-  const shown = expanded ? ratings.slice(0, 50) : ratings.slice(0, PAGE);
-  // 목표주가를 제시한 건만 "최근 투자의견" 표에 올린다 (Price Target 열이 핵심).
-  const withTarget = shown.filter((r) => r.priceTarget != null);
+  const changes = ratings.slice(0, OVERVIEW_ROWS);
+  // StockAnalysis 수집분이 없을 때만 Yahoo 로 "최근 투자의견"을 만든다
+  // (목표주가를 제시한 건만 — Price Target 열이 이 표의 핵심).
+  const yahooLatest = ratings.filter((r) => r.priceTarget != null).slice(0, OVERVIEW_ROWS);
+
+  const saSlug = symbol.toLowerCase().replace(/\./g, "-");
+  const saUrl = `https://stockanalysis.com/stocks/${saSlug}/forecast/`;
+  const yahooUrl = `https://finance.yahoo.com/quote/${encodeURIComponent(yahoo || symbol)}/analysis`;
 
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">
-          브로커 투자의견
-          <span className="text-muted-foreground ml-2 text-xs font-normal">
-            최근 {ratings.length.toLocaleString()}건 중 {shown.length}건 표시
-          </span>
-        </CardTitle>
+        <CardTitle className="text-sm">종목 투자의견</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* 최근 투자의견 — 목표주가·상승여력 포함 */}
-        {withTarget.length > 0 && (
+        {/* 최근 투자의견 — 애널리스트 개인 단위(StockAnalysis 수집분, 5건) */}
+        {forecasts.length > 0 ? (
           <div>
-            <h4 className="mb-2 text-xs font-semibold">최근 투자의견</h4>
+            <div className="mb-2 flex items-baseline justify-between gap-2">
+              <h4 className="text-xs font-semibold">최근 투자의견</h4>
+              <SourceLink href={saUrl} label="전체 보기" />
+            </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-sm">
+              <table className="w-full min-w-[720px] text-sm">
                 <thead>
                   <tr className="text-muted-foreground border-b">
+                    <th className="py-1.5 text-left font-medium">애널리스트</th>
                     <th className="py-1.5 text-left font-medium">증권사</th>
                     <th className="py-1.5 text-left font-medium">투자의견</th>
-                    <th className="py-1.5 text-left font-medium">액션</th>
+                    <th className="py-1.5 text-left font-medium">등급조정</th>
                     <th className="py-1.5 text-right font-medium">목표주가</th>
                     <th className="py-1.5 text-right font-medium">상승여력</th>
                     <th className="py-1.5 text-right font-medium">일자</th>
                   </tr>
                 </thead>
                 <tbody className="tnum">
-                  {withTarget.map((r, i) => {
-                    const tone = gradeTone(r.grade);
-                    const act = actionLabel(r.action);
-                    const tdir = targetDir(r);
+                  {forecasts.map((f, i) => {
+                    const act = saActionLabel(f.action);
+                    const tdir = targetDir(f.priceTarget, f.priceTargetOld);
                     return (
                       <tr
-                        key={`${r.date}-${r.firm}-${i}`}
+                        key={`${f.date}-${f.analystSlug ?? f.firm}`}
                         className={cn("border-b", i % 2 === 1 && "bg-muted/40")}
                       >
-                        <td className="py-1.5 pr-3 text-left font-medium">{r.firm}</td>
                         <td className="py-1.5 pr-3 text-left">
-                          <span
-                            className={cn(
-                              "rounded-md px-1.5 py-0.5 text-xs font-medium",
-                              tone === "buy" && "bg-up/10 text-up",
-                              tone === "sell" && "bg-down/10 text-down",
-                              tone === "hold" && "text-muted-foreground bg-muted",
+                          <div className="flex flex-col">
+                            {f.analystSlug ? (
+                              <a
+                                href={`https://stockanalysis.com/analysts/${f.analystSlug}/`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium hover:underline"
+                              >
+                                {f.analyst || "-"}
+                              </a>
+                            ) : (
+                              <span className="font-medium">{f.analyst || "-"}</span>
                             )}
-                          >
-                            {r.grade ?? "-"}
-                          </span>
+                            {f.stars != null && (
+                              <span className="text-muted-foreground text-[11px] whitespace-nowrap">
+                                ★ {f.stars.toFixed(1)}
+                                {f.successRate != null && ` · 적중 ${f.successRate.toFixed(0)}%`}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="text-muted-foreground py-1.5 pr-3 text-left">{f.firm}</td>
+                        <td className="py-1.5 pr-3 text-left">
+                          <GradeBadge grade={f.rating} />
                         </td>
                         <td
                           className={cn(
@@ -152,9 +239,9 @@ export function BrokerRatings({
                           {act.text}
                         </td>
                         <td className="py-1.5 text-right whitespace-nowrap">
-                          {r.priorPriceTarget != null && tdir !== 0 && (
+                          {tdir !== 0 && (
                             <span className="text-muted-foreground mr-1 text-xs">
-                              {money(r.priorPriceTarget)} →
+                              {money(f.priceTargetOld)} →
                             </span>
                           )}
                           <span
@@ -164,14 +251,14 @@ export function BrokerRatings({
                               tdir === -1 && stockDirClass(false, market),
                             )}
                           >
-                            {money(r.priceTarget)}
+                            {money(f.priceTarget)}
                           </span>
                         </td>
                         <td className="py-1.5 text-right">
-                          <ChangePercent value={upside(r.priceTarget)} market={market} />
+                          <ChangePercent value={upside(f.priceTarget)} market={market} />
                         </td>
                         <td className="text-muted-foreground py-1.5 text-right whitespace-nowrap">
-                          {r.date}
+                          {f.date}
                         </td>
                       </tr>
                     );
@@ -180,60 +267,132 @@ export function BrokerRatings({
               </table>
             </div>
           </div>
+        ) : (
+          yahooLatest.length > 0 && (
+            <div>
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <h4 className="text-xs font-semibold">최근 투자의견</h4>
+                <SourceLink href={yahooUrl} label="전체 보기" />
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] text-sm">
+                  <thead>
+                    <tr className="text-muted-foreground border-b">
+                      <th className="py-1.5 text-left font-medium">증권사</th>
+                      <th className="py-1.5 text-left font-medium">투자의견</th>
+                      <th className="py-1.5 text-left font-medium">등급조정</th>
+                      <th className="py-1.5 text-right font-medium">목표주가</th>
+                      <th className="py-1.5 text-right font-medium">상승여력</th>
+                      <th className="py-1.5 text-right font-medium">일자</th>
+                    </tr>
+                  </thead>
+                  <tbody className="tnum">
+                    {yahooLatest.map((r: AnalystRating, i) => {
+                      const act = actionLabel(r.action);
+                      const tdir = targetDir(r.priceTarget, r.priorPriceTarget);
+                      return (
+                        <tr
+                          key={`${r.date}-${r.firm}-${i}`}
+                          className={cn("border-b", i % 2 === 1 && "bg-muted/40")}
+                        >
+                          <td className="py-1.5 pr-3 text-left font-medium">{r.firm}</td>
+                          <td className="py-1.5 pr-3 text-left">
+                            <GradeBadge grade={r.grade} />
+                          </td>
+                          <td
+                            className={cn(
+                              "py-1.5 pr-3 text-left text-xs",
+                              act.dir === 1 && stockDirClass(true, market),
+                              act.dir === -1 && stockDirClass(false, market),
+                              act.dir === 0 && "text-muted-foreground",
+                            )}
+                          >
+                            {act.text}
+                          </td>
+                          <td className="py-1.5 text-right whitespace-nowrap">
+                            {tdir !== 0 && (
+                              <span className="text-muted-foreground mr-1 text-xs">
+                                {money(r.priorPriceTarget)} →
+                              </span>
+                            )}
+                            <span
+                              className={cn(
+                                "font-medium",
+                                tdir === 1 && stockDirClass(true, market),
+                                tdir === -1 && stockDirClass(false, market),
+                              )}
+                            >
+                              {money(r.priceTarget)}
+                            </span>
+                          </td>
+                          <td className="py-1.5 text-right">
+                            <ChangePercent value={upside(r.priceTarget)} market={market} />
+                          </td>
+                          <td className="text-muted-foreground py-1.5 text-right whitespace-nowrap">
+                            {r.date}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )
         )}
 
-        {/* 투자의견 변경 이력 */}
-        <div>
-          <h4 className="mb-2 text-xs font-semibold">투자의견 변경</h4>
-          <table className="w-full text-sm">
-            <tbody>
-              {shown.map((r, i) => {
-                const act = actionLabel(r.action);
-                return (
-                  <tr
-                    key={`ud-${r.date}-${r.firm}-${i}`}
-                    className={cn("border-b", i % 2 === 1 && "bg-muted/40")}
-                  >
-                    <td
-                      className={cn(
-                        "w-20 py-1.5 pl-2 text-left text-xs font-medium whitespace-nowrap",
-                        act.dir === 1 && stockDirClass(true, market),
-                        act.dir === -1 && stockDirClass(false, market),
-                        act.dir === 0 && "text-muted-foreground",
-                      )}
+        {/* 투자의견 변경 이력 (증권사 단위, Yahoo) */}
+        {changes.length > 0 && (
+          <div>
+            <div className="mb-2 flex items-baseline justify-between gap-2">
+              <h4 className="text-xs font-semibold">
+                투자의견 변경
+                <span className="text-muted-foreground ml-2 font-normal">
+                  최근 {changes.length}건
+                </span>
+              </h4>
+              <SourceLink href={yahooUrl} label="전체 보기" />
+            </div>
+            <table className="w-full text-sm">
+              <tbody>
+                {changes.map((r, i) => {
+                  const act = actionLabel(r.action);
+                  return (
+                    <tr
+                      key={`ud-${r.date}-${r.firm}-${i}`}
+                      className={cn("border-b", i % 2 === 1 && "bg-muted/40")}
                     >
-                      {act.text}
-                    </td>
-                    <td className="py-1.5 text-left">
-                      <span className="font-medium">{r.firm}</span>
-                      {(r.fromGrade || r.grade) && (
-                        <span className="text-muted-foreground">
-                          : {r.fromGrade ?? "-"} → {r.grade ?? "-"}
-                        </span>
-                      )}
-                    </td>
-                    <td className="text-muted-foreground tnum py-1.5 pr-2 text-right whitespace-nowrap">
-                      {r.date}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {ratings.length > PAGE && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-4"
-          >
-            {expanded ? "접기" : `더 보기 (최근 ${Math.min(ratings.length, 50)}건)`}
-          </button>
+                      <td
+                        className={cn(
+                          "w-20 py-1.5 pl-2 text-left text-xs font-medium whitespace-nowrap",
+                          act.dir === 1 && stockDirClass(true, market),
+                          act.dir === -1 && stockDirClass(false, market),
+                          act.dir === 0 && "text-muted-foreground",
+                        )}
+                      >
+                        {act.text}
+                      </td>
+                      <td className="py-1.5 text-left">
+                        <span className="font-medium">{r.firm}</span>
+                        {(r.fromGrade || r.grade) && (
+                          <span className="text-muted-foreground">
+                            : {r.fromGrade ?? "-"} → {r.grade ?? "-"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="text-muted-foreground tnum py-1.5 pr-2 text-right whitespace-nowrap">
+                        {r.date}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
 
         <p className="text-muted-foreground/70 text-[11px]">
-          출처: Yahoo Finance — 애널리스트 개인명·정확도는 제공되지 않아 증권사 단위로만 표시
+          출처: {forecasts.length > 0 ? "StockAnalysis.com · Yahoo Finance" : "Yahoo Finance"}
         </p>
       </CardContent>
     </Card>

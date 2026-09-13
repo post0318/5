@@ -78,7 +78,16 @@ npm run db:studio    # drizzle studio
 | L5 뉴스 | `yahoo-finance2` `search` / 규제기관 공시 + 딥링크 / Google 뉴스 RSS(제목·출처·링크, 무료 번역) | 인앱 목록 + 딥링크 |
 
 - **크롤링은 어떤 시나리오에서도 금지**: FnGuide(`robots.txt Disallow: /`),
-  stockanalysis·MarketScreener(ToS) → 딥링크만.
+  MarketScreener(ToS) → 딥링크만.
+  - **stockanalysis.com 은 2026-09 재검토 후 제한적으로 허용**(오너 승인).
+    기존 "ToS 위반" 판단이 실제 문구 확인 없이 내려진 것이었음 — 실측:
+    `robots.txt` 는 `/e/`·`/p/` 만 막고 `/stocks/*/forecast/` 는 허용,
+    ToS(`/terms-of-use/`)에는 크롤링·자동화·robot·spider 금지 조항이 아예
+    없고 *"It is not allowed to republish our content in full ... However,
+    you can use snippets of the content as long as you do not modify the
+    content and clearly state where you got it from"* 이라고 명시.
+    → **snippets + 출처 명시 + 하루 1회 + 종목당 5행**만 허용. 전체 목록·
+    본문·차트 재게시 금지. 상세는 아래 예외 항목 참고.
   - **예외 1건 (개인용, 오너 명시 승인)**: 외국인 코스피200 선물 순매수(투자자별
     거래실적)는 어떤 공식 무료 API에도 없고(KRX OPEN API·KIS 확인), KRX 정보데이터
     시스템 화면은 로그인 필수 + Vercel IP 차단. **로컬 전용 스크립트**
@@ -285,6 +294,24 @@ npm run db:studio    # drizzle studio
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
+    - **StockAnalysis.com 개별 애널리스트 투자의견 추가(오너 승인, 2026-09)**:
+      Yahoo `upgradeDowngradeHistory` 는 증권사(firm)까지만 주고 애널리스트
+      개인명·정확도는 유료 데이터라 안 나온다. stockanalysis.com 의 종목별
+      Forecast 화면("Latest Forecasts")에는 애널리스트명·소속·등급·액션·
+      목표주가(직전→현재)·별점·적중률이 다 들어있고, SvelteKit 사이트라
+      HTML 파싱 없이 데이터 엔드포인트를 그대로 쓴다:
+      `/stocks/{ticker}/forecast/__data.json?x-sveltekit-invalidated=001`
+      (로그인 불필요, devalue 평탄화 배열이라 unflatten 필요, `ratings` 키에
+      정확히 상위 5건). 위 정책 항목대로 robots.txt·ToS 모두 이 용도를 막지
+      않는다 — 지금까지의 예외들(대부분 `Disallow: /`)보다 근거가 깨끗한 편.
+      **로컬 스크립트** (`scripts/collect-analyst-forecasts.mjs`, GitHub
+      Actions `.github/workflows/analyst-forecasts.yml`, 하루 1회)가 유니버스의
+      미국 종목을 돌며 종목당 5건만 모아 `/api/cron/analyst-forecasts` 로 POST
+      → MongoDB(`analyst_forecasts`). 종목 단위 **스냅샷 교체**(누적 아님 —
+      5건에서 밀려난 옛 항목이 쌓이지 않게). 종목당 1요청·2초 간격.
+      화면(`BrokerRatings`)은 "출처: StockAnalysis.com" 을 명시하고, 수집 전
+      종목은 Yahoo 증권사 단위 표로 폴백한다. 앱 배포본은 DB 조회만
+      (`/api/markets/us/[symbol]/analyst-forecasts`).
     - **로그인이 필요한 증권사는 이 프로젝트 방식 대상이 아님**: 실거래
       계좌 자격증명을 자동화 스크립트/CI 시크릿에 두는 것은 지금까지의
       "공개 페이지 개인용 크롤링" 예외와 성격이 전혀 다른(데이터센터 IP
