@@ -394,7 +394,7 @@ const CANDLE_MAX_YEARS = 3;
 
 function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => void }) {
   const [years, setYears] = useState<(typeof CHART_YEARS)[number]>(0.25); // 기본 3개월
-  const [chartType, setChartType] = useState<"line" | "candle">("line");
+  const [chartType, setChartType] = useState<"line" | "candle">("candle");
   const q = useQuery({
     queryKey: ["index-chart", idxKey, years],
     queryFn: () => apiFetch<IndexChartResp>(`/api/macro/index-chart/${idxKey}?y=${years}`),
