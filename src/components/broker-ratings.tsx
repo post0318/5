@@ -254,8 +254,9 @@ export function BrokerRatings({
                   {/* 애널리스트는 줄이고 증권사는 이름이 한 줄에 들어가게 넓힌다
                       (오너 지시 — "Bank of America Securities" 기준).
                       나머지 9개 수치 열은 같은 폭. 모바일에서는 증권사·적중률·
-                      순위·현종목적중률·현종목수익률 열을 숨긴다(오너 지시) —
-                      <col> 자체도 숨겨야 그 만큼의 폭이 빈 공간으로 안 남는다. */}
+                      순위·상승여력·현종목적중률·현종목수익률 열을 숨긴다
+                      (오너 지시) — <col> 자체도 숨겨야 그 만큼의 폭이 빈
+                      공간으로 안 남는다. */}
                   <col style={{ width: "18%" }} />
                   <col className="hidden sm:table-column" style={{ width: "13%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
@@ -263,7 +264,7 @@ export function BrokerRatings({
                   <col style={{ width: "7.78%" }} />
                   <col style={{ width: "7.78%" }} />
                   <col style={{ width: "7.78%" }} />
-                  <col style={{ width: "7.78%" }} />
+                  <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col style={{ width: "7.78%" }} />
@@ -283,7 +284,9 @@ export function BrokerRatings({
                     <th className="py-1.5 text-center align-bottom font-medium">투자의견</th>
                     <th className="py-1.5 text-center align-bottom font-medium">등급조정</th>
                     <th className="py-1.5 text-center align-bottom font-medium">목표주가</th>
-                    <th className="py-1.5 text-center align-bottom font-medium">상승여력</th>
+                    <th className="hidden py-1.5 text-center align-bottom font-medium sm:table-cell">
+                      상승여력
+                    </th>
                     <th className="hidden py-1.5 text-center align-bottom font-medium sm:table-cell">
                       현종목
                       <br />
@@ -369,7 +372,7 @@ export function BrokerRatings({
                             {money(f.priceTarget)}
                           </span>
                         </td>
-                        <td className="py-1.5 text-right">
+                        <td className="hidden py-1.5 text-right sm:table-cell">
                           <ChangePercent value={upside(f.priceTarget)} market={market} />
                         </td>
                         <td className="hidden py-1.5 pl-3 text-right sm:table-cell">
