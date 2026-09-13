@@ -118,11 +118,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </header>
 
       <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6">{children}</main>
-
-      <footer className="text-muted-foreground border-t px-4 py-4 text-center text-xs">
-        개인용 리서치 도구 · 시세 EOD · 포워드 컨센서스는 yahoo-finance2(개인용) ·
-        확장 시 데이터 소스 재검토 필요 (prd.md §4.3)
-      </footer>
     </div>
   );
 }
