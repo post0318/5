@@ -253,6 +253,15 @@ async function fetchGoogleOverseasNews(
   const requireWhitelist = opts?.requireWhitelist ?? false;
   const items: Omit<NewsItem, "titleKo">[] = [];
   for (const n of raw) {
+    // Google 뉴스 RSS는 hl=en-US 로 요청해도 질의어가 우연히 일치하면 국내
+    // 한국어 매체(예: 서울경제) 기사를 섞어 보낼 때가 있다(실측, 2026-09 —
+    // 오너 지적: 해외뉴스란에 서울경제 기사가 떠 있고 번역도 안 돼 있었음).
+    // LLM 관련성 판정은 "이 회사 얘기인가"만 보지 "국내 매체인가"는 안 보므로
+    // 여기서 원천 차단 — 안 그러면 이미 한국어인 제목을 sl="en" 으로 잘못
+    // 번역 시도해(구글·MyMemory 둘 다 동일 텍스트 반환) "번역 안 된 것처럼"
+    // 보이는 원문 그대로 노출된다.
+    if (n.sourceDomain && KR_PUBLISHER_BY_DOMAIN[n.sourceDomain]) continue;
+    if (DOMESTIC_PUBLISHERS.has(n.source)) continue;
     const mapped = n.sourceDomain ? OVERSEAS_PUBLISHER_BY_DOMAIN[n.sourceDomain] : undefined;
     // 종목뉴스 탭은 LLM 관련성 판정이 신뢰도까지 함께 보므로 화이트리스트 밖
     // 매체도 표시용 이름을 그대로 써서 통과시킨다(requireWhitelist 기본 false).

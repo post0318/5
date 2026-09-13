@@ -11,6 +11,44 @@ import "server-only";
 
 const REQ_TIMEOUT_MS = 3500;
 
+/**
+ * 성공한 번역 결과 메모이즈(2026-09, 오너 지적 — "거시경제 해외뉴스에 번역이
+ * 안 된 게 있다"). 원인: translateTitles 는 라우트 1회 호출당 동시성 5·전체
+ * 7초 예산 안에서만 번역을 시도하고 예산을 넘기면 원문 그대로 둔다(라우트
+ * 전체가 느려지는 것 방지 목적, 의도된 동작) — 그런데 거시경제 해외뉴스는
+ * 후보가 최대 30건(야후 3개 주제어 + 구글 뉴스 RSS 합산)까지 늘어나 동시성
+ * 5개로는 예산 안에 다 처리 못 하는 경우가 실측으로 확인됨. RSS 원본은
+ * 15분 캐시(googleNews.ts)라 같은 기사가 여러 번 재조회되는데, 캐시가 없으면
+ * 이전에 성공한 번역까지 매번 처음부터 다시 시도해(불필요한 API 호출 반복,
+ * 무료 엔드포인트 레이트리밋 위험 증가) 실패 확률만 계속 유지된다. 이 메모리
+ * 캐시는 한 번 성공한 번역은 24시간 재사용해 다음 요청부터 그 항목은 예산을
+ * 안 쓰고, 남은 예산을 아직 못 번역한 새 항목에 더 쓸 수 있게 한다(실패는
+ * 캐시하지 않음 — 다음 요청에서 다시 시도, 대부분 일시적 오류라 재시도가
+ * 안전). 서버리스 인스턴스 재시작 시 초기화되지만(Fluid Compute 는 인스턴스
+ * 재사용이 잦아 실무상 효과 있음), 인스턴스가 살아있는 동안은 계속 누적.
+ */
+const CACHE_TTL_MS = 24 * 3600_000;
+const CACHE_MAX = 2000;
+const translationCache = new Map<string, { ko: string; ok: boolean; at: number }>();
+
+function cacheGet(key: string): { ko: string; ok: boolean } | null {
+  const e = translationCache.get(key);
+  if (!e) return null;
+  if (Date.now() - e.at > CACHE_TTL_MS) {
+    translationCache.delete(key);
+    return null;
+  }
+  return e;
+}
+
+function cacheSet(key: string, ko: string, ok: boolean) {
+  if (translationCache.size >= CACHE_MAX) {
+    const oldest = translationCache.keys().next().value;
+    if (oldest !== undefined) translationCache.delete(oldest);
+  }
+  translationCache.set(key, { ko, ok, at: Date.now() });
+}
+
 async function viaGoogle(text: string, sl: string, tl = "ko"): Promise<string | null> {
   try {
     const url =
@@ -79,18 +117,33 @@ export async function translateChecked(
   sl: "en" | "ja" | "ko",
 ): Promise<{ ko: string | null; ok: boolean }> {
   if (sl === "ko") return { ko: src, ok: true };
+  const cacheKey = `${sl}:${src}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
   // 1) Google 시도 + 성공 시에만 왕복검증(영어권 위주. dice 계수는 알파벳 기준이라
   //    일본어 역번역 검증엔 약함 — 실패해도 원문 노출이라 안전)
   const gk = await viaGoogle(src, sl, "ko");
   if (gk && gk.trim() !== src.trim()) {
-    if (sl !== "en") return { ko: gk, ok: true };
+    if (sl !== "en") {
+      cacheSet(cacheKey, gk, true);
+      return { ko: gk, ok: true };
+    }
     const back = await viaGoogle(gk, "ko", sl);
-    if (!back) return { ko: gk, ok: true };
-    return { ko: gk, ok: dice(contentWords(back), contentWords(src)) >= 0.3 };
+    if (!back) {
+      cacheSet(cacheKey, gk, true);
+      return { ko: gk, ok: true };
+    }
+    const ok = dice(contentWords(back), contentWords(src)) >= 0.3;
+    cacheSet(cacheKey, gk, ok);
+    return { ko: gk, ok };
   }
   // 2) Google 실패/미번역 → MyMemory 폴백 (왕복검증 생략)
   const mk = await viaMyMemory(src, sl);
-  if (mk && mk.trim() !== src.trim()) return { ko: mk, ok: true };
+  if (mk && mk.trim() !== src.trim()) {
+    cacheSet(cacheKey, mk, true);
+    return { ko: mk, ok: true };
+  }
+  // 실패는 캐시하지 않음 — 다음 요청에서 재시도(대부분 일시적 오류).
   return { ko: null, ok: false };
 }
 
