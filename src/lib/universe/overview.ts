@@ -118,7 +118,11 @@ export async function refreshUniverseOverview(market?: MarketId): Promise<{
   rows: UniverseOverviewDoc[];
 }> {
   const items = await listUniverse({ market, activeOnly: true });
-  const rows = await mapWithConcurrency(items, 8, computeDoc);
+  // 종목당 여러 외부 API를 호출해서(프로필·시세·재무·컨센서스 등) 동시성이
+  // 낮으면 전체 새로고침이 라우트의 maxDuration(60초)을 넘겨 중간에 끊길 수
+  // 있다(오너 확인 — 새로고침 클릭해도 반영 안 되던 문제). 동시성을 올려
+  // 전체 라운드 수를 줄인다.
+  const rows = await mapWithConcurrency(items, 20, computeDoc);
   await writeOverview(rows);
   if (!market) {
     await pruneOverview(rows.map((r) => r._id));
