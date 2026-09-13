@@ -21,6 +21,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+      # 수집 스크립트가 pdf-parse 를 import 한다 — 설치 단계가 없으면
+      # ERR_MODULE_NOT_FOUND 로 죽는다(실측, 2026-09).
+      - run: npm ci
       - run: node scripts/collect-yuanta-research.mjs
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
