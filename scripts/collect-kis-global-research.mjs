@@ -12,6 +12,13 @@
  * 고른다. 요약에 "매수 의견과 목표주가 92달러"처럼 등급/목표가가 문장으로
  * 들어있는 경우가 많아 공용 추출기(lib/us-research-extract.mjs)로 뽑는다.
  *
+ * 산업분석/투자전략(2026-09 추가, 오너 지시 — "미국도 산업분석을 하려면
+ * 역시 해외를 읽어라"): 목록 항목의 "head" 라벨이 "스티펠 산업분석"·
+ * "국태해통증권 산업분석"처럼 "산업분석"으로 끝나는 행은 종목이 아니라
+ * 업종 리포트("업종명:헤드라인" 형식, 예: "에너지 & 전력:E&P/미드스트림
+ * 분석 개시...")인데 지금까지 통째로 버려지고 있었다. `category:"산업"`
+ * 으로 별도 수집(symbol 항상 null, 목표주가·투자의견 추출은 건너뜀).
+ *
  * PDF 는 로그인이 필요해(국내 수집기와 동일) 상세 페이지 URL 을 대신 연결한다.
  *
  * -- 실행 --
@@ -110,13 +117,30 @@ function parseItems(html) {
     const summaryM = chunk.match(/<span class="body_sub">\s*([\s\S]*?)\s*<\/span>/);
     const analystM = chunk.match(/<em>([^<]*)<\/em>\s*<em>([\d.]+)<\/em>/);
     const headM = chunk.match(/<div class="head[^"]*">\s*([^<]+?)\s*<\/div>/);
-    if (headM && /산업분석/.test(headM[1])) continue; // 종목 없는 산업 리포트
     if (!idM || !titleM || !analystM) continue;
-    const tm = titleM[1].match(TITLE_RE);
-    if (!tm) continue; // 종목코드 없는 산업/섹터 리포트 — 건너뜀
-    const [, code, headline] = tm;
     const date = isoDate(analystM[2]);
     if (!date) continue;
+    if (headM && /산업분석/.test(headM[1])) {
+      // 종목 없는 업종 리포트 — "업종명:헤드라인" 형식.
+      const sm = titleM[1].match(/^([^:：]+)[:：]\s*(.+)$/);
+      items.push({
+        id: idM[1],
+        date,
+        title: sm ? sm[2].trim() : titleM[1].trim(),
+        stockName: sm ? sm[1].trim() : titleM[1].trim(),
+        symbolHint: null,
+        analyst: analystM[1].trim(),
+        opinion: "",
+        targetPrice: null,
+        summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
+        detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
+        category: "산업",
+      });
+      continue;
+    }
+    const tm = titleM[1].match(TITLE_RE);
+    if (!tm) continue; // 종목코드 없는 리포트(USA 외 시장 등) — 건너뜀
+    const [, code, headline] = tm;
     items.push({
       id: idM[1],
       date,
@@ -126,6 +150,7 @@ function parseItems(html) {
       analyst: analystM[1].trim(),
       summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
       detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
+      category: "기업",
     });
   }
   return items;
@@ -165,13 +190,15 @@ console.log(
 );
 console.log(`▶ 투자의견/목표주가 조회 중 (${collected.length}건)...`);
 for (const it of collected) {
+  // 산업분석은 특정 종목 얘기가 아니므로 투자의견·목표주가 개념이 없음.
+  if (it.category === "산업") continue;
   const { opinion, targetPrice } = await fetchOpinionAndTarget(it.detailUrl);
   it.opinion = opinion;
   it.targetPrice = targetPrice;
   await sleep(400);
 }
 // 한투 PDF 는 로그인이 필요해 pdfUrl 이 상세 페이지 URL 이다 — PDF 단계는 끈다.
-await enrichUsResearch(collected, { sleepMs: 0, usePdf: false });
+await enrichUsResearch(collected.filter((it) => it.category !== "산업"), { sleepMs: 0, usePdf: false });
 console.log("  예시:", collected[0] && `${collected[0].opinion || "(없음)"} / ${collected[0].targetPrice ?? "(없음)"}`);
 
 if (DRY_RUN) {
@@ -183,7 +210,7 @@ const items = collected.map((it) => ({
   id: it.id,
   date: it.date,
   title: it.title,
-  stockName: nameByCode.get(it.symbolHint) ?? it.symbolHint,
+  stockName: it.symbolHint ? (nameByCode.get(it.symbolHint) ?? it.symbolHint) : it.stockName,
   symbol: it.symbolHint,
   analyst: it.analyst,
   opinion: it.opinion,
@@ -191,6 +218,7 @@ const items = collected.map((it) => ({
   summary: it.summary,
   pdfUrl: it.detailUrl,
   views: null,
+  category: it.category,
 }));
 
 const headers = { "Content-Type": "application/json" };

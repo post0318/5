@@ -13,6 +13,13 @@
  *    (미국 산업/기업 140건, 미국 전략 115건, 중국/일본/인디아 등은 제외).
  *  - recomm/tp 가 비어있는 경우가 많아 공용 추출기로 본문/PDF 를 보강한다.
  *
+ * 산업분석/투자전략(2026-09 추가, 오너 지시 — "미국도 산업분석을 하려면
+ * 역시 해외를 읽어라"): "미국" 폴더 안에서도 티커가 없는 항목("KB Global
+ * Tracker+", "Global Insights", "US Market Pulse" 등, docTitle=시리즈명·
+ * docTitleSub=실제 헤드라인)은 지금까지 통째로 버려지고 있었다(실측: 미국
+ * 폴더 89건 중 63건). `category:"산업"`으로 별도 수집(symbol 항상 null,
+ * 목표주가·투자의견 추출은 건너뜀).
+ *
  * PDF 는 로그인 없이 받아진다(국내 수집기와 동일, rdata.kbsec.com).
  *
  * -- 실행 --
@@ -52,7 +59,6 @@ const UA =
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const AJAX_URL = "https://www.kbsec.com/go.able?linkcd=s040203010001";
-const TITLE_RE = /^(.+?)\s*\((\d{6})\)$/;
 
 const EXCERPT_LEN = 150;
 function isMetaLine(l) {
@@ -155,23 +161,41 @@ const collected = [];
 for (const r of rows) {
   // 중국/일본/인디아 리포트가 같은 탭에 섞여 있어 폴더로 미국만 고른다.
   if (!/미국/.test(String(r.foldertemplate ?? ""))) continue;
-  // 제목 "AI 실적속보: 어도비 (ADBE US)" 에서 티커를 뽑는다(종목코드 필드는 ISIN).
-  const tm = String(r.docTitle ?? "").trim().match(/\(([A-Z][A-Z.]{0,5})\s+US\)/);
-  if (!tm) continue; // 종목 없는 전략/기타발간 리포트 — 건너뜀
   const date = r.publicDate;
   if (!date || new Date(date) < cutoff) continue;
+  // 제목 "AI 실적속보: 어도비 (ADBE US)" 에서 티커를 뽑는다(종목코드 필드는 ISIN).
+  const tm = String(r.docTitle ?? "").trim().match(/\(([A-Z][A-Z.]{0,5})\s+US\)/);
+  if (tm) {
+    collected.push({
+      id: r.documentid,
+      date,
+      title: (r.docTitleSub || r.docTitle || "").trim(),
+      stockName: String(r.docTitle ?? "").split("(")[0].replace(/^[^:]*:\s*/, "").trim(),
+      symbol: tm[1],
+      analyst: r.analystNm ?? "",
+      opinion: r.recomm ?? "",
+      targetPrice: parseTargetPrice(r.tp),
+      summary: "",
+      pdfUrl: r.urlLink || null,
+      views: null,
+      category: "기업",
+    });
+    continue;
+  }
+  // 종목 없는 전략/기타발간 리포트 — 산업분석/투자전략으로 수집.
   collected.push({
     id: r.documentid,
     date,
     title: (r.docTitleSub || r.docTitle || "").trim(),
-    stockName: String(r.docTitle ?? "").split("(")[0].replace(/^[^:]*:\s*/, "").trim(),
-    symbol: tm[1],
+    stockName: String(r.docTitle ?? "").trim() || "산업",
+    symbol: null,
     analyst: r.analystNm ?? "",
-    opinion: r.recomm ?? "",
-    targetPrice: parseTargetPrice(r.tp),
+    opinion: "",
+    targetPrice: null,
     summary: "",
     pdfUrl: r.urlLink || null,
     views: null,
+    category: "산업",
   });
 }
 
@@ -180,7 +204,9 @@ if (collected.length === 0) {
   process.exit(1);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
-await enrichUsResearch(collected);
+// 산업분석/투자전략은 특정 종목 얘기가 아니므로 목표주가·투자의견 개념이
+// 없음 — PDF에 우연히 등장하는 숫자를 잘못 채우지 않게 기업(종목) 항목만 보강.
+await enrichUsResearch(collected.filter((it) => it.category === "기업"));
 console.log(
   "  최근 5건:",
   collected.slice(0, 5).map((i) => `${i.date} ${i.stockName}(${i.symbol}) — ${i.title}`),
