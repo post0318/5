@@ -180,61 +180,6 @@ function SourceLink({ href, label }: { href: string; label: string }) {
   );
 }
 
-/** 증권사 단위 집계 — 같은 증권사에 애널리스트가 여러 명이면 평균낸다. */
-interface FirmRow {
-  firm: string;
-  analysts: number;
-  score: number | null;
-  successRate: number | null;
-  /** 소속 애널리스트 중 가장 높은(=숫자가 작은) 순위. */
-  bestRank: number | null;
-  rankedExperts: number | null;
-  stockSuccessRate: number | null;
-  stockAvgReturn: number | null;
-  rating: string;
-  priceTarget: number | null;
-  date: string;
-}
-
-function avg(values: (number | null)[]): number | null {
-  const nums = values.filter((v): v is number => v != null);
-  return nums.length === 0 ? null : nums.reduce((a, b) => a + b, 0) / nums.length;
-}
-
-function byFirm(forecasts: AnalystForecast[]): FirmRow[] {
-  const groups = new Map<string, AnalystForecast[]>();
-  for (const f of forecasts) {
-    const key = f.firm.toLowerCase();
-    const list = groups.get(key);
-    if (list) list.push(f);
-    else groups.set(key, [f]);
-  }
-  const rows: FirmRow[] = [];
-  for (const list of groups.values()) {
-    // forecasts 는 최신순 → 첫 항목이 그 증권사의 최신 의견.
-    const latest = list[0];
-    rows.push({
-      firm: latest.firm,
-      analysts: list.length,
-      score: avg(list.map((f) => f.score)),
-      successRate: avg(list.map((f) => f.successRate)),
-      // 순위는 평균이 의미 없어(등수 평균은 해석이 애매) 최고 순위를 쓴다.
-      bestRank: (() => {
-        const ranks = list.map((f) => f.analystRank).filter((v): v is number => v != null);
-        return ranks.length === 0 ? null : Math.min(...ranks);
-      })(),
-      rankedExperts: list.find((f) => f.rankedExperts != null)?.rankedExperts ?? null,
-      stockSuccessRate: avg(list.map((f) => f.stockSuccessRate)),
-      stockAvgReturn: avg(list.map((f) => f.stockAvgReturn)),
-      rating: latest.rating,
-      priceTarget: latest.priceTarget,
-      date: latest.date,
-    });
-  }
-  // Top Analysts 와 같은 정렬 — 점수 높은 순, 점수 없으면 뒤로.
-  return rows.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
-}
-
 export function BrokerRatings({
   market,
   symbol,
@@ -288,13 +233,10 @@ export function BrokerRatings({
   // StockAnalysis 수집분이 없을 때만 Yahoo 로 "최근 투자의견"을 만든다
   // (목표주가를 제시한 건만 — Price Target 열이 이 표의 핵심).
   const yahooLatest = ratings.filter((r) => r.priceTarget != null).slice(0, OVERVIEW_ROWS);
-  const firms = byFirm(forecasts);
   // 전체 애널리스트 수는 StockAnalysis 쪽에서 계속 늘어나므로 하드코딩하지 않고
   // 수집분에서 읽어 주석에 쓴다.
   const rankedExperts = forecasts.find((f) => f.rankedExperts != null)?.rankedExperts ?? null;
 
-  const saSlug = symbol.toLowerCase().replace(/\./g, "-");
-  const saUrl = `https://stockanalysis.com/stocks/${saSlug}/forecast/`;
   const yahooUrl = `https://finance.yahoo.com/quote/${encodeURIComponent(yahoo || symbol)}/analysis`;
 
   return (
@@ -508,82 +450,6 @@ export function BrokerRatings({
               </div>
             </div>
           )
-        )}
-
-        {/* 증권사별 점수 — StockAnalysis 의 Top Analysts 는 Pro 전용이라, 수집한
-            애널리스트를 증권사로 묶어 같은 읽는 법(점수 높은 순)으로 재구성한다. */}
-        {firms.length > 0 && (
-          <div>
-            <div className="mb-2 flex items-baseline justify-between gap-2">
-              <h4 className="text-xs font-semibold">
-                증권사별 점수
-                <span className="text-muted-foreground ml-2 font-normal">{firms.length}개사</span>
-              </h4>
-              <SourceLink href={saUrl} label="전체 보기" />
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full table-fixed text-xs">
-                <thead>
-                  <tr className="text-muted-foreground border-b">
-                    <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
-                    <th className="py-1.5 text-center align-bottom font-medium">적중률</th>
-                    <th className="py-1.5 text-center align-bottom font-medium">순위</th>
-                    <th className="py-1.5 text-center align-bottom font-medium">투자의견</th>
-                    <th className="py-1.5 text-right align-bottom font-medium">목표주가</th>
-                    <th className="py-1.5 text-right align-bottom font-medium">상승여력</th>
-                    <th className="py-1.5 text-center align-bottom font-medium">
-                      현종목
-                      <br />
-                      적중률
-                    </th>
-                    <th className="py-1.5 text-center align-bottom font-medium">
-                      현종목
-                      <br />
-                      수익률
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="tnum">
-                  {firms.map((f, i) => (
-                    <tr
-                      key={f.firm}
-                      className={cn("border-b", i % 2 === 1 && "bg-muted/40")}
-                    >
-                      <td className="py-1.5 pr-3 text-left font-medium whitespace-nowrap">
-                        {f.firm}
-                        {f.analysts > 1 && (
-                          <span className="text-muted-foreground ml-1 text-[11px] font-normal">
-                            {f.analysts}명 평균
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-1.5 pr-3 pl-3 text-center">
-                        <ScoreBar value={f.score ?? f.successRate} />
-                      </td>
-                      <td className="py-1.5 text-right">
-                        <Rank rank={f.bestRank} />
-                      </td>
-                      <td className="py-1.5 pr-3 pl-3 text-center">
-                        <GradeBadge grade={f.rating} />
-                      </td>
-                      <td className="py-1.5 text-right font-medium whitespace-nowrap">
-                        {money(f.priceTarget)}
-                      </td>
-                      <td className="py-1.5 text-right">
-                        <ChangePercent value={upside(f.priceTarget)} market={market} />
-                      </td>
-                      <td className="py-1.5 pl-3 text-right">
-                        <Pct value={f.stockSuccessRate} />
-                      </td>
-                      <td className="py-1.5 pr-3 text-right">
-                        <ReturnPct value={f.stockAvgReturn} market={market} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
         )}
 
         {/* 투자의견 변경 이력 (증권사 단위, Yahoo) */}
