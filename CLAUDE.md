@@ -288,6 +288,20 @@ npm run db:studio    # drizzle studio
       승인. **로컬 스크립트** (`scripts/collect-kb-research.mjs`, GitHub
       Actions `.github/workflows/kb-research.yml`, 하루 1회)가 같은 라우트를
       `source: "KB증권"` 으로 재사용.
+      - **산업분석/투자전략 수집 추가(오너 지시, 2026-09)**: "종목분석 옆에
+        산업분석/투자전략 탭" 준비의 첫 단계 — 종목코드 없이 걸러지던 업종명
+        리포트("반도체"·"유틸리티" 등 docTitle 자체가 업종명)와 정기 전략
+        노트("대형주 추천종목"·"중소형주 추천종목"·"KB 리서치 모델
+        포트폴리오"·"Global ESG Brief"·"KB IPO Brief")를 더 이상 버리지 않고
+        `category:"산업"`으로 별도 수집한다(`docTitle`→`stockName`,
+        `docTitleSub`→`title`, `symbol`은 항상 null). 라우트
+        (`/api/cron/shinhan-research`)도 `category:"산업"`이면 이름 검색으로
+        종목코드를 추측하지 않도록 수정(업종명이 우연히 어떤 회사명과 부분
+        일치해 잘못 달라붙는 사고 방지). **미결**: 이 데이터를 화면에 어떤
+        종목 페이지에 매칭해 보여줄지(업종 분류 체계 필요)는 아직 미정 —
+        수집·저장까지만 우선 완료, 탭 UI·매칭 로직은 다음 과제. 다른 증권사
+        (한경 컨센서스 "산업" 분류, DS증권 `sub03_03` 투자전략 게시판 등)도
+        같은 방식으로 순차 확장 예정.
     - **GlobalMonitor(einfomax) 미국주식 리포트 추가(오너 확인, 2026-09)**:
       `globalmonitor.einfomax.co.kr` — 연합인포맥스가 운영하는 증권사 리서치
       통합 열람 서비스로, 키움·신한·유진·대신·한화·유안타·DB·현대차증권 등

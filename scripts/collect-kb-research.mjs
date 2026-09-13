@@ -14,9 +14,15 @@
  * 정확하다(오너 지적으로 확인, 2026-09). **PDF는 실측 결과 로그인 없이
  * 그대로 다운로드된다**(오너가 "kb는 pdf는 로그인해야하나 본문은
  * 가능하다"고 전달했던 것과 달리, 최소 "산업/기업" 게시판은 로그인 불필요로
- * 확인됨 — 필요시 재확인). 종목코드 없이 업종명만 있는 리포트(대표 종목코드가
- * 임의로 붙어있는 경우 포함, 예: "반도체"·"유틸리티" 제목에 삼성전자/한국전력
- * 코드가 딸려오는 경우)는 제목이 "종목명 (코드)" 패턴이 아니므로 걸러진다.
+ * 확인됨 — 필요시 재확인). 종목코드 없이 업종명·전략 노트만 있는 리포트
+ * ("반도체"·"유틸리티" 같은 업종명 자체가 docTitle 인 경우, "대형주 추천종목"·
+ * "KB 리서치 모델 포트폴리오" 같은 정기 전략 노트)는 제목이 "종목명 (코드)"
+ * 패턴이 아니라서 갈린다 — 2026-09부터는 이런 항목도 버리지 않고
+ * category:"산업"으로 별도 수집한다(오너 지시, "산업분석/투자전략" 탭 준비 —
+ * 수집기부터 구축). docTitle 을 업종/전략 이름(stockName 자리), docTitleSub
+ * 를 실제 헤드라인(title 자리)으로 저장하고 symbol 은 항상 null(라우트가
+ * category:"산업"이면 이름 검색을 아예 건너뛰므로 임의 종목에 잘못 붙을
+ * 위험 없음).
  *
  * ⚠️ www.kbsec.com, rdata.kbsec.com 모두 robots.txt 자체가 없음(404/302) —
  *    지금까지 중 가장 깨끗한 케이스. 그래도 다른 예외들과 동일하게
@@ -171,23 +177,42 @@ const rows = await fetchList();
 
 const collected = [];
 for (const r of rows) {
-  const tm = String(r.docTitle ?? "").trim().match(TITLE_RE);
-  if (!tm) continue; // 업종 리포트(종목코드 없음, 또는 대표코드만 딸려있음) — 건너뜀
   const date = r.publicDate;
   if (!date || new Date(date) < cutoff) continue;
-  collected.push({
-    id: r.documentid,
-    date,
-    title: (r.docTitleSub || tm[1]).trim(),
-    stockName: tm[1].trim(),
-    symbol: tm[2],
-    analyst: r.analystNm ?? "",
-    opinion: r.recomm ?? "",
-    targetPrice: parseTargetPrice(r.tp),
-    summary: "",
-    pdfUrl: r.urlLink || null,
-    views: null,
-  });
+  const docTitle = String(r.docTitle ?? "").trim();
+  const tm = docTitle.match(TITLE_RE);
+  if (tm) {
+    collected.push({
+      id: r.documentid,
+      date,
+      title: (r.docTitleSub || tm[1]).trim(),
+      stockName: tm[1].trim(),
+      symbol: tm[2],
+      analyst: r.analystNm ?? "",
+      opinion: r.recomm ?? "",
+      targetPrice: parseTargetPrice(r.tp),
+      summary: "",
+      pdfUrl: r.urlLink || null,
+      views: null,
+      category: "기업",
+    });
+  } else if (docTitle) {
+    // 업종명("반도체" 등)·정기 전략 노트("대형주 추천종목" 등) — 종목코드 없음.
+    collected.push({
+      id: r.documentid,
+      date,
+      title: (r.docTitleSub || docTitle).trim(),
+      stockName: docTitle,
+      symbol: null,
+      analyst: r.analystNm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.urlLink || null,
+      views: null,
+      category: "산업",
+    });
+  }
 }
 
 if (collected.length === 0) {

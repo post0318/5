@@ -73,7 +73,13 @@ export async function POST(req: Request) {
       date: it.date,
       title: it.title,
       stockName: it.stockName,
-      symbol: it.symbol ?? (market === "kr" ? resolveSymbol(it.stockName) : null),
+      // 산업분석 리포트는 stockName 이 업종명("반도체" 등)이라 이름 검색으로
+      // 종목코드를 추측하면 안 됨(예: "반도체"가 우연히 어떤 회사명과 부분
+      // 일치해 잘못된 종목에 달라붙을 위험) — 카테고리로 아예 이름 검색을 건너뜀.
+      symbol:
+        it.category === "산업"
+          ? null
+          : (it.symbol ?? (market === "kr" ? resolveSymbol(it.stockName) : null)),
       analyst: it.analyst,
       opinion: it.opinion,
       targetPrice: it.targetPrice ?? null,
