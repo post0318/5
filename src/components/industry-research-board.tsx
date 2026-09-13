@@ -90,10 +90,6 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
     <div className="space-y-3">
       <div>
         <h1 className="text-xl font-semibold">산업분석·투자전략</h1>
-        <p className="text-muted-foreground mt-1 text-xs">
-          특정 종목이 아니라 업종·시장 전반을 다루는 증권사 리포트입니다. 개인용 참고자료 —
-          투자 판단의 근거로 쓰지 마세요.
-        </p>
       </div>
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
