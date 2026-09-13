@@ -316,14 +316,6 @@ export function BrokerRatings({
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1100px] text-sm">
                 <thead>
-                  <tr className="text-muted-foreground/70 border-b text-[11px]">
-                    <th className="pb-0.5" colSpan={2} />
-                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={3}>
-                      전체 실적
-                    </th>
-                    <th className="border-l pb-0.5" colSpan={2} />
-                    <th className="border-l pb-0.5" colSpan={5} />
-                  </tr>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left align-bottom font-medium">애널리스트</th>
                     <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
@@ -539,14 +531,6 @@ export function BrokerRatings({
             <div className="overflow-x-auto">
               <table className="w-full min-w-[820px] text-sm">
                 <thead>
-                  <tr className="text-muted-foreground/70 border-b text-[11px]">
-                    <th className="pb-0.5" />
-                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={3}>
-                      전체 실적
-                    </th>
-                    <th className="border-l pb-0.5" colSpan={2} />
-                    <th className="border-l pb-0.5" colSpan={3} />
-                  </tr>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
                     <th className="border-l py-1.5 pl-3 text-left align-bottom font-medium">적중률</th>
