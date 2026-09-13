@@ -306,7 +306,6 @@ export function BrokerRatings({
         {/* 최근 투자의견 — 애널리스트 개인 단위(StockAnalysis 수집분, 최대 8건) */}
         {forecasts.length > 0 ? (
           <div>
-            <h4 className="mb-2 text-xs font-semibold">최근 투자의견</h4>
             <div className="overflow-x-auto">
               <table className="w-full table-fixed text-xs">
                 <colgroup>
@@ -321,14 +320,24 @@ export function BrokerRatings({
                 </colgroup>
                 <thead>
                   <tr className="text-muted-foreground border-b">
-                    <th className="py-1.5 text-center align-bottom font-medium">애널리스트</th>
-                    <th className="py-1.5 text-center align-bottom font-medium">증권사</th>
-                    <th className="py-1.5 pl-3 text-center align-bottom font-medium">적중률</th>
+                    <th className="py-1.5 text-left align-bottom font-medium">애널리스트</th>
+                    <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">적중률</th>
                     <th className="py-1.5 text-center align-bottom font-medium">순위</th>
-                    <th className="py-1.5 pl-3 text-center font-medium">투자의견</th>
-                    <th className="py-1.5 text-center font-medium">등급조정</th>
-                    <th className="py-1.5 text-center font-medium">목표주가</th>
-                    <th className="py-1.5 text-center font-medium">상승여력</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">투자의견</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">등급조정</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">목표주가</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">상승여력</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">
+                      현종목
+                      <br />
+                      적중률
+                    </th>
+                    <th className="py-1.5 text-center align-bottom font-medium">
+                      현종목
+                      <br />
+                      수익률
+                    </th>
                     <th className="py-1.5 text-center align-bottom font-medium">
                       최근
                       <br />
@@ -405,10 +414,10 @@ export function BrokerRatings({
                         <td className="py-1.5 text-right">
                           <ChangePercent value={upside(f.priceTarget)} market={market} />
                         </td>
-                        <td className="bg-muted/50 py-1.5 pl-3 text-right">
+                        <td className="py-1.5 pl-3 text-right">
                           <Pct value={f.stockSuccessRate} />
                         </td>
-                        <td className="bg-muted/50 py-1.5 pr-3 text-right">
+                        <td className="py-1.5 pr-3 text-right">
                           <ReturnPct value={f.stockAvgReturn} market={market} />
                         </td>
                         <td className="text-muted-foreground py-1.5 text-right whitespace-nowrap">
@@ -437,29 +446,15 @@ export function BrokerRatings({
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[640px] text-sm">
                   <thead>
-                    <tr className="text-muted-foreground border-b">
-                      <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
-                      <th className="py-1.5 text-left font-medium">투자의견</th>
-                      <th className="py-1.5 text-left font-medium">등급조정</th>
-                      <th className="py-1.5 text-right font-medium">목표주가</th>
-                      <th className="py-1.5 text-right font-medium">상승여력</th>
-                    <th className="bg-muted/50 py-1.5 pl-3 text-center align-bottom font-medium">
-                      현종목
-                      <br />
-                      적중률
-                    </th>
-                    <th className="bg-muted/50 py-1.5 pr-3 text-center align-bottom font-medium">
-                      현종목
-                      <br />
-                      수익률
-                    </th>
-                      <th className="py-1.5 text-right align-bottom font-medium">
-                      최근
-                      <br />
-                      변경일자
-                    </th>
-                    </tr>
-                  </thead>
+                  <tr className="text-muted-foreground border-b">
+                    <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">투자의견</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">등급조정</th>
+                    <th className="py-1.5 text-right align-bottom font-medium">목표주가</th>
+                    <th className="py-1.5 text-right align-bottom font-medium">상승여력</th>
+                    <th className="py-1.5 text-right align-bottom font-medium">일자</th>
+                  </tr>
+                </thead>
                   <tbody className="tnum">
                     {yahooLatest.map((r: AnalystRating, i) => {
                       const act = actionLabel(r.action);
@@ -470,7 +465,7 @@ export function BrokerRatings({
                           className={cn("border-b", i % 2 === 1 && "bg-muted/40")}
                         >
                           <td className="py-1.5 pr-3 text-left font-medium">{r.firm}</td>
-                          <td className="py-1.5 pr-3 text-left">
+                          <td className="py-1.5 pr-3 text-center">
                             <GradeBadge grade={r.grade} />
                           </td>
                           <td
@@ -531,21 +526,21 @@ export function BrokerRatings({
                 <thead>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
-                    <th className="py-1.5 pl-3 text-left align-bottom font-medium">적중률</th>
-                    <th className="py-1.5 text-right align-bottom font-medium">순위</th>
-                    <th className="bg-muted/50 py-1.5 pl-3 text-right align-bottom font-medium">
+                    <th className="py-1.5 text-center align-bottom font-medium">적중률</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">순위</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">투자의견</th>
+                    <th className="py-1.5 text-right align-bottom font-medium">목표주가</th>
+                    <th className="py-1.5 text-right align-bottom font-medium">상승여력</th>
+                    <th className="py-1.5 text-center align-bottom font-medium">
                       현종목
                       <br />
                       적중률
                     </th>
-                    <th className="bg-muted/50 py-1.5 pr-3 text-right align-bottom font-medium">
+                    <th className="py-1.5 text-center align-bottom font-medium">
                       현종목
                       <br />
                       수익률
                     </th>
-                    <th className="py-1.5 pl-3 text-left font-medium">투자의견</th>
-                    <th className="py-1.5 text-right font-medium">목표주가</th>
-                    <th className="py-1.5 text-right font-medium">상승여력</th>
                   </tr>
                 </thead>
                 <tbody className="tnum">
@@ -577,10 +572,10 @@ export function BrokerRatings({
                       <td className="py-1.5 text-right">
                         <ChangePercent value={upside(f.priceTarget)} market={market} />
                       </td>
-                      <td className="bg-muted/50 py-1.5 pl-3 text-right">
+                      <td className="py-1.5 pl-3 text-right">
                         <Pct value={f.stockSuccessRate} />
                       </td>
-                      <td className="bg-muted/50 py-1.5 pr-3 text-right">
+                      <td className="py-1.5 pr-3 text-right">
                         <ReturnPct value={f.stockAvgReturn} market={market} />
                       </td>
                     </tr>
