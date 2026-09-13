@@ -30,7 +30,6 @@ interface AnalystForecast {
   score: number | null;
   stars: number | null;
   successRate: number | null;
-  avgReturn: number | null;
   analystRank: number | null;
   rankedExperts: number | null;
   totalRatings: number | null;
@@ -187,7 +186,6 @@ interface FirmRow {
   analysts: number;
   score: number | null;
   successRate: number | null;
-  avgReturn: number | null;
   /** 소속 애널리스트 중 가장 높은(=숫자가 작은) 순위. */
   bestRank: number | null;
   rankedExperts: number | null;
@@ -220,7 +218,6 @@ function byFirm(forecasts: AnalystForecast[]): FirmRow[] {
       analysts: list.length,
       score: avg(list.map((f) => f.score)),
       successRate: avg(list.map((f) => f.successRate)),
-      avgReturn: avg(list.map((f) => f.avgReturn)),
       // 순위는 평균이 의미 없어(등수 평균은 해석이 애매) 최고 순위를 쓴다.
       bestRank: (() => {
         const ranks = list.map((f) => f.analystRank).filter((v): v is number => v != null);
@@ -314,13 +311,23 @@ export function BrokerRatings({
               <SourceLink href={saUrl} label="전체 보기" />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1100px] text-sm">
+              <table className="w-full min-w-[1200px] table-fixed text-sm">
+                {/* 증권사~등급조정 8개 열은 같은 폭(7%)으로 고정(오너 지시).
+                    애널리스트는 이름+별점이 들어가 넓게, 목표주가·상승여력·
+                    일자는 값 길이에 맞춰 남는 폭을 배분. */}
+                <colgroup>
+                  {/* 애널리스트만 넓게(이름+별점), 증권사~최근변경일자 10개 열은
+                      모두 같은 폭으로 고정(오너 지시). */}
+                  <col style={{ width: "20%" }} />
+                  {Array.from({ length: 10 }, (_, i) => (
+                    <col key={i} style={{ width: "8%" }} />
+                  ))}
+                </colgroup>
                 <thead>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left align-bottom font-medium">애널리스트</th>
                     <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
                     <th className="border-l py-1.5 pl-3 text-left align-bottom font-medium">적중률</th>
-                    <th className="py-1.5 text-right font-medium">평균수익</th>
                     <th className="py-1.5 text-right align-bottom font-medium">순위</th>
                     <th className="border-l py-1.5 pl-3 text-right align-bottom font-medium">
                       현종목
@@ -373,14 +380,9 @@ export function BrokerRatings({
                             )}
                           </div>
                         </td>
-                        <td className="text-muted-foreground py-1.5 pr-3 text-left whitespace-nowrap">
-                          {f.firm}
-                        </td>
+                        <td className="text-muted-foreground py-1.5 pr-3 text-left">{f.firm}</td>
                         <td className="border-l py-1.5 pr-3 pl-3 text-left">
                           <ScoreBar value={f.score ?? f.successRate} />
-                        </td>
-                        <td className="py-1.5 text-right">
-                          <ReturnPct value={f.avgReturn} market={market} />
                         </td>
                         <td className="py-1.5 text-right">
                           <Rank rank={f.analystRank} />
@@ -404,7 +406,7 @@ export function BrokerRatings({
                         >
                           {act.text}
                         </td>
-                        <td className="py-1.5 text-right whitespace-nowrap">
+                        <td className="py-1.5 text-right">
                           {tdir !== 0 && (
                             <span className="text-muted-foreground mr-1 text-xs">
                               {money(f.priceTargetOld)} →
@@ -433,7 +435,7 @@ export function BrokerRatings({
               </table>
             </div>
             <p className="text-muted-foreground/70 mt-1.5 text-[11px]">
-              전체 실적 = 애널리스트의 모든 종목 예측 정확도 · 현종목 = 이 종목에 한정한 실적 ·
+              적중률·순위는 애널리스트의 모든 종목 예측 기준 · 현종목 = 이 종목에 한정한 실적 ·
               순위는 전체 애널리스트{" "}
               {rankedExperts != null && `${formatNumber(rankedExperts, 0)}명 `}중 등수
               (StockAnalysis 산출)
@@ -529,12 +531,11 @@ export function BrokerRatings({
               <SourceLink href={saUrl} label="전체 보기" />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px] text-sm">
+              <table className="w-full min-w-[740px] text-sm">
                 <thead>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left align-bottom font-medium">증권사</th>
                     <th className="border-l py-1.5 pl-3 text-left align-bottom font-medium">적중률</th>
-                    <th className="py-1.5 text-right font-medium">평균수익</th>
                     <th className="py-1.5 text-right align-bottom font-medium">순위</th>
                     <th className="border-l py-1.5 pl-3 text-right align-bottom font-medium">
                       현종목
@@ -567,9 +568,6 @@ export function BrokerRatings({
                       </td>
                       <td className="border-l py-1.5 pr-3 pl-3 text-left">
                         <ScoreBar value={f.score ?? f.successRate} />
-                      </td>
-                      <td className="py-1.5 text-right">
-                        <ReturnPct value={f.avgReturn} market={market} />
                       </td>
                       <td className="py-1.5 text-right">
                         <Rank rank={f.bestRank} />
@@ -632,7 +630,18 @@ export function BrokerRatings({
                         <span className="font-medium">{r.firm}</span>
                         {(r.fromGrade || r.grade) && (
                           <span className="text-muted-foreground">
-                            : {r.fromGrade ?? "-"} → {r.grade ?? "-"}
+                            : {cleanGrade(r.fromGrade) ?? "-"} →{" "}
+                            {/* 색은 바뀐 결과 등급에만 — 하향이면 그 등급이 빨강,
+                                상향이면 녹색. 유지는 회색 그대로(오너 지시). */}
+                            <span
+                              className={cn(
+                                act.dir === 1 && stockDirClass(true, market),
+                                act.dir === -1 && stockDirClass(false, market),
+                                act.dir !== 0 && "font-medium",
+                              )}
+                            >
+                              {cleanGrade(r.grade) ?? "-"}
+                            </span>
                           </span>
                         )}
                       </td>
