@@ -328,9 +328,7 @@ export function BrokerRatings({
                     <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={2}>
                       이 종목
                     </th>
-                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={5}>
-                      이번 의견
-                    </th>
+                    <th className="border-l pb-0.5" colSpan={5} />
                   </tr>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left font-medium">애널리스트</th>
@@ -537,9 +535,7 @@ export function BrokerRatings({
                     <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={2}>
                       이 종목
                     </th>
-                    <th className="border-l pb-0.5 pl-3 text-left font-medium" colSpan={3}>
-                      최신 의견
-                    </th>
+                    <th className="border-l pb-0.5" colSpan={3} />
                   </tr>
                   <tr className="text-muted-foreground border-b">
                     <th className="py-1.5 text-left font-medium">증권사</th>
