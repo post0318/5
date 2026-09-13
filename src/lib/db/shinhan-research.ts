@@ -92,6 +92,28 @@ function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
 }
 
 /**
+ * 산업분석/투자전략 리포트(종목 무관, `symbol: null`) — 시장 전체용 화면
+ * (`/[market]/research`)에서 사용. `getShinhanResearchBySymbol`(종목별
+ * 기업분석)과 달리 symbol 로 좁히지 않고 market+category="산업"으로만
+ * 조회한다. 2026-09 기준 KB·미래에셋·한투·NH·하나·DS·BNK·GlobalMonitor·
+ * 한경컨센서스 등 다수 소스가 이미 이 카테고리로 수집 중(수집기부터 먼저
+ * 구축, 화면 연동은 이번에 처음).
+ */
+export async function getIndustryResearch(
+  market: MarketId,
+  limit = 30,
+): Promise<ShinhanResearchDoc[]> {
+  const col = await shinhanResearchCol();
+  const fetchLimit = limit + 20; // dedupe 로 줄어들 수 있어 넉넉히
+  const docs = await col
+    .find({ market, category: "산업" })
+    .sort({ date: -1 })
+    .limit(fetchLimit)
+    .toArray();
+  return dedupeBySourceTitle(docs).slice(0, limit);
+}
+
+/**
  * 최근 3개월 내 리포트를 우선 반환하고, 없으면(커버리지가 뜸한 종목) 기간
  * 제한 없이 가장 최근 것으로 확대해서 보여준다 — "없음"보다 "오래됐지만
  * 있는 것"이 낫다는 원칙.

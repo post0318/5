@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Globe, LineChart, Newspaper, Settings2 } from "lucide-react";
+import { BarChart3, Building2, Globe, LineChart, Newspaper, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MARKETS, isMarketId } from "@/lib/markets/types";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -11,6 +11,7 @@ const SUBNAV = [
   { seg: "universe", label: "유니버스 통합 뷰", icon: LineChart },
   { seg: "news", label: "유니버스통합 뉴스", icon: Newspaper },
   { seg: "analysis", label: "종목분석", icon: BarChart3 },
+  { seg: "research", label: "산업분석", icon: Building2 },
 ] as const;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -18,7 +19,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const parts = pathname.split("/").filter(Boolean);
   const market = parts[0] && isMarketId(parts[0]) ? parts[0] : "kr";
   const sub =
-    parts[1] === "analysis" ? "analysis" : parts[1] === "news" ? "news" : "universe";
+    parts[1] === "analysis"
+      ? "analysis"
+      : parts[1] === "news"
+        ? "news"
+        : parts[1] === "research"
+          ? "research"
+          : "universe";
   const onManage = parts[0] === "manage";
   const onMacro = parts[0] === "macro";
 
