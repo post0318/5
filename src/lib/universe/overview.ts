@@ -35,20 +35,28 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
         // 한국은 아래 dart-facts 기반 경로로 대체 — adapter.getFinancials(rowsToStatement)
         // 왕복을 줄인다 (multiples.ts 문자열 매칭은 계정명 편차로 구멍이 많았음)
         skipFinancials: isKr,
+        // 한국 시세는 computeKrOverviewMetrics 가 별도로 받아온다 — 여기서 또
+        // getEodQuote 를 호출하면 종목당 KRX 요청이 중복(과거엔 두 군데서
+        // 각각 fetchKrxEod 호출)돼 새로고침이 느려진다.
+        skipQuote: isKr,
       }),
       isKr ? fetchKrForeignOwnership(item.symbol).catch(() => null) : Promise.resolve(null),
       isKr ? fetchKrNaverConsensus(item.symbol).catch(() => null) : Promise.resolve(null),
-      isKr ? computeKrOverviewMetrics(item.symbol).catch(() => null) : Promise.resolve(null),
+      isKr
+        ? computeKrOverviewMetrics(item.symbol, item.yahooSymbol).catch(() => null)
+        : Promise.resolve(null),
     ]);
     const inp = ov.multiples?.inputs;
     const rev = isKr ? (krMetrics?.revenueAnnual ?? null) : (inp?.revenueAnnual ?? null);
     const margin = (n: number | null | undefined) => (n != null && rev ? n / rev : null);
+    const warnings = [...ov.warnings];
+    if (isKr && krMetrics?.last == null) warnings.push("시세 조회 실패");
     return {
       ...base,
       name: item.name ?? ov.profile?.name ?? null,
-      last: ov.quote?.last ?? null,
-      changePct: ov.quote?.changePct ?? null,
-      currency: ov.quote?.currency ?? null,
+      last: isKr ? (krMetrics?.last ?? null) : (ov.quote?.last ?? null),
+      changePct: isKr ? (krMetrics?.changePct ?? null) : (ov.quote?.changePct ?? null),
+      currency: isKr ? (krMetrics?.currency ?? "KRW") : (ov.quote?.currency ?? null),
       per: isKr ? null : (ov.multiples?.per ?? null),
       perTtm: isKr ? (krMetrics?.perTtm ?? null) : (ov.multiples?.perTtm ?? null),
       estPer:
@@ -66,7 +74,7 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       foreignRatio: foreign?.ratio ?? null,
       foreignRatioAsOf: foreign?.asOf ?? null,
       highDividend: isKr && isHighDividendKr(item.symbol),
-      warnings: ov.warnings,
+      warnings: [...new Set(warnings)],
       error: null,
     };
   } catch (err) {
@@ -122,7 +130,28 @@ export async function refreshUniverseOverview(market?: MarketId): Promise<{
   // 낮으면 전체 새로고침이 라우트의 maxDuration(60초)을 넘겨 중간에 끊길 수
   // 있다(오너 확인 — 새로고침 클릭해도 반영 안 되던 문제). 동시성을 올려
   // 전체 라운드 수를 줄인다.
-  const rows = await mapWithConcurrency(items, 20, computeDoc);
+  // 다만 한국은 KRX 시세(computeKrOverviewMetrics)가 무거워 동시성을 그대로
+  // 20으로 두면 콜드 상태에서 요청이 한꺼번에 몰려 오히려 느려진다 — 한국만
+  // 낮은 동시성(8)으로 분리하고, market 없이 전 시장을 도는 경로(cron·bulk)도
+  // 있으므로 kr/non-kr 를 나눠 병렬로 돌린 뒤 원래 순서대로 재조립한다.
+  const krIdx: number[] = [];
+  const otherIdx: number[] = [];
+  items.forEach((item, i) => (item.market === "kr" ? krIdx : otherIdx).push(i));
+  const [krRows, otherRows] = await Promise.all([
+    mapWithConcurrency(
+      krIdx.map((i) => items[i]),
+      8,
+      computeDoc,
+    ),
+    mapWithConcurrency(
+      otherIdx.map((i) => items[i]),
+      20,
+      computeDoc,
+    ),
+  ]);
+  const rows = new Array<UniverseOverviewDoc>(items.length);
+  krIdx.forEach((i, j) => (rows[i] = krRows[j]));
+  otherIdx.forEach((i, j) => (rows[i] = otherRows[j]));
   await writeOverview(rows);
   if (!market) {
     await pruneOverview(rows.map((r) => r._id));

@@ -35,6 +35,10 @@ interface KrxRow {
 
 // basDd -> (shortCode -> row)
 const dayCache = new Map<string, Map<string, KrxRow>>();
+// basDd -> 진행 중인 요청. 종목 여러 개가 동시에 같은 날짜를 찾으면(통합뷰
+// 새로고침 등) 캐시가 아직 없는 상태에서 동일 URL 요청이 수십 개 겹쳐 KRX가
+// 느려진다 — 진행 중인 promise 를 공유해 같은 날짜는 한 번만 실제로 받는다.
+const dayInflight = new Map<string, Promise<Map<string, KrxRow>>>();
 
 function num(v: string | undefined): number | null {
   if (!v || v.trim() === "" || v === "-") return null;
@@ -60,11 +64,7 @@ async function fetchService(
   return j.OutBlock_1 ?? [];
 }
 
-/** 특정 영업일의 전체 종목(KOSPI+KOSDAQ) 맵. 과거일은 영구 캐시. */
-async function getDay(basDd: string): Promise<Map<string, KrxRow>> {
-  const cached = dayCache.get(basDd);
-  if (cached) return cached;
-
+async function loadDay(basDd: string): Promise<Map<string, KrxRow>> {
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const isPast = basDd !== today;
 
@@ -79,6 +79,20 @@ async function getDay(basDd: string): Promise<Map<string, KrxRow>> {
   // 휴장일이면 빈 맵 — 캐시하되 오늘 날짜는 캐시하지 않음
   if (isPast) dayCache.set(basDd, map);
   return map;
+}
+
+/** 특정 영업일의 전체 종목(KOSPI+KOSDAQ) 맵. 과거일은 영구 캐시. */
+async function getDay(basDd: string): Promise<Map<string, KrxRow>> {
+  const cached = dayCache.get(basDd);
+  if (cached) return cached;
+
+  // 이미 같은 날짜를 가져오는 중이면 그 promise 를 공유(in-flight 중복 제거).
+  const inflight = dayInflight.get(basDd);
+  if (inflight) return inflight;
+
+  const p = loadDay(basDd).finally(() => dayInflight.delete(basDd));
+  dayInflight.set(basDd, p);
+  return p;
 }
 
 function businessDaysBack(count: number): string[] {
