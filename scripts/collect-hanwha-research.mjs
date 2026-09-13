@@ -6,6 +6,11 @@
  * 종목명[코드/의견] 제목" 형식이라 이름 검색 없이 제목에서 종목코드를 뽑는다.
  * 목록에 직접 PDF 링크가 없어 상세보기 URL(view.cmd)을 대신 연결한다.
  *
+ * 목표주가 폴백(2026-09 추가): 목록 요약(cont_txt)엔 목표주가가 없는 경우가
+ * 많지만(오너 확인 — LS 사례), 상세보기(view.cmd) 본문엔 "투자의견 BUY,
+ * 목표주가 542,000원 유지"처럼 항상 있다. 목록 요약에서 못 찾았을 때만
+ * 상세 페이지를 받아 재시도(매번 받지 않음 — 페이지가 커서 비용 고려).
+ *
  * ⚠️ www.hanwhawm.com/robots.txt 는 `Disallow: /` (Googlebot·Yeti 제외)다.
  *    다른 예외들과 동일하게 "개인용·로컬 실행·저빈도" 조건으로 오너 승인
  *    (CLAUDE.md 참조). 앱 배포본(Vercel)에는 이 수집 코드가 없다.
@@ -65,6 +70,19 @@ function extractTargetPrice(text) {
   if (!m) return null;
   const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+async function extractTargetPriceFromDetail(detailUrl) {
+  if (!detailUrl) return null;
+  try {
+    const res = await fetch(detailUrl, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    return extractTargetPrice(stripHtml(html));
+  } catch (err) {
+    console.warn(`  ⚠ 상세 본문 목표주가 추출 실패 (${detailUrl}): ${err.message}`);
+    return null;
+  }
 }
 
 // 제목 형식: "[업종] 종목명[코드/의견] 나머지" — 업종 태그는 매칭 전에 먼저 떼어낸다.
@@ -137,6 +155,18 @@ console.log(
   "  최근 3건:",
   collected.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbolHint}) — ${i.title}`),
 );
+
+console.log(`▶ 목표주가 보강 중 (${collected.length}건)...`);
+let targetFallbackCount = 0;
+for (const it of collected) {
+  if (it.targetPrice == null) {
+    it.targetPrice = await extractTargetPriceFromDetail(it.pdfUrl);
+    if (it.targetPrice != null) targetFallbackCount++;
+    await sleep(400);
+  }
+}
+console.log(`✔ 보강 완료 (${targetFallbackCount}건 폴백으로 채움)`);
+
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);

@@ -9,6 +9,12 @@
  *    프로젝트 오너가 "개인용·로컬 실행·저빈도" 조건으로 예외 승인(CLAUDE.md 참조).
  *    앱 배포본(Vercel)에는 이 수집 코드가 없다 — DB 적재 라우트는 결과를 받기만 함.
  *
+ * 목표주가 PDF 폴백(2026-09 추가): "Review" 후속 리포트는 본문(f7)에
+ * "목표주가는 유지"라고만 쓰고 숫자를 다시 안 적는 경우가 많다(실측 —
+ * LS 사례). 그 경우 PDF 표지 헤더("목표주가 600,000 원 (유지)")에는 항상
+ * 숫자가 있어(다른 브로커 PDF와 동일 패턴) 본문에서 못 찾았을 때만 PDF를
+ * 내려받아 재시도한다 — 매번 받지 않고 폴백일 때만이라 비용 최소화.
+ *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-shinhan-research.mjs             # 최근 14일, 최대 5페이지
  *   node scripts/collect-shinhan-research.mjs --days=30 --pages=10
@@ -20,6 +26,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { PDFParse } from "pdf-parse";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -82,6 +89,22 @@ function extractTargetPrice(text) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+async function extractTargetPriceFromPdf(pdfUrl) {
+  if (!pdfUrl) return null;
+  try {
+    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const parser = new PDFParse({ data: buf });
+    const { text } = await parser.getText();
+    await parser.destroy();
+    return extractTargetPrice(text);
+  } catch (err) {
+    console.warn(`  ⚠ PDF 목표주가 추출 실패 (${pdfUrl}): ${err.message}`);
+    return null;
+  }
+}
+
 async function fetchPage(curPage, startId) {
   const url = new URL(BASE);
   url.searchParams.set("v", String(Date.now()));
@@ -113,6 +136,12 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       stop = true;
       break;
     }
+    const pdfUrl = it.f3 || null;
+    let targetPrice = extractTargetPrice(it.f7);
+    if (targetPrice == null && pdfUrl) {
+      targetPrice = await extractTargetPriceFromPdf(pdfUrl);
+      await sleep(400);
+    }
     items.push({
       id: String(it.fn),
       date,
@@ -120,9 +149,9 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       stockName: it.f2,
       analyst: it.f4,
       opinion: it.f6,
-      targetPrice: extractTargetPrice(it.f7),
+      targetPrice,
       summary: excerpt(it.f7),
-      pdfUrl: it.f3 || null,
+      pdfUrl,
       views: Number(it.f5) || null,
     });
   }
