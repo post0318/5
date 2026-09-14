@@ -240,6 +240,10 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // 추가. 예외: PMI/ISM 은 시황으로 확정됐으므로(오너 지적) 여기 넣지 않음.
 const BOND_HINT_RE =
   /크레딧|채권|국채|부채|금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|Beige\s?Book|\bCPI\b|\bPPI\b|\bPCE\b|\bGDP\b|Retail\s?Sales|\bCredit\b|\bBond\b|\bDebt\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
+// source 자체가 "FRB"(연방준비제도)면 내용이 뭐든 채권/통화정책 자료다
+// ("FOMC Minutes"처럼 본문에 흔한 채권 키워드가 하나도 없는 경우 있음,
+// 오너 지적 2026-09).
+const BOND_SOURCES = new Set(["FRB"]);
 
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
@@ -254,6 +258,7 @@ export function classifyResearchTopic(
   // 넓히면 진짜 산업분석까지 오분류할 위험이 큼 — 채권 키워드는 상대적으로
   // 금융 용어라 그 위험이 작음).
   const hayWithSummary = `${hay} ${doc.summary ?? ""}`;
+  if (BOND_SOURCES.has(doc.source)) return "투자전략(채권)";
   if (STRATEGY_STOCKNAMES.has(doc.stockName))
     return BOND_HINT_RE.test(hayWithSummary) ? "투자전략(채권)" : "투자전략(주식)";
   if (MARKET_CONDITION_RE.test(hay)) return "시황";
