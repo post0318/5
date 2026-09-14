@@ -8,7 +8,9 @@ name: 한경 컨센서스 리포트 수집
 
 on:
   schedule:
-    - cron: "50 0 * * *" # 00:50 UTC = 09:50 KST
+    # 하루 2회(오너 지시, 2026-09 -- 작성시간과 로드시간의 시차 보완).
+    - cron: "50 23 * * *" # 23:50 UTC = 08:50 KST(1차)
+    - cron: "50 3 * * *" # 03:50 UTC = 12:50 KST(2차)
   workflow_dispatch: {}
 
 jobs:

@@ -105,17 +105,32 @@ async function extractTargetPriceFromPdf(pdfUrl) {
   }
 }
 
-async function fetchPage(curPage, startId) {
+// 일시적 네트워크 오류("fetch failed"/소켓 리셋 등, 2026-09 실측 —
+// bbs2.shinhansec.com이 이따금 연결을 끊어 스케줄 실행 전체가 그 날 통째로
+// 실패했다)에도 전체 수집이 죽지 않도록 페이지당 재시도를 둔다. 하루 2회
+// 스케줄(오너 지시, 2026-09 — "작성시간과 로드시간의 시차")로도 다음 실행
+// 때 자연 복구되지만, 한 번의 일시적 오류로 그 회차 전체를 날리지 않는 게
+// 더 안전하다.
+async function fetchPage(curPage, startId, attempt = 1) {
   const url = new URL(BASE);
   url.searchParams.set("v", String(Date.now()));
   url.searchParams.set("curPage", String(curPage));
   url.searchParams.set("startPage", String(curPage));
   if (startId) url.searchParams.set("startId", startId);
-  const res = await fetch(url, { headers: { "User-Agent": UA, "X-Requested-With": "XMLHttpRequest" } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
-  if (text.includes("errorWrapper")) throw new Error("게시판 API 404(구조 변경?)");
-  return JSON.parse(text);
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": UA, "X-Requested-With": "XMLHttpRequest" } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    if (text.includes("errorWrapper")) throw new Error("게시판 API 404(구조 변경?)");
+    return JSON.parse(text);
+  } catch (err) {
+    if (attempt < 3 && /fetch failed|SocketError|ECONNRESET|ETIMEDOUT/i.test(String(err.message ?? err))) {
+      console.warn(`  ⚠ 페이지 ${curPage} 요청 실패(${attempt}회차), 재시도: ${err.message}`);
+      await sleep(2000 * attempt);
+      return fetchPage(curPage, startId, attempt + 1);
+    }
+    throw err;
+  }
 }
 
 console.log(`▶ 신한투자증권 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);

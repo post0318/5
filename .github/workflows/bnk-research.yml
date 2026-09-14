@@ -6,7 +6,9 @@ name: BNK투자증권 기업분석 수집
 
 on:
   schedule:
-    - cron: "5 0 * * *" # 00:05 UTC = 09:05 KST
+    # 하루 2회(오너 지시, 2026-09 -- 작성시간과 로드시간의 시차 보완).
+    - cron: "5 23 * * *" # 23:05 UTC = 08:05 KST(1차)
+    - cron: "5 3 * * *" # 03:05 UTC = 12:05 KST(2차)
   workflow_dispatch: {}
 
 jobs:

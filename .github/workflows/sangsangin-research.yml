@@ -5,7 +5,9 @@ name: 상상인증권 기업리포트 수집
 
 on:
   schedule:
-    - cron: "0 1 * * *" # 01:00 UTC = 10:00 KST
+    # 하루 2회(오너 지시, 2026-09 -- 작성시간과 로드시간의 시차 보완).
+    - cron: "0 23 * * *" # 23:00 UTC = 08:00 KST(1차)
+    - cron: "0 3 * * *" # 03:00 UTC = 12:00 KST(2차)
   workflow_dispatch: {}
 
 jobs:

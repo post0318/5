@@ -6,7 +6,9 @@ name: 교보증권 기업분석 리포트 수집
 
 on:
   schedule:
-    - cron: "40 0 * * *" # 00:40 UTC = 09:40 KST
+    # 하루 2회(오너 지시, 2026-09 -- 작성시간과 로드시간의 시차 보완).
+    - cron: "40 23 * * *" # 23:40 UTC = 08:40 KST(1차)
+    - cron: "40 3 * * *" # 03:40 UTC = 12:40 KST(2차)
   workflow_dispatch: {}
 
 jobs:
