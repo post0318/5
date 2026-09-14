@@ -155,3 +155,17 @@
     font-feature-settings: "tnum";
   }
 }
+/* 주간 리포트 마크다운(react-markdown) — 컴팩트한 A4 1장 느낌 */
+.weekly-md h1 { font-size: 1.125rem; font-weight: 700; margin: 0 0 0.75rem; }
+.weekly-md h2 { font-size: 0.95rem; font-weight: 600; margin: 1.1rem 0 0.4rem; border-bottom: 1px solid var(--border); padding-bottom: 0.2rem; }
+.weekly-md h3 { font-size: 0.9rem; font-weight: 600; margin: 0.8rem 0 0.3rem; }
+.weekly-md p { margin: 0.35rem 0; }
+.weekly-md ul, .weekly-md ol { margin: 0.3rem 0 0.5rem; padding-left: 1.2rem; }
+.weekly-md li { margin: 0.15rem 0; }
+.weekly-md strong { font-weight: 600; }
+.weekly-md table { width: 100%; border-collapse: collapse; margin: 0.5rem 0 0.75rem; font-variant-numeric: tabular-nums; }
+.weekly-md th, .weekly-md td { border: 1px solid var(--border); padding: 0.2rem 0.5rem; text-align: left; }
+.weekly-md td:nth-child(2), .weekly-md td:nth-child(3) { text-align: right; }
+.weekly-md th { background: color-mix(in oklab, var(--muted) 60%, transparent); font-weight: 600; }
+.weekly-md a { text-decoration: underline; }
+.weekly-md hr { margin: 0.75rem 0; }

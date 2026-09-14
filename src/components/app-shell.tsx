@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Building2, Globe, LineChart, Newspaper, Settings2 } from "lucide-react";
+import { BarChart3, Building2, CalendarDays, Globe, LineChart, Newspaper, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MARKETS, isMarketId } from "@/lib/markets/types";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -28,6 +28,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           : "universe";
   const onManage = parts[0] === "manage";
   const onMacro = parts[0] === "macro";
+  const onWeekly = parts[0] === "weekly";
 
   return (
     <div className="flex min-h-full flex-col">
@@ -43,7 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {/* 시장 탭 */}
           <nav className="flex items-center gap-1">
             {MARKETS.map((m) => {
-              const active = !onManage && m.id === market;
+              const active = !onManage && !onMacro && !onWeekly && m.id === market;
               return (
                 <Link
                   key={m.id}
@@ -75,6 +76,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <span className="hidden sm:inline">거시경제</span>
             </Link>
             <Link
+              href="/weekly"
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                onWeekly
+                  ? "bg-secondary text-secondary-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <CalendarDays className="size-4" />
+              <span className="hidden sm:inline">주간 리포트</span>
+            </Link>
+            <Link
               href="/manage"
               className={cn(
                 "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
@@ -91,7 +104,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* 서브 내비 */}
-        {!onManage && !onMacro && (
+        {!onManage && !onMacro && !onWeekly && (
           <div className="mx-auto max-w-[1400px] overflow-x-auto px-4">
             <div className="flex w-max min-w-full gap-4">
               {SUBNAV.map((s) => {

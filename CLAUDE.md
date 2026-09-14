@@ -664,6 +664,51 @@ npm run db:studio    # drizzle studio
   팀/대외 확장 시 인앱 중단 → 딥링크 또는 정식 라이선스 (prd.md §4.3).
 - L1(공식 API)·L3(자체 계산)은 모든 시나리오에서 안전.
 
+## 주간 거시·시황 리포트 (`/weekly`, 오너 지시 2026-09)
+
+"한 사람 인력 대체" 목적 — 매주 월요일 지난 한 주의 한국·미국 시장, 브라질
+국채, 금·원유 원자재, FOMC·BOJ·BOK 금리정책, AI 기술 이슈를 **A4 1장**으로
+요약한다. 기업분석은 범위 밖(거시이므로 제외). 코드는 `src/lib/weekly/`,
+DB는 `weekly_reports`(주당 1건, `_id`=대상 주 월요일) + `weekly_llm_usage`.
+
+- **흐름**: GitHub Actions(`.github/workflows/weekly-report.yml`, 월 09:00
+  KST) → `POST /api/cron/weekly-report`(CRON_SECRET) → `generateWeeklyReport()`
+  → 초안(draft) 저장 → 오너가 `/weekly` 화면에서 편집·발행. 화면의 "초안
+  생성/재생성"은 로그인 세션으로 `POST /api/weekly`(proxy.ts 보호).
+- **입력 코퍼스**(`corpus.ts`, 원문 미저장): `kr_research` `category:"산업"`
+  중 거시·전략·시황·AI/반도체 키워드 발췌(주간 200~400건), Google 뉴스 RSS
+  제목(고정 검색어 16개), 텔레그램 게시물, 인플루언서 유튜브 영상 제목.
+  **본문 스크래핑은 이 작업에 한해 오너 승인**(2026-09, 원문 미저장 조건)
+  — 아직 미구현(뉴스 본문·PDF·유튜브 자막은 2단계).
+- **시세 스냅샷**(`snapshot.ts`): 전 지표를 "지난주 금요일 vs 전전주 금요일"
+  같은 구간으로 맞춤(데모 때 자산별 구간이 제각각이라 표가 뒤섞였던 문제).
+  Yahoo(지수·미국채·원자재·환율), ECOS(국고채), 브라질 중앙은행 SGS(Selic —
+  시리즈에 다음 COPOM 까지 미래 일자가 미리 들어있어 실행일 이전 값만 사용).
+  **브라질 장기 국채(NTN-F ~10년)는 오너의 4번 프로젝트**(github.com/post0318/4,
+  재무부 CSV를 매주 갱신·커밋)의 JSON 을 GitHub raw 로 읽는다(오너 안내 —
+  Tesouro Direto 공개 JSON 은 410 Gone). 4번 저장소의 갱신 크론을 월 09:00
+  UTC → **일 12:00 UTC 로 앞당겨**(오너 지시, 2026-09-15) 월요일 아침 우리
+  크론 시점에 지난주 금요일 값이 있도록 함. 그래도 갱신이 밀리면 asOf 를
+  표기하고 그 시점 기준 7일 전과 비교. Yahoo
+  환율·일부 지수는 봉 타임스탬프가 전일 23:00Z 라 20시 이후 봉을 다음 날로 보정.
+- **LLM = Gemini API**(`gemini.ts`, REST, SDK 없음). 모델 비교(Sonnet 5/
+  Opus 5/Fable 5.1 샘플) 후 오너가 비용 문제로 Claude API 대신 선택 —
+  **Google AI Pro 구독에 포함된 월 $10 Cloud 크레딧**으로 결제(유료 등급이라
+  프롬프트가 학습에 안 쓰임). 기본 모델 `gemini-3.1-pro-preview`
+  (`GEMINI_MODEL`로 교체, 404면 폴백 체인), 웹검색 그라운딩 기본 ON
+  (`WEEKLY_GROUNDING=0`으로 끔). 월 상한 `WEEKLY_MONTHLY_BUDGET_USD`(기본 8).
+  회당 추정 0.3~0.6달러. 키는 `GEMINI_API_KEY`(.env.local + Vercel).
+- **출력 형식**(`prompt.ts`): 한 줄 결론 / 스냅샷 표 / 핵심 이슈 3개(트리거→
+  파급 경로→확인된 시장 영향→주시 포인트, 출처) / 금리정책 / 다음 주 일정.
+  표 제외 본문 1,300자 목표, 1,800자 초과 시 압축 호출 1회. 리포트 뒤에
+  `<<<후보이슈>>>` 구분자로 검수용 후보 이슈 8~12개를 붙이게 해 `candidates`
+  필드에 분리 저장(발행본엔 미포함, 화면 접힘 영역에 표시).
+- **Gemini 결과 검증 교훈(2026-09)**: 오너가 Gemini 앱으로 만든 샘플을
+  실측한 결과 새 사실(송유관 피격 등)은 실제였지만 표의 수치가 목/금 종가가
+  뒤섞이고 10년물이 본문·표에서 세 값으로 달랐다 — 그래서 수치는 모델에
+  맡기지 않고 스냅샷 모듈이 계산해 넣고, 프롬프트에 "제공 수치만 사용"을
+  강제한다.
+
 ## 숫자 · 통화 포맷 (엄수)
 
 공통 유틸 `formatCurrency(value, currency)` 하나로 전 화면 적용.

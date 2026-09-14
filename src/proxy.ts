@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
  *     POST   /api/universe/bulk
  *     GET    /api/universe/overview?refresh=1 (캐시 조회는 공개)
  *     *      /api/markets/[market]/[symbol]/news/summarize (LLM 비용 발생 — 비로그인 남용 방지)
+ *     POST   /api/weekly, PATCH /api/weekly/[id]  (주간 리포트 생성·수정·발행. GET 은 공개)
  * - /api/cron/* 은 자체 CRON_SECRET 검증 → 여기서 제외
  */
 
@@ -40,7 +41,9 @@ export function proxy(req: NextRequest) {
     (pathname === "/api/universe/overview" &&
       searchParams.get("refresh") === "1") ||
     /^\/api\/universe\/(?!overview$|bulk$)[^/]+$/.test(pathname) || // /api/universe/[id]
-    /^\/api\/markets\/[^/]+\/[^/]+\/news\/summarize$/.test(pathname);
+    /^\/api\/markets\/[^/]+\/[^/]+\/news\/summarize$/.test(pathname) ||
+    // 주간 리포트: 생성(POST, LLM 비용)·수정/발행(PATCH)만 보호, GET 조회는 공개
+    (pathname.startsWith("/api/weekly") && method !== "GET");
 
   if (!isProtected || authed(req)) return NextResponse.next();
 
@@ -61,5 +64,5 @@ export function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/manage", "/api/universe/:path*", "/api/markets/:path*"],
+  matcher: ["/manage", "/api/universe/:path*", "/api/markets/:path*", "/api/weekly/:path*", "/api/weekly"],
 };
