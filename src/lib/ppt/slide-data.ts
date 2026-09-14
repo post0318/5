@@ -139,28 +139,28 @@ function parseEcosystemLines(v?: string | string[]): { label: string; category: 
 
 /**
  * "핵심 비즈니스 요약" 불릿·"사업 생태계" 다이어그램을 종목명만으로 자동
- * 생성(오너 지시, 2026-09 — Gemini가 "한화에어로스페이스"란 이름만으로
- * 이 둘을 다 만들어낸 사례 제시). 사용자가 둘 다 직접 입력했으면 LLM을
- * 아예 호출하지 않는다(불필요한 비용). 월 예산 초과·API 키 미설정·호출
- * 실패 시 조용히 빈 값 — business 불릿이 비면 slide.ts가 "직접 작성"
- * 힌트를 보여주는 기존 동작 그대로 안전하게 유지된다.
+ * 생성 — Gemini(웹검색 그라운딩) 사용(오너 지시, 2026-09 — 처음엔 Claude
+ * Haiku로 만들었으나 "차라리 제미나이를 연결할 수 있는 방안으로 구축하는게
+ * 좋을듯해"라고 정정. Gemini가 "한화에어로스페이스"란 이름만으로 실시간
+ * 검색을 통해 K9 썬더·천무·누리호 등 실제 제품명까지 정확히 뽑아낸 사례를
+ * 근거로 제시함 — Haiku는 학습 지식만이라 그 정도 구체성이 안 나옴).
+ * 실제 호출은 src/lib/ppt/gemini-profile.ts(기존 주간 리포트 기능의 Gemini
+ * REST 클라이언트 재사용). 사용자가 둘 다 직접 입력했으면 아예 호출하지
+ * 않는다(불필요한 비용). API 키 미설정·호출 실패 시 조용히 빈 값 —
+ * business 불릿이 비면 slide.ts가 "직접 작성" 힌트를 보여주는 기존 동작
+ * 그대로 안전하게 유지된다.
  */
 async function fetchBusinessProfile(
   name: string,
   sector: string | null,
 ): Promise<{ bullets: string[]; ecosystemCore: string; ecosystem: { label: string; category: string }[] }> {
-  const empty = { bullets: [], ecosystemCore: "", ecosystem: [] };
-  if (!process.env.ANTHROPIC_API_KEY) return empty;
   try {
-    const { isBudgetExceeded, incUsage } = await import("../db/llm-usage");
-    if (await isBudgetExceeded()) return empty;
-    const { generateBusinessProfile } = await import("../llm/claude");
-    const { bullets, ecosystemCore, ecosystem, costUsd } = await generateBusinessProfile(name, sector);
-    await incUsage(costUsd);
+    const { generateBusinessProfileGemini } = await import("./gemini-profile");
+    const { bullets, ecosystemCore, ecosystem } = await generateBusinessProfileGemini(name, sector);
     return { bullets, ecosystemCore, ecosystem };
   } catch (err) {
-    console.error("[ppt] 사업 프로필 LLM 자동 생성 실패:", err);
-    return empty;
+    console.error("[ppt] 사업 프로필 자동 생성 실패:", err);
+    return { bullets: [], ecosystemCore: "", ecosystem: [] };
   }
 }
 
