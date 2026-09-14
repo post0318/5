@@ -1,0 +1,24 @@
+name: 신한투자증권 산업분석 리포트 수집
+
+# CLAUDE.md 방침(오너 승인 예외): bbs2.shinhansec.com 게시판 JSON API를
+# 하루 1회, 개인용으로만 조회한다. 국내 기업분석 수집기와 같은 사이트·같은
+# 조건이고 게시판만 산업분석(boardName=giindustry)으로 다르다.
+
+on:
+  schedule:
+    - cron: "5 0 * * *" # 00:05 UTC = 09:05 KST (다른 신한 수집기와 같은 시간대)
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/collect-shinhan-industry-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
