@@ -56,6 +56,7 @@ export function StockPptButton({
   const [brand, setBrand] = useState("");
   const [overview, setOverview] = useState("");
   const [business, setBusiness] = useState("");
+  const [ecosystem, setEcosystem] = useState("");
   const [busy, setBusy] = useState(false);
 
   const run = async () => {
@@ -63,7 +64,7 @@ export function StockPptButton({
     try {
       await downloadPptx(
         "/api/ppt/stock",
-        { market, symbol, yahoo: yahoo ?? undefined, slideNo, brand, overview, business },
+        { market, symbol, yahoo: yahoo ?? undefined, slideNo, brand, overview, business, ecosystem },
         `${symbol}.pptx`,
       );
       toast.success("PPT를 내려받았습니다");
@@ -87,8 +88,8 @@ export function StockPptButton({
         <DialogHeader>
           <DialogTitle>{name ?? symbol} · 종목 소개 PPT</DialogTitle>
           <DialogDescription>
-            아래 항목은 한 줄에 하나씩 입력하세요 (비워도 됨). 재무제표·주가 추이는 자동
-            채워집니다.
+            아래 항목은 한 줄에 하나씩 입력하세요. 비워두면 AI가 종목명만으로 자동
+            생성합니다(재무제표·주가·로고는 항상 자동).
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -122,17 +123,29 @@ export function StockPptButton({
             />
           </div>
           <div className="space-y-1">
-            <span className="text-xs font-medium">주요 사업 (한 줄에 하나)</span>
+            <span className="text-xs font-medium">핵심 투자 포인트 (한 줄에 하나, 비우면 AI 자동)</span>
             <textarea
               className={`${TA} min-h-[80px]`}
               value={business}
               onChange={(e) => setBusiness(e.target.value)}
-              placeholder={"음식 배달·매장 예약\n호텔·여행, 영화 예매\n신선식품 배송, 클라우드 ERP"}
+              placeholder={"(비워두면 AI가 자동으로 3줄 생성)\n음식 배달·매장 예약\n호텔·여행, 영화 예매"}
+            />
+          </div>
+          <div className="space-y-1">
+            <span className="text-xs font-medium">
+              사업 생태계 다이어그램 (한 줄에 &quot;카테고리:라벨&quot;, 비우면 AI 자동)
+            </span>
+            <textarea
+              className={`${TA} min-h-[80px]`}
+              value={ecosystem}
+              onChange={(e) => setEcosystem(e.target.value)}
+              placeholder={"(비워두면 AI가 자동으로 6~10개 노드 생성)\n지상무기:K9 썬더\n지상무기:천무\n항공우주:누리호 발사체"}
             />
           </div>
           <p className="text-muted-foreground text-xs">
-            제목·로고·재무제표·주가차트는 자동 생성됩니다. 시장점유율 영역은 빈 칸으로 두니
-            내보낸 뒤 직접 채우세요.
+            제목·로고·재무제표·주가차트는 항상 자동 생성됩니다. AI 생성 내용은 학습 데이터
+            기반이라 최신 사업이나 정확한 수치는 반영 못할 수 있습니다 — 시장점유율처럼 정확도가
+            중요한 항목은 직접 입력을 권장합니다.
           </p>
         </div>
         <DialogFooter>

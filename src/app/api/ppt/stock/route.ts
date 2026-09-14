@@ -14,6 +14,7 @@ const schema = z.object({
   brand: z.string().max(60).optional(),
   overview: z.string().max(1500).optional(),
   business: z.string().max(2000).optional(),
+  ecosystem: z.string().max(1500).optional(),
   priceYears: z.union([z.literal(1), z.literal(3), z.literal(5), z.literal(10)]).optional(),
 });
 
@@ -27,6 +28,7 @@ export async function POST(req: Request) {
       brand: b.brand,
       overview: b.overview,
       business: b.business,
+      ecosystem: b.ecosystem,
       priceYears: b.priceYears,
     });
     const buf = await buildStockPptx([data]);

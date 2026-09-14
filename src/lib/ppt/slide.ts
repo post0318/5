@@ -119,9 +119,16 @@ function addSlide(pptx: PptxGenJS, d: StockSlideData) {
   const leftW = 4.4;
   const rightW = 4.5;
 
-  // 좌: 주요 사업 (텍스트)
-  sectionTitle(s, leftX, secY, leftW, "주요 사업");
-  bulletBox(s, leftX, bodyY, leftW, 2.56, d.business, "(주요 사업 내용을 입력하세요)");
+  // 좌: 사업 생태계(방사형 다이어그램, AI 자동 생성 또는 직접 입력) — 없으면
+  // 기존처럼 주요 사업 불릿 목록으로 대체(오너 지시, 2026-09 — Gemini가
+  // 종목명만으로 이 다이어그램을 만들어낸 사례 제시).
+  if (d.ecosystem && d.ecosystem.nodes.length > 0) {
+    sectionTitle(s, leftX, secY, leftW, "사업 생태계");
+    drawEcosystem(s, d.ecosystem, leftX, bodyY, leftW, 2.56);
+  } else {
+    sectionTitle(s, leftX, secY, leftW, "주요 사업");
+    bulletBox(s, leftX, bodyY, leftW, 2.56, d.business, "(주요 사업 내용을 입력하세요)");
+  }
 
   // 우: 핵심 시장점유율 — 실제 데이터 있으면 도넛차트(편집 가능한 네이티브 차트)
   sectionTitle(s, rightX, secY, rightW, "핵심 시장점유율 · 경쟁 구도");
@@ -155,6 +162,95 @@ function addSlide(pptx: PptxGenJS, d: StockSlideData) {
       color: SUB, fontFace: F_BODY, fontSize: 7.5,
     });
   }
+}
+
+// x1,y1 -> x2,y2 직선 하나 — pptxgenjs의 "line" 도형은 bbox 좌상단→우하단
+// 대각선이 기본이라, 실제 두 점의 기울기가 반대 방향(우상향)이면 flipH로
+// 대각선을 뒤집어야 한다.
+function connectLine(
+  s: PptxGenJS.Slide,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  color: string,
+) {
+  const x = Math.min(x1, x2);
+  const y = Math.min(y1, y2);
+  const w = Math.abs(x2 - x1) || 0.01;
+  const h = Math.abs(y2 - y1) || 0.01;
+  const flipH = x1 < x2 !== y1 < y2;
+  s.addShape("line", { x, y, w, h, flipH, line: { color, width: 1 } });
+}
+
+const ECO_COLORS = [ORANGE, "2E5C8A", "6B8E23", "8B5FA6", "C0392B", "16A085", "7F8C8D"];
+
+/**
+ * 사업 생태계 방사형 다이어그램 — 중심 허브(회사의 사업 본질) + 부채꼴로
+ * 펼쳐진 노드(제품/사업부/자회사, 카테고리별 색상 구분) + 연결선. 아이콘까지
+ * 손으로 그린 원본 예시(예시.pptx)와 달리 원+텍스트+선만으로 구성 — 이
+ * 정도는 좌표 계산만으로 도형 조합이 가능하다(오너 지적, 2026-09 — "불가능
+ * 하다"고 했던 게 틀렸음. 원 안에 커스텀 아이콘을 넣는 것만 불가능하고,
+ * 방사형 배치 자체는 삼각함수로 계산 가능).
+ */
+function drawEcosystem(
+  s: PptxGenJS.Slide,
+  eco: NonNullable<StockSlideData["ecosystem"]>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
+  const nodes = eco.nodes.slice(0, 10);
+  const n = nodes.length;
+  const categories: string[] = [];
+  for (const node of nodes) {
+    const cat = node.category || "기타";
+    if (!categories.includes(cat)) categories.push(cat);
+  }
+  const colorOf = (cat: string) => ECO_COLORS[categories.indexOf(cat || "기타") % ECO_COLORS.length];
+
+  const hubR = 0.4;
+  const nodeR = n > 8 ? 0.38 : n > 5 ? 0.42 : 0.48;
+  const hubCx = x + w / 2;
+  const hubCy = y + h - hubR - 0.04;
+  const orbit = Math.min(w / 2 - nodeR - 0.08, hubCy - y - nodeR - 0.04);
+
+  const angleStartDeg = 10;
+  const angleEndDeg = 170;
+  const pos = nodes.map((node, i) => {
+    const t = n === 1 ? 0.5 : i / (n - 1);
+    const deg = angleStartDeg + t * (angleEndDeg - angleStartDeg);
+    const rad = (deg * Math.PI) / 180;
+    return { cx: hubCx + orbit * Math.cos(rad), cy: hubCy - orbit * Math.sin(rad), node };
+  });
+
+  // 선(원보다 먼저 그려서 원 아래로 깔리게)
+  for (const p of pos) connectLine(s, hubCx, hubCy, p.cx, p.cy, RULE);
+
+  // 노드 원 + 라벨
+  for (const p of pos) {
+    const color = colorOf(p.node.category);
+    s.addShape("ellipse", {
+      x: p.cx - nodeR, y: p.cy - nodeR, w: nodeR * 2, h: nodeR * 2,
+      fill: { color }, line: { color: "FFFFFF", width: 1.5 },
+    });
+    s.addText(p.node.label, {
+      x: p.cx - nodeR + 0.04, y: p.cy - nodeR, w: nodeR * 2 - 0.08, h: nodeR * 2,
+      align: "center", valign: "middle", fontFace: F_BODY, fontSize: n > 8 ? 6.5 : 7.5,
+      bold: true, color: "FFFFFF", lineSpacingMultiple: 0.9,
+    });
+  }
+
+  // 허브(중심)
+  s.addShape("ellipse", {
+    x: hubCx - hubR, y: hubCy - hubR, w: hubR * 2, h: hubR * 2,
+    fill: { color: INK }, line: { color: "FFFFFF", width: 2 },
+  });
+  s.addText(eco.core || "Core", {
+    x: hubCx - hubR, y: hubCy - hubR, w: hubR * 2, h: hubR * 2,
+    align: "center", valign: "middle", fontFace: F_TITLE, fontSize: 8.5, bold: true, color: "FFFFFF",
+  });
 }
 
 const SHARE_RE = /^(.+?)\s+([\d.]+)\s*%?$/;

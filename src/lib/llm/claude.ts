@@ -108,6 +108,99 @@ isLikelyGenuine 판단 기준: 실제 언론사(${publisher})가 작성한 정�
   };
 }
 
+export interface BusinessProfile {
+  bullets: string[];
+  ecosystemCore: string;
+  ecosystem: { label: string; category: string }[];
+  costUsd: number;
+}
+
+/**
+ * PPT 종목 원페이지의 "핵심 비즈니스 요약" 불릿 + "사업 생태계" 방사형
+ * 다이어그램 데이터를 종목명만으로 자동 생성(오너 지시, 2026-09 — Gemini에
+ * 한화에어로스페이스 이름만 주고 생태계 다이어그램까지 자동으로 뽑아낸
+ * 사례를 보여주며 "내가 데이타 준거없음. 한화에어로스페이스만 줬음").
+ *
+ * Gemini는 실시간 웹 검색으로 사실을 확인했지만, 이 프로젝트엔 그런 검색
+ * 도구가 없다 — Haiku의 학습 지식만으로 생성하므로 아주 최신 사업(수개월
+ * 이내 발표) 은 못 담을 수 있음을 프롬프트에 명시하고, 널리 알려진 사업
+ * 라인 위주로만 답하도록 유도한다. 재무 숫자(매출·EPS 등)는 절대 여기서
+ * 만들지 않는다 — 그쪽은 DART/EDGAR/Yahoo 실측 데이터 전용(slide-data.ts
+ * 다른 부분), LLM이 숫자를 지어내면 재무제표 신뢰도 자체가 깨짐.
+ *
+ * ecosystem 은 6~10개 노드, 각각 "카테고리"(색상 그룹, 예: "지상무기")와
+ * "라벨"(원 안에 들어갈 짧은 이름, 예: "K9 썬더")을 가진다 — slide.ts가
+ * 카테고리별로 색을 묶고 라벨을 원 안에 배치한다.
+ */
+export async function generateBusinessProfile(
+  name: string,
+  sector: string | null,
+): Promise<BusinessProfile> {
+  const system = `당신은 증권사 리서치 애널리스트입니다. 회사명만 보고 그 회사의 사업
+구조를 요약해 오직 JSON 객체 하나만 출력하세요(다른 텍스트 없이):
+{
+  "bullets": ["핵심 투자 포인트 한국어 문장 1", "문장 2", "문장 3"],
+  "ecosystemCore": "이 회사 사업의 본질을 나타내는 1~2단어(영문 가능, 예: Defense, Food, Semiconductor)",
+  "ecosystem": [
+    {"category": "사업 대분류(2~5글자)", "label": "구체적 제품·서비스·자회사명(2~8글자)"}
+  ]
+}
+규칙:
+- bullets 는 3개, 각 40자 내외 — 시장 지위·경쟁 우위·최근 방향성 위주로.
+- ecosystem 은 6~10개 노드. 대분류(category)가 겹치는 노드가 자연스럽게
+  섞여도 됨 — 실제 사업부/제품/자회사명을 최대한 구체적으로(일반적인
+  "기타 사업" 같은 모호한 라벨 금지).
+- 확실히 아는 사실만 답하세요. 최근 수개월 내 발표된 사업은 놓칠 수
+  있음을 감안해 널리 알려진 주력 사업 위주로 답하고, 불확실하면 노드
+  개수를 줄여 보수적으로 답하세요 — 지어내지 마세요.
+- 숫자(매출액·점유율%·주가 등)는 이 응답에 절대 포함하지 마세요.`;
+  const userMsg = sector ? `회사명: ${name}\n업종: ${sector}` : `회사명: ${name}`;
+
+  const response = await anthropic().messages.create({
+    model: MODEL,
+    max_tokens: 1200,
+    system,
+    messages: [{ role: "user", content: userMsg }],
+  });
+  const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+  const raw = textBlock?.text ?? "";
+  const costUsd =
+    response.usage.input_tokens * PRICE_PER_TOKEN.input +
+    response.usage.output_tokens * PRICE_PER_TOKEN.output;
+
+  try {
+    const match = raw.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : raw) as {
+      bullets?: unknown;
+      ecosystemCore?: unknown;
+      ecosystem?: unknown;
+    };
+    const bullets = Array.isArray(parsed.bullets)
+      ? parsed.bullets.filter((b): b is string => typeof b === "string" && b.trim().length > 0)
+      : [];
+    const ecosystem = Array.isArray(parsed.ecosystem)
+      ? parsed.ecosystem
+          .filter(
+            (n): n is { label: unknown; category: unknown } =>
+              typeof n === "object" && n !== null,
+          )
+          .map((n) => ({
+            label: String((n as { label?: unknown }).label ?? "").trim(),
+            category: String((n as { category?: unknown }).category ?? "").trim(),
+          }))
+          .filter((n) => n.label.length > 0)
+      : [];
+    return {
+      bullets,
+      ecosystemCore: typeof parsed.ecosystemCore === "string" ? parsed.ecosystemCore.trim() : "",
+      ecosystem,
+      costUsd,
+    };
+  } catch {
+    return { bullets: [], ecosystemCore: "", ecosystem: [], costUsd };
+  }
+}
+
 /**
  * 뉴스 헤드라인 번역의 최종 폴백(오너 승인, 2026-09 — 무료 API 두 곳(Google
  * 번역 웹 엔드포인트·MyMemory)이 동시에 실패할 때만 호출). 무인증 Google

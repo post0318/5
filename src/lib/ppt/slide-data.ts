@@ -104,9 +104,12 @@ export interface StockSlideData {
   brand: string;
   /** 회사 로고 (PNG data URI) — TradingView 심볼검색 기반 자동 조회 */
   logo: string | null;
-  /** 사용자 입력 */
+  /** 사용자 입력(비어있으면 LLM 자동 생성 — fetchBusinessProfile 참고) */
   overview: string;
   business: string[];
+  /** 사업 생태계 방사형 다이어그램 — 사용자 입력 없으면 LLM 자동 생성.
+   * null 이면(LLM도 실패) slide.ts가 business 불릿 목록으로 대체 표시. */
+  ecosystem: { core: string; nodes: { label: string; category: string }[] } | null;
   marketShare: string[];
   price: { date: string; close: number }[];
   /** 벤치마크(나스닥) — 우측 축 비교용 */
@@ -123,6 +126,43 @@ const UNIT_LABEL: Record<MarketId, string> = { kr: "억원", us: "백만$", jp: 
 
 const lines = (v?: string | string[]) =>
   (Array.isArray(v) ? v : (v ?? "").split(/\r?\n/)).map((x) => x.trim()).filter(Boolean);
+
+/** "카테고리:라벨" 줄 형식을 파싱(수동 입력용) — 콜론 없으면 카테고리 공란. */
+function parseEcosystemLines(v?: string | string[]): { label: string; category: string }[] {
+  return lines(v).map((line) => {
+    const i = line.indexOf(":");
+    return i > 0
+      ? { category: line.slice(0, i).trim(), label: line.slice(i + 1).trim() }
+      : { category: "", label: line };
+  });
+}
+
+/**
+ * "핵심 비즈니스 요약" 불릿·"사업 생태계" 다이어그램을 종목명만으로 자동
+ * 생성(오너 지시, 2026-09 — Gemini가 "한화에어로스페이스"란 이름만으로
+ * 이 둘을 다 만들어낸 사례 제시). 사용자가 둘 다 직접 입력했으면 LLM을
+ * 아예 호출하지 않는다(불필요한 비용). 월 예산 초과·API 키 미설정·호출
+ * 실패 시 조용히 빈 값 — business 불릿이 비면 slide.ts가 "직접 작성"
+ * 힌트를 보여주는 기존 동작 그대로 안전하게 유지된다.
+ */
+async function fetchBusinessProfile(
+  name: string,
+  sector: string | null,
+): Promise<{ bullets: string[]; ecosystemCore: string; ecosystem: { label: string; category: string }[] }> {
+  const empty = { bullets: [], ecosystemCore: "", ecosystem: [] };
+  if (!process.env.ANTHROPIC_API_KEY) return empty;
+  try {
+    const { isBudgetExceeded, incUsage } = await import("../db/llm-usage");
+    if (await isBudgetExceeded()) return empty;
+    const { generateBusinessProfile } = await import("../llm/claude");
+    const { bullets, ecosystemCore, ecosystem, costUsd } = await generateBusinessProfile(name, sector);
+    await incUsage(costUsd);
+    return { bullets, ecosystemCore, ecosystem };
+  } catch (err) {
+    console.error("[ppt] 사업 프로필 LLM 자동 생성 실패:", err);
+    return empty;
+  }
+}
 
 /**
  * 로고 자동 조회 — 2026-09 재도입(오너 지시: "회사로고도 자동으로 넣고 해야
@@ -204,6 +244,8 @@ export async function getStockSlideData(
     yahoo?: string | null;
     overview?: string;
     business?: string[] | string;
+    /** "카테고리:라벨" 줄 형식 수동 입력(선택) — 비우면 LLM 자동 생성 시도. */
+    ecosystem?: string[] | string;
     marketShare?: string[] | string;
     priceYears?: number;
     slideNo?: string;
@@ -294,24 +336,39 @@ export async function getStockSlideData(
       return [];
     }
   };
-  const [priceRows, benchRows, logo] = await Promise.all([
+  const stockName = ov.profile?.name ?? nsym;
+  const sector = ov.profile?.industry ?? ov.profile?.sector ?? null;
+  const businessLines = lines(opts.business);
+  const ecosystemManual = parseEcosystemLines(opts.ecosystem);
+  const needsProfile = businessLines.length === 0 || ecosystemManual.length === 0;
+
+  const [priceRows, benchRows, logo, profile] = await Promise.all([
     dailySeries(ysym),
     dailySeries("^IXIC"),
-    fetchLogo(ov.profile?.name ?? nsym, nsym, market).catch(() => null),
+    fetchLogo(stockName, nsym, market).catch(() => null),
+    needsProfile
+      ? fetchBusinessProfile(stockName, sector)
+      : Promise.resolve({ bullets: [], ecosystemCore: "", ecosystem: [] }),
   ]);
+
+  const ecosystemNodes = ecosystemManual.length > 0 ? ecosystemManual : profile.ecosystem;
 
   return {
     market,
     symbol: nsym,
-    name: ov.profile?.name ?? nsym,
+    name: stockName,
     currency: ov.quote?.currency ?? ov.multiples?.currency ?? "USD",
-    sector: ov.profile?.industry ?? ov.profile?.sector ?? null,
+    sector,
     unitLabel: UNIT_LABEL[market],
     slideNo: (opts.slideNo ?? "02").trim() || "02",
     brand: (opts.brand ?? "").trim(),
     logo,
     overview: (opts.overview ?? "").trim(),
-    business: lines(opts.business),
+    business: businessLines.length > 0 ? businessLines : profile.bullets,
+    ecosystem:
+      ecosystemNodes.length > 0
+        ? { core: (profile.ecosystemCore || sector || "").trim(), nodes: ecosystemNodes }
+        : null,
     marketShare: lines(opts.marketShare),
     price: priceRows,
     bench: benchRows,
