@@ -82,12 +82,24 @@ function extractTargetPrice(text) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-async function fetchPage(page, listUrl = LIST_URL) {
+// 일시적 네트워크 오류(GitHub Actions 러너 쪽 DNS 일시 장애 — 실측 2026-09,
+// "getaddrinfo EAI_AGAIN www.bnkfn.co.kr" 로 연속 실패했으나 로컬에서는
+// 정상 접속 확인됨)에도 전체 수집이 죽지 않도록 페이지당 재시도를 둔다.
+async function fetchPage(page, listUrl = LIST_URL, attempt = 1) {
   const url = new URL(listUrl);
   if (page > 1) url.searchParams.set("pageIndex", String(page));
-  const res = await fetch(url, { headers: { "User-Agent": UA } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } catch (err) {
+    if (attempt < 3 && /fetch failed|EAI_AGAIN|ECONNRESET|ETIMEDOUT/i.test(String(err.message ?? err))) {
+      console.warn(`  ⚠ 페이지 ${page} 요청 실패(${attempt}회차), 재시도: ${err.message}`);
+      await sleep(2000 * attempt);
+      return fetchPage(page, listUrl, attempt + 1);
+    }
+    throw err;
+  }
 }
 
 function parseItems(html) {
