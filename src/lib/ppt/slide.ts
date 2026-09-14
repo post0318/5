@@ -92,7 +92,9 @@ function addSlide(pptx: PptxGenJS, d: StockSlideData) {
     },
   );
   if (d.logo) {
-    s.addImage({ data: d.logo, x: 8.02, y: 0.3, w: 1.6, h: 0.62, sizing: { type: "contain", w: 1.6, h: 0.62 } });
+    // TradingView 로고는 정사각형 컬러 배지 스타일(와이드 워드마크 아님) —
+    // 정사각형 자리에 맞춘다(오너 지시, 2026-09 — 로고 자동 삽입 재도입).
+    s.addImage({ data: d.logo, x: 8.98, y: 0.28, w: 0.6, h: 0.6, sizing: { type: "contain", w: 0.6, h: 0.6 } });
   }
 
   // ── 회사 개요 밴드 (0.43, 1.02, 9.22×0.91) ──────────

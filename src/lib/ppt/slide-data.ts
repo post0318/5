@@ -102,7 +102,7 @@ export interface StockSlideData {
   slideNo: string;
   /** 우측 하단 브랜드 문구 (기본 공란) */
   brand: string;
-  /** 회사 로고 (data URI) — 도메인 기반 자동 조회 */
+  /** 회사 로고 (PNG data URI) — TradingView 심볼검색 기반 자동 조회 */
   logo: string | null;
   /** 사용자 입력 */
   overview: string;
@@ -125,16 +125,76 @@ const lines = (v?: string | string[]) =>
   (Array.isArray(v) ? v : (v ?? "").split(/\r?\n/)).map((x) => x.trim()).filter(Boolean);
 
 /**
- * 로고 자동 조회는 쓰지 않는다 — Clearbit Logo API는 서비스 종료(DNS 응답
- * 없음)됐고, 폴백으로 쓰던 Google 파비콘 서비스는 실제 파비콘을 못 찾으면
- * 도메인 첫 글자로 만든 가짜 아이콘을 정상 이미지처럼 반환해(예: samsung.com
- * → 진짜 삼성 로고가 아니라 파란 바탕에 "S" 아이콘) 틀린 로고가 그대로
- * PPT에 들어가는 문제가 있었다. 틀린 로고보다 로고 없음이 낫다고 판단해
- * 자동 조회를 제거 — 로고가 필요하면 사용자가 직접 이미지를 준비해 붙여야
- * 한다(현재 다이얼로그에는 업로드 필드 없음).
+ * 로고 자동 조회 — 2026-09 재도입(오너 지시: "회사로고도 자동으로 넣고 해야
+ * 하지 않겠니" — TradingView 로고 CDN 선택). 예전엔 Clearbit(서비스 종료)·
+ * Google 파비콘(못 찾으면 도메인 첫 글자로 가짜 아이콘 반환 — 틀린 로고
+ * 문제)을 썼다가 아예 꺼뒀었다(로고 없음이 틀린 로고보다 낫다는 판단).
+ *
+ * TradingView의 공개 심볼검색 API(`symbol-search.tradingview.com`, Referer/
+ * Origin 헤더만 있으면 접근 가능, 실측 확인)로 종목코드/티커 → `logoid` 를
+ * 찾고, 그 로고 파일을 CDN(`s3-symbol-logo.tradingview.com`)에서 받는다.
+ * 도메인 추측이 아니라 종목코드 매칭이라 Google 파비콘 방식보다 오탐 위험이
+ * 훨씬 작다. 로고 파일이 SVG만 제공되는데, 이 프로젝트는 파워포인트 2007
+ * 호환을 신경쓰고(다른 곳에서 네이티브 콤보차트 대신 도형으로 우회한 이유와
+ * 동일) SVG는 2016 이전 PowerPoint에서 아예 안 열려 sharp(Next.js 자체
+ * optionalDependency로 이미 번들, 이번에 package.json에 명시 추가)로 PNG
+ * 변환 후 삽입한다. 실패하면(검색 결과 없음·SVG 없음·변환 실패) 조용히
+ * null — 로고 없음으로 안전하게 폴백.
  */
-async function fetchLogo(_homepage?: string | null): Promise<string | null> {
-  return null;
+const TV_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+  Referer: "https://www.tradingview.com/",
+  Origin: "https://www.tradingview.com",
+  Accept: "application/json",
+};
+const TV_COUNTRY: Record<MarketId, string> = { kr: "KR", us: "US", jp: "JP" };
+
+interface TvSymbol {
+  logoid?: string;
+  country?: string;
+  is_primary_listing?: boolean;
+}
+
+async function findLogoId(query: string, market: MarketId): Promise<string | null> {
+  try {
+    const url = `https://symbol-search.tradingview.com/symbol_search/v3/?text=${encodeURIComponent(
+      query,
+    )}&hl=1&exchange=&lang=en&search_type=stock&domain=production`;
+    const res = await fetch(url, { headers: TV_HEADERS, signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { symbols?: TvSymbol[] };
+    const symbols = (data.symbols ?? []).filter((s) => s.logoid);
+    if (symbols.length === 0) return null;
+    const country = TV_COUNTRY[market];
+    const best =
+      symbols.find((s) => s.country === country && s.is_primary_listing) ??
+      symbols.find((s) => s.country === country) ??
+      symbols.find((s) => s.is_primary_listing) ??
+      symbols[0];
+    return best.logoid ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchLogo(name: string, symbol: string, market: MarketId): Promise<string | null> {
+  try {
+    // 한국은 종목코드(숫자)만으로 검색해야 정확도가 높다(실측 — "005930" →
+    // 삼성전자 1건 정확 매칭, 회사명으로 검색하면 동명이사·계열사 혼선 위험).
+    const query = market === "kr" ? symbol.replace(/\.[A-Z]+$/, "") : symbol;
+    const logoid = (await findLogoId(query, market)) ?? (await findLogoId(name, market));
+    if (!logoid) return null;
+    const res = await fetch(`https://s3-symbol-logo.tradingview.com/${logoid}--big.svg`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    const svg = Buffer.from(await res.arrayBuffer());
+    const { default: sharp } = await import("sharp");
+    const png = await sharp(svg).resize(240, 240, { fit: "inside" }).png().toBuffer();
+    return `data:image/png;base64,${png.toString("base64")}`;
+  } catch {
+    return null;
+  }
 }
 
 export async function getStockSlideData(
@@ -237,7 +297,7 @@ export async function getStockSlideData(
   const [priceRows, benchRows, logo] = await Promise.all([
     dailySeries(ysym),
     dailySeries("^IXIC"),
-    fetchLogo(ov.profile?.homepage).catch(() => null),
+    fetchLogo(ov.profile?.name ?? nsym, nsym, market).catch(() => null),
   ]);
 
   return {
