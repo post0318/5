@@ -164,7 +164,12 @@ for (const r of rows) {
   const date = r.publicDate;
   if (!date || new Date(date) < cutoff) continue;
   // 제목 "AI 실적속보: 어도비 (ADBE US)" 에서 티커를 뽑는다(종목코드 필드는 ISIN).
-  const tm = String(r.docTitle ?? "").trim().match(/\(([A-Z][A-Z.]{0,5})\s+US\)/);
+  // 국가 코드가 "US"가 아닌 경우도 있음(예: "ASML 홀딩 (ASML NL)" — 실제로는
+  // 나스닥 ADR로도 거래되는 개별기업 리포트인데 "US"만 받던 정규식이 이걸
+  // 놓쳐 종목 없는 "산업"으로 잘못 편입되고 있었다, 오너 지적 2026-09).
+  // foldertemplate 로 이미 "미국" 폴더만 걸러낸 뒤라 국가 코드 종류와 무관하게
+  // "(TICKER XX)" 형식이면 개별기업 리포트로 본다.
+  const tm = String(r.docTitle ?? "").trim().match(/\(([A-Z][A-Z.]{0,5})\s+[A-Z]{2,3}\)/);
   if (tm) {
     collected.push({
       id: r.documentid,
