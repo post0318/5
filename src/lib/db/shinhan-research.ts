@@ -231,7 +231,7 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // 있어(나스닥 반응 vs 금리 코멘트) 여기엔 안 넣음 — STRATEGY_HINT_RE에서만
 // 승격 신호로 쓰고, 실제 채권 여부는 이 정규식의 다른 키워드로 판정.
 const BOND_HINT_RE =
-  /크레딧|채권|국채|금리|중앙은행|통화정책|고용|실업|비농업|물가|Beige\s?Book|\bCPI\b|\bPPI\b|\bPCE\b|\bCredit\b|\bBond\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
+  /크레딧|채권|국채|부채|금리|중앙은행|통화정책|고용|실업|비농업|물가|Beige\s?Book|\bCPI\b|\bPPI\b|\bPCE\b|\bCredit\b|\bBond\b|\bDebt\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
 
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market">,
