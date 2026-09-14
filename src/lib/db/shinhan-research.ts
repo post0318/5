@@ -169,7 +169,7 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
 // "매크로 Comment") — 산업분석 아니면 투자전략이라는 원칙에서, 섹터명이
 // 아닌 매크로 코멘트류는 투자전략 기본값(오너 지적, 2026-09).
 const STRATEGY_HINT_RE =
-  /전략|\bStrategy\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|\bFICC\b/i;
+  /전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income/i;
 // "Check-up"(신한 FX/Econ Check-up), "Economy/Economic Brief"(iM증권 등,
 // "IPO Brief"와 충돌 안 하게 일반 Brief 단독은 안 넣음), "N주)"/"N주차"
 // (키움 "키움 글로벌 키차트(9월 1주)"처럼 주차 표기가 괄호 안에만 있고
