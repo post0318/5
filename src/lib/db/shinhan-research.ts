@@ -202,8 +202,26 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
 // "실적상향/실적하향"(어닝 리비전 스크리닝, 예: "신흥국 실적 상향 상위에
 // 한국 10개 종목 진입" — 여러 종목을 실적 모멘텀 기준으로 스크리닝하는
 // 투자전략물이지 업종 얘기가 아님) 추가(오너 지적, 2026-09).
-const STRATEGY_HINT_RE =
-  /(?<!치료\s?)(?<!임상\s?)전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC|실적\s?(상향|하향)/i;
+//
+// 한글 "전략" 단독(영문 Strategy/Strategic 제외)은 업종 심층분석 리포트가
+// 결론부에 "…변화와 투자전략"/"9월 전략: …" 식으로 흔히 쓰는 관용구라(실측:
+// LS증권 "AI시대 조선 산업의 변화와 투자전략", DS증권 "9월 전략: 높은
+// 파도도 항로를 바꾸지 못한다"(stockName="반도체") 둘 다 산업분석인데
+// 투자전략(주식)으로 잘못 넘어감, 오너 지적 2026-09 — "단순히 위클리만
+// 따라가면 답없다"와 같은 성격의 문제) MARKET_CONDITION_PERIOD_RE와 똑같이
+// stockName이 실제 업종명일 땐 무시해야 한다. 그래서 STRATEGY_HINT_RE를
+// 두 그룹으로 나눈다: STRATEGY_HINT_STRONG_RE(영문 Strategy/매크로/
+// 추천종목 등, stockName과 무관하게 항상 승격)와 BARE_STRATEGY_RE(한글
+// "전략" 단독, stockName이 업종명이 아닐 때만 승격 — isGenericOrBoardLabel).
+const STRATEGY_HINT_STRONG_RE =
+  /\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC|실적\s?(상향|하향)/i;
+const BARE_STRATEGY_RE = /(?<!치료\s?)(?<!임상\s?)전략/;
+// isGenericOrBoardLabel()에서 stockName 자체가 전략/보드 라벨인지 판별할
+// 때는 강한 신호와 bare 전략을 합친 전체를 쓴다 — "글로벌 투자전략"처럼
+// stockName 자체에 "전략"이 있으면 그건 진짜 전략 게시판이라는 뜻이라
+// bare 전략도 신뢰해도 안전하다(hay 전체가 아니라 stockName만 검사하므로
+// 제목에만 있는 bare 전략은 여기 안 걸림).
+const STRATEGY_HINT_RE = /(?<!치료\s?)(?<!임상\s?)전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC|실적\s?(상향|하향)/i;
 // "Check-up"(신한 FX/Econ Check-up), "Economy/Economic Brief"(iM증권 등,
 // "IPO Brief"와 충돌 안 하게 일반 Brief 단독은 안 넣음), "N주)"/"N주차"
 // (키움 "키움 글로벌 키차트(9월 1주)"처럼 주차 표기가 괄호 안에만 있고
@@ -326,8 +344,11 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // 사이클 연장" 누락 확인).
 const BOND_STRONG_RE =
   /(?<!매출)(?<!연체)(?<!부실)채권(?!단|자|회수|추심)|크레딧|국채|부채|Beige\s?Book|\bCredit\b|\bBond\b|\bDebt\b|Fixed\s?Income/i;
+// "환율"(FX) 추가 — 한국투자증권 "경제분석 Note" 환율 FAQ 사례가 채권/
+// FICC 데스크 소관인데 신호가 없어 투자전략(주식)으로 잘못 넘어감(오너
+// 지적, 2026-09).
 const BOND_MACRO_RE =
-  /금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|\bCPI\b(?!\()|\bPPI\b(?!\()|\bPCE\b(?!\()|\bGDP\b|Retail\s?Sales|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|\bECB\b/i;
+  /금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|환율|\bCPI\b(?!\()|\bPPI\b(?!\()|\bPCE\b(?!\()|\bGDP\b|Retail\s?Sales|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|\bECB\b/i;
 // "코스피/코스닥/나스닥" 등 지수명 자체가 이미 주식시장 얘기라는 강한 신호
 // (오너 지적, 2026-09). 한글 표기뿐 아니라 리포트에 흔한 영문 표기(KOSPI/
 // KOSDAQ/NASDAQ)도 포함.
@@ -359,20 +380,28 @@ function isMarketConditionStockname(stockName: string): boolean {
  * 매치, 예: "글로벌 투자전략")인 경우 true. 이럴 땐 주기성 키워드나 약한
  * 매크로 신호만으로도 시황/투자전략 판정을 신뢰할 수 있지만, false(=구체적
  * 업종명)면 정기 업종분석일 가능성이 높아 그 신호들을 무시한다.
+ *
+ * stockName만 검사한다(hay=stockName+title 전체가 아님) — 제목에만 있는
+ * bare "전략"까지 여기 걸리면 "반도체"(stockName) + "9월 전략: …"(title)
+ * 같은 순수 업종 리포트가 전부 "보드 라벨"로 오인된다(실측, 오너 지적
+ * 2026-09). stockName 자체에 전략 관련 단어가 있으면("글로벌 투자전략" 등)
+ * 그건 진짜 게시판 라벨이라는 뜻이라 안전하게 걸어도 된다.
+ * KIS_STRATEGY_DEFAULT_STOCKNAMES("경제분석 Note" 등)도 업종명이 아니라
+ * 게시판 라벨이라 포함 — 안 그러면 이 라벨들은 bond 약한 신호(환율/금리
+ * 등)가 EQUITY_HINT_RE 억제 없이도 무시돼버린다(실측: "경제분석 Note" +
+ * "환율 관련 FAQ" 가 투자전략(채권)이어야 하는데 투자전략(주식)으로 새던
+ * 문제, 오너 지적 2026-09).
  */
-function isGenericOrBoardLabel(doc: { stockName: string; title: string }, hay: string): boolean {
+function isGenericOrBoardLabel(doc: { stockName: string; title: string }): boolean {
   if (!doc.stockName || doc.stockName === doc.title || doc.stockName === "산업" || doc.stockName === "시장")
     return true;
-  return STRATEGY_HINT_RE.test(hay);
+  if (KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)) return true;
+  return STRATEGY_HINT_RE.test(doc.stockName);
 }
 
-function isBond(
-  doc: { stockName: string; title: string },
-  hay: string,
-  hayWithSummary: string,
-): boolean {
+function isBond(doc: { stockName: string; title: string }, hayWithSummary: string): boolean {
   if (BOND_STRONG_RE.test(hayWithSummary)) return true;
-  return isGenericOrBoardLabel(doc, hay) && BOND_MACRO_RE.test(hayWithSummary) && !EQUITY_HINT_RE.test(hayWithSummary);
+  return isGenericOrBoardLabel(doc) && BOND_MACRO_RE.test(hayWithSummary) && !EQUITY_HINT_RE.test(hayWithSummary);
 }
 
 export function classifyResearchTopic(
@@ -389,9 +418,9 @@ export function classifyResearchTopic(
   // 키워드는 상대적으로 금융 용어라 그 위험이 작음).
   const hayWithSummary = `${hay} ${doc.summary ?? ""}`;
   if (BOND_SOURCES.has(doc.source)) return "투자전략(채권)";
-  if (isStrategyStockname(doc.stockName)) return isBond(doc, hay, hayWithSummary) ? "투자전략(채권)" : "투자전략(주식)";
+  if (isStrategyStockname(doc.stockName)) return isBond(doc, hayWithSummary) ? "투자전략(채권)" : "투자전략(주식)";
   if (MARKET_CONDITION_STRONG_RE.test(hay)) return "시황";
-  const generic = isGenericOrBoardLabel(doc, hay);
+  const generic = isGenericOrBoardLabel(doc);
   if (MARKET_CONDITION_PERIOD_RE.test(hay) && generic) return "시황";
   // 강한 채권 신호는 항상, 약한 매크로 신호·명시적 주식 신호는 stockName이
   // 구체적 업종이 아닐 때만 투자전략 승격 신호로 쓴다("미국 10년물 금리
@@ -403,8 +432,11 @@ export function classifyResearchTopic(
   const bondMacro = generic && BOND_MACRO_RE.test(hayWithSummary);
   const equitySignal = generic && EQUITY_HINT_RE.test(hayWithSummary);
   const bond = bondStrong || (bondMacro && !equitySignal);
+  // bare "전략"은 stockName이 업종명이 아닐 때만(generic) 승격 신호로 쓴다 —
+  // 영문 Strategy/매크로 등 강한 신호는 항상.
   if (
-    STRATEGY_HINT_RE.test(hay) ||
+    STRATEGY_HINT_STRONG_RE.test(hay) ||
+    (generic && BARE_STRATEGY_RE.test(hay)) ||
     bondStrong ||
     bondMacro ||
     equitySignal ||
@@ -435,8 +467,12 @@ export async function getIndustryResearch(
   // 가져와야 limit 만큼 채워진다 — 최근 200건 중 한쪽 topic이 몰려 있어도
   // 안전하도록 여유있게.
   const fetchLimit = topic ? Math.max(limit * 6, 200) : limit + 20;
+  // pdfUrl 이 없으면 화면에서 클릭할 게 없어 조회 단계에서 제외한다(오너
+  // 지적, 2026-09 — "링크가 없다 링크안되면 삭제다", NH의 일부 "산업" 항목이
+  // API 응답 자체에 첨부파일이 없어 실측됨). 해당 수집기도 앞으로 이런
+  // 항목을 아예 안 보내도록 함께 수정.
   const docs = await col
-    .find({ market, category: "산업" })
+    .find({ market, category: "산업", pdfUrl: { $ne: null } })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();

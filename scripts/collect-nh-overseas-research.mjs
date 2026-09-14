@@ -67,12 +67,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 발췌 공란을 확인해 발견). 헤더/표지 블록을 건너뛰는 휴리스틱은 국내
 // 수집기와 동일.
 const EXCERPT_LEN = 150;
+// "동 자료상 투자의견이 제시된 기업 중 별도의 언급이 없는 한, NH투자증권은
+// 해당기업의 발행주식 등을 1% 이상 보유하고 있지 않습니다" 같은 컴플라이언스
+// 고지 문구가 헤더 스킵 이후에도 남아 발췌에 반복적으로 섞여 들어갔다(오너
+// 지적, 2026-09 — "이거 반복인데 이거는 주제와 벗어나는 문구다").
+const COMPLIANCE_LINE_RE = /1%\s*이상\s*보유/;
 function excerptFromPdfText(text) {
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   const anchor = lines.findIndex((l) => /Note\s*[│|]/.test(l));
   const bodyLines = anchor >= 0 ? lines.slice(anchor + 3) : lines.slice(4);
   const flat = bodyLines
-    .filter((l) => l.length >= 10)
+    .filter((l) => l.length >= 10 && !COMPLIANCE_LINE_RE.test(l))
     .join(" ")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -230,6 +235,11 @@ for (const r of rawRows) {
   const sm = rawTitle.match(STRATEGY_INSIDE_RE);
   if (sm) {
     if (NON_US_COUNTRY_RE.test(sm[1])) continue; // 미국 외 국가 회차 — 건너뜀
+    // PDF 링크가 없으면 화면에서 클릭할 게 없어 그대로 버린다(오너 지적,
+    // 2026-09 — "링크가 없다 링크안되면 삭제다"). "Weekly ETF Flows"·
+    // "Global Markets Morning Brief" 등 일부 항목은 NH API 응답 자체에
+    // 첨부파일 필드가 비어있음(실측).
+    if (!r.hpge_fle_url_cts) continue;
     collected.push({
       id: r.rsh_ppr_no,
       date: isoDate(r.rsh_ppr_dru_dt),
@@ -248,7 +258,7 @@ for (const r of rawRows) {
   }
 
   const gm = rawTitle.match(GENERIC_BRACKET_RE);
-  if (gm && !NON_US_COUNTRY_RE.test(gm[1])) {
+  if (gm && !NON_US_COUNTRY_RE.test(gm[1]) && r.hpge_fle_url_cts) {
     collected.push({
       id: r.rsh_ppr_no,
       date: isoDate(r.rsh_ppr_dru_dt),

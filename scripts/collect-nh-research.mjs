@@ -102,12 +102,17 @@ function sectorLabelAndTitle(rawTitle) {
 }
 
 const EXCERPT_LEN = 150;
+// "동 자료상 투자의견이 제시된 기업 중 별도의 언급이 없는 한, NH투자증권은
+// 해당기업의 발행주식 등을 1% 이상 보유하고 있지 않습니다" 같은 컴플라이언스
+// 고지 문구가 헤더 스킵 이후에도 남아 발췌에 반복적으로 섞여 들어갔다(오너
+// 지적, 2026-09 — "이거 반복인데 이거는 주제와 벗어나는 문구다").
+const COMPLIANCE_LINE_RE = /1%\s*이상\s*보유/;
 function excerptFromPdfText(text) {
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   const anchor = lines.findIndex((l) => /Note\s*[│|]/.test(l));
   const bodyLines = anchor >= 0 ? lines.slice(anchor + 3) : lines.slice(4);
   const flat = bodyLines
-    .filter((l) => l.length >= 10)
+    .filter((l) => l.length >= 10 && !COMPLIANCE_LINE_RE.test(l))
     .join(" ")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -232,6 +237,10 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
     // 코드 0개 — ser_cd_nm 이 "산업"이면 산업분석/투자전략으로 수집, 그 외
     // ("기업"인데 코드 매칭 실패, 해외종목만 다룸 등)는 기존처럼 건너뜀.
     if (r.rsh_ppr_ser_cd_nm !== "산업") continue;
+    // PDF 링크가 없으면 화면에서 클릭할 게 없어 그대로 버린다(오너 지적,
+    // 2026-09 — "링크가 없다 링크안되면 삭제다"). "Weekly KR ETF Flows" 등
+    // 일부 항목은 NH API 응답 자체에 첨부파일 필드가 비어있음(실측).
+    if (!r.hpge_fle_url_cts) continue;
     const { sector, title } = sectorLabelAndTitle(r.rsh_ppr_til_cts);
     collected.push({
       id: r.rsh_ppr_no,
