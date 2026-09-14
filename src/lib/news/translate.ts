@@ -1,4 +1,5 @@
 import "server-only";
+import { getCachedTranslation, setCachedTranslation } from "../db/translation-cache";
 
 /**
  * 뉴스 제목 번역 + 가벼운 왕복검증. 무인증 Google 번역 웹 엔드포인트를 먼저 쓰고
@@ -120,27 +121,42 @@ export async function translateChecked(
   const cacheKey = `${sl}:${src}`;
   const cached = cacheGet(cacheKey);
   if (cached) return cached;
+  // DB 캐시(인스턴스 재시작·다른 서버리스 인스턴스에도 살아남음) — 오너 지적,
+  // 2026-09: "새로고침할 때마다 번역이 달라지는데 LLM 비용이 계속 쓰는거
+  // 아닌가?" — 인메모리 캐시만으로는 HTTP 엣지 캐시가 실제로 안 먹히는
+  // 요청에서 같은 헤드라인이 매번 재번역되고(LLM 폴백은 매번 문구도 살짝
+  // 달라짐) 있었다. DB에서 찾으면 인메모리에도 채워 같은 인스턴스 안에서는
+  // DB 왕복도 생략.
+  const dbCached = await getCachedTranslation(sl, src);
+  if (dbCached) {
+    cacheSet(cacheKey, dbCached.ko, dbCached.ok);
+    return dbCached;
+  }
   // 1) Google 시도 + 성공 시에만 왕복검증(영어권 위주. dice 계수는 알파벳 기준이라
   //    일본어 역번역 검증엔 약함 — 실패해도 원문 노출이라 안전)
   const gk = await viaGoogle(src, sl, "ko");
   if (gk && gk.trim() !== src.trim()) {
     if (sl !== "en") {
       cacheSet(cacheKey, gk, true);
+      void setCachedTranslation(sl, src, gk, true);
       return { ko: gk, ok: true };
     }
     const back = await viaGoogle(gk, "ko", sl);
     if (!back) {
       cacheSet(cacheKey, gk, true);
+      void setCachedTranslation(sl, src, gk, true);
       return { ko: gk, ok: true };
     }
     const ok = dice(contentWords(back), contentWords(src)) >= 0.3;
     cacheSet(cacheKey, gk, ok);
+    void setCachedTranslation(sl, src, gk, ok);
     return { ko: gk, ok };
   }
   // 2) Google 실패/미번역 → MyMemory 폴백 (왕복검증 생략)
   const mk = await viaMyMemory(src, sl);
   if (mk && mk.trim() !== src.trim()) {
     cacheSet(cacheKey, mk, true);
+    void setCachedTranslation(sl, src, mk, true);
     return { ko: mk, ok: true };
   }
   // 3) 무료 경로(Google·MyMemory) 둘 다 실패 → Claude Haiku 최종 폴백(오너
@@ -151,6 +167,9 @@ export async function translateChecked(
     const llm = await translateViaLlmFallback(src, sl);
     if (llm) {
       cacheSet(cacheKey, llm, true);
+      // LLM 폴백 결과는 특히 DB에 꼭 남겨야 한다 — 실제 비용이 든 호출이라
+      // 캐시가 안 먹히면 새로고침마다 돈이 계속 나간다(이번 수정의 핵심 동기).
+      await setCachedTranslation(sl, src, llm, true);
       return { ko: llm, ok: true };
     }
   }

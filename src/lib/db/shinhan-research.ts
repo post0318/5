@@ -173,7 +173,7 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
 // 될 수 있어 — 실측: "나스닥 신고가 기대" 는 주식, "CPI…금리 인상" 은
 // 채권 — STRATEGY 승격까지만 담당하고 BOND_HINT_RE 가 최종 구분)도 추가.
 const STRATEGY_HINT_RE =
-  /전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC/i;
+  /전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC/i;
 // "Check-up"(신한 FX/Econ Check-up), "Economy/Economic Brief"(iM증권 등,
 // "IPO Brief"와 충돌 안 하게 일반 Brief 단독은 안 넣음), "N주)"/"N주차"
 // (키움 "키움 글로벌 키차트(9월 1주)"처럼 주차 표기가 괄호 안에만 있고
@@ -181,7 +181,7 @@ const STRATEGY_HINT_RE =
 // Economist"), "모니터/Monitor"(대신증권 "S&P 500 분기 실적 시즌 모니터")
 // 추가(오너 지적, 2026-09).
 const MARKET_CONDITION_RE =
-  /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|마켓레이더|모니터|\bWeek(ly)?\b|\bDaily\b|\bMorning\b|\bMonitor\b|Market\s?(Radar|Pulse|Insight)\b|Check-?up|Econom(y|ic)\s?Brief|Economist|\d+주(차)?[)\s]/i;
+  /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|마켓레이더|모니터|\bWeek(ly)?\b|\bDaily\b|\bMorning\b|\bMonitor\b|\bPMI\b|Market\s?(Radar|Pulse|Insight)\b|Check-?up|Econom(y|ic)\s?Brief|Economist|\d+주(차)?[)\s]/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
   "KB Global Tracker+",
   "KB데일리", // 오너 지적, 2026-09
@@ -195,7 +195,7 @@ const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 // KB증권 "Global Insights" — 오너 지시, 2026-09("KB증권 Global Insights는
 // 투자전략임"). 제목에 "전략"/Strategy 등 키워드가 없는 경우가 많아 시리즈명
 // 기준으로 강제.
-const STRATEGY_STOCKNAMES = new Set(["Global Insights"]);
+const STRATEGY_STOCKNAMES = new Set(["Global Insights", "Global Watchlist", "마켓픽"]);
 // 한국투자증권 "전략/이슈 리포트" 게시판(collect-kis-strategy-research.mjs,
 // jkGubun=6) 라벨들 — 처음엔 전부 시황으로 강제했으나(오너 지시, "한국투자는
 // 시황으로 분류"), 이후 "위클리, 데일리 등이 아니면 투자전략이다"로 정정됨
