@@ -102,6 +102,19 @@ const ALLOWED_PUBLISHERS = new Set(
     "Benzinga",
     "Zacks",
     "CNN Business", // 오너 요청(2026-09) — Google 뉴스 경유로만 나옴(야후엔 없음)
+    // 미국 — 메이저 종합·테크 매체(2026-09-15 추가, 오너 승인): AMZN 후보 43건
+    // 실측에서 탈락 33건이 전부 "목록 밖" 사유였고 그중 상당수가 아래 매체였음.
+    // 지역 방송(교통사고·배심원 출석)·기업 블로그 노이즈는 여전히 목록 밖.
+    "Axios",
+    "USA Today",
+    "CBS News",
+    "NBC News",
+    "NPR",
+    "Fox Business",
+    "Fortune",
+    "TechCrunch",
+    "The Guardian",
+    "Variety",
     // 일본
     "Nikkei Asia",
     "The Japan Times",
@@ -225,6 +238,16 @@ const OVERSEAS_PUBLISHER_BY_DOMAIN: Record<string, string> = {
   "cnn.com": "CNN Business",
   "edition.cnn.com": "CNN Business",
   "money.cnn.com": "CNN Business",
+  "axios.com": "Axios",
+  "usatoday.com": "USA Today",
+  "cbsnews.com": "CBS News",
+  "nbcnews.com": "NBC News",
+  "npr.org": "NPR",
+  "foxbusiness.com": "Fox Business",
+  "fortune.com": "Fortune",
+  "techcrunch.com": "TechCrunch",
+  "theguardian.com": "The Guardian",
+  "variety.com": "Variety",
   "asia.nikkei.com": "Nikkei Asia",
   "japantimes.co.jp": "The Japan Times",
   "kyodonews.net": "Kyodo News",
@@ -479,7 +502,9 @@ export async function fetchStockNews(
   // KR은 네이버 증권의 종목코드별 태깅 API(fetchKrStockTaggedNews)를 써서
   // 애초에 검색·필터 자체가 불필요 — 나머지 시장은 기존 야후 검색 유지.
   const items =
-    market === "kr" ? await fetchKrStockTaggedNews(symbol) : await fetchUsJpNews(market, symbol, query);
+    market === "kr"
+      ? await fetchKrStockTaggedNews(symbol)
+      : await fetchUsJpNews(market, symbol, yahooQuery(market, symbol, query));
   return withTranslatedTitles(SOURCE_LANG[market], items);
 }
 
@@ -553,8 +578,73 @@ function stripLegalSuffix(engName: string): string {
   return words.join(" ");
 }
 
+/**
+ * SEC EDGAR 등록명("CORNING INC /NY", "APPLE INC", "ALPHABET INC.")을 검색어로
+ * 쓸 수 있게 정리 — 주(州) 꼬리표(" /NY", "/DE/")와 법인 접미사를 뗀다. 실측
+ * (2026-09, 오너 지적 "코닝 뉴스가 너무 평온하다"): "CORNING INC /NY"로 Yahoo
+ * 검색하면 지붕 시공·코인쉐어스 등 무관한 기사만 10건, "Corning"이면 당일
+ * 급락 기사가 바로 나왔다. 미국 종목의 Yahoo 검색은 아예 티커로 한다(아래).
+ */
+function cleanEdgarName(name: string): string {
+  const noState = name.replace(/\s*\/[A-Z]{2}\/?\s*$/i, "").trim();
+  return stripLegalSuffix(noState) || name;
+}
+
+/** 미국·일본 종목의 Yahoo 검색어 — 티커. Yahoo 는 티커 검색 시 그 종목에 태깅된
+ * 기사를 돌려줘 회사명 검색보다 정확하고 최신이다(실측: "GLW" → 당일 기사 10건). */
+function yahooQuery(market: MarketId, symbol: string, companyName: string): string {
+  return market === "kr" ? companyName : symbol;
+}
+
+/** 구두점·공백·대소문자를 무시한 비교용 정규화("Coca-Cola"→"cocacola", "McDonald's"→"mcdonalds") */
+function normalizeForMatch(str: string): string {
+  return str.toLowerCase().replace(/[^a-z0-9가-힣]+/g, "");
+}
+
+/** 첫 단어 매칭에서 제외할 흔한 회사명 앞말(다른 회사·일반 문장에 너무 자주 등장) */
+const GENERIC_NAME_WORDS = new Set([
+  "international", "american", "advanced", "united", "general", "global", "national", "first",
+  "micro", "digital", "energy", "capital", "financial", "technology", "technologies", "holdings",
+  // 지명 — "TAIWAN SEMICONDUCTOR…"의 "Taiwan"으로 검색·매칭하면 정치 뉴스가 쏟아짐
+  "taiwan", "china", "japan", "korea", "america", "europe", "european", "canada", "texas",
+]);
+
+/** 회사명 첫 단어가 그 회사를 특정할 만큼 고유하면("Amazon", "Marriott", "Applied")
+ * 반환, 아니면 null(5자 미만 "Coca", 일반어 "International", 지명 "Taiwan"). Google
+ * 검색 보조 질의와 폴백 관련성 판정이 같은 규칙을 쓴다. */
+function distinctiveFirstWord(cleanName: string): string | null {
+  const first = cleanName.split(/\s+/)[0] ?? "";
+  const norm = normalizeForMatch(first);
+  if (norm.length < 5 || GENERIC_NAME_WORDS.has(norm)) return null;
+  return first;
+}
+
+/**
+ * 해외 폴백(LLM 미사용)용 관련성 판정기 — 기사 제목(+요약)에
+ *  (1) 정리된 회사명 전체(정규화 비교: "AMAZON COM"→"amazoncom") 또는
+ *  (2) 회사명 첫 단어(5자 이상, 흔한 단어 제외 — "Amazon", "Marriott", "Applied") 또는
+ *  (3) 티커(대소문자 구분, 단어 경계 — "BE"가 영어 "be"에 걸리지 않게)
+ * 가 있으면 통과. 실측(2026-09): EDGAR 명 "AMAZON COM INC"/"COCA COLA CO"/"MCDONALDS
+ * CORP"는 단순 소문자 포함 비교로는 제목의 "Amazon"/"Coca-Cola"/"McDonald's"와
+ * 안 맞았음.
+ */
+function overseasNameMatcher(shortName: string, symbol: string): (hay: string) => boolean {
+  const nameNorm = normalizeForMatch(shortName);
+  const first = distinctiveFirstWord(shortName);
+  const firstWord = first ? normalizeForMatch(first) : "";
+  const useFirst = firstWord.length > 0;
+  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tickerRe = new RegExp(`(^|[^A-Za-z0-9])${escaped}(?=$|[^A-Za-z0-9])`);
+  return (hay: string) => {
+    const hayNorm = normalizeForMatch(hay);
+    if (nameNorm && hayNorm.includes(nameNorm)) return true;
+    if (useFirst && hayNorm.includes(firstWord)) return true;
+    return tickerRe.test(hay);
+  };
+}
+
 function overseasQuery(market: MarketId, symbol: string, companyName: string): string {
-  if (market !== "kr") return companyName;
+  if (market !== "kr") return cleanEdgarName(companyName);
   try {
     const eng = resolveCorpCode("", symbol).corpEngName;
     return eng ? stripLegalSuffix(eng) : companyName;
@@ -729,6 +819,26 @@ async function tryLlmRelevanceFilter(
   }
 }
 
+/** 해외 기사 중복 정리 — 같은 기사가 원매체(Motley Fool 등)와 Yahoo Finance 게재본,
+ * Yahoo 티커 검색·Google 검색 양쪽에서 제목만 같고 URL 이 달라 2~3번 나오던 문제
+ * (실측 2026-09-15: KO "Coca-Cola Loses to 30-year U.S. Treasury Bonds" 3회). 정규화
+ * 제목이 같으면 한 건만 남기되 원매체를 우선(Yahoo Finance 게재본은 후순위). */
+function dedupeOverseasSyndication(items: RawNewsItem[]): RawNewsItem[] {
+  const byTitle = new Map<string, RawNewsItem>();
+  const order: string[] = [];
+  for (const it of items) {
+    const key = normalizeTitleForDedup(it.title);
+    const prev = byTitle.get(key);
+    if (!prev) {
+      byTitle.set(key, it);
+      order.push(key);
+    } else if (prev.publisher.toLowerCase() === "yahoo finance" && it.publisher.toLowerCase() !== "yahoo finance") {
+      byTitle.set(key, it);
+    }
+  }
+  return order.map((k) => byTitle.get(k)!);
+}
+
 export async function fetchStockNewsBySide(
   market: MarketId,
   symbol: string,
@@ -747,7 +857,7 @@ export async function fetchStockNewsBySide(
   const naver = isKr ? null : await resolveNaverWorldStock(symbol);
   const searchQuery = isKr ? query : (naver?.koreanName ?? domesticQuery(market, query));
 
-  const [domesticTagged, domesticSearched, yahooOverseas, googleOverseas] = await Promise.all([
+  const [domesticTagged, domesticSearched, yahooOverseas, googleOverseas, googleOverseasAlt] = await Promise.all([
     isKr
       ? fetchKrStockTaggedNews(symbol, { cutoffMs: ONE_WEEK_MS, pageSize: 20, maxPages: 2 })
       : naver
@@ -769,8 +879,21 @@ export async function fetchStockNewsBySide(
           display: 30,
           requireWhitelist: false,
         }),
-    fetchUsJpNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, newsCount: 30, requireWhitelist: false }),
+    fetchUsJpNews(market, symbol, yahooQuery(market, symbol, oQuery), {
+      cutoffMs: ONE_WEEK_MS,
+      newsCount: 30,
+      requireWhitelist: false,
+    }),
     fetchGoogleOverseasNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, limit: 30 }).catch(() => []),
+    // EDGAR 정리명이 "AMAZON COM"처럼 검색어로 어색하면 Google 결과가 빈약하다(실측:
+    // "AMAZON COM" 10건 vs "Amazon" 30건, AP·로이터·WSJ 는 후자에만). 첫 단어가
+    // 고유하면 그 단어로 한 번 더 조회해 합친다(URL 중복은 아래서 제거).
+    (() => {
+      const first = isKr ? null : distinctiveFirstWord(oQuery);
+      return first && first.toLowerCase() !== oQuery.toLowerCase()
+        ? fetchGoogleOverseasNews(market, symbol, first, { cutoffMs: ONE_WEEK_MS, limit: 30 }).catch(() => [])
+        : Promise.resolve([] as RawNewsItem[]);
+    })(),
   ]);
 
   // 네이버가 직접 태깅한 기사는 관련성이 이미 보장된 소스 — LLM 미사용 폴백에서
@@ -787,7 +910,7 @@ export async function fetchStockNewsBySide(
   // 야후·구글 두 소스에서 같은 기사(URL 동일)가 겹칠 수 있어 합치기 전 URL 기준
   // 1차 정리(문구만 다른 별도 기사의 중복은 LLM 판정 단계에서 그룹으로 잡음).
   const seenUrls = new Set<string>();
-  const overseasRaw = [...yahooOverseas, ...googleOverseas].filter((it) => {
+  const overseasRaw = [...yahooOverseas, ...googleOverseas, ...googleOverseasAlt].filter((it) => {
     if (seenUrls.has(it.url)) return false;
     seenUrls.add(it.url);
     return true;
@@ -832,10 +955,23 @@ export async function fetchStockNewsBySide(
     } else {
       domesticSafe = whitelisted;
     }
-    overseasSafe = overseasRaw; // 해외는 fetchUsJpNews 단계에서 이미 ALLOWED_PUBLISHERS로 걸러짐
+    // 해외 폴백: 종목뉴스 탭은 requireWhitelist=false 로 원본을 받아오므로(LLM이
+    // 신뢰도까지 판정하는 전제) LLM 이 없을 땐 여기서 화이트리스트를 되살리고,
+    // 제목에 회사명(EDGAR 명 정리본) 또는 티커가 있는 기사만 남긴다 — Yahoo 티커
+    // 검색은 그 종목에 느슨하게 태깅된 시황·타종목 기사(실측: GLW 검색에 "Iren
+    // 더블 업그레이드", "오일 콜 스프레드")를 섞어 보내기 때문. 회사명이 제목에
+    // 다른 표기로만 등장하는 경우(예: Alphabet→Google)는 놓칠 수 있음 — LLM
+    // 경로가 살아나면 그쪽이 처리.
+    const shortName = name ? cleanEdgarName(name) : null;
+    const matcher = shortName ? overseasNameMatcher(shortName, symbol) : null;
+    overseasSafe = overseasRaw.filter((it) => {
+      if (!ALLOWED_PUBLISHERS.has(it.publisher.toLowerCase())) return false;
+      return matcher ? matcher(`${it.title} ${it.excerpt ?? ""}`) : true;
+    });
     relevance = !name ? "no_company_name" : (llmResult?.fallback ?? "no_api_key");
   }
   domesticSafe = dedupeByMajorPublisher(domesticSafe);
+  overseasSafe = dedupeOverseasSyndication(overseasSafe);
 
   const [domestic, overseas] = await Promise.all([
     withTranslatedTitles("ko", domesticSafe),
