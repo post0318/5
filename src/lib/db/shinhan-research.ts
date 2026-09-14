@@ -148,19 +148,28 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
  * 추측으로 화면단에서 나눈다(미래에셋 market 분류와 동일한 트레이드오프 —
  * 완전하지 않음).
  *
- * 판정 순서: **시황(주기성) 신호를 먼저 본다.** "일간/위클리/주간/데일리/
- * 모닝/브리핑/마감/시황" 등은 특정 업종 심층분석이 아니라 시황·종목 단신을
- * 짧은 주기로 묶어내는 성격이라 시황으로 분류한다(오너 지시, 2026-09 —
- * "투자전략에서 시황, 마감, 브리핑, 위클리 등은 시황으로 분류" + "데일리,
- * 모닝, 일간도 시황으로 분류" + "NH투자증권 투자전략은 투자전략으로 분류
- * 하나 모닝, 위클리, 주간 등 특정 단어가 포함되면 시황으로 분류" — "주간"도
- * 추가). "한화 주간전략"처럼 제목에 "전략"이 있어도 "주간"이 있으면 시황이
- * 우선한다 — 이 신호를 먼저 보는 이유는 하나증권처럼 소스가 게시판
- * 자체를 "글로벌 투자전략"으로 라벨링해둔 경우(stockName에 "전략"이 그대로
+ * 판정 순서: **시황(주기성) 신호를 먼저 본다.** "마감/브리핑/시황/모니터/
+ * 마켓레이더" 등(MARKET_CONDITION_STRONG_RE)은 stockName이 뭐든 항상 시황
+ * 이다(오너 지시, 2026-09 — "투자전략에서 시황, 마감, 브리핑, 위클리 등은
+ * 시황으로 분류" + "데일리, 모닝, 일간도 시황으로 분류" + "NH투자증권
+ * 투자전략은 투자전략으로 분류하나 모닝, 위클리, 주간 등 특정 단어가
+ * 포함되면 시황으로 분류"). "한화 주간전략"처럼 제목에 "전략"이 있어도
+ * "주간"이 있으면 시황이 우선한다 — 하나증권처럼 소스가 게시판 자체를
+ * "글로벌 투자전략"으로 라벨링해둔 경우(stockName에 "전략"이 그대로
  * 들어있음) 그 라벨이 개별 항목의 실제 형식("Tech&Stock Weekly" 같은
- * 정기물)을 가려버리는 문제가 실측됐음 — 제목 자체의 주기성 신호가 더
- * 신뢰도 높은 판단 근거라 우선한다. "Weekly"/"Daily"/"Morning"은 제목에
- * 자주 그대로 영문으로 붙어 있어(예: "Tech&Stock Weekly", "HANA US Weekly")
+ * 정기물)을 가려버리는 문제가 실측됐기 때문.
+ *
+ * 다만 "일간/위클리/주간/데일리/모닝/아침/Weekly/Daily/Morning"(주기성만
+ * 있고 시황임을 확정 짓지는 못하는 약한 신호, MARKET_CONDITION_PERIOD_RE)
+ * 은 stockName이 실제 업종명(예: "철강금속", "인터넷/게임")일 때는 시황으로
+ * 확정하지 않는다(오너 지적, 2026-09 — "단순히 위클리만 따라가면 답없다") —
+ * 하나증권의 "철강금속 Weekly"/"Battery Weekly"/"유틸리티 Weekly", IBK
+ * "IBKS Daily"(stockName "인터넷/게임") 등은 특정 업종의 **정기 커버리지**
+ * 이지 시장 전체 시황이 아니다(실측: 90일치 산업 카테고리에서 100건 이상
+ * 오분류 확인). stockName이 업종명이 아니라 "산업"/"시장"(수집기 기본값
+ * 라벨) 이거나 게시판 라벨 자체가 전략/시장 성격(STRATEGY_HINT_RE 매치)일
+ * 때만 이 약한 신호도 시황으로 확정한다(`isGenericOrBoardLabel()`).
+ * "Weekly"/"Daily"/"Morning"은 제목에 자주 그대로 영문으로 붙어 있어
  * 한글 표기(위클리/데일리/모닝)와 함께 넓게 잡는다.
  *
  * stockName 시리즈명 강제 분류: GlobalMonitor(einfomax) 경유 리포트는 목록
@@ -185,7 +194,7 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
 // PCE/물가"(미국 고용·물가 지표 발표 코멘트, 실측 다수 확인 — 전부 오너가
 // 투자전략(채권)으로 지적)와 "FOMC"(FOMC 자체 언급은 주식/채권 어느 쪽도
 // 될 수 있어 — 실측: "나스닥 신고가 기대" 는 주식, "CPI…금리 인상" 은
-// 채권 — STRATEGY 승격까지만 담당하고 BOND_HINT_RE 가 최종 구분)도 추가.
+// 채권 — STRATEGY 승격까지만 담당하고 isBond() 가 최종 구분)도 추가.
 // "전략"은 "치료 전략"/"임상 전략"처럼 금융과 무관한 일반 단어로도 흔히 쓰여
 // (실측: 바이오 섹터 리포트 "비소세포폐암 차세대 치료 전략..."이 산업분석
 // 인데 투자전략(주식)으로 잘못 넘어감, 오너 지적 2026-09) "치료"/"임상" 바로
@@ -196,10 +205,25 @@ const STRATEGY_HINT_RE =
 // "IPO Brief"와 충돌 안 하게 일반 Brief 단독은 안 넣음), "N주)"/"N주차"
 // (키움 "키움 글로벌 키차트(9월 1주)"처럼 주차 표기가 괄호 안에만 있고
 // "위클리/주간" 단어 자체는 없는 경우), "Economist"(대신증권 "AI
-// Economist"), "모니터/Monitor"(대신증권 "S&P 500 분기 실적 시즌 모니터")
-// 추가(오너 지적, 2026-09).
-const MARKET_CONDITION_RE =
-  /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|마켓레이더|모니터|\bWeek(ly)?\b|\bDaily\b|\bMorning\b|\bMonitor\b|\bPMI\b|Market\s?(Radar|Pulse|Insight)\b|Check-?up|Econom(y|ic)\s?Brief|Economist|\d+주(차)?[)\s]/i;
+// Economist"), "모니터/Monitor"(대신증권 "S&P 500 분기 실적 시즌 모니터"),
+// "클로징"/Closing(미래에셋 "한국&중국 마켓 클로징") 추가(오너 지적, 2026-09).
+// 항상 시황을 확정하는 신호 — stockName 이 구체적 업종명이어도 이 단어들이
+// 있으면 무조건 시황(모두 특정 업종 얘기가 아니라 시장 전체 마감/브리핑
+// 성격이라 예외가 실측된 적이 없음).
+const MARKET_CONDITION_STRONG_RE =
+  /시황|마감|브리핑|마켓레이더|모니터|\bMonitor\b|\bPMI\b|Market\s?(Radar|Pulse|Insight)\b|Check-?up|Econom(y|ic)\s?Brief|Economist|\d+주(차)?[)\s]|클로징|\bClosing\b/i;
+// "일간/위클리/주간/데일리/모닝/아침/Weekly/Daily/Morning" 같은 주기성
+// 단어는 STRONG과 달리 그 자체만으로 시황을 확정하지 못한다(오너 지적,
+// 2026-09 — "단순히 위클리만 따라가면 답없다") — 하나증권의 "철강금속
+// Weekly"/"Battery Weekly"/"유틸리티 Weekly", IBK "IBKS Daily"(stockName
+// "인터넷/게임") 등은 stockName 이 실제 업종명인 **정기 업종분석**이지
+// 시장 전체 시황이 아니다(실측: 90일치 산업 카테고리에서 100건 이상
+// 오분류 확인). 반대로 stockName 이 업종명이 아니라 "산업"/"시장"(수집기
+// 기본값 라벨, 실제 업종을 특정 못 한 경우) 이거나, "글로벌 투자전략"처럼
+// 게시판 자체가 전략/시장 라벨인 경우(개별 항목이 "Tech&Stock Weekly" 같은
+// 정기물이어도 진짜 시황)엔 여전히 시황으로 확정한다 — isGenericOrBoardLabel()
+// 로 이 둘을 가른다.
+const MARKET_CONDITION_PERIOD_RE = /일간|위클리|주간|데일리|모닝|아침|\bWeek(ly)?\b|\bDaily\b|\bMorning\b/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
   "KB Global Tracker+",
   "KB데일리", // 오너 지적, 2026-09
@@ -208,25 +232,38 @@ const MARKET_CONDITION_STOCKNAMES = new Set([
   // 시리즈(실측: 8~9월 사이 거의 매일)라 제목에 "전략"이 들어있어도 실질은
   // 일일 시황 업데이트다(오너 지적, 2026-09 — PDF 원문 확인).
   "글로벌전략",
+  // 한경컨센서스(LS증권 작성) "마켓 BEAT" — 실측 2건 모두 시장 전반 코멘트
+  // (오너 지적, 2026-09).
+  "마켓 BEAT",
 ]);
+// stockName 뒤에 " | Weekly" 같은 부가 표기가 붙어 정확히 일치하지 않는
+// 경우가 있어(예: "KB Global Tracker+ | Weekly") 접두어로도 매칭(오너 지적
+// 사례로 발견한 기존 누락, 2026-09).
+const MARKET_CONDITION_STOCKNAME_PREFIXES = ["KB Global Tracker+"];
 const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 // KB증권 "Global Insights" — 오너 지시, 2026-09("KB증권 Global Insights는
 // 투자전략임"). 제목에 "전략"/Strategy 등 키워드가 없는 경우가 많아 시리즈명
 // 기준으로 강제.
 const STRATEGY_STOCKNAMES = new Set(["Global Insights", "Global Watchlist", "마켓픽"]);
+// 미래에셋증권 "월스트리트파인더 Ep.201, 202, ..." — 매회 에피소드 번호가
+// 붙어 정확히 일치하지 않아 접두어로 매칭. 계절성·금리 대응·엔비디아
+// 내러티브 등 시장 전반 투자 아이디어 시리즈(오너 확인, 2026-09).
+const STRATEGY_STOCKNAME_PREFIXES = [/^월스트리트파인더/];
 // 한국투자증권 "전략/이슈 리포트" 게시판(collect-kis-strategy-research.mjs,
 // jkGubun=6) 라벨들 — 처음엔 전부 시황으로 강제했으나(오너 지시, "한국투자는
 // 시황으로 분류"), 이후 "위클리, 데일리 등이 아니면 투자전략이다"로 정정됨
 // (오너 지시, 2026-09) — "채권분석 Note"/"경제분석 Note" 등은 "전략" 텍스트가
 // 없어 STRATEGY_HINT_RE 에 안 걸리므로, 이 라벨들만 기본값을 투자전략으로
-// 깔아준다. MARKET_CONDITION_RE(주간/Weekly/Daily 등) 검사가 이보다 먼저
-// 실행되므로 "계량 Weekly" 처럼 실제로 주간물이면 여전히 시황으로 먼저
-// 걸러진다 — 이 세트는 "그 외엔 전부 투자전략"만 담당.
+// 깔아준다. MARKET_CONDITION_STRONG_RE(마감/브리핑 등) 검사가 이보다 먼저
+// 실행되므로 실제로 시황성이면 여전히 먼저 걸러진다 — 이 세트는 "그 외엔
+// 전부 투자전략"만 담당. "대체투자 Note"는 여기서 제외됐다 — 수집기
+// (collect-kis-strategy-research.mjs)에서 아예 수집을 건너뛴다(오너 지시,
+// 2026-09 — "대체투자는 제외하자", NH FICC 게시판의 대체투자/부동산 제외와
+// 같은 취지).
 const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
   "채권분석 Note",
   "경제분석 Note",
   "투자전략Note",
-  "대체투자 Note",
   "자산배분전략 Note",
   "글로벌전략 Note",
   "전략/이슈",
@@ -239,6 +276,12 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // 채권으로 쓸려버린다(오너 지적, 2026-09 — "로빈후드에 이어 블록체인을
 // 출시하는 써클"은 투자전략(주식)이어야 함). 실제 크레딧/채권/금리 언급
 // 여부로만 판정.
+// "채권"은 "연체채권"(부실채권 등 대출채권)·"매출채권"(외상매출금) 처럼
+// 채권(bond)과 무관한 여신·회계 용어에도 부분일치한다(실측 — 은행 연체율
+// 리포트가 "연체채권"의 "채권" 때문에 투자전략(채권)으로 잘못 넘어감, 오너
+// 지적 2026-09 "내용을 보면 주식과 채권인지 구분이 안되냐?"). 그 앞에
+// "매출"/"연체"/"부실"이 오거나 뒤에 "단"/"자"/"회수"/"추심"이 붙는(채권단
+// ·채권자·채권회수·채권추심 — 전부 대출채권 문맥) 경우는 제외.
 // "국채"(채권과 별개 합성어라 "채권" 부분문자열 매칭에 안 걸림), "중앙은행"/
 // "Central Bank"(통화정책 자체가 FICC의 금리 데스크 영역) 추가(오너 지적,
 // 2026-09 — "안전자산으로서의 가치를 의심받는 국채..."·"Central Bank Working
@@ -251,37 +294,101 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // 미국 매크로 지표 발표 코멘트는 종류를 가리지 않고 실측상 전부 채권 데스크
 // 소관이었다(오너 지적 다수, 2026-09) — 고용/물가류에 이어 "소매판매"/GDP도
 // 추가. 예외: PMI/ISM 은 시황으로 확정됐으므로(오너 지적) 여기 넣지 않음.
-const BOND_HINT_RE =
-  /크레딧|채권|국채|부채|금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|Beige\s?Book|\bCPI\b|\bPPI\b|\bPCE\b|\bGDP\b|Retail\s?Sales|\bCredit\b|\bBond\b|\bDebt\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
+// "CPI(무색폴리이미드)" 처럼 소재 산업 리포트가 CPI 를 화학 소재 약어로 쓴
+// 사례가 실측돼(오너 지적, 2026-09) CPI/PPI/PCE 뒤에 괄호가 바로 오면
+// (통상 약어 설명 패턴) 제외.
+//
+// 두 그룹으로 나눈다(오너 지적, 2026-09 — 위 두 사례 모두 "채권" 판정이
+// 요약문 전체에서 단어 하나만 보고 내려짐): "크레딧/채권/국채/부채" 등은
+// 채권 얘기가 아니면 거의 안 쓰는 강한 신호라 항상 적용. "금리/고용/물가/
+// GDP/CPI" 등은 주식 전략 코멘트에도 배경 설명으로 흔히 등장하는 약한
+// 매크로 신호라(실측: "반도체 위주의 주식시장 상승 기대"의 배경으로 "금리
+// 급등"만 언급된 SK증권 코멘트, "국내주식전략"이 stockName인 신한 M.R.I가
+// "금리·유가 매크로 불안"을 배경으로 언급 — 둘 다 투자전략(주식)이어야
+// 하는데 이 약한 신호만으로 투자전략(채권)으로 잘못 넘어감) stockName이
+// 구체적 업종/종목이 아닌 경우(isGenericOrBoardLabel)에만, 그리고 본문에
+// 명시적 주식 신호(코스피/코스닥/나스닥/주식 등)가 없을 때만 채권으로 본다.
+const BOND_STRONG_RE =
+  /(?<!매출)(?<!연체)(?<!부실)채권(?!단|자|회수|추심)|크레딧|국채|부채|Beige\s?Book|\bCredit\b|\bBond\b|\bDebt\b|Fixed\s?Income/i;
+const BOND_MACRO_RE =
+  /금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|\bCPI\b(?!\()|\bPPI\b(?!\()|\bPCE\b(?!\()|\bGDP\b|Retail\s?Sales|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy/i;
+// "코스피/코스닥/나스닥" 등 지수명 자체가 이미 주식시장 얘기라는 강한 신호
+// (오너 지적, 2026-09). 한글 표기뿐 아니라 리포트에 흔한 영문 표기(KOSPI/
+// KOSDAQ/NASDAQ)도 포함.
+const EQUITY_HINT_RE =
+  /주식|증시|코스피|코스닥|나스닥|다우|\bKOSPI\b|\bKOSDAQ\b|\bNASDAQ\b|S&P\s?500|\bEquity\b|\bStock\b/i;
 // source 자체가 "FRB"(연방준비제도)면 내용이 뭐든 채권/통화정책 자료다
 // ("FOMC Minutes"처럼 본문에 흔한 채권 키워드가 하나도 없는 경우 있음,
 // 오너 지적 2026-09).
 const BOND_SOURCES = new Set(["FRB"]);
 
+function isStrategyStockname(stockName: string): boolean {
+  if (STRATEGY_STOCKNAMES.has(stockName)) return true;
+  return STRATEGY_STOCKNAME_PREFIXES.some((re) => re.test(stockName));
+}
+
+function isMarketConditionStockname(stockName: string): boolean {
+  if (MARKET_CONDITION_STOCKNAMES.has(stockName)) return true;
+  return MARKET_CONDITION_STOCKNAME_PREFIXES.some((p) => stockName.startsWith(p));
+}
+
+/**
+ * stockName 이 실제 업종/종목명이 아니라 "산업"/"시장"(수집기 기본값,
+ * 업종을 못 뽑았을 때) 이거나, 게시판 자체가 전략/시장 라벨(STRATEGY_HINT_RE
+ * 매치, 예: "글로벌 투자전략")인 경우 true. 이럴 땐 주기성 키워드나 약한
+ * 매크로 신호만으로도 시황/투자전략 판정을 신뢰할 수 있지만, false(=구체적
+ * 업종명)면 정기 업종분석일 가능성이 높아 그 신호들을 무시한다.
+ */
+function isGenericOrBoardLabel(doc: { stockName: string; title: string }, hay: string): boolean {
+  if (!doc.stockName || doc.stockName === doc.title || doc.stockName === "산업" || doc.stockName === "시장")
+    return true;
+  return STRATEGY_HINT_RE.test(hay);
+}
+
+function isBond(
+  doc: { stockName: string; title: string },
+  hay: string,
+  hayWithSummary: string,
+): boolean {
+  if (BOND_STRONG_RE.test(hayWithSummary)) return true;
+  return isGenericOrBoardLabel(doc, hay) && BOND_MACRO_RE.test(hayWithSummary) && !EQUITY_HINT_RE.test(hayWithSummary);
+}
+
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
 ): ResearchTopic {
-  if (MARKET_CONDITION_STOCKNAMES.has(doc.stockName)) return "시황";
+  if (isMarketConditionStockname(doc.stockName)) return "시황";
   if (MARKET_CONDITION_SOURCE_MARKETS.has(`${doc.source}:${doc.market}`)) return "시황";
   const hay = `${doc.stockName ?? ""} ${doc.title}`;
   // 채권 판정만 요약(summary)까지 넓혀 본다("Econ Guide" 라벨 + 제목엔 채권
   // 신호가 전혀 없고 요약에만 "국채"/"장기금리"가 있던 사례, 오너 지적,
-  // 2026-09) — STRATEGY_HINT_RE·MARKET_CONDITION_RE는 제목/라벨만 본다(전략/
-  // 시황 같은 범용 단어는 일반 산업분석 요약문에도 흔히 섞여 나와 요약까지
-  // 넓히면 진짜 산업분석까지 오분류할 위험이 큼 — 채권 키워드는 상대적으로
-  // 금융 용어라 그 위험이 작음).
+  // 2026-09) — STRATEGY_HINT_RE·MARKET_CONDITION_STRONG_RE는 제목/라벨만
+  // 본다(전략/시황 같은 범용 단어는 일반 산업분석 요약문에도 흔히 섞여
+  // 나와 요약까지 넓히면 진짜 산업분석까지 오분류할 위험이 큼 — 채권
+  // 키워드는 상대적으로 금융 용어라 그 위험이 작음).
   const hayWithSummary = `${hay} ${doc.summary ?? ""}`;
   if (BOND_SOURCES.has(doc.source)) return "투자전략(채권)";
-  if (STRATEGY_STOCKNAMES.has(doc.stockName))
-    return BOND_HINT_RE.test(hayWithSummary) ? "투자전략(채권)" : "투자전략(주식)";
-  if (MARKET_CONDITION_RE.test(hay)) return "시황";
-  // BOND_HINT_RE 매칭도 그 자체로 투자전략 승격 신호다("미국 10년물 금리 5%의
-  // 시험대"처럼 "금리"만 있고 STRATEGY_HINT_RE 쪽 키워드(전략/매크로/CPI 등)는
-  // 없는 순수 채권·금리 코멘트가 승격 자체가 안 돼 산업분석으로 새던 문제,
-  // 오너 지적, 2026-09) — 채권 언급 자체가 이미 "산업분석이 아니라 투자전략
-  // (채권)"이라는 뜻이므로 별도 승격 키워드가 없어도 여기서 잡는다.
-  const bond = BOND_HINT_RE.test(hayWithSummary);
-  if (STRATEGY_HINT_RE.test(hay) || bond || KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)) {
+  if (isStrategyStockname(doc.stockName)) return isBond(doc, hay, hayWithSummary) ? "투자전략(채권)" : "투자전략(주식)";
+  if (MARKET_CONDITION_STRONG_RE.test(hay)) return "시황";
+  const generic = isGenericOrBoardLabel(doc, hay);
+  if (MARKET_CONDITION_PERIOD_RE.test(hay) && generic) return "시황";
+  // 강한 채권 신호는 항상, 약한 매크로 신호·명시적 주식 신호는 stockName이
+  // 구체적 업종이 아닐 때만 투자전략 승격 신호로 쓴다("미국 10년물 금리
+  // 5%의 시험대"처럼 STRATEGY_HINT_RE 쪽 키워드가 없는 순수 채권·금리
+  // 코멘트, "우리는 이 게임을 해본 적이 있다"처럼 반도체·주식시장 얘기인데
+  // 배경으로 "금리"만 잠깐 나오는 순수 주식 코멘트 둘 다 승격 자체가 안 돼
+  // 산업분석으로 새던 문제, 오너 지적, 2026-09).
+  const bondStrong = BOND_STRONG_RE.test(hayWithSummary);
+  const bondMacro = generic && BOND_MACRO_RE.test(hayWithSummary);
+  const equitySignal = generic && EQUITY_HINT_RE.test(hayWithSummary);
+  const bond = bondStrong || (bondMacro && !equitySignal);
+  if (
+    STRATEGY_HINT_RE.test(hay) ||
+    bondStrong ||
+    bondMacro ||
+    equitySignal ||
+    KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)
+  ) {
     return bond ? "투자전략(채권)" : "투자전략(주식)";
   }
   return "산업분석";

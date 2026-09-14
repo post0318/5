@@ -11,9 +11,10 @@
  *
  * 이 게시판만의 차이: 종목 티커가 아예 없고, 각 항목 앞에 `<div class="head
  * ...">라벨</div>`로 "채권분석 Note"/"투자전략Note"/"글로벌전략 Note"/
- * "자산배분전략 Note"/"경제분석 Note"/"대체투자 Note"/"계량 Weekly" 같은
- * 시리즈 라벨이 이미 붙어있다(실측) — 이 라벨을 stockName으로 그대로 쓰면
- * classifyResearchTopic()의 "전략"/"Weekly" 키워드 매칭과 자연스럽게 맞는다.
+ * "자산배분전략 Note"/"경제분석 Note"/"계량 Weekly" 같은 시리즈 라벨이 이미
+ * 붙어있다(실측) — 이 라벨을 stockName으로 그대로 쓰면 classifyResearchTopic()
+ * 의 "전략"/"Weekly" 키워드 매칭과 자연스럽게 맞는다. "대체투자 Note"는
+ * 제외한다(오너 지시, 2026-09 — "대체투자는 제외하자").
  *
  * 시장 분류: 이 게시판은 KIS 사이트 자체 메뉴명이 "전략/이슈 리포트"로
  * 국가 구분이 없는 일반 게시판이라(해외 전용 메뉴가 아님) 국내(엔화·중국 등
@@ -108,6 +109,11 @@ function parseItems(html) {
     if (!date) continue;
 
     const label = headM ? headM[1].trim() : "전략/이슈";
+    // 대체투자(사모대출·BDC 등)는 제외한다(오너 지시, 2026-09 — "대체투자는
+    // 제외하자", NH FICC 게시판의 대체투자/부동산 제외와 같은 취지). 내용이
+    // 채권/사모신용시장 얘기라 정확히는 채권 쪽에 가깝지만 이 프로젝트가
+    // 다루는 산업분석/투자전략 범위 밖으로 보고 아예 수집을 건너뛴다.
+    if (label === "대체투자 Note") continue;
     let title = titleM[1].trim();
     // 제목이 라벨과 같은 말로 시작하면("채권분석:9월 FOMC...") 중복 제거.
     const labelNorm = label.replace(/\s|Note/gi, "");
