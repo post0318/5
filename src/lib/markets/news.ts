@@ -998,9 +998,23 @@ export async function fetchStockNewsBySide(
  */
 const KR_MACRO_TOPICS = ["코스피 마감", "한국은행 기준금리", "원달러 환율", "수출 반도체 업황"];
 const US_MACRO_TOPICS = ["Federal Reserve interest rate", "S&P 500 Nasdaq stock market", "inflation jobs report"];
-/** Google 뉴스 RSS는 실제 boolean 검색을 지원해 해외 쪽은 이 질의 하나로 폭넓게 커버. */
-const US_MACRO_GOOGLE_QUERY =
-  '(Fed OR "interest rate" OR inflation OR "stock market" OR "S&P 500" OR Nasdaq OR "Wall Street" OR earnings season) markets';
+/**
+ * 해외 시황용 Google 뉴스 질의 — 원래는 boolean OR 하나로 묶은 질의였는데 실측
+ * (2026-09-15, 오너 지적 "거시경제 해외뉴스 2건인데 맞냐") 100건 중 최근 1주일
+ * 기사가 3건뿐이었다(기간 지정이 없으면 관련도순으로 오래된 기사가 섞임).
+ * 단순 주제 질의 + `when:7d` 로 바꾸니 질의당 60~100건이 전부 1주일 내 기사
+ * (CNBC·로이터·WSJ·블룸버그 등). 질의별로 나눠 받고 URL 로 합친다.
+ */
+const US_MACRO_GOOGLE_QUERIES = [
+  "Federal Reserve interest rates when:7d",
+  "Treasury yields bond market when:7d",
+  "stock market Wall Street when:7d",
+  "inflation CPI economy when:7d",
+  "oil prices markets when:7d",
+  "gold price when:7d",
+  "Nasdaq S&P 500 tech stocks when:7d",
+  "jobs report unemployment when:7d",
+];
 
 /**
  * Yahoo Finance 검색은 주제 질의("S&P 500 Nasdaq stock market")를 줘도 개별
@@ -1052,12 +1066,19 @@ export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
           fetchUsJpNews("us", symbol, q, { cutoffMs: ONE_WEEK_MS, newsCount: 15 }),
         ),
       ),
-      fetchGoogleOverseasNews("us", symbol, US_MACRO_GOOGLE_QUERY, {
-        cutoffMs: ONE_WEEK_MS,
-        limit: 30,
-      }),
+      // 질의당 수십 건이 들어오므로 여기선 매체 화이트리스트를 켠다(Kitco·FXStreet·
+      // 지역지 등 걸러도 CNBC·로이터·WSJ·블룸버그·FT·CNN 만으로 충분히 남음).
+      Promise.all(
+        US_MACRO_GOOGLE_QUERIES.map((q) =>
+          fetchGoogleOverseasNews("us", symbol, q, {
+            cutoffMs: ONE_WEEK_MS,
+            limit: 40,
+            requireWhitelist: true,
+          }).catch(() => [] as RawNewsItem[]),
+        ),
+      ),
     ]);
-    raw = filterMacroRelevant([...yahooResults.flat(), ...google], MACRO_RELEVANT_EN);
+    raw = filterMacroRelevant([...yahooResults.flat(), ...google.flat()], MACRO_RELEVANT_EN);
   }
   const seenUrls = new Set<string>();
   const deduped = raw.filter((it) => {
