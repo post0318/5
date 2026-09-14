@@ -173,8 +173,12 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
 // 투자전략(채권)으로 지적)와 "FOMC"(FOMC 자체 언급은 주식/채권 어느 쪽도
 // 될 수 있어 — 실측: "나스닥 신고가 기대" 는 주식, "CPI…금리 인상" 은
 // 채권 — STRATEGY 승격까지만 담당하고 BOND_HINT_RE 가 최종 구분)도 추가.
+// "전략"은 "치료 전략"/"임상 전략"처럼 금융과 무관한 일반 단어로도 흔히 쓰여
+// (실측: 바이오 섹터 리포트 "비소세포폐암 차세대 치료 전략..."이 산업분석
+// 인데 투자전략(주식)으로 잘못 넘어감, 오너 지적 2026-09) "치료"/"임상" 바로
+// 앞에 오는 경우는 제외(부정 전방탐색).
 const STRATEGY_HINT_RE =
-  /전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC/i;
+  /(?<!치료\s?)(?<!임상\s?)전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC/i;
 // "Check-up"(신한 FX/Econ Check-up), "Economy/Economic Brief"(iM증권 등,
 // "IPO Brief"와 충돌 안 하게 일반 Brief 단독은 안 넣음), "N주)"/"N주차"
 // (키움 "키움 글로벌 키차트(9월 1주)"처럼 주차 표기가 괄호 안에만 있고
@@ -231,8 +235,11 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // 지표라 채권 데스크 소관으로 본다. "FOMC" 자체는 주식/채권 둘 다 될 수
 // 있어(나스닥 반응 vs 금리 코멘트) 여기엔 안 넣음 — STRATEGY_HINT_RE에서만
 // 승격 신호로 쓰고, 실제 채권 여부는 이 정규식의 다른 키워드로 판정.
+// 미국 매크로 지표 발표 코멘트는 종류를 가리지 않고 실측상 전부 채권 데스크
+// 소관이었다(오너 지적 다수, 2026-09) — 고용/물가류에 이어 "소매판매"/GDP도
+// 추가. 예외: PMI/ISM 은 시황으로 확정됐으므로(오너 지적) 여기 넣지 않음.
 const BOND_HINT_RE =
-  /크레딧|채권|국채|부채|금리|중앙은행|통화정책|고용|실업|비농업|물가|Beige\s?Book|\bCPI\b|\bPPI\b|\bPCE\b|\bCredit\b|\bBond\b|\bDebt\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
+  /크레딧|채권|국채|부채|금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|Beige\s?Book|\bCPI\b|\bPPI\b|\bPCE\b|\bGDP\b|Retail\s?Sales|\bCredit\b|\bBond\b|\bDebt\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
 
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
