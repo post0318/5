@@ -39,14 +39,17 @@ export interface ShinhanResearchDoc {
 
 // 리서치 자료는 3개월(90일)까지만 수집·보관한다(오너 최종 확정, 2026-09
 // — 각 수집기의 백필 범위도 90일, 90일 지난 문서는 DB에서 지워도 무방).
-// 단, "산업" 카테고리 중 투자전략으로 분류되는 문서는 휘발성이 강해(오너
-// 지시, 2026-09 — "투자전략은 7일... 오래 가져갈 내용은 아니다") 원래 7일로
-// 정했으나, classifyResearchTopic() 분류 품질을 먼저 검증할 시간이 필요해
-// (오너 지시, 2026-09 — "일단 자료 검증을 위해 30일로 유지한다") 30일로
-// 임시 상향. 검증 끝나면 7일로 되돌릴 것. 기업분석·산업분석은 기존 90일 그대로.
+// 단, "산업" 카테고리 중 투자전략/시황으로 분류되는 문서는 휘발성이 강해
+// 짧게만 보관한다 — 투자전략(주식)/(채권)은 30일(오너 지시, 2026-09 —
+// 분류 품질 검증 기간 동안 원래 7일에서 임시 상향, 검증 끝나면 7일로
+// 되돌릴 것), 시황은 원래 7일 지시("시황은 7일 이상은 불필요하다. db도
+// 필요없다")였다가 분류 검증 기간 동안 14일로 임시 상향(오너 지시, 2026-09
+// — "시황은 일단 14일까지 유지한다... 테스트가 필요하니") — 검증 끝나면
+// 7일로 되돌릴 것. 기업분석·산업분석은 기존 90일 그대로.
 const MAX_AGE_MS = 90 * 24 * 3600_000;
 const RECENT_WINDOW_MS = 90 * 24 * 3600_000;
 const STRATEGY_MAX_AGE_MS = 30 * 24 * 3600_000;
+const MARKET_CONDITION_MAX_AGE_MS = 14 * 24 * 3600_000;
 
 export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDoc>> {
   const db = await getDb();
@@ -77,15 +80,19 @@ export async function upsertShinhanResearch(
   const del = await col.deleteMany({ date: { $lt: cutoff } });
 
   // 투자전략·시황 조기 정리 — topic 은 DB 필드가 아니라 classifyResearchTopic()
-  // 의 계산 결과라 deleteMany 조건절에 바로 못 넣는다. 컷오프~90일 사이의
-  // "산업" 카테고리 문서만 후보로 가져와(전체 대비 소수) JS 에서 분류 후
-  // 투자전략·시황인 것만 id로 골라 지운다 — 산업분석은 그대로 90일 유지.
-  // 시황도 투자전략과 같은 컷오프 적용(둘 다 "휘발성 강함"이 분리 이유였던
-  // 같은 카테고리에서 갈라져 나온 것이라 동일 취급 — 오너가 다르게 정하면 조정).
+  // 의 계산 결과라 deleteMany 조건절에 바로 못 넣는다. 둘 중 더 짧은 컷오프
+  // (시황 14일)~90일 사이의 "산업" 카테고리 문서만 후보로 가져와(전체 대비
+  // 소수) JS 에서 분류 후 각자의 컷오프를 넘겼으면 id로 골라 지운다 —
+  // 산업분석은 그대로 90일 유지.
   const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
+  const marketConditionCutoff = new Date(Date.now() - MARKET_CONDITION_MAX_AGE_MS).toISOString().slice(0, 10);
+  // 후보 조회는 둘 중 더 넓은(=더 최근인) 컷오프를 써야 한다 — 시황(14일)이
+  // 투자전략(30일)보다 짧아서, 14일 기준으로 가져와야 "14~30일 사이의
+  // 시황"도 후보에 걸린다(30일 기준으로만 가져오면 이 구간을 통째로 놓침).
   const staleIndustryCandidates = await col
-    .find({ category: "산업", date: { $lt: strategyCutoff } })
-    .project<{ _id: string; stockName: string; title: string; source: string; market: MarketId; summary: string }>({
+    .find({ category: "산업", date: { $lt: marketConditionCutoff } })
+    .project<{ _id: string; date: string; stockName: string; title: string; source: string; market: MarketId; summary: string }>({
+      date: 1,
       stockName: 1,
       title: 1,
       source: 1,
@@ -94,7 +101,12 @@ export async function upsertShinhanResearch(
     })
     .toArray();
   const staleStrategyIds = staleIndustryCandidates
-    .filter((d) => classifyResearchTopic(d) !== "산업분석")
+    .filter((d) => {
+      const t = classifyResearchTopic(d);
+      if (t === "산업분석") return false;
+      if (t === "시황") return true; // 후보 자체가 이미 14일 이전만 가져왔음
+      return d.date < strategyCutoff; // 투자전략(주식)/(채권) — 30일까지는 유지
+    })
     .map((d) => d._id);
   let prunedStrategy = 0;
   if (staleStrategyIds.length > 0) {
@@ -300,14 +312,20 @@ export async function getIndustryResearch(
     .limit(fetchLimit)
     .toArray();
   const deduped = dedupeBySourceTitle(docs);
-  // 투자전략(주식)/투자전략(채권)은 30일까지만 화면에 노출(오너 지시, 2026-09
-  // — "그 이상은 불필요하다. 화면에서도 제외한다"). DB 정리(upsertShinhanResearch)
-  // 는 다음 수집기 실행 때만 돌아 아직 안 지워진 30일 초과 항목이 화면에
-  // 잠깐 남을 수 있어 조회 시점에도 한 번 더 걸러준다 — 산업분석·시황은
-  // 기존 정책(각각 90일·30일 DB 정리) 그대로 유지, 여기선 따로 안 건드림.
+  // 투자전략(주식)/투자전략(채권)은 30일까지만, 시황은 14일까지만 화면에
+  // 노출(오너 지시, 2026-09 — 투자전략 "그 이상은 불필요하다. 화면에서도
+  // 제외한다" / 시황 "일단 14일까지 유지한다"(검증 기간 동안 임시, 이후
+  // 7일로 되돌릴 예정)). DB 정리(upsertShinhanResearch)는 다음 수집기 실행
+  // 때만 돌아 아직 안 지워진 초과 항목이 화면에 잠깐 남을 수 있어 조회
+  // 시점에도 한 번 더 걸러준다 — 산업분석은 기존 정책(90일 DB 정리) 그대로
+  // 유지, 여기선 따로 안 건드림.
   const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
+  const marketConditionCutoff = new Date(Date.now() - MARKET_CONDITION_MAX_AGE_MS)
+    .toISOString()
+    .slice(0, 10);
   const fresh = deduped.filter((d) => {
     const t = classifyResearchTopic(d);
+    if (t === "시황") return d.date >= marketConditionCutoff;
     if (t !== "투자전략(주식)" && t !== "투자전략(채권)") return true;
     return d.date >= strategyCutoff;
   });
