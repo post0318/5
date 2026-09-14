@@ -123,7 +123,7 @@ function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
   return result;
 }
 
-export type ResearchTopic = "산업분석" | "투자전략" | "시황";
+export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전략(채권)" | "시황";
 
 /**
  * "산업" 카테고리 문서를 산업분석/투자전략/시황 세 갈래로 나눈다(오너 지시,
@@ -168,7 +168,7 @@ export type ResearchTopic = "산업분석" | "투자전략" | "시황";
 const STRATEGY_HINT_RE =
   /전략|\bStrategy\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|\bFICC\b/i;
 const MARKET_CONDITION_RE =
-  /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|\bWeek(ly)?\b|\bDaily\b|\bMorning\b/i;
+  /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|마켓레이더|\bWeek(ly)?\b|\bDaily\b|\bMorning\b|Market\s?(Radar|Pulse|Insight)\b/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
   "KB Global Tracker+",
   "KB데일리", // 오너 지적, 2026-09
@@ -191,6 +191,15 @@ const MARKET_CONDITION_STOCKNAMES = new Set([
   "전략/이슈",
 ]);
 const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
+// KB증권 "Global Insights" — 오너 지시, 2026-09("KB증권 Global Insights는
+// 투자전략임"). 제목에 "전략"/Strategy 등 키워드가 없는 경우가 많아 시리즈명
+// 기준으로 강제.
+const STRATEGY_STOCKNAMES = new Set(["Global Insights"]);
+// 투자전략을 다시 주식/채권으로 나눈다(오너 지시, 2026-09 — "투자전략도
+// 분리하자 투자전략(주식) 투자전략(채권)" + "크레딧, 채권, 금리 등은
+// 투자전략(채권)으로 분류"). FICC(Fixed Income·Currency·Commodity)는
+// 정의상 채권 쪽이라 이미 STRATEGY_HINT_RE에 있는 FICC 키워드도 여기 포함.
+const BOND_HINT_RE = /크레딧|채권|금리|\bCredit\b|\bBond\b|\bRate[s]?\b|\bFICC\b/i;
 
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market">,
@@ -198,8 +207,9 @@ export function classifyResearchTopic(
   if (MARKET_CONDITION_STOCKNAMES.has(doc.stockName)) return "시황";
   if (MARKET_CONDITION_SOURCE_MARKETS.has(`${doc.source}:${doc.market}`)) return "시황";
   const hay = `${doc.stockName ?? ""} ${doc.title}`;
+  if (STRATEGY_STOCKNAMES.has(doc.stockName)) return BOND_HINT_RE.test(hay) ? "투자전략(채권)" : "투자전략(주식)";
   if (MARKET_CONDITION_RE.test(hay)) return "시황";
-  if (STRATEGY_HINT_RE.test(hay)) return "투자전략";
+  if (STRATEGY_HINT_RE.test(hay)) return BOND_HINT_RE.test(hay) ? "투자전략(채권)" : "투자전략(주식)";
   return "산업분석";
 }
 

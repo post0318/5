@@ -183,7 +183,11 @@ for (const board of BOARDS) {
       // 전략으로 분류")를 어떤 세부 라벨이 와도 지키기 위함.
       if (board.ditCd === "04") stockName = `FICC · ${stockName}`;
 
-      const market = board.forceMarket ?? classifyMarket(`${stockName} ${title}`);
+      // FICC는 기본 미국 고정이지만, "[N2 FICC 인사이드/크레딧(국내)]"처럼
+      // 라벨에 "(국내)"가 명시된 항목(LH채권 등 국내 신용 얘기)은 예외적으로
+      // 한국으로 분류한다(오너 지적, 2026-09 — 실제 PDF 확인해 지적).
+      const isDomesticFicc = board.ditCd === "04" && /\(국내\)/.test(stockName);
+      const market = isDomesticFicc ? "kr" : (board.forceMarket ?? classifyMarket(`${stockName} ${title}`));
       if (!market) continue; // 미국 외 국가 명시 — 이 수집기는 미국/국내 외엔 다루지 않음
 
       collected.push({

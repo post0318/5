@@ -21,12 +21,15 @@ export async function GET(request: Request) {
     if (!isDbConfigured()) return ok({ items: [] });
 
     const topicParam = url.searchParams.get("topic");
-    const topic: ResearchTopic | undefined =
-      topicParam === "산업분석" || topicParam === "투자전략" || topicParam === "시황"
-        ? topicParam
-        : undefined;
+    const VALID_TOPICS: ResearchTopic[] = ["산업분석", "투자전략(주식)", "투자전략(채권)", "시황"];
+    const topic = (VALID_TOPICS as string[]).includes(topicParam ?? "")
+      ? (topicParam as ResearchTopic)
+      : undefined;
 
-    const items = await getIndustryResearch(market, 30, topic);
+    // 90일 백필인데도 화면엔 최근 1주일치만 보인다는 지적(오너, 2026-09) —
+    // 수집기가 20곳 넘게 늘면서 하루 유입량 자체가 커져 30건 한도로는 며칠
+    // 만에 소진됐음(실측). 150으로 상향.
+    const items = await getIndustryResearch(market, 150, topic);
     return ok(
       { items },
       { headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" } },

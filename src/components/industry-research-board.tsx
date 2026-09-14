@@ -14,7 +14,8 @@ const PAGE_SIZE = 10;
 const TOPICS = [
   { key: "all", label: "전체" },
   { key: "산업분석", label: "산업분석" },
-  { key: "투자전략", label: "투자전략" },
+  { key: "투자전략(주식)", label: "투자전략(주식)" },
+  { key: "투자전략(채권)", label: "투자전략(채권)" },
   { key: "시황", label: "시황" },
 ] as const;
 type TopicKey = (typeof TOPICS)[number]["key"];
