@@ -147,11 +147,21 @@ for (const board of BOARDS) {
       const market = classifyMarket(label, rawTitle);
       if (!market) continue; // 미국 외 특정국가 — 스킵
 
+      // 이 두 게시판(gicomment/gieconomy)은 섹터별 심층분석이 아니라 항상
+      // 시황·매크로·전략 코멘트라("신한 속보", "한국 8월 소비자물가", "잭슨홀
+      // 미팅"처럼 라벨이 그때그때 다른 경제지표/이벤트명이라 고정 키워드로
+      // 다 못 잡음) stockName에 "투자전략 · " 접두어를 항상 붙여 기본값을
+      // 투자전략으로 깐다(오너 지적, 2026-09 — "신한 속보... 투자전략이다"
+      // 등 다수 사례). "국내 주식 마감 시황"/"마켓레이더"처럼 실제 시황
+      // 신호가 있는 제목은 classifyResearchTopic()이 이 접두어보다 먼저
+      // MARKET_CONDITION_RE를 검사하므로 여전히 시황으로 정확히 갈린다.
+      const stockName = `투자전략 · ${label}`;
+
       collected.push({
         id: String(it.fn),
         date,
         title: rest,
-        stockName: label,
+        stockName,
         market,
         analyst: it.f4 ?? "",
         summary: excerpt(it.f7),

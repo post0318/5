@@ -109,6 +109,44 @@ isLikelyGenuine 판단 기준: 실제 언론사(${publisher})가 작성한 정�
 }
 
 /**
+ * 뉴스 헤드라인 번역의 최종 폴백(오너 승인, 2026-09 — 무료 API 두 곳(Google
+ * 번역 웹 엔드포인트·MyMemory)이 동시에 실패할 때만 호출). 무인증 Google
+ * 번역 엔드포인트가 배포 IP 기준으로 간헐적으로 429(요청 과다)를 내고,
+ * MyMemory는 그럴 때 번역 없이 원문을 그대로 돌려주는 경우가 실측으로
+ * 확인돼(예: "Dow Jones Futures Fall..." 헤드라인) 무료 경로만으로는 일부
+ * 헤드라인이 계속 영어로 남는 문제가 있었음 — src/lib/news/translate.ts 가
+ * 두 무료 경로 다 실패했을 때만 이 함수를 부른다. 헤드라인 1건이라 비용은
+ * 거의 무시할 수준(건당 $0.0001 미만)이지만, 그래도 월 $10 예산에는 포함
+ * 시켜(incUsage) 상한 로직과 일관되게 관리한다 — 호출 전 예산 확인은
+ * translate.ts 쪽에서 처리.
+ */
+export async function translateHeadline(
+  text: string,
+  sourceLang: "en" | "ja",
+): Promise<{ ko: string | null; costUsd: number }> {
+  const langName = sourceLang === "ja" ? "일본어" : "영어";
+  const response = await anthropic().messages.create({
+    model: MODEL,
+    max_tokens: 300,
+    system: `당신은 금융 뉴스 헤드라인 번역기입니다. 주어진 ${langName} 헤드라인 1개를 자연스러운
+한국어로 번역해 오직 JSON 객체 하나만 출력하세요(다른 텍스트 없이): {"ko": "번역된 헤드라인"}`,
+    messages: [{ role: "user", content: text }],
+  });
+  const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+  const raw = textBlock?.text ?? "";
+  const costUsd =
+    response.usage.input_tokens * PRICE_PER_TOKEN.input +
+    response.usage.output_tokens * PRICE_PER_TOKEN.output;
+  try {
+    const match = raw.match(/\{[\s\S]*?\}/);
+    const parsed = JSON.parse(match ? match[0] : raw) as { ko?: string };
+    return { ko: parsed.ko?.trim() || null, costUsd };
+  } catch {
+    return { ko: null, costUsd };
+  }
+}
+
+/**
  * 종목뉴스 목록의 "이 기사가 진짜 이 종목 얘기인가" 판정 — 순수 키워드 매칭으로는
  * 판단 불가(회사명이 요약에 스치듯 언급만 돼도 통과되거나, 반대로 축약형만 써서
  * 걸러지는 문제 반복 확인됨). 국내+해외 후보를 한 번의 호출로 함께 판정해

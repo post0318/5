@@ -177,6 +177,13 @@ for (const board of BOARDS) {
       const bm = rawTitle.match(GENERIC_BRACKET_RE);
       let stockName = bm ? bm[1].trim() : r.rsh_ppr_ser_cd_nm || board.label;
       const title = bm ? bm[2].trim() : rawTitle;
+      // FICC 게시판에서 대체투자·부동산 라벨은 통째로 제외한다(오너 지시,
+      // 2026-09 — "nh ficc에서 대체투자, 부동산은 자료에서 제외한다"). 라벨
+      // 텍스트 기준 판정 — NH 응답의 ser_cd_nm("대체투자")은 디지털자산
+      // 항목에도 붙어있어(그건 유지 대상, 오너가 "투자전략(주식)"으로
+      // 분류하라고 지시한 사례) ser_cd_nm이 아니라 대괄호 라벨(부동산·인프라
+      // 등)로만 걸러야 오분류가 안 난다.
+      if (board.ditCd === "04" && /대체투자|부동산/.test(stockName)) continue;
       // FICC 게시판은 세부 라벨(리츠/채권/크레딧 등)이 "FICC" 단어 자체를
       // 안 담고 있는 경우가 많아(예: "[원자재(에너지)/Note]") 키워드가
       // 사라지지 않게 항상 접두어로 붙인다 — 오너 지시("FICC는 해외투자

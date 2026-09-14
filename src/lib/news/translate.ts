@@ -143,8 +143,35 @@ export async function translateChecked(
     cacheSet(cacheKey, mk, true);
     return { ko: mk, ok: true };
   }
+  // 3) 무료 경로(Google·MyMemory) 둘 다 실패 → Claude Haiku 최종 폴백(오너
+  // 승인, 2026-09 — Google 웹 엔드포인트가 배포 IP에서 간헐적으로 429를
+  // 내고, MyMemory는 그럴 때 원문을 그대로 돌려주는 경우가 실측 확인됨).
+  // 일본어는 sl="ja"만 지원(ko 는 위에서 이미 처리, en/ja 외 값은 안 옴).
+  if (sl === "en" || sl === "ja") {
+    const llm = await translateViaLlmFallback(src, sl);
+    if (llm) {
+      cacheSet(cacheKey, llm, true);
+      return { ko: llm, ok: true };
+    }
+  }
   // 실패는 캐시하지 않음 — 다음 요청에서 재시도(대부분 일시적 오류).
   return { ko: null, ok: false };
+}
+
+/** LLM 폴백 — 예산 초과·API 키 미설정·호출 실패 시 조용히 null(헤드라인 원문 노출로 안전하게 폴백). */
+async function translateViaLlmFallback(text: string, sl: "en" | "ja"): Promise<string | null> {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  try {
+    const { isBudgetExceeded, incUsage } = await import("../db/llm-usage");
+    if (await isBudgetExceeded()) return null;
+    const { translateHeadline } = await import("../llm/claude");
+    const { ko, costUsd } = await translateHeadline(text, sl);
+    await incUsage(costUsd);
+    return ko;
+  } catch (err) {
+    console.error("[news] 헤드라인 LLM 번역 폴백 실패:", err);
+    return null;
+  }
 }
 
 /**

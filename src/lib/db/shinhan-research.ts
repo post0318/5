@@ -165,10 +165,17 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
  * 으로는 못 가리므로 source+market 조합으로 강제 — **국내(kr)는 절대
  * 포함하지 않는다**(같은 소스라도 시장에 따라 성격이 다름).
  */
+// "매크로"/"Macro"(특정 섹터가 아닌 거시경제 코멘트 전반, 예: SK증권
+// "매크로 Comment") — 산업분석 아니면 투자전략이라는 원칙에서, 섹터명이
+// 아닌 매크로 코멘트류는 투자전략 기본값(오너 지적, 2026-09).
 const STRATEGY_HINT_RE =
-  /전략|\bStrategy\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|\bFICC\b/i;
+  /전략|\bStrategy\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|\bFICC\b/i;
+// "Check-up"(신한 FX/Econ Check-up), "Economy/Economic Brief"(iM증권 등,
+// "IPO Brief"와 충돌 안 하게 일반 Brief 단독은 안 넣음), "N주)"/"N주차"
+// (키움 "키움 글로벌 키차트(9월 1주)"처럼 주차 표기가 괄호 안에만 있고
+// "위클리/주간" 단어 자체는 없는 경우) 추가(오너 지적, 2026-09).
 const MARKET_CONDITION_RE =
-  /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|마켓레이더|\bWeek(ly)?\b|\bDaily\b|\bMorning\b|Market\s?(Radar|Pulse|Insight)\b/i;
+  /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|마켓레이더|\bWeek(ly)?\b|\bDaily\b|\bMorning\b|Market\s?(Radar|Pulse|Insight)\b|Check-?up|Econom(y|ic)\s?Brief|\d+주(차)?[)\s]/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
   "KB Global Tracker+",
   "KB데일리", // 오너 지적, 2026-09
@@ -177,24 +184,29 @@ const MARKET_CONDITION_STOCKNAMES = new Set([
   // 시리즈(실측: 8~9월 사이 거의 매일)라 제목에 "전략"이 들어있어도 실질은
   // 일일 시황 업데이트다(오너 지적, 2026-09 — PDF 원문 확인).
   "글로벌전략",
-  // 한국투자증권 "전략/이슈 리포트" 게시판(collect-kis-strategy-research.mjs,
-  // jkGubun=6) 전체 — 오너 지시, 2026-09 ("한국투자는 시황으로 분류"). 이
-  // 게시판 자체가 짧은 주기의 시황·매크로 코멘트 모음이라 개별 라벨의
-  // "전략"/"산업" 텍스트와 무관하게 전부 시황으로 강제.
-  "채권분석 Note",
-  "경제분석 Note",
-  "투자전략Note",
-  "대체투자 Note",
-  "계량 Weekly (Quant of the Week)",
-  "자산배분전략 Note",
-  "글로벌전략 Note",
-  "전략/이슈",
 ]);
 const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 // KB증권 "Global Insights" — 오너 지시, 2026-09("KB증권 Global Insights는
 // 투자전략임"). 제목에 "전략"/Strategy 등 키워드가 없는 경우가 많아 시리즈명
 // 기준으로 강제.
 const STRATEGY_STOCKNAMES = new Set(["Global Insights"]);
+// 한국투자증권 "전략/이슈 리포트" 게시판(collect-kis-strategy-research.mjs,
+// jkGubun=6) 라벨들 — 처음엔 전부 시황으로 강제했으나(오너 지시, "한국투자는
+// 시황으로 분류"), 이후 "위클리, 데일리 등이 아니면 투자전략이다"로 정정됨
+// (오너 지시, 2026-09) — "채권분석 Note"/"경제분석 Note" 등은 "전략" 텍스트가
+// 없어 STRATEGY_HINT_RE 에 안 걸리므로, 이 라벨들만 기본값을 투자전략으로
+// 깔아준다. MARKET_CONDITION_RE(주간/Weekly/Daily 등) 검사가 이보다 먼저
+// 실행되므로 "계량 Weekly" 처럼 실제로 주간물이면 여전히 시황으로 먼저
+// 걸러진다 — 이 세트는 "그 외엔 전부 투자전략"만 담당.
+const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
+  "채권분석 Note",
+  "경제분석 Note",
+  "투자전략Note",
+  "대체투자 Note",
+  "자산배분전략 Note",
+  "글로벌전략 Note",
+  "전략/이슈",
+]);
 // 투자전략을 다시 주식/채권으로 나눈다(오너 지시, 2026-09 — "투자전략도
 // 분리하자 투자전략(주식) 투자전략(채권)" + "크레딧, 채권, 금리 등은
 // 투자전략(채권)으로 분류"). "FICC"는 일부러 뺐다 — NH FICC 게시판 수집기가
@@ -203,7 +215,12 @@ const STRATEGY_STOCKNAMES = new Set(["Global Insights"]);
 // 채권으로 쓸려버린다(오너 지적, 2026-09 — "로빈후드에 이어 블록체인을
 // 출시하는 써클"은 투자전략(주식)이어야 함). 실제 크레딧/채권/금리 언급
 // 여부로만 판정.
-const BOND_HINT_RE = /크레딧|채권|금리|\bCredit\b|\bBond\b|\bRate[s]?\b/i;
+// "국채"(채권과 별개 합성어라 "채권" 부분문자열 매칭에 안 걸림), "중앙은행"/
+// "Central Bank"(통화정책 자체가 FICC의 금리 데스크 영역) 추가(오너 지적,
+// 2026-09 — "안전자산으로서의 가치를 의심받는 국채..."·"Central Bank Working
+// Paper" 둘 다 투자전략(채권) 누락 확인).
+const BOND_HINT_RE =
+  /크레딧|채권|국채|금리|중앙은행|통화정책|\bCredit\b|\bBond\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
 
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market">,
@@ -213,7 +230,9 @@ export function classifyResearchTopic(
   const hay = `${doc.stockName ?? ""} ${doc.title}`;
   if (STRATEGY_STOCKNAMES.has(doc.stockName)) return BOND_HINT_RE.test(hay) ? "투자전략(채권)" : "투자전략(주식)";
   if (MARKET_CONDITION_RE.test(hay)) return "시황";
-  if (STRATEGY_HINT_RE.test(hay)) return BOND_HINT_RE.test(hay) ? "투자전략(채권)" : "투자전략(주식)";
+  if (STRATEGY_HINT_RE.test(hay) || KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)) {
+    return BOND_HINT_RE.test(hay) ? "투자전략(채권)" : "투자전략(주식)";
+  }
   return "산업분석";
 }
 
