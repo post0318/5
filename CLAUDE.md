@@ -528,6 +528,35 @@ npm run db:studio    # drizzle studio
         (경제분석/투자전략, 대괄호 없는 평문 제목이라 라벨을 "산업"으로
         고정). 둘 다 `category:"산업"`, symbol 항상 null, 목표주가 추출도
         건너뜀.
+    - **상상인증권 추가(오너 확인, 2026-09)**: `www.sangsanginib.com` 화면은
+      목록을 AJAX로 채워 HTML만 받아서는 아무것도 안 나온다. 브라우저
+      네트워크 로그로 내부 API를 역추적: `POST /notice/getNoticeList`
+      (form-urlencoded, `cmsCd`로 게시판 구분·`rowNum`·`startRow`·`src=all`·
+      `sdt`/`edt`). 응답에 STOCK_CD(종목코드)·STOCK_NM·TITLE·REGDT·NM(작성자)
+      이 구조화돼 있어 제목 파싱도 이름 검색도 불필요. 기업리포트
+      (`cmsCd=CM0079`, 로컬 스크립트 `scripts/collect-sangsangin-research.mjs`,
+      GitHub Actions `sangsangin-research.yml`)가 먼저 붙었고, 전체 4,466건
+      (실측)으로 한경 컨센서스 경유분(90일 12건)보다 훨씬 많아 자체 수집으로
+      전환(오너 — "사이트에는 리서치가 엄청 많다"). PDF는 로그인 없이
+      규칙적인 경로(`/_upload/attFile/{cmsCd}/{cmsCd}_{NT_NO}_1.pdf`)로
+      받아진다.
+      - **산업리포트/주식시장 수집 추가(오너 지적, 2026-09 — "산업리포트가
+        버젓이 공개하는데" + "투자전략도 있고")**: 같은 내부 API를 다른
+        `cmsCd`로 재사용 — 화면(`research/industryReport/industryReportView`,
+        `research/stockMarket/stockMarketView`)이 로드하는 정적 JS 번들
+        (`/static/js/research/{보드}/{보드}.js`)에서 `cmsCd` 값을
+        역추적해 확인: 산업리포트 `CM0338`(868건, STOCK_NM에 이미 깔끔한
+        업종명이 있어 그대로 씀), 주식시장 `CM0078`(2,532건, STOCK_NM이
+        전부 "시장전체"로 안 나뉘어 있어 제목의 "[라벨] 헤드라인" 브라켓을
+        라벨로 뽑음 — "상상인 US Monitor"처럼 이미 `classifyResearchTopic()`
+        의 `MARKET_CONDITION_STOCKNAMES`에 있던 라벨과 그대로 일치).
+        `category:"산업"`, symbol 항상 null, 목표주가·투자의견 추출도
+        건너뜀. market은 두 게시판 모두 국내(한국어) 관점 코멘터리라 "kr"
+        고정(미국 자산 얘기도 상상인 리서치센터가 작성한 해외 시황 코멘트라
+        신한 M.R.I 등 다른 브로커의 국내 "투자전략" 게시판과 동일 처리).
+        **로컬 스크립트** (`scripts/collect-sangsangin-industry-research.mjs`,
+        GitHub Actions `sangsangin-industry-research.yml`)가 같은 라우트를
+        `source: "상상인증권"` 으로 재사용.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
