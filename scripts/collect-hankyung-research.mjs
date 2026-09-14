@@ -51,6 +51,39 @@
 import { readFileSync } from "node:fs";
 import { PDFParse } from "pdf-parse";
 
+// IN/MA(산업/시장) 항목 중 대괄호 업종 태그가 없는 제목이 실은 특정 국내
+// 종목 얘기인 경우가 있다(실측, 오너 지적 2026-09 — 메리츠증권 "HD현대중공업
+// 의 엔진 증설 발표 - 조선주 재반등 신호탄", 유진투자증권 "플래닛랩스, 소버린
+// 수요에 분기 최대 실적" 등이 종목 리포트인데 "산업"으로 새고 있었음). DS
+// 수집기와 동일한 방식("제목이 그 이름으로 시작하는 것 중 가장 긴 이름")으로
+// corpcodes.json(3,930개, DART_API_KEY 불필요)에서 매칭되면 기업분석으로
+// 승격한다 — 해외 개별종목(플래닛랩스 등)까지는 다루지 않음(네이버 자동완성
+// 해석이 필요해 국내보다 비용이 크고, 이 게시판은 국내·해외가 섞여 있어
+// 오탐 위험도 큼 — 국내 매칭만으로도 확인된 사례 다수 해결).
+const CORPS = JSON.parse(
+  readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
+).sort((a, b) => b.n.length - a.n.length);
+// startsWith만으로는 "신흥국 실적 상향..."이 "신흥"(실제 상장사, 004080)의
+// 접두어와 우연히 겹쳐 오매칭되는 사례가 실측됨(제목이 자연어 문장이라
+// DS의 "[업종] 종목명 - 부제" 처럼 구조화돼 있지 않아 이 게시판에서 특히
+// 위험) — 매칭 뒤 남는 글자가 없거나(제목이 회사명으로 끝남), 공백/구두점/
+// 영숫자이거나, 한글 조사(의/은/는/이/가/을/를/과/와/도/만 등)로 시작할
+// 때만 인정한다. "국"처럼 조사가 아닌 한글 음절이 바로 이어지면 다른 단어의
+// 일부로 보고 기각.
+const KR_PARTICLES = ["의", "은", "는", "이", "가", "을", "를", "과", "와", "도", "만", "에", "께", "이나", "나", "라도", "마저", "조차", "밖에", "부터", "까지", "로", "으로"];
+function resolveKrStock(text) {
+  const t = text.trim();
+  for (const c of CORPS) {
+    if (!t.startsWith(c.n)) continue;
+    const rest = t.slice(c.n.length);
+    if (!rest || !/^[가-힣]/.test(rest)) return { symbol: c.s, stockName: c.n }; // 제목이 그대로 끝나거나 공백/구두점/영숫자로 이어짐
+    const particle = KR_PARTICLES.find((p) => rest.startsWith(p));
+    if (particle && !/^[가-힣]/.test(rest.slice(particle.length))) return { symbol: c.s, stockName: c.n }; // 조사 뒤 공백 등으로 끊김
+    // 조사가 아닌 한글 음절이 바로 이어지면 다른 단어의 일부 — 기각, 더 짧은 후보로 계속.
+  }
+  return null;
+}
+
 function loadEnvLocal() {
   const env = { ...process.env };
   try {
@@ -220,6 +253,31 @@ function parseIndustryItems(html, label, reportCode) {
     const cells = [...rowHtml.matchAll(/<td[^>]*>\s*([^<]*?)\s*<\/td>/g)].map((m) => stripHtml(m[1]));
     const [analyst, source] = reportCode === "MA" ? [cells[1] ?? "", cells[2] ?? ""] : [cells[2] ?? "", cells[3] ?? ""];
     const bm = title.match(BRACKET_RE);
+    // 대괄호가 없는 제목만 종목명 매칭을 시도한다 — 있으면 이미 업종 태그가
+    // 의도적으로 붙은 것이므로(예: "[화장품] ...") 그대로 산업분석으로 둔다.
+    const stockHit = bm ? null : resolveKrStock(title);
+    if (stockHit) {
+      // 종목명 뒤에 붙은 조사(의/은/는 등, resolveKrStock 매칭 때 이미 확인된
+      // 경계)도 잘라내야 "의 엔진 증설 발표..." 처럼 조사만 남지 않는다.
+      let restTitle = title.slice(stockHit.stockName.length);
+      const particle = KR_PARTICLES.find((p) => restTitle.startsWith(p));
+      if (particle) restTitle = restTitle.slice(particle.length);
+      restTitle = restTitle.replace(/^[\s\-–—:,]+/, "").trim();
+      items.push({
+        id: reportIdx,
+        date: dateM[1],
+        title: restTitle || title,
+        stockName: stockHit.stockName,
+        symbolHint: stockHit.symbol,
+        opinion: "",
+        targetPrice: null,
+        analyst,
+        source,
+        pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
+        category: "기업",
+      });
+      continue;
+    }
     const sector = bm ? bm[1].trim() : label;
     const restTitle = bm && bm[2].trim() ? bm[2].trim() : title;
 
