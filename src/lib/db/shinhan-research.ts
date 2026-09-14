@@ -197,9 +197,13 @@ const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 const STRATEGY_STOCKNAMES = new Set(["Global Insights"]);
 // 투자전략을 다시 주식/채권으로 나눈다(오너 지시, 2026-09 — "투자전략도
 // 분리하자 투자전략(주식) 투자전략(채권)" + "크레딧, 채권, 금리 등은
-// 투자전략(채권)으로 분류"). FICC(Fixed Income·Currency·Commodity)는
-// 정의상 채권 쪽이라 이미 STRATEGY_HINT_RE에 있는 FICC 키워드도 여기 포함.
-const BOND_HINT_RE = /크레딧|채권|금리|\bCredit\b|\bBond\b|\bRate[s]?\b|\bFICC\b/i;
+// 투자전략(채권)으로 분류"). "FICC"는 일부러 뺐다 — NH FICC 게시판 수집기가
+// stockName에 항상 "FICC · " 접두어를 붙이는데(투자전략 키워드 유지 목적),
+// 이 키워드까지 여기 넣으면 디지털자산·리츠 같은 FICC 하위 항목까지 전부
+// 채권으로 쓸려버린다(오너 지적, 2026-09 — "로빈후드에 이어 블록체인을
+// 출시하는 써클"은 투자전략(주식)이어야 함). 실제 크레딧/채권/금리 언급
+// 여부로만 판정.
+const BOND_HINT_RE = /크레딧|채권|금리|\bCredit\b|\bBond\b|\bRate[s]?\b/i;
 
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market">,
