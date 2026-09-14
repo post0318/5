@@ -352,6 +352,15 @@ export async function getStockSlideData(
   ]);
 
   const ecosystemNodes = ecosystemManual.length > 0 ? ecosystemManual : profile.ecosystem;
+  // 생태계 다이어그램이 좌측 상단 패널을 차지하면 그 자리의 불릿(d.business)이
+  // 화면에 안 나온다 — LLM이 만든 핵심 투자 포인트가 통째로 안 보이는 걸
+  // 막기 위해, 사용자가 회사 개요(overview)를 직접 안 썼으면 그 불릿을
+  // 상단 개요 밴드에 대신 채운다.
+  const overview = (opts.overview ?? "").trim();
+  const autoOverview =
+    !overview && ecosystemNodes.length > 0 && profile.bullets.length > 0
+      ? profile.bullets.join("  ·  ")
+      : "";
 
   return {
     market,
@@ -363,7 +372,7 @@ export async function getStockSlideData(
     slideNo: (opts.slideNo ?? "02").trim() || "02",
     brand: (opts.brand ?? "").trim(),
     logo,
-    overview: (opts.overview ?? "").trim(),
+    overview: overview || autoOverview,
     business: businessLines.length > 0 ? businessLines : profile.bullets,
     ecosystem:
       ecosystemNodes.length > 0
