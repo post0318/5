@@ -183,6 +183,25 @@ const INDUSTRY_REPORT_TYPES = [
 ];
 const BRACKET_RE = /^\[([^\]]+)\]\s*(.*)$/;
 
+// IN/MA(산업/시장) 항목의 국내·해외 구분(2026-09 추가, 오너 지적 — "TSMC와
+// 주요 AI 서버 ODM 업체들..." 리포트가 국내로 잘못 남아있는데?"). 이 스크립트는
+// "기업" 분류(CO)를 뺀 IN/MA 항목엔 지금까지 market 필드를 아예 안 보내 라우트
+// 기본값("kr")으로만 저장돼 있었다 — TSMC/대만/ECB/Fed 얘기까지 전부 국내로
+// 잡히는 문제가 실측됨. 제목만으로는 신호가 없는 경우가 많아(예: "AI 수요와
+// 고도화, 두 축 모두 견조"는 본문에서야 "TSMC"·"대만"이 나옴) PDF 발췌
+// 완료 후 본문까지 포함해 분류한다. 미국뿐 아니라 중국·대만·일본·유럽 등
+// 이 사이트 특유의 "해외" 전반을 폭넓게 잡는다(미래에셋 등 다른 해외
+// 산업분석 수집기가 US_HINT_RE로 "미국"만 좁게 보는 것과 다른 이유 — 이
+// 게시판은 처음부터 특정 국가 전용 게시판이 아니라 국내·해외가 뒤섞인
+// "산업/시장" 전체 피드라 국내 신호가 없으면 해외로 본다). 완벽하진 않음
+// (국가 신호가 전혀 없는 애매한 글로벌 매크로 코멘트는 kr 기본값으로 남을
+// 수 있음) — 다른 산업분석 수집기와 동일한 트레이드오프.
+const OVERSEAS_HINT_RE =
+  /미국|글로벌|Global|해외|\bUS\b|나스닥|Nasdaq|다우|S&P|연준|\bFed\b|\bECB\b|FOMC|중국|대만|TSMC|일본|유럽|홍콩|베트남|인도|위안화|엔화|유로/i;
+function classifyIndustryMarket(hay) {
+  return OVERSEAS_HINT_RE.test(hay) ? "us" : "kr";
+}
+
 function parseIndustryItems(html, label, reportCode) {
   const items = [];
   for (const rowHtml of html.split(/<tr[^>]*>/).slice(1)) {
@@ -322,6 +341,9 @@ for (const it of collected) {
     if (it.targetPrice == null) it.targetPrice = targetPriceFallback;
     if (it.targetPrice != null && !hasTargetMention) it.targetPrice = null; // 표 값이 본문에 없으면 버림
     if (it.opinion && !hasOpinionMention) it.opinion = "";
+    it.market = "kr"; // "기업" 분류는 "종목명(코드)" 제목 패턴상 항상 국내 상장 종목
+  } else {
+    it.market = classifyIndustryMarket(`${it.stockName} ${it.title} ${it.summary}`);
   }
   if (!it.summary) excerptFailCount++;
   await sleep(400);
@@ -352,13 +374,19 @@ const SKIP_SOURCES = new Set(["상상인증권"]);
 // 경유 90일 12건인데 자사 API 로는 같은 기간 126건(전체 4,466건)이다(오너 지시).
 const EXCLUDED_SOURCES = new Set(["상상인증권"]);
 
-const bySource = new Map();
+// 라우트는 POST 한 번당 market 하나만 받으므로(전체 items에 일괄 적용),
+// source뿐 아니라 market까지 묶어서 그룹핑한다 — 같은 증권사라도 "산업"
+// 분류 결과가 국내/해외로 갈릴 수 있어(2026-09 추가) source만으로 묶으면
+// 안 됨.
+const bySourceMarket = new Map();
 for (const it of collected) {
   if (EXCLUDED_SOURCES.has((it.source || "").trim())) continue;
-  const key = it.source || "한경컨센서스";
-  if (SKIP_SOURCES.has(key)) continue;
-  if (!bySource.has(key)) bySource.set(key, []);
-  bySource.get(key).push({
+  const source = it.source || "한경컨센서스";
+  if (SKIP_SOURCES.has(source)) continue;
+  const market = it.market || "kr";
+  const key = `${source}|${market}`;
+  if (!bySourceMarket.has(key)) bySourceMarket.set(key, { source, market, items: [] });
+  bySourceMarket.get(key).items.push({
     id: `한경:${it.id}`,
     date: it.date,
     title: it.title,
@@ -375,18 +403,18 @@ for (const it of collected) {
 }
 
 let totalUpserted = 0;
-for (const [source, group] of bySource) {
+for (const { source, market, items: group } of bySourceMarket.values()) {
   const up = await fetch(IMPORT_URL, {
     method: "POST",
     headers,
-    body: JSON.stringify({ items: group, source }),
+    body: JSON.stringify({ items: group, source, market }),
   });
   const upBody = await up.text();
   if (!up.ok) {
-    console.error(`✗ [${source}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 200)}`);
+    console.error(`✗ [${source}/${market}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 200)}`);
     continue;
   }
-  console.log(`✔ [${source}] ${group.length}건 전송: ${upBody}`);
+  console.log(`✔ [${source}/${market}] ${group.length}건 전송: ${upBody}`);
   totalUpserted += group.length;
 }
-console.log(`\n✔ 총 ${totalUpserted}건 전송 완료 (${bySource.size}개 증권사)`);
+console.log(`\n✔ 총 ${totalUpserted}건 전송 완료 (${bySourceMarket.size}개 그룹)`);

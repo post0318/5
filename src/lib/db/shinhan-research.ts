@@ -199,8 +199,11 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
 // (실측: 바이오 섹터 리포트 "비소세포폐암 차세대 치료 전략..."이 산업분석
 // 인데 투자전략(주식)으로 잘못 넘어감, 오너 지적 2026-09) "치료"/"임상" 바로
 // 앞에 오는 경우는 제외(부정 전방탐색).
+// "실적상향/실적하향"(어닝 리비전 스크리닝, 예: "신흥국 실적 상향 상위에
+// 한국 10개 종목 진입" — 여러 종목을 실적 모멘텀 기준으로 스크리닝하는
+// 투자전략물이지 업종 얘기가 아님) 추가(오너 지적, 2026-09).
 const STRATEGY_HINT_RE =
-  /(?<!치료\s?)(?<!임상\s?)전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC/i;
+  /(?<!치료\s?)(?<!임상\s?)전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC|실적\s?(상향|하향)/i;
 // "Check-up"(신한 FX/Econ Check-up), "Economy/Economic Brief"(iM증권 등,
 // "IPO Brief"와 충돌 안 하게 일반 Brief 단독은 안 넣음), "N주)"/"N주차"
 // (키움 "키움 글로벌 키차트(9월 1주)"처럼 주차 표기가 괄호 안에만 있고
@@ -210,8 +213,13 @@ const STRATEGY_HINT_RE =
 // 항상 시황을 확정하는 신호 — stockName 이 구체적 업종명이어도 이 단어들이
 // 있으면 무조건 시황(모두 특정 업종 얘기가 아니라 시장 전체 마감/브리핑
 // 성격이라 예외가 실측된 적이 없음).
+// "마켓 뷰(9월 11일)"(미래에셋 — "마켓 클로징(9월 11일)"과 같은 날짜별
+// 시황 시리즈 포맷) 추가(오너 지적, 2026-09).
+// "ETF Flows"(NH "[NH투자/하재석]Weekly KR/US ETF Flows" — stockName이
+// 애널리스트 바이라인("NH투자/하재석")이라 업종명이 아닌데도 이 자체만으로
+// 자금흐름 집계물(시장 전체)임이 확정된다, 오너 지적 2026-09) 추가.
 const MARKET_CONDITION_STRONG_RE =
-  /시황|마감|브리핑|마켓레이더|모니터|\bMonitor\b|\bPMI\b|Market\s?(Radar|Pulse|Insight)\b|Check-?up|Econom(y|ic)\s?Brief|Economist|\d+주(차)?[)\s]|클로징|\bClosing\b/i;
+  /시황|마감|브리핑|마켓레이더|모니터|\bMonitor\b|\bPMI\b|Market\s?(Radar|Pulse|Insight)\b|Check-?up|Econom(y|ic)\s?Brief|Economist|\d+주(차)?[)\s]|클로징|\bClosing\b|마켓\s?뷰|ETF\s?Flows?/i;
 // "일간/위클리/주간/데일리/모닝/아침/Weekly/Daily/Morning" 같은 주기성
 // 단어는 STRONG과 달리 그 자체만으로 시황을 확정하지 못한다(오너 지적,
 // 2026-09 — "단순히 위클리만 따라가면 답없다") — 하나증권의 "철강금속
@@ -244,11 +252,16 @@ const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 // KB증권 "Global Insights" — 오너 지시, 2026-09("KB증권 Global Insights는
 // 투자전략임"). 제목에 "전략"/Strategy 등 키워드가 없는 경우가 많아 시리즈명
 // 기준으로 강제.
-const STRATEGY_STOCKNAMES = new Set(["Global Insights", "Global Watchlist", "마켓픽"]);
+// "NAV Dashboard Weekly"(미래에셋 — 지주회사 NAV 할인율 스크리닝 시리즈,
+// 업종 얘기가 아니라 밸류에이션 갭을 노리는 투자전략물, 오너 지적 2026-09)
+// 추가.
+const STRATEGY_STOCKNAMES = new Set(["Global Insights", "Global Watchlist", "마켓픽", "NAV Dashboard Weekly"]);
 // 미래에셋증권 "월스트리트파인더 Ep.201, 202, ..." — 매회 에피소드 번호가
 // 붙어 정확히 일치하지 않아 접두어로 매칭. 계절성·금리 대응·엔비디아
 // 내러티브 등 시장 전반 투자 아이디어 시리즈(오너 확인, 2026-09).
-const STRATEGY_STOCKNAME_PREFIXES = [/^월스트리트파인더/];
+// DS투자증권 "거버넌스 - 베어허그 시리즈 N" — 특정 업종이 아니라 상법개정·
+// 지배구조 개혁 테마 투자전략 시리즈(오너 지적, 2026-09).
+const STRATEGY_STOCKNAME_PREFIXES = [/^월스트리트파인더/, /^거버넌스/];
 // 한국투자증권 "전략/이슈 리포트" 게시판(collect-kis-strategy-research.mjs,
 // jkGubun=6) 라벨들 — 처음엔 전부 시황으로 강제했으나(오너 지시, "한국투자는
 // 시황으로 분류"), 이후 "위클리, 데일리 등이 아니면 투자전략이다"로 정정됨
@@ -308,10 +321,13 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // 하는데 이 약한 신호만으로 투자전략(채권)으로 잘못 넘어감) stockName이
 // 구체적 업종/종목이 아닌 경우(isGenericOrBoardLabel)에만, 그리고 본문에
 // 명시적 주식 신호(코스피/코스닥/나스닥/주식 등)가 없을 때만 채권으로 본다.
+// "ECB"(유럽중앙은행) 추가 — "중앙은행"/"Central Bank" 처럼 일반 단어가
+// 아니라 특정 기관명이라 별도로 안 걸림(오너 지적, 2026-09 — "ECB, 인상
+// 사이클 연장" 누락 확인).
 const BOND_STRONG_RE =
   /(?<!매출)(?<!연체)(?<!부실)채권(?!단|자|회수|추심)|크레딧|국채|부채|Beige\s?Book|\bCredit\b|\bBond\b|\bDebt\b|Fixed\s?Income/i;
 const BOND_MACRO_RE =
-  /금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|\bCPI\b(?!\()|\bPPI\b(?!\()|\bPCE\b(?!\()|\bGDP\b|Retail\s?Sales|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy/i;
+  /금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|\bCPI\b(?!\()|\bPPI\b(?!\()|\bPCE\b(?!\()|\bGDP\b|Retail\s?Sales|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|\bECB\b/i;
 // "코스피/코스닥/나스닥" 등 지수명 자체가 이미 주식시장 얘기라는 강한 신호
 // (오너 지적, 2026-09). 한글 표기뿐 아니라 리포트에 흔한 영문 표기(KOSPI/
 // KOSDAQ/NASDAQ)도 포함.
@@ -321,6 +337,11 @@ const EQUITY_HINT_RE =
 // ("FOMC Minutes"처럼 본문에 흔한 채권 키워드가 하나도 없는 경우 있음,
 // 오너 지적 2026-09).
 const BOND_SOURCES = new Set(["FRB"]);
+// ESG는 산업분석/투자전략/시황 어디에도 안 맞아 이 탭 범위 밖으로 보고
+// 제외한다(오너 지시, 2026-09 — "esg는 제외하라"). getIndustryResearch()
+// 조회 시점에 적용(분류가 아니라 제외라 classifyResearchTopic() 이 아닌
+// 별도 필터).
+const ESG_EXCLUDE_RE = /\bESG\b/i;
 
 function isStrategyStockname(stockName: string): boolean {
   if (STRATEGY_STOCKNAMES.has(stockName)) return true;
@@ -419,7 +440,13 @@ export async function getIndustryResearch(
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
-  const deduped = dedupeBySourceTitle(docs);
+  // ESG는 이 탭 범위 밖이라 제외한다(오너 지시, 2026-09 — "esg는 제외하라").
+  // KB "Global ESG Brief", SK증권 "ESG snapshot", NH "NH ESG Research",
+  // 미래에셋 "ESG Strategy"/"[ESG Issue Comment]" 등 여러 증권사 수집기에
+  // 걸쳐 있어(실측 90일 15건) 수집기별로 개별 제외하는 대신 조회 시점에
+  // 한 번에 걸러낸다.
+  const withoutEsg = docs.filter((d) => !ESG_EXCLUDE_RE.test(`${d.stockName} ${d.title}`));
+  const deduped = dedupeBySourceTitle(withoutEsg);
   // 투자전략(주식)/투자전략(채권)은 30일까지만(오너 지시, 2026-09 —
   // "그 이상은 불필요하다. 화면에서도 제외한다", 최종 값), 시황은 14일까지만
   // 화면에 노출(오너 지시 — "일단 14일까지 유지한다", 검증 기간 동안 임시,

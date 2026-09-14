@@ -130,13 +130,18 @@ function parseItems(html) {
 //    market:"us".
 //  - 그 외(업종명+비중확대/축소 등 국내 브로커 관행, 국가 신호 없음)는
 //    기존처럼 market:"kr" 기본값.
-// 완벽한 분류는 아니다(예: "AI Infra Signal"처럼 영문명이어도 신호 키워드가
-// 없으면 kr로 남음) — 전수 정확도보다 "타국 콘텐츠가 국내로 잘못 들어가지
-// 않는 것"과 "명백한 해외 콘텐츠는 us로 건너가는 것" 두 가지를 우선한다.
+// 완벽한 분류는 아니었다(예: "AI Infra Signal"처럼 영문명이어도 신호
+// 키워드가 없으면 kr로 남음, 오너 지적 2026-09로 확인·수정) — 전수
+// 정확도보다 "타국 콘텐츠가 국내로 잘못 들어가지 않는 것"과 "명백한 해외
+// 콘텐츠는 us로 건너가는 것" 두 가지를 우선한다.
 const EXCLUDE_COUNTRY_RE = /중국|인도|인디아|일본|홍콩|대만|베트남|동남아/;
 const US_HINT_RE = /글로벌|Global|해외|미국|\bUS\b|나스닥|Nasdaq|S&P|다우존스|연준|\bFed\b/i;
+// 시리즈명만으로 해외(미국)로 강제 분류 — 신호 키워드 없이도 매회 미국 AI
+// 인프라/전력/자본시장 주제인 것을 실측 확인(2026-09, 오너 지적).
+const US_SERIES_PREFIXES = ["AI Infra Signal"];
 function classifyMarket(label, headline) {
   const hay = `${label} ${headline}`;
+  if (US_SERIES_PREFIXES.some((p) => label.trim().startsWith(p))) return "us";
   if (EXCLUDE_COUNTRY_RE.test(hay)) return null; // 이 프로젝트 대상 시장 아님
   if (US_HINT_RE.test(hay)) return "us";
   return "kr";
