@@ -896,9 +896,15 @@ export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
   let lang: "ko" | "en";
   if (region === "kr") {
     lang = "ko";
+    // 도메인 화이트리스트(KR_PUBLISHER_BY_DOMAIN, 22곳)를 그대로 쓰면 NAVER
+    // 검색 결과 15건 중 살아남는 게 topic당 1~4건뿐이라 "국내 시황"란이 거의
+    // 비다시피 했다(실측, 2026-09 — 오너 지적: "국내시황은 왜 저리 적은가").
+    // 이미 아래 MARKET_RELEVANT_KO 로 주제 적합성을 따로 거르고 있어(종목뉴스
+    // 탭이 화이트리스트 대신 LLM 판정으로 넘어간 것과 같은 이유 — 고정된 소수
+    // 도메인 목록보다 신뢰도 낮음) 화이트리스트는 끄고 주제 필터에 맡긴다.
     const results = await Promise.all(
       KR_MACRO_TOPICS.map((q) =>
-        fetchKrNewsBySearch(symbol, q, { cutoffMs: ONE_WEEK_MS, display: 15 }),
+        fetchKrNewsBySearch(symbol, q, { cutoffMs: ONE_WEEK_MS, display: 15, requireWhitelist: false }),
       ),
     );
     raw = filterMacroRelevant(results.flat(), MACRO_RELEVANT_KO);

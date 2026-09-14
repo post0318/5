@@ -167,15 +167,21 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
  */
 // "매크로"/"Macro"(특정 섹터가 아닌 거시경제 코멘트 전반, 예: SK증권
 // "매크로 Comment") — 산업분석 아니면 투자전략이라는 원칙에서, 섹터명이
-// 아닌 매크로 코멘트류는 투자전략 기본값(오너 지적, 2026-09).
+// 아닌 매크로 코멘트류는 투자전략 기본값(오너 지적, 2026-09). "고용/CPI/PPI/
+// PCE/물가"(미국 고용·물가 지표 발표 코멘트, 실측 다수 확인 — 전부 오너가
+// 투자전략(채권)으로 지적)와 "FOMC"(FOMC 자체 언급은 주식/채권 어느 쪽도
+// 될 수 있어 — 실측: "나스닥 신고가 기대" 는 주식, "CPI…금리 인상" 은
+// 채권 — STRATEGY 승격까지만 담당하고 BOND_HINT_RE 가 최종 구분)도 추가.
 const STRATEGY_HINT_RE =
-  /전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income/i;
+  /전략|\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC/i;
 // "Check-up"(신한 FX/Econ Check-up), "Economy/Economic Brief"(iM증권 등,
 // "IPO Brief"와 충돌 안 하게 일반 Brief 단독은 안 넣음), "N주)"/"N주차"
 // (키움 "키움 글로벌 키차트(9월 1주)"처럼 주차 표기가 괄호 안에만 있고
-// "위클리/주간" 단어 자체는 없는 경우) 추가(오너 지적, 2026-09).
+// "위클리/주간" 단어 자체는 없는 경우), "Economist"(대신증권 "AI
+// Economist"), "모니터/Monitor"(대신증권 "S&P 500 분기 실적 시즌 모니터")
+// 추가(오너 지적, 2026-09).
 const MARKET_CONDITION_RE =
-  /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|마켓레이더|\bWeek(ly)?\b|\bDaily\b|\bMorning\b|Market\s?(Radar|Pulse|Insight)\b|Check-?up|Econom(y|ic)\s?Brief|\d+주(차)?[)\s]/i;
+  /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|마켓레이더|모니터|\bWeek(ly)?\b|\bDaily\b|\bMorning\b|\bMonitor\b|Market\s?(Radar|Pulse|Insight)\b|Check-?up|Econom(y|ic)\s?Brief|Economist|\d+주(차)?[)\s]/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
   "KB Global Tracker+",
   "KB데일리", // 오너 지적, 2026-09
@@ -219,8 +225,13 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // "Central Bank"(통화정책 자체가 FICC의 금리 데스크 영역) 추가(오너 지적,
 // 2026-09 — "안전자산으로서의 가치를 의심받는 국채..."·"Central Bank Working
 // Paper" 둘 다 투자전략(채권) 누락 확인).
+// 미국 고용·물가 지표 발표 코멘트("8월 고용", "미국 8월 CPI" 등)는 실측
+// 다수(오너 확인)가 전부 투자전략(채권)이었다 — Fed 금리 결정에 직결되는
+// 지표라 채권 데스크 소관으로 본다. "FOMC" 자체는 주식/채권 둘 다 될 수
+// 있어(나스닥 반응 vs 금리 코멘트) 여기엔 안 넣음 — STRATEGY_HINT_RE에서만
+// 승격 신호로 쓰고, 실제 채권 여부는 이 정규식의 다른 키워드로 판정.
 const BOND_HINT_RE =
-  /크레딧|채권|국채|금리|중앙은행|통화정책|\bCredit\b|\bBond\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
+  /크레딧|채권|국채|금리|중앙은행|통화정책|고용|실업|비농업|물가|Beige\s?Book|\bCPI\b|\bPPI\b|\bPCE\b|\bCredit\b|\bBond\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
 
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market">,
@@ -230,8 +241,14 @@ export function classifyResearchTopic(
   const hay = `${doc.stockName ?? ""} ${doc.title}`;
   if (STRATEGY_STOCKNAMES.has(doc.stockName)) return BOND_HINT_RE.test(hay) ? "투자전략(채권)" : "투자전략(주식)";
   if (MARKET_CONDITION_RE.test(hay)) return "시황";
-  if (STRATEGY_HINT_RE.test(hay) || KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)) {
-    return BOND_HINT_RE.test(hay) ? "투자전략(채권)" : "투자전략(주식)";
+  // BOND_HINT_RE 매칭도 그 자체로 투자전략 승격 신호다("미국 10년물 금리 5%의
+  // 시험대"처럼 "금리"만 있고 STRATEGY_HINT_RE 쪽 키워드(전략/매크로/CPI 등)는
+  // 없는 순수 채권·금리 코멘트가 승격 자체가 안 돼 산업분석으로 새던 문제,
+  // 오너 지적, 2026-09) — 채권 언급 자체가 이미 "산업분석이 아니라 투자전략
+  // (채권)"이라는 뜻이므로 별도 승격 키워드가 없어도 여기서 잡는다.
+  const bond = BOND_HINT_RE.test(hay);
+  if (STRATEGY_HINT_RE.test(hay) || bond || KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)) {
+    return bond ? "투자전략(채권)" : "투자전략(주식)";
   }
   return "산업분석";
 }
