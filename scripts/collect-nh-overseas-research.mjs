@@ -28,7 +28,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch } from "./lib/us-research-extract.mjs";
+import { enrichUsResearch, readPdfText } from "./lib/us-research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -60,6 +60,28 @@ const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 목록 응답에 본문 발췌가 아예 없어(summary 는 항상 "") 국내 수집기
+// (collect-nh-research.mjs)처럼 PDF 본문에서 발췌를 뽑는다 — 그동안 이
+// 스크립트에만 이 단계가 빠져 있었음(오너 지적, 2026-09 — 특정 리포트의
+// 발췌 공란을 확인해 발견). 헤더/표지 블록을 건너뛰는 휴리스틱은 국내
+// 수집기와 동일.
+const EXCERPT_LEN = 150;
+function excerptFromPdfText(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const anchor = lines.findIndex((l) => /Note\s*[│|]/.test(l));
+  const bodyLines = anchor >= 0 ? lines.slice(anchor + 3) : lines.slice(4);
+  const flat = bodyLines
+    .filter((l) => l.length >= 10)
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!flat) return "";
+  if (flat.length <= EXCERPT_LEN) return flat;
+  const cut = flat.slice(0, EXCERPT_LEN);
+  const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
+  return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
+}
 
 function isoDate(yyyymmdd) {
   const m = String(yyyymmdd).match(/^(\d{4})(\d{2})(\d{2})$/);
@@ -261,6 +283,23 @@ console.log(
 // 산업/전략 노트는 특정 종목 얘기가 아니라 목표주가·투자의견 개념이 없음 —
 // PDF에 우연히 등장하는 숫자를 잘못 채우지 않게 기업(종목) 항목만 보강한다.
 await enrichUsResearch(collected.filter((it) => it.category === "기업"));
+
+// 본문 발췌(summary)는 기업·산업 구분 없이 전부 채운다(목표주가·투자의견과
+// 달리 오분류 위험이 없음). 같은 PDF를 여러 번 안 받게 캐시.
+console.log(`▶ PDF 본문 발췌 중...`);
+const excerptCache = new Map();
+let excerptFailCount = 0;
+for (const it of collected) {
+  if (it.summary || !it.pdfUrl) continue;
+  if (!excerptCache.has(it.pdfUrl)) {
+    const text = await readPdfText(it.pdfUrl);
+    excerptCache.set(it.pdfUrl, excerptFromPdfText(text));
+    await sleep(400);
+  }
+  it.summary = excerptCache.get(it.pdfUrl);
+  if (!it.summary) excerptFailCount++;
+}
+console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건, PDF ${excerptCache.size}개)`);
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
