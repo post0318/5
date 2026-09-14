@@ -66,7 +66,8 @@ function Pager({
  */
 export function IndustryResearchBoard({ market }: { market: MarketId }) {
   const [page, setPage] = useState(1);
-  const [topic, setTopic] = useState<TopicKey>("all");
+  // 디폴트 분류값은 "전체"가 아니라 "산업분석"(오너 지시, 2026-09).
+  const [topic, setTopic] = useState<TopicKey>("산업분석");
 
   const q = useQuery({
     queryKey: ["industry-research", market, topic],
@@ -90,12 +91,12 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
   return (
     <div className="space-y-3">
       <div>
-        <h1 className="text-xl font-semibold">산업분석·투자전략</h1>
+        <h1 className="text-xl font-semibold">산업분석</h1>
       </div>
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
           <CardTitle className="text-sm">
-            {market === "kr" ? "국내" : "해외"} 산업분석·투자전략
+            {market === "kr" ? "국내 산업분석" : "해외 리서치"}
             {q.data && <span className="text-muted-foreground ml-1.5 text-xs font-normal">({items.length})</span>}
           </CardTitle>
           <div className="flex gap-1">
