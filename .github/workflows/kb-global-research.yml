@@ -5,7 +5,7 @@ name: KB증권 해외주식 리서치 수집
 
 on:
   schedule:
-    - cron: "30 0 * * *" # 00:30 UTC = 09:30 KST
+    - cron: "25 0 * * *" # 00:25 UTC = 09:25 KST (국내 수집기와 동일 시각 — 오너 지시, 2026-09)
   workflow_dispatch: {}
 
 jobs:

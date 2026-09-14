@@ -165,8 +165,15 @@ export type ResearchTopic = "산업분석" | "투자전략" | "시황";
 const STRATEGY_HINT_RE =
   /전략|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?/i;
 const MARKET_CONDITION_RE =
-  /시황|마감|브리핑|일간|위클리|데일리|모닝|\bWeekly\b|\bDaily\b|\bMorning\b/i;
-const MARKET_CONDITION_STOCKNAMES = new Set(["KB Global Tracker+", "상상인 US Monitor"]);
+  /시황|마감|브리핑|일간|위클리|데일리|모닝|\bWeek(ly)?\b|\bDaily\b|\bMorning\b/i;
+const MARKET_CONDITION_STOCKNAMES = new Set([
+  "KB Global Tracker+",
+  "상상인 US Monitor",
+  // 신한투자증권 "글로벌 전략; Global Portfolio" — 거의 매 거래일 올라오는 연속
+  // 시리즈(실측: 8~9월 사이 거의 매일)라 제목에 "전략"이 들어있어도 실질은
+  // 일일 시황 업데이트다(오너 지적, 2026-09 — PDF 원문 확인).
+  "글로벌전략",
+]);
 const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 
 export function classifyResearchTopic(

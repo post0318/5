@@ -6,7 +6,7 @@ name: 신한투자증권 해외 기업분석 수집
 
 on:
   schedule:
-    - cron: "5 1 * * *" # 01:05 UTC = 10:05 KST
+    - cron: "0 0 * * *" # 00:00 UTC = 09:00 KST (국내 수집기와 동일 시각 — 오너 지시, 2026-09)
   workflow_dispatch: {}
 
 jobs:

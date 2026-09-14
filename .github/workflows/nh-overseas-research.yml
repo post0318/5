@@ -8,7 +8,7 @@ name: NH투자증권 해외기업분석 수집
 
 on:
   schedule:
-    - cron: "15 1 * * *" # 01:15 UTC = 10:15 KST
+    - cron: "10 0 * * *" # 00:10 UTC = 09:10 KST (국내 수집기와 동일 시각 — 오너 지시, 2026-09)
   workflow_dispatch: {}
 
 jobs:

@@ -6,7 +6,7 @@ name: 한국투자증권 해외 기업분석 수집
 
 on:
   schedule:
-    - cron: "50 0 * * *" # 00:50 UTC = 09:50 KST
+    - cron: "45 0 * * *" # 00:45 UTC = 09:45 KST (국내 수집기와 동일 시각 — 오너 지시, 2026-09)
   workflow_dispatch: {}
 
 jobs:

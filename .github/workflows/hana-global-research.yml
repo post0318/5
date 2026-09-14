@@ -6,7 +6,7 @@ name: 하나증권 글로벌 기업분석 수집
 
 on:
   schedule:
-    - cron: "35 0 * * *" # 00:35 UTC = 09:35 KST
+    - cron: "10 0 * * *" # 00:10 UTC = 09:10 KST (국내 수집기와 동일 시각 — 오너 지시, 2026-09)
   workflow_dispatch: {}
 
 jobs:
