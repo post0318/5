@@ -463,10 +463,15 @@ export async function getIndustryResearch(
   topic?: ResearchTopic,
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
-  // topic 필터가 있으면 DB에서 걸러낼 수 없어(계산 필드) 후보를 훨씬 넉넉히
-  // 가져와야 limit 만큼 채워진다 — 최근 200건 중 한쪽 topic이 몰려 있어도
-  // 안전하도록 여유있게.
-  const fetchLimit = topic ? Math.max(limit * 6, 200) : limit + 20;
+  // topic 유무와 무관하게 항상 넉넉히 가져온다(오너 지적, 2026-09 — "전체는
+  // 129개인데 산업분석만 150개로 표시되고... 머가맞는건가?"). "전체"만
+  // limit+20(150+20=170)으로 좁게 가져오던 게 버그였다 — 하루에 산업분석
+  // 항목이 가장 많이 올라오다 보니 최근 170건 풀이 산업분석 위주로 채워져
+  // 시황·투자전략 항목이 실제 비중보다 훨씬 적게(129건) 섞여 들어갔다.
+  // ESG·pdfUrl null 제외, dedup, 보존기간 컷오프까지 거치므로 "전체"도
+  // topic 필터와 똑같이 넉넉한 풀에서 뽑아야 각 topic 탭의 합과 "전체"가
+  // 어긋나지 않는다.
+  const fetchLimit = Math.max(limit * 6, 200);
   // pdfUrl 이 없으면 화면에서 클릭할 게 없어 조회 단계에서 제외한다(오너
   // 지적, 2026-09 — "링크가 없다 링크안되면 삭제다", NH의 일부 "산업" 항목이
   // API 응답 자체에 첨부파일이 없어 실측됨). 해당 수집기도 앞으로 이런
