@@ -300,7 +300,18 @@ export async function getIndustryResearch(
     .limit(fetchLimit)
     .toArray();
   const deduped = dedupeBySourceTitle(docs);
-  const filtered = topic ? deduped.filter((d) => classifyResearchTopic(d) === topic) : deduped;
+  // 투자전략(주식)/투자전략(채권)은 30일까지만 화면에 노출(오너 지시, 2026-09
+  // — "그 이상은 불필요하다. 화면에서도 제외한다"). DB 정리(upsertShinhanResearch)
+  // 는 다음 수집기 실행 때만 돌아 아직 안 지워진 30일 초과 항목이 화면에
+  // 잠깐 남을 수 있어 조회 시점에도 한 번 더 걸러준다 — 산업분석·시황은
+  // 기존 정책(각각 90일·30일 DB 정리) 그대로 유지, 여기선 따로 안 건드림.
+  const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
+  const fresh = deduped.filter((d) => {
+    const t = classifyResearchTopic(d);
+    if (t !== "투자전략(주식)" && t !== "투자전략(채권)") return true;
+    return d.date >= strategyCutoff;
+  });
+  const filtered = topic ? fresh.filter((d) => classifyResearchTopic(d) === topic) : fresh;
   return filtered.slice(0, limit);
 }
 
