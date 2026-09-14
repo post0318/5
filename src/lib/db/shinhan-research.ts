@@ -85,11 +85,12 @@ export async function upsertShinhanResearch(
   const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
   const staleIndustryCandidates = await col
     .find({ category: "산업", date: { $lt: strategyCutoff } })
-    .project<{ _id: string; stockName: string; title: string; source: string; market: MarketId }>({
+    .project<{ _id: string; stockName: string; title: string; source: string; market: MarketId; summary: string }>({
       stockName: 1,
       title: 1,
       source: 1,
       market: 1,
+      summary: 1,
     })
     .toArray();
   const staleStrategyIds = staleIndustryCandidates
@@ -234,19 +235,27 @@ const BOND_HINT_RE =
   /크레딧|채권|국채|부채|금리|중앙은행|통화정책|고용|실업|비농업|물가|Beige\s?Book|\bCPI\b|\bPPI\b|\bPCE\b|\bCredit\b|\bBond\b|\bDebt\b|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|Fixed\s?Income/i;
 
 export function classifyResearchTopic(
-  doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market">,
+  doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
 ): ResearchTopic {
   if (MARKET_CONDITION_STOCKNAMES.has(doc.stockName)) return "시황";
   if (MARKET_CONDITION_SOURCE_MARKETS.has(`${doc.source}:${doc.market}`)) return "시황";
   const hay = `${doc.stockName ?? ""} ${doc.title}`;
-  if (STRATEGY_STOCKNAMES.has(doc.stockName)) return BOND_HINT_RE.test(hay) ? "투자전략(채권)" : "투자전략(주식)";
+  // 채권 판정만 요약(summary)까지 넓혀 본다("Econ Guide" 라벨 + 제목엔 채권
+  // 신호가 전혀 없고 요약에만 "국채"/"장기금리"가 있던 사례, 오너 지적,
+  // 2026-09) — STRATEGY_HINT_RE·MARKET_CONDITION_RE는 제목/라벨만 본다(전략/
+  // 시황 같은 범용 단어는 일반 산업분석 요약문에도 흔히 섞여 나와 요약까지
+  // 넓히면 진짜 산업분석까지 오분류할 위험이 큼 — 채권 키워드는 상대적으로
+  // 금융 용어라 그 위험이 작음).
+  const hayWithSummary = `${hay} ${doc.summary ?? ""}`;
+  if (STRATEGY_STOCKNAMES.has(doc.stockName))
+    return BOND_HINT_RE.test(hayWithSummary) ? "투자전략(채권)" : "투자전략(주식)";
   if (MARKET_CONDITION_RE.test(hay)) return "시황";
   // BOND_HINT_RE 매칭도 그 자체로 투자전략 승격 신호다("미국 10년물 금리 5%의
   // 시험대"처럼 "금리"만 있고 STRATEGY_HINT_RE 쪽 키워드(전략/매크로/CPI 등)는
   // 없는 순수 채권·금리 코멘트가 승격 자체가 안 돼 산업분석으로 새던 문제,
   // 오너 지적, 2026-09) — 채권 언급 자체가 이미 "산업분석이 아니라 투자전략
   // (채권)"이라는 뜻이므로 별도 승격 키워드가 없어도 여기서 잡는다.
-  const bond = BOND_HINT_RE.test(hay);
+  const bond = BOND_HINT_RE.test(hayWithSummary);
   if (STRATEGY_HINT_RE.test(hay) || bond || KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)) {
     return bond ? "투자전략(채권)" : "투자전략(주식)";
   }
