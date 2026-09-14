@@ -166,7 +166,7 @@ export type ResearchTopic = "산업분석" | "투자전략" | "시황";
  * 포함하지 않는다**(같은 소스라도 시장에 따라 성격이 다름).
  */
 const STRATEGY_HINT_RE =
-  /전략|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?/i;
+  /전략|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|투자의견|Top\s?Picks?|\bFICC\b/i;
 const MARKET_CONDITION_RE =
   /시황|마감|브리핑|일간|위클리|주간|데일리|모닝|\bWeek(ly)?\b|\bDaily\b|\bMorning\b/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
