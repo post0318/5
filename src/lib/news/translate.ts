@@ -113,9 +113,19 @@ function dice(a: Set<string>, b: Set<string>): number {
 }
 
 /** sl(원문 언어) → 한국어. sl="ko"면 번역 없이 그대로 통과. */
+export interface TranslateOptions {
+  /**
+   * 무료 경로(Google·MyMemory)가 모두 실패했을 때 Claude Haiku로 폴백할지.
+   * 기본 true. 거시경제 시황 뉴스는 오너 지시(2026-09-15)로 false — 해외시황
+   * 헤드라인에는 LLM을 붙이지 않는다(실패 시 원문 노출).
+   */
+  llmFallback?: boolean;
+}
+
 export async function translateChecked(
   src: string,
   sl: "en" | "ja" | "ko",
+  opts: TranslateOptions = {},
 ): Promise<{ ko: string | null; ok: boolean }> {
   if (sl === "ko") return { ko: src, ok: true };
   const cacheKey = `${sl}:${src}`;
@@ -163,7 +173,7 @@ export async function translateChecked(
   // 승인, 2026-09 — Google 웹 엔드포인트가 배포 IP에서 간헐적으로 429를
   // 내고, MyMemory는 그럴 때 원문을 그대로 돌려주는 경우가 실측 확인됨).
   // 일본어는 sl="ja"만 지원(ko 는 위에서 이미 처리, en/ja 외 값은 안 옴).
-  if (sl === "en" || sl === "ja") {
+  if (opts.llmFallback !== false && (sl === "en" || sl === "ja")) {
     const llm = await translateViaLlmFallback(src, sl);
     if (llm) {
       cacheSet(cacheKey, llm, true);
@@ -201,6 +211,7 @@ export async function translateTitles<T>(
   items: T[],
   sl: "en" | "ja" | "ko",
   getTitle: (item: T) => string,
+  opts: TranslateOptions = {},
 ): Promise<{ titleKo: string; translationOk: boolean }[]> {
   const POOL = 5;
   const DEADLINE_MS = 7000;
@@ -212,7 +223,7 @@ export async function translateTitles<T>(
     while (next < items.length && Date.now() < deadline) {
       const i = next++;
       const src = getTitle(items[i]);
-      const r = await translateChecked(src, sl);
+      const r = await translateChecked(src, sl, opts);
       out[i] = { titleKo: r.ko ?? src, translationOk: r.ko ? r.ok : true };
     }
   }

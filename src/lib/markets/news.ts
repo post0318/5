@@ -2,7 +2,7 @@ import "server-only";
 import YahooFinancePkg from "yahoo-finance2";
 import { fetchJson } from "./http";
 import type { MarketId } from "./types";
-import { translateTitles } from "../news/translate";
+import { translateTitles, type TranslateOptions } from "../news/translate";
 import { fetchGoogleNewsRss, googleNewsUrl } from "../news/googleNews";
 import { resolveCorpCode } from "./kr/corpcode";
 import { judgeNewsRelevance } from "../llm/claude";
@@ -63,8 +63,9 @@ const SOURCE_LANG: Record<MarketId, "ko" | "en" | "ja"> = { kr: "ko", us: "en", 
 async function withTranslatedTitles(
   lang: "ko" | "en" | "ja",
   items: Omit<NewsItem, "titleKo">[],
+  opts: TranslateOptions = {},
 ): Promise<NewsItem[]> {
-  const translated = await translateTitles(items, lang, (it) => it.title);
+  const translated = await translateTitles(items, lang, (it) => it.title, opts);
   return items.map((it, i) => ({ ...it, titleKo: translated[i].titleKo }));
 }
 
@@ -1087,7 +1088,8 @@ export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
     return true;
   });
   const merged = dedupeByMajorPublisher(deduped);
-  const items = await withTranslatedTitles(lang, merged);
+  // 거시경제 시황(국내/해외) 헤드라인은 무료 번역만 — LLM 폴백 없음(오너 지시 2026-09-15).
+  const items = await withTranslatedTitles(lang, merged, { llmFallback: false });
   return items.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)).slice(0, 30);
 }
 
