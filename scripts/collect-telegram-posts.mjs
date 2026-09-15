@@ -37,7 +37,10 @@ const IMPORT_URL = (
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
-const LIMIT_PER_CHANNEL = 10;
+// 실행이 밀린 사이 10건 넘게 올라오면 중간 글이 영구 누락되던 문제(실측:
+// 63708~63713 6건 유실, 2026-09) 때문에 넉넉히 가져온다 — _id 로 upsert 하므로
+// 이미 있는 글은 덮어쓸 뿐 중복되지 않는다.
+const LIMIT_PER_CHANNEL = 50;
 
 function parseTelegramChannels(mdText) {
   const blocks = mdText.split(/^##[ \t]+/m).slice(1);
