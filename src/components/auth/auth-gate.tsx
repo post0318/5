@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { useAppAuth } from "@/components/auth/app-auth";
-import { SignupDialog } from "@/components/auth/signup-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -13,7 +12,6 @@ import { Card, CardContent } from "@/components/ui/card";
  */
 export function AuthGate({ children }: { children: ReactNode }) {
   const auth = useAppAuth();
-  const [signupOpen, setSignupOpen] = useState(false);
 
   if (auth.enabled && auth.isSignedIn && auth.allowed === true) return <>{children}</>;
 
@@ -58,7 +56,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
           <Button size="sm" onClick={auth.openSignIn}>
             로그인
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setSignupOpen(true)}>
+          <Button variant="outline" size="sm" onClick={auth.openSignup}>
             가입 신청
           </Button>
         </div>
@@ -67,11 +65,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   return (
-    <>
-      <Card className="mx-auto mt-10 w-full max-w-md">
-        <CardContent className="p-6 text-sm">{body}</CardContent>
-      </Card>
-      <SignupDialog open={signupOpen} onOpenChange={setSignupOpen} />
-    </>
+    <Card className="mx-auto mt-10 w-full max-w-md">
+      <CardContent className="p-6 text-sm">{body}</CardContent>
+    </Card>
   );
 }

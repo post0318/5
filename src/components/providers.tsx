@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { AppAuthProvider } from "@/components/auth/app-auth";
+import { SignupHost } from "@/components/auth/signup-host";
 
 export function Providers({
   children,
@@ -32,7 +33,10 @@ export function Providers({
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delayDuration={200}>
-          <AppAuthProvider enabled={authEnabled}>{children}</AppAuthProvider>
+          <AppAuthProvider enabled={authEnabled}>
+            {children}
+            <SignupHost />
+          </AppAuthProvider>
         </TooltipProvider>
         <Toaster richColors position="top-center" />
       </QueryClientProvider>

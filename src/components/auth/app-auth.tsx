@@ -27,6 +27,14 @@ export interface AppAuth {
   signOut: () => Promise<void>;
   /** 승인 대기 가입 신청. 실패 시 메시지를 던진다. */
   joinWaitlist: (emailAddress: string) => Promise<void>;
+  /**
+   * 가입 신청 팝업 열기. 팝업 자체는 `SignupHost` 가 앱에 하나만 띄운다 —
+   * 4번 프로젝트가 콜백(onSignup)을 내려주던 자리를 컨텍스트로 대신한다.
+   */
+  openSignup: () => void;
+  /** SignupHost 전용 — 화면 컴포넌트는 쓰지 않는다 */
+  signupOpen: boolean;
+  setSignupOpen: (v: boolean) => void;
 }
 
 const DISABLED: AppAuth = {
@@ -43,6 +51,9 @@ const DISABLED: AppAuth = {
   joinWaitlist: async () => {
     throw new Error("인증 서비스가 설정되지 않았습니다.");
   },
+  openSignup: () => {},
+  signupOpen: false,
+  setSignupOpen: () => {},
 };
 
 const Ctx = createContext<AppAuth>(DISABLED);
@@ -50,6 +61,7 @@ const Ctx = createContext<AppAuth>(DISABLED);
 function ClerkBridge({ children }: { children: ReactNode }) {
   const clerk = useClerk();
   const { isLoaded, isSignedIn, user } = useUser();
+  const [signupOpen, setSignupOpen] = useState(false);
   const [verdict, setVerdict] = useState<{
     allowed: boolean;
     admin: boolean;
@@ -90,6 +102,21 @@ function ClerkBridge({ children }: { children: ReactNode }) {
     };
   }, [isLoaded, isSignedIn, user?.id]);
 
+  // Clerk 로그인 팝업의 "가입" 링크는 `waitlistUrl`(= /kr/universe?signup=1)
+  // 로 돌아온다. 4번 프로젝트가 서버에서 searchParams 를 읽어 내려주던 자리를
+  // 여기서 대신한다 — 어느 화면으로 돌아와도 가입 폼이 열리게. 한 번 열고
+  // 주소에서 지워 새로고침에 다시 뜨지 않게 한다.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("signup") !== "1") return;
+    url.searchParams.delete("signup");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    // 효과 안에서 곧바로 setState 하면 연쇄 렌더 경고가 난다 — 한 틱 미룬다.
+    const id = setTimeout(() => setSignupOpen(true), 0);
+    return () => clearTimeout(id);
+  }, []);
+
   const value: AppAuth = {
     enabled: true,
     isLoaded,
@@ -104,6 +131,9 @@ function ClerkBridge({ children }: { children: ReactNode }) {
     openSignIn: () => clerk.openSignIn({}),
     openProfile: () => clerk.openUserProfile({}),
     signOut: () => clerk.signOut(),
+    openSignup: () => setSignupOpen(true),
+    signupOpen,
+    setSignupOpen,
     joinWaitlist: async (emailAddress) => {
       try {
         await clerk.joinWaitlist({ emailAddress });

@@ -1,9 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { LogIn, UserRound } from "lucide-react";
 import { useAppAuth } from "@/components/auth/app-auth";
-import { SignupDialog } from "@/components/auth/signup-dialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -17,7 +15,6 @@ import {
 /** 헤더 우측 계정 메뉴 — 로그인 전에는 로그인·가입 신청, 후에는 계정·로그아웃. */
 export function AccountMenu() {
   const auth = useAppAuth();
-  const [signupOpen, setSignupOpen] = useState(false);
 
   if (!auth.enabled) return null;
 
@@ -36,12 +33,11 @@ export function AccountMenu() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => setSignupOpen(true)}
+          onClick={auth.openSignup}
           className="text-muted-foreground hover:text-foreground hidden sm:inline-flex"
         >
           가입 신청
         </Button>
-        <SignupDialog open={signupOpen} onOpenChange={setSignupOpen} />
       </>
     );
   }

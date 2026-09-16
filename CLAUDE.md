@@ -66,8 +66,16 @@ npm run db:studio    # drizzle studio
 태그·메모로 담을 수 있다.
 
 - **가입은 승인 대기제**(Clerk Waitlist). 신청은 누구나 하되 관리자가 Clerk
-  대시보드에서 승인해야 로그인된다. `ALLOWED_EMAIL_DOMAINS`(비우면 제한 없음)가
-  승인 실수를 막는 두 번째 방어선, `ADMIN_EMAILS` 는 관리자 판정.
+  대시보드에서 승인해야 로그인된다. **도메인 검사는 쓰지 않는다**(오너 결정
+  2026-09 — 4번은 한화 도메인을 검사했지만 5번은 승인만으로 충분).
+  `ALLOWED_EMAIL_DOMAINS` 는 비워 두는 것이 기본이고, 채우면 승인 실수를 막는
+  두 번째 방어선이 된다. `ADMIN_EMAILS` 는 관리자 판정에만 쓴다 — 비워 두면
+  「기존 유니버스 가져오기」가 아무에게도 안 보이므로 오너 이메일은 넣어야 한다.
+- **가입 신청 팝업은 앱에 하나**(`SignupHost`). 헤더 계정 메뉴·유니버스 안내
+  박스·Clerk 로그인 팝업의 "가입" 링크가 모두 같은 팝업을 연다. Clerk 의
+  `waitlistUrl` 을 `/kr/universe?signup=1` 로 두고, `AppAuth` 가 그 쿼리를
+  읽어 팝업을 연 뒤 주소에서 지운다(4번이 서버 searchParams 로 하던 것을
+  클라이언트에서 대신).
 - **잠금 위치**: 프록시(`src/proxy.ts`)는 Clerk 세션만 붙이고 아무것도 막지
   않는다. 실제 검증은 각 라우트에서 `requireAppUser()`
   (`src/lib/server/app-auth.ts`), 화면은 `AuthGate`(`components/auth/`)가
