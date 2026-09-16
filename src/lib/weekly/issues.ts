@@ -11,10 +11,10 @@ import type { ReportWeek } from "./week";
  *  1) 증권사 리포트 빈도 — 한 주 동안 여러 증권사가 반복해 다룬 주제일수록
  *     그 주의 시장 관심사다. 이미 수집 중인 자료라 근거(제목·출처)를 그대로
  *     붙일 수 있다. **주 신호**.
- *  2) 네이버 뉴스 그 주 기사 수 — 대중 매체가 얼마나 다뤘는지. 한 번에 100건
- *     까지만 받을 수 있어 큰 주제는 포화하므로 보조 가중치로만 쓴다.
- *  3) 네이버 데이터랩 검색어 트렌드 — 실제 검색 관심도. 구독이 붙기 전에는
- *     조용히 건너뛴다(`lib/weekly/datalab.ts`).
+ *  2) 그 주 뉴스 기사 수 — 대중 매체가 얼마나 다뤘는지. 피드가 주제당 100건
+ *     에서 포화하므로 보조 가중치로만 쓴다.
+ *  3) 네이버 검색어 트렌드(API 허브) — 실제 대중 검색 관심도.
+ *     애플리케이션에 활성화되기 전에는 조용히 건너뛴다(`datalab.ts`).
  *
  * 점수는 각 신호를 그 주 최댓값으로 나눠 0~1 로 맞춘 뒤 가중 합산한다.
  * 신호마다 단위가 달라(건수 vs 상대지수) 그대로 더하면 큰 쪽이 결과를 삼킨다.
@@ -42,7 +42,7 @@ export interface WeeklyIssue {
   score: number;
   researchCount: number;
   newsCount: number;
-  /** 데이터랩 상대 검색량(0~100). 구독 전에는 null */
+  /** 네이버 검색어 트렌드 상대 관심도(0~100). 활성화 전에는 null */
   searchInterest: number | null;
   reports: IssueEvidenceReport[];
   news: IssueEvidenceNews[];
@@ -95,9 +95,10 @@ async function countFromResearch(
 }
 
 /**
- * 주제별 그 주 뉴스. 네이버 뉴스 검색은 날짜 범위를 못 걸어 전체 누적 건수만
- * 주므로(실측 — "FOMC 금리" 38만 건), 대신 Google 뉴스 RSS 의 `when:7d` 로
- * 그 주 기사만 받아 센다. 둘 다 공개 피드이고 본문은 건드리지 않는다.
+ * 주제별 그 주 뉴스. 네이버 뉴스 검색(API 허브)은 날짜 범위를 못 걸어 전체
+ * 누적 건수만 주므로(실측 — "FOMC 금리" 38만 건) 주간 신호로 쓸 수 없다.
+ * 대신 Google 뉴스 RSS 의 `when:7d` 로 그 주 기사만 받아 센다. 공개 피드이고
+ * 제목·출처·링크만 쓴다(본문 미수집).
  */
 async function countFromNews(
   week: ReportWeek,
@@ -108,7 +109,7 @@ async function countFromNews(
   const results = await Promise.all(
     WEEKLY_TOPICS.map(async (t) => {
       const url = googleNewsUrl(
-        `search?q=${encodeURIComponent(t.naverQuery)}+when:7d`,
+        `search?q=${encodeURIComponent(t.newsQuery)}+when:7d`,
         "hl=ko&gl=KR&ceid=KR:ko",
       );
       const items = await fetchGoogleNewsRss(url).catch(() => []);
@@ -165,26 +166,25 @@ export async function buildWeeklyIssues(
   const nSearch = normalize(rows.map((r) => r.searchInterest ?? 0));
   const hasSearch = rows.some((r) => r.searchInterest != null);
 
-  const scored: WeeklyIssue[] = rows.map((r, i) => {
-    // 데이터랩 구독 전에는 검색 가중치를 리포트·뉴스로 비례 배분한다 —
-    // 그냥 0 으로 두면 전체 점수만 낮아지고 순위는 그대로라 무의미하다.
-    const w = hasSearch
-      ? WEIGHT
-      : {
-          research: WEIGHT.research / (WEIGHT.research + WEIGHT.news),
-          news: WEIGHT.news / (WEIGHT.research + WEIGHT.news),
-          search: 0,
-        };
-    return {
-      label: r.topic.label,
-      score: nRes[i] * w.research + nNews[i] * w.news + nSearch[i] * w.search,
-      researchCount: r.researchCount,
-      newsCount: r.newsCount,
-      searchInterest: r.searchInterest,
-      reports: r.reports.slice(0, 3),
-      news: r.newsItems.slice(0, 3),
-    };
-  });
+  // 검색어 트렌드가 아직 활성화되지 않았으면 그 몫을 리포트·뉴스로 비례
+  // 배분한다 — 0 으로 두면 총점만 낮아지고 순위는 그대로라 무의미하다.
+  const w = hasSearch
+    ? WEIGHT
+    : {
+        research: WEIGHT.research / (WEIGHT.research + WEIGHT.news),
+        news: WEIGHT.news / (WEIGHT.research + WEIGHT.news),
+        search: 0,
+      };
+
+  const scored: WeeklyIssue[] = rows.map((r, i) => ({
+    label: r.topic.label,
+    score: nRes[i] * w.research + nNews[i] * w.news + nSearch[i] * w.search,
+    researchCount: r.researchCount,
+    newsCount: r.newsCount,
+    searchInterest: r.searchInterest,
+    reports: r.reports.slice(0, 3),
+    news: r.newsItems.slice(0, 3),
+  }));
 
   return scored
     .filter((s) => s.researchCount > 0 || s.newsCount > 0)

@@ -3,22 +3,27 @@ import type { WeeklyTopic } from "./topics";
 import type { ReportWeek } from "./week";
 
 /**
- * 네이버 데이터랩 통합검색어 트렌드 (NAVER API HUB).
+ * 네이버 검색어 트렌드 (NAVER API HUB).
  *
- * 요청 주소는 `naveropenapi.apigw.ntruss.com/datalab/v1/search`, 인증은 다른
- * 허브 API 와 같은 `X-NCP-APIGW-API-KEY-ID`/`X-NCP-APIGW-API-KEY` 헤더다.
- * 실측(2026-09): 이 프로젝트의 검색용 키를 그대로 넣으면 인증은 통과하고
- * `"A subscription to the API is required"` 가 돌아온다 — 즉 **콘솔에서
- * 검색어 트렌드 상품만 이용 신청하면 새 키 없이 바로 열린다**.
+ * **경로 주의**(실측 2026-09, 오너 확인 — "네이버는 API HUB 이고 바라봐야 하는
+ * 곳이 달라졌다"): 예전 개발자센터(`openapi.naver.com/v1/datalab/search`)와
+ * 옛 게이트웨이(`naveropenapi.apigw.ntruss.com/datalab/v1/search`)는 이 키로
+ * 안 된다. 뉴스 검색과 **같은 허브 호스트**에 경로만 다르다 —
+ * `naverapihub.apigw.ntruss.com/search-trend/v1/search`. 인증 헤더도 같은
+ * `X-NCP-APIGW-API-KEY-ID` / `X-NCP-APIGW-API-KEY`.
  *
- * 구독 전에는 조용히 빈 결과를 돌려준다. 주간 리포트는 이 신호 없이도
+ * 실측: 이 프로젝트의 검색용 키를 넣으면 인증은 통과하고 `"요청한 API는 이
+ * Application 에서 활성화되어 있지 않습니다"` 가 온다 — 즉 **콘솔에서 그
+ * 애플리케이션에 검색어 트렌드만 활성화하면 새 키 없이 바로 열린다**.
+ *
+ * 활성화 전에는 조용히 빈 결과를 돌려준다. 주간 리포트는 이 신호 없이도
  * 리포트·뉴스 빈도만으로 이슈를 뽑는다(`issues.ts`).
  *
  * 한 요청에 키워드 그룹은 5개까지라 나눠 보내고, 그룹당 최대 검색 비율을
  * 0~100 상대지수로 돌려준다.
  */
 
-const ENDPOINT = "https://naveropenapi.apigw.ntruss.com/datalab/v1/search";
+const ENDPOINT = "https://naverapihub.apigw.ntruss.com/search-trend/v1/search";
 const GROUPS_PER_CALL = 5;
 
 interface DatalabResponse {
@@ -51,14 +56,14 @@ async function callOnce(
       keywordGroups: groups.map((g) => ({
         groupName: g.label,
         // 데이터랩은 그룹당 키워드 5개까지
-        keywords: g.datalabKeywords.slice(0, 5),
+        keywords: g.trendKeywords.slice(0, 5),
       })),
     }),
     cache: "no-store",
   });
   if (!res.ok) {
-    // 구독 없음(401/210)·일시 오류 모두 여기로 — 신호만 빠지고 리포트는 나간다
-    throw new Error(`데이터랩 HTTP ${res.status}`);
+    // 미활성화(401)·일시 오류 모두 여기로 — 신호만 빠지고 리포트는 나간다
+    throw new Error(`검색어 트렌드 HTTP ${res.status}`);
   }
   const body = (await res.json()) as DatalabResponse;
   const out = new Map<string, number>();
@@ -95,7 +100,7 @@ export async function fetchSearchInterest(
   return merged;
 }
 
-/** 설정 화면·점검용 — 구독이 붙었는지 한 번에 확인 */
+/** 점검용 — 애플리케이션에 검색어 트렌드가 활성화됐는지 한 번에 확인 */
 export async function datalabStatus(): Promise<{
   configured: boolean;
   ok: boolean;
@@ -124,8 +129,8 @@ export async function datalabStatus(): Promise<{
     return {
       configured: true,
       ok: false,
-      message: text.includes("subscription")
-        ? "검색어 트렌드 상품 이용 신청 필요 (콘솔에서 신청하면 이 키 그대로 열림)"
+      message: text.includes("활성화")
+        ? "콘솔에서 이 애플리케이션에 검색어 트렌드를 활성화해야 함 (키는 그대로 사용)"
         : `HTTP ${res.status} ${text.slice(0, 120)}`,
     };
   } catch (e) {

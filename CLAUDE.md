@@ -786,15 +786,19 @@ DB는 `weekly_reports`(주당 1건, `_id`=대상 주 월요일) + `weekly_llm_us
 >   - 집계 기간 상한 필수: `date >= weekStart` 만 걸면 주중 수동 실행 때
 >     이번 주 리포트가 딸려 들어와 "지난주" 집계가 아니게 된다(실측). 금요일
 >     +3일(다음 월요일)까지만 — 월요일 오전 발간분은 지난주 정리 성격이라 포함.
->   - **네이버 데이터랩**(`datalab.ts`)은 아직 안 켜져 있다. 요청 주소는
->     `naveropenapi.apigw.ntruss.com/datalab/v1/search`, 인증 헤더는 다른 허브
->     API 와 같은 `X-NCP-APIGW-API-KEY-ID`/`X-NCP-APIGW-API-KEY`. 실측 결과
->     이 프로젝트의 검색용 키로 **인증은 통과하고 "A subscription to the API
->     is required"** 가 온다 — 콘솔에서 검색어 트렌드 상품만 이용 신청하면
->     새 키 없이 열린다. 구독 전에는 조용히 건너뛰고, 검색 가중치는 리포트·
->     뉴스로 비례 배분한다(0 으로 두면 총점만 낮아지고 순위는 그대로라 무의미).
->     오너가 개발자센터(`developers.naver.com`) 키를 시도했으나 그쪽 데이터랩은
->     API 허브로 이관돼 더 이상 지원되지 않는다(401).
+>   - **네이버 검색어 트렌드**(`datalab.ts`)는 아직 안 켜져 있다.
+>     **경로 주의**(오너 확인 — "네이버는 API HUB 이고 바라봐야 하는 곳이
+>     달라졌다"): 뉴스 검색과 **같은 허브 호스트**에 경로만 다르다 —
+>     `naverapihub.apigw.ntruss.com/search-trend/v1/search`. 인증 헤더도 같은
+>     `X-NCP-APIGW-API-KEY-ID`/`X-NCP-APIGW-API-KEY`. 실측으로 확인한 막다른
+>     길 셋: 개발자센터(`openapi.naver.com/v1/datalab/search`)는 API 허브로
+>     이관돼 401, 옛 게이트웨이(`naveropenapi.apigw.ntruss.com/datalab/v1/
+>     search`)도 이 키로 401, 허브의 `/datalab/v1/search` 는 404.
+>     이 프로젝트의 검색용 키를 넣으면 **인증은 통과하고 "요청한 API는 이
+>     Application 에서 활성화되어 있지 않습니다"** 가 온다 — 콘솔에서 그
+>     애플리케이션에 검색어 트렌드만 활성화하면 새 키 없이 열린다.
+>     활성화 전에는 조용히 건너뛰고, 검색 가중치는 리포트·뉴스로 비례
+>     배분한다(0 으로 두면 총점만 낮아지고 순위는 그대로라 무의미).
 >   - **구글 트렌드는 못 쓴다(실측, 2026-09)**: 오너가 먼저 제안했으나 확인
 >     결과 쓸 수 있는 건 `trends.google.com/trending/rss` 하나뿐이고, 한 번에
 >     10개·약 40분 구간만 주며 내용이 연예·스포츠 위주라 시장 이슈가 거의 안
