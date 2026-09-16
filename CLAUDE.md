@@ -17,10 +17,13 @@
 - Drizzle ORM + libSQL(SQLite, `data/app.db`) — 개인용. 확장 시 Postgres 이식
 - date-fns, zod
 - yahoo-finance2 (서버 전용, `serverExternalPackages` 등록됨)
+- Clerk (`@clerk/nextjs`) — 사용자 로그인·승인 대기제. 유니버스가 계정별로 분리됨
 
 ## 코드 구조
 
 ```
+src/lib/server/app-auth.ts     Clerk 서버 검증 (requireAppUser / requireAdmin)
+src/components/auth/           로그인 컨텍스트·게이트·가입 신청·계정 메뉴
 src/lib/format.ts              숫자·통화 포맷 (콤마, trunc)
 src/lib/dates.ts               날짜 방어 (연도 완성 판정, 루프 상한)
 src/lib/db/                    Drizzle 스키마 + 클라이언트
@@ -36,7 +39,7 @@ src/lib/markets/
   kr/corpcode.ts              corpCode.xml(zip) → stock_code↔corp_code, 이름 검색
   jp/edinet.ts                골격 (EDINET 키 발급 후 구현)
   quote/                      Stooq + yahoo EOD(.KS/.KQ 폴백), 오케스트레이터
-src/lib/universe/repo.ts       유니버스 CRUD + 일괄 파서
+src/lib/universe/repo.ts       유니버스 CRUD(계정별) + 일괄 파서 + 전 계정 합집합
 src/app/api/                   Route Handlers
 src/components/                UI (num.tsx=포맷 표시, financials-table 등)
 ```
@@ -54,6 +57,54 @@ npm run db:studio    # drizzle studio
 ```
 
 커밋 전 `npm run build` 와 `npm run lint` 통과 확인.
+
+## 인증 · 계정별 유니버스 (오너 지시 2026-09)
+
+**공유 비밀번호(`APP_PASSWORD`) 로그인은 폐지**하고 4번 프로젝트
+(`github.com/post0318/4`)에서 쓰던 **Clerk** 방식을 그대로 이식했다. 유니버스를
+계정마다 따로 관리하려는 것이 목적이다 — A·B·C 가 각자 삼성전자를 자기 그룹명·
+태그·메모로 담을 수 있다.
+
+- **가입은 승인 대기제**(Clerk Waitlist). 신청은 누구나 하되 관리자가 Clerk
+  대시보드에서 승인해야 로그인된다. `ALLOWED_EMAIL_DOMAINS`(비우면 제한 없음)가
+  승인 실수를 막는 두 번째 방어선, `ADMIN_EMAILS` 는 관리자 판정.
+- **잠금 위치**: 프록시(`src/proxy.ts`)는 Clerk 세션만 붙이고 아무것도 막지
+  않는다. 실제 검증은 각 라우트에서 `requireAppUser()`
+  (`src/lib/server/app-auth.ts`), 화면은 `AuthGate`(`components/auth/`)가
+  안내만 한다. 4번과 같은 구조.
+- **로그인 필수 화면 3곳**: 유니버스 통합 뷰 · 유니버스통합 뉴스 · 유니버스 관리.
+  종목분석·산업분석·거시경제·주간 리포트 조회는 공개 유지(오너 결정). 종목분석의
+  「유니버스에 추가」 버튼만 로그인 시 노출.
+- **Clerk 키가 없으면 fail-closed** — 유니버스 라우트가 503, 화면은 안내 박스.
+  나머지 앱은 그대로 돈다.
+
+### 데이터 모델
+
+- `universe_items` 유일 키 = **(ownerId, market, symbol)**. 옛 (market, symbol)
+  유니크 인덱스는 `universeCol()` 이 기동 시 자동으로 걷어낸다 — 남아 있으면
+  두 사람이 같은 종목을 담을 때 충돌한다.
+- `universe_overview`(통합 뷰 캐시) 키는 **(market, symbol) 그대로 = 전 계정
+  공유**. 시세·멀티플은 사람과 무관하므로 같은 종목을 열 사람이 담아도 외부 API
+  호출은 한 번이다. 대신 이름·그룹명·태그·itemId 는 사람마다 다르므로 캐시에
+  든 값을 믿지 않고 **조회 시점에 각 계정의 `universe_items` 값으로 덮어쓴다**
+  (`getUniverseOverview()`). 캐시 삭제(`removeOverviewItem`)도 **다른 계정이
+  아직 담고 있으면 건너뛴다**. 잔여 정리(`pruneOverview`)는 전 계정 합집합을
+  넘겨야 안전해서 전 시장·전 계정 배치 경로에서만 부른다.
+- **마이그레이션**: Clerk 도입 이전 문서는 `ownerId` 가 없어 어느 화면에도 안
+  나온다. 관리 화면 상단 배너(관리자에게만 보임) → `/api/universe/claim-legacy`
+  가 자기 계정으로 1회 귀속시킨다.
+
+### 배치·수집 스크립트
+
+- 수집 스크립트는 사람이 아니라 **세션을 가질 수 없다**. `/api/universe` 가
+  로그인 필수가 되면서 `/api/cron/universe-symbols`(CRON_SECRET, 로컬 수동
+  실행 시 `x-app-token: APP_PASSWORD`)를 새로 두고 **전 계정 합집합(중복 제거)**
+  을 돌려준다. `scripts/collect-analyst-forecasts.mjs` 가 이 경로를 쓴다.
+- `APP_PASSWORD` 는 이제 **사람 로그인용이 아니라 수집 스크립트 토큰 전용**이다
+  (`.env.local` 에 `CRON_SECRET` 이 없어 로컬 수동 실행이 이 값에 의존).
+  `/api/cron/*` 는 예전처럼 자체 검증하며 Clerk 과 무관하다.
+- `listUniverseDistinct()` = 전 계정 합집합에서 (market, symbol) 중복 제거.
+  배치는 반드시 이쪽을 쓴다 — 같은 종목을 사람 수만큼 반복 조회하지 않게.
 
 ## 아키텍처 규칙
 

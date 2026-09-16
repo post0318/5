@@ -1,5 +1,6 @@
 import { isMarketId } from "@/lib/markets/types";
 import { UniverseOverview } from "@/components/universe-overview";
+import { AuthGate } from "@/components/auth/auth-gate";
 
 export default async function UniversePage({
   params,
@@ -8,5 +9,9 @@ export default async function UniversePage({
 }) {
   const { market } = await params;
   if (!isMarketId(market)) return null;
-  return <UniverseOverview market={market} />;
+  return (
+    <AuthGate>
+      <UniverseOverview market={market} />
+    </AuthGate>
+  );
 }

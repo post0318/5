@@ -3,14 +3,13 @@ import type { MarketId } from "@/lib/markets/types";
 import { getStockOverview } from "@/lib/markets/service";
 import { fetchKrForeignOwnership, fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 import { computeKrOverviewMetrics } from "@/lib/markets/kr/overview-metrics";
-import { listUniverse } from "@/lib/universe/repo";
+import { listUniverse, listUniverseDistinct } from "@/lib/universe/repo";
 import { isHighDividendKr } from "@/lib/markets/kr/high-dividend";
 import type { UniverseItem } from "@/lib/db/schema";
 import {
   deleteOverview,
-  patchOverviewMeta,
   pruneOverview,
-  readOverview,
+  readOverviewByIds,
   writeOverview,
   type UniverseOverviewDoc,
 } from "@/lib/db/universe-overview";
@@ -120,12 +119,25 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-/** 전체(또는 시장별) 유니버스 요약을 재계산해 DB 에 저장. 배치·수동 새로고침용. */
-export async function refreshUniverseOverview(market?: MarketId): Promise<{
+/**
+ * 유니버스 요약을 재계산해 DB 에 저장. 배치·수동 새로고침용.
+ *  - `ownerId` 를 주면 그 계정의 종목만 (화면의 새로고침 버튼)
+ *  - 안 주면 전 계정 합집합에서 중복을 걷어낸 목록 (배치) — 같은 종목을
+ *    여러 사람이 담아도 외부 API 는 한 번만 부른다.
+ * 캐시가 전 계정 공유라 잔여 정리(prune)는 배치 경로에서만 한다.
+ */
+export async function refreshUniverseOverview(opts?: {
+  ownerId?: string;
+  market?: MarketId;
+}): Promise<{
   count: number;
   rows: UniverseOverviewDoc[];
 }> {
-  const items = await listUniverse({ market, activeOnly: true });
+  const ownerId = opts?.ownerId;
+  const market = opts?.market;
+  const items = ownerId
+    ? await listUniverse({ ownerId, market, activeOnly: true })
+    : await listUniverseDistinct({ market, activeOnly: true });
   // 종목당 여러 외부 API를 호출해서(프로필·시세·재무·컨센서스 등) 동시성이
   // 낮으면 전체 새로고침이 라우트의 maxDuration(60초)을 넘겨 중간에 끊길 수
   // 있다(오너 확인 — 새로고침 클릭해도 반영 안 되던 문제). 동시성을 올려
@@ -153,7 +165,8 @@ export async function refreshUniverseOverview(market?: MarketId): Promise<{
   krIdx.forEach((i, j) => (rows[i] = krRows[j]));
   otherIdx.forEach((i, j) => (rows[i] = otherRows[j]));
   await writeOverview(rows);
-  if (!market) {
+  if (!market && !ownerId) {
+    // 전 계정·전 시장 배치일 때만 안전하게 정리할 수 있다.
     await pruneOverview(rows.map((r) => r._id));
   }
   return { count: rows.length, rows };
@@ -165,36 +178,52 @@ export async function refreshOverviewItem(item: UniverseItem): Promise<void> {
   await writeOverview([doc]);
 }
 
+/**
+ * 캐시 삭제. 캐시가 전 계정 공유라 **다른 사람이 아직 담고 있으면 지우지
+ * 않는다** — 한 사람이 삼성전자를 빼도 남은 사람 화면이 비지 않게.
+ */
 export async function removeOverviewItem(market: string, symbol: string): Promise<void> {
+  const stillUsed = await listUniverse({ market: market as MarketId });
+  if (stillUsed.some((i) => i.symbol === symbol)) return;
   await deleteOverview(market, symbol);
 }
 
-/** 편집 즉시 반영: 시세는 그대로 두고 이름·그룹·태그만 갱신. 이후 배치가 전체 재계산. */
-export async function patchOverviewItemMeta(item: UniverseItem): Promise<void> {
-  await patchOverviewMeta(item.market, item.symbol, {
-    name: item.name ?? null,
-    groupName: item.groupName,
-    tags: item.tags,
-  });
-}
-
-/** 조회: DB 만 읽음. 비어있으면 즉석 계산 후 저장. */
-export async function getUniverseOverview(market?: MarketId): Promise<{
+/**
+ * 한 계정의 통합 뷰 조회. DB 만 읽는다(외부 API 미호출).
+ * 공유 캐시에서 내 종목만 골라오고, 이름·그룹명·태그·itemId 는 내 유니버스
+ * 값으로 덮어쓴다 — 캐시에 든 그 필드들은 마지막에 쓴 사람의 것이라
+ * 그대로 두면 남의 그룹명이 보인다.
+ */
+export async function getUniverseOverview(
+  ownerId: string,
+  market?: MarketId,
+): Promise<{
   rows: UniverseOverviewDoc[];
   stale: boolean;
 }> {
-  const [cached, items] = await Promise.all([
-    readOverview(market),
-    listUniverse({ market, activeOnly: true }),
-  ]);
+  const items = await listUniverse({ ownerId, market, activeOnly: true });
+  if (items.length === 0) return { rows: [], stale: false };
+
+  const cached = await readOverviewByIds(items.map((i) => `${i.market}:${i.symbol}`));
   if (cached.length === 0) {
-    if (items.length === 0) return { rows: [], stale: false };
-    const built = await refreshUniverseOverview(market);
+    const built = await refreshUniverseOverview({ ownerId, market });
     return { rows: built.rows, stale: false };
   }
-  // 유니버스에서 이미 빠진 종목(삭제 후 프룬 지연분)은 통합뷰에서 즉시 제외
-  const valid = new Set(items.map((i) => `${i.market}:${i.symbol}`));
-  const rows = cached.filter((r) => valid.has(r._id));
+
+  const byId = new Map(items.map((i) => [`${i.market}:${i.symbol}`, i]));
+  const rows = cached.flatMap((r) => {
+    const mine = byId.get(r._id);
+    if (!mine) return [];
+    return [
+      {
+        ...r,
+        itemId: mine.id,
+        name: mine.name ?? r.name,
+        groupName: mine.groupName,
+        tags: mine.tags,
+      },
+    ];
+  });
   const oldest = rows.length
     ? rows.reduce((m, r) => (r.updatedAt < m ? r.updatedAt : m), rows[0].updatedAt)
     : new Date().toISOString();

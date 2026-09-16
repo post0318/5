@@ -1,7 +1,7 @@
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
 import { saveClassAFactsToDb } from "@/lib/db/us-class-facts";
-import { listUniverse } from "@/lib/universe/repo";
+import { listUniverseDistinct } from "@/lib/universe/repo";
 import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
 import { fetchClassAFacts, needsClassAFacts } from "@/lib/markets/us/edgar-classfacts";
 
@@ -31,7 +31,11 @@ export async function GET(req: Request) {
     const only = new URL(req.url).searchParams.get("symbol");
     const symbols = only
       ? [only.toUpperCase()]
-      : (await listUniverse({ market: "us", activeOnly: true })).map((u) => u.symbol);
+      : // 유니버스가 계정별로 나뉜 뒤로는 전 계정 합집합(중복 제거)을 돈다 —
+        // 같은 종목을 여러 사람이 담아도 SEC 요청은 한 번이면 된다.
+        (await listUniverseDistinct({ market: "us", activeOnly: true })).map(
+          (u) => u.symbol,
+        );
 
     const results: { symbol: string; status: string; years?: number }[] = [];
     for (const symbol of symbols) {

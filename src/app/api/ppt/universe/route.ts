@@ -4,6 +4,7 @@ import { isMarketId, type MarketId } from "@/lib/markets/types";
 import { listUniverse } from "@/lib/universe/repo";
 import { getStockSlideData } from "@/lib/ppt/slide-data";
 import { buildStockPptx } from "@/lib/ppt/slide";
+import { authErrorResponse, requireAppUser } from "@/lib/server/app-auth";
 
 export const maxDuration = 300;
 
@@ -14,10 +15,18 @@ const schema = z.object({
 
 export async function POST(req: Request) {
   try {
+    const who = await requireAppUser();
+    if (!who.ok) return authErrorResponse(who);
+
     const { market, ids } = schema.parse(await req.json());
     if (!isMarketId(market)) throw new Error("시장 오류");
 
-    let items = await listUniverse({ market: market as MarketId, activeOnly: true });
+    // 자기 유니버스만 — ids 를 남의 항목으로 채워도 여기서 걸러진다.
+    let items = await listUniverse({
+      ownerId: who.userId,
+      market: market as MarketId,
+      activeOnly: true,
+    });
     if (ids?.length) items = items.filter((i) => ids.includes(i.id));
     if (items.length === 0) throw new Error("대상 종목이 없습니다");
 

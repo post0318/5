@@ -6,6 +6,7 @@ import { urlHash, saveNewsSummary, deleteNewsSummary } from "@/lib/db/news-saved
 import { isBudgetExceeded, incUsage, claimAlertSlot, getMonthUsage } from "@/lib/db/llm-usage";
 import { summarizeArticle } from "@/lib/llm/claude";
 import { sendBudgetAlert } from "@/lib/email/resend";
+import { authErrorResponse, requireAppUser } from "@/lib/server/app-auth";
 
 export const maxDuration = 60;
 
@@ -18,13 +19,16 @@ interface SummarizeBody {
 
 /**
  * 체크한 기사 1건 번역(필요시)·요약·진위판단 → news_saved 저장. LLM 비용 발생
- * — proxy.ts 매처로 로그인 필요. 월 $10 상한 도달 시 429 + (최초 1회) 이메일.
+ * — 로그인 계정만(requireAppUser). 월 $10 상한 도달 시 429 + (최초 1회) 이메일.
  */
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ market: string; symbol: string }> },
 ) {
   try {
+    const who = await requireAppUser();
+    if (!who.ok) return authErrorResponse(who);
+
     const { market, symbol } = await params;
     if (!isMarketId(market)) {
       return Response.json({ error: "알 수 없는 시장" }, { status: 404 });

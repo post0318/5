@@ -135,10 +135,16 @@ async function fetchForecast(symbol) {
     }));
 }
 
+// 유니버스가 계정별로 분리된 뒤 /api/universe 는 로그인(Clerk) 필수가 됐다.
+// 스크립트는 세션을 가질 수 없으므로 CRON_SECRET/APP_PASSWORD 로 여는 전용
+// 경로에서 전 계정 합집합을 받는다.
 async function listUsSymbols() {
   if (ONLY.length > 0) return ONLY;
-  const res = await fetch(`${APP_URL}/api/universe?market=us&active=1`, {
-    headers: { accept: "application/json" },
+  const authHeaders = { accept: "application/json" };
+  if (CRON_SECRET) authHeaders.Authorization = "Bearer " + CRON_SECRET;
+  else if (APP_PASSWORD) authHeaders["x-app-token"] = APP_PASSWORD;
+  const res = await fetch(`${APP_URL}/api/cron/universe-symbols?market=us&active=1`, {
+    headers: authHeaders,
   });
   if (!res.ok) throw new Error(`유니버스 조회 실패 HTTP ${res.status}`);
   const body = await res.json();

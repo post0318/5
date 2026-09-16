@@ -20,6 +20,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
+import { useAppAuth } from "@/components/auth/app-auth";
 
 interface Item {
   id: string;
@@ -52,6 +53,7 @@ export function UniverseManager() {
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-semibold">유니버스 관리</h1>
+      <LegacyClaimBanner onClaimed={invalidate} />
 
       <Tabs defaultValue="single">
         <TabsList>
@@ -408,5 +410,57 @@ function BulkForm({ onDone }: { onDone: () => void }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * 계정별 분리 이전(공유 비밀번호 시절)에 등록된 소유자 없는 종목이 남아 있으면
+ * 관리자에게만 배너로 보여주고, 한 번 눌러 자기 계정으로 가져오게 한다.
+ * 가져올 게 없으면 아무것도 그리지 않는다.
+ */
+function LegacyClaimBanner({ onClaimed }: { onClaimed: () => void }) {
+  const auth = useAppAuth();
+  const qc = useQueryClient();
+  const pending = useQuery({
+    queryKey: ["universe-legacy"],
+    queryFn: () => apiFetch<{ pending: number }>("/api/universe/claim-legacy"),
+    enabled: auth.isAdmin,
+    retry: false,
+  });
+
+  const claim = useMutation({
+    mutationFn: () =>
+      apiFetch<{ claimed: number; skipped: number }>("/api/universe/claim-legacy", {
+        method: "POST",
+      }),
+    onSuccess: (r) => {
+      toast.success(
+        `기존 종목 ${r.claimed}개를 가져왔습니다.` +
+          (r.skipped > 0 ? ` 이미 갖고 있던 ${r.skipped}개는 건너뛰었습니다.` : ""),
+      );
+      qc.invalidateQueries({ queryKey: ["universe-legacy"] });
+      onClaimed();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const count = pending.data?.pending ?? 0;
+  if (!auth.isAdmin || count === 0) return null;
+
+  return (
+    <Card>
+      <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+        <div>
+          <p className="font-medium">로그인 도입 전에 등록된 종목 {count}개가 있습니다.</p>
+          <p className="text-muted-foreground mt-0.5 text-xs">
+            지금은 어느 계정에도 속해 있지 않아 화면에 나오지 않습니다. 가져오면 내
+            계정의 유니버스가 됩니다.
+          </p>
+        </div>
+        <Button size="sm" disabled={claim.isPending} onClick={() => claim.mutate()}>
+          {claim.isPending ? "가져오는 중…" : "기존 유니버스 가져오기"}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }

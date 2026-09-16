@@ -41,7 +41,13 @@ export async function getDb(): Promise<Db> {
 export async function universeCol(): Promise<Collection<UniverseItemDoc>> {
   const db = await getDb();
   const col = db.collection<UniverseItemDoc>("universe_items");
-  // 시장+심볼 유니크 인덱스 (idempotent)
-  await col.createIndex({ market: 1, symbol: 1 }, { unique: true }).catch(() => {});
+  // 소유자+시장+심볼 유니크 인덱스 (idempotent). 계정별 유니버스 분리 이후
+  // 같은 종목을 여러 사람이 담을 수 있어야 하므로 ownerId 가 키에 들어간다.
+  // 옛 (market, symbol) 유니크 인덱스가 남아 있으면 A·B 가 같은 종목을 담을 때
+  // 충돌하므로 먼저 걷어낸다(없으면 조용히 무시).
+  await col.dropIndex("market_1_symbol_1").catch(() => {});
+  await col
+    .createIndex({ ownerId: 1, market: 1, symbol: 1 }, { unique: true })
+    .catch(() => {});
   return col;
 }

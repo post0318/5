@@ -2,6 +2,7 @@ import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
 import { listWeeklyReports } from "@/lib/db/weekly-reports";
 import { generateWeeklyReport, WeeklyGenerateError } from "@/lib/weekly/generate";
+import { authErrorResponse, requireAppUser } from "@/lib/server/app-auth";
 
 export const maxDuration = 300;
 // 목록은 매번 DB 최신값(빌드 시 정적 캐시 금지)
@@ -21,6 +22,10 @@ export async function GET() {
 /** 화면의 "초안 생성/재생성" — proxy.ts 매처로 로그인 필요(LLM 비용 발생). */
 export async function POST(req: Request) {
   try {
+    // LLM 비용이 드는 초안 생성 — 로그인 계정만 (이전 공유 비밀번호 대체)
+    const who = await requireAppUser();
+    if (!who.ok) return authErrorResponse(who);
+
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
     const body = (await req.json().catch(() => ({}))) as { force?: boolean };
     const doc = await generateWeeklyReport({ force: Boolean(body.force) });

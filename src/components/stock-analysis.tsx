@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import { apiFetch } from "@/lib/query";
+import { useAppAuth } from "@/components/auth/app-auth";
 import { cn } from "@/lib/utils";
 import { formatMoneyWithUnits, formatNumber } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
@@ -227,10 +228,16 @@ export function StockAnalysis({
     retry: false,
   });
 
+  // 유니버스는 계정별이라 로그인한 경우에만 조회한다 — 비로그인에서 부르면
+  // 401 이라 「유니버스에 추가」 버튼도 함께 감춘다.
+  const auth = useAppAuth();
+  const canUseUniverse = auth.isSignedIn && auth.allowed === true;
   const universe = useQuery({
     queryKey: ["universe"],
     queryFn: () =>
       apiFetch<{ items: { market: string; symbol: string }[] }>("/api/universe"),
+    enabled: canUseUniverse,
+    retry: false,
   });
   const normSym = (s: string) => {
     const d = s.replace(/[^0-9]/g, "");
@@ -487,18 +494,20 @@ export function StockAnalysis({
                 yahoo={yahooOverride}
                 name={ov.profile?.name}
               />
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={
-                  inUniverse || addToUniverse.isPending || addToUniverse.isSuccess
-                }
-                onClick={() => addToUniverse.mutate()}
-              >
-                {inUniverse || addToUniverse.isSuccess
-                  ? "유니버스에 있음"
-                  : "유니버스에 추가"}
-              </Button>
+              {canUseUniverse && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    inUniverse || addToUniverse.isPending || addToUniverse.isSuccess
+                  }
+                  onClick={() => addToUniverse.mutate()}
+                >
+                  {inUniverse || addToUniverse.isSuccess
+                    ? "유니버스에 있음"
+                    : "유니버스에 추가"}
+                </Button>
+              )}
             </div>
           </div>
 

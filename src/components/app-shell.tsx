@@ -6,6 +6,7 @@ import { BarChart3, Building2, CalendarDays, Globe, LineChart, Newspaper, Settin
 import { cn } from "@/lib/utils";
 import { MARKETS, isMarketId } from "@/lib/markets/types";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { AccountMenu } from "@/components/auth/account-menu";
 
 const SUBNAV = [
   { seg: "universe", label: "유니버스 통합 뷰", icon: LineChart },
@@ -99,6 +100,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Settings2 className="size-4" />
               <span className="hidden sm:inline">유니버스 관리</span>
             </Link>
+            <AccountMenu />
             <ThemeToggle />
           </div>
         </div>

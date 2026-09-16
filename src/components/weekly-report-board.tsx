@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 /**
  * 주간 거시·시황 리포트 — 목록 / 미리보기 / 검수(편집·발행) 화면.
  * 초안은 월요일 아침 크론이 만들고, 여기서 오너가 고쳐 "발행"을 누른다.
- * 생성·수정·발행은 로그인 필요(proxy.ts) — 비로그인 상태면 401 메시지.
+ * 생성·수정·발행은 로그인 필요(Clerk, 헤더 계정 메뉴) — 비로그인이면 401 메시지.
  */
 
 function fmtDate(iso: string | null): string {

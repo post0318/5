@@ -7,8 +7,8 @@ import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId, type MarketId } from "@/lib/markets/types";
 
 function toItem(doc: WithId<UniverseItemDoc>): UniverseItem {
-  const { _id, ...rest } = doc;
-  return { id: _id.toHexString(), ...rest };
+  const { _id, ownerId, ...rest } = doc;
+  return { id: _id.toHexString(), ownerId: ownerId ?? null, ...rest };
 }
 
 export const marketSchema = z.enum(["kr", "us", "jp"]);
@@ -30,19 +30,50 @@ function normalize(input: UniverseInput): UniverseInput {
   return { ...input, symbol: adapter.normalizeSymbol(input.symbol) };
 }
 
+/**
+ * 유니버스 조회.
+ *  - `ownerId` 를 주면 그 계정의 유니버스만 (화면·사용자 API 는 항상 이쪽)
+ *  - 안 주면 전 계정 합집합 (수집 배치 전용 — 어떤 종목이든 하루 1회만
+ *    외부에서 받아오면 되므로 소유자를 가리지 않는다)
+ */
 export async function listUniverse(filter?: {
+  ownerId?: string;
   market?: MarketId;
   activeOnly?: boolean;
 }): Promise<UniverseItem[]> {
   const col = await universeCol();
   const q: Record<string, unknown> = {};
+  if (filter?.ownerId) q.ownerId = filter.ownerId;
   if (filter?.market) q.market = filter.market;
   if (filter?.activeOnly) q.active = true;
   const docs = await col.find(q).sort({ market: 1, symbol: 1 }).toArray();
   return docs.map(toItem);
 }
 
-export async function upsertUniverseItem(raw: UniverseInput): Promise<UniverseItem> {
+/**
+ * 전 계정 합집합에서 (market, symbol) 중복을 걷어낸 목록. 배치가 같은 종목을
+ * 사람 수만큼 반복 조회하지 않게 한다.
+ */
+export async function listUniverseDistinct(filter?: {
+  market?: MarketId;
+  activeOnly?: boolean;
+}): Promise<UniverseItem[]> {
+  const items = await listUniverse(filter);
+  const seen = new Set<string>();
+  const out: UniverseItem[] = [];
+  for (const it of items) {
+    const key = `${it.market}:${it.symbol}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(it);
+  }
+  return out;
+}
+
+export async function upsertUniverseItem(
+  ownerId: string,
+  raw: UniverseInput,
+): Promise<UniverseItem> {
   const input = normalize(universeInputSchema.parse(raw));
   const col = await universeCol();
   const now = new Date().toISOString();
@@ -56,18 +87,22 @@ export async function upsertUniverseItem(raw: UniverseInput): Promise<UniverseIt
     updatedAt: now,
   };
   const doc = await col.findOneAndUpdate(
-    { market: input.market, symbol: input.symbol },
-    { $set: set, $setOnInsert: { createdAt: now } },
+    { ownerId, market: input.market, symbol: input.symbol },
+    { $set: set, $setOnInsert: { ownerId, createdAt: now } },
     { upsert: true, returnDocument: "after" },
   );
   if (!doc) throw new Error("유니버스 저장 실패");
   return toItem(doc);
 }
 
-export async function deleteUniverseItem(id: string): Promise<UniverseItem | null> {
+/** 삭제 — 남의 항목을 지우지 못하도록 ownerId 를 반드시 조건에 건다. */
+export async function deleteUniverseItem(
+  ownerId: string,
+  id: string,
+): Promise<UniverseItem | null> {
   if (!ObjectId.isValid(id)) return null;
   const col = await universeCol();
-  const doc = await col.findOneAndDelete({ _id: new ObjectId(id) });
+  const doc = await col.findOneAndDelete({ _id: new ObjectId(id), ownerId });
   return doc ? toItem(doc) : null;
 }
 
@@ -80,7 +115,9 @@ export const universePatchSchema = z.object({
 });
 export type UniversePatch = z.infer<typeof universePatchSchema>;
 
+/** 수정 — 삭제와 같은 이유로 ownerId 를 조건에 건다. */
 export async function updateUniverseItem(
+  ownerId: string,
   id: string,
   patch: UniversePatch,
 ): Promise<UniverseItem | null> {
@@ -93,7 +130,7 @@ export async function updateUniverseItem(
   if ("note" in patch) set.note = patch.note?.trim() || null;
   if (patch.active !== undefined) set.active = patch.active;
   const doc = await col.findOneAndUpdate(
-    { _id: new ObjectId(id) },
+    { _id: new ObjectId(id), ownerId },
     { $set: set },
     { returnDocument: "after" },
   );
@@ -168,11 +205,43 @@ export function parseBulk(
   return { ok, errors };
 }
 
-export async function bulkUpsert(items: UniverseInput[]): Promise<number> {
+export async function bulkUpsert(ownerId: string, items: UniverseInput[]): Promise<number> {
   let count = 0;
   for (const item of items) {
-    await upsertUniverseItem(item);
+    await upsertUniverseItem(ownerId, item);
     count++;
   }
   return count;
+}
+
+/**
+ * Clerk 도입 이전에 만들어진(소유자 없는) 유니버스를 한 계정으로 귀속시킨다.
+ * 관리자가 「기존 유니버스 가져오기」를 누를 때 1회 실행. 이미 같은 종목을
+ * 갖고 있으면 유니크 인덱스에 걸리므로 그 건만 건너뛴다.
+ */
+export async function claimLegacyUniverse(ownerId: string): Promise<{
+  claimed: number;
+  skipped: number;
+}> {
+  const col = await universeCol();
+  const legacy = await col.find({ ownerId: { $exists: false } }).toArray();
+  let claimed = 0;
+  let skipped = 0;
+  for (const doc of legacy) {
+    try {
+      await col.updateOne({ _id: doc._id }, { $set: { ownerId } });
+      claimed++;
+    } catch {
+      // 이미 같은 (ownerId, market, symbol) 을 갖고 있는 경우 — 옛 문서는 버린다
+      await col.deleteOne({ _id: doc._id }).catch(() => {});
+      skipped++;
+    }
+  }
+  return { claimed, skipped };
+}
+
+/** 귀속 대기 중인 옛 문서 수 (관리 화면 배너 표시 판단용) */
+export async function countLegacyUniverse(): Promise<number> {
+  const col = await universeCol();
+  return col.countDocuments({ ownerId: { $exists: false } });
 }

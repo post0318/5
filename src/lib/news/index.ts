@@ -33,8 +33,11 @@ const UNIVERSE_NEWS_MAX_AGE_MS = 30 * 24 * 3600_000;
  * 나눠 표시). 순서는 유니버스 그룹 단위 유지 + PINNED_GROUP 을 맨 앞으로.
  * 동시성·시간예산을 제한해(POOL·DEADLINE) 종목이 많아도 오래 걸리지 않게 한다.
  */
-export async function fetchUniverseNews(market: MarketId): Promise<NewsItem[]> {
-  const all = await listUniverse({ market, activeOnly: true });
+export async function fetchUniverseNews(
+  ownerId: string,
+  market: MarketId,
+): Promise<NewsItem[]> {
+  const all = await listUniverse({ ownerId, market, activeOnly: true });
   const pinned = all.filter((u) => u.groupName === PINNED_GROUP);
   const rest = all.filter((u) => u.groupName !== PINNED_GROUP);
   const universe = [...pinned, ...rest];
