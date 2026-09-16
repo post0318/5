@@ -1,30 +1,30 @@
 import "server-only";
 import {
   getPreviousSnapshot,
-  getWeeklyMonthUsage,
   getWeeklyReport,
-  incWeeklyUsage,
   saveWeeklyReport,
-  WEEKLY_MONTHLY_BUDGET_USD,
   type SnapshotRow,
   type WeeklyReportDoc,
 } from "@/lib/db/weekly-reports";
-import { buildCorpus } from "./corpus";
-import { GeminiApiError, geminiGenerate, isGeminiConfigured } from "./gemini";
-import {
-  BODY_CHAR_LIMIT,
-  buildCompressPrompt,
-  buildSystemPrompt,
-  CANDIDATES_DELIMITER,
-} from "./prompt";
-import { buildSnapshot, fillFromPrevious, snapshotToMarkdownTable, snapshotToText } from "./snapshot";
-import { resolveReportWeek } from "./week";
+import { buildWeeklyIssues, type WeeklyIssue } from "./issues";
+import { renderWeeklyReport } from "./render";
+import { buildSnapshot, fillFromPrevious } from "./snapshot";
+import { WEEKLY_TOPICS } from "./topics";
+import { resolveReportWeek, type ReportWeek } from "./week";
 
 /**
- * 주간 리포트 초안 생성 오케스트레이터.
- *  1) 대상 주 계산 → 2) 스냅샷·코퍼스 병렬 조립 → 3) Gemini(웹검색 그라운딩)
- *  → 4) 본문/후보이슈 분리 → 5) 분량 초과 시 압축 호출 → 6) 저장(draft).
- * 발행된(published) 리포트는 force 없이는 덮어쓰지 않는다.
+ * 주간 리포트 초안 생성 — **LLM 호출 없음**(오너 지시 2026-09 — "주간 리포트는
+ * LLM 사용 없이 가자. LLM 을 통해 추론을 안 하는 것일 뿐 시장 요약 정리는
+ * 유효하다").
+ *
+ *  1) 대상 주 계산
+ *  2) 시세 스냅샷 (기존 코드 — 원래부터 LLM 과 무관)
+ *  3) 핵심 이슈 3개 = 증권사 리포트 빈도 + 뉴스 건수 (+ 데이터랩 구독 시 검색량)
+ *  4) 금리정책·다음 주 일정 = 미리 정한 검색어의 그 주 기사 목록
+ *  5) 코드로 본문 조립 → draft 저장
+ *
+ * 문장을 지어내지 않는다. 숫자와 실제 제목·링크만 배치하고 해석은 오너가
+ * 편집기에서 직접 쓴다. 발행된 리포트는 force 없이는 덮어쓰지 않는다.
  */
 
 export class WeeklyGenerateError extends Error {
@@ -37,7 +37,7 @@ export class WeeklyGenerateError extends Error {
   }
 }
 
-/** 표 행(| … |)을 제외한 본문 글자 수 */
+/** 표 행(| … |)을 제외한 본문 글자 수 — 화면 분량 표시용 */
 export function bodyCharCount(md: string): number {
   return md
     .split("\n")
@@ -47,207 +47,98 @@ export function bodyCharCount(md: string): number {
 }
 
 /**
- * "## 2. 시장 스냅샷" 섹션을 코드가 만든 표로 교체 — 모델은 "- 지표명: 코멘트"
- * 줄만 쓰고, 값·변동은 스냅샷 데이터에서 넣는다. 모델이 표를 그대로 그려버린
- * 경우(지시 무시)에도 섹션 전체를 교체하므로 잘못 옮겨 적은 숫자가 남지 않는다.
+ * 검수용 후보 목록 — 채택한 3개 말고도 어떤 주제가 몇 건 잡혔는지 그대로
+ * 남긴다. 발행본엔 안 나가고 화면의 접힘 영역에만 보인다.
  */
-function replaceSnapshotSection(body: string, snapshot: SnapshotRow[]): string {
-  const lines = body.split("\n");
-  const start = lines.findIndex((l) => /^##\s*2\./.test(l));
-  if (start < 0) return body;
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) {
-    if (/^##\s/.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  const comments = new Map<string, string>();
-  const names = snapshot.map((r) => r.name).sort((a, b) => b.length - a.length);
-  for (const raw of lines.slice(start + 1, end)) {
-    const l = raw.trim();
-    // "- 지표명: 코멘트" 또는 표 행 "| 지표명 | … | 코멘트 |"
-    let name: string | null = null;
-    let comment = "";
-    const bullet = l.match(/^[-*]\s*\**([^:：*]+)\**\s*[:：]\s*(.+)$/);
-    if (bullet) {
-      name = bullet[1].trim();
-      comment = bullet[2].trim();
-    } else if (l.startsWith("|")) {
-      const cells = l.split("|").map((c) => c.trim()).filter(Boolean);
-      if (cells.length >= 4 && !/^-+$/.test(cells[0]) && cells[0] !== "자산") {
-        name = cells[0];
-        comment = cells[cells.length - 1];
-      }
-    }
-    if (!name) continue;
-    // 모델이 "원자재 | 금"처럼 그룹을 앞에 붙이거나 "(만기 2037)"을 생략/추가하는
-    // 변형이 실측됨 → 마지막 "|" 뒤만 취하고 괄호 꼬리를 뗀 뒤 비교.
-    // 정확 일치 → 스냅샷 이름이 모델 표기로 시작 → 모델 표기가 스냅샷 이름을
-    // 포함(2자 이상만 — "금"이 "기준금리"에 걸리는 사고 방지)
-    const key = name
-      .split("|")
-      .pop()!
-      .replace(/\s*\(.*?\)\s*$/, "")
-      .trim();
-    if (!key) continue;
-    const matched =
-      names.find((n) => n === key) ??
-      names.find((n) => n.startsWith(key)) ??
-      names.find((n) => n.length >= 2 && key.includes(n));
-    if (matched && !comments.has(matched)) comments.set(matched, comment);
-  }
-  const table = snapshotToMarkdownTable(snapshot, comments);
-  return [...lines.slice(0, start), lines[start], table, "", ...lines.slice(end)].join("\n");
-}
-
-function forceTitle(body: string, weekStart: string, weekEnd: string): string {
-  const title = `# 주간 거시·시황 요약 (${weekStart} ~ ${weekEnd})`;
-  const lines = body.split("\n");
-  const i = lines.findIndex((l) => /^#\s/.test(l));
-  if (i < 0) return `${title}\n\n${body}`;
-  lines[i] = title;
+function candidatesText(all: WeeklyIssue[], picked: WeeklyIssue[]): string {
+  const pickedSet = new Set(picked.map((p) => p.label));
+  const lines = all
+    .filter((a) => a.researchCount > 0 || a.newsCount > 0)
+    .map((a) => {
+      const mark = pickedSet.has(a.label) ? "[채택] " : "";
+      const search = a.searchInterest != null ? ` · 검색 ${a.searchInterest.toFixed(0)}` : "";
+      return `- ${mark}${a.label} — 리포트 ${a.researchCount}건 · 뉴스 ${a.newsCount}건${search} (점수 ${a.score.toFixed(3)})`;
+    });
   return lines.join("\n");
 }
 
-function splitCandidates(text: string): { body: string; candidates: string } {
-  const idx = text.indexOf(CANDIDATES_DELIMITER);
-  if (idx < 0) return { body: text.trim(), candidates: "" };
+async function collect(week: ReportWeek): Promise<{
+  snapshot: SnapshotRow[];
+  all: WeeklyIssue[];
+  top: WeeklyIssue[];
+}> {
+  const [rawSnapshot, prevSnapshot, all] = await Promise.all([
+    buildSnapshot(week),
+    getPreviousSnapshot(week.weekStart),
+    // 후보 전체를 받아 두고(검수용) 상위 3개만 본문에 쓴다
+    buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length }),
+  ]);
   return {
-    body: text.slice(0, idx).trim(),
-    candidates: text.slice(idx + CANDIDATES_DELIMITER.length).trim(),
+    snapshot: fillFromPrevious(rawSnapshot, prevSnapshot),
+    all,
+    top: all.slice(0, 3),
   };
 }
 
-/** Gemini API 오류를 라우트가 그대로 노출할 수 있는 502 로 변환 */
-async function callGemini(opts: Parameters<typeof geminiGenerate>[0]) {
-  try {
-    return await geminiGenerate(opts);
-  } catch (e) {
-    if (e instanceof GeminiApiError) throw new WeeklyGenerateError(e.message, 502);
-    throw e;
-  }
-}
-
-/** LLM 호출 없이 입력(스냅샷·코퍼스)만 조립해 점검 — 비용 0 */
+/** 저장 없이 입력만 조립해 점검 — 비용 0 (원래도 0 이었지만 이제 전 과정이 0) */
 export async function previewWeeklyInputs(): Promise<{
-  week: ReturnType<typeof resolveReportWeek>;
+  week: ReportWeek;
   snapshot: SnapshotRow[];
-  corpus: { researchCount: number; newsCount: number; telegramCount: number; youtubeCount: number; chars: number };
-  promptChars: number;
+  issues: WeeklyIssue[];
+  candidates: string;
 }> {
   const week = resolveReportWeek();
-  const [rawSnapshot, corpus, prevSnapshot] = await Promise.all([
-    buildSnapshot(week),
-    buildCorpus(week),
-    getPreviousSnapshot(week.weekStart),
-  ]);
-  const snapshot = fillFromPrevious(rawSnapshot, prevSnapshot);
-  const promptChars = snapshotToText(snapshot, week).length + corpus.text.length + buildSystemPrompt().length;
-  return {
-    week,
-    snapshot,
-    corpus: {
-      researchCount: corpus.researchCount,
-      newsCount: corpus.newsCount,
-      telegramCount: corpus.telegramCount,
-      youtubeCount: corpus.youtubeCount,
-      chars: corpus.text.length,
-    },
-    promptChars,
-  };
+  const { snapshot, all, top } = await collect(week);
+  return { week, snapshot, issues: top, candidates: candidatesText(all, top) };
 }
 
-/** LLM 재호출 없이 저장된 초안 원문(draftBody)에 후처리(표 재생성·제목)만 다시 적용 —
- * 후처리 코드를 고친 뒤 비용 0으로 재렌더링할 때. 오너가 수정한 body 는 건드리지
- * 않고, body 가 draftBody 와 같을 때(미수정)만 함께 갱신한다. */
+/**
+ * 저장된 리포트를 다시 렌더링한다. 조립 규칙(`render.ts`)을 고친 뒤 쓰는
+ * 경로로, 오너가 수정한 body 는 건드리지 않고 body 가 초안과 같을 때(미수정)만
+ * 함께 갱신한다. LLM 이 없어져 재생성과 비용이 같지만, 오너 수정본을 지키는
+ * 점이 달라 그대로 둔다.
+ */
 export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc> {
   const doc = await getWeeklyReport(id);
   if (!doc) throw new WeeklyGenerateError(`${id} 리포트 없음`, 404);
-  // 구버전 문서(rawBody 없음)는 draftBody 로 대체 — 그 경우 표 코멘트가 이미 렌더링
-  // 결과라 완전한 재처리는 아님(재생성 권장)
-  const source = doc.rawBody || doc.draftBody;
-  const rendered = forceTitle(replaceSnapshotSection(source, doc.snapshot), doc.weekStart, doc.weekEnd);
+
+  const week: ReportWeek = {
+    weekStart: doc.weekStart,
+    weekEnd: doc.weekEnd,
+    baseFriday: "",
+    today: new Date().toISOString().slice(0, 10),
+  };
+  const all = await buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length });
+  const top = all.slice(0, 3);
+  const rendered = await renderWeeklyReport({ week, snapshot: doc.snapshot, issues: top });
+
   const untouched = doc.body === doc.draftBody;
   const next: WeeklyReportDoc = {
     ...doc,
-    rawBody: source,
+    rawBody: rendered,
     draftBody: rendered,
     body: untouched ? rendered : doc.body,
+    candidates: candidatesText(all, top),
     updatedAt: new Date().toISOString(),
   };
   await saveWeeklyReport(next);
   return next;
 }
 
-export async function generateWeeklyReport(opts: { force?: boolean } = {}): Promise<WeeklyReportDoc> {
-  if (!isGeminiConfigured()) throw new WeeklyGenerateError("GEMINI_API_KEY 미설정", 503);
-
+export async function generateWeeklyReport(
+  opts: { force?: boolean } = {},
+): Promise<WeeklyReportDoc> {
   const week = resolveReportWeek();
   const existing = await getWeeklyReport(week.weekStart);
   if (existing?.status === "published" && !opts.force) {
-    throw new WeeklyGenerateError(`${week.weekStart} 주 리포트는 이미 발행됨 (force 필요)`, 409);
-  }
-
-  const usage = await getWeeklyMonthUsage();
-  if (usage.totalCostUsd >= WEEKLY_MONTHLY_BUDGET_USD) {
     throw new WeeklyGenerateError(
-      `이번 달 주간 리포트 예산(${WEEKLY_MONTHLY_BUDGET_USD}달러) 초과 — 누적 ${usage.totalCostUsd.toFixed(2)}달러`,
-      429,
+      `${week.weekStart} 주 리포트는 이미 발행됨 (force 필요)`,
+      409,
     );
   }
 
-  const [rawSnapshot, corpus, prevSnapshot] = await Promise.all([
-    buildSnapshot(week),
-    buildCorpus(week),
-    getPreviousSnapshot(week.weekStart),
-  ]);
-  const snapshot = fillFromPrevious(rawSnapshot, prevSnapshot);
-
-  const user = [
-    `오늘은 ${week.today}(KST)입니다. 대상 주간: ${week.weekStart} ~ ${week.weekEnd}.`,
-    "",
-    "## 주간 시세 스냅샷",
-    snapshotToText(snapshot, week),
-    "",
-    corpus.text,
-    "",
-    "위 자료를 1차 근거로, 필요한 사실 확인·보강만 웹검색으로 하여 주간 리포트를 작성하세요.",
-  ].join("\n");
-
-  const first = await callGemini({
-    system: buildSystemPrompt(),
-    user,
-    grounding: process.env.WEEKLY_GROUNDING !== "0",
-  });
-  let calls = 1;
-  let costUsd = first.usage.costUsd;
-  let inputTokens = first.usage.inputTokens;
-  let outputTokens = first.usage.outputTokens;
-  let thoughtTokens = first.usage.thoughtTokens;
-
-  const split = splitCandidates(first.text);
-  let rawBody = split.body;
-  let body = forceTitle(replaceSnapshotSection(rawBody, snapshot), week.weekStart, week.weekEnd);
-  const candidates = split.candidates;
-
-  if (bodyCharCount(body) > BODY_CHAR_LIMIT) {
-    const second = await callGemini({
-      system: buildCompressPrompt(),
-      user: body,
-      grounding: false,
-      temperature: 0.1,
-    });
-    calls += 1;
-    costUsd += second.usage.costUsd;
-    inputTokens += second.usage.inputTokens;
-    outputTokens += second.usage.outputTokens;
-    thoughtTokens += second.usage.thoughtTokens;
-    rawBody = splitCandidates(second.text).body;
-    body = forceTitle(replaceSnapshotSection(rawBody, snapshot), week.weekStart, week.weekEnd);
-  }
-
-  await incWeeklyUsage(costUsd, calls);
+  const { snapshot, all, top } = await collect(week);
+  const body = await renderWeeklyReport({ week, snapshot, issues: top });
 
   const now = new Date().toISOString();
   const doc: WeeklyReportDoc = {
@@ -258,19 +149,22 @@ export async function generateWeeklyReport(opts: { force?: boolean } = {}): Prom
     title: `주간 거시·시황 요약 (${week.weekStart} ~ ${week.weekEnd})`,
     body,
     draftBody: body,
-    rawBody,
-    candidates,
+    rawBody: body,
+    candidates: candidatesText(all, top),
     snapshot,
     sources: {
-      researchCount: corpus.researchCount,
-      newsCount: corpus.newsCount,
-      telegramCount: corpus.telegramCount,
-      youtubeCount: corpus.youtubeCount,
-      groundingQueries: first.groundingQueries,
-      groundingSources: first.groundingSources.slice(0, 40),
+      // 이슈 집계에 실제로 쓰인 건수 — 코퍼스를 통째로 모으던 시절과 달리
+      // 주제별 합계다.
+      researchCount: all.reduce((s, a) => s + a.researchCount, 0),
+      newsCount: all.reduce((s, a) => s + a.newsCount, 0),
+      telegramCount: 0,
+      youtubeCount: 0,
+      groundingQueries: [],
+      groundingSources: [],
     },
-    model: first.model,
-    usage: { inputTokens, outputTokens, thoughtTokens, costUsd, calls },
+    // LLM 을 안 쓰므로 모델·토큰·비용은 0 으로 남긴다(기존 문서와 스키마 호환).
+    model: "rule-based",
+    usage: { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, costUsd: 0, calls: 0 },
     generatedAt: now,
     publishedAt: null,
     updatedAt: now,
