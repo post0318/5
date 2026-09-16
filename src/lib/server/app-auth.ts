@@ -4,7 +4,8 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 /**
  * 앱 사용자 인증 — 4번 프로젝트(post0318/4)의 `lib/server/appAuth.ts` 와 동일한
  * 구조를 이식했다. Clerk 세션이 있고, 그 계정 이메일이 허용 도메인
- * (`ALLOWED_EMAIL_DOMAINS`)에 속하거나 관리자 목록(`ADMIN_EMAILS`)에 있어야 통과.
+ * (`ALLOWED_EMAIL_DOMAINS`, 기본 hanwha.com)에 속하거나 관리자 목록
+ * (`ADMIN_EMAILS`)에 있어야 통과.
  *
  * Clerk 대기자(Waitlist) 모드에서는 관리자가 승인한 사람만 사용자로 존재하므로
  * 세션이 있다는 것 자체가 "승인됨"을 뜻한다. 도메인 검사는 승인 실수를 막는
@@ -24,12 +25,15 @@ export function clerkConfigured(): boolean {
 }
 
 /**
- * 허용 이메일 도메인. 비워 두면(기본) 도메인 제한 없이 "Clerk 이 승인한 계정"
- * 만으로 판단한다 — 개인용이라 승인 대기제 하나로 충분하고, 회사 도메인으로
- * 좁히고 싶으면 이 환경변수를 채우면 된다.
+ * 허용 이메일 도메인. **기본값이 코드에 박혀 있어 Vercel 에 아무것도 넣지
+ * 않아도 검사가 돈다** — 4번 프로젝트와 같은 방식(오너 확인 2026-09).
+ * 다른 도메인을 쓰려면 `ALLOWED_EMAIL_DOMAINS` 로 덮어쓰고, 제한을 아예
+ * 없애려면 그 값을 공백 한 칸 등 빈 목록으로 두면 된다.
  */
+const DEFAULT_ALLOWED_DOMAINS = "hanwha.com";
+
 export function allowedEmailDomains(): string[] {
-  return (process.env.ALLOWED_EMAIL_DOMAINS ?? "")
+  return (process.env.ALLOWED_EMAIL_DOMAINS ?? DEFAULT_ALLOWED_DOMAINS)
     .split(/[,;\s]+/)
     .map((d) => d.trim().toLowerCase().replace(/^@/, ""))
     .filter(Boolean);
