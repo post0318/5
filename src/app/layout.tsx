@@ -4,6 +4,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { koKR } from "@clerk/localizations";
 import "./globals.css";
 import { Providers } from "@/components/providers";
+import { resolveAuthState } from "@/lib/server/app-auth";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -29,9 +30,12 @@ export const metadata: Metadata = {
   description: "유니버스 종목의 재무제표 · 공시 · 뉴스 · 멀티플 통합 조회",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
   // Clerk 키가 없으면(로컬 초기 상태) 인증 없이 렌더 — 유니버스 화면만 잠긴다.
   const clerkEnabled = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+  // 인증 상태를 서버 렌더링에서 미리 판정해 내려준다 — 예전에는 화면이 뜬 뒤
+  // /api/auth/me 를 따로 불러 왕복이 한 번 더 붙었다.
+  const initialAuth = clerkEnabled ? await resolveAuthState() : null;
 
   const body = (
     <html
@@ -40,7 +44,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} ${notoKR.variable} h-full antialiased`}
     >
       <body className="bg-background text-foreground min-h-full">
-        <Providers authEnabled={clerkEnabled}>{children}</Providers>
+        <Providers authEnabled={clerkEnabled} initialAuth={initialAuth}>
+          {children}
+        </Providers>
       </body>
     </html>
   );

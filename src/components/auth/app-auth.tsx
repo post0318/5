@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useClerk, useUser } from "@clerk/nextjs";
+import type { InitialAuthState } from "@/lib/server/app-auth";
 import { useQueryClient } from "@tanstack/react-query";
 
 /**
@@ -73,22 +74,39 @@ const DISABLED: AppAuth = {
 
 const Ctx = createContext<AppAuth>(DISABLED);
 
-function ClerkBridge({ children }: { children: ReactNode }) {
+function ClerkBridge({
+  initial,
+  children,
+}: {
+  initial: InitialAuthState | null;
+  children: ReactNode;
+}) {
   const clerk = useClerk();
   const { isLoaded, isSignedIn, user } = useUser();
   const qc = useQueryClient();
   const [signupOpen, setSignupOpen] = useState(false);
+  // 서버(layout)가 이미 판정해 내려준 값으로 시작한다 — 첫 화면에서
+  // /api/auth/me 왕복이 사라진다. 로그인·로그아웃으로 계정이 바뀔 때만 다시 묻는다.
   const [verdict, setVerdict] = useState<{
     allowed: boolean;
     admin: boolean;
     reason: string | null;
-  } | null>(null);
-  const [domains, setDomains] = useState<string[]>([]);
+  } | null>(
+    initial
+      ? { allowed: initial.allowed, admin: initial.admin, reason: initial.reason }
+      : null,
+  );
+  const [domains, setDomains] = useState<string[]>(initial?.domains ?? []);
+  const checkedUserIdRef = useRef<string | null | undefined>(
+    initial ? initial.userId : undefined,
+  );
 
-  // 로그인 상태가 바뀔 때마다 서버에 허용 여부를 묻는다. 로그아웃 상태에서도
-  // 부른다 — 가입 신청 화면이 쓸 허용 도메인 목록이 같은 응답에 들어있다.
   useEffect(() => {
     if (!isLoaded) return;
+    const uid = isSignedIn ? (user?.id ?? null) : null;
+    // 서버가 본 계정과 같으면 다시 물을 필요가 없다(도메인 목록도 이미 받았다).
+    if (checkedUserIdRef.current === uid) return;
+    checkedUserIdRef.current = uid;
     let cancelled = false;
     fetch("/api/auth/me")
       .then((r) => r.json())
@@ -198,13 +216,16 @@ function ClerkBridge({ children }: { children: ReactNode }) {
 
 export function AppAuthProvider({
   enabled,
+  initial = null,
   children,
 }: {
   enabled: boolean;
+  /** 서버 렌더링 시점의 판정 (layout → providers 에서 내려준다) */
+  initial?: InitialAuthState | null;
   children: ReactNode;
 }) {
   if (!enabled) return <Ctx.Provider value={DISABLED}>{children}</Ctx.Provider>;
-  return <ClerkBridge>{children}</ClerkBridge>;
+  return <ClerkBridge initial={initial}>{children}</ClerkBridge>;
 }
 
 export function useAppAuth(): AppAuth {

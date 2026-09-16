@@ -61,6 +61,32 @@ export function isAllowedEmail(email: string): boolean {
   return domains.includes(e.slice(at + 1));
 }
 
+/**
+ * userId → 이메일 캐시.
+ *
+ * `currentUser()` 는 Clerk Backend API(GET /v1/users/{id})를 네트워크로 부른다.
+ * 보호된 요청마다 왕복이 한 번씩 붙어 체감 지연이 컸다(4번 프로젝트와 동일
+ * 문제, 2026-09 확인). 세션 검증(`auth()`)은 토큰 서명만 보므로 빠르고,
+ * 이메일은 거의 바뀌지 않으므로 짧게 캐시한다. 세션이 끊기거나 차단되면
+ * `auth()` 단계에서 막히므로 캐시가 권한을 늘려주지는 않는다.
+ */
+const EMAIL_TTL_MS = 5 * 60 * 1000;
+const emailCache = new Map<string, { email: string; at: number }>();
+
+async function emailOf(userId: string): Promise<string> {
+  const hit = emailCache.get(userId);
+  if (hit && Date.now() - hit.at < EMAIL_TTL_MS) return hit.email;
+
+  const user = await currentUser();
+  const email =
+    user?.primaryEmailAddress?.emailAddress ?? user?.emailAddresses?.[0]?.emailAddress ?? "";
+  if (email) {
+    if (emailCache.size > 200) emailCache.clear();
+    emailCache.set(userId, { email, at: Date.now() });
+  }
+  return email;
+}
+
 export type AppUserResult =
   | { ok: true; userId: string; email: string; admin: boolean }
   | { ok: false; status: 401 | 403 | 503; error: string };
@@ -72,9 +98,7 @@ export async function requireAppUser(): Promise<AppUserResult> {
   const { userId } = await auth();
   if (!userId) return { ok: false, status: 401, error: "로그인이 필요합니다." };
 
-  const user = await currentUser();
-  const email =
-    user?.primaryEmailAddress?.emailAddress ?? user?.emailAddresses?.[0]?.emailAddress ?? "";
+  const email = await emailOf(userId);
   if (!email || !isAllowedEmail(email)) {
     const domains = allowedEmailDomains();
     return {
@@ -101,4 +125,45 @@ export function authErrorResponse(who: Extract<AppUserResult, { ok: false }>): R
     { error: who.error },
     { status: who.status, headers: { "Cache-Control": "no-store" } },
   );
+}
+
+/**
+ * 서버 렌더링 시점의 인증 상태 — 화면이 `/api/auth/me` 를 다시 부르지 않게
+ * layout 에서 내려준다. `domains` 는 로그아웃 상태에서도 가입 신청 화면이
+ * 써야 해서 항상 담는다.
+ */
+export interface InitialAuthState {
+  userId: string | null;
+  signedIn: boolean;
+  allowed: boolean;
+  admin: boolean;
+  email: string | null;
+  reason: string | null;
+  domains: string[];
+}
+
+export async function resolveAuthState(): Promise<InitialAuthState> {
+  const domains = allowedEmailDomains();
+  const who = await requireAppUser();
+  if (who.ok) {
+    return {
+      userId: who.userId,
+      signedIn: true,
+      allowed: true,
+      admin: who.admin,
+      email: who.email,
+      reason: null,
+      domains,
+    };
+  }
+  // 401 은 로그인 안 함, 403 은 로그인했지만 허용되지 않은 계정
+  return {
+    userId: null,
+    signedIn: who.status === 403,
+    allowed: false,
+    admin: false,
+    email: null,
+    reason: who.status === 401 ? null : who.error,
+    domains,
+  };
 }
