@@ -30,6 +30,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const onManage = parts[0] === "manage";
   const onMacro = parts[0] === "macro";
   const onWeekly = parts[0] === "weekly";
+  const onAdmin = parts[0] === "admin";
 
   return (
     <div className="flex min-h-full flex-col">
@@ -106,7 +107,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* 서브 내비 */}
-        {!onManage && !onMacro && !onWeekly && (
+        {!onManage && !onMacro && !onWeekly && !onAdmin && (
           <div className="mx-auto max-w-[1400px] overflow-x-auto px-4">
             <div className="flex w-max min-w-full gap-4">
               {SUBNAV.map((s) => {

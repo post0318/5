@@ -240,6 +240,19 @@ export async function claimLegacyUniverse(ownerId: string): Promise<{
   return { claimed, skipped };
 }
 
+/** 계정별 보유 종목 수 — 승인 관리 화면에서 누가 얼마나 담았는지 보여준다. */
+export async function countUniverseByOwner(): Promise<Map<string, number>> {
+  const col = await universeCol();
+  const rows = await col
+    .aggregate<{ _id: string | null; n: number }>([
+      { $group: { _id: "$ownerId", n: { $sum: 1 } } },
+    ])
+    .toArray();
+  const out = new Map<string, number>();
+  for (const r of rows) if (r._id) out.set(r._id, r.n);
+  return out;
+}
+
 /** 귀속 대기 중인 옛 문서 수 (관리 화면 배너 표시 판단용) */
 export async function countLegacyUniverse(): Promise<number> {
   const col = await universeCol();

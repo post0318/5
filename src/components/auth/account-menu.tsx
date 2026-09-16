@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { LogIn, UserRound } from "lucide-react";
 import { useAppAuth } from "@/components/auth/app-auth";
 import { Button } from "@/components/ui/button";
@@ -63,6 +64,11 @@ export function AccountMenu() {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => auth.openProfile()}>내 계정</DropdownMenuItem>
+        {auth.isAdmin && (
+          <DropdownMenuItem asChild>
+            <Link href="/admin">승인 관리</Link>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={() => void auth.signOut()}>로그아웃</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
