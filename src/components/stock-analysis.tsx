@@ -14,7 +14,11 @@ import type { FinancialStatement, Filing, TtmFlows } from "@/lib/markets/types";
 import type { FinancialHighlights } from "@/lib/markets/us/edgar-highlights";
 import { FinancialHighlightsTable } from "@/components/financial-highlights";
 import { Button } from "@/components/ui/button";
-import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
+import {
+  SymbolSearch,
+  formatSymbolLabel,
+  type SymbolHit,
+} from "@/components/symbol-search";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +31,11 @@ import { BrokerRatings } from "@/components/broker-ratings";
 import { StockNews } from "@/components/stock-news";
 import { ShinhanResearch } from "@/components/shinhan-research";
 import { PriceChartPanel } from "@/components/price-chart-panel";
+
+/** 시장별로 마지막에 보던 종목을 담아 두는 sessionStorage 키 */
+function lastViewedKey(market: MarketId): string {
+  return `stock-analysis:last:${market}`;
+}
 
 export function StockAnalysis({
   market,
@@ -42,6 +51,7 @@ export function StockAnalysis({
   const qc = useQueryClient();
   const [symbol, setSymbol] = useState<string | null>(initialSymbol);
   const [yahooOverride, setYahooOverride] = useState<string | null>(initialYahoo);
+  const [name, setName] = useState<string | null>(initialName);
   const [period, setPeriod] = useState<"annual" | "quarter">("annual");
   const [filingScope, setFilingScope] = useState<"core" | "all">("core");
   const [showPriceChart, setShowPriceChart] = useState(false);
@@ -49,7 +59,49 @@ export function StockAnalysis({
   function pick(hit: SymbolHit) {
     setSymbol(hit.symbol);
     setYahooOverride(hit.yahooSymbol ?? null);
+    setName(hit.name ?? null);
   }
+
+  /**
+   * 보던 종목 기억 (오너 지적 2026-09 — "유니버스 갔다가 종목 가면 전 종목이
+   * 지워져 있다"). 통합 뷰에서 넘어올 때만 주소에 종목이 실리고, 검색으로 고른
+   * 종목이나 헤더의 「종목분석」 링크(`/{market}/analysis`)에는 쿼리가 없어
+   * 화면을 벗어나면 선택이 통째로 날아갔다. 시장별로 마지막 종목을
+   * sessionStorage 에 남겨 두고, **주소에 종목이 없을 때만** 복원한다 —
+   * 통합 뷰에서 특정 종목을 눌러 들어온 경우를 덮어쓰지 않기 위해서다.
+   * 탭(브라우저 탭) 단위 저장이라 새로고침에는 남고 창을 닫으면 사라진다.
+   */
+  useEffect(() => {
+    if (initialSymbol) return;
+    let saved: { symbol?: string; yahoo?: string | null; name?: string | null };
+    try {
+      const raw = sessionStorage.getItem(lastViewedKey(market));
+      if (!raw) return;
+      saved = JSON.parse(raw);
+    } catch {
+      return; // 시크릿 모드·저장 차단 등 — 복원만 건너뛴다
+    }
+    if (!saved.symbol) return;
+    // 효과 안에서 곧바로 setState 하면 연쇄 렌더 경고가 난다 — 한 틱 미룬다.
+    const id = setTimeout(() => {
+      setSymbol(saved.symbol!);
+      setYahooOverride(saved.yahoo ?? null);
+      setName(saved.name ?? null);
+    }, 0);
+    return () => clearTimeout(id);
+  }, [market, initialSymbol]);
+
+  useEffect(() => {
+    if (!symbol) return;
+    try {
+      sessionStorage.setItem(
+        lastViewedKey(market),
+        JSON.stringify({ symbol, yahoo: yahooOverride, name }),
+      );
+    } catch {
+      // 저장 실패는 조용히 무시 — 기억만 안 될 뿐 화면은 그대로 동작
+    }
+  }, [market, symbol, yahooOverride, name]);
 
   const overview = useQuery({
     queryKey: ["overview", market, symbol, yahooOverride],
@@ -420,13 +472,7 @@ export function StockAnalysis({
       <SymbolSearch
         market={market}
         onSelect={pick}
-        initialLabel={
-          initialSymbol
-            ? initialName
-              ? `${initialName} (${initialSymbol})`
-              : initialSymbol
-            : ""
-        }
+        initialLabel={symbol ? formatSymbolLabel(name, symbol) : ""}
       />
 
       {!symbol && (
@@ -437,9 +483,9 @@ export function StockAnalysis({
 
       {symbol && overview.isLoading && (
         <>
-          {initialName && (
+          {name && name !== symbol && (
             <h1 className="text-xl font-semibold">
-              {initialName}{" "}
+              {name}{" "}
               <span className="text-muted-foreground tnum text-sm font-normal">
                 {symbol}
               </span>

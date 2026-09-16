@@ -17,6 +17,18 @@ export interface SymbolHit {
   yahooSymbol?: string;
 }
 
+/**
+ * 검색창에 표시할 "이름 (코드)" 문자열. 선택 직후와 복원 직후가 같은 문자열을
+ * 쓰도록 여기 하나로 모았다 — 형식이 어긋나면 복원 동기화 효과가 방금 고른
+ * 라벨을 덮어쓴다.
+ */
+export function formatSymbolLabel(
+  name: string | null | undefined,
+  symbol: string,
+): string {
+  return !name || name === symbol ? symbol : `${name} (${symbol})`;
+}
+
 const PLACEHOLDER: Record<MarketId, string> = {
   kr: "종목명 또는 코드 (예: 삼성전자, 005930)",
   us: "Name or ticker (e.g. Apple, AAPL)",
@@ -52,6 +64,23 @@ export function SymbolSearch({
     return () => clearTimeout(t);
   }, [input]);
 
+  /**
+   * 선택된 종목이 마운트 이후에 정해지는 경우(탭을 옮겼다 돌아와 마지막 종목을
+   * 복원할 때)에도 검색창에 그 이름이 보이게 맞춘다. 사용자가 입력 중이면
+   * 건드리지 않는다 — 확정된 라벨(committed)과 같을 때만 따라간다.
+   */
+  useEffect(() => {
+    if (!initialLabel || initialLabel === committed) return;
+    if (input !== committed) return; // 편집 중 — 가로채지 않는다
+    // 효과 안에서 곧바로 setState 하면 연쇄 렌더 경고가 난다 — 한 틱 미룬다.
+    const id = setTimeout(() => {
+      skipSearch.current = true;
+      setInput(initialLabel);
+      setCommitted(initialLabel);
+    }, 0);
+    return () => clearTimeout(id);
+  }, [initialLabel, committed, input]);
+
   /** 확정되지 않은 편집을 마지막 선택 상태로 되돌린다 (없으면 빈칸) */
   function revert() {
     if (input !== committed) {
@@ -76,13 +105,9 @@ export function SymbolSearch({
   const [submitting, setSubmitting] = useState(false);
 
   /** 선택 확정 시 검색창에 남길 표시 문자열 */
-  function pickedLabel(hit: SymbolHit): string {
-    return !hit.name || hit.name === hit.symbol ? hit.symbol : `${hit.name} (${hit.symbol})`;
-  }
-
   function choose(hit: SymbolHit) {
     // 정상 선택 → 무엇을 골랐는지 검색창에 유지 + 확정값으로 기억
-    const label = pickedLabel(hit);
+    const label = formatSymbolLabel(hit.name, hit.symbol);
     skipSearch.current = true;
     setInput(label);
     setCommitted(label);
