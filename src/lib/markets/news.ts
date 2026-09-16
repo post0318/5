@@ -145,6 +145,7 @@ const KR_PUBLISHER_BY_DOMAIN: Record<string, string> = {
   "mk.co.kr": "매일경제",
   "sedaily.com": "서울경제",
   "biz.chosun.com": "조선비즈",
+  "chosun.com": "조선일보",
   "mt.co.kr": "머니투데이",
   "edaily.co.kr": "이데일리",
   "fnnews.com": "파이낸셜뉴스",
@@ -166,6 +167,84 @@ const KR_PUBLISHER_BY_DOMAIN: Record<string, string> = {
 /** 이 도메인 맵에 있는(=사전 큐레이션된 주요 언론사) 발행사명 집합 — 중복기사
  * 정리 시 "메이저" 판단, 요약 대상 판정에도 재사용. */
 const DOMESTIC_PUBLISHERS = new Set(Object.values(KR_PUBLISHER_BY_DOMAIN));
+
+/**
+ * 한국 언론사 판정 — **해외뉴스에서 걸러내기 위한 것**(오너 지적 2026-09:
+ * "해외뉴스에 국내 언론사는 제외하라 했는데 한화에어로스페이스 해외뉴스에
+ * 조선일보가 나온다").
+ *
+ * 전에는 `KR_PUBLISHER_BY_DOMAIN` 의 **정확히 일치**하는 도메인과 매체명만
+ * 걸렀는데, 실측해 보니 세 방향으로 샜다.
+ *  - 목록 누락: `chosun.com`(조선일보)이 없었다. 조선비즈만 있었다.
+ *  - 하위 도메인: `en.sedaily.com`(서울경제 영문판)은 `sedaily.com` 과
+ *    정확히 같지 않아 통과했다.
+ *  - 한국 매체의 영문판: 코리아헤럴드·코리아중앙데일리·한국경제 영문판
+ *    (kedglobal)·코리아타임스·비즈니스코리아. 이름도 도메인도 영어라
+ *    한국 매체 목록 어디에도 안 걸렸다.
+ *
+ * 그래서 목록을 늘리는 대신 판정을 바꾼다 — `.kr` 최상위 도메인, 도메인
+ * 접미사 일치, 매체명에 한글 포함. 셋 중 하나면 국내로 본다. 영문 피드에
+ * 한글 이름이 찍히는 매체는 사실상 전부 한국 매체라 이 신호가 특히 강하다.
+ */
+const KR_MEDIA_DOMAINS = [
+  // 위 KR_PUBLISHER_BY_DOMAIN 과 별개 — 여기는 "해외뉴스에서 뺄 대상"이라
+  // 영문판·전문지까지 더 넓게 잡는다.
+  "chosun.com",
+  "donga.com",
+  "joongang.co.kr",
+  "joins.com",
+  "koreajoongangdaily.com",
+  "koreaherald.com",
+  "koreatimes.co.kr",
+  "kedglobal.com",
+  "businesskorea.co.kr",
+  "koreabizwire.com",
+  "pulsenews.co.kr",
+  "hankyung.com",
+  "sedaily.com",
+  "mk.co.kr",
+  "newsis.com",
+  "segye.com",
+  "heraldcorp.com",
+  "munhwa.com",
+  "hankookilbo.com",
+  "fnnews.com",
+  "etnews.com",
+  "thelec.net",
+  "newspim.com",
+  "ajunews.com",
+  "ajudaily.com",
+  "inews24.com",
+  "mt.co.kr",
+  "asiae.co.kr",
+  "starnewskorea.com",
+];
+
+/**
+ * 도메인에 "korea" 가 들어가면 한국 매체로 본다. 영문 이름·`.com` 을 쓰는
+ * 한국 매체(코리아헤럴드·코리아중앙데일리·비즈니스코리아·스타뉴스코리아 …)
+ * 가 길게 이어져 목록으로는 계속 새기 때문이다. 한국을 다루는 외국 매체가
+ * 드물게 함께 걸릴 수 있으나, 그런 기사는 국내뉴스 쪽에서 이미 다루는
+ * 내용이라 손실이 작다고 보고 recall 을 택했다.
+ */
+const KOREA_IN_DOMAIN_RE = /(^|[.-])korea/i;
+
+export function isKoreanNewsSource(
+  domain: string | null | undefined,
+  source: string | null | undefined,
+): boolean {
+  const d = (domain ?? "").toLowerCase().replace(/^www\./, "");
+  if (d) {
+    if (d === "kr" || d.endsWith(".kr")) return true;
+    if (KR_MEDIA_DOMAINS.some((k) => d === k || d.endsWith(`.${k}`))) return true;
+    if (KR_PUBLISHER_BY_DOMAIN[d]) return true;
+    if (KOREA_IN_DOMAIN_RE.test(d)) return true;
+  }
+  const src = (source ?? "").trim();
+  if (!src) return false;
+  if (/[가-힣]/.test(src)) return true;
+  return DOMESTIC_PUBLISHERS.has(src);
+}
 
 const THREE_MONTHS_MS = 90 * 24 * 3600_000;
 const ONE_WEEK_MS = 7 * 24 * 3600_000;
@@ -277,15 +356,11 @@ async function fetchGoogleOverseasNews(
   const requireWhitelist = opts?.requireWhitelist ?? false;
   const items: Omit<NewsItem, "titleKo">[] = [];
   for (const n of raw) {
-    // Google 뉴스 RSS는 hl=en-US 로 요청해도 질의어가 우연히 일치하면 국내
-    // 한국어 매체(예: 서울경제) 기사를 섞어 보낼 때가 있다(실측, 2026-09 —
-    // 오너 지적: 해외뉴스란에 서울경제 기사가 떠 있고 번역도 안 돼 있었음).
-    // LLM 관련성 판정은 "이 회사 얘기인가"만 보지 "국내 매체인가"는 안 보므로
-    // 여기서 원천 차단 — 안 그러면 이미 한국어인 제목을 sl="en" 으로 잘못
-    // 번역 시도해(구글·MyMemory 둘 다 동일 텍스트 반환) "번역 안 된 것처럼"
-    // 보이는 원문 그대로 노출된다.
-    if (n.sourceDomain && KR_PUBLISHER_BY_DOMAIN[n.sourceDomain]) continue;
-    if (DOMESTIC_PUBLISHERS.has(n.source)) continue;
+    // Google 뉴스 RSS는 hl=en-US 로 요청해도 국내 매체 기사를 섞어 보낸다
+    // (실측, 2026-09 — 서울경제에 이어 조선일보·코리아헤럴드 등). 한국어
+    // 제목을 sl="en" 으로 잘못 번역 시도하면 원문 그대로 노출되기도 해서
+    // 여기서 원천 차단한다. 판정 근거는 isKoreanNewsSource() 주석 참고.
+    if (isKoreanNewsSource(n.sourceDomain, n.source)) continue;
     const mapped = n.sourceDomain ? OVERSEAS_PUBLISHER_BY_DOMAIN[n.sourceDomain] : undefined;
     // 종목뉴스 탭은 LLM 관련성 판정이 신뢰도까지 함께 보므로 화이트리스트 밖
     // 매체도 표시용 이름을 그대로 써서 통과시킨다(requireWhitelist 기본 false).
