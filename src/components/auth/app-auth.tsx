@@ -1,7 +1,15 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useClerk, useUser } from "@clerk/nextjs";
+import { useQueryClient } from "@tanstack/react-query";
 
 /**
  * 앱 인증 컨텍스트 — 4번 프로젝트(post0318/4)의 `components/auth/AppAuth.tsx`
@@ -68,6 +76,7 @@ const Ctx = createContext<AppAuth>(DISABLED);
 function ClerkBridge({ children }: { children: ReactNode }) {
   const clerk = useClerk();
   const { isLoaded, isSignedIn, user } = useUser();
+  const qc = useQueryClient();
   const [signupOpen, setSignupOpen] = useState(false);
   const [verdict, setVerdict] = useState<{
     allowed: boolean;
@@ -112,6 +121,24 @@ function ClerkBridge({ children }: { children: ReactNode }) {
     };
   }, [isLoaded, isSignedIn, user?.id]);
 
+  /**
+   * 계정이 바뀌면 이전 계정으로 받아둔 응답을 버린다. 유니버스·통합 뷰·통합
+   * 뉴스가 계정별이라, 한 브라우저에서 갈아타면 잠깐이라도 남의 목록이
+   * 보일 수 있다. 첫 마운트에는 비울 게 없어 무해하다.
+   */
+  const lastUserId = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!isLoaded) return;
+    const id = user?.id ?? null;
+    if (lastUserId.current === undefined) {
+      lastUserId.current = id;
+      return;
+    }
+    if (lastUserId.current === id) return;
+    lastUserId.current = id;
+    qc.clear();
+  }, [isLoaded, user?.id, qc]);
+
   // Clerk 로그인 팝업의 "가입" 링크는 `waitlistUrl`(= /kr/universe?signup=1)
   // 로 돌아온다. 4번 프로젝트가 서버에서 searchParams 를 읽어 내려주던 자리를
   // 여기서 대신한다 — 어느 화면으로 돌아와도 가입 폼이 열리게. 한 번 열고
@@ -141,7 +168,14 @@ function ClerkBridge({ children }: { children: ReactNode }) {
     allowedDomains: domains,
     openSignIn: () => clerk.openSignIn({}),
     openProfile: () => clerk.openUserProfile({}),
-    signOut: () => clerk.signOut(),
+    // ClerkProvider 의 afterSignOutUrl 만으로는 프로그램 호출에 안 먹는 경우가
+    // 있어(오너 지적 2026-09 — "로그아웃이 안 먹힌다") 이동할 주소를 직접
+    // 넘긴다. 유니버스가 계정별이라 남의 계정 데이터가 화면에 남지 않도록
+    // 캐시도 함께 비운다.
+    signOut: async () => {
+      qc.clear();
+      await clerk.signOut({ redirectUrl: "/" });
+    },
     openSignup: () => setSignupOpen(true),
     signupOpen,
     setSignupOpen,
