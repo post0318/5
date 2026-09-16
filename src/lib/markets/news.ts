@@ -229,12 +229,37 @@ const KR_MEDIA_DOMAINS = [
  */
 const KOREA_IN_DOMAIN_RE = /(^|[.-])korea/i;
 
+/**
+ * 한국에 있지만 **한글판이 없는 영문 전용 매체** — 해외뉴스에 남긴다
+ * (오너 지적 2026-09: "코리아타임스는 한글판이 없지 않니?").
+ *
+ * 국내 매체를 해외뉴스에서 빼는 근거는 "같은 내용이 국내뉴스에 이미 나오니
+ * 손실이 없다"였는데, 이 매체들은 한국어 기사 자체가 없어 국내뉴스(네이버
+ * 한국어 검색)에 잡히지 않는다. 빼면 어느 탭에서도 안 보인다.
+ *
+ * 반대로 **한글판이 있는 영문판**(서울경제 en.sedaily.com, 연합뉴스
+ * en.yna.co.kr, 코리아중앙데일리=중앙일보, KED Global=한국경제, Pulse=매일경제,
+ * english.chosun.com=조선일보)은 계속 제외한다 — 같은 기사가 국내뉴스에 있다.
+ *
+ * 이 목록은 다른 모든 판정보다 먼저 본다(`.kr` TLD·korea 도메인 규칙에
+ * 먼저 걸리기 때문).
+ */
+const KR_ENGLISH_ONLY_DOMAINS = [
+  "koreatimes.co.kr",
+  "koreaherald.com",
+  "theinvestor.co.kr", // 코리아헤럴드 영문 경제 사이트
+  "businesskorea.co.kr",
+  "koreabizwire.com",
+];
+
 export function isKoreanNewsSource(
   domain: string | null | undefined,
   source: string | null | undefined,
 ): boolean {
   const d = (domain ?? "").toLowerCase().replace(/^www\./, "");
   if (d) {
+    // 영문 전용 국내 매체는 해외뉴스에 남긴다 — 다른 규칙보다 먼저 본다.
+    if (KR_ENGLISH_ONLY_DOMAINS.some((k) => d === k || d.endsWith(`.${k}`))) return false;
     if (d === "kr" || d.endsWith(".kr")) return true;
     if (KR_MEDIA_DOMAINS.some((k) => d === k || d.endsWith(`.${k}`))) return true;
     if (KR_PUBLISHER_BY_DOMAIN[d]) return true;
