@@ -95,7 +95,11 @@ async function countFromResearch(
     .toArray();
 
   const out = new Map<string, { count: number; reports: IssueEvidenceReport[] }>();
-  for (const t of WEEKLY_TOPICS) out.set(t.label, { count: 0, reports: [] });
+  const seenByTopic = new Map<string, Set<string>>();
+  for (const t of WEEKLY_TOPICS) {
+    out.set(t.label, { count: 0, reports: [] });
+    seenByTopic.set(t.label, new Set());
+  }
 
   for (const d of docs) {
     // 발췌까지 보는 이유: 제목만으로는 "Weekly Monitor" 처럼 주제가 안 드러나는
@@ -107,7 +111,15 @@ async function countFromResearch(
       slot.count += 1;
       // 근거는 제목에 주제가 드러난 것부터 — 발췌에만 걸린 건 뒤로 민다.
       const strong = t.match.test(`${d.stockName ?? ""} ${d.title ?? ""}`);
-      if (slot.reports.length < 12) {
+      // 같은 리포트가 여러 소스(예: 자체 수집기 + 한경 컨센서스 경유)로
+      // 중복 저장돼 있을 수 있어(실측 — DS투자증권 리포트가 그대로 두 번
+      // 뽑힘) 소스+제목 기준으로 근거만 중복 제거한다. count(빈도 점수)는
+      // 원래 신호대로 그대로 둔다 — 실제로 두 곳에서 다뤄진 만큼 관심도가
+      // 높다는 뜻이라 점수를 깎을 이유가 없다.
+      const dedupeKey = `${d.source ?? ""}:${(d.title ?? "").replace(/\s+/g, "").toLowerCase()}`;
+      const seen = seenByTopic.get(t.label)!;
+      if (slot.reports.length < 12 && !seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
         const ev: IssueEvidenceReport = {
           date: d.date,
           source: d.source,
@@ -130,14 +142,19 @@ async function countFromResearch(
  *
  * 네이버 뉴스 검색(API 허브)은 날짜 범위를 못 걸어 전체 누적 건수만 주므로
  * (실측 — "FOMC 금리" 38만 건) `display` 로 받은 최신순 결과를 날짜로 직접
- * 걸러야 주간 신호가 된다. 구글은 `when:7d` 로 서버가 이미 걸러 준다.
- * 두 소스가 같은 기사를 각자 다른 매체로 다시 걸어주는 경우가 있어 제목
- * 기준으로 가볍게 중복 제거한다(네이버를 먼저 둬 요약문이 있는 쪽을 우선).
+ * 걸러야 주간 신호가 된다. 구글의 `when:7d` 도 "지금부터 7일 전"이라 대상
+ * 주가 지난 뒤(재생성 시점)엔 안 맞는 기간을 준다 — 그래서 하한(주 시작)
+ * 뿐 아니라 **상한(주 종료+3일)도 직접 건다**(`countFromResearch()`와 동일
+ * 패턴, 오너 실측 — 09-07~09-11 리포트를 09-18에 재생성했더니 09-16·09-17
+ * 자 기사가 "그 주" 뉴스로 섞여 나왔다). 두 소스가 같은 기사를 각자 다른
+ * 매체로 다시 걸어주는 경우가 있어 제목 기준으로 가볍게 중복 제거한다
+ * (네이버를 먼저 둬 요약문이 있는 쪽을 우선).
  */
 async function countFromNews(
   week: ReportWeek,
 ): Promise<Map<string, { count: number; news: IssueEvidenceNews[] }>> {
   const sinceMs = Date.parse(`${week.weekStart}T00:00:00+09:00`);
+  const untilMs = Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000;
   const out = new Map<string, { count: number; news: IssueEvidenceNews[] }>();
 
   const results = await Promise.all(
@@ -173,7 +190,7 @@ async function countFromNews(
     const fresh: IssueEvidenceNews[] = [];
     for (const i of items) {
       const ms = Date.parse(i.publishedAt);
-      if (Number.isFinite(ms) && ms < sinceMs) continue;
+      if (Number.isFinite(ms) && (ms < sinceMs || ms > untilMs)) continue;
       const key = i.title.replace(/\s+/g, "").toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);

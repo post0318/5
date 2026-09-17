@@ -127,18 +127,46 @@ interface CommentResponse {
   issues?: Record<string, string>;
 }
 
+function tryParse(s: string): CommentResponse | null {
+  try {
+    const v = JSON.parse(s) as unknown;
+    return v && typeof v === "object" ? (v as CommentResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 출력 형식을 "JSON만" 이라고 강제해도 앞뒤에 설명을 붙이는 경우가 있어
+ * 코드펜스 제거 → 실패하면 첫 '{' ~ 마지막 '}' 만 다시 시도한다. */
 function parseJson(text: string): CommentResponse | null {
   const cleaned = text
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/```\s*$/i, "");
-  try {
-    const v = JSON.parse(cleaned) as unknown;
-    if (v && typeof v === "object") return v as CommentResponse;
-    return null;
-  } catch {
-    return null;
+  const direct = tryParse(cleaned);
+  if (direct) return direct;
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    const loose = tryParse(cleaned.slice(start, end + 1));
+    if (loose) return loose;
   }
+  console.warn(`[weekly] Gemini 코멘트 JSON 파싱 실패 — 응답 앞 300자: ${text.slice(0, 300)}`);
+  return null;
+}
+
+/** 공백·대소문자 차이만으로 "코스피" ≠ "코스피 " 처럼 매칭이 깨지지 않게. */
+function normalizeKey(s: string): string {
+  return s.trim().replace(/\s+/g, "").toLowerCase();
+}
+
+/** Gemini가 돌려준 키가 실제 스냅샷 name/이슈 label 과 정확히 같은 문자열이
+ * 아닐 수 있어(공백·괄호 등 사소한 차이) 정규화 비교로 원본 목록에서 찾고,
+ * 매칭되면 항상 우리 쪽 정식 문자열을 키로 쓴다(렌더링 쪽 Map.get 이 항상
+ * 정확한 값과 대조하도록). 못 찾으면 로그만 남기고 버린다. */
+function matchCanonical(rawKey: string, candidates: string[]): string | null {
+  const norm = normalizeKey(rawKey);
+  return candidates.find((c) => normalizeKey(c) === norm) ?? null;
 }
 
 /** 검증 단계 입력 — 코멘트가 인용할 수 있는 "실제 수치" 전체 목록. */
@@ -202,20 +230,36 @@ export async function generateWeeklyComments(
     user: JSON.stringify(payload),
     grounding: false, // 코멘트는 수집된 자체 데이터만 근거로 삼는다 — 웹검색 그라운딩은 비용만 늘고 대조 불가능한 외부 주장이 섞일 위험이 있어 끔.
     temperature: 0.25,
-    maxOutputTokens: 2_000,
+    // gemini-3.1-pro-preview 는 "사고" 토큰도 이 상한을 같이 쓴다 — 2,000
+    // 이었을 때 사고에 다 쓰고 JSON 이 중간에 잘려 파싱이 통째로 실패했을
+    // 가능성이 있어(실측 — 비용은 $0.031 정상 청구됐는데 코멘트가 0건)
+    // 여유를 더 뒀다.
+    maxOutputTokens: 4_000,
   });
 
   const parsed = parseJson(result.text);
   const allowed = buildAllowedNumbers(payload);
+  const snapshotNames = payload.snapshot.map((r) => r.name);
+  const issueLabels = payload.issues.map((i) => i.label);
   const comments: WeeklyComments = { snapshot: new Map(), issues: new Map() };
 
-  for (const [name, text] of Object.entries(parsed?.snapshot ?? {})) {
+  for (const [rawName, text] of Object.entries(parsed?.snapshot ?? {})) {
+    const canonical = matchCanonical(rawName, snapshotNames);
+    if (!canonical) {
+      console.warn(`[weekly] 스냅샷 코멘트 키 불일치 — "${rawName}" 는 알려진 자산명이 아님`);
+      continue;
+    }
     const v = verifyComment(String(text ?? ""), allowed);
-    if (v) comments.snapshot.set(name, v);
+    if (v) comments.snapshot.set(canonical, v);
   }
-  for (const [label, text] of Object.entries(parsed?.issues ?? {})) {
+  for (const [rawLabel, text] of Object.entries(parsed?.issues ?? {})) {
+    const canonical = matchCanonical(rawLabel, issueLabels);
+    if (!canonical) {
+      console.warn(`[weekly] 이슈 코멘트 키 불일치 — "${rawLabel}" 는 알려진 이슈명이 아님`);
+      continue;
+    }
     const v = verifyComment(String(text ?? ""), allowed);
-    if (v) comments.issues.set(label, v);
+    if (v) comments.issues.set(canonical, v);
   }
 
   return { comments, result };
