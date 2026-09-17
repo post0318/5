@@ -370,11 +370,13 @@ export async function generateWeeklyComments(
     // 실시간 검색이 필요하다(오너 지시 2026-09-18). 요청당 +$0.035.
     grounding: true,
     temperature: 0.25,
-    // gemini-3.1-pro-preview 는 "사고" 토큰도 이 상한을 같이 쓴다 — 2,000
-    // 이었을 때 사고에 다 쓰고 JSON 이 중간에 잘려 파싱이 통째로 실패했을
-    // 가능성이 있어(실측 — 비용은 $0.031 정상 청구됐는데 코멘트가 0건)
-    // 여유를 더 뒀고, 그라운딩까지 켜져 검색 컨텍스트가 더해지니 한 번 더 늘림.
-    maxOutputTokens: 6_000,
+    // gemini-3.1-pro-preview 는 "사고" 토큰도 이 상한을 같이 쓴다. 2,000→
+    // 6,000으로 올렸는데도 여전히 부족해 응답이 410자에서 중간에 잘리는
+    // 게 로그로 확인됐다(오너가 직접 Vercel 로그 찾아줘서 확정 — "응답길이
+    // =410자, parseJson성공=false", policySummary 문자열 중간에 끊김).
+    // 실제 사용한 토큰만큼만 과금되므로 상한을 낮게 잡을 이유가 없다 —
+    // 오히려 지금처럼 잘려서 통째로 버려지는 게 진짜 비용 낭비다. 크게 올림.
+    maxOutputTokens: 32_000,
   });
 
   const parsed = parseJson(result.text);
