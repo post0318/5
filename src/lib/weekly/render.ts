@@ -90,10 +90,17 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
   return lines.join("\n");
 }
 
-/** 고정 검색어의 그 주 기사를 그대로 건다 — 추론 없음. */
+/**
+ * 고정 검색어의 그 주 기사를 표로 건다 — 추론 없음, 코드가 표만 조립한다
+ * (오너 지시 2026-09-18 — "일정을 안 건든다는 건 임의 해석하지 말라는
+ * 거지 표로 만들지 말라는 게 아니다"). 하한(주 시작)뿐 아니라 상한(주
+ * 종료+3일)도 건다 — `issues.ts`의 `countFromNews()`와 같은 이유(실측
+ * — 지난 주 리포트를 나중에 재생성하면 그사이 최신 기사가 섞여 들어옴).
+ */
 async function queryBlock(
   queries: { label: string; query: string }[],
   sinceMs: number,
+  untilMs: number,
   perQuery: number,
 ): Promise<string> {
   const results = await Promise.all(
@@ -105,20 +112,19 @@ async function queryBlock(
       const items = await fetchGoogleNewsRss(url).catch(() => []);
       const fresh = items.filter((i) => {
         const ms = Date.parse(i.publishedAt);
-        return !Number.isFinite(ms) || ms >= sinceMs;
+        return !Number.isFinite(ms) || (ms >= sinceMs && ms <= untilMs);
       });
       return { label, items: fresh.slice(0, perQuery) };
     }),
   );
-  const lines: string[] = [];
+  const lines = ["| 구분 | 날짜 | 제목 | 출처 |", "|---|---|---|---|"];
   for (const { label, items } of results) {
-    lines.push(`- **${label}**`);
     if (items.length === 0) {
-      lines.push("  - 이번 주 관련 기사 없음");
+      lines.push(`| ${label} | - | 이번 주 관련 기사 없음 | - |`);
       continue;
     }
     for (const i of items) {
-      lines.push(`  - [${i.title}](${i.link}) — ${i.source} ${i.publishedAt.slice(0, 10)}`);
+      lines.push(`| ${label} | ${i.publishedAt.slice(0, 10)} | [${i.title}](${i.link}) | ${i.source} |`);
     }
   }
   return lines.join("\n");
@@ -134,9 +140,10 @@ export async function renderWeeklyReport(opts: {
   const snapshotComments = comments?.snapshot ?? new Map<string, string>();
   const issueComments = comments?.issues ?? new Map<string, string>();
   const sinceMs = Date.parse(`${week.weekStart}T00:00:00+09:00`);
+  const untilMs = Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000;
   const [policy, calendar] = await Promise.all([
-    queryBlock(POLICY_QUERIES, sinceMs, 2),
-    queryBlock(CALENDAR_QUERIES, sinceMs, 3),
+    queryBlock(POLICY_QUERIES, sinceMs, untilMs, 2),
+    queryBlock(CALENDAR_QUERIES, sinceMs, untilMs, 3),
   ]);
 
   const parts: string[] = [];
