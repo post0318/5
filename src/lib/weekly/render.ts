@@ -3,13 +3,20 @@ import type { SnapshotRow } from "@/lib/db/weekly-reports";
 import { fetchGoogleNewsRss, googleNewsUrl } from "@/lib/news/googleNews";
 import { snapshotToMarkdownTable } from "./snapshot";
 import { CALENDAR_QUERIES, POLICY_QUERIES } from "./topics";
+import type { WeeklyComments } from "./comment";
 import type { WeeklyIssue } from "./issues";
 import type { ReportWeek } from "./week";
 
 /**
- * 주간 리포트 본문을 **코드로** 조립한다 (오너 지시 2026-09 — "LLM 사용 없이
- * 가자"). 문장을 지어내지 않고, 집계한 숫자와 실제 기사·리포트 제목만 배치한다.
- * 해석은 오너가 편집기에서 직접 쓴다.
+ * 주간 리포트 본문 조립 — 구조·표·숫자는 **코드로** 만든다(오너 지시 2026-09
+ * "LLM 사용 없이 가자"). 문장을 지어내지 않고, 집계한 숫자와 실제 기사·리포트
+ * 제목만 배치한다.
+ *
+ * 코멘트 칸(스냅샷 표 마지막 열, 이슈별 "- 코멘트:")만 `comments` 로 채운다
+ * (오너 지시 2026-09 "llm을 부활한다" — `comment.ts`가 Gemini로 생성 후 검증한
+ * 결과). 호출부가 `comments` 를 안 주거나(LLM 미설정·예산 초과·실패) 특정
+ * 항목이 검증에서 걸러지면 해당 칸은 그대로 빈 문자열 — 오너가 편집기에서
+ * 직접 채울 수 있다.
  *
  * 구성: 스냅샷 표 / 주간 핵심 이슈 3개 / 금리정책 / 다음 주 일정.
  */
@@ -37,7 +44,7 @@ function movers(rows: SnapshotRow[]): string {
   return `상승폭 최대 ${up.name} ${pctText(up)}, 하락폭 최대 ${down.name} ${pctText(down)}.`;
 }
 
-function issueBlock(issue: WeeklyIssue, rank: number): string {
+function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
   const lines: string[] = [];
   const metrics = [
     `증권사 리포트 ${issue.researchCount}건`,
@@ -63,7 +70,7 @@ function issueBlock(issue: WeeklyIssue, rank: number): string {
       lines.push(`  - [${n.title}](${n.url}) — ${n.source} ${n.publishedAt.slice(0, 10)}`);
     }
   }
-  lines.push("- 코멘트: ");
+  lines.push(`- 코멘트: ${comment}`);
   return lines.join("\n");
 }
 
@@ -105,8 +112,11 @@ export async function renderWeeklyReport(opts: {
   week: ReportWeek;
   snapshot: SnapshotRow[];
   issues: WeeklyIssue[];
+  comments?: WeeklyComments;
 }): Promise<string> {
-  const { week, snapshot, issues } = opts;
+  const { week, snapshot, issues, comments } = opts;
+  const snapshotComments = comments?.snapshot ?? new Map<string, string>();
+  const issueComments = comments?.issues ?? new Map<string, string>();
   const sinceMs = Date.parse(`${week.weekStart}T00:00:00+09:00`);
   const [policy, calendar] = await Promise.all([
     queryBlock(POLICY_QUERIES, sinceMs, 2),
@@ -122,8 +132,7 @@ export async function renderWeeklyReport(opts: {
   parts.push("");
   parts.push("## 2. 시장 스냅샷");
   parts.push("");
-  // 코멘트 칸은 비워 둔다 — 오너가 편집기에서 채운다(자동 서술 안 함).
-  parts.push(snapshotToMarkdownTable(snapshot, new Map()));
+  parts.push(snapshotToMarkdownTable(snapshot, snapshotComments));
   parts.push("");
   parts.push("## 3. 주간 핵심 이슈 3개");
   parts.push("");
@@ -135,7 +144,7 @@ export async function renderWeeklyReport(opts: {
     parts.push("이번 주 집계된 이슈가 없습니다.");
   } else {
     issues.forEach((it, i) => {
-      parts.push(issueBlock(it, i + 1));
+      parts.push(issueBlock(it, i + 1, issueComments.get(it.label) ?? ""));
       parts.push("");
     });
   }

@@ -1,11 +1,16 @@
 import "server-only";
 import {
   getPreviousSnapshot,
+  getWeeklyMonthUsage,
   getWeeklyReport,
+  incWeeklyUsage,
   saveWeeklyReport,
+  WEEKLY_MONTHLY_BUDGET_USD,
   type SnapshotRow,
   type WeeklyReportDoc,
 } from "@/lib/db/weekly-reports";
+import { generateWeeklyComments, type WeeklyComments } from "./comment";
+import { isGeminiConfigured } from "./gemini";
 import { buildWeeklyIssues, type WeeklyIssue } from "./issues";
 import { renderWeeklyReport } from "./render";
 import { buildSnapshot, fillFromPrevious } from "./snapshot";
@@ -13,19 +18,20 @@ import { WEEKLY_TOPICS } from "./topics";
 import { resolveReportWeek, type ReportWeek } from "./week";
 
 /**
- * 주간 리포트 초안 생성 — **LLM 호출 없음**(오너 지시 2026-09 — "주간 리포트는
- * LLM 사용 없이 가자. LLM 을 통해 추론을 안 하는 것일 뿐 시장 요약 정리는
- * 유효하다").
+ * 주간 리포트 초안 생성.
  *
  *  1) 대상 주 계산
- *  2) 시세 스냅샷 (기존 코드 — 원래부터 LLM 과 무관)
+ *  2) 시세 스냅샷 (기존 코드 — LLM 과 무관)
  *  3) 핵심 이슈 3개 = 증권사 리포트 빈도 + 그 주 뉴스 건수
  *     (+ 네이버 검색어 트렌드, 활성화된 경우)
  *  4) 금리정책·다음 주 일정 = 미리 정한 검색어의 그 주 기사 목록
- *  5) 코드로 본문 조립 → draft 저장
+ *  5) **해석 코멘트** = Gemini(`comment.ts`, 수집→해석→검증 3단계, 오너 지시
+ *     2026-09 "llm을 부활한다") — 설정 없음/월 예산(`WEEKLY_MONTHLY_BUDGET_USD`)
+ *     초과/API 실패 시 조용히 생략(빈 코멘트로 폴백, model="rule-based")
+ *  6) 코드로 본문 조립 → draft 저장
  *
- * 문장을 지어내지 않는다. 숫자와 실제 제목·링크만 배치하고 해석은 오너가
- * 편집기에서 직접 쓴다. 발행된 리포트는 force 없이는 덮어쓰지 않는다.
+ * 표·숫자·구조는 절대 지어내지 않는다 — 그 부분은 5)와 무관하게 항상 코드가
+ * 만든다. 발행된 리포트는 force 없이는 덮어쓰지 않는다.
  */
 
 export class WeeklyGenerateError extends Error {
@@ -61,6 +67,47 @@ function candidatesText(all: WeeklyIssue[], picked: WeeklyIssue[]): string {
       return `- ${mark}${a.label} — 리포트 ${a.researchCount}건 · 뉴스 ${a.newsCount}건${search} (점수 ${a.score.toFixed(3)})`;
     });
   return lines.join("\n");
+}
+
+type LlmOutcome = {
+  comments: WeeklyComments;
+  model: string;
+  usage: WeeklyReportDoc["usage"];
+  groundingQueries: string[];
+  groundingSources: { title: string; uri: string }[];
+};
+
+/**
+ * Gemini 코멘트 생성 시도 — 실패는 전부 이 함수 안에서 삼키고 null 을 준다.
+ * 호출부는 null 이면 그냥 rule-based(빈 코멘트)로 렌더링한다.
+ */
+async function tryGenerateComments(
+  snapshot: SnapshotRow[],
+  issues: WeeklyIssue[],
+): Promise<LlmOutcome | null> {
+  if (!isGeminiConfigured()) return null;
+  const monthUsage = await getWeeklyMonthUsage();
+  if (monthUsage.totalCostUsd >= WEEKLY_MONTHLY_BUDGET_USD) {
+    console.warn(
+      `[weekly] 월 예산 초과($${monthUsage.totalCostUsd.toFixed(2)} / $${WEEKLY_MONTHLY_BUDGET_USD}) — Gemini 코멘트 생략`,
+    );
+    return null;
+  }
+  try {
+    const out = await generateWeeklyComments(snapshot, issues);
+    if (!out) return null;
+    await incWeeklyUsage(out.result.usage.costUsd);
+    return {
+      comments: out.comments,
+      model: out.result.model,
+      usage: { ...out.result.usage, calls: 1 },
+      groundingQueries: out.result.groundingQueries,
+      groundingSources: out.result.groundingSources,
+    };
+  } catch (err) {
+    console.warn("[weekly] Gemini 코멘트 생성 실패 — rule-based로 폴백", err);
+    return null;
+  }
 }
 
 async function collect(week: ReportWeek): Promise<{
@@ -111,7 +158,13 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
   };
   const all = await buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length });
   const top = all.slice(0, 3);
-  const rendered = await renderWeeklyReport({ week, snapshot: doc.snapshot, issues: top });
+  const llm = await tryGenerateComments(doc.snapshot, top);
+  const rendered = await renderWeeklyReport({
+    week,
+    snapshot: doc.snapshot,
+    issues: top,
+    comments: llm?.comments,
+  });
 
   const untouched = doc.body === doc.draftBody;
   const next: WeeklyReportDoc = {
@@ -120,6 +173,13 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
     draftBody: rendered,
     body: untouched ? rendered : doc.body,
     candidates: candidatesText(all, top),
+    model: llm?.model ?? doc.model,
+    usage: llm?.usage ?? doc.usage,
+    sources: {
+      ...doc.sources,
+      groundingQueries: llm?.groundingQueries ?? doc.sources.groundingQueries,
+      groundingSources: llm?.groundingSources ?? doc.sources.groundingSources,
+    },
     updatedAt: new Date().toISOString(),
   };
   await saveWeeklyReport(next);
@@ -139,7 +199,8 @@ export async function generateWeeklyReport(
   }
 
   const { snapshot, all, top } = await collect(week);
-  const body = await renderWeeklyReport({ week, snapshot, issues: top });
+  const llm = await tryGenerateComments(snapshot, top);
+  const body = await renderWeeklyReport({ week, snapshot, issues: top, comments: llm?.comments });
 
   const now = new Date().toISOString();
   const doc: WeeklyReportDoc = {
@@ -160,12 +221,12 @@ export async function generateWeeklyReport(
       newsCount: all.reduce((s, a) => s + a.newsCount, 0),
       telegramCount: 0,
       youtubeCount: 0,
-      groundingQueries: [],
-      groundingSources: [],
+      groundingQueries: llm?.groundingQueries ?? [],
+      groundingSources: llm?.groundingSources ?? [],
     },
-    // LLM 을 안 쓰므로 모델·토큰·비용은 0 으로 남긴다(기존 문서와 스키마 호환).
-    model: "rule-based",
-    usage: { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, costUsd: 0, calls: 0 },
+    // Gemini 미설정/예산 초과/실패 시 rule-based 로 폴백(모델·비용 0, 스키마 호환 유지).
+    model: llm?.model ?? "rule-based",
+    usage: llm?.usage ?? { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, costUsd: 0, calls: 0 },
     generatedAt: now,
     publishedAt: null,
     updatedAt: now,
