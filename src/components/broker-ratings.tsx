@@ -256,18 +256,24 @@ export function BrokerRatings({
                       나머지 9개 수치 열은 같은 폭. 모바일에서는 증권사·적중률·
                       순위·상승여력·현종목적중률·현종목수익률 열을 숨긴다
                       (오너 지시) — <col> 자체도 숨겨야 그 만큼의 폭이 빈
-                      공간으로 안 남는다. */}
-                  <col style={{ width: "18%" }} />
+                      공간으로 안 남는다. 남는 5개 열(애널리스트/투자의견/
+                      등급조정/목표주가/최근변경일자)은 desktop 비율(18%+
+                      7.78%*4)을 그대로 쓰면 합이 100%가 안 돼 브라우저가
+                      비례 확대하면서 좁은 열(특히 날짜)이 줄바꿈 없이 넘쳐
+                      테이블 전체가 가로 스크롤됐다(오너 지적, 2026-09) —
+                      모바일 전용 폭을 따로 정의(목표주가·최근변경일자에
+                      여유를 더 줌), sm 이상에서는 기존 desktop 비율 유지. */}
+                  <col className="w-[22%] sm:w-[18%]" />
                   <col className="hidden sm:table-column" style={{ width: "13%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
-                  <col style={{ width: "7.78%" }} />
-                  <col style={{ width: "7.78%" }} />
-                  <col style={{ width: "7.78%" }} />
+                  <col className="w-[15%] sm:w-[7.78%]" />
+                  <col className="w-[13%] sm:w-[7.78%]" />
+                  <col className="w-[26%] sm:w-[7.78%]" />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
-                  <col style={{ width: "7.78%" }} />
+                  <col className="w-[24%] sm:w-[7.78%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-muted-foreground border-b">
@@ -356,7 +362,7 @@ export function BrokerRatings({
                         >
                           {act.text}
                         </td>
-                        <td className="py-1.5 text-right">
+                        <td className="py-1.5 pr-2 text-right">
                           {tdir !== 0 && (
                             <span className="text-muted-foreground mr-1 text-xs">
                               {money(f.priceTargetOld)} →
@@ -381,7 +387,7 @@ export function BrokerRatings({
                         <td className="hidden py-1.5 pr-3 text-right sm:table-cell">
                           <ReturnPct value={f.stockAvgReturn} market={market} />
                         </td>
-                        <td className="text-muted-foreground py-1.5 text-right whitespace-nowrap">
+                        <td className="text-muted-foreground py-1.5 pl-2 text-right sm:whitespace-nowrap">
                           {f.date}
                         </td>
                       </tr>
