@@ -352,6 +352,37 @@ const OVERSEAS_PUBLISHER_BY_DOMAIN: Record<string, string> = {
   "fortune.com": "Fortune",
   "techcrunch.com": "TechCrunch",
   "theguardian.com": "The Guardian",
+  // 종합 일간지·방송사 보강 (오너 지적 2026-09-17 — "뉴욕타임스가 유명 뉴스
+  // 아닌가?"). 목록이 미국 경제지·통신사 위주로 짜여 있어 정작 가장 빠른
+  // 기사를 내는 종합지들이 통째로 빠지고 있었다. 실측: 거시경제 해외뉴스의
+  // 최신이 4.7시간 전이었는데, 버려진 상위 기사가 뉴욕타임스 1.0시간 전·
+  // 워싱턴포스트 1.1시간 전·BBC 3.7시간 전이었다.
+  "nytimes.com": "The New York Times",
+  "washingtonpost.com": "The Washington Post",
+  "bbc.com": "BBC",
+  "bbc.co.uk": "BBC",
+  "economist.com": "The Economist",
+  "politico.com": "Politico",
+  "thehill.com": "The Hill",
+  "abcnews.go.com": "ABC News",
+  "businessinsider.com": "Business Insider",
+  "forbes.com": "Forbes",
+  "time.com": "TIME",
+  "latimes.com": "Los Angeles Times",
+  "aljazeera.com": "Al Jazeera",
+  "scmp.com": "South China Morning Post",
+  // 2차 보강 (오너 지시 2026-09-17 — "유명한데 리스트에 포함 안 된 곳 찾아봐라").
+  // 실제 피드에서 주제 필터는 통과하는데 목록에 없어 버려지던 도메인을 세어
+  // 골랐다. 상위권의 FXStreet·Kitco·FXEmpire·OilPrice 는 특정 상품 전문
+  // 사이트라 시황에 노이즈가 되고, StockTwits·TradingView 는 커뮤니티·도구,
+  // 인도 매체들은 이 화면 범위 밖이라 일부러 뺐다.
+  "morningstar.com": "Morningstar",
+  "global.morningstar.com": "Morningstar",
+  "investopedia.com": "Investopedia",
+  "pbs.org": "PBS",
+  "abcnews.com": "ABC News",
+  "uk.finance.yahoo.com": "Yahoo Finance",
+  "theglobeandmail.com": "The Globe and Mail",
   "variety.com": "Variety",
   "asia.nikkei.com": "Nikkei Asia",
   "japantimes.co.jp": "The Japan Times",
@@ -1205,8 +1236,14 @@ const US_MACRO_GOOGLE_QUERIES = [
  */
 const MACRO_RELEVANT_KO =
   /코스피|코스닥|증시|환율|금리|물가|수출|경기|경제|한국은행|기준금리|달러|주가지수|성장률|무역|수지|인플레이션|연준|투자자/;
+/**
+ * 거시 주제 적합성. 복수형·변형을 놓쳐 정당한 기사가 버려지던 문제를 고쳤다
+ * (실측 2026-09-17: BBC "US interest rates raised for first time in three
+ * years" 가 `interest rate` 단수형만 보는 규칙에 안 걸려 탈락 — 단어 경계
+ * 때문에 복수형이 매칭되지 않는다). 끝에 s? 를 붙이고 자주 쓰는 표현을 보강.
+ */
 const MACRO_RELEVANT_EN =
-  /\b(fed|federal reserve|interest rate|rate hike|rate cut|inflation|cpi|ppi|gdp|jobs report|unemployment|stock market|s&p|nasdaq|dow jones|treasury|yield|recession|economy|economic|tariff|trade war|fomc|wall street|markets?)\b/i;
+  /\b(fed|federal reserve|interest rates?|rate hikes?|rate cuts?|rate rise|inflation|deflation|cpi|ppi|gdp|jobs report|payrolls?|unemployment|stock markets?|equities|s&p|nasdaq|dow jones|treasury|treasuries|yields?|bond markets?|recession|economy|economic|tariffs?|trade war|fomc|wall street|markets?|central banks?|monetary policy|dollar|oil prices?|gold price)\b/i;
 function filterMacroRelevant(raw: RawNewsItem[], re: RegExp): RawNewsItem[] {
   const filtered = raw.filter((it) => re.test(it.title));
   return filtered.length > 0 || raw.length === 0 ? filtered : raw;
