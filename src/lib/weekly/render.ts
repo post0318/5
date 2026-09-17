@@ -3,7 +3,7 @@ import type { SnapshotRow } from "@/lib/db/weekly-reports";
 import { fetchGoogleNewsRss, googleNewsUrl } from "@/lib/news/googleNews";
 import { fetchNaverNewsSearch } from "@/lib/news/naverNews";
 import { snapshotToMarkdownTable } from "./snapshot";
-import { CALENDAR_QUERIES, POLICY_QUERIES } from "./topics";
+import { CALENDAR_QUERIES } from "./topics";
 import type { WeeklyComments } from "./comment";
 import type { WeeklyIssue } from "./issues";
 import type { ReportWeek } from "./week";
@@ -167,10 +167,10 @@ export async function renderWeeklyReport(opts: {
   const issueComments = comments?.issues ?? new Map<string, string>();
   const sinceMs = Date.parse(`${week.weekStart}T00:00:00+09:00`);
   const untilMs = Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000;
-  const [policy, calendar] = await Promise.all([
-    queryBlock(POLICY_QUERIES, sinceMs, untilMs, 2),
-    queryBlock(CALENDAR_QUERIES, sinceMs, untilMs, 3),
-  ]);
+  // 금리정책은 더 이상 기사 표를 안 쓴다(오너 지시 2026-09-18 — "표
+  // 필요없다구!!") — policySummary(종합 요약 문단)만 보여주고, 없으면
+  // 짧은 안내만 남긴다. 다음 주 일정만 캘린더가 비었을 때 기사 표로 폴백.
+  const calendar = await queryBlock(CALENDAR_QUERIES, sinceMs, untilMs, 3);
 
   const parts: string[] = [];
   parts.push(`# 주간 거시·시황 요약 (${week.weekStart} ~ ${week.weekEnd})`);
@@ -202,13 +202,10 @@ export async function renderWeeklyReport(opts: {
   }
   parts.push("## 4. 금리정책");
   parts.push("");
-  // Gemini 가 그라운딩으로 종합한 정책 요약(오너 지시 2026-09-18 — "네이버
-  // AI 요약도 이 정도는 한다") — 그라운딩 실패 시 null, 기사 표만 보여줌.
-  if (comments?.policySummary) {
-    parts.push(comments.policySummary);
-    parts.push("");
-  }
-  parts.push(policy || "이번 주 관련 기사 없음");
+  // Gemini 가 그라운딩으로 종합한 정책 요약만 보여준다 — 기사 표는 더 이상
+  // 안 쓴다(오너 지시 2026-09-18 — "표 필요없다구!!"). 그라운딩 실패 시
+  // 표로 폴백하지 않고 짧은 안내만 남긴다.
+  parts.push(comments?.policySummary || "이번 주 통화정책 요약을 확인하지 못했습니다.");
   parts.push("");
   parts.push("## 5. 다음 주 주시 일정");
   parts.push("");
