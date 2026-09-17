@@ -372,7 +372,13 @@ async function fetchGoogleOverseasNews(
   market: MarketId,
   symbol: string,
   query: string,
-  opts?: { cutoffMs?: number; limit?: number; requireWhitelist?: boolean },
+  opts?: {
+    cutoffMs?: number;
+    limit?: number;
+    requireWhitelist?: boolean;
+    /** 주면 그 회사가 직접 운영하는 페이지(보도자료)를 제외한다 */
+    companyName?: string | null;
+  },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
   const url = googleNewsUrl(`search?q=${encodeURIComponent(query)}`, "hl=en-US&gl=US&ceid=US:en");
   const raw = await fetchGoogleNewsRss(url);
@@ -386,6 +392,8 @@ async function fetchGoogleOverseasNews(
     // 제목을 sl="en" 으로 잘못 번역 시도하면 원문 그대로 노출되기도 해서
     // 여기서 원천 차단한다. 판정 근거는 isKoreanNewsSource() 주석 참고.
     if (isKoreanNewsSource(n.sourceDomain, n.source)) continue;
+    // 회사 자체 홍보 페이지(보도자료)는 언론 보도가 아니라 제외
+    if (isSelfPromoSource(n.sourceDomain, opts?.companyName)) continue;
     const mapped = n.sourceDomain ? OVERSEAS_PUBLISHER_BY_DOMAIN[n.sourceDomain] : undefined;
     // 종목뉴스 탭은 LLM 관련성 판정이 신뢰도까지 함께 보므로 화이트리스트 밖
     // 매체도 표시용 이름을 그대로 써서 통과시킨다(requireWhitelist 기본 false).
@@ -744,6 +752,45 @@ function overseasNameMatcher(shortName: string, symbol: string): (hay: string) =
   };
 }
 
+/**
+ * 회사가 직접 운영하는 페이지인지 — 해외뉴스에서 제외한다(오너 지시 2026-09:
+ * "해외뉴스에 자체홍보페이지는 뺀다"). 실측: 한화에어로스페이스 해외뉴스에
+ * `hanwha.com`("Hanwha Group") 기사가 12건 들어와 있었다. 언론사가 아니라
+ * 회사 보도자료 페이지다.
+ *
+ * 목록을 만들지 않고 회사명과 도메인을 맞춰 본다 — 유니버스에 어떤 종목이
+ * 들어와도 따로 등록할 필요가 없다. 도메인의 대표 라벨(`ir.hanwha.com` →
+ * `hanwha`)이 회사명 전체 또는 고유한 낱말 하나와 같으면 자사 도메인으로 본다.
+ * 흔한 낱말(Global·Energy·Korea 등 GENERIC_NAME_WORDS)과 4자 미만은 다른
+ * 회사·매체와 겹칠 수 있어 제외한다.
+ */
+function domainBase(domain: string): string {
+  const parts = domain.toLowerCase().replace(/^www\./, "").split(".");
+  if (parts.length < 2) return parts[0] ?? "";
+  // co.kr / or.kr 처럼 2단계 접미사면 라벨을 하나 더 뗀다
+  const cut = parts.length >= 3 && ["co", "or", "ne", "go", "ac"].includes(parts[parts.length - 2]) ? 2 : 1;
+  return parts[parts.length - 1 - cut] ?? "";
+}
+
+export function isSelfPromoSource(
+  domain: string | null | undefined,
+  companyName: string | null | undefined,
+): boolean {
+  if (!domain || !companyName) return false;
+  const base = domainBase(domain);
+  if (base.length < 4) return false;
+
+  const words = stripLegalSuffix(companyName)
+    .split(/[\s,.()\-]+/)
+    .map(normalizeForMatch)
+    .filter(Boolean);
+  if (words.length === 0) return false;
+
+  const full = words.join("");
+  if (full && (base === full || base.startsWith(full))) return true;
+  return words.some((w) => w.length >= 5 && !GENERIC_NAME_WORDS.has(w) && base === w);
+}
+
 function overseasQuery(market: MarketId, symbol: string, companyName: string): string {
   if (market !== "kr") return cleanEdgarName(companyName);
   try {
@@ -985,14 +1032,22 @@ export async function fetchStockNewsBySide(
       newsCount: 30,
       requireWhitelist: false,
     }),
-    fetchGoogleOverseasNews(market, symbol, oQuery, { cutoffMs: ONE_WEEK_MS, limit: 30 }).catch(() => []),
+    fetchGoogleOverseasNews(market, symbol, oQuery, {
+      cutoffMs: ONE_WEEK_MS,
+      limit: 30,
+      companyName: oQuery,
+    }).catch(() => []),
     // EDGAR 정리명이 "AMAZON COM"처럼 검색어로 어색하면 Google 결과가 빈약하다(실측:
     // "AMAZON COM" 10건 vs "Amazon" 30건, AP·로이터·WSJ 는 후자에만). 첫 단어가
     // 고유하면 그 단어로 한 번 더 조회해 합친다(URL 중복은 아래서 제거).
     (() => {
       const first = isKr ? null : distinctiveFirstWord(oQuery);
       return first && first.toLowerCase() !== oQuery.toLowerCase()
-        ? fetchGoogleOverseasNews(market, symbol, first, { cutoffMs: ONE_WEEK_MS, limit: 30 }).catch(() => [])
+        ? fetchGoogleOverseasNews(market, symbol, first, {
+            cutoffMs: ONE_WEEK_MS,
+            limit: 30,
+            companyName: oQuery,
+          }).catch(() => [])
         : Promise.resolve([] as RawNewsItem[]);
     })(),
   ]);
