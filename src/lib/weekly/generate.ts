@@ -10,6 +10,7 @@ import {
   type WeeklyReportDoc,
 } from "@/lib/db/weekly-reports";
 import { generateWeeklyComments, type WeeklyComments } from "./comment";
+import { enrichTopIssues } from "./evidence";
 import { isGeminiConfigured } from "./gemini";
 import { buildWeeklyIssues, type WeeklyIssue } from "./issues";
 import { renderWeeklyReport } from "./render";
@@ -24,6 +25,8 @@ import { resolveReportWeek, type ReportWeek } from "./week";
  *  2) 시세 스냅샷 (기존 코드 — LLM 과 무관)
  *  3) 핵심 이슈 3개 = 증권사 리포트 빈도 + 그 주 뉴스 건수
  *     (+ 네이버 검색어 트렌드, 활성화된 경우)
+ *  3.5) 뽑힌 3개에 한해 실적 서프라이즈·FRED 공식 지표 근거 보강
+ *     (`evidence.ts`, 오너 지시 2026-09-18 "핵심 이슈 근거로만 추가")
  *  4) 금리정책·다음 주 일정 = 미리 정한 검색어의 그 주 기사 목록
  *  5) **해석 코멘트** = Gemini(`comment.ts`, 수집→해석→검증 3단계, 오너 지시
  *     2026-09 "llm을 부활한다") — 설정 없음/월 예산(`WEEKLY_MONTHLY_BUDGET_USD`)
@@ -124,7 +127,7 @@ async function collect(week: ReportWeek): Promise<{
   return {
     snapshot: fillFromPrevious(rawSnapshot, prevSnapshot),
     all,
-    top: all.slice(0, 3),
+    top: await enrichTopIssues(all.slice(0, 3)),
   };
 }
 
@@ -157,7 +160,7 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
     today: new Date().toISOString().slice(0, 10),
   };
   const all = await buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length });
-  const top = all.slice(0, 3);
+  const top = await enrichTopIssues(all.slice(0, 3));
   const llm = await tryGenerateComments(doc.snapshot, top);
   const rendered = await renderWeeklyReport({
     week,

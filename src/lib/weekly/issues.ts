@@ -39,6 +39,28 @@ export interface IssueEvidenceNews {
   excerpt?: string;
 }
 
+/** 빅테크 실적 서프라이즈 — "핵심 이슈 근거로만"(오너 지시 2026-09-18,
+ * `evidence.ts` 참고). 기업분석 자체는 범위 밖이라 최근 실적 1건만 싣는다. */
+export interface IssueEvidenceEarnings {
+  ticker: string;
+  /** 분기 종료일(YYYY-MM-DD) 또는 라벨 */
+  period: string;
+  epsActual: number | null;
+  epsEstimate: number | null;
+  surprisePct: number | null;
+}
+
+/** FRED 공식 거시지표(전기 대비) — "핵심 이슈 근거로만"(오너 지시 2026-09-18). */
+export interface IssueEvidenceMetric {
+  label: string;
+  date: string;
+  current: number;
+  previous: number;
+  change: number;
+  unit: string;
+  source: string;
+}
+
 export interface WeeklyIssue {
   label: string;
   /** 0~1 가중 합산 점수 */
@@ -49,6 +71,9 @@ export interface WeeklyIssue {
   searchInterest: number | null;
   reports: IssueEvidenceReport[];
   news: IssueEvidenceNews[];
+  /** 상위 3개로 뽑힌 뒤에만 채워진다(`evidence.ts` enrichTopIssues) */
+  earnings?: IssueEvidenceEarnings[];
+  metrics?: IssueEvidenceMetric[];
 }
 
 /** 리포트 제목·업종명·발췌에서 주제별 등장 건수와 근거를 모은다. */

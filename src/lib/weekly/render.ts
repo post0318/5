@@ -70,6 +70,22 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
       lines.push(`  - [${n.title}](${n.url}) — ${n.source} ${n.publishedAt.slice(0, 10)}`);
     }
   }
+  if (issue.metrics && issue.metrics.length > 0) {
+    lines.push("- 공식 지표(FRED)");
+    for (const m of issue.metrics) {
+      const chg = `${m.change >= 0 ? "+" : ""}${m.change}`;
+      lines.push(`  - ${m.label} ${m.current}${m.unit} (전기 대비 ${chg}${m.unit}, ${m.date})`);
+    }
+  }
+  if (issue.earnings && issue.earnings.length > 0) {
+    lines.push("- 최근 실적 서프라이즈");
+    for (const e of issue.earnings) {
+      const s = e.surprisePct != null ? `${e.surprisePct >= 0 ? "+" : ""}${e.surprisePct}%` : "-";
+      lines.push(
+        `  - ${e.ticker} EPS 서프라이즈 ${s} (실제 ${e.epsActual ?? "-"} / 추정 ${e.epsEstimate ?? "-"}, ${e.period})`,
+      );
+    }
+  }
   lines.push(`- 코멘트: ${comment}`);
   return lines.join("\n");
 }

@@ -37,7 +37,9 @@ const SYSTEM_PROMPT = `# 역할
   변동폭 bp). value/pct/diffBp 가 null 이면 비교할 값이 없다는 뜻이다.
 - issues: 이번 주 핵심 이슈 후보. reports(증권사 리포트 제목)·news(뉴스
   제목, 일부는 excerpt=기사 요약문도 있음)가 근거로 들어있다. excerpt가
-  있으면 제목보다 구체적인 근거이니 우선 참고한다.
+  있으면 제목보다 구체적인 근거이니 우선 참고한다. 일부 이슈엔 earnings
+  (빅테크 최근 실적 EPS 서프라이즈)·metrics(FRED 공식 거시지표, 전기 대비
+  변화)도 있다 — 있으면 우선 인용할 만한 확정 수치다.
 
 # 작성 원칙 (반드시 지킬 것)
 1. **제공된 JSON에 있는 수치만 인용한다.** 새 수치·통계·퍼센트·bp를 추측해서
@@ -71,6 +73,8 @@ interface CommentPayload {
     searchInterest: number | null;
     reports: { date: string; source: string; stockName: string; title: string }[];
     news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+    earnings?: { ticker: string; period: string; epsActual: number | null; epsEstimate: number | null; surprisePct: number | null }[];
+    metrics?: { label: string; date: string; current: number; previous: number; change: number; unit: string }[];
   }[];
 }
 
@@ -98,6 +102,21 @@ function buildPayload(snapshot: SnapshotRow[], issues: WeeklyIssue[]): CommentPa
         excerpt: n.excerpt,
         source: n.source,
         publishedAt: n.publishedAt,
+      })),
+      earnings: i.earnings?.map((e) => ({
+        ticker: e.ticker,
+        period: e.period,
+        epsActual: e.epsActual,
+        epsEstimate: e.epsEstimate,
+        surprisePct: e.surprisePct,
+      })),
+      metrics: i.metrics?.map((m) => ({
+        label: m.label,
+        date: m.date,
+        current: m.current,
+        previous: m.previous,
+        change: m.change,
+        unit: m.unit,
       })),
     })),
   };
@@ -133,6 +152,14 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
   for (const i of payload.issues) {
     nums.push(i.researchCount, i.newsCount);
     if (i.searchInterest != null) nums.push(i.searchInterest);
+    for (const e of i.earnings ?? []) {
+      if (e.surprisePct != null) nums.push(e.surprisePct);
+      if (e.epsActual != null) nums.push(e.epsActual);
+      if (e.epsEstimate != null) nums.push(e.epsEstimate);
+    }
+    for (const m of i.metrics ?? []) {
+      nums.push(m.current, m.previous, m.change);
+    }
   }
   return nums;
 }
