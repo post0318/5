@@ -102,6 +102,7 @@ const ALLOWED_PUBLISHERS = new Set(
     "Seeking Alpha",
     "Benzinga",
     "Zacks",
+    "Investing.com", // 오너 요청(2026-09) — Google 뉴스 경유로만 나옴(야후엔 없음)
     "CNN Business", // 오너 요청(2026-09) — Google 뉴스 경유로만 나옴(야후엔 없음)
     // 미국 — 메이저 종합·테크 매체(2026-09-15 추가, 오너 승인): AMZN 후보 43건
     // 실측에서 탈락 33건이 전부 "목록 밖" 사유였고 그중 상당수가 아래 매체였음.
@@ -340,6 +341,7 @@ const OVERSEAS_PUBLISHER_BY_DOMAIN: Record<string, string> = {
   "seekingalpha.com": "Seeking Alpha",
   "benzinga.com": "Benzinga",
   "zacks.com": "Zacks",
+  "investing.com": "Investing.com",
   "cnn.com": "CNN Business",
   "edition.cnn.com": "CNN Business",
   "money.cnn.com": "CNN Business",
