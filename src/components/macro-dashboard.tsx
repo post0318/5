@@ -1772,6 +1772,11 @@ const HIDE_NASDAQ_OVERLAY = new Set(["DFEDTARU", "M2SL"]);
 
 function IndicatorCard({ ind, nasdaq: nasdaqRaw }: { ind: Indicator; nasdaq: Indicator | null }) {
   const nasdaq = HIDE_NASDAQ_OVERLAY.has(ind.id) ? null : nasdaqRaw;
+  // Radix Tooltip은 hover/focus로만 열려 모바일 탭으로는 안 뜬다(오너 지적,
+  // 2026-09 — 데스크톱만 설명이 보이던 문제). open을 직접 제어해 배지 탭으로도
+  // 토글되게 한다 — 데스크톱의 기존 hover 동작은 그대로(Radix가 내부적으로
+  // 여전히 onOpenChange를 호출) 유지된다.
+  const [tipOpen, setTipOpen] = useState(false);
   // 나스닥을 같은 기간으로 정규화해 오버레이
   const merged = useMemo(() => {
     // 나스닥은 일간, 지표는 월간일 수 있어 날짜가 정확히 안 맞는다 →
@@ -1810,11 +1815,12 @@ function IndicatorCard({ ind, nasdaq: nasdaqRaw }: { ind: Indicator; nasdaq: Ind
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-sm leading-snug">{ind.name}</CardTitle>
-          <UITooltip>
+          <UITooltip open={tipOpen} onOpenChange={setTipOpen}>
             <UITooltipTrigger asChild>
               <Badge
                 variant="outline"
                 className={cn("shrink-0 cursor-help gap-1", VERDICT_CLASS[ind.verdict])}
+                onClick={() => setTipOpen((o) => !o)}
               >
                 <DirIcon dir={ind.direction6m} />
                 {VERDICT_LABEL[ind.verdict]}
