@@ -37,10 +37,12 @@ const IMPORT_URL = (
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
-// 실행이 밀린 사이 10건 넘게 올라오면 중간 글이 영구 누락되던 문제(실측:
-// 63708~63713 6건 유실, 2026-09) 때문에 넉넉히 가져온다 — _id 로 upsert 하므로
-// 이미 있는 글은 덮어쓸 뿐 중복되지 않는다.
+// 한 번에 받아 오는 최대 건수. 아래 이어받기가 이 값을 넘어가는 공백도
+// 페이지를 넘겨가며 채우므로, 이건 "한 요청당" 상한일 뿐이다.
 const LIMIT_PER_CHANNEL = 50;
+// 이어받기 안전장치 — 채널당 이만큼 받으면 멈춘다(첫 실행이거나 커서가
+// 아주 오래됐을 때 무한정 거슬러 올라가지 않게). 보관이 90일이라 넉넉하다.
+const MAX_CATCHUP_PER_CHANNEL = 500;
 
 function parseTelegramChannels(mdText) {
   const blocks = mdText.split(/^##[ \t]+/m).slice(1);
@@ -59,6 +61,52 @@ function parseTelegramChannels(mdText) {
 function usernameFromTelegramUrl(url) {
   const m = url.match(/t\.me\/([\w.]+)/i);
   return m ? m[1] : null;
+}
+
+/**
+ * 채널별로 이미 받아 둔 마지막 글 번호를 서버에서 받아 온다. 실패하면 빈
+ * 객체 — 그 경우 예전처럼 최신 LIMIT_PER_CHANNEL 건만 가져간다(수집이 아예
+ * 멈추는 것보다 낫다).
+ */
+async function fetchCursors() {
+  const headers = {};
+  if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
+  try {
+    const res = await fetch(IMPORT_URL, { headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    return body.cursors ?? {};
+  } catch (err) {
+    console.log("커서 조회 실패 — 최신분만 받습니다:", err.message ?? err);
+    return {};
+  }
+}
+
+/**
+ * `minId` 뒤의 글을 페이지를 넘겨가며 전부 받는다. gramjs 의 `getMessages` 는
+ * 최신부터 내려주므로, 가장 오래된 글 번호를 `maxId` 로 넘겨 더 과거로
+ * 내려가며 `minId` 에 닿을 때까지 반복한다.
+ *
+ * `minId` 가 없으면(첫 수집) 최신 한 페이지만 받는다 — 채널 전체를 처음부터
+ * 긁지 않기 위해서다.
+ */
+async function fetchSince(client, entity, minId) {
+  const all = [];
+  let maxId = 0; // 0 = 제한 없음(최신부터)
+  for (let page = 0; page < Math.ceil(MAX_CATCHUP_PER_CHANNEL / LIMIT_PER_CHANNEL); page++) {
+    const opts = { limit: LIMIT_PER_CHANNEL };
+    if (maxId) opts.maxId = maxId;
+    if (minId) opts.minId = minId;
+    const batch = await client.getMessages(entity, opts);
+    if (batch.length === 0) break;
+    all.push(...batch);
+    if (!minId) break; // 첫 수집 — 최신 한 페이지로 충분
+    if (batch.length < LIMIT_PER_CHANNEL) break; // 공백을 다 채웠다
+    maxId = Math.min(...batch.map((m) => m.id));
+    if (maxId <= minId + 1) break;
+  }
+  return all;
 }
 
 async function postItems(channelUsername, channelTitle, items) {
@@ -98,6 +146,13 @@ async function main() {
   });
   await client.connect();
 
+  // 채널별 마지막 글 번호 — 이 뒤부터만 이어받는다
+  const cursors = await fetchCursors();
+  const seen = Object.entries(cursors)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(", ");
+  console.log(seen ? `커서: ${seen}` : "커서 없음 — 최신분만 받습니다");
+
   for (const ch of channels) {
     const username = usernameFromTelegramUrl(ch.url);
     if (!username) {
@@ -106,7 +161,8 @@ async function main() {
     }
     try {
       const entity = await client.getEntity(username);
-      const messages = await client.getMessages(entity, { limit: LIMIT_PER_CHANNEL });
+      const minId = cursors[username] ?? 0;
+      const messages = await fetchSince(client, entity, minId);
       const items = messages
         .filter((m) => m.message && m.message.trim())
         .map((m) => ({
@@ -119,7 +175,12 @@ async function main() {
         continue;
       }
       const result = await postItems(username, entity.title ?? ch.name, items);
-      console.log(`[${ch.name}] @${username} — ${items.length}건 전송, 결과:`, result);
+      console.log(
+        `[${ch.name}] @${username} — ${items.length}건 전송` +
+          (minId ? ` (글 ${minId} 이후 이어받기)` : " (첫 수집)"),
+        "결과:",
+        result,
+      );
     } catch (err) {
       console.error(`[${ch.name}] 실패:`, err.message ?? err);
     }

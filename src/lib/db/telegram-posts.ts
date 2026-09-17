@@ -45,6 +45,30 @@ export async function upsertTelegramPosts(docs: TelegramPostDoc[]): Promise<{ up
   return { upserted, pruned: del.deletedCount ?? 0 };
 }
 
+/**
+ * 채널별로 이미 받아 둔 **가장 큰 글 번호**. 수집 스크립트가 그 뒤부터만
+ * 이어받도록 커서로 쓴다(오너 지시 2026-09-17 — 실행이 밀린 사이 최신 N건을
+ * 넘어선 글이 영구 누락되던 문제).
+ *
+ * `_id` 가 `${channelUsername}:${messageId}` 라 messageId 를 따로 저장하지
+ * 않는다 — _id 뒤쪽을 잘라 숫자로 비교한다. 문자열 최대값은 자릿수가 다르면
+ * 틀리므로(예: "9" > "10") 반드시 숫자로 변환해 비교한다.
+ */
+export async function getTelegramCursors(): Promise<Record<string, number>> {
+  const col = await telegramPostsCol();
+  const rows = await col
+    .find({}, { projection: { _id: 1, channelUsername: 1 } })
+    .toArray();
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    const id = Number(String(r._id).split(":").pop());
+    if (!Number.isFinite(id)) continue;
+    const ch = r.channelUsername;
+    if (!out[ch] || id > out[ch]) out[ch] = id;
+  }
+  return out;
+}
+
 export async function getTelegramPostsByChannel(
   channelUsername: string,
   limit = 10,

@@ -1,6 +1,10 @@
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
-import { upsertTelegramPosts, type TelegramPostDoc } from "@/lib/db/telegram-posts";
+import {
+  getTelegramCursors,
+  upsertTelegramPosts,
+  type TelegramPostDoc,
+} from "@/lib/db/telegram-posts";
 
 export const maxDuration = 60;
 
@@ -22,6 +26,23 @@ interface RawItem {
   messageId: string;
   text: string;
   publishedAt: string;
+}
+
+/**
+ * 채널별로 이미 받아 둔 마지막 글 번호. 수집 스크립트가 이걸 먼저 받아
+ * 그 뒤부터만 이어받는다 — 실행이 밀려도 밀린 구간을 다 채운다.
+ */
+export async function GET(req: Request) {
+  try {
+    if (!authorized(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
+    if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });
+    return ok(
+      { cursors: await getTelegramCursors() },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  } catch (err) {
+    return jsonError(err);
+  }
 }
 
 export async function POST(req: Request) {
