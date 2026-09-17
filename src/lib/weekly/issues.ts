@@ -1,6 +1,7 @@
 import "server-only";
 import { shinhanResearchCol } from "@/lib/db/shinhan-research";
 import { fetchGoogleNewsRss, googleNewsUrl } from "@/lib/news/googleNews";
+import { fetchNaverNewsSearch } from "@/lib/news/naverNews";
 import { WEEKLY_TOPICS, type WeeklyTopic } from "./topics";
 import type { ReportWeek } from "./week";
 
@@ -34,6 +35,8 @@ export interface IssueEvidenceNews {
   source: string;
   url: string;
   publishedAt: string;
+  /** 네이버 뉴스 검색 API 의 요약문(있을 때만) — 구글 뉴스 RSS 항목은 없음 */
+  excerpt?: string;
 }
 
 export interface WeeklyIssue {
@@ -95,10 +98,16 @@ async function countFromResearch(
 }
 
 /**
- * 주제별 그 주 뉴스. 네이버 뉴스 검색(API 허브)은 날짜 범위를 못 걸어 전체
- * 누적 건수만 주므로(실측 — "FOMC 금리" 38만 건) 주간 신호로 쓸 수 없다.
- * 대신 Google 뉴스 RSS 의 `when:7d` 로 그 주 기사만 받아 센다. 공개 피드이고
- * 제목·출처·링크만 쓴다(본문 미수집).
+ * 주제별 그 주 뉴스 — 국내 주제는 네이버 뉴스 검색만, 해외 주제는 네이버+
+ * 구글 뉴스 RSS 를 합친다(`WeeklyTopic.domestic`, 오너 지시 2026-09 —
+ * "해외는 구글과 네이버를 같이쓰고 국내는 대체"). 네이버는 요약문
+ * (`excerpt`)이 있어 제목만 주는 구글보다 Gemini 코멘트 근거가 구체적이다.
+ *
+ * 네이버 뉴스 검색(API 허브)은 날짜 범위를 못 걸어 전체 누적 건수만 주므로
+ * (실측 — "FOMC 금리" 38만 건) `display` 로 받은 최신순 결과를 날짜로 직접
+ * 걸러야 주간 신호가 된다. 구글은 `when:7d` 로 서버가 이미 걸러 준다.
+ * 두 소스가 같은 기사를 각자 다른 매체로 다시 걸어주는 경우가 있어 제목
+ * 기준으로 가볍게 중복 제거한다(네이버를 먼저 둬 요약문이 있는 쪽을 우선).
  */
 async function countFromNews(
   week: ReportWeek,
@@ -108,29 +117,44 @@ async function countFromNews(
 
   const results = await Promise.all(
     WEEKLY_TOPICS.map(async (t) => {
-      const url = googleNewsUrl(
-        `search?q=${encodeURIComponent(t.newsQuery)}+when:7d`,
-        "hl=ko&gl=KR&ceid=KR:ko",
-      );
-      const items = await fetchGoogleNewsRss(url).catch(() => []);
+      const naverP = fetchNaverNewsSearch(t.newsQuery, { display: 20 }).catch(() => []);
+      const googleP = t.domestic
+        ? Promise.resolve([])
+        : fetchGoogleNewsRss(
+            googleNewsUrl(`search?q=${encodeURIComponent(t.newsQuery)}+when:7d`, "hl=ko&gl=KR&ceid=KR:ko"),
+          ).catch(() => []);
+      const [naver, google] = await Promise.all([naverP, googleP]);
+      const items: IssueEvidenceNews[] = [
+        ...naver.map((n) => ({
+          title: n.title,
+          source: n.source,
+          url: n.url,
+          publishedAt: n.publishedAt,
+          excerpt: n.excerpt ?? undefined,
+        })),
+        ...google.map((g) => ({
+          title: g.title,
+          source: g.source,
+          url: g.link,
+          publishedAt: g.publishedAt,
+        })),
+      ];
       return { topic: t, items };
     }),
   );
 
   for (const { topic, items } of results) {
-    const fresh = items.filter((i) => {
+    const seen = new Set<string>();
+    const fresh: IssueEvidenceNews[] = [];
+    for (const i of items) {
       const ms = Date.parse(i.publishedAt);
-      return !Number.isFinite(ms) || ms >= sinceMs;
-    });
-    out.set(topic.label, {
-      count: fresh.length,
-      news: fresh.slice(0, 5).map((i) => ({
-        title: i.title,
-        source: i.source,
-        url: i.link,
-        publishedAt: i.publishedAt,
-      })),
-    });
+      if (Number.isFinite(ms) && ms < sinceMs) continue;
+      const key = i.title.replace(/\s+/g, "").toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fresh.push(i);
+    }
+    out.set(topic.label, { count: fresh.length, news: fresh.slice(0, 5) });
   }
   return out;
 }

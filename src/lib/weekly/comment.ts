@@ -36,7 +36,8 @@ const SYSTEM_PROMPT = `# 역할
 - snapshot: 이번 주 자산별 종가·주간 변동(pct=주간 변동률%, diffBp=금리류
   변동폭 bp). value/pct/diffBp 가 null 이면 비교할 값이 없다는 뜻이다.
 - issues: 이번 주 핵심 이슈 후보. reports(증권사 리포트 제목)·news(뉴스
-  제목)가 근거로 들어있다.
+  제목, 일부는 excerpt=기사 요약문도 있음)가 근거로 들어있다. excerpt가
+  있으면 제목보다 구체적인 근거이니 우선 참고한다.
 
 # 작성 원칙 (반드시 지킬 것)
 1. **제공된 JSON에 있는 수치만 인용한다.** 새 수치·통계·퍼센트·bp를 추측해서
@@ -69,7 +70,7 @@ interface CommentPayload {
     newsCount: number;
     searchInterest: number | null;
     reports: { date: string; source: string; stockName: string; title: string }[];
-    news: { title: string; source: string; publishedAt: string }[];
+    news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
   }[];
 }
 
@@ -92,7 +93,12 @@ function buildPayload(snapshot: SnapshotRow[], issues: WeeklyIssue[]): CommentPa
       newsCount: i.newsCount,
       searchInterest: i.searchInterest,
       reports: i.reports.map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
-      news: i.news.map((n) => ({ title: n.title, source: n.source, publishedAt: n.publishedAt })),
+      news: i.news.map((n) => ({
+        title: n.title,
+        excerpt: n.excerpt,
+        source: n.source,
+        publishedAt: n.publishedAt,
+      })),
     })),
   };
 }
