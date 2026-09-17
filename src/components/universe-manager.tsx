@@ -19,6 +19,14 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
 import { useAppAuth } from "@/components/auth/app-auth";
 
@@ -54,18 +62,21 @@ export function UniverseManager() {
     <div className="space-y-6">
       <h1 className="text-xl font-semibold">유니버스 관리</h1>
       <LegacyClaimBanner onClaimed={invalidate} />
-      <CopyFromAccount onCopied={invalidate} />
 
       <Tabs defaultValue="single">
         <TabsList>
           <TabsTrigger value="single">개별 등록</TabsTrigger>
           <TabsTrigger value="bulk">일괄 업로드</TabsTrigger>
+          <TabsTrigger value="copy">가져오기</TabsTrigger>
         </TabsList>
         <TabsContent value="single" className="pt-4">
           <SingleForm onDone={invalidate} />
         </TabsContent>
         <TabsContent value="bulk" className="pt-4">
           <BulkForm onDone={invalidate} />
+        </TabsContent>
+        <TabsContent value="copy" className="pt-4">
+          <CopyFromAccount onCopied={invalidate} />
         </TabsContent>
       </Tabs>
 
@@ -476,6 +487,7 @@ function CopyFromAccount({ onCopied }: { onCopied: () => void }) {
   const auth = useAppAuth();
   const qc = useQueryClient();
   const [from, setFrom] = useState<string>("");
+  const [open, setOpen] = useState(false);
 
   const accounts = useQuery({
     queryKey: ["universe-copy-sources"],
@@ -499,40 +511,87 @@ function CopyFromAccount({ onCopied }: { onCopied: () => void }) {
           (r.skipped > 0 ? ` 이미 갖고 있던 ${r.skipped}개는 건너뛰었습니다.` : ""),
       );
       qc.invalidateQueries({ queryKey: ["universe-copy-sources"] });
+      setOpen(false);
+      setFrom("");
       onCopied();
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
   const list = accounts.data?.accounts ?? [];
-  if (list.length === 0) return null;
+  const picked = list.find((a) => a.id === from);
 
   return (
-    <Card>
-      <CardContent className="flex flex-wrap items-center gap-3 p-4 text-sm">
-        <div className="min-w-[14rem] flex-1">
-          <p className="font-medium">다른 계정 유니버스 가져오기</p>
-          <p className="text-muted-foreground mt-0.5 text-xs">
-            고른 계정의 종목을 내 유니버스로 복제합니다. 가져온 뒤에는 각자 따로
-            관리되고, 이미 갖고 있는 종목은 건너뜁니다.
-          </p>
-        </div>
-        <Select value={from} onValueChange={setFrom}>
-          <SelectTrigger className="w-[16rem]">
-            <SelectValue placeholder="가져올 계정 선택" />
-          </SelectTrigger>
-          <SelectContent>
-            {list.map((a) => (
-              <SelectItem key={a.id} value={a.id}>
-                {a.email} ({a.universeCount}종목)
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button size="sm" disabled={!from || copy.isPending} onClick={() => copy.mutate()}>
-          {copy.isPending ? "가져오는 중…" : "가져오기"}
-        </Button>
-      </CardContent>
-    </Card>
+    <div className="space-y-3">
+      <Button size="sm" onClick={() => setOpen(true)}>
+        가져오기
+      </Button>
+      <p className="text-muted-foreground text-sm">
+        다른 계정의 종목을 내 유니버스로 복제합니다. 가져온 뒤에는 각자 따로
+        관리되고(공유가 아닙니다), 이미 갖고 있는 종목은 건너뜁니다.
+      </p>
+
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          setOpen(v);
+          if (!v) setFrom("");
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>다른 계정 유니버스 가져오기</DialogTitle>
+          </DialogHeader>
+
+          {accounts.isLoading && (
+            <p className="text-muted-foreground text-sm">계정 목록을 불러오는 중…</p>
+          )}
+          {accounts.error && (
+            <p className="text-destructive text-sm">{(accounts.error as Error).message}</p>
+          )}
+          {!accounts.isLoading && !accounts.error && list.length === 0 && (
+            <p className="text-muted-foreground text-sm">
+              가져올 수 있는 계정이 없습니다. 종목을 담아 둔 다른 계정이 있어야
+              보입니다.
+            </p>
+          )}
+
+          {list.length > 0 && (
+            <Select value={from} onValueChange={setFrom}>
+              <SelectTrigger>
+                <SelectValue placeholder="가져올 계정 선택" />
+              </SelectTrigger>
+              <SelectContent>
+                {list.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.email} ({a.universeCount}종목)
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {list.length > 0 && (
+            <DialogDescription>
+              고른 계정의 종목이 내 유니버스로 복제됩니다. 이미 갖고 있는 종목은
+              건너뛰므로 내 그룹명·메모는 그대로 남습니다.
+            </DialogDescription>
+          )}
+
+          <DialogFooter>
+            <Button
+              disabled={!from || copy.isPending}
+              onClick={() => copy.mutate()}
+            >
+              {copy.isPending
+                ? "가져오는 중…"
+                : picked
+                  ? `${picked.universeCount}종목 가져오기`
+                  : "가져오기"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
