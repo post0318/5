@@ -131,16 +131,33 @@ async function getSubmissions(cik: string): Promise<SubmissionsResponse> {
 // 프로세스 메모리에 짧게 캐시한다 (본격적으로는 배치→DB, prd.md §4.5).
 const factsCache = new Map<string, { at: number; data: CompanyFacts }>();
 const FACTS_TTL = 1000 * 60 * 60 * 6;
+// getStockOverview 는 getFinancials("annual")·getTtm 을 Promise.all 로 동시에
+// 부르는데, 둘 다 같은 CIK 의 companyfacts 가 필요하다 — 캐시는 fetch 가 끝나야
+// 채워지므로 둘 다 "미스"로 보고 SEC 에 같은 URL 을 중복 요청했다(실측 확인,
+// 2026-09 — 유니버스 통합 뷰의 미국 종목 전원에 경고 배지가 뜬 원인. 새로고침이
+// 종목당 20개 동시성으로 도는데, 이 중복까지 겹쳐 SEC 응답이 느려지거나
+// 속도 제한에 걸려 15초 타임아웃을 넘기는 것으로 추정). in-flight Promise 를
+// 공유해 같은 CIK 로 몰리는 동시 요청을 1건으로 합친다.
+const factsInFlight = new Map<string, Promise<CompanyFacts>>();
 
 async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
   const hit = factsCache.get(cik);
   if (hit && Date.now() - hit.at < FACTS_TTL) return hit.data;
-  const data = await fetchJson<CompanyFacts>(
+  const inFlight = factsInFlight.get(cik);
+  if (inFlight) return inFlight;
+  const p = fetchJson<CompanyFacts>(
     `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
     { headers: SEC_HEADERS, revalidate: false },
-  );
-  factsCache.set(cik, { at: Date.now(), data });
-  return data;
+  )
+    .then((data) => {
+      factsCache.set(cik, { at: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      factsInFlight.delete(cik);
+    });
+  factsInFlight.set(cik, p);
+  return p;
 }
 
 /** 하이라이트/외부 계산용 raw companyfacts (+ CIK). */

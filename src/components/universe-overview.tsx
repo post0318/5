@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw, TriangleAlert } from "lucide-react";
+import { toast } from "sonner";
 import { apiFetch } from "@/lib/query";
 import type { MarketId } from "@/lib/markets/types";
 import { Badge } from "@/components/ui/badge";
@@ -229,9 +230,23 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                         </Badge>
                       )}
                       {r.warnings != null && r.warnings.length > 0 && (
-                        <span title={r.warnings.join(" · ")}>
+                        <button
+                          type="button"
+                          title={r.warnings.join(" · ")}
+                          // title(hover 툴팁)은 모바일 탭으로는 안 뜬다 — 탭해도
+                          // 이유를 볼 방법이 없다는 오너 지적(2026-09)으로 토스트
+                          // 추가. Link 안에 있어 클릭이 그대로 새어나가면 종목
+                          // 페이지로 이동해버리니 막는다.
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            toast.warning(r.name ?? r.symbol, {
+                              description: r.warnings!.join(" · "),
+                            });
+                          }}
+                        >
                           <TriangleAlert className="size-3.5 text-amber-600 dark:text-amber-500" />
-                        </span>
+                        </button>
                       )}
                     </Link>
                     <div className="text-muted-foreground tnum text-xs">{r.symbol}</div>
