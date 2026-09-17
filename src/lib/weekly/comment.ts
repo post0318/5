@@ -440,5 +440,16 @@ export async function generateWeeklyComments(
     if (v) comments.issues.set(canonical, v);
   }
 
+  // 진단용 — 왜 특정 이슈 코멘트가 비는지(키 불일치/검증 실패는 위에서 이미
+  // 로그됨) 원인을 한 번 더 좁힌다: Gemini 응답 JSON에 그 라벨이 아예 없었는지
+  // (원본 issues 키 목록으로 확인) 알 수 있게 남긴다(오너 지적 2026-09-18 —
+  // "돈은 계속 나가고 바뀐건 없고" — 다음부턴 추측 대신 로그로 확정할 것).
+  const missingIssues = issueLabels.filter((l) => !comments.issues.has(l));
+  if (missingIssues.length > 0) {
+    console.warn(
+      `[weekly] 이슈 코멘트 누락: [${missingIssues.join(", ")}] — Gemini 응답 issues 원본 키: ${JSON.stringify(Object.keys(parsed?.issues ?? {}))}, trustGrounded=${trustGrounded}`,
+    );
+  }
+
   return { comments, result };
 }
