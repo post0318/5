@@ -104,7 +104,9 @@ async function tryGenerateComments(
     return {
       comments: out.comments,
       model: out.result.model,
-      usage: { ...out.result.usage, calls: 1 },
+      // 오너 지시 2026-09-18 — Gemini 호출을 매크로/코멘트 2개로 쪼개
+      // 병렬 실행하도록 바꿨다(comment.ts 참고) — 항상 2회.
+      usage: { ...out.result.usage, calls: 2 },
       groundingQueries: out.result.groundingQueries,
       groundingSources: out.result.groundingSources,
     };

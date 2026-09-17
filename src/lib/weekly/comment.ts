@@ -26,6 +26,16 @@ import type { ReportWeek } from "./week";
  * 게 오히려 정상이기 때문. 그라운딩이 출처 없이 끝났으면(검색 실패 등)
  * 기존처럼 %/bp/배/pt/건 수치를 원본 데이터와 엄격히 대조해 근거 없는
  * 수치가 섞인 코멘트를 버린다 — 안전망은 그대로 둔다.
+ *
+ * **호출을 둘로 쪼개 병렬 실행(오너 지시 2026-09-18)**: 한 호출에 한 줄
+ * 결론·정책요약·캘린더·스냅샷 16개·이슈 3개를 전부 몰아넣었더니 응답이
+ * 중간에 잘리거나(사고 토큰이 예산을 다 먹음, 실측 — 410자에서 끊김)
+ * 전체 처리시간이 70~90초까지 늘어나 모바일에서 "재생성이 안 되는 것
+ * 처럼" 보였다. "매크로"(한 줄 결론·정책요약·캘린더)와 "코멘트"(스냅샷·
+ * 이슈)로 나눠 `Promise.all`로 동시에 호출 — 각각 다룰 필드가 줄어 잘릴
+ * 위험이 낮아지고, 전체 대기시간도 "더 느린 쪽 하나" 수준으로 줄어든다.
+ * 두 호출 다 그라운딩을 쓰므로 비용은 두 배(+$0.035 한 번 더)지만 회당
+ * 여전히 10~20센트 수준.
  */
 
 export interface WeeklyComments {
@@ -48,14 +58,7 @@ export interface WeeklyComments {
   issues: Map<string, string>;
 }
 
-const SYSTEM_PROMPT = `# 역할
-너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이미 집계된
-주간 시장 데이터에 짧은 해석 코멘트를 붙이는 것이 임무다. 리포트의 구조·
-표·숫자는 이미 코드로 완성돼 있으니 절대 다시 만들지 않는다. 이번 주 각
-자산·이슈가 왜 그렇게 움직였는지 확실치 않으면 **웹검색으로 실제 원인을
-확인**하고 인용해라 — 짐작으로 채우지 마라.
-
-# 입력 데이터
+const INPUT_DATA_DESC = `# 입력 데이터
 사용자 메시지는 JSON 객체 하나다.
 - reportWeek: 이 리포트가 다루는 주(월~금).
 - nextWeek: reportWeek 바로 다음 주(월~금) — calendar 는 이 기간 대상.
@@ -63,19 +66,60 @@ const SYSTEM_PROMPT = `# 역할
 - snapshot: 이번 주 자산별 종가·주간 변동(pct=주간 변동률%, diffBp=금리류
   변동폭 bp). value/pct/diffBp 가 null 이면 비교할 값이 없다는 뜻이다.
 - issues: 이번 주 핵심 이슈 후보(증권사 리포트·뉴스 빈도로 뽑힘). reports·
-  news·earnings(실적 서프라이즈)·metrics(FRED 거시지표)가 근거로 들어있다
-  — snapshot 코멘트를 쓸 때 참고는 되지만 **거기에 묶일 필요는 없다.**
+  news·earnings(실적 서프라이즈)·metrics(FRED 거시지표)가 근거로 들어있다.`;
+
+const MACRO_PROMPT = `# 역할
+너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이번 주 전체
+흐름을 종합해서 "한 줄 결론"·"금리정책 요약"·"다음 주 일정 캘린더"를
+쓰는 게 임무다. 리포트의 표·숫자는 이미 코드로 완성돼 있으니 다시 만들지
+않는다. 확실치 않으면 **웹검색으로 실제 사실을 확인**하고 인용해라 —
+짐작으로 채우지 마라.
+
+${INPUT_DATA_DESC}
 
 # 작성 원칙 (반드시 지킬 것)
-1. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치(%, 가격,
-   지표 등)를 쓸 때는 **실제 웹검색으로 확인한 것만** 쓴다 — 확인 안 되면
-   수치 없이 정성적으로만("~영향", "~로 해석됨") 서술하고, 그마저 안 되면
-   해당 칸을 비운다.
-2. 각 코멘트는 1문장, 간결한 애널리스트 어조(~음/~함 체). 미사여구·감탄사·
-   전망 단정("반드시", "확실히") 금지.
-3. snapshot 코멘트는 40자 내외, issues 코멘트는 80자 내외, headline은
-   120자 내외.
-4. **snapshot: 각 자산 고유의 그 주 등락 원인·특이점을 쓴다.** 핵심 이슈
+1. **headline(한 줄 결론)** — 스냅샷 표 전체를 훑고 "이번 주 시장이 무엇
+   때문에 이렇게 흘렀는지"를 종합해 한 문장으로 쓴다. topMovers 하나만
+   짚는 게 아니라, 여러 자산에 걸쳐 공통으로 작용한 배경(금리 결정, 유가
+   급등, 인플레이션 지표 등)이 있으면 그걸 중심으로 삼아라. 예: "미 CPI
+   서프라이즈발 금리 인상 우려와 유가 급등이 겹치며 위험자산은 눌리고
+   원자재는 강세를 보인 한 주." 근거가 정말 없을 때만 topMovers 사실
+   나열로 대체한다. 120자 내외.
+2. **policySummary** — 미국 연준(FOMC)·한국은행·일본은행의 이번 주 통화
+   정책 동향을 종합한 2~4문장 요약. 단순 기사 나열이 아니라 "각국
+   중앙은행이 이번 주 무엇을 했거나 시사했는지, 시장이 어떻게 반응했는지"
+   를 종합 서술한다(포털 AI 검색 요약 수준을 목표로 한다 — 얕은 사실
+   나열 금지). 웹검색으로 실제 확인한 내용만 쓴다. 확인이 부족하면 아는
+   범위까지만 쓰고, 아예 근거가 없으면 null 로 남긴다.
+3. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. "관련
+   기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
+   예정된 이벤트(중앙은행 회의·주요 경제지표 발표일·옵션선물 동시만기일
+   등 거시·시장 이벤트 위주, 개별 기업 실적·공모주 일정은 제외)를
+   날짜별로 확인해서 적는다. **절대 지어내지 마라** — 확인 안 되는
+   날짜/이벤트는 통째로 뺀다(목록이 짧거나 비어도 괜찮다). 각 항목은
+   {"date": "YYYY-MM-DD", "event": "그 날 있는 일정, 15자 내외"} 형식,
+   nextWeek 범위를 벗어나는 날짜는 넣지 않는다. 날짜 오름차순 정렬.
+4. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치를 쓸 때는
+   **실제 웹검색으로 확인한 것만** 쓴다 — 확인 안 되면 수치 없이
+   정성적으로만 서술한다.
+5. 간결한 애널리스트 어조(~음/~함 체). 미사여구·감탄사·전망 단정
+   ("반드시", "확실히") 금지.
+
+# 출력 형식
+마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
+{"headline": "한 줄 결론", "policySummary": "정책 요약 또는 null", "calendar": [{"date": "YYYY-MM-DD", "event": "..."}]}`;
+
+const COMMENT_PROMPT = `# 역할
+너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이미 집계된
+주간 시장 데이터의 **자산별·이슈별 짧은 해석 코멘트**를 쓰는 게 임무다.
+리포트의 표·숫자는 이미 코드로 완성돼 있으니 다시 만들지 않는다. 이번 주
+각 자산·이슈가 왜 그렇게 움직였는지 확실치 않으면 **웹검색으로 실제
+원인을 확인**하고 인용해라 — 짐작으로 채우지 마라.
+
+${INPUT_DATA_DESC}
+
+# 작성 원칙 (반드시 지킬 것)
+1. **snapshot: 각 자산 고유의 그 주 등락 원인·특이점을 쓴다.** 핵심 이슈
    3개(issues)에 묶이는 자산만 쓰라는 게 아니다 — 16개 전부 독립적으로
    "이 자산이 왜 오르내렸는가"를 다룬다. 확실한 원인을 모르면 웹검색으로
    찾아서 쓰고, 그래도 못 찾으면 빈 문자열로 남긴다.
@@ -87,33 +131,19 @@ const SYSTEM_PROMPT = `# 역할
      채워라.** 같은 그룹(예: 채권) 안에서 더 크게 움직인 자산을 건너뛰고
      덜 움직인 자산만 채우는 건 앞뒤가 안 맞다(예: 미국채 3년이 10년보다
      더 움직였는데 10년만 쓰는 것 — 금지).
-5. **headline(한 줄 결론)은 스냅샷 표 전체를 훑고 "이번 주 시장이 무엇
-   때문에 이렇게 흘렀는지"를 종합해 한 문장으로 쓴다.** topMovers 하나만
-   짚는 게 아니라, 여러 자산에 걸쳐 공통으로 작용한 배경(금리 결정, 유가
-   급등, 인플레이션 지표 등)이 있으면 그걸 중심으로 삼아라. 예: "미 CPI
-   서프라이즈발 금리 인상 우려와 유가 급등이 겹치며 위험자산은 눌리고
-   원자재는 강세를 보인 한 주." 근거가 정말 없을 때만 topMovers 사실
-   나열로 대체한다.
-6. issues 코멘트는 그 이슈의 reports/news/earnings/metrics 를 우선 활용해
+2. issues 코멘트는 그 이슈의 reports/news/earnings/metrics 를 우선 활용해
    해석하되, 부족하면 마찬가지로 웹검색으로 보강한다.
-7. **policySummary — 미국 연준(FOMC)·한국은행·일본은행의 이번 주 통화
-   정책 동향을 종합한 2~4문장 요약.** 단순 기사 나열이 아니라 "각국
-   중앙은행이 이번 주 무엇을 했거나 시사했는지, 시장이 어떻게 반응했는지"
-   를 종합 서술한다(포털 AI 검색 요약 수준을 목표로 한다 — 얕은 사실
-   나열 금지). 웹검색으로 실제 확인한 내용만 쓴다. 확인이 부족하면 아는
-   범위까지만 쓰고, 아예 근거가 없으면 null 로 남긴다.
-8. **calendar — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정.** "관련
-   기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
-   예정된 이벤트(중앙은행 회의·주요 경제지표 발표일·옵션선물 동시만기일
-   등 거시·시장 이벤트 위주, 개별 기업 실적·공모주 일정은 제외)를
-   날짜별로 확인해서 적는다. **절대 지어내지 마라** — 확인 안 되는
-   날짜/이벤트는 통째로 뺀다(목록이 짧거나 비어도 괜찮다). 각 항목은
-   {"date": "YYYY-MM-DD", "event": "그 날 있는 일정, 15자 내외"} 형식,
-   nextWeek 범위를 벗어나는 날짜는 넣지 않는다. 날짜 오름차순 정렬.
+3. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치(%, 가격,
+   지표 등)를 쓸 때는 **실제 웹검색으로 확인한 것만** 쓴다 — 확인 안 되면
+   수치 없이 정성적으로만("~영향", "~로 해석됨") 서술하고, 그마저 안 되면
+   해당 칸을 비운다.
+4. 각 코멘트는 1문장, 간결한 애널리스트 어조(~음/~함 체). 미사여구·감탄사·
+   전망 단정("반드시", "확실히") 금지. snapshot 40자 내외, issues 80자
+   내외.
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
-{"headline": "한 줄 결론", "policySummary": "정책 요약 또는 null", "calendar": [{"date": "YYYY-MM-DD", "event": "..."}], "snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": "코멘트"}}
+{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": "코멘트"}}
 snapshot·issues 에 없는 키를 새로 만들지 말 것.`;
 
 interface CommentPayload {
@@ -226,18 +256,21 @@ function buildPayload(snapshot: SnapshotRow[], issues: WeeklyIssue[], week: Repo
   };
 }
 
-interface CommentResponse {
+interface MacroResponse {
   headline?: string;
   policySummary?: string;
   calendar?: { date?: string; event?: string }[];
+}
+
+interface CommentsOnlyResponse {
   snapshot?: Record<string, string>;
   issues?: Record<string, string>;
 }
 
-function tryParse(s: string): CommentResponse | null {
+function tryParse<T>(s: string): T | null {
   try {
     const v = JSON.parse(s) as unknown;
-    return v && typeof v === "object" ? (v as CommentResponse) : null;
+    return v && typeof v === "object" ? (v as T) : null;
   } catch {
     return null;
   }
@@ -245,20 +278,20 @@ function tryParse(s: string): CommentResponse | null {
 
 /** 출력 형식을 "JSON만" 이라고 강제해도 앞뒤에 설명을 붙이는 경우가 있어
  * 코드펜스 제거 → 실패하면 첫 '{' ~ 마지막 '}' 만 다시 시도한다. */
-function parseJson(text: string): CommentResponse | null {
+function parseJson<T>(text: string, label: string): T | null {
   const cleaned = text
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/```\s*$/i, "");
-  const direct = tryParse(cleaned);
+  const direct = tryParse<T>(cleaned);
   if (direct) return direct;
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start >= 0 && end > start) {
-    const loose = tryParse(cleaned.slice(start, end + 1));
+    const loose = tryParse<T>(cleaned.slice(start, end + 1));
     if (loose) return loose;
   }
-  console.warn(`[weekly] Gemini 코멘트 JSON 파싱 실패 — 응답 앞 300자: ${text.slice(0, 300)}`);
+  console.warn(`[weekly] Gemini(${label}) 응답 JSON 파싱 실패 — 응답 앞 300자: ${text.slice(0, 300)}`);
   return null;
 }
 
@@ -363,32 +396,28 @@ export async function generateWeeklyComments(
   if (!isGeminiConfigured() || issues.length === 0) return null;
 
   const payload = buildPayload(snapshot, issues, week);
-  const result = await geminiGenerate({
-    system: SYSTEM_PROMPT,
-    user: JSON.stringify(payload),
-    // 스냅샷 16개 자산 각각의 "왜"를 설명하려면 우리 데이터만으론 부족해
-    // 실시간 검색이 필요하다(오너 지시 2026-09-18). 요청당 +$0.035.
-    grounding: true,
-    temperature: 0.25,
-    // gemini-3.1-pro-preview 는 "사고" 토큰도 이 상한을 같이 쓴다. 2,000→
-    // 6,000으로 올렸는데도 여전히 부족해 응답이 410자에서 중간에 잘리는
-    // 게 로그로 확인됐다(오너가 직접 Vercel 로그 찾아줘서 확정 — "응답길이
-    // =410자, parseJson성공=false", policySummary 문자열 중간에 끊김).
-    // 실제 사용한 토큰만큼만 과금되므로 상한을 낮게 잡을 이유가 없다 —
-    // 오히려 지금처럼 잘려서 통째로 버려지는 게 진짜 비용 낭비다. 크게 올림.
-    maxOutputTokens: 32_000,
-  });
-
-  const parsed = parseJson(result.text);
+  const userJson = JSON.stringify(payload);
   const allowed = buildAllowedNumbers(payload);
-  const trustGrounded = result.groundingSources.length > 0;
-  console.warn(
-    `[weekly] Gemini 응답 요약 — model=${result.model}, 응답길이=${result.text.length}자, ` +
-      `groundingSources=${result.groundingSources.length}건, trustGrounded=${trustGrounded}, ` +
-      `parseJson성공=${parsed != null}, 응답 최상위 키=${JSON.stringify(parsed ? Object.keys(parsed) : [])}`,
-  );
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
+
+  const [macroResult, commentResult] = await Promise.all([
+    geminiGenerate({
+      system: MACRO_PROMPT,
+      user: userJson,
+      grounding: true,
+      temperature: 0.25,
+      maxOutputTokens: 16_000,
+    }),
+    geminiGenerate({
+      system: COMMENT_PROMPT,
+      user: userJson,
+      grounding: true,
+      temperature: 0.25,
+      maxOutputTokens: 16_000,
+    }),
+  ]);
+
   const comments: WeeklyComments = {
     headline: null,
     policySummary: null,
@@ -396,24 +425,33 @@ export async function generateWeeklyComments(
     snapshot: new Map(),
     issues: new Map(),
   };
-  comments.headline = parsed?.headline ? verifyComment(parsed.headline, allowed, trustGrounded) || null : null;
+
+  // --- 매크로(한 줄 결론·정책요약·캘린더) ---
+  const macroParsed = parseJson<MacroResponse>(macroResult.text, "매크로");
+  const macroTrustGrounded = macroResult.groundingSources.length > 0;
+  console.warn(
+    `[weekly] Gemini(매크로) 응답 요약 — model=${macroResult.model}, 응답길이=${macroResult.text.length}자, ` +
+      `groundingSources=${macroResult.groundingSources.length}건, trustGrounded=${macroTrustGrounded}, ` +
+      `parseJson성공=${macroParsed != null}`,
+  );
+  comments.headline = macroParsed?.headline
+    ? verifyComment(macroParsed.headline, allowed, macroTrustGrounded) || null
+    : null;
 
   // policySummary·calendar 는 날짜·기관명 등 검증 불가능한 구체적 사실을
   // 담으므로, 그라운딩이 실제로 출처를 찾아왔을 때만 신뢰한다 — 실패하면
   // 렌더링 쪽이 기존 기사 표로 폴백(허위 캘린더보단 표가 안전).
-  if (trustGrounded && parsed?.policySummary) {
-    comments.policySummary = parsed.policySummary.trim() || null;
-  } else {
-    // 진단용(오너 지적 2026-09-18 — "정책도 또 기사제목이네") — trustGrounded
-    // 가 false였는지, parsed 자체엔 있었는데 우리가 무시했는지 구분해서 남긴다.
+  if (macroTrustGrounded && macroParsed?.policySummary) {
+    comments.policySummary = macroParsed.policySummary.trim() || null;
+  } else if (!macroTrustGrounded || macroParsed?.policySummary) {
     console.warn(
-      `[weekly] policySummary 미채움 — trustGrounded=${trustGrounded}, parsed.policySummary=${JSON.stringify(parsed?.policySummary ?? null)}`,
+      `[weekly] policySummary 미채움 — trustGrounded=${macroTrustGrounded}, parsed=${JSON.stringify(macroParsed?.policySummary ?? null)}`,
     );
   }
-  if (trustGrounded && Array.isArray(parsed?.calendar)) {
+  if (macroTrustGrounded && Array.isArray(macroParsed?.calendar)) {
     const nextStart = payload.nextWeek.start;
     const nextEnd = payload.nextWeek.end;
-    comments.calendar = parsed.calendar
+    comments.calendar = macroParsed.calendar
       .filter(
         (c): c is { date: string; event: string } =>
           typeof c?.date === "string" &&
@@ -422,9 +460,9 @@ export async function generateWeeklyComments(
           c.date <= nextEnd,
       )
       .sort((a, b) => a.date.localeCompare(b.date));
-  } else if (!trustGrounded || parsed?.calendar) {
+  } else if (!macroTrustGrounded || macroParsed?.calendar) {
     console.warn(
-      `[weekly] calendar 미채움 — trustGrounded=${trustGrounded}, parsed.calendar=${JSON.stringify(parsed?.calendar ?? null)}`,
+      `[weekly] calendar 미채움 — trustGrounded=${macroTrustGrounded}, parsed=${JSON.stringify(macroParsed?.calendar ?? null)}`,
     );
   }
   // 선물·옵션 동시 만기일("네 마녀의 날" — 3/6/9/12월 셋째 금요일)은 공개된
@@ -438,35 +476,55 @@ export async function generateWeeklyComments(
     }
   }
 
-  for (const [rawName, text] of Object.entries(parsed?.snapshot ?? {})) {
+  // --- 코멘트(스냅샷·이슈) ---
+  const commentParsed = parseJson<CommentsOnlyResponse>(commentResult.text, "코멘트");
+  const commentTrustGrounded = commentResult.groundingSources.length > 0;
+  console.warn(
+    `[weekly] Gemini(코멘트) 응답 요약 — model=${commentResult.model}, 응답길이=${commentResult.text.length}자, ` +
+      `groundingSources=${commentResult.groundingSources.length}건, trustGrounded=${commentTrustGrounded}, ` +
+      `parseJson성공=${commentParsed != null}`,
+  );
+
+  for (const [rawName, text] of Object.entries(commentParsed?.snapshot ?? {})) {
     const canonical = matchCanonical(rawName, snapshotNames);
     if (!canonical) {
       console.warn(`[weekly] 스냅샷 코멘트 키 불일치 — "${rawName}" 는 알려진 자산명이 아님`);
       continue;
     }
-    const v = verifyComment(String(text ?? ""), allowed, trustGrounded);
+    const v = verifyComment(String(text ?? ""), allowed, commentTrustGrounded);
     if (v) comments.snapshot.set(canonical, v);
   }
-  for (const [rawLabel, text] of Object.entries(parsed?.issues ?? {})) {
+  for (const [rawLabel, text] of Object.entries(commentParsed?.issues ?? {})) {
     const canonical = matchCanonical(rawLabel, issueLabels);
     if (!canonical) {
       console.warn(`[weekly] 이슈 코멘트 키 불일치 — "${rawLabel}" 는 알려진 이슈명이 아님`);
       continue;
     }
-    const v = verifyComment(String(text ?? ""), allowed, trustGrounded);
+    const v = verifyComment(String(text ?? ""), allowed, commentTrustGrounded);
     if (v) comments.issues.set(canonical, v);
   }
 
-  // 진단용 — 왜 특정 이슈 코멘트가 비는지(키 불일치/검증 실패는 위에서 이미
-  // 로그됨) 원인을 한 번 더 좁힌다: Gemini 응답 JSON에 그 라벨이 아예 없었는지
-  // (원본 issues 키 목록으로 확인) 알 수 있게 남긴다(오너 지적 2026-09-18 —
-  // "돈은 계속 나가고 바뀐건 없고" — 다음부턴 추측 대신 로그로 확정할 것).
   const missingIssues = issueLabels.filter((l) => !comments.issues.has(l));
   if (missingIssues.length > 0) {
     console.warn(
-      `[weekly] 이슈 코멘트 누락: [${missingIssues.join(", ")}] — Gemini 응답 issues 원본 키: ${JSON.stringify(Object.keys(parsed?.issues ?? {}))}, trustGrounded=${trustGrounded}`,
+      `[weekly] 이슈 코멘트 누락: [${missingIssues.join(", ")}] — Gemini 응답 issues 원본 키: ${JSON.stringify(Object.keys(commentParsed?.issues ?? {}))}, trustGrounded=${commentTrustGrounded}`,
     );
   }
 
-  return { comments, result };
+  // 두 호출 결과를 하나로 합쳐서 돌려준다 — 호출부(generate.ts)는 여전히
+  // "호출 하나" 인터페이스로 usage/그라운딩 출처를 저장한다.
+  const mergedResult: GeminiResult = {
+    text: `${macroResult.text}\n${commentResult.text}`,
+    model: macroResult.model,
+    usage: {
+      inputTokens: macroResult.usage.inputTokens + commentResult.usage.inputTokens,
+      outputTokens: macroResult.usage.outputTokens + commentResult.usage.outputTokens,
+      thoughtTokens: macroResult.usage.thoughtTokens + commentResult.usage.thoughtTokens,
+      costUsd: macroResult.usage.costUsd + commentResult.usage.costUsd,
+    },
+    groundingQueries: [...macroResult.groundingQueries, ...commentResult.groundingQueries],
+    groundingSources: [...macroResult.groundingSources, ...commentResult.groundingSources],
+  };
+
+  return { comments, result: mergedResult };
 }
