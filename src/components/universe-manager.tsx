@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Pencil, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
@@ -48,6 +48,9 @@ interface BulkResult {
 
 export function UniverseManager() {
   const qc = useQueryClient();
+  // 「가져오기」 탭은 누르는 순간 팝업이 떠야 해서(오너 지시) 선택된 탭을
+  // 상태로 들고 있는다.
+  const [tab, setTab] = useState("single");
   const list = useQuery({
     queryKey: ["universe"],
     queryFn: () => apiFetch<{ items: Item[] }>("/api/universe"),
@@ -63,7 +66,7 @@ export function UniverseManager() {
       <h1 className="text-xl font-semibold">유니버스 관리</h1>
       <LegacyClaimBanner onClaimed={invalidate} />
 
-      <Tabs defaultValue="single">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="single">개별 등록</TabsTrigger>
           <TabsTrigger value="bulk">일괄 업로드</TabsTrigger>
@@ -76,7 +79,7 @@ export function UniverseManager() {
           <BulkForm onDone={invalidate} />
         </TabsContent>
         <TabsContent value="copy" className="pt-4">
-          <CopyFromAccount onCopied={invalidate} />
+          <CopyFromAccount active={tab === "copy"} onCopied={invalidate} />
         </TabsContent>
       </Tabs>
 
@@ -483,11 +486,26 @@ function LegacyClaimBanner({ onClaimed }: { onClaimed: () => void }) {
  * 종목은 건너뛰므로 내 그룹명·메모가 덮어써지지 않는다.
  * 가져올 게 있는 계정이 없으면 아무것도 그리지 않는다.
  */
-function CopyFromAccount({ onCopied }: { onCopied: () => void }) {
+function CopyFromAccount({
+  active,
+  onCopied,
+}: {
+  /** 이 탭이 선택돼 있는가 — 선택되는 순간 팝업을 연다 */
+  active: boolean;
+  onCopied: () => void;
+}) {
   const auth = useAppAuth();
   const qc = useQueryClient();
   const [from, setFrom] = useState<string>("");
   const [open, setOpen] = useState(false);
+
+  // 탭을 누르면 곧바로 팝업 — 탭 안에 또 「가져오기」 버튼을 두면 같은 이름이
+  // 두 번 나와 헷갈린다는 오너 지적(2026-09-17).
+  useEffect(() => {
+    if (!active) return;
+    const id = setTimeout(() => setOpen(true), 0);
+    return () => clearTimeout(id);
+  }, [active]);
 
   const accounts = useQuery({
     queryKey: ["universe-copy-sources"],
@@ -523,13 +541,14 @@ function CopyFromAccount({ onCopied }: { onCopied: () => void }) {
 
   return (
     <div className="space-y-3">
-      <Button size="sm" onClick={() => setOpen(true)}>
-        가져오기
-      </Button>
       <p className="text-muted-foreground text-sm">
         다른 계정의 종목을 내 유니버스로 복제합니다. 가져온 뒤에는 각자 따로
         관리되고(공유가 아닙니다), 이미 갖고 있는 종목은 건너뜁니다.
       </p>
+      {/* 팝업을 닫은 뒤 다시 열 수 있는 길 — 탭을 다시 눌러도 열리지 않으므로 */}
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        계정 선택 창 열기
+      </Button>
 
       <Dialog
         open={open}
