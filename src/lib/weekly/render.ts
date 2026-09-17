@@ -1,6 +1,7 @@
 import "server-only";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
 import { fetchGoogleNewsRss, googleNewsUrl } from "@/lib/news/googleNews";
+import { fetchNaverNewsSearch } from "@/lib/news/naverNews";
 import { snapshotToMarkdownTable } from "./snapshot";
 import { CALENDAR_QUERIES, POLICY_QUERIES } from "./topics";
 import type { WeeklyComments } from "./comment";
@@ -90,12 +91,23 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
   return lines.join("\n");
 }
 
+function tableCell(s: string): string {
+  return s.replace(/\|/g, "/").replace(/\s+/g, " ").trim();
+}
+
 /**
  * 고정 검색어의 그 주 기사를 표로 건다 — 추론 없음, 코드가 표만 조립한다
  * (오너 지시 2026-09-18 — "일정을 안 건든다는 건 임의 해석하지 말라는
  * 거지 표로 만들지 말라는 게 아니다"). 하한(주 시작)뿐 아니라 상한(주
  * 종료+3일)도 건다 — `issues.ts`의 `countFromNews()`와 같은 이유(실측
  * — 지난 주 리포트를 나중에 재생성하면 그사이 최신 기사가 섞여 들어옴).
+ *
+ * **제목만 링크로 나열하던 걸 요약문 있는 표로(오너 지적 2026-09-18 —
+ * "표만들라니깐 그냥 링크 넣는 표를 만든거냐... 발언·수치 같은 걸 넣는
+ * 것이 정책이지")**: `issues.ts`와 같은 방식으로 네이버 뉴스 검색(요약문
+ * 포함)을 구글 뉴스 RSS와 합쳐서, 최소한 각 행에 실제 스니펫(발언·수치가
+ * 언급된 문장)이 보이게 한다. 여전히 추론 없음 — 검색된 기사의 요약문을
+ * 그대로 옮길 뿐 해석하지 않는다.
  */
 async function queryBlock(
   queries: { label: string; query: string }[],
@@ -105,26 +117,40 @@ async function queryBlock(
 ): Promise<string> {
   const results = await Promise.all(
     queries.map(async ({ label, query }) => {
-      const url = googleNewsUrl(
-        `search?q=${encodeURIComponent(query)}+when:7d`,
-        "hl=ko&gl=KR&ceid=KR:ko",
-      );
-      const items = await fetchGoogleNewsRss(url).catch(() => []);
-      const fresh = items.filter((i) => {
+      const naverP = fetchNaverNewsSearch(query, { display: 20 }).catch(() => []);
+      const googleP = fetchGoogleNewsRss(
+        googleNewsUrl(`search?q=${encodeURIComponent(query)}+when:7d`, "hl=ko&gl=KR&ceid=KR:ko"),
+      ).catch(() => []);
+      const [naver, google] = await Promise.all([naverP, googleP]);
+      const merged = [
+        ...naver.map((n) => ({ title: n.title, excerpt: n.excerpt, url: n.url, source: n.source, publishedAt: n.publishedAt })),
+        ...google.map((g) => ({ title: g.title, excerpt: null as string | null, url: g.link, source: g.source, publishedAt: g.publishedAt })),
+      ];
+      const seen = new Set<string>();
+      const fresh: typeof merged = [];
+      for (const i of merged) {
         const ms = Date.parse(i.publishedAt);
-        return !Number.isFinite(ms) || (ms >= sinceMs && ms <= untilMs);
-      });
-      return { label, items: fresh.slice(0, perQuery) };
+        if (Number.isFinite(ms) && (ms < sinceMs || ms > untilMs)) continue;
+        const key = i.title.replace(/\s+/g, "").toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        fresh.push(i);
+        if (fresh.length >= perQuery) break;
+      }
+      return { label, items: fresh };
     }),
   );
-  const lines = ["| 구분 | 날짜 | 제목 | 출처 |", "|---|---|---|---|"];
+  const lines = ["| 구분 | 날짜 | 제목 | 요약 | 출처 |", "|---|---|---|---|---|"];
   for (const { label, items } of results) {
     if (items.length === 0) {
-      lines.push(`| ${label} | - | 이번 주 관련 기사 없음 | - |`);
+      lines.push(`| ${label} | - | 이번 주 관련 기사 없음 | - | - |`);
       continue;
     }
     for (const i of items) {
-      lines.push(`| ${label} | ${i.publishedAt.slice(0, 10)} | [${i.title}](${i.link}) | ${i.source} |`);
+      const excerpt = i.excerpt ? tableCell(i.excerpt).slice(0, 80) : "-";
+      lines.push(
+        `| ${label} | ${i.publishedAt.slice(0, 10)} | [${tableCell(i.title)}](${i.url}) | ${excerpt} | ${i.source} |`,
+      );
     }
   }
   return lines.join("\n");
