@@ -55,6 +55,11 @@ interface IndicatorSpec {
   category: MacroCategory;
   unit: string;
   note: string;
+  /**
+   * FRED 가 아닌 곳에서 받아오는 지표는 여기서 직접 가져온다. 비워 두면
+   * `id` 를 FRED 시리즈로 보고 CSV 를 받는다(기존 지표 전부).
+   */
+  fetchSeries?: () => Promise<MacroPoint[]>;
   /** 판정 기준 표 (툴팁). 지표별로 읽는 법이 달라 개별 명시 */
   guide?: GuideRow[];
   goodDirection: "up" | "down" | "none";
@@ -263,6 +268,22 @@ const SPECS: IndicatorSpec[] = [
       if (v < 3) return { verdict: "neutral", reason: `${v.toFixed(1)}% — 저성장` };
       return { verdict: "positive", reason: `${v.toFixed(1)}% — 성장 지속` };
     },
+  },
+  {
+    id: "TGA",
+    fetchSeries: () => import("./tga").then((m) => m.fetchTgaSeries()),
+    name: "미국 재무부 현금잔고(TGA)",
+    category: "core",
+    unit: "십억$",
+    note: "정부가 연준에 둔 현금. 늘면 시중 유동성이 그만큼 빠지고(국채 발행·세금 수납), 줄면 풀린다. 출처: 미국 재무부 일일재정보고(DTS).",
+    guide: [
+      { when: "잔고 증가", verdict: "neutral", note: "유동성 흡수 — 다만 부채한도 후 재적립 구간은 예외" },
+      { when: "잔고 감소", verdict: "neutral", note: "유동성 공급" },
+      { when: "세금 납부일 전후 급등락", verdict: "neutral", note: "계절적 요인" },
+    ],
+    // 방향만으로 좋고 나쁨을 단정하기 어려워(부채한도 재적립 등) 점수화 제외
+    goodDirection: "none",
+    frequency: "daily",
   },
   {
     id: "DGS10",
@@ -537,11 +558,13 @@ export async function getMacroDashboard(): Promise<MacroDashboard> {
   const results = await Promise.all(
     SPECS.map(async (spec) => {
       try {
-        const series = await fetchSeries(spec.id);
+        const series = spec.fetchSeries
+          ? await spec.fetchSeries()
+          : await fetchSeries(spec.id);
         return buildIndicator(spec, series);
       } catch (err) {
         // 조용한 실패는 운영 중 감지가 불가능함 — 최소한 로그는 남김 (2026-09)
-        console.error(`FRED ${spec.id} 수집 실패:`, err instanceof Error ? err.message : err);
+        console.error(`거시지표 ${spec.id} 수집 실패:`, err instanceof Error ? err.message : err);
         return buildIndicator(spec, []);
       }
     }),
