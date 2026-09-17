@@ -72,6 +72,10 @@ const SYSTEM_PROMPT = `# 역할
      이미 있는 등락률을 문장으로 바꿔 적기만 함, 정보량 0.
    - 좋은 예: "미 CPI 상회로 금리 인상 우려 완화, 외국인 순매수 유입."
      (실제 그 주 있었던 사건을 원인으로 명시)
+   - **pct/diffBp 절댓값이 큰(그 주 가장 많이 움직인) 자산부터 우선
+     채워라.** 같은 그룹(예: 채권) 안에서 더 크게 움직인 자산을 건너뛰고
+     덜 움직인 자산만 채우는 건 앞뒤가 안 맞다(예: 미국채 3년이 10년보다
+     더 움직였는데 10년만 쓰는 것 — 금지).
 5. **headline(한 줄 결론)은 스냅샷 표 전체를 훑고 "이번 주 시장이 무엇
    때문에 이렇게 흘렀는지"를 종합해 한 문장으로 쓴다.** topMovers 하나만
    짚는 게 아니라, 여러 자산에 걸쳐 공통으로 작용한 배경(금리 결정, 유가
@@ -222,7 +226,24 @@ function matchCanonical(rawKey: string, candidates: string[]): string | null {
   return candidates.find((c) => normalizeKey(c) === norm) ?? null;
 }
 
-/** 검증 단계 입력 — 코멘트가 인용할 수 있는 "실제 수치" 전체 목록. */
+// 통계적 주장으로 보이는 "숫자+단위" 조합만 뽑는다(서수·"2주 연속" 같은
+// 평범한 소수는 자연어에 흔해 오탐이 크다). verifyComment() 도 같은
+// 정규식으로 코멘트를 검사하므로 여기서 먼저 선언해 재사용한다.
+const CLAIM_NUM_RE = /(-?\d+(?:\.\d+)?)\s*(%|bp|배|pt|건)/g;
+
+function extractNumbers(text: string): number[] {
+  return [...text.matchAll(CLAIM_NUM_RE)].map((m) => Number(m[1]));
+}
+
+/**
+ * 검증 단계 입력 — 코멘트가 인용할 수 있는 "실제 수치" 전체 목록.
+ *
+ * 근거로 준 리포트·뉴스 제목/요약문 안의 숫자도 반드시 포함해야 한다 —
+ * 안 그러면 Gemini가 근거를 그대로 인용해도("美 8월 CPI 3.4%↑" 제목의
+ * "3.4%") "우리 데이터에 없는 수치"로 오판돼 코멘트 전체가 버려진다
+ * (실측 — 근거가 가장 풍부했던 "물가·인플레이션" 이슈만 계속 코멘트가
+ * 비던 진짜 원인. 근거를 주고 그 근거를 인용하면 검열하는 자기모순이었다).
+ */
 function buildAllowedNumbers(payload: CommentPayload): number[] {
   const nums: number[] = [];
   for (const r of payload.snapshot) {
@@ -241,14 +262,16 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
     for (const m of i.metrics ?? []) {
       nums.push(m.current, m.previous, m.change);
     }
+    for (const r of i.reports) {
+      nums.push(...extractNumbers(r.title));
+    }
+    for (const n of i.news) {
+      nums.push(...extractNumbers(n.title));
+      if (n.excerpt) nums.push(...extractNumbers(n.excerpt));
+    }
   }
   return nums;
 }
-
-// 통계적 주장으로 보이는 "숫자+단위" 조합만 검증 대상으로 삼는다(서수·
-// "2주 연속" 같은 평범한 소수는 자연어에 흔해 오탐이 크다 — 실제 위험은
-// 근거 없는 %/bp/배/건 수치를 지어내는 쪽이다).
-const CLAIM_NUM_RE = /(-?\d+(?:\.\d+)?)\s*(%|bp|배|pt|건)/g;
 
 /**
  * @param trustGrounded 그라운딩이 실제로 출처를 찾아왔을 때 true — 우리가

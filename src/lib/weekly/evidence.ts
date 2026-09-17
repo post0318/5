@@ -24,10 +24,15 @@ const FRED_METRICS_BY_TOPIC: Record<
   string,
   { series: string; label: string; unit: string }[]
 > = {
-  "물가·인플레이션": [{ series: "CPIAUCSL", label: "미국 CPI(계절조정지수)", unit: "지수" }],
+  // "전월비"를 라벨에 못 박아 둔다 — 뉴스 헤드라인의 "CPI 3.4%↑"는 보통
+  // 전년동월비(YoY)라, 라벨 없이 지수값만 주면 서로 다른 기준의 숫자가
+  // 나란히 놓여 헷갈린다(실측 — 오너 지적으로 발견).
+  "물가·인플레이션": [
+    { series: "CPIAUCSL", label: "미국 CPI(계절조정지수, 전월비)", unit: "지수" },
+  ],
   "고용·경기": [
     { series: "UNRATE", label: "미국 실업률", unit: "%" },
-    { series: "PAYEMS", label: "미국 비농업 고용", unit: "천명" },
+    { series: "PAYEMS", label: "미국 비농업 고용(전월비)", unit: "천명" },
   ],
   "미국 금리·연준": [{ series: "FEDFUNDS", label: "실효 연방기금금리", unit: "%" }],
 };
