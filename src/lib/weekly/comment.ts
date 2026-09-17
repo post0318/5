@@ -2,6 +2,7 @@ import "server-only";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
 import type { WeeklyIssue } from "./issues";
 import { geminiGenerate, isGeminiConfigured, type GeminiResult } from "./gemini";
+import type { ReportWeek } from "./week";
 
 /**
  * 주간 리포트 해석 코멘트 — Gemini(수집→**해석**→검증의 가운데 단계).
@@ -33,6 +34,14 @@ export interface WeeklyComments {
    * 원인이든 결과든 인과가 있어야". 근거가 약하면 null → 렌더링 쪽이
    * 기존 `movers()`(사실 나열)로 폴백한다. */
   headline: string | null;
+  /** "4. 금리정책" 맨 위에 붙는 종합 요약 문단(오너 지시 2026-09-18 —
+   * "네이버 AI 요약도 이 정도는 한다"). 그라운딩 성공(trustGrounded)일
+   * 때만 채워진다 — 실패하면 null → 기존 기사 표만 보여준다. */
+  policySummary: string | null;
+  /** "5. 다음 주 주시 일정" — 날짜별 확정 이벤트 캘린더(오너 지시
+   * 2026-09-18 — "관련 기사 목록이 아니라 일자별 캘린더를 원한 거다").
+   * 그라운딩 성공일 때만 채워진다 — 실패하면 null → 기존 기사 표로 폴백. */
+  calendar: { date: string; event: string }[] | null;
   /** key = SnapshotRow.name */
   snapshot: Map<string, string>;
   /** key = WeeklyIssue.label */
@@ -48,6 +57,8 @@ const SYSTEM_PROMPT = `# 역할
 
 # 입력 데이터
 사용자 메시지는 JSON 객체 하나다.
+- reportWeek: 이 리포트가 다루는 주(월~금).
+- nextWeek: reportWeek 바로 다음 주(월~금) — calendar 는 이 기간 대상.
 - topMovers: 이번 주 가장 많이 오른/내린 자산(코드가 계산한 값, 참고용).
 - snapshot: 이번 주 자산별 종가·주간 변동(pct=주간 변동률%, diffBp=금리류
   변동폭 bp). value/pct/diffBp 가 null 이면 비교할 값이 없다는 뜻이다.
@@ -85,13 +96,29 @@ const SYSTEM_PROMPT = `# 역할
    나열로 대체한다.
 6. issues 코멘트는 그 이슈의 reports/news/earnings/metrics 를 우선 활용해
    해석하되, 부족하면 마찬가지로 웹검색으로 보강한다.
+7. **policySummary — 미국 연준(FOMC)·한국은행·일본은행의 이번 주 통화
+   정책 동향을 종합한 2~4문장 요약.** 단순 기사 나열이 아니라 "각국
+   중앙은행이 이번 주 무엇을 했거나 시사했는지, 시장이 어떻게 반응했는지"
+   를 종합 서술한다(포털 AI 검색 요약 수준을 목표로 한다 — 얕은 사실
+   나열 금지). 웹검색으로 실제 확인한 내용만 쓴다. 확인이 부족하면 아는
+   범위까지만 쓰고, 아예 근거가 없으면 null 로 남긴다.
+8. **calendar — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정.** "관련
+   기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
+   예정된 이벤트(중앙은행 회의·주요 경제지표 발표일·옵션선물 동시만기일
+   등 거시·시장 이벤트 위주, 개별 기업 실적·공모주 일정은 제외)를
+   날짜별로 확인해서 적는다. **절대 지어내지 마라** — 확인 안 되는
+   날짜/이벤트는 통째로 뺀다(목록이 짧거나 비어도 괜찮다). 각 항목은
+   {"date": "YYYY-MM-DD", "event": "그 날 있는 일정, 15자 내외"} 형식,
+   nextWeek 범위를 벗어나는 날짜는 넣지 않는다. 날짜 오름차순 정렬.
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
-{"headline": "한 줄 결론", "snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": "코멘트"}}
+{"headline": "한 줄 결론", "policySummary": "정책 요약 또는 null", "calendar": [{"date": "YYYY-MM-DD", "event": "..."}], "snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": "코멘트"}}
 snapshot·issues 에 없는 키를 새로 만들지 말 것.`;
 
 interface CommentPayload {
+  reportWeek: { start: string; end: string };
+  nextWeek: { start: string; end: string };
   topMovers: { up: { name: string; pct: number } | null; down: { name: string; pct: number } | null };
   snapshot: {
     name: string;
@@ -128,8 +155,34 @@ function computeTopMovers(snapshot: SnapshotRow[]): CommentPayload["topMovers"] 
   };
 }
 
-function buildPayload(snapshot: SnapshotRow[], issues: WeeklyIssue[]): CommentPayload {
+function thirdFridayUTC(year: number, month1to12: number): string {
+  const first = new Date(Date.UTC(year, month1to12 - 1, 1));
+  const firstFridayDate = 1 + ((5 - first.getUTCDay() + 7) % 7); // 5 = 금요일
+  const thirdFridayDate = firstFridayDate + 14;
+  return new Date(Date.UTC(year, month1to12 - 1, thirdFridayDate)).toISOString().slice(0, 10);
+}
+
+/** 선물·옵션 동시 만기일("네 마녀의 날") — 3/6/9/12월 셋째 금요일은 공개된
+ * 고정 일정이라 검색 없이 코드로 항상 정확히 계산할 수 있다(할루시네이션
+ * 위험 0). 대상 기간(YYYY-MM-DD)에 걸리면 그 날짜를 돌려준다. */
+function computeQuadWitching(startDate: string, endDate: string): { date: string; event: string } | null {
+  const y1 = Number(startDate.slice(0, 4));
+  const y2 = Number(endDate.slice(0, 4));
+  const candidates: string[] = [];
+  for (let y = y1; y <= y2; y++) {
+    for (const m of [3, 6, 9, 12]) candidates.push(thirdFridayUTC(y, m));
+  }
+  const hit = candidates.find((d) => d >= startDate && d <= endDate);
+  return hit ? { date: hit, event: "선물·옵션 동시 만기일(네 마녀의 날)" } : null;
+}
+
+function buildPayload(snapshot: SnapshotRow[], issues: WeeklyIssue[], week: ReportWeek): CommentPayload {
+  const weekEndMs = Date.parse(`${week.weekEnd}T00:00:00Z`);
+  const nextStart = new Date(weekEndMs + 3 * 86_400_000).toISOString().slice(0, 10); // 금→월
+  const nextEnd = new Date(weekEndMs + 7 * 86_400_000).toISOString().slice(0, 10); // 금→그다음 금
   return {
+    reportWeek: { start: week.weekStart, end: week.weekEnd },
+    nextWeek: { start: nextStart, end: nextEnd },
     topMovers: computeTopMovers(snapshot),
     snapshot: snapshot
       .filter((r) => r.value != null)
@@ -175,6 +228,8 @@ function buildPayload(snapshot: SnapshotRow[], issues: WeeklyIssue[]): CommentPa
 
 interface CommentResponse {
   headline?: string;
+  policySummary?: string;
+  calendar?: { date?: string; event?: string }[];
   snapshot?: Record<string, string>;
   issues?: Record<string, string>;
 }
@@ -303,10 +358,11 @@ function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): 
 export async function generateWeeklyComments(
   snapshot: SnapshotRow[],
   issues: WeeklyIssue[],
+  week: ReportWeek,
 ): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
   if (!isGeminiConfigured() || issues.length === 0) return null;
 
-  const payload = buildPayload(snapshot, issues);
+  const payload = buildPayload(snapshot, issues, week);
   const result = await geminiGenerate({
     system: SYSTEM_PROMPT,
     user: JSON.stringify(payload),
@@ -326,8 +382,44 @@ export async function generateWeeklyComments(
   const trustGrounded = result.groundingSources.length > 0;
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
-  const comments: WeeklyComments = { headline: null, snapshot: new Map(), issues: new Map() };
+  const comments: WeeklyComments = {
+    headline: null,
+    policySummary: null,
+    calendar: null,
+    snapshot: new Map(),
+    issues: new Map(),
+  };
   comments.headline = parsed?.headline ? verifyComment(parsed.headline, allowed, trustGrounded) || null : null;
+
+  // policySummary·calendar 는 날짜·기관명 등 검증 불가능한 구체적 사실을
+  // 담으므로, 그라운딩이 실제로 출처를 찾아왔을 때만 신뢰한다 — 실패하면
+  // 렌더링 쪽이 기존 기사 표로 폴백(허위 캘린더보단 표가 안전).
+  if (trustGrounded && parsed?.policySummary) {
+    comments.policySummary = parsed.policySummary.trim() || null;
+  }
+  if (trustGrounded && Array.isArray(parsed?.calendar)) {
+    const nextStart = payload.nextWeek.start;
+    const nextEnd = payload.nextWeek.end;
+    comments.calendar = parsed.calendar
+      .filter(
+        (c): c is { date: string; event: string } =>
+          typeof c?.date === "string" &&
+          typeof c?.event === "string" &&
+          c.date >= nextStart &&
+          c.date <= nextEnd,
+      )
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+  // 선물·옵션 동시 만기일("네 마녀의 날" — 3/6/9/12월 셋째 금요일)은 공개된
+  // 고정 일정이라 검색 없이 코드로 항상 정확히 계산할 수 있다. 그라운딩
+  // 결과와 무관하게 항상 포함(중복이면 건너뜀).
+  const quadWitching = computeQuadWitching(payload.nextWeek.start, payload.nextWeek.end);
+  if (quadWitching) {
+    const list = comments.calendar ?? [];
+    if (!list.some((c) => c.date === quadWitching.date)) {
+      comments.calendar = [...list, quadWitching].sort((a, b) => a.date.localeCompare(b.date));
+    }
+  }
 
   for (const [rawName, text] of Object.entries(parsed?.snapshot ?? {})) {
     const canonical = matchCanonical(rawName, snapshotNames);

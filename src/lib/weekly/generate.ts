@@ -87,6 +87,7 @@ type LlmOutcome = {
 async function tryGenerateComments(
   snapshot: SnapshotRow[],
   issues: WeeklyIssue[],
+  week: ReportWeek,
 ): Promise<LlmOutcome | null> {
   if (!isGeminiConfigured()) return null;
   const monthUsage = await getWeeklyMonthUsage();
@@ -97,7 +98,7 @@ async function tryGenerateComments(
     return null;
   }
   try {
-    const out = await generateWeeklyComments(snapshot, issues);
+    const out = await generateWeeklyComments(snapshot, issues, week);
     if (!out) return null;
     await incWeeklyUsage(out.result.usage.costUsd);
     return {
@@ -161,7 +162,7 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
   };
   const all = await buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length });
   const top = await enrichTopIssues(all.slice(0, 3));
-  const llm = await tryGenerateComments(doc.snapshot, top);
+  const llm = await tryGenerateComments(doc.snapshot, top, week);
   const rendered = await renderWeeklyReport({
     week,
     snapshot: doc.snapshot,
@@ -202,7 +203,7 @@ export async function generateWeeklyReport(
   }
 
   const { snapshot, all, top } = await collect(week);
-  const llm = await tryGenerateComments(snapshot, top);
+  const llm = await tryGenerateComments(snapshot, top, week);
   const body = await renderWeeklyReport({ week, snapshot, issues: top, comments: llm?.comments });
 
   const now = new Date().toISOString();

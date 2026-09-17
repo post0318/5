@@ -202,11 +202,26 @@ export async function renderWeeklyReport(opts: {
   }
   parts.push("## 4. 금리정책");
   parts.push("");
+  // Gemini 가 그라운딩으로 종합한 정책 요약(오너 지시 2026-09-18 — "네이버
+  // AI 요약도 이 정도는 한다") — 그라운딩 실패 시 null, 기사 표만 보여줌.
+  if (comments?.policySummary) {
+    parts.push(comments.policySummary);
+    parts.push("");
+  }
   parts.push(policy || "이번 주 관련 기사 없음");
   parts.push("");
   parts.push("## 5. 다음 주 주시 일정");
   parts.push("");
-  parts.push(calendar || "이번 주 관련 기사 없음");
+  // 날짜별 확정 이벤트 캘린더(오너 지시 2026-09-18 — "관련 기사 목록이
+  // 아니라 일자별 캘린더를 원한 거다"). 없으면(그라운딩 실패 등) 기존
+  // 기사 표로 폴백.
+  if (comments?.calendar && comments.calendar.length > 0) {
+    const lines = ["| 날짜 | 일정 |", "|---|---|"];
+    for (const c of comments.calendar) lines.push(`| ${c.date} | ${c.event} |`);
+    parts.push(lines.join("\n"));
+  } else {
+    parts.push(calendar || "이번 주 관련 기사 없음");
+  }
   parts.push("");
 
   return parts.join("\n");
