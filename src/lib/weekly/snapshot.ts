@@ -1,19 +1,22 @@
 import "server-only";
 import { getYahooFinance } from "@/lib/macro/yf-client";
 import { fetchRateSeries } from "@/lib/macro/kr/ecos";
+import { fetchText } from "@/lib/markets/http";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
 import type { ReportWeek } from "./week";
 
 /**
  * 주간 시세 스냅샷 — "지난주 금요일 종가 vs 전전주 금요일 종가"로 전 지표를
  * 같은 구간에 맞춘다(데모 때 자산별 조회 구간이 제각각이라 표가 뒤섞였던
- * 문제 방지). 소스: Yahoo(지수·원자재·환율·미국채), ECOS(국고채, 키 있을 때),
- * 브라질 중앙은행 SGS(Selic), 브라질 장기 국채(NTN-F ~10년 롤링)는 오너의
- * 4번 프로젝트(github.com/post0318/4)가 재무부 CSV(14MB)를 매주 일요일
- * 12:00 UTC 에 갱신해 커밋하는 JSON 을 GitHub raw 로 읽는다(오너 안내,
- * 2026-09 — Tesouro Direto 공개 JSON 은 410 Gone 으로 폐기돼 못 씀).
- * 갱신이 밀리면 asOf 를 그대로 표기하고 전주 대비는 그 시점 기준 7일 전과
- * 비교한다.
+ * 문제 방지). 소스: Yahoo(지수·원자재·환율·미국채 10년), FRED(미국채 3년 —
+ * CBOE 가 3년물 지수 자체를 안 내서 Yahoo 티커가 없음, `^`류 대신 FRED
+ * DGS3 공개 CSV 사용), ECOS(국고채, 키 있을 때), 브라질 장기 국채(NTN-F
+ * ~10년 롤링)는 오너의 4번 프로젝트(github.com/post0318/4)가 재무부
+ * CSV(14MB)를 매주 일요일 12:00 UTC 에 갱신해 커밋하는 JSON 을 GitHub raw
+ * 로 읽는다(오너 안내, 2026-09 — Tesouro Direto 공개 JSON 은 410 Gone 으로
+ * 폐기돼 못 씀). 갱신이 밀리면 asOf 를 그대로 표기하고 전주 대비는 그
+ * 시점 기준 7일 전과 비교한다. 브라질 Selic(기준금리) 행은 표를 줄이라는
+ * 오너 지시로 제거 — NTN-F 10년 수익률 하나만 남긴다(2026-09).
  */
 
 interface YahooSpec {
@@ -31,12 +34,9 @@ const YAHOO_SPECS: YahooSpec[] = [
   { sym: "^KQ11", key: "KOSDAQ", group: "국내주식", name: "코스닥", unit: "pt" },
   { sym: "^GSPC", key: "SPX", group: "해외주식", name: "S&P 500", unit: "pt" },
   { sym: "^IXIC", key: "IXIC", group: "해외주식", name: "나스닥", unit: "pt" },
-  { sym: "^SOX", key: "SOX", group: "해외주식", name: "필라델피아 반도체", unit: "pt" },
   { sym: "^TNX", key: "UST10Y", group: "채권", name: "미국채 10년", unit: "%", rate: true },
-  { sym: "^FVX", key: "UST5Y", group: "채권", name: "미국채 5년", unit: "%", rate: true },
   { sym: "GC=F", key: "GOLD", group: "원자재", name: "금", unit: "$/oz" },
   { sym: "CL=F", key: "WTI", group: "원자재", name: "WTI", unit: "$/bbl" },
-  { sym: "BZ=F", key: "BRENT", group: "원자재", name: "브렌트", unit: "$/bbl" },
   { sym: "HG=F", key: "COPPER", group: "원자재", name: "구리", unit: "$/lb" },
   { sym: "KRW=X", key: "USDKRW", group: "환율·변동성", name: "원/달러", unit: "원" },
   { sym: "JPY=X", key: "USDJPY", group: "환율·변동성", name: "엔/달러", unit: "엔" },
@@ -144,8 +144,8 @@ async function ecosRows(week: ReportWeek): Promise<SnapshotRow[]> {
   const start = week.baseFriday.replace(/-/g, "");
   const end = week.weekEnd.replace(/-/g, "");
   const items = [
-    { item: "gov3y" as const, key: "KTB3Y", name: "국고채 3년" },
     { item: "gov10y" as const, key: "KTB10Y", name: "국고채 10년" },
+    { item: "gov3y" as const, key: "KTB3Y", name: "국고채 3년" },
   ];
   const rows: SnapshotRow[] = [];
   for (const it of items) {
@@ -162,41 +162,29 @@ async function ecosRows(week: ReportWeek): Promise<SnapshotRow[]> {
   return rows;
 }
 
-/** 브라질 중앙은행 SGS 432 = Selic 목표금리(공개 API, 키 불필요) */
-async function selicRow(): Promise<SnapshotRow | null> {
+/** 미국채 3년 — CBOE 가 3년물 지수(^FVX 류)를 안 내서 Yahoo 티커가 없다.
+ * FRED DGS3(공개 CSV, 키 불필요)로 대체(오너 지시 — 미국채 5년 대신 3년). */
+async function ust3yRow(week: ReportWeek): Promise<SnapshotRow> {
+  const spec: RowSpec = { key: "UST3Y", group: "채권", name: "미국채 3년", unit: "%", rate: true, source: "FRED (DGS3)" };
   try {
-    const res = await fetch(
-      "https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/10?formato=json",
-      { signal: AbortSignal.timeout(8000) },
+    // baseFriday 자체가 휴장일일 수 있어(요일이 항상 거래일은 아님) 그
+    // 이전 값도 찾을 수 있게 며칠 여유를 두고 요청한다(yahooRows와 동일 방식).
+    const cosd = new Date(Date.parse(week.baseFriday) - 12 * 86_400_000).toISOString().slice(0, 10);
+    const csv = await fetchText(
+      `https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS3&cosd=${cosd}`,
+      { headers: { "user-agent": "Mozilla/5.0", accept: "text/csv" }, revalidate: 60 * 60 * 12 },
     );
-    if (!res.ok) return null;
-    const j = (await res.json()) as { data: string; valor: string }[];
-    const bars: Bar[] = j
-      .map((r) => {
-        const [d, m, y] = r.data.split("/");
-        return { date: `${y}-${m}-${d}`, close: Number(r.valor) };
-      })
-      .filter((b) => Number.isFinite(b.close))
-      .sort((a, b) => a.date.localeCompare(b.date));
-    // 시리즈에 오늘 이후 일자가 미리 들어있음(실측 — 다음 COPOM 까지 채워져
-    // 있음) → 실행일 이전 값만
-    const today = new Date().toISOString().slice(0, 10);
-    const last = lastOnOrBefore(bars, today);
-    if (!last) return null;
-    return {
-      key: "SELIC",
-      group: "채권",
-      name: "브라질 Selic 기준금리",
-      value: last.close,
-      asOf: last.date,
-      pct: null,
-      diff: null,
-      baseAsOf: null,
-      unit: "%",
-      source: "브라질 중앙은행",
-    };
+    const lines = csv.trim().split(/\r?\n/);
+    const bars: Bar[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const [date, raw] = lines[i].split(",");
+      if (!raw || raw === ".") continue;
+      const value = Number(raw);
+      if (Number.isFinite(value)) bars.push({ date, close: value });
+    }
+    return rowFromBars(spec, bars, week);
   } catch {
-    return null;
+    return emptyRow(spec);
   }
 }
 
@@ -243,18 +231,18 @@ async function ntnfRow(week: ReportWeek): Promise<SnapshotRow | null> {
 }
 
 export async function buildSnapshot(week: ReportWeek): Promise<SnapshotRow[]> {
-  const [yahoo, ecos, selic, ntnf] = await Promise.all([
+  const [yahoo, ust3y, ecos, ntnf] = await Promise.all([
     yahooRows(week),
+    ust3yRow(week),
     ecosRows(week),
-    selicRow(),
     ntnfRow(week),
   ]);
-  const rows = [...yahoo, ...ecos, ...(selic ? [selic] : []), ...(ntnf ? [ntnf] : [])];
+  const rows = [...yahoo, ust3y, ...ecos, ...(ntnf ? [ntnf] : [])];
   const order = ["국내주식", "해외주식", "채권", "원자재", "환율·변동성"];
   return rows.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
 }
 
-/** 이력이 없는 지표(Selic 등)에 직전 리포트 값을 기준값으로 채움 */
+/** 이력이 없는 지표(NTN-F 등)에 직전 리포트 값을 기준값으로 채움 */
 export function fillFromPrevious(rows: SnapshotRow[], prev: SnapshotRow[] | null): SnapshotRow[] {
   if (!prev) return rows;
   const byKey = new Map(prev.map((r) => [r.key, r]));
