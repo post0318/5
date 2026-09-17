@@ -219,6 +219,48 @@ export async function bulkUpsert(ownerId: string, items: UniverseInput[]): Promi
  * 관리자가 「기존 유니버스 가져오기」를 누를 때 1회 실행. 이미 같은 종목을
  * 갖고 있으면 유니크 인덱스에 걸리므로 그 건만 건너뛴다.
  */
+/**
+ * 다른 계정의 유니버스를 내 계정으로 복제한다 (오너 지시 2026-09-17 —
+ * 지메일 계정의 77종목을 회사 계정에도 똑같이).
+ *
+ * 복제지 공유가 아니다 — 복제한 뒤에는 각자 따로 편집된다. 계정별 분리라는
+ * 이번 작업의 취지를 유지하면서 "처음 상태만 맞추기"를 지원한다.
+ * 이미 갖고 있는 종목은 건드리지 않는다(그룹명·메모를 덮어쓰지 않기 위해).
+ */
+export async function copyUniverseFrom(
+  fromOwnerId: string,
+  toOwnerId: string,
+): Promise<{ copied: number; skipped: number }> {
+  if (fromOwnerId === toOwnerId) return { copied: 0, skipped: 0 };
+  const col = await universeCol();
+  const [source, mine] = await Promise.all([
+    col.find({ ownerId: fromOwnerId }).toArray(),
+    col.find({ ownerId: toOwnerId }).toArray(),
+  ]);
+  const have = new Set(mine.map((d) => `${d.market}:${d.symbol}`));
+  const now = new Date().toISOString();
+
+  let copied = 0;
+  let skipped = 0;
+  for (const d of source) {
+    if (have.has(`${d.market}:${d.symbol}`)) {
+      skipped += 1;
+      continue;
+    }
+    // _id 는 새로 발급받아야 한다 — 원본 문서를 그대로 넣으면 키가 겹친다.
+    const rest = { ...d } as Partial<typeof d>;
+    delete rest._id;
+    await col.insertOne({
+      ...(rest as UniverseItemDoc),
+      ownerId: toOwnerId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    copied += 1;
+  }
+  return { copied, skipped };
+}
+
 export async function claimLegacyUniverse(ownerId: string): Promise<{
   claimed: number;
   skipped: number;

@@ -54,6 +54,7 @@ export function UniverseManager() {
     <div className="space-y-6">
       <h1 className="text-xl font-semibold">유니버스 관리</h1>
       <LegacyClaimBanner onClaimed={invalidate} />
+      <CopyFromAccount onCopied={invalidate} />
 
       <Tabs defaultValue="single">
         <TabsList>
@@ -459,6 +460,77 @@ function LegacyClaimBanner({ onClaimed }: { onClaimed: () => void }) {
         </div>
         <Button size="sm" disabled={claim.isPending} onClick={() => claim.mutate()}>
           {claim.isPending ? "가져오는 중…" : "기존 유니버스 가져오기"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * 다른 계정의 유니버스를 내 계정으로 복제 (오너 지시 2026-09-17).
+ * 복제지 공유가 아니다 — 가져온 뒤에는 각자 따로 편집된다. 이미 갖고 있는
+ * 종목은 건너뛰므로 내 그룹명·메모가 덮어써지지 않는다.
+ * 가져올 게 있는 계정이 없으면 아무것도 그리지 않는다.
+ */
+function CopyFromAccount({ onCopied }: { onCopied: () => void }) {
+  const auth = useAppAuth();
+  const qc = useQueryClient();
+  const [from, setFrom] = useState<string>("");
+
+  const accounts = useQuery({
+    queryKey: ["universe-copy-sources"],
+    queryFn: () =>
+      apiFetch<{ accounts: { id: string; email: string; universeCount: number }[]; mine: number }>(
+        "/api/universe/copy-from",
+      ),
+    enabled: auth.isSignedIn && auth.allowed === true,
+    retry: false,
+  });
+
+  const copy = useMutation({
+    mutationFn: () =>
+      apiFetch<{ copied: number; skipped: number }>("/api/universe/copy-from", {
+        method: "POST",
+        body: JSON.stringify({ fromUserId: from }),
+      }),
+    onSuccess: (r) => {
+      toast.success(
+        `${r.copied}개를 가져왔습니다.` +
+          (r.skipped > 0 ? ` 이미 갖고 있던 ${r.skipped}개는 건너뛰었습니다.` : ""),
+      );
+      qc.invalidateQueries({ queryKey: ["universe-copy-sources"] });
+      onCopied();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const list = accounts.data?.accounts ?? [];
+  if (list.length === 0) return null;
+
+  return (
+    <Card>
+      <CardContent className="flex flex-wrap items-center gap-3 p-4 text-sm">
+        <div className="min-w-[14rem] flex-1">
+          <p className="font-medium">다른 계정 유니버스 가져오기</p>
+          <p className="text-muted-foreground mt-0.5 text-xs">
+            고른 계정의 종목을 내 유니버스로 복제합니다. 가져온 뒤에는 각자 따로
+            관리되고, 이미 갖고 있는 종목은 건너뜁니다.
+          </p>
+        </div>
+        <Select value={from} onValueChange={setFrom}>
+          <SelectTrigger className="w-[16rem]">
+            <SelectValue placeholder="가져올 계정 선택" />
+          </SelectTrigger>
+          <SelectContent>
+            {list.map((a) => (
+              <SelectItem key={a.id} value={a.id}>
+                {a.email} ({a.universeCount}종목)
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button size="sm" disabled={!from || copy.isPending} onClick={() => copy.mutate()}>
+          {copy.isPending ? "가져오는 중…" : "가져오기"}
         </Button>
       </CardContent>
     </Card>
