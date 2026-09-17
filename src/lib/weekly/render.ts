@@ -151,7 +151,10 @@ export async function renderWeeklyReport(opts: {
   parts.push("");
   parts.push("## 1. 한 줄 결론");
   parts.push("");
-  parts.push(movers(snapshot));
+  // Gemini 가 이슈 근거와 엮어 인과관계로 쓴 한 줄(오너 지시 2026-09-18 —
+  // "상승·하락 2개만 적고 끝이냐, 인과가 있어야"). 미설정/검증 실패 시
+  // 기존처럼 순수 사실 비교(movers)로 폴백.
+  parts.push(comments?.headline || movers(snapshot));
   parts.push("");
   parts.push("## 2. 시장 스냅샷");
   parts.push("");

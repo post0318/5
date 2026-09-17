@@ -20,6 +20,11 @@ import { geminiGenerate, isGeminiConfigured, type GeminiResult } from "./gemini"
  */
 
 export interface WeeklyComments {
+  /** "1. 한 줄 결론" — 가장 크게 움직인 자산과 이슈 근거를 인과관계로 엮은
+   * 한 문장(오너 지시 2026-09-18 — "딸랑 상승·하락 2개만 적고 끝이냐,
+   * 원인이든 결과든 인과가 있어야". 근거가 약하면 null → 렌더링 쪽이
+   * 기존 `movers()`(사실 나열)로 폴백한다. */
+  headline: string | null;
   /** key = SnapshotRow.name */
   snapshot: Map<string, string>;
   /** key = WeeklyIssue.label */
@@ -33,6 +38,8 @@ const SYSTEM_PROMPT = `# 역할
 
 # 입력 데이터
 사용자 메시지는 JSON 객체 하나다.
+- topMovers: 이번 주 가장 많이 오른/내린 자산(코드가 계산한 값, 그대로
+  인용 가능).
 - snapshot: 이번 주 자산별 종가·주간 변동(pct=주간 변동률%, diffBp=금리류
   변동폭 bp). value/pct/diffBp 가 null 이면 비교할 값이 없다는 뜻이다.
 - issues: 이번 주 핵심 이슈 후보. reports(증권사 리포트 제목)·news(뉴스
@@ -50,13 +57,21 @@ const SYSTEM_PROMPT = `# 역할
    전망 단정("반드시", "확실히") 금지.
 4. snapshot 코멘트는 40자 내외, issues 코멘트는 80자 내외.
 5. 근거가 부족한 항목은 빈 문자열("")로 남긴다. 억지로 채우지 않는다.
+6. **headline(한 줄 결론)이 이 리포트에서 가장 중요한 문장이다.** topMovers
+   (가장 크게 움직인 자산)를 issues 의 근거(뉴스·리포트·실적·FRED 지표)와
+   엮어 "무엇이(원인) → 무엇에 영향을 줬다(결과)"는 인과관계로 써라.
+   예: "WTI가 [원인 근거]로 급등하며 에너지 관련 자산에 부담을 줬다"처럼.
+   근거가 진짜로 연결되지 않으면 억지로 엮지 말고 topMovers 사실만 간결히
+   서술한다(과잉 추론 금지). 100자 내외, 위 1·3 규칙(수치 원칙·어조)도
+   동일하게 적용.
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
-{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": "코멘트"}}
+{"headline": "한 줄 결론", "snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": "코멘트"}}
 snapshot·issues 에 없는 키를 새로 만들지 말 것.`;
 
 interface CommentPayload {
+  topMovers: { up: { name: string; pct: number } | null; down: { name: string; pct: number } | null };
   snapshot: {
     name: string;
     group: string;
@@ -78,8 +93,23 @@ interface CommentPayload {
   }[];
 }
 
+/** render.ts 의 movers() 와 같은 계산(가장 크게 오르내린 자산) — LLM 이
+ * 직접 최댓값을 고르게 하지 않고 코드가 확정해 넘긴다(오답 방지). */
+function computeTopMovers(snapshot: SnapshotRow[]): CommentPayload["topMovers"] {
+  const withPct = snapshot.filter((r) => r.pct != null && Number.isFinite(r.pct));
+  if (withPct.length === 0) return { up: null, down: null };
+  const sorted = [...withPct].sort((a, b) => (b.pct as number) - (a.pct as number));
+  const up = sorted[0];
+  const down = sorted[sorted.length - 1];
+  return {
+    up: { name: up.name, pct: up.pct as number },
+    down: { name: down.name, pct: down.pct as number },
+  };
+}
+
 function buildPayload(snapshot: SnapshotRow[], issues: WeeklyIssue[]): CommentPayload {
   return {
+    topMovers: computeTopMovers(snapshot),
     snapshot: snapshot
       .filter((r) => r.value != null)
       .map((r) => ({
@@ -123,6 +153,7 @@ function buildPayload(snapshot: SnapshotRow[], issues: WeeklyIssue[]): CommentPa
 }
 
 interface CommentResponse {
+  headline?: string;
   snapshot?: Record<string, string>;
   issues?: Record<string, string>;
 }
@@ -241,7 +272,8 @@ export async function generateWeeklyComments(
   const allowed = buildAllowedNumbers(payload);
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
-  const comments: WeeklyComments = { snapshot: new Map(), issues: new Map() };
+  const comments: WeeklyComments = { headline: null, snapshot: new Map(), issues: new Map() };
+  comments.headline = parsed?.headline ? verifyComment(parsed.headline, allowed) || null : null;
 
   for (const [rawName, text] of Object.entries(parsed?.snapshot ?? {})) {
     const canonical = matchCanonical(rawName, snapshotNames);
