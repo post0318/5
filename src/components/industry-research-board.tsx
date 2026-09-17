@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "@/lib/query";
-import { cn } from "@/lib/utils";
+import { cn, toHttps } from "@/lib/utils";
 import type { MarketId } from "@/lib/markets/types";
 import type { ShinhanResearchDoc } from "@/lib/db/shinhan-research";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -137,7 +137,7 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
               <ul className="divide-y">
                 {paged.map((it) => (
                   <li key={it._id} className="py-2.5 first:pt-0 last:pb-0">
-                    <a href={it.pdfUrl ?? undefined} target="_blank" rel="noreferrer" className="group block">
+                    <a href={toHttps(it.pdfUrl)} target="_blank" rel="noreferrer" className="group block">
                       <div className="group-hover:text-primary text-sm leading-snug font-medium">
                         {it.stockName && it.stockName !== it.title && (
                           <span className="text-muted-foreground mr-1.5">[{it.stockName}]</span>

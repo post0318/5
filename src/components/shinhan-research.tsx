@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "@/lib/query";
-import { cn } from "@/lib/utils";
+import { cn, toHttps } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ShinhanResearchDoc } from "@/lib/db/shinhan-research";
@@ -129,7 +129,7 @@ export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbo
               const opinion = normalizeOpinion(it.opinion);
               return (
                 <li key={it._id} className="py-2.5 first:pt-0 last:pb-0">
-                  <a href={it.pdfUrl ?? undefined} target="_blank" rel="noreferrer" className="group block">
+                  <a href={toHttps(it.pdfUrl)} target="_blank" rel="noreferrer" className="group block">
                     <div className="group-hover:text-primary text-sm leading-snug font-medium">
                       {it.title}
                       {it.targetPrice != null && (
