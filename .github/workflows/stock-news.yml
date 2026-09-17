@@ -1,0 +1,46 @@
+name: 종목뉴스 미리 수집
+
+# 종목뉴스를 요청 시점에 긁으면 처음 보는 종목이 4.5~9.3초 걸린다(실측).
+# 유니버스 종목을 미리 받아 MongoDB(stock_news)에 넣어두면 화면은 DB 만 읽는다.
+#
+# Vercel Cron 은 Hobby 요금제에서 2개까지라 이미 kr-fg·us-class-facts 로 차 있다.
+# 다른 수집기들과 같이 GitHub Actions 에서 배포본의 크론 라우트를 호출한다.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # 장중(KST 09~17시)에는 30분, 그 외에는 2시간 간격. 라우트가 30분 안에
+    # 받은 종목은 건너뛰므로 자주 불러도 헛일하지 않는다.
+    - cron: "7,37 0-8 * * *" # 00:07~08:37 UTC = 09:07~17:37 KST (장중, 30분)
+    - cron: "7 9,11,13,15,17,19,21,23 * * *" # 그 외 시간, 2시간
+
+# 앞 회차가 아직 돌고 있으면 기다린다 — 같은 종목을 동시에 두 번 긁지 않게.
+concurrency:
+  group: stock-news
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 유니버스 종목뉴스 갱신
+        env:
+          APP_URL: ${{ vars.APP_URL || 'https://5-topaz-five.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          # 한 번 호출로 240초까지만 돌고 남은 종목 수를 remaining 으로 알려준다.
+          # 다 돌 때까지 최대 5회 이어서 부른다.
+          for i in 1 2 3 4 5; do
+            body=$(curl -sS --max-time 320 \
+              -H "authorization: Bearer ${CRON_SECRET}" \
+              "${APP_URL}/api/cron/stock-news")
+            echo "[$i] $body" | head -c 2000; echo
+            remaining=$(node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).remaining??0))}catch{process.stdout.write("0")}})' <<<"$body")
+            if [ "$remaining" = "0" ]; then
+              echo "한 바퀴 완료"
+              exit 0
+            fi
+            echo "남은 종목 ${remaining}건 — 이어서 호출"
+          done
+          echo "5회 호출 후에도 남음 — 다음 예약 회차에서 계속한다"
