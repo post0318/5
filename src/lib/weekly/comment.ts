@@ -13,10 +13,18 @@ import { geminiGenerate, isGeminiConfigured, type GeminiResult } from "./gemini"
  * 더 잘해야한다" — 예전 `prompt.ts`는 LLM이 리포트 전체를 쓰게 시켜 수치
  * 왜곡 위험이 컸다. 이번엔 입력 범위를 코멘트로만 좁혀 위험을 줄였다).
  *
- * "검증" 단계는 `verifyComment()` — 응답에 %/bp/배/pt/건 단위가 붙은 수치가
- * 나오면 원본 수집 데이터에 실제로 있는 값인지 대조하고, 근거 없는 수치가
- * 하나라도 섞이면 그 코멘트 전체를 버린다(빈 문자열로 대체) — 절반만
- * 맞는 문장을 그대로 노출하지 않는다.
+ * **그라운딩(웹검색) 켬(오너 지시 2026-09-18 — "스냅샷은 이슈와 무관하게
+ * 각 자산의 특이점(상승 원인·하락 사유)을 말해야 한다")**: 스냅샷 16개
+ * 자산 각각의 "왜"를 설명하려면 우리가 미리 모아둔 이슈 3개 근거만으론
+ * 턱없이 부족하다 — 나머지 13개는 아무 근거도 없다. 실제 원인을 알려면
+ * Gemini 가 그 자리에서 검색해야 해서 `grounding: true` 로 바꿨다.
+ *
+ * "검증" 단계(`verifyComment()`)는 그라운딩 여부로 갈린다: 그라운딩이 실제
+ * 로 출처를 찾아왔으면(`groundingSources` 존재) 그 검색 결과를 신뢰하고
+ * 수치 대조를 건너뛴다 — 우리가 안 가진 사실(예: 중국 PMI 수치)을 인용하는
+ * 게 오히려 정상이기 때문. 그라운딩이 출처 없이 끝났으면(검색 실패 등)
+ * 기존처럼 %/bp/배/pt/건 수치를 원본 데이터와 엄격히 대조해 근거 없는
+ * 수치가 섞인 코멘트를 버린다 — 안전망은 그대로 둔다.
  */
 
 export interface WeeklyComments {
@@ -34,53 +42,45 @@ export interface WeeklyComments {
 const SYSTEM_PROMPT = `# 역할
 너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이미 집계된
 주간 시장 데이터에 짧은 해석 코멘트를 붙이는 것이 임무다. 리포트의 구조·
-표·숫자는 이미 코드로 완성돼 있으니 절대 다시 만들지 않는다.
+표·숫자는 이미 코드로 완성돼 있으니 절대 다시 만들지 않는다. 이번 주 각
+자산·이슈가 왜 그렇게 움직였는지 확실치 않으면 **웹검색으로 실제 원인을
+확인**하고 인용해라 — 짐작으로 채우지 마라.
 
 # 입력 데이터
 사용자 메시지는 JSON 객체 하나다.
-- topMovers: 이번 주 가장 많이 오른/내린 자산(코드가 계산한 값, 그대로
-  인용 가능).
+- topMovers: 이번 주 가장 많이 오른/내린 자산(코드가 계산한 값, 참고용).
 - snapshot: 이번 주 자산별 종가·주간 변동(pct=주간 변동률%, diffBp=금리류
   변동폭 bp). value/pct/diffBp 가 null 이면 비교할 값이 없다는 뜻이다.
-- issues: 이번 주 핵심 이슈 후보. reports(증권사 리포트 제목)·news(뉴스
-  제목, 일부는 excerpt=기사 요약문도 있음)가 근거로 들어있다. excerpt가
-  있으면 제목보다 구체적인 근거이니 우선 참고한다. 일부 이슈엔 earnings
-  (빅테크 최근 실적 EPS 서프라이즈)·metrics(FRED 공식 거시지표, 전기 대비
-  변화)도 있다 — 있으면 우선 인용할 만한 확정 수치다.
+- issues: 이번 주 핵심 이슈 후보(증권사 리포트·뉴스 빈도로 뽑힘). reports·
+  news·earnings(실적 서프라이즈)·metrics(FRED 거시지표)가 근거로 들어있다
+  — snapshot 코멘트를 쓸 때 참고는 되지만 **거기에 묶일 필요는 없다.**
 
 # 작성 원칙 (반드시 지킬 것)
-1. **제공된 JSON에 있는 수치만 인용한다.** 새 수치·통계·퍼센트·bp를 추측해서
-   만들지 않는다. 확신이 없으면 수치 언급 자체를 뺀다.
-2. 인과관계는 근거(reports/news 제목)에 실제로 드러난 경우에만 "~영향",
-   "~로 해석됨" 처럼 조심스럽게 쓴다. 근거가 없으면 사실 나열에 그친다.
-3. 각 코멘트는 1문장, 간결한 애널리스트 어조(~음/~함 체). 미사여구·감탄사·
+1. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치(%, 가격,
+   지표 등)를 쓸 때는 **실제 웹검색으로 확인한 것만** 쓴다 — 확인 안 되면
+   수치 없이 정성적으로만("~영향", "~로 해석됨") 서술하고, 그마저 안 되면
+   해당 칸을 비운다.
+2. 각 코멘트는 1문장, 간결한 애널리스트 어조(~음/~함 체). 미사여구·감탄사·
    전망 단정("반드시", "확실히") 금지.
-4. snapshot 코멘트는 40자 내외, issues 코멘트는 80자 내외.
-5. **snapshot 의 pct/diffBp 를 말로 그대로 옮기기만 하는 코멘트는 절대
-   금지한다** — 그 숫자는 이미 표의 "주간 변동" 열에 그대로 보이므로
-   다시 적으면 정보량이 0이다.
-   - 나쁜 예(금지): "주간 3.33% 상승하며 강세를 보임." / "주간 0.88%
-     상승 마감함." — 숫자를 문장으로 바꿔 적기만 함.
-   - 이슈 3개에 직접 엮이는 자산만 쓰라는 뜻이 아니다. 아래 중 하나라도
-     실제로 해당되면 코멘트를 써라(전부 issues 에 묶일 필요 없음):
-     a) issues 중 하나의 근거(뉴스·리포트·실적·지표)와 직접 연결된다 —
-        그 원인을 인용(예: "국제유가 급등 여파로 에너지 비용 부담 반영").
-     b) snapshot 안의 다른 자산과 뚜렷하게 알려진 상관관계가 보인다
-        (예: 미국채 금리 상승과 함께 달러·환율이 움직임, 증시 조정과
-        VIX 상승이 같이 나타남) — 숫자 두 개를 실제로 엮어 설명한다.
-     c) 그 등락의 배경으로 통상 통용되는 시장 메커니즘이 명백하다(예:
-        안전자산 선호 확대·위험선호 회복) — 이때도 "~로 보임"처럼 조심
-        스럽게 쓰고 단정하지 않는다.
-   - 위 a~c 어디에도 해당 안 되고 정말 근거가 없을 때만 빈 문자열("")로
-     남긴다 — 숫자 재진술로 자리만 채우지 말라는 것이지, "이슈에 안
-     묶이면 무조건 빈칸"이 아니다.
-6. **headline(한 줄 결론)이 이 리포트에서 가장 중요한 문장이다.** topMovers
-   (가장 크게 움직인 자산)를 issues 의 근거(뉴스·리포트·실적·FRED 지표)와
-   엮어 "무엇이(원인) → 무엇에 영향을 줬다(결과)"는 인과관계로 써라.
-   예: "WTI가 [원인 근거]로 급등하며 에너지 관련 자산에 부담을 줬다"처럼.
-   근거가 진짜로 연결되지 않으면 억지로 엮지 말고 topMovers 사실만 간결히
-   서술한다(과잉 추론 금지). 100자 내외, 위 1·3 규칙(수치 원칙·어조)도
-   동일하게 적용.
+3. snapshot 코멘트는 40자 내외, issues 코멘트는 80자 내외, headline은
+   120자 내외.
+4. **snapshot: 각 자산 고유의 그 주 등락 원인·특이점을 쓴다.** 핵심 이슈
+   3개(issues)에 묶이는 자산만 쓰라는 게 아니다 — 16개 전부 독립적으로
+   "이 자산이 왜 오르내렸는가"를 다룬다. 확실한 원인을 모르면 웹검색으로
+   찾아서 쓰고, 그래도 못 찾으면 빈 문자열로 남긴다.
+   - 나쁜 예(절대 금지): "주간 3.33% 상승하며 강세를 보임." — 표에
+     이미 있는 등락률을 문장으로 바꿔 적기만 함, 정보량 0.
+   - 좋은 예: "미 CPI 상회로 금리 인상 우려 완화, 외국인 순매수 유입."
+     (실제 그 주 있었던 사건을 원인으로 명시)
+5. **headline(한 줄 결론)은 스냅샷 표 전체를 훑고 "이번 주 시장이 무엇
+   때문에 이렇게 흘렀는지"를 종합해 한 문장으로 쓴다.** topMovers 하나만
+   짚는 게 아니라, 여러 자산에 걸쳐 공통으로 작용한 배경(금리 결정, 유가
+   급등, 인플레이션 지표 등)이 있으면 그걸 중심으로 삼아라. 예: "미 CPI
+   서프라이즈발 금리 인상 우려와 유가 급등이 겹치며 위험자산은 눌리고
+   원자재는 강세를 보인 한 주." 근거가 정말 없을 때만 topMovers 사실
+   나열로 대체한다.
+6. issues 코멘트는 그 이슈의 reports/news/earnings/metrics 를 우선 활용해
+   해석하되, 부족하면 마찬가지로 웹검색으로 보강한다.
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
@@ -250,9 +250,15 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
 // 근거 없는 %/bp/배/건 수치를 지어내는 쪽이다).
 const CLAIM_NUM_RE = /(-?\d+(?:\.\d+)?)\s*(%|bp|배|pt|건)/g;
 
-function verifyComment(raw: string, allowed: number[]): string {
+/**
+ * @param trustGrounded 그라운딩이 실제로 출처를 찾아왔을 때 true — 우리가
+ *   안 가진 사실(웹검색으로 확인한 수치)을 인용하는 게 정상이므로 수치
+ *   대조를 건너뛴다. false 면(그라운딩 꺼짐/검색 실패) 기존처럼 엄격 검증.
+ */
+function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): string {
   const text = raw.trim();
   if (!text) return "";
+  if (trustGrounded) return text;
   for (const m of text.matchAll(CLAIM_NUM_RE)) {
     const n = Number(m[1]);
     const unit = m[2];
@@ -281,21 +287,24 @@ export async function generateWeeklyComments(
   const result = await geminiGenerate({
     system: SYSTEM_PROMPT,
     user: JSON.stringify(payload),
-    grounding: false, // 코멘트는 수집된 자체 데이터만 근거로 삼는다 — 웹검색 그라운딩은 비용만 늘고 대조 불가능한 외부 주장이 섞일 위험이 있어 끔.
+    // 스냅샷 16개 자산 각각의 "왜"를 설명하려면 우리 데이터만으론 부족해
+    // 실시간 검색이 필요하다(오너 지시 2026-09-18). 요청당 +$0.035.
+    grounding: true,
     temperature: 0.25,
     // gemini-3.1-pro-preview 는 "사고" 토큰도 이 상한을 같이 쓴다 — 2,000
     // 이었을 때 사고에 다 쓰고 JSON 이 중간에 잘려 파싱이 통째로 실패했을
     // 가능성이 있어(실측 — 비용은 $0.031 정상 청구됐는데 코멘트가 0건)
-    // 여유를 더 뒀다.
-    maxOutputTokens: 4_000,
+    // 여유를 더 뒀고, 그라운딩까지 켜져 검색 컨텍스트가 더해지니 한 번 더 늘림.
+    maxOutputTokens: 6_000,
   });
 
   const parsed = parseJson(result.text);
   const allowed = buildAllowedNumbers(payload);
+  const trustGrounded = result.groundingSources.length > 0;
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
   const comments: WeeklyComments = { headline: null, snapshot: new Map(), issues: new Map() };
-  comments.headline = parsed?.headline ? verifyComment(parsed.headline, allowed) || null : null;
+  comments.headline = parsed?.headline ? verifyComment(parsed.headline, allowed, trustGrounded) || null : null;
 
   for (const [rawName, text] of Object.entries(parsed?.snapshot ?? {})) {
     const canonical = matchCanonical(rawName, snapshotNames);
@@ -303,7 +312,7 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 스냅샷 코멘트 키 불일치 — "${rawName}" 는 알려진 자산명이 아님`);
       continue;
     }
-    const v = verifyComment(String(text ?? ""), allowed);
+    const v = verifyComment(String(text ?? ""), allowed, trustGrounded);
     if (v) comments.snapshot.set(canonical, v);
   }
   for (const [rawLabel, text] of Object.entries(parsed?.issues ?? {})) {
@@ -312,7 +321,7 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 이슈 코멘트 키 불일치 — "${rawLabel}" 는 알려진 이슈명이 아님`);
       continue;
     }
-    const v = verifyComment(String(text ?? ""), allowed);
+    const v = verifyComment(String(text ?? ""), allowed, trustGrounded);
     if (v) comments.issues.set(canonical, v);
   }
 
