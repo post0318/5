@@ -539,7 +539,22 @@ interface NaverNewsResponse {
 async function fetchKrNewsBySearch(
   symbol: string,
   query: string,
-  opts?: { cutoffMs?: number; display?: number; requireWhitelist?: boolean },
+  opts?: {
+    cutoffMs?: number;
+    display?: number;
+    requireWhitelist?: boolean;
+    /**
+     * 네이버 뉴스에 제휴돼 `naverUrl` 이 있는 기사만 남긴다. 거시경제 국내뉴스
+     * 에서 쓴다(오너 지시 2026-09 — "광고 때문에 네이버 뉴스로 열리게 해
+     * 놨는데 그냥 원사이트로 간다").
+     *
+     * 화면은 `naverUrl ?? url` 로 여는데, 매체 화이트리스트를 끄면서 네이버에
+     * 제휴되지 않은 군소 매체가 대거 들어와 대부분 원문으로 열렸다(실측 —
+     * 30건 중 네이버 링크가 9건). 제휴 매체만 남기면 전부 네이버로 열리고,
+     * 광고 많은 군소 매체도 함께 걸러진다.
+     */
+    requireNaverLink?: boolean;
+  },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
   const requireWhitelist = opts?.requireWhitelist ?? true;
   const keyId = process.env.NAVER_APIHUB_KEY_ID;
@@ -587,6 +602,7 @@ async function fetchKrNewsBySearch(
     } catch {
       // ignore
     }
+    if (opts?.requireNaverLink && !naverUrl) continue;
     items.push({
       id: origLink,
       title: stripHtml(n.title),
@@ -1210,7 +1226,13 @@ export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
     // 도메인 목록보다 신뢰도 낮음) 화이트리스트는 끄고 주제 필터에 맡긴다.
     const results = await Promise.all(
       KR_MACRO_TOPICS.map((q) =>
-        fetchKrNewsBySearch(symbol, q, { cutoffMs: ONE_WEEK_MS, display: 15, requireWhitelist: false }),
+        fetchKrNewsBySearch(symbol, q, {
+          cutoffMs: ONE_WEEK_MS,
+          // 제휴 기사만 남기느라 줄어드는 만큼 더 넉넉히 받아 온다
+          display: 40,
+          requireWhitelist: false,
+          requireNaverLink: true,
+        }),
       ),
     );
     raw = filterMacroRelevant(results.flat(), MACRO_RELEVANT_KO);
