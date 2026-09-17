@@ -20,6 +20,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+      # 이 수집기는 공용 추출기(scripts/lib/us-research-extract.mjs)를 거쳐
+      # pdf-parse 를 쓴다. 설치 단계가 빠져 있어 매 실행이
+      # ERR_MODULE_NOT_FOUND 로 죽고 있었다(실측 2026-09-17).
+      - run: npm ci
       - run: node scripts/collect-mirae-research.mjs
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}

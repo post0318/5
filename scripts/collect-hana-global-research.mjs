@@ -96,9 +96,17 @@ async function fetchPage(page) {
 const ITEM_RE =
   /<a href="#" class="more_btn title" title="더보기" id="(\d+)_(\d+)">([^<]+)<\/a>[\s\S]{0,80}?<li class="mb7 m-info info">[\s\S]*?<span class="txtbasic">([\d.]+)<\/span>[\s\S]{0,400}?<li class="mb7 j_bbsContn[^"]*">([\s\S]*?)<\/li>[\s\S]{0,600}?class="j_fileLink"[^>]*>([^<]*)<\/a>/g;
 
+/**
+ * 목록에서 뽑은 항목. `rawRows` 는 **미국 필터를 걸기 전** 행 수다 — 0건일 때
+ * "페이지 구조가 바뀐 것"과 "최근에 미국 종목 리포트가 없는 것"을 구분하려면
+ * 이 값이 필요하다(오너 지적 2026-09-17: 6회 연속 빨간불이었는데 실제로는
+ * 최근 3일치가 홍콩·중국·유럽 종목뿐이라 정상이었다).
+ */
 function parseItems(html) {
   const items = [];
+  let rawRows = 0;
   for (const m of html.matchAll(ITEM_RE)) {
+    rawRows += 1;
     const [, bbsCd, bbsSeq, rawTitle, rawDate, rawBody] = m;
     const title = stripHtml(rawTitle);
     const date = isoDate(rawDate);
@@ -117,7 +125,7 @@ function parseItems(html) {
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
     });
   }
-  return items;
+  return { items, rawRows };
 }
 
 console.log(`▶ 하나증권 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -128,11 +136,14 @@ console.log(`▶ 하나증권 기업분석 리포트 수집: 최근 ${DAYS}일, 
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
 const collected = [];
 let stop = false;
+let totalRows = 0;
 
 for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   const html = await fetchPage(page);
-  const items = parseItems(html);
-  if (items.length === 0) break;
+  const { items, rawRows } = parseItems(html);
+  totalRows += rawRows;
+  if (rawRows === 0) break;
+  if (items.length === 0) continue; // 이 페이지엔 미국 종목이 없을 뿐
   for (const it of items) {
     if (new Date(it.date) < cutoff) {
       stop = true;
@@ -144,7 +155,14 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
 }
 
 if (collected.length === 0) {
-  console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음(정규식 재확인 필요).");
+  if (totalRows > 0) {
+    // 목록은 멀쩡히 읽혔는데 조건에 맞는 게 없었을 뿐 — 실패가 아니다.
+    console.log(
+      `· 최근 ${DAYS}일 안에 미국(.US) 종목 리포트가 없습니다 (목록 ${totalRows}건 정상 조회).`,
+    );
+    process.exit(0);
+  }
+  console.error("✗ 목록에서 항목을 하나도 못 읽었습니다. 페이지 구조가 바뀌었을 수 있음(정규식 재확인 필요).");
   process.exit(1);
 }
 
