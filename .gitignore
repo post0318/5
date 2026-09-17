@@ -58,3 +58,6 @@ darttest.mjs
 scripts/.krx-last-response.json
 
 scripts/.krx-collect.log
+
+# 로컬 재실행 도구 로그 (scripts/retry-failed-collectors.mjs)
+logs/
