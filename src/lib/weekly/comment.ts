@@ -380,6 +380,11 @@ export async function generateWeeklyComments(
   const parsed = parseJson(result.text);
   const allowed = buildAllowedNumbers(payload);
   const trustGrounded = result.groundingSources.length > 0;
+  console.warn(
+    `[weekly] Gemini 응답 요약 — model=${result.model}, 응답길이=${result.text.length}자, ` +
+      `groundingSources=${result.groundingSources.length}건, trustGrounded=${trustGrounded}, ` +
+      `parseJson성공=${parsed != null}, 응답 최상위 키=${JSON.stringify(parsed ? Object.keys(parsed) : [])}`,
+  );
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
   const comments: WeeklyComments = {
@@ -396,6 +401,12 @@ export async function generateWeeklyComments(
   // 렌더링 쪽이 기존 기사 표로 폴백(허위 캘린더보단 표가 안전).
   if (trustGrounded && parsed?.policySummary) {
     comments.policySummary = parsed.policySummary.trim() || null;
+  } else {
+    // 진단용(오너 지적 2026-09-18 — "정책도 또 기사제목이네") — trustGrounded
+    // 가 false였는지, parsed 자체엔 있었는데 우리가 무시했는지 구분해서 남긴다.
+    console.warn(
+      `[weekly] policySummary 미채움 — trustGrounded=${trustGrounded}, parsed.policySummary=${JSON.stringify(parsed?.policySummary ?? null)}`,
+    );
   }
   if (trustGrounded && Array.isArray(parsed?.calendar)) {
     const nextStart = payload.nextWeek.start;
@@ -409,6 +420,10 @@ export async function generateWeeklyComments(
           c.date <= nextEnd,
       )
       .sort((a, b) => a.date.localeCompare(b.date));
+  } else if (!trustGrounded || parsed?.calendar) {
+    console.warn(
+      `[weekly] calendar 미채움 — trustGrounded=${trustGrounded}, parsed.calendar=${JSON.stringify(parsed?.calendar ?? null)}`,
+    );
   }
   // 선물·옵션 동시 만기일("네 마녀의 날" — 3/6/9/12월 셋째 금요일)은 공개된
   // 고정 일정이라 검색 없이 코드로 항상 정확히 계산할 수 있다. 그라운딩
