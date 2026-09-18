@@ -865,6 +865,55 @@ npm run db:studio    # drizzle studio
     "노출 한계" 문제(CLAUDE.md 위 항목 — 저빈도 소스가 고빈도 국내 소스들에
     밀려 `/api/research/industry` 의 150건 한도 밖으로 밀려나던 문제)도
     해결됨 — 이제 별도 탭이라 국내 산업분석 150건과 경쟁하지 않음.
+  - **"해외리서치" 세그먼트 — 인사이트에서 산업분석으로 부분 역이동(오너
+    지시, 2026-09-19 — "goldman-sachs-research는 산업분석으로 이동하는데
+    시황 오른쪽에 해외리서치라고 분류추가해서 해당리서치는 여기로 분류하고
+    여기만 백필기간을 180일로")**: 위 "인사이트 탭 분리"가 5곳 전부를
+    산업분석에서 뺀 지 얼마 안 돼, 오너가 골드만삭스의 **리서치 노트만**
+    (`goldman-sachs-research` 경로, GS Sustain 등 — 일반 인사이트 아티클과
+    다르게 국내 산업분석과 같은 성격의 콘텐츠) 다시 산업분석 탭으로 옮기고
+    싶어함 — "모든 걸 산업분석으로"가 아니라 **경로 단위로 정밀하게
+    구분**(오너 — "모든것을 산업분석으로 이동이 아니다"). 골드만삭스
+    인사이트 하위 실측 7개 경로 중 오너 최종 결정: articles·top-of-mind·
+    the-markets·goldman-sachs-exchanges(팟캐스트 2종 포함) → 인사이트 그대로,
+    videos·talks-at-gs(영상 2종) → 완전 제외, goldman-sachs-research →
+    산업분석 "해외리서치" 세그먼트. 이후 블랙록도 같은 방식으로 확장(오너 —
+    "블랙락은 global-investment-outlook은 산업분석으로 정리하고 나머지는
+    인사이트에") — `global-weekly-commentary`(매주)는 인사이트, `global-
+    investment-outlook`(반기)만 해외리서치.
+    - **구현**: 같은 회사라도 콘텐츠 종류에 따라 다른 `source` 문자열을 쓴다
+      — "Goldman Sachs"/"BlackRock"(인사이트, `INSIGHT_SOURCES`)과
+      "Goldman Sachs Research"/"BlackRock Research"(해외리서치,
+      `FOREIGN_RESEARCH_SOURCES`, `shinhan-research.ts`)를 분리. 라우트가
+      POST 1회당 source 하나만 받으므로 각 수집기가 콘텐츠 종류별로 나눠
+      두 번 전송한다(한경 컨센서스 수집기의 "실제 출처별로 나눠 전송"과
+      같은 패턴). `classifyResearchTopic()`이 `FOREIGN_RESEARCH_SOURCES`면
+      무조건 "해외리서치"로 분류(다른 국내 키워드 분류 우회, 새
+      `ResearchTopic` 값 — TOPICS 배열에 "시황" 바로 오른쪽에 배치).
+      `getIndustryResearch()`의 산업 조회·정리 양쪽에서 `INSIGHT_SOURCES`만
+      제외하므로 `FOREIGN_RESEARCH_SOURCES`는 자동으로 포함(추가 코드 불요).
+    - **180일 보존(오너 지시 — "여기만")**: 다른 산업분석(90일)과 달리
+      `FOREIGN_RESEARCH_MAX_AGE_MS`(180일)를 따로 둬 `upsertShinhanResearch()`
+      의 전역 정리 단계에서 `FOREIGN_RESEARCH_SOURCES`를 제외하고 별도
+      180일 컷오프로 정리. 14~90일 사이 "산업" 카테고리를 재분류해 조기
+      삭제하는 후보 조회(`staleIndustryCandidates`)에서도 함께 제외 —
+      안 그러면 "해외리서치"가 (시황도 투자전략도 아니니) 기본 30일
+      컷오프로 오분류돼 조기 삭제될 뻔했다(구현 중 직접 발견·수정).
+    - **블랙록 발행일 근사**: `global-investment-outlook`은 발행일 메타
+      자체가 없어(실측) 제목+요약의 연도와 "Midyear" 표기로 반기를
+      추정(Midyear면 7/1, 아니면 1/1) — 정확한 발행일이 아니라 근사값.
+    - **모간스탠리 ESG/개인재무 주제 제외(오너 지시, 2026-09-19 — "esg는
+      다 제외" + "Personal Finance 대상에서 제외")**: `<meta
+      name="content_topics">`에 기사별 주제 태그가 명시돼 있어(실측) 제목
+      키워드 추측 없이 정확히 거른다. ESG/지속가능성 계열 9종(diversity-
+      and-inclusion·sustainability·sustainable-investing·sustainable-
+      supply-chain·sustainable-finance·corporate-sustainability·
+      environmental-social-and-governance-esg·inclusive-growth·
+      esg-investing)과 personal-finance 태그가 있으면 그 기사를 통째로
+      건너뛴다(인사이트에도 안 실림). "Morgan Stanley Institute"(오너
+      확인 — "인사이트에")는 이 필터에 안 걸리는 한 기존처럼 인사이트로
+      감, 별도 처리 불필요. 팟캐스트(`/insights/podcasts/`, 379건)는
+      "요약본 제공 없이 링크"라 처음부터 수집 대상 밖(오너 확인).
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로

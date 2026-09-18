@@ -17,6 +17,7 @@ const TOPICS = [
   { key: "투자전략(주식)", label: "투자전략(주식)" },
   { key: "투자전략(채권)", label: "투자전략(채권)" },
   { key: "시황", label: "시황" },
+  { key: "해외리서치", label: "해외리서치" },
 ] as const;
 type TopicKey = (typeof TOPICS)[number]["key"];
 

@@ -59,6 +59,9 @@ const MAX_AGE_MS = 90 * 24 * 3600_000;
 const RECENT_WINDOW_MS = 90 * 24 * 3600_000;
 const STRATEGY_MAX_AGE_MS = 30 * 24 * 3600_000;
 const MARKET_CONDITION_MAX_AGE_MS = 14 * 24 * 3600_000;
+/** 해외리서치(골드만삭스 리서치 노트) 전용 보존기간 — 오너 지시,
+ * 2026-09-19 "여기만 백필기간을 180일로". 다른 "산업" 카테고리는 90일. */
+const FOREIGN_RESEARCH_MAX_AGE_MS = 180 * 24 * 3600_000;
 
 export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDoc>> {
   const db = await getDb();
@@ -86,7 +89,18 @@ export async function upsertShinhanResearch(
     upserted = result.upsertedCount + result.modifiedCount;
   }
   const cutoff = new Date(Date.now() - MAX_AGE_MS).toISOString().slice(0, 10);
-  const del = await col.deleteMany({ date: { $lt: cutoff } });
+  const del = await col.deleteMany({
+    date: { $lt: cutoff },
+    source: { $nin: FOREIGN_RESEARCH_SOURCES as unknown as string[] },
+  });
+  // 해외리서치(골드만삭스 리서치 노트)만 180일 보존(오너 지시, 2026-09-19).
+  const foreignResearchCutoff = new Date(Date.now() - FOREIGN_RESEARCH_MAX_AGE_MS)
+    .toISOString()
+    .slice(0, 10);
+  const delForeignResearch = await col.deleteMany({
+    date: { $lt: foreignResearchCutoff },
+    source: { $in: FOREIGN_RESEARCH_SOURCES as unknown as string[] },
+  });
 
   // 투자전략·시황 조기 정리 — topic 은 DB 필드가 아니라 classifyResearchTopic()
   // 의 계산 결과라 deleteMany 조건절에 바로 못 넣는다. 둘 중 더 짧은 컷오프
@@ -99,7 +113,11 @@ export async function upsertShinhanResearch(
   // 투자전략(30일)보다 짧아서, 14일 기준으로 가져와야 "14~30일 사이의
   // 시황"도 후보에 걸린다(30일 기준으로만 가져오면 이 구간을 통째로 놓침).
   const staleIndustryCandidates = await col
-    .find({ category: "산업", date: { $lt: marketConditionCutoff }, source: { $nin: INSIGHT_SOURCES as unknown as string[] } })
+    .find({
+      category: "산업",
+      date: { $lt: marketConditionCutoff },
+      source: { $nin: [...INSIGHT_SOURCES, ...FOREIGN_RESEARCH_SOURCES] as unknown as string[] },
+    })
     .project<{ _id: string; date: string; stockName: string; title: string; source: string; market: MarketId; summary: string }>({
       date: 1,
       stockName: 1,
@@ -123,7 +141,10 @@ export async function upsertShinhanResearch(
     prunedStrategy = del2.deletedCount ?? 0;
   }
 
-  return { upserted, pruned: (del.deletedCount ?? 0) + prunedStrategy };
+  return {
+    upserted,
+    pruned: (del.deletedCount ?? 0) + (delForeignResearch.deletedCount ?? 0) + prunedStrategy,
+  };
 }
 
 /**
@@ -145,7 +166,7 @@ function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
   return result;
 }
 
-export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전략(채권)" | "시황";
+export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전략(채권)" | "시황" | "해외리서치";
 
 /**
  * "산업" 카테고리 문서를 산업분석/투자전략/시황 세 갈래로 나눈다(오너 지시,
@@ -383,6 +404,24 @@ const ESG_EXCLUDE_RE = /\bESG\b/i;
  */
 export const INSIGHT_SOURCES = ["BlackRock", "Goldman Sachs", "J.P. Morgan", "Morgan Stanley", "PIMCO"] as const;
 
+/**
+ * "해외리서치" — 산업분석 탭의 새 세그먼트(오너 지시, 2026-09-19 —
+ * "goldman-sachs-research는 산업분석으로 이동하는데 시황 오른쪽에
+ * 해외리서치라고 분류추가해서... video는 제외다... 정리하면 2개는 제외
+ * 3개는 인사이트 1개는 산업분석이다"). 골드만삭스 인사이트 하위 7개
+ * 경로(articles/goldman-sachs-research/top-of-mind/the-markets/
+ * goldman-sachs-exchanges/videos/talks-at-gs) 중 영상 2종(videos,
+ * talks-at-gs)은 제외, 텍스트 3종(articles/top-of-mind/the-markets +
+ * goldman-sachs-exchanges)은 `INSIGHT_SOURCES`의 "Goldman Sachs"로 계속
+ * 인사이트 탭, 리서치 노트 1종(goldman-sachs-research)만 `source: "Goldman
+ * Sachs Research"`로 구분해 이 분류를 탄다 — `getIndustryResearch()`가
+ * `INSIGHT_SOURCES`만 걸러내므로 이 소스는 자동으로 산업분석 탭 조회에
+ * 포함되고, `classifyResearchTopic()`이 이 소스면 무조건 "해외리서치"로
+ * 분류한다(다른 국내 분류 로직 우회). 백필·보존기간만 180일로 다른 산업
+ * 분석(90일)보다 길게 둔다(오너 지시 — "여기만 백필기간을 180일로").
+ */
+export const FOREIGN_RESEARCH_SOURCES = ["Goldman Sachs Research", "BlackRock Research"] as const;
+
 function isStrategyStockname(stockName: string): boolean {
   if (STRATEGY_STOCKNAMES.has(stockName)) return true;
   return STRATEGY_STOCKNAME_PREFIXES.some((re) => re.test(stockName));
@@ -426,6 +465,7 @@ function isBond(doc: { stockName: string; title: string }, hayWithSummary: strin
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
 ): ResearchTopic {
+  if ((FOREIGN_RESEARCH_SOURCES as readonly string[]).includes(doc.source)) return "해외리서치";
   if (isMarketConditionStockname(doc.stockName)) return "시황";
   if (MARKET_CONDITION_SOURCE_MARKETS.has(`${doc.source}:${doc.market}`)) return "시황";
   const hay = `${doc.stockName ?? ""} ${doc.title}`;

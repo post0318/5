@@ -9,9 +9,21 @@
  *
  * `/insights/articles/` 경로엔 기관 리서치성 콘텐츠(예: "Can Stocks Keep
  * Defying Higher Rates?")와 일반 개인 재무 가이드성 콘텐츠(예: "What Is a
- * Financial Plan?")가 섞여 있음(실측 확인) — 이 프로젝트의 다른 "산업분석"
- * 소스들도 완벽한 필터링 없이 폭넓게 수집하는 기존 트레이드오프와 동일하게
- * 별도 주제 필터 없이 그대로 수집한다.
+ * Financial Plan?")가 섞여 있음(실측 확인).
+ *
+ * **주제 필터(오너 지시, 2026-09-19 — "Diversity & Inclusion는 대상에서
+ * 제외" + "Sustainability 대상에서 제외" + "esg는 다 제외" + "Personal
+ * Finance 대상에서 제외")**: 이 사이트는 `<meta name="content_topics">`
+ * 에 기사별 주제 태그가 `[msdotcom:topics/a, msdotcom:topics/b, ...]`
+ * 형식으로 명시돼 있어(실측 확인) 제목 키워드 추측 없이 정확히 걸러낸다.
+ * ESG/지속가능성 계열(`EXCLUDE_TOPICS`, 오너가 확인한 diversity-and-
+ * inclusion·sustainability 포함 실측 9종 전체)과 personal-finance 주제
+ * 태그가 있으면 그 기사 자체를 통째로 건너뛴다(인사이트 탭에도 안 실림 —
+ * "대상에서 제외"). "Morgan Stanley Institute"(오너 확인, "인사이트에")는
+ * 별도 처리 불필요 — 이 필터에 안 걸리는 한 원래부터 인사이트 탭으로 간다.
+ * **팟캐스트 제외(오너 지시 — "요약본제공없이 링크이기에")**: `/insights/
+ * podcasts/`(379건)는 처음부터 수집 대상(`INSIGHT_PATH_RE`)에 없음 —
+ * 요약 없이 링크만 있는 오디오 콘텐츠라 텍스트 소스 원칙에 안 맞음.
  *
  * 개별 글 페이지: `<meta property="og:title">`(" | Morgan Stanley" 접미사
  * 제거 필요)로 제목, `<meta property="og:description">`로 요약(다른
@@ -66,6 +78,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const SITEMAP = "https://www.morganstanley.com/sitemap.xml";
 const INSIGHT_PATH_RE = /\/insights\/articles\//;
+// 오너 확인(2026-09-19): ESG/지속가능성 계열 9종 + personal-finance 제외.
+const EXCLUDE_TOPICS = [
+  "diversity-and-inclusion",
+  "sustainability",
+  "sustainable-investing",
+  "sustainable-supply-chain",
+  "sustainable-finance",
+  "corporate-sustainability",
+  "environmental-social-and-governance-esg",
+  "inclusive-growth",
+  "esg-investing",
+  "personal-finance",
+];
 
 function decodeEntities(s) {
   return String(s ?? "")
@@ -107,6 +132,10 @@ for (const { url } of targets) {
     const descM = html.match(/<meta property="og:description" content="([^"]*)"/);
     const dateM = html.match(/<meta name="content_publishedAt" content="([^"]*)"/);
     if (!titleM || !dateM) continue;
+
+    const topicsM = html.match(/<meta name="content_topics" content="([^"]*)"/);
+    const topicsRaw = topicsM?.[1] ?? "";
+    if (EXCLUDE_TOPICS.some((t) => topicsRaw.includes(t))) continue;
 
     const title = decodeEntities(titleM[1].replace(/\s*\|\s*Morgan Stanley\s*$/, ""));
     const date = dateM[1].slice(0, 10);
