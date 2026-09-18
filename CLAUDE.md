@@ -725,6 +725,23 @@ npm run db:studio    # drizzle studio
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로
   한국어 번역한다. LLM 요약 없음(비용·본문 소스 미확보로 보류). `post0318/4`
   프로젝트의 `src/lib/server/{brazilNews,translate}.ts` 와 동일 패턴을 이식.
+- **빅테크 공식 블로그("기업 발표", `src/lib/news/companyBlog.ts`, 2026-09
+  추가, 오너 지시 — "엔비디아처럼 블로그등을 통해 공개하는... 파급력이
+  큰데")**: 로이터·블룸버그 등 3자 매체가 받아쓰기 전까진 기존 종목뉴스
+  화이트리스트·뉴스 검색에 전혀 안 잡히는 기업 자체 발표를 보강. 공개
+  RSS/Atom 피드 구독(Google 뉴스 RSS와 같은 성격, 크롤링 아님) — 실측
+  확인된 4곳: NVIDIA(`blogs.nvidia.com/feed/`, RSS)·Apple
+  (`apple.com/newsroom/rss-feed.rss`, **Atom** — `<entry>`/`<link href>`
+  형식이 RSS 와 달라 별도 파싱)·Google(`blog.google/rss/`)·Meta
+  (`about.fb.com/news/feed/`). Microsoft 는 기본 UA 에 403(봇 차단)이라
+  제외 — 나중에 다른 방법을 찾으면 추가. 블로그에 소비자 콘텐츠(NVIDIA
+  GeForce NOW 게임, Apple Arcade/Apple TV 엔터테인먼트 등, 실측 확인)가
+  섞여 있어 기업별 `relevance` 정규식으로 AI·반도체·재무·제품 발표만
+  거른다. 두 군데서 쓴다: ① 주간 리포트(`weekly/issues.ts`
+  `COMPANY_BLOGS_BY_TOPIC` — 지금은 NVIDIA→"AI·반도체 수요" 이슈만) ②
+  종목 페이지 "리서치" 탭의 "기업 발표" 카드(`/api/markets/us/[symbol]/
+  company-blog`, DB 없이 매번 짧은 캐시로 직접 조회 — 새 탭 대신 기존
+  탭에 통합, 종목이 4개뿐이라 별도 최상위 탭은 과하다고 판단).
 - **인플루언서 텔레그램 채널 수집 트리거(2026-09)**: 수집 자체는
   다른 소스와 같은 구조(로컬/Actions 수집 → DB 적재 → 배포본은 조회만)이지만
   **트리거만 두 겹**이다. GitHub `schedule` 이 이 저장소에서 실행률
