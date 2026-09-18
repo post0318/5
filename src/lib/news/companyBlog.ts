@@ -25,8 +25,10 @@ import "server-only";
 
 interface BlogFeedConfig {
   source: string;
-  /** 대응하는 미국 종목 티커 — 종목 페이지에서 조회할 때 이 값으로 찾는다. */
-  ticker: string;
+  /** 대응하는 미국 종목 티커(들) — 종목 페이지에서 조회할 때 이 값으로
+   * 찾는다. 알파벳처럼 복수 종류 주식(GOOGL/GOOG)이 있으면 배열에 전부
+   * 넣는다(오너 지적 2026-09-18 — "googl goog 같은기업인거알지?"). */
+  tickers: string[];
   feedUrl: string;
   format: "rss" | "atom";
   relevance: RegExp;
@@ -35,7 +37,7 @@ interface BlogFeedConfig {
 const BLOG_FEEDS: BlogFeedConfig[] = [
   {
     source: "NVIDIA",
-    ticker: "NVDA",
+    tickers: ["NVDA"],
     feedUrl: "https://blogs.nvidia.com/feed/",
     format: "rss",
     relevance:
@@ -43,15 +45,17 @@ const BLOG_FEEDS: BlogFeedConfig[] = [
   },
   {
     source: "Apple",
-    ticker: "AAPL",
+    tickers: ["AAPL"],
     feedUrl: "https://www.apple.com/newsroom/rss-feed.rss",
     format: "atom",
     relevance:
       /\bAI\b|Apple Intelligence|\bchip\b|silicon|\bM\d\b|earnings|revenue|financial results|manufactur|supply chain|privacy|security|antitrust|European Union|\bEU\b|App Store|data center/i,
   },
   {
+    // 알파벳(구글 모회사) — Class A(GOOGL, 의결권)·Class C(GOOG, 무의결권)
+    // 둘 다 실질적으로 같은 회사라 같은 피드를 공유한다.
     source: "Google",
-    ticker: "GOOGL",
+    tickers: ["GOOGL", "GOOG"],
     feedUrl: "https://blog.google/rss/",
     format: "rss",
     relevance:
@@ -59,7 +63,7 @@ const BLOG_FEEDS: BlogFeedConfig[] = [
   },
   {
     source: "Meta",
-    ticker: "META",
+    tickers: ["META"],
     feedUrl: "https://about.fb.com/news/feed/",
     format: "rss",
     relevance:
@@ -67,7 +71,7 @@ const BLOG_FEEDS: BlogFeedConfig[] = [
   },
   {
     source: "Microsoft",
-    ticker: "MSFT",
+    tickers: ["MSFT"],
     feedUrl: "https://blogs.microsoft.com/feed/",
     format: "rss",
     relevance:
@@ -75,11 +79,25 @@ const BLOG_FEEDS: BlogFeedConfig[] = [
   },
   {
     source: "Oracle",
-    ticker: "ORCL",
+    tickers: ["ORCL"],
     feedUrl: "https://www.oracle.com/corporate/press/rss/rss-pr.xml",
     format: "rss",
     relevance:
       /\bAI\b|artificial intelligence|cloud infrastructure|OCI\b|data cent|datacenter|earnings|revenue|quarterly results|fiscal (?:Q|year)|financial results|stock|acqui|partnership|investor/i,
+  },
+  {
+    // 오너 지적 2026-09-18 — "amazon은 aws에 국한될필요없다". aboutamazon.com
+    // 뉴스룸은 AWS 뿐 아니라 소매·물류·인력정책·재무 관련 발표까지 폭넓게
+    // 다룬다(실측 확인 — <category> 로 AWS/Retail/Workplace/Entertainment/
+    // Community/Sustainability 등 구분). 엔터테인먼트(Prime Video 예고편)·
+    // 지역사회 기부·물 절약 캠페인 등은 걸러내고 AWS·AI·실적·대형 소매
+    // 이벤트(Prime Day)·인력 관련 대규모 투자만 남긴다.
+    source: "Amazon",
+    tickers: ["AMZN"],
+    feedUrl: "https://www.aboutamazon.com/rss/feed.rss",
+    format: "rss",
+    relevance:
+      /\bAWS\b|\bAI\b|artificial intelligence|cloud comput|data cent|datacenter|earnings|revenue|quarterly|antitrust|regulat|Prime Day|Big Deal Days|minimum (?:wage|pay)|\$?\d+(?:\.\d+)?\s*billion|acqui|layoff|logistics|supply chain|chip|infrastructure/i,
   },
 ];
 
@@ -176,10 +194,12 @@ export async function fetchCompanyBlog(companySource: string): Promise<CompanyBl
 /** 종목 페이지("기업 발표" 카드)용 — 티커로 피드가 있는지 찾아 바로 가져온다.
  * 피드가 없는 티커는 빈 배열(화면에서 카드 자체를 숨김). */
 export async function fetchCompanyBlogByTicker(ticker: string): Promise<CompanyBlogItem[]> {
-  const cfg = BLOG_FEEDS.find((f) => f.ticker === ticker.toUpperCase());
+  const upper = ticker.toUpperCase();
+  const cfg = BLOG_FEEDS.find((f) => f.tickers.includes(upper));
   return cfg ? fetchOne(cfg) : [];
 }
 
 export function hasCompanyBlog(ticker: string): boolean {
-  return BLOG_FEEDS.some((f) => f.ticker === ticker.toUpperCase());
+  const upper = ticker.toUpperCase();
+  return BLOG_FEEDS.some((f) => f.tickers.includes(upper));
 }
