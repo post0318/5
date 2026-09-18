@@ -467,11 +467,17 @@ export async function generateWeeklyComments(
   }
   // 선물·옵션 동시 만기일("네 마녀의 날" — 3/6/9/12월 셋째 금요일)은 공개된
   // 고정 일정이라 검색 없이 코드로 항상 정확히 계산할 수 있다. 그라운딩
-  // 결과와 무관하게 항상 포함(중복이면 건너뜀).
+  // 결과와 무관하게 항상 포함 — 단, "같은 날짜"가 아니라 "이미 같은
+  // 이벤트가 그 날짜에 있는지"로 중복을 판정한다(실측 버그 — 같은 날
+  // BOJ 회의가 있어서 날짜만 보고 건너뛰는 바람에 네 마녀의 날 자체가
+  // 통째로 빠짐. 한 날짜에 이벤트가 여러 개 있는 건 정상이다).
   const quadWitching = computeQuadWitching(payload.nextWeek.start, payload.nextWeek.end);
   if (quadWitching) {
     const list = comments.calendar ?? [];
-    if (!list.some((c) => c.date === quadWitching.date)) {
+    const alreadyListed = list.some(
+      (c) => c.date === quadWitching.date && /네\s*마녀|만기일/.test(c.event),
+    );
+    if (!alreadyListed) {
       comments.calendar = [...list, quadWitching].sort((a, b) => a.date.localeCompare(b.date));
     }
   }
