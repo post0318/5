@@ -165,7 +165,13 @@
 .weekly-md strong { font-weight: 600; }
 .weekly-md table { width: 100%; border-collapse: collapse; margin: 0.5rem 0 0.75rem; font-variant-numeric: tabular-nums; }
 .weekly-md th, .weekly-md td { border: 1px solid var(--border); padding: 0.2rem 0.5rem; text-align: left; }
-.weekly-md td:nth-child(2), .weekly-md td:nth-child(3) { text-align: right; }
+/* 열 정렬은 CSS 로 강제하지 않는다 — react-markdown 이 마크다운의 `---:` 를
+   인라인 style 로 내보내므로(실측: <td style="text-align:right">) 위 기본값
+   left 를 알아서 덮는다. 예전엔 여기서 2·3열을 무조건 우측 정렬했는데, 그건
+   시장 스냅샷 표(종가·주간 변동)만 염두에 둔 규칙이라 "다음 주 주시 일정"
+   (날짜·일정)·금리정책 표까지 오른쪽으로 밀어버렸다(오너 지적 2026-09-18 —
+   "일정은 왼쪽 정렬이 맞다"). 우측 정렬이 필요하면 마크다운 쪽에서 `---:` 로
+   지정할 것. */
 .weekly-md th { background: color-mix(in oklab, var(--muted) 60%, transparent); font-weight: 600; }
 .weekly-md a { text-decoration: underline; }
 .weekly-md hr { margin: 0.75rem 0; }
