@@ -98,7 +98,7 @@ export function InsightsBoard({ market }: { market: MarketId }) {
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
           <CardTitle className="text-sm">
-            해외 IB·자산운용사 리서치
+            주요 해외IB 리서치 (딜레이자료)
             {q.data && <span className="text-muted-foreground ml-1.5 text-xs font-normal">({items.length})</span>}
           </CardTitle>
           <div className="flex flex-wrap gap-1">
