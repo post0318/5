@@ -21,7 +21,7 @@ export async function GET(request: Request) {
     if (!isDbConfigured()) return ok({ items: [] });
 
     const topicParam = url.searchParams.get("topic");
-    const VALID_TOPICS: ResearchTopic[] = ["산업분석", "투자전략(주식)", "투자전략(채권)", "시황"];
+    const VALID_TOPICS: ResearchTopic[] = ["산업분석", "투자전략(주식)", "투자전략(채권)", "시황", "해외리서치"];
     const topic = (VALID_TOPICS as string[]).includes(topicParam ?? "")
       ? (topicParam as ResearchTopic)
       : undefined;
