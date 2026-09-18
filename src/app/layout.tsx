@@ -4,7 +4,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { koKR } from "@clerk/localizations";
 import "./globals.css";
 import { Providers } from "@/components/providers";
-import { resolveAuthState } from "@/lib/server/app-auth";
+import { resolveAuthStateFast } from "@/lib/server/app-auth";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -33,9 +33,11 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   // Clerk 키가 없으면(로컬 초기 상태) 인증 없이 렌더 — 유니버스 화면만 잠긴다.
   const clerkEnabled = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
-  // 인증 상태를 서버 렌더링에서 미리 판정해 내려준다 — 예전에는 화면이 뜬 뒤
-  // /api/auth/me 를 따로 불러 왕복이 한 번 더 붙었다.
-  const initialAuth = clerkEnabled ? await resolveAuthState() : null;
+  // 로그인 여부만 빠르게(네트워크 없이) 판정해 내려준다 — allowed/admin/email
+  // 확정은 클라이언트(/api/auth/me, 비차단)에 맡긴다. 자세한 이유는
+  // resolveAuthStateFast() 주석 참고 — 여기서 currentUser() 까지 기다리면
+  // 루트 레이아웃이 Suspense 없이 통째로 멈춰서 로그인 후 전 화면이 느려졌다.
+  const initialAuth = clerkEnabled ? await resolveAuthStateFast() : null;
 
   const body = (
     <html

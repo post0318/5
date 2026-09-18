@@ -66,14 +66,24 @@ export function isAllowedEmail(email: string): boolean {
  *
  * `currentUser()` 는 Clerk Backend API(GET /v1/users/{id})를 네트워크로 부른다.
  * 보호된 요청마다 왕복이 한 번씩 붙어 체감 지연이 컸다(4번 프로젝트와 동일
- * 문제, 2026-09 확인). 세션 검증(`auth()`)은 토큰 서명만 보므로 빠르고,
- * 이메일은 거의 바뀌지 않으므로 짧게 캐시한다. 세션이 끊기거나 차단되면
- * `auth()` 단계에서 막히므로 캐시가 권한을 늘려주지는 않는다.
+ * 문제, 2026-09 확인. 루트 레이아웃에서 이걸 기다리다 로그인 후 전 화면이
+ * 느려진 사고도 같은 원인 — [[resolveAuthStateFast]] 참고). 세션 검증(`auth()`)
+ * 은 토큰 서명만 보므로 빠르고, 이메일은 거의 바뀌지 않으므로 짧게 캐시한다.
+ * 세션이 끊기거나 차단되면 `auth()` 단계에서 막히므로 캐시가 권한을 늘려주지는
+ * 않는다.
+ *
+ * **네트워크 호출 자체를 없애는 법**: Clerk 대시보드 → Configure → Sessions →
+ * "Customize session token" 에서 커스텀 클레임 `email: "{{user.primary_email_address}}"`
+ * 를 추가하면, `auth()`가 돌려주는 `sessionClaims.email` 에 이메일이 이미 담겨
+ * 있어 `currentUser()` 호출도, 캐시도 필요 없어진다(아래에서 먼저 확인).
+ * 설정 전에는 이 필드가 없으니 기존 캐시+`currentUser()` 경로로 자동 폴백한다.
  */
 const EMAIL_TTL_MS = 5 * 60 * 1000;
 const emailCache = new Map<string, { email: string; at: number }>();
 
-async function emailOf(userId: string): Promise<string> {
+async function emailOf(userId: string, claimEmail?: string | null): Promise<string> {
+  if (claimEmail) return claimEmail;
+
   const hit = emailCache.get(userId);
   if (hit && Date.now() - hit.at < EMAIL_TTL_MS) return hit.email;
 
@@ -95,10 +105,14 @@ export async function requireAppUser(): Promise<AppUserResult> {
   if (!clerkConfigured()) {
     return { ok: false, status: 503, error: "인증 서비스(Clerk)가 설정되지 않았습니다." };
   }
-  const { userId } = await auth();
+  const { userId, sessionClaims } = await auth();
   if (!userId) return { ok: false, status: 401, error: "로그인이 필요합니다." };
+  const claimEmail =
+    typeof (sessionClaims as Record<string, unknown> | null)?.email === "string"
+      ? ((sessionClaims as Record<string, unknown>).email as string)
+      : null;
 
-  const email = await emailOf(userId);
+  const email = await emailOf(userId, claimEmail);
   if (!email || !isAllowedEmail(email)) {
     const domains = allowedEmailDomains();
     return {
@@ -140,6 +154,12 @@ export interface InitialAuthState {
   email: string | null;
   reason: string | null;
   domains: string[];
+  /**
+   * allowed/admin/email 이 실제 서버 검증(currentUser() 포함) 결과인지 여부.
+   * false 면 자리표시자일 뿐이라 클라이언트가 `/api/auth/me` 로 반드시 다시
+   * 확인해야 한다 — [[resolveAuthStateFast]] 참고.
+   */
+  resolved: boolean;
 }
 
 export async function resolveAuthState(): Promise<InitialAuthState> {
@@ -154,6 +174,7 @@ export async function resolveAuthState(): Promise<InitialAuthState> {
       email: who.email,
       reason: null,
       domains,
+      resolved: true,
     };
   }
   // 401 은 로그인 안 함, 403 은 로그인했지만 허용되지 않은 계정
@@ -165,5 +186,45 @@ export async function resolveAuthState(): Promise<InitialAuthState> {
     email: null,
     reason: who.status === 401 ? null : who.error,
     domains,
+    resolved: true,
+  };
+}
+
+/**
+ * 루트 레이아웃 전용 — `auth()`(토큰 서명 검증만, 네트워크 없음)로 로그인 여부만
+ * 빠르게 판정한다. allowed/admin/email 은 확정하지 않고(currentUser() 네트워크
+ * 호출을 하지 않음) 클라이언트(`/api/auth/me`)에 맡긴다.
+ *
+ * **배경(2026-09)**: 전에는 여기서 [[resolveAuthState]](currentUser() 포함)를
+ * 그대로 불러 첫 화면 왕복을 없앴는데, 루트 레이아웃은 Suspense 로 감싸여
+ * 있지 않아 그 네트워크 호출이 끝날 때까지 로그인 상태에서는 페이지 전체가
+ * 통째로 멈췄다(로그아웃 상태는 `auth()`만 타 빠름 — 로그인 후에만 느려지는
+ * 증상으로 확인). "화면이 뜬 뒤 한 번 더 왕복"이 "화면 자체가 안 뜨는 것"보다
+ * 훨씬 낫다고 판단해 되돌림 — 클라이언트 왕복은 비차단이라 체감상 무해하다.
+ */
+export async function resolveAuthStateFast(): Promise<InitialAuthState> {
+  const domains = allowedEmailDomains();
+  if (!clerkConfigured()) {
+    return {
+      userId: null,
+      signedIn: false,
+      allowed: false,
+      admin: false,
+      email: null,
+      reason: null,
+      domains,
+      resolved: true, // Clerk 미설정은 확정된 상태 — 다시 물을 곳이 없다
+    };
+  }
+  const { userId } = await auth();
+  return {
+    userId,
+    signedIn: !!userId,
+    allowed: false,
+    admin: false,
+    email: null,
+    reason: null,
+    domains,
+    resolved: false,
   };
 }

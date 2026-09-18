@@ -85,20 +85,22 @@ function ClerkBridge({
   const { isLoaded, isSignedIn, user } = useUser();
   const qc = useQueryClient();
   const [signupOpen, setSignupOpen] = useState(false);
-  // 서버(layout)가 이미 판정해 내려준 값으로 시작한다 — 첫 화면에서
-  // /api/auth/me 왕복이 사라진다. 로그인·로그아웃으로 계정이 바뀔 때만 다시 묻는다.
+  // 서버(layout)는 로그인 여부만 빠르게 내려준다(resolveAuthStateFast — 네트워크
+  // 없이 auth() 토큰만 검증). allowed/admin 은 실제로 검증된 값(resolved===true)
+  // 일 때만 신뢰하고, 아니면 null 로 시작해 아래 effect 가 /api/auth/me 로 확정한다
+  // (이 왕복은 화면을 막지 않는다 — 루트 레이아웃에서 통째로 기다리던 것과 다름).
   const [verdict, setVerdict] = useState<{
     allowed: boolean;
     admin: boolean;
     reason: string | null;
   } | null>(
-    initial
+    initial?.resolved
       ? { allowed: initial.allowed, admin: initial.admin, reason: initial.reason }
       : null,
   );
   const [domains, setDomains] = useState<string[]>(initial?.domains ?? []);
   const checkedUserIdRef = useRef<string | null | undefined>(
-    initial ? initial.userId : undefined,
+    initial?.resolved ? initial.userId : undefined,
   );
 
   useEffect(() => {
