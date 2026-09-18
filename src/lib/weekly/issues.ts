@@ -1,5 +1,6 @@
 import "server-only";
 import { shinhanResearchCol } from "@/lib/db/shinhan-research";
+import { fetchCompanyBlog } from "@/lib/news/companyBlog";
 import { fetchGoogleNewsRss, googleNewsUrl } from "@/lib/news/googleNews";
 import { fetchNaverNewsSearch } from "@/lib/news/naverNews";
 import { WEEKLY_TOPICS, type WeeklyTopic } from "./topics";
@@ -150,6 +151,14 @@ async function countFromResearch(
  * 매체로 다시 걸어주는 경우가 있어 제목 기준으로 가볍게 중복 제거한다
  * (네이버를 먼저 둬 요약문이 있는 쪽을 우선).
  */
+/** 이슈 주제 → 빅테크 공식 블로그(companyBlog.ts) 소스 매핑. 파급력이
+ * 커도 3자 뉴스 매체가 받아쓰기 전엔 기존 파이프라인에 안 잡히는 자체
+ * 발표를 보강한다(오너 지시 2026-09-18). 필요해지면 다른 주제·기업도
+ * 여기 추가. */
+const COMPANY_BLOGS_BY_TOPIC: Record<string, string[]> = {
+  "AI·반도체 수요": ["NVIDIA"],
+};
+
 async function countFromNews(
   week: ReportWeek,
 ): Promise<Map<string, { count: number; news: IssueEvidenceNews[] }>> {
@@ -165,7 +174,9 @@ async function countFromNews(
         : fetchGoogleNewsRss(
             googleNewsUrl(`search?q=${encodeURIComponent(t.newsQuery)}+when:7d`, "hl=ko&gl=KR&ceid=KR:ko"),
           ).catch(() => []);
-      const [naver, google] = await Promise.all([naverP, googleP]);
+      const blogSources = COMPANY_BLOGS_BY_TOPIC[t.label] ?? [];
+      const blogP = Promise.all(blogSources.map((s) => fetchCompanyBlog(s).catch(() => [])));
+      const [naver, google, blogLists] = await Promise.all([naverP, googleP, blogP]);
       const items: IssueEvidenceNews[] = [
         ...naver.map((n) => ({
           title: n.title,
@@ -179,6 +190,13 @@ async function countFromNews(
           source: g.source,
           url: g.link,
           publishedAt: g.publishedAt,
+        })),
+        ...blogLists.flat().map((b) => ({
+          title: b.title,
+          source: b.source,
+          url: b.url,
+          publishedAt: b.publishedAt,
+          excerpt: b.excerpt ?? undefined,
         })),
       ];
       return { topic: t, items };
