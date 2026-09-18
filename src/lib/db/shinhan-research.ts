@@ -522,6 +522,23 @@ export async function getIndustryResearch(
   topic?: ResearchTopic,
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
+  // "해외리서치"는 국내 고빈도 소스들과 같은 900건 풀에서 걸러내면 밀려서
+  // 안 보일 수 있어(실측 — 8건 중 2건만 노출됨) source로 직접 좁혀 조회.
+  // 180일 보존(FOREIGN_RESEARCH_MAX_AGE_MS)에 맞춰 볼륨이 원래 적어 별도
+  // 페이지네이션 없이 바로 반환해도 된다.
+  if (topic === "해외리서치") {
+    const docs = await col
+      .find({
+        market,
+        category: "산업",
+        pdfUrl: { $ne: null },
+        source: { $in: FOREIGN_RESEARCH_SOURCES as unknown as string[] },
+      })
+      .sort({ date: -1 })
+      .limit(limit * 3)
+      .toArray();
+    return dedupeBySourceTitle(docs).slice(0, limit);
+  }
   // topic 유무와 무관하게 항상 넉넉히 가져온다(오너 지적, 2026-09 — "전체는
   // 129개인데 산업분석만 150개로 표시되고... 머가맞는건가?"). "전체"만
   // limit+20(150+20=170)으로 좁게 가져오던 게 버그였다 — 하루에 산업분석
