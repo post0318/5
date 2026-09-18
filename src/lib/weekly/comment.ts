@@ -45,8 +45,9 @@ export interface WeeklyComments {
    * 기존 `movers()`(사실 나열)로 폴백한다. */
   headline: string | null;
   /** "4. 금리정책" 맨 위에 붙는 종합 요약 문단(오너 지시 2026-09-18 —
-   * "네이버 AI 요약도 이 정도는 한다"). 그라운딩 성공(trustGrounded)일
-   * 때만 채워진다 — 실패하면 null → 기존 기사 표만 보여준다. */
+   * "네이버 AI 요약도 이 정도는 한다"). 그라운딩 성공 또는 이미 수집된
+   * policyEvidence(실제 리포트·뉴스)가 있을 때 채워진다 — 둘 다 없으면
+   * null → 화면이 안내 문구만 보여준다. */
   policySummary: string | null;
   /** "5. 다음 주 주시 일정" — 날짜별 확정 이벤트 캘린더(오너 지시
    * 2026-09-18 — "관련 기사 목록이 아니라 일자별 캘린더를 원한 거다").
@@ -66,7 +67,10 @@ const INPUT_DATA_DESC = `# 입력 데이터
 - snapshot: 이번 주 자산별 종가·주간 변동(pct=주간 변동률%, diffBp=금리류
   변동폭 bp). value/pct/diffBp 가 null 이면 비교할 값이 없다는 뜻이다.
 - issues: 이번 주 핵심 이슈 후보(증권사 리포트·뉴스 빈도로 뽑힘). reports·
-  news·earnings(실적 서프라이즈)·metrics(FRED 거시지표)가 근거로 들어있다.`;
+  news·earnings(실적 서프라이즈)·metrics(FRED 거시지표)가 근거로 들어있다.
+- policyEvidence: 미국 금리·연준/한국은행/일본은행 주제로 이미 수집된
+  증권사 리포트·뉴스 근거(근거 있는 주제만 포함). policySummary 를 쓸 때
+  최우선으로 활용한다.`;
 
 const MACRO_PROMPT = `# 역할
 너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이번 주 전체
@@ -86,17 +90,19 @@ ${INPUT_DATA_DESC}
    원자재는 강세를 보인 한 주." 근거가 정말 없을 때만 topMovers 사실
    나열로 대체한다. 120자 내외.
 2. **policySummary** — 미국 연준(FOMC)·한국은행·일본은행의 이번 주 통화
-   정책 동향을 종합한 2~4문장 요약. 단순 기사 나열이 아니라 "각국
-   중앙은행이 이번 주 무엇을 했거나 시사했는지, 시장이 어떻게 반응했는지"
-   를 종합 서술한다(포털 AI 검색 요약 수준을 목표로 한다 — 얕은 사실
-   나열 금지). 웹검색으로 실제 확인한 내용만 쓴다. 확인이 부족하면 아는
-   범위까지만 쓰고, 아예 근거가 없으면 null 로 남긴다.
+   정책 동향을 종합한 2~4문장 요약. **policyEvidence 의 근거를 최우선
+   으로 활용**하고, 부족한 부분만 웹검색으로 보강해라. 단순 기사 나열이
+   아니라 "각국 중앙은행이 이번 주 무엇을 했거나 시사했는지, 시장이
+   어떻게 반응했는지"를 종합 서술한다(포털 AI 검색 요약 수준을 목표로
+   한다 — 얕은 사실 나열 금지). policyEvidence 에도 없고 웹검색으로도
+   확인 안 되면 아는 범위까지만 쓰고, 그마저 없으면 null 로 남긴다.
 3. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. "관련
    기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
    예정된 이벤트(중앙은행 회의·주요 경제지표 발표일·옵션선물 동시만기일
    등 거시·시장 이벤트 위주, 개별 기업 실적·공모주 일정은 제외)를
    날짜별로 확인해서 적는다. **절대 지어내지 마라** — 확인 안 되는
-   날짜/이벤트는 통째로 뺀다(목록이 짧거나 비어도 괜찮다). 각 항목은
+   날짜/이벤트는 통째로 뺀다(목록이 짧거나 비어도 괜찮다. 주요 중앙은행
+   회의 일정은 이미 코드가 따로 채우니 몰라도 괜찮다). 각 항목은
    {"date": "YYYY-MM-DD", "event": "그 날 있는 일정, 15자 내외"} 형식,
    nextWeek 범위를 벗어나는 날짜는 넣지 않는다. 날짜 오름차순 정렬.
 4. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치를 쓸 때는
@@ -181,6 +187,16 @@ interface CommentPayload {
     earnings?: { ticker: string; period: string; epsActual: number | null; epsEstimate: number | null; surprisePct: number | null }[];
     metrics?: { label: string; date: string; current: number; previous: number; change: number; unit: string }[];
   }[];
+  /** 미국 금리·연준/한국은행/일본은행 주제로 이미 수집된 근거 — 핵심
+   * 이슈 3개(issues)에 안 뽑혀도 policySummary 는 이걸 우선 활용한다
+   * (오너 지시 2026-09-18 — "4번은 사실밖에 없는 정책을 이야기하는건데
+   * 없다는게 더 이상하다": 매번 실시간 검색에만 기대지 않고 이미 모아둔
+   * 근거로 신뢰도를 높인다). 근거가 없는 주제는 빠진다. */
+  policyEvidence: {
+    label: string;
+    reports: { date: string; source: string; stockName: string; title: string }[];
+    news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+  }[];
 }
 
 /** render.ts 의 movers() 와 같은 계산(가장 크게 오르내린 자산) — LLM 이
@@ -218,14 +234,82 @@ function computeQuadWitching(startDate: string, endDate: string): { date: string
   return hit ? { date: hit, event: "선물·옵션 동시 만기일(네 마녀의 날)" } : null;
 }
 
-function buildPayload(snapshot: SnapshotRow[], issues: WeeklyIssue[], week: ReportWeek): CommentPayload {
+/**
+ * 미국 FOMC·일본은행(BOJ)·한국은행 금통위 2026년 공식 일정(오너 지시
+ * 2026-09-18 — "4,5번은 정해진 일정인데 없다는게 더 이상하다"). 몇 달
+ * 전에 공식 발표되는 고정 일정이라 매번 검색에 맡기지 않고 코드로 직접
+ * 낸다 — 네 마녀의 날과 같은 원리. 실측 확인한 출처:
+ *  - FOMC: federalreserve.gov 공식 회의 캘린더(2회차 마지막 날짜, 결정
+ *    발표일과 동일).
+ *  - BOJ: boj.or.jp 공식 PDF(mref250731a.pdf, "Scheduled Dates of
+ *    Monetary Policy Meetings in 2026").
+ *  - 한국은행: 2026년 통화정책방향 결정회의 8회(1·2·4·5·7·8·10·11월).
+ * **연도가 바뀌면 갱신 필요** — 다음 해로 넘어간 주는 이 목록에 없어
+ * 조용히 빈 채로 남는다(잘못된 날짜를 지어내는 것보단 안전).
+ */
+const FOMC_2026 = [
+  "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+  "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
+];
+const BOJ_2026 = [
+  "2026-01-23", "2026-03-19", "2026-04-28", "2026-06-16",
+  "2026-07-31", "2026-09-18", "2026-10-30", "2026-12-18",
+];
+const BOK_2026 = [
+  "2026-01-15", "2026-02-26", "2026-04-10", "2026-05-28",
+  "2026-07-16", "2026-08-27", "2026-10-22", "2026-11-26",
+];
+
+interface FixedCalendarEvent {
+  date: string;
+  event: string;
+  /** 같은 날짜에 Gemini 가 이미 같은 이벤트를 독립적으로 언급했는지
+   * 판별하는 키워드 — 날짜만으로 중복 판정하면 같은 날 다른 이벤트가
+   * 있을 때 잘못 걸러진다(실측 버그, 네 마녀의 날이 BOJ 회의에 가려짐). */
+  dedupe: RegExp;
+}
+
+function computeFixedCalendarEvents(startDate: string, endDate: string): FixedCalendarEvent[] {
+  const inRange = (d: string) => d >= startDate && d <= endDate;
+  const out: FixedCalendarEvent[] = [];
+  const quadWitching = computeQuadWitching(startDate, endDate);
+  if (quadWitching) out.push({ ...quadWitching, dedupe: /네\s*마녀|만기일/ });
+  for (const d of FOMC_2026) if (inRange(d)) out.push({ date: d, event: "미국 FOMC 금리 결정", dedupe: /FOMC|연준.*금리|Fed\b/i });
+  for (const d of BOJ_2026) if (inRange(d)) out.push({ date: d, event: "일본은행(BOJ) 금융정책결정회의", dedupe: /BOJ|일본은행/i });
+  for (const d of BOK_2026) if (inRange(d)) out.push({ date: d, event: "한국은행 금융통화위원회", dedupe: /한국은행|금통위|한은\b/ });
+  return out;
+}
+
+/** issues.ts WEEKLY_TOPICS 의 정확한 라벨과 일치해야 한다. */
+const POLICY_TOPIC_LABELS = ["미국 금리·연준", "한국은행·국내 금리", "일본은행·엔화"];
+
+function buildPayload(
+  snapshot: SnapshotRow[],
+  issues: WeeklyIssue[],
+  week: ReportWeek,
+  allIssues: WeeklyIssue[],
+): CommentPayload {
   const weekEndMs = Date.parse(`${week.weekEnd}T00:00:00Z`);
   const nextStart = new Date(weekEndMs + 3 * 86_400_000).toISOString().slice(0, 10); // 금→월
   const nextEnd = new Date(weekEndMs + 7 * 86_400_000).toISOString().slice(0, 10); // 금→그다음 금
+  const policyEvidence = POLICY_TOPIC_LABELS.map((label) => {
+    const found = allIssues.find((i) => i.label === label);
+    return {
+      label,
+      reports: (found?.reports ?? []).map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
+      news: (found?.news ?? []).map((n) => ({
+        title: n.title,
+        excerpt: n.excerpt,
+        source: n.source,
+        publishedAt: n.publishedAt,
+      })),
+    };
+  }).filter((p) => p.reports.length > 0 || p.news.length > 0);
   return {
     reportWeek: { start: week.weekStart, end: week.weekEnd },
     nextWeek: { start: nextStart, end: nextEnd },
     topMovers: computeTopMovers(snapshot),
+    policyEvidence,
     snapshot: snapshot
       .filter((r) => r.value != null)
       .map((r) => ({
@@ -370,6 +454,13 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
       if (n.excerpt) nums.push(...extractNumbers(n.excerpt));
     }
   }
+  for (const p of payload.policyEvidence) {
+    for (const r of p.reports) nums.push(...extractNumbers(r.title));
+    for (const n of p.news) {
+      nums.push(...extractNumbers(n.title));
+      if (n.excerpt) nums.push(...extractNumbers(n.excerpt));
+    }
+  }
   return nums;
 }
 
@@ -430,10 +521,11 @@ export async function generateWeeklyComments(
   snapshot: SnapshotRow[],
   issues: WeeklyIssue[],
   week: ReportWeek,
+  allIssues: WeeklyIssue[],
 ): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
   if (!isGeminiConfigured() || issues.length === 0) return null;
 
-  const payload = buildPayload(snapshot, issues, week);
+  const payload = buildPayload(snapshot, issues, week, allIssues);
   const userJson = JSON.stringify(payload);
   const allowed = buildAllowedNumbers(payload);
   const snapshotNames = payload.snapshot.map((r) => r.name);
@@ -471,14 +563,19 @@ export async function generateWeeklyComments(
     ? verifyComment(macroParsed.headline, allowed, macroTrustGrounded) || null
     : null;
 
-  // policySummary·calendar 는 날짜·기관명 등 검증 불가능한 구체적 사실을
-  // 담으므로, 그라운딩이 실제로 출처를 찾아왔을 때만 신뢰한다 — 실패하면
-  // 렌더링 쪽이 기존 기사 표로 폴백(허위 캘린더보단 표가 안전).
-  if (macroTrustGrounded && macroParsed?.policySummary) {
-    comments.policySummary = macroParsed.policySummary.trim() || null;
-  } else if (!macroTrustGrounded || macroParsed?.policySummary) {
+  // policySummary — 날짜·기관명 등 검증 불가능한 구체적 사실을 담을 수
+  // 있으므로, 그라운딩 성공 **또는** 우리가 이미 모아둔 policyEvidence
+  // (실제 리포트·뉴스)가 있을 때만 신뢰한다(오너 지시 2026-09-18 — "4번은
+  // 사실밖에 없는 정책 얘기인데 없다는게 이상하다": 매번 실시간 검색
+  // 성공에만 기대지 않고, 이미 검증된 근거가 있으면 그걸로도 충분히
+  // 신뢰할 수 있다). 숫자 검증은 그라운딩 여부에 따라 그대로 적용.
+  const hasPolicyEvidence = payload.policyEvidence.length > 0;
+  if ((macroTrustGrounded || hasPolicyEvidence) && macroParsed?.policySummary) {
+    comments.policySummary = verifyComment(macroParsed.policySummary, allowed, macroTrustGrounded) || null;
+  }
+  if (!comments.policySummary) {
     console.warn(
-      `[weekly] policySummary 미채움 — trustGrounded=${macroTrustGrounded}, parsed=${JSON.stringify(macroParsed?.policySummary ?? null)}`,
+      `[weekly] policySummary 미채움 — trustGrounded=${macroTrustGrounded}, hasPolicyEvidence=${hasPolicyEvidence}, parsed=${JSON.stringify(macroParsed?.policySummary ?? null)}`,
     );
   }
   if (macroTrustGrounded && Array.isArray(macroParsed?.calendar)) {
@@ -498,21 +595,21 @@ export async function generateWeeklyComments(
       `[weekly] calendar 미채움 — trustGrounded=${macroTrustGrounded}, parsed=${JSON.stringify(macroParsed?.calendar ?? null)}`,
     );
   }
-  // 선물·옵션 동시 만기일("네 마녀의 날" — 3/6/9/12월 셋째 금요일)은 공개된
-  // 고정 일정이라 검색 없이 코드로 항상 정확히 계산할 수 있다. 그라운딩
-  // 결과와 무관하게 항상 포함 — 단, "같은 날짜"가 아니라 "이미 같은
-  // 이벤트가 그 날짜에 있는지"로 중복을 판정한다(실측 버그 — 같은 날
-  // BOJ 회의가 있어서 날짜만 보고 건너뛰는 바람에 네 마녀의 날 자체가
-  // 통째로 빠짐. 한 날짜에 이벤트가 여러 개 있는 건 정상이다).
-  const quadWitching = computeQuadWitching(payload.nextWeek.start, payload.nextWeek.end);
-  if (quadWitching) {
-    const list = comments.calendar ?? [];
-    const alreadyListed = list.some(
-      (c) => c.date === quadWitching.date && /네\s*마녀|만기일/.test(c.event),
-    );
-    if (!alreadyListed) {
-      comments.calendar = [...list, quadWitching].sort((a, b) => a.date.localeCompare(b.date));
+  // 네 마녀의 날·FOMC·BOJ·한국은행 금통위는 공개된 고정 일정이라 검색
+  // 없이 코드로 항상 정확히 계산할 수 있다(오너 지시 2026-09-18 — "5번은
+  // 정해진 일정인데 없다는게 더 이상하다"). 그라운딩 결과와 무관하게
+  // 항상 포함 — "같은 날짜"가 아니라 "이미 같은 이벤트가 그 날짜에
+  // 있는지"로 중복을 판정한다(실측 버그 — 같은 날 BOJ 회의가 있어서
+  // 날짜만 보고 건너뛰는 바람에 네 마녀의 날 자체가 통째로 빠짐. 한
+  // 날짜에 이벤트가 여러 개 있는 건 정상이다).
+  const fixedEvents = computeFixedCalendarEvents(payload.nextWeek.start, payload.nextWeek.end);
+  if (fixedEvents.length > 0) {
+    let list = comments.calendar ?? [];
+    for (const fx of fixedEvents) {
+      const alreadyListed = list.some((c) => c.date === fx.date && fx.dedupe.test(c.event));
+      if (!alreadyListed) list = [...list, { date: fx.date, event: fx.event }];
     }
+    comments.calendar = list.sort((a, b) => a.date.localeCompare(b.date));
   }
 
   // --- 코멘트(스냅샷·이슈) ---
