@@ -105,7 +105,10 @@ async function tryGenerateComments(
       comments: out.comments,
       model: out.result.model,
       // 오너 지시 2026-09-18 — Gemini 호출을 매크로/코멘트 2개로 쪼개
-      // 병렬 실행하도록 바꿨다(comment.ts 참고) — 항상 2회.
+      // 병렬 실행(comment.ts 참고) — 매크로 쪽은 그라운딩 실패 시 1회
+      // 재시도하므로 실제로는 2~3회일 수 있다. costUsd 등 usage 수치
+      // 자체는(out.result.usage) 재시도분까지 이미 정확히 합산돼 있고,
+      // calls 는 화면 참고용 근사치라 "2(+재시도)" 로만 표기.
       usage: { ...out.result.usage, calls: 2 },
       groundingQueries: out.result.groundingQueries,
       groundingSources: out.result.groundingSources,
