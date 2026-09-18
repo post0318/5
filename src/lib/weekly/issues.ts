@@ -156,7 +156,7 @@ async function countFromResearch(
  * 발표를 보강한다(오너 지시 2026-09-18). 필요해지면 다른 주제·기업도
  * 여기 추가. */
 const COMPANY_BLOGS_BY_TOPIC: Record<string, string[]> = {
-  "AI·반도체 수요": ["NVIDIA"],
+  "AI·반도체 수요": ["NVIDIA", "Microsoft", "Oracle"],
 };
 
 async function countFromNews(

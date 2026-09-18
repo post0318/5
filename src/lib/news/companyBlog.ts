@@ -10,13 +10,17 @@ import "server-only";
  * 명시.
  *
  * 실측 확인한 소스: NVIDIA(RSS 2.0)·Google(RSS 2.0)·Meta(RSS 2.0)·
+ * Microsoft(RSS 2.0)·Oracle(RSS 2.0, 공식 보도자료 피드)·
  * Apple(Atom — `<entry>`/`<link href>`/`<updated>`/`<content>` 형식이 달라
- * 별도 파싱). Microsoft 는 기본 UA 로 403(봇 차단)이라 제외 — 나중에 다른
- * 방법을 찾으면 추가.
+ * 별도 파싱). Microsoft 는 처음에 봇 차단(403)으로 막혔다가 UA 를 실제
+ * 브라우저 문자열로 바꾸니 통과됨(아래 UA 상수) — Broadcom/AMD/Tesla 는
+ * 이번 조사에서 RSS 자체를 못 찾아 보류(오너 지시 2026-09-18 — "미국
+ * 유니버스가 대형주 대부분", 확인되는 대로 계속 추가할 것).
  *
  * 블로그엔 게임(NVIDIA GeForce NOW)·엔터테인먼트(Apple Arcade, Apple TV
- * Emmy 수상 등) 소비자 콘텐츠가 섞여 있어(실측 확인) 기업별 `relevance`
- * 정규식으로 AI·반도체·재무·제품 발표 등 시장 관련 콘텐츠만 거른다.
+ * Emmy 수상 등)·지역사회 기부(Oracle 의 CSR 보도자료 등) 소비자/비市場
+ * 콘텐츠가 섞여 있어(실측 확인) 기업별 `relevance` 정규식으로 AI·반도체·
+ * 재무·제품 발표 등 시장 관련 콘텐츠만 거른다.
  */
 
 interface BlogFeedConfig {
@@ -61,6 +65,22 @@ const BLOG_FEEDS: BlogFeedConfig[] = [
     relevance:
       /\bAI\b|artificial intelligence|Llama|data cent|datacenter|infrastructure|earnings|revenue|antitrust|regulat|advertis|reality lab|metaverse|chip/i,
   },
+  {
+    source: "Microsoft",
+    ticker: "MSFT",
+    feedUrl: "https://blogs.microsoft.com/feed/",
+    format: "rss",
+    relevance:
+      /\bAI\b|artificial intelligence|Azure|Copilot|OpenAI|data cent|datacenter|cloud comput|infrastructure|earnings|revenue|antitrust|regulat|enterprise|chip|HPC|supercomput/i,
+  },
+  {
+    source: "Oracle",
+    ticker: "ORCL",
+    feedUrl: "https://www.oracle.com/corporate/press/rss/rss-pr.xml",
+    format: "rss",
+    relevance:
+      /\bAI\b|artificial intelligence|cloud infrastructure|OCI\b|data cent|datacenter|earnings|revenue|quarterly results|fiscal (?:Q|year)|financial results|stock|acqui|partnership|investor/i,
+  },
 ];
 
 export interface CompanyBlogItem {
@@ -71,7 +91,10 @@ export interface CompanyBlogItem {
   source: string;
 }
 
-const UA = "Mozilla/5.0 (compatible; stock-research/1.0)";
+// 일부 기업 뉴스룸(Microsoft 실측 확인)이 정직하게 밝히는 UA 를 봇으로
+// 차단해서(403) 실제 브라우저 UA 로 바꿨다 — 콘텐츠 자체는 공개 RSS라
+// 접근 자체엔 문제 없고, 서버가 UA 만으로 걸러내는 것뿐이다.
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
 function decode(s: string): string {
   return s
