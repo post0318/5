@@ -841,6 +841,30 @@ npm run db:studio    # drizzle studio
     산업분석/투자전략 범위 밖 콘텐츠라 `collect-kis-strategy-research.mjs`
     에서 수집 자체를 건너뛴다(NH FICC 게시판의 대체투자/부동산 제외와 같은
     취지).
+  - **업종 필터 추가(오너 지시, 2026-09-19 — "너무 섹터가 다양해서 섹터별로
+    선택 조회가 가능하거나")**: 국내는 수십 개 증권사가 저마다 다른 업종명을
+    쓰다 보니 "산업분석" 목록 하나에 업종이 너무 많이 섞여 스크롤이 길어지는
+    문제 — 추가 API 호출 없이 이미 받아온 목록의 `stockName` 별 건수를 세어
+    드롭다운으로 필터링한다(`IndustryResearchBoard` 의 `sector` state).
+    라디오버튼도 검토했으나 업종 수가 많으면 줄바꿈이 심해져 드롭다운으로
+    구현. topic 전환 시 업종 선택은 초기화됨.
+  - **인사이트 탭 분리(오너 지시, 2026-09-19 — "해외ib에서 발취되는 것은
+    산업분석에 빼서 산업분석 옆에 인사이트라고 탭 만들도록 거기에
+    전체/각사별구분으로 넣자")**: 해외 IB/자산운용사 리서치 5곳(골드만삭스·
+    JP모간·모간스탠리·블랙록·PIMCO, 바로 위 "해외 IB/자산운용사 리서치 5곳
+    추가" 항목 참고)은 국내 산업분석/투자전략/시황 분류 체계가 애초에 안
+    맞는 콘텐츠라(블랙록 stockName "글로벌 위클리 시황"이 문자 그대로
+    "시황"에 걸려 14일 만에 삭제될 뻔한 문제가 실제 계기) `/[market]/research`
+    산업분석 탭에서 완전히 빼고 `/[market]/insights`(`InsightsBoard`,
+    `getInsightResearch()`, `/api/research/insights`)라는 별도 최상위 탭을
+    새로 만들었다 — 두 탭은 `source` 로 서로 배타적(`INSIGHT_SOURCES` 상수,
+    `getIndustryResearch()`는 이 소스들을 조회·정리(prune) 양쪽에서 제외).
+    전체/BlackRock/Goldman Sachs/J.P. Morgan/Morgan Stanley/PIMCO 세그먼트로
+    구분, classifyResearchTopic() 후처리 분류·투자전략/시황 단기 보존기간
+    없이 다른 산업분석 소스와 동일한 90일을 그대로 적용한다. 부수 효과로
+    "노출 한계" 문제(CLAUDE.md 위 항목 — 저빈도 소스가 고빈도 국내 소스들에
+    밀려 `/api/research/industry` 의 150건 한도 밖으로 밀려나던 문제)도
+    해결됨 — 이제 별도 탭이라 국내 산업분석 150건과 경쟁하지 않음.
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로

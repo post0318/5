@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Building2, CalendarDays, Globe, LineChart, Newspaper, Settings2 } from "lucide-react";
+import { BarChart3, Building2, CalendarDays, Globe, Lightbulb, LineChart, Newspaper, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MARKETS, isMarketId } from "@/lib/markets/types";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -13,6 +13,7 @@ const SUBNAV = [
   { seg: "news", label: "유니버스통합 뉴스", icon: Newspaper },
   { seg: "analysis", label: "종목분석", icon: BarChart3 },
   { seg: "research", label: "산업분석", icon: Building2 },
+  { seg: "insights", label: "인사이트", icon: Lightbulb },
 ] as const;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -26,7 +27,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         ? "news"
         : parts[1] === "research"
           ? "research"
-          : "universe";
+          : parts[1] === "insights"
+            ? "insights"
+            : "universe";
   const onManage = parts[0] === "manage";
   const onMacro = parts[0] === "macro";
   const onWeekly = parts[0] === "weekly";

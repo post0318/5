@@ -99,7 +99,7 @@ export async function upsertShinhanResearch(
   // 투자전략(30일)보다 짧아서, 14일 기준으로 가져와야 "14~30일 사이의
   // 시황"도 후보에 걸린다(30일 기준으로만 가져오면 이 구간을 통째로 놓침).
   const staleIndustryCandidates = await col
-    .find({ category: "산업", date: { $lt: marketConditionCutoff } })
+    .find({ category: "산업", date: { $lt: marketConditionCutoff }, source: { $nin: INSIGHT_SOURCES as unknown as string[] } })
     .project<{ _id: string; date: string; stockName: string; title: string; source: string; market: MarketId; summary: string }>({
       date: 1,
       stockName: 1,
@@ -372,6 +372,17 @@ const BOND_SOURCES = new Set(["FRB"]);
 // 별도 필터).
 const ESG_EXCLUDE_RE = /\bESG\b/i;
 
+/**
+ * 해외 IB/자산운용사 리서치 5곳(오너 지시, 2026-09-19 — 골드만삭스·JP모간·
+ * 모간스탠리·블랙록·PIMCO 추가 후 "산업분석탭에서 빼서... 인사이트 탭
+ * 만들자"). 이 소스들은 국내 산업분석/투자전략/시황 분류 체계(`classify
+ * ResearchTopic()`)가 애초에 안 맞는 성격이라(예: 블랙록 stockName
+ * "글로벌 위클리 시황"이 문자 그대로 "시황"에 걸려 14일 만에 삭제되던 문제)
+ * `getIndustryResearch()`(산업분석 탭)·정리 로직 양쪽에서 전부 제외하고,
+ * `getInsightResearch()`(인사이트 탭)에서만 별도로 90일 그대로 유지한다.
+ */
+export const INSIGHT_SOURCES = ["BlackRock", "Goldman Sachs", "J.P. Morgan", "Morgan Stanley", "PIMCO"] as const;
+
 function isStrategyStockname(stockName: string): boolean {
   if (STRATEGY_STOCKNAMES.has(stockName)) return true;
   return STRATEGY_STOCKNAME_PREFIXES.some((re) => re.test(stockName));
@@ -485,7 +496,7 @@ export async function getIndustryResearch(
   // API 응답 자체에 첨부파일이 없어 실측됨). 해당 수집기도 앞으로 이런
   // 항목을 아예 안 보내도록 함께 수정.
   const docs = await col
-    .find({ market, category: "산업", pdfUrl: { $ne: null } })
+    .find({ market, category: "산업", pdfUrl: { $ne: null }, source: { $nin: INSIGHT_SOURCES as unknown as string[] } })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
@@ -515,6 +526,32 @@ export async function getIndustryResearch(
   });
   const filtered = topic ? fresh.filter((d) => classifyResearchTopic(d) === topic) : fresh;
   return filtered.slice(0, limit);
+}
+
+/**
+ * 해외 IB/자산운용사 인사이트 — `/[market]/insights`(오너 지시, 2026-09-19
+ * — "해외ib에서 발취되는 것은 산업분석에 빼서 산업분석 옆에 인사이트라고
+ * 탭 만들도록... 전체/각사별구분으로"). `getIndustryResearch()`와 달리
+ * 국내 산업분석/투자전략/시황 분류(`classifyResearchTopic()`)를 아예 거치지
+ * 않는다 — 이 소스들은 그 분류 체계 대상이 아니고(예: 블랙록 stockName이
+ * 문자 그대로 "시황"을 포함해 오분류·조기삭제될 뻔한 문제, 위 상수 주석
+ * 참고), 대신 90일 산업분석 기본 보존기간을 그대로 쓴다. `source`를 주면
+ * 그 소스 하나로만 좁힌다(화면의 "각사별" 세그먼트).
+ */
+export async function getInsightResearch(
+  market: MarketId,
+  limit = 100,
+  source?: string,
+): Promise<ShinhanResearchDoc[]> {
+  const col = await shinhanResearchCol();
+  const filter: Record<string, unknown> = {
+    market,
+    category: "산업",
+    pdfUrl: { $ne: null },
+    source: source ? source : { $in: INSIGHT_SOURCES as unknown as string[] },
+  };
+  const docs = await col.find(filter).sort({ date: -1 }).limit(limit * 3).toArray();
+  return dedupeBySourceTitle(docs).slice(0, limit);
 }
 
 /**
