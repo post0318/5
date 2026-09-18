@@ -676,6 +676,60 @@ npm run db:studio    # drizzle studio
         **로컬 스크립트** (`scripts/collect-sangsangin-industry-research.mjs`,
         GitHub Actions `sangsangin-industry-research.yml`)가 같은 라우트를
         `source: "상상인증권"` 으로 재사용.
+    - **해외 IB/자산운용사 리서치 5곳 검토 — 블랙록만 우선 구축(오너 지시,
+      2026-09-19)**: 오너가 골드만삭스·JP모간·모간스탠리·블랙록·PIMCO 5곳의
+      공개 인사이트 페이지를 제시하며 추가를 요청. 실측 조사 결과 5곳 중
+      **블랙록만** 정적 서버렌더 HTML로 바로 수집 가능 — 나머지 4곳은 실제
+      목록이 검색 위젯(골드만삭스 Algolia, PIMCO Coveo) 뒤에 있거나, 제시된
+      페이지 자체가 허브/네비게이션용이라 실제 기사 카드가 JS 지연 로드로
+      뒤에 없음(JP모간 `/insights/global-research`→`/insights/research`
+      리다이렉트, 모간스탠리 `/insights/topics/investing` 모두 실측 시 기사
+      링크가 사실상 1개뿐). 이 4곳은 브라우저 네트워크 로그로 실제 API를
+      역추적하는 추가 조사가 필요해 **보류**(오너 지시 — "5곳 모두 동일
+      조건으로 진행"이라 robots.txt 조건 자체는 승인됐으나 착수는 순차적).
+      - **robots.txt 관련 특이사항**: 골드만삭스는 `User-agent: *` 규칙으로는
+        `/insights/top-of-mind/` 를 막지 않지만, `GPTBot`/`ChatGPT-User`
+        AI 크롤러 전용 규칙에서는 정확히 이 경로를 명시적으로 차단하고
+        있음(오너가 제시한 바로 그 페이지) — 지금까지의 예외들과 달리 "AI가
+        긁어가는 건 원치 않는다"는 의도가 코드로 명시된 첫 사례. 오너에게
+        플래그했고 "5곳 모두 동일 조건으로 진행"(일반 UA 기준 판단, AI 전용
+        규칙 무시)으로 명시 결정.
+      - **블랙록(BII) 위클리 시황 추가**: `blackrock.com/sg/en/insights/
+        global-weekly-commentary` 는 다른 수집기들의 "게시판 목록+페이지네이션"
+        구조와 다르게 **URL이 고정이고 내용만 매주 교체**되는 단일 페이지
+        (실측 확인, 페이지네이션 없음). `<meta name="articleTitle">`·
+        `<meta name="pageSummary">`·`<meta name="publicationDate">`
+        (영문 "Sep 14, 2026" 형식) 세 값만으로 제목·요약·발행일이 다 나와
+        PDF·API 역추적이 불필요한 가장 단순한 케이스. 매주 내용이 바뀌므로
+        `id`를 발행일 기반(`weekly-commentary-YYYY-MM-DD`)으로 만들어 과거
+        분이 안 덮어써지게 함. 종목 얘기가 아닌 매크로/자산배분 코멘터리라
+        `category:"산업"`(symbol 항상 null), `market:"us"`(다른 해외
+        "글로벌 전략"류 콘텐츠와 같은 자리). **번역 안 함** — 영문 원문
+        그대로 저장(기존 "기업 발표" 공식 블로그 카드와 동일 선례, 이
+        프로젝트에서 영어 원문을 그대로 쓰는 첫 증권사 성격 리서치 소스는
+        아니지만 최초의 비한국계 소스). **로컬 스크립트**
+        (`scripts/collect-blackrock-research.mjs`, GitHub Actions
+        `.github/workflows/blackrock-research.yml`, 하루 1회 — 주 1회만
+        바뀌는 콘텐츠라 대부분은 같은 문서 재확인(upsert)에 그침)가 같은
+        라우트를 `source: "BlackRock", market: "us"` 로 재사용.
+      - **노출 한계(실측 확인, 2026-09-19)**: 실제 업서트(`upserted:1`)는
+        성공했지만, 이 시점 미국 시장 `category:"산업"` 문서가 다른 15곳
+        넘는 수집기(GlobalMonitor·KB·NH·신한 등)에서 이미 하루 150건 넘게
+        쏟아지고 있어 `/api/research/industry` 조회의 `fetchLimit`(900)·
+        `limit`(150, 날짜 내림차순) 안에 주 1회짜리 항목이 며칠만 지나도
+        밀려날 수 있음(실측 — 발행 5일 뒤 조회 시 이미 안 보임). 데이터
+        유실이 아니라 고빈도 소스들 사이에서 저빈도 소스가 화면 노출
+        순위에서 밀리는 기존에 이미 알려진 트레이드오프(CLAUDE.md 위 "산업
+        분석 탭" 항목 참고) — 별도 수정 없이 그대로 둠.
+      - **로컬 실행 인증 관련 별개 발견(2026-09-19)**: 작업 중 `.env.local`
+        의 `CRON_SECRET` 값이 `vercel env pull` 류 작업으로 `"[SENSITIVE]"`
+        마스킹 placeholder 로 바뀌어 있는 걸 발견 — 로컬 수집 스크립트는
+        전부 "CRON_SECRET 있으면 우선, 없으면 APP_PASSWORD" 순서라 지금은
+        모든 로컬 수동 실행이 401로 실패하는 상태(`APP_PASSWORD` 는 아직
+        정상). 이번 백필은 x-app-token 으로 직접 우회해 완료했지만, 근본
+        수정(`.env.local`에서 CRON_SECRET 줄 제거 또는 복원)은 아직 안 함 —
+        다른 세션이 동시에 이 파일을 건드리고 있을 수 있어 오너 확인 후
+        처리 필요.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.

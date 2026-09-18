@@ -1,0 +1,25 @@
+name: BlackRock Investment Institute 위클리 시황 수집
+
+# CLAUDE.md 방침(오너 승인, 2026-09-19): blackrock.com/sg/en/insights 의
+# 위클리 시황 페이지(URL 고정, 내용만 매주 교체)를 하루 1회 조회한다.
+# robots.txt User-agent: * 기준 차단 없음. 매주 한 번만 내용이 바뀌므로
+# 하루 실행해도 대부분은 같은 문서를 재확인(upsert)할 뿐이다.
+
+on:
+  schedule:
+    - cron: "5 23 * * *" # 23:05 UTC = 08:05 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/collect-blackrock-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
