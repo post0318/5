@@ -131,6 +131,13 @@ export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbo
                 <li key={it._id} className="py-2.5 first:pt-0 last:pb-0">
                   <a href={toHttps(it.pdfUrl)} target="_blank" rel="noreferrer" className="group block">
                     <div className="group-hover:text-primary text-sm leading-snug font-medium">
+                      {/* 산업분석이 이 종목을 실질적으로 다뤄서(relatedSymbols)
+                          끼어든 경우 — 어느 업종 리포트인지 표시(2026-09-19
+                          추가, 오너 지적 — 삼성전자 페이지에 반도체 산업분석이
+                          왜 나오는지 설명 없이 나오면 안 됨). */}
+                      {it.category === "산업" && (
+                        <span className="text-muted-foreground mr-1.5">[{it.stockName}]</span>
+                      )}
                       {it.title}
                       {it.targetPrice != null && (
                         <span className="tnum ml-1.5 text-xs font-normal text-orange-600 dark:text-orange-400">

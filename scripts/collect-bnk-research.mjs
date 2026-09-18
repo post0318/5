@@ -82,6 +82,60 @@ function extractTargetPrice(text) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/**
+ * 산업분석 relatedSymbols 계산용 대형주 이름→코드(2026-09-19 추가, 오너
+ * 지적 — BNK "반도체" 산업분석 PDF에 삼성전자가 26번 언급되는데도
+ * category:"산업"이라 symbol이 항상 null이라서 삼성전자 페이지에서 안
+ * 보였음). 전체 종목이 아니라 업종 대표 대형주만 추린다 — 작은 종목까지
+ * 다 스캔하면 본문에 스치듯 언급된 것까지 걸려 노이즈가 커진다. BNK 먼저
+ * 해보고(오너 지시 — "bnk만 해보고 결정하자") 다른 수집기로 확대할지
+ * 결정.
+ */
+const MAJOR_STOCKS = [
+  ["삼성전자", "005930"],
+  ["SK하이닉스", "000660"],
+  ["LG에너지솔루션", "373220"],
+  ["삼성바이오로직스", "207940"],
+  ["현대차", "005380"],
+  ["기아", "000270"],
+  ["셀트리온", "068270"],
+  ["POSCO홀딩스", "005490"],
+  ["NAVER", "035420"],
+  ["카카오", "035720"],
+  ["삼성SDI", "006400"],
+  ["LG화학", "051910"],
+  ["한화에어로스페이스", "012450"],
+  ["HD현대중공업", "329180"],
+  ["삼성물산", "028260"],
+  ["KB금융", "105560"],
+  ["신한지주", "055550"],
+  ["현대모비스", "012330"],
+  ["LG전자", "066570"],
+  ["SK이노베이션", "096770"],
+  ["두산에너빌리티", "034020"],
+  ["한국전력", "015760"],
+  ["삼성생명", "032830"],
+  ["하나금융지주", "086790"],
+  ["크래프톤", "259960"],
+  ["한미반도체", "042700"],
+  ["에코프로", "086520"],
+  ["에코프로비엠", "247540"],
+];
+
+/** 본문에서 대형주 이름이 3회 이상 언급되면 "실질적으로 다룬다"고 판단한다
+ * (1~2회는 스쳐가는 비교 언급일 수 있어 오탐 방지). 이름 검색으로 종목코드를
+ * 추측하는 것과 달리 실제 언급 빈도 기반이라 우연한 오매칭 위험이 없다. */
+function findRelatedSymbols(text) {
+  const hay = String(text ?? "");
+  const found = [];
+  for (const [name, code] of MAJOR_STOCKS) {
+    const re = new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+    const count = (hay.match(re) ?? []).length;
+    if (count >= 3) found.push(code);
+  }
+  return found;
+}
+
 // 일시적 네트워크 오류(GitHub Actions 러너 쪽 DNS 일시 장애 — 실측 2026-09,
 // "getaddrinfo EAI_AGAIN www.bnkfn.co.kr" 로 연속 실패했으나 로컬에서는
 // 정상 접속 확인됨)에도 전체 수집이 죽지 않도록 페이지당 재시도를 둔다.
@@ -196,17 +250,22 @@ function parseEconItems(html) {
   return items;
 }
 
-async function targetPriceFromPdf(pdfUrl) {
-  if (!pdfUrl) return null;
+/** PDF 본문을 한 번만 열어 기업분석은 목표주가를, 산업분석은 relatedSymbols
+ * 를 뽑는다(둘 다 필요 없으면 굳이 다시 안 엶) — 원문 텍스트 자체는 저장
+ * 안 하고 이 두 결과만 남긴다. */
+async function analyzePdf(pdfUrl, category) {
+  if (!pdfUrl) return { targetPrice: null, relatedSymbols: [] };
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) return null;
+    if (!res.ok) return { targetPrice: null, relatedSymbols: [] };
     const parser = new PDFParse({ data: Buffer.from(await res.arrayBuffer()) });
     const { text } = await parser.getText();
     await parser.destroy();
-    return extractTargetPrice(text);
+    return category === "산업"
+      ? { targetPrice: null, relatedSymbols: findRelatedSymbols(text) }
+      : { targetPrice: extractTargetPrice(text), relatedSymbols: [] };
   } catch {
-    return null;
+    return { targetPrice: null, relatedSymbols: [] };
   }
 }
 
@@ -257,13 +316,17 @@ console.log(
   collected.slice(0, 3).map((i) => `${i.date} ${i.stockName}/${i.opinion} — ${i.title}`),
 );
 
-console.log(`▶ 목표주가 추출 중 (${collected.length}건)...`);
+console.log(`▶ 목표주가/관련종목 추출 중 (${collected.length}건)...`);
 for (const it of collected) {
-  // 산업분석/투자전략은 특정 종목 얘기가 아니므로 목표주가 개념이 없음.
-  if (it.category !== "산업") it.targetPrice = await targetPriceFromPdf(it.pdfUrl);
+  const { targetPrice, relatedSymbols } = await analyzePdf(it.pdfUrl, it.category);
+  it.targetPrice = targetPrice;
+  it.relatedSymbols = relatedSymbols;
   await sleep(300);
 }
 console.log(`✔ 목표주가 ${collected.filter((i) => i.targetPrice != null).length}/${collected.length}건`);
+console.log(
+  `✔ 관련종목 태그됨 ${collected.filter((i) => i.relatedSymbols?.length > 0).length}건`,
+);
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
@@ -284,6 +347,7 @@ const items = collected.map((it) => ({
   pdfUrl: it.pdfUrl,
   views: null,
   category: it.category,
+  relatedSymbols: it.relatedSymbols,
 }));
 
 const headers = { "Content-Type": "application/json" };

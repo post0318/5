@@ -45,6 +45,9 @@ interface RawItem {
   views: number | null;
   /** 없으면 "기업"(현재 모든 수집기가 기업분석만 수집 — 산업분석 수집은 추후 과제). */
   category?: "기업" | "산업";
+  /** category:"산업" 전용(2026-09-19 추가) — 수집기가 PDF 본문에서 대형주
+   * 언급 횟수를 세어 임계값 넘긴 종목코드 목록. shinhan-research.ts 참고. */
+  relatedSymbols?: string[];
 }
 
 function resolveSymbol(stockName: string): string | null {
@@ -87,6 +90,7 @@ export async function POST(req: Request) {
       pdfUrl: it.pdfUrl,
       views: it.views,
       collectedAt: now,
+      ...(it.relatedSymbols && it.relatedSymbols.length > 0 ? { relatedSymbols: it.relatedSymbols } : {}),
       category: it.category ?? "기업",
     }));
 

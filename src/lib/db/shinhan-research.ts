@@ -35,6 +35,14 @@ export interface ShinhanResearchDoc {
    * 수집하므로 기존 데이터·미지정 시 "기업"으로 취급(라우트에서 기본값 처리).
    * 산업분석 수집은 추후 과제. */
   category: "기업" | "산업";
+  /** category:"산업" 리포트가 실질적으로 다루는 대형주(2026-09-19 추가,
+   * 오너 지적 — BNK "반도체" 산업분석 PDF에 삼성전자가 26번 언급되는데
+   * category:"산업"이라 symbol이 항상 null이라서 삼성전자 페이지에서
+   * 전혀 안 보였음). 수집기가 PDF 본문에서 미리 정한 대형주 목록의 언급
+   * 횟수를 세어(원문은 저장 안 함, 횟수만) 임계값을 넘으면 채운다 — 이름
+   * 검색으로 종목코드를 추측하는 것과 달리 오탐 위험이 없다(실제 언급
+   * 빈도 기반). 기업분석(category:"기업")엔 안 쓰임(이미 symbol 있음). */
+  relatedSymbols?: string[];
 }
 
 // 리서치 자료는 3개월(90일)까지만 수집·보관한다(오너 최종 확정, 2026-09
@@ -527,16 +535,20 @@ export async function getShinhanResearchBySymbol(
   const marketFilter =
     market === "kr" ? { $or: [{ market }, { market: { $exists: false } }] } : { market };
   const recentCutoff = new Date(Date.now() - RECENT_WINDOW_MS).toISOString().slice(0, 10);
+  // 산업분석이 이 종목을 실질적으로 다루면(relatedSymbols) 기업분석과
+  // 함께 보여준다(2026-09-19 추가 — BNK "반도체" 산업분석이 삼성전자를
+  // 26번 언급하는데도 symbol이 null이라 안 보이던 문제).
+  const symbolFilter = { $or: [{ symbol }, { relatedSymbols: symbol }] };
   // 중복 제거로 개수가 줄어들 수 있어 limit보다 넉넉히 가져온 뒤 잘라낸다.
   const fetchLimit = limit + 10;
   const recent = await col
-    .find({ ...marketFilter, symbol, date: { $gte: recentCutoff } })
+    .find({ ...marketFilter, ...symbolFilter, date: { $gte: recentCutoff } })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
   if (recent.length > 0) return dedupeBySourceTitle(recent).slice(0, limit);
   const fallback = await col
-    .find({ ...marketFilter, symbol })
+    .find({ ...marketFilter, ...symbolFilter })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
