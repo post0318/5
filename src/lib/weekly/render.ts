@@ -88,11 +88,13 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
     }
   }
   if (issue.earnings && issue.earnings.length > 0) {
-    lines.push("- 최근 실적 서프라이즈");
+    // 오너 지시(2026-09-18) — 이 블록만 굵게. 다른 근거(뉴스·FRED)와 달리
+    // 실적 서프라이즈는 이슈의 핵심 숫자라 한눈에 띄어야 한다.
+    lines.push("- **최근 실적 서프라이즈**");
     for (const e of issue.earnings) {
       const s = e.surprisePct != null ? `${e.surprisePct >= 0 ? "+" : ""}${e.surprisePct}%` : "-";
       lines.push(
-        `  - ${e.ticker} EPS 서프라이즈 ${s} (실제 ${e.epsActual ?? "-"} / 추정 ${e.epsEstimate ?? "-"}, ${e.period})`,
+        `  - **${e.ticker} EPS 서프라이즈 ${s} (실제 ${e.epsActual ?? "-"} / 추정 ${e.epsEstimate ?? "-"}, ${e.period})**`,
       );
     }
   }
@@ -197,7 +199,7 @@ export async function renderWeeklyReport(opts: {
   parts.push("## 3. 주간 핵심 이슈 3개");
   parts.push("");
   parts.push(
-    "_증권사 산업·전략 리포트 빈도와 그 주 뉴스 건수로 뽑았습니다. 해석은 코멘트 줄에 직접 적으세요._",
+    "_증권사 산업·전략 리포트 빈도와 그 주 뉴스 건수로 뽑았습니다._",
   );
   parts.push("");
   if (issues.length === 0) {
