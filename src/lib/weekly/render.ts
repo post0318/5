@@ -45,6 +45,12 @@ function movers(rows: SnapshotRow[]): string {
   return `상승폭 최대 ${up.name} ${pctText(up)}, 하락폭 최대 ${down.name} ${pctText(down)}.`;
 }
 
+/**
+ * 오너 지시 2026-09-18 — "리서치자료와 뉴스는 근거일 뿐이다. 핵심은
+ * 코멘트다." 분석(코멘트)을 제목 바로 아래 맨 앞에 문단으로 두고, 리포트·
+ * 뉴스·지표·실적 목록은 그 아래 "근거"로 내린다 — 목록 나열이 먼저 보이고
+ * 코멘트가 맨 끝에 한 줄 딸려오던 이전 구조를 뒤집었다.
+ */
 function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
   const lines: string[] = [];
   const metrics = [
@@ -56,6 +62,9 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
     .join(" · ");
 
   lines.push(`### ${rank}. ${issue.label}`);
+  lines.push("");
+  lines.push(`**분석**: ${comment || "_(해석 근거 부족으로 비어 있음 — 편집기에서 직접 작성하세요)_"}`);
+  lines.push("");
   lines.push(`- 집계: ${metrics}`);
 
   if (issue.reports.length > 0) {
@@ -87,7 +96,6 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
       );
     }
   }
-  lines.push(`- 코멘트: ${comment}`);
   return lines.join("\n");
 }
 
