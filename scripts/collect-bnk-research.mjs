@@ -85,11 +85,27 @@ function extractTargetPrice(text) {
 // 일시적 네트워크 오류(GitHub Actions 러너 쪽 DNS 일시 장애 — 실측 2026-09,
 // "getaddrinfo EAI_AGAIN www.bnkfn.co.kr" 로 연속 실패했으나 로컬에서는
 // 정상 접속 확인됨)에도 전체 수집이 죽지 않도록 페이지당 재시도를 둔다.
+//
+// ⚠️ 페이지네이션 버그 수정(오너 지적 2026-09-19 — "삼성전자 bnk 리포트
+// 빠진원인먼가?"): `?pageIndex=N` GET 쿼리스트링은 서버가 그냥 무시하고
+// 항상 1페이지를 돌려준다(실측 확인 — page1과 "page2"가 완전히 동일한
+// 목록이었음). 실제 페이지네이션은 목록 폼(`<form name="listFrm"
+// method="post">`, 페이지 링크의 `onclick="fn_search('N')"`)이 POST로
+// `curPage` 필드를 보내는 방식이다(실측 — POST curPage=2 로 실제 다른
+// 목록 확인됨, 마지막 페이지 476). 즉 이 수집기는 지금까지 매번 최신
+// 10여 건만 반복 수집했지 뒤 페이지(오래된 리포트)는 한 번도 못 가져온
+// 상태였다 — 그래서 이 브로커가 최근 다루지 않은 종목(삼성전자 등)은
+// 실제로 안 다뤘는지, 예전엔 다뤘는데 못 가져온 건지 구분이 안 됐다.
 async function fetchPage(page, listUrl = LIST_URL, attempt = 1) {
-  const url = new URL(listUrl);
-  if (page > 1) url.searchParams.set("pageIndex", String(page));
   try {
-    const res = await fetch(url, { headers: { "User-Agent": UA } });
+    const res =
+      page > 1
+        ? await fetch(listUrl, {
+            method: "POST",
+            headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded" },
+            body: `curPage=${page}`,
+          })
+        : await fetch(listUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.text();
   } catch (err) {
