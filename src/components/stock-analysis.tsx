@@ -30,6 +30,7 @@ import { ConsensusPanel } from "@/components/consensus-panel";
 import { BrokerRatings } from "@/components/broker-ratings";
 import { StockNews } from "@/components/stock-news";
 import { ShinhanResearch } from "@/components/shinhan-research";
+import { CompanyBlog } from "@/components/company-blog";
 import { PriceChartPanel } from "@/components/price-chart-panel";
 
 /** 시장별로 마지막에 보던 종목을 담아 두는 sessionStorage 키 */
@@ -995,8 +996,9 @@ export function StockAnalysis({
 
             {/* 리서치 (한국·미국) */}
             {(market === "kr" || market === "us") && (
-              <TabsContent value="research" className="pt-4">
+              <TabsContent value="research" className="space-y-3 pt-4">
                 <ShinhanResearch market={market} symbol={ov.symbol} />
+                {market === "us" && <CompanyBlog symbol={ov.symbol} />}
               </TabsContent>
             )}
 
