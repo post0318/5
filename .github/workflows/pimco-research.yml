@@ -1,0 +1,24 @@
+name: PIMCO 인사이트 수집
+
+# CLAUDE.md 방침(오너 승인, 2026-09-19): pimco.com 의 /us/en/insights 를
+# 사이트맵(robots.txt에 Sitemap: /sitemap_index.xml 명시) 기반으로 하루
+# 1회 조회한다. robots.txt User-agent: * 전체 허용, 차단 없음.
+
+on:
+  schedule:
+    - cron: "25 23 * * *" # 23:25 UTC = 08:25 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/collect-pimco-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

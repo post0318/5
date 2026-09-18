@@ -1,0 +1,24 @@
+name: 모간스탠리 인사이트 수집
+
+# CLAUDE.md 방침(오너 승인, 2026-09-19): morganstanley.com 의 /insights/
+# articles 를 사이트맵(robots.txt가 AI 크롤러까지 전부 허용하는 가장 깨끗한
+# 케이스) 기반으로 하루 1회 조회한다.
+
+on:
+  schedule:
+    - cron: "20 23 * * *" # 23:20 UTC = 08:20 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/collect-morganstanley-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

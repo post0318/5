@@ -676,17 +676,13 @@ npm run db:studio    # drizzle studio
         **로컬 스크립트** (`scripts/collect-sangsangin-industry-research.mjs`,
         GitHub Actions `sangsangin-industry-research.yml`)가 같은 라우트를
         `source: "상상인증권"` 으로 재사용.
-    - **해외 IB/자산운용사 리서치 5곳 검토 — 블랙록만 우선 구축(오너 지시,
-      2026-09-19)**: 오너가 골드만삭스·JP모간·모간스탠리·블랙록·PIMCO 5곳의
-      공개 인사이트 페이지를 제시하며 추가를 요청. 실측 조사 결과 5곳 중
-      **블랙록만** 정적 서버렌더 HTML로 바로 수집 가능 — 나머지 4곳은 실제
-      목록이 검색 위젯(골드만삭스 Algolia, PIMCO Coveo) 뒤에 있거나, 제시된
-      페이지 자체가 허브/네비게이션용이라 실제 기사 카드가 JS 지연 로드로
-      뒤에 없음(JP모간 `/insights/global-research`→`/insights/research`
-      리다이렉트, 모간스탠리 `/insights/topics/investing` 모두 실측 시 기사
-      링크가 사실상 1개뿐). 이 4곳은 브라우저 네트워크 로그로 실제 API를
-      역추적하는 추가 조사가 필요해 **보류**(오너 지시 — "5곳 모두 동일
-      조건으로 진행"이라 robots.txt 조건 자체는 승인됐으나 착수는 순차적).
+    - **해외 IB/자산운용사 리서치 5곳 추가(오너 지시, 2026-09-19)**: 오너가
+      골드만삭스·JP모간·모간스탠리·블랙록·PIMCO 5곳의 공개 인사이트 페이지를
+      제시하며 산업분석/기업분석 코퍼스 보강을 요청, **5곳 모두 구축 완료**.
+      이 프로젝트에서 영문 원문을 그대로 쓰는(번역 안 함) 첫 비한국계 소스
+      군이다 — 종목 얘기가 아닌 매크로/업종 테마 콘텐츠라 5곳 다
+      `category:"산업"`(symbol 항상 null), `market:"us"`, `stockName:"글로벌
+      인사이트"`(블랙록만 "글로벌 위클리 시황").
       - **robots.txt 관련 특이사항**: 골드만삭스는 `User-agent: *` 규칙으로는
         `/insights/top-of-mind/` 를 막지 않지만, `GPTBot`/`ChatGPT-User`
         AI 크롤러 전용 규칙에서는 정확히 이 경로를 명시적으로 차단하고
@@ -694,42 +690,80 @@ npm run db:studio    # drizzle studio
         긁어가는 건 원치 않는다"는 의도가 코드로 명시된 첫 사례. 오너에게
         플래그했고 "5곳 모두 동일 조건으로 진행"(일반 UA 기준 판단, AI 전용
         규칙 무시)으로 명시 결정.
-      - **블랙록(BII) 위클리 시황 추가**: `blackrock.com/sg/en/insights/
-        global-weekly-commentary` 는 다른 수집기들의 "게시판 목록+페이지네이션"
-        구조와 다르게 **URL이 고정이고 내용만 매주 교체**되는 단일 페이지
-        (실측 확인, 페이지네이션 없음). `<meta name="articleTitle">`·
-        `<meta name="pageSummary">`·`<meta name="publicationDate">`
-        (영문 "Sep 14, 2026" 형식) 세 값만으로 제목·요약·발행일이 다 나와
-        PDF·API 역추적이 불필요한 가장 단순한 케이스. 매주 내용이 바뀌므로
-        `id`를 발행일 기반(`weekly-commentary-YYYY-MM-DD`)으로 만들어 과거
-        분이 안 덮어써지게 함. 종목 얘기가 아닌 매크로/자산배분 코멘터리라
-        `category:"산업"`(symbol 항상 null), `market:"us"`(다른 해외
-        "글로벌 전략"류 콘텐츠와 같은 자리). **번역 안 함** — 영문 원문
-        그대로 저장(기존 "기업 발표" 공식 블로그 카드와 동일 선례, 이
-        프로젝트에서 영어 원문을 그대로 쓰는 첫 증권사 성격 리서치 소스는
-        아니지만 최초의 비한국계 소스). **로컬 스크립트**
-        (`scripts/collect-blackrock-research.mjs`, GitHub Actions
-        `.github/workflows/blackrock-research.yml`, 하루 1회 — 주 1회만
-        바뀌는 콘텐츠라 대부분은 같은 문서 재확인(upsert)에 그침)가 같은
-        라우트를 `source: "BlackRock", market: "us"` 로 재사용.
-      - **노출 한계(실측 확인, 2026-09-19)**: 실제 업서트(`upserted:1`)는
-        성공했지만, 이 시점 미국 시장 `category:"산업"` 문서가 다른 15곳
-        넘는 수집기(GlobalMonitor·KB·NH·신한 등)에서 이미 하루 150건 넘게
-        쏟아지고 있어 `/api/research/industry` 조회의 `fetchLimit`(900)·
-        `limit`(150, 날짜 내림차순) 안에 주 1회짜리 항목이 며칠만 지나도
-        밀려날 수 있음(실측 — 발행 5일 뒤 조회 시 이미 안 보임). 데이터
-        유실이 아니라 고빈도 소스들 사이에서 저빈도 소스가 화면 노출
-        순위에서 밀리는 기존에 이미 알려진 트레이드오프(CLAUDE.md 위 "산업
-        분석 탭" 항목 참고) — 별도 수정 없이 그대로 둠.
-      - **로컬 실행 인증 관련 별개 발견(2026-09-19)**: 작업 중 `.env.local`
-        의 `CRON_SECRET` 값이 `vercel env pull` 류 작업으로 `"[SENSITIVE]"`
-        마스킹 placeholder 로 바뀌어 있는 걸 발견 — 로컬 수집 스크립트는
-        전부 "CRON_SECRET 있으면 우선, 없으면 APP_PASSWORD" 순서라 지금은
-        모든 로컬 수동 실행이 401로 실패하는 상태(`APP_PASSWORD` 는 아직
-        정상). 이번 백필은 x-app-token 으로 직접 우회해 완료했지만, 근본
-        수정(`.env.local`에서 CRON_SECRET 줄 제거 또는 복원)은 아직 안 함 —
-        다른 세션이 동시에 이 파일을 건드리고 있을 수 있어 오너 확인 후
-        처리 필요.
+      - **핵심 발견 — 목록 페이지 대신 사이트맵을 쓴다**: 오너가 제시한 목록
+        페이지(골드만삭스 `/insights/goldman-sachs-research`, JP모간
+        `/insights/global-research`, 모간스탠리 `/insights/topics/investing`)
+        는 전부 실제 기사 카드가 검색 위젯(골드만삭스 Algolia — 앱ID·검색키는
+        페이지에 노출되나 인덱스명을 못 찾음)이나 JS 지연 로드 뒤에 있어
+        정적 fetch로는 목록을 못 뽑는다(실측 — 목록형 페이지 자체에 기사
+        링크가 사실상 1개뿐). 대신 **`robots.txt`에 명시된 공개
+        `sitemap.xml`에 개별 인사이트 글 URL이 `<lastmod>`와 함께 전부
+        들어있어**(실측 — 4곳 다 최신 항목이 전날 발행분까지 잡힘, 신한/하나
+        같은 "게시판 목록 API" 대신 처음 쓴 "사이트맵 diff" 방식) 이걸로
+        최근 글 목록을 얻고, 개별 글 페이지는 서버렌더 HTML이라 제목·요약·
+        날짜를 `<meta>` 태그에서 바로 뽑는다. PIMCO만 소사이트맵 자체가
+        국가별로 나뉨(`/sitemap_index.xml` → `/us/en/sitemap.xml`), 나머지
+        3곳은 골드만삭스·모간스탠리가 단일/거의-단일 사이트맵, JP모간은
+        국가별로 나뉨(`/US/en/sitemap.xml`).
+      - **사이트마다 발행일 메타 필드가 전부 다름**(실측, 5곳 비교): 블랙록
+        `<meta name="publicationDate">`("Sep 14, 2026"), 골드만삭스 JSON-LD
+        `"datePublished"`(ISO), JP모간 `<meta name="publishDate">`
+        ("September 15, 2026" — 사이트맵 lastmod과 다를 수 있음, lastmod은
+        편집일·publishDate가 실제 발행일), 모간스탠리 `<meta name="content_
+        publishedAt">`(ISO), PIMCO는 본문에 발행일 메타 자체가 없어 **사이트맵
+        lastmod을 그대로 씀**(이 사이트는 lastmod이 날짜 단위로 기사마다
+        세밀히 찍혀 있어 사실상 발행일과 같음, 실측 확인). 표준 og:title도
+        사이트마다 접미사가 다르거나(JP모간 `<title>`은 " | J.P. Morgan",
+        모간스탠리·PIMCO는 og:title 자체에 접미사) 아예 없어(JP모간은
+        og:title 자체가 없어 `<h1>`을 씀) 소스별로 별도 정리 필요했음.
+      - **요약 품질도 사이트마다 다름**: 모간스탠리·PIMCO는 `og:description`에
+        이미 다듬어진 1~2문장 요약이 있어 그대로 씀(품질 좋음). JP모간은
+        `<meta name="description">`에 비슷한 품질의 요약이 있음. 골드만삭스는
+        메타 요약이 title과 동일(무의미)해 본문 첫 문단을 발췌하는데, 페이지에
+        숨겨진 메가메뉴 nav 텍스트("What We Do"/"Insights"/"Our Firm"/
+        "Careers"로 시작하는 문단들)가 실제 본문보다 먼저 나와 이 프리픽스로
+        걸러낸다(`NAV_JUNK_RE`, 실측 — 필터 없이 쓰면 nav 텍스트가 그대로
+        요약으로 저장됨). 팟캐스트형 Top of Mind 일부는 본문이 "Subscribe:
+        ..." 같은 UI 텍스트뿐이라 필터를 통과할 실제 문장이 없으면 빈 요약으로
+        폴백(정크 텍스트를 저장하는 것보다 나음 — 우선순위 낮아 개선 보류).
+      - **블랙록(BII) 위클리 시황**: 다른 4곳과 다르게 "게시판/사이트맵"이
+        아니라 `blackrock.com/sg/en/insights/global-weekly-commentary` 라는
+        **URL이 고정이고 내용만 매주 교체**되는 단일 페이지(실측 확인,
+        페이지네이션 없음). `<meta name="articleTitle">`·`<meta
+        name="pageSummary">`·`<meta name="publicationDate">` 세 값만으로
+        제목·요약·발행일이 다 나와 PDF·API 역추적이 불필요한 가장 단순한
+        케이스. 매주 내용이 바뀌므로 `id`를 발행일 기반
+        (`weekly-commentary-YYYY-MM-DD`)으로 만들어 과거분이 안 덮어써지게
+        함.
+      - **로컬 스크립트 4개**: `scripts/collect-blackrock-research.mjs`
+        (`source:"BlackRock"`, GitHub Actions 하루 1회 — 주 1회만 바뀌는
+        콘텐츠라 대부분은 같은 문서 재확인에 그침), `scripts/collect-
+        goldman-research.mjs`(`source:"Goldman Sachs"`), `scripts/collect-
+        jpmorgan-research.mjs`(`source:"J.P. Morgan"`), `scripts/collect-
+        morganstanley-research.mjs`(`source:"Morgan Stanley"`), `scripts/
+        collect-pimco-research.mjs`(`source:"PIMCO"`) — 전부 같은
+        `/api/cron/shinhan-research` 라우트 재사용, GitHub Actions 하루
+        1회(`.github/workflows/{blackrock,goldman,jpmorgan,morganstanley,
+        pimco}-research.yml`, 실행 시각을 5분씩 밀려 동시 실행 줄임).
+      - **노출 한계(실측 확인, 2026-09-19)**: 5곳 다 실제 업서트는 성공했지만,
+        미국 시장 `category:"산업"` 문서가 다른 15곳 넘는 국내 수집기
+        (GlobalMonitor·KB·NH·신한 등)에서 이미 하루 150건 넘게 쏟아지고 있어
+        `/api/research/industry` 조회의 `fetchLimit`(900)·`limit`(150, 날짜
+        내림차순) 안에서 저빈도 소스(특히 블랙록 주 1회)는 며칠만 지나도
+        밀려날 수 있음(실측 — 블랙록 발행 5일 뒤 조회 시 이미 안 보임). 데이터
+        유실이 아니라 고빈도 소스들 사이에서 저빈도 소스가 화면 노출 순위에서
+        밀리는 기존에 이미 알려진 트레이드오프(CLAUDE.md 위 "산업분석 탭"
+        항목 참고) — 별도 수정 없이 그대로 둠.
+      - **로컬 실행 인증 관련 별개 발견 및 수정(2026-09-19)**: 작업 중
+        `.env.local`의 `CRON_SECRET` 값이 `vercel env pull` 류 작업으로
+        `"[SENSITIVE]"` 마스킹 placeholder 로 바뀌어 있는 걸 발견 — 로컬
+        수집 스크립트는 전부 "CRON_SECRET 있으면 우선, 없으면 APP_PASSWORD"
+        순서라 이 상태에서는 모든 로컬 수동 실행이 401로 실패한다
+        (`APP_PASSWORD` 는 정상이었음). 블랙록 백필은 x-app-token 으로 직접
+        우회해 완료했고, 이후 오너 확인 하에 `.env.local`에서 마스킹된
+        `CRON_SECRET` 줄 자체를 삭제해 원래 문서화된 상태(로컬엔
+        CRON_SECRET 없음 → APP_PASSWORD 폴백)로 복원함 — 이후 골드만삭스/
+        JP모간/모간스탠리/PIMCO 백필부터는 정상 폴백으로 진행.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.

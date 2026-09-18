@@ -1,0 +1,26 @@
+name: 골드만삭스 인사이트 수집
+
+# CLAUDE.md 방침(오너 승인, 2026-09-19): goldmansachs.com 의 /insights/
+# articles, /insights/goldman-sachs-research, /insights/top-of-mind 를
+# 사이트맵(robots.txt에 명시된 공개 sitemap.xml) 기반으로 하루 1회 조회한다.
+# robots.txt User-agent: * 기준 차단 없음(GPTBot 전용 규칙만 top-of-mind를
+# 막지만 오너가 "5곳 모두 동일 조건으로 진행" 결정).
+
+on:
+  schedule:
+    - cron: "10 23 * * *" # 23:10 UTC = 08:10 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/collect-goldman-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
