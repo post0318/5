@@ -25,7 +25,9 @@ export async function GET(request: Request) {
       ? (sourceParam as string)
       : undefined;
 
-    const items = await getInsightResearch(market, 100, source);
+    // 90일 백필(오너 지시, 2026-09-19) 기준 5곳 합계 180여 건이라 100으로는
+    // "전체" 탭에서 오래된 항목이 잘림 — 여유 있게 상향.
+    const items = await getInsightResearch(market, 300, source);
     return ok(
       { items },
       { headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" } },
