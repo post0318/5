@@ -353,6 +353,12 @@ function isoDate(d: Date | string): string {
   return date.toISOString().slice(0, 10);
 }
 
+function addDaysIso(dateIso: string, days: number): string {
+  const d = new Date(`${dateIso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 /** KR은 KOSPI(.KS)/KOSDAQ(.KQ) 구분이 필요 → override 없으면 둘 다 시도 */
 function candidateSymbols(market: MarketId, symbol: string, override?: string | null): string[] {
   if (override) return [override];
@@ -374,7 +380,12 @@ export async function fetchYahooEod(
     try {
       const res = await yf().chart(s, {
         period1: opts.from ?? "2019-01-01",
-        period2: opts.to ?? isoDate(new Date()),
+        // period2 는 그 날짜 자정(UTC) 미만만 포함하는 배타적 상한이다(실측
+        // 확인, 2026-09-19 — 정규장 시간에 찍힌 "오늘" 봉이 빠지는 시장이
+        // 있음, weekly/sectors.ts 에서 처음 발견). opts.to 를 안 준 경우의
+        // 기본값에 +2일 버퍼를 둬 오늘·어제 봉이 안전하게 포함되게 한다 —
+        // 미래 데이터는 없으니 버퍼를 넉넉히 잡아도 결과에는 영향 없다.
+        period2: opts.to ?? addDaysIso(isoDate(new Date()), 2),
         interval: "1d",
       });
       const bars = res.quotes

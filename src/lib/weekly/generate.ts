@@ -14,6 +14,7 @@ import { enrichTopIssues } from "./evidence";
 import { isGeminiConfigured } from "./gemini";
 import { buildWeeklyIssues, type WeeklyIssue } from "./issues";
 import { renderWeeklyReport } from "./render";
+import { buildWeeklySectors, type WeeklySectors } from "./sectors";
 import { buildSnapshot, fillFromPrevious } from "./snapshot";
 import { WEEKLY_TOPICS } from "./topics";
 import { resolveReportWeek, type ReportWeek } from "./week";
@@ -89,6 +90,7 @@ async function tryGenerateComments(
   issues: WeeklyIssue[],
   week: ReportWeek,
   allIssues: WeeklyIssue[],
+  sectors: WeeklySectors,
 ): Promise<LlmOutcome | null> {
   if (!isGeminiConfigured()) return null;
   const monthUsage = await getWeeklyMonthUsage();
@@ -99,7 +101,7 @@ async function tryGenerateComments(
     return null;
   }
   try {
-    const out = await generateWeeklyComments(snapshot, issues, week, allIssues);
+    const out = await generateWeeklyComments(snapshot, issues, week, allIssues, sectors);
     if (!out) return null;
     await incWeeklyUsage(out.result.usage.costUsd);
     return {
@@ -124,17 +126,20 @@ async function collect(week: ReportWeek): Promise<{
   snapshot: SnapshotRow[];
   all: WeeklyIssue[];
   top: WeeklyIssue[];
+  sectors: WeeklySectors;
 }> {
-  const [rawSnapshot, prevSnapshot, all] = await Promise.all([
+  const [rawSnapshot, prevSnapshot, all, sectors] = await Promise.all([
     buildSnapshot(week),
     getPreviousSnapshot(week.weekStart),
     // 후보 전체를 받아 두고(검수용) 상위 3개만 본문에 쓴다
     buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length }),
+    buildWeeklySectors(week),
   ]);
   return {
     snapshot: fillFromPrevious(rawSnapshot, prevSnapshot),
     all,
     top: await enrichTopIssues(all.slice(0, 3)),
+    sectors,
   };
 }
 
@@ -144,10 +149,11 @@ export async function previewWeeklyInputs(): Promise<{
   snapshot: SnapshotRow[];
   issues: WeeklyIssue[];
   candidates: string;
+  sectors: WeeklySectors;
 }> {
   const week = resolveReportWeek();
-  const { snapshot, all, top } = await collect(week);
-  return { week, snapshot, issues: top, candidates: candidatesText(all, top) };
+  const { snapshot, all, top, sectors } = await collect(week);
+  return { week, snapshot, issues: top, candidates: candidatesText(all, top), sectors };
 }
 
 /**
@@ -163,16 +169,25 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
   const week: ReportWeek = {
     weekStart: doc.weekStart,
     weekEnd: doc.weekEnd,
-    baseFriday: "",
+    // 전전주 금요일 = weekEnd - 7일(스냅샷과 같은 구간, week.ts 의
+    // resolveReportWeek() 과 동일 계산) — sectors.ts 의 등락률 기준점으로
+    // 쓰인다. 전에는 여기서 안 써서 빈 문자열이었지만 이제 필요해짐.
+    baseFriday: new Date(Date.parse(`${doc.weekEnd}T00:00:00Z`) - 7 * 86_400_000)
+      .toISOString()
+      .slice(0, 10),
     today: new Date().toISOString().slice(0, 10),
   };
-  const all = await buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length });
+  const [all, sectors] = await Promise.all([
+    buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length }),
+    buildWeeklySectors(week),
+  ]);
   const top = await enrichTopIssues(all.slice(0, 3));
-  const llm = await tryGenerateComments(doc.snapshot, top, week, all);
+  const llm = await tryGenerateComments(doc.snapshot, top, week, all, sectors);
   const rendered = await renderWeeklyReport({
     week,
     snapshot: doc.snapshot,
     issues: top,
+    sectors,
     comments: llm?.comments,
   });
 
@@ -208,9 +223,9 @@ export async function generateWeeklyReport(
     );
   }
 
-  const { snapshot, all, top } = await collect(week);
-  const llm = await tryGenerateComments(snapshot, top, week, all);
-  const body = await renderWeeklyReport({ week, snapshot, issues: top, comments: llm?.comments });
+  const { snapshot, all, top, sectors } = await collect(week);
+  const llm = await tryGenerateComments(snapshot, top, week, all, sectors);
+  const body = await renderWeeklyReport({ week, snapshot, issues: top, sectors, comments: llm?.comments });
 
   const now = new Date().toISOString();
   const doc: WeeklyReportDoc = {

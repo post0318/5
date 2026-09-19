@@ -2,6 +2,7 @@ import "server-only";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
 import type { WeeklyIssue } from "./issues";
 import { geminiGenerate, isGeminiConfigured, type GeminiResult } from "./gemini";
+import type { SectorHighlight, WeeklySectors } from "./sectors";
 import type { ReportWeek } from "./week";
 
 /**
@@ -57,6 +58,10 @@ export interface WeeklyComments {
   snapshot: Map<string, string>;
   /** key = WeeklyIssue.label */
   issues: Map<string, string>;
+  /** "주요 섹터 이슈"(오너 지시 2026-09-19) — key = SectorHighlight.id
+   * (예: "kr-up-1", "combined-down-2"). 등락률·순위는 코드(sectors.ts)가
+   * 이미 계산해 확정하고, 여기엔 "왜 그렇게 움직였는지" 코멘트만 담는다. */
+  sectors: Map<string, string>;
 }
 
 const INPUT_DATA_DESC = `# 입력 데이터
@@ -70,7 +75,10 @@ const INPUT_DATA_DESC = `# 입력 데이터
   news·earnings(실적 서프라이즈)·metrics(FRED 거시지표)가 근거로 들어있다.
 - policyEvidence: 미국 금리·연준/한국은행/일본은행 주제로 이미 수집된
   증권사 리포트·뉴스 근거(근거 있는 주제만 포함). policySummary 를 쓸 때
-  최우선으로 활용한다.`;
+  최우선으로 활용한다.
+- sectors: 이번 주 한국·미국·일본 증시의 상승/하락 상위 섹터(등락률은 코드가
+  이미 계산해 확정). 왜 그 섹터가 그렇게 움직였는지는 안 채워져 있다 —
+  네가 웹검색으로 원인을 찾아 채운다.`;
 
 const MACRO_PROMPT = `# 역할
 너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이번 주 전체
@@ -150,19 +158,26 @@ ${INPUT_DATA_DESC}
        "~로 보임", "~가능성"처럼 조심스럽게. 근거 없는 전망을 확정
        처럼 쓰지 마라.
    짧게 요약하려 하지 말고 실제 분석 분량(200~400자)으로 써라.
-3. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치(%, 가격,
+3. **sectors: 이번 주 왜 그 섹터가 그렇게 오르내렸는지를 쓴다.** 등락률·
+   순위는 이미 코드가 계산해 확정했으니 다시 쓰지 마라 — "이번 주 X.X%
+   상승" 처럼 표에 이미 있는 숫자를 문장으로 바꿔 적기만 하는 건 금지
+   (snapshot 규칙 1과 같은 이유). 그 섹터 안에서 실제로 무슨 일이 있었는지
+   (실적·정책·수급·업황 뉴스 등)를 웹검색으로 확인해 1~2문장(60자 내외)
+   으로 쓴다. 확인 안 되면 빈 문자열로 남긴다. sectors 항목의 id 값을
+   그대로 키로 써서 응답한다(예: "kr-up-1").
+4. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치(%, 가격,
    지표 등)를 쓸 때는 **실제 웹검색으로 확인한 것만** 쓴다 — 확인 안 되면
    수치 없이 정성적으로만("~영향", "~로 해석됨") 서술하고, 그마저 안 되면
    해당 칸을 비운다.
-4. 간결한 애널리스트 어조(~음/~함 체). 미사여구·감탄사 금지(단, 전망은
-   위 2-(c)처럼 조심스러운 표현 사용). **snapshot 코멘트는 40자 내외로
-   짧게 유지**(자산이 16개라 다 길면 표가 안 읽힌다) — 길이 기준은
-   issues 에만 적용된다.
+5. 간결한 애널리스트 어조(~음/~함 체). 미사여구·감탄사 금지(단, 전망은
+   위 2-(c)처럼 조심스러운 표현 사용). **snapshot·sectors 코멘트는 40~60자
+   내외로 짧게 유지**(항목이 많아 다 길면 표가 안 읽힌다) — 길이 기준은
+   issues 에만 적용되지 않는다.
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
-{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": "코멘트"}}
-snapshot·issues 에 없는 키를 새로 만들지 말 것.`;
+{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": "코멘트"}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
+snapshot·issues·sectors 에 없는 키를 새로 만들지 말 것.`;
 
 interface CommentPayload {
   reportWeek: { start: string; end: string };
@@ -196,6 +211,15 @@ interface CommentPayload {
     label: string;
     reports: { date: string; source: string; stockName: string; title: string }[];
     news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+  }[];
+  sectors: {
+    id: string;
+    market: string;
+    label: string;
+    direction: "up" | "down";
+    pct: number;
+    startDate: string;
+    endDate: string;
   }[];
 }
 
@@ -283,11 +307,36 @@ function computeFixedCalendarEvents(startDate: string, endDate: string): FixedCa
 /** issues.ts WEEKLY_TOPICS 의 정확한 라벨과 일치해야 한다. */
 const POLICY_TOPIC_LABELS = ["미국 금리·연준", "한국은행·국내 금리", "일본은행·엔화"];
 
+const MARKET_LABEL: Record<string, string> = { kr: "한국", us: "미국", jp: "일본" };
+
+function flattenSectors(sectors: WeeklySectors): CommentPayload["sectors"] {
+  const groups: SectorHighlight[] = [
+    ...sectors.kr.up,
+    ...sectors.kr.down,
+    ...sectors.us.up,
+    ...sectors.us.down,
+    ...sectors.jp.up,
+    ...sectors.jp.down,
+    ...sectors.combined.up,
+    ...sectors.combined.down,
+  ];
+  return groups.map((s) => ({
+    id: s.id,
+    market: MARKET_LABEL[s.market] ?? s.market,
+    label: s.label,
+    direction: s.direction,
+    pct: Math.round(s.pct * 100) / 100,
+    startDate: s.startDate,
+    endDate: s.endDate,
+  }));
+}
+
 function buildPayload(
   snapshot: SnapshotRow[],
   issues: WeeklyIssue[],
   week: ReportWeek,
   allIssues: WeeklyIssue[],
+  sectors: WeeklySectors,
 ): CommentPayload {
   const weekEndMs = Date.parse(`${week.weekEnd}T00:00:00Z`);
   const nextStart = new Date(weekEndMs + 3 * 86_400_000).toISOString().slice(0, 10); // 금→월
@@ -310,6 +359,7 @@ function buildPayload(
     nextWeek: { start: nextStart, end: nextEnd },
     topMovers: computeTopMovers(snapshot),
     policyEvidence,
+    sectors: flattenSectors(sectors),
     snapshot: snapshot
       .filter((r) => r.value != null)
       .map((r) => ({
@@ -361,6 +411,7 @@ interface MacroResponse {
 interface CommentsOnlyResponse {
   snapshot?: Record<string, string>;
   issues?: Record<string, string>;
+  sectors?: Record<string, string>;
 }
 
 function tryParse<T>(s: string): T | null {
@@ -461,6 +512,7 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
       if (n.excerpt) nums.push(...extractNumbers(n.excerpt));
     }
   }
+  for (const s of payload.sectors) nums.push(s.pct);
   return nums;
 }
 
@@ -522,14 +574,16 @@ export async function generateWeeklyComments(
   issues: WeeklyIssue[],
   week: ReportWeek,
   allIssues: WeeklyIssue[],
+  sectors: WeeklySectors,
 ): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
   if (!isGeminiConfigured() || issues.length === 0) return null;
 
-  const payload = buildPayload(snapshot, issues, week, allIssues);
+  const payload = buildPayload(snapshot, issues, week, allIssues, sectors);
   const userJson = JSON.stringify(payload);
   const allowed = buildAllowedNumbers(payload);
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
+  const sectorIds = payload.sectors.map((s) => s.id);
 
   const [macroCall, commentResult] = await Promise.all([
     callMacroWithRetry(userJson),
@@ -549,6 +603,7 @@ export async function generateWeeklyComments(
     calendar: null,
     snapshot: new Map(),
     issues: new Map(),
+    sectors: new Map(),
   };
 
   // --- 매크로(한 줄 결론·정책요약·캘린더) ---
@@ -638,6 +693,16 @@ export async function generateWeeklyComments(
     }
     const v = verifyComment(String(text ?? ""), allowed, commentTrustGrounded);
     if (v) comments.issues.set(canonical, v);
+  }
+  for (const [rawId, text] of Object.entries(commentParsed?.sectors ?? {})) {
+    // id 는 코드가 만든 단순 문자열(kr-up-1 등)이라 fuzzy 매칭 없이 정확히
+    // 일치해야 한다 — 모델이 다른 값을 돌려주면 그냥 버린다(오염 방지).
+    if (!sectorIds.includes(rawId)) {
+      console.warn(`[weekly] 섹터 코멘트 키 불일치 — "${rawId}" 는 알려진 섹터 id 가 아님`);
+      continue;
+    }
+    const v = verifyComment(String(text ?? ""), allowed, commentTrustGrounded);
+    if (v) comments.sectors.set(rawId, v);
   }
 
   const missingIssues = issueLabels.filter((l) => !comments.issues.has(l));

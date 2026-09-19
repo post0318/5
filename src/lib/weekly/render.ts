@@ -6,6 +6,7 @@ import { snapshotToMarkdownTable } from "./snapshot";
 import { CALENDAR_QUERIES } from "./topics";
 import type { WeeklyComments } from "./comment";
 import type { WeeklyIssue } from "./issues";
+import type { SectorHighlight, WeeklySectors } from "./sectors";
 import type { ReportWeek } from "./week";
 
 /**
@@ -19,7 +20,7 @@ import type { ReportWeek } from "./week";
  * 항목이 검증에서 걸러지면 해당 칸은 그대로 빈 문자열 — 오너가 편집기에서
  * 직접 채울 수 있다.
  *
- * 구성: 스냅샷 표 / 주간 핵심 이슈 3개 / 금리정책 / 다음 주 일정.
+ * 구성: 스냅샷 표 / 주간 핵심 이슈 3개 / 주요 섹터 이슈 / 금리정책 / 다음 주 일정.
  */
 
 function pctText(r: SnapshotRow): string {
@@ -105,6 +106,53 @@ function tableCell(s: string): string {
   return s.replace(/\|/g, "/").replace(/\s+/g, " ").trim();
 }
 
+/** 실제 기준·비교일이 그 주의 일반적인 구간(baseFriday~weekEnd)과 다르면
+ * (연휴로 기준점이 앞으로, 비교점이 뒤로 밀린 경우) 등락률 옆에 실제 날짜를
+ * 밝힌다 — 평소엔 안 붙어 표가 깔끔하다. */
+function sectorPctCell(s: SectorHighlight, week: ReportWeek): string {
+  const pct = `${s.pct >= 0 ? "+" : ""}${s.pct.toFixed(2)}%`;
+  if (s.startDate === week.baseFriday && s.endDate === week.weekEnd) return pct;
+  return `${pct} (${s.startDate.slice(5)}→${s.endDate.slice(5)})`;
+}
+
+/** 섹터 한 그룹(상승/하락 최대 2개씩)을 표로. 데이터가 없으면 안내 문구만. */
+function sectorGroupTable(
+  title: string,
+  up: SectorHighlight[],
+  down: SectorHighlight[],
+  week: ReportWeek,
+  comments: Map<string, string>,
+): string {
+  const lines: string[] = [`### ${title}`, ""];
+  if (up.length === 0 && down.length === 0) {
+    lines.push("_이번 주 집계된 섹터 데이터가 없습니다._");
+    return lines.join("\n");
+  }
+  lines.push("| 구분 | 섹터 | 등락률 | 코멘트 |", "|---|---|---:|---|");
+  for (const s of up) {
+    lines.push(`| 상승 | ${tableCell(s.label)} | ${sectorPctCell(s, week)} | ${tableCell(comments.get(s.id) ?? "")} |`);
+  }
+  for (const s of down) {
+    lines.push(`| 하락 | ${tableCell(s.label)} | ${sectorPctCell(s, week)} | ${tableCell(comments.get(s.id) ?? "")} |`);
+  }
+  return lines.join("\n");
+}
+
+function sectorSection(sectors: WeeklySectors, week: ReportWeek, comments: Map<string, string>): string {
+  const parts = [
+    "_전주 금요일 종가 대비 당주 금요일 종가 기준, 시장별 상승·하락 상위 섹터입니다(연휴로 기준일이 밀리면 실제 날짜를 괄호로 표기)._",
+    "",
+    sectorGroupTable("한국", sectors.kr.up, sectors.kr.down, week, comments),
+    "",
+    sectorGroupTable("미국", sectors.us.up, sectors.us.down, week, comments),
+    "",
+    sectorGroupTable("일본", sectors.jp.up, sectors.jp.down, week, comments),
+    "",
+    sectorGroupTable("통합(한·미·일)", sectors.combined.up, sectors.combined.down, week, comments),
+  ];
+  return parts.join("\n");
+}
+
 /**
  * 고정 검색어의 그 주 기사를 표로 건다 — 추론 없음, 코드가 표만 조립한다
  * (오너 지시 2026-09-18 — "일정을 안 건든다는 건 임의 해석하지 말라는
@@ -170,11 +218,13 @@ export async function renderWeeklyReport(opts: {
   week: ReportWeek;
   snapshot: SnapshotRow[];
   issues: WeeklyIssue[];
+  sectors: WeeklySectors;
   comments?: WeeklyComments;
 }): Promise<string> {
-  const { week, snapshot, issues, comments } = opts;
+  const { week, snapshot, issues, sectors, comments } = opts;
   const snapshotComments = comments?.snapshot ?? new Map<string, string>();
   const issueComments = comments?.issues ?? new Map<string, string>();
+  const sectorComments = comments?.sectors ?? new Map<string, string>();
   const sinceMs = Date.parse(`${week.weekStart}T00:00:00+09:00`);
   const untilMs = Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000;
   // 금리정책은 더 이상 기사 표를 안 쓴다(오너 지시 2026-09-18 — "표
@@ -210,14 +260,18 @@ export async function renderWeeklyReport(opts: {
       parts.push("");
     });
   }
-  parts.push("## 4. 금리정책");
+  parts.push("## 4. 주요 섹터 이슈");
+  parts.push("");
+  parts.push(sectorSection(sectors, week, sectorComments));
+  parts.push("");
+  parts.push("## 5. 금리정책");
   parts.push("");
   // Gemini 가 그라운딩으로 종합한 정책 요약만 보여준다 — 기사 표는 더 이상
   // 안 쓴다(오너 지시 2026-09-18 — "표 필요없다구!!"). 그라운딩 실패 시
   // 표로 폴백하지 않고 짧은 안내만 남긴다.
   parts.push(comments?.policySummary || "이번 주 통화정책 요약을 확인하지 못했습니다.");
   parts.push("");
-  parts.push("## 5. 다음 주 주시 일정");
+  parts.push("## 6. 다음 주 주시 일정");
   parts.push("");
   // 날짜별 확정 이벤트 캘린더(오너 지시 2026-09-18 — "관련 기사 목록이
   // 아니라 일자별 캘린더를 원한 거다"). 없으면(그라운딩 실패 등) 기존
