@@ -431,11 +431,7 @@ export const INSIGHT_SOURCES = [
  * 분류한다(다른 국내 분류 로직 우회). 백필·보존기간만 180일로 다른 산업
  * 분석(90일)보다 길게 둔다(오너 지시 — "여기만 백필기간을 180일로").
  */
-export const FOREIGN_RESEARCH_SOURCES = [
-  "Goldman Sachs Research",
-  "BlackRock Research",
-  "J.P. Morgan Research",
-] as const;
+export const FOREIGN_RESEARCH_SOURCES = ["Goldman Sachs Research", "BlackRock Research"] as const;
 
 function isStrategyStockname(stockName: string): boolean {
   if (STRATEGY_STOCKNAMES.has(stockName)) return true;
