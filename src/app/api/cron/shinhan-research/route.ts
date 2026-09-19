@@ -107,7 +107,11 @@ export async function POST(req: Request) {
  * 대체한 뒤(예: 신한투자증권 해외, 2026-09) 옛 GM 경유 문서가 남아 같은
  * 종목·날짜가 두 번 뜨는 문제(실측: AVGO 신한투자증권 2건)를 지운다.
  * `_id` 가 `${source}:GM:${원본id}` 로 네임스페이스돼 있어 `source`+`idPrefix`
- * 로 안전하게 좁혀서만 삭제한다.
+ * 로 안전하게 좁혀서만 삭제한다. `idPrefix` 생략 시 그 `source` 전체를
+ * 지운다 — 콘텐츠 종류를 나눠 다른 source로 재전송할 때(예: JP모간
+ * "J.P. Morgan" → "J.P. Morgan Research", 2026-09-19) 옛 source 문서
+ * 전량이 고아로 남는 걸 정리하는 용도(source 는 여전히 필수라 전체
+ * 컬렉션을 잘못 지울 위험은 없음).
  */
 export async function DELETE(req: Request) {
   try {
@@ -117,16 +121,17 @@ export async function DELETE(req: Request) {
     const body = (await req.json().catch(() => ({}))) as { source?: string; idPrefix?: string };
     const source = body.source?.trim();
     const idPrefix = body.idPrefix?.trim();
-    if (!source || !idPrefix) {
-      return Response.json({ error: "source, idPrefix 필요" }, { status: 400 });
+    if (!source) {
+      return Response.json({ error: "source 필요" }, { status: 400 });
     }
 
     const col = await shinhanResearchCol();
-    const result = await col.deleteMany({
-      source,
-      _id: { $regex: `^${source}:${idPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}` },
-    });
-    return ok({ source, idPrefix, deleted: result.deletedCount ?? 0 });
+    const result = await col.deleteMany(
+      idPrefix
+        ? { source, _id: { $regex: `^${source}:${idPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}` } }
+        : { source },
+    );
+    return ok({ source, idPrefix: idPrefix ?? null, deleted: result.deletedCount ?? 0 });
   } catch (err) {
     return jsonError(err);
   }

@@ -9,6 +9,17 @@
  * 항목이 전날짜까지 잡힘). 미국 사이트맵(`/US/en/sitemap.xml`) 기준
  * `/insights/global-research/` 경로만 필터.
  *
+ * **산업분석 "해외리서치"로 분류(오너 지시, 2026-09-19 — "jpm도
+ * 글로벌리서치는 산업분석으로 정리하고 나머지는 인사이트다" + "산업분석의
+ * 해외리서치로 분류다")**: `/insights/` 하위엔 global-research 외에도
+ * banking·treasury·payments·real-estate 등 B2B 뱅킹 서비스 콘텐츠가
+ * 훨씬 많지만(실측 — 20개 넘는 카테고리, 투자 리서치와 무관) 이 수집기는
+ * 처음부터 global-research 만 대상이었다. 그 전량을 골드만삭스 리서치
+ * 노트와 같은 메커니즘(`source: "J.P. Morgan Research"`,
+ * `FOREIGN_RESEARCH_SOURCES`)으로 산업분석 탭 "해외리서치" 세그먼트로
+ * 보낸다 — "J.P. Morgan"(인사이트) 소스로는 현재 아무것도 안 보냄("나머지는
+ * 인사이트"는 향후 다른 JPM 콘텐츠를 추가할 때 적용할 원칙).
+ *
  * 개별 글 페이지는 서버렌더 HTML — `<h1>`에 실제 헤드라인(`<title>` 태그는
  * "... | J.P. Morgan" 접미사가 붙어 지저분함), `<meta name="description">`
  * 에 2~3문장 요약이 이미 있어(골드만삭스와 달리 nav 텍스트 필터링 불필요)
@@ -128,7 +139,7 @@ for (const { url } of targets) {
       title,
       stockName: "글로벌 인사이트",
       symbol: null,
-      analyst: "J.P. Morgan",
+      analyst: "J.P. Morgan Research",
       opinion: "",
       targetPrice: null,
       summary: decodeEntities(descM?.[1] ?? "").slice(0, 300),
@@ -161,7 +172,7 @@ else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 const up = await fetch(IMPORT_URL, {
   method: "POST",
   headers,
-  body: JSON.stringify({ items, source: "J.P. Morgan", market: "us" }),
+  body: JSON.stringify({ items, source: "J.P. Morgan Research", market: "us" }),
 });
 const upBody = await up.text();
 if (!up.ok) {
