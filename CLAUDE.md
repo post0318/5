@@ -913,6 +913,17 @@ npm run db:studio    # drizzle studio
     - **블랙록 발행일 근사**: `global-investment-outlook`은 발행일 메타
       자체가 없어(실측) 제목+요약의 연도와 "Midyear" 표기로 반기를
       추정(Midyear면 7/1, 아니면 1/1) — 정확한 발행일이 아니라 근사값.
+    - **JP모간은 해외리서치로 옮겼다가 인사이트로 원복(오너 지시,
+      2026-09-19)**: "jpm도 글로벌리서치는 산업분석으로 정리하고 나머지는
+      인사이트다"란 지시를 받아 `/insights/global-research/` 전량을
+      `source: "J.P. Morgan Research"`로 바꿔 해외리서치로 옮겼었는데
+      (골드만삭스와 같은 방식), 오너가 실제 화면을 보고 "jpm은 해외리서치로
+      싹다옮겼네 내가 원한건 그게 아닌데.. 인사이트로 다시 옮겨라"고
+      정정 — 다시 `source: "J.P. Morgan"`으로 되돌려 인사이트 탭으로
+      복귀시켰다. **JP모간은 해외리서치 대상이 아니다** — 골드만삭스·
+      블랙록만 해당(`FOREIGN_RESEARCH_SOURCES`에 JPM 없음). 소스 전환 시
+      옛 문서 정리는 `/api/cron/shinhan-research` DELETE(`source`만으로
+      호출, idPrefix 생략 가능하도록 이때 확장)로 처리.
     - **모간스탠리 ESG/개인재무 주제 제외(오너 지시, 2026-09-19 — "esg는
       다 제외" + "Personal Finance 대상에서 제외")**: `<meta
       name="content_topics">`에 기사별 주제 태그가 명시돼 있어(실측) 제목
