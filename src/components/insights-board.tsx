@@ -20,6 +20,9 @@ const SOURCES = [
   { key: "J.P. Morgan", label: "J.P. Morgan" },
   { key: "Morgan Stanley", label: "Morgan Stanley" },
   { key: "PIMCO", label: "PIMCO" },
+  { key: "BNP Paribas", label: "BNP Paribas" },
+  { key: "Citigroup", label: "Citigroup" },
+  { key: "Bank of America Institute", label: "BofA Institute" },
 ] as const;
 type SourceKey = (typeof SOURCES)[number]["key"];
 

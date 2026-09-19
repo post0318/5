@@ -925,6 +925,59 @@ npm run db:studio    # drizzle studio
       확인 — "인사이트에")는 이 필터에 안 걸리는 한 기존처럼 인사이트로
       감, 별도 처리 불필요. 팟캐스트(`/insights/podcasts/`, 379건)는
       "요약본 제공 없이 링크"라 처음부터 수집 대상 밖(오너 확인).
+  - **해외 IB/자산운용사 리서치 2차 6곳 조사 — 3곳 구축(오너 지시,
+    2026-09-19)**: ING THINK·BNP Paribas·Deutsche Bank·UBS CIO·Citi GPS·
+    BofA Institute를 오너가 추가 제시, 실측 결과 **BNP Paribas·
+    Citigroup·Bank of America Institute 3곳만 구축**. 전부 `INSIGHT_
+    SOURCES`에 추가해 인사이트 탭으로(해외리서치 세그먼트 이관은 이번엔
+    없음 — GS/블랙록/JPM처럼 "리서치노트 전용 경로"가 뚜렷이 구분되는
+    콘텐츠가 없었음).
+    - **BNP Paribas**(`economic-research.bnpparibas.com`): 사이트맵엔
+      개별 리포트가 아니라 게시판 허브 URL만 있고 lastmod도 전부
+      2022-12-05로 고정(실측 — 최신순 추림 불가) — 대신 게시판 자체가
+      `/Publications/{board}/en-US/Page-N` 형식으로 페이지네이션되는
+      평범한 서버렌더 HTML이라 그걸 쓴다(Eco-Week·Eco-Flash·
+      Eco-Conjoncture·Eco-Emerging·Special-Edition 5개 게시판, 팟캐스트·
+      참고자료 게시판은 제외). 발행일 메타가 없어 **제목에 박힌 날짜**를
+      파싱("Eco Week September 14, 2026"/"Eco Week 1 June 2026" 등
+      형식이 섞여 있음, 실측) — 일자 없이 월만 있으면(드묾) 1일로 근사.
+      `scripts/collect-bnpparibas-research.mjs`.
+    - **Citigroup**(`citigroup.com/global/insights`): 사이트맵에 1,800개
+      URL이 lastmod과 함께 있어(실측) 최신순 추림. Citi GPS류 정통
+      리서치 외 지점 개소식 등 PR성 콘텐츠도 섞여 있어(실측 —
+      "...-grand-opening-event" 등) 제목 키워드로 일부만 걸러냄(완전하지
+      않음). `og:title`/`og:description` 품질 좋음. `scripts/
+      collect-citigroup-research.mjs`.
+    - **Bank of America Institute**(`institute.bankofamerica.com`):
+      사이트맵 169개 URL, lastmod 신뢰 가능(실측). BofA 자체 거래
+      데이터 기반 소비자·중소기업 분석(BofA Global Research와는 별개
+      조직, 오너 제시 설명 그대로). `sustainability/` 경로는 이 프로젝트의
+      기존 ESG 제외 원칙과 동일하게 건너뜀. `scripts/collect-boa-
+      research.mjs`.
+    - **보류 3곳(실측으로 확인된 막힘)**: **UBS**(`www.ubs.com`)는
+      robots.txt 요청 자체가 403(Akamai 차단) — 접근 자체가 막혀있어
+      제외. **Deutsche Bank**(`corporatebank.db.com/.../Research`)는
+      오너가 제시한 URL이 다른 도메인(`conferences.db.com`)으로 리다이렉트
+      되며 404 — 실제 리서치 페이지 경로를 다시 찾아야 함. **ING THINK**
+      (`think.ing.com`)는 Algolia 검색(앱ID·키는 페이지에 노출되나
+      인덱스명 못 찾음, 골드만삭스와 같은 패턴)으로 그려지고 사이트맵
+      URL(`/sitemap/index.html`) 요청은 TLS 재협상 단계에서 타임아웃 —
+      브라우저 네트워크 로그 역추적이 더 필요.
+  - **3차 3곳 조사 — 전부 보류(오너 지시, 2026-09-19)**: HSBC Global
+    Research·Barclays Research·Nomura Connects 추가 제시, 실측 결과
+    **셋 다 이번엔 구축 보류**. **HSBC**(`gbm.hsbc.com`)는 robots.txt에
+    Sitemap이 있고 접근도 되지만 사이트맵 자체가 UTF-16 인코딩(BOM 확인,
+    다른 소스들과 다름)인 데다 공개 콘텐츠가 79개 URL뿐이고 최신 항목도
+    2025-10(실측 — 거의 1년 전)로 정체돼 있어 오너가 언급한 Live
+    Insights/Open Pass/Talking Points 같은 실제 공개 시리즈는 다른 경로에
+    있는 것으로 보임(live-insights 캠페인 페이지도 301 리다이렉트). **Barclays**
+    (`www.ib.barclays`)는 robots.txt의 sitemap.xml이 실제로는 404이고,
+    "Global Outlook"/"연구" 허브 페이지들의 리스트 카드가 `[%=pageItem.
+    pagePath%].html` 같은 미치환 템플릿 placeholder로 나와(실측) 클라이언트
+    JS 렌더링 확인 — 검색 위젯 역추적이 더 필요. **Nomura Connects**
+    (`nomuraconnects.com`)는 robots.txt·sitemap.xml 둘 다 없고 Vite 기반
+    완전 SPA(실측 — 정적 fetch로는 페이지 골격만 나옴)라 내부 API 역추적이
+    필요.
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로

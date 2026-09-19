@@ -402,7 +402,16 @@ const ESG_EXCLUDE_RE = /\bESG\b/i;
  * `getIndustryResearch()`(산업분석 탭)·정리 로직 양쪽에서 전부 제외하고,
  * `getInsightResearch()`(인사이트 탭)에서만 별도로 90일 그대로 유지한다.
  */
-export const INSIGHT_SOURCES = ["BlackRock", "Goldman Sachs", "J.P. Morgan", "Morgan Stanley", "PIMCO"] as const;
+export const INSIGHT_SOURCES = [
+  "BlackRock",
+  "Goldman Sachs",
+  "J.P. Morgan",
+  "Morgan Stanley",
+  "PIMCO",
+  "BNP Paribas",
+  "Citigroup",
+  "Bank of America Institute",
+] as const;
 
 /**
  * "해외리서치" — 산업분석 탭의 새 세그먼트(오너 지시, 2026-09-19 —
