@@ -111,16 +111,19 @@ ${INPUT_DATA_DESC}
    까지 쓰고, 셋 다 없으면 null 로 남긴다.
 3. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. "관련
    기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
-   예정된 이벤트(중앙은행 회의·주요 경제지표 발표일·옵션선물 동시만기일
-   등 거시·시장 이벤트 위주, 개별 기업 실적·공모주 일정은 제외)를
-   날짜별로 확인해서 적는다. **주요 중앙은행 회의가 없는 주라고 캘린더가
+   예정된 이벤트를 날짜별로 확인해서 적는다. 대상: 중앙은행 회의·주요
+   경제지표 발표일·옵션선물 동시만기일 같은 거시·시장 이벤트 **더하여
+   M7(애플·마이크로소프트·엔비디아·아마존·구글·메타·테슬라) 등 시가총액
+   최상위 빅테크의 실적 발표일**도 포함한다(오너 지시 2026-09-19 — 시황에
+   미치는 영향이 커서 거시 이벤트급으로 취급). 그 외 개별 기업 실적·
+   공모주 일정은 제외. **주요 중앙은행 회의가 없는 주라고 캘린더가
    빈 게 정상은 아니다** — CPI·PPI·고용지표(비농업)·PMI·소매판매 같은
    정기 경제지표 발표일, ECB·BOE 회의, 미 국채 입찰처럼 거의 매주
    무언가는 있다. "이번 주 [nextWeek 날짜] 경제지표 발표 일정"처럼
    구체적으로 검색해서 찾아라 — 검색 자체를 안 하고 비우지 마라.
    **절대 지어내지 마라** — 확인 안 되는 날짜/이벤트는 통째로 뺀다
-   (그래도 목록이 비면 어쩔 수 없다. 주요 중앙은행 회의 일정은 이미
-   코드가 따로 채우니 몰라도 괜찮다). 각 항목은
+   (그래도 목록이 비면 어쩔 수 없다. 주요 중앙은행 회의·고용지표·시장
+   휴장일은 이미 코드가 따로 채우니 몰라도 괜찮다). 각 항목은
    {"date": "YYYY-MM-DD", "event": "그 날 있는 일정, 15자 내외"} 형식,
    nextWeek 범위를 벗어나는 날짜는 넣지 않는다. 날짜 오름차순 정렬.
 4. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치를 쓸 때는
@@ -247,6 +250,10 @@ function computeTopMovers(snapshot: SnapshotRow[]): CommentPayload["topMovers"] 
   };
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function thirdFridayUTC(year: number, month1to12: number): string {
   const first = new Date(Date.UTC(year, month1to12 - 1, 1));
   const firstFridayDate = 1 + ((5 - first.getUTCDay() + 7) % 7); // 5 = 금요일
@@ -266,6 +273,114 @@ function computeQuadWitching(startDate: string, endDate: string): { date: string
   }
   const hit = candidates.find((d) => d >= startDate && d <= endDate);
   return hit ? { date: hit, event: "선물·옵션 동시 만기일(네 마녀의 날)" } : null;
+}
+
+function firstFridayUTC(year: number, month1to12: number): string {
+  const first = new Date(Date.UTC(year, month1to12 - 1, 1));
+  const firstFridayDate = 1 + ((5 - first.getUTCDay() + 7) % 7); // 5 = 금요일
+  return new Date(Date.UTC(year, month1to12 - 1, firstFridayDate)).toISOString().slice(0, 10);
+}
+
+/** 미국 고용지표(비농업, Employment Situation) — 매월 첫째 금요일 발표가
+ * 수십 년째 고정 관행이라(드물게 공휴일과 겹치면 하루 밀림) 검색 없이
+ * 코드로 계산한다. FRED(아래 fetchFredReleaseEvents)가 실제 공식 날짜를
+ * 주므로 그쪽이 우선이고, 이건 FRED 호출 실패 시 폴백이다. */
+function computeJobsReport(startDate: string, endDate: string): { date: string; event: string } | null {
+  const y1 = Number(startDate.slice(0, 4));
+  const y2 = Number(endDate.slice(0, 4));
+  const candidates: string[] = [];
+  for (let y = y1; y <= y2; y++) {
+    for (let m = 1; m <= 12; m++) candidates.push(firstFridayUTC(y, m));
+  }
+  const hit = candidates.find((d) => d >= startDate && d <= endDate);
+  return hit ? { date: hit, event: "미국 고용지표(비농업, Employment Situation)" } : null;
+}
+
+/**
+ * 미국 CPI·PPI·GDP·고용지표(비농업) 공식 발표일 — FRED `release/dates`
+ * API(오너가 발급받은 무료 키, 2026-09-19). `fredgraph.csv`(값 조회, 키
+ * 불필요)와 달리 "언제 발표되는지"는 이 엔드포인트가 필요하다. release_id
+ * 는 `/fred/series/release?series_id=...` 로 실측 확인:
+ *  - CPIAUCSL(CPI) → 10, PPIACO(PPI) → 46, GDP → 53, PAYEMS(고용) → 50.
+ * 키 없거나 호출 실패 시 조용히 빈 배열(고용지표만 위 규칙 기반 계산으로
+ * 대신 채워짐, CPI/PPI/GDP는 그냥 빠짐 — 지어내지 않음).
+ */
+const FRED_RELEASES: { id: number; label: string }[] = [
+  { id: 10, label: "미국 CPI(소비자물가지수) 발표" },
+  { id: 46, label: "미국 PPI(생산자물가지수) 발표" },
+  { id: 53, label: "미국 GDP 발표" },
+  { id: 50, label: "미국 고용지표(비농업, Employment Situation)" },
+];
+
+async function fetchFredReleaseEvents(
+  startDate: string,
+  endDate: string,
+): Promise<{ date: string; event: string }[]> {
+  const key = process.env.FRED_API_KEY;
+  if (!key) return [];
+  const results = await Promise.all(
+    FRED_RELEASES.map(async (r) => {
+      try {
+        const res = await fetch(
+          `https://api.stlouisfed.org/fred/release/dates?release_id=${r.id}&api_key=${key}&realtime_start=${startDate}&realtime_end=${endDate}&include_release_dates_with_no_data=true&file_type=json`,
+          { signal: AbortSignal.timeout(8_000) },
+        );
+        if (!res.ok) return [];
+        const j = (await res.json()) as { release_dates?: { date: string }[] };
+        return (j.release_dates ?? [])
+          .filter((d) => d.date >= startDate && d.date <= endDate)
+          .map((d) => ({ date: d.date, event: r.label }));
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return results.flat();
+}
+
+/**
+ * 시장 휴장일 — Nager.Date 공개 API(무료, 인증 불필요, 실측 확인
+ * 2026-09-19)로 한국·미국·일본·중국·독일(유럽 섹터 거래소 기준)의
+ * 공휴일을 받아 대상 기간에 걸리는 것만 돌려준다. 웹검색과 달리 구조화된
+ * 공식 데이터라 확인 실패·할루시네이션 위험이 없다.
+ */
+const HOLIDAY_COUNTRIES: { code: string; label: string }[] = [
+  { code: "KR", label: "한국" },
+  { code: "US", label: "미국" },
+  { code: "JP", label: "일본" },
+  { code: "CN", label: "중국" },
+  { code: "DE", label: "유럽(독일)" },
+];
+
+async function fetchHolidayEvents(
+  startDate: string,
+  endDate: string,
+): Promise<{ date: string; event: string }[]> {
+  const y1 = Number(startDate.slice(0, 4));
+  const y2 = Number(endDate.slice(0, 4));
+  const years = y1 === y2 ? [y1] : [y1, y2];
+  const results = await Promise.all(
+    HOLIDAY_COUNTRIES.flatMap((c) =>
+      years.map(async (y) => {
+        try {
+          const res = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${y}/${c.code}`, {
+            signal: AbortSignal.timeout(8_000),
+          });
+          if (!res.ok) return [];
+          // localName 은 그 나라 언어 그대로라(일본어 한자·중국어 간체 등)
+          // 한글 리포트에서 읽기 어렵다 — 영문 name 을 대신 쓴다(실측 확인,
+          // 2026-09-19: "敬老の日" 대신 "Respect for the Aged Day").
+          const rows = (await res.json()) as { date: string; name: string }[];
+          return rows
+            .filter((r) => r.date >= startDate && r.date <= endDate)
+            .map((r) => ({ date: r.date, event: `${c.label} 휴장 — ${r.name}` }));
+        } catch {
+          return [];
+        }
+      }),
+    ),
+  );
+  return results.flat();
 }
 
 /**
@@ -303,7 +418,7 @@ interface FixedCalendarEvent {
   dedupe: RegExp;
 }
 
-function computeFixedCalendarEvents(startDate: string, endDate: string): FixedCalendarEvent[] {
+async function computeFixedCalendarEvents(startDate: string, endDate: string): Promise<FixedCalendarEvent[]> {
   const inRange = (d: string) => d >= startDate && d <= endDate;
   const out: FixedCalendarEvent[] = [];
   const quadWitching = computeQuadWitching(startDate, endDate);
@@ -311,6 +426,23 @@ function computeFixedCalendarEvents(startDate: string, endDate: string): FixedCa
   for (const d of FOMC_2026) if (inRange(d)) out.push({ date: d, event: "미국 FOMC 금리 결정", dedupe: /FOMC|연준.*금리|Fed\b/i });
   for (const d of BOJ_2026) if (inRange(d)) out.push({ date: d, event: "일본은행(BOJ) 금융정책결정회의", dedupe: /BOJ|일본은행/i });
   for (const d of BOK_2026) if (inRange(d)) out.push({ date: d, event: "한국은행 금융통화위원회", dedupe: /한국은행|금통위|한은\b/ });
+
+  // CPI·PPI·GDP·고용지표는 FRED(공식 발표일)가 우선. 고용지표만 FRED가
+  // 실패했을 때 "매월 첫째 금요일" 규칙으로 대신 채운다(FRED 성공 시 규칙
+  // 계산은 버림 — 같은 이벤트가 두 번 들어가는 걸 막는다).
+  const fredEvents = await fetchFredReleaseEvents(startDate, endDate).catch(() => []);
+  const jobsRe = /고용지표|비농업|Employment Situation|Nonfarm/i;
+  for (const f of fredEvents) out.push({ ...f, dedupe: jobsRe.test(f.event) ? jobsRe : new RegExp(escapeRegExp(f.event)) });
+  if (!fredEvents.some((f) => jobsRe.test(f.event))) {
+    const jobsReport = computeJobsReport(startDate, endDate);
+    if (jobsReport) out.push({ ...jobsReport, dedupe: jobsRe });
+  }
+
+  const holidays = await fetchHolidayEvents(startDate, endDate).catch(() => []);
+  for (const h of holidays) {
+    const name = h.event.split(" — ")[1] ?? h.event;
+    out.push({ ...h, dedupe: new RegExp(escapeRegExp(name)) });
+  }
   return out;
 }
 
@@ -675,14 +807,16 @@ export async function generateWeeklyComments(
       `[weekly] calendar 미채움 — trustGrounded=${macroTrustGrounded}, parsed=${JSON.stringify(macroParsed?.calendar ?? null)}`,
     );
   }
-  // 네 마녀의 날·FOMC·BOJ·한국은행 금통위는 공개된 고정 일정이라 검색
-  // 없이 코드로 항상 정확히 계산할 수 있다(오너 지시 2026-09-18 — "5번은
-  // 정해진 일정인데 없다는게 더 이상하다"). 그라운딩 결과와 무관하게
-  // 항상 포함 — "같은 날짜"가 아니라 "이미 같은 이벤트가 그 날짜에
-  // 있는지"로 중복을 판정한다(실측 버그 — 같은 날 BOJ 회의가 있어서
-  // 날짜만 보고 건너뛰는 바람에 네 마녀의 날 자체가 통째로 빠짐. 한
-  // 날짜에 이벤트가 여러 개 있는 건 정상이다).
-  const fixedEvents = computeFixedCalendarEvents(payload.nextWeek.start, payload.nextWeek.end);
+  // 네 마녀의 날·FOMC·BOJ·한국은행 금통위·미국 고용지표(첫째 금요일)·
+  // 시장 휴장일(Nager.Date)은 전부 검색 없이 코드로 확정할 수 있다(오너
+  // 지시 2026-09-18 "5번은 정해진 일정인데 없다는게 더 이상하다", 2026-09-19
+  // "그라운딩이 계속 실패해 결국 안 채워진다" — 그라운딩 성공 여부에
+  // 기대지 않는 항목을 최대한 늘림). 그라운딩 결과와 무관하게 항상 포함
+  // — "같은 날짜"가 아니라 "이미 같은 이벤트가 그 날짜에 있는지"로 중복을
+  // 판정한다(실측 버그 — 같은 날 BOJ 회의가 있어서 날짜만 보고 건너뛰는
+  // 바람에 네 마녀의 날 자체가 통째로 빠짐. 한 날짜에 이벤트가 여러 개
+  // 있는 건 정상이다).
+  const fixedEvents = await computeFixedCalendarEvents(payload.nextWeek.start, payload.nextWeek.end);
   if (fixedEvents.length > 0) {
     let list = comments.calendar ?? [];
     for (const fx of fixedEvents) {
