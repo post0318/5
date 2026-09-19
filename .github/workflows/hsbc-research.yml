@@ -1,0 +1,24 @@
+name: HSBC Business Insights 수집
+
+# CLAUDE.md 방침(오너 승인, 2026-09-19): business.hsbc.com 의 /en-gb/insights
+# 를 사이트맵 기반으로 하루 1회 조회한다. robots.txt User-agent: * 기준
+# /en-gb/cib-products·/products-and-solutions-2 만 차단, /insights는 안 막힘.
+
+on:
+  schedule:
+    - cron: "45 23 * * *" # 23:45 UTC = 08:45 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/collect-hsbc-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

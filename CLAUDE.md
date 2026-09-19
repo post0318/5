@@ -963,21 +963,34 @@ npm run db:studio    # drizzle studio
       인덱스명 못 찾음, 골드만삭스와 같은 패턴)으로 그려지고 사이트맵
       URL(`/sitemap/index.html`) 요청은 TLS 재협상 단계에서 타임아웃 —
       브라우저 네트워크 로그 역추적이 더 필요.
-  - **3차 3곳 조사 — 전부 보류(오너 지시, 2026-09-19)**: HSBC Global
-    Research·Barclays Research·Nomura Connects 추가 제시, 실측 결과
-    **셋 다 이번엔 구축 보류**. **HSBC**(`gbm.hsbc.com`)는 robots.txt에
-    Sitemap이 있고 접근도 되지만 사이트맵 자체가 UTF-16 인코딩(BOM 확인,
-    다른 소스들과 다름)인 데다 공개 콘텐츠가 79개 URL뿐이고 최신 항목도
-    2025-10(실측 — 거의 1년 전)로 정체돼 있어 오너가 언급한 Live
-    Insights/Open Pass/Talking Points 같은 실제 공개 시리즈는 다른 경로에
-    있는 것으로 보임(live-insights 캠페인 페이지도 301 리다이렉트). **Barclays**
-    (`www.ib.barclays`)는 robots.txt의 sitemap.xml이 실제로는 404이고,
-    "Global Outlook"/"연구" 허브 페이지들의 리스트 카드가 `[%=pageItem.
-    pagePath%].html` 같은 미치환 템플릿 placeholder로 나와(실측) 클라이언트
-    JS 렌더링 확인 — 검색 위젯 역추적이 더 필요. **Nomura Connects**
-    (`nomuraconnects.com`)는 robots.txt·sitemap.xml 둘 다 없고 Vite 기반
-    완전 SPA(실측 — 정적 fetch로는 페이지 골격만 나옴)라 내부 API 역추적이
-    필요.
+  - **3차 3곳 조사 — HSBC 재조사로 구축, Deutsche Bank도 URL 재확인으로
+    구축, Barclays·Nomura는 보류(오너 지시, 2026-09-19)**: HSBC Global
+    Research·Barclays Research·Nomura Connects 추가 제시. 1차 조사에선
+    HSBC가 `gbm.hsbc.com`(HSBC Global Banking & Markets) 기준 공개 콘텐츠
+    79건뿐·최신 항목도 2025-10로 정체돼 보류했는데, **오너가 실제 살아있는
+    URL(`business.hsbc.com` — HSBC Commercial Banking, 별개 사이트)을
+    제시**해 재조사 후 구축 — 사이트맵 362건, 최신 항목이 당일까지 잡힘
+    (사이트맵이 UTF-16LE BOM 인코딩이라 `res.text()` 대신 `arrayBuffer()`로
+    받아 직접 디코딩 필요, 이 프로젝트에서 처음 나온 케이스). 마찬가지로
+    Deutsche Bank도 1차 조사 때 오너가 준 URL(`corporatebank.db.com/...`)
+    이 다른 도메인으로 리다이렉트되며 404였는데, **오너가 실제 작동하는
+    URL(`dbresearch.com/PROD/IE-PROD/HOME.alias`)을 다시 제시**해 재조사
+    후 구축 — 레거시 CMS(Reweb)지만 카드마다 `class="...-date"`/`"...-
+    title"`/`"...-teaser"` 세 블록이 순서대로 붙어있는 안정적인 서버렌더
+    구조라 정규식으로 바로 파싱(다른 소스들의 "제목에 박힌 날짜 추측"보다
+    안정적 — 날짜가 별도 텍스트로 깔끔하게 있음). 홈+Macro+Geopolitics+
+    Germany+Corporate Landscape 5개 허브를 함께 훑음.
+    **Barclays**(`www.ib.barclays`)는 오너가 준 개별 글 URL은 정상
+    작동하지만(og:title/description 있음) sitemap.xml이 실제로는 404이고
+    허브 페이지 리스트는 정적 HTML에 전혀 없이 **클라이언트 JS가 로드 후
+    주입**함을 이번엔 크롬 확장으로 직접 확인(네트워크 로그의 이미지 요청
+    URL에 실제 글 경로가 박혀있어 URL 패턴 자체는 알아냈지만 — `/content/
+    barclaysmicrosites/ibpublic/en/{경로}/_jcr_content/image...` → 공개
+    URL로 역산 가능 확인 — 이 목록을 매번 새로 알아내려면 진짜 API 호출이
+    안 잡히고 브라우저 렌더링이 필요해 무인 수집 스크립트로는 아직 안 됨).
+    **Nomura Connects**(`nomuraconnects.com`)는 robots.txt·sitemap.xml
+    둘 다 없고 Vite 기반 완전 SPA(실측 — 정적 fetch로는 페이지 골격만
+    나옴)라 내부 API 역추적이 필요, 이번엔 착수 안 함.
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로

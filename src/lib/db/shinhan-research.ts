@@ -411,6 +411,8 @@ export const INSIGHT_SOURCES = [
   "BNP Paribas",
   "Citigroup",
   "Bank of America Institute",
+  "HSBC",
+  "Deutsche Bank Research",
 ] as const;
 
 /**
