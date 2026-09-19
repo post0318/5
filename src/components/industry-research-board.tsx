@@ -88,13 +88,20 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
   });
 
   const allItems = q.data?.items ?? [];
+  // 미분류(표준 섹터 규칙에 안 걸리는 항목 — 수집기 기본값 "산업"/"시장",
+  // 게시판 라벨 등)는 "기타"로 묶어 따로 걸러볼 수 있게 한다(오너 지시,
+  // 2026-09-19 — "기타로 분류해줘").
+  const OTHER = "기타";
   const sectorCounts = new Map<string, number>();
   for (const it of allItems) {
-    const s = classifySector(it);
-    if (s) sectorCounts.set(s, (sectorCounts.get(s) ?? 0) + 1);
+    const s = classifySector(it) ?? OTHER;
+    sectorCounts.set(s, (sectorCounts.get(s) ?? 0) + 1);
   }
-  const sectors = SECTOR_LABELS.filter((s) => sectorCounts.has(s)).map((s) => [s, sectorCounts.get(s)!] as const);
-  const items = sector === "all" ? allItems : allItems.filter((it) => classifySector(it) === sector);
+  const sectors = [...SECTOR_LABELS.filter((s) => sectorCounts.has(s)), ...(sectorCounts.has(OTHER) ? [OTHER] : [])].map(
+    (s) => [s, sectorCounts.get(s)!] as const,
+  );
+  const items =
+    sector === "all" ? allItems : allItems.filter((it) => (classifySector(it) ?? OTHER) === sector);
   const pageCount = Math.ceil(items.length / PAGE_SIZE) || 1;
   const clampedPage = Math.min(page, pageCount);
   const paged = items.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);

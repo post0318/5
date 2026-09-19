@@ -98,12 +98,17 @@ ${INPUT_DATA_DESC}
    원자재는 강세를 보인 한 주." 근거가 정말 없을 때만 topMovers 사실
    나열로 대체한다. 120자 내외.
 2. **policySummary** — 미국 연준(FOMC)·한국은행·일본은행의 이번 주 통화
-   정책 동향을 종합한 2~4문장 요약. **policyEvidence 의 근거를 최우선
-   으로 활용**하고, 부족한 부분만 웹검색으로 보강해라. 단순 기사 나열이
-   아니라 "각국 중앙은행이 이번 주 무엇을 했거나 시사했는지, 시장이
-   어떻게 반응했는지"를 종합 서술한다(포털 AI 검색 요약 수준을 목표로
-   한다 — 얕은 사실 나열 금지). policyEvidence 에도 없고 웹검색으로도
-   확인 안 되면 아는 범위까지만 쓰고, 그마저 없으면 null 로 남긴다.
+   정책 동향. **policyEvidence 의 근거를 최우선으로 활용**하고, 부족한
+   부분만 웹검색으로 보강해라. 단순 기사 나열이 아니라 "그 중앙은행이
+   이번 주 무엇을 했거나 시사했는지, 시장이 어떻게 반응했는지"를
+   종합 서술한다(포털 AI 검색 요약 수준을 목표로 한다 — 얕은 사실 나열
+   금지). **한 문단으로 뭉쳐 쓰지 말고, 은행별로 줄을 바꿔라**(오너 지시
+   2026-09-19 — "시장별로 줄바꿈"): 마크다운 리스트로 "- 미국 연준(Fed):
+   ...", "- 한국은행: ...", "- 일본은행(BOJ): ..." 세 줄(각 1~2문장)을
+   개행 문자로 구분해 하나의 문자열에 담아라. 그 은행 소식이 그 주에
+   전혀 없으면 그 줄은 통째로 뺀다(세 줄을 억지로 채우지 마라).
+   policyEvidence 에도 없고 웹검색으로도 확인 안 되는 은행만 아는 범위
+   까지 쓰고, 셋 다 없으면 null 로 남긴다.
 3. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. "관련
    기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
    예정된 이벤트(중앙은행 회의·주요 경제지표 발표일·옵션선물 동시만기일
@@ -307,12 +312,19 @@ function computeFixedCalendarEvents(startDate: string, endDate: string): FixedCa
 /** issues.ts WEEKLY_TOPICS 의 정확한 라벨과 일치해야 한다. */
 const POLICY_TOPIC_LABELS = ["미국 금리·연준", "한국은행·국내 금리", "일본은행·엔화"];
 
-const MARKET_LABEL: Record<string, string> = { kr: "한국", us: "미국", jp: "일본" };
+const MARKET_LABEL: Record<string, string> = {
+  "kr-kospi": "코스피",
+  "kr-kosdaq": "코스닥",
+  us: "미국",
+  jp: "일본",
+};
 
 function flattenSectors(sectors: WeeklySectors): CommentPayload["sectors"] {
   const groups: SectorHighlight[] = [
-    ...sectors.kr.up,
-    ...sectors.kr.down,
+    ...sectors.kospi.up,
+    ...sectors.kospi.down,
+    ...sectors.kosdaq.up,
+    ...sectors.kosdaq.down,
     ...sectors.us.up,
     ...sectors.us.down,
     ...sectors.jp.up,
@@ -584,9 +596,16 @@ export async function generateWeeklyComments(
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
   const sectorIds = payload.sectors.map((s) => s.id);
+  // 매크로 콜(한 줄 결론·정책요약·캘린더)은 sectors 를 전혀 안 쓴다 — 그런데도
+  // 코멘트 콜과 같은 payload(userJson)를 그대로 넘기면 섹터 16개만큼 입력이
+  // 불필요하게 커져서, 이미 그라운딩 미스가 잦다고 알려진 매크로 콜(재시도
+  // 로직이 있는 이유)의 실패율을 더 키운다(실측 — sectors 추가 이후 "다음 주
+  // 일정"이 옛 기사-표 폴백으로 자주 떨어짐). 매크로 콜에는 sectors 를 뺀
+  // 별도 payload 를 준다.
+  const macroJson = JSON.stringify({ ...payload, sectors: undefined });
 
   const [macroCall, commentResult] = await Promise.all([
-    callMacroWithRetry(userJson),
+    callMacroWithRetry(macroJson),
     geminiGenerate({
       system: COMMENT_PROMPT,
       user: userJson,

@@ -30,7 +30,7 @@ import type { ReportWeek } from "./week";
  * 일본은 `yahoo-finance2`(개인용 한정, prd.md §4.3와 동일 제약)를 쓴다.
  */
 
-export type SectorMarket = "kr" | "us" | "jp";
+export type SectorMarket = "kr-kospi" | "kr-kosdaq" | "us" | "jp";
 
 export interface SectorReturn {
   market: SectorMarket;
@@ -48,7 +48,8 @@ export interface SectorHighlight extends SectorReturn {
 }
 
 export interface WeeklySectors {
-  kr: { up: SectorHighlight[]; down: SectorHighlight[] };
+  kospi: { up: SectorHighlight[]; down: SectorHighlight[] };
+  kosdaq: { up: SectorHighlight[]; down: SectorHighlight[] };
   us: { up: SectorHighlight[]; down: SectorHighlight[] };
   jp: { up: SectorHighlight[]; down: SectorHighlight[] };
   combined: { up: SectorHighlight[]; down: SectorHighlight[] };
@@ -92,7 +93,7 @@ const KR_SECTOR_CANDIDATES: KrSectorCandidate[] = [
   ...KR_KOSDAQ_SECTOR_NAMES.map((s) => ({
     service: "kosdaq_dd_trd" as const,
     indexName: `코스닥 150 ${s}`,
-    label: `${s}(코스닥)`,
+    label: s,
   })),
 ];
 
@@ -228,7 +229,9 @@ function resolveBackward(series: DatedClose[], target: string): DatedClose | nul
   return best;
 }
 
-/** target 이상 중 가장 이른(끝점 — 연휴면 재개 후 첫 거래일로). */
+/** target 이상 중 가장 이른(끝점 — 연휴면 재개 후 첫 거래일로). 없으면 null
+ * (연휴 케이스는 이걸로 처리하되, 데이터가 아직 안 들어온 경우의 폴백은
+ * 호출부가 resolveBackward 로 대신한다 — 아래 computeReturn 참고). */
 function resolveForward(series: DatedClose[], target: string): DatedClose | null {
   for (const p of series) {
     if (p.date >= target) return p;
@@ -243,7 +246,14 @@ function computeReturn(
   week: ReportWeek,
 ): SectorReturn | null {
   const start = resolveBackward(series, week.baseFriday);
-  const end = resolveForward(series, week.weekEnd);
+  // 끝점은 "target 이상 중 가장 이른 날"을 우선(연휴로 밀린 재개일을 잡기
+  // 위해)으로 찾되, 그게 없으면(아직 시장이 재개 전이거나 — 더 흔하게는 —
+  // 소스가 최신 거래일 데이터를 아직 다 못 받은 경우, 실측 확인 2026-09-19:
+  // 미국 장 마감 직후엔 Yahoo 가 그날 종가를 일부 티커에서만 내려줌, 일본은
+  // 장이 훨씬 일찍 끝나 안정적) "target 이하 중 가장 최근 날"로 물러선다 —
+  // 아예 없는 것보다 조금 묵은 값이라도 있는 게 낫다(실제 사용된 날짜는
+  // endDate 로 그대로 노출되니 화면에서 확인 가능, render.ts 참고).
+  const end = resolveForward(series, week.weekEnd) ?? resolveBackward(series, week.weekEnd);
   if (!start || !end || end.date <= start.date || start.close <= 0) return null;
   const pct = ((end.close - start.close) / start.close) * 100;
   return { market, label, pct, startDate: start.date, endDate: end.date };
@@ -267,7 +277,8 @@ async function fetchKrSectorReturns(week: ReportWeek): Promise<SectorReturn[]> {
   const out: SectorReturn[] = [];
   for (const c of KR_SECTOR_CANDIDATES) {
     const series = seriesByName.get(c.indexName) ?? [];
-    const r = computeReturn("kr", c.label, series, week);
+    const market: SectorMarket = c.service === "kospi_dd_trd" ? "kr-kospi" : "kr-kosdaq";
+    const r = computeReturn(market, c.label, series, week);
     if (r) out.push(r);
   }
   return out;
@@ -285,7 +296,8 @@ async function fetchYahooSeries(ticker: string, fromIso: string, toIso: string):
       .filter((q): q is typeof q & { close: number } => q.close != null)
       .map((q) => ({ date: isoDate(q.date), close: q.close }))
       .sort((a, b) => a.date.localeCompare(b.date));
-  } catch {
+  } catch (err) {
+    console.warn(`[weekly/sectors] Yahoo 조회 실패 — ${ticker}:`, err instanceof Error ? err.message : err);
     return [];
   }
 }
@@ -311,6 +323,12 @@ async function fetchYahooSectorReturns(
   return results.filter((r): r is SectorReturn => r != null);
 }
 
+/**
+ * 상승 상위 2 + 하락 상위 2. **하락은 하락률이 큰 쪽이 표에서 맨 아래로
+ * 가도록**(오너 지시 2026-09-19) 정렬 순서를 그대로 둔다 — `slice(-2)`
+ * 결과가 이미 [덜 빠진 것, 가장 많이 빠진 것] 순서라 추가로 뒤집지 않는다
+ * (전에는 `.reverse()`로 가장 많이 빠진 걸 맨 위로 올렸었음).
+ */
 function pickTop(returns: SectorReturn[], market: SectorMarket, prefix: string): { up: SectorHighlight[]; down: SectorHighlight[] } {
   const sorted = [...returns].sort((a, b) => b.pct - a.pct);
   const up = sorted
@@ -319,11 +337,17 @@ function pickTop(returns: SectorReturn[], market: SectorMarket, prefix: string):
     .map((r, i) => ({ ...r, market, id: `${prefix}-up-${i + 1}`, direction: "up" as const, rank: i + 1 }));
   const down = sorted
     .slice(-2)
-    .reverse()
     .filter((r) => r.pct < 0)
     .map((r, i) => ({ ...r, market, id: `${prefix}-down-${i + 1}`, direction: "down" as const, rank: i + 1 }));
   return { up, down };
 }
+
+const MARKET_LABEL: Record<SectorMarket, string> = {
+  "kr-kospi": "코스피",
+  "kr-kosdaq": "코스닥",
+  us: "미국",
+  jp: "일본",
+};
 
 export async function buildWeeklySectors(week: ReportWeek): Promise<WeeklySectors> {
   const [kr, us, jp] = await Promise.all([
@@ -332,23 +356,23 @@ export async function buildWeeklySectors(week: ReportWeek): Promise<WeeklySector
     fetchYahooSectorReturns("jp", JP_SECTOR_CANDIDATES, week).catch(() => [] as SectorReturn[]),
   ]);
 
+  const kospi = kr.filter((r) => r.market === "kr-kospi");
+  const kosdaq = kr.filter((r) => r.market === "kr-kosdaq");
   const all = [...kr, ...us, ...jp];
-  const marketLabel: Record<SectorMarket, string> = { kr: "한국", us: "미국", jp: "일본" };
 
   return {
-    kr: pickTop(kr, "kr", "kr"),
+    kospi: pickTop(kospi, "kr-kospi", "kospi"),
+    kosdaq: pickTop(kosdaq, "kr-kosdaq", "kosdaq"),
     us: pickTop(us, "us", "us"),
     jp: pickTop(jp, "jp", "jp"),
-    combined: pickTopCombined(all, marketLabel),
+    combined: pickTopCombined(all),
   };
 }
 
-function pickTopCombined(
-  all: SectorReturn[],
-  marketLabel: Record<SectorMarket, string>,
-): { up: SectorHighlight[]; down: SectorHighlight[] } {
+/** 통합 랭킹도 하락은 같은 규칙(많이 빠진 게 맨 아래)으로 둔다. */
+function pickTopCombined(all: SectorReturn[]): { up: SectorHighlight[]; down: SectorHighlight[] } {
   const sorted = [...all].sort((a, b) => b.pct - a.pct);
-  const withMarketLabel = (r: SectorReturn) => `${marketLabel[r.market]} ${r.label}`;
+  const withMarketLabel = (r: SectorReturn) => `${MARKET_LABEL[r.market]} ${r.label}`;
   const up = sorted
     .slice(0, 2)
     .filter((r) => r.pct > 0)
@@ -361,7 +385,6 @@ function pickTopCombined(
     }));
   const down = sorted
     .slice(-2)
-    .reverse()
     .filter((r) => r.pct < 0)
     .map((r, i) => ({
       ...r,

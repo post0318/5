@@ -34,6 +34,12 @@ const YAHOO_SPECS: YahooSpec[] = [
   { sym: "^KQ11", key: "KOSDAQ", group: "국내주식", name: "코스닥", unit: "pt" },
   { sym: "^GSPC", key: "SPX", group: "해외주식", name: "S&P 500", unit: "pt" },
   { sym: "^IXIC", key: "IXIC", group: "해외주식", name: "나스닥", unit: "pt" },
+  // MSCI World 지수 자체는 라이선스 데이터라 무료로 직접 못 받아, 이를
+  // 추종하는 ETF(iShares MSCI World, URTH) 가격으로 근사한다(오너 지시
+  // 2026-09-19 — 운용보수·추적오차만큼의 미세한 괴리는 감안).
+  { sym: "URTH", key: "MSCIWORLD", group: "해외주식", name: "MSCI World(URTH)", unit: "$" },
+  { sym: "000001.SS", key: "SSEC", group: "해외주식", name: "상해종합지수", unit: "pt" },
+  { sym: "^STOXX50E", key: "SX5E", group: "해외주식", name: "유로스톡스50", unit: "pt" },
   { sym: "^TNX", key: "UST10Y", group: "채권", name: "미국채 10년", unit: "%", rate: true },
   { sym: "GC=F", key: "GOLD", group: "원자재", name: "금", unit: "$/oz" },
   { sym: "CL=F", key: "WTI", group: "원자재", name: "WTI", unit: "$/bbl" },
