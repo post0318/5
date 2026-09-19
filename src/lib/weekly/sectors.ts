@@ -25,12 +25,18 @@ import type { ReportWeek } from "./week";
  *  - 미국: SPDR Select Sector ETF 11개(GICS 11개 업종과 1:1).
  *  - 일본: NEXT FUNDS TOPIX-17 ETF(1617~1633.T) 17개 — 실측으로 티커·
  *    섹터명 전부 확인(2026-09-19).
+ *  - 유럽: iShares STOXX Europe 600 섹터 UCITS ETF(Xetra, EUR) 17개 —
+ *    실측으로 티커·섹터명 전부 확인(2026-09-19, 오너 지시 — "유럽 가능
+ *    하겠나?").
  *
  * 한국은 KRX(count 기반 fetch, `data-dbg.krx.co.kr`)를 재사용하고, 미국·
- * 일본은 `yahoo-finance2`(개인용 한정, prd.md §4.3와 동일 제약)를 쓴다.
+ * 일본·유럽은 `yahoo-finance2`(개인용 한정, prd.md §4.3와 동일 제약)를 쓴다.
+ *
+ * **"통합(한·미·일)" 랭킹은 뺐다**(오너 지시 2026-09-19 — "통합은 제외").
+ * 시장별 표만 보여준다.
  */
 
-export type SectorMarket = "kr-kospi" | "kr-kosdaq" | "us" | "jp";
+export type SectorMarket = "kr-kospi" | "kr-kosdaq" | "us" | "jp" | "eu";
 
 export interface SectorReturn {
   market: SectorMarket;
@@ -52,7 +58,7 @@ export interface WeeklySectors {
   kosdaq: { up: SectorHighlight[]; down: SectorHighlight[] };
   us: { up: SectorHighlight[]; down: SectorHighlight[] };
   jp: { up: SectorHighlight[]; down: SectorHighlight[] };
-  combined: { up: SectorHighlight[]; down: SectorHighlight[] };
+  eu: { up: SectorHighlight[]; down: SectorHighlight[] };
 }
 
 interface DatedClose {
@@ -131,6 +137,27 @@ const JP_SECTOR_CANDIDATES: { ticker: string; label: string }[] = [
   { ticker: "1631.T", label: "은행" },
   { ticker: "1632.T", label: "금융(은행 제외)" },
   { ticker: "1633.T", label: "부동산" },
+];
+
+// ── 유럽: iShares STOXX Europe 600 섹터 UCITS ETF (Xetra, EUR) ──────
+const EU_SECTOR_CANDIDATES: { ticker: string; label: string }[] = [
+  { ticker: "EXV1.DE", label: "은행" },
+  { ticker: "EXV3.DE", label: "기술" },
+  { ticker: "EXH5.DE", label: "보험" },
+  { ticker: "EXH9.DE", label: "유틸리티" },
+  { ticker: "EXH1.DE", label: "석유·가스" },
+  { ticker: "EXV5.DE", label: "자동차·부품" },
+  { ticker: "EXH2.DE", label: "금융서비스" },
+  { ticker: "EXV6.DE", label: "기초자원" },
+  { ticker: "EXH3.DE", label: "식음료" },
+  { ticker: "EXV4.DE", label: "헬스케어" },
+  { ticker: "EXH7.DE", label: "생활용품" },
+  { ticker: "EXV7.DE", label: "화학" },
+  { ticker: "EXH8.DE", label: "소매업" },
+  { ticker: "EXI5.DE", label: "부동산" },
+  { ticker: "EXV2.DE", label: "통신" },
+  { ticker: "EXH4.DE", label: "산업재" },
+  { ticker: "EXH6.DE", label: "미디어" },
 ];
 
 function addDaysIso(dateIso: string, days: number): string {
@@ -342,56 +369,22 @@ function pickTop(returns: SectorReturn[], market: SectorMarket, prefix: string):
   return { up, down };
 }
 
-const MARKET_LABEL: Record<SectorMarket, string> = {
-  "kr-kospi": "코스피",
-  "kr-kosdaq": "코스닥",
-  us: "미국",
-  jp: "일본",
-};
-
 export async function buildWeeklySectors(week: ReportWeek): Promise<WeeklySectors> {
-  const [kr, us, jp] = await Promise.all([
+  const [kr, us, jp, eu] = await Promise.all([
     fetchKrSectorReturns(week).catch(() => [] as SectorReturn[]),
     fetchYahooSectorReturns("us", US_SECTOR_CANDIDATES, week).catch(() => [] as SectorReturn[]),
     fetchYahooSectorReturns("jp", JP_SECTOR_CANDIDATES, week).catch(() => [] as SectorReturn[]),
+    fetchYahooSectorReturns("eu", EU_SECTOR_CANDIDATES, week).catch(() => [] as SectorReturn[]),
   ]);
 
   const kospi = kr.filter((r) => r.market === "kr-kospi");
   const kosdaq = kr.filter((r) => r.market === "kr-kosdaq");
-  const all = [...kr, ...us, ...jp];
 
   return {
     kospi: pickTop(kospi, "kr-kospi", "kospi"),
     kosdaq: pickTop(kosdaq, "kr-kosdaq", "kosdaq"),
     us: pickTop(us, "us", "us"),
     jp: pickTop(jp, "jp", "jp"),
-    combined: pickTopCombined(all),
+    eu: pickTop(eu, "eu", "eu"),
   };
-}
-
-/** 통합 랭킹도 하락은 같은 규칙(많이 빠진 게 맨 아래)으로 둔다. */
-function pickTopCombined(all: SectorReturn[]): { up: SectorHighlight[]; down: SectorHighlight[] } {
-  const sorted = [...all].sort((a, b) => b.pct - a.pct);
-  const withMarketLabel = (r: SectorReturn) => `${MARKET_LABEL[r.market]} ${r.label}`;
-  const up = sorted
-    .slice(0, 2)
-    .filter((r) => r.pct > 0)
-    .map((r, i) => ({
-      ...r,
-      label: withMarketLabel(r),
-      id: `combined-up-${i + 1}`,
-      direction: "up" as const,
-      rank: i + 1,
-    }));
-  const down = sorted
-    .slice(-2)
-    .filter((r) => r.pct < 0)
-    .map((r, i) => ({
-      ...r,
-      label: withMarketLabel(r),
-      id: `combined-down-${i + 1}`,
-      direction: "down" as const,
-      rank: i + 1,
-    }));
-  return { up, down };
 }

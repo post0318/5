@@ -150,7 +150,7 @@ function sectorSection(sectors: WeeklySectors, week: ReportWeek, comments: Map<s
     "",
     sectorGroupTable("일본", sectors.jp.up, sectors.jp.down, week, comments),
     "",
-    sectorGroupTable("통합(한·미·일)", sectors.combined.up, sectors.combined.down, week, comments),
+    sectorGroupTable("유럽", sectors.eu.up, sectors.eu.down, week, comments),
   ];
   return parts.join("\n");
 }

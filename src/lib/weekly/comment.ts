@@ -317,6 +317,7 @@ const MARKET_LABEL: Record<string, string> = {
   "kr-kosdaq": "코스닥",
   us: "미국",
   jp: "일본",
+  eu: "유럽",
 };
 
 function flattenSectors(sectors: WeeklySectors): CommentPayload["sectors"] {
@@ -329,8 +330,8 @@ function flattenSectors(sectors: WeeklySectors): CommentPayload["sectors"] {
     ...sectors.us.down,
     ...sectors.jp.up,
     ...sectors.jp.down,
-    ...sectors.combined.up,
-    ...sectors.combined.down,
+    ...sectors.eu.up,
+    ...sectors.eu.down,
   ];
   return groups.map((s) => ({
     id: s.id,
