@@ -137,7 +137,7 @@ function sectorGroupTable(
 
 function sectorSection(sectors: WeeklySectors, week: ReportWeek, comments: Map<string, string>): string {
   const parts = [
-    "_전주 금요일 종가 대비 당주 금요일 종가 기준, 시장별 상승·하락 상위 섹터입니다(연휴로 기준일이 밀리면 실제 날짜를 괄호로 표기)._",
+    "_전주 금요일 종가 대비 당주 금요일 종가 기준, 시장별 상승·하락 상위 섹터입니다._",
     "",
     sectorGroupTable("코스피", sectors.kospi.up, sectors.kospi.down, week, comments),
     "",

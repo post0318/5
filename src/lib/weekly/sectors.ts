@@ -316,13 +316,39 @@ function isoDate(d: Date | string): string {
   return date.toISOString().slice(0, 10);
 }
 
-async function fetchYahooSeries(ticker: string, fromIso: string, toIso: string): Promise<DatedClose[]> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchYahooSeriesOnce(ticker: string, fromIso: string, toIso: string): Promise<DatedClose[]> {
+  const res = await getYahooFinance().chart(ticker, { period1: fromIso, period2: toIso, interval: "1d" });
+  return res.quotes
+    .filter((q): q is typeof q & { close: number } => q.close != null)
+    .map((q) => ({ date: isoDate(q.date), close: q.close }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Yahoo 가 같은 티커에 대해 요청마다 다른 신선도의 응답을 주는 현상을 실측
+ * 확인(2026-09-19~20 — XLK·EXV1.DE 등에서 어떤 호출은 당주 금요일 봉까지
+ * 포함, 다른 호출(특히 여러 티커를 한꺼번에 쏘는 buildWeeklySectors 안에서)은
+ * 하루 묵은 응답을 줌 — CDN/캐시 계층 문제로 추정). 받은 시계열의 마지막
+ * 날짜가 목표(expectedThrough) 에 못 미치면 짧게 쉬었다 한 번 더 시도한다.
+ */
+async function fetchYahooSeries(
+  ticker: string,
+  fromIso: string,
+  toIso: string,
+  expectedThrough: string,
+): Promise<DatedClose[]> {
   try {
-    const res = await getYahooFinance().chart(ticker, { period1: fromIso, period2: toIso, interval: "1d" });
-    return res.quotes
-      .filter((q): q is typeof q & { close: number } => q.close != null)
-      .map((q) => ({ date: isoDate(q.date), close: q.close }))
-      .sort((a, b) => a.date.localeCompare(b.date));
+    let series = await fetchYahooSeriesOnce(ticker, fromIso, toIso);
+    if ((series.at(-1)?.date ?? "") < expectedThrough) {
+      await sleep(1_500);
+      const retried = await fetchYahooSeriesOnce(ticker, fromIso, toIso);
+      if ((retried.at(-1)?.date ?? "") > (series.at(-1)?.date ?? "")) series = retried;
+    }
+    return series;
   } catch (err) {
     console.warn(`[weekly/sectors] Yahoo 조회 실패 — ${ticker}:`, err instanceof Error ? err.message : err);
     return [];
@@ -343,7 +369,7 @@ async function fetchYahooSectorReturns(
   const toIso = addDaysIso(todayIso(), 2);
   const results = await Promise.all(
     candidates.map(async (c) => {
-      const series = await fetchYahooSeries(c.ticker, fromIso, toIso);
+      const series = await fetchYahooSeries(c.ticker, fromIso, toIso, week.weekEnd);
       return computeReturn(market, c.label, series, week);
     }),
   );
@@ -370,6 +396,13 @@ function pickTop(returns: SectorReturn[], market: SectorMarket, prefix: string):
 }
 
 export async function buildWeeklySectors(week: ReportWeek): Promise<WeeklySectors> {
+  // 유럽(EXx.DE) 티커만 유독 Yahoo 가 하루 묵은 종가를 주는 현상을 실측
+  // 확인(2026-09-20) — 단독 호출·재시도(fetchYahooSeries)·순차 실행 전부
+  // 시도했지만 고정적으로 재현되지 않아(가끔 되고 가끔 안 됨) 원인을 못
+  // 좁혔다. 코드 쪽 동시성 문제라기보다 Yahoo 인프라(유럽 거래소 데이터
+  // 전파가 유독 느린 것으로 추정)일 가능성이 높아, 더 이상 이 함수에서
+  // 붙잡지 않는다 — computeReturn() 의 백워드 폴백이 이미 안전하게 동작
+  // 하므로(며칠 묵은 값이라도 endDate 로 투명하게 표기) 그대로 둔다.
   const [kr, us, jp, eu] = await Promise.all([
     fetchKrSectorReturns(week).catch(() => [] as SectorReturn[]),
     fetchYahooSectorReturns("us", US_SECTOR_CANDIDATES, week).catch(() => [] as SectorReturn[]),
