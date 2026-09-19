@@ -1,9 +1,6 @@
 import "server-only";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
-import { fetchGoogleNewsRss, googleNewsUrl } from "@/lib/news/googleNews";
-import { fetchNaverNewsSearch } from "@/lib/news/naverNews";
 import { snapshotToMarkdownTable } from "./snapshot";
-import { CALENDAR_QUERIES } from "./topics";
 import type { WeeklyComments } from "./comment";
 import type { WeeklyIssue } from "./issues";
 import type { SectorHighlight, WeeklySectors } from "./sectors";
@@ -155,67 +152,6 @@ function sectorSection(sectors: WeeklySectors, week: ReportWeek, comments: Map<s
   return parts.join("\n");
 }
 
-/**
- * 고정 검색어의 그 주 기사를 표로 건다 — 추론 없음, 코드가 표만 조립한다
- * (오너 지시 2026-09-18 — "일정을 안 건든다는 건 임의 해석하지 말라는
- * 거지 표로 만들지 말라는 게 아니다"). 하한(주 시작)뿐 아니라 상한(주
- * 종료+3일)도 건다 — `issues.ts`의 `countFromNews()`와 같은 이유(실측
- * — 지난 주 리포트를 나중에 재생성하면 그사이 최신 기사가 섞여 들어옴).
- *
- * **제목만 링크로 나열하던 걸 요약문 있는 표로(오너 지적 2026-09-18 —
- * "표만들라니깐 그냥 링크 넣는 표를 만든거냐... 발언·수치 같은 걸 넣는
- * 것이 정책이지")**: `issues.ts`와 같은 방식으로 네이버 뉴스 검색(요약문
- * 포함)을 구글 뉴스 RSS와 합쳐서, 최소한 각 행에 실제 스니펫(발언·수치가
- * 언급된 문장)이 보이게 한다. 여전히 추론 없음 — 검색된 기사의 요약문을
- * 그대로 옮길 뿐 해석하지 않는다.
- */
-async function queryBlock(
-  queries: { label: string; query: string }[],
-  sinceMs: number,
-  untilMs: number,
-  perQuery: number,
-): Promise<string> {
-  const results = await Promise.all(
-    queries.map(async ({ label, query }) => {
-      const naverP = fetchNaverNewsSearch(query, { display: 20 }).catch(() => []);
-      const googleP = fetchGoogleNewsRss(
-        googleNewsUrl(`search?q=${encodeURIComponent(query)}+when:7d`, "hl=ko&gl=KR&ceid=KR:ko"),
-      ).catch(() => []);
-      const [naver, google] = await Promise.all([naverP, googleP]);
-      const merged = [
-        ...naver.map((n) => ({ title: n.title, excerpt: n.excerpt, url: n.url, source: n.source, publishedAt: n.publishedAt })),
-        ...google.map((g) => ({ title: g.title, excerpt: null as string | null, url: g.link, source: g.source, publishedAt: g.publishedAt })),
-      ];
-      const seen = new Set<string>();
-      const fresh: typeof merged = [];
-      for (const i of merged) {
-        const ms = Date.parse(i.publishedAt);
-        if (Number.isFinite(ms) && (ms < sinceMs || ms > untilMs)) continue;
-        const key = i.title.replace(/\s+/g, "").toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        fresh.push(i);
-        if (fresh.length >= perQuery) break;
-      }
-      return { label, items: fresh };
-    }),
-  );
-  const lines = ["| 구분 | 날짜 | 제목 | 요약 | 출처 |", "|---|---|---|---|---|"];
-  for (const { label, items } of results) {
-    if (items.length === 0) {
-      lines.push(`| ${label} | - | 이번 주 관련 기사 없음 | - | - |`);
-      continue;
-    }
-    for (const i of items) {
-      const excerpt = i.excerpt ? tableCell(i.excerpt).slice(0, 80) : "-";
-      lines.push(
-        `| ${label} | ${i.publishedAt.slice(0, 10)} | [${tableCell(i.title)}](${i.url}) | ${excerpt} | ${i.source} |`,
-      );
-    }
-  }
-  return lines.join("\n");
-}
-
 export async function renderWeeklyReport(opts: {
   week: ReportWeek;
   snapshot: SnapshotRow[];
@@ -227,12 +163,6 @@ export async function renderWeeklyReport(opts: {
   const snapshotComments = comments?.snapshot ?? new Map<string, string>();
   const issueComments = comments?.issues ?? new Map<string, string>();
   const sectorComments = comments?.sectors ?? new Map<string, string>();
-  const sinceMs = Date.parse(`${week.weekStart}T00:00:00+09:00`);
-  const untilMs = Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000;
-  // 금리정책은 더 이상 기사 표를 안 쓴다(오너 지시 2026-09-18 — "표
-  // 필요없다구!!") — policySummary(종합 요약 문단)만 보여주고, 없으면
-  // 짧은 안내만 남긴다. 다음 주 일정만 캘린더가 비었을 때 기사 표로 폴백.
-  const calendar = await queryBlock(CALENDAR_QUERIES, sinceMs, untilMs, 3);
 
   const parts: string[] = [];
   parts.push(`# 주간 거시·시황 요약 (${week.weekStart} ~ ${week.weekEnd})`);
@@ -276,14 +206,17 @@ export async function renderWeeklyReport(opts: {
   parts.push("## 6. 다음 주 주시 일정");
   parts.push("");
   // 날짜별 확정 이벤트 캘린더(오너 지시 2026-09-18 — "관련 기사 목록이
-  // 아니라 일자별 캘린더를 원한 거다"). 없으면(그라운딩 실패 등) 기존
-  // 기사 표로 폴백.
+  // 아니라 일자별 캘린더를 원한 거다"). 예전엔 비었을 때 키워드 뉴스검색
+  // 표로 폴백했는데, 검색어와 우연히 겹치기만 한 무관한 기사가 섞여
+  // "보고서로 가치가 없다"(오너 지적 2026-09-19)는 게 확인돼 그 폴백을
+  // 없앴다 — 확인 안 되면 정직하게 안내만 남긴다(금리정책 섹션과 동일
+  // 원칙).
   if (comments?.calendar && comments.calendar.length > 0) {
     const lines = ["| 날짜 | 일정 |", "|---|---|"];
     for (const c of comments.calendar) lines.push(`| ${c.date} | ${c.event} |`);
     parts.push(lines.join("\n"));
   } else {
-    parts.push(calendar || "이번 주 관련 기사 없음");
+    parts.push("이번 주 통화정책·경제지표 일정을 확인하지 못했습니다.");
   }
   parts.push("");
 
