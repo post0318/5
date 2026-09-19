@@ -25,9 +25,10 @@ export async function GET(request: Request) {
       ? (sourceParam as string)
       : undefined;
 
-    // 90일 백필(오너 지시, 2026-09-19) 기준 5곳 합계 180여 건이라 100으로는
-    // "전체" 탭에서 오래된 항목이 잘림 — 여유 있게 상향.
-    const items = await getInsightResearch(market, 300, source);
+    // 90일 백필(오너 지시, 2026-09-19) 기준 소스가 5→10곳으로 늘며 합계가
+    // 300을 넘어 "전체" 탭에서 새로 추가한 HSBC·Deutsche Bank가 밀려난 걸
+    // 실측 확인 — 소스가 늘어날 걸 감안해 여유 있게 상향.
+    const items = await getInsightResearch(market, 600, source);
     return ok(
       { items },
       { headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" } },
