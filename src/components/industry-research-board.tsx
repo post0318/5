@@ -6,6 +6,7 @@ import { apiFetch, ApiError } from "@/lib/query";
 import { cn, toHttps } from "@/lib/utils";
 import type { MarketId } from "@/lib/markets/types";
 import type { ShinhanResearchDoc } from "@/lib/db/shinhan-research";
+import { SECTOR_LABELS, classifySector } from "@/lib/research-sector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -70,9 +71,11 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
   // 디폴트 분류값은 "전체"가 아니라 "산업분석"(오너 지시, 2026-09).
   const [topic, setTopic] = useState<TopicKey>("산업분석");
   // 업종 필터(오너 지시, 2026-09-19 — "너무 섹터가 다양해서 섹터별로 선택
-  // 조회가 가능하거나"). 별도 API 호출 없이 이미 받아온 목록에서 stockName
-  // 별 건수를 세어 드롭다운으로 제공(라디오버튼은 업종 수가 많으면
-  // 줄바꿈이 심해져 드롭다운으로 선택 — 국내는 실측 기준 업종만 수십 개).
+  // 조회가 가능하거나" → "산업분석 분류값을 너무 엉터리도 해두었네..
+  // 섹터 분류값은 한국지수와 미국지수 분류값을 섞어서"). 수집기마다 제각각인
+  // 원문 stockName을 그대로 나열하는 대신 표준 섹터(`research-sector.ts`
+  // — KOSPI200/KOSDAQ150/미국 SPDR 실제 지수 체계 기반)로 분류해서 보여준다.
+  // 별도 API 호출 없이 이미 받아온 목록에서 클라이언트 분류.
   const [sector, setSector] = useState<string>("all");
 
   const q = useQuery({
@@ -87,11 +90,11 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
   const allItems = q.data?.items ?? [];
   const sectorCounts = new Map<string, number>();
   for (const it of allItems) {
-    if (!it.stockName || it.stockName === it.title) continue;
-    sectorCounts.set(it.stockName, (sectorCounts.get(it.stockName) ?? 0) + 1);
+    const s = classifySector(it);
+    if (s) sectorCounts.set(s, (sectorCounts.get(s) ?? 0) + 1);
   }
-  const sectors = [...sectorCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const items = sector === "all" ? allItems : allItems.filter((it) => it.stockName === sector);
+  const sectors = SECTOR_LABELS.filter((s) => sectorCounts.has(s)).map((s) => [s, sectorCounts.get(s)!] as const);
+  const items = sector === "all" ? allItems : allItems.filter((it) => classifySector(it) === sector);
   const pageCount = Math.ceil(items.length / PAGE_SIZE) || 1;
   const clampedPage = Math.min(page, pageCount);
   const paged = items.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
