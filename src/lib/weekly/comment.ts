@@ -1,4 +1,11 @@
 import "server-only";
+import {
+  BANK_BOJ,
+  BANK_BOK,
+  BANK_FOMC,
+  getCentralBankMeetings,
+  type CbMeeting,
+} from "./cb-calendar";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
 import type { WeeklyIssue } from "./issues";
 import { geminiGenerate, isGeminiConfigured, type GeminiResult } from "./gemini";
@@ -80,7 +87,7 @@ const INPUT_DATA_DESC = `# 입력 데이터
   이미 계산해 확정). 왜 그 섹터가 그렇게 움직였는지는 안 채워져 있다 —
   네가 웹검색으로 원인을 찾아 채운다.
 - centralBankMeetings: 미국 FOMC·일본은행(BOJ)·한국은행 금통위의 **남은
-  공식 회의 일정 전부**(각 중앙은행 공식 캘린더 기준, 코드에 확정 입력됨).
+  공식 회의 일정 전부**(각 중앙은행·Kalshi 공식 캘린더에서 실시간 조회).
 
 # 중앙은행 회의 일정 (절대 규칙)
 회의 날짜·개최 월을 언급할 때는 **centralBankMeetings 에 있는 날짜만**
@@ -244,10 +251,10 @@ interface CommentPayload {
     startDate: string;
     endDate: string;
   }[];
-  /** 남은 중앙은행 회의 일정 — 아래 FOMC_2026·BOJ_2026·BOK_2026 에서 뽑는다.
+  /** 남은 중앙은행 회의 일정 — `cb-calendar.ts` 가 공식 소스에서 가져온다.
    * 이걸 안 주면 모델이 회의가 없는 달을 지어낸다(실측 2026-09: FOMC 가
    * 10/28 다음 12/09 인데 "11월 추가 인상 여부"라고 썼다). */
-  centralBankMeetings: { date: string; bank: string }[];
+  centralBankMeetings: CbMeeting[];
 }
 
 /** render.ts 의 movers() 와 같은 계산(가장 크게 오르내린 자산) — LLM 이
@@ -399,49 +406,6 @@ async function fetchHolidayEvents(
   return results.flat();
 }
 
-/**
- * 미국 FOMC·일본은행(BOJ)·한국은행 금통위 2026년 공식 일정(오너 지시
- * 2026-09-18 — "4,5번은 정해진 일정인데 없다는게 더 이상하다"). 몇 달
- * 전에 공식 발표되는 고정 일정이라 매번 검색에 맡기지 않고 코드로 직접
- * 낸다 — 네 마녀의 날과 같은 원리. 실측 확인한 출처:
- *  - FOMC: federalreserve.gov 공식 회의 캘린더(2회차 마지막 날짜, 결정
- *    발표일과 동일).
- *  - BOJ: boj.or.jp 공식 PDF(mref250731a.pdf, "Scheduled Dates of
- *    Monetary Policy Meetings in 2026").
- *  - 한국은행: 2026년 통화정책방향 결정회의 8회(1·2·4·5·7·8·10·11월).
- * **연도가 바뀌면 갱신 필요** — 다음 해로 넘어간 주는 이 목록에 없어
- * 조용히 빈 채로 남는다(잘못된 날짜를 지어내는 것보단 안전).
- */
-const FOMC_2026 = [
-  "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
-  "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
-];
-const BOJ_2026 = [
-  "2026-01-23", "2026-03-19", "2026-04-28", "2026-06-16",
-  "2026-07-31", "2026-09-18", "2026-10-30", "2026-12-18",
-];
-const BOK_2026 = [
-  "2026-01-15", "2026-02-26", "2026-04-10", "2026-05-28",
-  "2026-07-16", "2026-08-27", "2026-10-22", "2026-11-26",
-];
-
-/**
- * 리포트 주 이후 남은 중앙은행 회의 전부 — 프롬프트에 그대로 실어 보낸다.
- * 모델에게 일정표를 안 주면 회의가 없는 달을 지어낸다(실측 2026-09 —
- * FOMC 가 10/28 다음 12/09 인데 코멘트에 "11월 추가 인상 여부"라고 썼다.
- * FOMC 는 연 8회라 11월처럼 회의가 아예 없는 달이 있다).
- * 위 배열이 2026년까지라 연도가 바뀌면 빈 목록이 된다 — 그때는 달을
- * 특정하지 말라는 프롬프트 규칙이 대신 작동한다.
- */
-function upcomingCentralBankMeetings(fromDate: string): { date: string; bank: string }[] {
-  const all = [
-    ...FOMC_2026.map((date) => ({ date, bank: "미국 FOMC" })),
-    ...BOJ_2026.map((date) => ({ date, bank: "일본은행(BOJ)" })),
-    ...BOK_2026.map((date) => ({ date, bank: "한국은행 금통위" })),
-  ];
-  return all.filter((m) => m.date >= fromDate).sort((a, b) => a.date.localeCompare(b.date));
-}
-
 interface FixedCalendarEvent {
   date: string;
   event: string;
@@ -451,14 +415,25 @@ interface FixedCalendarEvent {
   dedupe: RegExp;
 }
 
-async function computeFixedCalendarEvents(startDate: string, endDate: string): Promise<FixedCalendarEvent[]> {
+async function computeFixedCalendarEvents(
+  startDate: string,
+  endDate: string,
+  meetings: CbMeeting[],
+): Promise<FixedCalendarEvent[]> {
   const inRange = (d: string) => d >= startDate && d <= endDate;
   const out: FixedCalendarEvent[] = [];
   const quadWitching = computeQuadWitching(startDate, endDate);
   if (quadWitching) out.push({ ...quadWitching, dedupe: /네\s*마녀|만기일/ });
-  for (const d of FOMC_2026) if (inRange(d)) out.push({ date: d, event: "미국 FOMC 금리 결정", dedupe: /FOMC|연준.*금리|Fed\b/i });
-  for (const d of BOJ_2026) if (inRange(d)) out.push({ date: d, event: "일본은행(BOJ) 금융정책결정회의", dedupe: /BOJ|일본은행/i });
-  for (const d of BOK_2026) if (inRange(d)) out.push({ date: d, event: "한국은행 금융통화위원회", dedupe: /한국은행|금통위|한은\b/ });
+  // 손으로 박아둔 배열 대신 공식 소스에서 가져온 일정을 쓴다(cb-calendar.ts).
+  const meetingEvent: Record<string, { event: string; dedupe: RegExp }> = {
+    [BANK_FOMC]: { event: "미국 FOMC 금리 결정", dedupe: /FOMC|연준.*금리|Fed\b/i },
+    [BANK_BOJ]: { event: "일본은행(BOJ) 금융정책결정회의", dedupe: /BOJ|일본은행/i },
+    [BANK_BOK]: { event: "한국은행 금융통화위원회", dedupe: /한국은행|금통위|한은\b/ },
+  };
+  for (const m of meetings) {
+    const spec = meetingEvent[m.bank];
+    if (spec && inRange(m.date)) out.push({ date: m.date, ...spec });
+  }
 
   // CPI·PPI·GDP·고용지표는 FRED(공식 발표일)가 우선. 고용지표만 FRED가
   // 실패했을 때 "매월 첫째 금요일" 규칙으로 대신 채운다(FRED 성공 시 규칙
@@ -520,6 +495,7 @@ function buildPayload(
   week: ReportWeek,
   allIssues: WeeklyIssue[],
   sectors: WeeklySectors,
+  meetings: CbMeeting[],
 ): CommentPayload {
   const weekEndMs = Date.parse(`${week.weekEnd}T00:00:00Z`);
   const nextStart = new Date(weekEndMs + 3 * 86_400_000).toISOString().slice(0, 10); // 금→월
@@ -544,7 +520,7 @@ function buildPayload(
     policyEvidence,
     // 리포트 주 시작일 기준 — 그 주에 열린 회의도 "이번 주 무슨 일이
     // 있었는지" 서술에 필요하므로 nextWeek 이 아니라 weekStart 부터.
-    centralBankMeetings: upcomingCentralBankMeetings(week.weekStart),
+    centralBankMeetings: meetings,
     sectors: flattenSectors(sectors),
     snapshot: snapshot
       .filter((r) => r.value != null)
@@ -764,7 +740,10 @@ export async function generateWeeklyComments(
 ): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
   if (!isGeminiConfigured() || issues.length === 0) return null;
 
-  const payload = buildPayload(snapshot, issues, week, allIssues, sectors);
+  // 중앙은행 회의 일정은 공식 소스에서 가져온다(cb-calendar.ts). 프롬프트
+  // 입력과 "다음 주 일정" 캘린더가 같은 목록을 쓰도록 여기서 한 번만 조회.
+  const meetings = await getCentralBankMeetings(week.weekStart);
+  const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings);
   const userJson = JSON.stringify(payload);
   const allowed = buildAllowedNumbers(payload);
   const snapshotNames = payload.snapshot.map((r) => r.name);
@@ -852,7 +831,11 @@ export async function generateWeeklyComments(
   // 판정한다(실측 버그 — 같은 날 BOJ 회의가 있어서 날짜만 보고 건너뛰는
   // 바람에 네 마녀의 날 자체가 통째로 빠짐. 한 날짜에 이벤트가 여러 개
   // 있는 건 정상이다).
-  const fixedEvents = await computeFixedCalendarEvents(payload.nextWeek.start, payload.nextWeek.end);
+  const fixedEvents = await computeFixedCalendarEvents(
+    payload.nextWeek.start,
+    payload.nextWeek.end,
+    payload.centralBankMeetings,
+  );
   if (fixedEvents.length > 0) {
     let list = comments.calendar ?? [];
     for (const fx of fixedEvents) {
