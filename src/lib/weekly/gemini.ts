@@ -34,13 +34,29 @@ const FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-flash-latest", "gemini-pro-
  */
 const PRICE = { input: 0.75 / 1e6, output: 3.75 / 1e6 };
 /**
- * 웹검색 그라운딩 요청당 단가. 공식 표기는 **월 5,000건 무료, 초과분
- * $14/1,000건**이다(= 건당 $0.014). 주간 리포트는 회당 2~3콜이라 월 10건
- * 남짓 — 실제로는 무료 구간 안이라 $0 이다. 무료 한도를 코드로 세지는 않고
- * 상한(건당 $0.014)으로 잡아 둔다: 예산 검사가 과소평가되는 쪽보다 안전하다.
- * 종전 값 $0.035 는 근거 없는 추정치였다(2026-09-21 공식 단가로 교정).
+ * 웹검색 그라운딩 비용 — **0 으로 둔다**(오너 판단 2026-09-21 — "검색비용
+ * 이면 없는거고").
+ *
+ * 공식 단가(2026-09-21 확인): **월 5,000건 무료, 초과분 $14/1,000건**.
+ * 과금 단위는 API 요청이 아니라 **모델이 실제로 날린 검색 쿼리 하나하나**다
+ * ("A customer-submitted request to Gemini may result in one or more queries
+ * to Google Search. You will be charged for each individual search query
+ * performed.").
+ *
+ * 이 앱에서 그라운딩을 쓰는 곳은 둘뿐이다 — 주간 리포트 코멘트(`comment.ts`,
+ * 주 1회 × 2~3콜)와 발표자료 기업 프로필(`lib/ppt/gemini-profile.ts`, PPT
+ * 내보내기 할 때마다 1콜). 쿼리를 넉넉히 잡아도 월 수백 건이라 무료 한도의
+ * 한 자릿수 % 수준 — 실제 청구액은 $0 이다.
+ *
+ * 그래서 추정치를 얹지 않는다. 종전 $0.035(근거 없는 추정)는 회당 $0.07~0.10 을
+ * 없는 비용으로 잡아 월 예산(WEEKLY_MONTHLY_BUDGET_USD, 기본 $8)을 헛되이
+ * 갉아먹고 있었다.
+ *
+ * **다시 켜야 할 때**: 주간 리포트 외에 그라운딩을 쓰는 기능이 늘어 월
+ * 검색 쿼리가 5,000건에 근접하면 건당 $0.014 로 되살린다. 검색으로 가져온
+ * 본문은 입력 토큰으로 과금되지 않으므로 토큰 쪽은 따로 볼 필요 없다.
  */
-const GROUNDING_COST_PER_REQUEST = 0.014;
+const GROUNDING_COST_PER_REQUEST = 0;
 
 export interface GeminiUsage {
   inputTokens: number;
