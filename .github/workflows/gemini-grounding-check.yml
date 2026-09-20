@@ -17,21 +17,28 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - run: |
+      - name: 진단 라우트 호출
+        run: |
           URL="https://5-topaz-five.vercel.app/api/cron/gemini-grounding-check"
           M="${{ github.event.inputs.model }}"
           if [ -n "$M" ]; then URL="$URL?model=$M"; fi
           curl -sf --max-time 300 "$URL" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" -o g.json
-          python3 -c "
-import json
-d = json.load(open('g.json'))
-print(f\"모델: {d['model']}  (오늘 {d['today']})\")
-for r in d['results']:
-    print(f\"\n[tools={r['tools']}] HTTP {r.get('httpStatus')}  오류={r.get('error')}\")
-    print(f\"  candidate 키:        {r.get('candidateKeys')}\")
-    print(f\"  groundingMetadata 키: {r.get('groundingMetadataKeys')}\")
-    print(f\"  검색 쿼리({len(r.get('webSearchQueries') or [])}건): {r.get('webSearchQueries')}\")
-    print(f\"  출처 청크: {r.get('groundingChunkCount')}건\")
-    print(f\"  응답: {r.get('textPreview')}\")
-"
+          python3 - <<'PY'
+          import json
+          d = json.load(open("g.json"))
+          print(f"모델: {d['model']}  (오늘 {d['today']})")
+          for r in d["results"]:
+              print(f"\n[tools={r['tools']}] HTTP {r.get('httpStatus')}  오류={r.get('error')}")
+              print(f"  candidate 키:         {r.get('candidateKeys')}")
+              print(f"  groundingMetadata 키: {r.get('groundingMetadataKeys')}")
+              q = r.get("webSearchQueries") or []
+              print(f"  검색 쿼리({len(q)}건): {q}")
+              print(f"  출처 청크: {r.get('groundingChunkCount')}건")
+              print(f"  응답: {r.get('textPreview')}")
+          PY
+      - name: 원본 JSON 아티팩트
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-grounding-check
+          path: g.json
