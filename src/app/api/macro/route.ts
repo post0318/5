@@ -3,6 +3,9 @@ import { jsonError, ok } from "@/lib/api";
 import { getMacroDashboard, getSeriesLongTermMean } from "@/lib/macro/fred";
 import { getIndices } from "@/lib/macro/indices";
 import { getFearGreed } from "@/lib/macro/feargreed";
+import { getFedWatch } from "@/lib/macro/fedwatch";
+import { getFedWatchComparison } from "@/lib/db/fedwatch";
+import { isDbConfigured } from "@/lib/db";
 import { getKrFearGreed } from "@/lib/macro/kr/fear-greed";
 import { autoBackfillKrFg } from "@/lib/macro/kr/batch";
 
@@ -17,7 +20,7 @@ export const maxDuration = 30;
 
 export async function GET() {
   try {
-    const [dashboard, indices, fearGreed, vixMean, krFearGreed] = await Promise.all([
+    const [dashboard, indices, fearGreed, vixMean, krFearGreed, fedWatch] = await Promise.all([
       // 다른 호출은 모두 .catch 로 감싸 개별 실패해도 나머지가 나가는데
       // getMacroDashboard() 만 안 감싸져 있어 여기서 던지면 라우트 전체가
       // 500 이 됨 (2026-09 수정).
@@ -30,8 +33,13 @@ export async function GET() {
       getFearGreed().catch(() => null),
       getSeriesLongTermMean("VIXCLS", "1990-01-01").catch(() => null),
       getKrFearGreed().catch(() => null),
+      getFedWatch().catch(() => null),
     ]);
     after(() => autoBackfillKrFg(krFearGreed?.asOf ?? null));
+    // 전일·전주 비교(오너 지시 2026-09-20, CME/investing.com 스타일) — DB
+    // 미설정(로컬 초기 상태)이거나 조회 실패해도 카드는 "현재"만으로 그대로 뜬다.
+    const fedWatchCompare =
+      fedWatch && isDbConfigured() ? await getFedWatchComparison(fedWatch.meetingDate).catch(() => null) : null;
     return ok({
       ...dashboard,
       indices,
@@ -39,6 +47,7 @@ export async function GET() {
         ? { ...fearGreed, vixHistoricalAvg: vixMean?.mean ?? null }
         : null,
       krFearGreed,
+      fedWatch: fedWatch ? { ...fedWatch, compare: fedWatchCompare } : null,
     });
   } catch (err) {
     return jsonError(err);

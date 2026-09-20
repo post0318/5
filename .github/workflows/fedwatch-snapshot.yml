@@ -1,0 +1,20 @@
+name: Fed 금리 확률(Kalshi) 일별 스냅샷
+
+# vercel.json 의 crons 는 Vercel Hobby 플랜 한도(2개, kr-fg·us-class-facts 로
+# 이미 참)라 세 번째 크론을 여기 추가할 수 없다 — 다른 일일 수집기들과 같은
+# 패턴으로 GitHub Actions에서 배포된 라우트를 직접 호출한다(CLAUDE.md
+# "인플루언서 텔레그램 채널 수집 트리거" 항목과 동일 이유).
+
+on:
+  schedule:
+    # 21:00 UTC — 미국 장 마감(21:00 UTC = 16:00~17:00 ET, DST 무관하게 마감 후) 이후.
+    - cron: "0 21 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sf -X GET "https://5-topaz-five.vercel.app/api/cron/fedwatch" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"

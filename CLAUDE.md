@@ -799,6 +799,38 @@ npm run db:studio    # drizzle studio
     실패 시 조용히 생략(해당 컴포넌트만 빠짐, 대시보드 전체 에러 아님) +
     딥링크(cnn.com/markets/fear-and-greed) 병행. 어댑터 격리(`lib/macro/`
     하위)도 이미 되어 있어 소스 교체 시 파일 단위로 영향 최소화.
+  - **예외 4건 (개인용, 오너 명시 승인, 2026-09-19)**: 거시경제 대시보드의
+    Fed 금리 확률 카드 — Kalshi 예측시장 API(`api.elections.kalshi.com/
+    trade-api/v2`, 무인증 공개)를 `src/lib/macro/fedwatch.ts` 가 호출한다.
+    - **원래 목표는 CME FedWatch** 였으나 두 경로 모두 막혔다. ① FedWatch
+      수치를 직접 계산하려면 연방기금금리 선물의 **월물별 시세가 필요한데
+      이건 CME 유료 데이터**라 우리에게 없다. ② CME 공식 FedWatch 도구
+      페이지와 investing.com 의 동일 위젯은 **스크래핑·iframe 임베드가 모두
+      차단**돼 있다(응답 헤더 `X-Frame-Options`/`Content-Security-Policy:
+      frame-ancestors` 실측 확인) — 화면에 끼워 넣는 것 자체가 불가능.
+    - **대안으로 Kalshi 선택(오너 결정)**: CFTC 규제를 받는 미국 예측시장
+      으로, `KXFED` 시리즈가 FOMC 회의별 "연방기금금리 **상단이 X% 초과**?"
+      계약을 25bp 간격으로 제공한다. 인증·API 키 없이 열리고, 누적 확률을
+      인접 임계값끼리 빼면 목표범위 구간별 확률이 나와 FedWatch 와 같은
+      형태(인상/동결/인하)로 재구성된다.
+    - **ToS 긴장(다른 예외들과 성격이 다름 — robots.txt 가 아니라 명시적
+      약관 조항)**: Kalshi Data Terms of Service 는 데이터 사용을
+      "personal, non-commercial" 로 제한하고 **서면 동의 없이 제3자에게
+      공유·게시하는 것을 금지**한다. 이 앱의 거시경제 대시보드는 로그인
+      없이 공개(오너 결정 — 종목분석·거시경제는 공개 유지)라 그 조항과
+      정면으로 충돌할 소지가 있다. 오너가 이 위험을 설명받은 뒤 **"허가
+      없이 그냥 진행한다"** 고 명시 결정 — Kalshi 에 서면 동의를 구하지
+      않는다. 개인용 전제 + 출처 표기("출처: Kalshi") + 딥링크
+      (`kalshi.com/markets/kxfed/fed-funds-rate`) 병행으로 진행.
+    - 다른 예외들과 동일 원칙 — 실패 시 조용히 생략(`null` 반환, 카드만
+      빠지고 대시보드 전체는 정상), 어댑터 격리(`lib/macro/` 하위)로 소스
+      교체 시 파일 단위 영향.
+    - **유지보수 주의**: 인상/동결/인하 분류는 "현재 목표범위" 를 알아야
+      계산되는데 Kalshi 응답엔 그 값이 없어 `CURRENT_FED_RANGE_LOW` 상수
+      (현재 3.75 = 3.75~4.00%, 2026-09-16 FOMC 결정)로 코드에 박아 뒀다.
+      **FOMC 결정이 날 때마다 손으로 갱신해야 한다** — 틀리면 세 숫자가
+      통째로 한 칸씩 밀린다. `lib/weekly/comment.ts` 의 `FOMC_2026`·
+      `BOJ_2026` 일정 배열과 같은 수동 갱신 패턴.
 - **산업분석 탭 (`/[market]/research`, 종목분석 옆 최상위 탭, 오너 지시
   2026-09)**: `kr_research` 의 `category:"산업"`(symbol 항상 null, 여러
   증권사가 이미 수집 중이었지만 종목별 조회(`getShinhanResearchBySymbol`)

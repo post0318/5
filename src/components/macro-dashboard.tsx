@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Area,
@@ -103,6 +103,28 @@ interface FearGreed {
   vkospiAvg?: number | null;
   creditAvg?: number | null;
 }
+interface FedWatchBucket {
+  label: string;
+  prob: number;
+  isCurrent: boolean;
+}
+interface FedWatchSnapshot {
+  meetingDate: string;
+  buckets: FedWatchBucket[];
+}
+interface FedWatch {
+  meetingDate: string;
+  meetingDateTime: string;
+  meetingLabel: string;
+  hikeProb: number;
+  holdProb: number;
+  cutProb: number;
+  buckets: FedWatchBucket[];
+  asOf: string;
+  source: string;
+  deepLink: string;
+  compare: { yesterday: FedWatchSnapshot | null; weekAgo: FedWatchSnapshot | null } | null;
+}
 interface Dashboard {
   asOf: string;
   indicators: Indicator[];
@@ -112,6 +134,7 @@ interface Dashboard {
   krFearGreed:
     | (FearGreed & { ready?: boolean; componentsReady?: number; vkospiAvg?: number | null; creditAvg?: number | null })
     | null;
+  fedWatch: FedWatch | null;
 }
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -275,44 +298,60 @@ export function MacroDashboard() {
       )}
       {q.isError && <p className="text-destructive text-sm">{(q.error as Error).message}</p>}
 
-      {q.data && q.data.indices.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-semibold">글로벌 시장지수</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
-            {q.data.indices.map((ix) => (
-              <button
-                key={ix.key}
-                onClick={() => setSelIdx((k) => (k === ix.key ? null : ix.key))}
-                className={cn(
-                  "rounded-lg border p-3 text-left transition-colors",
-                  selIdx === ix.key
-                    ? "border-primary bg-secondary"
-                    : "border-border hover:bg-muted/50",
-                )}
-              >
-                <div className="text-muted-foreground text-xs">{ix.name}</div>
-                <div className="tnum mt-1 text-lg font-semibold">
-                  {ix.value != null ? formatNumber(ix.value, 2) : "-"}
-                </div>
-                <div
-                  className={cn(
-                    "tnum text-xs",
-                    ix.changePct != null && ix.changePct !== 0
-                      ? stockDirClass(ix.changePct > 0, ix.region === "kr" ? "kr" : ix.region)
-                      : "text-muted-foreground",
-                  )}
-                >
-                  {ix.changePct != null
-                    ? `${ix.changePct > 0 ? "+" : ""}${formatNumber(ix.changePct, 2)}%`
-                    : "-"}
-                </div>
-              </button>
-            ))}
-          </div>
-          {selIdx && (
-            <IndexChartPanel idxKey={selIdx} onClose={() => setSelIdx(null)} />
+      {q.data && (q.data.indices.length > 0 || q.data.fedWatch) && (
+        <div className="grid items-stretch gap-4 lg:grid-cols-2">
+          {q.data.indices.length > 0 && (
+            <section className="flex flex-col space-y-3">
+              <h2 className="text-sm font-semibold">글로벌 시장지수</h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {q.data.indices.map((ix) => (
+                  <button
+                    key={ix.key}
+                    onClick={() => setSelIdx((k) => (k === ix.key ? null : ix.key))}
+                    className={cn(
+                      "rounded-lg border p-3 text-left transition-colors",
+                      selIdx === ix.key
+                        ? "border-primary bg-secondary"
+                        : "border-border hover:bg-muted/50",
+                    )}
+                  >
+                    <div className="text-muted-foreground text-xs">{ix.name}</div>
+                    <div className="tnum mt-1 text-lg font-semibold">
+                      {ix.value != null ? formatNumber(ix.value, 2) : "-"}
+                    </div>
+                    <div
+                      className={cn(
+                        "tnum text-xs",
+                        ix.changePct != null && ix.changePct !== 0
+                          ? stockDirClass(ix.changePct > 0, ix.region === "kr" ? "kr" : ix.region)
+                          : "text-muted-foreground",
+                      )}
+                    >
+                      {ix.changePct != null
+                        ? `${ix.changePct > 0 ? "+" : ""}${formatNumber(ix.changePct, 2)}%`
+                        : "-"}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              {selIdx && (
+                <IndexChartPanel idxKey={selIdx} onClose={() => setSelIdx(null)} />
+              )}
+            </section>
           )}
-        </section>
+
+          {q.data.fedWatch && (
+            <section className="flex flex-col space-y-2">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <h2 className="text-sm font-semibold">Fed 금리 확률</h2>
+                <span className="text-muted-foreground text-xs">
+                  {q.data.fedWatch.meetingLabel} · {q.data.fedWatch.meetingDate}
+                </span>
+              </div>
+              <FedWatchCard fw={q.data.fedWatch} />
+            </section>
+          )}
+        </div>
       )}
 
       {q.data && (
@@ -809,6 +848,184 @@ function componentScoreDir(
   const diff = now - then;
   if (Math.abs(diff) < 2) return 0; // 정규화 후 임계값 2점 미만은 "변화없음"
   return diff > 0 ? 1 : -1;
+}
+
+interface Countdown {
+  weeks: number;
+  days: number;
+  hours: number;
+  minutes: number;
+}
+
+/** FOMC 발표까지 남은 시간(오너 지시 2026-09-20, CME/investing.com 스타일).
+ * 분 단위 표시라 1분마다만 재계산 — 초 단위 tick 은 불필요한 리렌더. */
+function useCountdown(targetIso: string): Countdown | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const target = Date.parse(targetIso);
+  if (!Number.isFinite(target)) return null;
+  const diffMs = target - now;
+  if (diffMs <= 0) return null;
+  const totalMinutes = Math.floor(diffMs / 60_000);
+  const totalHours = Math.floor(totalMinutes / 60);
+  const totalDays = Math.floor(totalHours / 24);
+  return {
+    weeks: Math.floor(totalDays / 7),
+    days: totalDays % 7,
+    hours: totalHours % 24,
+    minutes: totalMinutes % 60,
+  };
+}
+
+/** 비교용 스냅샷(전일/전주)에서 같은 구간 라벨의 확률을 찾는다 — 없으면 "-". */
+function findBucketProb(snap: FedWatchSnapshot | null, label: string): string {
+  const b = snap?.buckets.find((x) => x.label === label);
+  return b ? `${formatNumber(b.prob, 1)}%` : "-";
+}
+
+/** investing.com 스타일 — 가로 막대를 세로로 쌓는다(오너 지시 2026-09-20,
+ * CME 세로 히스토그램 시안에서 변경). 현재 목표범위(동결) 구간만 파란색으로
+ * 강조하고 나머지는 회색 — investing 스크린샷과 동일 원칙. */
+function FedWatchCard({ fw }: { fw: FedWatch }) {
+  // 금리 레벨 막대는 확률 상위 2개만(오너 지시 2026-09-20) — 1%대 의미없는
+  // 막대까지 다 늘어놓으면 카드가 붐볐다. 원래 순서(낮은 금리→높은 금리)는
+  // 유지해 막대가 뒤섞여 보이지 않게 한다.
+  const shown = fw.buckets
+    .map((b, i) => ({ ...b, i }))
+    .sort((a, b) => b.prob - a.prob)
+    .slice(0, 2)
+    .sort((a, b) => a.i - b.i);
+  const maxProb = Math.max(...shown.map((b) => b.prob), 1);
+  const countdown = useCountdown(fw.meetingDateTime);
+  const hasCompare = Boolean(fw.compare?.yesterday || fw.compare?.weekAgo);
+
+  return (
+    <div className="flex h-full flex-col gap-1.5">
+      <Card className="flex flex-1 flex-col">
+        <CardContent className="flex flex-1 flex-col gap-4">
+          <div className="flex flex-1 items-center gap-4">
+            <div className="flex shrink-0 flex-col justify-center gap-3 text-left">
+              <div>
+                <div className="text-muted-foreground text-xs">인상</div>
+                <div className="text-down tnum text-2xl font-bold">{formatNumber(fw.hikeProb, 1)}%</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground text-xs">동결</div>
+                <div className="tnum text-2xl font-bold">{formatNumber(fw.holdProb, 1)}%</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground text-xs">인하</div>
+                <div className="text-up tnum text-2xl font-bold">{formatNumber(fw.cutProb, 1)}%</div>
+              </div>
+            </div>
+
+            <div className="flex flex-1 flex-col gap-3">
+              {/* 카운트다운 — 바 차트와 같은 컬럼 안, 바로 위(오너 지시
+                  2026-09-20 — 카드 전체 폭이 아니라 차트 박스 안쪽에 배치).
+                  카운트다운:차트 = 1:2 높이 비율(오너 지시). */}
+              {countdown && (
+                <div className="flex flex-1 flex-col items-center justify-center gap-1.5 border-b pb-2">
+                  <div className="text-muted-foreground text-[9px] font-medium tracking-wide">
+                    FOMC까지 남은 시간
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {[
+                      { label: "주", value: countdown.weeks },
+                      { label: "일", value: countdown.days },
+                      { label: "시간", value: countdown.hours },
+                      { label: "분", value: countdown.minutes },
+                    ].map((c) => (
+                      <div
+                        key={c.label}
+                        className="bg-muted/60 flex min-w-11 flex-col items-center rounded-md border px-2 py-1"
+                      >
+                        <span
+                          className="tnum text-lg leading-tight font-bold"
+                          style={{ color: "oklch(0.52 0.15 260)" }}
+                        >
+                          {c.value}
+                        </span>
+                        <span className="text-muted-foreground text-[9px]">{c.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="flex flex-[2] flex-col justify-center gap-3">
+                {shown.map((b) => (
+                  <div key={b.label} className="flex items-center gap-2">
+                    <div className="text-muted-foreground w-16 shrink-0 text-xs">{b.label}</div>
+                    <div className="bg-muted h-5 flex-1 overflow-hidden rounded-sm">
+                      <div
+                        className={cn("h-full rounded-sm", b.prob !== maxProb && "bg-muted-foreground/40")}
+                        style={{
+                          width: `${Math.max(2, (b.prob / maxProb) * 100)}%`,
+                          // 코발트블루(오너 지시 2026-09-19 — 옅은 톤 유지) —
+                          // 확률이 가장 높은 구간만 강조(오너 지시 2026-09-20 —
+                          // "현재 구간" 대신 "확률 높은 쪽"으로 변경), 나머지는
+                          // 회색(bg-muted-foreground/40).
+                          background:
+                            b.prob === maxProb
+                              ? "linear-gradient(90deg, oklch(0.68 0.13 260), oklch(0.52 0.15 260))"
+                              : undefined,
+                        }}
+                      />
+                    </div>
+                    <div className="tnum w-12 shrink-0 text-right text-xs font-medium">
+                      {formatNumber(b.prob, 1)}%
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 전일·전주 비교(오너 지시 2026-09-20, CME/investing.com 스타일) —
+              배포 직후처럼 DB에 스냅샷이 아직 없으면 조용히 생략된다. */}
+          {hasCompare && (
+            <div className="border-t pt-3">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="text-left font-normal">목표금리</th>
+                    <th className="text-right font-normal">현재</th>
+                    <th className="text-right font-normal">전일</th>
+                    <th className="text-right font-normal">전주</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((b) => (
+                    <tr key={b.label}>
+                      <td className="py-0.5">{b.label}</td>
+                      <td className="tnum py-0.5 text-right font-medium">{formatNumber(b.prob, 1)}%</td>
+                      <td className="tnum text-muted-foreground py-0.5 text-right">
+                        {findBucketProb(fw.compare?.yesterday ?? null, b.label)}
+                      </td>
+                      <td className="tnum text-muted-foreground py-0.5 text-right">
+                        {findBucketProb(fw.compare?.weekAgo ?? null, b.label)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      <a
+        href={fw.deepLink}
+        target="_blank"
+        rel="noreferrer"
+        className="text-muted-foreground hover:text-primary inline-flex items-center gap-1 self-start text-xs underline-offset-2 hover:underline"
+      >
+        출처: {fw.source}
+        <ExternalLink className="size-3" />
+      </a>
+    </div>
+  );
 }
 
 function FearGreedCard({ fg, showLink = true }: { fg: FearGreed; showLink?: boolean }) {
