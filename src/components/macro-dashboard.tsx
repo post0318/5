@@ -923,7 +923,6 @@ function FedWatchCountdown({ targetIso }: { targetIso: string }) {
   if (!countdown) return null;
   return (
     <div className="flex flex-col items-center gap-1">
-      <span className="text-muted-foreground text-[9px] font-medium tracking-wide">FOMC까지 남은 시간</span>
       <div className="flex items-center gap-1">
         {[
           { label: "주", value: countdown.weeks },
@@ -1063,7 +1062,7 @@ function FedWatchCard({ fw }: { fw: FedWatch }) {
         rel="noreferrer"
         className="text-muted-foreground hover:text-primary inline-flex items-center gap-1 self-start text-xs underline-offset-2 hover:underline"
       >
-        출처: {fw.source}
+        출처: {fw.source} (CME Fed Watch 대체)
         <ExternalLink className="size-3" />
       </a>
     </div>
