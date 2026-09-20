@@ -880,21 +880,25 @@ interface Countdown {
   days: number;
   hours: number;
   minutes: number;
+  seconds: number;
 }
 
 /** FOMC 발표까지 남은 시간(오너 지시 2026-09-20, CME/investing.com 스타일).
- * 분 단위 표시라 1분마다만 재계산 — 초 단위 tick 은 불필요한 리렌더. */
+ * CME FedWatch 처럼 초가 계속 움직여야 해서 1초마다 재계산한다(오너 지시
+ * 2026-09-20 — "초가 계속 반응하게"). 바뀌는 건 이 작은 컴포넌트뿐이라
+ * 대시보드 전체가 다시 그려지지는 않는다. */
 function useCountdown(targetIso: string): Countdown | null {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 60_000);
+    const id = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
   const target = Date.parse(targetIso);
   if (!Number.isFinite(target)) return null;
   const diffMs = target - now;
   if (diffMs <= 0) return null;
-  const totalMinutes = Math.floor(diffMs / 60_000);
+  const totalSeconds = Math.floor(diffMs / 1_000);
+  const totalMinutes = Math.floor(totalSeconds / 60);
   const totalHours = Math.floor(totalMinutes / 60);
   const totalDays = Math.floor(totalHours / 24);
   return {
@@ -902,6 +906,7 @@ function useCountdown(targetIso: string): Countdown | null {
     days: totalDays % 7,
     hours: totalHours % 24,
     minutes: totalMinutes % 60,
+    seconds: totalSeconds % 60,
   };
 }
 
@@ -925,6 +930,8 @@ function FedWatchCountdown({ targetIso }: { targetIso: string }) {
           { label: "일", value: countdown.days },
           { label: "시간", value: countdown.hours },
           { label: "분", value: countdown.minutes },
+          // 초는 두 자리 고정(9→09) — 한 자리로 떨어지면 칸 폭이 흔들린다.
+          { label: "초", value: String(countdown.seconds).padStart(2, "0") },
         ].map((c) => (
           <div key={c.label} className="bg-muted/60 flex min-w-9 flex-col items-center rounded-md border px-1.5 py-1">
             <span className="tnum text-sm leading-tight font-bold" style={{ color: "oklch(0.52 0.15 260)" }}>
