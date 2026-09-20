@@ -278,15 +278,40 @@ export function MacroDashboard() {
   return (
    <TooltipProvider delayDuration={0}>
     <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      {/* 아래 "글로벌 시장지수 | Fed 금리 확률" 2열 그리드와 같은 gap-4
+          lg:grid-cols-2 를 써서, 오른쪽 칸(카운트다운) 시작 X 좌표가 그
+          칸의 "Fed 금리 확률 · 10월 FOMC" 텍스트 시작 위치와 맞도록 한다
+          (오너 지시 2026-09-20 — "5주를 10월 FOMC와 시작점을 맞춰줘"). */}
+      <div className="grid items-start gap-4 lg:grid-cols-2">
         <div className="flex items-baseline gap-2">
           <h1 className="text-xl font-semibold">글로벌 핵심지표</h1>
           <span className="text-muted-foreground text-sm">{q.data?.asOf ?? "-"}</span>
         </div>
-        <Button variant="outline" size="sm" onClick={() => q.refetch()} disabled={q.isFetching}>
-          <RefreshCw className={q.isFetching ? "size-4 animate-spin" : "size-4"} />
-          새로고침
-        </Button>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          {q.data?.fedWatch && (
+            <div className="flex items-baseline">
+              {/* "Fed 금리 확률" 만큼의 투명 스페이서 — 카운트다운이 그 옆의
+                  "10월 FOMC" 텍스트 시작 위치에서 시작하도록(오너 지시
+                  2026-09-20 — "10월 FOMC에 맞추라고", "fed가 아니고").
+                  gap 없이 바로 붙여 살짝 더 왼쪽으로(오너 지적 — 스크린샷에
+                  화살표로 표시한 만큼만 왼쪽으로). */}
+              <h2 className="invisible text-sm font-semibold" aria-hidden="true">
+                Fed 금리 확률
+              </h2>
+              <FedWatchCountdown targetIso={q.data.fedWatch.meetingDateTime} />
+            </div>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => q.refetch()}
+            disabled={q.isFetching}
+            className="ml-auto"
+          >
+            <RefreshCw className={q.isFetching ? "size-4 animate-spin" : "size-4"} />
+            새로고침
+          </Button>
+        </div>
       </div>
 
       {q.isLoading && (
@@ -886,6 +911,33 @@ function findBucketProb(snap: FedWatchSnapshot | null, label: string): string {
   return b ? `${formatNumber(b.prob, 1)}%` : "-";
 }
 
+/** FOMC까지 남은 시간 — 페이지 제목(h1)과 새로고침 버튼 사이 빈 공간에 배치
+ * (오너 지시 2026-09-20, 스크린샷 제시). */
+function FedWatchCountdown({ targetIso }: { targetIso: string }) {
+  const countdown = useCountdown(targetIso);
+  if (!countdown) return null;
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <span className="text-muted-foreground text-[9px] font-medium tracking-wide">FOMC까지 남은 시간</span>
+      <div className="flex items-center gap-1">
+        {[
+          { label: "주", value: countdown.weeks },
+          { label: "일", value: countdown.days },
+          { label: "시간", value: countdown.hours },
+          { label: "분", value: countdown.minutes },
+        ].map((c) => (
+          <div key={c.label} className="bg-muted/60 flex min-w-9 flex-col items-center rounded-md border px-1.5 py-1">
+            <span className="tnum text-sm leading-tight font-bold" style={{ color: "oklch(0.52 0.15 260)" }}>
+              {c.value}
+            </span>
+            <span className="text-muted-foreground text-[9px]">{c.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** investing.com 스타일 — 가로 막대를 세로로 쌓는다(오너 지시 2026-09-20,
  * CME 세로 히스토그램 시안에서 변경). 현재 목표범위(동결) 구간만 파란색으로
  * 강조하고 나머지는 회색 — investing 스크린샷과 동일 원칙. */
@@ -899,7 +951,6 @@ function FedWatchCard({ fw }: { fw: FedWatch }) {
     .slice(0, 2)
     .sort((a, b) => a.i - b.i);
   const maxProb = Math.max(...shown.map((b) => b.prob), 1);
-  const countdown = useCountdown(fw.meetingDateTime);
   const hasCompare = Boolean(fw.compare?.yesterday || fw.compare?.weekAgo);
 
   return (
@@ -922,64 +973,31 @@ function FedWatchCard({ fw }: { fw: FedWatch }) {
               </div>
             </div>
 
-            <div className="flex flex-1 flex-col gap-3">
-              {/* 카운트다운 — 바 차트와 같은 컬럼 안, 바로 위(오너 지시
-                  2026-09-20 — 카드 전체 폭이 아니라 차트 박스 안쪽에 배치).
-                  카운트다운:차트 = 1:2 높이 비율(오너 지시). */}
-              {countdown && (
-                <div className="flex flex-1 flex-col items-center justify-center gap-1.5 border-b pb-2">
-                  <div className="text-muted-foreground text-[9px] font-medium tracking-wide">
-                    FOMC까지 남은 시간
+            <div className="flex flex-1 flex-col justify-center gap-3">
+              {shown.map((b) => (
+                <div key={b.label} className="flex items-center gap-2">
+                  <div className="text-muted-foreground w-16 shrink-0 text-xs">{b.label}</div>
+                  <div className="bg-muted h-5 flex-1 overflow-hidden rounded-sm">
+                    <div
+                      className={cn("h-full rounded-sm", b.prob !== maxProb && "bg-muted-foreground/40")}
+                      style={{
+                        width: `${Math.max(2, (b.prob / maxProb) * 100)}%`,
+                        // 코발트블루(오너 지시 2026-09-19 — 옅은 톤 유지) —
+                        // 확률이 가장 높은 구간만 강조(오너 지시 2026-09-20 —
+                        // "현재 구간" 대신 "확률 높은 쪽"으로 변경), 나머지는
+                        // 회색(bg-muted-foreground/40).
+                        background:
+                          b.prob === maxProb
+                            ? "linear-gradient(90deg, oklch(0.68 0.13 260), oklch(0.52 0.15 260))"
+                            : undefined,
+                      }}
+                    />
                   </div>
-                  <div className="flex items-center gap-1">
-                    {[
-                      { label: "주", value: countdown.weeks },
-                      { label: "일", value: countdown.days },
-                      { label: "시간", value: countdown.hours },
-                      { label: "분", value: countdown.minutes },
-                    ].map((c) => (
-                      <div
-                        key={c.label}
-                        className="bg-muted/60 flex min-w-11 flex-col items-center rounded-md border px-2 py-1"
-                      >
-                        <span
-                          className="tnum text-lg leading-tight font-bold"
-                          style={{ color: "oklch(0.52 0.15 260)" }}
-                        >
-                          {c.value}
-                        </span>
-                        <span className="text-muted-foreground text-[9px]">{c.label}</span>
-                      </div>
-                    ))}
+                  <div className="tnum w-12 shrink-0 text-right text-xs font-medium">
+                    {formatNumber(b.prob, 1)}%
                   </div>
                 </div>
-              )}
-              <div className="flex flex-[2] flex-col justify-center gap-3">
-                {shown.map((b) => (
-                  <div key={b.label} className="flex items-center gap-2">
-                    <div className="text-muted-foreground w-16 shrink-0 text-xs">{b.label}</div>
-                    <div className="bg-muted h-5 flex-1 overflow-hidden rounded-sm">
-                      <div
-                        className={cn("h-full rounded-sm", b.prob !== maxProb && "bg-muted-foreground/40")}
-                        style={{
-                          width: `${Math.max(2, (b.prob / maxProb) * 100)}%`,
-                          // 코발트블루(오너 지시 2026-09-19 — 옅은 톤 유지) —
-                          // 확률이 가장 높은 구간만 강조(오너 지시 2026-09-20 —
-                          // "현재 구간" 대신 "확률 높은 쪽"으로 변경), 나머지는
-                          // 회색(bg-muted-foreground/40).
-                          background:
-                            b.prob === maxProb
-                              ? "linear-gradient(90deg, oklch(0.68 0.13 260), oklch(0.52 0.15 260))"
-                              : undefined,
-                        }}
-                      />
-                    </div>
-                    <div className="tnum w-12 shrink-0 text-right text-xs font-medium">
-                      {formatNumber(b.prob, 1)}%
-                    </div>
-                  </div>
-                ))}
-              </div>
+              ))}
             </div>
           </div>
 
