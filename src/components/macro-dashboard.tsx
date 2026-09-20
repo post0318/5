@@ -952,6 +952,12 @@ function FedWatchCard({ fw }: { fw: FedWatch }) {
     .sort((a, b) => a.i - b.i);
   const maxProb = Math.max(...shown.map((b) => b.prob), 1);
   const hasCompare = Boolean(fw.compare?.yesterday || fw.compare?.weekAgo);
+  // 인상/동결/인하 셋 중 확률이 가장 높은 것만 크게, 나머지는 절반 크기로
+  // (오너 지시 2026-09-20). 막대 차트에서 최다 구간만 강조하는 것과 같은 원칙 —
+  // 어느 쪽으로 기울었는지가 한눈에 들어오게 한다. 동률이면 둘 다 크게 나온다.
+  const topDirProb = Math.max(fw.hikeProb, fw.holdProb, fw.cutProb);
+  const dirClass = (p: number) =>
+    p === topDirProb ? "text-3xl font-bold" : "text-base font-semibold opacity-70";
 
   return (
     <div className="flex h-full flex-col gap-1.5">
@@ -961,15 +967,19 @@ function FedWatchCard({ fw }: { fw: FedWatch }) {
             <div className="flex shrink-0 flex-col justify-center gap-3 text-left">
               <div>
                 <div className="text-muted-foreground text-xs">인상</div>
-                <div className="text-down tnum text-2xl font-bold">{formatNumber(fw.hikeProb, 1)}%</div>
+                <div className={cn("text-down tnum", dirClass(fw.hikeProb))}>
+                  {formatNumber(fw.hikeProb, 1)}%
+                </div>
               </div>
               <div>
                 <div className="text-muted-foreground text-xs">동결</div>
-                <div className="tnum text-2xl font-bold">{formatNumber(fw.holdProb, 1)}%</div>
+                <div className={cn("tnum", dirClass(fw.holdProb))}>{formatNumber(fw.holdProb, 1)}%</div>
               </div>
               <div>
                 <div className="text-muted-foreground text-xs">인하</div>
-                <div className="text-up tnum text-2xl font-bold">{formatNumber(fw.cutProb, 1)}%</div>
+                <div className={cn("text-up tnum", dirClass(fw.cutProb))}>
+                  {formatNumber(fw.cutProb, 1)}%
+                </div>
               </div>
             </div>
 
