@@ -359,9 +359,6 @@ export function MacroDashboard() {
                   </button>
                 ))}
               </div>
-              {selIdx && (
-                <IndexChartPanel idxKey={selIdx} onClose={() => setSelIdx(null)} />
-              )}
             </section>
           )}
 
@@ -377,6 +374,13 @@ export function MacroDashboard() {
             </section>
           )}
         </div>
+      )}
+
+      {/* 지수 차트는 2열 그리드 **밖**에 둬서 화면 전체 폭을 쓴다(오너 지시
+          2026-09-20). 왼쪽 칼럼 안에 있을 때는 절반 폭만 쓰면서, 그 높이만큼
+          오른쪽 Fed 카드까지 같이 늘어나 빈 공간이 생겼다. */}
+      {q.data && selIdx && (
+        <IndexChartPanel idxKey={selIdx} onClose={() => setSelIdx(null)} />
       )}
 
       {q.data && (
