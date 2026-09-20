@@ -962,28 +962,32 @@ function FedWatchCard({ fw }: { fw: FedWatch }) {
   return (
     <div className="flex h-full flex-col gap-1.5">
       <Card className="flex flex-1 flex-col">
-        <CardContent className="flex flex-1 flex-col gap-4">
-          <div className="flex flex-1 items-center gap-4">
-            <div className="flex shrink-0 flex-col justify-center gap-3 text-left">
-              <div>
-                <div className="text-muted-foreground text-xs">인상</div>
-                <div className={cn("text-down tnum", dirClass(fw.hikeProb))}>
-                  {formatNumber(fw.hikeProb, 1)}%
-                </div>
-              </div>
-              <div>
-                <div className="text-muted-foreground text-xs">동결</div>
-                <div className={cn("tnum", dirClass(fw.holdProb))}>{formatNumber(fw.holdProb, 1)}%</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground text-xs">인하</div>
-                <div className={cn("text-up tnum", dirClass(fw.cutProb))}>
-                  {formatNumber(fw.cutProb, 1)}%
-                </div>
+        {/* 왼쪽 = 인상/동결/인하(카드 높이 전체), 오른쪽 = 위는 현재 상태(막대)
+            아래는 그 구간들의 추이(전일·전주) — 오너 지시 2026-09-20 "위는 바
+            아래는 추이". 표를 카드 전체 폭에 깔면 인상/동결/인하 밑까지 들어가
+            위 막대와 열이 안 맞는다. */}
+        <CardContent className="flex flex-1 gap-4">
+          <div className="flex shrink-0 flex-col justify-center gap-3 text-left">
+            <div>
+              <div className="text-muted-foreground text-xs">인상</div>
+              <div className={cn("text-down tnum", dirClass(fw.hikeProb))}>
+                {formatNumber(fw.hikeProb, 1)}%
               </div>
             </div>
+            <div>
+              <div className="text-muted-foreground text-xs">동결</div>
+              <div className={cn("tnum", dirClass(fw.holdProb))}>{formatNumber(fw.holdProb, 1)}%</div>
+            </div>
+            <div>
+              <div className="text-muted-foreground text-xs">인하</div>
+              <div className={cn("text-up tnum", dirClass(fw.cutProb))}>
+                {formatNumber(fw.cutProb, 1)}%
+              </div>
+            </div>
+          </div>
 
-            <div className="flex flex-1 flex-col justify-center gap-3">
+          <div className="flex flex-1 flex-col justify-center gap-3">
+            <div className="flex flex-col gap-3">
               {shown.map((b) => (
                 <div key={b.label} className="flex items-center gap-2">
                   <div className="text-muted-foreground w-16 shrink-0 text-xs">{b.label}</div>
@@ -1009,38 +1013,41 @@ function FedWatchCard({ fw }: { fw: FedWatch }) {
                 </div>
               ))}
             </div>
-          </div>
 
-          {/* 전일·전주 비교(오너 지시 2026-09-20, CME/investing.com 스타일) —
-              배포 직후처럼 DB에 스냅샷이 아직 없으면 조용히 생략된다. */}
-          {hasCompare && (
-            <div className="border-t pt-3">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-muted-foreground">
-                    <th className="text-left font-normal">목표금리</th>
-                    <th className="text-right font-normal">현재</th>
-                    <th className="text-right font-normal">전일</th>
-                    <th className="text-right font-normal">전주</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((b) => (
-                    <tr key={b.label}>
-                      <td className="py-0.5">{b.label}</td>
-                      <td className="tnum py-0.5 text-right font-medium">{formatNumber(b.prob, 1)}%</td>
-                      <td className="tnum text-muted-foreground py-0.5 text-right">
-                        {findBucketProb(fw.compare?.yesterday ?? null, b.label)}
-                      </td>
-                      <td className="tnum text-muted-foreground py-0.5 text-right">
-                        {findBucketProb(fw.compare?.weekAgo ?? null, b.label)}
-                      </td>
+            {/* 위 막대가 "현재", 이 표가 같은 구간들의 "추이"(전일·전주).
+                첫 열 너비를 막대 라벨(w-16)과 맞춰 위아래 열이 정렬된다.
+                배포 직후처럼 DB에 스냅샷이 없으면 조용히 생략된다. */}
+            {hasCompare && (
+              <div className="border-t pt-3">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="w-16 text-left font-normal">목표금리</th>
+                      <th className="text-right font-normal">현재</th>
+                      <th className="text-right font-normal">전일</th>
+                      <th className="text-right font-normal">전주</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody>
+                    {shown.map((b) => (
+                      <tr key={b.label}>
+                        <td className="py-0.5">{b.label}</td>
+                        <td className="tnum py-0.5 text-right font-medium">
+                          {formatNumber(b.prob, 1)}%
+                        </td>
+                        <td className="tnum text-muted-foreground py-0.5 text-right">
+                          {findBucketProb(fw.compare?.yesterday ?? null, b.label)}
+                        </td>
+                        <td className="tnum text-muted-foreground py-0.5 text-right">
+                          {findBucketProb(fw.compare?.weekAgo ?? null, b.label)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
       <a
