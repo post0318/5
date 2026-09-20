@@ -876,7 +876,8 @@ function componentScoreDir(
 }
 
 interface Countdown {
-  weeks: number;
+  /** 주 단위로 쪼개지 않은 총 일수 — 오너 지시 2026-09-20 "주는 없애고
+   *  일로만 가자, 38일 이런식으로". 5주 3일보다 38일이 바로 읽힌다. */
   days: number;
   hours: number;
   minutes: number;
@@ -902,8 +903,7 @@ function useCountdown(targetIso: string): Countdown | null {
   const totalHours = Math.floor(totalMinutes / 60);
   const totalDays = Math.floor(totalHours / 24);
   return {
-    weeks: Math.floor(totalDays / 7),
-    days: totalDays % 7,
+    days: totalDays,
     hours: totalHours % 24,
     minutes: totalMinutes % 60,
     seconds: totalSeconds % 60,
@@ -925,7 +925,6 @@ function FedWatchCountdown({ targetIso }: { targetIso: string }) {
     <div className="flex flex-col items-center gap-1">
       <div className="flex items-center gap-1">
         {[
-          { label: "주", value: countdown.weeks },
           { label: "일", value: countdown.days },
           { label: "시간", value: countdown.hours },
           { label: "분", value: countdown.minutes },
