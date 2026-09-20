@@ -1,0 +1,53 @@
+name: 주간 리포트 Gemini 모델 비교 (수동)
+
+# 오너 지시 2026-09-21 — "비교해줘". 같은 주 입력으로 모델 둘을 각각 돌려
+# 결과를 나란히 본다. GEMINI_API_KEY 가 배포 환경에만 있어서 로컬에서는
+# 못 돌린다 — fedwatch 백필과 같은 패턴으로 배포된 라우트를 호출한다.
+# 실제 과금되므로 스케줄 없이 수동(workflow_dispatch)으로만 돈다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "비교할 모델(쉼표 구분, 2~3개)"
+        required: false
+        default: "gemini-3.1-pro-preview,gemini-3.8-flash"
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 두 모델로 같은 주 리포트 생성
+        run: |
+          MODELS="${{ github.event.inputs.models || 'gemini-3.1-pro-preview,gemini-3.8-flash' }}"
+          curl -sf --max-time 600 \
+            "https://5-topaz-five.vercel.app/api/cron/weekly-model-compare?models=$MODELS" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -o compare.json
+          echo "=== 요약 ==="
+          python3 - <<'PY'
+          import json
+          d = json.load(open("compare.json"))
+          print(f"주간: {d['weekStart']} ~ {d['weekEnd']}")
+          for r in d["results"]:
+              if not r.get("ok"):
+                  print(f"\n[{r['model']}] 실패: {r.get('error')} ({r['elapsedMs']}ms)")
+                  continue
+              u = r.get("usage") or {}
+              print(f"\n[{r['model']}] {r['elapsedMs']/1000:.1f}s · 본문 {r.get('bodyChars')}자 "
+                    f"· 출처 {r.get('groundingSources')}건 · ${u.get('costUsd', 0):.4f} "
+                    f"(in {u.get('inputTokens')} / out {u.get('outputTokens')} / think {u.get('thoughtTokens')})")
+              print(f"  한 줄 결론: {r.get('headline')}")
+              ps = (r.get("policySummary") or "").replace("\n", "\n    ")
+              print(f"  금리정책:\n    {ps}")
+              for ic in r.get("issueComments") or []:
+                  print(f"  [{ic['label']}] {ic['comment']}")
+              cal = r.get("calendar") or []
+              if cal:
+                  print("  다음 주 일정: " + ", ".join(f"{c['date']} {c['event']}" for c in cal))
+          PY
+      - name: 전체 결과 아티팩트로 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-model-compare
+          path: compare.json

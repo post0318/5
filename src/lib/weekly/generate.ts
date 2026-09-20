@@ -259,3 +259,86 @@ export async function generateWeeklyReport(
   await saveWeeklyReport(doc);
   return doc;
 }
+
+/**
+ * 모델 비교(오너 지시 2026-09-21 — "비교해줘"). 같은 주 입력으로 모델
+ * 여러 개를 각각 돌려 결과를 나란히 돌려준다. **DB 에 저장하지 않는다** —
+ * 진행 중인 초안을 건드리지 않기 위해서다.
+ *
+ * 수집(스냅샷·이슈·섹터)은 한 번만 하고 모델별로 코멘트 생성만 다시 한다 —
+ * 입력이 완전히 같아야 비교가 성립한다. 호출은 순차적으로 한다(동시에
+ * 때리면 레이트리밋·그라운딩 쿼터가 꼬인다).
+ *
+ * 실제 과금되므로 usage 는 그대로 기록하고 월 예산도 검사한다.
+ */
+export async function compareWeeklyModels(models: string[]): Promise<{
+  weekStart: string;
+  weekEnd: string;
+  results: {
+    model: string;
+    ok: boolean;
+    error?: string;
+    elapsedMs: number;
+    body?: string;
+    bodyChars?: number;
+    headline?: string | null;
+    policySummary?: string | null;
+    issueComments?: { label: string; comment: string }[];
+    calendar?: { date: string; event: string }[] | null;
+    groundingSources?: number;
+    usage?: WeeklyReportDoc["usage"];
+  }[];
+}> {
+  if (!isGeminiConfigured()) throw new WeeklyGenerateError("GEMINI_API_KEY 미설정", 503);
+  const monthUsage = await getWeeklyMonthUsage();
+  if (monthUsage.totalCostUsd >= WEEKLY_MONTHLY_BUDGET_USD) {
+    throw new WeeklyGenerateError(
+      `월 예산 초과($${monthUsage.totalCostUsd.toFixed(2)} / $${WEEKLY_MONTHLY_BUDGET_USD})`,
+      429,
+    );
+  }
+
+  const week = resolveReportWeek();
+  const { snapshot, all, top, sectors } = await collect(week);
+
+  const results = [];
+  for (const model of models) {
+    const startedAt = Date.now();
+    try {
+      const out = await generateWeeklyComments(snapshot, top, week, all, sectors, model);
+      if (!out) {
+        results.push({ model, ok: false, error: "코멘트 생성 결과 없음", elapsedMs: Date.now() - startedAt });
+        continue;
+      }
+      await incWeeklyUsage(out.result.usage.costUsd);
+      const body = await renderWeeklyReport({
+        week,
+        snapshot,
+        issues: top,
+        sectors,
+        comments: out.comments,
+      });
+      results.push({
+        model: out.result.model,
+        ok: true,
+        elapsedMs: Date.now() - startedAt,
+        body,
+        bodyChars: bodyCharCount(body),
+        headline: out.comments.headline,
+        policySummary: out.comments.policySummary,
+        issueComments: [...out.comments.issues.entries()].map(([label, comment]) => ({ label, comment })),
+        calendar: out.comments.calendar,
+        groundingSources: out.result.groundingSources.length,
+        usage: { ...out.result.usage, calls: 2 },
+      });
+    } catch (err) {
+      results.push({
+        model,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        elapsedMs: Date.now() - startedAt,
+      });
+    }
+  }
+  return { weekStart: week.weekStart, weekEnd: week.weekEnd, results };
+}

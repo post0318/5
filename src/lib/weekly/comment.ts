@@ -834,11 +834,15 @@ function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): 
  * 안 함 — 실패해도 추가 비용만 든다. 재시도 발생분까지 usage 를 전부
  * 합산해서 돌려준다(실제로 청구된 비용이므로).
  */
-async function callMacroWithRetry(userJson: string): Promise<{ result: GeminiResult; attempts: GeminiResult[] }> {
+async function callMacroWithRetry(
+  userJson: string,
+  modelOverride?: string,
+): Promise<{ result: GeminiResult; attempts: GeminiResult[] }> {
   const attempts: GeminiResult[] = [];
   for (let attempt = 1; attempt <= 2; attempt++) {
     const r = await geminiGenerate({
       system: MACRO_PROMPT,
+      model: modelOverride,
       user: userJson,
       grounding: true,
       temperature: 0.25,
@@ -864,6 +868,8 @@ export async function generateWeeklyComments(
   week: ReportWeek,
   allIssues: WeeklyIssue[],
   sectors: WeeklySectors,
+  /** 모델 비교용 — 주면 그 모델만 쓴다(폴백 없음). */
+  modelOverride?: string,
 ): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
   if (!isGeminiConfigured() || issues.length === 0) return null;
 
@@ -899,9 +905,10 @@ export async function generateWeeklyComments(
   const macroJson = JSON.stringify({ ...payload, sectors: undefined });
 
   const [macroCall, commentResult] = await Promise.all([
-    callMacroWithRetry(macroJson),
+    callMacroWithRetry(macroJson, modelOverride),
     geminiGenerate({
       system: COMMENT_PROMPT,
+      model: modelOverride,
       user: userJson,
       grounding: true,
       temperature: 0.25,

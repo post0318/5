@@ -51,6 +51,9 @@ export function isGeminiConfigured(): boolean {
 interface GenerateOpts {
   system: string;
   user: string;
+  /** 모델 비교용 오버라이드 — 주면 폴백 체인 없이 이 모델만 쓴다
+   *  (generate.ts 의 compareWeeklyModels). 평소엔 비워 둔다. */
+  model?: string;
   grounding?: boolean;
   maxOutputTokens?: number;
   temperature?: number;
@@ -97,7 +100,7 @@ async function callOnce(model: string, opts: GenerateOpts, key: string): Promise
 export async function geminiGenerate(opts: GenerateOpts): Promise<GeminiResult> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY 미설정");
-  const primary = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
+  const primary = opts.model?.trim() || process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
   const chain = primary === DEFAULT_MODEL ? [primary, ...FALLBACK_MODELS] : [primary];
 
   let lastErr = "";
