@@ -3,6 +3,7 @@ import {
   BANK_BOJ,
   BANK_BOK,
   BANK_FOMC,
+  BANK_MENTION_RE,
   getCentralBankMeetings,
   type CbMeeting,
 } from "./cb-calendar";
@@ -683,6 +684,91 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
  *   안 가진 사실(웹검색으로 확인한 수치)을 인용하는 게 정상이므로 수치
  *   대조를 건너뛴다. false 면(그라운딩 꺼짐/검색 실패) 기존처럼 엄격 검증.
  */
+/**
+ * 중앙은행 회의 **월** 검증 — 수치 검증(`verifyComment`)과 같은 원리로,
+ * 우리가 확정 데이터를 갖고 있는데 모델이 다르게 쓰면 통째로 버린다.
+ *
+ * 실측 오류(2026-09-20, 오너 지적): 이슈 코멘트가 "11월 추가 인상 여부가
+ * 결정될 것"이라고 썼는데 2026년 FOMC 는 10/28 다음이 12/09 라 11월 회의가
+ * 없다. 프롬프트에 일정을 실어주는 것만으로는 모델이 무시하면 그만이라
+ * 출력을 실제로 대조해야 한다.
+ *
+ * **그라운딩 성공이어도 건너뛰지 않는다** — 회의 일정은 우리 쪽이 공식
+ * 소스에서 확정해 갖고 있는 사실이라 웹검색 결과에 양보할 이유가 없다
+ * (수치 검증은 우리가 모르는 외부 수치를 인용하는 게 정상이라 건너뛴다).
+ *
+ * 검증 범위는 리포트 주 기준 앞뒤로만 본다(과거 3개월 ~ 이후 15개월).
+ * 전체 기간으로 보면 2023·2024년에는 11월 FOMC 가 실제로 있어서 위 오류를
+ * 못 잡는다. 범위 밖 월이나 일정을 아예 못 가져온 은행은 검증을 건너뛴다 —
+ * 틀렸다고 증명할 수 없는 건 버리지 않는다.
+ */
+function verifyMeetingMonths(raw: string, meetings: CbMeeting[], weekStart: string): string {
+  const text = raw.trim();
+  if (!text || meetings.length === 0) return text;
+
+  const base = Date.parse(`${weekStart}T00:00:00Z`);
+  if (!Number.isFinite(base)) return text;
+  const lo = new Date(base - 90 * 86_400_000).toISOString().slice(0, 7);
+  const hi = new Date(base + 455 * 86_400_000).toISOString().slice(0, 7);
+
+  // 은행별로 "이 창 안에 회의가 있는 YYYY-MM" 집합을 만든다.
+  const monthsByBank = new Map<string, Set<string>>();
+  for (const m of meetings) {
+    const ym = m.date.slice(0, 7);
+    if (ym < lo || ym > hi) continue;
+    const set = monthsByBank.get(m.bank) ?? new Set<string>();
+    set.add(ym);
+    monthsByBank.set(m.bank, set);
+  }
+
+  // 본문에 등장하는 중앙은행 키워드의 위치를 전부 모아둔다. "연준은 ...
+  // (100자) ... 11월 추가 인상"처럼 주어가 문장 앞에 한 번만 나오는 경우가
+  // 실제 오류 문장의 형태라, 월 주변 좁은 창만 보면 못 잡는다(실측).
+  const mentions: { bank: string; at: number }[] = [];
+  for (const [bank, re] of Object.entries(BANK_MENTION_RE)) {
+    for (const m of text.matchAll(new RegExp(re.source, re.flags.replace("g", "") + "g"))) {
+      mentions.push({ bank, at: m.index ?? 0 });
+    }
+  }
+  if (mentions.length === 0) return text;
+
+  // "N월" 뒤에 통화정책 행위를 가리키는 말이 붙을 때만 회의 언급으로 본다 —
+  // "11월 소비자물가 발표"처럼 회의와 무관한 월까지 잡으면 오탐이 된다.
+  const POLICY_ACT_RE = /^[^.]{0,12}(회의|FOMC|금통위|금융통화|정책결정|인상|인하|동결|결정|금리)/;
+
+  for (const hit of text.matchAll(/(\d{1,2})\s*월/g)) {
+    const month = Number(hit[1]);
+    if (month < 1 || month > 12) continue;
+    const at = hit.index ?? 0;
+    if (!POLICY_ACT_RE.test(text.slice(at + hit[0].length))) continue;
+    // 그 월에서 가장 가까운 은행 언급을 주어로 본다(앞·뒤 모두 고려).
+    const nearest = mentions.reduce((best, m) =>
+      Math.abs(m.at - at) < Math.abs(best.at - at) ? m : best,
+    );
+    const known = monthsByBank.get(nearest.bank);
+    if (!known || known.size === 0) continue; // 그 은행 일정을 못 가져옴
+    if ([...known].some((ym) => Number(ym.slice(5, 7)) === month)) continue; // 실제로 있는 달
+    if (!monthsExistInWindow(lo, hi, month)) continue; // 검증 범위 밖 — 판단 보류
+    console.warn(
+      `[weekly] 코멘트 검증 실패 — ${nearest.bank} 는 ${month}월에 회의가 없음, 폐기: ${text}`,
+    );
+    return "";
+  }
+  return text;
+}
+
+/** lo~hi(YYYY-MM) 구간에 해당 월이 한 번이라도 등장하는지. */
+function monthsExistInWindow(lo: string, hi: string, month: number): boolean {
+  const [ly, lm] = lo.split("-").map(Number);
+  const [hy, hm] = hi.split("-").map(Number);
+  for (let y = ly; y <= hy; y++) {
+    const from = y === ly ? lm : 1;
+    const to = y === hy ? hm : 12;
+    if (month >= from && month <= to) return true;
+  }
+  return false;
+}
+
 function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): string {
   const text = raw.trim();
   if (!text) return "";
@@ -742,10 +828,20 @@ export async function generateWeeklyComments(
 
   // 중앙은행 회의 일정은 공식 소스에서 가져온다(cb-calendar.ts). 프롬프트
   // 입력과 "다음 주 일정" 캘린더가 같은 목록을 쓰도록 여기서 한 번만 조회.
-  const meetings = await getCentralBankMeetings(week.weekStart);
+  const allMeetings = await getCentralBankMeetings();
+  // 프롬프트에는 앞으로 남은 것만 넘기고, 검증은 지난 회의 언급("9월
+  // FOMC에서 인상")도 참으로 봐야 해서 전체 목록을 쓴다.
+  const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
   const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings);
   const userJson = JSON.stringify(payload);
   const allowed = buildAllowedNumbers(payload);
+  /**
+   * 검증 두 단계를 한 번에 — 수치 대조(그라운딩 성공 시 건너뜀)와 중앙은행
+   * 회의 월 대조(항상 적용). 어느 쪽이든 걸리면 그 코멘트를 통째로 버린다
+   * (반쪽만 맞는 문장을 노출하지 않는다는 기존 원칙).
+   */
+  const verify = (raw: string, trustGrounded: boolean): string =>
+    verifyMeetingMonths(verifyComment(raw, allowed, trustGrounded), allMeetings, week.weekStart);
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
   const sectorIds = payload.sectors.map((s) => s.id);
@@ -787,7 +883,7 @@ export async function generateWeeklyComments(
       `parseJson성공=${macroParsed != null}`,
   );
   comments.headline = macroParsed?.headline
-    ? verifyComment(macroParsed.headline, allowed, macroTrustGrounded) || null
+    ? verify(macroParsed.headline, macroTrustGrounded) || null
     : null;
 
   // policySummary — 날짜·기관명 등 검증 불가능한 구체적 사실을 담을 수
@@ -798,7 +894,7 @@ export async function generateWeeklyComments(
   // 신뢰할 수 있다). 숫자 검증은 그라운딩 여부에 따라 그대로 적용.
   const hasPolicyEvidence = payload.policyEvidence.length > 0;
   if ((macroTrustGrounded || hasPolicyEvidence) && macroParsed?.policySummary) {
-    comments.policySummary = verifyComment(macroParsed.policySummary, allowed, macroTrustGrounded) || null;
+    comments.policySummary = verify(macroParsed.policySummary, macroTrustGrounded) || null;
   }
   if (!comments.policySummary) {
     console.warn(
@@ -860,7 +956,7 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 스냅샷 코멘트 키 불일치 — "${rawName}" 는 알려진 자산명이 아님`);
       continue;
     }
-    const v = verifyComment(String(text ?? ""), allowed, commentTrustGrounded);
+    const v = verify(String(text ?? ""), commentTrustGrounded);
     if (v) comments.snapshot.set(canonical, v);
   }
   for (const [rawLabel, text] of Object.entries(commentParsed?.issues ?? {})) {
@@ -869,7 +965,7 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 이슈 코멘트 키 불일치 — "${rawLabel}" 는 알려진 이슈명이 아님`);
       continue;
     }
-    const v = verifyComment(String(text ?? ""), allowed, commentTrustGrounded);
+    const v = verify(String(text ?? ""), commentTrustGrounded);
     if (v) comments.issues.set(canonical, v);
   }
   for (const [rawId, text] of Object.entries(commentParsed?.sectors ?? {})) {
@@ -879,7 +975,7 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 섹터 코멘트 키 불일치 — "${rawId}" 는 알려진 섹터 id 가 아님`);
       continue;
     }
-    const v = verifyComment(String(text ?? ""), allowed, commentTrustGrounded);
+    const v = verify(String(text ?? ""), commentTrustGrounded);
     if (v) comments.sectors.set(rawId, v);
   }
 

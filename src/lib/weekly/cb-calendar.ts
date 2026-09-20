@@ -154,10 +154,15 @@ function pick(bank: string, fetched: string[]): CbMeeting[] {
 }
 
 /**
- * `fromDate`(YYYY-MM-DD) 이후 남은 중앙은행 회의를 날짜순으로 돌려준다.
+ * 가져올 수 있는 중앙은행 회의를 **전부** 날짜순으로 돌려준다(과거분 포함).
  * 한 소스가 실패해도 나머지는 그대로 나간다.
+ *
+ * 과거분까지 주는 이유: 프롬프트에는 앞으로 남은 것만 넘기면 되지만,
+ * 검증(`verifyMeetingMonths`)은 "9월 FOMC에서 인상했다" 같은 **지난 회의
+ * 언급**도 참이라고 판정할 수 있어야 한다. 앞으로 남은 것만 갖고 검증하면
+ * 맞는 문장을 틀렸다고 버린다.
  */
-export async function getCentralBankMeetings(fromDate: string): Promise<CbMeeting[]> {
+export async function getCentralBankMeetings(): Promise<CbMeeting[]> {
   const [fomc, boj, bok] = await Promise.all([
     fetchFomc().catch(() => []),
     fetchBoj().catch(() => []),
@@ -167,7 +172,12 @@ export async function getCentralBankMeetings(fromDate: string): Promise<CbMeetin
     ...pick(BANK_FOMC, fomc),
     ...pick(BANK_BOJ, boj),
     ...pick(BANK_BOK, bok),
-  ]
-    .filter((m) => m.date >= fromDate)
-    .sort((a, b) => a.date.localeCompare(b.date) || a.bank.localeCompare(b.bank));
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.bank.localeCompare(b.bank));
 }
+
+/** 텍스트에서 그 중앙은행을 가리키는지 판정하는 키워드 — 검증에서 쓴다. */
+export const BANK_MENTION_RE: Record<string, RegExp> = {
+  [BANK_FOMC]: /FOMC|연준|연방준비|\bFed\b/i,
+  [BANK_BOJ]: /BOJ|일본은행|일은\b/i,
+  [BANK_BOK]: /한국은행|금통위|한은\b/,
+};
