@@ -78,7 +78,17 @@ const INPUT_DATA_DESC = `# 입력 데이터
   최우선으로 활용한다.
 - sectors: 이번 주 한국·미국·일본 증시의 상승/하락 상위 섹터(등락률은 코드가
   이미 계산해 확정). 왜 그 섹터가 그렇게 움직였는지는 안 채워져 있다 —
-  네가 웹검색으로 원인을 찾아 채운다.`;
+  네가 웹검색으로 원인을 찾아 채운다.
+- centralBankMeetings: 미국 FOMC·일본은행(BOJ)·한국은행 금통위의 **남은
+  공식 회의 일정 전부**(각 중앙은행 공식 캘린더 기준, 코드에 확정 입력됨).
+
+# 중앙은행 회의 일정 (절대 규칙)
+회의 날짜·개최 월을 언급할 때는 **centralBankMeetings 에 있는 날짜만**
+쓴다. 목록에 없는 달의 회의를 지어내지 마라 — FOMC 는 연 8회라 회의가
+아예 없는 달이 있다(실측 오류 2026-09: 10월 다음이 12월인데 "11월 추가
+인상 여부"라고 썼다). "다음 회의"를 말하려면 목록에서 그 주 이후 가장
+가까운 날짜를 찾아 그 달을 써라. 목록에 근거가 없으면 달을 특정하지 말고
+"다음 회의"처럼 뭉뚱그려 쓴다.`;
 
 const MACRO_PROMPT = `# 역할
 너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이번 주 전체
@@ -234,6 +244,10 @@ interface CommentPayload {
     startDate: string;
     endDate: string;
   }[];
+  /** 남은 중앙은행 회의 일정 — 아래 FOMC_2026·BOJ_2026·BOK_2026 에서 뽑는다.
+   * 이걸 안 주면 모델이 회의가 없는 달을 지어낸다(실측 2026-09: FOMC 가
+   * 10/28 다음 12/09 인데 "11월 추가 인상 여부"라고 썼다). */
+  centralBankMeetings: { date: string; bank: string }[];
 }
 
 /** render.ts 의 movers() 와 같은 계산(가장 크게 오르내린 자산) — LLM 이
@@ -411,6 +425,23 @@ const BOK_2026 = [
   "2026-07-16", "2026-08-27", "2026-10-22", "2026-11-26",
 ];
 
+/**
+ * 리포트 주 이후 남은 중앙은행 회의 전부 — 프롬프트에 그대로 실어 보낸다.
+ * 모델에게 일정표를 안 주면 회의가 없는 달을 지어낸다(실측 2026-09 —
+ * FOMC 가 10/28 다음 12/09 인데 코멘트에 "11월 추가 인상 여부"라고 썼다.
+ * FOMC 는 연 8회라 11월처럼 회의가 아예 없는 달이 있다).
+ * 위 배열이 2026년까지라 연도가 바뀌면 빈 목록이 된다 — 그때는 달을
+ * 특정하지 말라는 프롬프트 규칙이 대신 작동한다.
+ */
+function upcomingCentralBankMeetings(fromDate: string): { date: string; bank: string }[] {
+  const all = [
+    ...FOMC_2026.map((date) => ({ date, bank: "미국 FOMC" })),
+    ...BOJ_2026.map((date) => ({ date, bank: "일본은행(BOJ)" })),
+    ...BOK_2026.map((date) => ({ date, bank: "한국은행 금통위" })),
+  ];
+  return all.filter((m) => m.date >= fromDate).sort((a, b) => a.date.localeCompare(b.date));
+}
+
 interface FixedCalendarEvent {
   date: string;
   event: string;
@@ -511,6 +542,9 @@ function buildPayload(
     nextWeek: { start: nextStart, end: nextEnd },
     topMovers: computeTopMovers(snapshot),
     policyEvidence,
+    // 리포트 주 시작일 기준 — 그 주에 열린 회의도 "이번 주 무슨 일이
+    // 있었는지" 서술에 필요하므로 nextWeek 이 아니라 weekStart 부터.
+    centralBankMeetings: upcomingCentralBankMeetings(week.weekStart),
     sectors: flattenSectors(sectors),
     snapshot: snapshot
       .filter((r) => r.value != null)
