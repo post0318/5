@@ -1,7 +1,7 @@
 import "server-only";
 import type { Collection } from "mongodb";
 import { getDb } from "./index";
-import type { FedWatch } from "@/lib/macro/fedwatch";
+import type { FedWatch, FedWatchDay } from "@/lib/macro/fedwatch";
 
 /**
  * Fed 금리 확률(Kalshi) 일별 스냅샷 — CME FedWatch·investing.com 이 보여주는
@@ -38,6 +38,40 @@ export async function saveFedWatchSnapshot(fw: FedWatch): Promise<void> {
     asOf: fw.asOf,
   };
   await col.updateOne({ _id: id }, { $set: doc }, { upsert: true });
+}
+
+/**
+ * 과거분 일괄 저장(백필) — Kalshi candlesticks 로 재구성한 일별 스냅샷을 넣는다.
+ * 하루 1회 수집만으로는 "전일·전주" 비교가 배포 후 1주일이 지나야 채워지는
+ * 문제를 한 번에 메운다(오너 지시 2026-09-20).
+ *
+ * **이미 있는 날짜는 건드리지 않는다**(`$setOnInsert`) — 실시간 수집으로 쌓인
+ * 그날의 스냅샷이 과거 일봉 종가로 덮이면 안 된다. 수집 시각이 서로 다르다.
+ */
+export async function backfillFedWatchDays(days: FedWatchDay[]): Promise<number> {
+  if (days.length === 0) return 0;
+  const col = await fedWatchDailyCol();
+  const res = await col.bulkWrite(
+    days.map((d) => ({
+      updateOne: {
+        filter: { _id: d.date },
+        update: {
+          $setOnInsert: {
+            meetingDate: d.meetingDate,
+            meetingLabel: d.meetingLabel,
+            hikeProb: d.hikeProb,
+            holdProb: d.holdProb,
+            cutProb: d.cutProb,
+            buckets: d.buckets,
+            asOf: d.asOf,
+          },
+        },
+        upsert: true,
+      },
+    })),
+    { ordered: false },
+  );
+  return res.upsertedCount;
 }
 
 async function nearestOnOrBefore(dateIso: string): Promise<FedWatchDailyDoc | null> {

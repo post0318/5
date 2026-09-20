@@ -9,12 +9,19 @@ on:
   schedule:
     # 21:00 UTC — 미국 장 마감(21:00 UTC = 16:00~17:00 ET, DST 무관하게 마감 후) 이후.
     - cron: "0 21 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "과거 N일치 백필(0=평소대로 오늘분만). Kalshi candlesticks 로 재구성, 이미 있는 날짜는 안 덮음"
+        required: false
+        default: "0"
 
 jobs:
   snapshot:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          curl -sf -X GET "https://5-topaz-five.vercel.app/api/cron/fedwatch" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
+          BACKFILL="${{ github.event.inputs.backfill || '0' }}"
+          URL="https://5-topaz-five.vercel.app/api/cron/fedwatch"
+          if [ "$BACKFILL" != "0" ]; then URL="$URL?backfill=$BACKFILL"; fi
+          curl -sf -X GET "$URL" -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"

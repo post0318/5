@@ -22,6 +22,13 @@ const BASE = "https://api.elections.kalshi.com/trade-api/v2";
 const SERIES = "KXFED";
 export const KALSHI_DEEPLINK = "https://kalshi.com/markets/kxfed/fed-funds-rate";
 
+/** 회의별 페이지(오너 제시 URL 2026-09-20 — `.../fed-funds-rate/kxfed-26oct`).
+ *  event_ticker `KXFED-26OCT` 를 소문자로 붙이면 그 회의 마켓으로 바로 간다.
+ *  시리즈 공통 페이지로 보내면 사용자가 회의를 다시 골라야 했다. */
+function eventDeepLink(eventTicker: string): string {
+  return `${KALSHI_DEEPLINK}/${eventTicker.toLowerCase()}`;
+}
+
 /**
  * 현재 연방기금금리 목표범위의 **하단**(%).
  * 2026-09-16 FOMC 에서 3.75~4.00% 로 결정 → 3.75.
@@ -41,10 +48,16 @@ interface RawEvent {
   title?: string;
 }
 interface RawMarket {
+  /** 과거 일봉(candlesticks) 조회에 필요 — 예: "KXFED-26OCT-T4.00" */
+  ticker?: string;
   floor_strike?: number;
   last_price_dollars?: string;
   yes_bid_dollars?: string;
   yes_ask_dollars?: string;
+}
+interface RawCandle {
+  end_period_ts?: number;
+  price?: { close_dollars?: string; mean_dollars?: string };
 }
 
 export interface FedWatch {
@@ -98,6 +111,75 @@ async function getJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** 예: "2026-10-28" → "10월 FOMC" */
+function meetingLabelOf(meetingDate: string): string {
+  return `${Number(meetingDate.slice(5, 7))}월 FOMC`;
+}
+
+/**
+ * 임계값별 누적확률("금리 상단이 X% 초과일 확률") → 목표범위 구간확률 + 인상/
+ * 동결/인하 집계. 현재 시세(`getFedWatch`)와 과거 일봉(`getFedWatchHistory`)이
+ * 완전히 같은 계산을 쓰도록 공통화했다 — 둘이 어긋나면 전일 대비가 거짓이 된다.
+ *
+ * 인접 임계값 사이의 확률 질량이 곧 그 목표범위 구간이다. 유동성 부족으로
+ * 누적확률이 단조감소하지 않을 수 있어 음수는 0 으로 막고, 절단 후 합이 1 에서
+ * 벗어나므로 재정규화한다.
+ */
+function summarizeRows(rows: { strike: number; p: number }[]): Pick<
+  FedWatch,
+  "hikeProb" | "holdProb" | "cutProb" | "buckets"
+> | null {
+  if (rows.length < 2) return null;
+  const sorted = [...rows].sort((a, b) => a.strike - b.strike);
+  const buckets: { label: string; lowEdge: number; prob: number }[] = [];
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  buckets.push({
+    label: `${bp(first.strike)}bp 이하`,
+    lowEdge: first.strike - STEP,
+    prob: Math.max(0, 1 - first.p),
+  });
+  for (let i = 1; i < sorted.length; i++) {
+    const lo = sorted[i - 1];
+    const hi = sorted[i];
+    buckets.push({
+      label: `${bp(lo.strike)}-${bp(hi.strike)}`,
+      lowEdge: lo.strike,
+      prob: Math.max(0, lo.p - hi.p),
+    });
+  }
+  buckets.push({
+    label: `${bp(last.strike)}bp 초과`,
+    lowEdge: last.strike,
+    prob: Math.max(0, last.p),
+  });
+
+  const total = buckets.reduce((s, b) => s + b.prob, 0);
+  if (total <= 0) return null;
+  for (const b of buckets) b.prob /= total;
+
+  const eq = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  let hike = 0;
+  let hold = 0;
+  let cut = 0;
+  for (const b of buckets) {
+    if (eq(b.lowEdge, CURRENT_FED_RANGE_LOW)) hold += b.prob;
+    else if (b.lowEdge > CURRENT_FED_RANGE_LOW) hike += b.prob;
+    else cut += b.prob;
+  }
+
+  return {
+    hikeProb: pct(hike),
+    holdProb: pct(hold),
+    cutProb: pct(cut),
+    buckets: buckets.map((b) => ({
+      label: b.label,
+      prob: pct(b.prob),
+      isCurrent: eq(b.lowEdge, CURRENT_FED_RANGE_LOW),
+    })),
+  };
+}
+
 export async function getFedWatch(): Promise<FedWatch | null> {
   try {
     const { events } = await getJson<{ events?: RawEvent[] }>(
@@ -117,71 +199,112 @@ export async function getFedWatch(): Promise<FedWatch | null> {
     // floor_strike = "금리 상단이 이 값을 초과?" 임계값(%), 확률은 초과일 확률(누적)
     const rows = (markets ?? [])
       .map((m) => ({ strike: m.floor_strike, p: impliedProb(m) }))
-      .filter((r): r is { strike: number; p: number } => typeof r.strike === "number" && r.p != null)
-      .sort((a, b) => a.strike - b.strike);
-    if (rows.length < 2) return null;
-
-    // 누적확률 → 구간확률. 인접 임계값 사이의 확률 질량이 곧 그 목표범위 구간.
-    // 유동성 부족으로 누적확률이 단조감소하지 않을 수 있어 음수는 0 으로 막는다.
-    const buckets: { label: string; lowEdge: number; prob: number }[] = [];
-    const first = rows[0];
-    const last = rows[rows.length - 1];
-    buckets.push({
-      label: `${bp(first.strike)}bp 이하`,
-      lowEdge: first.strike - STEP,
-      prob: Math.max(0, 1 - first.p),
-    });
-    for (let i = 1; i < rows.length; i++) {
-      const lo = rows[i - 1];
-      const hi = rows[i];
-      buckets.push({
-        label: `${bp(lo.strike)}-${bp(hi.strike)}`,
-        lowEdge: lo.strike,
-        prob: Math.max(0, lo.p - hi.p),
-      });
-    }
-    buckets.push({
-      label: `${bp(last.strike)}bp 초과`,
-      lowEdge: last.strike,
-      prob: Math.max(0, last.p),
-    });
-
-    // 음수 절단 후 합이 1 에서 벗어나므로 재정규화
-    const total = buckets.reduce((s, b) => s + b.prob, 0);
-    if (total <= 0) return null;
-    for (const b of buckets) b.prob /= total;
-
-    const eq = (a: number, b: number) => Math.abs(a - b) < 1e-6;
-    let hike = 0;
-    let hold = 0;
-    let cut = 0;
-    for (const b of buckets) {
-      if (eq(b.lowEdge, CURRENT_FED_RANGE_LOW)) hold += b.prob;
-      else if (b.lowEdge > CURRENT_FED_RANGE_LOW) hike += b.prob;
-      else cut += b.prob;
-    }
+      .filter((r): r is { strike: number; p: number } => typeof r.strike === "number" && r.p != null);
+    const summary = summarizeRows(rows);
+    if (!summary) return null;
 
     const meetingDateTime = next.strike_date!;
     const meetingDate = meetingDateTime.slice(0, 10);
-    const month = Number(meetingDate.slice(5, 7));
 
     return {
       meetingDate,
       meetingDateTime,
-      meetingLabel: `${month}월 FOMC`,
-      hikeProb: pct(hike),
-      holdProb: pct(hold),
-      cutProb: pct(cut),
-      buckets: buckets.map((b) => ({
-        label: b.label,
-        prob: pct(b.prob),
-        isCurrent: eq(b.lowEdge, CURRENT_FED_RANGE_LOW),
-      })),
+      meetingLabel: meetingLabelOf(meetingDate),
+      ...summary,
       asOf: new Date().toISOString(),
       source: "Kalshi",
-      deepLink: KALSHI_DEEPLINK,
+      deepLink: eventDeepLink(next.event_ticker!),
     };
   } catch {
     return null; // 비공식·경계선 소스 — 실패 시 카드 자체를 생략
+  }
+}
+
+/** 하루치 과거 스냅샷 — `db/fedwatch.ts` 의 FedWatchDailyDoc 과 같은 모양. */
+export interface FedWatchDay {
+  /** 미국 동부 영업일 YYYY-MM-DD (일봉 구간이 끝나는 04:00Z = ET 자정) */
+  date: string;
+  meetingDate: string;
+  meetingLabel: string;
+  hikeProb: number;
+  holdProb: number;
+  cutProb: number;
+  buckets: { label: string; prob: number; isCurrent: boolean }[];
+  asOf: string;
+}
+
+/**
+ * 과거 일별 확률 재구성 — Kalshi candlesticks(무인증 공개 API)로 임계값별
+ * 일봉 종가를 받아 `getFedWatch()` 와 **같은 누적→구간 변환**을 날짜별로 돌린다.
+ * 스냅샷을 하루 1회 쌓는 방식만으로는 "전일·전주" 비교가 배포 후 1주일이
+ * 지나야 채워져서, 과거분을 한 번에 메우려고 추가했다(오너 지시 2026-09-20).
+ *
+ * 실측(2026-09-20): 60일 요청 시 59일치가 내려온다.
+ *
+ * **날짜 주의** — 일봉 구간 종료가 `04:00Z`(미국 동부 자정)라 그 캔들은 **직전
+ * ET 영업일**의 종가다. `end_period_ts - 86400` 으로 맞추지 않으면 하루씩 밀린다.
+ */
+export async function getFedWatchHistory(days = 60): Promise<FedWatchDay[]> {
+  try {
+    const { events } = await getJson<{ events?: RawEvent[] }>(
+      `${BASE}/events?series_ticker=${SERIES}&status=open`,
+    );
+    const now = Date.now();
+    const next = (events ?? [])
+      .filter((e) => e.event_ticker && e.strike_date && Date.parse(e.strike_date) > now)
+      .sort((a, b) => Date.parse(a.strike_date!) - Date.parse(b.strike_date!))[0];
+    if (!next) return [];
+
+    const { markets } = await getJson<{ markets?: RawMarket[] }>(
+      `${BASE}/markets?event_ticker=${encodeURIComponent(next.event_ticker!)}`,
+    );
+    const strikes = (markets ?? [])
+      .map((m) => ({ ticker: m.ticker, strike: m.floor_strike }))
+      .filter((s): s is { ticker: string; strike: number } => Boolean(s.ticker) && typeof s.strike === "number");
+    if (strikes.length < 2) return [];
+
+    const endTs = Math.floor(now / 1000);
+    const startTs = endTs - days * 86_400;
+    // 날짜 → (임계값 → 종가). 임계값 하나가 실패해도 나머지로 계산은 된다.
+    const byDate = new Map<string, { strike: number; p: number }[]>();
+    for (const { ticker, strike } of strikes) {
+      let candles: RawCandle[] = [];
+      try {
+        const r = await getJson<{ candlesticks?: RawCandle[] }>(
+          `${BASE}/series/${SERIES}/markets/${encodeURIComponent(ticker)}/candlesticks` +
+            `?start_ts=${startTs}&end_ts=${endTs}&period_interval=1440`,
+        );
+        candles = r.candlesticks ?? [];
+      } catch {
+        continue;
+      }
+      for (const c of candles) {
+        const close = num(c.price?.close_dollars) ?? num(c.price?.mean_dollars);
+        if (close == null || !c.end_period_ts) continue;
+        const date = new Date((c.end_period_ts - 86_400) * 1000).toISOString().slice(0, 10);
+        const list = byDate.get(date) ?? [];
+        list.push({ strike, p: close });
+        byDate.set(date, list);
+      }
+    }
+
+    const meetingDate = next.strike_date!.slice(0, 10);
+    const label = meetingLabelOf(meetingDate);
+    const out: FedWatchDay[] = [];
+    for (const [date, rows] of [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      const summary = summarizeRows(rows);
+      if (!summary) continue;
+      out.push({
+        date,
+        meetingDate,
+        meetingLabel: label,
+        ...summary,
+        // 그날 ET 자정 종가 기준임을 남긴다(실시간 asOf 와 구분).
+        asOf: `${date}T23:59:59.000Z`,
+      });
+    }
+    return out;
+  } catch {
+    return [];
   }
 }
