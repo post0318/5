@@ -1,0 +1,37 @@
+name: Gemini 그라운딩 진단 (수동)
+
+# 오너 지시 2026-09-21 — 모델 비교에서 두 모델 다 groundingSources: 0 이
+# 나왔다. 웹검색을 켰는데 출처가 안 온다면 코멘트의 구체적 주장이 실제
+# 검색이 아니라 모델 내부 지식에서 나온 것이 된다. GEMINI_API_KEY 가
+# 배포 환경에만 있어 배포된 라우트를 호출한다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "진단할 모델(비우면 기본 모델)"
+        required: false
+        default: ""
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          URL="https://5-topaz-five.vercel.app/api/cron/gemini-grounding-check"
+          M="${{ github.event.inputs.model }}"
+          if [ -n "$M" ]; then URL="$URL?model=$M"; fi
+          curl -sf --max-time 300 "$URL" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" -o g.json
+          python3 -c "
+import json
+d = json.load(open('g.json'))
+print(f\"모델: {d['model']}  (오늘 {d['today']})\")
+for r in d['results']:
+    print(f\"\n[tools={r['tools']}] HTTP {r.get('httpStatus')}  오류={r.get('error')}\")
+    print(f\"  candidate 키:        {r.get('candidateKeys')}\")
+    print(f\"  groundingMetadata 키: {r.get('groundingMetadataKeys')}\")
+    print(f\"  검색 쿼리({len(r.get('webSearchQueries') or [])}건): {r.get('webSearchQueries')}\")
+    print(f\"  출처 청크: {r.get('groundingChunkCount')}건\")
+    print(f\"  응답: {r.get('textPreview')}\")
+"

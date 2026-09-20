@@ -182,3 +182,78 @@ export async function geminiGenerate(opts: GenerateOpts): Promise<GeminiResult> 
   }
   throw new GeminiApiError(`Gemini 모델을 찾지 못함 — ${lastErr}`, 404);
 }
+
+/**
+ * 그라운딩 진단(오너 지시 2026-09-21) — 검색이 실제로 도는지, 응답 어디에
+ * 담기는지 확인한다. 모델 비교에서 두 모델 다 groundingSources: 0 이 나와
+ * 원인을 좁혀야 했다.
+ *
+ * 세 가지 tools 선언을 같은 프롬프트로 각각 시도하고, 응답 candidate 의
+ * **키 목록까지 그대로 돌려준다** — 필드 이름이 바뀌었으면 파서가 조용히
+ * 0 을 반환하므로 값만 봐서는 구분이 안 된다.
+ *
+ * 프롬프트는 검색 없이는 답할 수 없는 것으로 잡는다(모델은 필요할 때만
+ * 검색한다 — 문서상 강제 옵션이 없다).
+ */
+export async function geminiGroundingDiagnostic(model?: string): Promise<unknown> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("GEMINI_API_KEY 미설정");
+  const target = model?.trim() || process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
+  const today = new Date().toISOString().slice(0, 10);
+  const user =
+    `오늘은 ${today}이다. 최근 일주일 안에 보도된 미국 연방준비제도(Fed) 관련 ` +
+    `뉴스 한 건을 매체명과 함께 알려줘. 반드시 웹검색으로 확인한 실제 기사여야 한다.`;
+
+  const variants: { label: string; tools: unknown }[] = [
+    { label: "google_search", tools: [{ google_search: {} }] },
+    { label: "googleSearch", tools: [{ googleSearch: {} }] },
+    { label: "none(대조군)", tools: undefined },
+  ];
+
+  const out = [];
+  for (const v of variants) {
+    const payload: Record<string, unknown> = {
+      contents: [{ role: "user", parts: [{ text: user }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 4000 },
+    };
+    if (v.tools) payload.tools = v.tools;
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${target}:generateContent`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": key },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(90_000),
+        },
+      );
+      const body = (await res.json().catch(() => ({}))) as {
+        candidates?: Record<string, unknown>[];
+        error?: { message?: string };
+      };
+      const cand = body.candidates?.[0];
+      const gm = cand?.groundingMetadata as
+        | { webSearchQueries?: string[]; groundingChunks?: unknown[] }
+        | undefined;
+      const parts = (cand?.content as { parts?: { text?: string; thought?: boolean }[] })?.parts ?? [];
+      out.push({
+        tools: v.label,
+        httpStatus: res.status,
+        error: body.error?.message ?? null,
+        // 필드 이름이 바뀌었는지 보려고 키를 그대로 노출한다.
+        candidateKeys: cand ? Object.keys(cand) : [],
+        groundingMetadataKeys: gm ? Object.keys(gm) : [],
+        webSearchQueries: gm?.webSearchQueries ?? [],
+        groundingChunkCount: gm?.groundingChunks?.length ?? 0,
+        textPreview: parts
+          .filter((p) => !p.thought && typeof p.text === "string")
+          .map((p) => p.text)
+          .join("")
+          .slice(0, 240),
+      });
+    } catch (err) {
+      out.push({ tools: v.label, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return { model: target, today, results: out };
+}
