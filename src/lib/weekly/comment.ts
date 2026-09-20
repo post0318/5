@@ -91,12 +91,15 @@ const INPUT_DATA_DESC = `# 입력 데이터
   공식 회의 일정 전부**(각 중앙은행·Kalshi 공식 캘린더에서 실시간 조회).
 
 # 중앙은행 회의 일정 (절대 규칙)
-회의 날짜·개최 월을 언급할 때는 **centralBankMeetings 에 있는 날짜만**
-쓴다. 목록에 없는 달의 회의를 지어내지 마라 — FOMC 는 연 8회라 회의가
-아예 없는 달이 있다(실측 오류 2026-09: 10월 다음이 12월인데 "11월 추가
-인상 여부"라고 썼다). "다음 회의"를 말하려면 목록에서 그 주 이후 가장
-가까운 날짜를 찾아 그 달을 써라. 목록에 근거가 없으면 달을 특정하지 말고
-"다음 회의"처럼 뭉뚱그려 쓴다.`;
+- **앞으로 열릴 회의의 월·날짜를 직접 쓰지 마라.** "다음 회의", "차기
+  금통위"처럼만 쓰면 실제 날짜는 **코드가 괄호로 붙인다**(예: 네가 "다음
+  회의에서 결정될 전망" 이라고 쓰면 화면엔 "다음 회의(10/28)에서 결정될
+  전망" 으로 나간다). 월을 직접 쓰면 그 코멘트는 통째로 폐기된다.
+  실측 오류(2026-09): 2026년 FOMC 는 10/28 다음이 12/09 라 11월 회의가
+  없는데 "11월 추가 인상 여부가 결정될 것"이라고 썼다. FOMC 는 연 8회라
+  회의가 아예 없는 달이 있다.
+- 이미 열린 회의(리포트 주 이전)는 centralBankMeetings 의 날짜를 그대로
+  인용해도 된다 — "9월 FOMC에서 인상" 처럼.`;
 
 const MACRO_PROMPT = `# 역할
 너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이번 주 전체
@@ -757,6 +760,44 @@ function verifyMeetingMonths(raw: string, meetings: CbMeeting[], weekStart: stri
   return text;
 }
 
+/**
+ * "다음 회의" 뒤에 **실제 날짜를 코드가 붙인다**(오너 지시 2026-09-21 —
+ * "코드가 붙이게 하고"). 다음 FOMC 가 10/28 이라는 건 이미 공식 소스에서
+ * 확정해 갖고 있는 값이라 모델이 다시 추측하게 둘 이유가 없다. 스냅샷
+ * 수치를 모델에 안 맡기고 코드가 계산해 넣는 기존 원칙과 같은 방향 —
+ * 검증으로 잡는 것보다 틀릴 자리를 없애는 쪽이 확실하다.
+ *
+ * 어느 중앙은행인지는 `verifyMeetingMonths` 와 같은 방식(본문에서 가장
+ * 가까운 은행 언급)으로 정한다. 못 정하거나 일정이 없으면 그냥 둔다.
+ */
+function annotateNextMeeting(raw: string, meetings: CbMeeting[], afterDate: string): string {
+  const text = raw.trim();
+  if (!text || meetings.length === 0) return text;
+
+  const mentions: { bank: string; at: number }[] = [];
+  for (const [bank, re] of Object.entries(BANK_MENTION_RE)) {
+    for (const m of text.matchAll(new RegExp(re.source, re.flags.replace("g", "") + "g"))) {
+      mentions.push({ bank, at: m.index ?? 0 });
+    }
+  }
+  if (mentions.length === 0) return text;
+
+  const NEXT_MEETING_RE =
+    /(다음|차기|오는)\s*(회의|FOMC|금통위|금융통화위원회|정책결정회의|통화정책회의|통화정책방향\s*결정회의)/g;
+  return text.replace(NEXT_MEETING_RE, (match, ...rest) => {
+    const at = Number(rest[rest.length - 2]);
+    // 이미 날짜가 붙어 있으면(재생성분 등) 건드리지 않는다.
+    if (/^\s*\(\s*\d/.test(text.slice(at + match.length))) return match;
+    const nearest = mentions.reduce((best, m) =>
+      Math.abs(m.at - at) < Math.abs(best.at - at) ? m : best,
+    );
+    const next = meetings.find((m) => m.bank === nearest.bank && m.date > afterDate);
+    if (!next) return match;
+    const [, mo, d] = next.date.split("-");
+    return `${match}(${Number(mo)}/${Number(d)})`;
+  });
+}
+
 /** lo~hi(YYYY-MM) 구간에 해당 월이 한 번이라도 등장하는지. */
 function monthsExistInWindow(lo: string, hi: string, month: number): boolean {
   const [ly, lm] = lo.split("-").map(Number);
@@ -841,7 +882,11 @@ export async function generateWeeklyComments(
    * (반쪽만 맞는 문장을 노출하지 않는다는 기존 원칙).
    */
   const verify = (raw: string, trustGrounded: boolean): string =>
-    verifyMeetingMonths(verifyComment(raw, allowed, trustGrounded), allMeetings, week.weekStart);
+    annotateNextMeeting(
+      verifyMeetingMonths(verifyComment(raw, allowed, trustGrounded), allMeetings, week.weekStart),
+      allMeetings,
+      week.weekEnd,
+    );
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
   const sectorIds = payload.sectors.map((s) => s.id);
