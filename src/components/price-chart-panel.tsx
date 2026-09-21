@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrency, type CurrencyCode } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const AXIS_TICK = { fontSize: 10, fill: "var(--muted-foreground)" } as const;
@@ -155,7 +156,25 @@ export function PriceChartPanel({
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
         <CardTitle className="text-sm">가격 추이</CardTitle>
         <div className="flex items-center gap-1">
-          <div className="border-border flex overflow-hidden rounded-md border text-xs">
+          {/* 모바일에서만 드롭다운(오너 지시 2026-09-21) — 태블릿·PC 는
+              아래 버튼 나열형을 그대로 쓴다(구조 변경 없음). 옵션 개수가
+              7개까지 늘어날 수 있어(1개월~10년) 좁은 화면에서 가로 나열이
+              줄바꿈되며 다른 컨트롤(라인/캔들, 닫기)까지 밀어내던 문제. */}
+          <div className="sm:hidden">
+            <Select value={String(years)} onValueChange={(v) => setYears(Number(v))}>
+              <SelectTrigger size="sm" className="h-6 px-2 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {options.map((o) => (
+                  <SelectItem key={o.label} value={String(o.y)}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="border-border hidden overflow-hidden rounded-md border text-xs sm:flex">
             {options.map((o) => (
               <button
                 key={o.label}
