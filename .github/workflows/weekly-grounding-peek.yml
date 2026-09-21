@@ -1,0 +1,44 @@
+name: 주간 리포트 그라운딩 흔적 조회 (수동)
+
+# 오너 지시 2026-09-21 — "몽고db가서". 저장된 리포트의 groundingQueries /
+# groundingSources 를 읽어 "검색을 아예 안 했다"와 "검색은 했는데 출처를
+# 못 얻었다"를 구분한다. LLM 호출이 없어 비용이 없다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      week:
+        description: "조회할 주(YYYY-MM-DD, 비우면 최근 8주)"
+        required: false
+        default: ""
+
+jobs:
+  peek:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 조회
+        run: |
+          URL="https://5-topaz-five.vercel.app/api/cron/weekly-grounding-peek"
+          W="${{ github.event.inputs.week }}"
+          if [ -n "$W" ]; then URL="$URL?week=$W"; fi
+          curl -sf --max-time 60 "$URL" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" -o peek.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("peek.json"))
+          if "reports" in d:
+              for r in d["reports"]:
+                  print(f"\n[{r['weekStart']}] {r['status']} · {r['model']} · {r['generatedAt']}")
+                  print(f"  검색어 {r['queryCount']}건 / 출처 {r['sourceCount']}건")
+                  for q in r["queries"]:
+                      print(f"    검색어: {q}")
+                  for s in r["sources"]:
+                      print(f"    출처: {s.get('title')} — {s.get('uri','')[:80]}")
+          else:
+              print(json.dumps(d, ensure_ascii=False, indent=2)[:4000])
+          PY
+      - name: 원본 JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-grounding-peek
+          path: peek.json
