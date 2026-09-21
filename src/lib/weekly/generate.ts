@@ -10,6 +10,7 @@ import {
   type WeeklyReportDoc,
 } from "@/lib/db/weekly-reports";
 import { generateWeeklyComments, type WeeklyComments } from "./comment";
+import { saveWeeklyTopicCounts } from "@/lib/db/weekly-topic-counts";
 import { enrichTopIssues } from "./evidence";
 import { isGeminiConfigured } from "./gemini";
 import { buildWeeklyIssues, selectTopIssues, type WeeklyIssue } from "./issues";
@@ -227,6 +228,12 @@ export async function generateWeeklyReport(
   }
 
   const { snapshot, all, top, sectors } = await collect(week);
+  // 주제별 집계를 남긴다 — 몇 주 쌓이면 "평소 대비 배수" 정규화의 기준선이
+  // 된다(과거를 역으로 조회할 수 없어 앞으로 쌓는 방식, 오너 지시 2026-09-21).
+  // 실패해도 리포트 생성을 막지 않는다.
+  await saveWeeklyTopicCounts(week.weekStart, all).catch((err) =>
+    console.warn("[weekly] 주제 집계 저장 실패(리포트는 계속)", err),
+  );
   const llm = await tryGenerateComments(snapshot, top, week, all, sectors);
   const body = await renderWeeklyReport({ week, snapshot, issues: top, sectors, comments: llm?.comments });
 
