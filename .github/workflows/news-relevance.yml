@@ -1,0 +1,45 @@
+name: 뉴스 관련성 진단 (수동)
+
+# 오너 지시 2026-09-21 — match 정규식이 주제마다 정밀도가 달라 필터 감소율이
+# -5% ~ -100% 로 들쭉날쭉했다. 무엇이 걸러졌는지 봐야 고칠 수 있다.
+# LLM 호출이 없어 비용 0.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 진단 호출
+        run: |
+          curl -sf --max-time 300 \
+            "https://5-topaz-five.vercel.app/api/cron/news-relevance" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" -o rel.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("rel.json"))
+          print(f"주간: {d['week']['weekStart']} ~ {d['week']['weekEnd']}")
+          rows = sorted(d["topics"], key=lambda r: -(r["accepted"] + r["rejected"]))
+          print("")
+          print(f"{'주제':<24}{'통과':>6}{'탈락':>7}{'탈락률':>8}")
+          print("-" * 50)
+          for r in rows:
+              tot = r["accepted"] + r["rejected"]
+              pct = f"{r['rejected']/tot*100:.0f}%" if tot else "-"
+              print(f"{r['label']:<24}{r['accepted']:>6}{r['rejected']:>7}{pct:>8}")
+          print("")
+          print("=== 탈락 제목 표본 ===")
+          for r in rows:
+              if not r["rejectedSamples"]:
+                  continue
+              print("")
+              print(f"[{r['label']}] 탈락 {r['rejected']}건")
+              for t in r["rejectedSamples"]:
+                  print(f"   {t[:70]}")
+          PY
+      - name: 원본 JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-relevance
+          path: rel.json

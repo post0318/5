@@ -178,10 +178,10 @@ const COMPANY_BLOGS_BY_TOPIC: Record<string, string[]> = {
 
 async function countFromNews(
   week: ReportWeek,
-): Promise<Map<string, { count: number; news: IssueEvidenceNews[] }>> {
+): Promise<Map<string, { count: number; news: IssueEvidenceNews[]; rejected: string[] }>> {
   const sinceMs = Date.parse(`${week.weekStart}T00:00:00+09:00`);
   const untilMs = Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000;
-  const out = new Map<string, { count: number; news: IssueEvidenceNews[] }>();
+  const out = new Map<string, { count: number; news: IssueEvidenceNews[]; rejected: string[] }>();
 
   const results = await Promise.all(
     WEEKLY_TOPICS.map(async (t) => {
@@ -229,6 +229,7 @@ async function countFromNews(
   for (const { topic, items } of results) {
     const seen = new Set<string>();
     const fresh: IssueEvidenceNews[] = [];
+    const rejected: string[] = [];
     for (const i of items) {
       const ms = Date.parse(i.publishedAt);
       if (Number.isFinite(ms) && (ms < sinceMs || ms > untilMs)) continue;
@@ -241,13 +242,16 @@ async function countFromNews(
       //
       // **제목만 본다** — 본문 발췌까지 넣으면 긴 텍스트 어딘가에 주제어가
       // 한 번 나오는 것만으로 통과한다(기업 블로그 필터에서 겪은 그 문제).
-      if (!i.trusted && !topic.match.test(i.title)) continue;
+      if (!i.trusted && !topic.match.test(i.title)) {
+        rejected.push(i.title); // 정규식 튜닝용 — newsRelevanceReport() 가 읽는다
+        continue;
+      }
       const key = i.title.replace(/\s+/g, "").toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       fresh.push(i);
     }
-    out.set(topic.label, { count: fresh.length, news: fresh.slice(0, 5) });
+    out.set(topic.label, { count: fresh.length, news: fresh.slice(0, 5), rejected });
   }
   return out;
 }
@@ -434,4 +438,26 @@ export function selectTopIssues(all: WeeklyIssue[], n = 3): WeeklyIssue[] {
   }
 
   return picked.sort((a, b) => b.score - a.score).slice(0, n);
+}
+
+/**
+ * 관련성 정규식 튜닝용 진단(오너 지시 2026-09-21) — 주제별로 몇 건이
+ * 걸러졌는지와 **탈락한 제목 표본**을 돌려준다. 필터를 켜니 감소율이
+ * 주제마다 -5% ~ -100% 로 들쭉날쭉했는데, 그건 기사가 없어서가 아니라
+ * 정규식 정밀도가 제각각이기 때문이다. 무엇이 걸러졌는지 봐야 고칠 수 있다.
+ * LLM 을 호출하지 않아 비용이 없다.
+ */
+export async function newsRelevanceReport(week: ReportWeek): Promise<
+  { label: string; accepted: number; rejected: number; rejectedSamples: string[] }[]
+> {
+  const news = await countFromNews(week);
+  return WEEKLY_TOPICS.map((t) => {
+    const r = news.get(t.label);
+    return {
+      label: t.label,
+      accepted: r?.count ?? 0,
+      rejected: r?.rejected.length ?? 0,
+      rejectedSamples: (r?.rejected ?? []).slice(0, 12),
+    };
+  });
 }
