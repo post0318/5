@@ -91,8 +91,8 @@ jobs:
               print(f"{i+1:<4}{a:<34}{b:<34}{mark}")
 
           if excl:
-              print(f"
-[C안] 후보에서 제외: {', '.join(sorted(excl))}")
+              print("")
+              print(f"[C안] 후보에서 제외: {', '.join(sorted(excl))}")
               print(f"{'순위':<4}{'제외 전':<34}{'제외 후':<34}")
               print("-" * 76)
               for i in range(min(6, len(new_ex))):
