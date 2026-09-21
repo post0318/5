@@ -2,7 +2,7 @@ import "server-only";
 import { shinhanResearchCol } from "@/lib/db/shinhan-research";
 import { fetchCompanyBlog } from "@/lib/news/companyBlog";
 import { fetchGoogleNewsRss, googleNewsUrl } from "@/lib/news/googleNews";
-import { fetchNaverNewsSearch } from "@/lib/news/naverNews";
+import { fetchNaverNewsInRange } from "@/lib/news/naverNews";
 import { WEEKLY_TOPICS, type WeeklyTopic } from "./topics";
 import type { ReportWeek } from "./week";
 
@@ -168,7 +168,10 @@ async function countFromNews(
 
   const results = await Promise.all(
     WEEKLY_TOPICS.map(async (t) => {
-      const naverP = fetchNaverNewsSearch(t.newsQuery, { display: 20 }).catch(() => []);
+      // 최신 20건만 받으면 조회 시점 직전 몇 시간치만 들어와, 기사가 많은
+      // 주제일수록 리포트 주 밖으로 전부 밀려난다(실측 2026-09-21 — "원달러
+      // 환율" 0건). 기간이 찰 때까지 페이지를 넘겨 받는다.
+      const naverP = fetchNaverNewsInRange(t.newsQuery, sinceMs, untilMs).catch(() => []);
       const googleP = t.domestic
         ? Promise.resolve([])
         : fetchGoogleNewsRss(

@@ -88,9 +88,22 @@ jobs:
           for lab in new3 - cur3:
               print(f"  들어옴: {lab}")
 
-          print("\n원시 건수(리포트 / 뉴스 / 검색):")
-          for lab, sc, r in new[:8]:
-              print(f"  {lab:<22} {r['res']:>3} / {r['news']:>3} / {r['search'] if r['search'] is not None else '-'}")
+          # 국내 주제는 네이버만 쓰고 해외는 구글 RSS(when:7d)가 더해진다.
+          DOMESTIC = {"한국은행·국내 금리", "원달러 환율", "코스피 수급·외국인", "2차전지·전기차", "조선·방산"}
+          print("\n전 주제 원시 건수 (리포트 / 뉴스 / 검색)   [국내]=네이버만")
+          for lab, sc, r in new:
+              tag = "[국내]" if lab in DOMESTIC else "      "
+              sv = f"{r['search']:.0f}" if r["search"] is not None else "-"
+              print(f"  {tag} {lab:<22} {r['res']:>4} / {r['news']:>4} / {sv:>5}")
+
+          dom = [r for r in rows if r["label"] in DOMESTIC]
+          ovs = [r for r in rows if r["label"] not in DOMESTIC]
+          def avg(xs, k):
+              return sum(x[k] for x in xs) / len(xs) if xs else 0
+          print(f"\n뉴스 건수 평균 — 국내 {avg(dom,'news'):.1f}건 / 해외 {avg(ovs,'news'):.1f}건")
+          zero_dom = [r["label"] for r in dom if r["news"] == 0]
+          if zero_dom:
+              print(f"  뉴스 0건인 국내 주제: {', '.join(zero_dom)}")
           PY
       - name: 원본 JSON
         uses: actions/upload-artifact@v4
