@@ -44,40 +44,27 @@ function movers(rows: SnapshotRow[]): string {
 }
 
 /**
- * 오너 지시 2026-09-18 — "리서치자료와 뉴스는 근거일 뿐이다. 핵심은
- * 코멘트다." 분석(코멘트)을 제목 바로 아래 맨 앞에 문단으로 두고, 리포트·
- * 뉴스·지표·실적 목록은 그 아래 "근거"로 내린다 — 목록 나열이 먼저 보이고
- * 코멘트가 맨 끝에 한 줄 딸려오던 이전 구조를 뒤집었다.
+ * 이슈 블록 = **분석 요약**이 전부다(오너 지시 2026-09-21 — "보고서라는 것을
+ * 감안하면 불필요하다. 이슈는 분석 요약이 핵심이다. 근거 보여주기는 뺀다").
+ *
+ * 증권사 리포트 목록·뉴스 목록·집계 건수는 화면에서 뺀다. 수집·선정에는
+ * 여전히 쓰이고 LLM 입력으로도 들어가지만(분석의 재료), 발행되는 보고서에
+ * 원자료를 나열할 이유가 없다. 검수용으로는 `candidates`(후보 목록)와
+ * 화면 접힘 영역이 따로 있다.
+ *
+ * **남기는 것 둘**(오너 지시 2026-09-21):
+ *  - 최근 실적 서프라이즈 — 이슈의 핵심 숫자
+ *  - 공식 지표(FRED) — 출처가 확정된 수치
+ * 둘 다 "근거 목록"이 아니라 그 자체가 읽을 값이라 본문에 남긴다.
  */
 function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
   const lines: string[] = [];
-  const metrics = [
-    `증권사 리포트 ${issue.researchCount}건`,
-    `뉴스 ${issue.newsCount}건`,
-    issue.searchInterest != null ? `검색 관심도 ${issue.searchInterest.toFixed(0)}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
 
   lines.push(`### ${rank}. ${issue.label}`);
   lines.push("");
   lines.push(`**분석**: ${comment || "_(해석 근거 부족으로 비어 있음 — 편집기에서 직접 작성하세요)_"}`);
   lines.push("");
-  lines.push(`- 집계: ${metrics}`);
 
-  if (issue.reports.length > 0) {
-    lines.push("- 증권사 리포트");
-    for (const r of issue.reports) {
-      const name = r.stockName && r.stockName !== r.title ? `${r.stockName} — ` : "";
-      lines.push(`  - ${r.date} ${r.source}: ${name}${r.title}`);
-    }
-  }
-  if (issue.news.length > 0) {
-    lines.push("- 뉴스");
-    for (const n of issue.news) {
-      lines.push(`  - [${n.title}](${n.url}) — ${n.source} ${n.publishedAt.slice(0, 10)}`);
-    }
-  }
   if (issue.metrics && issue.metrics.length > 0) {
     lines.push("- 공식 지표(FRED)");
     for (const m of issue.metrics) {
