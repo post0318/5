@@ -102,6 +102,38 @@ jobs:
               print("")
               print(f"→ 채택 3개: {', '.join(x[0] for x in new_ex[:3])}")
 
+          # [B안] 계열(family)당 1개만 채택 — 같은 이야기의 다른 얼굴이
+          # 상위 3칸을 나눠 갖는 걸 막는다. 오너 지적: 유가와 물가는 밀접해
+          # 따로 뗄 내용이 아니다.
+          FAMILY = {
+              "물가·인플레이션": "물가·원자재", "국제유가·에너지": "물가·원자재", "금·귀금속": "물가·원자재",
+              "미국 증시·밸류에이션": "미국증시·기술", "AI·반도체 수요": "미국증시·기술",
+              "코스피 수급·외국인": "국내시장", "원달러 환율": "국내시장",
+              "2차전지·전기차": "산업", "조선·방산": "산업",
+              "관세·통상": "대외·경기", "중국 경기·부양책": "대외·경기",
+              "고용·경기": "대외·경기", "브라질 국채": "대외·경기",
+              "미국 금리·연준": "통화정책", "한국은행·국내 금리": "통화정책", "일본은행·엔화": "통화정책",
+          }
+          def pick_diverse(ranked, n=3):
+              out, used = [], set()
+              for lab, sc, r in ranked:
+                  fam = FAMILY.get(lab, lab)
+                  if fam in used:
+                      continue
+                  used.add(fam)
+                  out.append((lab, sc, fam))
+                  if len(out) == n:
+                      break
+              return out
+          print("")
+          print("[B+C안] 계열당 1개 + 중앙은행 제외")
+          for i, (lab, sc, fam) in enumerate(pick_diverse(new_ex)):
+              print(f"  {i+1}. {lab} ({sc:.3f})   [{fam}]")
+          print("")
+          print("[B안만] 계열당 1개, 중앙은행 포함")
+          for i, (lab, sc, fam) in enumerate(pick_diverse(new)):
+              print(f"  {i+1}. {lab} ({sc:.3f})   [{fam}]")
+
           cur3 = {x[0] for x in cur[:3]}
           new3 = {x[0] for x in new[:3]}
           print(f"\n상위 3개 변화: {'없음' if cur3 == new3 else ''}")
