@@ -108,6 +108,16 @@ export const WEEKLY_TOPICS: WeeklyTopic[] = [
     domestic: false,
   },
   {
+    // 오너 지시 2026-09-21 — 경기 계열에 포함. 벌크선 운임은 철광석·석탄·
+    // 곡물 같은 원자재 실물 물동량을 바로 반영해 구리와 함께 경기 선행
+    // 지표로 읽힌다. 국내 기사도 많아 네이버·구글 병행(domestic: false).
+    label: "BDI·해운운임",
+    match: /\bBDI\b|발틱운임|발틱\s*건화물|벌크선\s*운임|해상운임|컨테이너\s*운임|\bSCFI\b|\bHARPEX\b/i,
+    newsQuery: "BDI 발틱운임 해상운임",
+    trendKeywords: ["BDI", "해상운임"],
+    domestic: false,
+  },
+  {
     label: "금·귀금속",
     // "골드만삭스"가 "골드"에 걸리지 않게
     match: /금값|금\s*가격|금시세|귀금속|은값|골드(?!만)|gold price/i,
