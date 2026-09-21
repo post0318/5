@@ -349,10 +349,10 @@ export function MacroDashboard() {
             </section>
           )}
 
+          {/* section 의 space-y-3 은 왼쪽 "글로벌 시장지수" 섹션과 맞춘 값 —
+              제목과 카드 사이 간격이 다르면(2 vs 3) 제목 높이를 맞춰도 카드
+              상단이 4px 어긋난다. */}
           {q.data.fedWatch && (
-            {/* 왼쪽 "글로벌 시장지수" 섹션과 같은 space-y-3 — 제목과 카드
-                사이 간격이 다르면(2 vs 3) 제목 높이를 맞춰도 카드 상단이
-                4px 어긋난다. */}
             <section className="flex flex-col space-y-3">
               {/* 제목 · 카운트다운 · 회의 일자를 한 줄에(오너 지시 2026-09-21
                   — 변경 스크린샷). 카운트다운이 "Fed 금리 확률" 바로 옆에
@@ -368,8 +368,11 @@ export function MacroDashboard() {
                 <div className="-my-2">
                   <FedWatchCountdown targetIso={q.data.fedWatch.meetingDateTime} />
                 </div>
+                {/* "10월 FOMC" 대신 "차기 FOMC"(오너 지시 2026-09-21) — 옆에
+                    날짜가 이미 있어 월 표기는 중복이고, 회의가 지나면 달만
+                    바뀌어 무엇을 가리키는지 흐려진다. */}
                 <span className="text-muted-foreground text-xs">
-                  {q.data.fedWatch.meetingLabel} · {q.data.fedWatch.meetingDate}
+                  차기 FOMC · {q.data.fedWatch.meetingDate}
                 </span>
               </div>
               <FedWatchCard fw={q.data.fedWatch} />
