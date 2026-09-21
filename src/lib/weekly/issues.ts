@@ -52,6 +52,9 @@ export interface IssueEvidenceNews {
   publishedAt: string;
   /** 네이버 뉴스 검색 API 의 요약문(있을 때만) — 구글 뉴스 RSS 항목은 없음 */
   excerpt?: string;
+  /** 주제에 직접 매핑된 소스(기업 블로그)라 관련성 정규식 검사를 면제한다.
+   *  LLM 페이로드(buildPayload)에는 안 실린다 — 집계 단계 표시용. */
+  trusted?: boolean;
 }
 
 /** 빅테크 실적 서프라이즈 — "핵심 이슈 근거로만"(오너 지시 2026-09-18,
@@ -214,6 +217,9 @@ async function countFromNews(
           url: b.url,
           publishedAt: b.publishedAt,
           excerpt: b.excerpt ?? undefined,
+          // 기업 블로그는 주제에 직접 매핑된 소스라 아래 관련성 검사를
+          // 면제한다(영문 제목이라 한글 정규식에 안 걸리는 경우가 많다).
+          trusted: true,
         })),
       ];
       return { topic: t, items };
@@ -226,6 +232,16 @@ async function countFromNews(
     for (const i of items) {
       const ms = Date.parse(i.publishedAt);
       if (Number.isFinite(ms) && (ms < sinceMs || ms > untilMs)) continue;
+      // 관련성 검사(오너 지시 2026-09-21) — 뉴스는 검색어로 받아온 결과를
+      // 그대로 세고 있어서 주제와 무관한 기사가 섞였다(실측: "물가·인플레이션"
+      // 근거에 "코스피, 미중 정상회담·추석 앞두고 방향성 탐색", "원달러 환율"에
+      // "LG에너지솔루션 실적 개선세"). 리포트는 이미 match 정규식으로 판정
+      // 하는데 뉴스만 검증이 없었다. 뉴스 가중치를 0.6 으로 올리면서 더
+      // 중요해졌다.
+      //
+      // **제목만 본다** — 본문 발췌까지 넣으면 긴 텍스트 어딘가에 주제어가
+      // 한 번 나오는 것만으로 통과한다(기업 블로그 필터에서 겪은 그 문제).
+      if (!i.trusted && !topic.match.test(i.title)) continue;
       const key = i.title.replace(/\s+/g, "").toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
