@@ -22,7 +22,21 @@ import type { ReportWeek } from "./week";
  * 신호마다 단위가 달라(건수 vs 상대지수) 그대로 더하면 큰 쪽이 결과를 삼킨다.
  */
 
-const WEIGHT = { research: 0.5, news: 0.3, search: 0.2 } as const;
+/**
+ * 이슈 점수 가중치(오너 결정 2026-09-21, 실측 시뮬레이션 근거).
+ *
+ * 종전 0.5/0.3/0.2 는 증권사 리포트를 주 신호로 뒀는데, 리포트는 상시·후행
+ * 성격이라 "그 주의 이슈"를 못 짚었다 — 실측: AI·반도체가 리포트 143건으로
+ * 1위였지만 그중 107건이 국내 반도체였고, 그 주 보도량은 물가·유가·미국증시가
+ * 훨씬 많았다. 뉴스를 주 신호로 올린다.
+ *
+ * **검색은 0** — 네이버 데이터랩 지수는 단어의 **일상성**에 지배된다.
+ * 실측: "환율"은 그 주 뉴스 0건인데 검색 100, "물가"·"관세"·"고용"은 0.
+ * 그 주에 무슨 일이 있었나가 아니라 평소 그 단어를 얼마나 검색하나를 재고
+ * 있어 노이즈다. 절대값 대신 **직전 4주 평균 대비 변화율**로 바꾸면 사건성을
+ * 재게 되므로, 그때 비중을 다시 넣는다(미착수).
+ */
+const WEIGHT = { research: 0.4, news: 0.6, search: 0 } as const;
 
 export interface IssueEvidenceReport {
   date: string;
@@ -236,7 +250,10 @@ export async function buildWeeklyIssues(
   const [research, news, interest] = await Promise.all([
     countFromResearch(week),
     countFromNews(week),
-    fetchSearchInterest(week, WEEKLY_TOPICS).catch(() => new Map<string, number>()),
+    // 가중치가 0 이면 결과를 쓰지 않으므로 호출 자체를 건너뛴다.
+    WEIGHT.search > 0
+      ? fetchSearchInterest(week, WEEKLY_TOPICS).catch(() => new Map<string, number>())
+      : Promise.resolve(new Map<string, number>()),
   ]);
 
   const rows = WEEKLY_TOPICS.map((t: WeeklyTopic) => ({
@@ -277,4 +294,128 @@ export async function buildWeeklyIssues(
     .filter((s) => s.researchCount > 0 || s.newsCount > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, opts.top ?? 3);
+}
+
+// ── 계열(family) 기반 상위 이슈 선정 ─────────────────────────────────
+// 오너 지시 2026-09-21. 종전엔 점수 상위 3개를 그대로 썼는데 두 가지 문제가
+// 있었다.
+//  (1) 「5. 금리정책」 섹션이 이미 연준·한국은행·일본은행을 전담하는데
+//      「3. 핵심 이슈」에서 또 미국 금리·연준이 1위로 뽑혀 같은 내용이 리포트
+//      안에서 두 번 다뤄졌다 → 통화정책 계열은 후보에서 뺀다.
+//  (2) 물가·유가처럼 사실상 한 이야기인 주제가 3칸 중 2칸을 나눠 가졌다
+//      → 계열당 하나만 뽑고, 포함 관계가 뚜렷한 계열은 병합한다.
+
+/** 주제 → 계열. 여기 없는 주제는 자기 자신이 계열이 된다. */
+const TOPIC_FAMILY: Record<string, string> = {
+  "미국 금리·연준": "통화정책",
+  "한국은행·국내 금리": "통화정책",
+  "일본은행·엔화": "통화정책",
+  "물가·인플레이션": "물가·원자재",
+  "국제유가·에너지": "물가·원자재",
+  "미국 증시·밸류에이션": "미국증시·기술",
+  "AI·반도체 수요(해외)": "미국증시·기술",
+  "코스피 수급·외국인": "국내시장",
+  "국내 반도체": "국내시장",
+  "2차전지·전기차": "국내시장",
+  "조선·방산": "국내시장",
+  "관세·통상": "경기",
+  "중국 경기·부양책": "경기",
+  "고용·경기": "경기",
+  "브라질 국채": "경기",
+  "금·귀금속": "경기",
+  "원달러 환율": "경기",
+  "구리·산업금속": "경기",
+  "BDI·해운운임": "경기",
+};
+
+/** 핵심 이슈 후보에서 통째로 빼는 계열 — 전용 섹션이 따로 있다. */
+const EXCLUDED_FAMILIES = new Set(["통화정책"]);
+
+/**
+ * 병합하는 계열과 그 대표 라벨. 포함 관계가 뚜렷한 계열만 넣는다 —
+ * 물가가 유가를 품고(오너 지시: "물가가 유가를 포함해야 한다"), 미국 증시가
+ * AI·반도체를 품는다("ai 반도체는 미국증시를 움직인 하나의 요인").
+ * 「경기」는 관세·중국·금·구리·BDI 가 서로 포함 관계가 없어(금과 구리는
+ * 방향조차 반대) 병합하지 않고 점수 1위만 뽑는다.
+ */
+const MERGED_FAMILY_LABEL: Record<string, string> = {
+  "물가·원자재": "물가·인플레이션",
+  "미국증시·기술": "미국 증시·밸류에이션",
+};
+
+/** 제목 기준 중복 제거 — 같은 기사가 두 주제에 잡히는 경우가 많다. */
+function dedupeByTitle<T extends { title: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const i of items) {
+    const key = i.title.replace(/\s+/g, "").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(i);
+  }
+  return out;
+}
+
+/** 여러 주제의 근거를 번갈아 담는다 — 앞 주제가 자리를 다 차지하지 않게. */
+function interleave<T>(lists: T[][], limit: number): T[] {
+  const out: T[] = [];
+  for (let i = 0; out.length < limit; i++) {
+    let added = false;
+    for (const l of lists) {
+      if (i < l.length) {
+        out.push(l[i]);
+        added = true;
+        if (out.length >= limit) break;
+      }
+    }
+    if (!added) break;
+  }
+  return out;
+}
+
+/**
+ * 계열 규칙을 적용해 상위 n개를 고른다. `all` 은 `buildWeeklyIssues()` 가
+ * 준 **주제별** 목록(점수 내림차순)이고, 그대로 둬야 한다 — 검수용 후보
+ * 목록과 금리정책 근거(policyEvidence)가 개별 주제를 그대로 참조한다.
+ *
+ * 병합 계열의 점수는 **구성원 중 최댓값**을 쓴다. 건수를 더하면 두 주제에
+ * 동시에 잡힌 같은 기사를 두 번 세게 되는데(물가 491건·유가 492건이 대부분
+ * 같은 기사일 수 있다), 정규화가 최댓값 기준이라 그 부풀림이 순위를 그대로
+ * 뒤집는다. 최댓값은 과소평가일 수는 있어도 없는 근거를 만들지는 않는다.
+ */
+export function selectTopIssues(all: WeeklyIssue[], n = 3): WeeklyIssue[] {
+  const byFamily = new Map<string, WeeklyIssue[]>();
+  for (const issue of all) {
+    const fam = TOPIC_FAMILY[issue.label] ?? issue.label;
+    if (EXCLUDED_FAMILIES.has(fam)) continue;
+    const list = byFamily.get(fam) ?? [];
+    list.push(issue);
+    byFamily.set(fam, list);
+  }
+
+  const picked: WeeklyIssue[] = [];
+  for (const [fam, members] of byFamily) {
+    // all 이 점수 내림차순이므로 members[0] 이 그 계열의 최고 점수다.
+    const head = members[0];
+    const repLabel = MERGED_FAMILY_LABEL[fam];
+    if (!repLabel || members.length === 1) {
+      picked.push(head);
+      continue;
+    }
+    picked.push({
+      ...head,
+      label: repLabel,
+      score: head.score,
+      researchCount: Math.max(...members.map((m) => m.researchCount)),
+      newsCount: Math.max(...members.map((m) => m.newsCount)),
+      searchInterest: members.reduce<number | null>(
+        (acc, m) => (m.searchInterest == null ? acc : Math.max(acc ?? 0, m.searchInterest)),
+        null,
+      ),
+      reports: dedupeByTitle(interleave(members.map((m) => m.reports), 6)).slice(0, 3),
+      news: dedupeByTitle(interleave(members.map((m) => m.news), 10)).slice(0, 5),
+    });
+  }
+
+  return picked.sort((a, b) => b.score - a.score).slice(0, n);
 }

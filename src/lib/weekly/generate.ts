@@ -12,7 +12,7 @@ import {
 import { generateWeeklyComments, type WeeklyComments } from "./comment";
 import { enrichTopIssues } from "./evidence";
 import { isGeminiConfigured } from "./gemini";
-import { buildWeeklyIssues, type WeeklyIssue } from "./issues";
+import { buildWeeklyIssues, selectTopIssues, type WeeklyIssue } from "./issues";
 import { renderWeeklyReport } from "./render";
 import { buildWeeklySectors, type WeeklySectors } from "./sectors";
 import { buildSnapshot, fillFromPrevious } from "./snapshot";
@@ -138,7 +138,10 @@ async function collect(week: ReportWeek): Promise<{
   return {
     snapshot: fillFromPrevious(rawSnapshot, prevSnapshot),
     all,
-    top: await enrichTopIssues(all.slice(0, 3)),
+    // 계열 규칙(통화정책 제외 + 계열당 1개 + 물가·미국증시 병합)을 적용해
+    // 고른다. all 은 그대로 둔다 — 검수용 후보 목록과 금리정책 근거가
+    // 개별 주제를 참조한다.
+    top: await enrichTopIssues(selectTopIssues(all, 3)),
     sectors,
   };
 }
