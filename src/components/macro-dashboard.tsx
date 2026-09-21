@@ -315,7 +315,12 @@ export function MacroDashboard() {
           {q.data.indices.length > 0 && (
             <section className="flex flex-col space-y-3">
               <h2 className="text-sm font-semibold">글로벌 시장지수</h2>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {/* flex-1 + auto-rows-fr — 오른쪽 Fed 카드는 flex-1 로 섹션
+                  높이를 꽉 채우는데 이 칩 그리드는 내용 높이에 머물러,
+                  두 박스의 **아래쪽**이 약 10px 어긋났다(오너 지적
+                  2026-09-21, 스크린샷). 그리드가 남은 높이를 받고 두 행이
+                  그 높이를 똑같이 나눠 가지면 아래 끝이 맞는다. */}
+              <div className="grid flex-1 auto-rows-fr grid-cols-2 gap-3 sm:grid-cols-4">
                 {q.data.indices.map((ix) => (
                   <button
                     key={ix.key}
