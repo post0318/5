@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Noto_Sans_KR } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { koKR } from "@clerk/localizations";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 import { resolveAuthStateFast } from "@/lib/server/app-auth";
@@ -49,6 +50,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
         <Providers authEnabled={clerkEnabled} initialAuth={initialAuth}>
           {children}
         </Providers>
+        {/* Vercel Analytics — 방문자·페이지뷰 집계. 배포된 Vercel 프로젝트에서
+            자동 수집되고 별도 키·설정이 필요 없다. */}
+        <Analytics />
       </body>
     </html>
   );
