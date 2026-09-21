@@ -38,6 +38,7 @@ export async function GET(req: Request) {
         usage: doc.usage,
         groundingQueries: doc.sources.groundingQueries,
         groundingSources: doc.sources.groundingSources,
+        dropReasons: doc.sources.dropReasons ?? {},
       });
     }
 
@@ -55,6 +56,7 @@ export async function GET(req: Request) {
             generatedAt: 1,
             "sources.groundingQueries": 1,
             "sources.groundingSources": 1,
+            "sources.dropReasons": 1,
           },
         },
       )
@@ -70,6 +72,7 @@ export async function GET(req: Request) {
         sourceCount: d.sources?.groundingSources?.length ?? 0,
         queries: d.sources?.groundingQueries ?? [],
         sources: (d.sources?.groundingSources ?? []).slice(0, 5),
+        dropReasons: d.sources?.dropReasons ?? {},
       })),
     });
   } catch (err) {

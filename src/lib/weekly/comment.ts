@@ -70,6 +70,15 @@ export interface WeeklyComments {
    * (예: "kr-up-1", "combined-down-2"). 등락률·순위는 코드(sectors.ts)가
    * 이미 계산해 확정하고, 여기엔 "왜 그렇게 움직였는지" 코멘트만 담는다. */
   sectors: Map<string, string>;
+  /**
+   * 코멘트가 빈 채로 남은 이유(오너 지시 2026-09-21 — "폐기사유 넣으라는거").
+   * 원인 없이 "비어 있음"만 보면 검증이 걸러낸 건지, 모델이 아예 안 쓴 건지,
+   * 그라운딩이 실패한 건지 구분이 안 됐다(실측: 3개 이슈 중 1개만 코멘트가
+   * 비어 원인을 못 밝힘). 키는 "headline" | "policySummary" | "calendar" |
+   * `snapshot:${name}` | `issue:${label}` | `sector:${id}`. 값이 채워진
+   * 항목에는 키가 없다.
+   */
+  dropReasons: Map<string, string>;
 }
 
 const INPUT_DATA_DESC = `# 입력 데이터
@@ -705,12 +714,18 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
  * 못 잡는다. 범위 밖 월이나 일정을 아예 못 가져온 은행은 검증을 건너뛴다 —
  * 틀렸다고 증명할 수 없는 건 버리지 않는다.
  */
-function verifyMeetingMonths(raw: string, meetings: CbMeeting[], weekStart: string): string {
+interface VerifyResult {
+  text: string;
+  /** 폐기됐을 때만 채워진다 — 검수 화면에 그대로 노출된다. */
+  reason: string | null;
+}
+
+function verifyMeetingMonths(raw: string, meetings: CbMeeting[], weekStart: string): VerifyResult {
   const text = raw.trim();
-  if (!text || meetings.length === 0) return text;
+  if (!text || meetings.length === 0) return { text, reason: null };
 
   const base = Date.parse(`${weekStart}T00:00:00Z`);
-  if (!Number.isFinite(base)) return text;
+  if (!Number.isFinite(base)) return { text, reason: null };
   const lo = new Date(base - 90 * 86_400_000).toISOString().slice(0, 7);
   const hi = new Date(base + 455 * 86_400_000).toISOString().slice(0, 7);
 
@@ -733,7 +748,7 @@ function verifyMeetingMonths(raw: string, meetings: CbMeeting[], weekStart: stri
       mentions.push({ bank, at: m.index ?? 0 });
     }
   }
-  if (mentions.length === 0) return text;
+  if (mentions.length === 0) return { text, reason: null };
 
   // "N월" 뒤에 통화정책 행위를 가리키는 말이 붙을 때만 회의 언급으로 본다 —
   // "11월 소비자물가 발표"처럼 회의와 무관한 월까지 잡으면 오탐이 된다.
@@ -752,12 +767,11 @@ function verifyMeetingMonths(raw: string, meetings: CbMeeting[], weekStart: stri
     if (!known || known.size === 0) continue; // 그 은행 일정을 못 가져옴
     if ([...known].some((ym) => Number(ym.slice(5, 7)) === month)) continue; // 실제로 있는 달
     if (!monthsExistInWindow(lo, hi, month)) continue; // 검증 범위 밖 — 판단 보류
-    console.warn(
-      `[weekly] 코멘트 검증 실패 — ${nearest.bank} 는 ${month}월에 회의가 없음, 폐기: ${text}`,
-    );
-    return "";
+    const reason = `${nearest.bank}는 ${month}월에 회의가 없는데 코멘트가 그 달을 언급함`;
+    console.warn(`[weekly] 코멘트 검증 실패 — ${reason}, 폐기: ${text}`);
+    return { text: "", reason };
   }
-  return text;
+  return { text, reason: null };
 }
 
 /**
@@ -824,21 +838,22 @@ function stripCitations(text: string): string {
     .trim();
 }
 
-function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): string {
+function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): VerifyResult {
   const text = stripCitations(raw);
-  if (!text) return "";
-  if (trustGrounded) return text;
+  if (!text) return { text: "", reason: null };
+  if (trustGrounded) return { text, reason: null };
   for (const m of text.matchAll(CLAIM_NUM_RE)) {
     const n = Number(m[1]);
     const unit = m[2];
     const tol = unit === "bp" ? 1 : unit === "건" ? 0.5 : 0.15;
     const ok = allowed.some((a) => Math.abs(a - n) <= tol);
     if (!ok) {
-      console.warn(`[weekly] 코멘트 검증 실패 — 근거 없는 수치 "${m[0]}" 포함, 폐기: ${text}`);
-      return "";
+      const reason = `근거 없는 수치 "${m[0]}"가 포함됨(원본 데이터와 대조 실패)`;
+      console.warn(`[weekly] 코멘트 검증 실패 — ${reason}, 폐기: ${text}`);
+      return { text: "", reason };
     }
   }
-  return text;
+  return { text, reason: null };
 }
 
 /**
@@ -908,14 +923,17 @@ export async function generateWeeklyComments(
   /**
    * 검증 두 단계를 한 번에 — 수치 대조(그라운딩 성공 시 건너뜀)와 중앙은행
    * 회의 월 대조(항상 적용). 어느 쪽이든 걸리면 그 코멘트를 통째로 버린다
-   * (반쪽만 맞는 문장을 노출하지 않는다는 기존 원칙).
+   * (반쪽만 맞는 문장을 노출하지 않는다는 기존 원칙). `reason` 은 폐기됐을
+   * 때만 채워진다 — 호출부가 `dropReasons` 에 기록한다.
    */
-  const verify = (raw: string, trustGrounded: boolean): string =>
-    annotateNextMeeting(
-      verifyMeetingMonths(verifyComment(raw, allowed, trustGrounded), allMeetings, week.weekStart),
-      allMeetings,
-      week.weekEnd,
-    );
+  const verify = (raw: string, trustGrounded: boolean): VerifyResult => {
+    const step1 = verifyComment(raw, allowed, trustGrounded);
+    if (step1.reason) return step1;
+    const step2 = verifyMeetingMonths(step1.text, allMeetings, week.weekStart);
+    if (step2.reason) return step2;
+    return { text: annotateNextMeeting(step2.text, allMeetings, week.weekEnd), reason: null };
+  };
+  const dropReasons = new Map<string, string>();
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
   const sectorIds = payload.sectors.map((s) => s.id);
@@ -941,6 +959,7 @@ export async function generateWeeklyComments(
     snapshot: new Map(),
     issues: new Map(),
     sectors: new Map(),
+    dropReasons,
   };
 
   // --- 매크로(한 줄 결론·정책요약·캘린더) ---
@@ -951,9 +970,15 @@ export async function generateWeeklyComments(
       `groundingSources=${macroResult.groundingSources.length}건, trustGrounded=${macroTrustGrounded}, ` +
       `parseJson성공=${macroParsed != null}`,
   );
-  comments.headline = macroParsed?.headline
-    ? verify(macroParsed.headline, macroTrustGrounded) || null
-    : null;
+  if (macroParsed?.headline) {
+    const r = verify(macroParsed.headline, macroTrustGrounded);
+    comments.headline = r.text || null;
+    if (r.reason) dropReasons.set("headline", r.reason);
+  } else if (macroParsed) {
+    dropReasons.set("headline", "모델이 한 줄 결론을 생성하지 않음");
+  } else {
+    dropReasons.set("headline", "매크로 응답 JSON 파싱 실패");
+  }
 
   // policySummary — 날짜·기관명 등 검증 불가능한 구체적 사실을 담을 수
   // 있으므로, 그라운딩 성공 **또는** 우리가 이미 모아둔 policyEvidence
@@ -963,9 +988,19 @@ export async function generateWeeklyComments(
   // 신뢰할 수 있다). 숫자 검증은 그라운딩 여부에 따라 그대로 적용.
   const hasPolicyEvidence = payload.policyEvidence.length > 0;
   if ((macroTrustGrounded || hasPolicyEvidence) && macroParsed?.policySummary) {
-    comments.policySummary = verify(macroParsed.policySummary, macroTrustGrounded) || null;
+    const r = verify(macroParsed.policySummary, macroTrustGrounded);
+    comments.policySummary = r.text || null;
+    if (r.reason) dropReasons.set("policySummary", r.reason);
   }
   if (!comments.policySummary) {
+    const reason = !macroParsed
+      ? "매크로 응답 JSON 파싱 실패"
+      : !macroTrustGrounded && !hasPolicyEvidence
+        ? "그라운딩 실패 + 이미 확보한 근거자료(리포트·뉴스) 없음"
+        : !macroParsed.policySummary
+          ? "모델이 정책요약을 생성하지 않음"
+          : (dropReasons.get("policySummary") ?? "알 수 없는 사유");
+    dropReasons.set("policySummary", reason);
     console.warn(
       `[weekly] policySummary 미채움 — trustGrounded=${macroTrustGrounded}, hasPolicyEvidence=${hasPolicyEvidence}, parsed=${JSON.stringify(macroParsed?.policySummary ?? null)}`,
     );
@@ -1009,6 +1044,18 @@ export async function generateWeeklyComments(
     }
     comments.calendar = list.sort((a, b) => a.date.localeCompare(b.date));
   }
+  // 코드로 확정되는 fixedEvents 가 있으므로 그것까지 합친 뒤에도 비어 있을
+  // 때만 진짜 "미채움"이다.
+  if (!comments.calendar || comments.calendar.length === 0) {
+    dropReasons.set(
+      "calendar",
+      !macroParsed
+        ? "매크로 응답 JSON 파싱 실패"
+        : !macroTrustGrounded
+          ? "그라운딩 실패로 검색 기반 일정을 못 가져옴 + 코드로 확정되는 고정 일정도 이 기간엔 없음"
+          : "모델이 캘린더를 생성하지 않음 + 코드로 확정되는 고정 일정도 이 기간엔 없음",
+    );
+  }
 
   // --- 코멘트(스냅샷·이슈) ---
   const commentParsed = parseJson<CommentsOnlyResponse>(commentResult.text, "코멘트");
@@ -1025,8 +1072,9 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 스냅샷 코멘트 키 불일치 — "${rawName}" 는 알려진 자산명이 아님`);
       continue;
     }
-    const v = verify(String(text ?? ""), commentTrustGrounded);
-    if (v) comments.snapshot.set(canonical, v);
+    const r = verify(String(text ?? ""), commentTrustGrounded);
+    if (r.text) comments.snapshot.set(canonical, r.text);
+    else if (r.reason) dropReasons.set(`snapshot:${canonical}`, r.reason);
   }
   for (const [rawLabel, text] of Object.entries(commentParsed?.issues ?? {})) {
     const canonical = matchCanonical(rawLabel, issueLabels);
@@ -1034,8 +1082,9 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 이슈 코멘트 키 불일치 — "${rawLabel}" 는 알려진 이슈명이 아님`);
       continue;
     }
-    const v = verify(String(text ?? ""), commentTrustGrounded);
-    if (v) comments.issues.set(canonical, v);
+    const r = verify(String(text ?? ""), commentTrustGrounded);
+    if (r.text) comments.issues.set(canonical, r.text);
+    else if (r.reason) dropReasons.set(`issue:${canonical}`, r.reason);
   }
   for (const [rawId, text] of Object.entries(commentParsed?.sectors ?? {})) {
     // id 는 코드가 만든 단순 문자열(kr-up-1 등)이라 fuzzy 매칭 없이 정확히
@@ -1044,8 +1093,29 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 섹터 코멘트 키 불일치 — "${rawId}" 는 알려진 섹터 id 가 아님`);
       continue;
     }
-    const v = verify(String(text ?? ""), commentTrustGrounded);
-    if (v) comments.sectors.set(rawId, v);
+    const r = verify(String(text ?? ""), commentTrustGrounded);
+    if (r.text) comments.sectors.set(rawId, r.text);
+    else if (r.reason) dropReasons.set(`sector:${rawId}`, r.reason);
+  }
+
+  // 검증을 통과했든 안 했든, **모델이 애초에 그 항목을 안 쓴 경우**도
+  // "코멘트가 비어 있다"는 결과는 같다 — 이유가 없으면 검수 화면에서 왜
+  // 비었는지 알 수 없다(오너 지적 2026-09-21, 실측: 3개 이슈 중 1개만
+  // 코멘트가 비어 원인을 못 밝힘).
+  for (const name of snapshotNames) {
+    if (!comments.snapshot.has(name) && !dropReasons.has(`snapshot:${name}`)) {
+      dropReasons.set(`snapshot:${name}`, "모델이 이 항목에 대한 코멘트를 생성하지 않음");
+    }
+  }
+  for (const label of issueLabels) {
+    if (!comments.issues.has(label) && !dropReasons.has(`issue:${label}`)) {
+      dropReasons.set(`issue:${label}`, "모델이 이 항목에 대한 코멘트를 생성하지 않음");
+    }
+  }
+  for (const id of sectorIds) {
+    if (!comments.sectors.has(id) && !dropReasons.has(`sector:${id}`)) {
+      dropReasons.set(`sector:${id}`, "모델이 이 항목에 대한 코멘트를 생성하지 않음");
+    }
   }
 
   const missingIssues = issueLabels.filter((l) => !comments.issues.has(l));

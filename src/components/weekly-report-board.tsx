@@ -292,6 +292,21 @@ function ReportView({ doc, busy, onSave, onPublish, onUnpublish, onRegenerate, o
                       ))}
                     </ul>
                   )}
+                  {/* 코멘트가 빈 이유(오너 지시 2026-09-21 — "폐기사유 넣으라는거").
+                      "근거 부족" 같은 뭉뚱그린 문구 대신 검증 실패·모델 미생성·
+                      그라운딩 실패 중 실제로 무엇이었는지 항목별로 밝힌다. */}
+                  {doc.sources.dropReasons && Object.keys(doc.sources.dropReasons).length > 0 && (
+                    <div>
+                      <p className="mb-1 font-medium">비어 있는 코멘트 — 사유</p>
+                      <ul className="list-disc space-y-0.5 pl-4">
+                        {Object.entries(doc.sources.dropReasons).map(([key, reason]) => (
+                          <li key={key}>
+                            <span className="font-medium">{key}</span>: {reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   <div>
                     <p className="mb-1 font-medium">시세 스냅샷(원본)</p>
                     <table className="w-full text-left">

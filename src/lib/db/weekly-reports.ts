@@ -55,6 +55,13 @@ export interface WeeklyReportDoc {
     groundingQueries: string[];
     /** 그라운딩이 인용한 출처(제목·URL) */
     groundingSources: { title: string; uri: string }[];
+    /**
+     * 코멘트가 빈 채로 남은 이유(오너 지시 2026-09-21). 키는 comment.ts 의
+     * WeeklyComments.dropReasons 와 같다("headline" | "policySummary" |
+     * "calendar" | `snapshot:${name}` | `issue:${label}` | `sector:${id}`).
+     * Mongo 저장용으로 Map 대신 일반 객체를 쓴다.
+     */
+    dropReasons: Record<string, string>;
   };
   model: string;
   usage: {

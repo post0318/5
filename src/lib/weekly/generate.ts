@@ -80,6 +80,7 @@ type LlmOutcome = {
   usage: WeeklyReportDoc["usage"];
   groundingQueries: string[];
   groundingSources: { title: string; uri: string }[];
+  dropReasons: Record<string, string>;
 };
 
 /**
@@ -116,6 +117,7 @@ async function tryGenerateComments(
       usage: { ...out.result.usage, calls: 2 },
       groundingQueries: out.result.groundingQueries,
       groundingSources: out.result.groundingSources,
+      dropReasons: Object.fromEntries(out.comments.dropReasons),
     };
   } catch (err) {
     console.warn("[weekly] Gemini 코멘트 생성 실패 — rule-based로 폴백", err);
@@ -208,6 +210,7 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
       ...doc.sources,
       groundingQueries: llm?.groundingQueries ?? doc.sources.groundingQueries,
       groundingSources: llm?.groundingSources ?? doc.sources.groundingSources,
+      dropReasons: llm?.dropReasons ?? doc.sources.dropReasons ?? {},
     },
     updatedAt: new Date().toISOString(),
   };
@@ -258,6 +261,7 @@ export async function generateWeeklyReport(
       youtubeCount: 0,
       groundingQueries: llm?.groundingQueries ?? [],
       groundingSources: llm?.groundingSources ?? [],
+      dropReasons: llm?.dropReasons ?? {},
     },
     // Gemini 미설정/예산 초과/실패 시 rule-based 로 폴백(모델·비용 0, 스키마 호환 유지).
     model: llm?.model ?? "rule-based",

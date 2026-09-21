@@ -34,6 +34,8 @@ jobs:
                       print(f"    검색어: {q}")
                   for s in r["sources"]:
                       print(f"    출처: {s.get('title')} — {s.get('uri','')[:80]}")
+                  for key, reason in (r.get("dropReasons") or {}).items():
+                      print(f"    폐기: {key} — {reason}")
           else:
               print(json.dumps(d, ensure_ascii=False, indent=2)[:4000])
           PY
