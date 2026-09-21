@@ -63,10 +63,15 @@ export const WEEKLY_TOPICS: WeeklyTopic[] = [
     domestic: true,
   },
   {
-    label: "AI·반도체 수요",
-    match: /\bAI\b|인공지능|반도체|메모리|HBM|엔비디아|NVIDIA|TSMC|파운드리|데이터센터|하이퍼스케일러|capex/i,
-    newsQuery: "AI 반도체 수요",
-    trendKeywords: ["AI 반도체", "엔비디아", "HBM"],
+    // 해외 기업 한정(오너 지시 2026-09-21) — 국내 반도체는 아래 "국내
+    // 반도체" 주제가 맡는다. 종전엔 `반도체|메모리|HBM` 같은 일반 명사가
+    // 들어 있어 삼성전자·SK하이닉스 기사가 대거 섞였다. "무엇이 아닌가"
+    // (제외 규칙)로 정의하면 예외가 계속 생기므로 해외 고유명사 중심으로
+    // "무엇인가"를 적는다.
+    label: "AI·반도체 수요(해외)",
+    match: /엔비디아|NVIDIA|TSMC|\bAMD\b|브로드컴|Broadcom|마이크론|Micron|ASML|인텔|Intel|하이퍼스케일러|데이터센터\s*투자|AI\s*(반도체|가속기|서버|인프라)|인공지능\s*반도체/i,
+    newsQuery: "엔비디아 TSMC AI 반도체",
+    trendKeywords: ["엔비디아", "AI 반도체"],
     domestic: false,
   },
   {
@@ -82,6 +87,24 @@ export const WEEKLY_TOPICS: WeeklyTopic[] = [
     match: /유가(?!증권)|원유|WTI|브렌트|OPEC|정유|에너지\s*가격|천연가스/i,
     newsQuery: "국제유가 원유",
     trendKeywords: ["국제유가", "유가"],
+    domestic: false,
+  },
+  {
+    // 오너 지시 2026-09-21 — AI·반도체를 해외로 한정하면서 국내 반도체가
+    // 어느 주제에도 안 잡히게 되어 신설. 계열은 「국내시장」.
+    label: "국내 반도체",
+    match: /삼성전자|SK\s*하이닉스|하이닉스|메모리\s*(반도체|가격)|\bHBM\b|디램|\bDRAM\b|낸드|\bNAND\b|파운드리|국내\s*반도체|반도체\s*수출/i,
+    newsQuery: "삼성전자 SK하이닉스 반도체",
+    trendKeywords: ["삼성전자", "SK하이닉스"],
+    domestic: true,
+  },
+  {
+    // 오너 지시 2026-09-21 — 원자재 계열에 구리 등 금속 포함. 금(안전자산)과
+    // 달리 산업금속은 경기·물가에 연동돼 계열이 다르다.
+    label: "구리·산업금속",
+    match: /구리|동값|전기동|니켈|알루미늄|아연|비철금속|산업금속|copper\b/i,
+    newsQuery: "구리 가격 비철금속",
+    trendKeywords: ["구리 가격", "비철금속"],
     domestic: false,
   },
   {

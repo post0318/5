@@ -16,7 +16,7 @@ import type { IssueEvidenceEarnings, IssueEvidenceMetric, WeeklyIssue } from "./
  */
 
 const EARNINGS_TICKERS_BY_TOPIC: Record<string, string[]> = {
-  "AI·반도체 수요": ["NVDA", "TSM", "AVGO"],
+  "AI·반도체 수요(해외)": ["NVDA", "TSM", "AVGO"],
   "미국 증시·밸류에이션": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
 };
 
