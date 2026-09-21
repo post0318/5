@@ -278,29 +278,16 @@ export function MacroDashboard() {
   return (
    <TooltipProvider delayDuration={0}>
     <div className="space-y-5">
-      {/* 아래 "글로벌 시장지수 | Fed 금리 확률" 2열 그리드와 같은 gap-4
-          lg:grid-cols-2 를 써서, 오른쪽 칸(카운트다운) 시작 X 좌표가 그
-          칸의 "Fed 금리 확률 · 10월 FOMC" 텍스트 시작 위치와 맞도록 한다
-          (오너 지시 2026-09-20 — "5주를 10월 FOMC와 시작점을 맞춰줘"). */}
+      {/* 카운트다운은 아래 "Fed 금리 확률" 제목 줄로 내렸다(오너 지시
+          2026-09-21, 기존/변경 스크린샷 비교) — 페이지 헤더에 떠 있으면
+          무엇까지 남은 시간인지 맥락에서 떨어진다. 헤더는 제목과 새로고침만
+          남긴다. */}
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <div className="flex items-baseline gap-2">
           <h1 className="text-xl font-semibold">글로벌 핵심지표</h1>
           <span className="text-muted-foreground text-sm">{q.data?.asOf ?? "-"}</span>
         </div>
         <div className="flex flex-wrap items-start justify-between gap-3">
-          {q.data?.fedWatch && (
-            <div className="flex items-baseline">
-              {/* "Fed 금리 확률" 만큼의 투명 스페이서 — 카운트다운이 그 옆의
-                  "10월 FOMC" 텍스트 시작 위치에서 시작하도록(오너 지시
-                  2026-09-20 — "10월 FOMC에 맞추라고", "fed가 아니고").
-                  gap 없이 바로 붙여 살짝 더 왼쪽으로(오너 지적 — 스크린샷에
-                  화살표로 표시한 만큼만 왼쪽으로). */}
-              <h2 className="invisible text-sm font-semibold" aria-hidden="true">
-                Fed 금리 확률
-              </h2>
-              <FedWatchCountdown targetIso={q.data.fedWatch.meetingDateTime} />
-            </div>
-          )}
           <Button
             variant="outline"
             size="sm"
@@ -364,8 +351,12 @@ export function MacroDashboard() {
 
           {q.data.fedWatch && (
             <section className="flex flex-col space-y-2">
-              <div className="flex flex-wrap items-baseline gap-2">
+              {/* 제목 · 카운트다운 · 회의 일자를 한 줄에(오너 지시 2026-09-21
+                  — 변경 스크린샷). 카운트다운이 "Fed 금리 확률" 바로 옆에
+                  붙어야 무엇까지 남은 시간인지 설명이 따로 필요 없다. */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <h2 className="text-sm font-semibold">Fed 금리 확률</h2>
+                <FedWatchCountdown targetIso={q.data.fedWatch.meetingDateTime} />
                 <span className="text-muted-foreground text-xs">
                   {q.data.fedWatch.meetingLabel} · {q.data.fedWatch.meetingDate}
                 </span>
