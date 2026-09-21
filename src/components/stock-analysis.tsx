@@ -596,9 +596,10 @@ export function StockAnalysis({
                       </span>
                     )}
                   </span>
-                  <div className="text-muted-foreground mt-1 text-xs">
-                    {ov.quote?.lastDate ?? "-"} · {ov.quote?.source ?? ""}
-                  </div>
+                  {/* 출처 주석 삭제(오너 지시 2026-09-21) — "KRX 정보데이터시스템
+                      + Yahoo Finance (최신 종가 보강)" 같은 내부 폴백 설명이
+                      화면에 그대로 노출됐다. 날짜만 남긴다. */}
+                  <div className="text-muted-foreground mt-1 text-xs">{ov.quote?.lastDate ?? "-"}</div>
                 </Stat>
                 <Stat label="시가총액" className="order-3 lg:order-none">
                   <span className="text-base">

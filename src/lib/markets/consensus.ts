@@ -97,9 +97,17 @@ function closeFromBars(bars: QuoteBar[], onIso: string): number | null {
   return best;
 }
 
+/** 컨센서스 차트 X축 라벨 — 종전 "2026.12"(4자리 연도)에서 이 프로젝트가
+ * 다른 차트 축에 이미 쓰는 "YY-MM" 표기로 통일한다(오너 지시 2026-09-21;
+ * price-chart-panel.tsx·macro-dashboard.tsx 의 xTick = d.slice(2, 7) 과
+ * 같은 규칙). */
+function chartLabel(fy: number, fiscalMonth: number): string {
+  return `${String(fy).slice(2)}-${String(fiscalMonth).padStart(2, "0")}`;
+}
+
 export interface ConsensusRow {
   fy: number;
-  label: string; // "2024.12"
+  label: string; // "26-12" — 컨센서스 차트 X축 라벨
   isEstimate: boolean;
   revenue: number | null;
   revenueYoY: number | null;
@@ -226,7 +234,7 @@ export async function getConsensusData(
 
     actualRows.push({
       fy,
-      label: `${fy}.${String(fiscalMonth).padStart(2, "0")}`,
+      label: chartLabel(fy, fiscalMonth),
       isEstimate: false,
       revenue,
       revenueYoY: null,
@@ -255,7 +263,7 @@ export async function getConsensusData(
     const per = price != null && eps ? price / eps : null;
     estRows.push({
       fy,
-      label: `${fy}.${String(fiscalMonth).padStart(2, "0")}`,
+      label: chartLabel(fy, fiscalMonth),
       isEstimate: true,
       revenue: p.revenueAvg,
       revenueYoY: null,
