@@ -142,7 +142,7 @@ async function collect(week: ReportWeek): Promise<{
     // 계열 규칙(통화정책 제외 + 계열당 1개 + 물가·미국증시 병합)을 적용해
     // 고른다. all 은 그대로 둔다 — 검수용 후보 목록과 금리정책 근거가
     // 개별 주제를 참조한다.
-    top: await enrichTopIssues(selectTopIssues(all, 3)),
+    top: await enrichTopIssues(selectTopIssues(all, 3), week),
     sectors,
   };
 }
@@ -185,7 +185,7 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
     buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length }),
     buildWeeklySectors(week),
   ]);
-  const top = await enrichTopIssues(all.slice(0, 3));
+  const top = await enrichTopIssues(selectTopIssues(all, 3), week);
   const llm = await tryGenerateComments(doc.snapshot, top, week, all, sectors);
   const rendered = await renderWeeklyReport({
     week,

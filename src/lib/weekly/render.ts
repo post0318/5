@@ -62,7 +62,7 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
 
   lines.push(`### ${rank}. ${issue.label}`);
   lines.push("");
-  lines.push(`**분석**: ${comment || "_(해석 근거 부족으로 비어 있음 — 편집기에서 직접 작성하세요)_"}`);
+  lines.push(`**분석**: ${comment || "_(코멘트가 생성되지 않았습니다 — 재생성하거나 편집기에서 직접 작성하세요)_"}`);
   lines.push("");
 
   if (issue.metrics && issue.metrics.length > 0) {

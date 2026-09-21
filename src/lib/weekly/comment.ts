@@ -810,8 +810,22 @@ function monthsExistInWindow(lo: string, hi: string, month: number): boolean {
   return false;
 }
 
+/**
+ * Gemini 가 그라운딩 인용 번호를 "[0]", "[1]" 형태로 본문에 박아 넣는다.
+ * 출처 목록을 화면에 안 쓰므로 그 번호만 남아 읽는 사람에게는 의미 없는
+ * 노이즈다(오너 지적 2026-09-21 — "0은 대체 먼 의미지?"). 문장 부호 앞의
+ * 공백까지 같이 걷어낸다.
+ */
+function stripCitations(text: string): string {
+  return text
+    .replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, "")
+    .replace(/\s+([.,!?])/g, "$1")
+    .replace(/[ 	]{2,}/g, " ")
+    .trim();
+}
+
 function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): string {
-  const text = raw.trim();
+  const text = stripCitations(raw);
   if (!text) return "";
   if (trustGrounded) return text;
   for (const m of text.matchAll(CLAIM_NUM_RE)) {

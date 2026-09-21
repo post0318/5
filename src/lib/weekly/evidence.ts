@@ -2,6 +2,7 @@ import "server-only";
 import { fetchText } from "@/lib/markets/http";
 import { fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
 import type { IssueEvidenceEarnings, IssueEvidenceMetric, WeeklyIssue } from "./issues";
+import type { ReportWeek } from "./week";
 
 /**
  * 핵심 이슈 3개(선정 끝난 뒤)에 실적·공식 거시지표 근거를 덧붙인다(오너 지시
@@ -104,7 +105,21 @@ async function fetchEarningsForTickers(tickers: string[]): Promise<Map<string, I
   return out;
 }
 
-export async function enrichTopIssues(issues: WeeklyIssue[]): Promise<WeeklyIssue[]> {
+/**
+ * 실적 서프라이즈는 **그 리포트 주와 가까운 분기만** 붙인다(오너 지적
+ * 2026-09-21 — 9월 셋째 주 리포트에 2026-06-30 분기 실적이 달려 "먼소리지?").
+ *
+ * Yahoo earningsHistory 는 **분기 종료일**만 주고 발표일은 안 준다. 미국
+ * 대형주는 분기 종료 후 3~5주에 발표하므로, 종료일이 리포트 주 기준 8주
+ * 이내인 분기만 "최근 실적"으로 본다. 6/30 분기는 9/18 기준 11주 전이라
+ * 빠지고, 8월 초 리포트에서는 5주 전이라 남는다.
+ */
+const EARNINGS_MAX_AGE_DAYS = 8 * 7;
+
+export async function enrichTopIssues(
+  issues: WeeklyIssue[],
+  week: ReportWeek,
+): Promise<WeeklyIssue[]> {
   const labels = new Set(issues.map((i) => i.label));
 
   const tickerSet = new Set<string>();
@@ -129,9 +144,14 @@ export async function enrichTopIssues(issues: WeeklyIssue[]): Promise<WeeklyIssu
 
   return issues.map((issue) => {
     const tickers = EARNINGS_TICKERS_BY_TOPIC[issue.label];
+    const cutoff = Date.parse(`${week.weekEnd}T00:00:00Z`) - EARNINGS_MAX_AGE_DAYS * 86_400_000;
     const earnings = tickers
       ?.map((t) => earningsMap.get(t))
-      .filter((e): e is IssueEvidenceEarnings => e != null);
+      .filter((e): e is IssueEvidenceEarnings => e != null)
+      .filter((e) => {
+        const t = Date.parse(`${e.period}T00:00:00Z`);
+        return Number.isFinite(t) && t >= cutoff;
+      });
     const metrics = metricsByTopic.get(issue.label);
     return {
       ...issue,
