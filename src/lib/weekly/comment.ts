@@ -828,20 +828,29 @@ function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): 
 }
 
 /**
- * 매크로 호출(한 줄 결론·정책요약·캘린더)만 그라운딩 실패 시 1회 재시도
- * (오너 지시 2026-09-18 — "4,5번 개선해", 정책요약·캘린더가 그라운딩
- * 미스로 자주 빈 채 나오던 문제). 코멘트 호출은 이런 문제가 덜해 재시도
- * 안 함 — 실패해도 추가 비용만 든다. 재시도 발생분까지 usage 를 전부
- * 합산해서 돌려준다(실제로 청구된 비용이므로).
+ * 그라운딩 실패 시 1회 재시도. 원래는 매크로 호출에만 붙어 있었는데(오너
+ * 지시 2026-09-18 — 정책요약·캘린더가 그라운딩 미스로 자주 비던 문제),
+ * **두 호출 모두에 적용한다**(오너 결정 2026-09-21).
+ *
+ * "코멘트 호출은 이런 문제가 덜하다"는 원래 전제가 실측으로 깨졌다 —
+ * 2026-09-20 비교 실행에서 매크로·코멘트 양쪽 다 출처 0건이었다(같은 주
+ * 입력으로 하루 전 저장된 초안은 검색어 3건·출처 7건이었다. 즉 모델이
+ * 검색할지 말지를 실행마다 다르게 판단한다. 문서상 강제 옵션은 없다).
+ * 코멘트 쪽은 스냅샷 16개 자산의 "왜"를 채워야 해서 검색 의존도가 오히려
+ * 더 높다 — 우리가 가진 이슈 근거 3개로는 나머지 13개를 못 채운다.
+ *
+ * 재시도 발생분까지 usage 를 전부 합산해서 돌려준다(실제로 청구된 비용).
  */
-async function callMacroWithRetry(
+async function callWithGroundingRetry(
+  system: string,
   userJson: string,
+  label: string,
   modelOverride?: string,
 ): Promise<{ result: GeminiResult; attempts: GeminiResult[] }> {
   const attempts: GeminiResult[] = [];
   for (let attempt = 1; attempt <= 2; attempt++) {
     const r = await geminiGenerate({
-      system: MACRO_PROMPT,
+      system,
       model: modelOverride,
       user: userJson,
       grounding: true,
@@ -851,7 +860,7 @@ async function callMacroWithRetry(
     attempts.push(r);
     if (r.groundingSources.length > 0) break;
     if (attempt === 1) {
-      console.warn("[weekly] 매크로 호출 그라운딩 실패(정책요약·캘린더 못 채움 위험) — 1회 재시도");
+      console.warn(`[weekly] ${label} 호출 그라운딩 실패 — 1회 재시도`);
     }
   }
   return { result: attempts[attempts.length - 1], attempts };
@@ -904,18 +913,12 @@ export async function generateWeeklyComments(
   // 별도 payload 를 준다.
   const macroJson = JSON.stringify({ ...payload, sectors: undefined });
 
-  const [macroCall, commentResult] = await Promise.all([
-    callMacroWithRetry(macroJson, modelOverride),
-    geminiGenerate({
-      system: COMMENT_PROMPT,
-      model: modelOverride,
-      user: userJson,
-      grounding: true,
-      temperature: 0.25,
-      maxOutputTokens: 16_000,
-    }),
+  const [macroCall, commentCall] = await Promise.all([
+    callWithGroundingRetry(MACRO_PROMPT, macroJson, "매크로", modelOverride),
+    callWithGroundingRetry(COMMENT_PROMPT, userJson, "코멘트", modelOverride),
   ]);
   const macroResult = macroCall.result;
+  const commentResult = commentCall.result;
 
   const comments: WeeklyComments = {
     headline: null,
@@ -1038,9 +1041,11 @@ export async function generateWeeklyComments(
     );
   }
 
-  // 매크로 재시도분까지 포함해 실제 청구된 비용을 전부 합산한다(재시도로
-  // 버린 첫 응답도 돈은 이미 냈으므로 usage 에서 누락하면 안 됨).
-  const macroUsage = macroCall.attempts.reduce(
+  // 재시도분까지 포함해 실제 청구된 비용을 전부 합산한다(재시도로 버린 첫
+  // 응답도 돈은 이미 냈으므로 usage 에서 누락하면 안 됨). 이제 코멘트
+  // 호출도 재시도를 타므로 두 호출의 attempts 를 함께 센다.
+  const allAttempts = [...macroCall.attempts, ...commentCall.attempts];
+  const totalUsage = allAttempts.reduce(
     (acc, r) => ({
       inputTokens: acc.inputTokens + r.usage.inputTokens,
       outputTokens: acc.outputTokens + r.usage.outputTokens,
@@ -1049,22 +1054,15 @@ export async function generateWeeklyComments(
     }),
     { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, costUsd: 0 },
   );
-  const macroGroundingQueries = macroCall.attempts.flatMap((r) => r.groundingQueries);
-  const macroGroundingSources = macroCall.attempts.flatMap((r) => r.groundingSources);
 
   // 두 호출 결과를 하나로 합쳐서 돌려준다 — 호출부(generate.ts)는 여전히
   // "호출 하나" 인터페이스로 usage/그라운딩 출처를 저장한다.
   const mergedResult: GeminiResult = {
     text: `${macroResult.text}\n${commentResult.text}`,
     model: macroResult.model,
-    usage: {
-      inputTokens: macroUsage.inputTokens + commentResult.usage.inputTokens,
-      outputTokens: macroUsage.outputTokens + commentResult.usage.outputTokens,
-      thoughtTokens: macroUsage.thoughtTokens + commentResult.usage.thoughtTokens,
-      costUsd: macroUsage.costUsd + commentResult.usage.costUsd,
-    },
-    groundingQueries: [...macroGroundingQueries, ...commentResult.groundingQueries],
-    groundingSources: [...macroGroundingSources, ...commentResult.groundingSources],
+    usage: totalUsage,
+    groundingQueries: allAttempts.flatMap((r) => r.groundingQueries),
+    groundingSources: allAttempts.flatMap((r) => r.groundingSources),
   };
 
   return { comments, result: mergedResult };

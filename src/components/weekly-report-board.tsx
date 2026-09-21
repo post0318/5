@@ -174,6 +174,24 @@ function ReportView({ doc, busy, onSave, onPublish, onUnpublish, onRegenerate, o
                 <span className="text-muted-foreground tnum text-xs">
                   본문 {chars.toLocaleString()}자 · {doc.model} · ${doc.usage.costUsd.toFixed(3)} · 생성 {fmtDate(doc.generatedAt)}
                 </span>
+                {/* 그라운딩(웹검색) 실패 표시(오너 결정 2026-09-21) — 실패해도
+                    리포트는 그냥 나가고 아무 신호가 없어서, 코멘트가 검색
+                    근거인지 모델 내부 지식인지 검수 때 알 수 없었다. 실패는
+                    "틀린 내용"이 아니라 "빈 코멘트" 방향이지만, 재생성 한 번
+                    이면 되는 일이라 판단 근거를 화면에 남긴다. 실행마다 갈려서
+                    (실측) 재생성하면 채워질 수 있다. */}
+                {doc.sources.groundingSources.length === 0 ? (
+                  <span
+                    className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-600"
+                    title="Gemini 가 웹검색을 하지 않았거나 출처를 못 얻었습니다. 코멘트가 검색 근거 없이 작성됐을 수 있습니다 — 재생성하면 채워질 수 있습니다."
+                  >
+                    웹검색 실패
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground text-xs">
+                    웹검색 출처 {doc.sources.groundingSources.length}건
+                  </span>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 {!editing ? (
