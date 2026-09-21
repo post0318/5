@@ -190,14 +190,23 @@ export async function renderWeeklyReport(opts: {
   parts.push("");
   parts.push(sectorSection(sectors, week, sectorComments));
   parts.push("");
-  parts.push("## 5. 금리정책");
+  // "5. 경제"(오너 지시 2026-09-21 — "금리정책처럼 경제를 하나 추가하고
+  // 경기와 관련된 내용은 여기서 요약하도록 하자. 위치는 금리정책보다
+  // 앞에"). 관세·중국 경기·고용·금·구리 등 "경기" 계열 주제는 핵심 이슈
+  // 3개 경쟁에서 제외됐다(issues.ts selectTopIssues 참고) — 여기서만
+  // 다룬다.
+  parts.push("## 5. 경제");
+  parts.push("");
+  parts.push(comments?.economySummary || "이번 주 특별한 경기 관련 동향을 확인하지 못했습니다.");
+  parts.push("");
+  parts.push("## 6. 금리정책");
   parts.push("");
   // Gemini 가 그라운딩으로 종합한 정책 요약만 보여준다 — 기사 표는 더 이상
   // 안 쓴다(오너 지시 2026-09-18 — "표 필요없다구!!"). 그라운딩 실패 시
   // 표로 폴백하지 않고 짧은 안내만 남긴다.
   parts.push(comments?.policySummary || "이번 주 통화정책 요약을 확인하지 못했습니다.");
   parts.push("");
-  parts.push("## 6. 다음 주 주시 일정");
+  parts.push("## 7. 다음 주 주시 일정");
   parts.push("");
   // 날짜별 확정 이벤트 캘린더(오너 지시 2026-09-18 — "관련 기사 목록이
   // 아니라 일자별 캘린더를 원한 거다"). 예전엔 비었을 때 키워드 뉴스검색

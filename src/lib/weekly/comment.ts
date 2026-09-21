@@ -53,12 +53,23 @@ export interface WeeklyComments {
    * 원인이든 결과든 인과가 있어야". 근거가 약하면 null → 렌더링 쪽이
    * 기존 `movers()`(사실 나열)로 폴백한다. */
   headline: string | null;
-  /** "4. 금리정책" 맨 위에 붙는 종합 요약 문단(오너 지시 2026-09-18 —
+  /**
+   * "5. 경제" 요약 문단(오너 지시 2026-09-21 — "경기와 관련된 내용을
+   * 요약하도록 하자. 위치는 금리정책보다 앞에"). 관세·중국 경기·고용·
+   * 금·구리 등 "경기" 계열 주제는 서로 포함 관계가 없어(금과 구리는
+   * 방향조차 반대) 「3. 핵심 이슈」의 계열당-1개 규칙에서 거의 항상 밀린다
+   * (실측: 최고점 계열이 0.25 안팎으로 다른 계열의 0.5~0.7 대에 못 미침 —
+   * "경기는 안나오네"). 그래서 경쟁시키지 않고 전용 섹션을 둔다.
+   * economyEvidence 를 우선 활용, 그라운딩 성공 또는 그 근거가 있을 때만
+   * 채워진다 — policySummary 와 같은 신뢰 조건.
+   */
+  economySummary: string | null;
+  /** "6. 금리정책" 맨 위에 붙는 종합 요약 문단(오너 지시 2026-09-18 —
    * "네이버 AI 요약도 이 정도는 한다"). 그라운딩 성공 또는 이미 수집된
    * policyEvidence(실제 리포트·뉴스)가 있을 때 채워진다 — 둘 다 없으면
    * null → 화면이 안내 문구만 보여준다. */
   policySummary: string | null;
-  /** "5. 다음 주 주시 일정" — 날짜별 확정 이벤트 캘린더(오너 지시
+  /** "7. 다음 주 주시 일정" — 날짜별 확정 이벤트 캘린더(오너 지시
    * 2026-09-18 — "관련 기사 목록이 아니라 일자별 캘린더를 원한 거다").
    * 그라운딩 성공일 때만 채워진다 — 실패하면 null → 기존 기사 표로 폴백. */
   calendar: { date: string; event: string }[] | null;
@@ -93,6 +104,9 @@ const INPUT_DATA_DESC = `# 입력 데이터
 - policyEvidence: 미국 금리·연준/한국은행/일본은행 주제로 이미 수집된
   증권사 리포트·뉴스 근거(근거 있는 주제만 포함). policySummary 를 쓸 때
   최우선으로 활용한다.
+- economyEvidence: 관세·통상/중국 경기/고용/브라질 국채/금/원달러 환율/
+  구리 등 산업금속/BDI·해운운임 주제로 이미 수집된 증권사 리포트·뉴스
+  근거(근거 있는 주제만 포함). economySummary 를 쓸 때 최우선으로 활용한다.
 - sectors: 이번 주 한국·미국·일본 증시의 상승/하락 상위 섹터(등락률은 코드가
   이미 계산해 확정). 왜 그 섹터가 그렇게 움직였는지는 안 채워져 있다 —
   네가 웹검색으로 원인을 찾아 채운다.
@@ -112,10 +126,10 @@ const INPUT_DATA_DESC = `# 입력 데이터
 
 const MACRO_PROMPT = `# 역할
 너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이번 주 전체
-흐름을 종합해서 "한 줄 결론"·"금리정책 요약"·"다음 주 일정 캘린더"를
-쓰는 게 임무다. 리포트의 표·숫자는 이미 코드로 완성돼 있으니 다시 만들지
-않는다. 확실치 않으면 **웹검색으로 실제 사실을 확인**하고 인용해라 —
-짐작으로 채우지 마라.
+흐름을 종합해서 "한 줄 결론"·"경제 요약"·"금리정책 요약"·"다음 주 일정
+캘린더"를 쓰는 게 임무다. 리포트의 표·숫자는 이미 코드로 완성돼 있으니
+다시 만들지 않는다. 확실치 않으면 **웹검색으로 실제 사실을 확인**하고
+인용해라 — 짐작으로 채우지 마라.
 
 ${INPUT_DATA_DESC}
 
@@ -127,7 +141,17 @@ ${INPUT_DATA_DESC}
    서프라이즈발 금리 인상 우려와 유가 급등이 겹치며 위험자산은 눌리고
    원자재는 강세를 보인 한 주." 근거가 정말 없을 때만 topMovers 사실
    나열로 대체한다. 120자 내외.
-2. **policySummary** — 미국 연준(FOMC)·한국은행·일본은행의 이번 주 통화
+2. **economySummary** — 통화정책(중앙은행)을 뺀 그 외 거시경제 동향
+   종합. 대상: 관세·통상, 중국 경기·부양책, 고용지표, 브라질 국채,
+   금 가격, 원달러 환율, 구리 등 산업금속, BDI·해운운임. **economyEvidence
+   의 근거를 최우선으로 활용**하고, 부족한 부분만 웹검색으로 보강해라.
+   이 항목들은 서로 인과관계가 뚜렷하지 않은 개별 신호(금은 안전자산
+   수요, 구리·BDI는 경기 선행지표, 원달러는 환율 그 자체)라 **주제별로
+   줄을 바꿔라** — policySummary 와 같은 원칙. 마크다운 리스트로
+   "- 관세·통상: ...", "- 원달러 환율: ...", "- 금값: ..." 처럼 그 주에
+   실제 움직임·소식이 있던 주제만 한 줄씩(각 1~2문장) 쓴다. 아무 주제도
+   특별한 움직임이 없으면 null 로 남긴다(억지로 채우지 마라).
+3. **policySummary** — 미국 연준(FOMC)·한국은행·일본은행의 이번 주 통화
    정책 동향. **policyEvidence 의 근거를 최우선으로 활용**하고, 부족한
    부분만 웹검색으로 보강해라. 단순 기사 나열이 아니라 "그 중앙은행이
    이번 주 무엇을 했거나 시사했는지, 시장이 어떻게 반응했는지"를
@@ -139,7 +163,7 @@ ${INPUT_DATA_DESC}
    전혀 없으면 그 줄은 통째로 뺀다(세 줄을 억지로 채우지 마라).
    policyEvidence 에도 없고 웹검색으로도 확인 안 되는 은행만 아는 범위
    까지 쓰고, 셋 다 없으면 null 로 남긴다.
-3. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. "관련
+4. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. "관련
    기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
    예정된 이벤트를 날짜별로 확인해서 적는다. 대상: 중앙은행 회의·주요
    경제지표 발표일·옵션선물 동시만기일 같은 거시·시장 이벤트 **더하여
@@ -156,15 +180,15 @@ ${INPUT_DATA_DESC}
    휴장일은 이미 코드가 따로 채우니 몰라도 괜찮다). 각 항목은
    {"date": "YYYY-MM-DD", "event": "그 날 있는 일정, 15자 내외"} 형식,
    nextWeek 범위를 벗어나는 날짜는 넣지 않는다. 날짜 오름차순 정렬.
-4. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치를 쓸 때는
+5. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치를 쓸 때는
    **실제 웹검색으로 확인한 것만** 쓴다 — 확인 안 되면 수치 없이
    정성적으로만 서술한다.
-5. 간결한 애널리스트 어조(~음/~함 체). 미사여구·감탄사·전망 단정
+6. 간결한 애널리스트 어조(~음/~함 체). 미사여구·감탄사·전망 단정
    ("반드시", "확실히") 금지.
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
-{"headline": "한 줄 결론", "policySummary": "정책 요약 또는 null", "calendar": [{"date": "YYYY-MM-DD", "event": "..."}]}`;
+{"headline": "한 줄 결론", "economySummary": "경제 요약 또는 null", "policySummary": "정책 요약 또는 null", "calendar": [{"date": "YYYY-MM-DD", "event": "..."}]}`;
 
 const COMMENT_PROMPT = `# 역할
 너는 국내 자산운용사 소속 시니어 매크로·주식 애널리스트다. 이미 집계된
@@ -251,6 +275,14 @@ interface CommentPayload {
    * 없다는게 더 이상하다": 매번 실시간 검색에만 기대지 않고 이미 모아둔
    * 근거로 신뢰도를 높인다). 근거가 없는 주제는 빠진다. */
   policyEvidence: {
+    label: string;
+    reports: { date: string; source: string; stockName: string; title: string }[];
+    news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+  }[];
+  /** "경기" 계열(관세·중국 경기·고용·브라질 국채·금·원달러·구리·BDI) 근거 —
+   * policyEvidence 와 같은 구조·같은 이유(오너 지시 2026-09-21, "5. 경제"
+   * 섹션 신설). 근거가 없는 주제는 빠진다. */
+  economyEvidence: {
     label: string;
     reports: { date: string; source: string; stockName: string; title: string }[];
     news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
@@ -470,6 +502,19 @@ async function computeFixedCalendarEvents(
 /** issues.ts WEEKLY_TOPICS 의 정확한 라벨과 일치해야 한다. */
 const POLICY_TOPIC_LABELS = ["미국 금리·연준", "한국은행·국내 금리", "일본은행·엔화"];
 
+/** issues.ts 의 TOPIC_FAMILY 에서 "경기" 계열로 묶인 라벨과 정확히
+ * 일치해야 한다(오너 지시 2026-09-21, "5. 경제" 섹션 신설). */
+const ECONOMY_TOPIC_LABELS = [
+  "관세·통상",
+  "중국 경기·부양책",
+  "고용·경기",
+  "브라질 국채",
+  "금·귀금속",
+  "원달러 환율",
+  "구리·산업금속",
+  "BDI·해운운임",
+];
+
 const MARKET_LABEL: Record<string, string> = {
   "kr-kospi": "코스피",
   "kr-kosdaq": "코스닥",
@@ -526,11 +571,25 @@ function buildPayload(
       })),
     };
   }).filter((p) => p.reports.length > 0 || p.news.length > 0);
+  const economyEvidence = ECONOMY_TOPIC_LABELS.map((label) => {
+    const found = allIssues.find((i) => i.label === label);
+    return {
+      label,
+      reports: (found?.reports ?? []).map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
+      news: (found?.news ?? []).map((n) => ({
+        title: n.title,
+        excerpt: n.excerpt,
+        source: n.source,
+        publishedAt: n.publishedAt,
+      })),
+    };
+  }).filter((p) => p.reports.length > 0 || p.news.length > 0);
   return {
     reportWeek: { start: week.weekStart, end: week.weekEnd },
     nextWeek: { start: nextStart, end: nextEnd },
     topMovers: computeTopMovers(snapshot),
     policyEvidence,
+    economyEvidence,
     // 리포트 주 시작일 기준 — 그 주에 열린 회의도 "이번 주 무슨 일이
     // 있었는지" 서술에 필요하므로 nextWeek 이 아니라 weekStart 부터.
     centralBankMeetings: meetings,
@@ -579,6 +638,7 @@ function buildPayload(
 
 interface MacroResponse {
   headline?: string;
+  economySummary?: string;
   policySummary?: string;
   calendar?: { date?: string; event?: string }[];
 }
@@ -954,6 +1014,7 @@ export async function generateWeeklyComments(
 
   const comments: WeeklyComments = {
     headline: null,
+    economySummary: null,
     policySummary: null,
     calendar: null,
     snapshot: new Map(),
@@ -978,6 +1039,29 @@ export async function generateWeeklyComments(
     dropReasons.set("headline", "모델이 한 줄 결론을 생성하지 않음");
   } else {
     dropReasons.set("headline", "매크로 응답 JSON 파싱 실패");
+  }
+
+  // economySummary — policySummary 와 같은 신뢰 조건(그라운딩 성공 또는
+  // 이미 모아둔 economyEvidence 가 있을 때만)(오너 지시 2026-09-21 —
+  // "경기와 관련된 내용은 여기서 요약하도록 하자").
+  const hasEconomyEvidence = payload.economyEvidence.length > 0;
+  if ((macroTrustGrounded || hasEconomyEvidence) && macroParsed?.economySummary) {
+    const r = verify(macroParsed.economySummary, macroTrustGrounded);
+    comments.economySummary = r.text || null;
+    if (r.reason) dropReasons.set("economySummary", r.reason);
+  }
+  if (!comments.economySummary) {
+    const reason = !macroParsed
+      ? "매크로 응답 JSON 파싱 실패"
+      : !macroTrustGrounded && !hasEconomyEvidence
+        ? "그라운딩 실패 + 이미 확보한 근거자료(리포트·뉴스) 없음"
+        : !macroParsed.economySummary
+          ? "모델이 경제 요약을 생성하지 않음(또는 특별한 움직임 없음)"
+          : (dropReasons.get("economySummary") ?? "알 수 없는 사유");
+    dropReasons.set("economySummary", reason);
+    console.warn(
+      `[weekly] economySummary 미채움 — trustGrounded=${macroTrustGrounded}, hasEconomyEvidence=${hasEconomyEvidence}, parsed=${JSON.stringify(macroParsed?.economySummary ?? null)}`,
+    );
   }
 
   // policySummary — 날짜·기관명 등 검증 불가능한 구체적 사실을 담을 수
