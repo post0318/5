@@ -100,46 +100,43 @@ function sectorPctCell(s: SectorHighlight, week: ReportWeek): string {
 }
 
 /** 섹터 한 그룹(상승/하락 최대 2개씩)을 표로. 데이터가 없으면 안내 문구만. */
-/**
- * 섹터는 **표 하나**로 낸다(오너 지시 2026-09-21 — 1번안). 종전엔 시장마다
- * 표를 따로 그렸는데, 마크다운 표는 각자 내용에 맞춰 폭이 정해져서 다섯
- * 표의 "구분·섹터·등락률" 열 너비가 서로 안 맞았다(오너 지적 두 차례).
- * 한 표로 합치면 폭 불일치가 구조적으로 사라진다 — 대신 시장별 소제목이
- * 없어져 "시장" 열로 구분한다.
- */
-function sectorSection(sectors: WeeklySectors, week: ReportWeek, comments: Map<string, string>): string {
-  const groups: [string, SectorHighlight[], SectorHighlight[]][] = [
-    ["코스피", sectors.kospi.up, sectors.kospi.down],
-    ["코스닥", sectors.kosdaq.up, sectors.kosdaq.down],
-    ["미국", sectors.us.up, sectors.us.down],
-    ["일본", sectors.jp.up, sectors.jp.down],
-    ["유럽", sectors.eu.up, sectors.eu.down],
-  ];
-  const parts = [
-    "_전주 금요일 종가 대비 당주 금요일 종가 기준, 시장별 상승·하락 상위 섹터입니다._",
-    "",
-  ];
-  const rows: string[] = [];
-  for (const [market, up, down] of groups) {
-    for (const s of up) rows.push(sectorRow(market, "상승", s, week, comments));
-    for (const s of down) rows.push(sectorRow(market, "하락", s, week, comments));
-  }
-  if (rows.length === 0) {
-    parts.push("_이번 주 집계된 섹터 데이터가 없습니다._");
-    return parts.join("\n");
-  }
-  parts.push("| 시장 | 구분 | 섹터 | 등락률 | 코멘트 |", "|---|---|---|---:|---|", ...rows);
-  return parts.join("\n");
-}
-
-function sectorRow(
-  market: string,
-  dir: string,
-  s: SectorHighlight,
+function sectorGroupTable(
+  title: string,
+  up: SectorHighlight[],
+  down: SectorHighlight[],
   week: ReportWeek,
   comments: Map<string, string>,
 ): string {
-  return `| ${market} | ${dir} | ${tableCell(s.label)} | ${sectorPctCell(s, week)} | ${tableCell(comments.get(s.id) ?? "")} |`;
+  const lines: string[] = [`### ${title}`, ""];
+  if (up.length === 0 && down.length === 0) {
+    lines.push("_이번 주 집계된 섹터 데이터가 없습니다._");
+    return lines.join("\n");
+  }
+  lines.push("| 구분 | 섹터 | 등락률 | 코멘트 |", "|---|---|---:|---|");
+  for (const s of up) {
+    lines.push(`| 상승 | ${tableCell(s.label)} | ${sectorPctCell(s, week)} | ${tableCell(comments.get(s.id) ?? "")} |`);
+  }
+  for (const s of down) {
+    lines.push(`| 하락 | ${tableCell(s.label)} | ${sectorPctCell(s, week)} | ${tableCell(comments.get(s.id) ?? "")} |`);
+  }
+  return lines.join("\n");
+}
+
+function sectorSection(sectors: WeeklySectors, week: ReportWeek, comments: Map<string, string>): string {
+  const parts = [
+    "_전주 금요일 종가 대비 당주 금요일 종가 기준, 시장별 상승·하락 상위 섹터입니다._",
+    "",
+    sectorGroupTable("코스피", sectors.kospi.up, sectors.kospi.down, week, comments),
+    "",
+    sectorGroupTable("코스닥", sectors.kosdaq.up, sectors.kosdaq.down, week, comments),
+    "",
+    sectorGroupTable("미국", sectors.us.up, sectors.us.down, week, comments),
+    "",
+    sectorGroupTable("일본", sectors.jp.up, sectors.jp.down, week, comments),
+    "",
+    sectorGroupTable("유럽", sectors.eu.up, sectors.eu.down, week, comments),
+  ];
+  return parts.join("\n");
 }
 
 export async function renderWeeklyReport(opts: {
