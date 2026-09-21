@@ -1,0 +1,99 @@
+name: 핵심이슈 가중치 시뮬레이션 (수동)
+
+# 오너 제안 2026-09-21 — 리포트 0.5/뉴스 0.3/트렌드 0.2 를
+# 0.3/0.4/0.3 으로 바꾸면 어떤가. 의견 대신 실제 데이터로 확인한다.
+# preview 는 LLM 을 호출하지 않아 비용이 0 이다(저장도 안 한다).
+
+on:
+  workflow_dispatch:
+    inputs:
+      weights:
+        description: "비교할 가중치 research,news,search (쉼표 구분)"
+        required: false
+        default: "0.3,0.4,0.3"
+
+jobs:
+  sim:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 입력 미리보기 받기 (비용 0)
+        run: |
+          curl -sf --max-time 330 -X POST \
+            "https://5-topaz-five.vercel.app/api/cron/weekly-report" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "content-type: application/json" \
+            -d '{"preview":true}' -o preview.json
+          echo "WEIGHTS=${{ github.event.inputs.weights || '0.3,0.4,0.3' }}" >> $GITHUB_ENV
+      - name: 두 가중치로 순위 비교
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          d = json.load(open("preview.json"))
+          print(f"주간: {d['week']['weekStart']} ~ {d['week']['weekEnd']}\n")
+
+          # candidates 텍스트에서 주제별 원시 건수를 뽑는다
+          # 예: "- [채택] AI·반도체 수요 — 리포트 12건 · 뉴스 30건 · 검색 55 (점수 0.812)"
+          rows = []
+          for line in d["candidates"].splitlines():
+              m = re.search(r"-\s*(?:\[채택\]\s*)?(.+?)\s*—\s*리포트\s*(\d+)건\s*·\s*뉴스\s*(\d+)건(?:\s*·\s*검색\s*([\d.]+))?", line)
+              if m:
+                  rows.append({
+                      "label": m.group(1).strip(),
+                      "res": int(m.group(2)),
+                      "news": int(m.group(3)),
+                      "search": float(m.group(4)) if m.group(4) else None,
+                  })
+          if not rows:
+              print("candidates 파싱 실패 — 원문 앞부분:")
+              print(d["candidates"][:800]); raise SystemExit(0)
+
+          def normalize(vals):
+              mx = max(vals) or 1
+              return [v / mx for v in vals]
+
+          has_search = any(r["search"] is not None for r in rows)
+          nres = normalize([r["res"] for r in rows])
+          nnews = normalize([r["news"] for r in rows])
+          nsearch = normalize([r["search"] or 0 for r in rows])
+
+          def rank(wr, wn, ws):
+              if not has_search:      # issues.ts 와 같은 비례 배분
+                  tot = wr + wn
+                  wr, wn, ws = wr / tot, wn / tot, 0.0
+              scored = [
+                  (r["label"], nres[i] * wr + nnews[i] * wn + nsearch[i] * ws, r)
+                  for i, r in enumerate(rows)
+                  if r["res"] > 0 or r["news"] > 0
+              ]
+              return sorted(scored, key=lambda x: -x[1])
+
+          cur = rank(0.5, 0.3, 0.2)
+          wr, wn, ws = [float(x) for x in os.environ["WEIGHTS"].split(",")]
+          new = rank(wr, wn, ws)
+
+          print(f"검색 트렌드 사용 여부: {'O' if has_search else 'X (그 몫을 리포트·뉴스로 비례 배분)'}\n")
+          print(f"{'순위':<4}{'현재 0.5/0.3/0.2':<34}{f'제안 {wr}/{wn}/{ws}':<34}")
+          print("-" * 76)
+          for i in range(min(6, len(cur))):
+              a = f"{cur[i][0]} ({cur[i][1]:.3f})"
+              b = f"{new[i][0]} ({new[i][1]:.3f})"
+              mark = "  " if cur[i][0] == new[i][0] else "<<"
+              print(f"{i+1:<4}{a:<34}{b:<34}{mark}")
+
+          cur3 = {x[0] for x in cur[:3]}
+          new3 = {x[0] for x in new[:3]}
+          print(f"\n상위 3개 변화: {'없음' if cur3 == new3 else ''}")
+          for lab in cur3 - new3:
+              print(f"  빠짐: {lab}")
+          for lab in new3 - cur3:
+              print(f"  들어옴: {lab}")
+
+          print("\n원시 건수(리포트 / 뉴스 / 검색):")
+          for lab, sc, r in new[:8]:
+              print(f"  {lab:<22} {r['res']:>3} / {r['news']:>3} / {r['search'] if r['search'] is not None else '-'}")
+          PY
+      - name: 원본 JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-weight-sim
+          path: preview.json
