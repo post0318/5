@@ -23,6 +23,29 @@ import { getKrDaDoc } from "@/lib/db/kr-da";
 
 export const maxDuration = 60;
 
+/**
+ * 이 라우트 응답은 캐시하지 않는다(오너 지적 2026-09-21 — "재무제표 분기
+ * 총괄조회시 캐쉬가 모일때까지 과거 변경전 레이아웃이 노출된다. 레이아웃은
+ * 캐쉬랑 조회시간 여부 무관하게 변경된 버전이 나와야한다").
+ *
+ * 원인: 응답에 `Cache-Control: s-maxage=1800, stale-while-revalidate=86400`
+ * 이 붙어 있어 Vercel CDN 이 이 URL(symbol·period·view 조합)의 응답 **본문**을
+ * 최대 30분은 그대로, 그 뒤 24시간은 "일단 예전 걸 내주고 뒤에서 갱신"
+ * 방식으로 캐시했다. 이 캐시는 **배포와 무관하게 URL 기준으로 유지**된다 —
+ * buildKrSummary/buildUsSummary 같은 레이아웃 생성 코드를 고쳐 배포해도,
+ * 배포 전에 이미 캐시된 URL 은 그 예전 코드가 만든 JSON 을 그대로 계속
+ * 내려준다. "캐쉬가 모일 때까지"는 그 캐시가 자연 만료(최대 24.5시간)될
+ * 때까지를 뜻했다.
+ *
+ * 이 응답을 만드는 build*(...) 변환 자체는 가벼운 동기 연산이고, 실제
+ * 무거운 외부 호출(SEC EDGAR·OpenDART 원본 조회)은 각 모듈이 자체적으로
+ * Next.js fetch revalidate 로 이미 캐시한다(예: edgar.ts, dart-facts.ts) —
+ * 그쪽은 원본 데이터가 바뀔 때만 갱신하면 되므로 그대로 둔다. 이 라우트가
+ * 캐시를 끄는 건 "완성된 응답 모양(레이아웃)"이 배포 시점과 어긋나는 걸
+ * 막기 위해서다.
+ */
+const NO_CACHE = { "Cache-Control": "no-store" };
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ market: string; symbol: string }> },
@@ -79,9 +102,7 @@ export async function GET(
           daDoc: daDoc ?? null,
         });
         stmt.symbol = sym;
-        return ok(stmt, {
-          headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },
-        });
+        return ok(stmt, { headers: NO_CACHE });
       }
 
       const [facts, daDoc] = await Promise.all([
@@ -102,9 +123,7 @@ export async function GET(
               ? buildKrBalance(facts)
               : buildKrSummary(facts, daDoc);
       stmt.symbol = sym;
-      return ok(stmt, {
-        headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },
-      });
+      return ok(stmt, { headers: NO_CACHE });
     }
 
     if (market === "us" && isDetail) {
@@ -143,17 +162,11 @@ export async function GET(
                 ? buildUsSummary(facts, period, { sharesHint, classFacts, sic })
                 : buildUsAnalysis(facts, quote?.bars ?? [], { sharesHint, classFacts, sic });
       stmt.symbol = sym;
-      return ok(stmt, {
-        headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" },
-      });
+      return ok(stmt, { headers: NO_CACHE });
     }
 
     const statement = await adapter.getFinancials(sym, period);
-    return ok(statement, {
-      headers: {
-        "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400",
-      },
-    });
+    return ok(statement, { headers: NO_CACHE });
   } catch (err) {
     return jsonError(err);
   }
