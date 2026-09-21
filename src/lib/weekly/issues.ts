@@ -178,6 +178,7 @@ const COMPANY_BLOGS_BY_TOPIC: Record<string, string[]> = {
 
 async function countFromNews(
   week: ReportWeek,
+  opts: { maxPages?: number } = {},
 ): Promise<Map<string, { count: number; news: IssueEvidenceNews[]; rejected: string[] }>> {
   const sinceMs = Date.parse(`${week.weekStart}T00:00:00+09:00`);
   const untilMs = Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000;
@@ -188,7 +189,9 @@ async function countFromNews(
       // 최신 20건만 받으면 조회 시점 직전 몇 시간치만 들어와, 기사가 많은
       // 주제일수록 리포트 주 밖으로 전부 밀려난다(실측 2026-09-21 — "원달러
       // 환율" 0건). 기간이 찰 때까지 페이지를 넘겨 받는다.
-      const naverP = fetchNaverNewsInRange(t.newsQuery, sinceMs, untilMs).catch(() => []);
+      const naverP = fetchNaverNewsInRange(t.newsQuery, sinceMs, untilMs, {
+        maxPages: opts.maxPages,
+      }).catch(() => []);
       const googleP = t.domestic
         ? Promise.resolve([])
         : fetchGoogleNewsRss(
@@ -458,6 +461,69 @@ export async function newsRelevanceReport(week: ReportWeek): Promise<
       accepted: r?.count ?? 0,
       rejected: r?.rejected.length ?? 0,
       rejectedSamples: (r?.rejected ?? []).slice(0, 12),
+    };
+  });
+}
+
+// ── 정규화 방식 비교 시뮬레이션 ──────────────────────────────────────
+/**
+ * 오너 지시 2026-09-21 — "정규화 개선을 했을 때 시뮬레이션도 확인해줘".
+ *
+ * 현재는 주제별 건수를 **전 주제 최댓값**으로 나눈다. 그러면 검색어가
+ * 원래 많은 기사를 가져오는 주제가 항상 유리하다 — 실측: 미국 금리 319건 /
+ * 고용·경기 4건 이라 고용은 점수가 0.01 수준이라 영구 배제된다. 기사량
+ * 차이는 그 주에 무슨 일이 있었나가 아니라 검색어가 주는 양의 차이다.
+ *
+ * 대안: **그 주제의 평소 건수 대비 배수**로 바꾼다(직전 N주 평균 기준).
+ * 평소 4건 나오던 주제가 12건이면 3배 — 평소 300건이 310건인 주제보다
+ * 그 주에 실제로 튄 것이다. 검색 트렌드를 변화율로 바꾸자고 한 것과 같은 원리.
+ *
+ * 과거 주는 기준선 계산용이라 페이지를 2장으로 줄여 호출을 아낀다
+ * (그 주의 정확한 총량이 아니라 평소 수준만 알면 된다).
+ */
+export async function normalizationSim(
+  week: ReportWeek,
+  lookbackWeeks = 3,
+): Promise<{
+  label: string;
+  current: { research: number; news: number };
+  baseline: { research: number; news: number };
+  ratio: { research: number; news: number };
+}[]> {
+  const DAY = 86_400_000;
+  const priorWeeks: ReportWeek[] = [];
+  for (let i = 1; i <= lookbackWeeks; i++) {
+    const shift = i * 7 * DAY;
+    const iso = (d: string) => new Date(Date.parse(`${d}T00:00:00Z`) - shift).toISOString().slice(0, 10);
+    priorWeeks.push({
+      weekStart: iso(week.weekStart),
+      weekEnd: iso(week.weekEnd),
+      baseFriday: iso(week.baseFriday),
+      today: week.today,
+    });
+  }
+
+  const [curRes, curNews] = await Promise.all([countFromResearch(week), countFromNews(week)]);
+  const priors: { research: Awaited<ReturnType<typeof countFromResearch>>; news: Awaited<ReturnType<typeof countFromNews>> }[] = [];
+  for (const w of priorWeeks) {
+    // 순차 실행 — 동시에 때리면 네이버 레이트리밋에 걸린다.
+    priors.push({
+      research: await countFromResearch(w),
+      news: await countFromNews(w, { maxPages: 2 }),
+    });
+  }
+
+  return WEEKLY_TOPICS.map((t) => {
+    const cR = curRes.get(t.label)?.count ?? 0;
+    const cN = curNews.get(t.label)?.count ?? 0;
+    const bR = priors.reduce((s, p) => s + (p.research.get(t.label)?.count ?? 0), 0) / priors.length;
+    const bN = priors.reduce((s, p) => s + (p.news.get(t.label)?.count ?? 0), 0) / priors.length;
+    return {
+      label: t.label,
+      current: { research: cR, news: cN },
+      baseline: { research: bR, news: bN },
+      // 기준선이 0 이면 배수를 못 내므로 1 로 바닥을 깐다(신규 주제 보호).
+      ratio: { research: cR / Math.max(bR, 1), news: cN / Math.max(bN, 1) },
     };
   });
 }

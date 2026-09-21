@@ -1,0 +1,87 @@
+name: 정규화 방식 비교 (수동)
+
+# 오너 지시 2026-09-21 — 현재는 전 주제 최댓값으로 나눠 기사량이 원래 많은
+# 주제가 항상 유리하다(미국 금리 319건 vs 고용·경기 4건). "평소 대비 배수"로
+# 바꾸면 순위가 어떻게 달라지는지 본다. LLM 호출 없어 비용 0.
+
+on:
+  workflow_dispatch:
+    inputs:
+      weeks:
+        description: "기준선으로 쓸 직전 주 수"
+        required: false
+        default: "3"
+
+jobs:
+  sim:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 조회
+        run: |
+          W="${{ github.event.inputs.weeks || '3' }}"
+          curl -sf --max-time 600 \
+            "https://5-topaz-five.vercel.app/api/cron/normalize-sim?weeks=$W" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" -o norm.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("norm.json"))
+          rows = d["rows"]
+          print(f"주간: {d['week']['weekStart']} ~ {d['week']['weekEnd']}")
+
+          EXCL = {"미국 금리·연준", "한국은행·국내 금리", "일본은행·엔화"}
+          FAM = {
+            "물가·인플레이션": "물가·원자재", "국제유가·에너지": "물가·원자재",
+            "미국 증시·밸류에이션": "미국증시·기술", "AI·반도체 수요(해외)": "미국증시·기술",
+            "코스피 수급·외국인": "국내시장", "국내 반도체": "국내시장",
+            "2차전지·전기차": "국내시장", "조선·방산": "국내시장",
+          }
+          REP = {"물가·원자재": "물가·인플레이션", "미국증시·기술": "미국 증시·밸류에이션"}
+
+          def norm(vals):
+              mx = max(vals) or 1
+              return [v / mx for v in vals]
+
+          def rank(res_vals, news_vals):
+              nr, nn = norm(res_vals), norm(news_vals)
+              out = [(rows[i]["label"], nr[i] * 0.4 + nn[i] * 0.6) for i in range(len(rows))]
+              return sorted(out, key=lambda x: -x[1])
+
+          cur = rank([r["current"]["research"] for r in rows], [r["current"]["news"] for r in rows])
+          new = rank([r["ratio"]["research"] for r in rows], [r["ratio"]["news"] for r in rows])
+
+          def pick(ranked, n=3):
+              out, used = [], set()
+              for lab, sc in ranked:
+                  fam = FAM.get(lab, lab)
+                  if fam in EXCL or lab in EXCL or fam in used:
+                      continue
+                  used.add(fam)
+                  out.append((REP.get(fam, lab), sc))
+                  if len(out) == n:
+                      break
+              return out
+
+          print("")
+          print(f"{'순위':<4}{'현재 방식(최댓값 기준)':<36}{'개선안(평소 대비 배수)':<36}")
+          print("-" * 78)
+          for i in range(8):
+              a = f"{cur[i][0]} ({cur[i][1]:.3f})"
+              b = f"{new[i][0]} ({new[i][1]:.3f})"
+              print(f"{i+1:<4}{a:<36}{b:<36}")
+
+          print("")
+          print("계열 규칙 적용 후 채택 3개")
+          print(f"  현재 방식: {', '.join(l for l, _ in pick(cur))}")
+          print(f"  개선안  : {', '.join(l for l, _ in pick(new))}")
+
+          print("")
+          print(f"{'주제':<22}{'이번주':>8}{'평소':>8}{'배수':>7}")
+          print("-" * 46)
+          for r in sorted(rows, key=lambda r: -r["ratio"]["news"]):
+              print(f"{r['label']:<22}{r['current']['news']:>8}{r['baseline']['news']:>8.0f}{r['ratio']['news']:>7.1f}x")
+          PY
+      - name: 원본 JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: normalize-sim
+          path: norm.json
