@@ -36,7 +36,7 @@ export interface WeeklyTopic {
 export const WEEKLY_TOPICS: WeeklyTopic[] = [
   {
     label: "미국 금리·연준",
-    match: /FOMC|연준|파월|미국\s*금리|기준금리\s*인하|점도표|Fed\b|Federal Reserve|금리\s*인하|금리\s*인상/i,
+    match: /FOMC|연준|파월|[미美]국?\s*(금리|긴축|완화)|기준금리|점도표|Fed\b|Federal Reserve|금리\s*(인하|인상|동결)/i,
     newsQuery: "FOMC 연준 금리",
     trendKeywords: ["FOMC", "연준", "미국 금리"],
     domestic: false,
@@ -50,7 +50,7 @@ export const WEEKLY_TOPICS: WeeklyTopic[] = [
   },
   {
     label: "일본은행·엔화",
-    match: /일본은행|BOJ\b|엔화|엔\/달러|엔캐리|일본\s*금리/i,
+    match: /일본은행|BOJ\b|엔화|엔\/달러|엔캐리|[일日]본?\s*(금리|국채|물가|증시)|우에다|닛케이/i,
     newsQuery: "일본은행 BOJ 엔화",
     trendKeywords: ["일본은행", "엔화"],
     domestic: false,
@@ -112,7 +112,7 @@ export const WEEKLY_TOPICS: WeeklyTopic[] = [
     // 곡물 같은 원자재 실물 물동량을 바로 반영해 구리와 함께 경기 선행
     // 지표로 읽힌다. 국내 기사도 많아 네이버·구글 병행(domestic: false).
     label: "BDI·해운운임",
-    match: /\bBDI\b|발틱운임|발틱\s*건화물|벌크선\s*운임|해상운임|컨테이너\s*운임|\bSCFI\b|\bHARPEX\b/i,
+    match: /\bBDI\b|발틱\s*(운임|건화물)|벌크선|건화물|해상\s*운임|해운\s*운임|컨(테이너)?\s*운임|운임\s*(급등|폭등|상승|하락|지수)|\bSCFI\b|\bHARPEX\b|해운주|\bHMM\b/i,
     newsQuery: "BDI 발틱운임 해상운임",
     trendKeywords: ["BDI", "해상운임"],
     domestic: false,
@@ -142,21 +142,21 @@ export const WEEKLY_TOPICS: WeeklyTopic[] = [
   {
     label: "미국 증시·밸류에이션",
     // "다우"는 다우케미칼·다우기술 같은 회사명과 겹쳐 지수 표기만 본다
-    match: /S&P\s*500|나스닥|다우\s*지수|미국\s*증시|빅테크|밸류에이션\s*부담|매그니피센트/i,
+    match: /S&P\s*500|나스닥|다우\s*지수|[미美]국?\s*증시|뉴욕\s*증시|뉴욕\s*마켓|월가|빅테크|밸류에이션|매그니피센트|\bMag\s*7\b/i,
     newsQuery: "미국 증시 나스닥",
     trendKeywords: ["나스닥", "미국 증시"],
     domestic: false,
   },
   {
     label: "물가·인플레이션",
-    match: /물가|인플레이션|CPI\b|PCE\b|근원물가|디스인플레/i,
+    match: /물가|인플레이션|인플레\b|CPI\b|PCE\b|PPI\b|근원\s*물가|디스인플레|기대\s*인플레|생활비|장바구니/i,
     newsQuery: "물가 인플레이션 CPI",
     trendKeywords: ["물가", "인플레이션"],
     domestic: false,
   },
   {
     label: "고용·경기",
-    match: /고용지표|비농업|실업률|경기침체|리세션|ISM\b|PMI\b|소비지표/i,
+    match: /고용\s*(지표|둔화|시장|보고서)|비농업|실업률|실업\s*수당|취업|일자리|구인|해고|감원|경기\s*(침체|둔화|회복|불황)|리세션|ISM\b|PMI\b|소비\s*지표|소비\s*심리/i,
     newsQuery: "고용지표 실업률 경기",
     trendKeywords: ["고용지표", "실업률"],
     domestic: false,
@@ -178,7 +178,7 @@ export const WEEKLY_TOPICS: WeeklyTopic[] = [
   },
   {
     label: "중국 경기·부양책",
-    match: /중국\s*경기|중국\s*부양|위안화|인민은행|중국\s*수출|리오프닝/i,
+    match: /[중中]국?\s*(경기|부양|수출|증시|지표|소비|투자)|위안화|인민은행|리오프닝|\bLPR\b|中\s|중국\s*(정부|당국)/i,
     newsQuery: "중국 경기 부양책",
     trendKeywords: ["중국 경기", "위안화"],
     domestic: false,
