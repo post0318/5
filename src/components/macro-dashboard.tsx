@@ -314,13 +314,17 @@ export function MacroDashboard() {
         <div className="grid items-stretch gap-4 lg:grid-cols-2">
           {q.data.indices.length > 0 && (
             <section className="flex flex-col space-y-3">
-              <h2 className="text-sm font-semibold">글로벌 시장지수</h2>
-              {/* flex-1 + auto-rows-fr — 오른쪽 Fed 카드는 flex-1 로 섹션
-                  높이를 꽉 채우는데 이 칩 그리드는 내용 높이에 머물러,
-                  두 박스의 **아래쪽**이 약 10px 어긋났다(오너 지적
-                  2026-09-21, 스크린샷). 그리드가 남은 높이를 받고 두 행이
-                  그 높이를 똑같이 나눠 가지면 아래 끝이 맞는다. */}
-              <div className="grid flex-1 auto-rows-fr grid-cols-2 gap-3 sm:grid-cols-4">
+              {/* 오른쪽 "Fed 금리 확률" 줄에는 카운트다운 박스가 들어가 줄이
+                  더 높다. 여기에 같은 높이의 투명 스페이서를 둬서 두 제목
+                  줄 높이를 맞춘다 — 그래야 아래 카드 상단이 어긋나지 않는다
+                  (오너 지시 2026-09-21 — "투명스페이서 반영해라"). */}
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold">글로벌 시장지수</h2>
+                <div className="invisible" aria-hidden="true">
+                  <CountdownBox label="일" value={0} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {q.data.indices.map((ix) => (
                   <button
                     key={ix.key}
@@ -362,17 +366,12 @@ export function MacroDashboard() {
               {/* 제목 · 카운트다운 · 회의 일자를 한 줄에(오너 지시 2026-09-21
                   — 변경 스크린샷). 카운트다운이 "Fed 금리 확률" 바로 옆에
                   붙어야 무엇까지 남은 시간인지 설명이 따로 필요 없다.
-                  **-my-2 필수** — 카운트다운 박스(약 34px)가 제목 글자(약
-                  20px)보다 높아서 그대로 두면 이 줄이 그만큼 커지고, 오른쪽
-                  Fed 카드만 아래로 밀려 왼쪽 "글로벌 시장지수" 카드와 상단이
-                  어긋난다(오너 지적 2026-09-21, 스크린샷). 음수 마진으로
-                  줄 높이 계산에서 빼면 카운터는 위아래로 살짝 넘치되 줄
-                  높이는 글자 기준으로 유지된다. */}
+                  이 줄은 카운트다운 박스 때문에 글자만 있는 왼쪽 제목 줄보다
+                  높다 — 왼쪽에 같은 박스를 투명하게 하나 둬서 높이를 맞춘다
+                  (오너 지시 2026-09-21 — "투명스페이서 반영해라"). */}
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <h2 className="text-sm font-semibold">Fed 금리 확률</h2>
-                <div className="-my-2">
-                  <FedWatchCountdown targetIso={q.data.fedWatch.meetingDateTime} />
-                </div>
+                <FedWatchCountdown targetIso={q.data.fedWatch.meetingDateTime} />
                 {/* "10월 FOMC" 대신 "차기 FOMC"(오너 지시 2026-09-21) — 옆에
                     날짜가 이미 있어 월 표기는 중복이고, 회의가 지나면 달만
                     바뀌어 무엇을 가리키는지 흐려진다. */}
@@ -932,6 +931,20 @@ function findBucketProb(snap: FedWatchSnapshot | null, label: string): string {
 
 /** FOMC까지 남은 시간 — 페이지 제목(h1)과 새로고침 버튼 사이 빈 공간에 배치
  * (오너 지시 2026-09-20, 스크린샷 제시). */
+/** 카운트다운 칸 하나. 왼쪽 "글로벌 시장지수" 제목 줄의 투명 스페이서가
+ *  같은 마크업을 써서 높이를 정확히 맞춘다(오너 지시 2026-09-21) — 수치를
+ *  손으로 맞추면 폰트·패딩이 바뀔 때 다시 어긋난다. */
+function CountdownBox({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="bg-muted/60 flex min-w-9 flex-col items-center rounded-md border px-1.5 py-1">
+      <span className="tnum text-sm leading-tight font-bold" style={{ color: "oklch(0.52 0.15 260)" }}>
+        {value}
+      </span>
+      <span className="text-muted-foreground text-[9px]">{label}</span>
+    </div>
+  );
+}
+
 function FedWatchCountdown({ targetIso }: { targetIso: string }) {
   const countdown = useCountdown(targetIso);
   if (!countdown) return null;
@@ -945,12 +958,7 @@ function FedWatchCountdown({ targetIso }: { targetIso: string }) {
           // 초는 두 자리 고정(9→09) — 한 자리로 떨어지면 칸 폭이 흔들린다.
           { label: "초", value: String(countdown.seconds).padStart(2, "0") },
         ].map((c) => (
-          <div key={c.label} className="bg-muted/60 flex min-w-9 flex-col items-center rounded-md border px-1.5 py-1">
-            <span className="tnum text-sm leading-tight font-bold" style={{ color: "oklch(0.52 0.15 260)" }}>
-              {c.value}
-            </span>
-            <span className="text-muted-foreground text-[9px]">{c.label}</span>
-          </div>
+          <CountdownBox key={c.label} label={c.label} value={c.value} />
         ))}
       </div>
     </div>
