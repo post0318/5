@@ -350,13 +350,24 @@ export function MacroDashboard() {
           )}
 
           {q.data.fedWatch && (
-            <section className="flex flex-col space-y-2">
+            {/* 왼쪽 "글로벌 시장지수" 섹션과 같은 space-y-3 — 제목과 카드
+                사이 간격이 다르면(2 vs 3) 제목 높이를 맞춰도 카드 상단이
+                4px 어긋난다. */}
+            <section className="flex flex-col space-y-3">
               {/* 제목 · 카운트다운 · 회의 일자를 한 줄에(오너 지시 2026-09-21
                   — 변경 스크린샷). 카운트다운이 "Fed 금리 확률" 바로 옆에
-                  붙어야 무엇까지 남은 시간인지 설명이 따로 필요 없다. */}
+                  붙어야 무엇까지 남은 시간인지 설명이 따로 필요 없다.
+                  **-my-2 필수** — 카운트다운 박스(약 34px)가 제목 글자(약
+                  20px)보다 높아서 그대로 두면 이 줄이 그만큼 커지고, 오른쪽
+                  Fed 카드만 아래로 밀려 왼쪽 "글로벌 시장지수" 카드와 상단이
+                  어긋난다(오너 지적 2026-09-21, 스크린샷). 음수 마진으로
+                  줄 높이 계산에서 빼면 카운터는 위아래로 살짝 넘치되 줄
+                  높이는 글자 기준으로 유지된다. */}
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <h2 className="text-sm font-semibold">Fed 금리 확률</h2>
-                <FedWatchCountdown targetIso={q.data.fedWatch.meetingDateTime} />
+                <div className="-my-2">
+                  <FedWatchCountdown targetIso={q.data.fedWatch.meetingDateTime} />
+                </div>
                 <span className="text-muted-foreground text-xs">
                   {q.data.fedWatch.meetingLabel} · {q.data.fedWatch.meetingDate}
                 </span>
