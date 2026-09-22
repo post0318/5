@@ -68,7 +68,16 @@ const SECTOR_RULES: [SectorLabel, RegExp][] = [
 ];
 
 export function classifySector(doc: { stockName?: string | null; title?: string | null }): SectorLabel | null {
-  const hay = `${doc.stockName ?? ""} ${doc.title ?? ""}`;
+  // stockName은 원문 수집기가 붙인 업종 라벨 그대로("운송" 등)라 title보다
+  // 신뢰도가 높다 — 먼저 stockName만으로 판정하고, 거기서 못 정하면 title까지
+  // 합쳐서 본다. 순서를 안 나누면 "운송" 리포트 제목에 "조선업" 같은 단어가
+  // 우연히 섞였을 때 중공업으로 새는 문제가 있었다(오너 지적, 2026-09-22 —
+  // "중공업에도 운송이 들어가있다 업종분류는 운송인데").
+  const stockName = doc.stockName ?? "";
+  for (const [label, re] of SECTOR_RULES) {
+    if (re.test(stockName)) return label;
+  }
+  const hay = `${stockName} ${doc.title ?? ""}`;
   for (const [label, re] of SECTOR_RULES) {
     if (re.test(hay)) return label;
   }
