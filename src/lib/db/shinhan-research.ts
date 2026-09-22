@@ -461,9 +461,33 @@ function isMarketConditionStockname(stockName: string): boolean {
  * "환율 관련 FAQ" 가 투자전략(채권)이어야 하는데 투자전략(주식)으로 새던
  * 문제, 오너 지적 2026-09).
  */
+/**
+ * stockName 이 "제약/바이오 산업"처럼 **업종명**으로 보이는가.
+ *
+ * 수집기에 따라 stockName 과 title 에 같은 업종명을 넣는 소스가 있다(KB증권
+ * 산업 리포트 등). 그래서 "stockName === title" 만으로 게시판 기본 라벨이라고
+ * 보면 멀쩡한 업종 리포트가 generic 으로 취급돼, 요약문에 우연히 섞인 지수명
+ * 하나로 투자전략으로 넘어간다(실측·오너 지적 2026-09-22 — KB증권 "제약/
+ * 바이오 산업"이 투자전략(주식)으로 분류됨. 요약이 "자료: Bloomberg, KB증권
+ * / 주: 1M 이전 종가 기준 NASDAQ 1M 1.14%" 라는 표 각주였는데 거기 있는
+ * NASDAQ 이 EQUITY_HINT_RE 에 걸렸다).
+ */
+const SECTOR_LABEL_TAIL_RE = /(산업|업종|섹터)$/;
+function looksLikeSectorLabel(stockName: string): boolean {
+  const s = stockName.trim();
+  if (!s) return false;
+  if (SECTOR_LABEL_TAIL_RE.test(s)) return true;
+  // 업종명은 짧고, 문장이 아니고, 숫자를 안 쓴다 — 헤드라인이 통째로
+  // stockName 에 들어온 경우(그건 진짜 라벨 없음)와 시리즈명(한국투자증권
+  // "해외주식369" 처럼 회차 번호가 붙는다, 실측)을 이걸로 걸러낸다.
+  return (
+    s.length <= 12 && !/\d/.test(s) && !/[.!?:·…]|\s{2,}/.test(s) && s.split(/\s+/).length <= 2
+  );
+}
+
 function isGenericOrBoardLabel(doc: { stockName: string; title: string }): boolean {
-  if (!doc.stockName || doc.stockName === doc.title || doc.stockName === "산업" || doc.stockName === "시장")
-    return true;
+  if (!doc.stockName || doc.stockName === "산업" || doc.stockName === "시장") return true;
+  if (doc.stockName === doc.title && !looksLikeSectorLabel(doc.stockName)) return true;
   if (KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)) return true;
   return STRATEGY_HINT_RE.test(doc.stockName);
 }
