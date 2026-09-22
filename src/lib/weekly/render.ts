@@ -128,7 +128,14 @@ function sectorSentence(s: SectorHighlight, week: ReportWeek, comment: string): 
   const verb = s.direction === "up" ? "상승" : "하락";
   const pct = sectorPctCell(s, week);
   const reason = comment.trim() || "주요 요인은 확인되지 않았습니다";
-  return `- **${tableCell(s.label)}**: 주간 ${pct} ${verb}. ${reason}`;
+  // 섹터를 끌고 간 종목을 이름·등락률로 붙인다(오너 지시 2026-09-22) —
+  // 등락률만 있으면 그 주에 무슨 일이 있었는지 감이 안 온다. 구성종목을 못
+  // 구한 시장·섹터는 이 부분만 빠진다.
+  const leaders = (s.leaders ?? [])
+    .map((l) => `${tableCell(l.name)} ${l.pct >= 0 ? "+" : ""}${l.pct.toFixed(2)}%`)
+    .join(", ");
+  const tail = leaders ? ` (주도: ${leaders})` : "";
+  return `- **${tableCell(s.label)}**: 주간 ${pct} ${verb}${tail}. ${reason}`;
 }
 
 function sectorGroupSentences(

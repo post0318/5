@@ -27,6 +27,9 @@ interface RawBar {
 export interface YahooFinanceClient {
   quote: (symbols: string[]) => Promise<RawQuote[]>;
   chart: (symbol: string, opts: Record<string, unknown>) => Promise<{ quotes: RawBar[] }>;
+  /** ETF 상위 보유 종목·종목 섹터 조회용(주간 리포트 섹터 주도 종목).
+   * 모듈마다 응답 모양이 달라 호출부에서 좁혀 쓴다. */
+  quoteSummary: (symbol: string, opts: { modules: string[] }) => Promise<unknown>;
 }
 
 let client: YahooFinanceClient | null = null;

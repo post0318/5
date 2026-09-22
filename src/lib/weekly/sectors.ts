@@ -51,6 +51,9 @@ export interface SectorHighlight extends SectorReturn {
   id: string;
   direction: "up" | "down";
   rank: number;
+  /** 그 주 섹터를 끌고 간 종목(오너 지시 2026-09-22). 구성종목을 못 구하거나
+   * 조회에 실패하면 비어 있다 — 부가 정보라 없어도 섹터 표는 그대로 나간다. */
+  leaders?: { name: string; pct: number }[];
 }
 
 export interface WeeklySectors {
@@ -413,11 +416,50 @@ export async function buildWeeklySectors(week: ReportWeek): Promise<WeeklySector
   const kospi = kr.filter((r) => r.market === "kr-kospi");
   const kosdaq = kr.filter((r) => r.market === "kr-kosdaq");
 
-  return {
+  const sectors: WeeklySectors = {
     kospi: pickTop(kospi, "kr-kospi", "kospi"),
     kosdaq: pickTop(kosdaq, "kr-kosdaq", "kosdaq"),
     us: pickTop(us, "us", "us"),
     jp: pickTop(jp, "jp", "jp"),
     eu: pickTop(eu, "eu", "eu"),
   };
+
+  // 섹터 등락률만으로는 그 주에 무슨 일이 있었는지 감이 안 온다(오너 지시
+  // 2026-09-22) — 각 섹터를 끌고 간 종목 2개를 붙인다. 실패해도 섹터 표는
+  // 그대로 나가야 하므로 통째로 감싼다.
+  try {
+    const { attachSectorLeaders, buildKrStocks } = await import("./sector-leaders");
+    const krDates = [...sectors.kospi.up, ...sectors.kospi.down, ...sectors.kosdaq.up, ...sectors.kosdaq.down][0];
+    const krStocks = krDates
+      ? await buildKrStocks(krDates.startDate, krDates.endDate).catch(() => [])
+      : [];
+    const leaders = await attachSectorLeaders(sectors, sectorEtfTicker, krStocks);
+    for (const g of [sectors.kospi, sectors.kosdaq, sectors.us, sectors.jp, sectors.eu]) {
+      for (const h of [...g.up, ...g.down]) {
+        const l = leaders.get(h.id);
+        if (l && l.length > 0) h.leaders = l;
+      }
+    }
+  } catch (err) {
+    console.warn("[weekly] 섹터 주도 종목 생략:", err instanceof Error ? err.message : err);
+  }
+
+  return sectors;
+}
+
+/**
+ * 섹터 라벨 → 그 섹터를 대표하는 ETF 티커. 주도 종목을 뽑을 때 이 ETF 의
+ * 상위 보유 종목을 쓴다(`sector-leaders.ts`). 한국은 KRX 지수를 쓰므로
+ * ETF 가 없다 — null.
+ */
+export function sectorEtfTicker(market: SectorMarket, label: string): string | null {
+  const table =
+    market === "us"
+      ? US_SECTOR_CANDIDATES
+      : market === "jp"
+        ? JP_SECTOR_CANDIDATES
+        : market === "eu"
+          ? EU_SECTOR_CANDIDATES
+          : null;
+  return table?.find((c) => c.label === label)?.ticker ?? null;
 }

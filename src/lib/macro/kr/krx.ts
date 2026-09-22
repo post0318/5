@@ -54,7 +54,11 @@ const n = (v: string | undefined) => {
 /** basDd: YYYYMMDD */
 export interface DayStockRow {
   code: string;
+  /** 종목명(ISU_NM) — 주간 리포트 섹터 주도 종목 표시에 쓴다 */
+  name: string;
   market: "KOSPI" | "KOSDAQ";
+  /** 시가총액(원). 섹터 주도 종목을 시총 상위로 좁힐 때 쓴다 */
+  mktcap: number | null;
   close: number | null;
   changePrc: number | null; // 전일 대비 (원)
   high: number | null;
@@ -70,7 +74,9 @@ export async function fetchAllStocks(basDd: string): Promise<DayStockRow[]> {
   const map = (rows: Record<string, string>[], market: "KOSPI" | "KOSDAQ"): DayStockRow[] =>
     rows.map((r) => ({
       code: r.ISU_CD ?? "",
+      name: (r.ISU_NM ?? "").trim(),
       market,
+      mktcap: n(r.MKTCAP),
       close: n(r.TDD_CLSPRC),
       changePrc: n(r.CMPPREVDD_PRC),
       high: n(r.TDD_HGPRC),
