@@ -47,6 +47,14 @@ import type { ReportWeek } from "./week";
  * 여전히 10~20센트 수준.
  */
 
+/** 이슈 코멘트 — 사실과 해석을 나눠 담는다(오너 지시 2026-09-22). */
+export interface IssueComment {
+  /** 확인된 사실. 각 줄에 구체 수치(금액·비율·건수·레벨)를 담는다. */
+  facts: string[];
+  /** 그 사실들이 왜 중요한지, 무엇을 주시해야 하는지. */
+  reading: string;
+}
+
 export interface WeeklyComments {
   /** "1. 한 줄 결론" — 가장 크게 움직인 자산과 이슈 근거를 인과관계로 엮은
    * 한 문장(오너 지시 2026-09-18 — "딸랑 상승·하락 2개만 적고 끝이냐,
@@ -75,8 +83,12 @@ export interface WeeklyComments {
   calendar: { date: string; event: string }[] | null;
   /** key = SnapshotRow.name */
   snapshot: Map<string, string>;
-  /** key = WeeklyIssue.label */
-  issues: Map<string, string>;
+  /** key = WeeklyIssue.label.
+   * 사실과 해석을 분리해서 담는다(오너 지시 2026-09-22 — 타사 시황처럼
+   * "사실 → 해석" 2단으로. 한 문단에 섞여 있으면 어디까지가 확인된 사실인지
+   * 구분이 안 된다). facts 는 수치가 박힌 확인된 사실, reading 은 거기서
+   * 끌어낸 해석·전망. 둘 중 하나만 검증을 통과할 수도 있다. */
+  issues: Map<string, IssueComment>;
   /** "주요 섹터 이슈"(오너 지시 2026-09-19) — key = SectorHighlight.id
    * (예: "kr-up-1", "combined-down-2"). 등락률·순위는 코드(sectors.ts)가
    * 이미 계산해 확정하고, 여기엔 "왜 그렇게 움직였는지" 코멘트만 담는다. */
@@ -212,19 +224,24 @@ ${INPUT_DATA_DESC}
      채워라.** 같은 그룹(예: 채권) 안에서 더 크게 움직인 자산을 건너뛰고
      덜 움직인 자산만 채우는 건 앞뒤가 안 맞다(예: 미국채 3년이 10년보다
      더 움직였는데 10년만 쓰는 것 — 금지).
-2. **issues 코멘트가 이 리포트의 핵심이다(오너 지시).** reports/news/
-   earnings/metrics 는 근거일 뿐이고, 코멘트가 실제 분석이다 — "A 때문에
-   B했다" 한 문장으로 끝내지 마라. 다음 세 가지를 담은 3~5문장 분석으로
-   쓴다:
-   (a) 이번 주 실제로 무슨 일이 있었는지 — 근거(reports/news/earnings/
-       metrics, 부족하면 웹검색)에 기반한 사실.
-   (b) 그게 왜 중요한지 — 어떤 메커니즘으로 시장·다른 자산에 영향을
-       주는지(예: 할인율 상승이 고밸류에이션 성장주에 미치는 압박,
-       원자재 가격이 인플레이션 기대에 미치는 영향 등).
-   (c) 다음에 무엇을 주시해야 하는지(있다면) — 확정된 사실이 아니면
-       "~로 보임", "~가능성"처럼 조심스럽게. 근거 없는 전망을 확정
-       처럼 쓰지 마라.
-   짧게 요약하려 하지 말고 실제 분석 분량(200~400자)으로 써라.
+2. **issues 는 사실(facts)과 해석(reading)을 반드시 나눠서 쓴다.** 한
+   문단에 섞으면 어디까지가 확인된 사실인지 구분이 안 된다(오너 지시
+   2026-09-22).
+   - **facts: 2~4개.** 이번 주 실제로 일어난 일만. 각 항목에 **구체적인
+     수치를 반드시 하나 이상** 넣는다 — 금액, 비율, 건수, 지수 레벨,
+     날짜 중 무엇이든. 주체(회사·기관·국가)를 명시한다.
+     - 나쁜 예(금지): "반도체 수출이 호조를 보였다." — 수치도 주체도 없음.
+     - 좋은 예: "9월 1~20일 수출 714억달러 중 반도체가 341억달러로 48%를
+       차지(전년동기 +31%)."
+     - 좋은 예: "엔비디아 2분기 EPS 2.22달러로 컨센서스 2.09달러를 6.2%
+       상회."
+     수치는 아래 4번 규칙을 그대로 따른다 — 제공된 JSON 값이거나 웹검색
+     으로 확인한 것만. 확인 못 한 숫자를 지어내면 그 줄은 통째로 버려진다.
+     각 줄은 60~100자.
+   - **reading: 해석.** facts 에 적은 사실이 왜 중요한지(어떤 메커니즘으로
+     시장·다른 자산에 영향을 주는지)와 다음에 무엇을 주시해야 하는지를
+     150~300자로 쓴다. 사실을 다시 나열하지 마라 — facts 에 이미 있다.
+     확정된 사실이 아니면 "~로 보임", "~가능성"처럼 조심스럽게 쓴다.
 3. **sectors: 이번 주 왜 그 섹터가 그렇게 오르내렸는지를 쓴다.** 등락률·
    순위는 이미 코드가 계산해 확정했으니 다시 쓰지 마라 — "이번 주 X.X%
    상승" 처럼 표에 이미 있는 숫자를 문장으로 바꿔 적기만 하는 건 금지
@@ -243,7 +260,7 @@ ${INPUT_DATA_DESC}
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
-{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": "코멘트"}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
+{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": {"facts": ["사실1", "사실2"], "reading": "해석"}}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
 snapshot·issues·sectors 에 없는 키를 새로 만들지 말 것.`;
 
 interface CommentPayload {
@@ -645,7 +662,7 @@ interface MacroResponse {
 
 interface CommentsOnlyResponse {
   snapshot?: Record<string, string>;
-  issues?: Record<string, string>;
+  issues?: Record<string, string | { facts?: unknown; reading?: unknown }>;
   sectors?: Record<string, string>;
 }
 
@@ -1160,15 +1177,42 @@ export async function generateWeeklyComments(
     if (r.text) comments.snapshot.set(canonical, r.text);
     else if (r.reason) dropReasons.set(`snapshot:${canonical}`, r.reason);
   }
-  for (const [rawLabel, text] of Object.entries(commentParsed?.issues ?? {})) {
+  for (const [rawLabel, value] of Object.entries(commentParsed?.issues ?? {})) {
     const canonical = matchCanonical(rawLabel, issueLabels);
     if (!canonical) {
       console.warn(`[weekly] 이슈 코멘트 키 불일치 — "${rawLabel}" 는 알려진 이슈명이 아님`);
       continue;
     }
-    const r = verify(String(text ?? ""), commentTrustGrounded);
-    if (r.text) comments.issues.set(canonical, r.text);
-    else if (r.reason) dropReasons.set(`issue:${canonical}`, r.reason);
+    // 사실/해석 분리 구조(오너 지시 2026-09-22). 예전 형식(문자열 하나)로
+    // 오는 응답도 버리지 않고 해석으로 받아 둔다 — 모델이 스키마를 놓치는
+    // 경우가 있어서다.
+    const raw =
+      typeof value === "string"
+        ? { facts: [] as unknown[], reading: value }
+        : ((value ?? {}) as { facts?: unknown; reading?: unknown });
+    const rawFacts = Array.isArray(raw.facts) ? raw.facts : [];
+
+    // 사실은 줄 단위로 검증한다 — 한 줄이 근거 없는 수치로 걸려도 나머지
+    // 사실까지 같이 버리지 않기 위해서다(해석과 달리 서로 독립적).
+    const facts: string[] = [];
+    const factReasons: string[] = [];
+    for (const f of rawFacts) {
+      const r = verify(String(f ?? ""), commentTrustGrounded);
+      if (r.text) facts.push(r.text);
+      else if (r.reason) factReasons.push(r.reason);
+    }
+    const rd = verify(String(raw.reading ?? ""), commentTrustGrounded);
+
+    if (facts.length > 0 || rd.text) {
+      comments.issues.set(canonical, { facts, reading: rd.text });
+      // 일부만 걸러졌으면 그 사유도 남긴다 — 검수 화면에서 왜 사실이
+      // 적은지 알 수 있게.
+      const partial = [...factReasons, ...(rd.reason ? [`해석: ${rd.reason}`] : [])];
+      if (partial.length > 0) dropReasons.set(`issue:${canonical}`, partial.join(" / "));
+    } else {
+      const reason = [...factReasons, rd.reason].filter(Boolean).join(" / ");
+      if (reason) dropReasons.set(`issue:${canonical}`, reason);
+    }
   }
   for (const [rawId, text] of Object.entries(commentParsed?.sectors ?? {})) {
     // id 는 코드가 만든 단순 문자열(kr-up-1 등)이라 fuzzy 매칭 없이 정확히

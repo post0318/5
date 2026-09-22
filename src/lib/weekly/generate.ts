@@ -9,7 +9,7 @@ import {
   type SnapshotRow,
   type WeeklyReportDoc,
 } from "@/lib/db/weekly-reports";
-import { generateWeeklyComments, type WeeklyComments } from "./comment";
+import { generateWeeklyComments, type WeeklyComments , type IssueComment } from "./comment";
 import { saveWeeklyTopicCounts } from "@/lib/db/weekly-topic-counts";
 import { enrichTopIssues } from "./evidence";
 import { isGeminiConfigured } from "./gemini";
@@ -297,7 +297,7 @@ export async function compareWeeklyModels(models: string[]): Promise<{
     bodyChars?: number;
     headline?: string | null;
     policySummary?: string | null;
-    issueComments?: { label: string; comment: string }[];
+    issueComments?: { label: string; comment: IssueComment }[];
     calendar?: { date: string; event: string }[] | null;
     groundingSources?: number;
     usage?: WeeklyReportDoc["usage"];

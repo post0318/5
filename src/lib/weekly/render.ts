@@ -1,7 +1,7 @@
 import "server-only";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
 import { snapshotToMarkdownTable } from "./snapshot";
-import type { WeeklyComments } from "./comment";
+import type { IssueComment, WeeklyComments } from "./comment";
 import type { WeeklyIssue } from "./issues";
 import type { SectorHighlight, WeeklySectors } from "./sectors";
 import type { ReportWeek } from "./week";
@@ -57,13 +57,32 @@ function movers(rows: SnapshotRow[]): string {
  *  - 공식 지표(FRED) — 출처가 확정된 수치
  * 둘 다 "근거 목록"이 아니라 그 자체가 읽을 값이라 본문에 남긴다.
  */
-function issueBlock(issue: WeeklyIssue, rank: number, comment: string): string {
+function issueBlock(issue: WeeklyIssue, rank: number, comment: IssueComment | undefined): string {
   const lines: string[] = [];
 
   lines.push(`### ${rank}. ${issue.label}`);
   lines.push("");
-  lines.push(`**분석**: ${comment || "_(코멘트가 생성되지 않았습니다 — 재생성하거나 편집기에서 직접 작성하세요)_"}`);
-  lines.push("");
+
+  // 사실과 해석을 눈으로 구분되게 나눠 놓는다(오너 지시 2026-09-22 — 타사
+  // 시황처럼 "사실 → 해석" 2단). 한 문단에 섞여 있으면 어디까지가 확인된
+  // 사실인지 읽는 사람이 가려낼 수 없다.
+  const facts = comment?.facts ?? [];
+  const reading = comment?.reading ?? "";
+  if (facts.length === 0 && !reading) {
+    lines.push("_(코멘트가 생성되지 않았습니다 — 재생성하거나 편집기에서 직접 작성하세요)_");
+    lines.push("");
+  } else {
+    if (facts.length > 0) {
+      lines.push("**사실**");
+      lines.push("");
+      for (const f of facts) lines.push(`- ${f}`);
+      lines.push("");
+    }
+    if (reading) {
+      lines.push(`**해석** → ${reading}`);
+      lines.push("");
+    }
+  }
 
   if (issue.metrics && issue.metrics.length > 0) {
     lines.push("- 공식 지표(FRED)");
@@ -155,7 +174,7 @@ export async function renderWeeklyReport(opts: {
 }): Promise<string> {
   const { week, snapshot, issues, sectors, comments } = opts;
   const snapshotComments = comments?.snapshot ?? new Map<string, string>();
-  const issueComments = comments?.issues ?? new Map<string, string>();
+  const issueComments = comments?.issues ?? new Map<string, IssueComment>();
   const sectorComments = comments?.sectors ?? new Map<string, string>();
 
   const parts: string[] = [];
@@ -182,7 +201,7 @@ export async function renderWeeklyReport(opts: {
     parts.push("이번 주 집계된 이슈가 없습니다.");
   } else {
     issues.forEach((it, i) => {
-      parts.push(issueBlock(it, i + 1, issueComments.get(it.label) ?? ""));
+      parts.push(issueBlock(it, i + 1, issueComments.get(it.label)));
       parts.push("");
     });
   }
