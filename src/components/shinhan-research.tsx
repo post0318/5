@@ -105,9 +105,6 @@ export function ShinhanResearch({ market, symbol }: { market: "kr" | "us"; symbo
         <CardTitle className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
           증권사 리서치
           {q.data && <span className="text-muted-foreground text-xs font-normal">({filtered.length})</span>}
-          <span className="text-muted-foreground ml-auto text-[11px] font-normal">
-            최근 3개월(없으면 최신순) · 개인용 참고자료
-          </span>
         </CardTitle>
       </CardHeader>
       <CardContent>
