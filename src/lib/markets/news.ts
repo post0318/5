@@ -655,15 +655,28 @@ export async function fetchStockNews(
   market: MarketId,
   symbol: string,
   companyName?: string | null,
+  opts?: {
+    /** 최신순 상위 N건만 반환·번역(유니버스통합뉴스처럼 종목당 1건만 쓸 때
+     * 나머지를 번역하느라 시간을 낭비하지 않게 — 오너 지적 2026-09-22,
+     * "미국/한국 유니버스 통합뉴스뜨는게 매우느리다": 실제 쓰는 건 종목당
+     * 최신 1건뿐인데 화이트리스트 통과분 전부(많으면 10여 건)를 매번
+     * 번역하고 있었다. */
+    limit?: number;
+  },
 ): Promise<NewsItem[]> {
   const query = companyName || symbol;
   // KR은 네이버 증권의 종목코드별 태깅 API(fetchKrStockTaggedNews)를 써서
   // 애초에 검색·필터 자체가 불필요 — 나머지 시장은 기존 야후 검색 유지.
+  // limit=1이면 2페이지째를 아예 안 받는다(최신 1건은 1페이지에 이미 있음 —
+  // 90일치 40건을 받아놓고 1건만 쓰던 낭비 제거).
   const items =
     market === "kr"
-      ? await fetchKrStockTaggedNews(symbol)
+      ? await fetchKrStockTaggedNews(symbol, opts?.limit ? { maxPages: 1 } : undefined)
       : await fetchUsJpNews(market, symbol, yahooQuery(market, symbol, query));
-  return withTranslatedTitles(SOURCE_LANG[market], items);
+  const picked = opts?.limit
+    ? [...items].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)).slice(0, opts.limit)
+    : items;
+  return withTranslatedTitles(SOURCE_LANG[market], picked);
 }
 
 /**

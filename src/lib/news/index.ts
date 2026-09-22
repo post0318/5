@@ -53,8 +53,8 @@ export async function fetchUniverseNews(
     while (next < universe.length && Date.now() < deadline) {
       const i = next++;
       const u = universe[i];
-      const items = await fetchCredibleStockNews(market, u.symbol, u.name ?? null).catch(() => []);
-      const latest = [...items].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))[0];
+      const items = await fetchCredibleStockNews(market, u.symbol, u.name ?? null, { limit: 1 }).catch(() => []);
+      const latest = items[0];
       if (!latest) continue;
       if (Date.now() - new Date(latest.publishedAt).getTime() > UNIVERSE_NEWS_MAX_AGE_MS) continue;
       perStock[i] = {
