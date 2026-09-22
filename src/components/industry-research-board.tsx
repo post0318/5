@@ -22,9 +22,12 @@ const TOPICS = [
 ] as const;
 type TopicKey = (typeof TOPICS)[number]["key"];
 
-// 업종 필터 숨김 대상(오너 지시, 2026-09-22 — 산업분석/투자전략(주식)/
-// 투자전략(채권)에서는 업종 선택을 없앤다).
-const SECTOR_FILTER_HIDDEN: ReadonlySet<TopicKey> = new Set(["산업분석", "투자전략(주식)", "투자전략(채권)"]);
+// 업종 필터 노출 대상(오너 지시, 2026-09-22 — "산업분석 중 산업분석과
+// 전체에만 업종선택을 넣는다"): 전체·산업분석 탭에서만 보이고, 투자전략
+// (주식)/(채권)·시황·해외리서치에서는 숨긴다. 업종 분류값 자체는 한국·미국
+// 공통(`research-sector.ts` SECTOR_LABELS, 오너 확인 — "업종구분은 미국과
+// 동일하다").
+const SECTOR_FILTER_SHOWN: ReadonlySet<TopicKey> = new Set(["all", "산업분석"]);
 
 function fmtAgo(iso: string): string {
   const days = Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000);
@@ -150,7 +153,7 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
             제목·라벨 키워드로 자동 구분한 결과라 완전히 정확하지 않을 수 있습니다.
           </p>
         )}
-        {sectors.length > 1 && !SECTOR_FILTER_HIDDEN.has(topic) && (
+        {sectors.length > 1 && SECTOR_FILTER_SHOWN.has(topic) && (
           <div className="flex items-center gap-2 px-6 pb-1">
             <label htmlFor="sector-filter" className="text-muted-foreground text-xs">
               업종
