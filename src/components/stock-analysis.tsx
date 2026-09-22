@@ -173,6 +173,16 @@ export function StockAnalysis({
     retry: false,
   });
 
+  // 상세 뷰(cf/is/bs/summary)가 아직 로딩 중인데 기본 financials 쿼리가 먼저
+  // 끝나버리면, financials-table.tsx가 그 사이 statement(기본 쿼리, 분기여도
+  // "FY" 라벨을 쓰는 옛 단일-최근분기 계산)로 잠깐 폴백해 보여준다 — 화면에
+  // "분기"가 선택된 채 연간 라벨의 옛 수치가 떴다 사라지는 문제(오너 지적,
+  // 2026-09-22 — 하이닉스 스크린샷으로 직접 확인). 상세 쿼리까지 다 끝나야
+  // 테이블을 그려서 이 폴백이 화면에 노출되지 않게 한다.
+  const financialsPending =
+    financials.isLoading ||
+    (hasDetail && (cfDetailQ.isLoading || isDetailQ.isLoading || bsDetailQ.isLoading || summaryQ.isLoading));
+
   // 멀티플용 연간 재무제표 — period 탭과 무관하게 항상 연간. period가 "annual"이면
   // 위 financials 쿼리와 키가 같아 자동 중복 제거된다.
   const annualForMultiples = useQuery({
@@ -888,16 +898,16 @@ export function StockAnalysis({
 
             {/* 재무제표 */}
             <TabsContent value="financials" className="space-y-4 pt-4">
-              {financials.isLoading && <Skeleton className="h-64 w-full" />}
-              {financials.isError && (
+              {financialsPending && <Skeleton className="h-64 w-full" />}
+              {!financialsPending && financials.isError && (
                 <ErrorBox message={(financials.error as Error).message} />
               )}
-              {financials.data && financials.data.sections.length === 0 && (
+              {!financialsPending && financials.data && financials.data.sections.length === 0 && (
                 <p className="text-muted-foreground text-sm">
                   표시할 재무 데이터가 없습니다.
                 </p>
               )}
-              {financials.data && financials.data.sections.length > 0 && (
+              {!financialsPending && financials.data && financials.data.sections.length > 0 && (
                 <FinancialsTable
                   statement={financials.data}
                   detailedCf={hasDetail ? (cfDetailQ.data ?? null) : null}
