@@ -22,6 +22,34 @@ function fmtDate(iso: string | null): string {
   return iso.slice(0, 16).replace("T", " ");
 }
 
+/**
+ * PDF 다운로드(오너 지시 2026-09-22). 바이너리 응답이라 JSON 만 다루는
+ * apiFetch 를 안 쓰고 직접 fetch — blob 을 받아 임시 <a> 로 저장 트리거.
+ * 실패해도 예외를 던지지 않고 메시지만 돌려준다 — 발행 자체는 이미 끝난
+ * 뒤라(자동 트리거 시) 여기서 막히면 안 된다.
+ */
+async function downloadWeeklyPdf(id: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/weekly/${id}/pdf`);
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      return body.error ?? `PDF 생성 실패 (${res.status})`;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `weekly-${id}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return null;
+  } catch {
+    return "PDF 다운로드 실패 — 네트워크 오류";
+  }
+}
+
 function bodyChars(md: string): number {
   return md
     .split("\n")
@@ -62,9 +90,16 @@ export function WeeklyReportBoard() {
   const patch = useMutation({
     mutationFn: (p: { body?: string; status?: "draft" | "published" }) =>
       apiFetch<WeeklyReportDoc>(`/api/weekly/${activeId}`, { method: "PATCH", body: JSON.stringify(p) }),
-    onSuccess: (_doc, vars) => {
-      setMsg(vars.status === "published" ? "발행 완료" : vars.status === "draft" ? "발행 취소" : "저장 완료");
+    onSuccess: (doc, vars) => {
+      setMsg(vars.status === "published" ? "발행 완료 — PDF 생성 중…" : vars.status === "draft" ? "발행 취소" : "저장 완료");
       void qc.invalidateQueries({ queryKey: ["weekly"] });
+      // 발행 시 PDF 자동 생성·다운로드(오너 지시 2026-09-22 — "발행을 누르면
+      // pdf로 생성"). 실패해도 발행 자체는 이미 끝났으니 메시지만 갱신.
+      if (vars.status === "published") {
+        void downloadWeeklyPdf(doc._id).then((err) => {
+          setMsg(err ? `발행 완료 (PDF: ${err})` : "발행 완료 — PDF 다운로드됨");
+        });
+      }
     },
     onError: (e) => setMsg(e instanceof ApiError ? `실패: ${e.message}` : "실패"),
   });
@@ -157,6 +192,7 @@ interface ReportViewProps {
 function ReportView({ doc, busy, onSave, onPublish, onUnpublish, onRegenerate, onMsg }: ReportViewProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(doc.body);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const chars = useMemo(() => bodyChars(editing ? draft : doc.body), [doc.body, draft, editing]);
   return (
           <Card>
@@ -223,6 +259,24 @@ function ReportView({ doc, busy, onSave, onPublish, onUnpublish, onRegenerate, o
                 ) : (
                   <Button size="sm" variant="outline" disabled={busy || editing} onClick={onUnpublish}>
                     발행 취소
+                  </Button>
+                )}
+                {/* 발행된 리포트는 재발행 없이도 다시 받을 수 있어야 한다 —
+                    자동 다운로드는 "발행" 클릭 시 1회뿐이라(오너 지시
+                    2026-09-22). */}
+                {doc.status === "published" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || pdfBusy}
+                    onClick={async () => {
+                      setPdfBusy(true);
+                      const err = await downloadWeeklyPdf(doc._id);
+                      setPdfBusy(false);
+                      onMsg(err ? `PDF: ${err}` : "PDF 다운로드됨");
+                    }}
+                  >
+                    {pdfBusy ? "PDF 생성 중…" : "PDF 다운로드"}
                   </Button>
                 )}
                 <Button
