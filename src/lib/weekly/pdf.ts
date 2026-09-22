@@ -49,14 +49,22 @@ export function isPdfExportConfigured(): boolean {
  * 앱의 `:root` 변수 정의가 없고, PDF 는 어차피 라이트 배경으로 인쇄·열람되는
  * 게 자연스럽다.
  */
-async function renderReportHtml(doc: WeeklyReportDoc): Promise<string> {
+/**
+ * markdown 본문 → HTML 조각. PDF 와 발행 메일이 같은 파서를 쓰게 하려고
+ * 따로 빼서 내보낸다(메일 쪽은 `lib/email/resend.ts`).
+ */
+export async function weeklyMarkdownToHtml(markdown: string): Promise<string> {
   const file = await unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkRehype)
     .use(rehypeStringify)
-    .process(doc.body);
-  const bodyHtml = String(file);
+    .process(markdown);
+  return String(file);
+}
+
+async function renderReportHtml(doc: WeeklyReportDoc): Promise<string> {
+  const bodyHtml = await weeklyMarkdownToHtml(doc.body);
   return `<!doctype html>
 <html lang="ko">
 <head>

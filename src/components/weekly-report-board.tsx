@@ -88,16 +88,26 @@ export function WeeklyReportBoard() {
   });
 
   const patch = useMutation({
+    // 발행 응답에만 붙는 메일 전송 결과 — DB 문서 필드가 아니라 이 호출의 부가
+    // 정보라 WeeklyReportDoc 타입은 건드리지 않고 여기서만 얹는다.
     mutationFn: (p: { body?: string; status?: "draft" | "published" }) =>
-      apiFetch<WeeklyReportDoc>(`/api/weekly/${activeId}`, { method: "PATCH", body: JSON.stringify(p) }),
+      apiFetch<WeeklyReportDoc & { email?: { sent: boolean; reason?: string } }>(
+        `/api/weekly/${activeId}`,
+        { method: "PATCH", body: JSON.stringify(p) },
+      ),
     onSuccess: (doc, vars) => {
       setMsg(vars.status === "published" ? "발행 완료 — PDF 생성 중…" : vars.status === "draft" ? "발행 취소" : "저장 완료");
       void qc.invalidateQueries({ queryKey: ["weekly"] });
-      // 발행 시 PDF 자동 생성·다운로드(오너 지시 2026-09-22 — "발행을 누르면
-      // pdf로 생성"). 실패해도 발행 자체는 이미 끝났으니 메시지만 갱신.
+      // 발행 한 번에 두 가지가 같이 돈다 — PDF 생성·다운로드(오너 지시
+      // 2026-09-22 — "발행을 누르면 pdf로 생성")와 메일 전송(오너 지시
+      // 2026-09-18). 메일은 서버가 이미 보냈고 결과만 doc.email 로 온다.
+      // 둘 다 실패해도 발행 자체는 이미 끝났으니 메시지만 갱신한다.
       if (vars.status === "published") {
+        const mail = doc.email?.sent
+          ? "메일 전송됨"
+          : `메일 미전송(${doc.email?.reason ?? "설정 없음"})`;
         void downloadWeeklyPdf(doc._id).then((err) => {
-          setMsg(err ? `발행 완료 (PDF: ${err})` : "발행 완료 — PDF 다운로드됨");
+          setMsg(err ? `발행 완료 — ${mail}, PDF: ${err}` : `발행 완료 — ${mail}, PDF 다운로드됨`);
         });
       }
     },
