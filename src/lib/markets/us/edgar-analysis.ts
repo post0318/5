@@ -22,6 +22,7 @@ import {
   classAShares,
   type ClassAFacts,
 } from "./edgar-classfacts";
+import { buildShareResolver } from "./edgar-shares";
 import {
   FIN_NET_REVENUE,
   FIN_NONINTEREST_EXPENSE,
@@ -675,13 +676,20 @@ export function buildUsAnalysis(
     investedCapAvg[l] = assetsAvg[l]! - (curLiabAvg[l]! - (curDebtAvg[l] ?? 0));
   }
 
-  // 주가·시총
+  // 주가·시총 — 주식수는 공용 기준(edgar-shares.ts)으로 통일한다. 시세는 분할
+  // 소급 반영된 값이므로 주식수도 현재 기준으로 환산해야 시가총액이 맞는다
+  // (오너 지적 2026-09-23 — 하이라이트와 PBR·PSR·EV 가 달랐던 원인. 자세한
+  // 내용은 edgar-shares.ts 주석 참고).
+  const shareRes = buildShareResolver(facts, { classFacts, sharesHint });
   const price = blank();
   const mktcap = blank();
   for (const p of periods) {
     const px = p.label === LTM ? (lastBar?.close ?? null) : closeOnOrBefore(bars, p.endDate ?? "");
     price[p.label] = px;
-    const sh = p.label === LTM ? shares[LTM] : sharesEnd[p.label] ?? shares[p.label];
+    const sh =
+      p.label === LTM
+        ? (shareRes.current() ?? shares[LTM])
+        : shareRes.atFiscalYearEnd(p.fiscalYear, p.endDate ?? "");
     mktcap[p.label] = px != null && sh != null ? px * sh : null;
   }
   const curMktcap = mktcap[LTM];

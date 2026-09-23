@@ -10,11 +10,10 @@
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { splitFactorsByYear } from "./edgar-series";
+import { buildShareResolver } from "./edgar-shares";
 import {
   classAEps,
   classALatest,
-  classAOutstanding,
-  classAShares,
   type ClassAFacts,
 } from "./edgar-classfacts";
 
@@ -104,9 +103,6 @@ function entriesAny(facts: CompanyFacts, concepts: string[], unit = "USD"): Fact
     if (e.length) return e;
   }
   return [];
-}
-function deiEntries(facts: CompanyFacts, concept: string): FactUnitEntry[] {
-  return facts.facts.dei?.[concept]?.units?.shares ?? [];
 }
 
 /** 사업연도(FY, 10-K) duration 값 → {year, val, end}[]. */
@@ -241,6 +237,8 @@ export function buildUsHighlights(
 ): FinancialHighlights {
   const cf = classFacts ?? null;
   const notes: string[] = [];
+  // 발행주식수 단일 기준 — edgar-analysis.ts 와 같은 모듈을 쓴다.
+  const shareRes = buildShareResolver(facts, { classFacts: cf, sharesHint: fallbackShares });
 
   // ── 컬럼 구성 ────────────────────────────────────────────────────
   const revSeries = annualSeriesMerged(facts, REVENUE);
@@ -427,26 +425,9 @@ export function buildUsHighlights(
   const finLeaseNcE = unitEntries(facts, "FinanceLeaseLiabilityNoncurrent", "USD");
   const finLeaseCurE = unitEntries(facts, "FinanceLeaseLiabilityCurrent", "USD");
   const prefE = unitEntries(facts, "PreferredStockValue", "USD");
-  const sharesEndE = unitEntries(facts, "CommonStockSharesOutstanding", "shares");
-  const sharesDeiE = deiEntries(facts, "EntityCommonStockSharesOutstanding");
-  // 이중 클래스(메타 등)는 기말 발행주식수를 클래스별로만 태깅해 undimensioned 값이
-  // 없다 → 가중평균 희석주식수(연간)로 대체해 시총·EV 를 근사한다.
-  const sharesWavgDil = annualSeries(
-    unitEntries(facts, "WeightedAverageNumberOfDilutedSharesOutstanding", "shares"),
-  );
-  const sharesWavgBasic = annualSeries(
-    unitEntries(facts, "WeightedAverageNumberOfSharesOutstandingBasic", "shares"),
-  );
-  const wavgSharesAt = (year: number): number | null =>
-    annualAt(sharesWavgDil, year) ??
-    annualAt(sharesWavgBasic, year) ??
-    classAShares(cf, year);
-  const latestWavgShares = (): number | null =>
-    sharesWavgDil.at(-1)?.val ??
-    sharesWavgBasic.at(-1)?.val ??
-    classALatest(cf)?.dilShares ??
-    classALatest(cf)?.basicShares ??
-    null;
+  // 발행주식수(기말·현재·듀얼클래스 폴백)는 전부 edgar-shares.ts 의
+  // buildShareResolver 로 옮겼다 — 이 파일과 edgar-analysis.ts 가 각자
+  // 우선순위를 두면서 같은 종목의 시가총액이 갈렸기 때문(위 shareRes 참고).
 
   // 컬럼별 helper
   const flowVal = (
@@ -477,21 +458,18 @@ export function buildUsHighlights(
     const price = isLtm ? (lastBar?.close ?? null) : closeOnOrBefore(bars, asOf);
     priceByCol[i] = price;
     equity[i] = equityAt(asOf);
-    // 시총용 주식수: LTM 은 현재(가장 최근) 발행주식수, 과거는 기말 주식수
-    // 발행주식수는 550일 이상 오래된 태그(중단된 dei 값 등)는 무시
-    const SS = 550;
+    // 시총용 주식수: 공용 기준(edgar-shares.ts)으로 통일 — 소스 우선순위도,
+    // 분할 보정(시세는 분할 소급 반영인데 공시 주식수는 as-reported)도 거기
+    // 한 곳에서 처리한다. 예전엔 이 파일과 edgar-analysis.ts 가 서로 다른
+    // 우선순위를 써서 같은 종목 PBR·PSR·EV 가 화면마다 달랐다(오너 지적
+    // 2026-09-23, WMT).
     const disclosed = isLtm
-      ? (instantAt(sharesDeiE, priceDate, SS) ??
-        instantAt(sharesEndE, priceDate, SS) ??
-        instantAt(sharesDeiE, asOf, SS) ??
-        classALatest(cf)?.sharesOutstanding ??
-        latestWavgShares())
-      : (instantAt(sharesEndE, asOf, SS) ??
-        classAOutstanding(cf, Number(col.key.slice(2))) ??
-        instantAt(sharesDeiE, asOf, SS) ??
-        wavgSharesAt(Number(col.key.slice(2))));
-    const shares = disclosed ?? (fallbackShares ?? null);
-    if (disclosed == null && fallbackShares != null) approxPerShare = true;
+      ? shareRes.current()
+      : shareRes.atFiscalYearEnd(Number(col.key.slice(2)), asOf);
+    const shares = disclosed;
+    // 공시 주식수가 없어 힌트(시총÷주가 등)로 대체됐는지는 resolver 가 안다
+    // — 클래스별로만 태깅하는 종목(Visa 등)에 붙는 "근사" 주석용.
+    if (shareRes.usedHint()) approxPerShare = true;
     sharesByCol[i] = shares;
     const mc = price != null && shares != null ? price * shares : null;
     marketCap[i] = mc;
@@ -564,12 +542,8 @@ export function buildUsHighlights(
     }
     return null;
   });
-  const currentShares =
-    instantAt(sharesDeiE, priceDate, 550) ??
-    instantAt(sharesEndE, priceDate, 550) ??
-    classALatest(cf)?.sharesOutstanding ??
-    latestWavgShares() ??
-    (fallbackShares ?? null);
+  // 현재 발행주식수도 같은 공용 기준을 쓴다(시총·추정 순이익·LTM EPS 공통).
+  const currentShares = shareRes.current();
   const netIncome = columns.map((col) => {
     if (col.kind === "estimate") {
       const eps = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
