@@ -286,6 +286,14 @@ export function buildUsIncome(
     ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"],
     "shares",
   );
+  // 주식수는 흐름(더하고 빼도 되는 값)이 아니라 시점 값이라, val() 이 LTM 칸에
+  // 채워 넣는 ttmOf 차감식("최근 FY + 당기누적 − 전년동기누적") 결과가 의미가
+  // 없다 — 실측(2026-09-23, Bloom Energy): 실제 발행주식수가 2.3억→2.84억으로
+  // 늘어난 구간인데 이 식은 3.3억 주를 내놔, 같은 회사 LTM EPS 가 재무제표
+  // 탭에서는 0.030, 개요/하이라이트에서는 0.035 로 갈렸다(오너 지적 — "be 개요
+  // 재무하이라이트에 eps -0.04 재무제표 is에서 0.03"). LTM 칸은 비워서 아래
+  // deriveEps 가 현재 주식수(sharesHint, 다른 모듈과 같은 분모)를 쓰게 한다.
+  if (!quarterly) wavgShares[LTM] = null;
   let epsApprox = false;
   const yearOf = (l: string): number => Number(l.replace(/[^0-9]/g, "")) || 0;
   const deriveEps = (

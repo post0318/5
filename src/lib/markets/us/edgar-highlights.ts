@@ -556,7 +556,18 @@ export function buildUsHighlights(
       }
       return null;
     };
-    if (col.kind === "ltm") return ttm(E.eps) ?? derive() ?? classALatest(cf)?.epsDiluted ?? null;
+    if (col.kind === "ltm") {
+      // LTM EPS 는 ttm() 의 "최근 FY + 당기누적 − 전년동기누적" 식으로 구하지
+      // 않는다 — 그 식은 더하고 빼도 되는 흐름(매출·순이익)에만 성립하고,
+      // 분모(주식수)가 기간마다 다른 주당 지표에는 안 맞아 순이익과 부호가
+      // 어긋난다(실측 2026-09-23 — Bloom Energy: LTM 순이익 +996만 달러인데
+      // 개요 재무하이라이트 EPS 는 -0.04 로 표시. 같은 문제를
+      // edgar-income.ts·edgar.ts 에서도 각각 고쳤다). LTM 순이익 ÷ 현재
+      // 주식수로 직접 계산하고, 그마저 불가능할 때만 옛 경로로 폴백한다.
+      if (netIncome[i] != null && currentShares)
+        return netIncome[i]! / currentShares;
+      return ttm(E.eps) ?? derive() ?? classALatest(cf)?.epsDiluted ?? null;
+    }
     const y = Number(col.key.slice(2));
     const v = annualAt(S.eps, y);
     if (v != null) return v * sf(y);
