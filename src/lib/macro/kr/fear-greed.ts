@@ -477,3 +477,54 @@ export async function getKrFearGreed(): Promise<
     creditAvg,
   };
 }
+
+/**
+ * 외부(프로젝트 6 등) 백테스트용 전체 히스토리 내보내기.
+ * getKrFearGreed()는 대시보드 카드용으로 history를 최근 180거래일로 자르므로
+ * 별도 함수로 분리 — 기존 대시보드 응답(캐시·페이로드 크기)에는 영향 없음.
+ */
+export async function getKrFearGreedFullHistory(): Promise<{
+  asOf: string;
+  history: Row[];
+  kospiHistory: { date: string; close: number | null }[];
+} | null> {
+  const all = await getKrFgHistory().catch(() => []);
+  if (all.length < 5) return null;
+
+  const compScored = COMPONENTS.map((c) => {
+    const s = c.series(all);
+    const raw: Row[] = [];
+    all.forEach((d, i) => {
+      const v = s[i];
+      if (v != null && Number.isFinite(v)) raw.push({ date: d._id, value: Math.round(v * 1000) / 1000 });
+    });
+    const win = c.normWindow ?? NORM_WINDOW;
+    const scored =
+      c.scoring === "percentileRank"
+        ? percentileRankNormalize(raw, !c.higherIsGreedy, win)
+        : c.scoring === "zLinear"
+          ? zLinearNormalize(raw, !c.higherIsGreedy, win)
+          : normalize(raw, !c.higherIsGreedy, win, c.fixedRange);
+    return scored;
+  });
+
+  const byDate = new Map<string, number[]>();
+  for (const scored of compScored) {
+    for (const r of scored) {
+      const arr = byDate.get(r.date) ?? [];
+      arr.push(r.value);
+      byDate.set(r.date, arr);
+    }
+  }
+  const history: Row[] = [...byDate.entries()]
+    .map(([date, arr]) => ({ date, value: Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 }))
+    .filter((r) => (byDate.get(r.date)?.length ?? 0) >= 3)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (history.length === 0) return null;
+
+  return {
+    asOf: history[history.length - 1].date,
+    history,
+    kospiHistory: all.map((d) => ({ date: d._id, close: d.kospiClose })),
+  };
+}
