@@ -286,8 +286,38 @@ export function buildUsHighlights(
   const blank = (): (number | null)[] => Array(nCol).fill(null);
 
   // ── 계정 시리즈 ──────────────────────────────────────────────────
-  const concat = (concepts: string[], unit = "USD"): FactUnitEntry[] =>
-    concepts.flatMap((c) => unitEntries(facts, c, unit));
+  /**
+   * 후보 개념들을 하나로 합치되 **앞 개념이 이미 채운 기간은 뒤 개념이
+   * 덮지 못하게** 한다.
+   *
+   * 단순 flatMap 이던 것을 고침(오너 지적 2026-09-23 — "wmt 재무하이라이트랑
+   * 손익계산서랑 당기순이익금액이 안맞음"). 월마트는 같은 회계연도에
+   * `NetIncomeLoss`(지배주주 귀속)와 `ProfitLoss`(비지배지분 포함 연결)를
+   * 둘 다 태깅하는데, 합친 배열에서 뒤쪽 항목이 이기는 tiebreak(`filed >=`)
+   * 때문에 연결 기준이 지배주주 기준을 덮어써 FY2024 순이익이 하이라이트
+   * 162.7억 달러 / 손익계산서 155.1억 달러로 갈렸다. 같은 이유로 자기자본도
+   * NCI 포함값이 이길 수 있어 PBR 이 틀어진다.
+   *
+   * 기간을 (start|end|form|fp) 로 잡아 **개념 경계에서만** 걸러서, 한 개념
+   * 안의 소급 재작성본(같은 기간·다른 filed)은 그대로 남기고 "앞 개념이 안
+   * 다루는 기간을 뒤 개념이 메우는" 태그 전환 대응은 유지한다.
+   */
+  const concat = (concepts: string[], unit = "USD"): FactUnitEntry[] => {
+    const out: FactUnitEntry[] = [];
+    const claimed = new Set<string>();
+    const keyOf = (e: FactUnitEntry) => `${e.start ?? ""}|${e.end}|${e.form}|${e.fp}`;
+    for (const c of concepts) {
+      const mine = new Set<string>();
+      for (const e of unitEntries(facts, c, unit)) {
+        const k = keyOf(e);
+        if (claimed.has(k)) continue;
+        out.push(e);
+        mine.add(k);
+      }
+      for (const k of mine) claimed.add(k);
+    }
+    return out;
+  };
   const SGA_C = [
     "SellingGeneralAndAdministrativeExpense",
     "GeneralAndAdministrativeExpense",
@@ -326,7 +356,13 @@ export function buildUsHighlights(
     grossProfit: gpS,
     opIncome: opIncS,
     da: daS,
-    netIncome: annualSeries(concat(["NetIncomeLoss","ProfitLoss","NetIncomeLossAvailableToCommonStockholdersBasic"])),
+    // 지배주주 귀속(NetIncomeLoss)이 1순위 — annualSeriesMerged 는 연도별로
+    // 앞 개념을 우선한다(위 concat 주석의 월마트 사례 참고).
+    netIncome: annualSeriesMerged(facts, [
+      "NetIncomeLoss",
+      "ProfitLoss",
+      "NetIncomeLossAvailableToCommonStockholdersBasic",
+    ]),
     eps: annualSeries(unitEntries(facts, "EarningsPerShareDiluted", "USD/shares")),
     ocf: annualSeries(
       unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
@@ -359,15 +395,14 @@ export function buildUsHighlights(
     ),
   };
   const cashE = unitEntries(facts, "CashAndCashEquivalentsAtCarryingValue", "USD");
-  // 자기자본: 태그가 시기별로 바뀌는 종목(V 는 2012년부터 …IncludingNCI 만) 대응해 병합
-  const equityE = [
-    ...unitEntries(facts, "StockholdersEquity", "USD"),
-    ...unitEntries(
-      facts,
-      "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-      "USD",
-    ),
-  ];
+  // 자기자본: 태그가 시기별로 바뀌는 종목(V 는 2012년부터 …IncludingNCI 만) 대응해 병합.
+  // concat 을 쓰는 이유는 위 주석 참고 — 단순 이어붙이면 같은 시점에 둘 다
+  // 태깅하는 기업(월마트 등)에서 NCI 포함값이 지배주주 자본을 덮어써 PBR 이
+  // 틀어진다.
+  const equityE = concat([
+    "StockholdersEquity",
+    "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+  ]);
   const assetsForEqE = unitEntries(facts, "Assets", "USD");
   const liabForEqE = unitEntries(facts, "Liabilities", "USD");
   // 자본을 클래스별로만 태깅하는 기업(Visa) → 자산 − 부채로 보정
