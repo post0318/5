@@ -202,7 +202,19 @@ export interface CompanyFacts {
   };
 }
 
-/** companyfacts 에서 개념 후보 중 먼저 존재하는 것의 unit 배열. */
+/**
+ * companyfacts 에서 개념 후보들의 unit 배열을 전부 합친다.
+ *
+ * 예전엔 "먼저 존재하는 개념 하나만" 썼는데, 기업이 도중에 개념 태그를
+ * 갈아탄 경우(실측, 2026-09-23 — Bloom Energy: `NetIncomeLoss`를 2023년
+ * 사업연도까지만 쓰고 2024년부터 `ProfitLoss`로 전환) 먼저 나열된 개념이
+ * 이후 연도엔 데이터가 없어도 "존재는 한다"는 이유로 그 개념만 쓰고
+ * 최신 연도로 못 넘어갔다 — 개요 탭 TTM 순이익이 2023년 값(-3.02억 달러)
+ * 에 고정되고, 그 값으로 계산되는 TTM EPS도 같이 틀어졌다(당기순이익은
+ * 실제로 +996만 달러 흑자). ttmFlow() 자신이 이미 "가장 최근 end" 기준
+ * 으로 연간·YTD를 고르므로, 여기서는 후보 개념 전부의 항목을 하나로
+ * 합쳐 넘기기만 하면 어느 개념으로 갈아탔든 최신 데이터를 제대로 고른다.
+ */
 function factEntries(
   facts: CompanyFacts,
   ns: "us-gaap" | "dei",
@@ -211,12 +223,16 @@ function factEntries(
 ): FactEntry[] | undefined {
   const bag = facts.facts[ns];
   if (!bag) return undefined;
+  let merged: FactEntry[] | undefined;
   for (const n of names) {
     const node = bag[n];
     if (!node) continue;
-    for (const u of units) if (node.units[u]?.length) return node.units[u] as FactEntry[];
+    for (const u of units) {
+      const entries = node.units[u] as FactEntry[] | undefined;
+      if (entries?.length) merged = merged ? [...merged, ...entries] : entries;
+    }
   }
-  return undefined;
+  return merged;
 }
 
 /**
@@ -385,13 +401,20 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
     );
   const snapLabel =
     [equity?.end, liabilities?.end, cash?.end].filter(Boolean).sort().pop() ?? "";
+  // TTM EPS는 ttmFlow()의 "FY + 당기누적 − 전년동기누적" 식(흐름 지표용)을
+  // 믿지 않는다 — 분모(주식수)가 분기마다 달라 비율 지표엔 안 맞아 순이익과
+  // 부호가 어긋날 수 있다(실측, 2026-09-23 — Bloom Energy: TTM 순이익은
+  // +996만 달러 흑자인데 이 식으로는 EPS가 여전히 음수로 나옴 —
+  // edgar-income.ts에 적용한 것과 같은 문제). TTM 순이익÷최근 주식수로
+  // 직접 계산해 부호가 항상 일치하게 한다.
+  const epsTtm = netIncome.ttm != null && shares?.val ? netIncome.ttm / shares.val : eps.ttm;
 
   return {
     periodLabel: eps.ttmLabel || netIncome.ttmLabel || "",
     netIncome: netIncome.ttm,
     revenue: revenue.ttm,
     opIncome: opIncome.ttm,
-    eps: eps.ttm,
+    eps: epsTtm,
     snapshot: {
       label: snapLabel,
       equity: equity?.val ?? null,
