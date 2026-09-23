@@ -16,13 +16,21 @@
 
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
+import { buildShareResolver } from "./edgar-shares";
+import {
+  fyEps,
+  ltmEps,
+  netIncomeAnnualByYear,
+  netIncomeToParentEntries,
+  parentEquityAt,
+} from "./edgar-pershare";
 import type { FinancialHighlights, HighlightColumn, HighlightRow, HighlightEstimatePeriod } from "./edgar-highlights";
 import {
   FIN_NET_REVENUE as NET_REVENUE,
   FIN_NONINTEREST_EXPENSE as NONINTEREST_EXPENSE,
   FIN_PROVISION as PROVISION,
-  FIN_NET_INCOME as NET_INCOME,
   isFinancialCompany,
+  withFinNetRevenue,
 } from "./edgar-financial";
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
@@ -53,10 +61,6 @@ function firstEntries(facts: CompanyFacts, concepts: string[], unit = "USD"): Fa
   }
   return [];
 }
-function deiEntries(facts: CompanyFacts, concept: string): FactUnitEntry[] {
-  return facts.facts.dei?.[concept]?.units?.shares ?? [];
-}
-
 function annualSeries(entries: FactUnitEntry[]): { year: number; val: number; end: string }[] {
   const m = new Map<number, { val: number; end: string; filed: string }>();
   for (const e of entries) {
@@ -138,6 +142,9 @@ export function buildUsBankHighlights(
   fallbackShares?: number | null,
 ): FinancialHighlights {
   const notes: string[] = [];
+  // 은행 순수익은 태그가 은행마다 달라(JPM 만 RevenuesNetOfInterestExpense) 합성한다
+  // — edgar-financial.ts withFinNetRevenue(사본 facts, 원본 캐시는 그대로).
+  facts = withFinNetRevenue(facts);
 
   const revSeries = annualSeries(firstEntries(facts, NET_REVENUE));
   const fyYears = revSeries.map((s) => s.year).slice(-5);
@@ -182,21 +189,26 @@ export function buildUsBankHighlights(
     netRevenue: revSeries,
     noninterestExpense: annualSeries(firstEntries(facts, NONINTEREST_EXPENSE)),
     provision: annualSeries(firstEntries(facts, PROVISION)),
-    netIncome: annualSeries(firstEntries(facts, NET_INCOME)),
+    // 순이익 행은 지배주주 순이익(손익계산서·재무분석·컨센서스와 같은 값). EPS 는
+    // 보통주 귀속 순이익 기준(ltmEps·fyEps) — 은행은 우선주 배당이 커서 둘이 다르다.
+    netIncome: [...netIncomeAnnualByYear(facts)]
+      .map(([year, val]) => ({ year, val, end: `${year}-12-31` }))
+      .sort((a, b) => a.year - b.year),
     eps: annualSeries(unitEntries(facts, "EarningsPerShareDiluted", "USD/shares")),
   };
   const E = {
     netRevenue: firstEntries(facts, NET_REVENUE),
     noninterestExpense: firstEntries(facts, NONINTEREST_EXPENSE),
     provision: firstEntries(facts, PROVISION),
-    netIncome: firstEntries(facts, NET_INCOME),
+    netIncome: netIncomeToParentEntries(facts),
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
   };
-  const equityE = unitEntries(facts, "StockholdersEquity", "USD");
   const depositsE = firstEntries(facts, DEPOSITS);
   const assetsE = unitEntries(facts, "Assets", "USD");
-  const sharesEndE = unitEntries(facts, "CommonStockSharesOutstanding", "shares");
-  const sharesDeiE = deiEntries(facts, "EntityCommonStockSharesOutstanding");
+  // 주식수·자기자본·EPS — 일반 하이라이트·재무분석과 같은 공통 기준(edgar-shares·
+  // edgar-pershare). 예전엔 자체 주식수(분할 보정 없음)·흐름식 LTM EPS 를 써서 JPM
+  // LTM PER 이 재무분석과 4.6% 달랐다(검증 체계 2층, 2026-09-23).
+  const shareRes = buildShareResolver(facts, { sharesHint: fallbackShares });
 
   const flowVal = (
     ser: { year: number; val: number }[],
@@ -214,6 +226,7 @@ export function buildUsBankHighlights(
   const deposits = blank();
   const assets = blank();
   const priceByCol = blank();
+  const sharesByCol = blank();
 
   columns.forEach((col, i) => {
     if (col.kind === "estimate") return;
@@ -221,18 +234,17 @@ export function buildUsBankHighlights(
     const isLtm = col.kind === "ltm";
     const price = isLtm ? (lastBar?.close ?? null) : closeOnOrBefore(bars, asOf);
     priceByCol[i] = price;
-    equity[i] = instantAt(equityE, asOf);
+    equity[i] = parentEquityAt(facts, asOf);
     deposits[i] = instantAt(depositsE, asOf);
     assets[i] = instantAt(assetsE, asOf);
-    const SS = 550;
     const shares = isLtm
-      ? (instantAt(sharesDeiE, priceDate, SS) ?? instantAt(sharesEndE, priceDate, SS) ?? fallbackShares)
-      : (instantAt(sharesEndE, asOf, SS) ?? instantAt(sharesDeiE, asOf, SS) ?? fallbackShares);
+      ? shareRes.current()
+      : shareRes.atFiscalYearEnd(Number(col.key.slice(2)), asOf);
+    sharesByCol[i] = shares;
     marketCap[i] = price != null && shares != null ? price * shares : null;
   });
 
-  const currentShares =
-    instantAt(sharesDeiE, priceDate, 550) ?? instantAt(sharesEndE, priceDate, 550) ?? fallbackShares ?? null;
+  const currentShares = shareRes.current() ?? fallbackShares ?? null;
 
   // ── 손익 (순수익 → 충당금전이익 → 영업이익 → 순이익) ─────────────
   const netRevenue = columns.map((col) =>
@@ -256,8 +268,12 @@ export function buildUsBankHighlights(
   const eps = columns.map((col) => {
     if (col.kind === "estimate")
       return estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
-    if (col.kind === "ltm") return ttm(E.eps);
-    return annualAt(S.eps, Number(col.key.slice(2)));
+    if (col.kind === "ltm") return ltmEps(facts, currentShares);
+    const i = columns.indexOf(col);
+    return fyEps(facts, Number(col.key.slice(2)), {
+      fyShares: sharesByCol[i],
+      fyNetIncome: netIncome[i],
+    }).eps;
   });
 
   const firstFy = columns[0]?.kind === "fy" ? Number(columns[0].key.slice(2)) : null;

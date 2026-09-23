@@ -12,6 +12,14 @@ import type { QuoteBar } from "../types";
 import { isStaleAnnual, splitFactorsByYear } from "./edgar-series";
 import { buildShareResolver } from "./edgar-shares";
 import {
+  ltmEps,
+  ltmNetIncome,
+  netIncomeAnnualByYear,
+  netIncomeToParentEntries,
+  parentEquityAt,
+  positiveRatio,
+} from "./edgar-pershare";
+import {
   buildEvResolver,
   daAnnualByYear,
   daTtm,
@@ -130,28 +138,6 @@ function annualSeriesMerged(
     for (const s of annualSeries(unitEntries(facts, c, unit)))
       if (!byYear.has(s.year)) byYear.set(s.year, s);
   return [...byYear.values()].sort((a, b) => a.year - b.year);
-}
-
-/**
- * instant(재무상태표) 값 중 end ≤ asOf 이면서 가장 가까운 것.
- * maxStaleDays 지정 시 그보다 오래된 값은 무시 (분기마다 태깅되지 않는 계정용 — 리스 등).
- */
-function instantAt(
-  entries: FactUnitEntry[],
-  asOf: string,
-  maxStaleDays?: number,
-): number | null {
-  let best: { val: number; end: string; filed: string } | null = null;
-  for (const e of entries) {
-    if (e.start) continue; // duration 제외
-    if (e.end > asOf) continue;
-    if (maxStaleDays != null && daysBetween(e.end, asOf) > maxStaleDays) continue;
-    const filed = e.filed ?? "";
-    // 최신 종료일, 동률이면 최신 공시(액면분할 등 소급 재작성본) 우선
-    if (!best || e.end > best.end || (e.end === best.end && filed >= best.filed))
-      best = { val: e.val, end: e.end, filed };
-  }
-  return best?.val ?? null;
 }
 
 /** 흐름 계정 TTM = 최근 FY + 당기누적 − 전년동기누적. */
@@ -333,13 +319,10 @@ export function buildUsHighlights(
     grossProfit: gpS,
     opIncome: opIncS,
     da: daS,
-    // 지배주주 귀속(NetIncomeLoss)이 1순위 — annualSeriesMerged 는 연도별로
-    // 앞 개념을 우선한다(위 concat 주석의 월마트 사례 참고).
-    netIncome: annualSeriesMerged(facts, [
-      "NetIncomeLoss",
-      "ProfitLoss",
-      "NetIncomeLossAvailableToCommonStockholdersBasic",
-    ]),
+    // 지배주주 순이익 — edgar-pershare.ts 공통 규칙(NetIncomeLoss 없으면 ProfitLoss − 비지배지분)
+    netIncome: [...netIncomeAnnualByYear(facts)]
+      .map(([year, val]) => ({ year, val, end: `${year}-12-31` }))
+      .sort((a, b) => a.year - b.year),
     eps: annualSeries(unitEntries(facts, "EarningsPerShareDiluted", "USD/shares")),
     ocf: annualSeries(
       unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
@@ -361,7 +344,7 @@ export function buildUsHighlights(
     grossProfit: unitEntries(facts, "GrossProfit", "USD"),
     opIncome: unitEntries(facts, "OperatingIncomeLoss", "USD"),
     pretax: concat(PRETAX_CONCEPTS),
-    netIncome: concat(["NetIncomeLoss","ProfitLoss","NetIncomeLossAvailableToCommonStockholdersBasic"]),
+    netIncome: netIncomeToParentEntries(facts),
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
     ocf: unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
     capex: concat(CAPEX_CONCEPTS),
@@ -370,24 +353,8 @@ export function buildUsHighlights(
       "USD/shares",
     ),
   };
-  // 자기자본: 태그가 시기별로 바뀌는 종목(V 는 2012년부터 …IncludingNCI 만) 대응해 병합.
-  // concat 을 쓰는 이유는 위 주석 참고 — 단순 이어붙이면 같은 시점에 둘 다
-  // 태깅하는 기업(월마트 등)에서 NCI 포함값이 지배주주 자본을 덮어써 PBR 이
-  // 틀어진다.
-  const equityE = concat([
-    "StockholdersEquity",
-    "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-  ]);
-  const assetsForEqE = unitEntries(facts, "Assets", "USD");
-  const liabForEqE = unitEntries(facts, "Liabilities", "USD");
-  // 자본을 클래스별로만 태깅하는 기업(Visa) → 자산 − 부채로 보정
-  const equityAt = (asOf: string): number | null => {
-    const e = instantAt(equityE, asOf);
-    if (e != null) return e;
-    const a = instantAt(assetsForEqE, asOf);
-    const l = instantAt(liabForEqE, asOf);
-    return a != null && l != null ? a - l : null;
-  };
+  // 자기자본 — edgar-pershare.ts 단일 기준(재작성본 우선, 없으면 자산 − 부채).
+  const equityAt = (asOf: string): number | null => parentEquityAt(facts, asOf);
   // 현금·차입금·우선주·비지배지분은 edgar-ev.ts(evRes)가 계산한다.
   // 발행주식수(기말·현재·듀얼클래스 폴백)는 전부 edgar-shares.ts 의
   // buildShareResolver 로 옮겼다 — 이 파일과 edgar-analysis.ts 가 각자
@@ -501,6 +468,8 @@ export function buildUsHighlights(
       const eps = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
       return eps != null && currentShares != null ? eps * currentShares : null;
     }
+    // LTM 순이익은 공통 함수(재무분석·개요 멀티플과 같은 값)
+    if (col.kind === "ltm") return ltmNetIncome(facts);
     return flowVal(S.netIncome, E.netIncome, col);
   });
   // 액면분할 보정 (소급 재작성 안 된 과거 연도 주당 지표를 최신 기준으로 환산)
@@ -525,8 +494,9 @@ export function buildUsHighlights(
       // 개요 재무하이라이트 EPS 는 -0.04 로 표시. 같은 문제를
       // edgar-income.ts·edgar.ts 에서도 각각 고쳤다). LTM 순이익 ÷ 현재
       // 주식수로 직접 계산하고, 그마저 불가능할 때만 옛 경로로 폴백한다.
-      if (netIncome[i] != null && currentShares)
-        return netIncome[i]! / currentShares;
+      // 공통 함수(보통주 귀속 LTM 순이익 ÷ 현재 주식수) — 재무분석·개요·은행과 동일
+      const le = ltmEps(facts, currentShares);
+      if (le != null) return le;
       return ttm(E.eps) ?? derive() ?? classALatest(cf)?.epsDiluted ?? null;
     }
     const y = Number(col.key.slice(2));
@@ -598,8 +568,8 @@ export function buildUsHighlights(
   const ltmIdx = columns.findIndex((c) => c.kind === "ltm");
   const curMcap = ltmIdx >= 0 ? marketCap[ltmIdx] : null;
   const curPrice = ltmIdx >= 0 ? priceByCol[ltmIdx] : null;
-  const ratio = (num: number | null, den: number | null): number | null =>
-    num != null && den != null && den > 0 ? num / den : null;
+  // 분모 0 이하면 비운다 — edgar-pershare.ts 공통 부호 규칙
+  const ratio = positiveRatio;
   // PER = 회계연도말 종가 ÷ 보고 희석 EPS (컨센서스 표와 동일 기준).
   // 예상 열은 현재가 ÷ 추정 EPS.
   const per = columns.map((col, i) =>

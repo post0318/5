@@ -206,12 +206,18 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     ]);
   }
 
+  // 미국: 주식수·시가총액을 하이라이트와 같은 공통 기준(edgar-shares, 스냅샷 evShares)
+  // 으로 — Yahoo 주식수·시가총액을 쓰면 PBR·PSR 이 하이라이트와 달랐다.
+  const usShares = snap?.evShares ?? null;
   const shares =
+    usShares ??
     sharesOutstanding ??
     snap?.shares ??
     (netIncome != null && epsDiluted ? netIncome / epsDiluted : null);
   const marketCap =
-    quotedMarketCap ?? (price != null && shares != null ? price * shares : null);
+    usShares != null && price != null
+      ? price * usShares
+      : (quotedMarketCap ?? (price != null && shares != null ? price * shares : null));
 
   const per = price != null && epsDiluted ? price / epsDiluted : null;
   // TTM EPS 우선 자체 산출값 → 없으면 순이익/주식수, 그것도 없으면 null
@@ -221,9 +227,11 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
       : ttm?.netIncome != null && shares
         ? ttm.netIncome / shares
         : null;
-  const perTtm = price != null && epsTtm ? price / epsTtm : null;
+  // 미국은 분모 0 이하면 비운다(하이라이트·재무분석과 같은 부호 규칙)
+  const pos = (n: number | null, d: number | null) => (n != null && d != null && d > 0 ? n / d : null);
+  const perTtm = usShares != null ? pos(price, epsTtm) : price != null && epsTtm ? price / epsTtm : null;
   const bps = equity != null && shares ? equity / shares : null;
-  const pbr = price != null && bps ? price / bps : null;
+  const pbr = usShares != null ? pos(price, bps) : price != null && bps ? price / bps : null;
   // PSR·EV/EBITDA: 분자(시가총액·EV)가 현재가 기준이므로 분모도 TTM 으로 맞춘다.
   // 미국(snapshot 존재)은 EDGAR TTM 사용, 그 외(국내 등)는 종전대로 최근 "연간".
   const revenueForPsr = snap && ttm?.revenue != null ? ttm.revenue : revenue;

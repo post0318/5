@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "build:kr-corpcodes": "node scripts/build-kr-corpcodes.mjs",
     "batch:kr-da": "node scripts/populate-kr-da.mjs",
-    "batch:nightly": "node scripts/nightly.mjs"
+    "batch:nightly": "node scripts/nightly.mjs",
+    "verify:financials": "node scripts/verify-financials.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

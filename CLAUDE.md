@@ -144,6 +144,10 @@ npm run db:studio    # drizzle studio
 
 - **크롤링은 어떤 시나리오에서도 금지**: FnGuide(`robots.txt Disallow: /`),
   MarketScreener(ToS) → 딥링크만.
+  - **검증용 1회 조회 예외 (오너 승인 2026-09-23)**: 재무 숫자 정의 확인을 위해
+    MarketScreener·FnGuide 페이지를 **사람이 보는 수준으로 몇 개만 1회** 조회했다
+    (EV·순차입금·우선주 시가총액 정의 대조). 앱·스크립트 코드에는 넣지 않으며,
+    반복 조회·수집은 여전히 금지. FnGuide 는 "이번 검증용"으로만 승인됨.
   - **stockanalysis.com 은 2026-09 재검토 후 제한적으로 허용**(오너 승인).
     기존 "ToS 위반" 판단이 실제 문구 확인 없이 내려진 것이었음 — 실측:
     `robots.txt` 는 `/e/`·`/p/` 만 막고 `/stocks/*/forecast/` 는 허용,
@@ -1299,6 +1303,28 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
 - 태그 함정(실측): 회사가 표준 태그를 중단(GE 현금 2017·영업이익, SBUX 현금 2022)
   → 최근 12개월 계산은 마지막 연간값이 550일 넘은 태그를 버린다(`isStaleAnnual`).
   주식수 단위 오류(MCD 가중평균 `716.4` = 7억 1,640만 주) → `fixScale`.
+
+### 재무 숫자 검증 체계 (오너 지시 2026-09-23 — "검증체계는 구축해라")
+
+- **1층 강제**: `eslint.config.mjs` 의 `no-restricted-syntax` — 미국 멀티플 계산
+  모듈(edgar-highlights·edgar-analysis·multiples)에서 차입금·리스·감가상각비·
+  장기투자 태그 문자열을 직접 쓰면 린트 오류. 공통 모듈(`edgar-ev.ts`·
+  `edgar-shares.ts`·`edgar-pershare.ts`)을 거칠 것.
+- **2·3층**: `npm run verify:financials -- --symbols=AAPL,WMT` (또는 `--universe`,
+  `--sp500`). 실행 중인 앱 API 를 그대로 불러 사용자가 보는 숫자를 검사한다.
+  2층 = 화면 간 동일성(EV/EBITDA·PER·PBR·PSR·EBITDA·순이익·차입금) + 항등식
+  (EV 브릿지 합, 공시 EPS × 가중평균 주식수 ≈ 순이익, 자산 = 부채 + 자본), 결과는
+  통과·실패·**검증불가**(값이 없으면 통과로 치지 않음). 3층 = Yahoo 분기 재무제표
+  합계와 대조한 **검토 목록**(정의 차이가 있어 판정하지 않음). 결과는
+  `reports/verify/`(git 제외). 공시 자체의 계산 차이(AT&T 2022 EPS 등)는 검토 목록.
+- **주의**: `.env.local` 을 `vercel env pull` 로 받으면 민감 변수(MONGODB_URI·
+  KRX_API_KEY 등)가 빈 값으로 온다 — 유니버스 검증·한국 시가총액이 안 된다.
+- `edgar-pershare.ts`: 지배주주 순이익(NetIncomeLoss 없으면 ProfitLoss − 비지배지분),
+  LTM EPS(보통주 귀속 LTM 순이익 ÷ 현재 주식수 — 주당 지표에 흐름식 금지),
+  사업연도 EPS, 자기자본(재작성본 우선), 배수 부호 규칙(분모 0 이하 비움).
+- 은행 순수익은 태그가 은행마다 달라 합성한다(`edgar-financial.ts`
+  `withFinNetRevenue`: RevenuesNetOfInterestExpense → Revenues → 순이자이익 +
+  비이자이익). 대형 은행 14곳 중 12곳이 첫 번째 태그를 안 써서 비어 있었다.
 
 ## 숫자 소수점 처리 (오너 지시 2026-09-23 — "조건은 통일되어야")
 

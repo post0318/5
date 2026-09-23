@@ -61,3 +61,6 @@ scripts/.krx-collect.log
 
 # 로컬 재실행 도구 로그 (scripts/retry-failed-collectors.mjs)
 logs/
+
+# 재무 검증 스크립트 결과 (scripts/verify-financials.mjs)
+/reports/

@@ -13,6 +13,7 @@ import {
   ttmOf,
 } from "./edgar-series";
 import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa } from "./edgar-ev";
+import { ltmNetIncome, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
 import {
   classAEps,
   classALatest,
@@ -24,6 +25,7 @@ import {
   FIN_NONINTEREST_EXPENSE,
   FIN_PROVISION,
   isFinancialCompany,
+  withFinNetRevenue,
 } from "./edgar-financial";
 
 /**
@@ -52,7 +54,6 @@ const PRETAX = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
 ];
 const TAX = ["IncomeTaxExpenseBenefit"];
-const NET_INCOME = ["NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"];
 const EPS_BASIC = ["EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted"];
 const EPS_DIL = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"];
 const NONOP = ["NonoperatingIncomeExpense", "OtherNonoperatingIncomeExpense"];
@@ -83,6 +84,9 @@ export function buildUsIncome(
   const classFacts = opts.classFacts ?? null;
   // 금융회사(은행·카드사) — 매출 대신 순수익(이자비용 차감), 매출총이익 대신 충당금전이익.
   const isFin = isFinancialCompany(facts, opts.sic ?? null);
+  // 은행 순수익은 태그가 은행마다 달라(JPM 만 RevenuesNetOfInterestExpense) 합성한다
+  // — edgar-financial.ts withFinNetRevenue(사본 facts, 원본 캐시는 그대로).
+  if (isFin) facts = withFinNetRevenue(facts);
   const revConcepts = isFin ? FIN_NET_REVENUE : REVENUE;
 
   // 개념 태그가 시기별로 바뀌는 기업(NVIDIA 등) → 나열 개념을 연도별로 병합
@@ -260,7 +264,23 @@ export function buildUsIncome(
   if (!intFresh && LTM in netIntCost) netIntCost[LTM] = null;
   const hasInterest = !isFin && labels.some((l) => netIntCost[l] != null);
   const tax = val(TAX);
-  const netIncome = val([...NET_INCOME, "ProfitLoss"]);
+  // 지배주주 순이익 — edgar-pershare.ts 공통 규칙(하이라이트·재무분석과 같은 값).
+  // NetIncomeLoss 가 없는 기간은 ProfitLoss − 비지배지분(BE 2024·2025).
+  const netIncome = (() => {
+    const out = blank();
+    const entries = netIncomeToParentEntries(facts);
+    if (quarterly) {
+      qCols.forEach((q, i) => {
+        if (i === 0) return; // prev 전용
+        out[q.label] = singleQuarter(entries, q, qCols[i - 1]);
+      });
+      return out;
+    }
+    const ann = netIncomeAnnualByYear(facts);
+    for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
+    out[LTM] = ltmNetIncome(facts);
+    return out;
+  })();
   // (−) 기타 = (세전이익 − 법인세비용) − 공시 당기순이익 (중단사업·소수주주지분 등)
   const otherToNi = blank();
   for (const l of labels)

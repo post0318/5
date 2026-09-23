@@ -16,6 +16,9 @@ import { loadCaptiveDebt } from "./us/edgar-captive";
 import { loadClassAFacts } from "./us/class-facts-loader";
 import { buildShareResolver, type ShareResolver } from "./us/edgar-shares";
 import { isFinancialCompany } from "./us/edgar-financial";
+import { fyEps, netIncomeAnnualByYear, parentEquityAt, positiveRatio } from "./us/edgar-pershare";
+import type { ClassAFacts } from "./us/edgar-classfacts";
+import type { CompanyFacts } from "./us/edgar";
 import {
   AdapterError,
   type DeepLink,
@@ -213,6 +216,8 @@ export async function getConsensusData(
     ev: EvResolver;
     da: Map<number, number>;
     op: Map<number, number>;
+    facts: CompanyFacts;
+    classFacts: ClassAFacts | null;
   } | null = null;
   if (market === "us") {
     try {
@@ -229,6 +234,8 @@ export async function getConsensusData(
         ev: buildEvResolver(facts, { sic, captive, opUnits, isFinancial: isFinancialCompany(facts, sic) }),
         da: daAnnualByYear(facts),
         op: opIncomeAnnualByYear(facts),
+        facts,
+        classFacts,
       };
     } catch {
       us = null;
@@ -239,8 +246,17 @@ export async function getConsensusData(
   for (const fy of years) {
     const revenue = valueForYear(annual, fy, ACCT.revenue);
     const opIncome = valueForYear(annual, fy, ACCT.opIncome);
-    const netIncome = valueForYear(annual, fy, ACCT.netIncome);
-    const equity = valueForYear(annual, fy, ACCT.equity);
+    // 미국: 지배주주 순이익 공통 규칙(하이라이트·손익계산서와 같은 값)
+    const netIncome = us
+      ? (netIncomeAnnualByYear(us.facts).get(fy) ?? null)
+      : valueForYear(annual, fy, ACCT.netIncome);
+    // 미국: 자기자본은 하이라이트와 같은 단일 기준(재작성본 우선) — 계정명 매칭은
+    // T·VZ 처럼 지배주주 자본 태그가 다른 회사에서 빈칸이 됐다(검증 체계로 발견).
+    const periodEndUs = annual.periods.find((p) => p.fiscalYear === fy)?.endDate ?? null;
+    const equity =
+      us && periodEndUs
+        ? parentEquityAt(us.facts, periodEndUs)
+        : valueForYear(annual, fy, ACCT.equity);
     const liab = valueForYear(annual, fy, ACCT.liabilities);
     const cash = valueForYear(annual, fy, ACCT.cash);
     const epsStmt = valueForYear(annual, fy, ACCT.eps);
@@ -248,7 +264,10 @@ export async function getConsensusData(
     // 미국은 연도말 주식수(단일 기준), 그 외는 종전대로 현재 주식수
     const periodEnd0 = annual.periods.find((p) => p.fiscalYear === fy)?.endDate ?? null;
     const fyShares = us && periodEnd0 ? (us.shares.atFiscalYearEnd(fy, periodEnd0) ?? shares) : shares;
-    const eps = epsStmt ?? (netIncome != null && fyShares ? netIncome / fyShares : null);
+    // 미국: 하이라이트와 같은 연도 EPS 규칙(공시값·분할 보정 → Class A 실측 → 근사)
+    const eps = us
+      ? fyEps(us.facts, fy, { classFacts: us.classFacts, fyShares, fyNetIncome: netIncome }).eps
+      : (epsStmt ?? (netIncome != null && fyShares ? netIncome / fyShares : null));
     const bps = equity != null && fyShares ? equity / fyShares : null;
 
     // 해당 회계연도의 실제 마감일 시점 주가 (없으면 결산월 28일로 근사)
@@ -263,8 +282,10 @@ export async function getConsensusData(
     }
     yePrice = yePrice ?? price; // 못 구하면 현재가로 대체
 
-    const per = yePrice != null && eps ? yePrice / eps : null;
-    const pbr = yePrice != null && bps ? yePrice / bps : null;
+    // 미국: 분모 0 이하면 비운다(하이라이트·재무분석과 같은 부호 규칙). 한국·일본은
+    // B16 결정 전까지 종전 그대로.
+    const per = us ? positiveRatio(yePrice, eps) : yePrice != null && eps ? yePrice / eps : null;
+    const pbr = us ? positiveRatio(yePrice, bps) : yePrice != null && bps ? yePrice / bps : null;
     let roe = netIncome != null && equity ? (netIncome / equity) * 100 : null;
     // netIncome 이 자본 계정과 잘못 매칭되면 ROE≈100 → 숨김
     if (roe != null && (Math.abs(roe - 100) < 0.001 || roe > 100 || roe < -100)) roe = null;

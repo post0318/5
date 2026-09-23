@@ -24,6 +24,13 @@ import {
 } from "./edgar-classfacts";
 import { buildShareResolver } from "./edgar-shares";
 import {
+  ltmEps,
+  ltmNetIncome,
+  netIncomeAnnualByYear,
+  parentEquityAt,
+  positiveRatio,
+} from "./edgar-pershare";
+import {
   buildEvResolver,
   daAnnualByYear,
   daTtm,
@@ -35,6 +42,7 @@ import {
   FIN_NONINTEREST_EXPENSE,
   FIN_PROVISION,
   isFinancialCompany,
+  withFinNetRevenue,
 } from "./edgar-financial";
 
 /**
@@ -47,12 +55,6 @@ const REV = [
   "RevenueFromContractWithCustomerExcludingAssessedTax",
   "RevenueFromContractWithCustomerIncludingAssessedTax",
   "Revenues",
-];
-// 당기순이익 — CAT 등은 NetIncomeLoss 대신 ProfitLoss 사용
-const NI_C = [
-  "NetIncomeLoss",
-  "ProfitLoss",
-  "NetIncomeLossAvailableToCommonStockholdersBasic",
 ];
 const PRETAX_C = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
@@ -105,6 +107,9 @@ export function buildUsAnalysis(
   const classFacts = opts.classFacts ?? null;
   // 금융회사(은행·카드사) — 매출 대신 순수익(이자비용 차감), 매출총이익 대신 충당금전이익 사용.
   const isFin = isFinancialCompany(facts, opts.sic ?? null);
+  // 은행 순수익은 태그가 은행마다 달라(JPM 만 RevenuesNetOfInterestExpense) 합성한다
+  // — edgar-financial.ts withFinNetRevenue(사본 facts, 원본 캐시는 그대로).
+  if (isFin) facts = withFinNetRevenue(facts);
   const revConcepts = isFin ? FIN_NET_REVENUE : REV;
   let approxPerShare = false;
   // 개념 태그가 시기에 따라 바뀌는 기업(NVIDIA: RevenueFromContract…→Revenues,
@@ -235,7 +240,14 @@ export function buildUsAnalysis(
     }
     return o;
   })();
-  const netIncome = flow(NI_C);
+  // 지배주주 순이익 — edgar-pershare.ts 공통 규칙(NetIncomeLoss 없으면 ProfitLoss − 비지배지분)
+  const niByYear = netIncomeAnnualByYear(facts);
+  const netIncome = blank();
+  for (const y of years) netIncome[`${y}Y`] = niByYear.get(y) ?? null;
+  // LTM 순이익 — edgar-pershare.ts 공통(하이라이트·개요 멀티플과 같은 값)
+  netIncome[LTM] = ltmNetIncome(facts);
+  // 주식수 단일 기준(edgar-shares.ts) — 시가총액·LTM EPS 공통
+  const shareRes = buildShareResolver(facts, { classFacts, sharesHint });
   const EPS_C = [
     "EarningsPerShareDiluted",
     "IncomeLossFromContinuingOperationsPerDilutedShare",
@@ -249,7 +261,14 @@ export function buildUsAnalysis(
   );
   const eps = (() => {
     const o = adjPerShare(flow(EPS_C, "USD/shares"));
-    const niF = fullAnnual(NI_C);
+    // LTM EPS 는 주당 지표에 흐름식(FY + 누적 − 전년누적)을 쓰지 않는다 — 분모가
+    // 기간마다 달라 성립하지 않는다(오전 A1 과 같은 오류가 여기 남아 있었다, 검증
+    // 체계로 발견). 하이라이트와 같게 LTM 순이익 ÷ 현재 주식수.
+    {
+      o[LTM] = ltmEps(facts, shareRes.current());
+      if (o[LTM] != null && shareRes.usedHint()) approxPerShare = true;
+    }
+    const niF = niByYear;
     for (const l of labels) {
       if (o[l] != null) continue;
       if (l === LTM) {
@@ -283,7 +302,7 @@ export function buildUsAnalysis(
   const epsFull = (() => {
     const m = adjMap(fullAnnual(EPS_C, "USD/shares"));
     if (m.size) return m;
-    const niF = fullAnnual(NI_C);
+    const niF = niByYear;
     const out = new Map<number, number>();
     for (const [y, ni] of niF) {
       const ca = classAEps(classFacts, y, "diluted");
@@ -335,7 +354,7 @@ export function buildUsAnalysis(
     for (const [y, v] of gp) if (s.has(y) || r.has(y)) out.set(y, v - (s.get(y) ?? 0) - (r.get(y) ?? 0));
     return out;
   })();
-  const niFull = fullAnnual(NI_C);
+  const niFull = niByYear;
   const daFull = daByYear;
   const ocfFull = fullAnnual(["NetCashProvidedByUsedInOperatingActivities"]);
   const capexFull = fullAnnual(CAPEX_C);
@@ -418,16 +437,16 @@ export function buildUsAnalysis(
 
   const assets = stock(["Assets"]);
   const liabAndEquity = stock(["LiabilitiesAndStockholdersEquity"]);
+  // 자기자본 — edgar-pershare.ts 단일 기준(재작성본 우선). 예전엔 연간 보고서 양식만
+  // 봐서 8-K 재작성본(GE 2021 LDTI 소급)을 놓쳐 PBR 이 하이라이트와 달랐다.
   const equity = (() => {
-    const o = stock([
-      "StockholdersEquity",
-      "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-    ]);
-    // 파생: 자산 − 부채총계
-    const liab0 = stock(["Liabilities"]);
-    for (const l of labels)
-      if (o[l] == null && (liabAndEquity[l] ?? assets[l]) != null && liab0[l] != null)
-        o[l] = (liabAndEquity[l] ?? assets[l])! - liab0[l]!;
+    const o = blank();
+    let latestBal = "";
+    for (const e of entriesOf(facts, "Assets")) if (!e.start && e.end > latestBal) latestBal = e.end;
+    for (const p of periods) {
+      const d = p.label === LTM ? latestBal : (p.endDate ?? "");
+      o[p.label] = d ? parentEquityAt(facts, d) : null;
+    }
     return o;
   })();
   const curAssets = stock(["AssetsCurrent"]);
@@ -632,14 +651,6 @@ export function buildUsAnalysis(
     }
     return o;
   };
-  const avgStockSum = (concepts: string[]): Record<string, number | null> => {
-    const o = blank();
-    for (const c of concepts) {
-      const a = avgStock([c]);
-      for (const l of labels) if (a[l] != null) o[l] = (o[l] ?? 0) + a[l]!;
-    }
-    return o;
-  };
   const equityAvg = (() => {
     const o = avgStock([
       "StockholdersEquity",
@@ -652,12 +663,20 @@ export function buildUsAnalysis(
   // 투하자본 = 총자산 − 비이자 유동부채 (= 총차입금 + 자기자본 + 비유동 비이자부채).
   // 블룸버그 ROIC 기준. 순현금 기업이라도 음수화 안 됨.
   const curLiabAvg = avgStock(["LiabilitiesCurrent"]);
-  const curDebtAvg = avgStockSum([
-    "LongTermDebtCurrent",
-    "CommercialPaper",
-    "ShortTermBorrowings",
-    "FinanceLeaseLiabilityCurrent",
-  ]);
+  // 유동 차입금(평균) — edgar-ev.ts 단일 기준: 전체 차입금 − 비유동 차입금.
+  // 예전엔 여기서 차입금 태그를 따로 골라 EV 쪽과 기준이 달랐다(감사 2026-09-23).
+  const curDebtAt = (d: string): number | null => {
+    const b = d ? evRes.bridgeAt(d) : null;
+    return b && b.debtNoncurrent != null ? Math.max(0, b.debt - b.debtNoncurrent) : null;
+  };
+  const curDebtAvg = blank();
+  for (const l of labels) {
+    const d = balDate(l);
+    const prevD = l === LTM ? shiftYear(d, -1) : (ends.get(Number(l.slice(0, 4)) - 1) ?? "");
+    const cur = curDebtAt(d);
+    const prev = prevD ? curDebtAt(prevD) : null;
+    curDebtAvg[l] = cur != null && prev != null ? (cur + prev) / 2 : cur;
+  }
   const investedCapAvg = blank();
   for (const l of labels) {
     if (assetsAvg[l] == null || curLiabAvg[l] == null) continue;
@@ -668,7 +687,6 @@ export function buildUsAnalysis(
   // 소급 반영된 값이므로 주식수도 현재 기준으로 환산해야 시가총액이 맞는다
   // (오너 지적 2026-09-23 — 하이라이트와 PBR·PSR·EV 가 달랐던 원인. 자세한
   // 내용은 edgar-shares.ts 주석 참고).
-  const shareRes = buildShareResolver(facts, { classFacts, sharesHint });
   const price = blank();
   const mktcap = blank();
   for (const p of periods) {
@@ -770,9 +788,11 @@ export function buildUsAnalysis(
     values: blank(),
   });
 
-  const per = ratio(price, eps);
+  // 분모 0 이하(적자 EPS)면 비운다 — edgar-pershare.ts 공통 부호 규칙
+  const per = blank();
+  for (const l of labels) per[l] = positiveRatio(price[l], eps[l]);
   const pbrV = blank();
-  for (const l of labels) if (mktcap[l] != null && equity[l]) pbrV[l] = mktcap[l]! / equity[l]!;
+  for (const l of labels) pbrV[l] = positiveRatio(mktcap[l], equity[l]);
   const psrV = blank();
   for (const l of labels) {
     const mc = l === LTM ? curMktcap : mktcap[l];

@@ -23,6 +23,7 @@ import { splitFactorsByYear } from "./edgar-series";
 import { buildEvResolver, daAnnualByYear, daTtm, type EvContext } from "./edgar-ev";
 import { loadCaptiveDebt } from "./edgar-captive";
 import { buildShareResolver } from "./edgar-shares";
+import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
 import { isFinancialCompany } from "./edgar-financial";
 import { loadClassAFacts } from "./class-facts-loader";
 import type { ClassAFacts } from "./edgar-classfacts";
@@ -408,28 +409,32 @@ function buildUsTtm(
   // +996만 달러 흑자인데 이 식으로는 EPS가 여전히 음수로 나옴 —
   // edgar-income.ts에 적용한 것과 같은 문제). TTM 순이익÷최근 주식수로
   // 직접 계산해 부호가 항상 일치하게 한다.
-  const epsTtm = netIncome.ttm != null && shares?.val ? netIncome.ttm / shares.val : eps.ttm;
-
   // EV 브릿지 — 하이라이트 LTM 열과 같은 모듈·같은 기준일(자산총계 최근일).
   const evRes = buildEvResolver(facts, evCtx);
   const evDate = evRes.latestBalanceDate();
   const evBridge = evDate ? evRes.bridgeAt(evDate) : null;
+  // 개요 멀티플이 하이라이트 LTM 열과 같은 값을 내도록 주식수·순이익·자기자본을
+  // 공통 기준으로(edgar-shares·edgar-pershare) — 검증 체계 2층에서 PER·PBR 불일치 발견.
+  const evShares = buildShareResolver(facts, { classFacts: evCtx.classFacts ?? null }).current();
+  const niLtm = ltmNetIncome(facts);
+  const epsTtm = ltmEps(facts, evShares);
+  const equityLtm = evDate ? parentEquityAt(facts, evDate) : null;
 
   return {
     periodLabel: eps.ttmLabel || netIncome.ttmLabel || "",
-    netIncome: netIncome.ttm,
+    netIncome: niLtm,
     revenue: revenue.ttm,
     opIncome: opIncome.ttm,
     eps: epsTtm,
     snapshot: {
       label: snapLabel,
-      equity: equity?.val ?? null,
+      equity: equityLtm,
       liabilities: liabilities?.val ?? null,
       cash: cash?.val ?? null,
       shares: shares?.val ?? null,
       evNetDebt: evBridge ? evBridge.debt + evBridge.preferred + evBridge.nci - evBridge.cash : null,
       evBlocker: evDate ? evRes.blocker(evDate) : null,
-      evShares: buildShareResolver(facts, { classFacts: evCtx.classFacts ?? null }).current(),
+      evShares,
       evOpNciBook: evBridge?.opUnitNciBook ?? null,
       isReit: evCtx.sic === "6798",
     },
