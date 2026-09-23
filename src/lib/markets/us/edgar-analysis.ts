@@ -382,6 +382,22 @@ export function buildUsAnalysis(
     if (cx != null) fcfFull.set(y, v - Math.abs(cx));
   }
   const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
+  // "PaymentsOfDividends"(포괄) 는 보통주 배당뿐 아니라 비지배지분(NCI)·종속회사
+  // 우선주 분배까지 섞여 들어올 수 있다(실측, 2026-09-23 — Bloom Energy: 재무
+  // 제표엔 보통주 배당이 전혀 없는데 "주당배당금 성장률"이 -47%로 나옴. 원인:
+  // PaymentsOfDividends 947천~1,468천 달러는 BE의 프로젝트금융 자회사(Bloom
+  // Electrons)가 세금평등 파트너에게 지급하는 분배금으로 보이는데, 이걸 보통주
+  // 배당인 것처럼 DPS·배당성향·growth%를 계산해 의미 없는 "배당 삭감" 신호가
+  // 떴다). 실제 보통주 배당 지급 기업은 거의 항상 `CommonStockDividendsPer
+  // ShareDeclared` 같은 직접 주당배당 태그도 함께 공시한다 — 이 태그도, 명시적
+  // 으로 "보통주"라고 못박은 `PaymentsOfDividendsCommonStock`도 전혀 없으면
+  // 포괄 개념 하나만 믿고 보통주 지표(DPS·배당성향·총주주환원율의 배당분)를
+  // 만들지 않는다(빈 칸/버뱩만 반영 — 오배당 신호보다 안전).
+  const hasCommonDivEvidence =
+    entriesOf(facts, "CommonStockDividendsPerShareDeclared").length > 0 ||
+    entriesOf(facts, "CommonStockDividendsPerShareCashPaid").length > 0 ||
+    entriesOf(facts, "PaymentsOfDividendsCommonStock").length > 0;
+  const commonDividends = hasCommonDivEvidence ? dividends : blank();
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const INT_PAID_C = ["InterestPaidNet", "InterestPaid"];
   const intPaid = flow(INT_PAID_C); // 현금 이자 지급액
@@ -552,25 +568,29 @@ export function buildUsAnalysis(
   }
 
   // 주당배당금 (DPS) — 배당 총액 ÷ 주식수, 액면분할 보정. 성장률 계산용.
+  // commonDividends 가 이미 위에서 "보통주 배당 근거 없으면 빈 값"으로
+  // 걸러졌다.
   const DIV_C = ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"];
   const dps = adjPerShare(
     (() => {
       const o = blank();
       for (const l of labels)
-        if (dividends[l] != null && shares[l]) o[l] = Math.abs(dividends[l]!) / shares[l]!;
+        if (commonDividends[l] != null && shares[l]) o[l] = Math.abs(commonDividends[l]!) / shares[l]!;
       return o;
     })(),
   );
-  const dpsFull = adjMap(
-    (() => {
-      const m = new Map<number, number>();
-      for (const [y, v] of fullAnnual(DIV_C)) {
-        const sh = wavgAt(y);
-        if (sh) m.set(y, Math.abs(v) / sh);
-      }
-      return m;
-    })(),
-  );
+  const dpsFull = !hasCommonDivEvidence
+    ? new Map<number, number>()
+    : adjMap(
+        (() => {
+          const m = new Map<number, number>();
+          for (const [y, v] of fullAnnual(DIV_C)) {
+            const sh = wavgAt(y);
+            if (sh) m.set(y, Math.abs(v) / sh);
+          }
+          return m;
+        })(),
+      );
 
   // 파생
   const ebitda = blank();
@@ -915,13 +935,13 @@ export function buildUsAnalysis(
     R("배당성향 (%)", (() => {
       const o = blank();
       for (const l of labels)
-        if (dividends[l] != null && netIncome[l]) o[l] = (Math.abs(dividends[l]!) / netIncome[l]!) * 100;
+        if (commonDividends[l] != null && netIncome[l]) o[l] = (Math.abs(commonDividends[l]!) / netIncome[l]!) * 100;
       return o;
     })(), "pct"),
     R("총주주환원율 (%)", (() => {
       const o = blank();
       for (const l of labels) {
-        const ret = (dividends[l] != null ? Math.abs(dividends[l]!) : 0) + (buyback[l] != null ? Math.abs(buyback[l]!) : 0);
+        const ret = (commonDividends[l] != null ? Math.abs(commonDividends[l]!) : 0) + (buyback[l] != null ? Math.abs(buyback[l]!) : 0);
         if (netIncome[l]) o[l] = (ret / netIncome[l]!) * 100;
       }
       return o;
