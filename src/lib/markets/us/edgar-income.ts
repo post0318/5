@@ -4,6 +4,7 @@ import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../
 import {
   annualByYear,
   annualEnds,
+  directQuarterValue,
   entriesOf,
   firstConcept,
   recentQuarters,
@@ -315,8 +316,53 @@ export function buildUsIncome(
     }
     return r;
   };
-  const epsBasic = deriveEps(adjEps(val(EPS_BASIC, "USD/shares")), "basic");
-  const epsDil = deriveEps(adjEps(val(EPS_DIL, "USD/shares")), "diluted");
+  // ① EPS 는 흐름(매출·순이익)과 달라 singleQuarter/ttmOf 의 "누적값 차감"
+  // 식이 안 성립한다 — 분모(가중평균 주식수)가 분기마다 달라 단순 뺄셈이
+  // 실제 TTM 주당순이익을 안 준다(오너 지적, 2026-09-23 — Bloom Energy
+  // "당기순이익은 9백만인데 기본/희석 EPS는 마이너스"). val()의 LTM 결과가
+  // null이 아니면 바로 아래 deriveEps()의 "순이익÷주식수" 폴백이
+  // `r[l] != null` 에 걸려 아예 안 도는 게 원인 — LTM은 차감식 결과를 버리고
+  // 항상 그 폴백을 타게 한다.
+  //
+  // ② 공시 태그값 자체가 틀린 경우도 있다 — 실측(2026-09-23): Bloom Energy
+  // 2025 Q3 10-Q(accn 0001628280-25-046844)가 `EarningsPerShareBasic`/
+  // `Diluted`를 단일분기 -100, 9개월 누적 -380으로 오기재했다(당기순손실
+  // 2,296만 달러·주식수 약 2.3억주면 정상 EPS는 -0.1 안팎이어야 함 — 회사가
+  // 자릿수를 잘못 태깅한 것으로 보임). ①과 달리 이건 차감식이 아니라
+  // "직접 단일분기로 태깅된 값"(direct) 자체가 틀린 사례라 경로를 우회해도
+  // 못 피한다 — 태그값을 순이익÷주식수 근사와 대조해 10배 넘게 벌어지면
+  // 신뢰하지 않고 폴백으로 넘긴다.
+  const plausibleEps = (tagVal: number, l: string): boolean => {
+    const ni = netIncome[l];
+    const sh = wavgShares[l] ?? sharesHint;
+    if (ni == null || !sh) return true; // 대조 불가 — 태그값 그대로 신뢰
+    const approx = ni / sh;
+    if (Math.abs(approx) < 0.01) return Math.abs(tagVal) < 1; // 거의 손익분기인데 태그가 크면 의심
+    const ratio = Math.abs(tagVal / approx);
+    return ratio <= 10 && ratio >= 0.1;
+  };
+  const valEps = (concepts: string[]): Record<string, number | null> => {
+    if (quarterly) {
+      const out = blank();
+      qCols.forEach((q, i) => {
+        if (i === 0) return; // prev 전용
+        for (const c of concepts) {
+          const v = directQuarterValue(entriesOf(facts, c, "USD/shares"), q);
+          if (v != null && plausibleEps(v, q.label)) { out[q.label] = v; break; }
+        }
+      });
+      return out;
+    }
+    const out = val(concepts, "USD/shares");
+    out[LTM] = null; // TTM 흐름식 결과 버림 — 항상 순이익÷주식수로 계산
+    for (const y of years) {
+      const l = fyKey(y);
+      if (out[l] != null && !plausibleEps(out[l]!, l)) out[l] = null;
+    }
+    return out;
+  };
+  const epsBasic = deriveEps(adjEps(valEps(EPS_BASIC)), "basic");
+  const epsDil = deriveEps(adjEps(valEps(EPS_DIL)), "diluted");
 
   const da = (() => {
     const o = val(DA);

@@ -162,22 +162,32 @@ export function recentQuarters(
 }
 
 /** 단일 분기 값: 직접 태깅(≈90일) → 없으면 당기 YTD − 직전분기 YTD. */
-export function singleQuarter(
-  entries: FactUnitEntry[],
-  col: QuarterCol,
-  prevCol: QuarterCol | undefined,
-): number | null {
+/** singleQuarter 1단계(직접 단일분기, 기간 60~100일·end 일치)만 떼어낸 것 —
+ * EPS 등 비율 지표가 2단계(YTD 차감)를 타지 않게 하는 용도로 별도 공개
+ * (edgar-income.ts 참고). */
+export function directQuarterValue(entries: FactUnitEntry[], col: QuarterCol): number | null {
   const interim = entries.filter(
     (e) => INTERIM_FORMS.includes(e.form) && e.fp !== "FY" && e.start,
   );
-  // 1) 직접 단일분기 (기간 60~100일, end 일치)
   const direct = interim.find(
     (e) =>
       Math.abs(days(e.start!, e.end)) >= 55 &&
       Math.abs(days(e.start!, e.end)) <= 100 &&
       Math.abs(days(col.end, e.end)) <= 6,
   );
-  if (direct) return direct.val;
+  return direct ? direct.val : null;
+}
+
+export function singleQuarter(
+  entries: FactUnitEntry[],
+  col: QuarterCol,
+  prevCol: QuarterCol | undefined,
+): number | null {
+  const direct = directQuarterValue(entries, col);
+  if (direct != null) return direct;
+  const interim = entries.filter(
+    (e) => INTERIM_FORMS.includes(e.form) && e.fp !== "FY" && e.start,
+  );
   // 2) YTD 차감
   const ytd = (end: string) =>
     interim
