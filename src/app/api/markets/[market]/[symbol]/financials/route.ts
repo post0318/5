@@ -22,6 +22,8 @@ import { buildKrAnalysis } from "@/lib/markets/kr/dart-analysis";
 import { fetchStooqEod } from "@/lib/markets/quote/stooq";
 import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { getKrDaDoc } from "@/lib/db/kr-da";
+import { usSharesHint } from "@/lib/markets/us/shares-hint";
+import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
 
 export const maxDuration = 60;
 
@@ -75,12 +77,14 @@ export async function GET(
       const { corpCode } = resolveCorpCode("", sym);
 
       if (detailView === "analysis") {
-        const [facts, krx, bars, ttm, daDoc] = await Promise.all([
+        const [facts, krx, bars, ttm, daDoc, live] = await Promise.all([
           fetchKrFacts(corpCode, "annual"),
           fetchKrxEod(sym).catch(() => null),
           fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
           adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
           getKrDaDoc(sym).catch(() => null),
+          // 현재가·시가총액은 개요·하이라이트와 같은 시세 함수
+          getEodQuote("kr", sym).catch(() => null),
         ]);
         if (!facts) return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });
         const fyCloseByYear = new Map<number, number>();
@@ -93,13 +97,16 @@ export async function GET(
             if (c != null) fyCloseByYear.set(y, c);
           }),
         );
+        const caps = await loadKrCaps(sym, facts.periods.map((p) => p.year)).catch(() => null);
         const stmt = buildKrAnalysis({
+          code: sym,
+          caps,
           facts,
           bars,
           fyCloseByYear,
-          sharesOutstanding: krx?.listedShares ?? null,
-          currentPrice: krx?.bars.at(-1)?.close ?? bars.at(-1)?.close ?? null,
-          currentMarketCap: krx?.marketCap ?? null,
+          sharesOutstanding: krx?.listedShares ?? live?.sharesOutstanding ?? null,
+          currentPrice: live?.last ?? krx?.bars.at(-1)?.close ?? bars.at(-1)?.close ?? null,
+          currentMarketCap: live?.marketCap ?? krx?.marketCap ?? null,
           ttm: ttm ?? null,
           daDoc: daDoc ?? null,
         });
@@ -147,12 +154,7 @@ export async function GET(
       ]);
       // 현재 발행주식수 근사(클래스별로만 공시하는 Visa 등의 EPS·PBR 계산용):
       // 시가총액÷주가(전 클래스 경제적 주식수) 우선, 없으면 yahoo sharesOutstanding.
-      const mcap = consensus?.marketCap ?? quote?.marketCap ?? null;
-      const sharesHint =
-        (mcap != null && quote?.last ? mcap / quote.last : null) ??
-        consensus?.sharesOutstanding ??
-        quote?.sharesOutstanding ??
-        null;
+      const sharesHint = usSharesHint(quote, consensus);
       const stmt =
         detailView === "cf"
           ? buildUsCashFlow(facts, period, sic)

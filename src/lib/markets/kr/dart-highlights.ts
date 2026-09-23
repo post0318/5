@@ -5,7 +5,8 @@ import type {
   HighlightColumn,
   HighlightRow,
 } from "../us/edgar-highlights";
-import { type KrFacts, type KrDaInput, annualSeries, annualSumByPattern, daAndAmortSeries } from "./dart-facts";
+import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries } from "./dart-facts";
+import { buildKrEvResolver, krEpsByYear, krEv, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
  * 한국 재무 하이라이트 (개요) — `edgar-highlights.ts` 미러.
@@ -15,26 +16,17 @@ import { type KrFacts, type KrDaInput, annualSeries, annualSumByPattern, daAndAm
 
 const IS = ["IS", "CIS"];
 const REV = { ids: ["ifrs-full_Revenue", "dart_Revenue"], names: ["매출액", "수익(매출액)", "영업수익"] };
-const OPI = { ids: ["dart_OperatingIncomeLoss", "ifrs-full_ProfitLossFromOperatingActivities"], names: ["영업이익"] };
 const NI = { ids: ["ifrs-full_ProfitLoss"], names: ["당기순이익", "분기순이익", "반기순이익"] };
-const EPS = {
-  ids: [
-    "ifrs-full_DilutedEarningsLossPerShare",
-    "ifrs-full_BasicEarningsLossPerShare",
-    "ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations",
-    "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations",
-  ],
-  names: ["희석주당이익", "희석주당순이익", "기본주당이익", "기본주당순이익", "보통주기본주당이익", "계속영업기본주당이익"],
-};
 const OCF = { ids: ["ifrs-full_CashFlowsFromUsedInOperatingActivities"], names: ["영업활동현금흐름"] };
 const CAPEX = { ids: ["ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"], names: ["유형자산의 취득"] };
-const CASH = { ids: ["ifrs-full_CashAndCashEquivalents"], names: ["현금및현금성자산"] };
-const STINV = { ids: ["ifrs-full_ShorttermDepositsNotClassifiedAsCashEquivalents"], names: ["단기금융상품"] };
-const EQUITY = { ids: ["ifrs-full_Equity"], names: ["자본총계"] };
 
 
 export interface KrHighlightInput {
+  /** 종목코드(6자리) — EV 막힘 판정(금융 자회사 등)용 */
+  code: string;
   facts: KrFacts; // annual
+  /** KRX 연말·현재 보통주·우선주 시가총액(dart-ev.ts loadKrCaps) */
+  caps?: KrCaps | null;
   bars: QuoteBar[]; // Stooq (다년) — 회계연도말 종가
   fyCloseByYear?: Map<number, number>; // KRX 회계연도말 종가 폴백
   sharesOutstanding: number | null; // KRX 현재 상장주식수
@@ -77,7 +69,7 @@ const ratio = (n: number | null, d: number | null): number | null =>
   n != null && d != null && d > 0 ? n / d : null;
 
 export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights {
-  const { facts, bars, fyCloseByYear, sharesOutstanding: shares, currentMarketCap, currentPrice, ttm, dpsByYear, dpsTtm, daDoc, consensus } = input;
+  const { code, facts, caps, bars, fyCloseByYear, sharesOutstanding: shares, currentMarketCap, currentPrice, ttm, dpsByYear, dpsTtm, daDoc, consensus } = input;
 
   const fyYears = facts.periods.map((p) => p.year);
   const lastFy = fyYears[fyYears.length - 1] ?? new Date().getFullYear();
@@ -98,15 +90,16 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   const blank = (): (number | null)[] => Array(nCol).fill(null);
 
   const aRev = annualSeries(facts, REV.ids, REV.names, IS);
-  const aOpi = annualSeries(facts, OPI.ids, OPI.names, IS);
+  const aOpi = krOpIncomeByYear(facts); // dart-ev.ts 공통
   const aNi = annualSeries(facts, NI.ids, NI.names, IS);
-  const aEps = annualSeries(facts, EPS.ids, EPS.names, IS);
+  const aEps = krEpsByYear(facts); // dart-ev.ts 공통(재무분석·컨센서스와 같은 값)
   const aOcf = annualSeries(facts, OCF.ids, OCF.names, "CF");
   const aCapex = annualSeries(facts, CAPEX.ids, CAPEX.names, "CF");
-  const aCash = annualSeries(facts, CASH.ids, CASH.names, "BS");
-  const aStInv = annualSeries(facts, STINV.ids, STINV.names, "BS");
-  const aEquity = annualSeries(facts, EQUITY.ids, EQUITY.names, "BS");
-  const aDebt = annualSumByPattern(facts, /차입금|사채|리스부채/, "BS", /리스채권|투자|자산|받을|대여/);
+  // 자기자본 — 지배주주 기준(PBR 분모, dart-ev.ts — 재무분석·컨센서스·개요와 같은 값)
+  const aEquity = krParentEquityByYear(facts);
+  // EV 브릿지 — dart-ev.ts 단일 기준(재무분석·개요 멀티플·컨센서스와 같은 값)
+  const evRes = buildKrEvResolver(facts, code);
+  const evBlocker = evRes.blocker();
 
   const at = (m: Map<number, number>, y: number): number | null => m.get(y) ?? null;
   const cy = (c: HighlightColumn): number => Number(c.key.replace(/[^0-9]/g, ""));
@@ -117,24 +110,33 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
       ? (currentPrice ?? lastBar?.close ?? null)
       : c.kind === "estimate"
         ? (currentPrice ?? null)
-        : (closeOnOrBefore(bars, c.date) ?? fyCloseByYear?.get(cy(c)) ?? null),
+        : // 연말 주가 — KRX 실제 종가 우선(DART EPS 는 당시 기준이라 분할 소급 보정된
+          // Stooq 가격과 섞으면 분할 연도 PER 이 틀린다; 재무분석·컨센서스와 같은 값)
+          (caps?.byYear.get(cy(c))?.close ?? closeOnOrBefore(bars, c.date) ?? fyCloseByYear?.get(cy(c)) ?? null),
   );
+  // 시가총액 — KRX 실측(그날의 실제 상장주식수 × 종가). 없을 때만 종가 × 현재 주식수 근사.
+  let approxMcap = false;
   const marketCap = columns.map((c, i) => {
-    if (c.kind === "ltm") return currentMarketCap ?? (priceByCol[i] != null && shares != null ? priceByCol[i]! * shares : null);
     if (c.kind === "estimate") return null;
-    return priceByCol[i] != null && shares != null ? priceByCol[i]! * shares : null;
+    const kx = c.kind === "ltm" ? caps?.current?.common : caps?.byYear.get(cy(c))?.common;
+    if (c.kind === "ltm" && currentMarketCap != null) return currentMarketCap;
+    if (kx != null) return kx;
+    if (priceByCol[i] == null || shares == null) return null;
+    if (c.kind === "fy") approxMcap = true;
+    return priceByCol[i]! * shares;
   });
-  const cashCol = columns.map((c) => {
-    if (c.kind === "estimate") return null;
-    const y = c.kind === "fy" ? cy(c) : lastFy;
-    const a = at(aCash, y);
-    const b = at(aStInv, y);
-    return a != null || b != null ? (a ?? 0) + (b ?? 0) : null;
-  });
-  const debtCol = columns.map((c) => (c.kind === "estimate" ? null : at(aDebt, c.kind === "fy" ? cy(c) : lastFy)));
-  const equityCol = columns.map((c) => (c.kind === "estimate" ? null : at(aEquity, c.kind === "fy" ? cy(c) : lastFy)));
-  const ev = columns.map((_, i) =>
-    marketCap[i] != null ? marketCap[i]! - (cashCol[i] ?? 0) + (debtCol[i] ?? 0) : null,
+  const prefMcap = columns.map((c) =>
+    c.kind === "estimate" ? null : c.kind === "ltm" ? (caps?.current?.preferred ?? null) : (caps?.byYear.get(cy(c))?.preferred ?? null),
+  );
+  // LTM 열의 재무상태표는 최근 사업연도말(분기 BS 미보유) — 종전과 같다
+  const bsYear = (c: HighlightColumn) => (c.kind === "fy" ? cy(c) : lastFy);
+  const bridge = columns.map((c) => (c.kind === "estimate" ? null : evRes.bridgeAt(bsYear(c))));
+  const cashCol = bridge.map((b) => b?.cash ?? null);
+  const debtCol = bridge.map((b) => b?.debt ?? null);
+  const nciCol = bridge.map((b) => b?.nci ?? null);
+  const equityCol = columns.map((c) => (c.kind === "estimate" ? null : at(aEquity, bsYear(c))));
+  const ev = columns.map((c, i) =>
+    c.kind === "estimate" ? null : krEv(evRes, bsYear(c), marketCap[i], prefMcap[i]),
   );
 
   // 추정(estimate) 열은 네이버 컨센서스 매출액·영업이익·순이익을 그대로 쓴다(우선순위)
@@ -193,9 +195,15 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   });
 
   const rows: HighlightRow[] = [
-    { key: "mktcap", label: "시가총액", format: "money", values: marketCap },
-    { key: "cash", label: "− 현금 및 단기금융상품", format: "money", values: cashCol.map((v) => (v == null ? null : -v)) },
-    { key: "debt", label: "+ 총차입금", format: "money", values: debtCol },
+    { key: "mktcap", label: "시가총액 (보통주)", format: "money", values: marketCap },
+    ...(prefMcap.some((v) => v != null && v > 0)
+      ? [{ key: "pref_mcap", label: "+ 우선주 시가총액", format: "money" as const, values: prefMcap }]
+      : []),
+    { key: "cash", label: "− 현금성자산", format: "money", values: cashCol.map((v) => (v == null ? null : -v)) },
+    { key: "debt", label: "+ 총차입금 (리스부채 포함)", format: "money", values: debtCol },
+    ...(nciCol.some((v) => v != null && v !== 0)
+      ? [{ key: "nci", label: "+ 비지배지분", format: "money" as const, values: nciCol }]
+      : []),
     { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
     { key: "revenue", label: "매출액", format: "money", values: revenue },
@@ -241,10 +249,16 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
 
   const notes = [
     "실적·재무상태표·현금흐름: OpenDART 전체 재무제표 (연결)",
-    "과거 시가총액: 각 회계연도말 종가 × 현재 상장주식수 (기간별 주식수 미반영 — 근사)",
-    "총차입금 = 단기차입금 + 유동성장기부채 + 사채 + 장기차입금",
+    "시가총액: KRX 각 회계연도 마지막 거래일 시가총액(그날의 상장주식수 × 종가)",
+    "EV = 보통주 + 우선주 시가총액(우선주 자체 시세) + 총차입금(차입금·사채·리스부채) + 비지배지분 − 현금성자산(현금 + 단기금융상품 + 단기 상각후원가·당기손익 금융자산)",
     "EBITDA = 영업이익 + 감가상각비 (사업보고서 XBRL 주석 실측)",
   ];
+  if (approxMcap) notes.push("일부 연도 시가총액: KRX 조회 실패 → 연말 종가 × 현재 상장주식수 근사");
+  if (evBlocker === "financial") notes.push("금융업 — EV·EV/EBITDA 는 계산하지 않음(예금·보험부채가 영업용 부채)");
+  if (evBlocker === "captive-unsplit")
+    notes.push("금융 자회사 연결(할부금융 차입금 미분리) — EV·EV/EBITDA 는 표시하지 않음(최종 기준 결정 전)");
+  if (bridge.some((b) => b?.plainFinLiab))
+    notes.push("총차입금: 차입금 계정 대신 \"(유동·비유동)금융부채\" 로 공시하는 회사 — 그 금액을 차입금으로 사용");
 
   return {
     currency: "KRW",

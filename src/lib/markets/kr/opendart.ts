@@ -20,6 +20,9 @@ import {
   type TtmFlows,
 } from "../types";
 import { resolveCorpCode } from "./corpcode";
+import { annualSeries, daAndAmortSeries, fetchKrFacts } from "./dart-facts";
+import { buildKrEvResolver, krEpsByYear, krOpIncomeByYear, krParentEquityByYear, loadKrCaps } from "./dart-ev";
+import { getKrDaDoc } from "@/lib/db/kr-da";
 
 const HINT =
   "한국(OpenDART) 데이터는 아직 연결되지 않았습니다. " +
@@ -115,6 +118,7 @@ interface ListResponse extends DartEnvelope {
 interface FnlttRow {
   sj_div: string; // BS/IS/CIS/CF/SCE
   sj_nm: string;
+  account_id?: string;
   account_nm: string;
   account_detail: string;
   thstrm_nm: string;
@@ -316,7 +320,26 @@ const TTM_ACCOUNTS = {
   ],
 } as const;
 
-const norm = (s: string) => s.replace(/\s/g, "");
+// 계정명 앞 번호("Ⅳ. 영업이익"·"1. 매출액"·"(1) 매출액")는 떼고 비교 — 가온전선처럼 번호를
+// 붙이는 회사는 정확 일치가 전부 실패해 TTM 매출·영업이익·순이익이 비었다(2026-09-23).
+const norm = (s: string) =>
+  s.replace(/\s/g, "").replace(/^(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+\.?|\d+[.)]|\(\d+\)|[가-하][.)])/, "");
+
+/**
+ * TTM 계정 ID — dart-facts·dart-ev(하이라이트·재무분석)와 같은 ID 를 먼저 본다. 계정명은
+ * 회사마다 표기가 달라(번호·괄호) ID 가 있으면 ID 가 우선.
+ */
+const TTM_IDS: Record<keyof typeof TTM_ACCOUNTS, readonly string[]> = {
+  netIncome: ["ifrs-full_ProfitLoss"],
+  revenue: ["ifrs-full_Revenue", "dart_Revenue"],
+  opIncome: ["dart_OperatingIncomeLoss", "ifrs-full_ProfitLossFromOperatingActivities"],
+  eps: [
+    "ifrs-full_DilutedEarningsLossPerShare",
+    "ifrs-full_BasicEarningsLossPerShare",
+    "ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations",
+    "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations",
+  ],
+};
 // EPS 계정명은 회사·보고서별 편차가 커서 부분일치 허용
 const EPS_LOOSE = /주당(순)?이익/;
 
@@ -326,6 +349,7 @@ function isValue(
   names: readonly string[],
   col: "cumCur" | "cumPrior" | "annual",
   loose?: RegExp,
+  ids?: readonly string[],
 ): number | null {
   const set = new Set(names.map(norm));
   const pick = (r: FnlttRow) => {
@@ -334,6 +358,14 @@ function isValue(
       return parseAmount(r.thstrm_add_amount) ?? parseAmount(r.thstrm_amount);
     return parseAmount(r.frmtrm_add_amount) ?? parseAmount(r.frmtrm_amount);
   };
+  // ID 우선(목록 순서 = 우선순위)
+  for (const id of ids ?? []) {
+    const r = rows.find((x) => (x.sj_div === "IS" || x.sj_div === "CIS") && x.account_id === id);
+    if (r) {
+      const v = pick(r);
+      if (v != null) return v;
+    }
+  }
   let looseHit: number | null = null;
   for (const r of rows) {
     if (r.sj_div !== "IS" && r.sj_div !== "CIS") continue;
@@ -392,7 +424,8 @@ async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
 
   // 3) 전년 동기 누적이 보고서에 없으면, 전년 동일 보고서를 따로 조회
   let priorInterimRows: FnlttRow[] | null = null;
-  const needPriorFetch = isValue(interim.rows, TTM_ACCOUNTS.netIncome, "cumPrior") == null;
+  const needPriorFetch =
+    isValue(interim.rows, TTM_ACCOUNTS.netIncome, "cumPrior", undefined, TTM_IDS.netIncome) == null;
   if (needPriorFetch) {
     for (const fsDiv of fsOrder) {
       const rows = await fetchFnlttYear(corpCode, interim.year - 1, interim.code, fsDiv);
@@ -406,11 +439,12 @@ async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
   const ttm = (key: keyof typeof TTM_ACCOUNTS): { v: number | null; ttm: boolean } => {
     const names = TTM_ACCOUNTS[key];
     const lz = key === "eps" ? EPS_LOOSE : undefined;
-    const annual = isValue(annualRows!, names, "annual", lz);
-    const cur = isValue(interim!.rows, names, "cumCur", lz);
-    let prior = isValue(interim!.rows, names, "cumPrior", lz);
+    const ids = TTM_IDS[key];
+    const annual = isValue(annualRows!, names, "annual", lz, ids);
+    const cur = isValue(interim!.rows, names, "cumCur", lz, ids);
+    let prior = isValue(interim!.rows, names, "cumPrior", lz, ids);
     if (prior == null && priorInterimRows)
-      prior = isValue(priorInterimRows, names, "cumCur", lz);
+      prior = isValue(priorInterimRows, names, "cumCur", lz, ids);
     if (annual == null) return { v: null, ttm: false };
     if (cur == null || prior == null) return { v: annual, ttm: false }; // 분기 데이터 부족 → 연간값
     return { v: annual + cur - prior, ttm: true };
@@ -424,8 +458,8 @@ async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
   // EPS 분기데이터가 없으면 TTM 순이익 / (연간 순이익 ÷ 연간 EPS) 로 환산
   let eps = epsR.ttm && epsR.v && epsR.v > 0 ? epsR.v : null;
   if (eps == null && ni.ttm && ni.v != null) {
-    const annualNi = isValue(annualRows!, TTM_ACCOUNTS.netIncome, "annual");
-    const annualEps = isValue(annualRows!, TTM_ACCOUNTS.eps, "annual", EPS_LOOSE);
+    const annualNi = isValue(annualRows!, TTM_ACCOUNTS.netIncome, "annual", undefined, TTM_IDS.netIncome);
+    const annualEps = isValue(annualRows!, TTM_ACCOUNTS.eps, "annual", EPS_LOOSE, TTM_IDS.eps);
     if (annualNi && annualEps && annualEps > 0) {
       const shares = annualNi / annualEps;
       if (shares > 0) eps = ni.v / shares; // 반올림하지 않음 — 표시 포맷(버림)에서 처리
@@ -544,7 +578,61 @@ export const krOpenDartAdapter: MarketAdapter = {
   async getTtm(symbol): Promise<TtmFlows | null> {
     const entry = await resolveCorpCode(key(), symbol);
     try {
-      return await getKrTtm(entry.corpCode);
+      const code = symbol.replace(/\D/g, "").padStart(6, "0").slice(-6);
+      const [flows, facts, daDoc, caps] = await Promise.all([
+        getKrTtm(entry.corpCode),
+        fetchKrFacts(entry.corpCode, "annual").catch(() => null),
+        getKrDaDoc(code).catch(() => null),
+        loadKrCaps(code, []).catch(() => null),
+      ]);
+      if (!facts) return flows;
+      // TTM 항목이 비면(계정 매칭 실패·분기 보고서 없음) 최근 사업연도 값으로 채운다 —
+      // getKrTtm 이 분기 데이터가 부족할 때 연간값을 쓰는 것과 같은 의미. 여기서 채워야
+      // 하이라이트·재무분석·개요가 같은 값을 쓴다(예전엔 재무분석만 연간값으로 대체해
+      // LTM 열이 화면마다 갈렸다, 2026-09-23 가온전선).
+      const fyLast = (m: Map<number, number>) => {
+        const ys = [...m.keys()].sort((a, b) => a - b);
+        return ys.length ? (m.get(ys[ys.length - 1]) ?? null) : null;
+      };
+      const base: TtmFlows = flows ?? {
+        periodLabel: "",
+        netIncome: null,
+        revenue: null,
+        opIncome: null,
+        eps: null,
+      };
+      const filled: TtmFlows = {
+        ...base,
+        revenue: base.revenue ?? fyLast(annualSeries(facts, ["ifrs-full_Revenue", "dart_Revenue"], ["매출액", "수익(매출액)", "영업수익"], ["IS", "CIS"])),
+        opIncome: base.opIncome ?? fyLast(krOpIncomeByYear(facts)),
+        netIncome: base.netIncome ?? fyLast(annualSeries(facts, ["ifrs-full_ProfitLoss"], ["당기순이익", "분기순이익", "반기순이익"], ["IS", "CIS"])),
+        eps: base.eps ?? (() => {
+          const e = fyLast(krEpsByYear(facts));
+          return e != null && e > 0 ? e : null;
+        })(),
+      };
+      if (!base.periodLabel) filled.periodLabel = `FY${facts.periods.at(-1)?.year ?? ""} (연간)`;
+      // EV 스냅샷 — 하이라이트 LTM 열과 같은 모듈(dart-ev.ts)·같은 기준일(최근 사업연도말
+      // 재무상태표). 개요 멀티플이 부채총계 대신 차입금으로 EV 를 내게 한다(B16).
+      const ev = buildKrEvResolver(facts, code);
+      const lastFy = ev.years().at(-1) ?? null;
+      const b = lastFy != null ? ev.bridgeAt(lastFy) : null;
+      const eq = krParentEquityByYear(facts); // PBR 분모 — 지배주주 자본(하이라이트와 같은 값)
+      return {
+        ...filled,
+        // LTM D&A — 하이라이트와 같은 함수(사업보고서 주석 실측 → 연간 폴백)
+        daTtm: daAndAmortSeries(facts, daDoc).ltm,
+        snapshot: {
+          label: lastFy != null ? `FY${lastFy}` : "",
+          equity: lastFy != null ? (eq.get(lastFy) ?? null) : null,
+          liabilities: null,
+          cash: b?.cash ?? null,
+          shares: null,
+          evNetDebt: b ? b.debt + b.nci - b.cash : null,
+          evBlocker: ev.blocker(),
+          evPreferredMcap: caps?.current?.preferred ?? 0,
+        },
+      };
     } catch {
       return null;
     }

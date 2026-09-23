@@ -1,6 +1,7 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem } from "../types";
-import { type KrFacts, seriesOf, sumByPattern, sumOf } from "./dart-facts";
+import { type KrFacts, seriesOf, sumOf } from "./dart-facts";
+import { krBridgeLines, sumLinesByPeriod } from "./dart-ev";
 
 /**
  * 한국 상세 재무상태표 — DART `fnlttSinglAcntAll` 정규화 재분류.
@@ -232,17 +233,13 @@ export function buildKrBalance(facts: KrFacts): FinancialStatement {
   });
   const nciEq = val({ ids: ["ifrs-full_NoncontrollingInterests"], names: ["비지배지분"] });
 
-  // 총차입금 = BS 부채 중 차입금·사채·리스부채 전부 (계정명 편차·동명 유동/비유동 대응)
-  const debt = sumByPattern(facts, /차입금|사채|리스부채/, "BS", /리스채권|투자|자산|받을|대여/);
-  const cashLike = sumOf(
-    facts,
-    [
-      { ids: ["ifrs-full_CashAndCashEquivalents"], names: ["현금및현금성자산"] },
-      { ids: ["ifrs-full_ShorttermDepositsNotClassifiedAsCashEquivalents"], names: ["단기금융상품"] },
-      { ids: ["ifrs-full_CurrentFinancialAssetsAtFairValueThroughProfitOrLoss"], names: ["단기당기손익-공정가치금융자산"] },
-    ],
-    "BS",
-  );
+  // 총차입금·현금성자산 — dart-ev.ts 단일 기준(하이라이트·재무분석 EV 와 같은 판정). 예전엔
+  // 계정명 정규식이라 "유동성장기부채"(삼성전자)·"(유동|비유동)금융부채"(한전)를 놓쳤다.
+  const bridge = krBridgeLines(facts);
+  const debt = sumLinesByPeriod(facts, bridge.debt);
+  const cashLike = sumLinesByPeriod(facts, bridge.cash);
+  // 차입금 계정이 아예 없는 무차입 회사(한전KPS)는 0 — 하이라이트 EV 브릿지와 같은 표시
+  if (!bridge.debt.length) for (const l of labels) if (cashLike[l] != null) debt[l] = 0;
   const netDebt = blank();
   for (const l of labels)
     if (debt[l] != null || cashLike[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashLike[l] ?? 0);

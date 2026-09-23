@@ -199,6 +199,10 @@ export interface TtmFlows {
     evShares?: number | null;
     /** 리츠(SIC 6798) — 운영 파트너십 지분 반영 대상 */
     isReit?: boolean;
+    /** 20-F 제출사 — evShares 가 본국 보통주 기준이라 ADR 비율 보정 대상(lib/markets/adr.ts) */
+    is20F?: boolean;
+    /** 우선주 시가총액(한국 — KRX 우선주 자체 시세) — EV 에 더한다 */
+    evPreferredMcap?: number | null;
     /** evNetDebt 에 들어 있는 운영 파트너십 지분 장부가 — 지분을 시가로 더할 때 뺀다 */
     evOpNciBook?: number | null;
   } | null;

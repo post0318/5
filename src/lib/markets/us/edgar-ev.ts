@@ -457,28 +457,83 @@ const PRETAX = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndEquityMethodInvestments",
 ];
 
+/** EBIT 폴백의 이자비용 — 실측에 쓴 목록 그대로(scratchpad oiscan, 2026-09-23). */
+const EBIT_INTEREST = [
+  "InterestExpense",
+  "InterestExpenseNonoperating",
+  "InterestExpenseDebt",
+  "InterestAndDebtExpense",
+];
+
+/** 합성 영업이익 개념 이름 — 로더(edgar.ts)가 facts 에 끼워 넣는다. */
+export const SYN_OP_INCOME = "OperatingIncomeLossUnified";
+
 /**
- * 연도별 영업이익 — 하이라이트 규칙과 동일: OperatingIncomeLoss → (태그 자체가
- * 없으면) 매출총이익 − 판관비 − 연구개발비 → 그래도 없는 연도는 세전이익.
- * 컨센서스 표가 하이라이트와 같은 EBITDA 를 쓰도록 공유한다(GE 는 영업이익
- * 태그를 중단해 최근 연도가 세전이익으로 채워진다).
+ * **영업이익 단일 기준 시계열** — 모든 화면(하이라이트·재무분석·손익계산서·개요
+ * 멀티플·컨센서스)의 영업이익과 EBITDA 가 이 한 시계열을 읽는다.
+ *
+ *   ① 공시 OperatingIncomeLoss
+ *   ② 태그가 없는 기간은 **세전이익 + 이자비용**(EBIT)
+ *   ③ 이자비용 태그도 없으면 세전이익
+ *
+ * 왜 ②인가 — 영업이익 태그가 없는 S&P 500 67개사(BMY·BIIB·ADP·XOM 등)를 Yahoo
+ * 영업이익과 대조한 실측(2026-09-23): 세전+이자 중앙값 오차 7.4%(5% 이내 23곳),
+ * 세전이익 16.9%, 종전 규칙이던 매출총이익 − 판관비 − 연구개발비 23%(GrossProfit 을
+ * 태깅하는 회사만 가능, BMY 는 매출총이익 태그가 원가 일부만 담아 12억 달러로
+ * 나옴), 매출 − 총비용 32%. 예전엔 모듈마다 폴백이 달라(하이라이트 = 매출총이익
+ * 태그, 손익계산서 = 매출 − 원가로 만든 매출총이익) 같은 회사 EBITDA 가 갈렸다.
+ *
+ * ②는 태그가 **끊긴 뒤의 기간에만** 쓴다(마지막 OperatingIncomeLoss 종료일 이후,
+ * 또는 태그가 아예 없을 때) — 같은 시기에 연간은 공시값, 분기는 합성값이 섞이면
+ * "FY + 당기누적 − 전년누적" TTM 이 두 정의를 섞게 된다. GE 처럼 태그를 중단한
+ * 회사는 중단 이후만 합성값으로 이어진다.
  */
-export function opIncomeAnnualByYear(facts: CompanyFacts): Map<number, number> {
-  const out = new Map(annualByYear(entriesOf(facts, "OperatingIncomeLoss")));
-  if (!out.size) {
-    const gp = annualByYear(entriesOf(facts, "GrossProfit"));
-    const merged = (cs: string[]) => {
-      const m = new Map<number, number>();
-      for (const c of cs) for (const [y, v] of annualByYear(entriesOf(facts, c))) if (!m.has(y)) m.set(y, v);
-      return m;
-    };
-    const sga = merged(["SellingGeneralAndAdministrativeExpense", "GeneralAndAdministrativeExpense"]);
-    const rnd = annualByYear(entriesOf(facts, "ResearchAndDevelopmentExpense"));
-    for (const [y, g] of gp) out.set(y, g - (sga.get(y) ?? 0) - (rnd.get(y) ?? 0));
-  }
+export function opIncomeEntries(facts: CompanyFacts): FactUnitEntry[] {
+  const oi = entriesOf(facts, "OperatingIncomeLoss");
+  const lastOi = oi.reduce((m, e) => (e.end > m ? e.end : m), "");
+  const key = (e: FactUnitEntry) => `${e.start ?? ""}|${e.end}|${e.form}|${e.fp}`;
+  const interest = new Map<string, number>();
+  for (const c of EBIT_INTEREST)
+    for (const e of entriesOf(facts, c)) {
+      const k = key(e);
+      if (e.start && e.val != null && !interest.has(k)) interest.set(k, e.val);
+    }
+  const out: FactUnitEntry[] = [...oi];
+  const covered = new Set(oi.map(key));
   for (const c of PRETAX)
-    for (const [y, v] of annualByYear(entriesOf(facts, c))) if (!out.has(y)) out.set(y, v);
+    for (const e of entriesOf(facts, c)) {
+      const k = key(e);
+      if (!e.start || e.val == null || covered.has(k) || e.end <= lastOi) continue;
+      covered.add(k);
+      out.push({ ...e, val: e.val + (interest.get(k) ?? 0) });
+    }
   return out;
+}
+
+/** 영업이익을 합성(②·③)으로 채운 기간이 있는지 — 화면 주석용. */
+export function opIncomeIsDerived(facts: CompanyFacts): boolean {
+  const oi = entriesOf(facts, "OperatingIncomeLoss");
+  const lastOi = oi.reduce((m, e) => (e.end > m ? e.end : m), "");
+  return entriesOf(facts, SYN_OP_INCOME).some((e) => e.end > lastOi);
+}
+
+/** 합성 영업이익을 끼운 사본 facts (로더에서 한 번). */
+export function withOpIncome(facts: CompanyFacts): CompanyFacts {
+  const g = facts.facts["us-gaap"] ?? {};
+  return {
+    ...facts,
+    facts: { ...facts.facts, "us-gaap": { ...g, [SYN_OP_INCOME]: { units: { USD: opIncomeEntries(facts) } } } },
+  } as CompanyFacts;
+}
+
+/** 연도별 영업이익 — 단일 기준 시계열(opIncomeEntries)의 사업연도 값. */
+export function opIncomeAnnualByYear(facts: CompanyFacts): Map<number, number> {
+  return annualByYear(entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts));
+}
+
+/** 최근 12개월 영업이익 — 같은 시계열. */
+export function opIncomeTtm(facts: CompanyFacts): number | null {
+  return ttmOf(entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts));
 }
 
 // ── 모기지 리츠 판정 ──────────────────────────────────────────────────

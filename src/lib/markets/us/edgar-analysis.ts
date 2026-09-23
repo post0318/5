@@ -15,7 +15,6 @@ import {
   ttmOf,
 } from "./edgar-series";
 import {
-  classAEps,
   classALatest,
   classAOutstanding,
   classAOutstandingLatest,
@@ -25,6 +24,7 @@ import {
 import { buildShareResolver } from "./edgar-shares";
 import {
   ltmEps,
+  fyEps,
   ltmNetIncome,
   netIncomeAnnualByYear,
   parentEquityAt,
@@ -34,6 +34,7 @@ import {
   buildEvResolver,
   daAnnualByYear,
   daTtm,
+  SYN_OP_INCOME,
   type EvBlocker,
   type EvContext,
 } from "./edgar-ev";
@@ -206,12 +207,6 @@ export function buildUsAnalysis(
   const revenue = flow(revConcepts);
   const grossProfitRaw = flow(["GrossProfit"]);
   const cogs0 = flowM(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
-  const sga = flow([
-    "SellingGeneralAndAdministrativeExpense",
-    "GeneralAndAdministrativeExpense",
-    "SellingGeneralAndAdministrativeExpenses",
-  ]);
-  const rnd = flow(["ResearchAndDevelopmentExpense"]);
   // 금융회사(은행·카드사): 매출총이익 대신 충당금전이익(=순수익 − 총이자외비용).
   const finNoninterestExpense = flow(FIN_NONINTEREST_EXPENSE);
   const finProvision = flow(FIN_PROVISION);
@@ -223,8 +218,7 @@ export function buildUsAnalysis(
           : null)
       : (grossProfitRaw[l] ??
         (revenue[l] != null && cogs0[l] != null ? revenue[l]! - Math.abs(cogs0[l]!) : null));
-  // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 공시 태그,
-  // 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등)
+  // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 단일 기준 시계열
   const opIncome = (() => {
     const o = blank();
     if (isFin) {
@@ -232,13 +226,8 @@ export function buildUsAnalysis(
         if (grossProfit0[l] != null) o[l] = grossProfit0[l]! - (finProvision[l] ?? 0);
       return o;
     }
-    const primary = flow(["OperatingIncomeLoss", "OperatingIncomeLossBeforeUnusualItems"]);
-    for (const l of labels) {
-      if (primary[l] != null) { o[l] = primary[l]; continue; }
-      if (grossProfit0[l] != null && (sga[l] != null || rnd[l] != null))
-        o[l] = grossProfit0[l]! - (sga[l] ?? 0) - (rnd[l] ?? 0);
-    }
-    return o;
+    // edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전) — 하이라이트·손익계산서와 같은 값
+    return flow([SYN_OP_INCOME]);
   })();
   // 지배주주 순이익 — edgar-pershare.ts 공통 규칙(NetIncomeLoss 없으면 ProfitLoss − 비지배지분)
   const niByYear = netIncomeAnnualByYear(facts);
@@ -248,70 +237,47 @@ export function buildUsAnalysis(
   netIncome[LTM] = ltmNetIncome(facts);
   // 주식수 단일 기준(edgar-shares.ts) — 시가총액·LTM EPS 공통
   const shareRes = buildShareResolver(facts, { classFacts, sharesHint });
-  const EPS_C = [
-    "EarningsPerShareDiluted",
-    "IncomeLossFromContinuingOperationsPerDilutedShare",
-    "EarningsPerShareBasicAndDiluted",
-    "EarningsPerShareBasic",
-  ];
-  // 희석주식수 (EPS 태그가 클래스 차원에만 있는 기업[Visa 등] 파생용)
+  // 희석주식수 (연도말 근사 폴백용)
   const dilSharesF = fullAnnual(
     ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"],
     "shares",
   );
+  // 사업연도 EPS — edgar-pershare.ts fyEps 공통 규칙(하이라이트·컨센서스·은행과 같은 값).
+  // 예전엔 계속영업 EPS 태그까지 후보로 병합해 중단영업이 있는 해(DELL FY2022)에
+  // 하이라이트와 PER 이 17% 갈렸다(검증 체계, 2026-09-23).
+  const fyEpsOf = (y: number) => {
+    const r = fyEps(facts, y, {
+      classFacts,
+      // 근사 폴백의 분모는 하이라이트와 같은 연도말 주식수(edgar-shares) — 예전엔 현재
+      // 주식수를 써서 EPS 태그가 없는 해(BKR 2025)에 PER 이 0.4% 갈렸다.
+      fyShares: (() => {
+        const end = periods.find((p) => p.fiscalYear === y)?.endDate;
+        return (
+          (end ? shareRes.atFiscalYearEnd(y, end) : null) ??
+          dilSharesF.get(y) ??
+          classAShares(classFacts, y) ??
+          sharesHint
+        );
+      })(),
+      fyNetIncome: niByYear.get(y) ?? null,
+    });
+    if (r.approx) approxPerShare = true;
+    return r.eps;
+  };
   const eps = (() => {
-    const o = adjPerShare(flow(EPS_C, "USD/shares"));
+    const o = blank();
+    for (const y of years) o[`${y}Y`] = fyEpsOf(y);
     // LTM EPS 는 주당 지표에 흐름식(FY + 누적 − 전년누적)을 쓰지 않는다 — 분모가
-    // 기간마다 달라 성립하지 않는다(오전 A1 과 같은 오류가 여기 남아 있었다, 검증
-    // 체계로 발견). 하이라이트와 같게 LTM 순이익 ÷ 현재 주식수.
-    {
-      o[LTM] = ltmEps(facts, shareRes.current());
-      if (o[LTM] != null && shareRes.usedHint()) approxPerShare = true;
-    }
-    const niF = niByYear;
-    for (const l of labels) {
-      if (o[l] != null) continue;
-      if (l === LTM) {
-        // LTM 은 TTM 순이익 ÷ 최신 주식수 (Class A as-converted 우선)
-        const ni = netIncome[LTM];
-        const dcl =
-          dilSharesF.get(years.at(-1) ?? 0) ?? classALatest(classFacts)?.dilShares ?? null;
-        const sh = dcl ?? sharesHint;
-        if (ni != null && sh) {
-          o[l] = ni / sh;
-          if (dcl == null) approxPerShare = true;
-        }
-        continue;
-      }
-      const y = Number(l.replace("Y", ""));
-      // Class A 공시 EPS (실측) — 근사 아님
-      const ca = classAEps(classFacts, y, "diluted");
-      if (ca != null) {
-        o[l] = ca;
-        continue;
-      }
-      const dcl = dilSharesF.get(y) ?? classAShares(classFacts, y);
-      const sh = dcl ?? sharesHint;
-      if (niF.get(y) != null && sh) {
-        o[l] = niF.get(y)! / sh;
-        if (dcl == null) approxPerShare = true;
-      }
-    }
+    // 기간마다 달라 성립하지 않는다. 하이라이트와 같게 LTM 순이익 ÷ 현재 주식수.
+    o[LTM] = ltmEps(facts, shareRes.current());
+    if (o[LTM] != null && shareRes.usedHint()) approxPerShare = true;
     return o;
   })();
   const epsFull = (() => {
-    const m = adjMap(fullAnnual(EPS_C, "USD/shares"));
-    if (m.size) return m;
-    const niF = niByYear;
     const out = new Map<number, number>();
-    for (const [y, ni] of niF) {
-      const ca = classAEps(classFacts, y, "diluted");
-      if (ca != null) {
-        out.set(y, ca);
-        continue;
-      }
-      const sh = dilSharesF.get(y) ?? classAShares(classFacts, y) ?? sharesHint;
-      if (sh) out.set(y, ni / sh);
+    for (const y of niByYear.keys()) {
+      const v = fyEpsOf(y);
+      if (v != null) out.set(y, v);
     }
     return out;
   })();
@@ -344,15 +310,7 @@ export function buildUsAnalysis(
       for (const [y, v] of rev) if (nie.has(y)) out.set(y, v - nie.get(y)! - (prov.get(y) ?? 0));
       return out;
     }
-    const m = fullAnnual(["OperatingIncomeLoss"]);
-    if (m.size) return m;
-    // 파생: GrossProfit − SG&A − R&D
-    const gp = fullAnnual(["GrossProfit"]);
-    const s = fullAnnual(["SellingGeneralAndAdministrativeExpense", "GeneralAndAdministrativeExpense"]);
-    const r = fullAnnual(["ResearchAndDevelopmentExpense"]);
-    const out = new Map<number, number>();
-    for (const [y, v] of gp) if (s.has(y) || r.has(y)) out.set(y, v - (s.get(y) ?? 0) - (r.get(y) ?? 0));
-    return out;
+    return fullAnnual([SYN_OP_INCOME]);
   })();
   const niFull = niByYear;
   const daFull = daByYear;
@@ -417,8 +375,10 @@ export function buildUsAnalysis(
         o[l] = netIncome[l]! + taxExp[l]!;
     return o;
   })();
-  // 영업이익도 못 구했으면 세전이익으로 근사 (통합 정유사·금융 등 — 이자 미미)
-  for (const l of labels) if (opIncome[l] == null && pretax[l] != null) opIncome[l] = pretax[l];
+  // 금융회사만: 영업이익도 못 구했으면 세전이익으로 근사. 비금융은 단일 기준 시계열이
+  // 이미 세전+이자 → 세전 폴백을 담고 있어 여기서 또 채우면 하이라이트와 갈린다.
+  if (isFin)
+    for (const l of labels) if (opIncome[l] == null && pretax[l] != null) opIncome[l] = pretax[l];
   // opIncFull(전체 연도 시계열 — 첫 표시연도 YoY 의 "전년" 소스)도 동일 폴백 반영.
   // 위 for 문은 표시 컬럼(labels)만 패치하므로, 전체 시계열이 비어 있으면(OperatingIncomeLoss
   // 미태깅 기업 — 금융사 등) 첫 컬럼 성장률이 항상 공란이 되는 버그가 있었다.
@@ -431,7 +391,7 @@ export function buildUsAnalysis(
       for (const [y, v] of niFull) if (taxFull.has(y)) out.set(y, v + taxFull.get(y)!);
       return out;
     })();
-    for (const [y, v] of pretaxFull) if (!opIncFull.has(y)) opIncFull.set(y, v);
+    if (isFin) for (const [y, v] of pretaxFull) if (!opIncFull.has(y)) opIncFull.set(y, v);
     for (const [y, v] of opIncFull) if (!ebitdaFull.has(y)) ebitdaFull.set(y, v + (daFull.get(y) ?? 0));
   }
 

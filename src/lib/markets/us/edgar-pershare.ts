@@ -96,17 +96,27 @@ export function ltmEps(facts: CompanyFacts, currentShares: number | null | undef
 
 /**
  * 사업연도 희석 EPS — 공시값(액면분할 보정) → 듀얼클래스 Class A 실측(Visa) →
- * 순이익 ÷ 연도말 주식수(근사). 하이라이트·컨센서스·은행 모듈 공통.
+ * 보통주 귀속 순이익 ÷ 가중평균 희석주식수(공시 EPS 정의 그대로) → 순이익 ÷
+ * 연도말 주식수(근사). 하이라이트·재무분석·컨센서스·은행 모듈 공통.
+ *
+ * 계속영업 EPS(IncomeLossFromContinuingOperationsPerDilutedShare)는 쓰지 않는다 —
+ * 중단영업이 있는 해(DELL FY2022, VMware 분사)에 순이익 기준 PER 과 분자가
+ * 달라진다. 재무분석만 이 태그를 후보에 두어 하이라이트와 PER 이 17% 갈렸다
+ * (검증 체계, 2026-09-23 유니버스 전수).
  */
 export function fyEps(
   facts: CompanyFacts,
   year: number,
   opts: { classFacts?: ClassAFacts | null; fyShares?: number | null; fyNetIncome?: number | null } = {},
 ): { eps: number | null; approx: boolean } {
+  const sf = splitFactorsByYear(facts).get(year) ?? 1;
   const rep = annualByYear(entriesOf(facts, "EarningsPerShareDiluted", "USD/shares")).get(year);
-  if (rep != null) return { eps: rep * (splitFactorsByYear(facts).get(year) ?? 1), approx: false };
+  if (rep != null) return { eps: rep * sf, approx: false };
   const ca = classAEps(opts.classFacts ?? null, year, "diluted");
   if (ca != null) return { eps: ca, approx: false };
+  const ni = annualByYear(niToCommonEntries(facts)).get(year);
+  const wsh = annualByYear(entriesOf(facts, "WeightedAverageNumberOfDilutedSharesOutstanding", "shares")).get(year);
+  if (ni != null && wsh) return { eps: (ni / wsh) * sf, approx: false };
   if (opts.fyNetIncome != null && opts.fyShares) return { eps: opts.fyNetIncome / opts.fyShares, approx: true };
   return { eps: null, approx: false };
 }

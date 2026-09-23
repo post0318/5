@@ -151,6 +151,71 @@ export async function fetchKrxCloseOn(code: string, dateYmd: string): Promise<nu
 }
 
 /**
+ * 특정 일자(휴장이면 최대 7일 앞으로) 보통주·우선주 시가총액 — KRX MKTCAP(그날의 실제
+ * 상장주식수 × 종가).
+ *
+ * 우선주 = 같은 회사 우선주들의 합(각 우선주 자체 종가 × 상장주식수). EV 에 우선주를
+ * 넣기로 한 결정(오너 2026-09-23) — Yahoo·StockAnalysis 처럼 보통주 가격을 우선주
+ * 주식수에 곱하면 과대(삼성전자 약 53조)라 우선주 자체 시세를 쓴다.
+ *
+ * 우선주 판별: 보통주와 단축코드 앞 5자리가 같고(005930 → 005935·00088K 등),
+ * 종목명이 보통주 이름으로 시작하며 "우"를 포함(삼성전자우·현대차2우B). 없으면 0.
+ */
+export async function fetchKrxCapsOn(
+  code: string,
+  dateYmd: string,
+): Promise<{
+  date: string;
+  close: number | null;
+  commonMarketCap: number | null;
+  preferredMarketCap: number;
+  preferredIssues: string[];
+} | null> {
+  if (!key()) return null;
+  const short = code.replace(/[^0-9A-Z]/g, "").padStart(6, "0").slice(-6);
+  const d = new Date(
+    Number(dateYmd.slice(0, 4)),
+    Number(dateYmd.slice(4, 6)) - 1,
+    Number(dateYmd.slice(6, 8)),
+  );
+  for (let i = 0; i < 7; i++) {
+    const basDd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(
+      d.getDate(),
+    ).padStart(2, "0")}`;
+    try {
+      const day = await getDay(basDd);
+      const common = day.get(short);
+      if (common) {
+        const name = common.ISU_NM.trim();
+        let mc = 0;
+        const issues: string[] = [];
+        for (const [cd, r] of day) {
+          if (cd === short || cd.slice(0, 5) !== short.slice(0, 5)) continue;
+          const nm = r.ISU_NM.trim();
+          if (!nm.startsWith(name) || !/우/.test(nm.slice(name.length))) continue;
+          const v = num(r.MKTCAP);
+          if (v != null) {
+            mc += v;
+            issues.push(`${cd} ${nm}`);
+          }
+        }
+        return {
+          date: basDd,
+          close: num(common.TDD_CLSPRC),
+          commonMarketCap: num(common.MKTCAP),
+          preferredMarketCap: mc,
+          preferredIssues: issues,
+        };
+      }
+    } catch {
+      // 다음 날짜 시도
+    }
+    d.setDate(d.getDate() - 1);
+  }
+  return null;
+}
+
+/**
  * 종목의 최근 `days` 영업일 시세 + 상장주식수/시총.
  * 날짜별로 전체 시장 스냅샷을 받아오므로 days 를 키우면 그만큼 무거워진다.
  * 개요/멀티플은 최근 종가·전일 대비만 필요해 기본값을 작게 둔다(공휴일 여유 포함).

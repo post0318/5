@@ -55,6 +55,54 @@ export function isFullYearDuration(e: FactUnitEntry): boolean {
   return d >= 300 && d <= 400;
 }
 
+/**
+ * **반올림 재태깅 제거** — 나중 공시가 과거 기간 값을 본문 문장("$189 billion")의
+ * 반올림값으로 다시 태깅한 엔트리를 버린다. 모든 모듈이 "같은 기간이면 최신 공시
+ * (재작성본) 우선"이라 이 값이 정밀값을 덮어썼다(검증 체계 A = L + E 검사로 발견 —
+ * AXP 2021 총자산 188,548 → 189,000 백만 달러, 2024 10-K). 샘플 25개사 실측
+ * 528건(2026-09-23): 총자산·영업이익·매출원가·매출총이익 등 핵심 계정 포함.
+ *
+ * 판정: 같은 개념·단위·기간(start·end)에 **먼저 공시된** 값 y 가 있고, 이 값이 y 를
+ * 1억·10억·100억 단위로 반올림한 값과 정확히 같으면(그리고 y 자신은 그 단위의
+ * 배수가 아니면) 반올림 재태깅으로 본다. 실제 재작성이 원래 값의 반올림과 정확히
+ * 일치할 가능성은 사실상 없다. 원본 객체는 건드리지 않고 새 객체를 돌려준다.
+ */
+export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
+  const P = [1e8, 1e9, 1e10];
+  const roundsTo = (x: number, y: number) =>
+    x !== y && P.some((p) => Math.round(y / p) * p === x && y % p !== 0);
+  const clean = (es: FactUnitEntry[]): FactUnitEntry[] => {
+    const groups = new Map<string, FactUnitEntry[]>();
+    for (const e of es) {
+      const k = `${e.start ?? ""}|${e.end}`;
+      const g = groups.get(k);
+      if (g) g.push(e);
+      else groups.set(k, [e]);
+    }
+    const drop = new Set<FactUnitEntry>();
+    for (const g of groups.values()) {
+      if (g.length < 2) continue;
+      for (const x of g) {
+        if (Math.abs(x.val) < 1e8) continue;
+        if (g.some((y) => (y.filed ?? "") < (x.filed ?? "") && roundsTo(x.val, y.val))) drop.add(x);
+      }
+    }
+    return drop.size ? es.filter((e) => !drop.has(e)) : es;
+  };
+  const out: CompanyFacts = { ...facts, facts: { ...facts.facts } };
+  const gaap = facts.facts["us-gaap"];
+  if (gaap) {
+    const ng: NonNullable<CompanyFacts["facts"]["us-gaap"]> = {};
+    for (const [concept, o] of Object.entries(gaap)) {
+      const units: Record<string, FactUnitEntry[]> = {};
+      for (const [u, es] of Object.entries(o.units)) units[u] = u === "USD" ? clean(es) : es;
+      ng[concept] = { ...o, units };
+    }
+    out.facts["us-gaap"] = ng;
+  }
+  return out;
+}
+
 /** 같은 회계기간의 두 값 중 채택할 것 — 최신 종료일, 동률이면 최신 공시(재작성) 우선. */
 function preferNewer(cand: FactUnitEntry, prev: { end: string; filed?: string }): boolean {
   if (cand.end !== prev.end) return cand.end > prev.end;

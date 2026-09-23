@@ -12,7 +12,7 @@ import {
   splitFactorsByYear,
   ttmOf,
 } from "./edgar-series";
-import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa } from "./edgar-ev";
+import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, opIncomeIsDerived, pickDa, SYN_OP_INCOME } from "./edgar-ev";
 import { ltmNetIncome, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
 import {
   classAEps,
@@ -48,7 +48,10 @@ const SGA = [
   "GeneralAndAdministrativeExpense",
 ];
 const RND = ["ResearchAndDevelopmentExpense"];
-const OP_INCOME = ["OperatingIncomeLoss"];
+// 영업이익 — edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전, 로더가 합성).
+// 하이라이트·재무분석·개요 멀티플과 같은 값(예전엔 여기만 매출 − 원가로 만든 매출총이익
+// 에서 판관비·연구개발비를 빼 BMY 등에서 EBITDA 가 화면마다 달랐다).
+const OP_INCOME = [SYN_OP_INCOME];
 const PRETAX = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
@@ -205,9 +208,7 @@ export function buildUsIncome(
   const rnd = val(RND);
   const opex = val(OPEX);
   const pretax = val(PRETAX);
-  // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 공시 태그,
-  // 없으면 매출총이익 − 판관비 − 연구개발비 (IBM 등), 그래도 없으면 세전이익으로
-  // 근사(XOM 등 영업이익 태그 자체가 없는 회사 — 비영업 손익 포함될 수 있음)
+  // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 단일 기준 시계열
   const opIncome = (() => {
     if (isFin) {
       const o = blank();
@@ -216,14 +217,6 @@ export function buildUsIncome(
       return o;
     }
     const o = val(OP_INCOME);
-    for (const l of labels) {
-      if (o[l] != null) continue;
-      if (grossProfit[l] != null && (sga[l] != null || rnd[l] != null)) {
-        o[l] = Math.round(grossProfit[l]! - (sga[l] ?? 0) - (rnd[l] ?? 0));
-        continue;
-      }
-      if (pretax[l] != null) o[l] = pretax[l];
-    }
     return o;
   })();
   // 기타 영업비용 = OPEX − SGA − RND, 없으면 GrossProfit − OpIncome − SGA − RND
@@ -453,7 +446,11 @@ export function buildUsIncome(
             row("(−) 기타 영업비용", otherOpex),
           ]
         : [row("(−) 영업비용", totalOpex)]),
-    row("영업이익", opIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
+    row(
+      !isFin && opIncomeIsDerived(facts) ? "영업이익 (태그 없음 · 세전이익+이자비용 근사)" : "영업이익",
+      opIncome,
+      { depth: 0, isSubtotal: true, isHighlight: true },
+    ),
     row("(−) 영업외손익", nonOpLoss),
     ...(hasInterest
       ? [row("(순이자비용)", netIntCost, { depth: 2, italic: true, paren: true })]

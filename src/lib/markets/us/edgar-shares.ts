@@ -13,6 +13,7 @@ import {
   classAShares,
   type ClassAFacts,
 } from "./edgar-classfacts";
+import { adrRatio } from "../adr";
 
 /**
  * 미국 종목 **발행주식수 단일 기준**.
@@ -148,6 +149,9 @@ export function buildShareResolver(
   const wavgBasic = entriesOf(facts, "WeightedAverageNumberOfSharesOutstandingBasic", "shares");
   const splitF = splitFactorsByYear(facts);
   let hintUsed = false;
+  // 20-F ADR 비율(보통주 ÷ ADR) — 1 이 아니면 모든 주식수를 ADR 기준으로 환산
+  const lastDei = dei.reduce<FactUnitEntry | null>((b, e) => (!b || e.end > b.end ? e : b), null);
+  const adr = adrRatio(/^20-F/.test(lastDei?.form ?? ""), lastDei?.val, hint);
 
   return {
     atFiscalYearEnd(year, endDate) {
@@ -180,9 +184,11 @@ export function buildShareResolver(
         return hint;
       }
       const f = splitF.get(year);
-      return f != null && f !== 0 ? raw / f : raw;
+      return (f != null && f !== 0 ? raw / f : raw) / adr;
     },
     current() {
+      // ADR 비율이 있는 20-F 기업은 Yahoo ADR 환산 주식수가 곧 현재 주식수
+      if (adr !== 1) return hint;
       // 기준 검증용 잣대 — 최근 연간 가중평균주식수. 듀얼클래스 종목(Visa 등)
       // 은 DEI 표지 주식수가 클래스별 부분값만 잡히는 경우가 있어(실측:
       // Visa LTM 시가총액이 1,736억 달러로 실제의 1/3 수준으로 떨어짐)

@@ -19,8 +19,8 @@ import {
   type TtmFlows,
 } from "../types";
 import { type FactEntry, latestInstant, ttmFlow } from "./edgar-fundamentals";
-import { splitFactorsByYear } from "./edgar-series";
-import { buildEvResolver, daAnnualByYear, daTtm, type EvContext } from "./edgar-ev";
+import { dropRoundedRetags, splitFactorsByYear } from "./edgar-series";
+import { buildEvResolver, daAnnualByYear, daTtm, SYN_OP_INCOME, withOpIncome, type EvContext } from "./edgar-ev";
 import { loadCaptiveDebt } from "./edgar-captive";
 import { buildShareResolver } from "./edgar-shares";
 import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
@@ -156,7 +156,10 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
     `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
     { headers: SEC_HEADERS, revalidate: false },
   )
-    .then((data) => {
+    // 반올림 재태깅 제거 + 영업이익 단일 기준 합성(edgar-ev.ts) — 모든 소비 모듈이
+    // 같은 정제본을 쓰게 로더에서 한 번만
+    .then((raw) => {
+      const data = withOpIncome(dropRoundedRetags(raw));
       factsCache.set(cik, { at: Date.now(), data });
       return data;
     })
@@ -309,41 +312,9 @@ function buildUsTtm(
       ["USD"],
     ),
   );
-  let opIncome = ttmFlow(factEntries(facts, "us-gaap", ["OperatingIncomeLoss"], ["USD"]));
-  if (opIncome.ttm == null) {
-    // 파생: 매출총이익 − 판관비 − 연구개발비 (IBM 등)
-    const gp = ttmFlow(factEntries(facts, "us-gaap", ["GrossProfit"], ["USD"]));
-    const sg = ttmFlow(
-      factEntries(
-        facts,
-        "us-gaap",
-        ["SellingGeneralAndAdministrativeExpense", "GeneralAndAdministrativeExpense"],
-        ["USD"],
-      ),
-    );
-    const rd = ttmFlow(factEntries(facts, "us-gaap", ["ResearchAndDevelopmentExpense"], ["USD"]));
-    if (gp.ttm != null && (sg.ttm != null || rd.ttm != null))
-      opIncome = {
-        ...gp,
-        ttm: gp.ttm - (sg.ttm ?? 0) - (rd.ttm ?? 0),
-        annual:
-          gp.annual != null ? gp.annual - (sg.annual ?? 0) - (rd.annual ?? 0) : null,
-      };
-  }
-  if (opIncome.ttm == null) {
-    // 최후 폴백: 세전이익 — 하이라이트·분석 지표와 같은 순서(영업이익 태그가 없거나
-    // 중단된 회사: XOM·GE 등). 이게 없으면 개요 멀티플만 EV/EBITDA 가 비었다.
-    for (const c of [
-      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
-    ]) {
-      const p = ttmFlow(factEntries(facts, "us-gaap", [c], ["USD"]));
-      if (p.ttm != null) {
-        opIncome = p;
-        break;
-      }
-    }
-  }
+  // 영업이익 — edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전). 하이라이트·
+  // 재무분석·손익계산서와 같은 값.
+  const opIncome = ttmFlow(factEntries(facts, "us-gaap", [SYN_OP_INCOME], ["USD"]));
   // 감가상각비 — edgar-ev.ts 단일 규칙(하이라이트·분석 지표와 동일).
   const daByYear = daAnnualByYear(facts);
   const daLatestYear = [...daByYear.keys()].sort((a, b) => b - a)[0];
@@ -437,6 +408,11 @@ function buildUsTtm(
       evShares,
       evOpNciBook: evBridge?.opUnitNciBook ?? null,
       isReit: evCtx.sic === "6798",
+      is20F: /^20-F/.test(
+        (facts.facts.dei?.["EntityCommonStockSharesOutstanding"]?.units?.shares ?? []).reduce<
+          FactUnitEntry | null
+        >((b, e) => (!b || e.end > b.end ? e : b), null)?.form ?? "",
+      ),
     },
     daAnnual: da.annual,
     daTtm: da.ttm,

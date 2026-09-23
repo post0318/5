@@ -18,6 +18,8 @@ import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
 import { getKrDaDoc } from "@/lib/db/kr-da";
+import { usSharesHint } from "@/lib/markets/us/shares-hint";
+import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
 
 export const revalidate = 3600;
 export const maxDuration = 45;
@@ -43,7 +45,7 @@ export async function GET(
 
     if (market === "kr") {
       const { corpCode } = resolveCorpCode("", sym);
-      const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daDoc] = await Promise.all([
+      const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daDoc, live] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
         fetchKrDps(corpCode),
         fetchKrxEod(sym).catch(() => null),
@@ -54,6 +56,9 @@ export async function GET(
           .then((crno) => fetchKrAnnualDps(crno))
           .catch(() => null),
         getKrDaDoc(sym).catch(() => null),
+        // 현재가·시가총액은 개요(브라우저 멀티플)와 같은 시세 함수 — KRX 일별 전종목은 장
+        // 마감 뒤에야 당일분이 나와 하루 늦을 수 있어 LTM 열이 개요와 갈렸다.
+        getEodQuote("kr", sym).catch(() => null),
       ]);
       if (!facts) return ok({ highlights: null });
       // 회계연도말 종가 — Stooq 커버리지가 부족하면 KRX 로 개별 조회
@@ -67,13 +72,17 @@ export async function GET(
           if (c != null) fyCloseByYear.set(y, c);
         }),
       );
+      // KRX 연말·현재 보통주·우선주 시가총액 (dart-ev.ts — EV·PBR·PSR 공통)
+      const caps = await loadKrCaps(sym, facts.periods.map((p) => p.year)).catch(() => null);
       const highlights = buildKrHighlights({
+        code: sym,
+        caps,
         facts,
         bars,
         fyCloseByYear,
-        sharesOutstanding: krx?.listedShares ?? null,
-        currentMarketCap: krx?.marketCap ?? null,
-        currentPrice: krx?.bars.at(-1)?.close ?? bars.at(-1)?.close ?? null,
+        sharesOutstanding: krx?.listedShares ?? live?.sharesOutstanding ?? null,
+        currentMarketCap: live?.marketCap ?? krx?.marketCap ?? null,
+        currentPrice: live?.last ?? krx?.bars.at(-1)?.close ?? bars.at(-1)?.close ?? null,
         ttm: ttm ?? null,
         dpsByYear: dps.dpsByYear,
         payoutByYear: dps.payoutByYear,
@@ -109,12 +118,7 @@ export async function GET(
     const captive = await loadCaptiveDebt(factsRes.cik, sic).catch(() => null);
     const opUnits = reitOpUnits(sic, consensus?.sharesOutstanding, consensus?.impliedSharesOutstanding);
 
-    const mcap = consensus?.marketCap ?? quote?.marketCap ?? null;
-    const sharesHint =
-      (mcap != null && quote?.last ? mcap / quote.last : null) ??
-      consensus?.sharesOutstanding ??
-      quote?.sharesOutstanding ??
-      null;
+    const sharesHint = usSharesHint(quote, consensus);
 
     const estCols = (estimates?.periods ?? []).map((p) => ({
       period: p.period,

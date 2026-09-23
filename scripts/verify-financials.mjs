@@ -24,6 +24,7 @@
  *   node scripts/verify-financials.mjs --symbols=AAPL,WMT,MCD
  *   node scripts/verify-financials.mjs --universe          # 유니버스(미국) 전체
  *   node scripts/verify-financials.mjs --sp500 --limit=50  # S&P 500 (위키피디아 목록)
+ *   node scripts/verify-financials.mjs --market=kr --universe   # 유니버스(한국) — 2층만
  *   옵션: --base=http://localhost:3000 (기본) · --concurrency=2 · --no-external
  * 결과: reports/verify/verify-YYYY-MM-DD.json + 콘솔 요약. 실패가 있으면 종료코드 1.
  */
@@ -41,6 +42,7 @@ const args = Object.fromEntries(
 const BASE = String(args.base ?? "http://localhost:3000").replace(/\/$/, "");
 const CONCURRENCY = Number(args.concurrency ?? 2);
 const EXTERNAL = !args["no-external"];
+const MARKET = String(args.market ?? "us").toLowerCase(); // us | kr
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -65,6 +67,14 @@ async function getJson(path, timeoutMs = 240_000) {
 
 async function symbolList() {
   if (args.symbols) return String(args.symbols).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (args.universe && MARKET === "kr") {
+    const headers = env.CRON_SECRET
+      ? { authorization: `Bearer ${env.CRON_SECRET}` }
+      : { "x-app-token": env.APP_PASSWORD ?? "" };
+    const r = await fetch(`${BASE}/api/cron/universe-symbols?market=kr`, { headers });
+    if (!r.ok) throw new Error(`유니버스 목록 조회 실패 HTTP ${r.status}`);
+    return (await r.json()).items.map((i) => i.symbol);
+  }
   if (args.universe) {
     const headers = env.CRON_SECRET
       ? { authorization: `Bearer ${env.CRON_SECRET}` }
@@ -290,10 +300,85 @@ async function verifySymbol(sym, yf) {
   return { sym, checks, review: review.filter((r) => r.gapPct == null || Math.abs(r.gapPct) > 5), reviewAll: review };
 }
 
+// ── 한국 종목 1개 검증 (kr/dart-ev.ts 단일 기준, B16) ───────────────────
+async function verifyKrSymbol(sym) {
+  const u = `/api/markets/kr/${encodeURIComponent(sym)}`;
+  const checks = [];
+  const add = (layer, name, col, r) => checks.push({ layer, name, col, ...r });
+  const [hl, an, ov, tt, cs, bs] = await Promise.all([
+    getJson(`${u}/highlights`),
+    getJson(`${u}/financials?view=analysis`),
+    getJson(`${u}/overview`),
+    getJson(`${u}/ttm`),
+    getJson(`${u}/consensus`).catch(() => null),
+    getJson(`${u}/financials?view=bs&period=annual`).catch(() => null),
+  ]);
+  const h = hl.highlights;
+  if (!h) return { sym, skipped: "하이라이트 없음", checks };
+  const H = {};
+  h.columns.forEach((c, i) => {
+    if (c.kind === "estimate") return;
+    const lab = c.kind === "ltm" ? "LTM" : c.label;
+    const row = (k) => h.rows.find((r) => r.key === k)?.values[i] ?? null;
+    const val = (k) => h.valuationRows.find((r) => r.key === k)?.values[i] ?? null;
+    H[lab] = {
+      mc: row("mktcap"), pref: row("pref_mcap"), cash: row("cash"), debt: row("debt"), nci: row("nci"),
+      ev: row("ev"), ebitda: row("ebitda"),
+      per: val("per"), pbr: val("pbr"), psr: val("psr"), evx: val("ev_ebitda"),
+    };
+  });
+  const rowOf = (stmt, name) => stmt?.sections?.flatMap((s) => s.items).find((x) => x.accountName === name)?.values ?? {};
+  const lab = (k) => (k === "현재/LTM" ? "LTM" : k);
+  const A = {};
+  for (const [name, key] of [["EV/EBITDA", "evx"], ["PER", "per"], ["PBR", "pbr"], ["PSR", "psr"]])
+    for (const [k, v] of Object.entries(rowOf(an, name))) (A[lab(k)] ??= {})[key] = v;
+  const C = {};
+  for (const r of cs?.rows ?? []) if (!r.isEstimate) C[`${r.fy}Y`] = r;
+  // 대차대조표 주석(연간 라벨 "FY2025" → "2025Y")
+  const BS = {};
+  for (const [name, key] of [["총차입금", "debt"], ["순차입금", "nd"]])
+    for (const [k, v] of Object.entries(rowOf(bs, name))) (BS[k.replace(/^FY(\d{4})$/, "$1Y")] ??= {})[key] = v;
+  for (const c of Object.keys(H)) {
+    const x = H[c];
+    if (c !== "LTM" && BS[c] && x.debt != null) {
+      add(2, "차입금 하이라이트=대차대조표 주석", c, same(BS[c].debt ?? null, x.debt));
+      add(2, "순차입금 하이라이트=대차대조표 주석", c, same(BS[c].nd ?? null, x.debt + (x.cash ?? 0)));
+    }
+    add(2, "EV/EBITDA 하이라이트=재무분석", c, same(A[c]?.evx ?? null, x.evx));
+    add(2, "PER 하이라이트=재무분석", c, same(A[c]?.per ?? null, x.per));
+    add(2, "PBR 하이라이트=재무분석", c, same(A[c]?.pbr ?? null, x.pbr));
+    add(2, "PSR 하이라이트=재무분석", c, same(A[c]?.psr ?? null, x.psr));
+    if (c !== "LTM" && C[c]) {
+      add(2, "EV/EBITDA 컨센서스=하이라이트", c, same(C[c].evEbitda ?? null, x.evx));
+      add(2, "PER 컨센서스=하이라이트", c, same(C[c].per ?? null, x.per));
+      add(2, "PBR 컨센서스=하이라이트", c, same(C[c].pbr ?? null, x.pbr));
+    }
+    if (x.ev != null) {
+      const sum = (x.mc ?? 0) + (x.pref ?? 0) + (x.debt ?? 0) + (x.nci ?? 0) + (x.cash ?? 0); // cash 행은 음수
+      add(2, "EV = 보통주+우선주 시총+차입금+NCI−현금", c, same(x.ev, sum));
+      if (x.ebitda != null && x.ebitda > 0) add(2, "EV/EBITDA = EV÷EBITDA", c, same(x.evx, x.ev / x.ebitda));
+    }
+  }
+  // 개요 멀티플(브라우저 computeTrailingMultiples 와 같은 식) vs 하이라이트 LTM
+  const sn = tt?.ttm?.snapshot, q = ov?.quote;
+  if (sn && q?.last && H.LTM) {
+    const shares = q.sharesOutstanding ?? null;
+    const mc = q.marketCap ?? (shares ? q.last * shares : null);
+    const ev = sn.evBlocker || sn.evNetDebt == null || shares == null ? null : q.last * shares + (sn.evPreferredMcap ?? 0) + sn.evNetDebt;
+    const eb = tt.ttm.opIncome != null ? tt.ttm.opIncome + (tt.ttm.daTtm ?? 0) : null;
+    const pos = (n, d) => (n != null && d != null && d > 0 ? n / d : null);
+    add(2, "EV/EBITDA 개요=하이라이트", "LTM", same(ev != null ? pos(ev, eb) : null, H.LTM.evx));
+    add(2, "PER(TTM) 개요=하이라이트", "LTM", same(pos(q.last, tt.ttm.eps), H.LTM.per));
+    add(2, "PBR 개요=하이라이트", "LTM", same(sn.equity && shares ? pos(q.last, sn.equity / shares) : null, H.LTM.pbr));
+    add(2, "PSR 개요=하이라이트", "LTM", same(pos(mc, tt.ttm.revenue), H.LTM.psr));
+  }
+  return { sym, checks, review: [], reviewAll: [] };
+}
+
 // ── 실행 ─────────────────────────────────────────────────────────────
 const syms = await symbolList();
 let yf = null;
-if (EXTERNAL) {
+if (EXTERNAL && MARKET === "us") {
   const req = createRequire(new URL("../package.json", import.meta.url));
   const mod = await import(new URL(`file:///${req.resolve("yahoo-finance2").replace(/\\/g, "/")}`).href);
   const YF = mod.default?.default ?? mod.default ?? mod;
@@ -312,7 +397,7 @@ async function worker() {
   while (idx < syms.length) {
     const s = syms[idx++];
     try {
-      const r = await verifySymbol(s, yf);
+      const r = MARKET === "kr" ? await verifyKrSymbol(s) : await verifySymbol(s, yf);
       results.push(r);
       if (results.length % 10 === 0) savePartial();
       const f = r.checks.filter((c) => c.status === FAIL).length;

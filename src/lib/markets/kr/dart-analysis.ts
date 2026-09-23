@@ -1,6 +1,7 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem, QuoteBar, TtmFlows } from "../types";
-import { type KrFacts, type KrDaInput, annualSeries, annualSumByPattern, daAndAmortSeries } from "./dart-facts";
+import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries } from "./dart-facts";
+import { buildKrEvResolver, krEpsByYear, krEv, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
  * 한국 분석 지표 — `edgar-analysis.ts` 미러 (섹션·라벨 동일, 개요 요약칩 호환).
@@ -15,7 +16,6 @@ const IS = ["IS", "CIS"];
 const C = {
   rev: { ids: ["ifrs-full_Revenue", "dart_Revenue"], names: ["매출액", "수익(매출액)", "영업수익"] },
   gross: { ids: ["ifrs-full_GrossProfit"], names: ["매출총이익"] },
-  opInc: { ids: ["dart_OperatingIncomeLoss"], names: ["영업이익"] },
   pretax: { ids: ["ifrs-full_ProfitLossBeforeTax"], names: ["법인세비용차감전순이익"] },
   tax: { ids: ["ifrs-full_IncomeTaxExpenseContinuingOperations", "ifrs-full_IncomeTaxExpenseBenefit"], names: ["법인세비용"] },
   ni: { ids: ["ifrs-full_ProfitLoss"], names: ["당기순이익", "분기순이익", "반기순이익"] },
@@ -55,7 +55,11 @@ function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
 }
 
 export interface KrAnalysisInput {
+  /** 종목코드(6자리) — EV 막힘 판정용 */
+  code: string;
   facts: KrFacts;
+  /** KRX 연말·현재 보통주·우선주 시가총액(dart-ev.ts loadKrCaps) */
+  caps?: KrCaps | null;
   bars: QuoteBar[];
   fyCloseByYear?: Map<number, number>;
   sharesOutstanding: number | null;
@@ -66,23 +70,24 @@ export interface KrAnalysisInput {
 }
 
 export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
-  const { facts, bars, fyCloseByYear, sharesOutstanding: shares, currentPrice, currentMarketCap, ttm, daDoc = null } = input;
+  const { code, facts, caps, bars, fyCloseByYear, sharesOutstanding: shares, currentPrice, currentMarketCap, ttm, daDoc = null } = input;
   const years = facts.periods.map((p) => p.year);
   const labels = [...years.map((y) => `${y}Y`), LTM];
   const blank = (): Record<string, number | null> => Object.fromEntries(labels.map((l) => [l, null]));
 
   const A = (c: { ids: string[]; names: string[] }, sj?: string | string[]) =>
     annualSeries(facts, c.ids, c.names, sj);
-  const aDebt = annualSumByPattern(facts, /차입금|사채|리스부채/, "BS", /리스채권|투자|자산|받을|대여/);
+  // EV 브릿지·차입금·현금 — dart-ev.ts 단일 기준(하이라이트·개요 멀티플과 같은 값)
+  const evRes = buildKrEvResolver(facts, code);
 
   // 연간 시계열 (6개년) → 라벨 맵 (5개년 + LTM)
   const rev0 = A(C.rev, IS);
   const gross0 = A(C.gross, IS);
-  const opInc0 = A(C.opInc, IS);
+  const opInc0 = krOpIncomeByYear(facts); // dart-ev.ts 공통(하이라이트·컨센서스와 같은 값)
   const pretax0 = A(C.pretax, IS);
   const tax0 = A(C.tax, IS);
   const ni0 = A(C.ni, IS);
-  const eps0 = A(C.eps, IS);
+  const eps0 = krEpsByYear(facts); // dart-ev.ts 공통(하이라이트·컨센서스와 같은 값)
   const assets0 = A(C.assets, "BS");
   const curAssets0 = A(C.curAssets, "BS");
   const curLiab0 = A(C.curLiab, "BS");
@@ -137,12 +142,17 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     for (const l of labels) if (o[l] != null) o[l] = Math.abs(o[l]!);
     return o;
   })();
-  const debt = map(aDebt);
-
-  // 현금성 (순차입금용): 현금 + 단기금융상품
+  // 차입금(리스부채 포함)·현금성자산 — LTM 열은 최근 사업연도말 BS(종전과 같다)
+  const debt = blank();
   const cashTot = blank();
-  for (const l of labels)
-    if (cash[l] != null || stInv[l] != null) cashTot[l] = (cash[l] ?? 0) + (stInv[l] ?? 0);
+  const nci = blank();
+  for (const l of labels) {
+    const b = evRes.bridgeAt(l === LTM ? years[years.length - 1] : Number(l.slice(0, 4)));
+    if (!b) continue;
+    debt[l] = b.debt;
+    cashTot[l] = b.cash;
+    nci[l] = b.nci;
+  }
   const netDebt = blank();
   for (const l of labels) if (debt[l] != null || cashTot[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashTot[l] ?? 0);
 
@@ -172,15 +182,23 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const apAvg = avg(ap0);
 
   // 시가총액
+  // KRX 실측(그날의 실제 상장주식수 × 종가) — 하이라이트와 같은 값. 없을 때만 근사.
   const mktcap = blank();
+  const prefMcap = blank();
   for (const y of years) {
+    const kx = caps?.byYear.get(y);
     const px = closeOnOrBefore(bars, `${y}-12-31`) ?? fyCloseByYear?.get(y) ?? null;
-    mktcap[`${y}Y`] = px != null && shares != null ? px * shares : null;
+    mktcap[`${y}Y`] = kx?.common ?? (px != null && shares != null ? px * shares : null);
+    prefMcap[`${y}Y`] = kx?.preferred ?? null;
   }
-  const curMktcap = currentMarketCap ?? (currentPrice != null && shares != null ? currentPrice * shares : null);
+  const curMktcap =
+    currentMarketCap ?? caps?.current?.common ?? (currentPrice != null && shares != null ? currentPrice * shares : null);
   mktcap[LTM] = curMktcap;
+  prefMcap[LTM] = caps?.current?.preferred ?? null;
   const priceByLabel = blank();
-  for (const y of years) priceByLabel[`${y}Y`] = closeOnOrBefore(bars, `${y}-12-31`) ?? fyCloseByYear?.get(y) ?? null;
+  // 연말 주가 — KRX 실제 종가 우선(하이라이트·컨센서스와 같은 값)
+  for (const y of years)
+    priceByLabel[`${y}Y`] = caps?.byYear.get(y)?.close ?? closeOnOrBefore(bars, `${y}-12-31`) ?? fyCloseByYear?.get(y) ?? null;
   priceByLabel[LTM] = currentPrice;
 
   // ── helpers ──
@@ -244,12 +262,21 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   };
 
   // ── 밸류에이션 ──
-  const per = ratio(priceByLabel, eps);
-  const pbr = ratio(mktcap, equity);
-  const psr = ratio(mktcap, rev);
+  // 배수는 분모 0 이하면 비운다(전 화면 공통 부호 규칙 — 적자 PER·음수 EBITDA 배수 등)
+  const pos = (n: Record<string, number | null>, d: Record<string, number | null>): Record<string, number | null> => {
+    const o = blank();
+    for (const l of labels) if (n[l] != null && d[l] != null && d[l]! > 0) o[l] = n[l]! / d[l]!;
+    return o;
+  };
+  const per = pos(priceByLabel, eps);
+  // PBR 분모는 지배주주 자본(dart-ev.ts — 하이라이트·컨센서스·개요와 같은 값)
+  const parentEq = map(krParentEquityByYear(facts));
+  const pbr = pos(mktcap, parentEq);
+  const psr = pos(mktcap, rev);
   const evV = blank();
-  for (const l of labels) if (mktcap[l] != null && netDebt[l] != null) evV[l] = mktcap[l]! + netDebt[l]!;
-  const evEbitda = ratio(evV, ebitda);
+  for (const l of labels)
+    evV[l] = krEv(evRes, l === LTM ? years[years.length - 1] : Number(l.slice(0, 4)), mktcap[l], prefMcap[l]);
+  const evEbitda = pos(evV, ebitda);
   const fcf = blank();
   for (const l of labels) if (ocf[l] != null && capexAbs[l] != null) fcf[l] = ocf[l]! - capexAbs[l]!;
   const epsCagr3 = cagrN(eps0, 3, ttm?.eps);
@@ -284,8 +311,8 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const netDebtToEquity = ratio(netDebt, equity, 100);
 
   // ── 재무건전성 ──
-  const debtEbitda = ratio(debt, ebitda);
-  const netDebtEbitda = ratio(netDebt, ebitda);
+  const debtEbitda = pos(debt, ebitda);
+  const netDebtEbitda = pos(netDebt, ebitda);
   const opToDebt = ratio(opInc, debt);
   const intCov = ratio(opInc, intPaid); // 이자보상배율 (EBIT/이자)
   const cfoToDebt = ratio(ocf, debt);

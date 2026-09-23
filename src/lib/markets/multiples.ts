@@ -11,6 +11,7 @@ import type {
   TtmFlows,
 } from "./types";
 import { MARKET_CURRENCY } from "./types";
+import { adrRatio } from "./adr";
 
 const norm = (s: string) => s.replace(/\s/g, "");
 
@@ -208,7 +209,11 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
 
   // 미국: 주식수·시가총액을 하이라이트와 같은 공통 기준(edgar-shares, 스냅샷 evShares)
   // 으로 — Yahoo 주식수·시가총액을 쓰면 PBR·PSR 이 하이라이트와 달랐다.
-  const usShares = snap?.evShares ?? null;
+  // 20-F ADR(TSM 1:5)은 EDGAR 주식수가 본국 보통주 기준 → Yahoo ADR 환산 주식수로
+  const usShares =
+    snap?.evShares != null && adrRatio(Boolean(snap.is20F), snap.evShares, sharesOutstanding) !== 1
+      ? sharesOutstanding!
+      : (snap?.evShares ?? null);
   const shares =
     usShares ??
     sharesOutstanding ??
@@ -245,18 +250,22 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   const ev = usEv
     ? snap!.evBlocker || snap!.evNetDebt == null || price == null
       ? null
-      : price * (snap!.evShares ?? shares ?? 0) +
+      : price * (usShares ?? shares ?? 0) +
         (input.opUnits ? input.opUnits * price - (snap!.evOpNciBook ?? 0) : 0) +
+        (snap!.evPreferredMcap ?? 0) +
         snap!.evNetDebt
     : marketCap != null
       ? marketCap + (totalLiabilities ?? 0) - (cash ?? 0)
       : null;
   // EBITDA = 영업이익 + 감가상각비 + 무형자산상각비. D&A 없으면 EV/EBIT 근사.
-  const ebitdaOpIncome = snap && ttm?.opIncome != null ? ttm.opIncome : opIncome;
-  const ebitdaDa = snap && ttm?.daTtm != null ? ttm.daTtm : da;
+  // 미국(스냅샷 있음)은 EDGAR 단일 기준 TTM 만 쓴다 — 없을 때 재무제표 값으로 새면
+  // 하이라이트(같은 시계열, 없으면 빈칸·D&A 0)와 갈린다.
+  const ebitdaOpIncome = snap ? (ttm?.opIncome ?? null) : opIncome;
+  const ebitdaDa = snap ? (ttm?.daTtm ?? null) : da;
   const ebitda =
     ebitdaOpIncome != null ? ebitdaOpIncome + (ebitdaDa ?? 0) : null;
-  const evEbitda = ev != null && ebitda ? ev / ebitda : null;
+  // 분모 0 이하면 비운다(전 화면 공통 부호 규칙)
+  const evEbitda = ev != null && ebitda != null && ebitda > 0 ? ev / ebitda : null;
   const evEbitdaIsApprox = (snap ? ttm?.daTtm : da) == null;
 
   return {

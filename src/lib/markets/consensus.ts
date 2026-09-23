@@ -15,6 +15,20 @@ import {
 import { loadCaptiveDebt } from "./us/edgar-captive";
 import { loadClassAFacts } from "./us/class-facts-loader";
 import { buildShareResolver, type ShareResolver } from "./us/edgar-shares";
+import { usSharesHint } from "./us/shares-hint";
+import {
+  buildKrEvResolver,
+  krEpsByYear,
+  krEv,
+  krOpIncomeByYear,
+  krParentEquityByYear,
+  loadKrCaps,
+  type KrCaps,
+  type KrEvResolver,
+} from "./kr/dart-ev";
+import { daAndAmortSeries, fetchKrFacts } from "./kr/dart-facts";
+import { resolveCorpCode } from "./kr/corpcode";
+import { getKrDaDoc } from "@/lib/db/kr-da";
 import { isFinancialCompany } from "./us/edgar-financial";
 import { fyEps, netIncomeAnnualByYear, parentEquityAt, positiveRatio } from "./us/edgar-pershare";
 import type { ClassAFacts } from "./us/edgar-classfacts";
@@ -225,12 +239,13 @@ export async function getConsensusData(
       const sic = await fetchUsSic(symbol).catch(() => null);
       const [captive, fwd, classFacts] = await Promise.all([
         loadCaptiveDebt(cik, sic).catch(() => null),
-        sic === "6798" ? fetchForwardConsensus(market, symbol, yahooOverride).catch(() => null) : null,
+        fetchForwardConsensus(market, symbol, yahooOverride).catch(() => null),
         loadClassAFacts(cik, facts).catch(() => null),
       ]);
       const opUnits = reitOpUnits(sic, fwd?.sharesOutstanding, fwd?.impliedSharesOutstanding);
       us = {
-        shares: buildShareResolver(facts, { classFacts, sharesHint: shares }),
+        // 힌트는 하이라이트·재무분석 라우트와 같은 규칙(us/shares-hint.ts)
+        shares: buildShareResolver(facts, { classFacts, sharesHint: usSharesHint(quote, fwd) }),
         ev: buildEvResolver(facts, { sic, captive, opUnits, isFinancial: isFinancialCompany(facts, sic) }),
         da: daAnnualByYear(facts),
         op: opIncomeAnnualByYear(facts),
@@ -242,10 +257,50 @@ export async function getConsensusData(
     }
   }
 
+  // 한국: 하이라이트와 같은 EV 단일 기준(kr/dart-ev.ts) — 부채총계 대신 차입금, KRX 연말
+  // 실제 시가총액(보통주·우선주), 감가상각비는 사업보고서 주석 실측(daAndAmortSeries).
+  // 예전엔 부채총계를 더하고 D&A 계정 매칭 실패 시 영업이익만 써서 EV/EBITDA 가 하이라이트의
+  // 2~16배였고, 40배 초과를 숨기는 필터까지 있어 화면마다 갈렸다(B16, 2026-09-23).
+  let kr: {
+    ev: KrEvResolver;
+    caps: KrCaps | null;
+    da: Map<number, number>;
+    eps: Map<number, number>;
+    equity: Map<number, number>;
+    op: Map<number, number>;
+  } | null = null;
+  if (market === "kr") {
+    try {
+      const { corpCode } = resolveCorpCode("", symbol);
+      const [facts, daDoc, caps] = await Promise.all([
+        fetchKrFacts(corpCode, "annual"),
+        getKrDaDoc(symbol).catch(() => null),
+        loadKrCaps(symbol, years).catch(() => null),
+      ]);
+      if (facts)
+        kr = {
+          ev: buildKrEvResolver(facts, symbol),
+          caps,
+          da: daAndAmortSeries(facts, daDoc).byYear,
+          eps: krEpsByYear(facts),
+          equity: krParentEquityByYear(facts),
+          op: krOpIncomeByYear(facts),
+        };
+    } catch {
+      kr = null;
+    }
+  }
+
   const actualRows: ConsensusRow[] = [];
   for (const fy of years) {
     const revenue = valueForYear(annual, fy, ACCT.revenue);
-    const opIncome = valueForYear(annual, fy, ACCT.opIncome);
+    // 미국: 영업이익 단일 기준 시계열(edgar-ev.ts — 공시 → 세전+이자 → 세전)
+    // 한국: dart-ev.ts 공통 영업이익(하이라이트·재무분석과 같은 값)
+    const opIncome = us
+      ? (us.op.get(fy) ?? null)
+      : kr
+        ? (kr.op.get(fy) ?? null)
+        : valueForYear(annual, fy, ACCT.opIncome);
     // 미국: 지배주주 순이익 공통 규칙(하이라이트·손익계산서와 같은 값)
     const netIncome = us
       ? (netIncomeAnnualByYear(us.facts).get(fy) ?? null)
@@ -256,7 +311,9 @@ export async function getConsensusData(
     const equity =
       us && periodEndUs
         ? parentEquityAt(us.facts, periodEndUs)
-        : valueForYear(annual, fy, ACCT.equity);
+        : kr
+          ? (kr.equity.get(fy) ?? null) // 한국: 지배주주 자본(dart-ev.ts — 하이라이트와 같은 값)
+          : valueForYear(annual, fy, ACCT.equity);
     const liab = valueForYear(annual, fy, ACCT.liabilities);
     const cash = valueForYear(annual, fy, ACCT.cash);
     const epsStmt = valueForYear(annual, fy, ACCT.eps);
@@ -267,7 +324,9 @@ export async function getConsensusData(
     // 미국: 하이라이트와 같은 연도 EPS 규칙(공시값·분할 보정 → Class A 실측 → 근사)
     const eps = us
       ? fyEps(us.facts, fy, { classFacts: us.classFacts, fyShares, fyNetIncome: netIncome }).eps
-      : (epsStmt ?? (netIncome != null && fyShares ? netIncome / fyShares : null));
+      : kr
+        ? (kr.eps.get(fy) ?? null) // 한국: dart-ev.ts 공통 EPS
+        : (epsStmt ?? (netIncome != null && fyShares ? netIncome / fyShares : null));
     const bps = equity != null && fyShares ? equity / fyShares : null;
 
     // 해당 회계연도의 실제 마감일 시점 주가 (없으면 결산월 28일로 근사)
@@ -276,16 +335,29 @@ export async function getConsensusData(
       `${fy}-${String(fiscalMonth).padStart(2, "0")}-28`;
     let yePrice: number | null = null;
     if (market === "kr") {
-      yePrice = await fetchKrxCloseOn(symbol, periodEnd.replace(/-/g, "")).catch(() => null);
+      yePrice =
+        kr?.caps?.byYear.get(fy)?.close ??
+        (await fetchKrxCloseOn(symbol, periodEnd.replace(/-/g, "")).catch(() => null));
     } else if (quote?.bars?.length) {
       yePrice = closeFromBars(quote.bars, periodEnd);
     }
-    yePrice = yePrice ?? price; // 못 구하면 현재가로 대체
+    // 못 구하면 현재가로 대체 — 미국은 하지 않는다. 상장 전 연도(분사 GEV·SNDK
+    // 2022~2023)에 현재가 × 옛 자본으로 PBR 22배 같은 가짜 값이 생겨 하이라이트
+    // (빈칸)와 갈렸다(검증 체계, 2026-09-23 유니버스 전수).
+    // 한국도 같다(산일전기 2024 상장 — 2023 연도에 현재가로 가짜 PER·PBR). 일본만 종전대로.
+    if (market === "jp") yePrice = yePrice ?? price;
 
     // 미국: 분모 0 이하면 비운다(하이라이트·재무분석과 같은 부호 규칙). 한국·일본은
     // B16 결정 전까지 종전 그대로.
-    const per = us ? positiveRatio(yePrice, eps) : yePrice != null && eps ? yePrice / eps : null;
-    const pbr = us ? positiveRatio(yePrice, bps) : yePrice != null && bps ? yePrice / bps : null;
+    // 미국·한국: 분모 0 이하면 비운다(하이라이트·재무분석과 같은 부호 규칙). 한국 PBR 은
+    // 하이라이트와 같게 KRX 연말 실제 시가총액 ÷ 지배주주 자본. 일본은 종전 그대로.
+    const krCommon = kr?.caps?.byYear.get(fy)?.common ?? null;
+    const per = us || kr ? positiveRatio(yePrice, eps) : yePrice != null && eps ? yePrice / eps : null;
+    const pbr = us
+      ? positiveRatio(yePrice, bps)
+      : kr
+        ? positiveRatio(krCommon ?? (yePrice != null && fyShares ? yePrice * fyShares : null), equity)
+        : yePrice != null && bps ? yePrice / bps : null;
     let roe = netIncome != null && equity ? (netIncome / equity) * 100 : null;
     // netIncome 이 자본 계정과 잘못 매칭되면 ROE≈100 → 숨김
     if (roe != null && (Math.abs(roe - 100) < 0.001 || roe > 100 || roe < -100)) roe = null;
@@ -295,9 +367,15 @@ export async function getConsensusData(
       // 하이라이트와 동일: EV = edgar-ev 브릿지, EBITDA = 영업이익 + D&A(단일 규칙),
       // EBITDA ≤ 0 만 비운다(40배 초과 숨김은 하이라이트와 달라져 미국은 적용 안 함).
       const ev = us.ev.evAt(periodEnd, mcap, yePrice);
-      const op = us.op.get(fy) ?? opIncome;
+      const op = opIncome;
       const ebitda = op != null ? op + (us.da.get(fy) ?? 0) : null;
       evEbitda = ev != null && ebitda && ebitda > 0 ? ev / ebitda : null;
+    } else if (kr) {
+      const common = kr.caps?.byYear.get(fy)?.common ?? mcap;
+      const ev = krEv(kr.ev, fy, common, kr.caps?.byYear.get(fy)?.preferred ?? null);
+      const d = kr.da.get(fy);
+      const ebitda = opIncome != null && d != null ? opIncome + d : null;
+      evEbitda = ev != null && ebitda != null && ebitda > 0 ? ev / ebitda : null;
     } else {
       const ev = mcap != null ? mcap + (liab ?? 0) - (cash ?? 0) : null;
       // EBITDA = 영업이익 + 감가상각비(+무형상각). 상각비 계정을 못 찾으면 영업이익 근사.
