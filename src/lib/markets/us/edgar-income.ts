@@ -330,8 +330,18 @@ export function buildUsIncome(
   // 2,296만 달러·주식수 약 2.3억주면 정상 EPS는 -0.1 안팎이어야 함 — 회사가
   // 자릿수를 잘못 태깅한 것으로 보임). ①과 달리 이건 차감식이 아니라
   // "직접 단일분기로 태깅된 값"(direct) 자체가 틀린 사례라 경로를 우회해도
-  // 못 피한다 — 태그값을 순이익÷주식수 근사와 대조해 10배 넘게 벌어지면
-  // 신뢰하지 않고 폴백으로 넘긴다.
+  // 못 피한다 — 태그값을 순이익÷주식수 근사와 대조해 벌어지면 신뢰하지
+  // 않고 폴백으로 넘긴다.
+  //
+  // 배수는 처음 10배로 뒀다가 5배로 낮췄다(오너 지적, 2026-09-23 — "10배
+  // 괴리는 너무 크다, 반도체 기업처럼 2~3배 변동도 있을 수 있는데 그러면
+  // 일반적 오류를 못 찾을 수 있다"). 이 대조는 분기별 실적 변동(다른 분기
+  // 대비 2~3배)이 아니라 **같은 분기 안에서** "공시 태그"와 "순이익÷주식수
+  // 단순 나눗셈"을 비교하는 것이라 성격이 다르다 — 우선주 배당 차감·
+  // Two-Class Method·희석증권 등 정상적인 차이도 보통 2배를 잘 안 넘는다
+  // (그 이상 벌어지는 진짜 예외는 Visa 등 별도 classFacts 경로로 이미
+  // 처리됨). 5배는 그 정상 오차보다 넉넉한 여유를 두면서도, 10배보다
+  // 작은 규모의 오기재(자릿수 일부만 밀린 경우 등)를 더 많이 잡아낸다.
   const plausibleEps = (tagVal: number, l: string): boolean => {
     const ni = netIncome[l];
     const sh = wavgShares[l] ?? sharesHint;
@@ -339,7 +349,7 @@ export function buildUsIncome(
     const approx = ni / sh;
     if (Math.abs(approx) < 0.01) return Math.abs(tagVal) < 1; // 거의 손익분기인데 태그가 크면 의심
     const ratio = Math.abs(tagVal / approx);
-    return ratio <= 10 && ratio >= 0.1;
+    return ratio <= 5 && ratio >= 0.2;
   };
   const valEps = (concepts: string[]): Record<string, number | null> => {
     if (quarterly) {
