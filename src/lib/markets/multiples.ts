@@ -92,6 +92,8 @@ export interface MultiplesInput {
   ttm?: TtmFlows | null;
   /** 감가상각비 + 무형자산상각비 (연간, EV/EBITDA 정확 산출용). 없으면 EV/EBIT 근사. */
   depreciationAmortisation?: number | null;
+  /** UP-REIT 운영 파트너십 지분 수(미국 리츠만) — EV 에 시가로 더한다 */
+  opUnits?: number | null;
 }
 
 export function computeTrailingMultiples(input: MultiplesInput): TrailingMultiples {
@@ -227,8 +229,18 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   const revenueForPsr = snap && ttm?.revenue != null ? ttm.revenue : revenue;
   const psr =
     marketCap != null && revenueForPsr ? marketCap / revenueForPsr : null;
-  const ev =
-    marketCap != null
+  // 미국: edgar-ev.ts 단일 기준(하이라이트 LTM 열과 동일) — 보통주 시가총액은
+  // 공용 주식수(edgar-shares.ts)로 계산하고, 순차입금은 스냅샷의 EV 브릿지를 쓴다.
+  // 예전엔 부채총계를 차입금 대신 더해 EV 가 과대했다(감사 2026-09-23).
+  // 그 외 시장은 종전 방식(부채총계) — 한국·일본 정정은 별도 결정 대기.
+  const usEv = snap && snap.evNetDebt !== undefined;
+  const ev = usEv
+    ? snap!.evBlocker || snap!.evNetDebt == null || price == null
+      ? null
+      : price * (snap!.evShares ?? shares ?? 0) +
+        (input.opUnits ? input.opUnits * price - (snap!.evOpNciBook ?? 0) : 0) +
+        snap!.evNetDebt
+    : marketCap != null
       ? marketCap + (totalLiabilities ?? 0) - (cash ?? 0)
       : null;
   // EBITDA = 영업이익 + 감가상각비 + 무형자산상각비. D&A 없으면 EV/EBIT 근사.

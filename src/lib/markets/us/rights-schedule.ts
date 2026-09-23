@@ -84,7 +84,7 @@ export async function fetchUsRightsSchedule(
     const px = closeOn(onDate) ?? closeOn(todayIso);
     if (px == null || px <= 0) return null;
     const annual = amount * (freq && freq > 0 ? freq : 4);
-    return Math.round((annual / px) * 10000) / 100;
+    return (annual / px) * 100;
   };
 
   const events: KrRightEvent[] = [];

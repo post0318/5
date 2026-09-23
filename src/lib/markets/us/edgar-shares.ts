@@ -107,6 +107,22 @@ function latestAnnualOf(entries: FactUnitEntry[]): number | null {
   return best?.val ?? null;
 }
 
+/**
+ * 공시 단위 오류 보정 — 회사가 주식수를 "백만 주"·"천 주" 단위 숫자로 잘못
+ * 태깅하는 경우가 있다(실측 2026-09-23: MCD 가 가중평균 희석주식수를 7억 1,640만
+ * 주가 아니라 `716.4` 로 태깅). 기준값(ref)과의 비율이 정확히 1,000배·1,000,000배
+ * (±50%) 근처면 그만큼 곱해 같은 단위로 맞춘다. 분할(최대 20:1 정도)로는 이런
+ * 배수가 나오지 않으므로 분할 판정과 겹치지 않는다.
+ */
+function fixScale(v: number | null, ref: number | null): number | null {
+  if (v == null || ref == null || v <= 0 || ref <= 0) return v;
+  for (const k of [1e3, 1e6]) {
+    const r = ref / v / k;
+    if (r <= 1.5 && r >= 1 / 1.5) return v * k;
+  }
+  return v;
+}
+
 export interface ShareResolver {
   /**
    * 회계연도말 발행주식수 — **현재(분할 반영) 기준**으로 환산된 값.
@@ -137,11 +153,14 @@ export function buildShareResolver(
     atFiscalYearEnd(year, endDate) {
       // as-reported(그 회계연도 시점) 값만 쓴다 — DEI 표지 주식수는 제출일
       // 기준이라 결산 후 분할이 있으면 기준이 어긋나므로 맨 뒤.
-      const wavg = annualOf(wavgDil, year) ?? annualOf(wavgBasic, year) ?? classAShares(cf, year);
       const instant =
         instantAtOrBefore(sharesEnd, endDate) ??
         classAOutstanding(cf, year) ??
         instantAtOrBefore(dei, endDate);
+      const wavg = fixScale(
+        annualOf(wavgDil, year) ?? annualOf(wavgBasic, year) ?? classAShares(cf, year),
+        instant,
+      );
 
       // **분할 소급 재작성 범위는 계정마다 다르다.** 실측(WMT, 2024-02 3:1):
       // 가중평균주식수는 FY2022 까지 소급 재작성돼 있는데(2.85억→8.42억 주로
@@ -169,12 +188,14 @@ export function buildShareResolver(
       // Visa LTM 시가총액이 1,736억 달러로 실제의 1/3 수준으로 떨어짐)
       // 후보를 그대로 믿으면 안 된다. 잣대와 1.5배 넘게 벌어지는 후보는
       // 건너뛰고 다음 후보를 본다.
-      const ref =
+      const ref = fixScale(
         latestAnnualOf(wavgDil) ??
-        latestAnnualOf(wavgBasic) ??
-        classALatest(cf)?.dilShares ??
-        classALatest(cf)?.basicShares ??
-        null;
+          latestAnnualOf(wavgBasic) ??
+          classALatest(cf)?.dilShares ??
+          classALatest(cf)?.basicShares ??
+          null,
+        latestInstantOf(dei) ?? latestInstantOf(sharesEnd),
+      );
       const plausible = (v: number | null): v is number =>
         v != null && v > 0 && (ref == null || (v / ref <= 1.5 && v / ref >= 1 / 1.5));
       const candidates = [

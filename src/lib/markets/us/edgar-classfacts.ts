@@ -253,7 +253,7 @@ interface FilingIndex {
   directory: { item: { name: string }[] };
 }
 
-async function instanceUrl(cik: number, accnNoDash: string, primaryDoc: string): Promise<string | null> {
+export async function instanceUrl(cik: number, accnNoDash: string, primaryDoc: string): Promise<string | null> {
   const base = `https://www.sec.gov/Archives/edgar/data/${cik}/${accnNoDash}`;
   const stem = primaryDoc.replace(/\.html?$/i, "");
   // 최신 파일링: `{stem}_htm.xml`

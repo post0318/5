@@ -9,8 +9,15 @@
 
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
-import { splitFactorsByYear } from "./edgar-series";
+import { isStaleAnnual, splitFactorsByYear } from "./edgar-series";
 import { buildShareResolver } from "./edgar-shares";
+import {
+  buildEvResolver,
+  daAnnualByYear,
+  daTtm,
+  type EvBlocker,
+  type EvContext,
+} from "./edgar-ev";
 import {
   classAEps,
   classALatest,
@@ -63,11 +70,6 @@ const REVENUE = [
   "Revenues",
   "SalesRevenueNet",
 ];
-const DA_CONCEPTS = [
-  "DepreciationDepletionAndAmortization",
-  "DepreciationAmortizationAndAccretionNet",
-  "DepreciationAndAmortization",
-];
 // 영업이익 태그 자체가 없는 회사(XOM 등 — 매출→세전이익 구조) 최후 폴백.
 const PRETAX_CONCEPTS = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
@@ -96,13 +98,6 @@ function shiftYear(iso: string, n: number): string {
 
 function unitEntries(facts: CompanyFacts, concept: string, unit: string): FactUnitEntry[] {
   return facts.facts["us-gaap"]?.[concept]?.units?.[unit] ?? [];
-}
-function entriesAny(facts: CompanyFacts, concepts: string[], unit = "USD"): FactUnitEntry[] {
-  for (const c of concepts) {
-    const e = unitEntries(facts, c, unit);
-    if (e.length) return e;
-  }
-  return [];
 }
 
 /** 사업연도(FY, 10-K) duration 값 → {year, val, end}[]. */
@@ -136,20 +131,6 @@ function annualSeriesMerged(
       if (!byYear.has(s.year)) byYear.set(s.year, s);
   return [...byYear.values()].sort((a, b) => a.year - b.year);
 }
-/** 여러 개념을 연도별로 합산 (Depreciation + AmortizationOfIntangibleAssets 등). */
-function annualSeriesSum(
-  facts: CompanyFacts,
-  concepts: string[],
-  unit = "USD",
-): { year: number; val: number; end: string }[] {
-  const byYear = new Map<number, { year: number; val: number; end: string }>();
-  for (const c of concepts)
-    for (const s of annualSeries(unitEntries(facts, c, unit))) {
-      const cur = byYear.get(s.year);
-      byYear.set(s.year, { year: s.year, val: (cur?.val ?? 0) + s.val, end: s.end });
-    }
-  return [...byYear.values()].sort((a, b) => a.year - b.year);
-}
 
 /**
  * instant(재무상태표) 값 중 end ≤ asOf 이면서 가장 가까운 것.
@@ -173,16 +154,6 @@ function instantAt(
   return best?.val ?? null;
 }
 
-/** instant 엔트리 중 가장 최근 end 날짜 (최근 분기 기준일). */
-function latestInstantEnd(entries: FactUnitEntry[]): string | null {
-  let best: string | null = null;
-  for (const e of entries) {
-    if (e.start) continue;
-    if (!best || e.end > best) best = e.end;
-  }
-  return best;
-}
-
 /** 흐름 계정 TTM = 최근 FY + 당기누적 − 전년동기누적. */
 function ttm(entries: FactUnitEntry[]): number | null {
   const annuals = entries
@@ -190,6 +161,10 @@ function ttm(entries: FactUnitEntry[]): number | null {
     .sort((a, b) => b.end.localeCompare(a.end));
   const fy = annuals[0];
   if (!fy?.start) return null;
+  // 태그를 중단한 개념의 옛 연간값을 "최근 12개월"로 쓰지 않는다(감사 2026-09-23:
+  // GE 는 OperatingIncomeLoss 를 몇 년 전에 끊었는데 그 마지막 연간값이 LTM 으로
+  // 잡혀 EBITDA 가 3배로 나왔다). 최근 사업연도 종료가 550일보다 오래됐으면 없음.
+  if (isStaleAnnual(fy.end)) return null;
   const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
   const cur = interims
     .filter((e) => Math.abs(daysBetween(fy.end, e.start!)) <= 12 && e.end > fy.end)
@@ -234,11 +209,15 @@ export function buildUsHighlights(
   fallbackShares?: number | null,
   /** 10-K XBRL 인스턴스에서 뽑은 Class A EPS·주식수 실측(Visa 등). */
   classFacts?: ClassAFacts | null,
+  /** EV 브릿지 맥락(금융 자회사·UP-REIT 파트너 지분) — edgar-ev.ts */
+  evCtx?: EvContext,
 ): FinancialHighlights {
   const cf = classFacts ?? null;
   const notes: string[] = [];
   // 발행주식수 단일 기준 — edgar-analysis.ts 와 같은 모듈을 쓴다.
   const shareRes = buildShareResolver(facts, { classFacts: cf, sharesHint: fallbackShares });
+  // EV 브릿지·감가상각비 단일 기준 — edgar-analysis.ts·multiples·컨센서스와 공유.
+  const evRes = buildEvResolver(facts, evCtx ?? {});
 
   // ── 컬럼 구성 ────────────────────────────────────────────────────
   const revSeries = annualSeriesMerged(facts, REVENUE);
@@ -248,10 +227,10 @@ export function buildUsHighlights(
 
   const lastBar = [...bars].reverse().find((b) => b.close != null);
   const priceDate = lastBar?.date ?? new Date().toISOString().slice(0, 10);
-  // LTM 컬럼 기준일 = 최근 분기 재무상태표 기준일 (블룸버그 표기와 동일)
-  const mrqEnd =
-    latestInstantEnd(unitEntries(facts, "CashAndCashEquivalentsAtCarryingValue", "USD")) ??
-    priceDate;
+  // LTM 컬럼 기준일 = 최근 분기 재무상태표 기준일 (블룸버그 표기와 동일).
+  // 자산총계 기준 — 예전엔 현금 태그 날짜를 썼는데 GE(2017)·SBUX(2022)처럼
+  // 그 태그를 중단한 회사는 LTM 기준일이 몇 년 전으로 잡혔다(감사 2026-09-23).
+  const mrqEnd = evRes.latestBalanceDate() ?? priceDate;
   const ltmDate = mrqEnd;
 
   const columns: HighlightColumn[] = fyYears.map((y) => ({
@@ -344,11 +323,11 @@ export function buildUsHighlights(
       }
     return [...byYear.values()].sort((a, b) => a.year - b.year);
   })();
-  const daS = (() => {
-    const direct = annualSeriesMerged(facts, DA_CONCEPTS);
-    if (direct.length) return direct;
-    return annualSeriesSum(facts, ["Depreciation", "AmortizationOfIntangibleAssets"]);
-  })();
+  // 감가상각비 — edgar-ev.ts 규칙(합계 태그 최댓값, 무형상각 누락 시 구성항목 합).
+  // "앞 태그 우선"이던 예전 방식은 MCD 등에서 일부 항목만 담긴 태그를 집었다.
+  const daS = [...daAnnualByYear(facts)]
+    .map(([year, val]) => ({ year, val, end: `${year}-12-31` }))
+    .sort((a, b) => a.year - b.year);
   const S = {
     revenue: annualSeriesMerged(facts, REVENUE),
     grossProfit: gpS,
@@ -382,7 +361,6 @@ export function buildUsHighlights(
     grossProfit: unitEntries(facts, "GrossProfit", "USD"),
     opIncome: unitEntries(facts, "OperatingIncomeLoss", "USD"),
     pretax: concat(PRETAX_CONCEPTS),
-    da: concat(DA_CONCEPTS),
     netIncome: concat(["NetIncomeLoss","ProfitLoss","NetIncomeLossAvailableToCommonStockholdersBasic"]),
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
     ocf: unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
@@ -392,7 +370,6 @@ export function buildUsHighlights(
       "USD/shares",
     ),
   };
-  const cashE = unitEntries(facts, "CashAndCashEquivalentsAtCarryingValue", "USD");
   // 자기자본: 태그가 시기별로 바뀌는 종목(V 는 2012년부터 …IncludingNCI 만) 대응해 병합.
   // concat 을 쓰는 이유는 위 주석 참고 — 단순 이어붙이면 같은 시점에 둘 다
   // 태깅하는 기업(월마트 등)에서 NCI 포함값이 지배주주 자본을 덮어써 PBR 이
@@ -411,20 +388,7 @@ export function buildUsHighlights(
     const l = instantAt(liabForEqE, asOf);
     return a != null && l != null ? a - l : null;
   };
-  const mSecCurE = entriesAny(facts, ["MarketableSecuritiesCurrent", "ShortTermInvestments"]);
-  const mSecNonCurE = entriesAny(facts, [
-    "MarketableSecuritiesNoncurrent",
-    "LongTermInvestments",
-  ]);
-  const debtNonCurE = unitEntries(facts, "LongTermDebtNoncurrent", "USD");
-  const debtCurE = unitEntries(facts, "LongTermDebtCurrent", "USD");
-  const cpE = unitEntries(facts, "CommercialPaper", "USD");
-  const opLeaseNcE = unitEntries(facts, "OperatingLeaseLiabilityNoncurrent", "USD");
-  const opLeaseCurE = unitEntries(facts, "OperatingLeaseLiabilityCurrent", "USD");
-  const opLeaseTotE = unitEntries(facts, "OperatingLeaseLiability", "USD");
-  const finLeaseNcE = unitEntries(facts, "FinanceLeaseLiabilityNoncurrent", "USD");
-  const finLeaseCurE = unitEntries(facts, "FinanceLeaseLiabilityCurrent", "USD");
-  const prefE = unitEntries(facts, "PreferredStockValue", "USD");
+  // 현금·차입금·우선주·비지배지분은 edgar-ev.ts(evRes)가 계산한다.
   // 발행주식수(기말·현재·듀얼클래스 폴백)는 전부 edgar-shares.ts 의
   // buildShareResolver 로 옮겼다 — 이 파일과 edgar-analysis.ts 가 각자
   // 우선순위를 두면서 같은 종목의 시가총액이 갈렸기 때문(위 shareRes 참고).
@@ -449,7 +413,12 @@ export function buildUsHighlights(
   const equity = blank();
   const priceByCol = blank();
   const sharesByCol = blank();
+  const opUnitValue = blank();
   let approxPerShare = false;
+  const blockers = new Set<EvBlocker>();
+  let staleEv = false;
+  let partialDebt = false;
+  let captiveExcluded = false;
 
   columns.forEach((col, i) => {
     if (col.kind === "estimate") return;
@@ -474,35 +443,22 @@ export function buildUsHighlights(
     const mc = price != null && shares != null ? price * shares : null;
     marketCap[i] = mc;
 
-    const c = instantAt(cashE, asOf);
-    const sc = instantAt(mSecCurE, asOf);
-    const snc = instantAt(mSecNonCurE, asOf);
-    cash[i] = c != null || sc != null || snc != null ? (c ?? 0) + (sc ?? 0) + (snc ?? 0) : null;
-
-    preferred[i] = mc != null ? (instantAt(prefE, asOf) ?? 0) : null;
-
-    const dn = instantAt(debtNonCurE, asOf);
-    const dc = instantAt(debtCurE, asOf);
-    const cp = instantAt(cpE, asOf);
-    const termDebt =
-      dn != null || dc != null || cp != null ? (dn ?? 0) + (dc ?? 0) + (cp ?? 0) : null;
-    // 리스부채 (블룸버그 총부채는 리스 포함). 매 분기 태깅되지 않으므로 ~100일 이내 값만.
-    const FRESH = 100;
-    const oln = instantAt(opLeaseNcE, asOf, FRESH);
-    const olc = instantAt(opLeaseCurE, asOf, FRESH);
-    const opLease =
-      oln != null || olc != null
-        ? (oln ?? 0) + (olc ?? 0)
-        : instantAt(opLeaseTotE, asOf, FRESH);
-    const fln = instantAt(finLeaseNcE, asOf, FRESH);
-    const flc = instantAt(finLeaseCurE, asOf, FRESH);
-    const finLease = fln != null || flc != null ? (fln ?? 0) + (flc ?? 0) : null;
-    const leases = (opLease ?? 0) + (finLease ?? 0);
-    debt[i] =
-      termDebt != null ? termDebt + leases : leases > 0 ? leases : null;
-
-    ev[i] =
-      mc != null ? mc - (cash[i] ?? 0) + (preferred[i] ?? 0) + (debt[i] ?? 0) : null;
+    // EV 브릿지 — edgar-ev.ts 단일 기준(운용리스 제외, 장기투자자산 미차감,
+    // 금융 자회사 차입금 제외, UP-REIT 파트너 지분 시가 반영).
+    const block = evRes.blocker(asOf);
+    if (block) blockers.add(block);
+    const b = evRes.bridgeAt(asOf);
+    if (b) {
+      cash[i] = b.cash;
+      debt[i] = b.debt;
+      preferred[i] = b.preferred + b.nci;
+      if (b.stale) staleEv = true;
+      if (b.debtPartial) partialDebt = true;
+      if (b.captiveDebtExcluded != null) captiveExcluded = true;
+      const opv = evCtx?.opUnits && price != null ? evCtx.opUnits * price : null;
+      opUnitValue[i] = opv;
+      ev[i] = evRes.evAt(asOf, mc, price);
+    }
   });
 
   // ── 손익 ────────────────────────────────────────────────────────
@@ -533,11 +489,7 @@ export function buildUsHighlights(
         oi = ttm(E.pretax);
         if (oi != null) usedPretaxAsOpIncome = true;
       }
-      let d = ttm(E.da);
-      if (d == null)
-        d =
-          (ttm(concat(["Depreciation"])) ?? 0) +
-          (ttm(concat(["AmortizationOfIntangibleAssets"])) ?? 0) || null;
+      const d = daTtm(facts);
       return oi != null ? oi + (d ?? 0) : null;
     }
     return null;
@@ -618,8 +570,12 @@ export function buildUsHighlights(
 
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap },
-    { key: "cash", label: "− 현금 및 현금등물", format: "money", values: cash.map((v) => (v == null ? null : -v)) },
-    { key: "debt", label: "+ 총부채", format: "money", values: debt },
+    ...(opUnitValue.some((v) => v != null)
+      ? [{ key: "opunits", label: "+ 운영 파트너십 지분 (시가)", format: "money" as const, values: opUnitValue }]
+      : []),
+    { key: "cash", label: "− 현금·단기투자·장기 투자증권", format: "money", values: cash.map((v) => (v == null ? null : -v)) },
+    { key: "debt", label: "+ 차입금", format: "money", values: debt },
+    { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", values: preferred },
     { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
     { key: "revenue", label: "매출액", format: "money", values: revenue },
@@ -669,7 +625,25 @@ export function buildUsHighlights(
   notes.push(
     "과거 시가총액: 각 회계연도말 종가 × 기말 발행주식수 (클래스별로만 태깅된 종목은 가중평균 희석주식수로 근사)",
   );
-  notes.push("총부채 = 차입금(장·단기) + CP + 리스부채");
+  notes.push(
+    "차입금 = 이자부 차입금(장·단기·CP) + 금융리스 — 운용리스는 제외(리스비용이 이미 EBITDA 에 반영돼 있어 이중 계산 방지)",
+  );
+  notes.push("현금 = 현금·단기투자·장기 투자증권 — 보험 투자자산·지분법 투자(장기투자자산)는 빼지 않음");
+  if (blockers.has("captive-unsplit"))
+    notes.push(
+      "EV·EV/EBITDA 미표시: 금융 자회사(할부금융) 보유 — 연결 차입금·EBITDA 에 금융 자회사분이 섞여 산정 기준 확정 전까지 비움",
+    );
+  if (blockers.has("debt-untagged"))
+    notes.push("EV·EV/EBITDA 미표시: 차입금이 표준 태그로 공시되지 않음");
+  if (captiveExcluded)
+    notes.push("금융 자회사(할부금융) 차입금 제외 — 제조 부문 차입금만 반영");
+  if (staleEv)
+    notes.push("일부 열의 현금·차입금: 분기 공시에 없어 직전 사업연도말 값 사용");
+  if (partialDebt) notes.push("차입금 일부(개별 대출 건별로만 공시된 기간대출 등) 미집계 — EV 과소 가능");
+  if (opUnitValue.some((v) => v != null))
+    notes.push(
+      "운영 파트너십 지분: 보통주로 교환 가능한 외부 파트너 지분을 시가로 반영(수량 출처: Yahoo implied shares)",
+    );
   if (estCols.length)
     notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
   notes.push("EBITDA = 보고 영업이익 + 감가상각비·무형자산상각비 (블룸버그 '조정'과 다를 수 있음)");

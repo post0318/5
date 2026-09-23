@@ -2,6 +2,7 @@ import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import { recentQuarters, singleQuarter } from "./edgar-series";
+import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa } from "./edgar-ev";
 import { isFinancialCompany } from "./edgar-financial";
 
 /**
@@ -94,6 +95,8 @@ interface Line {
   fallbackCombine?: [string, boolean][];
   /** (구간 총계 − 이 앞의 형제 라인 합)으로 계산되는 잔여 라인 */
   plug?: boolean;
+  /** 감가상각비 — edgar-ev.ts pickDa 규칙(합계 태그 최댓값·무형상각 누락 보정) */
+  pickDa?: boolean;
 }
 
 interface Block {
@@ -124,9 +127,9 @@ function getBlocks(isFin: boolean): Block[] {
       { label: "당기순이익", concepts: ["NetIncomeLoss", "ProfitLoss"], depth: 1 },
       {
         label: "감가상각비·무형자산상각비",
-        concepts: ["DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet", "DepreciationAndAmortization"],
-        // 통합 태그 없으면 감가상각 + 무형자산상각 합산 (IBM 등)
-        fallbackCombine: [["Depreciation", false], ["AmortizationOfIntangibleAssets", false]],
+        // 여러 합계 태그를 동시에 다는 회사(MCD: 일부 항목 4.6억 / 전체 22억)가 있어
+        // "앞 태그 우선"이 아니라 하이라이트·분석 지표와 같은 pickDa 규칙을 쓴다.
+        pickDa: true,
         depth: 1,
       },
       { label: "주식보상비용", concepts: ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], depth: 1 },
@@ -314,7 +317,13 @@ export function buildUsCashFlow(
     for (const line of block.lines) {
       if (line.kind === "subtotal" || line.plug) continue;
       let v: Record<string, number | null>;
-      if (line.combine) v = combineVals(line.combine);
+      if (line.pickDa) {
+        const totals = DA_TOTAL.map((c) => valOf([c]));
+        const dep = valOf(DA_DEPRECIATION);
+        const am = valOf([DA_INTANGIBLE]);
+        v = {};
+        for (const l of labels) v[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l]);
+      } else if (line.combine) v = combineVals(line.combine);
       else v = valOf(line.concepts ?? []);
       if (line.fallbackCombine && labels.some((l) => v[l] == null)) {
         const fb = combineVals(line.fallbackCombine);

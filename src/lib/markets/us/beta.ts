@@ -103,7 +103,8 @@ export async function computeUs52wBeta(
   if (sr.length >= take + 1) {
     prevBeta = betaOf(sr.slice(-(take + 1), -1), mr.slice(-(take + 1), -1));
   }
-  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  // 반올림하지 않는다 — 소수점 처리는 표시 포맷(버림)에서만
+  const r3 = (v: number) => v;
   const used = dates.slice(-(take + 1));
 
   const c52 = dates.slice(-252).map((d) => stock.get(d)!).filter((v) => v > 0);

@@ -270,6 +270,12 @@ export function splitFactorsByYear(
   return factor;
 }
 
+/** 최근 사업연도 종료일이 이만큼(일) 넘게 지났으면 태그를 중단한 개념으로 본다. */
+export const STALE_ANNUAL_DAYS = 550;
+export function isStaleAnnual(fyEnd: string, now = Date.now()): boolean {
+  return (now - Date.parse(fyEnd)) / 86_400_000 > STALE_ANNUAL_DAYS;
+}
+
 /** 흐름 TTM = 최근 FY + 당기누적 − 전년동기누적. */
 export function ttmOf(entries: FactUnitEntry[]): number | null {
   const annuals = entries
@@ -277,6 +283,10 @@ export function ttmOf(entries: FactUnitEntry[]): number | null {
     .sort((a, b) => b.end.localeCompare(a.end));
   const fy = annuals[0];
   if (!fy?.start) return null;
+  // 태그를 중단한 개념의 옛 연간값을 "최근 12개월"로 쓰지 않는다(감사 2026-09-23:
+  // GE 는 OperatingIncomeLoss 를 몇 년 전에 끊었는데 그 마지막 연간값이 LTM 으로
+  // 잡혀 EBITDA 가 3배로 나왔다). 최근 사업연도 종료가 550일보다 오래됐으면 없음.
+  if (isStaleAnnual(fy.end)) return null;
   const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
   const cur = interims
     .filter((e) => Math.abs(days(fy.end, e.start!)) <= 12 && e.end > fy.end)

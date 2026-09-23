@@ -12,6 +12,7 @@ import {
   splitFactorsByYear,
   ttmOf,
 } from "./edgar-series";
+import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa } from "./edgar-ev";
 import {
   classAEps,
   classALatest,
@@ -67,11 +68,6 @@ const INT_INC = [
   "InterestAndDividendIncomeOperating",
   "InterestIncomeOperating",
   "InterestIncomeNonoperating",
-];
-const DA = [
-  "DepreciationDepletionAndAmortization",
-  "DepreciationAmortizationAndAccretionNet",
-  "DepreciationAndAmortization",
 ];
 
 const LTM = "현재/LTM";
@@ -382,15 +378,14 @@ export function buildUsIncome(
   const epsBasic = deriveEps(adjEps(valEps(EPS_BASIC)), "basic");
   const epsDil = deriveEps(adjEps(valEps(EPS_DIL)), "diluted");
 
+  // 감가상각비 — edgar-ev.ts pickDa 규칙(하이라이트·분석 지표와 같은 판정).
+  // "앞 태그 우선"이던 예전 방식은 MCD 등에서 일부 항목만 담긴 태그를 집었다.
   const da = (() => {
-    const o = val(DA);
-    // 통합 태그 없으면 감가상각 + 무형자산상각 합산 (IBM 등)
-    if (labels.every((l) => o[l] == null)) {
-      const dep = val(["Depreciation"]);
-      const am = val(["AmortizationOfIntangibleAssets"]);
-      for (const l of labels)
-        if (dep[l] != null || am[l] != null) o[l] = (dep[l] ?? 0) + (am[l] ?? 0);
-    }
+    const totals = DA_TOTAL.map((c) => val([c]));
+    const dep = val(DA_DEPRECIATION);
+    const am = val([DA_INTANGIBLE]);
+    const o = blank();
+    for (const l of labels) o[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l]);
     return o;
   })();
   const ebitda = blank();

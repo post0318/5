@@ -24,6 +24,13 @@ import {
 } from "./edgar-classfacts";
 import { buildShareResolver } from "./edgar-shares";
 import {
+  buildEvResolver,
+  daAnnualByYear,
+  daTtm,
+  type EvBlocker,
+  type EvContext,
+} from "./edgar-ev";
+import {
   FIN_NET_REVENUE,
   FIN_NONINTEREST_EXPENSE,
   FIN_PROVISION,
@@ -47,11 +54,6 @@ const NI_C = [
   "ProfitLoss",
   "NetIncomeLossAvailableToCommonStockholdersBasic",
 ];
-const DA = [
-  "DepreciationDepletionAndAmortization",
-  "DepreciationAmortizationAndAccretionNet",
-  "DepreciationAndAmortization",
-];
 const PRETAX_C = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
@@ -68,20 +70,9 @@ const INT_EXP = [
 ];
 // 총이자 개념이 없을 때 현금 이자지급액을 대용 (DAL·CAT 등)
 const INT_EXP_PROXY = ["InterestPaidNet", "InterestPaid"];
-// 총차입금 = 이자부 차입금 + 리스부채 (블룸버그 'Total Debt' 기준, IFRS16/ASC842).
+// EV·순차입금용 차입금·현금은 edgar-ev.ts 가 계산한다(단일 기준).
 // ※ 한국식 '부채비율'의 부채총계(Liabilities)와 다름 — 이건 이자 내는 빚만.
-// (실제 개념 목록은 debtComponent/sumParts 로 유동·비유동 분리/미분류 폴백 처리)
-const CASH_C = [
-  "CashAndCashEquivalentsAtCarryingValue",
-  "MarketableSecuritiesCurrent",
-  "ShortTermInvestments",
-  "DebtSecuritiesCurrent",
-  "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent",
-  "MarketableSecuritiesNoncurrent",
-  "LongTermInvestments",
-  "DebtSecuritiesNoncurrent",
-];
-// 유동성 지표용 현금 (장기 투자자산 제외 — 순부채용 CASH_C 와 다름)
+// 유동성 지표용 현금 (장기 투자자산 제외)
 const CASH_CUR = [
   "CashAndCashEquivalentsAtCarryingValue",
   "MarketableSecuritiesCurrent",
@@ -99,7 +90,13 @@ function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
 export function buildUsAnalysis(
   facts: CompanyFacts,
   bars: QuoteBar[],
-  opts: { sharesHint?: number | null; classFacts?: ClassAFacts | null; sic?: string | null } = {},
+  opts: {
+    sharesHint?: number | null;
+    classFacts?: ClassAFacts | null;
+    sic?: string | null;
+    /** EV 브릿지 맥락(금융 자회사·UP-REIT 파트너 지분) — edgar-ev.ts */
+    evCtx?: EvContext;
+  } = {},
 ): FinancialStatement {
   // EPS·발행주식수를 클래스별로만 태깅해 undimensioned 값이 없는 기업(Visa 등)은
   // 10-K XBRL 인스턴스에서 뽑은 Class A 실측값(classFacts) 우선, 없으면
@@ -185,22 +182,6 @@ export function buildUsAnalysis(
     }
     return o;
   };
-  /**
-   * 유동/비유동으로 분리 태깅하는 회사는 분리값 합, 미분류(단일 총액)로만 태깅하는
-   * 회사(금융사 등 — LongTermDebt·OperatingLeaseLiability 단일 라인)는 그 총액으로 폴백.
-   * 기간별로 독립 판정 — 같은 회사도 연도에 따라 태깅 방식이 바뀔 수 있어서.
-   */
-  const debtComponent = (
-    splitConcepts: string[],
-    unclassifiedConcept: string,
-  ): Record<string, number | null> => {
-    const split = stockSum(splitConcepts);
-    const total = stock([unclassifiedConcept]);
-    const o = blank();
-    for (const l of labels) o[l] = split[l] ?? total[l];
-    return o;
-  };
-
   // 액면분할 보정 계수 (소급 재작성 안 된 과거 연도의 주당 지표를 최신 연도 기준으로 환산)
   const splitF = splitFactorsByYear(facts);
   const adjPerShare = (o: Record<string, number | null>): Record<string, number | null> => {
@@ -215,16 +196,6 @@ export function buildUsAnalysis(
     const out = new Map<number, number>();
     for (const [y, v] of m) out.set(y, v * (splitF.get(y) ?? 1));
     return out;
-  };
-
-  // 여러 개념을 기간별로 합산 (Depreciation + AmortizationOfIntangibleAssets 등).
-  const combineFlow = (concepts: string[], unit = "USD") => {
-    const o = blank();
-    for (const c of concepts) {
-      const v = flow([c], unit);
-      for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
-    }
-    return o;
   };
 
   const revenue = flow(revConcepts);
@@ -326,12 +297,13 @@ export function buildUsAnalysis(
     return out;
   })();
   const revFull = fullAnnual(revConcepts);
-  // D&A: 통합 태그 없으면 감가상각 + 무형자산상각 합산 (IBM 등)
+  // D&A — edgar-ev.ts 단일 규칙(합계 태그 최댓값, 무형상각 누락 시 구성항목 합).
+  // "앞 태그 우선"이던 예전 방식은 MCD·CRM 등에서 일부 항목만 담긴 태그를 집었다.
+  const daByYear = daAnnualByYear(facts);
   const da = (() => {
-    const primary = flow(DA);
-    const fb = combineFlow(["Depreciation", "AmortizationOfIntangibleAssets"]);
     const o = blank();
-    for (const l of labels) o[l] = primary[l] ?? (fb[l] ?? null);
+    for (const y of years) o[`${y}Y`] = daByYear.get(y) ?? null;
+    o[LTM] = daTtm(facts);
     return o;
   })();
   const ocf = flow(["NetCashProvidedByUsedInOperatingActivities"]);
@@ -364,15 +336,7 @@ export function buildUsAnalysis(
     return out;
   })();
   const niFull = fullAnnual(NI_C);
-  const daFull = (() => {
-    const m = fullAnnual(DA);
-    if (m.size) return m;
-    const dep = fullAnnual(["Depreciation"]);
-    const am = fullAnnual(["AmortizationOfIntangibleAssets"]);
-    const out = new Map<number, number>();
-    for (const y of new Set([...dep.keys(), ...am.keys()])) out.set(y, (dep.get(y) ?? 0) + (am.get(y) ?? 0));
-    return out;
-  })();
+  const daFull = daByYear;
   const ocfFull = fullAnnual(["NetCashProvidedByUsedInOperatingActivities"]);
   const capexFull = fullAnnual(CAPEX_C);
   const ebitdaFull = new Map<number, number>();
@@ -395,33 +359,15 @@ export function buildUsAnalysis(
   // 포괄 개념 하나만 믿고 보통주 지표(DPS·배당성향·총주주환원율의 배당분)를
   // 만들지 않는다(빈 칸/버뱩만 반영 — 오배당 신호보다 안전).
   const hasCommonDivEvidence =
-    entriesOf(facts, "CommonStockDividendsPerShareDeclared").length > 0 ||
-    entriesOf(facts, "CommonStockDividendsPerShareCashPaid").length > 0 ||
+    // 주당배당 태그는 단위가 USD/shares — 기본값(USD)으로 조회하면 항상 빈
+    // 배열이라 이 조건이 한 번도 참이 된 적이 없었다(감사 2026-09-23).
+    entriesOf(facts, "CommonStockDividendsPerShareDeclared", "USD/shares").length > 0 ||
+    entriesOf(facts, "CommonStockDividendsPerShareCashPaid", "USD/shares").length > 0 ||
     entriesOf(facts, "PaymentsOfDividendsCommonStock").length > 0;
   const commonDividends = hasCommonDivEvidence ? dividends : blank();
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const INT_PAID_C = ["InterestPaidNet", "InterestPaid"];
   const intPaid = flow(INT_PAID_C); // 현금 이자 지급액
-  // 차입금·리스 구성요소 — 분리(유동/비유동) 우선, 없으면 미분류 총액 폴백 (AXP 등 금융사).
-  const ltdComp = debtComponent(["LongTermDebtNoncurrent", "LongTermDebtCurrent"], "LongTermDebt");
-  const opLeaseComp = debtComponent(
-    ["OperatingLeaseLiabilityNoncurrent", "OperatingLeaseLiabilityCurrent"],
-    "OperatingLeaseLiability",
-  );
-  const finLeaseComp = debtComponent(
-    ["FinanceLeaseLiabilityNoncurrent", "FinanceLeaseLiabilityCurrent"],
-    "FinanceLeaseLiability",
-  );
-  const sumParts = (...parts: Record<string, number | null>[]): Record<string, number | null> => {
-    const o = blank();
-    for (const l of labels) {
-      const vs = parts.map((p) => p[l]).filter((v): v is number => v != null);
-      if (vs.length) o[l] = vs.reduce((s, v) => s + v, 0);
-    }
-    return o;
-  };
-  // 장기 부채(비유동 차입금 + 비유동 리스, 미분류 회사는 총액) — 블룸버그 '장기채무'
-  const ltDebt = sumParts(ltdComp, opLeaseComp, finLeaseComp);
   const intExp = flowM(INT_EXP);
   // 순이자 개념이 잡혀 음수(순이자수익)면 이자보상 지표에 무의미 → 공란
   for (const l of labels) if (intExp[l] != null && intExp[l]! <= 0) intExp[l] = null;
@@ -486,10 +432,53 @@ export function buildUsAnalysis(
   })();
   const curAssets = stock(["AssetsCurrent"]);
   const curLiab = stock(["LiabilitiesCurrent"]);
-  // 이자부 차입금 — 장기(분리/미분류 폴백) + 단기(CP·단기차입금)
-  const debt = sumParts(ltdComp, stockSum(["CommercialPaper", "ShortTermBorrowings"]));
-  const debtTotal = sumParts(debt, opLeaseComp, finLeaseComp); // 차입금 + 리스부채
-  const cash = stockSum(CASH_C);
+  // 이자부 차입금·현금 — edgar-ev.ts 단일 기준(하이라이트·멀티플·컨센서스와 동일).
+  // 예전엔 여기서 LongTermInvestments(UNH·GE 의 보험 투자자산)까지 현금으로 빼
+  // EV 가 11~15% 과소했고, 차입금 태그 목록이 짧아 VZ·T 등이 과소했다.
+  const evRes = buildEvResolver(facts, { ...(opts.evCtx ?? {}), isFinancial: isFin });
+  const balDate = (l: string): string =>
+    l === LTM
+      ? (evRes.latestBalanceDate() ?? nowIso)
+      : (periods.find((p) => p.label === l)?.endDate ?? "");
+  const evBlockers = new Set<EvBlocker>();
+  let evStale = false;
+  let evPartial = false;
+  let evCaptive = false;
+  const bridge = Object.fromEntries(
+    labels.map((l) => {
+      const d = balDate(l);
+      const blk = evRes.blocker(d);
+      if (blk) evBlockers.add(blk);
+      const b = evRes.bridgeAt(d);
+      if (b?.stale) evStale = true;
+      if (b?.debtPartial) evPartial = true;
+      if (b?.captiveDebtExcluded != null) evCaptive = true;
+      return [l, b];
+    }),
+  );
+  const debt = blank();
+  const cash = blank();
+  for (const l of labels) {
+    debt[l] = bridge[l]?.debt ?? null;
+    cash[l] = bridge[l]?.cash ?? null;
+  }
+  // 신용지표용 총차입금 = 이자부 차입금(금융리스 포함), **운용리스 제외** — EV 와
+  // 같은 기준(오너 결정 2026-09-23). 미국 회계기준은 운용리스 부채를 차입금이 아닌
+  // 영업부채로 분류하고, 순차입금/EBITDA 는 임차료가 이미 빠진 EBITDA 와 짝이라
+  // 리스를 넣으면 이중 반영이 된다. 운용리스 규모는 대차대조표 주석에 따로 보인다.
+  const debtTotal = debt;
+  // 장기차입금 = 비유동 차입금(+비유동 금융리스) — 같은 단일 기준(태그 목록)
+  const ltDebt = blank();
+  for (const l of labels) ltDebt[l] = bridge[l]?.debtNoncurrent ?? null;
+  // 부채비율 참고용 — 신용평가사(S&P·Moody's)처럼 운용리스까지 넣은 총차입금.
+  // 이름을 따로 붙인 별도 행으로만 쓴다(다른 지표는 위 debtTotal 기준).
+  // 운용리스가 그 기간에 공시되지 않았으면 비운다(리스 없이 합한 값이 "포함"으로
+  // 보이지 않게).
+  const debtWithOpLease = blank();
+  for (const l of labels) {
+    const b = bridge[l];
+    if (b && b.operatingLease != null) debtWithOpLease[l] = b.debt + b.operatingLease;
+  }
   const cashCur = stockSum(CASH_CUR); // 유동성 지표용 (장기투자 제외)
   const ar = stock([
     "AccountsReceivableNetCurrent",
@@ -598,8 +587,7 @@ export function buildUsAnalysis(
   for (const l of labels) if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
   const fcf = blank();
   for (const l of labels) if (ocf[l] != null && capexRaw[l] != null) fcf[l] = ocf[l]! - Math.abs(capexRaw[l]!);
-  const netDebt = blank();
-  for (const l of labels) if (debt[l] != null || cash[l] != null) netDebt[l] = (debt[l] ?? 0) - (cash[l] ?? 0);
+
   // 순차입금(총차입금 − 현금·투자) — 블룸버그 신용지표 기준
   const netDebtT = blank();
   for (const l of labels)
@@ -793,9 +781,13 @@ export function buildUsAnalysis(
   const evV = blank();
   for (const l of labels) {
     const mc = l === LTM ? curMktcap : mktcap[l];
-    if (mc != null && netDebt[l] != null) evV[l] = mc + netDebt[l]!;
+    evV[l] = evRes.evAt(balDate(l), mc, price[l]);
   }
-  const evEbitda = ratio(evV, ebitda);
+  // EBITDA ≤ 0 이면 비운다 — 음수 배수는 의미가 없고, 하이라이트·컨센서스도 같은 규칙
+  const evEbitda = ratio(
+    evV,
+    Object.fromEntries(labels.map((l) => [l, ebitda[l] != null && ebitda[l]! > 0 ? ebitda[l] : null])),
+  );
   // PEG: 분모는 3년(부족 시 2년) EPS CAGR% — 1년 YoY 는 변동이 커 왜곡 심함
   const epsCagr3 = cagr(epsFull, 3, eps[LTM]);
   const epsCagr2 = cagr(epsFull, 2, eps[LTM]);
@@ -908,6 +900,7 @@ export function buildUsAnalysis(
     HEAD("레버리지"),
     R("부채비율 (%)", ratio(liabTotal, equity, 100), "pct"),
     R("총차입금 / 자기자본 (%)", ratio(debtTotal, equity, 100), "pct"),
+    R("총차입금(운용리스 포함) / 자기자본 (%)", ratio(debtWithOpLease, equity, 100), "pct"),
     R("총차입금 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
     R("장기차입금 / 자기자본 (%)", ratio(ltDebt, equity, 100), "pct"),
     R("장기차입금 / 총자산 (%)", ratio(ltDebt, assets, 100), "pct"),
@@ -971,6 +964,22 @@ export function buildUsAnalysis(
     R("EPS", cagr(epsFull, 3, eps[LTM]), "pct"),
     R("주당배당금", cagr(dpsFull, 3, dps[LTM]), "pct"),
   ];
+
+  const evNotes: string[] = [
+    "※ EV = 시가총액 + 차입금(금융리스 포함·운용리스 제외) + 우선주·비지배지분 − 현금·단기투자·장기 투자증권",
+  ];
+  if (evBlockers.has("captive-unsplit"))
+    evNotes.push("※ EV/EBITDA 미표시: 금융 자회사(할부금융) 보유 — 산정 기준 확정 전까지 비움");
+  if (evBlockers.has("debt-untagged")) evNotes.push("※ EV/EBITDA 미표시: 차입금이 표준 태그로 공시되지 않음");
+  if (evCaptive) evNotes.push("※ 금융 자회사(할부금융) 차입금 제외 — 제조 부문 차입금만 반영");
+  if (evStale) evNotes.push("※ 일부 열의 현금·차입금: 분기 공시에 없어 직전 사업연도말 값 사용");
+  if (evPartial) evNotes.push("※ 차입금 일부(건별로만 공시된 기간대출 등) 미집계 — EV 과소 가능");
+  if (opts.evCtx?.opUnits)
+    evNotes.push("※ 운영 파트너십 지분을 시가로 EV 에 반영(수량 출처: Yahoo implied shares)");
+  if (!isFin) {
+    items.push(SP("evnote"));
+    for (const n of evNotes) items.push(R(n, blank(), undefined, { italic: true }));
+  }
 
   if (approxPerShare) {
     items.push(SP("note"));

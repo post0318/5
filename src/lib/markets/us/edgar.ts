@@ -20,6 +20,12 @@ import {
 } from "../types";
 import { type FactEntry, latestInstant, ttmFlow } from "./edgar-fundamentals";
 import { splitFactorsByYear } from "./edgar-series";
+import { buildEvResolver, daAnnualByYear, daTtm, type EvContext } from "./edgar-ev";
+import { loadCaptiveDebt } from "./edgar-captive";
+import { buildShareResolver } from "./edgar-shares";
+import { isFinancialCompany } from "./edgar-financial";
+import { loadClassAFacts } from "./class-facts-loader";
+import type { ClassAFacts } from "./edgar-classfacts";
 
 const UA =
   process.env.SEC_USER_AGENT ??
@@ -273,7 +279,10 @@ function latestInstantMerged(
  * TTM 흐름 + 최근분기 재무상태표 스냅샷 + D&A + 주당배당금 (EDGAR companyfacts).
  * prd.md §4.1 — 공식 무료 API, 라이선스 무관.
  */
-function buildUsTtm(facts: CompanyFacts): TtmFlows {
+function buildUsTtm(
+  facts: CompanyFacts,
+  evCtx: EvContext & { classFacts?: ClassAFacts | null } = {},
+): TtmFlows {
   const eps = ttmFlow(
     factEntries(facts, "us-gaap", ["EarningsPerShareDiluted", "EarningsPerShareBasic"], [
       "USD/shares",
@@ -320,35 +329,27 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
           gp.annual != null ? gp.annual - (sg.annual ?? 0) - (rd.annual ?? 0) : null,
       };
   }
-  let da = ttmFlow(
-    factEntries(
-      facts,
-      "us-gaap",
-      [
-        "DepreciationDepletionAndAmortization",
-        "DepreciationAmortizationAndAccretionNet",
-        "DepreciationAndAmortization",
-      ],
-      ["USD"],
-    ),
-  );
-  if (da.ttm == null) {
-    const dep = ttmFlow(factEntries(facts, "us-gaap", ["Depreciation"], ["USD"]));
-    const am = ttmFlow(
-      factEntries(facts, "us-gaap", ["AmortizationOfIntangibleAssets"], ["USD"]),
-    );
-    if (dep.ttm != null || am.ttm != null) {
-      const base = dep.ttm != null ? dep : am;
-      da = {
-        ...base,
-        ttm: (dep.ttm ?? 0) + (am.ttm ?? 0),
-        annual:
-          dep.annual != null || am.annual != null
-            ? (dep.annual ?? 0) + (am.annual ?? 0)
-            : null,
-      };
+  if (opIncome.ttm == null) {
+    // 최후 폴백: 세전이익 — 하이라이트·분석 지표와 같은 순서(영업이익 태그가 없거나
+    // 중단된 회사: XOM·GE 등). 이게 없으면 개요 멀티플만 EV/EBITDA 가 비었다.
+    for (const c of [
+      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+    ]) {
+      const p = ttmFlow(factEntries(facts, "us-gaap", [c], ["USD"]));
+      if (p.ttm != null) {
+        opIncome = p;
+        break;
+      }
     }
   }
+  // 감가상각비 — edgar-ev.ts 단일 규칙(하이라이트·분석 지표와 동일).
+  const daByYear = daAnnualByYear(facts);
+  const daLatestYear = [...daByYear.keys()].sort((a, b) => b - a)[0];
+  const da = {
+    annual: daLatestYear != null ? (daByYear.get(daLatestYear) ?? null) : null,
+    ttm: daTtm(facts),
+  };
   const dps = ttmFlow(
     factEntries(facts, "us-gaap", ["CommonStockDividendsPerShareDeclared"], ["USD/shares"]),
   );
@@ -409,6 +410,11 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
   // 직접 계산해 부호가 항상 일치하게 한다.
   const epsTtm = netIncome.ttm != null && shares?.val ? netIncome.ttm / shares.val : eps.ttm;
 
+  // EV 브릿지 — 하이라이트 LTM 열과 같은 모듈·같은 기준일(자산총계 최근일).
+  const evRes = buildEvResolver(facts, evCtx);
+  const evDate = evRes.latestBalanceDate();
+  const evBridge = evDate ? evRes.bridgeAt(evDate) : null;
+
   return {
     periodLabel: eps.ttmLabel || netIncome.ttmLabel || "",
     netIncome: netIncome.ttm,
@@ -421,6 +427,11 @@ function buildUsTtm(facts: CompanyFacts): TtmFlows {
       liabilities: liabilities?.val ?? null,
       cash: cash?.val ?? null,
       shares: shares?.val ?? null,
+      evNetDebt: evBridge ? evBridge.debt + evBridge.preferred + evBridge.nci - evBridge.cash : null,
+      evBlocker: evDate ? evRes.blocker(evDate) : null,
+      evShares: buildShareResolver(facts, { classFacts: evCtx.classFacts ?? null }).current(),
+      evOpNciBook: evBridge?.opUnitNciBook ?? null,
+      isReit: evCtx.sic === "6798",
     },
     daAnnual: da.annual,
     daTtm: da.ttm,
@@ -634,8 +645,21 @@ export const usEdgarAdapter: MarketAdapter = {
   async getTtm(symbol): Promise<TtmFlows | null> {
     try {
       const { cik } = await resolveCik(symbol);
-      const facts = await getCompanyFacts(cik);
-      return buildUsTtm(facts);
+      const [facts, sic] = await Promise.all([
+        getCompanyFacts(cik),
+        getSubmissions(cik).then((s) => s.sic ?? null).catch(() => null),
+      ]);
+      const [captive, classFacts] = await Promise.all([
+        loadCaptiveDebt(cik, sic).catch(() => null),
+        // 듀얼클래스(Visa 등) — 하이라이트와 같은 주식수를 쓰려면 클래스별 보정이 필요
+        loadClassAFacts(cik, facts).catch(() => null),
+      ]);
+      return buildUsTtm(facts, {
+        sic,
+        captive,
+        classFacts,
+        isFinancial: isFinancialCompany(facts, sic),
+      });
     } catch {
       return null;
     }

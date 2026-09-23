@@ -6,6 +6,8 @@
  * 한국(OpenDART) 과 동일한 누적 차감 방식.
  */
 
+import { isStaleAnnual } from "./edgar-series";
+
 export interface FactEntry {
   start?: string;
   end: string;
@@ -73,6 +75,10 @@ export function ttmFlow(entries: FactEntry[] | undefined): TtmResult {
   annuals.sort((a, b) => b.end.localeCompare(a.end));
   const fy = annuals[0];
   if (!fy || !fy.start) return empty;
+  // 태그를 중단한 개념의 옛 연간값을 "최근 12개월"로 쓰지 않는다(감사 2026-09-23:
+  // GE 는 OperatingIncomeLoss 를 몇 년 전에 끊었는데 그 마지막 연간값이 LTM 으로
+  // 잡혀 EBITDA 가 3배로 나왔다). 최근 사업연도 종료가 550일보다 오래됐으면 없음.
+  if (isStaleAnnual(fy.end)) return empty;
   const fyYear = fy.end.slice(0, 4);
   const annualLabel = `FY${fyYear} (${fy.start}~${fy.end})`;
 

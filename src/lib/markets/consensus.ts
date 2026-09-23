@@ -2,8 +2,20 @@ import "server-only";
 import { getAdapter } from "./registry";
 import { getEodQuote } from "./quote";
 import { fetchKrxCloseOn } from "./quote/krx";
-import { fetchYahooEstimates, type AnalystRating } from "./quote/yahoo";
+import { fetchForwardConsensus, fetchYahooEstimates, type AnalystRating } from "./quote/yahoo";
 import { consensusDeepLinks } from "./deeplinks";
+import { fetchUsCompanyFacts, fetchUsSic } from "./us/edgar";
+import {
+  buildEvResolver,
+  daAnnualByYear,
+  opIncomeAnnualByYear,
+  reitOpUnits,
+  type EvResolver,
+} from "./us/edgar-ev";
+import { loadCaptiveDebt } from "./us/edgar-captive";
+import { loadClassAFacts } from "./us/class-facts-loader";
+import { buildShareResolver, type ShareResolver } from "./us/edgar-shares";
+import { isFinancialCompany } from "./us/edgar-financial";
 import {
   AdapterError,
   type DeepLink,
@@ -193,6 +205,36 @@ export async function getConsensusData(
     .sort((a, b) => a - b)
     .slice(-4);
 
+  // 미국: 하이라이트와 같은 단일 기준(edgar-shares·edgar-ev) — 과거 연도 시가총액은
+  // 그 연도말 주식수(분할 보정)로, EV 는 차입금 기준으로. 예전엔 현재 주식수와
+  // 부채총계를 써서 같은 연도 PER·PBR·EV/EBITDA 가 하이라이트와 달랐다(감사 2026-09-23).
+  let us: {
+    shares: ShareResolver;
+    ev: EvResolver;
+    da: Map<number, number>;
+    op: Map<number, number>;
+  } | null = null;
+  if (market === "us") {
+    try {
+      const { cik, facts } = await fetchUsCompanyFacts(symbol);
+      const sic = await fetchUsSic(symbol).catch(() => null);
+      const [captive, fwd, classFacts] = await Promise.all([
+        loadCaptiveDebt(cik, sic).catch(() => null),
+        sic === "6798" ? fetchForwardConsensus(market, symbol, yahooOverride).catch(() => null) : null,
+        loadClassAFacts(cik, facts).catch(() => null),
+      ]);
+      const opUnits = reitOpUnits(sic, fwd?.sharesOutstanding, fwd?.impliedSharesOutstanding);
+      us = {
+        shares: buildShareResolver(facts, { classFacts, sharesHint: shares }),
+        ev: buildEvResolver(facts, { sic, captive, opUnits, isFinancial: isFinancialCompany(facts, sic) }),
+        da: daAnnualByYear(facts),
+        op: opIncomeAnnualByYear(facts),
+      };
+    } catch {
+      us = null;
+    }
+  }
+
   const actualRows: ConsensusRow[] = [];
   for (const fy of years) {
     const revenue = valueForYear(annual, fy, ACCT.revenue);
@@ -203,8 +245,11 @@ export async function getConsensusData(
     const cash = valueForYear(annual, fy, ACCT.cash);
     const epsStmt = valueForYear(annual, fy, ACCT.eps);
 
-    const eps = epsStmt ?? (netIncome != null && shares ? netIncome / shares : null);
-    const bps = equity != null && shares ? equity / shares : null;
+    // 미국은 연도말 주식수(단일 기준), 그 외는 종전대로 현재 주식수
+    const periodEnd0 = annual.periods.find((p) => p.fiscalYear === fy)?.endDate ?? null;
+    const fyShares = us && periodEnd0 ? (us.shares.atFiscalYearEnd(fy, periodEnd0) ?? shares) : shares;
+    const eps = epsStmt ?? (netIncome != null && fyShares ? netIncome / fyShares : null);
+    const bps = equity != null && fyShares ? equity / fyShares : null;
 
     // 해당 회계연도의 실제 마감일 시점 주가 (없으면 결산월 28일로 근사)
     const periodEnd =
@@ -223,14 +268,24 @@ export async function getConsensusData(
     let roe = netIncome != null && equity ? (netIncome / equity) * 100 : null;
     // netIncome 이 자본 계정과 잘못 매칭되면 ROE≈100 → 숨김
     if (roe != null && (Math.abs(roe - 100) < 0.001 || roe > 100 || roe < -100)) roe = null;
-    const mcap = yePrice != null && shares ? yePrice * shares : null;
-    const ev = mcap != null ? mcap + (liab ?? 0) - (cash ?? 0) : null;
-    // EBITDA = 영업이익 + 감가상각비(+무형상각). 상각비 계정을 못 찾으면 영업이익 근사.
-    const dep = valueForYear(annual, fy, ACCT.depreciation);
-    const ebitda = opIncome != null ? opIncome + Math.abs(dep ?? 0) : null;
-    let evEbitda = ev != null && ebitda && ebitda > 0 ? ev / ebitda : null;
-    // 영업이익이 급감한 해 등 비정상값은 숨김
-    if (evEbitda != null && (evEbitda > 40 || evEbitda < 0)) evEbitda = null;
+    const mcap = yePrice != null && fyShares ? yePrice * fyShares : null;
+    let evEbitda: number | null;
+    if (us) {
+      // 하이라이트와 동일: EV = edgar-ev 브릿지, EBITDA = 영업이익 + D&A(단일 규칙),
+      // EBITDA ≤ 0 만 비운다(40배 초과 숨김은 하이라이트와 달라져 미국은 적용 안 함).
+      const ev = us.ev.evAt(periodEnd, mcap, yePrice);
+      const op = us.op.get(fy) ?? opIncome;
+      const ebitda = op != null ? op + (us.da.get(fy) ?? 0) : null;
+      evEbitda = ev != null && ebitda && ebitda > 0 ? ev / ebitda : null;
+    } else {
+      const ev = mcap != null ? mcap + (liab ?? 0) - (cash ?? 0) : null;
+      // EBITDA = 영업이익 + 감가상각비(+무형상각). 상각비 계정을 못 찾으면 영업이익 근사.
+      const dep = valueForYear(annual, fy, ACCT.depreciation);
+      const ebitda = opIncome != null ? opIncome + Math.abs(dep ?? 0) : null;
+      evEbitda = ev != null && ebitda && ebitda > 0 ? ev / ebitda : null;
+      // 영업이익이 급감한 해 등 비정상값은 숨김
+      if (evEbitda != null && (evEbitda > 40 || evEbitda < 0)) evEbitda = null;
+    }
 
     actualRows.push({
       fy,
@@ -240,8 +295,8 @@ export async function getConsensusData(
       revenueYoY: null,
       opIncome,
       netIncome,
-      eps: eps != null ? Math.round(eps * 100) / 100 : null,
-      bps: bps != null ? Math.round(bps) : null,
+      eps,
+      bps,
       per: fin(per),
       pbr: fin(pbr),
       roe: fin(roe),
@@ -269,7 +324,7 @@ export async function getConsensusData(
       revenueYoY: null,
       opIncome: null,
       netIncome: null,
-      eps: eps != null ? Math.round(eps * 100) / 100 : null,
+      eps,
       bps: null,
       per: fin(per),
       pbr: null,
@@ -285,7 +340,7 @@ export async function getConsensusData(
     const cur = rows[i].revenue;
     const prev = rows[i - 1].revenue;
     if (cur != null && prev != null && prev !== 0) {
-      rows[i].revenueYoY = Math.round(((cur - prev) / Math.abs(prev)) * 1000) / 10;
+      rows[i].revenueYoY = ((cur - prev) / Math.abs(prev)) * 100;
     }
   }
 
@@ -298,7 +353,7 @@ export async function getConsensusData(
     const eps = [t.current, t.d7, t.d30, t.d90];
     const nt = ny?.epsTrend;
     const epsNext = nt ? [nt.current, nt.d7, nt.d30, nt.d90] : eps.map(() => null);
-    const perOf = (e: number | null) => (price != null && e ? Math.round((price / e) * 100) / 100 : null);
+    const perOf = (e: number | null) => (price != null && e ? price / e : null);
     epsRevision = {
       asOf: ["현재", "1주 전", "1개월 전", "3개월 전"],
       eps,
@@ -326,6 +381,12 @@ export async function getConsensusData(
   };
 }
 
+/**
+ * 유한한 숫자만 통과(반올림하지 않는다). 소수점 처리는 화면의 공통 포맷
+ * (lib/format.ts, 버림)에서만 한다 — 여기서 반올림하면 같은 값이 다른 화면과
+ * 0.01 다르게 보인다(감사 2026-09-23: VZ 2023 EV/EBITDA 7.616 → 컨센서스 7.62,
+ * 하이라이트 7.61).
+ */
 function fin(v: number | null | undefined): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? Math.round(v * 100) / 100 : null;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }

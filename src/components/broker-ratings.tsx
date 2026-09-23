@@ -335,7 +335,7 @@ export function BrokerRatings({
                             )}
                             {f.stars != null && (
                               <span className="text-muted-foreground text-[11px] whitespace-nowrap">
-                                ★ {f.stars.toFixed(1)}
+                                ★ {formatNumber(f.stars, 1)}
                               </span>
                             )}
                           </div>

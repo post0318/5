@@ -3,6 +3,8 @@ import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
+import { loadCaptiveDebt } from "@/lib/markets/us/edgar-captive";
+import { reitOpUnits } from "@/lib/markets/us/edgar-ev";
 import { buildUsCashFlow } from "@/lib/markets/us/edgar-cashflow";
 import { buildUsIncome } from "@/lib/markets/us/edgar-income";
 import { buildUsBalance } from "@/lib/markets/us/edgar-balance";
@@ -160,7 +162,20 @@ export async function GET(
               ? buildUsBalance(facts, period, sic)
               : detailView === "summary"
                 ? buildUsSummary(facts, period, { sharesHint, classFacts, sic })
-                : buildUsAnalysis(facts, quote?.bars ?? [], { sharesHint, classFacts, sic });
+                : buildUsAnalysis(facts, quote?.bars ?? [], {
+                    sharesHint,
+                    classFacts,
+                    sic,
+                    evCtx: {
+                      sic,
+                      captive: await loadCaptiveDebt(cik, sic).catch(() => null),
+                      opUnits: reitOpUnits(
+                        sic,
+                        consensus?.sharesOutstanding,
+                        consensus?.impliedSharesOutstanding,
+                      ),
+                    },
+                  });
       stmt.symbol = sym;
       return ok(stmt, { headers: NO_CACHE });
     }

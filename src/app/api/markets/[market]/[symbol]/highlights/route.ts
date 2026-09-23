@@ -7,6 +7,8 @@ import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
 import { buildUsHighlights } from "@/lib/markets/us/edgar-highlights";
 import { buildUsBankHighlights, isFinancialCompany } from "@/lib/markets/us/edgar-highlights-bank";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
+import { loadCaptiveDebt } from "@/lib/markets/us/edgar-captive";
+import { reitOpUnits } from "@/lib/markets/us/edgar-ev";
 import { resolveCorpCode } from "@/lib/markets/kr/corpcode";
 import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrFacts, fetchKrDps } from "@/lib/markets/kr/dart-facts";
@@ -103,6 +105,9 @@ export async function GET(
       loadClassAFacts(factsRes.cik, factsRes.facts).catch(() => null),
       fetchUsSic(sym).catch(() => null),
     ]);
+    // EV 브릿지 맥락 — 금융 자회사 부문 차입금(XBRL 인스턴스), UP-REIT 파트너 지분
+    const captive = await loadCaptiveDebt(factsRes.cik, sic).catch(() => null);
+    const opUnits = reitOpUnits(sic, consensus?.sharesOutstanding, consensus?.impliedSharesOutstanding);
 
     const mcap = consensus?.marketCap ?? quote?.marketCap ?? null;
     const sharesHint =
@@ -120,7 +125,11 @@ export async function GET(
 
     const highlights = isFinancialCompany(factsRes.facts, sic)
       ? buildUsBankHighlights(factsRes.facts, quote?.bars ?? [], estCols, sharesHint)
-      : buildUsHighlights(factsRes.facts, quote?.bars ?? [], estCols, sharesHint, classFacts);
+      : buildUsHighlights(factsRes.facts, quote?.bars ?? [], estCols, sharesHint, classFacts, {
+          sic,
+          captive,
+          opUnits,
+        });
 
     return ok(
       { highlights },

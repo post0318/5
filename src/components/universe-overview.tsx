@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChangePercent, Money, Multiple, Percent } from "@/components/num";
 import { UniversePptButton } from "@/components/ppt-export";
-import { formatBigAmount, formatMarketCap } from "@/lib/format";
+import { formatBigAmount, formatMarketCap, formatNumber } from "@/lib/format";
 import { recommendationKo } from "@/components/stock-analysis";
 import { cn } from "@/lib/utils";
 
@@ -268,7 +268,7 @@ export function UniverseOverview({ market }: { market: MarketId }) {
                       </td>
                       {showForeign && (
                         <td className="tnum text-muted-foreground px-3 py-2 text-right">
-                          {r.foreignRatio != null ? `${r.foreignRatio.toFixed(2)}%` : "-"}
+                          {r.foreignRatio != null ? `${formatNumber(r.foreignRatio, 2)}%` : "-"}
                         </td>
                       )}
                       <td className="tnum px-3 py-2 text-right">

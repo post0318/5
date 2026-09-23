@@ -138,7 +138,8 @@ export async function computeKr52wBeta(
   if (sr.length >= take + 1) {
     prevBeta = betaOf(sr.slice(-(take + 1), -1), mr.slice(-(take + 1), -1));
   }
-  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  // 반올림하지 않는다 — 소수점 처리는 표시 포맷(버림)에서만
+  const r3 = (v: number) => v;
   const used = dates.slice(-(take + 1));
 
   // 52주 고가/저가 — 최근 252거래일 종가

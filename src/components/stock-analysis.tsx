@@ -10,10 +10,19 @@ import { formatMoneyWithUnits, formatNumber } from "@/lib/format";
 import type { MarketId } from "@/lib/markets/types";
 import type { StockOverview } from "@/lib/markets/service";
 import { computeTrailingMultiples } from "@/lib/markets/multiples";
+import { opUnitsFrom } from "@/lib/markets/op-units";
 import type { FinancialStatement, Filing, TtmFlows } from "@/lib/markets/types";
 import type { FinancialHighlights } from "@/lib/markets/us/edgar-highlights";
 import { FinancialHighlightsTable } from "@/components/financial-highlights";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   SymbolSearch,
   formatSymbolLabel,
@@ -50,7 +59,7 @@ export function StockAnalysis({
   initialName?: string | null;
 }) {
   const qc = useQueryClient();
-  const [symbol, setSymbol] = useState<string | null>(initialSymbol);
+  const [pickedSymbol, setSymbol] = useState<string | null>(initialSymbol);
   const [yahooOverride, setYahooOverride] = useState<string | null>(initialYahoo);
   const [name, setName] = useState<string | null>(initialName);
   const [period, setPeriod] = useState<"annual" | "quarter">("annual");
@@ -91,6 +100,29 @@ export function StockAnalysis({
     }, 0);
     return () => clearTimeout(id);
   }, [market, initialSymbol]);
+
+  /**
+   * 지원 종목 확인 — 모기지 리츠(NLY·AGNC 등)는 종목분석 대상에서 제외한다
+   * (오너 결정 2026-09-23). 판정이 끝나기 전엔 아래 조회를 전부 보류하고(symbol
+   * = null), 미지원이면 팝업을 띄운 뒤 선택을 해제한다. 판정 API 가 실패하면
+   * 막지 않는다(정상 종목을 막는 쪽이 더 나쁘다).
+   */
+  const supportQ = useQuery({
+    queryKey: ["support", market, pickedSymbol],
+    queryFn: () =>
+      apiFetch<{ supported: boolean; reason?: string }>(
+        `/api/markets/${market}/${encodeURIComponent(pickedSymbol!)}/support`,
+      ),
+    enabled: market === "us" && Boolean(pickedSymbol),
+    staleTime: 1000 * 60 * 60 * 24,
+  });
+  const symbol =
+    !pickedSymbol || market !== "us"
+      ? pickedSymbol
+      : supportQ.data?.supported || supportQ.isError
+        ? pickedSymbol
+        : null;
+  const unsupported = market === "us" && Boolean(pickedSymbol) && supportQ.data?.supported === false;
 
   useEffect(() => {
     if (!symbol) return;
@@ -369,6 +401,12 @@ export function StockAnalysis({
       depreciationAmortisation: daTotal,
       // 미국(EDGAR): 최근분기 재무상태표·D&A·EPS(TTM) 스냅샷 → BPS·PBR·PSR·EV 정확도
       ttm: ttmForMultiples,
+      // UP-REIT 운영 파트너십 지분(하이라이트·분석 지표와 같은 규칙)
+      opUnits: opUnitsFrom(
+        Boolean(ttmForMultiples?.snapshot?.isReit),
+        ov.consensus?.sharesOutstanding,
+        ov.consensus?.impliedSharesOutstanding,
+      ),
     });
   }, [ov, annualForMultiples.data, market, daTotal, ttmForMultiples]);
   const multiplesFallback =
@@ -486,11 +524,43 @@ export function StockAnalysis({
         initialLabel={symbol ? formatSymbolLabel(name, symbol) : ""}
       />
 
-      {!symbol && (
+      <Dialog
+        open={unsupported}
+        onOpenChange={(open) => {
+          if (open) return;
+          setSymbol(null);
+          setName(null);
+          setYahooOverride(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>해당 종목은 지원되지 않습니다</DialogTitle>
+            <DialogDescription>
+              {formatSymbolLabel(name, pickedSymbol ?? "")} — {supportQ.data?.reason}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              onClick={() => {
+                setSymbol(null);
+                setName(null);
+                setYahooOverride(null);
+              }}
+            >
+              확인
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {!pickedSymbol && (
         <p className="text-muted-foreground text-sm">
           종목명 또는 코드로 검색하세요.
         </p>
       )}
+
+      {pickedSymbol && !symbol && supportQ.isLoading && <OverviewSkeleton />}
 
       {symbol && overview.isLoading && (
         <>
@@ -617,12 +687,12 @@ export function StockAnalysis({
                   </span>
                   {market === "kr" && naverQ.data?.foreign && (
                     <div className="text-muted-foreground mt-1 text-xs">
-                      외국인지분율 {naverQ.data.foreign.ratio.toFixed(2)}%
+                      외국인지분율 {formatNumber(naverQ.data.foreign.ratio, 2)}%
                     </div>
                   )}
                   {market === "us" && ov.consensus?.shortPercentSharesOut != null && (
                     <div className="text-muted-foreground mt-1 text-xs">
-                      공매도/발행주식 {(ov.consensus.shortPercentSharesOut * 100).toFixed(2)}%
+                      공매도/발행주식 {formatNumber(ov.consensus.shortPercentSharesOut * 100, 2)}%
                     </div>
                   )}
                 </Stat>
@@ -643,7 +713,7 @@ export function StockAnalysis({
                         )}
                       >
                         ({ttmQ.data.beta.change > 0 ? "+" : ""}
-                        {ttmQ.data.beta.change.toFixed(3)})
+                        {formatNumber(ttmQ.data.beta.change, 3)})
                       </span>
                     )}
                   </span>
@@ -761,7 +831,7 @@ export function StockAnalysis({
                       {fcfM != null && (
                         <MetricChip
                           label="FCF 마진"
-                          value={`${fcfM.toFixed(1)}%`}
+                          value={`${formatNumber(fcfM, 1)}%`}
                           hint="20%↑ 우수 · 0~20% 보통 · 0%↓ 취약"
                           verdict={fcfM >= 20 ? "우수" : fcfM >= 0 ? "보통" : "취약"}
                           tone={fcfM >= 20 ? "good" : fcfM >= 0 ? "mid" : "bad"}
@@ -770,7 +840,7 @@ export function StockAnalysis({
                       {peg != null && (
                         <MetricChip
                           label="PEG"
-                          value={`${peg.toFixed(2)}x`}
+                          value={`${formatNumber(peg, 2)}x`}
                           hint="1미만 저평가 · 1~1.5 적정 · 1.5↑ 고평가 (EPS 3년 CAGR 기준)"
                           verdict={peg < 1 ? "저평가" : peg < 1.5 ? "적정" : "고평가"}
                           tone={peg < 1 ? "good" : peg < 1.5 ? "mid" : "bad"}
@@ -779,7 +849,7 @@ export function StockAnalysis({
                       {ndEbitda != null && (
                         <MetricChip
                           label="순차입금/EBITDA"
-                          value={`${ndEbitda.toFixed(2)}x`}
+                          value={`${formatNumber(ndEbitda, 2)}x`}
                           hint="2배 미만 안전 · 2~5배 주의 · 5배↑ 위험"
                           verdict={
                             ndEbitda < 2 ? "안전" : ndEbitda < 5 ? "주의" : "위험"
@@ -792,7 +862,7 @@ export function StockAnalysis({
                       {curRatio != null && (
                         <MetricChip
                           label="유동비율"
-                          value={`${curRatio.toFixed(2)}x`}
+                          value={`${formatNumber(curRatio, 2)}x`}
                           hint="2배 이상 우수 · 1~2배 적정 · 1배 미만 취약"
                           verdict={
                             curRatio >= 2 ? "우수" : curRatio >= 1 ? "적정" : "취약"
@@ -805,8 +875,8 @@ export function StockAnalysis({
                       {dToE != null && (
                         <MetricChip
                           label="총차입금/자기자본"
-                          value={`${dToE.toFixed(0)}%`}
-                          hint="100% 미만 우수 · 100~200% 주의 · 200% 이상 위험 (차입금+리스 기준)"
+                          value={`${formatNumber(dToE, 0)}%`}
+                          hint="100% 미만 우수 · 100~200% 주의 · 200% 이상 위험 (이자부 차입금 기준, 운용리스 제외)"
                           verdict={
                             dToE < 100 ? "우수" : dToE < 200 ? "주의" : "위험"
                           }
@@ -816,7 +886,7 @@ export function StockAnalysis({
                       {icov != null && (
                         <MetricChip
                           label="이자보상배율"
-                          value={`${icov.toFixed(1)}x`}
+                          value={`${formatNumber(icov, 1)}x`}
                           hint="1배 미만 위험 · 1~2배 주의 · 2~5배 안정 · 5배↑ 우수"
                           verdict={
                             icov < 1
@@ -833,7 +903,7 @@ export function StockAnalysis({
                       {altZ != null && (
                         <MetricChip
                           label="알트만 Z"
-                          value={altZ.toFixed(2)}
+                          value={formatNumber(altZ, 2)}
                           hint="3.0 이상 안전 · 1.81~2.99 회색지대 · 1.81 미만 위험"
                           verdict={
                             altZ >= 3 ? "안전" : altZ >= 1.81 ? "회색" : "위험"
@@ -1266,8 +1336,8 @@ function Week52Bar({
         />
       </div>
       <div className="text-muted-foreground tnum mt-0.5 flex justify-between text-[10px]">
-        <span className={stockDirClass(true, market)}>{lowPct != null ? `저점比 +${lowPct.toFixed(0)}%` : " "}</span>
-        <span className={stockDirClass(false, market)}>고점比 −{Math.max(0, 100 - pct).toFixed(0)}%</span>
+        <span className={stockDirClass(true, market)}>{lowPct != null ? `저점比 +${formatNumber(lowPct, 0)}%` : " "}</span>
+        <span className={stockDirClass(false, market)}>고점比 −{formatNumber(Math.max(0, 100 - pct), 0)}%</span>
       </div>
     </div>
   );

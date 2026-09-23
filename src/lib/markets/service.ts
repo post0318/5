@@ -3,6 +3,7 @@ import { getAdapter } from "./registry";
 import { getEodQuote } from "./quote";
 import { fetchForwardConsensus } from "./quote/yahoo";
 import { computeTrailingMultiples } from "./multiples";
+import { opUnitsFrom } from "./op-units";
 import { newsDeepLinks } from "./deeplinks";
 import { isHighDividendKr } from "./kr/high-dividend";
 import {
@@ -134,6 +135,11 @@ export async function getStockOverview(
       quarterly: quarterly as FinancialStatement | null,
       sharesOutstanding: quoteForMultiples.sharesOutstanding ?? null,
       ttm: ttm as TtmFlows | null,
+      opUnits: (() => {
+        const t = ttm as TtmFlows | null;
+        const c = consensus as { sharesOutstanding?: number | null; impliedSharesOutstanding?: number | null } | null;
+        return opUnitsFrom(Boolean(t?.snapshot?.isReit), c?.sharesOutstanding, c?.impliedSharesOutstanding);
+      })(),
     });
   }
 

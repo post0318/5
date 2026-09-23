@@ -188,6 +188,19 @@ export interface TtmFlows {
     liabilities: number | null;
     cash: number | null;
     shares: number | null;
+    /**
+     * EV 브릿지(edgar-ev.ts 단일 기준) — 차입금 + 우선주·비지배지분 − 현금.
+     * 하이라이트 LTM 열과 같은 값. 계산 불가(은행·금융 자회사 미분리 등)면 null.
+     */
+    evNetDebt?: number | null;
+    /** EV 계산 불가 사유 (있으면 EV/EBITDA 를 비운다) */
+    evBlocker?: string | null;
+    /** 시가총액용 보통주 수(edgar-shares.ts 현재 기준) — 하이라이트와 동일 */
+    evShares?: number | null;
+    /** 리츠(SIC 6798) — 운영 파트너십 지분 반영 대상 */
+    isReit?: boolean;
+    /** evNetDebt 에 들어 있는 운영 파트너십 지분 장부가 — 지분을 시가로 더할 때 뺀다 */
+    evOpNciBook?: number | null;
   } | null;
   /** 감가상각비+무형자산상각비 — 최근 사업연도(연간, PER 과 동일 기준) */
   daAnnual?: number | null;
@@ -230,6 +243,8 @@ export interface ForwardConsensus {
   trailingAnnualDividendRate: number | null;
   bookValue: number | null;
   sharesOutstanding: number | null;
+  /** Yahoo impliedSharesOutstanding — 교환 가능 지분 포함(UP-REIT 파트너 지분 산출용) */
+  impliedSharesOutstanding?: number | null;
   marketCap: number | null;
   revenueTtm: number | null;
   ebitdaTtm: number | null;

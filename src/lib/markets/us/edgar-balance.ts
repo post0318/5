@@ -2,6 +2,7 @@ import "server-only";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import {
+  ANNUAL_FORMS,
   annualEnds,
   days,
   firstConcept,
@@ -10,6 +11,7 @@ import {
   recentInstantQuarters,
   recentQuarters,
 } from "./edgar-series";
+import { buildEvResolver } from "./edgar-ev";
 import { isFinancialCompany } from "./edgar-financial";
 
 /** 분기 컬럼 달력용 (duration 개념 — instant 개념엔 분기 기간이 없음). */
@@ -220,19 +222,6 @@ const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
   },
 ];
 
-const DEBT = [
-  "LongTermDebtNoncurrent",
-  "LongTermDebtCurrent",
-  "CommercialPaper",
-  "ShortTermBorrowings",
-];
-const CASH_LIKE = [
-  "CashAndCashEquivalentsAtCarryingValue",
-  "MarketableSecuritiesCurrent",
-  "ShortTermInvestments",
-  "MarketableSecuritiesNoncurrent",
-  "LongTermInvestments",
-];
 
 export function buildUsBalance(
   facts: CompanyFacts,
@@ -270,7 +259,17 @@ export function buildUsBalance(
     };
   } else {
     const years = [...instantByYear(anchor).keys()].sort((a, b) => a - b).slice(-5);
-    const ends = annualEnds(anchor);
+    // 결산일 — 자산총계(시점 값)의 연간 보고서 기준일. annualEnds 는 기간(1년)
+    // 값만 보므로 시점 값인 자산총계에선 아무것도 못 찾아 전 연도가 "12-31"로
+    // 떨어졌다(1월 결산 WMT 등에서 날짜 기준 조회가 엉뚱한 분기 값을 집음 —
+    // 감사 2026-09-23). 연간 보고서의 시점 값에서 연도별 최신 기준일을 뽑는다.
+    const ends = new Map<number, string>();
+    for (const e of anchor) {
+      if (e.start || !ANNUAL_FORMS.includes(e.form)) continue;
+      const y = Number(e.end.slice(0, 4));
+      if (!ends.has(y) || e.end > ends.get(y)!) ends.set(y, e.end);
+    }
+    for (const [y, d] of annualEnds(anchor)) if (!ends.has(y)) ends.set(y, d);
     periods = years.map((y) => ({
       label: fyKey(y),
       fiscalYear: y,
@@ -425,38 +424,21 @@ export function buildUsBalance(
   items.push({ accountName: "", accountId: "bs:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() });
   items.push({ accountName: "[ 주석 항목 ]", accountId: "bs:note", depth: 0, isSubtotal: true, isHighlight: false, values: blank() });
 
-  const debt = (() => {
-    const o = blank();
-    for (const c of DEBT) {
-      const v = value([c]);
-      for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
-    }
-    // 장기차입금을 유동/비유동 분리 없이 미분류 총액(LongTermDebt)으로만 태깅하는
-    // 회사(AXP 등) — 분리 태그가 둘 다 없는 기(period)만 폴백으로 더한다.
-    const ltdNc = value(["LongTermDebtNoncurrent"]);
-    const ltdCur = value(["LongTermDebtCurrent"]);
-    const ltdTotal = value(["LongTermDebt"]);
-    for (const l of labels)
-      if (ltdNc[l] == null && ltdCur[l] == null && ltdTotal[l] != null)
-        o[l] = (o[l] ?? 0) + ltdTotal[l]!;
-    return o;
-  })();
-  const cashLike = (() => {
-    const o = blank();
-    for (const c of CASH_LIKE) {
-      const v = value([c]);
-      for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
-    }
-    // 제한현금 포함 총액 하나로만 공시하는 회사(AXP 등) 폴백
-    const cashPrimary = value(["CashAndCashEquivalentsAtCarryingValue"]);
-    const cashTotal = value(["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]);
-    for (const l of labels)
-      if (cashPrimary[l] == null && cashTotal[l] != null) o[l] = (o[l] ?? 0) + cashTotal[l]!;
-    return o;
-  })();
+  // 총차입금·순차입금 — edgar-ev.ts 와 같은 차입금·현금 규칙(태그 목록·현금 정의)을
+  // 쓴다. 이 표는 재무상태표 주석이라 연결 기준 그대로 둔다(금융 자회사 차입금
+  // 포함). EV 는 하이라이트·분석 지표에서 금융 자회사분을 뺀다.
+  const evRes = buildEvResolver(facts);
+  const debt = blank();
   const netDebt = blank();
-  for (const l of labels)
-    if (debt[l] != null || cashLike[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashLike[l] ?? 0);
+  const opLease = blank();
+  for (const p of periods) {
+    const d = p.label === LTM ? (evRes.latestBalanceDate() ?? p.endDate ?? "") : (p.endDate ?? "");
+    const br = d ? evRes.bridgeAt(d) : null;
+    if (!br) continue;
+    debt[p.label] = br.debt;
+    netDebt[p.label] = br.debt - br.cash;
+    opLease[p.label] = br.operatingLease;
+  }
 
   const nrow = (label: string, values: Record<string, number | null>, nf?: FinancialLineItem["numberFormat"]): FinancialLineItem => ({
     accountName: label,
@@ -469,6 +451,14 @@ export function buildUsBalance(
   });
   items.push(nrow("총차입금", debt));
   items.push(nrow("순차입금", netDebt));
+  // 운용리스는 차입금·순차입금에 넣지 않는다(미국 회계기준상 영업부채, 오너 결정
+  // 2026-09-23) — 규모는 여기서 따로 보인다. 분기 공시에 없는 회사는 빈칸.
+  items.push(nrow("운용리스 부채 (차입금 미포함)", opLease));
+  // 신용평가사(S&P·Moody's) 기준 참고치 — 운용리스가 공시된 기간만
+  const debtWithOpLease = blank();
+  for (const l of labels)
+    if (debt[l] != null && opLease[l] != null) debtWithOpLease[l] = debt[l]! + opLease[l]!;
+  items.push(nrow("총차입금 (운용리스 포함)", debtWithOpLease));
 
   return {
     symbol: "",

@@ -60,6 +60,8 @@ interface QuoteSummaryResult {
     bookValue?: number;
     priceToBook?: number;
     sharesOutstanding?: number;
+    /** 보통주로 교환 가능한 지분까지 포함한 주식수 — UP-REIT 파트너 지분 산출용 */
+    impliedSharesOutstanding?: number;
     enterpriseValue?: number;
     enterpriseToEbitda?: number;
     shortRatio?: number;
@@ -467,6 +469,7 @@ export async function fetchForwardConsensus(
     trailingAnnualDividendRate: sd.trailingAnnualDividendRate ?? null,
     bookValue: qs.defaultKeyStatistics?.bookValue ?? null,
     sharesOutstanding: qs.defaultKeyStatistics?.sharesOutstanding ?? null,
+    impliedSharesOutstanding: qs.defaultKeyStatistics?.impliedSharesOutstanding ?? null,
     marketCap: qs.price?.marketCap ?? sd.marketCap ?? null,
     revenueTtm: fd.totalRevenue ?? null,
     ebitdaTtm: fd.ebitda ?? null,

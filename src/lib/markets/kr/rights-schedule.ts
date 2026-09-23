@@ -138,7 +138,7 @@ export async function fetchKrAnnualDps(crno: string | null): Promise<{
   for (const y of [yy - 1, yy, yy - 2]) {
     const v = byYear.get(y);
     if (v) {
-      annual = { dps: Math.round(v * 100) / 100, year: y };
+      annual = { dps: v, year: y };
       break;
     }
   }
@@ -151,7 +151,7 @@ export async function fetchKrAnnualDps(crno: string | null): Promise<{
   const ttm =
     t.length > 0
       ? {
-          dps: Math.round(t.reduce((s, e) => s + e.amt, 0) * 100) / 100,
+          dps: t.reduce((s, e) => s + e.amt, 0),
           from: ymd(t[0].bd),
           to: ymd(t[t.length - 1].bd),
         }
@@ -358,7 +358,7 @@ export async function fetchKrRightsSchedule(
       }
       const ymd = e.basDt.replace(/-/g, "");
       const close = closeMap.get(ymd) ?? closeAtOrBefore(closeMap, ymd);
-      if (close && close > 0) e.dividendYield = Math.round((rec.amt / close) * 10000) / 100;
+      if (close && close > 0) e.dividendYield = (rec.amt / close) * 100;
     }
   }
 

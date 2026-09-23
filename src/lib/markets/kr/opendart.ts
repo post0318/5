@@ -428,7 +428,7 @@ async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
     const annualEps = isValue(annualRows!, TTM_ACCOUNTS.eps, "annual", EPS_LOOSE);
     if (annualNi && annualEps && annualEps > 0) {
       const shares = annualNi / annualEps;
-      if (shares > 0) eps = Math.round((ni.v / shares) * 100) / 100;
+      if (shares > 0) eps = ni.v / shares; // 반올림하지 않음 — 표시 포맷(버림)에서 처리
     }
   }
 
