@@ -452,6 +452,45 @@ async function verifyUs(sym) {
   const sub = await secJson(`https://data.sec.gov/submissions/CIK${cik}.json`);
   const sic = Number(sub.sic ?? 0);
   const G = f.facts["us-gaap"] ?? {};
+  // companyfacts 가 앱 LTM 기준일의 공시(10-Q/10-K)를 아직 반영하지 않은 경우(KO·MDLZ·V — 앱은 공시 원본으로 채운다)
+  // 그 공시 원본에서 차원 없는 USD 기간 값을 읽어 채운다. 검증기가 따로 구현한 것이고, 이미 있는 기간은 건드리지 않는다.
+  // 이게 없으면 LTM 은 "기준일 다름"으로 SEC 대조가 빠졌다.
+  {
+    const ltmDate = h.columns.find((c) => c.kind === "ltm")?.date;
+    const durEnds = ["NetIncomeLoss", "ProfitLoss", "Revenues"].flatMap((t) => (G[t]?.units?.USD ?? []).filter((e) => e.start).map((e) => e.end));
+    const latest = durEnds.sort().at(-1);
+    const rc = sub.filings?.recent ?? {};
+    const k = ltmDate && (!latest || (latest < ltmDate && dayDiff(latest, ltmDate) > 7))
+      ? (rc.form ?? []).findIndex((fm, i) => /^10-[QK]$/.test(fm) && rc.reportDate?.[i] && dayDiff(rc.reportDate[i], ltmDate) <= 7)
+      : -1;
+    if (k >= 0) {
+      try {
+        const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rc.accessionNumber[k].replace(/-/g, "")}`;
+        const idx = await secJson(base + "/index.json");
+        const name = idx.directory.item.map((x) => x.name).find((x) => /_htm\.xml$/i.test(x));
+        const xml = name ? await secText(base + "/" + name) : "";
+        const ctx = new Map();
+        for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
+          if (/dimension="/.test(m[2])) continue;
+          const s = /<(?:xbrli:)?startDate>\s*([^<\s]+)/.exec(m[2])?.[1], e = /<(?:xbrli:)?endDate>\s*([^<\s]+)/.exec(m[2])?.[1];
+          if (s && e) ctx.set(m[1], { start: s, end: e });
+        }
+        let added = 0;
+        for (const m of xml.matchAll(/<us-gaap:([A-Za-z0-9_]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/us-gaap:\1>/g)) {
+          const c = ctx.get(/contextRef="([^"]+)"/.exec(m[2])?.[1] ?? "");
+          if (!c || !/unitRef="[^"]*usd"/i.test(m[2])) continue;
+          const arr = ((G[m[1]] ??= { units: {} }).units.USD ??= []);
+          if (arr.some((e) => e.start === c.start && e.end === c.end)) continue;
+          const days = (Date.parse(c.end) - Date.parse(c.start)) / 864e5;
+          arr.push({ start: c.start, end: c.end, val: Number(m[3]), form: rc.form[k], filed: rc.filingDate[k], fp: days > 300 ? "FY" : "Q", fy: 0 });
+          added++;
+        }
+        review.push({ item: "SEC 최신 공시 보강", note: `companyfacts 미반영 ${rc.form[k]} ${rc.reportDate[k]} 원본에서 ${added}개 값 보강` });
+      } catch (e) {
+        hardErrors.push(`최신 공시 원본 조회 실패: ${String(e).slice(0, 60)}`);
+      }
+    }
+  }
   const ann = (c, unit = "USD") => annualPeriods(f.facts, "us-gaap", c, unit);
   const has20F = Object.keys(f.facts).includes("ifrs-full") || (sub.filings?.recent?.form ?? []).some((x) => /^20-F/.test(x));
   // 보고 통화 = 매출·순이익·자산 태그의 단위(외화 차입금 태그 등 일부 항목의 외화 단위는 무관 — MCD 오판)
