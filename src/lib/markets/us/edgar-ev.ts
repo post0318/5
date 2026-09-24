@@ -51,7 +51,9 @@ const DEBT_TOTAL = [
 /** 금융리스 — LongTermDebtAndCapitalLeaseObligations 계열을 쓰면 이미 포함. */
 const FIN_LEASE = ["FinanceLeaseLiabilityNoncurrent", "FinanceLeaseLiabilityCurrent"];
 /** 차입금 태그가 하나라도 있는지 판정용(기준일 폴백). */
-const ANY_DEBT = [...DEBT_NONCURRENT, ...DEBT_CURRENT, ...DEBT_TOTAL];
+// 단기차입금도 포함 — 장기차입금 없이 단기차입금·금융리스만 공시한 해(GEV 2024 분사 직후)를
+// "차입금 미공시"로 오판해 EV 를 비웠다(검증 2026-09-24). resolveDebt 는 이미 합산한다.
+const ANY_DEBT = [...DEBT_NONCURRENT, ...DEBT_CURRENT, ...DEBT_TOTAL, ...SHORT_BORROWINGS];
 /** 대차대조표에 차입금 태그가 없을 때 "빚이 없다"와 "태그를 안 달았다"를
  *  가르는 신호 — 최근 1년 안에 차입·상환·이자 흐름이 있으면 후자(Ford).
  *  무차입 기업(PLTR)은 이 흐름이 전혀 없다. */
@@ -93,6 +95,8 @@ const NCI_OP_UNITS = ["MinorityInterestInOperatingPartnerships"];
  *  DepreciationAndAmortization(22억, 전체)을 동시에 단다. 200종목 실측에서
  *  "앞 태그 우선"보다 나빠진 종목 0개, CRM·MCK·UPS·VST 등 8종목 개선. */
 export const DA_TOTAL = [
+  // 합성: 표준 감가상각 + 콘텐츠 상각(미디어, edgar-content.ts) — 최댓값 규칙이라 있으면 이 값이 선택된다
+  "DAIncludingContentAmortizationDerived",
   "DepreciationDepletionAndAmortization",
   "DepreciationAmortizationAndAccretionNet",
   "DepreciationAndAmortization",
@@ -491,6 +495,12 @@ export const SYN_OP_INCOME = "OperatingIncomeLossUnified";
 export function opIncomeEntries(facts: CompanyFacts): FactUnitEntry[] {
   const oi = entriesOf(facts, "OperatingIncomeLoss");
   const lastOi = oi.reduce((m, e) => (e.end > m ? e.end : m), "");
+  // 태그를 나중에 시작한 회사(MET — OperatingIncomeLoss가 FY2022부터만 있고 FY2021은
+  // 없음, 검증 2026-09-24)는 "마지막 종료일 이전은 실공시로 커버된다"는 가정이 깨진다 —
+  // firstOi(최초 종료일) 이전 기간은 실공시 범위 밖이라 합성 대상이어야 하는데,
+  // lastOi 만으로 판정하면 FY2021이 "이미 커버됨"으로 잘못 스킵돼 EBITDA가 통째로
+  // 빈칸이 됐다. firstOi~lastOi 구간(실제 태그가 존재하는 구간)만 합성을 막는다.
+  const firstOi = oi.reduce((m, e) => (m === "" || e.end < m ? e.end : m), "");
   const key = (e: FactUnitEntry) => `${e.start ?? ""}|${e.end}|${e.form}|${e.fp}`;
   const interest = new Map<string, number>();
   for (const c of EBIT_INTEREST)
@@ -498,14 +508,53 @@ export function opIncomeEntries(facts: CompanyFacts): FactUnitEntry[] {
       const k = key(e);
       if (e.start && e.val != null && !interest.has(k)) interest.set(k, e.val);
     }
+  // 지분법 이익 — 세전이익 태그가 이를 **포함**하는 계열이면 빼서 영업이익에 가깝게(오너 결정 2026-09-24).
+  // XOM 2023: 세전 527.8억 + 이자 8.5억 = 536억 → 지분법 63.9억 차감 472억(인포맥스 영업이익 434억).
+  // 기타수익(이자·투자수익 등)은 XOM 이 표준 태그로 공시하지 않아 남는다.
+  const equityInc = new Map<string, number>();
+  for (const e of entriesOf(facts, "IncomeLossFromEquityMethodInvestments"))
+    if (e.start && e.val != null && !equityInc.has(key(e))) equityInc.set(key(e), e.val);
+  const PRETAX_INCLUDES_EQUITY = new Set([PRETAX[0], PRETAX[2]]);
+  // 총수익에 섞인 비영업 수익(지분법 + 기타수익)을 원본에서 읽은 경우(XOM) — 지분법만 빼는 것보다 정확하다
+  const nonopInRev = new Map<string, number>();
+  for (const e of entriesOf(facts, "NonoperatingIncomeInRevenuesDerived"))
+    if (e.start && e.val != null && !nonopInRev.has(key(e))) nonopInRev.set(key(e), e.val);
+  // 손익계산서 계산 구조에서 읽은 세전이익 속 영업외 항목 합(DIS·FOXA — edgar-is-structure.ts). 있으면 이자·지분법
+  // 근사 대신 "세전이익 − 영업외 항목"(공시 구조 그대로)
+  const nonopInPretax = new Map<string, number>();
+  for (const e of entriesOf(facts, "NonoperatingItemsInPretaxDerived"))
+    if (e.start && e.val != null && !nonopInPretax.has(key(e))) nonopInPretax.set(key(e), e.val);
   const out: FactUnitEntry[] = [...oi];
   const covered = new Set(oi.map(key));
+  // 같은 기간(키)에 값이 여러 개면 가장 최근 제출분(재작성본) — 손익계산서 세전이익 행과 같은 값.
+  // 먼저 나온 원공시를 쓰면 AIG 2022 처럼 재작성(세전 142.82억 → 37.72억) 전 값으로 영업이익을 냈다(검증 2026-09-24)
+  const latestFiled = (es: FactUnitEntry[]): FactUnitEntry[] => {
+    const m = new Map<string, FactUnitEntry>();
+    for (const e of es) { const p = m.get(key(e)); if (!p || (e.filed ?? "") > (p.filed ?? "")) m.set(key(e), e); }
+    return [...m.values()];
+  };
   for (const c of PRETAX)
-    for (const e of entriesOf(facts, c)) {
+    for (const e of latestFiled(entriesOf(facts, c))) {
       const k = key(e);
-      if (!e.start || e.val == null || covered.has(k) || e.end <= lastOi) continue;
+      if (!e.start || e.val == null || covered.has(k)) continue;
+      // 실공시 OperatingIncomeLoss가 존재하는 구간(firstOi~lastOi)만 합성을 건너뛴다 —
+      // 같은 해에 실공시·합성이 섞여 TTM 정의가 갈리는 걸 막기 위한 가드라, 그 구간 밖
+      // (태그가 아예 없던 초기 연도 등)은 막을 이유가 없다.
+      if (firstOi && e.end >= firstOi && e.end <= lastOi) continue;
       covered.add(k);
-      out.push({ ...e, val: e.val + (interest.get(k) ?? 0) });
+      // 총수익에서 분리한 비영업 수익은 세전이익에 반드시 들어 있다(총수익이 세전이익으로 흐름) — 태그 종류와
+      // 무관하게 뺀다. CVX 는 "지분법 제외" 의미의 세전 태그에 지분법·영업외수익이 든 값을 달았다.
+      const st = nonopInPretax.get(k);
+      // 총수익 분리 회사(XOM)인데 그 기간 분리값이 없으면(최근 10-K 3건 밖 옛 연도) 구조 경로를 쓰지 않는다 —
+      // 지분법·기타수익이 빠지지 않아 영업이익이 부푼다(감사 2026-09-24: XOM 2018 +30%). 종전 근사로.
+      if (st != null && !(facts.nonopInRevenues && !nonopInRev.has(k))) {
+        out.push({ ...e, val: e.val - st - (nonopInRev.get(k) ?? 0) });
+        continue;
+      }
+      const eq = nonopInRev.get(k) ?? (PRETAX_INCLUDES_EQUITY.has(c) ? (equityInc.get(k) ?? 0) : 0);
+      // 금융·보험업은 이자비용이 본업 비용이라 더하지 않는다 — 증권사(GS·SCHW, 은행 레이아웃 아님)가 세전이익의
+      // 4배 영업이익을 냈다(검증 괴리 검사로 발견 2026-09-24: GS 2025 886.66억 vs 세전 218.52억)
+      out.push({ ...e, val: e.val + (facts.financialSector ? 0 : (interest.get(k) ?? 0)) - eq });
     }
   return out;
 }
@@ -514,7 +563,10 @@ export function opIncomeEntries(facts: CompanyFacts): FactUnitEntry[] {
 export function opIncomeIsDerived(facts: CompanyFacts): boolean {
   const oi = entriesOf(facts, "OperatingIncomeLoss");
   const lastOi = oi.reduce((m, e) => (e.end > m ? e.end : m), "");
-  return entriesOf(facts, SYN_OP_INCOME).some((e) => e.end > lastOi);
+  const firstOi = oi.reduce((m, e) => (m === "" || e.end < m ? e.end : m), "");
+  // 트레일링(태그 중단 후, GE 등)뿐 아니라 리딩(태그를 나중에 시작, MET 등) 합성도
+  // 잡는다 — opIncomeEntries()의 firstOi/lastOi 판정과 짝을 맞춤(2026-09-24).
+  return entriesOf(facts, SYN_OP_INCOME).some((e) => e.end > lastOi || (firstOi !== "" && e.end < firstOi) || firstOi === "");
 }
 
 /** 합성 영업이익을 끼운 사본 facts (로더에서 한 번). */
