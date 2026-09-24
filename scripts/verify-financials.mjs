@@ -730,18 +730,18 @@ async function verifyUs(sym) {
       if (im?.ni && x.ni) review.push({ item: `${c} 순이익 vs 인포맥스(USD 환산)`, ours: x.ni, other: im.ni, gapPct: ((x.ni - im.ni) / Math.abs(im.ni)) * 100 });
     } else if (isFy) {
       const pn = parentNi(x.date);
-      add("A", "순이익 앱 = SEC 지배주주 순이익", c, vsSource(x.ni, pn.v, 5e-4, pn.note ?? pn.why ?? ""));
+      add("A", "순이익 앱 = SEC 지배주주 순이익", c, vsSource(x.ni, pn.v, EXACT, pn.note ?? pn.why ?? ""));
       // 매출 — 은행은 순수익을 합성(이자수익 − 이자비용 등)해 태그 하나와 대조할 수 없다
       if (bank) add("A", "매출 앱 = SEC 매출", c, { status: NA, note: "은행 순수익은 합성값" });
       else {
         const sp = atEnd(nonopSplit, x.date);
         const sr = sp ? { v: sp.v, tag: sp.basis } : secRevenue(x.date);
-        let res = vsSource(x.rev, sr?.v ?? null, 1e-3, sr?.tag ?? "");
+        let res = vsSource(x.rev, sr?.v ?? null, EXACT, sr?.tag ?? "");
         // 분리 기준은 앱과 같은 판정 규칙이라 독립 검증이 아니다(감사) — Yahoo 연간 매출도 같아야 통과
         if (sp && res.status === PASS) {
           const yv = yRev.get([...yRev.keys()].find((d) => dayDiff(d, x.date) <= 7));
           res = yv == null ? { status: NA, note: `${sp.basis} — Yahoo 연간 매출 없음(독립 확인 불가)` }
-            : Math.abs(yv - x.rev) <= 5e-3 * Math.abs(yv) ? { status: PASS, note: `${sp.basis} · Yahoo ${yv} 일치` }
+            : Math.abs(yv - x.rev) <= 5e5 ? { status: PASS, note: `${sp.basis} · Yahoo ${yv} 일치` }
             : { status: FAIL, note: `${sp.basis} 로는 맞지만 Yahoo 연간 매출 ${yv} 와 다름` };
         }
         add("A", "매출 앱 = SEC 매출", c, res);
@@ -858,6 +858,15 @@ async function verifyUs(sym) {
         signRule("EV/EBITDA", x.evx, x.ebitda);
         if (x.mc > 1e9 && !x.debt && !x.cash) add("D", "차입금·현금 원자료 반영", c, { status: FAIL, note: "대형주인데 차입금·현금이 모두 0/빈칸" });
       }
+    }
+    // 자산총계 = SEC Assets(결산일 시점 값, 최신 제출분)
+    if (BS[c]?.assets != null) {
+      // 최신 제출분 — 단 나중 공시가 본문 반올림값("$189 billion")으로 다시 태깅한 값은 버린다(먼저 공시된 정밀값을
+      // 1억·10억·100억 단위로 반올림한 값과 정확히 같을 때, AXP 2021 — CLAUDE.md "반올림 재태깅 제거")
+      const cand = (G.Assets?.units?.USD ?? []).filter((e) => !e.start && dayDiff(e.end, x.date) <= 7).sort((p, q) => (p.filed ?? "").localeCompare(q.filed ?? ""));
+      const rounded = (e) => cand.some((o) => (o.filed ?? "") < (e.filed ?? "") && o.val !== e.val && [1e8, 1e9, 1e10].some((u) => Math.round(o.val / u) * u === e.val));
+      const a = cand.filter((e) => !rounded(e)).at(-1) ?? null;
+      add("A", "자산총계 앱 = SEC 자산총계", c, vsSource(BS[c].assets, a?.val ?? null, EXACT));
     }
     if (BS[c]) add("D", "자산 총계 = 부채와 자본 총계", c, BS[c].assets == null || BS[c].le == null ? { status: NA, note: "대차대조표 값 없음" } : same(BS[c].assets, BS[c].le, 5e-4));
 
@@ -1025,6 +1034,9 @@ async function verifyUs(sym) {
 
     // 외부 불일치의 원인을 숫자로 확인한다(추정으로 통과시키지 않는다 — 식이 성립할 때만 "원인 확인").
     const opPassed = (col) => checks.some((k) => k.col === col && k.status === PASS && /^영업이익 앱 = SEC (영업이익|세전이익 − 지분법)/.test(k.name));
+    // 지표 → A층(SEC 원자료 정확 대조) 검사 이름
+    const A_OF = { 매출: /^매출 앱 = SEC 매출/, 순이익: /^(LTM )?순이익 앱 = SEC/, "희석 EPS": /^EPS 앱 = SEC 공시 EPS/, 자산총계: /^자산총계 앱 = SEC/ };
+    const aPassed = (col, metric) => A_OF[metric] && checks.some((k) => k.col === col && k.status === PASS && A_OF[metric].test(k.name));
     const causeOf = (r, n) => {
       const col = r.item.split(" ")[0];
       const metric = r.item.slice(col.length + 1);
@@ -1041,8 +1053,20 @@ async function verifyUs(sym) {
           if (Math.abs(k1 / k2 - 1) < 1e-6 && Math.abs(k1 - 1) > 1e-3) return { ok: `Yahoo 원통화 표시 — 앱÷Yahoo 비율 ${k1.toPrecision(6)} 이 ${other.item} 과 같음(환율)` };
         }
       }
-      // ③ 영업이익: 앱 = SEC 공시 영업이익(A층 정확 일치) → 외부는 조정·재분류 값
+      // ③ 앱 = SEC 원자료(A층 정확 일치) → 외부는 다른 정의·조정 값
       if (metric === "영업이익" && opPassed(col)) return { ok: "앱 = SEC 공시 영업이익(A층 일치) — 외부는 조정·재분류 영업이익" };
+      if (aPassed(col, metric)) return { ok: `앱 = SEC 공시 ${metric}(A층 정확 일치) — ${n} 는 다른 정의·조정` };
+      // ⑥ 감가상각비·EBITDA: 차이 = SEC 운용리스 사용권자산 상각 — 외부는 운용리스 상각을 감가상각에 넣고 앱은 뺀다
+      //    (CLAUDE.md: 운용리스 비용은 임차료 성격이라 EBITDA 에 이미 반영, PEP 2025 Yahoo 4,178 = 3,451 + 727)
+      if (/^(감가상각비|EBITDA)$/.test(metric)) {
+        const ol = col === "LTM" ? secTtm("OperatingLeaseRightOfUseAssetAmortizationExpense")?.v : atEnd(ann("OperatingLeaseRightOfUseAssetAmortizationExpense"), H[col]?.date ?? "")?.val;
+        if (ol && within(v - r.ours - ol)) return { ok: `운용리스 사용권자산 상각(${ol}) 포함 여부 — 앱은 제외(임차료 성격)` };
+      }
+      // ⑤ 감가상각비: 다른 외부 소스가 앱과 정확히 같다(앱 = 현금흐름표 본표 줄) → 이 소스는 다른 정의
+      if (metric === "감가상각비") {
+        const same = Object.keys(r.srcs).filter((m) => m !== n && sameAt(r.ours, r.srcs[m].v, r.srcs[m].unit));
+        if (same.length) return { ok: `앱(현금흐름표 본표 줄) = ${same.join("·")} — ${n} 는 다른 정의` };
+      }
       // ④ EBITDA: 같은 소스의 영업이익 차이 + 감가상각비 차이로 정확히 분해되면 구성요소 항목으로 넘긴다
       if (metric === "EBITDA") {
         const o = recon.get(`${col} 영업이익`), d = recon.get(`${col} 감가상각비`);
@@ -1051,6 +1075,7 @@ async function verifyUs(sym) {
           return { ok: `구성요소로 분해 — 영업이익 차 ${dOp}, 감가상각비 차 ${dDa} (각 항목 참조)` };
       }
       if (oneOff != null && oneOff !== 0 && Math.abs(v - r.ours - oneOff) <= Math.abs(v) * 1e-3) return { guess: `일회성 항목 조정 — 잔차 ${v - r.ours - oneOff}` };
+      if (Math.abs(v - r.ours) <= Math.abs(v) * 5e-4) return { guess: `0.05% 이내 — 소스 반올림·주식수 기준일 차 추정(차 ${v - r.ours})` };
       return {};
     };
     for (const r of recon.values()) {

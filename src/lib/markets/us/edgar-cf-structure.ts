@@ -88,7 +88,9 @@ export function cashFlowDaLines(cal: string, lab: Map<string, string[]>): string
         // AdjustmentForAmortization 에 "운용리스 사용권자산 상각" 라벨이 붙어 3,548 이 빠졌다). 회사 고유 개념만 라벨로.
         const std = a.to.startsWith("us-gaap_");
         const text = std ? concept : labs.join(" | ") || concept;
-        const leadsWithDep = !std && labs.some((l) => /^depreciation/i.test(l));
+        // 회사 고유 줄의 주 라벨이 감가상각·무형자산 상각으로 시작하면 제외어가 섞여 있어도 포함(ISRG "Amortization of
+        // intangible and other assets" — 표준 라벨의 "Contract Acquisition" 에 걸려 빠졌다, Yahoo 677.1 = 615 + 62)
+        const leadsWithDep = !std && labs.some((l) => /^(depreciation|amortization of (acquired |acquisition-related )?intangible)/i.test(l));
         if (DA.test(text) && (!NOT_DA.test(text) || leadsWithDep)) out.push(a.to);
         else walk(a.to, depth + 1);
       }
