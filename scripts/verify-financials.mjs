@@ -394,6 +394,36 @@ async function saStatement(sym, path, quarterly = false) {
   if (!f?.datekey) throw new Error(`StockAnalysis ${path} 재무 데이터 없음`);
   return f;
 }
+/**
+ * FnGuide 투자지표(국내 — 검증 스크립트 전용, 오너 결정 2026-09-24). 신버전 `wcomp.fnguide.com` 은 서버렌더 페이지
+ * 안에 `invValueIndex` JSON 을 싣는다(옛 `comp.fnguide.com/SVO2` 는 폐지). 금액은 억원, EPS 는 원.
+ * 열: 연도(YYYY/12) + 최근 분기(직전 4분기 기준 행은 TTM, 그 외 행은 누적).
+ */
+async function fnguideInvest(code) {
+  // 종목은 cmp_cd 로 지정한다 — gicode 는 무시되고 기본 종목(삼성전자)이 온다(실측). 응답 종목 코드를 반드시 확인
+  const r = await fetch(`https://wcomp.fnguide.com/CompanyInfo/Invest?cmp_cd=${code}`, { headers: { "user-agent": SA_UA }, signal: AbortSignal.timeout(20_000) });
+  if (!r.ok) throw new Error(`FnGuide HTTP ${r.status}`);
+  const html = await r.text();
+  const got = /cmp_cd:\s*'(\d{6})'/.exec(html)?.[1];
+  if (got !== code) throw new Error(`FnGuide 응답 종목 ${got} ≠ 요청 ${code}`);
+  const m = /invValueIndex:\s*(\{[^\n]*)\n/.exec(html);
+  if (!m) throw new Error("FnGuide invValueIndex 없음");
+  const j = JSON.parse(m[1].trim().replace(/,\s*$/, ""));
+  const cols = j.header.map((x) => ({ ym: x.YYMM, cd: x.CD }));
+  const num = (s) => (s == null || s === "" ? null : Number(String(s).replace(/,/g, "")));
+  const rows = j.data.map((d) => ({ grp: d.GRP_CD, nm: String(d.NM).trim(), vals: Object.fromEntries(cols.map((c) => [c.ym, num(d[c.cd])])) }));
+  const pick = (grp, nm) => rows.find((x) => x.grp === grp && x.nm === nm)?.vals ?? {};
+  return {
+    cols: cols.map((c) => c.ym),
+    ebitda: pick(3, "EBITDA"), // EV/EBITDA 블록 — 연도는 연간, 최근 분기 열은 직전 4분기
+    ev: pick(3, "EV"),
+    rev: pick(3, "매출액"),
+    epsTtm: pick(3, "EPS"), // 연도는 연간 EPS, 최근 분기 열은 직전 4분기
+    niParent: pick(1, "당기순이익(지배)"), // 최근 분기 열은 누적(반기 등) — 연도만 대조
+    eqParent: pick(1, "자본총계(지배)"),
+  };
+}
+
 /** 값 비교 — 소스의 보고 단위 안에서 같은가(인포맥스는 백만 달러 단위, 나머지는 달러) */
 const sameAt = (a, b, unit) => a != null && b != null && Math.abs(a - b) <= Math.max(unit / 2, Math.abs(b) * 1e-12);
 
@@ -741,6 +771,39 @@ async function verifyUs(sym) {
   }
   const opP = new Map([...ann("OperatingIncomeLoss"), ...ann("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest")]);
 
+  // 영업이익 태그가 손익계산서 본표(계산 구조)에 실제로 있는가 — 앱이 구조 판독에 실패해 부문 주석 영업이익(DIS 형)으로
+  // 조용히 돌아가도 같은 태그와 비교하면 통과해 버린다(재감사 HIGH). 최신 10-K 계산 구조(.xsd 내장 포함)로 따로 확인.
+  let opOnFace = null;
+  try {
+    const rk = sub.filings?.recent ?? {};
+    const ik = (rk.form ?? []).findIndex((fm) => fm === "10-K");
+    if (ik >= 0) {
+      const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rk.accessionNumber[ik].replace(/-/g, "")}`;
+      const names = (await secJson(base + "/index.json")).directory.item.map((x) => x.name);
+      const calName = names.find((x) => /_cal\.xml$/i.test(x)) ?? names.find((x) => /\.xsd$/i.test(x));
+      if (calName) {
+        const cal = await secText(base + "/" + calName);
+        opOnFace = false;
+        for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+          const role = m[1].split("/").pop() ?? "";
+          if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Segment/i.test(role)) continue;
+          if (/#us-gaap_OperatingIncomeLoss"/.test(m[2])) { opOnFace = true; break; }
+        }
+      }
+    }
+  } catch (e) {
+    hardErrors.push(`손익계산서 계산 구조 조회 실패: ${String(e).slice(0, 60)}`);
+  }
+  // 앱 LTM 이 SEC 최신 정기공시 보고일보다 이르면(앱·companyfacts 가 같이 뒤처져도) 실패 — 재감사 HIGH
+  {
+    const rk = sub.filings?.recent ?? {};
+    const latestRep = (rk.form ?? []).map((fm, i) => (/^10-[QK]$/.test(fm) ? rk.reportDate?.[i] : null)).filter(Boolean).sort().at(-1);
+    const ltm = H.LTM?.date;
+    if (latestRep && ltm) add("B", "앱 LTM 기준일 ≥ SEC 최신 정기공시 보고일", "LTM", Date.parse(ltm) >= Date.parse(latestRep) - 7 * 864e5
+      ? { status: PASS, note: `앱 ${ltm} / SEC ${latestRep}` }
+      : { status: FAIL, note: `앱 LTM ${ltm} 이 SEC 최신 정기공시 ${latestRep} 보다 이름(분기 누락)` });
+  }
+
   for (const [c, x] of Object.entries(H)) {
     const isFy = c !== "LTM";
     // ── A. SEC 원자료 대조 (연도 열만 — 결산일로 매칭)
@@ -817,7 +880,7 @@ async function verifyUs(sym) {
       // 3차 감사: 앱 LTM 이 SEC 최신 분기보다 늦으면(한 분기 뒤처짐) 검증불가가 아니라 실패
       else if (Date.parse(x.date) < Date.parse(t.end) - 7 * 864e5) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: FAIL, note: `앱 LTM 기준일 ${x.date} 이 SEC 최신 결산 ${t.end} 보다 늦음(분기 누락)` });
       else if (dayDiff(t.end, x.date) > 7) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: NA, note: `기준일 다름(앱 ${x.date} / SEC ${t.end})` });
-      else add("A", "LTM 순이익 앱 = SEC TTM", c, vsSource(x.ni, t.v, 5e-4, t.how));
+      else add("A", "LTM 순이익 앱 = SEC TTM", c, vsSource(x.ni, t.v, EXACT, t.how));
     }
     // ── C. 화면 간 동일성
     if (!bank) add("C", "EV/EBITDA 하이라이트=재무분석", c, same(A[c]?.evx ?? null, x.evx));
@@ -871,7 +934,8 @@ async function verifyUs(sym) {
         const eq = secAt("IncomeLossFromEquityMethodInvestments") ?? 0;
         add("A", "영업이익 앱 = SEC 세전이익 − 지분법(금융·보험)", c, secPt == null ? { status: NA, note: "SEC 세전이익 없음" } : vsSource(op, secPt - eq, EXACT));
       } else if (!synth) {
-        add("A", "영업이익 앱 = SEC 영업이익", c, vsSource(op, secAt("OperatingIncomeLoss"), EXACT));
+        if (opOnFace === false) add("A", "영업이익 앱 = SEC 영업이익", c, { status: FAIL, note: "SEC 영업이익 태그가 손익계산서 본표에 없음(부문 주석값) — 앱이 구조 판독에 실패해 주석값을 쓴 것으로 보임" });
+        else add("A", "영업이익 앱 = SEC 영업이익", c, vsSource(op, secAt("OperatingIncomeLoss"), EXACT));
       } else {
         // 합성 영업이익(소계 없는 손익계산서): SEC 세전이익에서 영업외 항목 태그를 되돌려 정확 대조.
         // NonoperatingIncomeExpense 가 회사마다 "영업외 합계"(이자·지분법 포함)이기도 하고 "기타수익" 한 줄이기도
@@ -1020,14 +1084,16 @@ async function verifyUs(sym) {
         const ttmOk = qEnd && dayDiff(qEnd, L.date) <= 7;
         if (ttmOk) put("LTM 총차입금(운용리스 포함)", withLease, "StockAnalysis", bq.debt?.[bq.datekey.indexOf(qEnd)]);
         const inc = await saStatement(sym, "income-statement");
+        // 보고 단위 — 대형주는 백만, 그 외는 천 단위(TER). 값이 모두 백만의 배수면 백만
+        const saUnit = [inc.revenue, inc.netinc, inc.opinc].flat().every((v) => v == null || v % 1e6 === 0) ? 1e6 : 1e3;
         for (const [c, x] of Object.entries(H)) {
           const k = c === "LTM" ? (ttmOk ? inc.datekey.indexOf("TTM") : -1) : inc.datekey.findIndex((d) => d !== "TTM" && dayDiff(d, x.date) <= 7);
           if (k < 0) continue;
-          put(`${c} 매출`, x.rev, "StockAnalysis", inc.revenue?.[k]);
-          put(`${c} 순이익`, x.ni, "StockAnalysis", inc.netinc?.[k]);
-          put(`${c} EBITDA`, x.ebitda, "StockAnalysis", inc.ebitda?.[k]);
-          put(`${c} 영업이익`, IS[c]?.op, "StockAnalysis", inc.opinc?.[k]);
-          put(`${c} 감가상각비`, IS[c]?.da, "StockAnalysis", inc.depAmorEbitda?.[k]);
+          put(`${c} 매출`, x.rev, "StockAnalysis", inc.revenue?.[k], saUnit);
+          put(`${c} 순이익`, x.ni, "StockAnalysis", inc.netinc?.[k], saUnit);
+          put(`${c} EBITDA`, x.ebitda, "StockAnalysis", inc.ebitda?.[k], saUnit);
+          put(`${c} 영업이익`, IS[c]?.op, "StockAnalysis", inc.opinc?.[k], saUnit);
+          put(`${c} 감가상각비`, IS[c]?.da, "StockAnalysis", inc.depAmorEbitda?.[k], saUnit);
         }
       } catch (e) {
         errs.push(String(e).slice(0, 80));
@@ -1072,15 +1138,14 @@ async function verifyUs(sym) {
     }
 
     // 외부 불일치의 원인을 숫자로 확인한다(추정으로 통과시키지 않는다 — 식이 성립할 때만 "원인 확인").
-    const opPassed = (col) => checks.some((k) => k.col === col && k.status === PASS && /^영업이익 앱 = SEC (영업이익|세전이익 − 지분법)/.test(k.name));
-    // 지표 → A층(SEC 원자료 정확 대조) 검사 이름
-    const A_OF = { 매출: /^매출 앱 = SEC 매출/, 순이익: /^(LTM )?순이익 앱 = SEC/, "희석 EPS": /^EPS 앱 = SEC 공시 EPS/, 자산총계: /^자산총계 앱 = SEC/ };
-    const aPassed = (col, metric) => A_OF[metric] && checks.some((k) => k.col === col && k.status === PASS && A_OF[metric].test(k.name));
-    const causeOf = (r, n) => {
+    // 근거로 쓰는 A층은 허용치 없는 정확 대조(EXACT)만 — EPS(분할 반올림 허용)·금융사 근사식(앱 정의 재계산)은 제외(재감사)
+    const EXACT_A = { 영업이익: /^영업이익 앱 = SEC 영업이익$/, 매출: /^매출 앱 = SEC 매출$/, 순이익: /^(LTM )?순이익 앱 = SEC/, 자산총계: /^자산총계 앱 = SEC/ };
+    const aPassed = (col, metric) => EXACT_A[metric] && checks.some((k) => k.col === col && k.status === PASS && EXACT_A[metric].test(k.name));
+    const causeOf = (r, n, done) => {
       const col = r.item.split(" ")[0];
       const metric = r.item.slice(col.length + 1);
       const v = r.srcs[n].v, unit = r.srcs[n].unit;
-      const within = (d) => Math.abs(d) <= Math.max(unit, 1e6);
+      const within = (d) => Math.abs(d) <= unit; // 소스의 보고 단위 안(재감사 — 예전엔 최소 100만)
       // ① 외부가 일회성 항목을 뺀 조정값 — 차이가 앱 일회성비용 행과 같다
       const oneOff = /^(영업이익|EBITDA)$/.test(metric) ? IS[col]?.oneOff : null;
       if (oneOff != null && oneOff !== 0 && within(v - r.ours - oneOff)) return { ok: "일회성 항목 조정 — 차이 = 앱 일회성비용" };
@@ -1093,7 +1158,6 @@ async function verifyUs(sym) {
         }
       }
       // ③ 앱 = SEC 원자료(A층 정확 일치) → 외부는 다른 정의·조정 값
-      if (metric === "영업이익" && opPassed(col)) return { ok: "앱 = SEC 공시 영업이익(A층 일치) — 외부는 조정·재분류 영업이익" };
       if (aPassed(col, metric)) return { ok: `앱 = SEC 공시 ${metric}(A층 정확 일치) — ${n} 는 다른 정의·조정` };
       // ⑥ 감가상각비·EBITDA: 차이 = SEC 운용리스 사용권자산 상각 — 외부는 운용리스 상각을 감가상각에 넣고 앱은 뺀다
       //    (CLAUDE.md: 운용리스 비용은 임차료 성격이라 EBITDA 에 이미 반영, PEP 2025 Yahoo 4,178 = 3,451 + 727)
@@ -1101,26 +1165,35 @@ async function verifyUs(sym) {
         const ol = col === "LTM" ? secTtm("OperatingLeaseRightOfUseAssetAmortizationExpense")?.v : atEnd(ann("OperatingLeaseRightOfUseAssetAmortizationExpense"), H[col]?.date ?? "")?.val;
         if (ol && within(v - r.ours - ol)) return { ok: `운용리스 사용권자산 상각(${ol}) 포함 여부 — 앱은 제외(임차료 성격)` };
       }
-      // ⑤ 감가상각비: 다른 외부 소스가 앱과 정확히 같다(앱 = 현금흐름표 본표 줄) → 이 소스는 다른 정의
+      // ④ EBITDA: 같은 소스의 영업이익 차 + 감가상각비 차로 분해되고, **두 구성요소 모두 원인 확인**일 때만 확인.
+      //    분해식 자체는 항상 성립하므로(앱 EBITDA = 영업이익 + 감가상각비, 인포맥스 감가상각비 = EBITDA − 영업이익)
+      //    구성요소 판정 없이 확인으로 치면 틀린 EBITDA 가 지나간다(재감사 HIGH)
+      if (metric === "EBITDA" && done) {
+        const part = (m) => {
+          const x = recon.get(`${col} ${m}`);
+          if (!x?.srcs[n]) return null;
+          return { d: x.srcs[n].v - x.ours, ok: sameAt(x.ours, x.srcs[n].v, x.srcs[n].unit) || !!done.get(`${col} ${m}|${n}`)?.ok };
+        };
+        const o = part("영업이익"), d = part("감가상각비");
+        if (o && d && within(v - r.ours - o.d - d.d) && o.ok && d.ok) return { ok: `구성요소 모두 원인 확인 — 영업이익 차 ${o.d}, 감가상각비 차 ${d.d}` };
+      }
+      // ⑤ 감가상각비: 다른 외부 소스가 앱과 정확히 같다 — 앱이 맞다는 증거는 아니어서(SEC 독립 대조 없음) 추정만
       if (metric === "감가상각비") {
         const same = Object.keys(r.srcs).filter((m) => m !== n && sameAt(r.ours, r.srcs[m].v, r.srcs[m].unit));
-        if (same.length) return { ok: `앱(현금흐름표 본표 줄) = ${same.join("·")} — ${n} 는 다른 정의` };
-      }
-      // ④ EBITDA: 같은 소스의 영업이익 차이 + 감가상각비 차이로 정확히 분해되면 구성요소 항목으로 넘긴다
-      if (metric === "EBITDA") {
-        const o = recon.get(`${col} 영업이익`), d = recon.get(`${col} 감가상각비`);
-        const dOp = o?.srcs[n] ? o.srcs[n].v - o.ours : null, dDa = d?.srcs[n] ? d.srcs[n].v - d.ours : null;
-        if (dOp != null && dDa != null && within(v - r.ours - dOp - dDa))
-          return { ok: `구성요소로 분해 — 영업이익 차 ${dOp}, 감가상각비 차 ${dDa} (각 항목 참조)` };
+        if (same.length) return { guess: `앱(현금흐름표 본표 줄) = ${same.join("·")} — ${n} 는 다른 정의로 보임` };
       }
       if (oneOff != null && oneOff !== 0 && Math.abs(v - r.ours - oneOff) <= Math.abs(v) * 1e-3) return { guess: `일회성 항목 조정 — 잔차 ${v - r.ours - oneOff}` };
       if (Math.abs(v - r.ours) <= Math.abs(v) * 5e-4) return { guess: `0.05% 이내 — 소스 반올림·주식수 기준일 차 추정(차 ${v - r.ours})` };
       return {};
     };
-    for (const r of recon.values()) {
+    // 1차: EBITDA 외 항목 → 2차: EBITDA(구성요소 판정 결과를 쓴다)
+    const done = new Map();
+    const ordered = [...recon.values()].sort((a, b) => Number(/EBITDA$/.test(a.item)) - Number(/EBITDA$/.test(b.item)));
+    for (const r of ordered) {
       const names = Object.keys(r.srcs);
       const matched = names.filter((n) => sameAt(r.ours, r.srcs[n].v, r.srcs[n].unit));
-      const causes = Object.fromEntries(names.filter((n) => !matched.includes(n)).map((n) => [n, causeOf(r, n)]));
+      const causes = Object.fromEntries(names.filter((n) => !matched.includes(n)).map((n) => [n, causeOf(r, n, done)]));
+      for (const [n, c] of Object.entries(causes)) done.set(`${r.item}|${n}`, c);
       const explained = names.filter((n) => causes[n]?.ok);
       const why = (n) => (causes[n]?.ok ? ` [원인 확인: ${causes[n].ok}]` : causes[n]?.guess ? ` [원인 추정: ${causes[n].guess}]` : "");
       const off = names.filter((n) => !matched.includes(n)).map((n) => `${n} ${r.srcs[n].v} (${(((r.ours - r.srcs[n].v) / Math.abs(r.srcs[n].v)) * 100).toFixed(2)}%)${why(n)}`);
@@ -1168,7 +1241,7 @@ async function verifyKr(sym) {
     const lab = c.kind === "ltm" ? "LTM" : c.label;
     const r = (k) => h.rows.find((x) => x.key === k)?.values[i] ?? null;
     const v = (k) => h.valuationRows.find((x) => x.key === k)?.values[i] ?? null;
-    H[lab] = { mc: r("mktcap"), pref: r("pref_mcap"), cash: r("cash"), debt: r("debt"), nci: r("nci"), ev: r("ev"), ebitda: r("ebitda"), ni: r("ni"), eps: r("eps"), per: v("per"), pbr: v("pbr"), psr: v("psr"), evx: v("ev_ebitda") };
+    H[lab] = { date: c.date, mc: r("mktcap"), pref: r("pref_mcap"), cash: r("cash"), debt: r("debt"), nci: r("nci"), ev: r("ev"), ebitda: r("ebitda"), ni: r("ni"), eps: r("eps"), per: v("per"), pbr: v("pbr"), psr: v("psr"), evx: v("ev_ebitda") };
   });
   const evBlocked = (h.notes ?? []).find((n) => /EV.*(미표시|표시하지 않|계산하지 않)/.test(n));
   const rowOf = (stmt, name) => stmt?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName === name)?.values ?? {};
@@ -1252,7 +1325,37 @@ async function verifyKr(sym) {
       add("C", "PBR 유니버스=하이라이트", "LTM", same(uv.pbr, L.pbr));
     }
   }
-  return { sym, checks, review: [] };
+
+  // ── F. 외부 대조 — FnGuide(국내). 금액은 억원 단위 안에서 일치(보고 단위), 차이는 원인 규명 대상
+  const review = [];
+  if (EXTERNAL) {
+    try {
+      const fg = await fnguideInvest(sym);
+      const ymOf = (d) => (d ? `${d.slice(0, 4)}/${d.slice(5, 7)}` : null);
+      const items = [];
+      const put = (item, ours, v, unit) => { if (ours != null && v != null) items.push({ item, ours, v, unit }); };
+      for (const [c, x] of Object.entries(H)) {
+        const ym = ymOf(x.date);
+        if (!ym || !fg.cols.includes(ym)) continue;
+        const isLtm = c === "LTM";
+        put(`${c} EBITDA`, x.ebitda, fg.ebitda[ym] != null ? fg.ebitda[ym] * 1e8 : null, 1e8);
+        put(`${c} EV`, x.ev, fg.ev[ym] != null ? fg.ev[ym] * 1e8 : null, 1e8);
+        put(`${c} 매출`, isLtm ? null : IS[c]?.rev ?? null, fg.rev[ym] != null ? fg.rev[ym] * 1e8 : null, 1e8);
+        put(`${c} EPS`, x.eps, fg.epsTtm[ym], 1);
+        if (!isLtm) put(`${c} 순이익(지배)`, x.ni, fg.niParent[ym] != null ? fg.niParent[ym] * 1e8 : null, 1e8);
+      }
+      for (const it of items) {
+        const ok = sameAt(it.ours, it.v, it.unit);
+        review.push({
+          item: it.item, ours: it.ours, sources: { FnGuide: it.v }, matched: ok ? ["FnGuide"] : [], explained: [],
+          verdict: ok ? "1곳 모두 일치" : `0/1곳 일치 — 불일치: FnGuide ${it.v} (${(((it.ours - it.v) / Math.abs(it.v)) * 100).toFixed(2)}%)`,
+        });
+      }
+    } catch (e) {
+      review.push({ item: "외부 소스 조회 실패", note: `FnGuide: ${String(e).slice(0, 80)}` });
+    }
+  }
+  return { sym, checks, review };
 }
 
 // ── 실행 ─────────────────────────────────────────────────────────────
