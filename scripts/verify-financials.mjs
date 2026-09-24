@@ -152,6 +152,11 @@ function vsSource(app, src, tol, srcNote = "") {
     : { status: FAIL, note: `앱 ${app} vs 원자료 ${src} (차 ${(d * 100).toFixed(3)}%)${srcNote ? ` · ${srcNote}` : ""}` };
 }
 const dayDiff = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
+/** SEC 세전이익 개념 — 앱 edgar-ev.ts 와 같은 두 개념(지분법 포함/제외) */
+const PRETAX_TAGS = [
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+];
 
 // ── SEC 연간 사실 (결산 기간 = (start, end) 단위, 연도 키 아님) ────────────
 function annualPeriods(facts, ns, concept, unit) {
@@ -625,6 +630,8 @@ async function verifyUs(sym) {
   const rowStarts = (stmt, prefix) => stmt?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.startsWith(prefix))?.values ?? {};
   for (const [prefix, key] of [["영업이익", "op"], ["세전이익", "pretax"]])
     for (const [k, v] of Object.entries(rowStarts(is, prefix))) (IS[lab(k)] ??= {})[key] = v;
+  // 앱 영업이익 행 이름 — "영업이익" 그대로면 공시 태그, 뒤에 설명이 붙으면 합성(소계 없는 손익계산서 등)
+  const opRowName = is?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.startsWith("영업이익"))?.accountName ?? null;
   for (const [name, key] of [["총차입금", "debt"], ["순차입금", "nd"], ["자산 총계", "assets"], ["부채와 자본 총계", "le"]])
     for (const [k, v] of Object.entries(rowOf(bs, name))) (BS[lab(k)] ??= {})[key] = v;
   const C = {};
@@ -753,15 +760,36 @@ async function verifyUs(sym) {
     if (x.mc != null) signRule("PER", x.per, x.eps);
     // 원자료로 정한 기대치 — 전 화면에서 같이 비어도 잡힌다(재감사: EBITDA·PBR·PSR 빈칸 회귀가 검증불가로만 남았음)
     if (isFy && !bank && atEnd(opP, x.date) && x.ebitda == null) add("D", "EBITDA 기대치(SEC 영업이익·세전이익 있음)", c, { status: FAIL, note: "SEC 에 이익 태그가 있는데 앱 EBITDA 빈칸" });
-    // 영업이익 ↔ 세전이익 괴리 — 영업외 항목이 매출의 25% 를 넘는 일은 드물다. 은행·증권 순수익이나 보험 투자수익을
-    // 영업외로 잘못 빼면 여기서 걸린다(감사 2026-09-24: GS −364억·JPM −1,099억 영업이익을 기존 층이 못 잡음).
-    // 앱 계산을 재현하지 않는 독립 기준.
-    { const op = IS[c]?.op, pt = IS[c]?.pretax, rv = x.rev ?? IS[c]?.rev;
-      if (op != null && pt != null && rv) {
-        const gap = Math.abs(op - pt) / Math.abs(rv);
-        add("D", "영업이익↔세전이익 괴리(매출 25% 이내)", c, gap <= 0.25 ? { status: PASS } : { status: FAIL, note: `영업이익 ${op} vs 세전이익 ${pt} — 매출의 ${(gap * 100).toFixed(1)}%` });
-        if (sic >= 6000 && sic <= 6799 && pt > 0 && op < 0) add("D", "금융·보험 영업이익 부호(세전 흑자 → 영업 적자 불가)", c, { status: FAIL, note: `세전이익 ${pt} 인데 영업이익 ${op}` });
-      } }
+    // 영업이익·세전이익 = SEC 원자료 정확 일치(오너 지시 2026-09-24 — "허용치를 좁히는 것보다 완벽하게 일치").
+    // 예전 "매출 25% 이내 괴리" 는 영업외 이익이 큰 정상 회사(GOOG 지분평가익·WDC)를 떨어뜨리고 보험·리츠 오류
+    // (7.7%·12%)는 통과시켰다(재감사). 기간은 연도 열 = 10-K 결산일, LTM = SEC 분기 공시로 직접 낸 TTM.
+    { const op = IS[c]?.op, pt = IS[c]?.pretax;
+      const secAt = (tag) => {
+        if (isFy) return atEnd(ann(tag), x.date)?.val ?? null;
+        const t = secTtm(tag);
+        return t && dayDiff(t.end, x.date) <= 7 ? t.v : null;
+      };
+      const secPt = PRETAX_TAGS.map(secAt).find((v) => v != null) ?? null;
+      add("A", "세전이익 앱 = SEC 세전이익", c, vsSource(pt, secPt, EXACT));
+      const synth = opRowName != null && opRowName !== "영업이익";
+      const fin = sic >= 6000 && sic <= 6499;
+      if (fin) {
+        // 금융·보험: 앱 규칙 = 세전이익 − 지분법이익(CLAUDE.md "금융·보험업 영업이익 근사")
+        const eq = secAt("IncomeLossFromEquityMethodInvestments") ?? 0;
+        add("A", "영업이익 앱 = SEC 세전이익 − 지분법(금융·보험)", c, secPt == null ? { status: NA, note: "SEC 세전이익 없음" } : vsSource(op, secPt - eq, EXACT));
+      } else if (!synth) {
+        add("A", "영업이익 앱 = SEC 영업이익", c, vsSource(op, secAt("OperatingIncomeLoss"), EXACT));
+      } else {
+        // 합성 영업이익(소계 없는 손익계산서): SEC 세전이익에서 영업외 항목 태그를 되돌려 정확 대조.
+        // NonoperatingIncomeExpense 가 회사마다 "영업외 합계"(이자·지분법 포함)이기도 하고 "기타수익" 한 줄이기도
+        // 해서(DIS — 이자비용·지분법이 별도 줄) 두 해석을 모두 계산하고, 앱이 어느 쪽과 정확히 같은지 기록한다.
+        // 태그 조합(영업외 합계·이자·지분법)으로 되살리는 식은 회사마다 태그 범위·부호가 달라 추측이 된다
+        // (DIS: NonoperatingIncomeExpense 가 "기타수익" 한 줄뿐, 태그 조합 1,918 vs 손익계산서 실제 5,100).
+        // 손익계산서 표시 구조의 독립 재구현 전까지는 판정하지 않고 미결로 남긴다 — 허용치·추측으로 통과시키지 않는다.
+        add("A", "영업이익(합성) 앱 = SEC 손익계산서 구조", c, { status: NA, note: `미결 — 합성 영업이익 "${opRowName}", SEC 영업이익 태그 없음(독립 구조 재구현 필요). 세전이익 ${secPt}` });
+      }
+      if (fin && pt != null && op != null && pt > 0 && op < 0) add("D", "금융·보험 영업이익 부호(세전 흑자 → 영업 적자 불가)", c, { status: FAIL, note: `세전이익 ${pt} 인데 영업이익 ${op}` });
+    }
     if (x.mc != null && x.rev != null) signRule("PSR", x.psr, x.rev);
     if (isFy && x.mc != null) { const eq = atEnd(eqP, x.date)?.val; if (eq != null) signRule("PBR", x.pbr, eq); }
     if (!bank && x.mc != null) {
