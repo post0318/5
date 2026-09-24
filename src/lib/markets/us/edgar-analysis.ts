@@ -53,9 +53,13 @@ import {
 
 const LTM = "현재/LTM";
 const REV = [
+  // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
+  // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
+  "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
+  "Revenues",
   "RevenueFromContractWithCustomerExcludingAssessedTax",
   "RevenueFromContractWithCustomerIncludingAssessedTax",
-  "Revenues",
+  "RevenuesNetOfInterestExpense", // 증권사·투자은행(GS·MS) — 하이라이트와 같은 목록
 ];
 const PRETAX_C = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",

@@ -110,11 +110,22 @@ function preferNewer(cand: FactUnitEntry, prev: { end: string; filed?: string })
 }
 
 /** 사업연도(FY, 10-K) duration 값 Map<year, val>. */
+/**
+ * 결산일 → 사업연도. 52/53주 결산 회사는 결산일이 1월 첫 주로 넘어가는 해가 있다 — 그 결산은
+ * 전년도 사업연도다(업계 관행: WEN "fiscal 2022" = 2023-01-01 결산). 결산일의 연도로만 키를
+ * 잡으면 2023-01-01 결산과 2023-12-31 결산이 같은 2023 으로 겹쳐 한 해가 통째로 사라졌다
+ * (검증 2026-09-24, WEN). 연도 키를 만드는 모든 미국 모듈이 이 함수를 쓴다.
+ */
+export function fiscalYearOf(end: string): number {
+  const y = Number(end.slice(0, 4));
+  return end.slice(5, 7) === "01" && Number(end.slice(8, 10)) <= 7 ? y - 1 : y;
+}
+
 export function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
   const m = new Map<number, { val: number; end: string; filed?: string }>();
   for (const e of entries) {
     if (e.fp !== "FY" || !isFullYearDuration(e) || !ANNUAL_FORMS.includes(e.form)) continue;
-    const y = Number(e.end.slice(0, 4));
+    const y = fiscalYearOf(e.end);
     const prev = m.get(y);
     if (!prev || preferNewer(e, prev)) m.set(y, { val: e.val, end: e.end, filed: e.filed });
   }
@@ -126,7 +137,7 @@ export function instantByYear(entries: FactUnitEntry[]): Map<number, number> {
   const m = new Map<number, { val: number; end: string; filed?: string }>();
   for (const e of entries) {
     if (e.start || !ANNUAL_FORMS.includes(e.form)) continue;
-    const y = Number(e.end.slice(0, 4));
+    const y = fiscalYearOf(e.end);
     const prev = m.get(y);
     if (!prev || preferNewer(e, prev)) m.set(y, { val: e.val, end: e.end, filed: e.filed });
   }
@@ -175,7 +186,7 @@ export function annualEnds(entries: FactUnitEntry[]): Map<number, string> {
   const m = new Map<number, string>();
   for (const e of entries) {
     if (e.fp !== "FY" || !isFullYearDuration(e) || !ANNUAL_FORMS.includes(e.form)) continue;
-    const y = Number(e.end.slice(0, 4));
+    const y = fiscalYearOf(e.end);
     if (!m.has(y) || e.end > m.get(y)!) m.set(y, e.end);
   }
   return m;
@@ -288,7 +299,9 @@ export function splitFactorsByYear(
   const factor = new Map<number, number>();
   if (!years.length) return factor;
   factor.set(years[years.length - 1], 1);
-  const SPLITS = [2, 3, 4, 5, 6, 7, 8, 10, 15, 20];
+  // 25~100 추가 — CMG 50:1(2024-06)을 못 알아봐 2021 EPS 가 22.9(실제 0.458)로 나왔다(검증 2026-09-24).
+  // 3:2(1.5배)는 증자·자사주와 구분이 어려워 넣지 않는다 — 검증 도구가 Yahoo 분할 이력으로 따로 잡는다.
+  const SPLITS = [2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 40, 50, 100];
   for (let i = years.length - 1; i > 0; i--) {
     const yNew = years[i];
     const yOld = years[i - 1];

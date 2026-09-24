@@ -21,7 +21,7 @@ import {
 } from "../types";
 import { resolveCorpCode } from "./corpcode";
 import { annualSeries, daAndAmortSeries, fetchKrFacts } from "./dart-facts";
-import { buildKrEvResolver, krEpsByYear, krOpIncomeByYear, krParentEquityByYear, loadKrCaps } from "./dart-ev";
+import { buildKrEvResolver, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCaps } from "./dart-ev";
 import { getKrDaDoc } from "@/lib/db/kr-da";
 
 const HINT =
@@ -378,7 +378,10 @@ function isValue(
 
 const INTERIM_RANK: Record<string, number> = { "11014": 3, "11012": 2, "11013": 1 };
 
-async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
+/** 손익 TTM + 그 TTM 의 마지막 분기(재무상태표 기준일 — getTtm 스냅샷용). */
+type KrTtmResult = TtmFlows & { lastQuarter: { year: number; quarter: number } };
+
+async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   const y = new Date().getFullYear();
 
   // 1) 최근 가용 당기 분기/반기 보고서
@@ -456,11 +459,14 @@ async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
   const epsR = ttm("eps");
 
   // EPS 분기데이터가 없으면 TTM 순이익 / (연간 순이익 ÷ 연간 EPS) 로 환산
-  let eps = epsR.ttm && epsR.v && epsR.v > 0 ? epsR.v : null;
+  // 적자여도 EPS 는 음수 그대로 낸다(오너 지시 2026-09-24 — "적자여도 eps 는 나오는 것
+  // 아닌가"). PER 등 배수는 소비하는 쪽이 분모 0 이하면 비운다(미국과 같은 부호 규칙).
+  let eps = epsR.ttm && epsR.v != null ? epsR.v : null;
   if (eps == null && ni.ttm && ni.v != null) {
     const annualNi = isValue(annualRows!, TTM_ACCOUNTS.netIncome, "annual", undefined, TTM_IDS.netIncome);
     const annualEps = isValue(annualRows!, TTM_ACCOUNTS.eps, "annual", EPS_LOOSE, TTM_IDS.eps);
-    if (annualNi && annualEps && annualEps > 0) {
+    // 주식수 환산은 연간 순이익·EPS 부호가 같으면(적자 해 포함) 성립
+    if (annualNi && annualEps) {
       const shares = annualNi / annualEps;
       if (shares > 0) eps = ni.v / shares; // 반올림하지 않음 — 표시 포맷(버림)에서 처리
     }
@@ -469,10 +475,11 @@ async function getKrTtm(corpCode: string): Promise<TtmFlows | null> {
   const q = QUARTER_LABEL[interim.code] ?? "분기";
   return {
     periodLabel: `FY${annualYear} + ${interim.year} ${q} − ${interim.year - 1} ${q}`,
+    lastQuarter: { year: interim.year, quarter: INTERIM_RANK[interim.code] },
     netIncome: ni.v,
     revenue: rev.v,
     opIncome: op.v,
-    eps: eps != null && eps > 0 ? eps : null,
+    eps,
   };
 }
 
@@ -579,12 +586,18 @@ export const krOpenDartAdapter: MarketAdapter = {
     const entry = await resolveCorpCode(key(), symbol);
     try {
       const code = symbol.replace(/\D/g, "").padStart(6, "0").slice(-6);
-      const [flows, facts, daDoc, caps] = await Promise.all([
+      const [ttmRes, facts, quarterFacts, daDoc, caps] = await Promise.all([
         getKrTtm(entry.corpCode),
         fetchKrFacts(entry.corpCode, "annual").catch(() => null),
+        // LTM 재무상태표(최신 분기말) — 분기 재무제표 화면과 같은 캐시(fetchKrFacts)를 공유
+        fetchKrFacts(entry.corpCode, "quarter").catch(() => null),
         getKrDaDoc(code).catch(() => null),
         loadKrCaps(code, []).catch(() => null),
       ]);
+      const lastQuarter = ttmRes?.lastQuarter ?? null;
+      const flows: TtmFlows | null = ttmRes
+        ? { periodLabel: ttmRes.periodLabel, netIncome: ttmRes.netIncome, revenue: ttmRes.revenue, opIncome: ttmRes.opIncome, eps: ttmRes.eps }
+        : null;
       if (!facts) return flows;
       // TTM 항목이 비면(계정 매칭 실패·분기 보고서 없음) 최근 사업연도 값으로 채운다 —
       // getKrTtm 이 분기 데이터가 부족할 때 연간값을 쓰는 것과 같은 의미. 여기서 채워야
@@ -606,31 +619,30 @@ export const krOpenDartAdapter: MarketAdapter = {
         revenue: base.revenue ?? fyLast(annualSeries(facts, ["ifrs-full_Revenue", "dart_Revenue"], ["매출액", "수익(매출액)", "영업수익"], ["IS", "CIS"])),
         opIncome: base.opIncome ?? fyLast(krOpIncomeByYear(facts)),
         netIncome: base.netIncome ?? fyLast(annualSeries(facts, ["ifrs-full_ProfitLoss"], ["당기순이익", "분기순이익", "반기순이익"], ["IS", "CIS"])),
-        eps: base.eps ?? (() => {
-          const e = fyLast(krEpsByYear(facts));
-          return e != null && e > 0 ? e : null;
-        })(),
+        // 적자여도 EPS 는 음수 그대로(PER 은 소비하는 쪽이 부호 규칙으로 비움, 오너 지시 2026-09-24)
+        eps: base.eps ?? fyLast(krEpsByYear(facts)),
       };
       if (!base.periodLabel) filled.periodLabel = `FY${facts.periods.at(-1)?.year ?? ""} (연간)`;
-      // EV 스냅샷 — 하이라이트 LTM 열과 같은 모듈(dart-ev.ts)·같은 기준일(최근 사업연도말
-      // 재무상태표). 개요 멀티플이 부채총계 대신 차입금으로 EV 를 내게 한다(B16).
+      // EV 스냅샷 — 하이라이트·재무분석 LTM 열이 이 값을 그대로 쓴다(dart-ev.ts 단일 기준).
+      // 기준일 = 손익 TTM 의 마지막 분기말 재무상태표(오너 결정 2026-09-24, 미국 MRQ 와 같은
+      // 원칙). TTM 이 연간값이면 사업연도말. 분기 BS 를 못 구하면 연말값 + 라벨에 표기.
       const ev = buildKrEvResolver(facts, code);
-      const lastFy = ev.years().at(-1) ?? null;
-      const b = lastFy != null ? ev.bridgeAt(lastFy) : null;
-      const eq = krParentEquityByYear(facts); // PBR 분모 — 지배주주 자본(하이라이트와 같은 값)
+      const bal = krLtmBalance(facts, quarterFacts, lastQuarter, code);
+      const b = bal.bridge;
       return {
         ...filled,
         // LTM D&A — 하이라이트와 같은 함수(사업보고서 주석 실측 → 연간 폴백)
         daTtm: daAndAmortSeries(facts, daDoc).ltm,
         snapshot: {
-          label: lastFy != null ? `FY${lastFy}` : "",
-          equity: lastFy != null ? (eq.get(lastFy) ?? null) : null,
+          label: bal.label,
+          equity: bal.parentEquity,
           liabilities: null,
           cash: b?.cash ?? null,
           shares: null,
           evNetDebt: b ? b.debt + b.nci - b.cash : null,
           evBlocker: ev.blocker(),
           evPreferredMcap: caps?.current?.preferred ?? 0,
+          evBridge: b,
         },
       };
     } catch {

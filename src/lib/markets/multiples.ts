@@ -226,15 +226,17 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
 
   const per = price != null && epsDiluted ? price / epsDiluted : null;
   // TTM EPS 우선 자체 산출값 → 없으면 순이익/주식수, 그것도 없으면 null
+  // 적자 EPS 도 그대로 두고(음수), PER 만 부호 규칙으로 비운다
   const epsTtm =
-    ttm?.eps != null && ttm.eps > 0
+    ttm?.eps != null
       ? ttm.eps
       : ttm?.netIncome != null && shares
         ? ttm.netIncome / shares
         : null;
-  // 미국은 분모 0 이하면 비운다(하이라이트·재무분석과 같은 부호 규칙)
+  // 분모 0 이하면 비운다(하이라이트·재무분석과 같은 부호 규칙 — 미국만 적용하던 것을
+  // PER(TTM)은 전 시장으로: 한국 적자 EPS 를 음수로 내면서 음수 PER 이 나오지 않게, 2026-09-24)
   const pos = (n: number | null, d: number | null) => (n != null && d != null && d > 0 ? n / d : null);
-  const perTtm = usShares != null ? pos(price, epsTtm) : price != null && epsTtm ? price / epsTtm : null;
+  const perTtm = pos(price, epsTtm);
   const bps = equity != null && shares ? equity / shares : null;
   const pbr = usShares != null ? pos(price, bps) : price != null && bps ? price / bps : null;
   // PSR·EV/EBITDA: 분자(시가총액·EV)가 현재가 기준이므로 분모도 TTM 으로 맞춘다.
@@ -262,8 +264,10 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   // 하이라이트(같은 시계열, 없으면 빈칸·D&A 0)와 갈린다.
   const ebitdaOpIncome = snap ? (ttm?.opIncome ?? null) : opIncome;
   const ebitdaDa = snap ? (ttm?.daTtm ?? null) : da;
+  // 스냅샷 경로(미국·한국)는 LTM 감가상각비가 없으면 EBITDA 를 비운다 — 영업이익만으로 근사하면
+  // 하이라이트(빈칸)와 개요가 갈렸다(셀트리온 LTM, 검증 2026-09-24 — "빈칸이면 모두 빈칸").
   const ebitda =
-    ebitdaOpIncome != null ? ebitdaOpIncome + (ebitdaDa ?? 0) : null;
+    ebitdaOpIncome != null && (!snap || ebitdaDa != null) ? ebitdaOpIncome + (ebitdaDa ?? 0) : null;
   // 분모 0 이하면 비운다(전 화면 공통 부호 규칙)
   const evEbitda = ev != null && ebitda != null && ebitda > 0 ? ev / ebitda : null;
   const evEbitdaIsApprox = (snap ? ttm?.daTtm : da) == null;

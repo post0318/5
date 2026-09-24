@@ -14,6 +14,26 @@ import {
   type UniverseOverviewDoc,
 } from "@/lib/db/universe-overview";
 
+/**
+ * 유니버스 통합 뷰 한 행 계산 — 저장 없이 결과만. 재무 검증 스크립트가 화면과 같은 함수의
+ * 결과를 비교하려고 쓴다(`/api/cron/verify-row`, 검증 도구 감사 2026-09-24: 예전 검증기는
+ * 식을 다시 짜서 비교해 실제 화면 경로를 검증하지 못했다).
+ */
+export async function computeUniverseRow(
+  market: "kr" | "us" | "jp",
+  symbol: string,
+): Promise<UniverseOverviewDoc> {
+  return computeDoc({
+    id: `verify:${market}:${symbol}`,
+    market,
+    symbol,
+    yahooSymbol: null,
+    name: null,
+    groupName: null,
+    tags: [],
+  } as unknown as UniverseItem);
+}
+
 async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
   const base = {
     _id: `${item.market}:${item.symbol}`,

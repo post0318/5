@@ -10,20 +10,41 @@ import { fetchText } from "../http";
 import { AdapterError, type MarketId, type QuoteBar } from "../types";
 import { stooqSymbol } from "./symbols";
 
+/**
+ * 연결 실패 차단기 — Stooq 가 먹통이면(2026-09-24 실측: 약 11초 뒤 "fetch failed") 시세마다
+ * 그만큼 기다렸다가 Yahoo 로 넘어가, 개요 화면의 시세 제한시간(12초)을 넘겨 멀티플이
+ * 통째로 비었다. 네트워크 실패가 나면 일정 시간 Stooq 를 건너뛴다(데이터 없음 404 는 해당 안 됨).
+ */
+const STOOQ_TIMEOUT_MS = 4_000;
+const STOOQ_COOLDOWN_MS = 30 * 60 * 1000;
+let stooqDownUntil = 0;
+
 export async function fetchStooqEod(
   market: MarketId,
   symbol: string,
   opts: { from?: string; to?: string } = {},
 ): Promise<QuoteBar[]> {
+  if (Date.now() < stooqDownUntil) {
+    throw new AdapterError("Stooq 연결 불가(차단기 작동 중) — Yahoo 로 폴백", { status: 503 });
+  }
   const s = stooqSymbol(market, symbol);
   const params = new URLSearchParams({ s, i: "d" });
   if (opts.from) params.set("d1", opts.from.replace(/-/g, ""));
   if (opts.to) params.set("d2", opts.to.replace(/-/g, ""));
 
-  const csv = await fetchText(`https://stooq.com/q/d/l/?${params.toString()}`, {
-    revalidate: 60 * 60 * 6,
-    headers: { accept: "text/csv" },
-  });
+  let csv: string;
+  try {
+    csv = await fetchText(`https://stooq.com/q/d/l/?${params.toString()}`, {
+      revalidate: 60 * 60 * 6,
+      headers: { accept: "text/csv" },
+      timeoutMs: STOOQ_TIMEOUT_MS,
+    });
+  } catch (err) {
+    // HTTP 응답을 받은 실패(상태코드 있음)는 종목 문제일 수 있어 차단하지 않는다
+    const st = err instanceof AdapterError ? err.opts.status : undefined;
+    if (!(st && st !== 504)) stooqDownUntil = Date.now() + STOOQ_COOLDOWN_MS;
+    throw err;
+  }
 
   const trimmed = csv.trim();
   if (!trimmed || /no data|exceeded the daily hits limit/i.test(trimmed)) {

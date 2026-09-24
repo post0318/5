@@ -1,7 +1,7 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem, QuoteBar, TtmFlows } from "../types";
 import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries } from "./dart-facts";
-import { buildKrEvResolver, krEpsByYear, krEv, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
+import { buildKrEvResolver, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
  * 한국 분석 지표 — `edgar-analysis.ts` 미러 (섹션·라벨 동일, 개요 요약칩 호환).
@@ -110,13 +110,21 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     o[LTM] = ltm ?? m.get(years[years.length - 1]) ?? null;
     return o;
   };
-  const rev = map(rev0, ttm?.revenue);
+  // TTM 이 있는 흐름 지표(매출·영업이익·순이익·EPS)는 LTM 을 TTM 으로만 채운다 — 최근
+  // 연간값으로 대체하면 하이라이트(TTM 없으면 빈칸)와 화면이 갈린다(오너 지시 2026-09-24,
+  // "빈칸이면 다른 것도 당연히 빈칸 — 1원칙 일관성").
+  const mapTtm = (m: Map<number, number>, ltm: number | null | undefined): Record<string, number | null> => {
+    const o = map(m);
+    o[LTM] = ltm ?? null;
+    return o;
+  };
+  const rev = mapTtm(rev0, ttm?.revenue);
   const gross = map(gross0);
-  const opInc = map(opInc0, ttm?.opIncome);
+  const opInc = mapTtm(opInc0, ttm?.opIncome);
   const pretax = map(pretax0);
   const tax = map(tax0);
-  const ni = map(ni0, ttm?.netIncome);
-  const eps = map(eps0, ttm?.eps);
+  const ni = mapTtm(ni0, ttm?.netIncome);
+  const eps = mapTtm(eps0, ttm?.eps);
   const assets = map(assets0);
   const curAssets = map(curAssets0);
   const curLiab = map(curLiab0);
@@ -142,12 +150,17 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     for (const l of labels) if (o[l] != null) o[l] = Math.abs(o[l]!);
     return o;
   })();
-  // 차입금(리스부채 포함)·현금성자산 — LTM 열은 최근 사업연도말 BS(종전과 같다)
+  // 차입금(리스부채 포함)·현금성자산 — LTM 열은 getTtm 스냅샷(dart-ev.ts krLtmBalance,
+  // 손익 TTM 의 마지막 분기말 — 하이라이트·개요와 같은 값, 오너 결정 2026-09-24).
+  // 스냅샷이 없을 때만 최근 사업연도말.
+  const snap = ttm?.snapshot ?? null;
+  const ltmFromSnap = snap?.evBridge !== undefined;
   const debt = blank();
   const cashTot = blank();
   const nci = blank();
   for (const l of labels) {
-    const b = evRes.bridgeAt(l === LTM ? years[years.length - 1] : Number(l.slice(0, 4)));
+    const b =
+      l === LTM && ltmFromSnap ? (snap!.evBridge ?? null) : evRes.bridgeAt(l === LTM ? years[years.length - 1] : Number(l.slice(0, 4)));
     if (!b) continue;
     debt[l] = b.debt;
     cashTot[l] = b.cash;
@@ -271,11 +284,15 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const per = pos(priceByLabel, eps);
   // PBR 분모는 지배주주 자본(dart-ev.ts — 하이라이트·컨센서스·개요와 같은 값)
   const parentEq = map(krParentEquityByYear(facts));
+  if (ltmFromSnap) parentEq[LTM] = snap!.equity ?? null;
   const pbr = pos(mktcap, parentEq);
   const psr = pos(mktcap, rev);
   const evV = blank();
   for (const l of labels)
-    evV[l] = krEv(evRes, l === LTM ? years[years.length - 1] : Number(l.slice(0, 4)), mktcap[l], prefMcap[l]);
+    evV[l] =
+      l === LTM && ltmFromSnap
+        ? krEvFromBridge(evRes.blocker(), snap!.evBridge ?? null, mktcap[l], prefMcap[l])
+        : krEv(evRes, l === LTM ? years[years.length - 1] : Number(l.slice(0, 4)), mktcap[l], prefMcap[l]);
   const evEbitda = pos(evV, ebitda);
   const fcf = blank();
   for (const l of labels) if (ocf[l] != null && capexAbs[l] != null) fcf[l] = ocf[l]! - capexAbs[l]!;
@@ -448,7 +465,10 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
       { label: LTM, fiscalYear: (years.at(-1) ?? 0) + 1, fiscalQuarter: null, endDate: bars.at(-1)?.date ?? new Date().toISOString().slice(0, 10) },
     ],
     sections: [{ title: "분석 지표", items }],
-    source: facts.source + " + 시세 · 자체 계산",
+    source:
+      facts.source +
+      " + 시세 · 자체 계산" +
+      (ltmFromSnap ? ` · LTM 차입금·현금·PBR 자본: ${snap!.label} 기준` : " · LTM 재무상태표: 최신 분기 스냅샷 없음 — 연말값"),
   };
 
   function avg2(m: Record<string, number | null>): Record<string, number | null> {

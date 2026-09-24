@@ -1,7 +1,7 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { recentQuarters, singleQuarter } from "./edgar-series";
+import { recentQuarters, singleQuarter, fiscalYearOf } from "./edgar-series";
 import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa } from "./edgar-ev";
 import { isFinancialCompany } from "./edgar-financial";
 
@@ -49,7 +49,7 @@ function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
   const m = new Map<number, { val: number; end: string }>();
   for (const e of entries) {
     if (e.fp !== "FY" || !isFullYear(e) || !ANNUAL_FORMS.includes(e.form)) continue;
-    const y = Number(e.end.slice(0, 4));
+    const y = fiscalYearOf(e.end);
     const prev = m.get(y);
     if (!prev || e.end > prev.end) m.set(y, { val: e.val, end: e.end });
   }
@@ -262,7 +262,7 @@ export function buildUsCashFlow(
     const opAnnualEnds = new Map<number, string>();
     for (const e of opEntries)
       if (e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form)) {
-        const y = Number(e.end.slice(0, 4));
+        const y = fiscalYearOf(e.end);
         if (!opAnnualEnds.has(y) || e.end > opAnnualEnds.get(y)!) opAnnualEnds.set(y, e.end);
       }
     periods = years.map((y) => ({

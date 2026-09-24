@@ -4,6 +4,7 @@ import { getAdapter } from "@/lib/markets/registry";
 import { getEodQuote } from "@/lib/markets/quote";
 import { fetchForwardConsensus, fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
 import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
+import { estimatesToUsd } from "@/lib/markets/us/edgar-foreign";
 import { buildUsHighlights } from "@/lib/markets/us/edgar-highlights";
 import { buildUsBankHighlights, isFinancialCompany } from "@/lib/markets/us/edgar-highlights-bank";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
@@ -107,7 +108,7 @@ export async function GET(
     }
 
     const factsRes = await fetchUsCompanyFacts(sym);
-    const [quote, estimates, consensus, classFacts, sic] = await Promise.all([
+    const [quote, estimatesRaw, consensus, classFacts, sic] = await Promise.all([
       getEodQuote(market, sym, { yahooOverride: yahoo }).catch(() => null),
       fetchYahooEstimates(market, sym, yahoo).catch(() => null),
       fetchForwardConsensus(market, sym, yahoo).catch(() => null),
@@ -116,6 +117,8 @@ export async function GET(
     ]);
     // EV 브릿지 맥락 — 금융 자회사 부문 차입금(XBRL 인스턴스), UP-REIT 파트너 지분
     const captive = await loadCaptiveDebt(factsRes.cik, sic).catch(() => null);
+    // 외화 공시 기업 예상치 → USD(edgar-foreign.ts). 환산 실패 시 예상치 숨김(원통화 숫자를 USD 로 섞지 않음)
+    const estimates = estimatesRaw ? await estimatesToUsd(estimatesRaw, factsRes.facts).catch(() => null) : null;
     const opUnits = reitOpUnits(sic, consensus?.sharesOutstanding, consensus?.impliedSharesOutstanding);
 
     const sharesHint = usSharesHint(quote, consensus);
@@ -134,6 +137,8 @@ export async function GET(
           captive,
           opUnits,
         });
+    if (estimates && "fxNote" in estimates && estimates.fxNote) highlights.notes.push(estimates.fxNote);
+    if (estimatesRaw && !estimates) highlights.notes.push("외화 예상치 환산 실패 — 예상치 숨김");
 
     return ok(
       { highlights },

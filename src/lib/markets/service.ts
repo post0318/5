@@ -143,6 +143,12 @@ export async function getStockOverview(
     });
   }
 
+  // 미국은 시가총액을 공통 주식수(edgar-shares — EDGAR·인포맥스 보정)로만 낸다. 재무를
+  // 건너뛴 호출(개요 화면 첫 응답)은 그 주식수가 없어 Yahoo 시가총액이 남는데, Yahoo
+  // 주식수는 한 분기 늦는 경우가 있다(WMT = 직전 분기 표지, 2026-09-24 실측) → 비운다.
+  // 화면은 재무 도착 후 같은 기준으로 다시 계산한다(stock-analysis.tsx).
+  if (market === "us" && !wantAnnual && multiples) multiples = { ...multiples, marketCap: null };
+
   return {
     market,
     symbol,

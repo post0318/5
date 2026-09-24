@@ -1,4 +1,5 @@
 import "server-only";
+import { fiscalYearOf } from "./edgar-series";
 import { fetchJson, fetchText } from "../http";
 import type { CompanyFacts } from "./edgar";
 
@@ -128,7 +129,7 @@ function facts(xml: string, ctxs: Map<string, Ctx>, tag: string): Fact[] {
     }
     const val = Number(m[2].trim());
     if (!Number.isFinite(val)) continue;
-    out.push({ fy: Number(ctx.end.slice(0, 4)), end: ctx.end, val });
+    out.push({ fy: fiscalYearOf(ctx.end), end: ctx.end, val });
   }
   return out;
 }
@@ -159,7 +160,7 @@ function instantSharesOutstanding(
     if (!ctx || !ctx.end || ctx.start) continue; // instant 만
     const val = Number(m[2].trim());
     if (!Number.isFinite(val)) continue;
-    const fy = Number(ctx.end.slice(0, 4));
+    const fy = fiscalYearOf(ctx.end);
     const cur = acc.get(fy) ?? { end: ctx.end, parts: new Map<string, number>() };
     const equityDim = ctx.dims.find(([axis]) => axis === "StatementEquityComponentsAxis");
     const classDim = ctx.dims.find(([axis]) => axis === "StatementClassOfStockAxis");

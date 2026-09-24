@@ -3,6 +3,7 @@ import { getAdapter } from "../registry";
 import { resolveCorpCode } from "./corpcode";
 import { type KrFacts, fetchKrFacts, annualSeries } from "./dart-facts";
 import { getEodQuote } from "../quote";
+import { krParentEquityByYear } from "./dart-ev";
 
 /**
  * 유니버스 통합뷰용 한국 종목 지표 — DART(account_id 기반, dart-facts) + KRX 시세.
@@ -21,7 +22,6 @@ export interface KrOverviewMetrics {
   currency: "KRW" | null;
 }
 
-const EQUITY = { ids: ["ifrs-full_Equity"], names: ["자본총계"] };
 const IS = ["IS", "CIS"];
 const REV = { ids: ["ifrs-full_Revenue", "dart_Revenue"], names: ["매출액", "수익(매출액)", "영업수익"] };
 const OPI = { ids: ["dart_OperatingIncomeLoss", "ifrs-full_ProfitLossFromOperatingActivities"], names: ["영업이익"] };
@@ -61,9 +61,14 @@ export async function computeKrOverviewMetrics(
   const shares = quote?.sharesOutstanding ?? null;
   const marketCap = quote?.marketCap ?? (price != null && shares != null ? price * shares : null);
 
-  let equity: number | null = null;
-  if (facts) {
-    const eq = annualSeries(facts, EQUITY.ids, EQUITY.names, "BS");
+  // PBR 분모 — LTM 기준(getTtm 스냅샷, dart-ev.ts krLtmBalance: 손익 TTM 의 마지막 분기말
+  // 지배주주 자본 — 하이라이트·개요와 같은 값, 오너 결정 2026-09-24). 스냅샷이 없을 때만
+  // 최근 사업연도말.
+  let equity: number | null = ttm?.snapshot ? (ttm.snapshot.equity ?? null) : null;
+  if (!ttm?.snapshot && facts) {
+    // PBR 분모 = 지배주주 자본(dart-ev.ts 공통 — 하이라이트·재무분석·개요와 같은 값). 예전엔
+    // 비지배지분 포함 자본총계를 써서 유니버스 PBR 만 최대 31% 달랐다(LG에너지솔루션, 검증 2026-09-24).
+    const eq = krParentEquityByYear(facts);
     const years = [...eq.keys()].sort((a, b) => b - a);
     equity = years.length ? (eq.get(years[0]) ?? null) : null;
   }
@@ -74,9 +79,12 @@ export async function computeKrOverviewMetrics(
   const netIncome = ttm?.netIncome ?? (facts ? latestOf(facts, NI.ids, NI.names, IS) : null);
   const eps = ttm?.eps ?? null;
 
+  // EPS 가 있으면(적자 포함) 그것만으로 판정 — 적자면 비움. 없을 때만 시총÷순이익
   const perTtm =
-    price != null && eps != null && eps > 0
-      ? price / eps
+    eps != null
+      ? price != null && eps > 0
+        ? price / eps
+        : null
       : marketCap != null && netIncome != null && netIncome > 0
         ? marketCap / netIncome
         : null;

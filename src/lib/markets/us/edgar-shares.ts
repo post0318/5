@@ -4,8 +4,7 @@ import {
   ANNUAL_FORMS,
   entriesOf,
   isFullYearDuration,
-  splitFactorsByYear,
-} from "./edgar-series";
+  splitFactorsByYear, fiscalYearOf } from "./edgar-series";
 import {
   classALatest,
   classAOutstanding,
@@ -91,7 +90,7 @@ function annualOf(entries: FactUnitEntry[], year: number): number | null {
   let best: { val: number; end: string; filed: string } | null = null;
   for (const e of entries) {
     if (!isAnnual(e) || e.val == null) continue;
-    if (Number(e.end.slice(0, 4)) !== year) continue;
+    if (fiscalYearOf(e.end) !== year) continue;
     const filed = e.filed ?? "";
     if (!best || e.end > best.end || (e.end === best.end && filed >= best.filed))
       best = { val: e.val, end: e.end, filed };
@@ -135,6 +134,10 @@ export interface ShareResolver {
   /** 공시 주식수를 못 찾아 힌트(시총÷주가 등)로 대체한 적이 있는지. */
   usedHint(): boolean;
 }
+
+/** EDGAR 표지 기준일이 이보다 오래되면 Yahoo 현재 주식수를 채택한다(인포맥스 실패 시).
+ *  분기 공시 간격(~91일)의 절반 — INTC 는 표지 07-17 뒤 08-12 증자. */
+const YAHOO_AFTER_COVER_DAYS = 45;
 
 export function buildShareResolver(
   facts: CompanyFacts,
@@ -204,6 +207,16 @@ export function buildShareResolver(
       );
       const plausible = (v: number | null): v is number =>
         v != null && v > 0 && (ref == null || (v / ref <= 1.5 && v / ref >= 1 / 1.5));
+      // 현재 주식수 보정(current-shares.ts, 오너 결정 2026-09-24) — 인포맥스는 그대로,
+      // Yahoo 는 EDGAR 표지가 오래됐을 때만(표지 뒤 증자·자사주 반영용. Yahoo 는 옛 값이
+      // 남는 경우가 있어 — MRVL +2.5% — 표지가 최근이면 EDGAR 를 믿는다).
+      const cs = facts.currentShares ?? null;
+      if (cs && plausible(cs.val)) {
+        if (cs.source === "infomax") return cs.val;
+        const coverEnd = lastDei?.end ?? null;
+        const coverAgeDays = coverEnd ? (Date.now() - Date.parse(coverEnd)) / 86_400_000 : Infinity;
+        if (coverAgeDays > YAHOO_AFTER_COVER_DAYS) return cs.val;
+      }
       const candidates = [
         latestInstantOf(dei),
         latestInstantOf(sharesEnd),

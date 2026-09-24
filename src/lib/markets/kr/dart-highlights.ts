@@ -6,7 +6,7 @@ import type {
   HighlightRow,
 } from "../us/edgar-highlights";
 import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries } from "./dart-facts";
-import { buildKrEvResolver, krEpsByYear, krEv, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
+import { buildKrEvResolver, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
  * 한국 재무 하이라이트 (개요) — `edgar-highlights.ts` 미러.
@@ -128,15 +128,26 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   const prefMcap = columns.map((c) =>
     c.kind === "estimate" ? null : c.kind === "ltm" ? (caps?.current?.preferred ?? null) : (caps?.byYear.get(cy(c))?.preferred ?? null),
   );
-  // LTM 열의 재무상태표는 최근 사업연도말(분기 BS 미보유) — 종전과 같다
-  const bsYear = (c: HighlightColumn) => (c.kind === "fy" ? cy(c) : lastFy);
-  const bridge = columns.map((c) => (c.kind === "estimate" ? null : evRes.bridgeAt(bsYear(c))));
+  // LTM 열의 재무상태표 = getTtm 스냅샷(dart-ev.ts krLtmBalance — 손익 TTM 의 마지막
+  // 분기말, 오너 결정 2026-09-24). 개요 멀티플·재무분석과 같은 값·같은 기준일. 스냅샷이
+  // 없으면(TTM 조회 실패) 최근 사업연도말로 두고 주석에 적는다.
+  const snap = ttm?.snapshot ?? null;
+  const ltmFromSnap = snap?.evBridge !== undefined;
+  const bridge = columns.map((c) =>
+    c.kind === "estimate" ? null : c.kind === "ltm" && ltmFromSnap ? (snap!.evBridge ?? null) : evRes.bridgeAt(c.kind === "fy" ? cy(c) : lastFy),
+  );
   const cashCol = bridge.map((b) => b?.cash ?? null);
   const debtCol = bridge.map((b) => b?.debt ?? null);
   const nciCol = bridge.map((b) => b?.nci ?? null);
-  const equityCol = columns.map((c) => (c.kind === "estimate" ? null : at(aEquity, bsYear(c))));
+  const equityCol = columns.map((c) =>
+    c.kind === "estimate" ? null : c.kind === "ltm" && ltmFromSnap ? (snap!.equity ?? null) : at(aEquity, c.kind === "fy" ? cy(c) : lastFy),
+  );
   const ev = columns.map((c, i) =>
-    c.kind === "estimate" ? null : krEv(evRes, bsYear(c), marketCap[i], prefMcap[i]),
+    c.kind === "estimate"
+      ? null
+      : c.kind === "ltm" && ltmFromSnap
+        ? krEvFromBridge(evBlocker, bridge[i], marketCap[i], prefMcap[i])
+        : krEv(evRes, c.kind === "fy" ? cy(c) : lastFy, marketCap[i], prefMcap[i]),
   );
 
   // 추정(estimate) 열은 네이버 컨센서스 매출액·영업이익·순이익을 그대로 쓴다(우선순위)
@@ -253,6 +264,11 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     "EV = 보통주 + 우선주 시가총액(우선주 자체 시세) + 총차입금(차입금·사채·리스부채) + 비지배지분 − 현금성자산(현금 + 단기금융상품 + 단기 상각후원가·당기손익 금융자산)",
     "EBITDA = 영업이익 + 감가상각비 (사업보고서 XBRL 주석 실측)",
   ];
+  notes.push(
+    ltmFromSnap
+      ? `현재/LTM 열 재무상태표(현금·차입금·비지배지분·자본): ${snap!.label} 기준`
+      : `현재/LTM 열 재무상태표: 최신 분기 스냅샷 없음 — FY${lastFy} 연말값`,
+  );
   if (approxMcap) notes.push("일부 연도 시가총액: KRX 조회 실패 → 연말 종가 × 현재 상장주식수 근사");
   if (evBlocker === "financial") notes.push("금융업 — EV·EV/EBITDA 는 계산하지 않음(예금·보험부채가 영업용 부채)");
   if (evBlocker === "captive-unsplit")

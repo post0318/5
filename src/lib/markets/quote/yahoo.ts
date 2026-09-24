@@ -68,7 +68,7 @@ interface QuoteSummaryResult {
     sharesPercentSharesOut?: number;
     shortPercentOfFloat?: number;
   };
-  price?: { marketCap?: number };
+  price?: { marketCap?: number; regularMarketPrice?: number };
   financialData?: {
     targetMeanPrice?: number;
     targetHighPrice?: number;
@@ -406,6 +406,40 @@ export async function fetchYahooEod(
     }
   }
   throw new AdapterError(`Yahoo 시세 조회 실패: ${candidates.join(", ")}`, { cause: lastErr });
+}
+
+/**
+ * Yahoo 기준 현재 발행주식수 = 시가총액 ÷ 현재가(전 클래스 경제적 주식수 — usSharesHint 와
+ * 같은 정의). 미국 현재 주식수의 최후 폴백(us/current-shares.ts) 전용.
+ */
+/**
+ * 환율 일별 종가 — "통화 1단위당 USD". 외화 공시 기업(20-F·외화 10-K)의 재무를 USD 로
+ * 환산할 때 쓴다(us/edgar-foreign.ts). Yahoo 는 EURUSD=X(USD/EUR)·TWD=X(TWD/USD)처럼
+ * 쌍마다 방향이 달라, `{통화}USD=X` 를 먼저 보고 없으면 `{통화}=X` 를 뒤집는다.
+ */
+export async function fetchFxToUsdDaily(currency: string, from = "2014-01-01"): Promise<{ date: string; rate: number }[]> {
+  const pull = async (sym: string) => {
+    const c = await yf().chart(sym, { period1: from, interval: "1d" });
+    return c.quotes
+      .filter((q) => q.close != null && q.close > 0)
+      .map((q) => ({ date: isoDate(q.date), close: q.close as number }));
+  };
+  try {
+    const direct = await pull(`${currency}USD=X`);
+    if (direct.length > 100) return direct.map((q) => ({ date: q.date, rate: q.close }));
+  } catch {
+    /* 반대 방향 쌍으로 */
+  }
+  const inv = await pull(`${currency}=X`);
+  if (!inv.length) throw new AdapterError(`환율 없음: ${currency}`, { status: 502 });
+  return inv.map((q) => ({ date: q.date, rate: 1 / q.close }));
+}
+
+export async function fetchYahooShares(symbol: string): Promise<number | null> {
+  const qs = await yf().quoteSummary(yahooSymbol("us", symbol), { modules: ["price"] });
+  const mc = qs.price?.marketCap;
+  const px = qs.price?.regularMarketPrice;
+  return mc && px ? mc / px : null;
 }
 
 export async function fetchForwardConsensus(

@@ -19,12 +19,19 @@ import {
   type TtmFlows,
 } from "../types";
 import { type FactEntry, latestInstant, ttmFlow } from "./edgar-fundamentals";
-import { dropRoundedRetags, splitFactorsByYear } from "./edgar-series";
+import { dropRoundedRetags, splitFactorsByYear, fiscalYearOf } from "./edgar-series";
 import { buildEvResolver, daAnnualByYear, daTtm, SYN_OP_INCOME, withOpIncome, type EvContext } from "./edgar-ev";
 import { loadCaptiveDebt } from "./edgar-captive";
 import { buildShareResolver } from "./edgar-shares";
+import { withFilingGapFill } from "./edgar-gapfill";
+import { toAdrBasis, withForeignNormalization } from "./edgar-foreign";
+import { withContentAmortization } from "./edgar-content";
+import { withRevenueDims } from "./edgar-revenue-dims";
+import { withIncomeStatementStructure } from "./edgar-is-structure";
+import { withOneOffCharges } from "./edgar-oneoff";
+import { loadUsCurrentShares, type CurrentShares } from "./current-shares";
 import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
-import { isFinancialCompany } from "./edgar-financial";
+import { FIN_NET_REVENUE, isFinancialCompany, withFinNetRevenue } from "./edgar-financial";
 import { loadClassAFacts } from "./class-facts-loader";
 import type { ClassAFacts } from "./edgar-classfacts";
 
@@ -61,7 +68,10 @@ async function loadTickerMap(): Promise<Map<string, TickerRow>> {
 
 /**
  * company_tickers.json 이 잘못된 엔티티로 매핑하는 티커 보정.
- * XOM: 신설 지주사 "ExxonMobil Holdings Corp"(2115436, XBRL 재무 없음) → 영업회사 Exxon Mobil Corp.
+ * XOM: 신설 지주사 "ExxonMobil Holdings Corp"(2115436) → 영업회사 Exxon Mobil Corp(34088).
+ * 과거 재무는 34088 에만 있다. 2026-07-01 재편 뒤 공시(2분기 10-Q~)는 XBRL 이 새 CIK
+ * 로만 집계되지만 34088 공시 목록에도 공동 제출로 올라오므로 edgar-gapfill.ts 가
+ * 인스턴스에서 채운다(없으면 LTM 이 03-31 에 멈춘다 — 2026-09-24 실측).
  */
 const CIK_OVERRIDE: Record<string, number> = {
   XOM: 34088,
@@ -158,8 +168,24 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
   )
     // 반올림 재태깅 제거 + 영업이익 단일 기준 합성(edgar-ev.ts) — 모든 소비 모듈이
     // 같은 정제본을 쓰게 로더에서 한 번만
-    .then((raw) => {
-      const data = withOpIncome(dropRoundedRetags(raw));
+    // companyfacts 누락 공시·복수 클래스 표지 주식수 보완(edgar-gapfill.ts) → 정제
+    .then(async (raw) => {
+      const sub = await getSubmissions(cik).catch(() => null);
+      const recent = sub?.filings.recent ?? null;
+      const filled = await withFilingGapFill(cik, raw, recent).catch(() => raw);
+      // 외화·IFRS 공시(ASML·TSM·SPOT) → us-gaap·USD(edgar-foreign.ts). 환율 조회 실패 시 원본을 쓴다 —
+      // 앱은 USD 단위만 읽으므로 원통화 숫자가 USD 로 섞이지 않고 빈칸이 된다.
+      const normalized = await withForeignNormalization(filled).catch(() => filled);
+      // 콘텐츠 상각(NFLX 등 미디어) → 감가상각비에 포함(edgar-content.ts, 오너 결정 2026-09-24)
+      const withContent = await withContentAmortization(cik, normalized, recent, sub?.sic ? Number(sub.sic) : null).catch(() => normalized);
+      // 총수익 안의 지분법·기타수익 분리(XOM — 영업이익 태그 없는 회사, edgar-revenue-dims.ts)
+      const withDims = await withRevenueDims(cik, withContent, recent).catch(() => withContent);
+      // 영업이익 소계가 없는 손익계산서 — 계산 구조로 영업외 항목 분리(DIS·FOXA, edgar-is-structure.ts)
+      const withIs = await withIncomeStatementStructure(cik, withDims, recent, sub?.sic ? Number(sub.sic) : null).catch(() => withDims);
+      const sicN = sub?.sic ? Number(sub.sic) : null;
+      // 손익계산서 별도 줄로 공시된 일회성비용(주석 행, edgar-oneoff.ts)
+      const withOneOff = await withOneOffCharges(cik, withIs, recent).catch(() => withIs);
+      const data = withOpIncome(dropRoundedRetags({ ...withOneOff, financialSector: sicN != null && sicN >= 6000 && sicN <= 6499 }));
       factsCache.set(cik, { at: Date.now(), data });
       return data;
     })
@@ -175,7 +201,22 @@ export async function fetchUsCompanyFacts(
   symbol: string,
 ): Promise<{ cik: string; facts: CompanyFacts }> {
   const { cik } = await resolveCik(symbol);
-  return { cik, facts: await getCompanyFacts(cik) };
+  return { cik, facts: await getSymbolFacts(cik, symbol) };
+}
+
+/**
+ * 종목 단위 companyfacts — CIK 캐시본에 현재 주식수 보정값(current-shares.ts)을 얹는다.
+ * 주식수 해석(edgar-shares.ts)을 쓰는 모든 경로가 이 함수를 거쳐야 화면끼리 같은
+ * 시가총액이 나온다. 캐시본은 CIK 단위라 복사본에 붙인다(GOOG·GOOGL 공유).
+ */
+async function getSymbolFacts(cik: string, symbol: string): Promise<CompanyFacts> {
+  const [facts, currentShares] = await Promise.all([
+    getCompanyFacts(cik),
+    loadUsCurrentShares(symbol).catch(() => null),
+  ]);
+  // 20-F ADR(TSM 1:5) — 주식수·주당 값을 ADR 1주 기준으로(edgar-foreign.ts toAdrBasis)
+  const adr = toAdrBasis(facts, currentShares?.val);
+  return { ...adr.facts, currentShares };
 }
 
 /** SIC 코드 (은행·카드사 등 금융회사 레이아웃 분기 판정용). */
@@ -200,6 +241,25 @@ export interface FactUnitEntry {
 }
 export interface CompanyFacts {
   entityName: string;
+  /** 현재 주식수 보정값(인포맥스 → Yahoo) — 종목 단위 로더만 채운다 */
+  currentShares?: CurrentShares | null;
+  /** 공시 통화(외화 공시면 USD 로 환산됨 — edgar-foreign.ts) */
+  reportingCurrency?: string;
+  /** IFRS 개념을 us-gaap 으로 매핑했는지 */
+  ifrsMapped?: boolean;
+  /** ADR 1주 = 보통주 몇 주(1 이면 1:1) */
+  adrRatio?: number;
+  /** 감가상각비에 콘텐츠 상각을 포함했는지(edgar-content.ts) */
+  contentAmortization?: boolean;
+  /** 총수익에서 지분법·기타수익을 분리했는지(edgar-revenue-dims.ts) */
+  nonopInRevenues?: boolean;
+  /** 은행·증권·보험(SIC 6000~6499) — 이자가 본업이라 영업이익 근사에 이자를 더하지 않는다. 리츠·부동산(65xx·67xx)은
+   *  아니다 — 이자가 조달비용이라 빼면 EBITDA 가 줄고 EV/EBITDA 가 부푼다(재감사 2026-09-24: VTR −28%) */
+  financialSector?: boolean;
+  /** 손익계산서 계산 구조로 영업외 항목을 분리했는지(edgar-is-structure.ts) */
+  opIncomeFromStructure?: boolean;
+  /** 영업이익 태그가 부문 주석에만 있어 쓰지 않았는지(DIS) */
+  segmentOpIncomeOnly?: boolean;
   facts: {
     "us-gaap"?: Record<
       string,
@@ -292,15 +352,24 @@ function buildUsTtm(
       "USD/shares",
     ]),
   );
+  // 은행·카드사는 매출 = 순수익(이자비용 차감 합성값) — 하이라이트·손익계산서와 같은 정의.
+  // 예전엔 여기만 총매출(Revenues)을 써서 JPM 개요 PSR 이 하이라이트와 9.3% 갈렸다(검증 2026-09-24).
+  const revFacts = evCtx.isFinancial ? withFinNetRevenue(facts) : facts;
   const revenue = ttmFlow(
     factEntries(
-      facts,
+      revFacts,
       "us-gaap",
-      [
-        "RevenueFromContractWithCustomerExcludingAssessedTax",
-        "RevenueFromContractWithCustomerIncludingAssessedTax",
-        "Revenues",
-      ],
+      evCtx.isFinancial
+        ? FIN_NET_REVENUE
+        : [
+            // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
+            // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
+            "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
+            "Revenues",
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "RevenueFromContractWithCustomerIncludingAssessedTax",
+            "RevenuesNetOfInterestExpense", // 증권사·투자은행(GS·MS)
+          ],
       ["USD"],
     ),
   );
@@ -472,7 +541,7 @@ const CONCEPTS: ConceptSpec[] = [
 function periodKey(e: FactUnitEntry): string {
   // 연간은 종료 연도로 키를 잡는다 → 최신 10-K 의 재작성된 비교연도(액면분할 소급 등)를
   // 원 공시값 대신 채택할 수 있다. (e.fy 는 "공시" 회계연도라 비교연도 값이 엉뚱한 키로 감)
-  return e.fp === "FY" ? `FY${e.end.slice(0, 4)}` : `${e.fy} ${e.fp}`;
+  return e.fp === "FY" ? `FY${fiscalYearOf(e.end)}` : `${e.fy} ${e.fp}`;
 }
 
 function pickEntries(
@@ -560,7 +629,7 @@ export const usEdgarAdapter: MarketAdapter = {
         if (!periodMeta.has(key)) {
           periodMeta.set(key, {
             label: key,
-            fiscalYear: e.fp === "FY" ? Number(e.end.slice(0, 4)) : e.fy,
+            fiscalYear: e.fp === "FY" ? fiscalYearOf(e.end) : e.fy,
             fiscalQuarter: e.fp === "FY" ? null : Number(e.fp.replace("Q", "")),
             endDate: e.end,
           });
@@ -627,7 +696,7 @@ export const usEdgarAdapter: MarketAdapter = {
     try {
       const { cik } = await resolveCik(symbol);
       const [facts, sic] = await Promise.all([
-        getCompanyFacts(cik),
+        getSymbolFacts(cik, symbol),
         getSubmissions(cik).then((s) => s.sic ?? null).catch(() => null),
       ]);
       const [captive, classFacts] = await Promise.all([

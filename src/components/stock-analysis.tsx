@@ -442,13 +442,15 @@ export function StockAnalysis({
   const ttmEps =
     jpY
       ? (jpY.trailingEps ?? null)
-      : ttm?.eps != null && ttm.eps > 0
+      : ttm?.eps != null
         ? ttm.eps
         : ttm?.netIncome != null && multiples?.inputs.shares
           ? ttm.netIncome / multiples.inputs.shares
           : null;
-  const ownTtmPer = price != null && ttmEps ? price / ttmEps : null;
-  const trailingPer = ownTtmPer ?? cons?.trailingPer ?? null;
+  // 부호 규칙(전 화면 공통): EPS 가 0 이하면 PER 은 비운다. 적자라서 비운 것이므로
+  // Yahoo PER 로 대체하지 않는다 — 자체 TTM 이 아예 없을 때만 Yahoo 폴백.
+  const ownTtmPer = price != null && ttmEps != null && ttmEps > 0 ? price / ttmEps : null;
+  const trailingPer = ttmEps != null ? ownTtmPer : (cons?.trailingPer ?? null);
 
   const pbrVal = jpY?.pbr ?? multiples?.pbr ?? null;
   const bpsVal = jpY?.bps ?? multiples?.bps ?? null;
@@ -1193,8 +1195,8 @@ function RightsDetail({ e, market }: { e: RightsEvent; market: MarketId }) {
     return (
       <span className="tnum">
         {market === "us"
-          ? `주당 $${e.dividendPerShare.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          : `주당 ${e.dividendPerShare.toLocaleString()}원`}
+          ? `주당 $${formatNumber(e.dividendPerShare, 2)}` /* toLocaleString 은 반올림 — 전 화면 버림 규칙 */
+          : `주당 ${formatNumber(e.dividendPerShare, 0)}원`}
         {e.dividendYield != null && (
           <span className="text-muted-foreground">
             {" "}· 수익률 {e.dividendYield}%{market === "us" ? " (연환산)" : ""}

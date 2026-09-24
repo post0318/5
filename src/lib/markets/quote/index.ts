@@ -1,7 +1,12 @@
 /**
  * L2 EOD 시세 오케스트레이터 (prd.md §4.1)
- * 한국: KRX(키 있으면, 마지막 거래일치가 비어 있으면 Stooq→Yahoo로 그 날만 보강) → Stooq → Yahoo
- * 미국·일본: Stooq → Yahoo(개인용)
+ * 한국: KRX(키 있으면, 마지막 거래일치가 비어 있으면 Yahoo→Stooq로 그 날만 보강) → Yahoo → Stooq
+ * 미국·일본: Yahoo(개인용) → Stooq
+ *
+ * Yahoo 1순위(오너 결정 2026-09-24). Stooq 는 2026-09 부터 연결 자체가 안 돼(TCP 연결 시간
+ * 초과 — 이 PC·외부 fetch 모두) 시세마다 약 11초를 기다린 뒤 Yahoo 로 넘어갔고, 개요의
+ * 시세 제한시간(12초)을 넘겨 멀티플이 비는 원인이었다. 화면 값은 이미 Yahoo 값이었다.
+ * Stooq 는 마지막 폴백으로만 남긴다(stooq.ts 차단기로 먹통이면 즉시 건너뜀).
  */
 
 import { MARKET_CURRENCY, type EodQuote, type MarketId, type QuoteBar } from "../types";
@@ -57,15 +62,20 @@ export async function getEodQuote(
     }
   }
 
+  let yahooErr: unknown;
+  try {
+    const bars = await fetchYahooEod(market, symbol, opts);
+    if (bars.length > 0) return buildQuote(market, symbol, bars, "Yahoo Finance");
+  } catch (e) {
+    yahooErr = e;
+  }
   try {
     const bars = await fetchStooqEod(market, symbol, opts);
     if (bars.length > 0) return buildQuote(market, symbol, bars, "Stooq");
   } catch {
-    // Stooq 실패 → Yahoo 폴백
+    // Stooq 도 실패 — Yahoo 오류를 올린다
   }
-
-  const bars = await fetchYahooEod(market, symbol, opts);
-  return buildQuote(market, symbol, bars, "Yahoo Finance");
+  throw yahooErr ?? new Error(`시세 없음: ${market}:${symbol}`);
 }
 
 /** KST 기준 현재 시각의 연/월/일/시/분/요일(0=일 ~ 6=토). 서버 실행 TZ와 무관하게 항상 KST로 계산. */
@@ -110,21 +120,21 @@ function mostRecentCompletedKrSessionDate(now: Date = new Date()): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Stooq → Yahoo 순으로 시도해 종가 바(bar)를 가져온다. 둘 다 실패하면 null. */
+/** Yahoo → Stooq 순으로 시도해 종가 바(bar)를 가져온다. 둘 다 실패하면 null. */
 async function fetchSupplementBars(
   market: MarketId,
   symbol: string,
   opts: { from?: string; to?: string; yahooOverride?: string | null },
 ): Promise<{ bars: QuoteBar[]; source: string } | null> {
   try {
-    const bars = await fetchStooqEod(market, symbol, opts);
-    if (bars.length > 0) return { bars, source: "Stooq" };
+    const bars = await fetchYahooEod(market, symbol, opts);
+    if (bars.length > 0) return { bars, source: "Yahoo Finance" };
   } catch {
     // 다음 소스로
   }
   try {
-    const bars = await fetchYahooEod(market, symbol, opts);
-    if (bars.length > 0) return { bars, source: "Yahoo Finance" };
+    const bars = await fetchStooqEod(market, symbol, opts);
+    if (bars.length > 0) return { bars, source: "Stooq" };
   } catch {
     // 보강 실패 — KRX 값만 쓴다
   }

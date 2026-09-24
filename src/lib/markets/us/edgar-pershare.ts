@@ -111,10 +111,15 @@ export function fyEps(
 ): { eps: number | null; approx: boolean } {
   const sf = splitFactorsByYear(facts).get(year) ?? 1;
   const rep = annualByYear(entriesOf(facts, "EarningsPerShareDiluted", "USD/shares")).get(year);
+  const ni = annualByYear(niToCommonEntries(facts)).get(year);
+  // 순이익이 있는데 공시 EPS 가 정확히 0 = 자리표시자. CEG 2020·2021(2022-02 분사 전)은
+  // EPS·가중평균주식수를 0 으로 태깅했다 → 앱이 "EPS 0, 순이익 −2.05억 달러"를 냈다
+  // (검증 2026-09-24). 상장 전이라 주당 값이 없는 해이므로 근사로 만들지 않고 비운다.
+  const netForCheck = ni ?? opts.fyNetIncome ?? null;
+  if (rep === 0 && netForCheck != null && netForCheck !== 0) return { eps: null, approx: false };
   if (rep != null) return { eps: rep * sf, approx: false };
   const ca = classAEps(opts.classFacts ?? null, year, "diluted");
   if (ca != null) return { eps: ca, approx: false };
-  const ni = annualByYear(niToCommonEntries(facts)).get(year);
   const wsh = annualByYear(entriesOf(facts, "WeightedAverageNumberOfDilutedSharesOutstanding", "shares")).get(year);
   if (ni != null && wsh) return { eps: (ni / wsh) * sf, approx: false };
   if (opts.fyNetIncome != null && opts.fyShares) return { eps: opts.fyNetIncome / opts.fyShares, approx: true };

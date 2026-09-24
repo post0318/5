@@ -9,7 +9,7 @@
 
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
-import { isStaleAnnual, splitFactorsByYear } from "./edgar-series";
+import { isStaleAnnual, splitFactorsByYear, fiscalYearOf } from "./edgar-series";
 import { buildShareResolver } from "./edgar-shares";
 import {
   ltmEps,
@@ -75,10 +75,15 @@ const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
 const INTERIM_FORMS = ["10-Q", "10-Q/A"];
 
 const REVENUE = [
+  // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
+  // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
+  "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
+  "Revenues",
   "RevenueFromContractWithCustomerExcludingAssessedTax",
   "RevenueFromContractWithCustomerIncludingAssessedTax",
-  "Revenues",
   "SalesRevenueNet",
+  // 증권사·투자은행(GS·MS)은 순수익만 공시 — 없으면 연도 열이 빠지거나(GS) 옛 연도에 멈췄다(MS 2010~2014, 검증 2026-09-24)
+  "RevenuesNetOfInterestExpense",
 ];
 // 영업이익 태그 자체가 없는 회사(XOM 등 — 매출→세전이익 구조) 최후 폴백.
 const PRETAX_CONCEPTS = [
@@ -115,7 +120,7 @@ function annualSeries(entries: FactUnitEntry[]): { year: number; val: number; en
   const m = new Map<number, { val: number; end: string; filed: string }>();
   for (const e of entries) {
     if (e.fp !== "FY" || !isFullYear(e) || !ANNUAL_FORMS.includes(e.form)) continue;
-    const year = Number(e.end.slice(0, 4));
+    const year = fiscalYearOf(e.end);
     const prev = m.get(year);
     const filed = e.filed ?? "";
     // 최신 종료일, 동률이면 최신 공시(액면분할 등 소급 재작성) 우선
@@ -206,6 +211,11 @@ export function buildUsHighlights(
   const shareRes = buildShareResolver(facts, { classFacts: cf, sharesHint: fallbackShares });
   // EV 브릿지·감가상각비 단일 기준 — edgar-analysis.ts·multiples·컨센서스와 공유.
   const evRes = buildEvResolver(facts, evCtx ?? {});
+  // 금융 자회사 보유로 EV 를 비우는 회사도 차입금·현금은 연결 기준으로 보여준다 — 대차대조표 주석
+  // (edgar-balance.ts, 같은 무맥락 resolver)과 같은 값. 예전엔 EV 와 함께 이 행들까지 비워
+  // 화면끼리 한쪽만 빈칸이었다(GM·F, 검증 2026-09-24).
+  const evResConsolidated = buildEvResolver(facts);
+  let consolidatedShown = false;
 
   // ── 컬럼 구성 ────────────────────────────────────────────────────
   const revSeries = annualSeriesMerged(facts, REVENUE);
@@ -232,7 +242,7 @@ export function buildUsHighlights(
   const estCols: { period: HighlightEstimatePeriod; year: number }[] = [];
   for (const p of estimates) {
     if (!["0y", "+1y", "+2y"].includes(p.period)) continue;
-    const year = p.endDate ? Number(p.endDate.slice(0, 4)) : null;
+    const year = p.endDate ? fiscalYearOf(p.endDate) : null;
     if (year == null || year <= lastFy) continue;
     if (estCols.some((e) => e.year === year)) continue;
     estCols.push({ period: p, year });
@@ -404,6 +414,14 @@ export function buildUsHighlights(
       const opv = evCtx?.opUnits && price != null ? evCtx.opUnits * price : null;
       opUnitValue[i] = opv;
       ev[i] = evRes.evAt(asOf, mc, price);
+    } else if (block === "captive-unsplit") {
+      const cb = evResConsolidated.bridgeAt(asOf);
+      if (cb) {
+        cash[i] = cb.cash;
+        debt[i] = cb.debt;
+        preferred[i] = cb.preferred + cb.nci;
+        consolidatedShown = true;
+      }
     }
   });
 
@@ -562,6 +580,18 @@ export function buildUsHighlights(
   ];
 
   notes.push("실적·재무상태표·현금흐름: SEC EDGAR companyfacts (GAAP 보고치)");
+  if (facts.reportingCurrency && facts.reportingCurrency !== "USD")
+    notes.push(`외화 공시(${facts.reportingCurrency}${facts.ifrsMapped ? " · IFRS" : ""}) → USD 환산: 손익·현금흐름은 기간 평균 환율, 재무상태표는 기말 환율 (Yahoo 일별 환율 — 인포맥스와 같은 방식)`);
+  if (facts.nonopInRevenues)
+    notes.push("매출·영업이익: 공시 총수익에서 지분법 이익·기타수익을 뺀 값(10-K·10-Q 원본의 제품·서비스 구분) — 인포맥스·MarketScreener·Yahoo 매출과 같은 기준");
+  if (facts.opIncomeFromStructure)
+    notes.push(`영업이익: 손익계산서에 영업이익 소계가 없어 세전이익에서 영업외 항목(이자·지분법·영업외손익)을 뺀 값(공시 계산 구조 그대로, 구조조정·손상은 영업 항목)${facts.segmentOpIncomeOnly ? " — 공시의 영업이익 태그는 부문 영업이익 합계(주석)라 쓰지 않음" : ""}`);
+  if (facts.segmentOpIncomeOnly && !facts.opIncomeFromStructure)
+    notes.push("영업이익: 공시의 영업이익 태그가 손익계산서가 아닌 부문·조정 이익이라 쓰지 않고 세전이익 기준(금융업은 이자가 본업)");
+  if (facts.contentAmortization)
+    notes.push("감가상각비·EBITDA 에 콘텐츠 상각 포함(10-K·10-Q 원본의 회사 고유 태그) — 인포맥스·Yahoo 와 같은 기준");
+  if (facts.adrRatio && facts.adrRatio !== 1)
+    notes.push(`ADR 기준: 1 ADR = 보통주 ${Number(facts.adrRatio.toPrecision(4))}주 — 주식수·주당 값은 ADR 1주 기준`);
   notes.push(
     "과거 시가총액: 각 회계연도말 종가 × 기말 발행주식수 (클래스별로만 태깅된 종목은 가중평균 희석주식수로 근사)",
   );
@@ -573,6 +603,8 @@ export function buildUsHighlights(
     notes.push(
       "EV·EV/EBITDA 미표시: 금융 자회사(할부금융) 보유 — 연결 차입금·EBITDA 에 금융 자회사분이 섞여 산정 기준 확정 전까지 비움",
     );
+  if (consolidatedShown)
+    notes.push("차입금·현금·우선주·비지배지분: 연결 기준(금융 자회사 포함, 대차대조표 주석과 같은 값) — EV 만 비움");
   if (blockers.has("debt-untagged"))
     notes.push("EV·EV/EBITDA 미표시: 차입금이 표준 태그로 공시되지 않음");
   if (captiveExcluded)
@@ -588,7 +620,7 @@ export function buildUsHighlights(
     notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
   notes.push("EBITDA = 보고 영업이익 + 감가상각비·무형자산상각비 (블룸버그 '조정'과 다를 수 있음)");
   if (usedPretaxAsOpIncome)
-    notes.push("영업이익 태그가 없는 회사(BMY·XOM 등) — 세전이익 + 이자비용(EBIT)으로 근사(비영업 손익 포함 가능)");
+    notes.push("영업이익 태그가 없는 회사(BMY·XOM 등) — 세전이익 + 이자비용 − 지분법 이익(EBIT)으로 근사(기타 비영업 손익 포함 가능)");
   if (approxPerShare)
     notes.push(
       "EPS·시가총액·PER·PBR: 발행주식수를 클래스별로만 공시(Visa 등) → 현재 주식수(시총÷주가) 기준 근사",

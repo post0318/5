@@ -1,5 +1,5 @@
 import "server-only";
-import { annualSeries, type KrFactLine, type KrFacts } from "./dart-facts";
+import { annualSeries, seriesOf, type KrFactLine, type KrFacts } from "./dart-facts";
 import { fetchKrxCapsOn } from "../quote/krx";
 
 /**
@@ -208,10 +208,87 @@ export function krEv(
   commonMcap: number | null,
   preferredMcap: number | null,
 ): number | null {
-  if (resolver.blocker() || commonMcap == null) return null;
-  const b = resolver.bridgeAt(year);
-  if (!b) return null;
+  return krEvFromBridge(resolver.blocker(), resolver.bridgeAt(year), commonMcap, preferredMcap);
+}
+
+/** krEv 의 브릿지 직접 입력판 — LTM 열(최신 분기말 재무상태표)용. 식은 같다. */
+export function krEvFromBridge(
+  blocker: KrEvBlocker | string | null | undefined,
+  b: Pick<KrBalanceBridge, "debt" | "nci" | "cash"> | null,
+  commonMcap: number | null,
+  preferredMcap: number | null,
+): number | null {
+  if (blocker || commonMcap == null || !b) return null;
   return commonMcap + (preferredMcap ?? 0) + b.debt + b.nci - b.cash;
+}
+
+// ── LTM 열 재무상태표 (최신 분기·반기 보고서) ──────────────────────────
+
+export interface KrLtmBalance {
+  /**
+   * 기준 라벨 — 분기 보고서 값이면 분기 재무제표 라벨 그대로("2026 Q2"), 손익 TTM 자체가
+   * 연간이면 "FY2025", 분기 재무상태표를 못 구해 연말값으로 대체했으면 그 사실을 적는다
+   * ("FY2025 (2026 Q2 재무상태표 없음 — 연말값)").
+   */
+  label: string;
+  bridge: KrBalanceBridge | null;
+  parentEquity: number | null;
+}
+
+/**
+ * LTM(현재/LTM) 열의 재무상태표 — **손익 TTM 의 마지막 분기말** 기준(오너 결정 2026-09-24,
+ * 미국 MRQ 와 같은 원칙). 판정 규칙은 연간과 같은 krBridgeLines·지배주주 자본 계정을
+ * 분기 facts 에 그대로 적용한다. 분기 facts 에 그 분기가 없거나 계정이 비면 최근
+ * 사업연도말 값으로 폴백하되 label 에 드러낸다(조용한 대체 금지).
+ *
+ * @param target 손익 TTM 의 마지막 분기(getKrTtm 의 분기·반기 보고서). null 이면 TTM 이
+ *               연간값 — 사업연도말 재무상태표가 곧 같은 기준일.
+ */
+export function krLtmBalance(
+  annual: KrFacts,
+  quarter: KrFacts | null,
+  target: { year: number; quarter: number } | null,
+  code: string,
+): KrLtmBalance {
+  const res = buildKrEvResolver(annual, code);
+  const lastFy = res.years().at(-1) ?? null;
+  const fyEq = lastFy != null ? (krParentEquityByYear(annual).get(lastFy) ?? null) : null;
+  const fyBridge = lastFy != null ? res.bridgeAt(lastFy) : null;
+  const fyLabel = lastFy != null ? `FY${lastFy}` : "";
+  if (!target) return { label: fyLabel, bridge: fyBridge, parentEquity: fyEq };
+
+  const qLabel = `${target.year} Q${target.quarter}`;
+  const fallback = (why: string): KrLtmBalance => ({
+    label: `${fyLabel} (${qLabel} ${why} — 연말값)`,
+    bridge: fyBridge,
+    parentEquity: fyEq,
+  });
+  if (!quarter || !quarter.periods.some((p) => p.label === qLabel)) return fallback("재무상태표 없음");
+
+  const L = krBridgeLines(quarter);
+  const at = (lines: KrFactLine[]) => sumLinesByPeriod(quarter, lines)[qLabel] ?? null;
+  const debt = at(L.debt);
+  const cash = at(L.cash);
+  const parent = seriesOf(quarter, PARENT_EQ.ids, PARENT_EQ.names, "BS")[qLabel] ?? null;
+  const equity = parent ?? seriesOf(quarter, TOTAL_EQ.ids, TOTAL_EQ.names, "BS")[qLabel] ?? null;
+  const hasBridge = debt != null || cash != null;
+  if (!hasBridge && equity == null) return fallback("재무상태표 계정 없음");
+  // 한 쪽만 비면 그 항목만 연말값 — 라벨에 어느 항목인지 적는다
+  const missing = [!hasBridge && "차입금·현금", equity == null && "자본"].filter(Boolean);
+  return {
+    label: missing.length ? `${qLabel} (${missing.join("·")}은 ${fyLabel} 연말값)` : qLabel,
+    bridge: hasBridge
+      ? {
+          // 연간 resolver 와 같은 규칙 — 현금만 있고 차입금 계정이 없으면 무차입(0)
+          debt: debt ?? 0,
+          lease: at(L.lease) ?? 0,
+          cash: cash ?? 0,
+          nci: at(L.nci) ?? 0,
+          plainFinLiab: L.plainFinLiab,
+        }
+      : fyBridge,
+    parentEquity: equity ?? fyEq,
+  };
 }
 
 // ── 시가총액 (KRX 실측) ───────────────────────────────────────────────
@@ -257,14 +334,15 @@ export async function loadKrCaps(code: string, years: number[]): Promise<KrCaps>
  * 자본총계를, 컨센서스는 지배주주 자본을 써서 같은 해 PBR 이 갈렸다(현대차 최대 10%,
  * 검증 체계 한국 확장으로 발견 2026-09-23). 별도재무제표만 있는 회사는 자본총계.
  */
+const PARENT_EQ = {
+  ids: ["ifrs-full_EquityAttributableToOwnersOfParent"],
+  names: ["지배기업의 소유주에게 귀속되는 자본", "지배기업 소유주지분", "지배기업소유주지분", "지배기업의소유주지분"],
+};
+const TOTAL_EQ = { ids: ["ifrs-full_Equity"], names: ["자본총계"] };
+
 export function krParentEquityByYear(facts: KrFacts): Map<number, number> {
-  const parent = annualSeries(
-    facts,
-    ["ifrs-full_EquityAttributableToOwnersOfParent"],
-    ["지배기업의 소유주에게 귀속되는 자본", "지배기업 소유주지분", "지배기업소유주지분", "지배기업의소유주지분"],
-    "BS",
-  );
-  const total = annualSeries(facts, ["ifrs-full_Equity"], ["자본총계"], "BS");
+  const parent = annualSeries(facts, PARENT_EQ.ids, PARENT_EQ.names, "BS");
+  const total = annualSeries(facts, TOTAL_EQ.ids, TOTAL_EQ.names, "BS");
   const out = new Map(parent);
   for (const [y, v] of total) if (!out.has(y)) out.set(y, v);
   return out;

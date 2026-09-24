@@ -13,7 +13,8 @@ import {
   ttmOf,
 } from "./edgar-series";
 import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, opIncomeIsDerived, pickDa, SYN_OP_INCOME } from "./edgar-ev";
-import { ltmNetIncome, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
+import { fyEps, ltmEps, ltmNetIncome, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
+import { buildShareResolver } from "./edgar-shares";
 import {
   classAEps,
   classALatest,
@@ -36,10 +37,14 @@ import {
  */
 
 const REVENUE = [
+  // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
+  // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
+  "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
+  "Revenues",
   "RevenueFromContractWithCustomerExcludingAssessedTax",
   "RevenueFromContractWithCustomerIncludingAssessedTax",
-  "Revenues",
   "SalesRevenueNet",
+  "RevenuesNetOfInterestExpense", // 증권사·투자은행(GS·MS) 순수익 — 하이라이트와 같은 목록
 ];
 const COGS = ["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"];
 const OPEX = ["OperatingExpenses", "CostsAndExpenses"];
@@ -390,6 +395,27 @@ export function buildUsIncome(
   };
   const epsBasic = deriveEps(adjEps(valEps(EPS_BASIC)), "basic");
   const epsDil = deriveEps(adjEps(valEps(EPS_DIL)), "diluted");
+  // 연간 희석 EPS 는 하이라이트·재무분석·컨센서스와 **같은 공통 함수**로 덮어쓴다(단일 기준).
+  // 예전엔 여기서 따로 계산해 (1) LTM 은 Yahoo 주식수를, 하이라이트는 공통 현재 주식수를 써서
+  // 거의 전 종목이 0.2~5% 갈렸고 (2) MCD 처럼 가중평균 주식수를 백만 단위로 공시한 회사는
+  // 타당성 검사가 단위 보정 전 주식수와 비교하다 정상 EPS(10.04)를 버리고 1,003만을 냈다
+  // (검증 도구 재구축 후 첫 실행에서 발견, 2026-09-24).
+  if (!quarterly) {
+    const shareRes = buildShareResolver(facts, { classFacts, sharesHint });
+    const le = ltmEps(facts, shareRes.current());
+    if (le != null) epsDil[LTM] = le;
+    for (const p of periods) {
+      if (p.label === LTM) continue;
+      const y = yearOf(p.label);
+      const r = fyEps(facts, y, {
+        classFacts,
+        fyShares: shareRes.atFiscalYearEnd(y, p.endDate ?? `${y}-12-31`),
+        fyNetIncome: netIncome[p.label] ?? null,
+      });
+      epsDil[p.label] = r.eps;
+      if (r.approx) epsApprox = true;
+    }
+  }
 
   // 감가상각비 — edgar-ev.ts pickDa 규칙(하이라이트·분석 지표와 같은 판정).
   // "앞 태그 우선"이던 예전 방식은 MCD 등에서 일부 항목만 담긴 태그를 집었다.
@@ -401,6 +427,7 @@ export function buildUsIncome(
     for (const l of labels) o[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l]);
     return o;
   })();
+  const oneOff = val(["OneOffChargesDerived"]);
   const ebitda = blank();
   for (const l of labels)
     if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
@@ -447,7 +474,15 @@ export function buildUsIncome(
           ]
         : [row("(−) 영업비용", totalOpex)]),
     row(
-      !isFin && opIncomeIsDerived(facts) ? "영업이익 (태그 없음 · 세전이익+이자비용 근사)" : "영업이익",
+      !isFin && opIncomeIsDerived(facts)
+        ? facts.opIncomeFromStructure
+          ? "영업이익 (소계 없음 · 세전이익−영업외 항목, 공시 계산 구조)"
+          : facts.financialSector
+          ? "영업이익 (태그 없음 · 세전이익 — 금융업은 이자가 본업)"
+          : facts.nonopInRevenues
+          ? "영업이익 (태그 없음 · 세전이익+이자비용−지분법·기타수익)"
+          : "영업이익 (태그 없음 · 세전이익+이자비용−지분법이익 근사)"
+        : "영업이익",
       opIncome,
       { depth: 0, isSubtotal: true, isHighlight: true },
     ),
@@ -465,7 +500,16 @@ export function buildUsIncome(
     row("[ 주석 항목 ]", blank(), { depth: 0, isSubtotal: true }),
     row("EBITDA", ebitda),
     row("감가상각비", da),
+    // 손익계산서에 별도 줄로 공시된 구조조정·손상·위약금·합의금 등의 합(edgar-oneoff.ts) — 영업이익에 이미 반영
+    row("일회성비용(구조조정·손상차손·위약금·합의금 등)", oneOff),
   ];
+  if (!isFin && labels.some((l) => oneOff[l] != null))
+    items.push(
+      row("※ 일회성비용: 손익계산서에 별도 줄로 공시된 항목만(다른 비용 줄에 섞인 금액은 빠짐) · 영업이익에 이미 반영된 금액", blank(), {
+        depth: 1,
+        italic: true,
+      }),
+    );
 
   if (epsApprox && !quarterly)
     items.push(

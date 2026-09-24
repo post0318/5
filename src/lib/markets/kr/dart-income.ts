@@ -91,6 +91,10 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
 
   const epsBasic = S(C.epsBasic);
   const epsDil = S(C.epsDil);
+  // 희석 EPS 를 따로 공시하지 않은 해(희석 증권 없음)는 기본 EPS 와 정의상 같다 — 하이라이트·
+  // 재무분석·컨센서스가 쓰는 krEpsByYear(dart-ev.ts, 희석 → 기본 순)와 같은 값이 되게 채운다.
+  // 예전엔 여기만 비워 LG에너지솔루션 2023~2025 가 화면마다 갈렸다(검증 2026-09-24).
+  for (const l of labels) if (epsDil[l] == null && epsBasic[l] != null) epsDil[l] = epsBasic[l];
 
   let daApprox = false;
   const da = (() => {

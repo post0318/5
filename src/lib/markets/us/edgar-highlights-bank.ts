@@ -17,6 +17,7 @@
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { buildShareResolver } from "./edgar-shares";
+import { fiscalYearOf } from "./edgar-series";
 import {
   fyEps,
   ltmEps,
@@ -65,7 +66,7 @@ function annualSeries(entries: FactUnitEntry[]): { year: number; val: number; en
   const m = new Map<number, { val: number; end: string; filed: string }>();
   for (const e of entries) {
     if (e.fp !== "FY" || !isFullYear(e) || !ANNUAL_FORMS.includes(e.form)) continue;
-    const year = Number(e.end.slice(0, 4));
+    const year = fiscalYearOf(e.end);
     const prev = m.get(year);
     const filed = e.filed ?? "";
     if (!prev || e.end > prev.end || (e.end === prev.end && filed >= prev.filed))
@@ -167,7 +168,7 @@ export function buildUsBankHighlights(
   const estCols: { period: HighlightEstimatePeriod; year: number }[] = [];
   for (const p of estimates) {
     if (!["0y", "+1y", "+2y"].includes(p.period)) continue;
-    const year = p.endDate ? Number(p.endDate.slice(0, 4)) : null;
+    const year = p.endDate ? fiscalYearOf(p.endDate) : null;
     if (year == null || year <= lastFy) continue;
     if (estCols.some((e) => e.year === year)) continue;
     estCols.push({ period: p, year });
@@ -317,7 +318,7 @@ export function buildUsBankHighlights(
 
   notes.push("금융회사(은행·카드사) 전용 레이아웃 — 순수익=매출−이자비용(GAAP RevenuesNetOfInterestExpense)");
   notes.push("충당금전이익 = 순수익 − 총이자외비용, 영업이익 = 충당금전이익 − 대손충당금");
-  notes.push("순이익 = 보통주 귀속 순이익(우선주배당 차감 후, GAAP) — 우선주 없는 회사는 당기순이익과 동일");
+  notes.push("순이익 = 지배주주 순이익(손익계산서·재무분석·컨센서스와 같은 값) · EPS·PER 은 보통주 귀속 순이익(우선주배당 차감 후) 기준");
   notes.push(
     "총대출채권·Tier1/총자본비율은 SEC EDGAR companyfacts 에 세그먼트 차원(Card Member loans 등)으로만 태깅되어 있어 " +
       "무차원 API 로는 조회 불가 — 이 표에서 제공하지 않음 (구조적 한계)",

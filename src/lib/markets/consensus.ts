@@ -15,6 +15,7 @@ import {
 import { loadCaptiveDebt } from "./us/edgar-captive";
 import { loadClassAFacts } from "./us/class-facts-loader";
 import { buildShareResolver, type ShareResolver } from "./us/edgar-shares";
+import { estimatesToUsd } from "./us/edgar-foreign";
 import { usSharesHint } from "./us/shares-hint";
 import {
   buildKrEvResolver,
@@ -195,7 +196,7 @@ export async function getConsensusData(
   const symbol = adapter.normalizeSymbol(rawSymbol);
   const notes: string[] = [];
 
-  const [annual, quote, estimates] = await Promise.all([
+  const [annual, quote, estimatesRaw] = await Promise.all([
     adapter.getFinancials(symbol, "annual").catch((e) => {
       throw new AdapterError(
         e instanceof AdapterError ? e.message : "연간 재무제표 조회 실패",
@@ -205,6 +206,7 @@ export async function getConsensusData(
     getEodQuote(market, symbol, { yahooOverride }).catch(() => null),
     fetchYahooEstimates(market, symbol, yahooOverride).catch(() => null),
   ]);
+  let estimates = estimatesRaw;
   if (!estimates) notes.push("추정치(yahoo) 조회 실패 — 실적만 표시");
 
   const price = quote?.last ?? null;
@@ -254,6 +256,14 @@ export async function getConsensusData(
       };
     } catch {
       us = null;
+    }
+    // 외화 공시 기업(ASML·TSM·SPOT) — Yahoo 예상치를 USD 로(edgar-foreign.ts). 환산 실패 시 예상치를
+    // 숨긴다(원통화 숫자를 USD 로 섞지 않음).
+    if (us && estimates) {
+      const conv = await estimatesToUsd(estimates, us.facts).catch(() => null);
+      if (!conv) notes.push("외화 예상치 환산 실패 — 예상치 숨김");
+      else if (conv.fxNote) notes.push(conv.fxNote);
+      estimates = conv;
     }
   }
 
