@@ -2,7 +2,7 @@ import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import { recentQuarters, singleQuarter, fiscalYearOf } from "./edgar-series";
-import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa } from "./edgar-ev";
+import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa, SYN_DA_CF } from "./edgar-ev";
 import { isFinancialCompany } from "./edgar-financial";
 
 /**
@@ -321,8 +321,9 @@ export function buildUsCashFlow(
         const totals = DA_TOTAL.map((c) => valOf([c]));
         const dep = valOf(DA_DEPRECIATION);
         const am = valOf([DA_INTANGIBLE]);
+        const cf = valOf([SYN_DA_CF]);
         v = {};
-        for (const l of labels) v[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l]);
+        for (const l of labels) v[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
       } else if (line.combine) v = combineVals(line.combine);
       else v = valOf(line.concepts ?? []);
       if (line.fallbackCombine && labels.some((l) => v[l] == null)) {

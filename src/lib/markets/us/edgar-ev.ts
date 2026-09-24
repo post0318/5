@@ -3,6 +3,8 @@ import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import { annualByYear, entriesOf, ttmOf } from "./edgar-series";
 import { opUnitsFrom } from "../op-units";
 import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT } from "./edgar-bs-structure";
+import { SYN_DA_CF } from "./edgar-cf-structure";
+export { SYN_DA_CF };
 
 /**
  * 미국 종목 **EV 브릿지·EBITDA 단일 기준**.
@@ -409,7 +411,10 @@ export function pickDa(
   totals: (number | null | undefined)[],
   depreciation: number | null | undefined,
   intangible: number | null | undefined,
+  /** 현금흐름표 본표 감가상각·상각 줄 합(edgar-cf-structure.ts) — 있으면 이 값이 기준 */
+  cashFlow?: number | null,
 ): number | null {
+  if (cashFlow != null) return cashFlow;
   const tv = totals.filter((v): v is number => v != null);
   const total = tv.length ? Math.max(...tv) : null;
   const comp =
@@ -432,9 +437,10 @@ export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
     return new Map<number, number>();
   })();
   const am = annualByYear(entriesOf(facts, DA_INTANGIBLE));
-  const years = new Set<number>([...totals.flatMap((m) => [...m.keys()]), ...dep.keys(), ...am.keys()]);
+  const cf = annualByYear(entriesOf(facts, SYN_DA_CF));
+  const years = new Set<number>([...totals.flatMap((m) => [...m.keys()]), ...dep.keys(), ...am.keys(), ...cf.keys()]);
   for (const y of years) {
-    const v = pickDa(totals.map((m) => m.get(y)), dep.get(y), am.get(y));
+    const v = pickDa(totals.map((m) => m.get(y)), dep.get(y), am.get(y), cf.get(y));
     if (v != null) out.set(y, v);
   }
   return out;
@@ -453,6 +459,7 @@ export function daTtm(facts: CompanyFacts): number | null {
     DA_TOTAL.map((c) => ttmOf(entriesOf(facts, c))),
     dep,
     ttmOf(entriesOf(facts, DA_INTANGIBLE)),
+    ttmOf(entriesOf(facts, SYN_DA_CF)),
   );
 }
 

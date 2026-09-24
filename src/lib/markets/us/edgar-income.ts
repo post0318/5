@@ -12,7 +12,7 @@ import {
   splitFactorsByYear,
   ttmOf,
 } from "./edgar-series";
-import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, opIncomeIsDerived, pickDa, SYN_OP_INCOME } from "./edgar-ev";
+import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, opIncomeIsDerived, pickDa, SYN_DA_CF, SYN_OP_INCOME } from "./edgar-ev";
 import { fyEps, ltmEps, ltmNetIncome, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
 import { buildShareResolver } from "./edgar-shares";
 import {
@@ -423,8 +423,9 @@ export function buildUsIncome(
     const totals = DA_TOTAL.map((c) => val([c]));
     const dep = val(DA_DEPRECIATION);
     const am = val([DA_INTANGIBLE]);
+    const cf = val([SYN_DA_CF]);
     const o = blank();
-    for (const l of labels) o[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l]);
+    for (const l of labels) o[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
     return o;
   })();
   const oneOff = val(["OneOffChargesDerived"]);

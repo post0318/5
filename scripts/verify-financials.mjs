@@ -1131,7 +1131,8 @@ async function verifyKr(sym) {
 const syms = await symbolList();
 if (!syms.length) die("검증 대상 0종목");
 const kst = new Date(Date.now() + 9 * 3600e3).toISOString();
-const stamp = `${MARKET}-${kst.slice(0, 10).replace(/-/g, "")}-${kst.slice(11, 16).replace(":", "")}`;
+// 초까지 — 같은 분에 연달아 돌리면 결과 파일이 덮어써졌다
+const stamp = `${MARKET}-${kst.slice(0, 10).replace(/-/g, "")}-${kst.slice(11, 19).replace(/:/g, "")}`;
 const dir = new URL("../reports/verify/", import.meta.url);
 mkdirSync(dir, { recursive: true });
 const partialFile = new URL(`verify-${stamp}.partial.json`, dir);

@@ -30,6 +30,7 @@ import { withRevenueDims } from "./edgar-revenue-dims";
 import { withIncomeStatementStructure } from "./edgar-is-structure";
 import { withOneOffCharges } from "./edgar-oneoff";
 import { withBalanceSheetDebt } from "./edgar-bs-structure";
+import { withCashFlowDa } from "./edgar-cf-structure";
 import { loadUsCurrentShares, type CurrentShares } from "./current-shares";
 import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
 import { FIN_NET_REVENUE, isFinancialCompany, withFinNetRevenue } from "./edgar-financial";
@@ -188,7 +189,9 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const withOneOff = await withOneOffCharges(cik, withIs, recent).catch(() => withIs);
       // 총차입금 = 대차대조표 본표 차입금 줄(edgar-bs-structure.ts)
       const withDebt = await withBalanceSheetDebt(cik, withOneOff, recent).catch(() => withOneOff);
-      const data = withOpIncome(dropRoundedRetags({ ...withDebt, financialSector: sicN != null && sicN >= 6000 && sicN <= 6499 }));
+      // 감가상각비 = 현금흐름표 본표 감가상각·상각 줄(edgar-cf-structure.ts)
+      const withDa = await withCashFlowDa(cik, withDebt, recent).catch(() => withDebt);
+      const data = withOpIncome(dropRoundedRetags({ ...withDa, financialSector: sicN != null && sicN >= 6000 && sicN <= 6499 }));
       factsCache.set(cik, { at: Date.now(), data });
       return data;
     })

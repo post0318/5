@@ -29,7 +29,7 @@ export const SYN_DEBT_FACE_NONCURRENT = "DebtFaceNoncurrentDerived";
 const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) contact@example.com";
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 
-const DEBT_CONCEPT = /Debt|Borrowing|NotesPayable|CommercialPaper|FinanceLease|CapitalLease|LoansPayable|SeniorNotes|ConvertibleNotes|LineOfCredit/;
+const DEBT_CONCEPT = /Debt|Borrowing|NotesPayable|NotesAndLoans|CommercialPaper|FinanceLease|CapitalLease|LoansPayable|SeniorNotes|ConvertibleNotes|LineOfCredit/;
 const NOT_DEBT = /OperatingLease|Interest|DeferredTax|Securities|Receivable|Issuance|Discount|Premium|Asset|Guarantee/;
 const DEBT_LABEL = /\b(debt|borrowings?|notes payable|commercial paper|finance leases?|capital leases?|loans? payable|senior notes|convertible notes|credit facilit)/i;
 const NOT_DEBT_LABEL = /operating lease|interest|guarantee/i;
@@ -146,8 +146,10 @@ async function filingFiles(cik: number, f: Filing): Promise<{ cal: string; lab: 
   const base = `https://www.sec.gov/Archives/edgar/data/${cik}/${f.accn.replace(/-/g, "")}`;
   const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, { headers: H, revalidate: 60 * 60 * 24 });
   const names = idx.directory.item.map((i) => i.name);
-  const cal = names.find((n) => /_cal\.xml$/i.test(n));
-  const lab = names.find((n) => /_lab\.xml$/i.test(n));
+  // 계산 구조·라벨을 스키마(.xsd) 안에 넣어 제출하는 회사(MSFT·ORCL 2026~)는 .xsd 에서 읽는다
+  const xsd = names.find((n) => /\.xsd$/i.test(n));
+  const cal = names.find((n) => /_cal\.xml$/i.test(n)) ?? xsd;
+  const lab = names.find((n) => /_lab\.xml$/i.test(n)) ?? xsd;
   const inst = names.find((n) => /_htm\.xml$/i.test(n));
   if (!lab || !inst) return null;
   const opt = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 };
