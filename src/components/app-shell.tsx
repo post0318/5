@@ -151,6 +151,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="flex w-max min-w-full gap-4">
               {SUBNAV.map((s) => {
                 const active = s.seg === sub;
+                // 국내는 해외IB 인사이트가 없어 비상장 리서치로 대체한다(오너
+                // 지시, 2026-09-24) — 탭 라벨도 시장에 따라 다르게 표시.
+                const label = s.seg === "insights" && market === "kr" ? "비상장 리서치" : s.label;
                 return (
                   <Link
                     key={s.seg}
@@ -163,7 +166,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     )}
                   >
                     <s.icon className="size-3.5" />
-                    {s.label}
+                    {label}
                   </Link>
                 );
               })}

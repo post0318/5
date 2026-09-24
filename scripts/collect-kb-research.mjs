@@ -1,5 +1,5 @@
 /**
- * KB증권 "산업/기업" 리포트 — 로컬 수집기.
+ * KB증권 "산업/기업" + "KB데일리" 리포트 — 로컬 수집기.
  *
  * www.kbsec.com 리서치보고서 메뉴("산업/기업" 탭, tab=5)는 화면이 호출하는
  * 내부 TR API `/go.able?linkcd=s040203010001` (POST, `document.forms[0]`
@@ -40,6 +40,54 @@
  *    좁혀 PDF를 매일 다시 받는 범위를 최소화했다(유안타증권과 동일 이유).
  *    백필은 --days=30 등으로 수동 실행.
  *
+ * ── 게시판 구조 정리(오너 지시 2026-09-24 — "kb증권도 키움처럼 게시판별로
+ * 정리해서 보여줘") ──────────────────────────────────────────────────
+ * `tab`(1~6)은 상위 대분류일 뿐이고, 응답 항목마다 실린 `categoryid`/
+ * `pCategoryid` 필드가 키움의 `rMenuGb`에 해당하는 진짜 게시판 코드다 —
+ * `tab=6`(통합 피드)으로 전수 조회해 `foldertemplate`(실제 사이트 내비)와
+ * 함께 확인했다(실측, `searchMonth=3` 기준):
+ *
+ *   | categoryid | 실제 사이트 내비                          | market | category | 비고 |
+ *   |------------|--------------------------------------------|--------|----------|------|
+ *   | 79         | 자산배분/매크로 > KB데일리                  | kr     | 산업     | ✅ 이 스크립트(`tab=1`) — 시황 고정(오너 지시 2026-09-24 "kb데일리는 산업분석>시황에 해당한다") |
+ *   | 69/65/63   | 자산배분/매크로 > 매크로                    | kr     | 산업     | ❌ 미수집 — 투자전략(주식) 라벨 후보 |
+ *   | 77         | 자산배분/매크로 > 자산배분("이그전")        | kr     | 산업     | ❌ 미수집 — 투자전략(주식) 후보 |
+ *   | 193/75/76  | 자산배분/매크로 > 대체투자(가상자산/원자재/부동산리츠) | kr | 산업 | ❌ 미수집 — 다른 증권사의 "대체투자 제외" 전례 있음(CLAUDE.md) |
+ *   | 174        | 자산배분/매크로 > 자산배분기타 > 기타발간   | kr     | 산업     | ❌ 미수집 |
+ *   | 84         | 한국 투자 > 시황코멘트                      | kr     | 산업     | ❌ 수집 제외(오너 결정, 2026-09-24) |
+ *   | 81("KB 전략") | 한국 투자 > 주식전략                     | kr     | 산업     | ✅ 이 스크립트(`tab=3`, docTitle="KB 전략"만) — 투자전략(주식) 고정(오너 지시 — "kb전략은 투자전략(주식)에 해당된다") |
+ *   | 81("이그전")/83("KB Quant") | 한국 투자 > 주식전략        | kr     | 산업     | ❌ 수집 제외(오너 결정 — "나머지는 수집에서 제외한다") |
+ *   | 70("KB Bond"/"KB Fed Watch") | 한국 투자 > 채권/크레딧    | kr     | -        | ✅ `collect-kb-macro-issues.mjs`(docTitle 정확 일치) — `kr_research`가 아니라 거시경제 > 이슈분석(`macro_issues`, topic:"이슈분석")으로 별도 전송(오너 지시 — "kb bond는 거시경제>이슈분석에 해당된다" + "KB Fed Watch는 이슈분석에 포함한다") |
+ *   | 71("KB Credit Weekly") | 한국 투자 > 채권/크레딧          | kr     | -        | ❌ 수집 제외(오너 결정) |
+ *   | 192        | 한국 투자 > 종목컨설팅("KB 이슈 플러스")    | kr     | 산업     | ❌ 수집 제외(오너 결정) |
+ *   | 177        | 한국투자 > 한국투자기타 > 기타발간           | kr     | 산업     | ❌ 수집 제외(오너 결정) |
+ *   | 156        | 해외 투자 > 미국 > 산업/기업                | us     | 기업/산업| ✅ `collect-kb-global-research.mjs`("미국" foldertemplate 필터) |
+ *   | 85         | 해외 투자 > 미국 > 전략("US Market Pulse") | us     | 산업     | ✅ 위와 동일 |
+ *   | 158        | 해외 투자 > 중국 > 산업/기업                | **ch** | 기업/산업| ✅ `collect-kb-global-research.mjs`(오너 지시 2026-09-24 — "kb 중국과 일본도 수집기는 만들어두고") — 티커 매칭 시 기업, 시리즈 라벨은 산업 |
+ *   | 86         | 해외 투자 > 중국 > 전략("KB Asia Market Headline") | **ch** | 산업 | ✅ 위와 동일 — 시황 고정 라벨(`MARKET_CONDITION_STOCKNAMES`) |
+ *   | 160        | 해외 투자 > 일본 > 산업/기업("글로벌기업+") | jp     | 산업     | ✅ 위와 동일 — 표본이 적어(6개월 2건) 티커 추출 없이 라벨 고정만 |
+ *   | 180        | 해외투자 > 해외투자기타 > 기타발간(아시아/미국주식 추천종목 등) | us/ch 혼재 | 산업 | ❌ 미수집 — 제목에 지역이 섞여 미래에셋식 키워드 분류 필요 |
+ *   | 103~195(다수) | 산업/기업 > 섹터별(반도체/화학/제약 등)  | kr     | 기업/산업| ✅ 이 스크립트(`tab=5`) |
+ *   | 131        | 산업/기업 > 스몰캡("KB IPO Brief")          | kr     | 기업     | ✅ 이 스크립트(`tab=5`에 포함) |
+ *   | 132        | 산업/기업 > 기타발간("KB 리서치 모델 포트폴리오") | kr | 산업 | ✅ 이 스크립트(`tab=5`에 포함) |
+ *   | **188**    | 산업/기업 > **비상장기업**("비상장 Tracker+", "케이비 비상장 플러스") | kr | 산업 | ❌ 미수집 — `tab=5` 기본 조회에 안 잡히고 `pCatfolderid=186`을 따로 줘야 나옴(실측 17건/3개월). **키움 CI 비상장과 같은 성격 — "비상장 리서치" 탭 후보** |
+ *
+ * **"한국 투자"(tab=3) 최종 결정(오너 지시, 2026-09-24)**: 시황코멘트(84)·
+ * KB Quant/이그전(81 일부·83)·KB Fed Watch/KB Credit Weekly(70 일부·71)·
+ * 종목컨설팅(192)·기타발간(177)은 전부 수집 제외 — "KB 전략"(81 중
+ * docTitle 일치분)과 "KB Bond"(70 중 docTitle 일치분) **딱 두 시리즈만**
+ * 수집한다.
+ *
+ * **처리 완료 이력**: 158/86(중국)·160(일본)은 `collect-kb-global-
+ * research.mjs`로, 자산배분/매크로 그룹(69/65/63·77·193/75/76·174)은
+ * `collect-kb-macro-issues.mjs`(tab=2 전체, Weekly/주간 제외·FX/환율은
+ * 환율분석)로, 188(비상장기업)은 이 스크립트의 "비상장 리서치" 라우팅으로
+ * 각각 확장 완료(2026-09-24). 위 표의 다른 ✅ 항목들과 함께 참고.
+ *
+ * **미결(오너 확인 필요, 착수 안 함)**: 180(해외투자기타 — "아시아주식
+ * 추천종목"/"미국주식 추천종목" 등 지역이 제목에 섞여 있음)만 남음 — 미래에셋
+ * 수집기처럼 키워드 추측으로 region을 나눠야 할 것으로 보이나 착수 전.
+ *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-kb-research.mjs
  *   node scripts/collect-kb-research.mjs --days=30 --dry-run
@@ -47,6 +95,7 @@
 
 import { readFileSync } from "node:fs";
 import { PDFParse } from "pdf-parse";
+import { isEsgContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -77,6 +126,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const AJAX_URL = "https://www.kbsec.com/go.able?linkcd=s040203010001";
 const TITLE_RE = /^(.+?)\s*\((\d{6})\)$/;
+// 오너 지시(2026-09-24 — "산업/기업 중 코드나 종목명인 경우 종목분석에
+// 해당되고 그 외는 산업분석에 해당한다. 다만, 포트폴리오, 추천종목, ESG등은
+// 대상에서 제외한다. 또한 IPO나 비상장인 경우는 종목분석>인사이트에
+// 해당한다."): 정기 전략 노트 중 포트폴리오·추천종목 라벨은 이 프로젝트의
+// 산업분석/투자전략 범위 밖이라 아예 수집하지 않는다. ESG는 이후 "esg는
+// 공통으로 제외처리" 지시로 소스 불문 공용 필터(`isEsgContent`)로 승격돼
+// 여기선 KB 전용 목록에서 빠졌다(아래 EXCLUDE_LABEL_RE 판정과 별도로 검사).
+const EXCLUDE_LABEL_RE = /포트폴리오|추천종목/i;
+// IPO·비상장 라벨("KB IPO Brief"·"비상장 Tracker+"·"케이비 비상장 플러스")은
+// 일반 산업분석 풀이 아니라 "비상장 리서치"(해외 IB 인사이트 탭의 국내
+// 대응, INSIGHT_SOURCES)로 별도 전송한다.
+const INSIGHT_LABEL_RE = /\bIPO\b|비상장/i;
 
 const EXCERPT_LEN = 150;
 function isMetaLine(l) {
@@ -142,7 +203,7 @@ function parseTargetPrice(tp) {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
 }
 
-async function fetchList() {
+async function fetchList(tab) {
   const body = new URLSearchParams({
     pCatfolderid: "",
     templateid: "",
@@ -152,7 +213,7 @@ async function fetchList() {
     sDocumentid: "",
     sUrlLink: "",
     wInfo: "",
-    tab: "5", // 산업/기업
+    tab,
   });
   const res = await fetch(AJAX_URL, {
     method: "POST",
@@ -168,12 +229,12 @@ async function fetchList() {
   return json.list ?? [];
 }
 
-console.log(`▶ KB증권 산업/기업 리포트 수집: 최근 ${DAYS}일`);
+console.log(`▶ KB증권 산업/기업 + KB데일리 리포트 수집: 최근 ${DAYS}일`);
 // 항목 날짜가 'YYYY-MM-DD'(=UTC 자정)라 컷오프도 자정으로 맞춘다.
 // Date.now() 기준 그대로 두면 '정확히 DAYS일 전' 리포트가 시:분 차이로
 // 매번 잘려나간다(실측 2026-09: 미래에셋 최신 리포트가 3시간 차이로 탈락).
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
-const rows = await fetchList();
+const rows = await fetchList("5"); // 산업/기업
 
 const collected = [];
 for (const r of rows) {
@@ -196,8 +257,10 @@ for (const r of rows) {
       views: null,
       category: "기업",
     });
-  } else if (docTitle) {
-    // 업종명("반도체" 등)·정기 전략 노트("대형주 추천종목" 등) — 종목코드 없음.
+  } else if (docTitle && !EXCLUDE_LABEL_RE.test(docTitle) && !isEsgContent(docTitle)) {
+    // 업종명("반도체" 등)·정기 전략 노트 — 종목코드 없음. 포트폴리오/
+    // 추천종목/ESG 라벨은 위에서 걸러졌고, IPO/비상장 라벨은 일반 산업분석이
+    // 아니라 "비상장 리서치"(unlisted) 대상.
     collected.push({
       id: r.documentid,
       date,
@@ -211,8 +274,118 @@ for (const r of rows) {
       pdfUrl: r.urlLink || null,
       views: null,
       category: "산업",
+      unlisted: INSIGHT_LABEL_RE.test(docTitle),
     });
   }
+}
+
+// 비상장기업(categoryid 188, "비상장 Tracker+"/"케이비 비상장 플러스") —
+// tab=5 기본 조회엔 안 잡히고 `pCatfolderid=186`을 따로 줘야 나온다(실측).
+// "IPO나 비상장인 경우는 종목분석>인사이트에 해당한다"(오너 지시)에 따라
+// 처음부터 unlisted:true로 표시한다.
+async function fetchUnlistedBoard() {
+  const body = new URLSearchParams({
+    pCatfolderid: "186",
+    templateid: "",
+    lowTempId: "",
+    searchMonth: "3",
+    searchFlag: "",
+    sDocumentid: "",
+    sUrlLink: "",
+    wInfo: "",
+    tab: "5",
+  });
+  const res = await fetch(AJAX_URL, {
+    method: "POST",
+    headers: {
+      "User-Agent": UA,
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+    },
+    body: body.toString(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  return json.list ?? [];
+}
+const unlistedRows = await fetchUnlistedBoard();
+for (const r of unlistedRows) {
+  const date = r.publicDate;
+  if (!date || new Date(date) < cutoff) continue;
+  const docTitle = String(r.docTitle ?? "").trim();
+  if (!docTitle) continue;
+  collected.push({
+    id: r.documentid,
+    date,
+    title: (r.docTitleSub || docTitle).trim(),
+    stockName: docTitle,
+    symbol: null,
+    analyst: r.analystNm ?? "",
+    opinion: "",
+    targetPrice: null,
+    summary: "",
+    pdfUrl: r.urlLink || null,
+    views: null,
+    category: "산업",
+    unlisted: true,
+  });
+}
+
+// KB데일리(tab=1, categoryid 79) — 오너 지시(2026-09-24 — "kb데일리는
+// 산업분석>시황에 해당한다")로 추가. 게시판 전체가 하나의 일간 시황
+// 코멘트 시리즈라(예: "2026년 9월 23일 (수): KB 데일리") 키움 EM/IM
+// 게시판과 같은 방식으로 stockName을 고정 라벨 "KB데일리"로 둔다 —
+// `shinhan-research.ts`의 `MARKET_CONDITION_STOCKNAMES`에 등록해
+// classifyResearchTopic()이 항상 시황으로 분류하게 함.
+const dailyRows = await fetchList("1");
+for (const r of dailyRows) {
+  const date = r.publicDate;
+  if (!date || new Date(date) < cutoff) continue;
+  collected.push({
+    id: r.documentid,
+    date,
+    title: (r.docTitleSub || r.docTitle || "").trim(),
+    stockName: "KB데일리",
+    symbol: null,
+    analyst: r.analystNm ?? "",
+    opinion: "",
+    targetPrice: null,
+    summary: "",
+    pdfUrl: r.urlLink || null,
+    views: null,
+    category: "산업",
+  });
+}
+
+// KB전략(tab=3, docTitle "KB 전략") — 오너 지시(2026-09-24 — "한국투자에서
+// kb전략은 투자전략(주식)에 해당되고 kb bond는 거시경제>이슈분석에 해당된다.
+// 나머지는 수집에서 제외한다"). tab=3("한국 투자")는 시황코멘트·주식전략·
+// 채권/크레딧·종목컨설팅·기타발간이 섞여 있고, 응답의 `categoryid` 필드로
+// 걸러도 같은 categoryid 안에 "이그전"(자산배분 계열) 같은 다른 시리즈가
+// 섞여 나오는 게 실측 확인돼(categoryid만으론 부정확) **docTitle 정확히
+// 일치**로만 골랐다. "KB 전략"만 수집하고 그 옆의 "KB Quant"·"이그전" 등은
+// 명시적으로 제외(오너 지시의 "나머지는 제외"). stockName을 고정 라벨로 둬
+// `shinhan-research.ts`의 `STRATEGY_STOCKNAMES`에 등록, 투자전략(주식)으로
+// 확정 분류한다.
+const tab3Rows = await fetchList("3");
+for (const r of tab3Rows) {
+  const date = r.publicDate;
+  if (!date || new Date(date) < cutoff) continue;
+  if (String(r.docTitle ?? "").trim() !== "KB 전략") continue;
+  collected.push({
+    id: r.documentid,
+    date,
+    title: (r.docTitleSub || r.docTitle || "").trim(),
+    stockName: "KB 전략",
+    symbol: null,
+    analyst: r.analystNm ?? "",
+    opinion: "",
+    targetPrice: null,
+    summary: "",
+    pdfUrl: r.urlLink || null,
+    views: null,
+    category: "산업",
+  });
 }
 
 if (collected.length === 0) {
@@ -243,17 +416,33 @@ if (DRY_RUN) {
   process.exit(0);
 }
 
+// 비상장(unlisted) 항목은 일반 산업분석 풀과 섞이지 않도록 별도 source로
+// 나눠 전송한다(오너 지시 — "IPO나 비상장인 경우는 종목분석>인사이트에
+// 해당한다" — 키움 CI 비상장 처리와 같은 패턴, INSIGHT_SOURCES 재사용).
+const UNLISTED_SOURCE = "KB증권 비상장리서치";
+// 라우트(RawItem)가 알려진 필드만 읽으므로 `unlisted` 플래그는 그대로 실려가도
+// 무해하다 — 굳이 벗겨내지 않는다.
+const normalItems = collected.filter((it) => !it.unlisted);
+const unlistedItems = collected.filter((it) => it.unlisted);
+
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const up = await fetch(IMPORT_URL, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ items: collected, source: "KB증권" }),
-});
-const upBody = await up.text();
-if (!up.ok) {
-  console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+
+for (const [source, items] of [
+  ["KB증권", normalItems],
+  [UNLISTED_SOURCE, unlistedItems],
+]) {
+  if (items.length === 0) continue;
+  const up = await fetch(IMPORT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ items, source }),
+  });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ [${source}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`\n✔ [${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }
-console.log(`\n✔ 앱 전송 완료: ${upBody}`);

@@ -39,7 +39,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichUsResearch } from "./lib/us-research-extract.mjs";
-import { isEtfOrEtpContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -114,6 +114,8 @@ function parseItems(html, analystFallback) {
     // ETF/ETP 리포트 제외(오너 지시 2026-09-24, 공용 필터) — "ETP Weekly
     // Insight"·"모두의 ETP Biweekly"·"오토콜러블 ETF" 등이 여기서 걸러진다.
     if (isEtfOrEtpContent(title)) continue;
+    // ESG 공용 제외(오너 지시 2026-09-24 — "esg는 공통으로 제외처리").
+    if (isEsgContent(title)) continue;
     const pdfUrl = `${PDF_BASE}?cmd=down&saveKey=research.pdf&fileName=${encodeURIComponent(fileName)}&contentType=application/pdf`;
     const tm = title.match(TITLE_RE);
     if (tm) {

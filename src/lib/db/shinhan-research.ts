@@ -4,6 +4,20 @@ import { getDb } from "./index";
 import type { MarketId } from "../markets/types";
 
 /**
+ * 산업/기업분석 리서치는 이 앱의 4대 시장(`MarketId`: kr/us/jp) 밖의 소스도
+ * 다룰 수 있다 — 중국(`ch`)이 첫 사례(오너 지시, 2026-09-24 — "ch는 마켓은
+ * ch다 us분류하면 안된다"). 종목분석(EDGAR/DART/EDINET 어댑터, `registry.ts`)
+ * 은 아직 중국을 지원하지 않으므로 `MarketId` 자체는 건드리지 않고, 리서치
+ * 문서·조회 함수만 이 더 넓은 타입을 쓴다 — 종목분석 쪽 코드는 전혀 영향
+ * 없음. `/ch/research` 같은 전용 화면은 아직 없어(추후 과제) 이 태그가 붙은
+ * 문서는 당장 화면에 노출되지 않지만, 최소한 "us"로 잘못 섞이는 것은 막는다.
+ */
+export type ResearchMarketId = MarketId | "ch";
+export function isResearchMarketId(v: string): v is ResearchMarketId {
+  return v === "kr" || v === "us" || v === "jp" || v === "ch";
+}
+
+/**
  * 증권사 리서치(기업분석) 리포트 — 개인용 로컬 수집 (CLAUDE.md 예외 참고).
  * 여러 증권사를 붙일 걸 감안해 스키마에 `source`를 두고 `_id`도
  * `${source}:${게시글번호}`로 네임스페이스했다(증권사별 ID 체계가 달라 충돌
@@ -16,8 +30,10 @@ export interface ShinhanResearchDoc {
   /** 증권사명 — "신한투자증권" 등. 여러 증권사 연동 대비 필드. */
   source: string;
   /** 종목의 상장 시장(2026-09 추가, GlobalMonitor의 미국주식 리포트 수집으로
-   * 한국 전용이 아니게 됨) — 컬렉션 이름(kr_research)은 유지하되 필드로 구분. */
-  market: MarketId;
+   * 한국 전용이 아니게 됨) — 컬렉션 이름(kr_research)은 유지하되 필드로 구분.
+   * `MarketId`(kr/us/jp) 뿐 아니라 종목분석 미지원 시장(예: "ch")도 태깅
+   * 가능(`ResearchMarketId` 참고). */
+  market: ResearchMarketId;
   date: string; // ISO (YYYY-MM-DD)
   title: string;
   stockName: string;
@@ -293,6 +309,14 @@ const MARKET_CONDITION_STOCKNAMES = new Set([
   // 키움증권 "일간증시전망" 게시판 — 매일 나오는 데일리 시황 코멘트라
   // 개별 업종 얘기가 아님(오너 지시, 2026-09-24 — "일간증시전망은 시황이다").
   "키움 일간증시전망",
+  // KB증권 "KB데일리" 게시판(tab=1, categoryid 79) — 매일 나오는 데일리
+  // 시황 코멘트(오너 지시, 2026-09-24 — "kb데일리는 산업분석>시황에
+  // 해당한다").
+  "KB데일리",
+  // KB증권 "KB Asia Market Headline"(tab=4, categoryid 86, market:"ch") —
+  // 거의 매일 올라오는 아시아 시장 헤드라인 코멘트, KB데일리와 같은 성격
+  // (오너 지시 2026-09-24 — "kb 중국과 일본도 수집기는 만들어두고").
+  "KB Asia Market Headline",
 ]);
 // stockName 뒤에 " | Weekly" 같은 부가 표기가 붙어 정확히 일치하지 않는
 // 경우가 있어(예: "KB Global Tracker+ | Weekly") 접두어로도 매칭(오너 지적
@@ -314,6 +338,9 @@ const STRATEGY_STOCKNAMES = new Set([
   "NAV Dashboard Weekly",
   "키움 월간증시전망",
   "키움 중장기증시전망",
+  // KB증권 "KB 전략" 게시판(tab=3, "한국 투자 > 주식전략") — 오너 지시,
+  // 2026-09-24 — "한국투자에서 kb전략은 투자전략(주식)에 해당된다".
+  "KB 전략",
 ]);
 // 미래에셋증권 "월스트리트파인더 Ep.201, 202, ..." — 매회 에피소드 번호가
 // 붙어 정확히 일치하지 않아 접두어로 매칭. 계절성·금리 대응·엔비디아
@@ -413,6 +440,17 @@ const ESG_EXCLUDE_RE = /\bESG\b/i;
  * "글로벌 위클리 시황"이 문자 그대로 "시황"에 걸려 14일 만에 삭제되던 문제)
  * `getIndustryResearch()`(산업분석 탭)·정리 로직 양쪽에서 전부 제외하고,
  * `getInsightResearch()`(인사이트 탭)에서만 별도로 90일 그대로 유지한다.
+ *
+ * **국내는 "키움증권 비상장리서치"로 대체(오너 지시, 2026-09-24 — "국내는
+ * 인사이트가 없다. 따라서 미국은 유지하나 한국은 인사이트를 비상장 리서치로
+ * 대체한다")**: 위 10곳은 전부 해외(market:"us") 소스뿐이라 국내(market:"kr")
+ * 인사이트 탭은 늘 비어 있었다 — 대신 키움증권 CI(산업분석) 게시판 중
+ * "회사명(비상장-IPO예정) : 헤드라인" 형식(상장 종목이 아니라 프리IPO
+ * 기업 리포트)을 이 소스로 별도 전송해 같은 인프라를 국내 시장에도 채운다
+ * (`scripts/collect-kiwoom-research.mjs`). market이 "kr"이라 위 해외
+ * 소스들의 market:"us" 조회와 자연히 분리되고, `getIndustryResearch()`의
+ * `INSIGHT_SOURCES` 제외 로직 덕분에 일반 산업분석(source:"키움증권") 풀에도
+ * 안 섞인다.
  */
 export const INSIGHT_SOURCES = [
   "BlackRock",
@@ -425,6 +463,16 @@ export const INSIGHT_SOURCES = [
   "Bank of America Institute",
   "HSBC",
   "Deutsche Bank Research",
+  "키움증권 비상장리서치",
+  // KB증권 "KB IPO Brief"("산업/기업 > 스몰캡")·"비상장 Tracker+"/"케이비
+  // 비상장 플러스"("산업/기업 > 비상장기업") — 오너 지시, 2026-09-24 —
+  // "IPO나 비상장인 경우는 종목분석>인사이트에 해당한다". 키움과 같은 패턴.
+  "KB증권 비상장리서치",
+  // NH투자증권 "[NH 비상장]" 라벨(기업/산업분석 게시판) — 오너 지시,
+  // 2026-09-24 — "국내 비상장은 종목분석 인사이트로 해외 비상장은 그대로
+  // 산업분석으로 유지"(국내(market:"kr")만 인사이트 대상, 삼성증권의 해외
+  // (market:"us") 비상장 콘텐츠는 그대로 산업분석 유지 — 손대지 않음).
+  "NH투자증권 비상장리서치",
 ] as const;
 
 /**

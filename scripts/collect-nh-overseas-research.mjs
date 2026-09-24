@@ -138,7 +138,12 @@ async function fetchPage(ditCd, cursor) {
     body: body.toString(),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = new TextDecoder("euc-kr").decode(await res.arrayBuffer());
+  const raw = new TextDecoder("euc-kr").decode(await res.arrayBuffer());
+  // 제목 필드에 이스케이프 안 된 raw 탭 문자가 섞여 나오는 경우가 실측
+  // 확인돼(2026-09-24) JSON.parse가 "Bad control character"로 죽는다 —
+  // 문자열 값 안의 제어문자를 공백으로 정리한 뒤 파싱한다(collect-nh-
+  // research.mjs와 동일 수정).
+  const text = raw.replace(/[\x00-\x1F]/g, " ");
   return JSON.parse(text);
 }
 

@@ -3,10 +3,10 @@ import { isDbConfigured } from "@/lib/db";
 import {
   shinhanResearchCol,
   upsertShinhanResearch,
+  isResearchMarketId,
   type ShinhanResearchDoc,
 } from "@/lib/db/shinhan-research";
 import { searchCorps } from "@/lib/markets/kr/corpcode";
-import { isMarketId } from "@/lib/markets/types";
 
 export const maxDuration = 60;
 
@@ -66,7 +66,7 @@ export async function POST(req: Request) {
     const body = (await req.json()) as { items?: RawItem[]; source?: string; market?: string };
     if (!Array.isArray(body.items)) return Response.json({ error: "items 배열 필요" }, { status: 400 });
     const source = body.source?.trim() || "신한투자증권";
-    const market = body.market && isMarketId(body.market) ? body.market : "kr";
+    const market = body.market && isResearchMarketId(body.market) ? body.market : "kr";
 
     const now = new Date().toISOString();
     const docs: ShinhanResearchDoc[] = body.items.map((it) => ({

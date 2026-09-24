@@ -41,7 +41,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichUsResearch } from "./lib/us-research-extract.mjs";
-import { isEtfOrEtpContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -136,9 +136,10 @@ function parseItems(rows) {
     const dateM = String(r.writeDate ?? "").match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
     if (!dateM) continue;
     const date = `${dateM[1]}-${dateM[2]}-${dateM[3]}`;
-    // ETF/ETP 리포트 제외(오너 지시 2026-09-24, 공용 필터 — 여러 증권사가
-    // 모이는 소스라 특히 잘 섞여 들어온다).
-    if (isEtfOrEtpContent(r.title)) continue;
+    // ETF/ETP·ESG 리포트 제외(오너 지시 2026-09-24, 공용 필터 — 여러
+    // 증권사가 모이는 소스라 특히 잘 섞여 들어온다. ESG는 "esg는 공통으로
+    // 제외처리" 지시로 ETF와 동일하게 승격).
+    if (isEtfOrEtpContent(r.title) || isEsgContent(r.title)) continue;
     const tm = String(r.title ?? "").match(TITLE_RE);
     if (tm) {
       const [, stockName, , ticker, headline] = tm;

@@ -1,0 +1,24 @@
+name: KB증권 KB Bond(거시경제 이슈분석) 수집
+
+# CLAUDE.md 방침(오너 승인 예외): www.kbsec.com 리서치 TR API를 하루 2회,
+# 개인용으로만 조회한다. collect-kb-research.mjs(종목·산업분석, kr_research)
+# 와는 완전히 별개 스크립트·라우트(macro_issues) — 거시경제 > 이슈분석 탭
+# 전용(오너 지시 2026-09-24 — "kb bond는 거시경제>이슈분석에 해당된다").
+
+on:
+  schedule:
+    - cron: "30 23 * * *" # 23:30 UTC = 08:30 KST(1차, kb-research.yml과 5분 차)
+    - cron: "30 3 * * *" # 03:30 UTC = 12:30 KST(2차)
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/collect-kb-macro-issues.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

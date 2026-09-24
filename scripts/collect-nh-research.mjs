@@ -27,6 +27,14 @@
  * "[분류/세부]" 형식은 "/" 뒤쪽을 업종 라벨로 쓴다(예: "[Spot Comment/
  * 자동차산업]" → "자동차산업"), "/" 없으면 대괄호 안 전체를 그대로 라벨로.
  *
+ * **ESG 제외·비상장 인사이트 분리(오너 지시, 2026-09-24 — "nh랑
+ * 삼성증권도 카테고리별 분류를 부탁한다"에 따른 조사로 발견)**: 라벨 65개
+ * 중 "[NH ESG Research]"류는 공용 필터(`isEsgContent`, "esg는 공통으로
+ * 제외처리")로 제외. "[NH 비상장]"류는 일반 산업분석이 아니라
+ * `source:"NH투자증권 비상장리서치"`로 별도 전송(오너 지시 — "국내 비상장은
+ * 종목분석 인사이트로 해외 비상장은 그대로 산업분석으로 유지" — 이 게시판은
+ * 국내라 대상. 삼성증권의 해외 비상장 콘텐츠는 그대로 산업분석 유지).
+ *
  * ⚠️ www.nhsec.com/robots.txt 는 `Disallow: /`(Googlebot 등 주요 크롤러만 예외)다.
  *    다른 예외들과 동일하게 "개인용·로컬 실행·저빈도" 조건으로 오너 승인
  *    (CLAUDE.md 참조, 오너가 "NH투자증권도 로그인없이 가능하다" 직접 확인).
@@ -49,6 +57,7 @@
 
 import { readFileSync } from "node:fs";
 import { PDFParse } from "pdf-parse";
+import { isEsgContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -181,7 +190,12 @@ async function fetchPage(cursor) {
     body: body.toString(),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = new TextDecoder("euc-kr").decode(await res.arrayBuffer());
+  const raw = new TextDecoder("euc-kr").decode(await res.arrayBuffer());
+  // 제목 필드에 이스케이프 안 된 raw 탭 문자가 섞여 나오는 경우가 실측
+  // 확인돼(2026-09-24, "NH 글로벌 주식시장 투자 포인트 10월호\t") JSON.parse가
+  // "Bad control character" 로 죽는다 — 문자열 값 안의 제어문자를 공백으로
+  // 정리한 뒤 파싱한다(JSON 구조 밖의 개행/탭도 공백으로 바뀌지만 무해).
+  const text = raw.replace(/[\x00-\x1F]/g, " ");
   return JSON.parse(text);
 }
 
@@ -242,6 +256,15 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
     // 일부 항목은 NH API 응답 자체에 첨부파일 필드가 비어있음(실측).
     if (!r.hpge_fle_url_cts) continue;
     const { sector, title } = sectorLabelAndTitle(r.rsh_ppr_til_cts);
+    // ESG 공용 제외(오너 지시 2026-09-24 — "esg는 공통으로 제외처리",
+    // "[NH ESG Research]" 라벨 발견 계기).
+    if (isEsgContent(sector) || isEsgContent(title)) continue;
+    // 비상장 라벨("[NH 비상장]")은 일반 산업분석이 아니라 "비상장 리서치"로
+    // 별도 전송(오너 지시 2026-09-24 — "국내 비상장은 종목분석 인사이트로
+    // 해외 비상장은 그대로 산업분석으로 유지" — 이 게시판은 국내(market
+    // 기본값 "kr")라 인사이트 대상. 삼성증권처럼 해외(market:"us") 비상장은
+    // 그대로 산업분석 유지, 손대지 않음).
+    const unlisted = /비상장/.test(sector);
     collected.push({
       id: r.rsh_ppr_no,
       date,
@@ -254,6 +277,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       pdfUrl: r.hpge_fle_url_cts || null,
       views: null,
       category: "산업",
+      unlisted,
     });
   }
 
@@ -301,17 +325,30 @@ if (DRY_RUN) {
   process.exit(0);
 }
 
+// 비상장(unlisted) 항목은 일반 산업분석 풀과 섞이지 않도록 별도 source로
+// 나눠 전송한다(키움/KB 비상장리서치와 동일 패턴).
+const UNLISTED_SOURCE = "NH투자증권 비상장리서치";
+const normalItems = collected.filter((it) => !it.unlisted);
+const unlistedItems = collected.filter((it) => it.unlisted);
+
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const up = await fetch(IMPORT_URL, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ items: collected, source: "NH투자증권" }),
-});
-const upBody = await up.text();
-if (!up.ok) {
-  console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+
+for (const [source, items] of [
+  ["NH투자증권", normalItems],
+  [UNLISTED_SOURCE, unlistedItems],
+]) {
+  if (items.length === 0) continue;
+  const up = await fetch(IMPORT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ items, source }),
+  });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ [${source}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`\n✔ [${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }
-console.log(`\n✔ 앱 전송 완료: ${upBody}`);
