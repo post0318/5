@@ -1,4 +1,5 @@
 import "server-only";
+import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import {
@@ -251,8 +252,13 @@ export function buildUsIncome(
   const intExp = val(INT_EXP);
   const netIntCost = blank();
   if (!isFin) {
+    // 20-F Yahoo 분기 LTM: 한쪽만 채워졌으면(다른 쪽은 LTM 에서만 빔) 0 으로 보지 않는다
+    const ylI = !quarterly && yahooLtm(facts);
+    const prevL = labels[labels.length - 2];
+    const gapI = (x: Record<string, number | null>) => !!ylI && x[LTM] == null && x[prevL] != null;
     for (const l of labels) {
       if (intExp[l] == null && intInc[l] == null) continue;
+      if (l === LTM && (gapI(intExp) || gapI(intInc))) continue;
       netIntCost[l] = (intExp[l] ?? 0) - (intInc[l] ?? 0);
     }
   }
@@ -434,6 +440,8 @@ export function buildUsIncome(
   const ebitda = blank();
   for (const l of labels)
     if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
+  // 20-F Yahoo 분기 LTM(edgar-yahoo-quarters.ts)에서 감가상각비를 못 채웠으면 EBITDA 도 공란
+  if (!quarterly && yahooLtm(facts) && da[LTM] == null) ebitda[LTM] = null;
 
   const row = (
     label: string,

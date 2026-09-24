@@ -1,4 +1,5 @@
 import "server-only";
+import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import {
@@ -279,8 +280,10 @@ export function buildUsBalance(
       fiscalQuarter: null,
       endDate: ends.get(y) ?? `${y}-12-31`,
     }));
+    // 20-F Yahoo 분기 LTM — LTM 열 = 그 기준일(최신 분기말) 값만, 채우지 못한 줄은 공란(FY말 값으로 대신하지 않음)
+    const yl = yahooLtm(facts);
     const latestEnd =
-      recentInstantQuarters(anchor, 1)[0] ?? new Date().toISOString().slice(0, 10);
+      yl?.through ?? recentInstantQuarters(anchor, 1)[0] ?? new Date().toISOString().slice(0, 10);
     periods.push({ label: LTM, fiscalYear: (years.at(-1) ?? 0) + 1, fiscalQuarter: null, endDate: latestEnd });
     value = (concepts) => {
       const e = firstConcept(facts, concepts);
@@ -292,7 +295,7 @@ export function buildUsBalance(
       const latest = e.filter((x) => !x.start).sort((a, b) => (a.end < b.end ? 1 : -1))[0];
       const fresh =
         latest && Math.abs(days(latest.end, latestEnd)) <= 400 ? latest.val : null;
-      out[LTM] = instantOn(e, latestEnd) ?? fresh;
+      out[LTM] = instantOn(e, latestEnd) ?? (yl ? null : fresh);
       return out;
     };
   }
@@ -350,20 +353,28 @@ export function buildUsBalance(
     const resolved: Record<string, Record<string, number | null>> = {};
     for (const line of block.lines) {
       if (line.kind === "subtotal" || line.kind === "total" || line.plugOf) continue;
+      // 20-F Yahoo 분기 LTM: LTM 에서만 빈 값(채우지 못함)은 합산·대체하지 않는다(부분 합·다른 개념 혼합 방지)
+      const ylLine = yahooLtm(facts);
+      const prevL = labels[labels.length - 2];
+      const ltmGap = (v: Record<string, number | null>) => !!ylLine && labels.includes(LTM) && v[LTM] == null && v[prevL] != null;
       resolved[line.label] = line.combine
         ? (() => {
             const o = blank();
+            let gap = false;
             for (const c of line.combine) {
               const v = value([c]);
+              if (ltmGap(v)) gap = true;
               for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
             }
+            if (gap) o[LTM] = null;
             return o;
           })()
         : value(line.concepts ?? []);
       if (line.fallback) {
         const fb = value(line.fallback);
+        const primaryGap = ltmGap(resolved[line.label]);
         for (const l of labels)
-          if (resolved[line.label][l] == null && fb[l] != null) resolved[line.label][l] = fb[l];
+          if (resolved[line.label][l] == null && fb[l] != null && !(l === LTM && primaryGap)) resolved[line.label][l] = fb[l];
       }
     }
 
@@ -399,15 +410,21 @@ export function buildUsBalance(
             break;
           }
         values = blank();
+        // 20-F Yahoo 분기 LTM: 구성 줄이 LTM 에서만 비었으면(채우지 못함) 차감 잔여(기타)도 비운다 — 0 으로 보면 기타가 부푼다
+        const ylPlug = yahooLtm(facts);
+        const prevLabel = labels[labels.length - 2];
         for (const l of labels) {
           if (tot[l] == null) continue;
           let mapped = 0;
+          let unknown = false;
           for (let i = bound + 1; i < idx; i++) {
             const s = block.lines[i];
             if (s.kind || s.plugOf) continue;
-            mapped += resolved[s.label]?.[l] ?? 0;
+            const v = resolved[s.label]?.[l];
+            if (ylPlug && l === LTM && v == null && resolved[s.label]?.[prevLabel] != null) unknown = true;
+            mapped += v ?? 0;
           }
-          values[l] = Math.round(tot[l]! - mapped);
+          values[l] = unknown ? null : Math.round(tot[l]! - mapped);
         }
       } else {
         values = resolved[line.label];
@@ -435,9 +452,12 @@ export function buildUsBalance(
   const netDebt = blank();
   const opLease = blank();
   for (const p of periods) {
-    const d = p.label === LTM ? (evRes.latestBalanceDate() ?? p.endDate ?? "") : (p.endDate ?? "");
+    const ylE = p.label === LTM ? yahooLtm(facts) : null;
+    const d = p.label === LTM ? (ylE?.through ?? evRes.latestBalanceDate() ?? p.endDate ?? "") : (p.endDate ?? "");
     const br = d ? evRes.bridgeAt(d) : null;
     if (!br) continue;
+    // Yahoo 분기 LTM: 차입금·현금이 같은 기준일로 다 채워졌을 때만(edgar-yahoo-quarters.ts evComplete)
+    if (ylE && (!ylE.evComplete || br.stale || br.balanceDate !== ylE.through)) continue;
     debt[p.label] = br.debt;
     netDebt[p.label] = br.debt - br.cash;
     opLease[p.label] = br.operatingLease;

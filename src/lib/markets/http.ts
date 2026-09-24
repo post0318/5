@@ -1,7 +1,7 @@
 /** 어댑터 공통 HTTP 헬퍼. 서버 전용. */
 
 import { AdapterError } from "./types";
-import { noteFetchFailure } from "./fetch-health";
+import { checkBackoff, noteFetchFailure, noteFetchSuccess } from "./fetch-health";
 
 export interface FetchJsonOpts {
   headers?: Record<string, string>;
@@ -12,6 +12,8 @@ export interface FetchJsonOpts {
 
 export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promise<T> {
   const { headers = {}, revalidate = 60 * 30, timeoutMs = 15_000 } = opts;
+  // 같은 URL 이 연속으로 일시 오류였으면 백오프 동안 조회하지 않는다(fetch-health.ts)
+  if (checkBackoff(url) > 0) throw new AdapterError(`재시도 대기(연속 실패) — ${url}`, { status: 503 });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -25,7 +27,9 @@ export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promi
       noteFetchFailure(url, res.status);
       throw new AdapterError(`요청 실패 ${res.status} — ${url}`, { status: res.status });
     }
-    return (await res.json()) as T;
+    const json = (await res.json()) as T;
+    noteFetchSuccess(url);
+    return json;
   } catch (err) {
     if (err instanceof AdapterError) throw err;
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -41,6 +45,8 @@ export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promi
 
 export async function fetchText(url: string, opts: FetchJsonOpts = {}): Promise<string> {
   const { headers = {}, revalidate = 60 * 30, timeoutMs = 15_000 } = opts;
+  // 같은 URL 이 연속으로 일시 오류였으면 백오프 동안 조회하지 않는다(fetch-health.ts)
+  if (checkBackoff(url) > 0) throw new AdapterError(`재시도 대기(연속 실패) — ${url}`, { status: 503 });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -53,7 +59,9 @@ export async function fetchText(url: string, opts: FetchJsonOpts = {}): Promise<
       noteFetchFailure(url, res.status);
       throw new AdapterError(`요청 실패 ${res.status} — ${url}`, { status: res.status });
     }
-    return await res.text();
+    const text = await res.text();
+    noteFetchSuccess(url);
+    return text;
   } catch (err) {
     if (err instanceof AdapterError) throw err;
     if (err instanceof DOMException && err.name === "AbortError") {

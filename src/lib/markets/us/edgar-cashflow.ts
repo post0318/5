@@ -1,4 +1,5 @@
 import "server-only";
+import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import { recentQuarters, singleQuarter, fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
@@ -12,7 +13,7 @@ import { isFinancialCompany } from "./edgar-financial";
  */
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-// LTM 조합 전용 — 10-Q + 20-F 발행사 인포맥스 분기 LTM(edgar-infomax-quarters.ts)
+// LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)
 const INTERIM_FORMS = LTM_INTERIM_FORMS;
 
 function days(a: string, b: string) {
@@ -290,17 +291,25 @@ export function buildUsCashFlow(
   const labels = periods.map((p) => p.label);
   const blank = (): Record<string, number | null> =>
     Object.fromEntries(labels.map((l) => [l, null]));
+  // 20-F Yahoo 분기 LTM(edgar-yahoo-quarters.ts): 최근 연도엔 있는데 LTM 만 빈 값(채우지 못함)은 합산·차감에서 0 으로
+  // 보지 않는다 — 부분 합·"기타" 잔여가 부푸는 것 방지
+  const ylCf = yahooLtm(facts) && labels.includes(LTM);
+  const prevLbl = labels[labels.length - 2];
+  const ltmGap = (v: Record<string, number | null> | undefined) => !!ylCf && !!v && v[LTM] == null && v[prevLbl] != null;
   const combineVals = (parts: [string, boolean][]): Record<string, number | null> => {
     const out: Record<string, number | null> = {};
     for (const lbl of labels) out[lbl] = null;
+    let gap = false;
     for (const [concept, neg] of parts) {
       const v = valOf([concept]);
+      if (ltmGap(v)) gap = true;
       for (const lbl of labels) {
         const x = v[lbl];
         if (x == null) continue;
         out[lbl] = (out[lbl] ?? 0) + (neg ? -x : x);
       }
     }
+    if (gap) out[LTM] = null;
     return out;
   };
   const applyNegate = (v: Record<string, number | null>): Record<string, number | null> => {
@@ -329,7 +338,8 @@ export function buildUsCashFlow(
       else v = valOf(line.concepts ?? []);
       if (line.fallbackCombine && labels.some((l) => v[l] == null)) {
         const fb = combineVals(line.fallbackCombine);
-        for (const l of labels) if (v[l] == null && fb[l] != null) v[l] = fb[l];
+        const primaryGap = ltmGap(v);
+        for (const l of labels) if (v[l] == null && fb[l] != null && !(l === LTM && primaryGap)) v[l] = fb[l];
       }
       if (line.negate) v = applyNegate(v);
       resolved[line.label] = v;
@@ -349,7 +359,7 @@ export function buildUsCashFlow(
             const x = resolved[k.label]?.[lbl];
             if (x != null) s = (s ?? 0) + x;
           }
-          values[lbl] = s;
+          values[lbl] = lbl === LTM && kids.some((k) => ltmGap(resolved[k.label])) ? null : s;
         }
       } else if (line.plug) {
         values = {};
@@ -369,7 +379,8 @@ export function buildUsCashFlow(
           for (const l of block.lines) {
             if (l.depth === 2 && !l.plug) mapped += resolved[l.label]?.[lbl] ?? 0;
           }
-          values[lbl] = Math.round(tot - mapped);
+          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && (l.depth === 1 || l.depth === 2) && ltmGap(resolved[l.label]));
+          values[lbl] = gap ? null : Math.round(tot - mapped);
         }
       } else {
         values = resolved[line.label];

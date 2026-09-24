@@ -9,6 +9,7 @@ import {
   entriesOf,
   firstConcept,
   instantByYear,
+  instantOn,
   latestInstant,
   shiftYear,
   splitFactorsByYear,
@@ -22,6 +23,7 @@ import {
   type ClassAFacts,
 } from "./edgar-classfacts";
 import { buildShareResolver } from "./edgar-shares";
+import { yahooLtm } from "./edgar-yahoo-quarters";
 import {
   ltmEps,
   fyEps,
@@ -176,20 +178,28 @@ export function buildUsAnalysis(
   /** 전체 연도 시계열 (CAGR용). */
   const fullAnnual = (concepts: string[], unit = "USD") => mergedAnnual(concepts, unit);
   // 잔액값 (단일 개념 우선 목록)
+  // 20-F Yahoo 분기 LTM(edgar-yahoo-quarters.ts) — LTM 잔액은 그 기준일 값만, 흐름과 짝이 안 맞는 값은 비운다
+  const yl = yahooLtm(facts);
+  /** Yahoo 분기 LTM 에서 이 값을 못 채웠는지(최근 연도엔 있는데 LTM 만 빔) — 0 으로 보고 계산하지 않기 위해 */
+  const ltmGap = (x: Record<string, number | null>) =>
+    !!yl && x[LTM] == null && labels.length >= 2 && x[labels[labels.length - 2]] != null;
   const stock = (concepts: string[]): Record<string, number | null> => {
     const e = firstConcept(facts, concepts);
     const ann = instantByYear(e);
     const o = blank();
     for (const y of years) o[`${y}Y`] = ann.get(y) ?? null;
-    o[LTM] = latestInstant(e);
+    o[LTM] = yl ? instantOn(e, yl.through) : latestInstant(e);
     return o;
   };
   const stockSum = (list: string[]): Record<string, number | null> => {
     const o = blank();
+    let gap = false;
     for (const c of list) {
       const v = stock([c]);
+      if (ltmGap(v)) gap = true; // 일부 구성요소만 LTM 에 채워졌으면 부분 합을 내지 않는다
       for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
     }
+    if (gap) o[LTM] = null;
     return o;
   };
   // 액면분할 보정 계수 (소급 재작성 안 된 과거 연도의 주당 지표를 최신 연도 기준으로 환산)
@@ -408,7 +418,7 @@ export function buildUsAnalysis(
     let latestBal = "";
     for (const e of entriesOf(facts, "Assets")) if (!e.start && e.end > latestBal) latestBal = e.end;
     for (const p of periods) {
-      const d = p.label === LTM ? latestBal : (p.endDate ?? "");
+      const d = p.label === LTM ? (yl?.through ?? latestBal) : (p.endDate ?? "");
       o[p.label] = d ? parentEquityAt(facts, d) : null;
     }
     return o;
@@ -421,7 +431,7 @@ export function buildUsAnalysis(
   const evRes = buildEvResolver(facts, { ...(opts.evCtx ?? {}), isFinancial: isFin });
   const balDate = (l: string): string =>
     l === LTM
-      ? (evRes.latestBalanceDate() ?? nowIso)
+      ? (yl?.through ?? evRes.latestBalanceDate() ?? nowIso)
       : (periods.find((p) => p.label === l)?.endDate ?? "");
   const evBlockers = new Set<EvBlocker>();
   let evStale = false;
@@ -432,7 +442,9 @@ export function buildUsAnalysis(
       const d = balDate(l);
       const blk = evRes.blocker(d);
       if (blk) evBlockers.add(blk);
-      const b = evRes.bridgeAt(d);
+      const b0 = evRes.bridgeAt(d);
+      // Yahoo 분기 LTM: 차입금·현금 등 EV 구성요소가 같은 기준일로 다 채워졌을 때만(아니면 LTM EV·순차입금 공란)
+      const b = b0 && l === LTM && yl && (!yl.evComplete || b0.stale || b0.balanceDate !== yl.through) ? null : b0;
       if (b?.stale) evStale = true;
       if (b?.debtPartial) evPartial = true;
       if (b?.captiveDebtExcluded != null) evCaptive = true;
@@ -568,6 +580,8 @@ export function buildUsAnalysis(
   // 파생
   const ebitda = blank();
   for (const l of labels) if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
+  // Yahoo 분기 LTM 에서 감가상각비를 못 채웠으면 EBITDA 도 공란(0 으로 보지 않음)
+  if (yl && da[LTM] == null) ebitda[LTM] = null;
   const fcf = blank();
   for (const l of labels) if (ocf[l] != null && capexRaw[l] != null) fcf[l] = ocf[l]! - Math.abs(capexRaw[l]!);
 
@@ -607,7 +621,7 @@ export function buildUsAnalysis(
       .flatMap((c) => entriesOf(facts, c))
       .filter((e) => !e.start)
       .sort((a, b) => (a.end < b.end ? 1 : -1));
-    if (insts.length) {
+    if (insts.length && (!yl || insts[0].end === yl.through)) {
       const latest = insts[0];
       const target = shiftYear(latest.end, -1);
       const prevE = insts.find((e) => Math.abs(days(e.end, target)) <= 25);
@@ -629,21 +643,25 @@ export function buildUsAnalysis(
   const curLiabAvg = avgStock(["LiabilitiesCurrent"]);
   // 유동 차입금(평균) — edgar-ev.ts 단일 기준: 전체 차입금 − 비유동 차입금.
   // 예전엔 여기서 차입금 태그를 따로 골라 EV 쪽과 기준이 달랐다(감사 2026-09-23).
-  const curDebtAt = (d: string): number | null => {
+  // strict: 그 기준일 값만(이전 연말로 대체된 값은 버림) — Yahoo 분기 LTM 열
+  const curDebtAt = (d: string, strict = false): number | null => {
     const b = d ? evRes.bridgeAt(d) : null;
+    if (strict && b && (b.stale || b.balanceDate !== d)) return null;
     return b && b.debtNoncurrent != null ? Math.max(0, b.debt - b.debtNoncurrent) : null;
   };
   const curDebtAvg = blank();
   for (const l of labels) {
     const d = balDate(l);
     const prevD = l === LTM ? shiftYear(d, -1) : (ends.get(Number(l.slice(0, 4)) - 1) ?? "");
-    const cur = curDebtAt(d);
-    const prev = prevD ? curDebtAt(prevD) : null;
+    const strict = !!yl && l === LTM;
+    const cur = curDebtAt(d, strict);
+    const prev = prevD ? curDebtAt(prevD, strict) : null;
     curDebtAvg[l] = cur != null && prev != null ? (cur + prev) / 2 : cur;
   }
   const investedCapAvg = blank();
   for (const l of labels) {
     if (assetsAvg[l] == null || curLiabAvg[l] == null) continue;
+    if (l === LTM && ltmGap(curDebtAvg)) continue; // 유동 차입금을 같은 기준일로 못 채움 — 0 으로 보지 않음
     investedCapAvg[l] = assetsAvg[l]! - (curLiabAvg[l]! - (curDebtAvg[l] ?? 0));
   }
 
@@ -683,7 +701,8 @@ export function buildUsAnalysis(
     for (const p of periods) {
       const isLtm = p.label === LTM;
       const anchorY = isLtm ? lastY + 1 : p.fiscalYear;
-      const cur = isLtm ? (ltm ?? full.get(lastY) ?? null) : (full.get(anchorY) ?? null);
+      // Yahoo 분기 LTM 이면 LTM 값이 없을 때 연간값으로 대신하지 않는다(기간 혼합)
+      const cur = isLtm ? (ltm ?? (yl ? null : full.get(lastY)) ?? null) : (full.get(anchorY) ?? null);
       const base = full.get(anchorY - n);
       if (cur != null && base != null && base > 0 && cur > 0)
         o[p.label] = (Math.pow(cur / base, 1 / n) - 1) * 100;
@@ -765,7 +784,7 @@ export function buildUsAnalysis(
   const evV = blank();
   for (const l of labels) {
     const mc = l === LTM ? curMktcap : mktcap[l];
-    evV[l] = evRes.evAt(balDate(l), mc, price[l]);
+    evV[l] = bridge[l] ? evRes.evAt(balDate(l), mc, price[l]) : null; // Yahoo 분기 LTM 에서 비운 브릿지는 EV 도 공란
   }
   // EBITDA ≤ 0 이면 비운다 — 음수 배수는 의미가 없고, 하이라이트·컨센서스도 같은 규칙
   const evEbitda = ratio(
@@ -790,6 +809,7 @@ export function buildUsAnalysis(
     const o = blank();
     for (const l of labels) {
       if (!curLiab[l]) continue;
+      if (l === LTM && (ltmGap(cashCur) || ltmGap(ar))) continue; // 구성요소를 못 채웠으면 0 으로 보지 않음
       const qa = (cashCur[l] ?? 0) + (ar[l] ?? 0);
       if (qa > 0) o[l] = qa / curLiab[l]!;
     }
@@ -815,7 +835,8 @@ export function buildUsAnalysis(
   // 재고 태그가 없으면 재고 0 (플랫폼·서비스) → DIO 0, CCC 계산 가능
   const dio = (() => {
     const o = blank();
-    for (const l of labels) if (cogsAbs[l]) o[l] = ((invAvg[l] ?? 0) / cogsAbs[l]!) * 365;
+    for (const l of labels)
+      if (cogsAbs[l] && !(l === LTM && ltmGap(invAvg))) o[l] = ((invAvg[l] ?? 0) / cogsAbs[l]!) * 365;
     return o;
   })();
   const dpo = ratio(apAvg, cogsAbs, 365);
@@ -926,6 +947,7 @@ export function buildUsAnalysis(
     R("총주주환원율 (%)", (() => {
       const o = blank();
       for (const l of labels) {
+        if (l === LTM && (ltmGap(commonDividends) || ltmGap(buyback))) continue; // 구성요소를 못 채웠으면 0 으로 보지 않음
         const ret = (commonDividends[l] != null ? Math.abs(commonDividends[l]!) : 0) + (buyback[l] != null ? Math.abs(buyback[l]!) : 0);
         if (netIncome[l]) o[l] = (ret / netIncome[l]!) * 100;
       }

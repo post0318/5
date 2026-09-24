@@ -140,8 +140,27 @@ function fixScale(v: number | null, ref: number | null): number | null {
  * 없으면 확인 불가로 보고 손대지 않는다(종전 동작). 실제 분할(NVDA 10:1·CMG 50:1·WMT 3:1 등)은 표지 주식수가
  * 그 배수로 바뀌므로 그대로 남는다. 20-F ADR 은 ADR 비율 변경이 "분할"로 기록될 수 있어(보통주 수는 불변) 제외.
  * 가격만 바꾸므로 PER·PBR·시가총액·EV·배당수익률이 함께 일관되게 바뀐다.
+ * 되돌리는 조건은 둘 다(AND): ① Yahoo 비율이 작은 정수비가 아님(분사 조정계수) ② 분할일 ±10일 밖의 앞뒤 표지로 확인 안 됨.
  */
 const SPLIT_CONFIRM_WINDOW_DAYS = 200;
+/**
+ * 분할일 ±이 일수 안의 표지는 판정에서 뺀다 — 표지 기준일이 분할 배분일 직전이어도 이미 분할 후 주식수가 적혀
+ * 있는 경우가 있다(SHW 3:1, Yahoo 2021-04-01 — 10-K 표지 기준일 2021-03-31 인데 265,949,600 주 = 분할 후. 비율
+ * 0.99 로 "확인 안 된 분할(분사)"로 오판해 진짜 분할을 되돌렸다, 독립 감사 2026-09-25).
+ */
+const SPLIT_COVER_EXCLUDE_DAYS = 10;
+
+/**
+ * Yahoo 비율이 작은 정수비(분자 ≤ 100, 분모 ≤ 10 — 2:1·3:2·10:1·50:1·1:10 등)인지. 실제 분할·병합은 항상 이런 비율이고,
+ * Yahoo 가 "분할"로 기록하는 분사 조정계수는 분사 기준가 비율이라 1.323(WDC)·1.281·1.253(GE) 같은 비정수다.
+ */
+function isSmallIntegerRatio(ratio: number): boolean {
+  for (let den = 1; den <= 10; den++) {
+    const num = Math.round(ratio * den);
+    if (num >= 1 && num <= 100 && Math.abs(num / den - ratio) < 1e-9) return true;
+  }
+  return false;
+}
 
 export function secBasisBars(facts: CompanyFacts, quote: EodQuote | null | undefined): QuoteBar[] {
   const bars = quote?.bars ?? [];
@@ -153,10 +172,12 @@ export function secBasisBars(facts: CompanyFacts, quote: EodQuote | null | undef
   if (/^20-F/.test(lastDei?.form ?? "") || (facts.adrRatio ?? 1) !== 1) return bars;
   const win = SPLIT_CONFIRM_WINDOW_DAYS * 864e5;
   // 같은 기준일 값이 여럿이면(클래스별 표지) 최댓값 — 앞뒤를 같은 규칙으로 고른다
+  const excl = SPLIT_COVER_EXCLUDE_DAYS * 864e5;
   const coverAt = (pickBefore: boolean, date: string): number | null => {
     let best: { end: string; val: number } | null = null;
     for (const e of dei) {
       const gap = Date.parse(e.end) - Date.parse(date);
+      if (Math.abs(gap) <= excl) continue;
       if (pickBefore ? !(gap < 0 && -gap <= win) : !(gap >= 0 && gap <= win)) continue;
       if (!best || (pickBefore ? e.end > best.end : e.end < best.end) || (e.end === best.end && e.val > best.val))
         best = { end: e.end, val: e.val };
@@ -165,6 +186,8 @@ export function secBasisBars(facts: CompanyFacts, quote: EodQuote | null | undef
   };
   const undo = splits.filter((s) => {
     if (!(s.ratio > 0) || s.ratio === 1) return false;
+    // 작은 정수비는 실제 분할로 보고 되돌리지 않는다(표지 판정과 AND — 분사 조정계수는 비정수)
+    if (isSmallIntegerRatio(s.ratio)) return false;
     const before = coverAt(true, s.date), after = coverAt(false, s.date);
     if (before == null || after == null) return false;
     const r = Math.log(after / before);
@@ -223,20 +246,97 @@ export function buildShareResolver(
   const lastDei = dei.reduce<FactUnitEntry | null>((b, e) => (!b || e.end > b.end ? e : b), null);
   const adr = adrRatio(/^20-F/.test(lastDei?.form ?? ""), lastDei?.val, hint);
 
+  // 공시별 분할 기준 계수(현재 기준 ÷ 그 공시 기준) — 최신 공시를 1 로 두고, 앞선 공시마다 이미 계수가 정해진 나중 공시와
+  // 같은 결산일의 유통·발행주식수를 비교한다. 비율이 1(±1%)이면 같은 기준, 정수 배수(±0.5%, 2~100)면 그 사이 분할.
+  // GOOG: 2022-02 10-K 의 2021-12-31 유통주식수 662,121,000 vs 2022-07 10-Q 의 같은 날 13,242,000,000 → 20.
+  let splitByFiled: Map<string, number> | null = null;
+  const filingSplitFactor = (): Map<string, number> => {
+    if (splitByFiled) return splitByFiled;
+    const byFiled = new Map<string, Map<string, number>>();
+    for (const [tag, es] of [["o", sharesEnd], ["i", issuedE]] as const)
+      for (const e of es) {
+        if (e.start || !e.filed || !(e.val > 0) || !e.end) continue;
+        const m = byFiled.get(e.filed) ?? new Map<string, number>();
+        m.set(`${tag}|${e.end}`, e.val);
+        byFiled.set(e.filed, m);
+      }
+    const fac = new Map<string, number>();
+    for (const fd of [...byFiled.keys()].sort().reverse()) {
+      if (!fac.size) { fac.set(fd, 1); continue; }
+      const fm = byFiled.get(fd)!;
+      let got: number | null = null;
+      for (const [g, gf] of fac) {
+        const gm = byFiled.get(g)!;
+        for (const [key, v] of fm) {
+          const w = gm.get(key);
+          if (w == null) continue;
+          const r = w / v, R = r >= 1 ? r : 1 / r, k = Math.round(R);
+          if (Math.abs(R - 1) < 0.01) got = gf;
+          else if (k >= 2 && k <= 100 && Math.abs(R / k - 1) < 0.005) got = r >= 1 ? gf * k : gf / k;
+          if (got != null) break;
+        }
+        if (got != null) break;
+      }
+      if (got != null) fac.set(fd, got);
+    }
+    return (splitByFiled = fac);
+  };
+
   return {
     atFiscalYearEnd(year, endDate) {
       // 결산일(±7일) 시점 값 — 대차대조표 본표 기준. 후보는 같은 해 가중평균 주식수와 1.2배 안일 때만 채택한다
       // (PEP 는 "발행주식수" 태그가 이미 자기주식을 뺀 순발행분이라 또 빼면 틀린다 — 가중평균과 어긋나 걸러짐)
-      const atEnd = (es: FactUnitEntry[]): number | null => {
-        let b: FactUnitEntry | null = null;
-        for (const e of es) if (!e.start && e.val != null && e.end && Math.abs(Date.parse(e.end) - Date.parse(endDate)) <= 7 * 864e5 && (!b || (e.filed ?? "") > (b.filed ?? ""))) b = e;
-        return b?.val ?? null;
-      };
-      const issued = atEnd(issuedE), treasury = atEnd(treasuryE), trust = atEnd(trustE) ?? 0;
       // 잣대도 후보마다 단위 오류 보정 — MCD 는 가중평균을 7.164억 주가 아니라 716.4 로 태깅했다
       // 잣대는 기본 가중평균 우선 — 희석 가중평균은 전환사채 희석이 큰 해에 본표 주식수와 10% 넘게 벌어져 정답 후보가
       // 탈락했다(TSLA FY2020: 희석 32.49억 ÷ (본표 9.6억 × 3) = 1.128 → 가중평균 근사, 기본 27.98억이면 0.97)
       const refRaw = annualOf(wavgBasic, year) ?? annualOf(wavgDil, year);
+      const zeros = (v: number) => { let n = 0; while (n < 9 && v % 10 ** (n + 1) === 0) n++; return n; };
+      // **결산일 값의 판본 선택** — 그 해의 10-K(결산일 값을 담은 가장 먼저 제출된 연간 공시, own)와 가장 최근 공시
+      // (latest) 중:
+      //  · 값이 같으면 그 해의 10-K(같은 공시의 후보끼리 비교할 수 있게 — 아래 정밀값 선택)
+      //  · 정수 분할 배수(2~100배, 0.1% 안)만큼 다르면 분할 소급본 — 같은 기준으로 환산해 더 정밀한 쪽(동률이면 최신).
+      //    GOOG 2021: 10-K 662,121,000 × 20 = 13,242,420,000 이 2022-07 10-Q 소급본 13,242,000,000 보다 정밀 → 13,242,420,000.
+      //    거꾸로 LRCX 2024 는 10-K 130,377,000(천 주 단위) × 10 보다 소급본 1,303,769,000 이 정밀하다.
+      //  · 1,000배 넘게 다르면 단위 오류(TER — 천 주로 태깅) — 가중평균에 가까운 쪽
+      //  · 그 밖의 차이는 나중 공시의 정정으로 보고 최신(PEP 2019 — 2020 10-K 가 전년 값을 잘못 태깅한 것을 이후 공시가
+      //    바로잡음, MU 2016 — 10-K 가 발행주식수를 유통주식수 태그로 적은 것을 이듬해 정정). 예전 규칙 그대로.
+      // 반올림 재태깅(MRVL 2022 846,695,000 → 846,700,000)은 dropRoundedRetags 가 미리 버린다.
+      type Vin = { val: number; filed?: string };
+      const pickVintage = (own: Vin | null, latest: Vin | null): Vin | null => {
+        if (!own || !latest || own.val === latest.val) return own ?? latest;
+        if (!(own.val > 0 && latest.val > 0)) return latest;
+        const r = latest.val / own.val, R = r >= 1 ? r : 1 / r, k = Math.round(R);
+        if (!(k >= 2 && Math.abs(R / k - 1) < 1e-3)) return latest;
+        if (k > 100) {
+          if (refRaw == null || !(refRaw > 0)) return latest;
+          return Math.abs(Math.log(own.val / refRaw)) < Math.abs(Math.log(latest.val / refRaw)) ? own : latest;
+        }
+        const [a, b] = r >= 1 ? [own.val * k, latest.val] : [own.val, latest.val * k];
+        // 정밀한 쪽이 그 해의 10-K 면 그 값을 최신 판본의 분할 기준으로 환산해 쓴다(이후 분할 배수 처리는 종전과 같은 기준)
+        // (환산한 값은 최신 판본의 분할 기준이므로 filed 도 최신 판본 — 아래 공시별 분할 계수가 이 기준으로 본다)
+        return zeros(a) < zeros(b) ? { val: r >= 1 ? own.val * k : own.val / k, filed: latest.filed } : latest;
+      };
+      const vintagesAt = (es: FactUnitEntry[]): { own: FactUnitEntry | null; latest: FactUnitEntry | null } => {
+        let own: FactUnitEntry | null = null, latest: FactUnitEntry | null = null;
+        for (const e of es) {
+          if (e.start || e.val == null || !e.end || Math.abs(Date.parse(e.end) - Date.parse(endDate)) > 7 * 864e5) continue;
+          if (!latest || (e.filed ?? "") > (latest.filed ?? "")) latest = e;
+          if (ANNUAL_FORMS.includes(e.form) && (!own || (e.filed ?? "") < (own.filed ?? ""))) own = e;
+        }
+        return { own, latest };
+      };
+      const atEndE = (es: FactUnitEntry[]): Vin | null => {
+        const v = vintagesAt(es);
+        return pickVintage(v.own, v.latest);
+      };
+      const atEnd = (es: FactUnitEntry[]): number | null => atEndE(es)?.val ?? null;
+      const issued = atEnd(issuedE), trust = atEnd(trustE) ?? 0;
+      // 발행 − 자기주식은 같은 공시의 두 값끼리만 빼고, 그 차를 한 덩어리로 판본 선택(발행·자기주식이 서로 다른 분할
+      // 기준 판본에서 오면 무의미한 값이 된다)
+      const iv = vintagesAt(issuedE), tv = vintagesAt(treasuryE);
+      const pairOf = (i: FactUnitEntry | null, t: FactUnitEntry | null): Vin | null =>
+        i && t && i.filed === t.filed ? { val: i.val - t.val, filed: i.filed } : null;
+      const pair = pickVintage(pairOf(iv.own, tv.own), pairOf(iv.latest, tv.latest));
       const near = (v: number | null) => {
         if (v == null || v <= 0) return false;
         const ref = fixScale(refRaw, v);
@@ -257,8 +357,25 @@ export function buildShareResolver(
       // 보통주를 클래스별로만 공시하고 클래스 간 전환비율이 있는 종목(Visa) — 10-K 의 전환 기준(as-converted) 보통주
       // 합계가 결산일 주식수다(edgar-classfacts.ts). 발행 주수 단순 합(B·C 과소 반영)·가중평균 근사보다 앞선다.
       const asConverted = classAsConverted(cf, year);
-      const bsFace = asConverted ?? [atEnd(sharesEnd), atEnd(equityStmtE), atEnd(equityDimE), issued != null && treasury != null ? issued - treasury - trust : null].find(near)
-        ?? (nearTight(issuedOnly) ? issuedOnly : null);
+      const cands: { val: number | null; filed?: string }[] = [sharesEnd, equityStmtE, equityDimE].map((es) => {
+        const e = atEndE(es);
+        return { val: e?.val ?? null, filed: e?.filed };
+      });
+      cands.push({ val: pair ? pair.val - trust : null, filed: pair?.filed });
+      const first = cands.find((c) => near(c.val));
+      // 같은 공시의 후보끼리 반올림 범위 안에서 일치하면 가장 정밀한 값(오너 결정 "정확한 값 우선") — CAT 은 본표
+      // 유통주식수를 10만 주 단위(535,900,000)로, 같은 10-K 의 발행 − 자기주식은 정확히(535,888,051) 적는다.
+      const precise = first?.val != null && first.filed
+        ? cands
+            .filter((c) => c.val != null && c.filed === first.filed && near(c.val) &&
+              [1e3, 1e4, 1e5, 1e6].some((p) => first.val! % p === 0 && Math.round(c.val! / p) * p === first.val))
+            .reduce((b, c) => (zeros(c.val!) < zeros(b) ? c.val! : b), first.val)
+        : first?.val ?? null;
+      const bsFace = asConverted ?? precise ?? (nearTight(issuedOnly) ? issuedOnly : null);
+      // 본표 값이 실린 공시(분할 기준 판정용) — 전환 기준 합계는 공시를 모르므로 없음
+      const bsFiled = asConverted != null ? undefined
+        : precise != null ? first?.filed
+        : bsFace != null ? atEndE(issuedE)?.filed : undefined;
       // as-reported(그 회계연도 시점) 값만 쓴다 — DEI 표지 주식수는 제출일
       // 기준이라 결산 후 분할이 있으면 기준이 어긋나므로 맨 뒤.
       const instant =
@@ -305,6 +422,12 @@ export function buildShareResolver(
         return hint;
       }
       const f = splitF.get(year);
+      // 가중평균 태그가 없어 분할 계수가 없는 해(GOOG — 가중평균을 클래스 차원으로만 공시, 2022-07 20:1 분할 이전
+      // 연도): 본표 값이 실린 공시의 분할 기준을 공시끼리 같은 결산일 값으로 이어 현재 기준으로 환산한다.
+      if (f == null && !splitBasis && raw === instant && bsFace != null && bsFiled) {
+        const k = filingSplitFactor().get(bsFiled);
+        if (k != null && k !== 1) return (raw * k) / adr;
+      }
       return (f != null && f !== 0 ? raw / f : raw) / adr;
     },
     current() {

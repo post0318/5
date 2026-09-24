@@ -160,6 +160,16 @@ function avgRate(s: { date: string; rate: number }[], start: string, end: string
   return n > 0 && n >= days * 0.3 ? sum / n : null;
 }
 
+/**
+ * 통화 → USD 환산 도우미(앱 공통 환율 규칙 — 흐름 = 기간 평균 환율, 잔액 = 기말 환율). USD 면 1.
+ * 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)이 SEC 연도 열과 같은 환율 원천·규칙을 쓰게 한다.
+ */
+export async function fxToUsd(cur: string): Promise<{ avg(start: string, end: string): number | null; at(date: string): number | null }> {
+  if (cur === "USD") return { avg: () => 1, at: () => 1 };
+  const s = await fxSeries(cur);
+  return { avg: (a, b) => avgRate(s, a, b), at: (d) => rateAt(s, d) };
+}
+
 const dayMs = 864e5;
 const addDay = (d: string, n: number) => {
   const t = Date.parse(`${d.slice(0, 10)}T00:00:00Z`) + n * dayMs;

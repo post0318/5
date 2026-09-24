@@ -1,5 +1,6 @@
 import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
+import { yahooLtmLabel } from "@/lib/markets/us/edgar-yahoo-quarters";
 import { getAdapter } from "@/lib/markets/registry";
 import { getEodQuote } from "@/lib/markets/quote";
 import { fetchForwardConsensus, fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
@@ -155,14 +156,9 @@ export async function GET(
     // 원본 조회 일시 오류(SEC 429 등) — 일부 공시가 빠졌을 수 있다(fetch-health.ts, 2분 뒤 다시 계산)
     if (factsRes.facts.fetchWarnings?.length)
       highlights.notes.unshift(`⚠ 일부 공시 조회 실패(${factsRes.facts.fetchWarnings.slice(0, 3).join(", ")}) — 값이 빠지거나 오래됐을 수 있음, 잠시 뒤 다시 계산`);
+    // 20-F 발행사 LTM 열 = Yahoo 분기(edgar-yahoo-quarters.ts) — 기준일·공란 항목 명시
     const lq = factsRes.facts.ltmQuarterSource;
-    if (lq)
-      highlights.notes.push(
-        lq.source === "infomax"
-          ? `LTM 분기: 인포맥스(FactSet, ~${lq.through}) — 현재/LTM 열 ${lq.items.join("·")} = 인포맥스 최근 4개 분기 합(USD, FactSet 환율). 연도 열은 SEC 공시(앱 환산). 재무상태표는 SEC 최근 연말` +
-            lq.definitionDiffs.map((d) => ` · LTM ${d.label}은 FactSet 정의 — SEC 연도 열 대비 정의 차 ${d.pct >= 0 ? "+" : ""}${d.pct.toFixed(2)}%`).join("")
-          : `LTM 분기 보강 안 함(연간 유지): ${lq.reason}`,
-      );
+    if (lq) highlights.notes.push(yahooLtmLabel(lq));
 
     return ok(
       { highlights },

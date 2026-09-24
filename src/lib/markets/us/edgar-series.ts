@@ -5,8 +5,9 @@ import type { CompanyFacts, FactUnitEntry } from "./edgar";
 
 export const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
 export const INTERIM_FORMS = ["10-Q", "10-Q/A"];
-/** LTM 조합 전용 — 10-Q + 20-F 발행사 인포맥스 분기 LTM 합성 공시(edgar-infomax-quarters.ts INFOMAX_Q_FORM) */
-export const LTM_INTERIM_FORMS = [...INTERIM_FORMS, "INFOMAX-Q"];
+/** LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM 합성 공시(edgar-yahoo-quarters.ts YAHOO_Q_FORM) */
+const YAHOO_Q_FORM = "YAHOO-Q";
+export const LTM_INTERIM_FORMS = [...INTERIM_FORMS, YAHOO_Q_FORM];
 
 export function days(a: string, b: string): number {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
@@ -75,9 +76,14 @@ export function isFullYearDuration(e: FactUnitEntry): boolean {
  */
 export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
   const P = [1e6, 1e8, 1e9, 1e10];
-  const roundsTo = (x: number, y: number) =>
-    x !== y && P.some((p) => Math.round(y / p) * p === x && y % p !== 0);
-  const clean = (es: FactUnitEntry[]): FactUnitEntry[] => {
+  const usdRounds = (x: number, y: number) =>
+    Math.abs(x) >= 1e8 && x !== y && P.some((p) => Math.round(y / p) * p === x && y % p !== 0);
+  // 주식수(shares)도 같은 규칙 — MRVL 2022-01-29 유통주식수: 그 해 10-K 846,695,000 → 2023 10-K 846,700,000(10만 주
+  // 반올림). 주식수 공시 관행 단위(천·만·10만·백만 주)마다 값이 그 단위의 100배 이상일 때만(상대 오차 0.5% 이하 — USD 규칙과 같은 폭.
+  // 자사주 매입·발행 같은 실제 변동이 우연히 원래 값의 반올림과 같아질 여지를 없앤다).
+  const sharesRounds = (x: number, y: number) =>
+    x !== y && [1e3, 1e4, 1e5, 1e6].some((p) => Math.abs(x) >= 100 * p && Math.round(y / p) * p === x && y % p !== 0);
+  const clean = (es: FactUnitEntry[], roundsTo: (x: number, y: number) => boolean): FactUnitEntry[] => {
     const groups = new Map<string, FactUnitEntry[]>();
     for (const e of es) {
       const k = `${e.start ?? ""}|${e.end}`;
@@ -89,7 +95,6 @@ export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
     for (const g of groups.values()) {
       if (g.length < 2) continue;
       for (const x of g) {
-        if (Math.abs(x.val) < 1e8) continue;
         if (g.some((y) => (y.filed ?? "") < (x.filed ?? "") && roundsTo(x.val, y.val))) drop.add(x);
       }
     }
@@ -101,7 +106,7 @@ export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
     const ng: NonNullable<CompanyFacts["facts"]["us-gaap"]> = {};
     for (const [concept, o] of Object.entries(gaap)) {
       const units: Record<string, FactUnitEntry[]> = {};
-      for (const [u, es] of Object.entries(o.units)) units[u] = u === "USD" ? clean(es) : es;
+      for (const [u, es] of Object.entries(o.units)) units[u] = u === "USD" ? clean(es, usdRounds) : u === "shares" ? clean(es, sharesRounds) : es;
       ng[concept] = { ...o, units };
     }
     out.facts["us-gaap"] = ng;
@@ -308,14 +313,36 @@ export function splitFactorsByYear(
   // 25~100 추가 — CMG 50:1(2024-06)을 못 알아봐 2021 EPS 가 22.9(실제 0.458)로 나왔다(검증 2026-09-24).
   // 3:2(1.5배)는 증자·자사주와 구분이 어려워 넣지 않는다 — 검증 도구가 Yahoo 분할 이력으로 따로 잡는다.
   const SPLITS = [2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 40, 50, 100];
+  // **같은 공시로 두 해를 잇는다(우선)** — yOld 의 최신 판본이 실린 공시(A)에는 yNew 값도 있다(10-K 비교 열). A 의 yNew
+  // 값과 yNew 의 최신 판본 값의 비율은 두 공시 사이의 분할 배수 그 자체다(연도 간 주식수 증감·희석이 섞이지 않는다).
+  // 인접 연도 비교(아래 폴백)는 TSLA 에서 2020 희석 32.49억(3:1 소급) ÷ 2019 8.87억(5:1 까지만 소급) = 3.66 → 4 로
+  // 틀려 2018·2019 계수가 1/4(실제 1/3), FY2018 결산일 주식수가 ×20(실제 5×3=15)이 됐다(검증 2026-09-25).
+  const annualE = (c: string) =>
+    entriesOf(facts, c, "shares").filter((e) => e.fp === "FY" && isFullYearDuration(e) && ANNUAL_FORMS.includes(e.form));
+  const newestOf = (es: FactUnitEntry[], y: number) =>
+    es.filter((e) => fiscalYearOf(e.end) === y).reduce<FactUnitEntry | null>((b, e) => (!b || preferNewer(e, b) ? e : b), null);
+  const crossStep = (yOld: number, yNew: number): number | null => {
+    for (const c of shareConcepts) {
+      const es = annualE(c);
+      const o = newestOf(es, yOld), n = newestOf(es, yNew);
+      if (!o || !n) continue;
+      const inA = es.find((e) => fiscalYearOf(e.end) === yNew && e.filed === o.filed);
+      if (!inA || !(inA.val > 0) || !(n.val > 0)) return null;
+      const r = n.val / inA.val, R = r >= 1 ? r : 1 / r, k = Math.round(R);
+      if (k === 1) return Math.abs(R - 1) < 0.02 ? 1 : null;
+      return k <= 100 && Math.abs(R / k - 1) < 0.005 ? (r >= 1 ? 1 / k : k) : null;
+    }
+    return null;
+  };
   for (let i = years.length - 1; i > 0; i--) {
     const yNew = years[i];
     const yOld = years[i - 1];
     const f = factor.get(yNew) ?? 1;
     const sNew = sh.get(yNew);
     const sOld = sh.get(yOld);
-    let step = 1;
-    if (sNew != null && sOld != null && sOld > 0) {
+    const cross = crossStep(yOld, yNew);
+    let step = cross ?? 1;
+    if (cross == null && sNew != null && sOld != null && sOld > 0) {
       const r = sNew / sOld;
       const rvNew = rev.get(yNew);
       const rvOld = rev.get(yOld);
@@ -362,12 +389,16 @@ export function vintageOrder(a: { filed?: string }, b: { filed?: string }, prefe
  * 인포맥스·Finviz 방식). 구성요소 하나라도 ltmQ 가 없으면 공시값(val, 기간 평균 환율) 조합.
  */
 export function ttmCombine(
-  fy: { val: number; ltmQ?: number },
-  cur?: { val: number; ltmQ?: number } | null,
-  prior?: { val: number; ltmQ?: number } | null,
-): number {
+  fy: { val: number; ltmQ?: number; ltmNone?: boolean },
+  cur?: { val: number; ltmQ?: number; form?: string } | null,
+  prior?: { val: number; ltmQ?: number; form?: string } | null,
+): number | null {
+  // 20-F Yahoo 분기 LTM 에서 채우지 못한 항목 — FY 값으로 대신하지 않고 공란(edgar-yahoo-quarters.ts)
+  if (fy.ltmNone) return null;
   if (!cur || !prior) return fy.ltmQ ?? fy.val;
   if (fy.ltmQ != null && cur.ltmQ != null && prior.ltmQ != null) return fy.ltmQ + cur.ltmQ - prior.ltmQ;
+  // Yahoo 분기 구성요소는 LTM 전용 값(ltmQ) 조합으로만 — 공시값(val)과 섞으면 기간·원천이 섞인다
+  if (cur.form === YAHOO_Q_FORM || prior.form === YAHOO_Q_FORM) return null;
   return fy.val + cur.val - prior.val;
 }
 

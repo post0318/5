@@ -17,10 +17,12 @@ export interface FactEntry {
   filed?: string;
   /** 외화 공시 — 분기별 평균 환율 합 환산값(edgar-foreign.ts). LTM 조합 전용 */
   ltmQ?: number;
+  /** 20-F Yahoo 분기 LTM 에서 채우지 못한 항목(edgar-yahoo-quarters.ts) — LTM 공란 */
+  ltmNone?: boolean;
 }
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-// LTM 조합 전용 — 10-Q + 20-F 발행사 인포맥스 분기 LTM(edgar-infomax-quarters.ts)
+// LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)
 const INTERIM_FORMS = LTM_INTERIM_FORMS;
 
 function days(a: string, b: string): number {
@@ -136,7 +138,10 @@ export function ttmFlow(entries: FactEntry[] | undefined): TtmResult {
     ttm,
     annual: fy.val,
     annualLabel,
-    ttmLabel: `FY${fyYear} + ${cur.start.slice(0, 4)}누적(~${cur.end}) − 전년동기${fy.ltmQ != null && cur.ltmQ != null && prior.ltmQ != null ? " · USD 환산 = 분기마다 그 분기 평균 환율" : ""}`,
+    ttmLabel:
+      cur.form === "YAHOO-Q"
+        ? `최근 4개 분기(~${cur.end}) · Yahoo 분기(원통화, 분기 평균 환율 환산)`
+        : `FY${fyYear} + ${cur.start.slice(0, 4)}누적(~${cur.end}) − 전년동기${fy.ltmQ != null && cur.ltmQ != null && prior.ltmQ != null ? " · USD 환산 = 분기마다 그 분기 평균 환율" : ""}`,
     from: shiftYear(cur.end, -1),
     to: cur.end,
   };

@@ -54,8 +54,9 @@ export interface DartAdrSpec {
 /**
  * 대상 목록 — 종목별 상수는 여기 한 곳에만.
  * SKHY: 1 ADS = 보통주 0.1주. 근거 — 예탁증권 명칭 "SK HYNIX INC SPON ADS EACH REP 0.1 SHS"
- * (인포맥스 종목 마스터, ISIN US78392B2060), 인포맥스 ADS 수 7,288,651천 = 보통주 7.29억 주 × 10,
- * ADR 가격(≈$186) ≈ 000660 종가(≈186만 원) × 0.1 ÷ 환율.
+ * (인포맥스 종목 마스터, ISIN US78392B2060), 인포맥스 ADS 수 7,288,651천 = 보통주 7.29억 주 × 10.
+ * 가격은 비율 근거가 아니다 — ADR 가격(≈$186)이 KRX 환산가(000660 ≈186만 원 × 0.1 ÷ 환율 ≈ $136) 대비
+ * 프리미엄(2026-09 실측 약 37%)으로 거래된다(오너 확인 — 비율 오류 아님).
  */
 export const DART_ADR: Record<string, DartAdrSpec> = {
   SKHY: { krCode: "000660", sharesPerAdr: 0.1 },

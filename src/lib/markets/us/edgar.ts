@@ -5,8 +5,10 @@
  */
 
 import { fetchJson } from "../http";
-import { secFailuresSince } from "../fetch-health";
-import { loadInfomaxQuarters, withInfomaxLtm, type InfomaxLtmResult } from "./edgar-infomax-quarters";
+import { withFetchScope } from "../fetch-health";
+import { withYahooLtm, yahooLtm, type YahooLtmResult } from "./edgar-yahoo-quarters";
+import { fetchYahooFundamentals } from "../quote/yahoo";
+import { fxToUsd } from "./edgar-foreign";
 import { consensusDeepLinks, filingsDeepLink, newsDeepLinks } from "../deeplinks";
 import {
   AdapterError,
@@ -159,6 +161,9 @@ const FACTS_TTL = 1000 * 60 * 60 * 6;
  * 결과로 6시간 붙잡아 TSM FY2025 가 통째로 빠졌던 문제(SEC 429, 2026-09-25). 화면에는 fetchWarnings 로 경고.
  */
 const FACTS_TTL_DEGRADED = 1000 * 60 * 2;
+const FACTS_TTL_DEGRADED_MAX = 1000 * 60 * 60;
+/** CIK 별 연속 불완전 조립 횟수 — 짧은 캐시 주기 확대용 */
+const degradedStreak = new Map<string, number>();
 // getStockOverview 는 getFinancials("annual")·getTtm 을 Promise.all 로 동시에
 // 부르는데, 둘 다 같은 CIK 의 companyfacts 가 필요하다 — 캐시는 fetch 가 끝나야
 // 채워지므로 둘 다 "미스"로 보고 SEC 에 같은 URL 을 중복 요청했다(실측 확인,
@@ -173,9 +178,9 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
   if (hit && Date.now() - hit.at < hit.ttl) return hit.data;
   const inFlight = factsInFlight.get(cik);
   if (inFlight) return inFlight;
-  const t0 = Date.now();
   const extraWarnings: string[] = [];
-  const p = fetchJson<CompanyFacts>(
+  // 이 조립에 쓰인 조회의 실패만 모은다(fetch-health.ts withFetchScope — 같은 CIK 의 다른 로더 실패는 섞이지 않음)
+  const p = withFetchScope(() => fetchJson<CompanyFacts>(
     `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
     { headers: SEC_HEADERS, revalidate: false },
   )
@@ -207,30 +212,37 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const withDa = await withCashFlowDa(cik, withDebt, recent).catch(() => withDebt);
       // 연말 유통주식수가 자본변동표 차원으로만 있는 회사(WMT·BE·META, edgar-equity-shares.ts)
       const withShares = await withEquityStatementShares(cik, withDa, recent).catch(() => withDa);
-      // 20-F 발행사(분기 XBRL 없음) — LTM 최신 분기를 인포맥스(FactSet) 분기로(edgar-infomax-quarters.ts, 오너 결정
-      // 2026-09-25). 조회 실패 시 FY 유지 + 경고(짧은 캐시), 다른 원천으로 대체하지 않는다.
+      // 20-F 발행사(분기 XBRL 없음) — LTM 열을 Yahoo 분기(원통화) 최근 4개 분기로(edgar-yahoo-quarters.ts, 오너 결정
+      // 2026-09-25). 조회 실패 시 SEC 사업연도 유지 + 경고(짧은 캐시), 다른 원천으로 대체하지 않는다.
       let withLtm = withShares;
       const latestPeriodic = recent?.form.find((f) => /^(10-[QK]|20-F|40-F)(\/A)?$/.test(f)) ?? null;
       const ticker = sub?.tickers?.[0] ?? null;
       if (latestPeriodic && /^20-F/.test(latestPeriodic) && ticker) {
+        const cur = withShares.reportingCurrency ?? "USD";
         try {
-          const im = await loadInfomaxQuarters(ticker);
-          if (im) {
-            const r = withInfomaxLtm(withShares, im);
-            withLtm = { ...r.facts, ltmQuarterSource: r.result };
-          } else withLtm = { ...withShares, ltmQuarterSource: { source: "none", reason: "인포맥스에 종목 없음", ratios: {} } };
+          const [yq, fx] = await Promise.all([fetchYahooFundamentals(ticker), fxToUsd(cur)]);
+          const r = withYahooLtm(withShares, yq, fx, cur);
+          withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } catch {
-          extraWarnings.push("인포맥스 분기 조회 실패(LTM 최신 분기)");
-          withLtm = { ...withShares, ltmQuarterSource: { source: "none", reason: "인포맥스 조회 실패", ratios: {} } };
+          extraWarnings.push("Yahoo 분기 조회 실패(LTM 최신 분기)");
+          withLtm = { ...withShares, ltmQuarterSource: { source: "none", reason: "Yahoo 분기 조회 실패" } };
         }
       }
-      const warnings = [...secFailuresSince(cik, t0), ...extraWarnings];
+      return { withLtm, sicN };
+    }))
+    .then(({ result: { withLtm, sicN }, failures }) => {
+      const warnings = [...failures, ...extraWarnings];
       const data = withOpIncome(dropRoundedRetags({
         ...withLtm,
         financialSector: sicN != null && sicN >= 6000 && sicN <= 6499,
         ...(warnings.length ? { fetchWarnings: warnings } : {}),
       }));
-      factsCache.set(cik, { at: Date.now(), data, ttl: warnings.length ? FACTS_TTL_DEGRADED : FACTS_TTL });
+      // 불완전한 결과가 연달아 나오면(늘 실패하는 원본) 짧은 캐시를 2분·4분·8분 …(최대 1시간)으로 늘린다
+      const streak = warnings.length ? (degradedStreak.get(cik) ?? 0) + 1 : 0;
+      if (streak) degradedStreak.set(cik, streak);
+      else degradedStreak.delete(cik);
+      const ttl = streak ? Math.min(FACTS_TTL_DEGRADED * 2 ** (streak - 1), FACTS_TTL_DEGRADED_MAX) : FACTS_TTL;
+      factsCache.set(cik, { at: Date.now(), data, ttl });
       return data;
     })
     .finally(() => {
@@ -287,13 +299,15 @@ export interface FactUnitEntry {
    * LTM 조합 전용(edgar-series.ttmCombine). 표시·연간 값은 val(기간 평균 환율).
    */
   ltmQ?: number;
+  /** 20-F Yahoo 분기 LTM 에서 채우지 못한 항목의 최근 FY(edgar-yahoo-quarters.ts) — LTM 공란 */
+  ltmNone?: boolean;
 }
 export interface CompanyFacts {
   entityName: string;
   /** 보완 단계의 원본 조회 일시 오류(SEC 429·시간 초과 등, fetch-health.ts) — 있으면 결과가 불완전할 수 있다 */
   fetchWarnings?: string[];
-  /** 20-F 발행사 LTM 최신 분기(인포맥스 FactSet 분기, edgar-infomax-quarters.ts) 결과 — 화면 출처 표기용 */
-  ltmQuarterSource?: InfomaxLtmResult;
+  /** 20-F 발행사 LTM 열(Yahoo 분기, edgar-yahoo-quarters.ts) 결과 — 화면 출처 표기·LTM 잔액 기준일 */
+  ltmQuarterSource?: YahooLtmResult;
   /** 현재 주식수 보정값(인포맥스 → Yahoo) — 종목 단위 로더만 채운다 */
   currentShares?: CurrentShares | null;
   /** 공시 통화(외화 공시면 USD 로 환산됨 — edgar-foreign.ts) */
@@ -448,30 +462,33 @@ function buildUsTtm(
     factEntries(facts, "us-gaap", ["CommonStockDividendsPerShareDeclared"], ["USD/shares"]),
   );
 
-  const liabAndEq = latestInstant(
+  // 20-F Yahoo 분기 LTM — 잔액은 그 기준일(최신 분기말) 값만. 채우지 못한 잔액(FY말 값)은 섞지 않고 비운다
+  const yl = yahooLtm(facts);
+  const atBal = <T extends { end: string }>(x: T | null | undefined): T | null => (x && (!yl || x.end === yl.through) ? x : null);
+  const liabAndEq = atBal(latestInstant(
     factEntries(facts, "us-gaap", ["LiabilitiesAndStockholdersEquity"], ["USD"]),
-  );
-  const assetsL = latestInstant(factEntries(facts, "us-gaap", ["Assets"], ["USD"]));
-  const cash = latestInstant(
+  ));
+  const assetsL = atBal(latestInstant(factEntries(facts, "us-gaap", ["Assets"], ["USD"])));
+  const cash = atBal(latestInstant(
     factEntries(facts, "us-gaap", ["CashAndCashEquivalentsAtCarryingValue"], ["USD"]),
-  );
+  ));
   // 최근 재무상태표 기준일 — 자기자본·주식수의 유령(과거 태그) 값을 거를 기준
   const refEnd =
     [liabAndEq?.end, assetsL?.end, cash?.end].filter(Boolean).sort().pop() ?? undefined;
-  let equity = latestInstantMerged(
+  let equity = atBal(latestInstantMerged(
     facts,
     "us-gaap",
     ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
     ["USD"],
     refEnd,
-  );
-  let liabilities = latestInstantMerged(
+  ));
+  let liabilities = atBal(latestInstantMerged(
     facts,
     "us-gaap",
     ["Liabilities"],
     ["USD"],
     refEnd,
-  );
+  ));
   // 파생: 자기자본 ↔ 부채총계 상호 보완 (CAT·MCD 등 한쪽 미태깅)
   const base = liabAndEq ?? assetsL;
   const syn = (val: number, ref: FactEntry): FactEntry => ({ end: ref.end, val, fp: ref.fp, form: ref.form });
@@ -504,8 +521,10 @@ function buildUsTtm(
   // 직접 계산해 부호가 항상 일치하게 한다.
   // EV 브릿지 — 하이라이트 LTM 열과 같은 모듈·같은 기준일(자산총계 최근일).
   const evRes = buildEvResolver(facts, evCtx);
-  const evDate = evRes.latestBalanceDate();
-  const evBridge = evDate ? evRes.bridgeAt(evDate) : null;
+  const evDate = yl ? yl.through : evRes.latestBalanceDate();
+  const evBridge0 = evDate ? evRes.bridgeAt(evDate) : null;
+  // Yahoo 분기 LTM: EV 구성요소가 전부 같은 기준일이어야 한다(아니면 비움 — edgar-yahoo-quarters.ts evComplete)
+  const evBridge = evBridge0 && yl && (!yl.evComplete || evBridge0.stale || evBridge0.balanceDate !== yl.through) ? null : evBridge0;
   // 개요 멀티플이 하이라이트 LTM 열과 같은 값을 내도록 주식수·순이익·자기자본을
   // 공통 기준으로(edgar-shares·edgar-pershare) — 검증 체계 2층에서 PER·PBR 불일치 발견.
   const evShares = buildShareResolver(facts, { classFacts: evCtx.classFacts ?? null }).current();
@@ -514,11 +533,10 @@ function buildUsTtm(
   const equityLtm = evDate ? parentEquityAt(facts, evDate) : null;
 
   return {
-    // 20-F 인포맥스 분기 LTM 이면 그 기간으로 표기(EPS 는 보강 대상 아님 — LTM EPS 는 순이익 ÷ 주식수)
-    periodLabel:
-      facts.ltmQuarterSource?.source === "infomax"
-        ? `최근 4개 분기(~${facts.ltmQuarterSource.through}) · 인포맥스(FactSet) 분기 합(USD)${facts.ltmQuarterSource.definitionDiffs.map((d) => ` · LTM ${d.label}은 FactSet 정의 — SEC 연도 열 대비 정의 차 ${d.pct >= 0 ? "+" : ""}${d.pct.toFixed(2)}%`).join("")}`
-        : eps.ttmLabel || netIncome.ttmLabel || "",
+    // 20-F Yahoo 분기 LTM 이면 그 기간으로 표기(EPS 태그는 보강 대상 아님 — LTM EPS 는 순이익 ÷ 주식수)
+    periodLabel: yl
+      ? `최근 4개 분기(~${yl.through}) · Yahoo 분기(원통화 ${yl.currency}, 분기 평균 환율 환산)`
+      : eps.ttmLabel || netIncome.ttmLabel || "",
     netIncome: niLtm,
     revenue: revenue.ttm,
     opIncome: opIncome.ttm,

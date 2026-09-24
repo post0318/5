@@ -1,6 +1,7 @@
 import "server-only";
 import { fiscalYearOf } from "./edgar-series";
 import { fetchJson, fetchText } from "../http";
+import { checkBackoff, noteFetchFailure, noteFetchSuccess } from "../fetch-health";
 import type { CompanyFacts } from "./edgar";
 
 /**
@@ -209,7 +210,16 @@ function instantSharesOutstanding(
  * A·B·C)은 EV 브릿지가 우선주 장부가로 이미 더하므로 뺀다(인포맥스도 제외). 공시값이 없으면 클래스별 유통주식수 ×
  * 전환비율(`*ConversionRate`, 상장 클래스 A = 1)로 계산하고, 전환비율이 없는 클래스가 있으면 확정 불가로 null.
  */
+/** 주식 단위(measure = shares, 나눗셈 없음) unit id — as-converted 합산을 주식 단위 값으로만 한정 */
+function sharesUnitIds(xml: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of xml.matchAll(/<(?:[\w-]+:)?unit\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?unit>/g))
+    if (!/divide/i.test(m[2]) && /<(?:[\w-]+:)?measure>\s*(?:[\w-]+:)?shares\s*</i.test(m[2])) out.add(m[1]);
+  return out;
+}
+
 function asConvertedCommon(xml: string, ctxs: Map<string, Ctx>): Map<number, number> {
+  const shareUnits = sharesUnitIds(xml);
   const isCommon = (m: string) => /^Common/i.test(m) && !/Preferred|Series|Participating/i.test(m);
   const byDate = new Map<string, { conv: Map<string, number>; raw: Map<string, number>; rate: Map<string, number> }>();
   const slot = (d: string) => {
@@ -223,6 +233,8 @@ function asConvertedCommon(xml: string, ctxs: Map<string, Ctx>): Map<number, num
       : tag === "CommonStockSharesOutstanding" ? "raw"
       : /^CommonStockConversionRate$/i.test(tag) ? "rate" : null;
     if (!target) continue;
+    // /AsConverted/ 태그에 비율·금액(pure·USD) 값이 섞일 수 있다 — 주식 단위 값만 합산(독립 감사 2026-09-25)
+    if (target !== "rate" && !shareUnits.has(/unitRef="([^"]+)"/.exec(attrs)?.[1] ?? "")) continue;
     const ctx = ctxs.get(/contextRef="([^"]+)"/.exec(attrs)?.[1] ?? "");
     if (!ctx?.end || ctx.start || ctx.dims.length !== 1 || ctx.dims[0][0] !== "StatementClassOfStockAxis") continue;
     const member = ctx.dims[0][1].replace(/Member$/, "");
@@ -319,11 +331,18 @@ export async function instanceUrl(cik: number, accnNoDash: string, primaryDoc: s
   const stem = primaryDoc.replace(/\.html?$/i, "");
   // 최신 파일링: `{stem}_htm.xml`
   const guess = `${base}/${stem}_htm.xml`;
-  try {
-    const head = await fetch(guess, { method: "HEAD", headers: SEC_HEADERS });
-    if (head.ok) return guess;
-  } catch {
-    /* fall through */
+  // HEAD 도 일시 오류(429·403·5xx·네트워크)는 기록한다 — index.json 폴백이 성공해도 SEC 가 막히고 있다는 신호(fetch-health.ts)
+  if (checkBackoff(guess) === 0) {
+    try {
+      const head = await fetch(guess, { method: "HEAD", headers: SEC_HEADERS });
+      if (head.ok) {
+        noteFetchSuccess(guess);
+        return guess;
+      }
+      noteFetchFailure(guess, head.status);
+    } catch {
+      noteFetchFailure(guess, undefined);
+    }
   }
   // index.json 으로 인스턴스 파일 탐색 (구버전 등)
   try {

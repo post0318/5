@@ -2,7 +2,7 @@ import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import { annualByYear, entriesOf, ttmOf } from "./edgar-series";
 import { opUnitsFrom } from "../op-units";
-import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT } from "./edgar-bs-structure";
+import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT, SYN_MIXED_LEASE_CURRENT, SYN_MIXED_LEASE_NONCURRENT } from "./edgar-bs-structure";
 import { SYN_DA_CF } from "./edgar-cf-structure";
 export { SYN_DA_CF };
 
@@ -361,12 +361,20 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
       noncurrent: null,
       partial: false,
     };
-    const olNc = on("OperatingLeaseLiabilityNoncurrent", bal);
-    const olCur = on("OperatingLeaseLiabilityCurrent", bal);
-    const operatingLease =
-      olNc != null || olCur != null ? (olNc ?? 0) + (olCur ?? 0) : on("OperatingLeaseLiability", bal);
+    // 운용리스 = 유동 + 비유동, 단 총액 태그가 더 크면 총액 — 한쪽 태그만 단 분기(MSFT: 비유동 16,532 만, 총액
+    // OperatingLeaseLiability 21,925)에 부분 합이 과소했다. 비유동 태그가 없으면 본표 운용·금융 합산 줄의 운용리스 몫
+    // (VRT 10-Q `vrt:OperatingAndFinanceLeaseLiabilityNoncurrent` — edgar-bs-structure.ts 가 차입금에 이미 넣은 주석
+    // 금융리스분을 빼서 넘긴다, 이중 계산 없음)
+    const olNc = on("OperatingLeaseLiabilityNoncurrent", bal) ?? on(SYN_MIXED_LEASE_NONCURRENT, bal);
+    const olCur = on("OperatingLeaseLiabilityCurrent", bal) ?? on(SYN_MIXED_LEASE_CURRENT, bal);
+    const olParts = olNc != null || olCur != null ? (olNc ?? 0) + (olCur ?? 0) : null;
+    const olTotal = on("OperatingLeaseLiability", bal);
+    const operatingLease = olParts == null ? olTotal : olTotal == null ? olParts : Math.max(olParts, olTotal);
     const debt = cp ? cp.industrialDebt : rawDebt;
-    const cash = cd ? (cashOn(cd.date) ?? 0) : 0;
+    // 순차입금·EV 구성요소는 같은 기준일 — 차입금이 이전 연말로 폴백했으면 현금도 그 날짜 값(있으면). 예전엔 차입금
+    // 2025-12 − 현금 2026-06 처럼 기준일이 섞였다(CAT LTM)
+    const cashAtBal = dd && cd && dd.date !== cd.date ? cashOn(bal) : null;
+    const cash = cashAtBal ?? (cd ? (cashOn(cd.date) ?? 0) : 0);
     const preferred = (firstOn(PREFERRED, bal)?.v ?? 0) + sumOn(PREFERRED_UNITS, bal);
     let nci = firstOn(NCI, bal)?.v ?? 0;
     const opUnitNciBook = on(NCI_OP_UNITS[0], bal) ?? 0;

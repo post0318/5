@@ -4,6 +4,7 @@ import { isMarketId } from "@/lib/markets/types";
 import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
 import { secBasisBars } from "@/lib/markets/us/edgar-shares";
+import { yahooLtmLabel } from "@/lib/markets/us/edgar-yahoo-quarters";
 import { loadCaptiveDebt } from "@/lib/markets/us/edgar-captive";
 import { reitOpUnits } from "@/lib/markets/us/edgar-ev";
 import { buildUsCashFlow } from "@/lib/markets/us/edgar-cashflow";
@@ -193,7 +194,8 @@ export async function GET(
       stmt.symbol = sym;
       // 원본 조회 일시 오류(SEC 429 등) — 일부 공시가 빠졌을 수 있다(fetch-health.ts)
       if (facts.fetchWarnings?.length) stmt.source += ` · ⚠ 일부 공시 조회 실패(${facts.fetchWarnings.slice(0, 3).join(", ")}) — 잠시 뒤 다시 계산`;
-      if (facts.ltmQuarterSource?.source === "infomax") stmt.source += ` · LTM 분기: 인포맥스(FactSet, ~${facts.ltmQuarterSource.through})`;
+      // 20-F 발행사 LTM 열 = Yahoo 분기(edgar-yahoo-quarters.ts) — 기준일·공란 항목 명시
+      if (facts.ltmQuarterSource) stmt.source += ` · ${yahooLtmLabel(facts.ltmQuarterSource)}`;
       return ok(stmt, { headers: NO_CACHE });
     }
 

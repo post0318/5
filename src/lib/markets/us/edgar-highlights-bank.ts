@@ -35,7 +35,7 @@ import {
 } from "./edgar-financial";
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-// LTM 조합 전용 — 10-Q + 20-F 발행사 인포맥스 분기 LTM(edgar-infomax-quarters.ts)
+// LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)
 const INTERIM_FORMS = LTM_INTERIM_FORMS;
 const DEPOSITS = ["Deposits"];
 

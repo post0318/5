@@ -35,6 +35,11 @@ type YFInstance = {
     o: Record<string, unknown>,
     m?: Record<string, unknown>,
   ) => Promise<QuoteSummaryResult>;
+  fundamentalsTimeSeries: (
+    s: string,
+    o: Record<string, unknown>,
+    m?: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>[]>;
 };
 
 interface RawBar {
@@ -457,6 +462,36 @@ export async function fetchFxToUsdDaily(currency: string, from = "2014-01-01"): 
   const inv = await pull(`${currency}=X`);
   if (!inv.length) throw new AdapterError(`환율 없음: ${currency}`, { status: 502 });
   return inv.map((q) => ({ date: q.date, rate: 1 / q.close }));
+}
+
+/** Yahoo 재무 시계열 한 행 — 기간 말일(YYYY-MM-DD) + 항목별 숫자(원통화, 공시 통화 그대로) */
+export interface YahooFundamentalsRow {
+  end: string;
+  values: Record<string, number>;
+}
+
+/**
+ * Yahoo 분기·연간 재무 시계열(fundamentalsTimeSeries, 원통화). 20-F 발행사 LTM 최신 분기 보강 전용
+ * (us/edgar-yahoo-quarters.ts). 조회 실패는 예외.
+ */
+export async function fetchYahooFundamentals(
+  symbol: string,
+): Promise<{ quarterly: YahooFundamentalsRow[]; annual: YahooFundamentalsRow[] }> {
+  const s = yahooSymbol("us", symbol);
+  const rows = (rs: Record<string, unknown>[]): YahooFundamentalsRow[] =>
+    rs
+      .filter((r) => r.date != null)
+      .map((r) => {
+        const values: Record<string, number> = {};
+        for (const [k, v] of Object.entries(r)) if (typeof v === "number" && Number.isFinite(v)) values[k] = v;
+        return { end: isoDate(r.date as Date | string), values };
+      })
+      .sort((a, b) => a.end.localeCompare(b.end));
+  const [q, a] = await Promise.all([
+    yf().fundamentalsTimeSeries(s, { period1: isoDate(new Date(Date.now() - 800 * 864e5)), type: "quarterly", module: "all" }, { validateResult: false }),
+    yf().fundamentalsTimeSeries(s, { period1: isoDate(new Date(Date.now() - 1500 * 864e5)), type: "annual", module: "all" }, { validateResult: false }),
+  ]);
+  return { quarterly: rows(q), annual: rows(a) };
 }
 
 export async function fetchYahooShares(symbol: string): Promise<number | null> {

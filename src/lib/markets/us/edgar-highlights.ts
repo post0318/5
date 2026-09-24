@@ -10,6 +10,7 @@
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { isStaleAnnual, splitFactorsByYear, fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
+import { yahooLtm } from "./edgar-yahoo-quarters";
 import { buildShareResolver } from "./edgar-shares";
 import {
   ltmEps,
@@ -72,7 +73,7 @@ export interface HighlightEstimatePeriod {
 }
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-// LTM 조합 전용 — 10-Q + 20-F 발행사 인포맥스 분기 LTM(edgar-infomax-quarters.ts)
+// LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)
 const INTERIM_FORMS = LTM_INTERIM_FORMS;
 
 const REVENUE = [
@@ -229,7 +230,9 @@ export function buildUsHighlights(
   // LTM 컬럼 기준일 = 최근 분기 재무상태표 기준일 (블룸버그 표기와 동일).
   // 자산총계 기준 — 예전엔 현금 태그 날짜를 썼는데 GE(2017)·SBUX(2022)처럼
   // 그 태그를 중단한 회사는 LTM 기준일이 몇 년 전으로 잡혔다(감사 2026-09-23).
-  const mrqEnd = evRes.latestBalanceDate() ?? priceDate;
+  // 20-F Yahoo 분기 LTM(edgar-yahoo-quarters.ts) — LTM 열 기준일 = Yahoo 최신 분기말
+  const yl = yahooLtm(facts);
+  const mrqEnd = yl?.through ?? evRes.latestBalanceDate() ?? priceDate;
   const ltmDate = mrqEnd;
 
   const columns: HighlightColumn[] = fyYears.map((y) => ({
@@ -404,7 +407,9 @@ export function buildUsHighlights(
     // 금융 자회사 차입금 제외, UP-REIT 파트너 지분 시가 반영).
     const block = evRes.blocker(asOf);
     if (block) blockers.add(block);
-    const b = evRes.bridgeAt(asOf);
+    const b0 = evRes.bridgeAt(asOf);
+    // Yahoo 분기 LTM: EV 구성요소가 전부 같은 기준일로 채워졌을 때만(아니면 LTM EV·순차입금 공란)
+    const b = b0 && isLtm && yl && (!yl.evComplete || b0.stale || b0.balanceDate !== yl.through) ? null : b0;
     if (b) {
       cash[i] = b.cash;
       debt[i] = b.debt;
@@ -442,6 +447,8 @@ export function buildUsHighlights(
     if (col.kind === "ltm") {
       const oi = ttm(E.opIncome);
       const d = daTtm(facts);
+      // Yahoo 분기 LTM 에서 감가상각비를 못 채웠으면 EBITDA 도 공란(0 으로 보지 않음)
+      if (yl && d == null) return null;
       return oi != null ? oi + (d ?? 0) : null;
     }
     return null;

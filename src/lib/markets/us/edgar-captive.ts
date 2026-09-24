@@ -1,6 +1,6 @@
 import "server-only";
 import { fetchJson, fetchText } from "../http";
-import { secFailuresSince } from "../fetch-health";
+import { withFetchScope } from "../fetch-health";
 import { instanceUrl } from "./edgar-classfacts";
 import { resolveDebt, type CaptiveDebtPoint } from "./edgar-ev";
 
@@ -159,51 +159,53 @@ export async function loadCaptiveDebt(
   if (hit && Date.now() - hit.at < TTL) return hit.data;
 
   const cikNum = Number(key);
-  const t0 = Date.now();
   let data: { points: CaptiveDebtPoint[] } | "unsplit" | null = null;
-  try {
-    const sub = await fetchJson<SubmissionsRecent>(
-      `https://data.sec.gov/submissions/CIK${key}.json`,
-      { headers: SEC_HEADERS, revalidate: 60 * 60 * 6 },
-    );
-    const r = sub.filings.recent;
-    const picks: { accn: string; doc: string }[] = [];
-    let q = 0;
-    let k = 0;
-    for (let i = 0; i < r.accessionNumber.length && (q < 1 || k < 4); i++) {
-      const f = r.form[i];
-      if (f === "10-Q" && q < 1 && k === 0) {
-        picks.push({ accn: r.accessionNumber[i], doc: r.primaryDocument[i] });
-        q++;
-      } else if (f === "10-K" && k < 4) {
-        picks.push({ accn: r.accessionNumber[i], doc: r.primaryDocument[i] });
-        k++;
-      }
-    }
-    const byDate = new Map<string, CaptiveDebtPoint>();
-    for (const [idx, p] of picks.entries()) {
-      try {
-        const url = await instanceUrl(cikNum, p.accn.replace(/-/g, ""), p.doc);
-        if (!url) {
-          if (idx === 0) break; // 최신 건을 못 읽으면 판별 불가 — 과거 10-K 로 대신 판별하지 않는다
-          continue;
+  // 이 로더가 부른 SEC 조회의 실패만 본다(fetch-health.ts)
+  const { failures } = await withFetchScope(async () => {
+    try {
+      const sub = await fetchJson<SubmissionsRecent>(
+        `https://data.sec.gov/submissions/CIK${key}.json`,
+        { headers: SEC_HEADERS, revalidate: 60 * 60 * 6 },
+      );
+      const r = sub.filings.recent;
+      const picks: { accn: string; doc: string }[] = [];
+      let q = 0;
+      let k = 0;
+      for (let i = 0; i < r.accessionNumber.length && (q < 1 || k < 4); i++) {
+        const f = r.form[i];
+        if (f === "10-Q" && q < 1 && k === 0) {
+          picks.push({ accn: r.accessionNumber[i], doc: r.primaryDocument[i] });
+          q++;
+        } else if (f === "10-K" && k < 4) {
+          picks.push({ accn: r.accessionNumber[i], doc: r.primaryDocument[i] });
+          k++;
         }
-        const xml = await fetchText(url, { headers: SEC_HEADERS, revalidate: false, timeoutMs: 25_000 });
-        // 최신 파일링을 먼저 넣고 유지 — 이후(과거) 파일링은 빈 날짜만 채운다(재작성본 우선)
-        const pts = extractCaptiveDebt(xml);
-        // 판별: 가장 최근 파일링에 금융 부문 차입금이 없으면 금융 자회사 없음 —
-        // 나머지 파일링은 받지 않는다(대부분의 종목이 여기서 끝나 비용이 1건).
-        if (idx === 0 && !pts.length) break;
-        for (const pt of pts) if (!byDate.has(pt.date)) byDate.set(pt.date, pt);
-      } catch {
-        if (idx === 0) break; // 최신 건조차 실패 → 판단 불가, 금융 자회사 없음으로 둔다
       }
+      const byDate = new Map<string, CaptiveDebtPoint>();
+      for (const [idx, p] of picks.entries()) {
+        try {
+          const url = await instanceUrl(cikNum, p.accn.replace(/-/g, ""), p.doc);
+          if (!url) {
+            if (idx === 0) break; // 최신 건을 못 읽으면 판별 불가 — 과거 10-K 로 대신 판별하지 않는다
+            continue;
+          }
+          const xml = await fetchText(url, { headers: SEC_HEADERS, revalidate: false, timeoutMs: 25_000 });
+          // 최신 파일링을 먼저 넣고 유지 — 이후(과거) 파일링은 빈 날짜만 채운다(재작성본 우선)
+          const pts = extractCaptiveDebt(xml);
+          // 판별: 가장 최근 파일링에 금융 부문 차입금이 없으면 금융 자회사 없음 —
+          // 나머지 파일링은 받지 않는다(대부분의 종목이 여기서 끝나 비용이 1건).
+          if (idx === 0 && !pts.length) break;
+          for (const pt of pts) if (!byDate.has(pt.date)) byDate.set(pt.date, pt);
+        } catch {
+          if (idx === 0) break; // 최신 건조차 실패 → 판단 불가, 금융 자회사 없음으로 둔다
+        }
+      }
+      data = byDate.size ? { points: [...byDate.values()] } : null;
+    } catch {
+      data = null;
     }
-    data = byDate.size ? { points: [...byDate.values()] } : null;
-  } catch {
-    data = null;
-  }
+  });
   // 최신 공시 조회가 일시 오류(SEC 429 등)로 실패하면 "금융 자회사 없음"으로 12시간 굳지 않게 캐시하지 않는다
-  if (!secFailuresSince(key, t0).length) mem.set(key, { at: Date.now(), data });
+  if (!failures.length) mem.set(key, { at: Date.now(), data });
   return data;
 }
