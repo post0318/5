@@ -999,7 +999,8 @@ async function verifyUs(sym) {
         // SEC 공시 EPS 는 소수 둘째 자리 — 인포맥스는 순이익÷주식수로 넷째 자리까지 내므로 공시 정밀도(±0.005)로 비교
         put(`${c} 희석 EPS`, x.eps, "인포맥스", im.eps, 0.01);
         put(`${c} 시가총액(결산일)`, x.mc, "인포맥스", im.mc, 1e6);
-        put(`${c} EV(결산일)`, x.ev, "인포맥스", im.ev, 1e6);
+        // 인포맥스 "ev희석화수량" 은 표준 EV 가 아니다 — AAPL 2025: EV − 시가총액 = +1,168억 ≈ 인포맥스 총채무(채무자본금×자본총계
+        // 1,124억), 현금을 빼지 않은 값으로 보인다. 정의가 다른 값이라 대조하지 않는다(시가총액은 일치 확인됨).
       }
       // LTM — 인포맥스 분기 4개 합(최근 분기말이 앱 LTM 기준일과 같을 때만)
       const q4 = (imAnnual.quarters ?? []).filter((r) => r.end <= L.date || dayDiff(r.end, L.date) <= 7).slice(-4);

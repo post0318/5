@@ -32,6 +32,9 @@ const EXCLUDE = /Tax|PerShare|Nonoperating|Interest|ExtinguishmentOfDebt|Accumul
 const GENERAL_COST = /SellingGeneralAndAdministrative|^CostOf|^OperatingExpenses$|CostsAndExpenses|^GeneralAndAdministrativeExpense$|^ResearchAndDevelopmentExpense/;
 /** 라벨의 부정 문맥("excluding impairment losses") 이후는 판정에서 뺀다 */
 const NEGATED = /\b(excluding|excl\.?|exclusive of|other than|before)\b.*$/i;
+/** 상각 줄 — 취득 무형자산 상각은 매년 반복되는 비용이지 일회성이 아니다(AMD·AVGO: "Amortization of acquisition-related
+ *  intangibles" 가 "acquisition-related" 에 걸려 일회성비용 28억·110억으로 잡혔다, 검증 2026-09-24) */
+const AMORTIZATION = /amortiz/i;
 /** 매각손익 라벨 — 개념명이 손상차손이어도 회사가 매각손익 줄로 쓴 경우(DVN형) */
 const SALE_GAIN = /\(gain\)|\bgains?\b[^|]*\b(sale|disposal|divest)/i;
 const PRETAX = [
@@ -113,7 +116,7 @@ function oneOffLines(cal: string, lab: Map<string, string[]>): Line[] | null {
         // 회사 라벨이 있으면 라벨로만 판정하고, 라벨이 없을 때만 개념명을 본다(회사가 표준 개념을 다른 뜻으로 쓴 경우)
         const labs = lab.get(a.to);
         const text = labs?.length ? labs.join(" ") : c.concept;
-        if (!GENERAL_COST.test(c.concept) && !SALE_GAIN.test(text) && ONE_OFF_TEXT.test(text)) out.push({ ...c, w: w * a.w });
+        if (!GENERAL_COST.test(c.concept) && !SALE_GAIN.test(text) && !AMORTIZATION.test(text) && ONE_OFF_TEXT.test(text)) out.push({ ...c, w: w * a.w });
         else walk(a.to, w * a.w, depth + 1);
       }
     };
