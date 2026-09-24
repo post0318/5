@@ -1,0 +1,29 @@
+name: 키움증권 미국 산업/기업분석 수집
+
+# CLAUDE.md 방침(오너 승인 예외): bbn.kiwoom.com 의 "미국 산업/기업분석"
+# 게시판을 하루 3회, 개인용으로만 조회한다. robots.txt 는 www3/bbn 모두
+# Allow: / 로 제한 없음 — 다른 예외들과 동일 조건(개인용·로컬 실행·저빈도)
+# 으로 진행.
+
+on:
+  schedule:
+    # 하루 3회(오너 지시, 2026-09-24 — 3차는 2차 4시간 뒤).
+    - cron: "15 23 * * *" # 23:15 UTC = 08:15 KST(1차)
+    - cron: "15 3 * * *" # 03:15 UTC = 12:15 KST(2차)
+    - cron: "15 7 * * *" # 07:15 UTC = 16:15 KST(3차, 2차+4시간)
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # 수집 스크립트가 pdf-parse 를 import 한다(로그인 없이 PDF 접근 가능).
+      - run: npm ci
+      - run: node scripts/collect-kiwoom-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

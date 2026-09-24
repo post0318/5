@@ -290,6 +290,9 @@ const MARKET_CONDITION_STOCKNAMES = new Set([
   // 한경컨센서스(LS증권 작성) "마켓 BEAT" — 실측 2건 모두 시장 전반 코멘트
   // (오너 지적, 2026-09).
   "마켓 BEAT",
+  // 키움증권 "일간증시전망" 게시판 — 매일 나오는 데일리 시황 코멘트라
+  // 개별 업종 얘기가 아님(오너 지시, 2026-09-24 — "일간증시전망은 시황이다").
+  "키움 일간증시전망",
 ]);
 // stockName 뒤에 " | Weekly" 같은 부가 표기가 붙어 정확히 일치하지 않는
 // 경우가 있어(예: "KB Global Tracker+ | Weekly") 접두어로도 매칭(오너 지적
@@ -302,7 +305,16 @@ const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 // "NAV Dashboard Weekly"(미래에셋 — 지주회사 NAV 할인율 스크리닝 시리즈,
 // 업종 얘기가 아니라 밸류에이션 갭을 노리는 투자전략물, 오너 지적 2026-09)
 // 추가.
-const STRATEGY_STOCKNAMES = new Set(["Global Insights", "Global Watchlist", "마켓픽", "NAV Dashboard Weekly"]);
+// 키움증권 "월간증시전망"·"중장기증시전망" 게시판(오너 지시, 2026-09-24 —
+// "월간증시전망은 투자전략(주식)", "중장기증시전망은 투자전략(주식)이다").
+const STRATEGY_STOCKNAMES = new Set([
+  "Global Insights",
+  "Global Watchlist",
+  "마켓픽",
+  "NAV Dashboard Weekly",
+  "키움 월간증시전망",
+  "키움 중장기증시전망",
+]);
 // 미래에셋증권 "월스트리트파인더 Ep.201, 202, ..." — 매회 에피소드 번호가
 // 붙어 정확히 일치하지 않아 접두어로 매칭. 계절성·금리 대응·엔비디아
 // 내러티브 등 시장 전반 투자 아이디어 시리즈(오너 확인, 2026-09).

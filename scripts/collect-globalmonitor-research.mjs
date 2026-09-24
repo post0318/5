@@ -41,6 +41,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichUsResearch } from "./lib/us-research-extract.mjs";
+import { isEtfOrEtpContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -135,6 +136,9 @@ function parseItems(rows) {
     const dateM = String(r.writeDate ?? "").match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
     if (!dateM) continue;
     const date = `${dateM[1]}-${dateM[2]}-${dateM[3]}`;
+    // ETF/ETP 리포트 제외(오너 지시 2026-09-24, 공용 필터 — 여러 증권사가
+    // 모이는 소스라 특히 잘 섞여 들어온다).
+    if (isEtfOrEtpContent(r.title)) continue;
     const tm = String(r.title ?? "").match(TITLE_RE);
     if (tm) {
       const [, stockName, , ticker, headline] = tm;
@@ -216,11 +220,14 @@ if (DRY_RUN) {
   process.exit(0);
 }
 
-// 자체 수집기가 훨씬 많이(그리고 미국 외 시장까지) 가져오는 증권사는 여기서
-// 뺀다 — 신한투자증권 자체 게시판(collect-shinhan-overseas-research.mjs)이
-// 같은 14일 기준 8건 대비 34건, 미국 외에 일본·중국·유럽까지 커버한다(오너
-// 지시, 2026-09).
-const EXCLUDED_SOURCES = new Set(["신한투자증권"]);
+// 자체 수집기가 있는 증권사는 여기서 뺀다 — 같은 문서가 GM 경유와 자체
+// 수집기 양쪽에 중복 저장되는 걸 막는다(오너 지시 2026-09-24 — "글로벌
+// 모니터에서 수집건 중 개별 증권사에서 수집된 동일한 문서는 제외해야한다").
+//  - 신한투자증권: 자체 해외 게시판(collect-shinhan-overseas-research.mjs)이
+//    같은 14일 기준 8건 대비 34건, 미국 외에 일본·중국·유럽까지 커버(오너 지시, 2026-09).
+//  - 키움증권: 자체 수집기(collect-kiwoom-research.mjs, 2026-09-24 추가)가
+//    PDF까지 로그인 없이 받아 GM 경유(PDF 없음)보다 데이터가 낫다.
+const EXCLUDED_SOURCES = new Set(["신한투자증권", "키움증권"]);
 
 // 증권사(제공출처)별로 그룹핑해 나눠 전송 — 라우트가 body당 source 하나만 받음
 // (한경 컨센서스 스크립트와 동일 패턴).

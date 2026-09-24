@@ -144,10 +144,12 @@ npm run db:studio    # drizzle studio
 
 - **크롤링은 어떤 시나리오에서도 금지**: FnGuide(`robots.txt Disallow: /`),
   MarketScreener(ToS) → 딥링크만.
-  - **검증용 1회 조회 예외 (오너 승인 2026-09-23)**: 재무 숫자 정의 확인을 위해
-    MarketScreener·FnGuide 페이지를 **사람이 보는 수준으로 몇 개만 1회** 조회했다
-    (EV·순차입금·우선주 시가총액 정의 대조). 앱·스크립트 코드에는 넣지 않으며,
-    반복 조회·수집은 여전히 금지. FnGuide 는 "이번 검증용"으로만 승인됨.
+  - **검증용 조회 예외 (오너 승인 2026-09-23, 2026-09-24 "1회" 제약 삭제)**: 재무 숫자
+    정의·값 확인을 위해 MarketScreener·FnGuide 페이지를 **검증용으로만** 조회한다
+    (사람이 보는 수준, 브라우저로 필요한 페이지만). 횟수 제한은 없다(오너 지시 2026-09-24
+    — "검증용은 1회라는 제약을 제외한다. 검증용으로만 조회한다"). 용도는 검증에 한정 —
+    앱·수집 스크립트 코드에는 넣지 않고, 화면에 싣거나 저장·수집하지 않는다. 처음 사례는
+    EV·순차입금·우선주 시가총액 정의 대조, 이후 AVGO 순이익·EPS 대조(09-24).
   - **stockanalysis.com 은 2026-09 재검토 후 제한적으로 허용**(오너 승인).
     기존 "ToS 위반" 판단이 실제 문구 확인 없이 내려진 것이었음 — 실측:
     `robots.txt` 는 `/e/`·`/p/` 만 막고 `/stocks/*/forecast/` 는 허용,
@@ -582,7 +584,9 @@ npm run db:studio    # drizzle studio
         "GM에서 받아오는 회사는 제외" 조건이 바로 이 의미). 제목이 "[라벨]
         헤드라인" 형식이면 대괄호를 라벨로, 아니면 라벨을 "산업"으로 고정.
         신한투자증권은 기존처럼 계속 제외(자체 해외 게시판이 이미 산업분석
-        까지 다룸).
+        까지 다룸). **키움증권도 2026-09-24 추가 제외**(자체 수집기
+        `collect-kiwoom-research.mjs` 신설 — "산업분석 탭" 항목의 "키움증권
+        해외(미국) 산업/기업분석 추가" 참고, GM 경유 중복 방지).
     - **DS투자증권 추가(오너 확인, 2026-09)**: `www.ds-sec.co.kr` 은 그누보드
       게시판이라 로그인 없이 서버렌더 HTML이 그대로 나온다(오너가 URL
       제시). 게시판 두 곳 — `sub03_02`(기업분석, 국내), `sub03_03`(투자전략/
@@ -768,6 +772,101 @@ npm run db:studio    # drizzle studio
         `CRON_SECRET` 줄 자체를 삭제해 원래 문서화된 상태(로컬엔
         CRON_SECRET 없음 → APP_PASSWORD 폴백)로 복원함 — 이후 골드만삭스/
         JP모간/모간스탠리/PIMCO 백필부터는 정상 폴백으로 진행.
+    - **키움증권 해외(미국) 산업/기업분석 추가(오너 확인, 2026-09-24)**: 오너가
+      제시한 `www3.kiwoom.com/h/invest/research/VAnalCCView`·
+      `www.kiwoom.com/h/invest/research/VAnalCCDetailView?sqno=` 는 실제
+      콘텐츠로 안내만 하고, 진짜 데이터는 서브도메인 `bbn.kiwoom.com`의
+      내부 JSON AJAX에서 온다(`fn_list`/`fn_detail` 역추적) — 목록
+      `POST /research/SResearchCCListAjax`(15건 고정), PDF는
+      `GET /research/SPdfFileView?rMenuGb=CC&attaFile=...&makeDt=...`.
+      **로그인 없이 PDF까지 그대로 받아진다**(실측: `Content-Type:
+      application/pdf` 200) — 지금까지 대부분의 국내 증권사(신한·하나·
+      한국투자·교보 등)가 PDF에 로그인을 요구하던 것과 다른 몇 안 되는
+      예외. `www3`·`bbn` 모두 robots.txt 가 `Allow: /`(제한 없음, 가장
+      깨끗한 케이스). 제목이 "종목명(TICKER.US): 헤드라인" 형식(종목명과
+      괄호 사이 공백 유무가 섞여 있어 정규식에 `\s*` 허용)이라 이름 검색
+      불필요. **로그인 없이 PDF를 받을 수 있는 몇 안 되는 소스**라 공용
+      추출기(`us-research-extract.mjs`)의 PDF 보강 단계(`usePdf:true`)를
+      켜서 목표주가를 채운다(실측 백필 4/4 성공) — 투자의견은 PDF 안에서
+      그래픽 배지로 표시돼 텍스트로 못 뽑음(실측 확인, 버그 아님). 종목
+      티커 패턴이 아닌 항목("[미국은 지금] ...", "09/21 큠틴 아메리카
+      (미국주식 Weekly)" 등)은 `category:"산업"`으로 별도 수집(symbol 항상
+      null).
+      - **국내·AI보고서·글로벌테마 게시판 추가(오너 지시, 2026-09-24 —
+        "기업분석 산업분석 스팟노트", "이슈분석은 제외한다", "키움 해외
+        ai보고서는 종목분석에 해당된다", "키움 해외 글로벌테마/이슈는
+        투자전략(이슈)로 분류하고 키차트는 연결대상에서 제외한다", "채권
+        시장이슈는 수집대상에서 제외한다")**: `rMenuGb` 2글자 게시판 코드는
+        화면 어디에도 노출되지 않아 후보 코드를 하나씩 찔러 응답의
+        `rMenuGbNm` 필드로 확인했다(실측). 최종 화이트리스트 —
+        `AI`(AI 보고서, market:"us", category:"기업" — 제목이 "[AI 실적
+        리뷰] {분기} 종목명 (TICKER.US)" 형식으로 콜론 없이 끝에 티커가
+        옴), `CA`(글로벌 테마/이슈분석, market:"us", category:"산업",
+        라벨을 "투자전략(이슈)"로 고정하되 제목에 "키차트"가 들어간 항목은
+        단순 주간 차트라 제외 — "키움 글로벌 키차트(9월 3주)"류는 버리고
+        "키움 글로벌 9월 Monthly - 줄다리기"류만 남음, 실측 45일 기준
+        수십 건 중 1건만 통과), `CR`(기업리포트, market:"kr",
+        category:"기업", "종목명(6자리코드): 제목" — 코드가 바로 나와
+        이름 검색 불필요, 콜론 대신 세미콜론을 쓰는 오탈자성 항목도
+        실측돼 `[:;：]`로 허용), `SN`(스팟노트, market:"kr", CR과 같은
+        제목 형식이지만 더 짧은 코멘트성 리포트라 별도 게시판),
+        `CI`(산업분석, market:"kr", category:"산업", 대괄호/콜론 라벨
+        추출 — 삼성증권 수집기와 같은 로직이라 공용
+        `lib/label-extract.mjs`로 뺐다, 삼성증권도 이걸 쓰도록 리팩터).
+        **화이트리스트 방식이라 뺀 게시판은 그냥 안 부르면 그만**(별도
+        차단 로직 불필요) — `CS`(이슈분석, 국내), `QE`(퀀트전략),
+        `SW`(주간증시전망), `SE`(경제분석), `BM`/`BW`(월간·주간채권전망,
+        "채권시장이슈" 제외 지시에 해당), `CH`(중화권), `CJ`(일본),
+        `TP`(글로벌 ETF — 넣었어도 ETF 필터에 걸림), `EM`(월간증시전망),
+        `BC`(디지털자산리서치). 국내(market:"kr") 항목은 공용 추출기
+        (`us-research-extract.mjs`)가 달러 표기 기준이라 PDF 보강을 하지
+        않음(투자의견·목표주가 공란, 다른 국내 수집기들과 동일) — 미국
+        항목만 PDF 보강 대상.
+      **로컬 스크립트** (`scripts/collect-kiwoom-research.mjs`,
+      GitHub Actions `.github/workflows/kiwoom-research.yml`, 하루 3회 —
+      3차는 2차 4시간 뒤, 오너 지시 2026-09-24)가
+      같은 `/api/cron/shinhan-research` 라우트를 `source: "키움증권"`로
+      재사용, 시장별(`market: "us"`/`"kr"`)로 나눠 전송. **GlobalMonitor
+      경유 중복 제외(오너 지시
+      2026-09-24 — "글로벌모니터에서 수집건 중 개별 증권사에서 수집된
+      동일한 문서는 제외해야한다")**: GlobalMonitor 응답의 `auth` 필드에
+      "키움증권"이 실제로 섞여 나오는 걸 확인해(자체 수집기가 더 안정적이고
+      PDF까지 확보되므로) `collect-globalmonitor-research.mjs`의
+      `EXCLUDED_SOURCES`에 추가 — 신한투자증권과 동일 처리(아래 "GlobalMonitor
+      미국주식 리포트" 항목 참고). **미결**: 이미 GM 경유로 쌓인 옛
+      `키움증권:GM:*` 문서는 DELETE(`source:"키움증권", idPrefix:"GM:"`)로
+      아직 안 지웠다 — 다음 배포 후 정리 필요(idPrefix를 꼭 줘야 새로 쌓이는
+      자체 수집기 문서(`키움증권:{sqno}`, GM: 접두어 없음)까지 같이 안 지워짐).
+      삼성증권은 이번 실측(USA 목록 샘플)에서 GlobalMonitor `auth`에 안 잡혀
+      제외 목록에 추가하지 않음(중복 위험 없음, 확인됨).
+    - **삼성증권 해외기업/해외산업 추가(오너 확인, 2026-09-24)**: 오너가 제시한
+      POP(`www.samsungpop.com`) "투자정보 > 해외주식 > 해외주식투자정보" 화면은
+      레거시 frameset + XCMS 메뉴 시스템(메뉴코드 → URL 매핑이 서버 세션에서
+      동적으로 채워짐, NH·미래에셋과 같은 구조)이라 메뉴코드로 콘텐츠 URL을
+      끝내 못 찾았다 — 대신 **모바일 리포트 검색 화면**
+      (`/mbw/invest/investInfo.do?cmd=report_search`)이 훨씬 단순한
+      서버렌더 HTML이라 그 검색 폼(`GET /mbw/search/search.do?
+      cmd=report_search&GUBUN=...`)을 그대로 호출한다. `GUBUN=company2`
+      (해외기업)·`industry2`(해외산업) 두 구분을 돈다(화면의 "리포트 구분"
+      드롭다운에 16개 구분이 더 있어 국내 기업/산업/투자전략 등으로 확장
+      여지 있음). **PDF는 로그인 없이 받아진다**(실측 확인, 오늘 날짜 파일도
+      200) — 모바일 화면의 `downloadPdf()` 함수 자체는 "로그인 후 이용
+      가능합니다" 확인창을 띄우는 로그인 게이트 UI지만, 그 함수가 넘겨받는
+      `fileName` 값을 레거시 다운로드 엔드포인트(`common.do?cmd=down&
+      saveKey=research.pdf&fileName=...`)에 직접 넣으면 그대로 열린다 — UI만
+      로그인을 요구할 뿐 엔드포인트 자체는 열려 있는 패턴(다른 소스에서도
+      나온 사례). `www.samsungpop.com/robots.txt` 는 `Allow: /`(제한 없음,
+      가장 깨끗한 케이스). 제목이 "(작성자) 종목명 (TICKER US): 헤드라인"
+      형식(다른 증권사의 "TICKER.US"와 달리 마침표 없이 공백으로 구분)이라
+      그 패턴에서 티커를 뽑고, 공용 추출기(`us-research-extract.mjs`)가
+      로그인 없이 PDF 본문까지 확인해 목표주가를 채운다(실측 확인 —
+      투자의견은 다른 소스처럼 PDF 안에서 텍스트로 안 잡히는 경우가 많음).
+      티커 패턴이 아닌 항목(예: "글로벌 포트폴리오 전략(9월 4주 차)...",
+      "글로벌 AI/SW: ...")은 `category:"산업"`으로 별도 수집(symbol 항상
+      null). **로컬 스크립트** (`scripts/collect-samsung-research.mjs`,
+      GitHub Actions `.github/workflows/samsung-research.yml`, 하루 2회)가
+      같은 `/api/cron/shinhan-research` 라우트를 `source: "삼성증권",
+      market: "us"` 로 재사용.
     - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
       "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
       확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
@@ -835,6 +934,19 @@ npm run db:studio    # drizzle studio
       **FOMC 결정이 날 때마다 손으로 갱신해야 한다** — 틀리면 세 숫자가
       통째로 한 칸씩 밀린다. `lib/weekly/comment.ts` 의 `FOMC_2026`·
       `BOJ_2026` 일정 배열과 같은 수동 갱신 패턴.
+- **ETF/ETP 리포트는 전 수집기 공통 제외 대상(오너 지시 2026-09-24 —
+  "ETF, ETP 등은 수집대상에서 제외한다. 여기뿐만 아니라 모두 동일하다")**:
+  이 프로젝트의 산업분석/투자전략 수집은 개별 종목·업종 얘기가 목적인데,
+  ETF/ETP 리포트는 종목이 아니라 상품(펀드 자금 흐름·구성비 등) 얘기라
+  범위 밖. 소스마다 각자 키워드를 두지 않고 `scripts/lib/exclude-filters.mjs`
+  의 `isEtfOrEtpContent()` 한 곳에서 관리 — 나중에 예외 패턴이 하나 발견되면
+  전체 수집기에 한 번에 반영된다. 발견 계기는 삼성증권 수집기의 "산업" 분류
+  라벨 정리 중(예: "ETP Weekly Insight", "모두의 ETP Biweekly", "[ETF전략]
+  오토콜러블...") — 삼성증권·키움증권·GlobalMonitor 수집기에 이미 적용
+  완료(2026-09-24). **미결**: 그 이전에 만든 나머지 수집기들(신한·하나·
+  NH·KB·한투·DS·BNK·상상인·해외 IB 등)은 아직 이 필터를 안 쓴다 — 실제로
+  ETF/ETP 콘텐츠가 섞이는 게 확인되면 그때그때 같은 필터를 추가할 것(전량
+  일괄 적용은 보류, 근거 없이 손대지 않음).
 - **산업분석 탭 (`/[market]/research`, 종목분석 옆 최상위 탭, 오너 지시
   2026-09)**: `kr_research` 의 `category:"산업"`(symbol 항상 null, 여러
   증권사가 이미 수집 중이었지만 종목별 조회(`getShinhanResearchBySymbol`)
@@ -1317,6 +1429,21 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
 - **20-F ADR**(`lib/markets/adr.ts`): 20-F 제출사의 EDGAR 주식수는 본국 보통주 기준 —
   Yahoo 주식수와 1.5배 넘게 다르면 ADR 비율로 보고 환산(TSM 1 ADR = 5주, 시가총액이
   5배로 나오던 문제). ASML·SPOT 은 1:1 이라 무보정.
+- **현재 주식수 = EDGAR 보강 → 인포맥스 보정 → 실패 시 Yahoo**(오너 결정 2026-09-24 —
+  "시가총액은 완벽해야", 인포맥스 대비 차이 0 이 목표). 과거 연도 주식수는 EDGAR 그대로.
+  - EDGAR 보강(`us/edgar-gapfill.ts`, companyfacts 로더에서 1회): ① SEC companyfacts 가
+    최신 10-Q/10-K 를 통째로 빠뜨리는 경우(BE 2분기 — LTM 이 03-31 에 멈춤)와 CIK 변경
+    (XOM 2026-07 지주사 재편, 2분기부터 새 CIK)은 공시 목록에 있는데 companyfacts 에 없는
+    정기공시의 XBRL 인스턴스를 직접 읽어 채운다. ② 표지 주식수를 클래스 차원에만 다는
+    복수 클래스 종목(META·DELL)은 인스턴스의 클래스별 값을 합산(Visa 형은 전환비율
+    미반영이라 제외).
+  - 인포맥스 보정(`us/current-shares.ts`): 인포맥스 종목분석(`globalmonitor.einfomax.co.kr`
+    `/facset/tickerlist/usa` → `/facset/getPriceData` 의 `주식수`, FactSet, 천 주 단위, 로그인
+    불필요 — GlobalMonitor 리서치와 같은 도메인, robots.txt 없음). 표지 기준일 뒤 증자
+    (INTC 08-12 2.4억 주)·as-converted(V)까지 반영. 주가는 하루 늦어 안 쓴다.
+  - Yahoo 는 **EDGAR 표지가 45일 넘게 오래됐을 때만**. 실측: SEC 와 둘이 다른 5건에서
+    인포맥스 5건 일치·Yahoo 0건(WMT 는 Yahoo = 직전 분기 표지, MRVL +2.5%).
+  - 서버 개요 응답(재무 생략)은 이 주식수가 없어 미국 시가총액을 비운다(Yahoo 값 노출 방지).
 - **주식수 힌트**(`us/shares-hint.ts`): 주식수 태그가 없는 기간에 쓰는 Yahoo 기반 값 —
   라우트·컨센서스가 같은 함수를 쓴다(BKR 2021~22 컨센서스만 빈칸이던 문제).
 - **사업연도 EPS**는 `fyEps` 하나(공시 희석 EPS → Class A → 보통주 귀속 순이익 ÷
