@@ -141,7 +141,8 @@ function instantValues(xml: string, ids: Set<string>): InstantValues {
   return out;
 }
 
-async function filingFiles(cik: number, f: Filing): Promise<{ cal: string; lab: string; xml: string } | null> {
+/** 계산 구조·라벨(작다)만 받고, 인스턴스(수 MB — Next 데이터 캐시 2MB 한도를 넘어 매번 새로 받는다)는 필요할 때만 */
+async function filingFiles(cik: number, f: Filing): Promise<{ cal: string; lab: string; instUrl: string } | null> {
   const base = `https://www.sec.gov/Archives/edgar/data/${cik}/${f.accn.replace(/-/g, "")}`;
   const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, { headers: H, revalidate: 60 * 60 * 24 });
   const names = idx.directory.item.map((i) => i.name);
@@ -150,12 +151,8 @@ async function filingFiles(cik: number, f: Filing): Promise<{ cal: string; lab: 
   const inst = names.find((n) => /_htm\.xml$/i.test(n));
   if (!lab || !inst) return null;
   const opt = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 };
-  const [c, l, x] = await Promise.all([
-    cal ? fetchText(`${base}/${cal}`, opt) : Promise.resolve(""),
-    fetchText(`${base}/${lab}`, opt),
-    fetchText(`${base}/${inst}`, opt),
-  ]);
-  return { cal: c, lab: l, xml: x };
+  const [c, l] = await Promise.all([cal ? fetchText(`${base}/${cal}`, opt) : Promise.resolve(""), fetchText(`${base}/${lab}`, opt)]);
+  return { cal: c, lab: l, instUrl: `${base}/${inst}` };
 }
 
 export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, recent: RecentFilings | null): Promise<CompanyFacts> {
@@ -182,34 +179,46 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
   const total: FactUnitEntry[] = [];
   const noncurrent: FactUnitEntry[] = [];
   const done = new Set<string>();
-  // 오래된 공시부터 구조를 이어받는다(10-Q 에 대차대조표 구조가 없을 때 직전 공시 구조 사용) — 결과는 최신 공시 우선
-  const parsed: { f: Filing; face: Face | null; xml: string }[] = [];
+  const parsed: { f: Filing; face: Face | null; instUrl: string }[] = [];
   for (const f of filings) {
     const fl = await filingFiles(Number(cik), f).catch(() => null);
     if (!fl) return facts; // 하나라도 못 읽으면 전체 미적용 — 기간마다 방식이 섞이지 않게
-    parsed.push({ f, face: fl.cal ? faceDebtLines(fl.cal, labels(fl.lab)) : null, xml: fl.xml });
+    parsed.push({ f, face: fl.cal ? faceDebtLines(fl.cal, labels(fl.lab)) : null, instUrl: fl.instUrl });
   }
+  const noteIds = [...NOTE_CURRENT_TOTAL, ...NOTE_CURRENT_PARTS, "FinanceLeaseLiability", ...NOTE_FIN_LEASE_PARTS].map((c) => `us-gaap_${c}`);
   for (let k = 0; k < parsed.length; k++) {
     const p = parsed[k];
+    // 10-Q 에 대차대조표 계산 구조가 없으면(ORCL) 직전 공시의 줄 목록을 쓴다
     const face = p.face ?? parsed.slice(k + 1).find((q) => q.face)?.face ?? null;
     if (!face || !face.lines.length) continue;
-    const noteIds = [...NOTE_CURRENT_TOTAL, ...NOTE_CURRENT_PARTS, "FinanceLeaseLiability", ...NOTE_FIN_LEASE_PARTS].map((c) => `us-gaap_${c}`);
-    const inst = instantValues(p.xml, new Set([...face.lines, ...noteIds]));
-    // 이 공시의 대차대조표 날짜 = 본표 줄 값이 있는 날짜(보통 당기말·전기말)
-    const dates = new Set<string>();
-    for (const l of face.lines) for (const d of inst.get(l)?.keys() ?? []) dates.add(d);
+    // 이 공시의 대차대조표 날짜 — companyfacts 에서 같은 날 제출된 부채 총계(당기말·전기말)
+    const cfDates = new Set<string>();
+    for (const c of ["Liabilities", "LiabilitiesAndStockholdersEquity"])
+      for (const e of g[c]?.units?.USD ?? []) if (!e.start && e.filed === p.f.filed) cfDates.add(e.end);
+    const allUsGaap = face.lines.every((l) => l.startsWith("us-gaap_"));
+    const cfComplete = allUsGaap && cfDates.size > 0 && [...cfDates].every((d) => face.lines.every((l) => cfVal(l.slice(8), d) !== undefined));
+    // 회사 고유 줄·companyfacts 미반영 공시·빈 줄이 있으면 인스턴스에서 읽는다
+    let inst: InstantValues | null = null;
+    if (!cfComplete) {
+      const xml = await fetchText(p.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 }).catch(() => null);
+      if (!xml) return facts;
+      inst = instantValues(xml, new Set([...face.lines, ...noteIds]));
+    }
+    const dates = new Set<string>(cfDates);
+    if (inst) for (const l of face.lines) for (const d of inst.get(l)?.keys() ?? []) dates.add(d);
     for (const d of dates) {
       if (done.has(d)) continue;
       // 본표 줄이 부문 차원으로만 공시된 날짜(CAT — 연결 합계 태그 없음)는 합이 모자라므로 기존 규칙으로 둔다
-      if (face.lines.some((l) => inst.dimOnly?.has(`${l}|${d}`))) continue;
+      if (inst && face.lines.some((l) => inst.dimOnly?.has(`${l}|${d}`))) continue;
       const v = (id: string): number | undefined => {
-        const x = inst.get(id)?.get(d);
+        const x = inst?.get(id)?.get(d);
         if (x !== undefined) return x;
         return id.startsWith("us-gaap_") ? cfVal(id.slice(8), d) : undefined;
       };
+      if (!face.lines.some((l) => v(l) !== undefined)) continue;
       let sum = 0;
       let nc = 0;
-      // 줄 값이 비면 0(본표의 "—") — 날짜 목록이 이미 줄 값이 있는 날짜만이라 전부 빈 날짜는 없다
+      // 줄 값이 비면 0(본표의 "—")
       for (const l of face.lines) {
         const x = v(l) ?? 0;
         sum += x;
