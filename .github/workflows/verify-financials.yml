@@ -41,8 +41,18 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then m="${{ inputs.mode }}";
           elif [ "${{ github.event.schedule }}" = "40 22 * * *" ]; then m=all; else m=missing; fi
           if [ "$m" = "missing" ]; then echo "flag=--missing" >> "$GITHUB_OUTPUT"; else echo "flag=--universe" >> "$GITHUB_OUTPUT"; fi
-      # 실패·불일치가 있어도 결과는 올리고 다음 시장으로 넘어간다(종료코드는 관리자 화면에서 확인)
+      # 실패·불일치가 있어도 두 시장 모두 돌리고 결과를 올린 뒤, 어느 한쪽이라도 실패면 실행 자체를 실패로 표시한다
+      # (예전 "|| true" 는 결과 업로드 실패까지 삼켜 Actions 화면이 늘 녹색이었다 — 재감사 LOW)
       - name: 미국
-        run: node scripts/verify-financials.mjs ${{ steps.mode.outputs.flag }} --market=us --base=$BASE --post || true
+        id: us
+        continue-on-error: true
+        run: node scripts/verify-financials.mjs ${{ steps.mode.outputs.flag }} --market=us --base=$BASE --post
       - name: 한국
-        run: node scripts/verify-financials.mjs ${{ steps.mode.outputs.flag }} --market=kr --base=$BASE --post || true
+        id: kr
+        continue-on-error: true
+        run: node scripts/verify-financials.mjs ${{ steps.mode.outputs.flag }} --market=kr --base=$BASE --post
+      - name: 결과 판정
+        if: steps.us.outcome != 'success' || steps.kr.outcome != 'success'
+        run: |
+          echo "::error::검증 실패 또는 실행 오류 — 미국 ${{ steps.us.outcome }}, 한국 ${{ steps.kr.outcome }}. 상세는 /admin/verify"
+          exit 1

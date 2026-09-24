@@ -9,7 +9,7 @@
 
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
-import { isStaleAnnual, splitFactorsByYear, fiscalYearOf } from "./edgar-series";
+import { isStaleAnnual, splitFactorsByYear, fiscalYearOf, vintageOrder } from "./edgar-series";
 import { buildShareResolver } from "./edgar-shares";
 import {
   ltmEps,
@@ -151,7 +151,7 @@ function annualSeriesMerged(
 function ttm(entries: FactUnitEntry[]): number | null {
   const annuals = entries
     .filter((e) => e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form))
-    .sort((a, b) => b.end.localeCompare(a.end));
+    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b));
   const fy = annuals[0];
   if (!fy?.start) return null;
   // 태그를 중단한 개념의 옛 연간값을 "최근 12개월"로 쓰지 않는다(감사 2026-09-23:
@@ -161,7 +161,7 @@ function ttm(entries: FactUnitEntry[]): number | null {
   const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
   const cur = interims
     .filter((e) => Math.abs(daysBetween(fy.end, e.start!)) <= 12 && e.end > fy.end)
-    .sort((a, b) => b.end.localeCompare(a.end))[0];
+    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
   if (!cur?.start) return fy.val;
   const wS = shiftYear(cur.start, -1);
   const wE = shiftYear(cur.end, -1);
@@ -172,7 +172,7 @@ function ttm(entries: FactUnitEntry[]): number | null {
         Math.abs(daysBetween(wS, e.start)) <= 12 &&
         Math.abs(daysBetween(wE, e.end)) <= 12,
     )
-    .sort((a, b) => Math.abs(daysBetween(wE, a.end)) - Math.abs(daysBetween(wE, b.end)))[0];
+    .sort((a, b) => Math.abs(daysBetween(wE, a.end)) - Math.abs(daysBetween(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
   if (!prior) return fy.val;
   return fy.val + cur.val - prior.val;
 }

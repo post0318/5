@@ -1,7 +1,7 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { recentQuarters, singleQuarter, fiscalYearOf } from "./edgar-series";
+import { recentQuarters, singleQuarter, fiscalYearOf, vintageOrder } from "./edgar-series";
 import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa, SYN_DA_CF } from "./edgar-ev";
 import { isFinancialCompany } from "./edgar-financial";
 
@@ -60,13 +60,13 @@ function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
 function ttmOf(entries: FactUnitEntry[]): number | null {
   const annuals = entries
     .filter((e) => e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form))
-    .sort((a, b) => b.end.localeCompare(a.end));
+    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b));
   const fy = annuals[0];
   if (!fy?.start) return null;
   const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
   const cur = interims
     .filter((e) => Math.abs(days(fy.end, e.start!)) <= 12 && e.end > fy.end)
-    .sort((a, b) => b.end.localeCompare(a.end))[0];
+    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
   if (!cur?.start) return fy.val;
   const wS = shiftYear(cur.start, -1);
   const wE = shiftYear(cur.end, -1);
@@ -77,7 +77,7 @@ function ttmOf(entries: FactUnitEntry[]): number | null {
         Math.abs(days(wS, e.start)) <= 12 &&
         Math.abs(days(wE, e.end)) <= 12,
     )
-    .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)))[0];
+    .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
   if (!prior) return fy.val;
   return fy.val + cur.val - prior.val;
 }

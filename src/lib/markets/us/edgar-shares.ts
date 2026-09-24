@@ -155,6 +155,8 @@ export function buildShareResolver(
   // 자본변동표 보통주 차원 값(10-K 원본, edgar-equity-shares.ts) — 위 태그가 차원으로만 있는 회사(WMT·BE·META)
   const equityDimE = entriesOf(facts, SYN_EQUITY_SHARES, "shares");
   const treasuryE = [...entriesOf(facts, "TreasuryStockCommonShares", "shares"), ...entriesOf(facts, "TreasuryStockShares", "shares")];
+  // 종업원 신탁 보유주(LLY 5,000만 주) — 발행주식이지만 유통주식·EPS 분모에서 빠진다(재감사 MEDIUM)
+  const trustE = entriesOf(facts, "CommonStockSharesHeldInEmployeeTrustShares", "shares");
   const dei = (facts.facts.dei?.["EntityCommonStockSharesOutstanding"]?.units?.shares ??
     []) as FactUnitEntry[];
   const wavgDil = entriesOf(facts, "WeightedAverageNumberOfDilutedSharesOutstanding", "shares");
@@ -174,7 +176,7 @@ export function buildShareResolver(
         for (const e of es) if (!e.start && e.val != null && e.end && Math.abs(Date.parse(e.end) - Date.parse(endDate)) <= 7 * 864e5 && (!b || (e.filed ?? "") > (b.filed ?? ""))) b = e;
         return b?.val ?? null;
       };
-      const issued = atEnd(issuedE), treasury = atEnd(treasuryE);
+      const issued = atEnd(issuedE), treasury = atEnd(treasuryE), trust = atEnd(trustE) ?? 0;
       // 잣대도 후보마다 단위 오류 보정 — MCD 는 가중평균을 7.164억 주가 아니라 716.4 로 태깅했다
       const refRaw = annualOf(wavgDil, year) ?? annualOf(wavgBasic, year);
       const near = (v: number | null) => {
@@ -186,7 +188,16 @@ export function buildShareResolver(
         const kk = Math.round(k);
         return (k <= 1.2 && k >= 1 / 1.2) || (kk >= 2 && Math.abs(k / kk - 1) < 0.1);
       };
-      const bsFace = [atEnd(sharesEnd), atEnd(equityStmtE), atEnd(equityDimE), issued != null && treasury != null ? issued - treasury : null, issued].find(near) ?? null;
+      // 발행주식수만 있는 경우(자기주식 태그 없음)는 가중평균과 10% 안일 때만 — 넓은 허용치로는 신탁·자기주식이 섞인
+      // 발행주식수가 그대로 채택된다(재감사 MEDIUM)
+      const nearTight = (v: number | null) => {
+        if (v == null || v <= 0) return false;
+        const ref = fixScale(refRaw, v);
+        return ref != null && Math.abs(ref / v - 1) <= 0.1;
+      };
+      const issuedOnly = issued != null ? issued - trust : null;
+      const bsFace = [atEnd(sharesEnd), atEnd(equityStmtE), atEnd(equityDimE), issued != null && treasury != null ? issued - treasury - trust : null].find(near)
+        ?? (nearTight(issuedOnly) ? issuedOnly : null);
       // as-reported(그 회계연도 시점) 값만 쓴다 — DEI 표지 주식수는 제출일
       // 기준이라 결산 후 분할이 있으면 기준이 어긋나므로 맨 뒤.
       const instant =
@@ -214,7 +225,9 @@ export function buildShareResolver(
       // 두 계열 비율이 정수 분할배수(±10%)면 연말 주식수를 가중평균 기준으로 환산해 쓴다 — 가중평균 자체를 쓰면 연중
       // 평균이라 연말 시가총액이 어긋난다(WMT FY2022: 가중평균 84.15억 vs 연말 27.61억×3 = 82.83억, 인포맥스와 일치)
       const splitK = instant != null && wavg != null && instant > 0 ? Math.round(wavg / instant) : 0;
-      const splitBasis = !sameBasis && splitK >= 2 && Math.abs(wavg! / instant! / splitK - 1) < 0.1;
+      // 실제 분할 이력(가중평균 계열의 분할계수)이 있을 때만 — 없으면 우연한 정수배를 분할로 오인한다(재감사 LOW)
+      const hasSplit = [...splitF.values()].some((v) => v != null && Math.abs(v - 1) > 0.01);
+      const splitBasis = !sameBasis && hasSplit && splitK >= 2 && Math.abs(wavg! / instant! / splitK - 1) < 0.1;
       const raw = sameBasis ? instant : splitBasis ? instant! * splitK : (wavg ?? instant);
       if (raw == null) {
         if (hint != null) hintUsed = true;

@@ -39,7 +39,8 @@ function yearEndShares(xml: string, reportDate: string): number | null {
       const [axis, member] = cx.dims[0];
       const v = Number(m[2]);
       if (axis === "StatementEquityComponentsAxis" && member === "CommonStockMember") component ??= v;
-      else if (axis === "StatementClassOfStockAxis" && !byClass.has(member)) byClass.set(member, v);
+      // 우선주 클래스는 보통주 합에서 뺀다(재감사 LOW)
+      else if (axis === "StatementClassOfStockAxis" && !/Preferred/i.test(member) && !byClass.has(member)) byClass.set(member, v);
     }
   }
   if (component != null) return component;

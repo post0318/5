@@ -39,9 +39,11 @@ const NOTE_CURRENT_PARTS = ["LongTermDebtCurrent", "ShortTermBorrowings", "Comme
 const NOTE_FIN_LEASE_PARTS = ["FinanceLeaseLiabilityCurrent", "FinanceLeaseLiabilityNoncurrent"];
 
 interface Filing { accn: string; form: string; filed: string; doc: string; report: string }
-interface Face { lines: string[]; hasCurrent: boolean; hasLease: boolean }
+interface Face { lines: string[]; current: Set<string>; hasCurrent: boolean; hasLease: boolean }
 
-const isCurrentLine = (id: string) => /Current|ShortTerm|CommercialPaper/.test(id) && !/Noncurrent/.test(id);
+// 계산 구조에 유동부채 소계가 없는 본표(비분류형)에서만 쓰는 이름 판정. "IncludingCurrentMaturities" 는 유동분을 포함한
+// 장기 줄이지 유동 줄이 아니다(CVX — 이름 판정으로 장기차입금 39,781 이 0 이 됐다, 재감사 HIGH)
+const isCurrentName = (id: string) => /Current|ShortTerm|CommercialPaper/.test(id) && !/Noncurrent|IncludingCurrent/.test(id);
 
 function locs(x: string): Map<string, string> {
   const loc = new Map<string, string>();
@@ -85,13 +87,15 @@ export function faceDebtLines(cal: string, lab: Map<string, string>): Face | nul
     }
     if (!arcs.some((a) => /^us-gaap_Liabilities(Current|Noncurrent)?$/.test(a.from))) continue;
     const lines: string[] = [];
+    const underCurrent = new Set<string>();
     let mixedLease = false;
     const seen = new Set<string>();
-    const walk = (id: string, depth: number) => {
+    const walk = (id: string, depth: number, cur: boolean) => {
       if (depth > 5) return;
       for (const a of arcs.filter((x) => x.from === id)) {
         if (seen.has(a.to)) continue;
         seen.add(a.to);
+        if (cur) underCurrent.add(a.to);
         const concept = a.to.slice(a.to.indexOf("_") + 1);
         if (/Equity|Stockholders/.test(concept) && !/Liabilit/.test(concept)) continue;
         const lb = lab.get(a.to) ?? "";
@@ -102,13 +106,18 @@ export function faceDebtLines(cal: string, lab: Map<string, string>): Face | nul
           ? DEBT_CONCEPT.test(concept) && !NOT_DEBT.test(concept)
           : (DEBT_LABEL.test(lb) && !NOT_DEBT_LABEL.test(lb)) || (!lb && DEBT_CONCEPT.test(concept) && !NOT_DEBT.test(concept));
         if (debt) lines.push(a.to);
-        else walk(a.to, depth + 1);
+        else walk(a.to, depth + 1, cur || a.to === "us-gaap_LiabilitiesCurrent");
       }
     };
-    for (const root of ["us-gaap_LiabilitiesAndStockholdersEquity", "us-gaap_Liabilities", "us-gaap_LiabilitiesCurrent", "us-gaap_LiabilitiesNoncurrent"]) walk(root, 0);
+    for (const root of ["us-gaap_LiabilitiesAndStockholdersEquity", "us-gaap_Liabilities", "us-gaap_LiabilitiesCurrent", "us-gaap_LiabilitiesNoncurrent"]) walk(root, 0, root === "us-gaap_LiabilitiesCurrent");
+    // 유동 여부 = 계산 구조상 유동부채 소계 아래인가. 소계가 없는 본표만 이름으로
+    const classified = arcs.some((a) => a.from === "us-gaap_LiabilitiesCurrent");
+    const current = new Set(lines.filter((l) => (classified ? underCurrent.has(l) : isCurrentName(l))));
     return {
       lines,
-      hasCurrent: lines.some(isCurrentLine),
+      current,
+      // 유동분을 포함한 장기 줄이 있으면 유동 만기분도 본표에 있는 것 — 주석 유동분을 더하면 이중 합산
+      hasCurrent: current.size > 0 || lines.some((l) => /IncludingCurrent/.test(l)),
       hasLease: !mixedLease && lines.some((l) => /Lease/i.test(l) || /lease/i.test(lab.get(l) ?? "")),
     };
   }
@@ -224,7 +233,7 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
       for (const l of face.lines) {
         const x = v(l) ?? 0;
         sum += x;
-        if (!isCurrentLine(l)) nc += x;
+        if (!face.current.has(l)) nc += x;
       }
       if (!face.hasCurrent) {
         const t = NOTE_CURRENT_TOTAL.map((c) => v(`us-gaap_${c}`)).find((x) => x !== undefined);

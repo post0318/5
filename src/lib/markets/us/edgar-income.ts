@@ -52,7 +52,9 @@ const SGA = [
   "SellingGeneralAndAdministrativeExpense",
   "GeneralAndAdministrativeExpense",
 ];
-const RND = ["ResearchAndDevelopmentExpense"];
+// 취득 IPR&D 를 별도 줄로 공시하는 회사(LLY 2023~)는 R&D 태그가 "취득 IPR&D 제외"로 바뀐다 — 없으면 연구개발비·
+// 기타 영업비용 행이 통째로 비었다. 취득 IPR&D 는 기타 영업비용(차감 계산)에 남는다.
+const RND = ["ResearchAndDevelopmentExpense", "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"];
 // 영업이익 — edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전, 로더가 합성).
 // 하이라이트·재무분석·개요 멀티플과 같은 값(예전엔 여기만 매출 − 원가로 만든 매출총이익
 // 에서 판관비·연구개발비를 빼 BMY 등에서 EBITDA 가 화면마다 달랐다).

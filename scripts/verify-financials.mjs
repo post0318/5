@@ -293,7 +293,7 @@ async function nonopSplitFromInstances(cik, G) {
       const v = Number(m[4]);
       if (m[1] === "us-gaap" && m[2] === "Revenues") {
         if (!c.dims.length) total.set(c.end, v);
-        else if (c.dims.length === 1 && c.dims[0][0] === "ProductOrServiceAxis" && /EquityAffiliate|EquityMethod|EquityCompan|OtherRevenueMember|OtherIncomeMember/i.test(c.dims[0][1])) {
+        else if (c.dims.length === 1 && c.dims[0][0] === "ProductOrServiceAxis" && /EquityAffiliate|EquityMethod|EquityCompan|^(OtherRevenueMember|OtherIncomeMember)$/i.test(c.dims[0][1])) {
           const k = c.end + "|" + c.dims[0][1];
           if (!dimNonop.has(k)) dimNonop.set(k, { end: c.end, v });
         }

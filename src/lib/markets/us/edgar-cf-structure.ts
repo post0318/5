@@ -27,8 +27,10 @@ const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) 
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 
 const DA = /deprecia|amortiz/i;
-// 개념명(카멜케이스)·라벨(띄어쓰기) 둘 다에 맞도록 공백을 선택으로 둔다
-const NOT_DA = /debt|discount|premium|issuance|financing ?costs?|deferred ?(financing|charges)|stock|share-?based|compensation|operating ?lease|content|contract ?(cost|acquisition)|capitalized ?software|investment|securities|bond|inventory|incentive|acquisition ?costs|defined ?benefit|pension|postretirement/i;
+// 개념명(카멜케이스)·라벨(띄어쓰기) 둘 다에 맞도록 공백을 선택으로 둔다.
+// 운용리스가 섞인 사용권자산 상각 줄은 제외(COST "Non-cash lease expense" = 운용+금융리스 합 303 — 운용리스 비용은
+// 임차료 성격이라 EBITDA 에 이미 반영, 대차대조표 차입금의 운용·금융 혼합 리스 줄 제외와 같은 원칙). 금융리스 단독 줄은 포함.
+const NOT_DA = /debt|discount|premium|issuance|financing ?costs?|deferred ?(financing|charges)|stock|share-?based|compensation|operating\w*lease|lease ?expense|content|contract ?(cost|acquisition)|capitalized ?software|investment|securities|bond|inventory|incentive|acquisition ?costs|defined ?benefit|pension|postretirement/i;
 const OP_CF_ROOT = /^us-gaap_NetCashProvidedByUsedInOperatingActivities(ContinuingOperations)?$/;
 
 interface Filing { accn: string; form: string; filed: string }

@@ -225,10 +225,13 @@ export async function withIncomeStatementStructure(cik: string, facts: CompanyFa
     }
   }
   const structures: Structure[] = [];
+  // 최신 공시 손익계산서에 영업이익 소계가 없음을 확인했는가 — 확인됐으면 값 대입이 실패해도 부문 주석 영업이익은 옮긴다
+  let latestNoOp = false;
   for (const f of filings) {
     const fl = await filesOf(Number(cik), f).catch(() => null);
     if (!fl) continue;
     const s = pretaxChildren(fl.cal, labelsOf(fl.lab));
+    if (s && f === filings[0]) latestNoOp = true;
     if (s) structures.push({ ...s, instUrl: fl.instUrl ?? undefined });
     else if (f === filings[0]) return facts; // 최신 공시에 영업이익 소계가 있음 — 해당 없음
   }
@@ -281,14 +284,17 @@ export async function withIncomeStatementStructure(cik: string, facts: CompanyFa
       out.push({ ...p, val: nonop });
     }
   }
-  if (!out.length) return facts;
+  // 값 대입이 전부 실패해도(원본 조회 실패 등) 최신 본표에 영업이익 소계가 없다는 게 확인됐으면 부문 주석 값은 옮긴다 —
+  // 남겨 두면 모든 화면이 부문 영업이익 합계를 회사 영업이익으로 조용히 쓴다(재감사 MEDIUM, fail-open). 그 경우 영업이익은
+  // edgar-ev.ts 의 세전이익 + 이자비용 근사로 간다.
+  if (!out.length && !latestNoOp) return facts;
   // DIS 형 — 영업이익 태그가 손익계산서 구조에 없으면 부문 주석 값이므로 옮겨 둔다(모든 화면이 합성값을 쓰게)
-  const next: Record<string, unknown> = { ...g, [SYN_NONOP_IN_PRETAX]: { units: { USD: out } } };
+  const next: Record<string, unknown> = out.length ? { ...g, [SYN_NONOP_IN_PRETAX]: { units: { USD: out } } } : { ...g };
   let segmentOnly = false;
-  if (g.OperatingIncomeLoss?.units?.USD?.some((e) => e.end >= "2020-01-01")) {
+  if ((latestNoOp || out.length > 0) && g.OperatingIncomeLoss?.units?.USD?.some((e) => e.end >= "2020-01-01")) {
     next[SEGMENT_OP_INCOME] = g.OperatingIncomeLoss;
     delete next.OperatingIncomeLoss;
     segmentOnly = true;
   }
-  return { ...facts, opIncomeFromStructure: true, segmentOpIncomeOnly: segmentOnly, facts: { ...facts.facts, "us-gaap": next } } as CompanyFacts;
+  return { ...facts, opIncomeFromStructure: out.length > 0, segmentOpIncomeOnly: segmentOnly, facts: { ...facts.facts, "us-gaap": next } } as CompanyFacts;
 }

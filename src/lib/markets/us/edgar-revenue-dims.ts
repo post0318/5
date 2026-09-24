@@ -21,8 +21,12 @@ import type { RecentFilings } from "./edgar-gapfill";
 export const SYN_NONOP_IN_REVENUES = "NonoperatingIncomeInRevenuesDerived";
 export const SYN_OPERATING_REVENUE = "OperatingRevenueExcludingNonoperatingDerived";
 
-/** 비영업 수익 멤버(지분법·기타수익) */
-const NONOP_MEMBER = /EquityAffiliate|EquityMethod|EquityCompan|OtherRevenueMember|OtherIncomeMember/i;
+/**
+ * 비영업 수익 멤버(지분법·기타수익). 기타수익은 멤버 이름 **전체**가 일치할 때만 — 부분일치로는 LLY 의
+ * "CollaborationandOtherRevenueMember"(협업·로열티 매출 53억, 본업 매출)가 비영업으로 빠져 매출이 16~18%,
+ * 영업이익이 최대 89% 작게 나왔다(검증 2026-09-24). XOM 은 정확히 "OtherRevenueMember".
+ */
+const NONOP_MEMBER = /EquityAffiliate|EquityMethod|EquityCompan|^(OtherRevenueMember|OtherIncomeMember)$/i;
 
 const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) contact@example.com";
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };

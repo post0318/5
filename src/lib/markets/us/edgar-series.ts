@@ -337,11 +337,24 @@ export function isStaleAnnual(fyEnd: string, now = Date.now()): boolean {
   return (now - Date.parse(fyEnd)) / 86_400_000 > STALE_ANNUAL_DAYS;
 }
 
+/**
+ * TTM 구성요소의 공시 판본 선택 — 같은 기간 값이 여러 공시에 있으면(비교 열 재공시) 전년동기 누적은 **당기 누적과
+ * 같은 공시의 비교 열**, 그 외는 가장 최근 공시. 예전엔 배열 순서(최초 공시)를 따라 LLY 처럼 2026 부터 백만 단위로
+ * 반올림해 공시하는 회사는 LTM 이 원공시 8,419.8 과 비교 열 8,420 을 섞어 0.2 백만 달랐다(검증 2026-09-24).
+ */
+export function vintageOrder(a: { filed?: string }, b: { filed?: string }, prefer?: string): number {
+  if (prefer) {
+    const pa = a.filed === prefer ? 0 : 1, pb = b.filed === prefer ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+  }
+  return (b.filed ?? "").localeCompare(a.filed ?? "");
+}
+
 /** 흐름 TTM = 최근 FY + 당기누적 − 전년동기누적. */
 export function ttmOf(entries: FactUnitEntry[]): number | null {
   const annuals = entries
     .filter((e) => e.fp === "FY" && isFullYearDuration(e) && ANNUAL_FORMS.includes(e.form))
-    .sort((a, b) => b.end.localeCompare(a.end));
+    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b));
   const fy = annuals[0];
   if (!fy?.start) return null;
   // 태그를 중단한 개념의 옛 연간값을 "최근 12개월"로 쓰지 않는다(감사 2026-09-23:
@@ -351,7 +364,7 @@ export function ttmOf(entries: FactUnitEntry[]): number | null {
   const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
   const cur = interims
     .filter((e) => Math.abs(days(fy.end, e.start!)) <= 12 && e.end > fy.end)
-    .sort((a, b) => b.end.localeCompare(a.end))[0];
+    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
   if (!cur?.start) return fy.val;
   const wS = shiftYear(cur.start, -1);
   const wE = shiftYear(cur.end, -1);
@@ -362,7 +375,7 @@ export function ttmOf(entries: FactUnitEntry[]): number | null {
         Math.abs(days(wS, e.start)) <= 12 &&
         Math.abs(days(wE, e.end)) <= 12,
     )
-    .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)))[0];
+    .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
   if (!prior) return fy.val;
   return fy.val + cur.val - prior.val;
 }
