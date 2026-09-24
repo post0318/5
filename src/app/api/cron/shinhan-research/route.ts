@@ -7,6 +7,7 @@ import {
   type ShinhanResearchDoc,
 } from "@/lib/db/shinhan-research";
 import { searchCorps } from "@/lib/markets/kr/corpcode";
+import { isCommonExcludedResearch } from "@/lib/research-exclude";
 
 export const maxDuration = 60;
 
@@ -69,7 +70,11 @@ export async function POST(req: Request) {
     const market = body.market && isResearchMarketId(body.market) ? body.market : "kr";
 
     const now = new Date().toISOString();
-    const docs: ShinhanResearchDoc[] = body.items.map((it) => ({
+    // 공통 제외(주간물·일정표·추천종목·원자재 외 대체투자) — 모든 수집기가 이
+    // 라우트를 거치므로 여기서 한 번에 거른다(오너 지시 2026-09-25).
+    const kept = body.items.filter((it) => !isCommonExcludedResearch(`${it.stockName ?? ""} ${it.title ?? ""}`, it.category ?? "기업"));
+    const excluded = body.items.length - kept.length;
+    const docs: ShinhanResearchDoc[] = kept.map((it) => ({
       _id: `${source}:${it.id}`,
       source,
       market,
@@ -96,7 +101,7 @@ export async function POST(req: Request) {
 
     const result = await upsertShinhanResearch(docs);
     const unresolved = docs.filter((d) => d.symbol == null).length;
-    return ok({ received: docs.length, unresolved, ...result });
+    return ok({ received: body.items.length, excluded, unresolved, ...result });
   } catch (err) {
     return jsonError(err);
   }

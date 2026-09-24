@@ -1152,6 +1152,29 @@ npm run db:studio    # drizzle studio
     조회 시점의 `ESG_EXCLUDE_RE`(`shinhan-research.ts`)와 이중으로 걸러진다
     (수집 단계에서 막아 DB에 아예 안 쌓이게, 조회 단계는 그 전에 이미
     쌓인 문서·아직 이 필터를 안 쓰는 나머지 수집기의 안전망).
+  - **주간물·일정표·추천종목·대체투자 공통 제외(오너 지시, 2026-09-25 — "공통으로
+    캘린더나 주간, 추천종목은 수집 대상에서 제외, 대체투자에서 원자재는 수집으로
+    적용")**: 수집기가 40개가 넘어 각자 고치지 않고, 전부 거치는 수신 라우트
+    (`/api/cron/shinhan-research`·`/api/cron/macro-issues`)와 조회 함수(이미 쌓인
+    문서 안전망 — 산업분석·인사이트·종목별·이슈분석)에서
+    `src/lib/research-exclude.ts` 하나로 거른다(수집기용 같은 규칙:
+    `exclude-filters.mjs` `isCommonExcludedContent`). 주간물 = Weekly/위클리/
+    주간(주간사 제외)/Week Ahead/"9월 4주", Daily 는 대상 아님. 대체투자는 원자재
+    얘기만 남기고, 종목 리포트(category 기업)엔 대체투자 규칙을 안 건다(JPM
+    "대체투자 확장" 딜 기사 오탐 실측). 제목에 "대체투자"가 안 나오는 소스는
+    수집기에서 따로 처리 — 한투 "대체투자 Note"·NH FICC 대체투자/부동산 라벨·KB
+    tab=2 대체투자 폴더는 원자재만 통과. 적용 시점 DB 실측: kr_research 6,699건 중
+    282건이 화면에서 빠짐(신한 해외 Weekly 86·KB 추천종목/Biopharma Weekly 57·
+    하나 업종 Weekly 49 등).
+- **삼성증권 게시판 전체 매핑(오너 지시, 2026-09-25)**: 모바일 리포트 검색의
+  GUBUN 별로 목적지를 정했다 — 상세 표는 `collect-samsung-research.mjs` 헤더.
+  해외기업·Chief's Note → 미국 종목분석, 해외산업 → 미국 산업분석, 국내기업·
+  SPOT코멘트(기업) → 국내 종목분석, 국내산업·프리미엄 → 국내 산업분석,
+  투자전략·SPOT코멘트(전략)·이슈리포트 → 투자전략(주식), Daily시황 → 시황,
+  경제·채권 → 거시경제 이슈분석, 원자재 글(Commodity Issues 등)은 어느 게시판이든
+  이슈분석. 주간투자정보·선물옵션은 미수집. 국내 비상장은 "삼성증권
+  비상장리서치"(국내 인사이트). chief·spot1·spot2 는 모바일 검색에서 0건(실측),
+  프리미엄은 2022-12 이후 새 글 없음.
 - **산업분석 탭 (`/[market]/research`, 종목분석 옆 최상위 탭, 오너 지시
   2026-09)**: `kr_research` 의 `category:"산업"`(symbol 항상 null, 여러
   증권사가 이미 수집 중이었지만 종목별 조회(`getShinhanResearchBySymbol`)

@@ -123,7 +123,12 @@ for (const r of tab2Rows) {
   const docTitleSub = String(r.docTitleSub ?? "").trim();
   if (!docTitle) continue;
   if (WEEKLY_RE.test(`${docTitle} ${docTitleSub}`)) continue;
-  const folderTail = String(r.foldertemplate ?? "").split(">").pop()?.trim() ?? "";
+  // 대체투자 폴더는 원자재만 수집(오너 지시 2026-09-25 — "대체투자에서 원자재는
+  // 수집"). 가상자산·부동산리츠는 제외. 제목엔 "대체투자"가 안 나와 서버 공통
+  // 필터가 못 거르므로 여기서 폴더 경로로 판정한다.
+  const folder = String(r.foldertemplate ?? "");
+  if (/대체투자/.test(folder) && !/원자재|commodit/i.test(`${folder} ${docTitle} ${docTitleSub}`)) continue;
+  const folderTail = folder.split(">").pop()?.trim() ?? "";
   const isFx = FX_RE.test(docTitle) || FX_RE.test(folderTail);
   collected.push({
     id: r.documentid,

@@ -1,6 +1,7 @@
 import "server-only";
 import type { Collection } from "mongodb";
 import { getDb } from "./index";
+import { isCommonExcludedResearch } from "../research-exclude";
 
 /**
  * 거시경제 "이슈분석"/"환율분석" 탭 전용 컬렉션(`macro_issues`, 오너 지시
@@ -65,7 +66,9 @@ export async function getMacroIssues(
   const col = await macroIssuesCol();
   const filter: Record<string, unknown> = { topic };
   if (source) filter.source = source;
-  return col.find(filter).sort({ date: -1 }).limit(limit).toArray();
+  // 공통 제외(오너 지시 2026-09-25) — 이미 쌓인 문서용 안전망. 걸러지는 만큼 넉넉히 읽는다.
+  const docs = await col.find(filter).sort({ date: -1 }).limit(limit * 2).toArray();
+  return docs.filter((d) => !isCommonExcludedResearch(d.title)).slice(0, limit);
 }
 
 /** 탭 UI용 — 해당 topic에 실제로 존재하는 증권사명 목록(문서 수 많은 순). */

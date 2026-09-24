@@ -113,7 +113,8 @@ function parseItems(html) {
     // 제외하자", NH FICC 게시판의 대체투자/부동산 제외와 같은 취지). 내용이
     // 채권/사모신용시장 얘기라 정확히는 채권 쪽에 가깝지만 이 프로젝트가
     // 다루는 산업분석/투자전략 범위 밖으로 보고 아예 수집을 건너뛴다.
-    if (label === "대체투자 Note") continue;
+    // 단, 원자재 얘기는 수집(오너 지시 2026-09-25 — "대체투자에서 원자재는 수집").
+    if (label === "대체투자 Note" && !/원자재|commodit/i.test(titleM[1])) continue;
     let title = titleM[1].trim();
     // 제목이 라벨과 같은 말로 시작하면("채권분석:9월 FOMC...") 중복 제거.
     const labelNorm = label.replace(/\s|Note/gi, "");

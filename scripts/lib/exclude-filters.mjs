@@ -48,3 +48,30 @@ const ESG_RE = /\bESG\b/i;
 export function isEsgContent(text) {
   return ESG_RE.test(String(text ?? ""));
 }
+
+/**
+ * 공통 제외(오너 지시 2026-09-25 — "공통으로 캘린더나 주간, 추천종목은 수집
+ * 대상에서 제외, 대체투자에서 원자재는 수집으로 적용"). 서버 수신 라우트가
+ * 같은 규칙(`src/lib/research-exclude.ts`)으로 한 번 더 거르므로 이 함수를 안
+ * 쓰는 수집기도 결과는 같다 — 수집기에서 쓰면 PDF 보강 등 헛일을 줄인다.
+ * 정규식은 두 파일에서 같이 고칠 것.
+ */
+const COMMON_WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*\d+\s*주(?!년)/i;
+const CALENDAR_RE = /캘린더|캘박|calendar|일정표/i;
+const RECOMMEND_RE = /추천\s*종목/;
+const ALT_INVEST_RE = /대체투자/;
+const COMMODITY_RE = /원자재|commodit/i;
+
+/** 원자재(Commodity) 얘기면 true — 대체투자 중 이것만 수집한다. */
+export function isCommodityContent(text) {
+  return COMMODITY_RE.test(String(text ?? ""));
+}
+
+/** 주간물·일정표·추천종목·원자재 외 대체투자면 true — 수집기가 건너뛴다. */
+export function isCommonExcludedContent(text, category) {
+  const t = String(text ?? "");
+  if (COMMON_WEEKLY_RE.test(t) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t)) return true;
+  // 대체투자 규칙은 종목 리포트에 적용하지 않는다(서버 규칙과 동일).
+  if (category === "기업") return false;
+  return ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t);
+}

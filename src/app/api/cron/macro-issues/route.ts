@@ -1,6 +1,7 @@
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
 import { upsertMacroIssues, type MacroIssueDoc } from "@/lib/db/macro-issues";
+import { isCommonExcludedResearch } from "@/lib/research-exclude";
 
 /**
  * 거시경제 "이슈분석"/"환율분석" 탭 수집 수신처 — 로컬 스크립트가 쓴다
@@ -39,7 +40,9 @@ export async function POST(req: Request) {
     if (!topic) return Response.json({ error: "topic은 이슈분석|환율분석 이어야 합니다" }, { status: 400 });
 
     const now = new Date().toISOString();
-    const docs: MacroIssueDoc[] = body.items.map((it) => ({
+    // 공통 제외(주간물·일정표·추천종목·원자재 외 대체투자, 오너 지시 2026-09-25).
+    const kept = body.items.filter((it) => !isCommonExcludedResearch(it.title));
+    const docs: MacroIssueDoc[] = kept.map((it) => ({
       _id: `${source}:${topic}:${it.id}`,
       source,
       topic,
@@ -52,7 +55,7 @@ export async function POST(req: Request) {
     }));
 
     const result = await upsertMacroIssues(docs);
-    return ok({ received: docs.length, ...result });
+    return ok({ received: body.items.length, excluded: body.items.length - kept.length, ...result });
   } catch (err) {
     return jsonError(err);
   }

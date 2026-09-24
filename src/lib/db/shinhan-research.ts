@@ -2,6 +2,7 @@ import "server-only";
 import type { Collection } from "mongodb";
 import { getDb } from "./index";
 import type { MarketId } from "../markets/types";
+import { isCommonExcludedResearch } from "../research-exclude";
 
 /**
  * 산업/기업분석 리서치는 이 앱의 4대 시장(`MarketId`: kr/us/jp) 밖의 소스도
@@ -317,6 +318,9 @@ const MARKET_CONDITION_STOCKNAMES = new Set([
   // 거의 매일 올라오는 아시아 시장 헤드라인 코멘트, KB데일리와 같은 성격
   // (오너 지시 2026-09-24 — "kb 중국과 일본도 수집기는 만들어두고").
   "KB Asia Market Headline",
+  // 삼성증권 "Daily시황"(GUBUN=daily, 국내/미국 마감시황) — 오너 지시,
+  // 2026-09-25 — "daily시황은 시황으로".
+  "삼성증권 Daily시황",
 ]);
 // stockName 뒤에 " | Weekly" 같은 부가 표기가 붙어 정확히 일치하지 않는
 // 경우가 있어(예: "KB Global Tracker+ | Weekly") 접두어로도 매칭(오너 지적
@@ -341,6 +345,13 @@ const STRATEGY_STOCKNAMES = new Set([
   // KB증권 "KB 전략" 게시판(tab=3, "한국 투자 > 주식전략") — 오너 지시,
   // 2026-09-24 — "한국투자에서 kb전략은 투자전략(주식)에 해당된다".
   "KB 전략",
+  // 삼성증권 "투자전략"(GUBUN=market)·"SPOT코멘트(전략)"(GUBUN=spot1) — 오너
+  // 지시, 2026-09-25 — "투자전략은 투자전략(주식)으로", "spot코멘트(전략)은
+  // 투자전략(주식)으로".
+  "삼성증권 투자전략",
+  "삼성증권 SPOT코멘트(전략)",
+  // 삼성증권 "이슈리포트"(GUBUN=issue) — 오너 지시, 2026-09-25.
+  "삼성증권 이슈리포트",
 ]);
 // 미래에셋증권 "월스트리트파인더 Ep.201, 202, ..." — 매회 에피소드 번호가
 // 붙어 정확히 일치하지 않아 접두어로 매칭. 계절성·금리 대응·엔비디아
@@ -473,6 +484,9 @@ export const INSIGHT_SOURCES = [
   // 산업분석으로 유지"(국내(market:"kr")만 인사이트 대상, 삼성증권의 해외
   // (market:"us") 비상장 콘텐츠는 그대로 산업분석 유지 — 손대지 않음).
   "NH투자증권 비상장리서치",
+  // 삼성증권 국내기업·국내산업 게시판의 비상장 글("BPMG (비상장): …",
+  // "비상장 위클리 업데이트") — 위와 같은 국내 비상장 규칙(2026-09-25).
+  "삼성증권 비상장리서치",
 ] as const;
 
 /**
@@ -657,7 +671,11 @@ export async function getIndustryResearch(
   // 미래에셋 "ESG Strategy"/"[ESG Issue Comment]" 등 여러 증권사 수집기에
   // 걸쳐 있어(실측 90일 15건) 수집기별로 개별 제외하는 대신 조회 시점에
   // 한 번에 걸러낸다.
-  const withoutEsg = docs.filter((d) => !ESG_EXCLUDE_RE.test(`${d.stockName} ${d.title}`));
+  // 공통 제외(주간물·일정표·추천종목·원자재 외 대체투자, 오너 지시 2026-09-25)도
+  // 이미 쌓인 문서에 함께 적용 — 수신 라우트가 새 문서는 이미 거른다.
+  const withoutEsg = docs.filter(
+    (d) => !ESG_EXCLUDE_RE.test(`${d.stockName} ${d.title}`) && !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
+  );
   const deduped = dedupeBySourceTitle(withoutEsg);
   // 투자전략(주식)/투자전략(채권)은 30일까지만(오너 지시, 2026-09 —
   // "그 이상은 불필요하다. 화면에서도 제외한다", 최종 값), 시황은 14일까지만
@@ -703,7 +721,8 @@ export async function getInsightResearch(
     source: source ? source : { $in: INSIGHT_SOURCES as unknown as string[] },
   };
   const docs = await col.find(filter).sort({ date: -1 }).limit(limit * 3).toArray();
-  return dedupeBySourceTitle(docs).slice(0, limit);
+  const kept = docs.filter((d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"));
+  return dedupeBySourceTitle(kept).slice(0, limit);
 }
 
 /**
@@ -735,11 +754,14 @@ export async function getShinhanResearchBySymbol(
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
-  if (recent.length > 0) return dedupeBySourceTitle(recent).slice(0, limit);
+  // 공통 제외(오너 지시 2026-09-25) — 이미 쌓인 문서용 안전망.
+  const keep = (d: ShinhanResearchDoc) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업");
+  const recentKept = recent.filter(keep);
+  if (recentKept.length > 0) return dedupeBySourceTitle(recentKept).slice(0, limit);
   const fallback = await col
     .find({ ...marketFilter, ...symbolFilter })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
-  return dedupeBySourceTitle(fallback).slice(0, Math.min(limit, 3));
+  return dedupeBySourceTitle(fallback.filter(keep)).slice(0, Math.min(limit, 3));
 }

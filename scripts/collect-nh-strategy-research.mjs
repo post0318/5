@@ -183,7 +183,8 @@ for (const board of BOARDS) {
       // 항목에도 붙어있어(그건 유지 대상, 오너가 "투자전략(주식)"으로
       // 분류하라고 지시한 사례) ser_cd_nm이 아니라 대괄호 라벨(부동산·인프라
       // 등)로만 걸러야 오분류가 안 난다.
-      if (board.ditCd === "04" && /대체투자|부동산/.test(stockName)) continue;
+      // 단, 원자재 얘기는 수집(오너 지시 2026-09-25 — "대체투자에서 원자재는 수집").
+      if (board.ditCd === "04" && /대체투자|부동산/.test(stockName) && !/원자재|commodit/i.test(`${stockName} ${title}`)) continue;
       // FICC 게시판은 세부 라벨(리츠/채권/크레딧 등)이 "FICC" 단어 자체를
       // 안 담고 있는 경우가 많아(예: "[원자재(에너지)/Note]") 키워드가
       // 사라지지 않게 항상 접두어로 붙인다 — 오너 지시("FICC는 해외투자
