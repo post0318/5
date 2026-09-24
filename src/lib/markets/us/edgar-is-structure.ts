@@ -106,10 +106,14 @@ function durationValues(xml: string, ids: Set<string>): Map<string, number> {
 }
 
 /** calculation linkbase 에서 손익계산서 역할의 "세전이익 ← 하위 줄" 목록. OperatingIncomeLoss 가 트리에 있으면 null. */
-function pretaxChildren(cal: string, labels: Map<string, string[]> = new Map()): Structure | null {
+function pretaxChildren(cal: string, labels: Map<string, string[]> = new Map(), allowCombined = false): Structure | null {
   for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
-    if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Comprehensive|Segment/i.test(role)) continue;
+    if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Segment/i.test(role)) continue;
+    // 포괄손익계산서 단독은 제외하되, 손익·포괄손익 결합 보고서("Statements of Operations and Comprehensive Income")는
+    // 금융사 판정에서 손익계산서로 인정한다(MET 2026 2분기 — 결합 형식이라 부문 조정이익 태그를 못 떼어 영업이익이
+    // 세전이익의 2~3배로 나왔다. 2026-09-24 재감사 미결 질문의 실제 사례)
+    if (/Comprehensive/i.test(role) && !(allowCombined && /OPERATIONS|EARNINGS/i.test(role))) continue;
     const loc = new Map<string, string>();
     for (const l of m[2].matchAll(/<link:loc\b([^>]*)\/?>/g)) {
       const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
@@ -160,7 +164,7 @@ async function financialSegmentOnly(cik: string, facts: CompanyFacts, recent: Re
     const i = recent.form.findIndex((f) => f === form);
     if (i < 0) { if (form === "10-K") return facts; continue; }
     const cal = await calOf(Number(cik), { accn: recent.accessionNumber[i], form, filed: recent.filingDate[i], doc: recent.primaryDocument[i] }).catch(() => null);
-    if (!cal || !pretaxChildren(cal)) return facts;
+    if (!cal || !pretaxChildren(cal, new Map(), true)) return facts;
     for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
       const role = m[1].split("/").pop() ?? "";
       if (/INCOME|OPERATIONS|EARNINGS/i.test(role) && !/Detail|Table|Parenth/i.test(role) && /#us-gaap_OperatingIncomeLoss"/.test(m[2])) return facts;

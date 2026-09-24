@@ -513,28 +513,31 @@ export function opIncomeEntries(facts: CompanyFacts): FactUnitEntry[] {
   // 빈칸이 됐다. firstOi~lastOi 구간(실제 태그가 존재하는 구간)만 합성을 막는다.
   const firstOi = oi.reduce((m, e) => (m === "" || e.end < m ? e.end : m), "");
   const key = (e: FactUnitEntry) => `${e.start ?? ""}|${e.end}|${e.form}|${e.fp}`;
+  // 같은 기간 값이 여러 개면 가장 최근 제출분(재작성본) — 세전이익(아래 latestFiled)과 같은 시점 값끼리 짝짓는다.
+  // 원공시를 먼저 쓰면 재작성된 해에 세전이익(재작성)과 지분법·이자(원공시)가 섞였다(감사 LOW 지적의 실제 사례:
+  // MET 2021 세전 8,518(재작성) − 지분법 5,100(원공시) = 3,418 vs 둘 다 최신 3,382)
+  const latestVals = (es: FactUnitEntry[]): Map<string, number> => {
+    const m = new Map<string, FactUnitEntry>();
+    for (const e of es) {
+      if (!e.start || e.val == null) continue;
+      const p = m.get(key(e));
+      if (!p || (e.filed ?? "") > (p.filed ?? "")) m.set(key(e), e);
+    }
+    return new Map([...m].map(([k, e]) => [k, e.val]));
+  };
   const interest = new Map<string, number>();
   for (const c of EBIT_INTEREST)
-    for (const e of entriesOf(facts, c)) {
-      const k = key(e);
-      if (e.start && e.val != null && !interest.has(k)) interest.set(k, e.val);
-    }
+    for (const [k, v] of latestVals(entriesOf(facts, c))) if (!interest.has(k)) interest.set(k, v);
   // 지분법 이익 — 세전이익 태그가 이를 **포함**하는 계열이면 빼서 영업이익에 가깝게(오너 결정 2026-09-24).
   // XOM 2023: 세전 527.8억 + 이자 8.5억 = 536억 → 지분법 63.9억 차감 472억(인포맥스 영업이익 434억).
   // 기타수익(이자·투자수익 등)은 XOM 이 표준 태그로 공시하지 않아 남는다.
-  const equityInc = new Map<string, number>();
-  for (const e of entriesOf(facts, "IncomeLossFromEquityMethodInvestments"))
-    if (e.start && e.val != null && !equityInc.has(key(e))) equityInc.set(key(e), e.val);
+  const equityInc = latestVals(entriesOf(facts, "IncomeLossFromEquityMethodInvestments"));
   const PRETAX_INCLUDES_EQUITY = new Set([PRETAX[0], PRETAX[2]]);
   // 총수익에 섞인 비영업 수익(지분법 + 기타수익)을 원본에서 읽은 경우(XOM) — 지분법만 빼는 것보다 정확하다
-  const nonopInRev = new Map<string, number>();
-  for (const e of entriesOf(facts, "NonoperatingIncomeInRevenuesDerived"))
-    if (e.start && e.val != null && !nonopInRev.has(key(e))) nonopInRev.set(key(e), e.val);
+  const nonopInRev = latestVals(entriesOf(facts, "NonoperatingIncomeInRevenuesDerived"));
   // 손익계산서 계산 구조에서 읽은 세전이익 속 영업외 항목 합(DIS·FOXA — edgar-is-structure.ts). 있으면 이자·지분법
   // 근사 대신 "세전이익 − 영업외 항목"(공시 구조 그대로)
-  const nonopInPretax = new Map<string, number>();
-  for (const e of entriesOf(facts, "NonoperatingItemsInPretaxDerived"))
-    if (e.start && e.val != null && !nonopInPretax.has(key(e))) nonopInPretax.set(key(e), e.val);
+  const nonopInPretax = latestVals(entriesOf(facts, "NonoperatingItemsInPretaxDerived"));
   const out: FactUnitEntry[] = [...oi];
   const covered = new Set(oi.map(key));
   // 같은 기간(키)에 값이 여러 개면 가장 최근 제출분(재작성본) — 손익계산서 세전이익 행과 같은 값.
@@ -577,7 +580,12 @@ export function opIncomeIsDerived(facts: CompanyFacts): boolean {
   const firstOi = oi.reduce((m, e) => (m === "" || e.end < m ? e.end : m), "");
   // 트레일링(태그 중단 후, GE 등)뿐 아니라 리딩(태그를 나중에 시작, MET 등) 합성도
   // 잡는다 — opIncomeEntries()의 firstOi/lastOi 판정과 짝을 맞춤(2026-09-24).
-  return entriesOf(facts, SYN_OP_INCOME).some((e) => e.end > lastOi || (firstOi !== "" && e.end < firstOi) || firstOi === "");
+  // 화면에 나오는 최근 6년만 본다 — VRT 는 태그가 2019 년부터라 2017·2018 합성값 때문에 행 전체가 "근사"로 표시되고
+  // 검증에서도 SEC 대조가 빠졌다(2021~ 값은 SEC 태그와 정확히 같음, 검증 2026-09-24)
+  const syn = entriesOf(facts, SYN_OP_INCOME);
+  const latest = syn.reduce((m, e) => (e.end > m ? e.end : m), "");
+  const from = latest ? `${Number(latest.slice(0, 4)) - 6}${latest.slice(4)}` : "";
+  return syn.some((e) => e.end >= from && (e.end > lastOi || (firstOi !== "" && e.end < firstOi) || firstOi === ""));
 }
 
 /** 합성 영업이익을 끼운 사본 facts (로더에서 한 번). */
