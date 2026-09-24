@@ -1,6 +1,17 @@
 {
   "crons": [
-    { "path": "/api/cron/kr-fg", "schedule": "30 9 * * *" },
-    { "path": "/api/cron/us-class-facts", "schedule": "0 6 5 1,4,7,10 *" }
-  ]
+    {
+      "path": "/api/cron/kr-fg",
+      "schedule": "30 9 * * *"
+    },
+    {
+      "path": "/api/cron/us-class-facts",
+      "schedule": "0 6 5 1,4,7,10 *"
+    }
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "wip/*": false
+    }
+  }
 }
