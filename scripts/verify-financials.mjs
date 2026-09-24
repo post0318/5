@@ -355,7 +355,15 @@ async function infomaxAnnual(sym) {
   if (!code || t._source["티커"]?.toUpperCase() !== sym) return null;
   const k = await post("/facset/getKeyData", { param: code });
   const M = (v) => (v != null ? v * 1e6 : null);
-  return (k?.y_report ?? []).map((r) => ({ end: String(r["결산년월"]).slice(0, 10), rev: M(r["매출"]), ni: M(r["당기순익"]), ebitda: M(r["ebitda"]) }));
+  // 인포맥스 = FactSet(오너 지시 2026-09-24 — "잘 활용"). 백만 달러 단위, EPS 는 달러
+  const row = (r) => ({
+    end: String(r["결산년월"]).slice(0, 10), rev: M(r["매출"]), ni: M(r["당기순익"]), ebitda: M(r["ebitda"]),
+    op: M(r["영업이익"]), assets: M(r["자산총계"]), mc: M(r["시가총액"]), ev: M(r["ev희석화수량"]), eps: r["eps"] ?? null,
+    da: r["ebitda"] != null && r["영업이익"] != null ? M(r["ebitda"] - r["영업이익"]) : null,
+  });
+  const out = (k?.y_report ?? []).map(row);
+  out.quarters = (k?.q_report ?? []).map(row).sort((a, b) => a.end.localeCompare(b.end));
+  return out;
 }
 /**
  * StockAnalysis.com 재무(검증 대조 전용 — 오너 결정 2026-09-24 "검증 스크립트에만", 앱·DB 에는 넣지 않는다).
@@ -985,6 +993,22 @@ async function verifyUs(sym) {
         put(`${c} 매출`, x.rev, "인포맥스", im.rev, 1e6);
         put(`${c} 순이익`, x.ni, "인포맥스", im.ni, 1e6);
         put(`${c} EBITDA`, x.ebitda, "인포맥스", im.ebitda, 1e6);
+        put(`${c} 영업이익`, IS[c]?.op, "인포맥스", im.op, 1e6);
+        put(`${c} 감가상각비`, IS[c]?.da, "인포맥스", im.da, 1e6);
+        put(`${c} 자산총계`, BS[c]?.assets, "인포맥스", im.assets, 1e6);
+        // SEC 공시 EPS 는 소수 둘째 자리 — 인포맥스는 순이익÷주식수로 넷째 자리까지 내므로 공시 정밀도(±0.005)로 비교
+        put(`${c} 희석 EPS`, x.eps, "인포맥스", im.eps, 0.01);
+        put(`${c} 시가총액(결산일)`, x.mc, "인포맥스", im.mc, 1e6);
+        put(`${c} EV(결산일)`, x.ev, "인포맥스", im.ev, 1e6);
+      }
+      // LTM — 인포맥스 분기 4개 합(최근 분기말이 앱 LTM 기준일과 같을 때만)
+      const q4 = (imAnnual.quarters ?? []).filter((r) => r.end <= L.date || dayDiff(r.end, L.date) <= 7).slice(-4);
+      if (q4.length === 4 && dayDiff(q4[3].end, L.date) <= 7) {
+        const sum = (k) => (q4.every((r) => r[k] != null) ? q4.reduce((s, r) => s + r[k], 0) : null);
+        put("LTM 매출", L.rev, "인포맥스", sum("rev"), 4e6);
+        put("LTM 순이익", L.ni, "인포맥스", sum("ni"), 4e6);
+        put("LTM EBITDA", L.ebitda, "인포맥스", sum("ebitda"), 4e6);
+        put("LTM 영업이익", IS.LTM?.op, "인포맥스", sum("op"), 4e6);
       }
     }
     try {
