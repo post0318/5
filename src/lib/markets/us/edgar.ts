@@ -5,6 +5,8 @@
  */
 
 import { fetchJson } from "../http";
+import { secFailuresSince } from "../fetch-health";
+import { loadInfomaxQuarters, withInfomaxLtm, type InfomaxLtmResult } from "./edgar-infomax-quarters";
 import { consensusDeepLinks, filingsDeepLink, newsDeepLinks } from "../deeplinks";
 import {
   AdapterError,
@@ -36,6 +38,7 @@ import { loadUsCurrentShares, type CurrentShares } from "./current-shares";
 import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
 import { FIN_NET_REVENUE, isFinancialCompany, withFinNetRevenue } from "./edgar-financial";
 import { loadClassAFacts } from "./class-facts-loader";
+import { dartAdrFinancials, dartAdrOf, dartAdrTtm } from "./dart-adr";
 import type { ClassAFacts } from "./edgar-classfacts";
 
 const UA =
@@ -149,8 +152,13 @@ async function getSubmissions(cik: string): Promise<SubmissionsResponse> {
 
 // companyfacts 응답은 종종 2MB 초과 → Next fetch 캐시 불가.
 // 프로세스 메모리에 짧게 캐시한다 (본격적으로는 배치→DB, prd.md §4.5).
-const factsCache = new Map<string, { at: number; data: CompanyFacts }>();
+const factsCache = new Map<string, { at: number; data: CompanyFacts; ttl: number }>();
 const FACTS_TTL = 1000 * 60 * 60 * 6;
+/**
+ * 보완 단계(누락 공시·본표 구조 등)의 SEC 조회가 일시 오류로 실패한 결과는 짧게만 캐시한다 — 실패를 정상
+ * 결과로 6시간 붙잡아 TSM FY2025 가 통째로 빠졌던 문제(SEC 429, 2026-09-25). 화면에는 fetchWarnings 로 경고.
+ */
+const FACTS_TTL_DEGRADED = 1000 * 60 * 2;
 // getStockOverview 는 getFinancials("annual")·getTtm 을 Promise.all 로 동시에
 // 부르는데, 둘 다 같은 CIK 의 companyfacts 가 필요하다 — 캐시는 fetch 가 끝나야
 // 채워지므로 둘 다 "미스"로 보고 SEC 에 같은 URL 을 중복 요청했다(실측 확인,
@@ -162,9 +170,11 @@ const factsInFlight = new Map<string, Promise<CompanyFacts>>();
 
 async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
   const hit = factsCache.get(cik);
-  if (hit && Date.now() - hit.at < FACTS_TTL) return hit.data;
+  if (hit && Date.now() - hit.at < hit.ttl) return hit.data;
   const inFlight = factsInFlight.get(cik);
   if (inFlight) return inFlight;
+  const t0 = Date.now();
+  const extraWarnings: string[] = [];
   const p = fetchJson<CompanyFacts>(
     `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
     { headers: SEC_HEADERS, revalidate: false },
@@ -178,7 +188,10 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const filled = await withFilingGapFill(cik, raw, recent).catch(() => raw);
       // 외화·IFRS 공시(ASML·TSM·SPOT) → us-gaap·USD(edgar-foreign.ts). 환율 조회 실패 시 원본을 쓴다 —
       // 앱은 USD 단위만 읽으므로 원통화 숫자가 USD 로 섞이지 않고 빈칸이 된다.
-      const normalized = await withForeignNormalization(filled).catch(() => filled);
+      const normalized = await withForeignNormalization(filled).catch(() => {
+        extraWarnings.push("외화 환산 환율 조회 실패");
+        return filled;
+      });
       // 콘텐츠 상각(NFLX 등 미디어) → 감가상각비에 포함(edgar-content.ts, 오너 결정 2026-09-24)
       const withContent = await withContentAmortization(cik, normalized, recent, sub?.sic ? Number(sub.sic) : null).catch(() => normalized);
       // 총수익 안의 지분법·기타수익 분리(XOM — 영업이익 태그 없는 회사, edgar-revenue-dims.ts)
@@ -194,8 +207,30 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const withDa = await withCashFlowDa(cik, withDebt, recent).catch(() => withDebt);
       // 연말 유통주식수가 자본변동표 차원으로만 있는 회사(WMT·BE·META, edgar-equity-shares.ts)
       const withShares = await withEquityStatementShares(cik, withDa, recent).catch(() => withDa);
-      const data = withOpIncome(dropRoundedRetags({ ...withShares, financialSector: sicN != null && sicN >= 6000 && sicN <= 6499 }));
-      factsCache.set(cik, { at: Date.now(), data });
+      // 20-F 발행사(분기 XBRL 없음) — LTM 최신 분기를 인포맥스(FactSet) 분기로(edgar-infomax-quarters.ts, 오너 결정
+      // 2026-09-25). 조회 실패 시 FY 유지 + 경고(짧은 캐시), 다른 원천으로 대체하지 않는다.
+      let withLtm = withShares;
+      const latestPeriodic = recent?.form.find((f) => /^(10-[QK]|20-F|40-F)(\/A)?$/.test(f)) ?? null;
+      const ticker = sub?.tickers?.[0] ?? null;
+      if (latestPeriodic && /^20-F/.test(latestPeriodic) && ticker) {
+        try {
+          const im = await loadInfomaxQuarters(ticker);
+          if (im) {
+            const r = withInfomaxLtm(withShares, im);
+            withLtm = { ...r.facts, ltmQuarterSource: r.result };
+          } else withLtm = { ...withShares, ltmQuarterSource: { source: "none", reason: "인포맥스에 종목 없음", ratios: {} } };
+        } catch {
+          extraWarnings.push("인포맥스 분기 조회 실패(LTM 최신 분기)");
+          withLtm = { ...withShares, ltmQuarterSource: { source: "none", reason: "인포맥스 조회 실패", ratios: {} } };
+        }
+      }
+      const warnings = [...secFailuresSince(cik, t0), ...extraWarnings];
+      const data = withOpIncome(dropRoundedRetags({
+        ...withLtm,
+        financialSector: sicN != null && sicN >= 6000 && sicN <= 6499,
+        ...(warnings.length ? { fetchWarnings: warnings } : {}),
+      }));
+      factsCache.set(cik, { at: Date.now(), data, ttl: warnings.length ? FACTS_TTL_DEGRADED : FACTS_TTL });
       return data;
     })
     .finally(() => {
@@ -247,9 +282,18 @@ export interface FactUnitEntry {
   frame?: string;
   /** 공시(제출)일 YYYY-MM-DD. 같은 기간의 재작성(액면분할 소급 등)은 최신 filed 우선. */
   filed?: string;
+  /**
+   * 외화 공시만 — 이 기간을 분기별 평균 환율로 환산해 더한 USD 값(edgar-foreign.ts quarterSummer).
+   * LTM 조합 전용(edgar-series.ttmCombine). 표시·연간 값은 val(기간 평균 환율).
+   */
+  ltmQ?: number;
 }
 export interface CompanyFacts {
   entityName: string;
+  /** 보완 단계의 원본 조회 일시 오류(SEC 429·시간 초과 등, fetch-health.ts) — 있으면 결과가 불완전할 수 있다 */
+  fetchWarnings?: string[];
+  /** 20-F 발행사 LTM 최신 분기(인포맥스 FactSet 분기, edgar-infomax-quarters.ts) 결과 — 화면 출처 표기용 */
+  ltmQuarterSource?: InfomaxLtmResult;
   /** 현재 주식수 보정값(인포맥스 → Yahoo) — 종목 단위 로더만 채운다 */
   currentShares?: CurrentShares | null;
   /** 공시 통화(외화 공시면 USD 로 환산됨 — edgar-foreign.ts) */
@@ -470,7 +514,11 @@ function buildUsTtm(
   const equityLtm = evDate ? parentEquityAt(facts, evDate) : null;
 
   return {
-    periodLabel: eps.ttmLabel || netIncome.ttmLabel || "",
+    // 20-F 인포맥스 분기 LTM 이면 그 기간으로 표기(EPS 는 보강 대상 아님 — LTM EPS 는 순이익 ÷ 주식수)
+    periodLabel:
+      facts.ltmQuarterSource?.source === "infomax"
+        ? `최근 4개 분기(~${facts.ltmQuarterSource.through}) · 인포맥스(FactSet) 분기 합(USD)${facts.ltmQuarterSource.definitionDiffs.map((d) => ` · LTM ${d.label}은 FactSet 정의 — SEC 연도 열 대비 정의 차 ${d.pct >= 0 ? "+" : ""}${d.pct.toFixed(2)}%`).join("")}`
+        : eps.ttmLabel || netIncome.ttmLabel || "",
     netIncome: niLtm,
     revenue: revenue.ttm,
     opIncome: opIncome.ttm,
@@ -619,6 +667,9 @@ export const usEdgarAdapter: MarketAdapter = {
   },
 
   async getFinancials(symbol, periodType): Promise<FinancialStatement> {
+    // SEC XBRL 이 없는 ADR(SKHY) — 본국 DART 재무를 USD·ADR 기준으로(dart-adr.ts)
+    const dartAdr = dartAdrOf(symbol);
+    if (dartAdr) return dartAdrFinancials(dartAdr, periodType);
     const { cik } = await resolveCik(symbol);
     const facts = await getCompanyFacts(cik);
     const gaap = facts.facts["us-gaap"] ?? {};
@@ -703,6 +754,8 @@ export const usEdgarAdapter: MarketAdapter = {
 
   async getTtm(symbol): Promise<TtmFlows | null> {
     try {
+      const dartAdr = dartAdrOf(symbol);
+      if (dartAdr) return await dartAdrTtm(dartAdr);
       const { cik } = await resolveCik(symbol);
       const [facts, sic] = await Promise.all([
         getSymbolFacts(cik, symbol),

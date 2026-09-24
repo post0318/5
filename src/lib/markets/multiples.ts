@@ -237,8 +237,17 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   // PER(TTM)은 전 시장으로: 한국 적자 EPS 를 음수로 내면서 음수 PER 이 나오지 않게, 2026-09-24)
   const pos = (n: number | null, d: number | null) => (n != null && d != null && d > 0 ? n / d : null);
   const perTtm = pos(price, epsTtm);
-  const bps = equity != null && shares ? equity / shares : null;
-  const pbr = usShares != null ? pos(price, bps) : price != null && bps ? price / bps : null;
+  // 장부 주식수를 따로 받은 경우(DART 연결 ADR — 자사주 제외 유통주식수)만 BPS 분모를 바꾸고, PBR 은
+  // 시가총액 ÷ 자본(하이라이트와 같은 식 — 두 주식수가 달라도 PBR 은 주식수와 무관)
+  // (키가 있는데 값이 null 이면 장부 주식수를 못 구한 것 — 다른 주식수로 대체하지 않고 BPS 를 비운다)
+  const hasBookShares = snap?.bookShares !== undefined;
+  const bookShares = snap?.bookShares ?? null;
+  const bps = hasBookShares
+    ? equity != null && bookShares ? equity / bookShares : null
+    : equity != null && shares ? equity / shares : null;
+  const pbr = hasBookShares
+    ? pos(marketCap, equity)
+    : usShares != null ? pos(price, bps) : price != null && bps ? price / bps : null;
   // PSR·EV/EBITDA: 분자(시가총액·EV)가 현재가 기준이므로 분모도 TTM 으로 맞춘다.
   // 미국(snapshot 존재)은 EDGAR TTM 사용, 그 외(국내 등)는 종전대로 최근 "연간".
   const revenueForPsr = snap && ttm?.revenue != null ? ttm.revenue : revenue;

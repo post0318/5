@@ -14,9 +14,10 @@ import {
 } from "./us/edgar-ev";
 import { loadCaptiveDebt } from "./us/edgar-captive";
 import { loadClassAFacts } from "./us/class-facts-loader";
-import { buildShareResolver, type ShareResolver } from "./us/edgar-shares";
+import { buildShareResolver, secBasisBars, type ShareResolver } from "./us/edgar-shares";
 import { estimatesToUsd } from "./us/edgar-foreign";
 import { usSharesHint } from "./us/shares-hint";
+import { dartAdrConsensusInputs, dartAdrEstimatesToUsd, dartAdrOf } from "./us/dart-adr";
 import {
   buildKrEvResolver,
   krEpsByYear,
@@ -210,7 +211,10 @@ export async function getConsensusData(
   if (!estimates) notes.push("추정치(yahoo) 조회 실패 — 실적만 표시");
 
   const price = quote?.last ?? null;
-  const shares =
+  // SEC XBRL 이 없는 ADR(SKHY) — 실적은 본국 DART 재무를 USD·ADR 기준으로 환산해 한국 경로로
+  // 계산한다(us/dart-adr.ts). 시세·예상치는 ADR 그대로.
+  const dartAdr = market === "us" ? dartAdrOf(symbol) : null;
+  let shares =
     quote?.sharesOutstanding ??
     (quote?.marketCap != null && price ? quote.marketCap / price : null);
 
@@ -235,7 +239,7 @@ export async function getConsensusData(
     facts: CompanyFacts;
     classFacts: ClassAFacts | null;
   } | null = null;
-  if (market === "us") {
+  if (market === "us" && !dartAdr) {
     try {
       const { cik, facts } = await fetchUsCompanyFacts(symbol);
       const sic = await fetchUsSic(symbol).catch(() => null);
@@ -259,6 +263,7 @@ export async function getConsensusData(
     }
     // 외화 공시 기업(ASML·TSM·SPOT) — Yahoo 예상치를 USD 로(edgar-foreign.ts). 환산 실패 시 예상치를
     // 숨긴다(원통화 숫자를 USD 로 섞지 않음).
+    if (us?.facts.fetchWarnings?.length) notes.push(`⚠ 일부 공시 조회 실패(${us.facts.fetchWarnings.slice(0, 3).join(", ")}) — 잠시 뒤 다시 계산`);
     if (us && estimates) {
       const conv = await estimatesToUsd(estimates, us.facts).catch(() => null);
       if (!conv) notes.push("외화 예상치 환산 실패 — 예상치 숨김");
@@ -271,6 +276,13 @@ export async function getConsensusData(
   // 실제 시가총액(보통주·우선주), 감가상각비는 사업보고서 주석 실측(daAndAmortSeries).
   // 예전엔 부채총계를 더하고 D&A 계정 매칭 실패 시 영업이익만 써서 EV/EBITDA 가 하이라이트의
   // 2~16배였고, 40배 초과를 숨기는 필터까지 있어 화면마다 갈렸다(B16, 2026-09-23).
+  if (dartAdr && estimates) {
+    const conv = await dartAdrEstimatesToUsd(dartAdr, estimates).catch(() => null);
+    if (!conv) notes.push("외화 예상치 환산 실패 — 예상치 숨김");
+    else if (conv.fxNote) notes.push(conv.fxNote);
+    estimates = conv;
+  }
+
   let kr: {
     ev: KrEvResolver;
     caps: KrCaps | null;
@@ -279,6 +291,28 @@ export async function getConsensusData(
     equity: Map<number, number>;
     op: Map<number, number>;
   } | null = null;
+  // DART 연결 ADR — BPS 분모는 사업연도말 자사주 제외 유통주식수(시가총액 주식수와 별개)
+  let dartBookShares: Map<number, number> | null = null;
+  if (dartAdr) {
+    try {
+      const x = await dartAdrConsensusInputs(dartAdr, years);
+      if (x) {
+        kr = {
+          ev: buildKrEvResolver(x.facts, x.code),
+          caps: x.caps,
+          da: daAndAmortSeries(x.facts, x.daDoc).byYear,
+          eps: krEpsByYear(x.facts),
+          equity: krParentEquityByYear(x.facts),
+          op: krOpIncomeByYear(x.facts),
+        };
+        shares = x.adrShares ?? shares;
+        dartBookShares = x.bookShares;
+        notes.push(`실적: ${x.code} OpenDART 재무 USD 환산(손익 = 기간 평균 환율, 재무상태표·연말 시가총액 = 결산일 환율), 주당 값은 ADR 1주 기준`);
+      }
+    } catch {
+      kr = null;
+    }
+  }
   if (market === "kr") {
     try {
       const { corpCode } = resolveCorpCode("", symbol);
@@ -337,17 +371,25 @@ export async function getConsensusData(
       : kr
         ? (kr.eps.get(fy) ?? null) // 한국: dart-ev.ts 공통 EPS
         : (epsStmt ?? (netIncome != null && fyShares ? netIncome / fyShares : null));
-    const bps = equity != null && fyShares ? equity / fyShares : null;
+    // DART 연결 ADR 은 유통주식수가 없으면 BPS 를 비운다(시가총액 주식수로 대체하지 않음)
+    const bookSh = dartAdr ? (dartBookShares?.get(fy) ?? null) : fyShares;
+    const bps = equity != null && bookSh ? equity / bookSh : null;
 
     // 해당 회계연도의 실제 마감일 시점 주가 (없으면 결산월 28일로 근사)
     const periodEnd =
       annual.periods.find((p) => p.fiscalYear === fy)?.endDate ??
       `${fy}-${String(fiscalMonth).padStart(2, "0")}-28`;
     let yePrice: number | null = null;
-    if (market === "kr") {
+    if (dartAdr) {
+      // 연말 가격 = KRX 종가 × 결산일 환율 × ADR 비율(환산 caps) — ADR 상장 전 연도도 같은 기준
+      yePrice = kr?.caps?.byYear.get(fy)?.close ?? null;
+    } else if (market === "kr") {
       yePrice =
         kr?.caps?.byYear.get(fy)?.close ??
         (await fetchKrxCloseOn(symbol, periodEnd.replace(/-/g, "")).catch(() => null));
+    } else if (us) {
+      // 주식수와 같은 기준의 가격 — Yahoo 가 분할로 기록한 분사 되돌림(edgar-shares.ts secBasisBars)
+      yePrice = closeFromBars(secBasisBars(us.facts, quote), periodEnd);
     } else if (quote?.bars?.length) {
       yePrice = closeFromBars(quote.bars, periodEnd);
     }

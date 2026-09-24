@@ -30,8 +30,13 @@ export interface ClassAYear {
   /** 희석 가중평균주식수 (Class A, as-converted) — EPS 분모용 */
   dilShares: number | null;
   basicShares: number | null;
-  /** 기말 유통주식수 (전 클래스 as-converted 합) — 시총·PBR·PSR 분모용 */
+  /** 기말 유통주식수 (전 클래스 발행 주수 단순 합 — 전환비율 미반영) */
   sharesOutstanding: number | null;
+  /**
+   * 기말 보통주 전환 기준(as-converted) 주식수 — 클래스 A + 각 클래스 × 전환비율, 우선주 제외. 결산일 시가총액·
+   * PBR·PSR 분모. 없으면(옛 캐시 포함) undefined/null.
+   */
+  sharesAsConverted?: number | null;
   /** 출처 10-K accession */
   sourceAccn: string;
 }
@@ -195,6 +200,59 @@ function instantSharesOutstanding(
   return out;
 }
 
+/**
+ * 기말 **보통주 전환 기준(as-converted) 주식수** — Visa 형(클래스 B·C 가 A 로 전환되는 구조).
+ * 전 클래스 발행 주수를 단순 합산하면 B(1주 = A 1.5~1.6주)·C(1주 = A 4주)가 과소 반영된다(V FY2021 19.32억 주 vs
+ * 전환 기준 21.16억 주). 10-K 의 클래스별 as-converted 주식수 공시값(Visa `v:SharesOutstandingAsConvertedBasis`,
+ * 백만 주 단위)을 보통주 클래스만 합산한다 — 인포맥스(FactSet) 결산일 주식수와 반올림 안에서 일치(FY2022~2025:
+ * 2,068·2,022·1,966·1,918 vs 2,068.45·2,022.94·1,965.99·1,917.45, FY2021 2,116 vs 2,114.59). 우선주 전환분(시리즈
+ * A·B·C)은 EV 브릿지가 우선주 장부가로 이미 더하므로 뺀다(인포맥스도 제외). 공시값이 없으면 클래스별 유통주식수 ×
+ * 전환비율(`*ConversionRate`, 상장 클래스 A = 1)로 계산하고, 전환비율이 없는 클래스가 있으면 확정 불가로 null.
+ */
+function asConvertedCommon(xml: string, ctxs: Map<string, Ctx>): Map<number, number> {
+  const isCommon = (m: string) => /^Common/i.test(m) && !/Preferred|Series|Participating/i.test(m);
+  const byDate = new Map<string, { conv: Map<string, number>; raw: Map<string, number>; rate: Map<string, number> }>();
+  const slot = (d: string) => {
+    let x = byDate.get(d);
+    if (!x) byDate.set(d, (x = { conv: new Map(), raw: new Map(), rate: new Map() }));
+    return x;
+  };
+  for (const m of xml.matchAll(/<([a-z0-9-]+):(\w+)\b([^>]*)>([^<]+)</g)) {
+    const [, , tag, attrs, text] = m;
+    const target = /AsConverted/i.test(tag) && !/WeightedAverage/i.test(tag) ? "conv"
+      : tag === "CommonStockSharesOutstanding" ? "raw"
+      : /^CommonStockConversionRate$/i.test(tag) ? "rate" : null;
+    if (!target) continue;
+    const ctx = ctxs.get(/contextRef="([^"]+)"/.exec(attrs)?.[1] ?? "");
+    if (!ctx?.end || ctx.start || ctx.dims.length !== 1 || ctx.dims[0][0] !== "StatementClassOfStockAxis") continue;
+    const member = ctx.dims[0][1].replace(/Member$/, "");
+    if (!isCommon(member)) continue;
+    const v = Number(text.trim());
+    if (!Number.isFinite(v)) continue;
+    slot(ctx.end)[target].set(member, v);
+  }
+  // 집계 멤버(B1AndB2)는 구성 멤버(B1·B2)가 있으면 뺀다
+  const leaves = (mm: Map<string, number>) =>
+    [...mm].filter(([k]) => { const first = k.split(/And/i)[0]; return first === k || !mm.has(first); });
+  const out = new Map<number, number>();
+  for (const [end, x] of byDate) {
+    let total: number | null = null;
+    if (x.conv.size) total = leaves(x.conv).reduce((s, [, v]) => s + v, 0);
+    else if (x.raw.size) {
+      total = 0;
+      for (const [k, v] of leaves(x.raw)) {
+        const rate = isClassA(k) ? 1 : x.rate.get(k);
+        if (rate == null || !(rate > 0)) { total = null; break; }
+        total += v * rate;
+      }
+      // 전환비율 공시가 하나도 없으면 전환 구조가 아닌 복수 클래스 — 전환 기준 값이 아니다
+      if (!x.rate.size) total = null;
+    }
+    if (total != null && total > 0) out.set(fiscalYearOf(end), total);
+  }
+  return out;
+}
+
 function pick(xml: string, ctxs: Map<string, Ctx>, tags: string[]): Map<number, number> {
   // 태그 우선순위대로, 없는 연도만 다음 태그로 보충
   const out = new Map<number, number>();
@@ -214,6 +272,7 @@ function parseInstance(xml: string, accn: string): ClassAYear[] {
   for (const t of [...EPS_DIL_TAGS, ...DIL_SHARE_TAGS])
     for (const f of facts(xml, ctxs, t)) if (!endByFy.has(f.fy)) endByFy.set(f.fy, f.end);
   const shOut = instantSharesOutstanding(xml, ctxs);
+  const shConv = asConvertedCommon(xml, ctxs);
   const years = new Set([
     ...epsD.keys(),
     ...epsB.keys(),
@@ -231,6 +290,7 @@ function parseInstance(xml: string, accn: string): ClassAYear[] {
       dilShares: shD.get(fy) ?? null,
       basicShares: shB.get(fy) ?? null,
       sharesOutstanding: shOut.get(fy)?.val ?? null,
+      sharesAsConverted: shConv.get(fy) ?? null,
       sourceAccn: accn,
     });
   }
@@ -326,6 +386,7 @@ export async function fetchClassAFacts(cik: string | number, maxFilings = 4): Pr
             dilShares: prev.dilShares ?? y.dilShares,
             basicShares: prev.basicShares ?? y.basicShares,
             sharesOutstanding: prev.sharesOutstanding ?? y.sharesOutstanding,
+            sharesAsConverted: prev.sharesAsConverted ?? y.sharesAsConverted,
           });
         }
       }
@@ -367,6 +428,14 @@ export function classAOutstanding(
   year: number,
 ): number | null {
   return cf?.get(year)?.sharesOutstanding ?? null;
+}
+
+/**
+ * 회계연도 기말 보통주 전환 기준(as-converted) 주식수 — 결산일 시가총액·PBR·PSR 분모(edgar-shares.ts).
+ * `undefined` = 이 필드가 생기기 전 캐시(재조회 필요), `null` = 공시로 확정 못 함.
+ */
+export function classAsConverted(cf: ClassAFacts | null | undefined, year: number): number | null {
+  return cf?.get(year)?.sharesAsConverted ?? null;
 }
 
 /** 가장 최근 회계연도 기말 유통주식수. */

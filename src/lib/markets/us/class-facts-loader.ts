@@ -3,6 +3,7 @@ import { isDbConfigured } from "@/lib/db";
 import { getClassAFactsFromDb, saveClassAFactsToDb } from "@/lib/db/us-class-facts";
 import type { CompanyFacts } from "./edgar";
 import { fetchClassAFacts, needsClassAFacts, type ClassAFacts } from "./edgar-classfacts";
+import { secFailuresSince } from "../fetch-health";
 
 /**
  * 듀얼클래스 보정 시계열 로더 (라우트에서 사용).
@@ -25,10 +26,13 @@ export async function loadClassAFacts(
   if (hit && Date.now() - hit.at < TTL) return hit.data;
 
   let data: ClassAFacts | null = null;
+  const t0 = Date.now();
   if (isDbConfigured()) {
     data = await getClassAFactsFromDb(key);
   }
-  if (!data || data.size === 0) {
+  // 전환 기준 주식수(sharesAsConverted) 도입 전 캐시 — 필드가 아예 없으면 다시 파싱한다
+  const stale = !!data && [...data.values()].every((y) => y.sharesAsConverted === undefined);
+  if (!data || data.size === 0 || stale) {
     try {
       const live = await fetchClassAFacts(key);
       if (live.size > 0) {
@@ -40,6 +44,7 @@ export async function loadClassAFacts(
     }
   }
 
-  mem.set(key, { at: Date.now(), data: data ?? null });
+  // SEC 조회가 일시 오류로 실패했으면 결과(보정 없음 등)를 캐시하지 않는다 — 다음 요청이 다시 시도(fetch-health.ts)
+  if (!secFailuresSince(key, t0).length) mem.set(key, { at: Date.now(), data: data ?? null });
   return data ?? null;
 }

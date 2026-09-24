@@ -5,6 +5,8 @@ import type { CompanyFacts, FactUnitEntry } from "./edgar";
 
 export const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
 export const INTERIM_FORMS = ["10-Q", "10-Q/A"];
+/** LTM 조합 전용 — 10-Q + 20-F 발행사 인포맥스 분기 LTM 합성 공시(edgar-infomax-quarters.ts INFOMAX_Q_FORM) */
+export const LTM_INTERIM_FORMS = [...INTERIM_FORMS, "INFOMAX-Q"];
 
 export function days(a: string, b: string): number {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
@@ -66,9 +68,13 @@ export function isFullYearDuration(e: FactUnitEntry): boolean {
  * 1억·10억·100억 단위로 반올림한 값과 정확히 같으면(그리고 y 자신은 그 단위의
  * 배수가 아니면) 반올림 재태깅으로 본다. 실제 재작성이 원래 값의 반올림과 정확히
  * 일치할 가능성은 사실상 없다. 원본 객체는 건드리지 않고 새 객체를 돌려준다.
+ *
+ * **백만 단위(1e6)도 포함**(오너 승인 2026-09-25): 회사가 표기를 천 달러 → 백만 달러로 바꾸면 비교 열의 과거
+ * 값이 백만 단위 반올림값으로 재태깅된다(MCD 2025-02 10-K — 2022-12-31 총자산 50,435.6 → 50,436 백만 달러, 자산 ≠
+ * 부채+자본). 대상 값은 1억 이상만(아래 하한 — 상대 오차 0.5% 이하라 작은 값의 실제 재작성을 반올림으로 오인하지 않는다).
  */
 export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
-  const P = [1e8, 1e9, 1e10];
+  const P = [1e6, 1e8, 1e9, 1e10];
   const roundsTo = (x: number, y: number) =>
     x !== y && P.some((p) => Math.round(y / p) * p === x && y % p !== 0);
   const clean = (es: FactUnitEntry[]): FactUnitEntry[] => {
@@ -350,6 +356,21 @@ export function vintageOrder(a: { filed?: string }, b: { filed?: string }, prefe
   return (b.filed ?? "").localeCompare(a.filed ?? "");
 }
 
+/**
+ * LTM 조합 — 최근 FY + 당기누적 − 전년동기누적(전년동기·당기누적이 없으면 FY). 외화 공시 기업은 각 구성요소의
+ * 분기 합 환산값(ltmQ, edgar-foreign.ts)으로 더해 "최근 4개 분기 × 각 분기 평균 환율"이 된다(오너 결정 2026-09-25,
+ * 인포맥스·Finviz 방식). 구성요소 하나라도 ltmQ 가 없으면 공시값(val, 기간 평균 환율) 조합.
+ */
+export function ttmCombine(
+  fy: { val: number; ltmQ?: number },
+  cur?: { val: number; ltmQ?: number } | null,
+  prior?: { val: number; ltmQ?: number } | null,
+): number {
+  if (!cur || !prior) return fy.ltmQ ?? fy.val;
+  if (fy.ltmQ != null && cur.ltmQ != null && prior.ltmQ != null) return fy.ltmQ + cur.ltmQ - prior.ltmQ;
+  return fy.val + cur.val - prior.val;
+}
+
 /** 흐름 TTM = 최근 FY + 당기누적 − 전년동기누적. */
 export function ttmOf(entries: FactUnitEntry[]): number | null {
   const annuals = entries
@@ -361,11 +382,11 @@ export function ttmOf(entries: FactUnitEntry[]): number | null {
   // GE 는 OperatingIncomeLoss 를 몇 년 전에 끊었는데 그 마지막 연간값이 LTM 으로
   // 잡혀 EBITDA 가 3배로 나왔다). 최근 사업연도 종료가 550일보다 오래됐으면 없음.
   if (isStaleAnnual(fy.end)) return null;
-  const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
+  const interims = entries.filter((e) => e.start && LTM_INTERIM_FORMS.includes(e.form));
   const cur = interims
     .filter((e) => Math.abs(days(fy.end, e.start!)) <= 12 && e.end > fy.end)
     .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
-  if (!cur?.start) return fy.val;
+  if (!cur?.start) return ttmCombine(fy);
   const wS = shiftYear(cur.start, -1);
   const wE = shiftYear(cur.end, -1);
   const prior = interims
@@ -376,6 +397,6 @@ export function ttmOf(entries: FactUnitEntry[]): number | null {
         Math.abs(days(wE, e.end)) <= 12,
     )
     .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
-  if (!prior) return fy.val;
-  return fy.val + cur.val - prior.val;
+  if (!prior) return ttmCombine(fy);
+  return ttmCombine(fy, cur, prior);
 }

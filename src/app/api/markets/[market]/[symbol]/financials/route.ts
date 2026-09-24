@@ -3,6 +3,7 @@ import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
+import { secBasisBars } from "@/lib/markets/us/edgar-shares";
 import { loadCaptiveDebt } from "@/lib/markets/us/edgar-captive";
 import { reitOpUnits } from "@/lib/markets/us/edgar-ev";
 import { buildUsCashFlow } from "@/lib/markets/us/edgar-cashflow";
@@ -24,6 +25,7 @@ import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { getKrDaDoc } from "@/lib/db/kr-da";
 import { usSharesHint } from "@/lib/markets/us/shares-hint";
 import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
+import { dartAdrAnalysis, dartAdrDetail, dartAdrOf } from "@/lib/markets/us/dart-adr";
 
 export const maxDuration = 60;
 
@@ -135,6 +137,16 @@ export async function GET(
       return ok(stmt, { headers: NO_CACHE });
     }
 
+    // SEC XBRL 이 없는 ADR(SKHY) — 본국 DART 재무를 USD·ADR 기준으로(dart-adr.ts)
+    const dartAdr = market === "us" && isDetail ? dartAdrOf(sym) : null;
+    if (dartAdr) {
+      const stmt =
+        detailView === "analysis"
+          ? await dartAdrAnalysis(dartAdr, searchParams.get("yahoo"))
+          : await dartAdrDetail(dartAdr, detailView as "is" | "bs" | "cf" | "summary", period);
+      return ok(stmt, { headers: NO_CACHE });
+    }
+
     if (market === "us" && isDetail) {
       const yahoo = searchParams.get("yahoo");
       const needsShares =
@@ -164,7 +176,7 @@ export async function GET(
               ? buildUsBalance(facts, period, sic)
               : detailView === "summary"
                 ? buildUsSummary(facts, period, { sharesHint, classFacts, sic })
-                : buildUsAnalysis(facts, quote?.bars ?? [], {
+                : buildUsAnalysis(facts, secBasisBars(facts, quote), {
                     sharesHint,
                     classFacts,
                     sic,
@@ -179,6 +191,9 @@ export async function GET(
                     },
                   });
       stmt.symbol = sym;
+      // 원본 조회 일시 오류(SEC 429 등) — 일부 공시가 빠졌을 수 있다(fetch-health.ts)
+      if (facts.fetchWarnings?.length) stmt.source += ` · ⚠ 일부 공시 조회 실패(${facts.fetchWarnings.slice(0, 3).join(", ")}) — 잠시 뒤 다시 계산`;
+      if (facts.ltmQuarterSource?.source === "infomax") stmt.source += ` · LTM 분기: 인포맥스(FactSet, ~${facts.ltmQuarterSource.through})`;
       return ok(stmt, { headers: NO_CACHE });
     }
 

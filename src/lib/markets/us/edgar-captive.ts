@@ -1,5 +1,6 @@
 import "server-only";
 import { fetchJson, fetchText } from "../http";
+import { secFailuresSince } from "../fetch-health";
 import { instanceUrl } from "./edgar-classfacts";
 import { resolveDebt, type CaptiveDebtPoint } from "./edgar-ev";
 
@@ -158,6 +159,7 @@ export async function loadCaptiveDebt(
   if (hit && Date.now() - hit.at < TTL) return hit.data;
 
   const cikNum = Number(key);
+  const t0 = Date.now();
   let data: { points: CaptiveDebtPoint[] } | "unsplit" | null = null;
   try {
     const sub = await fetchJson<SubmissionsRecent>(
@@ -201,6 +203,7 @@ export async function loadCaptiveDebt(
   } catch {
     data = null;
   }
-  mem.set(key, { at: Date.now(), data });
+  // 최신 공시 조회가 일시 오류(SEC 429 등)로 실패하면 "금융 자회사 없음"으로 12시간 굳지 않게 캐시하지 않는다
+  if (!secFailuresSince(key, t0).length) mem.set(key, { at: Date.now(), data });
   return data;
 }

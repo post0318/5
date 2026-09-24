@@ -18,6 +18,8 @@ export interface UsClassFactsDoc {
   dilShares: number | null;
   basicShares: number | null;
   sharesOutstanding: number | null;
+  /** 보통주 전환 기준(as-converted) 기말 주식수 — 없는 문서는 이 필드 도입 전 캐시 */
+  sharesAsConverted?: number | null;
   sourceAccn: string;
   updatedAt: string;
 }
@@ -46,6 +48,8 @@ export async function getClassAFactsFromDb(cik: string | number): Promise<ClassA
         dilShares: d.dilShares,
         basicShares: d.basicShares,
         sharesOutstanding: d.sharesOutstanding ?? null,
+        // 필드가 없으면 undefined 그대로 — 로더가 옛 캐시로 보고 다시 파싱한다
+        sharesAsConverted: d.sharesAsConverted,
         sourceAccn: d.sourceAccn,
       };
       out.set(d.fy, y);
@@ -77,6 +81,7 @@ export async function saveClassAFactsToDb(
           dilShares: y.dilShares,
           basicShares: y.basicShares,
           sharesOutstanding: y.sharesOutstanding,
+          sharesAsConverted: y.sharesAsConverted ?? null,
           sourceAccn: y.sourceAccn,
           updatedAt: now,
         },

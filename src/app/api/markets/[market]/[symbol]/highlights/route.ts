@@ -20,7 +20,9 @@ import { fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
 import { getKrDaDoc } from "@/lib/db/kr-da";
 import { usSharesHint } from "@/lib/markets/us/shares-hint";
+import { secBasisBars } from "@/lib/markets/us/edgar-shares";
 import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
+import { dartAdrHighlights, dartAdrOf } from "@/lib/markets/us/dart-adr";
 
 export const revalidate = 3600;
 export const maxDuration = 45;
@@ -107,6 +109,15 @@ export async function GET(
       );
     }
 
+    // SEC XBRL 이 없는 ADR(SKHY) — 본국 DART 재무를 USD·ADR 기준으로(dart-adr.ts)
+    const dartAdr = dartAdrOf(sym);
+    if (dartAdr) {
+      return ok(
+        { highlights: await dartAdrHighlights(dartAdr, yahoo) },
+        { headers: { "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400" } },
+      );
+    }
+
     const factsRes = await fetchUsCompanyFacts(sym);
     const [quote, estimatesRaw, consensus, classFacts, sic] = await Promise.all([
       getEodQuote(market, sym, { yahooOverride: yahoo }).catch(() => null),
@@ -130,15 +141,28 @@ export async function GET(
       revenueAvg: p.revenueAvg,
     }));
 
+    // 과거 결산일 가격을 주식수와 같은 기준으로 — Yahoo 가 분할로 기록한 분사 되돌림(edgar-shares.ts)
+    const usBars = secBasisBars(factsRes.facts, quote);
     const highlights = isFinancialCompany(factsRes.facts, sic)
-      ? buildUsBankHighlights(factsRes.facts, quote?.bars ?? [], estCols, sharesHint)
-      : buildUsHighlights(factsRes.facts, quote?.bars ?? [], estCols, sharesHint, classFacts, {
+      ? buildUsBankHighlights(factsRes.facts, usBars, estCols, sharesHint)
+      : buildUsHighlights(factsRes.facts, usBars, estCols, sharesHint, classFacts, {
           sic,
           captive,
           opUnits,
         });
     if (estimates && "fxNote" in estimates && estimates.fxNote) highlights.notes.push(estimates.fxNote);
     if (estimatesRaw && !estimates) highlights.notes.push("외화 예상치 환산 실패 — 예상치 숨김");
+    // 원본 조회 일시 오류(SEC 429 등) — 일부 공시가 빠졌을 수 있다(fetch-health.ts, 2분 뒤 다시 계산)
+    if (factsRes.facts.fetchWarnings?.length)
+      highlights.notes.unshift(`⚠ 일부 공시 조회 실패(${factsRes.facts.fetchWarnings.slice(0, 3).join(", ")}) — 값이 빠지거나 오래됐을 수 있음, 잠시 뒤 다시 계산`);
+    const lq = factsRes.facts.ltmQuarterSource;
+    if (lq)
+      highlights.notes.push(
+        lq.source === "infomax"
+          ? `LTM 분기: 인포맥스(FactSet, ~${lq.through}) — 현재/LTM 열 ${lq.items.join("·")} = 인포맥스 최근 4개 분기 합(USD, FactSet 환율). 연도 열은 SEC 공시(앱 환산). 재무상태표는 SEC 최근 연말` +
+            lq.definitionDiffs.map((d) => ` · LTM ${d.label}은 FactSet 정의 — SEC 연도 열 대비 정의 차 ${d.pct >= 0 ? "+" : ""}${d.pct.toFixed(2)}%`).join("")
+          : `LTM 분기 보강 안 함(연간 유지): ${lq.reason}`,
+      );
 
     return ok(
       { highlights },

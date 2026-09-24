@@ -9,14 +9,15 @@
  * Stooq 는 마지막 폴백으로만 남긴다(stooq.ts 차단기로 먹통이면 즉시 건너뜀).
  */
 
-import { MARKET_CURRENCY, type EodQuote, type MarketId, type QuoteBar } from "../types";
+import { MARKET_CURRENCY, type EodQuote, type MarketId, type QuoteBar, type YahooSplit } from "../types";
 import { fetchStooqEod } from "./stooq";
-import { fetchYahooEod } from "./yahoo";
+import { fetchYahooEod, fetchYahooEodWithSplits } from "./yahoo";
 import { fetchKrxEod, hasKrxKey, type KrxQuoteResult } from "./krx";
 
 interface BuildExtra {
   sharesOutstanding?: number | null;
   marketCap?: number | null;
+  splits?: YahooSplit[];
 }
 
 function buildQuote(
@@ -45,6 +46,7 @@ function buildQuote(
     source,
     sharesOutstanding: extra.sharesOutstanding ?? null,
     marketCap: extra.marketCap ?? null,
+    ...(extra.splits ? { splits: extra.splits } : {}),
   };
 }
 
@@ -64,8 +66,8 @@ export async function getEodQuote(
 
   let yahooErr: unknown;
   try {
-    const bars = await fetchYahooEod(market, symbol, opts);
-    if (bars.length > 0) return buildQuote(market, symbol, bars, "Yahoo Finance");
+    const { bars, splits } = await fetchYahooEodWithSplits(market, symbol, opts);
+    if (bars.length > 0) return buildQuote(market, symbol, bars, "Yahoo Finance", { splits });
   } catch (e) {
     yahooErr = e;
   }

@@ -31,7 +31,7 @@ export interface CurrentShares {
 
 const IM_BASE = "https://globalmonitor.einfomax.co.kr";
 const TTL = 1000 * 60 * 60 * 6;
-const cache = new Map<string, { at: number; data: CurrentShares | null }>();
+const cache = new Map<string, { at: number; data: CurrentShares | null; ttl: number }>();
 const inFlight = new Map<string, Promise<CurrentShares | null>>();
 
 async function imPost<T>(path: string, body: unknown): Promise<T> {
@@ -66,31 +66,34 @@ async function fetchInfomaxShares(symbol: string): Promise<CurrentShares | null>
   return { val: p.주식수 * 1000, date: p.주식수일 ?? null, source: "infomax" };
 }
 
-async function load(symbol: string): Promise<CurrentShares | null> {
+/** degraded = 인포맥스 조회가 오류로 실패해 폴백한 결과 — 짧게만 캐시(일시 오류가 6시간 굳지 않게) */
+async function load(symbol: string): Promise<{ data: CurrentShares | null; degraded: boolean }> {
+  let degraded = false;
   try {
     const im = await fetchInfomaxShares(symbol);
-    if (im) return im;
+    if (im) return { data: im, degraded };
   } catch {
-    /* Yahoo 로 폴백 */
+    degraded = true; // Yahoo 로 폴백
   }
   try {
     const y = await fetchYahooShares(symbol);
-    return y != null && y > 0 ? { val: y, date: null, source: "yahoo" } : null;
+    return { data: y != null && y > 0 ? { val: y, date: null, source: "yahoo" } : null, degraded };
   } catch {
-    return null;
+    return { data: null, degraded: true };
   }
 }
+const TTL_DEGRADED = 1000 * 60 * 2;
 
 /** 현재 주식수 보정값 (없으면 null — EDGAR 표지 주식수를 그대로 쓴다). */
 export async function loadUsCurrentShares(symbol: string): Promise<CurrentShares | null> {
   const key = symbol.toUpperCase();
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < TTL) return hit.data;
+  if (hit && Date.now() - hit.at < hit.ttl) return hit.data;
   const pending = inFlight.get(key);
   if (pending) return pending;
   const p = load(key)
-    .then((data) => {
-      cache.set(key, { at: Date.now(), data });
+    .then(({ data, degraded }) => {
+      cache.set(key, { at: Date.now(), data, ttl: degraded ? TTL_DEGRADED : TTL });
       return data;
     })
     .finally(() => inFlight.delete(key));

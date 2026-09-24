@@ -96,6 +96,7 @@ export function ltmEps(facts: CompanyFacts, currentShares: number | null | undef
 
 /**
  * 사업연도 희석 EPS — 공시값(액면분할 보정) → 듀얼클래스 Class A 실측(Visa) →
+ * 계속영업 + 중단영업 희석 EPS 공시값의 합(총 EPS 미태깅, DELL FY2022) →
  * 보통주 귀속 순이익 ÷ 가중평균 희석주식수(공시 EPS 정의 그대로) → 순이익 ÷
  * 연도말 주식수(근사). 하이라이트·재무분석·컨센서스·은행 모듈 공통.
  *
@@ -120,8 +121,31 @@ export function fyEps(
   if (rep != null) return { eps: rep * sf, approx: false };
   const ca = classAEps(opts.classFacts ?? null, year, "diluted");
   if (ca != null) return { eps: ca, approx: false };
+  // 총 희석 EPS 태그 없이 계속·중단영업 주당이익만 공시한 해 — 두 공시값의 합이 공시 총 희석 EPS 다(DELL FY2022,
+  // VMware 분사: 6.26 + 0.76 = 7.02, 회사 공시 총 EPS·인포맥스 7.024 와 일치). 계속영업 EPS 단독은 쓰지 않는다.
+  const perDil = (c: string) => annualByYear(entriesOf(facts, c, "USD/shares")).get(year);
+  const contEps = perDil("IncomeLossFromContinuingOperationsPerDilutedShare");
+  const discEps =
+    perDil("IncomeLossFromDiscontinuedOperationsNetOfTaxPerDilutedShare") ??
+    perDil("DiscontinuedOperationIncomeLossFromDiscontinuedOperationNetOfTaxPerDilutedShare");
+  if (contEps != null && discEps != null) return { eps: (contEps + discEps) * sf, approx: false };
   const wsh = annualByYear(entriesOf(facts, "WeightedAverageNumberOfDilutedSharesOutstanding", "shares")).get(year);
-  if (ni != null && wsh) return { eps: (ni / wsh) * sf, approx: false };
+  if (ni != null && wsh) {
+    // "보통주 귀속 순이익" 태그에 계속영업분만 단 공시(DELL FY2024 10-K 의 FY2022 = 4,948 = 5,563 − 중단영업 615)
+    // — 중단영업 귀속분을 더한 값이 지배주주 순이익에 (1% 안에서) 더 가까우면 더한다.
+    const discNi = annualByYear(
+      entriesOf(facts, "NetIncomeLossFromDiscontinuedOperationsAvailableToCommonShareholdersDiluted"),
+    ).get(year);
+    const parent = annualByYear(netIncomeToParentEntries(facts)).get(year);
+    const withDisc = discNi ? ni + discNi : null;
+    const num =
+      withDisc != null && parent != null &&
+      Math.abs(withDisc - parent) < Math.abs(ni - parent) &&
+      Math.abs(withDisc - parent) <= Math.abs(parent) * 0.01
+        ? withDisc
+        : ni;
+    return { eps: (num / wsh) * sf, approx: false };
+  }
   if (opts.fyNetIncome != null && opts.fyShares) return { eps: opts.fyNetIncome / opts.fyShares, approx: true };
   return { eps: null, approx: false };
 }

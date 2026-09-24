@@ -1,7 +1,7 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { recentQuarters, singleQuarter, fiscalYearOf, vintageOrder } from "./edgar-series";
+import { recentQuarters, singleQuarter, fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
 import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa, SYN_DA_CF } from "./edgar-ev";
 import { isFinancialCompany } from "./edgar-financial";
 
@@ -12,7 +12,8 @@ import { isFinancialCompany } from "./edgar-financial";
  */
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-const INTERIM_FORMS = ["10-Q", "10-Q/A"];
+// LTM 조합 전용 — 10-Q + 20-F 발행사 인포맥스 분기 LTM(edgar-infomax-quarters.ts)
+const INTERIM_FORMS = LTM_INTERIM_FORMS;
 
 function days(a: string, b: string) {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
@@ -67,7 +68,7 @@ function ttmOf(entries: FactUnitEntry[]): number | null {
   const cur = interims
     .filter((e) => Math.abs(days(fy.end, e.start!)) <= 12 && e.end > fy.end)
     .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
-  if (!cur?.start) return fy.val;
+  if (!cur?.start) return ttmCombine(fy);
   const wS = shiftYear(cur.start, -1);
   const wE = shiftYear(cur.end, -1);
   const prior = interims
@@ -78,8 +79,8 @@ function ttmOf(entries: FactUnitEntry[]): number | null {
         Math.abs(days(wE, e.end)) <= 12,
     )
     .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
-  if (!prior) return fy.val;
-  return fy.val + cur.val - prior.val;
+  if (!prior) return ttmCombine(fy);
+  return ttmCombine(fy, cur, prior);
 }
 
 interface Line {

@@ -160,6 +160,72 @@ function avgRate(s: { date: string; rate: number }[], start: string, end: string
   return n > 0 && n >= days * 0.3 ? sum / n : null;
 }
 
+const dayMs = 864e5;
+const addDay = (d: string, n: number) => {
+  const t = Date.parse(`${d.slice(0, 10)}T00:00:00Z`) + n * dayMs;
+  return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : d;
+};
+const span = (a: string, b: string) => (Date.parse(b) - Date.parse(a)) / dayMs;
+
+/**
+ * **LTM 환산용 분기 합** (오너 결정 2026-09-25 — 인포맥스·Finviz 방식): 기간 값(연간·누적)을 그 안의 분기들로
+ * 쪼개 **분기마다 그 분기 평균 환율**로 환산해 더한 값. LTM(= 최근 FY + 당기누적 − 전년동기누적) 조합이 이 값으로
+ * 계산되면(edgar-series.ttmCombine) 결과가 정확히 "최근 4개 분기 × 각 분기 평균 환율의 합"이 된다 — 분기가 더해지고
+ * 빠지는 항등식이라 FY·누적 분기합끼리 상쇄된다. 연도 열·누적 표시값(val)은 종전대로 그 기간 평균 환율.
+ *
+ * 분기 값 = 원통화 3개월 공시값, 없으면 같은 시작일의 누적끼리 뺀 값(10-Q 현금흐름 누적, 10-K − 9개월 = 4분기).
+ * 기간을 분기로 끝까지 잇지 못하면(20-F 처럼 연간만 있거나 반기만 있는 회사) null — 호출부가 기간 평균 환율 값(val)을
+ * 쓴다(분기 금액이 없으니 분기 가중을 할 근거가 없다).
+ */
+function quarterSummer(arr: FactUnitEntry[], fx: { date: string; rate: number }[]) {
+  const latest = new Map<string, FactUnitEntry>();
+  for (const e of arr) {
+    if (!e.start || e.val == null) continue;
+    const k = `${e.start}|${e.end}`;
+    const p = latest.get(k);
+    if (!p || (e.filed ?? "") > (p.filed ?? "")) latest.set(k, e);
+  }
+  const isQuarter = (a: string, b: string) => { const d = span(a, b); return d >= 70 && d <= 110; };
+  const pieces = new Map<string, { start: string; end: string; val: number }>(); // key start
+  const put = (start: string, end: string, val: number, direct: boolean) => {
+    const p = pieces.get(start);
+    if (!p || (direct && span(p.start, p.end) !== span(start, end))) pieces.set(start, { start, end, val });
+  };
+  const byStart = new Map<string, FactUnitEntry[]>();
+  for (const e of latest.values()) {
+    if (isQuarter(e.start!, e.end)) put(e.start!, e.end, e.val, true);
+    (byStart.get(e.start!) ?? byStart.set(e.start!, []).get(e.start!)!).push(e);
+  }
+  for (const es of byStart.values()) {
+    es.sort((a, b) => a.end.localeCompare(b.end));
+    for (let i = 1; i < es.length; i++) {
+      const s0 = addDay(es[i - 1].end, 1);
+      if (isQuarter(s0, es[i].end) && !pieces.has(s0)) put(s0, es[i].end, es[i].val - es[i - 1].val, false);
+    }
+  }
+  const starts = [...pieces.keys()].sort();
+  const findFrom = (d: string) => {
+    let best: string | null = null;
+    for (const k of starts) if (Math.abs(span(d, k)) <= 3 && (best == null || Math.abs(span(d, k)) < Math.abs(span(d, best)))) best = k;
+    return best ? pieces.get(best)! : null;
+  };
+  return (start: string, end: string): number | null => {
+    if (span(start, end) < 70) return null;
+    let cursor = start;
+    let sum = 0;
+    for (let i = 0; i < 12; i++) {
+      const p = findFrom(cursor);
+      if (!p || p.end > addDay(end, 3)) return null;
+      const r = avgRate(fx, p.start, p.end);
+      if (r == null) return null;
+      sum += p.val * r;
+      if (Math.abs(span(p.end, end)) <= 3) return sum;
+      cursor = addDay(p.end, 1);
+    }
+    return null;
+  };
+}
+
 function convertNs(ns: Ns, cur: string, fx: { date: string; rate: number }[]): Ns {
   const out: Ns = {};
   for (const [concept, node] of Object.entries(ns)) {
@@ -173,10 +239,15 @@ function convertNs(ns: Ns, cur: string, fx: { date: string; rate: number }[]): N
       if (u !== cur && u !== `${cur}/shares`) { nu[u] = arr; continue; }
       const target = u === cur ? "USD" : "USD/shares";
       const conv: FactUnitEntry[] = [];
+      // 분기 합은 LTM 보조값 — 어떤 이유로든 실패하면 없는 것으로(연도·기간 환산 자체는 막지 않는다)
+      let qsum: (start: string, end: string) => number | null = () => null;
+      try { qsum = quarterSummer(arr, fx); } catch { /* 분기 분해 불가 */ }
       for (const e of arr) {
         const r = e.start ? avgRate(fx, e.start, e.end) : rateAt(fx, e.end);
         if (r == null) continue; // 환율 없는 기간은 버린다(원통화 그대로 USD 로 섞지 않음)
-        conv.push({ ...e, val: e.val * r });
+        let q: number | null = null;
+        try { q = e.start ? qsum(e.start, e.end) : null; } catch { q = null; }
+        conv.push(q != null ? { ...e, val: e.val * r, ltmQ: q } : { ...e, val: e.val * r });
       }
       nu[target] = [...(nu[target] ?? []), ...conv];
     }
@@ -228,7 +299,7 @@ export function toAdrBasis(facts: CompanyFacts, adrShares: number | null | undef
       const nu: Units = {};
       for (const [u, arr] of Object.entries(node.units ?? {}))
         nu[u] = u === "shares" ? arr.map((e) => ({ ...e, val: e.val / ratio }))
-          : /\/shares$/.test(u) ? arr.map((e) => ({ ...e, val: e.val * ratio }))
+          : /\/shares$/.test(u) ? arr.map((e) => ({ ...e, val: e.val * ratio, ...(e.ltmQ != null ? { ltmQ: e.ltmQ * ratio } : {}) }))
           : arr;
       out[c] = { ...node, units: nu };
     }
@@ -254,11 +325,15 @@ export async function estimatesToUsd<
     periods: { revenueAvg: number | null; revenueLow: number | null; revenueHigh: number | null; epsAvg: number | null; epsLow: number | null; epsHigh: number | null; epsTrend: Record<string, number | null> }[];
     surprises: { epsEstimate: number | null; epsActual: number | null }[];
   },
->(est: T, facts: CompanyFacts): Promise<T & { fxNote?: string }> {
+>(
+  est: T,
+  facts: Pick<CompanyFacts, "reportingCurrency" | "adrRatio">,
+  /** 현재 환율을 다른 원천으로 줄 때(DART 연결 ADR — ECOS 매매기준율, us/dart-adr.ts). 없으면 Yahoo */
+  nowRate?: { date: string; rate: number; source?: string },
+): Promise<T & { fxNote?: string }> {
   const cur = facts.reportingCurrency;
   if (!cur || cur === "USD") return est;
-  const fx = await fxSeries(cur);
-  const last = fx.at(-1);
+  const last = nowRate ?? (await fxSeries(cur)).at(-1);
   if (!last) return est;
   const r = last.rate;
   const epsInUsd = (facts.adrRatio ?? 1) !== 1;
@@ -267,7 +342,7 @@ export async function estimatesToUsd<
   return {
     ...est,
     currency: "USD",
-    fxNote: `예상(매출${epsInUsd ? "" : "·EPS"}): ${cur} → USD 현재 환율(${last.date} ${Number(r.toPrecision(5))}) 환산${epsInUsd ? " · EPS 는 ADR 1주당 USD 로 제공" : ""}`,
+    fxNote: `예상(매출${epsInUsd ? "" : "·EPS"}): ${cur} → USD 현재 환율(${nowRate?.source ? `${nowRate.source} ` : ""}${last.date} ${Number(r.toPrecision(5))}) 환산${epsInUsd ? " · EPS 는 ADR 1주당 USD 로 제공" : ""}`,
     periods: est.periods.map((p) => ({
       ...p,
       revenueAvg: m(p.revenueAvg, r), revenueLow: m(p.revenueLow, r), revenueHigh: m(p.revenueHigh, r),

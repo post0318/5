@@ -6,7 +6,7 @@
  * 한국(OpenDART) 과 동일한 누적 차감 방식.
  */
 
-import { isStaleAnnual, fiscalYearOf, vintageOrder } from "./edgar-series";
+import { isStaleAnnual, fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
 
 export interface FactEntry {
   start?: string;
@@ -15,10 +15,13 @@ export interface FactEntry {
   fp: string;
   form: string;
   filed?: string;
+  /** 외화 공시 — 분기별 평균 환율 합 환산값(edgar-foreign.ts). LTM 조합 전용 */
+  ltmQ?: number;
 }
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-const INTERIM_FORMS = ["10-Q", "10-Q/A"];
+// LTM 조합 전용 — 10-Q + 20-F 발행사 인포맥스 분기 LTM(edgar-infomax-quarters.ts)
+const INTERIM_FORMS = LTM_INTERIM_FORMS;
 
 function days(a: string, b: string): number {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
@@ -95,7 +98,7 @@ export function ttmFlow(entries: FactEntry[] | undefined): TtmResult {
   if (!cur || !cur.start) {
     // 신규 분기 없음 → 연간이 곧 TTM
     return {
-      ttm: fy.val,
+      ttm: ttmCombine(fy),
       annual: fy.val,
       annualLabel,
       ttmLabel: annualLabel,
@@ -119,7 +122,7 @@ export function ttmFlow(entries: FactEntry[] | undefined): TtmResult {
   if (!prior) {
     // 전년동기 없음 → 연간값 폴백
     return {
-      ttm: fy.val,
+      ttm: ttmCombine(fy),
       annual: fy.val,
       annualLabel,
       ttmLabel: `${annualLabel} (전년동기 누락 → 연간)`,
@@ -128,12 +131,12 @@ export function ttmFlow(entries: FactEntry[] | undefined): TtmResult {
     };
   }
 
-  const ttm = fy.val + cur.val - prior.val;
+  const ttm = ttmCombine(fy, cur, prior);
   return {
     ttm,
     annual: fy.val,
     annualLabel,
-    ttmLabel: `FY${fyYear} + ${cur.start.slice(0, 4)}누적(~${cur.end}) − 전년동기`,
+    ttmLabel: `FY${fyYear} + ${cur.start.slice(0, 4)}누적(~${cur.end}) − 전년동기${fy.ltmQ != null && cur.ltmQ != null && prior.ltmQ != null ? " · USD 환산 = 분기마다 그 분기 평균 환율" : ""}`,
     from: shiftYear(cur.end, -1),
     to: cur.end,
   };

@@ -16,13 +16,20 @@ import {
   type ForwardConsensus,
   type MarketId,
   type QuoteBar,
+  type YahooSplit,
 } from "../types";
 import { yahooSymbol } from "./symbols";
 
 const YahooFinance = (YahooFinancePkg as { default?: unknown }).default ?? YahooFinancePkg;
 
 type YFInstance = {
-  chart: (s: string, o: Record<string, unknown>) => Promise<{ quotes: RawBar[] }>;
+  chart: (
+    s: string,
+    o: Record<string, unknown>,
+  ) => Promise<{
+    quotes: RawBar[];
+    events?: { splits?: { date: Date | string; numerator?: number; denominator?: number }[] };
+  }>;
   quoteSummary: (
     s: string,
     o: Record<string, unknown>,
@@ -376,6 +383,19 @@ export async function fetchYahooEod(
   symbol: string,
   opts: { from?: string; to?: string; yahooOverride?: string | null } = {},
 ): Promise<QuoteBar[]> {
+  return (await fetchYahooEodWithSplits(market, symbol, opts)).bars;
+}
+
+/**
+ * 시세 + Yahoo 가 가격을 소급 조정한 "분할" 이력. Yahoo 종가는 분할뿐 아니라 **분사(spin-off)도 분할로
+ * 기록해** 그 이전 가격을 나눠 둔다(WDC 2025-02-24 "1323:1000" 샌디스크 분사, GE 2023·2024). 과거 결산일
+ * 시가총액을 as-reported 주식수와 맞출 때 이 이력으로 되돌린다(us/edgar-shares.ts `secBasisBars`).
+ */
+export async function fetchYahooEodWithSplits(
+  market: MarketId,
+  symbol: string,
+  opts: { from?: string; to?: string; yahooOverride?: string | null } = {},
+): Promise<{ bars: QuoteBar[]; splits: YahooSplit[] }> {
   const candidates = candidateSymbols(market, symbol, opts.yahooOverride);
   let lastErr: unknown;
   for (const s of candidates) {
@@ -400,7 +420,11 @@ export async function fetchYahooEod(
           close: q.close ?? null,
           volume: q.volume ?? null,
         }));
-      if (bars.length) return bars;
+      const splits = (res.events?.splits ?? [])
+        .filter((e) => e.numerator && e.denominator)
+        .map((e) => ({ date: isoDate(e.date), ratio: (e.numerator as number) / (e.denominator as number) }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+      if (bars.length) return { bars, splits };
     } catch (err) {
       lastErr = err;
     }

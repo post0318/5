@@ -10,10 +10,12 @@ import {
   classAOutstanding,
   classAOutstandingLatest,
   classAShares,
+  classAsConverted,
   type ClassAFacts,
 } from "./edgar-classfacts";
 import { adrRatio } from "../adr";
 import { SYN_EQUITY_SHARES } from "./edgar-equity-shares";
+import type { EodQuote, QuoteBar } from "../types";
 
 /**
  * 미국 종목 **발행주식수 단일 기준**.
@@ -124,6 +126,60 @@ function fixScale(v: number | null, ref: number | null): number | null {
   return v;
 }
 
+/**
+ * **과거 시가총액·주당 비교용 가격 = 주식수와 같은 기준**(오너 승인 2026-09-24).
+ *
+ * 과거 결산일 가격은 Yahoo 종가(분할 소급 조정)이고, 주식수는 as-reported ÷ SEC 분할계수
+ * (`splitFactorsByYear`, 가중평균주식수의 정수배 변화로 추정)다. Yahoo 는 **분사도 "분할"로 기록해** 이전 종가를
+ * 나눠 두는데(WDC 2025-02-24 "1323:1000" 샌디스크 분사, GE 2023-01 GEHC 1.281·2024-04 GEV 1.253), 분사는 주식수가
+ * 안 바뀌어 SEC 분할계수에 안 잡힌다 → "소급으로 깎인 가격 × 당시 실제 주식수"가 돼 WDC FY2022~2024 시가총액이
+ * 인포맥스의 정확히 1/1.323 이었다(실측: 되돌린 종가 43.42·37.93·75.77 × 315·322·343백만 주 = 인포맥스 시총).
+ *
+ * 그래서 Yahoo 분할 이력 중 **SEC 주식수로 확인되지 않는 것만** 가격에서 되돌린다. 확인 = 분할일 직전·직후 공시
+ * 표지 주식수(DEI, 제출 시점 as-of 값이라 소급 재작성이 없다)의 비율이 1 보다 분할비율에 가깝다. 앞뒤 표지가
+ * 없으면 확인 불가로 보고 손대지 않는다(종전 동작). 실제 분할(NVDA 10:1·CMG 50:1·WMT 3:1 등)은 표지 주식수가
+ * 그 배수로 바뀌므로 그대로 남는다. 20-F ADR 은 ADR 비율 변경이 "분할"로 기록될 수 있어(보통주 수는 불변) 제외.
+ * 가격만 바꾸므로 PER·PBR·시가총액·EV·배당수익률이 함께 일관되게 바뀐다.
+ */
+const SPLIT_CONFIRM_WINDOW_DAYS = 200;
+
+export function secBasisBars(facts: CompanyFacts, quote: EodQuote | null | undefined): QuoteBar[] {
+  const bars = quote?.bars ?? [];
+  const splits = quote?.splits ?? [];
+  if (!bars.length || !splits.length) return bars;
+  const dei = ((facts.facts.dei?.["EntityCommonStockSharesOutstanding"]?.units?.shares ?? []) as FactUnitEntry[])
+    .filter((e) => !e.start && e.val != null && e.val > 0 && e.end);
+  const lastDei = dei.reduce<FactUnitEntry | null>((b, e) => (!b || e.end > b.end ? e : b), null);
+  if (/^20-F/.test(lastDei?.form ?? "") || (facts.adrRatio ?? 1) !== 1) return bars;
+  const win = SPLIT_CONFIRM_WINDOW_DAYS * 864e5;
+  // 같은 기준일 값이 여럿이면(클래스별 표지) 최댓값 — 앞뒤를 같은 규칙으로 고른다
+  const coverAt = (pickBefore: boolean, date: string): number | null => {
+    let best: { end: string; val: number } | null = null;
+    for (const e of dei) {
+      const gap = Date.parse(e.end) - Date.parse(date);
+      if (pickBefore ? !(gap < 0 && -gap <= win) : !(gap >= 0 && gap <= win)) continue;
+      if (!best || (pickBefore ? e.end > best.end : e.end < best.end) || (e.end === best.end && e.val > best.val))
+        best = { end: e.end, val: e.val };
+    }
+    return best?.val ?? null;
+  };
+  const undo = splits.filter((s) => {
+    if (!(s.ratio > 0) || s.ratio === 1) return false;
+    const before = coverAt(true, s.date), after = coverAt(false, s.date);
+    if (before == null || after == null) return false;
+    const r = Math.log(after / before);
+    return Math.abs(r) < Math.abs(r - Math.log(s.ratio));
+  });
+  if (!undo.length) return bars;
+  const k = (d: string) => undo.reduce((m, s) => (d < s.date ? m * s.ratio : m), 1);
+  return bars.map((b) => {
+    const f = k(b.date);
+    if (f === 1) return b;
+    const x = (v: number | null) => (v == null ? v : v * f);
+    return { ...b, open: x(b.open), high: x(b.high), low: x(b.low), close: x(b.close) };
+  });
+}
+
 export interface ShareResolver {
   /**
    * 회계연도말 발행주식수 — **현재(분할 반영) 기준**으로 환산된 값.
@@ -178,7 +234,9 @@ export function buildShareResolver(
       };
       const issued = atEnd(issuedE), treasury = atEnd(treasuryE), trust = atEnd(trustE) ?? 0;
       // 잣대도 후보마다 단위 오류 보정 — MCD 는 가중평균을 7.164억 주가 아니라 716.4 로 태깅했다
-      const refRaw = annualOf(wavgDil, year) ?? annualOf(wavgBasic, year);
+      // 잣대는 기본 가중평균 우선 — 희석 가중평균은 전환사채 희석이 큰 해에 본표 주식수와 10% 넘게 벌어져 정답 후보가
+      // 탈락했다(TSLA FY2020: 희석 32.49억 ÷ (본표 9.6억 × 3) = 1.128 → 가중평균 근사, 기본 27.98억이면 0.97)
+      const refRaw = annualOf(wavgBasic, year) ?? annualOf(wavgDil, year);
       const near = (v: number | null) => {
         if (v == null || v <= 0) return false;
         const ref = fixScale(refRaw, v);
@@ -196,7 +254,10 @@ export function buildShareResolver(
         return ref != null && Math.abs(ref / v - 1) <= 0.1;
       };
       const issuedOnly = issued != null ? issued - trust : null;
-      const bsFace = [atEnd(sharesEnd), atEnd(equityStmtE), atEnd(equityDimE), issued != null && treasury != null ? issued - treasury - trust : null].find(near)
+      // 보통주를 클래스별로만 공시하고 클래스 간 전환비율이 있는 종목(Visa) — 10-K 의 전환 기준(as-converted) 보통주
+      // 합계가 결산일 주식수다(edgar-classfacts.ts). 발행 주수 단순 합(B·C 과소 반영)·가중평균 근사보다 앞선다.
+      const asConverted = classAsConverted(cf, year);
+      const bsFace = asConverted ?? [atEnd(sharesEnd), atEnd(equityStmtE), atEnd(equityDimE), issued != null && treasury != null ? issued - treasury - trust : null].find(near)
         ?? (nearTight(issuedOnly) ? issuedOnly : null);
       // as-reported(그 회계연도 시점) 값만 쓴다 — DEI 표지 주식수는 제출일
       // 기준이라 결산 후 분할이 있으면 기준이 어긋나므로 맨 뒤.
@@ -224,10 +285,20 @@ export function buildShareResolver(
         instant != null && wavg != null && instant / wavg <= 1.5 && instant / wavg >= 1 / 1.5;
       // 두 계열 비율이 정수 분할배수(±10%)면 연말 주식수를 가중평균 기준으로 환산해 쓴다 — 가중평균 자체를 쓰면 연중
       // 평균이라 연말 시가총액이 어긋난다(WMT FY2022: 가중평균 84.15억 vs 연말 27.61억×3 = 82.83억, 인포맥스와 일치)
-      const splitK = instant != null && wavg != null && instant > 0 ? Math.round(wavg / instant) : 0;
+      // 배수는 같은 연도 가중평균의 원공시 ÷ 분할 소급 재작성 공시 비율(= 실제 분할배수)을 우선한다. round(가중평균 ÷
+      // 연말)은 배수가 크면 연중 자사주 매입 차이만으로 한 칸 틀린다 — CMG 2022(50:1): 14.03억 ÷ 2,762.7만 = 50.79 → 51
+      // 로 연말 주식수가 2% 부풀었다(원공시 2,806.2만 → 재작성 14.03억 = 정확히 50).
+      const wavgSrc = annualOf(wavgDil, year) != null ? wavgDil : wavgBasic;
+      const fyW = wavgSrc.filter((e) => isAnnual(e) && e.val > 0 && fiscalYearOf(e.end) === year);
+      const oldest = fyW.reduce<FactUnitEntry | null>((b, e) => (!b || (e.filed ?? "") < (b.filed ?? "") ? e : b), null);
+      const restateR = oldest && wavg != null ? wavg / fixScale(oldest.val, wavg)! : 0;
+      const restateK = Math.round(restateR) >= 2 && Math.abs(restateR / Math.round(restateR) - 1) < 0.01 ? Math.round(restateR) : 0;
+      // 분할 배수 검사 잣대도 기본 가중평균 우선(위 refRaw 와 같은 이유 — TSLA FY2020 희석 1.128 vs 기본 0.97)
+      const refW = fixScale(refRaw, instant) ?? wavg;
+      const splitK = restateK || (instant != null && refW != null && instant > 0 ? Math.round(refW / instant) : 0);
       // 실제 분할 이력(가중평균 계열의 분할계수)이 있을 때만 — 없으면 우연한 정수배를 분할로 오인한다(재감사 LOW)
       const hasSplit = [...splitF.values()].some((v) => v != null && Math.abs(v - 1) > 0.01);
-      const splitBasis = !sameBasis && hasSplit && splitK >= 2 && Math.abs(wavg! / instant! / splitK - 1) < 0.1;
+      const splitBasis = !sameBasis && hasSplit && splitK >= 2 && refW != null && Math.abs(refW / instant! / splitK - 1) < 0.1;
       const raw = sameBasis ? instant : splitBasis ? instant! * splitK : (wavg ?? instant);
       if (raw == null) {
         if (hint != null) hintUsed = true;

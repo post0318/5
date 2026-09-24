@@ -9,7 +9,7 @@
 
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
-import { isStaleAnnual, splitFactorsByYear, fiscalYearOf, vintageOrder } from "./edgar-series";
+import { isStaleAnnual, splitFactorsByYear, fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
 import { buildShareResolver } from "./edgar-shares";
 import {
   ltmEps,
@@ -72,7 +72,8 @@ export interface HighlightEstimatePeriod {
 }
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-const INTERIM_FORMS = ["10-Q", "10-Q/A"];
+// LTM 조합 전용 — 10-Q + 20-F 발행사 인포맥스 분기 LTM(edgar-infomax-quarters.ts)
+const INTERIM_FORMS = LTM_INTERIM_FORMS;
 
 const REVENUE = [
   // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
@@ -162,7 +163,7 @@ function ttm(entries: FactUnitEntry[]): number | null {
   const cur = interims
     .filter((e) => Math.abs(daysBetween(fy.end, e.start!)) <= 12 && e.end > fy.end)
     .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
-  if (!cur?.start) return fy.val;
+  if (!cur?.start) return ttmCombine(fy);
   const wS = shiftYear(cur.start, -1);
   const wE = shiftYear(cur.end, -1);
   const prior = interims
@@ -173,8 +174,8 @@ function ttm(entries: FactUnitEntry[]): number | null {
         Math.abs(daysBetween(wE, e.end)) <= 12,
     )
     .sort((a, b) => Math.abs(daysBetween(wE, a.end)) - Math.abs(daysBetween(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
-  if (!prior) return fy.val;
-  return fy.val + cur.val - prior.val;
+  if (!prior) return ttmCombine(fy);
+  return ttmCombine(fy, cur, prior);
 }
 
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
@@ -593,7 +594,7 @@ export function buildUsHighlights(
   if (facts.adrRatio && facts.adrRatio !== 1)
     notes.push(`ADR 기준: 1 ADR = 보통주 ${Number(facts.adrRatio.toPrecision(4))}주 — 주식수·주당 값은 ADR 1주 기준`);
   notes.push(
-    "과거 시가총액: 각 회계연도말 종가 × 기말 발행주식수 (클래스별로만 태깅된 종목은 가중평균 희석주식수로 근사)",
+    "과거 시가총액: 각 회계연도말 종가 × 기말 발행주식수 (클래스 간 전환 구조 종목(Visa 등)은 10-K 전환 기준(as-converted) 보통주 합계)",
   );
   notes.push(
     "차입금 = 이자부 차입금(장·단기·CP) + 금융리스 — 운용리스는 제외(리스비용이 이미 EBITDA 에 반영돼 있어 이중 계산 방지)",

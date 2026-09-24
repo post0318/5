@@ -1,6 +1,7 @@
 /** 어댑터 공통 HTTP 헬퍼. 서버 전용. */
 
 import { AdapterError } from "./types";
+import { noteFetchFailure } from "./fetch-health";
 
 export interface FetchJsonOpts {
   headers?: Record<string, string>;
@@ -21,14 +22,17 @@ export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promi
       next: revalidate === false ? undefined : { revalidate },
     });
     if (!res.ok) {
+      noteFetchFailure(url, res.status);
       throw new AdapterError(`요청 실패 ${res.status} — ${url}`, { status: res.status });
     }
     return (await res.json()) as T;
   } catch (err) {
     if (err instanceof AdapterError) throw err;
     if (err instanceof DOMException && err.name === "AbortError") {
+      noteFetchFailure(url, 504);
       throw new AdapterError(`요청 시간 초과 — ${url}`, { status: 504, cause: err });
     }
+    noteFetchFailure(url, undefined);
     throw new AdapterError(`요청 오류 — ${url}`, { cause: err });
   } finally {
     clearTimeout(timer);
@@ -45,13 +49,18 @@ export async function fetchText(url: string, opts: FetchJsonOpts = {}): Promise<
       signal: controller.signal,
       next: revalidate === false ? undefined : { revalidate },
     });
-    if (!res.ok) throw new AdapterError(`요청 실패 ${res.status} — ${url}`, { status: res.status });
+    if (!res.ok) {
+      noteFetchFailure(url, res.status);
+      throw new AdapterError(`요청 실패 ${res.status} — ${url}`, { status: res.status });
+    }
     return await res.text();
   } catch (err) {
     if (err instanceof AdapterError) throw err;
     if (err instanceof DOMException && err.name === "AbortError") {
+      noteFetchFailure(url, 504);
       throw new AdapterError(`요청 시간 초과 — ${url}`, { status: 504, cause: err });
     }
+    noteFetchFailure(url, undefined);
     throw new AdapterError(`요청 오류 — ${url}`, { cause: err });
   } finally {
     clearTimeout(timer);

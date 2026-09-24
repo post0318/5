@@ -115,6 +115,13 @@ export interface Filing {
   source: string;
 }
 
+/** Yahoo 가 종가를 소급 조정한 분할(분사 포함) — ratio = 분할 전 1주가 분할 후 몇 주인지(1323:1000 → 1.323) */
+export interface YahooSplit {
+  /** YYYY-MM-DD */
+  date: string;
+  ratio: number;
+}
+
 export interface QuoteBar {
   /** YYYY-MM-DD */
   date: string;
@@ -141,6 +148,8 @@ export interface EodQuote {
   sharesOutstanding?: number | null;
   /** 시가총액 (제공 소스에서만) */
   marketCap?: number | null;
+  /** 시세가 Yahoo 일 때만 — 종가에 소급 반영된 분할·분사 이력 */
+  splits?: YahooSplit[];
 }
 
 /** 트레일링 멀티플 (L3, 자체 계산). */
@@ -203,6 +212,11 @@ export interface TtmFlows {
     is20F?: boolean;
     /** 우선주 시가총액(한국 — KRX 우선주 자체 시세) — EV 에 더한다 */
     evPreferredMcap?: number | null;
+    /**
+     * 주당 장부 지표(BPS) 분모 — 시가총액 주식수(evShares)와 따로 둘 때만(DART 연결 ADR: 자사주 제외 유통주식수,
+     * us/dart-adr.ts). 있으면 PBR 은 시가총액 ÷ 자본(주식수 무관)으로 낸다.
+     */
+    bookShares?: number | null;
     /** evNetDebt 에 들어 있는 운영 파트너십 지분 장부가 — 지분을 시가로 더할 때 뺀다 */
     evOpNciBook?: number | null;
     /**
