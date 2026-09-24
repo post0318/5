@@ -13,6 +13,7 @@ import {
   type ClassAFacts,
 } from "./edgar-classfacts";
 import { adrRatio } from "../adr";
+import { SYN_EQUITY_SHARES } from "./edgar-equity-shares";
 
 /**
  * 미국 종목 **발행주식수 단일 기준**.
@@ -146,6 +147,14 @@ export function buildShareResolver(
   const cf = opts.classFacts ?? null;
   const hint = opts.sharesHint ?? null;
   const sharesEnd = entriesOf(facts, "CommonStockSharesOutstanding", "shares");
+  // 유통주식수 태그 없이 본표에 "발행주식수"·"자기주식수"만 적는 회사(KO·MCD·DAL·GLW·MDLZ 등) — 발행 − 자기주식이
+  // 인포맥스(FactSet) 연말 주식수와 정확히 일치(검증 2026-09-24). 예전엔 표지(제출일 기준)·가중평균으로 근사했다.
+  const issuedE = entriesOf(facts, "CommonStockSharesIssued", "shares");
+  // 자본변동표에 유통주식수를 적는 회사(WMT — 본표 태그 없음)
+  const equityStmtE = entriesOf(facts, "SharesOutstanding", "shares");
+  // 자본변동표 보통주 차원 값(10-K 원본, edgar-equity-shares.ts) — 위 태그가 차원으로만 있는 회사(WMT·BE·META)
+  const equityDimE = entriesOf(facts, SYN_EQUITY_SHARES, "shares");
+  const treasuryE = [...entriesOf(facts, "TreasuryStockCommonShares", "shares"), ...entriesOf(facts, "TreasuryStockShares", "shares")];
   const dei = (facts.facts.dei?.["EntityCommonStockSharesOutstanding"]?.units?.shares ??
     []) as FactUnitEntry[];
   const wavgDil = entriesOf(facts, "WeightedAverageNumberOfDilutedSharesOutstanding", "shares");
@@ -158,9 +167,30 @@ export function buildShareResolver(
 
   return {
     atFiscalYearEnd(year, endDate) {
+      // 결산일(±7일) 시점 값 — 대차대조표 본표 기준. 후보는 같은 해 가중평균 주식수와 1.2배 안일 때만 채택한다
+      // (PEP 는 "발행주식수" 태그가 이미 자기주식을 뺀 순발행분이라 또 빼면 틀린다 — 가중평균과 어긋나 걸러짐)
+      const atEnd = (es: FactUnitEntry[]): number | null => {
+        let b: FactUnitEntry | null = null;
+        for (const e of es) if (!e.start && e.val != null && e.end && Math.abs(Date.parse(e.end) - Date.parse(endDate)) <= 7 * 864e5 && (!b || (e.filed ?? "") > (b.filed ?? ""))) b = e;
+        return b?.val ?? null;
+      };
+      const issued = atEnd(issuedE), treasury = atEnd(treasuryE);
+      // 잣대도 후보마다 단위 오류 보정 — MCD 는 가중평균을 7.164억 주가 아니라 716.4 로 태깅했다
+      const refRaw = annualOf(wavgDil, year) ?? annualOf(wavgBasic, year);
+      const near = (v: number | null) => {
+        if (v == null || v <= 0) return false;
+        const ref = fixScale(refRaw, v);
+        if (ref == null) return true;
+        const k = ref / v;
+        // 가중평균이 분할로 소급 수정되고 본표 주식수는 그대로인 해(WMT FY2022·2023, 2024 3:1 분할)도 후보로 인정
+        const kk = Math.round(k);
+        return (k <= 1.2 && k >= 1 / 1.2) || (kk >= 2 && Math.abs(k / kk - 1) < 0.1);
+      };
+      const bsFace = [atEnd(sharesEnd), atEnd(equityStmtE), atEnd(equityDimE), issued != null && treasury != null ? issued - treasury : null, issued].find(near) ?? null;
       // as-reported(그 회계연도 시점) 값만 쓴다 — DEI 표지 주식수는 제출일
       // 기준이라 결산 후 분할이 있으면 기준이 어긋나므로 맨 뒤.
       const instant =
+        bsFace ??
         instantAtOrBefore(sharesEnd, endDate) ??
         classAOutstanding(cf, year) ??
         instantAtOrBefore(dei, endDate);
@@ -181,7 +211,11 @@ export function buildShareResolver(
       // 정상적인 차이는 이 배수를 넘지 않는다.
       const sameBasis =
         instant != null && wavg != null && instant / wavg <= 1.5 && instant / wavg >= 1 / 1.5;
-      const raw = sameBasis ? instant : (wavg ?? instant);
+      // 두 계열 비율이 정수 분할배수(±10%)면 연말 주식수를 가중평균 기준으로 환산해 쓴다 — 가중평균 자체를 쓰면 연중
+      // 평균이라 연말 시가총액이 어긋난다(WMT FY2022: 가중평균 84.15억 vs 연말 27.61억×3 = 82.83억, 인포맥스와 일치)
+      const splitK = instant != null && wavg != null && instant > 0 ? Math.round(wavg / instant) : 0;
+      const splitBasis = !sameBasis && splitK >= 2 && Math.abs(wavg! / instant! / splitK - 1) < 0.1;
+      const raw = sameBasis ? instant : splitBasis ? instant! * splitK : (wavg ?? instant);
       if (raw == null) {
         if (hint != null) hintUsed = true;
         return hint;

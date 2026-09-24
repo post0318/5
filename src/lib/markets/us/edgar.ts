@@ -31,6 +31,7 @@ import { withIncomeStatementStructure } from "./edgar-is-structure";
 import { withOneOffCharges } from "./edgar-oneoff";
 import { withBalanceSheetDebt } from "./edgar-bs-structure";
 import { withCashFlowDa } from "./edgar-cf-structure";
+import { withEquityStatementShares } from "./edgar-equity-shares";
 import { loadUsCurrentShares, type CurrentShares } from "./current-shares";
 import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
 import { FIN_NET_REVENUE, isFinancialCompany, withFinNetRevenue } from "./edgar-financial";
@@ -191,7 +192,9 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const withDebt = await withBalanceSheetDebt(cik, withOneOff, recent).catch(() => withOneOff);
       // 감가상각비 = 현금흐름표 본표 감가상각·상각 줄(edgar-cf-structure.ts)
       const withDa = await withCashFlowDa(cik, withDebt, recent).catch(() => withDebt);
-      const data = withOpIncome(dropRoundedRetags({ ...withDa, financialSector: sicN != null && sicN >= 6000 && sicN <= 6499 }));
+      // 연말 유통주식수가 자본변동표 차원으로만 있는 회사(WMT·BE·META, edgar-equity-shares.ts)
+      const withShares = await withEquityStatementShares(cik, withDa, recent).catch(() => withDa);
+      const data = withOpIncome(dropRoundedRetags({ ...withShares, financialSector: sicN != null && sicN >= 6000 && sicN <= 6499 }));
       factsCache.set(cik, { at: Date.now(), data });
       return data;
     })
