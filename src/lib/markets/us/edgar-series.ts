@@ -431,3 +431,35 @@ export function ttmOf(entries: FactUnitEntry[]): number | null {
   if (!prior) return ttmCombine(fy);
   return ttmCombine(fy, cur, prior);
 }
+
+/** 매출원가 후보 태그(기본 우선순위) */
+export const COGS_CONCEPTS = ["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"];
+const GP_CHECK_REVENUE = [
+  "Revenues",
+  "RevenueFromContractWithCustomerExcludingAssessedTax",
+  "RevenueFromContractWithCustomerIncludingAssessedTax",
+];
+
+/**
+ * 매출원가 태그 순서 — 매출총이익 태그가 있으면 **"매출 − 매출원가 = 매출총이익"이 성립하는 태그를 앞으로**.
+ * BE 는 CostOfGoodsAndServicesSold 를 주석의 일부 항목(FY2025 1,800만 달러)에만 달고 본표 매출원가는 CostOfRevenue
+ * (14.37억)로 공시해, 기본 우선순위로는 매출원가 행이 1,800만 달러 · LTM 매출총이익 ≠ 매출 − 매출원가가 됐다(검증 D층
+ * 2026-09-25). 판정은 세 값이 다 있는 가장 최근 사업연도 기준(0.5% 안), 성립하는 태그가 없으면 기본 순서.
+ */
+export function cogsConcepts(facts: CompanyFacts): string[] {
+  const gp = annualByYear(entriesOf(facts, "GrossProfit"));
+  if (!gp.size) return COGS_CONCEPTS;
+  const revs = GP_CHECK_REVENUE.map((c) => annualByYear(entriesOf(facts, c)));
+  const fits = (c: string): boolean | null => {
+    const cg = annualByYear(entriesOf(facts, c));
+    const years = [...cg.keys()].filter((y) => gp.has(y) && revs.some((r) => r.has(y))).sort((a, b) => b - a);
+    if (!years.length) return null;
+    const y = years[0];
+    return revs.some((r) => {
+      const rv = r.get(y);
+      return rv != null && Math.abs(rv - cg.get(y)! - gp.get(y)!) <= Math.abs(rv) * 0.005;
+    });
+  };
+  const ok = COGS_CONCEPTS.filter((c) => fits(c) === true);
+  return ok.length ? [...ok, ...COGS_CONCEPTS.filter((c) => !ok.includes(c))] : COGS_CONCEPTS;
+}

@@ -306,7 +306,7 @@ export function withYahooLtm(
       filled,
       blanked,
       evComplete: evMiss.length === 0,
-      evReason: evMiss.length ? `LTM EV 공란 — ${evMiss.join("·")}을(를) ${last} 기준으로 못 채움` : null,
+      evReason: evMiss.length ? `LTM EV 미표시(Yahoo 분기 LTM) — ${evMiss.join("·")}을(를) ${last} 기준으로 못 채움` : null,
     },
   };
 }

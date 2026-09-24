@@ -3,6 +3,7 @@ import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import type { QuoteBar } from "../types";
 import {
+  cogsConcepts,
   annualByYear,
   annualEnds,
   days,
@@ -220,7 +221,7 @@ export function buildUsAnalysis(
 
   const revenue = flow(revConcepts);
   const grossProfitRaw = flow(["GrossProfit"]);
-  const cogs0 = flowM(["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"]);
+  const cogs0 = flowM(cogsConcepts(facts));
   // 금융회사(은행·카드사): 매출총이익 대신 충당금전이익(=순수익 − 총이자외비용).
   const finNoninterestExpense = flow(FIN_NONINTEREST_EXPENSE);
   const finProvision = flow(FIN_PROVISION);

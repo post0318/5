@@ -3,6 +3,7 @@ import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import {
+  cogsConcepts,
   annualByYear,
   annualEnds,
   directQuarterValue,
@@ -47,7 +48,6 @@ const REVENUE = [
   "SalesRevenueNet",
   "RevenuesNetOfInterestExpense", // 증권사·투자은행(GS·MS) 순수익 — 하이라이트와 같은 목록
 ];
-const COGS = ["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"];
 const OPEX = ["OperatingExpenses", "CostsAndExpenses"];
 const SGA = [
   "SellingGeneralAndAdministrativeExpense",
@@ -195,7 +195,7 @@ export function buildUsIncome(
   };
 
   const revenue = val(revConcepts);
-  const cogs = val(COGS);
+  const cogs = val(cogsConcepts(facts));
   // 금융회사: 매출총이익 대신 충당금전이익(=순수익 − 총이자외비용), 대손충당금 별도.
   const finNoninterestExpense = val(FIN_NONINTEREST_EXPENSE);
   const finProvision = val(FIN_PROVISION);
