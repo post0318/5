@@ -20,7 +20,7 @@ jobs:
         run: |
           W="${{ github.event.inputs.weeks || '3' }}"
           curl -sf --max-time 600 \
-            "https://5-topaz-five.vercel.app/api/cron/normalize-sim?weeks=$W" \
+            "https://macroresearch.vercel.app/api/cron/normalize-sim?weeks=$W" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" -o norm.json
           python3 - <<'PY'
           import json

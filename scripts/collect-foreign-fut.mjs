@@ -17,7 +17,7 @@
  *   node scripts/collect-foreign-fut.mjs --status    # 앱 반영 현황 + 소스 확인만
  *
  * ── 설정 (.env.local, 선택) ─────────────────────────────────────────
- *   KR_FG_IMPORT_URL="https://5-topaz-five.vercel.app/api/cron/kr-fg"
+ *   KR_FG_IMPORT_URL="https://macroresearch.vercel.app/api/cron/kr-fg"
  *   CRON_SECRET="앱에 설정한 값이 있으면"
  *
  * ── Windows 작업 스케줄러 (일 1회) ─────────────────────────────────
@@ -48,8 +48,8 @@ const STATUS = ARGS.includes("--status");
 const DRY_RUN = ARGS.includes("--dry-run") || STATUS;
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || (STATUS ? 15 : 40);
 
-const IMPORT_URL = (ENV.KR_FG_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/kr-fg").trim();
-const MACRO_URL = (ENV.KR_FG_MACRO_URL || "https://5-topaz-five.vercel.app/api/macro/kr-fg").trim();
+const IMPORT_URL = (ENV.KR_FG_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/kr-fg").trim();
+const MACRO_URL = (ENV.KR_FG_MACRO_URL || "https://macroresearch.vercel.app/api/macro/kr-fg").trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 
 const UA =

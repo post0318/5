@@ -21,7 +21,7 @@ jobs:
         run: |
           MODELS="${{ github.event.inputs.models || 'gemini-3.1-pro-preview,gemini-3.8-flash' }}"
           curl -sf --max-time 600 \
-            "https://5-topaz-five.vercel.app/api/cron/weekly-model-compare?models=$MODELS" \
+            "https://macroresearch.vercel.app/api/cron/weekly-model-compare?models=$MODELS" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             -o compare.json
           echo "=== 요약 ==="

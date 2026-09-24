@@ -33,7 +33,7 @@ function loadEnvLocal() {
 
 const ENV = loadEnvLocal();
 const IMPORT_URL = (
-  ENV.TELEGRAM_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/telegram-posts"
+  ENV.TELEGRAM_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/telegram-posts"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();

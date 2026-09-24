@@ -65,7 +65,7 @@ const BOARDS = [
   { cmsCd: "CM0078", label: "시장" }, // 주식시장 — STOCK_NM 이 전부 "시장전체"라 브라켓 필요
 ];
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();

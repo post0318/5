@@ -14,7 +14,7 @@ jobs:
       - name: 진단 호출
         run: |
           curl -sf --max-time 300 \
-            "https://5-topaz-five.vercel.app/api/cron/news-relevance" \
+            "https://macroresearch.vercel.app/api/cron/news-relevance" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" -o rel.json
           python3 - <<'PY'
           import json

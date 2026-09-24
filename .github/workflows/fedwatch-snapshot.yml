@@ -22,6 +22,6 @@ jobs:
     steps:
       - run: |
           BACKFILL="${{ github.event.inputs.backfill || '0' }}"
-          URL="https://5-topaz-five.vercel.app/api/cron/fedwatch"
+          URL="https://macroresearch.vercel.app/api/cron/fedwatch"
           if [ "$BACKFILL" != "0" ]; then URL="$URL?backfill=$BACKFILL"; fi
           curl -sf -X GET "$URL" -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"

@@ -19,7 +19,7 @@ jobs:
     steps:
       - name: 진단 라우트 호출
         run: |
-          URL="https://5-topaz-five.vercel.app/api/cron/gemini-grounding-check"
+          URL="https://macroresearch.vercel.app/api/cron/gemini-grounding-check"
           M="${{ github.event.inputs.model }}"
           if [ -n "$M" ]; then URL="$URL?model=$M"; fi
           curl -sf --max-time 300 "$URL" \

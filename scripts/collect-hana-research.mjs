@@ -25,7 +25,7 @@
  *   node scripts/collect-hana-research.mjs --dry-run   # 전송 안 하고 파싱 결과만
  *
  * ── 설정 (.env.local, 선택) ─────────────────────────────────────────
- *   SHINHAN_RESEARCH_IMPORT_URL="https://5-topaz-five.vercel.app/api/cron/shinhan-research"
+ *   SHINHAN_RESEARCH_IMPORT_URL="https://macroresearch.vercel.app/api/cron/shinhan-research"
  *   CRON_SECRET="앱에 설정한 값이 있으면"
  * (신한 수집기와 같은 수신 라우트를 재사용 — source 로 구분됨)
  */
@@ -53,7 +53,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)

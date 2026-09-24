@@ -62,7 +62,7 @@ const MAX_PAGES = Number(arg("pages")) || 10;
 const AJAX_URL = "https://www.nhsec.com/research/boardCommonTrAjax.action";
 const PAGE_SIZE = 20; // 서버가 이보다 많이 요청해도 20건으로 잘라 응답(다른 NH 수집기와 동일 실측)
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();

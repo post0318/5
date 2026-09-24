@@ -53,7 +53,7 @@ const MAX_ROWS = 8;
 // 저빈도 원칙 — 종목당 1요청, 기본 2초 간격.
 const DELAY_MS = Number(arg("delay")) || 2000;
 
-const APP_URL = (ENV.APP_URL || "https://5-topaz-five.vercel.app").replace(/\/$/, "");
+const APP_URL = (ENV.APP_URL || "https://macroresearch.vercel.app").replace(/\/$/, "");
 const IMPORT_URL = (ENV.ANALYST_FORECAST_IMPORT_URL || `${APP_URL}/api/cron/analyst-forecasts`).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();

@@ -51,7 +51,7 @@ const MAX_PAGES = Number(arg("pages")) || 10;
 const LIST_URL = "https://www.sangsanginib.com/notice/getNoticeList";
 const CMS_CD = "CM0079"; // 기업리포트
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();

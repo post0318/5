@@ -53,7 +53,7 @@ const LIST_URL = "https://www.bnkfn.co.kr/research/analysingCompany.jspx";
 const ISSUE_URL = "https://www.bnkfn.co.kr/research/analysingIssue.jspx";
 const ECON_URL = "https://www.bnkfn.co.kr/research/economyAnalyse.jspx";
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://5-topaz-five.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();

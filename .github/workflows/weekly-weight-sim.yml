@@ -23,7 +23,7 @@ jobs:
       - name: 입력 미리보기 받기 (비용 0)
         run: |
           curl -sf --max-time 330 -X POST \
-            "https://5-topaz-five.vercel.app/api/cron/weekly-report" \
+            "https://macroresearch.vercel.app/api/cron/weekly-report" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             -H "content-type: application/json" \
             -d '{"preview":true}' -o preview.json
