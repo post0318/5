@@ -28,7 +28,7 @@ const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 
 const DA = /deprecia|amortiz/i;
 // 개념명(카멜케이스)·라벨(띄어쓰기) 둘 다에 맞도록 공백을 선택으로 둔다
-const NOT_DA = /debt|discount|premium|issuance|financing ?costs?|deferred ?(financing|charges)|stock|share-?based|compensation|operating ?lease|content|contract ?(cost|acquisition)|capitalized ?software|investment|securities|bond|inventory/i;
+const NOT_DA = /debt|discount|premium|issuance|financing ?costs?|deferred ?(financing|charges)|stock|share-?based|compensation|operating ?lease|content|contract ?(cost|acquisition)|capitalized ?software|investment|securities|bond|inventory|incentive|acquisition ?costs|defined ?benefit|pension|postretirement/i;
 const OP_CF_ROOT = /^us-gaap_NetCashProvidedByUsedInOperatingActivities(ContinuingOperations)?$/;
 
 interface Filing { accn: string; form: string; filed: string }
