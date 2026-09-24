@@ -1,0 +1,29 @@
+name: 키움증권 이슈분석/환율분석 수집
+
+# CLAUDE.md 방침(오너 승인 예외): bbn.kiwoom.com 의 "이슈분석"(IA)·
+# "일간환율전망"(FE) 게시판을 하루 3회, 개인용으로만 조회한다. 거시경제 >
+# 이슈분석/환율분석 탭 전용 — collect-kiwoom-research.mjs(종목·산업분석,
+# kr_research)와는 완전히 별개 스크립트·라우트(macro_issues).
+#
+# 2026-09-24 발견(오너 지적 — "실행은 성공했다고 나오나 왜 거시경제
+# 이슈분석에는 아무것도 안나오는데?"): 스크립트만 만들고 이 워크플로 파일을
+# 빠뜨려서 한 번도 자동 실행된 적이 없었다 — 뒤늦게 추가.
+
+on:
+  schedule:
+    - cron: "25 23 * * *" # 23:25 UTC = 08:25 KST(1차)
+    - cron: "25 3 * * *" # 03:25 UTC = 12:25 KST(2차)
+    - cron: "25 7 * * *" # 07:25 UTC = 16:25 KST(3차, 다른 키움 수집기와 동일 주기)
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/collect-kiwoom-macro-issues.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
