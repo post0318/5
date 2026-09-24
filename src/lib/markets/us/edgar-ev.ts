@@ -2,6 +2,7 @@ import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import { annualByYear, entriesOf, ttmOf } from "./edgar-series";
 import { opUnitsFrom } from "../op-units";
+import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT } from "./edgar-bs-structure";
 
 /**
  * 미국 종목 **EV 브릿지·EBITDA 단일 기준**.
@@ -53,7 +54,7 @@ const FIN_LEASE = ["FinanceLeaseLiabilityNoncurrent", "FinanceLeaseLiabilityCurr
 /** 차입금 태그가 하나라도 있는지 판정용(기준일 폴백). */
 // 단기차입금도 포함 — 장기차입금 없이 단기차입금·금융리스만 공시한 해(GEV 2024 분사 직후)를
 // "차입금 미공시"로 오판해 EV 를 비웠다(검증 2026-09-24). resolveDebt 는 이미 합산한다.
-const ANY_DEBT = [...DEBT_NONCURRENT, ...DEBT_CURRENT, ...DEBT_TOTAL, ...SHORT_BORROWINGS];
+const ANY_DEBT = [SYN_DEBT_FACE, ...DEBT_NONCURRENT, ...DEBT_CURRENT, ...DEBT_TOTAL, ...SHORT_BORROWINGS];
 /** 대차대조표에 차입금 태그가 없을 때 "빚이 없다"와 "태그를 안 달았다"를
  *  가르는 신호 — 최근 1년 안에 차입·상환·이자 흐름이 있으면 후자(Ford).
  *  무차입 기업(PLTR)은 이 흐름이 전혀 없다. */
@@ -125,6 +126,9 @@ export function resolveDebt(
     return null;
   };
   const sum = (cs: string[]) => cs.reduce((s, c) => s + (get(c) ?? 0), 0);
+  // 대차대조표 본표 차입금 줄 합(edgar-bs-structure.ts) — 공시 구조가 있는 날짜는 이 값이 기준
+  const face = get(SYN_DEBT_FACE);
+  if (face != null) return { debt: face, noncurrent: get(SYN_DEBT_FACE_NONCURRENT), partial: false };
   const nc = first(DEBT_NONCURRENT);
   const cur = first(DEBT_CURRENT);
   const tot = nc ? null : first(DEBT_TOTAL);

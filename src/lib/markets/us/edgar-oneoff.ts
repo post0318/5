@@ -28,6 +28,12 @@ const ONE_OFF_TEXT =
   /restructur|impairment|litigation|legal (settlement|matters)|settlement|lawsuit|termination|severance|written off|write-?off|write-?down|acquisition[- ]related|merger[- ]related|transaction costs|corporate matters|opioid/i;
 /** 이름·라벨이 걸려도 제외 — 영업외·세금·주당이익·누계 */
 const EXCLUDE = /Tax|PerShare|Nonoperating|Interest|ExtinguishmentOfDebt|Accumulated|Pension|Postretirement/;
+/** 일반 비용·합계 줄 — 라벨에 일회성 단어가 있어도 줄 자체는 아니다(KHC "판관비, 손상차손 제외"). 하위 줄은 계속 본다. */
+const GENERAL_COST = /SellingGeneralAndAdministrative|^CostOf|^OperatingExpenses$|CostsAndExpenses|^GeneralAndAdministrativeExpense$|^ResearchAndDevelopmentExpense/;
+/** 라벨의 부정 문맥("excluding impairment losses") 이후는 판정에서 뺀다 */
+const NEGATED = /\b(excluding|excl\.?|exclusive of|other than|before)\b.*$/i;
+/** 매각손익 라벨 — 개념명이 손상차손이어도 회사가 매각손익 줄로 쓴 경우(DVN형) */
+const SALE_GAIN = /\(gain\)|\bgains?\b[^|]*\b(sale|disposal|divest)/i;
 const PRETAX = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
@@ -61,7 +67,9 @@ function labels(lab: string): Map<string, string[]> {
   const text = new Map<string, string>();
   for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
     const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
-    if (id) text.set(id, (text.get(id) ?? "") + " | " + m[2]);
+    // 정의문(documentation)은 표시 라벨이 아니다 — CI 투자손익 정의문의 "write-downs" 가 걸렸다
+    if (!id || /xlink:role="[^"]*documentation"/i.test(m[1])) continue;
+    text.set(id, (text.get(id) ?? "") + " | " + m[2].replace(NEGATED, ""));
   }
   const out = new Map<string, string[]>();
   for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
@@ -102,8 +110,10 @@ function oneOffLines(cal: string, lab: Map<string, string[]>): Line[] | null {
         seen.add(a.to);
         const c = split(a.to);
         if (EXCLUDE.test(c.concept) || /^Revenue/.test(c.concept)) continue;
-        const text = [c.concept, ...(lab.get(a.to) ?? [])].join(" ");
-        if (ONE_OFF_TEXT.test(text)) out.push({ ...c, w: w * a.w });
+        // 회사 라벨이 있으면 라벨로만 판정하고, 라벨이 없을 때만 개념명을 본다(회사가 표준 개념을 다른 뜻으로 쓴 경우)
+        const labs = lab.get(a.to);
+        const text = labs?.length ? labs.join(" ") : c.concept;
+        if (!GENERAL_COST.test(c.concept) && !SALE_GAIN.test(text) && ONE_OFF_TEXT.test(text)) out.push({ ...c, w: w * a.w });
         else walk(a.to, w * a.w, depth + 1);
       }
     };

@@ -29,6 +29,7 @@ import { withContentAmortization } from "./edgar-content";
 import { withRevenueDims } from "./edgar-revenue-dims";
 import { withIncomeStatementStructure } from "./edgar-is-structure";
 import { withOneOffCharges } from "./edgar-oneoff";
+import { withBalanceSheetDebt } from "./edgar-bs-structure";
 import { loadUsCurrentShares, type CurrentShares } from "./current-shares";
 import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
 import { FIN_NET_REVENUE, isFinancialCompany, withFinNetRevenue } from "./edgar-financial";
@@ -185,7 +186,9 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const sicN = sub?.sic ? Number(sub.sic) : null;
       // 손익계산서 별도 줄로 공시된 일회성비용(주석 행, edgar-oneoff.ts)
       const withOneOff = await withOneOffCharges(cik, withIs, recent).catch(() => withIs);
-      const data = withOpIncome(dropRoundedRetags({ ...withOneOff, financialSector: sicN != null && sicN >= 6000 && sicN <= 6499 }));
+      // 총차입금 = 대차대조표 본표 차입금 줄(edgar-bs-structure.ts)
+      const withDebt = await withBalanceSheetDebt(cik, withOneOff, recent).catch(() => withOneOff);
+      const data = withOpIncome(dropRoundedRetags({ ...withDebt, financialSector: sicN != null && sicN >= 6000 && sicN <= 6499 }));
       factsCache.set(cik, { at: Date.now(), data });
       return data;
     })
