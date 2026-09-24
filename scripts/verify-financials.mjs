@@ -1012,6 +1012,7 @@ async function verifyUs(sym) {
         put("LTM 순이익", L.ni, "인포맥스", sum("ni"), 4e6);
         put("LTM EBITDA", L.ebitda, "인포맥스", sum("ebitda"), 4e6);
         put("LTM 영업이익", IS.LTM?.op, "인포맥스", sum("op"), 4e6);
+        put("LTM 감가상각비", IS.LTM?.da, "인포맥스", sum("da"), 4e6);
       }
     }
     try {
@@ -1022,18 +1023,42 @@ async function verifyUs(sym) {
       errs.push(`인포맥스 주식수: ${String(e).slice(0, 60)}`);
     }
 
+    // 외부 불일치의 원인을 숫자로 확인한다(추정으로 통과시키지 않는다 — 식이 성립할 때만 "원인 확인").
+    const opPassed = (col) => checks.some((k) => k.col === col && k.status === PASS && /^영업이익 앱 = SEC (영업이익|세전이익 − 지분법)/.test(k.name));
+    const causeOf = (r, n) => {
+      const col = r.item.split(" ")[0];
+      const metric = r.item.slice(col.length + 1);
+      const v = r.srcs[n].v, unit = r.srcs[n].unit;
+      const within = (d) => Math.abs(d) <= Math.max(unit, 1e6);
+      // ① 외부가 일회성 항목을 뺀 조정값 — 차이가 앱 일회성비용 행과 같다
+      const oneOff = /^(영업이익|EBITDA)$/.test(metric) ? IS[col]?.oneOff : null;
+      if (oneOff != null && oneOff !== 0 && within(v - r.ours - oneOff)) return { ok: "일회성 항목 조정 — 차이 = 앱 일회성비용" };
+      // ② 외화 공시의 Yahoo 는 원통화 — 같은 해 두 지표에서 "앱 ÷ Yahoo" 비율(=환율)이 같다
+      if (foreign && n === "Yahoo") {
+        const other = ["매출", "순이익", "영업이익"].filter((m) => m !== metric).map((m) => recon.get(`${col} ${m}`)).find((x) => x?.srcs.Yahoo?.v);
+        if (other) {
+          const k1 = r.ours / v, k2 = other.ours / other.srcs.Yahoo.v;
+          if (Math.abs(k1 / k2 - 1) < 1e-6 && Math.abs(k1 - 1) > 1e-3) return { ok: `Yahoo 원통화 표시 — 앱÷Yahoo 비율 ${k1.toPrecision(6)} 이 ${other.item} 과 같음(환율)` };
+        }
+      }
+      // ③ 영업이익: 앱 = SEC 공시 영업이익(A층 정확 일치) → 외부는 조정·재분류 값
+      if (metric === "영업이익" && opPassed(col)) return { ok: "앱 = SEC 공시 영업이익(A층 일치) — 외부는 조정·재분류 영업이익" };
+      // ④ EBITDA: 같은 소스의 영업이익 차이 + 감가상각비 차이로 정확히 분해되면 구성요소 항목으로 넘긴다
+      if (metric === "EBITDA") {
+        const o = recon.get(`${col} 영업이익`), d = recon.get(`${col} 감가상각비`);
+        const dOp = o?.srcs[n] ? o.srcs[n].v - o.ours : null, dDa = d?.srcs[n] ? d.srcs[n].v - d.ours : null;
+        if (dOp != null && dDa != null && within(v - r.ours - dOp - dDa))
+          return { ok: `구성요소로 분해 — 영업이익 차 ${dOp}, 감가상각비 차 ${dDa} (각 항목 참조)` };
+      }
+      if (oneOff != null && oneOff !== 0 && Math.abs(v - r.ours - oneOff) <= Math.abs(v) * 1e-3) return { guess: `일회성 항목 조정 — 잔차 ${v - r.ours - oneOff}` };
+      return {};
+    };
     for (const r of recon.values()) {
       const names = Object.keys(r.srcs);
       const matched = names.filter((n) => sameAt(r.ours, r.srcs[n].v, r.srcs[n].unit));
-      // 원인 확인(추정 아님): 영업이익·EBITDA 차이가 앱 일회성비용 행과 백만 단위까지 같으면 "외부가 일회성 항목을
-      // 뺀 조정 영업이익" 으로 확정한다(앱은 GAAP 공시값 — A층에서 SEC 와 일치 확인)
-      const col = r.item.split(" ")[0];
-      const oneOff = /영업이익$|EBITDA$/.test(r.item) ? IS[col]?.oneOff : null;
-      const gapOf = (n) => (oneOff != null && oneOff !== 0 ? r.srcs[n].v - r.ours - oneOff : null);
-      const explained = names.filter((n) => !matched.includes(n) && gapOf(n) != null && Math.abs(gapOf(n)) <= 1e6);
-      // 백만 단위로는 안 맞지만 0.1% 안 — 소스 자체 반올림·구성 차이일 수 있어 "추정"으로만 표시(통과 아님)
-      const nearly = names.filter((n) => !matched.includes(n) && !explained.includes(n) && gapOf(n) != null && Math.abs(gapOf(n)) <= Math.abs(r.srcs[n].v) * 1e-3);
-      const why = (n) => (explained.includes(n) ? " [원인 확인: 일회성 항목 조정 — 차이 = 앱 일회성비용]" : nearly.includes(n) ? ` [원인 추정: 일회성 항목 조정 — 잔차 ${gapOf(n)}]` : "");
+      const causes = Object.fromEntries(names.filter((n) => !matched.includes(n)).map((n) => [n, causeOf(r, n)]));
+      const explained = names.filter((n) => causes[n]?.ok);
+      const why = (n) => (causes[n]?.ok ? ` [원인 확인: ${causes[n].ok}]` : causes[n]?.guess ? ` [원인 추정: ${causes[n].guess}]` : "");
       const off = names.filter((n) => !matched.includes(n)).map((n) => `${n} ${r.srcs[n].v} (${(((r.ours - r.srcs[n].v) / Math.abs(r.srcs[n].v)) * 100).toFixed(2)}%)${why(n)}`);
       review.push({
         item: r.item,
@@ -1041,9 +1066,11 @@ async function verifyUs(sym) {
         sources: Object.fromEntries(names.map((n) => [n, r.srcs[n].v])),
         matched,
         explained,
+        causes: Object.fromEntries(Object.entries(causes).map(([n, c]) => [n, c.ok ?? (c.guess ? `추정: ${c.guess}` : null)])),
         verdict: off.length ? `${matched.length}/${names.length}곳 일치 — 불일치: ${off.join(", ")}` : `${names.length}곳 모두 일치`,
       });
     }
+
     for (const e of errs) review.push({ item: "외부 소스 조회 실패", note: e });
   }
   return { sym, checks, review, hardErrors };

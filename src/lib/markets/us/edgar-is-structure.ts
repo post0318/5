@@ -52,10 +52,61 @@ const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 
 interface Arc { concept: string; ns: string; w: number }
 /** 세전이익 구조 — 직접 하위 줄(합 검증용)과 하위 트리 전체에서 찾은 영업외 항목(가중치 곱) */
-interface Structure { pretax: string; arcs: Arc[]; nonop: Arc[] }
+interface Structure { pretax: string; arcs: Arc[]; nonop: Arc[]; instUrl?: string; ext?: Map<string, number> | null }
+
+/**
+ * 회사 고유 태그 중 영업외로 인정하는 줄 — 라벨이 정확히 "기타수익·비용" 형태일 때만(표준 OtherNonoperatingIncomeExpense
+ * 에 해당). IBM 은 "Other (income) and expense"(ibm_OtherExpenseAndIncome — 연금 비영업 비용·환손익·매각손익)를 고유
+ * 태그로 달아 영업 항목으로 남았고, 2022 연금 정산 손실(약 58억)이 영업이익을 깎았다(검증 2026-09-24,
+ * StockAnalysis·인포맥스는 영업외). 부분일치는 감사에서 지적된 오탐을 부르므로 라벨 전체 형태로만 판정.
+ */
+const EXT_NONOP_LABEL = /^\s*other\s*\(?\s*(income|expense)s?\s*\)?\s*(and|&|,)?\s*\(?\s*(income|expense)s?\s*\)?\s*(,\s*net)?\s*$/i;
+
+/** 표시 라벨(정의문 제외) — 개념 id → 라벨들 */
+function labelsOf(lab: string): Map<string, string[]> {
+  const loc = new Map<string, string>();
+  for (const l of lab.matchAll(/<link:loc\b([^>]*)\/?>/g)) {
+    const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1];
+    const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
+    if (id && href) loc.set(id, href);
+  }
+  const text = new Map<string, string[]>();
+  for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+    const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
+    if (!id || /xlink:role="[^"]*documentation"/i.test(m[1])) continue;
+    text.set(id, [...(text.get(id) ?? []), m[2].trim()]);
+  }
+  const out = new Map<string, string[]>();
+  for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+    const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
+    const t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
+    if (from && t) out.set(from, [...(out.get(from) ?? []), ...t]);
+  }
+  return out;
+}
+
+/** 인스턴스의 차원 없는 기간 값: "ns_Concept|start|end" → 값 */
+function durationValues(xml: string, ids: Set<string>): Map<string, number> {
+  const ctx = new Map<string, string>();
+  for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
+    if (/dimension="/.test(m[2])) continue;
+    const s = /<(?:xbrli:)?startDate>\s*([^<\s]+)/.exec(m[2])?.[1];
+    const e = /<(?:xbrli:)?endDate>\s*([^<\s]+)/.exec(m[2])?.[1];
+    if (s && e) ctx.set(m[1], `${s}|${e}`);
+  }
+  const out = new Map<string, number>();
+  for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/\1:\2>/g)) {
+    const id = `${m[1]}_${m[2]}`;
+    if (!ids.has(id)) continue;
+    const k = ctx.get(/contextRef="([^"]+)"/.exec(m[3])?.[1] ?? "");
+    if (!k || !/unitRef="[^"]*usd/i.test(m[3])) continue;
+    if (!out.has(`${id}|${k}`)) out.set(`${id}|${k}`, Number(m[4]));
+  }
+  return out;
+}
 
 /** calculation linkbase 에서 손익계산서 역할의 "세전이익 ← 하위 줄" 목록. OperatingIncomeLoss 가 트리에 있으면 null. */
-function pretaxChildren(cal: string): Structure | null {
+function pretaxChildren(cal: string, labels: Map<string, string[]> = new Map()): Structure | null {
   for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
     if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Comprehensive|Segment/i.test(role)) continue;
@@ -84,7 +135,10 @@ function pretaxChildren(cal: string): Structure | null {
         if (depth > 6) return;
         for (const a of arcs.filter((x) => x.from === id)) {
           const c = split(a.to);
-          if (c.ns === "us-gaap" && NONOP.has(c.concept)) nonop.push({ ...c, w: w * a.w });
+          // 말단 줄만 — 합계 줄에도 비슷한 라벨이 붙는다(IBM ibm_ExpenseAndIncomeOther "Other expense and (income)" = 비용 합계)
+          const leaf = !arcs.some((x) => x.from === a.to);
+          const extNonop = c.ns !== "us-gaap" && leaf && (labels.get(a.to) ?? []).some((l) => EXT_NONOP_LABEL.test(l));
+          if ((c.ns === "us-gaap" && NONOP.has(c.concept)) || extNonop) nonop.push({ ...c, w: w * a.w });
           else if (!NO_DESCEND.test(c.concept)) walk(a.to, w * a.w, depth + 1);
         }
       };
@@ -117,11 +171,22 @@ async function financialSegmentOnly(cik: string, facts: CompanyFacts, recent: Re
   return { ...facts, segmentOpIncomeOnly: true, facts: { ...facts.facts, "us-gaap": next } } as CompanyFacts;
 }
 
-async function calOf(cik: number, f: Filing): Promise<string | null> {
+async function filesOf(cik: number, f: Filing): Promise<{ cal: string; lab: string; instUrl: string | null } | null> {
   const base = `https://www.sec.gov/Archives/edgar/data/${cik}/${f.accn.replace(/-/g, "")}`;
   const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, { headers: H, revalidate: 60 * 60 * 24 });
-  const name = idx.directory.item.map((i) => i.name).find((n) => /_cal\.xml$/i.test(n));
-  return name ? fetchText(`${base}/${name}`, { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 }) : null;
+  const names = idx.directory.item.map((i) => i.name);
+  // 계산 구조·라벨을 스키마(.xsd) 안에 넣어 제출하는 회사(MSFT·ORCL 2026~)는 .xsd 에서 읽는다
+  const xsd = names.find((n) => /\.xsd$/i.test(n));
+  const calName = names.find((n) => /_cal\.xml$/i.test(n)) ?? xsd;
+  const labName = names.find((n) => /_lab\.xml$/i.test(n)) ?? xsd;
+  const inst = names.find((n) => /_htm\.xml$/i.test(n));
+  if (!calName) return null;
+  const opt = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 };
+  const [cal, lab] = await Promise.all([fetchText(`${base}/${calName}`, opt), labName ? fetchText(`${base}/${labName}`, opt) : Promise.resolve("")]);
+  return { cal, lab, instUrl: inst ? `${base}/${inst}` : null };
+}
+async function calOf(cik: number, f: Filing): Promise<string | null> {
+  return (await filesOf(cik, f))?.cal ?? null;
 }
 
 /** 이 회사에 적용할지 — 영업이익 태그가 없거나, 있어도 "매출 − 총비용"과 크게 어긋나면(DIS 형 의심) */
@@ -157,10 +222,10 @@ export async function withIncomeStatementStructure(cik: string, facts: CompanyFa
   }
   const structures: Structure[] = [];
   for (const f of filings) {
-    const cal = await calOf(Number(cik), f).catch(() => null);
-    if (!cal) continue;
-    const s = pretaxChildren(cal);
-    if (s) structures.push(s);
+    const fl = await filesOf(Number(cik), f).catch(() => null);
+    if (!fl) continue;
+    const s = pretaxChildren(fl.cal, labelsOf(fl.lab));
+    if (s) structures.push({ ...s, instUrl: fl.instUrl ?? undefined });
     else if (f === filings[0]) return facts; // 최신 공시에 영업이익 소계가 있음 — 해당 없음
   }
   if (!structures.length) return facts;
@@ -185,19 +250,27 @@ export async function withIncomeStatementStructure(cik: string, facts: CompanyFa
   const done = new Set<string>();
   // 기간마다 최신 구조부터 대입 — 하위 줄 합이 세전이익과 0.5% 안에서 맞는 첫 구조를 쓴다
   for (const s of structures) {
+    // 회사 고유 줄이 있으면 그 공시 원본에서 값을 읽는다(원본이 없으면 이 구조는 건너뜀)
+    const extIds = new Set([...s.arcs, ...s.nonop].filter((a) => a.ns !== "us-gaap").map((a) => `${a.ns}_${a.concept}`));
+    if (extIds.size && s.instUrl) {
+      const xml = await fetchText(s.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 }).catch(() => null);
+      s.ext = xml ? durationValues(xml, extIds) : null;
+    }
+    const extAt = (a: Arc, k: string) => s.ext?.get(`${a.ns}_${a.concept}|${k}`);
     for (const p of g[s.pretax]?.units?.USD ?? []) {
       if (!p.start || done.has(key(p) + "|" + p.form + "|" + p.fp)) continue;
       const k = key(p);
       let sum = 0, nonop = 0, ok = true;
       for (const a of s.arcs) {
-        if (a.ns !== "us-gaap") { ok = false; break; } // 회사 확장 태그 값은 companyfacts 에 없음
-        const v = valAt(a.concept, k);
+        const v = a.ns === "us-gaap" ? valAt(a.concept, k) : extAt(a, k);
+        if (a.ns !== "us-gaap" && v === undefined) { ok = false; break; } // 이 공시 원본에 없는 기간
         if (v === undefined) continue; // 그 기간엔 없는 줄(0)
         sum += a.w * v;
       }
       for (const a of s.nonop) {
-        if (a.ns !== "us-gaap") { ok = false; break; }
-        nonop += a.w * (valAt(a.concept, k) ?? 0);
+        const v = a.ns === "us-gaap" ? valAt(a.concept, k) : extAt(a, k);
+        if (a.ns !== "us-gaap" && v === undefined) { ok = false; break; }
+        nonop += a.w * (v ?? 0);
       }
       if (!ok || Math.abs(sum - p.val) > 0.005 * Math.max(Math.abs(p.val), 1)) continue;
       done.add(k + "|" + p.form + "|" + p.fp);

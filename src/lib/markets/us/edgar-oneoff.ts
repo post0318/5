@@ -52,8 +52,10 @@ async function files(cik: number, f: Filing): Promise<{ cal: string; lab: string
   const base = `https://www.sec.gov/Archives/edgar/data/${cik}/${f.accn.replace(/-/g, "")}`;
   const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, { headers: H, revalidate: 60 * 60 * 24 });
   const names = idx.directory.item.map((i) => i.name);
-  const cal = names.find((n) => /_cal\.xml$/i.test(n));
-  const lab = names.find((n) => /_lab\.xml$/i.test(n));
+  // 계산 구조·라벨을 스키마(.xsd) 안에 넣어 제출하는 회사(IBM·MSFT·ORCL 2026~)는 .xsd 에서 읽는다
+  const xsd = names.find((n) => /\.xsd$/i.test(n));
+  const cal = names.find((n) => /_cal\.xml$/i.test(n)) ?? xsd;
+  const lab = names.find((n) => /_lab\.xml$/i.test(n)) ?? xsd;
   if (!cal || !lab) return null;
   const opt = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 };
   return { cal: await fetchText(`${base}/${cal}`, opt), lab: await fetchText(`${base}/${lab}`, opt) };
