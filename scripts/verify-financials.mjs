@@ -682,6 +682,8 @@ async function verifyUs(sym) {
   for (const [prefix, key] of [["영업이익", "op"], ["세전이익", "pretax"]])
     for (const [k, v] of Object.entries(rowStarts(is, prefix))) (IS[lab(k)] ??= {})[key] = v;
   for (const [k, v] of Object.entries(rowOf(is, "감가상각비"))) (IS[lab(k)] ??= {}).da = v;
+  // 앱 일회성비용 주석 행(edgar-oneoff.ts) — 외부 영업이익 차이의 원인 확인용
+  for (const [k, v] of Object.entries(rowStarts(is, "일회성비용"))) (IS[lab(k)] ??= {}).oneOff = v;
   // 앱 영업이익 행 이름 — "영업이익" 그대로면 공시 태그, 뒤에 설명이 붙으면 합성(소계 없는 손익계산서 등)
   const opRowName = is?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.startsWith("영업이익"))?.accountName ?? null;
   for (const [name, key] of [["총차입금", "debt"], ["순차입금", "nd"], ["자산 총계", "assets"], ["부채와 자본 총계", "le"]])
@@ -1023,12 +1025,22 @@ async function verifyUs(sym) {
     for (const r of recon.values()) {
       const names = Object.keys(r.srcs);
       const matched = names.filter((n) => sameAt(r.ours, r.srcs[n].v, r.srcs[n].unit));
-      const off = names.filter((n) => !matched.includes(n)).map((n) => `${n} ${r.srcs[n].v} (${(((r.ours - r.srcs[n].v) / Math.abs(r.srcs[n].v)) * 100).toFixed(2)}%)`);
+      // 원인 확인(추정 아님): 영업이익·EBITDA 차이가 앱 일회성비용 행과 백만 단위까지 같으면 "외부가 일회성 항목을
+      // 뺀 조정 영업이익" 으로 확정한다(앱은 GAAP 공시값 — A층에서 SEC 와 일치 확인)
+      const col = r.item.split(" ")[0];
+      const oneOff = /영업이익$|EBITDA$/.test(r.item) ? IS[col]?.oneOff : null;
+      const gapOf = (n) => (oneOff != null && oneOff !== 0 ? r.srcs[n].v - r.ours - oneOff : null);
+      const explained = names.filter((n) => !matched.includes(n) && gapOf(n) != null && Math.abs(gapOf(n)) <= 1e6);
+      // 백만 단위로는 안 맞지만 0.1% 안 — 소스 자체 반올림·구성 차이일 수 있어 "추정"으로만 표시(통과 아님)
+      const nearly = names.filter((n) => !matched.includes(n) && !explained.includes(n) && gapOf(n) != null && Math.abs(gapOf(n)) <= Math.abs(r.srcs[n].v) * 1e-3);
+      const why = (n) => (explained.includes(n) ? " [원인 확인: 일회성 항목 조정 — 차이 = 앱 일회성비용]" : nearly.includes(n) ? ` [원인 추정: 일회성 항목 조정 — 잔차 ${gapOf(n)}]` : "");
+      const off = names.filter((n) => !matched.includes(n)).map((n) => `${n} ${r.srcs[n].v} (${(((r.ours - r.srcs[n].v) / Math.abs(r.srcs[n].v)) * 100).toFixed(2)}%)${why(n)}`);
       review.push({
         item: r.item,
         ours: r.ours,
         sources: Object.fromEntries(names.map((n) => [n, r.srcs[n].v])),
         matched,
+        explained,
         verdict: off.length ? `${matched.length}/${names.length}곳 일치 — 불일치: ${off.join(", ")}` : `${names.length}곳 모두 일치`,
       });
     }
