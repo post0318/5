@@ -50,7 +50,7 @@ function die(msg) {
   console.error(`오류: ${msg}`);
   process.exit(2);
 }
-const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external"]);
+const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing"]);
 for (const k of Object.keys(args)) if (!KNOWN.has(k)) die(`알 수 없는 옵션 --${k}`);
 if (args.symbols === true) die("--symbols 에 종목을 지정하세요 (예: --symbols=AAPL,WMT)");
 const MARKET = String(args.market ?? "us").toLowerCase();
@@ -85,6 +85,17 @@ async function getJson(path, timeoutMs = 240_000, headers = {}) {
 
 async function symbolList() {
   if (args.symbols) return String(args.symbols).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+  // 유니버스 중 아직 검증 결과가 없는 종목만(새로 담긴 종목) — 관리자 화면 "미검증"과 같은 목록
+  if (args.missing) {
+    const r = await fetch(`${BASE}/api/cron/verify-results?market=${MARKET}`, { headers: AUTH });
+    if (!r.ok) throw new Error(`미검증 목록 조회 실패 HTTP ${r.status} ${(await r.text()).slice(0, 80)}`);
+    const items = (await r.json()).items.map((i) => i.symbol);
+    if (!items.length) {
+      console.log("미검증 종목 없음");
+      process.exit(0);
+    }
+    return items;
+  }
   if (args.universe) {
     const r = await fetch(`${BASE}/api/cron/universe-symbols?market=${MARKET}`, { headers: AUTH });
     if (!r.ok) throw new Error(`유니버스 목록 조회 실패 HTTP ${r.status} ${(await r.text()).slice(0, 80)}`);
@@ -346,6 +357,38 @@ async function infomaxAnnual(sym) {
   const M = (v) => (v != null ? v * 1e6 : null);
   return (k?.y_report ?? []).map((r) => ({ end: String(r["결산년월"]).slice(0, 10), rev: M(r["매출"]), ni: M(r["당기순익"]), ebitda: M(r["ebitda"]) }));
 }
+/**
+ * StockAnalysis.com 재무(검증 대조 전용 — 오너 결정 2026-09-24 "검증 스크립트에만", 앱·DB 에는 넣지 않는다).
+ * SvelteKit 데이터 엔드포인트(devalue 평탄화 배열). 브라우저 UA 가 없으면 Cloudflare 확인 페이지가 온다.
+ */
+const SA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
+function saUnflatten(arr) {
+  const memo = new Map();
+  const h = (i) => {
+    if (i === -1) return undefined;
+    if (memo.has(i)) return memo.get(i);
+    const v = arr[i];
+    if (v === null || typeof v !== "object") { memo.set(i, v); return v; }
+    if (Array.isArray(v)) { const o = []; memo.set(i, o); for (const x of v) o.push(h(x)); return o; }
+    const o = {}; memo.set(i, o);
+    for (const [k, x] of Object.entries(v)) o[k] = h(x);
+    return o;
+  };
+  return h(0);
+}
+async function saStatement(sym, path, quarterly = false) {
+  const url = `https://stockanalysis.com/stocks/${sym.toLowerCase()}/financials/${path}/__data.json?${quarterly ? "p=quarterly&" : ""}x-sveltekit-invalidated=001`;
+  const r = await fetch(url, { headers: { "user-agent": SA_UA, accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+  const t = await r.text();
+  if (!r.ok || t.startsWith("<")) throw new Error(`StockAnalysis ${path} HTTP ${r.status}${t.startsWith("<") ? " (확인 페이지)" : ""}`);
+  const node = JSON.parse(t).nodes.find((n) => n?.type === "data" && JSON.stringify(n.data).includes("financialData"));
+  const f = node ? saUnflatten(node.data).financialData : null;
+  if (!f?.datekey) throw new Error(`StockAnalysis ${path} 재무 데이터 없음`);
+  return f;
+}
+/** 값 비교 — 소스의 보고 단위 안에서 같은가(인포맥스는 백만 달러 단위, 나머지는 달러) */
+const sameAt = (a, b, unit) => a != null && b != null && Math.abs(a - b) <= Math.max(unit / 2, Math.abs(b) * 1e-12);
+
 /** 환율 일별 종가 "통화 1단위당 USD" — 검증기가 앱과 별개로 받는다(외화 공시 환산 대조용) */
 const fxCacheV = new Map();
 async function fxDaily(cur) {
@@ -630,6 +673,7 @@ async function verifyUs(sym) {
   const rowStarts = (stmt, prefix) => stmt?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.startsWith(prefix))?.values ?? {};
   for (const [prefix, key] of [["영업이익", "op"], ["세전이익", "pretax"]])
     for (const [k, v] of Object.entries(rowStarts(is, prefix))) (IS[lab(k)] ??= {})[key] = v;
+  for (const [k, v] of Object.entries(rowOf(is, "감가상각비"))) (IS[lab(k)] ??= {}).da = v;
   // 앱 영업이익 행 이름 — "영업이익" 그대로면 공시 태그, 뒤에 설명이 붙으면 합성(소계 없는 손익계산서 등)
   const opRowName = is?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.startsWith("영업이익"))?.accountName ?? null;
   for (const [name, key] of [["총차입금", "debt"], ["순차입금", "nd"], ["자산 총계", "assets"], ["부채와 자본 총계", "le"]])
@@ -866,49 +910,104 @@ async function verifyUs(sym) {
     }
   }
 
-  // ── F. 외부 대조 (검토 목록) — 기준일이 같을 때만 차이를 계산
+  // ── F. 외부 대조 — 지표×기간마다 Yahoo·StockAnalysis·인포맥스를 한 줄에 모은다(오너 지시 2026-09-24 —
+  // "단순히 한곳만 일치한다고 통과하면 안 된다"). 각 소스가 제 보고 단위 안에서 앱과 같은지 기록하고, 다른
+  // 소스는 차이를 남긴다. 외부 소스는 정의가 제각각이라 판정(실패)이 아니라 원인 규명 대상 목록이다.
+  // 기준일이 앱과 같은(±7일) 값만 넣는다.
   if (EXTERNAL && !bank && L) {
+    const recon = new Map();
+    const put = (item, ours, name, v, unit = 1) => {
+      if (ours == null || v == null || !Number.isFinite(v)) return;
+      const r = recon.get(item) ?? { item, ours, srcs: {} };
+      r.srcs[name] = { v, unit };
+      recon.set(item, r);
+    };
+    const errs = [];
+    const iso = (d) => new Date(d).toISOString().slice(0, 10);
+    const withLease = rowOf(bs, "총차입금 (운용리스 포함)")["현재/LTM"];
+
+    // Yahoo — 연간·분기(EBITDA 는 앱과 같은 정의: 공시 영업이익 + 감가상각비)
+    let yq = [], ya = [];
     try {
-      const q = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: new Date(Date.now() - 500 * 864e5), type: "quarterly", module: "all" });
-      const last4 = q.filter((r) => r.totalOperatingIncomeAsReported != null).slice(-4);
-      const endY = last4.at(-1) ? new Date(last4.at(-1).date).toISOString().slice(0, 10) : null;
-      if (last4.length === 4 && L.ebitda != null) {
-        if (!endY || dayDiff(endY, L.date) > 7) review.push({ item: "LTM EBITDA vs Yahoo", note: `기준일 다름(앱 ${L.date} / Yahoo ${endY}) — 비교 안 함` });
-        else if (last4.some((r) => r.reconciledDepreciation == null)) review.push({ item: "LTM EBITDA vs Yahoo", note: "Yahoo 감가상각비 일부 없음 — 비교 안 함" });
-        else {
-          const y = last4.reduce((s, r) => s + r.totalOperatingIncomeAsReported + r.reconciledDepreciation, 0);
-          review.push({ item: "LTM EBITDA vs Yahoo 분기합", ours: L.ebitda, other: y, gapPct: ((L.ebitda - y) / Math.abs(y)) * 100 });
-        }
-      }
-      const bsq = q.filter((r) => r.totalDebt != null).at(-1);
-      const withLease = rowOf(bs, "총차입금 (운용리스 포함)")["현재/LTM"];
-      if (bsq && withLease != null) {
-        const d = new Date(bsq.date).toISOString().slice(0, 10);
-        if (dayDiff(d, L.date) > 7) review.push({ item: "총차입금(리스 포함) vs Yahoo", note: `기준일 다름(앱 ${L.date} / Yahoo ${d}) — 비교 안 함` });
-        else review.push({ item: `총차입금(리스 포함) vs Yahoo @${d}`, ours: withLease, other: bsq.totalDebt, gapPct: ((withLease - bsq.totalDebt) / bsq.totalDebt) * 100 });
-      }
+      const y = await yahoo();
+      yq = await y.fundamentalsTimeSeries(sym, { period1: new Date(Date.now() - 500 * 864e5), type: "quarterly", module: "all" }, { validateResult: false });
+      ya = await y.fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "all" }, { validateResult: false });
     } catch (e) {
-      review.push({ item: "Yahoo 조회 실패", note: String(e).slice(0, 80) });
+      errs.push(`Yahoo: ${String(e).slice(0, 60)}`);
     }
-    // 인포맥스(FactSet) 연도별 대조 — 미국 전 종목(오너 지시: 인포맥스·Yahoo 와 같이 대조). 정의 차이
-    // (FactSet 조정·중단영업 등)가 있어 판정이 아니라 검토 목록
+    const yEbitda = (r) => (r.totalOperatingIncomeAsReported != null && r.reconciledDepreciation != null ? r.totalOperatingIncomeAsReported + r.reconciledDepreciation : null);
+    for (const [c, x] of Object.entries(H)) {
+      if (c === "LTM") continue;
+      const r = ya.find((r) => dayDiff(iso(r.date), x.date) <= 7);
+      if (!r) continue;
+      put(`${c} 매출`, x.rev, "Yahoo", r.totalRevenue);
+      put(`${c} 순이익`, x.ni, "Yahoo", r.netIncome ?? r.netIncomeCommonStockholders);
+      put(`${c} EBITDA`, x.ebitda, "Yahoo", yEbitda(r));
+      put(`${c} 영업이익`, IS[c]?.op, "Yahoo", r.totalOperatingIncomeAsReported);
+      put(`${c} 감가상각비`, IS[c]?.da, "Yahoo", r.reconciledDepreciation);
+    }
+    const last4 = yq.filter((r) => r.totalOperatingIncomeAsReported != null).slice(-4);
+    if (last4.length === 4 && dayDiff(iso(last4.at(-1).date), L.date) <= 7) {
+      if (last4.every((r) => yEbitda(r) != null)) put("LTM EBITDA", L.ebitda, "Yahoo", last4.reduce((s, r) => s + yEbitda(r), 0));
+      if (last4.every((r) => r.totalRevenue != null)) put("LTM 매출", L.rev, "Yahoo", last4.reduce((s, r) => s + r.totalRevenue, 0));
+    }
+    const bsq = yq.filter((r) => r.totalDebt != null).at(-1);
+    if (bsq && dayDiff(iso(bsq.date), L.date) <= 7) put("LTM 총차입금(운용리스 포함)", withLease, "Yahoo", bsq.totalDebt);
+
+    // StockAnalysis — TTM 은 최근 분기말이 앱 LTM 기준일과 같을 때만
+    if (!foreign) {
+      try {
+        const bq = await saStatement(sym, "balance-sheet", true);
+        const qEnd = bq.datekey.find((d) => d !== "TTM");
+        const ttmOk = qEnd && dayDiff(qEnd, L.date) <= 7;
+        if (ttmOk) put("LTM 총차입금(운용리스 포함)", withLease, "StockAnalysis", bq.debt?.[bq.datekey.indexOf(qEnd)]);
+        const inc = await saStatement(sym, "income-statement");
+        for (const [c, x] of Object.entries(H)) {
+          const k = c === "LTM" ? (ttmOk ? inc.datekey.indexOf("TTM") : -1) : inc.datekey.findIndex((d) => d !== "TTM" && dayDiff(d, x.date) <= 7);
+          if (k < 0) continue;
+          put(`${c} 매출`, x.rev, "StockAnalysis", inc.revenue?.[k]);
+          put(`${c} 순이익`, x.ni, "StockAnalysis", inc.netinc?.[k]);
+          put(`${c} EBITDA`, x.ebitda, "StockAnalysis", inc.ebitda?.[k]);
+          put(`${c} 영업이익`, IS[c]?.op, "StockAnalysis", inc.opinc?.[k]);
+          put(`${c} 감가상각비`, IS[c]?.da, "StockAnalysis", inc.depAmorEbitda?.[k]);
+        }
+      } catch (e) {
+        errs.push(String(e).slice(0, 80));
+      }
+    }
+
+    // 인포맥스(FactSet) — 연간(백만 달러 단위)
     if (!foreign && imAnnual) {
       for (const [c, x] of Object.entries(H)) {
         if (c === "LTM") continue;
         const im = imAnnual.find((r) => dayDiff(r.end, x.date) <= 7);
-        if (!im) { review.push({ item: `${c} 인포맥스 대조`, note: "인포맥스에 이 연도 없음" }); continue; }
-        for (const [k, lab] of [["rev", "매출"], ["ni", "순이익"], ["ebitda", "EBITDA"]])
-          if (im[k] != null && x[k] != null) review.push({ item: `${c} ${lab} vs 인포맥스`, ours: x[k], other: im[k], gapPct: ((x[k] - im[k]) / Math.abs(im[k])) * 100 });
+        if (!im) continue;
+        put(`${c} 매출`, x.rev, "인포맥스", im.rev, 1e6);
+        put(`${c} 순이익`, x.ni, "인포맥스", im.ni, 1e6);
+        put(`${c} EBITDA`, x.ebitda, "인포맥스", im.ebitda, 1e6);
       }
     }
     try {
       const im = await infomaxShares(sym);
       const px = ov?.quote?.last;
-      if (im && px && L.mc) review.push({ item: `주식수 앱(시총÷현재가) vs 인포맥스(${im.date})`, ours: L.mc / px, other: im.shares, gapPct: ((L.mc / px - im.shares) / im.shares) * 100 });
-      else review.push({ item: "주식수 vs 인포맥스", note: im ? "앱 시가총액·현재가 없음" : "인포맥스 종목 없음" });
+      if (im && px && L.mc) put("현재 주식수(시총÷현재가)", L.mc / px, "인포맥스", im.shares, 1e3);
     } catch (e) {
-      review.push({ item: "인포맥스 조회 실패", note: String(e).slice(0, 80) });
+      errs.push(`인포맥스 주식수: ${String(e).slice(0, 60)}`);
     }
+
+    for (const r of recon.values()) {
+      const names = Object.keys(r.srcs);
+      const matched = names.filter((n) => sameAt(r.ours, r.srcs[n].v, r.srcs[n].unit));
+      const off = names.filter((n) => !matched.includes(n)).map((n) => `${n} ${r.srcs[n].v} (${(((r.ours - r.srcs[n].v) / Math.abs(r.srcs[n].v)) * 100).toFixed(2)}%)`);
+      review.push({
+        item: r.item,
+        ours: r.ours,
+        sources: Object.fromEntries(names.map((n) => [n, r.srcs[n].v])),
+        matched,
+        verdict: off.length ? `${matched.length}/${names.length}곳 일치 — 불일치: ${off.join(", ")}` : `${names.length}곳 모두 일치`,
+      });
+    }
+    for (const e of errs) review.push({ item: "외부 소스 조회 실패", note: e });
   }
   return { sym, checks, review, hardErrors };
 }
@@ -1049,7 +1148,7 @@ async function worker() {
       const f = r.checks.filter((c) => c.status === FAIL).length;
       const n = r.checks.filter((c) => c.status === NA).length;
       const p = r.checks.filter((c) => c.status === PASS).length;
-      console.log(`${s.padEnd(7)} ${r.skipped ? `건너뜀: ${r.skipped}` : r.error ? `오류: ${r.error}` : `실패 ${f} · 검증불가 ${n} · 통과 ${p} · 외부검토 ${r.review.length}`}`);
+      console.log(`${s.padEnd(7)} ${r.skipped ? `건너뜀: ${r.skipped}` : r.error ? `오류: ${r.error}` : `실패 ${f} · 검증불가 ${n} · 통과 ${p} · 외부 전부일치 ${r.review.filter((x) => x.matched && !/불일치/.test(x.verdict)).length} · 외부 불일치 ${r.review.filter((x) => /불일치/.test(x.verdict ?? "")).length} · 기타검토 ${r.review.filter((x) => !x.matched).length}`}`);
     } catch (e) {
       results.push({ sym: s, error: String(e).slice(0, 160), checks: [], review: [] });
       console.log(`${s.padEnd(7)} 오류: ${String(e).slice(0, 120)}`);
@@ -1082,13 +1181,54 @@ if (fails.length) {
   for (const f of fails) console.log(`  ${f.sym} ${f.col} [${f.layer}] ${f.name}: ${f.note ?? ""}`);
 }
 const reviews = results.flatMap((r) => (r.review ?? []).map((x) => ({ sym: r.sym, ...x })));
-const shownReviews = reviews.filter((x) => x.gapPct == null || !Number.isFinite(x.gapPct) || Math.abs(x.gapPct) > 5);
+// 외부 대조는 허용치 없이 — 소스 하나라도 앱과 다르면 원인 규명 대상으로 전부 보인다
+const shownReviews = reviews.filter((x) => !x.verdict || /불일치/.test(x.verdict));
 if (shownReviews.length) {
-  console.log("\n── 외부 대조 검토 목록 (|차이| > 5% 또는 비교 불가) ──");
-  for (const x of shownReviews) console.log(`  ${x.sym} ${x.item}: ${x.gapPct != null && Number.isFinite(x.gapPct) ? x.gapPct.toFixed(2) + "%" : x.note ?? "차이 계산 불가"}`);
+  console.log("\n── 외부 대조 불일치·기타 검토 (원인 규명 대상) ──");
+  for (const x of shownReviews) console.log(`  ${x.sym} ${x.item}: ${x.verdict ?? x.note ?? ""}`);
 }
 const out = new URL(`verify-${stamp}.json`, dir);
 writeFileSync(out, JSON.stringify({ base: BASE, market: MARKET, at: new Date().toISOString(), symbols: syms, results }, null, 2));
 rmSync(partialFile, { force: true });
+
+// 관리자 화면(/admin/verify)용 저장 — 종목별 최신 결과로 교체. 통과 항목은 건수만.
+if (args.post) {
+  const docs = results.map((r) => {
+    const cs = r.checks ?? [];
+    const rv = r.review ?? [];
+    const pick = (st) => cs.filter((c) => c.status === st).map((c) => ({ layer: c.layer, name: c.name, col: c.col, note: c.note ?? "" }));
+    return {
+      market: MARKET,
+      symbol: r.sym,
+      runAt: new Date().toISOString(),
+      base: BASE,
+      commit: process.env.GITHUB_SHA ?? null,
+      counts: {
+        fail: cs.filter((c) => c.status === FAIL).length,
+        unverifiable: cs.filter((c) => c.status === NA).length,
+        pass: cs.filter((c) => c.status === PASS).length,
+        extAllMatch: rv.filter((x) => x.verdict && !/불일치/.test(x.verdict)).length,
+        extMismatch: rv.filter((x) => /불일치/.test(x.verdict ?? "")).length,
+        otherReview: rv.filter((x) => !x.verdict).length,
+      },
+      fails: pick(FAIL),
+      unverifiable: pick(NA),
+      external: rv,
+      errors: [r.error, r.skipped && !r.allowedSkip ? `건너뜀: ${r.skipped}` : null, ...(r.hardErrors ?? [])].filter(Boolean),
+    };
+  });
+  for (let i = 0; i < docs.length; i += 10) {
+    const res = await fetch(`${BASE}/api/cron/verify-results`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...AUTH },
+      body: JSON.stringify({ results: docs.slice(i, i + 10) }),
+    });
+    if (!res.ok) {
+      console.error(`결과 저장 실패 HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
+      process.exit(1);
+    }
+  }
+  console.log(`결과 저장 ${docs.length}종목 → ${BASE}/admin/verify`);
+}
 console.log(`\n실패 ${fails.length} · 오류 ${errors.length} · 부당 건너뜀 ${badSkips.length} · 통과 0건 종목 ${empty.length} · 누락 ${missing.length} · 결과 ${decodeURIComponent(out.pathname)}`);
 process.exit(fails.length || errors.length || badSkips.length || empty.length || missing.length ? 1 : 0);

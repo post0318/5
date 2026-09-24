@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { AdminAccounts } from "@/components/auth/admin-accounts";
 import { requireAdmin } from "@/lib/server/app-auth";
 
@@ -13,7 +14,10 @@ export default async function AdminPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">계정 승인 관리</h1>
+      <div className="flex items-baseline justify-between gap-2">
+        <h1 className="text-xl font-semibold">계정 승인 관리</h1>
+        <Link href="/admin/verify" className="text-muted-foreground hover:text-foreground text-sm">재무 검증 →</Link>
+      </div>
       {who.ok ? (
         <AdminAccounts />
       ) : (

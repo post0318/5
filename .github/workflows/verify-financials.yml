@@ -1,0 +1,48 @@
+name: 재무 숫자 검증 (관리자 화면용)
+
+# 배포된 앱이 사용자에게 보여주는 재무 숫자를 SEC 원자료·외부 소스(Yahoo·StockAnalysis·인포맥스)와 대조해
+# 결과를 /api/cron/verify-results 로 올린다 → 관리자 화면 /admin/verify (오너 결정 2026-09-24).
+#   - 하루 1회: 유니버스 전 종목(미국·한국)
+#   - 3시간마다: 유니버스에 새로 담겼는데 아직 결과가 없는 종목만(--missing)
+# 외부 대조(StockAnalysis 등)는 이 스크립트 안에만 있고 앱 배포본에는 없다.
+
+on:
+  schedule:
+    - cron: "40 22 * * *" # 22:40 UTC = 07:40 KST — 전 종목
+    - cron: "10 */3 * * *" # 3시간마다 — 미검증 종목만
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "all = 전 종목, missing = 미검증 종목만"
+        default: all
+
+concurrency:
+  group: verify-financials
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      BASE: https://macroresearch.vercel.app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 대상 결정
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then m="${{ inputs.mode }}";
+          elif [ "${{ github.event.schedule }}" = "40 22 * * *" ]; then m=all; else m=missing; fi
+          if [ "$m" = "missing" ]; then echo "flag=--missing" >> "$GITHUB_OUTPUT"; else echo "flag=--universe" >> "$GITHUB_OUTPUT"; fi
+      # 실패·불일치가 있어도 결과는 올리고 다음 시장으로 넘어간다(종료코드는 관리자 화면에서 확인)
+      - name: 미국
+        run: node scripts/verify-financials.mjs ${{ steps.mode.outputs.flag }} --market=us --base=$BASE --post || true
+      - name: 한국
+        run: node scripts/verify-financials.mjs ${{ steps.mode.outputs.flag }} --market=kr --base=$BASE --post || true
