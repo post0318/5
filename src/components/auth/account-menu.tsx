@@ -69,6 +69,11 @@ export function AccountMenu() {
             <Link href="/admin">승인 관리</Link>
           </DropdownMenuItem>
         )}
+        {auth.isAdmin && (
+          <DropdownMenuItem asChild>
+            <Link href="/admin/verify">재무 검증</Link>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={() => void auth.signOut()}>로그아웃</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
