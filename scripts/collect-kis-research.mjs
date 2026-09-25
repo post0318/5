@@ -35,6 +35,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { enrichResearch } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -92,31 +93,18 @@ function excerpt(text) {
   return text.length > EXCERPT_LEN ? `${text.slice(0, EXCERPT_LEN)}…` : text;
 }
 
-// "투자의견 매수"(라벨이 먼저)와 "매수 의견"(단어가 먼저) 둘 다 나온다.
-function extractOpinion(text) {
-  const m = text.match(
-    /투자의견\s*[:：]?\s*(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated|매수|매도|중립|비중확대|비중축소)|(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated|매수|매도|중립|비중확대|비중축소)\s*의견/,
-  );
-  return m ? (m[1] || m[2]) : "";
-}
-function extractTargetPrice(text) {
-  const m = text.match(/목표주가(?:를|는|가)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?\s*원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-async function fetchOpinionAndTarget(detailUrl) {
+// 상세 페이지 본문 텍스트 — 투자의견·목표주가는 공용 추출기가 이 텍스트에서 찾는다.
+async function fetchDetailText(detailUrl) {
   try {
     const res = await fetch(detailUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
-    const bodyText = [...html.matchAll(/<div class='v_info_(?:head|body)'>([\s\S]*?)<\/div>/g)]
+    return [...html.matchAll(/<div class='v_info_(?:head|body)'>([\s\S]*?)<\/div>/g)]
       .map((m) => stripHtml(m[1]))
       .join(" ");
-    return { opinion: extractOpinion(bodyText), targetPrice: extractTargetPrice(bodyText) };
   } catch (err) {
     console.warn(`  ⚠ 상세 본문 조회 실패 (${detailUrl}): ${err.message}`);
-    return { opinion: "", targetPrice: null };
+    return "";
   }
 }
 
@@ -213,11 +201,11 @@ console.log(`▶ 투자의견/목표주가 조회 중 (${collected.length}건)..
 for (const it of collected) {
   // 산업분석은 특정 종목 얘기가 아니므로 투자의견·목표주가 개념이 없음.
   if (it.category === "산업") continue;
-  const { opinion, targetPrice } = await fetchOpinionAndTarget(it.detailUrl);
-  it.opinion = opinion;
-  it.targetPrice = targetPrice;
+  it.bodyText = await fetchDetailText(it.detailUrl);
   await sleep(400);
 }
+// 한투 PDF 는 로그인이 필요해 pdfUrl 이 상세 페이지 URL 이다 — PDF 단계는 끈다.
+await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0] && `${collected[0].opinion || "(없음)"} / ${collected[0].targetPrice ?? "(없음)"}`);
 
 if (DRY_RUN) {

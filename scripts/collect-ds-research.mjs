@@ -22,6 +22,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -257,6 +258,31 @@ if (krItems.length + usItems.length === 0) {
 }
 console.log("  국내 예시:", krItems.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbol})`));
 console.log("  미국 예시:", usItems.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbol})`));
+
+// 투자의견·목표주가 — 종목 리포트만 첨부 PDF 를 읽어 공용 추출기에 넘긴다.
+// 그누보드 첨부(download.php)는 게시글을 먼저 열어 받은 세션 쿠키가 있어야
+// PDF 가 나온다(쿠키 없으면 "오류안내" HTML, 실측 2026-09-25) — 로그인은 불필요.
+// 목록 링크(pdfUrl)는 그대로 게시글 주소로 둔다.
+async function readDsAttachmentText(postUrl) {
+  try {
+    const view = await fetch(postUrl, { headers: { "User-Agent": UA } });
+    const cookie = (view.headers.getSetCookie?.() ?? []).map((c) => c.split(";")[0]).join("; ");
+    const html = await view.text();
+    const m = html.match(/href="([^"]*\/bbs\/download\.php\?[^"]+)"/);
+    if (!m) return "";
+    return await readPdfText(m[1].replace(/&amp;/g, "&"), { headers: { cookie, referer: postUrl } });
+  } catch {
+    return "";
+  }
+}
+const stockItems = [...krItems, ...usItems].filter((it) => it.category === "기업");
+console.log(`▶ 투자의견/목표주가 조회 중 (첨부 PDF) — ${stockItems.length}건...`);
+for (const it of stockItems) {
+  it.pdfText = await readDsAttachmentText(it.pdfUrl);
+  await sleep(400);
+}
+for (const it of krItems) it.market ??= "kr";
+await enrichResearch([...krItems, ...usItems], { usePdf: false });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

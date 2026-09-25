@@ -40,7 +40,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch } from "./lib/us-research-extract.mjs";
+import { enrichResearch } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
@@ -152,7 +152,7 @@ function parseItems(rows) {
         analyst: r.writer ?? "",
         source: r.auth ?? "",
         // 응답에 투자의견 필드가 있다(빈 값인 행도 많음) — 있으면 그대로 쓰고,
-        // 없으면 뒤의 enrichUsResearch 가 본문·PDF 에서 찾는다.
+        // 없으면 뒤의 enrichResearch 가 본문·PDF 에서 찾는다(칸 값은 본문 언급 확인 후 사용).
         opinion: String(r.rptopninvest ?? "").trim(),
         targetPrice: null,
         summary: excerpt(r.summary),
@@ -214,7 +214,7 @@ console.log(
 );
 // 산업분석/투자전략은 특정 종목 얘기가 아니므로 목표주가·투자의견 개념이
 // 없음 — PDF에 우연히 등장하는 숫자를 잘못 채우지 않게 기업(종목) 항목만 보강.
-await enrichUsResearch(collected.filter((it) => it.category === "기업"));
+await enrichResearch(collected.filter((it) => it.category === "기업"), { market: "us" });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

@@ -10,7 +10,7 @@
  *
  * 제목이 "종목명(TICKER USA):제목" 형식이고 홍콩(HKG) 등이 섞여 있어 USA 만
  * 고른다. 요약에 "매수 의견과 목표주가 92달러"처럼 등급/목표가가 문장으로
- * 들어있는 경우가 많아 공용 추출기(lib/us-research-extract.mjs)로 뽑는다.
+ * 들어있는 경우가 많아 공용 추출기(lib/research-extract.mjs)로 뽑는다.
  *
  * 산업분석/투자전략(2026-09 추가, 오너 지시 — "미국도 산업분석을 하려면
  * 역시 해외를 읽어라"): 목록 항목의 "head" 라벨이 "스티펠 산업분석"·
@@ -27,11 +27,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import {
-  enrichUsResearch,
-  extractOpinion,
-  extractTargetPrice,
-} from "./lib/us-research-extract.mjs";
+import { enrichResearch } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -83,19 +79,18 @@ function excerpt(text) {
   return text.length > EXCERPT_LEN ? `${text.slice(0, EXCERPT_LEN)}…` : text;
 }
 
-// "투자의견 매수"(라벨이 먼저)와 "매수 의견"(단어가 먼저) 둘 다 나온다.
-async function fetchOpinionAndTarget(detailUrl) {
+// 상세 페이지 본문 텍스트 — 투자의견·목표주가는 공용 추출기가 이 텍스트에서 찾는다.
+async function fetchDetailText(detailUrl) {
   try {
     const res = await fetch(detailUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
-    const bodyText = [...html.matchAll(/<div class='v_info_(?:head|body)'>([\s\S]*?)<\/div>/g)]
+    return [...html.matchAll(/<div class='v_info_(?:head|body)'>([\s\S]*?)<\/div>/g)]
       .map((m) => stripHtml(m[1]))
       .join(" ");
-    return { opinion: extractOpinion(bodyText), targetPrice: extractTargetPrice(bodyText) };
   } catch (err) {
     console.warn(`  ⚠ 상세 본문 조회 실패 (${detailUrl}): ${err.message}`);
-    return { opinion: "", targetPrice: null };
+    return "";
   }
 }
 
@@ -192,13 +187,11 @@ console.log(`▶ 투자의견/목표주가 조회 중 (${collected.length}건)..
 for (const it of collected) {
   // 산업분석은 특정 종목 얘기가 아니므로 투자의견·목표주가 개념이 없음.
   if (it.category === "산업") continue;
-  const { opinion, targetPrice } = await fetchOpinionAndTarget(it.detailUrl);
-  it.opinion = opinion;
-  it.targetPrice = targetPrice;
+  it.bodyText = await fetchDetailText(it.detailUrl);
   await sleep(400);
 }
 // 한투 PDF 는 로그인이 필요해 pdfUrl 이 상세 페이지 URL 이다 — PDF 단계는 끈다.
-await enrichUsResearch(collected.filter((it) => it.category !== "산업"), { sleepMs: 0, usePdf: false });
+await enrichResearch(collected, { market: "us", usePdf: false });
 console.log("  예시:", collected[0] && `${collected[0].opinion || "(없음)"} / ${collected[0].targetPrice ?? "(없음)"}`);
 
 if (DRY_RUN) {

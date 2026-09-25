@@ -26,7 +26,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -79,31 +79,8 @@ function excerpt(text) {
   return flat.length > EXCERPT_LEN ? `${flat.slice(0, EXCERPT_LEN)}…` : flat;
 }
 
-// 본문(f7) 뒷부분에 "매수 의견과 목표주가 65만원 유지" 처럼 만원 단위로
-// 섞여 나온다 — excerpt()로 자르기 전 원문 전체에서 뽑는다(300자 넘어가는
-// 경우가 많음).
-function extractTargetPrice(text) {
-  const m = String(text ?? "").match(/목표주가(?:를|는|가)?\s*([\d,]+)\s*(만)?원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-async function extractTargetPriceFromPdf(pdfUrl) {
-  if (!pdfUrl) return null;
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return extractTargetPrice(text);
-  } catch (err) {
-    console.warn(`  ⚠ PDF 목표주가 추출 실패 (${pdfUrl}): ${err.message}`);
-    return null;
-  }
-}
+// 본문(f7) 뒷부분에 "매수 의견과 목표주가 65만원 유지" 처럼 만원 단위로 섞여
+// 나온다 — excerpt()로 자르기 전 원문 전체(bodyText)를 공용 추출기에 넘긴다.
 
 // 일시적 네트워크 오류("fetch failed"/소켓 리셋 등, 2026-09 실측 —
 // bbs2.shinhansec.com이 이따금 연결을 끊어 스케줄 실행 전체가 그 날 통째로
@@ -155,20 +132,16 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       break;
     }
     const pdfUrl = it.f3 || null;
-    let targetPrice = extractTargetPrice(it.f7);
-    if (targetPrice == null && pdfUrl) {
-      targetPrice = await extractTargetPriceFromPdf(pdfUrl);
-      await sleep(400);
-    }
     items.push({
       id: String(it.fn),
       date,
       title: it.f1,
       stockName: it.f2,
       analyst: it.f4,
-      opinion: it.f6,
-      targetPrice,
+      opinion: it.f6, // 목록 칸 — 공용 추출기가 본문 언급 확인 후 사용
+      targetPrice: null,
       summary: excerpt(it.f7),
+      bodyText: String(it.f7 ?? ""),
       pdfUrl,
       views: Number(it.f5) || null,
     });
@@ -185,6 +158,8 @@ if (items.length === 0) {
 }
 
 console.log(`✔ 파싱 완료: ${items.length}건`);
+// 투자의견·목표주가 — 공용 추출기(본문 → PDF).
+await enrichResearch(items, { market: "kr" });
 console.log("  최근 3건:", items.slice(0, 3).map((i) => `${i.date} ${i.stockName} — ${i.title}`));
 
 if (DRY_RUN) {

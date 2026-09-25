@@ -213,7 +213,7 @@ npm run db:studio    # drizzle studio
       Knockout.js 바인딩에 찍힌 `boardName=foreignstock` 을 그대로 API
       슬러그로 써서 발견. 제목 "종목명(TICKER.US)" 에서 티커를 뽑고, 그 외
       시장(JP/SH/DE 등)은 건너뜀. 목표주가는 공용 추출기
-      (`us-research-extract.mjs`)의 컨센서스 패턴으로 PDF에서 보강. **로컬
+      (`research-extract.mjs`)의 컨센서스 패턴으로 PDF에서 보강. **로컬
       스크립트** (`scripts/collect-shinhan-overseas-research.mjs`, GitHub
       Actions `.github/workflows/shinhan-overseas-research.yml`, 하루
       1회)가 같은 라우트를 `source: "신한투자증권", market: "us"` 로 재사용.
@@ -245,7 +245,7 @@ npm run db:studio    # drizzle studio
       - **하나증권 해외(미국 종목) 추가**: 같은 사이트·같은 목록 구조인데
         게시판만 다르다(`pid=8&cid=3`, "글로벌 기업분석"). 제목이 "종목명
         (TICKER.거래소): 제목" 형식, .US 만 골라 미국 종목으로 저장. 목표
-        주가는 공용 추출기(`us-research-extract.mjs`)로 본문/PDF에서 추출
+        주가는 공용 추출기(`research-extract.mjs`)로 본문/PDF에서 추출
         (예: "TP(컨센서스) 308.9 USD"). **버그 수정(2026-09, 오너 지적 —
         "애플 하나증권에서 pdf에 pt가 있는데 보여주지 못하고 있다")**: 국내
         수집기에서 그대로 복사해온 원화(KRW) 기준 목표주가 추출 함수가
@@ -431,7 +431,7 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-nh-overseas-research.mjs`, GitHub Actions
       `.github/workflows/nh-overseas-research.yml`, 하루 1회)가 "03"과 "01"
       둘 다 스캔해 합친 뒤 같은 라우트를 `source: "NH투자증권", market: "us"`
-      로 재사용. 목표주가는 공용 추출기(`us-research-extract.mjs`)의
+      로 재사용. 목표주가는 공용 추출기(`research-extract.mjs`)의
       컨센서스 패턴으로 PDF에서 보강(90일 백필 46건 중 42건 확보). **미결**:
       투자의견(등급)은 현재 0건 추출 — NH 리포트 PDF의 등급 표기 위치/형식이
       다른 브로커와 달라 보이며, 우선순위 낮아 추후 재확인 필요.
@@ -877,7 +877,7 @@ npm run db:studio    # drizzle studio
       깨끗한 케이스). 제목이 "종목명(TICKER.US): 헤드라인" 형식(종목명과
       괄호 사이 공백 유무가 섞여 있어 정규식에 `\s*` 허용)이라 이름 검색
       불필요. **로그인 없이 PDF를 받을 수 있는 몇 안 되는 소스**라 공용
-      추출기(`us-research-extract.mjs`)의 PDF 보강 단계(`usePdf:true`)를
+      추출기(`research-extract.mjs`)의 PDF 보강 단계(`usePdf:true`)를
       켜서 목표주가를 채운다(실측 백필 4/4 성공) — 투자의견은 PDF 안에서
       그래픽 배지로 표시돼 텍스트로 못 뽑음(실측 확인, 버그 아님). 종목
       티커 패턴이 아닌 항목("[미국은 지금] ...", "09/21 큠틴 아메리카
@@ -911,7 +911,7 @@ npm run db:studio    # drizzle studio
         `TP`(글로벌 ETF — 넣었어도 ETF 필터에 걸림),
         `BC`(디지털자산리서치). (`EM`·`CH`는 이후 추가됨, `SD`는 추가 후
         중단 — 아래 "게시판 추가 2차" 항목 참고.) 국내(market:"kr") 항목은 공용 추출기
-        (`us-research-extract.mjs`)가 달러 표기 기준이라 PDF 보강을 하지
+        (`research-extract.mjs`)가 달러 표기 기준이라 PDF 보강을 하지
         않음(투자의견·목표주가 공란, 다른 국내 수집기들과 동일) — 미국
         항목만 PDF 보강 대상.
       **로컬 스크립트** (`scripts/collect-kiwoom-research.mjs`,
@@ -1039,7 +1039,7 @@ npm run db:studio    # drizzle studio
       나온 사례). `www.samsungpop.com/robots.txt` 는 `Allow: /`(제한 없음,
       가장 깨끗한 케이스). 제목이 "(작성자) 종목명 (TICKER US): 헤드라인"
       형식(다른 증권사의 "TICKER.US"와 달리 마침표 없이 공백으로 구분)이라
-      그 패턴에서 티커를 뽑고, 공용 추출기(`us-research-extract.mjs`)가
+      그 패턴에서 티커를 뽑고, 공용 추출기(`research-extract.mjs`)가
       로그인 없이 PDF 본문까지 확인해 목표주가를 채운다(실측 확인 —
       투자의견은 다른 소스처럼 PDF 안에서 텍스트로 안 잡히는 경우가 많음).
       티커 패턴이 아닌 항목(예: "글로벌 포트폴리오 전략(9월 4주 차)...",
@@ -1152,6 +1152,38 @@ npm run db:studio    # drizzle studio
     조회 시점의 `ESG_EXCLUDE_RE`(`shinhan-research.ts`)와 이중으로 걸러진다
     (수집 단계에서 막아 DB에 아예 안 쌓이게, 조회 단계는 그 전에 이미
     쌓인 문서·아직 이 필터를 안 쓰는 나머지 수집기의 안전망).
+  - **투자의견·목표주가 공용 추출기 — 국내·해외 통합(오너 지시, 2026-09-25 —
+    "종목리포트는 국내냐 해외냐 구분없이 공용추출기가 맞다", "어디서 찾는다·순서는
+    어떻게 본다는 국내도 해외도 동일하다", "통화단위는 각 시장의 통화단위를 적용한다",
+    "중국 일본 유럽도 시장은 추가해놔라")**: `scripts/lib/research-extract.mjs` 하나
+    (`enrichResearch`·`extractOpinion`·`extractTargetPrice`·`readPdfText`). 예전엔 해외만
+    공용(`us-research-extract.mjs`, 삭제)이고 국내 14곳이 각자 정규식을 뒀다 — 위 항목들에
+    "국내는 PDF 보강 안 함"·"달러 기준이라 국내 제외"라고 적힌 곳은 이 통합 전 기록이다.
+    - 공통 규칙: 찾는 순서 목록·API 칸 → 본문 → PDF / **목록 칸 값은 본문·PDF 에
+      "목표주가"·"투자의견" 언급이 있을 때만 사용**(KB tp/recomm 문제의 규칙을 전 소스로 —
+      제목에서 읽은 의견 `opinionFrom:"title"` 은 제외) / 면책·등급기준·목표주가 변동추이
+      구간 잘라냄 / 라벨 바로 뒤 값만 / 자체 목표가 → 컨센서스 / 애매하면 빈칸 / 의견 어휘
+      공통, "X 의견"·PDF 앞부분 줄 맨 앞 등급("Buy(유지)") 인정 / 산업분석 제외 / PDF 는
+      URL 당 1회(캐시), 수집기가 이미 읽은 텍스트는 `pdfText`·`bodyText` 로 넘기고 전송
+      전에 추출기가 지운다.
+    - 시장별(통화): kr 원(목표주가·목표가·적정주가·적정가격·TP, "N만원", "-원"=미제시,
+      100~1천만) / us 달러(자체 + 컨센서스 7종) / ch 홍콩달러·위안 / jp 엔 / eu 유로·파운드·
+      스위스프랑 등. 국내는 컨센서스 표기 없음(오너 확인). 규칙이 없는 시장은 추출 안 함.
+      ch·jp·eu 는 실측 표본이 적어 통화가 붙은 일반형 패턴뿐 — 놓치는 표기가 나오면 추가.
+    - 리서치 시장 구분에 유럽 `eu` 추가(`ResearchMarketId`, 수집기 쪽 유럽 종목 라우팅은
+      아직 없음 — 대부분 수집기가 유럽 티커를 건너뛴다).
+    - DS 는 이번에 처음 추출 대상이 됐다 — 그누보드 첨부는 게시글을 먼저 열어 받은 세션
+      쿠키가 있어야 PDF 가 나온다(로그인 불필요, 실측).
+    - 통합 전후 비교(20개 수집기, 최근 7일, 전송 내용을 로컬 수신기로 받아 문서 단위 대조)
+      중 발견·수정: ① 신한 PDF 는 "투자의견" 대신 "✓ 투자판단 매수 (유지)" 라벨이라 C2 가
+      목록 의견을 버렸다 → "투자판단"을 라벨·언급어에 추가, 신한 등급 설명("투자등급
+      (2017년 4월 1일부터 적용)")을 면책 구간으로. ② KB "화학 (151010)"·"건설 (201030)"
+      같은 업종 리포트가 괄호 속 업종코드 때문에 종목 리포트(기업)로 분류돼 업종 PDF 속
+      개별 종목 목표가가 붙었다 → 상장 종목코드(corpcodes.json)일 때만 기업으로.
+      ③ 메리츠(한경 경유) "Buy (Maintain)"은 라벨 단어가 없고 1페이지 중간이라 목록 의견이
+      버려졌다 → 괄호 등급변동 표시("(유지)·(Maintain)" 등)가 붙은 줄 맨 앞 등급은 위치
+      무관 인정, 문서에서 등급·목표가를 직접 찾았으면 그 자체를 "언급 있음"으로 본다.
+      목록·제목 값도 표기 통일(Not Rated → NR).
   - **주간물·일정표·추천종목·대체투자 공통 제외(오너 지시, 2026-09-25 — "공통으로
     캘린더나 주간, 추천종목은 수집 대상에서 제외, 대체투자에서 원자재는 수집으로
     적용")**: 수집기가 40개가 넘어 각자 고치지 않고, 전부 거치는 수신 라우트

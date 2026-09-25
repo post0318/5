@@ -26,7 +26,7 @@
  * 제목 형식 "종목명(TICKER.US)" 에서 티커를 뽑는다. PDF 표지에 "목표주가
  * (LSEG, 컨센서스) 248.8 달러"·"투자판단 ★★★★★" 처럼 실려 있다 — 후자는
  * 매수/매도 텍스트가 아니라 별점이라 등급 필드엔 못 쓰지만(실측 확인 — 전문에
- * 매수/매도 문구 자체가 없음), 전자는 공용 추출기(us-research-extract.mjs)의
+ * 매수/매도 문구 자체가 없음), 전자는 공용 추출기(research-extract.mjs)의
  * 컨센서스 목표가 패턴으로 그대로 잡힌다 — "해외는 자사 목표가가 아니어도
  * 컨센서스가 있으면 표시"라는 정책(오너 확인, 2026-09)이 공용 모듈에 있다.
  *
@@ -39,7 +39,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch } from "./lib/us-research-extract.mjs";
+import { enrichResearch } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -186,7 +186,7 @@ console.log(
 
 // 산업/전략 노트는 특정 종목 얘기가 아니라 목표주가·투자의견 개념이 없음 —
 // PDF에 우연히 등장하는 숫자를 잘못 채우지 않게 기업(종목) 항목만 보강한다.
-await enrichUsResearch(collected.filter((it) => it.category === "기업"));
+await enrichResearch(collected.filter((it) => it.category === "기업"), { market: "us" });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

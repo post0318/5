@@ -19,6 +19,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+      # 공용 추출기(scripts/lib/research-extract.mjs)가 pdf-parse 를 import 한다 —
+      # 설치 단계가 없으면 ERR_MODULE_NOT_FOUND 로 죽는다(2026-09-25 공용화로 추가).
+      - run: npm ci
       - run: node scripts/collect-kis-research.mjs
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}

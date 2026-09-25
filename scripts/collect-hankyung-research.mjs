@@ -49,7 +49,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 
 // IN/MA(산업/시장) 항목 중 대괄호 업종 태그가 없는 제목이 실은 특정 국내
 // 종목 얘기인 경우가 있다(실측, 오너 지적 2026-09 — 메리츠증권 "HD현대중공업
@@ -313,46 +313,14 @@ function excerptFromPdfText(text) {
   const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
-// 목록의 "적정가격" 컬럼이 0/공백인 경우(브로커가 그 값을 안 채웠거나, 목표가
-// 대신 "적정주가" 같은 자기들만의 표현을 써서 한경 쪽 정형 컬럼에 안 잡힌
-// 경우 — 메리츠증권 실측) PDF 본문에서 라벨을 폭넓게 잡아 폴백으로 뽑는다.
-function extractTargetPriceFallback(text) {
-  const m = text.match(
-    /(?:목표주가|목표가|적정주가|적정가격|TP)(?:를|는|가)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?\s*원/,
-  );
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-// 목록의 "적정가격"·"투자의견" 컬럼도 KB증권의 tp/recomm처럼 리포트 본문과
-// 무관하게 채워진 값일 위험이 있어(오너 지적, 2026-09 — 모든 소스에 공통
-// 적용하기로 함), 본문에 실제 언급이 있는 경우에만 쓰기로 한다.
-function mentionsTargetPrice(text) {
-  return /목표주가|목표가|적정주가|적정가격|\bTP\b/.test(text);
-}
-function mentionsOpinion(text) {
-  return /투자의견/.test(text);
-}
-
+// 목록의 "적정가격"·"투자의견" 칸은 공용 추출기(research-extract.mjs)가 본문 언급을
+// 확인한 뒤에만 쓰고(C2 — KB tp/recomm 과 같은 문제, 오너 결정 "모든 소스에 공통"),
+// 칸이 비면 PDF 본문에서 "목표주가/목표가/적정주가/적정가격/TP N원"을 찾는다
+// (메리츠 "적정주가" 실측).
 async function extractPdfExcerpt(pdfUrl) {
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return {
-      summary: excerptFromPdfText(text),
-      targetPriceFallback: extractTargetPriceFallback(text),
-      hasTargetMention: mentionsTargetPrice(text),
-      hasOpinionMention: mentionsOpinion(text),
-    };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", targetPriceFallback: null, hasTargetMention: false, hasOpinionMention: false };
-  }
+  const pdfText = await readPdfText(pdfUrl);
+  if (pdfUrl && !pdfText) console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl})`);
+  return { summary: pdfText ? excerptFromPdfText(pdfText) : "", pdfText };
 }
 
 console.log(`▶ 한경 컨센서스 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -391,14 +359,10 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, targetPriceFallback, hasTargetMention, hasOpinionMention } = await extractPdfExcerpt(it.pdfUrl);
+  const { summary, pdfText } = await extractPdfExcerpt(it.pdfUrl);
   it.summary = summary;
-  // 산업/시장 분류는 특정 종목 얘기가 아니라 목표주가·투자의견 개념 자체가
-  // 없음 — PDF에 우연히 등장하는 숫자를 목표주가로 잘못 채우지 않게 건너뜀.
+  it.pdfText = pdfText;
   if (it.category !== "산업") {
-    if (it.targetPrice == null) it.targetPrice = targetPriceFallback;
-    if (it.targetPrice != null && !hasTargetMention) it.targetPrice = null; // 표 값이 본문에 없으면 버림
-    if (it.opinion && !hasOpinionMention) it.opinion = "";
     it.market = "kr"; // "기업" 분류는 "종목명(코드)" 제목 패턴상 항상 국내 상장 종목
   } else {
     it.market = classifyIndustryMarket(`${it.stockName} ${it.title} ${it.summary}`);
@@ -407,6 +371,8 @@ for (const it of collected) {
   await sleep(400);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+// 투자의견·목표주가 — 공용 추출기(산업/시장 분류는 내부에서 건너뜀). PDF 는 위에서 읽었다.
+await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {

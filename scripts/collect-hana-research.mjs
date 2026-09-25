@@ -31,7 +31,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -86,33 +86,6 @@ function excerpt(text) {
   return flat.length > EXCERPT_LEN ? `${flat.slice(0, EXCERPT_LEN)}…` : flat;
 }
 
-// 실적 속보성 리포트는 목표주가 언급이 없는 경우가 많음 — 있으면만 뽑는다.
-// PDF 표지의 "목표주가(12M) 220,000원"처럼 라벨 뒤에 괄호 주석이 붙기도 함.
-function extractTargetPrice(text) {
-  const m = String(text ?? "").match(
-    /목표주가(?:를|는|가)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?원/,
-  );
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-async function extractTargetPriceFromPdf(pdfUrl) {
-  if (!pdfUrl) return null;
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return extractTargetPrice(text);
-  } catch (err) {
-    console.warn(`  ⚠ PDF 목표주가 추출 실패 (${pdfUrl}): ${err.message}`);
-    return null;
-  }
-}
-
 function stripHtml(s) {
   return s
     .replace(/<[^>]+>/g, "")
@@ -155,8 +128,10 @@ function parseItems(html) {
       stockName: tm ? tm[1].trim() : title,
       symbolHint: tm ? tm[2].slice(0, 6) : null,
       opinion: tm ? tm[3].trim() : "",
-      targetPrice: extractTargetPrice(rawBody),
+      opinionFrom: "title", // "종목명(코드.거래소/의견)" 제목 — 공용 추출기 C2 검증 제외
+      targetPrice: null,
       summary: excerpt(stripHtml(rawBody)),
+      bodyText: stripHtml(rawBody),
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
       category: "기업",
     });
@@ -238,13 +213,8 @@ console.log(
 );
 
 console.log(`▶ 목표주가 보강 중 (${collected.length}건)...`);
-for (const it of collected) {
-  // 산업분석은 특정 종목 얘기가 아니므로 목표주가 개념이 없음 — 건너뜀.
-  if (it.category !== "산업" && it.targetPrice == null) {
-    it.targetPrice = await extractTargetPriceFromPdf(it.pdfUrl);
-    await sleep(400);
-  }
-}
+// 공용 추출기(본문 → PDF, 산업분석은 내부에서 건너뜀).
+await enrichResearch(collected, { market: "kr" });
 console.log(
   "  예시:",
   collected.find((it) => it.targetPrice != null)?.targetPrice ?? "(없음)",

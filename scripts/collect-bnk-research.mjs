@@ -22,7 +22,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -61,7 +61,6 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const EXCERPT_LEN = 150;
 const stripHtml = (s) =>
   String(s ?? "")
     .replace(/<[^>]+>/g, " ")
@@ -74,13 +73,6 @@ const stripHtml = (s) =>
 /** 제목: "[종목명/투자의견] 나머지" — 의견이 없는 항목(예: "[종목명]")도 허용. */
 const TITLE_RE = /^\[([^/\]]+?)(?:\s*\/\s*([^\]]+))?\]\s*(.+)$/;
 
-/** 국내 리포트라 목표주가는 "N원" 표기. */
-function extractTargetPrice(text) {
-  const m = String(text ?? "").match(/목표\s*주가[^\d]{0,16}([\d,]{4,12})\s*원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, ""));
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
 
 /**
  * 산업분석 relatedSymbols 계산용 대형주 이름→코드(2026-09-19 추가, 오너
@@ -188,6 +180,7 @@ function parseItems(html) {
       title: tm[3].trim(),
       stockName: tm[1].trim(),
       opinion: (tm[2] ?? "").trim(),
+      opinionFrom: "title", // "[종목명/투자의견]" 제목에서 읽은 값 — 공용 추출기 C2 검증 제외
       analyst: analystM ? analystM[1].trim() : "",
       // /uploads/{글번호}/1/{파일명} — 목록의 onclick 인자를 그대로 조립.
       pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
@@ -250,23 +243,11 @@ function parseEconItems(html) {
   return items;
 }
 
-/** PDF 본문을 한 번만 열어 기업분석은 목표주가를, 산업분석은 relatedSymbols
- * 를 뽑는다(둘 다 필요 없으면 굳이 다시 안 엶) — 원문 텍스트 자체는 저장
- * 안 하고 이 두 결과만 남긴다. */
-async function analyzePdf(pdfUrl, category) {
-  if (!pdfUrl) return { targetPrice: null, relatedSymbols: [] };
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) return { targetPrice: null, relatedSymbols: [] };
-    const parser = new PDFParse({ data: Buffer.from(await res.arrayBuffer()) });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return category === "산업"
-      ? { targetPrice: null, relatedSymbols: findRelatedSymbols(text) }
-      : { targetPrice: extractTargetPrice(text), relatedSymbols: [] };
-  } catch {
-    return { targetPrice: null, relatedSymbols: [] };
-  }
+/** 산업분석 PDF 에서 대형주 언급을 세어 relatedSymbols 를 뽑는다. 기업분석의
+ * 목표주가는 공용 추출기가 같은 PDF(캐시)에서 뽑는다 — 원문은 저장 안 함. */
+async function relatedSymbolsFromPdf(pdfUrl) {
+  const text = await readPdfText(pdfUrl);
+  return text ? findRelatedSymbols(text) : [];
 }
 
 console.log(`▶ BNK투자증권 기업분석 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -318,12 +299,12 @@ console.log(
 
 console.log(`▶ 목표주가/관련종목 추출 중 (${collected.length}건)...`);
 for (const it of collected) {
-  const { targetPrice, relatedSymbols } = await analyzePdf(it.pdfUrl, it.category);
-  it.targetPrice = targetPrice;
-  it.relatedSymbols = relatedSymbols;
+  if (it.category !== "산업") continue;
+  it.relatedSymbols = await relatedSymbolsFromPdf(it.pdfUrl);
   await sleep(300);
 }
-console.log(`✔ 목표주가 ${collected.filter((i) => i.targetPrice != null).length}/${collected.length}건`);
+// 투자의견·목표주가 — 공용 추출기(기업분석만, PDF 는 URL 당 한 번).
+await enrichResearch(collected, { market: "kr", sleepMs: 300 });
 console.log(
   `✔ 관련종목 태그됨 ${collected.filter((i) => i.relatedSymbols?.length > 0).length}건`,
 );

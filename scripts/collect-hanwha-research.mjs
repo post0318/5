@@ -21,6 +21,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { enrichResearch, extractTargetPrice } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -65,23 +66,16 @@ function stripHtml(s) {
   return s.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim();
 }
 
-function extractTargetPrice(text) {
-  const m = String(text ?? "").match(/목표주가(?:를|는|가)?\s*[:：]?\s*([\d,]+)\s*(만)?원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-async function extractTargetPriceFromDetail(detailUrl) {
-  if (!detailUrl) return null;
+// 상세 페이지 본문 — 목록 요약에 목표주가가 없을 때만 받는다.
+async function fetchDetailText(detailUrl) {
+  if (!detailUrl) return "";
   try {
     const res = await fetch(detailUrl, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const html = await res.text();
-    return extractTargetPrice(stripHtml(html));
+    return stripHtml(await res.text());
   } catch (err) {
-    console.warn(`  ⚠ 상세 본문 목표주가 추출 실패 (${detailUrl}): ${err.message}`);
-    return null;
+    console.warn(`  ⚠ 상세 본문 조회 실패 (${detailUrl}): ${err.message}`);
+    return "";
   }
 }
 
@@ -119,9 +113,11 @@ function parseItems(html) {
       stockName: tm ? tm[1].trim() : title,
       symbolHint: tm ? tm[2].slice(0, 6) : null,
       opinion: tm ? tm[3].trim() : "",
+      opinionFrom: "title", // "종목명[코드/의견]" 제목 — 공용 추출기 C2 검증 제외
       analyst: analyst.trim(),
-      targetPrice: extractTargetPrice(rawSummary),
+      targetPrice: null,
       summary: excerpt(stripHtml(rawSummary)),
+      bodyText: stripHtml(rawSummary),
       pdfUrl: `https://www.hanwhawm.com/main/research/main/view.cmd?depth3_id=${depth3}&mode=&seq=${seq}&p=`,
     });
   }
@@ -160,15 +156,19 @@ console.log(
 );
 
 console.log(`▶ 목표주가 보강 중 (${collected.length}건)...`);
-let targetFallbackCount = 0;
+// 목록 요약에 목표주가가 없으면 상세 페이지 본문까지 붙여 공용 추출기에 넘긴다
+// (pdfUrl 이 상세 페이지 URL 이라 PDF 단계는 끈다).
+let detailCount = 0;
 for (const it of collected) {
-  if (it.targetPrice == null) {
-    it.targetPrice = await extractTargetPriceFromDetail(it.pdfUrl);
-    if (it.targetPrice != null) targetFallbackCount++;
+  if (extractTargetPrice(it.bodyText, "kr") == null) {
+    it.bodyText += `
+${await fetchDetailText(it.pdfUrl)}`;
+    detailCount++;
     await sleep(400);
   }
 }
-console.log(`✔ 보강 완료 (${targetFallbackCount}건 폴백으로 채움)`);
+console.log(`  상세 본문 확인 ${detailCount}건`);
+await enrichResearch(collected, { market: "kr", usePdf: false });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

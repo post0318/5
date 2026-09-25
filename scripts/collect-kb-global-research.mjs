@@ -51,8 +51,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch } from "./lib/us-research-extract.mjs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -111,35 +110,13 @@ function excerptFromPdfText(text, stockName, symbol) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// API의 tp(목표주가)·recomm(투자의견)은 "F I R S T TO THE MARKET" 같은
-// 뉴스 속보 노트에도 항상 채워져 있는 KB의 현재 유지값이라, 본문에 실제
-// 재언급된 경우만 쓰기로 함(오너 확인, 2026-09 — 목표주가·투자의견 둘 다
-// 동일 문제 지적). "목표주가"/"투자의견"이란 말이 PDF에 있는지만 검증.
-function mentionsTargetPrice(text) {
-  return /목표주가/.test(text);
-}
-function mentionsOpinion(text) {
-  return /투자의견/.test(text);
-}
-
+// API의 tp(목표주가)·recomm(투자의견)은 속보 노트에도 채워져 있는 KB 유지값이라
+// 본문에 재언급된 경우만 쓴다(오너 확인 2026-09) — 이 검증(C2)은 공용 추출기
+// (research-extract.mjs)가 한다.
 async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
-  if (!pdfUrl) return { summary: "", hasTargetMention: false, hasOpinionMention: false };
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return {
-      summary: excerptFromPdfText(text, stockName, symbol),
-      hasTargetMention: mentionsTargetPrice(text),
-      hasOpinionMention: mentionsOpinion(text),
-    };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", hasTargetMention: false, hasOpinionMention: false };
-  }
+  const pdfText = await readPdfText(pdfUrl);
+  if (pdfUrl && !pdfText) console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl})`);
+  return { summary: pdfText ? excerptFromPdfText(pdfText, stockName, symbol) : "", pdfText };
 }
 
 function parseTargetPrice(tp) {
@@ -266,9 +243,6 @@ if (collected.length === 0) {
   process.exit(1);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
-// 목표주가·투자의견 PDF 보강은 미국 개별기업만(USD 표기 기준 추출기 —
-// 중국/일본은 대상 아님, 산업분석/투자전략도 특정 종목 얘기가 아니므로 제외).
-await enrichUsResearch(collected.filter((it) => it.market === "us" && it.category === "기업"));
 console.log(
   "  최근 5건:",
   collected.slice(0, 5).map((i) => `[${i.market}] ${i.date} ${i.stockName}(${i.symbol}) — ${i.title}`),
@@ -277,14 +251,16 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, hasTargetMention, hasOpinionMention } = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
+  const { summary, pdfText } = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
   it.summary = summary;
-  if (!hasTargetMention) it.targetPrice = null; // 본문에 언급 없으면 tp 메타데이터도 버림
-  if (!hasOpinionMention) it.opinion = ""; // 마찬가지로 recomm 메타데이터도 버림
+  it.pdfText = pdfText;
   if (it.pdfUrl && !it.summary) excerptFailCount++;
   await sleep(400);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+// 투자의견·목표주가 — 공용 추출기(항목별 시장 통화: us 달러·ch 홍콩달러/위안·jp 엔,
+// 산업분석 제외). tp/recomm 칸은 본문 언급 확인 후. PDF 는 위에서 이미 읽었다.
+await enrichResearch(collected, { usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {

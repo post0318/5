@@ -10,7 +10,7 @@
  * SNOW.US, PONY.US / 600183.SH, 0992.HK, NEX.FP).
  *
  * 투자의견·목표주가는 제목에 없어 본문 → PDF 순으로 추출한다
- * (scripts/lib/us-research-extract.mjs — 달러 표기 대응).
+ * (scripts/lib/research-extract.mjs — 시장별 통화 규칙).
  *
  * ⚠️ 접근 조건은 국내 수집기와 동일(CLAUDE.md 하나증권 항목): robots.txt 가
  *    Disallow: / 라 개인용·로컬 실행·하루 1회 조건으로 오너 승인.
@@ -21,7 +21,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch } from "./lib/us-research-extract.mjs";
+import { enrichResearch } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -173,7 +173,7 @@ console.log(
 );
 
 
-await enrichUsResearch(collected);
+await enrichResearch(collected, { market: "us" });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

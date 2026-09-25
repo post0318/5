@@ -13,9 +13,11 @@ import { isCommonExcludedResearch } from "../research-exclude";
  * 없음. `/ch/research` 같은 전용 화면은 아직 없어(추후 과제) 이 태그가 붙은
  * 문서는 당장 화면에 노출되지 않지만, 최소한 "us"로 잘못 섞이는 것은 막는다.
  */
-export type ResearchMarketId = MarketId | "ch";
+// "eu" — 유럽(오너 지시 2026-09-25 — "중국 일본 유럽도 시장은 추가해놔라").
+// ch 와 같이 리서치 태깅 전용이고 종목분석 어댑터(MarketId)와는 별개.
+export type ResearchMarketId = MarketId | "ch" | "eu";
 export function isResearchMarketId(v: string): v is ResearchMarketId {
-  return v === "kr" || v === "us" || v === "jp" || v === "ch";
+  return v === "kr" || v === "us" || v === "jp" || v === "ch" || v === "eu";
 }
 
 /**

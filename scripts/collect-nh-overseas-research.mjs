@@ -16,7 +16,7 @@
  * 해석한다(DS투자증권 수집기와 동일 방식).
  *
  * 목표주가·투자의견은 PDF 본문에 "목표주가(컨센서스): 331.5달러"처럼
- * 실려 있어 공용 추출기(us-research-extract.mjs)의 컨센서스 패턴이 그대로
+ * 실려 있어 공용 추출기(research-extract.mjs)의 컨센서스 패턴이 그대로
  * 잡는다(실측 확인 — 별도 전용 패턴 불필요).
  *
  * ⚠️ www.nhsec.com/robots.txt 는 `Disallow: /` — 국내 수집기와 동일 조건
@@ -28,7 +28,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch, readPdfText } from "./lib/us-research-extract.mjs";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -297,7 +297,7 @@ console.log(
 
 // 산업/전략 노트는 특정 종목 얘기가 아니라 목표주가·투자의견 개념이 없음 —
 // PDF에 우연히 등장하는 숫자를 잘못 채우지 않게 기업(종목) 항목만 보강한다.
-await enrichUsResearch(collected.filter((it) => it.category === "기업"));
+await enrichResearch(collected.filter((it) => it.category === "기업"), { market: "us" });
 
 // 본문 발췌(summary)는 기업·산업 구분 없이 전부 채운다(목표주가·투자의견과
 // 달리 오분류 위험이 없음). 같은 PDF를 여러 번 안 받게 캐시.

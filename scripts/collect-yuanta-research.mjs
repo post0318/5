@@ -30,7 +30,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -92,28 +92,12 @@ function excerptFromPdfText(text) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// 통계 블록 첫 줄이 항상 "목표주가 470,000원 (D)" 또는 미제시 시 "목표주가 -원 (M)".
-function extractTargetPrice(text) {
-  const m = text.match(/목표주가\s*([\d,]+|-)\s*원/);
-  if (!m || m[1] === "-") return null;
-  const n = Number(m[1].replace(/,/g, ""));
-  return Number.isFinite(n) ? n : null;
-}
-
+// 통계 블록 첫 줄 "목표주가 470,000원 (D)"(미제시 "목표주가 -원 (M)")은 공용 추출기
+// (research-extract.mjs)의 국내 규칙이 처리한다.
 async function extractPdfExcerpt(pdfUrl) {
-  if (!pdfUrl) return { summary: "", targetPrice: null };
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return { summary: excerptFromPdfText(text), targetPrice: extractTargetPrice(text) };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", targetPrice: null };
-  }
+  const pdfText = await readPdfText(pdfUrl);
+  if (pdfUrl && !pdfText) console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl})`);
+  return { summary: pdfText ? excerptFromPdfText(pdfText) : "", pdfText };
 }
 
 async function fetchPage(page) {
@@ -198,7 +182,7 @@ console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 const items = [];
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, targetPrice } = await extractPdfExcerpt(it.pdfUrl);
+  const { summary, pdfText } = await extractPdfExcerpt(it.pdfUrl);
   if (it.pdfUrl && !summary) excerptFailCount++;
   items.push({
     id: it.id,
@@ -208,14 +192,17 @@ for (const it of collected) {
     symbol: it.symbolHint,
     analyst: "",
     opinion: it.opinion,
-    targetPrice,
+    targetPrice: null,
     summary,
     pdfUrl: it.pdfUrl,
+    pdfText,
     views: null,
   });
   await sleep(500);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+// 투자의견(목록 칸 → 본문 언급 확인)·목표주가 — 공용 추출기. PDF 는 위에서 이미 읽었다.
+await enrichResearch(items, { market: "kr", usePdf: false });
 console.log("  예시:", items[0]?.summary || "(없음)");
 
 if (DRY_RUN) {

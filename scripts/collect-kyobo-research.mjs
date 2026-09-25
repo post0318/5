@@ -32,7 +32,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -155,40 +155,14 @@ function excerptFromPdfText(text) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// 교보는 "Buy\t상향" + "TP 380,000 원\t상향" 처럼 다른 증권사와 다른 라벨을
-// 쓴다("목표주가"가 아니라 "TP"). "Spot Brief"·"탐방노트" 등 약식 리포트는
-// 이 헤더 자체가 없어 null.
-function extractOpinion(text) {
-  const m = text.match(/^(Strong\s*Buy|Buy|Hold|Sell|Not\s*Rated)\b/m);
-  return m ? m[1] : "";
-}
-function extractTargetPrice(text) {
-  const m = text.match(/\bTP\s*([\d,]+)\s*원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, ""));
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
+// 교보는 "Buy<탭>상향" + "TP 380,000 원<탭>상향" 처럼 "목표주가" 대신 "TP" 라벨을
+// 쓴다 — 공용 추출기(research-extract.mjs)의 국내 규칙·PDF 앞부분 등급 표기로 처리.
 async function extractExcerpt(sno) {
-  try {
-    const pdfUrl = await fetchPdfUrl(sno);
-    if (!pdfUrl) return { pdfUrl: null, summary: "", opinion: "", targetPrice: null };
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return {
-      pdfUrl,
-      summary: excerptFromPdfText(text),
-      opinion: extractOpinion(text),
-      targetPrice: extractTargetPrice(text),
-    };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (sno=${sno}): ${err.message}`);
-    return { pdfUrl: null, summary: "", opinion: "", targetPrice: null };
-  }
+  const pdfUrl = await fetchPdfUrl(sno).catch(() => null);
+  if (!pdfUrl) return { pdfUrl: null, summary: "", pdfText: "" };
+  const pdfText = await readPdfText(pdfUrl);
+  if (!pdfText) console.warn(`  ⚠ PDF 본문 추출 실패 (sno=${sno})`);
+  return { pdfUrl, summary: pdfText ? excerptFromPdfText(pdfText) : "", pdfText };
 }
 
 console.log(`▶ 교보증권 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -222,19 +196,17 @@ console.log("  최근 3건:", collected.slice(0, 3).map((i) => `${i.date} ${i.st
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { pdfUrl, summary, opinion, targetPrice } = await extractExcerpt(it.id);
+  const { pdfUrl, summary, pdfText } = await extractExcerpt(it.id);
   // rno=1 없으면 "서비스 이용에 불편을 드려 죄송합니다" 에러 페이지로 감(실측 확인).
   it.pdfUrl = pdfUrl ?? `https://www.iprovest.com/weblogic/RSReportServlet?scr_id=32&mode=detail&menuCode=1&pageNum=1&sno=${it.id}&rno=1`;
   it.summary = summary;
-  // 산업분석은 특정 종목 얘기가 아니므로 목표주가·투자의견 개념이 없음.
-  if (it.category !== "산업") {
-    it.opinion = opinion;
-    it.targetPrice = targetPrice;
-  }
+  it.pdfText = pdfText;
   if (!summary) excerptFailCount++;
   await sleep(400);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+// 투자의견·목표주가 — 공용 추출기(산업분석은 내부에서 건너뜀). PDF 는 위에서 이미 읽었다.
+await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {

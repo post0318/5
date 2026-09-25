@@ -37,7 +37,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { readPdfText } from "./lib/us-research-extract.mjs";
+import { readPdfText } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };

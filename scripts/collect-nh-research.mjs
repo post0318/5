@@ -56,7 +56,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isEsgContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
@@ -132,37 +132,12 @@ function excerptFromPdfText(text) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// 헤더 블록에 "Buy(유지)" 같은 등급 줄과 "목표주가 30,000원 (상향)" 줄이
-// 고정으로 등장한다(Yuanta·KB와 동일 계열 템플릿).
-function extractOpinion(text) {
-  const m = text.match(/^(Strong Buy|Buy|Hold|Sell|매수|중립|매도)\s*[\(（]/m);
-  return m ? m[1] : "";
-}
-function extractTargetPrice(text) {
-  const m = text.match(/목표주가(?:를|는|가)?\s*([\d,]+)\s*(만)?\s*원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
+// 헤더 블록의 "Buy(유지)"·"목표주가 30,000원 (상향)" 줄은 공용 추출기
+// (research-extract.mjs)의 국내 규칙·PDF 앞부분 등급 표기로 처리한다.
 async function extractPdfExcerpt(pdfUrl) {
-  if (!pdfUrl) return { summary: "", opinion: "", targetPrice: null };
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return {
-      summary: excerptFromPdfText(text),
-      opinion: extractOpinion(text),
-      targetPrice: extractTargetPrice(text),
-    };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", opinion: "", targetPrice: null };
-  }
+  const pdfText = await readPdfText(pdfUrl);
+  if (pdfUrl && !pdfText) console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl})`);
+  return { summary: pdfText ? excerptFromPdfText(pdfText) : "", pdfText };
 }
 
 async function fetchPage(cursor) {
@@ -307,17 +282,14 @@ for (const it of collected) {
     excerptCache.set(it.pdfUrl, await extractPdfExcerpt(it.pdfUrl));
     await sleep(500);
   }
-  const { summary, opinion, targetPrice } = excerptCache.get(it.pdfUrl);
+  const { summary, pdfText } = excerptCache.get(it.pdfUrl);
   it.summary = summary;
-  // 산업분석은 특정 종목 얘기가 아니므로 목표주가·투자의견 개념이 없음 —
-  // 본문 발췌(summary)는 유지하되 등급·목표가는 채우지 않는다.
-  if (it.category !== "산업") {
-    it.opinion = opinion;
-    it.targetPrice = targetPrice;
-  }
+  it.pdfText = pdfText;
   if (!it.summary) excerptFailCount++;
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건, PDF ${excerptCache.size}개)`);
+// 투자의견·목표주가 — 공용 추출기(산업분석은 내부에서 건너뜀). PDF 는 위에서 이미 읽었다.
+await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {

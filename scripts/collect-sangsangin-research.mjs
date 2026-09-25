@@ -25,7 +25,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -59,20 +59,6 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** 국내 리포트라 목표주가는 "N원" 표기. */
-function extractTargetPrice(text) {
-  const m = String(text ?? "").match(/목표\s*주가[^\d]{0,16}([\d,]{4,12})\s*원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, ""));
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-function extractOpinion(text) {
-  const m = String(text ?? "").match(
-    /투자의견[^가-힣A-Za-z]{0,8}(매수|적극매수|중립|보유|매도|비중확대|비중축소|Buy|Hold|Sell|Not\s*Rated|N\.?R\.?)/i,
-  );
-  return m ? m[1].replace(/\s+/g, " ").trim() : "";
-}
-
 async function fetchPage(startRow) {
   const res = await fetch(LIST_URL, {
     method: "POST",
@@ -94,19 +80,6 @@ async function fetchPage(startRow) {
   const json = await res.json();
   const node = Array.isArray(json) ? json[0] : json;
   return { rows: node?.getNoticeList ?? [], total: node?.getCount ?? 0 };
-}
-
-async function pdfText(url) {
-  try {
-    const res = await fetch(url, { headers: { "User-Agent": UA } });
-    if (!res.ok) return "";
-    const parser = new PDFParse({ data: Buffer.from(await res.arrayBuffer()) });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return String(text ?? "");
-  } catch {
-    return "";
-  }
 }
 
 console.log(`▶ 상상인증권 기업리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -161,19 +134,8 @@ console.log(
 );
 
 console.log(`▶ 투자의견·목표주가 추출 중 (${collected.length}건)...`);
-for (const it of collected) {
-  if (!it.pdfUrl) continue;
-  const text = await pdfText(it.pdfUrl);
-  if (text) {
-    it.opinion = extractOpinion(text);
-    it.targetPrice = extractTargetPrice(text);
-  }
-  await sleep(300);
-}
-console.log(
-  `✔ 보강 완료 — 등급 ${collected.filter((i) => i.opinion).length}/${collected.length}` +
-    ` · 목표주가 ${collected.filter((i) => i.targetPrice != null).length}/${collected.length}`,
-);
+// 공용 추출기(국내 규칙) — 본문 → PDF 순.
+await enrichResearch(collected, { market: "kr", sleepMs: 300 });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

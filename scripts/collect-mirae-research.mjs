@@ -33,6 +33,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { enrichResearch } from "./lib/research-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -111,6 +112,7 @@ function parseItems(html) {
       stockName: (tm ?? um)[1].trim(),
       symbolHint: tm ? tm[2] : um[2].toUpperCase(),
       opinion: (tm ?? um)[3].trim(),
+      opinionFrom: "title", // 목록 제목의 투자의견 — 공용 추출기 C2 검증 제외
       analyst: analystM ? analystM[1].trim() : "",
       pdfUrl: pdfM ? pdfM[1] : null,
       category: "기업",
@@ -196,14 +198,8 @@ function excerptFromFlat(flat) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// 본문에 "목표주가를 310만원(기존 280만원)으로" 처럼 만원 단위로도 등장한다.
-function extractTargetPrice(flatText) {
-  const m = flatText.match(/목표주가(?:를|는|가)?\s*([\d,]+)\s*(만)?원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
+// 본문에 "목표주가를 310만원(기존 280만원)으로" 처럼 만원 단위로도 등장한다 —
+// 본문 전체(bodyText)를 공용 추출기에 넘긴다.
 async function extractDetail(id, messageNumber, categoryId = CATEGORY_ID) {
   try {
     const url = new URL(DETAIL_URL);
@@ -215,10 +211,10 @@ async function extractDetail(id, messageNumber, categoryId = CATEGORY_ID) {
     const html = new TextDecoder("euc-kr").decode(await res.arrayBuffer());
     const m = html.match(/id="messageContentsDiv"[^>]*>([\s\S]*?)<\/div>\s*<\/td>/);
     const flat = m ? stripHtml(m[1]).replace(/\s{2,}/g, " ").trim() : "";
-    return { summary: excerptFromFlat(flat), targetPrice: extractTargetPrice(flat) };
+    return { summary: excerptFromFlat(flat), bodyText: flat };
   } catch (err) {
     console.warn(`  ⚠ 본문 발췌 실패 (id=${id}): ${err.message}`);
-    return { summary: "", targetPrice: null };
+    return { summary: "", bodyText: "" };
   }
 }
 
@@ -273,14 +269,15 @@ console.log(
 console.log(`▶ 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, targetPrice } = await extractDetail(it.id, it.messageNumber, it.srcCategoryId);
+  const { summary, bodyText } = await extractDetail(it.id, it.messageNumber, it.srcCategoryId);
   it.summary = summary;
-  // 산업분석/투자전략은 특정 종목 얘기가 아니므로 목표주가 개념이 없음.
-  it.targetPrice = it.category === "산업" ? null : targetPrice;
+  it.bodyText = bodyText;
   if (!it.summary) excerptFailCount++;
   await sleep(400);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+// 투자의견(제목)·목표주가 — 공용 추출기(항목별 market 통화, 본문 → PDF, 산업분석 제외).
+await enrichResearch(collected, { market: "kr" });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {

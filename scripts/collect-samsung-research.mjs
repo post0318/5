@@ -77,7 +77,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch } from "./lib/us-research-extract.mjs";
+import { enrichResearch } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
@@ -232,6 +232,7 @@ function parseTitle(base, title, board) {
         stockName: stockName.trim(),
         symbol: code,
         opinion: opinion.trim(),
+        opinionFrom: "title",
         category: "기업",
         source: SOURCE,
       };
@@ -300,10 +301,10 @@ for (const i of collected) {
   );
 }
 
-// 목표주가 PDF 보강은 미국 종목만(공용 추출기가 USD 표기 기준).
-const usCompany = research.filter((it) => it.market === "us" && it.category === "기업");
-console.log(`▶ 투자의견/목표주가 조회 중 (PDF 포함, 로그인 불필요) — ${usCompany.length}건...`);
-await enrichUsResearch(usCompany, { sleepMs: 400, usePdf: true });
+// 투자의견·목표주가 — 국내·해외 공용 추출기(시장별 통화). 국내 의견은 제목에서 읽은 값.
+const stockItems = research.filter((it) => it.category === "기업");
+console.log(`▶ 투자의견/목표주가 조회 중 (PDF 포함, 로그인 불필요) — ${stockItems.length}건...`);
+await enrichResearch(stockItems, { sleepMs: 400, usePdf: true });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

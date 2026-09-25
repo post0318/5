@@ -57,11 +57,11 @@
  * 제외한다.
  *
  * `summary`는 대부분 `titl`과 동일하거나 더 짧아 별도 요약으로 쓸 가치가
- * 없다(실측 확인) — summary는 비워 두고, 미국(market:"us") 항목만 공용
- * 추출기(lib/us-research-extract.mjs)가 **PDF 본문**에서 투자의견·목표주가를
+ * 없다(실측 확인) — summary는 비워 두고, 종목 리포트는 국내·해외 공용
+ * 추출기(lib/research-extract.mjs)가 **PDF 본문**에서 투자의견·목표주가를
  * 채운다(usePdf:true — 로그인 없이 PDF를 받을 수 있는 몇 안 되는 소스).
- * 국내(market:"kr") 항목은 이 추출기가 달러 표기 기준이라 안 맞아 PDF
- * 보강을 하지 않는다(다른 국내 수집기들과 동일하게 opinion/targetPrice 공란).
+ * 통화는 시장별(kr 원·us 달러·ch 홍콩달러/위안 — 2026-09-25 공용화 전엔
+ * 미국만 했다).
  *
  * www3.kiwoom.com·bbn.kiwoom.com 모두 robots.txt 가 `Allow: /`(제한 없음) —
  * 지금까지 중 가장 깨끗한 케이스. 그래도 다른 예외들과 동일 조건(개인용·
@@ -73,7 +73,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch } from "./lib/us-research-extract.mjs";
+import { enrichResearch } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isWeeklyRecurringContent, isEsgContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
@@ -306,9 +306,9 @@ console.log(
   collected.slice(0, 8).map((i) => `[${i.market}/${i.category}] ${i.date} ${i.symbol ?? i.stockName} — ${i.title}`),
 );
 
-const usItems = collected.filter((it) => it.market === "us" && it.category !== "산업");
-console.log(`▶ 투자의견/목표주가 조회 중 (PDF 포함, 로그인 불필요, 미국 종목만) — ${usItems.length}건...`);
-await enrichUsResearch(usItems, { sleepMs: 400, usePdf: true });
+const stockItems = collected.filter((it) => it.category !== "산업");
+console.log(`▶ 투자의견/목표주가 조회 중 (PDF 포함, 로그인 불필요) — ${stockItems.length}건...`);
+await enrichResearch(stockItems, { sleepMs: 400, usePdf: true });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");

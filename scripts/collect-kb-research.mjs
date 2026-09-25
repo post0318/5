@@ -94,7 +94,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isEsgContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
@@ -126,6 +126,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const AJAX_URL = "https://www.kbsec.com/go.able?linkcd=s040203010001";
 const TITLE_RE = /^(.+?)\s*\((\d{6})\)$/;
+// 괄호 안 6자리가 상장 종목코드인지 — "화학 (151010)"·"건설 (201030)" 같은 업종
+// 리포트는 업종 분류코드(GICS 계열로 보임)가 붙어 종목 리포트로 잘못 분류되고,
+// 업종 PDF 속 개별 종목 목표가가 그 "종목"에 붙었다(2026-09-25 공용 추출기 비교 중 발견).
+const LISTED_CODES = new Set(
+  JSON.parse(readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"))
+    .map((c) => c.s)
+    .filter(Boolean),
+);
 // 오너 지시(2026-09-24 — "산업/기업 중 코드나 종목명인 경우 종목분석에
 // 해당되고 그 외는 산업분석에 해당한다. 다만, 포트폴리오, 추천종목, ESG등은
 // 대상에서 제외한다. 또한 IPO나 비상장인 경우는 종목분석>인사이트에
@@ -167,35 +175,14 @@ function excerptFromPdfText(text, stockName, symbol) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// API의 tp(목표주가)·recomm(투자의견)은 "F I R S T TO THE MARKET" 같은
-// 뉴스 속보 노트에도 항상 채워져 있는 KB의 현재 유지값이라, 본문에 실제
-// 재언급된 경우만 쓰기로 함(오너 확인, 2026-09 — 목표주가·투자의견 둘 다
-// 동일 문제 지적). "목표주가"/"투자의견"이란 말이 PDF에 있는지만 검증.
-function mentionsTargetPrice(text) {
-  return /목표주가/.test(text);
-}
-function mentionsOpinion(text) {
-  return /투자의견/.test(text);
-}
-
+// API의 tp(목표주가)·recomm(투자의견)은 "F I R S T TO THE MARKET" 같은 뉴스 속보
+// 노트에도 항상 채워져 있는 KB의 현재 유지값이라, 본문에 실제 재언급된 경우만
+// 쓴다(오너 확인 2026-09) — 이 검증(C2)은 이제 공용 추출기(research-extract.mjs)가
+// 모든 소스에 공통으로 한다.
 async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
-  if (!pdfUrl) return { summary: "", hasTargetMention: false, hasOpinionMention: false };
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return {
-      summary: excerptFromPdfText(text, stockName, symbol),
-      hasTargetMention: mentionsTargetPrice(text),
-      hasOpinionMention: mentionsOpinion(text),
-    };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", hasTargetMention: false, hasOpinionMention: false };
-  }
+  const pdfText = await readPdfText(pdfUrl);
+  if (pdfUrl && !pdfText) console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl})`);
+  return { summary: pdfText ? excerptFromPdfText(pdfText, stockName, symbol) : "", pdfText };
 }
 
 function parseTargetPrice(tp) {
@@ -242,7 +229,7 @@ for (const r of rows) {
   if (!date || new Date(date) < cutoff) continue;
   const docTitle = String(r.docTitle ?? "").trim();
   const tm = docTitle.match(TITLE_RE);
-  if (tm) {
+  if (tm && LISTED_CODES.has(tm[2])) {
     collected.push({
       id: r.documentid,
       date,
@@ -401,14 +388,15 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, hasTargetMention, hasOpinionMention } = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
+  const { summary, pdfText } = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
   it.summary = summary;
-  if (!hasTargetMention) it.targetPrice = null; // 본문에 언급 없으면 tp 메타데이터도 버림
-  if (!hasOpinionMention) it.opinion = ""; // 마찬가지로 recomm 메타데이터도 버림
+  it.pdfText = pdfText;
   if (it.pdfUrl && !it.summary) excerptFailCount++;
   await sleep(400);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+// 투자의견·목표주가 — 공용 추출기(tp/recomm 은 본문 언급 확인 후, 없으면 PDF 에서 추출).
+await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {
