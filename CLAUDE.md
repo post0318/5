@@ -1232,7 +1232,8 @@ npm run db:studio    # drizzle studio
     고정 라벨은 `shinhan-research.ts` STRATEGY_/MARKET_CONDITION_STOCKNAMES 에 등록.
   - 오너 결정(2026-09-25): 메리츠 "Meritz Strategy Daily"는 같은 날 Strategy Idea 글의
     재게시라 수집 제외. 대신 퀀틴전시 플랜(PDF 파일명 Strategy_Daily)은 매일 장 마감 코멘트라
-    시황("대신증권 시황"). 대신 "포트폴리오가 커지는 Stock" 제외 여부는 오너가 PDF 확인 후 결정 대기.
+    시황("대신증권 시황"). 대신 "포트폴리오가 커지는 Stock"은 PDF(2026-08-10자) 확인 후 오너가
+    위클리 리테일 추천종목 모음으로 확정 — 제외 유지("위클리네 제외").
   - **미결**: 한경 경유로 이미 쌓인 옛 문서(`{source}:한경:*`)는 id 가 달라 90일 보존이 끝날
     때까지 새 직접 수집 문서와 중복될 수 있다 — 배포 후 `/api/cron/shinhan-research` DELETE
     (source + idPrefix "한경:")로 7곳 정리 필요. 대신·iM 의 옛 GM 문서(idPrefix "GM:")도 같다.

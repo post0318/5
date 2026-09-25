@@ -36,8 +36,8 @@
  *  "[대신증권 이름]"은 작성자로 떼고, 이어지는 대괄호들을 시리즈로 본다.
  *  순서대로 첫 규칙이 이긴다(규칙 표는 classify() 주석).
  *   1. 제외: 오늘의리포트 모음(Morning Meeting Brief)·ETF/ETP·ESG·공통 제외(주간물·
- *      일정표·추천종목·원자재 외 대체투자)·"포트폴리오가 커지는 Stock"(리테일 추천
- *      종목 모음 — 추천종목 제외와 같은 취지, 이 수집기만의 추정 규칙).
+ *      일정표·추천종목·원자재 외 대체투자)·"포트폴리오가 커지는 Stock"(위클리 리테일
+ *      추천종목 모음 — 오너 확인 2026-09-25, PDF 샘플(2026-08-10자) 검토 후 제외 확정).
  *   2. 미국 종목: "[Issue & News] 종목명: …" + PDF 파일명 "event_{TICKER}_" → 기업/us.
  *   3. 시황 시리즈(장마감 시황·데일리 뉴스·뉴스 다이제스트·실적 대시보드·실적 시즌
  *      모니터) → 산업/kr, stockName "대신증권 시황".
@@ -272,7 +272,7 @@ async function classify(it) {
   const text = `${seriesText} ${headline}`;
   it.analyst = analyst;
   if (MMB_RE.test(text)) return { kind: "skip", reason: "오늘의리포트 모음" };
-  if (LOCAL_EXCLUDE_RE.test(text)) return { kind: "skip", reason: "리테일 추천종목 모음" };
+  if (LOCAL_EXCLUDE_RE.test(text)) return { kind: "skip", reason: "위클리 리테일 추천종목 모음(오너 확인)" };
   if (isEtfOrEtpContent(text)) return { kind: "skip", reason: "ETF/ETP" };
   if (isEsgContent(text)) return { kind: "skip", reason: "ESG" };
 
