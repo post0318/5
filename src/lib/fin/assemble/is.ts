@@ -1,6 +1,6 @@
 import "server-only";
 import { Gap, type AssembledIs, type Column, type LineRole, type Prov, type StmtLine } from "../types";
-import { canonical, type CellValue, type ColumnSpec, type FilingStructure, type Part, type UsReader } from "../read";
+import { canonical, REVENUE_ALIAS_CONCEPTS, type CellValue, type ColumnSpec, type FilingStructure, type Part, type UsReader } from "../read";
 
 /**
  * 2층 — 손익계산서 조립(architecture.md §1·§2). **한 열 = 한 기준**: 그 열 원천 공시의 본표 표시 구조(_pre) 순서대로 줄을
@@ -49,43 +49,16 @@ const FALLBACK = [
 const provOf = (p: Part): Prov => ({ accn: p.accn, form: p.form, filed: p.filed, source: "sec-cf" });
 
 /**
- * Q4D 매출 줄 폴백 — 9개월 누적 공시가 사업연도(10-K) 공시와 다른 매출 개념으로 재태깅된 회사(CEG: 10-K
- * "Operating revenues" = RevenueFromContractWithCustomerIncludingAssessedTax, 같은 줄의 10-Q 태그는
- * us-gaap:Revenues) 는 사업연도 부분만 값이 잡히고 9개월 부분이 항상 "gap"이라 Q4 매출이 통째로 빈칸이 됐다.
- * 정상 개념으로 못 읽으면(9개월 부분만), 사업연도 값을 정확히 같은 금액으로 공시한 다른 매출 계열 개념이
- * **어느 정기공시에서든**(판본 무관 — GOOG: 최신 10-K 는 옛 개념이 아예 사라지고 새 개념으로만 재태깅해
- * 같은 공시 안에서는 두 개념이 공존하지 않는다. 옛 10-K(2024-01-31·2025-02-05)에 그 옛 개념·같은 금액이
- * 남아 있는 것을 증거로 삼는다) 있었는지 확인해(같은 줄이라는 근거, 증거 공시 accn 은 경고로 남긴다) 그
- * 개념으로 9개월 값을 대신 읽는다 — 값이 우연히 같은 다른 지표를 섞지 않도록 매출 계열 개념끼리만 비교한다.
+ * Q4D 매출 줄 — 9개월 누적 부분이 구조 기준 개념으로 없으면 1층의 개념 대체 판단(reader.revenueAliasNine — 같은 줄이라는
+ * 증거 공시가 있을 때만)에 맡긴다. 대체 여부·후보 개념은 1층이 정한다(architecture.md §1).
  */
-const REVENUE_ALIAS_CONCEPTS = [
-  "us-gaap:Revenues",
-  "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-  "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
-  "us-gaap:RevenuesNetOfInterestExpense",
-];
-
 function q4RevenueFallback(reader: UsReader, qname: string, fyPart: Part, ninePart: Part) {
   return async (p: Part): Promise<number | null | "gap"> => {
     const direct = await reader.partValue(qname, p);
     if (direct === "gap") return "gap";
     if (direct !== null) return direct.val;
     if (p !== ninePart) return null; // 사업연도 부분은 폴백 대상 아님 — 구조 기준 개념 그대로
-    const fyDirect = await reader.partValue(qname, fyPart);
-    if (fyDirect === null || fyDirect === "gap") return null;
-    for (const alt of REVENUE_ALIAS_CONCEPTS) {
-      if (alt === qname) continue;
-      // 같은 줄이라는 증거(1층 — reader.aliasEvidenceAccn) 없으면 대체하지 않는다: 기존대로 공란
-      const evidenceAccn = reader.aliasEvidenceAccn(alt, fyPart.start, fyPart.end, fyDirect.val);
-      if (!evidenceAccn) continue;
-      const altNine = await reader.partValue(alt, ninePart);
-      if (altNine === null || altNine === "gap") continue;
-      reader.warnings.push(
-        `Q4 매출 폴백: ${qname}(9개월 부분 없음) → ${alt} 대체(사업연도 값 증거 공시 ${evidenceAccn}, 9개월 원본 ${ninePart.accn ?? "?"})`,
-      );
-      return altNine.val;
-    }
-    return null;
+    return reader.revenueAliasNine(qname, fyPart, ninePart);
   };
 }
 
@@ -212,6 +185,8 @@ async function assembleColumn(
 
   // 항등식 — 부모 = Σ 가중치 × 자식(원통화 값, 공시 반올림 단위 × 항 수 허용). 자식 값이 없으면 0
   const fails: string[] = [];
+  const failAt: number[] = [];
+  const failPartial: boolean[] = [];
   lines.forEach((ln, i) => {
     if (raws[i] == null || ln.id.startsWith("syn:")) return;
     const kids = lines.map((k, j) => ({ k, j })).filter(({ k, j }) => k.parent === i && raws[j] != null && !k.id.startsWith("syn:"));
@@ -219,7 +194,14 @@ async function assembleColumn(
     const sum = kids.reduce((s, { k, j }) => s + k.w * (raws[j] as number), 0);
     const unit = roundingUnit([raws[i] as number, ...kids.map(({ j }) => raws[j] as number)]);
     const tol = unit * (kids.length + 1) * (col.segments.flatMap((s) => s.parts).length);
-    if (Math.abs((raws[i] as number) - sum) > tol) fails.push(`${ln.id}: ${raws[i]} ≠ Σ ${sum}`);
+    if (Math.abs((raws[i] as number) - sum) > tol) {
+      // 값이 없는 자식 줄(그 열 공시에 그 줄이 없음 — 예: WDC 10-K 분기 요약표는 매출·매출총이익만 싣고 매출원가는 없다)은 0 으로
+      // 보고 검사하되 "판정 불완전"으로 표시한다. 3층 매출 경로 판정은 판정 불완전 식으로 매출을 비우지 않는다(값 섞임의 증거가 아님)
+      const missing = lines.filter((k, j) => k.parent === i && raws[j] == null && !k.id.startsWith("syn:")).length;
+      fails.push(`${ln.id}: ${raws[i]} ≠ Σ ${sum}${missing ? ` (값 없는 자식 줄 ${missing}개 — 판정 불완전)` : ""}`);
+      failAt.push(i);
+      failPartial.push(missing > 0);
+    }
   });
   if (fails.length) gaps |= Gap.IDENTITY;
 
@@ -233,7 +215,7 @@ async function assembleColumn(
     const w = reader.yahooWindow(col);
     if (w) { column.start = w.start; column.end = w.end; }
   }
-  return { col: column, lines, identity: { ok: fails.length === 0, fails } };
+  return { col: column, lines, identity: { ok: fails.length === 0, fails, at: failAt, partial: failPartial } };
 }
 
 /** 연간·분기(+Q4D)·LTM 열을 조립한다. LTM 은 연간·분기 목록 끝에 각각 붙는다(같은 값). */

@@ -33,8 +33,16 @@ const ANCHOR = [
   "us-gaap:NetIncomeLoss", "us-gaap:ProfitLoss", "ifrs-full:ProfitLoss", "ifrs-full:ProfitLossAttributableToOwnersOfParent",
 ];
 const REVENUE_ANCHOR = new Set(ANCHOR.slice(0, 8));
+/** Q4D 매출 개념 대체(revenueAliasNine)의 후보 — 매출 계열 개념끼리만 */
+export const REVENUE_ALIAS_CONCEPTS = [
+  "us-gaap:Revenues",
+  "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+  "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
+  "us-gaap:RevenuesNetOfInterestExpense",
+];
 const ANNUAL_FORM = /^(10-K|20-F|40-F)(\/A)?$/;
 const INTERIM_FORM = /^10-Q(\/A)?$/;
+const PERIODIC_FORM = /^(10-[QK]|20-F|40-F)(\/A)?$/;
 /** companyfacts 에 들어 있는 네임스페이스 — 나머지(회사 고유·srt)는 인스턴스에서 읽는다 */
 const CF_NS = new Set(["us-gaap", "ifrs-full", "dei", "srt"]);
 
@@ -147,6 +155,28 @@ export class UsReader {
     const cands = this.facts(concept).filter((f) => near(f.start, start) && near(f.end, end) && f.val === targetVal);
     const best = cands.reduce<RawFact | null>((b, f) => (!b || (f.prov.filed ?? "") > (b.prov.filed ?? "") ? f : b), null);
     return best?.prov.accn ?? null;
+  }
+
+  /**
+   * Q4D 매출 9개월 부분의 개념 대체(판본·개념 판단 = 1층 몫, 2층 assemble/is.ts 는 호출만) — 9개월 누적 공시가 사업연도
+   * 공시와 다른 매출 개념으로 태깅된 회사(CEG: 10-K "Operating revenues" = RevenueFromContractWithCustomerIncludingAssessedTax,
+   * 같은 줄의 10-Q 태그는 us-gaap:Revenues. GOOG: 최신 10-K 는 옛 개념이 사라지고 새 개념으로만 재태깅). 사업연도 값을
+   * 정확히 같은 금액으로 공시한 다른 매출 계열 개념이 **어느 정기공시에서든** 있었으면(같은 줄이라는 증거 —
+   * aliasEvidenceAccn) 그 개념의 9개월 값을 쓴다. 증거가 없으면 null(대체하지 않음 — 공란). 매출 계열 개념끼리만 비교한다.
+   */
+  async revenueAliasNine(qname: string, fyPart: Part, ninePart: Part): Promise<number | null> {
+    const fyDirect = await this.partValue(qname, fyPart);
+    if (fyDirect === null || fyDirect === "gap") return null;
+    for (const alt of REVENUE_ALIAS_CONCEPTS) {
+      if (alt === qname) continue;
+      const evidenceAccn = this.aliasEvidenceAccn(alt, fyPart.start, fyPart.end, fyDirect.val);
+      if (!evidenceAccn) continue;
+      const altNine = await this.partValue(alt, ninePart);
+      if (altNine === null || altNine === "gap") continue;
+      this.warnings.push(`Q4 매출 폴백: ${qname}(9개월 부분 없음) → ${alt} 대체(사업연도 값 증거 공시 ${evidenceAccn}, 9개월 원본 ${ninePart.accn ?? "?"})`);
+      return altNine.val;
+    }
+    return null;
   }
 
   /**
@@ -393,6 +423,13 @@ function uniq<T extends { start: string; end: string }>(xs: T[]): T[] {
   const m = new Map<string, T>();
   for (const x of xs) m.set(`${x.start}|${x.end}`, x);
   return [...m.values()];
+}
+
+/** 종목의 가장 최근 정기공시 accn — 제출 목록(submissions)만 읽는다(배치 갱신 판정용, UsReader.latestPeriodic 과 같은 규칙) */
+export async function latestPeriodicAccn(symbol: string): Promise<string | null> {
+  const { cik } = await resolveCik(symbol);
+  const sub = await getSubmissions(cik);
+  return sub.recent.find((f) => PERIODIC_FORM.test(f.form))?.accn ?? null;
 }
 
 export { fiscalYearOf, days, canonical };

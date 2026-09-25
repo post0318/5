@@ -81,6 +81,8 @@ export interface FinancialStatement {
   source: string;
   /** 원문/딥링크 */
   sourceUrl?: string;
+  /** 미국 — 재무 5층 구조(fin) 조립이 완전하지 않은 열(gaps·조립 항등식 불성립, fin-revenue.ts FinColIssue) */
+  finIssues?: { col: string; gaps: string[]; rev: string[]; other: string[] }[];
 }
 
 export interface CompanyProfile {

@@ -52,6 +52,22 @@ export function revenue(cols: AssembledIs[], co: CompanyProfile): MetricSeries {
       const net = role("revenue.net");
       out = tot ? mv(tot, "total") : rfc ? mv(rfc, "contract") : net ? mv(net, "net") : mv(null, "none", null);
     }
+    // 조립 항등식 불성립이 매출 줄에 걸리면(매출 줄이 그 식의 부모이거나 항 — 예: 매출총이익 = 매출 − 매출원가) 그 열의
+    // 매출을 비운다(revenue.md §6). 매출과 무관한 줄의 불성립은 값을 두고 index.ts 가 경고·gaps 로 노출한다.
+    const used = new Set<number>();
+    const idx = (l: StmtLine | null) => (l ? a.lines.indexOf(l) : -1);
+    if (out.v != null) {
+      used.add(idx(a.lines.find((l) => l.id === out.line) ?? null));
+      if (out.rule === "nii+nonii") used.add(idx(byId(NONII)));
+      if (out.rule === "override:total-nonop") for (const l of a.lines) if (l.role === "revenue.nonop") used.add(a.lines.indexOf(l));
+      used.delete(-1);
+    }
+    const revFails = a.identity.fails.filter((_, k) => {
+      if (a.identity.partial[k]) return false; // 값 없는 자식 줄이 있어 판정 불완전 — 매출을 비우지 않고 경고로만(index.ts)
+      const p = a.identity.at[k];
+      return used.has(p) || [...used].some((u) => a.lines[u].parent === p);
+    });
+    if (revFails.length) out = { ...out, v: null, rule: `identity-fail:${out.rule}`, reason: `조립 항등식 불성립(매출 줄 포함) — ${revFails.join("; ")}`, idFails: revFails };
     values[a.col.key] = out;
   }
   return { metric: "revenue", unit: "USD", values };

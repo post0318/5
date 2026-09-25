@@ -1,5 +1,5 @@
 import "server-only";
-import { loadFinSym, metricAt, type FinSymDoc } from "@/lib/fin";
+import { gapNames, loadFinSym, metricAt, type FinSymDoc } from "@/lib/fin";
 
 /**
  * 미국 매출 — **재무 5층 구조(src/lib/fin)의 매출 지표만** 받아 화면 모듈에 나눠 준다(docs/metrics/revenue.md §3).
@@ -29,6 +29,18 @@ export interface UsRevenue {
   ltm: RevCol | null;
   /** fin 완전성 비트(0 = 완전) */
   gaps: number;
+  /**
+   * 완전하지 않은 열 — gaps 이름(IDENTITY·BASIS_SHIFT 등)과 조립 항등식 불성립. rev = 매출 줄이 걸린 불성립(그 열 매출은
+   * 비어 있음), other = 매출과 무관한 줄의 불성립(매출 값은 유지 — 다음 지표 착수 때 닫을 미결)
+   */
+  issues: FinColIssue[];
+}
+
+export interface FinColIssue {
+  col: string;
+  gaps: string[];
+  rev: string[];
+  other: string[];
 }
 
 const Q_KEY = /^(\d{4})Q([1-4])$/;
@@ -49,7 +61,11 @@ export function revenueFromFinSym(sym: FinSymDoc): UsRevenue {
   }
   annual.sort((a, b) => a.end.localeCompare(b.end));
   quarters.sort((a, b) => a.end.localeCompare(b.end));
-  return { annual, quarters, ltm, gaps: sym.g };
+  const idf = new Map((sym.i ?? []).map(([k, r, o]) => [k, { rev: r, other: o }]));
+  const issues: FinColIssue[] = sym.c
+    .filter((c) => c[6] || idf.has(c[0]))
+    .map((c) => ({ col: c[0], gaps: gapNames(c[6]), rev: idf.get(c[0])?.rev ?? [], other: idf.get(c[0])?.other ?? [] }));
+  return { annual, quarters, ltm, gaps: sym.g, issues };
 }
 
 /** 종목의 매출 — 저장본(유니버스) 또는 비저장 조립(fin loadFinSym). 실패하면 null(소비처는 빈칸) */
@@ -92,4 +108,13 @@ export const revQuarterLabel = (c: RevCol): string => `${c.fy} Q${c.fq}`;
 export function revQuarterAt(r: UsRevenue | null | undefined, end: string): RevCol | null {
   const t = Date.parse(end);
   return r?.quarters.find((c) => Math.abs(Date.parse(c.end) - t) <= 6 * 86_400_000) ?? null;
+}
+
+/** 재무제표 출처 표기용 한 줄 — 완전하지 않은 열(gaps·항등식). 없으면 null */
+export function finIssueNote(r: UsRevenue | null | undefined): string | null {
+  const xs = r?.issues ?? [];
+  if (!xs.length) return null;
+  return `fin 조립 미완전 열: ${xs
+    .map((q) => `${q.col}[${q.gaps.join("·")}]${q.rev.length ? ` 매출 비움(항등식 ${q.rev.join("; ")})` : ""}${q.other.length ? ` 매출 외 항등식 ${q.other.join("; ")}` : ""}`)
+    .join(" / ")}`;
 }

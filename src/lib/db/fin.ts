@@ -24,6 +24,10 @@ export interface FinSymDoc {
   c: FinColTuple[];
   m: Record<string, (number | null)[]>;
   x: Record<string, Record<string, FinExc>>;
+  /** 배치가 "새 정기공시 없음"을 마지막으로 확인한 시각(/api/cron/fin-build) */
+  ck?: Date;
+  /** 조립 항등식 불성립 [열키, 매출 경로 불성립(그 열 매출 비움), 매출 외 줄 불성립(값 유지)] — 없으면 생략 */
+  i?: [string, string[], string[]][];
 }
 
 export interface FinStmtDoc {

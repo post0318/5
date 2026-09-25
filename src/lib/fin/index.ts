@@ -1,9 +1,9 @@
 import "server-only";
-import { UsReader } from "./read";
+import { latestPeriodicAccn, UsReader } from "./read";
 import { assembleIncomeStatements } from "./assemble/is";
 import { revenue } from "./metrics/revenue";
-import { markFailed, persist, readStmt, readSym, toStmtDoc, toSymDoc } from "./store";
-import { Gap, type FinAssembly, type Market } from "./types";
+import { ENGINE_VERSION, markFailed, persist, readStmt, readSym, readSymMeta, toStmtDoc, toSymDoc, touchChecked } from "./store";
+import { Gap, gapNames, type FinAssembly, type Market } from "./types";
 import type { FinStmtDoc, FinSymDoc } from "../db/fin";
 
 /**
@@ -35,13 +35,27 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
   }
   const st = await assembleIncomeStatements(reader, { annual: opts.annual ?? 10, quarterly: opts.quarterly ?? 20 });
   const colsGaps = [...st.annual, ...st.quarterly].reduce((g, a) => g | a.col.gaps, 0);
+  const cols = dedupe([...st.annual, ...st.quarterly]);
+  const rev = revenue(cols, reader.profile);
+  // 조립 항등식 불성립(Gap.IDENTITY) 노출 — 매출 경로는 3층이 이미 값을 비웠고(reason), 그 외 줄은 값을 두고 경고로만
+  const issues: FinAssembly["issues"] = [];
+  const warnings = [...reader.warnings];
+  for (const a of cols) {
+    if (a.identity.ok) continue;
+    const r = rev.values[a.col.key]?.idFails ?? [];
+    const other = a.identity.fails.filter((f) => !r.includes(f));
+    issues.push({ col: a.col.key, rev: r, other });
+    if (r.length) warnings.push(`${a.col.key} 매출 비움 — 조립 항등식 불성립(매출 줄 포함): ${r.join("; ")}`);
+    if (other.length) warnings.push(`${a.col.key} 조립 항등식 불성립(매출 외 줄 — 값 유지, 다음 지표 미결): ${other.join("; ")}`);
+  }
   const result: FinAssembly = {
     profile: reader.profile,
     annual: st.annual,
     quarterly: st.quarterly,
-    metrics: { revenue: revenue(dedupe([...st.annual, ...st.quarterly]), reader.profile) },
+    metrics: { revenue: rev },
     gaps: reader.gaps | colsGaps,
-    warnings: reader.warnings,
+    warnings,
+    issues,
     latestAccn: reader.latestPeriodic(),
     at: new Date().toISOString(),
   };
@@ -83,7 +97,8 @@ export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | 
   const entry: LookupEntry = { at: Date.now(), ttl: LOOKUP_TTL_MS.stored, p: Promise.resolve(null) };
   entry.p = (async () => {
     const stored = await getFinSym(market, symbol).catch(() => null);
-    if (stored) return stored;
+    // 엔진판이 다른 저장본(판독·조립 규칙이 바뀌기 전 배치)은 쓰지 않는다 — 배치(/api/cron/fin-build)가 다시 적재할 때까지 비저장 조립
+    if (stored && stored.ev === ENGINE_VERSION) return stored;
     try {
       const a = await assemble(market, symbol, { persist: false });
       entry.ttl = LOOKUP_TTL_MS.assembled;
@@ -101,4 +116,51 @@ const METRIC_KEY = { revenue: "rev" } as const;
 export function metricAt(sym: FinSymDoc, metric: keyof typeof METRIC_KEY, colKey: string): number | null {
   const i = sym.c.findIndex((c) => c[0] === colKey);
   return i < 0 ? null : (sym.m[METRIC_KEY[metric]]?.[i] ?? null);
+}
+
+/**
+ * 배치 갱신(architecture.md §5.1, /api/cron/fin-build) — 대상 종목 중 **저장본이 없거나, 엔진판이 다르거나, 저장 후 새 정기공시가
+ * 나온** 종목만 조립·저장한다. 호출당 최대 `max` 종목, `deadline`(epoch ms) 이후에는 새 조립을 시작하지 않는다(Vercel 함수 시간).
+ * 판정 순서: 저장본 없음 → 엔진판 다름 → 새 공시 확인(제출 목록만 — 마지막 확인이 오래된 종목부터). 새 공시가 없으면 확인 시각만 남긴다.
+ */
+export interface RefreshResult {
+  built: { symbol: string; why: "missing" | "engine" | "filing"; changed?: number; kept?: boolean; gaps: string[]; error?: string }[];
+  upToDate: string[];
+  /** 시간·개수 한도로 이번 호출에서 보지 못한 종목 */
+  pending: number;
+}
+
+export async function refreshStored(market: Market, symbols: string[], opts: { max: number; deadline: number; minBuildMs?: number }): Promise<RefreshResult> {
+  if (market !== "us") throw new Error("한국(DART) 어댑터는 아직 없음 — architecture.md §10");
+  const syms = [...new Set(symbols.map((s) => s.toUpperCase()))];
+  const meta = await readSymMeta(syms.map((s) => `${market}:${s}`));
+  const m = (s: string) => meta.get(`${market}:${s}`);
+  const rank = (s: string) => (!m(s) ? 0 : m(s)!.ev !== ENGINE_VERSION ? 1 : 2);
+  const last = (s: string) => (m(s)?.ck ?? m(s)?.at)?.valueOf() ?? 0;
+  const queue = syms.sort((a, b) => rank(a) - rank(b) || last(a) - last(b));
+  const out: RefreshResult = { built: [], upToDate: [], pending: 0 };
+  const minBuild = opts.minBuildMs ?? 60_000;
+  let i = 0;
+  for (; i < queue.length; i++) {
+    if (out.built.length >= opts.max || Date.now() + minBuild > opts.deadline) break;
+    const s = queue[i];
+    let why: RefreshResult["built"][number]["why"] | null = rank(s) === 0 ? "missing" : rank(s) === 1 ? "engine" : null;
+    if (!why) {
+      const la = await latestPeriodicAccn(s).catch(() => null);
+      if (la && la !== m(s)!.la) why = "filing";
+      else {
+        // 제출 목록 조회 실패(la null)도 "새 공시 없음"으로 보지 않는다 — 확인 시각을 남기지 않고 다음 호출에서 다시
+        if (la) { await touchChecked(`${market}:${s}`).catch(() => {}); out.upToDate.push(s); }
+        continue;
+      }
+    }
+    try {
+      const r = await assemble(market, s, { persist: true });
+      out.built.push({ symbol: s, why, changed: r.persisted?.changed, kept: r.persisted?.kept, gaps: gapNames(r.gaps) });
+    } catch (e) {
+      out.built.push({ symbol: s, why, gaps: [], error: String((e as Error).message ?? e).slice(0, 200) });
+    }
+  }
+  out.pending = queue.length - i;
+  return out;
 }

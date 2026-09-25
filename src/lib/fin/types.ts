@@ -112,7 +112,8 @@ export interface StmtLine {
 export interface AssembledIs {
   col: Column;
   lines: StmtLine[];
-  identity: { ok: boolean; fails: string[] };
+  /** 항등식(부모 = Σ 가중치 × 자식) 검사 — fails[k] 는 줄 at[k](부모)의 불성립, partial[k] = 값 없는 자식 줄이 있어 판정 불완전 */
+  identity: { ok: boolean; fails: string[]; at: number[]; partial: boolean[] };
 }
 
 /** 3층 — 지표 값. */
@@ -124,6 +125,10 @@ export interface MetricValue {
   rule: string;
   gaps: number;
   why?: ReadWhy;
+  /** 값을 비운 사유(예: 매출 줄이 걸린 조립 항등식 불성립) */
+  reason?: string;
+  /** 이 값을 비운 항등식 불성립(매출 경로) — AssembledIs.identity.fails 의 부분집합 */
+  idFails?: string[];
 }
 export interface MetricSeries {
   metric: "revenue";
@@ -149,8 +154,10 @@ export interface FinAssembly {
   quarterly: AssembledIs[];
   metrics: { revenue: MetricSeries };
   gaps: number;
-  /** 원천 조회 실패 등 사람이 읽는 경고 */
+  /** 원천 조회 실패 등 사람이 읽는 경고(조립 항등식 불성립 포함) */
   warnings: string[];
+  /** 조립 항등식 불성립 열 — rev = 매출 경로(그 열 매출을 비움), other = 매출과 무관한 줄(값은 둠, 다음 지표 미결) */
+  issues: { col: string; rev: string[]; other: string[] }[];
   /** 가장 최근 정기공시 accn */
   latestAccn: string | null;
   at: string;

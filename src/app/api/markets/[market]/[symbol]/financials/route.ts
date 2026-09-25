@@ -9,6 +9,7 @@ import { loadCaptiveDebt } from "@/lib/markets/us/edgar-captive";
 import { reitOpUnits } from "@/lib/markets/us/edgar-ev";
 import { buildUsCashFlow } from "@/lib/markets/us/edgar-cashflow";
 import { buildUsIncome } from "@/lib/markets/us/edgar-income";
+import { finIssueNote } from "@/lib/markets/us/fin-revenue";
 import { buildUsBalance } from "@/lib/markets/us/edgar-balance";
 import { buildUsAnalysis } from "@/lib/markets/us/edgar-analysis";
 import { buildUsSummary } from "@/lib/markets/us/edgar-summary";
@@ -196,6 +197,12 @@ export async function GET(
       if (facts.fetchWarnings?.length) stmt.source += ` · ⚠ 일부 공시 조회 실패(${facts.fetchWarnings.slice(0, 3).join(", ")}) — 잠시 뒤 다시 계산`;
       // 20-F 발행사 LTM 열 = Yahoo 분기(edgar-yahoo-quarters.ts) — 기준일·공란 항목 명시
       if (facts.ltmQuarterSource) stmt.source += ` · ${yahooLtmLabel(facts.ltmQuarterSource)}`;
+      // 재무 5층 구조 매출의 미완전 열(gaps·조립 항등식 불성립) — 매출 경로면 그 열 매출은 비어 있다(fin-revenue.ts)
+      const finNote = finIssueNote(facts.revenue);
+      if (finNote) {
+        stmt.source += ` · ⚠ ${finNote}`;
+        stmt.finIssues = facts.revenue!.issues;
+      }
       return ok(stmt, { headers: NO_CACHE });
     }
 

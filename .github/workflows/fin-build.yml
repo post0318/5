@@ -1,0 +1,48 @@
+name: 재무 5층 구조 배치 갱신 (fin_sym·fin_stmt)
+
+# 유니버스(미국) 종목의 재무 조립 결과를 DB 에 적재한다(docs/metrics/architecture.md §5.1).
+# 배포된 앱의 /api/cron/fin-build 를 부른다 — 저장본이 없거나 · 엔진판이 다르거나 · 새 정기공시가 나온 종목만 조립.
+# 호출당 3종목(Vercel 함수 시간), 응답의 pending 이 0 이 되거나 이번 호출에서 아무것도 안 했으면 멈춘다.
+#   - 하루 1회: 21:10 UTC = 06:10 KST (미국 장 마감·공시 반영 뒤, 재무 검증 07:40 KST 전)
+#   - 수동: workflow_dispatch (symbols 를 주면 그 종목만)
+
+on:
+  schedule:
+    - cron: "10 21 * * *"
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "쉼표 구분 종목(비우면 유니버스 전체 중 갱신 대상만)"
+        default: ""
+
+concurrency:
+  group: fin-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      BASE: https://macroresearch.vercel.app
+      SYMBOLS: ${{ inputs.symbols }}
+    steps:
+      - name: 갱신 대상 조립·저장(반복 호출)
+        run: |
+          set -u
+          q="n=3"
+          if [ -n "${SYMBOLS:-}" ]; then q="$q&symbols=$SYMBOLS"; fi
+          fail=0
+          for i in $(seq 1 60); do
+            code=$(curl -sS -o res.json -w "%{http_code}" -X POST --max-time 320 \
+              -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/fin-build?$q" || echo 000)
+            echo "── 호출 $i (HTTP $code)"; cat res.json; echo
+            if [ "$code" != "200" ]; then fail=1; break; fi
+            errs=$(jq '[.built[] | select(.error)] | length' res.json)
+            if [ "$errs" != "0" ]; then fail=1; fi
+            pending=$(jq '.pending' res.json)
+            did=$(jq '(.built | length) + (.upToDate | length)' res.json)
+            if [ "$pending" = "0" ] || [ "$did" = "0" ]; then break; fi
+          done
+          if [ "$fail" = "1" ]; then echo "::error::fin 배치 갱신 실패 또는 종목 조립 오류 — 로그 확인"; exit 1; fi

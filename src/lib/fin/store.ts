@@ -8,7 +8,7 @@ import { Gap, type AssembledIs, type Column, type FinAssembly, type MetricValue,
  */
 
 /** 엔진판 — 판독·조립 규칙이 바뀌면 올린다(fin_chg 사유 "ev") */
-export const ENGINE_VERSION = 2;
+export const ENGINE_VERSION = 3;
 /** 문서 스키마판 — 압축 형식이 바뀌면 올린다 */
 export const SCHEMA_VERSION = 1;
 
@@ -48,6 +48,7 @@ export function toSymDoc(a: FinAssembly): FinSymDoc {
     c: cols.map(colTuple),
     m: { rev: cols.map((c) => rev[c.key]?.v ?? null) },
     x: { rev: x },
+    ...(a.issues.length ? { i: a.issues.map((q) => [q.col, q.rev, q.other] as [string, string[], string[]]) } : {}),
   };
 }
 
@@ -136,6 +137,17 @@ export async function persist(a: FinAssembly, stmts: { annual: FinStmtDoc; quart
 export async function markFailed(id: string, gaps: number): Promise<void> {
   const symCol = await finSymCol();
   await symCol.updateOne({ _id: id }, { $bit: { g: { or: gaps } }, $set: { at: new Date() } });
+}
+
+/** 배치 갱신 판정용 메타 — 엔진판·최신 공시 accn·적재 시각·마지막 확인 시각 */
+export async function readSymMeta(ids: string[]): Promise<Map<string, Pick<FinSymDoc, "_id" | "ev" | "la" | "at" | "ck">>> {
+  const docs = await (await finSymCol()).find({ _id: { $in: ids } }, { projection: { ev: 1, la: 1, at: 1, ck: 1 } }).toArray();
+  return new Map(docs.map((d) => [d._id, d]));
+}
+
+/** 새 정기공시 없음을 확인한 시각 — 다음 배치가 오래 확인 안 한 종목부터 보게 */
+export async function touchChecked(id: string): Promise<void> {
+  await (await finSymCol()).updateOne({ _id: id }, { $set: { ck: new Date() } });
 }
 
 export async function readSym(id: string): Promise<FinSymDoc | null> {
