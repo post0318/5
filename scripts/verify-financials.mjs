@@ -2173,6 +2173,13 @@ async function verifyUs(sym) {
       const E0 = new Date(Date.parse(H[c0].date) - 365 * 864e5).toISOString().slice(0, 10);
       const name = "첫 열 전년 매출 = SEC(성장률 기준)";
       let prior = null, how = "";
+      // 보조 신호(오너 결정 2026-09-25): 본표에서 전년 매출을 못 찾았을 때 SEC companyfacts 연간 매출 태그에도 없으면 "공시 없음"(분사 첫해 등),
+      // 있으면 "검증기 본표 판독 실패" — 조용히 검증불가로 두지 않고 조회 오류로 기록
+      const cfPrior = [...revP.keys()].find((k) => Math.abs(Date.parse(k) - Date.parse(E0)) <= 10 * 864e5);
+      const naOrReadFail = (why) => cfPrior
+        ? hardErrors.push(`첫 열 전년 매출 본표 판독 실패 — companyfacts 에는 ${cfPrior} 연간 매출 ${revP.get(cfPrior)?.val ?? revP.get(cfPrior)} 있음(${why})`)
+        : add("A", name, c0, { status: NA, note: `${why} · companyfacts 연간 매출도 없음(공시 없음)` });
+
       if (foreign) {
         const r = atEnd(natRev, E0);
         const avg = r && fxRows ? fxAvg(fxRows, r.start, r.end) : null;
@@ -2182,14 +2189,14 @@ async function verifyUs(sym) {
       } else if (!revFace) {
         // 본표 판독 실패 — 앱이 첫 열 성장률을 보이면 대조 없이 둘 수 없어 FAIL(미검증 열 검사와 같은 규칙)
         const appYoy = [H[c0].revYoy, A[c0]?.revYoy, C[c0]?.revenueYoY].filter((v) => v != null);
-        add("A", name, c0, { status: appYoy.length ? FAIL : NA, note: appYoy.length ? `${revFaceWhy} · 앱 첫 열 성장률 ${appYoy.join("/")} 표시` : revFaceWhy });
+        if (appYoy.length) add("A", name, c0, { status: FAIL, note: `${revFaceWhy} · 앱 첫 열 성장률 ${appYoy.join("/")} 표시` }); else naOrReadFail(revFaceWhy);
       }
       else {
         try { await revFace.extend(E0, "FY"); } catch (e) { hardErrors.push(`첫 열 전년 매출 SEC 공시 추가 판독 실패: ${String(e).slice(0, 80)}`); }
         const e = revFace.annualAt(E0);
         // 전년 정기공시 자체가 없으면(분사 첫해 등) 앱 성장률도 빈칸이어야 한다 — 양쪽 빈칸은 검증불가, 앱만 값이 있으면 실패
         const appYoy = [H[c0].revYoy, A[c0]?.revYoy, C[c0]?.revenueYoY].filter((v) => v != null);
-        if (!e && appYoy.length === 0) add("A", name, c0, { status: NA, note: `전년(${E0} 전후) SEC 본표 매출 없음 · 앱 첫 열 성장률도 빈칸` });
+        if (!e && appYoy.length === 0) naOrReadFail(`전년(${E0} 전후) SEC 본표 매출 없음 · 앱 첫 열 성장률도 빈칸`);
         else if (!e) add("A", name, c0, { status: FAIL, note: `전년(${E0} 전후) SEC 본표 매출 대응값 없음인데 앱 첫 열 성장률 ${appYoy.join("/")} 표시 — 근거 대조 불가` });
         else { prior = e.v; how = e.how; }
       }
