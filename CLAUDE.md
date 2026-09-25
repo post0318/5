@@ -1063,9 +1063,10 @@ npm run db:studio    # drizzle studio
         나오는 시황 전략 칼럼(KB "이그전"에 가까움)이라 기계적 추천 리스트인
         KB "리서치 모델 포트폴리오"와 성격이 달라 제외 여부는 보류(오너
         확인 대기, 착수 안 함).
-    - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
-      "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
-      확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
+    - **대신증권 — 제외(오너 결정, 2026-09) → 2026-09-25 모바일 웹으로 전환**:
+      PC "기업분석"·"글로벌 기업분석" 메뉴가 로그인으로 리다이렉트되는 것만 보고 중단했었는데,
+      재조사에서 모바일 웹 리서치 화면이 로그인 없이 열려 직접 수집으로 전환(아래 "한경 컨센서스
+      경유 → 직접 수집 전환" 항목).
     - **StockAnalysis.com 개별 애널리스트 투자의견 추가(오너 승인, 2026-09)**:
       Yahoo `upgradeDowngradeHistory` 는 증권사(firm)까지만 주고 애널리스트
       개인명·정확도는 유료 데이터라 안 나온다. stockanalysis.com 의 종목별
@@ -1207,6 +1208,39 @@ npm run db:studio    # drizzle studio
   이슈분석. 주간투자정보·선물옵션은 미수집. 국내 비상장은 "삼성증권
   비상장리서치"(국내 인사이트). chief·spot1·spot2 는 모바일 검색에서 0건(실측),
   프리미엄은 2022-12 이후 새 글 없음.
+- **한경 컨센서스 경유 → 직접 수집 전환(오너 결정, 2026-09-25)**: 한경으로만 받던
+  증권사 10곳을 NH·삼성 방식(화면은 로그인이어도 열려 있는 엔드포인트)으로 재조사했다.
+  | 소스 | 결과 | 방식 | 수집기 |
+  |---|---|---|---|
+  | iM증권 | 전환 | 모바일 화면 내부 JSON API(`/_json/source.jsp`, 세션키 등록 — 로그인 아님), 첨부 조회로 PDF·종목코드(파일명 끝 6자리) | `collect-im-research.mjs` |
+  | 메리츠증권 | 전환 | 메뉴는 로그인, 게시판 엔진 `/bbs/BbsList.go` 는 열림(삼성과 같은 패턴), 상세에 PDF 직링크 | `collect-meritz-research.mjs` |
+  | IBK투자증권 | 전환 | 서버렌더 HTML(EUC-KR), 정적 PDF 경로, robots `Allow: /`. 종목코드는 제목 종목명→corpcodes | `collect-ibk-research.mjs` |
+  | 유안타증권 | 재개 | 옛 수집기가 그대로 정상(과거 실패 재현 안 됨) + 산업·투자전략·경제 게시판 추가 | `collect-yuanta-research.mjs` |
+  | 한화투자증권 | 확장 | 자체 수집기에 산업·전략·경제·채권·해외 게시판 추가, new 배지 누락 버그 수정, PDF(`mode=attach_open`) | `collect-hanwha-research.mjs` |
+  | 한국IR협의회 | 전환 | 서버렌더 HTML(인소싱·아웃소싱), 의견·목표가 원래 없음. TLS 중간 인증서 누락 → 스크립트에 공개 중간 인증서 추가(Node 24) | `collect-kirs-research.mjs` |
+  | 대신증권 | 전환(예전 "재검토 안 함" 결정을 뒤집음) | PC 는 로그인, 모바일 웹(`money2.daishin.com/E5/ResearchCenter/DM_*`)은 열림. 모바일 목록이 글의 절반 가까이 빠뜨려 rowid 를 연속 조회, 재게시 제외. robots.txt 는 WAF 가 막아 확인 불가 | `collect-daishin-research.mjs` |
+  | SK증권 | 한경 유지 | 게시판은 로그인, 통합검색만 열리나 날짜 정렬이 없어 매일 증분 수집 불가 | — |
+  | 유진투자증권 | 한경 유지 | 목록 서버가 로그인 검사, 공개 게시판은 2022-01 에 멈춤 | — |
+  | LS증권 | 한경 유지 | "계좌고객만"(서버) + 모바일 API 봇 차단(Eversafe), robots `Disallow: /` | — |
+  - 전환한 7곳은 한경 수집기 `EXCLUDED_SOURCES` 에 넣었다 — 한경 쪽 오류가 실측됨
+    (유안타 IPARK 목표가 34,000 → 340,000, 한화 한국가스공사 리포트의 종목이 "한화투자증권"
+    으로 오표기·2중 게재). 대신·iM 은 GlobalMonitor 에서도 뺐다(같은 글인데 GM 제목에
+    "[Issue & News]" 머리말이 붙어 제목 dedupe 가 안 걸림). 메리츠·유안타는 자체 수집기가
+    미국 종목 리포트를 안 받아 GM 경유 유지.
+  - 게시판 분류는 삼성증권과 같은 기준: 기업→종목분석, 산업→산업분석, 투자전략→투자전략
+    (주식), 데일리·시황→시황, 경제·채권→거시경제 이슈분석(FX·환율은 환율분석), 원자재→이슈분석.
+    고정 라벨은 `shinhan-research.ts` STRATEGY_/MARKET_CONDITION_STOCKNAMES 에 등록.
+  - **미결**: 한경 경유로 이미 쌓인 옛 문서(`{source}:한경:*`)는 id 가 달라 90일 보존이 끝날
+    때까지 새 직접 수집 문서와 중복될 수 있다 — 배포 후 `/api/cron/shinhan-research` DELETE
+    (source + idPrefix "한경:")로 7곳 정리 필요. 대신·iM 의 옛 GM 문서(idPrefix "GM:")도 같다.
+- **링크는 PDF 우선(오너 지시 2026-09-25 — "공통에 적용해라 pdf 우선으로 pdf 가능시
+  상세화면 연결 불필요. 즉시 pdf로 링크")**: 모든 수집기의 `pdfUrl` 은 로그인 없이 열리는
+  PDF 직링크가 1순위, PDF 가 안 되는 건만 상세 페이지 폴백. 이번에 한국투자증권 3개
+  수집기가 상세 페이지 → PDF 로 바뀌었다(공용 JS `doFiledownload()` 의 옛 다운로드 서블릿
+  `file.koreainvestment.com/servlet/Download?file_path=research/research{category1}/&file_name=`
+  이 로그인 없이 열림 — 파일로 내려받아지는 `attachment` 응답). 예외: DS투자증권은 그누보드
+  첨부가 게시글 세션 쿠키 없이는 오류 페이지라 브라우저 직링크가 안 돼 게시글 링크 유지,
+  교보는 PDF 조회 실패 건만 상세 폴백.
 - **산업분석 탭 (`/[market]/research`, 종목분석 옆 최상위 탭, 오너 지시
   2026-09)**: `kr_research` 의 `category:"산업"`(symbol 항상 null, 여러
   증권사가 이미 수집 중이었지만 종목별 조회(`getShinhanResearchBySymbol`)

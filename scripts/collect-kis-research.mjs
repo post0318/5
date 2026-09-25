@@ -7,10 +7,10 @@
  * 나온다(GNB "리서치" 메뉴 → "기업/산업" 서브메뉴 링크를 그대로 사용).
  * 로그인 불필요. 상세 페이지(`StrategyDetail.jsp?id=N`)도 로그인 없이 전체
  * 본문이 그대로 보이지만(실측 확인), 이 프로젝트 방침상 전체 본문은 저장하지
- * 않고 목록에 이미 노출되는 요약 발췌만 저장한다. **PDF 원문은 로그인
- * 필요**(`prePdfFileView()`가 비로그인 시 `login.jsp`로 리다이렉트, 실측
- * 확인) — 교보증권과 동일한 패턴으로, 로그인 없이 열리는 상세 페이지 URL을
- * 대신 연결한다.
+ * 않고 목록에 이미 노출되는 요약 발췌만 저장한다. 화면의 `prePdfFileView()`는
+ * 비로그인 시 `login.jsp`로 보내지만, 공용 JS 의 옛 다운로드 서블릿은 로그인 없이
+ * PDF 를 준다(2026-09-25 재점검) — 링크는 그 PDF 직링크로 건다(공통 규칙 — PDF
+ * 우선, 없는 건만 상세 페이지 폴백). 아래 `kisPdfUrl()` 참고.
  *
  * 목록 제목이 "종목명 (코드):제목"(일부는 앞에 "AIR 스몰캡" 같은 태그가 더
  * 붙음) 형식이라 코드를 바로 뽑되, 종목명은 태그가 섞여 지저분할 수 있어
@@ -120,6 +120,17 @@ async function fetchPage(page) {
   return res.text();
 }
 
+// PDF 직링크(공통 규칙 — PDF 우선, 2026-09-25): 화면의 prePdfFileView() 는 비로그인 시
+// 로그인 페이지로 보내지만, 사이트 공용 JS(common_2021.js doFiledownload)가 만드는 옛
+// 다운로드 서블릿은 로그인 없이 PDF 를 준다(실측 — 국내 research05·해외 research17·전략
+// research02 모두 %PDF). 경로는 category1 번호 그대로 "research/research{번호}".
+const KIS_PDF_RE = /prePdfFileView\('\?category1=(\d+)&category2=\d+','([^']+\.pdf)'/i;
+function kisPdfUrl(chunk) {
+  const m = chunk.match(KIS_PDF_RE);
+  if (!m) return null;
+  return `https://file.koreainvestment.com/servlet/Download?file_path=research/research${m[1]}/&file_name=${encodeURIComponent(m[2])}`;
+}
+
 function parseItems(html) {
   const items = [];
   for (const chunk of html.split("<li>").slice(1)) {
@@ -141,6 +152,7 @@ function parseItems(html) {
         analyst: analystM[1].trim(),
         summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
         detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=10&id=${idM[1]}`,
+        pdfUrl: kisPdfUrl(chunk),
         category: "기업",
       });
       continue;
@@ -156,6 +168,7 @@ function parseItems(html) {
       analyst: analystM[1].trim(),
       summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
       detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=10&id=${idM[1]}`,
+      pdfUrl: kisPdfUrl(chunk),
       category: "산업",
     });
   }
@@ -204,8 +217,8 @@ for (const it of collected) {
   it.bodyText = await fetchDetailText(it.detailUrl);
   await sleep(400);
 }
-// 한투 PDF 는 로그인이 필요해 pdfUrl 이 상세 페이지 URL 이다 — PDF 단계는 끈다.
-await enrichResearch(collected, { market: "kr", usePdf: false });
+// 상세 본문 → PDF(옛 다운로드 서블릿, 로그인 불필요) 순으로 공용 추출기가 찾는다.
+await enrichResearch(collected, { market: "kr" });
 console.log("  예시:", collected[0] && `${collected[0].opinion || "(없음)"} / ${collected[0].targetPrice ?? "(없음)"}`);
 
 if (DRY_RUN) {
@@ -223,7 +236,7 @@ const items = collected.map((it) => ({
   opinion: it.opinion,
   targetPrice: it.targetPrice,
   summary: it.summary,
-  pdfUrl: it.detailUrl,
+  pdfUrl: it.pdfUrl ?? it.detailUrl, // PDF 우선, 없으면 상세 페이지
   views: null,
   category: it.category,
 }));

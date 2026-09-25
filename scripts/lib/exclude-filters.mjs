@@ -42,7 +42,8 @@ export function isWeeklyRecurringContent(text) {
  * `ESG_EXCLUDE_RE`) — 여기서는 애초에 DB에 쌓이지 않도록 수집 단계에서
  * 막는다.
  */
-const ESG_RE = /\bESG\b/i;
+// 붙여 쓴 시리즈명("The ESGVerse" — 메리츠, 2026-09-25 실측)도 잡도록 뒤쪽 \b 는 뺐다.
+const ESG_RE = /\bESG/i;
 
 /** 제목(또는 라벨+제목)에 ESG 신호가 있으면 true — 수집기가 이 항목을 건너뛴다. */
 export function isEsgContent(text) {

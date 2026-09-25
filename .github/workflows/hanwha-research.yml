@@ -1,8 +1,9 @@
-name: 한화투자증권 기업분석 리포트 수집
+name: 한화투자증권 리서치 수집
 
-# CLAUDE.md 방침(오너 승인 예외): www.hanwhawm.com 리서치센터를 하루 1회,
-# 개인용으로만 조회한다. robots.txt가 Disallow: / 라 다른 예외들과 동일한
-# 조건(개인용·로컬 실행(GitHub Actions 개인 자동화)·저빈도)으로 승인됨.
+# CLAUDE.md 방침: www.hanwhawm.com 리서치센터(기업·산업·주식전략·경제·채권·
+# 해외주식 게시판 + 첨부 PDF)를 개인용·저빈도로 조회한다. robots.txt 는
+# /service/ 등 좁은 경로만 막고 /main/research/·/main/common/common_file/ 은
+# 허용한다(실측 2026-09-25). 한경 컨센서스 경유분을 대체(오너 결정 2026-09-25).
 
 on:
   schedule:

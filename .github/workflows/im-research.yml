@@ -1,0 +1,26 @@
+name: iM증권 리서치 수집
+
+# CLAUDE.md 방침(오너 결정 2026-09-25): www.imfnsec.com 리서치 게시판 내부 JSON
+# (/_json/source.jsp, 세션 키 절차 필요·로그인 불필요)을 하루 2회, 개인용으로만
+# 조회한다. robots.txt 는 없다 — 다른 예외들과 동일 조건(개인용·저빈도·요청 간격).
+
+on:
+  schedule:
+    - cron: "30 23 * * *" # 23:30 UTC = 08:30 KST(1차)
+    - cron: "30 3 * * *" # 03:30 UTC = 12:30 KST(2차)
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # 공용 추출기가 pdf-parse 를 import 한다(PDF 는 로그인 없이 받아짐).
+      - run: npm ci
+      - run: node scripts/collect-im-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

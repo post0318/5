@@ -112,7 +112,11 @@ const MARKET_RULES = {
     manwon: true,
     // 라벨(+조사/짧은 괄호/콜론) 바로 뒤 "N원"·"N만원"·"-원"(미제시).
     own: [
-      /(?:목표\s*주가|목표가|적정\s*주가|적정\s*가격|\bTP)(?:를|는|가|은)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+|-)\s*(만)?\s*원/,
+      // "3.6만원"(한화) 같은 소수 만원도 — 소수점은 "만" 단위일 때만 인정(matchPrice).
+      /(?:목표\s*주가|목표가|적정\s*주가|적정\s*가격|\bTP)(?:를|는|가|은)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+(?:\.\d+)?|-)\s*(만)?\s*원/,
+      // "원" 없는 표기(대신 "6개월 목표주가 560,000") — 천 단위 콤마가 있는 숫자만,
+      // 뒤에 다른 단위(%·억·조·배·달러)가 오면 인정 안 함. 위 "원" 패턴보다 뒤에 둔다.
+      /(?:목표\s*주가|목표가|적정\s*주가)\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*(\d{1,3}(?:,\d{3})+)(?![\d,.]|\s*(?:%|억|조|배|달러|USD|\$|원))/,
     ],
     consensus: [],
   },
@@ -174,7 +178,11 @@ function matchPrice(patterns, text, rules) {
     const m = text.match(re);
     if (!m) continue;
     if (m[1] === "-") return null; // "목표주가 -원" = 미제시
-    const n = Number(m[1].replace(/,/g, "")) * (rules.manwon && m[2] ? 10_000 : 1);
+    const manwon = rules.manwon && m[2];
+    // 국내(만원 단위 규칙)는 "만" 없는 소수를 받지 않는다("3.6원" 같은 오탐 방지).
+    if (rules.manwon && !manwon && m[1].includes(".")) continue;
+    const raw = Number(m[1].replace(/,/g, ""));
+    const n = manwon ? Math.round(raw * 10_000) : raw; // 3.6만원 → 36000 (부동소수 오차 제거)
     if (Number.isFinite(n) && n > rules.min && n < rules.max) return n;
     // 범위 밖이면 다음 패턴으로(기존 해외 추출기와 같은 동작).
   }

@@ -1,19 +1,52 @@
 /**
- * 한화투자증권 "기업분석" 리포트 — 로컬 수집기.
+ * 한화투자증권 리서치 — 로컬 수집기(기업·산업·주식전략·경제·채권·해외주식).
  *
- * www.hanwhawm.com 리서치센터(기업분석, depth3_id=anls1)는 로그인 없이 서버
- * 렌더링 HTML로 나온다. 페이지네이션도 평범한 GET(`&p=N`). 제목이 "[업종]
- * 종목명[코드/의견] 제목" 형식이라 이름 검색 없이 제목에서 종목코드를 뽑는다.
- * 목록에 직접 PDF 링크가 없어 상세보기 URL(view.cmd)을 대신 연결한다.
+ * www.hanwhawm.com 리서치센터 게시판은 로그인 없이 서버렌더 HTML로 나온다.
+ * 페이지네이션은 평범한 GET(`list.cmd?depth3_id={게시판}&p=N`, 페이지당 10건).
+ * 한경 컨센서스 경유분을 완전히 대체하려고(오너 결정 2026-09-25) 기업분석
+ * 하나만 보던 것을 아래 게시판으로 넓혔다. 분류 기준은 삼성증권 수집기와 같다.
  *
- * 목표주가 폴백(2026-09 추가): 목록 요약(cont_txt)엔 목표주가가 없는 경우가
- * 많지만(오너 확인 — LS 사례), 상세보기(view.cmd) 본문엔 "투자의견 BUY,
- * 목표주가 542,000원 유지"처럼 항상 있다. 목록 요약에서 못 찾았을 때만
- * 상세 페이지를 받아 재시도(매번 받지 않음 — 페이지가 커서 비용 고려).
+ *   | depth3_id | 사이트 분류   | 앱 목적지                                            |
+ *   |-----------|---------------|------------------------------------------------------|
+ *   | anls1     | 기업분석      | 국내 종목분석("[업종] 종목명[코드/의견] 제목")        |
+ *   | anls2     | 산업분석      | 국내 산업분석(대괄호 업종 라벨). 디지털자산·ESG 제외 |
+ *   | rpt_m1    | 주식전략      | 국내 산업분석, stockName 고정 "한화 투자전략"        |
+ *   | rpt_m8    | 국내외 경제   | 거시경제 이슈분석(FX·환율 글은 환율분석)             |
+ *   | istn1     | 채권전략      | 거시경제 이슈분석(FX·환율 글은 환율분석)             |
+ *   | anls19    | 해외주식분석  | 미국 종목(us/기업)·중국 종목(ch/기업)·그 외 산업     |
  *
- * ⚠️ www.hanwhawm.com/robots.txt 는 `Disallow: /` (Googlebot·Yeti 제외)다.
- *    다른 예외들과 동일하게 "개인용·로컬 실행·저빈도" 조건으로 오너 승인
- *    (CLAUDE.md 참조). 앱 배포본(Vercel)에는 이 수집 코드가 없다.
+ * rp9·rpt_m3·idea_02 는 휴면 게시판이라 넣지 않았다(실측 2026-09-25).
+ *
+ * **해외주식분석(anls19) 제목 규칙(실측 2026-09-25, 약 80건)**:
+ *  - "[미국주식] NVIDIA Corp. (NVDA) 헤드라인", "[미국주식] 플루언스 에너지(FLNC),
+ *    헤드라인" — 괄호 안 티커 → us/기업, symbol=티커.
+ *  - "[미국주식] [Earnings Flash] Tapestry, Inc." — 티커가 제목·본문·PDF 어디에도
+ *    없다(PDF 의 기업명 칸은 그림). 영문 회사명을 네이버 해외종목 자동완성으로
+ *    티커 해석(NH 해외 수집기와 같은 엔드포인트). 이름이 정확히 같거나 미국 후보가
+ *    하나뿐일 때만 인정하고, 못 찾으면 종목 없이 us/산업으로 보낸다(C6 — 틀린
+ *    티커보다 빈칸).
+ *  - "[미국주식] [IPO 101] [스페이스X (SPCX)] …" — 상장 전 기업이라 us/산업.
+ *  - "[중국주식] …" — 지금까지는 전부 테마·전략 글(종목 리포트 0건). 종목코드
+ *    ("(0700.HK)"·"(688981 CH)")가 있으면 ch/기업, 없으면 ch/산업
+ *    (오너 원칙 "ch는 마켓은 ch다 us분류하면 안된다").
+ *  - "[해외주식]"·"[해외시황]"·기타 — us/산업.
+ *
+ * **PDF(오너 결정 2026-09-25)**: 상세 `view.cmd?...&mode=attach_open&seq=N` 에
+ * 첨부 링크(`/main/common/common_file/fileView.cmd?category=2&depth3_id=...&key1=
+ * {seq}&key2=1&bldid=bbs10031`)가 나오고, 이 링크는 쿠키 없이 200
+ * application/pdf 다(실측 — 6개 게시판 모두 같은 형식). 상세 페이지에서 첨부
+ * 링크를 파싱해 pdfUrl 로 쓰고, 첨부가 없으면 기존처럼 상세 URL 로 폴백한다.
+ * 같은 상세 페이지의 본문(`researchCont`)은 투자의견·목표주가 추출에 쓴다
+ * (본문 → PDF 순, 공용 추출기가 필요할 때만 PDF 를 받는다).
+ *
+ * 새 글 배지 버그(2026-09-25 수정): 새 글은 `</a>` 와 `<p class="cont_txt">`
+ * 사이에 `<img src="/img/common/new.gif">` 가 끼는데, 예전 정규식이 이를 허용하지
+ * 않아 가장 최근 글을 통째로 놓쳤다.
+ *
+ * www.hanwhawm.com/robots.txt 는 `/service/`·`/service/cs/` 등 좁은 경로만
+ * Disallow 하고 `/main/research/`·`/main/common/common_file/` 은 허용한다
+ * (실측 2026-09-25). 그래도 다른 소스와 같은 조건(개인용·저빈도)으로 돌린다.
+ * 앱 배포본(Vercel)에는 이 수집 코드가 없다.
  *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-hanwha-research.mjs
@@ -21,7 +54,9 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichResearch, extractTargetPrice } from "./lib/research-extract.mjs";
+import { enrichResearch } from "./lib/research-extract.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent } from "./lib/exclude-filters.mjs";
+import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -45,13 +80,30 @@ const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
 ).trim();
+const MACRO_IMPORT_URL = (
+  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
+).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
+const SLEEP_MS = 400;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const LIST_URL = "https://www.hanwhawm.com/main/research/main/list.cmd";
+const SITE = "https://www.hanwhawm.com";
+const LIST_URL = `${SITE}/main/research/main/list.cmd`;
+const VIEW_URL = `${SITE}/main/research/main/view.cmd`;
+const SOURCE = "한화투자증권";
+const STRATEGY_LABEL = "한화 투자전략";
+
+const BOARDS = [
+  { id: "anls1", label: "기업분석", kind: "krCompany" },
+  { id: "anls2", label: "산업분석", kind: "krIndustry" },
+  { id: "rpt_m1", label: "주식전략", kind: "strategy" },
+  { id: "rpt_m8", label: "국내외 경제", kind: "macro" },
+  { id: "istn1", label: "채권전략", kind: "macro" },
+  { id: "anls19", label: "해외주식분석", kind: "overseas" },
+];
 
 const isoDate = (s) => {
   const m = String(s).trim().match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
@@ -63,143 +115,368 @@ function excerpt(text) {
   return flat.length > EXCERPT_LEN ? `${flat.slice(0, EXCERPT_LEN)}…` : flat;
 }
 function stripHtml(s) {
-  return s.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim();
+  return String(s ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
-// 상세 페이지 본문 — 목록 요약에 목표주가가 없을 때만 받는다.
-async function fetchDetailText(detailUrl) {
-  if (!detailUrl) return "";
-  try {
-    const res = await fetch(detailUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return stripHtml(await res.text());
-  } catch (err) {
-    console.warn(`  ⚠ 상세 본문 조회 실패 (${detailUrl}): ${err.message}`);
-    return "";
-  }
-}
-
-// 제목 형식: "[업종] 종목명[코드/의견] 나머지" — 업종 태그는 매칭 전에 먼저 떼어낸다.
-const SECTOR_TAG_RE = /^\[[^\]]+\]\s*/;
-const TITLE_RE = /^(.+?)\[(\d{6}[A-Z0-9]*)\/([^\]]+)\]\s*(.+)$/;
-
-async function fetchPage(page) {
-  const url = new URL(LIST_URL);
-  url.searchParams.set("depth3_id", "anls1");
-  url.searchParams.set("mode", "");
-  url.searchParams.set("viewclass", "");
-  url.searchParams.set("p", String(page));
+async function fetchText(url) {
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
 }
 
-// 항목 하나 = view('seq','depth3_id','제목') 앵커 + 요약(cont_txt) + 카테고리/작성자/날짜.
-const ITEM_RE =
-  /<a href="javascript:view\('(\d+)', '(\w+)', '[^']*'\);"\s*>\s*([^<]+?)\s*<\/a>\s*<p class="cont_txt">([\s\S]*?)<\/p>[\s\S]{0,200}?<span class="gubun">([^<]*)<\/span>\s*([^<]*?)\s*<span class="date">([\d.]+)<\/span>/g;
-
-function parseItems(html) {
-  const items = [];
-  for (const m of html.matchAll(ITEM_RE)) {
-    const [, seq, depth3, rawTitle, rawSummary, , analyst, rawDate] = m;
-    const date = isoDate(rawDate);
-    if (!date) continue;
-    const title = stripHtml(rawTitle);
-    const tm = title.replace(SECTOR_TAG_RE, "").match(TITLE_RE);
-    items.push({
-      id: seq,
-      date,
-      title,
-      stockName: tm ? tm[1].trim() : title,
-      symbolHint: tm ? tm[2].slice(0, 6) : null,
-      opinion: tm ? tm[3].trim() : "",
-      opinionFrom: "title", // "종목명[코드/의견]" 제목 — 공용 추출기 C2 검증 제외
-      analyst: analyst.trim(),
-      targetPrice: null,
-      summary: excerpt(stripHtml(rawSummary)),
-      bodyText: stripHtml(rawSummary),
-      pdfUrl: `https://www.hanwhawm.com/main/research/main/view.cmd?depth3_id=${depth3}&mode=&seq=${seq}&p=`,
-    });
-  }
-  return items;
+async function fetchPage(boardId, page) {
+  const url = new URL(LIST_URL);
+  url.searchParams.set("depth3_id", boardId);
+  url.searchParams.set("mode", "");
+  url.searchParams.set("viewclass", "");
+  url.searchParams.set("p", String(page));
+  return fetchText(url);
 }
 
-console.log(`▶ 한화투자증권 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+const detailUrl = (boardId, seq) => `${VIEW_URL}?depth3_id=${boardId}&mode=&seq=${seq}&p=`;
+const attachUrl = (boardId, seq) => `${VIEW_URL}?depth3_id=${boardId}&mode=attach_open&seq=${seq}`;
+
+// 상세(attach_open) — 본문(researchCont)과 첨부 PDF 링크. 실패하면 빈 값.
+const FILE_LINK_RE = /href="(\/main\/common\/common_file\/fileView\.cmd\?[^"]+)"[^>]*>[\s\S]{0,200}?\.pdf/i;
+async function fetchDetail(boardId, seq) {
+  try {
+    const html = await fetchText(attachUrl(boardId, seq));
+    const start = html.indexOf('class="researchCont"');
+    const end = html.indexOf('class="researchAttach"', start);
+    const body = start >= 0 ? stripHtml(html.slice(start + 20, end > start ? end : start + 50_000)) : "";
+    const link = html.match(FILE_LINK_RE)?.[1]?.replace(/&amp;/g, "&");
+    return { body, pdfUrl: link ? `${SITE}${link}` : null };
+  } catch (err) {
+    console.warn(`  ⚠ 상세 조회 실패 (${boardId}:${seq}): ${err.message}`);
+    return { body: "", pdfUrl: null };
+  }
+}
+
+// 항목 하나 = view('seq','depth3_id','게시판명') 앵커 + (새 글 배지) + 요약(cont_txt)
+// + 카테고리/작성자/날짜. 새 글 배지(new.gif)가 </a> 뒤에 끼는 경우를 허용한다.
+const ITEM_RE =
+  /<a href="javascript:view\('(\d+)', '(\w+)', '[^']*'\);"\s*>\s*([^<]+?)\s*<\/a>\s*((?:<img[^>]*>\s*)*)<p class="cont_txt">([\s\S]*?)<\/p>[\s\S]{0,200}?<span class="gubun">([^<]*)<\/span>\s*([^<]*?)\s*<span class="date">([\d.]+)<\/span>/g;
+
+function parseList(html) {
+  const rows = [];
+  for (const m of html.matchAll(ITEM_RE)) {
+    const [, seq, board, rawTitle, badges, rawSummary, , analyst, rawDate] = m;
+    const date = isoDate(rawDate);
+    if (!date) continue;
+    rows.push({
+      seq,
+      board,
+      date,
+      title: stripHtml(rawTitle),
+      summaryText: stripHtml(rawSummary),
+      analyst: analyst.trim(),
+      newBadge: /new\.gif/.test(badges),
+    });
+  }
+  return rows;
+}
+
+// ── 제목 규칙 ─────────────────────────────────────────────────────────
+// 기업분석: "[업종] 종목명[코드/의견] 나머지" — 업종 태그는 먼저 떼어낸다.
+const SECTOR_TAG_RE = /^\[[^\]]+\]\s*/;
+const KR_TITLE_RE = /^(.+?)\[(\d{6}[A-Z0-9]*)\/([^\]]+)\]\s*(.+)$/;
+// 해외주식분석 지역 태그: "[미국주식] …"·"미국주식 […]"(대괄호 누락 실측 1건).
+const REGION_RE = /^\[?(미국주식|중국주식|해외주식|해외시황)\]?\s*/;
+// "NVIDIA Corp. (NVDA) 헤드라인" / "플루언스 에너지(FLNC), 헤드라인"
+const US_TICKER_RE = /^([^[\]]+?)\s*\(([A-Z]{1,5}(?:\.[A-Z])?)\)\s*[,:：]?\s*(.+)$/;
+// 중국 종목: "텐센트 (0700.HK) 헤드라인" / "SMIC (688981 CH) 헤드라인"
+const CH_TICKER_RE = /^([^[\]]+?)\s*\((\d{4,6})[.\s](HK|CH|SH|SZ)\)\s*[,:：]?\s*(.+)$/i;
+const EARNINGS_FLASH_RE = /^\[Earnings Flash\]\s*(.+)$/i;
+const IPO_RE = /\[IPO\b|\bIPO 101\b/i;
+const DIGITAL_ASSET_RE = /디지털\s*자산|가상\s*자산|스테이블\s*코인|stablecoin|crypto/i;
+const FX_RE = /\bFX\b|환율/i;
+
+/** 영문 회사명 → 미국 티커(네이버 해외종목 자동완성). 확실할 때만, 실패하면 null. */
+const COMPANY_SUFFIX_RE =
+  /(?:,?\s+(?:Inc\.?|lnc\.?|Corp\.?|Corporation|plc|N\.?V\.?|Co\.?|Company|Ltd\.?|Limited|ADR|S\.?A\.?))+\s*$/i;
+const cleanCompany = (n) => String(n ?? "").replace(COMPANY_SUFFIX_RE, "").trim();
+const normCompany = (n) => cleanCompany(n).toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
+const usCache = new Map();
+async function resolveUsTicker(name) {
+  const q = cleanCompany(name);
+  if (!q) return null;
+  if (usCache.has(q)) return usCache.get(q);
+  let hit = null;
+  try {
+    const res = await fetch(`https://ac.stock.naver.com/ac?q=${encodeURIComponent(q)}&target=stock`, {
+      headers: { "User-Agent": UA, accept: "application/json" },
+    });
+    if (res.ok) {
+      const us = ((await res.json()).items ?? []).filter(
+        (i) => i.nationCode === "USA" && /^[A-Z]{1,5}(?:\.[A-Z])?$/.test(String(i.code)),
+      );
+      // 이름이 정확히 같거나(접미어 제외) 미국 후보가 하나뿐일 때만 인정.
+      const found = us.find((i) => normCompany(i.name) === normCompany(q)) ?? (us.length === 1 ? us[0] : null);
+      if (found) hit = String(found.code).toUpperCase();
+    }
+  } catch {
+    /* 무시 — 종목 없이 산업으로 */
+  }
+  usCache.set(q, hit);
+  await sleep(SLEEP_MS);
+  return hit;
+}
+
+function baseItem(row) {
+  return {
+    id: row.board === "anls1" ? row.seq : `${row.board}:${row.seq}`, // anls1 은 기존 id(seq) 호환
+    date: row.date,
+    analyst: row.analyst,
+    opinion: "",
+    targetPrice: null,
+    summary: excerpt(row.summaryText),
+    pdfUrl: detailUrl(row.board, row.seq),
+    views: null,
+    board: row.board,
+    seq: row.seq,
+    newBadge: row.newBadge,
+  };
+}
+
+function industryItem(base, title, market) {
+  const { label, headline } = industryLabelAndHeadline(title);
+  return { ...base, title: headline || title, stockName: label, symbol: null, category: "산업", market, source: SOURCE };
+}
+
+const macroTopic = (title) => (FX_RE.test(title) ? "환율분석" : "이슈분석");
+
+/** 게시판·제목 → 전송 항목. null 이면 제외. 반환 항목에 topic 이 있으면 이슈분석행. */
+async function classify(row, board) {
+  const base = baseItem(row);
+  const title = row.title;
+
+  if (board.kind === "krCompany") {
+    const tm = title.replace(SECTOR_TAG_RE, "").match(KR_TITLE_RE);
+    // "조사분석자료 공표중단 종목" 같은 공지는 종목 리포트가 아니다(실측 2026-09-04).
+    if (!tm) return null;
+    return {
+      ...base,
+      title,
+      stockName: tm[1].trim(),
+      symbol: tm[2].slice(0, 6),
+      opinion: tm[3].trim(),
+      opinionFrom: "title", // "종목명[코드/의견]" 제목 — 공용 추출기 C2 검증 제외
+      category: "기업",
+      market: "kr",
+      source: SOURCE,
+    };
+  }
+  if (board.kind === "macro") return { ...base, title, topic: macroTopic(title) };
+
+  // 여기부터 종목이 아닌 글이 섞이는 게시판 — 원자재는 이슈분석으로.
+  if (board.kind === "krIndustry") {
+    if (DIGITAL_ASSET_RE.test(title)) return null;
+    if (isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+    return industryItem(base, title, "kr");
+  }
+  if (board.kind === "strategy") {
+    if (isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+    return { ...base, title, stockName: STRATEGY_LABEL, symbol: null, category: "산업", market: "kr", source: SOURCE };
+  }
+
+  // overseas(anls19)
+  const region = title.match(REGION_RE)?.[1] ?? "";
+  const rest = title.replace(REGION_RE, "").trim();
+  const market = region === "중국주식" ? "ch" : "us";
+  if (!IPO_RE.test(rest)) {
+    const cm = rest.match(CH_TICKER_RE);
+    if (cm) {
+      return {
+        ...base,
+        title: cm[4].trim(),
+        stockName: cm[1].trim(),
+        symbol: `${cm[2]}.${cm[3].toUpperCase()}`,
+        category: "기업",
+        market: "ch",
+        source: SOURCE,
+      };
+    }
+    if (market === "us") {
+      const um = rest.match(US_TICKER_RE);
+      if (um) {
+        return { ...base, title: um[3].trim(), stockName: um[1].trim(), symbol: um[2], category: "기업", market, source: SOURCE };
+      }
+      const ef = rest.match(EARNINGS_FLASH_RE);
+      if (ef) {
+        const company = ef[1].trim();
+        const symbol = await resolveUsTicker(company);
+        if (symbol) {
+          return { ...base, title: `[Earnings Flash] ${company}`, stockName: company, symbol, category: "기업", market, source: SOURCE, resolvedBy: "naver" };
+        }
+        return { ...base, title: `[Earnings Flash] ${company}`, stockName: company, symbol: null, category: "산업", market, source: SOURCE, unresolved: true };
+      }
+    }
+  }
+  if (isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+  const it = industryItem(base, rest || title, market);
+  // 대괄호·콜론 라벨이 없으면 지역 태그를 라벨로.
+  if (it.stockName === "산업" && region) it.stockName = region;
+  return it;
+}
+
+// ── 수집 ──────────────────────────────────────────────────────────────
+console.log(`▶ 한화투자증권 리서치 수집(${BOARDS.map((b) => b.label).join("·")}): 최근 ${DAYS}일, 게시판당 최대 ${MAX_PAGES}페이지`);
 // 항목 날짜가 'YYYY-MM-DD'(=UTC 자정)라 컷오프도 자정으로 맞춘다.
 // Date.now() 기준 그대로 두면 '정확히 DAYS일 전' 리포트가 시:분 차이로
 // 매번 잘려나간다(실측 2026-09: 미래에셋 최신 리포트가 3시간 차이로 탈락).
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
+
 const collected = [];
-let stop = false;
-for (let page = 1; page <= MAX_PAGES && !stop; page++) {
-  const html = await fetchPage(page);
-  const items = parseItems(html);
-  if (items.length === 0) break;
-  for (const it of items) {
-    if (new Date(it.date) < cutoff) {
-      stop = true;
-      break;
+const stats = {};
+for (const board of BOARDS) {
+  const st = (stats[board.id] = { listed: 0, newBadge: 0, excluded: 0, kept: 0 });
+  let stop = false;
+  for (let page = 1; page <= MAX_PAGES && !stop; page++) {
+    const rows = parseList(await fetchPage(board.id, page));
+    await sleep(SLEEP_MS);
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      if (new Date(row.date) < cutoff) {
+        stop = true;
+        break;
+      }
+      st.listed++;
+      if (row.newBadge) st.newBadge++;
+      // 공용 제외 — ETF/ETP·ESG·주간물·일정표·추천종목·원자재 외 대체투자.
+      const isStock = board.kind === "krCompany";
+      if (
+        isEtfOrEtpContent(row.title) ||
+        isEsgContent(row.title) ||
+        isCommonExcludedContent(row.title, isStock ? "기업" : undefined)
+      ) {
+        st.excluded++;
+        continue;
+      }
+      const it = await classify(row, board);
+      if (!it) {
+        st.excluded++;
+        continue;
+      }
+      st.kept++;
+      collected.push(it);
     }
-    collected.push(it);
   }
-  await sleep(400);
+  console.log(
+    `  ${board.label}(${board.id}): 기간 내 ${st.listed}건(새 글 배지 ${st.newBadge}) · 제외 ${st.excluded} · 수집 ${st.kept}`,
+  );
 }
 
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
-console.log(`✔ 파싱 완료: ${collected.length}건`);
-console.log(
-  "  최근 3건:",
-  collected.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbolHint}) — ${i.title}`),
-);
 
-console.log(`▶ 목표주가 보강 중 (${collected.length}건)...`);
-// 목록 요약에 목표주가가 없으면 상세 페이지 본문까지 붙여 공용 추출기에 넘긴다
-// (pdfUrl 이 상세 페이지 URL 이라 PDF 단계는 끈다).
-let detailCount = 0;
+// 상세(attach_open) — 첨부 PDF 링크 + 본문. 항목마다 1회.
+console.log(`▶ 상세 페이지(첨부 PDF 링크·본문) 조회 중 (${collected.length}건)...`);
+let pdfLinked = 0;
 for (const it of collected) {
-  if (extractTargetPrice(it.bodyText, "kr") == null) {
-    it.bodyText += `
-${await fetchDetailText(it.pdfUrl)}`;
-    detailCount++;
-    await sleep(400);
+  const d = await fetchDetail(it.board, it.seq);
+  await sleep(SLEEP_MS);
+  if (d.pdfUrl) {
+    it.pdfUrl = d.pdfUrl;
+    pdfLinked++;
+  } else {
+    it.noPdf = true; // 상세 URL 폴백 — 추출기가 HTML 을 PDF 로 받지 않게
+  }
+  if (it.category === "기업") it.bodyText = d.body;
+  if (!it.summary && d.body) it.summary = excerpt(d.body);
+}
+console.log(`  PDF 첨부 링크 ${pdfLinked}/${collected.length}건 (나머지는 상세 URL 폴백)`);
+
+const research = collected.filter((it) => it.topic == null);
+const macro = collected.filter((it) => it.topic != null);
+
+// 투자의견·목표주가 — 공용 추출기(본문 → 필요할 때만 PDF).
+const stockItems = research.filter((it) => it.category === "기업");
+// "3.6만원" 같은 소수 만원 표기는 공용 추출기가 아직 못 읽는다 — 건수만 센다.
+const DECIMAL_MANWON_RE = /목표\s*주가[^\d\n]{0,15}\d+\.\d+\s*만\s*원/;
+const decimalManwon = stockItems.filter((it) => it.market === "kr" && DECIMAL_MANWON_RE.test(`${it.summary}\n${it.bodyText ?? ""}`));
+const pdfHold = new Map();
+for (const it of stockItems) {
+  if (it.noPdf) {
+    pdfHold.set(it, it.pdfUrl);
+    it.pdfUrl = null;
   }
 }
-console.log(`  상세 본문 확인 ${detailCount}건`);
-await enrichResearch(collected, { market: "kr", usePdf: false });
+console.log(`▶ 투자의견/목표주가 조회 중 — ${stockItems.length}건...`);
+await enrichResearch(stockItems, { sleepMs: SLEEP_MS, usePdf: true });
+for (const [it, url] of pdfHold) it.pdfUrl = url;
+const decimalMissing = decimalManwon.filter((it) => it.targetPrice == null).length;
+console.log(`  소수 만원 표기("3.6만원") 본문 ${decimalManwon.length}건 — 그중 목표가 빈칸 ${decimalMissing}건`);
+
+console.log(`✔ 수집 완료: 리서치 ${research.length}건 · 이슈분석/환율분석 ${macro.length}건`);
+const resolved = research.filter((it) => it.resolvedBy === "naver").length;
+const unresolved = research.filter((it) => it.unresolved).length;
+if (resolved || unresolved) console.log(`  Earnings Flash 티커 해석: 성공 ${resolved} · 실패(산업으로) ${unresolved}`);
+for (const i of collected) {
+  const dest = i.topic ?? `${i.market}/${i.category}`;
+  const who = i.symbol ?? i.stockName ?? "";
+  const op = i.opinion || i.targetPrice != null ? ` (${i.opinion || "-"}/${i.targetPrice ?? "-"})` : "";
+  const pdf = i.noPdf ? " [PDF없음]" : "";
+  console.log(`  [${i.board}→${dest}] ${i.date} ${who}${op} — ${i.title} [${i.analyst}]${pdf}${i.newBadge ? " ★new" : ""}`);
+}
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
   process.exit(0);
 }
 
-const items = collected.map((it) => ({
-  id: it.id,
-  date: it.date,
-  title: it.title,
-  stockName: it.stockName,
-  symbol: it.symbolHint,
-  analyst: it.analyst,
-  opinion: it.opinion,
-  targetPrice: it.targetPrice,
-  summary: it.summary,
-  pdfUrl: it.pdfUrl,
-  views: null,
-}));
-
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const up = await fetch(IMPORT_URL, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ items, source: "한화투자증권" }),
-});
-const upBody = await up.text();
-if (!up.ok) {
-  console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+
+async function post(url, payload, label, count) {
+  const up = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ [${label}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`✔ [${label}] 앱 전송 완료 (${count}건): ${upBody}`);
 }
-console.log(`\n✔ 앱 전송 완료: ${upBody}`);
+
+// 라우트가 POST 1회당 source·market 하나만 받으므로 묶어서 나눠 전송.
+const groups = new Map();
+for (const it of research) {
+  const key = `${it.source}|${it.market}`;
+  if (!groups.has(key)) groups.set(key, []);
+  groups.get(key).push({
+    id: it.id,
+    date: it.date,
+    title: it.title,
+    stockName: it.stockName,
+    symbol: it.symbol,
+    analyst: it.analyst,
+    opinion: it.opinion,
+    targetPrice: it.targetPrice,
+    summary: it.summary,
+    pdfUrl: it.pdfUrl,
+    views: it.views,
+    category: it.category,
+  });
+}
+for (const [key, items] of groups) {
+  const [source, market] = key.split("|");
+  await post(IMPORT_URL, { items, source, market }, `${source}/${market}`, items.length);
+}
+
+for (const topic of ["이슈분석", "환율분석"]) {
+  const items = macro
+    .filter((it) => it.topic === topic)
+    .map((it) => ({ id: it.id, date: it.date, title: it.title, analyst: it.analyst, summary: it.summary, pdfUrl: it.pdfUrl }));
+  if (items.length > 0) await post(MACRO_IMPORT_URL, { items, source: SOURCE, topic }, topic, items.length);
+}

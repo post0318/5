@@ -19,7 +19,8 @@
  * 분석 개시...")인데 지금까지 통째로 버려지고 있었다. `category:"산업"`
  * 으로 별도 수집(symbol 항상 null, 목표주가·투자의견 추출은 건너뜀).
  *
- * PDF 는 로그인이 필요해(국내 수집기와 동일) 상세 페이지 URL 을 대신 연결한다.
+ * PDF 는 공용 JS 의 옛 다운로드 서블릿으로 로그인 없이 받는다(2026-09-25 재점검,
+ * 국내 수집기와 동일) — 링크는 PDF 직링크, 없는 건만 상세 페이지 폴백.
  *
  * -- 실행 --
  *   node scripts/collect-kis-global-research.mjs
@@ -104,6 +105,17 @@ async function fetchPage(page) {
   return res.text();
 }
 
+// PDF 직링크(공통 규칙 — PDF 우선, 2026-09-25): 화면의 prePdfFileView() 는 비로그인 시
+// 로그인 페이지로 보내지만, 사이트 공용 JS(common_2021.js doFiledownload)가 만드는 옛
+// 다운로드 서블릿은 로그인 없이 PDF 를 준다(실측 — 국내 research05·해외 research17·전략
+// research02 모두 %PDF). 경로는 category1 번호 그대로 "research/research{번호}".
+const KIS_PDF_RE = /prePdfFileView\('\?category1=(\d+)&category2=\d+','([^']+\.pdf)'/i;
+function kisPdfUrl(chunk) {
+  const m = chunk.match(KIS_PDF_RE);
+  if (!m) return null;
+  return `https://file.koreainvestment.com/servlet/Download?file_path=research/research${m[1]}/&file_name=${encodeURIComponent(m[2])}`;
+}
+
 function parseItems(html) {
   const items = [];
   for (const chunk of html.split("<li>").slice(1)) {
@@ -129,6 +141,7 @@ function parseItems(html) {
         targetPrice: null,
         summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
         detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
+        pdfUrl: kisPdfUrl(chunk),
         category: "산업",
       });
       continue;
@@ -145,6 +158,7 @@ function parseItems(html) {
       analyst: analystM[1].trim(),
       summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
       detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
+      pdfUrl: kisPdfUrl(chunk),
       category: "기업",
     });
   }
@@ -190,8 +204,8 @@ for (const it of collected) {
   it.bodyText = await fetchDetailText(it.detailUrl);
   await sleep(400);
 }
-// 한투 PDF 는 로그인이 필요해 pdfUrl 이 상세 페이지 URL 이다 — PDF 단계는 끈다.
-await enrichResearch(collected, { market: "us", usePdf: false });
+// 상세 본문 → PDF(옛 다운로드 서블릿, 로그인 불필요) 순으로 공용 추출기가 찾는다.
+await enrichResearch(collected, { market: "us" });
 console.log("  예시:", collected[0] && `${collected[0].opinion || "(없음)"} / ${collected[0].targetPrice ?? "(없음)"}`);
 
 if (DRY_RUN) {
@@ -209,7 +223,7 @@ const items = collected.map((it) => ({
   opinion: it.opinion,
   targetPrice: it.targetPrice,
   summary: it.summary,
-  pdfUrl: it.detailUrl,
+  pdfUrl: it.pdfUrl ?? it.detailUrl, // PDF 우선, 없으면 상세 페이지
   views: null,
   category: it.category,
 }));

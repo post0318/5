@@ -96,6 +96,17 @@ async function fetchPage(page) {
   return res.text();
 }
 
+// PDF 직링크(공통 규칙 — PDF 우선, 2026-09-25): 화면의 prePdfFileView() 는 비로그인 시
+// 로그인 페이지로 보내지만, 사이트 공용 JS(common_2021.js doFiledownload)가 만드는 옛
+// 다운로드 서블릿은 로그인 없이 PDF 를 준다(실측 — 국내 research05·해외 research17·전략
+// research02 모두 %PDF). 경로는 category1 번호 그대로 "research/research{번호}".
+const KIS_PDF_RE = /prePdfFileView\('\?category1=(\d+)&category2=\d+','([^']+\.pdf)'/i;
+function kisPdfUrl(chunk) {
+  const m = chunk.match(KIS_PDF_RE);
+  if (!m) return null;
+  return `https://file.koreainvestment.com/servlet/Download?file_path=research/research${m[1]}/&file_name=${encodeURIComponent(m[2])}`;
+}
+
 function parseItems(html) {
   const items = [];
   for (const chunk of html.split("<li>").slice(1)) {
@@ -134,6 +145,7 @@ function parseItems(html) {
       summary,
       market,
       detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=6&id=${idM[1]}`,
+      pdfUrl: kisPdfUrl(chunk),
     });
   }
   return items;
@@ -207,7 +219,7 @@ for (const [market, group] of byMarket) {
     opinion: "",
     targetPrice: null,
     summary: it.summary,
-    pdfUrl: it.detailUrl,
+    pdfUrl: it.pdfUrl ?? it.detailUrl, // PDF 우선, 없으면 상세 페이지
     views: null,
     category: "산업",
   }));
