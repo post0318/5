@@ -1,0 +1,388 @@
+import "server-only";
+import {
+  FactIndex, fillMissingFilings, filingFiles, getCompanyFacts, getSubmissions, instanceText, linkbaseText, parseInstance,
+  resolveCik, withFetchScope, type Submissions,
+} from "../source/us/sec";
+import { currentQuoteShares, yahooQuarters, type YahooFundamentalsRow } from "../source/us/market";
+import { Gap, type CompanyProfile, type FormType, type Prov, type RawFact, type ReadWhy } from "../types";
+import { dropRoundedRetags, latest, isPeriodic } from "./vintage";
+import { addDays, buildCalendar, days, durKind, fiscalYearOf, isStaleAnnual, near, shiftYear, type FiscalYear } from "./period";
+import { makeFx, reportingCurrency, type Fx } from "./fx";
+import { canonical } from "./ifrs";
+import { companyType, filerKind } from "./profile";
+import { adrRatioOf } from "./adr";
+import { calcParents, parseCalculation, parseLabels, parsePresentation, pickIncomeStatement, type StatementShape } from "./linkbase";
+import { YAHOO_FIELD, yahooLtmOf } from "./ltm-yahoo";
+
+/**
+ * 1층 판독 엔진 — 미국(SEC). 판본·기간·분기화·Q4·LTM·IFRS·환율·ADR 을 **여기서만** 정한다(architecture.md §1).
+ * 2층(assemble)은 `ColumnSpec`(열 정의)와 `value()`(그 열의 한 개념 값)만 받는다.
+ *
+ * 열 정의:
+ *  - FY  = 사업연도 기간(start·end)의 **최신 판본** 공시 1건
+ *  - Q   = 3개월 기간의 최신 판본 1건. 3개월 값이 없으면 누적 차(6M − Q1, 9M − 6M)를 각 최신 판본으로(파생 표시)
+ *  - Q4D = 사업연도(최신 판본) − 9개월 누적(최신 판본)
+ *  - LTM = 최근 사업연도 + 당기 누적 − 전년 동기 누적(전부 최신 판본). 20-F·40-F 는 Yahoo 분기 최근 4개(ltm-yahoo.ts)
+ * 열의 판본(원천 공시)은 매출·순이익 기준 개념(ANCHOR) 중 그 기간을 담은 가장 늦은 정기공시로 정한다 — 한 열 = 한 공시.
+ */
+
+const ANCHOR = [
+  "us-gaap:Revenues", "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax", "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
+  "us-gaap:RevenuesNetOfInterestExpense", "us-gaap:InterestAndDividendIncomeOperating", "us-gaap:NoninterestIncome",
+  "ifrs-full:Revenue", "ifrs-full:RevenueFromContractsWithCustomers",
+  "us-gaap:NetIncomeLoss", "us-gaap:ProfitLoss", "ifrs-full:ProfitLoss", "ifrs-full:ProfitLossAttributableToOwnersOfParent",
+];
+const REVENUE_ANCHOR = new Set(ANCHOR.slice(0, 8));
+const ANNUAL_FORM = /^(10-K|20-F|40-F)(\/A)?$/;
+const INTERIM_FORM = /^10-Q(\/A)?$/;
+/** companyfacts 에 들어 있는 네임스페이스 — 나머지(회사 고유·srt)는 인스턴스에서 읽는다 */
+const CF_NS = new Set(["us-gaap", "ifrs-full", "dei", "srt"]);
+
+export interface Part { start: string; end: string; accn: string | null; form: FormType; filed: string | null; sign: 1 | -1 }
+export interface Segment { start: string; end: string; parts: Part[] }
+export interface ColumnSpec {
+  key: string;
+  kind: "FY" | "Q" | "Q4D" | "LTM";
+  fy: number;
+  fq: 0 | 1 | 2 | 3 | 4;
+  start: string;
+  end: string;
+  /** 열 = Σ 구간, 구간 = Σ(부호 × 구성 공시 값) → 구간마다 그 구간 평균 환율로 USD */
+  segments: Segment[];
+  /** 20-F·40-F LTM — Yahoo 분기(구성 공시 대신) */
+  yahoo?: { fyStart: string; fyEnd: string; fyAccn: string | null };
+  gaps: number;
+}
+export interface CellValue {
+  v: number | null;
+  /** 원통화 값(환산 전) — 항등식 검사용 */
+  raw: number | null;
+  why?: ReadWhy;
+  gaps: number;
+}
+export interface FilingStructure {
+  shape: StatementShape | null;
+  parents: Map<string, { parent: string; w: number }>;
+  labels: Map<string, Map<string, string>> | null;
+  gaps: number;
+}
+
+export class UsReader {
+  readonly calendar: FiscalYear[];
+  private anchorFacts: RawFact[];
+  private factMemo = new Map<string, RawFact[]>();
+  private structMemo = new Map<string, Promise<FilingStructure>>();
+  private instMemo = new Map<string, Promise<RawFact[] | null>>();
+
+  private constructor(
+    readonly profile: CompanyProfile,
+    readonly idx: FactIndex,
+    readonly sub: Submissions,
+    readonly fx: Fx | null,
+    readonly yahoo: { quarterly: YahooFundamentalsRow[]; annual: YahooFundamentalsRow[] } | null,
+    public gaps: number,
+    readonly warnings: string[],
+  ) {
+    this.anchorFacts = ANCHOR.flatMap((c) => this.facts(c)).filter((f) => f.start);
+    const annual = uniq(this.anchorFacts.filter((f) => ANNUAL_FORM.test(f.prov.form) && durKind(f.start, f.end) === "FY").map((f) => ({ start: f.start!, end: f.end })));
+    const interim = uniq(this.anchorFacts.filter((f) => INTERIM_FORM.test(f.prov.form)).map((f) => ({ start: f.start!, end: f.end })));
+    this.calendar = buildCalendar(annual, interim);
+  }
+
+  static async open(symbol: string): Promise<UsReader> {
+    const warnings: string[] = [];
+    let gaps = 0;
+    const { result, failures } = await withFetchScope(async () => {
+      const { cik } = await resolveCik(symbol);
+      const [sub, idx] = await Promise.all([getSubmissions(cik), getCompanyFacts(cik)]);
+      const fill = await fillMissingFilings(cik, idx, sub);
+      gaps |= fill.gaps;
+      warnings.push(...fill.warnings);
+      return { cik, sub, idx };
+    });
+    if (failures.length) warnings.push(...failures.map((f) => `SEC 조회 일시 오류: ${f}`));
+    const { cik, sub, idx } = result;
+    const filer = filerKind(sub);
+    const cur = reportingCurrency(idx);
+    let fx: Fx | null = null;
+    try {
+      fx = await makeFx(cur);
+    } catch {
+      gaps |= Gap.FX;
+      warnings.push(`환율 조회 실패(${cur})`);
+    }
+    let yahoo: UsReader["yahoo"] = null;
+    let quoteShares: number | null = null;
+    if (filer !== "domestic") {
+      try {
+        yahoo = await yahooQuarters(symbol);
+      } catch {
+        gaps |= Gap.YAHOO;
+        warnings.push("Yahoo 분기 조회 실패(LTM)");
+      }
+      quoteShares = await currentQuoteShares(symbol).catch(() => null);
+    }
+    const profile: CompanyProfile = {
+      market: "us", symbol: symbol.toUpperCase(), cik, sic: sub.sic, type: companyType(sub.sic, idx), filer,
+      adrRatio: adrRatioOf(filer !== "domestic", idx, quoteShares), reportingCurrency: cur,
+    };
+    return new UsReader(profile, idx, sub, fx, yahoo, gaps, warnings);
+  }
+
+  /** 개념의 사실 — 차원 없는 정기공시 값, 반올림 재태깅 제거 후 */
+  facts(qname: string): RawFact[] {
+    const hit = this.factMemo.get(qname);
+    if (hit) return hit;
+    const out = dropRoundedRetags(this.idx.get(qname).filter((f) => isPeriodic(f) && !Object.keys(f.dims).length));
+    this.factMemo.set(qname, out);
+    return out;
+  }
+
+  /**
+   * 기간(start·end ±3일)의 최신 판본 원천 공시 — 매출 개념 우선, 없을 때만 순이익 개념. 순이익은 자본변동표에도 분기별로
+   * 실려(3분기 10-Q 에 1·2분기 순이익) 그것까지 판본 후보로 보면 1분기 열의 원천이 손익계산서에 1분기가 없는 3분기 10-Q 가
+   * 된다(WDC 실측).
+   */
+  private sourceOf(start: string, end: string): Part | null {
+    const hit = this.anchorFacts.filter((x) => near(x.start, start) && near(x.end, end));
+    const rev = hit.filter((x) => REVENUE_ANCHOR.has(x.concept));
+    const f = latest(rev.length ? rev : hit);
+    return f ? { start: f.start!, end: f.end, accn: f.prov.accn, form: f.prov.form, filed: f.prov.filed, sign: 1 } : null;
+  }
+
+  // ── 열 정의 ──
+
+  annualCols(n = 10): ColumnSpec[] {
+    const out: ColumnSpec[] = [];
+    for (const y of this.calendar) {
+      if (!y.end) continue;
+      const p = this.sourceOf(y.start, y.end);
+      if (!p) continue;
+      out.push({ key: `FY${y.fy}`, kind: "FY", fy: y.fy, fq: 0, start: y.start, end: y.end, segments: [{ start: y.start, end: y.end, parts: [p] }], gaps: 0 });
+    }
+    return out.slice(-n);
+  }
+
+  quarterCols(n = 20): ColumnSpec[] {
+    const out: ColumnSpec[] = [];
+    for (const y of this.calendar) {
+      const bounds = [y.start, ...y.qEnds];
+      for (let q = 1; q <= 4; q++) {
+        const qs = q === 1 ? y.start : bounds[q - 1] ? addDays(bounds[q - 1]!, 1) : null;
+        const qe = q === 4 ? y.end : bounds[q];
+        if (!qs || !qe) continue;
+        const key = `${y.fy}Q${q}`;
+        if (q === 4) {
+          // Q4 = 사업연도(최신 판본) − 9개월 누적(최신 판본)
+          const fy = this.sourceOf(y.start, y.end!);
+          const nine = y.qEnds[2] ? this.sourceOf(y.start, y.qEnds[2]) : null;
+          if (!fy || !nine) continue;
+          out.push({ key, kind: "Q4D", fy: y.fy, fq: 4, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [fy, { ...nine, sign: -1 }] }], gaps: 0 });
+          continue;
+        }
+        const direct = this.sourceOf(qs, qe);
+        if (direct && durKind(direct.start, direct.end) === "Q") {
+          out.push({ key, kind: "Q", fy: y.fy, fq: q as 1 | 2 | 3, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [direct] }], gaps: 0 });
+          continue;
+        }
+        // 3개월 값이 없으면 누적 차(각 최신 판본)
+        const cum = this.sourceOf(y.start, qe);
+        const prev = this.sourceOf(y.start, bounds[q - 1]!);
+        if (!cum || !prev) continue;
+        out.push({ key, kind: "Q", fy: y.fy, fq: q as 1 | 2 | 3, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [cum, { ...prev, sign: -1 }] }], gaps: 0 });
+      }
+    }
+    return out.slice(-n);
+  }
+
+  /**
+   * LTM — 최근 사업연도 + 당기 누적 − 전년 동기 누적(markets/us/edgar-series.ts ttmOf 와 같은 창). 최근 사업연도 종료가
+   * 550일을 넘으면(태그 중단) 없음. 외화 10-Q 제출사는 최근 4개 분기를 분기 평균 환율로(인포맥스 방식 — edgar-foreign.ts).
+   */
+  ltmCol(quarters: ColumnSpec[]): ColumnSpec | null {
+    const fyY = [...this.calendar].reverse().find((y) => y.end);
+    if (!fyY?.end) return null;
+    const fyPart = this.sourceOf(fyY.start, fyY.end);
+    if (!fyPart || isStaleAnnual(fyY.end)) return null;
+    const base = { key: "LTM", kind: "LTM" as const, fy: fyY.fy, fq: 0 as const, gaps: 0 };
+    if (this.profile.filer !== "domestic") {
+      // 20-F·40-F — Yahoo 분기(값은 value() 에서 항목별로)
+      return { ...base, start: fyY.start, end: fyY.end, segments: [{ start: fyY.start, end: fyY.end, parts: [fyPart] }], yahoo: { fyStart: fyY.start, fyEnd: fyY.end, fyAccn: fyPart.accn } };
+    }
+    // 당기 누적: 사업연도 끝 다음날 시작, 가장 늦은 끝
+    const cur = latest(this.anchorFacts.filter((f) => INTERIM_FORM.test(f.prov.form) && near(f.start, addDays(fyY.end!, 1), 12) && f.end > fyY.end!)
+      .filter((f, _, all) => f.end === all.reduce((m, x) => (x.end > m ? x.end : m), "")));
+    if (!cur?.start) return { ...base, start: fyY.start, end: fyY.end, segments: [{ start: fyY.start, end: fyY.end, parts: [fyPart] }] };
+    const wS = shiftYear(cur.start, -1), wE = shiftYear(cur.end, -1);
+    const priorF = this.anchorFacts.filter((f) => near(f.start, wS, 12) && near(f.end, wE, 12));
+    const prior = latest(priorF);
+    if (!prior?.start) return { ...base, start: fyY.start, end: fyY.end, segments: [{ start: fyY.start, end: fyY.end, parts: [fyPart] }], gaps: Gap.BASIS_SHIFT };
+    const start = addDays(shiftYear(cur.end, -1), 1);
+    const curPart: Part = { start: cur.start, end: cur.end, accn: cur.prov.accn, form: cur.prov.form, filed: cur.prov.filed, sign: 1 };
+    const priorPart: Part = { start: prior.start, end: prior.end, accn: prior.prov.accn, form: prior.prov.form, filed: prior.prov.filed, sign: -1 };
+    if (this.profile.reportingCurrency !== "USD") {
+      const last4 = quarters.filter((q) => q.end <= cur.end).slice(-4);
+      if (last4.length === 4 && near(last4[3].end, cur.end) && near(addDays(shiftYear(cur.end, -1), 1), last4[0].start, 12))
+        return { ...base, start: last4[0].start, end: cur.end, segments: last4.flatMap((q) => q.segments) };
+    }
+    return { ...base, start, end: cur.end, segments: [{ start, end: cur.end, parts: [fyPart, curPart, priorPart] }] };
+  }
+
+  // ── 값 ──
+
+  /** 한 공시·기간의 개념 값(원통화). 회사 고유 개념은 인스턴스에서 */
+  async partValue(qname: string, p: Part): Promise<{ val: number; unit: string } | null | "gap"> {
+    const [ns] = qname.split(":");
+    if (CF_NS.has(ns)) {
+      // 보고 통화 단위만 — 20-F 의 USD "편의 환산" 태그(단일 환율)는 쓰지 않는다(edgar-foreign.ts 와 같은 규칙)
+      const all = this.facts(qname).filter((f) => near(f.start, p.start) && near(f.end, p.end) && f.unit === this.profile.reportingCurrency);
+      const same = all.find((f) => f.prov.accn === p.accn);
+      if (same) return { val: same.val, unit: same.unit };
+      // 이 공시 값이 반올림 재태깅으로 버려졌으면 앞선 정밀값(원래 이 공시에 있었음)
+      const dropped = this.idx.get(qname).some((f) => f.prov.accn === p.accn && near(f.start, p.start) && near(f.end, p.end));
+      if (dropped) {
+        const l = latest(all);
+        if (l) return { val: l.val, unit: l.unit };
+      }
+      // companyfacts 에 없으면 그 공시에 없는 값(인스턴스로 보완된 공시는 idx 에 이미 들어 있다)
+      return null;
+    }
+    if (!p.accn) return null;
+    const inst = await this.instance(p.accn, p.form, p.filed);
+    if (!inst) return "gap";
+    const f = inst.find((x) => x.concept === qname && !Object.keys(x.dims).length && near(x.start, p.start) && near(x.end, p.end) && x.unit === this.profile.reportingCurrency);
+    return f ? { val: f.val, unit: f.unit } : null;
+  }
+
+  /** 인스턴스 사실(공시 단위 캐시). 실패 시 null */
+  instance(accn: string, form: FormType, filed: string | null): Promise<RawFact[] | null> {
+    let p = this.instMemo.get(accn);
+    if (!p) {
+      p = (async () => {
+        try {
+          const xml = await instanceText(await filingFiles(this.profile.cik, accn));
+          return xml ? parseInstance(xml, { accn, form, filed }) : null;
+        } catch {
+          return null;
+        }
+      })();
+      this.instMemo.set(accn, p);
+    }
+    return p;
+  }
+
+  /** 차원 값(인스턴스) — 개념·축·멤버 조건에 맞는 값의 합(원통화). 없으면 null */
+  async dimSum(qname: string, axis: string, member: (m: string) => boolean, p: Part): Promise<number | null | "gap"> {
+    if (!p.accn) return null;
+    const inst = await this.instance(p.accn, p.form, p.filed);
+    if (!inst) return "gap";
+    let sum: number | null = null;
+    for (const f of inst) {
+      if (f.concept !== qname || f.unit !== this.profile.reportingCurrency || !near(f.start, p.start) || !near(f.end, p.end)) continue;
+      const ks = Object.keys(f.dims);
+      if (ks.length !== 1 || ks[0] !== axis || !member(f.dims[axis])) continue;
+      sum = (sum ?? 0) + f.val;
+    }
+    return sum;
+  }
+
+  /**
+   * 열의 한 개념 값 — 구간마다 Σ(부호 × 공시 값)을 그 구간 평균 환율로 USD 환산해 더한다.
+   * 파생 열의 구성 공시 중 하나라도 그 개념이 없으면 null + BASIS_SHIFT(기준이 섞인 값을 만들지 않는다).
+   * `get` 을 주면 개념 대신 그 함수로 공시 값을 얻는다(차원 합 등).
+   */
+  async value(qname: string, col: ColumnSpec, get?: (p: Part) => Promise<number | null | "gap">): Promise<CellValue> {
+    if (col.yahoo) return this.yahooValue(qname, col);
+    let gaps = 0;
+    let total = 0, rawTotal = 0;
+    let fxWhy: ReadWhy | undefined;
+    for (const s of col.segments) {
+      let sum = 0, present = 0;
+      for (const p of s.parts) {
+        const r = get ? await get(p) : await this.partValue(qname, p);
+        if (r === "gap") { gaps |= Gap.INSTANCE; continue; }
+        if (r == null) continue;
+        sum += p.sign * (typeof r === "number" ? r : r.val);
+        present++;
+      }
+      if (present === 0) return { v: null, raw: null, gaps };
+      if (present < s.parts.length) return { v: null, raw: null, gaps: gaps | Gap.BASIS_SHIFT };
+      const rate = this.fx ? (this.fx.cur === "USD" ? 1 : this.fx.avg(s.start, s.end)) : null;
+      if (rate == null) return { v: null, raw: sum, gaps: gaps | Gap.FX };
+      if (this.fx!.cur !== "USD") fxWhy = { k: "fx", cur: this.fx!.cur, rate, basis: "avg" };
+      total += sum * rate;
+      rawTotal += sum;
+    }
+    const parts = col.segments.flatMap((s) => s.parts);
+    const why: ReadWhy | undefined =
+      parts.length > 1 ? { k: "derived", parts: parts.map((p) => ({ accn: p.accn ?? "", form: p.form, sign: p.sign })) } : fxWhy;
+    return { v: total, raw: rawTotal, why, gaps };
+  }
+
+  private async yahooValue(qname: string, col: ColumnSpec): Promise<CellValue> {
+    const field = YAHOO_FIELD[canonical(qname)];
+    if (!field) return { v: null, raw: null, gaps: 0 };
+    if (!this.yahoo || !this.fx) return { v: null, raw: null, gaps: Gap.YAHOO };
+    const fyPart = col.segments[0].parts[0];
+    const fyOrig = await this.partValue(qname, fyPart);
+    if (fyOrig == null || fyOrig === "gap") return { v: null, raw: null, gaps: 0 };
+    const r = yahooLtmOf(this.yahoo, field, fyOrig.val, col.yahoo!.fyEnd, this.fx);
+    if (!r.ok) return { v: null, raw: null, gaps: Gap.YAHOO };
+    return { v: r.usd, raw: null, why: { k: "yahoo-q", through: r.through }, gaps: 0 };
+  }
+
+  /** Yahoo LTM 이 성립했을 때의 기간(열 머리글 보정용) */
+  yahooWindow(col: ColumnSpec): { start: string; end: string } | null {
+    if (!col.yahoo || !this.yahoo || !this.fx) return null;
+    const rev = this.facts("us-gaap:Revenues").concat(this.facts("ifrs-full:Revenue"), this.facts("ifrs-full:RevenueFromContractsWithCustomers"))
+      .find((f) => near(f.start, col.yahoo!.fyStart) && near(f.end, col.yahoo!.fyEnd));
+    if (!rev) return null;
+    const r = yahooLtmOf(this.yahoo, "totalRevenue", rev.val, col.yahoo.fyEnd, this.fx);
+    if (!r.ok) return null;
+    return { start: r.start, end: r.through };
+  }
+
+  // ── 구조 ──
+
+  /** 공시의 손익계산서 표시 구조·계산 부모·(선택) 라벨 */
+  structure(accn: string, withLabels = false): Promise<FilingStructure> {
+    const key = `${accn}|${withLabels ? 1 : 0}`;
+    let p = this.structMemo.get(key);
+    if (!p) {
+      p = (async (): Promise<FilingStructure> => {
+        try {
+          const ff = await filingFiles(this.profile.cik, accn);
+          const preT = await linkbaseText(ff, "pre");
+          const shape = preT ? pickIncomeStatement(parsePresentation(preT)) : null;
+          if (!shape) return { shape: null, parents: new Map(), labels: null, gaps: Gap.LINKBASE };
+          const calT = await linkbaseText(ff, "cal");
+          const parents = calT ? calcParents(parseCalculation(calT), shape.role, new Set(shape.lines.map((l) => l.id))) : new Map();
+          let labels: FilingStructure["labels"] = null;
+          if (withLabels) {
+            const labT = await linkbaseText(ff, "lab").catch(() => null);
+            labels = labT ? parseLabels(labT) : null;
+          }
+          return { shape, parents, labels, gaps: calT ? 0 : Gap.LINKBASE };
+        } catch {
+          return { shape: null, parents: new Map(), labels: null, gaps: Gap.LINKBASE };
+        }
+      })();
+      this.structMemo.set(key, p);
+    }
+    return p;
+  }
+
+  /** 최근 정기공시 accn */
+  latestPeriodic(): string | null {
+    return this.sub.recent.find((f) => /^(10-[QK]|20-F|40-F)(\/A)?$/.test(f.form))?.accn ?? null;
+  }
+}
+
+function uniq<T extends { start: string; end: string }>(xs: T[]): T[] {
+  const m = new Map<string, T>();
+  for (const x of xs) m.set(`${x.start}|${x.end}`, x);
+  return [...m.values()];
+}
+
+export { fiscalYearOf, days, canonical };
+export type { Prov };
