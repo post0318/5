@@ -90,7 +90,6 @@ const GAP_MS = 400;
 const BASE = "https://home.imeritz.com";
 const SOURCE = "메리츠증권";
 const STRATEGY_LABEL = "메리츠 투자전략";
-const DAILY_LABEL = "메리츠 Strategy Daily";
 // 경제·채권을 먼저 읽는다 — 투자전략 목록에 섞인 같은 글번호를 거르기 위해.
 const BOARDS = [
   { bbsId: "sih02anl", label: "경제분석", kind: "macro" },
@@ -238,12 +237,15 @@ function classify(row, board) {
     const { label, headline } = industryLabelAndHeadline(title);
     return { ...base, title: headline, stockName: label || "산업", symbol: null, category: "산업" };
   }
+  // "Meritz Strategy Daily" 는 같은 날 "Strategy Idea" 글에 "[전략공감 2.0]" 을 붙여 다시
+  // 올리는 중복 게시라 수집하지 않는다(오너 결정 2026-09-25 — "메리츠는 제외").
+  if (DAILY_SERIES_RE.test(title)) return null;
   // strategy — 시리즈명을 떼고 헤드라인만 제목으로(시리즈는 고정 라벨로 대체).
   const { headline } = industryLabelAndHeadline(title);
   return {
     ...base,
     title: headline,
-    stockName: DAILY_SERIES_RE.test(title) ? DAILY_LABEL : STRATEGY_LABEL,
+    stockName: STRATEGY_LABEL,
     symbol: null,
     category: "산업",
   };

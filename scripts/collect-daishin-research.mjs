@@ -233,10 +233,13 @@ const MMB_RE = /Morning\s*Meeting\s*Brief/i;
 const LOCAL_EXCLUDE_RE = /포트폴리오가\s*커지는\s*Stock/i;
 const US_NEWS_RE = /Issue\s*&\s*News/i;
 const US_EVENT_PDF_RE = /^\d+_event_([A-Z][A-Z.]{0,6})_/;
-const MARKET_SERIES_RE = /장마감\s*시황|데일리\s*뉴스|뉴스\s*다이제스트|실적\s*대시보드|실적\s*시즌\s*모니터|마감\s*시황/;
+// 퀀틴전시 플랜(PDF 파일명 Strategy_Daily)은 매일 나오는 장 마감 코멘트라 시황(오너 결정
+// 2026-09-25 — "시황으로"). 시황 규칙이 전략 규칙보다 먼저 적용된다.
+const MARKET_SERIES_RE = /장마감\s*시황|데일리\s*뉴스|뉴스\s*다이제스트|실적\s*대시보드|실적\s*시즌\s*모니터|마감\s*시황|퀀틴전시/;
+const MARKET_PDF_RE = /Strategy_Daily/i;
 const STRATEGY_SERIES_RE =
-  /퀀틴전시|다음\s*주\s*시장|증시\s*전망|투자\s*전략|THE\s*GLOBAL|Global\s*Daishin\s*View|KOSPI|KOSDAQ|코스피|코스닥/i;
-const STRATEGY_PDF_RE = /THE_GLOBAL|Strategy_Daily/i;
+  /다음\s*주\s*시장|증시\s*전망|투자\s*전략|THE\s*GLOBAL|Global\s*Daishin\s*View|KOSPI|KOSDAQ|코스피|코스닥/i;
+const STRATEGY_PDF_RE = /THE_GLOBAL/i;
 const MACRO_RE =
   /AI\s*Economist|Fed\s*Oracle|FOMC|BOJ|ECB|금통위|연준|중앙은행|기준금리|금리|국채|채권|물가|인플레|CPI|PPI|PCE|GDP|PMI|고용|실업|임금|소매판매|산업생산|기계수주|주택가격|경기|경제지표|매크로|Macro|환율|\bFX\b|달러|엔화|위안/i;
 const FX_RE = /환율|\bFX\b/i;
@@ -291,7 +294,7 @@ async function classify(it) {
   if (isCommonExcludedContent(text)) return { kind: "skip", reason: "공통 제외(주간·일정표·추천·대체투자)" };
 
   // 3·4. 시리즈 확정 분류
-  if (MARKET_SERIES_RE.test(text)) {
+  if (MARKET_SERIES_RE.test(text) || MARKET_PDF_RE.test(it.pdfName)) {
     return { kind: "research", category: "산업", market: "kr", stockName: LABEL_MARKET, symbol: null, title: full, rule: "3 시황" };
   }
   // THE GLOBAL NOTE 는 제목에 시리즈 대괄호가 빠지는 회차가 있어 PDF 파일명으로도 본다.

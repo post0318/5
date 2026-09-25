@@ -1230,6 +1230,9 @@ npm run db:studio    # drizzle studio
   - 게시판 분류는 삼성증권과 같은 기준: 기업→종목분석, 산업→산업분석, 투자전략→투자전략
     (주식), 데일리·시황→시황, 경제·채권→거시경제 이슈분석(FX·환율은 환율분석), 원자재→이슈분석.
     고정 라벨은 `shinhan-research.ts` STRATEGY_/MARKET_CONDITION_STOCKNAMES 에 등록.
+  - 오너 결정(2026-09-25): 메리츠 "Meritz Strategy Daily"는 같은 날 Strategy Idea 글의
+    재게시라 수집 제외. 대신 퀀틴전시 플랜(PDF 파일명 Strategy_Daily)은 매일 장 마감 코멘트라
+    시황("대신증권 시황"). 대신 "포트폴리오가 커지는 Stock" 제외 여부는 오너가 PDF 확인 후 결정 대기.
   - **미결**: 한경 경유로 이미 쌓인 옛 문서(`{source}:한경:*`)는 id 가 달라 90일 보존이 끝날
     때까지 새 직접 수집 문서와 중복될 수 있다 — 배포 후 `/api/cron/shinhan-research` DELETE
     (source + idPrefix "한경:")로 7곳 정리 필요. 대신·iM 의 옛 GM 문서(idPrefix "GM:")도 같다.
