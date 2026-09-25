@@ -57,7 +57,7 @@
  *   | 84         | 한국 투자 > 시황코멘트                      | kr     | 산업     | ❌ 수집 제외(오너 결정, 2026-09-24) |
  *   | 81("KB 전략") | 한국 투자 > 주식전략                     | kr     | 산업     | ✅ 이 스크립트(`tab=3`, docTitle="KB 전략"만) — 투자전략(주식) 고정(오너 지시 — "kb전략은 투자전략(주식)에 해당된다") |
  *   | 81("이그전")/83("KB Quant") | 한국 투자 > 주식전략        | kr     | 산업     | ❌ 수집 제외(오너 결정 — "나머지는 수집에서 제외한다") |
- *   | 70("KB Bond"/"KB Fed Watch") | 한국 투자 > 채권/크레딧    | kr     | -        | ✅ `collect-kb-macro-issues.mjs`(docTitle 정확 일치) — `kr_research`가 아니라 거시경제 > 이슈분석(`macro_issues`, topic:"이슈분석")으로 별도 전송(오너 지시 — "kb bond는 거시경제>이슈분석에 해당된다" + "KB Fed Watch는 이슈분석에 포함한다") |
+ *   | 70("KB Bond"/"KB Fed Watch") | 한국 투자 > 채권/크레딧    | kr     | 산업     | ✅ 이 스크립트(`tab=3`, docTitle 정확 일치) — 고정 stockName으로 kr_research에 합류, classifyResearchTopic()이 거시경제 > 이슈분석으로 분류(오너 지시 — "kb bond는 거시경제>이슈분석에 해당된다" + "KB Fed Watch는 이슈분석에 포함한다") |
  *   | 71("KB Credit Weekly") | 한국 투자 > 채권/크레딧          | kr     | -        | ❌ 수집 제외(오너 결정) |
  *   | 192        | 한국 투자 > 종목컨설팅("KB 이슈 플러스")    | kr     | 산업     | ❌ 수집 제외(오너 결정) |
  *   | 177        | 한국투자 > 한국투자기타 > 기타발간           | kr     | 산업     | ❌ 수집 제외(오너 결정) |
@@ -120,10 +120,8 @@ const IMPORT_URL = (
 ).trim();
 // 거시경제(이슈분석/환율분석) 전용 — 오너 지시 2026-09-26 "kb 키움은 개별수집기에
 // 통합되어야 맞아보인다. 따로 있을 이유가 없다"로 collect-kb-macro-issues.mjs를
-// 이 파일에 흡수. kr_research와 스키마가 달라 라우트는 분리 유지, 파일만 통합.
-const MACRO_ISSUES_IMPORT_URL = (
-  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
-).trim();
+// 이 파일에 흡수. 이후 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues
+// 컬렉션·라우트 자체가 폐지돼 kr_research(IMPORT_URL)로 완전히 합류했다.
 // 자산배분/매크로(tab=2) 전용 Weekly 판정 — 공용 isWeeklyRecurringContent()
 // (Weekly/위클리만)보다 넓게 "주간"까지 포함한다(오너 지시, 이 게시판 한정).
 const MACRO_WEEKLY_RE = /\bWeekly\b|위클리|주간/i;
@@ -441,23 +439,34 @@ for (const r of tab3Rows) {
   });
 }
 
-// 거시경제(이슈분석/환율분석) — 원 collect-kb-macro-issues.mjs 로직 그대로.
+// 거시경제(이슈분석/환율분석) — 리서치 분류 체계 전면 개편(2026-09-26)으로
+// macro_issues 컬렉션 폐지, kr_research로 합류시킨다. 고정 stockName은
+// shinhan-research.ts FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES 등록값과
+// 일치시켜 classifyResearchTopic()이 이슈분석/환율분석으로 확정 분류하게 한다.
 // 1) KB Bond·KB Fed Watch(tab=3, 위에서 이미 받은 tab3Rows 재사용 — 같은
-//    게시판을 두 번 안 부른다) — 고정 topic:"이슈분석".
-const macroCollected = [];
+//    게시판을 두 번 안 부른다) — 고정 이슈분석.
 const TAB3_ISSUE_TITLES = new Set(["KB Bond", "KB Fed Watch"]);
+let macroCount = 0;
 for (const r of tab3Rows) {
   const date = r.publicDate;
   if (!date || new Date(date) < cutoff) continue;
-  if (!TAB3_ISSUE_TITLES.has(String(r.docTitle ?? "").trim())) continue;
-  macroCollected.push({
+  const docTitle = String(r.docTitle ?? "").trim();
+  if (!TAB3_ISSUE_TITLES.has(docTitle)) continue;
+  macroCount++;
+  collected.push({
     id: r.documentid,
     date,
     title: (r.docTitleSub || r.docTitle || "").trim(),
+    stockName: docTitle,
+    symbol: null,
     analyst: r.analystNm ?? "",
+    opinion: "",
+    targetPrice: null,
     summary: "",
     pdfUrl: r.urlLink || null,
-    topic: "이슈분석",
+    views: null,
+    category: "산업",
+    market: "kr",
   });
 }
 
@@ -474,17 +483,24 @@ for (const r of tab2Rows) {
   if (/대체투자/.test(folder) && !/원자재|commodit/i.test(`${folder} ${docTitle} ${docTitleSub}`)) continue;
   const folderTail = folder.split(">").pop()?.trim() ?? "";
   const isFx = isFxContent(docTitle) || isFxContent(folderTail);
-  macroCollected.push({
+  macroCount++;
+  collected.push({
     id: r.documentid,
     date,
     title: (docTitleSub || docTitle).trim(),
+    stockName: isFx ? "KB 자산배분매크로 FX" : "KB 자산배분매크로",
+    symbol: null,
     analyst: r.analystNm ?? "",
+    opinion: "",
+    targetPrice: null,
     summary: "",
     pdfUrl: r.urlLink || null,
-    topic: isFx ? "환율분석" : "이슈분석",
+    views: null,
+    category: "산업",
+    market: "kr",
   });
 }
-console.log(`✔ 거시경제 파싱 완료: ${macroCollected.length}건`);
+console.log(`✔ 거시경제 파싱 완료: ${macroCount}건`);
 
 // 해외주식(tab=4, 미국/중국/일본) — 국내 항목과 같은 collected 배열에 합친다
 // (market 필드로 구분되고, 최종 전송 시 market별로 나뉜다).
@@ -513,7 +529,7 @@ for (const r of globalRows) {
   });
 }
 
-if (collected.length === 0 && macroCollected.length === 0) {
+if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. API 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
@@ -588,31 +604,4 @@ for (const [, group] of byGroup) {
     process.exit(1);
   }
   console.log(`\n✔ [${market}/${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
-}
-
-// 거시경제(이슈분석/환율분석) — macro_issues 라우트로 topic별 별도 전송.
-const macroByTopic = new Map();
-for (const it of macroCollected) {
-  if (!macroByTopic.has(it.topic)) macroByTopic.set(it.topic, []);
-  macroByTopic.get(it.topic).push({
-    id: it.id,
-    date: it.date,
-    title: it.title,
-    analyst: it.analyst,
-    summary: it.summary,
-    pdfUrl: it.pdfUrl,
-  });
-}
-for (const [topic, items] of macroByTopic) {
-  const up = await fetch(MACRO_ISSUES_IMPORT_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ items, source: "KB증권", topic }),
-  });
-  const upBody = await up.text();
-  if (!up.ok) {
-    console.error(`✗ [${topic}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-    process.exit(1);
-  }
-  console.log(`✔ [${topic}] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

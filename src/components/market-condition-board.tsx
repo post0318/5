@@ -10,6 +10,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const PAGE_SIZE = 10;
 
+const SEGMENTS = [
+  { key: "Daily", label: "Daily" },
+  { key: "Monthly", label: "Monthly" },
+  { key: "투자전략", label: "투자전략" },
+] as const;
+type SegmentKey = (typeof SEGMENTS)[number]["key"];
+
 function fmtAgo(iso: string): string {
   const days = Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000);
   if (days <= 0) return "오늘";
@@ -46,70 +53,61 @@ function Pager({
 }
 
 /**
- * 거시경제 "이슈분석"/"환율분석" 탭(`/macro/issues`, `/macro/fx`, 오너 지시
- * 2026-09-24) — 종목·시장에 매이지 않는 매크로 코멘트를 "전체/증권사명"
- * 탭으로 구분해 보여준다(`macro_issues` 컬렉션, `/api/research/macro-issues`).
- * `/[market]/research`의 `IndustryResearchBoard`(산업분석)와 같은 카드·
- * 목록 스타일을 쓰되, 구분 기준이 topic(주제)이 아니라 source(증권사)라는
- * 점이 다르다.
+ * 신규 "시황분석" 탭(`/macro/market-condition`, 오너 지시 2026-09-26 —
+ * "거시경제 환율분석 오른쪽에 시황분석 탭 추가"). Daily/Monthly/투자전략
+ * 3개 세그먼트로 구분 — 구 "시황"(→Daily/Monthly)·"투자전략(주식)"
+ * (→투자전략)이 산업분석 탭에서 완전히 이동해 여기서 대신 보여준다.
+ * `MacroIssuesBoard`와 같은 카드·목록 스타일이되, 구분 기준이 source(증권사)가
+ * 아니라 segment(Daily/Monthly/투자전략)라는 점이 다르다.
  */
-export function MacroIssuesBoard({ topic, title }: { topic: "이슈분석" | "환율분석"; title: string }) {
+export function MarketConditionBoard() {
   const [page, setPage] = useState(1);
-  const [source, setSource] = useState<string>("전체");
+  const [segment, setSegment] = useState<SegmentKey>("Daily");
 
   const q = useQuery({
-    queryKey: ["macro-issues", topic, source],
+    queryKey: ["market-condition", segment],
     queryFn: () =>
-      apiFetch<{ items: ShinhanResearchDoc[]; sources: string[] }>(
-        `/api/research/macro-issues?topic=${encodeURIComponent(topic)}&source=${encodeURIComponent(source)}`,
+      apiFetch<{ items: ShinhanResearchDoc[] }>(
+        `/api/research/market-condition?segment=${encodeURIComponent(segment)}`,
       ),
     staleTime: 30 * 60_000,
   });
 
   const items = q.data?.items ?? [];
-  const sources = q.data?.sources ?? [];
   const pageCount = Math.ceil(items.length / PAGE_SIZE) || 1;
   const clampedPage = Math.min(page, pageCount);
   const paged = items.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
 
-  function selectSource(s: string) {
-    setSource(s);
+  function selectSegment(s: SegmentKey) {
+    setSegment(s);
     setPage(1);
   }
 
   return (
     <div className="space-y-3">
       <div>
-        <h1 className="text-xl font-semibold">{title}</h1>
+        <h1 className="text-xl font-semibold">시황분석</h1>
       </div>
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
           <CardTitle className="text-sm">
-            {title}
+            시황분석
             {q.data && <span className="text-muted-foreground ml-1.5 text-xs font-normal">({items.length})</span>}
           </CardTitle>
           <div className="flex flex-wrap gap-1">
-            <button
-              type="button"
-              onClick={() => selectSource("전체")}
-              className={cn(
-                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                source === "전체" ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:bg-muted",
-              )}
-            >
-              전체
-            </button>
-            {sources.map((s) => (
+            {SEGMENTS.map((s) => (
               <button
-                key={s}
+                key={s.key}
                 type="button"
-                onClick={() => selectSource(s)}
+                onClick={() => selectSegment(s.key)}
                 className={cn(
                   "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                  source === s ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:bg-muted",
+                  segment === s.key
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:bg-muted",
                 )}
               >
-                {s}
+                {s.label}
               </button>
             ))}
           </div>

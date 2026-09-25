@@ -1941,6 +1941,46 @@ LLM 수치 검증·지수 관행 때문에 이번 통일에서 제외(별도 결
   등에는 적용하지 않는다(그쪽은 시장 무관 고정 규칙, 별개).
 - 차트·테이블도 동일 디자인 토큰 공유.
 
+## 리서치 분류 체계 전면 개편 — macro_issues 폐기 (오너 지시 2026-09-26)
+
+"세관은 하나다" 원칙(라우터·컬렉션 통합)에 따라 `macro_issues`(이슈분석·환율분석
+전용, 데이터 적음)를 `kr_research`(투자전략(채권) 등 이미 훨씬 많음, 데이터
+많은 쪽)로 흡수 — **작은 쪽을 큰 쪽으로**(반대 방향 아님, 처음에 거꾸로
+설계했다가 오너가 정정: "현재 매크로 이슈에 있는 자료가 적다는 것이 투자전략
+(채권)은 엄청많다").
+
+- **새 8종 분류**(`classifyResearchTopic()`, `shinhan-research.ts`): 산업분석·
+  이슈분석(구 투자전략(채권))·환율분석(이슈분석 중 FX 신호)·시황분석:Daily
+  (구 시황, 기본값)·시황분석:Monthly(구 시황 중 "월간"/"month")·시황분석:투자전략
+  (구 투자전략(주식))·글로벌IB(구 해외리서치, market≠kr)·비상장(구 해외리서치,
+  market=kr — 현재 도달 사례 없음, 이론적 케이스). 기존 5종 휴리스틱
+  (`classifyLegacyTopic`, 실측 이력 많은 BOND_STRONG_RE 등)은 **전혀 안 건드리고**
+  그 결과를 새 taxonomy로 리매핑하는 계층만 얹었다.
+- **보관기간**(오너 지시로 확정): 이슈분석 30일·환율분석 30일·시황분석:Daily
+  7일·:Monthly 30일·:투자전략 90일·비상장 180일·글로벌IB 90일(기존 180일에서
+  단축)·산업분석/종목분석 90일(불변)·인사이트 90일(불변).
+- **`macro_issues` 컬렉션·`/api/cron/macro-issues`·`src/lib/db/macro-issues.ts`
+  삭제**. KB·키움·삼성·iM·메리츠·IBK·대신·한화·유안타 9개 수집기의 거시경제
+  게시판은 이제 `/cron/total-research`로 `category:"산업"` + 고정 stockName
+  라벨(`FORCED_ISSUE_STOCKNAMES`/`FORCED_FX_STOCKNAMES`, 예: "키움 이슈분석"·
+  "키움 환율분석"·"KB 자산배분매크로")로 합류해서 보낸다 — 게시판 코드가
+  topic을 확정하던 콘텐츠라 텍스트 키워드 휴리스틱을 못 믿고 기존
+  MARKET_CONDITION_STOCKNAMES와 같은 고정 라벨 강제 패턴을 재사용.
+- **`getIndustryResearch()`는 이제 산업분석·글로벌IB만** 반환(시황·투자전략·
+  해외리서치 완전 제거). 신규 `getMacroIssueResearch()`/`getMarketConditionResearch()`
+  추가. `/macro`에 "시황분석" 탭 신설(환율분석 오른쪽, Daily/Monthly/투자전략
+  세그먼트).
+- **미결 — 실제 데이터 이관 아직 안 함**: `scripts/migrate-macro-issues.mjs`
+  (MongoDB 드라이버 직접 사용, `--dry-run` 지원)를 작성해뒀지만 이 작업을 한
+  워크트리엔 `.env.local`(MONGODB_URI)이 없어 실행을 못 했다. MongoDB 접속
+  가능한 환경에서 `--dry-run`으로 건수 확인 후 실제 실행 필요. 실행 전까지는
+  옛 `macro_issues` 문서가 화면에 안 보이는 상태(라우트가 이미 없어져서
+  조회 자체가 kr_research만 봄) — 이관해야 예전 이슈분석/환율분석 글이 다시
+  나타남.
+- 부수 발견: 삼성증권 수집기가 거시경제 항목에 `market:"kr"`을 안 붙여 null로
+  새던 버그, FX 여부 무관하게 항상 topic:"이슈분석"으로 보내던 버그를 이번
+  재작업 중 발견·수정.
+
 ## 대화
 
 - 사용자와는 **한국어**로 대화.

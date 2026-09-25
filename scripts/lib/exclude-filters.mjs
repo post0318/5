@@ -72,20 +72,43 @@ export function isCommodityContent(text) {
 }
 
 /**
- * 주간물·일정표·추천종목·리츠·ETF/ETP·ESG·원자재 외 대체투자면 true — 수집기가
- * 건너뛴다. ETF/ETP·ESG 는 원래 `isEtfOrEtpContent`/`isEsgContent` 로 따로
- * 불러써야만 걸러졌는데, 신한·하나·NH·KB·한국투자 등 먼저 만든 수집기들은 이걸
- * 안 써서 뚫려 있었다(오너 지적 2026-09-25 — "etf etp 등은 공통에서
- * 수집제외하고 있지?"/"esg도 공용모듈에서 처리안되고 있어?") — 서버 안전망
- * (`src/lib/research-exclude.ts`)에도 같이 올려 전 소스에 한 번에 적용한다.
+ * 디지털자산(가상자산/암호화폐/스테이블코인) 제외(오너 지시 2026-09-26 —
+ * "디지털자산은 공통으로 수집제외이나 개별종목은 포함이다. 개별함수는
+ * 해외일 경우는 예외다"). 삼성(KR_DIGITAL_ASSET_RE)·한화(DIGITAL_ASSET_RE)·
+ * 유안타(DIGITAL_ASSET_RE)가 각자 다른 정규식으로 흩어져 있던 걸(FX_RE와
+ * 같은 패턴의 구멍) 하나로 통일 — 유안타의 가장 넓은 버전을 기준으로 한다.
  */
-export function isCommonExcludedContent(text, category) {
+const DIGITAL_ASSET_RE =
+  /디지털\s*자산|가상\s*자산|가상자산|암호화폐|스테이블\s*코인|\bstablecoin\b|\bstable\s*coin\b|\bBTC\b|\bcrypto\b|조각\s*투자|\bSTO\b/i;
+
+/** 제목에 디지털자산 신호가 있으면 true. */
+export function isDigitalAssetContent(text) {
+  return DIGITAL_ASSET_RE.test(String(text ?? ""));
+}
+
+/**
+ * 주간물·일정표·추천종목·리츠·ETF/ETP·ESG·원자재 외 대체투자·디지털자산이면
+ * true — 수집기가 건너뛴다. ETF/ETP·ESG 는 원래 `isEtfOrEtpContent`/
+ * `isEsgContent` 로 따로 불러써야만 걸러졌는데, 신한·하나·NH·KB·한국투자 등
+ * 먼저 만든 수집기들은 이걸 안 써서 뚫려 있었다(오너 지적 2026-09-25 —
+ * "etf etp 등은 공통에서 수집제외하고 있지?"/"esg도 공용모듈에서
+ * 처리안되고 있어?") — 서버 안전망(`src/lib/research-exclude.ts`)에도
+ * 같이 올려 전 소스에 한 번에 적용한다.
+ *
+ * `market` 인자(선택, 오너 지시 2026-09-26): 디지털자산 배제만 시장을 본다 —
+ * 개별종목(category:"기업")은 원래도 이 규칙 대상이 아니고, **해외(kr이 아닌
+ * market)는 명시적 예외**다(삼성이 "미국 스테이블코인은 유지"하던 것과 동일
+ * 원칙). market을 안 넘기면(레거시 호출) 국내로 간주해 기존처럼 배제한다.
+ */
+export function isCommonExcludedContent(text, category, market) {
   const t = String(text ?? "");
   if (COMMON_WEEKLY_RE.test(t) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
   if (ETF_RE.test(t) || ESG_RE.test(t)) return true;
   // 대체투자 규칙은 종목 리포트에 적용하지 않는다(서버 규칙과 동일).
   if (category === "기업") return false;
-  return ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t);
+  if (ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t)) return true;
+  if ((market === undefined || market === "kr") && DIGITAL_ASSET_RE.test(t)) return true;
+  return false;
 }
 
 /**

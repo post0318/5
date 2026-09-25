@@ -55,7 +55,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent, isDigitalAssetContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -79,9 +79,6 @@ const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[
 
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
-).trim();
-const MACRO_IMPORT_URL = (
-  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
@@ -197,7 +194,6 @@ const US_TICKER_RE = /^([^[\]]+?)\s*\(([A-Z]{1,5}(?:\.[A-Z])?)\)\s*[,:：]?\s*(.
 const CH_TICKER_RE = /^([^[\]]+?)\s*\((\d{4,6})[.\s](HK|CH|SH|SZ)\)\s*[,:：]?\s*(.+)$/i;
 const EARNINGS_FLASH_RE = /^\[Earnings Flash\]\s*(.+)$/i;
 const IPO_RE = /\[IPO\b|\bIPO 101\b/i;
-const DIGITAL_ASSET_RE = /디지털\s*자산|가상\s*자산|스테이블\s*코인|stablecoin|crypto/i;
 
 /** 영문 회사명 → 미국 티커(네이버 해외종목 자동완성). 확실할 때만, 실패하면 null. */
 const COMPANY_SUFFIX_RE =
@@ -251,9 +247,27 @@ function industryItem(base, title, market) {
   return { ...base, title: headline || title, stockName: label, symbol: null, category: "산업", market, source: SOURCE };
 }
 
-const macroTopic = (title) => (isFxContent(title) ? "환율분석" : "이슈분석");
+// 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues 컬렉션 폐지 — 고정
+// stockName(shinhan-research.ts FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES
+// 등록)으로 kr_research에 합류시킨다.
+function macroItem(base, title, label) {
+  const isFx = isFxContent(title);
+  return { ...base, title, stockName: isFx ? `${label} FX` : label, symbol: null, category: "산업", market: "kr", source: SOURCE };
+}
+function commodityItem(base, title, market = "kr") {
+  const isFx = isFxContent(title);
+  return {
+    ...base,
+    title,
+    stockName: isFx ? "한화 원자재 FX" : "한화 원자재",
+    symbol: null,
+    category: "산업",
+    market,
+    source: SOURCE,
+  };
+}
 
-/** 게시판·제목 → 전송 항목. null 이면 제외. 반환 항목에 topic 이 있으면 이슈분석행. */
+/** 게시판·제목 → 전송 항목. null 이면 제외. */
 async function classify(row, board) {
   const base = baseItem(row);
   const title = row.title;
@@ -274,16 +288,19 @@ async function classify(row, board) {
       source: SOURCE,
     };
   }
-  if (board.kind === "macro") return { ...base, title, topic: macroTopic(title) };
+  if (board.kind === "macro") {
+    const label = board.id === "istn1" ? "한화 채권전략" : "한화 국내외경제";
+    return macroItem(base, title, label);
+  }
 
   // 여기부터 종목이 아닌 글이 섞이는 게시판 — 원자재는 이슈분석으로.
   if (board.kind === "krIndustry") {
-    if (DIGITAL_ASSET_RE.test(title)) return null;
-    if (isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+    if (isDigitalAssetContent(title)) return null; // 이 게시판은 국내 전용(market:"kr")
+    if (isCommodityContent(title)) return commodityItem(base, title);
     return industryItem(base, title, "kr");
   }
   if (board.kind === "strategy") {
-    if (isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+    if (isCommodityContent(title)) return commodityItem(base, title);
     return { ...base, title, stockName: STRATEGY_LABEL, symbol: null, category: "산업", market: "kr", source: SOURCE };
   }
 
@@ -320,7 +337,7 @@ async function classify(row, board) {
       }
     }
   }
-  if (isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+  if (isCommodityContent(title)) return commodityItem(base, title, market);
   const it = industryItem(base, rest || title, market);
   // 대괄호·콜론 라벨이 없으면 지역 태그를 라벨로.
   if (it.stockName === "산업" && region) it.stockName = region;
@@ -396,8 +413,7 @@ for (const it of collected) {
 }
 console.log(`  PDF 첨부 링크 ${pdfLinked}/${collected.length}건 (나머지는 상세 URL 폴백)`);
 
-const research = collected.filter((it) => it.topic == null);
-const macro = collected.filter((it) => it.topic != null);
+const research = collected;
 
 // 투자의견·목표주가 — 공용 추출기(본문 → 필요할 때만 PDF).
 const stockItems = research.filter((it) => it.category === "기업");
@@ -417,12 +433,12 @@ for (const [it, url] of pdfHold) it.pdfUrl = url;
 const decimalMissing = decimalManwon.filter((it) => it.targetPrice == null).length;
 console.log(`  소수 만원 표기("3.6만원") 본문 ${decimalManwon.length}건 — 그중 목표가 빈칸 ${decimalMissing}건`);
 
-console.log(`✔ 수집 완료: 리서치 ${research.length}건 · 이슈분석/환율분석 ${macro.length}건`);
+console.log(`✔ 수집 완료: ${research.length}건`);
 const resolved = research.filter((it) => it.resolvedBy === "naver").length;
 const unresolved = research.filter((it) => it.unresolved).length;
 if (resolved || unresolved) console.log(`  Earnings Flash 티커 해석: 성공 ${resolved} · 실패(산업으로) ${unresolved}`);
 for (const i of collected) {
-  const dest = i.topic ?? `${i.market}/${i.category}`;
+  const dest = `${i.market}/${i.category}`;
   const who = i.symbol ?? i.stockName ?? "";
   const op = i.opinion || i.targetPrice != null ? ` (${i.opinion || "-"}/${i.targetPrice ?? "-"})` : "";
   const pdf = i.noPdf ? " [PDF없음]" : "";
@@ -471,11 +487,4 @@ for (const it of research) {
 for (const [key, items] of groups) {
   const [source, market] = key.split("|");
   await post(IMPORT_URL, { items, source, market }, `${source}/${market}`, items.length);
-}
-
-for (const topic of ["이슈분석", "환율분석"]) {
-  const items = macro
-    .filter((it) => it.topic === topic)
-    .map((it) => ({ id: it.id, date: it.date, title: it.title, analyst: it.analyst, summary: it.summary, pdfUrl: it.pdfUrl }));
-  if (items.length > 0) await post(MACRO_IMPORT_URL, { items, source: SOURCE, topic }, topic, items.length);
 }

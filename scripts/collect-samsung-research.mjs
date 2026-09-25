@@ -30,8 +30,8 @@
  *   | issue     | 이슈리포트             | 국내 산업분석 > 투자전략(주식)              |
  *   | spot1     | SPOT코멘트(전략)       | 국내 산업분석 > 투자전략(주식)(현재 0건)     |
  *   | daily     | Daily시황              | 국내 산업분석 > 시황                         |
- *   | economy   | 경제                   | 거시경제 > 이슈분석(macro_issues)            |
- *   | bond      | 채권                   | 거시경제 > 이슈분석(macro_issues)            |
+ *   | economy   | 경제                   | 거시경제 > 이슈분석/환율분석(kr_research, 이관됨)|
+ *   | bond      | 채권                   | 거시경제 > 이슈분석/환율분석(kr_research, 이관됨)|
  *   | premium   | 프리미엄               | 국내 산업분석(최근 글 2022-12 — 사실상 휴면) |
  *   | invest·futures | 주간투자정보·선물옵션 | 미수집                                     |
  *
@@ -78,7 +78,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent, isDigitalAssetContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -101,9 +101,6 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
-).trim();
-const MACRO_IMPORT_URL = (
-  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -130,8 +127,8 @@ const BOARDS = [
   { gubun: "issue", label: "이슈리포트", market: "kr", kind: "fixed", fixedLabel: "삼성증권 이슈리포트" },
   { gubun: "premium", label: "프리미엄", market: "kr", kind: "krIndustry" },
   { gubun: "daily", label: "Daily시황", market: "kr", kind: "fixed", fixedLabel: "삼성증권 Daily시황" },
-  { gubun: "economy", label: "경제", kind: "macro" },
-  { gubun: "bond", label: "채권", kind: "macro" },
+  { gubun: "economy", label: "경제", market: "kr", kind: "macro" },
+  { gubun: "bond", label: "채권", market: "kr", kind: "macro" },
 ];
 
 const TITLE_RE = /^(.+?)\s*\(([A-Za-z0-9.-]{1,10})\s+US\)\s*:\s*(.+)$/;
@@ -198,7 +195,6 @@ const TECH_TALK_RE = /^Tech\s*Talk/i;
 // 국내 디지털자산/조각투자/STO 산업 리포트는 제외한다(오너 지시 2026-09-25 —
 // "kr 산업분석 — 한국 STO 한국은 조각투자 STO, 디지털자산을 제외하고 미국은
 // 유지한다"). us 쪽(예: 미국 스테이블코인 얘기)은 그대로 수집.
-const KR_DIGITAL_ASSET_RE = /조각\s*투자|\bSTO\b|디지털\s*자산/i;
 
 // 티커/코드 없는 글 → 산업(라벨 추출). 국내에서 라벨에 "비상장"이면 인사이트로.
 function industryItem(base, title, board) {
@@ -211,7 +207,7 @@ function industryItem(base, title, board) {
   } else if (market === "kr" && TECH_TALK_RE.test(label)) {
     market = "us";
   }
-  if (market === "kr" && KR_DIGITAL_ASSET_RE.test(`${label} ${title}`)) return null;
+  if (market === "kr" && isDigitalAssetContent(`${label} ${title}`)) return null;
   const unlisted = market === "kr" && UNLISTED_LABEL_RE.test(label);
   return {
     ...base,
@@ -226,13 +222,33 @@ function industryItem(base, title, board) {
 }
 
 function parseTitle(base, title, board) {
-  // 공용 FX 판정(오너 지적 2026-09-25 — "거시경제 fx 수집기준은 공통에서 반영하고\n  // 있지?"): 경제·채권 게시판이 여태 FX 분기 없이 전부 이슈분석으로만 갔다.\n  if (board.kind === "macro") return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
+  // 공용 FX 판정(오너 지적 2026-09-25 — "거시경제 fx 수집기준은 공통에서 반영하고
+  // 있지?"): 경제·채권 게시판이 여태 FX 분기 없이 전부 이슈분석으로만 갔다.
+  // 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues 컬렉션은 폐지 —
+  // 경제/채권 게시판도 kr_research로 합류시키되 게시판별 고정 stockName
+  // (shinhan-research.ts FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES 등록)으로
+  // classifyResearchTopic()이 이슈분석/환율분석으로 확정 분류하게 한다.
+  if (board.kind === "macro") {
+    const isFx = isFxContent(title);
+    const label = board.gubun === "bond" ? "삼성증권 채권" : "삼성증권 경제";
+    return { ...base, title, stockName: isFx ? `${label} FX` : label, symbol: null, category: "산업", source: SOURCE };
+  }
   // 종목 리포트는 아래 공통 규칙 대상이 아니다.
   const isStockReport =
     (board.kind === "us" && TITLE_RE.test(title)) || (board.kind === "krCompany" && KR_TITLE_RE.test(title));
   // 원자재 글은 어느 게시판이든 거시경제 이슈분석으로(대체투자는 공통 필터가
   // 원자재만 남긴다).
-  if (!isStockReport && isCommodityContent(title)) return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
+  if (!isStockReport && isCommodityContent(title)) {
+    const isFx = isFxContent(title);
+    return {
+      ...base,
+      title,
+      stockName: isFx ? "삼성증권 원자재 FX" : "삼성증권 원자재",
+      symbol: null,
+      category: "산업",
+      source: SOURCE,
+    };
+  }
   if (board.kind === "fixed") {
     // Daily시황은 "국내 마감시황"·"미국 마감시황" 둘을 함께 다룬다 — 미국 쪽은
     // 국내 시황과 market이 달라야 하므로 별도 라벨·market으로 분리한다(오너 지시
@@ -332,12 +348,11 @@ if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
-const research = collected.filter((it) => it.topic == null);
-const macro = collected.filter((it) => it.topic != null);
-console.log(`✔ 파싱 완료: 리서치 ${research.length}건 · 이슈분석 ${macro.length}건`);
+const research = collected;
+console.log(`✔ 파싱 완료: ${research.length}건`);
 for (const i of collected) {
   console.log(
-    `  [${i.board}→${i.topic ?? `${i.market}/${i.category}/${i.source}`}] ${i.date} ${i.symbol ?? i.stockName ?? ""}${i.opinion ? `(${i.opinion})` : ""} — ${i.title} [${i.analyst}]`,
+    `  [${i.board}→${i.market}/${i.category}/${i.source}] ${i.date} ${i.symbol ?? i.stockName ?? ""}${i.opinion ? `(${i.opinion})` : ""} — ${i.title} [${i.analyst}]`,
   );
 }
 
@@ -388,26 +403,4 @@ for (const [key, items] of groups) {
     process.exit(1);
   }
   console.log(`✔ [${source}/${market}] 앱 전송 완료 (${items.length}건): ${upBody}`);
-}
-
-if (macro.length > 0) {
-  const items = macro.map((it) => ({
-    id: it.id,
-    date: it.date,
-    title: it.title,
-    analyst: it.analyst,
-    summary: it.summary,
-    pdfUrl: it.pdfUrl,
-  }));
-  const up = await fetch(MACRO_IMPORT_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ items, source: SOURCE, topic: "이슈분석" }),
-  });
-  const upBody = await up.text();
-  if (!up.ok) {
-    console.error(`✗ [이슈분석] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-    process.exit(1);
-  }
-  console.log(`✔ [이슈분석] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

@@ -38,6 +38,15 @@ const REIT_RE = /리츠|\bREITs?\b/i;
 const ETF_RE = /\bETFs?\b|\bETPs?\b|상장지수(?:펀드|증권)?/i;
 const ESG_RE = /\bESG/i;
 
+/**
+ * 디지털자산은 여기 없다(오너 결정 2026-09-26 — "이건 스크립트에서
+ * 마무리되는거 아닌가? 서버단에서 다시 나올이유는 없어보인다"). ETF/ESG/
+ * 리츠와 달리 디지털자산 배제는 market에 따라 결과가 달라지는데(국내만
+ * 배제, 해외는 유지), 서버까지 오면 macro_issues처럼 market 필드 자체가
+ * 없는 경로도 있어 여기서 재판정하면 오히려 잘못 걸러질 위험이 있다.
+ * 수집기가 자기 market을 정확히 알고 이미 걸러내므로(scripts/lib/
+ * exclude-filters.mjs 의 isDigitalAssetContent()) 서버는 재검사하지 않는다.
+ */
 export function isCommonExcludedResearch(text: string | null | undefined, category?: string): boolean {
   const t = String(text ?? "");
   if (WEEKLY_RE.test(t) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;

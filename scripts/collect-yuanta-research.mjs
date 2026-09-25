@@ -10,9 +10,9 @@
  *   |---------------|-----------------|-------------------------------------------------|
  *   | RE01          | 기업분석        | 국내 종목분석(`data-jongcode` 종목코드)          |
  *   | RE02          | 산업분석        | 국내 산업분석(디지털 자산 Daily 제외)            |
- *   | RB30 / RB30B  | 글로벌 투자전략 | 거시경제 이슈분석(FX·엔화 등은 환율분석) —        |
+ *   | RB30 / RB30B  | 글로벌 투자전략 | 거시경제 이슈분석/환율분석(kr_research) —        |
  *   |               |                 | "미국 주식시장 마감 시황"(데일리)은 미수집        |
- *   | RB30 / RB30C  | 경제분석        | 거시경제 이슈분석(FX·환율 글은 환율분석)          |
+ *   | RB30 / RB30C  | 경제분석        | 거시경제 이슈분석/환율분석(kr_research)          |
  *
  * **RB30A(한국 투자전략) 제외(오너 결정, 2026-09-25 — "쓸만한게 없다")**: 처음엔
  * 고정 라벨 "유안타 투자전략"으로 투자전략(주식) 수집했으나, 실제로는 "환율,
@@ -53,6 +53,7 @@ import {
   isFxContent,
   isCommonExcludedContent,
   isCommodityContent,
+  isDigitalAssetContent,
 } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
@@ -78,9 +79,6 @@ const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
-const MACRO_IMPORT_URL = (
-  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
-).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
@@ -98,7 +96,6 @@ const BOARDS = [
   { cd007: "RB30", cd008: "RB30C", label: "경제분석", kind: "macro" },
 ];
 // 다른 증권사도 디지털자산 게시판은 수집하지 않는다(키움 BC·iM 디지털자산 등과 동일).
-const DIGITAL_ASSET_RE = /디지털\s*자산|\bBTC\b|스테이블\s*코인|\bstable\s*coin\b|가상자산|암호화폐/i;
 // "리서치 Top-Picks Follow up" — 월간 추천종목 목록(추천종목 공통 제외와 같은 취지).
 const TOP_PICKS_RE = /top\s*-?\s*picks/i;
 // 글로벌 전략 게시판의 데일리 미국 마감 시황(AI 생성) — 시황으로 확정 분류.
@@ -213,17 +210,32 @@ function toItem(r, board) {
     };
   }
   if (board.kind === "industry") {
-    if (DIGITAL_ASSET_RE.test(r.title) || TOP_PICKS_RE.test(r.title)) return null;
+    if (isDigitalAssetContent(r.title) || TOP_PICKS_RE.test(r.title)) return null; // 이 게시판은 국내 전용(market:"kr")
     const { label, headline } = industryLabelAndHeadline(r.title);
     return { ...base, title: headline, stockName: label, symbol: null, category: "산업", market: "kr" };
   }
   // macro(경제분석 RB30C) / global(글로벌 투자전략 RB30B, 2026-09-25 이슈분석으로
-  // 전환) / 원자재 글(어느 게시판이든) 전부 거시경제 이슈분석으로.
+  // 전환) / 원자재 글(어느 게시판이든) 전부 거시경제 이슈분석으로. 리서치 분류
+  // 체계 전면 개편(2026-09-26)으로 macro_issues 컬렉션 폐지 — 고정 stockName
+  // (shinhan-research.ts FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES 등록)으로
+  // kr_research에 합류시킨다.
   if (board.kind === "macro" || board.kind === "global" || isCommodityContent(r.title)) {
     // global 게시판의 미국 시황(마감 코멘트)만 수집하지 않는다(오너 지시
     // 2026-09-25 — "유안타 미국 시황은 수집하지 않는다").
     if (board.kind === "global" && US_MARKET_CONDITION_RE.test(r.title)) return null;
-    return { ...base, title: r.title, topic: isFxContent(r.title) ? "환율분석" : "이슈분석" };
+    const isFx = isFxContent(r.title);
+    const label = isCommodityContent(r.title)
+      ? isFx
+        ? "유안타 원자재 FX"
+        : "유안타 원자재"
+      : board.kind === "global"
+        ? isFx
+          ? "유안타 해외전략 FX"
+          : "유안타 해외전략"
+        : isFx
+          ? "유안타 경제분석 FX"
+          : "유안타 경제분석";
+    return { ...base, title: r.title, stockName: label, symbol: null, category: "산업", market: "kr" };
   }
   return null; // 정의되지 않은 게시판 kind — 안전하게 건너뜀
 }
@@ -258,9 +270,8 @@ if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
-const research = collected.filter((it) => !it.topic);
-const macro = collected.filter((it) => it.topic);
-console.log(`✔ 파싱 완료: 리서치 ${research.length}건 · 거시경제 ${macro.length}건`);
+const research = collected;
+console.log(`✔ 파싱 완료: ${research.length}건`);
 
 // 기업분석만 PDF 에서 발췌(목록에 요약이 없음). 텍스트는 공용 추출기가 다시 쓴다(캐시).
 const companyItems = research.filter((it) => it.category === "기업");
@@ -278,7 +289,7 @@ console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
 await enrichResearch(research, { market: "kr", usePdf: false });
 for (const it of collected) {
   console.log(
-    `  [${it.board}→${it.topic ?? `${it.market}/${it.category}`}] ${it.date} ${it.symbol ?? it.stockName ?? ""}` +
+    `  [${it.board}→${it.market}/${it.category}] ${it.date} ${it.symbol ?? it.stockName ?? ""}` +
       `${it.opinion ? ` 의견=${it.opinion}` : ""}${it.targetPrice != null ? ` 목표가=${it.targetPrice}` : ""} — ${it.title}`,
   );
 }
@@ -323,31 +334,4 @@ for (const [market, items] of byMarket) {
     process.exit(1);
   }
   console.log(`✔ [${market}] 앱 전송 완료 (${items.length}건): ${upBody}`);
-}
-
-// 거시경제 이슈분석/환율분석 — topic 별로 나눠 전송.
-const byTopic = new Map();
-for (const it of macro) {
-  if (!byTopic.has(it.topic)) byTopic.set(it.topic, []);
-  byTopic.get(it.topic).push({
-    id: it.id,
-    date: it.date,
-    title: it.title,
-    analyst: it.analyst,
-    summary: it.summary,
-    pdfUrl: it.pdfUrl,
-  });
-}
-for (const [topic, items] of byTopic) {
-  const up = await fetch(MACRO_IMPORT_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ items, source: SOURCE, topic }),
-  });
-  const upBody = await up.text();
-  if (!up.ok) {
-    console.error(`✗ [${topic}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-    process.exit(1);
-  }
-  console.log(`✔ [${topic}] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

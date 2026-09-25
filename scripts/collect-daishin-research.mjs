@@ -90,9 +90,6 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
-const MACRO_IMPORT_URL = (
-  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
-).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 const UA =
@@ -249,7 +246,8 @@ const STRATEGISTS = new Set(["이경민", "문남중", "권순호"]);
 const US_TICKER_FIX = { BRKB: "BRK-B", BRKA: "BRK-A", BFB: "BF-B" };
 
 /**
- * 한 건 분류. 반환: { kind: "skip", reason } | { kind: "research", ... } | { kind: "macro", topic }.
+ * 한 건 분류. 반환: { kind: "skip", reason } | { kind: "research", ... }(거시경제도
+ * category:"산업"+고정 stockName의 research 로 합류한다).
  * 규칙 순서(첫 규칙 승):
  *  | # | 조건                                              | 결과                           |
  *  |---|---------------------------------------------------|--------------------------------|
@@ -307,12 +305,32 @@ async function classify(it) {
     const c = await detectKrCompany(it, headline, true);
     if (c) return c;
   }
-  // 5·6. 거시경제
+  // 5·6. 거시경제 — 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues
+  // 컬렉션 폐지, 고정 stockName(shinhan-research.ts FORCED_ISSUE_STOCKNAMES/
+  // FORCED_FX_STOCKNAMES 등록)으로 kr_research에 합류시킨다.
   if (isCommodityContent(text) || /commodity/i.test(it.pdfName)) {
-    return { kind: "macro", topic: "이슈분석", title: full, rule: "5 원자재" };
+    const isFx = isFxContent(text);
+    return {
+      kind: "research",
+      category: "산업",
+      market: "kr",
+      stockName: isFx ? "대신증권 원자재 FX" : "대신증권 원자재",
+      symbol: null,
+      title: full,
+      rule: "5 원자재",
+    };
   }
   if (MACRO_RE.test(text)) {
-    return { kind: "macro", topic: isFxContent(text) ? "환율분석" : "이슈분석", title: full, rule: "6 거시 키워드" };
+    const isFx = isFxContent(text);
+    return {
+      kind: "research",
+      category: "산업",
+      market: "kr",
+      stockName: isFx ? "대신증권 매크로 FX" : "대신증권 매크로",
+      symbol: null,
+      title: full,
+      rule: "6 거시 키워드",
+    };
   }
 
   // 7. 국내 종목
@@ -449,7 +467,6 @@ for (const it of fetched.sort((a, b) => b.rowid - a.rowid)) {
 console.log(`  범위 안 ${candidates.length + reposts.length}건 중 재게시 ${reposts.length}건 제외`);
 
 const research = [];
-const macro = [];
 const skipped = [];
 for (const it of candidates) {
   const c = await classify(it);
@@ -457,10 +474,6 @@ for (const it of candidates) {
   const summary = it.bodyText.slice(0, 300);
   if (c.kind === "skip") {
     skipped.push({ ...it, reason: c.reason });
-    continue;
-  }
-  if (c.kind === "macro") {
-    macro.push({ id: String(it.rowid), date: it.date, title: c.title, analyst: it.analyst, summary, pdfUrl, topic: c.topic, rule: c.rule });
     continue;
   }
   research.push({
@@ -482,7 +495,7 @@ for (const it of candidates) {
   });
 }
 
-if (research.length + macro.length === 0 && candidates.length === 0) {
+if (research.length === 0 && candidates.length === 0) {
   console.error("✗ 범위 안 글 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
@@ -494,11 +507,10 @@ for (const x of research) {
   const dest = x.category === "기업" ? "종목" : [LABEL_MARKET, LABEL_STRATEGY].includes(x.stockName) ? x.stockName : "업종 라벨";
   bump(`${x.rule} → ${x.category}/${x.market}/${dest}`);
 }
-for (const x of macro) bump(`${x.rule} → ${x.topic}`);
 for (const x of skipped) bump(`제외: ${x.reason}`);
 tally.set("제외: 목록 제목으로 선제외", skippedByListTitle.length);
 tally.set("제외: 재게시", reposts.length);
-console.log(`✔ 분류: 리서치 ${research.length}건 · 거시경제 ${macro.length}건 · 제외 ${skipped.length + skippedByListTitle.length + reposts.length}건`);
+console.log(`✔ 분류: 리서치 ${research.length}건 · 제외 ${skipped.length + skippedByListTitle.length + reposts.length}건`);
 for (const [k, v] of [...tally].sort()) console.log(`    ${k}: ${v}`);
 
 // 투자의견·목표주가(종목만) — 시장별 통화 규칙.
@@ -515,7 +527,6 @@ for (const i of research) {
     `  [${i.market}/${i.category}] ${i.date} ${i.symbol ?? i.stockName}${i.symbol ? ` ${i.stockName}` : ""}${i.opinion ? ` (${i.opinion}${i.targetPrice != null ? ` · TP ${i.targetPrice}` : ""})` : i.targetPrice != null ? ` (TP ${i.targetPrice})` : ""} — ${i.title} [${i.analyst}] <${i.rule}>`,
   );
 }
-for (const i of macro) console.log(`  [${i.topic}] ${i.date} — ${i.title} [${i.analyst}] <${i.rule}>`);
 for (const i of skipped) console.log(`  [제외:${i.reason}] ${i.date} ${i.rawTitle}`);
 for (const i of reposts) console.log(`  [재게시] ${i.date} #${i.rowid} ${i.rawTitle}`);
 
@@ -557,10 +568,4 @@ for (const mk of ["kr", "us"]) {
       category: it.category,
     }));
   if (items.length) await post(IMPORT_URL, { items, source: SOURCE, market: mk }, `${SOURCE}/${mk}`);
-}
-for (const topic of ["이슈분석", "환율분석"]) {
-  const items = macro
-    .filter((it) => it.topic === topic)
-    .map((it) => ({ id: it.id, date: it.date, title: it.title, analyst: it.analyst, summary: it.summary, pdfUrl: it.pdfUrl }));
-  if (items.length) await post(MACRO_IMPORT_URL, { items, source: SOURCE, topic }, topic);
 }

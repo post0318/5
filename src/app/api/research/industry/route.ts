@@ -1,15 +1,17 @@
 import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
 import { isDbConfigured } from "@/lib/db";
-import { getIndustryResearch, type ResearchTopic } from "@/lib/db/shinhan-research";
+import { getIndustryResearch } from "@/lib/db/shinhan-research";
 
 export const revalidate = 1800;
 
 /**
- * 산업분석/투자전략 리포트 — 종목 무관, 시장 전체용(`/[market]/research`
- * 새 탭). DB만 읽는다(수집은 로컬 스크립트, CLAUDE.md 예외 참고). 종목별
- * 기업분석(`/api/markets/[market]/[symbol]/research`)과는 별개 라우트.
- * `topic` 쿼리로 전체/산업분석/투자전략/시황을 나눠 조회(오너 지시, 2026-09).
+ * 산업분석 리포트 — 종목 무관, 시장 전체용(`/[market]/research`). DB만
+ * 읽는다(수집은 로컬 스크립트, CLAUDE.md 예외 참고). 종목별 기업분석
+ * (`/api/markets/[market]/[symbol]/research`)과는 별개 라우트.
+ * **전면 개편(오너 지시 2026-09-26)**: 이 탭은 이제 "산업분석"·"글로벌IB"만
+ * 다룬다 — 시황·투자전략·이슈분석·환율분석·비상장은 완전히 제거됐다
+ * (각자 `/macro/issues`·`/macro/fx`·`/macro/market-condition`으로 이동).
  */
 export async function GET(request: Request) {
   try {
@@ -21,9 +23,9 @@ export async function GET(request: Request) {
     if (!isDbConfigured()) return ok({ items: [] });
 
     const topicParam = url.searchParams.get("topic");
-    const VALID_TOPICS: ResearchTopic[] = ["산업분석", "투자전략(주식)", "투자전략(채권)", "시황", "해외리서치"];
-    const topic = (VALID_TOPICS as string[]).includes(topicParam ?? "")
-      ? (topicParam as ResearchTopic)
+    const VALID_TOPICS = ["산업분석", "글로벌IB"] as const;
+    const topic = (VALID_TOPICS as readonly string[]).includes(topicParam ?? "")
+      ? (topicParam as "산업분석" | "글로벌IB")
       : undefined;
 
     // 90일 백필인데도 화면엔 최근 1주일치만 보인다는 지적(오너, 2026-09) —

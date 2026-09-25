@@ -44,10 +44,14 @@ const SUBNAV = [
 
 // 거시경제 서브 내비(오너 지시 2026-09-24 — "거시경제 클릭시 상단 탭으로
 // 글로벌핵심지표 이슈분석을 구성"). seg가 빈 문자열이면 `/macro` 자체.
+// "시황분석" 탭 추가(오너 지시 2026-09-26 — "거시경제 환율분석 오른쪽에
+// 시황분석 탭 추가"). 산업분석 탭에서 완전히 제거된 구 "시황"·"투자전략
+// (주식)"이 여기로 이동(Daily/Monthly/투자전략 세그먼트).
 const MACRO_SUBNAV = [
   { seg: "", label: "글로벌핵심지표", icon: Globe },
   { seg: "issues", label: "이슈분석", icon: Newspaper },
   { seg: "fx", label: "환율분석", icon: TrendingUp },
+  { seg: "market-condition", label: "시황분석", icon: BarChart3 },
 ] as const;
 
 export function AppShell({ children }: { children: React.ReactNode }) {

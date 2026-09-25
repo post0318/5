@@ -18,7 +18,7 @@
  *   | enterpriseAnalysis   | 산업분석      | enterpriseAnalysisView(seq)   | indreport       | 국내 산업분석(대괄호 라벨)            |
  *   | strategy (STRATEGY)  | 전략/시황     | strategyView(seq, gubun)      | invreport       | 국내 산업분석 "IBK 투자전략"          |
  *   | strategy (DAIL)      | 전략/시황     | strategyView(seq, 'DAIL')     | invrespect      | 국내 산업분석 "IBKS Daily"(시황)      |
- *   | morning              | 경제/채권     | morningView(seq)              | comment         | 거시경제 이슈분석(macro_issues)       |
+ *   | morning              | 경제/채권     | morningView(seq)              | comment         | 거시경제 이슈분석/환율분석(kr_research)|
  *   | overseasBus          | 해외기업      | DetailView(seq)               | overseasreport  | 미국 종목분석(티커를 뽑을 수 있을 때만) |
  *
  *  - 목록 제목은 산업·전략·경제 게시판에서 "..."으로 잘린다 → 상세 페이지
@@ -74,9 +74,6 @@ const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[
 
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
-).trim();
-const MACRO_IMPORT_URL = (
-  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -189,7 +186,15 @@ function excerpt(text) {
 
 /** 게시판·제목 → 앱 목적지. null 이면 건너뜀. */
 function classify(board, row, title) {
-  // 공용 FX 판정(오너 지적 2026-09-25) — 경제/채권 게시판이 FX 분기 없이 전부\n  // 이슈분석으로만 갔다.\n  if (board.kind === "macro") return { topic: isFxContent(title) ? "환율분석" : "이슈분석" };
+  // 공용 FX 판정(오너 지적 2026-09-25) — 경제/채권 게시판이 FX 분기 없이 전부
+  // 이슈분석으로만 갔다. 리서치 분류 체계 전면 개편(2026-09-26)으로
+  // macro_issues 컬렉션 폐지 — 고정 stockName(shinhan-research.ts
+  // FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES 등록)으로 kr_research에 합류
+  // (이 게시판은 경제·채권을 함께 다뤄 별도 board 구분이 없다).
+  if (board.kind === "macro") {
+    const isFx = isFxContent(title);
+    return { category: "산업", market: "kr", stockName: isFx ? "IBK 경제 FX" : "IBK 경제", symbol: null, title };
+  }
   const { label, headline } = industryLabelAndHeadline(title);
   if (board.kind === "krCompany") {
     const bm = title.match(/^\[([^\]]+)\]\s*(.+)$/);
@@ -212,7 +217,10 @@ function classify(board, row, title) {
     };
   }
   // 원자재 글은 기업 리포트가 아니면 거시경제 이슈분석.
-  if (isCommodityContent(title)) return { topic: isFxContent(title) ? "환율분석" : "이슈분석" };
+  if (isCommodityContent(title)) {
+    const isFx = isFxContent(title);
+    return { category: "산업", market: "kr", stockName: isFx ? "IBK 원자재 FX" : "IBK 원자재", symbol: null, title };
+  }
   if (board.kind === "strategy") {
     const fixed = row.gubun === "DAIL" ? DAILY_LABEL : STRATEGY_LABEL;
     return { category: "산업", market: "kr", stockName: fixed, symbol: null, title: headline || title };
@@ -311,9 +319,8 @@ if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
-const research = collected.filter((it) => it.topic == null);
-const macro = collected.filter((it) => it.topic != null);
-console.log(`✔ 파싱 완료: 리서치 ${research.length}건 · 이슈분석 ${macro.length}건`);
+const research = collected;
+console.log(`✔ 파싱 완료: ${research.length}건`);
 
 // 투자의견·목표주가 — 상세 요약(bodyText) → PDF(직링크일 때만) 순.
 const stockItems = research.filter((it) => it.category === "기업");
@@ -381,26 +388,4 @@ for (const [market, items] of groups) {
     process.exit(1);
   }
   console.log(`✔ [${SOURCE}/${market}] 앱 전송 완료 (${items.length}건): ${upBody}`);
-}
-
-if (macro.length > 0) {
-  const items = macro.map((it) => ({
-    id: it.id,
-    date: it.date,
-    title: it.title,
-    analyst: it.analyst,
-    summary: it.summary,
-    pdfUrl: it.pdfUrl,
-  }));
-  const up = await fetch(MACRO_IMPORT_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ items, source: SOURCE, topic: "이슈분석" }),
-  });
-  const upBody = await up.text();
-  if (!up.ok) {
-    console.error(`✗ [이슈분석] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-    process.exit(1);
-  }
-  console.log(`✔ [이슈분석] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

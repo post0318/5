@@ -74,7 +74,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isWeeklyRecurringContent, isEsgContent } from "./lib/exclude-filters.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -101,11 +101,8 @@ const IMPORT_URL = (
 ).trim();
 // 거시경제(이슈분석/환율분석) 전용 — 오너 지시 2026-09-26 "kb 키움은 개별수집기에
 // 통합되어야 맞아보인다. 따로 있을 이유가 없다"로 collect-kiwoom-macro-issues.mjs를
-// 이 파일에 흡수. kr_research와 스키마가 달라(topic만 있고 category/symbol 없음)
-// 라우트는 그대로 분리 유지, 스크립트 파일만 하나로 합친다.
-const MACRO_ISSUES_IMPORT_URL = (
-  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
-).trim();
+// 이 파일에 흡수. 이후 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues
+// 컬렉션·라우트 자체가 폐지돼 kr_research(IMPORT_URL)로 완전히 합류했다.
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 const UA =
@@ -259,15 +256,14 @@ async function collectBoard(board, cutoff) {
       }
       const rawTitle = String(r.titl ?? "").trim();
       if (board.exclude && board.exclude(rawTitle)) continue; // 게시판별 개별 제외(예: EM 증시 캘린더)
-      if (isEtfOrEtpContent(rawTitle)) continue; // ETF/ETP 공용 제외(오너 지시 2026-09-24)
-      // Weekly 정기 시리즈 제외(오너 지시 2026-09-24 — "큠틴 아메리카처럼
-      // weekly 자료는 수집 제외다", CC 게시판 "09/21 큠틴 아메리카 (미국주식
-      // Weekly)"가 발견 계기).
-      if (isWeeklyRecurringContent(rawTitle)) continue;
-      // ESG 공용 제외(오너 지시 2026-09-24 — "esg는 공통으로 제외처리").
-      if (isEsgContent(rawTitle)) continue;
       const parsed = board.parse(rawTitle);
       if (!parsed) continue;
+      // 공통 배제가 기본(오너 지시 2026-09-26 — "통합함수가 기본이고 예외가
+      // 필요할 때 개별함수 쓴다"). category가 parse() 이후에야 정해지므로
+      // 여기로 옮겨 ETF/ESG/Weekly뿐 아니라 리츠·캘린더·추천종목·대체투자까지
+      // 한 번에 적용한다(이전엔 개별 함수 3개만 써서 이 4개는 서버 안전망에만
+      // 의존했음).
+      if (isCommonExcludedContent(rawTitle, parsed.category)) continue;
       out.push({
         id: `${board.rMenuGb}:${r.sqno}`,
         date,
@@ -296,9 +292,12 @@ async function collectBoard(board, cutoff) {
 // 거시경제(이슈분석/환율분석) — 원 collect-kiwoom-macro-issues.mjs 로직 그대로.
 // SI(rMenuGbNm "이슈분석", 실제 사이트 내비 확인됨)·FE(rMenuGbNm "일간환율전망")
 // 게시판 코드 자체가 topic을 확정하므로 FX 판정이 불필요(다른 증권사와 다른 점).
+// 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues 컬렉션 폐지 — 고정
+// stockName("키움 이슈분석"/"키움 환율분석", shinhan-research.ts
+// FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES 등록)으로 kr_research에 합류시킨다.
 const MACRO_BOARDS = [
-  { rMenuGb: "SI", topic: "이슈분석" },
-  { rMenuGb: "FE", topic: "환율분석" },
+  { rMenuGb: "SI", stockName: "키움 이슈분석" },
+  { rMenuGb: "FE", stockName: "키움 환율분석" },
 ];
 
 async function collectMacroBoard(board, cutoff) {
@@ -316,17 +315,23 @@ async function collectMacroBoard(board, cutoff) {
         break;
       }
       const title = String(r.titl ?? "").trim();
-      if (isEtfOrEtpContent(title)) continue;
+      if (isCommonExcludedContent(title)) continue;
       out.push({
         id: `${board.rMenuGb}:${r.sqno}`,
         date,
         title,
+        stockName: board.stockName,
+        symbol: null,
         analyst: r.workId ?? "",
+        opinion: "",
+        targetPrice: null,
         summary: "",
         pdfUrl: r.attaFile
           ? `${PDF_BASE}?rMenuGb=${board.rMenuGb}&attaFile=${encodeURIComponent(r.attaFile)}&makeDt=${encodeURIComponent(r.makeDt)}`
           : null,
-        topic: board.topic,
+        views: null,
+        category: "산업",
+        market: "kr",
       });
     }
     if (stop || rows.length < PAGE_SIZE) break;
@@ -346,19 +351,20 @@ for (const board of BOARDS) {
 }
 
 console.log(`▶ 키움증권 거시경제(이슈분석/환율분석) 수집: 최근 ${DAYS}일`);
-const macroCollected = [];
+let macroCount = 0;
 for (const board of MACRO_BOARDS) {
   const items = await collectMacroBoard(board, cutoff);
-  console.log(`  ${board.rMenuGb}(${board.topic}): ${items.length}건`);
-  macroCollected.push(...items);
+  console.log(`  ${board.rMenuGb}(${board.stockName}): ${items.length}건`);
+  collected.push(...items);
+  macroCount += items.length;
   await sleep(300);
 }
 
-if (collected.length === 0 && macroCollected.length === 0) {
+if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
-console.log(`✔ 파싱 완료: 총 ${collected.length}건 (거시경제 ${macroCollected.length}건)`);
+console.log(`✔ 파싱 완료: 총 ${collected.length}건 (거시경제 ${macroCount}건)`);
 console.log(
   "  샘플:",
   collected.slice(0, 8).map((i) => `[${i.market}/${i.category}] ${i.date} ${i.symbol ?? i.stockName} — ${i.title}`),
@@ -420,31 +426,4 @@ for (const [, group] of byGroup) {
   totalSent += items.length;
 }
 
-// 거시경제(이슈분석/환율분석) — macro_issues 라우트로 topic별 별도 전송.
-const macroByTopic = new Map();
-for (const it of macroCollected) {
-  if (!macroByTopic.has(it.topic)) macroByTopic.set(it.topic, []);
-  macroByTopic.get(it.topic).push({
-    id: it.id,
-    date: it.date,
-    title: it.title,
-    analyst: it.analyst,
-    summary: it.summary,
-    pdfUrl: it.pdfUrl,
-  });
-}
-for (const [topic, items] of macroByTopic) {
-  const up = await fetch(MACRO_ISSUES_IMPORT_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ items, source: "키움증권", topic }),
-  });
-  const upBody = await up.text();
-  if (!up.ok) {
-    console.error(`✗ [${topic}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-    process.exit(1);
-  }
-  console.log(`✔ [${topic}] 앱 전송 완료 (${items.length}건): ${upBody}`);
-  totalSent += items.length;
-}
 console.log(`\n✔ 총 ${totalSent}건 전송 완료`);

@@ -29,6 +29,7 @@ const localRules = {
           "isFxContent",
           "isCommodityContent",
           "isWeeklyRecurringContent",
+          "isDigitalAssetContent",
         ]);
         let found = false;
         return {
@@ -82,9 +83,9 @@ const eslintConfig = defineConfig([
       "no-restricted-syntax": [
         "error",
         {
-          selector: "VariableDeclarator > Identifier.id[name=/^(ETF_RE|ESG_RE|FX_RE|COMMODITY_RE)$/]",
+          selector: "VariableDeclarator > Identifier.id[name=/^(ETF_RE|ESG_RE|FX_RE|COMMODITY_RE|DIGITAL_ASSET_RE|KR_DIGITAL_ASSET_RE)$/]",
           message:
-            "ETF/ESG/FX/원자재 판정용 정규식을 이 파일에서 직접 선언하지 말 것 — scripts/lib/exclude-filters.mjs 의 isEtfOrEtpContent·isEsgContent·isFxContent·isCommodityContent 를 가져다 쓴다(공통 lib 강제).",
+            "ETF/ESG/FX/원자재/디지털자산 판정용 정규식을 이 파일에서 직접 선언하지 말 것 — scripts/lib/exclude-filters.mjs 의 isEtfOrEtpContent·isEsgContent·isFxContent·isCommodityContent·isDigitalAssetContent(또는 isCommonExcludedContent) 를 가져다 쓴다(공통 lib 강제).",
         },
       ],
     },

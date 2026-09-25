@@ -76,11 +76,20 @@ export interface ShinhanResearchDoc {
 // 것. 기업분석·산업분석은 기존 90일 그대로.
 const MAX_AGE_MS = 90 * 24 * 3600_000;
 const RECENT_WINDOW_MS = 90 * 24 * 3600_000;
-const STRATEGY_MAX_AGE_MS = 30 * 24 * 3600_000;
-const MARKET_CONDITION_MAX_AGE_MS = 14 * 24 * 3600_000;
+// 전면 개편(오너 지시 2026-09-26 — "macro_issues를 kr_research로 흡수").
+// 보관기간은 오너가 직접 지정한 값 그대로: 이슈분석 30일 · 환율분석 30일 ·
+// 시황분석:Daily 7일 · 시황분석:Monthly 30일 · 시황분석:투자전략 90일 ·
+// 비상장 180일 · 글로벌IB 90일(기존 180일에서 단축) · 인사이트/산업분석/
+// 종목분석은 기존 90일 그대로.
+const ISSUE_MAX_AGE_MS = 30 * 24 * 3600_000;
+const FX_MAX_AGE_MS = 30 * 24 * 3600_000;
+const MARKET_DAILY_MAX_AGE_MS = 7 * 24 * 3600_000;
+const MARKET_MONTHLY_MAX_AGE_MS = 30 * 24 * 3600_000;
+const MARKET_STRATEGY_MAX_AGE_MS = 90 * 24 * 3600_000; // == MAX_AGE_MS, 별도 조기 정리 불필요
+const UNLISTED_MAX_AGE_MS = 180 * 24 * 3600_000;
+const GLOBAL_IB_MAX_AGE_MS = 90 * 24 * 3600_000;
 /** 해외리서치(골드만삭스 리서치 노트) 전용 보존기간 — 오너 지시,
  * 2026-09-19 "여기만 백필기간을 180일로". 다른 "산업" 카테고리는 90일. */
-const FOREIGN_RESEARCH_MAX_AGE_MS = 180 * 24 * 3600_000;
 
 export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDoc>> {
   const db = await getDb();
@@ -112,32 +121,42 @@ export async function upsertShinhanResearch(
     date: { $lt: cutoff },
     source: { $nin: FOREIGN_RESEARCH_SOURCES as unknown as string[] },
   });
-  // 해외리서치(골드만삭스 리서치 노트)만 180일 보존(오너 지시, 2026-09-19).
-  const foreignResearchCutoff = new Date(Date.now() - FOREIGN_RESEARCH_MAX_AGE_MS)
-    .toISOString()
-    .slice(0, 10);
-  const delForeignResearch = await col.deleteMany({
-    date: { $lt: foreignResearchCutoff },
+  // 글로벌IB(market!=="kr")·비상장(market==="kr") — 소스는 같지만(FOREIGN_
+  // RESEARCH_SOURCES) market에 따라 보관기간이 다르다(오너 지시 2026-09-26 —
+  // 글로벌IB 90일, 비상장 180일).
+  const globalIbCutoff = new Date(Date.now() - GLOBAL_IB_MAX_AGE_MS).toISOString().slice(0, 10);
+  const unlistedCutoff = new Date(Date.now() - UNLISTED_MAX_AGE_MS).toISOString().slice(0, 10);
+  const delGlobalIb = await col.deleteMany({
+    date: { $lt: globalIbCutoff },
     source: { $in: FOREIGN_RESEARCH_SOURCES as unknown as string[] },
+    market: { $ne: "kr" },
+  });
+  const delUnlisted = await col.deleteMany({
+    date: { $lt: unlistedCutoff },
+    source: { $in: FOREIGN_RESEARCH_SOURCES as unknown as string[] },
+    market: "kr",
   });
 
-  // 투자전략·시황 조기 정리 — topic 은 DB 필드가 아니라 classifyResearchTopic()
-  // 의 계산 결과라 deleteMany 조건절에 바로 못 넣는다. 둘 중 더 짧은 컷오프
-  // (시황 14일)~90일 사이의 "산업" 카테고리 문서만 후보로 가져와(전체 대비
-  // 소수) JS 에서 분류 후 각자의 컷오프를 넘겼으면 id로 골라 지운다 —
-  // 산업분석은 그대로 90일 유지.
-  const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
-  const marketConditionCutoff = new Date(Date.now() - MARKET_CONDITION_MAX_AGE_MS).toISOString().slice(0, 10);
-  // 후보 조회는 둘 중 더 넓은(=더 최근인) 컷오프를 써야 한다 — 시황(14일)이
-  // 투자전략(30일)보다 짧아서, 14일 기준으로 가져와야 "14~30일 사이의
-  // 시황"도 후보에 걸린다(30일 기준으로만 가져오면 이 구간을 통째로 놓침).
+  // 이슈분석/환율분석/시황분석(Daily·Monthly) 조기 정리 — topic은 DB 필드가
+  // 아니라 classifyResearchTopic()의 계산 결과라 deleteMany 조건절에 바로
+  // 못 넣는다. 가장 짧은 컷오프(시황분석:Daily 7일)~90일 사이의 "산업"
+  // 카테고리 문서만 후보로 가져와(전체 대비 소수) JS에서 분류 후 각자의
+  // 컷오프를 넘겼으면 id로 골라 지운다. 산업분석·시황분석:투자전략(둘 다
+  // 90일)은 위 일반 del이 이미 처리하므로 여기서 안 건드린다.
+  const issueCutoff = new Date(Date.now() - ISSUE_MAX_AGE_MS).toISOString().slice(0, 10);
+  const fxCutoff = new Date(Date.now() - FX_MAX_AGE_MS).toISOString().slice(0, 10);
+  const dailyCutoff = new Date(Date.now() - MARKET_DAILY_MAX_AGE_MS).toISOString().slice(0, 10);
+  const monthlyCutoff = new Date(Date.now() - MARKET_MONTHLY_MAX_AGE_MS).toISOString().slice(0, 10);
+  // 후보 조회는 넷 중 가장 넓은(=가장 최근인) 컷오프를 써야 한다 — 시황분석:
+  // Daily(7일)가 가장 짧아서, 7일 기준으로 가져와야 "7~30일 사이의 이슈분석/
+  // 환율분석/Monthly"도 후보에 걸린다.
   const staleIndustryCandidates = await col
     .find({
       category: "산업",
-      date: { $lt: marketConditionCutoff },
+      date: { $lt: dailyCutoff },
       source: { $nin: [...INSIGHT_SOURCES, ...FOREIGN_RESEARCH_SOURCES] as unknown as string[] },
     })
-    .project<{ _id: string; date: string; stockName: string; title: string; source: string; market: MarketId; summary: string }>({
+    .project<{ _id: string; date: string; stockName: string; title: string; source: string; market: ResearchMarketId; summary: string }>({
       date: 1,
       stockName: 1,
       title: 1,
@@ -149,9 +168,11 @@ export async function upsertShinhanResearch(
   const staleStrategyIds = staleIndustryCandidates
     .filter((d) => {
       const t = classifyResearchTopic(d);
-      if (t === "산업분석") return false;
-      if (t === "시황") return true; // 후보 자체가 이미 14일 이전만 가져왔음
-      return d.date < strategyCutoff; // 투자전략(주식)/(채권) — 30일까지는 유지
+      if (t === "이슈분석") return d.date < issueCutoff;
+      if (t === "환율분석") return d.date < fxCutoff;
+      if (t === "시황분석:Daily") return true; // 후보 자체가 이미 7일 이전만 가져왔음
+      if (t === "시황분석:Monthly") return d.date < monthlyCutoff;
+      return false; // 산업분석·시황분석:투자전략은 일반 90일 정리에 맡김
     })
     .map((d) => d._id);
   let prunedStrategy = 0;
@@ -162,7 +183,11 @@ export async function upsertShinhanResearch(
 
   return {
     upserted,
-    pruned: (del.deletedCount ?? 0) + (delForeignResearch.deletedCount ?? 0) + prunedStrategy,
+    pruned:
+      (del.deletedCount ?? 0) +
+      (delGlobalIb.deletedCount ?? 0) +
+      (delUnlisted.deletedCount ?? 0) +
+      prunedStrategy,
   };
 }
 
@@ -185,7 +210,30 @@ function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
   return result;
 }
 
-export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전략(채권)" | "시황" | "해외리서치";
+/** 리매핑 전 내부 분류(과거 이름 그대로 유지, 잘 튜닝된 휴리스틱 그대로 재사용). */
+type LegacyResearchTopic = "산업분석" | "투자전략(주식)" | "투자전략(채권)" | "시황" | "해외리서치";
+
+/**
+ * 공개 분류 체계(오너 지시 2026-09-26, "리서치 파이프라인 구조 전면 개편") —
+ * macro_issues 컬렉션을 kr_research로 흡수하면서 이슈분석/환율분석이 이제
+ * 여기서도 판정된다. LegacyResearchTopic → ResearchTopic 매핑:
+ *   산업분석 → 산업분석(그대로)
+ *   투자전략(채권) → 이슈분석 | 환율분석(제목에 FX 신호 있으면 환율분석)
+ *   시황 → 시황분석:Daily | 시황분석:Monthly(제목에 "월간"/"month" 신호 있으면
+ *     Monthly, 그 외 기본값 Daily)
+ *   투자전략(주식) → 시황분석:투자전략
+ *   해외리서치 → 글로벌IB(market!=="kr") | 비상장(market==="kr", 현재
+ *     FOREIGN_RESEARCH_SOURCES가 전부 market:"us"라 이론적 케이스)
+ */
+export type ResearchTopic =
+  | "산업분석"
+  | "이슈분석"
+  | "환율분석"
+  | "시황분석:Daily"
+  | "시황분석:Monthly"
+  | "시황분석:투자전략"
+  | "글로벌IB"
+  | "비상장";
 
 /**
  * "산업" 카테고리 문서를 산업분석/투자전략/시황 세 갈래로 나눈다(오너 지시,
@@ -585,9 +633,9 @@ function isBond(doc: { stockName: string; title: string }, hayWithSummary: strin
   return isGenericOrBoardLabel(doc) && BOND_MACRO_RE.test(hayWithSummary) && !EQUITY_HINT_RE.test(hayWithSummary);
 }
 
-export function classifyResearchTopic(
+function classifyLegacyTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
-): ResearchTopic {
+): LegacyResearchTopic {
   if ((FOREIGN_RESEARCH_SOURCES as readonly string[]).includes(doc.source)) return "해외리서치";
   if (isMarketConditionStockname(doc.stockName)) return "시황";
   if (MARKET_CONDITION_SOURCE_MARKETS.has(`${doc.source}:${doc.market}`)) return "시황";
@@ -629,27 +677,131 @@ export function classifyResearchTopic(
   return "산업분석";
 }
 
+// FX 판정(오너 지시 2026-09-26) — scripts/lib/exclude-filters.mjs의
+// isFxContent()·구 macro-issues.ts의 escalateToFxTopic()과 같은 정규식.
+// 배제가 아니라 분류라 research-exclude.ts로 옮기지 않고 이 파일에 로컬로
+// 둔다(이 파일의 다른 분류용 정규식 BOND_STRONG_RE 등과 같은 관례).
+const FX_RE =
+  /\bFX\b|환율|엔화|달러화|위안화|유로화|파운드화|원화\s*(?:강세|약세|절상|절하)|달러[-\s]?엔|달러\s*인덱스|\bDXY\b/i;
+// 시황분석 Daily/Monthly 분기(오너 지시 2026-09-26 — "Daily는 일간, 데일리,
+// 모닝브리프 등을 분류, Monthly는 월간, month 등을 분류"). 기본값은 Daily —
+// 기존 "시황" 판정 자체가 이미 데일리성 신호(MARKET_CONDITION_STRONG_RE·
+// PERIOD_RE)로 확정된 것들이라 Monthly만 명시적으로 가르면 된다.
+const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b/i;
+
+// macro_issues에서 흡수한 콘텐츠 중 "게시판 코드가 topic을 확정"하던
+// 것들(제목 텍스트만으론 이슈분석/환율분석이 안 갈리는 경우)을 위한 고정
+// 라벨 강제 분류 — MARKET_CONDITION_STOCKNAMES/STRATEGY_STOCKNAMES와 같은
+// 패턴(오너 지시 2026-09-26). 대부분의 이관 콘텐츠는 제목에 채권/금리/환율
+// 신호가 실제로 있어 기존 휴리스틱(classifyLegacyTopic)만으로도 자연스럽게
+// "투자전략(채권)"으로 걸린 뒤 아래 FX_RE로 갈라지지만, 제목만으론 신호가
+// 약한 고정 시리즈(예: "KB Bond"·"KB Fed Watch"·키움 SI/FE 게시판)는 여기
+// 등록해 안전망으로 확정한다.
+const FORCED_ISSUE_STOCKNAMES = new Set([
+  "KB Bond",
+  "KB Fed Watch",
+  "KB 자산배분매크로",
+  "키움 이슈분석",
+  "삼성증권 경제",
+  "삼성증권 채권",
+  "삼성증권 원자재",
+  "iM증권 경제분석",
+  "iM증권 채권",
+  "iM증권 원자재",
+  "메리츠 경제분석",
+  "메리츠 채권분석",
+  "메리츠 원자재",
+  "IBK 경제",
+  "IBK 원자재",
+  "대신증권 매크로",
+  "대신증권 원자재",
+  "한화 국내외경제",
+  "한화 채권전략",
+  "한화 원자재",
+  "유안타 경제분석",
+  "유안타 해외전략",
+  "유안타 원자재",
+  // macro_issues 컬렉션 이관(scripts/migrate-macro-issues.mjs) 중 알려진 소스
+  // (키움증권·KB증권) 매핑에 없는 예상 밖 source 가 나올 때만 쓰는 안전망.
+  "이슈분석",
+]);
+const FORCED_FX_STOCKNAMES = new Set([
+  "KB 자산배분매크로 FX",
+  "키움 환율분석",
+  "삼성증권 경제 FX",
+  "삼성증권 채권 FX",
+  "삼성증권 원자재 FX",
+  "iM증권 경제분석 FX",
+  "iM증권 채권 FX",
+  "iM증권 원자재 FX",
+  "메리츠 경제분석 FX",
+  "메리츠 채권분석 FX",
+  "메리츠 원자재 FX",
+  "IBK 경제 FX",
+  "IBK 원자재 FX",
+  "대신증권 매크로 FX",
+  "대신증권 원자재 FX",
+  "한화 국내외경제 FX",
+  "한화 채권전략 FX",
+  "한화 원자재 FX",
+  "유안타 경제분석 FX",
+  "유안타 해외전략 FX",
+  "유안타 원자재 FX",
+  "환율분석", // macro_issues 이관 안전망(위 "이슈분석"과 동일 취지).
+]);
+
 /**
- * 산업분석/투자전략 리포트(종목 무관, `symbol: null`) — 시장 전체용 화면
+ * 공개 분류 함수 — classifyLegacyTopic()의 결과를 새 taxonomy로 리매핑한다.
+ * 레거시 휴리스틱 자체는 절대 건드리지 않는다(오너 지시 — 실측 이력이 많은
+ * 잘 튜닝된 로직).
+ */
+export function classifyResearchTopic(
+  doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
+): ResearchTopic {
+  if (FORCED_ISSUE_STOCKNAMES.has(doc.stockName)) return "이슈분석";
+  if (FORCED_FX_STOCKNAMES.has(doc.stockName)) return "환율분석";
+  const legacy = classifyLegacyTopic(doc);
+  switch (legacy) {
+    case "산업분석":
+      return "산업분석";
+    case "해외리서치":
+      return doc.market === "kr" ? "비상장" : "글로벌IB";
+    case "투자전략(채권)": {
+      const hay = `${doc.stockName ?? ""} ${doc.title}`;
+      return FX_RE.test(hay) ? "환율분석" : "이슈분석";
+    }
+    case "투자전략(주식)":
+      return "시황분석:투자전략";
+    case "시황": {
+      const hay = `${doc.stockName ?? ""} ${doc.title}`;
+      return MARKET_CONDITION_MONTHLY_RE.test(hay) ? "시황분석:Monthly" : "시황분석:Daily";
+    }
+  }
+}
+
+/**
+ * 산업분석 리포트(종목 무관, `symbol: null`) — 시장 전체용 화면
  * (`/[market]/research`)에서 사용. `getShinhanResearchBySymbol`(종목별
  * 기업분석)과 달리 symbol 로 좁히지 않고 market+category="산업"으로만
- * 조회한다. 2026-09 기준 KB·미래에셋·한투·NH·하나·DS·BNK·GlobalMonitor·
- * 한경컨센서스 등 다수 소스가 이미 이 카테고리로 수집 중(수집기부터 먼저
- * 구축, 화면 연동은 이번에 처음). `topic` 을 주면 classifyResearchTopic()
- * 기준으로 한 번 더 걸러낸다 — DB 필드가 아니라 후처리 필터라, 필터링 후에도
- * limit 만큼 채우려고 원본을 넉넉히 가져온다.
+ * 조회한다.
+ *
+ * **전면 개편(오너 지시 2026-09-26)**: 이 탭은 이제 "산업분석"·"글로벌IB"
+ * 두 토픽만 다룬다 — 시황·투자전략·이슈분석·환율분석·비상장은 완전히
+ * 제거해 각자의 전용 함수(`getMacroIssueResearch`·`getMarketConditionResearch`)
+ * 로 옮겼다("산업분석 탭에서 완전히 제거"). `topic`을 주면
+ * classifyResearchTopic() 기준으로 한 번 더 걸러낸다.
  */
 export async function getIndustryResearch(
   market: MarketId,
   limit = 30,
-  topic?: ResearchTopic,
+  topic?: "산업분석" | "글로벌IB",
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
-  // "해외리서치"는 국내 고빈도 소스들과 같은 900건 풀에서 걸러내면 밀려서
+  // "글로벌IB"는 국내 고빈도 소스들과 같은 900건 풀에서 걸러내면 밀려서
   // 안 보일 수 있어(실측 — 8건 중 2건만 노출됨) source로 직접 좁혀 조회.
-  // 180일 보존(FOREIGN_RESEARCH_MAX_AGE_MS)에 맞춰 볼륨이 원래 적어 별도
-  // 페이지네이션 없이 바로 반환해도 된다.
-  if (topic === "해외리서치") {
+  // 90일 보존(GLOBAL_IB_MAX_AGE_MS)에 맞춰 볼륨이 원래 적어 별도 페이지네이션
+  // 없이 바로 반환해도 된다.
+  if (topic === "글로벌IB") {
     const docs = await col
       .find({
         market,
@@ -663,18 +815,10 @@ export async function getIndustryResearch(
     return dedupeBySourceTitle(docs).slice(0, limit);
   }
   // topic 유무와 무관하게 항상 넉넉히 가져온다(오너 지적, 2026-09 — "전체는
-  // 129개인데 산업분석만 150개로 표시되고... 머가맞는건가?"). "전체"만
-  // limit+20(150+20=170)으로 좁게 가져오던 게 버그였다 — 하루에 산업분석
-  // 항목이 가장 많이 올라오다 보니 최근 170건 풀이 산업분석 위주로 채워져
-  // 시황·투자전략 항목이 실제 비중보다 훨씬 적게(129건) 섞여 들어갔다.
-  // ESG·pdfUrl null 제외, dedup, 보존기간 컷오프까지 거치므로 "전체"도
-  // topic 필터와 똑같이 넉넉한 풀에서 뽑아야 각 topic 탭의 합과 "전체"가
-  // 어긋나지 않는다.
+  // 129개인데 산업분석만 150개로 표시되고... 머가맞는건가?").
   const fetchLimit = Math.max(limit * 6, 200);
   // pdfUrl 이 없으면 화면에서 클릭할 게 없어 조회 단계에서 제외한다(오너
-  // 지적, 2026-09 — "링크가 없다 링크안되면 삭제다", NH의 일부 "산업" 항목이
-  // API 응답 자체에 첨부파일이 없어 실측됨). 해당 수집기도 앞으로 이런
-  // 항목을 아예 안 보내도록 함께 수정.
+  // 지적, 2026-09 — "링크가 없다 링크안되면 삭제다").
   const docs = await col
     .find({ market, category: "산업", pdfUrl: { $ne: null }, source: { $nin: INSIGHT_SOURCES as unknown as string[] } })
     .sort({ date: -1 })
@@ -682,33 +826,105 @@ export async function getIndustryResearch(
     .toArray();
   // 공통 제외(리츠·ETF/ETP·ESG·주간물·일정표·추천종목·원자재 외 대체투자,
   // 오너 지시 2026-09-25) — 이미 쌓인 문서에 함께 적용, 수신 라우트가 새
-  // 문서는 이미 거른다. ESG(KB "Global ESG Brief"·NH "NH ESG Research" 등,
-  // 실측 90일 15건)도 이 공용 필터 하나로 걸러진다 — 예전엔 여기 별도
-  // ESG_EXCLUDE_RE 가 있었으나 research-exclude.ts 의 ESG_RE 와 정규식이
-  // 완전히 같아 중복이었다(오너 지적 2026-09-25 — "중복이면 없애도 된다").
+  // 문서는 이미 거른다.
   const withoutEsg = docs.filter(
     (d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
   );
   const deduped = dedupeBySourceTitle(withoutEsg);
-  // 투자전략(주식)/투자전략(채권)은 30일까지만(오너 지시, 2026-09 —
-  // "그 이상은 불필요하다. 화면에서도 제외한다", 최종 값), 시황은 14일까지만
-  // 화면에 노출(오너 지시 — "일단 14일까지 유지한다", 검증 기간 동안 임시,
-  // **시황만** 이후 7일로 되돌릴 예정). DB 정리(upsertShinhanResearch)는
-  // 다음 수집기 실행 때만 돌아 아직 안 지워진 초과 항목이 화면에 잠깐
-  // 남을 수 있어 조회 시점에도 한 번 더 걸러준다 — 산업분석은 기존 정책
-  // (90일 DB 정리) 그대로 유지, 여기선 따로 안 건드림.
-  const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
-  const marketConditionCutoff = new Date(Date.now() - MARKET_CONDITION_MAX_AGE_MS)
+  // 이 탭은 "산업분석"·"글로벌IB"만 다룬다 — 나머지 토픽(이슈분석·환율분석·
+  // 시황분석·비상장)은 여기서 완전히 제외한다(오너 지시 — "완전히 제거").
+  const scoped = deduped.filter((d) => {
+    const t = classifyResearchTopic(d);
+    return t === "산업분석" || t === "글로벌IB";
+  });
+  const filtered = topic ? scoped.filter((d) => classifyResearchTopic(d) === topic) : scoped;
+  return filtered.slice(0, limit);
+}
+
+/**
+ * 거시경제 "이슈분석"/"환율분석" 탭 — `/macro/issues`, `/macro/fx`. 원래
+ * `macro_issues` 별도 컬렉션에서 읽었으나 오너 지시(2026-09-26 —
+ * "macro_issues를 kr_research로 흡수")로 kr_research에서 classifyResearchTopic()
+ * 결과를 기준으로 조회한다. market 구분이 없다(국내 매크로 코멘트 성격이라
+ * 원래도 시장 무관).
+ */
+export async function getMacroIssueResearch(
+  topic: "이슈분석" | "환율분석",
+  source?: string,
+  limit = 150,
+): Promise<ShinhanResearchDoc[]> {
+  const col = await shinhanResearchCol();
+  const cutoff = new Date(Date.now() - (topic === "이슈분석" ? ISSUE_MAX_AGE_MS : FX_MAX_AGE_MS))
     .toISOString()
     .slice(0, 10);
-  const fresh = deduped.filter((d) => {
-    const t = classifyResearchTopic(d);
-    if (t === "시황") return d.date >= marketConditionCutoff;
-    if (t !== "투자전략(주식)" && t !== "투자전략(채권)") return true;
-    return d.date >= strategyCutoff;
-  });
-  const filtered = topic ? fresh.filter((d) => classifyResearchTopic(d) === topic) : fresh;
-  return filtered.slice(0, limit);
+  const filter: Record<string, unknown> = {
+    category: "산업",
+    date: { $gte: cutoff },
+    pdfUrl: { $ne: null },
+  };
+  if (source) filter.source = source;
+  const docs = await col.find(filter).sort({ date: -1 }).limit(limit * 4).toArray();
+  const withoutExcluded = docs.filter(
+    (d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
+  );
+  const deduped = dedupeBySourceTitle(withoutExcluded);
+  const scoped = deduped.filter((d) => classifyResearchTopic(d) === topic);
+  return scoped.slice(0, limit);
+}
+
+/** 탭 UI용 — 해당 topic에 실제로 존재하는 증권사명 목록(문서 수 많은 순). classifyResearchTopic 이 DB 필드가 아니라 JS에서 매번 계산해야 해서 $group 집계 대신 후보를 가져와 직접 센다. */
+export async function getMacroIssueSources(topic: "이슈분석" | "환율분석"): Promise<string[]> {
+  const col = await shinhanResearchCol();
+  const cutoff = new Date(Date.now() - (topic === "이슈분석" ? ISSUE_MAX_AGE_MS : FX_MAX_AGE_MS))
+    .toISOString()
+    .slice(0, 10);
+  const docs = await col
+    .find({ category: "산업", date: { $gte: cutoff }, pdfUrl: { $ne: null } })
+    .project<{ source: string; stockName: string; title: string; market: ResearchMarketId; summary: string }>({
+      source: 1,
+      stockName: 1,
+      title: 1,
+      market: 1,
+      summary: 1,
+    })
+    .toArray();
+  const counts = new Map<string, number>();
+  for (const d of docs) {
+    if (classifyResearchTopic(d) !== topic) continue;
+    counts.set(d.source, (counts.get(d.source) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([s]) => s);
+}
+
+/**
+ * 신규 "시황분석" 탭(오너 지시 2026-09-26) — `/macro/market-condition`.
+ * Daily/Monthly/투자전략 3개 세그먼트로 구분. 구 "시황"·"투자전략(주식)"이
+ * 여기로 이동했다(산업분석 탭에서 완전히 제거).
+ */
+export async function getMarketConditionResearch(
+  segment: "Daily" | "Monthly" | "투자전략",
+  limit = 150,
+): Promise<ShinhanResearchDoc[]> {
+  const col = await shinhanResearchCol();
+  const cutoffMs =
+    segment === "Daily"
+      ? MARKET_DAILY_MAX_AGE_MS
+      : segment === "Monthly"
+        ? MARKET_MONTHLY_MAX_AGE_MS
+        : MARKET_STRATEGY_MAX_AGE_MS;
+  const cutoff = new Date(Date.now() - cutoffMs).toISOString().slice(0, 10);
+  const wantedTopic: ResearchTopic = `시황분석:${segment}`;
+  const docs = await col
+    .find({ category: "산업", date: { $gte: cutoff }, pdfUrl: { $ne: null } })
+    .sort({ date: -1 })
+    .limit(limit * 4)
+    .toArray();
+  const withoutExcluded = docs.filter(
+    (d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
+  );
+  const deduped = dedupeBySourceTitle(withoutExcluded);
+  const scoped = deduped.filter((d) => classifyResearchTopic(d) === wantedTopic);
+  return scoped.slice(0, limit);
 }
 
 /**

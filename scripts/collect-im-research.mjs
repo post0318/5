@@ -43,8 +43,8 @@
  *   | R_E03  | 투자전략 R_E031 마켓 준클리  | 미수집(오너 지시 — "마켓준클릭은 수집에서 제외다") |
  *   |        |          R_E037 해외주식     | 미국 투자전략 "iM증권 투자전략"         |
  *   |        |          R_E038 디지털자산   | 미수집(다른 증권사도 안 받음)           |
- *   | R_E04  | 경제분석                     | 거시경제 이슈분석(macro_issues)         |
- *   | R_E05  | 채권                         | 거시경제 이슈분석(macro_issues)         |
+ *   | R_E04  | 경제분석                     | 거시경제 이슈분석/환율분석(kr_research)  |
+ *   | R_E05  | 채권                         | 거시경제 이슈분석/환율분석(kr_research)  |
  *
  * R_E010(Morning Brief)은 수집하지 않는다(오너 결정 2026-09-25 — "im증권
  * Morning Brief는 수집제외다").
@@ -86,9 +86,6 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
-).trim();
-const MACRO_IMPORT_URL = (
-  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -227,7 +224,16 @@ function classify(row, board) {
   if (!title) return null;
   if (isEtfOrEtpContent(title) || isEsgContent(title) || isCommonExcludedContent(title)) return null;
   const base = baseItem(row, board);
-  // 공용 FX 판정(오너 지적 2026-09-25) — 경제·채권 게시판이 FX 분기 없이 전부\n  // 이슈분석으로만 갔다(실측: "거침없는 원화 강세..."·"가속 페달을 밟은 달러-엔").\n  if (board.kind === "macro") return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
+  // 공용 FX 판정(오너 지적 2026-09-25) — 경제·채권 게시판이 FX 분기 없이 전부
+  // 이슈분석으로만 갔다(실측: "거침없는 원화 강세..."·"가속 페달을 밟은 달러-엔").
+  // 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues 컬렉션 폐지 —
+  // 고정 stockName(shinhan-research.ts FORCED_ISSUE_STOCKNAMES/
+  // FORCED_FX_STOCKNAMES 등록)으로 kr_research에 합류시킨다.
+  if (board.kind === "macro") {
+    const isFx = isFxContent(title);
+    const label = board.bid === "R_E05" ? "iM증권 채권" : "iM증권 경제분석";
+    return { ...base, title, stockName: isFx ? `${label} FX` : label, symbol: null, category: "산업", market: "kr" };
+  }
 
   if (board.kind === "krCompany") {
     const m = title.match(KR_TITLE_RE);
@@ -261,7 +267,17 @@ function classify(row, board) {
     };
   }
   // 이하 비종목 글 — 원자재는 이슈분석으로.
-  if (isCommodityContent(title)) return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
+  if (isCommodityContent(title)) {
+    const isFx = isFxContent(title);
+    return {
+      ...base,
+      title,
+      stockName: isFx ? "iM증권 원자재 FX" : "iM증권 원자재",
+      symbol: null,
+      category: "산업",
+      market: "kr",
+    };
+  }
   if (board.kind === "strategy") {
     const market = STRATEGY_SUB[row.bid];
     if (!market) return null; // 디지털자산 등
@@ -327,9 +343,8 @@ for (const it of collected) {
   withLink.push(it);
 }
 
-const research = withLink.filter((it) => it.topic == null);
-const macro = withLink.filter((it) => it.topic != null);
-console.log(`✔ 파싱 완료: 리서치 ${research.length}건 · 이슈분석 ${macro.length}건 (PDF 없음 ${noPdf}건)`);
+const research = withLink;
+console.log(`✔ 파싱 완료: ${research.length}건 (PDF 없음 ${noPdf}건)`);
 
 // 투자의견·목표주가 — 공용 추출기(항목별 market 으로 통화 규칙).
 const stockItems = research.filter((it) => it.category === "기업");
@@ -392,26 +407,4 @@ for (const [market, items] of groups) {
     process.exit(1);
   }
   console.log(`✔ [${SOURCE}/${market}] 앱 전송 완료 (${items.length}건): ${upBody}`);
-}
-
-if (macro.length > 0) {
-  const items = macro.map((it) => ({
-    id: it.id,
-    date: it.date,
-    title: it.title,
-    analyst: it.analyst,
-    summary: it.summary,
-    pdfUrl: it.pdfUrl,
-  }));
-  const up = await fetch(MACRO_IMPORT_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ items, source: SOURCE, topic: "이슈분석" }),
-  });
-  const upBody = await up.text();
-  if (!up.ok) {
-    console.error(`✗ [이슈분석] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-    process.exit(1);
-  }
-  console.log(`✔ [이슈분석] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

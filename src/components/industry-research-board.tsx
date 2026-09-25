@@ -12,21 +12,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const PAGE_SIZE = 10;
 
+// 전면 개편(오너 지시 2026-09-26)으로 투자전략(주식)/(채권)·시황은 이 탭에서
+// 완전히 제거되고 /macro/market-condition·/macro/issues·/macro/fx로 이동했다.
+// 해외리서치는 "글로벌IB"로 이름만 바꿨다.
 const TOPICS = [
   { key: "all", label: "전체" },
   { key: "산업분석", label: "산업분석" },
-  { key: "투자전략(주식)", label: "투자전략(주식)" },
-  { key: "투자전략(채권)", label: "투자전략(채권)" },
-  { key: "시황", label: "시황" },
-  { key: "해외리서치", label: "해외리서치" },
+  { key: "글로벌IB", label: "글로벌IB" },
 ] as const;
 type TopicKey = (typeof TOPICS)[number]["key"];
 
 // 업종 필터 노출 대상(오너 지시, 2026-09-22 — "산업분석 중 산업분석과
-// 전체에만 업종선택을 넣는다"): 전체·산업분석 탭에서만 보이고, 투자전략
-// (주식)/(채권)·시황·해외리서치에서는 숨긴다. 업종 분류값 자체는 한국·미국
-// 공통(`research-sector.ts` SECTOR_LABELS, 오너 확인 — "업종구분은 미국과
-// 동일하다").
+// 전체에만 업종선택을 넣는다"): 전체·산업분석 탭에서만 보이고, 글로벌IB에서는
+// 숨긴다. 업종 분류값 자체는 한국·미국 공통(`research-sector.ts` SECTOR_LABELS,
+// 오너 확인 — "업종구분은 미국과 동일하다").
 const SECTOR_FILTER_SHOWN: ReadonlySet<TopicKey> = new Set(["all", "산업분석"]);
 
 function fmtAgo(iso: string): string {

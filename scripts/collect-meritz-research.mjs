@@ -15,8 +15,8 @@
  *     | invest02 | 기업분석    | "종목명(6자리코드):헤드라인"   | 국내 종목분석(category "기업")    |
  *     | invest03 | 산업분석    | "업종명 :헤드라인"             | 국내 산업분석(stockName=업종명)   |
  *     | sih02    | 투자전략    | "시리즈명 :헤드라인"           | 국내 산업분석 > 투자전략/시황     |
- *     | sih02anl | 경제분석    | "시리즈명 :헤드라인"           | 거시경제 > 이슈분석(macro_issues) |
- *     | sih02bon | 채권분석    | "시리즈명 :헤드라인"           | 거시경제 > 이슈분석(macro_issues) |
+ *     | sih02anl | 경제분석    | "시리즈명 :헤드라인"           | 거시경제 > 이슈분석/환율분석(kr_research) |
+ *     | sih02bon | 채권분석    | "시리즈명 :헤드라인"           | 거시경제 > 이슈분석/환율분석(kr_research) |
  *   게시판마다 열 순서가 달라(작성자·작성일 위치, 날짜 표기 YYYY/MM/DD 와
  *   YYYY.MM.DD 혼재) 표 머리글(th)로 열 위치를 찾는다.
  * - sih02(투자전략) 목록에는 경제·채권 게시판 글이 같은 글번호로 섞여 나온다
@@ -76,9 +76,6 @@ const MAX_PAGES = 5;
 
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
-).trim();
-const MACRO_IMPORT_URL = (
-  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -196,6 +193,19 @@ function isExcluded(title) {
   return false;
 }
 
+// 원자재 글은 어느 게시판이든 거시경제 이슈분석으로(리서치 분류 체계 전면
+// 개편 2026-09-26 — 고정 stockName으로 kr_research 합류).
+function commodityItem(base, title) {
+  const isFx = isFxContent(title);
+  return {
+    ...base,
+    title,
+    stockName: isFx ? "메리츠 원자재 FX" : "메리츠 원자재",
+    symbol: null,
+    category: "산업",
+  };
+}
+
 /** 행 → 항목(리서치는 category, 이슈분석은 topic). null 이면 버림. */
 function classify(row, board) {
   const { title } = row;
@@ -224,16 +234,22 @@ function classify(row, board) {
     }
     // 코드 없는 글은 산업으로(종목명 열 값이 있으면 라벨로).
     if (isCommonExcludedContent(title)) return null;
-    if (isCommodityContent(title)) return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
+    if (isCommodityContent(title)) return commodityItem(base, title);
     const { label, headline } = industryLabelAndHeadline(title);
     return { ...base, title: headline, stockName: row.stockCol || label, symbol: null, category: "산업" };
   }
 
   if (isCommonExcludedContent(title)) return null;
   // 공용 FX 판정(오너 지적 2026-09-25) — 경제·채권 게시판이 FX 분기 없이 전부
-  // 이슈분석으로만 갔다.
-  if (board.kind === "macro") return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
-  if (isCommodityContent(title)) return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
+  // 이슈분석으로만 갔다. 리서치 분류 체계 전면 개편(2026-09-26)으로
+  // macro_issues 컬렉션 폐지 — 고정 stockName(shinhan-research.ts
+  // FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES 등록)으로 kr_research에 합류.
+  if (board.kind === "macro") {
+    const isFx = isFxContent(title);
+    const label = board.bbsId === "sih02bon" ? "메리츠 채권분석" : "메리츠 경제분석";
+    return { ...base, title, stockName: isFx ? `${label} FX` : label, symbol: null, category: "산업" };
+  }
+  if (isCommodityContent(title)) return commodityItem(base, title);
 
   if (board.kind === "industry") {
     const { label, headline } = industryLabelAndHeadline(title);
@@ -312,9 +328,8 @@ for (const it of collected) {
 }
 console.log(`✔ PDF 링크 ${collected.length - noPdf}/${collected.length}건 (없음 ${noPdf}건 → 상세 URL)`);
 
-const research = collected.filter((it) => it.topic == null);
-const macro = collected.filter((it) => it.topic != null);
-console.log(`✔ 파싱 완료: 리서치 ${research.length}건 · 이슈분석 ${macro.length}건`);
+const research = collected;
+console.log(`✔ 파싱 완료: ${research.length}건`);
 
 // 투자의견·목표주가 — 공용 추출기가 PDF 에서 읽는다(목록·상세에 구조화 필드 없음).
 const stockItems = research.filter((it) => it.category === "기업");
@@ -368,26 +383,4 @@ for (const [market, items] of byMarket) {
     process.exit(1);
   }
   console.log(`✔ [${SOURCE}/${market}] 앱 전송 완료 (${items.length}건): ${upBody}`);
-}
-
-if (macro.length > 0) {
-  const items = macro.map((it) => ({
-    id: it.id,
-    date: it.date,
-    title: it.title,
-    analyst: it.analyst,
-    summary: it.summary,
-    pdfUrl: it.pdfUrl,
-  }));
-  const up = await fetch(MACRO_IMPORT_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ items, source: SOURCE, topic: "이슈분석" }),
-  });
-  const upBody = await up.text();
-  if (!up.ok) {
-    console.error(`✗ [이슈분석] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-    process.exit(1);
-  }
-  console.log(`✔ [이슈분석] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

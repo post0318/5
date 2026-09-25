@@ -41,7 +41,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent } from "./lib/exclude-filters.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -136,11 +136,12 @@ function parseItems(rows) {
     const dateM = String(r.writeDate ?? "").match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
     if (!dateM) continue;
     const date = `${dateM[1]}-${dateM[2]}-${dateM[3]}`;
-    // ETF/ETP·ESG 리포트 제외(오너 지시 2026-09-24, 공용 필터 — 여러
-    // 증권사가 모이는 소스라 특히 잘 섞여 들어온다. ESG는 "esg는 공통으로
-    // 제외처리" 지시로 ETF와 동일하게 승격).
-    if (isEtfOrEtpContent(r.title) || isEsgContent(r.title)) continue;
     const tm = String(r.title ?? "").match(TITLE_RE);
+    // 공통 배제가 기본(오너 지시 2026-09-26 — "통합함수가 기본이고 예외가
+    // 필요할 때 개별함수 쓴다"). 여러 증권사가 모이는 소스라 ETF/ESG뿐 아니라
+    // 리츠·캘린더·추천종목·대체투자까지 한 번에 걸러진다(이전엔 ETF/ESG만
+    // 개별로 걸렀음). 종목코드 매칭 여부로 category를 먼저 정해서 넘긴다.
+    if (isCommonExcludedContent(r.title, tm ? "기업" : "산업")) continue;
     if (tm) {
       const [, stockName, , ticker, headline] = tm;
       items.push({
