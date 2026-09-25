@@ -33,6 +33,9 @@ export function buildUsSummary(
     keys: string[],
   ): Map<string, Record<string, number | null>> => {
     const src = stmt.periods.map((p) => p.label);
+    // 순서(index) 대응은 라벨이 하나도 겹치지 않을 때만 — 분기 열에 Q4 가 있는 표(손익·재무상태표)와 없는 표(현금흐름표)를
+    // 순서로 맞추면 한 칸씩 밀린 값이 들어간다
+    const byIndex = src.length === tLabels.length && !tLabels.some((tl) => src.includes(tl));
     const by = new Map(stmt.sections[0].items.map((it) => [it.accountName, it]));
     const out = new Map<string, Record<string, number | null>>();
     for (const k of keys) {
@@ -40,9 +43,7 @@ export function buildUsSummary(
       if (!it) continue;
       const v: Record<string, number | null> = {};
       tLabels.forEach((tl, i) => {
-        v[tl] =
-          it.values[tl] ??
-          (src.length === tLabels.length ? (it.values[src[i]] ?? null) : null);
+        v[tl] = it.values[tl] ?? (byIndex ? (it.values[src[i]] ?? null) : null);
       });
       out.set(k, v);
     }

@@ -27,12 +27,11 @@ import {
 } from "./edgar-pershare";
 import type { FinancialHighlights, HighlightColumn, HighlightRow, HighlightEstimatePeriod } from "./edgar-highlights";
 import {
-  FIN_NET_REVENUE as NET_REVENUE,
   FIN_NONINTEREST_EXPENSE as NONINTEREST_EXPENSE,
   FIN_PROVISION as PROVISION,
   isFinancialCompany,
-  withFinNetRevenue,
 } from "./edgar-financial";
+import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm } from "./fin-revenue";
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
 // LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)
@@ -144,13 +143,13 @@ export function buildUsBankHighlights(
   fallbackShares?: number | null,
 ): FinancialHighlights {
   const notes: string[] = [];
-  // 은행 순수익은 태그가 은행마다 달라(JPM 만 RevenuesNetOfInterestExpense) 합성한다
-  // — edgar-financial.ts withFinNetRevenue(사본 facts, 원본 캐시는 그대로).
-  facts = withFinNetRevenue(facts);
-
-  const revSeries = annualSeries(firstEntries(facts, NET_REVENUE));
-  const fyYears = revSeries.map((s) => s.year).slice(-5);
-  const fyEndByYear = new Map(revSeries.map((s) => [s.year, s.end]));
+  // 순수익 = 재무 5층 구조 매출 지표(fin-revenue.ts, 은행 유형 규칙) — 손익계산서·재무분석과 같은 값·같은 연도 열
+  const revEnds = revAnnualEnds(facts.revenue);
+  const revSeries = [...revAnnualMap(facts.revenue)]
+    .map(([year, val]) => ({ year, val, end: revEnds.get(year) ?? `${year}-12-31` }))
+    .sort((a, b) => a.year - b.year);
+  const fyYears = revAnnualYears(facts.revenue, 5);
+  const fyEndByYear = revEnds;
   const lastFy = fyYears[fyYears.length - 1] ?? new Date().getFullYear();
 
   const lastBar = [...bars].reverse().find((b) => b.close != null);
@@ -199,7 +198,6 @@ export function buildUsBankHighlights(
     eps: annualSeries(unitEntries(facts, "EarningsPerShareDiluted", "USD/shares")),
   };
   const E = {
-    netRevenue: firstEntries(facts, NET_REVENUE),
     noninterestExpense: firstEntries(facts, NONINTEREST_EXPENSE),
     provision: firstEntries(facts, PROVISION),
     netIncome: netIncomeToParentEntries(facts),
@@ -252,7 +250,11 @@ export function buildUsBankHighlights(
   const netRevenue = columns.map((col) =>
     col.kind === "estimate"
       ? (estCols.find((e) => `FY${e.year}E` === col.key)?.period.revenueAvg ?? null)
-      : flowVal(S.netRevenue, E.netRevenue, col),
+      : col.kind === "fy"
+        ? annualAt(S.netRevenue, Number(col.key.slice(2)))
+        : col.kind === "ltm"
+          ? revLtm(facts.revenue)
+          : null,
   );
   const noninterestExpense = columns.map((col) => flowVal(S.noninterestExpense, E.noninterestExpense, col));
   const preProvision = netRevenue.map((v, i) =>

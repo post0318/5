@@ -139,8 +139,8 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "当期純利益",
   ]);
   const revenue = flowValue(annual, quarterly, [
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "Revenues",
+    // 미국: getFinancials 매출 행(재무 5층 구조 매출 지표 — us/edgar.ts REVENUE_ROW_ID). 매출 태그를 여기서 고르지 않는다
+    "fin:revenue",
     "매출액",
     "수익(매출액)",
     "매출",

@@ -8,7 +8,7 @@ import { Gap, type AssembledIs, type Column, type FinAssembly, type MetricValue,
  */
 
 /** 엔진판 — 판독·조립 규칙이 바뀌면 올린다(fin_chg 사유 "ev") */
-export const ENGINE_VERSION = 1;
+export const ENGINE_VERSION = 2;
 /** 문서 스키마판 — 압축 형식이 바뀌면 올린다 */
 export const SCHEMA_VERSION = 1;
 

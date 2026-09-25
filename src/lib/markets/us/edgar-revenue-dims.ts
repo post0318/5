@@ -15,11 +15,11 @@ import type { RecentFilings } from "./edgar-gapfill";
  *     인포맥스(모두 3,392.47억 — 매출 및 기타영업수익)보다 3% 컸고
  *   - 영업이익을 세전이익 + 이자로 근사해 EBITDA 가 인포맥스(637.5억)·MarketScreener(635.8억)보다
  *     13~15% 컸다(Yahoo 733.1억만 세전 기준).
- * 원본에서 두 항목을 읽어 합성 태그로 넣는다 — 매출·영업이익은 edgar-ev.ts·매출 목록이 사용.
+ * 원본에서 두 항목을 읽어 비영업 수익 합성 태그로 넣는다 — 영업이익(EBIT 근사)만 edgar-ev.ts 가 사용한다. 매출은 재무 5층
+ * 구조(src/lib/fin — metrics/overrides.ts revenue-excl-nonop)가 같은 분리를 따로 하므로 여기서 매출 태그를 만들지 않는다.
  */
 
 export const SYN_NONOP_IN_REVENUES = "NonoperatingIncomeInRevenuesDerived";
-export const SYN_OPERATING_REVENUE = "OperatingRevenueExcludingNonoperatingDerived";
 
 /**
  * 비영업 수익 멤버(지분법·기타수익). 기타수익은 멤버 이름 **전체**가 일치할 때만 — 부분일치로는 LLY 의
@@ -159,7 +159,7 @@ export async function withRevenueDims(cik: string, facts: CompanyFacts, recent: 
       nonopInRevenues: true,
       facts: {
         ...facts.facts,
-        "us-gaap": { ...g, [SYN_NONOP_IN_REVENUES]: { units: { USD: nonopAll } }, [SYN_OPERATING_REVENUE]: { units: { USD: opRev } } },
+        "us-gaap": { ...g, [SYN_NONOP_IN_REVENUES]: { units: { USD: nonopAll } } },
       },
     } as CompanyFacts;
   }
@@ -186,7 +186,7 @@ export async function withRevenueDims(cik: string, facts: CompanyFacts, recent: 
     nonopInRevenues: true,
     facts: {
       ...facts.facts,
-      "us-gaap": { ...g, [SYN_NONOP_IN_REVENUES]: { units: { USD: nonop } }, [SYN_OPERATING_REVENUE]: { units: { USD: opRev } } },
+      "us-gaap": { ...g, [SYN_NONOP_IN_REVENUES]: { units: { USD: nonop } } },
     },
   } as CompanyFacts;
 }

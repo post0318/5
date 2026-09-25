@@ -1,18 +1,22 @@
 import "server-only";
 import { yahooLtm } from "./edgar-yahoo-quarters";
-import type { CompanyFacts } from "./edgar";
+import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import {
+  ANNUAL_FORMS,
+  INTERIM_FORMS,
   cogsConcepts,
   annualByYear,
-  annualEnds,
+  days,
   directQuarterValue,
   entriesOf,
   firstConcept,
-  recentQuarters,
+  isFullYearDuration,
+  shiftYear,
   singleQuarter,
   splitFactorsByYear,
   ttmOf,
+  type QuarterCol,
 } from "./edgar-series";
 import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, opIncomeIsDerived, pickDa, SYN_DA_CF, SYN_OP_INCOME } from "./edgar-ev";
 import { fyEps, ltmEps, ltmNetIncome, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
@@ -24,12 +28,11 @@ import {
   type ClassAFacts,
 } from "./edgar-classfacts";
 import {
-  FIN_NET_REVENUE,
   FIN_NONINTEREST_EXPENSE,
   FIN_PROVISION,
   isFinancialCompany,
-  withFinNetRevenue,
 } from "./edgar-financial";
+import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm, revQuarterLabel } from "./fin-revenue";
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
@@ -38,16 +41,6 @@ import {
  * 예상치는 재무 하이라이트(개요)에서 제공 → 여기선 실적만.
  */
 
-const REVENUE = [
-  // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
-  // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
-  "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
-  "Revenues",
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
-  "RevenueFromContractWithCustomerIncludingAssessedTax",
-  "SalesRevenueNet",
-  "RevenuesNetOfInterestExpense", // 증권사·투자은행(GS·MS) 순수익 — 하이라이트와 같은 목록
-];
 const OPEX = ["OperatingExpenses", "CostsAndExpenses"];
 const SGA = [
   "SellingGeneralAndAdministrativeExpense",
@@ -95,10 +88,10 @@ export function buildUsIncome(
   const classFacts = opts.classFacts ?? null;
   // 금융회사(은행·카드사) — 매출 대신 순수익(이자비용 차감), 매출총이익 대신 충당금전이익.
   const isFin = isFinancialCompany(facts, opts.sic ?? null);
-  // 은행 순수익은 태그가 은행마다 달라(JPM 만 RevenuesNetOfInterestExpense) 합성한다
-  // — edgar-financial.ts withFinNetRevenue(사본 facts, 원본 캐시는 그대로).
-  if (isFin) facts = withFinNetRevenue(facts);
-  const revConcepts = isFin ? FIN_NET_REVENUE : REVENUE;
+  // 매출(순수익) = 재무 5층 구조 매출 지표(fin-revenue.ts). 열(연도·분기)도 그 열을 따른다 — 분기는 Q4(사업연도 − 9개월
+  // 누적) 포함, 최신 판본(docs/metrics/revenue.md §2).
+  const rev = facts.revenue ?? null;
+  const revAnnual = revAnnualMap(rev);
 
   // 개념 태그가 시기별로 바뀌는 기업(NVIDIA 등) → 나열 개념을 연도별로 병합
   const mergedAnnual = (concepts: string[], unit = "USD"): Map<number, number> => {
@@ -107,20 +100,40 @@ export function buildUsIncome(
       for (const [y, v] of annualByYear(entriesOf(facts, c, unit))) if (!out.has(y)) out.set(y, v);
     return out;
   };
-  const mergedEnds = (concepts: string[]): Map<number, string> => {
-    const out = new Map<number, string>();
-    for (const c of concepts)
-      for (const [y, d] of annualEnds(entriesOf(facts, c))) if (!out.has(y)) out.set(y, d);
-    return out;
-  };
-  const allRevEntries = revConcepts.flatMap((c) => entriesOf(facts, c));
 
-  const years = [...mergedAnnual(revConcepts).keys()].sort((a, b) => a - b).slice(-5);
-  const ends = mergedEnds(revConcepts);
+  const years = revAnnualYears(rev, 5);
+  const ends = revAnnualEnds(rev);
   const lastFy = years[years.length - 1] ?? new Date().getFullYear();
-  // 6개 확보 → 가장 오래된 1개는 YTD 차감용 prev 로만 쓰고 표시는 5개
-  const qCols = quarterly ? [...recentQuarters(allRevEntries, 6)].reverse() : [];
-  const qShow = qCols.slice(-5);
+  // 분기 열 — fin 분기(Q4 포함) 최근 5개. 누적 차감용 직전 열은 Q4 가 아닌 직전 분기(10-Q 누적 기준, 종전과 같음)
+  const finQ = rev?.quarters ?? [];
+  const toCol = (c: (typeof finQ)[number]): QuarterCol => ({ label: revQuarterLabel(c), end: c.end, fyStartApprox: shiftYear(c.end, -1) });
+  const qShowFin = quarterly ? finQ.slice(-5) : [];
+  const qShow = qShowFin.map(toCol);
+  const q4Labels = new Set(qShowFin.filter((c) => c.fq === 4).map(revQuarterLabel));
+  /** 분기 열 i 의 누적 차감용 직전 분기(Q4 제외) */
+  const prevOf = (i: number): QuarterCol | undefined => {
+    const idx = finQ.indexOf(qShowFin[i]);
+    for (let j = idx - 1; j >= 0; j--) if (finQ[j].fq !== 4) return toCol(finQ[j]);
+    return undefined;
+  };
+  /** Q4 열의 3분기 말(같은 사업연도) */
+  const q3EndOf = (i: number): string | null => {
+    const c = qShowFin[i];
+    return finQ.find((x) => x.fy === c.fy && x.fq === 3)?.end ?? null;
+  };
+  /** 분기 값 — 1~3분기는 종전 규칙(직접 → 누적 차감), Q4 = 사업연도(최신 판본) − 9개월 누적(최신 판본). 주식수·주당 값은 Q4 없음 */
+  const quarterValue = (entries: FactUnitEntry[], i: number, flow: boolean): number | null => {
+    const q = qShow[i];
+    if (!q4Labels.has(q.label)) return singleQuarter(entries, q, prevOf(i));
+    if (!flow) return null;
+    const q3End = q3EndOf(i);
+    if (!q3End) return null;
+    const newest = (xs: FactUnitEntry[]) => xs.sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0];
+    const fy = newest(entries.filter((e) => e.start && ANNUAL_FORMS.includes(e.form) && isFullYearDuration(e) && Math.abs(days(q.end, e.end)) <= 6));
+    const nine = newest(entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form) && Math.abs(days(q3End, e.end)) <= 6 && days(e.start, e.end) >= 250 && days(e.start, e.end) <= 290));
+    if (!fy?.start || !nine?.start || Math.abs(days(fy.start, nine.start)) > 12) return null;
+    return fy.val - nine.val;
+  };
 
   let periods: FinancialPeriod[];
   if (quarterly) {
@@ -152,10 +165,9 @@ export function buildUsIncome(
   const val = (concepts: string[], unit = "USD"): Record<string, number | null> => {
     const out = blank();
     if (quarterly) {
-      qCols.forEach((q, i) => {
-        if (i === 0) return; // prev 전용
+      qShow.forEach((q, i) => {
         for (const c of concepts) {
-          const v = singleQuarter(entriesOf(facts, c, unit), q, qCols[i - 1]);
+          const v = quarterValue(entriesOf(facts, c, unit), i, unit === "USD");
           if (v != null) { out[q.label] = v; break; }
         }
       });
@@ -194,7 +206,13 @@ export function buildUsIncome(
     return out;
   };
 
-  const revenue = val(revConcepts);
+  // 매출(순수익) — 재무 5층 구조 매출 지표(fin-revenue.ts)
+  const revenue = blank();
+  if (quarterly) qShowFin.forEach((c) => (revenue[revQuarterLabel(c)] = c.v));
+  else {
+    for (const y of years) revenue[fyKey(y)] = revAnnual.get(y) ?? null;
+    revenue[LTM] = revLtm(rev);
+  }
   const cogs = val(cogsConcepts(facts));
   // 금융회사: 매출총이익 대신 충당금전이익(=순수익 − 총이자외비용), 대손충당금 별도.
   const finNoninterestExpense = val(FIN_NONINTEREST_EXPENSE);
@@ -276,9 +294,8 @@ export function buildUsIncome(
     const out = blank();
     const entries = netIncomeToParentEntries(facts);
     if (quarterly) {
-      qCols.forEach((q, i) => {
-        if (i === 0) return; // prev 전용
-        out[q.label] = singleQuarter(entries, q, qCols[i - 1]);
+      qShow.forEach((q, i) => {
+        out[q.label] = quarterValue(entries, i, true);
       });
       return out;
     }
@@ -325,6 +342,8 @@ export function buildUsIncome(
     const r = { ...o };
     for (const l of labels) {
       if (r[l] != null) continue;
+      // Q4 열(사업연도 − 9개월 누적)은 주당 값을 빼서 만들 수 없다 — 현재 주식수로 근사하지 않고 공란
+      if (q4Labels.has(l)) continue;
       // Class A 공시값(실측) 우선 — 근사 아님
       const ca = quarterly ? null : classAEps(classFacts, yearOf(l), kind);
       if (ca != null) {
@@ -384,8 +403,7 @@ export function buildUsIncome(
   const valEps = (concepts: string[]): Record<string, number | null> => {
     if (quarterly) {
       const out = blank();
-      qCols.forEach((q, i) => {
-        if (i === 0) return; // prev 전용
+      qShow.forEach((q) => {
         for (const c of concepts) {
           const v = directQuarterValue(entriesOf(facts, c, "USD/shares"), q);
           if (v != null && plausibleEps(v, q.label)) { out[q.label] = v; break; }

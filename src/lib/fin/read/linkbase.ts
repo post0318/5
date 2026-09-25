@@ -112,6 +112,18 @@ export function pickIncomeStatement(pre: LinkRole[]): StatementShape | null {
       const ids = new Set(r.arcs.flatMap((a) => [a.from, a.to]));
       if ([...ids].some((i) => REVENUE_Q.test(i)) && [...ids].some((i) => NI_Q.test(i))) { cands.push({ r, score: 1 }); break; }
     }
+  // 역할 이름을 잘못 단 공시 — 손익계산서가 다른 표 이름(괄호 주석 등)으로 들어가 이름으로 고른 후보에 매출이 없으면(포괄손익계산서만
+  // 남음) 매출·순이익을 함께 담은 본표 역할을 이름과 무관하게 찾는다. Ford 2023 10-K(accn 0000037996-24-000009)는 손익계산서를
+  // "CONSOLIDATEDSTATEMENTOFCASHFLOWSParenthetical" 역할로 공시해 FY2021 열이 포괄손익계산서로 조립·매출 빈칸이었다.
+  // (이름으로 고른 후보가 전부 포괄손익계산서일 때만 — 회사 고유 매출 태그라 매출 개념이 안 보이는 정상 손익계산서(XOM 2018 이전)는 그대로)
+  const onlyComprehensive = cands.length > 0 && cands.every((c) => c.score < 10 && /Comprehensive/i.test(c.r.role.split("/").pop() ?? ""));
+  if (onlyComprehensive)
+    for (const r of pre) {
+      const name = r.role.split("/").pop() ?? r.role;
+      if (/Detail|Table|Polic|Segment|Narrative|Notes?$|Disclosure|Schedule/i.test(name)) continue;
+      const ids = new Set(r.arcs.flatMap((a) => [a.from, a.to]));
+      if ([...ids].some((i) => REVENUE_Q.test(i)) && [...ids].some((i) => NI_Q.test(i))) { cands.push({ r, score: 9 }); break; }
+    }
   if (!cands.length) return null;
   cands.sort((a, b) => b.score - a.score);
   const r = cands[0].r;

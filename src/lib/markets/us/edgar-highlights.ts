@@ -11,6 +11,7 @@ import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { isStaleAnnual, splitFactorsByYear, fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
 import { yahooLtm } from "./edgar-yahoo-quarters";
+import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm } from "./fin-revenue";
 import { buildShareResolver } from "./edgar-shares";
 import {
   ltmEps,
@@ -76,17 +77,6 @@ const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
 // LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)
 const INTERIM_FORMS = LTM_INTERIM_FORMS;
 
-const REVENUE = [
-  // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
-  // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
-  "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
-  "Revenues",
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
-  "RevenueFromContractWithCustomerIncludingAssessedTax",
-  "SalesRevenueNet",
-  // 증권사·투자은행(GS·MS)은 순수익만 공시 — 없으면 연도 열이 빠지거나(GS) 옛 연도에 멈췄다(MS 2010~2014, 검증 2026-09-24)
-  "RevenuesNetOfInterestExpense",
-];
 // 영업이익 태그 자체가 없는 회사(XOM 등 — 매출→세전이익 구조) 최후 폴백.
 const PRETAX_CONCEPTS = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
@@ -220,9 +210,13 @@ export function buildUsHighlights(
   let consolidatedShown = false;
 
   // ── 컬럼 구성 ────────────────────────────────────────────────────
-  const revSeries = annualSeriesMerged(facts, REVENUE);
-  const fyYears = revSeries.map((s) => s.year).slice(-5);
-  const fyEndByYear = new Map(revSeries.map((s) => [s.year, s.end]));
+  // 매출 = 재무 5층 구조 매출 지표(fin-revenue.ts) — 연도 열도 그 연도를 따른다(손익계산서·재무분석과 같은 열)
+  const revEnds = revAnnualEnds(facts.revenue);
+  const revSeries = [...revAnnualMap(facts.revenue)]
+    .map(([year, val]) => ({ year, val, end: revEnds.get(year) ?? `${year}-12-31` }))
+    .sort((a, b) => a.year - b.year);
+  const fyYears = revAnnualYears(facts.revenue, 5);
+  const fyEndByYear = revEnds;
   const lastFy = fyYears[fyYears.length - 1] ?? new Date().getFullYear();
 
   const lastBar = [...bars].reverse().find((b) => b.close != null);
@@ -308,7 +302,7 @@ export function buildUsHighlights(
     .map(([year, val]) => ({ year, val, end: `${year}-12-31` }))
     .sort((a, b) => a.year - b.year);
   const S = {
-    revenue: annualSeriesMerged(facts, REVENUE),
+    revenue: revSeries,
     grossProfit: gpS,
     opIncome: opIncS,
     da: daS,
@@ -333,7 +327,6 @@ export function buildUsHighlights(
     })(),
   };
   const E = {
-    revenue: concat(REVENUE),
     grossProfit: unitEntries(facts, "GrossProfit", "USD"),
     opIncome: unitEntries(facts, SYN_OP_INCOME, "USD"),
     pretax: concat(PRETAX_CONCEPTS),
@@ -435,7 +428,11 @@ export function buildUsHighlights(
   const revenue = columns.map((col) =>
     col.kind === "estimate"
       ? (estCols.find((e) => `FY${e.year}E` === col.key)?.period.revenueAvg ?? null)
-      : flowVal(S.revenue, E.revenue, col),
+      : col.kind === "fy"
+        ? annualAt(S.revenue, Number(col.key.slice(2)))
+        : col.kind === "ltm"
+          ? revLtm(facts.revenue)
+          : null,
   );
   const ebitda = columns.map((col) => {
     if (col.kind === "fy") {

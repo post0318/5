@@ -10,21 +10,10 @@ import {
   instantByYear,
   instantOn,
   recentInstantQuarters,
-  recentQuarters, fiscalYearOf } from "./edgar-series";
+  fiscalYearOf } from "./edgar-series";
+import { revQuarterCols, revQuarterLabel } from "./fin-revenue";
 import { buildEvResolver } from "./edgar-ev";
 import { isFinancialCompany } from "./edgar-financial";
-
-/** 분기 컬럼 달력용 (duration 개념 — instant 개념엔 분기 기간이 없음). */
-const REVENUE_CAL = [
-  // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
-  // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
-  "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
-  "Revenues",
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
-  "RevenueFromContractWithCustomerIncludingAssessedTax",
-  "SalesRevenueNet",
-  "RevenuesNetOfInterestExpense", // 증권사·투자은행(GS·MS) — 하이라이트와 같은 목록
-];
 
 /**
  * 미국 상세 재무상태표 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 B/S 근사).
@@ -239,8 +228,8 @@ export function buildUsBalance(
   let value: (concepts: string[]) => Record<string, number | null>;
 
   if (mode === "quarter") {
-    // 분기 라벨·기말은 IS/CF 와 동일하게 (duration 개념 달력 기준)
-    const cal = [...recentQuarters(firstConcept(facts, REVENUE_CAL), 5)].reverse();
+    // 분기 라벨·기말은 손익계산서와 같은 달력 — 재무 5층 구조 매출 지표의 분기 열(Q4 = 사업연도말 포함, fin-revenue.ts)
+    const cal = revQuarterCols(facts.revenue, 5).map((c) => ({ label: revQuarterLabel(c), end: c.end, fyStartApprox: c.end }));
     const fallback =
       cal.length === 0
         ? [...recentInstantQuarters(anchor, 5)].reverse().map((end) => ({

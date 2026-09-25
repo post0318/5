@@ -65,3 +65,4 @@ logs/
 # 재무 검증 스크립트 결과 (scripts/verify-financials.mjs)
 /reports/
 .scratch/
+scripts/metrics/expected/

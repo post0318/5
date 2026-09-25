@@ -55,7 +55,8 @@ const norm = (s: string) => s.replace(/\s/g, "");
 const ACCT = {
   revenue: [
     "매출액", "수익(매출액)", "매출", "영업수익",
-    "Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
+    // 미국: getFinancials 매출 행(재무 5층 구조 매출 지표 — us/edgar.ts REVENUE_ROW_ID)
+    "fin:revenue",
     "売上高", "営業収益 (IFRS)",
   ],
   opIncome: [

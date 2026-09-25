@@ -13,7 +13,11 @@ import type { Fx } from "./fx";
 /** 표준(us-gaap) 개념 → Yahoo 필드 — 손익계산서 흐름 항목만(edgar-yahoo-quarters.ts FLOWS 와 같은 대응) */
 export const YAHOO_FIELD: Record<string, string> = {
   "us-gaap:Revenues": "totalRevenue",
+  // US GAAP 로 20-F 를 내는 회사(ASML)는 매출을 고객계약 매출 개념으로만 단다 — edgar-yahoo-quarters.ts 옛 REV 목록과 같은 대응
+  "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax": "totalRevenue",
+  "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax": "totalRevenue",
   "us-gaap:CostOfRevenue": "costOfRevenue",
+  "us-gaap:CostOfGoodsAndServicesSold": "costOfRevenue",
   "us-gaap:GrossProfit": "grossProfit",
   "us-gaap:OperatingIncomeLoss": "totalOperatingIncomeAsReported",
   "us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": "pretaxIncome",

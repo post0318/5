@@ -38,7 +38,8 @@ import { withCashFlowDa } from "./edgar-cf-structure";
 import { withEquityStatementShares } from "./edgar-equity-shares";
 import { loadUsCurrentShares, type CurrentShares } from "./current-shares";
 import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
-import { FIN_NET_REVENUE, isFinancialCompany, withFinNetRevenue } from "./edgar-financial";
+import { isFinancialCompany } from "./edgar-financial";
+import { loadUsRevenue, revLtm, revQuarterAt, type UsRevenue } from "./fin-revenue";
 import { loadClassAFacts } from "./class-facts-loader";
 import { dartAdrFinancials, dartAdrOf, dartAdrTtm } from "./dart-adr";
 import type { ClassAFacts } from "./edgar-classfacts";
@@ -255,9 +256,10 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
 /** 하이라이트/외부 계산용 raw companyfacts (+ CIK). */
 export async function fetchUsCompanyFacts(
   symbol: string,
+  opts: { revenue?: boolean } = {},
 ): Promise<{ cik: string; facts: CompanyFacts }> {
   const { cik } = await resolveCik(symbol);
-  return { cik, facts: await getSymbolFacts(cik, symbol) };
+  return { cik, facts: await getSymbolFacts(cik, symbol, opts) };
 }
 
 /**
@@ -265,14 +267,16 @@ export async function fetchUsCompanyFacts(
  * 주식수 해석(edgar-shares.ts)을 쓰는 모든 경로가 이 함수를 거쳐야 화면끼리 같은
  * 시가총액이 나온다. 캐시본은 CIK 단위라 복사본에 붙인다(GOOG·GOOGL 공유).
  */
-async function getSymbolFacts(cik: string, symbol: string): Promise<CompanyFacts> {
-  const [facts, currentShares] = await Promise.all([
+async function getSymbolFacts(cik: string, symbol: string, opts: { revenue?: boolean } = {}): Promise<CompanyFacts> {
+  const [facts, currentShares, revenue] = await Promise.all([
     getCompanyFacts(cik),
     loadUsCurrentShares(symbol).catch(() => null),
+    // 매출 = 재무 5층 구조(src/lib/fin) 매출 지표(fin-revenue.ts). 매출을 안 쓰는 경로는 건너뛴다
+    opts.revenue === false ? Promise.resolve(null) : loadUsRevenue(symbol),
   ]);
   // 20-F ADR(TSM 1:5) — 주식수·주당 값을 ADR 1주 기준으로(edgar-foreign.ts toAdrBasis)
   const adr = toAdrBasis(facts, currentShares?.val);
-  return { ...adr.facts, currentShares };
+  return { ...adr.facts, currentShares, revenue };
 }
 
 /** SIC 코드 (은행·카드사 등 금융회사 레이아웃 분기 판정용). */
@@ -327,6 +331,11 @@ export interface CompanyFacts {
   opIncomeFromStructure?: boolean;
   /** 영업이익 태그가 부문 주석에만 있어 쓰지 않았는지(DIS) */
   segmentOpIncomeOnly?: boolean;
+  /**
+   * 매출 — 재무 5층 구조(src/lib/fin)의 매출 지표(fin-revenue.ts). 종목 단위 로더만 채운다. 화면 모듈은 매출을
+   * 이 값에서만 읽는다(매출 태그 직접 사용 금지). null = 조립 실패(빈칸).
+   */
+  revenue?: UsRevenue | null;
   facts: {
     "us-gaap"?: Record<
       string,
@@ -419,27 +428,8 @@ function buildUsTtm(
       "USD/shares",
     ]),
   );
-  // 은행·카드사는 매출 = 순수익(이자비용 차감 합성값) — 하이라이트·손익계산서와 같은 정의.
-  // 예전엔 여기만 총매출(Revenues)을 써서 JPM 개요 PSR 이 하이라이트와 9.3% 갈렸다(검증 2026-09-24).
-  const revFacts = evCtx.isFinancial ? withFinNetRevenue(facts) : facts;
-  const revenue = ttmFlow(
-    factEntries(
-      revFacts,
-      "us-gaap",
-      evCtx.isFinancial
-        ? FIN_NET_REVENUE
-        : [
-            // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
-            // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
-            "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
-            "Revenues",
-            "RevenueFromContractWithCustomerExcludingAssessedTax",
-            "RevenueFromContractWithCustomerIncludingAssessedTax",
-            "RevenuesNetOfInterestExpense", // 증권사·투자은행(GS·MS)
-          ],
-      ["USD"],
-    ),
-  );
+  // 매출 LTM = 재무 5층 구조 매출 지표(fin-revenue.ts) — 하이라이트·손익계산서·재무분석과 같은 값
+  const revenueLtm = revLtm(facts.revenue);
   const netIncome = ttmFlow(
     factEntries(
       facts,
@@ -538,7 +528,7 @@ function buildUsTtm(
       ? `최근 4개 분기(~${yl.through}) · Yahoo 분기(원통화 ${yl.currency}, 분기 평균 환율 환산)`
       : eps.ttmLabel || netIncome.ttmLabel || "",
     netIncome: niLtm,
-    revenue: revenue.ttm,
+    revenue: revenueLtm,
     opIncome: opIncome.ttm,
     eps: epsTtm,
     snapshot: {
@@ -584,8 +574,7 @@ interface ConceptSpec {
 
 const CONCEPTS: ConceptSpec[] = [
   // 손익계산서
-  { concept: "RevenueFromContractWithCustomerExcludingAssessedTax", label: "Revenues", section: "손익계산서", depth: 0, isSubtotal: false, isHighlight: true },
-  { concept: "Revenues", label: "Revenues (legacy)", section: "손익계산서", depth: 0, isSubtotal: false, isHighlight: true },
+  // 매출 행은 태그가 아니라 재무 5층 구조 매출 지표(fin-revenue.ts)로 따로 채운다(getFinancials) — REVENUE_ROW_ID
   { concept: "CostOfRevenue", label: "Cost of Revenue", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
   { concept: "GrossProfit", label: "Gross Profit", section: "손익계산서", depth: 0, isSubtotal: true, isHighlight: false },
   { concept: "ResearchAndDevelopmentExpense", label: "R&D Expense", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
@@ -612,6 +601,9 @@ const CONCEPTS: ConceptSpec[] = [
   { concept: "NetCashProvidedByUsedInFinancingActivities", label: "Financing Cash Flow", section: "현금흐름표", depth: 0, isSubtotal: true, isHighlight: false },
   { concept: "PaymentsToAcquirePropertyPlantAndEquipment", label: "CapEx", section: "현금흐름표", depth: 1, isSubtotal: false, isHighlight: false },
 ];
+
+/** getFinancials 의 매출 행 id — 멀티플·컨센서스가 이 id 로 찾는다 */
+export const REVENUE_ROW_ID = "fin:revenue";
 
 function periodKey(e: FactUnitEntry): string {
   // 연간은 종료 연도로 키를 잡는다 → 최신 10-K 의 재작성된 비교연도(액면분할 소급 등)를
@@ -689,7 +681,7 @@ export const usEdgarAdapter: MarketAdapter = {
     const dartAdr = dartAdrOf(symbol);
     if (dartAdr) return dartAdrFinancials(dartAdr, periodType);
     const { cik } = await resolveCik(symbol);
-    const facts = await getCompanyFacts(cik);
+    const [facts, revenue] = await Promise.all([getCompanyFacts(cik), loadUsRevenue(symbol)]);
     const gaap = facts.facts["us-gaap"] ?? {};
 
     // 1) 모든 컨셉에서 기간 집합 수집
@@ -715,6 +707,21 @@ export const usEdgarAdapter: MarketAdapter = {
       }
     }
 
+    // 매출 = 재무 5층 구조 매출 지표(fin-revenue.ts). 연간 열은 사업연도 키(FY{연도})로, 분기 열은 결산일(±6일)로 맞춘다
+    const revByKey = new Map<string, number | null>();
+    if (periodType === "annual")
+      for (const c of revenue?.annual ?? []) {
+        const key = `FY${c.fy}`;
+        revByKey.set(key, c.v);
+        if (!periodMeta.has(key) && c.v != null)
+          periodMeta.set(key, { label: key, fiscalYear: c.fy, fiscalQuarter: null, endDate: c.end });
+      }
+    else
+      for (const [key, meta] of periodMeta) {
+        const q = meta.endDate ? revQuarterAt(revenue, meta.endDate) : null;
+        if (q) revByKey.set(key, q.v);
+      }
+
     // 2) 최근 기간 우선, 최대 5개 (개요·재무 하이라이트와 동일)
     const periods = [...periodMeta.values()]
       .sort((a, b) => (b.endDate ?? "").localeCompare(a.endDate ?? ""))
@@ -730,6 +737,11 @@ export const usEdgarAdapter: MarketAdapter = {
     const sectionsOrder = ["손익계산서", "재무상태표", "현금흐름표"] as const;
     const sections = sectionsOrder.map((title) => {
       const items: FinancialLineItem[] = [];
+      if (title === "손익계산서") {
+        const values = Object.fromEntries(periodLabels.map((l) => [l, revByKey.get(l) ?? null]));
+        if (periodLabels.some((l) => values[l] != null))
+          items.push({ accountName: "Revenue", accountId: REVENUE_ROW_ID, depth: 0, isSubtotal: false, isHighlight: true, values });
+      }
       for (const spec of CONCEPTS) {
         if (spec.section !== title) continue;
         const picked = periodEntries.get(spec.concept);

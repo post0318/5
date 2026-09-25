@@ -40,7 +40,7 @@ export async function GET(req: Request) {
     const results: { symbol: string; status: string; years?: number }[] = [];
     for (const symbol of symbols) {
       try {
-        const { cik, facts } = await fetchUsCompanyFacts(symbol);
+        const { cik, facts } = await fetchUsCompanyFacts(symbol, { revenue: false });
         if (!needsClassAFacts(facts)) {
           results.push({ symbol, status: "skip (companyfacts ok)" });
           continue;

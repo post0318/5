@@ -2,9 +2,38 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
+// 매출 태그 직접 사용 금지(docs/metrics/architecture.md §4·§8, revenue.md §3) — 매출은 재무 5층 구조(src/lib/fin)의 매출 지표
+// (lib/markets/us/fin-revenue.ts)에서만 받는다. 화면 모듈이 매출 태그를 다시 고르면 화면마다 매출이 갈린다(revenue.md D1·D2).
+const REVENUE_TAG = "^(us-gaap:)?(Revenues|RevenueFromContractWithCustomer(Excluding|Including)AssessedTax|RevenuesNetOfInterestExpense|SalesRevenueNet|OperatingRevenueExcludingNonoperatingDerived|FinNetRevenueDerived)$";
+const REVENUE_TAG_RULES = [
+  { selector: `Literal[value=/${REVENUE_TAG}/]`, message: "매출 태그 직접 사용 금지 — 매출은 lib/markets/us/fin-revenue.ts(재무 5층 구조 매출 지표)에서만 받는다(architecture.md §8)." },
+  { selector: `MemberExpression > Identifier.property[name=/${REVENUE_TAG}/]`, message: "매출 태그 직접 사용 금지 — 매출은 lib/markets/us/fin-revenue.ts(재무 5층 구조 매출 지표)에서만 받는다(architecture.md §8)." },
+];
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
+  // 매출 태그 직접 사용 금지. 문서화된 예외(표시 매출이 아닌 판정·구조 보조 — architecture.md §1 표):
+  //  - edgar-series.ts        액면분할 판정(splitFactorsByYear)·매출원가 태그 판정(cogsConcepts) 휴리스틱
+  //  - edgar-ev.ts            모기지 리츠 판정(이자수익 ÷ 매출 비중)
+  //  - edgar-foreign.ts       IFRS → us-gaap 개념 매핑·보고 통화 판정(판독 단계)
+  //  - edgar-is-structure.ts  영업이익 소계 없는 손익계산서의 계산 구조 대입(영업이익 합성)
+  //  - edgar-revenue-dims.ts  총수익 안 비영업 수익 분리(영업이익 EBIT 근사용 — 매출 태그는 만들지 않음)
+  //  - verify-financials.mjs  독립 검증기(SEC 원자료를 직접 읽어야 함, S3)
+  {
+    files: ["src/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}"],
+    ignores: [
+      "src/lib/fin/**",
+      "scripts/fin/**",
+      "scripts/verify-financials.mjs",
+      "src/lib/markets/us/edgar-series.ts",
+      "src/lib/markets/us/edgar-ev.ts",
+      "src/lib/markets/us/edgar-foreign.ts",
+      "src/lib/markets/us/edgar-is-structure.ts",
+      "src/lib/markets/us/edgar-revenue-dims.ts",
+    ],
+    rules: { "no-restricted-syntax": ["error", ...REVENUE_TAG_RULES] },
+  },
   // 검증 체계 1층(오너 지시 2026-09-23 — "숫자는 화면 간 불일치가 완벽하게 없어야"):
   // 미국 멀티플 계산 모듈은 차입금·리스·감가상각비·장기투자 태그를 직접 고르지 말고
   // lib/markets/us/edgar-ev.ts(단일 기준)를 거쳐야 한다. 화면마다 태그 목록을 따로
@@ -25,6 +54,8 @@ const eslintConfig = defineConfig([
           message:
             "EV·차입금·감가상각비 계산 태그는 lib/markets/us/edgar-ev.ts 에서만 고른다(검증 체계 1층). 이 모듈에서 직접 쓰지 말 것.",
         },
+        // 같은 규칙 이름이라 위(전역) 설정을 덮어쓴다 — 매출 태그 금지도 여기에 함께
+        ...REVENUE_TAG_RULES,
       ],
     },
   },

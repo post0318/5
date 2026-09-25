@@ -62,11 +62,11 @@ const isMonthEnd = (d: string) => monthEndShift(d, 0) === d;
 const isAnnualE = (e: FactUnitEntry) =>
   !!e.start && /^(20-F|10-K)/.test(e.form) && e.fp === "FY" && span(e.start, e.end) > 300 && span(e.start, e.end) < 400;
 
-const REV = [
-  "Revenues",
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
-  "RevenueFromContractWithCustomerIncludingAssessedTax",
-];
+/**
+ * SEC 최근 사업연도 판정 기준 개념. 매출은 여기서 다루지 않는다 — 20-F 매출 LTM 은 재무 5층 구조(src/lib/fin
+ * read/ltm-yahoo.ts)가 같은 규칙으로 따로 만든다(docs/metrics/revenue.md §2, 매출 태그 직접 사용 금지).
+ */
+const FY_ANCHOR = ["NetIncomeLoss", "ProfitLoss"];
 const PRETAX = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
@@ -77,7 +77,6 @@ const INTEREST = ["InterestExpense", "InterestExpenseNonoperating", "InterestExp
 
 /** 흐름 항목 — Yahoo 필드 → us-gaap 개념(외화·IFRS 정규화 후). sign: SEC 부호 = sign × Yahoo */
 const FLOWS: { label: string; y: string; concepts: string[]; sign?: 1 | -1; da?: true }[] = [
-  { label: "매출", y: "totalRevenue", concepts: REV },
   { label: "매출원가", y: "costOfRevenue", concepts: ["CostOfRevenue", "CostOfGoodsAndServicesSold"] },
   { label: "매출총이익", y: "grossProfit", concepts: ["GrossProfit"] },
   { label: "판관비", y: "sellingGeneralAndAdministration", concepts: ["SellingGeneralAndAdministrativeExpense"] },
@@ -140,9 +139,9 @@ export function withYahooLtm(
   const latestFy = (c: string) =>
     usd(c).filter(isAnnualE).sort((a, b) => b.end.localeCompare(a.end) || (b.filed ?? "").localeCompare(a.filed ?? ""))[0];
 
-  // SEC 최근 사업연도 = 매출 개념의 최근 FY
-  const fyRev = REV.map(latestFy).filter(Boolean).sort((a, b) => b!.end.localeCompare(a!.end))[0];
-  if (!fyRev?.start) return none("SEC 연간 매출 없음");
+  // SEC 최근 사업연도 = 순이익 개념의 최근 FY
+  const fyRev = FY_ANCHOR.map(latestFy).filter(Boolean).sort((a, b) => b!.end.localeCompare(a!.end))[0];
+  if (!fyRev?.start) return none("SEC 연간 순이익 없음");
   const E = fyRev.end, fyStart = fyRev.start;
   if (!isMonthEnd(E)) return none("달 말 결산 아님");
 

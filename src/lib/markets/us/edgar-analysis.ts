@@ -5,7 +5,6 @@ import type { QuoteBar } from "../types";
 import {
   cogsConcepts,
   annualByYear,
-  annualEnds,
   days,
   entriesOf,
   firstConcept,
@@ -42,12 +41,11 @@ import {
   type EvContext,
 } from "./edgar-ev";
 import {
-  FIN_NET_REVENUE,
   FIN_NONINTEREST_EXPENSE,
   FIN_PROVISION,
   isFinancialCompany,
-  withFinNetRevenue,
 } from "./edgar-financial";
+import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm } from "./fin-revenue";
 
 /**
  * 미국 분석 지표 — 밸류에이션·수익성·현금창출·재무건전성·주주환원·성장성.
@@ -55,15 +53,6 @@ import {
  */
 
 const LTM = "현재/LTM";
-const REV = [
-  // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
-  // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
-  "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
-  "Revenues",
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
-  "RevenueFromContractWithCustomerIncludingAssessedTax",
-  "RevenuesNetOfInterestExpense", // 증권사·투자은행(GS·MS) — 하이라이트와 같은 목록
-];
 const PRETAX_C = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
@@ -115,10 +104,8 @@ export function buildUsAnalysis(
   const classFacts = opts.classFacts ?? null;
   // 금융회사(은행·카드사) — 매출 대신 순수익(이자비용 차감), 매출총이익 대신 충당금전이익 사용.
   const isFin = isFinancialCompany(facts, opts.sic ?? null);
-  // 은행 순수익은 태그가 은행마다 달라(JPM 만 RevenuesNetOfInterestExpense) 합성한다
-  // — edgar-financial.ts withFinNetRevenue(사본 facts, 원본 캐시는 그대로).
-  if (isFin) facts = withFinNetRevenue(facts);
-  const revConcepts = isFin ? FIN_NET_REVENUE : REV;
+  // 매출(순수익) = 재무 5층 구조 매출 지표(fin-revenue.ts) — 하이라이트·손익계산서와 같은 값. 연도 열도 그 연도를 따른다
+  const revAnnual = revAnnualMap(facts.revenue);
   let approxPerShare = false;
   // 개념 태그가 시기에 따라 바뀌는 기업(NVIDIA: RevenueFromContract…→Revenues,
   // 메타: InterestExpense→InterestExpenseNonoperating 등)이 많아, 단일 개념이 아니라
@@ -129,15 +116,8 @@ export function buildUsAnalysis(
     for (const m of maps) for (const [y, v] of m) if (!out.has(y)) out.set(y, v);
     return out;
   };
-  const mergedEnds = (concepts: string[], unit = "USD"): Map<number, string> => {
-    const out = new Map<number, string>();
-    for (const c of concepts)
-      for (const [y, d] of annualEnds(entriesOf(facts, c, unit))) if (!out.has(y)) out.set(y, d);
-    return out;
-  };
-
-  const years = [...mergedAnnual(revConcepts).keys()].sort((a, b) => a - b).slice(-5);
-  const ends = mergedEnds(revConcepts);
+  const years = revAnnualYears(facts.revenue, 5);
+  const ends = revAnnualEnds(facts.revenue);
   const lastBar = [...bars].reverse().find((b) => b.close != null);
   const nowIso = lastBar?.date ?? new Date().toISOString().slice(0, 10);
 
@@ -219,7 +199,9 @@ export function buildUsAnalysis(
     return out;
   };
 
-  const revenue = flow(revConcepts);
+  const revenue = blank();
+  for (const y of years) revenue[`${y}Y`] = revAnnual.get(y) ?? null;
+  revenue[LTM] = revLtm(facts.revenue);
   const grossProfitRaw = flow(["GrossProfit"]);
   const cogs0 = flowM(cogsConcepts(facts));
   // 금융회사(은행·카드사): 매출총이익 대신 충당금전이익(=순수익 − 총이자외비용).
@@ -296,7 +278,7 @@ export function buildUsAnalysis(
     }
     return out;
   })();
-  const revFull = fullAnnual(revConcepts);
+  const revFull = revAnnual;
   // D&A — edgar-ev.ts 단일 규칙(합계 태그 최댓값, 무형상각 누락 시 구성항목 합).
   // "앞 태그 우선"이던 예전 방식은 MCD·CRM 등에서 일부 항목만 담긴 태그를 집었다.
   const daByYear = daAnnualByYear(facts);
@@ -318,7 +300,7 @@ export function buildUsAnalysis(
   const opIncFull = (() => {
     if (isFin) {
       // 금융회사: 순수익 − 총이자외비용 − 대손충당금 (전체 연도)
-      const rev = fullAnnual(FIN_NET_REVENUE);
+      const rev = revAnnual;
       const nie = fullAnnual(FIN_NONINTEREST_EXPENSE);
       const prov = fullAnnual(FIN_PROVISION);
       const out = new Map<number, number>();

@@ -334,7 +334,7 @@ export class UsReader {
   /** Yahoo LTM 이 성립했을 때의 기간(열 머리글 보정용) */
   yahooWindow(col: ColumnSpec): { start: string; end: string } | null {
     if (!col.yahoo || !this.yahoo || !this.fx) return null;
-    const rev = this.facts("us-gaap:Revenues").concat(this.facts("ifrs-full:Revenue"), this.facts("ifrs-full:RevenueFromContractsWithCustomers"))
+    const rev = this.facts("us-gaap:Revenues").concat(this.facts("us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"), this.facts("ifrs-full:Revenue"), this.facts("ifrs-full:RevenueFromContractsWithCustomers"))
       .find((f) => near(f.start, col.yahoo!.fyStart) && near(f.end, col.yahoo!.fyEnd));
     if (!rev) return null;
     const r = yahooLtmOf(this.yahoo, "totalRevenue", rev.val, col.yahoo.fyEnd, this.fx);
