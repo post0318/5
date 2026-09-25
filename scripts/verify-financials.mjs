@@ -614,7 +614,8 @@ function usdFacts(xml, want) {
     const id = `${m[1]}_${m[2]}`;
     if (!want(id) || !/unitRef="[^"]*usd/i.test(`${m[3]} ${m[5]}`)) continue;
     const c = ctx.get(m[4]);
-    if (c?.start && c.end) out.push({ id, start: c.start, end: c.end, dims: c.dims, v: Number(m[6]) });
+    // dec = XBRL decimals(−8 = 1억 단위 반올림 공시 — 문장 속 반올림값)
+    if (c?.start && c.end) out.push({ id, start: c.start, end: c.end, dims: c.dims, v: Number(m[6]), dec: /decimals="([^"]+)"/.exec(`${m[3]} ${m[5]}`)?.[1] ?? null });
   }
   return out;
 }
@@ -645,11 +646,16 @@ async function faceRevenueParts(faces) {
   }
   return out;
 }
-/** 정기공시들(faces, 최신부터)의 매출 위치 파생상품 사실 — 모든 기간(3개월·9개월·연간). fi = 공시 순번(작을수록 최신) */
+/**
+ * 정기공시들(faces, 최신부터)의 매출 위치 파생상품 사실 — 모든 기간(3개월·9개월·연간). fi = 공시 순번(작을수록 최신), accn = 접수번호.
+ * 매출 개념에 헤지 지정 축(HedgingDesignationAxis)을 단 사실(XOM 10-Q: Revenues[NotDesignated…] = 매출 줄 파생상품 손익)도 함께 읽는다.
+ */
 async function derivFactsOf(faces) {
   const want = new Set(Object.values(DERIV_FAM).flatMap((f) => f.ids.map((i) => `us-gaap_${i}`)));
   const out = [];
-  for (const [fi, f] of faces.entries()) for (const x of usdFacts(await secInstance(f.instUrl), (id) => want.has(id))) out.push({ ...x, id: x.id.slice(8), fi });
+  for (const [fi, f] of faces.entries())
+    for (const x of usdFacts(await secInstance(f.instUrl), (id) => want.has(id) || id === "us-gaap_Revenues"))
+      if (x.id !== "us-gaap_Revenues" || x.dims.some((d) => d[0] === HEDGE_DES)) out.push({ ...x, id: x.id.slice(8), fi, accn: f.accn });
   return out;
 }
 /**
@@ -2780,42 +2786,89 @@ async function verifyUs(sym) {
         const imQ = qs ? qs.parts.map((p) => imAnnual.quarters.find((q) => dayDiff(q.end, p.end) <= 7) ?? null) : [];
         if (qs && imQ.every((q) => q?.rev != null)) {
           const dur = (x) => (Date.parse(x.end) - Date.parse(x.start)) / 864e5;
-          // 비영업 분리 회사만 — 위치 차원이 없는 사실(XOM 2025 3분기·2026 2분기 10-Q: 지정 차원만)을, 같은 개념·같은 비위치 차원이 다른
-          // 공시에서 매출 위치로만 태깅됐을 때(매출 외 위치로 태깅된 적 없음) 매출 위치로 추정한다. 추정이라 결과는 잔차 메모에만 쓰인다
-          // (이 경로는 ③ 을 ② 로 바꾸지 못한다 — 아래 split 분기)
+          const split = !!revFace?.split;
+          const inFy = (a, e) => { const d = (Date.parse(a.end) - Date.parse(e)) / 864e5; return d > -8 && d < 330; };
+          const derivIds = Object.values(DERIV_FAM).flatMap((f) => f.ids);
+          const hasLoc = (x) => x.dims.some((d) => LOC_AXES.includes(d[0]));
           const nonLoc = (x) => x.dims.filter((d) => !LOC_AXES.includes(d[0])).map((d) => d.join("=")).sort().join("|");
-          const locInferred = (x) => !!revFace?.split && !x.dims.some((d) => LOC_AXES.includes(d[0]))
-            && revQDeriv.some((y) => y.id === x.id && revLoc(y.dims) && nonLoc(y) === nonLoc(x))
-            && !revQDeriv.some((y) => y.id === x.id && y.dims.some((d) => LOC_AXES.includes(d[0])) && !revLoc(y.dims) && nonLoc(y) === nonLoc(x));
-          let inferredUsed = false;
+          const sameP = (x, y) => x.start === y.start && x.end === y.end;
+          const isRounded = (x) => !!x.dec && x.dec !== "INF" && Number(x.dec) <= -7;
+          const factTxt = (x) => `${x.accn ?? `공시${x.fi}`} ${x.id}${x.dims.length ? `[${x.dims.map((d) => d[1]).join(",")}]` : ""} ${x.start}~${x.end} ${x.v}${isRounded(x) ? `(decimals ${x.dec} 반올림 공시)` : ""}`;
+          // 비영업 분리 회사만(XOM·CVX) — 매출 줄 파생상품 손익의 위치 판정(버그 수정 2026-09-25: 예전엔 위치 없는 손익을 "다른 공시에서 매출
+          // 위치로만 태깅됐다"는 이유로 매출 줄로 추정했다 — XOM 2025 3분기 10-Q 의 위치 없는 −48 은 매출 줄 −31 + 원유 매입 줄 −17 합계였다).
+          // ① 매출 개념 + 헤지 지정 축(Revenues[NotDesignated…]) = 매출 줄 파생상품 손익(10-Q 가 매출 줄 금액을 이렇게 따로 태깅)
+          // ② 위치 없는 손익(GainLossOnDerivativeInstrumentsNetPretax 등) = 기본은 합계(매출 + 매입 등) — 매출 줄로 쓰지 않는다
+          // ③ 단, 같은 공시의 위치 없는 사실 하나가 다른 공시의 같은 기간 매출 줄 값과 정확히 같고 다른 공시의 같은 기간 위치 없는 값(합계)과는
+          //    겹치지 않으면(2026 2분기 10-Q 전년 비교 534 = 2025 2분기 10-Q Revenues[NotDesignated] 6개월 534 ≠ 합계 540) 그 공시의 위치 없는
+          //    사실(같은 개념·같은 비위치 차원)은 매출 줄로 확인. 증거 없이 위치를 추정하지 않는다
+          const revLine = (x) => split && x.id === "Revenues" && x.dims.some((d) => d[0] === HEDGE_DES);
+          const revLineVals = split ? revQDeriv.filter((y) => revLine(y) || (derivIds.includes(y.id) && revLoc(y.dims))) : [];
+          const confirmed = new Map(); // `${fi}|${id}|${nonLoc}` → 근거
+          for (const x of split ? revQDeriv.filter((y) => derivIds.includes(y.id) && !hasLoc(y)) : []) {
+            const k = `${x.fi}|${x.id}|${nonLoc(x)}`;
+            if (confirmed.has(k)) continue;
+            const m = revLineVals.find((y) => y.fi !== x.fi && sameP(x, y) && y.v === x.v && nonLoc(y) === nonLoc(x));
+            const ambiguous = revQDeriv.some((z) => z.fi !== x.fi && z.id === x.id && !hasLoc(z) && sameP(x, z) && z.v === x.v);
+            if (m && !ambiguous) confirmed.set(k, `위치 확인: ${factTxt(x)} = 매출 줄 ${factTxt(m)}`);
+          }
+          const accepted = (x) => revLoc(x.dims) || revLine(x) || (split && !hasLoc(x) && confirmed.has(`${x.fi}|${x.id}|${nonLoc(x)}`));
           const one = (kind, pred) => {
-            const fs = revQDeriv.filter((x) => DERIV_FAM[kind].ids.includes(x.id) && (revLoc(x.dims) || locInferred(x)) && DERIV_FAM[kind].pred(x.dims) && pred(x));
+            const fs = revQDeriv.filter((x) => (DERIV_FAM[kind].ids.includes(x.id) || (kind === "nd" && revLine(x))) && accepted(x) && DERIV_FAM[kind].pred(x.dims) && pred(x));
             if (!fs.length) return null;
             const fi = Math.min(...fs.map((x) => x.fi));
-            if (fs.some((x) => x.fi === fi && !revLoc(x.dims))) inferredUsed = true;
-            const f0 = fs.find((x) => x.fi === fi);
-            return { v: aggDeriv(fs.filter((x) => x.fi === fi)), start: f0.start, dur: dur(f0) };
+            const own = fs.filter((x) => x.fi === fi), f0 = own[0];
+            const conf = [...new Set(own.map((x) => confirmed.get(`${x.fi}|${x.id}|${nonLoc(x)}`)).filter(Boolean))];
+            return { v: aggDeriv(own), start: f0.start, dur: dur(f0), rounded: own.some(isRounded), ev: [...own.map(factTxt), ...conf].join("; ") };
           };
-          // 분기 파생상품 손익 — 3개월 사실, 없으면 누적 차(같은 시작일의 누적 − 3개월 짧은 누적: 연간 − 9M, 9M − 6M, 6M − 3M)
+          // 분기 파생상품 손익 — 3개월 사실, 없으면 누적 차(같은 시작일의 누적 − 3개월 짧은 누적: 연간 − 9M, 9M − 6M, 6M − 3M). 근거는 derivEv
+          const derivEv = new Map();
           const derivQ = (kind, E) => {
+            const key = `${kind}|${E}`;
             const q = one(kind, (x) => dayDiff(x.end, E) <= 7 && dur(x) >= 80 && dur(x) <= 100);
-            if (q) return q.v;
+            if (q) { derivEv.set(key, q.ev); return q.v; }
+            // 비영업 분리 회사의 4분기: 인포맥스 연간 = SEC 본표 연간이고 (인포맥스 연간 − 자기 분기 4개 합) = 같은 해 1~3분기 매출 줄 조정
+            // (9개월 매출 줄 파생상품 손익)이면 인포맥스는 그 해 연간을 조정하지 않았다 → 4분기 조정 0(XOM 2025: 323,905 = SEC,
+            // 323,905 − 323,402 = 503 = 2025 9개월 Revenues[NotDesignated] 503). 아니면 같은 기준(둘 다 매출 줄)의 연간 − 9개월
+            const secA = split ? revFace.annualAt(E) : null;
+            if (secA) {
+              const im = imAnnual.find((a) => dayDiff(a.end, E) <= 7);
+              const fq = im ? imAnnual.quarters.filter((q0) => inFy(im, q0.end)) : [];
+              const nine = one(kind, (x) => dayDiff(x.start, secA.start) <= 5 && dur(x) >= 250 && dur(x) <= 290 && x.end < E);
+              if (im?.rev != null && fq.length === 4 && fq.every((q0) => q0.rev != null) && nine) {
+                const sq = fq.reduce((t, q0) => t + q0.rev, 0);
+                if (Math.abs(im.rev - secA.v) <= 0.5e6 && Math.abs(im.rev - sq - nine.v) <= 0.5e6) {
+                  derivEv.set(key, `4분기 조정 0 — 인포맥스 ${E} 연간 ${im.rev} = SEC 본표 연간 ${secA.v}, 인포맥스 연간 − 자기 분기 4개 합 ${sq} = ${im.rev - sq} = 1~3분기 매출 줄 조정(${nine.ev})`);
+                  return 0;
+                }
+              }
+            }
             for (const [lo, hi] of [[300, 400], [250, 290], [160, 200]]) {
               const ytd = one(kind, (x) => dayDiff(x.end, E) <= 7 && dur(x) >= lo && dur(x) <= hi);
               if (!ytd) continue;
+              // 연간 값이 문장 속 반올림값(decimals ≤ −7)뿐이면 정확한 4분기 값이 아니다 — 미해결(비영업 분리 회사)
+              if (split && lo === 300 && ytd.rounded) { derivEv.set(key, `연간 매출 줄 파생상품 손익이 반올림 공시뿐(${ytd.ev}) — 4분기 미해결`); return null; }
               const prev = one(kind, (x) => x.start === ytd.start && x.end < E && ytd.dur - dur(x) >= 80 && ytd.dur - dur(x) <= 100);
+              if (prev) derivEv.set(key, `${ytd.ev} − ${prev.ev}`);
               return prev ? ytd.v - prev.v : null;
             }
             return null;
           };
           const fams = ["cf", "nd"].map((k) => [k, qs.parts.map((p) => derivQ(k, p.end))]).filter(([, vs]) => vs.every((x) => x != null) && vs.some((x) => x !== 0));
-          // 위치 추정 사실을 쓴 식은 ②·외부 단독 이탈 판정에 쓰지 않는다(추정은 원인 확인이 아님) — 아래 잔차 메모로만
-          for (let mask = 1; mask < 1 << fams.length && !inferredUsed; mask++) {
+          // Yahoo 분기 매출 = SEC 본표(분리값) 여부 — 비영업 분리 회사 ② 메모(인포맥스와 독립인 소스가 SEC 와 같다는 확인)
+          const yNote = () => {
+            const ys = qs.parts.map((p) => yq.find((r) => dayDiff(iso(r.date), p.end) <= 7)?.totalRevenue ?? null);
+            return ys.every((y, i) => y != null && Math.abs(y - qs.parts[i].v) <= 0.5e6) ? " · Yahoo 분기 4개 = SEC 본표(분리값) = 앱 정확 일치" : ` · Yahoo 분기 ${ys.join("/")}(SEC 와 일부 불일치 또는 없음)`;
+          };
+          for (let mask = 1; mask < 1 << fams.length; mask++) {
             const use = fams.filter((_, i) => mask & (1 << i));
             const exp = qs.parts.map((p, i) => p.v - use.reduce((t, [, vs]) => t + vs[i], 0));
             const txt = qs.parts.map((p, i) => `${p.end} ${p.v}${use.map(([k, vs]) => ` − ${k} ${vs[i]}`).join("")}`).join(" + ");
             const s = exp.reduce((t, x) => t + x, 0);
-            if (withinH(v - s)) return { ok: `인포맥스 LTM 매출 = Σ 분기(SEC ${tag} 3개월 − 매출 위치 파생상품 손익) ${s}(${txt}) — 앱 = SEC TTM(A층 정확 일치) · 공통모드 아님(10-Q·10-K 원본 차원값)` };
+            if (withinH(v - s)) {
+              if (!split) return { ok: `인포맥스 LTM 매출 = Σ 분기(SEC ${tag} 3개월 − 매출 위치 파생상품 손익) ${s}(${txt}) — 앱 = SEC TTM(A층 정확 일치) · 공통모드 아님(10-Q·10-K 원본 차원값)` };
+              const ev = qs.parts.map((p, i) => `${p.end}: 인포맥스 − SEC = ${imQ[i].rev - p.v}, 조정(매출 줄 파생) ${use.reduce((t, [, vs]) => t + vs[i], 0)}, 잔차 ${imQ[i].rev - exp[i]} [${use.map(([k]) => `${k}: ${derivEv.get(`${k}|${p.end}`) ?? ""}`).join(" / ")}]`).join(" · ");
+              return { ok: `인포맥스 LTM 매출 = Σ(SEC 본표 3개월 매출 − 그 분기 매출 줄 파생상품 손익), 인포맥스 연간 = SEC 본표인 해의 Q4 는 조정 0 — ${s}(${txt}) · 분기별 ${ev} — 앱 = SEC 본표 매출(비영업 분리, A층 정확 일치)${yNote()} · 공통모드 아님(10-Q·10-K 원본 차원값)` };
+            }
             const bad = exp.map((x, i) => i).filter((i) => Math.abs(imQ[i].rev - exp[i]) > 0.5e6);
             if (bad.length !== 1) continue;
             const k = bad[0], qe = imQ[k].end;
@@ -2827,19 +2880,19 @@ async function verifyUs(sym) {
               return { outlier: `외부 단독 이탈(인포맥스 자체 집계 불일치) — 인포맥스 ${qe} 분기 ${imQ[k].rev} ≠ 인포맥스 연간 ${ann.rev} − 나머지 3분기 = ${derived} = SEC 식(${txt.split(" + ")[k]}) ${exp[k]}, 나머지 3분기는 SEC 식과 정확 일치 · 앱 = SEC TTM(A층 정확 일치)` };
           }
           // 정확히 닫히지 않음(비영업 분리 회사) — ③ 유지(반올림 허용 없음, 오너 결정). 잔차 금액·분기·근거를 결과에 남긴다(감사 분해 재현).
-          // 분기마다: 인포맥스 = SEC 분리값이면 "조정 없음", 아니면 SEC 분리값 − 매출 위치 파생상품 손익(가족 합)과 비교해 분기 잔차.
+          // 분기마다: 인포맥스 = SEC 분리값이면 "조정 없음", 아니면 SEC 분리값 − 매출 줄 파생상품 손익(가족 합)과 비교해 분기 잔차.
           // 다른 회사는 종전 "정의 미분해" 표기 유지
-          if (revFace?.split) {
+          if (split) {
             const adj = qs.parts.map((p) => ["cf", "nd"].map((k) => derivQ(k, p.end)).filter((x) => x != null));
             const rows = qs.parts.map((p, i) => {
               const d = imQ[i].rev - p.v;
               // 차이 0 이어도 파생상품 조정은 계산한다 — 조정이 있는데 차이가 0 이면 그 분기 잔차는 a(재감사 2026-09-25)
               const a = adj[i].reduce((t, x) => t + x, 0);
-              if (d === 0) return { end: p.end, resid: d + a, txt: `${p.end} 인포맥스 = SEC ${p.v}, 파생 ${adj[i].length ? a : "없음"} → 잔차 ${d + a}` };
-              return { end: p.end, resid: d + a, txt: `${p.end} 인포맥스 ${imQ[i].rev} − SEC ${p.v} = ${d}, 파생 ${adj[i].length ? a : "없음"} → 잔차 ${d + a}` };
+              const why = ["cf", "nd"].map((k) => derivEv.get(`${k}|${p.end}`)).filter(Boolean).join(" / ");
+              const head = d === 0 ? `${p.end} 인포맥스 = SEC ${p.v}` : `${p.end} 인포맥스 ${imQ[i].rev} − SEC ${p.v} = ${d}`;
+              return { end: p.end, resid: d + a, txt: `${head}, 파생 ${adj[i].length ? a : "없음"}${why ? ` [${why}]` : ""} → 잔차 ${d + a}` };
             });
             const resid = rows.reduce((t, x) => t + x.resid, 0);
-            const inFy = (a, e) => { const d = (Date.parse(a.end) - Date.parse(e)) / 864e5; return d > -8 && d < 330; };
             // 인포맥스 연간 ≠ 자기 분기 4개 합(분기 값에만 조정이 들어간 경우) — 메모
             const selfGap = imAnnual.filter((a) => a.rev != null && qs.parts.some((p) => inFy(a, p.end))).map((a) => {
               const fq = imAnnual.quarters.filter((q) => inFy(a, q.end));
@@ -2847,8 +2900,8 @@ async function verifyUs(sym) {
               const sq = fq.reduce((t, q) => t + q.rev, 0);
               return sq === a.rev ? null : `인포맥스 ${a.end} 연간 ${a.rev} ≠ 자기 분기 4개 합 ${sq}(차 ${a.rev - sq})`;
             }).filter(Boolean);
-            if (resid !== 0 || inferredUsed)
-              return { appsec: `앱 = SEC 본표 매출(비영업 분리, A층 정확 일치) — 인포맥스 LTM 미분해 잔차 ${resid}(${rows.filter((x) => x.resid).map((x) => `${x.end} ${x.resid}`).join(", ") || "없음"}) · 분기별: ${rows.map((x) => x.txt).join(" · ")}${inferredUsed ? " · 일부 파생상품 사실은 위치 차원 없음 — 같은 개념·지정 차원이 다른 공시에서 매출 위치로만 태깅돼 매출로 추정" : ""}${selfGap.length ? ` · ${selfGap.join(" · ")}` : ""}` };
+            if (resid !== 0)
+              return { appsec: `앱 = SEC 본표 매출(비영업 분리, A층 정확 일치) — 인포맥스 LTM 미분해 잔차 ${resid}(${rows.filter((x) => x.resid).map((x) => `${x.end} ${x.resid}`).join(", ") || "없음"}) · 분기별: ${rows.map((x) => x.txt).join(" · ")}${selfGap.length ? ` · ${selfGap.join(" · ")}` : ""}` };
           }
         }
       }
