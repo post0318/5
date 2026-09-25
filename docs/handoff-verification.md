@@ -1,27 +1,48 @@
-# 재무 검증 작업 인수인계 (2026-09-24 밤)
+# 재무 숫자 작업 인수인계 (2026-09-25 — 매출 닫은 뒤 일시 중지)
 
-브랜치: `wip/verification` (master 에 합치면 Vercel 프로덕션 배포 — 오너 지시 전까지 master 푸시 금지)
+브랜치: `wip/verification` (master 에 합치면 Vercel 프로덕션 배포 — 오너 지시 전까지 master 푸시 금지).
+오너 지시로 **재무 작업은 멈춘 상태**다 — 리서치 작업을 먼저 마무리한 뒤 재개한다.
 
-## 지금까지 된 것
-- 검증 스크립트(`scripts/verify-financials.mjs`): A층 SEC 정확 일치, F층 외부 3소스(Yahoo·StockAnalysis·인포맥스),
-  국내 FnGuide 대조, 원인 판정은 숫자로 성립할 때만 "원인 확인", 영업이익 본표 존재·LTM 지연 검사.
-- 감사(REQUEST CHANGES) 지적 앱 쪽 반영(c395144): COST 운용리스 상각 제외, CVX 유동 판정(계산 구조 위치),
-  LLY 종업원 신탁주식·협업매출 오분리(`OtherRevenueMember` 정확 일치)·R&D 태그, DIS 구조 판독 실패 시에도
-  부문 영업이익 제거, TTM 판본 선택 통일(`vintageOrder` — 5개 모듈), 분할 이력 필수, 우선주 클래스 제외,
-  검증결과 API 입력 검증·CRON_SECRET 전용 쓰기, 워크플로 실패 표시.
-- 미국 유니버스 47종목 중 34종목 재검증 실패 0 (+ COST·CVX·LLY·DIS·WMT·XOM 실패 0).
+## 방식 (2026-09-25 오너 결정 — 이전 방식 폐기)
+- **지표 하나를 모든 차원(공시·기준·기간·통화·회사유형·외부소스)에서 한 번에 닫고 다음으로.** 순서: 손익
+  항목(매출 → 매출원가·매출총이익 → 판관비·R&D → 일회성비용 → 영업이익 → 이자·영업외·지분법 → 세전 → 법인세 →
+  순이익 → EPS) → 현금흐름표 → 재무상태표 → 파생(시가총액·EV·멀티플).
+- **5층 구조** `src/lib/fin/`: 원천(source) → 판독 엔진(read — 판본·IFRS·환율·분할·기간은 여기서만) → 재무제표
+  조립(assemble — 한 열 = 한 기준, 본표 구조, 항등식) → 지표(metrics) + 독립 검증(verify-financials.mjs, fin import
+  금지). 유니버스 종목만 MongoDB(`fin_sym`·`fin_stmt`·`fin_chg`)에 저장, 화면은 조회만. 설계:
+  `docs/metrics/architecture.md`, 지표 정의: `docs/metrics/revenue.md`.
+- 원칙: 숫자 오차 없음. 차이 = ① 일치 ② 정의 차이(분해식 정확 성립) ③ 오류. 외부 단독 이탈(앱 = SEC 본표 +
+  외부 2곳 일치 + 1곳 이탈)·외부 자기 모순(외부 연간 ≠ 자기 분기 합 = SEC)만 예외. SEC 반올림 잔차 불인정.
+- 기간 기준 = **최신 판본 우선**(연도·분기, Q4 = FY − 9개월). 인포맥스(FactSet)만 원공시 — 정의 차이.
+- 작업 규칙: 결함은 모아서 한 번에 고치고 전체 재검증·감사는 지표 닫을 때 1회, 수정 중엔 해당 종목만.
+  감사는 Fable 모델. 1시간 단위 WIP 커밋(재개 시 크론 다시 설정). 메모리 빠듯 — 긴 검증은 10종목씩, 사이마다
+  `.omc/tmp/kill-dev.ps1` 후 `npm run dev`(`.omc/tmp/rv-batch.sh 종목들 번호` 참고).
 
-## 남은 일 (순서대로)
-1. 미국 나머지 13종목 재검증: `SBUX,SNDK,SPOT,TER,TSLA,TSM,UBER,V,VRT,VST,WDC`
-   `node scripts/verify-financials.mjs --symbols=... --concurrency=1` (dev 서버 필요, 병렬은 SEC 429)
-2. 독립 재감사 요청(검증 도구 작성자가 스스로 승인하지 않는다 — CLAUDE.md).
-3. 한국 FnGuide 불일치 분석: 삼성전자 EBITDA −5~−11%, EV +2~4%, 지배 순이익 1~7% (정의 차이 규명).
-   한국 DART 원자료 A층 대조 신설 검토.
-4. 미국 외부 미해명 약 104건: LLY 영업이익(취득 IPR&D 3.8B — 외부는 제외, GAAP 본표는 포함), CEG/VST 핵연료 상각,
-   MAR/HLT LTM, 합성 영업이익(IBM·XOM·DIS), 운용리스 포함 차입금(정의 차).
-5. 유니버스 밖: JPM 2021 영업이익 −185M, JPM EPS 주석, PSA EBITDA 빈칸.
-6. CLAUDE.md · `docs/verification-status.md` 에 이번 감사 반영분 기록.
+## 매출 — 완료 상태
+- 모든 매출 소비처(손익·총괄·재무상태표 분기 열·재무분석·하이라이트·TTM/개요 PSR·컨센서스·유니버스 LTM)가
+  fin 매출만 사용. 매출 태그 사본 8곳 삭제 + eslint 금지. 분기 Q4 열 추가. PPT 기능은 삭제(재설계 예정).
+- 유니버스 미국 47종목 `--metric=revenue`: 실패 0, 조회 실패 0, **매출 ③ 1건**(아래). 기준선 스냅샷 대비
+  예상 밖 변경 0.
+- Fable 감사 1차 REQUEST CHANGES → 반영(ea89094: 연간 항등식, 조립 항등식 노출, XOM LTM 분기 분해, 배치 크론).
+  **재감사 결과는 이 문서 아래 "재감사" 절 참고.**
 
-## 다른 PC 준비
-- `.env.local` 은 git 에 없다 — 원래 PC 에서 복사해 올 것(`vercel env pull` 은 민감값이 빈칸으로 온다).
-- `npm ci` → `npm run dev` → 위 명령.
+## 미결 (재개 시 확인)
+1. **XOM LTM 인포맥스 ③**: 363,391 vs 앱 361,060 — 분기 분해로 2,300 닫힘, 2025Q3 잔차 −17백만 미해명(파생상품
+   손익이 매출·구매 합계로만 공시). 인포맥스 2025 연간 323,905 ≠ 자기 분기 합 323,402. 처리 방식 오너 결정 필요.
+2. **보험·금융 자회사 매출 정의 보류**(MET·TRV / GM·F·CAT·DE) — 현행 총수익.
+3. **배치 크론 미배포**: `/api/cron/fin-build` + `.github/workflows/fin-build.yml`(매일 06:10). master 배포 전까지
+   유니버스 저장본은 수동 갱신(`node scripts/fin/run.mjs scripts/fin/build.ts`).
+4. **다음 지표 미결 목록(매출 외 조립 항등식 불성립)**: WDC·WMT 등 영업외손익·이자·판관비 줄 — `revenue.md` §6.1.
+   edgar-income 비매출 행 Q4 판본 규칙 불일치 — `architecture.md` §9.
+5. 한국(DART)은 미국 롤아웃 후. 재무상태표 차례에 CLAUDE.md 기존 규칙(자기자본 재작성본 우선, 결산일 주식수
+   그해 10-K) 정합성 확인.
+
+## 재개 절차
+1. `git checkout wip/verification && git pull`, `.env.local` 확인(MONGODB_URI·SEC_USER_AGENT 실값 필요).
+2. 이 문서와 `docs/metrics/*.md` 읽기 → 다음 지표 = **매출원가·매출총이익**부터 같은 틀(전 칸 현황 조사 →
+   결정 일괄 질문 → 구현 → 기준선 스냅샷 대비 diff → 47종목 1회 검증 → Fable 감사).
+3. 조사 산출물 재사용: 매출 조사 `scratchpad metric-revenue/`, 감사 하네스 `scratchpad rev-audit/`(세션 임시 폴더라
+   다른 PC 에는 없음 — 필요 시 재생성).
+
+## 재감사
+(재감사 완료 후 기록)
