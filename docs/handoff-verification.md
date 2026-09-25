@@ -81,5 +81,8 @@ Fable 재감사(ea89094) REQUEST CHANGES → 반영(엔진판 4, 2026-09-25):
 - 검증: typecheck·eslint 통과. `--metric=revenue` TSM·TSLA·WDC·AMD·XOM 실패 0, ③ XOM LTM 1건. TSM 미검증 4열 원통화 대조 전부
   일치, 첫 열 성장률 5종목 통과. 주입 재현(검증기 쪽 가로채기 `inject-unv.mjs`) TSLA FY2018·TSM FY2018 ×1.01 → 둘 다 A층 FAIL.
   **47종목 전체 재검증은 미완** — 메모리 부족으로 배치가 강제 종료됨(첫 묶음 AAPL·AMAT·AMD·AMZN·ASML·AVGO·AXP 까지 실패 0).
-  남은 CAT~XOM(위 5종목 제외)은 다음에 10종목씩 돌릴 것.
+  남은 CAT~XOM(위 5종목 제외)은 다음에 10종목씩 돌릴 것. 이어서 BE~DELL 한 묶음을 더 돌렸으나(verify-us-20260925-185426)
+  같은 폴더의 리서치 세션과 개발 서버를 함께 쓰는 중이라 SEC·앱 조회 실패(503, 64건)가 섞여 결과를 쓸 수 없다 — BE 만 실패 0
+  (조회 실패 0). **재개 시 첫 작업 = 리서치 세션이 개발 서버를 안 쓸 때 BE 를 뺀 나머지 35종목 재검증**, 그 뒤 Fable 최종 감사
+  (재감사 2차 반영분 범위)로 매출을 닫는다.
 - 미결(기존부터, 규칙 none): 매출 null 칸 SNDK 2024Q1 · VRT FY2016 · WDC FY2017 — 매출원가 지표 착수 때 조사.
