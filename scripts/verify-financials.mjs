@@ -2179,7 +2179,11 @@ async function verifyUs(sym) {
         if (!r) add("A", name, c0, { status: FAIL, note: `전년(${E0} 전후) 원통화 공시 매출 없음 — 첫 열 성장률 근거 대조 불가` });
         else if (avg == null) hardErrors.push(`첫 열 전년 매출 기간 평균 환율 없음(${r.start}~${r.end})${fxErr ? `: ${fxErr}` : ""}`);
         else { prior = r.val * avg; how = `원통화 ${r.val} ${natCur} × 기간 평균 환율 ${avg.toPrecision(6)} (${r.end})`; }
-      } else if (!revFace) add("A", name, c0, { status: NA, note: revFaceWhy });
+      } else if (!revFace) {
+        // 본표 판독 실패 — 앱이 첫 열 성장률을 보이면 대조 없이 둘 수 없어 FAIL(미검증 열 검사와 같은 규칙)
+        const appYoy = [H[c0].revYoy, A[c0]?.revYoy, C[c0]?.revenueYoY].filter((v) => v != null);
+        add("A", name, c0, { status: appYoy.length ? FAIL : NA, note: appYoy.length ? `${revFaceWhy} · 앱 첫 열 성장률 ${appYoy.join("/")} 표시` : revFaceWhy });
+      }
       else {
         try { await revFace.extend(E0, "FY"); } catch (e) { hardErrors.push(`첫 열 전년 매출 SEC 공시 추가 판독 실패: ${String(e).slice(0, 80)}`); }
         const e = revFace.annualAt(E0);
@@ -2289,7 +2293,7 @@ async function verifyUs(sym) {
     if (is && !fi.some((q) => q.rev?.length)) add("D", "fin 조립 항등식(매출 경로)", "-", { status: PASS, note: fi.length ? `매출 경로 불성립 없음(미결 ${fi.length}열은 검토 목록)` : "미완전 열 없음" });
     // 항등식 미검증 열(매출 경로 식이 판정 불완전 — 앱은 매출 값을 둠) — 검토 목록이 아니라 A층 SEC 본표 직접 대조가 필수(재감사
     // 2026-09-25: 판정 불완전 예외가 틀린 매출을 숨김 — WDC 주입 재현). 화면에 없는 옛 열·분기 전부(finIssues 의 저장값·기간).
-    // 대응값이 없으면 조용히 넘기지 않고 FAIL(외화 공시는 SEC 본표 매출이 없어 검증불가로 기록)
+    // 대응값이 없으면 조용히 넘기지 않고 FAIL(외화 공시 연간 열은 원통화 × 기간 평균 환율로 대조, 분기·LTM 만 검증불가)
     for (const q of fi.filter((x) => x.unv?.length)) {
       const name = "항등식 미검증 열 매출 앱 = SEC 매출(직접 대조 필수)";
       const kind0 = q.col === "LTM" ? "LTM" : /^FY/.test(q.col) ? "FY" : /Q4$/.test(q.col) ? "Q4" : "Q";

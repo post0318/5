@@ -95,9 +95,14 @@ function stmtCells(doc: FinStmtDoc): Map<string, number | null> {
 }
 
 /** 저장 — 바뀐 칸만 fin_chg, 본문서 교체. 원자료 조회 실패(부분 판독)면 기존 문서를 유지하고 gaps 비트만 올린다(§5.1) */
+// 비저장 모드 — 주입 시험 중 운영 DB 쓰기 차단(persist·markFailed·touchChecked 공통, 재감사 2026-09-25)
+function assertPersistAllowed(): void {
+  if (process.env.FIN_NO_PERSIST) throw new Error("FIN_NO_PERSIST 설정 — 비저장 모드라 fin_sym·fin_stmt·fin_chg 저장 거부(주입 시험은 검증기 쪽 가로채기 또는 --dry)");
+}
+
 export async function persist(a: FinAssembly, stmts: { annual: FinStmtDoc; quarterly: FinStmtDoc }): Promise<{ changed: number; kept: boolean }> {
   // 주입 시험·실험 실행의 운영 DB 기록 차단(재감사 2026-09-25 — 주입 시험이 fin_chg 에 12건을 남김). 이 변수가 있으면 저장을 거부한다
-  if (process.env.FIN_NO_PERSIST) throw new Error("FIN_NO_PERSIST 설정 — 비저장 모드라 fin_sym·fin_stmt·fin_chg 저장 거부(주입 시험은 검증기 쪽 가로채기 또는 --dry)");
+  assertPersistAllowed();
   const symCol = await finSymCol();
   const stmtCol = await finStmtCol();
   const chgCol = await finChgCol();
@@ -137,6 +142,7 @@ export async function persist(a: FinAssembly, stmts: { annual: FinStmtDoc; quart
 
 /** 조립 실패(원천 조회 불가) — 기존 문서가 있으면 gaps 만 올린다 */
 export async function markFailed(id: string, gaps: number): Promise<void> {
+  assertPersistAllowed();
   const symCol = await finSymCol();
   await symCol.updateOne({ _id: id }, { $bit: { g: { or: gaps } }, $set: { at: new Date() } });
 }
@@ -149,6 +155,7 @@ export async function readSymMeta(ids: string[]): Promise<Map<string, Pick<FinSy
 
 /** 새 정기공시 없음을 확인한 시각 — 다음 배치가 오래 확인 안 한 종목부터 보게 */
 export async function touchChecked(id: string): Promise<void> {
+  assertPersistAllowed();
   await (await finSymCol()).updateOne({ _id: id }, { $set: { ck: new Date() } });
 }
 
