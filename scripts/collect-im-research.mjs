@@ -40,14 +40,16 @@
  *   | R_E08  | 기업분석(행 R_E081)          | 국내 종목분석 "[종목명/의견] 헤드라인"  |
  *   | R_E14  | 해외기업(R_E141)             | 미국 종목분석 "[회사명(TICKER-US)] …"  |
  *   | R_E09  | 산업분석(R_E091·R_E092)      | 국내 산업분석(라벨 = 대괄호, 의견 제거)  |
- *   | R_E03  | 투자전략 R_E031 마켓 준클리  | 국내 투자전략 "iM증권 투자전략"         |
+ *   | R_E03  | 투자전략 R_E031 마켓 준클리  | 미수집(오너 지시 — "마켓준클릭은 수집에서 제외다") |
  *   |        |          R_E037 해외주식     | 미국 투자전략 "iM증권 투자전략"         |
  *   |        |          R_E038 디지털자산   | 미수집(다른 증권사도 안 받음)           |
- *   | R_E010 | 데일리 Morning Brief         | 국내 시황 "iM증권 Morning Brief"        |
  *   | R_E04  | 경제분석                     | 거시경제 이슈분석(macro_issues)         |
  *   | R_E05  | 채권                         | 거시경제 이슈분석(macro_issues)         |
  *
- * 고정 라벨("iM증권 투자전략"/"iM증권 Morning Brief")은 게시판 단위 확정 분류용
+ * R_E010(Morning Brief)은 수집하지 않는다(오너 결정 2026-09-25 — "im증권
+ * Morning Brief는 수집제외다").
+ *
+ * 고정 라벨("iM증권 투자전략")은 게시판 단위 확정 분류용
  * stockName — `src/lib/db/shinhan-research.ts` 의 STRATEGY_/MARKET_CONDITION_
  * STOCKNAMES 에 같은 문자열로 등록돼야 확정 분류된다(이 수집기는 등록하지 않음).
  *
@@ -61,7 +63,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -83,7 +85,7 @@ const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const MACRO_IMPORT_URL = (
   ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
@@ -98,7 +100,6 @@ const GAP_MS = 400;
 const BASE = "https://www.imfnsec.com";
 const SOURCE = "iM증권";
 const STRATEGY_LABEL = "iM증권 투자전략";
-const DAILY_LABEL = "iM증권 Morning Brief";
 
 // kind: krCompany / usCompany / industry / strategy / daily / macro
 const BOARDS = [
@@ -106,11 +107,12 @@ const BOARDS = [
   { bid: "R_E14", label: "해외기업", kind: "usCompany" },
   { bid: "R_E09", label: "산업분석", kind: "industry" },
   { bid: "R_E03", label: "투자전략", kind: "strategy" },
-  { bid: "R_E010", label: "Morning Brief", kind: "daily" },
   { bid: "R_E04", label: "경제분석", kind: "macro" },
   { bid: "R_E05", label: "채권", kind: "macro" },
 ];
-const STRATEGY_SUB = { R_E031: "kr", R_E037: "us" }; // R_E038(디지털자산)은 제외
+// R_E031(마켓 준클리)은 수집 제외(오너 지시 2026-09-25 — "마켓준클릭은
+// 수집에서 제외다"), R_E038(디지털자산)도 제외.
+const STRATEGY_SUB = { R_E037: "us" };
 // 첨부가 없을 때 쓸 상세 화면(GET 으로 열리는 것 확인한 게시판만).
 const VIEWER_BOARDS = new Set(["R_E08", "R_E09"]);
 
@@ -225,7 +227,7 @@ function classify(row, board) {
   if (!title) return null;
   if (isEtfOrEtpContent(title) || isEsgContent(title) || isCommonExcludedContent(title)) return null;
   const base = baseItem(row, board);
-  if (board.kind === "macro") return { ...base, title, topic: "이슈분석" };
+  // 공용 FX 판정(오너 지적 2026-09-25) — 경제·채권 게시판이 FX 분기 없이 전부\n  // 이슈분석으로만 갔다(실측: "거침없는 원화 강세..."·"가속 페달을 밟은 달러-엔").\n  if (board.kind === "macro") return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
 
   if (board.kind === "krCompany") {
     const m = title.match(KR_TITLE_RE);
@@ -259,14 +261,11 @@ function classify(row, board) {
     };
   }
   // 이하 비종목 글 — 원자재는 이슈분석으로.
-  if (isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+  if (isCommodityContent(title)) return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
   if (board.kind === "strategy") {
     const market = STRATEGY_SUB[row.bid];
     if (!market) return null; // 디지털자산 등
     return { ...base, title: title.replace(PREFIX_RE, ""), stockName: STRATEGY_LABEL, symbol: null, category: "산업", market };
-  }
-  if (board.kind === "daily") {
-    return { ...base, title: title.replace(PREFIX_RE, ""), stockName: DAILY_LABEL, symbol: null, category: "산업", market: "kr" };
   }
   // industry(및 형식 밖 기업분석 제목)
   const { label: rawLabel, headline } = industryLabelAndHeadline(title);

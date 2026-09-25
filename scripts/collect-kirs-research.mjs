@@ -44,6 +44,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import tls from "node:tls";
 
 // 서버가 빠뜨리는 중간 인증서(위 주석 참고).
@@ -110,7 +111,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = 20;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -177,7 +178,7 @@ function parseRows(html, board) {
     const title = cellText(cells[1]);
     const analyst = cellText(cells[2]);
     const date = cellText(cells[3]).match(/\d{4}-\d{2}-\d{2}/)?.[0];
-    if (!date || !title) continue;
+    if (!date || !title || isCommonExcludedContent(title, "기업")) continue;
     const sm = stockCell.match(STOCK_RE);
     items.push({
       id: `${board.key}:${hit[1]}`,

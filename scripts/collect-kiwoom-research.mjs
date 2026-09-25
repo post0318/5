@@ -97,7 +97,14 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+).trim();
+// 거시경제(이슈분석/환율분석) 전용 — 오너 지시 2026-09-26 "kb 키움은 개별수집기에
+// 통합되어야 맞아보인다. 따로 있을 이유가 없다"로 collect-kiwoom-macro-issues.mjs를
+// 이 파일에 흡수. kr_research와 스키마가 달라(topic만 있고 category/symbol 없음)
+// 라우트는 그대로 분리 유지, 스크립트 파일만 하나로 합친다.
+const MACRO_ISSUES_IMPORT_URL = (
+  ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -286,6 +293,48 @@ async function collectBoard(board, cutoff) {
   return out;
 }
 
+// 거시경제(이슈분석/환율분석) — 원 collect-kiwoom-macro-issues.mjs 로직 그대로.
+// SI(rMenuGbNm "이슈분석", 실제 사이트 내비 확인됨)·FE(rMenuGbNm "일간환율전망")
+// 게시판 코드 자체가 topic을 확정하므로 FX 판정이 불필요(다른 증권사와 다른 점).
+const MACRO_BOARDS = [
+  { rMenuGb: "SI", topic: "이슈분석" },
+  { rMenuGb: "FE", topic: "환율분석" },
+];
+
+async function collectMacroBoard(board, cutoff) {
+  const out = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const data = await fetchPage(board.rMenuGb, page);
+    const rows = data?.researchList ?? [];
+    if (rows.length === 0) break;
+    let stop = false;
+    for (const r of rows) {
+      const date = isoDate(r.makeDt);
+      if (!date) continue;
+      if (new Date(date) < cutoff) {
+        stop = true;
+        break;
+      }
+      const title = String(r.titl ?? "").trim();
+      if (isEtfOrEtpContent(title)) continue;
+      out.push({
+        id: `${board.rMenuGb}:${r.sqno}`,
+        date,
+        title,
+        analyst: r.workId ?? "",
+        summary: "",
+        pdfUrl: r.attaFile
+          ? `${PDF_BASE}?rMenuGb=${board.rMenuGb}&attaFile=${encodeURIComponent(r.attaFile)}&makeDt=${encodeURIComponent(r.makeDt)}`
+          : null,
+        topic: board.topic,
+      });
+    }
+    if (stop || rows.length < PAGE_SIZE) break;
+    await sleep(300);
+  }
+  return out;
+}
+
 console.log(`▶ 키움증권 리서치 수집(${BOARDS.map((b) => b.rMenuGb).join("/")}): 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
 const collected = [];
@@ -296,11 +345,20 @@ for (const board of BOARDS) {
   await sleep(300);
 }
 
-if (collected.length === 0) {
+console.log(`▶ 키움증권 거시경제(이슈분석/환율분석) 수집: 최근 ${DAYS}일`);
+const macroCollected = [];
+for (const board of MACRO_BOARDS) {
+  const items = await collectMacroBoard(board, cutoff);
+  console.log(`  ${board.rMenuGb}(${board.topic}): ${items.length}건`);
+  macroCollected.push(...items);
+  await sleep(300);
+}
+
+if (collected.length === 0 && macroCollected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
-console.log(`✔ 파싱 완료: 총 ${collected.length}건`);
+console.log(`✔ 파싱 완료: 총 ${collected.length}건 (거시경제 ${macroCollected.length}건)`);
 console.log(
   "  샘플:",
   collected.slice(0, 8).map((i) => `[${i.market}/${i.category}] ${i.date} ${i.symbol ?? i.stockName} — ${i.title}`),
@@ -359,6 +417,34 @@ for (const [, group] of byGroup) {
     process.exit(1);
   }
   console.log(`✔ [${market}/${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
+  totalSent += items.length;
+}
+
+// 거시경제(이슈분석/환율분석) — macro_issues 라우트로 topic별 별도 전송.
+const macroByTopic = new Map();
+for (const it of macroCollected) {
+  if (!macroByTopic.has(it.topic)) macroByTopic.set(it.topic, []);
+  macroByTopic.get(it.topic).push({
+    id: it.id,
+    date: it.date,
+    title: it.title,
+    analyst: it.analyst,
+    summary: it.summary,
+    pdfUrl: it.pdfUrl,
+  });
+}
+for (const [topic, items] of macroByTopic) {
+  const up = await fetch(MACRO_ISSUES_IMPORT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ items, source: "키움증권", topic }),
+  });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ [${topic}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`✔ [${topic}] 앱 전송 완료 (${items.length}건): ${upBody}`);
   totalSent += items.length;
 }
 console.log(`\n✔ 총 ${totalSent}건 전송 완료`);

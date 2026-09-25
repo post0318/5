@@ -10,10 +10,14 @@
  *   |---------------|-----------------|-------------------------------------------------|
  *   | RE01          | 기업분석        | 국내 종목분석(`data-jongcode` 종목코드)          |
  *   | RE02          | 산업분석        | 국내 산업분석(디지털 자산 Daily 제외)            |
- *   | RB30 / RB30A  | 한국 투자전략   | 투자전략(주식) — "유안타 투자전략"               |
- *   | RB30 / RB30B  | 글로벌 투자전략 | 미국 — "AI 미국 주식시장 마감 시황"은 시황,       |
- *   |               |                 | 그 외 투자전략(주식)                            |
+ *   | RB30 / RB30B  | 글로벌 투자전략 | 거시경제 이슈분석(FX·엔화 등은 환율분석) —        |
+ *   |               |                 | "미국 주식시장 마감 시황"(데일리)은 미수집        |
  *   | RB30 / RB30C  | 경제분석        | 거시경제 이슈분석(FX·환율 글은 환율분석)          |
+ *
+ * **RB30A(한국 투자전략) 제외(오너 결정, 2026-09-25 — "쓸만한게 없다")**: 처음엔
+ * 고정 라벨 "유안타 투자전략"으로 투자전략(주식) 수집했으나, 실제로는 "환율,
+ * 금리" 같은 배경 설명이 실린 거시 코멘트가 대부분이라 쓸 만한 종목·업종 얘기가
+ * 없어 게시판 자체를 뺐다.
  *
  * **2026-09-25 직접 수집 재개(오너 결정)**: 2026-09-13 에 "발췌·목표주가·투자의견
  * 추출이 계속 실패"한다며 중단하고 한경 컨센서스 경유로 바꿨었다. 재점검에서 이
@@ -32,7 +36,7 @@
  * 부제(<p>)가 곧 요약이라 그걸 쓴다(PDF 를 받지 않음). PDF 원문·전체 본문은
  * 저장하지 않는다.
  *
- * ⚠️ 서버(/api/cron/shinhan-research)는 보낸 항목을 통째로 replace한다 —
+ * ⚠️ 서버(/api/cron/total-research)는 보낸 항목을 통째로 replace한다 —
  *    그래서 --days 기본값을 3으로 좁혀 "매일 최근 며칠만 다시 훑는" 방식이다.
  *    백필은 --days=30 등으로 수동 실행.
  *
@@ -46,6 +50,7 @@ import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import {
   isEtfOrEtpContent,
   isEsgContent,
+  isFxContent,
   isCommonExcludedContent,
   isCommodityContent,
 } from "./lib/exclude-filters.mjs";
@@ -71,7 +76,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const MACRO_IMPORT_URL = (
   ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
@@ -85,21 +90,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const LIST_URL = "https://www.myasset.com/myasset/research/rs_list/rs_list.cmd";
 const SOURCE = "유안타증권";
 
-// kind: company(종목) / industry(업종 라벨) / fixed(고정 라벨) / global(미국 전략·시황) / macro(이슈분석)
+// kind: company(종목) / industry(업종 라벨) / global(해외 전략 — 거시 이슈로) / macro(이슈분석)
 const BOARDS = [
   { cd007: "RE01", cd008: "", label: "기업분석", kind: "company" },
   { cd007: "RE02", cd008: "", label: "산업분석", kind: "industry" },
-  { cd007: "RB30", cd008: "RB30A", label: "한국 투자전략", kind: "fixed", fixedLabel: "유안타 투자전략" },
   { cd007: "RB30", cd008: "RB30B", label: "글로벌 투자전략", kind: "global" },
   { cd007: "RB30", cd008: "RB30C", label: "경제분석", kind: "macro" },
 ];
 // 다른 증권사도 디지털자산 게시판은 수집하지 않는다(키움 BC·iM 디지털자산 등과 동일).
-const DIGITAL_ASSET_RE = /디지털\s*자산/;
+const DIGITAL_ASSET_RE = /디지털\s*자산|\bBTC\b|스테이블\s*코인|\bstable\s*coin\b|가상자산|암호화폐/i;
 // "리서치 Top-Picks Follow up" — 월간 추천종목 목록(추천종목 공통 제외와 같은 취지).
 const TOP_PICKS_RE = /top\s*-?\s*picks/i;
 // 글로벌 전략 게시판의 데일리 미국 마감 시황(AI 생성) — 시황으로 확정 분류.
 const US_MARKET_CONDITION_RE = /미국\s*주식시장\s*(?:마감\s*)?시황/;
-const FX_RE = /\bFX\b|환율/i;
 
 const isoDate = (s) => {
   const m = String(s).trim().match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
@@ -209,20 +212,20 @@ function toItem(r, board) {
       market: "kr",
     };
   }
-  // 원자재 글은 어느 게시판이든 거시경제 이슈분석으로(삼성증권과 같은 규칙).
-  if (board.kind === "macro" || isCommodityContent(r.title)) {
-    return { ...base, title: r.title, topic: FX_RE.test(r.title) ? "환율분석" : "이슈분석" };
-  }
   if (board.kind === "industry") {
     if (DIGITAL_ASSET_RE.test(r.title) || TOP_PICKS_RE.test(r.title)) return null;
     const { label, headline } = industryLabelAndHeadline(r.title);
     return { ...base, title: headline, stockName: label, symbol: null, category: "산업", market: "kr" };
   }
-  if (board.kind === "global") {
-    const label = US_MARKET_CONDITION_RE.test(r.title) ? "유안타 미국 시황" : "유안타 투자전략";
-    return { ...base, title: r.title, stockName: label, symbol: null, category: "산업", market: "us" };
+  // macro(경제분석 RB30C) / global(글로벌 투자전략 RB30B, 2026-09-25 이슈분석으로
+  // 전환) / 원자재 글(어느 게시판이든) 전부 거시경제 이슈분석으로.
+  if (board.kind === "macro" || board.kind === "global" || isCommodityContent(r.title)) {
+    // global 게시판의 미국 시황(마감 코멘트)만 수집하지 않는다(오너 지시
+    // 2026-09-25 — "유안타 미국 시황은 수집하지 않는다").
+    if (board.kind === "global" && US_MARKET_CONDITION_RE.test(r.title)) return null;
+    return { ...base, title: r.title, topic: isFxContent(r.title) ? "환율분석" : "이슈분석" };
   }
-  return { ...base, title: r.title, stockName: board.fixedLabel, symbol: null, category: "산업", market: "kr" };
+  return null; // 정의되지 않은 게시판 kind — 안전하게 건너뜀
 }
 
 console.log(`▶ 유안타증권 리서치 수집(${BOARDS.map((b) => b.label).join("·")}): 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);

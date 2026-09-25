@@ -36,6 +36,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -55,7 +56,7 @@ const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -130,7 +131,7 @@ const weeklyItems = [];
   const title = metaContent(html, "articleTitle");
   const summary = metaContent(html, "pageSummary");
   const date = parsePublicationDate(metaContent(html, "publicationDate"));
-  if (title && date) {
+  if (title && date && !isCommonExcludedContent(title, "산업")) {
     weeklyItems.push({
       id: `weekly-commentary-${date}`,
       date,
@@ -158,7 +159,7 @@ const outlookItems = [];
   const title = metaContent(html, "articleTitle");
   const summary = metaContent(html, "pageSummary");
   const date = guessSemiAnnualDate(title, summary);
-  if (title && date) {
+  if (title && date && !isCommonExcludedContent(title, "산업")) {
     outlookItems.push({
       id: `global-investment-outlook-${date}`,
       date,

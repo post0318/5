@@ -33,6 +33,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -54,7 +55,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
@@ -109,6 +110,7 @@ function parseItems(html) {
     if (!date) continue;
     const isIndustry = category.includes("산업분석");
     if (!category.includes("기업분석") && !isIndustry) continue; // 그 외 분류(경제분석 등)는 제외
+    if (isCommonExcludedContent(`${stripHtml(rawStock)} ${stripHtml(rawTitle)}`, isIndustry ? "산업" : "기업")) continue;
     items.push({
       id: sno,
       date,

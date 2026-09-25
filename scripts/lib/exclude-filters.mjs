@@ -62,17 +62,44 @@ const CALENDAR_RE = /캘린더|캘박|calendar|일정표/i;
 const RECOMMEND_RE = /추천\s*종목/;
 const ALT_INVEST_RE = /대체투자/;
 const COMMODITY_RE = /원자재|commodit/i;
+// 리츠(오너 지시 2026-09-25 — "공통으로 리츠는 수집에서 제외한다") — ETF/ETP와
+// 같은 성격으로 보고 카테고리 구분 없이 전부 제외.
+const REIT_RE = /리츠|\bREITs?\b/i;
 
 /** 원자재(Commodity) 얘기면 true — 대체투자 중 이것만 수집한다. */
 export function isCommodityContent(text) {
   return COMMODITY_RE.test(String(text ?? ""));
 }
 
-/** 주간물·일정표·추천종목·원자재 외 대체투자면 true — 수집기가 건너뛴다. */
+/**
+ * 주간물·일정표·추천종목·리츠·ETF/ETP·ESG·원자재 외 대체투자면 true — 수집기가
+ * 건너뛴다. ETF/ETP·ESG 는 원래 `isEtfOrEtpContent`/`isEsgContent` 로 따로
+ * 불러써야만 걸러졌는데, 신한·하나·NH·KB·한국투자 등 먼저 만든 수집기들은 이걸
+ * 안 써서 뚫려 있었다(오너 지적 2026-09-25 — "etf etp 등은 공통에서
+ * 수집제외하고 있지?"/"esg도 공용모듈에서 처리안되고 있어?") — 서버 안전망
+ * (`src/lib/research-exclude.ts`)에도 같이 올려 전 소스에 한 번에 적용한다.
+ */
 export function isCommonExcludedContent(text, category) {
   const t = String(text ?? "");
-  if (COMMON_WEEKLY_RE.test(t) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t)) return true;
+  if (COMMON_WEEKLY_RE.test(t) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
+  if (ETF_RE.test(t) || ESG_RE.test(t)) return true;
   // 대체투자 규칙은 종목 리포트에 적용하지 않는다(서버 규칙과 동일).
   if (category === "기업") return false;
   return ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t);
+}
+
+/**
+ * 거시경제 이슈분석/환율분석 공용 FX 판정(오너 지적 2026-09-25 — "거시경제 fx
+ * 수집기준은 공통에서 반영하고 있지?"). 확인 결과 공통이 아니라 수집기마다
+ * 따로 FX_RE 를 두고 있었고, 심지어 삼성·iM·메리츠·IBK 는 경제/채권 게시판을
+ * 항상 "이슈분석"으로만 보내 환율분석 분기 자체가 없었다(실측 — iM 경제분석의
+ * "거침없는 원화 강세, 1,300원이 보인다"·"가속 페달을 밟은 달러-엔"이 전부
+ * 이슈분석으로 샘). 이 함수 하나로 모든 수집기가 통일해서 쓴다.
+ */
+const FX_RE =
+  /\bFX\b|환율|엔화|달러화|위안화|유로화|파운드화|원화\s*(?:강세|약세|절상|절하)|달러[-\s]?엔|달러\s*인덱스|\bDXY\b/i;
+
+/** 환율(FX) 얘기면 true — 거시경제 이슈분석/환율분석 중 어느 topic으로 보낼지 판정. */
+export function isFxContent(text) {
+  return FX_RE.test(String(text ?? ""));
 }

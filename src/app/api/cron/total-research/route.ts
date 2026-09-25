@@ -12,10 +12,15 @@ import { isCommonExcludedResearch } from "@/lib/research-exclude";
 export const maxDuration = 60;
 
 /**
- * 증권사 리서치 리포트 수집 수신처 — 신한투자증권 로컬 스크립트(scripts/
- * collect-shinhan-research.mjs)가 쓰지만, `source`를 body에 실어 보내면 다른
- * 증권사 수집 스크립트도 이 라우트를 그대로 재사용할 수 있게 만들었다(증권사
- * 하나로 한정하지 않음 — 스키마·라우트 모두 다중 소스 대비).
+ * 증권사·기관 리서치 리포트 수집 수신처(`kr_research`) — 47개 로컬 수집기
+ * 전부가 이 라우트 하나를 공유한다(오너 지시 2026-09-25 — "/cron/shinhan-
+ * research는 total-research로 수정이 맞고"). 원래 신한투자증권 수집기
+ * (scripts/collect-shinhan-research.mjs)가 첫 번째로 붙어 경로 이름이
+ * "shinhan-research"였지만, 처음부터 `source`를 body에 실어 보내는 다중
+ * 소스 스키마였고(증권사 하나로 한정하지 않음) 지금은 47곳 전부가 재사용
+ * 중이라 경로 이름을 실제 역할에 맞게 바꿨다. `source`는 이제 필수 —
+ * 기본값("신한투자증권")을 두지 않는다(오너 지시 — "source 미지정 시
+ * 기본값은 없는게 맞다", `/cron/macro-issues`와 동일 원칙).
  * bbs2.shinhansec.com/robots.txt 가 Disallow: / 라 다른 예외들과 동일하게
  * 개인용·로컬 실행 조건으로 오너 승인(CLAUDE.md 참조). 이 라우트 자체는
  * 크롤링을 하지 않는다 — 로컬에서 이미 수집된 결과를 받아 DB에 적재만 한다
@@ -66,7 +71,8 @@ export async function POST(req: Request) {
 
     const body = (await req.json()) as { items?: RawItem[]; source?: string; market?: string };
     if (!Array.isArray(body.items)) return Response.json({ error: "items 배열 필요" }, { status: 400 });
-    const source = body.source?.trim() || "신한투자증권";
+    const source = body.source?.trim();
+    if (!source) return Response.json({ error: "source 필요" }, { status: 400 });
     const market = body.market && isResearchMarketId(body.market) ? body.market : "kr";
 
     const now = new Date().toISOString();

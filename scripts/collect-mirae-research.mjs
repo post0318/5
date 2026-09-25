@@ -34,6 +34,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -55,7 +56,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
@@ -101,6 +102,7 @@ function parseItems(html) {
     const tm = title.match(TITLE_RE);
     const um = tm ? null : title.match(TITLE_US_RE);
     if (!tm && !um) continue; // 종목 없는 리포트 또는 US 외 해외시장
+    if (isCommonExcludedContent(rawSummary.trim() || rawTitle.trim(), "기업")) continue;
     const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
     const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
     items.push({
@@ -163,6 +165,7 @@ function parseIndustryItems(html, categoryId) {
     const title = rawSummary.trim() || rawTitle.trim();
     const market = classifyMarket(rawTitle.trim(), title);
     if (!market) continue; // 중국/인도 등 이 프로젝트가 다루지 않는 시장
+    if (isCommonExcludedContent(title, "산업")) continue;
     const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
     const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
     items.push({

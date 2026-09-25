@@ -1,5 +1,6 @@
 import "server-only";
 import { shinhanResearchCol } from "@/lib/db/shinhan-research";
+import { isCommonExcludedResearch } from "@/lib/research-exclude";
 import { fetchCompanyBlog } from "@/lib/news/companyBlog";
 import { fetchGoogleNewsRss, googleNewsUrl } from "@/lib/news/googleNews";
 import { fetchNaverNewsInRange } from "@/lib/news/naverNews";
@@ -106,11 +107,14 @@ async function countFromResearch(
   const until = new Date(Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000)
     .toISOString()
     .slice(0, 10);
-  const docs = await col
+  const rawDocs = await col
     .find({ category: "산업", date: { $gte: week.weekStart, $lte: until } })
     .sort({ date: -1 })
     .limit(800)
     .toArray();
+  // 공통 제외(오너 지시 2026-09-25) — 리츠·ETF/ETP·ESG·주간물·일정표·추천종목이
+  // 이슈 빈도 집계에 섞이지 않도록 다른 조회 경로와 동일한 안전망을 적용한다.
+  const docs = rawDocs.filter((d) => !isCommonExcludedResearch(`${d.stockName ?? ""} ${d.title ?? ""}`, d.category ?? "산업"));
 
   const out = new Map<string, { count: number; reports: IssueEvidenceReport[] }>();
   const seenByTopic = new Map<string, Set<string>>();

@@ -36,6 +36,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -57,7 +58,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 6;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
@@ -131,6 +132,126 @@ function kisPdfUrl(chunk) {
   return `https://file.koreainvestment.com/servlet/Download?file_path=research/research${m[1]}/&file_name=${encodeURIComponent(m[2])}`;
 }
 
+// 해외 기업분석(구 collect-kis-global-research.mjs, jkGubun=7) — "종목명
+// (TICKER USA):제목" 형식만 매칭, USA 외 시장은 건너뜀.
+const GLOBAL_TITLE_RE = /\(([A-Z][A-Z.]{0,5})\s+USA\)\s*:\s*(.*)$/;
+async function fetchGlobalPage(page) {
+  const url = new URL(LIST_URL);
+  url.searchParams.set("jkGubun", "7");
+  url.searchParams.set("rowsPerPages", String(PAGE_SIZE));
+  url.searchParams.set("currentPage", String(page));
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+function parseGlobalItems(html) {
+  const items = [];
+  for (const chunk of html.split("<li>").slice(1)) {
+    const idM = chunk.match(/doDetail\('(\d+)'\)/);
+    const titleM = chunk.match(/<span class="body_tit">\s*([^<]+?)\s*<\/span>/);
+    const summaryM = chunk.match(/<span class="body_sub">\s*([\s\S]*?)\s*<\/span>/);
+    const analystM = chunk.match(/<em>([^<]*)<\/em>\s*<em>([\d.]+)<\/em>/);
+    const headM = chunk.match(/<div class="head[^"]*">\s*([^<]+?)\s*<\/div>/);
+    if (!idM || !titleM || !analystM) continue;
+    const date = isoDate(analystM[2]);
+    if (!date) continue;
+    if (headM && /산업분석/.test(headM[1])) {
+      const sm = titleM[1].match(/^([^:：]+)[:：]\s*(.+)$/);
+      if (isCommonExcludedContent(titleM[1], "산업")) continue;
+      items.push({
+        id: idM[1],
+        date,
+        title: sm ? sm[2].trim() : titleM[1].trim(),
+        stockNameOverride: sm ? sm[1].trim() : titleM[1].trim(),
+        symbolHint: null,
+        analyst: analystM[1].trim(),
+        summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
+        detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
+        pdfUrl: kisPdfUrl(chunk),
+        category: "산업",
+        market: "us",
+      });
+      continue;
+    }
+    const tm = titleM[1].match(GLOBAL_TITLE_RE);
+    if (!tm) continue;
+    const [, code, headline] = tm;
+    if (isCommonExcludedContent(headline.trim(), "기업")) continue;
+    items.push({
+      id: idM[1],
+      date,
+      title: headline.trim(),
+      stockNameOverride: titleM[1].split("(")[0].trim(),
+      symbolHint: code,
+      analyst: analystM[1].trim(),
+      summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
+      detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
+      pdfUrl: kisPdfUrl(chunk),
+      category: "기업",
+      market: "us",
+    });
+  }
+  return items;
+}
+
+// 전략/이슈 리포트(구 collect-kis-strategy-research.mjs, jkGubun=6) — 종목
+// 무관, category:"산업" 고정.
+const NON_US_RE =
+  /중국|차이나|China|일본|엔화|엔캐리|Japan|유럽|Europe|베트남|Vietnam|인도(?!네시아)|India\b|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan/i;
+const US_HINT_RE = /미국|\bUS\b|나스닥|Nasdaq|S&P|다우|연준|\bFed\b|FOMC|월가|Wall Street/i;
+function classifyMarket(text) {
+  if (NON_US_RE.test(text)) return null;
+  if (US_HINT_RE.test(text)) return "us";
+  return "kr";
+}
+async function fetchStrategyPage(page) {
+  const url = new URL(LIST_URL);
+  url.searchParams.set("jkGubun", "6");
+  url.searchParams.set("rowsPerPages", String(PAGE_SIZE));
+  url.searchParams.set("currentPage", String(page));
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+function parseStrategyItems(html) {
+  const items = [];
+  for (const chunk of html.split("<li>").slice(1)) {
+    const idM = chunk.match(/doDetail\('(\d+)'\)/);
+    const headM = chunk.match(/<div class="head[^"]*">\s*([^<]+?)\s*<\/div>/);
+    const titleM = chunk.match(/<span class="body_tit">\s*([^<]+?)\s*<\/span>/);
+    const summaryM = chunk.match(/<span class="body_sub">\s*([\s\S]*?)\s*<\/span>/);
+    const analystM = chunk.match(/<em>([^<]*)<\/em>\s*<em>([\d.]+)<\/em>/);
+    if (!idM || !titleM || !analystM) continue;
+    const date = isoDate(analystM[2]);
+    if (!date) continue;
+    const label = headM ? headM[1].trim() : "전략/이슈";
+    if (label === "대체투자 Note" && !/원자재|commodit/i.test(titleM[1])) continue;
+    let title = titleM[1].trim();
+    const labelNorm = label.replace(/\s|Note/gi, "");
+    const pm = title.match(/^([^:：]+)[:：]\s*(.+)$/);
+    if (pm && pm[1].replace(/\s/g, "") === labelNorm) title = pm[2].trim();
+    const summary = summaryM ? excerpt(stripHtml(summaryM[1])) : "";
+    const market = classifyMarket(`${label} ${title} ${summary}`);
+    if (!market || isCommonExcludedContent(`${label} ${title}`, "산업")) continue;
+    items.push({
+      id: idM[1],
+      date,
+      title,
+      stockNameOverride: label,
+      symbolHint: null,
+      analyst: analystM[1].trim(),
+      opinion: "",
+      targetPrice: null,
+      summary,
+      market,
+      detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=6&id=${idM[1]}`,
+      pdfUrl: kisPdfUrl(chunk),
+      category: "산업",
+    });
+  }
+  return items;
+}
+
 function parseItems(html) {
   const items = [];
   for (const chunk of html.split("<li>").slice(1)) {
@@ -144,6 +265,7 @@ function parseItems(html) {
     const tm = titleM[1].match(TITLE_RE);
     if (tm) {
       const [, code, headline] = tm;
+      if (isCommonExcludedContent(headline.trim(), "기업")) { continue; }
       items.push({
         id: idM[1],
         date,
@@ -159,6 +281,7 @@ function parseItems(html) {
     }
     const im = titleM[1].match(INDUSTRY_TITLE_RE);
     if (!im) continue; // 콜론 형식도 아닌 예외적 제목 — 건너뜀
+    if (isCommonExcludedContent(`${im[1].trim()} ${im[2].trim()}`, "산업")) continue;
     items.push({
       id: idM[1],
       date,
@@ -196,6 +319,45 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   await sleep(400);
 }
 
+// 해외 기업분석(jkGubun=7, market:"us").
+console.log(`▶ 한국투자증권 해외 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+let gStop = false;
+for (let page = 1; page <= MAX_PAGES && !gStop; page++) {
+  const html = await fetchGlobalPage(page);
+  const items = parseGlobalItems(html);
+  if (items.length === 0) break;
+  for (const it of items) {
+    if (new Date(it.date) < cutoff) {
+      gStop = true;
+      break;
+    }
+    collected.push(it);
+  }
+  await sleep(400);
+}
+
+// 전략/이슈 리포트(jkGubun=6, category:"산업" 고정).
+console.log(`▶ 한국투자증권 전략/이슈 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+let sStop = false;
+for (let page = 1; page <= MAX_PAGES && !sStop; page++) {
+  const html = await fetchStrategyPage(page);
+  // classifyMarket 필터 때문에 items.length===0 이 페이지 끝을 뜻하지
+  // 않을 수 있어(그 페이지 항목이 전부 필터에 걸렸을 수 있음) 원본(필터 전)
+  // 항목 존재 여부로 페이지 끝을 판정한다.
+  const rawCount = (html.match(/doDetail\('\d+'\)/g) ?? []).length;
+  if (rawCount === 0) break;
+  const items = parseStrategyItems(html);
+  for (const it of items) {
+    if (new Date(it.date) < cutoff) continue;
+    collected.push(it);
+  }
+  const rawDates = [...html.matchAll(/<em>[^<]*<\/em>\s*<em>([\d.]+)<\/em>/g)].map((m) => isoDate(m[1])).filter(Boolean);
+  if (rawDates.length && new Date(Math.min(...rawDates.map((d) => new Date(d).getTime()))) < cutoff) {
+    sStop = true;
+  }
+  await sleep(400);
+}
+
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
@@ -226,32 +388,41 @@ if (DRY_RUN) {
   process.exit(0);
 }
 
-const items = collected.map((it) => ({
-  id: it.id,
-  date: it.date,
-  title: it.title,
-  stockName: it.stockNameOverride ?? nameByCode.get(it.symbolHint) ?? it.symbolHint,
-  symbol: it.symbolHint,
-  analyst: it.analyst,
-  opinion: it.opinion,
-  targetPrice: it.targetPrice,
-  summary: it.summary,
-  pdfUrl: it.pdfUrl ?? it.detailUrl, // PDF 우선, 없으면 상세 페이지
-  views: null,
-  category: it.category,
-}));
+// 해외/전략 병합으로 market이 kr/us 섞이므로 market별로 나눠 전송.
+const byMarket = new Map();
+for (const it of collected) {
+  const market = it.market ?? "kr";
+  if (!byMarket.has(market)) byMarket.set(market, []);
+  byMarket.get(market).push({
+    id: it.id,
+    date: it.date,
+    title: it.title,
+    stockName: it.stockNameOverride ?? nameByCode.get(it.symbolHint) ?? it.symbolHint,
+    symbol: it.symbolHint,
+    analyst: it.analyst,
+    opinion: it.opinion,
+    targetPrice: it.targetPrice,
+    summary: it.summary,
+    pdfUrl: it.pdfUrl ?? it.detailUrl, // PDF 우선, 없으면 상세 페이지
+    views: null,
+    category: it.category,
+  });
+}
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const up = await fetch(IMPORT_URL, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ items, source: "한국투자증권" }),
-});
-const upBody = await up.text();
-if (!up.ok) {
-  console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+
+for (const [market, items] of byMarket) {
+  const up = await fetch(IMPORT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ items, source: "한국투자증권", market }),
+  });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ 앱 전송 실패(market=${market}) HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`\n✔ 앱 전송 완료(market=${market}, ${items.length}건): ${upBody}`);
 }
-console.log(`\n✔ 앱 전송 완료: ${upBody}`);

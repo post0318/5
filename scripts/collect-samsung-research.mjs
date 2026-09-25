@@ -78,7 +78,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -100,7 +100,7 @@ const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const MACRO_IMPORT_URL = (
   ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
@@ -143,6 +143,9 @@ const KR_UNLISTED_RE = /^(.+?)\s*\(비상장\)\s*[:：]\s*(.+)$/;
 const SECTOR_OPINION_RE = /\s*\((?:OVERWEIGHT|NEUTRAL|UNDERWEIGHT)\)\s*$/i;
 
 const UNLISTED_LABEL_RE = /비상장/;
+// "화장품 수출 데이터북"(정동희, 10일 단위 반복 통계집) — 분석이 아니라 정기
+// 데이터 집계라 위클리와 같은 취지로 제외(오너 지시 2026-09-25).
+const EXPORT_DATABOOK_RE = /수출\s*데이터북/;
 const ITEM_RE =
   /downloadPdf\('([^']+)','(\d+)','(\d+)'\)[\s\S]*?<dt><strong>([^<]+)<\/strong><\/dt>[\s\S]*?<span>([\d-]+)&nbsp;[\d:]+<\/span>\s*<span>([^<]*)<\/span>\s*<span>([^<]*)<\/span>/g;
 
@@ -183,11 +186,33 @@ function baseItem(fileName, date, author) {
   };
 }
 
+// 시리즈 라벨이 실제 다루는 시장이 게시판 기본 market과 다른 경우 재분류(오너
+// 지시 2026-09-25) — "Now Japan 시리즈"는 us 게시판(industry2)에 실려도 일본
+// 얘기라 JP로, "중국 전기차"는 중국 얘기라 CH로 보낸다.
+const JP_SERIES_RE = /^Now\s*Japan/i;
+const CH_SERIES_RE = /^중국\s*전기차/;
+// "Tech Talk 시즌2"는 국내기업(industry1) 게시판에 실려도 애플 iPhone Duo 등
+// 해외 빅테크 얘기라 미국으로 보낸다(오너 확인 2026-09-25 — PDF 내용 대조,
+// "이건 미국 산업분석 이야기인데").
+const TECH_TALK_RE = /^Tech\s*Talk/i;
+// 국내 디지털자산/조각투자/STO 산업 리포트는 제외한다(오너 지시 2026-09-25 —
+// "kr 산업분석 — 한국 STO 한국은 조각투자 STO, 디지털자산을 제외하고 미국은
+// 유지한다"). us 쪽(예: 미국 스테이블코인 얘기)은 그대로 수집.
+const KR_DIGITAL_ASSET_RE = /조각\s*투자|\bSTO\b|디지털\s*자산/i;
+
 // 티커/코드 없는 글 → 산업(라벨 추출). 국내에서 라벨에 "비상장"이면 인사이트로.
 function industryItem(base, title, board) {
   const { label: rawLabel, headline } = industryLabelAndHeadline(title);
   const label = rawLabel.replace(SECTOR_OPINION_RE, "").trim() || "산업";
-  const unlisted = board.market === "kr" && UNLISTED_LABEL_RE.test(label);
+  let market = board.market;
+  if (market === "us") {
+    if (JP_SERIES_RE.test(label)) market = "jp";
+    else if (CH_SERIES_RE.test(label)) market = "ch";
+  } else if (market === "kr" && TECH_TALK_RE.test(label)) {
+    market = "us";
+  }
+  if (market === "kr" && KR_DIGITAL_ASSET_RE.test(`${label} ${title}`)) return null;
+  const unlisted = market === "kr" && UNLISTED_LABEL_RE.test(label);
   return {
     ...base,
     // "[Tech Talk 시즌2]: 애플 …"처럼 대괄호 뒤에 콜론이 또 붙는 경우 정리.
@@ -196,17 +221,18 @@ function industryItem(base, title, board) {
     symbol: null,
     category: "산업",
     source: unlisted ? UNLISTED_SOURCE : SOURCE,
+    marketOverride: market !== board.market ? market : undefined,
   };
 }
 
 function parseTitle(base, title, board) {
-  if (board.kind === "macro") return { ...base, title, topic: "이슈분석" };
+  // 공용 FX 판정(오너 지적 2026-09-25 — "거시경제 fx 수집기준은 공통에서 반영하고\n  // 있지?"): 경제·채권 게시판이 여태 FX 분기 없이 전부 이슈분석으로만 갔다.\n  if (board.kind === "macro") return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
   // 종목 리포트는 아래 공통 규칙 대상이 아니다.
   const isStockReport =
     (board.kind === "us" && TITLE_RE.test(title)) || (board.kind === "krCompany" && KR_TITLE_RE.test(title));
   // 원자재 글은 어느 게시판이든 거시경제 이슈분석으로(대체투자는 공통 필터가
   // 원자재만 남긴다).
-  if (!isStockReport && isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+  if (!isStockReport && isCommodityContent(title)) return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
   if (board.kind === "fixed") {
     // Daily시황은 "국내 마감시황"·"미국 마감시황" 둘을 함께 다룬다 — 미국 쪽은
     // 국내 시황과 market이 달라야 하므로 별도 라벨·market으로 분리한다(오너 지시
@@ -280,6 +306,7 @@ function parseItems(html, board) {
     if (isEsgContent(title)) continue;
     // 공통 제외 — 주간물·일정표·추천종목·원자재 외 대체투자(오너 지시 2026-09-25).
     if (isCommonExcludedContent(title)) continue;
+    if (EXPORT_DATABOOK_RE.test(title)) continue;
     const it = parseTitle(baseItem(fileName, date, author.trim() || prefixAuthor), title, board);
     if (it) items.push({ ...it, market: it.marketOverride ?? board.market ?? null, board: board.gubun });
   }

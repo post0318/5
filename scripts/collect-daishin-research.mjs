@@ -67,7 +67,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -88,7 +88,7 @@ const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const MACRO_IMPORT_URL = (
   ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
@@ -242,7 +242,6 @@ const STRATEGY_SERIES_RE =
 const STRATEGY_PDF_RE = /THE_GLOBAL/i;
 const MACRO_RE =
   /AI\s*Economist|Fed\s*Oracle|FOMC|BOJ|ECB|금통위|연준|중앙은행|기준금리|금리|국채|채권|물가|인플레|CPI|PPI|PCE|GDP|PMI|고용|실업|임금|소매판매|산업생산|기계수주|주택가격|경기|경제지표|매크로|Macro|환율|\bFX\b|달러|엔화|위안/i;
-const FX_RE = /환율|\bFX\b/i;
 const COMPANY_SERIES_RE = /Issue\s*Comment|Issue\s*&\s*News|기업\s*분석|Initiat|Company|실적\s*(?:리뷰|프리뷰)|Preview|Review/i;
 // 기업분석 PDF 1쪽: "휴젤\n(145020) 미국에서 …", "삼성전자\n(005930)"
 const PDF_CODE_RE = /\((\d{6})\)/g;
@@ -313,7 +312,7 @@ async function classify(it) {
     return { kind: "macro", topic: "이슈분석", title: full, rule: "5 원자재" };
   }
   if (MACRO_RE.test(text)) {
-    return { kind: "macro", topic: FX_RE.test(text) ? "환율분석" : "이슈분석", title: full, rule: "6 거시 키워드" };
+    return { kind: "macro", topic: isFxContent(text) ? "환율분석" : "이슈분석", title: full, rule: "6 거시 키워드" };
   }
 
   // 7. 국내 종목

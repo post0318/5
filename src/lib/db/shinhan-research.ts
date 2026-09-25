@@ -327,13 +327,12 @@ const MARKET_CONDITION_STOCKNAMES = new Set([
   "삼성증권 Daily시황",
   "삼성증권 미국 시황",
   // 한경 경유 → 직접 수집 전환 증권사들의 데일리 시황 게시판(오너 결정 2026-09-25,
-  // 삼성증권과 같은 기준 — 데일리·시황은 시황).
-  "iM증권 Morning Brief",
+  // 삼성증권과 같은 기준 — 데일리·시황은 시황). iM증권 Morning Brief(R_E010)는
+  // 이후 게시판째 수집 제외(오너 결정 2026-09-25 — "im증권 Morning Brief는
+  // 수집제외다") — 라벨은 더 이상 생성되지 않는다.
   "메리츠 Strategy Daily",
   "IBKS Daily",
   "대신증권 시황",
-  // 유안타 글로벌 투자전략 게시판의 "AI 미국 주식시장 마감 시황"(데일리, market:"us").
-  "유안타 미국 시황",
 ]);
 // stockName 뒤에 " | Weekly" 같은 부가 표기가 붙어 정확히 일치하지 않는
 // 경우가 있어(예: "KB Global Tracker+ | Weekly") 접두어로도 매칭(오너 지적
@@ -372,7 +371,6 @@ const STRATEGY_STOCKNAMES = new Set([
   "IBK 투자전략",
   "대신증권 투자전략",
   "한화 투자전략",
-  "유안타 투자전략",
 ]);
 // 미래에셋증권 "월스트리트파인더 Ep.201, 202, ..." — 매회 에피소드 번호가
 // 붙어 정확히 일치하지 않아 접두어로 매칭. 계절성·금리 대응·엔비디아
@@ -458,12 +456,6 @@ const EQUITY_HINT_RE =
 // ("FOMC Minutes"처럼 본문에 흔한 채권 키워드가 하나도 없는 경우 있음,
 // 오너 지적 2026-09).
 const BOND_SOURCES = new Set(["FRB"]);
-// ESG는 산업분석/투자전략/시황 어디에도 안 맞아 이 탭 범위 밖으로 보고
-// 제외한다(오너 지시, 2026-09 — "esg는 제외하라"). getIndustryResearch()
-// 조회 시점에 적용(분류가 아니라 제외라 classifyResearchTopic() 이 아닌
-// 별도 필터).
-// 붙여 쓴 시리즈명("The ESGVerse" — 메리츠, 2026-09-25 실측)도 잡도록 뒤쪽 \b 는 뺐다.
-const ESG_EXCLUDE_RE = /\bESG/i;
 
 /**
  * 해외 IB/자산운용사 리서치 5곳(오너 지시, 2026-09-19 — 골드만삭스·JP모간·
@@ -688,15 +680,14 @@ export async function getIndustryResearch(
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
-  // ESG는 이 탭 범위 밖이라 제외한다(오너 지시, 2026-09 — "esg는 제외하라").
-  // KB "Global ESG Brief", SK증권 "ESG snapshot", NH "NH ESG Research",
-  // 미래에셋 "ESG Strategy"/"[ESG Issue Comment]" 등 여러 증권사 수집기에
-  // 걸쳐 있어(실측 90일 15건) 수집기별로 개별 제외하는 대신 조회 시점에
-  // 한 번에 걸러낸다.
-  // 공통 제외(주간물·일정표·추천종목·원자재 외 대체투자, 오너 지시 2026-09-25)도
-  // 이미 쌓인 문서에 함께 적용 — 수신 라우트가 새 문서는 이미 거른다.
+  // 공통 제외(리츠·ETF/ETP·ESG·주간물·일정표·추천종목·원자재 외 대체투자,
+  // 오너 지시 2026-09-25) — 이미 쌓인 문서에 함께 적용, 수신 라우트가 새
+  // 문서는 이미 거른다. ESG(KB "Global ESG Brief"·NH "NH ESG Research" 등,
+  // 실측 90일 15건)도 이 공용 필터 하나로 걸러진다 — 예전엔 여기 별도
+  // ESG_EXCLUDE_RE 가 있었으나 research-exclude.ts 의 ESG_RE 와 정규식이
+  // 완전히 같아 중복이었다(오너 지적 2026-09-25 — "중복이면 없애도 된다").
   const withoutEsg = docs.filter(
-    (d) => !ESG_EXCLUDE_RE.test(`${d.stockName} ${d.title}`) && !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
+    (d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
   );
   const deduped = dedupeBySourceTitle(withoutEsg);
   // 투자전략(주식)/투자전략(채권)은 30일까지만(오너 지시, 2026-09 —

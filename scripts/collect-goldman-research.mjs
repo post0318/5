@@ -22,7 +22,7 @@
  *     둔다는 오너 판단("goldman-sachs-research는 산업분석으로 이동"). 다른
  *     4종과 달리 **백필·보존기간 180일**(오너 지시 — "여기만 백필기간을
  *     180일로", `shinhan-research.ts`의 `FOREIGN_RESEARCH_MAX_AGE_MS`).
- *     라우트(`/api/cron/shinhan-research`)는 POST 1회당 source 하나만
+ *     라우트(`/api/cron/total-research`)는 POST 1회당 source 하나만
  *     받으므로 두 그룹을 나눠 두 번 전송한다(한경 컨센서스 수집기와 동일
  *     패턴 — "항목별 실제 출처로 그룹핑해 나눠 전송").
  *
@@ -50,6 +50,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -73,7 +74,7 @@ const MAX_ITEMS = Number(ARGS.find((a) => a.startsWith("--max="))?.split("=")[1]
 const RESEARCH_DAYS = 180;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -110,6 +111,7 @@ async function parseItem(url) {
   if (!titleM || !dateM) return null;
   const title = decodeEntities(titleM[1]);
   const date = dateM[1];
+  if (isCommonExcludedContent(title, "산업")) return null;
 
   const paras = [...html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
     .map((m) => decodeEntities(m[1].replace(/<[^>]+>/g, "")))

@@ -25,13 +25,14 @@
  *   node scripts/collect-hana-research.mjs --dry-run   # 전송 안 하고 파싱 결과만
  *
  * ── 설정 (.env.local, 선택) ─────────────────────────────────────────
- *   SHINHAN_RESEARCH_IMPORT_URL="https://macroresearch.vercel.app/api/cron/shinhan-research"
+ *   SHINHAN_RESEARCH_IMPORT_URL="https://macroresearch.vercel.app/api/cron/total-research"
  *   CRON_SECRET="앱에 설정한 값이 있으면"
  * (신한 수집기와 같은 수신 라우트를 재사용 — source 로 구분됨)
  */
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -53,7 +54,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
@@ -119,7 +120,7 @@ function parseItems(html) {
     const [, bbsCd, bbsSeq, rawTitle, rawDate, rawBody] = m;
     const title = stripHtml(rawTitle);
     const date = isoDate(rawDate);
-    if (!date) continue;
+    if (!date || isCommonExcludedContent(title, "기업")) continue;
     const tm = title.match(TITLE_RE);
     items.push({
       id: `${bbsCd}_${bbsSeq}`,
@@ -145,7 +146,7 @@ function parseIndustryItems(html) {
     const [, bbsCd, bbsSeq, rawTitle, rawDate, rawBody] = m;
     const title = stripHtml(rawTitle);
     const date = isoDate(rawDate);
-    if (!date) continue;
+    if (!date || isCommonExcludedContent(title, "산업")) continue;
     const tm = title.match(INDUSTRY_TITLE_RE);
     items.push({
       id: `${bbsCd}_${bbsSeq}`,
@@ -155,6 +156,103 @@ function parseIndustryItems(html) {
       symbolHint: null,
       opinion: "",
       targetPrice: null,
+      summary: excerpt(stripHtml(rawBody)),
+      pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
+      category: "산업",
+    });
+  }
+  return items;
+}
+
+// 글로벌 기업분석(pid=8&cid=3, 미국만 .US 필터) — 구
+// collect-hana-global-research.mjs.
+const GLOBAL_TITLE_RE = /^(.+?)\(([A-Za-z0-9.-]{1,10})\.US\)\s*:\s*(.+)$/;
+async function fetchGlobalPage(page) {
+  const url = new URL(LIST_URL);
+  for (const [k, v] of Object.entries({ pid: "8", cid: "3", srchTitle: "", srchWord: "", startDate: "1900-01-01", endDate: "9999-12-31" })) {
+    url.searchParams.set(k, v);
+  }
+  url.searchParams.set("curPage", String(page));
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+function parseGlobalItems(html) {
+  const items = [];
+  let rawRows = 0;
+  for (const m of html.matchAll(ITEM_RE)) {
+    rawRows += 1;
+    const [, bbsCd, bbsSeq, rawTitle, rawDate, rawBody] = m;
+    const title = stripHtml(rawTitle);
+    const date = isoDate(rawDate);
+    if (!date) continue;
+    const tm = title.match(GLOBAL_TITLE_RE);
+    if (!tm) continue;
+    if (isCommonExcludedContent(title, "기업")) continue;
+    items.push({
+      id: `${bbsCd}_${bbsSeq}`,
+      date,
+      title,
+      stockName: tm[1].trim(),
+      symbolHint: tm[2].toUpperCase(),
+      opinion: "",
+      targetPrice: null,
+      summary: excerpt(stripHtml(rawBody)),
+      pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
+      category: "기업",
+      market: "us",
+    });
+  }
+  return { items, rawRows };
+}
+
+// 글로벌 산업분석(cid=2)/투자전략(cid=1) — 구
+// collect-hana-global-industry-research.mjs. 목록 구조는 같지만 애널리스트·
+// "해외주식 > {카테고리}" 라벨을 추가로 캡처하는 별도 정규식이 필요.
+const GLOBAL_INDUSTRY_BOARDS = [
+  { cid: "1", label: "글로벌 투자전략" },
+  { cid: "2", label: "글로벌 산업분석" },
+];
+const NON_US_RE =
+  /중국|차이나|China|인도(?!네시아)|India\b|베트남|Vietnam|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan|일본|Japan|유럽|Europe/i;
+const US_HINT_RE = /미국|\bUS\b|나스닥|Nasdaq|S&P|다우|연준|\bFed\b|FOMC|월가|Wall Street|빅테크/i;
+function classifyMarket(text) {
+  if (NON_US_RE.test(text)) return null;
+  if (US_HINT_RE.test(text)) return "us";
+  return null;
+}
+const INDUSTRY_ITEM_RE =
+  /<a href="#" class="more_btn title" title="더보기" id="(\d+)_(\d+)">([^<]+)<\/a>[\s\S]{0,80}?<li class="mb7 m-info info">[\s\S]*?<span class="none m-name">([^<]*)<\/span>[\s\S]*?<span class="txtbasic">([\d.]+)<\/span>[\s\S]{0,400}?해외주식\s*>\s*([^<]+?)<\/li>[\s\S]{0,400}?<li class="mb7 j_bbsContn[^"]*">([\s\S]*?)<\/li>[\s\S]{0,600}?class="j_fileLink"[^>]*>([^<]*)<\/a>/g;
+async function fetchGlobalIndustryPage(cid, page) {
+  const url = new URL(LIST_URL);
+  for (const [k, v] of Object.entries({ pid: "8", srchTitle: "", srchWord: "", startDate: "1900-01-01", endDate: "9999-12-31" })) {
+    url.searchParams.set(k, v);
+  }
+  url.searchParams.set("cid", cid);
+  url.searchParams.set("curPage", String(page));
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+function parseGlobalIndustryItems(html) {
+  const items = [];
+  for (const m of html.matchAll(INDUSTRY_ITEM_RE)) {
+    const [, bbsCd, bbsSeq, rawTitle, analyst, rawDate, category, rawBody] = m;
+    const title = stripHtml(rawTitle);
+    const date = isoDate(rawDate);
+    if (!date) continue;
+    const market = classifyMarket(`${title} ${stripHtml(rawBody)}`);
+    if (!market || isCommonExcludedContent(`${category.trim()} ${title}`, "산업")) continue;
+    items.push({
+      id: `${bbsCd}_${bbsSeq}`,
+      date,
+      title,
+      stockName: category.trim(),
+      symbolHint: null,
+      analyst: analyst.trim(),
+      opinion: "",
+      targetPrice: null,
+      market,
       summary: excerpt(stripHtml(rawBody)),
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
       category: "산업",
@@ -201,6 +299,50 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   await sleep(400); // 예의상 간격
 }
 
+// 글로벌 기업분석(pid=8&cid=3, .US만).
+console.log(`▶ 하나증권 글로벌 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+let gStop = false;
+let gTotalRows = 0;
+for (let page = 1; page <= MAX_PAGES && !gStop; page++) {
+  const html = await fetchGlobalPage(page);
+  const { items, rawRows } = parseGlobalItems(html);
+  gTotalRows += rawRows;
+  if (rawRows === 0) break;
+  if (items.length === 0) continue;
+  for (const it of items) {
+    if (new Date(it.date) < cutoff) {
+      gStop = true;
+      break;
+    }
+    collected.push(it);
+  }
+  await sleep(400);
+}
+if (gTotalRows > 0 && !collected.some((it) => it.market === "us" && it.category === "기업")) {
+  console.log(`· 최근 ${DAYS}일 안에 미국(.US) 종목 리포트가 없습니다(목록 ${gTotalRows}건 정상 조회).`);
+}
+
+// 글로벌 산업분석(cid=2)/투자전략(cid=1).
+console.log(`▶ 하나증권 글로벌 산업분석/투자전략 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지 × ${GLOBAL_INDUSTRY_BOARDS.length}개 게시판`);
+for (const board of GLOBAL_INDUSTRY_BOARDS) {
+  let iStop = false;
+  for (let page = 1; page <= MAX_PAGES && !iStop; page++) {
+    const html = await fetchGlobalIndustryPage(board.cid, page);
+    const items = parseGlobalIndustryItems(html);
+    const rawCount = [...html.matchAll(INDUSTRY_ITEM_RE)].length;
+    if (rawCount === 0) break;
+    for (const it of items) {
+      if (new Date(it.date) < cutoff) continue;
+      collected.push(it);
+    }
+    const rawDates = [...html.matchAll(INDUSTRY_ITEM_RE)].map((m) => isoDate(m[5])).filter(Boolean);
+    if (rawDates.length && new Date(Math.min(...rawDates.map((d) => new Date(d).getTime()))) < cutoff) {
+      iStop = true;
+    }
+    await sleep(400);
+  }
+}
+
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음(정규식 재확인 필요).");
   process.exit(1);
@@ -226,34 +368,43 @@ if (DRY_RUN) {
 }
 
 // analyst 필드는 이 정규식에서 안정적으로 못 뽑아 빈 값으로 보냄(제목·요약·PDF가
-// 핵심이라 우선순위 낮음) — /api/cron/shinhan-research 는 analyst 없어도 저장됨.
+// 핵심이라 우선순위 낮음) — /api/cron/total-research 는 analyst 없어도 저장됨.
 // symbol 은 제목에서 이미 뽑은 6자리 코드를 그대로 넘겨 서버의 이름 검색을 건너뛴다.
-const items = collected.map((it) => ({
-  id: it.id,
-  date: it.date,
-  title: it.title,
-  stockName: it.stockName,
-  symbol: it.symbolHint,
-  analyst: "",
-  opinion: it.opinion,
-  targetPrice: it.targetPrice,
-  summary: it.summary,
-  pdfUrl: it.pdfUrl,
-  views: null,
-  category: it.category,
-}));
+// 글로벌 기업분석·산업분석 병합으로 market이 kr/us 섞이므로 market별로 나눠 전송.
+const byMarket = new Map();
+for (const it of collected) {
+  const market = it.market ?? "kr";
+  if (!byMarket.has(market)) byMarket.set(market, []);
+  byMarket.get(market).push({
+    id: it.id,
+    date: it.date,
+    title: it.title,
+    stockName: it.stockName,
+    symbol: it.symbolHint,
+    analyst: it.analyst ?? "",
+    opinion: it.opinion,
+    targetPrice: it.targetPrice,
+    summary: it.summary,
+    pdfUrl: it.pdfUrl,
+    views: null,
+    category: it.category,
+  });
+}
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const up = await fetch(IMPORT_URL, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ items, source: "하나증권" }),
-});
-const upBody = await up.text();
-if (!up.ok) {
-  console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+
+for (const [market, items] of byMarket) {
+  const up = await fetch(IMPORT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ items, source: "하나증권", market }),
+  });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ 앱 전송 실패(market=${market}) HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`\n✔ 앱 전송 완료(market=${market}, ${items.length}건): ${upBody}`);
 }
-console.log(`\n✔ 앱 전송 완료: ${upBody}`);

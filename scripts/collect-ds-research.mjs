@@ -23,6 +23,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -46,7 +47,7 @@ const MAX_PAGES = Number(arg("pages")) || 5;
 
 const BOARD_URL = "https://www.ds-sec.co.kr/bbs/board.php";
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -250,6 +251,15 @@ for (const r of usRows) {
     market: isUsTagged ? "us" : "kr",
   });
 }
+
+// 공통 배제(오너 지시 2026-09-25) — push 지점이 여러 곳이라 완성된 배열에서 한 번에 거른다.
+function pruneExcluded(arr) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (isCommonExcludedContent(`${arr[i].stockName} ${arr[i].title}`, arr[i].category)) arr.splice(i, 1);
+  }
+}
+pruneExcluded(krItems);
+pruneExcluded(usItems);
 
 console.log(`✔ 종목 매핑 — 국내 ${krItems.length}건 · 미국 ${usItems.length}건`);
 if (krItems.length + usItems.length === 0) {

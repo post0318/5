@@ -34,6 +34,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -55,7 +56,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -153,7 +154,7 @@ for (const id of seenIds) {
     const h1 = html.match(/<h1[^>]*>([\s\S]{0,300}?)<\/h1>/);
     const title = decodeEntities(h1?.[1]?.replace(/<[^>]+>/g, "") ?? "");
     const date = parseTitleDate(title);
-    if (!title || !date || new Date(date) < cutoff) {
+    if (!title || !date || new Date(date) < cutoff || isCommonExcludedContent(title, "산업")) {
       await sleep(250);
       continue;
     }

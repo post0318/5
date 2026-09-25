@@ -21,12 +21,13 @@
  *   node scripts/collect-shinhan-research.mjs --dry-run   # 전송 안 하고 파싱 결과만
  *
  * ── 설정 (.env.local, 선택) ─────────────────────────────────────────
- *   SHINHAN_RESEARCH_IMPORT_URL="https://macroresearch.vercel.app/api/cron/shinhan-research"
+ *   SHINHAN_RESEARCH_IMPORT_URL="https://macroresearch.vercel.app/api/cron/total-research"
  *   CRON_SECRET="앱에 설정한 값이 있으면"
  */
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -51,7 +52,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
@@ -60,19 +61,28 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const BASE = "https://bbs2.shinhansec.com/bbs/list/gicompanyanalyst";
-
 const isoDate = (s) => {
   const m = String(s).trim().match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 };
 
+function decodeEntities(s) {
+  return s
+    .replace(/&lsquo;|&rsquo;/g, "'")
+    .replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&ndash;|&mdash;/g, "-")
+    .replace(/&middot;/g, "·")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 // 반복되는 "신한생각: ..." 헤더가 본문에 여러 번 겹쳐 나오는 원본 특성상,
 // 앞부분만 발췌(요약 카드에 이미 노출되는 분량 정도)하고 개행은 공백으로 접는다.
 const EXCERPT_LEN = 300;
 function excerpt(text) {
-  const flat = String(text ?? "")
-    .replace(/&middot;/g, "·")
+  const flat = decodeEntities(String(text ?? ""))
     .replace(/\s*\n\s*/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -88,8 +98,8 @@ function excerpt(text) {
 // 스케줄(오너 지시, 2026-09 — "작성시간과 로드시간의 시차")로도 다음 실행
 // 때 자연 복구되지만, 한 번의 일시적 오류로 그 회차 전체를 날리지 않는 게
 // 더 안전하다.
-async function fetchPage(curPage, startId, attempt = 1) {
-  const url = new URL(BASE);
+async function fetchPage(board, curPage, startId, attempt = 1) {
+  const url = new URL(`https://bbs2.shinhansec.com/bbs/list/${board}`);
   url.searchParams.set("v", String(Date.now()));
   url.searchParams.set("curPage", String(curPage));
   url.searchParams.set("startPage", String(curPage));
@@ -104,7 +114,7 @@ async function fetchPage(curPage, startId, attempt = 1) {
     if (attempt < 3 && /fetch failed|SocketError|ECONNRESET|ETIMEDOUT/i.test(String(err.message ?? err))) {
       console.warn(`  ⚠ 페이지 ${curPage} 요청 실패(${attempt}회차), 재시도: ${err.message}`);
       await sleep(2000 * attempt);
-      return fetchPage(curPage, startId, attempt + 1);
+      return fetchPage(board, curPage, startId, attempt + 1);
     }
     throw err;
   }
@@ -121,7 +131,7 @@ let startId = undefined;
 let stop = false;
 
 for (let page = 1; page <= MAX_PAGES && !stop; page++) {
-  const data = await fetchPage(page, startId);
+  const data = await fetchPage("gicompanyanalyst", page, startId);
   const list = data.list ?? [];
   if (list.length === 0) break;
   for (const it of list) {
@@ -132,6 +142,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       break;
     }
     const pdfUrl = it.f3 || null;
+    if (isCommonExcludedContent(`${it.f2} ${it.f1}`, "기업")) continue;
     items.push({
       id: String(it.fn),
       date,
@@ -152,6 +163,175 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   await sleep(400); // 예의상 간격
 }
 
+// 산업분석(boardName=giindustry) — 구 collect-shinhan-industry-research.mjs.
+console.log(`▶ 신한투자증권 산업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+{
+  let iStartId;
+  let iStop = false;
+  for (let page = 1; page <= MAX_PAGES && !iStop; page++) {
+    const data = await fetchPage("giindustry", page, iStartId);
+    const list = data.list ?? [];
+    if (list.length === 0) break;
+    for (const it of list) {
+      const date = isoDate(it.f0);
+      if (!date) continue;
+      if (new Date(date) < cutoff) {
+        iStop = true;
+        break;
+      }
+      const stockName = it.f2 && it.f2 !== "-" ? it.f2.trim() : "산업";
+      let title = decodeEntities(String(it.f1 ?? "")).trim();
+      const pm = title.match(/^([^;]+);\s*(.+)$/);
+      if (pm && pm[1].trim() === stockName) title = pm[2].trim();
+      if (isCommonExcludedContent(`${stockName} ${title}`, "산업")) continue;
+      items.push({
+        id: String(it.fn),
+        date,
+        title,
+        stockName,
+        symbol: null,
+        analyst: it.f4 ?? "",
+        opinion: "",
+        targetPrice: null,
+        summary: excerpt(it.f7),
+        pdfUrl: it.f3 || null,
+        views: Number(it.f5) || null,
+        category: "산업",
+      });
+    }
+    const pages = data.pageInfo?.pages ?? [];
+    iStartId = pages.length > 1 ? pages[1] : undefined;
+    if (!iStartId) break;
+    await sleep(400);
+  }
+}
+
+// 해외 산업/기업분석(boardName=foreignstock, 미국만) — 구
+// collect-shinhan-overseas-research.mjs.
+console.log(`▶ 신한투자증권 해외 기업분석 수집: 최근 ${DAYS}일, 최대 30페이지`);
+const TITLE_US_RE = /\(([A-Z][A-Z.]{0,5})\.US\)\s*$/;
+{
+  let oStartId;
+  let oStop = false;
+  for (let page = 1; page <= 30 && !oStop; page++) {
+    const data = await fetchPage("foreignstock", page, oStartId);
+    const list = data.list ?? [];
+    if (list.length === 0) break;
+    for (const it of list) {
+      const date = isoDate(it.f0);
+      if (!date) continue;
+      if (new Date(date) < cutoff) {
+        oStop = true;
+        break;
+      }
+      const stockField = String(it.f2 ?? "").trim();
+      const tm = stockField.match(TITLE_US_RE);
+      if (!tm) {
+        if ((stockField === "-" || stockField === "") && !isCommonExcludedContent(it.f1, "산업")) {
+          items.push({
+            id: String(it.fn),
+            date,
+            title: it.f1,
+            stockName: "글로벌전략",
+            symbol: null,
+            analyst: it.f4 ?? "",
+            opinion: "",
+            targetPrice: null,
+            summary: excerpt(it.f7),
+            pdfUrl: it.f3 || null,
+            views: Number(it.f5) || null,
+            category: "산업",
+            market: "us",
+          });
+        }
+        continue;
+      }
+      if (isCommonExcludedContent(`${stockField} ${it.f1}`, "기업")) continue;
+      items.push({
+        id: String(it.fn),
+        date,
+        title: it.f1,
+        stockName: stockField.replace(TITLE_US_RE, "").trim(),
+        symbol: tm[1],
+        analyst: it.f4 ?? "",
+        opinion: "",
+        targetPrice: null,
+        summary: excerpt(it.f7),
+        pdfUrl: it.f3 || null,
+        views: Number(it.f5) || null,
+        category: "기업",
+        market: "us",
+      });
+    }
+    const pages = data.pageInfo?.pages ?? [];
+    oStartId = pages.length > 1 ? pages[1] : undefined;
+    if (!oStartId) break;
+    await sleep(400);
+  }
+}
+
+// 투자전략(gicomment)·경제분석(gieconomy) — 구 collect-shinhan-strategy-research.mjs.
+console.log(`▶ 신한투자증권 투자전략/경제분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+const STRATEGY_SEMI_RE = /^([^;]+);\s*(.+)$/;
+const STRATEGY_DASH_RE = /^(\S[^-]{0,20}\S)\s*-\s*(.+)$/;
+function splitStrategyLabel(title) {
+  const sm = title.match(STRATEGY_SEMI_RE);
+  if (sm) return { label: sm[1].trim(), rest: sm[2].trim() };
+  const dm = title.match(STRATEGY_DASH_RE);
+  if (dm) return { label: dm[1].trim(), rest: dm[2].trim() };
+  return { label: "투자전략", rest: title };
+}
+const STRATEGY_NON_US_RE =
+  /중국|차이나|China|일본|엔화|엔캐리|Japan|유럽|Europe|베트남|Vietnam|인도(?!네시아)|India\b|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan/i;
+const STRATEGY_US_HINT_RE = /미국|\bUS\b|나스닥|Nasdaq|S&P|다우|연준|\bFed\b|FOMC|월가|Wall Street|글로벌|Global/i;
+function classifyStrategyMarket(label, title) {
+  if (/^국내/.test(label) || /^국내/.test(title)) return "kr";
+  if (STRATEGY_NON_US_RE.test(`${label} ${title}`)) return null;
+  if (STRATEGY_US_HINT_RE.test(`${label} ${title}`)) return "us";
+  return "kr";
+}
+for (const board of ["gicomment", "gieconomy"]) {
+  let sStartId;
+  let sStop = false;
+  for (let page = 1; page <= MAX_PAGES && !sStop; page++) {
+    const data = await fetchPage(board, page, sStartId);
+    const list = data.list ?? [];
+    if (list.length === 0) break;
+    for (const it of list) {
+      const date = isoDate(it.f0);
+      if (!date) continue;
+      if (new Date(date) < cutoff) {
+        sStop = true;
+        break;
+      }
+      const rawTitle = decodeEntities(String(it.f1 ?? "")).trim();
+      const { label, rest } = splitStrategyLabel(rawTitle);
+      const market = classifyStrategyMarket(label, rawTitle);
+      if (!market) continue;
+      if (isCommonExcludedContent(`${label} ${rawTitle}`, "산업")) continue;
+      items.push({
+        id: String(it.fn),
+        date,
+        title: rest,
+        stockName: `투자전략 · ${label}`,
+        symbol: null,
+        analyst: it.f4 ?? "",
+        opinion: "",
+        targetPrice: null,
+        summary: excerpt(it.f7),
+        pdfUrl: it.f3 || null,
+        views: Number(it.f5) || null,
+        category: "산업",
+        market,
+      });
+    }
+    const pages = data.pageInfo?.pages ?? [];
+    sStartId = pages.length > 1 ? pages[1] : undefined;
+    if (!sStartId) break;
+    await sleep(400);
+  }
+}
+
 if (items.length === 0) {
   console.error("✗ 파싱 결과 0건. 게시판 구조가 바뀌었을 수 있음.");
   process.exit(1);
@@ -167,17 +347,28 @@ if (DRY_RUN) {
   process.exit(0);
 }
 
+// 산업분석·해외·투자전략 병합으로 market이 kr/us 섞이므로 market별로 나눠 전송.
+const byMarket = new Map();
+for (const it of items) {
+  const market = it.market ?? "kr";
+  if (!byMarket.has(market)) byMarket.set(market, []);
+  byMarket.get(market).push(it);
+}
+
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const up = await fetch(IMPORT_URL, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ items, source: "신한투자증권" }),
-});
-const upBody = await up.text();
-if (!up.ok) {
-  console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+
+for (const [market, group] of byMarket) {
+  const up = await fetch(IMPORT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ items: group, source: "신한투자증권", market }),
+  });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ 앱 전송 실패(market=${market}) HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`\n✔ 앱 전송 완료(market=${market}, ${group.length}건): ${upBody}`);
 }
-console.log(`\n✔ 앱 전송 완료: ${upBody}`);

@@ -55,7 +55,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -78,7 +78,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const MACRO_IMPORT_URL = (
   ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
@@ -198,7 +198,6 @@ const CH_TICKER_RE = /^([^[\]]+?)\s*\((\d{4,6})[.\s](HK|CH|SH|SZ)\)\s*[,:：]?\s
 const EARNINGS_FLASH_RE = /^\[Earnings Flash\]\s*(.+)$/i;
 const IPO_RE = /\[IPO\b|\bIPO 101\b/i;
 const DIGITAL_ASSET_RE = /디지털\s*자산|가상\s*자산|스테이블\s*코인|stablecoin|crypto/i;
-const FX_RE = /\bFX\b|환율/i;
 
 /** 영문 회사명 → 미국 티커(네이버 해외종목 자동완성). 확실할 때만, 실패하면 null. */
 const COMPANY_SUFFIX_RE =
@@ -252,7 +251,7 @@ function industryItem(base, title, market) {
   return { ...base, title: headline || title, stockName: label, symbol: null, category: "산업", market, source: SOURCE };
 }
 
-const macroTopic = (title) => (FX_RE.test(title) ? "환율분석" : "이슈분석");
+const macroTopic = (title) => (isFxContent(title) ? "환율분석" : "이슈분석");
 
 /** 게시판·제목 → 전송 항목. null 이면 제외. 반환 항목에 topic 이 있으면 이슈분석행. */
 async function classify(row, board) {

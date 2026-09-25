@@ -7,7 +7,7 @@
  *
  * 제목이 "[종목명/투자의견] 제목" 형식으로 고정돼 있어 종목명과 투자의견을
  * 함께 뽑는다. 종목코드는 목록에 없어 서버 라우트의 이름 검색(corpcode)에
- * 맡긴다(symbol: null 로 보내면 /api/cron/shinhan-research 가 resolveSymbol 로
+ * 맡긴다(symbol: null 로 보내면 /api/cron/total-research 가 resolveSymbol 로
  * 매핑한다 — 하나·교보 등과 같은 방식).
  *
  * PDF 는 로그인 없이 받아진다: /uploads/{글번호}/1/{파일명}.pdf (실측 확인).
@@ -23,6 +23,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -53,7 +54,7 @@ const LIST_URL = "https://www.bnkfn.co.kr/research/analysingCompany.jspx";
 const ISSUE_URL = "https://www.bnkfn.co.kr/research/analysingIssue.jspx";
 const ECON_URL = "https://www.bnkfn.co.kr/research/economyAnalyse.jspx";
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -263,7 +264,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       stop = true;
       break;
     }
-    collected.push(it);
+    if (!isCommonExcludedContent(`${it.stockName} ${it.title}`, it.category)) collected.push(it);
   }
   await sleep(400);
 }
@@ -281,7 +282,7 @@ for (const [listUrl, parser] of [
         stop = true;
         break;
       }
-      collected.push(it);
+      if (!isCommonExcludedContent(`${it.stockName} ${it.title}`, it.category)) collected.push(it);
     }
     await sleep(400);
   }

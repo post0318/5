@@ -50,7 +50,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -73,7 +73,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 20;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const MACRO_IMPORT_URL = (
   ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
@@ -189,7 +189,7 @@ function excerpt(text) {
 
 /** 게시판·제목 → 앱 목적지. null 이면 건너뜀. */
 function classify(board, row, title) {
-  if (board.kind === "macro") return { topic: "이슈분석" };
+  // 공용 FX 판정(오너 지적 2026-09-25) — 경제/채권 게시판이 FX 분기 없이 전부\n  // 이슈분석으로만 갔다.\n  if (board.kind === "macro") return { topic: isFxContent(title) ? "환율분석" : "이슈분석" };
   const { label, headline } = industryLabelAndHeadline(title);
   if (board.kind === "krCompany") {
     const bm = title.match(/^\[([^\]]+)\]\s*(.+)$/);
@@ -212,7 +212,7 @@ function classify(board, row, title) {
     };
   }
   // 원자재 글은 기업 리포트가 아니면 거시경제 이슈분석.
-  if (isCommodityContent(title)) return { topic: "이슈분석" };
+  if (isCommodityContent(title)) return { topic: isFxContent(title) ? "환율분석" : "이슈분석" };
   if (board.kind === "strategy") {
     const fixed = row.gubun === "DAIL" ? DAILY_LABEL : STRATEGY_LABEL;
     return { category: "산업", market: "kr", stockName: fixed, symbol: null, title: headline || title };

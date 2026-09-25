@@ -29,6 +29,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -49,7 +50,7 @@ const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 14;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -114,7 +115,7 @@ for (const hub of HUBS) {
       const pdfUrl = m[2].startsWith("http") ? m[2] : `https://www.dbresearch.com${m[2]}`;
       const title = decodeEntities(m[3]);
       const summary = decodeEntities(m[4]).slice(0, 300);
-      if (!date || !title || new Date(date) < cutoff) continue;
+      if (!date || !title || new Date(date) < cutoff || isCommonExcludedContent(title, "산업")) continue;
       const idMatch = pdfUrl.match(/PROD(\d+)/);
       const id = idMatch ? idMatch[1] : pdfUrl;
       if (!byId.has(id)) byId.set(id, { id, date, title, pdfUrl, summary });

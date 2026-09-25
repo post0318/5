@@ -37,6 +37,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -65,7 +66,7 @@ const BOARDS = [
   { cmsCd: "CM0078", label: "시장" }, // 주식시장 — STOCK_NM 이 전부 "시장전체"라 브라켓 필요
 ];
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -143,6 +144,7 @@ for (const board of BOARDS) {
         stockName = bm ? bm[1].trim() : "시장";
         title = bm ? (bm[2].trim() || bm[1].trim()) : rawTitle;
       }
+      if (isCommonExcludedContent(`${stockName} ${title}`, "산업")) continue;
       collected.push({
         id: String(r.NT_NO),
         date,

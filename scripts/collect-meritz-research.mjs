@@ -52,7 +52,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -75,7 +75,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const MACRO_IMPORT_URL = (
   ENV.MACRO_ISSUES_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/macro-issues"
@@ -224,14 +224,16 @@ function classify(row, board) {
     }
     // 코드 없는 글은 산업으로(종목명 열 값이 있으면 라벨로).
     if (isCommonExcludedContent(title)) return null;
-    if (isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+    if (isCommodityContent(title)) return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
     const { label, headline } = industryLabelAndHeadline(title);
     return { ...base, title: headline, stockName: row.stockCol || label, symbol: null, category: "산업" };
   }
 
   if (isCommonExcludedContent(title)) return null;
-  if (board.kind === "macro") return { ...base, title, topic: "이슈분석" };
-  if (isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
+  // 공용 FX 판정(오너 지적 2026-09-25) — 경제·채권 게시판이 FX 분기 없이 전부
+  // 이슈분석으로만 갔다.
+  if (board.kind === "macro") return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
+  if (isCommodityContent(title)) return { ...base, title, topic: isFxContent(title) ? "환율분석" : "이슈분석" };
 
   if (board.kind === "industry") {
     const { label, headline } = industryLabelAndHeadline(title);

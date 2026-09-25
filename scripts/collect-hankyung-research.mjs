@@ -53,6 +53,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 // IN/MA(산업/시장) 항목 중 대괄호 업종 태그가 없는 제목이 실은 특정 국내
 // 종목 얘기인 경우가 있다(실측, 오너 지적 2026-09 — 메리츠증권 "HD현대중공업
@@ -107,7 +108,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
@@ -171,6 +172,7 @@ function parseItems(html) {
     const title = stripHtml(rawTitle);
     const tm = title.match(STOCK_TITLE_RE);
     if (!tm) continue; // 종목코드 형식이 아니면(드묾) 건너뜀
+    if (isCommonExcludedContent(`${tm[1].trim()} ${title}`, "기업")) continue;
 
     const targetM = rowHtml.match(TARGET_RE);
     let opinion = "";
@@ -266,6 +268,7 @@ function parseIndustryItems(html, label, reportCode) {
       const particle = KR_PARTICLES.find((p) => restTitle.startsWith(p));
       if (particle) restTitle = restTitle.slice(particle.length);
       restTitle = restTitle.replace(/^[\s\-–—:,]+/, "").trim();
+      if (isCommonExcludedContent(`${stockHit.stockName} ${restTitle}`, "기업")) continue;
       items.push({
         id: reportIdx,
         date: dateM[1],
@@ -283,6 +286,7 @@ function parseIndustryItems(html, label, reportCode) {
     }
     const sector = bm ? bm[1].trim() : label;
     const restTitle = bm && bm[2].trim() ? bm[2].trim() : title;
+    if (isCommonExcludedContent(`${sector} ${restTitle}`, "산업")) continue;
 
     items.push({
       id: reportIdx,
@@ -387,7 +391,7 @@ const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
-// /api/cron/shinhan-research 는 body 최상위 하나의 source만 받아 그 안의 모든
+// /api/cron/total-research 는 body 최상위 하나의 source만 받아 그 안의 모든
 // items에 적용한다. 이 스크립트는 항목마다 작성 증권사(제공출처)가 달라서,
 // 실제 출처가 정확히 표시되도록(예: "iM증권") 증권사별로 그룹핑해 나눠 보낸다.
 // _id 충돌 방지를 위해 접두어를 "한경:" 로 네임스페이스(원 증권사 스크립트의

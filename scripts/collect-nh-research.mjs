@@ -57,7 +57,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
-import { isEsgContent } from "./lib/exclude-filters.mjs";
+import { isEsgContent, isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -79,7 +79,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
@@ -140,12 +140,15 @@ async function extractPdfExcerpt(pdfUrl) {
   return { summary: pdfText ? excerptFromPdfText(pdfText) : "", pdfText };
 }
 
-async function fetchPage(cursor) {
+// ditCd: 01=기업/산업분석 · 03=해외주식 · 02=투자전략 · 04=FICC ·
+// 05=자산관리솔루션 · 06=모닝미팅브리프(오너가 리서치 포털 스크린샷으로
+// 확인한 전체 메뉴 — collect-nh-overseas/-strategy-research.mjs 흡수).
+async function fetchPage(ditCd, cursor) {
   const body = new URLSearchParams({
     trName: "H3211",
     output: "json",
     isNext: cursor ? "true" : "false",
-    rsh_ppr_dit_cd: "01", // 기업/산업분석
+    rsh_ppr_dit_cd: ditCd,
     rsh_ppr_ser_cd: "",
     rmt_cnt: String(PAGE_SIZE),
     rsh_ppr_no: cursor?.no ?? "",
@@ -160,7 +163,7 @@ async function fetchPage(cursor) {
       "User-Agent": UA,
       "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
       "X-Requested-With": "XMLHttpRequest",
-      Referer: "https://www.nhsec.com/research/boardList.action?rsh_ppr_dit_cd=01",
+      Referer: `https://www.nhsec.com/research/boardList.action?rsh_ppr_dit_cd=${ditCd}`,
     },
     body: body.toString(),
   });
@@ -172,6 +175,64 @@ async function fetchPage(cursor) {
   // 정리한 뒤 파싱한다(JSON 구조 밖의 개행/탭도 공백으로 바뀌지만 무해).
   const text = raw.replace(/[\x00-\x1F]/g, " ");
   return JSON.parse(text);
+}
+
+// ── 해외기업분석(구 collect-nh-overseas-research.mjs) ──────────────────
+// "[해외기업분석/Apple] 아이폰18, 균형 잡힌 전략" — 회사명과 본문 제목 분리.
+const OVERSEAS_TITLE_RE = /^\[해외기업분석(?:\s+\S+)?\s*\/\s*([^\]]+)\]\s*(.+)$/;
+const STRATEGY_INSIDE_RE = /^\[전략\s*인사이드\/([^\]]+)\]\s*(.+)$/;
+const BRACKET_RE = /^\[([^\]]+)\]\s*(.+)$/;
+const NON_US_COUNTRY_RE = /중국|일본|유럽|홍콩|대만|동남아|한국|인도/;
+
+/** 한글/영문 회사명 → 미국 티커(네이버 해외종목 자동완성). 실패하면 null. */
+const usCache = new Map();
+async function resolveUsTicker(name) {
+  const key = name.trim();
+  if (usCache.has(key)) return usCache.get(key);
+  let hit = null;
+  try {
+    const res = await fetch(`https://ac.stock.naver.com/ac?q=${encodeURIComponent(key)}&target=stock`, {
+      headers: { "User-Agent": UA, accept: "application/json" },
+    });
+    if (res.ok) {
+      const items = (await res.json()).items ?? [];
+      hit =
+        items.find((i) => i.nationCode === "USA" && i.name?.trim() === key) ??
+        items.find((i) => i.nationCode === "USA") ??
+        null;
+      if (hit) hit = { symbol: String(hit.code).toUpperCase(), stockName: hit.name ?? key };
+    }
+  } catch {
+    /* 무시 */
+  }
+  usCache.set(key, hit);
+  await sleep(300);
+  return hit;
+}
+
+// ── 투자전략/FICC/자산관리솔루션/모닝미팅브리프(구 collect-nh-strategy-research.mjs) ──
+const STRATEGY_BOARDS = [
+  { ditCd: "02", label: "투자전략", forceMarket: null },
+  { ditCd: "04", label: "FICC", forceMarket: "us" },
+  { ditCd: "05", label: "자산관리솔루션", forceMarket: null },
+  { ditCd: "06", label: "모닝미팅브리프", forceMarket: "us" },
+];
+const DECOR_RE = /^◆\s*|\s*◆$/g;
+function decodeEntities(s) {
+  return s
+    .replace(/&lsquo;|&rsquo;/g, "'")
+    .replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+const NON_US_RE =
+  /중국|차이나|China|일본|엔화|엔캐리|Japan|유럽|Europe|베트남|Vietnam|인도(?!네시아)|India\b|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan/i;
+const US_HINT_RE = /미국|\bUS\b|나스닥|Nasdaq|S&P|다우|연준|\bFed\b|FOMC|월가|Wall Street|Global\s?Markets/i;
+function classifyMarket(text) {
+  if (NON_US_RE.test(text)) return null;
+  if (US_HINT_RE.test(text)) return "us";
+  return "kr";
 }
 
 function parseRows(json) {
@@ -190,7 +251,7 @@ let cursor = null;
 let stop = false;
 
 for (let page = 1; page <= MAX_PAGES && !stop; page++) {
-  const json = await fetchPage(cursor);
+  const json = await fetchPage("01", cursor);
   const rows = parseRows(json);
   if (rows.length === 0) break;
 
@@ -261,6 +322,148 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   await sleep(400);
 }
 
+// 해외기업분석 — "03"(해외주식 전용, 주력) + "01"(기업/산업분석, 드물게 해외
+// 리포트 섞임) 스캔. "01"은 위 국내 루프와 별개로 다시 훑는다(원본 3개
+// 스크립트일 때도 각자 따로 "01"을 불렀다 — 동작 동일, 중복 호출 신설 아님).
+console.log(`▶ NH투자증권 해외기업분석 수집: 최근 ${DAYS}일 (게시판 03+01)`);
+const overseasRawRows = [];
+for (const ditCd of ["03", "01"]) {
+  let oCursor = null;
+  let oStop = false;
+  for (let page = 1; page <= MAX_PAGES && !oStop; page++) {
+    const json = await fetchPage(ditCd, oCursor);
+    const rows = parseRows(json);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const date = isoDate(r.rsh_ppr_dru_dt);
+      if (date && new Date(date) < cutoff) {
+        oStop = true;
+        break;
+      }
+      overseasRawRows.push({ ...r, __ditCd: ditCd });
+    }
+    const last = rows[rows.length - 1];
+    oCursor = { no: last.rsh_ppr_no, date: last.rsh_ppr_dru_dt, time: last.rsh_ppr_dru_tm };
+    await sleep(400);
+  }
+}
+console.log(`  목록 ${overseasRawRows.length}건 중 해외기업분석 매핑 시도...`);
+for (const r of overseasRawRows) {
+  const rawTitle = String(r.rsh_ppr_til_cts ?? "");
+  const tm = rawTitle.match(OVERSEAS_TITLE_RE);
+  if (tm) {
+    const hit = await resolveUsTicker(tm[1]);
+    if (!hit) continue;
+    if (isCommonExcludedContent(tm[2].trim(), "기업")) continue;
+    collected.push({
+      id: r.rsh_ppr_no,
+      date: isoDate(r.rsh_ppr_dru_dt),
+      title: tm[2].trim(),
+      stockName: hit.stockName,
+      symbol: hit.symbol,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "기업",
+      market: "us",
+    });
+    continue;
+  }
+  // 산업/전략 폴백은 "03"(해외주식 전용)에서만 — "01"은 평범한 국내 종목도
+  // "[종목명] 헤드라인" 형식을 쓰기 때문(실측으로 확인한 버그 재발 방지).
+  if (r.__ditCd !== "03") continue;
+  const sm = rawTitle.match(STRATEGY_INSIDE_RE);
+  if (sm) {
+    if (NON_US_COUNTRY_RE.test(sm[1])) continue;
+    if (!r.hpge_fle_url_cts) continue;
+    if (isCommonExcludedContent(sm[2].trim(), "산업")) continue;
+    collected.push({
+      id: r.rsh_ppr_no,
+      date: isoDate(r.rsh_ppr_dru_dt),
+      title: sm[2].trim(),
+      stockName: "투자전략",
+      symbol: null,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "산업",
+      market: "us",
+    });
+    continue;
+  }
+  const gm = rawTitle.match(BRACKET_RE);
+  if (gm && !NON_US_COUNTRY_RE.test(gm[1]) && r.hpge_fle_url_cts && !isCommonExcludedContent(`${gm[1].trim()} ${gm[2].trim()}`, "산업")) {
+    collected.push({
+      id: r.rsh_ppr_no,
+      date: isoDate(r.rsh_ppr_dru_dt),
+      title: gm[2].trim(),
+      stockName: gm[1].trim(),
+      symbol: null,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "산업",
+      market: "us",
+    });
+  }
+}
+
+// 투자전략/FICC/자산관리솔루션/모닝미팅브리프(02/04/05/06).
+console.log(`▶ NH투자증권 투자전략/FICC/자산관리솔루션/모닝미팅브리프 수집: 최근 ${DAYS}일`);
+for (const board of STRATEGY_BOARDS) {
+  let sCursor = null;
+  let sStop = false;
+  for (let page = 1; page <= MAX_PAGES && !sStop; page++) {
+    const json = await fetchPage(board.ditCd, sCursor);
+    const rows = parseRows(json);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const date = isoDate(r.rsh_ppr_dru_dt);
+      if (date && new Date(date) < cutoff) {
+        sStop = true;
+        break;
+      }
+      const rawTitle = decodeEntities(String(r.rsh_ppr_til_cts ?? "")).replace(DECOR_RE, "").trim();
+      const bm = rawTitle.match(BRACKET_RE);
+      let stockName = bm ? bm[1].trim() : r.rsh_ppr_ser_cd_nm || board.label;
+      const title = bm ? bm[2].trim() : rawTitle;
+      if (board.ditCd === "04" && /대체투자|부동산/.test(stockName) && !/원자재|commodit/i.test(`${stockName} ${title}`)) continue;
+      if (board.ditCd === "04") stockName = `FICC · ${stockName}`;
+      const isDomesticFicc = board.ditCd === "04" && /\(국내\)/.test(stockName);
+      const market = isDomesticFicc ? "kr" : (board.forceMarket ?? classifyMarket(`${stockName} ${title}`));
+      if (!market) continue;
+      if (isCommonExcludedContent(`${stockName} ${title}`, "산업")) continue;
+      collected.push({
+        id: r.rsh_ppr_no,
+        date,
+        title: title || rawTitle,
+        stockName,
+        symbol: null,
+        analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+        opinion: "",
+        targetPrice: null,
+        summary: "",
+        pdfUrl: r.hpge_fle_url_cts || null,
+        views: null,
+        category: "산업",
+        market,
+      });
+    }
+    const last = rows[rows.length - 1];
+    sCursor = { no: last.rsh_ppr_no, date: last.rsh_ppr_dru_dt, time: last.rsh_ppr_dru_tm };
+    await sleep(400);
+  }
+}
+
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. API 구조가 바뀌었을 수 있음.");
   process.exit(1);
@@ -300,27 +503,45 @@ if (DRY_RUN) {
 // 비상장(unlisted) 항목은 일반 산업분석 풀과 섞이지 않도록 별도 source로
 // 나눠 전송한다(키움/KB 비상장리서치와 동일 패턴).
 const UNLISTED_SOURCE = "NH투자증권 비상장리서치";
-const normalItems = collected.filter((it) => !it.unlisted);
-const unlistedItems = collected.filter((it) => it.unlisted);
-
+// 해외기업분석/투자전략 병합으로 market이 kr/us 둘 다 섞이므로 market×source
+// (비상장 여부)로 나눠 전송 — KB/키움 병합본과 동일한 byGroup 패턴.
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
-for (const [source, items] of [
-  ["NH투자증권", normalItems],
-  [UNLISTED_SOURCE, unlistedItems],
-]) {
-  if (items.length === 0) continue;
+const byGroup = new Map();
+for (const it of collected) {
+  const source = it.unlisted ? UNLISTED_SOURCE : "NH투자증권";
+  const market = it.market ?? "kr";
+  const key = `${market}::${source}`;
+  if (!byGroup.has(key)) byGroup.set(key, { market, source, items: [] });
+  byGroup.get(key).items.push({
+    id: it.id,
+    date: it.date,
+    title: it.title,
+    stockName: it.stockName,
+    symbol: it.symbol ?? null,
+    analyst: it.analyst,
+    opinion: it.opinion ?? "",
+    targetPrice: it.targetPrice ?? null,
+    summary: it.summary ?? "",
+    pdfUrl: it.pdfUrl,
+    views: it.views ?? null,
+    category: it.category,
+  });
+}
+
+for (const [, group] of byGroup) {
+  const { market, source, items } = group;
   const up = await fetch(IMPORT_URL, {
     method: "POST",
     headers,
-    body: JSON.stringify({ items, source }),
+    body: JSON.stringify({ items, source, market }),
   });
   const upBody = await up.text();
   if (!up.ok) {
-    console.error(`✗ [${source}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    console.error(`✗ [${market}/${source}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }
-  console.log(`\n✔ [${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
+  console.log(`\n✔ [${market}/${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

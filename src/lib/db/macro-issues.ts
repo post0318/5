@@ -19,6 +19,19 @@ import { isCommonExcludedResearch } from "../research-exclude";
  *    — "키움증권은 경제전략의 이슈분석만 대상이 된다").
  *  - topic:"환율분석" ← 키움 게시판 코드 FE(rMenuGbNm "일간환율전망").
  */
+// FX 판정(오너 지적 2026-09-25 — "서버 안전망은 혹시 모를 구멍을 막기위한
+// 방어책"): 제외 규칙(isCommonExcludedResearch)은 서버가 무조건 재검사하는데
+// FX 분류(이슈분석→환율분석)는 수집기가 보낸 topic을 그대로 믿기만 해서
+// 원칙이 반쪽만 지켜지고 있었다. scripts/lib/exclude-filters.mjs의
+// isFxContent()와 같은 정규식 — 두 파일을 함께 고칠 것.
+const FX_RE =
+  /\bFX\b|환율|엔화|달러화|위안화|유로화|파운드화|원화\s*(?:강세|약세|절상|절하)|달러[-\s]?엔|달러\s*인덱스|\bDXY\b/i;
+
+/** 제목에 FX 신호가 있으면 이슈분석→환율분석으로 승격(반대 방향은 안 함 — 게시판 자체가 환율분석인 키움 FE 등은 이미 정확). */
+export function escalateToFxTopic(topic: "이슈분석" | "환율분석", title: string): "이슈분석" | "환율분석" {
+  return topic === "이슈분석" && FX_RE.test(title) ? "환율분석" : topic;
+}
+
 export interface MacroIssueDoc {
   _id: string; // `${source}:${topic}:${원본 게시글 번호}`
   source: string;
