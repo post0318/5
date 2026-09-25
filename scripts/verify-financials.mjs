@@ -496,11 +496,14 @@ const NONOP_KID_RE = /EquityMethod|EquityAffiliat|EquityInEarnings|IncomeFromEqu
 const NONOP_MEMBER_RE = /EquityAffiliate|EquityMethod|EquityCompan|^(OtherRevenueMember|OtherIncomeMember)$/i;
 function xbrlLinks(xml, kind) {
   const out = [];
-  for (const m of xml.matchAll(new RegExp(`<link:${kind}Link\\b[^>]*xlink:role="([^"]+)"[^>]*>([\\s\\S]*?)<\\/link:${kind}Link>`, "g"))) {
+  // 빈 링크(자기 닫힘 — Workiva `<link:calculationLink … />`)를 지운다 — 남기면 다음 역할의 호가 빈 역할 이름으로 읽힌다(재감사 2026-09-25)
+  xml = xml.replace(new RegExp(`<(?:link:)?${kind}Link\\b[^>]*\\/>`, "g"), "");
+  // 접두어 없는 링크베이스(2019 이전 Donnelley ActiveDisclosure — 기본 네임스페이스 <presentationLink>)도 읽는다(재감사 2026-09-25 — TSLA 2017~2019 10-K)
+  for (const m of xml.matchAll(new RegExp(`<(?:link:)?${kind}Link\\b[^>]*xlink:role="([^"]+)"[^>]*>([\\s\\S]*?)<\\/(?:link:)?${kind}Link>`, "g"))) {
     const loc = new Map();
-    for (const l of m[2].matchAll(/<link:loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) loc.set(id, h); }
+    for (const l of m[2].matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) loc.set(id, h); }
     const arcs = [];
-    for (const a of m[2].matchAll(new RegExp(`<link:${kind}Arc\\b([^>]*)\\/?>`, "g"))) {
+    for (const a of m[2].matchAll(new RegExp(`<(?:link:)?${kind}Arc\\b([^>]*)\\/?>`, "g"))) {
       const fr = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       if (fr && to) arcs.push({ fr, to, order: Number(/\border="([^"]+)"/.exec(a[1])?.[1] ?? 0), w: Number(/\bweight="([^"]+)"/.exec(a[1])?.[1] ?? 1) });
     }
@@ -510,9 +513,9 @@ function xbrlLinks(xml, kind) {
 }
 function xbrlLabels(lab) {
   const loc = new Map(), text = new Map(), labels = new Map();
-  for (const l of lab.matchAll(/<link:loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) loc.set(id, h); }
-  for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) { const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1]; if (id && !/documentation/i.test(m[1])) text.set(id, [...(text.get(id) ?? []), m[2].trim()]); }
-  for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) { const f = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? ""); if (f && t) labels.set(f, [...(labels.get(f) ?? []), ...t]); }
+  for (const l of lab.matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) loc.set(id, h); }
+  for (const m of lab.matchAll(/<(?:link:)?label\b([^>]*)>([^<]*)<\/(?:link:)?label>/g)) { const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1]; if (id && !/documentation/i.test(m[1])) text.set(id, [...(text.get(id) ?? []), m[2].trim()]); }
+  for (const a of lab.matchAll(/<(?:link:)?labelArc\b([^>]*)\/?>/g)) { const f = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? ""); if (f && t) labels.set(f, [...(labels.get(f) ?? []), ...t]); }
   return labels;
 }
 /** 공시 한 건의 손익계산서 총매출 줄 → { role, concept, label, nonopKids, nonopMembers, instUrl } | null */
@@ -521,7 +524,8 @@ async function faceRevenueLine(cik, accn) {
   const names = (await secJson(base + "/index.json")).directory.item.map((x) => x.name);
   const xsd = names.find((x) => /\.xsd$/i.test(x));
   const preN = names.find((x) => /_pre\.xml$/i.test(x)) ?? xsd, calN = names.find((x) => /_cal\.xml$/i.test(x)) ?? xsd, labN = names.find((x) => /_lab\.xml$/i.test(x)) ?? xsd;
-  const instN = names.find((x) => /_htm\.xml$/i.test(x));
+  // 인스턴스 — 인라인 XBRL 추출본(_htm.xml), 없으면(2019 이전 비인라인 공시) 링크베이스·요약이 아닌 .xml
+  const instN = names.find((x) => /_htm\.xml$/i.test(x)) ?? names.find((x) => /\.xml$/i.test(x) && !/_(pre|cal|def|lab)\.xml$|FilingSummary|^R\d+\.xml$/i.test(x));
   if (!preN || !calN) return null;
   const texts = new Map();
   const get = async (n) => { if (!texts.has(n)) texts.set(n, await secText(`${base}/${n}`)); return texts.get(n); };
@@ -667,21 +671,56 @@ async function secFaceRevenue(cik, sub, G, bank) {
   const PERIODIC = /^(10-K|10-Q|20-F|40-F)/;
   const pools = new Map(); // key → [{ start, end, val, filed, form, accn, nonop }]
   const faces = [];
-  for (const p of picks) {
+  const read = new Set();
+  const addFiling = async (p) => {
+    if (read.has(p.accn)) return;
+    read.add(p.accn);
     const fc = await faceRevenueLine(cik, p.accn);
-    if (!fc) continue;
+    if (!fc) return;
     const split = splitGate && (fc.nonopKids.length > 0 || fc.nonopMembers.length > 0);
     const custom = !fc.concept.startsWith("us-gaap_");
     const key = `${fc.concept}${split ? "|split" : ""}`;
     if (custom || split) {
-      if (!fc.instUrl) continue;
+      if (!fc.instUrl) return;
       const rows = await faceInstanceRevenue(fc, split);
       pools.set(key, [...(pools.get(key) ?? []), ...rows.map((r) => ({ ...r, filed: p.filed, form: p.form, accn: p.accn }))]);
     } else if (!pools.has(key)) {
       pools.set(key, (G[fc.concept.slice(8)]?.units?.USD ?? []).filter((e) => e.start && PERIODIC.test(e.form ?? "")));
     }
     faces.push({ ...p, ...fc, key, split });
-  }
+  };
+  for (const p of picks) await addFiling(p);
+  /**
+   * 읽은 범위(최근 10-K 3건·10-Q 4건) 밖 기간 — 항등식 미검증 열(앱 fin unv)은 SEC 직접 대조가 필수라(재감사 2026-09-25) 그 기간을
+   * 공시한 정기공시(원공시 + 비교 기간으로 다시 실은 후속 공시)를 더 읽는다. 제출 목록 recent 밖이면 과거 목록 파일까지.
+   * kind: FY·LTM(결산일 E 의 10-K 와 이후 2년 10-K) · Q(분기말 E 의 10-Q 와 1년 뒤 10-Q) · Q4(연간 + 9개월 누적 10-Q)
+   */
+  const pages = [rc];
+  let olderLoaded = false;
+  const extend = async (E, kind) => {
+    const t = Date.parse(E), day = 864e5;
+    const want = (form, rep) => {
+      const d = (Date.parse(rep) - t) / day;
+      if (kind === "FY" || kind === "LTM") return form === "10-K" && d >= -7 && d <= 800;
+      if (kind === "Q") return form === "10-Q" && d >= -3 && d <= 400;
+      return (form === "10-K" && d >= -7 && d <= 800) || (form === "10-Q" && d >= -100 && d <= 300);
+    };
+    const oldest = (rc.filingDate ?? []).at(-1) ?? "";
+    if (!olderLoaded && oldest > E) {
+      olderLoaded = true;
+      for (const f of sub.filings?.files ?? [])
+        if ((f.filingTo ?? "") >= E) {
+          try { pages.push(await secJson(`https://data.sec.gov/submissions/${f.name}`)); } catch { /* 과거 목록 조회 실패 — 대응값 없음(FAIL)으로 드러난다 */ }
+        }
+    }
+    const more = [];
+    for (const pg of pages)
+      for (let i = 0; i < (pg.form ?? []).length; i++)
+        if (!read.has(pg.accessionNumber[i]) && pg.reportDate[i] && want(pg.form[i], pg.reportDate[i]))
+          more.push({ accn: pg.accessionNumber[i], form: pg.form[i], filed: pg.filingDate[i], report: pg.reportDate[i] });
+    for (const p of more) await addFiling(p);
+    faces.sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? "")); // find() 는 최신 공시부터
+  };
   if (!faces.length && bank) {
     const tagPool = (t) => (G[t]?.units?.USD ?? []).filter((e) => e.start && PERIODIC.test(e.form ?? ""));
     for (const t of ["RevenuesNetOfInterestExpense", "Revenues"]) if (tagPool(t).length) { pools.set(t, tagPool(t)); faces.push({ key: t, any: true, label: `${t}(본표 매출 줄 판독 실패 — 은행 순수익 합성, 공통모드)` }); }
@@ -731,7 +770,7 @@ async function secFaceRevenue(cik, sub, G, bank) {
     if (!prior) return null;
     return { v: fy.v + cur.v - prior.v, split: fy.split, how: `사업연도 ${fy.v} + 당기 누적 ${cur.v} − 전년 동기 ${prior.v} (${fy.how})` };
   };
-  return { annualAt, quarterAt, ltmAt, split: faces.some((f) => f.split), faces };
+  return { annualAt, quarterAt, ltmAt, extend, split: faces.some((f) => f.split), faces };
 }
 
 // ── Yahoo (분할 이력·외부 대조) ───────────────────────────────────────
@@ -2217,6 +2256,19 @@ async function verifyUs(sym) {
         review.push({ item: `${q.col} fin 조립 미결(다음 지표)`, note: `gaps[${(q.gaps ?? []).join("·")}]${q.other?.length ? ` · 매출 외 줄 항등식 불성립(매출 값 유지): ${q.other.join("; ")}` : ""}` });
     }
     if (is && !fi.some((q) => q.rev?.length)) add("D", "fin 조립 항등식(매출 경로)", "-", { status: PASS, note: fi.length ? `매출 경로 불성립 없음(미결 ${fi.length}열은 검토 목록)` : "미완전 열 없음" });
+    // 항등식 미검증 열(매출 경로 식이 판정 불완전 — 앱은 매출 값을 둠) — 검토 목록이 아니라 A층 SEC 본표 직접 대조가 필수(재감사
+    // 2026-09-25: 판정 불완전 예외가 틀린 매출을 숨김 — WDC 주입 재현). 화면에 없는 옛 열·분기 전부(finIssues 의 저장값·기간).
+    // 대응값이 없으면 조용히 넘기지 않고 FAIL(외화 공시는 SEC 본표 매출이 없어 검증불가로 기록)
+    for (const q of fi.filter((x) => x.unv?.length)) {
+      const name = "항등식 미검증 열 매출 앱 = SEC 매출(직접 대조 필수)";
+      if (foreign || !revFace) { add("A", name, q.col, { status: foreign ? NA : FAIL, note: `SEC 본표 대조 불가(${foreign ? "외화 공시" : revFaceWhy}) · 미검증 식: ${q.unv.join("; ")}` }); continue; }
+      const kind = q.col === "LTM" ? "LTM" : /^FY/.test(q.col) ? "FY" : /Q4$/.test(q.col) ? "Q4" : "Q";
+      try { await revFace.extend(q.end, kind); } catch (e) { hardErrors.push(`항등식 미검증 열 ${q.col} SEC 공시 추가 판독 실패: ${String(e).slice(0, 80)}`); }
+      const e = kind === "FY" ? revFace.annualAt(q.end) : kind === "LTM" ? revFace.ltmAt(q.end) : revFace.quarterAt(q.end, kind === "Q4");
+      add("A", name, q.col, e == null
+        ? { status: FAIL, note: `SEC 본표 매출 대응값 없음(${q.start}~${q.end}) — 미검증 열을 대조 없이 둘 수 없음 · 앱 ${q.v} · 미검증 식: ${q.unv.join("; ")}` }
+        : vsSource(q.v, e.v, EXACT, `${e.how} · 미검증 식: ${q.unv.join("; ")}`));
+    }
   }
 
   // ── D. LTM 열 일관성(감사 결함 3 연계, 2026-09-25) — 인포맥스 분기로 LTM 손익 일부를 채우는 외화 공시(TSM·ASML·SPOT)에서
@@ -2727,9 +2779,10 @@ async function verifyUs(sym) {
             const adj = qs.parts.map((p) => ["cf", "nd"].map((k) => derivQ(k, p.end)).filter((x) => x != null));
             const rows = qs.parts.map((p, i) => {
               const d = imQ[i].rev - p.v;
-              if (d === 0) return { end: p.end, resid: 0, txt: `${p.end} 인포맥스 = SEC ${p.v}(조정 없음)` };
+              // 차이 0 이어도 파생상품 조정은 계산한다 — 조정이 있는데 차이가 0 이면 그 분기 잔차는 a(재감사 2026-09-25)
               const a = adj[i].reduce((t, x) => t + x, 0);
-              return { end: p.end, resid: d + a, txt: `${p.end} 인포맥스 ${imQ[i].rev} − SEC ${p.v} = ${d}, 파생상품 손익 ${adj[i].length ? a : "없음"} → 잔차 ${d + a}` };
+              if (d === 0) return { end: p.end, resid: d + a, txt: `${p.end} 인포맥스 = SEC ${p.v}, 파생 ${adj[i].length ? a : "없음"} → 잔차 ${d + a}` };
+              return { end: p.end, resid: d + a, txt: `${p.end} 인포맥스 ${imQ[i].rev} − SEC ${p.v} = ${d}, 파생 ${adj[i].length ? a : "없음"} → 잔차 ${d + a}` };
             });
             const resid = rows.reduce((t, x) => t + x.resid, 0);
             const inFy = (a, e) => { const d = (Date.parse(a.end) - Date.parse(e)) / 864e5; return d > -8 && d < 330; };

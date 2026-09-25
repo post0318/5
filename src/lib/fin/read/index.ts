@@ -71,6 +71,8 @@ export interface CellValue {
 export interface FilingStructure {
   shape: StatementShape | null;
   parents: Map<string, { parent: string; w: number }>;
+  /** 계산 구조 합계식 — 부모 → 모든 항(가중치). 항등식은 이것으로 판정(linkbase.calcParents) */
+  sums: Map<string, { to: string; w: number }[]>;
   labels: Map<string, Map<string, string>> | null;
   gaps: number;
 }
@@ -395,17 +397,17 @@ export class UsReader {
           const ff = await filingFiles(this.profile.cik, accn);
           const preT = await linkbaseText(ff, "pre");
           const shape = preT ? pickIncomeStatement(parsePresentation(preT)) : null;
-          if (!shape) return { shape: null, parents: new Map(), labels: null, gaps: Gap.LINKBASE };
+          if (!shape) return { shape: null, parents: new Map(), sums: new Map(), labels: null, gaps: Gap.LINKBASE };
           const calT = await linkbaseText(ff, "cal");
-          const parents = calT ? calcParents(parseCalculation(calT), shape.role, new Set(shape.lines.map((l) => l.id))) : new Map();
+          const { parents, sums } = calT ? calcParents(parseCalculation(calT), shape.role, new Set(shape.lines.map((l) => l.id))) : { parents: new Map(), sums: new Map() };
           let labels: FilingStructure["labels"] = null;
           if (withLabels) {
             const labT = await linkbaseText(ff, "lab").catch(() => null);
             labels = labT ? parseLabels(labT) : null;
           }
-          return { shape, parents, labels, gaps: calT ? 0 : Gap.LINKBASE };
+          return { shape, parents, sums, labels, gaps: calT ? 0 : Gap.LINKBASE };
         } catch {
-          return { shape: null, parents: new Map(), labels: null, gaps: Gap.LINKBASE };
+          return { shape: null, parents: new Map(), sums: new Map(), labels: null, gaps: Gap.LINKBASE };
         }
       })();
       this.structMemo.set(key, p);

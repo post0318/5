@@ -112,8 +112,15 @@ export interface StmtLine {
 export interface AssembledIs {
   col: Column;
   lines: StmtLine[];
-  /** 항등식(부모 = Σ 가중치 × 자식) 검사 — fails[k] 는 줄 at[k](부모)의 불성립, partial[k] = 값 없는 자식 줄이 있어 판정 불완전 */
-  identity: { ok: boolean; fails: string[]; at: number[]; partial: boolean[] };
+  /**
+   * 항등식(계산 구조 합계식: 부모 = Σ 가중치 × 항) 검사 — fails[k] 는 줄 at[k](부모)의 불성립, terms[k] = 그 식의 항 줄 위치,
+   * partial[k] = 판정 불완전(값 없는 항·표시 줄에 없는 항·둘 이상 식의 항·식 밖 값 있는 줄·파생 열 구성 공시의 식 구성 다름 — is.ts)
+   */
+  identity: {
+    ok: boolean; fails: string[]; at: number[]; partial: boolean[]; terms: number[][];
+    /** 어느 합계식에도 속하지 않는 값 있는 줄 위치(계산 구조가 없는 열은 값 있는 줄 전부) — 항등식 검사가 닿지 않는 줄 */
+    uncovered: number[];
+  };
 }
 
 /** 3층 — 지표 값. */
@@ -129,6 +136,8 @@ export interface MetricValue {
   reason?: string;
   /** 이 값을 비운 항등식 불성립(매출 경로) — AssembledIs.identity.fails 의 부분집합 */
   idFails?: string[];
+  /** 매출 경로의 판정 불완전 불성립 — 값은 두되 "항등식 미검증"(검증기가 SEC 직접 대조를 강제) */
+  unv?: string[];
 }
 export interface MetricSeries {
   metric: "revenue";
@@ -156,8 +165,11 @@ export interface FinAssembly {
   gaps: number;
   /** 원천 조회 실패 등 사람이 읽는 경고(조립 항등식 불성립 포함) */
   warnings: string[];
-  /** 조립 항등식 불성립 열 — rev = 매출 경로(그 열 매출을 비움), other = 매출과 무관한 줄(값은 둠, 다음 지표 미결) */
-  issues: { col: string; rev: string[]; other: string[] }[];
+  /**
+   * 조립 항등식 불성립 열 — rev = 매출 경로 완전 판정 불성립(그 열 매출을 비움), unv = 매출 경로 판정 불완전(값은 두고 "항등식
+   * 미검증" — 검증기 SEC 직접 대조 필수), other = 매출과 무관한 줄(값은 둠, 다음 지표 미결)
+   */
+  issues: { col: string; rev: string[]; other: string[]; unv: string[] }[];
   /** 가장 최근 정기공시 accn */
   latestAccn: string | null;
   at: string;

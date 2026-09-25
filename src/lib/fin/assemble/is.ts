@@ -108,7 +108,7 @@ async function assembleColumn(
   opts: { dimSplit: boolean },
 ): Promise<AssembledIs> {
   const sp = structureAccn(col);
-  const st = sp.accn ? await reader.structure(sp.accn) : { shape: null, parents: new Map(), labels: null, gaps: Gap.LINKBASE };
+  const st = sp.accn ? await reader.structure(sp.accn) : { shape: null, parents: new Map(), sums: new Map(), labels: null, gaps: Gap.LINKBASE };
   let gaps = col.gaps | st.gaps;
   const shapeLines = st.shape?.lines ?? FALLBACK.filter((c) => reader.facts(c).length).map((id) => ({ id, depth: 0, preferredLabel: undefined as string | undefined }));
   if (!st.shape) gaps |= Gap.LINKBASE;
@@ -183,29 +183,59 @@ async function assembleColumn(
     }
   }
 
-  // 항등식 — 부모 = Σ 가중치 × 자식(원통화 값, 공시 반올림 단위 × 항 수 허용). 자식 값이 없으면 0
+  // 항등식 — 계산 구조의 합계식마다 부모 = Σ 가중치 × 항(원통화 값, 공시 반올림 단위 × 항 수 허용). 값 없는 항은 0.
+  // 표시 부모(ln.parent)가 아니라 합계식 전체(st.sums)로 판정한다 — 한 줄이 둘 이상 식의 항일 수 있다(AMD 매출원가 세부 줄).
+  // 불성립 식은 다음 중 하나면 "판정 불완전(partial)" — 식 자체를 믿을 수 없어 값 섞임의 증거가 아니다(3층은 매출을 비우지 않고
+  // "항등식 미검증"으로 표시, 검증기가 SEC 직접 대조를 강제):
+  //  ① 값 없는 항(그 열 공시에 그 줄이 없음 — WDC 10-K 분기 요약표) ② 표시 줄에 없는 항(ORCL 2020 10-K — 부문 조정 항이 같은 역할에 섞임)
+  //  ③ 둘 이상 식의 항인 줄(TSLA 2018 — 매출 합계와 자동차 매출 합계 양쪽에 고객계약 매출이 걸림: 본표 칸은 차원 값인데 무차원 값을 읽음)
+  //  ④ 열 안에 어느 식에도 속하지 않는 값 있는 줄(계산 구조가 표시 구조를 다 덮지 않음)
+  //  ⑤ 파생 열(Q4·누적 차·LTM)의 다른 구성 공시에서 그 식의 항 구성이 다름(SBUX 2021Q4 — 10-Q 에서는 처분손익이 영업이익 밖)
+  const at = new Map(lines.map((l, i) => [l.id, i] as const));
+  const sums = new Map<string, { to: string; w: number }[]>([...(st.sums as Map<string, { to: string; w: number }[]>)].filter(([p]) => at.has(p) && !p.startsWith("syn:")));
+  // 부모 줄이 식을 이루는가(항 중 값 있는 줄이 하나라도 있어야 검사가 성립)
+  const termsValued = (i: number) => (sums.get(lines[i].id) ?? []).some((t) => at.has(t.to) && raws[at.get(t.to)!] != null);
+  const termOf = new Map<string, number>(); // 줄 → 값 있는 부모 식 수
+  for (const [p, ts] of sums) if (raws[at.get(p)!] != null) for (const t of ts) termOf.set(t.to, (termOf.get(t.to) ?? 0) + 1);
+  // 어느 식에도 속하지 않는 값 있는 줄(계산 구조가 없으면 값 있는 줄 전부) — 3층은 매출 줄이 여기 있으면 "항등식 미검증"
+  const uncovered = lines.map((l, i) => i).filter((i) => raws[i] != null && !lines[i].id.startsWith("syn:") && !(sums.has(lines[i].id) && termsValued(i)) && !termOf.has(lines[i].id));
+  const orphans = sums.size ? uncovered.map((i) => lines[i].id) : [];
+  const partsAll = col.segments.flatMap((s) => s.parts);
+  const otherAccns = [...new Set(partsAll.map((p) => p.accn).filter((x): x is string => !!x && x !== sp.accn))];
   const fails: string[] = [];
   const failAt: number[] = [];
   const failPartial: boolean[] = [];
-  lines.forEach((ln, i) => {
-    if (raws[i] == null || ln.id.startsWith("syn:")) return;
-    const kids = lines.map((k, j) => ({ k, j })).filter(({ k, j }) => k.parent === i && raws[j] != null && !k.id.startsWith("syn:"));
-    if (!kids.length) return;
-    const sum = kids.reduce((s, { k, j }) => s + k.w * (raws[j] as number), 0);
-    const unit = roundingUnit([raws[i] as number, ...kids.map(({ j }) => raws[j] as number)]);
-    const tol = unit * (kids.length + 1) * (col.segments.flatMap((s) => s.parts).length);
-    if (Math.abs((raws[i] as number) - sum) > tol) {
-      // 값이 없는 자식 줄(그 열 공시에 그 줄이 없음 — 예: WDC 10-K 분기 요약표는 매출·매출총이익만 싣고 매출원가는 없다)은 0 으로
-      // 보고 검사하되 "판정 불완전"으로 표시한다. 3층 매출 경로 판정은 판정 불완전 식으로 매출을 비우지 않는다(값 섞임의 증거가 아님)
-      const missing = lines.filter((k, j) => k.parent === i && raws[j] == null && !k.id.startsWith("syn:")).length;
-      fails.push(`${ln.id}: ${raws[i]} ≠ Σ ${sum}${missing ? ` (값 없는 자식 줄 ${missing}개 — 판정 불완전)` : ""}`);
-      failAt.push(i);
-      failPartial.push(missing > 0);
+  const failTerms: number[][] = [];
+  for (const [p, ts] of sums) {
+    const i = at.get(p)!;
+    if (raws[i] == null) continue;
+    const inLines = ts.filter((t) => at.has(t.to));
+    const valued = inLines.filter((t) => raws[at.get(t.to)!] != null);
+    if (!valued.length) continue;
+    const sum = valued.reduce((s, t) => s + (t.w < 0 ? -1 : 1) * (raws[at.get(t.to)!] as number), 0);
+    const unit = roundingUnit([raws[i] as number, ...valued.map((t) => raws[at.get(t.to)!] as number)]);
+    const tol = unit * (valued.length + 1) * partsAll.length;
+    if (Math.abs((raws[i] as number) - sum) <= tol) continue;
+    const why: string[] = [];
+    if (inLines.length > valued.length) why.push(`값 없는 항 ${inLines.length - valued.length}개`);
+    if (ts.length > inLines.length) why.push(`표시 줄에 없는 항 ${ts.length - inLines.length}개(${ts.filter((t) => !at.has(t.to)).map((t) => t.to).join(",")})`);
+    const multi = inLines.filter((t) => (termOf.get(t.to) ?? 0) > 1).map((t) => t.to);
+    if (multi.length) why.push(`둘 이상 식의 항 ${multi.join(",")}`);
+    if (orphans.length) why.push(`식 밖 값 있는 줄 ${orphans.length}개(${orphans.slice(0, 3).join(",")}${orphans.length > 3 ? "…" : ""})`);
+    for (const oa of otherAccns) {
+      const o = await reader.structure(oa);
+      const ot = o.sums.get(p);
+      const key = (xs: { to: string; w: number }[]) => xs.map((t) => `${t.to}${t.w < 0 ? "-" : "+"}`).sort().join("|");
+      if (!ot || key(ot) !== key(ts)) { why.push(`구성 공시 ${oa} 의 식 항 구성이 다름`); break; }
     }
-  });
+    fails.push(`${p}: ${raws[i]} ≠ Σ ${sum}${why.length ? ` (판정 불완전 — ${why.join("; ")})` : ""}`);
+    failAt.push(i);
+    failPartial.push(why.length > 0);
+    failTerms.push(inLines.map((t) => at.get(t.to)!));
+  }
   if (fails.length) gaps |= Gap.IDENTITY;
 
-  const parts = col.segments.flatMap((s) => s.parts);
+  const parts = partsAll;
   const column: Column = {
     key: col.key, kind: col.kind, fy: col.fy, fq: col.fq, start: col.start, end: col.end,
     src: parts.length === 1 && !col.yahoo ? provOf(parts[0]) : col.yahoo ? { accn: null, form: "YAHOO-Q", filed: null, source: "yahoo" } : parts.map(provOf),
@@ -215,7 +245,7 @@ async function assembleColumn(
     const w = reader.yahooWindow(col);
     if (w) { column.start = w.start; column.end = w.end; }
   }
-  return { col: column, lines, identity: { ok: fails.length === 0, fails, at: failAt, partial: failPartial } };
+  return { col: column, lines, identity: { ok: fails.length === 0, fails, at: failAt, partial: failPartial, terms: failTerms, uncovered } };
 }
 
 /** 연간·분기(+Q4D)·LTM 열을 조립한다. LTM 은 연간·분기 목록 끝에 각각 붙는다(같은 값). */
@@ -228,7 +258,7 @@ export async function assembleIncomeStatements(reader: UsReader, n: { annual: nu
   const dimSplit = noOpIncomeTag(reader);
   const lastA = annualCols[annualCols.length - 1];
   const lastQ = quarterCols[quarterCols.length - 1];
-  const labA = lastA ? await reader.structure(structureAccn(lastA).accn ?? "", true) : { shape: null, parents: new Map(), labels: null, gaps: 0 };
+  const labA = lastA ? await reader.structure(structureAccn(lastA).accn ?? "", true) : { shape: null, parents: new Map(), sums: new Map(), labels: null, gaps: 0 };
   const labQ = lastQ && structureAccn(lastQ).accn ? await reader.structure(structureAccn(lastQ).accn!, true) : labA;
   const annual: AssembledIs[] = [];
   for (const c of annualCols) annual.push(await assembleColumn(reader, c, labA, labels, { dimSplit }));

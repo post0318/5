@@ -38,9 +38,15 @@ export interface UsRevenue {
 
 export interface FinColIssue {
   col: string;
+  /** 열 기간·저장된 매출 — 검증기가 항등식 미검증 열을 SEC 본표와 직접 대조할 때 쓴다(화면에 없는 옛 열 포함) */
+  start: string;
+  end: string;
+  v: number | null;
   gaps: string[];
   rev: string[];
   other: string[];
+  /** 매출 경로 판정 불완전 — 값은 두되 "항등식 미검증" */
+  unv: string[];
 }
 
 const Q_KEY = /^(\d{4})Q([1-4])$/;
@@ -61,10 +67,13 @@ export function revenueFromFinSym(sym: FinSymDoc): UsRevenue {
   }
   annual.sort((a, b) => a.end.localeCompare(b.end));
   quarters.sort((a, b) => a.end.localeCompare(b.end));
-  const idf = new Map((sym.i ?? []).map(([k, r, o]) => [k, { rev: r, other: o }]));
+  const idf = new Map((sym.i ?? []).map(([k, r, o, u]) => [k, { rev: r, other: o, unv: u ?? [] }]));
   const issues: FinColIssue[] = sym.c
     .filter((c) => c[6] || idf.has(c[0]))
-    .map((c) => ({ col: c[0], gaps: gapNames(c[6]), rev: idf.get(c[0])?.rev ?? [], other: idf.get(c[0])?.other ?? [] }));
+    .map((c) => ({
+      col: c[0], start: c[1], end: c[2], v: metricAt(sym, "revenue", c[0]), gaps: gapNames(c[6]),
+      rev: idf.get(c[0])?.rev ?? [], other: idf.get(c[0])?.other ?? [], unv: idf.get(c[0])?.unv ?? [],
+    }));
   return { annual, quarters, ltm, gaps: sym.g, issues };
 }
 
@@ -115,6 +124,6 @@ export function finIssueNote(r: UsRevenue | null | undefined): string | null {
   const xs = r?.issues ?? [];
   if (!xs.length) return null;
   return `fin 조립 미완전 열: ${xs
-    .map((q) => `${q.col}[${q.gaps.join("·")}]${q.rev.length ? ` 매출 비움(항등식 ${q.rev.join("; ")})` : ""}${q.other.length ? ` 매출 외 항등식 ${q.other.join("; ")}` : ""}`)
+    .map((q) => `${q.col}[${q.gaps.join("·")}]${q.rev.length ? ` 매출 비움(항등식 ${q.rev.join("; ")})` : ""}${q.unv.length ? ` 매출 항등식 미검증(${q.unv.join("; ")})` : ""}${q.other.length ? ` 매출 외 항등식 ${q.other.join("; ")}` : ""}`)
     .join(" / ")}`;
 }

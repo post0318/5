@@ -8,7 +8,7 @@ import { Gap, type AssembledIs, type Column, type FinAssembly, type MetricValue,
  */
 
 /** 엔진판 — 판독·조립 규칙이 바뀌면 올린다(fin_chg 사유 "ev") */
-export const ENGINE_VERSION = 3;
+export const ENGINE_VERSION = 4;
 /** 문서 스키마판 — 압축 형식이 바뀌면 올린다 */
 export const SCHEMA_VERSION = 1;
 
@@ -48,7 +48,7 @@ export function toSymDoc(a: FinAssembly): FinSymDoc {
     c: cols.map(colTuple),
     m: { rev: cols.map((c) => rev[c.key]?.v ?? null) },
     x: { rev: x },
-    ...(a.issues.length ? { i: a.issues.map((q) => [q.col, q.rev, q.other] as [string, string[], string[]]) } : {}),
+    ...(a.issues.length ? { i: a.issues.map((q) => [q.col, q.rev, q.other, q.unv] as [string, string[], string[], string[]]) } : {}),
   };
 }
 

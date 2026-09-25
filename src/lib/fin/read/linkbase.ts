@@ -16,6 +16,10 @@ const hrefId = (href: string): string | null => {
 
 function parseLinks(text: string, link: "presentationLink" | "calculationLink", arc: "presentationArc" | "calculationArc"): LinkRole[] {
   const out: LinkRole[] = [];
+  // 빈 링크(자기 닫힘 `<link:calculationLink xlink:role="…/CoverPage" … />` — Workiva 공시)는 먼저 지운다. 남겨 두면 아래 정규식이
+  // 그 빈 요소부터 다음 링크의 닫는 태그까지를 한 링크로 읽어 **다음 역할의 호를 빈 역할 이름으로** 가져간다(재감사 2026-09-25 —
+  // WDC 2020 10-K 는 손익계산서 계산 구조가 CoverPage 역할로 읽혀 손익 역할이 비었고, 2019 전후 다수 10-K 에서 같은 증상)
+  text = text.replace(new RegExp(`<(?:link:)?${link}\\b[^>]*\\/>`, "g"), "");
   const re = new RegExp(`<(?:link:)?${link}\\b[^>]*xlink:role="([^"]+)"[^>]*>([\\s\\S]*?)<\\/(?:link:)?${link}>`, "g");
   for (const m of text.matchAll(re)) {
     const loc = new Map<string, string>();
@@ -151,8 +155,18 @@ export function pickIncomeStatement(pre: LinkRole[]): StatementShape | null {
   return { role: r.role, lines };
 }
 
-/** 계산 구조에서 같은 역할(없으면 줄을 가장 많이 담은 손익 역할)의 부모·가중치 */
-export function calcParents(cal: LinkRole[], role: string, lineIds: Set<string>): Map<string, { parent: string; w: number }> {
+/**
+ * 계산 구조 — 같은 역할(없으면 줄을 가장 많이 담은 손익 역할)의 **합계식 전체**(부모 → [자식·가중치] 모든 호)와 표시용 부모.
+ *
+ * 한 개념이 둘 이상의 합계식의 항일 수 있다(XBRL 계산 구조는 트리가 아니다). AMD 2023 10-K: 매출원가(감가상각 제외) 줄이
+ * "매출원가 = 원가 + 인수 무형상각"과 "매출총이익 = 매출 − 원가 − 인수 무형상각" 두 식의 항이다. 예전엔 자식마다 첫 호 하나만
+ * 부모로 남겨 두 번째 식(매출총이익)이 매출만 자식으로 가진 식으로 잘려 항등식이 틀리게 판정됐다(재감사 2026-09-25).
+ * 항등식은 `sums`(부모별 모든 호)로 판정하고, `parents` 는 화면 들여쓰기용 한 부모(표시 줄 안에 있는 부모 우선, 그중 첫 호)다.
+ */
+export function calcParents(cal: LinkRole[], role: string, lineIds: Set<string>): {
+  parents: Map<string, { parent: string; w: number }>;
+  sums: Map<string, { to: string; w: number }[]>;
+} {
   let r = cal.find((c) => c.role === role) ?? null;
   if (!r) {
     let best = 0;
@@ -163,7 +177,15 @@ export function calcParents(cal: LinkRole[], role: string, lineIds: Set<string>)
       if (n > best) { best = n; r = c; }
     }
   }
-  const out = new Map<string, { parent: string; w: number }>();
-  for (const a of r?.arcs ?? []) if (!out.has(a.to)) out.set(a.to, { parent: a.from, w: a.weight });
-  return out;
+  const parents = new Map<string, { parent: string; w: number }>();
+  const sums = new Map<string, { to: string; w: number }[]>();
+  const arcs = [...(r?.arcs ?? [])].sort((a, b) => a.order - b.order);
+  for (const a of arcs) {
+    const k = sums.get(a.from) ?? sums.set(a.from, []).get(a.from)!;
+    if (!k.some((x) => x.to === a.to)) k.push({ to: a.to, w: a.weight });
+  }
+  // 표시 부모 — 표시 줄 안의 부모를 먼저(없으면 첫 호)
+  for (const pass of [true, false])
+    for (const a of arcs) if (!parents.has(a.to) && (!pass || lineIds.has(a.from))) parents.set(a.to, { parent: a.from, w: a.weight });
+  return { parents, sums };
 }

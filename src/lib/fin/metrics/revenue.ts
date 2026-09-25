@@ -62,12 +62,17 @@ export function revenue(cols: AssembledIs[], co: CompanyProfile): MetricSeries {
       if (out.rule === "override:total-nonop") for (const l of a.lines) if (l.role === "revenue.nonop") used.add(a.lines.indexOf(l));
       used.delete(-1);
     }
-    const revFails = a.identity.fails.filter((_, k) => {
-      if (a.identity.partial[k]) return false; // 값 없는 자식 줄이 있어 판정 불완전 — 매출을 비우지 않고 경고로만(index.ts)
-      const p = a.identity.at[k];
-      return used.has(p) || [...used].some((u) => a.lines[u].parent === p);
-    });
+    // 매출 경로 = 매출 줄이 그 식의 부모이거나 항(합계식 전체 — 표시 부모 아님)
+    const onPath = (k: number) => used.has(a.identity.at[k]) || a.identity.terms[k].some((t) => used.has(t));
+    const revFails = a.identity.fails.filter((_, k) => onPath(k) && !a.identity.partial[k]);
+    // 판정 불완전 식(is.ts ①~⑤)은 값 섞임의 증거가 아니라 매출을 비우지 않는다 — 대신 "항등식 미검증"으로 표시하고 검증기가
+    // 그 열을 SEC 본표 매출과 직접 대조한다(재감사 2026-09-25: 판정 불완전 예외가 틀린 매출을 숨길 수 있었음 — WDC 주입 재현)
+    const revUnv = a.identity.fails.filter((_, k) => onPath(k) && a.identity.partial[k]);
+    // 매출 줄이 어느 식에도 속하지 않으면(계산 구조 없음·매출 줄이 식 밖 — WDC 2020 10-K) 항등식이 매출에 닿지 않는다 — 같은 "미검증"
+    const unc = [...used].filter((u) => a.identity.uncovered.includes(u)).map((u) => a.lines[u].id);
+    if (unc.length && !revFails.length) revUnv.push(`${unc.join(",")}: 계산 구조 식 밖(항등식 검사 없음)`);
     if (revFails.length) out = { ...out, v: null, rule: `identity-fail:${out.rule}`, reason: `조립 항등식 불성립(매출 줄 포함) — ${revFails.join("; ")}`, idFails: revFails };
+    else if (revUnv.length && out.v != null) out = { ...out, reason: `항등식 미검증 — ${revUnv.join("; ")}`, unv: revUnv };
     values[a.col.key] = out;
   }
   return { metric: "revenue", unit: "USD", values };
