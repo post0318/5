@@ -94,7 +94,7 @@ export async function withContentAmortization(
         headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000,
       }).catch(() => "");
       const cfTags = new Set<string>();
-      for (const m of pre.matchAll(/<link:presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:presentationLink>/g)) {
+      for (const m of pre.matchAll(/<(?:link:)?presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?presentationLink>/g)) {
         if (!/CASH\s*FLOWS?/i.test(m[1].split("/").pop() ?? "") || /Detail|Table|Polic|Parenthetical/i.test(m[1])) continue;
         for (const h of m[2].matchAll(/xlink:href="[^"#]*#[a-z0-9-]+_([A-Za-z0-9]+)"/g)) cfTags.add(h[1]);
       }

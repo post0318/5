@@ -331,8 +331,12 @@ export function buildUsAnalysis(
   const daFull = daByYear;
   const ocfFull = fullAnnual(["NetCashProvidedByUsedInOperatingActivities"]);
   const capexFull = fullAnnual(CAPEX_C);
+  // 감가상각비 구성요소가 없는 해는 공란(0 으로 보지 않음) — 표시 EBITDA 와 같은 원칙
   const ebitdaFull = new Map<number, number>();
-  for (const [y, v] of opIncFull) ebitdaFull.set(y, v + (daFull.get(y) ?? 0));
+  for (const [y, v] of opIncFull) {
+    const d = daFull.get(y);
+    if (d != null) ebitdaFull.set(y, v + d);
+  }
   const fcfFull = new Map<number, number>();
   for (const [y, v] of ocfFull) {
     const cx = capexFull.get(y);
@@ -407,7 +411,11 @@ export function buildUsAnalysis(
       return out;
     })();
     if (isFin) for (const [y, v] of pretaxFull) if (!opIncFull.has(y)) opIncFull.set(y, v);
-    for (const [y, v] of opIncFull) if (!ebitdaFull.has(y)) ebitdaFull.set(y, v + (daFull.get(y) ?? 0));
+    for (const [y, v] of opIncFull) {
+      if (ebitdaFull.has(y)) continue;
+      const d = daFull.get(y);
+      if (d != null) ebitdaFull.set(y, v + d);
+    }
   }
 
   const assets = stock(["Assets"]);
@@ -579,10 +587,10 @@ export function buildUsAnalysis(
       );
 
   // 파생
+  // 감가상각비 구성요소가 없으면(매핑 누락 — IFRS 20-F 등) EBITDA 도 공란(0 으로
+  // 보지 않음, Yahoo 분기 LTM 여부와 무관 — 독립 감사 지적 2026-09-25 NVO·SAP)
   const ebitda = blank();
-  for (const l of labels) if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
-  // Yahoo 분기 LTM 에서 감가상각비를 못 채웠으면 EBITDA 도 공란(0 으로 보지 않음)
-  if (yl && da[LTM] == null) ebitda[LTM] = null;
+  for (const l of labels) if (opIncome[l] != null && da[l] != null) ebitda[l] = opIncome[l]! + da[l]!;
   const fcf = blank();
   for (const l of labels) if (ocf[l] != null && capexRaw[l] != null) fcf[l] = ocf[l]! - Math.abs(capexRaw[l]!);
 
@@ -977,6 +985,8 @@ export function buildUsAnalysis(
   ];
   if (evBlockers.has("captive-unsplit"))
     evNotes.push("※ EV/EBITDA 미표시: 금융 자회사(할부금융) 보유 — 산정 기준 확정 전까지 비움");
+  if (evBlockers.has("captive-unknown"))
+    evNotes.push("※ EV/EBITDA 미표시: 금융 자회사 여부를 판별할 최신 공시 조회 실패(일시적 오류일 수 있음)");
   if (evBlockers.has("debt-untagged")) evNotes.push("※ EV/EBITDA 미표시: 차입금이 표준 태그로 공시되지 않음");
   if (evCaptive) evNotes.push("※ 금융 자회사(할부금융) 차입금 제외 — 제조 부문 차입금만 반영");
   if (evStale) evNotes.push("※ 일부 열의 현금·차입금: 분기 공시에 없어 직전 사업연도말 값 사용");

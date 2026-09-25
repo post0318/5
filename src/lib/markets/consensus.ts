@@ -418,9 +418,12 @@ export async function getConsensusData(
     if (us) {
       // 하이라이트와 동일: EV = edgar-ev 브릿지, EBITDA = 영업이익 + D&A(단일 규칙),
       // EBITDA ≤ 0 만 비운다(40배 초과 숨김은 하이라이트와 달라져 미국은 적용 안 함).
+      // D&A 구성요소가 없으면(매핑 누락 — IFRS 20-F 등) EBITDA 도 공란(0 으로 보지
+      // 않음, 하이라이트·재무분석과 같은 원칙 — 독립 감사 지적 2026-09-25 NVO·SAP)
       const ev = us.ev.evAt(periodEnd, mcap, yePrice);
       const op = opIncome;
-      const ebitda = op != null ? op + (us.da.get(fy) ?? 0) : null;
+      const usDa = us.da.get(fy);
+      const ebitda = op != null && usDa != null ? op + usDa : null;
       evEbitda = ev != null && ebitda && ebitda > 0 ? ev / ebitda : null;
     } else if (kr) {
       const common = kr.caps?.byYear.get(fy)?.common ?? mcap;

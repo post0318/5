@@ -65,19 +65,19 @@ const EXT_NONOP_LABEL = /^\s*other\s*\(?\s*(income|expense)s?\s*\)?\s*(and|&|,)?
 /** 표시 라벨(정의문 제외) — 개념 id → 라벨들 */
 function labelsOf(lab: string): Map<string, string[]> {
   const loc = new Map<string, string>();
-  for (const l of lab.matchAll(/<link:loc\b([^>]*)\/?>/g)) {
+  for (const l of lab.matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) {
     const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1];
     const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
     if (id && href) loc.set(id, href);
   }
   const text = new Map<string, string[]>();
-  for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+  for (const m of lab.matchAll(/<(?:link:)?label\b([^>]*)>([^<]*)<\/(?:link:)?label>/g)) {
     const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
     if (!id || /xlink:role="[^"]*documentation"/i.test(m[1])) continue;
     text.set(id, [...(text.get(id) ?? []), m[2].trim()]);
   }
   const out = new Map<string, string[]>();
-  for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+  for (const a of lab.matchAll(/<(?:link:)?labelArc\b([^>]*)\/?>/g)) {
     const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
     const t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
     if (from && t) out.set(from, [...(out.get(from) ?? []), ...t]);
@@ -107,7 +107,7 @@ function durationValues(xml: string, ids: Set<string>): Map<string, number> {
 
 /** calculation linkbase 에서 손익계산서 역할의 "세전이익 ← 하위 줄" 목록. OperatingIncomeLoss 가 트리에 있으면 null. */
 function pretaxChildren(cal: string, labels: Map<string, string[]> = new Map(), allowCombined = false): Structure | null {
-  for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+  for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
     if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Segment/i.test(role)) continue;
     // 포괄손익계산서 단독은 제외하되, 손익·포괄손익 결합 보고서("Statements of Operations and Comprehensive Income")는
@@ -115,13 +115,13 @@ function pretaxChildren(cal: string, labels: Map<string, string[]> = new Map(), 
     // 세전이익의 2~3배로 나왔다. 2026-09-24 재감사 미결 질문의 실제 사례)
     if (/Comprehensive/i.test(role) && !(allowCombined && /OPERATIONS|EARNINGS/i.test(role))) continue;
     const loc = new Map<string, string>();
-    for (const l of m[2].matchAll(/<link:loc\b([^>]*)\/?>/g)) {
+    for (const l of m[2].matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) {
       const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
       const label = /xlink:label="([^"]+)"/.exec(l[1])?.[1];
       if (href && label) loc.set(label, href);
     }
     const arcs: { from: string; to: string; w: number }[] = [];
-    for (const a of m[2].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+    for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
       const to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       const w = Number(/weight="([^"]+)"/.exec(a[1])?.[1]);
@@ -165,7 +165,7 @@ async function financialSegmentOnly(cik: string, facts: CompanyFacts, recent: Re
     if (i < 0) { if (form === "10-K") return facts; continue; }
     const cal = await calOf(Number(cik), { accn: recent.accessionNumber[i], form, filed: recent.filingDate[i], doc: recent.primaryDocument[i] }).catch(() => null);
     if (!cal || !pretaxChildren(cal, new Map(), true)) return facts;
-    for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+    for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
       const role = m[1].split("/").pop() ?? "";
       if (/INCOME|OPERATIONS|EARNINGS/i.test(role) && !/Detail|Table|Parenth/i.test(role) && /#us-gaap_OperatingIncomeLoss"/.test(m[2])) return facts;
     }

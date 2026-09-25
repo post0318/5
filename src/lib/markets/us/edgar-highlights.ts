@@ -442,14 +442,17 @@ export function buildUsHighlights(
       const y = Number(col.key.slice(2));
       const oi = annualAt(S.opIncome, y);
       const d = annualAt(S.da, y);
-      return oi != null ? oi + (d ?? 0) : null;
+      // 감가상각비 구성요소가 없으면(매핑 누락 — IFRS 20-F 등) EBITDA 도 공란
+      // (0 으로 보지 않음, LTM 과 같은 원칙 — 독립 감사 지적 2026-09-25 NVO·SAP)
+      return oi != null && d != null ? oi + d : null;
     }
     if (col.kind === "ltm") {
       const oi = ttm(E.opIncome);
       const d = daTtm(facts);
-      // Yahoo 분기 LTM 에서 감가상각비를 못 채웠으면 EBITDA 도 공란(0 으로 보지 않음)
-      if (yl && d == null) return null;
-      return oi != null ? oi + (d ?? 0) : null;
+      // 감가상각비를 못 채웠으면 EBITDA 도 공란(0 으로 보지 않음) — Yahoo 분기
+      // LTM 여부와 무관(독립 감사 지적 2026-09-25, 예전엔 yl 있을 때만 비웠다)
+      if (d == null) return null;
+      return oi != null ? oi + d : null;
     }
     return null;
   });
@@ -610,6 +613,10 @@ export function buildUsHighlights(
   if (blockers.has("captive-unsplit"))
     notes.push(
       "EV·EV/EBITDA 미표시: 금융 자회사(할부금융) 보유 — 연결 차입금·EBITDA 에 금융 자회사분이 섞여 산정 기준 확정 전까지 비움",
+    );
+  if (blockers.has("captive-unknown"))
+    notes.push(
+      "EV·EV/EBITDA 미표시: 금융 자회사 여부를 판별할 최신 공시 조회 실패(일시적 오류일 수 있음) — 금융 자회사 없음으로 단정하지 않음",
     );
   if (consolidatedShown)
     notes.push("차입금·현금·우선주·비지배지분: 연결 기준(금융 자회사 포함, 대차대조표 주석과 같은 값) — EV 만 비움");

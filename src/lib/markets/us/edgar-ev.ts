@@ -184,9 +184,11 @@ function instantOn(entries: FactUnitEntry[], date: string): number | null {
  * EV 를 계산할 수 없는 이유. null 이면 계산 가능.
  * - financial: 은행·카드사(차입금이 영업용) — 기존 isFinancialCompany 판정
  * - captive-unsplit: 금융 자회사가 있는데 XBRL 에서 부문 구분이 안 됨(DE)
+ * - captive-unknown: 금융 자회사 여부를 판별할 최신 공시 조회가 실패(edgar-captive.ts
+ *   "unknown") — 일시적 오류일 수 있어 "금융 자회사 없음"으로 단정하지 않고 보수적으로 비운다
  * - debt-untagged: 차입금이 있는데 표준 태그가 없음(Ford — 부문별로만 태깅)
  */
-export type EvBlocker = "financial" | "captive-unsplit" | "debt-untagged";
+export type EvBlocker = "financial" | "captive-unsplit" | "captive-unknown" | "debt-untagged";
 
 export interface EvBridge {
   /** 재무상태표 값을 실제로 가져온 날짜 */
@@ -227,8 +229,8 @@ export interface EvContext {
   sic?: string | null;
   /** 은행·카드사 등 — 호출 측의 isFinancialCompany 결과 */
   isFinancial?: boolean;
-  /** 금융 자회사 판정 결과. null 이면 금융 자회사 없음. */
-  captive?: { points: CaptiveDebtPoint[] } | "unsplit" | null;
+  /** 금융 자회사 판정 결과. null 이면 금융 자회사 없음. "unknown" 이면 판별 조회 실패(EV 미표시). */
+  captive?: { points: CaptiveDebtPoint[] } | "unsplit" | "unknown" | null;
   /**
    * UP-REIT 운영 파트너십 지분 수(Yahoo impliedShares − sharesOutstanding).
    * 리츠(SIC 6798)만 호출 측이 넘긴다 — 일반 기업은 implied 가 다른 뜻
@@ -329,7 +331,7 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
   };
 
   const captivePoint = (d: string): CaptiveDebtPoint | null => {
-    if (!ctx.captive || ctx.captive === "unsplit") return null;
+    if (!ctx.captive || ctx.captive === "unsplit" || ctx.captive === "unknown") return null;
     for (const p of ctx.captive.points)
       if (Math.abs(Date.parse(p.date) - Date.parse(d)) / 86_400_000 <= 6) return p;
     return null;
@@ -337,6 +339,9 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
 
   const blocker = (asOf: string): EvBlocker | null => {
     if (ctx.isFinancial) return "financial";
+    // 금융 자회사 여부를 판별할 최신 공시 조회가 실패 — "금융 자회사 없음"으로
+    // 단정하지 않고 보수적으로 EV 를 비운다(edgar-captive.ts loadCaptiveDebt "unknown").
+    if (ctx.captive === "unknown") return "captive-unknown";
     if (ctx.captive === "unsplit") return "captive-unsplit";
     // **임시(오너 지시 2026-09-23 — "ev/ebitda 최종은 뒤로 미루고")**: 금융
     // 자회사가 있으면 부문 분리가 되더라도 EV 를 비운다. 차입금만 제조 부문으로

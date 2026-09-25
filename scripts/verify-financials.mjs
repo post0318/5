@@ -382,7 +382,7 @@ function parseContexts(xml) {
  */
 async function filingAtDate(cik, sub, date) {
   const rc = sub.filings?.recent ?? {};
-  const k = (rc.form ?? []).findIndex((fm, i) => /^10-[QK]$/.test(fm) && rc.reportDate?.[i] && dayDiff(rc.reportDate[i], date) <= 7);
+  const k = (rc.form ?? []).findIndex((fm, i) => /^(10-[QK]|20-F|40-F)$/.test(fm) && rc.reportDate?.[i] && dayDiff(rc.reportDate[i], date) <= 7);
   if (k < 0) return null;
   const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rc.accessionNumber[k].replace(/-/g, "")}`;
   const names = (await secJson(base + "/index.json")).directory.item.map((x) => x.name);
@@ -392,11 +392,13 @@ async function filingAtDate(cik, sub, date) {
   if (!instName || !calName) return null;
   const xml = await secText(`${base}/${instName}`);
   const ctx = parseContexts(xml);
-  const facts = [];
+  const facts = [], durFacts = [];
   for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+)\s*</g)) {
     const c = ctx.get(m[4]);
+    const unit = /unitRef="([^"]+)"/.exec(`${m[3]} ${m[5]}`)?.[1] ?? "";
+    if (c?.start && c.end && dayDiff(c.end, rc.reportDate[k]) <= 1) { durFacts.push({ id: `${m[1]}_${m[2]}`, dims: c.dims, start: c.start, end: c.end, v: Number(m[6]), unit }); continue; }
     if (!c?.instant || dayDiff(c.instant, rc.reportDate[k]) > 1) continue;
-    facts.push({ id: `${m[1]}_${m[2]}`, dims: c.dims, v: Number(m[6]) });
+    facts.push({ id: `${m[1]}_${m[2]}`, dims: c.dims, v: Number(m[6]), unit });
   }
   const cal = await secText(`${base}/${calName}`);
   const lab = labName === calName ? cal : await secText(`${base}/${labName}`);
@@ -416,7 +418,66 @@ async function filingAtDate(cik, sub, date) {
       kids.set(fr, [...(kids.get(fr) ?? []), to]); faceIds.add(fr); faceIds.add(to); hasParent.add(to);
     }
   }
-  return { form: rc.form[k], filed: rc.filingDate[k], date: rc.reportDate[k], facts, labels, kids, faceIds, roots: [...faceIds].filter((x) => !hasParent.has(x)) };
+  return { form: rc.form[k], filed: rc.filingDate[k], date: rc.reportDate[k], facts, durFacts, labels, kids, faceIds, roots: [...faceIds].filter((x) => !hasParent.has(x)) };
+}
+/**
+ * 재무상태표 본표 차입금·리스 줄 — 검증기 독립 판정(개념명·라벨 규칙, 앱과 같은 성격의 규칙이라 공통모드). 차입금 성격 노드를 만나면
+ * 그 아래로 내려가지 않는다(소계·하위 줄 이중 합산 방지). IFRS(ifrs-full·회사 고유)는 리스부채를 차입금에 포함(CLAUDE.md 한국·IFRS 규칙).
+ * → { faceVals: [{ id, v }], faceSum, val0, nm, lab }
+ */
+function faceDebtLines(fl, unitRe = /usd/i) {
+  const lab = (id) => (fl.labels.get(id) ?? []).join(" | ");
+  const nm = (id) => id.replace(/^[a-z0-9-]+_/, "");
+  // 단위 지정 — 20-F 는 원통화와 USD 편의 환산값이 같은 개념에 나란히 있다(TSM)
+  const val0 = (id) => fl.facts.find((x) => x.id === id && !x.dims.length && unitRe.test(x.unit ?? ""))?.v ?? null;
+  const STD = /Debt|Borrowing|Bonds?Issued|BondsPayable|NotesPayable|CommercialPaper|LinesOfCredit|LineOfCredit|FinanceLease|CapitalLease|OperatingLeaseLiabilit|LeaseLiabilit|ConvertibleNotes|SeniorNotes|LoansPayable|NotesAndLoans|ShortTermNonBankLoans|FinancingObligation/;
+  const CUS = /debt|borrowing|bonds payable|notes payable|commercial paper|lease liabilit|lease obligation|finance lease|capital lease|financing obligation/i;
+  const EXC = /Interest|Accrued|Derivative|Asset|Receivable|Securit|Investment|Tax|Unamortized|Issuance|Discount|Premium/i;
+  const isDebt = (id) => { const std = id.startsWith("us-gaap_"); return std ? STD.test(nm(id)) && !EXC.test(nm(id)) : (CUS.test(lab(id)) || STD.test(nm(id))) && !EXC.test(`${nm(id)} ${lab(id)}`); };
+  const lines = [], seen = new Set();
+  const walk = (id, d) => { if (d > 8 || seen.has(id)) return; seen.add(id); if (isDebt(id)) { lines.push(id); return; } for (const k of fl.kids.get(id) ?? []) walk(k, d + 1); };
+  for (const r0 of fl.roots) walk(r0, 0);
+  const faceVals = lines.map((id) => ({ id, v: val0(id) })).filter((x) => x.v != null);
+  return { faceVals, faceSum: faceVals.reduce((t, x) => t + x.v, 0), val0, nm, lab };
+}
+/**
+ * 20-F 총차입금 기대값(오너 결정 "원칙 유지" 2026-09-25 — 앱 규칙의 재구현, 공통모드):
+ *  본표 차입금 줄 + 리스. IFRS 는 리스 전액 — 본표에 유동·비유동 리스 중 한쪽만 있으면 없는 쪽을 주석값으로 더하고, 본표에 리스 줄이
+ *  없으면 주석 리스 전액을 더한다. 단 본표 차입금 줄 라벨이 리스를 포함한다고 밝히면(NVO) 더하지 않는다. US-GAAP 20-F(ASML)는 미국
+ *  규칙 ③과 같이 본표에 금융리스 줄이 없으면 주석 금융리스만 더한다(운용리스 제외). 본표에 차입금 줄이 아예 없으면(SAP — 금융부채
+ *  합산 줄) 태그 폴백: ifrs Borrowings + LeaseLiabilities.
+ * → { sum, parts: [{ what, id, v, kind }], face } | null   kind: face | curLease | nonLease | lease | finLease | fallback
+ */
+function expectedForeignDebt(fl, unitRe) {
+  const fd = faceDebtLines(fl, unitRe);
+  const v0 = (id) => fl.facts.find((x) => x.id === id && !x.dims.length && unitRe.test(x.unit ?? ""))?.v ?? null;
+  const ifrs = fl.facts.some((x) => x.id.startsWith("ifrs-full_"));
+  const parts = fd.faceVals.map((x) => ({ what: "본표", id: x.id, v: x.v, kind: "face" }));
+  const has = (re) => fd.faceVals.some((x) => re.test(fd.nm(x.id)));
+  if (!fd.faceVals.length) {
+    if (!ifrs) return null;
+    const b = v0("ifrs-full_Borrowings"), l = v0("ifrs-full_LeaseLiabilities");
+    if (b == null) return null;
+    parts.push({ what: "태그 폴백(본표 차입금 줄 없음)", id: "ifrs-full_Borrowings", v: b, kind: "fallback" });
+    if (l != null) parts.push({ what: "태그 폴백 리스", id: "ifrs-full_LeaseLiabilities", v: l, kind: "lease" });
+  } else if (ifrs) {
+    // 리스가 차입금 줄 안에 표시되는지 — 본표 차입금 줄 라벨이 리스를 밝히거나, 회사가 리스·차입금을 한 개념으로 공시(NVO
+    // nvo:LeaseAndBorrowingUndiscountedCashFlow — 차입금 만기표에 리스를 합쳐 공시)
+    const combo = fl.facts.find((x) => !x.dims.length && /LeaseAndBorrowing|BorrowingsAndLease|BorrowingsIncludingLease|LeaseLiabilitiesAndBorrowings/i.test(x.id));
+    const leaseInDebt = fd.faceVals.some((x) => /lease/i.test(fd.lab(x.id)) && !/LeaseLiabilit/.test(fd.nm(x.id))) || !!combo;
+    if (leaseInDebt) parts.push({ what: `리스는 차입금 줄 안에 포함(${combo ? combo.id.replace(/^[a-z0-9-]+_/, "") : "본표 라벨"}) — 가산 안 함`, id: "-", v: 0, kind: "note" });
+    const cur = has(/^CurrentLeaseLiabilities$/), non = has(/^NoncurrentLeaseLiabilities$/), tot = has(/^LeaseLiabilities$/);
+    if (!leaseInDebt && !tot) {
+      if (cur && !non) { const x = v0("ifrs-full_NoncurrentLeaseLiabilities"); if (x != null) parts.push({ what: "주석 비유동 리스", id: "ifrs-full_NoncurrentLeaseLiabilities", v: x, kind: "nonLease" }); }
+      else if (non && !cur) { const x = v0("ifrs-full_CurrentLeaseLiabilities"); if (x != null) parts.push({ what: "주석 유동 리스", id: "ifrs-full_CurrentLeaseLiabilities", v: x, kind: "curLease" }); }
+      else if (!cur && !non) { const x = v0("ifrs-full_LeaseLiabilities"); if (x != null) parts.push({ what: "주석 리스 전액", id: "ifrs-full_LeaseLiabilities", v: x, kind: "lease" }); }
+    }
+  } else if (!has(/FinanceLease|CapitalLease/)) {
+    const c = v0("us-gaap_FinanceLeaseLiabilityCurrent"), n = v0("us-gaap_FinanceLeaseLiabilityNoncurrent"), t = v0("us-gaap_FinanceLeaseLiability");
+    if (c != null || n != null) { if (c != null) parts.push({ what: "주석 금융리스(유동)", id: "us-gaap_FinanceLeaseLiabilityCurrent", v: c, kind: "finLease" }); if (n != null) parts.push({ what: "주석 금융리스(비유동)", id: "us-gaap_FinanceLeaseLiabilityNoncurrent", v: n, kind: "finLease" }); }
+    else if (t != null) parts.push({ what: "주석 금융리스", id: "us-gaap_FinanceLeaseLiability", v: t, kind: "finLease" });
+  }
+  return { sum: parts.reduce((t, x) => t + x.v, 0), parts, face: fd, v0 };
 }
 /** 최근 10-K 인스턴스들의 연간(300일 초과) 매출 사실(차원 포함) — 먼저 읽은(최신) 공시 우선. [{ id, start, end, dims, v }] */
 async function annualRevenueDimFacts(cik, sub, maxFilings = 3) {
@@ -573,6 +634,8 @@ async function fnguideFinance(code) {
 }
 
 /** 값 비교 — 소스의 보고 단위 안에서 같은가(인포맥스는 백만 달러 단위, 나머지는 달러) */
+/** 값을 나누는 가장 큰 10의 거듭제곱(최대 100만) — 공시 보고 단위 추정 */
+const secUnitAny = (v) => { let u = 1; const a = Math.abs(Math.round(v)); while (u < 1e6 && a % (u * 10) === 0) u *= 10; return u; };
 const sameAt = (a, b, unit) => a != null && b != null && Math.abs(a - b) <= Math.max(unit / 2, Math.abs(b) * 1e-12);
 
 /** 환율 일별 종가 "통화 1단위당 USD" — 검증기가 앱과 별개로 받는다(외화 공시 환산 대조용) */
@@ -1203,6 +1266,18 @@ async function verifyUs(sym) {
   /** EV 가 빈 열의 사유를 **그 열 날짜 기준으로** 원자료에서 확인 — 사유 문구만 믿지 않는다(재감사).
    *  안내문은 종목 단위라, 예전엔 문구가 하나라도 있으면 EV 가 있는 연도까지 실패로 쳤다(SNDK 오판). */
   let ltmEvCheck = null; // 20-F LTM EV 미표시 사유의 독립 확인 결과(루프 전 비동기로 채운다)
+  let fyDebtCheck = null; // 20-F 최근 FY 총차입금 기대값 대조(A층)
+  // 금융 자회사 보유사 — 오너 결정 목록(CLAUDE.md) 이면서 SEC 최신 기말 금융채권(할부·리스 채권)이 자산의 10% 이상일 때
+  let captiveSec = null;
+  if (CAPTIVE.has(sym)) {
+    const latest = (t) => (G[t]?.units?.USD ?? []).filter((e) => !e.start).reduce((b, e) => (!b || e.end > b.end || (e.end === b.end && (e.filed ?? "") > (b.filed ?? "")) ? e : b), null);
+    const a = latest("Assets");
+    const recv = ["FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss", "NotesAndLoansReceivableNetNoncurrent", "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLossNoncurrent", "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLossCurrent", "LoansAndLeasesReceivableNetReportedAmount", "SalesTypeAndDirectFinancingLeasesLeaseReceivable"]
+      .map(latest).filter((e) => e && a && dayDiff(e.end, a.end) <= 7);
+    const tot = recv.reduce((m, e) => Math.max(m, e.val), 0);
+    captiveSec = a && tot / a.val >= 0.1 ? `금융 자회사 보유(오너 결정 목록 + SEC 금융채권 ${tot} = 자산의 ${(tot / a.val * 100).toFixed(1)}%, ${a.end})` : null;
+    if (!captiveSec) review.push({ item: "금융 자회사 보유 판정", note: `오너 결정 목록 종목이나 SEC 금융채권 비중 10% 미만·태그 없음 — EV 미표시 강제 검사 생략` });
+  }
   const evBlockOkAt = (date) => {
     if (!evBlocked) return null;
     // 20-F LTM(Yahoo 분기)에서 앱이 EV 구성요소를 못 채워 LTM EV 를 비운 경우 — 사유("Yahoo FY말 총차입금 ≠ SEC")를 검증기가 따로
@@ -1303,18 +1378,45 @@ async function verifyUs(sym) {
   // 결산일 실제 종가 = Yahoo 일별 종가(분할·분사 소급 조정값) × 결산일 이후 분할·분사 가격조정 계수(Yahoo 분할 이력, 앱과 독립).
   // 분사(WDC→SNDK 1323:1000)도 Yahoo 가 과거 종가를 조정하므로 되돌린다(EPS 보정과 달리 가격만의 조정).
   // 앱 결산일 주식수 = 앱 시가총액 ÷ 이 값 — 앱이 실제 종가를 썼다면 공시 주식수(정수)가 그대로 나온다.
-  if (evBlocked && /LTM EV 미표시\(Yahoo 분기 LTM\)/.test(evBlocked) && foreign && natCur && fxRows) {
+  if (foreign && natCur && fxRows && H.LTM) { // 20-F FY 차입금 기대값은 항상 대조, LTM EV 공란 사유는 앱이 비웠을 때만 쓰인다
     try {
-      const c0 = Object.keys(H).filter((c) => c !== "LTM" && BS[c]?.debt != null).sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1);
-      const ya = c0 ? await (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "balance-sheet" }, { validateResult: false }) : [];
+      // 감사 m2 + 오너 결정 "원칙 유지": SEC 원자료 FY 20-F 로 앱 규칙(본표 차입금 줄 + 리스)의 기대 차입금을 따로 계산하고(공통모드),
+      // 앱 FY 차입금이 그 값(× 기말 환율)과 같은지, Yahoo FY 총차입금과의 차이가 무엇인지 숫자로 분해한 뒤, 그 차이 항목이 Yahoo 분기
+      // 재무상태표에 없어서 같은 정의로 LTM 을 채울 수 없는지 확인한다.
+      const c0 = Object.keys(H).filter((c) => c !== "LTM").sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1);
+      const y0 = await yahoo();
+      const ya = c0 ? await y0.fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "balance-sheet" }, { validateResult: false }) : [];
       const yr = ya.find((r) => r.totalDebt != null && dayDiff(new Date(r.date).toISOString().slice(0, 10), H[c0].date) <= 7);
-      const rate = fxRows.filter((q) => q.d <= H[c0]?.date).at(-1)?.r;
-      if (yr && rate) {
-        const appNat = BS[c0].debt / rate, d = Math.abs(yr.totalDebt - appNat) / Math.abs(appNat);
-        ltmEvCheck = d > 1e-3
-          ? { ok: `LTM EV 미표시 사유 확인 — Yahoo ${c0} 말 총차입금 ${yr.totalDebt} ${natCur} ≠ 앱(SEC) ${c0} 총차입금 ${BS[c0].debt} USD ÷ 기말 환율 ${rate} = ${appNat.toFixed(0)} ${natCur}(차 ${(d * 100).toFixed(2)}%) — Yahoo 분기로 SEC 정의 차입금을 채울 수 없음` }
-          : { why: `Yahoo ${c0} 말 총차입금이 앱(SEC) 값과 같음(차 ${(d * 100).toFixed(4)}%) — 사유 불성립` };
-      } else ltmEvCheck = { why: "Yahoo 연간 총차입금·기말 환율 없음 — 사유 확인 불가" };
+      const yq = await y0.fundamentalsTimeSeries(sym, { period1: new Date(Date.parse(H.LTM.date) - 200 * 864e5), type: "quarterly", module: "balance-sheet" }, { validateResult: false });
+      const yqL = yq.map((r) => ({ ...r, end: new Date(r.date).toISOString().slice(0, 10) })).filter((r) => dayDiff(r.end, H.LTM.date) <= 7).at(-1);
+      const fl = c0 ? await filingAtDate(cik, sub, H[c0].date) : null;
+      const unitRe = new RegExp(natCur, "i");
+      const ex = fl ? expectedForeignDebt(fl, unitRe) : null;
+      const rate = fxRows.filter((q) => q.d <= H[c0]?.date).at(-1)?.r ?? null;
+      const partsTxt = ex ? ex.parts.map((x) => `${x.what} ${x.id.replace(/^[a-z0-9-]+_/, "")} ${x.v}`).join(" + ") : "";
+      if (ex && rate != null) fyDebtCheck = { col: c0, r: vsSource(BS[c0]?.debt ?? null, ex.sum * rate, EXACT, `SEC ${fl.form} ${fl.date} 기대 차입금 ${ex.sum} ${natCur} = ${partsTxt} × 기말 환율 ${rate} · 공통모드(앱 규칙 재구현·Yahoo 환율)`) };
+      if (!yr || !ex) ltmEvCheck = { why: `Yahoo 연간 총차입금 또는 SEC ${c0} 기대 차입금 없음 — 사유 확인 불가` };
+      else if (fyDebtCheck?.r.status !== PASS) ltmEvCheck = { why: `앱 ${c0} 차입금이 SEC 기대 차입금과 다름 — 사유 확인 전제 불성립` };
+      else {
+        const added = ex.parts.filter((x) => x.kind !== "face" && x.kind !== "note");
+        const faceSum = ex.face.faceSum;
+        const qHas = (k) => yqL && yqL[k] != null;
+        let why = null;
+        // (가) Yahoo FY = 본표 차입금 줄만 — 앱이 더한 주석 리스가 Yahoo 분기 재무상태표에 없다(TSM 유동 리스·ASML 금융리스)
+        if (added.length && added.every((x) => ["curLease", "nonLease", "lease", "finLease"].includes(x.kind)) && Math.abs(yr.totalDebt - faceSum) <= 0.5) {
+          const field = { curLease: "currentCapitalLeaseObligation", nonLease: "longTermCapitalLeaseObligation", lease: "capitalLeaseObligations", finLease: "capitalLeaseObligations" };
+          const missing = added.filter((x) => !qHas(field[x.kind]));
+          if (missing.length === added.length) why = `Yahoo ${c0} 총차입금 ${yr.totalDebt} = SEC 본표 차입금 줄 합 ${faceSum}(앱이 더한 ${added.map((x) => `${x.what} ${x.v}`).join(" + ")} 제외), Yahoo 분기(${yqL?.end ?? "없음"}) 재무상태표에 ${[...new Set(missing.map((x) => field[x.kind]))].join("·")} 없음`;
+        }
+        // (나) 본표 차입금 줄 없음(SAP): Yahoo FY = 사채 + CP + 리스, SEC Borrowings 에 그 밖의 차입금이 더 있다
+        if (!why && ex.parts.some((x) => x.kind === "fallback")) {
+          const bonds = ex.v0("ifrs-full_BondsIssued"), cp = ex.v0("ifrs-full_CommercialPapersIssued"), lease = ex.v0("ifrs-full_LeaseLiabilities") ?? 0, bor = ex.v0("ifrs-full_Borrowings");
+          if (bonds != null && bor != null && Math.abs(yr.totalDebt - (bonds + (cp ?? 0) + lease)) <= 0.5 && bor - bonds - (cp ?? 0) > 0)
+            why = `Yahoo ${c0} 총차입금 ${yr.totalDebt} = SEC 사채 ${bonds} + CP ${cp ?? 0} + 리스 ${lease} — SEC Borrowings ${bor} 의 기타 차입금 ${bor - bonds - (cp ?? 0)} 을 Yahoo 는 넣지 않음(분기 재무상태표에도 그 구분 없음)`;
+        }
+        ltmEvCheck = why ? { ok: `LTM EV 미표시 사유 확인 — ${why} → 같은 정의로 LTM 차입금을 채울 수 없음 · 앱 ${c0} 차입금 = SEC 기대값(${partsTxt})`, yDebt: yr.totalDebt }
+          : { why: `Yahoo ${c0} 총차입금 ${yr.totalDebt} vs SEC 기대 ${ex.sum}(${partsTxt}) — 차이를 Yahoo 분기에 없는 항목으로 분해 못함` };
+      }
     } catch (e) {
       hardErrors.push(`LTM EV 미표시 사유 확인(Yahoo 연간 재무상태표) 조회 실패: ${String(e).slice(0, 60)}`);
     }
@@ -1556,7 +1658,13 @@ async function verifyUs(sym) {
     if (!isFy && foreign) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: NA, note: "외화 공시 — 분기 XBRL 없음(20-F)·환산은 인포맥스 대조로" });
     else if (!isFy) {
       const hasNciNow = [...nciTrace].some((e) => dayDiff(e, x.date) <= 400);
-      const t = secTtm("NetIncomeLoss") ?? (hasNciNow ? null : secTtm("ProfitLoss"));
+      // 감사 m1: 옛날에 끊긴 태그(기준일이 앱 LTM 과 다름)면 다음 태그로 — NetIncomeLoss → ProfitLoss − 비지배(또는 비지배 흔적이
+      // 없으면 ProfitLoss) → 보통주 귀속 순이익(우선주 흔적 없을 때만)
+      const fresh = (t0) => (t0 && dayDiff(t0.end, x.date) <= 7 ? t0 : null);
+      const plNci = () => { const a = fresh(secTtm("ProfitLoss")), b = fresh(secTtm("NetIncomeLossAttributableToNoncontrollingInterest")); return a && b ? { v: a.v - b.v, end: a.end, how: `ProfitLoss − 비지배지분(${a.how})` } : null; };
+      const t = fresh(secTtm("NetIncomeLoss")) ?? (hasNciNow ? plNci() : fresh(secTtm("ProfitLoss")))
+        ?? (![...prefTrace].some((e) => dayDiff(e, x.date) <= 400) ? fresh(secTtm("NetIncomeLossAvailableToCommonStockholdersBasic")) : null)
+        ?? secTtm("NetIncomeLoss") ?? (hasNciNow ? null : secTtm("ProfitLoss"));
       if (!t) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: NA, note: "SEC 분기 순이익으로 TTM 계산 불가" });
       // 3차 감사: 앱 LTM 이 SEC 최신 분기보다 늦으면(한 분기 뒤처짐) 검증불가가 아니라 실패
       else if (Date.parse(x.date) < Date.parse(t.end) - 7 * 864e5) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: FAIL, note: `앱 LTM 기준일 ${x.date} 이 SEC 최신 결산 ${t.end} 보다 늦음(분기 누락)` });
@@ -1670,6 +1778,9 @@ async function verifyUs(sym) {
     }
     if (x.mc != null && x.rev != null) signRule("PSR", x.psr, x.rev);
     if (isFy && x.mc != null) { const eq = atEnd(eqP, x.date)?.val; if (eq != null) signRule("PBR", x.pbr, eq); }
+    // 감사 m3: 금융 자회사 보유사(오너 결정 목록 + SEC 금융채권 비중으로 독립 확인)는 EV 를 표시하면 안 된다
+    if (captiveSec && x.ev != null) add("D", "금융 자회사 보유사 EV 미표시", c, { status: FAIL, note: `EV ${x.ev} 가 표시됨 — ${captiveSec}` });
+    else if (captiveSec) add("D", "금융 자회사 보유사 EV 미표시", c, { status: PASS, note: captiveSec });
     if (!bank && x.mc != null) {
       if (x.ev == null) {
         const ok = evBlockOkAt(x.date);
@@ -1790,6 +1901,65 @@ async function verifyUs(sym) {
     }
   }
 
+  if (fyDebtCheck) add("A", "20-F FY 총차입금 앱 = SEC 본표 차입금 + 리스(규칙 재구현)", fyDebtCheck.col, fyDebtCheck.r);
+
+  // ── A. 20-F LTM(Yahoo 분기) 독립 재계산(감사 M1, 2026-09-25) — 앱이 "LTM 열 = Yahoo 분기"라고 밝힌 외화 공시(TSM·ASML·SPOT)는
+  // 검증기가 Yahoo 분기 재무 + 일별 환율로 "최근 4개 분기 × 그 분기 평균 환율"(잔액은 최신 분기말 × 기말 환율)을 따로 계산해 정확 비교.
+  // 원천(Yahoo)·환율(Yahoo)이 앱과 같아 공통모드 — 앱의 합산·환산 계산 오류를 잡는 검사이고 Yahoo 값 자체의 정합성은 보증하지 않는다.
+  // 앱이 공란으로 둔 항목은 앱 notes 의 사유(Yahoo 연간 ≠ SEC FY)를 SEC 원본(검증기 판독)으로 따로 확인한다.
+  const ltmYahooNote = (h.notes ?? []).find((n) => /LTM 열 = Yahoo 분기/.test(n));
+  if (foreign && H.LTM && ltmYahooNote) {
+    try {
+      if (!fxRows) throw new Error(fxErr || "환율 없음");
+      const yqq = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: new Date(Date.parse(H.LTM.date) - 460 * 864e5), type: "quarterly", module: "all" }, { validateResult: false });
+      const rows = yqq.map((r) => ({ ...r, end: new Date(r.date).toISOString().slice(0, 10) })).filter((r) => r.end <= H.LTM.date || dayDiff(r.end, H.LTM.date) <= 7).sort((a, b) => a.end.localeCompare(b.end));
+      const last = rows.slice(-4);
+      if (last.length !== 4 || dayDiff(last[3].end, H.LTM.date) > 7) add("A", "20-F LTM = Yahoo 분기 4개 × 분기 평균 환율", "LTM", { status: FAIL, note: `Yahoo 분기 4개(기준일 ${H.LTM.date})를 못 찾음 — ${last.map((r) => r.end).join(",")}` });
+      else {
+        const qStart = (e) => { const d = new Date(`${e}T00:00:00Z`); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 2, 1)).toISOString().slice(0, 10); };
+        const avgR = last.map((r) => fxAvg(fxRows, qStart(r.end), r.end));
+        const endR = fxRows.filter((q) => q.d <= last[3].end).at(-1)?.r ?? null;
+        const flow = (k) => (last.every((r) => r[k] != null) ? last.reduce((t, r, i) => t + r[k] * avgR[i], 0) : null);
+        const hv = (key) => h.rows.find((r) => r.key === key)?.values[h.columns.findIndex((cc) => cc.kind === "ltm")] ?? null;
+        const isL = (name) => is?.sections?.flatMap((s0) => s0.items ?? []).find((x0) => x0.accountName === name)?.values?.["현재/LTM"] ?? null;
+        const bsL = (name) => rowOf(bs, name)["현재/LTM"] ?? null;
+        const blanks = /공란: (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1] ?? "";
+        const basis = `Yahoo 분기 ${last.map((r) => r.end).join("·")} × 분기 평균 환율(${natCur}→USD, Yahoo 일별 — 공통모드)`;
+        const items = [
+          ["매출", H.LTM.rev, flow("totalRevenue"), "totalRevenue"], ["매출원가", isL("(−) 매출원가"), flow("costOfRevenue"), "costOfRevenue"],
+          ["매출총이익", isL("매출총이익"), flow("grossProfit"), "grossProfit"], ["영업이익", IS.LTM?.op ?? null, flow("totalOperatingIncomeAsReported"), "totalOperatingIncomeAsReported"],
+          ["순이익", H.LTM.ni, flow("netIncome"), "netIncome"], ["감가상각비", IS.LTM?.da ?? null, flow("reconciledDepreciation"), "reconciledDepreciation"],
+          ["영업활동 현금흐름", hv("ocf"), flow("operatingCashFlow"), "operatingCashFlow"], ["CapEx", hv("capex"), flow("capitalExpenditure"), "capitalExpenditure"],
+        ];
+        const bals = [
+          ["자산 총계", bsL("자산 총계"), "totalAssets"], ["부채 총계", bsL("부채 총계"), "totalLiabilitiesNetMinorityInterest"],
+          ["자본 총계", bsL("자본 총계"), "stockholdersEquity"], ["현금·현금성자산", bsL("현금·현금성자산"), "cashAndCashEquivalents"],
+          ["유동자산 총계", bsL("유동자산 총계"), "currentAssets"], ["유동부채 총계", bsL("유동부채 총계"), "currentLiabilities"],
+        ].map(([n0, app, k]) => [n0, app, last[3][k] != null && endR != null ? last[3][k] * endR : null, k]);
+        let secFy = null; // 공란 사유 확인용 SEC FY(원통화) — 필요할 때만 판독
+        const fyCol = Object.keys(H).filter((cc) => cc !== "LTM").sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1);
+        for (const [n0, app, exp, k] of [...items, ...bals]) {
+          const name = `20-F LTM ${n0} = Yahoo 분기${bals.some((b) => b[0] === n0) ? " 최신 분기말 × 기말 환율" : " 4개 × 분기 평균 환율"}`;
+          if (app != null) { add("A", name, "LTM", exp == null ? { status: FAIL, note: `앱 ${app} 있는데 Yahoo ${k} 없음` } : vsSource(app, exp, EXACT, basis)); continue; }
+          if (exp == null) { add("A", name, "LTM", { status: NA, note: `양쪽 빈칸(Yahoo ${k} 없음)` }); continue; }
+          // 앱 공란 — notes 에 사유가 적힌 항목만, 사유(Yahoo 연간 ≠ SEC FY)를 SEC 원본으로 확인
+          if (!blanks.includes(n0)) { add("A", name, "LTM", { status: FAIL, note: `Yahoo ${k} ${exp} 있는데 앱 공란(사유 없음)` }); continue; }
+          if (n0 !== "CapEx") { add("A", name, "LTM", { status: NA, note: `앱 공란(사유 "${n0}") — SEC 대응 태그 독립 판독 미구현` }); continue; }
+          secFy ??= fyCol ? await filingAtDate(cik, sub, H[fyCol].date) : null;
+          const cap = secFy?.durFacts.filter((x0) => !x0.dims.length && /PurchaseOfPropertyPlantAndEquipment|PaymentsToAcquirePropertyPlantAndEquipment/.test(x0.id) && (Date.parse(x0.end) - Date.parse(x0.start)) / 864e5 > 300).sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0];
+          const ya = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "cash-flow" }, { validateResult: false });
+          const yr = ya.find((r) => r.capitalExpenditure != null && dayDiff(new Date(r.date).toISOString().slice(0, 10), H[fyCol].date) <= 7);
+          if (!cap || !yr) { add("A", name, "LTM", { status: FAIL, note: `앱 공란 사유(CapEx: Yahoo 연간 ≠ SEC FY) 확인 불가 — SEC ${cap ? "있음" : "없음"}·Yahoo ${yr ? "있음" : "없음"}` }); continue; }
+          const d = Math.abs(Math.abs(yr.capitalExpenditure) - Math.abs(cap.v));
+          add("A", name, "LTM", d > secUnitAny(cap.v) / 2 ? { status: NA, note: `앱 공란 — 사유 확인: Yahoo ${fyCol} CapEx ${Math.abs(yr.capitalExpenditure)} ≠ SEC ${secFy.form} ${cap.id.replace(/^[a-z-]+_/, "")} ${Math.abs(cap.v)} ${natCur}(정의 차이)` }
+            : { status: FAIL, note: `앱 공란인데 Yahoo ${fyCol} CapEx ${Math.abs(yr.capitalExpenditure)} = SEC ${Math.abs(cap.v)} — 사유 불성립` });
+        }
+      }
+    } catch (e) {
+      hardErrors.push(`20-F LTM 독립 재계산(Yahoo 분기·환율) 조회 실패: ${String(e).slice(0, 60)}`);
+    }
+  }
+
   // ── C. 개요·유니버스 — 앱이 실제로 계산한 값(verify-row) vs 하이라이트 LTM
   const L = H.LTM;
   if (row && L) {
@@ -1843,8 +2013,9 @@ async function verifyUs(sym) {
       errs.push(`Yahoo: ${String(e).slice(0, 60)}`);
     }
     const yEbitda = (r) => (r.totalOperatingIncomeAsReported != null && r.reconciledDepreciation != null ? r.totalOperatingIncomeAsReported + r.reconciledDepreciation : null);
+    // 감사 M1: 외화 공시는 Yahoo 가 원통화라 USD 앱 값과 직접 비교하지 않는다(환산 비교는 A층 "20-F LTM" 검사가 한다)
     for (const [c, x] of Object.entries(H)) {
-      if (c === "LTM") continue;
+      if (c === "LTM" || foreign) continue;
       const r = ya.find((r) => dayDiff(iso(r.date), x.date) <= 7);
       if (!r) continue;
       put(`${c} 매출`, x.rev, "Yahoo", r.totalRevenue);
@@ -1853,13 +2024,13 @@ async function verifyUs(sym) {
       put(`${c} 영업이익`, IS[c]?.op, "Yahoo", r.totalOperatingIncomeAsReported);
       put(`${c} 감가상각비`, IS[c]?.da, "Yahoo", r.reconciledDepreciation);
     }
-    const last4 = yq.filter((r) => r.totalOperatingIncomeAsReported != null).slice(-4);
+    const last4 = foreign ? [] : yq.filter((r) => r.totalOperatingIncomeAsReported != null).slice(-4);
     if (last4.length === 4 && dayDiff(iso(last4.at(-1).date), L.date) <= 7) {
       if (last4.every((r) => yEbitda(r) != null)) put("LTM EBITDA", L.ebitda, "Yahoo", last4.reduce((s, r) => s + yEbitda(r), 0));
       if (last4.every((r) => r.totalRevenue != null)) put("LTM 매출", L.rev, "Yahoo", last4.reduce((s, r) => s + r.totalRevenue, 0));
     }
     const bsq = yq.filter((r) => r.totalDebt != null).at(-1);
-    if (bsq && dayDiff(iso(bsq.date), L.date) <= 7) put("LTM 총차입금(운용리스 포함)", withLease, "Yahoo", bsq.totalDebt);
+    if (bsq && !foreign && dayDiff(iso(bsq.date), L.date) <= 7) put("LTM 총차입금(운용리스 포함)", withLease, "Yahoo", bsq.totalDebt);
 
     // StockAnalysis — TTM 은 최근 분기말이 앱 LTM 기준일과 같을 때만
     if (!foreign) {
@@ -2147,19 +2318,7 @@ async function verifyUs(sym) {
       try {
         const fl = await filingAtDate(cik, sub, L.date);
         if (fl) {
-          const lab = (id) => (fl.labels.get(id) ?? []).join(" | ");
-          const nm = (id) => id.replace(/^[a-z0-9-]+_/, "");
-          const val0 = (id) => fl.facts.find((x) => x.id === id && !x.dims.length)?.v ?? null;
-          const STD = /Debt|Borrowing|NotesPayable|CommercialPaper|LinesOfCredit|LineOfCredit|FinanceLease|CapitalLease|OperatingLeaseLiabilit|ConvertibleNotes|SeniorNotes|LoansPayable|NotesAndLoans|ShortTermNonBankLoans|FinancingObligation/;
-          const CUS = /debt|borrowing|notes payable|commercial paper|lease liabilit|lease obligation|finance lease|capital lease|financing obligation/i;
-          const EXC = /Interest|Accrued|Derivative|Asset|Receivable|Securit|Investment|Tax|Unamortized|Issuance|Discount|Premium/i;
-          const isDebt = (id) => { const std = id.startsWith("us-gaap_"); return std ? STD.test(nm(id)) && !EXC.test(nm(id)) : (CUS.test(lab(id)) || STD.test(nm(id))) && !EXC.test(`${nm(id)} ${lab(id)}`); };
-          // 본표 차입금·리스 줄 — 차입금 성격 노드를 만나면 그 아래로 내려가지 않는다(소계·하위 줄 이중 합산 방지)
-          const lines = [], seen = new Set();
-          const walk = (id, d) => { if (d > 8 || seen.has(id)) return; seen.add(id); if (isDebt(id)) { lines.push(id); return; } for (const k of fl.kids.get(id) ?? []) walk(k, d + 1); };
-          for (const r0 of fl.roots) walk(r0, 0);
-          const faceVals = lines.map((id) => ({ id, v: val0(id) })).filter((x) => x.v != null);
-          const faceSum = faceVals.reduce((t, x) => t + x.v, 0);
+          const { faceVals, faceSum, val0, nm } = faceDebtLines(fl);
           const onFace = (id) => fl.faceIds.has(id);
           const firstOff = (ids) => { for (const id of ids) if (!onFace(id) && val0(id) != null) return { id, v: val0(id) }; return null; };
           const off = [];

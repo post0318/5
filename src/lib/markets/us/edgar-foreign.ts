@@ -52,12 +52,23 @@ const IFRS_MAP: [string, string][] = [
   ["CashAndCashEquivalents", "CashAndCashEquivalentsAtCarryingValue"],
   ["CashFlowsFromUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivities"],
   ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", "PaymentsToAcquirePropertyPlantAndEquipment"],
+  // SAP 은 현금흐름표 본표 CapEx 가 유형·무형 합산 줄 하나(739·797·785 백만 EUR = Yahoo capitalExpenditure, 2026-09-25) —
+  // 없으면 CapEx 가 전 열 공란이었다. 위 개념이 있는 회사는 그 개념이 우선(빈 기간만 채움)
+  ["PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets", "PaymentsToAcquirePropertyPlantAndEquipment"],
   ["DividendsPaidClassifiedAsFinancingActivities", "PaymentsOfDividends"],
   ["ShorttermBorrowings", "ShortTermBorrowings"],
   // IFRS 16 리스 = 차입금 성격(구분 없음) → 금융리스 개념으로 넣어 차입금에 포함
   ["CurrentLeaseLiabilities", "FinanceLeaseLiabilityCurrent"],
   ["NoncurrentLeaseLiabilities", "FinanceLeaseLiabilityNoncurrent"],
   ["NumberOfSharesOutstanding", "CommonStockSharesOutstanding"],
+  // 감가상각+무형상각을 이미 하나로 합쳐 공시하는 회사(NVO 손익계산서·SAP 현금흐름
+  // 조정) — EBITDA(edgar-ev.ts pickDa)가 읽는 DA_TOTAL 목록에 그대로 잡힌다(검증
+  // 2026-09-25, 독립 감사 지적: 전엔 매핑이 없어 EBITDA 가 영업이익과 같게 나왔다).
+  // NVO 현금흐름의 결합 개념(AdjustmentsForDepreciationAndAmortisationExpenseAnd
+  // ImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss)은 손상차손까지
+  // 섞여(실측 2025 220억 DKK vs 이 손익계산서 태그 147억 DKK) 매핑하지 않는다.
+  ["DepreciationAndAmortisationExpense", "DepreciationDepletionAndAmortization"],
+  ["AdjustmentsForDepreciationAndAmortisationExpense", "DepreciationDepletionAndAmortization"],
 ];
 /** 여러 IFRS 개념의 합 → us-gaap 개념 (같은 기간끼리) */
 const IFRS_SUM: [string[], string][] = [

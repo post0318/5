@@ -437,11 +437,11 @@ export function buildUsIncome(
     return o;
   })();
   const oneOff = val(["OneOffChargesDerived"]);
+  // 감가상각비 구성요소가 없으면(매핑 누락 — IFRS 20-F 등) EBITDA 도 공란(0 으로
+  // 보지 않음, Yahoo 분기 LTM 여부와 무관 — 독립 감사 지적 2026-09-25 NVO·SAP)
   const ebitda = blank();
   for (const l of labels)
-    if (opIncome[l] != null) ebitda[l] = opIncome[l]! + (da[l] ?? 0);
-  // 20-F Yahoo 분기 LTM(edgar-yahoo-quarters.ts)에서 감가상각비를 못 채웠으면 EBITDA 도 공란
-  if (!quarterly && yahooLtm(facts) && da[LTM] == null) ebitda[LTM] = null;
+    if (opIncome[l] != null && da[l] != null) ebitda[l] = opIncome[l]! + da[l]!;
 
   const row = (
     label: string,

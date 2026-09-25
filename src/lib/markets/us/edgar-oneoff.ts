@@ -64,20 +64,20 @@ async function files(cik: number, f: Filing): Promise<{ cal: string; lab: string
 /** 개념 id(ns_Concept) → 모든 역할의 라벨 텍스트 */
 function labels(lab: string): Map<string, string[]> {
   const loc = new Map<string, string>();
-  for (const l of lab.matchAll(/<link:loc\b([^>]*)\/?>/g)) {
+  for (const l of lab.matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) {
     const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1];
     const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
     if (id && href) loc.set(id, href);
   }
   const text = new Map<string, string>();
-  for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+  for (const m of lab.matchAll(/<(?:link:)?label\b([^>]*)>([^<]*)<\/(?:link:)?label>/g)) {
     const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
     // 정의문(documentation)은 표시 라벨이 아니다 — CI 투자손익 정의문의 "write-downs" 가 걸렸다
     if (!id || /xlink:role="[^"]*documentation"/i.test(m[1])) continue;
     text.set(id, (text.get(id) ?? "") + " | " + m[2].replace(NEGATED, ""));
   }
   const out = new Map<string, string[]>();
-  for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+  for (const a of lab.matchAll(/<(?:link:)?labelArc\b([^>]*)\/?>/g)) {
     const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
     const t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
     if (from && t) out.set(from, [...(out.get(from) ?? []), t]);
@@ -87,17 +87,17 @@ function labels(lab: string): Map<string, string[]> {
 
 /** 손익계산서 계산 구조에서 일회성 줄(루트 기준 부호). 영업외·매출 노드 아래로는 내려가지 않는다. */
 function oneOffLines(cal: string, lab: Map<string, string[]>): Line[] | null {
-  for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+  for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
     if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Segment/i.test(role)) continue;
     const loc = new Map<string, string>();
-    for (const l of m[2].matchAll(/<link:loc\b([^>]*)\/?>/g)) {
+    for (const l of m[2].matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) {
       const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1];
       const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
       if (id && href) loc.set(id, href);
     }
     const arcs: { from: string; to: string; w: number }[] = [];
-    for (const a of m[2].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+    for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
       const to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       const w = Number(/weight="([^"]+)"/.exec(a[1])?.[1]);

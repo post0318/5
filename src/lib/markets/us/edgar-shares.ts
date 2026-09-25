@@ -150,16 +150,28 @@ const SPLIT_CONFIRM_WINDOW_DAYS = 200;
  */
 const SPLIT_COVER_EXCLUDE_DAYS = 10;
 
-/**
- * Yahoo 비율이 작은 정수비(분자 ≤ 100, 분모 ≤ 10 — 2:1·3:2·10:1·50:1·1:10 등)인지. 실제 분할·병합은 항상 이런 비율이고,
- * Yahoo 가 "분할"로 기록하는 분사 조정계수는 분사 기준가 비율이라 1.323(WDC)·1.281·1.253(GE) 같은 비정수다.
- */
-function isSmallIntegerRatio(ratio: number): boolean {
+/** 한쪽 방향만 — 분자 ≤ 100, 분모 ≤ 10 인 정수비(2:1·3:2·10:1·50:1·1:10 등)인지. */
+function isSmallRatioOneDirection(ratio: number): boolean {
   for (let den = 1; den <= 10; den++) {
     const num = Math.round(ratio * den);
     if (num >= 1 && num <= 100 && Math.abs(num / den - ratio) < 1e-9) return true;
   }
   return false;
+}
+
+/**
+ * Yahoo 비율이 작은 정수비(2:1·3:2·10:1·50:1·1:10·1:20·1:25·1:50 등)인지. 실제 분할·병합은 항상 이런 비율이고,
+ * Yahoo 가 "분할"로 기록하는 분사 조정계수는 분사 기준가 비율이라 1.323(WDC)·1.281·1.253(GE) 같은 비정수다.
+ *
+ * **정·역방향 대칭**(독립 감사 지적 2026-09-25): 분모를 10 까지만 보면 1:20·1:25·1:50 같은 역분할(ratio < 1)이
+ * 안 잡힌다(1:20 = 0.05 는 분모 20 이 필요) — 정방향에서 안 잡히면 역수(1/ratio)로도 확인한다(1/0.05 = 20 은
+ * 분자 20·분모 1 로 정방향 그대로 잡힌다). 분사 조정계수(1.323 등)는 역수(0.756 등)도 작은 정수비가 아니라 오탐 없음
+ * (실측 확인). 1.2·1.25 같은 작은 유리수 분사 조정계수가 우연히 걸릴 위험은 기존 그대로 — 이 함수가 참이면 SEC
+ * 표지 확인 없이 곧장 "실제 분할"로 보므로(대칭화 이전부터 있던 동작, 이 수정으로 새로 생긴 위험이 아니다).
+ */
+function isSmallIntegerRatio(ratio: number): boolean {
+  if (!(ratio > 0)) return false;
+  return isSmallRatioOneDirection(ratio) || isSmallRatioOneDirection(1 / ratio);
 }
 
 export function secBasisBars(facts: CompanyFacts, quote: EodQuote | null | undefined): QuoteBar[] {

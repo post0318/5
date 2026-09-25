@@ -2,6 +2,7 @@ import "server-only";
 import { fetchJson, fetchText } from "../http";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { RecentFilings } from "./edgar-gapfill";
+import { fxToUsd } from "./edgar-foreign";
 
 /**
  * **총차입금 = 대차대조표 본표의 차입금 줄**(10-K·10-Q 계산 구조 `_cal.xml`) — 태그 우선순위로 고르던 방식이
@@ -46,13 +47,23 @@ const DEBT_CONCEPT = /Debt|Borrowing|NotesPayable|NotesAndLoans|CommercialPaper|
 const NOT_DEBT = /OperatingLease|Interest|DeferredTax|Securities|Receivable|Issuance|Discount|Premium|Asset|Guarantee|Supplier/;
 const DEBT_LABEL = /\b(debt|borrowings?|notes payable|commercial paper|finance leases?|capital leases?|loans? payable|senior notes|convertible notes|credit facilit|financing obligations?)/i;
 const NOT_DEBT_LABEL = /operating lease|interest|guarantee|supplier/i;
+// IFRS(20-F — TSM·SPOT): 리스부채는 운용·금융 구분이 없고 리스비용이 EBITDA 밖이라 차입금에 넣는다(한국 IFRS 와 같은 규칙,
+// CLAUDE.md "외화·IFRS 공시"). 본표에 없는 유동 리스부채(TSM·SPOT 은 "미지급비용 및 기타유동부채" 안)는 주석 값으로 더한다
+// (withBalanceSheetDebt 의 IFRS 분기 — 미국 규칙 ② 본표 밖 유동 차입금과 같은 취지)
+const IFRS_DEBT_CONCEPT = /Borrowings|BondsIssued|LeaseLiabilities|Debentures|CommercialPaper|NotesPayable|LoansPayable/;
+const IFRS_NOT_DEBT = /Interest|Derivative|FairValue|Warrant/;
+const IFRS_NOTE_LEASE = ["ifrs-full_CurrentLeaseLiabilities", "ifrs-full_NoncurrentLeaseLiabilities"];
+const IFRS_LEASE_TO_GAAP: Record<string, string> = {
+  "ifrs-full_CurrentLeaseLiabilities": "FinanceLeaseLiabilityCurrent",
+  "ifrs-full_NoncurrentLeaseLiabilities": "FinanceLeaseLiabilityNoncurrent",
+};
 /** 주석 유동 차입금 — 본표에 유동 줄이 없을 때. DebtCurrent 는 단기차입금·CP 포함 상위 개념이라 단독 */
 const NOTE_CURRENT_TOTAL = ["DebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"];
 const NOTE_CURRENT_PARTS = ["LongTermDebtCurrent", "ShortTermBorrowings", "CommercialPaper", "OtherShortTermBorrowings"];
 const NOTE_FIN_LEASE_PARTS = ["FinanceLeaseLiabilityCurrent", "FinanceLeaseLiabilityNoncurrent"];
 
 interface Filing { accn: string; form: string; filed: string; doc: string; report: string }
-interface Face { lines: string[]; current: Set<string>; hasCurrent: boolean; hasLease: boolean; mixed: string[]; mixedCurrent: Set<string> }
+interface Face { lines: string[]; current: Set<string>; hasCurrent: boolean; hasLease: boolean; mixed: string[]; mixedCurrent: Set<string>; ifrs: boolean }
 
 // 계산 구조에 유동부채 소계가 없는 본표(비분류형)에서만 쓰는 이름 판정. "IncludingCurrentMaturities" 는 유동분을 포함한
 // 장기 줄이지 유동 줄이 아니다(CVX — 이름 판정으로 장기차입금 39,781 이 0 이 됐다, 재감사 HIGH)
@@ -60,7 +71,7 @@ const isCurrentName = (id: string) => /Current|ShortTerm|CommercialPaper/.test(i
 
 function locs(x: string): Map<string, string> {
   const loc = new Map<string, string>();
-  for (const l of x.matchAll(/<link:loc\b([^>]*)\/?>/g)) {
+  for (const l of x.matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) {
     const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1];
     const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
     if (id && href) loc.set(id, href);
@@ -72,13 +83,13 @@ function locs(x: string): Map<string, string> {
 function labels(lab: string): Map<string, string> {
   const loc = locs(lab);
   const text = new Map<string, string>();
-  for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+  for (const m of lab.matchAll(/<(?:link:)?label\b([^>]*)>([^<]*)<\/(?:link:)?label>/g)) {
     const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
     if (!id || /xlink:role="[^"]*documentation"/i.test(m[1])) continue;
     text.set(id, (text.get(id) ?? "") + " | " + m[2]);
   }
   const out = new Map<string, string>();
-  for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+  for (const a of lab.matchAll(/<(?:link:)?labelArc\b([^>]*)\/?>/g)) {
     const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
     const t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
     if (from && t) out.set(from, (out.get(from) ?? "") + t);
@@ -88,17 +99,20 @@ function labels(lab: string): Map<string, string> {
 
 /** 대차대조표 계산 구조의 차입금 줄. 대차대조표 역할이 없으면 null */
 export function faceDebtLines(cal: string, lab: Map<string, string>): Face | null {
-  for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+  for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
     if (!/BALANCE|FINANCIALPOSITION|FINANCIALCONDITION/i.test(role) || /Detail|Table|Parenth/i.test(role)) continue;
     const loc = locs(m[2]);
     const arcs: { from: string; to: string }[] = [];
-    for (const a of m[2].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+    for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
       const to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       if (from && to) arcs.push({ from, to });
     }
-    if (!arcs.some((a) => /^us-gaap_Liabilities(Current|Noncurrent)?$/.test(a.from))) continue;
+    // IFRS 20-F(TSM·SPOT)는 ifrs-full 소계(Liabilities·CurrentLiabilities·NoncurrentLiabilities·EquityAndLiabilities)
+    const ifrs = arcs.some((a) => /^ifrs-full_(Current|Noncurrent)?Liabilities$/.test(a.from));
+    if (!ifrs && !arcs.some((a) => /^us-gaap_Liabilities(Current|Noncurrent)?$/.test(a.from))) continue;
+    const CUR = ifrs ? "ifrs-full_CurrentLiabilities" : "us-gaap_LiabilitiesCurrent";
     const lines: string[] = [];
     const underCurrent = new Set<string>();
     const mixed: string[] = [];
@@ -112,19 +126,27 @@ export function faceDebtLines(cal: string, lab: Map<string, string>): Face | nul
         const concept = a.to.slice(a.to.indexOf("_") + 1);
         if (/Equity|Stockholders/.test(concept) && !/Liabilit/.test(concept)) continue;
         const lb = lab.get(a.to) ?? "";
-        const text = a.to.startsWith("us-gaap_") ? concept : lb || concept;
+        const std = a.to.startsWith("us-gaap_") || a.to.startsWith("ifrs-full_");
+        const text = std ? concept : lb || concept;
         // 운용·금융리스 합산 줄 — 차입금에서 빼고 주석 금융리스로 대신
         if (/OperatingAndFinanceLease|operating and finance lease/i.test(text)) { mixed.push(a.to); continue; }
-        const debt = a.to.startsWith("us-gaap_")
-          ? DEBT_CONCEPT.test(concept) && !NOT_DEBT.test(concept)
-          : (DEBT_LABEL.test(lb) && !NOT_DEBT_LABEL.test(lb)) || (!lb && DEBT_CONCEPT.test(concept) && !NOT_DEBT.test(concept));
+        const debt = a.to.startsWith("ifrs-full_")
+          ? IFRS_DEBT_CONCEPT.test(concept) && !IFRS_NOT_DEBT.test(concept)
+          : std
+            ? DEBT_CONCEPT.test(concept) && !NOT_DEBT.test(concept)
+            : (DEBT_LABEL.test(lb) && !NOT_DEBT_LABEL.test(lb)) ||
+              (ifrs && /\blease liabilit/i.test(lb) && !NOT_DEBT_LABEL.test(lb)) ||
+              (!lb && DEBT_CONCEPT.test(concept) && !NOT_DEBT.test(concept));
         if (debt) lines.push(a.to);
-        else walk(a.to, depth + 1, cur || a.to === "us-gaap_LiabilitiesCurrent");
+        else walk(a.to, depth + 1, cur || a.to === CUR);
       }
     };
-    for (const root of ["us-gaap_LiabilitiesAndStockholdersEquity", "us-gaap_Liabilities", "us-gaap_LiabilitiesCurrent", "us-gaap_LiabilitiesNoncurrent"]) walk(root, 0, root === "us-gaap_LiabilitiesCurrent");
+    const roots = ifrs
+      ? ["ifrs-full_EquityAndLiabilities", "ifrs-full_Liabilities", "ifrs-full_CurrentLiabilities", "ifrs-full_NoncurrentLiabilities"]
+      : ["us-gaap_LiabilitiesAndStockholdersEquity", "us-gaap_Liabilities", "us-gaap_LiabilitiesCurrent", "us-gaap_LiabilitiesNoncurrent"];
+    for (const root of roots) walk(root, 0, root === CUR);
     // 유동 여부 = 계산 구조상 유동부채 소계 아래인가. 소계가 없는 본표만 이름으로
-    const classified = arcs.some((a) => a.from === "us-gaap_LiabilitiesCurrent");
+    const classified = arcs.some((a) => a.from === CUR);
     const current = new Set(lines.filter((l) => (classified ? underCurrent.has(l) : isCurrentName(l))));
     return {
       lines,
@@ -134,6 +156,7 @@ export function faceDebtLines(cal: string, lab: Map<string, string>): Face | nul
       hasLease: !mixed.length && lines.some((l) => /Lease/i.test(l) || /lease/i.test(lab.get(l) ?? "")),
       mixed,
       mixedCurrent: new Set(mixed.filter((l) => (classified ? underCurrent.has(l) : isCurrentName(l)))),
+      ifrs,
     };
   }
   return null;
@@ -144,7 +167,12 @@ type InstantValues = Map<string, Map<string, number>> & { dimOnly?: Set<string>;
 
 /** 인스턴스의 차원 없는 시점 값: 개념 id(ns_Concept) → 날짜 → 값. 차원으로만 있는 "id|날짜" 는 dimOnly,
  *  그 날짜의 단일 명시 멤버 값은 dimVals("id|날짜" → 축·멤버·값) */
-function instantValues(xml: string, ids: Set<string>): InstantValues {
+function instantValues(xml: string, ids: Set<string>, cur = "USD"): InstantValues {
+  // 공시 통화 단위만(외화 공시는 원통화 — 20-F 의 USD 편의 환산 값은 단일 환율이라 쓰지 않는다, edgar-foreign.ts)
+  const units = new Set<string>();
+  const measure = new RegExp(`iso4217:${cur}\\s*<`, "i");
+  for (const u of xml.matchAll(/<(?:xbrli:)?unit\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?unit>/g))
+    if (!/divide/i.test(u[2]) && measure.test(u[2])) units.add(u[1]);
   const ctx = new Map<string, { d: string; dim: boolean; one: { axis: string; member: string } | null }>();
   for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
     const inst = /<(?:xbrli:)?instant>\s*([^<\s]+)/.exec(m[2])?.[1];
@@ -163,7 +191,7 @@ function instantValues(xml: string, ids: Set<string>): InstantValues {
     const id = `${m[1]}_${m[2]}`;
     if (!ids.has(id)) continue;
     const c = ctx.get(/contextRef="([^"]+)"/.exec(m[3])?.[1] ?? "");
-    if (!c || !/unitRef="[^"]*usd/i.test(m[3])) continue;
+    if (!c || !units.has(/unitRef="([^"]+)"/.exec(m[3])?.[1] ?? "")) continue;
     if (c.dim) {
       const k = `${id}|${c.d}`;
       dimmed.add(k);
@@ -192,12 +220,12 @@ function instantValues(xml: string, ids: Set<string>): InstantValues {
  */
 export function faceMembers(def: string): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
-  for (const m of def.matchAll(/<link:definitionLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:definitionLink>/g)) {
+  for (const m of def.matchAll(/<(?:link:)?definitionLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?definitionLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
     if (!/BALANCE|FINANCIALPOSITION|FINANCIALCONDITION/i.test(role) || /Detail|Table|Parenth/i.test(role)) continue;
     const loc = locs(m[2]);
     const arcs: { role: string; from: string; to: string }[] = [];
-    for (const a of m[2].matchAll(/<link:definitionArc\b([^>]*)\/?>/g)) {
+    for (const a of m[2].matchAll(/<(?:link:)?definitionArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
       const to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       const r = /xlink:arcrole="[^"]*\/([^"/]+)"/.exec(a[1])?.[1] ?? "";
@@ -253,16 +281,20 @@ async function filingFiles(cik: number, f: Filing): Promise<{ cal: string; lab: 
 export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, recent: RecentFilings | null): Promise<CompanyFacts> {
   if (!recent) return facts;
   const g = facts.facts["us-gaap"] ?? {};
-  // 최신 10-Q(최신 10-K 보다 새로울 때) + 최근 10-K 5건 — 화면 연도 열 5개와 LTM 을 덮는다
+  // 최신 10-Q(최신 10-K 보다 새로울 때) + 최근 10-K 5건 — 화면 연도 열 5개와 LTM 을 덮는다. 외국 발행사는 20-F·40-F 가
+  // 연차 보고서(ASML·TSM·SPOT — 예전엔 10-K 만 봐서 본표 판정이 통째로 빠지고 태그 규칙으로 폴백했다, 2026-09-25)
   const filings: Filing[] = [];
   let k10 = 0;
   for (let i = 0; i < recent.form.length && k10 < 5; i++) {
     const form = recent.form[i];
-    if (form === "10-K") k10++;
+    if (/^(10-K|20-F|40-F)$/.test(form)) k10++;
     else if (!(form === "10-Q" && k10 === 0 && !filings.some((x) => x.form === "10-Q"))) continue;
     filings.push({ accn: recent.accessionNumber[i], form, filed: recent.filingDate[i], doc: recent.primaryDocument[i], report: recent.reportDate?.[i] ?? "" });
   }
   if (!filings.length) return facts;
+  // 외화 공시(edgar-foreign.ts 정규화 후) — 인스턴스는 원통화로 읽어 기말 환율로 환산(companyfacts 쪽과 같은 규칙)
+  const cur = facts.reportingCurrency ?? "USD";
+  const fx = cur !== "USD" ? await fxToUsd(cur) : null;
 
   const cfVal = (concept: string, d: string): number | undefined => {
     let best: FactUnitEntry | undefined;
@@ -282,7 +314,10 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
     if (!fl) return facts; // 하나라도 못 읽으면 전체 미적용 — 기간마다 방식이 섞이지 않게
     parsed.push({ f, face: fl.cal ? faceDebtLines(fl.cal, labels(fl.lab)) : null, instUrl: fl.instUrl, defUrl: fl.defUrl });
   }
-  const noteIds = [...NOTE_CURRENT_TOTAL, ...NOTE_CURRENT_PARTS, "FinanceLeaseLiability", ...NOTE_FIN_LEASE_PARTS].map((c) => `us-gaap_${c}`);
+  const noteIds = [
+    ...[...NOTE_CURRENT_TOTAL, ...NOTE_CURRENT_PARTS, "FinanceLeaseLiability", ...NOTE_FIN_LEASE_PARTS].map((c) => `us-gaap_${c}`),
+    ...IFRS_NOTE_LEASE,
+  ];
   for (let k = 0; k < parsed.length; k++) {
     const p = parsed[k];
     // 10-Q 에 대차대조표 계산 구조가 없으면(ORCL) 직전 공시의 줄 목록을 쓴다
@@ -294,13 +329,13 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
       for (const e of g[c]?.units?.USD ?? []) if (!e.start && e.filed === p.f.filed) cfDates.add(e.end);
     const faceIds = [...face.lines, ...face.mixed];
     const allUsGaap = faceIds.every((l) => l.startsWith("us-gaap_"));
-    const cfComplete = allUsGaap && cfDates.size > 0 && [...cfDates].every((d) => faceIds.every((l) => cfVal(l.slice(8), d) !== undefined));
+    const cfComplete = !fx && allUsGaap && cfDates.size > 0 && [...cfDates].every((d) => faceIds.every((l) => cfVal(l.slice(8), d) !== undefined));
     // 회사 고유 줄·companyfacts 미반영 공시·빈 줄이 있으면 인스턴스에서 읽는다
     let inst: InstantValues | null = null;
     if (!cfComplete) {
       const xml = await fetchText(p.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 }).catch(() => null);
       if (!xml) return facts;
-      inst = instantValues(xml, new Set([...faceIds, ...noteIds]));
+      inst = instantValues(xml, new Set([...faceIds, ...noteIds]), cur);
     }
     const dates = new Set<string>(cfDates);
     if (inst)
@@ -332,12 +367,18 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
         // 한 줄이라도 못 정하면 합이 모자라므로 기존 규칙으로 둔다
         if (fromMembers.size < dimOnlyLines.length) continue;
       }
+      const rate = fx ? fx.at(d) : 1;
+      if (rate == null) continue; // 환율 없는 날짜는 원통화를 USD 로 섞지 않는다
       const v = (id: string): number | undefined => {
         const m = fromMembers.get(id);
-        if (m !== undefined) return m;
+        if (m !== undefined) return m * rate;
         const x = inst?.get(id)?.get(d);
-        if (x !== undefined) return x;
-        return id.startsWith("us-gaap_") ? cfVal(id.slice(8), d) : undefined;
+        if (x !== undefined) return x * rate;
+        if (id.startsWith("us-gaap_")) return cfVal(id.slice(8), d);
+        // IFRS 리스 주석값이 이 공시 인스턴스에 없는 날짜(전기말 — SPOT 은 당기말만 주석 공시)는 그 해 공시에서 온
+        // companyfacts 값(edgar-foreign.ts 가 금융리스 개념으로 매핑·USD 환산한 것)
+        const mapped = IFRS_LEASE_TO_GAAP[id];
+        return mapped ? cfVal(mapped, d) : undefined;
       };
       if (!face.lines.some((l) => v(l) !== undefined)) continue;
       let sum = 0;
@@ -348,14 +389,29 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
         sum += x;
         if (!face.current.has(l)) nc += x;
       }
-      if (!face.hasCurrent) {
+      if (face.ifrs) {
+        // IFRS 리스부채는 전부 차입금(CLAUDE.md "외화·IFRS 공시" — 한국 규칙과 같음). 본표에 유동·비유동 리스 줄 중 한쪽만 있으면 없는 쪽은
+        // 주석 값으로 더한다 — 유동 리스부채를 "미지급비용 및 기타유동부채" 안에 두는 발행사(TSM·SPOT)도 같은 범위가 되게
+        // (미국 규칙 ②·③ — 본표에 없는 유동 차입금·금융리스를 주석으로 더하는 것과 같은 취지). us-gaap 주석 규칙은 쓰지 않는다
+        // (IFRS→us-gaap 매핑 개념이 본표 줄과 같은 값이라 이중 합산)
+        const hasCurL = face.lines.some((l) => /(^|_)CurrentLeaseLiabilities$/.test(l));
+        const hasNcL = face.lines.some((l) => /NoncurrentLeaseLiabilities$/.test(l));
+        // 본표에 리스 줄이 **하나도 없으면** 더하지 않는다 — 리스부채를 차입금 줄 안에 넣어 표시하는 발행사가 있다(NVO:
+        // 본표 "장기차입금" 118,941 = 차입금 111,705 + 비유동 리스 7,236 백만 DKK, 주석 Borrowings 130,958 = 본표 합).
+        // 이때 주석 리스를 더하면 이중 합산(검증 2026-09-25, 139,530 vs 본표·Yahoo 130,958). 한쪽만 있으면 나머지 쪽만 더한다
+        if (hasCurL || hasNcL) {
+          const cl = v("ifrs-full_CurrentLeaseLiabilities"), ncl = v("ifrs-full_NoncurrentLeaseLiabilities");
+          if (!hasCurL) sum += cl ?? 0;
+          if (!hasNcL) { sum += ncl ?? 0; nc += ncl ?? 0; }
+        }
+      } else if (!face.hasCurrent) {
         const t = NOTE_CURRENT_TOTAL.map((c) => v(`us-gaap_${c}`)).find((x) => x !== undefined);
         sum += t ?? NOTE_CURRENT_PARTS.reduce((s, c) => s + (v(`us-gaap_${c}`) ?? 0), 0);
       }
       // 주석 금융리스로 차입금에 더한 몫(비유동·유동) — 운용·금융 합산 줄에서 운용리스 몫을 가를 때 뺀다
       let finNcAdded = 0;
       let finCurAdded = 0;
-      if (!face.hasLease) {
+      if (!face.hasLease && !face.ifrs) {
         const t = v("us-gaap_FinanceLeaseLiability");
         const cur = v("us-gaap_FinanceLeaseLiabilityCurrent") ?? 0;
         const ncl = v("us-gaap_FinanceLeaseLiabilityNoncurrent") ?? 0;

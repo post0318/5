@@ -37,7 +37,7 @@ interface Filing { accn: string; form: string; filed: string }
 
 function locs(x: string): Map<string, string> {
   const loc = new Map<string, string>();
-  for (const l of x.matchAll(/<link:loc\b([^>]*)\/?>/g)) {
+  for (const l of x.matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) {
     const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1];
     const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
     if (id && href) loc.set(id, href);
@@ -49,13 +49,13 @@ function locs(x: string): Map<string, string> {
 function labels(lab: string): Map<string, string[]> {
   const loc = locs(lab);
   const text = new Map<string, string[]>();
-  for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+  for (const m of lab.matchAll(/<(?:link:)?label\b([^>]*)>([^<]*)<\/(?:link:)?label>/g)) {
     const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
     if (!id || /xlink:role="[^"]*documentation"/i.test(m[1])) continue;
     text.set(id, [...(text.get(id) ?? []), m[2].trim()]);
   }
   const out = new Map<string, string[]>();
-  for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+  for (const a of lab.matchAll(/<(?:link:)?labelArc\b([^>]*)\/?>/g)) {
     const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
     const t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
     if (from && t) out.set(from, [...(out.get(from) ?? []), ...t]);
@@ -77,12 +77,12 @@ export interface CashFlowDaStructure {
 
 /** 현금흐름표 영업활동 조정 항목 중 감가상각·상각 줄. 현금흐름표 역할이 없으면 null */
 export function cashFlowDaLines(cal: string, lab: Map<string, string[]>): CashFlowDaStructure | null {
-  for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+  for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
     if (!/CASHFLOW/i.test(role) || /Detail|Table|Parenth|Supplement/i.test(role)) continue;
     const loc = locs(m[2]);
     const arcs: { from: string; to: string }[] = [];
-    for (const a of m[2].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+    for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
       const to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       if (from && to) arcs.push({ from, to });
