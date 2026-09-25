@@ -114,6 +114,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const LIST_URL = "https://www.samsungpop.com/mbw/search/search.do";
 const PDF_BASE = "https://www.samsungpop.com/common.do";
 const SOURCE = "삼성증권";
+const US_DAILY_LABEL = "삼성증권 미국 시황"; // Daily시황 게시판의 "미국 마감시황" 전용 라벨(market:"us").
 const UNLISTED_SOURCE = "삼성증권 비상장리서치";
 // kind 별 파서는 parseTitle() 참고. fixedLabel 은 게시판 단위 확정 분류용
 // stockName — shinhan-research.ts 에 같은 문자열로 등록돼 있어야 한다.
@@ -207,7 +208,19 @@ function parseTitle(base, title, board) {
   // 원자재만 남긴다).
   if (!isStockReport && isCommodityContent(title)) return { ...base, title, topic: "이슈분석" };
   if (board.kind === "fixed") {
-    return { ...base, title, stockName: board.fixedLabel, symbol: null, category: "산업", source: SOURCE };
+    // Daily시황은 "국내 마감시황"·"미국 마감시황" 둘을 함께 다룬다 — 미국 쪽은
+    // 국내 시황과 market이 달라야 하므로 별도 라벨·market으로 분리한다(오너 지시
+    // 2026-09-25 — "삼성 daily 시황에서 미국은 미국 시황으로 분류").
+    const isUsDaily = board.gubun === "daily" && /^미국\s*마감\s*시황/.test(title);
+    return {
+      ...base,
+      title,
+      stockName: isUsDaily ? US_DAILY_LABEL : board.fixedLabel,
+      symbol: null,
+      category: "산업",
+      source: SOURCE,
+      marketOverride: isUsDaily ? "us" : undefined,
+    };
   }
   if (board.kind === "us") {
     const tm = title.match(TITLE_RE);
@@ -268,7 +281,7 @@ function parseItems(html, board) {
     // 공통 제외 — 주간물·일정표·추천종목·원자재 외 대체투자(오너 지시 2026-09-25).
     if (isCommonExcludedContent(title)) continue;
     const it = parseTitle(baseItem(fileName, date, author.trim() || prefixAuthor), title, board);
-    if (it) items.push({ ...it, market: board.market ?? null, board: board.gubun });
+    if (it) items.push({ ...it, market: it.marketOverride ?? board.market ?? null, board: board.gubun });
   }
   return items;
 }
