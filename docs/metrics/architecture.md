@@ -1,5 +1,7 @@
 # 재무 숫자 5층 구조 — 설계 (2026-09-25, 오너 결정 반영)
 
+> 변경 이력: 2026-09-25 원공시 → 최신 판본 우선(외부 대조 근거)
+
 > **원칙 — 숫자의 오차가 없어야 한다. 정의의 차이가 아닌 수의 차이는 심각한 오류다.**
 > 모든 차이는 ① 일치 ② 정의 차이(분해식이 정확히 성립) ③ 오류 셋 중 하나로 닫는다.
 
@@ -30,7 +32,7 @@
 |---|---|---|
 | `edgar.ts` getCompanyFacts·getSubmissions, `edgar-gapfill.ts` 인스턴스 파서, `fetch-health.ts` | 0층 `source/us/sec.ts` | 로더 체인(`withX` 연쇄)은 해체 — 판독은 1층으로 |
 | `edgar-foreign.ts`(IFRS 매핑·환율), `adr.ts`, `edgar-yahoo-quarters.ts` | 1층 `read/ifrs.ts`·`read/fx.ts`·`read/adr.ts`·`read/ltm-yahoo.ts` | |
-| `edgar-series.ts` fiscalYearOf·dropRoundedRetags·vintageOrder·ttmCombine·splitFactorsByYear | 1층 `read/period.ts`·`read/vintage.ts`·`read/split.ts` | `preferNewer`(최신 판본 우선)는 **폐기** — 원공시 규칙으로 대체 |
+| `edgar-series.ts` fiscalYearOf·dropRoundedRetags·vintageOrder·ttmCombine·splitFactorsByYear | 1층 `read/period.ts`·`read/vintage.ts`·`read/split.ts` | `preferNewer`(최신 판본 우선) 유지 — 판본 선택 규칙 한 곳으로 통일(연간·분기·누적 동일) |
 | `edgar-is-structure.ts`·`edgar-revenue-dims.ts` 의 `_cal`/`.xsd` 판독 | 1층 `read/linkbase.ts` + 2층 `assemble/is.ts` | |
 | `edgar-financial.ts` 순수익 합성 | 3층 `metrics/revenue.ts` 회사 유형 규칙 | |
 | `edgar-series.ts` splitFactorsByYear 의 매출 태그(분할 판정 휴리스틱) | 1층 그대로 | 표시 숫자가 아니라 판정 보조 — 매출 지표 규칙 적용 대상 아님(문서화된 예외) |
@@ -61,7 +63,6 @@ interface RawFiling {
   pre: PresentationTree | null;     // _pre 또는 .xsd 내장
   cal: CalculationTree | null;      // _cal 또는 .xsd 내장
   labels: Map<string, string>;
-  htmlUrl: string | null;           // 태그 정정 판정용 본문
   gaps: number;
 }
 interface RawFact { concept: string; start: string | null; end: string; val: number; unit: string; dims: Record<string, string>; decimals: number | null; prov: Prov }
@@ -69,8 +70,6 @@ interface RawFact { concept: string; start: string | null; end: string; val: num
 /** 1층 산출 — 판본이 확정된 값. */
 interface ReadValue { val: number; unit: "USD" | "KRW" | "shares" | "USD/shares"; prov: Prov; why?: ReadWhy }
 type ReadWhy =
-  | { k: "tag-correction"; origVal: number; laterAccn: string }   // 나중 값 = 원공시 본문 → 나중 값 채택
-  | { k: "restated-kept"; laterVal: number; laterAccn: string }   // 나중 값 ≠ 본문 → 원공시 유지
   | { k: "fx"; cur: string; rate: number; basis: "avg" | "spot" }
   | { k: "yahoo-q"; through: string }
   | { k: "derived"; parts: { accn: string; form: FormType; sign: 1 | -1 }[] };  // Q4·LTM
@@ -141,16 +140,14 @@ interface CompanyProfile {
          ["LTM",    "2025-08-01", "2026-07-31", null, "LTM", null, 0] ],
   "m": { "rev": [680985000000, 177402000000, 180554000000, 735840000000] },
   "x": { "rev": { "2025Q4": { "d": [["0000104169-25-000021", 1], ["0000104169-24-000150", -1]] },
-                  "LTM":    { "d": [["...", 1], ["...", 1], ["...", -1]] },
-                  "FY2021": { "k": "tc", "o": 559151000000, "a": "0000104169-22-000012" } } } }
+                  "LTM":    { "d": [["...", 1], ["...", 1], ["...", -1]] } } } }
 
 // fin_stmt — IS 연간
 { "_id": "us:WMT:is:a", "ev": 1,
   "l": [ ["us-gaap:Revenues", "Total revenues"], ["us-gaap:CostOfRevenue", "Cost of sales"] ],
   "c": ["FY2016", "FY2017", "...", "FY2025", "LTM"],
   "s": [ [4096, 8195], ["..."] ],
-  "v": [ [680985000000, 511753000000], ["..."] ],
-  "x": { "FY2023": { "0": { "k": "rk", "n": 6255000000, "a": "0000106040-25-000099" } } } }
+  "v": [ [680985000000, 511753000000], ["..."] ] }
 
 // fin_chg
 { "k": "us:WDC", "at": ISODate("..."), "ev": 2, "t": "m.rev", "c": "FY2023", "o": 6255000000, "n": 12318000000, "r": "ev" }
@@ -160,8 +157,10 @@ interface CompanyProfile {
 - `s`(fin_stmt): 열별 줄 구조 — 줄마다 정수 1개 = `사전idx * 4096 + (부모pos+1) * 2 + (w<0 ? 1 : 0)`
   (사전 4,096줄·열당 2,047줄 상한 — 초과 시 `sv` 올림). 그 공시 본표 순서 그대로.
 - `v`: `s` 와 같은 순서의 값. 없는 값은 `null`.
-- 예외 코드 `k`: `tc` 태그 정정(나중 값 채택, `o`=원공시 태그값), `rk` 재작성인데 원공시 유지(`n`=나중 값), `fx` 환산(`r`=환율),
-  `yq` 20-F·40-F Yahoo 분기, `d` 파생 구성 `[accn, 부호]`. **예외가 아닌 칸은 출처를 따로 적지 않는다**(열 출처 = 칸 출처).
+- 예외 코드 `k`: `fx` 환산(`r`=환율), `yq` 20-F·40-F Yahoo 분기, `d` 파생 구성 `[accn, 부호]`.
+  **예외가 아닌 칸은 출처를 따로 적지 않는다**(열 출처 = 칸 출처) — 반올림 재태깅 제거
+  (`dropRoundedRetags`)로 버려진 값은 애초에 후보에서 빠지므로 별도 예외 코드가 없다. (태그 정정
+  판정용 `tc`·`rk` 코드는 2026-09-25 최신 판본 우선 회귀로 삭제 — §2 변경 이력 참고.)
 - **이전 판본은 복사하지 않는다** — 재조립 결과를 옛 문서와 칸 단위로 비교해 바뀐 칸만 `fin_chg` 에 쓰고 본문서는 교체.
 - 가격 의존 값(시가총액·PSR·EV·배수)은 **저장하지 않는다** — 조회 시 시세와 결합(§6).
 
@@ -257,7 +256,7 @@ DB 에 들어가지 않으므로 §1 의 0~3층 번호를 매기지 않는다. �
 | S1 | 소비처는 `src/lib/fin/index.ts` 공개 API만 import. `read/*`·`assemble/*`·`metrics/*` 내부 파일 직접 import 금지 | eslint `no-restricted-imports`(소비처 디렉터리 대상) |
 | S2 | 회사별 예외는 `metrics/overrides.ts` 한 곳, `evidence`(공시 accn·숫자) 없는 항목 금지 | 코드리뷰 + 런타임에서 evidence 없는 override 로드 시 throw |
 | S3 | `scripts/verify-financials.mjs` 는 `src/lib/fin/**` import 금지(공통모드 차단, §1) | eslint `no-restricted-imports`(스크립트 대상) |
-| S4 | 2·3층에 판본·환율·분할·기간 계산 로직 재등장 금지(`fiscalYearOf`·`preferNewer`·환율 리터럴 등) | eslint `no-restricted-syntax`(디렉터리 스코프, 기존 `edgar-ev.ts` 규칙과 같은 방식) |
+| S4 | 2·3층에서 판본 선택 코드 재등장 금지(`fiscalYearOf`·`preferNewer` 등) — 환율·분할·기간 계산 로직(환율 리터럴 등)도 동일하게 금지 | eslint `no-restricted-syntax`(디렉터리 스코프, 기존 `edgar-ev.ts` 규칙과 같은 방식) |
 | S5 | 계층 역방향 import 금지 — 0→1→2→3 단방향만 | eslint `import/no-restricted-paths`(zone 설정) |
 
 빌드 전 `npm run lint`·`npm run typecheck`(레포 공통 규칙, CLAUDE.md)에서 S1~S5 가 같이 걸린다.
