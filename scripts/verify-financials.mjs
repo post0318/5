@@ -696,7 +696,7 @@ async function secFaceRevenue(cik, sub, G, bank) {
    * kind: FY·LTM(결산일 E 의 10-K 와 이후 2년 10-K) · Q(분기말 E 의 10-Q 와 1년 뒤 10-Q) · Q4(연간 + 9개월 누적 10-Q)
    */
   const pages = [rc];
-  let olderLoaded = false;
+  const olderLoaded = new Set(); // 읽은 과거 목록 파일명
   const extend = async (E, kind) => {
     const t = Date.parse(E), day = 864e5;
     const want = (form, rep) => {
@@ -705,13 +705,13 @@ async function secFaceRevenue(cik, sub, G, bank) {
       if (kind === "Q") return form === "10-Q" && d >= -3 && d <= 400;
       return (form === "10-K" && d >= -7 && d <= 800) || (form === "10-Q" && d >= -100 && d <= 300);
     };
+    // 과거 목록 파일 — 기간 E 이후 제출분이 든 목록(filingTo ≥ E)을 아직 안 읽었으면 전부 더 읽는다. E 가 덮이거나 목록이 다할 때까지
+    // (재감사 2026-09-25: 한 번만 읽던 것 — 첫 호출보다 더 옛 기간의 두 번째 호출이 과거 목록을 못 읽었다)
     const oldest = (rc.filingDate ?? []).at(-1) ?? "";
-    if (!olderLoaded && oldest > E) {
-      olderLoaded = true;
-      for (const f of sub.filings?.files ?? [])
-        if ((f.filingTo ?? "") >= E) {
-          try { pages.push(await secJson(`https://data.sec.gov/submissions/${f.name}`)); } catch { /* 과거 목록 조회 실패 — 대응값 없음(FAIL)으로 드러난다 */ }
-        }
+    for (const f of oldest > E ? sub.filings?.files ?? [] : []) {
+      if (olderLoaded.has(f.name) || (f.filingTo ?? "") < E) continue;
+      olderLoaded.add(f.name);
+      try { pages.push(await secJson(`https://data.sec.gov/submissions/${f.name}`)); } catch { /* 과거 목록 조회 실패 — 대응값 없음(FAIL)으로 드러난다 */ }
     }
     const more = [];
     for (const pg of pages)
@@ -2166,6 +2166,33 @@ async function verifyUs(sym) {
         if (x.mc != null && x.rev > 0) add("C", "PSR 하이라이트 = 시가총액 ÷ 매출", c, same(x.psr, x.mc / x.rev));
       }
     });
+    // 첫 연도 열의 성장률 — 앱은 화면에 없는 전년 매출(companyfacts 시계열)로 계산한다(edgar-highlights.ts seq). 그 전년 매출을
+    // SEC 원자료(외화 공시는 원통화 × 기간 평균 환율)로 독립적으로 구해 첫 열 성장률을 다시 계산한다(재감사 2026-09-25 — 전 종목)
+    const c0 = cols[0];
+    if (c0 && c0 !== "LTM" && H[c0].rev != null) {
+      const E0 = new Date(Date.parse(H[c0].date) - 365 * 864e5).toISOString().slice(0, 10);
+      const name = "첫 열 전년 매출 = SEC(성장률 기준)";
+      let prior = null, how = "";
+      if (foreign) {
+        const r = atEnd(natRev, E0);
+        const avg = r && fxRows ? fxAvg(fxRows, r.start, r.end) : null;
+        if (!r) add("A", name, c0, { status: FAIL, note: `전년(${E0} 전후) 원통화 공시 매출 없음 — 첫 열 성장률 근거 대조 불가` });
+        else if (avg == null) hardErrors.push(`첫 열 전년 매출 기간 평균 환율 없음(${r.start}~${r.end})${fxErr ? `: ${fxErr}` : ""}`);
+        else { prior = r.val * avg; how = `원통화 ${r.val} ${natCur} × 기간 평균 환율 ${avg.toPrecision(6)} (${r.end})`; }
+      } else if (!revFace) add("A", name, c0, { status: NA, note: revFaceWhy });
+      else {
+        try { await revFace.extend(E0, "FY"); } catch (e) { hardErrors.push(`첫 열 전년 매출 SEC 공시 추가 판독 실패: ${String(e).slice(0, 80)}`); }
+        const e = revFace.annualAt(E0);
+        if (!e) add("A", name, c0, { status: FAIL, note: `전년(${E0} 전후) SEC 본표 매출 대응값 없음 — 첫 열 성장률 근거 대조 불가` });
+        else { prior = e.v; how = e.how; }
+      }
+      if (prior) {
+        const yoy = (H[c0].rev / prior - 1) * 100, note = (r) => ({ ...r, note: [r.note, `전년 ${prior} · ${how}`].filter(Boolean).join(" · ") });
+        add("C", "매출 성장률 하이라이트 = 매출 재계산(첫 열 — SEC 전년 대비)", c0, note(same(H[c0].revYoy, yoy)));
+        add("C", "매출 성장률 재무분석 = 매출 재계산(첫 열 — SEC 전년 대비)", c0, note(same(A[c0]?.revYoy ?? null, yoy)));
+        if (C[c0]) add("C", "매출 성장률 컨센서스 = 매출 재계산(첫 열 — SEC 전년 대비)", c0, note(same(C[c0].revenueYoY ?? null, yoy)));
+      }
+    }
     // 개요(연간 = 최근 사업연도, TTM = LTM)·유니버스(LTM 열) — 앱이 실제로 계산한 값(verify-row)
     const lastFy = cols.filter((c) => c !== "LTM").at(-1);
     if (row && H.LTM) {
@@ -2261,7 +2288,19 @@ async function verifyUs(sym) {
     // 대응값이 없으면 조용히 넘기지 않고 FAIL(외화 공시는 SEC 본표 매출이 없어 검증불가로 기록)
     for (const q of fi.filter((x) => x.unv?.length)) {
       const name = "항등식 미검증 열 매출 앱 = SEC 매출(직접 대조 필수)";
-      if (foreign || !revFace) { add("A", name, q.col, { status: foreign ? NA : FAIL, note: `SEC 본표 대조 불가(${foreign ? "외화 공시" : revFaceWhy}) · 미검증 식: ${q.unv.join("; ")}` }); continue; }
+      const kind0 = q.col === "LTM" ? "LTM" : /^FY/.test(q.col) ? "FY" : /Q4$/.test(q.col) ? "Q4" : "Q";
+      // 외화 공시(20-F) — SEC 본표 USD 매출이 없으니 표시 열과 같은 방식(원통화 공시값 × 기간 평균 환율, 부동소수 오차만)으로
+      // 대조한다(재감사 2026-09-25: 값과 무관하게 검증불가로 넘겨 TSM FY2018 ×1.01 주입이 통과). 20-F 는 분기 원자료가 없어 Q·LTM 만 검증불가
+      if (foreign) {
+        if (kind0 !== "FY") { add("A", name, q.col, { status: NA, note: `20-F 분기 원자료 없음 · 미검증 식: ${q.unv.join("; ")}` }); continue; }
+        const r = atEnd(natRev, q.end);
+        if (!r) { add("A", name, q.col, { status: FAIL, note: `원통화 공시 매출 없음(${q.end}) — 미검증 열을 대조 없이 둘 수 없음 · 앱 ${q.v} · 미검증 식: ${q.unv.join("; ")}` }); continue; }
+        const avg = fxRows ? fxAvg(fxRows, r.start, r.end) : null;
+        if (avg == null) { hardErrors.push(`항등식 미검증 열 ${q.col} 기간 평균 환율 없음(${r.start}~${r.end})${fxErr ? `: ${fxErr}` : ""}`); continue; }
+        add("A", name, q.col, vsSource(q.v, r.val * avg, EXACT, `원통화 ${r.val} ${natCur} × 기간 평균 환율 ${avg.toPrecision(6)} · 미검증 식: ${q.unv.join("; ")}`));
+        continue;
+      }
+      if (!revFace) { add("A", name, q.col, { status: FAIL, note: `SEC 본표 대조 불가(${revFaceWhy}) · 미검증 식: ${q.unv.join("; ")}` }); continue; }
       const kind = q.col === "LTM" ? "LTM" : /^FY/.test(q.col) ? "FY" : /Q4$/.test(q.col) ? "Q4" : "Q";
       try { await revFace.extend(q.end, kind); } catch (e) { hardErrors.push(`항등식 미검증 열 ${q.col} SEC 공시 추가 판독 실패: ${String(e).slice(0, 80)}`); }
       const e = kind === "FY" ? revFace.annualAt(q.end) : kind === "LTM" ? revFace.ltmAt(q.end) : revFace.quarterAt(q.end, kind === "Q4");

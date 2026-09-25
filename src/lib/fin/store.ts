@@ -96,6 +96,8 @@ function stmtCells(doc: FinStmtDoc): Map<string, number | null> {
 
 /** 저장 — 바뀐 칸만 fin_chg, 본문서 교체. 원자료 조회 실패(부분 판독)면 기존 문서를 유지하고 gaps 비트만 올린다(§5.1) */
 export async function persist(a: FinAssembly, stmts: { annual: FinStmtDoc; quarterly: FinStmtDoc }): Promise<{ changed: number; kept: boolean }> {
+  // 주입 시험·실험 실행의 운영 DB 기록 차단(재감사 2026-09-25 — 주입 시험이 fin_chg 에 12건을 남김). 이 변수가 있으면 저장을 거부한다
+  if (process.env.FIN_NO_PERSIST) throw new Error("FIN_NO_PERSIST 설정 — 비저장 모드라 fin_sym·fin_stmt·fin_chg 저장 거부(주입 시험은 검증기 쪽 가로채기 또는 --dry)");
   const symCol = await finSymCol();
   const stmtCol = await finStmtCol();
   const chgCol = await finChgCol();
