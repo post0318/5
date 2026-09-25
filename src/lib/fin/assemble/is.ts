@@ -48,6 +48,47 @@ const FALLBACK = [
 
 const provOf = (p: Part): Prov => ({ accn: p.accn, form: p.form, filed: p.filed, source: "sec-cf" });
 
+/**
+ * Q4D 매출 줄 폴백 — 9개월 누적 공시가 사업연도(10-K) 공시와 다른 매출 개념으로 재태깅된 회사(CEG: 10-K
+ * "Operating revenues" = RevenueFromContractWithCustomerIncludingAssessedTax, 같은 줄의 10-Q 태그는
+ * us-gaap:Revenues) 는 사업연도 부분만 값이 잡히고 9개월 부분이 항상 "gap"이라 Q4 매출이 통째로 빈칸이 됐다.
+ * 정상 개념으로 못 읽으면(9개월 부분만), 사업연도 값을 정확히 같은 금액으로 공시한 다른 매출 계열 개념이
+ * **어느 정기공시에서든**(판본 무관 — GOOG: 최신 10-K 는 옛 개념이 아예 사라지고 새 개념으로만 재태깅해
+ * 같은 공시 안에서는 두 개념이 공존하지 않는다. 옛 10-K(2024-01-31·2025-02-05)에 그 옛 개념·같은 금액이
+ * 남아 있는 것을 증거로 삼는다) 있었는지 확인해(같은 줄이라는 근거, 증거 공시 accn 은 경고로 남긴다) 그
+ * 개념으로 9개월 값을 대신 읽는다 — 값이 우연히 같은 다른 지표를 섞지 않도록 매출 계열 개념끼리만 비교한다.
+ */
+const REVENUE_ALIAS_CONCEPTS = [
+  "us-gaap:Revenues",
+  "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+  "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
+  "us-gaap:RevenuesNetOfInterestExpense",
+];
+
+function q4RevenueFallback(reader: UsReader, qname: string, fyPart: Part, ninePart: Part) {
+  return async (p: Part): Promise<number | null | "gap"> => {
+    const direct = await reader.partValue(qname, p);
+    if (direct === "gap") return "gap";
+    if (direct !== null) return direct.val;
+    if (p !== ninePart) return null; // 사업연도 부분은 폴백 대상 아님 — 구조 기준 개념 그대로
+    const fyDirect = await reader.partValue(qname, fyPart);
+    if (fyDirect === null || fyDirect === "gap") return null;
+    for (const alt of REVENUE_ALIAS_CONCEPTS) {
+      if (alt === qname) continue;
+      // 같은 줄이라는 증거(1층 — reader.aliasEvidenceAccn) 없으면 대체하지 않는다: 기존대로 공란
+      const evidenceAccn = reader.aliasEvidenceAccn(alt, fyPart.start, fyPart.end, fyDirect.val);
+      if (!evidenceAccn) continue;
+      const altNine = await reader.partValue(alt, ninePart);
+      if (altNine === null || altNine === "gap") continue;
+      reader.warnings.push(
+        `Q4 매출 폴백: ${qname}(9개월 부분 없음) → ${alt} 대체(사업연도 값 증거 공시 ${evidenceAccn}, 9개월 원본 ${ninePart.accn ?? "?"})`,
+      );
+      return altNine.val;
+    }
+    return null;
+  };
+}
+
 function structureAccn(col: ColumnSpec): Part {
   const parts = col.segments.flatMap((s) => s.parts);
   if (col.kind === "LTM" && !col.yahoo) {
@@ -102,8 +143,12 @@ async function assembleColumn(
   const lines: StmtLine[] = [];
   const raws: (number | null)[] = [];
   const pos = new Map<string, number>();
+  const q4Parts = col.kind === "Q4D" ? col.segments.flatMap((s) => s.parts) : null;
   for (const l of shapeLines) {
-    const cell: CellValue = await reader.value(l.id, col);
+    const cell: CellValue =
+      q4Parts && q4Parts.length === 2 && REVENUE_ALIAS_CONCEPTS.includes(canonical(l.id))
+        ? await reader.value(l.id, col, q4RevenueFallback(reader, l.id, q4Parts[0], q4Parts[1]))
+        : await reader.value(l.id, col);
     gaps |= cell.gaps;
     pos.set(l.id, lines.length);
     const label = labelOf(l.id, l.preferredLabel, labelSrc.labels, reader);

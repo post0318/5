@@ -139,6 +139,17 @@ export class UsReader {
   }
 
   /**
+   * 어느 정기공시에서든(판본 무관) 이 기간(±3일)의 값을 정확히 targetVal 로 공시한 적이 있으면 그 공시 accn —
+   * 2층 Q4D 매출 폴백(assemble/is.ts q4RevenueFallback)의 "다른 개념도 같은 줄" 증거. 여러 판본에 있으면 가장
+   * 늦게 제출된 것.
+   */
+  aliasEvidenceAccn(concept: string, start: string, end: string, targetVal: number): string | null {
+    const cands = this.facts(concept).filter((f) => near(f.start, start) && near(f.end, end) && f.val === targetVal);
+    const best = cands.reduce<RawFact | null>((b, f) => (!b || (f.prov.filed ?? "") > (b.prov.filed ?? "") ? f : b), null);
+    return best?.prov.accn ?? null;
+  }
+
+  /**
    * 기간(start·end ±3일)의 최신 판본 원천 공시 — 매출 개념 우선, 없을 때만 순이익 개념. 순이익은 자본변동표에도 분기별로
    * 실려(3분기 10-Q 에 1·2분기 순이익) 그것까지 판본 후보로 보면 1분기 열의 원천이 손익계산서에 1분기가 없는 3분기 10-Q 가
    * 된다(WDC 실측).

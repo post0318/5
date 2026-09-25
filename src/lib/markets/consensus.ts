@@ -15,6 +15,7 @@ import {
 import { loadCaptiveDebt } from "./us/edgar-captive";
 import { loadClassAFacts } from "./us/class-facts-loader";
 import { buildShareResolver, secBasisBars, type ShareResolver } from "./us/edgar-shares";
+import { revAnnualMap } from "./us/fin-revenue";
 import { estimatesToUsd } from "./us/edgar-foreign";
 import { usSharesHint } from "./us/shares-hint";
 import { dartAdrConsensusInputs, dartAdrEstimatesToUsd, dartAdrOf } from "./us/dart-adr";
@@ -496,6 +497,19 @@ export async function getConsensusData(
     const prev = rows[i - 1].revenue;
     if (cur != null && prev != null && prev !== 0) {
       rows[i].revenueYoY = ((cur - prev) / Math.abs(prev)) * 100;
+    }
+  }
+  // 첫 행(예: AAPL 2022)은 배열에 전년도가 없어 성장률이 항상 공란이었다 — 하이라이트는
+  // 같은 해 성장률을 보여줘 화면 간 불일치가 났다(매출 검증에서 발견, 2026-09).
+  // 미국만: fin 매출 시계열(fin-revenue.ts revAnnualMap)에는 표시 연도(최근 4개)보다
+  // 오래된 사업연도 값도 남아있어 그 값을 전년도로 써서 채운다. 한국·일본 경로는 그대로.
+  if (us && rows.length) {
+    const first = rows[0];
+    if (first.revenueYoY == null && first.revenue != null) {
+      const prevRevenue = revAnnualMap(us.facts.revenue).get(first.fy - 1) ?? null;
+      if (prevRevenue != null && prevRevenue !== 0) {
+        first.revenueYoY = ((first.revenue - prevRevenue) / Math.abs(prevRevenue)) * 100;
+      }
     }
   }
 
