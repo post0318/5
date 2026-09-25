@@ -313,7 +313,9 @@ function parseContexts(xml) {
     ctx.set(m[1], {
       start: /<(?:xbrli:)?startDate>\s*([^<\s]+)/.exec(b)?.[1], end: /<(?:xbrli:)?endDate>\s*([^<\s]+)/.exec(b)?.[1],
       instant: /<(?:xbrli:)?instant>\s*([^<\s]+)/.exec(b)?.[1],
-      dims: [...b.matchAll(/dimension="([^"]+)"[^>]*>\s*([^<]*?)\s*</g)].map((d) => [d[1].split(":").pop(), d[2].split(":").pop() || "(typed)"]),
+      // 명시 멤버는 멤버명, 유형 멤버(typedMember)는 안쪽 값 — 2026 택사노미의 손익 위치 축(StatementOfIncomeLocationBalanceAxis)은
+      // 유형 멤버에 QName(us-gaap:Revenues)을 담는다(GOOG 2026-06 10-Q)
+      dims: [...b.matchAll(/dimension="([^"]+)"[^>]*>\s*(?:<[^>/]+>\s*([^<]*?)\s*<\/[^>]+>|([^<]*?))\s*</g)].map((d) => [d[1].split(":").pop(), (d[2] ?? d[3] ?? "").split(":").pop() || "(typed)"]),
     });
   }
   return ctx;
@@ -427,6 +429,34 @@ function expectedForeignDebt(fl, unitRe) {
  * 파생상품 표는 2~3개 연도만 싣고 옛 연도는 그 해 10-K 에만 있다(LRCX FY2022·CAT 2021) → `ends` 결산일의 10-K 는 최근 3건 밖이어도 읽는다.
  */
 const REV_HEDGE_TAGS = "OtherComprehensiveIncomeLossCashFlowHedgeGainLossReclassificationBeforeTax|DerivativeInstrumentsGainLossReclassifiedFromAccumulatedOCIIntoIncomeEffectivePortionNet|DerivativeGainLossOnDerivativeNet|GainLossOnDerivativeInstrumentsNetPretax";
+// 매출 줄에 인식된 파생상품 손익 성분(R8 확장) — 손익 위치 축(명시 멤버 또는 2026 택사노미 유형 멤버 QName)이 매출·판매인 사실만
+const LOC_AXES = ["IncomeStatementLocationAxis", "StatementOfIncomeLocationBalanceAxis"];
+const HEDGE_REL = "DerivativeInstrumentsGainLossByHedgingRelationshipAxis", HEDGE_DES = "HedgingDesignationAxis";
+const revLoc = (ds) => ds.some((d) => LOC_AXES.includes(d[0]) && /Revenue|Sales/i.test(d[1]) && !/Cost|Expense/i.test(d[1]));
+const DERIV_FAM = {
+  cf: { ids: ["OtherComprehensiveIncomeLossCashFlowHedgeGainLossReclassificationBeforeTax", "DerivativeInstrumentsGainLossReclassifiedFromAccumulatedOCIIntoIncomeEffectivePortionNet"], pred: () => true },
+  nd: { ids: ["DerivativeGainLossOnDerivativeNet", "GainLossOnDerivativeInstrumentsNetPretax"], pred: (ds) => !ds.some((d) => d[0] === HEDGE_REL) && !ds.some((d) => d[0] === HEDGE_DES && /^Designated/i.test(d[1])) },
+};
+/** 같은 기간 사실 중 분해 차원(위치·관계·지정 제외)이 같은 것은 하나만 — 차원 없는 합계가 있으면 그것, 없으면 멤버 합 */
+function aggDeriv(facts) {
+  const byKey = new Map();
+  for (const x of facts) { const k = x.dims.filter((d) => ![...LOC_AXES, HEDGE_REL, HEDGE_DES].includes(d[0])).map((d) => d.join("=")).sort().join("|"); if (!byKey.has(k)) byKey.set(k, x.v); }
+  return byKey.has("") ? byKey.get("") : [...byKey.values()].reduce((t, y) => t + y, 0);
+}
+/**
+ * 한 기간의 사실들(facts, 공시 순번 fi 포함) → 성분 선택지 [{ id, v }]. 성분마다 공시 한 건의 사실만 합친다(공시마다 차원 구성이 달라
+ * 섞으면 두 번 더해진다). 공시별 값은 각각 선택지 — 나중 10-K 가 같은 기간을 0.1B 단위로 다시 공시하는 경우(XOM 2024 −661 → −700)
+ * 정밀값 공시로도 대조(반올림값 허용이 아니라 정밀값 공시를 찾아 쓰는 것)
+ */
+function revDerivFamily(facts, kind) {
+  const { ids, pred } = DERIV_FAM[kind];
+  for (const id of ids) {
+    const fs = facts.filter((x) => x.id === id && revLoc(x.dims) && pred(x.dims));
+    if (!fs.length) continue;
+    return [...new Set(fs.map((x) => x.fi))].map((fi) => ({ id, v: aggDeriv(fs.filter((x) => x.fi === fi)) })).filter((o, i, a) => o.v !== 0 && a.findIndex((p) => p.v === o.v) === i);
+  }
+  return [];
+}
 async function annualRevenueDimFacts(cik, sub, maxFilings = 3, ends = []) {
   const rc = sub.filings?.recent ?? {};
   const out = [], seen = new Set();
@@ -609,6 +639,13 @@ async function faceRevenueParts(faces) {
       if (ok.length) out.set(t.end, { src: `${f.form} ${f.report}`, total: t.v, sums: ok });
     }
   }
+  return out;
+}
+/** 정기공시들(faces, 최신부터)의 매출 위치 파생상품 사실 — 모든 기간(3개월·9개월·연간). fi = 공시 순번(작을수록 최신) */
+async function derivFactsOf(faces) {
+  const want = new Set(Object.values(DERIV_FAM).flatMap((f) => f.ids.map((i) => `us-gaap_${i}`)));
+  const out = [];
+  for (const [fi, f] of faces.entries()) for (const x of usdFacts(await secInstance(f.instUrl), (id) => want.has(id))) out.push({ ...x, id: x.id.slice(8), fi });
   return out;
 }
 /**
@@ -2346,7 +2383,7 @@ async function verifyUs(sym) {
           put(`${c} EBITDA`, x.ebitda, "StockAnalysis", inc.ebitda?.[k], saUnit);
           put(`${c} 영업이익`, IS[c]?.op, "StockAnalysis", inc.opinc?.[k], saUnit);
           put(`${c} 감가상각비`, IS[c]?.da, "StockAnalysis", inc.depAmorEbitda?.[k], saUnit);
-          saIsAdj.set(c, { aw: inc.assetWritedown?.[k] ?? 0, mr: inc.mergerRestructureCharges?.[k] ?? 0, ou: inc.otherUnusualItems?.[k] ?? 0, orv: inc.otherRevenue?.[k] ?? 0 });
+          saIsAdj.set(c, { aw: inc.assetWritedown?.[k] ?? 0, mr: inc.mergerRestructureCharges?.[k] ?? 0, ou: inc.otherUnusualItems?.[k] ?? 0, orv: inc.otherRevenue?.[k] ?? 0, opRev: inc.operatingRevenue?.[k] ?? null, ga: inc.gainAssets?.[k] ?? 0, cg: inc.currencyGains?.[k] ?? 0 });
           saUnitIs = saUnit;
         }
         // 현금흐름표의 기타 상각 줄 — StockAnalysis 는 이 줄을 EBITDA 용 감가상각(depAmorEbitda)에서 뺀다(원인 ⑦)
@@ -2527,28 +2564,12 @@ async function verifyUs(sym) {
         //    멤버인 사실만. 실측: AMAT 2021(cf 4)·PEP 2021(cf −6)·SBUX 2021(cf 1.8)·LRCX 2022(cf 45.057)·CAT 2021(cf −13)·
         //    KO 2021~2023(cf + nd)·XOM 2021~2023(nd)·VST 2021~2023(nd + am). 조합 중 하나가 정확히(인포맥스 보고 단위 반올림 안) 성립할 때만.
         if (n === "인포맥스") {
-          const LOC = "IncomeStatementLocationAxis", REL = "DerivativeInstrumentsGainLossByHedgingRelationshipAxis", DES = "HedgingDesignationAxis";
-          const atRev = (ds) => ds.some((d) => d[0] === LOC && /Revenue|Sales/i.test(d[1]) && !/Cost|Expense/i.test(d[1]));
-          /** 같은 기간 사실 중 분해 차원(위치·관계·지정 제외)이 같은 것은 하나만 — 차원 없는 합계가 있으면 그것, 없으면 멤버 합 */
-          const agg = (facts) => {
-            const byKey = new Map();
-            for (const x of facts) { const k = x.dims.filter((d) => ![LOC, REL, DES].includes(d[0])).map((d) => d.join("=")).sort().join("|"); if (!byKey.has(k)) byKey.set(k, x.v); }
-            return byKey.has("") ? byKey.get("") : [...byKey.values()].reduce((t, y) => t + y, 0);
-          };
-          // 성분마다 공시 한 건의 사실만 합친다(공시마다 차원 구성이 달라 섞으면 두 번 더해진다). 공시별 값은 각각 후보로 —
-          // 나중 10-K 가 같은 기간을 0.1B 단위로 다시 공시하는 경우(XOM 2023 986 → 1,000) 정밀값 공시로도 대조
-          const fam = (ids, pred) => {
-            for (const id of ids) {
-              const fs = atAll.filter((x) => x.id === id && atRev(x.dims) && pred(x.dims));
-              if (!fs.length) continue;
-              return [...new Set(fs.map((x) => x.fi))].map((fi) => ({ id, v: agg(fs.filter((x) => x.fi === fi)) })).filter((o, i, a) => o.v !== 0 && a.findIndex((p) => p.v === o.v) === i);
-            }
-            return [];
-          };
-          const cf = fam(["OtherComprehensiveIncomeLossCashFlowHedgeGainLossReclassificationBeforeTax", "DerivativeInstrumentsGainLossReclassifiedFromAccumulatedOCIIntoIncomeEffectivePortionNet"], () => true);
-          const nd = fam(["DerivativeGainLossOnDerivativeNet", "GainLossOnDerivativeInstrumentsNetPretax"], (ds) => !ds.some((d) => d[0] === REL) && !ds.some((d) => d[0] === DES && /^Designated/i.test(d[1])));
-          const amF = at.filter((x) => (x.id === "Revenues" || x.id === "RevenueFromContractWithCustomerExcludingAssessedTax") && x.dims.length === 1 && /ProductOrServiceAxis$/.test(x.dims[0][0]) && /Amortization/i.test(x.dims[0][1]) && x.v !== 0);
-          const am = amF.length ? [{ id: `${amF[0].id}[${amF[0].dims[0][1]}]`, v: amF[0].v }] : [];
+          const cf = revDerivFamily(atAll, "cf"), nd = revDerivFamily(atAll, "nd");
+          // 매출 차감 상각 멤버는 옛 연도의 경우 그 해 10-K 에만 있다(VST 2022 RetailContractAmortizationMember −6) — 그 해 10-K 까지(atAll)
+          const amF = atAll.filter((x) => (x.id === "Revenues" || x.id === "RevenueFromContractWithCustomerExcludingAssessedTax") && x.dims.length === 1 && /ProductOrServiceAxis$/.test(x.dims[0][0]) && /Amortization/i.test(x.dims[0][1]) && x.v !== 0);
+          // 공시마다 멤버가 다를 수 있어(VST 2024 10-K IntangibleAmortizationAndOtherRevenuesMember −4 vs 2022 10-K RetailContractAmortizationMember −6)
+          // 멤버·공시별 값을 각각 선택지로(같은 값은 하나)
+          const am = amF.map((x) => ({ id: `${x.id}[${x.dims[0][1]}]`, v: x.v })).filter((o, i, a) => a.findIndex((p) => p.v === o.v) === i);
           // 성분별 선택지(빼지 않음 + 공시별 값) 조합 — 하나 이상 뺀 조합만
           let combos = [[]];
           for (const [lab, opts] of [["매출 위치 현금흐름위험회피 재분류", cf], ["매출 위치 비지정 파생상품 손익", nd], ["매출 차감 상각", am]])
@@ -2570,6 +2591,14 @@ async function verifyUs(sym) {
           const re = reAll.some((x) => x.id === "Revenues") ? reAll.filter((x) => x.id === "Revenues") : reAll.filter((x) => x.id === "RevenueFromContractWithCustomerExcludingAssessedTax");
           if (re.length) cands.push([`StockAnalysis 매출 = Revenues ${tot} − 비용 환급 매출 ${re.map((x) => x.v).join("+")}`, tot - re.reduce((t, x) => t + x.v, 0)]);
         }
+        // StockAnalysis 매출 = SA 영업매출(operatingRevenue, 앱과 정확 일치) + SA 기타매출(otherRevenue). 기타매출이 SEC 본표 "기타수익"
+        //    줄(Revenues[OtherRevenueMember|OtherIncomeMember]) − SA 자산처분이익 − SA 환차익과 정확히 같을 때만(XOM 2021: 2,291 − 1,841 − 2
+        //    = 448). SA 가 기타수익 중 처분·환 손익을 뺀 나머지를 매출에 넣는 정의. 비영업 분리 회사(앱이 기타수익을 뺀 회사)만.
+        if (n === "StockAnalysis" && revFace?.split) {
+          const a = saIsAdj.get(col), oth = at.filter((x) => x.id === "Revenues" && x.dims.length === 1 && /ProductOrServiceAxis$/.test(x.dims[0][0]) && /^(OtherRevenueMember|OtherIncomeMember)$/.test(x.dims[0][1]));
+          if (a?.opRev === r.ours && a.orv && oth.length === 1 && oth[0].v === a.orv + a.ga + a.cg)
+            cands.push([`StockAnalysis 매출 = SA 영업매출 ${a.opRev}(= 앱) + SA 기타매출 ${a.orv}(= SEC 기타수익 줄 ${oth[0].v} − SA 자산처분이익 ${a.ga} − SA 환차익 ${a.cg})`, r.ours + a.orv]);
+        }
         for (const [how, exp] of cands) if (withinH(v - exp)) return { ok: `${how} = ${exp}, 앱 = SEC 매출(A층 정확 일치) · 공통모드 아님(10-K 원본 차원값)` };
       }
       // R4 Yahoo·인포맥스 LTM 매출 = SEC 3개월값 4개 합(4분기 = 사업연도 − 9개월 누적). 앱 LTM 은 사업연도 + 당기 누적 − 전년
@@ -2583,6 +2612,48 @@ async function verifyUs(sym) {
           if (qs && withinH(v - qs.sum))
             return { ok: `${n} LTM 매출 = SEC ${tag} 3개월값 합 ${qs.sum}(${qs.parts.map((p) => `${p.end} ${p.how === "3개월" ? p.v : p.how}`).join(" + ")}) — 앱 = SEC TTM(${t.how}) ${t.v}, 차 ${r.ours - qs.sum} = 누적과 분기 합의 차 · 공통모드 아님(SEC 원자료로 독립 재현)` };
           break;
+        }
+      }
+      // R8 분기 확장 — 인포맥스 LTM 매출 = Σ 분기(SEC 3개월 매출 − 그 분기 매출 위치 파생상품 손익). 4분기 = 연간 − 9개월(매출·파생 모두).
+      //    성립하지 않고 한 분기만 어긋나면, 그 분기의 인포맥스 값이 인포맥스 자신의 연간 − 나머지 3분기와 다르고 그 차감값이 SEC 식과
+      //    정확히 같을 때 인포맥스 자체 집계 불일치(외부 단독 이탈, 오너 승인 2026-09-25). GOOG: 2025 Q4 인포맥스 113,996 ≠ 인포맥스 연간
+      //    402,962 − Q1~Q3 = 113,895 = SEC 113,829 − 파생(−126 − (−60)).
+      if (metric === "매출" && col === "LTM" && n === "인포맥스" && revQDeriv && aPassed("LTM", "매출") && L?.date && imAnnual?.quarters) {
+        const tag = REV_TAGS.find((t) => { const x = secTtm(t); return x && dayDiff(x.end, L.date) <= 7 && Math.abs(x.v - r.ours) <= 0.5; });
+        const qs = tag ? secQuarterSum(tag, L.date) : null;
+        const imQ = qs ? qs.parts.map((p) => imAnnual.quarters.find((q) => dayDiff(q.end, p.end) <= 7) ?? null) : [];
+        if (qs && imQ.every((q) => q?.rev != null)) {
+          const dur = (x) => (Date.parse(x.end) - Date.parse(x.start)) / 864e5;
+          const one = (kind, pred) => {
+            const fs = revQDeriv.filter((x) => DERIV_FAM[kind].ids.includes(x.id) && revLoc(x.dims) && DERIV_FAM[kind].pred(x.dims) && pred(x));
+            if (!fs.length) return null;
+            const fi = Math.min(...fs.map((x) => x.fi));
+            return { v: aggDeriv(fs.filter((x) => x.fi === fi)), start: fs.find((x) => x.fi === fi).start };
+          };
+          const derivQ = (kind, E) => {
+            const q = one(kind, (x) => dayDiff(x.end, E) <= 7 && dur(x) >= 80 && dur(x) <= 100);
+            if (q) return q.v;
+            const fy = one(kind, (x) => dayDiff(x.end, E) <= 7 && dur(x) >= 300 && dur(x) <= 400);
+            const nine = fy && one(kind, (x) => x.start === fy.start && dur(x) >= 250 && dur(x) <= 290);
+            return fy && nine ? fy.v - nine.v : null;
+          };
+          const fams = ["cf", "nd"].map((k) => [k, qs.parts.map((p) => derivQ(k, p.end))]).filter(([, vs]) => vs.every((x) => x != null) && vs.some((x) => x !== 0));
+          for (let mask = 1; mask < 1 << fams.length; mask++) {
+            const use = fams.filter((_, i) => mask & (1 << i));
+            const exp = qs.parts.map((p, i) => p.v - use.reduce((t, [, vs]) => t + vs[i], 0));
+            const txt = qs.parts.map((p, i) => `${p.end} ${p.v}${use.map(([k, vs]) => ` − ${k} ${vs[i]}`).join("")}`).join(" + ");
+            const s = exp.reduce((t, x) => t + x, 0);
+            if (withinH(v - s)) return { ok: `인포맥스 LTM 매출 = Σ 분기(SEC ${tag} 3개월 − 매출 위치 파생상품 손익) ${s}(${txt}) — 앱 = SEC TTM(A층 정확 일치) · 공통모드 아님(10-Q·10-K 원본 차원값)` };
+            const bad = exp.map((x, i) => i).filter((i) => Math.abs(imQ[i].rev - exp[i]) > 0.5e6);
+            if (bad.length !== 1) continue;
+            const k = bad[0], qe = imQ[k].end;
+            const ann = imAnnual.find((a) => (Date.parse(a.end) - Date.parse(qe)) / 864e5 > -8 && (Date.parse(a.end) - Date.parse(qe)) / 864e5 < 330);
+            const fyQ = ann ? imAnnual.quarters.filter((q) => (Date.parse(ann.end) - Date.parse(q.end)) / 864e5 > -8 && (Date.parse(ann.end) - Date.parse(q.end)) / 864e5 < 330) : [];
+            if (ann?.rev == null || fyQ.length !== 4 || fyQ.some((q) => q.rev == null)) continue;
+            const derived = ann.rev - fyQ.filter((q) => q.end !== qe).reduce((t, q) => t + q.rev, 0);
+            if (Math.abs(derived - exp[k]) <= 0.5e6)
+              return { outlier: `외부 단독 이탈(인포맥스 자체 집계 불일치) — 인포맥스 ${qe} 분기 ${imQ[k].rev} ≠ 인포맥스 연간 ${ann.rev} − 나머지 3분기 = ${derived} = SEC 식(${txt.split(" + ")[k]}) ${exp[k]}, 나머지 3분기는 SEC 식과 정확 일치 · 앱 = SEC TTM(A층 정확 일치)` };
+          }
         }
       }
       // 인포맥스 연간 매출 ≠ 인포맥스 자신의 분기 4개 합, 그리고 그 분기 합 = 앱 = SEC 본표(A층 정확 일치) — 인포맥스 집계 자체의
@@ -2661,7 +2732,7 @@ async function verifyUs(sym) {
     };
     // ── 원인 R1~R3·R5·R6 준비 — 해당 불일치가 있을 때만 공시 원본을 읽는다(SEC 요청 절약)
     const mism = (item, src) => { const x = recon.get(item); return !!x?.srcs[src] && !sameAt(x.ours, x.srcs[src].v, x.srcs[src].unit); };
-    let debtDec = null, irDeriv = null, finOblig = null, revDims = null, revParts = null;
+    let debtDec = null, irDeriv = null, finOblig = null, revDims = null, revParts = null, revQDeriv = null;
     if (mism("LTM 총차입금(운용리스 포함)", "Yahoo") || mism("LTM 총차입금(운용리스 포함)", "StockAnalysis")) {
       try {
         const fl = await filingAtDate(cik, sub, L.date);
@@ -2740,6 +2811,12 @@ async function verifyUs(sym) {
     if (revAnyMism && revFace && !foreign) {
       try { revParts = await faceRevenueParts(revFace.faces); }
       catch (e) { errs.push(`매출 본표 하위 줄 공시 원본 조회 실패: ${String(e).slice(0, 60)}`); }
+    }
+    // R8 분기 확장 — 인포맥스 LTM 매출이 다를 때만, 인포맥스 최근 4분기 결산일의 10-Q·10-K 원본에서 매출 위치 파생상품 손익
+    if (mism("LTM 매출", "인포맥스") && revFace && !foreign && imAnnual?.quarters) {
+      const qEnds = imAnnual.quarters.filter((q) => q.end <= L.date || dayDiff(q.end, L.date) <= 7).slice(-4).map((q) => q.end);
+      try { if (qEnds.length === 4) revQDeriv = await derivFactsOf(revFace.faces.filter((f) => !f.any && f.instUrl && qEnds.some((E) => dayDiff(f.report, E) <= 7))); }
+      catch (e) { errs.push(`매출 분기 파생상품 공시 원본 조회 실패: ${String(e).slice(0, 60)}`); }
     }
     // 1차: EBITDA 외 항목 → 2차: EBITDA(구성요소 판정 결과를 쓴다)
     const done = new Map();
