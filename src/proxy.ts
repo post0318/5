@@ -10,7 +10,6 @@ import { NextResponse } from "next/server";
  * 잠기는 경로(모두 라우트 내부에서 검증):
  *   /api/universe 이하 전부           유니버스 조회·등록·수정·삭제 (계정별)
  *   /api/news/universe                유니버스통합 뉴스 (계정별)
- *   /api/ppt/universe                 유니버스 발표자료
  *   /api/weekly (GET 제외)            주간 리포트 생성·수정·발행
  *   종목뉴스 summarize 라우트          LLM 비용 발생
  *

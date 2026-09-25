@@ -33,7 +33,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { ChangePercent, Money, Multiple, NumberText, Percent, stockDirClass } from "@/components/num";
-import { StockPptButton } from "@/components/ppt-export";
 import { FinancialsTable } from "@/components/financials-table";
 import { ConsensusPanel } from "@/components/consensus-panel";
 import { BrokerRatings } from "@/components/broker-ratings";
@@ -617,12 +616,6 @@ export function StockAnalysis({
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <StockPptButton
-                market={market}
-                symbol={ov.symbol}
-                yahoo={yahooOverride}
-                name={ov.profile?.name}
-              />
               {canUseUniverse && (
                 <Button
                   variant="outline"

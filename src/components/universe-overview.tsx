@@ -11,7 +11,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChangePercent, Money, Multiple, Percent } from "@/components/num";
-import { UniversePptButton } from "@/components/ppt-export";
 import { formatBigAmount, formatMarketCap, formatNumber } from "@/lib/format";
 import { recommendationKo } from "@/components/stock-analysis";
 import { cn } from "@/lib/utils";
@@ -125,7 +124,6 @@ export function UniverseOverview({ market }: { market: MarketId }) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {q.data && q.data.rows.length > 0 && <UniversePptButton market={market} />}
           <Button
             variant="outline"
             size="sm"
