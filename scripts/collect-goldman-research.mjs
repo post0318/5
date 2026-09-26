@@ -131,6 +131,8 @@ async function parseItem(url) {
     summary,
     pdfUrl: url,
     views: null,
+    // 사이트 내 섹션(insights 하위 첫 경로) — 대조표에서 원본 화면 확인용.
+    board: `Goldman Sachs > insights/${slug.split("/")[0]}`,
     category: "산업",
   };
 }

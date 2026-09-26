@@ -584,7 +584,7 @@ npm run db:studio    # drizzle studio
           `INSIGHT_LABEL_RE`(IPO/비상장 라벨, "KB IPO Brief"·"비상장
           Tracker+"·"케이비 비상장 플러스")는 일반 산업분석 풀이 아니라
           `source:"KB증권 비상장리서치"`로 별도 전송 — 키움 CI 비상장과
-          같은 인프라(`INSIGHT_SOURCES`) 재사용, `/kr/insights`("비상장
+          같은 인프라(`INSIGHT_SOURCES`) 재사용, `/kr/unlisted`("비상장
           리서치" 탭)에서 "KB증권" 세그먼트로 노출(`insights-board.tsx`
           `KR_SOURCES`에 추가). "비상장기업" 게시판(categoryid 188)은
           `tab=5` 기본 조회에 안 잡히고 `pCatfolderid=186`을 따로 줘야
@@ -1989,3 +1989,8 @@ LLM 수치 검증·지수 관행 때문에 이번 통일에서 제외(별도 결
 
 `prd.md` §12 참조. 데이터 소스 평가는 §11 참조.
 관련 결정이 필요하면 임의로 정하지 말고 사용자에게 확인.
+
+- **국내 비상장 화면 분리(오너 지시 2026-09-26)**: 국내는 "인사이트" 탭을 없애고 **`/kr/unlisted`("비상장 리서치")**로
+  분리했다. 인사이트(해외 IB) 탭은 미국 등 해외 시장에서만 나온다(`app-shell.tsx` SUBNAV 시장별 필터).
+  `/kr/insights` 는 `/kr/unlisted` 로 리다이렉트. 데이터·API(`/api/research/insights`, `INSIGHT_SOURCES`)는
+  그대로 — `InsightsBoard market="kr"` 재사용.

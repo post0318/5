@@ -51,6 +51,7 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
+import { promoteKrIndustryToStock } from "./lib/company-match.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -319,6 +320,8 @@ if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
+// 산업 게시판에 섞인 종목 리포트를 종목분석으로 승격(공통 lib — 목표주가 추출 전에).
+for (let i = 0; i < collected.length; i++) collected[i] = promoteKrIndustryToStock(collected[i]);
 const research = collected;
 console.log(`✔ 파싱 완료: ${research.length}건`);
 
@@ -374,6 +377,12 @@ for (const it of research) {
     pdfUrl: it.pdfUrl,
     views: it.views,
     category: it.category,
+    // 원 게시판(사이트 메뉴) — 대조·검수용. it.board 는 "{게시판 key}[-gubun]".
+    board: (() => {
+      const [key, gubun] = String(it.board).split("-");
+      const b = BOARDS.find((x) => x.key === key);
+      return `IBK투자증권 > ${b?.label ?? key}(${b?.list ?? key}${gubun ? ` ${gubun}` : ""})`;
+    })(),
   });
 }
 for (const [market, items] of groups) {

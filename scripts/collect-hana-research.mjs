@@ -135,6 +135,7 @@ function parseItems(html) {
       bodyText: stripHtml(rawBody),
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
       category: "기업",
+      board: "하나증권 > 산업/기업 > 기업분석(pid=3, cid=2)",
     });
   }
   return items;
@@ -159,6 +160,7 @@ function parseIndustryItems(html) {
       summary: excerpt(stripHtml(rawBody)),
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
       category: "산업",
+      board: "하나증권 > 산업/기업 > 산업분석(pid=3, cid=1)",
     });
   }
   return items;
@@ -201,6 +203,7 @@ function parseGlobalItems(html) {
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
       category: "기업",
       market: "us",
+      board: "하나증권 > 글로벌리서치 > 글로벌 기업분석(pid=8, cid=3)",
     });
   }
   return { items, rawRows };
@@ -234,7 +237,7 @@ async function fetchGlobalIndustryPage(cid, page) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
 }
-function parseGlobalIndustryItems(html) {
+function parseGlobalIndustryItems(html, boardLabel) {
   const items = [];
   for (const m of html.matchAll(INDUSTRY_ITEM_RE)) {
     const [, bbsCd, bbsSeq, rawTitle, analyst, rawDate, category, rawBody] = m;
@@ -253,6 +256,7 @@ function parseGlobalIndustryItems(html) {
       opinion: "",
       targetPrice: null,
       market,
+      board: boardLabel,
       summary: excerpt(stripHtml(rawBody)),
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
       category: "산업",
@@ -328,7 +332,7 @@ for (const board of GLOBAL_INDUSTRY_BOARDS) {
   let iStop = false;
   for (let page = 1; page <= MAX_PAGES && !iStop; page++) {
     const html = await fetchGlobalIndustryPage(board.cid, page);
-    const items = parseGlobalIndustryItems(html);
+    const items = parseGlobalIndustryItems(html, `하나증권 > 글로벌리서치 > ${board.label}(pid=8, cid=${board.cid})`);
     const rawCount = [...html.matchAll(INDUSTRY_ITEM_RE)].length;
     if (rawCount === 0) break;
     for (const it of items) {
@@ -388,6 +392,7 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl,
     views: null,
     category: it.category,
+    board: it.board,
   });
 }
 

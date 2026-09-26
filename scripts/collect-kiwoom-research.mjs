@@ -76,6 +76,9 @@ import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
+import { sectorFromTitleOrCover, looksLikeSectorLabel, isIpoCover } from "./lib/sector-label.mjs";
+import { readPdfText } from "./lib/research-extract.mjs";
+import { resolveUsTickerByName } from "./lib/overseas-market.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -196,6 +199,9 @@ function parseChBoard(title) {
     };
   }
   const { label, headline } = industryLabelAndHeadline(title);
+  // "[중국은 지금] …" 중국 거시 시리즈(실물지표·정책 등)는 산업분석이 아니라 거시경제 이슈분석(경제) — 고정 라벨로 보내 앱이 분류
+  // (오너 지시 2026-09-27, 삼성증권 경제와 같은 기준).
+  if (/^중국은\s*지금$/.test(label)) return { title: headline, stockName: "키움 중국 경제", symbol: null, category: "산업" };
   return { title: headline, stockName: label, symbol: null, category: "산업" };
 }
 
@@ -212,6 +218,23 @@ function fixedLabelBoardParser(label) {
 // 밖이다(오너 지시 2026-09-24 — "월간증시전망에서 증시 캘린더는 수집대상에서
 // 제외한다").
 const CALENDAR_RE = /증시\s*캘린더/;
+
+// 실제 사이트 내비 경로(상단 표, 오너 확인 2026-09-24) — 리포트가 원래 어느 메뉴에 있었는지
+// 각 item 의 board 필드로 싣는다(분류 대조용).
+const MENU_LABEL = {
+  CC: "해외증시 > 미국/선진국",
+  AI: "해외증시 > AI보고서",
+  CA: "해외증시 > 글로벌테마/이슈",
+  CH: "해외증시 > 중국/신흥국",
+  CR: "기업/산업분석 > 기업분석",
+  SN: "기업/산업분석 > 스팟노트",
+  CI: "기업/산업분석 > 산업분석",
+  EM: "경제/전략 > 월간증시전망",
+  IM: "경제/전략 > 중장기증시전망",
+  SI: "경제/전략 > 이슈분석",
+  FE: "경제/전략 > 환율전망",
+};
+const boardLabel = (rMenuGb) => `키움증권 > ${MENU_LABEL[rMenuGb] ?? rMenuGb}(${rMenuGb})`;
 
 const BOARDS = [
   { rMenuGb: "CC", market: "us", parse: parseUsTickerBoard },
@@ -266,6 +289,7 @@ async function collectBoard(board, cutoff) {
       if (isCommonExcludedContent(rawTitle, parsed.category)) continue;
       out.push({
         id: `${board.rMenuGb}:${r.sqno}`,
+        board: boardLabel(board.rMenuGb),
         date,
         title: parsed.title,
         stockName: parsed.stockName,
@@ -318,6 +342,7 @@ async function collectMacroBoard(board, cutoff) {
       if (isCommonExcludedContent(title)) continue;
       out.push({
         id: `${board.rMenuGb}:${r.sqno}`,
+        board: boardLabel(board.rMenuGb),
         date,
         title,
         stockName: board.stockName,
@@ -370,6 +395,43 @@ console.log(
   collected.slice(0, 8).map((i) => `[${i.market}/${i.category}] ${i.date} ${i.symbol ?? i.stockName} — ${i.title}`),
 );
 
+// 국내 산업분석(CI) 게시판 항목의 PDF 표지를 읽어 두 가지를 보정한다(오너 지시 2026-09-27):
+//  ① 표지가 "IPO Report"(공모 리포트)면 비상장 리서치로 — 예: "덕산넵코어스(266690) 항법과 항재밍으로…".
+//  ② 라벨이 업종명이 아니면(제목 조각이 라벨로 들어온 경우 — 예: "소듐이온 전지(SIB) 기대감 확산") 표지의 업종명으로 —
+//     안 그러면 산업분석 업종 필터에서 어느 업종에도 안 잡힌다.
+let ipoMoved = 0, sectorFixed = 0;
+for (const it of collected) {
+  if (it.category !== "산업" || it.market !== "kr" || it.unlisted || !/\(CI\)/.test(it.board ?? "") || !it.pdfUrl) continue;
+  const text = await readPdfText(it.pdfUrl).catch(() => "");
+  if (isIpoCover(text)) {
+    it.unlisted = true;
+    it.stockName = String(it.stockName).replace(/\s*\(\d{6}\)\s*$/, "").trim();
+    ipoMoved++;
+    continue;
+  }
+  if (!looksLikeSectorLabel(it.stockName)) {
+    const label = sectorFromTitleOrCover(it.title, text);
+    if (label) { it.stockName = label; sectorFixed++; }
+  }
+}
+console.log(`▶ 산업분석(CI) 표지 보정: IPO→비상장 ${ipoMoved}건 · 업종 라벨 보정 ${sectorFixed}건`);
+
+// 미국(CC) 게시판에서 제목에 "(TICKER.US)" 표기 없이 "Bank of New York Mellon Corp: 지속적 수익증가…"처럼 영문 회사명만 온 글은
+// 종목 리포트인데 산업분석으로 새고 있었다(오너 지적 2026-09-27 — "종목같은데"). 영문 회사명 라벨이면 이름→티커 조회로 종목으로 올린다.
+let usPromoted = 0;
+for (const it of collected) {
+  if (it.market !== "us" || it.category !== "산업" || !/\(CC\)/.test(it.board ?? "")) continue;
+  if (!/^[A-Za-z][A-Za-z0-9 .,&'-]{3,60}$/.test(String(it.stockName ?? ""))) continue;
+  const hit = await resolveUsTickerByName(it.stockName);
+  if (hit) {
+    it.category = "기업";
+    it.stockName = hit.stockName;
+    it.symbol = hit.symbol;
+    usPromoted++;
+  }
+}
+console.log(`▶ 미국(CC) 티커 없는 영문 회사명 → 종목 ${usPromoted}건`);
+
 const stockItems = collected.filter((it) => it.category !== "산업");
 console.log(`▶ 투자의견/목표주가 조회 중 (PDF 포함, 로그인 불필요) — ${stockItems.length}건...`);
 await enrichResearch(stockItems, { sleepMs: 400, usePdf: true });
@@ -402,6 +464,7 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl,
     views: it.views,
     category: it.category,
+    board: it.board,
   });
 }
 

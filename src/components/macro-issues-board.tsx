@@ -56,18 +56,20 @@ function Pager({
 export function MacroIssuesBoard({ topic, title }: { topic: "이슈분석" | "환율분석"; title: string }) {
   const [page, setPage] = useState(1);
   const [source, setSource] = useState<string>("전체");
+  // 이슈분석 구분: 전체/경제/채권, 환율분석 구분: 전체/증권사명(오너 지시 2026-09-27)
+  const byKind = topic === "이슈분석";
 
   const q = useQuery({
-    queryKey: ["macro-issues", topic, source],
+    queryKey: ["macro-issues", topic, byKind ? "kind" : "source", source],
     queryFn: () =>
       apiFetch<{ items: ShinhanResearchDoc[]; sources: string[] }>(
-        `/api/research/macro-issues?topic=${encodeURIComponent(topic)}&source=${encodeURIComponent(source)}`,
+        `/api/research/macro-issues?topic=${encodeURIComponent(topic)}&${byKind ? "kind" : "source"}=${encodeURIComponent(source)}`,
       ),
     staleTime: 30 * 60_000,
   });
 
   const items = q.data?.items ?? [];
-  const sources = q.data?.sources ?? [];
+  const sources = byKind ? ["경제", "채권"] : (q.data?.sources ?? []);
   const pageCount = Math.ceil(items.length / PAGE_SIZE) || 1;
   const clampedPage = Math.min(page, pageCount);
   const paged = items.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);

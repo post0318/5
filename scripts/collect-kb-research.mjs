@@ -96,6 +96,7 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isEsgContent, isFxContent, isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { promoteKrIndustryToStock } from "./lib/company-match.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -192,6 +193,11 @@ async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
   return { summary: pdfText ? excerptFromPdfText(pdfText, stockName, symbol) : "", pdfText };
 }
 
+// 리포트가 올라온 KB 게시판 표시 — 응답 행의 사이트 메뉴 경로(foldertemplate)·categoryid 와
+// 조회한 tab 을 그대로 조합한 대조·검수용 메타(서버는 무시).
+const kbBoard = (r) =>
+  `KB증권 > ${String(r.foldertemplate ?? "").trim() || "리서치"}(tab=${r.__tab ?? "?"}, categoryid=${r.categoryid ?? "?"})`;
+
 function parseTargetPrice(tp) {
   const n = Number(tp);
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
@@ -220,7 +226,7 @@ async function fetchList(tab) {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json();
-  return json.list ?? [];
+  return (json.list ?? []).map((r) => ({ ...r, __tab: tab }));
 }
 
 // 해외주식(tab=4, 미국/중국/일본) — 원 collect-kb-global-research.mjs 로직 그대로.
@@ -307,6 +313,7 @@ for (const r of rows) {
       pdfUrl: r.urlLink || null,
       views: null,
       category: "기업",
+      board: kbBoard(r),
     });
   } else if (docTitle && !EXCLUDE_LABEL_RE.test(docTitle) && !isEsgContent(docTitle)) {
     // 업종명("반도체" 등)·정기 전략 노트 — 종목코드 없음. 포트폴리오/
@@ -325,6 +332,7 @@ for (const r of rows) {
       pdfUrl: r.urlLink || null,
       views: null,
       category: "산업",
+      board: kbBoard(r),
       unlisted: INSIGHT_LABEL_RE.test(docTitle),
     });
   }
@@ -357,7 +365,7 @@ async function fetchUnlistedBoard() {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json();
-  return json.list ?? [];
+  return (json.list ?? []).map((r) => ({ ...r, __tab: "5" }));
 }
 const unlistedRows = await fetchUnlistedBoard();
 for (const r of unlistedRows) {
@@ -378,6 +386,7 @@ for (const r of unlistedRows) {
     pdfUrl: r.urlLink || null,
     views: null,
     category: "산업",
+    board: kbBoard(r),
     unlisted: true,
   });
 }
@@ -405,6 +414,7 @@ for (const r of dailyRows) {
     pdfUrl: r.urlLink || null,
     views: null,
     category: "산업",
+    board: kbBoard(r),
   });
 }
 
@@ -436,6 +446,7 @@ for (const r of tab3Rows) {
     pdfUrl: r.urlLink || null,
     views: null,
     category: "산업",
+    board: kbBoard(r),
   });
 }
 
@@ -466,6 +477,7 @@ for (const r of tab3Rows) {
     pdfUrl: r.urlLink || null,
     views: null,
     category: "산업",
+    board: kbBoard(r),
     market: "kr",
   });
 }
@@ -497,6 +509,7 @@ for (const r of tab2Rows) {
     pdfUrl: r.urlLink || null,
     views: null,
     category: "산업",
+    board: kbBoard(r),
     market: "kr",
   });
 }
@@ -526,6 +539,7 @@ for (const r of globalRows) {
     pdfUrl: r.urlLink || null,
     views: null,
     category: parsed.category,
+    board: kbBoard(r),
   });
 }
 
@@ -550,6 +564,8 @@ for (const it of collected) {
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
 // 투자의견·목표주가 — 공용 추출기(tp/recomm 은 본문 언급 확인 후, 없으면 PDF 에서 추출).
+// 산업 게시판에 섞인 종목 리포트(라벨이 회사명인 경우 포함)를 종목분석으로 승격(공통 lib).
+for (let i = 0; i < collected.length; i++) collected[i] = promoteKrIndustryToStock(collected[i]);
 await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
@@ -588,6 +604,7 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl,
     views: it.views,
     category: it.category,
+    board: it.board,
   });
 }
 

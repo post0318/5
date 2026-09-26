@@ -118,6 +118,7 @@ for (const { url, lastmod } of targets) {
       summary: decodeEntities(descM?.[1] ?? "").slice(0, 300),
       pdfUrl: url,
       views: null,
+      board: `Bank of America Institute > ${slug.includes("/") ? slug.split("/")[0] : "(루트)"}`,
       category: "산업",
     });
   } catch (err) {

@@ -13,6 +13,7 @@
  *     | bbsId    | 사이트 분류 | 제목 형식                      | 앱 목적지                         |
  *     |----------|-------------|--------------------------------|-----------------------------------|
  *     | invest02 | 기업분석    | "종목명(6자리코드):헤드라인"   | 국내 종목분석(category "기업")    |
+ *     |          |  (미국 종목 혼재) | "Apple (AAPL.US):…"·"GM(GM US):…" | 미국 종목분석(market "us", 2026-09-27 추가) |
  *     | invest03 | 산업분석    | "업종명 :헤드라인"             | 국내 산업분석(stockName=업종명)   |
  *     | sih02    | 투자전략    | "시리즈명 :헤드라인"           | 국내 산업분석 > 투자전략/시황     |
  *     | sih02anl | 경제분석    | "시리즈명 :헤드라인"           | 거시경제 > 이슈분석/환율분석(kr_research) |
@@ -53,6 +54,8 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
+import { promoteKrIndustryToStock } from "./lib/company-match.mjs";
+import { parseOverseasTitle, resolveUsTickerByName } from "./lib/overseas-market.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -71,6 +74,8 @@ function loadEnvLocal() {
 const ENV = loadEnvLocal();
 const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
+// --no-enrich: 목표주가·투자의견 PDF 추출을 건너뜀(분류만 빠르게 확인할 때 — PDF 파싱이 메모리를 많이 씀).
+const NO_ENRICH = ARGS.includes("--no-enrich");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 const MAX_PAGES = 5;
 
@@ -98,6 +103,9 @@ const BOARDS = [
 
 // "삼성전기(009150):헤드라인", "피엠티(147760):탐방노트: …"
 const COMPANY_TITLE_RE = /^(.+?)\s*\((\d{6})\)\s*[:：]\s*(.+)$/;
+// 해외 종목: "Apple (AAPL.US):…"·"General Motors(GM US):…"·"TSMC (TSM.NY):…"(미국) · "(7203.JP)"(일본) · "(2330.TT)"(대만→중국) ·
+// "(OR FP)"·"(ICOS IM)"(유럽) — 시장 판별은 공통 lib(scripts/lib/overseas-market.mjs). 티커가 제목에 없는 영문 종목명
+// ("Albemarle:…"·"First Solar:…"·"Valero Energy:…")은 이름→티커 조회(미국만 인정, 오너 지시 2026-09-27)로 잡는다.
 // 데일리 시황 시리즈 — 시황으로 확정 분류.
 const DAILY_SERIES_RE = /^Meritz\s+Strategy\s+Daily\b/i;
 // 공용 ESG 필터(\bESG\b)가 못 잡는 붙여쓰기 시리즈명("The ESGVerse").
@@ -207,7 +215,7 @@ function commodityItem(base, title) {
 }
 
 /** 행 → 항목(리서치는 category, 이슈분석은 topic). null 이면 버림. */
-function classify(row, board) {
+async function classify(row, board) {
   const { title } = row;
   const base = {
     id: `${board.bbsId}:${row.no}`,
@@ -226,11 +234,24 @@ function classify(row, board) {
   if (isExcluded(title)) return null;
 
   if (board.kind === "company") {
+    const ov = parseOverseasTitle(title);
+    if (ov) {
+      if (isCommonExcludedContent(title, "기업")) return null;
+      return { ...base, title: ov.headline, stockName: ov.name, symbol: ov.symbol, category: "기업", market: ov.market };
+    }
     const m = title.match(COMPANY_TITLE_RE);
     if (m) {
       // 종목 리포트엔 대체투자 규칙을 걸지 않는다(category "기업").
       if (isCommonExcludedContent(title, "기업")) return null;
       return { ...base, title: m[3].trim(), stockName: m[1].trim(), symbol: m[2], category: "기업" };
+    }
+    // 티커 없는 영문 종목명("Albemarle: …") — 종목명 칸이 비어 있고 콜론 앞이 영문 회사명일 때만 이름→티커 조회.
+    const nm = !row.stockCol && title.match(/^([A-Za-z][A-Za-z0-9 .&'-]{3,40}?)\s*[:：]\s*(.+)$/);
+    if (nm) {
+      const hit = await resolveUsTickerByName(nm[1]);
+      if (hit && !isCommonExcludedContent(title, "기업")) {
+        return { ...base, title: nm[2].trim(), stockName: hit.stockName, symbol: hit.symbol, category: "기업", market: "us" };
+      }
     }
     // 코드 없는 글은 산업으로(종목명 열 값이 있으면 라벨로).
     if (isCommonExcludedContent(title)) return null;
@@ -286,7 +307,7 @@ for (const board of BOARDS) {
       dupSkipped++;
       continue;
     }
-    const it = classify(row, board);
+    const it = await classify(row, board);
     if (!it) {
       excluded++;
       continue;
@@ -328,13 +349,17 @@ for (const it of collected) {
 }
 console.log(`✔ PDF 링크 ${collected.length - noPdf}/${collected.length}건 (없음 ${noPdf}건 → 상세 URL)`);
 
+// 산업 게시판에 섞인 종목 리포트를 종목분석으로 승격(공통 lib — 목표주가 추출 전에).
+for (let i = 0; i < collected.length; i++) collected[i] = promoteKrIndustryToStock(collected[i]);
 const research = collected;
 console.log(`✔ 파싱 완료: ${research.length}건`);
 
 // 투자의견·목표주가 — 공용 추출기가 PDF 에서 읽는다(목록·상세에 구조화 필드 없음).
-const stockItems = research.filter((it) => it.category === "기업");
-console.log(`▶ 투자의견/목표주가 조회 중 (PDF, 로그인 불필요) — ${stockItems.length}건...`);
-await enrichResearch(stockItems, { market: "kr", sleepMs: GAP_MS, usePdf: true });
+const stockItems = research.filter((it) => it.category === "기업" && it.market === "kr");
+const usStockItems = research.filter((it) => it.category === "기업" && it.market === "us");
+console.log(`▶ 투자의견/목표주가 조회 중 (PDF, 로그인 불필요) — 국내 ${stockItems.length}건 · 미국 ${usStockItems.length}건...`);
+if (!NO_ENRICH) await enrichResearch(stockItems, { market: "kr", sleepMs: GAP_MS, usePdf: true });
+if (usStockItems.length && !NO_ENRICH) await enrichResearch(usStockItems, { market: "us", sleepMs: GAP_MS, usePdf: true });
 
 for (const i of collected) {
   console.log(
@@ -369,6 +394,8 @@ for (const it of research) {
     pdfUrl: it.pdfUrl,
     views: it.views,
     category: it.category,
+    // 원 게시판(사이트 메뉴) — 대조·검수용. it.board 는 게시판 코드(bbsId).
+    board: `메리츠증권 > ${BOARDS.find((b) => b.bbsId === it.board)?.label ?? it.board}(${it.board})`,
   });
 }
 for (const [market, items] of byMarket) {

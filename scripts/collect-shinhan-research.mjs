@@ -28,6 +28,7 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { refineSectorLabels } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -155,6 +156,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       bodyText: String(it.f7 ?? ""),
       pdfUrl,
       views: Number(it.f5) || null,
+      board: "신한투자증권 > 기업분석(gicompanyanalyst)",
     });
   }
   const pages = data.pageInfo?.pages ?? [];
@@ -197,6 +199,7 @@ console.log(`▶ 신한투자증권 산업분석 리포트 수집: 최근 ${DAYS
         pdfUrl: it.f3 || null,
         views: Number(it.f5) || null,
         category: "산업",
+        board: "신한투자증권 > 산업분석(giindustry)",
       });
     }
     const pages = data.pageInfo?.pages ?? [];
@@ -241,6 +244,7 @@ const TITLE_US_RE = /\(([A-Z][A-Z.]{0,5})\.US\)\s*$/;
             pdfUrl: it.f3 || null,
             views: Number(it.f5) || null,
             category: "산업",
+            board: "신한투자증권 > 해외 산업 및 기업분석(foreignstock)",
             market: "us",
           });
         }
@@ -260,6 +264,7 @@ const TITLE_US_RE = /\(([A-Z][A-Z.]{0,5})\.US\)\s*$/;
         pdfUrl: it.f3 || null,
         views: Number(it.f5) || null,
         category: "기업",
+        board: "신한투자증권 > 해외 산업 및 기업분석(foreignstock)",
         market: "us",
       });
     }
@@ -322,6 +327,7 @@ for (const board of ["gicomment", "gieconomy"]) {
         pdfUrl: it.f3 || null,
         views: Number(it.f5) || null,
         category: "산업",
+        board: `신한투자증권 > ${board === "gicomment" ? "투자전략(gicomment)" : "경제분석(gieconomy)"}`,
         market,
       });
     }
@@ -339,6 +345,8 @@ if (items.length === 0) {
 
 console.log(`✔ 파싱 완료: ${items.length}건`);
 // 투자의견·목표주가 — 공용 추출기(본문 → PDF).
+// 업종 리포트의 뭉뚱그린 라벨("산업")을 제목·PDF 표지의 실제 업종명으로 보정(공통 lib) — 안 그러면 제목 키워드로 오분류.
+console.log(`▶ 업종 라벨 보정: ${await refineSectorLabels(items)}건`);
 await enrichResearch(items, { market: "kr" });
 console.log("  최근 3건:", items.slice(0, 3).map((i) => `${i.date} ${i.stockName} — ${i.title}`));
 

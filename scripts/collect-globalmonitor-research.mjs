@@ -75,6 +75,9 @@ const LIST_URL = "https://globalmonitor.einfomax.co.kr/bizrpt/reportlist";
 const PAGE_SIZE = 50;
 // module_constants_base_bundle.js 의 bizrptCodelist.usa_all 값(역추적 확인).
 const USA_ALL = { lscCd: 700, sscCd: "524910,521090,523050,523070" };
+// 리포트가 원래 있던 GlobalMonitor 화면 위치 — item 의 board 필드(분류 대조용). 응답에 소분류 라벨이
+// 따로 없어 조회한 카테고리 코드(usa_all)를 그대로 적는다(작성 증권사는 source 로 별도).
+const BOARD_LABEL = `GlobalMonitor > 미국주식 전체(usa_all: lscCd=${USA_ALL.lscCd}, sscCd=${USA_ALL.sscCd})`;
 
 // "[종목명 (거래소:티커)] 제목" — 거래소는 NYS/NAS 등, 표시엔 안 쓰고 티커만 사용.
 const TITLE_RE = /^\[(.+?)\s*\(([A-Z]{2,5}):([A-Z.]+)\)\]\s*(.*)$/;
@@ -159,6 +162,7 @@ function parseItems(rows) {
         summary: excerpt(r.summary),
         pdfUrl: r.secureId ? `https://rreport.einfomax.co.kr/report/${r.secureId}.pdf` : null,
         category: "기업",
+        board: BOARD_LABEL,
       });
       continue;
     }
@@ -177,6 +181,7 @@ function parseItems(rows) {
       summary: excerpt(r.summary),
       pdfUrl: r.secureId ? `https://rreport.einfomax.co.kr/report/${r.secureId}.pdf` : null,
       category: "산업",
+      board: BOARD_LABEL,
     });
   }
   return items;
@@ -236,12 +241,22 @@ if (DRY_RUN) {
 //    자체 수집기가 미국 종목 리포트를 받지 않아 GM 경유를 그대로 둔다.
 const EXCLUDED_SOURCES = new Set(["신한투자증권", "키움증권", "대신증권", "iM증권"]);
 
+// 자체 수집기가 산업·거시(category:"산업") 게시판까지 이미 받는 증권사 — GM 의 "산업" 항목은 그 사본이라
+// 같은 리포트가 두 번(예: 상상인 "중간선거 이후의 미국 경제"가 자체 수집기에서는 거시경제 이슈분석,
+// GM 사본은 us 산업분석) 들어온다(오너 지시 2026-09-26 — "중복제외"). 이 증권사들은 산업 항목만 건너뛰고
+// 미국 종목(category:"기업") 리포트는 자체 수집기가 안 받으므로 GM 경유를 그대로 둔다.
+// 키는 GM 의 제공출처(auth) 표기.
+const OWN_INDUSTRY_COLLECTOR_SOURCES = new Set([
+  "상상인증권", "메리츠증권", "유안타증권", "하나증권", "한화증권", "교보증권", "DS투자증권",
+]);
+
 // 증권사(제공출처)별로 그룹핑해 나눠 전송 — 라우트가 body당 source 하나만 받음
 // (한경 컨센서스 스크립트와 동일 패턴).
 const bySource = new Map();
 for (const it of collected) {
   const key = it.source || "GlobalMonitor";
   if (EXCLUDED_SOURCES.has(key)) continue;
+  if (it.category === "산업" && OWN_INDUSTRY_COLLECTOR_SOURCES.has(key)) continue;
   if (!bySource.has(key)) bySource.set(key, []);
   bySource.get(key).push({
     id: `GM:${it.id}`,
@@ -256,6 +271,7 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl,
     views: null,
     category: it.category,
+    board: it.board,
   });
 }
 

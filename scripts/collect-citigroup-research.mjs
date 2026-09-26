@@ -120,6 +120,7 @@ for (const { url, lastmod } of targets) {
       summary: decodeEntities(descM?.[1] ?? "").slice(0, 300),
       pdfUrl: url,
       views: null,
+      board: `Citigroup > insights${/\/insights\/([^/]+)\//.test(url) ? "/" + url.match(/\/insights\/([^/]+)\//)[1] : ""}`,
       category: "산업",
     });
   } catch (err) {

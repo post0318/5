@@ -154,6 +154,7 @@ for (const { url } of targets) {
       summary: decodeEntities(descM?.[1] ?? "").slice(0, 300),
       pdfUrl: url,
       views: null,
+      board: "Morgan Stanley > insights/articles",
       category: "산업",
     });
   } catch (err) {

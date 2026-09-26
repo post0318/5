@@ -54,7 +54,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichResearch } from "./lib/research-extract.mjs";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent, isDigitalAssetContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
@@ -340,7 +340,10 @@ async function classify(row, board) {
   if (isCommodityContent(title)) return commodityItem(base, title, market);
   const it = industryItem(base, rest || title, market);
   // 대괄호·콜론 라벨이 없으면 지역 태그를 라벨로.
-  if (it.stockName === "산업" && region) it.stockName = region;
+  // "[해외시황]"(박제인, 해외 시장 이슈·자금조달 등)은 일간 시황이 아니라 이슈분석 — 고정 라벨로 붙여 앱이 거시경제
+  // 이슈분석으로 분류(오너 지시 2026-09-27, "AI 자금조달, 넓어지는 시장과 높아지는 비용").
+  if (region === "해외시황") it.stockName = "한화 해외시황";
+  else if (it.stockName === "산업" && region) it.stockName = region;
   return it;
 }
 
@@ -372,7 +375,13 @@ for (const board of BOARDS) {
       if (
         isEtfOrEtpContent(row.title) ||
         isEsgContent(row.title) ||
-        isCommonExcludedContent(row.title, isStock ? "기업" : undefined)
+        isCommonExcludedContent(row.title, isStock ? "기업" : undefined) ||
+        // "[EPS LIVE #N]" 주간 이익 예상치 정기 자료 — 수집 제외(오너 지시 2026-09-26).
+        /EPS\s*LIVE/i.test(row.title) ||
+        // "월간지수전망 — 9월" 주요 6대 지수 전망(글로벌리서치팀) — 수집 제외(오너 지시 2026-09-26).
+        /월간\s*지수\s*전망/.test(row.title) ||
+        // "[MP전략] [2026 #N] ..." 모델포트폴리오 정기 자료 — 수집 제외(오너 지시 2026-09-26).
+        /^\s*\[MP전략\]/.test(row.title)
       ) {
         st.excluded++;
         continue;
@@ -414,6 +423,17 @@ for (const it of collected) {
 console.log(`  PDF 첨부 링크 ${pdfLinked}/${collected.length}건 (나머지는 상세 URL 폴백)`);
 
 const research = collected;
+
+// "[해외시황]"(박제인) 글의 기본 분류는 시황분석(투자전략)이고, 채권·회사채·크레딧 등 채권 관련 내용이면 이슈분석(채권)이다
+// (오너 지시 2026-09-27 — "기본은 투자전략이다. 채권과 관련내용이 이슈분석 채권"). 채권 여부는 제목에 안 드러나
+// (예: "AI 자금조달, 넓어지는 시장과 높아지는 비용" — 본문이 회사채 발행 얘기) PDF 첫 쪽의 채권 계열어 개수로 본다
+// (실측: 해당 글 36개, 지수 전망·중국주식·이.글.스. 0~1개).
+const BOND_WORDS_RE = /채권|회사채|국채|크레딧|스프레드|공모채|신용/g;
+for (const it of research) {
+  if (it.stockName !== "한화 해외시황" || !it.pdfUrl || it.noPdf) continue;
+  const first = String(await readPdfText(it.pdfUrl).catch(() => "")).split(/-- 1 of \d+ --/)[0].slice(0, 2500);
+  if ((first.match(BOND_WORDS_RE) ?? []).length >= 5) it.stockName = "한화 해외시황 채권";
+}
 
 // 투자의견·목표주가 — 공용 추출기(본문 → 필요할 때만 PDF).
 const stockItems = research.filter((it) => it.category === "기업");
@@ -482,6 +502,8 @@ for (const it of research) {
     pdfUrl: it.pdfUrl,
     views: it.views,
     category: it.category,
+    // 원 게시판(사이트 메뉴) — 대조·검수용. it.board 는 depth3_id.
+    board: `한화투자증권 > ${BOARDS.find((b) => b.id === it.board)?.label ?? it.board}(${it.board})`,
   });
 }
 for (const [key, items] of groups) {

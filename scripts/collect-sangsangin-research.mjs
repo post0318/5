@@ -51,6 +51,7 @@ const MAX_PAGES = Number(arg("pages")) || 10;
 
 const LIST_URL = "https://www.sangsanginib.com/notice/getNoticeList";
 const CMS_CD = "CM0079"; // 기업리포트
+const BOARD_LABEL = "상상인증권 > 리서치 > 기업리포트(CM0079)"; // item 의 board 필드(분류 대조용)
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
@@ -120,6 +121,7 @@ for (let page = 0; page < MAX_PAGES && !stop; page++) {
           ? `https://www.sangsanginib.com/_upload/attFile/${CMS_CD}/${CMS_CD}_${r.NT_NO}_1.pdf`
           : null,
       views: typeof r.HIT === "number" ? r.HIT : null,
+      board: BOARD_LABEL,
     });
   }
   await sleep(400);

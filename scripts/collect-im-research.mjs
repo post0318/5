@@ -393,6 +393,8 @@ for (const it of research) {
     pdfUrl: it.pdfUrl,
     views: it.views,
     category: it.category,
+    // 원 게시판(사이트 메뉴) — 대조·검수용. it.board 는 게시판 코드(bid), 세부 코드는 subBid.
+    board: `iM증권 > ${BOARDS.find((b) => b.bid === it.board)?.label ?? it.board}(${it.board}${it.subBid && it.subBid !== it.board ? `/${it.subBid}` : ""})`,
   });
 }
 for (const [market, items] of groups) {

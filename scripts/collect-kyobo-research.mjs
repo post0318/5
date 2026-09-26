@@ -111,12 +111,17 @@ function parseItems(html) {
     const isIndustry = category.includes("산업분석");
     if (!category.includes("기업분석") && !isIndustry) continue; // 그 외 분류(경제분석 등)는 제외
     if (isCommonExcludedContent(`${stripHtml(rawStock)} ${stripHtml(rawTitle)}`, isIndustry ? "산업" : "기업")) continue;
+    // "교보증권 Corporate Day 미팅노트" — 기업 미팅 메모(종목 리포트 아님, 종목 칸에도 "KOSPI+KSQ+KTB"
+    // 같은 묶음이 들어감)라 수집 제외(오너 지시 2026-09-26).
+    if (/Corporate\s*Day\s*미팅\s*노트/i.test(stripHtml(rawTitle))) continue;
     items.push({
       id: sno,
       date,
       title: stripHtml(rawTitle),
       stockName: stripHtml(rawStock),
       category: isIndustry ? "산업" : "기업",
+      // 리포트가 원래 있던 위치 — "최신리포트" 게시판(RSReportServlet scr_id=32)의 구분 컬럼 값.
+      board: `교보증권 > 최신리포트(RSReportServlet scr_id=32) > 구분: ${category.trim()}`,
     });
   }
   return items;
@@ -229,6 +234,7 @@ const items = collected.map((it) => ({
   pdfUrl: it.pdfUrl,
   views: null,
   category: it.category,
+  board: it.board,
 }));
 
 const headers = { "Content-Type": "application/json" };

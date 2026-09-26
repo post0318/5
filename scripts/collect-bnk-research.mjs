@@ -53,6 +53,16 @@ const LIST_URL = "https://www.bnkfn.co.kr/research/analysingCompany.jspx";
 // 파싱 가능), economyAnalyse.jspx(경제분석/투자전략, 대괄호 없는 평문 제목).
 const ISSUE_URL = "https://www.bnkfn.co.kr/research/analysingIssue.jspx";
 const ECON_URL = "https://www.bnkfn.co.kr/research/economyAnalyse.jspx";
+// 금융시장(marketOverview2.jspx) — 채권전략/크레딧 Monthly·"주가와 장기금리 공방"·甲論乙駁. 지금까지 이 게시판을
+// 안 봐서 통째로 빠져 있었다(오너 지적 2026-09-26 — "주가와 장기금리 공방은 이슈분석이 맞다").
+const MARKET_URL = "https://www.bnkfn.co.kr/research/marketOverview2.jspx";
+// 리포트가 원래 있던 사이트 게시판(연구 메뉴 페이지) — item 의 board 필드(분류 대조용).
+const BOARD_LABEL = {
+  company: "BNK투자증권 > 리서치 > 기업분석(analysingCompany)",
+  issue: "BNK투자증권 > 리서치 > 업종분석(analysingIssue)",
+  econ: "BNK투자증권 > 리서치 > 경제분석/투자전략(economyAnalyse)",
+  market: "BNK투자증권 > 리서치 > 금융시장(marketOverview2)",
+};
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
@@ -187,6 +197,7 @@ function parseItems(html) {
       pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
       targetPrice: null,
       category: "기업",
+      board: BOARD_LABEL.company,
     });
   }
   return items;
@@ -214,6 +225,7 @@ function parseIssueItems(html) {
       pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
       targetPrice: null,
       category: "산업",
+      board: BOARD_LABEL.issue,
     });
   }
   return items;
@@ -239,9 +251,20 @@ function parseEconItems(html) {
       pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
       targetPrice: null,
       category: "산업",
+      board: BOARD_LABEL.econ,
     });
   }
   return items;
+}
+
+// marketOverview2.jspx(금융시장) — 대괄호 없는 평문 제목. "甲論乙駁"(주식시장 코멘트)만 별도 라벨이고, 나머지(채권전략·
+// 크레딧 Monthly·주가와 장기금리 공방 등 금리·크레딧 이슈)는 "BNK 금융시장" 고정 라벨 → 앱이 거시경제 이슈분석으로 분류.
+function parseMarketItems(html) {
+  return parseEconItems(html).map((it) => ({
+    ...it,
+    stockName: /甲論乙駁/.test(it.title) ? "BNK 甲論乙駁" : "BNK 금융시장",
+    board: BOARD_LABEL.market,
+  }));
 }
 
 /** 산업분석 PDF 에서 대형주 언급을 세어 relatedSymbols 를 뽑는다. 기업분석의
@@ -272,6 +295,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
 for (const [listUrl, parser] of [
   [ISSUE_URL, parseIssueItems],
   [ECON_URL, parseEconItems],
+  [MARKET_URL, parseMarketItems],
 ]) {
   stop = false;
   for (let page = 1; page <= MAX_PAGES && !stop; page++) {
@@ -329,6 +353,7 @@ const items = collected.map((it) => ({
   pdfUrl: it.pdfUrl,
   views: null,
   category: it.category,
+  board: it.board,
   relatedSymbols: it.relatedSymbols,
 }));
 

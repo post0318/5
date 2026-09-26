@@ -56,6 +56,7 @@ import {
   isDigitalAssetContent,
 } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
+import { refineSectorLabels } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -286,6 +287,8 @@ for (const it of companyItems) {
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
 // 투자의견(목록 칸 → 본문 언급 확인)·목표주가 — 공용 추출기. PDF 는 위에서 이미 읽었다.
+// 업종 리포트의 뭉뚱그린 라벨("산업")을 제목·PDF 표지의 실제 업종명으로 보정(공통 lib) — 안 그러면 제목 키워드로 오분류.
+console.log(`▶ 업종 라벨 보정: ${await refineSectorLabels(research)}건`);
 await enrichResearch(research, { market: "kr", usePdf: false });
 for (const it of collected) {
   console.log(
@@ -320,6 +323,11 @@ for (const it of research) {
     pdfUrl: it.pdfUrl,
     views: it.views,
     category: it.category,
+    // 원 게시판(사이트 메뉴) — 대조·검수용. it.board 는 게시판 라벨.
+    board: (() => {
+      const b = BOARDS.find((x) => x.label === it.board);
+      return `유안타증권 > ${it.board}(${b ? `${b.cd007}${b.cd008 ? `/${b.cd008}` : ""}` : "?"})`;
+    })(),
   });
 }
 for (const [market, items] of byMarket) {

@@ -310,8 +310,11 @@ export type ResearchTopic =
 // 추천종목 등, stockName과 무관하게 항상 승격)와 BARE_STRATEGY_RE(한글
 // "전략" 단독, stockName이 업종명이 아닐 때만 승격 — isGenericOrBoardLabel).
 const STRATEGY_HINT_STRONG_RE =
-  /\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC|실적\s?(상향|하향)/i;
-const BARE_STRATEGY_RE = /(?<!치료\s?)(?<!임상\s?)전략/;
+  /\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC|실적\s?(상향|하향)/i;
+// "포트폴리오/Portfolio"도 여기(라벨이 업종명이 아닐 때만 전략 신호) — 은행 "조달 포트폴리오의 악화"처럼 업종 리포트의
+// 자금 조달·자산 구성 얘기에 걸려 투자전략으로 새던 오분류 수정(오너 지적 2026-09-26). 라벨 자체가 전략/보드 라벨이면
+// (STRATEGY_HINT_RE에 포트폴리오 포함) 그대로 걸린다.
+const BARE_STRATEGY_RE = /(?<!치료\s?)(?<!임상\s?)전략|포트폴리오|Portfolio/i;
 // isGenericOrBoardLabel()에서 stockName 자체가 전략/보드 라벨인지 판별할
 // 때는 강한 신호와 bare 전략을 합친 전체를 쓴다 — "글로벌 투자전략"처럼
 // stockName 자체에 "전략"이 있으면 그건 진짜 전략 게시판이라는 뜻이라
@@ -347,6 +350,7 @@ const MARKET_CONDITION_STRONG_RE =
 // 로 이 둘을 가른다.
 const MARKET_CONDITION_PERIOD_RE = /일간|위클리|주간|데일리|모닝|아침|\bWeek(ly)?\b|\bDaily\b|\bMorning\b/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
+  "이.글.스.", // 한화 "이번달 글로벌 스토리" 월간 글로벌 주식 전략(글로벌리서치팀) — 월간 시황(오너 지시 2026-09-27)
   "KB Global Tracker+",
   "KB데일리", // 오너 지적, 2026-09
   "상상인 US Monitor",
@@ -419,6 +423,10 @@ const STRATEGY_STOCKNAMES = new Set([
   "IBK 투자전략",
   "대신증권 투자전략",
   "한화 투자전략",
+  // BNK투자증권 금융시장 게시판의 "甲論乙駁"(주식시장 코멘트) — 오너 지시 2026-09-26.
+  "BNK 甲論乙駁",
+  // 한화 [해외시황](박제인) 기본은 투자전략 — 채권 관련 글만 "한화 해외시황 채권"(이슈분석)으로 수집기가 바꾼다(오너 지시 2026-09-27).
+  "한화 해외시황",
 ]);
 // 미래에셋증권 "월스트리트파인더 Ep.201, 202, ..." — 매회 에피소드 번호가
 // 붙어 정확히 일치하지 않아 접두어로 매칭. 계절성·금리 대응·엔비디아
@@ -633,6 +641,8 @@ function isBond(doc: { stockName: string; title: string }, hayWithSummary: strin
   return isGenericOrBoardLabel(doc) && BOND_MACRO_RE.test(hayWithSummary) && !EQUITY_HINT_RE.test(hayWithSummary);
 }
 
+const LABEL_FIRST_STRATEGY_STOCKNAMES = new Set<string>(["삼성증권 투자전략"]);
+
 function classifyLegacyTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
 ): LegacyResearchTopic {
@@ -648,6 +658,9 @@ function classifyLegacyTopic(
   // 키워드는 상대적으로 금융 용어라 그 위험이 작음).
   const hayWithSummary = `${hay} ${doc.summary ?? ""}`;
   if (BOND_SOURCES.has(doc.source)) return "투자전략(채권)";
+  // 라벨 우선(오너 지시 2026-09-27): 삼성증권 "투자전략(market)" 게시판 글은 제목에 금리·채권 단어가 있어도(예: "업종 및 종목의 금리 민감도")
+  // 게시판이 곧 분류라 항상 투자전략(주식)이다. 다른 증권사 투자전략 라벨은 기존대로 채권 여부를 따진다.
+  if (LABEL_FIRST_STRATEGY_STOCKNAMES.has(doc.stockName)) return "투자전략(주식)";
   if (isStrategyStockname(doc.stockName)) return isBond(doc, hayWithSummary) ? "투자전략(채권)" : "투자전략(주식)";
   if (MARKET_CONDITION_STRONG_RE.test(hay)) return "시황";
   const generic = isGenericOrBoardLabel(doc);
@@ -687,7 +700,7 @@ const FX_RE =
 // 모닝브리프 등을 분류, Monthly는 월간, month 등을 분류"). 기본값은 Daily —
 // 기존 "시황" 판정 자체가 이미 데일리성 신호(MARKET_CONDITION_STRONG_RE·
 // PERIOD_RE)로 확정된 것들이라 Monthly만 명시적으로 가르면 된다.
-const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b/i;
+const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b|이\.글\.스\./i;
 
 // macro_issues에서 흡수한 콘텐츠 중 "게시판 코드가 topic을 확정"하던
 // 것들(제목 텍스트만으론 이슈분석/환율분석이 안 갈리는 경우)을 위한 고정
@@ -721,6 +734,13 @@ const FORCED_ISSUE_STOCKNAMES = new Set([
   "유안타 경제분석",
   "유안타 해외전략",
   "유안타 원자재",
+  "상상인 경제",
+  "상상인 채권",
+  "상상인 원자재",
+  "LS TGIF",
+  "키움 중국 경제", // 키움 중국/신흥국(CH) 게시판 "[중국은 지금]" 중국 거시 시리즈 — 이슈분석(경제)(오너 지시 2026-09-27)
+  "한화 해외시황 채권", // 한화 [해외시황] 중 채권·회사채·크레딧 내용 — 이슈분석(채권). 기본(채권 아님)은 STRATEGY_STOCKNAMES 의 "한화 해외시황"
+  "BNK 금융시장",
   // macro_issues 컬렉션 이관(scripts/migrate-macro-issues.mjs) 중 알려진 소스
   // (키움증권·KB증권) 매핑에 없는 예상 밖 source 가 나올 때만 쓰는 안전망.
   "이슈분석",
@@ -747,6 +767,9 @@ const FORCED_FX_STOCKNAMES = new Set([
   "유안타 경제분석 FX",
   "유안타 해외전략 FX",
   "유안타 원자재 FX",
+  "상상인 경제 FX",
+  "상상인 채권 FX",
+  "상상인 원자재 FX",
   "환율분석", // macro_issues 이관 안전망(위 "이슈분석"과 동일 취지).
 ]);
 
@@ -848,10 +871,30 @@ export async function getIndustryResearch(
  * 결과를 기준으로 조회한다. market 구분이 없다(국내 매크로 코멘트 성격이라
  * 원래도 시장 무관).
  */
+export type IssueKind = "경제" | "채권";
+
+// 이슈분석 탭의 "경제/채권" 구분(오너 지시 2026-09-27 — 전체/증권사명 → 전체/경제/채권). 라벨(stockName)에
+// 채권·Bond·크레딧·Fixed Income 이 있거나 제목에 채권·국채·회사채·크레딧·스프레드가 있으면 채권, 그 외(경제·원자재·
+// 통화정책 등 거시)는 경제. FOMC·금리 인상 같은 통화정책은 경제로 둔다(채권 리포트는 라벨/제목에 채권 계열 단어가 있음).
+const ISSUE_BOND_LABEL_RE = /채권|Bond|크레딧|Credit|Fixed\s?Income|\bFICC\b/i;
+const ISSUE_ECON_LABEL_RE = /경제|매크로|Macro|원자재|Econ/i;
+const ISSUE_BOND_TITLE_RE = /채권|국채|회사채|크레딧|Credit|\bBond|Treasur|스프레드|\bSpread/i;
+/**
+ * 라벨(증권사 게시판 이름)이 우선이다(오너 지시 2026-09-27 — "iM증권 채권은 채권", "한화 채권전략은 채권"): 라벨에 채권 계열 단어면 채권,
+ * 경제·매크로·원자재 계열이면 경제. 라벨이 "산업"·"시장"·"글로벌 인사이트"처럼 뭉뚱그려졌을 때만 제목의 채권 계열 단어로 판정한다.
+ */
+export function classifyIssueKind(doc: Pick<ShinhanResearchDoc, "stockName" | "title">): IssueKind {
+  const label = doc.stockName ?? "";
+  if (ISSUE_BOND_LABEL_RE.test(label)) return "채권";
+  if (ISSUE_ECON_LABEL_RE.test(label)) return "경제";
+  return ISSUE_BOND_TITLE_RE.test(doc.title ?? "") ? "채권" : "경제";
+}
+
 export async function getMacroIssueResearch(
   topic: "이슈분석" | "환율분석",
   source?: string,
   limit = 150,
+  kind?: IssueKind,
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
   const cutoff = new Date(Date.now() - (topic === "이슈분석" ? ISSUE_MAX_AGE_MS : FX_MAX_AGE_MS))
@@ -868,7 +911,9 @@ export async function getMacroIssueResearch(
     (d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
   );
   const deduped = dedupeBySourceTitle(withoutExcluded);
-  const scoped = deduped.filter((d) => classifyResearchTopic(d) === topic);
+  const scoped = deduped.filter(
+    (d) => classifyResearchTopic(d) === topic && (!kind || topic !== "이슈분석" || classifyIssueKind(d) === kind),
+  );
   return scoped.slice(0, limit);
 }
 

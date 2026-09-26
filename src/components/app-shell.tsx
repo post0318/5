@@ -40,6 +40,7 @@ const SUBNAV = [
   { seg: "analysis", label: "종목분석", icon: BarChart3 },
   { seg: "research", label: "산업분석", icon: Building2 },
   { seg: "insights", label: "인사이트", icon: Lightbulb },
+  { seg: "unlisted", label: "비상장", icon: Lightbulb },
 ] as const;
 
 // 거시경제 서브 내비(오너 지시 2026-09-24 — "거시경제 클릭시 상단 탭으로
@@ -67,7 +68,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ? "research"
           : parts[1] === "insights"
             ? "insights"
-            : "universe";
+            : parts[1] === "unlisted"
+              ? "unlisted"
+              : "universe";
   const onManage = parts[0] === "manage";
   const onMacro = parts[0] === "macro";
   const onWeekly = parts[0] === "weekly";
@@ -153,11 +156,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {!onManage && !onMacro && !onWeekly && !onAdmin && (
           <div className="mx-auto max-w-[1400px] overflow-x-auto px-4">
             <div className="flex w-max min-w-full gap-4">
-              {SUBNAV.map((s) => {
+              {SUBNAV.filter((s) =>
+                // 인사이트(해외 IB)는 해외 시장 전용, 비상장은 국내 전용(오너 지시 2026-09-26).
+                s.seg === "insights" ? market !== "kr" : s.seg === "unlisted" ? market === "kr" : true,
+              ).map((s) => {
                 const active = s.seg === sub;
-                // 국내는 해외IB 인사이트가 없어 비상장 리서치로 대체한다(오너
-                // 지시, 2026-09-24) — 탭 라벨도 시장에 따라 다르게 표시.
-                const label = s.seg === "insights" && market === "kr" ? "비상장 리서치" : s.label;
+                const label = s.seg === "unlisted" ? "비상장 리서치" : s.label;
                 return (
                   <Link
                     key={s.seg}

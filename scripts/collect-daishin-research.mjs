@@ -68,6 +68,7 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
+import { refineSectorLabels } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -549,6 +550,9 @@ async function post(url, body, label) {
   console.log(`✔ [${label}] 앱 전송 완료 (${body.items.length}건): ${upBody}`);
 }
 
+// 업종 리포트의 뭉뚱그린 라벨("산업")을 제목·PDF 표지의 실제 업종명으로 보정(공통 lib).
+console.log(`▶ 업종 라벨 보정: ${await refineSectorLabels(research)}건`);
+
 // 라우트가 POST 1회당 market 하나만 받으므로 시장별로 나눠 전송.
 for (const mk of ["kr", "us"]) {
   const items = research
@@ -566,6 +570,8 @@ for (const mk of ["kr", "us"]) {
       pdfUrl: it.pdfUrl,
       views: it.views,
       category: it.category,
+      // 원 게시판(사이트 메뉴) — 대조·검수용. 모바일 웹 리서치 목록 하나(pr_code=2)에서 전부 온다.
+      board: "대신증권 > 모바일 리서치센터 리서치(DM_ResearchList pr_code=2)",
     }));
   if (items.length) await post(IMPORT_URL, { items, source: SOURCE, market: mk }, `${SOURCE}/${mk}`);
 }

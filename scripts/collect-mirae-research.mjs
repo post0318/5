@@ -73,6 +73,9 @@ const CATEGORY_ID = "1800"; // 기업분석
 // 리포트처럼 제목에서 코드/티커를 뽑을 필요가 없음 — 굵은 글씨 부분을
 // 그대로 업종/전략 라벨(stockName)로 쓴다.
 const INDUSTRY_CATEGORY_IDS = ["1525", "1527"];
+// 리포트가 원래 있던 사이트 메뉴(각 categoryId 의 메뉴명 — 위 주석) — item 의 board 필드(분류 대조용).
+const MENU_LABEL = { 1800: "기업분석", 1525: "산업분석", 1527: "투자전략" };
+const boardLabel = (categoryId) => `미래에셋증권 > 투자정보 > 리서치 리포트 > ${MENU_LABEL[categoryId] ?? categoryId}(${categoryId})`;
 
 // "종목명 (코드/의견)" — 국내는 6자리 숫자 코드.
 const TITLE_RE = /^(.+?)\s*\((\d{6})\/([^)]+)\)$/;
@@ -118,6 +121,7 @@ function parseItems(html) {
       analyst: analystM ? analystM[1].trim() : "",
       pdfUrl: pdfM ? pdfM[1] : null,
       category: "기업",
+      board: boardLabel(CATEGORY_ID),
     });
   }
   return items;
@@ -181,6 +185,7 @@ function parseIndustryItems(html, categoryId) {
       analyst: analystM ? analystM[1].trim() : "",
       pdfUrl: pdfM ? pdfM[1] : null,
       category: "산업",
+      board: boardLabel(categoryId),
     });
   }
   return items;
@@ -302,6 +307,7 @@ const items = collected.map((it) => ({
   pdfUrl: it.pdfUrl,
   views: null,
   category: it.category,
+  board: it.board,
 }));
 
 const headers = { "Content-Type": "application/json" };

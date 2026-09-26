@@ -136,6 +136,7 @@ const weeklyItems = [];
       id: `weekly-commentary-${date}`,
       date,
       title,
+      board: "BlackRock > insights/global-weekly-commentary",
       stockName: "글로벌 위클리 시황",
       symbol: null,
       analyst: "BlackRock Investment Institute",
@@ -161,6 +162,7 @@ const outlookItems = [];
   const date = guessSemiAnnualDate(title, summary);
   if (title && date && !isCommonExcludedContent(title, "산업")) {
     outlookItems.push({
+      board: "BlackRock > insights/global-investment-outlook",
       id: `global-investment-outlook-${date}`,
       date,
       title,

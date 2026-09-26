@@ -117,6 +117,7 @@ async function fetchText(url) {
 console.log("▶ BNP Paribas Economic Research 수집");
 
 const seenIds = new Set();
+const boardById = new Map(); // id → 처음 발견된 게시판(대조표 원본 화면 표시용)
 for (const board of BOARDS) {
   for (let page = 1; page <= MAX_PAGES; page++) {
     const url =
@@ -135,6 +136,7 @@ for (const board of BOARDS) {
     for (const id of ids) {
       if (!seenIds.has(id)) {
         seenIds.add(id);
+        boardById.set(id, board);
         newCount++;
       }
     }
@@ -176,6 +178,7 @@ for (const id of seenIds) {
       summary,
       pdfUrl: url,
       views: null,
+      board: `BNP Paribas > Publications/${boardById.get(id)}`,
       category: "산업",
     });
   } catch (err) {

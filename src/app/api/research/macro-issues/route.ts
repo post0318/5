@@ -1,6 +1,6 @@
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
-import { getMacroIssueResearch, getMacroIssueSources } from "@/lib/db/shinhan-research";
+import { getMacroIssueResearch, getMacroIssueSources, type IssueKind } from "@/lib/db/shinhan-research";
 
 export const revalidate = 1800;
 
@@ -19,11 +19,14 @@ export async function GET(request: Request) {
     const topic = topicParam === "환율분석" ? "환율분석" : "이슈분석";
     const sourceParam = url.searchParams.get("source");
     const source = sourceParam && sourceParam !== "전체" ? sourceParam : undefined;
+    // 이슈분석은 "전체/경제/채권"(오너 지시 2026-09-27), 환율분석은 기존 "전체/증권사명".
+    const kindParam = url.searchParams.get("kind");
+    const kind: IssueKind | undefined = kindParam === "경제" || kindParam === "채권" ? kindParam : undefined;
 
     if (!isDbConfigured()) return ok({ items: [], sources: [] });
 
     const [items, sources] = await Promise.all([
-      getMacroIssueResearch(topic, source, 150),
+      getMacroIssueResearch(topic, source, 150, kind),
       getMacroIssueSources(topic),
     ]);
     return ok(

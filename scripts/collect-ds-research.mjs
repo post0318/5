@@ -24,6 +24,7 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { refineSectorLabels } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -46,6 +47,11 @@ const DAYS = Number(arg("days")) || 14;
 const MAX_PAGES = Number(arg("pages")) || 5;
 
 const BOARD_URL = "https://www.ds-sec.co.kr/bbs/board.php";
+// 리포트가 원래 있던 게시판(상단 주석의 bo_table) — item 의 board 필드(분류 대조용).
+const BOARD_LABEL = {
+  sub03_02: "DS투자증권 > 리서치 > 기업분석(sub03_02)",
+  sub03_03: "DS투자증권 > 리서치 > 투자전략/경제분석(sub03_03)",
+};
 const IMPORT_URL = (
   ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
@@ -178,6 +184,7 @@ for (const r of krRows) {
       targetPrice: null,
       summary: "",
       pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_02&wr_id=${r.id}`,
+      board: BOARD_LABEL.sub03_02,
       views: null,
       category: "기업",
     });
@@ -197,6 +204,7 @@ for (const r of krRows) {
     targetPrice: null,
     summary: "",
     pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_02&wr_id=${r.id}`,
+    board: BOARD_LABEL.sub03_02,
     views: null,
     category: "산업",
   });
@@ -227,6 +235,7 @@ for (const r of usRows) {
         targetPrice: null,
         summary: "",
         pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_03&wr_id=${r.id}`,
+        board: BOARD_LABEL.sub03_03,
         views: null,
         category: "기업",
         market: "us",
@@ -246,6 +255,7 @@ for (const r of usRows) {
     targetPrice: null,
     summary: "",
     pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_03&wr_id=${r.id}`,
+    board: BOARD_LABEL.sub03_03,
     views: null,
     category: "산업",
     market: isUsTagged ? "us" : "kr",
@@ -292,6 +302,8 @@ for (const it of stockItems) {
   await sleep(400);
 }
 for (const it of krItems) it.market ??= "kr";
+// 업종 리포트의 뭉뚱그린 라벨("산업")을 제목·PDF 표지의 실제 업종명으로 보정(공통 lib) — 안 그러면 제목 키워드로 오분류.
+console.log(`▶ 업종 라벨 보정: ${await refineSectorLabels([...krItems, ...usItems])}건`);
 await enrichResearch([...krItems, ...usItems], { usePdf: false });
 
 if (DRY_RUN) {

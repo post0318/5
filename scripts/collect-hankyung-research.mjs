@@ -54,6 +54,8 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { resolveKrStock, KR_PARTICLES } from "./lib/company-match.mjs";
+import { refineSectorLabels } from "./lib/sector-label.mjs";
 
 // IN/MA(산업/시장) 항목 중 대괄호 업종 태그가 없는 제목이 실은 특정 국내
 // 종목 얘기인 경우가 있다(실측, 오너 지적 2026-09 — 메리츠증권 "HD현대중공업
@@ -64,29 +66,8 @@ import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 // 승격한다 — 해외 개별종목(플래닛랩스 등)까지는 다루지 않음(네이버 자동완성
 // 해석이 필요해 국내보다 비용이 크고, 이 게시판은 국내·해외가 섞여 있어
 // 오탐 위험도 큼 — 국내 매칭만으로도 확인된 사례 다수 해결).
-const CORPS = JSON.parse(
-  readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
-).sort((a, b) => b.n.length - a.n.length);
-// startsWith만으로는 "신흥국 실적 상향..."이 "신흥"(실제 상장사, 004080)의
-// 접두어와 우연히 겹쳐 오매칭되는 사례가 실측됨(제목이 자연어 문장이라
-// DS의 "[업종] 종목명 - 부제" 처럼 구조화돼 있지 않아 이 게시판에서 특히
-// 위험) — 매칭 뒤 남는 글자가 없거나(제목이 회사명으로 끝남), 공백/구두점/
-// 영숫자이거나, 한글 조사(의/은/는/이/가/을/를/과/와/도/만 등)로 시작할
-// 때만 인정한다. "국"처럼 조사가 아닌 한글 음절이 바로 이어지면 다른 단어의
-// 일부로 보고 기각.
-const KR_PARTICLES = ["의", "은", "는", "이", "가", "을", "를", "과", "와", "도", "만", "에", "께", "이나", "나", "라도", "마저", "조차", "밖에", "부터", "까지", "로", "으로"];
-function resolveKrStock(text) {
-  const t = text.trim();
-  for (const c of CORPS) {
-    if (!t.startsWith(c.n)) continue;
-    const rest = t.slice(c.n.length);
-    if (!rest || !/^[가-힣]/.test(rest)) return { symbol: c.s, stockName: c.n }; // 제목이 그대로 끝나거나 공백/구두점/영숫자로 이어짐
-    const particle = KR_PARTICLES.find((p) => rest.startsWith(p));
-    if (particle && !/^[가-힣]/.test(rest.slice(particle.length))) return { symbol: c.s, stockName: c.n }; // 조사 뒤 공백 등으로 끊김
-    // 조사가 아닌 한글 음절이 바로 이어지면 다른 단어의 일부 — 기각, 더 짧은 후보로 계속.
-  }
-  return null;
-}
+// 상장사명 매칭·조사 경계 판정은 공통 lib(scripts/lib/company-match.mjs) — 산업 게시판
+// 종목 승격을 쓰는 모든 수집기가 같은 규칙을 쓴다.
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -201,6 +182,7 @@ function parseItems(html) {
       source: sourceName,
       pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
       category: "기업",
+      board: "한경 컨센서스 > 분류: 기업(CO)", // 사이트 안 위치(작성 증권사는 source 로 별도)
     });
   }
   return items;
@@ -240,6 +222,16 @@ function classifyIndustryMarket(hay) {
   return OVERSEAS_HINT_RE.test(hay) ? "us" : "kr";
 }
 
+// 증권사별 일간물 수집 제외(오너 지시 2026-09-26): SK증권 "wake up! 아침에 슼"(일간 시황)·"Global Carbon Daily",
+// 유진투자증권 "안녕하세요 데일리에요".
+const EXCLUDED_DAILY = [
+  [/SK증권/, /wake\s*up!?\s*아침에|Global\s*Carbon\s*Daily/i],
+  [/유진투자증권/, /안녕하세요\s*데일리에요/],
+];
+function isExcludedDaily(source, title) {
+  return EXCLUDED_DAILY.some(([src, re]) => src.test(source) && re.test(title));
+}
+
 function parseIndustryItems(html, label, reportCode) {
   const items = [];
   for (const rowHtml of html.split(/<tr[^>]*>/).slice(1)) {
@@ -257,6 +249,7 @@ function parseIndustryItems(html, label, reportCode) {
     // 뒤바뀐다(실제로 배포된 채 발견한 버그).
     const cells = [...rowHtml.matchAll(/<td[^>]*>\s*([^<]*?)\s*<\/td>/g)].map((m) => stripHtml(m[1]));
     const [analyst, source] = reportCode === "MA" ? [cells[1] ?? "", cells[2] ?? ""] : [cells[2] ?? "", cells[3] ?? ""];
+    if (isExcludedDaily(source, title)) continue;
     const bm = title.match(BRACKET_RE);
     // 대괄호가 없는 제목만 종목명 매칭을 시도한다 — 있으면 이미 업종 태그가
     // 의도적으로 붙은 것이므로(예: "[화장품] ...") 그대로 산업분석으로 둔다.
@@ -281,10 +274,16 @@ function parseIndustryItems(html, label, reportCode) {
         source,
         pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
         category: "기업",
+        board: `한경 컨센서스 > 분류: ${label}(${reportCode})`,
       });
       continue;
     }
-    const sector = bm ? bm[1].trim() : label;
+    let sector = bm ? bm[1].trim() : label;
+    // 거시 성격 라벨은 앱이 거시경제 이슈분석으로 분류하도록 고정 이름을 붙인다(오너 지적
+    // 2026-09-26 — "경제는 거시경제이다 왜 산업에 계속붙이나"): LS증권 정기 거시 시리즈 "[TGIF]".
+    // 대괄호 없는 시장(MA) 분류는 고정하지 않는다 — 모닝 시황("wake up! 아침에")·NOWCAST·
+    // FOMC 코멘트가 섞여 있어 통째로 이슈분석에 넣으면 시황분석(Daily)이 사라진다(실측).
+    if (sector === "TGIF") sector = "LS TGIF";
     const restTitle = bm && bm[2].trim() ? bm[2].trim() : title;
     if (isCommonExcludedContent(`${sector} ${restTitle}`, "산업")) continue;
 
@@ -300,6 +299,7 @@ function parseIndustryItems(html, label, reportCode) {
       source,
       pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
       category: "산업",
+      board: `한경 컨센서스 > 분류: ${label}(${reportCode})`,
     });
   }
   return items;
@@ -379,6 +379,8 @@ for (const it of collected) {
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
 // 투자의견·목표주가 — 공용 추출기(산업/시장 분류는 내부에서 건너뜀). PDF 는 위에서 읽었다.
+// 업종 리포트의 뭉뚱그린 라벨("산업")을 제목·PDF 표지의 실제 업종명으로 보정(공통 lib) — 안 그러면 제목 키워드로 오분류.
+console.log(`▶ 업종 라벨 보정: ${await refineSectorLabels(collected)}건`);
 await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
@@ -443,6 +445,7 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl,
     views: null,
     category: it.category,
+    board: it.board,
   });
 }
 

@@ -217,6 +217,10 @@ const STRATEGY_BOARDS = [
   { ditCd: "05", label: "자산관리솔루션", forceMarket: null },
   { ditCd: "06", label: "모닝미팅브리프", forceMarket: "us" },
 ];
+// 리포트가 올라온 NH 게시판 표시(rsh_ppr_dit_cd) — 대조·검수용 메타(서버는 무시).
+const NH_BOARD_LABEL = { "01": "기업/산업분석", "02": "투자전략", "03": "해외주식", "04": "FICC", "05": "자산관리솔루션", "06": "모닝미팅브리프" };
+const nhBoard = (ditCd) => `NH투자증권 > ${NH_BOARD_LABEL[ditCd] ?? "리서치"}(rsh_ppr_dit_cd=${ditCd})`;
+
 const DECOR_RE = /^◆\s*|\s*◆$/g;
 function decodeEntities(s) {
   return s
@@ -280,6 +284,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
           pdfUrl: r.hpge_fle_url_cts || null,
           views: null,
           category: "기업",
+          board: nhBoard("01"),
         });
       }
       continue;
@@ -313,6 +318,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       pdfUrl: r.hpge_fle_url_cts || null,
       views: null,
       category: "산업",
+      board: nhBoard("01"),
       unlisted,
     });
   }
@@ -368,6 +374,7 @@ for (const r of overseasRawRows) {
       pdfUrl: r.hpge_fle_url_cts || null,
       views: null,
       category: "기업",
+      board: nhBoard(r.__ditCd),
       market: "us",
     });
     continue;
@@ -393,6 +400,7 @@ for (const r of overseasRawRows) {
       pdfUrl: r.hpge_fle_url_cts || null,
       views: null,
       category: "산업",
+      board: nhBoard(r.__ditCd),
       market: "us",
     });
     continue;
@@ -412,6 +420,7 @@ for (const r of overseasRawRows) {
       pdfUrl: r.hpge_fle_url_cts || null,
       views: null,
       category: "산업",
+      board: nhBoard(r.__ditCd),
       market: "us",
     });
   }
@@ -455,6 +464,7 @@ for (const board of STRATEGY_BOARDS) {
         pdfUrl: r.hpge_fle_url_cts || null,
         views: null,
         category: "산업",
+        board: nhBoard(board.ditCd),
         market,
       });
     }
@@ -528,6 +538,7 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl,
     views: it.views ?? null,
     category: it.category,
+    board: it.board,
   });
 }
 

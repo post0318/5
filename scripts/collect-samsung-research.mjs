@@ -254,6 +254,16 @@ function parseTitle(base, title, board) {
     // 국내 시황과 market이 달라야 하므로 별도 라벨·market으로 분리한다(오너 지시
     // 2026-09-25 — "삼성 daily 시황에서 미국은 미국 시황으로 분류").
     const isUsDaily = board.gubun === "daily" && /^미국\s*마감\s*시황/.test(title);
+    // 투자전략(market) 게시판의 "차이나 전기차 투자 전략: …"(글로벌투자전략팀 전종규, 중국 전기차 업종 분석)은 시황·전략이 아니라
+    // 중국 업종 리포트 — 중국(ch) 산업분석으로(오너 지시 2026-09-27, "1번으로 처리"). 범위는 이 글(중국·차이나 전기차)만.
+    // "美 중간선거 스냅샷 D-N"(글로벌투자전략팀 유승민, 지정학) 시리즈는 주식 얘기가 아니라 선거·정치 경제 — 이슈분석(경제)으로
+    // (오너 지시 2026-09-27 — 미국 "1번": 이 시리즈만). 기존 고정 라벨 "삼성증권 경제"를 재사용해 앱 분류가 그대로 이슈분석(경제).
+    if (board.gubun === "market" && /중간선거\s*스냅샷/.test(title)) {
+      return { ...base, title, stockName: "삼성증권 경제", symbol: null, category: "산업", source: SOURCE };
+    }
+    if (board.gubun === "market" && /(중국|차이나)\s*전기차/.test(title)) {
+      return { ...base, title, stockName: "중국 전기차", symbol: null, category: "산업", source: SOURCE, marketOverride: "ch" };
+    }
     return {
       ...base,
       title,
@@ -324,7 +334,7 @@ function parseItems(html, board) {
     if (isCommonExcludedContent(title)) continue;
     if (EXPORT_DATABOOK_RE.test(title)) continue;
     const it = parseTitle(baseItem(fileName, date, author.trim() || prefixAuthor), title, board);
-    if (it) items.push({ ...it, market: it.marketOverride ?? board.market ?? null, board: board.gubun });
+    if (it) items.push({ ...it, market: it.marketOverride ?? board.market ?? null, board: `삼성증권 > ${board.label}(${board.gubun})` });
   }
   return items;
 }
@@ -388,6 +398,7 @@ for (const it of research) {
     pdfUrl: it.pdfUrl,
     views: it.views,
     category: it.category,
+    board: it.board,
   });
 }
 for (const [key, items] of groups) {

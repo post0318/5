@@ -304,6 +304,8 @@ const items = collected.map((it) => ({
   pdfUrl: it.pdfUrl,
   views: it.views,
   category: it.category,
+  // 원 게시판(사이트 메뉴) — 대조·검수용. it.board 는 게시판 key(in/out).
+  board: `한국IR협의회 > ${BOARDS.find((b) => b.key === it.board)?.label ?? it.board}(${BOARDS.find((b) => b.key === it.board)?.path ?? it.board})`,
 }));
 const up = await fetch(IMPORT_URL, {
   method: "POST",

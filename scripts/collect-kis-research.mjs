@@ -169,6 +169,7 @@ function parseGlobalItems(html) {
         detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
         pdfUrl: kisPdfUrl(chunk),
         category: "산업",
+        board: "한국투자증권 > 리서치 > 해외 기업분석(Strategy.jsp, jkGubun=7)",
         market: "us",
       });
       continue;
@@ -188,6 +189,7 @@ function parseGlobalItems(html) {
       detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
       pdfUrl: kisPdfUrl(chunk),
       category: "기업",
+      board: "한국투자증권 > 리서치 > 해외 기업분석(Strategy.jsp, jkGubun=7)",
       market: "us",
     });
   }
@@ -247,6 +249,7 @@ function parseStrategyItems(html) {
       detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=6&id=${idM[1]}`,
       pdfUrl: kisPdfUrl(chunk),
       category: "산업",
+      board: "한국투자증권 > 리서치 > 전략/이슈 리포트(Strategy.jsp, jkGubun=6)",
     });
   }
   return items;
@@ -276,6 +279,7 @@ function parseItems(html) {
         detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=10&id=${idM[1]}`,
         pdfUrl: kisPdfUrl(chunk),
         category: "기업",
+        board: "한국투자증권 > 리서치 > 기업/산업분석(Strategy.jsp, jkGubun=10)",
       });
       continue;
     }
@@ -293,6 +297,7 @@ function parseItems(html) {
       detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=10&id=${idM[1]}`,
       pdfUrl: kisPdfUrl(chunk),
       category: "산업",
+      board: "한국투자증권 > 리서치 > 기업/산업분석(Strategy.jsp, jkGubun=10)",
     });
   }
   return items;
@@ -406,6 +411,7 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl ?? it.detailUrl, // PDF 우선, 없으면 상세 페이지
     views: null,
     category: it.category,
+    board: it.board,
   });
 }
 

@@ -120,6 +120,7 @@ for (const { url, lastmod } of targets) {
       summary: decodeEntities(descM?.[1] ?? "").slice(0, 300),
       pdfUrl: url,
       views: null,
+      board: `PIMCO > us/en/insights${/\/us\/en\/insights\/([^/]+)\//.test(url) ? "/" + url.match(/\/us\/en\/insights\/([^/]+)\//)[1] : ""}`,
       category: "산업",
     });
   } catch (err) {

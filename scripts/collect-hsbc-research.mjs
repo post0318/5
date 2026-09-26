@@ -134,6 +134,7 @@ for (const { url, lastmod } of targets) {
       summary: decodeEntities(descM?.[1] ?? "").slice(0, 300),
       pdfUrl: url,
       views: null,
+      board: `HSBC > en-gb/insights${/\/en-gb\/insights\/([^/]+)\//.test(url) ? "/" + url.match(/\/en-gb\/insights\/([^/]+)\//)[1] : ""}`,
       category: "산업",
     });
   } catch (err) {

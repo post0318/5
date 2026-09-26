@@ -118,7 +118,7 @@ for (const hub of HUBS) {
       if (!date || !title || new Date(date) < cutoff || isCommonExcludedContent(title, "산업")) continue;
       const idMatch = pdfUrl.match(/PROD(\d+)/);
       const id = idMatch ? idMatch[1] : pdfUrl;
-      if (!byId.has(id)) byId.set(id, { id, date, title, pdfUrl, summary });
+      if (!byId.has(id)) byId.set(id, { id, date, title, pdfUrl, summary, hub: (hub.split("/IE-PROD/")[1] ?? hub).split("/")[0].replace(/\.alias$/, "") });
     }
   } catch (err) {
     console.error(`  ✗ ${hub}: ${err.message}`);
@@ -138,6 +138,7 @@ const items = [...byId.values()].map((it) => ({
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,
+  board: `Deutsche Bank Research > ${it.hub}`,
   category: "산업",
 }));
 

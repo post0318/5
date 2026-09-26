@@ -30,11 +30,14 @@
  *   수집기·전 소스에 한 번에 적용한다.
  */
 const WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*\d+\s*주(?!년)/i;
+// 주간물 제외의 예외 — 비상장 리서치는 수집해 비상장으로 분류(오너 지시 2026-09-26).
+const UNLISTED_RE = /비상장/;
 const CALENDAR_RE = /캘린더|캘박|calendar|일정표/i;
 const RECOMMEND_RE = /추천\s*종목/;
 const ALT_INVEST_RE = /대체투자/;
 const COMMODITY_RE = /원자재|commodit/i;
-const REIT_RE = /리츠|\bREITs?\b/i;
+// "메리츠"(증권사명)의 "리츠"에 걸리지 않게 앞글자가 "메"인 경우는 제외.
+const REIT_RE = /(?<!메)리츠|\bREITs?\b/i;
 const ETF_RE = /\bETFs?\b|\bETPs?\b|상장지수(?:펀드|증권)?/i;
 const ESG_RE = /\bESG/i;
 
@@ -47,10 +50,18 @@ const ESG_RE = /\bESG/i;
  * 수집기가 자기 market을 정확히 알고 이미 걸러내므로(scripts/lib/
  * exclude-filters.mjs 의 isDigitalAssetContent()) 서버는 재검사하지 않는다.
  */
+// 퀀트 제외(오너 지시 2026-09-27 — "공통에 퀀트는 수집제외 추가한다", "BNK Factor Sentiment 지표 - 월간 팩터 로테이션 &
+// 팩터별 투자유망 종목 수집제외"). 퀀트·팩터 모델 리포트는 개별 종목·업종 분석이 아니라 모델 산출물이라 ETF/ESG 와 같은 성격으로
+// 카테고리 구분 없이 제외. 예외는 오너가 공통에 따로 요청한다("공통에 예외로 요청할 것이다") — 예외 패턴은 QUANT_EXCEPT_RE 에 추가
+// (지금은 없음). BNK 제목은 "퀀트" 단어가 없어 Factor Sentiment·팩터 로테이션으로도 잡는다.
+const QUANT_RE = /퀀트|\bquant\b|factor\s*sentiment|팩터\s*로테이션/i;
+const QUANT_EXCEPT_RE = null as RegExp | null; // 오너 요청 시 예외 패턴(RegExp) — 지정되면 QUANT_RE 에 걸려도 제외하지 않는다
+const isQuant = (t: string) => QUANT_RE.test(t) && !(QUANT_EXCEPT_RE && QUANT_EXCEPT_RE.test(t));
+
 export function isCommonExcludedResearch(text: string | null | undefined, category?: string): boolean {
   const t = String(text ?? "");
-  if (WEEKLY_RE.test(t) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
-  if (ETF_RE.test(t) || ESG_RE.test(t)) return true;
+  if ((WEEKLY_RE.test(t) && !UNLISTED_RE.test(t)) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
+  if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
   if (category === "기업") return false;
   return ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t);
 }
