@@ -180,14 +180,16 @@ function same(a, b, tol = EXACT) {
   const d = Math.abs(a - b) / Math.max(Math.abs(b), 1e-12);
   return d <= tol ? { status: PASS } : { status: FAIL, note: `${a} vs ${b} (차 ${(d * 100).toFixed(4)}%)` };
 }
-/** 앱 값 vs 원자료 기준값 — 기준값이 있으면 앱 값도 있어야 한다 */
+/** 앱 값 vs 원자료 기준값 — 기준값이 있으면 앱 값도 있어야 한다.
+ *  결과에 app·src 값을 함께 남긴다 — 정답 데이터셋(골든셋, scripts/metrics/golden-build.mjs)이 통과 행의 값을 읽는다 */
 function vsSource(app, src, tol, srcNote = "") {
-  if (src == null) return { status: NA, note: `원자료 없음${srcNote ? ` (${srcNote})` : ""}` };
-  if (app == null) return { status: FAIL, note: `원자료 ${src} 있는데 앱 빈칸${srcNote ? ` · ${srcNote}` : ""}` };
+  const vals = { app: app ?? null, src: src ?? null };
+  if (src == null) return { status: NA, note: `원자료 없음${srcNote ? ` (${srcNote})` : ""}`, ...vals };
+  if (app == null) return { status: FAIL, note: `원자료 ${src} 있는데 앱 빈칸${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
   const d = Math.abs(app - src) / Math.max(Math.abs(src), 1e-12);
   return d <= tol
-    ? { status: PASS, ...(srcNote ? { note: srcNote } : {}) }
-    : { status: FAIL, note: `앱 ${app} vs 원자료 ${src} (차 ${(d * 100).toFixed(3)}%)${srcNote ? ` · ${srcNote}` : ""}` };
+    ? { status: PASS, ...(srcNote ? { note: srcNote } : {}), ...vals }
+    : { status: FAIL, note: `앱 ${app} vs 원자료 ${src} (차 ${(d * 100).toFixed(3)}%)${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
 }
 const dayDiff = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
 /** SEC 세전이익 개념 — 앱 edgar-ev.ts 와 같은 두 개념(지분법 포함/제외) */
@@ -1896,10 +1898,11 @@ async function verifyUs(sym) {
           // Yahoo 가 없으면 회사가 같은 공시에서 영업 매출 줄을 제품·서비스 차원 멤버로 직접 태깅한 값으로 확인(분리 규칙과 독립 —
           // 총액 − 비영업을 검증기가 계산한 값이 회사 자신의 태깅값과 정확히 같아야 한다. XOM 2021 SalesAndOtherOperatingRevenueMember)
           const own = yv == null ? sr.tagged?.find((t) => t.v === x.rev) : null;
-          res = own ? { status: PASS, note: `${sr.how} · 회사 태깅 영업 매출 줄 ${own.member} ${own.v} 와 정확 일치(분리 규칙과 독립 확인 — Yahoo 연간 없음)` }
-            : yv == null ? { status: NA, note: `${sr.how} — Yahoo 연간 매출 없음(독립 확인 불가)` }
-            : Math.abs(yv - x.rev) <= secUnit(yv) / 2 ? { status: PASS, note: `${sr.how} · Yahoo ${yv} 일치(Yahoo 보고 단위 ${secUnit(yv)} 안)` }
-            : { status: FAIL, note: `${sr.how} 로는 맞지만 Yahoo 연간 매출 ${yv} 와 다름` };
+          const vals = { app: res.app, src: res.src }; // 골든셋이 통과 행 값을 읽는다
+          res = own ? { ...vals, status: PASS, note: `${sr.how} · 회사 태깅 영업 매출 줄 ${own.member} ${own.v} 와 정확 일치(분리 규칙과 독립 확인 — Yahoo 연간 없음)` }
+            : yv == null ? { ...vals, status: NA, note: `${sr.how} — Yahoo 연간 매출 없음(독립 확인 불가)` }
+            : Math.abs(yv - x.rev) <= secUnit(yv) / 2 ? { ...vals, status: PASS, note: `${sr.how} · Yahoo ${yv} 일치(Yahoo 보고 단위 ${secUnit(yv)} 안)` }
+            : { ...vals, status: FAIL, note: `${sr.how} 로는 맞지만 Yahoo 연간 매출 ${yv} 와 다름` };
         }
         add("A", "매출 앱 = SEC 매출", c, res);
       }
