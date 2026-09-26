@@ -114,7 +114,8 @@ const SYNONYM_TO_CANON = new Map<string, string>(
 // 수집기 쪽 `scripts/lib/sector-label.mjs` 의 ANALYST_SECTOR 와 같은 표.
 export const ANALYST_SECTOR: Readonly<Record<string, string>> = { 매태호: "방산" };
 export function normalizeIndustryLabel(label: string | null | undefined): string {
-  const raw = String(label ?? "").trim();
+  // 날짜별 시황 시리즈 라벨("마켓 뷰(9월 16일)")은 날짜를 떼어 한 묶음으로(오너 지적 2026-09-27 — 날짜마다 폴더가 갈라짐)
+  const raw = String(label ?? "").trim().replace(/\s*\(\s*\d{1,2}월\s*\d{1,2}일\s*\)$/, "");
   if (!raw) return raw;
   if (Object.hasOwn(ANALYST_SECTOR, raw)) return ANALYST_SECTOR[raw];
   const stem = raw.replace(/(?:산업|업종|섹터|부문|업)$/, "").trim();

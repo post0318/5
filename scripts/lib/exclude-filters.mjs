@@ -111,7 +111,7 @@ export function isDigitalAssetContent(text) {
 // 팩터별 투자유망 종목 수집제외"). 퀀트·팩터 모델 리포트는 개별 종목·업종 분석이 아니라 모델 산출물이라 ETF/ESG 와 같은 성격으로
 // 카테고리 구분 없이 제외. 예외는 오너가 공통에 따로 요청한다("공통에 예외로 요청할 것이다") — 예외 패턴은 QUANT_EXCEPT_RE 에 추가
 // (지금은 없음). BNK 제목은 "퀀트" 단어가 없어 Factor Sentiment·팩터 로테이션으로도 잡는다.
-const QUANT_RE = /퀀트|\bquant\b|factor\s*sentiment|팩터\s*로테이션/i;
+const QUANT_RE = /퀀트|퀀틴전시|\bquant\b|factor\s*sentiment|팩터\s*로테이션/i;
 const QUANT_EXCEPT_RE = null; // 오너 요청 시 예외 패턴(RegExp) — 지정되면 QUANT_RE 에 걸려도 제외하지 않는다
 const isQuant = (t) => QUANT_RE.test(t) && !(QUANT_EXCEPT_RE && QUANT_EXCEPT_RE.test(t));
 
