@@ -1970,13 +1970,13 @@ LLM 수치 검증·지수 관행 때문에 이번 통일에서 제외(별도 결
   해외리서치 완전 제거). 신규 `getMacroIssueResearch()`/`getMarketConditionResearch()`
   추가. `/macro`에 "시황분석" 탭 신설(환율분석 오른쪽, Daily/Monthly/투자전략
   세그먼트).
-- **미결 — 실제 데이터 이관 아직 안 함**: `scripts/migrate-macro-issues.mjs`
-  (MongoDB 드라이버 직접 사용, `--dry-run` 지원)를 작성해뒀지만 이 작업을 한
-  워크트리엔 `.env.local`(MONGODB_URI)이 없어 실행을 못 했다. MongoDB 접속
-  가능한 환경에서 `--dry-run`으로 건수 확인 후 실제 실행 필요. 실행 전까지는
-  옛 `macro_issues` 문서가 화면에 안 보이는 상태(라우트가 이미 없어져서
-  조회 자체가 kr_research만 봄) — 이관해야 예전 이슈분석/환율분석 글이 다시
-  나타남.
+- **데이터 이관 완료(2026-09-26)**: `scripts/migrate-macro-issues.mjs`를
+  메인 체크아웃의 `.env.local`(MONGODB_URI)로 실행 — `macro_issues` 원본
+  10건(키움증권 이슈분석 5·환율분석 5, KB증권 문서는 0건) 전부 `kr_research`로
+  이관 확인(`_id`에 `:이관:` 포함된 문서 10건 직접 카운트로 검증). 원본
+  `macro_issues` 컬렉션 문서는 그대로 남아있음(스크립트가 의도적으로 안 지움) —
+  당장 문제는 없으나 나중에 정리하려면 `macro_issues` 컬렉션을 수동으로 비워도
+  된다(더 이상 어떤 코드도 이 컬렉션을 읽지 않음).
 - 부수 발견: 삼성증권 수집기가 거시경제 항목에 `market:"kr"`을 안 붙여 null로
   새던 버그, FX 여부 무관하게 항상 topic:"이슈분석"으로 보내던 버그를 이번
   재작업 중 발견·수정.
