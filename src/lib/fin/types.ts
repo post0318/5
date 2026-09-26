@@ -146,6 +146,20 @@ export interface StmtLine {
   /** 파생 칸(Q4·누적 차·LTM·환산)의 입력 — 없으면 열 출처 = 칸 출처 */
   inputs?: DerivedInput[];
 }
+/** 유형 D 매출원가 구성 규칙의 항(규칙표는 3층 metrics/cogs-rules.ts, 값 판독은 2층 assemble/is.ts readCogsTerms) */
+export interface CogsTerm {
+  /** 항 이름(표시·검증용, 예: "purch") */
+  group?: string;
+  /**
+   * 본표 줄 개념 id 후보("us-gaap:…" · 회사 고유 "xom:…" · 차원 줄 "us-gaap:CostOfRevenue[ProductOrServiceAxis=XMember]") — 앞 후보부터,
+   * 그 공시 본표에 있는 첫 후보를 쓴다. 후보가 배열이면 그 줄들의 합(모두 본표에 있어야 그 후보)
+   */
+  concepts: (string | string[])[];
+  sign: 1 | -1;
+  /** 본표에 없거나 값이 없으면 0(없으면 빈칸) */
+  optional?: boolean;
+}
+
 export interface AssembledIs {
   col: Column;
   lines: StmtLine[];
@@ -166,6 +180,13 @@ export interface AssembledIs {
   cogsWhy?: string;
   /** 줄 구조가 그 열 원천 공시의 본표(_pre)에서 왔는가 — false 면 기본 개념 목록(Gap.LINKBASE)이라 "본표 소계"로 볼 수 없다 */
   faceShape: boolean;
+  /**
+   * 유형 D 매출원가 구성 규칙 항(metrics/cogs-rules.ts)의 열 값 — 구성 공시마다 그 공시 본표에 있는 후보 개념으로 읽음(is.ts readCogsTerms).
+   * v null = 필수 항이 어느 구성 공시 본표에 없거나 값 없음. concepts = 읽은 본표 줄 개념(차원 줄은 기본 개념) — 항등식 경로 판정용.
+   * alts = 구성 공시마다 고른 후보(둘 이상이면 파생 열 안에서 개념이 바뀜 — 합이 같으면 3층이 주석으로 표시).
+   * mix = 구성 공시 간 기준 혼합(후보 합이 다름·재작성 — is.ts readCogsTerms ①②) — 있으면 v null
+   */
+  cogsTerms?: { group: string; sign: 1 | -1; v: number | null; inputs: DerivedInput[]; concepts: string[]; alts: string[]; mix?: string }[];
 }
 
 /** 3층 — 지표 값. */

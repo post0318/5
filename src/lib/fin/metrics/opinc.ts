@@ -9,7 +9,9 @@ import { FIN_TYPES } from "./cogs";
  *    + "정의 대기"(합성 규칙은 2단계).
  *  - 영업비용 = 매출총이익(fin gp) − 영업이익. 본표 영업이익 식이 "매출총이익 − 영업비용 합계 한 줄"이면 그 줄과 정확 일치를 확인하고,
  *    다르면 값을 두고 주석·경고(이슈)로 낸다.
- *  - 2단계로 미룬 종목(유형 D 11종목·CAT)은 본표 소계가 있어도 빈칸 + "정의 대기"(기존 화면 값은 옛 계산 그대로 — 소비처 전환 전).
+ *  - 유형 D(cogs-rules.ts 구성 규칙이 있는 종목, 리드 2026-09-27): 영업이익 = 본표 소계 그대로, 영업비용 = 구성 매출총이익 − 본표 영업이익.
+ *    본표 영업이익 소계가 없는 회사(XOM)는 위 규칙대로 빈칸 + "정의 대기"(합성하지 않는다). 규칙 대기(rule null) 종목은 정의 대기.
+ *  - 2단계로 미룬 종목(CAT·금융사)은 본표 소계가 있어도 빈칸 + "정의 대기"(기존 화면 값은 옛 계산 그대로 — 소비처 전환 전).
  * 화면(소비처)은 아직 이 값을 쓰지 않는다 — 전환은 매출원가·매출총이익 검증 통과 후(리드 지시).
  */
 
@@ -27,7 +29,7 @@ const DEFERRED: Record<string, string> = {
 
 export function opincOpex(cols: AssembledIs[], co: CompanyProfile, gp: MetricSeries): { opinc: MetricSeries; opex: MetricSeries } {
   const sym = co.symbol.toUpperCase();
-  const deferred = DEFERRED[sym] ?? (FIN_TYPES.has(co.type) ? `금융사 기준(${co.type}) — 기존 금융사 화면 구성 유지, 영업이익 정의 2단계` : null) ?? (cogsRuleFor(sym) ? "본표에 매출원가 줄 없음(유형 D) — 영업이익·영업비용 정의 2단계" : null);
+  const deferred = DEFERRED[sym] ?? (FIN_TYPES.has(co.type) ? `금융사 기준(${co.type}) — 기존 금융사 화면 구성 유지, 영업이익 정의 2단계` : null) ?? (cogsRuleFor(sym)?.rule === null ? "본표에 매출원가 줄 없음(유형 D) · 구성 규칙 대기 — 영업이익·영업비용 정의 2단계" : null);
   const opinc: Record<string, MetricValue> = {};
   const opex: Record<string, MetricValue> = {};
   const fxCol = co.reportingCurrency !== "USD";

@@ -7,26 +7,24 @@ import {
   ANNUAL_FORMS,
   INTERIM_FORMS,
   annualByYear,
+  bestLtmFlow,
   days,
   directQuarterValue,
   entriesOf,
   firstConcept,
+  fiscalYearOf,
   isFullYearDuration,
+  ltmAnchor,
+  ltmFlowOf,
   shiftYear,
   singleQuarter,
   splitFactorsByYear,
-  ttmOf,
   type QuarterCol,
 } from "./edgar-series";
 import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, opIncomeIsDerived, pickDa, SYN_DA_CF, SYN_OP_INCOME } from "./edgar-ev";
-import { fyEps, ltmEps, ltmNetIncome, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
+import { FY_EPS_NOTE, fyEps, ltmEpsOf, ltmNetIncomeOf, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
 import { buildShareResolver } from "./edgar-shares";
-import {
-  classAEps,
-  classALatest,
-  classAShares,
-  type ClassAFacts,
-} from "./edgar-classfacts";
+import { classAEps, type ClassAFacts } from "./edgar-classfacts";
 import {
   FIN_NONINTEREST_EXPENSE,
   FIN_PROVISION,
@@ -61,7 +59,6 @@ const PRETAX = [
 const TAX = ["IncomeTaxExpenseBenefit"];
 const EPS_BASIC = ["EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted"];
 const EPS_DIL = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"];
-const NONOP = ["NonoperatingIncomeExpense", "OtherNonoperatingIncomeExpense"];
 const INT_EXP = [
   "InterestExpense",
   "InterestExpenseNonoperating",
@@ -78,6 +75,8 @@ const INT_INC = [
 
 const LTM = "현재/LTM";
 const fyKey = (y: number) => `${y}Y`;
+/** 합성 영업이익이 세전이익 그대로인 칸(이자비용 태그 없음) — G6 */
+const PRETAX_ONLY_NOTE = "영업이익 태그 없음 · 세전이익 그대로(이자비용 태그 없음 — 이자·지분법 미조정)";
 
 export function buildUsIncome(
   facts: CompanyFacts,
@@ -162,6 +161,25 @@ export function buildUsIncome(
 
   const blank = (): Record<string, number | null> =>
     Object.fromEntries(labels.map((l) => [l, null]));
+  // 칸 주석(그림자 채우기 금지, 2026-09-27) — 빈칸 사유·근사 라벨. row() 가 cellNotes 로 싣는다
+  const WHY = new WeakMap<Record<string, number | null>, Record<string, string>>();
+  const note = (o: Record<string, number | null>, l: string, t: string | null | undefined) => {
+    if (!t) return;
+    const m = WHY.get(o) ?? {};
+    if (!m[l]) m[l] = t;
+    WHY.set(o, m);
+  };
+  const inheritWhy = (out: Record<string, number | null>, ...ins: Record<string, number | null>[]) => {
+    for (const l of labels)
+      for (const i of ins) {
+        const w = WHY.get(i)?.[l];
+        if (w && (i[l] == null ? out[l] == null : true)) {
+          note(out, l, w);
+          break;
+        }
+      }
+    return out;
+  };
 
   const val = (concepts: string[], unit = "USD"): Record<string, number | null> => {
     const out = blank();
@@ -176,14 +194,10 @@ export function buildUsIncome(
     }
     const ann = mergedAnnual(concepts, unit);
     for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-    // 가장 최근 데이터가 있는 개념의 TTM (태그 이전 후 과거 개념 옛 FY값 방지)
-    let ttmEnd = "";
-    for (const c of concepts) {
-      const es = entriesOf(facts, c, unit);
-      if (!es.length) continue;
-      const maxEnd = es.reduce((m, e) => (e.end > m ? e.end : m), "");
-      if (maxEnd > ttmEnd) { ttmEnd = maxEnd; out[LTM] = ttmOf(es); }
-    }
+    // 가장 최근 데이터가 있는 개념의 TTM (태그 이전 후 과거 개념 옛 FY값 방지) — 없으면 공란 + 사유
+    const r = bestLtmFlow(facts, concepts, unit);
+    out[LTM] = r.value;
+    if (r.value == null) note(out, LTM, r.reason);
     return out;
   };
   const diff = (
@@ -204,7 +218,7 @@ export function buildUsIncome(
       }
       out[l] = ok ? Math.round(x) : null;
     }
-    return out;
+    return inheritWhy(out, a, ...subs);
   };
 
   // 매출(순수익) — 재무 5층 구조 매출 지표(fin-revenue.ts)
@@ -247,15 +261,31 @@ export function buildUsIncome(
   const rnd = val(RND);
   const opex = val(OPEX);
   const pretax = val(PRETAX);
+  // 세전이익 태그가 없는 칸 — 순이익 + 법인세 등으로 만들지 않는다(사유)
+  for (const l of labels) if (pretax[l] == null && !WHY.get(pretax)?.[l]) note(pretax, l, "세전이익 공시 없음");
   // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 단일 기준 시계열
   const opIncome = (() => {
     if (isFin) {
+      // 대손충당금이 그 기간에 없으면 0 으로 보지 않는다(태그 자체가 없는 회사만 0 — 그림자 채우기 금지)
+      const provEver = FIN_PROVISION.some((c) => entriesOf(facts, c).length > 0);
       const o = blank();
       for (const l of labels)
-        if (grossProfit[l] != null) o[l] = Math.round(grossProfit[l]! - (finProvision[l] ?? 0));
-      return o;
+        if (grossProfit[l] != null && (finProvision[l] != null || !provEver)) o[l] = Math.round(grossProfit[l]! - (finProvision[l] ?? 0));
+      return inheritWhy(o, grossProfit, finProvision);
     }
     const o = val(OP_INCOME);
+    // 합성 영업이익 산식이 "세전이익 그대로"(이자비용 태그 없음)인 칸 — 칸마다 라벨(G6)
+    if (!quarterly) {
+      const syn = entriesOf(facts, SYN_OP_INCOME);
+      for (const y of years) {
+        const e = syn
+          .filter((x) => x.synBasis && x.fp === "FY" && isFullYearDuration(x) && ANNUAL_FORMS.includes(x.form) && fiscalYearOf(x.end) === y)
+          .sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0];
+        if (e?.synBasis === "pretax" && o[fyKey(y)] != null) note(o, fyKey(y), PRETAX_ONLY_NOTE);
+      }
+      const lf = ltmFlowOf(syn, ltmAnchor(facts));
+      if (o[LTM] != null && [lf.fy, lf.cur, lf.prior].some((x) => x?.synBasis === "pretax")) note(o, LTM, PRETAX_ONLY_NOTE);
+    }
     return o;
   })();
   // 기타 영업비용 = OPEX − SGA − RND, 없으면 GrossProfit − OpIncome − SGA − RND
@@ -265,16 +295,12 @@ export function buildUsIncome(
       : diff(grossProfit, opIncome);
     return diff(base, sga, rnd);
   })();
-  // (−)영업외손익 = 세전이익 − 영업이익 (부호 반전). 워터폴 정합을 위해 항상 이 정의 우선.
-  // NonoperatingIncomeExpense 태그는 일부 항목만 담는 기업(IBM 등)이 많아 사용 안 함.
+  // (−)영업외손익 = 세전이익 − 영업이익 (부호 반전). 워터폴 정합을 위해 이 정의만.
+  // NonoperatingIncomeExpense 태그는 일부 항목만 담는 기업(IBM 등)이 많아 대신 쓰지 않는다(그림자 채우기 금지, 2026-09-27)
   const nonOpLoss = (() => {
-    const nonop = val(NONOP);
     const out = blank();
-    for (const l of labels) {
-      if (pretax[l] != null && opIncome[l] != null) out[l] = -(pretax[l]! - opIncome[l]!);
-      else if (nonop[l] != null) out[l] = -nonop[l]!;
-    }
-    return out;
+    for (const l of labels) if (pretax[l] != null && opIncome[l] != null) out[l] = -(pretax[l]! - opIncome[l]!);
+    return inheritWhy(out, pretax, opIncome);
   })();
   // 순이자손익(−) = 이자비용 − 이자수익 (양수 = 순이자 부담, 음수 = 순이자 이익).
   // 금융회사는 이자비용이 이미 순수익(매출)에 반영된 영업비용이라 영업외손익 하위
@@ -287,9 +313,23 @@ export function buildUsIncome(
     const ylI = !quarterly && yahooLtm(facts);
     const prevL = labels[labels.length - 2];
     const gapI = (x: Record<string, number | null>) => !!ylI && x[LTM] == null && x[prevL] != null;
+    // 한쪽이 그 기간에 없으면 0 으로 보지 않는다 — 그 개념 태그를 아예 쓰지 않는 회사만 0(그 줄이 없음)
+    const expEver = INT_EXP.some((c) => entriesOf(facts, c).length > 0);
+    const incEver = INT_INC.some((c) => entriesOf(facts, c).length > 0);
     for (const l of labels) {
-      if (intExp[l] == null && intInc[l] == null) continue;
-      if (l === LTM && (gapI(intExp) || gapI(intInc))) continue;
+      if (intExp[l] == null && intInc[l] == null) {
+        // 둘 다 빈 칸 — 구성 항목의 사유(LTM 구성 분기 없음 등)를 물려준다
+        note(netIntCost, l, WHY.get(intExp)?.[l] ?? WHY.get(intInc)?.[l]);
+        continue;
+      }
+      if (l === LTM && (gapI(intExp) || gapI(intInc))) {
+        note(netIntCost, l, gapI(intExp) ? "LTM 이자비용 구성 분기 없음" : "LTM 이자수익 구성 분기 없음");
+        continue;
+      }
+      if ((intExp[l] == null && expEver) || (intInc[l] == null && incEver)) {
+        note(netIntCost, l, intExp[l] == null ? "이자비용 공시 없음" : "이자수익 공시 없음");
+        continue;
+      }
       netIntCost[l] = (intExp[l] ?? 0) - (intInc[l] ?? 0);
     }
   }
@@ -299,7 +339,8 @@ export function buildUsIncome(
     firstConcept(facts, [c]).some((e) => e.end >= recentIso),
   );
   if (!intFresh && LTM in netIntCost) netIntCost[LTM] = null;
-  const hasInterest = !isFin && labels.some((l) => netIntCost[l] != null);
+  // 값이 없어도 사유가 있으면 줄을 둔다(빈칸 사유가 화면에서 사라지지 않게)
+  const hasInterest = !isFin && labels.some((l) => netIntCost[l] != null || WHY.get(netIntCost)?.[l]);
   const tax = val(TAX);
   // 지배주주 순이익 — edgar-pershare.ts 공통 규칙(하이라이트·재무분석과 같은 값).
   // NetIncomeLoss 가 없는 기간은 ProfitLoss − 비지배지분(BE 2024·2025).
@@ -314,7 +355,9 @@ export function buildUsIncome(
     }
     const ann = netIncomeAnnualByYear(facts);
     for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-    out[LTM] = ltmNetIncome(facts);
+    const r = ltmNetIncomeOf(facts);
+    out[LTM] = r.value;
+    if (r.value == null) note(out, LTM, r.reason);
     return out;
   })();
   // (−) 기타 = (세전이익 − 법인세비용) − 공시 당기순이익 (중단사업·소수주주지분 등)
@@ -322,118 +365,97 @@ export function buildUsIncome(
   for (const l of labels)
     if (pretax[l] != null && tax[l] != null && netIncome[l] != null)
       otherToNi[l] = Math.round(pretax[l]! - tax[l]! - netIncome[l]!);
+  inheritWhy(otherToNi, pretax, tax, netIncome);
   // 액면분할 보정: 소급 재작성 안 된 과거 연도 EPS 를 최신 연도 기준으로 환산
   const splitF = splitFactorsByYear(facts);
   const adjEps = (o: Record<string, number | null>): Record<string, number | null> => {
     if (quarterly) return o;
     const r = { ...o };
+    if (WHY.get(o)) WHY.set(r, { ...WHY.get(o)! });
     for (const y of years) {
       const f = splitF.get(y);
       if (f != null && f !== 1 && r[fyKey(y)] != null) r[fyKey(y)] = r[fyKey(y)]! * f;
     }
     return r;
   };
-  // EPS: 공시 태그 우선. 클래스별로만 태깅하는 기업(Visa)은 순이익÷주식수로 산출.
+  // EPS: 공시 태그만. 없으면 Class A 공시 EPS(클래스별로만 공시 — 라벨), 그 밖은 공란 + 사유.
+  // 그림자 채우기 금지(2026-09-27): 예전엔 순이익 ÷ (희석 가중평균 → Class A → Yahoo 힌트)로 만들었다 — 기본 EPS 를 희석 주식수로
+  // 나누는 등 정의가 달랐고, 분기·LTM 근사에 라벨도 없었다. 연간 희석 EPS 는 공통 함수 fyEps(라벨 포함, 오너 승인 근사 G4).
   const wavgShares = val(
     ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"],
     "shares",
   );
-  // 주식수는 흐름(더하고 빼도 되는 값)이 아니라 시점 값이라, val() 이 LTM 칸에
-  // 채워 넣는 ttmOf 차감식("최근 FY + 당기누적 − 전년동기누적") 결과가 의미가
-  // 없다 — 실측(2026-09-23, Bloom Energy): 실제 발행주식수가 2.3억→2.84억으로
-  // 늘어난 구간인데 이 식은 3.3억 주를 내놔, 같은 회사 LTM EPS 가 재무제표
-  // 탭에서는 0.030, 개요/하이라이트에서는 0.035 로 갈렸다(오너 지적 — "be 개요
-  // 재무하이라이트에 eps -0.04 재무제표 is에서 0.03"). LTM 칸은 비워서 아래
-  // deriveEps 가 현재 주식수(sharesHint, 다른 모듈과 같은 분모)를 쓰게 한다.
+  // 주식수는 흐름이 아니라 LTM 차감식이 성립하지 않는다 — LTM 칸은 비운다(타당성 대조에도 안 씀)
   if (!quarterly) wavgShares[LTM] = null;
-  let epsApprox = false;
   const yearOf = (l: string): number => Number(l.replace(/[^0-9]/g, "")) || 0;
-  const deriveEps = (
-    o: Record<string, number | null>,
-    kind: "basic" | "diluted",
-  ): Record<string, number | null> => {
+  /** Class A 공시 EPS(Visa 등, 10-K 원본 실측) — 연간만. 라벨(G5) */
+  const withClassA = (o: Record<string, number | null>, kind: "basic" | "diluted"): Record<string, number | null> => {
     const r = { ...o };
+    WHY.set(r, { ...(WHY.get(o) ?? {}) });
+    if (quarterly) return r;
     for (const l of labels) {
-      if (r[l] != null) continue;
-      // Q4 열(사업연도 − 9개월 누적)은 주당 값을 빼서 만들 수 없다 — 현재 주식수로 근사하지 않고 공란
-      if (q4Labels.has(l)) continue;
-      // Class A 공시값(실측) 우선 — 근사 아님
-      const ca = quarterly ? null : classAEps(classFacts, yearOf(l), kind);
+      if (r[l] != null || l === LTM) continue;
+      const ca = classAEps(classFacts, yearOf(l), kind);
       if (ca != null) {
         r[l] = ca;
-        continue;
-      }
-      const dcl =
-        wavgShares[l] ??
-        (quarterly
-          ? null
-          : l === LTM
-            ? (classALatest(classFacts)?.dilShares ?? null)
-            : classAShares(classFacts, yearOf(l)));
-      const sh = dcl ?? sharesHint;
-      if (netIncome[l] != null && sh) {
-        r[l] = netIncome[l]! / sh;
-        if (dcl == null) epsApprox = true;
+        note(r, l, FY_EPS_NOTE.classA);
       }
     }
     return r;
   };
-  // ① EPS 는 흐름(매출·순이익)과 달라 singleQuarter/ttmOf 의 "누적값 차감"
-  // 식이 안 성립한다 — 분모(가중평균 주식수)가 분기마다 달라 단순 뺄셈이
-  // 실제 TTM 주당순이익을 안 준다(오너 지적, 2026-09-23 — Bloom Energy
-  // "당기순이익은 9백만인데 기본/희석 EPS는 마이너스"). val()의 LTM 결과가
-  // null이 아니면 바로 아래 deriveEps()의 "순이익÷주식수" 폴백이
-  // `r[l] != null` 에 걸려 아예 안 도는 게 원인 — LTM은 차감식 결과를 버리고
-  // 항상 그 폴백을 타게 한다.
-  //
-  // ② 공시 태그값 자체가 틀린 경우도 있다 — 실측(2026-09-23): Bloom Energy
-  // 2025 Q3 10-Q(accn 0001628280-25-046844)가 `EarningsPerShareBasic`/
-  // `Diluted`를 단일분기 -100, 9개월 누적 -380으로 오기재했다(당기순손실
-  // 2,296만 달러·주식수 약 2.3억주면 정상 EPS는 -0.1 안팎이어야 함 — 회사가
-  // 자릿수를 잘못 태깅한 것으로 보임). ①과 달리 이건 차감식이 아니라
-  // "직접 단일분기로 태깅된 값"(direct) 자체가 틀린 사례라 경로를 우회해도
-  // 못 피한다 — 태그값을 순이익÷주식수 근사와 대조해 벌어지면 신뢰하지
-  // 않고 폴백으로 넘긴다.
-  //
-  // 배수는 처음 10배로 뒀다가 5배로 낮췄다(오너 지적, 2026-09-23 — "10배
-  // 괴리는 너무 크다, 반도체 기업처럼 2~3배 변동도 있을 수 있는데 그러면
-  // 일반적 오류를 못 찾을 수 있다"). 이 대조는 분기별 실적 변동(다른 분기
-  // 대비 2~3배)이 아니라 **같은 분기 안에서** "공시 태그"와 "순이익÷주식수
-  // 단순 나눗셈"을 비교하는 것이라 성격이 다르다 — 우선주 배당 차감·
-  // Two-Class Method·희석증권 등 정상적인 차이도 보통 2배를 잘 안 넘는다
-  // (그 이상 벌어지는 진짜 예외는 Visa 등 별도 classFacts 경로로 이미
-  // 처리됨). 5배는 그 정상 오차보다 넉넉한 여유를 두면서도, 10배보다
-  // 작은 규모의 오기재(자릿수 일부만 밀린 경우 등)를 더 많이 잡아낸다.
+  // ② 공시 태그값 자체가 틀린 경우 — 실측(2026-09-23): Bloom Energy 2025 Q3 10-Q 가 EPS 를 단일분기 -100, 9개월 -380 으로
+  // 오기재. 태그값을 순이익 ÷ 공시 가중평균 주식수와 대조해 5배 넘게 벌어지면 쓰지 않는다 — 근사값으로 바꾸지 않고
+  // 공란 + "공시 EPS 이상치"(그림자 채우기 금지). 대조할 주식수가 없으면 태그값 그대로.
   const plausibleEps = (tagVal: number, l: string): boolean => {
     const ni = netIncome[l];
-    const sh = wavgShares[l] ?? sharesHint;
+    const sh = wavgShares[l];
     if (ni == null || !sh) return true; // 대조 불가 — 태그값 그대로 신뢰
     const approx = ni / sh;
     if (Math.abs(approx) < 0.01) return Math.abs(tagVal) < 1; // 거의 손익분기인데 태그가 크면 의심
     const ratio = Math.abs(tagVal / approx);
-    return ratio <= 5 && ratio >= 0.2;
+    // 가중평균 주식수를 천·백만 주 단위로 잘못 태깅한 회사(MCD 716.4 = 7억 1,640만 주 — edgar-shares.ts fixScale)는 주식수
+    // 쪽 단위 오류 — 공시 EPS 는 정상이다
+    return [1, 1e3, 1e6].some((k) => ratio * k <= 5 && ratio * k >= 0.2);
   };
+  const EPS_OUTLIER = "공시 EPS 이상치(순이익 ÷ 가중평균 주식수와 5배 넘게 차이) — 공란";
   const valEps = (concepts: string[]): Record<string, number | null> => {
     if (quarterly) {
       const out = blank();
       qShow.forEach((q) => {
+        if (q4Labels.has(q.label)) {
+          // Q4 열(사업연도 − 9개월 누적)은 주당 값을 빼서 만들 수 없다 — 공란
+          note(out, q.label, "4분기 EPS 미공시(주당 값은 연간 − 9개월 차감 불가)");
+          return;
+        }
+        let outlier = false;
         for (const c of concepts) {
           const v = directQuarterValue(entriesOf(facts, c, "USD/shares"), q);
-          if (v != null && plausibleEps(v, q.label)) { out[q.label] = v; break; }
+          if (v == null) continue;
+          if (plausibleEps(v, q.label)) { out[q.label] = v; outlier = false; break; }
+          outlier = true;
         }
+        if (out[q.label] == null) note(out, q.label, outlier ? EPS_OUTLIER : "분기 EPS 공시 없음");
       });
       return out;
     }
     const out = val(concepts, "USD/shares");
-    out[LTM] = null; // TTM 흐름식 결과 버림 — 항상 순이익÷주식수로 계산
+    out[LTM] = null; // TTM 흐름식 결과 버림 — 주당 지표는 누적 차감이 성립하지 않는다
+    WHY.set(out, {});
     for (const y of years) {
       const l = fyKey(y);
-      if (out[l] != null && !plausibleEps(out[l]!, l)) out[l] = null;
+      if (out[l] != null && !plausibleEps(out[l]!, l)) {
+        out[l] = null;
+        note(out, l, EPS_OUTLIER);
+      }
     }
     return out;
   };
-  const epsBasic = deriveEps(adjEps(valEps(EPS_BASIC)), "basic");
-  const epsDil = deriveEps(adjEps(valEps(EPS_DIL)), "diluted");
+  const epsBasic = withClassA(adjEps(valEps(EPS_BASIC)), "basic");
+  const epsDil = withClassA(adjEps(valEps(EPS_DIL)), "diluted");
+  // 공시 EPS 가 없는 연도 칸 — 순이익 ÷ 주식수로 대신 만들지 않는다(그림자 채우기 금지) — 사유
+  if (!quarterly)
+    for (const y of years) if (epsBasic[fyKey(y)] == null && netIncome[fyKey(y)] != null) note(epsBasic, fyKey(y), "기본 EPS 공시 없음");
+  if (!quarterly) note(epsBasic, LTM, "LTM 기본 EPS 미산정(희석 EPS 만 — 순이익 ÷ 현재 주식수)");
   // 연간 희석 EPS 는 하이라이트·재무분석·컨센서스와 **같은 공통 함수**로 덮어쓴다(단일 기준).
   // 예전엔 여기서 따로 계산해 (1) LTM 은 Yahoo 주식수를, 하이라이트는 공통 현재 주식수를 써서
   // 거의 전 종목이 0.2~5% 갈렸고 (2) MCD 처럼 가중평균 주식수를 백만 단위로 공시한 회사는
@@ -441,8 +463,12 @@ export function buildUsIncome(
   // (검증 도구 재구축 후 첫 실행에서 발견, 2026-09-24).
   if (!quarterly) {
     const shareRes = buildShareResolver(facts, { classFacts, sharesHint });
-    const le = ltmEps(facts, shareRes.current());
-    if (le != null) epsDil[LTM] = le;
+    const le = ltmEpsOf(facts, shareRes.current());
+    epsDil[LTM] = le.value;
+    const m = WHY.get(epsDil) ?? {};
+    delete m[LTM];
+    WHY.set(epsDil, m);
+    note(epsDil, LTM, le.value == null ? le.reason : shareRes.currentNote());
     for (const p of periods) {
       if (p.label === LTM) continue;
       const y = yearOf(p.label);
@@ -452,7 +478,9 @@ export function buildUsIncome(
         fyNetIncome: netIncome[p.label] ?? null,
       });
       epsDil[p.label] = r.eps;
-      if (r.approx) epsApprox = true;
+      const mm = WHY.get(epsDil)!;
+      delete mm[p.label];
+      note(epsDil, p.label, r.note);
     }
   }
 
@@ -467,6 +495,13 @@ export function buildUsIncome(
     // 본표 판독이 원본 조회 실패로 빠졌으면 태그 규칙으로 대체하지 않고 공란(sec-unavailable.ts)
     if (unavailableOn(facts, "da")) return o;
     for (const l of labels) o[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
+    // LTM — 최근 연도엔 있는데 LTM 에 없는 합계 태그가 있으면(구성항목 합이면 구성 태그도) 나머지로 낸 값은 부분값 — 공란
+    if (!quarterly && cf[LTM] == null) {
+      const prevL = labels[labels.length - 2];
+      const g = (t: Record<string, number | null>) => t[LTM] == null && t[prevL] != null;
+      if (totals.some(g) || (!totals.some((t) => t[LTM] != null) && (g(dep) || g(am)))) o[LTM] = null;
+    }
+    if (!quarterly && o[LTM] == null && o[labels[labels.length - 2]] != null) note(o, LTM, "LTM 감가상각비 구성 분기 없음");
     return o;
   })();
   const oneOff = unavailableOn(facts, "oneOff") ? blank() : val(["OneOffChargesDerived"]);
@@ -475,6 +510,7 @@ export function buildUsIncome(
   const ebitda = blank();
   for (const l of labels)
     if (opIncome[l] != null && da[l] != null) ebitda[l] = opIncome[l]! + da[l]!;
+  inheritWhy(ebitda, opIncome, da);
 
   const row = (
     label: string,
@@ -487,6 +523,7 @@ export function buildUsIncome(
     isSubtotal: false,
     isHighlight: false,
     values,
+    ...(WHY.get(values) && Object.keys(WHY.get(values)!).length ? { cellNotes: WHY.get(values) } : {}),
     ...opts,
   });
 
@@ -497,7 +534,7 @@ export function buildUsIncome(
     const o = blank();
     for (const l of labels)
       if (revenue[l] != null && opIncome[l] != null) o[l] = revenue[l]! - opIncome[l]!;
-    return o;
+    return inheritWhy(o, opIncome);
   })();
 
   // 매출원가·매출총이익 칸 주석 — 합성 매출총이익은 줄 이름에, 그 밖의 사유(구성 규칙 대기·회사 공시 자체·제외 항목 있는 원가 줄·
@@ -542,6 +579,8 @@ export function buildUsIncome(
           ? "영업이익 (태그 없음 · 세전이익 — 금융업은 이자가 본업)"
           : facts.nonopInRevenues
           ? "영업이익 (태그 없음 · 세전이익+이자비용−지분법·기타수익)"
+          : labels.every((l) => opIncome[l] == null || WHY.get(opIncome)?.[l] === PRETAX_ONLY_NOTE)
+          ? "영업이익 (태그 없음 · 세전이익 그대로 — 이자비용 태그 없음)"
           : "영업이익 (태그 없음 · 세전이익+이자비용−지분법이익 근사)"
         : "영업이익",
       opIncome,
@@ -576,13 +615,6 @@ export function buildUsIncome(
       }),
     );
 
-  if (epsApprox && !quarterly)
-    items.push(
-      row("※ EPS: 클래스별로만 공시(Visa 등) → 순이익÷주식수 근사", blank(), {
-        depth: 1,
-        italic: true,
-      }),
-    );
 
   return {
     symbol: "",

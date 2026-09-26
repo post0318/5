@@ -4,6 +4,7 @@ import { assembleIncomeStatements } from "./assemble/is";
 import { revenue } from "./metrics/revenue";
 import { cogsGp } from "./metrics/cogs";
 import { opincOpex } from "./metrics/opinc";
+import { cogsRuleFor } from "./metrics/cogs-rules";
 import { finalizeDerived } from "./derived";
 import { ENGINE_VERSION, markFailed, persist, readStmt, readSym, readSymMeta, toStmtDoc, toSymDoc, touchChecked } from "./store";
 import { Gap, gapNames, type FinAssembly, type Market } from "./types";
@@ -38,7 +39,7 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
     if (opts.persist) await markFailed(`${market}:${sym}`, Gap.CF_FETCH).catch(() => {});
     throw e;
   }
-  const st = await assembleIncomeStatements(reader, { annual: opts.annual ?? 10, quarterly: opts.quarterly ?? 20 });
+  const st = await assembleIncomeStatements(reader, { annual: opts.annual ?? 10, quarterly: opts.quarterly ?? 20 }, cogsRuleFor(sym)?.rule?.terms);
   const colsGaps = [...st.annual, ...st.quarterly].reduce((g, a) => g | a.col.gaps, 0);
   const cols = dedupe([...st.annual, ...st.quarterly]);
   const rev = revenue(cols, reader.profile);

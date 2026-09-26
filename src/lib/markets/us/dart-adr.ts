@@ -303,7 +303,8 @@ export async function dartAdrTtm(spec: Spec): Promise<TtmFlows | null> {
   const dpsA = lastDpsYear != null ? dps!.dpsByYear.get(lastDpsYear)! : null;
   const rA = lastDpsYear != null ? fx.avg(`${lastDpsYear}-01-01`, `${lastDpsYear}-12-31`) : null;
   const tt = dpsTtm?.ttm ?? null;
-  const rT = tt ? (fx.avg(tt.from, tt.to) ?? fx.at(tt.to)) : null;
+  // 배당기준일 구간 평균 환율만 — 구간 평균이 없으면 기말 현물 환율로 대신하지 않는다(그림자 채우기 금지, 2026-09-27)
+  const rT = tt ? fx.avg(tt.from, tt.to) : null;
 
   return {
     periodLabel: quarterly
@@ -337,6 +338,7 @@ export async function dartAdrTtm(spec: Spec): Promise<TtmFlows | null> {
       : null,
     dpsAnnual: dpsA != null && rA != null ? { dps: dpsA * rA * k, label: `FY${lastDpsYear}` } : null,
     dpsTtm: tt && rT != null ? { dps: tt.dps * rT * k, from: tt.from, to: tt.to } : null,
+    ...(tt && rT == null ? { reasons: { dpsTtm: "배당기준일 구간 평균 환율(ECOS) 없음 — 현물 환율로 대신하지 않음" } } : {}),
   };
 }
 
@@ -442,7 +444,8 @@ async function loadValuationInputs(spec: Spec, yahoo: string | null) {
   const adrShares = ttm?.snapshot?.bookShares ?? null;
   const price = adrQuote?.last ?? null;
   const tt = dpsTtm?.ttm ?? null;
-  const rT = tt ? (fx.avg(tt.from, tt.to) ?? fx.at(tt.to)) : null;
+  // 배당기준일 구간 평균 환율만(기말 현물 환율로 대신하지 않음)
+  const rT = tt ? fx.avg(tt.from, tt.to) : null;
   const dpsByYear = new Map<number, number>();
   for (const [y, v] of dps.dpsByYear) {
     const r = fx.avg(`${y}-01-01`, `${y}-12-31`);
@@ -451,9 +454,12 @@ async function loadValuationInputs(spec: Spec, yahoo: string | null) {
   const estimates = estimatesRaw
     ? await dartAdrEstimatesToUsd(spec, estimatesRaw, fx).catch(() => null)
     : null;
+  const sharesByYear = new Map<number, number>();
+  for (const [y, v] of outstanding) sharesByYear.set(y, v / k);
   return {
     facts,
     fx,
+    sharesByYear,
     caps: convertCaps(capsKrw, fx, k, outstanding),
     bars,
     fyCloseByYear,
@@ -491,6 +497,8 @@ export async function dartAdrHighlights(spec: Spec, yahoo: string | null): Promi
     bars: x.bars,
     fyCloseByYear: x.fyCloseByYear,
     sharesOutstanding: x.adrShares,
+    // 과거 연도는 결산일 유통주식수(caps)만 — 최근 주식수로 대신하지 않는다
+    strictPastShares: true,
     currentMarketCap: x.currentMarketCap,
     currentPrice: x.price,
     ttm: x.ttm,
@@ -511,6 +519,19 @@ export async function dartAdrHighlights(spec: Spec, yahoo: string | null): Promi
         }
       : null,
   });
+  // 빈칸 사유 — 과거 연도 시가총액(결산일 유통주식수 없음)·추정 순이익(무료 컨센서스 없음, EPS × 주식수로 대신하지 않음)
+  for (const r of hl.rows) {
+    if (r.key !== "mktcap" && r.key !== "ni") continue;
+    r.cellNotes = hl.columns.map((c, i) =>
+      r.values[i] != null
+        ? null
+        : r.key === "mktcap" && c.kind === "fy"
+          ? "결산일 유통주식수 없음(DART 주식총수 현황) — 현재 주식수로 대신하지 않음"
+          : r.key === "ni" && c.kind === "estimate"
+            ? "예상 순이익: 무료 컨센서스 없음(EPS × 주식수로 대신하지 않음)"
+            : null,
+    );
+  }
   const notes = hl.notes.map((n) =>
     n.startsWith("시가총액: KRX")
       ? `시가총액: 연도 열 = 결산일 유통주식수(자사주 제외, DART 주식총수 현황) × 결산일 KRX 종가 × 결산일 환율, 현재/LTM = ADR 현재가 × 유통주식수(${x.ttm?.snapshot?.label ?? "최근 분기말"} 기준, ADR 환산 ÷ ${spec.sharesPerAdr}) — BPS 와 같은 주식수`
@@ -533,6 +554,8 @@ export async function dartAdrAnalysis(spec: Spec, yahoo: string | null): Promise
     bars: x.bars,
     fyCloseByYear: x.fyCloseByYear,
     sharesOutstanding: x.adrShares,
+    // 연도 열 주식수 = 각 결산일 유통주식수(ADR 환산)만
+    sharesByYear: x.sharesByYear,
     currentPrice: x.price,
     currentMarketCap: x.currentMarketCap,
     ttm: x.ttm,
@@ -559,14 +582,11 @@ export async function dartAdrConsensusInputs(spec: Spec, years: number[]) {
   if (!factsKrw) return null;
   const bookShares = new Map<number, number>();
   for (const [y, v] of outstanding) bookShares.set(y, v / k);
-  const lastY = [...bookShares.keys()].sort((a, b) => a - b).at(-1);
   return {
     code: spec.krCode,
     facts: convertFacts(factsKrw, fx, k),
     daDoc: convertDaDoc(daDoc, fx, factsKrw),
     caps: convertCaps(capsKrw, fx, k, outstanding),
-    // 연말 시가총액 대체 계산(caps 없는 해)용 — 최근 결산일 유통주식수
-    adrShares: lastY != null ? bookShares.get(lastY)! : null,
     bookShares,
   };
 }

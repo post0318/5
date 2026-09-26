@@ -1,9 +1,8 @@
 import "server-only";
 import { unavailableNote, unavailableOn } from "./sec-unavailable";
-import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { recentQuarters, singleQuarter, fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
+import { recentQuarters, singleQuarter, fiscalYearOf, ltmAnchor, ltmFlowOf } from "./edgar-series";
 import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa, SYN_DA_CF } from "./edgar-ev";
 import { isFinancialCompany } from "./edgar-financial";
 
@@ -14,8 +13,6 @@ import { isFinancialCompany } from "./edgar-financial";
  */
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-// LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)
-const INTERIM_FORMS = LTM_INTERIM_FORMS;
 
 function days(a: string, b: string) {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
@@ -23,10 +20,6 @@ function days(a: string, b: string) {
 /** 온전한 1개 회계연도(약 300~400일)인지 — 90일 분기에도 fp="FY" 붙이는 기업(NVIDIA) 대응. */
 function isFullYear(e: FactUnitEntry): boolean {
   return Boolean(e.start) && days(e.start!, e.end) >= 300 && days(e.start!, e.end) <= 400;
-}
-function shiftYear(iso: string, n: number) {
-  const [y, m, d] = iso.split("-");
-  return `${Number(y) + n}-${m}-${d}`;
 }
 function entriesOf(facts: CompanyFacts, concept: string): FactUnitEntry[] {
   return facts.facts["us-gaap"]?.[concept]?.units?.["USD"] ?? [];
@@ -57,32 +50,6 @@ function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
     if (!prev || e.end > prev.end) m.set(y, { val: e.val, end: e.end });
   }
   return new Map([...m].map(([y, v]) => [y, v.val]));
-}
-
-/** 흐름 TTM = 최근 FY + 당기누적 − 전년동기누적. */
-function ttmOf(entries: FactUnitEntry[]): number | null {
-  const annuals = entries
-    .filter((e) => e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form))
-    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b));
-  const fy = annuals[0];
-  if (!fy?.start) return null;
-  const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
-  const cur = interims
-    .filter((e) => Math.abs(days(fy.end, e.start!)) <= 12 && e.end > fy.end)
-    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
-  if (!cur?.start) return ttmCombine(fy);
-  const wS = shiftYear(cur.start, -1);
-  const wE = shiftYear(cur.end, -1);
-  const prior = interims
-    .filter(
-      (e) =>
-        e.start &&
-        Math.abs(days(wS, e.start)) <= 12 &&
-        Math.abs(days(wE, e.end)) <= 12,
-    )
-    .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
-  if (!prior) return ttmCombine(fy);
-  return ttmCombine(fy, cur, prior);
 }
 
 interface Line {
@@ -243,6 +210,9 @@ export function buildUsCashFlow(
 
   let periods: FinancialPeriod[];
   let valOf: (concepts: string[]) => Record<string, number | null>;
+  // LTM 칸 주석(그림자 채우기 금지, 2026-09-27) — 줄별 LTM 공란 사유
+  const ltmWhy = new WeakMap<Record<string, number | null>, string>();
+  const anchor = ltmAnchor(facts);
 
   if (mode === "quarter") {
     const chron = [...recentQuarters(opEntries, 6)].reverse(); // 6개 (0번은 prev 전용)
@@ -285,18 +255,27 @@ export function buildUsCashFlow(
       const ann = annualByYear(entries);
       const out: Record<string, number | null> = {};
       for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-      out[LTM] = ttmOf(entries);
+      // LTM — edgar-series.ts 단일 함수(사업연도 뒤 분기가 있는데 누적이 없으면 공란 + 사유, 550일 규칙 포함)
+      const r = ltmFlowOf(entries, anchor);
+      out[LTM] = r.value;
+      if (r.value == null && r.reason) ltmWhy.set(out, r.reason);
       return out;
     };
   }
   const labels = periods.map((p) => p.label);
   const blank = (): Record<string, number | null> =>
     Object.fromEntries(labels.map((l) => [l, null]));
-  // 20-F Yahoo 분기 LTM(edgar-yahoo-quarters.ts): 최근 연도엔 있는데 LTM 만 빈 값(채우지 못함)은 합산·차감에서 0 으로
-  // 보지 않는다 — 부분 합·"기타" 잔여가 부푸는 것 방지
-  const ylCf = yahooLtm(facts) && labels.includes(LTM);
+  /** 줄의 LTM 칸 주석 — 값이 빈 칸만 */
+  const ltmCell = (v: Record<string, number | null>): { cellNotes?: Record<string, string> } => {
+    const w = ltmWhy.get(v);
+    return w && labels.includes(LTM) && v[LTM] == null ? { cellNotes: { [LTM]: w } } : {};
+  };
+  // 최근 연도엔 있는데 LTM 만 빈 값(분기 공시에 없음·Yahoo 분기 미매핑)은 합산·차감에서 0 으로 보지 않는다 — 부분 합·"기타"
+  // 잔여가 부푸는 것 방지(20-F 뿐 아니라 모든 회사 — 그림자 채우기 금지, 2026-09-27)
+  const ylCf = labels.includes(LTM);
   const prevLbl = labels[labels.length - 2];
   const ltmGap = (v: Record<string, number | null> | undefined) => !!ylCf && !!v && v[LTM] == null && v[prevLbl] != null;
+  const GAP_NOTE = "LTM 구성 분기 없음(구성 항목이 분기 공시에 없음)";
   const combineVals = (parts: [string, boolean][]): Record<string, number | null> => {
     const out: Record<string, number | null> = {};
     for (const lbl of labels) out[lbl] = null;
@@ -310,7 +289,14 @@ export function buildUsCashFlow(
         out[lbl] = (out[lbl] ?? 0) + (neg ? -x : x);
       }
     }
-    if (gap) out[LTM] = null;
+    if (gap) {
+      out[LTM] = null;
+      ltmWhy.set(out, GAP_NOTE);
+    } else if (labels.includes(LTM) && out[LTM] == null) {
+      // 구성 개념이 모두 LTM 에서 비었다(태그 중단 등) — 첫 구성 사유
+      const why = parts.map(([c]) => ltmWhy.get(valOf([c]))).find(Boolean);
+      if (why) ltmWhy.set(out, why);
+    }
     return out;
   };
   const applyNegate = (v: Record<string, number | null>): Record<string, number | null> => {
@@ -337,6 +323,12 @@ export function buildUsCashFlow(
         v = {};
         // 본표 판독이 원본 조회 실패로 빠졌으면 공란 — 태그 규칙 값으로 대체하지 않는다(sec-unavailable.ts)
         for (const l of labels) v[l] = daOut ? null : pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
+        // 최근 연도엔 있는데 LTM 에 없는 합계 태그가 있으면(구성항목 합이면 구성 태그도) 나머지로 낸 값은 부분값 — 공란
+        if (labels.includes(LTM) && !daOut && cf[LTM] == null) {
+          const totalLtm = totals.some((t) => t[LTM] != null);
+          if (totals.some(ltmGap) || (!totalLtm && (ltmGap(dep) || ltmGap(am)))) v[LTM] = null;
+        }
+        if (labels.includes(LTM) && !daOut && v[LTM] == null && v[prevLbl] != null) ltmWhy.set(v, "LTM 감가상각비 구성 분기 없음");
       } else if (line.combine) v = combineVals(line.combine);
       else v = valOf(line.concepts ?? []);
       if (line.fallbackCombine && labels.some((l) => v[l] == null)) {
@@ -344,7 +336,11 @@ export function buildUsCashFlow(
         const primaryGap = ltmGap(v);
         for (const l of labels) if (v[l] == null && fb[l] != null && !(l === LTM && primaryGap)) v[l] = fb[l];
       }
-      if (line.negate) v = applyNegate(v);
+      if (line.negate) {
+        const why = ltmWhy.get(v);
+        v = applyNegate(v);
+        if (why) ltmWhy.set(v, why);
+      }
       resolved[line.label] = v;
     }
 
@@ -364,13 +360,19 @@ export function buildUsCashFlow(
           }
           values[lbl] = lbl === LTM && kids.some((k) => ltmGap(resolved[k.label])) ? null : s;
         }
+        if (labels.includes(LTM) && values[LTM] == null) {
+          const why = kids.some((k) => ltmGap(resolved[k.label])) ? GAP_NOTE : kids.map((k) => ltmWhy.get(resolved[k.label])).find(Boolean);
+          if (why) ltmWhy.set(values, why);
+        }
       } else if (line.plug) {
         values = {};
+        let plugWhyNote: string | null = null;
         for (const lbl of labels) {
           const tot = totalVals[lbl];
           // 감가상각비가 공란(원본 조회 실패)인 구간의 잔여 줄은 감가상각비를 떠안아 다른 숫자가 되므로 함께 공란
           if (tot == null || (daOut && block.lines.some((l) => l.pickDa))) {
             values[lbl] = null;
+            if (lbl === LTM && tot == null && ltmWhy.get(totalVals)) plugWhyNote = ltmWhy.get(totalVals)!;
             continue;
           }
           let mapped = 0;
@@ -385,7 +387,9 @@ export function buildUsCashFlow(
           }
           const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && (l.depth === 1 || l.depth === 2) && ltmGap(resolved[l.label]));
           values[lbl] = gap ? null : Math.round(tot - mapped);
+          if (gap) ltmWhy.set(values, GAP_NOTE);
         }
+        if (plugWhyNote && !ltmWhy.get(values)) ltmWhy.set(values, plugWhyNote);
       } else {
         values = resolved[line.label];
       }
@@ -396,6 +400,7 @@ export function buildUsCashFlow(
         isSubtotal: line.kind === "subtotal",
         isHighlight: false,
         values,
+        ...ltmCell(values),
       });
     }
     items.push({
@@ -405,6 +410,7 @@ export function buildUsCashFlow(
       isSubtotal: true,
       isHighlight: true,
       values: totalVals,
+      ...ltmCell(totalVals),
     });
   }
 
@@ -416,6 +422,7 @@ export function buildUsCashFlow(
     return it?.values ?? {};
   };
   const fx: Record<string, number | null> = {};
+  let fxWhy: string | null = null;
   for (const lbl of labels) {
     if (fxReported[lbl] != null) {
       fx[lbl] = fxReported[lbl];
@@ -429,7 +436,10 @@ export function buildUsCashFlow(
       nc != null && s0 != null && s1 != null && s2 != null
         ? Math.round(nc - s0 - s1 - s2)
         : null;
+    if (lbl === LTM && fx[lbl] == null)
+      fxWhy = ltmWhy.get(netChange) ?? ltmWhy.get(fxReported) ?? "환율변동 효과 산정 불가(순증감·구간 합계 중 LTM 없음)";
   }
+  if (fxWhy) ltmWhy.set(fx, fxWhy);
   items.push({
     accountName: "환율변동 효과",
     accountId: "cf:fx",
@@ -437,6 +447,7 @@ export function buildUsCashFlow(
     isSubtotal: false,
     isHighlight: false,
     values: fx,
+    ...ltmCell(fx),
   });
   items.push({
     accountName: "현금및현금성자산 순증감",
@@ -445,6 +456,7 @@ export function buildUsCashFlow(
     isSubtotal: true,
     isHighlight: true,
     values: netChange,
+    ...ltmCell(netChange),
   });
   // ── 주석 항목 ──
   items.push({ accountName: "", accountId: "cf:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() });
@@ -459,8 +471,10 @@ export function buildUsCashFlow(
   const fcf: Record<string, number | null> = {};
   for (const l of labels)
     if (opCf[l] != null && capex[l] != null) fcf[l] = Math.round(opCf[l]! - Math.abs(capex[l]!));
-  items.push({ accountName: "자본적지출 (CapEx)", accountId: "cf:note:capex", depth: 1, isSubtotal: false, isHighlight: false, values: capex });
-  items.push({ accountName: "잉여현금흐름 (FCF)", accountId: "cf:note:fcf", depth: 1, isSubtotal: false, isHighlight: false, values: fcf });
+  const fcfWhy = ltmWhy.get(capex) ?? (labels.includes(LTM) && opCf[LTM] == null ? ltmWhy.get(valOf(BLOCKS[0].total.concepts)) : undefined);
+  if (fcfWhy) ltmWhy.set(fcf, fcfWhy);
+  items.push({ accountName: "자본적지출 (CapEx)", accountId: "cf:note:capex", depth: 1, isSubtotal: false, isHighlight: false, values: capex, ...ltmCell(capex) });
+  items.push({ accountName: "잉여현금흐름 (FCF)", accountId: "cf:note:fcf", depth: 1, isSubtotal: false, isHighlight: false, values: fcf, ...ltmCell(fcf) });
 
   const tax = valOf(TAX_PAID);
   const intp = valOf(INT_PAID);
@@ -472,6 +486,7 @@ export function buildUsCashFlow(
       isSubtotal: false,
       isHighlight: false,
       values: tax,
+      ...ltmCell(tax),
     });
   if (labels.some((l) => intp[l] != null))
     items.push({
@@ -481,6 +496,7 @@ export function buildUsCashFlow(
       isSubtotal: false,
       isHighlight: false,
       values: intp,
+      ...ltmCell(intp),
     });
 
   return {

@@ -18,6 +18,8 @@ export const COGS_NOTE = {
   synth: "본표 소계 없음 · 매출 − 매출원가",
   /** 유형 D 구성 규칙이 아직 없음 */
   pending: "구성 규칙 대기",
+  /** 유형 D 파생 열(Q4·LTM)의 구성 공시끼리 원가 항 합이 다름(재분류·재작성) — 한 열 = 한 기준이라 비움 */
+  mix: "구성 공시 간 원가 항목 재분류 — 기준 혼합",
   /** 본표 매출총이익이 매출 − 매출원가와 다름(본표 값 유지) */
   self: "회사 공시 자체",
   /** 원가 줄이 제외 항목을 둔 기준(UBER "exclusive of depreciation and amortization") */
@@ -60,10 +62,23 @@ export function cogsGp(cols: AssembledIs[], co: CompanyProfile, rev: MetricSerie
     if (entry) {
       if (!entry.rule) c = none("rule-pending", `${COGS_NOTE.pending} — 본표에 매출원가 줄 없음(cogs.md §3 유형 D)`);
       else {
-        const ls = entry.rule.terms.map((t) => ({ t, l: a.faceShape ? (t.concepts.map((c) => a.lines.find((l) => l.id === c && l.v != null)).find(Boolean) ?? null) : null }));
-        const miss = ls.filter((x) => !x.l).map((x) => x.t.group ?? x.t.concepts.join("|"));
+        // 항 값은 2층이 구성 공시마다 그 공시 본표의 후보 개념으로 읽어 둔다(is.ts readCogsTerms) — 입력은 항의 사실 참조 × 부호
+        const ts = a.cogsTerms ?? [];
+        const mixes = ts.filter((x) => x.mix).map((x) => x.mix!);
+        const miss = ts.length ? ts.filter((x) => x.v == null && !x.mix).map((x) => x.group) : ["구성 항 판독 없음"];
         composed = entry.rule.label;
-        c = miss.length ? none("rule", `구성 항 값 없음(${miss.join(",")})`) : sum(ls.map((x) => ({ l: x.l!, op: x.t.sign })), "rule", "term", `구성: ${entry.rule.label}`);
+        // 파생 열(Q4·LTM)의 구성 공시끼리 항 개념이 다름 — 합이 같은 대체(MCD 3줄 ↔ 1줄, ORCL·HLT 개명)는 값 + 주석, 합이 다른 재분류·
+        // 재작성(DAL·MAR 2026 10-Q)은 2층이 mix 로 표시 → 빈칸 + 사유(리드 결정 2026-09-27 — 합 동일성 기준)
+        const renamed = ts.filter((x) => x.alts.length > 1).map((x) => `${x.group}: ${x.alts.join(" ↔ ")}`);
+        const note = `구성: ${entry.rule.label}${renamed.length ? ` · 구성 공시마다 항 개념 다름 — 합 동일(${renamed.join("; ")})` : ""}`;
+        c = mixes.length
+          ? none("rule-mix", `${COGS_NOTE.mix}(${mixes.join("; ")})`)
+          : miss.length
+          ? none("rule", `구성 항 값 없음(${miss.join(",")}) — 구성 공시 본표에 그 줄이 없거나 값 없음`)
+          : {
+              ...base, v: ts.reduce((s, x) => s + x.sign * x.v!, 0), line: null, rule: "rule", note,
+              inputs: ts.flatMap((x) => x.inputs.map((i) => ({ ...i, op: (i.op * x.sign) as 1 | -1, role: `term:${x.group}` }))),
+            };
       }
     } else {
       const single = a.lines.find((l) => l.role === "cogs") ?? null;
@@ -101,6 +116,8 @@ export function cogsGp(cols: AssembledIs[], co: CompanyProfile, rev: MetricSerie
 
     // ── 조립 항등식 — 매출원가·매출총이익 줄이 걸린 불성립(매출 경로와 같은 방식, revenue.md §6.1) ──
     const used = new Set<number>();
+    // 구성 항이 읽은 본표 줄(열 구조에 있는 줄만) — 그 줄이 걸린 항등식 불성립도 매출원가 경로
+    if (c.rule === "rule") for (const x of a.cogsTerms ?? []) for (const id of x.concepts) used.add(a.lines.findIndex((l) => l.id === id));
     for (const v of [c, g]) {
       if (v.v == null) continue;
       if (v.line) used.add(a.lines.findIndex((l) => l.id === v.line));

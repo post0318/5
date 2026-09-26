@@ -45,6 +45,9 @@ export const COMMON_LABEL = "공통모드 — 독립 검증 아님";
  * 판본·반올림 재태깅 선택, 환율 곱, 그 밖에 검사 메모에 "공통모드"가 적힌 행(비영업 분리·은행 순수익 합성 등)
  * @param {{ layer: string, name: string, col: string, note?: string }} c
  */
+/** D형 구성 규칙 공통모드 사유 — 이 사유는 외부 1곳 일치로 풀리지 않는다(2곳 이상, 기간별 정확 일치 — handoff 공통모드 목록 5) */
+export const COGS_RULE_COMMON = "D형 매출원가 구성 규칙 = 앱과 같은 규칙표(외부 2곳 이상 정확 일치 시만 독립)";
+
 export function commonModeOf(c) {
   const n = c.name, note = c.note ?? "";
   // 20-F 환산 환율 = 연준 H.10 공식 고시(오너 결정 2026-09-27) — 검증기가 FRED 에서 따로 받아 같은 정의로 다시 계산한 값과 정확 대조하므로
@@ -60,6 +63,8 @@ export function commonModeOf(c) {
   if (/^결산일 주식수 /.test(n)) return "결산일 주식수 후보 순서·1.2배 검사 = 앱과 같은 규칙";
   if (/^결산일 시가총액 /.test(n)) return "Yahoo 부동소수 종가·분할 되돌림·주식수 후보 순서 = 앱과 같은 데이터·규칙";
   if (/^감가상각비 앱 = SEC 현금흐름표/.test(n)) return "현금흐름표 감가상각 줄 선택 규칙 = 앱과 같은 규칙";
+  // D형 구성 규칙 행 — 앱과 검증기가 같은 규칙표(src 표 ↔ scripts/metrics/cogs-rules.json)를 쓴다. 외부 2곳 이상 정확 일치일 때만 독립(COGS_RULE_COMMON)
+  if (c.layer === "A" && /매출원가|매출총이익/.test(n) && /구성 규칙/.test(note)) return COGS_RULE_COMMON;
   if (c.layer === "A" && /매출원가|매출총이익/.test(n)) return "본표 원가 판독 = 앱 identifyCogs 와 같은 알고리즘";
   if (/Q4 = 사업연도 − 9개월/.test(n) || (c.layer === "A" && /당기 ?누적|− 9개월/.test(note))) return "Q4·LTM 식(사업연도 − 9개월 / 사업연도 + 당기 누적 − 전년 동기) = 앱과 같은 식";
   // 판본 선택이 공시 원본 decimals 로 독립 확인된 행(검증기 applyVintage — "판본 decimals 독립 확인")은 이 사유에서 뺀다(오너 승인 2단계)
@@ -123,6 +128,8 @@ export function buildAudit({ app, cols, checks, review, closed }) {
       const commonA = aRow?.status === "common";
       // 공통모드 소스(일치 또는 원인 규칙이 공통모드) · 외부 정밀도 부족(표기 단위 반올림만) — ①·② 로 세지 않는다
       const cmSrc = ext?.commonMode ?? {}, naSrc = ext?.precisionNa ?? {};
+      // 검증불가 사유 이름 — 인포맥스 자체 환율(비공개) 규칙이면 "외부 환율 비공개", 그 밖엔 "외부 정밀도 부족"(표기 단위 반올림)
+      const naLab = (n) => (/자체 환율\(비공개\)/.test(naSrc[n] ?? "") ? "외부 환율 비공개" : "외부 정밀도 부족");
       if (fails.length) {
         verdict = "③";
         note = `${fails[0].layer}층 ${fails[0].name}${fails[0].note ? `: ${fails[0].note}` : ""}${fails.length > 1 ? ` 외 ${fails.length - 1}건` : ""}`;
@@ -132,33 +139,33 @@ export function buildAudit({ app, cols, checks, review, closed }) {
         const cls = ext.revenueClass ?? ext.metricClass;
         const of = (k) => Object.keys(cls).filter((n) => cls[n] === k);
         // 닫히지 않은 지표(매출원가·매출총이익)의 ③ 은 다른 미규명 차이처럼 "미결"로 둔다(닫힌 지표만 ③)
-        const extra = [...of("공통모드").map((n) => `${n} 공통모드`), ...of("NA").map((n) => `${n} 외부 정밀도 부족`)].join(", ");
+        const extra = [...of("공통모드").map((n) => `${n} 공통모드`), ...of("NA").map((n) => `${n} ${naLab(n)}`)].join(", ");
         if (of("③").length) { verdict = isClosed ? "③" : "미결"; note = `미규명 차이: ${of("③").map((n) => `${n} ${ext.causes?.[n] ?? "분해식 없음"}`).join("; ")}`; }
         else if (of("②").length || of("외부단독이탈").length) {
           verdict = "②";
           note = [...of("②").map((n) => `${n}: ${ext.causes?.[n] ?? ""}`), ...of("외부단독이탈").map((n) => `${n}: 외부 단독 이탈${ext.causes?.[n] ? ` — ${ext.causes[n]}` : ""}`), extra].filter(Boolean).join("; ");
         } else if (of("①").length) { verdict = "①"; note = `${of("①").length}곳 일치${passedA ? " · 앱 = SEC" : ""}${extra ? ` · ${extra}` : ""}`; }
         else if (of("공통모드").length) { verdict = COMMON_VERDICT; note = `${COMMON_LABEL}: ${of("공통모드").map((n) => `${n} ${cmSrc[n] ?? ext.causes?.[n] ?? ""}`).join("; ")}`; }
-        else { verdict = "NA"; note = `검증불가(외부 정밀도 부족): ${of("NA").map((n) => `${n} ${naSrc[n] ?? ""}`).join("; ")}`; }
+        else { verdict = "NA"; note = of("NA").map((n) => `검증불가(${naLab(n)}): ${n} ${naSrc[n] ?? ""}`).join("; "); }
       } else if (unmatched.some((n) => !cmSrc[n] && !naSrc[n])) {
         const explained = new Set([...(ext.explained ?? []), ...(ext.outliers ?? [])]);
         const indep = unmatched.filter((n) => !cmSrc[n] && !naSrc[n]);
         if (indep.every((n) => explained.has(n))) {
           verdict = "②";
-          note = [...indep.map((n) => `${n}: ${ext.causes?.[n] ?? "원인 확인"}`), ...unmatched.filter((n) => cmSrc[n]).map((n) => `${n} 공통모드`), ...unmatched.filter((n) => naSrc[n]).map((n) => `${n} 외부 정밀도 부족`)].join("; ");
+          note = [...indep.map((n) => `${n}: ${ext.causes?.[n] ?? "원인 확인"}`), ...unmatched.filter((n) => cmSrc[n]).map((n) => `${n} 공통모드`), ...unmatched.filter((n) => naSrc[n]).map((n) => `${n} ${naLab(n)}`)].join("; ");
         } else {
           verdict = isClosed ? "③" : "미결";
           const gap = (n) => (ext.ours != null && ext.sources[n] ? ` 차 ${(((ext.ours - ext.sources[n]) / Math.abs(ext.sources[n])) * 100).toFixed(2)}%` : "");
           note = `원인 미규명: ${unmatched.filter((n) => !explained.has(n)).map((n) => `${n}${gap(n)}${ext.causes?.[n] ? ` (${ext.causes[n]})` : ext.definitionDiffs?.[n] ? ` (${ext.definitionDiffs[n]})` : ""}`).join(", ")}`;
         }
       } else if ((ext?.matched ?? []).length) {
-        const rest = unmatched.map((n) => `${n} ${cmSrc[n] ? "공통모드" : "외부 정밀도 부족"}`).join(", ");
+        const rest = unmatched.map((n) => `${n} ${cmSrc[n] ? "공통모드" : naLab(n)}`).join(", ");
         verdict = "①"; note = `${ext.matched.length}곳 일치${passedA ? " · 앱 = SEC" : ""}${rest ? ` · ${rest}` : ""}`;
       } else if (unmatched.some((n) => cmSrc[n])) {
         // 외부 값이 있지만 공통모드 소스뿐(현재 주식수 = 인포맥스, 원인 규칙 ⑥·⑩·R1·R6')
         verdict = COMMON_VERDICT; note = `${COMMON_LABEL}: ${unmatched.filter((n) => cmSrc[n]).map((n) => `${n} ${cmSrc[n]}`).join("; ")}`;
       } else if (unmatched.length) {
-        verdict = "NA"; note = `검증불가(외부 정밀도 부족): ${unmatched.map((n) => `${n} ${naSrc[n]}`).join("; ")}`;
+        verdict = "NA"; note = unmatched.map((n) => `검증불가(${naLab(n)}): ${n} ${naSrc[n]}`).join("; ");
       } else if (commonA) {
         verdict = COMMON_VERDICT; note = `${COMMON_LABEL} · SEC 대조가 앱과 같은 규칙 · 외부 정확 일치 없음`;
       } else if (passedA) {

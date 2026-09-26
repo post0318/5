@@ -9,7 +9,7 @@ import { estimatesToUsd } from "@/lib/markets/us/edgar-foreign";
 import { buildUsHighlights } from "@/lib/markets/us/edgar-highlights";
 import { buildUsBankHighlights, isFinancialCompany } from "@/lib/markets/us/edgar-highlights-bank";
 import { blankLtmColumnIfFilingsUnavailable } from "@/lib/markets/us/sec-unavailable";
-import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
+import { loadClassAFactsMarked } from "@/lib/markets/us/class-facts-loader";
 import { loadCaptiveDebt } from "@/lib/markets/us/edgar-captive";
 import { reitOpUnits } from "@/lib/markets/us/edgar-ev";
 import { resolveCorpCode } from "@/lib/markets/kr/corpcode";
@@ -120,16 +120,19 @@ export async function GET(
       );
     }
 
-    const factsRes = await fetchUsCompanyFacts(sym);
-    const [quote, estimatesRaw, consensus, classFacts, sic] = await Promise.all([
+    const factsRes0 = await fetchUsCompanyFacts(sym);
+    const [quote, estimatesRaw, consensus, cls, sic] = await Promise.all([
       getEodQuote(market, sym, { yahooOverride: yahoo }).catch(() => null),
       fetchYahooEstimates(market, sym, yahoo).catch(() => null),
       fetchForwardConsensus(market, sym, yahoo).catch(() => null),
-      loadClassAFacts(factsRes.cik, factsRes.facts).catch(() => null),
+      // 듀얼클래스 보정 — 원본 판독 실패는 facts 에 기록(클래스별 값이 필요한 칸 공란 + 사유)
+      loadClassAFactsMarked(factsRes0.cik, factsRes0.facts),
       fetchUsSic(sym).catch(() => null),
     ]);
-    // EV 브릿지 맥락 — 금융 자회사 부문 차입금(XBRL 인스턴스), UP-REIT 파트너 지분
-    const captive = await loadCaptiveDebt(factsRes.cik, sic).catch(() => null);
+    const factsRes = { cik: factsRes0.cik, facts: cls.facts };
+    const classFacts = cls.classFacts;
+    // EV 브릿지 맥락 — 금융 자회사 부문 차입금(XBRL 인스턴스), UP-REIT 파트너 지분. 판별 조회 실패 = "unknown"(EV 미표시)
+    const captive = await loadCaptiveDebt(factsRes.cik, sic).catch(() => "unknown" as const);
     // 외화 공시 기업 예상치 → USD(edgar-foreign.ts). 환산 실패 시 예상치 숨김(원통화 숫자를 USD 로 섞지 않음)
     const estimates = estimatesRaw ? await estimatesToUsd(estimatesRaw, factsRes.facts).catch(() => null) : null;
     const opUnits = reitOpUnits(sic, consensus?.sharesOutstanding, consensus?.impliedSharesOutstanding);

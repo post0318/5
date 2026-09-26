@@ -17,13 +17,13 @@
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { buildShareResolver } from "./edgar-shares";
-import { fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
+import { fiscalYearOf, instantOn, ltmAnchor, ltmFlowOf } from "./edgar-series";
 import {
   fyEps,
-  ltmEps,
+  ltmEpsOf,
   netIncomeAnnualByYear,
   netIncomeToParentEntries,
-  parentEquityAt,
+  parentEquityOf,
 } from "./edgar-pershare";
 import type { FinancialHighlights, HighlightColumn, HighlightRow, HighlightEstimatePeriod } from "./edgar-highlights";
 import {
@@ -34,8 +34,6 @@ import {
 import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm } from "./fin-revenue";
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-// LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)
-const INTERIM_FORMS = LTM_INTERIM_FORMS;
 const DEPOSITS = ["Deposits"];
 
 export { isFinancialCompany };
@@ -47,10 +45,6 @@ function isFullYear(e: FactUnitEntry): boolean {
   if (!e.start) return false;
   const d = daysBetween(e.start, e.end);
   return d >= 300 && d <= 400;
-}
-function shiftYear(iso: string, n: number): string {
-  const [y, m, d] = iso.split("-");
-  return `${Number(y) + n}-${m}-${d}`;
 }
 function unitEntries(facts: CompanyFacts, concept: string, unit: string): FactUnitEntry[] {
   return facts.facts["us-gaap"]?.[concept]?.units?.[unit] ?? [];
@@ -80,18 +74,6 @@ function annualAt(series: { year: number; val: number }[], year: number): number
   return series.find((s) => s.year === year)?.val ?? null;
 }
 
-function instantAt(entries: FactUnitEntry[], asOf: string, maxStaleDays?: number): number | null {
-  let best: { val: number; end: string; filed: string } | null = null;
-  for (const e of entries) {
-    if (e.start) continue;
-    if (e.end > asOf) continue;
-    if (maxStaleDays != null && daysBetween(e.end, asOf) > maxStaleDays) continue;
-    const filed = e.filed ?? "";
-    if (!best || e.end > best.end || (e.end === best.end && filed >= best.filed))
-      best = { val: e.val, end: e.end, filed };
-  }
-  return best?.val ?? null;
-}
 function latestInstantEnd(entries: FactUnitEntry[]): string | null {
   let best: string | null = null;
   for (const e of entries) {
@@ -99,27 +81,6 @@ function latestInstantEnd(entries: FactUnitEntry[]): string | null {
     if (!best || e.end > best) best = e.end;
   }
   return best;
-}
-function ttm(entries: FactUnitEntry[]): number | null {
-  const annuals = entries
-    .filter((e) => e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form))
-    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b));
-  const fy = annuals[0];
-  if (!fy?.start) return null;
-  const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
-  const cur = interims
-    .filter((e) => Math.abs(daysBetween(fy.end, e.start!)) <= 12 && e.end > fy.end)
-    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
-  if (!cur?.start) return ttmCombine(fy);
-  const wS = shiftYear(cur.start, -1);
-  const wE = shiftYear(cur.end, -1);
-  const prior = interims
-    .filter(
-      (e) => e.start && Math.abs(daysBetween(wS, e.start)) <= 12 && Math.abs(daysBetween(wE, e.end)) <= 12,
-    )
-    .sort((a, b) => Math.abs(daysBetween(wE, a.end)) - Math.abs(daysBetween(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
-  if (!prior) return ttmCombine(fy);
-  return ttmCombine(fy, cur, prior);
 }
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   let best: number | null = null;
@@ -140,9 +101,12 @@ export function buildUsBankHighlights(
   facts: CompanyFacts,
   bars: QuoteBar[],
   estimates: HighlightEstimatePeriod[],
+  /** Yahoo 현재 주식수 힌트 — ADR 비율 판정에만(주식수 값으로 대신 쓰지 않음, edgar-shares.ts) */
   fallbackShares?: number | null,
 ): FinancialHighlights {
   const notes: string[] = [];
+  // LTM 흐름 — edgar-series.ts 단일 함수(550일 규칙·분기 누락 공란 포함 — 예전 은행 사본엔 550일 규칙이 없었다)
+  const anchor = ltmAnchor(facts);
   // 순수익 = 재무 5층 구조 매출 지표(fin-revenue.ts, 은행 유형 규칙) — 손익계산서·재무분석과 같은 값·같은 연도 열
   const revEnds = revAnnualEnds(facts.revenue);
   const revSeries = [...revAnnualMap(facts.revenue)]
@@ -216,8 +180,16 @@ export function buildUsBankHighlights(
     col: HighlightColumn,
   ): number | null => {
     if (col.kind === "fy") return annualAt(ser, Number(col.key.slice(2)));
-    if (col.kind === "ltm") return ttm(entries);
+    if (col.kind === "ltm") return ltmFlowOf(entries, anchor).value;
     return null;
+  };
+  const ltmIdxC = columns.findIndex((c) => c.kind === "ltm");
+  /** LTM 칸 사유(흐름이 비었을 때) */
+  const ltmNote = (entries: FactUnitEntry[]): (string | null)[] => {
+    const o: (string | null)[] = Array(nCol).fill(null);
+    const r = ltmFlowOf(entries, anchor);
+    if (ltmIdxC >= 0 && r.value == null && r.reason) o[ltmIdxC] = r.reason;
+    return o;
   };
 
   // ── 규모 지표 (시가총액/자기자본/예금/자산) ──────────────────────
@@ -227,6 +199,9 @@ export function buildUsBankHighlights(
   const assets = blank();
   const priceByCol = blank();
   const sharesByCol = blank();
+  const nMktcap: (string | null)[] = Array(nCol).fill(null);
+  const nEquity: (string | null)[] = Array(nCol).fill(null);
+  const nBal: (string | null)[] = Array(nCol).fill(null);
 
   columns.forEach((col, i) => {
     if (col.kind === "estimate") return;
@@ -234,17 +209,24 @@ export function buildUsBankHighlights(
     const isLtm = col.kind === "ltm";
     const price = isLtm ? (lastBar?.close ?? null) : closeOnOrBefore(bars, asOf);
     priceByCol[i] = price;
-    equity[i] = parentEquityAt(facts, asOf);
-    deposits[i] = instantAt(depositsE, asOf);
-    assets[i] = instantAt(assetsE, asOf);
+    const eq = parentEquityOf(facts, asOf);
+    equity[i] = eq.value;
+    if (eq.value == null) nEquity[i] = eq.reason;
+    // 예금·자산 — 그 기준일(±6일) 값만(이전 가장 최근 값으로 대신하지 않음 — 그림자 채우기 금지)
+    deposits[i] = instantOn(depositsE, asOf);
+    assets[i] = instantOn(assetsE, asOf);
+    if (deposits[i] == null && depositsE.length) nBal[i] = `재무상태표에 없음(${asOf})`;
     const shares = isLtm
       ? shareRes.current()
       : shareRes.atFiscalYearEnd(Number(col.key.slice(2)), asOf);
+    nMktcap[i] = isLtm ? shareRes.currentNote() : shareRes.yearEndNote(Number(col.key.slice(2)));
+    if (price == null) nMktcap[i] = "주가 없음";
     sharesByCol[i] = shares;
     marketCap[i] = price != null && shares != null ? price * shares : null;
   });
 
-  const currentShares = shareRes.current() ?? fallbackShares ?? null;
+  // 현재 주식수 — 공통 기준만(Yahoo 힌트로 대신하지 않음)
+  const currentShares = shareRes.current();
 
   // ── 손익 (순수익 → 충당금전이익 → 영업이익 → 순이익) ─────────────
   const netRevenue = columns.map((col) =>
@@ -262,22 +244,30 @@ export function buildUsBankHighlights(
   );
   const provision = columns.map((col) => flowVal(S.provision, E.provision, col));
   const opIncome = preProvision.map((v, i) => (v != null && provision[i] != null ? v - provision[i]! : null));
-  const netIncome = columns.map((col) => {
+  const nNetIncome = ltmNote(E.netIncome);
+  const netIncome = columns.map((col, i) => {
     if (col.kind === "estimate") {
-      const eps = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
-      return eps != null && currentShares != null ? eps * currentShares : null;
+      // 예상 순이익 = 무료 컨센서스 없음. "예상 EPS × 현재 주식수"로 대신하지 않는다(그림자 채우기 금지)
+      nNetIncome[i] = "예상 순이익: 무료 컨센서스 없음(EPS × 현재 주식수로 대신하지 않음)";
+      return null;
     }
     return flowVal(S.netIncome, E.netIncome, col);
   });
-  const eps = columns.map((col) => {
+  const nEps: (string | null)[] = Array(nCol).fill(null);
+  const eps = columns.map((col, i) => {
     if (col.kind === "estimate")
       return estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
-    if (col.kind === "ltm") return ltmEps(facts, currentShares);
-    const i = columns.indexOf(col);
-    return fyEps(facts, Number(col.key.slice(2)), {
+    if (col.kind === "ltm") {
+      const le = ltmEpsOf(facts, currentShares);
+      nEps[i] = le.value == null ? le.reason : shareRes.currentNote();
+      return le.value;
+    }
+    const r = fyEps(facts, Number(col.key.slice(2)), {
       fyShares: sharesByCol[i],
       fyNetIncome: netIncome[i],
-    }).eps;
+    });
+    nEps[i] = r.note; // 원인별 라벨(근사·클래스 등, G4)
+    return r.eps;
   });
 
   const firstFy = columns[0]?.kind === "fy" ? Number(columns[0].key.slice(2)) : null;
@@ -288,21 +278,25 @@ export function buildUsBankHighlights(
       return yoy(v, annualAt(series, firstFy - 1));
     });
 
+  const nNie = ltmNote(E.noninterestExpense);
+  const nProv = ltmNote(E.provision);
+  const inherit = (vals: (number | null)[], ...srcs: (string | null)[][]): (string | null)[] =>
+    vals.map((v, i) => (v != null ? null : (srcs.map((x) => x[i]).find((x) => x) ?? null)));
   const rows: HighlightRow[] = [
-    { key: "mktcap", label: "시가총액", format: "money", values: marketCap },
-    { key: "equity", label: "자기자본 장부가치", format: "money", values: equity },
-    { key: "deposits", label: "총예금", format: "money", values: deposits },
+    { key: "mktcap", label: "시가총액", format: "money", values: marketCap, cellNotes: nMktcap },
+    { key: "equity", label: "자기자본 장부가치", format: "money", values: equity, cellNotes: nEquity },
+    { key: "deposits", label: "총예금", format: "money", values: deposits, cellNotes: nBal },
     { key: "assets", label: "자산총계", format: "money", emphasis: true, values: assets },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
     { key: "net_revenue", label: "순수익", format: "money", values: netRevenue },
     { key: "net_revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(netRevenue, S.netRevenue) },
-    { key: "pre_provision", label: "충당금전이익", format: "money", values: preProvision },
+    { key: "pre_provision", label: "충당금전이익", format: "money", values: preProvision, cellNotes: inherit(preProvision, nNie) },
     { key: "pre_provision_m", label: "마진 %", format: "pct", indent: true, values: preProvision.map((v, i) => margin(v, netRevenue[i])) },
-    { key: "op_income", label: "영업이익", format: "money", values: opIncome },
+    { key: "op_income", label: "영업이익", format: "money", values: opIncome, cellNotes: inherit(opIncome, nNie, nProv) },
     { key: "op_income_m", label: "마진 %", format: "pct", indent: true, values: opIncome.map((v, i) => margin(v, netRevenue[i])) },
-    { key: "ni", label: "순이익", format: "money", values: netIncome },
+    { key: "ni", label: "순이익", format: "money", values: netIncome, cellNotes: nNetIncome },
     { key: "ni_m", label: "마진 %", format: "pct", indent: true, values: netIncome.map((v, i) => margin(v, netRevenue[i])) },
-    { key: "eps", label: "EPS (희석)", format: "eps", values: eps },
+    { key: "eps", label: "EPS (희석)", format: "eps", values: eps, cellNotes: nEps },
     { key: "eps_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(eps, S.eps) },
   ];
 
@@ -313,10 +307,13 @@ export function buildUsBankHighlights(
   const per = columns.map((col, i) => ratio(col.kind === "estimate" ? priceByCol[ltmIdx] : priceByCol[i], eps[i]));
   const pbr = columns.map((col, i) => (col.kind === "estimate" ? null : ratio(marketCap[i], equity[i])));
   const psr = columns.map((col, i) => ratio(col.kind === "estimate" ? curMcap : marketCap[i], netRevenue[i]));
+  const labelOrWhy = (vals: (number | null)[], lab: (string | null)[], whys: (string | null)[][]) =>
+    vals.map((v, i) => lab[i] ?? (v == null ? (whys.map((w) => w[i]).find((x) => x) ?? null) : null));
+  const mcLab = nMktcap.map((n, i) => (marketCap[i] != null ? n : null));
   const valuationRows: HighlightRow[] = [
-    { key: "per", label: "PER", format: "mult", values: per },
-    { key: "pbr", label: "PBR", format: "mult", values: pbr },
-    { key: "psr", label: "PSR (순수익 기준)", format: "mult", values: psr },
+    { key: "per", label: "PER", format: "mult", values: per, cellNotes: labelOrWhy(per, nEps.map((n, i) => (eps[i] != null ? n : null)), [nEps]) },
+    { key: "pbr", label: "PBR", format: "mult", values: pbr, cellNotes: labelOrWhy(pbr, mcLab, [nMktcap, nEquity]) },
+    { key: "psr", label: "PSR (순수익 기준)", format: "mult", values: psr, cellNotes: labelOrWhy(psr, mcLab, [nMktcap]) },
   ];
 
   notes.push("금융회사(은행·카드사) 전용 레이아웃 — 순수익=매출−이자비용(GAAP RevenuesNetOfInterestExpense)");
@@ -329,6 +326,20 @@ export function buildUsBankHighlights(
   if (estCols.length)
     notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
 
+  // 보조행(마진%·성장률%)의 빈칸 — 바로 위 기준 행의 칸 사유를 물려준다(빈칸 사유가 화면에서 빠지지 않게)
+  {
+    let base: HighlightRow | null = null;
+    for (const r of rows) {
+      if (r.spacer) continue;
+      if (!r.indent) {
+        base = r;
+        continue;
+      }
+      if (!base?.cellNotes) continue;
+      const bn = base.cellNotes;
+      r.cellNotes = r.values.map((v, i) => r.cellNotes?.[i] ?? (v == null ? (bn[i] ?? null) : null));
+    }
+  }
   return {
     currency: "USD",
     unitLabel: "USD 백만",

@@ -27,6 +27,8 @@ export interface CurrentShares {
   /** 주식수 기준일 (YYYY-MM-DD). Yahoo 는 알 수 없어 null */
   date: string | null;
   source: "infomax" | "yahoo";
+  /** 조회일(YYYY-MM-DD) — Yahoo 는 기준일을 몰라 화면 라벨에 조회일을 쓴다(오너 승인 근사 G2) */
+  fetched?: string;
 }
 
 const IM_BASE = "https://globalmonitor.einfomax.co.kr";
@@ -77,7 +79,7 @@ async function load(symbol: string): Promise<{ data: CurrentShares | null; degra
   }
   try {
     const y = await fetchYahooShares(symbol);
-    return { data: y != null && y > 0 ? { val: y, date: null, source: "yahoo" } : null, degraded };
+    return { data: y != null && y > 0 ? { val: y, date: null, source: "yahoo", fetched: new Date().toISOString().slice(0, 10) } : null, degraded };
   } catch {
     return { data: null, degraded: true };
   }

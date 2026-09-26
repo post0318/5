@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AdminVerifyRow } from "@/app/api/admin/verify/route";
-import { AUDIT_VERDICT_LABEL, type AuditRow } from "@/lib/db/verify-results";
+import { AUDIT_VERDICT_LABEL, FOCUS_METRICS, isFocusCheck, isFocusExternal, isFocusMetric, type AuditRow } from "@/lib/verify-audit";
 
 /**
  * 재무 숫자 검증 결과 — 관리자만(오너 결정 2026-09-24). 검증 스크립트가 GitHub Actions 에서 매일 전 종목,
@@ -22,15 +22,30 @@ import { AUDIT_VERDICT_LABEL, type AuditRow } from "@/lib/db/verify-results";
 type Filter = "issues" | "all" | "pending";
 const SOURCES = ["Yahoo", "StockAnalysis", "인포맥스"] as const;
 
+/** 작업 지표(FOCUS_METRICS)와 나머지(미결 지표)로 건수를 나눈다 — 상태 판정은 작업 지표만(오너 지시 2026-09-27) */
+function split(r: AdminVerifyRow) {
+  const x = r.result;
+  if (!x) return null;
+  const audit = x.audit ?? [];
+  const focusFail = x.fails.filter((c) => isFocusCheck(c.name)).length + audit.filter((a) => isFocusMetric(a.metric) && a.verdict === "③").length;
+  const focusOpen = audit.filter((a) => isFocusMetric(a.metric) && a.verdict === "미결").length;
+  const focusNa = x.unverifiable.filter((c) => isFocusCheck(c.name)).length;
+  const focusCommon = (x.common ?? []).filter((c) => isFocusCheck(c.name)).length + x.external.filter((e) => isFocusExternal(e.item) && (e.verdict ?? "").startsWith(AUDIT_VERDICT_LABEL.COMMON)).length;
+  const rest =
+    x.fails.filter((c) => !isFocusCheck(c.name)).length +
+    x.unverifiable.filter((c) => !isFocusCheck(c.name)).length +
+    x.external.filter((e) => !isFocusExternal(e.item) && /불일치/.test(e.verdict ?? "")).length;
+  return { focusFail, focusOpen, focusNa, focusCommon, rest };
+}
+
 function status(r: AdminVerifyRow): { label: string; tone: "bad" | "warn" | "ok" | "pending" } {
   if (r.pending || !r.result) return { label: "미검증", tone: "pending" };
-  const c = r.result.counts;
-  // 검사 실패 없이 실행 오류만 있으면 "실패 0" 이 아니라 오류 건수를 보인다(판정은 같다)
-  if (c.fail > 0 || r.result.errors.length) return { label: c.fail > 0 ? `실패 ${c.fail}` : `오류 ${r.result.errors.length}`, tone: "bad" };
-  if (c.extMismatch > 0 || c.unverifiable > 0) return { label: "확인 필요", tone: "warn" };
+  const c = split(r)!;
+  if (c.focusFail > 0) return { label: `실패 ${c.focusFail}`, tone: "bad" };
+  if (r.result.errors.length) return { label: `오류 ${r.result.errors.length}`, tone: "bad" };
+  if (c.focusOpen > 0) return { label: `미결 ${c.focusOpen}`, tone: "warn" };
   // 공통모드(독립 검증 아님)는 실패가 아니지만 통과로 세지 않는다 — 건수를 보인다
-  const cm = (c.common ?? 0) + (c.extCommon ?? 0);
-  return { label: cm ? `정상 · 공통모드 ${cm}` : "정상", tone: "ok" };
+  return { label: c.focusCommon ? `정상 · 공통모드 ${c.focusCommon}` : "정상", tone: "ok" };
 }
 
 const TONE: Record<string, string> = {
@@ -234,7 +249,10 @@ export function VerifyBoard() {
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
-        <CardTitle className="text-sm">유니버스 종목 재무 검증</CardTitle>
+        <div>
+          <CardTitle className="text-sm">유니버스 종목 재무 검증</CardTitle>
+          <p className="text-muted-foreground mt-0.5 text-xs">상태 판정 = 작업 지표({FOCUS_METRICS.join("·")})만 · 다른 지표 경고는 「미결 지표」 건수</p>
+        </div>
         <div className="flex gap-1">
           {([["issues", `확인 필요 ${counts.issues}`], ["pending", `미검증 ${counts.pending}`], ["all", `전체 ${counts.all}`]] as const).map(([k, label]) => (
             <button
@@ -260,8 +278,8 @@ export function VerifyBoard() {
                 <TableHead>종목</TableHead>
                 <TableHead>상태</TableHead>
                 <TableHead className="text-right">실패</TableHead>
-                <TableHead className="text-right">외부 불일치</TableHead>
                 <TableHead className="text-right">검증불가</TableHead>
+                <TableHead className="text-right">미결 지표</TableHead>
                 <TableHead className="text-right">검증 시각</TableHead>
               </TableRow>
             </TableHeader>
@@ -269,7 +287,7 @@ export function VerifyBoard() {
               {rows.map((r) => {
                 const key = `${r.market}:${r.symbol}`;
                 const s = status(r);
-                const c = r.result?.counts;
+                const c = split(r);
                 return (
                   <Fragment key={key}>
                     <TableRow className="cursor-pointer" onClick={() => setOpen(open === key ? null : key)}>
@@ -279,9 +297,9 @@ export function VerifyBoard() {
                         {r.name && <span className="text-muted-foreground ml-1.5 text-xs">{r.name}</span>}
                       </TableCell>
                       <TableCell><Badge variant="secondary" className={TONE[s.tone]}>{s.label}</Badge></TableCell>
-                      <TableCell className="tnum text-right">{c ? c.fail : "—"}</TableCell>
-                      <TableCell className="tnum text-right">{c ? c.extMismatch : "—"}</TableCell>
-                      <TableCell className="tnum text-right">{c ? c.unverifiable : "—"}</TableCell>
+                      <TableCell className="tnum text-right">{c ? c.focusFail : "—"}</TableCell>
+                      <TableCell className="tnum text-right">{c ? c.focusNa : "—"}</TableCell>
+                      <TableCell className="tnum text-muted-foreground text-right">{c ? c.rest : "—"}</TableCell>
                       <TableCell className="tnum text-muted-foreground text-right text-xs">{r.result ? fmtWhen(r.result.runAt) : "—"}</TableCell>
                     </TableRow>
                     {open === key && (

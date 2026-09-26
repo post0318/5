@@ -75,6 +75,20 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
     const margin = (n: number | null | undefined) => (n != null && rev ? n / rev : null);
     const warnings = [...ov.warnings];
     if (isKr && krMetrics?.last == null) warnings.push("시세 조회 실패");
+    // 미국 — 빈 칸·근사 칸의 사유(그림자 채우기 금지, 2026-09-27): 멀티플은 multiples.reasons, 매출·마진은 TTM reasons
+    if (isUs) {
+      const mr = ov.multiples?.reasons ?? {};
+      const tr = usTtm?.reasons ?? {};
+      const push = (label: string, r: string | undefined) => { if (r) warnings.push(`${label}: ${r}`); };
+      if (!ov.multiples && usTtm?.error) push("멀티플", usTtm.error);
+      push("PER", mr.per);
+      push("PER(TTM)", mr.perTtm);
+      push("PBR", mr.pbr);
+      push("시가총액", mr.marketCap);
+      push("매출(LTM)", tr.revenue);
+      push("영업이익률", tr.opIncome);
+      push("순이익률", tr.netIncome);
+    }
     return {
       ...base,
       name: item.name ?? ov.profile?.name ?? null,

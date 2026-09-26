@@ -13,7 +13,7 @@ import {
   type EvResolver,
 } from "./us/edgar-ev";
 import { loadCaptiveDebt } from "./us/edgar-captive";
-import { loadClassAFacts } from "./us/class-facts-loader";
+import { loadClassAFactsMarked } from "./us/class-facts-loader";
 import { buildShareResolver, secBasisBars, type ShareResolver } from "./us/edgar-shares";
 import { revAnnualMap } from "./us/fin-revenue";
 import { estimatesToUsd } from "./us/edgar-foreign";
@@ -36,7 +36,7 @@ import { isFinancialCompany } from "./us/edgar-financial";
 import { fyEps, netIncomeAnnualByYear, parentEquityAt, positiveRatio } from "./us/edgar-pershare";
 import type { ClassAFacts } from "./us/edgar-classfacts";
 import type { CompanyFacts } from "./us/edgar";
-import { unavailableNote, unavailableOn } from "./us/sec-unavailable";
+import { unavailableNote } from "./us/sec-unavailable";
 import {
   AdapterError,
   type DeepLink,
@@ -155,6 +155,8 @@ export interface ConsensusRow {
   evEbitda: number | null;
   /** PER/PBR 계산에 쓴 주가 (실적행=연말가, 추정행=현재가) */
   priceBasis: number | null;
+  /** 칸 주석 — 빈칸 사유·근사 라벨(그림자 채우기 금지, 2026-09-27). 화면은 notes 에 연도별로 모아 보여준다 */
+  cellNotes?: Partial<Record<"eps" | "bps" | "per" | "pbr" | "evEbitda" | "opIncome" | "netIncome", string>>;
 }
 
 export interface ConsensusData {
@@ -217,7 +219,7 @@ export async function getConsensusData(
   // SEC XBRL 이 없는 ADR(SKHY) — 실적은 본국 DART 재무를 USD·ADR 기준으로 환산해 한국 경로로
   // 계산한다(us/dart-adr.ts). 시세·예상치는 ADR 그대로.
   const dartAdr = market === "us" ? dartAdrOf(symbol) : null;
-  let shares =
+  const shares =
     quote?.sharesOutstanding ??
     (quote?.marketCap != null && price ? quote.marketCap / price : null);
 
@@ -242,15 +244,21 @@ export async function getConsensusData(
     facts: CompanyFacts;
     classFacts: ClassAFacts | null;
   } | null = null;
+  // SEC 조회 실패(us = null)면 미국 실적 파생 지표(영업이익·순이익·EPS·BPS·PER·PBR·ROE·EV/EBITDA)를 비운다 — 연간 재무제표
+  // 계정명 매칭·부채총계 EV 로 대신하지 않는다(그림자 채우기 금지, 2026-09-27)
+  let usFailed: string | null = null;
   if (market === "us" && !dartAdr) {
     try {
-      const { cik, facts } = await fetchUsCompanyFacts(symbol);
+      const { cik, facts: facts0 } = await fetchUsCompanyFacts(symbol);
       const sic = await fetchUsSic(symbol).catch(() => null);
-      const [captive, fwd, classFacts] = await Promise.all([
-        loadCaptiveDebt(cik, sic).catch(() => null),
+      const [captive, fwd, cls] = await Promise.all([
+        // 판별 조회 실패 = "unknown"(금융 자회사 없음으로 단정하지 않음 — EV 미표시)
+        loadCaptiveDebt(cik, sic).catch(() => "unknown" as const),
         fetchForwardConsensus(market, symbol, yahooOverride).catch(() => null),
-        loadClassAFacts(cik, facts).catch(() => null),
+        loadClassAFactsMarked(cik, facts0),
       ]);
+      const facts = cls.facts;
+      const classFacts = cls.classFacts;
       const opUnits = reitOpUnits(sic, fwd?.sharesOutstanding, fwd?.impliedSharesOutstanding);
       us = {
         // 힌트는 하이라이트·재무분석 라우트와 같은 규칙(us/shares-hint.ts)
@@ -261,8 +269,10 @@ export async function getConsensusData(
         facts,
         classFacts,
       };
-    } catch {
+    } catch (e) {
       us = null;
+      usFailed = `SEC 조회 실패 — 실적 파생 지표 공란(${e instanceof Error ? e.message : String(e)})`;
+      notes.push(usFailed);
     }
     // 외화 공시 기업(ASML·TSM·SPOT) — Yahoo 예상치를 USD 로(edgar-foreign.ts). 환산 실패 시 예상치를
     // 숨긴다(원통화 숫자를 USD 로 섞지 않음).
@@ -311,7 +321,7 @@ export async function getConsensusData(
           equity: krParentEquityByYear(x.facts),
           op: krOpIncomeByYear(x.facts),
         };
-        shares = x.adrShares ?? shares;
+        // 과거 연도 주식수 = 각 결산일 유통주식수만(최근 값으로 대신하지 않음 — 그림자 채우기 금지)
         dartBookShares = x.bookShares;
         notes.push(`실적: ${x.code} OpenDART 재무 USD 환산(손익 = 기간 평균 환율, 재무상태표·연말 시가총액 = 결산일 환율), 주당 값은 ADR 1주 기준`);
       }
@@ -348,36 +358,56 @@ export async function getConsensusData(
     // 한국: dart-ev.ts 공통 영업이익(하이라이트·재무분석과 같은 값)
     const opIncome = us
       ? (us.op.get(fy) ?? null)
-      : kr
-        ? (kr.op.get(fy) ?? null)
-        : valueForYear(annual, fy, ACCT.opIncome);
+      : usFailed
+        ? null
+        : kr
+          ? (kr.op.get(fy) ?? null)
+          : valueForYear(annual, fy, ACCT.opIncome);
     // 미국: 지배주주 순이익 공통 규칙(하이라이트·손익계산서와 같은 값)
     const netIncome = us
       ? (netIncomeAnnualByYear(us.facts).get(fy) ?? null)
-      : valueForYear(annual, fy, ACCT.netIncome);
+      : usFailed
+        ? null
+        : valueForYear(annual, fy, ACCT.netIncome);
     // 미국: 자기자본은 하이라이트와 같은 단일 기준(재작성본 우선) — 계정명 매칭은
     // T·VZ 처럼 지배주주 자본 태그가 다른 회사에서 빈칸이 됐다(검증 체계로 발견).
     const periodEndUs = annual.periods.find((p) => p.fiscalYear === fy)?.endDate ?? null;
     const equity =
       us && periodEndUs
         ? parentEquityAt(us.facts, periodEndUs)
-        : kr
-          ? (kr.equity.get(fy) ?? null) // 한국: 지배주주 자본(dart-ev.ts — 하이라이트와 같은 값)
-          : valueForYear(annual, fy, ACCT.equity);
+        : usFailed
+          ? null
+          : kr
+            ? (kr.equity.get(fy) ?? null) // 한국: 지배주주 자본(dart-ev.ts — 하이라이트와 같은 값)
+            : valueForYear(annual, fy, ACCT.equity);
     const liab = valueForYear(annual, fy, ACCT.liabilities);
     const cash = valueForYear(annual, fy, ACCT.cash);
     const epsStmt = valueForYear(annual, fy, ACCT.eps);
 
     // 미국은 연도말 주식수(단일 기준), 그 외는 종전대로 현재 주식수
     const periodEnd0 = annual.periods.find((p) => p.fiscalYear === fy)?.endDate ?? null;
-    // 연도말 주식수가 원본 조회 실패로 공란이면 현재 주식수로 대체하지 않는다(sec-unavailable.ts)
-    const fyShares = us && periodEnd0
-      ? (us.shares.atFiscalYearEnd(fy, periodEnd0) ?? (unavailableOn(us.facts, "yearEndShares", periodEnd0) ? null : shares))
-      : shares;
+    // 미국: 그 결산일 주식수만 — 없으면 현재 주식수로 대신하지 않는다(그림자 채우기 금지). DART 연결 ADR: 그 결산일 유통주식수만
+    const fyShares = us
+      ? (periodEnd0 ? us.shares.atFiscalYearEnd(fy, periodEnd0) : null)
+      : dartAdr
+        ? (dartBookShares?.get(fy) ?? null)
+        : usFailed
+          ? null
+          : shares;
     // 미국: 하이라이트와 같은 연도 EPS 규칙(공시값·분할 보정 → Class A 실측 → 근사)
+    const cellNotes: NonNullable<ConsensusRow["cellNotes"]> = {};
+    const fe = us ? fyEps(us.facts, fy, { classFacts: us.classFacts, fyShares, fyNetIncome: netIncome }) : null;
+    if (fe?.note) cellNotes.eps = cellNotes.per = fe.note;
+    if (us && periodEnd0) {
+      const sn = us.shares.yearEndNote(fy);
+      if (sn) cellNotes.bps = cellNotes.pbr = sn;
+    }
+    if (usFailed) cellNotes.eps = cellNotes.per = cellNotes.pbr = cellNotes.evEbitda = cellNotes.opIncome = cellNotes.netIncome = "SEC 조회 실패";
     const eps = us
-      ? fyEps(us.facts, fy, { classFacts: us.classFacts, fyShares, fyNetIncome: netIncome }).eps
-      : kr
+      ? fe!.eps
+      : usFailed
+        ? null
+        : kr
         ? (kr.eps.get(fy) ?? null) // 한국: dart-ev.ts 공통 EPS
         : (epsStmt ?? (netIncome != null && fyShares ? netIncome / fyShares : null));
     // DART 연결 ADR 은 유통주식수가 없으면 BPS 를 비운다(시가총액 주식수로 대체하지 않음)
@@ -413,8 +443,8 @@ export async function getConsensusData(
     // 미국·한국: 분모 0 이하면 비운다(하이라이트·재무분석과 같은 부호 규칙). 한국 PBR 은
     // 하이라이트와 같게 KRX 연말 실제 시가총액 ÷ 지배주주 자본. 일본은 종전 그대로.
     const krCommon = kr?.caps?.byYear.get(fy)?.common ?? null;
-    const per = us || kr ? positiveRatio(yePrice, eps) : yePrice != null && eps ? yePrice / eps : null;
-    const pbr = us
+    const per = us || kr || usFailed ? positiveRatio(yePrice, eps) : yePrice != null && eps ? yePrice / eps : null;
+    const pbr = us || usFailed
       ? positiveRatio(yePrice, bps)
       : kr
         ? positiveRatio(krCommon ?? (yePrice != null && fyShares ? yePrice * fyShares : null), equity)
@@ -434,8 +464,11 @@ export async function getConsensusData(
       const usDa = us.da.get(fy);
       const ebitda = op != null && usDa != null ? op + usDa : null;
       evEbitda = ev != null && ebitda && ebitda > 0 ? ev / ebitda : null;
+    } else if (usFailed) {
+      evEbitda = null;
     } else if (kr) {
-      const common = kr.caps?.byYear.get(fy)?.common ?? mcap;
+      // DART 연결 ADR 은 결산일 유통주식수 기준 시가총액(convertCaps)만 — 없으면 공란(최근 주식수로 대신하지 않음)
+      const common = kr.caps?.byYear.get(fy)?.common ?? (dartAdr ? null : mcap);
       const ev = krEv(kr.ev, fy, common, kr.caps?.byYear.get(fy)?.preferred ?? null);
       const d = kr.da.get(fy);
       const ebitda = opIncome != null && d != null ? opIncome + d : null;
@@ -465,7 +498,9 @@ export async function getConsensusData(
       roe: fin(roe),
       evEbitda: fin(evEbitda),
       priceBasis: yePrice,
+      ...(Object.keys(cellNotes).length ? { cellNotes } : {}),
     });
+    for (const [k, t] of Object.entries(cellNotes)) if (k === "eps" || k === "bps") notes.push(`${fy} ${k.toUpperCase()}: ${t}`);
   }
 
   // ── 추정 행 ──────────────────────────────────────────────────────

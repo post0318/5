@@ -70,6 +70,18 @@ const insertCogsRows = (col, cogs, gp) => (j) => {
   return 2;
 };
 
+/** 손익계산서의 "(−) 매출원가"·"매출총이익…" 행에서 빈칸인 열 col 에 값을 넣는다(기준 혼합 빈칸 → 값 표시). 행이 없거나 이미 값이면 심지 않음 */
+const fillCogsCell = (col, cogs, gp) => (j) => {
+  let n = 0;
+  for (const sec of j.sections ?? []) for (const it of sec.items ?? []) {
+    const v = /^(−) 매출원가$/.test(it.accountName) ? cogs : /^매출총이익/.test(it.accountName) ? gp : null;
+    if (v == null || !it.values || !(col in it.values) || it.values[col] != null) continue;
+    it.values[col] = v;
+    n++;
+  }
+  return n === 2 ? n : 0;
+};
+
 // TSM FY2024(2024-01-01 ~ 2024-12-31) 매출 — 원통화 공시 × 연준 H.10 기간 평균(2026-09-27 환율 원천 H.10 전환 후 앱 값).
 // TSM_REV_2024_YAHOO = 같은 원통화 × 옛 Yahoo 일별 종가 평균(전환 전 앱 값 — "앱이 H.10 대신 Yahoo 를 쓴" 오류의 전형적인 작은 차이 −0.15%)
 const FX_K = 1.005;
@@ -128,10 +140,15 @@ export const MUTATIONS = [
     expect: "A", plants: [{ op: "replace", from: 4302549243, to: 4302550243 }] },
   { id: "M13", cat: 13, sym: "KO", col: "2022Y", what: "매출 빈칸(사유 없음) 43,004,000,000 → null", origin: "TSM·ASML 연도 열 통째 누락이 통과하던 결함(2026-09-24 재구축)",
     expect: "A", plants: [{ op: "replace", from: 43004000000, to: null }] },
-  { id: "M14", cat: 14, sym: "MCD", col: "2025Y", what: "유형 D(구성 규칙 없음)인데 매출원가 14,492,000,000(총영업비용)·매출총이익 12,393,000,000 표시", origin: "cogs.md §3 유형 D — 규칙 대기 중엔 빈칸 + 사유여야 함",
-    expect: "A", plants: [{ op: "fn", kinds: ["is"], name: "매출원가·매출총이익 행 삽입(2025Y)", fn: insertCogsRows("2025Y", 14492000000, 12393000000) }] },
+  // M14 교체(리드 2026-09-27) — MCD 는 구성 규칙이 생겨(유형 D 10종목) "규칙 없는데 값" 은 더 이상 성립하지 않는다. 규칙 항 하나가 빠진 경우로
+  { id: "M14", cat: 9, sym: "MCD", col: "2025Y", what: "D형 구성 규칙 항 하나 누락 — 가맹점 임차비용(2,618,000,000) 제외: 매출원가 11,451,000,000 → 8,833,000,000, 매출총이익 15,434,000,000 → 18,052,000,000", origin: "cogs-rules.ts MCD = 직영점 비용 + 가맹점 임차 + 기타 매장비용 — 10-Q 는 가맹점 임차를 CostOfGoodsAndServicesSold 로 태깅해 후보에서 빠지기 쉬움(C2)",
+    expect: "A", plants: [{ op: "replace", kinds: ["is"], from: 11451000000, to: 8833000000 }, { op: "replace", kinds: ["is"], from: 15434000000, to: 18052000000 }] },
   { id: "M15", cat: 15, sym: "KO", col: "FY2024", what: "하이라이트 순이익만 10,631,000,000 → 10,632,000,000(손익계산서는 그대로)", origin: "revenue.md D2 — 화면마다 다른 정의·값(컨센서스·유니버스)",
     expect: "C", plants: [{ op: "replace", kinds: ["hl"], from: 10631000000, to: 10632000000 }] },
+  // 파생 열 구성 공시 간 기준 혼합(리드 결정 2026-09-27) — 앱은 빈칸 + "기준 혼합"이어야 한다. 검증기 secFaceCogs withMix 가 원 공시(2025 Q2 10-Q
+  // 부대사업·정유 22,023백만)와 파생 판본(2026 10-Q 재분류 21,936백만)을 따로 읽어 혼합을 판정한다
+  { id: "M16", cat: 14, sym: "DAL", col: "LTM", what: "기준 혼합 열(LTM)에 값 표시 — 매출원가 50,504,000,000·매출총이익 17,783,000,000", origin: "DAL LTM — 2026 10-Q 가 2025 상반기 부대사업을 정유 + MRO 로 나누며 87백만을 기타로 옮김(FY2025 10-K 와 기준 다름)",
+    expect: "A", plants: [{ op: "fn", kinds: ["is"], name: "LTM 매출원가·매출총이익 칸 채움", fn: fillCogsCell("현재/LTM", 50504000000, 17783000000) }] },
 ];
 
 // ── 응답 종류 판정 ───────────────────────────────────────────────────────────────────────────────────────────────

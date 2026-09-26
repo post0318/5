@@ -8,10 +8,9 @@ import {
   splitFactorsByYear, fiscalYearOf } from "./edgar-series";
 import {
   classALatest,
-  classAOutstanding,
-  classAOutstandingLatest,
   classAShares,
   classAsConverted,
+  needsClassAFacts,
   type ClassAFacts,
 } from "./edgar-classfacts";
 import { adrRatio } from "../adr";
@@ -49,25 +48,30 @@ import type { EodQuote, QuoteBar } from "../types";
  * 적용하게 된다.
  */
 
-/** 시점 값이 기준일보다 이만큼 오래되면 안 쓴다(일). */
-const MAX_STALE_DAYS = 550;
-
-function instantAtOrBefore(
-  entries: FactUnitEntry[],
-  asOf: string,
-  maxStaleDays = MAX_STALE_DAYS,
-): number | null {
-  let best: { val: number; end: string; filed: string } | null = null;
+/**
+ * 기준일(±7일) 시점 값 — 그림자 채우기 금지(2026-09-27): 예전엔 기준일 이전 550일 안의 가장 최근 값(옛 분기·옛 표지)을
+ * 결산일 주식수로 썼다. 같은 날짜면 최신 공시.
+ */
+function instantNear(entries: FactUnitEntry[], asOf: string): number | null {
+  let best: { val: number; d: number; filed: string } | null = null;
+  const t = Date.parse(asOf);
   for (const e of entries) {
-    if (e.start) continue; // duration 제외 — 시점(instant) 값만
-    if (e.val == null || !e.end || e.end > asOf) continue;
-    const stale = (Date.parse(asOf) - Date.parse(e.end)) / 86_400_000;
-    if (!Number.isFinite(stale) || stale > maxStaleDays) continue;
+    if (e.start || e.val == null || !e.end) continue; // duration 제외 — 시점(instant) 값만
+    const d = Math.abs(Date.parse(e.end) - t) / 86_400_000;
+    if (!Number.isFinite(d) || d > 7) continue;
     const filed = e.filed ?? "";
-    if (!best || e.end > best.end || (e.end === best.end && filed >= best.filed))
-      best = { val: e.val, end: e.end, filed };
+    if (!best || d < best.d || (d === best.d && filed >= best.filed)) best = { val: e.val, d, filed };
   }
   return best?.val ?? null;
+}
+
+function latestInstantEntry(entries: FactUnitEntry[]): FactUnitEntry | null {
+  let best: FactUnitEntry | null = null;
+  for (const e of entries) {
+    if (e.start || e.val == null || !e.end) continue;
+    if (!best || e.end > best.end) best = e;
+  }
+  return best;
 }
 
 function latestInstantOf(entries: FactUnitEntry[]): number | null {
@@ -219,14 +223,22 @@ export function secBasisBars(facts: CompanyFacts, quote: EodQuote | null | undef
 export interface ShareResolver {
   /**
    * 회계연도말 발행주식수 — **현재(분할 반영) 기준**으로 환산된 값.
-   * 분할 보정된 시세와 곱해야 그 시점의 실제 시가총액이 된다.
+   * 분할 보정된 시세와 곱해야 그 시점의 실제 시가총액이 된다. 못 구하면 null(현재 주식수·Yahoo 로 대신하지 않음).
    */
   atFiscalYearEnd(year: number, endDate: string): number | null;
-  /** 최근 발행주식수(현재 기준). */
+  /**
+   * 그 결산일 주식수의 칸 주석 — 값이 근사(오너 승인: 표지·가중평균)면 그 라벨, 값이 없으면 사유. 본표 값이면 null.
+   * atFiscalYearEnd 를 먼저 불러야 한다.
+   */
+  yearEndNote(year: number): string | null;
+  /** 최근 발행주식수(현재 기준). 못 구하면 null(가중평균·Yahoo 힌트로 대신하지 않음) */
   current(): number | null;
-  /** 공시 주식수를 못 찾아 힌트(시총÷주가 등)로 대체한 적이 있는지. */
-  usedHint(): boolean;
+  /** 현재 주식수 칸 주석 — Yahoo(인포맥스 실패) 등 출처 라벨, 값이 없으면 사유. EDGAR 표지·인포맥스면 null */
+  currentNote(): string | null;
 }
+
+/** 결산일 주식수 근사 라벨(오너 승인 근사 — 칸마다 표시, G1) */
+export const YEAR_END_SHARES_APPROX = "결산일 주식수 근사(표지·가중평균)";
 
 /** EDGAR 표지 기준일이 이보다 오래되면 Yahoo 현재 주식수를 채택한다(인포맥스 실패 시).
  *  분기 공시 간격(~91일)의 절반 — INTC 는 표지 07-17 뒤 08-12 증자. */
@@ -237,7 +249,10 @@ export function buildShareResolver(
   opts: { classFacts?: ClassAFacts | null; sharesHint?: number | null } = {},
 ): ShareResolver {
   const cf = opts.classFacts ?? null;
+  // 힌트(Yahoo 시가총액 ÷ 주가 등)는 ADR 비율 판정에만 쓴다 — 주식수 값으로는 쓰지 않는다(그림자 채우기 금지, 2026-09-27)
   const hint = opts.sharesHint ?? null;
+  // 듀얼클래스 보정 원본(10-K 인스턴스) 조회 실패 — 클래스별 값이 필요한 회사는 결산일 주식수를 비운다
+  const classOut = needsClassAFacts(facts) && unavailableOn(facts, "classFacts");
   const sharesEnd = entriesOf(facts, "CommonStockSharesOutstanding", "shares");
   // 유통주식수 태그 없이 본표에 "발행주식수"·"자기주식수"만 적는 회사(KO·MCD·DAL·GLW·MDLZ 등) — 발행 − 자기주식이
   // 인포맥스(FactSet) 연말 주식수와 정확히 일치(검증 2026-09-24). 예전엔 표지(제출일 기준)·가중평균으로 근사했다.
@@ -254,7 +269,8 @@ export function buildShareResolver(
   const wavgDil = entriesOf(facts, "WeightedAverageNumberOfDilutedSharesOutstanding", "shares");
   const wavgBasic = entriesOf(facts, "WeightedAverageNumberOfSharesOutstandingBasic", "shares");
   const splitF = splitFactorsByYear(facts);
-  let hintUsed = false;
+  const yearNotes = new Map<number, string | null>();
+  let curNote: string | null = null;
   // 20-F ADR 비율(보통주 ÷ ADR) — 1 이 아니면 모든 주식수를 ADR 기준으로 환산
   const lastDei = dei.reduce<FactUnitEntry | null>((b, e) => (!b || e.end > b.end ? e : b), null);
   const adr = adrRatio(/^20-F/.test(lastDei?.form ?? ""), lastDei?.val, hint);
@@ -296,7 +312,27 @@ export function buildShareResolver(
   };
 
   return {
+    yearEndNote(year) {
+      return yearNotes.get(year) ?? null;
+    },
+    currentNote() {
+      return curNote;
+    },
     atFiscalYearEnd(year, endDate) {
+      const r = yearEnd(year, endDate);
+      yearNotes.set(year, r.note);
+      return r.val;
+    },
+    current() {
+      const r = currentOf();
+      curNote = r.note;
+      return r.val;
+    },
+  };
+
+  function yearEnd(year: number, endDate: string): { val: number | null; note: string | null } {
+    {
+      if (classOut) return { val: null, note: "원본 조회 실패 — 클래스별 주식수(듀얼클래스) 공란" };
       // 자본변동표 원본 판독(edgar-equity-shares.ts)이 이 결산일에서 원본 조회 실패 — 표지·가중평균 근사로 대체하지 않고 공란
       // (sec-unavailable.ts). 판독 전체 실패(날짜 모름)는 차원 없는 유통·발행주식수 태그가 없는 결산일만(원본을 읽을 대상)
       if (
@@ -304,7 +340,7 @@ export function buildShareResolver(
         (facts.sourceUnavailable?.yearEndShares?.dates ||
           ![sharesEnd, equityStmtE, issuedE].some((es) => es.some((e) => !e.start && Math.abs(Date.parse(e.end) - Date.parse(endDate)) <= 7 * 864e5)))
       )
-        return null;
+        return { val: null, note: "원본 조회 실패 — 결산일 주식수 공란" };
       // 결산일(±7일) 시점 값 — 대차대조표 본표 기준. 후보는 같은 해 가중평균 주식수와 1.2배 안일 때만 채택한다
       // (PEP 는 "발행주식수" 태그가 이미 자기주식을 뺀 순발행분이라 또 빼면 틀린다 — 가중평균과 어긋나 걸러짐)
       // 잣대도 후보마다 단위 오류 보정 — MCD 는 가중평균을 7.164억 주가 아니라 716.4 로 태깅했다
@@ -398,12 +434,11 @@ export function buildShareResolver(
         : precise != null ? first?.filed
         : bsFace != null ? atEndE(issuedE)?.filed : undefined;
       // as-reported(그 회계연도 시점) 값만 쓴다 — DEI 표지 주식수는 제출일
-      // 기준이라 결산 후 분할이 있으면 기준이 어긋나므로 맨 뒤.
-      const instant =
-        bsFace ??
-        instantAtOrBefore(sharesEnd, endDate) ??
-        classAOutstanding(cf, year) ??
-        instantAtOrBefore(dei, endDate);
+      // 기준이라 결산 후 분할이 있으면 기준이 어긋나므로 맨 뒤(오너 승인 근사 — 라벨).
+      // 클래스 발행 주수 단순 합(classAOutstanding — 전환비율 미반영)은 정의가 달라 쓰지 않는다(그림자 채우기 금지)
+      const bsNear = bsFace ?? instantNear(sharesEnd, endDate);
+      const coverNear = bsNear == null ? instantNear(dei, endDate) : null;
+      const instant = bsNear ?? coverNear;
       const wavg = fixScale(
         annualOf(wavgDil, year) ?? annualOf(wavgBasic, year) ?? classAShares(cf, year),
         instant,
@@ -438,22 +473,28 @@ export function buildShareResolver(
       const hasSplit = [...splitF.values()].some((v) => v != null && Math.abs(v - 1) > 0.01);
       const splitBasis = !sameBasis && hasSplit && splitK >= 2 && refW != null && Math.abs(refW / instant! / splitK - 1) < 0.1;
       const raw = sameBasis ? instant : splitBasis ? instant! * splitK : (wavg ?? instant);
-      if (raw == null) {
-        if (hint != null) hintUsed = true;
-        return hint;
-      }
+      if (raw == null) return { val: null, note: "결산일 주식수 공시 없음" };
+      // 본표(결산일) 값이 아니면 오너 승인 근사 — 표지(제출일 기준)·가중평균. 칸마다 라벨(G1)
+      const fromWavg = !sameBasis && !splitBasis && wavg != null;
+      const note = fromWavg || bsNear == null ? YEAR_END_SHARES_APPROX : null;
       const f = splitF.get(year);
       // 가중평균 태그가 없어 분할 계수가 없는 해(GOOG — 가중평균을 클래스 차원으로만 공시, 2022-07 20:1 분할 이전
       // 연도): 본표 값이 실린 공시의 분할 기준을 공시끼리 같은 결산일 값으로 이어 현재 기준으로 환산한다.
       if (f == null && !splitBasis && raw === instant && bsFace != null && bsFiled) {
         const k = filingSplitFactor().get(bsFiled);
-        if (k != null && k !== 1) return (raw * k) / adr;
+        if (k != null && k !== 1) return { val: (raw * k) / adr, note };
       }
-      return (f != null && f !== 0 ? raw / f : raw) / adr;
-    },
-    current() {
-      // ADR 비율이 있는 20-F 기업은 Yahoo ADR 환산 주식수가 곧 현재 주식수
-      if (adr !== 1) return hint;
+      return { val: (f != null && f !== 0 ? raw / f : raw) / adr, note };
+    }
+  }
+
+  function currentOf(): { val: number | null; note: string | null } {
+    {
+      // ADR 비율을 현재 주식수(인포맥스·Yahoo)로 정하지 못한 20-F — ADR 기준 현재 주식수를 공시로 낼 수 없다(Yahoo 힌트로 대신하지 않음)
+      if (adr !== 1) return { val: null, note: "현재 주식수 조회 실패(ADR 기준 주식수 미상)" };
+      // 20-F 인데 현재 주식수(인포맥스·Yahoo)를 못 받아 ADR 비율을 확인하지 못함 — 표지(본국 보통주 기준)를 ADR 주식수로 쓰지 않는다
+      if (/^20-F/.test(lastDei?.form ?? "") && facts.adrRatio == null && !facts.currentShares)
+        return { val: null, note: "현재 주식수 조회 실패(20-F — ADR 비율 확인 불가)" };
       // 기준 검증용 잣대 — 최근 연간 가중평균주식수. 듀얼클래스 종목(Visa 등)
       // 은 DEI 표지 주식수가 클래스별 부분값만 잡히는 경우가 있어(실측:
       // Visa LTM 시가총액이 1,736억 달러로 실제의 1/3 수준으로 떨어짐)
@@ -473,27 +514,22 @@ export function buildShareResolver(
       // Yahoo 는 EDGAR 표지가 오래됐을 때만(표지 뒤 증자·자사주 반영용. Yahoo 는 옛 값이
       // 남는 경우가 있어 — MRVL +2.5% — 표지가 최근이면 EDGAR 를 믿는다).
       const cs = facts.currentShares ?? null;
+      // 최근 정기공시 재무상태표 기준일 — 이보다 앞선 표지·본표 주식수는 옛 값(그림자 채우기 금지)
+      const bal = latestInstantEntry(entriesOf(facts, "Assets"))?.end ?? null;
+      const coverE = latestInstantEntry(dei);
+      const coverFresh = coverE != null && (bal == null || coverE.end >= bal) && !unavailableOn(facts, "cover");
       if (cs && plausible(cs.val)) {
-        if (cs.source === "infomax") return cs.val;
-        const coverEnd = lastDei?.end ?? null;
-        const coverAgeDays = coverEnd ? (Date.now() - Date.parse(coverEnd)) / 86_400_000 : Infinity;
-        if (coverAgeDays > YAHOO_AFTER_COVER_DAYS) return cs.val;
+        if (cs.source === "infomax") return { val: cs.val, note: null };
+        const coverAgeDays = coverE ? (Date.now() - Date.parse(coverE.end)) / 86_400_000 : Infinity;
+        // 오너 승인(G2) — 인포맥스 실패 시 Yahoo, 라벨(출처·조회일)
+        if (!coverFresh || coverAgeDays > YAHOO_AFTER_COVER_DAYS)
+          return { val: cs.val, note: `현재 주식수: Yahoo(인포맥스 조회 실패 · ${cs.fetched ?? "조회일 미상"} 조회)` };
       }
-      const candidates = [
-        latestInstantOf(dei),
-        latestInstantOf(sharesEnd),
-        classAOutstandingLatest(cf),
-        ref,
-      ];
-      for (const c of candidates) if (plausible(c)) return c;
-      if (hint != null) {
-        hintUsed = true;
-        return hint;
-      }
-      return ref;
-    },
-    usedHint() {
-      return hintUsed;
-    },
-  };
+      if (coverFresh && plausible(coverE!.val)) return { val: coverE!.val, note: null };
+      const bsE = latestInstantEntry(sharesEnd);
+      if (bsE && bal && Math.abs(Date.parse(bsE.end) - Date.parse(bal)) <= 7 * 864e5 && plausible(bsE.val)) return { val: bsE.val, note: null };
+      // 가중평균(ref)·클래스 발행 주수 합·Yahoo 힌트로 대신하지 않는다(그림자 채우기 금지, 2026-09-27)
+      return { val: null, note: unavailableOn(facts, "cover") ? "원본 조회 실패 — 표지 주식수 공란" : "현재 주식수 없음(최근 공시 표지·인포맥스·Yahoo 모두 없음)" };
+    }
+  }
 }

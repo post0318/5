@@ -1,5 +1,5 @@
 import "server-only";
-import { Gap, type AssembledIs, type Column, type LineRole, type Prov, type StmtLine } from "../types";
+import { Gap, type AssembledIs, type CogsTerm, type Column, type LineRole, type Prov, type StmtLine } from "../types";
 import { asPartRead, canonical, REVENUE_ALIAS_CONCEPTS, type CellValue, type ColumnSpec, type FilingStructure, type Part, type PartRead, type UsReader } from "../read";
 
 /**
@@ -159,7 +159,7 @@ async function assembleColumn(
   col: ColumnSpec,
   labelSrc: FilingStructure,
   labelsOut: Map<string, string>,
-  opts: { dimSplit: boolean },
+  opts: { dimSplit: boolean; cogsTerms?: CogsTerm[] },
 ): Promise<AssembledIs> {
   const sp = structureAccn(col);
   const st = sp.accn ? await reader.structure(sp.accn) : { shape: null, parents: new Map(), sums: new Map(), labels: null, gaps: Gap.LINKBASE };
@@ -324,6 +324,14 @@ async function assembleColumn(
   }
   if (fails.length) gaps |= Gap.IDENTITY;
 
+  // 유형 D 매출원가 구성 항 — 항등식 밖(3층 cogs.ts 가 합한다)
+  let cogsTerms: AssembledIs["cogsTerms"];
+  if (opts.cogsTerms) {
+    const r = await readCogsTerms(reader, col, opts.cogsTerms);
+    cogsTerms = r.out;
+    gaps |= r.gaps;
+  }
+
   const parts = partsAll;
   const column: Column = {
     key: col.key, kind: col.kind, fy: col.fy, fq: col.fq, start: col.start, end: col.end,
@@ -337,11 +345,137 @@ async function assembleColumn(
   return {
     col: column, lines, identity: { ok: fails.length === 0, fails, at: failAt, partial: failPartial, terms: failTerms, uncovered },
     cogsBy: cogsId.by, ...(cogsId.why ? { cogsWhy: cogsId.why } : {}), faceShape: !!st.shape,
+    ...(cogsTerms ? { cogsTerms } : {}),
   };
 }
 
+/** 차원 줄 후보 "개념[축=멤버]"(축·멤버는 네임스페이스 없는 이름 — 1층 사실 dims 와 같은 표기) */
+const DIM_TERM = /^([^[]+)\[([^=\]]+)=([^\]]+)\]$/;
+
+/**
+ * 유형 D 매출원가 구성 항(metrics/cogs-rules.ts)의 열 값 — 구성 공시마다 **그 공시 본표(_pre)에 있는** 첫 후보 개념을 읽는다(후보가
+ * 배열이면 그 줄들의 합, "개념[축=멤버]" 는 차원 값). 열 구조 공시의 줄 id 로만 찾으면 파생 열(Q4 = 10-K − 9개월, LTM)에서 10-K 와
+ * 10-Q 의 개념 이름이 다른 회사(MCD 직영점 비용·가맹점 임차, DAL 부대사업)가 빈칸이 된다. optional 항은 본표에 없거나 값이 없으면 0.
+ *
+ * 파생 열의 기준 혼합 판정(리드 결정 2026-09-27 — "한 열 = 한 기준", 기준은 **합 동일성**):
+ *  ① 후보 합 동일성 — 열 안에서 후보가 바뀌었으면(MCD 3줄 ↔ 1줄, ORCL·HLT 개명, DAL 부대사업 분할) 두 후보가 모두 공시된 같은 기간의
+ *     합을 비교한다. 하나라도 반올림 단위 밖으로 다르면 재분류(DAL 2026 10-Q — 일부가 기타로 이동) → 혼합. 같거나 비교할 기간이 없으면 유지.
+ *  ② 재작성 혼합 — 구성 공시 p 의 기간을 다른 구성 공시 r 의 시점(r 제출일 이전)에 공시한 가장 최근 공시 q 가 있으면 q 기준 항 합과
+ *     비교한다(LTM 의 전년 동기 누적을 최신 10-Q 가 재작성해 사업연도(10-K)와 기준이 달라진 경우 — DAL·MAR 2026 10-Q).
+ *  혼합이면 v null + mix 사유(3층이 빈칸 + "구성 공시 간 원가 항목 재분류 — 기준 혼합"). 그림자 채우기(다른 기준 값으로 대체)는 하지 않는다.
+ */
+async function readCogsTerms(reader: UsReader, col: ColumnSpec, terms: CogsTerm[]): Promise<{ out: NonNullable<AssembledIs["cogsTerms"]>; gaps: number }> {
+  const out: NonNullable<AssembledIs["cogsTerms"]> = [];
+  let gaps = 0;
+  const cur = reader.profile.reportingCurrency;
+  const parts = col.segments.flatMap((sg) => sg.parts);
+  const ids = (alt: string | string[]) => ([] as string[]).concat(alt);
+  const base = (id: string) => DIM_TERM.exec(id)?.[1] ?? id;
+  const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 3 * 864e5; // 1층 period.near 와 같은 ±3일(1층 모듈은 import 금지 — S4)
+  /** 공시 p 기준 항 값 — 그 공시 본표에 있는 첫 후보(alt = 후보 키, 본표에 없는 optional 항은 alt null) */
+  const readAt = async (t: CogsTerm, p: Part): Promise<{ alt: string | null; r: PartRead | null | "gap" }> => {
+    if (!p.accn) return { alt: null, r: null };
+    const face = new Set((await reader.structure(p.accn)).shape?.lines.map((l) => l.id) ?? []);
+    for (const alt of t.concepts) {
+      const xs = ids(alt);
+      if (!xs.every((id) => face.has(base(id)))) continue;
+      const r: PartRead = { val: 0, leaves: [] };
+      for (const id of xs) {
+        const m = DIM_TERM.exec(id);
+        const x = m ? await reader.dimSum(m[1], m[2], (v) => v === m[3], p) : asPartRead(await reader.partValue(id, p));
+        if (x === "gap") return { alt: xs.join("+"), r: "gap" };
+        if (x == null) {
+          if (t.optional) continue;
+          return { alt: xs.join("+"), r: null };
+        }
+        r.val += x.val;
+        r.leaves.push(...x.leaves);
+      }
+      return { alt: xs.join("+"), r };
+    }
+    return { alt: null, r: t.optional ? { val: 0, leaves: [] } : null };
+  };
+  /** 반올림 허용 — 두 값 각자의 공시 단위 중 큰 쪽 × 항 줄 수 */
+  const tolOf = (a: number, b: number, n: number) => Math.max(roundingUnit([a]), roundingUnit([b])) * Math.max(n, 1);
+  /** 무차원 후보의 기간별 합(공시별) — 후보의 모든 줄이 같은 공시·기간에 있을 때만 */
+  const altSums = (alt: string): Map<string, number> => {
+    const xs = alt.split("+");
+    if (xs.some((id) => DIM_TERM.test(id))) return new Map();
+    const by = new Map<string, { n: number; v: number }>();
+    for (const id of xs)
+      for (const f of reader.facts(id)) {
+        if (f.unit !== cur || Object.keys(f.dims).length || !f.start || !f.prov.accn) continue;
+        const k = `${f.start}|${f.end}|${f.prov.accn}`;
+        const e = by.get(k) ?? { n: 0, v: 0 };
+        by.set(k, { n: e.n + 1, v: e.v + f.val });
+      }
+    const out = new Map<string, number>(); // "start|end|accn" → 그 공시의 후보 합
+    for (const [k, e] of by) if (e.n === xs.length) out.set(k, e.v);
+    return out;
+  };
+
+  for (const [k, t] of terms.entries()) {
+    const used = new Set<string>();
+    const chosen = new Set<string>(); // 구성 공시마다 고른 후보 — 둘 이상이면 열 안에서 개념이 바뀐 것
+    const at = new Map<Part, number>(); // 구성 공시별 읽은 값(② 비교용)
+    const get = async (p: Part): Promise<PartRead | null | "gap"> => {
+      const { alt, r } = await readAt(t, p);
+      if (alt) chosen.add(alt);
+      if (r && r !== "gap") {
+        at.set(p, r.val);
+        for (const l of r.leaves) if (l.rv.prov.concept) used.add(l.rv.prov.concept);
+      }
+      return r;
+    };
+    // 가상 개념 이름 — 읽은 사실이 모두 "다른 사실"로 잡혀 입력이 늘 남는다(단일 공시 열도 f: 참조, derived.ts 가 칸 참조로 압축)
+    const cell = await reader.value(`syn:cogs.term:${t.group ?? k}`, col, get);
+    gaps |= cell.gaps;
+    let mix: string | undefined;
+    // ① 후보 합 동일성
+    if (cell.v != null && chosen.size > 1) {
+      const alts = [...chosen], sums = alts.map(altSums);
+      for (let i = 0; i < alts.length && !mix; i++)
+        for (let j = i + 1; j < alts.length && !mix; j++) {
+          const pi = new Map([...sums[i]].map(([kk, v]) => [kk.split("|").slice(0, 2).join("|"), v]));
+          for (const [kk, v] of sums[j]) {
+            const per = kk.split("|").slice(0, 2).join("|"), w = pi.get(per);
+            if (w == null) continue;
+            if (Math.abs(v - w) > tolOf(v, w, alts[i].split("+").length + alts[j].split("+").length))
+              mix = `${t.group ?? k}: ${alts[i]} ${w} ≠ ${alts[j]} ${v}(${per.replace("|", "~")})`;
+          }
+        }
+    }
+    // ② 재작성 혼합
+    if (cell.v != null && !mix && new Set(parts.map((p) => p.accn)).size > 1) {
+      const reporters = ["us-gaap:Revenues", "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax", "us-gaap:OperatingIncomeLoss", "us-gaap:CostsAndExpenses", ...t.concepts.flatMap(ids).map(base)];
+      const facts = reporters.flatMap((c) => reader.facts(c));
+      for (const p of parts) {
+        if (mix || !at.has(p)) continue;
+        for (const r of parts) {
+          if (mix || r.accn === p.accn || !r.filed) continue;
+          const q = facts
+            .filter((f) => f.prov.accn && f.prov.accn !== p.accn && f.prov.filed && f.prov.filed <= r.filed! && f.start && near(f.start, p.start) && near(f.end, p.end))
+            .sort((x, y) => (y.prov.filed ?? "").localeCompare(x.prov.filed ?? ""))[0];
+          if (!q) continue;
+          const qr = await readAt(t, { start: p.start, end: p.end, accn: q.prov.accn, form: q.prov.form, filed: q.prov.filed, sign: 1 });
+          if (!qr.r || qr.r === "gap") continue;
+          const v = at.get(p)!;
+          if (Math.abs(v - qr.r.val) > tolOf(v, qr.r.val, ids(t.concepts[0]).length))
+            mix = `${t.group ?? k}: ${p.start}~${p.end} ${p.accn} ${v} ≠ ${q.prov.accn} ${qr.r.val}(재작성)`;
+        }
+      }
+    }
+    out.push({
+      group: t.group ?? String(k), sign: t.sign, v: mix ? null : cell.v, inputs: mix ? [] : (cell.inputs ?? []),
+      concepts: [...used].map(base), alts: [...chosen], ...(mix ? { mix } : {}),
+    });
+  }
+  return { out, gaps };
+}
+
 /** 연간·분기(+Q4D)·LTM 열을 조립한다. LTM 은 연간·분기 목록 끝에 각각 붙는다(같은 값). */
-export async function assembleIncomeStatements(reader: UsReader, n: { annual: number; quarterly: number } = { annual: 10, quarterly: 20 }): Promise<AssembledStatements> {
+/** cogsTerms = 유형 D 매출원가 구성 규칙 항(3층 metrics/cogs-rules.ts — 호출부 index.ts 가 넘긴다, 2층은 3층을 import 하지 않음) */
+export async function assembleIncomeStatements(reader: UsReader, n: { annual: number; quarterly: number } = { annual: 10, quarterly: 20 }, cogsTerms?: CogsTerm[]): Promise<AssembledStatements> {
   const annualCols = await reader.annualCols(n.annual);
   const allQ = await reader.quarterCols(1000);
   const quarterCols = allQ.slice(-n.quarterly);
@@ -353,11 +487,11 @@ export async function assembleIncomeStatements(reader: UsReader, n: { annual: nu
   const labA = lastA ? await reader.structure(structureAccn(lastA).accn ?? "", true) : { shape: null, parents: new Map(), sums: new Map(), labels: null, gaps: 0 };
   const labQ = lastQ && structureAccn(lastQ).accn ? await reader.structure(structureAccn(lastQ).accn!, true) : labA;
   const annual: AssembledIs[] = [];
-  for (const c of annualCols) annual.push(await assembleColumn(reader, c, labA, labels, { dimSplit }));
+  for (const c of annualCols) annual.push(await assembleColumn(reader, c, labA, labels, { dimSplit, cogsTerms }));
   const quarterly: AssembledIs[] = [];
-  for (const c of quarterCols) quarterly.push(await assembleColumn(reader, c, labQ, labels, { dimSplit }));
+  for (const c of quarterCols) quarterly.push(await assembleColumn(reader, c, labQ, labels, { dimSplit, cogsTerms }));
   if (ltm) {
-    const l = await assembleColumn(reader, ltm, labQ.labels ? labQ : labA, labels, { dimSplit });
+    const l = await assembleColumn(reader, ltm, labQ.labels ? labQ : labA, labels, { dimSplit, cogsTerms });
     annual.push(l);
     quarterly.push(l);
   }

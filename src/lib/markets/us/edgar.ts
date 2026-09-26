@@ -22,8 +22,8 @@ import {
   type MarketAdapter,
   type TtmFlows,
 } from "../types";
-import { type FactEntry, latestInstant, ttmFlow } from "./edgar-fundamentals";
-import { dropRoundedRetags, splitFactorsByYear, fiscalYearOf } from "./edgar-series";
+import { type FactEntry, ttmFlow } from "./edgar-fundamentals";
+import { dropRoundedRetags, entriesOf, instantOn, ltmAnchor, splitFactorsByYear, fiscalYearOf } from "./edgar-series";
 import { buildEvResolver, daAnnualByYear, daTtm, SYN_OP_INCOME, withOpIncome, type EvContext } from "./edgar-ev";
 import { loadCaptiveDebt } from "./edgar-captive";
 import { buildShareResolver } from "./edgar-shares";
@@ -37,13 +37,13 @@ import { withBalanceSheetDebt } from "./edgar-bs-structure";
 import { withCashFlowDa } from "./edgar-cf-structure";
 import { withEquityStatementShares } from "./edgar-equity-shares";
 import { loadUsCurrentShares, type CurrentShares } from "./current-shares";
-import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
+import { fyEps, ltmEpsOf, ltmNetIncomeOf, netIncomeAnnualByYear, parentEquityOf } from "./edgar-pershare";
 import { isFinancialCompany } from "./edgar-financial";
 import { loadUsRevenue, revLtm, revQuarterAt, type RevCol, type UsRevenue } from "./fin-revenue";
-import { loadClassAFacts } from "./class-facts-loader";
+import { loadClassAFactsMarked } from "./class-facts-loader";
 import { dartAdrFinancials, dartAdrOf, dartAdrTtm } from "./dart-adr";
 import type { ClassAFacts } from "./edgar-classfacts";
-import { fetchFailureReason, type SourceFeature, type SourceUnavailableMap } from "./sec-unavailable";
+import { fetchFailureReason, unavailableOn, type SourceFeature, type SourceUnavailableMap } from "./sec-unavailable";
 
 const UA =
   process.env.SEC_USER_AGENT ??
@@ -213,7 +213,7 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       // 규칙으로 조용히 대체). 영업이익은 판독 대상 회사(영업이익 태그 없음·의심)만 — 나머지는 공시 태그 그대로
       if (subErr.reason) {
         const reason = `제출 목록 · ${subErr.reason}`;
-        for (const f of ["debt", "da", "oneOff", "yearEndShares", "filings"] as const) unavailable[f] = { reason };
+        for (const f of ["debt", "da", "oneOff", "yearEndShares", "filings", "cover"] as const) unavailable[f] = { reason };
         if (needsOpIncomeStructure(raw.facts["us-gaap"] ?? {})) unavailable.opIncome = { reason };
       }
       const filled = await step("filings", raw, () => withFilingGapFill(cik, raw, recent));
@@ -258,8 +258,10 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           const r = blankYahooLtm(withShares, "연준 H.10 공식 환율 조회 실패");
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else {
+          // Yahoo 분기 조회 실패 — 사업연도 뒤 분기가 있는지 알 수 없으니 사업연도 값을 LTM 으로 쓰지 않고 공란(그림자 채우기 금지)
           extraWarnings.push("Yahoo 분기 조회 실패(LTM 최신 분기)");
-          withLtm = { ...withShares, ltmQuarterSource: { source: "none", reason: "Yahoo 분기 조회 실패" } };
+          const r = blankYahooLtm(withShares, "Yahoo 분기 조회 실패");
+          withLtm = { ...r.facts, ltmQuarterSource: r.result };
         }
       }
       return { withLtm, sicN, unavailable };
@@ -345,6 +347,11 @@ export interface FactUnitEntry {
   ltmQ?: number;
   /** 20-F Yahoo 분기 LTM 에서 채우지 못한 항목의 최근 FY(edgar-yahoo-quarters.ts) — LTM 공란 */
   ltmNone?: boolean;
+  /**
+   * 합성 영업이익(edgar-ev.ts opIncomeEntries)의 산식 — "pretax" = 세전이익 그대로(이자비용 태그 없음), "ebit" = 세전이익 +
+   * 이자비용 (− 지분법), "structure" = 손익계산서 계산 구조로 영업외 항목 차감, "fin" = 금융업 세전이익. 화면 라벨용(G6)
+   */
+  synBasis?: "pretax" | "ebit" | "structure" | "fin";
 }
 export interface CompanyFacts {
   entityName: string;
@@ -426,65 +433,31 @@ function factEntries(
 }
 
 /**
- * 여러 개념의 instant(재무상태표·주식수) 엔트리를 병합해 가장 최근 end 값.
- * refEnd 지정 시 그보다 550일 이상 오래된 값은 버린다 —
- * 태그가 시기별로 바뀌거나(StockholdersEquity → …IncludingNCI) 오래전에 중단된
- * dei:EntityCommonStockSharesOutstanding(듀얼클래스 종목) 같은 유령값 방지.
- */
-function latestInstantMerged(
-  facts: CompanyFacts,
-  ns: "us-gaap" | "dei",
-  names: string[],
-  units: string[],
-  refEnd?: string,
-): FactEntry | null {
-  const bag = facts.facts[ns];
-  if (!bag) return null;
-  let best: FactEntry | null = null;
-  for (const n of names) {
-    const node = bag[n];
-    if (!node) continue;
-    for (const u of units) {
-      for (const e of (node.units[u] ?? []) as (FactEntry & { start?: string })[]) {
-        if (e.val == null || !e.end || e.start) continue;
-        if (
-          refEnd &&
-          (Date.parse(refEnd) - Date.parse(e.end)) / 86_400_000 > 550
-        )
-          continue;
-        if (!best || e.end > best.end) best = e;
-      }
-    }
-  }
-  return best;
-}
-
-/**
  * TTM 흐름 + 최근분기 재무상태표 스냅샷 + D&A + 주당배당금 (EDGAR companyfacts).
  * prd.md §4.1 — 공식 무료 API, 라이선스 무관.
+ *
+ * **그림자 채우기 금지(오너 규칙 2026-09-27)**: 각 값은 정의 그대로의 값만 — 없으면 null 과 사유(reasons). 예전엔 자기자본·
+ * 부채·현금·주식수를 550일 안의 "가장 최근" 태그 값(서로 다른 기준일)과 자산 − 부채 파생으로 채웠다.
  */
 function buildUsTtm(
   facts: CompanyFacts,
   evCtx: EvContext & { classFacts?: ClassAFacts | null } = {},
 ): TtmFlows {
+  const anchor = ltmAnchor(facts);
+  const reasons: NonNullable<TtmFlows["reasons"]> = {};
   const eps = ttmFlow(
     factEntries(facts, "us-gaap", ["EarningsPerShareDiluted", "EarningsPerShareBasic"], [
       "USD/shares",
     ]),
+    anchor,
   );
   // 매출 LTM = 재무 5층 구조 매출 지표(fin-revenue.ts) — 하이라이트·손익계산서·재무분석과 같은 값
   const revenueLtm = revLtm(facts.revenue);
-  const netIncome = ttmFlow(
-    factEntries(
-      facts,
-      "us-gaap",
-      ["NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"],
-      ["USD"],
-    ),
-  );
+  if (revenueLtm == null) reasons.revenue = facts.revenue?.ltm ? "LTM 매출 조립 불완전(fin)" : "LTM 매출 없음(fin)";
   // 영업이익 — edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전). 하이라이트·
   // 재무분석·손익계산서와 같은 값.
-  const opIncome = ttmFlow(factEntries(facts, "us-gaap", [SYN_OP_INCOME], ["USD"]));
+  const opIncome = ttmFlow(factEntries(facts, "us-gaap", [SYN_OP_INCOME], ["USD"]), anchor);
+  if (opIncome.ttm == null) reasons.opIncome = opIncome.reason ?? "LTM 영업이익 없음";
   // 감가상각비 — edgar-ev.ts 단일 규칙(하이라이트·분석 지표와 동일).
   const daByYear = daAnnualByYear(facts);
   const daLatestYear = [...daByYear.keys()].sort((a, b) => b - a)[0];
@@ -492,97 +465,74 @@ function buildUsTtm(
     annual: daLatestYear != null ? (daByYear.get(daLatestYear) ?? null) : null,
     ttm: daTtm(facts),
   };
+  if (da.ttm == null) reasons.daTtm = unavailableOn(facts, "da") ? "원본 조회 실패 — 감가상각비 공란" : "LTM 감가상각비 구성 분기 없음";
   const dps = ttmFlow(
     factEntries(facts, "us-gaap", ["CommonStockDividendsPerShareDeclared"], ["USD/shares"]),
+    anchor,
   );
+  if (dps.ttm == null && dps.reason) reasons.dpsTtm = dps.reason;
 
   // 20-F Yahoo 분기 LTM — 잔액은 그 기준일(최신 분기말) 값만. 채우지 못한 잔액(FY말 값)은 섞지 않고 비운다
   const yl = yahooLtm(facts);
-  const atBal = <T extends { end: string }>(x: T | null | undefined): T | null => (x && (!yl || x.end === yl.through) ? x : null);
-  const liabAndEq = atBal(latestInstant(
-    factEntries(facts, "us-gaap", ["LiabilitiesAndStockholdersEquity"], ["USD"]),
-  ));
-  const assetsL = atBal(latestInstant(factEntries(facts, "us-gaap", ["Assets"], ["USD"])));
-  const cash = atBal(latestInstant(
-    factEntries(facts, "us-gaap", ["CashAndCashEquivalentsAtCarryingValue"], ["USD"]),
-  ));
-  // 최근 재무상태표 기준일 — 자기자본·주식수의 유령(과거 태그) 값을 거를 기준
-  const refEnd =
-    [liabAndEq?.end, assetsL?.end, cash?.end].filter(Boolean).sort().pop() ?? undefined;
-  let equity = atBal(latestInstantMerged(
-    facts,
-    "us-gaap",
-    ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
-    ["USD"],
-    refEnd,
-  ));
-  let liabilities = atBal(latestInstantMerged(
-    facts,
-    "us-gaap",
-    ["Liabilities"],
-    ["USD"],
-    refEnd,
-  ));
-  // 파생: 자기자본 ↔ 부채총계 상호 보완 (CAT·MCD 등 한쪽 미태깅)
-  const base = liabAndEq ?? assetsL;
-  const syn = (val: number, ref: FactEntry): FactEntry => ({ end: ref.end, val, fp: ref.fp, form: ref.form });
-  if (equity == null && base != null && liabilities != null)
-    equity = syn(base.val - liabilities.val, base);
-  if (liabilities == null && base != null && equity != null)
-    liabilities = syn(base.val - equity.val, base);
-  const shares =
-    latestInstantMerged(
-      facts,
-      "dei",
-      ["EntityCommonStockSharesOutstanding"],
-      ["shares"],
-      refEnd,
-    ) ??
-    latestInstantMerged(
-      facts,
-      "us-gaap",
-      ["CommonStockSharesOutstanding"],
-      ["shares"],
-      refEnd,
-    );
-  const snapLabel =
-    [equity?.end, liabilities?.end, cash?.end].filter(Boolean).sort().pop() ?? "";
-  // TTM EPS는 ttmFlow()의 "FY + 당기누적 − 전년동기누적" 식(흐름 지표용)을
-  // 믿지 않는다 — 분모(주식수)가 분기마다 달라 비율 지표엔 안 맞아 순이익과
-  // 부호가 어긋날 수 있다(실측, 2026-09-23 — Bloom Energy: TTM 순이익은
-  // +996만 달러 흑자인데 이 식으로는 EPS가 여전히 음수로 나옴 —
-  // edgar-income.ts에 적용한 것과 같은 문제). TTM 순이익÷최근 주식수로
-  // 직접 계산해 부호가 항상 일치하게 한다.
   // EV 브릿지 — 하이라이트 LTM 열과 같은 모듈·같은 기준일(자산총계 최근일).
   const evRes = buildEvResolver(facts, evCtx);
   const evDate = yl ? yl.through : evRes.latestBalanceDate();
+  const balOn = (c: string) => (evDate ? instantOn(entriesOf(facts, c), evDate) : null);
   const evBridge0 = evDate ? evRes.bridgeAt(evDate) : null;
   // Yahoo 분기 LTM: EV 구성요소가 전부 같은 기준일이어야 한다(아니면 비움 — edgar-yahoo-quarters.ts evComplete)
-  const evBridge = evBridge0 && yl && (!yl.evComplete || evBridge0.stale || evBridge0.balanceDate !== yl.through) ? null : evBridge0;
+  const evBridge = evBridge0 && yl && (!yl.evComplete || evBridge0.balanceDate !== yl.through) ? null : evBridge0;
+  const evBlocker = evDate ? evRes.blocker(evDate) : null;
+  if (!evBridge && !evBlocker)
+    reasons.evNetDebt = !evDate
+      ? "재무상태표 없음"
+      : evBridge0 && yl
+        ? (yl.evReason ?? "Yahoo 분기 EV 구성요소 불완전")
+        : (evRes.bridgeReason(evDate) ?? "EV 구성요소 없음");
   // 개요 멀티플이 하이라이트 LTM 열과 같은 값을 내도록 주식수·순이익·자기자본을
   // 공통 기준으로(edgar-shares·edgar-pershare) — 검증 체계 2층에서 PER·PBR 불일치 발견.
-  const evShares = buildShareResolver(facts, { classFacts: evCtx.classFacts ?? null }).current();
-  const niLtm = ltmNetIncome(facts);
-  const epsTtm = ltmEps(facts, evShares);
-  const equityLtm = evDate ? parentEquityAt(facts, evDate) : null;
+  const shareRes = buildShareResolver(facts, { classFacts: evCtx.classFacts ?? null });
+  const evShares = shareRes.current();
+  const shareNote = shareRes.currentNote();
+  if (shareNote) reasons.evShares = shareNote;
+  const ni = ltmNetIncomeOf(facts);
+  if (ni.value == null) reasons.netIncome = ni.reason ?? "LTM 순이익 없음";
+  const le = ltmEpsOf(facts, evShares);
+  if (le.value == null) reasons.eps = le.reason ?? "LTM EPS 없음";
+  const eq = evDate ? parentEquityOf(facts, evDate) : { value: null, reason: "재무상태표 없음" };
+  if (eq.value == null) reasons.equity = eq.reason ?? "자기자본 없음";
+  // 최근 사업연도 희석 EPS — 하이라이트·재무분석과 같은 규칙(ADR 은 ADR 1주 기준 facts)
+  const niByYear = netIncomeAnnualByYear(facts);
+  const lastFyE = [...(facts.revenue?.annual ?? [])].reverse().find((c) => c.end);
+  const lastFy = lastFyE?.fy ?? ([...niByYear.keys()].sort((a, b) => b - a)[0] ?? null);
+  const fe = lastFy != null
+    ? fyEps(facts, lastFy, {
+        classFacts: evCtx.classFacts ?? null,
+        fyShares: lastFyE ? shareRes.atFiscalYearEnd(lastFy, lastFyE.end) : null,
+        fyNetIncome: niByYear.get(lastFy) ?? null,
+      })
+    : null;
+  if (fe && fe.note) reasons.fyEps = fe.note;
 
   return {
     // 20-F Yahoo 분기 LTM 이면 그 기간으로 표기(EPS 태그는 보강 대상 아님 — LTM EPS 는 순이익 ÷ 주식수)
     periodLabel: yl
       ? `최근 4개 분기(~${yl.through}) · Yahoo 분기(원통화 ${yl.currency}, 분기 평균 환율 환산)`
-      : eps.ttmLabel || netIncome.ttmLabel || "",
-    netIncome: niLtm,
+      : eps.ttmLabel || opIncome.ttmLabel || "",
+    netIncome: ni.value,
     revenue: revenueLtm,
     opIncome: opIncome.ttm,
-    eps: epsTtm,
+    eps: le.value,
+    reasons,
+    fyEps: fe ? { eps: fe.eps, year: lastFy, note: fe.note } : null,
     snapshot: {
-      label: snapLabel,
-      equity: equityLtm,
-      liabilities: liabilities?.val ?? null,
-      cash: cash?.val ?? null,
-      shares: shares?.val ?? null,
+      label: evDate ?? "",
+      equity: eq.value,
+      // 부채총계·현금 — 같은 기준일(evDate) 값만(표시·감사용, 미국 EV 는 evNetDebt)
+      liabilities: balOn("Liabilities"),
+      cash: balOn("CashAndCashEquivalentsAtCarryingValue"),
+      shares: evShares,
       evNetDebt: evBridge ? evBridge.debt + evBridge.preferred + evBridge.nci - evBridge.cash : null,
-      evBlocker: evDate ? evRes.blocker(evDate) : null,
+      evBlocker,
       evShares,
       evOpNciBook: evBridge?.opUnitNciBook ?? null,
       isReit: evCtx.sic === "6798",
@@ -601,6 +551,11 @@ function buildUsTtm(
         ? { dps: dps.ttm, from: dps.from, to: dps.to }
         : null,
   };
+}
+
+/** getTtm 실패 — 값 전부 null + 사유(조용히 null 을 돌려주면 화면이 다른 원천으로 채웠다) */
+function failedTtm(reason: string): TtmFlows {
+  return { periodLabel: "", error: reason, netIncome: null, revenue: null, opIncome: null, eps: null, snapshot: null };
 }
 
 /**
@@ -836,27 +791,30 @@ export const usEdgarAdapter: MarketAdapter = {
   },
 
   async getTtm(symbol): Promise<TtmFlows | null> {
+    // 실패를 삼키지 않는다 — 사유를 싣고 모든 값 null(그림자 채우기 금지, 2026-09-27). 화면은 멀티플을 계산하지 않고 사유를 보인다
     try {
       const dartAdr = dartAdrOf(symbol);
-      if (dartAdr) return await dartAdrTtm(dartAdr);
+      if (dartAdr) return (await dartAdrTtm(dartAdr)) ?? failedTtm("TTM 조회 실패 — DART 분기 재무 없음");
       const { cik } = await resolveCik(symbol);
-      const [facts, sic] = await Promise.all([
+      const [facts0, sic] = await Promise.all([
         getSymbolFacts(cik, symbol),
         getSubmissions(cik).then((s) => s.sic ?? null).catch(() => null),
       ]);
-      const [captive, classFacts] = await Promise.all([
-        loadCaptiveDebt(cik, sic).catch(() => null),
-        // 듀얼클래스(Visa 등) — 하이라이트와 같은 주식수를 쓰려면 클래스별 보정이 필요
-        loadClassAFacts(cik, facts).catch(() => null),
+      const [captive, cls] = await Promise.all([
+        // 금융 자회사 판별 조회 실패 = "unknown"(금융 자회사 없음으로 단정하지 않음 — EV 미표시)
+        loadCaptiveDebt(cik, sic).catch(() => "unknown" as const),
+        // 듀얼클래스(Visa 등) — 하이라이트와 같은 주식수를 쓰려면 클래스별 보정이 필요. 실패는 facts 에 기록(공란)
+        loadClassAFactsMarked(cik, facts0),
       ]);
+      const facts = cls.facts;
       return buildUsTtm(facts, {
         sic,
         captive,
-        classFacts,
+        classFacts: cls.classFacts,
         isFinancial: isFinancialCompany(facts, sic),
       });
-    } catch {
-      return null;
+    } catch (e) {
+      return failedTtm(`TTM 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
     }
   },
 

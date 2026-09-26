@@ -13,7 +13,7 @@ import { isFetchFailure } from "../http";
  */
 
 /** 판독 단위 — 실패 시 공란이 되는 값 묶음 */
-export type SourceFeature = "debt" | "da" | "opIncome" | "oneOff" | "yearEndShares" | "filings";
+export type SourceFeature = "debt" | "da" | "opIncome" | "oneOff" | "yearEndShares" | "filings" | "cover" | "classFacts";
 
 export interface SourceUnavailable {
   /** 실패한 조회 요약(상태·파일) */
@@ -33,6 +33,8 @@ export const FEATURE_LABEL: Record<SourceFeature, string> = {
   oneOff: "일회성비용",
   yearEndShares: "결산일 주식수·시가총액",
   filings: "최신 공시 보완(companyfacts 미반영 공시)",
+  cover: "표지 주식수(현재 주식수·시가총액)",
+  classFacts: "클래스별 주식수·EPS(듀얼클래스)",
 };
 
 /** 판독기가 조회 실패를 알릴 때 던진다. dates 가 있으면 그 날짜만 실패 */

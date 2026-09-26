@@ -376,14 +376,18 @@ export function StockAnalysis({
       : null;
   const ttmForMultiples = ttmQ.data?.ttm ?? null;
   const multiples = useMemo(() => {
+    // 미국은 TTM 스냅샷(getTtm)으로만 계산 — TTM 이 오기 전에는 계산하지 않는다(그림자 채우기 금지, 2026-09-27).
+    // TTM 조회가 실패하면 computeTrailingMultiples 가 모든 멀티플을 비우고 사유("TTM 조회 실패")를 싣는다.
+    if (market === "us" && (ttmQ.isLoading || !ov?.quote || !annualForMultiples.data)) return null;
     if (!ov?.quote || !annualForMultiples.data) return ov?.multiples ?? null;
     // 듀얼클래스(V·비자 등)는 발행주식수·EPS 를 EDGAR 에 클래스별로만 태깅 →
-    // undimensioned 값이 없다. Yahoo 컨센서스의 주식수·시가총액으로 폴백.
+    // undimensioned 값이 없다. Yahoo 컨센서스의 주식수·시가총액으로 폴백 — 미국 외 시장만(미국은 edgar-shares 공통 주식수만)
     const cShares = ov.consensus?.sharesOutstanding ?? null;
     const cMktCap = ov.consensus?.marketCap ?? null;
     const quote =
-      (ov.quote.sharesOutstanding == null && cShares != null) ||
-      (ov.quote.marketCap == null && cMktCap != null)
+      market !== "us" &&
+      ((ov.quote.sharesOutstanding == null && cShares != null) ||
+        (ov.quote.marketCap == null && cMktCap != null))
         ? {
             ...ov.quote,
             sharesOutstanding: ov.quote.sharesOutstanding ?? cShares,
@@ -407,7 +411,7 @@ export function StockAnalysis({
         ov.consensus?.impliedSharesOutstanding,
       ),
     });
-  }, [ov, annualForMultiples.data, market, daTotal, ttmForMultiples]);
+  }, [ov, annualForMultiples.data, market, daTotal, ttmForMultiples, ttmQ.isLoading]);
   const multiplesFallback =
     annualForMultiples.isLoading ? "…" : annualForMultiples.isError ? "n/a" : "-";
   const ccy = ov?.quote?.currency ?? "USD";
@@ -438,18 +442,19 @@ export function StockAnalysis({
   // ── PER(TTM) · EPS(TTM) ─────────────────────────────────────────
   // 국내: DART 자체 TTM(직전연간 + 당기누적 − 전년동기). 미국: EDGAR 동일 방식. 일본: Yahoo.
   const ttm = ttmQ.data?.ttm ?? null;
+  // 미국은 TTM EPS(공통 함수) 그대로 — 순이익 ÷ 다른 주식수로 대신 계산하지 않는다(그림자 채우기 금지)
   const ttmEps =
     jpY
       ? (jpY.trailingEps ?? null)
       : ttm?.eps != null
         ? ttm.eps
-        : ttm?.netIncome != null && multiples?.inputs.shares
+        : market !== "us" && ttm?.netIncome != null && multiples?.inputs.shares
           ? ttm.netIncome / multiples.inputs.shares
           : null;
   // 부호 규칙(전 화면 공통): EPS 가 0 이하면 PER 은 비운다. 적자라서 비운 것이므로
-  // Yahoo PER 로 대체하지 않는다 — 자체 TTM 이 아예 없을 때만 Yahoo 폴백.
+  // Yahoo PER 로 대체하지 않는다 — 자체 TTM 이 아예 없을 때만 Yahoo 폴백(일본만 — 미국·한국은 자체 값만)
   const ownTtmPer = price != null && ttmEps != null && ttmEps > 0 ? price / ttmEps : null;
-  const trailingPer = ttmEps != null ? ownTtmPer : (cons?.trailingPer ?? null);
+  const trailingPer = ttmEps != null || market !== "jp" ? ownTtmPer : (cons?.trailingPer ?? null);
 
   const pbrVal = jpY?.pbr ?? multiples?.pbr ?? null;
   const bpsVal = jpY?.bps ?? multiples?.bps ?? null;
@@ -476,15 +481,16 @@ export function StockAnalysis({
 
   // DPS — 국내: 금융위 배당정보 API. 미국: EDGAR CommonStockDividendsPerShareDeclared.
   //   둘 다 DPS(전년 회계연도) + DPS(TTM, 최근 12개월).
+  // Yahoo 배당 폴백은 일본만(미국은 EDGAR 주당배당금만 — 없으면 "-")
   const dps =
     (ttmQ.data?.dividend?.annual?.dps ?? null) ??
-    (market !== "kr" ? (cons?.dividendPerShare ?? null) : null);
+    (market === "jp" ? (cons?.dividendPerShare ?? null) : null);
   const dpsTtm = (ttmQ.data?.dividend?.ttm?.dps ?? null) ?? jpY?.dpsTtm ?? null;
   // 배당수익률 = TTM 주당배당금 / 현재가. 소수 비율(0.012 = 1.2%)로 통일 (<Percent>가 ×100)
   const divYield =
     price != null && dpsTtm != null && price > 0
       ? dpsTtm / price
-      : market !== "kr"
+      : market === "jp"
         ? ((cons?.dividendYield ?? null) as number | null)
         : null;
 
@@ -678,8 +684,21 @@ export function StockAnalysis({
                 </Stat>
                 <Stat label="시가총액" className="order-3 lg:order-none">
                   <span className="text-base">
-                    {formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
+                    {/* 미국은 공통 주식수(edgar-shares) 기준만 — Yahoo 시가총액으로 대신하지 않고 사유 표시 */}
+                    {market === "us"
+                      ? multiples?.marketCap != null
+                        ? formatMoneyWithUnits(multiples.marketCap, market)
+                        : ttmQ.isLoading
+                          ? "…"
+                          : "-"
+                      : formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
                   </span>
+                  {market === "us" && multiples?.reasons?.marketCap && (
+                    <div className="text-muted-foreground mt-1 text-[11px]">※ {multiples.reasons.marketCap}</div>
+                  )}
+                  {market === "us" && !multiples && ttmQ.isError && (
+                    <div className="text-muted-foreground mt-1 text-[11px]">※ TTM 조회 실패</div>
+                  )}
                   {market === "kr" && naverQ.data?.foreign && (
                     <div className="text-muted-foreground mt-1 text-xs">
                       외국인지분율 {formatNumber(naverQ.data.foreign.ratio, 2)}%

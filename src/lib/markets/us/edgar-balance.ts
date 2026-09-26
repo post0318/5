@@ -6,10 +6,10 @@ import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../
 import {
   ANNUAL_FORMS,
   annualEnds,
-  days,
   firstConcept,
   instantByYear,
   instantOn,
+  provenAbsentAt,
   recentInstantQuarters,
   fiscalYearOf } from "./edgar-series";
 import { revQuarterCols, revQuarterLabel } from "./fin-revenue";
@@ -36,9 +36,13 @@ interface Line {
   label: string;
   concepts?: string[];
   combine?: string[]; // 합산
-  /** concepts/combine 결과가 없는 기(period)만 이 개념으로 대체 — 유동/비유동 분리 없이
-   * 미분류 총액 하나로만 공시하는 회사(AXP 등 금융사) 대응. */
+  /**
+   * concepts/combine 결과가 없는 기(period)의 **다른 정의** 값(제한현금 포함 현금·매입채무+미지급비용·미분류 장기부채 등 —
+   * AXP·XOM 등). 그림자 채우기 금지(2026-09-27): 이 값은 본 줄 이름으로 보이지 않고 fallbackLabel 의 별도 줄로 보인다.
+   */
   fallback?: string[];
+  /** fallback 값의 별도 줄 이름 */
+  fallbackLabel?: string;
   depth: number;
   kind?: "item" | "subtotal" | "total";
   plugOf?: string; // 이 구간 총계 개념군의 키 → (총계 − 앞선 depth1 형제합)
@@ -52,8 +56,9 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
       {
         label: "현금·현금성자산",
         concepts: ["CashAndCashEquivalentsAtCarryingValue"],
-        // 제한현금 포함 총액 하나로만 공시하는 회사(AXP 등) 폴백
+        // 제한현금 포함 총액 하나로만 공시하는 회사(AXP 등) — 별도 줄
         fallback: ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+        fallbackLabel: "현금·현금성자산 (제한현금 포함 총액)",
         depth: 1,
       },
       {
@@ -102,8 +107,9 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
       {
         label: "매입채무",
         concepts: ["AccountsPayableCurrent", "AccountsPayableTradeCurrent"],
-        // 유동/비유동 미분류 회사(AXP 등) 또는 매입채무·미지급비용 통합 태깅 회사(XOM 등)
+        // 유동/비유동 미분류 회사(AXP 등) 또는 매입채무·미지급비용 통합 태깅 회사(XOM 등) — 별도 줄
         fallback: ["AccountsPayableCurrentAndNoncurrent", "AccountsPayableAndAccruedLiabilitiesCurrent"],
+        fallbackLabel: "매입채무·미지급비용 (통합 공시)",
         depth: 1,
       },
       {
@@ -126,8 +132,9 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
           "FinanceLeaseLiabilityNoncurrent",
           "OperatingLeaseLiabilityNoncurrent",
         ],
-        // 유동/비유동 분리 없이 미분류 총액(LongTermDebt) 하나로만 공시하는 회사(AXP 등) 폴백
+        // 유동/비유동 분리 없이 미분류 총액(LongTermDebt) 하나로만 공시하는 회사(AXP 등) — 별도 줄
         fallback: ["LongTermDebt"],
+        fallbackLabel: "장기부채 (유동성 포함 미분류 총액)",
         depth: 1,
       },
       { label: "기타 장기부채", depth: 1, plugOf: "lnoncur" },
@@ -174,6 +181,7 @@ const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
         label: "현금·현금성자산",
         concepts: ["CashAndCashEquivalentsAtCarryingValue"],
         fallback: ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+        fallbackLabel: "현금·현금성자산 (제한현금 포함 총액)",
         depth: 1,
       },
       {
@@ -197,6 +205,7 @@ const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
         label: "매입채무",
         concepts: ["AccountsPayableCurrent"],
         fallback: ["AccountsPayableCurrentAndNoncurrent"],
+        fallbackLabel: "매입채무 (유동·비유동 미분류)",
         depth: 1,
       },
       {
@@ -208,6 +217,7 @@ const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
         label: "장기부채",
         combine: ["LongTermDebtNoncurrent", "FinanceLeaseLiabilityNoncurrent", "OperatingLeaseLiabilityNoncurrent"],
         fallback: ["LongTermDebt"],
+        fallbackLabel: "장기부채 (유동성 포함 미분류 총액)",
         depth: 1,
       },
       { label: "기타부채", depth: 1, plugOf: "finL" },
@@ -227,6 +237,13 @@ export function buildUsBalance(
 
   let periods: FinancialPeriod[];
   let value: (concepts: string[]) => Record<string, number | null>;
+  // LTM 칸이 빈 이유가 "그 재무상태표에 줄이 없음"(없음 증명)이 아니라 "분기 공시에 값이 없음"인 줄 — 합산·차감에서 0 으로 보지 않는다
+  const ltmUnknown = new WeakSet<Record<string, number | null>>();
+  /** LTM 칸이 비었는데 그 분기 재무상태표에 줄이 아예 없는(없음 증명) 줄 — 사유 "별도 줄 없음" */
+  const ltmAbsent = new WeakSet<Record<string, number | null>>();
+  /** 합산 줄 중 일부 구성 줄이 분기 재무상태표에 없어 빠진 줄 — 라벨 */
+  const ltmPartialAbsent = new WeakMap<Record<string, number | null>, string[]>();
+  let ltmDate = "";
 
   if (mode === "quarter") {
     // 분기 라벨·기말은 손익계산서와 같은 달력 — 재무 5층 구조 매출 지표의 분기 열(Q4 = 사업연도말 포함, fin-revenue.ts)
@@ -275,17 +292,19 @@ export function buildUsBalance(
     const latestEnd =
       yl?.through ?? recentInstantQuarters(anchor, 1)[0] ?? new Date().toISOString().slice(0, 10);
     periods.push({ label: LTM, fiscalYear: (years.at(-1) ?? 0) + 1, fiscalQuarter: null, endDate: latestEnd });
+    ltmDate = latestEnd;
     value = (concepts) => {
       const e = firstConcept(facts, concepts);
       const ann = instantByYear(e);
       const out: Record<string, number | null> = {};
       for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-      // LTM: 최근 분기말 값. 없으면 최근 재무상태표 값(단, 너무 오래된 건 제외 —
-      // 회사가 해당 라인 보고를 중단한 경우 옛 값이 잔존하지 않도록)
-      const latest = e.filter((x) => !x.start).sort((a, b) => (a.end < b.end ? 1 : -1))[0];
-      const fresh =
-        latest && Math.abs(days(latest.end, latestEnd)) <= 400 ? latest.val : null;
-      out[LTM] = instantOn(e, latestEnd) ?? (yl ? null : fresh);
+      // LTM: 최근 분기말(±6일) 값만 — 그 전 가장 최근 값으로 대신하지 않는다(그림자 채우기 금지, 2026-09-27)
+      out[LTM] = instantOn(e, latestEnd);
+      if (out[LTM] == null) {
+        if (!provenAbsentAt(facts, concepts, latestEnd)) ltmUnknown.add(out);
+        // 분기 재무상태표에 이 줄이 따로 없다(다른 줄에 포함) — 연말 값으로 대신하지 않고 사유만
+        else if (years.length && out[fyKey(years[years.length - 1])] != null) ltmAbsent.add(out);
+      }
       return out;
     };
   }
@@ -337,34 +356,43 @@ export function buildUsBalance(
   };
 
   const items: FinancialLineItem[] = [];
+  const plugWhy = new WeakSet<Record<string, number | null>>();
   const blocks = isFin ? [FIN_BLOCKS[0], FIN_BLOCKS[1], BLOCKS[2]] : BLOCKS;
   for (const block of blocks) {
     // 매핑된 depth1 라인 (플러그 제외)
     const resolved: Record<string, Record<string, number | null>> = {};
+    /** 다른 정의 값(제한현금 포함 현금 등)의 별도 줄 — 본 줄 이름으로 보이지 않는다(그림자 채우기 금지) */
+    const fbRows: Record<string, Record<string, number | null>> = {};
     for (const line of block.lines) {
       if (line.kind === "subtotal" || line.kind === "total" || line.plugOf) continue;
-      // 20-F Yahoo 분기 LTM: LTM 에서만 빈 값(채우지 못함)은 합산·대체하지 않는다(부분 합·다른 개념 혼합 방지)
-      const ylLine = yahooLtm(facts);
-      const prevL = labels[labels.length - 2];
-      const ltmGap = (v: Record<string, number | null>) => !!ylLine && labels.includes(LTM) && v[LTM] == null && v[prevL] != null;
+      // LTM 에서만 빈 값(분기 공시에 없음 — 없음 증명 안 됨)은 합산·대체하지 않는다(부분 합·다른 개념 혼합 방지)
+      const ltmGap = (v: Record<string, number | null>) => labels.includes(LTM) && v[LTM] == null && ltmUnknown.has(v);
       resolved[line.label] = line.combine
         ? (() => {
             const o = blank();
             let gap = false;
+            const dropped: string[] = [];
             for (const c of line.combine) {
               const v = value([c]);
               if (ltmGap(v)) gap = true;
+              if (ltmAbsent.has(v)) dropped.push(c);
               for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
             }
-            if (gap) o[LTM] = null;
+            if (dropped.length && o[LTM] != null) ltmPartialAbsent.set(o, dropped);
+            if (gap) {
+              o[LTM] = null;
+              ltmUnknown.add(o);
+            }
             return o;
           })()
         : value(line.concepts ?? []);
       if (line.fallback) {
         const fb = value(line.fallback);
         const primaryGap = ltmGap(resolved[line.label]);
+        const alt = blank();
         for (const l of labels)
-          if (resolved[line.label][l] == null && fb[l] != null && !(l === LTM && primaryGap)) resolved[line.label][l] = fb[l];
+          if (resolved[line.label][l] == null && fb[l] != null && !(l === LTM && primaryGap)) alt[l] = fb[l];
+        if (labels.some((l) => alt[l] != null)) fbRows[line.label] = alt;
       }
     }
 
@@ -400,9 +428,7 @@ export function buildUsBalance(
             break;
           }
         values = blank();
-        // 20-F Yahoo 분기 LTM: 구성 줄이 LTM 에서만 비었으면(채우지 못함) 차감 잔여(기타)도 비운다 — 0 으로 보면 기타가 부푼다
-        const ylPlug = yahooLtm(facts);
-        const prevLabel = labels[labels.length - 2];
+        // 구성 줄이 LTM 에서만 비었으면(분기 공시에 없음) 차감 잔여(기타)도 비운다 — 0 으로 보면 기타가 부푼다(모든 회사)
         for (const l of labels) {
           if (tot[l] == null) continue;
           let mapped = 0;
@@ -410,15 +436,31 @@ export function buildUsBalance(
           for (let i = bound + 1; i < idx; i++) {
             const s = block.lines[i];
             if (s.kind || s.plugOf) continue;
-            const v = resolved[s.label]?.[l];
-            if (ylPlug && l === LTM && v == null && resolved[s.label]?.[prevLabel] != null) unknown = true;
-            mapped += v ?? 0;
+            const r = resolved[s.label];
+            const v = r?.[l];
+            if (l === LTM && v == null && r && ltmUnknown.has(r) && fbRows[s.label]?.[l] == null) unknown = true;
+            // 별도 줄(다른 정의 값)도 구간 합에는 들어간다 — 기타 줄이 그 금액을 떠안지 않게
+            mapped += (v ?? 0) + (fbRows[s.label]?.[l] ?? 0);
           }
           values[l] = unknown ? null : Math.round(tot[l]! - mapped);
+          if (unknown) plugWhy.add(values);
         }
       } else {
         values = resolved[line.label];
       }
+      const notes: Record<string, string> = {};
+      if (labels.includes(LTM)) {
+        if (values[LTM] == null && plugWhy.has(values)) notes[LTM] = "구성 줄이 분기 재무상태표에 없음 — 잔여 산정 불가";
+        else if (values[LTM] == null && ltmUnknown.has(values)) notes[LTM] = `분기 재무상태표에 없음(${ltmDate})`;
+        else if (values[LTM] == null && ltmAbsent.has(values) && fbRows[line.label]?.[LTM] == null)
+          notes[LTM] = `분기 재무상태표에 별도 줄 없음(${ltmDate} — 다른 줄에 포함, 연말 값으로 대신하지 않음)`;
+        else if (values[LTM] != null && ltmPartialAbsent.has(values))
+          notes[LTM] = `일부 구성 줄(${ltmPartialAbsent.get(values)!.join(", ")})이 분기 재무상태표에 따로 없음 — 제외(다른 줄에 포함)`;
+      }
+      // 다른 정의 값을 별도 줄로 옮긴 칸 — 본 줄은 공란 + 사유
+      const fbv = fbRows[line.label];
+      if (fbv) for (const l of labels) if (fbv[l] != null && values[l] == null) notes[l] = `태그 없음 — 아래 「${line.fallbackLabel}」 줄 참조(다른 정의)`;
+      const ltmNote = Object.keys(notes).length ? { cellNotes: notes } : {};
       items.push({
         accountName: line.label,
         accountId: `bs:${block.title}:${line.label}`,
@@ -426,7 +468,22 @@ export function buildUsBalance(
         isSubtotal: line.kind === "subtotal" || line.kind === "total",
         isHighlight: Boolean(line.highlight),
         values,
+        ...ltmNote,
       });
+      const fb = fbRows[line.label];
+      if (fb && line.fallbackLabel)
+        items.push({
+          accountName: line.fallbackLabel,
+          accountId: `bs:${block.title}:${line.label}:alt`,
+          depth: line.depth + 1,
+          isSubtotal: false,
+          isHighlight: false,
+          italic: true,
+          values: fb,
+          cellNotes: Object.fromEntries(
+            labels.filter((l) => fb[l] != null).map((l) => [l, `「${line.label}」 태그 없음 — 다른 정의(${line.fallbackLabel}) 값을 별도 줄로 표시`]),
+          ),
+        });
     }
   }
 
@@ -441,13 +498,21 @@ export function buildUsBalance(
   const debt = blank();
   const netDebt = blank();
   const opLease = blank();
+  const bridgeWhy: Record<string, string> = {};
   for (const p of periods) {
     const ylE = p.label === LTM ? yahooLtm(facts) : null;
     const d = p.label === LTM ? (ylE?.through ?? evRes.latestBalanceDate() ?? p.endDate ?? "") : (p.endDate ?? "");
     const br = d ? evRes.bridgeAt(d) : null;
-    if (!br) continue;
+    if (!br) {
+      const why = d && !evRes.blocker(d) ? evRes.bridgeReason(d) : null;
+      if (why) bridgeWhy[p.label] = why;
+      continue;
+    }
     // Yahoo 분기 LTM: 차입금·현금이 같은 기준일로 다 채워졌을 때만(edgar-yahoo-quarters.ts evComplete)
-    if (ylE && (!ylE.evComplete || br.stale || br.balanceDate !== ylE.through)) continue;
+    if (ylE && (!ylE.evComplete || br.balanceDate !== ylE.through)) {
+      bridgeWhy[p.label] = ylE.evReason ?? "Yahoo 분기 EV 구성요소 불완전";
+      continue;
+    }
     debt[p.label] = br.debt;
     netDebt[p.label] = br.debt - br.cash;
     opLease[p.label] = br.operatingLease;
@@ -461,6 +526,10 @@ export function buildUsBalance(
     isHighlight: false,
     values,
     numberFormat: nf,
+    // 차입금·현금이 그 기준일 공시에 없으면 사유(이전 연말 값으로 대신하지 않음)
+    ...(Object.keys(bridgeWhy).some((l) => values[l] == null)
+      ? { cellNotes: Object.fromEntries(Object.entries(bridgeWhy).filter(([l]) => values[l] == null)) }
+      : {}),
   });
   items.push(nrow("총차입금", debt));
   items.push(nrow("순차입금", netDebt));

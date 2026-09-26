@@ -169,6 +169,40 @@ export function latestInstant(entries: FactUnitEntry[]): number | null {
   return best?.val ?? null;
 }
 
+/** 이 공시(제출일 filed)에 개념들 중 하나라도 값이 있는가(어느 기간이든, 모든 단위) */
+export function reportedInFiling(facts: CompanyFacts, concepts: string[], filed: string | undefined): boolean {
+  if (!filed) return true; // 공시를 모르면 "없음"을 증명할 수 없다
+  const g = facts.facts["us-gaap"] ?? {};
+  return concepts.some((c) => Object.values(g[c]?.units ?? {}).some((es) => es.some((e) => e.filed === filed)));
+}
+
+/**
+ * **없음 증명**(그림자 채우기 금지 — 0 으로 둘 수 있는 유일한 경우): 기준일(±7일) 재무상태표를 담은 정기공시에 이 개념들이
+ * 어느 기간으로도 전혀 없으면 그 줄이 본표에 없는 것 = 0. 공시를 못 찾거나 같은 공시에 다른 날짜 값이라도 있으면(그 날짜만
+ * 빠짐) 증명 불가 → false(값 공란).
+ */
+export function provenAbsentAt(facts: CompanyFacts, concepts: string[], date: string): boolean {
+  const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 7 * 86_400_000;
+  // 공시별 재무상태표 기준일(자산총계가 있는 날짜 — 당기·비교 칸)
+  const bsDates = new Map<string, string[]>();
+  for (const e of facts.facts["us-gaap"]?.["Assets"]?.units?.["USD"] ?? []) {
+    if (e.start || !e.filed || ![...ANNUAL_FORMS, ...INTERIM_FORMS].includes(e.form)) continue;
+    bsDates.set(e.filed, [...(bsDates.get(e.filed) ?? []), e.end]);
+  }
+  const filings = [...bsDates].filter(([, ds]) => ds.some((d) => near(d, date)));
+  if (!filings.length) return false;
+  const g = facts.facts["us-gaap"] ?? {};
+  // 그 공시에서 개념 값이 (1) 이 기준일에 없고 (2) 있다면 재무상태표 비교 칸 날짜에만 있을 때 = 이 칸이 본표 "—"(0 공시).
+  // 주석의 다른 날짜(분기말 등) 값이 있으면 이 칸이 빠진 이유를 알 수 없어 증명 불가(2026-09-27 — TER 2024 차입금·GLW 2021 우선주)
+  return filings.every(([f, ds]) =>
+    concepts.every((c) =>
+      Object.values(g[c]?.units ?? {}).every((es) =>
+        es.every((e) => e.filed !== f || (!e.start && !near(e.end, date) && ds.some((d) => near(d, e.end)))),
+      ),
+    ),
+  );
+}
+
 /** 재무상태표 — 특정 기준일(정확 일치 ±6일)의 instant 값. */
 export function instantOn(entries: FactUnitEntry[], end: string): number | null {
   let best: { val: number; d: number } | null = null;
@@ -388,9 +422,10 @@ export function vintageOrder(a: { filed?: string }, b: { filed?: string }, prefe
 }
 
 /**
- * LTM 조합 — 최근 FY + 당기누적 − 전년동기누적(전년동기·당기누적이 없으면 FY). 외화 공시 기업은 각 구성요소의
+ * LTM 조합 — 최근 FY + 당기누적 − 전년동기누적. 외화 공시 기업은 각 구성요소의
  * 분기 합 환산값(ltmQ, edgar-foreign.ts)으로 더해 "최근 4개 분기 × 각 분기 평균 환율"이 된다(오너 결정 2026-09-25,
  * 인포맥스·Finviz 방식). 구성요소 하나라도 ltmQ 가 없으면 공시값(val, 기간 평균 환율) 조합.
+ * cur·prior 를 모두 주지 않으면(사업연도 뒤 정기공시가 아직 없음 — ltmFlowOf 가 판정) 사업연도 값 그대로.
  */
 export function ttmCombine(
   fy: { val: number; ltmQ?: number; ltmNone?: boolean },
@@ -399,41 +434,146 @@ export function ttmCombine(
 ): number | null {
   // 20-F Yahoo 분기 LTM 에서 채우지 못한 항목 — FY 값으로 대신하지 않고 공란(edgar-yahoo-quarters.ts)
   if (fy.ltmNone) return null;
-  if (!cur || !prior) return fy.ltmQ ?? fy.val;
+  if (!cur && !prior) return fy.ltmQ ?? fy.val;
+  // 한쪽만 있으면(전년동기 누락 등) 조합 불가 — 사업연도 값으로 대신하지 않는다(그림자 채우기 금지, 2026-09-27)
+  if (!cur || !prior) return null;
   if (fy.ltmQ != null && cur.ltmQ != null && prior.ltmQ != null) return fy.ltmQ + cur.ltmQ - prior.ltmQ;
   // Yahoo 분기 구성요소는 LTM 전용 값(ltmQ) 조합으로만 — 공시값(val)과 섞으면 기간·원천이 섞인다
   if (cur.form === YAHOO_Q_FORM || prior.form === YAHOO_Q_FORM) return null;
   return fy.val + cur.val - prior.val;
 }
 
-/** 흐름 TTM = 최근 FY + 당기누적 − 전년동기누적. */
-export function ttmOf(entries: FactUnitEntry[]): number | null {
+/** LTM 공란 사유 — 화면 칸 주석 문구(그림자 채우기 금지, 오너 규칙 2026-09-27) */
+export const LTM_NO_QUARTER = "LTM 구성 분기 없음";
+export const LTM_STALE = "LTM 구성 분기 없음(최근 사업연도 공시가 550일 넘게 지남 — 태그 중단)";
+export const LTM_YAHOO_GAP = "LTM 구성 분기 없음(Yahoo 분기에 없는 항목)";
+
+export interface LtmFlow {
+  value: number | null;
+  /** value 가 null 인 이유(값이 원래 없는 개념이면 null) */
+  reason: string | null;
+  fy: FactUnitEntry | null;
+  cur: FactUnitEntry | null;
+  prior: FactUnitEntry | null;
+}
+
+const anchorCache = new WeakMap<object, string | null>();
+/**
+ * **LTM 기준일** — 회사의 가장 최근 정기공시(10-K·10-Q·20-F, 20-F Yahoo 분기) 재무상태표 기준일(자산총계 시점 값). 흐름
+ * 개념의 LTM 은 반드시 이 날짜에서 끝나야 한다 — 사업연도 뒤 분기 공시가 있는데 그 개념의 당기 누적(또는 전년 동기
+ * 누적)이 없으면 사업연도 값을 LTM 으로 쓰지 않고 공란(LTM_NO_QUARTER). 개념마다 제각각이던 "가장 최근 값"은 서로 다른
+ * 기간을 같은 LTM 열에 섞었다.
+ */
+export function ltmAnchor(facts: CompanyFacts): string | null {
+  const gaap = facts.facts["us-gaap"];
+  const key = (gaap ?? facts) as object;
+  const ys = facts.ltmQuarterSource?.source === "yahoo" ? facts.ltmQuarterSource.through : null;
+  if (anchorCache.has(key)) {
+    const a = anchorCache.get(key) ?? null;
+    return ys && (!a || ys > a) ? ys : a;
+  }
+  let best: string | null = null;
+  const periodic = [...ANNUAL_FORMS, ...INTERIM_FORMS];
+  for (const e of gaap?.["Assets"]?.units?.["USD"] ?? []) {
+    if (e.start || !e.end || e.val == null || !periodic.includes(e.form)) continue;
+    if (e.filed && e.end > e.filed) continue;
+    if (!best || e.end > best) best = e.end;
+  }
+  // 자산총계 태그가 없는 회사 — 순이익 기간 끝
+  if (!best)
+    for (const c of ["NetIncomeLoss", "ProfitLoss"])
+      for (const e of gaap?.[c]?.units?.["USD"] ?? []) {
+        if (!e.start || !periodic.includes(e.form) || (e.filed && e.end > e.filed)) continue;
+        if (!best || e.end > best) best = e.end;
+      }
+  anchorCache.set(key, best);
+  return ys && (!best || ys > best) ? ys : best;
+}
+
+/**
+ * **흐름 LTM 단일 함수** — 최근 FY + 당기누적 − 전년동기누적. 모든 화면(하이라이트·재무분석·손익·현금흐름·은행·개요 TTM)이
+ * 이것만 쓴다(예전엔 모듈마다 사본이 있어 550일 규칙·전년동기 누락 처리가 제각각이었다).
+ *  - 최근 사업연도 종료가 550일 넘게 지났으면(태그 중단) 공란 — LTM_STALE
+ *  - 사업연도 뒤 정기공시(anchor)가 있는데 이 개념의 당기 누적이 없거나 그 끝이 anchor 가 아니면 공란 — LTM_NO_QUARTER
+ *  - 당기 누적은 있는데 전년 동기 누적이 없으면 공란 — LTM_NO_QUARTER(사업연도 값으로 대신하지 않음)
+ *  - 사업연도 뒤 정기공시가 아직 없으면(anchor ≈ FY 말) LTM = 사업연도 값(정의상 같은 기간)
+ */
+export function ltmFlowOf(entries: FactUnitEntry[], anchor: string | null): LtmFlow {
+  const none = (reason: string | null): LtmFlow => ({ value: null, reason, fy: null, cur: null, prior: null });
   const annuals = entries
-    .filter((e) => e.fp === "FY" && isFullYearDuration(e) && ANNUAL_FORMS.includes(e.form))
+    .filter((e) => e.val != null && e.fp === "FY" && isFullYearDuration(e) && ANNUAL_FORMS.includes(e.form))
     .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b));
   const fy = annuals[0];
-  if (!fy?.start) return null;
-  // 태그를 중단한 개념의 옛 연간값을 "최근 12개월"로 쓰지 않는다(감사 2026-09-23:
-  // GE 는 OperatingIncomeLoss 를 몇 년 전에 끊었는데 그 마지막 연간값이 LTM 으로
-  // 잡혀 EBITDA 가 3배로 나왔다). 최근 사업연도 종료가 550일보다 오래됐으면 없음.
-  if (isStaleAnnual(fy.end)) return null;
-  const interims = entries.filter((e) => e.start && LTM_INTERIM_FORMS.includes(e.form));
+  if (!fy?.start) {
+    // 사업연도 값이 없는 개념 — 분기 값만 있으면 LTM 을 만들 수 없다
+    return none(entries.some((e) => e.start && LTM_INTERIM_FORMS.includes(e.form)) ? LTM_NO_QUARTER : null);
+  }
+  // 태그를 중단한 개념의 옛 연간값을 "최근 12개월"로 쓰지 않는다(감사 2026-09-23: GE OperatingIncomeLoss)
+  if (isStaleAnnual(fy.end)) return none(LTM_STALE);
+  const interims = entries.filter((e) => e.start && e.val != null && LTM_INTERIM_FORMS.includes(e.form));
   const cur = interims
     .filter((e) => Math.abs(days(fy.end, e.start!)) <= 12 && e.end > fy.end)
     .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
-  if (!cur?.start) return ttmCombine(fy);
+  const laterFiling = anchor != null && days(fy.end, anchor) > 12;
+  if (!cur?.start) {
+    if (laterFiling) return none(LTM_NO_QUARTER);
+    const v = ttmCombine(fy);
+    return { value: v, reason: v == null ? LTM_YAHOO_GAP : null, fy, cur: null, prior: null };
+  }
+  // 개념의 최근 누적이 회사의 최근 정기공시보다 앞서 끝나면(그 분기 공시에 없는 개념) 공란
+  if (anchor != null && days(cur.end, anchor) > 12) return none(LTM_NO_QUARTER);
   const wS = shiftYear(cur.start, -1);
   const wE = shiftYear(cur.end, -1);
   const prior = interims
-    .filter(
-      (e) =>
-        e.start &&
-        Math.abs(days(wS, e.start)) <= 12 &&
-        Math.abs(days(wE, e.end)) <= 12,
-    )
+    .filter((e) => Math.abs(days(wS, e.start!)) <= 12 && Math.abs(days(wE, e.end)) <= 12)
     .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
-  if (!prior) return ttmCombine(fy);
-  return ttmCombine(fy, cur, prior);
+  if (!prior) return none(LTM_NO_QUARTER);
+  const v = ttmCombine(fy, cur, prior);
+  return { value: v, reason: v == null ? LTM_YAHOO_GAP : null, fy, cur, prior };
+}
+
+/** 회사의 최근 사업연도 결산일(연간 공시의 자산총계 기준일) */
+export function latestAnnualEnd(facts: CompanyFacts): string | null {
+  let best: string | null = null;
+  for (const e of facts.facts["us-gaap"]?.["Assets"]?.units?.["USD"] ?? [])
+    if (!e.start && e.end && ANNUAL_FORMS.includes(e.form) && (!best || e.end > best)) best = e.end;
+  return best;
+}
+
+/**
+ * **LTM 구성 공백** — 이 개념이 회사의 최근 사업연도 값은 있는데 LTM 을 만들 분기 누적이 없다(연간에만 태깅). 여러 태그 중
+ * 최댓값·첫 값을 고르는 지표(감가상각비 등)는 이런 태그가 하나라도 있으면 나머지 태그만으로 낸 LTM 이 부분값일 수 있어 공란으로 둔다.
+ */
+export function ltmGapConcept(facts: CompanyFacts, entries: FactUnitEntry[]): boolean {
+  const fyEnd = latestAnnualEnd(facts);
+  if (!fyEnd) return false;
+  const hasFy = entries.some((e) => e.fp === "FY" && isFullYearDuration(e) && ANNUAL_FORMS.includes(e.form) && Math.abs(days(e.end, fyEnd)) <= 12);
+  return hasFy && ltmFlowOf(entries, ltmAnchor(facts)).value == null;
+}
+
+/** 흐름 TTM 값만(ltmFlowOf). anchor = ltmAnchor(facts) */
+export function ttmOf(entries: FactUnitEntry[], anchor: string | null): number | null {
+  return ltmFlowOf(entries, anchor).value;
+}
+
+/**
+ * 여러 후보 개념 중 **가장 최근 데이터가 있는 개념**의 LTM(태그 이전 후 옛 개념의 FY 값 방지 — NVIDIA 등). 값과 사유.
+ */
+export function bestLtmFlow(facts: CompanyFacts, concepts: string[], unit = "USD"): { value: number | null; reason: string | null } {
+  let best: { value: number | null; reason: string | null } = { value: null, reason: null };
+  let bestEnd = "";
+  const anchor = ltmAnchor(facts);
+  for (const c of concepts) {
+    const es = entriesOf(facts, c, unit);
+    if (!es.length) continue;
+    const maxEnd = es.reduce((m, e) => (e.end > m ? e.end : m), "");
+    if (maxEnd > bestEnd) {
+      bestEnd = maxEnd;
+      const r = ltmFlowOf(es, anchor);
+      best = { value: r.value, reason: r.reason };
+    }
+  }
+  return best;
 }
 
 // 매출원가 태그 판정(cogsConcepts)은 삭제 — 매출원가·매출총이익은 재무 5층 구조 지표(src/lib/fin metrics/cogs.ts)가 본표 계산 구조로

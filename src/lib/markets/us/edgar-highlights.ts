@@ -10,16 +10,16 @@
 import { unavailableNote } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
-import { isStaleAnnual, splitFactorsByYear, fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
+import { splitFactorsByYear, fiscalYearOf, ltmAnchor, ltmFlowOf } from "./edgar-series";
 import { yahooLtm } from "./edgar-yahoo-quarters";
 import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm } from "./fin-revenue";
 import { buildShareResolver } from "./edgar-shares";
 import {
-  ltmEps,
-  ltmNetIncome,
+  ltmEpsOf,
+  ltmNetIncomeOf,
   netIncomeAnnualByYear,
   netIncomeToParentEntries,
-  parentEquityAt,
+  parentEquityOf,
   fyEps,
   positiveRatio,
 } from "./edgar-pershare";
@@ -32,10 +32,7 @@ import {
   type EvBlocker,
   type EvContext,
 } from "./edgar-ev";
-import {
-  classALatest,
-  type ClassAFacts,
-} from "./edgar-classfacts";
+import type { ClassAFacts } from "./edgar-classfacts";
 
 export interface HighlightColumn {
   key: string;
@@ -54,6 +51,8 @@ export interface HighlightRow {
   /** 구분용 빈 행 */
   spacer?: boolean;
   values: (number | null)[];
+  /** 칸 주석(values 와 같은 순서) — 빈칸의 사유 또는 근사값 라벨(그림자 채우기 금지, 2026-09-27). 화면이 ※번호로 표시 */
+  cellNotes?: (string | null)[];
 }
 export interface FinancialHighlights {
   currency: string;
@@ -75,8 +74,6 @@ export interface HighlightEstimatePeriod {
 }
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-// LTM 조합 전용 — 10-Q + 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)
-const INTERIM_FORMS = LTM_INTERIM_FORMS;
 
 // 영업이익 태그 자체가 없는 회사(XOM 등 — 매출→세전이익 구조) 최후 폴백.
 const PRETAX_CONCEPTS = [
@@ -98,10 +95,6 @@ function isFullYear(e: FactUnitEntry): boolean {
   if (!e.start) return false;
   const d = daysBetween(e.start, e.end);
   return d >= 300 && d <= 400;
-}
-function shiftYear(iso: string, n: number): string {
-  const [y, m, d] = iso.split("-");
-  return `${Number(y) + n}-${m}-${d}`;
 }
 
 function unitEntries(facts: CompanyFacts, concept: string, unit: string): FactUnitEntry[] {
@@ -140,36 +133,6 @@ function annualSeriesMerged(
   return [...byYear.values()].sort((a, b) => a.year - b.year);
 }
 
-/** 흐름 계정 TTM = 최근 FY + 당기누적 − 전년동기누적. */
-function ttm(entries: FactUnitEntry[]): number | null {
-  const annuals = entries
-    .filter((e) => e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form))
-    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b));
-  const fy = annuals[0];
-  if (!fy?.start) return null;
-  // 태그를 중단한 개념의 옛 연간값을 "최근 12개월"로 쓰지 않는다(감사 2026-09-23:
-  // GE 는 OperatingIncomeLoss 를 몇 년 전에 끊었는데 그 마지막 연간값이 LTM 으로
-  // 잡혀 EBITDA 가 3배로 나왔다). 최근 사업연도 종료가 550일보다 오래됐으면 없음.
-  if (isStaleAnnual(fy.end)) return null;
-  const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
-  const cur = interims
-    .filter((e) => Math.abs(daysBetween(fy.end, e.start!)) <= 12 && e.end > fy.end)
-    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
-  if (!cur?.start) return ttmCombine(fy);
-  const wS = shiftYear(cur.start, -1);
-  const wE = shiftYear(cur.end, -1);
-  const prior = interims
-    .filter(
-      (e) =>
-        e.start &&
-        Math.abs(daysBetween(wS, e.start)) <= 12 &&
-        Math.abs(daysBetween(wE, e.end)) <= 12,
-    )
-    .sort((a, b) => Math.abs(daysBetween(wE, a.end)) - Math.abs(daysBetween(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
-  if (!prior) return ttmCombine(fy);
-  return ttmCombine(fy, cur, prior);
-}
-
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   let best: number | null = null;
   for (const b of bars) {
@@ -191,7 +154,7 @@ export function buildUsHighlights(
   facts: CompanyFacts,
   bars: QuoteBar[],
   estimates: HighlightEstimatePeriod[],
-  /** 듀얼클래스 종목(EDGAR 에 undimensioned 주식수 없음)용 Yahoo 컨센서스 발행주식수 — LTM 컬럼 폴백. */
+  /** Yahoo 현재 주식수 힌트 — ADR 비율 판정에만 쓴다(주식수 값으로 대신 쓰지 않음, edgar-shares.ts) */
   fallbackShares?: number | null,
   /** 10-K XBRL 인스턴스에서 뽑은 Class A EPS·주식수 실측(Visa 등). */
   classFacts?: ClassAFacts | null,
@@ -200,6 +163,9 @@ export function buildUsHighlights(
 ): FinancialHighlights {
   const cf = classFacts ?? null;
   const notes: string[] = [];
+  // LTM 흐름 — edgar-series.ts 단일 함수(사업연도 뒤 분기가 있는데 누적이 없으면 공란 + 사유)
+  const anchor = ltmAnchor(facts);
+  const ltm = (entries: FactUnitEntry[]) => ltmFlowOf(entries, anchor);
   // 발행주식수 단일 기준 — edgar-analysis.ts 와 같은 모듈을 쓴다.
   const shareRes = buildShareResolver(facts, { classFacts: cf, sharesHint: fallbackShares });
   // EV 브릿지·감가상각비 단일 기준 — edgar-analysis.ts·multiples·컨센서스와 공유.
@@ -338,7 +304,6 @@ export function buildUsHighlights(
     ),
   };
   // 자기자본 — edgar-pershare.ts 단일 기준(재작성본 우선, 없으면 자산 − 부채).
-  const equityAt = (asOf: string): number | null => parentEquityAt(facts, asOf);
   // 현금·차입금·우선주·비지배지분은 edgar-ev.ts(evRes)가 계산한다.
   // 발행주식수(기말·현재·듀얼클래스 폴백)는 전부 edgar-shares.ts 의
   // buildShareResolver 로 옮겼다 — 이 파일과 edgar-analysis.ts 가 각자
@@ -351,8 +316,16 @@ export function buildUsHighlights(
     col: HighlightColumn,
   ): number | null => {
     if (col.kind === "fy") return annualAt(ser, Number(col.key.slice(2)));
-    if (col.kind === "ltm") return ttm(entries);
+    if (col.kind === "ltm") return ltm(entries).value;
     return null;
+  };
+  /** LTM 칸 주석 — 흐름이 비었을 때 사유 */
+  const ltmIdxC = columns.findIndex((c) => c.kind === "ltm");
+  const ltmNote = (entries: FactUnitEntry[]): (string | null)[] => {
+    const o: (string | null)[] = Array(nCol).fill(null);
+    const r = ltm(entries);
+    if (ltmIdxC >= 0 && r.value == null && r.reason) o[ltmIdxC] = r.reason;
+    return o;
   };
 
   // ── EV 브릿지 ────────────────────────────────────────────────────
@@ -365,9 +338,11 @@ export function buildUsHighlights(
   const priceByCol = blank();
   const sharesByCol = blank();
   const opUnitValue = blank();
-  let approxPerShare = false;
+  // 칸 주석 — 시가총액(주식수 근사·공란 사유), EV 브릿지(구성요소가 그 기준일 공시에 없음)
+  const nMktcap: (string | null)[] = Array(nCol).fill(null);
+  const nBridge: (string | null)[] = Array(nCol).fill(null);
+  const nEquity: (string | null)[] = Array(nCol).fill(null);
   const blockers = new Set<EvBlocker>();
-  let staleEv = false;
   let partialDebt = false;
   let captiveExcluded = false;
 
@@ -377,7 +352,9 @@ export function buildUsHighlights(
     const isLtm = col.kind === "ltm";
     const price = isLtm ? (lastBar?.close ?? null) : closeOnOrBefore(bars, asOf);
     priceByCol[i] = price;
-    equity[i] = equityAt(asOf);
+    const eqR = parentEquityOf(facts, asOf);
+    equity[i] = eqR.value;
+    if (eqR.value == null) nEquity[i] = eqR.reason;
     // 시총용 주식수: 공용 기준(edgar-shares.ts)으로 통일 — 소스 우선순위도,
     // 분할 보정(시세는 분할 소급 반영인데 공시 주식수는 as-reported)도 거기
     // 한 곳에서 처리한다. 예전엔 이 파일과 edgar-analysis.ts 가 서로 다른
@@ -387,12 +364,12 @@ export function buildUsHighlights(
       ? shareRes.current()
       : shareRes.atFiscalYearEnd(Number(col.key.slice(2)), asOf);
     const shares = disclosed;
-    // 공시 주식수가 없어 힌트(시총÷주가 등)로 대체됐는지는 resolver 가 안다
-    // — 클래스별로만 태깅하는 종목(Visa 등)에 붙는 "근사" 주석용.
-    if (shareRes.usedHint()) approxPerShare = true;
+    // 주식수 칸 주석 — 근사(오너 승인: 결산일 표지·가중평균 / 현재 Yahoo) 라벨, 공란이면 사유
+    nMktcap[i] = isLtm ? shareRes.currentNote() : shareRes.yearEndNote(Number(col.key.slice(2)));
     sharesByCol[i] = shares;
     const mc = price != null && shares != null ? price * shares : null;
     marketCap[i] = mc;
+    if (mc == null && price == null) nMktcap[i] = "주가 없음";
 
     // EV 브릿지 — edgar-ev.ts 단일 기준(운용리스 제외, 장기투자자산 미차감,
     // 금융 자회사 차입금 제외, UP-REIT 파트너 지분 시가 반영).
@@ -400,12 +377,12 @@ export function buildUsHighlights(
     if (block) blockers.add(block);
     const b0 = evRes.bridgeAt(asOf);
     // Yahoo 분기 LTM: EV 구성요소가 전부 같은 기준일로 채워졌을 때만(아니면 LTM EV·순차입금 공란)
-    const b = b0 && isLtm && yl && (!yl.evComplete || b0.stale || b0.balanceDate !== yl.through) ? null : b0;
+    const b = b0 && isLtm && yl && (!yl.evComplete || b0.balanceDate !== yl.through) ? null : b0;
+    if (!b && !block) nBridge[i] = b0 && yl ? (yl.evReason ?? "Yahoo 분기 EV 구성요소 불완전") : evRes.bridgeReason(asOf);
     if (b) {
       cash[i] = b.cash;
       debt[i] = b.debt;
       preferred[i] = b.preferred + b.nci;
-      if (b.stale) staleEv = true;
       if (b.debtPartial) partialDebt = true;
       if (b.captiveDebtExcluded != null) captiveExcluded = true;
       const opv = evCtx?.opUnits && price != null ? evCtx.opUnits * price : null;
@@ -442,7 +419,7 @@ export function buildUsHighlights(
       return oi != null && d != null ? oi + d : null;
     }
     if (col.kind === "ltm") {
-      const oi = ttm(E.opIncome);
+      const oi = ltm(E.opIncome).value;
       const d = daTtm(facts);
       // 감가상각비를 못 채웠으면 EBITDA 도 공란(0 으로 보지 않음) — Yahoo 분기
       // LTM 여부와 무관(독립 감사 지적 2026-09-25, 예전엔 yl 있을 때만 비웠다)
@@ -453,29 +430,28 @@ export function buildUsHighlights(
   });
   // 현재 발행주식수도 같은 공용 기준을 쓴다(시총·추정 순이익·LTM EPS 공통).
   const currentShares = shareRes.current();
-  const netIncome = columns.map((col) => {
+  const niLtm = ltmNetIncomeOf(facts);
+  const nNetIncome: (string | null)[] = Array(nCol).fill(null);
+  const netIncome = columns.map((col, i) => {
     if (col.kind === "estimate") {
-      const eps = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
-      return eps != null && currentShares != null ? eps * currentShares : null;
+      // 예상 순이익 = 무료 컨센서스 없음. "예상 EPS × 현재 주식수"는 다른 정의라 쓰지 않는다(그림자 채우기 금지)
+      nNetIncome[i] = "예상 순이익: 무료 컨센서스 없음(EPS × 현재 주식수로 대신하지 않음)";
+      return null;
     }
     // LTM 순이익은 공통 함수(재무분석·개요 멀티플과 같은 값)
-    if (col.kind === "ltm") return ltmNetIncome(facts);
+    if (col.kind === "ltm") {
+      if (niLtm.value == null) nNetIncome[i] = niLtm.reason;
+      return niLtm.value;
+    }
     return flowVal(S.netIncome, E.netIncome, col);
   });
   // 액면분할 보정 (소급 재작성 안 된 과거 연도 주당 지표를 최신 기준으로 환산)
   const splitF = splitFactorsByYear(facts);
   const sf = (y: number) => splitF.get(y) ?? 1;
+  const nEps: (string | null)[] = Array(nCol).fill(null);
   const eps = columns.map((col, i) => {
     if (col.kind === "estimate")
       return estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
-    const derive = (): number | null => {
-      const sh = col.kind === "ltm" ? currentShares : sharesByCol[i];
-      if (netIncome[i] != null && sh) {
-        approxPerShare = true;
-        return netIncome[i]! / sh;
-      }
-      return null;
-    };
     if (col.kind === "ltm") {
       // LTM EPS 는 ttm() 의 "최근 FY + 당기누적 − 전년동기누적" 식으로 구하지
       // 않는다 — 그 식은 더하고 빼도 되는 흐름(매출·순이익)에만 성립하고,
@@ -485,9 +461,10 @@ export function buildUsHighlights(
       // edgar-income.ts·edgar.ts 에서도 각각 고쳤다). LTM 순이익 ÷ 현재
       // 주식수로 직접 계산하고, 그마저 불가능할 때만 옛 경로로 폴백한다.
       // 공통 함수(보통주 귀속 LTM 순이익 ÷ 현재 주식수) — 재무분석·개요·은행과 동일
-      const le = ltmEps(facts, currentShares);
-      if (le != null) return le;
-      return ttm(E.eps) ?? derive() ?? classALatest(cf)?.epsDiluted ?? null;
+      // 없으면 공란 + 사유 — 흐름식 EPS·다른 주식수·Class A 최근 연간값으로 대신하지 않는다(그림자 채우기 금지)
+      const le = ltmEpsOf(facts, currentShares);
+      if (le.value == null) nEps[i] = le.reason;
+      return le.value;
     }
     // 사업연도 EPS 는 공통 함수(재무분석·컨센서스·은행과 같은 규칙)
     const r = fyEps(facts, Number(col.key.slice(2)), {
@@ -495,12 +472,13 @@ export function buildUsHighlights(
       fyShares: sharesByCol[i],
       fyNetIncome: netIncome[i],
     });
-    if (r.approx) approxPerShare = true;
+    // 원인별 칸 주석(Class A 기준·근사 등 — G4·G5)
+    nEps[i] = r.note;
     return r.eps;
   });
   const dps = columns.map((col) => {
     if (col.kind === "estimate") return null;
-    if (col.kind === "ltm") return ttm(E.dps);
+    if (col.kind === "ltm") return ltm(E.dps).value;
     const y = Number(col.key.slice(2));
     const v = annualAt(S.dps, y);
     return v == null ? null : v * sf(y);
@@ -532,30 +510,44 @@ export function buildUsHighlights(
       return yoy(v, annualAt(series, firstFy - 1));
     });
 
+  // 파생 행 칸 주석 — 구성 행의 사유를 그대로(값이 빈 칸만)
+  const inherit = (vals: (number | null)[], ...srcs: (string | null)[][]): (string | null)[] =>
+    vals.map((v, i) => (v != null ? null : (srcs.map((s) => s[i]).find((x) => x) ?? null)));
+  const nEbitda = (() => {
+    const o: (string | null)[] = Array(nCol).fill(null);
+    if (ltmIdxC >= 0 && ebitda[ltmIdxC] == null) {
+      const oi = ltm(E.opIncome);
+      o[ltmIdxC] = oi.value == null ? oi.reason : daTtm(facts) == null ? "LTM 감가상각비 구성 분기 없음" : null;
+    }
+    return o;
+  })();
+  const nOcf = ltmNote(E.ocf);
+  const nCapex = ltmNote(E.capex);
+  const nDps = ltmNote(E.dps);
   const rows: HighlightRow[] = [
-    { key: "mktcap", label: "시가총액", format: "money", values: marketCap },
+    { key: "mktcap", label: "시가총액", format: "money", values: marketCap, cellNotes: nMktcap },
     ...(opUnitValue.some((v) => v != null)
       ? [{ key: "opunits", label: "+ 운영 파트너십 지분 (시가)", format: "money" as const, values: opUnitValue }]
       : []),
-    { key: "cash", label: "− 현금·단기투자·장기 투자증권", format: "money", values: cash.map((v) => (v == null ? null : -v)) },
-    { key: "debt", label: "+ 차입금", format: "money", values: debt },
-    { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", values: preferred },
-    { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev },
+    { key: "cash", label: "− 현금·단기투자·장기 투자증권", format: "money", values: cash.map((v) => (v == null ? null : -v)), cellNotes: nBridge },
+    { key: "debt", label: "+ 차입금", format: "money", values: debt, cellNotes: nBridge },
+    { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", values: preferred, cellNotes: nBridge },
+    { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev, cellNotes: inherit(ev, nBridge, nMktcap) },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
     { key: "revenue", label: "매출액", format: "money", values: revenue },
     { key: "revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(revenue, S.revenue) },
-    { key: "ebitda", label: "EBITDA", format: "money", values: ebitda },
+    { key: "ebitda", label: "EBITDA", format: "money", values: ebitda, cellNotes: nEbitda },
     { key: "ebitda_m", label: "마진 %", format: "pct", indent: true, values: ebitda.map((v, i) => margin(v, revenue[i])) },
-    { key: "ni", label: "순이익", format: "money", values: netIncome },
+    { key: "ni", label: "순이익", format: "money", values: netIncome, cellNotes: nNetIncome },
     { key: "ni_m", label: "마진 %", format: "pct", indent: true, values: netIncome.map((v, i) => margin(v, revenue[i])) },
-    { key: "eps", label: "EPS (희석)", format: "eps", values: eps },
+    { key: "eps", label: "EPS (희석)", format: "eps", values: eps, cellNotes: nEps },
     { key: "eps_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(eps, S.eps) },
-    { key: "dps", label: "DPS", format: "eps", values: dps },
+    { key: "dps", label: "DPS", format: "eps", values: dps, cellNotes: nDps },
     { key: "divyield", label: "배당수익률 %", format: "pct", indent: true, values: divYield },
     { key: "sp2", label: "", format: "money", spacer: true, values: blank() },
-    { key: "ocf", label: "영업활동 현금흐름", format: "money", values: ocf },
-    { key: "capex", label: "자본지출", format: "money", values: capex },
-    { key: "fcf", label: "잉여현금흐름", format: "money", values: fcf },
+    { key: "ocf", label: "영업활동 현금흐름", format: "money", values: ocf, cellNotes: nOcf },
+    { key: "capex", label: "자본지출", format: "money", values: capex, cellNotes: nCapex },
+    { key: "fcf", label: "잉여현금흐름", format: "money", values: fcf, cellNotes: inherit(fcf, nOcf, nCapex) },
   ];
 
   // ── 투자지표 (밸류에이션) ───────────────────────────────────────
@@ -578,11 +570,14 @@ export function buildUsHighlights(
   const evEbitda = columns.map((col, i) =>
     col.kind === "estimate" ? null : ratio(ev[i], ebitda[i]),
   );
+  // 배수 칸 주석 — 근사 라벨은 값이 있어도(분모·분자 근사), 사유는 값이 빈 칸만
+  const labelOrWhy = (vals: (number | null)[], labels: (string | null)[][], whys: (string | null)[][]) =>
+    vals.map((v, i) => labels.map((l) => l[i]).find((x) => x) ?? (v == null ? (whys.map((w) => w[i]).find((x) => x) ?? null) : null));
   const valuationRows: HighlightRow[] = [
-    { key: "per", label: "PER", format: "mult", values: per },
-    { key: "pbr", label: "PBR", format: "mult", values: pbr },
-    { key: "psr", label: "PSR", format: "mult", values: psr },
-    { key: "ev_ebitda", label: "EV/EBITDA", format: "mult", values: evEbitda },
+    { key: "per", label: "PER", format: "mult", values: per, cellNotes: labelOrWhy(per, [nEps.map((n, i) => (eps[i] != null ? n : null))], [nEps]) },
+    { key: "pbr", label: "PBR", format: "mult", values: pbr, cellNotes: labelOrWhy(pbr, [nMktcap.map((n, i) => (marketCap[i] != null ? n : null))], [nMktcap, nEquity]) },
+    { key: "psr", label: "PSR", format: "mult", values: psr, cellNotes: labelOrWhy(psr, [nMktcap.map((n, i) => (marketCap[i] != null ? n : null))], [nMktcap]) },
+    { key: "ev_ebitda", label: "EV/EBITDA", format: "mult", values: evEbitda, cellNotes: inherit(evEbitda, nBridge, nMktcap, nEbitda) },
   ];
 
   // SEC 원본 조회 실패로 공란이 된 값(대체 계산 없음 — sec-unavailable.ts)
@@ -622,8 +617,6 @@ export function buildUsHighlights(
     notes.push("EV·EV/EBITDA 미표시: 차입금이 표준 태그로 공시되지 않음");
   if (captiveExcluded)
     notes.push("금융 자회사(할부금융) 차입금 제외 — 제조 부문 차입금만 반영");
-  if (staleEv)
-    notes.push("일부 열의 현금·차입금: 분기 공시에 없어 직전 사업연도말 값 사용");
   if (partialDebt) notes.push("차입금 일부(개별 대출 건별로만 공시된 기간대출 등) 미집계 — EV 과소 가능");
   if (opUnitValue.some((v) => v != null))
     notes.push(
@@ -632,13 +625,32 @@ export function buildUsHighlights(
   if (estCols.length)
     notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
   notes.push("EBITDA = 보고 영업이익 + 감가상각비·무형자산상각비 (블룸버그 '조정'과 다를 수 있음)");
-  if (usedPretaxAsOpIncome)
-    notes.push("영업이익 태그가 없는 회사(BMY·XOM 등) — 세전이익 + 이자비용 − 지분법 이익(EBIT)으로 근사(기타 비영업 손익 포함 가능)");
-  if (approxPerShare)
-    notes.push(
-      "EPS·시가총액·PER·PBR: 발행주식수를 클래스별로만 공시(Visa 등) → 현재 주식수(시총÷주가) 기준 근사",
+  if (usedPretaxAsOpIncome) {
+    // 산식을 실제로 쓴 것만 적는다(G6) — 이자비용 태그가 없는 기간은 세전이익 그대로라 "세전 + 이자" 문구가 틀렸다
+    const shown = new Set(columns.filter((c) => c.kind === "fy").map((c) => Number(c.key.slice(2))));
+    const basis = new Set(
+      E.opIncome.filter((e) => e.synBasis && e.fp === "FY" && shown.has(fiscalYearOf(e.end))).map((e) => e.synBasis),
     );
+    if (basis.has("ebit") || basis.size === 0)
+      notes.push("영업이익 태그가 없는 회사(BMY·XOM 등) — 세전이익 + 이자비용 − 지분법 이익(EBIT)으로 근사(기타 비영업 손익 포함 가능)");
+    if (basis.has("pretax"))
+      notes.push("영업이익 태그·이자비용 태그가 모두 없는 기간 — 세전이익 그대로(이자·지분법 미조정 근사)");
+  }
 
+  // 보조행(마진%·성장률%)의 빈칸 — 바로 위 기준 행의 칸 사유를 물려준다(빈칸 사유가 화면에서 빠지지 않게)
+  {
+    let base: HighlightRow | null = null;
+    for (const r of rows) {
+      if (r.spacer) continue;
+      if (!r.indent) {
+        base = r;
+        continue;
+      }
+      if (!base?.cellNotes) continue;
+      const bn = base.cellNotes;
+      r.cellNotes = r.values.map((v, i) => r.cellNotes?.[i] ?? (v == null ? (bn[i] ?? null) : null));
+    }
+  }
   return {
     currency: "USD",
     unitLabel: "USD 백만",

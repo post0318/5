@@ -74,12 +74,9 @@ export async function withEquityStatementShares(cik: string, facts: CompanyFacts
       const v = yearEndShares(xml, report);
       if (v != null) out.push({ end: report, val: v, fy: 0, fp: "FY", form: "10-K", filed: f.filed });
     } catch (e) {
-      // 조회 실패 — 이 연도는 공란으로(근사로 조용히 대체하지 않음). 파싱 오류만 이 연도를 건너뛰고 기존 근사로
-      const why = fetchFailureReason(e);
-      if (why != null) {
-        failed.push(report);
-        failReason ||= why;
-      }
+      // 조회 실패·판독 오류 모두 — 이 연도는 공란으로(근사로 조용히 대체하지 않음, 그림자 채우기 금지 2026-09-27)
+      failed.push(report);
+      failReason ||= fetchFailureReason(e) ?? `판독 오류 · ${e instanceof Error ? e.message : String(e)}`;
     }
   }
   const withOut = out.length

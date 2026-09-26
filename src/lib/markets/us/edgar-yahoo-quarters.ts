@@ -167,7 +167,10 @@ export function withYahooLtm(
   fx: Fx,
   currency: string,
 ): { facts: CompanyFacts; result: YahooLtmResult } {
-  const none = (reason: string) => ({ facts, result: { source: "none" as const, reason } });
+  // 보강 불가 = LTM 열 공란(사업연도 값을 LTM 으로 보이지 않는다 — 그림자 채우기 금지, 2026-09-27). 예외는 "사업연도 뒤
+  // 분기가 아직 없음" 하나(그때는 사업연도 = 최근 12개월, 정의상 같은 기간) — noQuarter
+  const none = (reason: string) => blankYahooLtm(facts, reason);
+  const noQuarter = (reason: string) => ({ facts, result: { source: "none" as const, reason } });
   const gaap = (facts.facts["us-gaap"] ?? {}) as Ns;
   const usd = (c: string): FactUnitEntry[] => gaap[c]?.units?.USD ?? [];
   const latestFy = (c: string) =>
@@ -184,7 +187,7 @@ export function withYahooLtm(
   if (!ya) return none(`Yahoo FY${E.slice(0, 4)} 연간 없음 — 연간 경계 확인 불가`);
   const newQ: string[] = [];
   for (let i = 1; i <= 4 && qBy.has(monthEndShift(E, 3 * i)); i++) newQ.push(monthEndShift(E, 3 * i));
-  if (!newQ.length) return none(`Yahoo 에 SEC FY${E.slice(0, 4)} 이후 분기 없음 — LTM = SEC 사업연도`);
+  if (!newQ.length) return noQuarter(`Yahoo 에 SEC FY${E.slice(0, 4)} 이후 분기 없음 — LTM = SEC 사업연도`);
   if (newQ.length >= 4) return none("Yahoo 분기가 SEC 연간보다 1년 이상 앞섬 — 새 연간 공시 대기");
   const k = newQ.length;
   const last = newQ[k - 1];
@@ -199,13 +202,12 @@ export function withYahooLtm(
   const qRate = new Map<string, number>();
   for (const d of last4) {
     const r = fx.avg(qStart(d), d);
-    if (r == null) { const why = fx.why?.(d); return why ? blankYahooLtm(facts, why) : none(`환율 없음(${d} 분기)`); }
+    if (r == null) return none(fx.why?.(d) ?? `환율 없음(${d} 분기)`);
     qRate.set(d, r);
   }
   const fyRate = fx.avg(fyStart, E), priorRate = fx.avg(fyStart, priorEnd), lastRate = fx.at(last), eRate = fx.at(E);
   if (fyRate == null || priorRate == null || lastRate == null || eRate == null) {
-    const why = fx.why?.(last);
-    return why ? blankYahooLtm(facts, why) : none("환율 없음(연간·기말)");
+    return none(fx.why?.(last) ?? "환율 없음(연간·기말)");
   }
   const yearAgo = monthEndShift(last, -12);
   const yearAgoRate = fx.at(yearAgo);

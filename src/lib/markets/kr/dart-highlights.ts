@@ -30,6 +30,11 @@ export interface KrHighlightInput {
   bars: QuoteBar[]; // Stooq (다년) — 회계연도말 종가
   fyCloseByYear?: Map<number, number>; // KRX 회계연도말 종가 폴백
   sharesOutstanding: number | null; // KRX 현재 상장주식수
+  /**
+   * 과거 연도 주식수를 결산일 값으로만 쓰는 모드(DART 연결 ADR — us/dart-adr.ts). 주면 연도 열 시가총액은 caps(결산일 유통주식수
+   * 기준)만, 없는 해는 공란(현재 주식수로 대신하지 않음), 추정 순이익을 EPS × 현재 주식수로 만들지 않는다(그림자 채우기 금지).
+   */
+  strictPastShares?: boolean;
   currentMarketCap: number | null;
   currentPrice: number | null;
   ttm: TtmFlows | null;
@@ -121,6 +126,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     const kx = c.kind === "ltm" ? caps?.current?.common : caps?.byYear.get(cy(c))?.common;
     if (c.kind === "ltm" && currentMarketCap != null) return currentMarketCap;
     if (kx != null) return kx;
+    if (input.strictPastShares && c.kind === "fy") return null;
     if (priceByCol[i] == null || shares == null) return null;
     if (c.kind === "fy") approxMcap = true;
     return priceByCol[i]! * shares;
@@ -165,7 +171,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     if (c.kind === "estimate") {
       return (
         fromEokwon(consensus?.estNetIncome) ??
-        (consensus?.estEps != null && shares != null ? consensus.estEps * shares : null)
+        (!input.strictPastShares && consensus?.estEps != null && shares != null ? consensus.estEps * shares : null)
       );
     }
     return at(aNi, cy(c));

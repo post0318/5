@@ -52,7 +52,8 @@
  *         --metric=revenue (매출 닫기 모드 — 종료코드 = 매출 검사 실패·매출 ③ 오류·조회 실패. 기본 실행은 종전 기준)
  *         --metric=cogs (매출원가·매출총이익 모드 — 이 모드에서만 A층 본표 대조·분기 항등식·F층 분류를 돈다. 지표 미종결)
  *         --cogs-rules=파일.json (D형 — 본표에 매출원가 줄이 없는 회사 — 의 회사별 구성 규칙. 앱 src 에서 가져오지 않고 데이터로 받는다:
- *           { "MCD": { "lines": [{ "concept": "mcd_X" | ["mcd_X", "us-gaap_Y"](공시마다 태깅이 다를 때 대안), "w": 1, "member": "ProductOrServiceAxis=ZMember"? }],
+ *           { "MCD": { "lines": [{ "concept": "mcd_X" | ["mcd_X", "us-gaap_Y"](공시마다 태깅이 다를 때 대안), "w": 1, "member": "ProductOrServiceAxis=ZMember"?,
+ *                                  "optional": true?(그 공시 본표에 없으면 0 — CEG 계열사 줄·DAL 조종사 합의금처럼 일부 공시에만 있는 줄) }],
  *                      "linesByForm": { "10-Q": [...] }?(양식마다 본표 줄 구성이 다를 때), "gp": "synth"|"blank", "note": "근거" } }
  *           규칙이 있으면 그 줄들이 그 공시 본표(손익 역할)에 있는지 확인하고 줄 값 합과 앱 매출원가를 정확 대조한다)
  * 결과: reports/verify/verify-{market}-{YYYYMMDD-HHmm KST}.json. 실패·오류·누락이 있으면 종료코드 1.
@@ -61,7 +62,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
-import { buildAudit, commonModeOf, decimalsVintage, extItemOf } from "./metrics/audit.mjs";
+import { buildAudit, COGS_RULE_COMMON, commonModeOf, decimalsVintage, extItemOf, isDecimalsRounding } from "./metrics/audit.mjs";
 
 // ── 인자 ─────────────────────────────────────────────────────────────
 const args = {};
@@ -80,7 +81,7 @@ const METRIC = args.metric == null ? null : String(args.metric).toLowerCase();
 if (METRIC != null && METRIC !== "revenue" && METRIC !== "cogs") die(`--metric 은 revenue 또는 cogs (받은 값: ${args.metric})`);
 // 매출원가·매출총이익 모드 — 지표가 닫히기 전이라 기본 실행(야간 검증)에는 새 검사를 넣지 않는다
 const COGS_MODE = METRIC === "cogs";
-/** D형 구성 규칙(--cogs-rules) — 종목 → { lines: [{ concept, w?, member?, label? }], linesByForm?, gp: "synth"(기본)|"blank", note } */
+/** D형 구성 규칙(--cogs-rules) — 종목 → { lines: [{ concept, w?, member?, label?, optional? }], linesByForm?, gp: "synth"(기본)|"blank", note } */
 let COGS_RULES = {};
 if (args["cogs-rules"] != null) {
   if (args["cogs-rules"] === true) die("--cogs-rules 에 규칙 파일 경로를 지정하세요");
@@ -221,6 +222,7 @@ const COMMON = "common";
 const COMMON_LABEL = "공통모드 — 독립 검증 아님";
 /** 외부 표기 단위 반올림(round(앱, 단위) = 외부)만으로 설명되는 차이 — 증거로 쓰지 않는다(오너 결정 2026-09-26) */
 const NA_PRECISION = "검증불가(외부 정밀도 부족)";
+const NA_FX = "검증불가(외부 환율 비공개)";
 /**
  * 공통모드 PASS → COMMON. 앱과 같은 규칙·데이터로 낸 통과는 외부 소스가 앱 값과 **정확히** 같을 때(extExact = 그 소스 이름)만
  * 독립 확인으로 PASS 를 유지한다. 통과가 아닌 결과(FAIL·NA)는 그대로
@@ -463,9 +465,10 @@ function instanceDecimals(cik, accn) {
       const ctx = parseContexts(xml), out = new Map();
       for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+(?:[eE][-+]?\d+)?)\s*</g)) {
         const c = ctx.get(m[4]);
-        if (!c || c.dims.length) continue;
+        // 차원 사실은 축 하나짜리만 "|축=멤버" 를 붙인 별도 키로(매출원가 기준 혼합 판정 — MAR 원가 멤버 줄). 차원 없는 키는 종전 그대로
+        if (!c || c.dims.length > 1) continue;
         const d = /decimals="([^"]+)"/.exec(`${m[3]} ${m[5]}`)?.[1];
-        const k = `${m[2]}|${c.start ?? ""}|${c.end ?? c.instant ?? ""}`;
+        const k = `${m[2]}|${c.start ?? ""}|${c.end ?? c.instant ?? ""}${c.dims.length ? `|${c.dims[0][0]}=${c.dims[0][1]}` : ""}`;
         out.set(k, [...(out.get(k) ?? []), { v: Number(m[6]), dec: d == null ? null : d === "INF" ? Infinity : Number(d) }]);
       }
       return out;
@@ -1123,6 +1126,8 @@ const lineIs = (re, id, label) => !/Exclu/i.test(`${id} ${label ?? ""}`) && re.t
 const FP_INT_LABEL_RE = /interest expense of financial products/i;
 /** D형 빈칸의 앱 사유 문구 — 구성 규칙이 없는 동안 앱은 매출원가를 비우고 이 사유를 단다 */
 const COGS_WAIT = "구성 규칙 대기";
+/** 파생 열 구성 공시 간 기준 혼합 빈칸의 앱 사유 문구(앱 COGS_NOTE.mix — 문구만 맞춘다, import 안 함) */
+const COGS_MIX = "기준 혼합";
 
 /** 공시 링크베이스(_pre·_cal·_lab·.xsd)·목록(index.json) — 매출·매출원가 판독이 같은 공시 파일을 다시 받지 않게 최근 40건 캐시 */
 const linkCache = new Map();
@@ -1277,9 +1282,12 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
     const f = { ...p, ...fc };
     // 규칙 줄의 concept 는 대안 목록일 수 있다(MCD: 10-K 는 mcd:FoodAndPaperCosts, 10-Q 는 다른 개념으로 같은 줄을 태깅) — 이 공시 본표에 있는 첫 개념
     // 양식마다 본표 줄 구성이 다르면(MCD 10-Q 는 직영점 비용 세 줄을 한 줄로) linesByForm["10-Q"] 로 따로 준다
-    if (fc.type === "D" && rule) f.ruleTerms = (rule.linesByForm?.[p.form] ?? rule.lines).map((l) => {
+    // 구성 규칙은 매출총이익 식이 없는 본표(D·C)에 적용 — MAR 은 원가 줄(CostOfRevenue "Operating costs")이 차원 멤버로만 공시돼 라벨 판독상 C 로
+    // 잡히지만 무차원 값이 없어 규칙(멤버 합)이 정의다. 규칙이 있으면 D 로 본다(규칙 파일은 D형 종목만 — scripts/metrics/cogs-rules.json)
+    if (rule && fc.type === "C") f.type = "D";
+    if (f.type === "D" && rule) f.ruleTerms = (rule.linesByForm?.[p.form] ?? rule.lines).map((l) => {
       const alts = [].concat(l.concept), id = alts.find((c) => fc.ids.includes(c)) ?? alts[0];
-      return { id, w: l.w ?? 1, member: l.member ?? null, label: l.label ?? id.replace(/^[a-z0-9-]+_/i, ""), onFace: fc.ids.includes(id) };
+      return { id, w: l.w ?? 1, member: l.member ?? null, label: l.label ?? id.replace(/^[a-z0-9-]+_/i, ""), onFace: fc.ids.includes(id), optional: !!l.optional };
     });
     const ts = [...fc.terms, ...fc.parts, ...fc.da, ...(f.ruleTerms ?? []), ...(fc.gp ? [{ id: fc.gp }] : []), ...(fc.fpInt ? [fc.fpInt] : [])];
     const need = ts.filter((t) => t.member || !cfRows(t.id).some((e) => e.accn === p.accn));
@@ -1319,19 +1327,22 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
   const dd = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
   const tag = (t) => t.label ?? t.id;
   /** 공시 f 가 싣는 기간(pred) 중 줄 t 의 값 — 그 기간의 최신 판본(반올림 재태깅 제외) × 부호 */
-  const lineAt = (f, t, pred) => {
+  const lineAt = (f, t, pred, orig = false) => {
     const rs = rows(t);
     const own = rs.find((e) => e.accn === f.accn && pred(e));
     if (!own) return null;
-    const e = latestPrecise(rs.filter((x) => x.start === own.start && x.end === own.end));
-    return { v: e.val * (t.w ?? 1), start: e.start, end: e.end, filed: e.filed, form: e.form, retag: e.retag ?? null };
+    const pool = rs.filter((x) => x.start === own.start && x.end === own.end);
+    // orig = 그 공시 자체의 값(원 공시 대조용 — 최신 판본으로 바꾸지 않음). 같은 공시 안 문장용 반올림 사실은 정밀값 쪽
+    const mine = pool.filter((x) => x.accn === f.accn);
+    const e = orig ? (mine.find((x) => !mine.some((w) => w.val !== x.val && sentenceRetag(x.val, w.val))) ?? mine.at(-1)) : latestPrecise(pool);
+    return { v: e.val * (t.w ?? 1), val: e.val, accn: e.accn, start: e.start, end: e.end, filed: e.filed, form: e.form, retag: orig ? null : e.retag ?? null };
   };
   /** 공시 f 가 그 기간을 싣는가(D형 판정용 — 원가 줄이 없으니 본표의 다른 줄로). 현금흐름표·자본변동표에도 실린 개념은 빼고(faceIds) 본다 */
   const covers = (f, pred) => (f.faceIds ?? f.ids).some((id) => cfRows(id).some((e) => e.accn === f.accn && pred(e))) || (f.periods ?? []).some(pred);
-  const one = (f, pred) => {
+  const one = (f, pred, orig = false) => {
     const terms = f.type === "D" ? f.ruleTerms ?? [] : f.terms;
     let anchor = null;
-    for (const t of terms) { anchor = lineAt(f, t, pred); if (anchor) break; }
+    for (const t of terms) { anchor = lineAt(f, t, pred, orig); if (anchor) break; }
     if (!anchor) {
       if (f.type === "G") return null; // 매출총이익만 — 다음 공시로
       // 원가(규칙) 줄 값이 이 공시에서 하나라도 읽혔으면 본표가 그 기간 열을 싣지 않는 것 — 다음 공시로. 본표의 다른 줄로 판정하면
@@ -1344,16 +1355,16 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
       if (f.type !== "D" && !dimOnly) return { err: `${f.form} ${f.report}(${f.accn}) 본표 원가 줄 ${terms.map(tag).join("·")} 이 있는데 companyfacts·공시 원본 어디서도 차원 없는 값을 읽지 못함 — 판독 실패` };
       if (!covers(f, pred)) return null; // 이 공시는 그 기간을 싣지 않음 — 다음 공시로
       const why = f.ruleTerms ? "구성 규칙 줄 값 없음" : f.how;
-      return { type: "D", rule: !!f.ruleTerms, offFace: (f.ruleTerms ?? []).filter((t) => !t.onFace).map(tag), cogs: null, gp: null, parts: [], da: [], how: `${f.form} ${f.report} ${why}` };
+      return { type: "D", rule: !!f.ruleTerms, offFace: (f.ruleTerms ?? []).filter((t) => !t.onFace && !t.optional).map(tag), cogs: null, gp: null, parts: [], da: [], how: `${f.form} ${f.report} ${why}` };
     }
     const same = (e) => e.start === anchor.start && e.end === anchor.end;
-    const vals = terms.map((t) => ({ t, x: lineAt(f, t, same) }));
+    const vals = terms.map((t) => ({ t, x: lineAt(f, t, same, orig) }));
     const miss = vals.filter((y) => !y.x).map((y) => tag(y.t));
-    const g = f.gp ? lineAt(f, { id: f.gp, w: 1 }, same) : null;
+    const g = f.gp ? lineAt(f, { id: f.gp, w: 1 }, same, orig) : null;
     const newest = [...vals.map((y) => y.x), g].filter(Boolean).sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0];
     const retag = [...vals.map((y) => y.x && y.x.retag && `${tag(y.t)}`), g?.retag && "매출총이익"].filter(Boolean);
     return {
-      type: f.type, rule: !!f.ruleTerms, offFace: (f.ruleTerms ?? []).filter((t) => !t.onFace).map(tag),
+      type: f.type, rule: !!f.ruleTerms, offFace: (f.ruleTerms ?? []).filter((t) => !t.onFace && !t.optional).map(tag), faceAccn: f.accn,
       start: anchor.start, end: anchor.end,
       cogs: vals.reduce((s, y) => s + (y.x?.v ?? 0), 0), gp: g?.v ?? null,
       parts: f.parts.length >= 2 ? f.parts.map((t) => ({ id: t.id, label: t.label, v: lineAt(f, t, same)?.v ?? null })) : [],
@@ -1385,17 +1396,132 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
       cogs: sum((r) => r.cogs), gp: sum((r) => r.gp), parts: byId("parts"), da: byId("da"), start: xs[0][0].start, end: xs[0][0].end,
       fpInt: sum((r) => r.fpInt), fpIntLabel: xs[0][0].fpIntLabel ?? null,
       how: `${label} — ${xs.map(([r, k]) => `${k < 0 ? "− " : ""}[${r.how}]`).join(" ")}`,
+      comps: xs.map(([r, k]) => ({ start: r.start, end: r.end, k, v: r.cogs, faceAccn: r.faceAccn })),
     };
   };
+  /**
+   * 구성 공시 간 기준 혼합(리드 결정 2026-09-27 — 앱 is.ts readCogsTerms 와 다른 경로의 독립 판정): 파생 열의 구성분(사업연도·9개월·당기
+   * 누적·전년 동기)마다 **그 기간을 처음 공시한 원 공시**의 본표 원가(그 공시 자체 값 — 그 공시 본표의 원가 줄·구성 규칙 줄)와 파생에 쓴
+   * 최신 판본 값을 비교한다. 다르면(재작성·재분류) 혼합 — 한 열 = 한 기준이라 앱은 빈칸 + "기준 혼합"이어야 한다. 원 공시는
+   * 제출 목록에서 찾아(origFiling) addOriginals 가 미리 읽어 둔다(못 찾거나 못 읽으면 판정 불가 — mixUnknown, 다른 공시로 대신하지 않음).
+   * 합이 같은 개념 대체(MCD 10-K 3줄 ↔ 10-Q 1줄)는 값이 같아 혼합이 아니다. 차이는 허용 오차 없이 decimals 로 가른다(judgeComp).
+   */
+  /**
+   * 원 공시 — 그 기간을 처음 공시한 정기공시를 **제출 목록**(submissions recent · 과거 목록 파일)에서 정확히 찾는다: 보고 기준일 = 기간 끝(±3일),
+   * 양식 = 기간 길이에 맞는 원본(사업연도 10-K, 그 외 10-Q — 정정 공시 제외) 중 가장 이른 제출. 못 찾으면 null(판정 불가 — 다른 공시로 대신하지
+   * 않는다, 리드 결정 2026-09-27). 과거 목록 조회 실패는 throw(호출부가 조회 실패로 기록)
+   */
+  const subPages = [sub.filings?.recent ?? {}], oldPages = new Set();
+  const origOf = new Map(); // "start|end" → { accn, form, filed, report } | null
+  const origFiling = async (c) => {
+    const k = `${c.start}|${c.end}`;
+    if (origOf.has(k)) return origOf.get(k);
+    const form = (Date.parse(c.end) - Date.parse(c.start)) / 864e5 >= 300 ? "10-K" : "10-Q";
+    const oldest = () => subPages.map((pg) => (pg.filingDate ?? []).at(-1) ?? "").sort()[0] ?? "";
+    for (const f of oldest() > c.end ? sub.filings?.files ?? [] : []) {
+      if (oldPages.has(f.name) || (f.filingTo ?? "") < c.end) continue;
+      oldPages.add(f.name);
+      subPages.push(await secJson(`https://data.sec.gov/submissions/${f.name}`));
+    }
+    let best = null;
+    for (const pg of subPages)
+      for (let i = 0; i < (pg.form ?? []).length; i++)
+        if (pg.form[i] === form && pg.reportDate?.[i] && dayDiff(pg.reportDate[i], c.end) <= 3 && (!best || pg.filingDate[i] < best.filed))
+          best = { accn: pg.accessionNumber[i], form, filed: pg.filingDate[i], report: pg.reportDate[i] };
+    origOf.set(k, best);
+    return best;
+  };
+  /** 구성분 판정 결과 "start|end" → { mix } | { unk } | {} — addOriginals 가 채운다(원 공시·decimals 판독은 비동기) */
+  const mixVerdict = new Map();
+  const withMix = (res) => {
+    if (!res || res.cogs == null || !res.comps) return res;
+    const vs = res.comps.map((c) => mixVerdict.get(`${c.start}|${c.end}`));
+    if (vs.some((v) => !v)) return res; // 판정 전(addOriginals 를 거치지 않은 호출 — D층 항등식 등)
+    const bad = vs.filter((v) => v.mix).map((v) => v.mix), unk = vs.filter((v) => v.unk).map((v) => v.unk), rp = vs.filter((v) => v.rep).map((v) => v.rep);
+    if (bad.length) return { ...res, mix: bad.join("; ") };
+    if (unk.length) return { ...res, mixUnknown: unk.join("; ") };
+    // 반올림 재게시만 있으면 혼합 아님 — 근거를 메모에 남긴다(decimals 판정)
+    return rp.length ? { ...res, how: `${res.how} · 기준 혼합 아님(decimals: ${rp.join("; ")})` } : res;
+  };
+  const localOf = (id) => id.replace(/^[a-z0-9-]+_/i, "");
+  /** 공시 accn 의 그 줄 사실 decimals(같은 값 사실 중 가장 정밀한 선언) — 없으면 null */
+  const decOf = async (accn, t, x) => {
+    const idx = await instanceDecimals(cik, accn);
+    const hit = (idx?.get(`${localOf(t.id)}|${x.start}|${x.end}${t.member ? `|${t.member}` : ""}`) ?? []).filter((q) => q.v === x.val && q.dec != null);
+    return hit.length ? Math.max(...hit.map((q) => q.dec)) : null;
+  };
+  const lineVals = (f, pred, orig) => (f.type === "D" ? f.ruleTerms ?? [] : f.terms).map((t) => ({ t, key: keyOf(t), x: lineAt(f, t, pred, orig) }));
+  /**
+   * 구성분 하나의 판정 — 원 공시(그 기간을 처음 공시한 공시) 자체 값 vs 파생에 쓴 판본 값. 리드 결정(2026-09-27): 허용 오차 없이 decimals 로 가른다.
+   *  · 줄 구성이 같으면 줄마다: 같음 → 통과 · 나중 판본 decimals 가 낮고 원 값의 그 단위 반올림과 정확히 같음(audit.mjs isDecimalsRounding)
+   *    → 재게시(혼합 아님) · decimals 근거 없음 → 판정 불가 · 그 외 → 혼합(재작성·재분류)
+   *  · 줄 구성이 다르면(MCD 10-K 3줄 ↔ 10-Q 1줄, DAL 부대사업 분할) 합으로 같은 판정(합의 decimals = 줄 decimals 최솟값)
+   */
+  const judgeComp = async (c) => {
+    const pred = (e) => dayDiff(e.start, c.start) <= 3 && dayDiff(e.end, c.end) <= 3;
+    const tagc = `${c.start}~${c.end}`;
+    const of = origOf.get(`${c.start}|${c.end}`);
+    if (!of) return { unk: `${tagc} 원 공시 없음(제출 목록에 보고 기준일 ${c.end} 원본 공시 없음)` };
+    const f = faces.find((x) => x.accn === of.accn);
+    if (!f) return { unk: `${tagc} 원 공시 없음(${of.form} ${of.accn} 본표 판독 실패)` };
+    const u = faces.find((x) => x.accn === c.faceAccn);
+    if (!u) return { unk: `${tagc} 판본 공시 ${c.faceAccn} 판독 없음` };
+    const o = one(f, pred, true);
+    if (!o || o.err || o.cogs == null) return { unk: `${tagc} 원 공시 ${f.accn} 원가 판독 없음` };
+    if (o.cogs === c.v) return {};
+    const lo = lineVals(f, pred, true), lu = lineVals(u, pred, false);
+    const judgeVals = (ov, oDec, uv, uDec, what) => {
+      if (oDec == null || uDec == null) return { unk: `${tagc} ${what} 원 ${ov} → 판본 ${uv} — decimals 없음` };
+      if (isDecimalsRounding({ val: ov, dec: oDec }, { val: uv, dec: uDec })) return { rep: `${tagc} ${what} ${ov}(d${oDec}) → ${uv}(d${uDec}) 반올림 재게시` };
+      return { mix: `${tagc} ${what} 원 공시 ${f.form} ${f.accn} ${ov}(d${oDec}) ≠ 파생 판본 ${uv}(d${uDec})` };
+    };
+    if (lo.length === lu.length && lo.every((y, i) => y.key === lu[i].key)) {
+      const out = [];
+      for (let i = 0; i < lo.length; i++) {
+        const y = lo[i], z = lu[i];
+        if ((y.x?.v ?? null) === (z.x?.v ?? null)) continue;
+        if (!y.x || !z.x) { out.push({ unk: `${tagc} ${tag(y.t)} 한쪽 값 없음` }); continue; }
+        out.push(judgeVals(y.x.val, await decOf(f.accn, y.t, y.x), z.x.val, await decOf(z.x.accn, z.t, z.x), tag(y.t)));
+      }
+      const m = out.filter((r) => r.mix), k = out.filter((r) => r.unk), rp = out.filter((r) => r.rep);
+      return m.length ? { mix: m.map((r) => r.mix).join("; ") } : k.length ? { unk: k.map((r) => r.unk).join("; ") } : rp.length ? { rep: rp.map((r) => r.rep).join("; ") } : {};
+    }
+    const decMin = async (ls, accnOf) => {
+      let d = Infinity;
+      for (const y of ls) { if (!y.x) continue; const v = await decOf(accnOf(y), y.t, y.x); if (v == null) return null; d = Math.min(d, v); }
+      return d;
+    };
+    const sum = (ls) => ls.reduce((acc, y) => acc + (y.x?.val ?? 0) * (y.t.w ?? 1), 0);
+    return judgeVals(sum(lo), await decMin(lo, () => f.accn), sum(lu), await decMin(lu, (y) => y.x.accn),
+      `원가 합(줄 구성 다름: ${lo.map((y) => y.key).join("+")} ↔ ${lu.map((y) => y.key).join("+")})`);
+  };
+  /** 파생 열 구성분의 원 공시를 읽어 두고(이미 읽은 공시는 건너뜀) 구성분마다 판정해 둔다. cols = [{ kind: "Q4"|"LTM", E }] */
+  const addOriginals = async (cols) => {
+    for (const { kind, E } of cols) {
+      const r = kind === "LTM" ? ltmRaw(E) : q4Raw(E);
+      for (const c of r?.comps ?? []) {
+        const of = await origFiling(c);
+        if (of && !read.has(of.accn)) await addFiling(of);
+      }
+    }
+    for (const { kind, E } of cols) {
+      const r = kind === "LTM" ? ltmRaw(E) : q4Raw(E);
+      for (const c of r?.comps ?? []) {
+        const k = `${c.start}|${c.end}`;
+        if (!mixVerdict.has(k)) mixVerdict.set(k, await judgeComp(c));
+      }
+    }
+  };
   const annualAt = (E) => find((e) => dayDiff(e.end, E) <= 7 && dd(e) >= 300 && dd(e) <= 400);
-  const quarterAt = (E, isQ4) => {
-    if (!isQ4) return find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100);
+  const quarterAt = (E, isQ4) => (isQ4 ? withMix(q4Raw(E)) : find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100));
+  const q4Raw = (E) => {
     const fy = annualAt(E);
     if (!fy || fy.cogs == null) return fy;
     const nine = find((e) => dayDiff(e.start, fy.start) <= 5 && dd(e) >= 250 && dd(e) <= 290 && e.end < fy.end);
     return comb([[fy, 1], [nine, -1]], "사업연도 − 9개월");
   };
-  const ltmAt = (L) => {
+  const ltmAt = (L) => withMix(ltmRaw(L));
+  const ltmRaw = (L) => {
     const fy0 = annualAt(L);
     if (fy0) return fy0;
     const fy = find((e) => dd(e) >= 300 && dd(e) <= 400 && e.end < L && (Date.parse(L) - Date.parse(e.end)) / 864e5 < 370);
@@ -1407,7 +1533,7 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
     const prior = find((e) => dayDiff(e.start, ys(cur.start)) <= 7 && dayDiff(e.end, ys(L)) <= 7 && Math.abs(dd(e) - dd(cur)) <= 10);
     return comb([[fy, 1], [cur, 1], [prior, -1]], "사업연도 + 당기 누적 − 전년 동기");
   };
-  return { annualAt, quarterAt, ltmAt, faces };
+  return { annualAt, quarterAt, ltmAt, faces, addOriginals };
 }
 
 /** 외부 값(백만 단위 부동소수 환산 포함)을 달러 정수로 — 표현 오차만 없앤다(허용치 아님) */
@@ -2340,6 +2466,7 @@ async function verifyUs(sym) {
       ev: r("ev"), ebitda: r("ebitda"), ni: r("ni"), eps: r("eps"), rev: r("revenue") ?? r("net_revenue"),
       per: valRow("per", i), pbr: valRow("pbr", i), psr: valRow("psr", i), evx: valRow("ev_ebitda", i),
       revYoy: r("revenue_yoy") ?? r("net_revenue_yoy"), ebitdaM: r("ebitda_m"), niM: r("ni_m"),
+      evNote: h.rows.find((x) => x.key === "ev")?.cellNotes?.[i] ?? null,
     };
   });
   const evBlocked = (h.notes ?? []).find((n) => /EV.*(미표시|표시하지 않|계산하지 않)/.test(n));
@@ -2889,7 +3016,7 @@ async function verifyUs(sym) {
     if (!bank && x.mc != null) {
       if (x.ev == null) {
         const ok = evBlockOkAt(x.date);
-        add("D", "EV 기대치", c, ok ? { status: NA, note: `EV 미표시 — ${ok}` } : { status: FAIL, note: evBlocked ? `EV 미표시 — 앱 사유 "${evBlocked.slice(0, 50)}" 를 이 날짜 원자료로 확인 못함${ltmEvCheck?.why ? ` · ${ltmEvCheck.why}` : ""}` : "EV 미표시 사유 없이 빈칸" });
+        add("D", "EV 기대치", c, ok ? { status: NA, note: `EV 미표시 — ${ok}` } : { status: FAIL, note: (x.evNote ?? evBlocked) ? `EV 미표시 — 앱 사유 "${(x.evNote ?? evBlocked).slice(0, 60)}" 를 이 날짜 원자료로 확인 못함${ltmEvCheck?.why ? ` · ${ltmEvCheck.why}` : ""}` : "EV 미표시 사유 없이 빈칸" });
       }
       else {
         const sum = (x.mc ?? 0) + (x.op ?? 0) + (x.debt ?? 0) + (x.pn ?? 0) + (x.cash ?? 0); // cash 행은 음수
@@ -3096,6 +3223,8 @@ async function verifyUs(sym) {
     const cRowA = isItem(is, COGS_ROW_RE), gRowA = isItem(is, GP_ROW_RE), cRowQ = isItem(isq, COGS_ROW_RE), gRowQ = isItem(isq, GP_ROW_RE);
     // 앱이 D형 빈칸에 단 사유 — 행·열 단위 필드 형식이 아직 정해지지 않아 응답 전체에서 찾는다(실제 앱 응답으로 확인 필요)
     const waitA = JSON.stringify(is ?? {}).includes(COGS_WAIT), waitQ = JSON.stringify(isq ?? {}).includes(COGS_WAIT);
+    // 앱이 기준 혼합 빈칸에 단 사유(칸 각주 "… 기준 혼합(…)") — 응답 단위로 찾는다(COGS_WAIT 와 같은 방식)
+    const mixA = JSON.stringify(is ?? {}).includes(COGS_MIX), mixQ = JSON.stringify(isq ?? {}).includes(COGS_MIX);
     const finCo = sic >= 6000 && sic <= 6499, finWait = /금융사/.test(JSON.stringify(is ?? {}));
     const synthMark = (row) => /합성|소계 없음/.test(JSON.stringify(row ?? {}));
     const revAt = (kind, E, isQ4) => {
@@ -3133,6 +3262,21 @@ async function verifyUs(sym) {
       if (!e) {
         add("A", nC, col, vsSource(appC, null, EXACT, `기간 ${E} — 읽은 공시(연차 3건·10-Q 4건) 범위 밖`));
         add("A", nG, col, vsSource(appG, null, EXACT, `기간 ${E} — 읽은 공시 범위 밖`));
+        return;
+      }
+      if (e.mix) {
+        // 구성 공시 간 기준 혼합(secFaceCogs withMix — 원 공시 값 ≠ 파생에 쓴 판본 값) — 앱은 빈칸 + "기준 혼합"이어야 한다
+        const appMix = stmtTag === "분기" ? mixQ : mixA;
+        for (const [n, v] of [[nC, appC], [nG, appG]])
+          add("A", n, col, v != null ? { status: FAIL, note: `${COGS_MIX} 열에 앱 값 ${v} — 빈칸이어야 함(한 열 = 한 기준) · ${e.mix}`, app: v, src: null }
+            : appMix ? { status: NA, note: `${COGS_MIX} — 양쪽 공란 기대 · ${e.mix}`, app: null, src: null }
+            : { status: FAIL, note: `${COGS_MIX}인데 앱 빈칸 사유에 "${COGS_MIX}" 없음 · ${e.mix}`, app: null, src: null });
+        return;
+      }
+      if (e.mixUnknown) {
+        // 구성분이 원 공시와 다른데 decimals 근거가 없어(또는 원 공시를 못 읽어) 재게시·재작성을 못 가름 — 조용히 통과시키지 않는다
+        for (const [n, v] of [[nC, appC], [nG, appG]])
+          add("A", n, col, { status: NA, note: `${COGS_MIX} 판정 불가 — ${/decimals 없음/.test(e.mixUnknown) ? "decimals 없음" : /원 공시 없음/.test(e.mixUnknown) ? "원 공시 없음" : "판본 공시 판독 없음"} · ${e.mixUnknown}`, app: v, src: null });
         return;
       }
       if (e.cogs == null) {
@@ -3179,6 +3323,11 @@ async function verifyUs(sym) {
       }
       add("A", nG, col, vsSource(appG, gExp == null ? null : gExp * k, EXACT, `${gNote}${fxNote}`));
     };
+    // 파생 열(Q4·LTM) 구성분의 원 공시를 먼저 읽어 둔다(기준 혼합 판정 — withMix)
+    if (cogsFace && !foreign) await cogsFace.addOriginals([
+      ...(H.LTM && (is?.periods ?? []).some((p) => p.label === "현재/LTM") ? [{ kind: "LTM", E: H.LTM.date }] : []),
+      ...(isq?.periods ?? []).filter((p) => p.fiscalQuarter === 4 && p.endDate).map((p) => ({ kind: "Q4", E: p.endDate })),
+    ]).catch((e) => hardErrors.push(`매출원가 원 공시 판독(기준 혼합 판정) 실패: ${String(e).slice(0, 160)}`));
     for (const per of is?.periods ?? []) {
       const key = per.label;
       if (key === "현재/LTM") { if (H.LTM && !foreign) judge("LTM", "LTM", key, H.LTM.date, false, cRowA, gRowA, waitA, "연간"); continue; }
@@ -3662,6 +3811,10 @@ async function verifyUs(sym) {
       const metric = r.item.slice(col.length + 1);
       const item0 = r.item;
       const v = r.srcs[n].v, unit = r.srcs[n].unit, parts = r.srcs[n].parts;
+      // 외화 공시(20-F 원통화 — 그 칸의 "환산 환율 = 기간 평균(외화)" 검사 통과로 판정, IFRS 공시는 usdOnly 가 원통화를 못 봄) × 인포맥스 — 인포맥스는 자체(FactSet) 환율로 USD 환산하는데 그 환율이 공개돼 있지 않아 식으로 증명할 수 없다
+      // (SPOT 2025 암시환율 1.128578 vs H.10 일평균 1.130622 — H.10 일·월·분기평균·월말값 모두 불일치, 실측 2026-09-27). 앱 값이 SEC 원통화 ×
+      // H.10 독립 대조(A층)를 통과한 칸만 NA "검증불가(외부 환율 비공개)" — 오너 결정 2026-09-27. A층 미통과면 이 규칙을 쓰지 않는다
+      if (n === "인포맥스" && aPassed(col, metric) && checks.some((k) => k.col === col && k.status === PASS && /환산 환율 = 기간 평균\(외화\)/.test(k.name))) return { na: `인포맥스 자체 환율(비공개)로 USD 환산 — 앱 = SEC 원통화 × H.10 기간 평균(A층 통과)`, naLabel: NA_FX };
       // 원인 규칙의 식 성립 판정 — 허용 오차 없음(오너 지시 2026-09-26). 외부 값 v 가 기대값 exp(SEC 원자료로 만든 식)와 완전히 같거나,
       // 외부가 자기 표기 단위로 반올림해 실었다면 roundHalfAway(exp, 단위) 와 완전히 같을 때만. 둘 이상의 외부 값을 섞는 식(⑦·④)은 완전 일치만
       const eqExp = (exp) => exp != null && (extEq(v, exp) || (unit != null && unit !== 1 && extEq(v, roundHalfAway(exp, unit))));
@@ -4223,7 +4376,7 @@ async function verifyUs(sym) {
       // 정의차(앱 결함 후보) — 원인도 이탈도 아니다. causes 에 넣지 않고 따로 남긴다
       const defDiffs = Object.fromEntries(names.filter((n) => causes[n]?.defdiff).map((n) => [n, causes[n].defdiff]));
       const appSec = Object.fromEntries(names.filter((n) => causes[n]?.appsec).map((n) => [n, causes[n].appsec]));
-      const why = (n) => (causes[n]?.ok ? ` [원인 확인: ${causes[n].ok}]` : causes[n]?.common ? ` [${COMMON_LABEL}: ${causes[n].common}]` : causes[n]?.na ? ` [${NA_PRECISION}: ${causes[n].na}]` : causes[n]?.outlier ? ` [${causes[n].outlier}]` : causes[n]?.defdiff ? ` [${causes[n].defdiff}]` : causes[n]?.appsec ? ` [${causes[n].appsec}]` : causes[n]?.guess ? ` [원인 추정: ${causes[n].guess}]` : "");
+      const why = (n) => (causes[n]?.ok ? ` [원인 확인: ${causes[n].ok}]` : causes[n]?.common ? ` [${COMMON_LABEL}: ${causes[n].common}]` : causes[n]?.na ? ` [${causes[n].naLabel ?? NA_PRECISION}: ${causes[n].na}]` : causes[n]?.outlier ? ` [${causes[n].outlier}]` : causes[n]?.defdiff ? ` [${causes[n].defdiff}]` : causes[n]?.appsec ? ` [${causes[n].appsec}]` : causes[n]?.guess ? ` [원인 추정: ${causes[n].guess}]` : "");
       const off = names.filter((n) => !matched.includes(n) && !(commonMode[n] && extEq(r.ours, r.srcs[n].v))).map((n) => `${n} ${r.srcs[n].v} (${(((r.ours - r.srcs[n].v) / Math.abs(r.srcs[n].v)) * 100).toFixed(2)}%)${why(n)}`);
       // 매출 분류(revenue.md §0): ① 일치 · ② 정의 차이(분해식 정확 성립 = 원인 확인) · 외부 단독 이탈(앱 = SEC 본표 정확 일치 +
       // 다른 외부 2곳 이상 앱과 일치 + 이 소스만 이탈) · ③ 오류(그 밖 전부 — 추정·미분해·앱≠SEC 포함)
@@ -4312,7 +4465,11 @@ async function verifyUs(sym) {
     const k = checks[i];
     if (k.status !== PASS) continue;
     const why = commonModeOf(k);
-    if (why) checks[i] = independentOr(k, extExactFor(k), why);
+    if (!why) continue;
+    let ext = extExactFor(k);
+    // D형 구성 규칙 행은 외부 2곳 이상 정확 일치여야 독립(1곳이면 공통모드 유지)
+    if (ext && why === COGS_RULE_COMMON && ext.replace(/^분기 /, "").split("·").length < 2) ext = null;
+    checks[i] = independentOr(k, ext, why);
   }
   // 관리자 화면 감사표(--post) — 최근 사업연도 열·LTM. 이미 계산한 값만 옮긴다(scripts/metrics/audit.mjs)
   const fyLast = Object.keys(H).filter((c) => c !== "LTM").sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1);

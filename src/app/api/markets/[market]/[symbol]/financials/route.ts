@@ -3,7 +3,7 @@ import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
 import { blankLtmIfFilingsUnavailable } from "@/lib/markets/us/sec-unavailable";
-import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
+import { loadClassAFactsMarked } from "@/lib/markets/us/class-facts-loader";
 import { secBasisBars } from "@/lib/markets/us/edgar-shares";
 import { yahooLtmLabel } from "@/lib/markets/us/edgar-yahoo-quarters";
 import { loadCaptiveDebt } from "@/lib/markets/us/edgar-captive";
@@ -154,21 +154,23 @@ export async function GET(
       const yahoo = searchParams.get("yahoo");
       const needsShares =
         detailView === "analysis" || detailView === "is" || detailView === "summary";
-      const { cik, facts } = await fetchUsCompanyFacts(sym);
-      const [quote, consensus, classFacts, sic] = await Promise.all([
+      const { cik, facts: facts0 } = await fetchUsCompanyFacts(sym);
+      const [quote, consensus, cls, sic] = await Promise.all([
         needsShares
           ? getEodQuote("us", sym, { yahooOverride: yahoo }).catch(() => null)
           : Promise.resolve(null),
         needsShares
           ? fetchForwardConsensus("us", sym, yahoo).catch(() => null)
           : Promise.resolve(null),
+        // 듀얼클래스 보정 — 원본 판독 실패는 facts 에 기록(클래스별 값이 필요한 칸 공란 + 사유)
         needsShares
-          ? loadClassAFacts(cik, facts).catch(() => null)
-          : Promise.resolve(null),
+          ? loadClassAFactsMarked(cik, facts0)
+          : Promise.resolve({ classFacts: null, facts: facts0 }),
         fetchUsSic(sym).catch(() => null),
       ]);
-      // 현재 발행주식수 근사(클래스별로만 공시하는 Visa 등의 EPS·PBR 계산용):
-      // 시가총액÷주가(전 클래스 경제적 주식수) 우선, 없으면 yahoo sharesOutstanding.
+      const facts = cls.facts;
+      const classFacts = cls.classFacts;
+      // Yahoo 현재 주식수 힌트 — ADR 비율 판정에만(주식수 값으로 대신 쓰지 않음, edgar-shares.ts)
       const sharesHint = usSharesHint(quote, consensus);
       const stmt =
         detailView === "cf"
@@ -185,7 +187,8 @@ export async function GET(
                     sic,
                     evCtx: {
                       sic,
-                      captive: await loadCaptiveDebt(cik, sic).catch(() => null),
+                      // 판별 조회 실패 = "unknown"(금융 자회사 없음으로 단정하지 않음 — EV 미표시)
+                      captive: await loadCaptiveDebt(cik, sic).catch(() => "unknown" as const),
                       opUnits: reitOpUnits(
                         sic,
                         consensus?.sharesOutstanding,
