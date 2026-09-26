@@ -104,7 +104,12 @@ export function normalizeSectorLabel(label) {
     .replace(/\s*(?:(?:제\s*)?\d+\s*호|\(\d{6}\)|(?:Ep|EP|Vol|No)\.?\s*\d+|#\d+|시즌\s*\d+|\(\d{1,3}\))$/, "")
     .replace(/(?<=[A-Za-z])\s+\d{1,3}$/, "")
     .replace(/^\d{1,2}\/\d{1,2}\s+/, "")
-    .replace(/^해외주식\s*369$/, "해외주식 369");
+    .replace(/^해외주식\s*369$/, "해외주식 369")
+    // 수집기가 붙인 게시판 접두("FICC · "·"투자전략 · ") 뒤의 하위 구분·회차 꼬리를 떼어 시리즈당 한 묶음으로(오너 지시 2026-09-27)
+    .replace(/^(FICC · [^/]+)\/.*$/, "$1")
+    .replace(/^(FICC · .*?)크레딧\((?:국내|KP|해외)\)/, "$1크레딧")
+    .replace(/^(투자전략 · .*?)[,，]\s*#\d+.*$/, "$1")
+    .replace(/매커니즘/g, "메커니즘");
   if (!raw) return raw;
   if (Object.hasOwn(ANALYST_SECTOR, raw)) return ANALYST_SECTOR[raw];
   const stem = raw.replace(/(?:산업|업종|섹터|부문|업)$/, "").trim();

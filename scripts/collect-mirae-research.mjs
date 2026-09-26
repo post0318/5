@@ -146,7 +146,7 @@ const EXCLUDE_COUNTRY_RE = /중국|인도|인디아|일본|홍콩|대만|베트�
 const US_HINT_RE = /글로벌|Global|해외|미국|\bUS\b|나스닥|Nasdaq|S&P|다우존스|연준|\bFed\b/i;
 // 시리즈명만으로 해외(미국)로 강제 분류 — 신호 키워드 없이도 매회 미국 AI
 // 인프라/전력/자본시장 주제인 것을 실측 확인(2026-09, 오너 지적).
-const US_SERIES_PREFIXES = ["AI Infra Signal"];
+const US_SERIES_PREFIXES = ["AI Infra Signal", "Monthly Quantum"];
 function classifyMarket(label, headline) {
   const hay = `${label} ${headline}`;
   if (US_SERIES_PREFIXES.some((p) => label.trim().startsWith(p))) return "us";
@@ -169,7 +169,7 @@ function parseIndustryItems(html, categoryId) {
     const title = rawSummary.trim() || rawTitle.trim();
     const market = classifyMarket(rawTitle.trim(), title);
     if (!market) continue; // 중국/인도 등 이 프로젝트가 다루지 않는 시장
-    if (isCommonExcludedContent(title, "산업")) continue;
+    if (isCommonExcludedContent(`${rawTitle.trim()} ${title}`, "산업")) continue;
     const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
     const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
     items.push({

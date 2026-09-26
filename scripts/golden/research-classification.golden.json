@@ -452,6 +452,20 @@
       "titleIncludes": "유가 반등에 상승 탄력 둔화",
       "expect": "EXCLUDE",
       "why": "퀀틴전시 플랜 시리즈는 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X16",
+      "source": "미래에셋증권",
+      "titleIncludes": "저PBR 공표를 앞두고 나타난 자회사 상장",
+      "expect": "EXCLUDE",
+      "why": "NAV Dashboard Weekly — 주간물 라벨(제목엔 Weekly 없음) 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "M01",
+      "source": "미래에셋증권",
+      "titleIncludes": "양자컴퓨터가 AIDC에 들어가려면",
+      "expect": "us 산업분석",
+      "why": "Monthly Quantum 시리즈는 미국 주제 — 미래에셋 시리즈 접두로 us 강제(오너 지적 2026-09-27)"
     }
   ]
 }

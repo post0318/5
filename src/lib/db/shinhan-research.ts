@@ -711,6 +711,8 @@ const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b|이\.글\.스\./i;
 // 약한 고정 시리즈(예: "KB Bond"·"KB Fed Watch"·키움 SI/FE 게시판)는 여기
 // 등록해 안전망으로 확정한다.
 const FORCED_ISSUE_STOCKNAMES = new Set([
+  "투자전략 · 자산가격 메커니즘 변화",
+  "투자전략 · 자산가격 매커니즘 변화",
   "KB Bond",
   "KB Fed Watch",
   "KB 자산배분매크로",
