@@ -115,7 +115,12 @@ const SYNONYM_TO_CANON = new Map<string, string>(
 export const ANALYST_SECTOR: Readonly<Record<string, string>> = { 매태호: "방산" };
 export function normalizeIndustryLabel(label: string | null | undefined): string {
   // 날짜별 시황 시리즈 라벨("마켓 뷰(9월 16일)")은 날짜를 떼어 한 묶음으로(오너 지적 2026-09-27 — 날짜마다 폴더가 갈라짐)
-  const raw = String(label ?? "").trim().replace(/\s*\(\s*\d{1,2}월\s*\d{1,2}일\s*\)$/, "");
+  const raw = String(label ?? "").trim().replace(/\s*\(\s*\d{1,2}월\s*\d{1,2}일\s*\)$/, "")
+    // 시리즈 회차 표기("AI Infra Signal 4호"·"월스트리트파인더 Ep.206"·"Energy Renaissance 6"·"Monthly Quantum #8"·"시즌2")도 떼어 시리즈당 한 묶음으로(오너 지적 2026-09-27)
+    .replace(/\s*(?:(?:제\s*)?\d+\s*호|\(\d{6}\)|(?:Ep|EP|Vol|No)\.?\s*\d+|#\d+|시즌\s*\d+|\(\d{1,3}\))$/, "")
+    .replace(/(?<=[A-Za-z])\s+\d{1,3}$/, "")
+    .replace(/^\d{1,2}\/\d{1,2}\s+/, "")
+    .replace(/^해외주식\s*369$/, "해외주식 369");
   if (!raw) return raw;
   if (Object.hasOwn(ANALYST_SECTOR, raw)) return ANALYST_SECTOR[raw];
   const stem = raw.replace(/(?:산업|업종|섹터|부문|업)$/, "").trim();
