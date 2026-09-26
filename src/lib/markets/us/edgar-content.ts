@@ -1,5 +1,6 @@
 import "server-only";
-import { fetchText } from "../http";
+import { fetchText, isFetchFailure } from "../http";
+import { fetchFailureReason } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import { instanceUrl } from "./edgar-classfacts";
 import type { RecentFilings } from "./edgar-gapfill";
@@ -92,7 +93,11 @@ export async function withContentAmortization(
       // 더하지 않는다(검증 2026-09-24: DIS 를 주석 값으로 더해 인포맥스 대비 +76~138% 가 됐었다)
       const pre = await fetchText(url.replace(/_htm\.xml$/i, "_pre.xml").replace(/\.xml$/i, (m) => (url.endsWith("_htm.xml") ? m : "_pre.xml")), {
         headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000,
-      }).catch(() => "");
+      }).catch((e) => {
+        // 이름을 추정한 파일이라 404 는 "원래 없음". 그 밖의 조회 실패(429·시간 초과 등)는 올린다
+        if (isFetchFailure(e) && e.opts.status === 404) return "";
+        throw e;
+      });
       const cfTags = new Set<string>();
       for (const m of pre.matchAll(/<(?:link:)?presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?presentationLink>/g)) {
         if (!/CASH\s*FLOWS?/i.test(m[1].split("/").pop() ?? "") || /Detail|Table|Polic|Parenthetical/i.test(m[1])) continue;
@@ -100,8 +105,10 @@ export async function withContentAmortization(
       }
       for (const e of parse(xml, f, cfTags))
         if (!content.some((x) => x.start === e.start && x.end === e.end && x.form === e.form && x.filed === e.filed)) content.push(e);
-    } catch {
-      /* 이 공시만 건너뜀 */
+    } catch (e) {
+      // 조회 실패는 올린다 — 콘텐츠 상각이 빠진 감가상각비(NFLX 약 1/10)를 조용히 내지 않게 로더가 감가상각비를 공란 + 사유로
+      // (sec-unavailable.ts). 파싱 오류만 이 공시를 건너뜀
+      if (fetchFailureReason(e) != null) throw e;
     }
   }
   if (!content.length) return facts;

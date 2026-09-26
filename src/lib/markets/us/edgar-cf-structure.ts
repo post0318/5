@@ -278,22 +278,19 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
   }
   if (!filings.length) return facts;
   const opt = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 };
+  // 조회 실패는 올린다(로더가 감가상각비를 공란 + 사유로 — sec-unavailable.ts). 예전엔 삼키고 태그 규칙으로 조용히 대체했다
   for (const f of filings) {
-    try {
-      f.base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
-      const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${f.base}/index.json`, opt);
-      const names = idx.directory.item.map((i) => i.name);
-      // 계산 구조·라벨을 스키마(.xsd) 안에 넣어 제출하는 회사(MSFT·ORCL 2026~)는 .xsd 에서 읽는다
-      const xsd = names.find((n) => /\.xsd$/i.test(n));
-      const cal = names.find((n) => /_cal\.xml$/i.test(n)) ?? xsd;
-      const lab = names.find((n) => /_lab\.xml$/i.test(n)) ?? xsd;
-      f.instName = names.find((n) => /_htm\.xml$/i.test(n)) ?? "";
-      if (!cal || !lab) continue;
-      const [c, l] = await Promise.all([fetchText(`${f.base}/${cal}`, opt), fetchText(`${f.base}/${lab}`, opt)]);
-      f.lines = cashFlowDaLines(c, labels(l));
-    } catch {
-      return facts; // 하나라도 못 읽으면 전체 미적용 — 기간마다 방식이 섞이지 않게
-    }
+    f.base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
+    const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${f.base}/index.json`, opt);
+    const names = idx.directory.item.map((i) => i.name);
+    // 계산 구조·라벨을 스키마(.xsd) 안에 넣어 제출하는 회사(MSFT·ORCL 2026~)는 .xsd 에서 읽는다
+    const xsd = names.find((n) => /\.xsd$/i.test(n));
+    const cal = names.find((n) => /_cal\.xml$/i.test(n)) ?? xsd;
+    const lab = names.find((n) => /_lab\.xml$/i.test(n)) ?? xsd;
+    f.instName = names.find((n) => /_htm\.xml$/i.test(n)) ?? "";
+    if (!cal || !lab) continue;
+    const [c, l] = await Promise.all([fetchText(`${f.base}/${cal}`, opt), fetchText(`${f.base}/${lab}`, opt)]);
+    f.lines = cashFlowDaLines(c, labels(l));
   }
 
   const cfVal = (concept: string, start: string, end: string): number | undefined => {
@@ -325,8 +322,7 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
     let inst: Map<string, Map<string, number>> | null = null;
     let adj: InstFact[] | null = null;
     if ((!cfComplete || needAdj) && f.instName) {
-      const xml = await fetchText(`${f.base}/${f.instName}`, { headers: H, revalidate: false, timeoutMs: 30_000 }).catch(() => null);
-      if (!xml) return facts;
+      const xml = await fetchText(`${f.base}/${f.instName}`, { headers: H, revalidate: false, timeoutMs: 30_000 });
       if (!cfComplete) {
         inst = durationValues(xml, new Set(lines));
         for (const l of lines) for (const p of inst.get(l)?.keys() ?? []) periods.add(p);

@@ -1,4 +1,5 @@
 import "server-only";
+import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
@@ -463,10 +464,12 @@ export function buildUsIncome(
     const am = val([DA_INTANGIBLE]);
     const cf = val([SYN_DA_CF]);
     const o = blank();
+    // 본표 판독이 원본 조회 실패로 빠졌으면 태그 규칙으로 대체하지 않고 공란(sec-unavailable.ts)
+    if (unavailableOn(facts, "da")) return o;
     for (const l of labels) o[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
     return o;
   })();
-  const oneOff = val(["OneOffChargesDerived"]);
+  const oneOff = unavailableOn(facts, "oneOff") ? blank() : val(["OneOffChargesDerived"]);
   // 감가상각비 구성요소가 없으면(매핑 누락 — IFRS 20-F 등) EBITDA 도 공란(0 으로
   // 보지 않음, Yahoo 분기 LTM 여부와 무관 — 독립 감사 지적 2026-09-25 NVO·SAP)
   const ebitda = blank();
@@ -562,6 +565,9 @@ export function buildUsIncome(
     row("일회성비용(구조조정·손상차손·위약금·합의금 등)", oneOff),
   ];
   items.push(...cogsFootnotes);
+  // SEC 원본 조회 실패로 공란이 된 값(영업이익·감가상각비·EBITDA·일회성비용 — 대체 계산 없음, sec-unavailable.ts)
+  const unavailable = unavailableNote(facts);
+  if (unavailable) items.push(row(`※ ${unavailable}`, blank(), { depth: 1, italic: true }));
   if (!isFin && labels.some((l) => oneOff[l] != null))
     items.push(
       row("※ 일회성비용: 손익계산서에 별도 줄로 공시된 항목만(다른 비용 줄에 섞인 금액은 빠짐) · 영업이익에 이미 반영된 금액", blank(), {

@@ -1,4 +1,5 @@
 import "server-only";
+import { unavailableNote } from "./sec-unavailable";
 import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
@@ -471,6 +472,9 @@ export function buildUsBalance(
   for (const l of labels)
     if (debt[l] != null && opLease[l] != null) debtWithOpLease[l] = debt[l]! + opLease[l]!;
   items.push(nrow("총차입금 (운용리스 포함)", debtWithOpLease));
+  // SEC 원본 조회 실패로 공란이 된 값(총차입금 등 — 태그 규칙으로 대체하지 않음, sec-unavailable.ts)
+  const unavailable = unavailableNote(facts);
+  if (unavailable) items.push({ ...nrow(`※ ${unavailable}`, blank()), italic: true });
 
   return {
     symbol: "",

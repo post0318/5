@@ -1,5 +1,6 @@
 import "server-only";
 import { fetchText } from "../http";
+import { fetchFailureReason, markUnavailable } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import { instanceUrl, needsClassAFacts } from "./edgar-classfacts";
 
@@ -231,6 +232,10 @@ export async function withFilingGapFill(
   let dei = facts.facts.dei as Ns | undefined;
   const parsed = new Map<string, ParsedInstance>();
   // 오래된 것부터 붙여 "최신 filed 우선" 규칙과 맞춘다
+  // 조회 실패한 누락 공시 — 그 공시가 빠진 채로 계산한 최근 12개월(LTM)은 같은 "LTM" 열에 더 오래된 기간 값이 들어가므로
+  // 화면이 LTM 열을 공란 + 사유로 둔다(sec-unavailable.ts "filings"). 연도 열은 해당 연도가 통째로 빠질 뿐 값은 바뀌지 않는다
+  const failed: string[] = [];
+  let failReason = "";
   for (const f of [...gaps].reverse()) {
     try {
       const xml = await loadInstance(cik, f);
@@ -240,8 +245,13 @@ export async function withFilingGapFill(
       usGaap = mergeNs(usGaap, p.usGaap);
       if (Object.keys(p.ifrs).length) ifrsOut = mergeNs(ifrsOut, p.ifrs);
       dei = mergeNs(dei, p.dei);
-    } catch {
-      /* 이 공시만 건너뜀 */
+    } catch (e) {
+      /* 이 공시만 건너뜀 — 조회 실패면 기록 */
+      const why = fetchFailureReason(e);
+      if (why != null) {
+        failed.push(f.filed);
+        failReason ||= `${f.form} ${f.filed} · ${why}`;
+      }
     }
   }
 
@@ -268,8 +278,9 @@ export async function withFilingGapFill(
     }
   }
 
-  return {
+  const merged: CompanyFacts = {
     ...facts,
     facts: { ...facts.facts, "us-gaap": usGaap, dei, ...(ifrsOut ? { "ifrs-full": ifrsOut } : {}) } as CompanyFacts["facts"],
   };
+  return failed.length ? markUnavailable(merged, "filings", failReason, failed) : merged;
 }

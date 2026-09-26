@@ -1,5 +1,6 @@
 import "server-only";
 import { fetchText } from "../http";
+import { fetchFailureReason } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import { instanceUrl } from "./edgar-classfacts";
 import type { RecentFilings } from "./edgar-gapfill";
@@ -108,9 +109,11 @@ export async function withRevenueDims(cik: string, facts: CompanyFacts, recent: 
       for (const e of p.cands) if (!cands.some((x) => x.concept === e.concept && x.start === e.start && x.end === e.end && x.filed === e.filed)) cands.push(e);
       for (const e of p.nonop) if (!nonop.some((x) => x.start === e.start && x.end === e.end && x.filed === e.filed)) nonop.push(e);
       for (const e of p.total) if (!total.some((x) => x.start === e.start && x.end === e.end && x.filed === e.filed)) total.push(e);
-    } catch {
+    } catch (e) {
       // 한 건이라도 못 읽으면 적용하지 않는다 — 일부 기간만 분리되면 LTM(연간 + 당기 누적 − 전년 누적)에서
-      // 분리·미분리 정의가 섞인다(감사 2026-09-24). 다음 로드 때 다시 시도.
+      // 분리·미분리 정의가 섞인다(감사 2026-09-24). 조회 실패는 올린다 — 로더가 영업이익을 공란 + 사유로(분리 안 된
+      // 총수익으로 영업이익을 조용히 내지 않게, sec-unavailable.ts). 다음 로드 때 다시 시도.
+      if (fetchFailureReason(e) != null) throw e;
       return facts;
     }
   }

@@ -32,7 +32,7 @@ function record(what: string): void {
 }
 
 /** SEC URL 인지 */
-function isSecUrl(url: string): boolean {
+export function isSecUrl(url: string): boolean {
   return /sec\.gov\//.test(url);
 }
 

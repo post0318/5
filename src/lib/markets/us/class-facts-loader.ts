@@ -4,6 +4,7 @@ import { getClassAFactsFromDb, saveClassAFactsToDb } from "@/lib/db/us-class-fac
 import type { CompanyFacts } from "./edgar";
 import { fetchClassAFacts, needsClassAFacts, type ClassAFacts } from "./edgar-classfacts";
 import { withFetchScope } from "../fetch-health";
+import { fetchFailureReason } from "./sec-unavailable";
 
 /**
  * 듀얼클래스 보정 시계열 로더 (라우트에서 사용).
@@ -34,8 +35,14 @@ export async function loadClassAFacts(
   const stale = !!data && [...data.values()].every((y) => y.sharesAsConverted === undefined);
   if (!data || data.size === 0 || stale) {
     // 이 로더가 부른 SEC 조회의 실패만 본다(fetch-health.ts — 같은 CIK 의 다른 로더 실패와 섞지 않음)
-    const r = await withFetchScope(() => fetchClassAFacts(key).catch(() => null)); // 실패 시 보정 없이 진행
-    failures = r.failures;
+    // 실패 시 보정 없이 진행 — 조회 실패(404 포함)면 부분 결과를 만들지 않고(edgar-classfacts.ts) 캐시하지 않는다
+    const r = await withFetchScope(() =>
+      fetchClassAFacts(key).catch((e) => {
+        failures.push(fetchFailureReason(e) ?? "클래스별 공시 판독 오류");
+        return null;
+      }),
+    );
+    failures = [...failures, ...r.failures];
     const live = r.result;
     if (live && live.size > 0) {
       data = live;

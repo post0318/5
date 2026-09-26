@@ -310,8 +310,9 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
   const done = new Set<string>();
   const parsed: { f: Filing; face: Face | null; instUrl: string; defUrl: string | null }[] = [];
   for (const f of filings) {
-    const fl = await filingFiles(Number(cik), f).catch(() => null);
-    if (!fl) return facts; // 하나라도 못 읽으면 전체 미적용 — 기간마다 방식이 섞이지 않게
+    // 조회 실패는 올린다(로더가 총차입금을 공란 + 사유로 — sec-unavailable.ts). null = 라벨·인스턴스 파일이 원래 없음
+    const fl = await filingFiles(Number(cik), f);
+    if (!fl) return facts; // 하나라도 없으면 전체 미적용 — 기간마다 방식이 섞이지 않게
     parsed.push({ f, face: fl.cal ? faceDebtLines(fl.cal, labels(fl.lab)) : null, instUrl: fl.instUrl, defUrl: fl.defUrl });
   }
   const noteIds = [
@@ -333,8 +334,7 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
     // 회사 고유 줄·companyfacts 미반영 공시·빈 줄이 있으면 인스턴스에서 읽는다
     let inst: InstantValues | null = null;
     if (!cfComplete) {
-      const xml = await fetchText(p.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 }).catch(() => null);
-      if (!xml) return facts;
+      const xml = await fetchText(p.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 });
       inst = instantValues(xml, new Set([...faceIds, ...noteIds]), cur);
     }
     const dates = new Set<string>(cfDates);
@@ -352,7 +352,7 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
       const fromMembers = new Map<string, number>();
       if (dimOnlyLines.length) {
         if (!members) {
-          const def = p.defUrl ? await fetchText(p.defUrl, { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 }).catch(() => null) : null;
+          const def = p.defUrl ? await fetchText(p.defUrl, { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 }) : null;
           members = def ? faceMembers(def) : new Map();
         }
         const seenMembers = new Map<string, Set<string>>();

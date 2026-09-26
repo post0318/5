@@ -1,6 +1,6 @@
 import "server-only";
 import { fiscalYearOf } from "./edgar-series";
-import { fetchJson, fetchText } from "../http";
+import { fetchJson, fetchText, isFetchFailure } from "../http";
 import { checkBackoff, noteFetchFailure, noteFetchSuccess } from "../fetch-health";
 import type { CompanyFacts } from "./edgar";
 
@@ -362,7 +362,9 @@ export async function instanceUrl(cik: number, accnNoDash: string, primaryDoc: s
     const dated = xmls.find((n) => /-\d{8}\.xml$/i.test(n));
     const chosen = htm ?? dated ?? xmls[0];
     return chosen ? `${base}/${chosen}` : null;
-  } catch {
+  } catch (e) {
+    // 목록(index.json) 조회 실패는 "인스턴스 없음"이 아니다 — 호출부가 공란·재시도로 처리하도록 올린다(sec-unavailable.ts)
+    if (isFetchFailure(e)) throw e;
     return null;
   }
 }
@@ -409,8 +411,10 @@ export async function fetchClassAFacts(cik: string | number, maxFilings = 4): Pr
           });
         }
       }
-    } catch {
-      /* 파일링 1건 실패는 무시 */
+    } catch (e) {
+      // 조회 실패는 일부 연도만 채운 결과를 만들지 않게 올린다(부분 결과가 DB 에 백필되면 굳는다 — class-facts-loader.ts)
+      if (isFetchFailure(e)) throw e;
+      /* 파싱 실패 1건은 무시 */
     }
   }
   return merged;

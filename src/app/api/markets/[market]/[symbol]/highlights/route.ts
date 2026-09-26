@@ -8,6 +8,7 @@ import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
 import { estimatesToUsd } from "@/lib/markets/us/edgar-foreign";
 import { buildUsHighlights } from "@/lib/markets/us/edgar-highlights";
 import { buildUsBankHighlights, isFinancialCompany } from "@/lib/markets/us/edgar-highlights-bank";
+import { blankLtmColumnIfFilingsUnavailable } from "@/lib/markets/us/sec-unavailable";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
 import { loadCaptiveDebt } from "@/lib/markets/us/edgar-captive";
 import { reitOpUnits } from "@/lib/markets/us/edgar-ev";
@@ -153,6 +154,8 @@ export async function GET(
         });
     if (estimates && "fxNote" in estimates && estimates.fxNote) highlights.notes.push(estimates.fxNote);
     if (estimatesRaw && !estimates) highlights.notes.push("외화 예상치 환산 실패 — 예상치 숨김");
+    // 최신 공시 보완이 원본 조회 실패면 LTM 열은 공란(더 오래된 기간 값을 LTM 으로 내지 않음 — sec-unavailable.ts)
+    blankLtmColumnIfFilingsUnavailable(factsRes.facts, highlights);
     // 원본 조회 일시 오류(SEC 429 등) — 일부 공시가 빠졌을 수 있다(fetch-health.ts, 2분 뒤 다시 계산)
     if (factsRes.facts.fetchWarnings?.length)
       highlights.notes.unshift(`⚠ 일부 공시 조회 실패(${factsRes.facts.fetchWarnings.slice(0, 3).join(", ")}) — 값이 빠지거나 오래됐을 수 있음, 잠시 뒤 다시 계산`);
@@ -160,11 +163,13 @@ export async function GET(
     const lq = factsRes.facts.ltmQuarterSource;
     if (lq) highlights.notes.push(yahooLtmLabel(lq));
 
+    // 조회 실패로 불완전한 결과는 CDN 에 1시간 붙잡히지 않게 캐시하지 않는다(다음 요청이 다시 계산)
+    const degraded = !!factsRes.facts.fetchWarnings?.length || !!factsRes.facts.sourceUnavailable;
     return ok(
       { highlights },
       {
         headers: {
-          "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400",
+          "Cache-Control": degraded ? "no-store" : "public, s-maxage=3600, stale-while-revalidate=86400",
         },
       },
     );

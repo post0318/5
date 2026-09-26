@@ -3,6 +3,7 @@ import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import { annualByYear, entriesOf, ttmOf } from "./edgar-series";
 import { opUnitsFrom } from "../op-units";
 import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT, SYN_MIXED_LEASE_CURRENT, SYN_MIXED_LEASE_NONCURRENT } from "./edgar-bs-structure";
+import { unavailableOn } from "./sec-unavailable";
 import { SYN_DA_CF } from "./edgar-cf-structure";
 export { SYN_DA_CF };
 
@@ -187,8 +188,10 @@ function instantOn(entries: FactUnitEntry[], date: string): number | null {
  * - captive-unknown: 금융 자회사 여부를 판별할 최신 공시 조회가 실패(edgar-captive.ts
  *   "unknown") — 일시적 오류일 수 있어 "금융 자회사 없음"으로 단정하지 않고 보수적으로 비운다
  * - debt-untagged: 차입금이 있는데 표준 태그가 없음(Ford — 부문별로만 태깅)
+ * - source-unavailable: 대차대조표 본표 판독(edgar-bs-structure.ts)이 SEC 원본 조회 실패로 빠짐 — 태그 규칙 값으로 대체하지
+ *   않고 차입금·순차입금·EV 를 비운다(sec-unavailable.ts, 2026-09-26 — DE 651.9억 → 136.4억으로 조용히 바뀌던 결함)
  */
-export type EvBlocker = "financial" | "captive-unsplit" | "captive-unknown" | "debt-untagged";
+export type EvBlocker = "financial" | "captive-unsplit" | "captive-unknown" | "debt-untagged" | "source-unavailable";
 
 export interface EvBridge {
   /** 재무상태표 값을 실제로 가져온 날짜 */
@@ -350,6 +353,7 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     // 금융 자회사 자본까지 맞출지 최종 방식이 정해지면 이 줄을 걷어낸다.
     // (부문 분리 로직 captivePoint·industrialDebt 는 그때 쓰려고 남겨 둔다.)
     if (ctx.captive) return "captive-unsplit";
+    if (unavailableOn(facts, "debt", asOf)) return "source-unavailable";
     if (!ctx.captive && !debtDateFor(asOf) && hasDebtActivity(asOf)) return "debt-untagged";
     return null;
   };
@@ -438,9 +442,10 @@ export function pickDa(
   return total;
 }
 
-/** 연도별 감가상각비 (pickDa 규칙). */
+/** 연도별 감가상각비 (pickDa 규칙). 본표 판독이 원본 조회 실패로 빠졌으면 비운다(sec-unavailable.ts) */
 export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
   const out = new Map<number, number>();
+  if (unavailableOn(facts, "da")) return out;
   const totals = DA_TOTAL.map((c) => annualByYear(entriesOf(facts, c)));
   const dep = (() => {
     for (const c of DA_DEPRECIATION) {
@@ -459,8 +464,9 @@ export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
   return out;
 }
 
-/** 최근 12개월 감가상각비 (pickDa 규칙). */
+/** 최근 12개월 감가상각비 (pickDa 규칙). 본표 판독이 원본 조회 실패로 빠졌으면 null(sec-unavailable.ts) */
 export function daTtm(facts: CompanyFacts): number | null {
+  if (unavailableOn(facts, "da")) return null;
   const dep = (() => {
     for (const c of DA_DEPRECIATION) {
       const v = ttmOf(entriesOf(facts, c));
@@ -517,6 +523,9 @@ export const SYN_OP_INCOME = "OperatingIncomeLossUnified";
  * 회사는 중단 이후만 합성값으로 이어진다.
  */
 export function opIncomeEntries(facts: CompanyFacts): FactUnitEntry[] {
+  // 영업이익 판독(손익계산서 계산 구조·총수익 분리)이 원본 조회 실패로 빠졌으면 비운다 — 판독 대상 회사는 영업이익 태그가
+  // 없거나(근사) 부문 주석 값(DIS)이라 그대로 쓰면 다른 숫자가 된다(sec-unavailable.ts)
+  if (unavailableOn(facts, "opIncome")) return [];
   const oi = entriesOf(facts, "OperatingIncomeLoss");
   const lastOi = oi.reduce((m, e) => (e.end > m ? e.end : m), "");
   // 태그를 나중에 시작한 회사(MET — OperatingIncomeLoss가 FY2022부터만 있고 FY2021은

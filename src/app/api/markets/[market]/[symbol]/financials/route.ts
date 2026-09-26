@@ -2,6 +2,7 @@ import { jsonError, ok } from "@/lib/api";
 import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
+import { blankLtmIfFilingsUnavailable } from "@/lib/markets/us/sec-unavailable";
 import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
 import { secBasisBars } from "@/lib/markets/us/edgar-shares";
 import { yahooLtmLabel } from "@/lib/markets/us/edgar-yahoo-quarters";
@@ -193,6 +194,8 @@ export async function GET(
                     },
                   });
       stmt.symbol = sym;
+      // 최신 공시 보완이 원본 조회 실패면 LTM 열은 공란(더 오래된 기간 값을 LTM 으로 내지 않음 — sec-unavailable.ts)
+      blankLtmIfFilingsUnavailable(facts, stmt);
       // 원본 조회 일시 오류(SEC 429 등) — 일부 공시가 빠졌을 수 있다(fetch-health.ts)
       if (facts.fetchWarnings?.length) stmt.source += ` · ⚠ 일부 공시 조회 실패(${facts.fetchWarnings.slice(0, 3).join(", ")}) — 잠시 뒤 다시 계산`;
       // 20-F 발행사 LTM 열 = Yahoo 분기(edgar-yahoo-quarters.ts) — 기준일·공란 항목 명시

@@ -74,13 +74,23 @@
   아래 긴급 결함 그대로.
 - 운영 규칙: SEC 요청 많은 작업은 순차(429 차단 — 오너 지시), 감사는 반복 Opus·최종 1회 Fable, DB 증가는 예상·실측 보고(`scripts/db/size.mjs`).
 
-## 긴급 결함 — SEC 원본 조회 실패 시 조용한 대체(2026-09-26 발견, 미수정)
+## 긴급 결함 — SEC 원본 조회 실패 시 조용한 대체(2026-09-26 발견, 대부분 수정)
 - 병렬 조사로 www.sec.gov/Archives 가 429(요청 한도 초과)를 돌려주자, 앱이 공시 원본(계산 구조·인스턴스)을 못 읽고 **경고 없이
   옛 태그 규칙으로 대체**해 틀린 값을 표시했다: DE 총차입금 651.9억 → 136.4억(연결 → 장비 부문만), GE 일회성비용 → 빈칸, F·DELL
   감가상각비·기타 영업활동, 차입금/EBITDA 비율 다수(38종목). 코드 변경분을 빼고 띄워도 같은 값 — 코드가 아니라 조회 실패 경로.
 - 원칙 위반(조회 실패는 기록, 조용한 대체 금지). 수정 방향: 본표 구조 판독이 조회 실패로 끝나면 대체 계산 대신 공란 + "원본 조회 실패"
   사유(재시도 후에도 실패 시), Next 캐시에 실패 결과를 남기지 않기. 대상: edgar-bs-structure·edgar-cf-structure·edgar-is-structure·
   edgar-oneoff·edgar-equity-shares·edgar-gapfill 등 원본 파일을 읽는 모든 판독기. 검증기도 429 를 조회 실패로 기록하는지 확인.
+- **수정(2026-09-26)**: 옛 판독기 전부(bs/cf/is-structure·oneoff·revenue-dims·content·equity-shares·annual-filings·gapfill·classfacts
+  `instanceUrl`·`fetchClassAFacts`)가 조회 실패(429·5xx·시간 초과·네트워크·목록에 있는 파일의 404)를 삼키지 않고 올린다. 로더(`edgar.ts`)가
+  `facts.sourceUnavailable`(`src/lib/markets/us/sec-unavailable.ts`)에 적고, 소비 모듈은 대체 계산 없이 공란 + "⚠ 원본 조회 실패 — 잠시 후
+  다시 시도: … 공란" 주석. EV 막음 사유 `source-unavailable`, 감가상각비 공란이면 "기타 영업활동" 잔여 줄도 공란, 결산일 주식수는 실패
+  날짜만 공란, 최신 공시 보완(gapfill) 실패면 재무제표·하이라이트 LTM 열 공란. 결과는 짧은 캐시(fetchWarnings), 하이라이트 응답 no-store.
+  `http.ts`: SEC URL 만 429·408·5xx·시간 초과 최대 2회 재시도(Retry-After ≤10초, 없으면 1초·3초, 10초 초과면 즉시 실패), 403·404 재시도 안 함.
+  재현: Archives 전부 429 시험에서 옛 코드 35값 다른 숫자 → 새 코드 0건(101값 공란), 정상 조회 값 전부 동일. 실제 앱 스냅샷 전후 값 변경 0,
+  47종목 검증 실패 3(MRVL 기존)·매출 ③ 0.
+- **남은 것**: 개요 TTM(`getTtm`)·컨센서스 LTM 은 gapfill 실패 시 아직 공란 처리 안 함 · gapfill 표지 주식수 실패는 기존 대체 유지 ·
+  `fetchUsSic` 실패 시 은행 레이아웃 오판 가능 · 클래스별 공시(Visa) 판독 실패 시 EPS 근사로 대체되고 주석 없음.
 - 병렬 작업 규칙: SEC Archives 요청은 전체 합산 초당 10건 한도 — 에이전트 병렬 시 각자 초당 2건 이하, 429 시 60초 이상 대기.
 
 ## 재개 절차

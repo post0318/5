@@ -3,6 +3,7 @@ import { fetchJson, fetchText } from "../http";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { RecentFilings } from "./edgar-gapfill";
 import { recentAnnualFilings } from "./edgar-annual-filings";
+import { fetchFailureReason, markUnavailable } from "./sec-unavailable";
 
 /**
  * **연말 유통주식수 — 자본변동표 보통주 차원**(10-K 원본). 차원 없는 유통·발행주식수 태그가 없는 회사(WMT·BE·META)는
@@ -57,7 +58,10 @@ export async function withEquityStatementShares(cik: string, facts: CompanyFacts
       (g[c]?.units?.shares ?? []).some((e) => !e.start && Math.abs(Date.parse(e.end) - Date.parse(d)) <= 7 * 864e5),
     );
   const out: FactUnitEntry[] = [];
-  // 최근 10-K 6건 — recent 목록이 모자라면 과거 목록 파일까지(WMT·META)
+  // 조회 실패한 결산일 — 그 연도는 근사(표지·가중평균)로 대체하지 않고 공란(edgar-shares.ts, sec-unavailable.ts)
+  const failed: string[] = [];
+  let failReason = "";
+  // 최근 10-K 6건 — recent 목록이 모자라면 과거 목록 파일까지(WMT·META). 목록 조회 실패는 올린다(날짜를 모름 — 판독 전체 실패)
   for (const f of await recentAnnualFilings(cik, recent, 6)) {
     const report = f.report;
     if (!report || hasAt(report)) continue;
@@ -69,10 +73,17 @@ export async function withEquityStatementShares(cik: string, facts: CompanyFacts
       const xml = await fetchText(`${base}/${inst}`, { headers: H, revalidate: false, timeoutMs: 30_000 });
       const v = yearEndShares(xml, report);
       if (v != null) out.push({ end: report, val: v, fy: 0, fp: "FY", form: "10-K", filed: f.filed });
-    } catch {
-      /* 이 연도만 건너뜀 — 기존 근사로 */
+    } catch (e) {
+      // 조회 실패 — 이 연도는 공란으로(근사로 조용히 대체하지 않음). 파싱 오류만 이 연도를 건너뛰고 기존 근사로
+      const why = fetchFailureReason(e);
+      if (why != null) {
+        failed.push(report);
+        failReason ||= why;
+      }
     }
   }
-  if (!out.length) return facts;
-  return { ...facts, facts: { ...facts.facts, "us-gaap": { ...g, [SYN_EQUITY_SHARES]: { units: { shares: out } } } } } as CompanyFacts;
+  const withOut = out.length
+    ? ({ ...facts, facts: { ...facts.facts, "us-gaap": { ...g, [SYN_EQUITY_SHARES]: { units: { shares: out } } } } } as CompanyFacts)
+    : facts;
+  return failed.length ? markUnavailable(withOut, "yearEndShares", failReason, failed) : withOut;
 }

@@ -24,14 +24,15 @@ export async function recentAnnualFilings(cik: string, recent: RecentFilings, n 
   const out: AnnualFiling[] = [];
   take(recent as Page, out, n);
   if (out.length >= n) return out;
+  // 조회 실패는 올린다 — 예전엔 삼켜 옛 10-K 가 "없는" 것으로 보고 호출부가 근사로 대체했다(sec-unavailable.ts)
   const sub = await fetchJson<{ filings: { files?: { name: string }[] } }>(
     `https://data.sec.gov/submissions/CIK${cik.padStart(10, "0")}.json`,
     { headers: H, revalidate: 60 * 60 * 24 },
-  ).catch(() => null);
-  for (const f of sub?.filings.files ?? []) {
+  );
+  for (const f of sub.filings.files ?? []) {
     if (out.length >= n) break;
-    const page = await fetchJson<Page>(`https://data.sec.gov/submissions/${f.name}`, { headers: H, revalidate: 60 * 60 * 24 }).catch(() => null);
-    if (page) take(page, out, n);
+    const page = await fetchJson<Page>(`https://data.sec.gov/submissions/${f.name}`, { headers: H, revalidate: 60 * 60 * 24 });
+    take(page, out, n);
   }
   return out;
 }

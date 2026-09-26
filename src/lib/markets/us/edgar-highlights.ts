@@ -7,6 +7,7 @@
  * - 추정(수익·EPS): yahoo-finance2 earningsTrend
  */
 
+import { unavailableNote } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { isStaleAnnual, splitFactorsByYear, fiscalYearOf, LTM_INTERIM_FORMS, ttmCombine, vintageOrder } from "./edgar-series";
@@ -584,6 +585,9 @@ export function buildUsHighlights(
     { key: "ev_ebitda", label: "EV/EBITDA", format: "mult", values: evEbitda },
   ];
 
+  // SEC 원본 조회 실패로 공란이 된 값(대체 계산 없음 — sec-unavailable.ts)
+  const unavailable = unavailableNote(facts);
+  if (unavailable) notes.push(unavailable);
   notes.push("실적·재무상태표·현금흐름: SEC EDGAR companyfacts (GAAP 보고치)");
   if (facts.reportingCurrency && facts.reportingCurrency !== "USD")
     notes.push(`외화 공시(${facts.reportingCurrency}${facts.ifrsMapped ? " · IFRS" : ""}) → USD 환산: 손익·현금흐름은 기간 평균 환율, 재무상태표는 기말 환율 (Yahoo 일별 환율 — 인포맥스와 같은 방식)`);

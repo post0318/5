@@ -1,4 +1,5 @@
 import "server-only";
+import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
@@ -319,6 +320,7 @@ export function buildUsCashFlow(
   };
 
   const items: FinancialLineItem[] = [];
+  const daOut = unavailableOn(facts, "da");
 
   for (const block of BLOCKS) {
     const totalVals = valOf(block.total.concepts);
@@ -333,7 +335,8 @@ export function buildUsCashFlow(
         const am = valOf([DA_INTANGIBLE]);
         const cf = valOf([SYN_DA_CF]);
         v = {};
-        for (const l of labels) v[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
+        // 본표 판독이 원본 조회 실패로 빠졌으면 공란 — 태그 규칙 값으로 대체하지 않는다(sec-unavailable.ts)
+        for (const l of labels) v[l] = daOut ? null : pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
       } else if (line.combine) v = combineVals(line.combine);
       else v = valOf(line.concepts ?? []);
       if (line.fallbackCombine && labels.some((l) => v[l] == null)) {
@@ -365,7 +368,8 @@ export function buildUsCashFlow(
         values = {};
         for (const lbl of labels) {
           const tot = totalVals[lbl];
-          if (tot == null) {
+          // 감가상각비가 공란(원본 조회 실패)인 구간의 잔여 줄은 감가상각비를 떠안아 다른 숫자가 되므로 함께 공란
+          if (tot == null || (daOut && block.lines.some((l) => l.pickDa))) {
             values[lbl] = null;
             continue;
           }
@@ -444,6 +448,10 @@ export function buildUsCashFlow(
   });
   // ── 주석 항목 ──
   items.push({ accountName: "", accountId: "cf:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() });
+  // SEC 원본 조회 실패로 공란이 된 값(감가상각비·기타 영업활동 — 대체 계산 없음, sec-unavailable.ts)
+  const unavailable = unavailableNote(facts);
+  if (unavailable)
+    items.push({ accountName: `※ ${unavailable}`, accountId: "cf:note:unavailable", depth: 1, isSubtotal: false, isHighlight: false, italic: true, values: blank() });
   items.push({ accountName: "[ 주석 항목 ]", accountId: "cf:note", depth: 0, isSubtotal: true, isHighlight: false, values: blank() });
 
   const capex = valOf(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"]);

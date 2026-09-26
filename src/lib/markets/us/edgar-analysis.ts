@@ -1,4 +1,5 @@
 import "server-only";
+import { unavailableNote } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import type { QuoteBar } from "../types";
@@ -984,6 +985,13 @@ export function buildUsAnalysis(
   if (!isFin) {
     items.push(SP("evnote"));
     for (const n of evNotes) items.push(R(n, blank(), undefined, { italic: true }));
+  }
+
+  // SEC 원본 조회 실패로 공란이 된 값(대체 계산 없음 — sec-unavailable.ts)
+  const unavailable = unavailableNote(facts);
+  if (unavailable) {
+    items.push(SP("unavailable"));
+    items.push(R(unavailable, blank(), undefined, { italic: true }));
   }
 
   if (approxPerShare) {

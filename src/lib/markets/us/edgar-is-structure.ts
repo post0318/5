@@ -163,7 +163,8 @@ async function financialSegmentOnly(cik: string, facts: CompanyFacts, recent: Re
   for (const form of ["10-K", "10-Q"]) {
     const i = recent.form.findIndex((f) => f === form);
     if (i < 0) { if (form === "10-K") return facts; continue; }
-    const cal = await calOf(Number(cik), { accn: recent.accessionNumber[i], form, filed: recent.filingDate[i], doc: recent.primaryDocument[i] }).catch(() => null);
+    // 조회 실패는 올린다(로더가 영업이익을 공란 + 사유로 — sec-unavailable.ts). null = 계산 구조 파일이 원래 없음
+    const cal = await calOf(Number(cik), { accn: recent.accessionNumber[i], form, filed: recent.filingDate[i], doc: recent.primaryDocument[i] });
     if (!cal || !pretaxChildren(cal, new Map(), true)) return facts;
     for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
       const role = m[1].split("/").pop() ?? "";
@@ -194,7 +195,7 @@ async function calOf(cik: number, f: Filing): Promise<string | null> {
 }
 
 /** 이 회사에 적용할지 — 영업이익 태그가 없거나, 있어도 "매출 − 총비용"과 크게 어긋나면(DIS 형 의심) */
-function needsCheck(g: NonNullable<CompanyFacts["facts"]["us-gaap"]>): boolean {
+export function needsOpIncomeStructure(g: NonNullable<CompanyFacts["facts"]["us-gaap"]>): boolean {
   const oi = g.OperatingIncomeLoss?.units?.USD ?? [];
   if (!oi.some((e) => e.end >= "2020-01-01")) return true;
   const fy = (c: string) => (g[c]?.units?.USD ?? []).filter((e) => e.fp === "FY" && e.start);
@@ -213,7 +214,7 @@ export async function withIncomeStatementStructure(cik: string, facts: CompanyFa
   // 태그가 손익계산서 계산 구조에 없으면(MET — 부문 조정이익으로 보이는 값, 2023 57.23억 vs 세전 21.62억) 그 태그만
   // 옮겨 두고 세전이익 기준(edgar-ev.ts financialSector)으로 둔다
   if (sic >= 6000 && sic <= 6799) return financialSegmentOnly(cik, facts, recent);
-  if (!needsCheck(g)) return facts;
+  if (!needsOpIncomeStructure(g)) return facts;
   const filings: Filing[] = [];
   let k10 = 0, q10 = 0;
   for (let i = 0; i < recent.form.length && (k10 < 3 || q10 < 1); i++) {
@@ -228,7 +229,8 @@ export async function withIncomeStatementStructure(cik: string, facts: CompanyFa
   // 최신 공시 손익계산서에 영업이익 소계가 없음을 확인했는가 — 확인됐으면 값 대입이 실패해도 부문 주석 영업이익은 옮긴다
   let latestNoOp = false;
   for (const f of filings) {
-    const fl = await filesOf(Number(cik), f).catch(() => null);
+    // 조회 실패는 올린다(sec-unavailable.ts) — 예전엔 그 공시만 건너뛰어 구조 일부로 영업이익을 냈다. null = 계산 구조 파일 없음
+    const fl = await filesOf(Number(cik), f);
     if (!fl) continue;
     const s = pretaxChildren(fl.cal, labelsOf(fl.lab));
     if (s && f === filings[0]) latestNoOp = true;
@@ -260,8 +262,8 @@ export async function withIncomeStatementStructure(cik: string, facts: CompanyFa
     // 회사 고유 줄이 있으면 그 공시 원본에서 값을 읽는다(원본이 없으면 이 구조는 건너뜀)
     const extIds = new Set([...s.arcs, ...s.nonop].filter((a) => a.ns !== "us-gaap").map((a) => `${a.ns}_${a.concept}`));
     if (extIds.size && s.instUrl) {
-      const xml = await fetchText(s.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 }).catch(() => null);
-      s.ext = xml ? durationValues(xml, extIds) : null;
+      const xml = await fetchText(s.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 });
+      s.ext = durationValues(xml, extIds);
     }
     const extAt = (a: Arc, k: string) => s.ext?.get(`${a.ns}_${a.concept}|${k}`);
     for (const p of g[s.pretax]?.units?.USD ?? []) {

@@ -36,6 +36,7 @@ import { isFinancialCompany } from "./us/edgar-financial";
 import { fyEps, netIncomeAnnualByYear, parentEquityAt, positiveRatio } from "./us/edgar-pershare";
 import type { ClassAFacts } from "./us/edgar-classfacts";
 import type { CompanyFacts } from "./us/edgar";
+import { unavailableNote, unavailableOn } from "./us/sec-unavailable";
 import {
   AdapterError,
   type DeepLink,
@@ -265,6 +266,9 @@ export async function getConsensusData(
     }
     // 외화 공시 기업(ASML·TSM·SPOT) — Yahoo 예상치를 USD 로(edgar-foreign.ts). 환산 실패 시 예상치를
     // 숨긴다(원통화 숫자를 USD 로 섞지 않음).
+    // SEC 원본 조회 실패로 공란이 된 값(대체 계산 없음 — sec-unavailable.ts)
+    const unavailable = us ? unavailableNote(us.facts) : null;
+    if (unavailable) notes.push(unavailable);
     if (us?.facts.fetchWarnings?.length) notes.push(`⚠ 일부 공시 조회 실패(${us.facts.fetchWarnings.slice(0, 3).join(", ")}) — 잠시 뒤 다시 계산`);
     if (us && estimates) {
       const conv = await estimatesToUsd(estimates, us.facts).catch(() => null);
@@ -366,7 +370,10 @@ export async function getConsensusData(
 
     // 미국은 연도말 주식수(단일 기준), 그 외는 종전대로 현재 주식수
     const periodEnd0 = annual.periods.find((p) => p.fiscalYear === fy)?.endDate ?? null;
-    const fyShares = us && periodEnd0 ? (us.shares.atFiscalYearEnd(fy, periodEnd0) ?? shares) : shares;
+    // 연도말 주식수가 원본 조회 실패로 공란이면 현재 주식수로 대체하지 않는다(sec-unavailable.ts)
+    const fyShares = us && periodEnd0
+      ? (us.shares.atFiscalYearEnd(fy, periodEnd0) ?? (unavailableOn(us.facts, "yearEndShares", periodEnd0) ? null : shares))
+      : shares;
     // 미국: 하이라이트와 같은 연도 EPS 규칙(공시값·분할 보정 → Class A 실측 → 근사)
     const eps = us
       ? fyEps(us.facts, fy, { classFacts: us.classFacts, fyShares, fyNetIncome: netIncome }).eps

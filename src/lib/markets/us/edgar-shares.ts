@@ -1,4 +1,5 @@
 import "server-only";
+import { unavailableOn } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import {
   ANNUAL_FORMS,
@@ -296,6 +297,14 @@ export function buildShareResolver(
 
   return {
     atFiscalYearEnd(year, endDate) {
+      // 자본변동표 원본 판독(edgar-equity-shares.ts)이 이 결산일에서 원본 조회 실패 — 표지·가중평균 근사로 대체하지 않고 공란
+      // (sec-unavailable.ts). 판독 전체 실패(날짜 모름)는 차원 없는 유통·발행주식수 태그가 없는 결산일만(원본을 읽을 대상)
+      if (
+        unavailableOn(facts, "yearEndShares", endDate) &&
+        (facts.sourceUnavailable?.yearEndShares?.dates ||
+          ![sharesEnd, equityStmtE, issuedE].some((es) => es.some((e) => !e.start && Math.abs(Date.parse(e.end) - Date.parse(endDate)) <= 7 * 864e5)))
+      )
+        return null;
       // 결산일(±7일) 시점 값 — 대차대조표 본표 기준. 후보는 같은 해 가중평균 주식수와 1.2배 안일 때만 채택한다
       // (PEP 는 "발행주식수" 태그가 이미 자기주식을 뺀 순발행분이라 또 빼면 틀린다 — 가중평균과 어긋나 걸러짐)
       // 잣대도 후보마다 단위 오류 보정 — MCD 는 가중평균을 7.164억 주가 아니라 716.4 로 태깅했다

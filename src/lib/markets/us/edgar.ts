@@ -31,7 +31,7 @@ import { withFilingGapFill } from "./edgar-gapfill";
 import { toAdrBasis, withForeignNormalization } from "./edgar-foreign";
 import { withContentAmortization } from "./edgar-content";
 import { withRevenueDims } from "./edgar-revenue-dims";
-import { withIncomeStatementStructure } from "./edgar-is-structure";
+import { needsOpIncomeStructure, withIncomeStatementStructure } from "./edgar-is-structure";
 import { withOneOffCharges } from "./edgar-oneoff";
 import { withBalanceSheetDebt } from "./edgar-bs-structure";
 import { withCashFlowDa } from "./edgar-cf-structure";
@@ -43,6 +43,7 @@ import { loadUsRevenue, revLtm, revQuarterAt, type RevCol, type UsRevenue } from
 import { loadClassAFacts } from "./class-facts-loader";
 import { dartAdrFinancials, dartAdrOf, dartAdrTtm } from "./dart-adr";
 import type { ClassAFacts } from "./edgar-classfacts";
+import { fetchFailureReason, type SourceFeature, type SourceUnavailableMap } from "./sec-unavailable";
 
 const UA =
   process.env.SEC_USER_AGENT ??
@@ -189,9 +190,33 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
     // 같은 정제본을 쓰게 로더에서 한 번만
     // companyfacts 누락 공시·복수 클래스 표지 주식수 보완(edgar-gapfill.ts) → 정제
     .then(async (raw) => {
-      const sub = await getSubmissions(cik).catch(() => null);
+      // **원본 조회 실패 = 공란 + 사유**(sec-unavailable.ts) — 본표 판독이 조회 실패(429·시간 초과·목록에 있는 파일의
+      // 404 등)로 끝나면 그 판독 값은 옛 태그 규칙으로 대체하지 않고 공란으로 두도록 sourceUnavailable 에 적는다.
+      // "원래 없음"(구조·파일 없음)은 각 판독기가 facts 그대로 돌려주므로 종전 규칙 그대로.
+      const unavailable: SourceUnavailableMap = {};
+      const step = async (feature: SourceFeature, prev: CompanyFacts, run: () => Promise<CompanyFacts>): Promise<CompanyFacts> => {
+        try {
+          return await run();
+        } catch (e) {
+          unavailable[feature] = { reason: fetchFailureReason(e) ?? `원본 판독 오류 · ${e instanceof Error ? e.message : String(e)}` };
+          return prev;
+        }
+      };
+      const subErr: { reason: string | null } = { reason: null };
+      const sub = await getSubmissions(cik).catch((e) => {
+        subErr.reason = fetchFailureReason(e) ?? "제출 목록 판독 오류";
+        return null;
+      });
       const recent = sub?.filings.recent ?? null;
-      const filled = await withFilingGapFill(cik, raw, recent).catch(() => raw);
+      const sicN = sub?.sic ? Number(sub.sic) : null;
+      // 제출 목록(submissions) 조회 실패 — 본표 판독을 하나도 못 하므로 판독이 필요한 값은 모두 공란(예전엔 전부 태그
+      // 규칙으로 조용히 대체). 영업이익은 판독 대상 회사(영업이익 태그 없음·의심)만 — 나머지는 공시 태그 그대로
+      if (subErr.reason) {
+        const reason = `제출 목록 · ${subErr.reason}`;
+        for (const f of ["debt", "da", "oneOff", "yearEndShares", "filings"] as const) unavailable[f] = { reason };
+        if (needsOpIncomeStructure(raw.facts["us-gaap"] ?? {})) unavailable.opIncome = { reason };
+      }
+      const filled = await step("filings", raw, () => withFilingGapFill(cik, raw, recent));
       // 외화·IFRS 공시(ASML·TSM·SPOT) → us-gaap·USD(edgar-foreign.ts). 환율 조회 실패 시 원본을 쓴다 —
       // 앱은 USD 단위만 읽으므로 원통화 숫자가 USD 로 섞이지 않고 빈칸이 된다.
       const normalized = await withForeignNormalization(filled).catch(() => {
@@ -199,20 +224,20 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
         return filled;
       });
       // 콘텐츠 상각(NFLX 등 미디어) → 감가상각비에 포함(edgar-content.ts, 오너 결정 2026-09-24)
-      const withContent = await withContentAmortization(cik, normalized, recent, sub?.sic ? Number(sub.sic) : null).catch(() => normalized);
+      const withContent = await step("da", normalized, () => withContentAmortization(cik, normalized, recent, sicN));
       // 총수익 안의 지분법·기타수익 분리(XOM — 영업이익 태그 없는 회사, edgar-revenue-dims.ts)
-      const withDims = await withRevenueDims(cik, withContent, recent).catch(() => withContent);
+      const withDims = await step("opIncome", withContent, () => withRevenueDims(cik, withContent, recent));
       // 영업이익 소계가 없는 손익계산서 — 계산 구조로 영업외 항목 분리(DIS·FOXA, edgar-is-structure.ts)
-      const withIs = await withIncomeStatementStructure(cik, withDims, recent, sub?.sic ? Number(sub.sic) : null).catch(() => withDims);
-      const sicN = sub?.sic ? Number(sub.sic) : null;
+      const withIs = await step("opIncome", withDims, () => withIncomeStatementStructure(cik, withDims, recent, sicN));
       // 손익계산서 별도 줄로 공시된 일회성비용(주석 행, edgar-oneoff.ts)
-      const withOneOff = await withOneOffCharges(cik, withIs, recent).catch(() => withIs);
+      const withOneOff = await step("oneOff", withIs, () => withOneOffCharges(cik, withIs, recent));
       // 총차입금 = 대차대조표 본표 차입금 줄(edgar-bs-structure.ts)
-      const withDebt = await withBalanceSheetDebt(cik, withOneOff, recent).catch(() => withOneOff);
-      // 감가상각비 = 현금흐름표 본표 감가상각·상각 줄(edgar-cf-structure.ts)
-      const withDa = await withCashFlowDa(cik, withDebt, recent).catch(() => withDebt);
+      const withDebt = await step("debt", withOneOff, () => withBalanceSheetDebt(cik, withOneOff, recent));
+      // 감가상각비 = 현금흐름표 본표 감가상각·상각 줄(edgar-cf-structure.ts). 콘텐츠 상각 판독이 실패했으면(NFLX) 본표 줄로
+      // 대신하지 않는다 — 콘텐츠 상각이 빠진 값이 된다
+      const withDa = unavailable.da ? withDebt : await step("da", withDebt, () => withCashFlowDa(cik, withDebt, recent));
       // 연말 유통주식수가 자본변동표 차원으로만 있는 회사(WMT·BE·META, edgar-equity-shares.ts)
-      const withShares = await withEquityStatementShares(cik, withDa, recent).catch(() => withDa);
+      const withShares = await step("yearEndShares", withDa, () => withEquityStatementShares(cik, withDa, recent));
       // 20-F 발행사(분기 XBRL 없음) — LTM 열을 Yahoo 분기(원통화) 최근 4개 분기로(edgar-yahoo-quarters.ts, 오너 결정
       // 2026-09-25). 조회 실패 시 SEC 사업연도 유지 + 경고(짧은 캐시), 다른 원천으로 대체하지 않는다.
       let withLtm = withShares;
@@ -229,13 +254,20 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           withLtm = { ...withShares, ltmQuarterSource: { source: "none", reason: "Yahoo 분기 조회 실패" } };
         }
       }
-      return { withLtm, sicN };
+      return { withLtm, sicN, unavailable };
     }))
-    .then(({ result: { withLtm, sicN }, failures }) => {
-      const warnings = [...failures, ...extraWarnings];
+    .then(({ result: { withLtm, sicN, unavailable }, failures }) => {
+      // 판독기가 일부 날짜만 실패로 적은 것(withLtm.sourceUnavailable)과 판독 전체 실패(unavailable)를 합친다
+      const sourceUnavailable: SourceUnavailableMap = { ...withLtm.sourceUnavailable, ...unavailable };
+      // 판독 실패 사유도 경고에 싣는다 — 404 처럼 일시 오류로 기록되지 않는 실패도 짧은 캐시가 되게(화면의 공란 주석은
+      // 각 화면 모듈이 unavailableNote 로)
+      const warnings = [
+        ...new Set([...failures, ...extraWarnings, ...Object.values(sourceUnavailable).map((u) => u!.reason)]),
+      ];
       const data = withOpIncome(dropRoundedRetags({
         ...withLtm,
         financialSector: sicN != null && sicN >= 6000 && sicN <= 6499,
+        sourceUnavailable: Object.keys(sourceUnavailable).length ? sourceUnavailable : undefined,
         ...(warnings.length ? { fetchWarnings: warnings } : {}),
       }));
       // 불완전한 결과가 연달아 나오면(늘 실패하는 원본) 짧은 캐시를 2분·4분·8분 …(최대 1시간)으로 늘린다
@@ -310,6 +342,8 @@ export interface CompanyFacts {
   entityName: string;
   /** 보완 단계의 원본 조회 일시 오류(SEC 429·시간 초과 등, fetch-health.ts) — 있으면 결과가 불완전할 수 있다 */
   fetchWarnings?: string[];
+  /** 본표 판독이 원본 조회 실패로 빠진 값 — 소비 모듈은 대체 계산 없이 공란 + 사유(sec-unavailable.ts) */
+  sourceUnavailable?: SourceUnavailableMap;
   /** 20-F 발행사 LTM 열(Yahoo 분기, edgar-yahoo-quarters.ts) 결과 — 화면 출처 표기·LTM 잔액 기준일 */
   ltmQuarterSource?: YahooLtmResult;
   /** 현재 주식수 보정값(인포맥스 → Yahoo) — 종목 단위 로더만 채운다 */

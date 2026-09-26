@@ -162,20 +162,20 @@ export async function withOneOffCharges(cik: string, facts: CompanyFacts, recent
     else if (!(form === "10-Q" && k10 === 0 && !filings.some((x) => x.form === "10-Q"))) continue;
     filings.push({ accn: recent.accessionNumber[i], form, filed: recent.filingDate[i], doc: recent.primaryDocument[i], report: recent.reportDate?.[i] ?? "" });
   }
-  // 공시별 일회성 줄 — 하나라도 못 읽으면 전체 미적용(기간마다 정의가 섞이지 않게)
+  // 공시별 일회성 줄 — 하나라도 없으면 전체 미적용(기간마다 정의가 섞이지 않게). 조회 실패는 올린다(로더가 일회성비용을
+  // 공란 + "원본 조회 실패" 사유로 — sec-unavailable.ts; 예전엔 사유 없는 빈칸이었다)
   const perFiling: { f: Filing; lines: Line[]; ext: Map<string, FactUnitEntry[]> }[] = [];
   for (const f of filings) {
-    const fl = await files(Number(cik), f).catch(() => null);
+    const fl = await files(Number(cik), f);
     if (!fl) return facts;
     const lines = oneOffLines(fl.cal, labels(fl.lab));
     if (!lines) return facts;
     let ext = new Map<string, FactUnitEntry[]>();
     const extIds = new Set(lines.filter((l) => l.ns !== "us-gaap").map((l) => `${l.ns}_${l.concept}`));
     if (extIds.size) {
-      const url = await instanceUrl(Number(cik), f.accn.replace(/-/g, ""), f.doc).catch(() => null);
+      const url = await instanceUrl(Number(cik), f.accn.replace(/-/g, ""), f.doc);
       if (!url) return facts;
-      const xml = await fetchText(url, { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 }).catch(() => null);
-      if (!xml) return facts;
+      const xml = await fetchText(url, { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 });
       ext = instanceValues(xml, extIds, f);
     }
     perFiling.push({ f, lines, ext });
