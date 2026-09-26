@@ -6,7 +6,7 @@
 
 import { fetchJson } from "../http";
 import { withFetchScope } from "../fetch-health";
-import { withYahooLtm, yahooLtm, type YahooLtmResult } from "./edgar-yahoo-quarters";
+import { blankYahooLtm, withYahooLtm, yahooLtm, type YahooLtmResult } from "./edgar-yahoo-quarters";
 import { fetchYahooFundamentals } from "../quote/yahoo";
 import { fxToUsd } from "./edgar-foreign";
 import { consensusDeepLinks, filingsDeepLink, newsDeepLinks } from "../deeplinks";
@@ -217,10 +217,10 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
         if (needsOpIncomeStructure(raw.facts["us-gaap"] ?? {})) unavailable.opIncome = { reason };
       }
       const filled = await step("filings", raw, () => withFilingGapFill(cik, raw, recent));
-      // 외화·IFRS 공시(ASML·TSM·SPOT) → us-gaap·USD(edgar-foreign.ts). 환율 조회 실패 시 원본을 쓴다 —
+      // 외화·IFRS 공시(ASML·TSM·SPOT) → us-gaap·USD(edgar-foreign.ts, 연준 H.10). 환율 조회 실패 시 원본을 쓴다 —
       // 앱은 USD 단위만 읽으므로 원통화 숫자가 USD 로 섞이지 않고 빈칸이 된다.
       const normalized = await withForeignNormalization(filled).catch(() => {
-        extraWarnings.push("외화 환산 환율 조회 실패");
+        extraWarnings.push("외화 환산 환율(연준 H.10) 조회 실패 — 환산 값 비움");
         return filled;
       });
       // 콘텐츠 상각(NFLX 등 미디어) → 감가상각비에 포함(edgar-content.ts, 오너 결정 2026-09-24)
@@ -245,11 +245,19 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const ticker = sub?.tickers?.[0] ?? null;
       if (latestPeriodic && /^20-F/.test(latestPeriodic) && ticker) {
         const cur = withShares.reportingCurrency ?? "USD";
-        try {
-          const [yq, fx] = await Promise.all([fetchYahooFundamentals(ticker), fxToUsd(cur)]);
+        const [yq, fx] = await Promise.all([
+          fetchYahooFundamentals(ticker).catch(() => null),
+          fxToUsd(cur).catch(() => null),
+        ]);
+        if (yq && fx) {
           const r = withYahooLtm(withShares, yq, fx, cur);
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
-        } catch {
+        } else if (!fx) {
+          // H.10 조회 실패 — 사업연도 값을 LTM 으로 대체하지 않고 LTM 열 공란(미고시와 같은 처리)
+          extraWarnings.push("연준 H.10 환율 조회 실패(LTM 최신 분기)");
+          const r = blankYahooLtm(withShares, "연준 H.10 공식 환율 조회 실패");
+          withLtm = { ...r.facts, ltmQuarterSource: r.result };
+        } else {
           extraWarnings.push("Yahoo 분기 조회 실패(LTM 최신 분기)");
           withLtm = { ...withShares, ltmQuarterSource: { source: "none", reason: "Yahoo 분기 조회 실패" } };
         }
@@ -350,6 +358,8 @@ export interface CompanyFacts {
   currentShares?: CurrentShares | null;
   /** 공시 통화(외화 공시면 USD 로 환산됨 — edgar-foreign.ts) */
   reportingCurrency?: string;
+  /** 외화 환산에서 H.10 공식 환율 미고시로 비운 값이 있으면 사유(edgar-foreign.ts) — 화면 주석 */
+  fxPending?: string;
   /** IFRS 개념을 us-gaap 으로 매핑했는지 */
   ifrsMapped?: boolean;
   /** ADR 1주 = 보통주 몇 주(1 이면 1:1) */

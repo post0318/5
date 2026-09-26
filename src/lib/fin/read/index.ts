@@ -97,6 +97,8 @@ export class UsReader {
   private vintMemo = new Map<string, Promise<FilingLines | null>>();
   private structMemo = new Map<string, Promise<FilingStructure>>();
   private instMemo = new Map<string, Promise<RawFact[] | null>>();
+  /** 열 키 → 환율 미고시 사유(H.10 최신 고시일 뒤 창 — Fx.why). 3층 빈칸의 사유로 옮긴다(fin/index.ts) */
+  readonly fxPending = new Map<string, string>();
 
   private constructor(
     readonly profile: CompanyProfile,
@@ -136,7 +138,7 @@ export class UsReader {
       fx = await makeFx(cur);
     } catch {
       gaps |= Gap.FX;
-      warnings.push(`환율 조회 실패(${cur})`);
+      warnings.push(`H.10 공식 환율 조회 실패(${cur}) — 환산 값 비움(다른 원천으로 대체하지 않음)`);
     }
     let yahoo: UsReader["yahoo"] = null;
     let yahooAt: string | null = null;
@@ -476,7 +478,11 @@ export class UsReader {
       if (present === 0) return { v: null, raw: null, gaps };
       if (present < s.parts.length) return { v: null, raw: null, gaps: gaps | Gap.BASIS_SHIFT };
       const rate = this.fx ? (this.fx.cur === "USD" ? 1 : this.fx.avg(s.start, s.end)) : null;
-      if (rate == null) return { v: null, raw: sum, gaps: gaps | Gap.FX };
+      if (rate == null) {
+        const why = this.fx?.why(s.end);
+        if (why) this.fxPending.set(col.key, why);
+        return { v: null, raw: sum, gaps: gaps | Gap.FX };
+      }
       const x = this.fx!.cur !== "USD" ? { ref: fxAvgRef(this.fx!.cur, s.start, s.end), v: rate, asOf: this.fx!.asOf } : null;
       if (x) fxWhy = { k: "fx", cur: this.fx!.cur, rate, basis: "avg" };
       for (const i of segIn) inputs.push(x ? { ...i, x } : i);
@@ -499,7 +505,10 @@ export class UsReader {
     const fyOrig = await this.partValue(qname, fyPart);
     if (fyOrig == null || fyOrig === "gap") return { v: null, raw: null, gaps: 0 };
     const r = yahooLtmOf(this.yahoo, field, fyOrig.val, col.yahoo!.fyEnd, this.fx);
-    if (!r.ok) return { v: null, raw: null, gaps: Gap.YAHOO };
+    if (!r.ok) {
+      if (r.fxPending) { this.fxPending.set(col.key, r.reason); return { v: null, raw: null, gaps: Gap.FX }; }
+      return { v: null, raw: null, gaps: Gap.YAHOO };
+    }
     // 입력 = Yahoo 분기(보고 통화) × 그 분기 평균 환율 — 원천을 저장하지 않으므로 값·조회 시각을 같이 남긴다
     const fx = this.fx;
     const asOf = this.yahooAt ?? fx.asOf;

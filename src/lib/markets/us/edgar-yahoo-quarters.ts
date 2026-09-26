@@ -14,7 +14,7 @@ import { fiscalYearOf, instantOn } from "./edgar-series";
  * 남겨, 한 LTM 열 안에서 기간이 섞였다(TSM 매출총이익률 51.39% < 영업이익률 55.84%, 독립 감사 2026-09-25).
  *
  * 원칙 — LTM 열 안에서 원천·기간이 하나:
- *  - 흐름 = Yahoo 최근 4개 분기 합. 분기마다 **그 분기 평균 환율**(앱 공통 환율 규칙, edgar-foreign.ts fxToUsd)로 USD 환산.
+ *  - 흐름 = Yahoo 최근 4개 분기 합. 분기마다 **그 분기 평균 환율**(앱 공통 환율 규칙 — 연준 H.10, edgar-foreign.ts fxToUsd)로 USD 환산.
  *  - 잔액 = Yahoo 최신 분기말 값 × 기말 환율. 평균 잔액용으로 1년 전 분기말 값도 넣는다(있을 때).
  *  - 항목마다 **연간 경계 확인**: Yahoo 연간(SEC FY 말일) = SEC FY(원통화, 공시 단위 안). 다르면 정의가 다른 것 — 그 항목만
  *    LTM 공란(FY 값 유지·다른 원천 혼합 금지). 최근 4개 분기 중 하나라도 결측이어도 공란.
@@ -45,11 +45,20 @@ export type YahooLtmResult =
       evComplete: boolean;
       evReason: string | null;
     }
-  | { source: "none"; reason: string };
+  | {
+      source: "none";
+      reason: string;
+      /**
+       * true = LTM 열 공란(사업연도 값을 LTM 으로 대체하지 않음) — H.10 공식 환율 미고시·조회 실패(오너·리드 결정 2026-09-27, fin 과 같은 규칙).
+       * 흐름 개념 최근 FY 에 ltmNone 을 달고, 화면 라우트는 LTM 열 전체를 비운다(sec-unavailable.ts blankLtm…)
+       */
+      ltmBlank?: true;
+    };
 
 type Units = Record<string, FactUnitEntry[]>;
 type Ns = Record<string, { label?: string; description?: string; units: Units }>;
-type Fx = { avg(start: string, end: string): number | null; at(date: string): number | null };
+/** 환율(연준 H.10 — edgar-foreign.ts fxToUsd). why(end) = 값이 없을 때 사유(H.10 미고시) */
+type Fx = { avg(start: string, end: string): number | null; at(date: string): number | null; why?(end: string): string | null };
 
 const DAY = 864e5;
 const span = (a: string, b: string) => (Date.parse(b) - Date.parse(a)) / DAY;
@@ -126,6 +135,31 @@ function sameInUnit(sec: number, yv: number): boolean {
   return Math.abs(sec - yv) < unit + Math.abs(sec) * 1e-9;
 }
 
+/** 흐름 개념(skip 제외)의 최근 FY 항목에 ltmNone(LTM 공란) — 제자리 수정. 주식수 단위(가중평균)는 LTM 에 안 쓴다 */
+function markLtmNone(out: Ns, skip: Set<string> = new Set()): void {
+  for (const [c, node] of Object.entries(out)) {
+    if (skip.has(c)) continue;
+    let changed = false;
+    const units: Units = {};
+    for (const [u, arr] of Object.entries(node.units ?? {})) {
+      if (u === "shares" || u === "pure") { units[u] = arr; continue; }
+      const fyEnd = arr.filter(isAnnualE).reduce((m, e) => (e.end > m ? e.end : m), "");
+      if (!fyEnd) { units[u] = arr; continue; }
+      units[u] = arr.map((e) => (isAnnualE(e) && e.end === fyEnd ? ((changed = true), { ...e, ltmNone: true }) : e));
+    }
+    if (changed) out[c] = { ...node, units };
+  }
+}
+
+/**
+ * LTM 열 공란(사업연도 값 대체 없음) — H.10 공식 환율 미고시·조회 실패. 흐름 개념 최근 FY 에 ltmNone, 결과에 ltmBlank(라우트가 LTM 열 전체를 비움)
+ */
+export function blankYahooLtm(facts: CompanyFacts, reason: string): { facts: CompanyFacts; result: YahooLtmResult } {
+  const out: Ns = { ...((facts.facts["us-gaap"] ?? {}) as Ns) };
+  markLtmNone(out);
+  return { facts: { ...facts, facts: { ...facts.facts, "us-gaap": out } } as CompanyFacts, result: { source: "none", reason, ltmBlank: true } };
+}
+
 /** 정규화(USD) 이후의 facts 에 Yahoo 분기 LTM 을 붙인다 */
 export function withYahooLtm(
   facts: CompanyFacts,
@@ -160,15 +194,19 @@ export function withYahooLtm(
   const priorEnd = monthEndShift(E, -3 * (4 - k));
   const qStart = (d: string) => addDay(monthEndShift(d, -3), 1);
 
-  // 환율 — 분기 평균(흐름)·기말(잔액). 하나라도 없으면 LTM 전체 보강 안 함(FY 유지 + 사유)
+  // 환율 — 분기 평균(흐름)·기말(잔액). 하나라도 없으면 LTM 전체 보강 안 함(FY 유지 + 사유). 단 H.10 미고시(발표 지연)면 LTM 열 공란 —
+  // 사업연도 값을 LTM 으로 보이는 대체를 하지 않는다(fin 과 같은 규칙)
   const qRate = new Map<string, number>();
   for (const d of last4) {
     const r = fx.avg(qStart(d), d);
-    if (r == null) return none(`환율 없음(${d} 분기)`);
+    if (r == null) { const why = fx.why?.(d); return why ? blankYahooLtm(facts, why) : none(`환율 없음(${d} 분기)`); }
     qRate.set(d, r);
   }
   const fyRate = fx.avg(fyStart, E), priorRate = fx.avg(fyStart, priorEnd), lastRate = fx.at(last), eRate = fx.at(E);
-  if (fyRate == null || priorRate == null || lastRate == null || eRate == null) return none("환율 없음(연간·기말)");
+  if (fyRate == null || priorRate == null || lastRate == null || eRate == null) {
+    const why = fx.why?.(last);
+    return why ? blankYahooLtm(facts, why) : none("환율 없음(연간·기말)");
+  }
   const yearAgo = monthEndShift(last, -12);
   const yearAgoRate = fx.at(yearAgo);
 
@@ -221,19 +259,8 @@ export function withYahooLtm(
     filled.push(it.label);
   }
 
-  // 매핑하지 않은(또는 비운) 흐름 개념 — 최근 FY 항목에 ltmNone(LTM 공란). 주식수 단위(가중평균)는 LTM 에 안 쓴다
-  for (const [c, node] of Object.entries(out)) {
-    if (filledConcepts.has(c)) continue;
-    let changed = false;
-    const units: Units = {};
-    for (const [u, arr] of Object.entries(node.units ?? {})) {
-      if (u === "shares" || u === "pure") { units[u] = arr; continue; }
-      const fyEnd = arr.filter(isAnnualE).reduce((m, e) => (e.end > m ? e.end : m), "");
-      if (!fyEnd) { units[u] = arr; continue; }
-      units[u] = arr.map((e) => (isAnnualE(e) && e.end === fyEnd ? ((changed = true), { ...e, ltmNone: true }) : e));
-    }
-    if (changed) out[c] = { ...node, units };
-  }
+  // 매핑하지 않은(또는 비운) 흐름 개념 — 최근 FY 항목에 ltmNone(LTM 공란)
+  markLtmNone(out, filledConcepts);
 
   // ── 잔액(최신 분기말) ──
   const on = (c: string, d: string) => instantOn(usd(c), d);
@@ -318,9 +345,9 @@ export function yahooLtm(facts: CompanyFacts): Extract<YahooLtmResult, { source:
 
 /** 화면 라벨 */
 export function yahooLtmLabel(r: YahooLtmResult): string {
-  if (r.source !== "yahoo") return `LTM 분기 보강 안 함(SEC 사업연도 유지): ${r.reason}`;
+  if (r.source !== "yahoo") return r.ltmBlank ? `⚠ LTM 열 공란: ${r.reason}(사업연도 값으로 대체하지 않음)` : `LTM 분기 보강 안 함(SEC 사업연도 유지): ${r.reason}`;
   return (
-    `LTM 열 = Yahoo 분기(원통화 ${r.currency}, 분기 평균·기말 환율 환산, ~${r.through}), 결측 항목 공란` +
+    `LTM 열 = Yahoo 분기(원통화 ${r.currency}, 연준 H.10 분기 평균·기말 환율 환산, ~${r.through}), 결측 항목 공란` +
     (r.blanked.length ? ` — 공란: ${r.blanked.map((b) => `${b.label}(${b.reason})`).join(", ")}` : "") +
     (r.evReason ? ` · ${r.evReason}` : "")
   );

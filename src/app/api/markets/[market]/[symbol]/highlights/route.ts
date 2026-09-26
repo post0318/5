@@ -162,6 +162,8 @@ export async function GET(
     // 20-F 발행사 LTM 열 = Yahoo 분기(edgar-yahoo-quarters.ts) — 기준일·공란 항목 명시
     const lq = factsRes.facts.ltmQuarterSource;
     if (lq) highlights.notes.push(yahooLtmLabel(lq));
+    // 외화 환산 — 연준 H.10 최신 고시일 뒤 기간은 비움(edgar-foreign.ts, 다른 환율로 대체하지 않음)
+    if (factsRes.facts.fxPending) highlights.notes.push(`⚠ ${factsRes.facts.fxPending} — 해당 기간 환산 값 비움`);
 
     // 조회 실패로 불완전한 결과는 CDN 에 1시간 붙잡히지 않게 캐시하지 않는다(다음 요청이 다시 계산)
     const degraded = !!factsRes.facts.fetchWarnings?.length || !!factsRes.facts.sourceUnavailable;

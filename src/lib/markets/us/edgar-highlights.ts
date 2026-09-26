@@ -590,7 +590,7 @@ export function buildUsHighlights(
   if (unavailable) notes.push(unavailable);
   notes.push("실적·재무상태표·현금흐름: SEC EDGAR companyfacts (GAAP 보고치)");
   if (facts.reportingCurrency && facts.reportingCurrency !== "USD")
-    notes.push(`외화 공시(${facts.reportingCurrency}${facts.ifrsMapped ? " · IFRS" : ""}) → USD 환산: 손익·현금흐름은 기간 평균 환율, 재무상태표는 기말 환율 (Yahoo 일별 환율 — 인포맥스와 같은 방식)`);
+    notes.push(`외화 공시(${facts.reportingCurrency}${facts.ifrsMapped ? " · IFRS" : ""}) → USD 환산: 손익·현금흐름은 기간 평균 환율, 재무상태표는 기말 환율 (연준 H.10 공식 일별 환율 — FRED, 평균 = 기간 고시값 산술평균·기말 = 그날 이전 마지막 고시)`);
   if (facts.nonopInRevenues)
     notes.push("매출·영업이익: 공시 총수익에서 지분법 이익·기타수익을 뺀 값(10-K·10-Q 원본의 제품·서비스 구분) — 인포맥스·MarketScreener·Yahoo 매출과 같은 기준");
   if (facts.opIncomeFromStructure)

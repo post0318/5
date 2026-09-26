@@ -1,5 +1,5 @@
 import "server-only";
-import { fetchFxToUsdDaily } from "../quote/yahoo";
+import { h10Fx, type H10Fx } from "../quote/fred-fx";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 
 /**
@@ -11,9 +11,10 @@ import type { CompanyFacts, FactUnitEntry } from "./edgar";
  * 과 IFRS 로 공시하는 TSM(대만달러)·SPOT(유로)은 연도 열이 통째로 비고 차입금·현금이 0 이었다.
  *
  * 환산 방식(오너 결정 2026-09-24 — "다른 사이트 확인 후 적용", 인포맥스와 같은 방식):
- *   - 기간 값(손익·현금흐름·주당이익) = 그 기간의 **평균 환율**(일별 종가 평균)
- *   - 시점 값(재무상태표) = 그 날짜(이전 최근 영업일)의 **환율**
- *   인포맥스 역산 환율이 이 두 값과 0.1~0.3% 안에서 일치했다(ASML·SPOT·TSM·SKHY 실측).
+ *   - 기간 값(손익·현금흐름·주당이익) = 그 기간의 **평균 환율**(일별 고시 산술평균)
+ *   - 시점 값(재무상태표) = 그 날짜 또는 이전 마지막 고시 **환율**
+ *   환율 원천 = **연준 H.10 공식 일별 환율**(FRED, markets/quote/fred-fx.ts — 오너 결정 2026-09-27, 종전 Yahoo 일별 종가).
+ *   창 끝이 H.10 최신 고시일보다 뒤면 그 값은 비우고 사유를 facts.fxPending 에 남긴다(Yahoo 로 대체하지 않음).
  *   Yahoo·MarketScreener·StockAnalysis 는 환산하지 않고 원통화로 보여준다.
  * 20-F 의 USD "편의 환산" 태그(TSM 이 원통화와 함께 단다)는 단일 환율 일괄 환산이라 쓰지 않는다.
  *
@@ -143,42 +144,16 @@ function mapIfrs(gaap: Ns, ifrs: Ns): Ns {
   return out;
 }
 
-// ── 환율 ──────────────────────────────────────────────────────────────
-const FX_TTL = 1000 * 60 * 60 * 12;
-const fxCache = new Map<string, { at: number; data: { date: string; rate: number }[] }>();
-async function fxSeries(cur: string) {
-  const hit = fxCache.get(cur);
-  if (hit && Date.now() - hit.at < FX_TTL) return hit.data;
-  const data = await fetchFxToUsdDaily(cur);
-  fxCache.set(cur, { at: Date.now(), data });
-  return data;
-}
-function rateAt(s: { date: string; rate: number }[], date: string): number | null {
-  let lo = 0, hi = s.length - 1, best = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (s[mid].date <= date) { best = mid; lo = mid + 1; } else hi = mid - 1;
-  }
-  if (best < 0) return null;
-  // 기준일에서 10일 넘게 떨어진 환율은 쓰지 않는다(데이터 공백)
-  return (Date.parse(date) - Date.parse(s[best].date)) / 864e5 <= 10 ? s[best].rate : null;
-}
-function avgRate(s: { date: string; rate: number }[], start: string, end: string): number | null {
-  let sum = 0, n = 0;
-  for (const q of s) if (q.date >= start && q.date <= end) { sum += q.rate; n++; }
-  // 기간 영업일의 절반도 없으면 평균을 믿지 않는다
-  const days = (Date.parse(end) - Date.parse(start)) / 864e5;
-  return n > 0 && n >= days * 0.3 ? sum / n : null;
-}
+// ── 환율(연준 H.10 — markets/quote/fred-fx.ts) ──────────────────────────
+type Rates = Pick<H10Fx, "avg" | "at" | "why">;
 
 /**
- * 통화 → USD 환산 도우미(앱 공통 환율 규칙 — 흐름 = 기간 평균 환율, 잔액 = 기말 환율). USD 면 1.
- * 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)이 SEC 연도 열과 같은 환율 원천·규칙을 쓰게 한다.
+ * 통화 → USD 환산 도우미(앱 공통 환율 규칙 — 흐름 = 기간 평균 환율, 잔액 = 기말 환율, 원천 H.10). USD 면 1.
+ * 20-F 발행사 Yahoo 분기 LTM(edgar-yahoo-quarters.ts)·본표 차입금(edgar-bs-structure.ts)이 SEC 연도 열과 같은 환율 원천·규칙을 쓰게 한다.
+ * why(end) = 값이 없을 때 사유(H.10 미고시). 조회 실패는 예외.
  */
-export async function fxToUsd(cur: string): Promise<{ avg(start: string, end: string): number | null; at(date: string): number | null }> {
-  if (cur === "USD") return { avg: () => 1, at: () => 1 };
-  const s = await fxSeries(cur);
-  return { avg: (a, b) => avgRate(s, a, b), at: (d) => rateAt(s, d) };
+export async function fxToUsd(cur: string): Promise<H10Fx> {
+  return h10Fx(cur);
 }
 
 const dayMs = 864e5;
@@ -198,7 +173,7 @@ const span = (a: string, b: string) => (Date.parse(b) - Date.parse(a)) / dayMs;
  * 기간을 분기로 끝까지 잇지 못하면(20-F 처럼 연간만 있거나 반기만 있는 회사) null — 호출부가 기간 평균 환율 값(val)을
  * 쓴다(분기 금액이 없으니 분기 가중을 할 근거가 없다).
  */
-function quarterSummer(arr: FactUnitEntry[], fx: { date: string; rate: number }[]) {
+function quarterSummer(arr: FactUnitEntry[], fx: Rates) {
   const latest = new Map<string, FactUnitEntry>();
   for (const e of arr) {
     if (!e.start || e.val == null) continue;
@@ -237,7 +212,7 @@ function quarterSummer(arr: FactUnitEntry[], fx: { date: string; rate: number }[
     for (let i = 0; i < 12; i++) {
       const p = findFrom(cursor);
       if (!p || p.end > addDay(end, 3)) return null;
-      const r = avgRate(fx, p.start, p.end);
+      const r = fx.avg(p.start, p.end);
       if (r == null) return null;
       sum += p.val * r;
       if (Math.abs(span(p.end, end)) <= 3) return sum;
@@ -247,7 +222,7 @@ function quarterSummer(arr: FactUnitEntry[], fx: { date: string; rate: number }[
   };
 }
 
-function convertNs(ns: Ns, cur: string, fx: { date: string; rate: number }[]): Ns {
+function convertNs(ns: Ns, cur: string, fx: Rates, pending: Set<string>): Ns {
   const out: Ns = {};
   for (const [concept, node] of Object.entries(ns)) {
     const units = node.units ?? {};
@@ -264,8 +239,13 @@ function convertNs(ns: Ns, cur: string, fx: { date: string; rate: number }[]): N
       let qsum: (start: string, end: string) => number | null = () => null;
       try { qsum = quarterSummer(arr, fx); } catch { /* 분기 분해 불가 */ }
       for (const e of arr) {
-        const r = e.start ? avgRate(fx, e.start, e.end) : rateAt(fx, e.end);
-        if (r == null) continue; // 환율 없는 기간은 버린다(원통화 그대로 USD 로 섞지 않음)
+        const r = e.start ? fx.avg(e.start, e.end) : fx.at(e.end);
+        if (r == null) {
+          // 환율 없는 기간은 버린다(원통화 그대로 USD 로 섞지 않음). H.10 미고시 창이면 사유를 남긴다(화면 주석)
+          const why = fx.why(e.end);
+          if (why) pending.add(why);
+          continue;
+        }
         let q: number | null = null;
         try { q = e.start ? qsum(e.start, e.end) : null; } catch { q = null; }
         conv.push(q != null ? { ...e, val: e.val * r, ltmQ: q } : { ...e, val: e.val * r });
@@ -278,8 +258,9 @@ function convertNs(ns: Ns, cur: string, fx: { date: string; rate: number }[]): N
 }
 
 /**
- * 외화·IFRS 정규화. USD·us-gaap 공시 회사는 그대로 돌려준다. 환율 조회에 실패하면 예외를
+ * 외화·IFRS 정규화. USD·us-gaap 공시 회사는 그대로 돌려준다. 환율(H.10) 조회에 실패하면 예외를
  * 던진다 — 원통화 숫자를 USD 로 착각해 쓰느니 빈 화면이 낫다(로더가 원본을 쓰지 않도록).
+ * H.10 미고시 창(최신 고시일 뒤)의 값은 비우고 facts.fxPending 에 사유를 남긴다.
  */
 export async function withForeignNormalization(facts: CompanyFacts): Promise<CompanyFacts> {
   const cur = reportingCurrency(facts);
@@ -289,14 +270,16 @@ export async function withForeignNormalization(facts: CompanyFacts): Promise<Com
   let gaap: Ns = { ...(f["us-gaap"] ?? {}) };
   if (ifrs) gaap = mapIfrs(gaap, ifrs);
   let dei = f.dei ?? {};
+  const pending = new Set<string>();
   if (cur) {
-    const fx = await fxSeries(cur);
-    gaap = convertNs(gaap, cur, fx);
-    dei = convertNs(dei, cur, fx);
+    const fx = await h10Fx(cur);
+    gaap = convertNs(gaap, cur, fx, pending);
+    dei = convertNs(dei, cur, fx, pending);
   }
   return {
     ...facts,
     reportingCurrency: cur ?? "USD",
+    ...(pending.size ? { fxPending: [...pending].join(" · ") } : {}),
     ifrsMapped: Boolean(ifrs),
     facts: { ...facts.facts, "us-gaap": gaap, dei },
   } as CompanyFacts;
@@ -339,6 +322,8 @@ export function toAdrBasis(facts: CompanyFacts, adrShares: number | null | undef
  * 2026-09-24): 매출 예상은 항상 재무 통화(TSM 대만달러·ASML 유로). EPS 예상은 ADR 비율이 1 이
  * 아니면 이미 ADR 1주당 USD(TSM 16.93 ≈ 인포맥스 16.78), 1:1 상장이면 재무 통화(ASML 38.33 유로
  * × 1.147 ≈ 인포맥스 43.97). 예상은 미래 기간이라 **현재 환율**로 환산한다.
+ * 현재 환율 = **H.10 최신 고시값**(발표가 주 1회라 며칠 전 값 — 날짜를 주석에 적는다). 예상 환산은 정의상 환율이 필요해
+ * 미고시를 빈칸으로 두지 않는 유일한 예외(architecture.md §1.3). H.10 조회 실패는 예외(부르는 쪽이 예상치를 숨김).
  */
 export async function estimatesToUsd<
   T extends {
@@ -349,13 +334,18 @@ export async function estimatesToUsd<
 >(
   est: T,
   facts: Pick<CompanyFacts, "reportingCurrency" | "adrRatio">,
-  /** 현재 환율을 다른 원천으로 줄 때(DART 연결 ADR — ECOS 매매기준율, us/dart-adr.ts). 없으면 Yahoo */
+  /** 현재 환율을 다른 원천으로 줄 때(DART 연결 ADR — ECOS 매매기준율, us/dart-adr.ts). 없으면 H.10 최신 고시값 */
   nowRate?: { date: string; rate: number; source?: string },
 ): Promise<T & { fxNote?: string }> {
   const cur = facts.reportingCurrency;
   if (!cur || cur === "USD") return est;
-  const last = nowRate ?? (await fxSeries(cur)).at(-1);
-  if (!last) return est;
+  let last = nowRate;
+  if (!last) {
+    const h = await h10Fx(cur);
+    const r0 = h.latest ? h.at(h.latest) : null;
+    if (!h.latest || r0 == null) return est;
+    last = { date: h.latest, rate: r0, source: "연준 H.10 최신 고시" };
+  }
   const r = last.rate;
   const epsInUsd = (facts.adrRatio ?? 1) !== 1;
   const m = (v: number | null, k: number) => (v == null ? null : v * k);
@@ -363,7 +353,7 @@ export async function estimatesToUsd<
   return {
     ...est,
     currency: "USD",
-    fxNote: `예상(매출${epsInUsd ? "" : "·EPS"}): ${cur} → USD 현재 환율(${nowRate?.source ? `${nowRate.source} ` : ""}${last.date} ${Number(r.toPrecision(5))}) 환산${epsInUsd ? " · EPS 는 ADR 1주당 USD 로 제공" : ""}`,
+    fxNote: `예상(매출${epsInUsd ? "" : "·EPS"}): ${cur} → USD 현재 환율(${last.source ? `${last.source} ` : ""}${last.date} ${Number(r.toPrecision(5))}) 환산${epsInUsd ? " · EPS 는 ADR 1주당 USD 로 제공" : ""}`,
     periods: est.periods.map((p) => ({
       ...p,
       revenueAvg: m(p.revenueAvg, r), revenueLow: m(p.revenueLow, r), revenueHigh: m(p.revenueHigh, r),

@@ -52,6 +52,14 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
   // 조립 항등식 불성립(Gap.IDENTITY) 노출 — 매출 경로는 3층이 이미 값을 비웠고(reason), 그 외 줄은 값을 두고 경고로만
   const issues: FinAssembly["issues"] = [];
   const warnings = [...reader.warnings];
+  // H.10 공식 환율 미고시 창(최신 고시일 뒤) — 빈칸의 사유로 남기고 경고(Yahoo 등으로 대체하지 않는다, architecture.md §1.3)
+  for (const [key, why] of reader.fxPending) {
+    for (const s of [rev, cogs, gp, opinc, opex]) {
+      const mv = s.values[key];
+      if (mv && mv.v == null && !mv.reason) s.values[key] = { ...mv, reason: why };
+    }
+    warnings.push(`${key} ${why} — 환산 값 비움`);
+  }
   for (const a of cols) {
     const der = derErr.get(a.col.key) ?? [];
     if (a.identity.ok && !rev.values[a.col.key]?.unv?.length && !der.length) continue;

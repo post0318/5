@@ -70,9 +70,11 @@ const insertCogsRows = (col, cogs, gp) => (j) => {
   return 2;
 };
 
-// TSM FY2024(2024-01-01 ~ 2024-12-31) — 6b 에서 환율 원천(Yahoo 일별 TWD)이 +0.5% 틀린 경우. 앱 매출 × k, 검증기가 받는 같은 구간 환율 × k
+// TSM FY2024(2024-01-01 ~ 2024-12-31) 매출 — 원통화 공시 × 연준 H.10 기간 평균(2026-09-27 환율 원천 H.10 전환 후 앱 값).
+// TSM_REV_2024_YAHOO = 같은 원통화 × 옛 Yahoo 일별 종가 평균(전환 전 앱 값 — "앱이 H.10 대신 Yahoo 를 쓴" 오류의 전형적인 작은 차이 −0.15%)
 const FX_K = 1.005;
-const TSM_REV_2024 = 90303220607.22644;
+const TSM_REV_2024 = 90166642502.62016;
+const TSM_REV_2024_YAHOO = 90303220607.22644;
 
 export const MUTATIONS = [
   { id: "M01a", cat: 1, sym: "KO", col: "2024Y", what: "연간 매출 +1달러", origin: "골든셋 주입 시험(2026-09-26) — 상대 오차 1e-9 가 4천억 달러에서 400달러를 통과시킨 결함",
@@ -102,12 +104,12 @@ export const MUTATIONS = [
     expect: "A", plants: [{ op: "replace", from: 104816000000, to: 104816000 }] },
   { id: "M06a", cat: 6, sym: "TSM", col: "2024Y", what: "매출 × 1.005 — 앱만 환율 오적용(검증기 환율 원천은 정상)", origin: "20-F 환율 #4·#5(handoff) — 앱이 기간·환율 계열을 잘못 고른 경우",
     expect: "A", plants: [{ op: "replace", from: TSM_REV_2024, to: TSM_REV_2024 * FX_K }] },
-  { id: "M06b", cat: 6, sym: "TSM", col: "2024Y", what: "환율 원천 자체 +0.5% — 앱 매출 × 1.005 와 검증기가 받는 Yahoo TWD 일별 환율(FY2024 구간) × 1.005", origin: "20-F 환산 환율은 앱·검증기 모두 Yahoo 일별 — 원천이 틀리면 둘이 같이 틀림",
-    expect: "A", knownGap: "공통모드 — 앱·검증기가 같은 Yahoo 환율을 쓴다(20-F 환율 독립 원천 미확보, handoff 남은 순서 3). 외부(인포맥스·StockAnalysis)는 환율 방식이 달라 ② 로 분류",
-    countIf: (c) => c.metric === "rev" && ["A", "F"].includes(c.layer),
-    countNote: "계측 범위 = 매출 A·F층 — 이 가로채기는 FY2024 구간 환율만 바꾸고 앱은 매출만 바꿔서 다른 지표·파생값(순이익·성장률 등)의 발화는 계측 잡음",
-    fx: { cur: "TWD", start: "2024-01-01", end: "2024-12-31", k: FX_K },
-    plants: [{ op: "replace", from: TSM_REV_2024, to: TSM_REV_2024 * FX_K }] },
+  // 2026-09-27 환율 원천 H.10 전환 — 앱·검증기가 같은 공적 고시(연준 H.10)를 **각자** 받는다. 원천 자체가 틀리는 경우(옛 M06b: Yahoo 계열 ×1.005)는
+  // 더 이상 공통모드가 아니라 "앱 환율 ≠ H.10" 이 되므로 A층 정확 대조(환산 환율 = 기간 평균)가 잡는다
+  { id: "M06b", cat: 6, sym: "TSM", col: "2024Y", what: "앱 환율이 H.10 과 +0.5% 다름 — 매출 × 1.005(검증기는 FRED 에서 H.10 을 따로 받음)", origin: "20-F 환산 환율 원천 오류 — 옛 공통모드(앱·검증기 모두 Yahoo 일별, 2026-09-27 이전 M06b)를 H.10 독립 조회로 전환",
+    expect: "A", plants: [{ op: "replace", from: TSM_REV_2024, to: TSM_REV_2024 * FX_K }] },
+  { id: "M06c", cat: 6, sym: "TSM", col: "2024Y", what: "앱이 H.10 대신 Yahoo 일별 종가 평균을 씀 — 매출 90,166,642,502.62 → 90,303,220,607.23(+0.15%)", origin: "2026-09-27 이전 앱 값 그대로(Yahoo TWD 일별 평균 0.0312003 vs H.10 0.0311531) — 원천이 조용히 되돌아가는 경우",
+    expect: "A", plants: [{ op: "replace", from: TSM_REV_2024, to: TSM_REV_2024_YAHOO }] },
   { id: "M07", cat: 7, sym: "KO", col: "2025 Q4", what: "Q4 = FY − 6개월 11,822,000,000 → 24,277,000,000(47,941 − 23,664)", origin: "revenue.md §2 Q4 = FY − 9개월 규칙의 반대 사례",
     expect: "A", plants: [{ op: "replace", from: 11822000000, to: 24277000000 }] },
   { id: "M08", cat: 8, sym: "KO", col: "LTM", what: "LTM 전년 동기 누적을 2024 H1(23,663)로 — 50,129,000,000 → 50,130,000,000", origin: "XOM LTM — 연간 문장값과 9개월 합계를 섞어 구한 사례(handoff XOM LTM 해결)",
@@ -232,23 +234,6 @@ function installHook() {
         const n = p.op === "replace" ? deepReplace(j, p.from, p.to) : p.fn(j, kind);
         if (n) log({ t: "plant", kind, what: p.op === "replace" ? `${p.from} → ${p.to}` : p.name, n });
       }
-      return new Response(JSON.stringify(j), { status: res.status, headers: { "content-type": "application/json" } });
-    }
-    // 6b — Yahoo 일별 환율(TWDUSD=X 또는 TWD=X) FY 구간만 × k (역수 계열은 ÷ k)
-    const fxm = mut.fx && /\/v8\/finance\/chart\/([A-Z]{3})(USD)?(?:%3D|=)X/i.exec(url);
-    if (fxm && fxm[1].toUpperCase() === mut.fx.cur) {
-      const inverse = !fxm[2];
-      const j = await res.clone().json();
-      const r0 = j?.chart?.result?.[0];
-      let n = 0;
-      for (let i = 0; i < (r0?.timestamp ?? []).length; i++) {
-        const d = new Date(r0.timestamp[i] * 1000).toISOString().slice(0, 10);
-        if (d < mut.fx.start || d > mut.fx.end) continue;
-        for (const q of [...(r0.indicators?.quote ?? []), ...(r0.indicators?.adjclose ?? [])])
-          for (const f of ["open", "high", "low", "close", "adjclose"]) if (q[f]?.[i] != null) q[f][i] = inverse ? q[f][i] / mut.fx.k : q[f][i] * mut.fx.k;
-        n++;
-      }
-      log({ t: "plant", kind: "yahoo-fx", what: `${fxm[0]} ${mut.fx.start}~${mut.fx.end} ×${inverse ? "1/" : ""}${mut.fx.k}`, n });
       return new Response(JSON.stringify(j), { status: res.status, headers: { "content-type": "application/json" } });
     }
     return res;
@@ -382,12 +367,11 @@ async function main() {
     const planted = r.plants.filter((p) => p.t === "plant");
     row.plants = planted;
     if (r.fail || !r.res) { rows.push({ ...row, status: "실행 오류", detected: null, by: [], note: r.fail }); console.log(`실행 오류: ${r.fail}`); continue; }
-    const needFx = !!m.fx;
-    const appPlanted = planted.some((p) => p.kind !== "yahoo-fx");
+    const appPlanted = planted.length > 0;
     const replaceOps = m.plants.filter((p) => p.op === "replace");
     const missOps = replaceOps.filter((p) => !planted.some((q) => q.what === `${p.from} → ${p.to}`));
-    if (!appPlanted || missOps.length || (needFx && !planted.some((p) => p.kind === "yahoo-fx" && p.n > 0))) {
-      rows.push({ ...row, status: "심기 실패", detected: null, by: [], note: `앱 값이 목록의 from 과 다름(앱이 바뀜 — 목록 갱신 필요): ${missOps.map((p) => p.from).join(", ") || (needFx ? "환율 응답 없음" : "대상 응답 없음")}` });
+    if (!appPlanted || missOps.length) {
+      rows.push({ ...row, status: "심기 실패", detected: null, by: [], note: `앱 값이 목록의 from 과 다름(앱이 바뀜 — 목록 갱신 필요): ${missOps.map((p) => p.from).join(", ") || "대상 응답 없음"}` });
       console.log("심기 실패");
       continue;
     }

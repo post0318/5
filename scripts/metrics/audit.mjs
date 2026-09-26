@@ -40,15 +40,23 @@ export const COMMON_LABEL = "공통모드 — 독립 검증 아님";
 /**
  * 검사 행이 앱과 같은 규칙·데이터로 판정되는가(공통모드) — 그렇다면 사유, 아니면 null. 통과(PASS) 행에만 쓴다.
  * 검증기(scripts/verify-financials.mjs)가 이 사유가 있는 통과를 외부 소스 정확 일치(extItemOf)가 없으면 COMMON 으로 바꾼다.
- * 목록(감사 2026-09-26): 20-F 환산 환율·ADR 비율, 20-F LTM·FY 차입금 재계산, 결산일 주식수(후보 순서)·시가총액(Yahoo 종가·분할 되돌림),
+ * 목록(감사 2026-09-26, 환율은 2026-09-27 H.10 전환으로 제외): 20-F ADR 비율, 20-F LTM·FY 차입금 재계산, 결산일 주식수(후보 순서)·시가총액(Yahoo 종가·분할 되돌림),
  * 감가상각비(줄 선택 정규식), 매출원가·매출총이익 본표 판독(identifyCogs 와 같은 알고리즘), Q4 = 사업연도 − 9개월·LTM 식,
  * 판본·반올림 재태깅 선택, 환율 곱, 그 밖에 검사 메모에 "공통모드"가 적힌 행(비영업 분리·은행 순수익 합성 등)
  * @param {{ layer: string, name: string, col: string, note?: string }} c
  */
 export function commonModeOf(c) {
   const n = c.name, note = c.note ?? "";
-  if (/환산 환율 = 기간 평균/.test(n)) return "20-F 환산 환율 — 앱과 같은 원통화 공시값·Yahoo 일별 환율(EPS 는 ADR 비율 = dei ÷ 인포맥스 주식수까지 같음)";
-  if (/^20-F /.test(n)) return "20-F 앱 규칙 재구현(Yahoo 원천·Yahoo 환율 공통)";
+  // 20-F 환산 환율 = 연준 H.10 공식 고시(오너 결정 2026-09-27) — 검증기가 FRED 에서 따로 받아 같은 정의로 다시 계산한 값과 정확 대조하므로
+  // 환율은 공통모드 사유가 아니다(메모 표식 "환율 H.10 독립 조회", 또는 미고시 창의 빈칸 확인). 다른 사유(ADR 비율·Yahoo 분기 원천·
+  // 차입금 규칙 재구현)는 그대로 남는다
+  const fxInd = /환율 H\.10 독립 조회|H\.10 공식 환율 미고시/.test(note);
+  if (/환산 환율 = 기간 평균/.test(n)) {
+    if (/EPS/.test(n)) return "20-F EPS 환산 — ADR 비율 = dei ÷ 인포맥스 주식수(1.5배 규칙)가 앱과 같은 규칙";
+    return fxInd ? null : "20-F 환산 환율 — H.10 독립 조회 표식 없음";
+  }
+  if (/^20-F LTM /.test(n)) return "20-F LTM 앱 규칙 재구현(Yahoo 분기 원천 공통)";
+  if (/^20-F /.test(n)) return "20-F 앱 규칙 재구현(차입금 규칙 공통)";
   if (/^결산일 주식수 /.test(n)) return "결산일 주식수 후보 순서·1.2배 검사 = 앱과 같은 규칙";
   if (/^결산일 시가총액 /.test(n)) return "Yahoo 부동소수 종가·분할 되돌림·주식수 후보 순서 = 앱과 같은 데이터·규칙";
   if (/^감가상각비 앱 = SEC 현금흐름표/.test(n)) return "현금흐름표 감가상각 줄 선택 규칙 = 앱과 같은 규칙";
@@ -56,7 +64,7 @@ export function commonModeOf(c) {
   if (/Q4 = 사업연도 − 9개월/.test(n) || (c.layer === "A" && /당기 ?누적|− 9개월/.test(note))) return "Q4·LTM 식(사업연도 − 9개월 / 사업연도 + 당기 누적 − 전년 동기) = 앱과 같은 식";
   // 판본 선택이 공시 원본 decimals 로 독립 확인된 행(검증기 applyVintage — "판본 decimals 독립 확인")은 이 사유에서 뺀다(오너 승인 2단계)
   if (c.layer === "A" && /반올림 재태깅 제외/.test(note) && !/판본 decimals 독립 확인|회사 decimals 표기 불일치 — 외부 독립 확인/.test(note)) return "판본·반올림 재태깅 선택 = 앱과 같은 규칙(decimals 근거 없음)";
-  if (/(기간|분기) 평균 환율|기말 환율/.test(note)) return "환산 환율 = 앱과 같은 Yahoo 일별 환율";
+  if (/(기간|분기) 평균 환율|기말 환율/.test(note) && !fxInd) return "환산 환율 — H.10 독립 조회 표식 없음";
   // 메모에 공통모드가 적혀 있어도 검사 안에서 이미 독립 확인(회사 태깅 줄·Yahoo 완전 일치 — 비영업 분리 매출)을 거친 행은 제외
   if (/공통모드(?! 아님)/.test(note) && !/독립 확인|Yahoo -?\d+ 완전 일치/.test(note)) return "검사 메모 공통모드(앱 규칙 재구현)";
   return null;
@@ -147,7 +155,7 @@ export function buildAudit({ app, cols, checks, review, closed }) {
         const rest = unmatched.map((n) => `${n} ${cmSrc[n] ? "공통모드" : "외부 정밀도 부족"}`).join(", ");
         verdict = "①"; note = `${ext.matched.length}곳 일치${passedA ? " · 앱 = SEC" : ""}${rest ? ` · ${rest}` : ""}`;
       } else if (unmatched.some((n) => cmSrc[n])) {
-        // 외부 값이 있지만 공통모드 소스뿐(현재 주식수 = 인포맥스, 20-F Yahoo 원통화 × 같은 환율, 원인 규칙 ⑥·⑩·R1·R6')
+        // 외부 값이 있지만 공통모드 소스뿐(현재 주식수 = 인포맥스, 원인 규칙 ⑥·⑩·R1·R6')
         verdict = COMMON_VERDICT; note = `${COMMON_LABEL}: ${unmatched.filter((n) => cmSrc[n]).map((n) => `${n} ${cmSrc[n]}`).join("; ")}`;
       } else if (unmatched.length) {
         verdict = "NA"; note = `검증불가(외부 정밀도 부족): ${unmatched.map((n) => `${n} ${naSrc[n]}`).join("; ")}`;

@@ -8,7 +8,7 @@ import { Gap, type AssembledIs, type Column, type DerivedInput, type FinAssembly
  */
 
 /** 엔진판 — 판독·조립 규칙이 바뀌면 올린다(fin_chg 사유 "ev") */
-export const ENGINE_VERSION = 6; // 5: 파생값 입력 구조(fin_sym.d, 2026-09-26) · 6: 매출원가·매출총이익·영업이익·영업비용 지표(fin_sym.m.cogs·gp·opinc·opex·d·n, 2026-09-26)
+export const ENGINE_VERSION = 7; // 5: 파생값 입력 구조(fin_sym.d, 2026-09-26) · 6: 매출원가·매출총이익·영업이익·영업비용 지표(fin_sym.m.cogs·gp·opinc·opex·d·n, 2026-09-26) · 7: 외화 환산 환율 Yahoo → 연준 H.10(TSM·ASML·SPOT 등 값 변경, 2026-09-27)
 /** 문서 스키마판 — 압축 형식이 바뀌면 올린다 */
 export const SCHEMA_VERSION = 1;
 

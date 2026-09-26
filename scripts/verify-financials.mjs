@@ -58,7 +58,7 @@
  * 결과: reports/verify/verify-{market}-{YYYYMMDD-HHmm KST}.json. 실패·오류·누락이 있으면 종료코드 1.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
 import { buildAudit, commonModeOf, decimalsVintage, extItemOf } from "./metrics/audit.mjs";
@@ -1631,19 +1631,69 @@ const unitOfAll = (vals) => {
   return 1;
 };
 
-/** 환율 일별 종가 "통화 1단위당 USD" — 검증기가 앱과 별개로 받는다(외화 공시 환산 대조용) */
+// ── 외화 환산 환율 — 연준 H.10 공식 일별 환율(FRED, 오너 결정 2026-09-27, docs/metrics/architecture.md §1.3) ─────────────────────
+// 앱(src/lib/markets/quote/fred-fx.ts)도 같은 공적 고시를 쓴다. 검증기는 앱 코드를 import 하지 않고 FRED 에서 **따로** 받아 같은 정의로
+// 다시 계산한다 — 원천이 공식 고시라 SEC 원자료처럼 독립 대조(정확 일치, 부동소수 표현 차만)가 된다(공통모드 아님, commonModeOf).
+//   환율 = 통화 1단위당 USD. 계열이 "USD 1단위당 통화"면 1 / Number(CSV 문자열)(배정밀도, 반올림 없음).
+//   기간 평균 = [시작, 끝] 고시값의 산술평균(날짜 오름차순 합 ÷ 개수, 휴일 없음). 기말 = 그날 또는 이전 마지막 고시값.
+//   끝이 최신 고시일보다 뒤면 미고시(null) — 앱은 그 값을 비우고 사유 "H.10 공식 환율 미고시(최신 {날짜})" 를 단다.
+// 원문은 reports/.fx-cache/H10-{계열}-{KST 날짜}.txt 에 하루 1회만 받는다(같은 날 재실행·심은 오류 시험은 디스크). 이전 날짜 파일은 지운다.
+// (2026-09-27 이전의 Yahoo 일별 봉 ∋ 독립 고시(ECB·H.10·대만 중앙은행) 포함 검사 fxEvidence 는 앱이 H.10 으로 바뀌며 폐기 — 월별 "환율 원천
+//  교차" 행도 없다. 고시 시각이 다른 원천끼리의 교차는 판정 근거가 될 수 없어 정보용으로도 남기지 않았다.)
+const FX_DISK = pathResolve("reports/.fx-cache");
+/** 통화 → [H.10 계열, 역수 여부] — 앱 fred-fx.ts H10_SERIES 와 같은 대응(따로 적는다) */
+const H10 = { EUR: ["DEXUSEU", false], GBP: ["DEXUSUK", false], TWD: ["DEXTAUS", true], JPY: ["DEXJPUS", true], CNY: ["DEXCHUS", true], CHF: ["DEXSZUS", true], CAD: ["DEXCAUS", true], DKK: ["DEXDNUS", true] };
+const H10_FROM = "2010-01-01";
+async function h10Text(series) {
+  const day = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
+  const tag = `H10-${series}-`;
+  const file = pathJoin(FX_DISK, `${tag}${day}.txt`);
+  if (existsSync(file)) return readFileSync(file, "utf8");
+  let t = null, err = null;
+  for (let attempt = 0; attempt < 2 && t == null; attempt++) {
+    try {
+      const r = await fetch(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${series}&cosd=${H10_FROM}`, { headers: { "user-agent": SEC_UA, accept: "text/csv,*/*" }, signal: AbortSignal.timeout(60_000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      t = await r.text();
+    } catch (e) { err = e; if (attempt === 0) await new Promise((res) => setTimeout(res, 3000)); }
+  }
+  if (t == null) throw new Error(`FRED ${series} ${String(err).slice(0, 60)}`);
+  mkdirSync(FX_DISK, { recursive: true });
+  for (const old of readdirSync(FX_DISK)) if ((old.startsWith(tag) && old !== `${tag}${day}.txt`) || /^(EUR|TWD)-(ECB|CBC|FRED)-/.test(old)) rmSync(pathJoin(FX_DISK, old), { force: true });
+  writeFileSync(file, t);
+  return t;
+}
+/** 통화의 H.10 일별 환율 — [{ d, r }] 오름차순(통화 1단위당 USD), .series·.latest(최신 고시일) */
 const fxCacheV = new Map();
 async function fxDaily(cur) {
   if (fxCacheV.has(cur)) return fxCacheV.get(cur);
-  const y = await yahoo();
-  const pull = async (s) => (await y.chart(s, { period1: "2014-01-01", interval: "1d" })).quotes.filter((q) => q.close > 0).map((q) => ({ d: new Date(q.date).toISOString().slice(0, 10), c: q.close }));
-  let rows = [];
-  try { rows = (await pull(cur + "USD=X")).map((q) => ({ d: q.d, r: q.c })); } catch { rows = []; }
-  if (rows.length < 100) rows = (await pull(cur + "=X")).map((q) => ({ d: q.d, r: 1 / q.c }));
+  const spec = H10[cur];
+  if (!spec) throw new Error(`H.10 계열 없음(${cur}) — 지원: ${Object.keys(H10).join("·")}`);
+  const L = (await h10Text(spec[0])).trim().split(/\r?\n/);
+  if (!/^observation_date,/.test(L[0])) throw new Error(`FRED ${spec[0]} CSV 머리글 이상`);
+  const rows = L.slice(1).map((l) => l.split(",")).filter((x) => x[1] && x[1] !== ".")
+    .map((x) => { const v = Number(x[1]); return { d: x[0], r: spec[1] ? 1 / v : v }; })
+    .filter((q) => Number.isFinite(q.r) && q.r > 0).sort((a, b) => a.d.localeCompare(b.d));
+  if (rows.length < 100) throw new Error(`FRED ${spec[0]} 관측치 ${rows.length}건`);
+  rows.series = spec[0];
+  rows.latest = rows.at(-1).d;
   fxCacheV.set(cur, rows);
   return rows;
 }
-const fxAvg = (rows, start, end) => { const x = rows.filter((q) => q.d >= start && q.d <= end); return x.length ? x.reduce((s, q) => s + q.r, 0) / x.length : null; };
+/** 기간 평균(미고시·계열 이전이면 null) */
+const fxAvg = (rows, start, end) => {
+  if (end > rows.latest || start < rows[0].d) return null;
+  const x = rows.filter((q) => q.d >= start && q.d <= end);
+  return x.length ? x.reduce((s, q) => s + q.r, 0) / x.length : null;
+};
+/** 기말(미고시면 null) */
+const fxEndRate = (rows, date) => (date > rows.latest ? null : rows.filter((q) => q.d <= date).at(-1)?.r ?? null);
+/** 미고시 사유(앱 사유와 같은 문구) — 창 끝이 최신 고시일 뒤면 */
+const fxPendingWhy = (rows, end) => (rows && end > rows.latest ? `H.10 공식 환율 미고시(최신 ${rows.latest})` : null);
+/** 메모 표식 — 환산 환율이 검증기가 따로 받은 H.10 으로 확인됨(commonModeOf 가 "환율 공통" 사유를 빼는 근거) */
+const FX_IND_MARK = "환율 H.10 독립 조회";
+/** 외부 USD 환산값(인포맥스 등)이 H.10 환산과 다를 때 — 공시 원천 환율로 정확 분해할 수 없으면 ③ 로 남기는 메모 */
+const FX_DEF_NOTE = "③ 미해명 — 환율 출처 정의 차이 추정(외부 소스 환산 환율 미공개 — 공시 환율로 정확 분해 불가, 앱 = 원통화 공시 × 연준 H.10)";
 async function infomaxShares(sym) {
   const post = (p, b) => fetch(IM + p, { method: "POST", headers: { "content-type": "application/json", referer: `${IM}/sss.html` }, body: JSON.stringify(b), signal: AbortSignal.timeout(10_000) }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`인포맥스 HTTP ${r.status}`))));
   const t = await post("/facset/tickerlist/usa", { ticker: sym });
@@ -2059,8 +2109,21 @@ async function verifyUs(sym) {
     return { start: any.start, end: any.end, rev: r?.val ?? null, ni: n?.val ?? null, eps: e?.val ?? null };
   };
   let fxRows = null, fxErr = "", adrK = 1;
+  /** 평균(흐름)·기말(잔액) 환율 출처 메모 — 검증기가 FRED 에서 따로 받은 H.10(FX_IND_MARK) 또는 미고시 사유 */
+  const fxWin = (start, end) => {
+    if (!fxRows) return "";
+    const why = fxPendingWhy(fxRows, end);
+    if (why) return ` · ${why}`;
+    const n = fxRows.filter((q) => q.d >= start && q.d <= end).length;
+    return ` · ${FX_IND_MARK}(연준 H.10 ${fxRows.series} ${start}~${end} 고시 ${n}일 산술평균 — 검증기가 FRED 에서 따로 받음)`;
+  };
+  const fxAt = (date) => {
+    if (!fxRows) return "";
+    const why = fxPendingWhy(fxRows, date);
+    return why ? ` · ${why}` : ` · ${FX_IND_MARK}(연준 H.10 ${fxRows.series} ${fxRows.filter((q) => q.d <= date).at(-1)?.d} 고시 — ${date} 이전 마지막, 검증기가 FRED 에서 따로 받음)`;
+  };
   if (natCur) {
-    fxRows = await fxDaily(natCur).catch((e) => { fxErr = `환율 조회 실패: ${String(e).slice(0, 50)}`; hardErrors.push(fxErr); return null; });
+    fxRows = await fxDaily(natCur).catch((e) => { fxErr = `H.10 환율 조회 실패: ${String(e).slice(0, 60)}`; hardErrors.push(fxErr); return null; });
     // ADR 비율 — SEC 표지 주식수(보통주) ÷ 인포맥스 주식수(ADR). 1.5배 안이면 1:1
     const dei = (f.facts.dei?.EntityCommonStockSharesOutstanding?.units?.shares ?? []).reduce((b, e) => (!b || e.end > b.end ? e : b), null);
     const ims = await infomaxShares(sym).catch((e) => { hardErrors.push(`인포맥스 주식수(ADR 비율) 조회 실패: ${String(e).slice(0, 60)}`); return null; });
@@ -2419,9 +2482,9 @@ async function verifyUs(sym) {
       const fl = c0 ? await filingAtDate(cik, sub, H[c0].date) : null;
       const unitRe = new RegExp(natCur, "i");
       const ex = fl ? expectedForeignDebt(fl, unitRe) : null;
-      const rate = fxRows.filter((q) => q.d <= H[c0]?.date).at(-1)?.r ?? null;
+      const rate = H[c0]?.date ? fxEndRate(fxRows, H[c0].date) : null;
       const partsTxt = ex ? ex.parts.map((x) => `${x.what} ${x.id.replace(/^[a-z0-9-]+_/, "")} ${x.v}`).join(" + ") : "";
-      if (ex && rate != null) fyDebtCheck = { col: c0, r: vsSource(BS[c0]?.debt ?? null, ex.sum * rate, EXACT, `SEC ${fl.form} ${fl.date} 기대 차입금 ${ex.sum} ${natCur} = ${partsTxt} × 기말 환율 ${rate} · 공통모드(앱 규칙 재구현·Yahoo 환율)`) };
+      if (ex && rate != null) fyDebtCheck = { col: c0, r: vsSource(BS[c0]?.debt ?? null, ex.sum * rate, EXACT, `SEC ${fl.form} ${fl.date} 기대 차입금 ${ex.sum} ${natCur} = ${partsTxt} × 기말 환율 ${rate} · 공통모드(앱 규칙 재구현 — 차입금 규칙)${fxAt(H[c0].date)}`) };
       if (!yr || !ex) ltmEvCheck = { why: `Yahoo 연간 총차입금 또는 SEC ${c0} 기대 차입금 없음 — 사유 확인 불가` };
       else if (fyDebtCheck?.r.status !== PASS) ltmEvCheck = { why: `앱 ${c0} 차입금이 SEC 기대 차입금과 다름 — 사유 확인 전제 불성립` };
       else {
@@ -2572,28 +2635,32 @@ async function verifyUs(sym) {
     const isFy = c !== "LTM";
     // ── A. SEC 원자료 대조 (연도 열만 — 결산일로 매칭)
     if (isFy && foreign) {
-      // 3차 감사: 인포맥스 대조(허용 1.5~2.5%)는 환율 방식 오류(기말/평균 혼동 1~4%)를 놓친다 →
-      // 앱 USD ÷ 원통화 공시값으로 앱이 쓴 환율을 역산해, 검증기가 따로 구한 기간 평균 환율과 0.3% 대조.
+      // 앱 USD = 원통화 공시값 × 기간 평균 환율. 환율은 검증기가 FRED 에서 따로 받은 연준 H.10(앱과 같은 공적 원천·같은 정의 — 독립 대조)이라
+      // 정확히 같아야 한다(오너 지시 — "0% 맞춰라", 부동소수 표현 차만 — extEq). 앱 환율(역산)도 메모에 남긴다.
+      // 창 끝이 H.10 최신 고시일 뒤면(미고시) 앱은 빈칸 + 사유여야 한다 — 값이 있으면 다른 환율로 대체한 것이라 FAIL
       const nat = nativeAt(x.date);
       const avg = nat && fxRows ? fxAvg(fxRows, nat.start, nat.end) : null;
+      const pend = nat && fxRows ? fxPendingWhy(fxRows, nat.end) : null;
       const rateCheck = (name, app, native, k = 1) => {
+        if (native != null && pend) return add("A", name, c, app == null ? { status: PASS, note: `${pend} — 앱 빈칸(대체 없음)` } : { status: FAIL, note: `${pend}인데 앱 값 ${app} — 다른 환율로 대체한 것으로 보임` });
         if (native == null || avg == null) return add("A", name, c, { status: NA, note: fxErr || "원통화 공시값 없음" });
         if (app == null) return add("A", name, c, { status: FAIL, note: `원통화 ${native} 있는데 앱 빈칸` });
+        const exp = native * avg * k;
         const implied = app / (native * k);
-        const d = Math.abs(implied - avg) / avg;
-        // 앱·검증기가 같은 공시값·같은 일별 환율을 쓰므로 정확히 같아야 한다(오너 지시 — "0% 맞춰라").
-        // 허용은 부동소수점 오차(1e-9)뿐.
-        add("A", name, c, d <= 1e-9 ? { status: PASS, note: `앱 환율 ${implied.toPrecision(6)} ≈ 평균 ${avg.toPrecision(6)}` } : { status: FAIL, note: `앱이 쓴 환율 ${implied.toPrecision(6)} vs 기간 평균 ${avg.toPrecision(6)} (차 ${(d * 100).toFixed(2)}%)` });
+        const ev = fxWin(nat.start, nat.end);
+        add("A", name, c, extEq(app, exp)
+          ? { status: PASS, note: `앱 ${app} = 원통화 ${native} × 연준 H.10 ${nat.start}~${nat.end} 산술평균 ${avg}${k !== 1 ? ` × ADR 비율 ${k}` : ""} (정확 일치)${ev}` }
+          : { status: FAIL, note: `앱 ${app} ≠ 기대 ${exp} — 앱이 쓴 환율 ${implied.toPrecision(10)} vs H.10 기간 평균 ${avg.toPrecision(10)} (차 ${(((implied - avg) / avg) * 100).toFixed(4)}%)${ev}` });
       };
       rateCheck("매출 환산 환율 = 기간 평균(외화)", x.rev, nat?.rev ?? null);
       rateCheck("순이익 환산 환율 = 기간 평균(외화)", x.ni, nat?.ni ?? null);
       rateCheck("EPS 환산 환율 = 기간 평균(외화·ADR)", x.eps, nat?.eps ?? null, adrK);
       const im = imAnnual?.find((r) => dayDiff(r.end, x.date) <= 7);
-      // FactSet 과 우리 환산의 환율 출처·집계 차이 — 실측 0.1~0.3% → 허용 1.5%
-      if (im?.rev && x.rev) review.push({ item: `${c} 매출 vs 인포맥스(USD 환산)`, ours: x.rev, other: im.rev, gapPct: ((x.rev - im.rev) / im.rev) * 100 });
-      // 순이익은 허용 2.5% — 인포맥스는 분기별로 환산해 합산하는 것으로 보여(TSM 매출·순이익 역산 환율이 다름)
-      // 이익 계절성만큼 연평균 환산과 갈린다(실측 TSM 1.8~1.9%)
-      if (im?.ni && x.ni) review.push({ item: `${c} 순이익 vs 인포맥스(USD 환산)`, ours: x.ni, other: im.ni, gapPct: ((x.ni - im.ni) / Math.abs(im.ni)) * 100 });
+      // 인포맥스(FactSet) USD 환산은 자체 환율(미공개)이라 연준 H.10 환산과 값이 다르다. 공시된 원천 환율로 정확 분해가 성립할 때만 ②,
+      // 아니면 ③ 미해명(환율 출처 정의 차이 추정) — 숨기지 않는다(오너 결정 2026-09-27). 매출은 외부 대조가 켜져 있으면 F층 분류(put → causeOf)가
+      // 판정하고, 순이익(분기별 환산 합산으로 보여 계절성만큼 더 벌어짐 — 실측 TSM 1.8~1.9%)은 여기 검토 목록에 남긴다
+      if (!EXTERNAL && im?.rev && x.rev) review.push({ item: `${c} 매출 vs 인포맥스(USD 환산)`, ours: x.rev, other: im.rev, gapPct: ((x.rev - im.rev) / im.rev) * 100, note: FX_DEF_NOTE });
+      if (im?.ni && x.ni) review.push({ item: `${c} 순이익 vs 인포맥스(USD 환산)`, ours: x.ni, other: im.ni, gapPct: ((x.ni - im.ni) / Math.abs(im.ni)) * 100, note: FX_DEF_NOTE });
     } else if (isFy) {
       const pn = parentNi(x.date);
       add("A", "순이익 앱 = SEC 지배주주 순이익", c, vsSource(x.ni, pn.v, EXACT, pn.note ?? pn.why ?? ""));
@@ -2938,8 +3005,9 @@ async function verifyUs(sym) {
         const r = atEnd(natRev, E0);
         const avg = r && fxRows ? fxAvg(fxRows, r.start, r.end) : null;
         if (!r) add("A", name, c0, { status: FAIL, note: `전년(${E0} 전후) 원통화 공시 매출 없음 — 첫 열 성장률 근거 대조 불가` });
+        else if (avg == null && fxPendingWhy(fxRows, r.end)) add("A", name, c0, { status: NA, note: `${fxPendingWhy(fxRows, r.end)} — 전년 매출 환산 불가(${r.start}~${r.end})` });
         else if (avg == null) hardErrors.push(`첫 열 전년 매출 기간 평균 환율 없음(${r.start}~${r.end})${fxErr ? `: ${fxErr}` : ""}`);
-        else { prior = r.val * avg; how = `원통화 ${r.val} ${natCur} × 기간 평균 환율 ${avg.toPrecision(6)} (${r.end})`; }
+        else { prior = r.val * avg; how = `원통화 ${r.val} ${natCur} × 기간 평균 환율 ${avg.toPrecision(6)} (${r.end})${fxWin(r.start, r.end)}`; }
       } else if (!revFace) {
         // 본표 판독 실패 — 앱이 첫 열 성장률을 보이면 대조 없이 둘 수 없어 FAIL(미검증 열 검사와 같은 규칙)
         const appYoy = [H[c0].revYoy, A[c0]?.revYoy, C[c0]?.revenueYoY].filter((v) => v != null);
@@ -3086,9 +3154,11 @@ async function verifyUs(sym) {
       let k = 1, fxNote = "";
       if (foreign) {
         const avg = fxRows ? fxAvg(fxRows, e.start, e.end) : null;
+        const pend = fxPendingWhy(fxRows, e.end);
+        if (pend) { add("A", nC, col, appC == null ? { status: PASS, note: `${pend} — 앱 빈칸(대체 없음)` } : { status: FAIL, note: `${pend}인데 앱 값 ${appC} — 다른 환율로 대체한 것으로 보임` }); return; }
         if (avg == null) { hardErrors.push(`매출원가 기간 평균 환율 없음(${e.start}~${e.end})${fxErr ? `: ${fxErr}` : ""}`); return; }
         k = avg;
-        fxNote = ` · 원통화(${natCur}) × 기간 평균 환율 ${avg.toPrecision(6)}`;
+        fxNote = ` · 원통화(${natCur}) × 기간 평균 환율 ${avg.toPrecision(6)}${fxWin(e.start, e.end)}`;
       }
       add("A", nC, col, vsSource(appC, e.cogs * k, EXACT, `${e.rule ? "구성 규칙 · " : ""}${e.how}${fxNote}`));
       let gExp = e.gp, gNote = e.how;
@@ -3194,8 +3264,9 @@ async function verifyUs(sym) {
         const r = atEnd(natRev, q.end);
         if (!r) { add("A", name, q.col, { status: FAIL, note: `원통화 공시 매출 없음(${q.end}) — 미검증 열을 대조 없이 둘 수 없음 · 앱 ${q.v} · 미검증 식: ${q.unv.join("; ")}` }); continue; }
         const avg = fxRows ? fxAvg(fxRows, r.start, r.end) : null;
+        if (avg == null && fxPendingWhy(fxRows, r.end)) { add("A", name, q.col, { status: FAIL, note: `${fxPendingWhy(fxRows, r.end)}인데 앱 값 ${q.v} — 다른 환율로 대체한 것으로 보임` }); continue; }
         if (avg == null) { hardErrors.push(`항등식 미검증 열 ${q.col} 기간 평균 환율 없음(${r.start}~${r.end})${fxErr ? `: ${fxErr}` : ""}`); continue; }
-        add("A", name, q.col, vsSource(q.v, r.val * avg, EXACT, `원통화 ${r.val} ${natCur} × 기간 평균 환율 ${avg.toPrecision(6)} · 미검증 식: ${q.unv.join("; ")}`));
+        add("A", name, q.col, vsSource(q.v, r.val * avg, EXACT, `원통화 ${r.val} ${natCur} × 기간 평균 환율 ${avg.toPrecision(6)}${fxWin(r.start, r.end)} · 미검증 식: ${q.unv.join("; ")}`));
         continue;
       }
       if (!revFace) { add("A", name, q.col, { status: FAIL, note: `SEC 본표 대조 불가(${revFaceWhy}) · 미검증 식: ${q.unv.join("; ")}` }); continue; }
@@ -3259,8 +3330,8 @@ async function verifyUs(sym) {
   if (fyDebtCheck) add("A", "20-F FY 총차입금 앱 = SEC 본표 차입금 + 리스(규칙 재구현)", fyDebtCheck.col, fyDebtCheck.r);
 
   // ── A. 20-F LTM(Yahoo 분기) 독립 재계산(감사 M1, 2026-09-25) — 앱이 "LTM 열 = Yahoo 분기"라고 밝힌 외화 공시(TSM·ASML·SPOT)는
-  // 검증기가 Yahoo 분기 재무 + 일별 환율로 "최근 4개 분기 × 그 분기 평균 환율"(잔액은 최신 분기말 × 기말 환율)을 따로 계산해 정확 비교.
-  // 원천(Yahoo)·환율(Yahoo)이 앱과 같아 공통모드 — 앱의 합산·환산 계산 오류를 잡는 검사이고 Yahoo 값 자체의 정합성은 보증하지 않는다.
+  // 검증기가 Yahoo 분기 재무 + 연준 H.10 일별 환율(검증기가 따로 받음)로 "최근 4개 분기 × 그 분기 평균 환율"(잔액은 최신 분기말 × 기말 환율)을 따로 계산해 정확 비교.
+  // 분기 원천(Yahoo)이 앱과 같아 공통모드(환율은 H.10 독립) — 앱의 합산·환산 계산 오류를 잡는 검사이고 Yahoo 값 자체의 정합성은 보증하지 않는다.
   // 앱이 공란으로 둔 항목은 앱 notes 의 사유(Yahoo 연간 ≠ SEC FY)를 SEC 원본(검증기 판독)으로 따로 확인한다.
   const ltmYahooNote = (h.notes ?? []).find((n) => /LTM 열 = Yahoo 분기/.test(n));
   if (foreign && H.LTM && ltmYahooNote) {
@@ -3273,12 +3344,16 @@ async function verifyUs(sym) {
       else {
         const qStart = (e) => { const d = new Date(`${e}T00:00:00Z`); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 2, 1)).toISOString().slice(0, 10); };
         const avgR = last.map((r) => fxAvg(fxRows, qStart(r.end), r.end));
-        const endR = fxRows.filter((q) => q.d <= last[3].end).at(-1)?.r ?? null;
-        const flow = (k) => (last.every((r) => r[k] != null) ? last.reduce((t, r, i) => t + r[k] * avgR[i], 0) : null);
+        const endR = fxEndRate(fxRows, last[3].end);
+        // 앱이 Yahoo 분기 LTM 을 만들었는데 검증기 H.10 으로는 미고시 창이면 — 앱이 다른 환율을 쓴 것(대체 금지 위반)
+        const pendQ = fxPendingWhy(fxRows, last[3].end);
+        if (pendQ) add("A", "20-F LTM = Yahoo 분기 4개 × 분기 평균 환율", "LTM", { status: FAIL, note: `${pendQ}인데 앱이 LTM 열을 Yahoo 분기(~${last[3].end})로 채움 — 다른 환율로 대체한 것으로 보임` });
+        const flow = (k) => (last.every((r) => r[k] != null) && avgR.every((x) => x != null) ? last.reduce((t, r, i) => t + r[k] * avgR[i], 0) : null);
         const hv = (key) => h.rows.find((r) => r.key === key)?.values[h.columns.findIndex((cc) => cc.kind === "ltm")] ?? null;
         const bsL = (name) => rowOf(bs, name)["현재/LTM"] ?? null;
         const blanks = /공란: (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1] ?? "";
-        const basis = `Yahoo 분기 ${last.map((r) => r.end).join("·")} × 분기 평균 환율(${natCur}→USD, Yahoo 일별 — 공통모드)`;
+        // 환율 = 검증기가 FRED 에서 따로 받은 연준 H.10(흐름 분기 창 4개 평균, 잔액 최신 분기말 기말) — 독립. Yahoo 분기 원천은 공통모드로 남는다
+        const basis = `Yahoo 분기 ${last.map((r) => r.end).join("·")} × 분기 평균 환율(${natCur}→USD, 연준 H.10 ${fxRows.series})${pendQ ? "" : ` · ${FX_IND_MARK}(분기 창 4개 + 기말 ${last[3].end})`}`;
         const items = [
           ["매출", H.LTM.rev, flow("totalRevenue"), "totalRevenue"], ["매출원가", IS.LTM?.cogs ?? null, flow("costOfRevenue"), "costOfRevenue"],
           ["매출총이익", IS.LTM?.gp ?? null, flow("grossProfit"), "grossProfit"], ["영업이익", IS.LTM?.op ?? null, flow("totalOperatingIncomeAsReported"), "totalOperatingIncomeAsReported"],
@@ -3348,7 +3423,7 @@ async function verifyUs(sym) {
   //  소스·지표                         실제 표기 단위(2026-09-26 보고서 14개·47종목 실측)            반올림 식
   //  Yahoo fundamentalsTimeSeries      달러 정수(회사 공시값 그대로 — 최소 단위 = 회사 보고 단위)       없음(단위 1 — 완전 일치만)
   //  Yahoo LTM(분기 4개 합)·EBITDA(영업이익+감가상각)  달러 정수 합                                없음
-  //  Yahoo 외화 × 환율(20-F)           부동소수 곱 — 앱도 SEC 원통화 × 같은 환율                      없음(extEq 표현 차만)
+  //  Yahoo 외화 × 환율(20-F)           부동소수 곱 — 앱도 SEC 원통화 × H.10(검증기 따로 조회)         없음(extEq 표현 차만)
   //  StockAnalysis 손익·현금흐름       종목별 단위(unitOfAll: 매출·순이익·영업이익 전 기간이 1e6 배수면 1e6, 1e3 배수면 1e3, 아니면 1)
   //                                    — 연간·TTM 모두 SA 가 싣는 값 하나(합산은 SA 쪽)            round(앱, 단위) = SA
   //  StockAnalysis 재무상태표(차입금)  종목별 단위(unitOfAll: 분기 차입금 전 값)                      round(앱, 단위) = SA
@@ -3403,7 +3478,7 @@ async function verifyUs(sym) {
       put(`${c} 감가상각비`, IS[c]?.da, "Yahoo", r.reconciledDepreciation);
       if (COGS_MODE) { put(`${c} 매출원가`, IS[c]?.cogs, "Yahoo", r.costOfRevenue); put(`${c} 매출총이익`, IS[c]?.gp, "Yahoo", r.grossProfit); }
     }
-    // 외화 공시(20-F) 매출원가·매출총이익 연간 — Yahoo 연간(원통화) × 그 사업연도 평균 환율(A층과 같은 일별 환율 — 환율은 공통모드,
+    // 외화 공시(20-F) 매출원가·매출총이익 연간 — Yahoo 연간(원통화) × 그 사업연도 평균 환율(검증기가 따로 받은 연준 H.10 — 독립,
     // 원통화 값은 SEC 본표와 독립). 앱 = SEC 원통화 × 같은 환율이라 원통화 값이 같으면 부동소수 오차 안에서 일치한다.
     // LTM 은 넣지 않는다 — 앱 LTM 열 자체가 Yahoo 분기 × 환율이라 독립 대조가 아니다(A층 "20-F LTM … = Yahoo 분기"가 계산 검사).
     // 인포맥스는 자체 환율로 USD 환산해(TSM 역산 환율이 매출·순이익마다 다름 — 위 "vs 인포맥스(USD 환산)") 정확 대조가 성립하지 않아 넣지 않는다
@@ -3413,8 +3488,8 @@ async function verifyUs(sym) {
         const e = cogsExp.get(c), r = ya.find((r) => dayDiff(iso(r.date), x.date) <= 7);
         const avg = e?.start && e.end ? fxAvg(fxRows, e.start, e.end) : null;
         if (!r || avg == null) continue;
-        // 공통모드 — Yahoo 원통화 × 앱과 같은 일별 환율(앱도 같은 환율을 곱한다). 일치해도 ① 이 아니다(오너 결정 2026-09-26)
-        const cm = "Yahoo 원통화 × 앱과 같은 Yahoo 일별 환율";
+        // 환율은 검증기가 따로 받은 연준 H.10(독립) — 원통화 값은 Yahoo(SEC 본표와 독립)라 공통모드가 아니다
+        const cm = null;
         if (r.costOfRevenue != null) put(`${c} 매출원가`, IS[c]?.cogs, "Yahoo", r.costOfRevenue * avg, null, null, cm);
         if (r.grossProfit != null) put(`${c} 매출총이익`, IS[c]?.gp, "Yahoo", r.grossProfit * avg, null, null, cm);
       }
@@ -3469,6 +3544,14 @@ async function verifyUs(sym) {
 
     // 인포맥스(FactSet) — 연간. 금액 표기 단위 = imAnnual.unit(실측 천 달러). 예전엔 백만 단위 허용(±50만, LTM ±200만)이라
     // IBM·MCD LTM 매출 +100만, TER −124.8만 같은 차이가 ① 로 숨었다(2026-09-26) — 이제 완전 일치만 ①
+    // 외화 공시(20-F) — 인포맥스 USD 환산 매출(연간). 자체 환율이라 H.10 환산과 정확 일치하지 않으면 causeOf 가 "환율 출처 정의 차이 추정"(③)으로
+    if (foreign && imAnnual) {
+      for (const [c, x] of Object.entries(H)) {
+        if (c === "LTM") continue;
+        const im = imAnnual.find((r) => dayDiff(r.end, x.date) <= 7);
+        if (im) put(`${c} 매출`, x.rev, "인포맥스", im.rev, imAnnual.unit);
+      }
+    }
     if (!foreign && imAnnual) {
       const iu = imAnnual.unit;
       for (const [c, x] of Object.entries(H)) {
@@ -3518,7 +3601,8 @@ async function verifyUs(sym) {
 
     // 외부 불일치의 원인을 숫자로 확인한다(추정으로 통과시키지 않는다 — 식이 성립할 때만 "원인 확인").
     // 근거로 쓰는 A층은 허용치 없는 정확 대조(EXACT)만 — EPS(분할 반올림 허용)·금융사 근사식(앱 정의 재계산)은 제외(재감사)
-    const EXACT_A = { 영업이익: /^영업이익 앱 = SEC 영업이익$/, 매출: /^매출 앱 = SEC 매출$/, 순이익: /^(LTM )?순이익 앱 = SEC/, 자산총계: /^자산총계 앱 = SEC/, 매출원가: /^매출원가 앱 = SEC 매출원가$/, 매출총이익: /^매출총이익 앱 = SEC 매출총이익$/ };
+    // 외화 공시(20-F)는 "환산 환율 = 기간 평균" 행이 SEC 원통화 × 검증기 H.10 정확 대조(독립)라 같은 전제로 쓴다
+    const EXACT_A = { 영업이익: /^영업이익 앱 = SEC 영업이익$/, 매출: /^(매출 앱 = SEC 매출|매출 환산 환율 = 기간 평균\(외화\))$/, 순이익: /^((LTM )?순이익 앱 = SEC|순이익 환산 환율 = 기간 평균\(외화\))/, 자산총계: /^자산총계 앱 = SEC/, 매출원가: /^매출원가 앱 = SEC 매출원가$/, 매출총이익: /^매출총이익 앱 = SEC 매출총이익$/ };
     const aPassed = (col, metric) => EXACT_A[metric] && checks.some((k) => k.col === col && k.status === PASS && EXACT_A[metric].test(k.name));
     /**
      * CAT 형 Yahoo 매출원가 = 본표 원가 + 본표 금융 부문 이자비용 줄("Interest expense of Financial Products"). ② 는 Yahoo 매출원가를
@@ -4002,6 +4086,9 @@ async function verifyUs(sym) {
         if (oa && extEq(v + oa, r.ours)) return { ok: `StockAnalysis 는 기타상각(현금흐름표 별도 줄 ${oa})을 EBITDA 감가상각에서 제외 — 앱 = depAmorEbitda + otherAmortization, 앱 감가상각비 = SEC 현금흐름표 줄 대조 통과` };
       }
       if (unitNa) return { na: unitNa };
+      // 외화 공시 — 인포맥스는 자체(미공개) 환율로 USD 환산한다. 공시 원천 환율로 정확 분해할 방법이 없어 원인 확인(②)이 아니다 — ③ 미해명으로
+      // 남기되 사유를 적는다(오너 결정 2026-09-27, 앱 = 원통화 공시 × 연준 H.10)
+      if (foreign && n === "인포맥스") return { guess: `환율 출처 정의 차이 추정 — 인포맥스(FactSet) 환산 환율 미공개라 정확 분해 불가(차 ${v - r.ours}, 앱 = 원통화 공시 × 연준 H.10)` };
       // ⑤ 감가상각비: 다른 외부 소스가 앱과 정확히 같다 — 앱이 맞다는 증거는 아니어서(SEC 독립 대조 없음) 추정만
       if (metric === "감가상각비") {
         const same = Object.keys(r.srcs).filter((m) => m !== n && extEq(r.ours, r.srcs[m].v));

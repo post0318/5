@@ -65,6 +65,9 @@ export function rethrowFetch<T>(fallback: T): (err: unknown) => T {
 }
 
 type WithUnavailable = { sourceUnavailable?: SourceUnavailableMap };
+/** 20-F LTM 열 공란 표시(edgar-yahoo-quarters.ts YahooLtmResult ltmBlank — H.10 공식 환율 미고시·조회 실패) */
+type WithLtmSource = WithUnavailable & { ltmQuarterSource?: { source: string; ltmBlank?: true } };
+const ltmBlanked = (facts: WithLtmSource) => unavailableOn(facts, "filings") || facts.ltmQuarterSource?.ltmBlank === true;
 
 /** 이 판독이 날짜 d(±7일)에서 조회 실패로 공란이어야 하는가. dates 없는 실패는 모든 날짜 */
 export function unavailableOn(facts: WithUnavailable, feature: SourceFeature, d?: string | null): boolean {
@@ -99,21 +102,22 @@ const LTM_LABEL = "현재/LTM";
 /**
  * companyfacts 에 없는 최신 공시 보완(edgar-gapfill.ts)이 조회 실패면, 그 공시가 빠진 채 계산한 LTM 은 같은 "현재/LTM" 열에
  * 더 오래된 기간 값이 들어간다 — 열을 통째로 공란으로(대체 계산 없음). 연도 열은 해당 연도가 빠질 뿐 값이 바뀌지 않는다.
+ * 20-F LTM 창이 H.10 공식 환율 미고시·조회 실패(ltmQuarterSource.ltmBlank)여도 같은 이유로 열 전체 공란(사업연도 값 대체 금지).
  */
 export function blankLtmIfFilingsUnavailable(
-  facts: WithUnavailable,
+  facts: WithLtmSource,
   stmt: { sections: { items: { values: Record<string, number | null> }[] }[] },
 ): void {
-  if (!unavailableOn(facts, "filings")) return;
+  if (!ltmBlanked(facts)) return;
   for (const s of stmt.sections) for (const it of s.items) if (LTM_LABEL in it.values) it.values[LTM_LABEL] = null;
 }
 
 /** 하이라이트 표(열 배열) 판 — kind "ltm" 열 */
 export function blankLtmColumnIfFilingsUnavailable(
-  facts: WithUnavailable,
+  facts: WithLtmSource,
   h: { columns: { kind: string }[]; rows: { values: (number | null)[] }[]; valuationRows: { values: (number | null)[] }[] },
 ): void {
-  if (!unavailableOn(facts, "filings")) return;
+  if (!ltmBlanked(facts)) return;
   const idx = h.columns.findIndex((c) => c.kind === "ltm");
   if (idx < 0) return;
   for (const r of [...h.rows, ...h.valuationRows]) if (idx < r.values.length) r.values[idx] = null;

@@ -6,7 +6,7 @@ import type { Fx } from "./fx";
  * `markets/us/edgar-yahoo-quarters.ts` 의 규칙을 옮겼다(값 동일):
  *  - SEC 최근 사업연도 결산일(달 말) 뒤의 Yahoo 분기 1~3개 + 그 사업연도 안 꼬리 분기 → 최근 4개 분기
  *  - 항목마다 연간 경계 확인: Yahoo 연간(SEC FY 말일) = SEC FY(원통화, 공시 단위 안). 다르면 그 항목 LTM 공란
- *  - 분기마다 그 분기 평균 환율로 USD 환산 후 합(흐름)
+ *  - 분기마다 그 분기 평균 환율(연준 H.10 — read/fx.ts)로 USD 환산 후 합(흐름). 분기 끝이 H.10 최신 고시일 뒤면 공란 + 사유
  * 20-F 는 분기 XBRL 이 없어 이 구조적 제약은 설계로도 해소되지 않는다(architecture.md §9).
  */
 
@@ -45,7 +45,7 @@ export function sameInUnit(sec: number, yv: number): boolean {
 
 export type YahooLtm =
   | { ok: true; usd: number; start: string; through: string; quarters: string[]; terms: { start: string; end: string; v: number; rate: number }[] }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; fxPending?: true };
 
 /**
  * 한 항목의 Yahoo 분기 LTM. fyOrig = SEC 최근 사업연도 값(원통화), fyEnd = 그 결산일.
@@ -80,7 +80,11 @@ export function yahooLtmOf(
   for (const d of last4) {
     const qs = addDay(monthEndShift(d, -3), 1);
     const r = fx.avg(qs, d);
-    if (r == null) return { ok: false, reason: `환율 없음(${d} 분기)` };
+    if (r == null) {
+      // H.10 최신 고시일 뒤 분기(발표 지연) — 사유를 그대로(다른 원천으로 대체하지 않음)
+      const why = fx.why(d);
+      return why ? { ok: false, reason: why, fxPending: true } : { ok: false, reason: `환율 없음(${d} 분기)` };
+    }
     usd += qBy.get(d)![field] * r;
     terms.push({ start: qs, end: d, v: qBy.get(d)![field], rate: r });
   }
