@@ -91,11 +91,41 @@ async function request<T>(
   }
 }
 
+// ── SEC 요청 줄 세우기(2026-09-26) ──
+// 한 종목 화면 여러 개(하이라이트·재무제표·컨센서스…)가 같은 SEC 파일을 동시에 따로 받으러 가 SEC 초당 한도(10건)를 넘겨 429 →
+// 연속 실패 백오프(fetch-health)로 그 종목 전체가 2분간 막혔다. SEC URL 은 (1) 요청 시작 간격 최소 SEC_MIN_GAP_MS(초당 5건 —
+// 검증기 초당 3건과 합쳐 8건 이하) (2) 같은 URL 을 동시에 요청하면 한 번만 받아 나눠 쓴다(본문 문자열 공유, JSON 은 호출마다 파싱).
+const SEC_MIN_GAP_MS = 200;
+let secChain: Promise<void> = Promise.resolve();
+let secLast = 0;
+function secSlot(): Promise<void> {
+  secChain = secChain.then(async () => {
+    const w = secLast + SEC_MIN_GAP_MS - Date.now();
+    if (w > 0) await sleep(w);
+    secLast = Date.now();
+  });
+  return secChain;
+}
+const secInflight = new Map<string, Promise<string>>();
+function secText(url: string, opts: FetchJsonOpts, accept: Record<string, string>): Promise<string> {
+  const key = `${url}|${accept.accept ?? ""}`;
+  let p = secInflight.get(key);
+  if (!p) {
+    p = secSlot()
+      .then(() => request(url, opts, accept, (res) => res.text()))
+      .finally(() => secInflight.delete(key));
+    secInflight.set(key, p);
+  }
+  return p;
+}
+
 export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promise<T> {
+  if (isSecUrl(url)) return JSON.parse(await secText(url, opts, { accept: "application/json" })) as T;
   return request(url, opts, { accept: "application/json" }, (res) => res.json() as Promise<T>);
 }
 
 export async function fetchText(url: string, opts: FetchJsonOpts = {}): Promise<string> {
+  if (isSecUrl(url)) return secText(url, opts, {});
   return request(url, opts, {}, (res) => res.text());
 }
 

@@ -54,7 +54,8 @@ export function commonModeOf(c) {
   if (/^감가상각비 앱 = SEC 현금흐름표/.test(n)) return "현금흐름표 감가상각 줄 선택 규칙 = 앱과 같은 규칙";
   if (c.layer === "A" && /매출원가|매출총이익/.test(n)) return "본표 원가 판독 = 앱 identifyCogs 와 같은 알고리즘";
   if (/Q4 = 사업연도 − 9개월/.test(n) || (c.layer === "A" && /당기 ?누적|− 9개월/.test(note))) return "Q4·LTM 식(사업연도 − 9개월 / 사업연도 + 당기 누적 − 전년 동기) = 앱과 같은 식";
-  if (c.layer === "A" && /반올림 재태깅 제외/.test(note)) return "판본·반올림 재태깅 선택 = 앱과 같은 규칙";
+  // 판본 선택이 공시 원본 decimals 로 독립 확인된 행(검증기 applyVintage — "판본 decimals 독립 확인")은 이 사유에서 뺀다(오너 승인 2단계)
+  if (c.layer === "A" && /반올림 재태깅 제외/.test(note) && !/판본 decimals 독립 확인|회사 decimals 표기 불일치 — 외부 독립 확인/.test(note)) return "판본·반올림 재태깅 선택 = 앱과 같은 규칙(decimals 근거 없음)";
   if (/(기간|분기) 평균 환율|기말 환율/.test(note)) return "환산 환율 = 앱과 같은 Yahoo 일별 환율";
   // 메모에 공통모드가 적혀 있어도 검사 안에서 이미 독립 확인(회사 태깅 줄·Yahoo 완전 일치 — 비영업 분리 매출)을 거친 행은 제외
   if (/공통모드(?! 아님)/.test(note) && !/독립 확인|Yahoo -?\d+ 완전 일치/.test(note)) return "검사 메모 공통모드(앱 규칙 재구현)";
@@ -165,4 +166,57 @@ export function buildAudit({ app, cols, checks, review, closed }) {
     }
   }
   return rows;
+}
+
+// ── 판본 판정 — XBRL decimals 기반 독립 판정(오너 승인 2단계, 2026-09-26) ─────────────────────────────────────────────
+// 앱(src/lib/fin/read/vintage.ts)과 검증기의 옛 규칙(prepareColumnVintage·precisionRel·RETAG_UNITS)은 "값이 단위 배수인가"로 반올림
+// 재게시를 추측한다 — 같은 추측이라 같이 틀린다(공통모드, MRVL 1e5 재태깅을 둘 다 놓쳤다). 여기서는 값의 모양을 보지 않고 공시
+// 원본 인스턴스의 decimals 속성(회사가 선언한 정밀도)만 근거로 쓴다.
+//
+// 규칙: 같은 개념·같은 기간 사실을 공시일 순(같은 공시 안에서는 decimals 큰 것 먼저)으로 훑으며 "현재 기준값" A 를 둔다. 다음 사실 L 이
+//   · L 값 = A 값 → 같은 값(A 를 L 로 — decimals 가 같거나 큰 쪽만),
+//   · decimals(L) < decimals(A) 이고 L 값 = round(A 값, 10^−decimals(L)) → 정밀도만 낮춘 재게시(A 유지),
+//   · 그 밖에 값이 다르면 → 진짜 재작성(A = L). 같은 공시 안에서 재작성이 나오면(한 공시에 한 기간 값 둘) 판정 불가.
+// 반올림 정의(명시): 10^−d 의 가장 가까운 배수. 정확히 가운데(끝자리 5 뒤 0)면 두 이웃 모두 인정 — 회사마다 사사오입·짝수 반올림이
+//   섞여 있어 가운데 값만 어느 쪽인지 선언이 없다. decimals="INF" 는 정확값(무한 정밀). decimals 가 하나라도 없으면 판정 불가.
+/** 값 v(정밀도 dec)를 10^scale 배 정수(BigInt)로 — 소수 자릿수가 scale 을 넘으면 null */
+function scaled(v, scale) {
+  const s = Math.round(v * 10 ** scale);
+  return Math.abs(s - v * 10 ** scale) < 1e-6 * Math.max(1, Math.abs(s)) && Number.isSafeInteger(s) ? BigInt(s) : null;
+}
+/** later 가 earlier 를 later.dec 자리로 반올림한 값인가(위 반올림 정의) */
+export function isDecimalsRounding(earlier, later) {
+  if (!(later.dec < earlier.dec)) return false;
+  const K = Math.max(0, Number.isFinite(earlier.dec) ? earlier.dec : 6, later.dec);
+  if (K > 12) return false;
+  const a = scaled(earlier.val, K), b = scaled(later.val, K);
+  if (a == null || b == null) return false;
+  const q = 10n ** BigInt(K - later.dec);
+  const neg = a < 0n, m = neg ? -a : a;
+  const lo = (m / q) * q, rem = m - lo;
+  const cands = 2n * rem > q ? [lo + q] : 2n * rem < q ? [lo] : [lo, lo + q];
+  return cands.some((c) => (neg ? -c : c) === b);
+}
+/**
+ * @param {{ accn: string, filed: string, val: number, dec: number | null }[]} facts 한 개념·한 기간의 공시별 사실(값이 다른 판본 전부)
+ * @returns {{ ok: true, val: number, accn: string, represented: { val: number, accn: string, dec: number, of: number }[], restated: { val: number, accn: string, from: number }[], txt: string }
+ *          | { ok: false, why: string }}
+ */
+export function decimalsVintage(facts) {
+  if (!facts.length) return { ok: false, why: "사실 없음" };
+  const miss = facts.filter((f) => f.dec == null || Number.isNaN(f.dec));
+  if (miss.length) return { ok: false, why: `decimals 없음: ${miss.map((f) => `${f.accn} ${f.val}`).join(", ")}` };
+  const order = [...facts].sort((x, y) => (x.filed !== y.filed ? (x.filed < y.filed ? -1 : 1) : x.accn !== y.accn ? (x.accn < y.accn ? -1 : 1) : y.dec - x.dec));
+  const decTxt = (d) => (Number.isFinite(d) ? String(d) : "INF");
+  let A = order[0];
+  const represented = [], restated = [], log = [`${A.filed} ${A.val}(d${decTxt(A.dec)})`];
+  for (const L of order.slice(1)) {
+    if (L.val === A.val) { if (L.dec >= A.dec) A = L; continue; }
+    if (isDecimalsRounding(A, L)) { represented.push({ val: L.val, accn: L.accn, dec: L.dec, of: A.val }); log.push(`${L.filed} ${L.val}(d${decTxt(L.dec)}) = round(${A.val}) 재게시`); continue; }
+    if (L.accn === A.accn) return { ok: false, why: `같은 공시 ${L.accn} 에 반올림 관계가 아닌 두 값 ${A.val}·${L.val}` };
+    restated.push({ val: L.val, accn: L.accn, from: A.val });
+    log.push(`${L.filed} ${L.val}(d${decTxt(L.dec)}) 재작성`);
+    A = L;
+  }
+  return { ok: true, val: A.val, accn: A.accn, represented, restated, txt: log.join(" → ") };
 }

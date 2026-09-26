@@ -58,9 +58,10 @@
  * 결과: reports/verify/verify-{market}-{YYYYMMDD-HHmm KST}.json. 실패·오류·누락이 있으면 종료코드 1.
  */
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
-import { buildAudit, commonModeOf, extItemOf } from "./metrics/audit.mjs";
+import { buildAudit, commonModeOf, decimalsVintage, extItemOf } from "./metrics/audit.mjs";
 
 // ── 인자 ─────────────────────────────────────────────────────────────
 const args = {};
@@ -168,15 +169,30 @@ async function symbolList() {
 
 // ── SEC ──────────────────────────────────────────────────────────────
 const SEC_UA = env.SEC_USER_AGENT || "global-market-research (personal use) contact@example.com";
+// SEC 요청 공통 — 초당 3건 이하(앱 개발 서버 초당 5건과 합쳐 8건 — SEC 한도 10건/초 안), 429 면 65초 기다렸다 최대 3회 재시도(2026-09-26 — 판본 decimals
+// 판정 도입 뒤 인스턴스 요청이 늘어 429 가 났다). 공시 원본(www.sec.gov/Archives)은 제출 후 바뀌지 않으므로 디스크에 영구 캐시
+// (reports/.sec-cache — gitignore). companyfacts·submissions(data.sec.gov)는 매일 바뀌어 캐시하지 않는다.
+const SEC_DISK = pathResolve("reports/.sec-cache");
+let secChain = Promise.resolve(), secLast = 0;
+async function secFetchRaw(url, timeoutMs) {
+  const ARCH = "https://www.sec.gov/Archives/edgar/data/";
+  const disk = url.startsWith(ARCH) ? pathJoin(SEC_DISK, url.slice(ARCH.length).replace(/[^A-Za-z0-9._-]/g, "_")) : null;
+  if (disk && existsSync(disk)) return readFileSync(disk, "utf8");
+  for (let attempt = 0; ; attempt++) {
+    await (secChain = secChain.then(async () => { const w = secLast + 334 - Date.now(); if (w > 0) await new Promise((r) => setTimeout(r, w)); secLast = Date.now(); }));
+    const r = await fetch(url, { headers: { "user-agent": SEC_UA }, signal: AbortSignal.timeout(timeoutMs) });
+    if (r.status === 429 && attempt < 3) { await new Promise((res) => setTimeout(res, 65_000)); continue; }
+    if (!r.ok) throw new Error(`SEC ${url} → HTTP ${r.status}`);
+    const t = await r.text();
+    if (disk) { mkdirSync(SEC_DISK, { recursive: true }); writeFileSync(disk, t); }
+    return t;
+  }
+}
 async function secJson(url) {
-  const r = await fetch(url, { headers: { "user-agent": SEC_UA }, signal: AbortSignal.timeout(60_000) });
-  if (!r.ok) throw new Error(`SEC ${url} → HTTP ${r.status}`);
-  return r.json();
+  return JSON.parse(await secFetchRaw(url, 60_000));
 }
 async function secText(url) {
-  const r = await fetch(url, { headers: { "user-agent": SEC_UA }, signal: AbortSignal.timeout(60_000) });
-  if (!r.ok) throw new Error(`SEC ${url} → HTTP ${r.status}`);
-  return r.text();
+  return secFetchRaw(url, 60_000);
 }
 /** 공시 원본(인스턴스) — 한 종목 안에서 같은 원본을 여러 대조가 다시 받지 않게 최근 12건만 캐시(SEC 요청 절약) */
 const instCache = new Map();
@@ -374,6 +390,10 @@ async function prepareColumnVintage(facts, cik, hardErrors) {
  * 재태깅 제외(roundedRetagUnit).
  */
 function latestPrecise(list) {
+  return withVintage(list, latestPreciseRule(list));
+}
+/** 옛 규칙(열 판본·줄 단위 반올림 재태깅) 선택 — 앱 vintage.ts 와 같은 성격의 규칙이라 공통모드. decimals 교차 확인은 withVintage */
+function latestPreciseRule(list) {
   const sorted = [...list].sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""));
   const top = sorted.at(-1);
   const pick = top ? colCtx.get(top) : null;
@@ -391,7 +411,114 @@ function latestPrecise(list) {
   return e && di != null && di >= 0 ? { ...e, retag: { val: sorted[di].val, filed: sorted[di].filed, unit: flags[di] } } : e;
 }
 /** 기준값 메모 — 먼저 공시된 정밀값과 나중 반올림값이 갈리면 둘 다 남긴다 */
-const retagNote = (e) => (e?.retag ? `반올림 재태깅 제외 — 먼저 공시된 정밀값 ${e.val}(${e.filed}) 채택, 나중 공시 ${e.retag.val}(${e.retag.filed})는 ${e.retag.unit} 단위 반올림` : "");
+const retagNote = (e) => [
+  e?.retag ? `반올림 재태깅 제외 — 먼저 공시된 정밀값 ${e.val}(${e.filed}) 채택, 나중 공시 ${e.retag.val}(${e.retag.filed})는 ${e.retag.unit} 단위 반올림`
+    : e?.vint != null ? `판본 — 최신 공시값 ${e.val}(${e.filed}) 채택(앞선 공시와 값이 다름 — 재작성으로 판정)` : "",
+  e?.vint != null ? `[판본 #${e.vint}]` : "",
+].filter(Boolean).join(" ");
+
+// ── 판본 판정 교차 확인 — XBRL decimals 기반 독립 판정(오너 승인 2단계, 2026-09-26, docs/metrics/architecture.md) ───────────────────
+// 위 옛 규칙(열 판본·반올림 재태깅)은 앱 src/lib/fin/read/vintage.ts(columnFiling·precisionRelation·usdRounds)의 줄 단위 재구현이라
+// 앱과 같이 틀린다(MRVL 1e5 재태깅을 둘 다 놓침). 한 기간에 값이 다른 판본이 둘 이상이면 그 선택을 등록해 두고(메모에 [판본 #N]),
+// 나중에 각 공시 원본 인스턴스의 decimals 속성만으로 따로 판정한다(scripts/metrics/audit.mjs decimalsVintage — 값 모양·RETAG_UNITS 안 씀).
+//   · 두 판정이 같고 decimals 근거가 모두 있음 → 판본 선택은 독립 확인(공통모드 사유에서 빠진다 — commonModeOf)
+//   · 다름 → FAIL(앱은 옛 규칙과 같은 규칙이다 — 두 값을 메모에)
+//   · decimals 없음(인스턴스 없는 옛 공시·decimals 없는 사실·조회 실패) → 종전 그대로(반올림 재태깅 선택이면 공통모드)
+// companyfacts 에는 decimals 가 없어 인스턴스를 읽는다(공시당 1회, 차원 없는 사실만 색인해 캐시).
+const factConcept = new WeakMap(); // companyfacts 사실 객체 → 개념 이름(ns 없이 — 인스턴스 접두어가 공시마다 다를 수 있음)
+function indexFactConcepts(facts) {
+  for (const node of Object.values(facts ?? {}))
+    for (const [c, o] of Object.entries(node ?? {}))
+      for (const es of Object.values(o?.units ?? {})) for (const e of es) factConcept.set(e, c);
+}
+const vintReg = new Map(), vintSig = new Map(); // id → { concept, start, end, cands: [{ accn, filed, form, val }], rule }
+/** 옛 규칙의 선택 r 에 판본 등록 번호(vint)를 붙인다 — 목록에 값이 다른 사실이 둘 이상이고 전부 같은 companyfacts 개념일 때만 */
+function withVintage(list, r) {
+  if (!r || new Set(list.map((x) => x.val)).size < 2) return r;
+  const cs = new Set(list.map((x) => factConcept.get(x)));
+  if (cs.size !== 1 || cs.has(undefined) || list.some((x) => !x.accn)) return r;
+  const cands = [...new Map(list.map((x) => [`${x.accn}|${x.val}`, { accn: x.accn, filed: x.filed ?? "", form: x.form ?? "", val: x.val }])).values()];
+  const d = { concept: [...cs][0], start: list[0].start ?? "", end: list[0].end, cands, rule: r.val };
+  const sig = `${d.concept}|${d.start}|${d.end}|${d.rule}|${cands.map((x) => `${x.accn}:${x.val}`).sort().join(",")}`;
+  let id = vintSig.get(sig);
+  if (id == null) { id = vintReg.size + 1; vintReg.set(id, d); vintSig.set(sig, id); }
+  return { ...r, vint: id };
+}
+// SEC Archives 요청 — 이 판정은 공시 원본을 여러 건 더 받으므로 초당 2건 이하, 429 면 65초 기다렸다 최대 3회 재시도
+async function secArchiveText(url) {
+  // 공통 SEC 요청(속도 제한·429 대기·원본 디스크 캐시)으로 통일
+  return secFetchRaw(url, 120_000);
+}
+const decIdxCache = new Map(); // accn → Promise<Map(개념|start|end → [{ v, dec }]) | null>
+/** 공시 원본 인스턴스의 차원 없는 수치 사실 decimals 색인. 인스턴스가 없는 공시(XBRL 이전)는 null, 조회 실패는 throw */
+function instanceDecimals(cik, accn) {
+  if (!decIdxCache.has(accn)) {
+    const p = (async () => {
+      const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+      const names = JSON.parse(await secArchiveText(`${base}/index.json`)).directory.item.map((x) => x.name);
+      const instN = names.find((x) => /_htm\.xml$/i.test(x)) ?? names.find((x) => /\.xml$/i.test(x) && !/_(pre|cal|def|lab)\.xml$|FilingSummary|^R\d+\.xml$/i.test(x));
+      if (!instN) return null;
+      const url = `${base}/${instN}`;
+      const xml = instCache.has(url) ? await instCache.get(url) : await secArchiveText(url);
+      const ctx = parseContexts(xml), out = new Map();
+      for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+(?:[eE][-+]?\d+)?)\s*</g)) {
+        const c = ctx.get(m[4]);
+        if (!c || c.dims.length) continue;
+        const d = /decimals="([^"]+)"/.exec(`${m[3]} ${m[5]}`)?.[1];
+        const k = `${m[2]}|${c.start ?? ""}|${c.end ?? c.instant ?? ""}`;
+        out.set(k, [...(out.get(k) ?? []), { v: Number(m[6]), dec: d == null ? null : d === "INF" ? Infinity : Number(d) }]);
+      }
+      return out;
+    })();
+    decIdxCache.set(accn, p.catch((e) => { decIdxCache.delete(accn); throw e; }));
+    if (decIdxCache.size > 80) decIdxCache.delete(decIdxCache.keys().next().value);
+  }
+  return decIdxCache.get(accn);
+}
+const vintRes = new Map(); // id → decimalsVintage 결과
+async function resolveVintage(ids, cik, hardErrors) {
+  for (const id of ids) {
+    if (vintRes.has(id)) continue;
+    const d = vintReg.get(id);
+    const facts = [];
+    let why = null;
+    for (const x of d.cands) {
+      let idx;
+      try { idx = await instanceDecimals(cik, x.accn); }
+      catch (e) { hardErrors.push(`판본 decimals 판정용 공시 원본 조회 실패(${x.accn}): ${String(e).slice(0, 60)}`); why = `공시 원본 조회 실패 ${x.accn}`; break; }
+      // 같은 값의 사실이 여럿이면(본표 + 문장) 가장 정밀한 선언
+      const hit = (idx?.get(`${d.concept}|${d.start}|${d.end}`) ?? []).filter((f) => f.v === x.val && f.dec != null);
+      facts.push({ ...x, dec: hit.length ? Math.max(...hit.map((f) => f.dec)) : null });
+    }
+    vintRes.set(id, why ? { ok: false, why } : decimalsVintage(facts));
+  }
+}
+/** 한 등록의 옛 규칙 선택·decimals 선택 요약 */
+const vintTxt = (id) => {
+  const d = vintReg.get(id), r = vintRes.get(id);
+  return `${d.concept} ${d.start ? `${d.start}~` : ""}${d.end} 옛 규칙 ${d.rule}${r?.ok ? ` · decimals ${r.val}(${r.txt})` : ` · decimals 판정 불가(${r?.why ?? "미판정"})`}`;
+};
+/**
+ * A층 검사 메모의 [판본 #N] 을 decimals 판정과 대조해 상태를 정한다(검사마다 한 번 — vintage 필드). 모두 같고 근거 있음 → "independent"
+ * (메모 "판본 decimals 독립 확인" — commonModeOf 가 판본 사유를 빼는 표시) · 하나라도 다름 → FAIL "disagree" · 근거 없음 → "no-evidence"(종전 그대로)
+ */
+async function applyVintage(checks, cik, hardErrors) {
+  const tokens = (k) => [...new Set([...(k.note ?? "").matchAll(/\[판본 #(\d+)\]/g)].map((m) => Number(m[1])))];
+  const todo = new Set(checks.filter((k) => k.layer === "A" && !k.vintage && tokens(k).length));
+  await resolveVintage(new Set([...todo].flatMap(tokens)), cik, hardErrors);
+  for (let i = 0; i < checks.length; i++) {
+    const k = checks[i];
+    if (!todo.has(k)) continue;
+    const ts = tokens(k);
+    const dis = ts.filter((id) => vintRes.get(id)?.ok && vintRes.get(id).val !== vintReg.get(id).rule);
+    const noEv = ts.filter((id) => !vintRes.get(id)?.ok);
+    checks[i] = dis.length
+      ? { ...k, status: FAIL, vintage: "disagree", vintageVals: [k.src, ...dis.map((id) => vintRes.get(id).val)], note: [k.note, `판본 판정 불일치 — decimals 독립 판정 ≠ 옛 규칙(앱과 같은 규칙): ${dis.map(vintTxt).join("; ")}`].join(" · ") }
+      : noEv.length
+        ? { ...k, vintage: "no-evidence", note: [k.note, `판본 decimals 근거 없음: ${noEv.map(vintTxt).join("; ")}`].join(" · ") }
+        : { ...k, vintage: "independent", note: [k.note, `판본 decimals 독립 확인: ${ts.map(vintTxt).join("; ")}`].join(" · ") };
+  }
+}
 
 // ── SEC 연간 사실 (결산 기간 = (start, end) 단위, 연도 키 아님) ────────────
 function annualPeriods(facts, ns, concept, unit) {
@@ -1857,6 +1984,7 @@ async function verifyUs(sym) {
   // 열 단위 판본 판정 — 최신 공시 보강(위) 뒤, 기준값을 고르기(latestPrecise) 전에
   try { await prepareColumnVintage(f.facts, cik, hardErrors); }
   catch (e) { hardErrors.push(`열 판본 판정 준비 실패: ${String(e).slice(0, 60)}`); }
+  indexFactConcepts(f.facts); // 판본 decimals 교차 확인(withVintage)용 — 사실 → 개념
   const ann = (c, unit = "USD") => annualPeriods(f.facts, "us-gaap", c, unit);
   /** 결산일(±7일)의 연간 사실 전부(10-K·20-F, 300~400일) — 공시일 순. 최초·최신 공시를 구분할 때 */
   const annualAllAt = (concept, unit, date) => (G[concept]?.units?.[unit] ?? [])
@@ -1988,7 +2116,7 @@ async function verifyUs(sym) {
   /** 지배주주 순이익(기준값) — { v, note } | { v:null, why } */
   function parentNi(end) {
     const n = atEnd(niP, end);
-    if (n) return { v: n.val, ...(n.retag ? { note: retagNote(n) } : {}) };
+    if (n) return { v: n.val, ...(retagNote(n) ? { note: retagNote(n) } : {}) };
     const pl = atEnd(plP, end), nci = atEnd(nciP, end);
     if (pl && nci) return { v: pl.val - nci.val, note: "ProfitLoss − 비지배지분" };
     if (pl && !traceNear(nciTrace, end)) return { v: pl.val, note: "ProfitLoss(그 해 비지배지분 흔적 없음)" };
@@ -2537,8 +2665,8 @@ async function verifyUs(sym) {
         const r = vsSource(x.eps, expected, EXACT, "");
         const ok = x.eps != null && Math.abs(x.eps - expected) <= EXACT * Math.max(1, Math.abs(expected));
         add("A", "EPS 앱 = SEC 공시 EPS(분할 보정)", c, x.eps == null ? r : ok
-          ? { status: PASS, ...(k !== 1 ? { note: `분할 보정 ÷${k}(Yahoo 분할 이력)` } : {}), app: x.eps, src: expected }
-          : { status: FAIL, note: `앱 ${x.eps} vs 공시 ${e.val}${k !== 1 ? ` ÷ 분할 ${k}` : ""} = ${expected}${splitErr ? ` · ${splitErr}` : ""}`, app: x.eps, src: expected });
+          ? { status: PASS, ...(k !== 1 || retagNote(e) ? { note: [k !== 1 && `분할 보정 ÷${k}(Yahoo 분할 이력)`, retagNote(e)].filter(Boolean).join(" · ") } : {}), app: x.eps, src: expected }
+          : { status: FAIL, note: `앱 ${x.eps} vs 공시 ${e.val}${k !== 1 ? ` ÷ 분할 ${k}` : ""} = ${expected}${splitErr ? ` · ${splitErr}` : ""}${retagNote(e) ? ` · ${retagNote(e)}` : ""}`, app: x.eps, src: expected });
       } else if (contDiscEps(x.date)) {
         // 총 희석 EPS 태그가 없고 계속영업·중단영업 희석 EPS 가 같은 10-K 에 둘 다 공시된 해 — 두 태그값의 합이 SEC 기준
         // (DELL FY2022 = 6.26 + 0.76). 공시 총 EPS 와 반올림 0.01 차이가 날 수 있어 허용치 없이 태그값 합 그대로 비교
@@ -2621,9 +2749,9 @@ async function verifyUs(sym) {
     { const op = IS[c]?.op, pt = IS[c]?.pretax;
       const secNotes = [];
       const secAt = (tag) => {
-        if (isFy) { const e = atEnd(ann(tag), x.date); if (e?.retag) secNotes.push(`${tag}: ${retagNote(e)}`); return e?.val ?? null; }
+        if (isFy) { const e = atEnd(ann(tag), x.date); if (retagNote(e)) secNotes.push(`${tag}: ${retagNote(e)}`); return e?.val ?? null; }
         const t = secTtm(tag);
-        if (t && /반올림 재태깅/.test(t.how)) secNotes.push(`${tag}: ${t.how}`);
+        if (t && /반올림 재태깅|\[판본 #/.test(t.how)) secNotes.push(`${tag}: ${t.how}`);
         return t && dayDiff(t.end, x.date) <= 7 ? t.v : null;
       };
       const secPt = PRETAX_TAGS.map(secAt).find((v) => v != null) ?? null;
@@ -3230,6 +3358,8 @@ async function verifyUs(sym) {
   //  인포맥스 희석 EPS                 소수 넷째 자리(순이익 ÷ 주식수 자체 계산 — 실측 418/420 값)     round(앱, 1e-4) = 인포맥스 / ⑨
   //  인포맥스 결산일 시가총액          센트(= 주식수 × 센트 종가 — 실측 주식수가 SEC 본표 주식수와 정수 일치)  없음(완전 일치만 ① — 앱도 호가 단위 종가)
   //  인포맥스 현재 주식수              천 주                                                         round(앱 주식수, 1e3) = 인포맥스
+  // 판본 선택의 decimals 교차 확인 — 외부 대조 원인 규칙(aPassed·R6')이 그 결과를 보므로 그 앞에서(끝에서 한 번 더 — 뒤에 붙은 A층 검사)
+  await applyVintage(checks, cik, hardErrors);
   if (EXTERNAL && !bank && L) {
     const recon = new Map();
     /** unit = 외부 표기 단위(반올림 식에 쓸 값 — null 이면 식 없음), parts = 파생 외부 값의 앱 성분 [[부호, 앱 값], …] */
@@ -3573,8 +3703,14 @@ async function verifyUs(sym) {
       //    둘 다 SEC 사실값으로 외부 값을 정확히(보고 단위 반올림 없이) 재현할 때만. 공통모드 아님(10-K 원본 값).
       if (metric === "매출" && col !== "LTM" && aPassed(col, "매출") && H[col]?.date) {
         const sr = revFace?.annualAt(H[col].date);
-        if (sr?.retag && extEq(v, sr.retag.val))
-          return { common: `${n} 매출 = SEC 반올림 재태깅 값 ${sr.retag.val}(${sr.retag.filed} 공시, ${sr.retag.unit} 단위) — 앱 = 먼저 공시된 정밀값 ${sr.v}(반올림 재태깅 제외 = 앱과 같은 규칙, A층 정확 일치)` };
+        if (sr?.retag && extEq(v, sr.retag.val)) {
+          // ② 는 decimals 근거가 있을 때만 — 그 판본 등록의 decimals 판정이 앱 값(정밀값)을 고르고, 외부 값을 그 정밀값의 재게시로 확인
+          const id = Number(/\[판본 #(\d+)\]/.exec(sr.how ?? "")?.[1]), r = vintRes.get(id);
+          const rep = r?.ok && r.val === sr.v ? r.represented.find((x) => x.val === sr.retag.val) : null;
+          return rep
+            ? { ok: `${n} 매출 = SEC 정밀도만 낮춘 재게시 값 ${sr.retag.val}(${sr.retag.filed} 공시 decimals ${rep.dec} = round(${rep.of}, 10^${-rep.dec})) — 앱 = 먼저 공시된 정밀값 ${sr.v}(A층 정확 일치, 판본은 decimals 독립 판정: ${r.txt}) · 공통모드 아님(공시 원본 decimals)` }
+            : { common: `${n} 매출 = SEC 반올림 재태깅 값 ${sr.retag.val}(${sr.retag.filed} 공시, ${sr.retag.unit} 단위) — 앱 = 먼저 공시된 정밀값 ${sr.v}(반올림 재태깅 제외 = 앱과 같은 규칙, A층 정확 일치 · decimals 근거 ${r?.ok ? "는 재게시를 확인 못함" : `없음(${r?.why ?? "미판정"})`})` };
+        }
         const p = [...(revParts ?? new Map())].find(([end]) => dayDiff(end, H[col].date) <= 7)?.[1];
         for (const [how, s] of p?.sums ?? []) if (extEq(v, s))
           return { ok: `${n} 매출 = 본표 매출 하위 줄 합 ${s}(${p.src} ${how}) — 합계 줄 ${p.total} 과 회사 반올림 차 ${s - p.total}, 앱 = SEC 본표 합계(A층 정확 일치) · 공통모드 아님(10-K 원본 값)` };
@@ -4069,6 +4205,22 @@ async function verifyUs(sym) {
     if (!x?.matched?.length || (k.app != null && !extEq(k.app, x.ours))) return null;
     return x.matched.join("·");
   };
+  await applyVintage(checks, cik, hardErrors);
+  // 판본 판정 불일치(decimals ≠ 옛 규칙) 행 — 리드 결정 2026-09-26(값 모양 규칙 도입 없이): 앱 값이 두 SEC 후보(옛 규칙·decimals) 중 하나이고
+  // 독립 외부 소스(공통모드·외부 정밀도 부족이 아닌 matched)가 앱 값과 정확히 같으면 PASS — 회사 decimals 표기 오류(MCD 가 백만 단위 값을
+  // decimals −5 로 선언)를 외부로 확인. 외부 정확 일치가 없으면 FAIL 유지. 외부 대조가 끝난 뒤라야 한다(여기)
+  for (let i = 0; i < checks.length; i++) {
+    const k = checks[i];
+    if (k.vintage !== "disagree" || k.status !== FAIL || k.app == null || !k.vintageVals?.some((v) => extEq(k.app, v))) continue;
+    const it = extItemOf(k) ?? (k.layer === "A" && /^자산총계 /.test(k.name) && /^\d{4}Y$/.test(k.col) ? { item: `${k.col} 자산총계` } : null);
+    let hit = [];
+    if (it?.quarter) hit = quarterExt(qEndOf.get(k.col), it.metric).filter(([, v]) => extEq(k.app, v));
+    else if (it) {
+      const x = review.find((y) => y.item === it.item && y.sources);
+      if (x && extEq(k.app, x.ours)) hit = (x.matched ?? []).map((n) => [n, x.sources[n]]);
+    }
+    if (hit.length) checks[i] = { ...k, status: PASS, note: `${k.note} · 회사 decimals 표기 불일치 — 외부 독립 확인(${hit.map(([n, v]) => `${n} ${v}`).join(", ")} = 앱 ${k.app})` };
+  }
   for (let i = 0; i < checks.length; i++) {
     const k = checks[i];
     if (k.status !== PASS) continue;
