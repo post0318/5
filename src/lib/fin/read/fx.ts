@@ -1,6 +1,9 @@
 import "server-only";
-import { fxDaily } from "../source/us/market";
+import { fxDaily, fxFetchedAt } from "../source/us/market";
 import type { FactIndex } from "../source/us/sec";
+
+/** 기간 평균 환율 입력의 참조 키(파생값 입력 `x` — types.ts DerivedInput) */
+export const fxAvgRef = (cur: string, start: string, end: string) => `x:${cur}|avg|${start}|${end}`;
 
 /**
  * 1층 — 환율(architecture.md §1). `markets/us/edgar-foreign.ts` 의 규칙을 옮겼다(값 동일):
@@ -10,6 +13,8 @@ import type { FactIndex } from "../source/us/sec";
 
 export interface Fx {
   cur: string;
+  /** 환율 원천 조회 시각(ISO) — 파생값 입력의 asOf */
+  asOf: string;
   avg(start: string, end: string): number | null;
   at(date: string): number | null;
 }
@@ -33,9 +38,9 @@ function avgRate(s: Series, start: string, end: string): number | null {
 }
 
 export async function makeFx(cur: string): Promise<Fx> {
-  if (cur === "USD") return { cur, avg: () => 1, at: () => 1 };
+  if (cur === "USD") return { cur, asOf: new Date().toISOString(), avg: () => 1, at: () => 1 };
   const s = await fxDaily(cur);
-  return { cur, avg: (a, b) => avgRate(s, a, b), at: (d) => rateAt(s, d) };
+  return { cur, asOf: fxFetchedAt(cur) ?? new Date().toISOString(), avg: (a, b) => avgRate(s, a, b), at: (d) => rateAt(s, d) };
 }
 
 const isCurrency = (u: string) => /^[A-Z]{3}$/.test(u);

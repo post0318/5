@@ -12,6 +12,18 @@ import { getDb } from "./index";
 /** 열 머리글 [열키, start, end, accn, form, filed, gaps] — 파생 열은 accn null, form "Q4D"|"QD"|"LTM" */
 export type FinColTuple = [string, string, string, string | null, string, string | null, number];
 export type FinExc = { d: [string, 1 | -1][] } | { k: "fx"; r: number } | { k: "yq"; t: string };
+/**
+ * 파생값 입력 1건(architecture.md §2.1·§3.2) — [참조, 부호, 역할, 시장값, asOf 번호, 환율 참조, 환율, 환율 asOf 번호]. 뒤쪽 null 은
+ * 잘라 저장. asOf 번호 = FinDer.a 의 위치(같은 조회 시각을 한 번만 저장). 값 = Σ 부호 × 값(참조) × 환율.
+ */
+export type FinDerIn = [string, 1 | -1, (string | null)?, (number | null)?, (number | null)?, (string | null)?, (number | null)?, (number | null)?];
+/** 파생값 입력 — rev: 열키 → 매출 입력, ln: "열키|줄id" → 매출 입력이 참조한 파생 칸의 입력(재귀 전개), a: asOf 표, at: 계산 시각 */
+export interface FinDer {
+  rev: Record<string, FinDerIn[]>;
+  ln?: Record<string, FinDerIn[]>;
+  a?: string[];
+  at: string;
+}
 
 export interface FinSymDoc {
   _id: string; // "us:AAPL"
@@ -24,13 +36,15 @@ export interface FinSymDoc {
   c: FinColTuple[];
   m: Record<string, (number | null)[]>;
   x: Record<string, Record<string, FinExc>>;
+  /** 파생값 입력(엔진판 5부터) — 없으면 파생값 없음 */
+  d?: FinDer;
   /** 배치가 "새 정기공시 없음"을 마지막으로 확인한 시각(/api/cron/fin-build) */
   ck?: Date;
   /**
    * 조립 항등식 불성립 [열키, 매출 경로 불성립(그 열 매출 비움), 매출 외 줄 불성립(값 유지), 매출 경로 판정 불완전(값 유지 ·
-   * "항등식 미검증" — 엔진판 4부터, 없으면 빈 목록)] — 없으면 생략
+   * "항등식 미검증" — 엔진판 4부터, 없으면 빈 목록), 파생값 입력 자기 검사 불일치(값 유지 — 엔진판 5부터, 없으면 생략)] — 없으면 생략
    */
-  i?: [string, string[], string[], string[]?][];
+  i?: [string, string[], string[], string[]?, string[]?][];
 }
 
 export interface FinStmtDoc {

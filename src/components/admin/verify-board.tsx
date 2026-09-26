@@ -4,12 +4,13 @@ import { Fragment, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "@/lib/query";
 import { cn } from "@/lib/utils";
-import { formatNumber } from "@/lib/format";
+import { formatCurrency, formatMultiple, formatNumber } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AdminVerifyRow } from "@/app/api/admin/verify/route";
+import type { AuditRow } from "@/lib/db/verify-results";
 
 /**
  * 재무 숫자 검증 결과 — 관리자만(오너 결정 2026-09-24). 검증 스크립트가 GitHub Actions 에서 매일 전 종목,
@@ -24,7 +25,8 @@ const SOURCES = ["Yahoo", "StockAnalysis", "인포맥스"] as const;
 function status(r: AdminVerifyRow): { label: string; tone: "bad" | "warn" | "ok" | "pending" } {
   if (r.pending || !r.result) return { label: "미검증", tone: "pending" };
   const c = r.result.counts;
-  if (c.fail > 0 || r.result.errors.length) return { label: `실패 ${c.fail}`, tone: "bad" };
+  // 검사 실패 없이 실행 오류만 있으면 "실패 0" 이 아니라 오류 건수를 보인다(판정은 같다)
+  if (c.fail > 0 || r.result.errors.length) return { label: c.fail > 0 ? `실패 ${c.fail}` : `오류 ${r.result.errors.length}`, tone: "bad" };
   if (c.extMismatch > 0 || c.unverifiable > 0) return { label: "확인 필요", tone: "warn" };
   return { label: "정상", tone: "ok" };
 }
@@ -44,6 +46,67 @@ function fmtWhen(iso: string) {
 /** 금액은 백만 단위로 — 소스마다 보고 단위가 달라 원값 그대로 쓰면 읽기 어렵다 */
 const mil = (v: number | null | undefined) => (v == null ? "—" : formatNumber(v / 1e6));
 
+/** 감사표 칸 — 금액은 백만 단위, 주당 값은 달러 소수 2자리, 배수는 x (전부 버림, lib/format) */
+const PER_SHARE = new Set(["EPS", "BPS"]);
+const MULTIPLE = new Set(["PER", "PBR", "PSR", "EV/EBITDA"]);
+function auditCell(metric: string, v: number | null) {
+  if (v == null) return "—";
+  if (PER_SHARE.has(metric)) return formatCurrency(v, "USD");
+  if (MULTIPLE.has(metric)) return formatMultiple(v);
+  return mil(v);
+}
+const VERDICT_TONE: Record<AuditRow["verdict"], string> = {
+  "①": "text-emerald-700 dark:text-emerald-400",
+  "②": "text-amber-700 dark:text-amber-400",
+  "③": "text-destructive",
+  NA: "text-muted-foreground",
+  미결: "text-muted-foreground",
+};
+
+/** 지표 × (최근 사업연도 · LTM) 감사표 — 읽기 전용(오너 결정 2026-09-26, 펼침 상세 없음) */
+function AuditTable({ rows }: { rows: AuditRow[] | undefined }) {
+  if (!rows?.length) return <p className="text-muted-foreground">표 데이터 없음 — 검증기 재실행 필요</p>;
+  return (
+    <div className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>지표</TableHead>
+            <TableHead>기준</TableHead>
+            <TableHead className="text-right">앱</TableHead>
+            <TableHead className="text-right">SEC 원자료</TableHead>
+            <TableHead className="text-right">Yahoo</TableHead>
+            <TableHead className="text-right">StockAnalysis</TableHead>
+            <TableHead className="text-right">인포맥스</TableHead>
+            <TableHead>판정</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((x) => (
+            <TableRow key={`${x.metric}|${x.period}`} className={cn(!x.closed && "opacity-60")}>
+              <TableCell>
+                <span className="font-medium">{x.metric}</span>
+                {!x.closed && <span className="text-muted-foreground ml-1 text-[10px]">지표 미종결</span>}
+              </TableCell>
+              <TableCell className="text-muted-foreground">
+                {x.period}
+                {x.basis && <span className="ml-1">· {x.basis}</span>}
+              </TableCell>
+              {([x.app, x.sec, x.yahoo, x.sa, x.infomax] as const).map((v, i) => (
+                <TableCell key={i} className="tnum text-right">{auditCell(x.metric, v)}</TableCell>
+              ))}
+              <TableCell className="whitespace-normal">
+                <span className={cn("font-medium", VERDICT_TONE[x.verdict])}>{x.verdict}</span>
+                {x.note && <span className="text-muted-foreground ml-1.5">{x.note}</span>}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 function Detail({ r }: { r: AdminVerifyRow }) {
   const res = r.result;
   if (!res) return <p className="text-muted-foreground p-3 text-sm">아직 검증 결과가 없습니다. 다음 자동 검증 때 올라옵니다.</p>;
@@ -56,6 +119,10 @@ function Detail({ r }: { r: AdminVerifyRow }) {
         검증 {fmtWhen(res.runAt)} · 통과 {res.counts.pass} · 대상 {res.base}
         {res.commit ? ` · 커밋 ${res.commit.slice(0, 7)}` : ""}
       </p>
+      <section>
+        <h4 className="mb-1 font-semibold">감사표 <span className="text-muted-foreground font-normal">(금액 백만 달러 · 주당 값 달러 · 배수 x)</span></h4>
+        <AuditTable rows={res.audit} />
+      </section>
       {res.errors.length > 0 && (
         <section>
           <h4 className="text-destructive mb-1 font-semibold">실행 오류</h4>

@@ -4,7 +4,9 @@
  * 비교해 "예상한 변경" 목록 밖의 변화만 걸러낸다 — 매출 지표를 새 파이프라인으로 옮길 때 의도치
  * 않은 화면 값 변화(회귀)를 잡기 위한 것.
  *
- * **이 스크립트는 실행하지 않는다.** 리팩터 착수 시점에 실행자가 직접 돌린다.
+ * **지표 전환 표준 절차(2026-09-26 상시화)** — 지표를 fin 으로 옮길 때마다: ① 착수 전 --save=.omc/snapshots/<지표>-before
+ *  ② 전환 후 --save=.omc/snapshots/<지표>-after ③ --diff 로 "예상한 변경"(scripts/metrics/gen-expected.mjs 로 만든
+ *  scripts/metrics/expected/<지표>.json) 밖의 변화가 0 인지 확인 ④ 골든셋(scripts/metrics/golden.mjs check)으로 닫힌 지표 무변화 확인.
  *
  * ── 대상 종목 ─────────────────────────────────────────────────────────
  *  기본값 = 유니버스(미국, `/api/cron/universe-symbols?market=us`) + 아래 고정 추가 목록.

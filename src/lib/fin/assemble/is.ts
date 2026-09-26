@@ -1,6 +1,6 @@
 import "server-only";
 import { Gap, type AssembledIs, type Column, type LineRole, type Prov, type StmtLine } from "../types";
-import { canonical, REVENUE_ALIAS_CONCEPTS, type CellValue, type ColumnSpec, type FilingStructure, type Part, type UsReader } from "../read";
+import { asPartRead, canonical, REVENUE_ALIAS_CONCEPTS, type CellValue, type ColumnSpec, type FilingStructure, type Part, type PartRead, type UsReader } from "../read";
 
 /**
  * 2층 — 손익계산서 조립(architecture.md §1·§2). **한 열 = 한 기준**: 그 열 원천 공시의 본표 표시 구조(_pre) 순서대로 줄을
@@ -53,12 +53,12 @@ const provOf = (p: Part): Prov => ({ accn: p.accn, form: p.form, filed: p.filed,
  * 증거 공시가 있을 때만)에 맡긴다. 대체 여부·후보 개념은 1층이 정한다(architecture.md §1).
  */
 function q4RevenueFallback(reader: UsReader, qname: string, fyPart: Part, ninePart: Part) {
-  return async (p: Part): Promise<number | null | "gap"> => {
+  return async (p: Part): Promise<PartRead | null | "gap"> => {
     const direct = await reader.partValue(qname, p);
     if (direct === "gap") return "gap";
-    if (direct !== null) return direct.val;
+    if (direct !== null) return asPartRead(direct);
     if (p !== ninePart) return null; // 사업연도 부분은 폴백 대상 아님 — 구조 기준 개념 그대로
-    return reader.revenueAliasNine(qname, fyPart, ninePart);
+    return asPartRead(await reader.revenueAliasNine(qname, fyPart, ninePart));
   };
 }
 
@@ -126,7 +126,7 @@ async function assembleColumn(
     pos.set(l.id, lines.length);
     const label = labelOf(l.id, l.preferredLabel, labelSrc.labels, reader);
     if (!labelsOut.has(l.id)) labelsOut.set(l.id, label);
-    lines.push({ id: l.id, label, parent: null, w: 0, role: null, v: cell.v, ...(cell.why ? { why: cell.why } : {}) });
+    lines.push({ id: l.id, label, parent: null, w: 0, role: null, v: cell.v, ...(cell.why ? { why: cell.why } : {}), ...(cell.inputs ? { inputs: cell.inputs } : {}) });
     raws.push(cell.raw);
   }
   // 계산 부모·가중치
@@ -166,18 +166,18 @@ async function assembleColumn(
   // 값을 못 구한 열도 줄은 남긴다(v null) — 3층이 총수익으로 조용히 대체하지 않게.
   if (opts.dimSplit && totalIdx >= 0 && !lines.some((l) => l.role === "revenue.nonop" || l.role === "revenue")) {
     const totalId = lines[totalIdx].id;
-    const nonopOf = async (p: Part): Promise<number | null | "gap"> => {
+    const nonopOf = async (p: Part): Promise<PartRead | null | "gap"> => {
       const d = await reader.dimSum(totalId, "ProductOrServiceAxis", (m) => NONOP_MEMBER.test(m), p);
       if (d !== null) return d;
       const t = await reader.partValue(totalId, p);
       const c = await reader.partValue("us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax", p);
-      return t && t !== "gap" && c && c !== "gap" ? t.val - c.val : null;
+      return t && t !== "gap" && c && c !== "gap" ? { val: t.val - c.val, leaves: [{ rv: t, op: 1 }, { rv: c, op: -1 }] } : null;
     };
     const cell = await reader.value(totalId, col, nonopOf);
     gaps |= cell.gaps;
     {
       if (!labelsOut.has(SYN_NONOP_DIMS)) labelsOut.set(SYN_NONOP_DIMS, "(총수익 중 지분법·기타수익 — 제품·서비스 차원 멤버 또는 총수익 − 고객계약 매출)");
-      lines.splice(totalIdx + 1, 0, { id: SYN_NONOP_DIMS, label: labelsOut.get(SYN_NONOP_DIMS)!, parent: totalIdx, w: 1, role: "revenue.nonop", v: cell.v, ...(cell.why ? { why: cell.why } : {}) });
+      lines.splice(totalIdx + 1, 0, { id: SYN_NONOP_DIMS, label: labelsOut.get(SYN_NONOP_DIMS)!, parent: totalIdx, w: 1, role: "revenue.nonop", v: cell.v, ...(cell.why ? { why: cell.why } : {}), ...(cell.inputs ? { inputs: cell.inputs } : {}) });
       raws.splice(totalIdx + 1, 0, null); // 차원 멤버는 본표 계산 구조 밖 — 항등식에 넣지 않는다
       for (const ln of lines) if (ln.parent != null && ln.parent > totalIdx && ln.id !== SYN_NONOP_DIMS) ln.parent += 1;
     }

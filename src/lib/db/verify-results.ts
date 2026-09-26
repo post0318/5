@@ -27,6 +27,27 @@ export interface VerifyExternal {
   verdict?: string;
   note?: string;
 }
+/** 감사표 판정 — ① 일치 · ② 정의 차이(원인 확인) · ③ 오류 · NA 대조값 없음 · 미결(닫히지 않은 지표의 원인 미규명 차이) */
+export type AuditVerdict = "①" | "②" | "③" | "NA" | "미결";
+export const AUDIT_VERDICTS: readonly AuditVerdict[] = ["①", "②", "③", "NA", "미결"];
+/** 종목별 감사표 한 줄(scripts/metrics/audit.mjs) — 지표 × (최근 사업연도 열 · LTM). 값이 없거나 정의가 다른 칸은 null */
+export interface AuditRow {
+  metric: string;
+  /** "2025Y" · "LTM" */
+  period: string;
+  /** 기준 — "FY 2025-09-27" · "TTM 2026-06-27" · "결산일 …" · "현재가 · 재무 …" */
+  basis: string;
+  app: number | null;
+  /** A층 SEC 원자료 기준값(배수는 null) */
+  sec: number | null;
+  yahoo: number | null;
+  sa: number | null;
+  infomax: number | null;
+  verdict: AuditVerdict;
+  note: string;
+  /** 검증이 닫힌 지표인가(검증기 CLOSED_METRICS) */
+  closed: boolean;
+}
 export interface VerifyResultDoc {
   /** `${market}:${symbol}` */
   _id: string;
@@ -43,6 +64,8 @@ export interface VerifyResultDoc {
   external: VerifyExternal[];
   /** 조회 실패 등 실행 자체의 문제 */
   errors: string[];
+  /** 감사표 — 2026-09-26 이전 결과·한국 종목엔 없음 */
+  audit?: AuditRow[];
 }
 
 export async function verifyResultsCol(): Promise<Collection<VerifyResultDoc>> {

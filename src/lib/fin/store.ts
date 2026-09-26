@@ -1,6 +1,6 @@
 import "server-only";
-import { finChgCol, finStmtCol, finSymCol, type FinChgDoc, type FinColTuple, type FinExc, type FinStmtDoc, type FinSymDoc } from "../db/fin";
-import { Gap, type AssembledIs, type Column, type FinAssembly, type MetricValue, type Prov } from "./types";
+import { finChgCol, finStmtCol, finSymCol, type FinChgDoc, type FinColTuple, type FinDer, type FinDerIn, type FinExc, type FinStmtDoc, type FinSymDoc } from "../db/fin";
+import { Gap, type AssembledIs, type Column, type DerivedInput, type FinAssembly, type MetricValue, type Prov } from "./types";
 
 /**
  * 저장·조회(architecture.md §3). 조립 결과만 저장한다(SEC 원자료 저장 안 함). 이전 판본은 복사하지 않고, 바뀐 칸만
@@ -8,7 +8,7 @@ import { Gap, type AssembledIs, type Column, type FinAssembly, type MetricValue,
  */
 
 /** 엔진판 — 판독·조립 규칙이 바뀌면 올린다(fin_chg 사유 "ev") */
-export const ENGINE_VERSION = 4;
+export const ENGINE_VERSION = 5; // 5: 파생값 입력 구조(fin_sym.d, 2026-09-26)
 /** 문서 스키마판 — 압축 형식이 바뀌면 올린다 */
 export const SCHEMA_VERSION = 1;
 
@@ -28,6 +28,46 @@ function excOf(mv: MetricValue): FinExc | null {
   return null;
 }
 
+/**
+ * 파생값 입력 → 압축 저장형(FinDer). 매출 입력이 `c:` 로 가리킨 칸이 파생이면 그 칸의 입력도 ln 에 담는다(재귀 — 저장본만으로
+ * 끝까지 전개). 시장 데이터 asOf 는 표(a)로 한 번만.
+ */
+function toDer(a: FinAssembly, cols: Column[]): FinDer | null {
+  const lines = new Map<string, DerivedInput[]>();
+  for (const x of [...a.annual, ...a.quarterly]) for (const l of x.lines) if (l.inputs) lines.set(`${x.col.key}|${l.id}`, l.inputs);
+  const asOf: string[] = [];
+  const ai = (s: string | undefined) => {
+    if (s == null) return null;
+    const i = asOf.indexOf(s);
+    return i >= 0 ? i : asOf.push(s) - 1;
+  };
+  const ln: Record<string, FinDerIn[]> = {};
+  const enc = (ins: DerivedInput[]): FinDerIn[] =>
+    ins.map((i) => {
+      if (i.ref.startsWith("c:")) {
+        const k = i.ref.slice(2);
+        const sub = lines.get(k);
+        if (sub && !ln[k]) {
+          ln[k] = []; // 전개 중 표시(순환 참조 방지)
+          ln[k] = enc(sub);
+        }
+      }
+      const t: FinDerIn = [i.ref, i.op, i.role ?? null, i.v ?? null, ai(i.asOf), i.x?.ref ?? null, i.x?.v ?? null, ai(i.x?.asOf)];
+      while (t.length > 2 && t[t.length - 1] == null) t.pop();
+      return t;
+    });
+  const rev: Record<string, FinDerIn[]> = {};
+  let at: string | null = null;
+  for (const c of cols) {
+    const mv = a.metrics.revenue.values[c.key];
+    if (!mv?.inputs || mv.v == null) continue;
+    rev[c.key] = enc(mv.inputs);
+    at ??= mv.calculatedAt ?? a.at;
+  }
+  if (!at) return null;
+  return { rev, ...(Object.keys(ln).length ? { ln } : {}), ...(asOf.length ? { a: asOf } : {}), at };
+}
+
 export function toSymDoc(a: FinAssembly): FinSymDoc {
   const seen = new Set<string>();
   const cols: Column[] = [];
@@ -40,6 +80,7 @@ export function toSymDoc(a: FinAssembly): FinSymDoc {
     const e = excOf(mv);
     if (e) x[c.key] = e;
   }
+  const der = toDer(a, cols);
   return {
     _id: `${a.profile.market}:${a.profile.symbol}`,
     ev: ENGINE_VERSION, sv: SCHEMA_VERSION, at: new Date(), la: a.latestAccn,
@@ -48,7 +89,8 @@ export function toSymDoc(a: FinAssembly): FinSymDoc {
     c: cols.map(colTuple),
     m: { rev: cols.map((c) => rev[c.key]?.v ?? null) },
     x: { rev: x },
-    ...(a.issues.length ? { i: a.issues.map((q) => [q.col, q.rev, q.other, q.unv] as [string, string[], string[], string[]]) } : {}),
+    ...(der ? { d: der } : {}),
+    ...(a.issues.length ? { i: a.issues.map((q) => (q.der?.length ? [q.col, q.rev, q.other, q.unv, q.der] : [q.col, q.rev, q.other, q.unv]) as [string, string[], string[], string[], string[]?]) } : {}),
   };
 }
 

@@ -1,6 +1,6 @@
 # 재무 숫자 5층 구조 — 설계 (2026-09-25, 오너 결정 반영)
 
-> 변경 이력: 2026-09-25 원공시 → 최신 판본 우선(외부 대조 근거)
+> 변경 이력: 2026-09-25 원공시 → 최신 판본 우선(외부 대조 근거) · 2026-09-26 파생값 입력 구조(§2.1, 엔진판 5)
 
 > **원칙 — 숫자의 오차가 없어야 한다. 정의의 차이가 아닌 수의 차이는 심각한 오류다.**
 > 모든 차이는 ① 일치 ② 정의 차이(분해식이 정확히 성립) ③ 오류 셋 중 하나로 닫는다.
@@ -46,7 +46,8 @@ type FormType = "10-K" | "10-K/A" | "10-Q" | "10-Q/A" | "20-F" | "20-F/A" | "40-
 type SourceId = "sec-cf" | "sec-inst" | "sec-htm" | "yahoo" | "infomax" | "ecos" | "dart";
 
 /** 0층 — 모든 값에 붙는 출처. */
-interface Prov { accn: string | null; form: FormType; filed: string | null; source: SourceId; dims?: Record<string, string> }
+interface Prov { accn: string | null; form: FormType; filed: string | null; source: SourceId; dims?: Record<string, string>;
+  concept?: string; start?: string | null; end?: string; unit?: string }   // 값 하나의 사실 좌표 — 1층이 ReadValue 에 채움(§2.1)
 
 /** 완전성 비트마스크. 0 = 완전. 실패를 다른 원천으로 조용히 대체하지 않고 이 비트로 남긴다. */
 const enum Gap {
@@ -68,7 +69,7 @@ interface RawFiling {
 interface RawFact { concept: string; start: string | null; end: string; val: number; unit: string; dims: Record<string, string>; decimals: number | null; prov: Prov }
 
 /** 1층 산출 — 판본이 확정된 값. */
-interface ReadValue { val: number; unit: "USD" | "KRW" | "shares" | "USD/shares"; prov: Prov; why?: ReadWhy }
+interface ReadValue { val: number; unit: string; prov: Prov; why?: ReadWhy }   // unit = 공시 단위 그대로(TWD 등)
 type ReadWhy =
   | { k: "fx"; cur: string; rate: number; basis: "avg" | "spot" }
   | { k: "yahoo-q"; through: string }
@@ -96,7 +97,8 @@ type LineRole = "revenue" | "revenue.total" | "revenue.net" | "revenue.nonop" | 
 interface AssembledIs { col: Column; lines: StmtLine[]; identity: { ok: boolean; fails: string[] } }
 
 /** 3층 — 지표 값. 파생은 같은 기준(같은 열 키·같은 end)일 때만. */
-interface MetricValue { v: number | null; col: string; end: string; line: string | null; rule: string; gaps: number; why?: ReadWhy }
+interface MetricValue { v: number | null; col: string; end: string; line: string | null; rule: string; gaps: number; why?: ReadWhy;
+  inputs?: DerivedInput[]; calculatedAt?: string }   // §2.1 — rule·why 는 호환용으로 유지
 interface MetricSeries { metric: "revenue"; unit: "USD" | "KRW"; values: Record<string, MetricValue> }
 interface CompanyProfile {
   market: Market; symbol: string; cik: string; sic: number | null;
@@ -104,6 +106,39 @@ interface CompanyProfile {
   filer: "domestic" | "20-F" | "40-F"; adrRatio: number; reportingCurrency: string;
 }
 ```
+
+### 2.1 파생값 입력 구조 (엔진판 5, 2026-09-26)
+
+파생값(Q4 = FY − 9M, 누적 차 분기, LTM, 환산, 여러 줄을 합친 지표)마다 "무엇을 어떤 부호로 더했나"를 구조로 남긴다
+(`rule`·`why` 문자열은 호환용으로 그대로). 값 = **Σ op × 값(ref) × (x ? x.v : 1)**.
+
+```ts
+interface DerivedInput { ref: string; op: 1 | -1; role?: string; v?: number; asOf?: string; x?: MarketInput }
+interface MarketInput { ref: string; v: number; asOf: string }   // 곱하는 시장 데이터(환율)
+```
+
+| ref | 뜻 | 값 저장 |
+|---|---|---|
+| `f:{accn}\|{개념}\|{start}\|{end}[\|축=멤버,…]` | SEC 사실(보고 통화) — accn + CIK 로 원공시를 다시 읽음 | 안 함(참조만) |
+| `c:{열키}\|{줄id}` | 저장 칸(`fin_stmt`) — 칸이 파생이면 그 칸 입력으로 **재귀 전개** | 안 함 |
+| `y:{Yahoo 필드}\|{분기말}` | Yahoo 분기(20-F·40-F LTM) — 원천을 저장하지 않으므로 | `v`·`asOf` |
+| `x:{통화}\|avg\|{start}\|{end}` | 기간 평균 환율(`x` 자리) | `v`·`asOf` |
+
+- **1층**이 만든다(`read/index.ts` `value()`): 구성 공시마다 실제로 읽은 사실(차원 멤버·개념 대체·앞선 판본 정밀값 포함)을
+  `f:` 로, 구간 환율을 `x` 로. 사실 1개를 그 공시의 그 개념 그대로 읽은 칸은 입력을 남기지 않는다(열 출처 = 칸 출처, §3.2).
+  role: `fy`·`9m`·`ytd`·`ytd-prior`·`q`·`cum`·`cum-prev`·`yq`(3층 `total`·`nonop`·`nii`·`nonii`).
+- **3층**은 줄 하나를 쓰면 그 줄의 입력을 그대로, 여러 줄을 합치면(`override:total-nonop`·`nii+nonii`) 같은 열의 `c:` 칸 참조를 남긴다.
+- **마무리**(`derived.ts`, index.ts 가 호출): ① 참조 압축 — `f:` 가 저장 칸(단일 공시 열·입력 없는 칸)과 같은 사실(같은 accn·
+  개념·기간 ±3일·같은 값)이면 `c:` 로(예: Q4 = `c:FY2025|…` − `f:…9개월`). ② **자기 검사** — `f:` 는 원천에서 되읽고
+  (`UsReader.readRef`), `c:` 는 그 칸 값(파생 칸은 재귀 검사), 시장 데이터는 기록 값으로 합을 다시 내 값과 비교(부동소수 잡음
+  한도 8ε × 항 수 × Σ|항|). 불일치·참조 해석 실패는 값을 두고 `issues[].der`·경고·`fin_sym.i` 5번째 칸으로 표시(조용히 통과 금지).
+  ③ `calculatedAt` 기록.
+- 저장(§3.2 `d`): `{ rev: {열키: 입력[]}, ln: {"열키|줄id": 입력[]}(rev 가 c: 로 가리킨 파생 칸 — 재귀 전개용), a: asOf 표, at }`,
+  입력 1건 = 튜플 `[ref, op, role, v, asOf번호, x.ref, x.v, x.asOf번호]`(뒤쪽 null 생략). 원문 URL 은 저장하지 않는다.
+- 크기(2026-09-26 실측, 유니버스 47종목 비저장 조립): `d` 합계 **83KB**(일반 10-K 종목 1.1~1.7KB, 20-F 2.4~2.8KB, XOM 15.6KB —
+  차원 멤버 입력), `fin_sym` 47건 267KB → 350KB. `fin_stmt` 는 변화 없음.
+- 검증기는 이 입력 목록을 대조만 하고 입력값 자체는 원자료를 독립 판독해 확인한다(§1 공통모드 차단 유지). 다음 지표(성장률·
+  EV·멀티플)는 가격 입력(`asOf` 필수)을 같은 형식으로 추가한다.
 
 - 3층 시그니처: `revenue(cols: AssembledIs[], co: CompanyProfile): MetricSeries`.
 - 회사 유형(`type`)은 1층 `read/profile.ts` 한 곳에서 판정(SIC + 공시 구조) — 지금처럼 `isFinancialCompany`·`financialSector`·SIC 범위가 모듈마다 따로 있지 않게.
@@ -160,7 +195,8 @@ interface CompanyProfile {
 - `i`(fin_sym, 선택): 조립 항등식 불성립 열 `[열키, 매출 경로 불성립[], 매출 외 줄 불성립[], 매출 경로 판정 불완전[]]` — 매출
   경로 완전 판정 불성립이면 그 열 `m.rev` 는 null, 판정 불완전이면 값은 두고 "항등식 미검증"(`revenue.md` §6.1, 4번째 칸은
   엔진판 4부터). `ck`(선택): 배치가 "새 정기공시 없음"을 마지막으로 확인한 시각(§5.1). 엔진판 3(2026-09-25)부터.
-- 예외 코드 `k`: `fx` 환산(`r`=환율), `yq` 20-F·40-F Yahoo 분기, `d` 파생 구성 `[accn, 부호]`.
+- 예외 코드 `k`: `fx` 환산(`r`=환율), `yq` 20-F·40-F Yahoo 분기, `d` 파생 구성 `[accn, 부호]`(호환용 — 구조는 아래 `d`).
+- `d`(fin_sym, 엔진판 5부터): 파생값 입력 구조(§2.1) — 매출 칸별 입력 + 참조된 파생 칸 입력 + asOf 표 + 계산 시각.
   **예외가 아닌 칸은 출처를 따로 적지 않는다**(열 출처 = 칸 출처) — 반올림 재태깅 제거
   (`dropRoundedRetags`)로 버려진 값은 애초에 후보에서 빠지므로 별도 예외 코드가 없다. (태그 정정
   판정용 `tc`·`rk` 코드는 2026-09-25 최신 판본 우선 회귀로 삭제 — §2 변경 이력 참고.)

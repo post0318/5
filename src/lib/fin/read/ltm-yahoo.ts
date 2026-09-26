@@ -44,7 +44,7 @@ export function sameInUnit(sec: number, yv: number): boolean {
 }
 
 export type YahooLtm =
-  | { ok: true; usd: number; start: string; through: string; quarters: string[] }
+  | { ok: true; usd: number; start: string; through: string; quarters: string[]; terms: { start: string; end: string; v: number; rate: number }[] }
   | { ok: false; reason: string };
 
 /**
@@ -76,10 +76,13 @@ export function yahooLtmOf(
   const missing = last4.filter((d) => qBy.get(d)?.[field] == null);
   if (missing.length) return { ok: false, reason: `Yahoo 분기 결측(${missing.join("·")})` };
   let usd = 0;
+  const terms: { start: string; end: string; v: number; rate: number }[] = [];
   for (const d of last4) {
-    const r = fx.avg(addDay(monthEndShift(d, -3), 1), d);
+    const qs = addDay(monthEndShift(d, -3), 1);
+    const r = fx.avg(qs, d);
     if (r == null) return { ok: false, reason: `환율 없음(${d} 분기)` };
     usd += qBy.get(d)![field] * r;
+    terms.push({ start: qs, end: d, v: qBy.get(d)![field], rate: r });
   }
-  return { ok: true, usd, start: addDay(monthEndShift(last4[0], -3), 1), through: newQ[k - 1], quarters: last4 };
+  return { ok: true, usd, start: addDay(monthEndShift(last4[0], -3), 1), through: newQ[k - 1], quarters: last4, terms };
 }

@@ -2,6 +2,7 @@ import "server-only";
 import { latestPeriodicAccn, UsReader } from "./read";
 import { assembleIncomeStatements } from "./assemble/is";
 import { revenue } from "./metrics/revenue";
+import { finalizeDerived } from "./derived";
 import { ENGINE_VERSION, markFailed, persist, readStmt, readSym, readSymMeta, toStmtDoc, toSymDoc, touchChecked } from "./store";
 import { Gap, gapNames, type FinAssembly, type Market } from "./types";
 import type { FinStmtDoc, FinSymDoc } from "../db/fin";
@@ -37,15 +38,20 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
   const colsGaps = [...st.annual, ...st.quarterly].reduce((g, a) => g | a.col.gaps, 0);
   const cols = dedupe([...st.annual, ...st.quarterly]);
   const rev = revenue(cols, reader.profile);
+  const at = new Date().toISOString();
+  // 파생값 입력 참조 압축·자기 검사(입력 합 = 값) — 불일치는 값을 두고 issues.der·경고로(조용히 통과시키지 않음)
+  const derErr = await finalizeDerived(reader, cols, rev, at);
   // 조립 항등식 불성립(Gap.IDENTITY) 노출 — 매출 경로는 3층이 이미 값을 비웠고(reason), 그 외 줄은 값을 두고 경고로만
   const issues: FinAssembly["issues"] = [];
   const warnings = [...reader.warnings];
   for (const a of cols) {
-    if (a.identity.ok && !rev.values[a.col.key]?.unv?.length) continue;
+    const der = derErr.get(a.col.key) ?? [];
+    if (a.identity.ok && !rev.values[a.col.key]?.unv?.length && !der.length) continue;
     const r = rev.values[a.col.key]?.idFails ?? [];
     const unv = rev.values[a.col.key]?.unv ?? [];
     const other = a.identity.fails.filter((f) => !r.includes(f) && !unv.includes(f));
-    issues.push({ col: a.col.key, rev: r, other, unv });
+    issues.push({ col: a.col.key, rev: r, other, unv, ...(der.length ? { der } : {}) });
+    if (der.length) warnings.push(`${a.col.key} 매출 파생값 입력 자기 검사 불일치(값 유지): ${der.join("; ")}`);
     if (r.length) warnings.push(`${a.col.key} 매출 비움 — 조립 항등식 불성립(매출 줄 포함): ${r.join("; ")}`);
     if (unv.length) warnings.push(`${a.col.key} 매출 항등식 미검증(판정 불완전 — 값 유지, 검증기 SEC 직접 대조): ${unv.join("; ")}`);
     if (other.length) warnings.push(`${a.col.key} 조립 항등식 불성립(매출 외 줄 — 값 유지, 다음 지표 미결): ${other.join("; ")}`);
@@ -59,7 +65,7 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
     warnings,
     issues,
     latestAccn: reader.latestPeriodic(),
-    at: new Date().toISOString(),
+    at,
   };
   const id = `${market}:${sym}`;
   const stmts = { annual: toStmtDoc(`${id}:is:a`, st.annual, st.labels), quarterly: toStmtDoc(`${id}:is:q`, st.quarterly, st.labels) };

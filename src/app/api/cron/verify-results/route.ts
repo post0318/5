@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
-import { verifyResultsCol, type VerifyResultDoc } from "@/lib/db/verify-results";
+import { AUDIT_VERDICTS, verifyResultsCol, type AuditRow, type VerifyResultDoc } from "@/lib/db/verify-results";
 import { isMarketId } from "@/lib/markets/types";
 import { listUniverseDistinct } from "@/lib/universe/repo";
 
@@ -32,6 +32,25 @@ const str = (v: unknown, max = 500) => (typeof v === "string" ? v.slice(0, max) 
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const arr = <T>(v: unknown, f: (x: Record<string, unknown>) => T, max = 2000): T[] =>
   Array.isArray(v) ? v.slice(0, max).filter((x) => x && typeof x === "object").map((x) => f(x as Record<string, unknown>)) : [];
+const numOrNull = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+/** 감사표 한 줄 — 판정 값이 목록 밖이면 버린다 */
+const auditRow = (x: Record<string, unknown>): AuditRow | null => {
+  const verdict = AUDIT_VERDICTS.find((v) => v === x.verdict);
+  if (!verdict) return null;
+  return {
+    metric: str(x.metric, 40),
+    period: str(x.period, 20),
+    basis: str(x.basis, 80),
+    app: numOrNull(x.app),
+    sec: numOrNull(x.sec),
+    yahoo: numOrNull(x.yahoo),
+    sa: numOrNull(x.sa),
+    infomax: numOrNull(x.infomax),
+    verdict,
+    note: str(x.note, 300),
+    closed: x.closed === true,
+  };
+};
 const issue = (x: Record<string, unknown>) => ({ layer: str(x.layer, 4), name: str(x.name, 200), col: str(x.col, 20), note: str(x.note, 1000) || undefined });
 
 /** 받은 결과를 스키마대로 다시 만든다 — _id·알 수 없는 필드는 버린다 */
@@ -59,6 +78,7 @@ function sanitize(r: Record<string, unknown>): Omit<VerifyResultDoc, "_id"> | nu
       note: str(x.note, 1000) || undefined,
     })),
     errors: Array.isArray(r.errors) ? r.errors.slice(0, 100).map((e) => str(e, 500)) : [],
+    ...(Array.isArray(r.audit) ? { audit: arr(r.audit, auditRow, 100).filter((x): x is AuditRow => x != null) } : {}),
   };
 }
 

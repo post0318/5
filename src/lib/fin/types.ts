@@ -19,6 +19,14 @@ export interface Prov {
   filed: string | null;
   source: SourceId;
   dims?: Record<string, string>;
+  /**
+   * 값 하나의 사실 좌표 — 개념·기간·단위(파생값 입력 추적, architecture.md §2.1). 1층이 `ReadValue` 를 만들 때 채운다(열 머리글
+   * `Column.src` 처럼 공시 단위 출처에는 없음). 원문 URL 은 저장하지 않는다 — accn + CIK 로 생성.
+   */
+  concept?: string;
+  start?: string | null;
+  end?: string;
+  unit?: string;
 }
 
 /** 완전성 비트마스크. 0 = 완전. 실패를 다른 원천으로 조용히 대체하지 않고 이 비트로 남긴다. */
@@ -76,9 +84,36 @@ export interface RawFiling {
 /** 1층 산출 — 판본이 확정된 값. */
 export interface ReadValue {
   val: number;
-  unit: "USD" | "KRW" | "shares" | "USD/shares";
+  /** 공시 단위 그대로(보고 통화 "USD"·"TWD"…, "shares" 등) — prov.unit 과 같음 */
+  unit: string;
+  /** concept·start·end·unit 까지 채운 출처 */
   prov: Prov;
   why?: ReadWhy;
+}
+
+/**
+ * 파생값 입력(architecture.md §2.1) — 값 = Σ op × 값(ref) × (x ? x.v : 1). 값을 복사하지 않고 참조만 남긴다(시장 데이터만 값·기준 시각).
+ *  - `f:{accn}|{개념}|{start}|{end}[|축=멤버,…]` SEC 사실(보고 통화) — accn + CIK 로 원공시를 다시 읽어 재현
+ *  - `c:{열키}|{줄id}`                          저장 칸(fin_stmt) — 그 칸이 파생이면 그 칸의 입력으로 재귀 전개
+ *  - `y:{Yahoo 필드}|{분기말}`                   Yahoo 분기(20-F·40-F LTM, 보고 통화) — 원천을 저장하지 않으므로 v·asOf 동반
+ *  - `x:{통화}|avg|{start}|{end}`               기간 평균 환율(통화 → USD) — `x` 자리(곱하는 입력), v·asOf 동반
+ */
+export interface DerivedInput {
+  ref: string;
+  op: 1 | -1;
+  /** 구성 역할(fy·9m·ytd·ytd-prior·cum·cum-prev·yq·nonop …) — 표시용 */
+  role?: string;
+  /** 시장 데이터 입력만 — 값·조회 시각 */
+  v?: number;
+  asOf?: string;
+  /** 곱할 시장 데이터(환율) */
+  x?: MarketInput;
+}
+export interface MarketInput {
+  ref: string;
+  v: number;
+  /** 조회 시각(ISO) — 화면 간 다른 시점 시세를 구분 */
+  asOf: string;
 }
 export type ReadWhy =
   | { k: "fx"; cur: string; rate: number; basis: "avg" | "spot" }
@@ -108,6 +143,8 @@ export interface StmtLine {
   role: LineRole | null;
   v: number | null;
   why?: ReadWhy;
+  /** 파생 칸(Q4·누적 차·LTM·환산)의 입력 — 없으면 열 출처 = 칸 출처 */
+  inputs?: DerivedInput[];
 }
 export interface AssembledIs {
   col: Column;
@@ -132,6 +169,10 @@ export interface MetricValue {
   rule: string;
   gaps: number;
   why?: ReadWhy;
+  /** 파생값 입력(구조) — 없으면 열 출처 = 값 출처. `rule`·`why` 는 호환용으로 그대로 둔다 */
+  inputs?: DerivedInput[];
+  /** 파생값 계산 시각(ISO) — inputs 가 있을 때만 */
+  calculatedAt?: string;
   /** 값을 비운 사유(예: 매출 줄이 걸린 조립 항등식 불성립) */
   reason?: string;
   /** 이 값을 비운 항등식 불성립(매출 경로) — AssembledIs.identity.fails 의 부분집합 */
@@ -167,9 +208,10 @@ export interface FinAssembly {
   warnings: string[];
   /**
    * 조립 항등식 불성립 열 — rev = 매출 경로 완전 판정 불성립(그 열 매출을 비움), unv = 매출 경로 판정 불완전(값은 두고 "항등식
-   * 미검증" — 검증기 SEC 직접 대조 필수), other = 매출과 무관한 줄(값은 둠, 다음 지표 미결)
+   * 미검증" — 검증기 SEC 직접 대조 필수), other = 매출과 무관한 줄(값은 둠, 다음 지표 미결), der = 파생값 입력 자기 검사
+   * 불일치(입력을 부호대로 더해 값이 재현되지 않음 — 값은 두고 표시, derived.ts)
    */
-  issues: { col: string; rev: string[]; other: string[]; unv: string[] }[];
+  issues: { col: string; rev: string[]; other: string[]; unv: string[]; der?: string[] }[];
   /** 가장 최근 정기공시 accn */
   latestAccn: string | null;
   at: string;

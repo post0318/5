@@ -53,6 +53,7 @@
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { buildAudit } from "./metrics/audit.mjs";
 
 // ── 인자 ─────────────────────────────────────────────────────────────
 const args = {};
@@ -78,6 +79,9 @@ if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) die(`--concurrency 는 1 
 if (args.limit != null && !(Number.isInteger(Number(args.limit)) && Number(args.limit) > 0)) die(`--limit 은 양의 정수`);
 const BASE = String(args.base ?? "http://localhost:3000").replace(/\/$/, "");
 const EXTERNAL = !args["no-external"];
+/** 검증이 닫힌 지표(관리자 화면 감사표의 closed) — 정답 데이터셋(골든셋)의 GOLDEN_CHECKS 와 같은 목록이어야 한다.
+ *  지표를 닫을 때 scripts/metrics/golden.mjs 의 GOLDEN_CHECKS 와 함께 갱신할 것(revenue ↔ "매출") */
+const CLOSED_METRICS = ["매출"];
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -186,6 +190,13 @@ function vsSource(app, src, tol, srcNote = "") {
   const vals = { app: app ?? null, src: src ?? null };
   if (src == null) return { status: NA, note: `원자료 없음${srcNote ? ` (${srcNote})` : ""}`, ...vals };
   if (app == null) return { status: FAIL, note: `원자료 ${src} 있는데 앱 빈칸${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
+  // 정확 일치(오너 원칙) — 둘 다 정수(달러·주 단위 원자료와 그 합·차)면 상대 오차 없이 완전히 같아야 한다. 상대 1e-9 는
+  // 4천억 달러에서 약 400달러를 통과시켰다(골든셋 주입 시험 2026-09-26). 환율 곱·주당값 등 소수 계산값만 tol(부동소수 오차) 적용
+  if (tol <= EXACT && Number.isInteger(app) && Number.isInteger(src)) {
+    return app === src
+      ? { status: PASS, ...(srcNote ? { note: srcNote } : {}), ...vals }
+      : { status: FAIL, note: `앱 ${app} vs 원자료 ${src} (차 ${app - src})${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
+  }
   const d = Math.abs(app - src) / Math.max(Math.abs(src), 1e-12);
   return d <= tol
     ? { status: PASS, ...(srcNote ? { note: srcNote } : {}), ...vals }
@@ -1920,8 +1931,8 @@ async function verifyUs(sym) {
         const r = vsSource(x.eps, expected, EXACT, "");
         const ok = x.eps != null && Math.abs(x.eps - expected) <= EXACT * Math.max(1, Math.abs(expected));
         add("A", "EPS 앱 = SEC 공시 EPS(분할 보정)", c, x.eps == null ? r : ok
-          ? { status: PASS, ...(k !== 1 ? { note: `분할 보정 ÷${k}(Yahoo 분할 이력)` } : {}) }
-          : { status: FAIL, note: `앱 ${x.eps} vs 공시 ${e.val}${k !== 1 ? ` ÷ 분할 ${k}` : ""} = ${expected}${splitErr ? ` · ${splitErr}` : ""}` });
+          ? { status: PASS, ...(k !== 1 ? { note: `분할 보정 ÷${k}(Yahoo 분할 이력)` } : {}), app: x.eps, src: expected }
+          : { status: FAIL, note: `앱 ${x.eps} vs 공시 ${e.val}${k !== 1 ? ` ÷ 분할 ${k}` : ""} = ${expected}${splitErr ? ` · ${splitErr}` : ""}`, app: x.eps, src: expected });
       } else if (contDiscEps(x.date)) {
         // 총 희석 EPS 태그가 없고 계속영업·중단영업 희석 EPS 가 같은 10-K 에 둘 다 공시된 해 — 두 태그값의 합이 SEC 기준
         // (DELL FY2022 = 6.26 + 0.76). 공시 총 EPS 와 반올림 0.01 차이가 날 수 있어 허용치 없이 태그값 합 그대로 비교
@@ -1932,8 +1943,8 @@ async function verifyUs(sym) {
           const expected = (cd.cont + cd.disc) / k;
           const basis = `계속영업 ${cd.cont} + 중단영업 ${cd.disc} 희석 EPS(${cd.filed} 10-K, 총 EPS 태그 없음)${k !== 1 ? ` ÷ 분할 ${k}` : ""}`;
           add("A", "EPS 앱 = SEC 공시 EPS(분할 보정)", c, x.eps == null ? vsSource(null, expected, 0, basis)
-            : Math.abs(x.eps - expected) <= 1e-9 * Math.max(1, Math.abs(expected)) ? { status: PASS, note: basis }
-            : { status: FAIL, note: `앱 ${x.eps} vs ${basis} = ${expected}` });
+            : Math.abs(x.eps - expected) <= 1e-9 * Math.max(1, Math.abs(expected)) ? { status: PASS, note: basis, app: x.eps, src: expected }
+            : { status: FAIL, note: `앱 ${x.eps} vs ${basis} = ${expected}`, app: x.eps, src: expected });
         }
       } else {
         if (!inst.size && !instErr) inst = await classFactsFromInstances(cik).catch((err) => { instErr = String(err).slice(0, 80); hardErrors.push(`SEC 인스턴스(클래스별 EPS) 판독 실패: ${instErr}`); return new Map(); });
@@ -3116,7 +3127,16 @@ async function verifyUs(sym) {
 
     for (const e of errs) { review.push({ item: "외부 소스 조회 실패", note: e }); hardErrors.push(`외부 소스 조회 실패 — ${e}`); }
   }
-  return { sym, checks, review, hardErrors, revErrors };
+  // 관리자 화면 감사표(--post) — 최근 사업연도 열·LTM. 이미 계산한 값만 옮긴다(scripts/metrics/audit.mjs)
+  const fyLast = Object.keys(H).filter((c) => c !== "LTM").sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1);
+  const auditApp = Object.fromEntries([fyLast, "LTM"].filter((c) => c && H[c]).map((c) => [c, {
+    date: H[c].date, 매출: H[c].rev, 영업이익: IS[c]?.op ?? null, 순이익: H[c].ni, EPS: H[c].eps,
+    // BPS 는 개요(verify-row)에만 있다 — 연도 열은 앱이 BPS 를 내지 않아 빈칸
+    BPS: c === "LTM" ? row?.overview?.multiples?.bps ?? null : null,
+    시가총액: H[c].mc, EV: H[c].ev, EBITDA: H[c].ebitda, PER: H[c].per, PBR: H[c].pbr, PSR: H[c].psr, "EV/EBITDA": H[c].evx,
+  }]));
+  const audit = buildAudit({ app: auditApp, cols: [fyLast, "LTM"].filter(Boolean), checks, review, closed: CLOSED_METRICS });
+  return { sym, checks, review, hardErrors, revErrors, audit };
 }
 
 // ── 한국 종목 1개 (kr/dart-ev.ts 단일 기준) ─────────────────────────────
@@ -3440,6 +3460,7 @@ if (args.post) {
       fails: pick(FAIL),
       unverifiable: pick(NA),
       external: rv,
+      ...(r.audit ? { audit: r.audit } : {}),
       errors: [r.error, r.skipped && !r.allowedSkip ? `건너뜀: ${r.skipped}` : null, ...(r.hardErrors ?? [])].filter(Boolean),
     };
   });

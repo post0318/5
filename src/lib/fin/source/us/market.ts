@@ -22,6 +22,11 @@ export async function fxDaily(cur: string): Promise<{ date: string; rate: number
   fxMem.set(cur, { at: Date.now(), data });
   return data;
 }
+/** 환율 원천 조회 시각(ISO) — 파생값 입력의 기준 시각(asOf). 조회 전이면 null */
+export function fxFetchedAt(cur: string): string | null {
+  const hit = fxMem.get(cur);
+  return hit ? new Date(hit.at).toISOString() : null;
+}
 
 /** 현재 ADR 기준 주식수(인포맥스 → Yahoo). 없으면 null */
 export async function currentQuoteShares(symbol: string): Promise<number | null> {

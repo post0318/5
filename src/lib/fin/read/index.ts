@@ -4,10 +4,10 @@ import {
   resolveCik, withFetchScope, type Submissions,
 } from "../source/us/sec";
 import { currentQuoteShares, yahooQuarters, type YahooFundamentalsRow } from "../source/us/market";
-import { Gap, type CompanyProfile, type FormType, type Prov, type RawFact, type ReadWhy } from "../types";
+import { Gap, type CompanyProfile, type DerivedInput, type FormType, type Prov, type RawFact, type ReadValue, type ReadWhy } from "../types";
 import { dropRoundedRetags, latest, isPeriodic } from "./vintage";
 import { addDays, buildCalendar, days, durKind, fiscalYearOf, isStaleAnnual, near, shiftYear, type FiscalYear } from "./period";
-import { makeFx, reportingCurrency, type Fx } from "./fx";
+import { fxAvgRef, makeFx, reportingCurrency, type Fx } from "./fx";
 import { canonical } from "./ifrs";
 import { companyType, filerKind } from "./profile";
 import { adrRatioOf } from "./adr";
@@ -46,7 +46,13 @@ const PERIODIC_FORM = /^(10-[QK]|20-F|40-F)(\/A)?$/;
 /** companyfacts 에 들어 있는 네임스페이스 — 나머지(회사 고유·srt)는 인스턴스에서 읽는다 */
 const CF_NS = new Set(["us-gaap", "ifrs-full", "dei", "srt"]);
 
-export interface Part { start: string; end: string; accn: string | null; form: FormType; filed: string | null; sign: 1 | -1 }
+/** 열 구성 공시 하나(기간·판본·부호). role = 파생값 입력의 구성 역할(fy·9m·ytd·ytd-prior·q·cum·cum-prev) */
+export interface Part { start: string; end: string; accn: string | null; form: FormType; filed: string | null; sign: 1 | -1; role?: string }
+/**
+ * 구성 공시 하나에서 읽은 값 — val = Σ op × leaves 값. leaves = 실제로 읽은 사실(개념·기간·단위·accn 을 담은 출처 — 차원 합·개념
+ * 대체·두 개념의 차이면 여러 개). 파생값 입력(DerivedInput)의 원천.
+ */
+export interface PartRead { val: number; leaves: { rv: ReadValue; op: 1 | -1 }[] }
 export interface Segment { start: string; end: string; parts: Part[] }
 export interface ColumnSpec {
   key: string;
@@ -66,6 +72,8 @@ export interface CellValue {
   /** 원통화 값(환산 전) — 항등식 검사용 */
   raw: number | null;
   why?: ReadWhy;
+  /** 파생 값(구성 사실 2개 이상 또는 환산)의 입력 — 값 = Σ op × 사실 × 환율 */
+  inputs?: DerivedInput[];
   gaps: number;
 }
 export interface FilingStructure {
@@ -92,6 +100,8 @@ export class UsReader {
     readonly yahoo: { quarterly: YahooFundamentalsRow[]; annual: YahooFundamentalsRow[] } | null,
     public gaps: number,
     readonly warnings: string[],
+    /** Yahoo 분기 조회 시각(ISO) — 20-F·40-F LTM 입력의 asOf */
+    readonly yahooAt: string | null = null,
   ) {
     this.anchorFacts = ANCHOR.flatMap((c) => this.facts(c)).filter((f) => f.start);
     const annual = uniq(this.anchorFacts.filter((f) => ANNUAL_FORM.test(f.prov.form) && durKind(f.start, f.end) === "FY").map((f) => ({ start: f.start!, end: f.end })));
@@ -122,10 +132,12 @@ export class UsReader {
       warnings.push(`환율 조회 실패(${cur})`);
     }
     let yahoo: UsReader["yahoo"] = null;
+    let yahooAt: string | null = null;
     let quoteShares: number | null = null;
     if (filer !== "domestic") {
       try {
         yahoo = await yahooQuarters(symbol);
+        yahooAt = new Date().toISOString();
       } catch {
         gaps |= Gap.YAHOO;
         warnings.push("Yahoo 분기 조회 실패(LTM)");
@@ -136,7 +148,7 @@ export class UsReader {
       market: "us", symbol: symbol.toUpperCase(), cik, sic: sub.sic, type: companyType(sub.sic, idx), filer,
       adrRatio: adrRatioOf(filer !== "domestic", idx, quoteShares), reportingCurrency: cur,
     };
-    return new UsReader(profile, idx, sub, fx, yahoo, gaps, warnings);
+    return new UsReader(profile, idx, sub, fx, yahoo, gaps, warnings, yahooAt);
   }
 
   /** 개념의 사실 — 차원 없는 정기공시 값, 반올림 재태깅 제거 후 */
@@ -166,7 +178,7 @@ export class UsReader {
    * 정확히 같은 금액으로 공시한 다른 매출 계열 개념이 **어느 정기공시에서든** 있었으면(같은 줄이라는 증거 —
    * aliasEvidenceAccn) 그 개념의 9개월 값을 쓴다. 증거가 없으면 null(대체하지 않음 — 공란). 매출 계열 개념끼리만 비교한다.
    */
-  async revenueAliasNine(qname: string, fyPart: Part, ninePart: Part): Promise<number | null> {
+  async revenueAliasNine(qname: string, fyPart: Part, ninePart: Part): Promise<ReadValue | null> {
     const fyDirect = await this.partValue(qname, fyPart);
     if (fyDirect === null || fyDirect === "gap") return null;
     for (const alt of REVENUE_ALIAS_CONCEPTS) {
@@ -176,7 +188,7 @@ export class UsReader {
       const altNine = await this.partValue(alt, ninePart);
       if (altNine === null || altNine === "gap") continue;
       this.warnings.push(`Q4 매출 폴백: ${qname}(9개월 부분 없음) → ${alt} 대체(사업연도 값 증거 공시 ${evidenceAccn}, 9개월 원본 ${ninePart.accn ?? "?"})`);
-      return altNine.val;
+      return altNine;
     }
     return null;
   }
@@ -190,7 +202,7 @@ export class UsReader {
     const hit = this.anchorFacts.filter((x) => near(x.start, start) && near(x.end, end));
     const rev = hit.filter((x) => REVENUE_ANCHOR.has(x.concept));
     const f = latest(rev.length ? rev : hit);
-    return f ? { start: f.start!, end: f.end, accn: f.prov.accn, form: f.prov.form, filed: f.prov.filed, sign: 1 } : null;
+    return f ? { start: f.start!, end: f.end, accn: f.prov.accn, form: f.prov.form, filed: f.prov.filed, sign: 1, role: "fy" } : null;
   }
 
   // ── 열 정의 ──
@@ -220,19 +232,19 @@ export class UsReader {
           const fy = this.sourceOf(y.start, y.end!);
           const nine = y.qEnds[2] ? this.sourceOf(y.start, y.qEnds[2]) : null;
           if (!fy || !nine) continue;
-          out.push({ key, kind: "Q4D", fy: y.fy, fq: 4, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [fy, { ...nine, sign: -1 }] }], gaps: 0 });
+          out.push({ key, kind: "Q4D", fy: y.fy, fq: 4, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [fy, { ...nine, sign: -1, role: "9m" }] }], gaps: 0 });
           continue;
         }
         const direct = this.sourceOf(qs, qe);
         if (direct && durKind(direct.start, direct.end) === "Q") {
-          out.push({ key, kind: "Q", fy: y.fy, fq: q as 1 | 2 | 3, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [direct] }], gaps: 0 });
+          out.push({ key, kind: "Q", fy: y.fy, fq: q as 1 | 2 | 3, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [{ ...direct, role: "q" }] }], gaps: 0 });
           continue;
         }
         // 3개월 값이 없으면 누적 차(각 최신 판본)
         const cum = this.sourceOf(y.start, qe);
         const prev = this.sourceOf(y.start, bounds[q - 1]!);
         if (!cum || !prev) continue;
-        out.push({ key, kind: "Q", fy: y.fy, fq: q as 1 | 2 | 3, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [cum, { ...prev, sign: -1 }] }], gaps: 0 });
+        out.push({ key, kind: "Q", fy: y.fy, fq: q as 1 | 2 | 3, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [{ ...cum, role: "cum" }, { ...prev, sign: -1, role: "cum-prev" }] }], gaps: 0 });
       }
     }
     return out.slice(-n);
@@ -261,8 +273,8 @@ export class UsReader {
     const prior = latest(priorF);
     if (!prior?.start) return { ...base, start: fyY.start, end: fyY.end, segments: [{ start: fyY.start, end: fyY.end, parts: [fyPart] }], gaps: Gap.BASIS_SHIFT };
     const start = addDays(shiftYear(cur.end, -1), 1);
-    const curPart: Part = { start: cur.start, end: cur.end, accn: cur.prov.accn, form: cur.prov.form, filed: cur.prov.filed, sign: 1 };
-    const priorPart: Part = { start: prior.start, end: prior.end, accn: prior.prov.accn, form: prior.prov.form, filed: prior.prov.filed, sign: -1 };
+    const curPart: Part = { start: cur.start, end: cur.end, accn: cur.prov.accn, form: cur.prov.form, filed: cur.prov.filed, sign: 1, role: "ytd" };
+    const priorPart: Part = { start: prior.start, end: prior.end, accn: prior.prov.accn, form: prior.prov.form, filed: prior.prov.filed, sign: -1, role: "ytd-prior" };
     if (this.profile.reportingCurrency !== "USD") {
       const last4 = quarters.filter((q) => q.end <= cur.end).slice(-4);
       if (last4.length === 4 && near(last4[3].end, cur.end) && near(addDays(shiftYear(cur.end, -1), 1), last4[0].start, 12))
@@ -273,19 +285,19 @@ export class UsReader {
 
   // ── 값 ──
 
-  /** 한 공시·기간의 개념 값(원통화). 회사 고유 개념은 인스턴스에서 */
-  async partValue(qname: string, p: Part): Promise<{ val: number; unit: string } | null | "gap"> {
+  /** 한 공시·기간의 개념 값(원통화) — 실제로 읽은 사실의 개념·기간·단위·accn 을 출처에 담는다. 회사 고유 개념은 인스턴스에서 */
+  async partValue(qname: string, p: Part): Promise<ReadValue | null | "gap"> {
     const [ns] = qname.split(":");
     if (CF_NS.has(ns)) {
       // 보고 통화 단위만 — 20-F 의 USD "편의 환산" 태그(단일 환율)는 쓰지 않는다(edgar-foreign.ts 와 같은 규칙)
       const all = this.facts(qname).filter((f) => near(f.start, p.start) && near(f.end, p.end) && f.unit === this.profile.reportingCurrency);
       const same = all.find((f) => f.prov.accn === p.accn);
-      if (same) return { val: same.val, unit: same.unit };
+      if (same) return readValueOf(same);
       // 이 공시 값이 반올림 재태깅으로 버려졌으면 앞선 정밀값(원래 이 공시에 있었음)
       const dropped = this.idx.get(qname).some((f) => f.prov.accn === p.accn && near(f.start, p.start) && near(f.end, p.end));
       if (dropped) {
         const l = latest(all);
-        if (l) return { val: l.val, unit: l.unit };
+        if (l) return readValueOf(l);
       }
       // companyfacts 에 없으면 그 공시에 없는 값(인스턴스로 보완된 공시는 idx 에 이미 들어 있다)
       return null;
@@ -294,7 +306,31 @@ export class UsReader {
     const inst = await this.instance(p.accn, p.form, p.filed);
     if (!inst) return "gap";
     const f = inst.find((x) => x.concept === qname && !Object.keys(x.dims).length && near(x.start, p.start) && near(x.end, p.end) && x.unit === this.profile.reportingCurrency);
-    return f ? { val: f.val, unit: f.unit } : null;
+    return f ? readValueOf(f) : null;
+  }
+
+  /**
+   * 파생값 입력 참조(`f:` SEC 사실) 되읽기 — 자기 검사(derived.ts)가 입력이 값을 재현하는지 원천에서 다시 확인한다. 표준 개념은
+   * companyfacts(보완 공시 포함), 회사 고유 개념·차원 값은 그 공시 인스턴스. 보고 통화 단위만. 못 찾으면 null.
+   */
+  async readRef(ref: string): Promise<number | null> {
+    const m = /^f:([^|]+)\|([^|]+)\|([^|]*)\|([^|]+)(?:\|(.+))?$/.exec(ref);
+    if (!m) return null;
+    const [, accn, concept, start, end, dimStr] = m;
+    const dims: Record<string, string> = {};
+    for (const kv of dimStr ? dimStr.split(",") : []) {
+      const [a, b] = kv.split("=");
+      dims[a] = b;
+    }
+    const match = (f: RawFact) =>
+      f.concept === concept && f.prov.accn === accn && (f.start ?? "") === start && f.end === end && f.unit === this.profile.reportingCurrency &&
+      Object.keys(f.dims).length === Object.keys(dims).length && Object.entries(dims).every(([a, b]) => f.dims[a] === b);
+    if (CF_NS.has(concept.split(":")[0]) && !dimStr) {
+      const f = this.idx.get(concept).find(match);
+      if (f) return f.val;
+    }
+    const inst = await this.instance(accn, "10-K", null);
+    return inst?.find(match)?.val ?? null;
   }
 
   /** 인스턴스 사실(공시 단위 캐시). 실패 시 null */
@@ -315,18 +351,20 @@ export class UsReader {
   }
 
   /** 차원 값(인스턴스) — 개념·축·멤버 조건에 맞는 값의 합(원통화). 없으면 null */
-  async dimSum(qname: string, axis: string, member: (m: string) => boolean, p: Part): Promise<number | null | "gap"> {
+  async dimSum(qname: string, axis: string, member: (m: string) => boolean, p: Part): Promise<PartRead | null | "gap"> {
     if (!p.accn) return null;
     const inst = await this.instance(p.accn, p.form, p.filed);
     if (!inst) return "gap";
-    let sum: number | null = null;
+    let out: PartRead | null = null;
     for (const f of inst) {
       if (f.concept !== qname || f.unit !== this.profile.reportingCurrency || !near(f.start, p.start) || !near(f.end, p.end)) continue;
       const ks = Object.keys(f.dims);
       if (ks.length !== 1 || ks[0] !== axis || !member(f.dims[axis])) continue;
-      sum = (sum ?? 0) + f.val;
+      out ??= { val: 0, leaves: [] };
+      out.val += f.val;
+      out.leaves.push({ rv: readValueOf(f), op: 1 });
     }
-    return sum;
+    return out;
   }
 
   /**
@@ -334,32 +372,41 @@ export class UsReader {
    * 파생 열의 구성 공시 중 하나라도 그 개념이 없으면 null + BASIS_SHIFT(기준이 섞인 값을 만들지 않는다).
    * `get` 을 주면 개념 대신 그 함수로 공시 값을 얻는다(차원 합 등).
    */
-  async value(qname: string, col: ColumnSpec, get?: (p: Part) => Promise<number | null | "gap">): Promise<CellValue> {
+  async value(qname: string, col: ColumnSpec, get?: (p: Part) => Promise<PartRead | null | "gap">): Promise<CellValue> {
     if (col.yahoo) return this.yahooValue(qname, col);
     let gaps = 0;
     let total = 0, rawTotal = 0;
     let fxWhy: ReadWhy | undefined;
+    const inputs: DerivedInput[] = [];
+    let other = false; // 이 줄 개념의 그 공시 값이 아닌 사실(차원 값·개념 대체·앞선 판본 정밀값)을 읽음
     for (const s of col.segments) {
       let sum = 0, present = 0;
+      const segIn: DerivedInput[] = [];
       for (const p of s.parts) {
-        const r = get ? await get(p) : await this.partValue(qname, p);
+        const r = get ? await get(p) : asPartRead(await this.partValue(qname, p));
         if (r === "gap") { gaps |= Gap.INSTANCE; continue; }
         if (r == null) continue;
-        sum += p.sign * (typeof r === "number" ? r : r.val);
+        sum += p.sign * r.val;
         present++;
+        for (const l of r.leaves) if (l.rv.prov.concept !== qname || l.rv.prov.dims || l.rv.prov.accn !== p.accn) other = true;
+        for (const l of r.leaves) segIn.push({ ref: factRef(l.rv.prov), op: (p.sign * l.op) as 1 | -1, ...(p.role ? { role: p.role } : {}) });
       }
       if (present === 0) return { v: null, raw: null, gaps };
       if (present < s.parts.length) return { v: null, raw: null, gaps: gaps | Gap.BASIS_SHIFT };
       const rate = this.fx ? (this.fx.cur === "USD" ? 1 : this.fx.avg(s.start, s.end)) : null;
       if (rate == null) return { v: null, raw: sum, gaps: gaps | Gap.FX };
-      if (this.fx!.cur !== "USD") fxWhy = { k: "fx", cur: this.fx!.cur, rate, basis: "avg" };
+      const x = this.fx!.cur !== "USD" ? { ref: fxAvgRef(this.fx!.cur, s.start, s.end), v: rate, asOf: this.fx!.asOf } : null;
+      if (x) fxWhy = { k: "fx", cur: this.fx!.cur, rate, basis: "avg" };
+      for (const i of segIn) inputs.push(x ? { ...i, x } : i);
       total += sum * rate;
       rawTotal += sum;
     }
     const parts = col.segments.flatMap((s) => s.parts);
     const why: ReadWhy | undefined =
       parts.length > 1 ? { k: "derived", parts: parts.map((p) => ({ accn: p.accn ?? "", form: p.form, sign: p.sign })) } : fxWhy;
-    return { v: total, raw: rawTotal, why, gaps };
+    // 파생(사실 2개 이상)·환산·다른 사실일 때만 입력을 남긴다 — 그 공시의 이 개념 사실 1개 그대로면 열 출처 = 칸 출처(architecture.md §3.2)
+    const derived = inputs.length > 1 || other || inputs.some((i) => i.x);
+    return { v: total, raw: rawTotal, why, ...(derived ? { inputs } : {}), gaps };
   }
 
   private async yahooValue(qname: string, col: ColumnSpec): Promise<CellValue> {
@@ -371,7 +418,14 @@ export class UsReader {
     if (fyOrig == null || fyOrig === "gap") return { v: null, raw: null, gaps: 0 };
     const r = yahooLtmOf(this.yahoo, field, fyOrig.val, col.yahoo!.fyEnd, this.fx);
     if (!r.ok) return { v: null, raw: null, gaps: Gap.YAHOO };
-    return { v: r.usd, raw: null, why: { k: "yahoo-q", through: r.through }, gaps: 0 };
+    // 입력 = Yahoo 분기(보고 통화) × 그 분기 평균 환율 — 원천을 저장하지 않으므로 값·조회 시각을 같이 남긴다
+    const fx = this.fx;
+    const asOf = this.yahooAt ?? fx.asOf;
+    const inputs: DerivedInput[] = r.terms.map((t) => ({
+      ref: `y:${field}|${t.end}`, op: 1, role: "yq", v: t.v, asOf,
+      x: { ref: fxAvgRef(fx.cur, t.start, t.end), v: t.rate, asOf: fx.asOf },
+    }));
+    return { v: r.usd, raw: null, why: { k: "yahoo-q", through: r.through }, inputs, gaps: 0 };
   }
 
   /** Yahoo LTM 이 성립했을 때의 기간(열 머리글 보정용) */
@@ -419,6 +473,20 @@ export class UsReader {
   latestPeriodic(): string | null {
     return this.sub.recent.find((f) => /^(10-[QK]|20-F|40-F)(\/A)?$/.test(f.form))?.accn ?? null;
   }
+}
+
+function readValueOf(f: RawFact): ReadValue {
+  return { val: f.val, unit: f.unit, prov: { ...f.prov, concept: f.concept, start: f.start, end: f.end, unit: f.unit } };
+}
+
+export function asPartRead(r: ReadValue | null | "gap"): PartRead | null | "gap" {
+  return r === null || r === "gap" ? r : { val: r.val, leaves: [{ rv: r, op: 1 }] };
+}
+
+/** SEC 사실 참조 키 `f:{accn}|{개념}|{start}|{end}[|축=멤버,…]`(types.ts DerivedInput) — readRef 가 되읽는다 */
+export function factRef(p: Prov): string {
+  const dims = p.dims && Object.keys(p.dims).length ? `|${Object.entries(p.dims).map(([a, m]) => `${a}=${m}`).join(",")}` : "";
+  return `f:${p.accn ?? ""}|${p.concept ?? ""}|${p.start ?? ""}|${p.end ?? ""}${dims}`;
 }
 
 function uniq<T extends { start: string; end: string }>(xs: T[]): T[] {
