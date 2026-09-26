@@ -27,9 +27,15 @@ export interface VerifyExternal {
   verdict?: string;
   note?: string;
 }
-/** 감사표 판정 — ① 일치 · ② 정의 차이(원인 확인) · ③ 오류 · NA 대조값 없음 · 미결(닫히지 않은 지표의 원인 미규명 차이) */
-export type AuditVerdict = "①" | "②" | "③" | "NA" | "미결";
-export const AUDIT_VERDICTS: readonly AuditVerdict[] = ["①", "②", "③", "NA", "미결"];
+/**
+ * 감사표 판정 — ① 일치 · ② 정의 차이(원인 확인) · ③ 오류 · SEC(SEC만 확인 · 외부 없음) ·
+ * COMMON 공통모드 — 독립 검증 아님(앱과 같은 규칙·데이터로만 확인됨, ①·②·SEC 로 세지 않음 — 오너 결정 2026-09-26) ·
+ * NA 대조값 없음·검증불가(외부 정밀도 부족) · 미결(닫히지 않은 지표의 원인 미규명 차이)
+ */
+export type AuditVerdict = "①" | "②" | "③" | "SEC" | "COMMON" | "NA" | "미결";
+export const AUDIT_VERDICTS: readonly AuditVerdict[] = ["①", "②", "③", "SEC", "COMMON", "NA", "미결"];
+/** 판정 표시 이름 — COMMON 은 코드값이라 화면에는 이 문구로 */
+export const AUDIT_VERDICT_LABEL: Record<AuditVerdict, string> = { "①": "①", "②": "②", "③": "③", SEC: "SEC", COMMON: "공통모드 — 독립 검증 아님", NA: "NA", 미결: "미결" };
 /** 종목별 감사표 한 줄(scripts/metrics/audit.mjs) — 지표 × (최근 사업연도 열 · LTM). 값이 없거나 정의가 다른 칸은 null */
 export interface AuditRow {
   metric: string;
@@ -58,9 +64,12 @@ export interface VerifyResultDoc {
   base: string;
   /** 검증 당시 저장소 커밋(Actions 의 GITHUB_SHA) */
   commit: string | null;
-  counts: { fail: number; unverifiable: number; pass: number; extAllMatch: number; extMismatch: number; otherReview: number };
+  /** common = 공통모드 검사(통과에 세지 않음), extCommon = 공통모드 소스만 일치한 외부 대조 — 2026-09-26 이전 결과엔 없음 */
+  counts: { fail: number; unverifiable: number; pass: number; common?: number; extAllMatch: number; extCommon?: number; extMismatch: number; otherReview: number };
   fails: VerifyIssue[];
   unverifiable: VerifyIssue[];
+  /** 공통모드 — 독립 검증 아님(앱과 같은 규칙·데이터로 판정한 통과). 2026-09-26 이전 결과엔 없음 */
+  common?: VerifyIssue[];
   external: VerifyExternal[];
   /** 조회 실패 등 실행 자체의 문제 */
   errors: string[];

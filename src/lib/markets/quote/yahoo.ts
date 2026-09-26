@@ -19,6 +19,7 @@ import {
   type YahooSplit,
 } from "../types";
 import { yahooSymbol } from "./symbols";
+import { cleanUsdBars } from "./price-tick";
 
 const YahooFinance = (YahooFinancePkg as { default?: unknown }).default ?? YahooFinancePkg;
 
@@ -429,7 +430,9 @@ export async function fetchYahooEodWithSplits(
         .filter((e) => e.numerator && e.denominator)
         .map((e) => ({ date: isoDate(e.date), ratio: (e.numerator as number) / (e.denominator as number) }))
         .sort((a, b) => a.date.localeCompare(b.date));
-      if (bars.length) return { bars, splits };
+      // 미국(달러 호가) — 실제 체결가를 호가 단위로 정리(price-tick.ts, 오너 결정 2026-09-26). 분할 이력이 오늘까지
+      // 다 있을 때만(opts.to 를 과거로 주면 그 뒤 분할이 빠져 조정가를 실제 가격으로 되돌릴 수 없다)
+      if (bars.length) return { bars: market === "us" && !opts.to ? cleanUsdBars(bars, splits) : bars, splits };
     } catch (err) {
       lastErr = err;
     }

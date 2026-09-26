@@ -106,9 +106,9 @@ for (const sym of symbols) {
   }
   const rev = nw.metrics.revenue.values;
   const specs = new Map();
-  const allQ = reader.quarterCols(1000);
-  for (const c of [...reader.annualCols(10), ...allQ.slice(-20)]) specs.set(c.key, c);
-  const ltm = reader.ltmCol(allQ);
+  const allQ = await reader.quarterCols(1000);
+  for (const c of [...(await reader.annualCols(10)), ...allQ.slice(-20)]) specs.set(c.key, c);
+  const ltm = await reader.ltmCol(allQ);
   if (ltm) specs.set("LTM", ltm);
   const cells = [];
   for (const [src, vals] of Object.entries(old))

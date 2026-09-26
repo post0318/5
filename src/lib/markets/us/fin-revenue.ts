@@ -1,5 +1,5 @@
 import "server-only";
-import { gapNames, loadFinSym, metricAt, type FinSymDoc } from "@/lib/fin";
+import { gapNames, loadFinSym, metricAt, metricNoteAt, type FinSymDoc } from "@/lib/fin";
 
 /**
  * 미국 매출 — **재무 5층 구조(src/lib/fin)의 매출 지표만** 받아 화면 모듈에 나눠 준다(docs/metrics/revenue.md §3).
@@ -7,6 +7,9 @@ import { gapNames, loadFinSym, metricAt, type FinSymDoc } from "@/lib/fin";
  * 다시 고르거나 기간·판본을 다시 정하지 않는다(eslint: 매출 태그 직접 사용 금지).
  *
  * 열 = fin 열 그대로: 연간(FY, 최신 판본), 분기(3개월 — Q4 는 사업연도 − 9개월 누적), LTM.
+ *
+ * 매출원가·매출총이익(docs/metrics/cogs.md)도 같은 열에 싣는다 — 손익계산서·재무분석·기본 재무제표가 이 값만 쓴다(eslint: 매출원가·
+ * 매출총이익 태그 직접 사용 금지). 칸마다 사유·주석(cogsNote·gpNote — 합성 "본표 소계 없음 · 매출 − 매출원가", 빈칸 "구성 규칙 대기" 등).
  */
 
 export interface RevCol {
@@ -19,6 +22,13 @@ export interface RevCol {
   start: string;
   end: string;
   v: number | null;
+  /** 매출원가(fin cogs 지표) */
+  cogs: number | null;
+  /** 매출총이익(fin gp 지표 — 본표 소계, 없으면 매출 − 매출원가 합성) */
+  gp: number | null;
+  /** 칸 사유·주석(빈칸이면 사유, 값 있으면 정의 메모 — fin COGS_NOTE 문구 포함) */
+  cogsNote: string | null;
+  gpNote: string | null;
 }
 
 export interface UsRevenue {
@@ -58,11 +68,15 @@ export function revenueFromFinSym(sym: FinSymDoc): UsRevenue {
   for (const c of sym.c) {
     const [key, start, end] = c;
     const v = metricAt(sym, "revenue", key);
-    if (key === "LTM") ltm = { key, kind: "LTM", fy: 0, fq: 0, start, end, v };
-    else if (/^FY\d{4}$/.test(key)) annual.push({ key, kind: "FY", fy: Number(key.slice(2)), fq: 0, start, end, v });
+    const x = {
+      cogs: metricAt(sym, "cogs", key), gp: metricAt(sym, "gp", key),
+      cogsNote: metricNoteAt(sym, "cogs", key), gpNote: metricNoteAt(sym, "gp", key),
+    };
+    if (key === "LTM") ltm = { key, kind: "LTM", fy: 0, fq: 0, start, end, v, ...x };
+    else if (/^FY\d{4}$/.test(key)) annual.push({ key, kind: "FY", fy: Number(key.slice(2)), fq: 0, start, end, v, ...x });
     else {
       const m = Q_KEY.exec(key);
-      if (m) quarters.push({ key, kind: "Q", fy: Number(m[1]), fq: Number(m[2]), start, end, v });
+      if (m) quarters.push({ key, kind: "Q", fy: Number(m[1]), fq: Number(m[2]), start, end, v, ...x });
     }
   }
   annual.sort((a, b) => a.end.localeCompare(b.end));

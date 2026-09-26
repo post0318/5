@@ -18,7 +18,10 @@ const nearDay = (a: string | null | undefined, b: string | null | undefined) =>
 /** 부동소수 잡음 한도 — 항 절댓값 합 × (항 수 + 1) × 8ε */
 const noise = (abs: number, n: number) => Number.EPSILON * 8 * (n + 1) * Math.max(abs, 1);
 
-export async function finalizeDerived(reader: UsReader, cols: AssembledIs[], rev: MetricSeries, at: string): Promise<Map<string, string[]>> {
+/** 지표 이름(자기 검사 메시지용) */
+const METRIC_NAME: Record<MetricSeries["metric"], string> = { revenue: "매출", cogs: "매출원가", gp: "매출총이익", opinc: "영업이익", opex: "영업비용" };
+
+export async function finalizeDerived(reader: UsReader, cols: AssembledIs[], series: MetricSeries[], at: string): Promise<Map<string, string[]>> {
   const byKey = new Map(cols.map((a) => [a.col.key, a] as const));
   const refVal = new Map<string, Promise<number | null>>();
   const readRef = (ref: string) => {
@@ -55,7 +58,7 @@ export async function finalizeDerived(reader: UsReader, cols: AssembledIs[], rev
     return c;
   };
   for (const a of cols) for (const l of a.lines) if (l.inputs) l.inputs = await compactOnce(l.inputs);
-  for (const mv of Object.values(rev.values)) if (mv.inputs) mv.inputs = await compactOnce(mv.inputs);
+  for (const ser of series) for (const mv of Object.values(ser.values)) if (mv.inputs) mv.inputs = await compactOnce(mv.inputs);
 
   // 2. 자기 검사
   const errs = new Map<string, string[]>();
@@ -82,11 +85,12 @@ export async function finalizeDerived(reader: UsReader, cols: AssembledIs[], rev
     }
     return { sum, abs };
   };
-  for (const mv of Object.values(rev.values)) {
-    if (!mv.inputs || mv.v == null) continue;
-    mv.calculatedAt = at;
-    const r = await evalInputs(mv.inputs, mv.col, 0);
-    if (r && Math.abs(r.sum - mv.v) > noise(r.abs, mv.inputs.length)) err(mv.col, `매출 ${mv.v} ≠ 입력 합 ${r.sum}(차 ${mv.v - r.sum})`);
-  }
+  for (const ser of series)
+    for (const mv of Object.values(ser.values)) {
+      if (!mv.inputs || mv.v == null) continue;
+      mv.calculatedAt = at;
+      const r = await evalInputs(mv.inputs, mv.col, 0);
+      if (r && Math.abs(r.sum - mv.v) > noise(r.abs, mv.inputs.length)) err(mv.col, `${METRIC_NAME[ser.metric]} ${mv.v} ≠ 입력 합 ${r.sum}(차 ${mv.v - r.sum})`);
+    }
   return errs;
 }

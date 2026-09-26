@@ -168,6 +168,20 @@ export class FactIndex {
     this.memo.set(qname, out);
     return out;
   }
+  /** 모든 사실을 차례로(companyfacts 전 개념 + 보완 사실) — 1층 열 판본 색인용. companyfacts 사실은 호출마다 새 객체 */
+  forEach(fn: (f: RawFact) => void): void {
+    for (const [ns, node] of Object.entries(this.raw.facts ?? {}))
+      for (const [name, c] of Object.entries(node))
+        for (const [unit, arr] of Object.entries(c.units ?? {}))
+          for (const e of arr) {
+            if (e.val == null || !e.end) continue;
+            fn({
+              concept: `${ns}:${name}`, start: e.start ?? null, end: e.end, val: e.val, unit, dims: {}, decimals: null,
+              prov: { accn: e.accn ?? null, form: e.form as FormType, filed: e.filed ?? null, source: "sec-cf" },
+            });
+          }
+    for (const arr of this.extra.values()) for (const f of arr) fn(f);
+  }
   /** 재무 사실(us-gaap·ifrs-full)의 가장 늦은 제출일 — 표지(dei)·srt 몇 건만 들어온 공시는 재무가 빠진 것이라 세지 않는다(TSM 2025 20-F) */
   maxFiled(): string {
     let max = "";

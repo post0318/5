@@ -77,8 +77,8 @@ const INTEREST = ["InterestExpense", "InterestExpenseNonoperating", "InterestExp
 
 /** 흐름 항목 — Yahoo 필드 → us-gaap 개념(외화·IFRS 정규화 후). sign: SEC 부호 = sign × Yahoo */
 const FLOWS: { label: string; y: string; concepts: string[]; sign?: 1 | -1; da?: true }[] = [
-  { label: "매출원가", y: "costOfRevenue", concepts: ["CostOfRevenue", "CostOfGoodsAndServicesSold"] },
-  { label: "매출총이익", y: "grossProfit", concepts: ["GrossProfit"] },
+  // 매출원가·매출총이익은 여기서 다루지 않는다 — 20-F LTM 도 재무 5층 구조(src/lib/fin read/ltm-yahoo.ts)가 같은 규칙으로 만든다
+  // (docs/metrics/cogs.md §2, 매출원가·매출총이익 태그 직접 사용 금지)
   { label: "판관비", y: "sellingGeneralAndAdministration", concepts: ["SellingGeneralAndAdministrativeExpense"] },
   { label: "연구개발비", y: "researchAndDevelopment", concepts: ["ResearchAndDevelopmentExpense", "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"] },
   // Yahoo operatingIncome 은 정규화 값(TSM FY2025 1,936,095.6백만 TWD) — 공시값은 totalOperatingIncomeAsReported(1,936,091.7 = SEC)

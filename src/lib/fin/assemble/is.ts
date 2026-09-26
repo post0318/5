@@ -16,9 +16,7 @@ const ROLE: Record<string, LineRole> = {
   "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax": "revenue",
   "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax": "revenue",
   "us-gaap:RevenuesNetOfInterestExpense": "revenue.net",
-  "us-gaap:CostOfRevenue": "cogs",
-  "us-gaap:CostOfGoodsAndServicesSold": "cogs",
-  "us-gaap:CostOfGoodsSold": "cogs",
+  // 매출원가(cogs)는 개념 이름으로 붙이지 않는다 — 본표 계산 구조로 찾는다(identifyCogs, docs/metrics/cogs.md §1)
   "us-gaap:GrossProfit": "gross",
   "us-gaap:OperatingIncomeLoss": "opinc",
   "us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": "pretax",
@@ -36,6 +34,62 @@ const NONOP_CONCEPT = /^(EquityMethodInvestmentIncome|IncomeFromEquityAffiliates
 /** 총수익을 제품·서비스 차원으로 나눈 비영업 멤버(XOM) — edgar-revenue-dims.ts NONOP_MEMBER 와 같음(전체 일치만) */
 const NONOP_MEMBER = /EquityAffiliate|EquityMethod|EquityCompan|^(OtherRevenueMember|OtherIncomeMember)$/i;
 export const SYN_NONOP_DIMS = "syn:RevenuesNonoperatingMembers";
+
+/**
+ * 매출원가 후보 개념(IFRS 는 canonical 로 us-gaap 이름) — 매출총이익 식이 없는 본표에서만 쓰는 보조 조건(라벨과 함께).
+ * 개념 이름만으로는 고르지 않는다: MCD 10-Q 는 가맹점 임차비용 줄을 CostOfGoodsAndServicesSold 로, CAT·BE 는 주석 조각을 같은
+ * 개념으로 태깅했다(cogs.md §5).
+ */
+const COST_CONCEPT = new Set([
+  "us-gaap:CostOfRevenue", "us-gaap:CostOfGoodsAndServicesSold", "us-gaap:CostOfGoodsSold",
+  "us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+]);
+/** 원가 라벨 — 그 열 원천 공시 자체의 라벨로 판정("Cost of sales"·"Cost of revenues"·"Cost of goods sold"…) */
+const COST_LABEL = /\bcosts? of (net )?(revenues?|sales|goods|products|equipment)\b/i;
+const REVENUE_CANON = new Set(REVENUE_ALIAS_CONCEPTS);
+
+type Sums = Map<string, { to: string; w: number }[]>;
+
+/**
+ * 매출원가 줄 판정(오너 결정 2026-09-26, cogs.md §1) — 역할 "cogs"(한 줄·소계) 또는 "cogs.part"(소계 없는 여러 줄)를 붙인다.
+ *  1. 매출총이익(gross) 줄의 계산식에서 **빼는 항**. 식의 더하는 항에 매출 줄이 없으면(TSM 2018 이전 — 매출총이익 = 조정 전
+ *     매출총이익 ± 관계기업 미실현이익) 더하는 소계 항의 식으로 내려가 매출이 있는 식의 빼는 항을 쓴다. 빼는 항이 여러 줄이면
+ *     그 항들을 정확히 합하는 본표 소계 줄(AMD 2023·2024 10-K 매출원가 소계)을, 없으면 각 항을 cogs.part 로.
+ *  2. 매출총이익 식이 없으면(소계 없는 본표 — AMZN·CAT·UBER 등) 원가 개념이면서 **그 공시 자체 라벨**이 원가(cost of revenue/
+ *     sales/goods)인 줄. 다른 후보의 식 안 항은 빼고 하나만 남을 때만.
+ */
+function identifyCogs(lines: StmtLine[], sums: Sums, ownLabel: (l: StmtLine) => string | null): { by: AssembledIs["cogsBy"]; why?: string } {
+  const at = new Map(lines.map((l, i) => [l.id, i] as const));
+  const isRev = (id: string) => REVENUE_CANON.has(canonical(id)) || !!lines[at.get(id) ?? -1]?.role?.startsWith("revenue");
+  const gross = lines.find((l) => l.role === "gross");
+  if (gross && sums.get(gross.id)?.length) {
+    let id = gross.id;
+    let neg: { to: string; w: number }[] | null = null;
+    for (let d = 0; d < 3; d++) {
+      const ts = sums.get(id) ?? [];
+      const pos = ts.filter((t) => t.w > 0);
+      if (pos.some((t) => isRev(t.to))) { neg = ts.filter((t) => t.w < 0); break; }
+      const sub = pos.find((t) => sums.get(t.to)?.length);
+      if (!sub) break;
+      id = sub.to;
+    }
+    if (neg?.length) {
+      const key = (xs: string[]) => [...xs].sort().join("|");
+      const want = key(neg.map((t) => t.to));
+      const subtotal = neg.length > 1 ? lines.find((l) => { const f = sums.get(l.id); return !!f?.length && f.every((t) => t.w > 0) && key(f.map((t) => t.to)) === want; }) : undefined;
+      if (neg.length === 1 && at.has(neg[0].to)) { lines[at.get(neg[0].to)!].role = "cogs"; return { by: "gp" }; }
+      if (subtotal) { subtotal.role = "cogs"; return { by: "gp" }; }
+      if (neg.every((t) => at.has(t.to))) { for (const t of neg) lines[at.get(t.to)!].role = "cogs.part"; return { by: "gp" }; }
+      return { by: null, why: `매출총이익 식의 원가 항이 본표 줄에 없음(${neg.filter((t) => !at.has(t.to)).map((t) => t.to).join(",")})` };
+    }
+  }
+  const cands = lines.filter((l) => COST_CONCEPT.has(canonical(l.id)) && COST_LABEL.test(ownLabel(l) ?? ""));
+  const inner = new Set(cands.flatMap((c) => (sums.get(c.id) ?? []).map((t) => t.to)));
+  const top = cands.filter((c) => !inner.has(c.id));
+  if (top.length === 1) { top[0].role = "cogs"; return { by: "label" }; }
+  if (top.length > 1) return { by: null, why: `원가 라벨 줄이 여럿(${top.map((c) => c.id).join(",")})` };
+  return { by: null, why: gross ? "매출총이익 식 없음 · 원가 라벨 줄 없음" : "본표에 매출원가 줄 없음" };
+}
 
 /** 구조를 못 읽었을 때의 기본 줄(원본 표현 아님 — Gap.LINKBASE) */
 const FALLBACK = [
@@ -183,6 +237,41 @@ async function assembleColumn(
     }
   }
 
+  // 매출원가 줄 — 본표 계산 구조(매출총이익 식)로, 없으면 그 공시 자체 라벨로(identifyCogs)
+  const own = sp.accn && st.shape ? await reader.structure(sp.accn, true) : null;
+  const ownLabel = (l: StmtLine): string | null => {
+    const m = own?.labels?.get(l.id);
+    if (!m) return null;
+    const pl = st.shape?.lines.find((x) => x.id === l.id)?.preferredLabel;
+    return (pl && m.get(pl)) || ([...m.entries()].find(([r]) => /terseLabel$/i.test(r))?.[1] ?? m.get("http://www.xbrl.org/2003/role/label") ?? [...m.values()][0]);
+  };
+  const cogsId: { by: AssembledIs["cogsBy"]; why?: string } = st.shape ? identifyCogs(lines, st.sums as Sums, ownLabel) : { by: null, why: "본표 구조 판독 실패(Gap.LINKBASE)" };
+  // 파생 열(Q4·누적 차·LTM)의 구성 공시가 구조 기준 공시와 다른 개념으로 원가 줄을 달았으면(LRCX 10-K 는 구조조정 포함 매출원가
+  // 소계, 10-Q 는 그 소계 없이 "Cost of goods sold" 회사 고유 개념이 매출총이익 식의 원가 항) — 그 구성 공시 **자체 본표의 매출총이익
+  // 식 원가 항**(한 줄, 식의 더하는 항이 매출일 때만)을 읽는다. 각 공시의 본표 매출원가끼리 빼는 것이라 오너 결정(본표 원가 = 매출총이익
+  // 식의 빼는 항)과 같은 기준이다. 읽은 사실은 파생값 입력에 그대로 남는다(개념이 달라 f: 참조).
+  const cogsLine = lines.find((l) => l.role === "cogs");
+  if (cogsLine && cogsLine.v == null && col.segments.some((sg) => sg.parts.length > 1)) {
+    const faceCogsOf = async (p: Part): Promise<PartRead | null | "gap"> => {
+      const d = await reader.partValue(cogsLine.id, p);
+      if (d === "gap") return "gap";
+      if (d) return asPartRead(d);
+      if (!p.accn) return null;
+      const ps = await reader.structure(p.accn);
+      const gpId = ps.shape?.lines.find((x) => ROLE[canonical(x.id)] === "gross")?.id;
+      const ts = gpId ? (ps.sums.get(gpId) ?? []) : [];
+      const neg = ts.filter((t) => t.w < 0);
+      if (neg.length !== 1 || !ts.some((t) => t.w > 0 && REVENUE_CANON.has(canonical(t.to)))) return null;
+      return asPartRead(await reader.partValue(neg[0].to, p));
+    };
+    const cv = await reader.value(cogsLine.id, col, faceCogsOf);
+    if (cv.v != null) {
+      const i = lines.indexOf(cogsLine);
+      lines[i] = { ...cogsLine, v: cv.v, ...(cv.why ? { why: cv.why } : {}), ...(cv.inputs ? { inputs: cv.inputs } : {}) };
+      raws[i] = cv.raw;
+    }
+  }
+
   // 항등식 — 계산 구조의 합계식마다 부모 = Σ 가중치 × 항(원통화 값, 공시 반올림 단위 × 항 수 허용). 값 없는 항은 0.
   // 표시 부모(ln.parent)가 아니라 합계식 전체(st.sums)로 판정한다 — 한 줄이 둘 이상 식의 항일 수 있다(AMD 매출원가 세부 줄).
   // 불성립 식은 다음 중 하나면 "판정 불완전(partial)" — 식 자체를 믿을 수 없어 값 섞임의 증거가 아니다(3층은 매출을 비우지 않고
@@ -245,15 +334,18 @@ async function assembleColumn(
     const w = reader.yahooWindow(col);
     if (w) { column.start = w.start; column.end = w.end; }
   }
-  return { col: column, lines, identity: { ok: fails.length === 0, fails, at: failAt, partial: failPartial, terms: failTerms, uncovered } };
+  return {
+    col: column, lines, identity: { ok: fails.length === 0, fails, at: failAt, partial: failPartial, terms: failTerms, uncovered },
+    cogsBy: cogsId.by, ...(cogsId.why ? { cogsWhy: cogsId.why } : {}), faceShape: !!st.shape,
+  };
 }
 
 /** 연간·분기(+Q4D)·LTM 열을 조립한다. LTM 은 연간·분기 목록 끝에 각각 붙는다(같은 값). */
 export async function assembleIncomeStatements(reader: UsReader, n: { annual: number; quarterly: number } = { annual: 10, quarterly: 20 }): Promise<AssembledStatements> {
-  const annualCols = reader.annualCols(n.annual);
-  const allQ = reader.quarterCols(1000);
+  const annualCols = await reader.annualCols(n.annual);
+  const allQ = await reader.quarterCols(1000);
   const quarterCols = allQ.slice(-n.quarterly);
-  const ltm = reader.ltmCol(allQ);
+  const ltm = await reader.ltmCol(allQ);
   const labels = new Map<string, string>();
   const dimSplit = noOpIncomeTag(reader);
   const lastA = annualCols[annualCols.length - 1];

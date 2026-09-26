@@ -3,7 +3,6 @@ import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import type { QuoteBar } from "../types";
 import {
-  cogsConcepts,
   annualByYear,
   days,
   entriesOf,
@@ -202,8 +201,16 @@ export function buildUsAnalysis(
   const revenue = blank();
   for (const y of years) revenue[`${y}Y`] = revAnnual.get(y) ?? null;
   revenue[LTM] = revLtm(facts.revenue);
-  const grossProfitRaw = flow(["GrossProfit"]);
-  const cogs0 = flowM(cogsConcepts(facts));
+  // 매출원가·매출총이익 = 재무 5층 구조 지표(fin-revenue.ts 열의 cogs·gp, docs/metrics/cogs.md) — 손익계산서와 같은 값
+  const finAnnual = new Map((facts.revenue?.annual ?? []).map((c) => [c.fy, c] as const));
+  const cogs0 = blank();
+  const grossProfitFin = blank();
+  for (const y of years) {
+    cogs0[`${y}Y`] = finAnnual.get(y)?.cogs ?? null;
+    grossProfitFin[`${y}Y`] = finAnnual.get(y)?.gp ?? null;
+  }
+  cogs0[LTM] = facts.revenue?.ltm?.cogs ?? null;
+  grossProfitFin[LTM] = facts.revenue?.ltm?.gp ?? null;
   // 금융회사(은행·카드사): 매출총이익 대신 충당금전이익(=순수익 − 총이자외비용).
   const finNoninterestExpense = flow(FIN_NONINTEREST_EXPENSE);
   const finProvision = flow(FIN_PROVISION);
@@ -213,8 +220,7 @@ export function buildUsAnalysis(
       ? (revenue[l] != null && finNoninterestExpense[l] != null
           ? revenue[l]! - finNoninterestExpense[l]!
           : null)
-      : (grossProfitRaw[l] ??
-        (revenue[l] != null && cogs0[l] != null ? revenue[l]! - Math.abs(cogs0[l]!) : null));
+      : grossProfitFin[l];
   // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 단일 기준 시계열
   const opIncome = (() => {
     const o = blank();

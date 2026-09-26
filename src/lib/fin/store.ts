@@ -8,7 +8,7 @@ import { Gap, type AssembledIs, type Column, type DerivedInput, type FinAssembly
  */
 
 /** 엔진판 — 판독·조립 규칙이 바뀌면 올린다(fin_chg 사유 "ev") */
-export const ENGINE_VERSION = 5; // 5: 파생값 입력 구조(fin_sym.d, 2026-09-26)
+export const ENGINE_VERSION = 6; // 5: 파생값 입력 구조(fin_sym.d, 2026-09-26) · 6: 매출원가·매출총이익·영업이익·영업비용 지표(fin_sym.m.cogs·gp·opinc·opex·d·n, 2026-09-26)
 /** 문서 스키마판 — 압축 형식이 바뀌면 올린다 */
 export const SCHEMA_VERSION = 1;
 
@@ -56,16 +56,49 @@ function toDer(a: FinAssembly, cols: Column[]): FinDer | null {
       while (t.length > 2 && t[t.length - 1] == null) t.pop();
       return t;
     });
-  const rev: Record<string, FinDerIn[]> = {};
   let at: string | null = null;
-  for (const c of cols) {
-    const mv = a.metrics.revenue.values[c.key];
-    if (!mv?.inputs || mv.v == null) continue;
-    rev[c.key] = enc(mv.inputs);
-    at ??= mv.calculatedAt ?? a.at;
-  }
+  const series = (s: FinAssembly["metrics"][keyof FinAssembly["metrics"]]) => {
+    const out: Record<string, FinDerIn[]> = {};
+    for (const c of cols) {
+      const mv = s.values[c.key];
+      if (!mv?.inputs || mv.v == null) continue;
+      out[c.key] = enc(mv.inputs);
+      at ??= mv.calculatedAt ?? a.at;
+    }
+    return out;
+  };
+  // 같은 열 칸만 가리키는 입력(합성 매출총이익 = 매출 칸 − 매출원가 칸, 영업비용 = 매출총이익 − 영업이익 칸)은 열마다 모양이 같다 —
+  // 열 키를 "*" 로 바꾼 틀이 같은 열끼리 틀 1개 + 열 목록으로 묶어 tp 에 둔다(용량 — 무료 DB 512MB, cogs.md §7). 매출(rev)은 기존 형식 유지
+  const tp: Record<string, [FinDerIn[], string[]][]> = {};
+  const templated = (name: string, out: Record<string, FinDerIn[]>) => {
+    const groups = new Map<string, { t: FinDerIn[]; cols: string[] }>();
+    for (const [col, ins] of Object.entries(out)) {
+      const own = `c:${col}|`;
+      if (!ins.every((t) => t[0].startsWith(own))) continue;
+      const t = ins.map((x) => [`c:*|${x[0].slice(own.length)}`, ...x.slice(1)] as FinDerIn);
+      const k = JSON.stringify(t);
+      const g = groups.get(k) ?? groups.set(k, { t, cols: [] }).get(k)!;
+      g.cols.push(col);
+    }
+    for (const g of groups.values()) {
+      if (g.cols.length < 2) continue;
+      for (const c of g.cols) delete out[c];
+      (tp[name] ??= []).push([g.t, g.cols]);
+    }
+    return out;
+  };
+  const rev = series(a.metrics.revenue);
+  const cogs = templated("cogs", series(a.metrics.cogs));
+  const gp = templated("gp", series(a.metrics.gp));
+  const opinc = templated("opinc", series(a.metrics.opinc));
+  const opex = templated("opex", series(a.metrics.opex));
   if (!at) return null;
-  return { rev, ...(Object.keys(ln).length ? { ln } : {}), ...(asOf.length ? { a: asOf } : {}), at };
+  return {
+    rev, ...(Object.keys(cogs).length ? { cogs } : {}), ...(Object.keys(gp).length ? { gp } : {}),
+    ...(Object.keys(opinc).length ? { opinc } : {}), ...(Object.keys(opex).length ? { opex } : {}),
+    ...(Object.keys(tp).length ? { tp } : {}),
+    ...(Object.keys(ln).length ? { ln } : {}), ...(asOf.length ? { a: asOf } : {}), at,
+  };
 }
 
 export function toSymDoc(a: FinAssembly): FinSymDoc {
@@ -81,15 +114,33 @@ export function toSymDoc(a: FinAssembly): FinSymDoc {
     if (e) x[c.key] = e;
   }
   const der = toDer(a, cols);
+  // 지표 칸 사유·주석 — 문구 → 열키 목록(같은 문구는 한 번만)
+  const notes: Record<string, [string, string[]][]> = {};
+  for (const [k, s] of [["cogs", a.metrics.cogs], ["gp", a.metrics.gp], ["opinc", a.metrics.opinc], ["opex", a.metrics.opex]] as const) {
+    const by = new Map<string, string[]>();
+    for (const c of cols) {
+      const mv = s.values[c.key];
+      const t = mv ? (mv.v == null ? mv.reason : mv.note) : undefined;
+      if (t) by.set(t, [...(by.get(t) ?? []), c.key]);
+    }
+    if (by.size) notes[k] = [...by];
+  }
   return {
     _id: `${a.profile.market}:${a.profile.symbol}`,
     ev: ENGINE_VERSION, sv: SCHEMA_VERSION, at: new Date(), la: a.latestAccn,
     p: { t: a.profile.type, fl: a.profile.filer, sic: a.profile.sic, cur: a.profile.reportingCurrency, adr: a.profile.adrRatio },
     g: a.gaps,
     c: cols.map(colTuple),
-    m: { rev: cols.map((c) => rev[c.key]?.v ?? null) },
+    m: {
+      rev: cols.map((c) => rev[c.key]?.v ?? null),
+      cogs: cols.map((c) => a.metrics.cogs.values[c.key]?.v ?? null),
+      gp: cols.map((c) => a.metrics.gp.values[c.key]?.v ?? null),
+      opinc: cols.map((c) => a.metrics.opinc.values[c.key]?.v ?? null),
+      opex: cols.map((c) => a.metrics.opex.values[c.key]?.v ?? null),
+    },
     x: { rev: x },
     ...(der ? { d: der } : {}),
+    ...(Object.keys(notes).length ? { n: notes } : {}),
     ...(a.issues.length ? { i: a.issues.map((q) => (q.der?.length ? [q.col, q.rev, q.other, q.unv, q.der] : [q.col, q.rev, q.other, q.unv]) as [string, string[], string[], string[], string[]?]) } : {}),
   };
 }
@@ -157,14 +208,15 @@ export async function persist(a: FinAssembly, stmts: { annual: FinStmtDoc; quart
   const now = new Date();
   const chg: FinChgDoc[] = [];
   const r: FinChgDoc["r"] = old && old.ev !== ENGINE_VERSION ? "ev" : "data";
-  if (old) {
-    const o = new Map(old.c.map((c, i) => [c[0], old.m.rev?.[i] ?? null]));
-    sym.c.forEach((c, i) => {
-      const n = sym.m.rev[i];
-      const ov = o.has(c[0]) ? o.get(c[0])! : null;
-      if (ov !== n) chg.push({ k: sym._id, at: now, ev: ENGINE_VERSION, t: "m.rev", c: c[0], o: ov, n, r });
-    });
-  }
+  if (old)
+    for (const mk of ["rev", "cogs", "gp", "opinc", "opex"]) {
+      const o = new Map(old.c.map((c, i) => [c[0], old.m[mk]?.[i] ?? null]));
+      sym.c.forEach((c, i) => {
+        const n = sym.m[mk]?.[i] ?? null;
+        const ov = o.has(c[0]) ? o.get(c[0])! : null;
+        if (ov !== n) chg.push({ k: sym._id, at: now, ev: ENGINE_VERSION, t: `m.${mk}`, c: c[0], o: ov, n, r });
+      });
+    }
   for (const doc of [stmts.annual, stmts.quarterly]) {
     const prev = await stmtCol.findOne({ _id: doc._id });
     if (prev) {

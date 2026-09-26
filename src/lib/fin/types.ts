@@ -134,7 +134,7 @@ export interface Column {
 }
 export type LineRole =
   | "revenue" | "revenue.total" | "revenue.net" | "revenue.nonop"
-  | "cogs" | "gross" | "opinc" | "pretax" | "tax" | "ni" | "ni.parent";
+  | "cogs" | "cogs.part" | "gross" | "opinc" | "pretax" | "tax" | "ni" | "ni.parent";
 export interface StmtLine {
   id: string;
   label: string;
@@ -158,6 +158,14 @@ export interface AssembledIs {
     /** 어느 합계식에도 속하지 않는 값 있는 줄 위치(계산 구조가 없는 열은 값 있는 줄 전부) — 항등식 검사가 닿지 않는 줄 */
     uncovered: number[];
   };
+  /**
+   * 매출원가 줄을 어떻게 찾았나(docs/metrics/cogs.md §1) — "gp" = 본표 계산 구조의 매출총이익 식에서 빼는 항(소계가 있으면 소계),
+   * "label" = 매출총이익 식이 없어 원가 개념 + 원가 라벨(cost of revenue/sales/goods)인 본표 줄, null = 찾지 못함(`cogsWhy`)
+   */
+  cogsBy: "gp" | "label" | null;
+  cogsWhy?: string;
+  /** 줄 구조가 그 열 원천 공시의 본표(_pre)에서 왔는가 — false 면 기본 개념 목록(Gap.LINKBASE)이라 "본표 소계"로 볼 수 없다 */
+  faceShape: boolean;
 }
 
 /** 3층 — 지표 값. */
@@ -179,9 +187,12 @@ export interface MetricValue {
   idFails?: string[];
   /** 매출 경로의 판정 불완전 불성립 — 값은 두되 "항등식 미검증"(검증기가 SEC 직접 대조를 강제) */
   unv?: string[];
+  /** 값은 두되 화면에 알릴 정의 메모(예: 매출총이익 합성 "본표 소계 없음 · 매출 − 매출원가", "회사 공시 자체") */
+  note?: string;
 }
+export type MetricId = "revenue" | "cogs" | "gp" | "opinc" | "opex";
 export interface MetricSeries {
-  metric: "revenue";
+  metric: MetricId;
   unit: "USD" | "KRW";
   values: Record<string, MetricValue>;
 }
@@ -202,7 +213,7 @@ export interface FinAssembly {
   profile: CompanyProfile;
   annual: AssembledIs[];
   quarterly: AssembledIs[];
-  metrics: { revenue: MetricSeries };
+  metrics: { revenue: MetricSeries; cogs: MetricSeries; gp: MetricSeries; opinc: MetricSeries; opex: MetricSeries };
   gaps: number;
   /** 원천 조회 실패 등 사람이 읽는 경고(조립 항등식 불성립 포함) */
   warnings: string[];

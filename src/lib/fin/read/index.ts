@@ -5,7 +5,7 @@ import {
 } from "../source/us/sec";
 import { currentQuoteShares, yahooQuarters, type YahooFundamentalsRow } from "../source/us/market";
 import { Gap, type CompanyProfile, type DerivedInput, type FormType, type Prov, type RawFact, type ReadValue, type ReadWhy } from "../types";
-import { dropRoundedRetags, latest, isPeriodic } from "./vintage";
+import { columnFiling, dropRoundedRetags, latest, isPeriodic, mostPrecise, sentenceRetagged, type FilingLines } from "./vintage";
 import { addDays, buildCalendar, days, durKind, fiscalYearOf, isStaleAnnual, near, shiftYear, type FiscalYear } from "./period";
 import { fxAvgRef, makeFx, reportingCurrency, type Fx } from "./fx";
 import { canonical } from "./ifrs";
@@ -24,6 +24,7 @@ import { YAHOO_FIELD, yahooLtmOf } from "./ltm-yahoo";
  *  - Q4D = 사업연도(최신 판본) − 9개월 누적(최신 판본)
  *  - LTM = 최근 사업연도 + 당기 누적 − 전년 동기 누적(전부 최신 판본). 20-F·40-F 는 Yahoo 분기 최근 4개(ltm-yahoo.ts)
  * 열의 판본(원천 공시)은 매출·순이익 기준 개념(ANCHOR) 중 그 기간을 담은 가장 늦은 정기공시로 정한다 — 한 열 = 한 공시.
+ * 그 공시가 앞선 공시 값을 정밀도만 낮춰 다시 실은 것이면 열 전체를 앞선 정밀 공시로 옮긴다(vintage.ts columnFiling, §1.1).
  */
 
 const ANCHOR = [
@@ -33,6 +34,7 @@ const ANCHOR = [
   "us-gaap:NetIncomeLoss", "us-gaap:ProfitLoss", "ifrs-full:ProfitLoss", "ifrs-full:ProfitLossAttributableToOwnersOfParent",
 ];
 const REVENUE_ANCHOR = new Set(ANCHOR.slice(0, 8));
+const ANCHOR_SET = new Set(ANCHOR);
 /** Q4D 매출 개념 대체(revenueAliasNine)의 후보 — 매출 계열 개념끼리만 */
 export const REVENUE_ALIAS_CONCEPTS = [
   "us-gaap:Revenues",
@@ -89,6 +91,10 @@ export class UsReader {
   readonly calendar: FiscalYear[];
   private anchorFacts: RawFact[];
   private factMemo = new Map<string, RawFact[]>();
+  private rawMemo = new Map<string, RawFact[]>();
+  /** 기간(start|end) → 공시(accn) → 그 공시가 실은 통화 값(열 판본 판정용, 처음 쓸 때 한 번 만든다) */
+  private periodFilings: Map<string, Map<string, FilingLines>> | null = null;
+  private vintMemo = new Map<string, Promise<FilingLines | null>>();
   private structMemo = new Map<string, Promise<FilingStructure>>();
   private instMemo = new Map<string, Promise<RawFact[] | null>>();
 
@@ -103,7 +109,8 @@ export class UsReader {
     /** Yahoo 분기 조회 시각(ISO) — 20-F·40-F LTM 입력의 asOf */
     readonly yahooAt: string | null = null,
   ) {
-    this.anchorFacts = ANCHOR.flatMap((c) => this.facts(c)).filter((f) => f.start);
+    // 기준 개념은 반올림 재태깅을 버리지 않은 원래 사실 — 최신 판본을 먼저 정하고, 정밀도 판단은 열 단위로(columnFiling)
+    this.anchorFacts = ANCHOR.flatMap((c) => this.rawFacts(c)).filter((f) => f.start);
     const annual = uniq(this.anchorFacts.filter((f) => ANNUAL_FORM.test(f.prov.form) && durKind(f.start, f.end) === "FY").map((f) => ({ start: f.start!, end: f.end })));
     const interim = uniq(this.anchorFacts.filter((f) => INTERIM_FORM.test(f.prov.form)).map((f) => ({ start: f.start!, end: f.end })));
     this.calendar = buildCalendar(annual, interim);
@@ -151,13 +158,77 @@ export class UsReader {
     return new UsReader(profile, idx, sub, fx, yahoo, gaps, warnings, yahooAt);
   }
 
-  /** 개념의 사실 — 차원 없는 정기공시 값, 반올림 재태깅 제거 후 */
+  /** 개념의 사실 — 차원 없는 정기공시 값, 반올림 재태깅 제거 후(판본과 무관한 증거 조회용 — 열 값 판독은 rawFacts + 열 판본) */
   facts(qname: string): RawFact[] {
     const hit = this.factMemo.get(qname);
     if (hit) return hit;
-    const out = dropRoundedRetags(this.idx.get(qname).filter((f) => isPeriodic(f) && !Object.keys(f.dims).length));
+    const out = dropRoundedRetags(this.rawFacts(qname));
     this.factMemo.set(qname, out);
     return out;
+  }
+
+  /** 개념의 사실 — 차원 없는 정기공시 값 전부(반올림 재태깅 포함) */
+  private rawFacts(qname: string): RawFact[] {
+    const hit = this.rawMemo.get(qname);
+    if (hit) return hit;
+    const out = this.idx.get(qname).filter((f) => isPeriodic(f) && !Object.keys(f.dims).length);
+    this.rawMemo.set(qname, out);
+    return out;
+  }
+
+  /** 기간(정확히 start·end)을 실은 정기공시별 통화 값 — 같은 공시·개념에 값이 둘 이상이면 정밀한 쪽(mostPrecise) */
+  private filingsOf(start: string, end: string): FilingLines[] {
+    if (!this.periodFilings) {
+      const byPeriod = new Map<string, Map<string, RawFact[]>>();
+      this.idx.forEach((f) => {
+        if (!f.start || !f.prov.accn || !isPeriodic(f) || Object.keys(f.dims).length || !/^[A-Z]{3}$/.test(f.unit)) return;
+        const k = `${f.start}|${f.end}`;
+        let m = byPeriod.get(k);
+        if (!m) byPeriod.set(k, (m = new Map()));
+        const arr = m.get(f.prov.accn);
+        if (arr) arr.push(f);
+        else m.set(f.prov.accn, [f]);
+      });
+      this.periodFilings = new Map();
+      for (const [k, m] of byPeriod) {
+        const out = new Map<string, FilingLines>();
+        for (const [accn, fs] of m) {
+          const byLine = new Map<string, RawFact[]>();
+          for (const f of fs) byLine.set(`${f.concept}|${f.unit}`, [...(byLine.get(`${f.concept}|${f.unit}`) ?? []), f]);
+          const lines = new Map<string, number>();
+          for (const [lk, g] of byLine) lines.set(lk, mostPrecise(g)!.val);
+          const ds = fs.map((f) => f.decimals).filter((d): d is number => d != null);
+          out.set(accn, { accn, form: fs[0].prov.form, filed: fs[0].prov.filed ?? "", lines, decimals: ds.length ? Math.max(...ds) : null });
+        }
+        this.periodFilings.set(k, out);
+      }
+    }
+    return [...(this.periodFilings.get(`${start}|${end}`)?.values() ?? [])];
+  }
+
+  /**
+   * 열 구성 공시 — 기간의 최신 판본 사실 f 에서 시작해 열 단위 판본 규칙(columnFiling)을 적용한 공시. 정밀도만 낮춘 재게시면 앞선 정밀
+   * 공시로 열 전체를 옮기고, 진짜 재작성이면 f 의 공시 그대로.
+   */
+  private async partOf(f: RawFact, role: string, sign: 1 | -1 = 1): Promise<Part> {
+    const key = `${f.start}|${f.end}|${f.prov.accn}`;
+    // 옮겨 갈 수 있는 공시 = 같은 기준 개념 무리(매출 기준이면 매출 개념, 아니면 기준 개념 전체)를 실은 공시
+    const group = REVENUE_ANCHOR.has(f.concept) ? REVENUE_ANCHOR : ANCHOR_SET;
+    let v = this.vintMemo.get(key);
+    if (!v) {
+      v = f.prov.accn
+        ? columnFiling(this.filingsOf(f.start!, f.end), f.prov.accn, async (l) => {
+          // 본표를 못 읽으면 재작성으로 본다(최신 공시 그대로 — 그 공시 조립 단계가 LINKBASE 결손을 따로 남긴다)
+          const st = await this.structure(l.accn);
+          return st.shape ? new Set(st.shape.lines.map((x) => x.id)) : null;
+        }, (c) => [...c.lines.keys()].some((k) => group.has(k.slice(0, k.lastIndexOf("|")))))
+        : Promise.resolve(null);
+      this.vintMemo.set(key, v);
+    }
+    const c = await v;
+    return c && c.accn !== f.prov.accn
+      ? { start: f.start!, end: f.end, accn: c.accn, form: c.form, filed: c.filed || null, sign, role }
+      : { start: f.start!, end: f.end, accn: f.prov.accn, form: f.prov.form, filed: f.prov.filed, sign, role };
   }
 
   /**
@@ -198,27 +269,27 @@ export class UsReader {
    * 실려(3분기 10-Q 에 1·2분기 순이익) 그것까지 판본 후보로 보면 1분기 열의 원천이 손익계산서에 1분기가 없는 3분기 10-Q 가
    * 된다(WDC 실측).
    */
-  private sourceOf(start: string, end: string): Part | null {
+  private async sourceOf(start: string, end: string): Promise<Part | null> {
     const hit = this.anchorFacts.filter((x) => near(x.start, start) && near(x.end, end));
     const rev = hit.filter((x) => REVENUE_ANCHOR.has(x.concept));
     const f = latest(rev.length ? rev : hit);
-    return f ? { start: f.start!, end: f.end, accn: f.prov.accn, form: f.prov.form, filed: f.prov.filed, sign: 1, role: "fy" } : null;
+    return f ? this.partOf(f, "fy") : null;
   }
 
   // ── 열 정의 ──
 
-  annualCols(n = 10): ColumnSpec[] {
+  async annualCols(n = 10): Promise<ColumnSpec[]> {
     const out: ColumnSpec[] = [];
     for (const y of this.calendar) {
       if (!y.end) continue;
-      const p = this.sourceOf(y.start, y.end);
+      const p = await this.sourceOf(y.start, y.end);
       if (!p) continue;
       out.push({ key: `FY${y.fy}`, kind: "FY", fy: y.fy, fq: 0, start: y.start, end: y.end, segments: [{ start: y.start, end: y.end, parts: [p] }], gaps: 0 });
     }
     return out.slice(-n);
   }
 
-  quarterCols(n = 20): ColumnSpec[] {
+  async quarterCols(n = 20): Promise<ColumnSpec[]> {
     const out: ColumnSpec[] = [];
     for (const y of this.calendar) {
       const bounds = [y.start, ...y.qEnds];
@@ -229,20 +300,20 @@ export class UsReader {
         const key = `${y.fy}Q${q}`;
         if (q === 4) {
           // Q4 = 사업연도(최신 판본) − 9개월 누적(최신 판본)
-          const fy = this.sourceOf(y.start, y.end!);
-          const nine = y.qEnds[2] ? this.sourceOf(y.start, y.qEnds[2]) : null;
+          const fy = await this.sourceOf(y.start, y.end!);
+          const nine = y.qEnds[2] ? await this.sourceOf(y.start, y.qEnds[2]) : null;
           if (!fy || !nine) continue;
           out.push({ key, kind: "Q4D", fy: y.fy, fq: 4, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [fy, { ...nine, sign: -1, role: "9m" }] }], gaps: 0 });
           continue;
         }
-        const direct = this.sourceOf(qs, qe);
+        const direct = await this.sourceOf(qs, qe);
         if (direct && durKind(direct.start, direct.end) === "Q") {
           out.push({ key, kind: "Q", fy: y.fy, fq: q as 1 | 2 | 3, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [{ ...direct, role: "q" }] }], gaps: 0 });
           continue;
         }
         // 3개월 값이 없으면 누적 차(각 최신 판본)
-        const cum = this.sourceOf(y.start, qe);
-        const prev = this.sourceOf(y.start, bounds[q - 1]!);
+        const cum = await this.sourceOf(y.start, qe);
+        const prev = await this.sourceOf(y.start, bounds[q - 1]!);
         if (!cum || !prev) continue;
         out.push({ key, kind: "Q", fy: y.fy, fq: q as 1 | 2 | 3, start: qs, end: qe, segments: [{ start: qs, end: qe, parts: [{ ...cum, role: "cum" }, { ...prev, sign: -1, role: "cum-prev" }] }], gaps: 0 });
       }
@@ -254,10 +325,10 @@ export class UsReader {
    * LTM — 최근 사업연도 + 당기 누적 − 전년 동기 누적(markets/us/edgar-series.ts ttmOf 와 같은 창). 최근 사업연도 종료가
    * 550일을 넘으면(태그 중단) 없음. 외화 10-Q 제출사는 최근 4개 분기를 분기 평균 환율로(인포맥스 방식 — edgar-foreign.ts).
    */
-  ltmCol(quarters: ColumnSpec[]): ColumnSpec | null {
+  async ltmCol(quarters: ColumnSpec[]): Promise<ColumnSpec | null> {
     const fyY = [...this.calendar].reverse().find((y) => y.end);
     if (!fyY?.end) return null;
-    const fyPart = this.sourceOf(fyY.start, fyY.end);
+    const fyPart = await this.sourceOf(fyY.start, fyY.end);
     if (!fyPart || isStaleAnnual(fyY.end)) return null;
     const base = { key: "LTM", kind: "LTM" as const, fy: fyY.fy, fq: 0 as const, gaps: 0 };
     if (this.profile.filer !== "domestic") {
@@ -273,8 +344,8 @@ export class UsReader {
     const prior = latest(priorF);
     if (!prior?.start) return { ...base, start: fyY.start, end: fyY.end, segments: [{ start: fyY.start, end: fyY.end, parts: [fyPart] }], gaps: Gap.BASIS_SHIFT };
     const start = addDays(shiftYear(cur.end, -1), 1);
-    const curPart: Part = { start: cur.start, end: cur.end, accn: cur.prov.accn, form: cur.prov.form, filed: cur.prov.filed, sign: 1, role: "ytd" };
-    const priorPart: Part = { start: prior.start, end: prior.end, accn: prior.prov.accn, form: prior.prov.form, filed: prior.prov.filed, sign: -1, role: "ytd-prior" };
+    const curPart = await this.partOf(cur, "ytd");
+    const priorPart = await this.partOf(prior, "ytd-prior", -1);
     if (this.profile.reportingCurrency !== "USD") {
       const last4 = quarters.filter((q) => q.end <= cur.end).slice(-4);
       if (last4.length === 4 && near(last4[3].end, cur.end) && near(addDays(shiftYear(cur.end, -1), 1), last4[0].start, 12))
@@ -289,23 +360,26 @@ export class UsReader {
   async partValue(qname: string, p: Part): Promise<ReadValue | null | "gap"> {
     const [ns] = qname.split(":");
     if (CF_NS.has(ns)) {
-      // 보고 통화 단위만 — 20-F 의 USD "편의 환산" 태그(단일 환율)는 쓰지 않는다(edgar-foreign.ts 와 같은 규칙)
-      const all = this.facts(qname).filter((f) => near(f.start, p.start) && near(f.end, p.end) && f.unit === this.profile.reportingCurrency);
-      const same = all.find((f) => f.prov.accn === p.accn);
-      if (same) return readValueOf(same);
-      // 이 공시 값이 반올림 재태깅으로 버려졌으면 앞선 정밀값(원래 이 공시에 있었음)
-      const dropped = this.idx.get(qname).some((f) => f.prov.accn === p.accn && near(f.start, p.start) && near(f.end, p.end));
-      if (dropped) {
-        const l = latest(all);
-        if (l) return readValueOf(l);
-      }
+      // 보고 통화 단위만 — 20-F 의 USD "편의 환산" 태그(단일 환율)는 쓰지 않는다(edgar-foreign.ts 와 같은 규칙).
+      // 열의 공시(p.accn) 값 그대로 — 반올림 판단은 열 판본(partOf)에서 이미 끝났다. 줄마다 앞선 판본 값으로 바꾸지 않는다(열 안 판본 혼합 금지).
+      const period = this.rawFacts(qname).filter((f) => near(f.start, p.start) && near(f.end, p.end) && f.unit === this.profile.reportingCurrency);
+      const same = mostPrecise(period.filter((f) => f.prov.accn === p.accn));
       // companyfacts 에 없으면 그 공시에 없는 값(인스턴스로 보완된 공시는 idx 에 이미 들어 있다)
-      return null;
+      if (!same) return null;
+      // companyfacts 가 이 공시의 본문 문장 반올림값만 남겼으면 같은 공시 원본의 정밀값(vintage.ts sentenceRetagged)
+      if (p.accn && same.prov.source === "sec-cf" && sentenceRetagged(same, period)) {
+        const inst = await this.instance(p.accn, p.form, p.filed);
+        if (!inst) return "gap";
+        const own = mostPrecise(inst.filter((x) => x.concept === qname && !Object.keys(x.dims).length && near(x.start, p.start) && near(x.end, p.end) && x.unit === this.profile.reportingCurrency));
+        return readValueOf(own ?? same);
+      }
+      return readValueOf(same);
     }
     if (!p.accn) return null;
     const inst = await this.instance(p.accn, p.form, p.filed);
     if (!inst) return "gap";
-    const f = inst.find((x) => x.concept === qname && !Object.keys(x.dims).length && near(x.start, p.start) && near(x.end, p.end) && x.unit === this.profile.reportingCurrency);
+    // 같은 공시에 문장용 반올림 사실이 함께 있으면 정밀한 값(mostPrecise)
+    const f = mostPrecise(inst.filter((x) => x.concept === qname && !Object.keys(x.dims).length && near(x.start, p.start) && near(x.end, p.end) && x.unit === this.profile.reportingCurrency));
     return f ? readValueOf(f) : null;
   }
 
@@ -326,11 +400,11 @@ export class UsReader {
       f.concept === concept && f.prov.accn === accn && (f.start ?? "") === start && f.end === end && f.unit === this.profile.reportingCurrency &&
       Object.keys(f.dims).length === Object.keys(dims).length && Object.entries(dims).every(([a, b]) => f.dims[a] === b);
     if (CF_NS.has(concept.split(":")[0]) && !dimStr) {
-      const f = this.idx.get(concept).find(match);
+      const f = mostPrecise(this.idx.get(concept).filter(match));
       if (f) return f.val;
     }
     const inst = await this.instance(accn, "10-K", null);
-    return inst?.find(match)?.val ?? null;
+    return (inst ? mostPrecise(inst.filter(match)) : null)?.val ?? null;
   }
 
   /** 인스턴스 사실(공시 단위 캐시). 실패 시 null */
@@ -341,8 +415,10 @@ export class UsReader {
         try {
           const xml = await instanceText(await filingFiles(this.profile.cik, accn));
           return xml ? parseInstance(xml, { accn, form, filed }) : null;
-        } catch {
-          return null;
+        } catch (e) {
+          // 조회 실패는 "인스턴스 없음"(null)과 다르다 — 삼키지 않고 올린다(structure() 와 같은 원칙, 2026-09-26). 실패한 약속은 메모에서 뺀다
+          this.instMemo.delete(accn);
+          throw e;
         }
       })();
       this.instMemo.set(accn, p);
@@ -356,10 +432,16 @@ export class UsReader {
     const inst = await this.instance(p.accn, p.form, p.filed);
     if (!inst) return "gap";
     let out: PartRead | null = null;
+    // 멤버마다 사실 하나(같은 멤버에 문장용 반올림 사실이 함께 있으면 정밀한 값 — 두 번 더하지 않는다)
+    const byMember = new Map<string, RawFact[]>();
     for (const f of inst) {
       if (f.concept !== qname || f.unit !== this.profile.reportingCurrency || !near(f.start, p.start) || !near(f.end, p.end)) continue;
       const ks = Object.keys(f.dims);
       if (ks.length !== 1 || ks[0] !== axis || !member(f.dims[axis])) continue;
+      byMember.set(f.dims[axis], [...(byMember.get(f.dims[axis]) ?? []), f]);
+    }
+    for (const g of byMember.values()) {
+      const f = mostPrecise(g)!;
       out ??= { val: 0, leaves: [] };
       out.val += f.val;
       out.leaves.push({ rv: readValueOf(f), op: 1 });
@@ -460,8 +542,13 @@ export class UsReader {
             labels = labT ? parseLabels(labT) : null;
           }
           return { shape, parents, sums, labels, gaps: calT ? 0 : Gap.LINKBASE };
-        } catch {
-          return { shape: null, parents: new Map(), sums: new Map(), labels: null, gaps: Gap.LINKBASE };
+        } catch (e) {
+          // 조회 실패(429·시간 초과·네트워크)는 "구조 없음"이 아니다 — 삼키면 LINKBASE 결손으로 조립이 "성공"해 6시간 캐시되고
+          // 매출원가·매출총이익이 빈칸으로 남았다(SHW·NVO·SAP, 2026-09-26). 파일이 실제로 없으면 linkbaseText 가 null 을 돌려주므로
+          // 여기 오는 것은 조회 실패뿐 — 올려 보내 조립을 실패로 끝낸다(loadFinSym 은 실패를 5분만 캐시하고 다시 시도, 배치는 다음 날 재시도).
+          // 메모에 실패한 약속을 남기지 않는다(다음 호출이 다시 받게)
+          this.structMemo.delete(key);
+          throw e;
         }
       })();
       this.structMemo.set(key, p);

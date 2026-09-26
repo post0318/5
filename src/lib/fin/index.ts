@@ -2,6 +2,8 @@ import "server-only";
 import { latestPeriodicAccn, UsReader } from "./read";
 import { assembleIncomeStatements } from "./assemble/is";
 import { revenue } from "./metrics/revenue";
+import { cogsGp } from "./metrics/cogs";
+import { opincOpex } from "./metrics/opinc";
 import { finalizeDerived } from "./derived";
 import { ENGINE_VERSION, markFailed, persist, readStmt, readSym, readSymMeta, toStmtDoc, toSymDoc, touchChecked } from "./store";
 import { Gap, gapNames, type FinAssembly, type Market } from "./types";
@@ -17,6 +19,8 @@ import type { FinStmtDoc, FinSymDoc } from "../db/fin";
 export type { FinAssembly, Market } from "./types";
 export type { FinStmtDoc, FinSymDoc } from "../db/fin";
 export { gapNames } from "./types";
+export { COGS_NOTE } from "./metrics/cogs";
+export { OPINC_NOTE } from "./metrics/opinc";
 
 export interface AssembleOpts {
   persist?: boolean;
@@ -38,9 +42,13 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
   const colsGaps = [...st.annual, ...st.quarterly].reduce((g, a) => g | a.col.gaps, 0);
   const cols = dedupe([...st.annual, ...st.quarterly]);
   const rev = revenue(cols, reader.profile);
+  // 매출원가·매출총이익(docs/metrics/cogs.md) — 매출 지표 값을 받아 합성 매출총이익을 만든다
+  const { cogs, gp } = cogsGp(cols, reader.profile, rev);
+  // 영업이익·영업비용 1단계(본표 소계만 — cogs.md §8). 소비처 전환 전이라 화면은 아직 옛 계산을 쓴다
+  const { opinc, opex } = opincOpex(cols, reader.profile, gp);
   const at = new Date().toISOString();
   // 파생값 입력 참조 압축·자기 검사(입력 합 = 값) — 불일치는 값을 두고 issues.der·경고로(조용히 통과시키지 않음)
-  const derErr = await finalizeDerived(reader, cols, rev, at);
+  const derErr = await finalizeDerived(reader, cols, [rev, cogs, gp, opinc, opex], at);
   // 조립 항등식 불성립(Gap.IDENTITY) 노출 — 매출 경로는 3층이 이미 값을 비웠고(reason), 그 외 줄은 값을 두고 경고로만
   const issues: FinAssembly["issues"] = [];
   const warnings = [...reader.warnings];
@@ -51,16 +59,23 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
     const unv = rev.values[a.col.key]?.unv ?? [];
     const other = a.identity.fails.filter((f) => !r.includes(f) && !unv.includes(f));
     issues.push({ col: a.col.key, rev: r, other, unv, ...(der.length ? { der } : {}) });
-    if (der.length) warnings.push(`${a.col.key} 매출 파생값 입력 자기 검사 불일치(값 유지): ${der.join("; ")}`);
+    if (der.length) warnings.push(`${a.col.key} 파생값 입력 자기 검사 불일치(값 유지): ${der.join("; ")}`);
     if (r.length) warnings.push(`${a.col.key} 매출 비움 — 조립 항등식 불성립(매출 줄 포함): ${r.join("; ")}`);
     if (unv.length) warnings.push(`${a.col.key} 매출 항등식 미검증(판정 불완전 — 값 유지, 검증기 SEC 직접 대조): ${unv.join("; ")}`);
     if (other.length) warnings.push(`${a.col.key} 조립 항등식 불성립(매출 외 줄 — 값 유지, 다음 지표 미결): ${other.join("; ")}`);
+  }
+  for (const a of cols) {
+    const c = cogs.values[a.col.key], g = gp.values[a.col.key];
+    const idf = [...new Set([...(c?.idFails ?? []), ...(g?.idFails ?? [])])];
+    if (idf.length) warnings.push(`${a.col.key} 매출원가·매출총이익 비움 — 조립 항등식 불성립: ${idf.join("; ")}`);
+    const xn = opex.values[a.col.key]?.note;
+    if (xn) warnings.push(`${a.col.key} 영업비용: ${xn}`);
   }
   const result: FinAssembly = {
     profile: reader.profile,
     annual: st.annual,
     quarterly: st.quarterly,
-    metrics: { revenue: rev },
+    metrics: { revenue: rev, cogs, gp, opinc, opex },
     gaps: reader.gaps | colsGaps,
     warnings,
     issues,
@@ -109,7 +124,8 @@ export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | 
     if (stored && stored.ev === ENGINE_VERSION) return stored;
     try {
       const a = await assemble(market, symbol, { persist: false });
-      entry.ttl = LOOKUP_TTL_MS.assembled;
+      // 환율·Yahoo 조회 실패로 결손이 생긴 조립은 일시적 — 6시간 캐시하지 않고 실패와 같이 5분 뒤 다시 조립(2026-09-26)
+      entry.ttl = a.gaps & (Gap.FX | Gap.YAHOO) ? LOOKUP_TTL_MS.failed : LOOKUP_TTL_MS.assembled;
       return toSymDoc(a);
     } catch {
       entry.ttl = LOOKUP_TTL_MS.failed;
@@ -120,10 +136,16 @@ export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | 
   return entry.p;
 }
 
-const METRIC_KEY = { revenue: "rev" } as const;
+const METRIC_KEY = { revenue: "rev", cogs: "cogs", gp: "gp", opinc: "opinc", opex: "opex" } as const;
 export function metricAt(sym: FinSymDoc, metric: keyof typeof METRIC_KEY, colKey: string): number | null {
   const i = sym.c.findIndex((c) => c[0] === colKey);
   return i < 0 ? null : (sym.m[METRIC_KEY[metric]]?.[i] ?? null);
+}
+
+/** 저장본에서 지표 한 칸의 사유·주석(빈칸 사유 또는 정의 메모 — 예: COGS_NOTE.synth). 없으면 null */
+export function metricNoteAt(sym: FinSymDoc, metric: "cogs" | "gp" | "opinc" | "opex", colKey: string): string | null {
+  for (const [text, keys] of sym.n?.[METRIC_KEY[metric]] ?? []) if (keys.includes(colKey)) return text;
+  return null;
 }
 
 /**

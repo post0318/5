@@ -185,7 +185,8 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   ]);
   // 영업이익 태그가 없으면 매출총이익 − 판관비 − 연구개발비로 파생 (IBM 등)
   if (opIncome == null) {
-    const gp = flowValue(annual, quarterly, ["GrossProfit", "매출총이익", "売上総利益"]);
+    // 미국: getFinancials 매출총이익 행(재무 5층 구조 매출총이익 지표 — us/edgar.ts GROSS_PROFIT_ROW_ID). 태그를 여기서 고르지 않는다
+    const gp = flowValue(annual, quarterly, ["fin:grossProfit", "매출총이익", "売上総利益"]);
     const sgaV = flowValue(annual, quarterly, [
       "SellingGeneralAndAdministrativeExpense",
       "GeneralAndAdministrativeExpense",

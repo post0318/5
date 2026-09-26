@@ -76,6 +76,10 @@ export function isFullYearDuration(e: FactUnitEntry): boolean {
  */
 export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
   const P = [1e6, 1e8, 1e9, 1e10];
+  // 작은 단위(1e3·1e4·1e5) 반올림 판정은 이 옛 모듈에 넣지 않는다(2026-09-26 시도 후 되돌림) — 줄 단위 판정이라 본표 구조 없이
+  // 오판이 대량으로 나 NVO·SAP(20-F)·TRV·PSA 연간 열이 통째로 사라졌다. 정밀값 선택은 fin 판독층의 열 단위 규칙
+  // (read/vintage.ts columnFiling)과 검증기만 한다. 이 모듈이 담당하는 비매출 행의 반올림 섞임(MRVL FY2021 등)은 fin 전환 때 해소
+  // (architecture.md §1.1·§9).
   const usdRounds = (x: number, y: number) =>
     Math.abs(x) >= 1e8 && x !== y && P.some((p) => Math.round(y / p) * p === x && y % p !== 0);
   // 주식수(shares)도 같은 규칙 — MRVL 2022-01-29 유통주식수: 그 해 10-K 846,695,000 → 2023 10-K 846,700,000(10만 주
@@ -432,34 +436,5 @@ export function ttmOf(entries: FactUnitEntry[]): number | null {
   return ttmCombine(fy, cur, prior);
 }
 
-/** 매출원가 후보 태그(기본 우선순위) */
-export const COGS_CONCEPTS = ["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"];
-const GP_CHECK_REVENUE = [
-  "Revenues",
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
-  "RevenueFromContractWithCustomerIncludingAssessedTax",
-];
-
-/**
- * 매출원가 태그 순서 — 매출총이익 태그가 있으면 **"매출 − 매출원가 = 매출총이익"이 성립하는 태그를 앞으로**.
- * BE 는 CostOfGoodsAndServicesSold 를 주석의 일부 항목(FY2025 1,800만 달러)에만 달고 본표 매출원가는 CostOfRevenue
- * (14.37억)로 공시해, 기본 우선순위로는 매출원가 행이 1,800만 달러 · LTM 매출총이익 ≠ 매출 − 매출원가가 됐다(검증 D층
- * 2026-09-25). 판정은 세 값이 다 있는 가장 최근 사업연도 기준(0.5% 안), 성립하는 태그가 없으면 기본 순서.
- */
-export function cogsConcepts(facts: CompanyFacts): string[] {
-  const gp = annualByYear(entriesOf(facts, "GrossProfit"));
-  if (!gp.size) return COGS_CONCEPTS;
-  const revs = GP_CHECK_REVENUE.map((c) => annualByYear(entriesOf(facts, c)));
-  const fits = (c: string): boolean | null => {
-    const cg = annualByYear(entriesOf(facts, c));
-    const years = [...cg.keys()].filter((y) => gp.has(y) && revs.some((r) => r.has(y))).sort((a, b) => b - a);
-    if (!years.length) return null;
-    const y = years[0];
-    return revs.some((r) => {
-      const rv = r.get(y);
-      return rv != null && Math.abs(rv - cg.get(y)! - gp.get(y)!) <= Math.abs(rv) * 0.005;
-    });
-  };
-  const ok = COGS_CONCEPTS.filter((c) => fits(c) === true);
-  return ok.length ? [...ok, ...COGS_CONCEPTS.filter((c) => !ok.includes(c))] : COGS_CONCEPTS;
-}
+// 매출원가 태그 판정(cogsConcepts)은 삭제 — 매출원가·매출총이익은 재무 5층 구조 지표(src/lib/fin metrics/cogs.ts)가 본표 계산 구조로
+// 정한다(docs/metrics/cogs.md). 태그 우선순위 판정은 CAT 주석 조각·MCD 10-Q 가맹점 임차비용을 매출원가로 오인했다.

@@ -66,3 +66,6 @@ logs/
 /reports/
 .scratch/
 scripts/metrics/expected/
+
+# 독립 기준(scripts/reference) — SEC 원문·모델 응답 캐시
+scripts/reference/.cache/

@@ -39,7 +39,7 @@ import { withEquityStatementShares } from "./edgar-equity-shares";
 import { loadUsCurrentShares, type CurrentShares } from "./current-shares";
 import { ltmEps, ltmNetIncome, parentEquityAt } from "./edgar-pershare";
 import { isFinancialCompany } from "./edgar-financial";
-import { loadUsRevenue, revLtm, revQuarterAt, type UsRevenue } from "./fin-revenue";
+import { loadUsRevenue, revLtm, revQuarterAt, type RevCol, type UsRevenue } from "./fin-revenue";
 import { loadClassAFacts } from "./class-facts-loader";
 import { dartAdrFinancials, dartAdrOf, dartAdrTtm } from "./dart-adr";
 import type { ClassAFacts } from "./edgar-classfacts";
@@ -574,9 +574,7 @@ interface ConceptSpec {
 
 const CONCEPTS: ConceptSpec[] = [
   // 손익계산서
-  // 매출 행은 태그가 아니라 재무 5층 구조 매출 지표(fin-revenue.ts)로 따로 채운다(getFinancials) — REVENUE_ROW_ID
-  { concept: "CostOfRevenue", label: "Cost of Revenue", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
-  { concept: "GrossProfit", label: "Gross Profit", section: "손익계산서", depth: 0, isSubtotal: true, isHighlight: false },
+  // 매출·매출원가·매출총이익 행은 태그가 아니라 재무 5층 구조 지표(fin-revenue.ts)로 따로 채운다(getFinancials) — FIN_IS_ROWS
   { concept: "ResearchAndDevelopmentExpense", label: "R&D Expense", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
   { concept: "SellingGeneralAndAdministrativeExpense", label: "SG&A Expense", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
   { concept: "OperatingIncomeLoss", label: "Operating Income", section: "손익계산서", depth: 0, isSubtotal: true, isHighlight: true },
@@ -604,6 +602,16 @@ const CONCEPTS: ConceptSpec[] = [
 
 /** getFinancials 의 매출 행 id — 멀티플·컨센서스가 이 id 로 찾는다 */
 export const REVENUE_ROW_ID = "fin:revenue";
+/** getFinancials 의 매출원가·매출총이익 행 id(fin cogs·gp 지표, docs/metrics/cogs.md) — 멀티플이 이 id 로 찾는다 */
+export const COGS_ROW_ID = "fin:cogs";
+export const GROSS_PROFIT_ROW_ID = "fin:grossProfit";
+
+/** fin 지표 행(매출·매출원가·매출총이익) — 태그가 아니라 fin-revenue.ts 열 값 */
+const FIN_IS_ROWS: { id: string; label: string; pick: "v" | "cogs" | "gp"; depth: number; isSubtotal: boolean; isHighlight: boolean }[] = [
+  { id: REVENUE_ROW_ID, label: "Revenue", pick: "v", depth: 0, isSubtotal: false, isHighlight: true },
+  { id: COGS_ROW_ID, label: "Cost of Revenue", pick: "cogs", depth: 1, isSubtotal: false, isHighlight: false },
+  { id: GROSS_PROFIT_ROW_ID, label: "Gross Profit", pick: "gp", depth: 0, isSubtotal: true, isHighlight: false },
+];
 
 function periodKey(e: FactUnitEntry): string {
   // 연간은 종료 연도로 키를 잡는다 → 최신 10-K 의 재작성된 비교연도(액면분할 소급 등)를
@@ -707,19 +715,19 @@ export const usEdgarAdapter: MarketAdapter = {
       }
     }
 
-    // 매출 = 재무 5층 구조 매출 지표(fin-revenue.ts). 연간 열은 사업연도 키(FY{연도})로, 분기 열은 결산일(±6일)로 맞춘다
-    const revByKey = new Map<string, number | null>();
+    // 매출·매출원가·매출총이익 = 재무 5층 구조 지표(fin-revenue.ts). 연간 열은 사업연도 키(FY{연도})로, 분기 열은 결산일(±6일)로 맞춘다
+    const finByKey = new Map<string, RevCol>();
     if (periodType === "annual")
       for (const c of revenue?.annual ?? []) {
         const key = `FY${c.fy}`;
-        revByKey.set(key, c.v);
+        finByKey.set(key, c);
         if (!periodMeta.has(key) && c.v != null)
           periodMeta.set(key, { label: key, fiscalYear: c.fy, fiscalQuarter: null, endDate: c.end });
       }
     else
       for (const [key, meta] of periodMeta) {
         const q = meta.endDate ? revQuarterAt(revenue, meta.endDate) : null;
-        if (q) revByKey.set(key, q.v);
+        if (q) finByKey.set(key, q);
       }
 
     // 2) 최근 기간 우선, 최대 5개 (개요·재무 하이라이트와 동일)
@@ -737,11 +745,12 @@ export const usEdgarAdapter: MarketAdapter = {
     const sectionsOrder = ["손익계산서", "재무상태표", "현금흐름표"] as const;
     const sections = sectionsOrder.map((title) => {
       const items: FinancialLineItem[] = [];
-      if (title === "손익계산서") {
-        const values = Object.fromEntries(periodLabels.map((l) => [l, revByKey.get(l) ?? null]));
-        if (periodLabels.some((l) => values[l] != null))
-          items.push({ accountName: "Revenue", accountId: REVENUE_ROW_ID, depth: 0, isSubtotal: false, isHighlight: true, values });
-      }
+      if (title === "손익계산서")
+        for (const r of FIN_IS_ROWS) {
+          const values = Object.fromEntries(periodLabels.map((l) => [l, finByKey.get(l)?.[r.pick] ?? null]));
+          if (periodLabels.some((l) => values[l] != null))
+            items.push({ accountName: r.label, accountId: r.id, depth: r.depth, isSubtotal: r.isSubtotal, isHighlight: r.isHighlight, values });
+        }
       for (const spec of CONCEPTS) {
         if (spec.section !== title) continue;
         const picked = periodEntries.get(spec.concept);

@@ -64,9 +64,10 @@ function sanitize(r: Record<string, unknown>): Omit<VerifyResultDoc, "_id"> | nu
     runAt: str(r.runAt, 40),
     base: str(r.base, 200),
     commit: str(r.commit, 64) || null,
-    counts: { fail: num(c.fail), unverifiable: num(c.unverifiable), pass: num(c.pass), extAllMatch: num(c.extAllMatch), extMismatch: num(c.extMismatch), otherReview: num(c.otherReview) },
+    counts: { fail: num(c.fail), unverifiable: num(c.unverifiable), pass: num(c.pass), common: num(c.common), extAllMatch: num(c.extAllMatch), extCommon: num(c.extCommon), extMismatch: num(c.extMismatch), otherReview: num(c.otherReview) },
     fails: arr(r.fails, issue),
     unverifiable: arr(r.unverifiable, issue),
+    common: arr(r.common, issue),
     external: arr(r.external, (x) => ({
       item: str(x.item, 200),
       ours: typeof x.ours === "number" && Number.isFinite(x.ours) ? x.ours : null,

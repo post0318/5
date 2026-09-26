@@ -1,6 +1,7 @@
 # 재무 숫자 5층 구조 — 설계 (2026-09-25, 오너 결정 반영)
 
-> 변경 이력: 2026-09-25 원공시 → 최신 판본 우선(외부 대조 근거) · 2026-09-26 파생값 입력 구조(§2.1, 엔진판 5)
+> 변경 이력: 2026-09-25 원공시 → 최신 판본 우선(외부 대조 근거) · 2026-09-26 파생값 입력 구조(§2.1, 엔진판 5) · 2026-09-26 매출원가·
+> 매출총이익·영업이익(1단계)·영업비용 지표(엔진판 6, `cogs.md`) · 2026-09-26 열 단위 판본 — 정밀도만 낮춘 재게시(§1.1)
 
 > **원칙 — 숫자의 오차가 없어야 한다. 정의의 차이가 아닌 수의 차이는 심각한 오류다.**
 > 모든 차이는 ① 일치 ② 정의 차이(분해식이 정확히 성립) ③ 오류 셋 중 하나로 닫는다.
@@ -36,6 +37,39 @@
 | `edgar-is-structure.ts`·`edgar-revenue-dims.ts` 의 `_cal`/`.xsd` 판독 | 1층 `read/linkbase.ts` + 2층 `assemble/is.ts` | |
 | `edgar-financial.ts` 순수익 합성 | 3층 `metrics/revenue.ts` 회사 유형 규칙 | |
 | `edgar-series.ts` splitFactorsByYear 의 매출 태그(분할 판정 휴리스틱) | 1층 그대로 | 표시 숫자가 아니라 판정 보조 — 매출 지표 규칙 적용 대상 아님(문서화된 예외) |
+
+### 1.1 열 단위 판본 — 정밀도만 낮춘 재게시 (2026-09-26)
+
+**원칙: 한 열(기간)의 값은 한 공시에서만 읽는다.** 최신 판본 우선(재작성이 이긴다)은 그대로이고, 반올림 재게시는 새 정보가
+아니므로(오너 원칙) 그 판단을 **줄마다가 아니라 열 전체로** 한다(`read/vintage.ts` `columnFiling`, 판독은 `read/index.ts`
+`partOf` → `partValue`).
+
+- 열의 출발 공시 = 기준 개념(매출, 없으면 순이익)으로 정한 그 기간의 최신 정기공시(반올림 재태깅을 버리지 않은 원래 사실).
+- 더 이른 공시를 최신순으로 보며 **지금 공시의 손익계산서 본표 줄**(그 공시 `_pre` 의 손익계산서 역할)끼리 비교한다.
+  줄마다: ① 같음 ② 부호만 바뀜(부호 관례 재태깅 — 판정에 넣지 않음) ③ 반올림 재게시 — 나중 값이 나중 공시 표시 단위 u
+  (decimals, 없으면 그 공시·기간의 모든 값을 나누는 가장 큰 천·만·10만·백만 단위)의 배수이고 먼저 값은 아니며, 먼저 값을 u 로
+  반올림한 값에서 **한 단위 이내**(회사가 반올림된 항목으로 소계를 다시 계산하거나 합계를 맞추려 한 줄을 조정한 경우 포함), 또는
+  본문 문장 재태깅(1e6·1e8·1e9·1e10, 1억 이상) ④ 재작성 — 그 밖의 차이.
+- 본표 줄이 ③ 뿐(하나 이상)이면 **열 전체를 이른 공시로 옮기고** 계속 비교, 전부 같으면 계속, ④ 가 하나라도 있으면 멈춘다
+  (**최신 공시 그대로, 열 안에서 섞지 않는다** — 그 공시의 반올림처럼 보이는 줄도 그 공시 값).
+- 본표로 좁히는 이유: 현금흐름표 재분류·주석 표의 태그 재사용은 손익계산서 열의 재작성이 아니다(MRVL 2024 10-K 의 FY2022 재무활동
+  기타 1.0 → −10.8 백만 달러, FY2021 주석 구조조정 141.9 → 27.0). 주석만 반올림되고 본표가 같으면 옮기지 않는다(ISRG). 본표를 못
+  읽으면 전체 줄이 ③ 뿐일 때만 옮긴다.
+- 옮겨 갈 공시는 기준 개념을 실은 공시만 — 본문 문장에 숫자 하나만 다시 태깅한 공시(INTC 2025 10-K 의 2024 9개월 값 1줄)는
+  열의 원천이 아니다.
+- 열 공시의 companyfacts 값이 먼저 값의 본문 문장 반올림이면(companyfacts 는 공시·기간·개념당 값 하나만 남겨 문장값만 남을 수
+  있다) 그 공시 원본(인스턴스)에서 정밀값을 다시 읽는다 — 다른 판본 값으로 바꾸지 않는다(`sentenceRetagged`).
+- 실측(47종목 비저장 조립, 반올림 단위 확장 전과 비교): MRVL FY2021(2023 10-K → 2022 10-K — 매출총이익 1,488.3 은
+  2,968.9 − 1,480.6 재계산이라 줄 단위로는 안 잡혀 항등식이 깨졌다)·FY2022(2024 10-K → 2022 10-K, 매출 4,462,383,000)·
+  2022Q3(2022-12 10-Q → 2021-12 10-Q) 열이 옮겨짐. ASML FY2016 은 2019 20-F 가 실제 재작성(매출총이익 3,044.5 → 3,145.3)이라
+  2019 20-F 그대로. AXP FY2017 충당금 2,759 → 2,760 은 1e7 반올림처럼 보이지만 구성 항목(기타 96 → 97)이 바뀐 재작성이라
+  2019·2020 10-K 값 2,760 그대로(그래서 줄 단위 반올림 단위에서 1e7 은 뺐다). DELL 2025Q1 법인세 −408 → −400 은 공시 원본에
+  `RestatementAxis` 로 재작성 명시 — 옛 줄 단위 규칙(1e8 반올림으로 오인)이 −408 을 쓰던 것이 −400 으로 바로잡혔다.
+- **줄 단위 `dropRoundedRetags` 는 열 값 판독에 쓰지 않는다** — 판본과 무관한 증거 조회(`facts()` — Q4 매출 개념 대체 증거,
+  Yahoo LTM 창, 조립 존재 확인)와 같은 공시 안 중복 사실(`mostPrecise`)에만 남는다.
+- 검증기(`verify-financials.mjs` `prepareColumnVintage`·`latestPrecise`)는 같은 규칙을 **따로** 구현한다(본표 줄은 검증기 자체
+  `faceCogsLine` 판독, S3). 옛 모듈(`edgar-series.ts` `dropRoundedRetags`)은 동기 companyfacts 필터라 본표 판정이 없어 줄 단위
+  그대로 — §9 참고.
 
 ## 2. 데이터 계약 (`src/lib/fin/types.ts`)
 
@@ -93,13 +127,17 @@ interface StmtLine {
   v: number | null;
   why?: ReadWhy;          // 예외 칸만
 }
-type LineRole = "revenue" | "revenue.total" | "revenue.net" | "revenue.nonop" | "cogs" | "gross" | "opinc" | "pretax" | "tax" | "ni" | "ni.parent";
-interface AssembledIs { col: Column; lines: StmtLine[]; identity: { ok: boolean; fails: string[] } }
+type LineRole = "revenue" | "revenue.total" | "revenue.net" | "revenue.nonop" | "cogs" | "cogs.part" | "gross" | "opinc" | "pretax" | "tax" | "ni" | "ni.parent";
+interface AssembledIs { col: Column; lines: StmtLine[]; identity: { ok: boolean; fails: string[] };
+  cogsBy: "gp" | "label" | null; cogsWhy?: string;   // 매출원가 줄 판정 경로(cogs.md §1) — 역할 cogs 는 개념 이름이 아니라 본표 계산 구조로 붙인다
+  faceShape: boolean }                                 // 줄 구조가 그 공시 본표(_pre)에서 왔는가(false = 기본 개념 목록, Gap.LINKBASE)
 
 /** 3층 — 지표 값. 파생은 같은 기준(같은 열 키·같은 end)일 때만. */
 interface MetricValue { v: number | null; col: string; end: string; line: string | null; rule: string; gaps: number; why?: ReadWhy;
-  inputs?: DerivedInput[]; calculatedAt?: string }   // §2.1 — rule·why 는 호환용으로 유지
-interface MetricSeries { metric: "revenue"; unit: "USD" | "KRW"; values: Record<string, MetricValue> }
+  inputs?: DerivedInput[]; calculatedAt?: string     // §2.1 — rule·why 는 호환용으로 유지
+  reason?: string; note?: string }                   // reason = 빈칸 사유, note = 값 있는 칸의 정의 메모(합성·회사 공시 자체 등)
+type MetricId = "revenue" | "cogs" | "gp" | "opinc" | "opex";
+interface MetricSeries { metric: MetricId; unit: "USD" | "KRW"; values: Record<string, MetricValue> }
 interface CompanyProfile {
   market: Market; symbol: string; cik: string; sic: number | null;
   type: "general" | "bank" | "broker" | "insurer" | "captive" | "reit";
@@ -135,15 +173,20 @@ interface MarketInput { ref: string; v: number; asOf: string }   // 곱하는 �
   ③ `calculatedAt` 기록.
 - 저장(§3.2 `d`): `{ rev: {열키: 입력[]}, ln: {"열키|줄id": 입력[]}(rev 가 c: 로 가리킨 파생 칸 — 재귀 전개용), a: asOf 표, at }`,
   입력 1건 = 튜플 `[ref, op, role, v, asOf번호, x.ref, x.v, x.asOf번호]`(뒤쪽 null 생략). 원문 URL 은 저장하지 않는다.
+- 지표 확장(엔진판 6): `d` 에 `cogs`·`gp`·`opinc`·`opex` 사전(매출과 같은 형식)과 **틀 `tp`** — 같은 열 칸만 가리키는 입력(합성 매출총이익 =
+  `c:열|매출 줄` − `c:열|원가 줄`, 영업비용 = 매출총이익 − 영업이익 칸)은 열 키를 `*` 로 바꾼 틀이 같은 열끼리 `[틀, 열키[]]` 로 한 번만 저장
+  (`c:*|줄id` 의 `*` = 그 열). 여기 묶인 열은 지표 사전에 따로 없다. 자기 검사는 다섯 지표 모두 같은 규칙.
 - 크기(2026-09-26 실측, 유니버스 47종목 비저장 조립): `d` 합계 **83KB**(일반 10-K 종목 1.1~1.7KB, 20-F 2.4~2.8KB, XOM 15.6KB —
   차원 멤버 입력), `fin_sym` 47건 267KB → 350KB. `fin_stmt` 는 변화 없음.
 - 검증기는 이 입력 목록을 대조만 하고 입력값 자체는 원자료를 독립 판독해 확인한다(§1 공통모드 차단 유지). 다음 지표(성장률·
   EV·멀티플)는 가격 입력(`asOf` 필수)을 같은 형식으로 추가한다.
 
-- 3층 시그니처: `revenue(cols: AssembledIs[], co: CompanyProfile): MetricSeries`.
+- 3층 시그니처: `revenue(cols: AssembledIs[], co: CompanyProfile): MetricSeries`, `cogsGp(cols, co, revenue): { cogs, gp }`,
+  `opincOpex(cols, co, gp): { opinc, opex }`(`metrics/cogs.ts`·`opinc.ts`, 정의는 `cogs.md`).
 - 회사 유형(`type`)은 1층 `read/profile.ts` 한 곳에서 판정(SIC + 공시 구조) — 지금처럼 `isFinancialCompany`·`financialSector`·SIC 범위가 모듈마다 따로 있지 않게.
 - 회사별 예외는 `metrics/overrides.ts` 한 곳: `{ symbol, metric, rule, evidence, since }`. `evidence`(공시 accn·숫자로 된 근거) 없는 항목은 금지.
-- 공개 API(`src/lib/fin/index.ts`): `assemble(market, symbol, {persist})`, `getFinSym(market, symbol)`, `getFinStmt(market, symbol, stmt, period)`, `metricAt(sym, metric, colKey)`. 그 밖의 내부 모듈 직접 import 금지.
+  예외: 본표에 매출원가 줄이 없는 회사(유형 D)의 매출원가 구성 규칙은 `metrics/cogs-rules.ts`(같은 evidence 규칙, 규칙 없음 = 대기).
+- 공개 API(`src/lib/fin/index.ts`): `assemble(market, symbol, {persist})`, `getFinSym(market, symbol)`, `getFinStmt(market, symbol, stmt, period)`, `metricAt(sym, metric, colKey)`, `metricNoteAt(sym, metric, colKey)`(칸 사유·주석), 주석 문구 `COGS_NOTE`·`OPINC_NOTE`. 그 밖의 내부 모듈 직접 import 금지.
 
 ## 3. DB 스키마 — 유니버스 종목만 저장 (압축형)
 
@@ -196,7 +239,11 @@ interface MarketInput { ref: string; v: number; asOf: string }   // 곱하는 �
   경로 완전 판정 불성립이면 그 열 `m.rev` 는 null, 판정 불완전이면 값은 두고 "항등식 미검증"(`revenue.md` §6.1, 4번째 칸은
   엔진판 4부터). `ck`(선택): 배치가 "새 정기공시 없음"을 마지막으로 확인한 시각(§5.1). 엔진판 3(2026-09-25)부터.
 - 예외 코드 `k`: `fx` 환산(`r`=환율), `yq` 20-F·40-F Yahoo 분기, `d` 파생 구성 `[accn, 부호]`(호환용 — 구조는 아래 `d`).
-- `d`(fin_sym, 엔진판 5부터): 파생값 입력 구조(§2.1) — 매출 칸별 입력 + 참조된 파생 칸 입력 + asOf 표 + 계산 시각.
+- `d`(fin_sym, 엔진판 5부터): 파생값 입력 구조(§2.1) — 매출 칸별 입력 + 참조된 파생 칸 입력 + asOf 표 + 계산 시각. 엔진판 6부터
+  `d.cogs`·`d.gp`·`d.opinc`·`d.opex`·틀 `d.tp`.
+- `m`(fin_sym): 엔진판 6부터 `rev`·`cogs`·`gp`·`opinc`·`opex`. `n`(선택, 엔진판 6부터): 칸 사유·주석 — 지표 키 → `[문구, 열키[]][]`
+  (빈칸이면 사유 "구성 규칙 대기 — …"·"정의 대기 — …", 값이 있으면 정의 메모 "본표 소계 없음 · 매출 − 매출원가"·"회사 공시 자체 — …").
+  예외 코드 `x` 는 매출에만(새 지표는 `d` 로 충분).
   **예외가 아닌 칸은 출처를 따로 적지 않는다**(열 출처 = 칸 출처) — 반올림 재태깅 제거
   (`dropRoundedRetags`)로 버려진 값은 애초에 후보에서 빠지므로 별도 예외 코드가 없다. (태그 정정
   판정용 `tc`·`rk` 코드는 2026-09-25 최신 판본 우선 회귀로 삭제 — §2 변경 이력 참고.)
@@ -221,6 +268,8 @@ interface MarketInput { ref: string; v: number; asOf: string }   // 곱하는 �
 - 합계 **약 15MB, 판본 변경분 포함 20MB 안팎**(인덱스 포함 — `_id` 인덱스는 종목당 수백 바이트). 기존 23MB 와 합쳐 약 45MB, M0 한도의 9%.
   유니버스가 200종목으로 늘어도 약 40MB.
 - 한도 근접(예: 400MB) 시 순서: ① `fin_chg` TTL 90일 ② 분기 열 20 → 12 ③ 연간 10 → 7 ④ M2 이상 유료 등급 — ④는 오너 결정.
+- **실측(2026-09-26, 비저장 조립 47종목 BSON)**: 엔진판 5 fin_sym 350KB·fin_stmt 728KB → 엔진판 6(매출원가·매출총이익·영업이익·영업비용)
+  fin_sym **694KB**·fin_stmt 728KB(형식 변화 없음). 내역·사전 추정 대비는 `cogs.md` §7.
 - **가정**: M0 한도를 BSON 데이터 크기(비압축) + 인덱스로 보고 계산했다(WiredTiger 압축 이득은 여유분으로 둠). 첫 적재 후 `db.stats()` 로 실측해 이 표를 갱신한다.
 
 ## 4. 조회 API — 소비처 통합 원칙
@@ -306,6 +355,7 @@ DB 에 들어가지 않으므로 §1 의 0~3층 번호를 매기지 않는다. �
 
 | 코드 | 규칙 | 수단 |
 |---|---|---|
+| S0 | 매출·매출원가·매출총이익 태그 문자열을 src/lib/fin 밖에서 쓰지 않는다(`REVENUE_TAG`·`COGS_TAG`, 문서화된 판정 보조 예외만) | eslint `no-restricted-syntax` |
 | S1 | 소비처는 `src/lib/fin/index.ts` 공개 API만 import. `read/*`·`assemble/*`·`metrics/*` 내부 파일 직접 import 금지 | eslint `no-restricted-imports`(소비처 디렉터리 대상) |
 | S2 | 회사별 예외는 `metrics/overrides.ts` 한 곳, `evidence`(공시 accn·숫자) 없는 항목 금지 | 코드리뷰 + 런타임에서 evidence 없는 override 로드 시 throw |
 | S3 | `scripts/verify-financials.mjs` 는 `src/lib/fin/**` import 금지(공통모드 차단, §1) | eslint `no-restricted-imports`(스크립트 대상) |
@@ -324,6 +374,7 @@ DB 에 들어가지 않으므로 §1 의 0~3층 번호를 매기지 않는다. �
 - 20-F·40-F 제출사의 LTM 은 여전히 Yahoo 분기에 의존(`read/ltm-yahoo.ts`) — SEC 자체 분기 공시가
   없는 구조적 제약이라 이 설계로도 해소되지 않는다.
 - IFRS 매핑(`read/ifrs.ts`)은 종목이 늘 때마다 수동 확장이 필요하다(현재 TSM·SPOT 뿐).
+- (2026-09-26) 아래 Q4 판본 규칙 불일치 중 **매출원가·매출총이익 행은 fin 값으로 전환돼 해소**. 영업이익 이하 행은 그대로(영업이익 전환 시 해소).
 - **다음 지표 주의 — 옛 모듈 비매출 행의 Q4 판본 규칙 불일치(감사 2026-09-25, 고치지 않고 기록)**: 손익계산서 분기 화면
   (`lib/markets/us/edgar-income.ts` `quarterValue`)의 매출 외 행(매출원가·영업이익 등)은 Q4 = "가장 늦게 제출된 연간 값" −
   "가장 늦게 제출된 9개월 값"을 **따로** 고른다 — fin 1층(Q4D = 사업연도 최신 판본 − 9개월 최신 판본, 구성 공시가 개념을
@@ -332,6 +383,13 @@ DB 에 들어가지 않으므로 §1 의 0~3층 번호를 매기지 않는다. �
 - 조립 항등식 판정 불완전(값 없는 항·표시 줄에 없는 항·둘 이상 식의 항·식 밖 줄·파생 열 구성 공시의 식 구성 다름)은 매출을
   비우지 않고 "항등식 미검증"으로 표시한다(`revenue.md` §6.1) — 대신 검증기가 그 열을 SEC 본표와 직접 대조한다. 다음 지표를
   세울 때 그 줄의 값이 필요한 열이면 판독 원천을 늘려 닫는다(특히 ③ 차원 값 줄 — TSLA 2016~2018 자동차 매출).
+- **옛 모듈 비매출 행의 열 판본 혼합(2026-09-26, 고치지 않고 기록)**: 옛 모듈(`edgar-series.ts` `dropRoundedRetags`)은 줄 단위라
+  반올림 재게시 공시에서 회사가 다시 계산·조정한 줄(반올림으로 안 잡힘)은 나중 값, 나머지는 먼저 정밀값을 써 한 열에 판본이
+  섞인다. 47종목 비저장 조립의 fin 손익계산서 줄(미국 달러 국내 제출사, 15,545칸)과 대조한 결과 옛 모듈이 fin 과 다른 칸 37개
+  (반올림 단위 확장 전 68개) — MRVL FY2021·FY2022·2022Q3(매출총이익·연구개발비·영업이익·순이익·법인세 등 12칸), MCD FY2023·
+  2023Q1~Q3(14칸 — 부호 관례 변경 포함), TSLA FY2017·FY2018(9칸), DELL 2025Q1 법인세(옛 모듈이 실제 재작성 −400 을 1e8 반올림으로
+  오인해 −408)·WDC 2023Q1 순이익(각 1칸, WDC 는 반올림과 무관한 기존 차이).
+  옛 모듈은 동기 companyfacts 필터라 본표 판정을 넣을 수 없다 — 해당 행을 fin 으로 옮길 때(§7) 해소.
 - `metrics/overrides.ts` 가 지표 확장과 함께 계속 늘어난다 — 일정 규모를 넘으면 회사별이 아니라
   유형별 규칙(`read/profile.ts`)으로 승격할지 재검토한다.
 

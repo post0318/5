@@ -5,7 +5,6 @@ import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../
 import {
   ANNUAL_FORMS,
   INTERIM_FORMS,
-  cogsConcepts,
   annualByYear,
   days,
   directQuarterValue,
@@ -32,7 +31,8 @@ import {
   FIN_PROVISION,
   isFinancialCompany,
 } from "./edgar-financial";
-import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm, revQuarterLabel } from "./fin-revenue";
+import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm, revQuarterLabel, type RevCol } from "./fin-revenue";
+import { COGS_NOTE } from "@/lib/fin";
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
@@ -213,7 +213,22 @@ export function buildUsIncome(
     for (const y of years) revenue[fyKey(y)] = revAnnual.get(y) ?? null;
     revenue[LTM] = revLtm(rev);
   }
-  const cogs = val(cogsConcepts(facts));
+  // 매출원가·매출총이익 = 재무 5층 구조 지표(fin-revenue.ts 열의 cogs·gp, docs/metrics/cogs.md) — 본표 계산 구조로 찾은 원가 줄,
+  // 본표 매출총이익 소계(없으면 매출 − 매출원가 합성). 태그를 여기서 고르지 않는다(eslint)
+  const annualCol = new Map((rev?.annual ?? []).map((c) => [c.fy, c] as const));
+  /** 표시 열 → fin 열 */
+  const finColOf = new Map<string, RevCol>();
+  if (quarterly) qShowFin.forEach((c) => finColOf.set(revQuarterLabel(c), c));
+  else {
+    for (const y of years) { const c = annualCol.get(y); if (c) finColOf.set(fyKey(y), c); }
+    if (rev?.ltm) finColOf.set(LTM, rev.ltm);
+  }
+  const finVal = (pick: (c: RevCol) => number | null): Record<string, number | null> => {
+    const out = blank();
+    for (const l of labels) { const c = finColOf.get(l); out[l] = c ? pick(c) : null; }
+    return out;
+  };
+  const cogs = finVal((c) => c.cogs);
   // 금융회사: 매출총이익 대신 충당금전이익(=순수익 − 총이자외비용), 대손충당금 별도.
   const finNoninterestExpense = val(FIN_NONINTEREST_EXPENSE);
   const finProvision = val(FIN_PROVISION);
@@ -225,10 +240,7 @@ export function buildUsIncome(
           g[l] = revenue[l]! - finNoninterestExpense[l]!;
       return g;
     }
-    const g = val(["GrossProfit"]);
-    for (const l of labels)
-      if (g[l] == null && revenue[l] != null && cogs[l] != null) g[l] = revenue[l]! - cogs[l]!;
-    return g;
+    return finVal((c) => c.gp);
   })();
   const sga = val(SGA);
   const rnd = val(RND);
@@ -485,6 +497,23 @@ export function buildUsIncome(
     return o;
   })();
 
+  // 매출원가·매출총이익 칸 주석 — 합성 매출총이익은 줄 이름에, 그 밖의 사유(구성 규칙 대기·회사 공시 자체·제외 항목 있는 원가 줄·
+  // 빈칸 사유)는 각주로(표시 열만)
+  const noteGroups = (pick: (c: RevCol) => string | null) => {
+    const by = new Map<string, string[]>();
+    for (const l of labels) { const t = finColOf.get(l) ? pick(finColOf.get(l)!) : null; if (t) by.set(t, [...(by.get(t) ?? []), l]); }
+    return [...by];
+  };
+  const gpNotes = noteGroups((c) => c.gpNote);
+  const cogsNotes = noteGroups((c) => c.cogsNote);
+  const synthNote = gpNotes.find(([t]) => t.startsWith(COGS_NOTE.synth))?.[0] ?? null;
+  const sameCols = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const cogsFootnotes: FinancialLineItem[] = isFin && !cogsNotes.length ? [] : [
+    ...cogsNotes.map(([t, ls]) => ({ what: gpNotes.some(([g, gl]) => g === t && sameCols(gl, ls)) ? "매출원가·매출총이익" : "매출원가", t, ls })),
+    ...gpNotes.filter(([t, ls]) => !t.startsWith(COGS_NOTE.synth) && !cogsNotes.some(([c, cl]) => c === t && sameCols(cl, ls))).map(([t, ls]) => ({ what: "매출총이익", t, ls })),
+  ].map(({ what, t, ls }) =>
+    row(`※ ${what}: ${t}${ls.length === labels.length ? "" : ` (${ls.join(", ")})`}`, blank(), { depth: 1, italic: true }));
+
   const items: FinancialLineItem[] = [
     row(isFin ? "순수익" : "매출액", revenue, { depth: 0, isSubtotal: true, isHighlight: true }),
     ...(isFin
@@ -496,7 +525,7 @@ export function buildUsIncome(
       : hasGross
         ? [
             row("(−) 매출원가", cogs),
-            row("매출총이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
+            row(synthNote ? `매출총이익 (${synthNote})` : "매출총이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
             row("(−) 판매관리비", sga),
             row("(−) 연구개발비", rnd),
             row("(−) 기타 영업비용", otherOpex),
@@ -532,6 +561,7 @@ export function buildUsIncome(
     // 손익계산서에 별도 줄로 공시된 구조조정·손상·위약금·합의금 등의 합(edgar-oneoff.ts) — 영업이익에 이미 반영
     row("일회성비용(구조조정·손상차손·위약금·합의금 등)", oneOff),
   ];
+  items.push(...cogsFootnotes);
   if (!isFin && labels.some((l) => oneOff[l] != null))
     items.push(
       row("※ 일회성비용: 손익계산서에 별도 줄로 공시된 항목만(다른 비용 줄에 섞인 금액은 빠짐) · 영업이익에 이미 반영된 금액", blank(), {

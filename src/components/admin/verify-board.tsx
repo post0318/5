@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AdminVerifyRow } from "@/app/api/admin/verify/route";
-import type { AuditRow } from "@/lib/db/verify-results";
+import { AUDIT_VERDICT_LABEL, type AuditRow } from "@/lib/db/verify-results";
 
 /**
  * 재무 숫자 검증 결과 — 관리자만(오너 결정 2026-09-24). 검증 스크립트가 GitHub Actions 에서 매일 전 종목,
@@ -28,7 +28,9 @@ function status(r: AdminVerifyRow): { label: string; tone: "bad" | "warn" | "ok"
   // 검사 실패 없이 실행 오류만 있으면 "실패 0" 이 아니라 오류 건수를 보인다(판정은 같다)
   if (c.fail > 0 || r.result.errors.length) return { label: c.fail > 0 ? `실패 ${c.fail}` : `오류 ${r.result.errors.length}`, tone: "bad" };
   if (c.extMismatch > 0 || c.unverifiable > 0) return { label: "확인 필요", tone: "warn" };
-  return { label: "정상", tone: "ok" };
+  // 공통모드(독립 검증 아님)는 실패가 아니지만 통과로 세지 않는다 — 건수를 보인다
+  const cm = (c.common ?? 0) + (c.extCommon ?? 0);
+  return { label: cm ? `정상 · 공통모드 ${cm}` : "정상", tone: "ok" };
 }
 
 const TONE: Record<string, string> = {
@@ -59,6 +61,8 @@ const VERDICT_TONE: Record<AuditRow["verdict"], string> = {
   "①": "text-emerald-700 dark:text-emerald-400",
   "②": "text-amber-700 dark:text-amber-400",
   "③": "text-destructive",
+  SEC: "text-sky-700 dark:text-sky-400",
+  COMMON: "text-violet-700 dark:text-violet-400",
   NA: "text-muted-foreground",
   미결: "text-muted-foreground",
 };
@@ -96,7 +100,7 @@ function AuditTable({ rows }: { rows: AuditRow[] | undefined }) {
                 <TableCell key={i} className="tnum text-right">{auditCell(x.metric, v)}</TableCell>
               ))}
               <TableCell className="whitespace-normal">
-                <span className={cn("font-medium", VERDICT_TONE[x.verdict])}>{x.verdict}</span>
+                <span className={cn("font-medium", VERDICT_TONE[x.verdict])}>{AUDIT_VERDICT_LABEL[x.verdict]}</span>
                 {x.note && <span className="text-muted-foreground ml-1.5">{x.note}</span>}
               </TableCell>
             </TableRow>
@@ -111,12 +115,15 @@ function Detail({ r }: { r: AdminVerifyRow }) {
   const res = r.result;
   if (!res) return <p className="text-muted-foreground p-3 text-sm">아직 검증 결과가 없습니다. 다음 자동 검증 때 올라옵니다.</p>;
   const mismatch = res.external.filter((x) => x.verdict && /불일치/.test(x.verdict));
-  const matched = res.external.filter((x) => x.verdict && !/불일치/.test(x.verdict));
+  // 공통모드 소스만 일치한 행은 "일치"가 아니다(검증기 verdict 가 공통모드로 시작)
+  const commonExt = res.external.filter((x) => x.verdict?.startsWith("공통모드"));
+  const matched = res.external.filter((x) => x.verdict && !/불일치/.test(x.verdict) && !x.verdict.startsWith("공통모드"));
   const other = res.external.filter((x) => !x.verdict);
   return (
     <div className="space-y-4 p-3 text-xs">
       <p className="text-muted-foreground">
-        검증 {fmtWhen(res.runAt)} · 통과 {res.counts.pass} · 대상 {res.base}
+        검증 {fmtWhen(res.runAt)} · 통과 {res.counts.pass}
+        {res.counts.common != null && ` · 공통모드 ${res.counts.common}(통과에 세지 않음)`} · 대상 {res.base}
         {res.commit ? ` · 커밋 ${res.commit.slice(0, 7)}` : ""}
       </p>
       <section>
@@ -178,6 +185,20 @@ function Detail({ r }: { r: AdminVerifyRow }) {
           <ul className="text-muted-foreground space-y-0.5">
             {res.unverifiable.map((f, i) => <li key={i}>[{f.layer}] {f.name} · {f.col} — {f.note}</li>)}
           </ul>
+        </section>
+      )}
+      {(res.common?.length ?? 0) > 0 && (
+        <section>
+          <h4 className="mb-1 font-semibold">공통모드 — 독립 검증 아님 {res.common?.length} <span className="text-muted-foreground font-normal">(앱과 같은 규칙·데이터로 판정 — 통과에 세지 않음)</span></h4>
+          <ul className="text-muted-foreground space-y-0.5">
+            {res.common?.map((f, i) => <li key={i}>[{f.layer}] {f.name} · {f.col} — {f.note}</li>)}
+          </ul>
+        </section>
+      )}
+      {commonExt.length > 0 && (
+        <section>
+          <h4 className="mb-1 font-semibold">외부 대조 공통모드 {commonExt.length}</h4>
+          <ul className="text-muted-foreground space-y-0.5">{commonExt.map((x, i) => <li key={i}>{x.item} — {x.verdict}</li>)}</ul>
         </section>
       )}
       {other.length > 0 && (

@@ -27,7 +27,8 @@ async function main() {
       const rev = r.metrics.revenue.values;
       out[s] = dry ? r : { gaps: gapNames(r.gaps), persisted: r.persisted };
       const ltm = rev.LTM?.v;
-      console.log(`${s.padEnd(6)} ${r.profile.type}/${r.profile.filer} 열 ${r.annual.length}+${r.quarterly.length} LTM매출 ${ltm == null ? "—" : Math.round(ltm / 1e6).toLocaleString("en-US")}백만 gaps[${gapNames(r.gaps).join(",")}]` +
+      const mm = (v: number | null | undefined) => (v == null ? "—" : Math.round(v / 1e6).toLocaleString("en-US"));
+      console.log(`${s.padEnd(6)} ${r.profile.type}/${r.profile.filer} 열 ${r.annual.length}+${r.quarterly.length} LTM매출 ${mm(ltm)}백만 매출원가 ${mm(r.metrics.cogs.values.LTM?.v)} 매출총이익 ${mm(r.metrics.gp.values.LTM?.v)} gaps[${gapNames(r.gaps).join(",")}]` +
         (r.persisted ? ` 변경칸 ${r.persisted.changed}${r.persisted.kept ? "(기존 유지)" : ""}` : "") + ` ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       if (r.warnings.length) console.log(`       경고: ${r.warnings.join(" / ")}`);
     } catch (e) {

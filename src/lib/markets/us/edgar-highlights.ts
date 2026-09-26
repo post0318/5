@@ -291,7 +291,6 @@ export function buildUsHighlights(
     }
     return out;
   };
-  const gpS = annualSeries(unitEntries(facts, "GrossProfit", "USD"));
   // 영업이익 — edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전). 로더가 합성
   // 개념으로 끼워 넣어 두었다 — 재무분석·손익계산서·개요 멀티플과 같은 값.
   const usedPretaxAsOpIncome = opIncomeIsDerived(facts);
@@ -303,7 +302,6 @@ export function buildUsHighlights(
     .sort((a, b) => a.year - b.year);
   const S = {
     revenue: revSeries,
-    grossProfit: gpS,
     opIncome: opIncS,
     da: daS,
     // 지배주주 순이익 — edgar-pershare.ts 공통 규칙(NetIncomeLoss 없으면 ProfitLoss − 비지배지분)
@@ -327,7 +325,6 @@ export function buildUsHighlights(
     })(),
   };
   const E = {
-    grossProfit: unitEntries(facts, "GrossProfit", "USD"),
     opIncome: unitEntries(facts, SYN_OP_INCOME, "USD"),
     pretax: concat(PRETAX_CONCEPTS),
     netIncome: netIncomeToParentEntries(facts),
