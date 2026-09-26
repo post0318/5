@@ -29,7 +29,8 @@
  *   (CLAUDE.md에 "미결"로 남아있던 항목). 리츠와 같은 방식으로 여기 올려 전
  *   수집기·전 소스에 한 번에 적용한다.
  */
-const WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*\d+\s*주(?!년)/i;
+// "다음주 시장은?"(대신증권 주간 시장 전망 시리즈, 오너 지적 2026-09-27 — "주간같은데")도 주간물이다.
+const WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*\d+\s*주(?!년)|다음\s*주\s*시장/i;
 // 주간물 제외의 예외 — 비상장 리서치는 수집해 비상장으로 분류(오너 지시 2026-09-26).
 const UNLISTED_RE = /비상장/;
 const CALENDAR_RE = /캘린더|캘박|calendar|일정표/i;
@@ -43,6 +44,9 @@ const ESG_RE = /\bESG/i;
 // "거버넌스"는 ESG(지배구조)로 보고 제외(오너 지시 2026-09-27 — "거버넌스는 esg다", DS "거버넌스 - 베어허그 시리즈"). 종목 리포트 제목의
 // "거버넌스 개선 기대"까지 지우지 않도록 산업·거시 글(category "기업" 아님)에만 적용한다.
 const GOVERNANCE_RE = /거버넌스|\bgovernance\b/i;
+// 부동산은 리츠와 함께 수집 제외(오너 지적 2026-09-27 — 대신 "한국 상업용 부동산", "리츠, 부동산은 수집제외라고 했을텐데"). 리츠는 기업 리포트까지
+// 제외하지만, 부동산은 종목 리포트 제목에 사업 얘기로 흔히 나와("…부동산 PF 부담") 산업·거시 글(category "기업" 아님)에만 적용한다.
+const REAL_ESTATE_RE = /부동산|맨션/;
 
 /**
  * 디지털자산은 여기 없다(오너 결정 2026-09-26 — "이건 스크립트에서
@@ -66,6 +70,6 @@ export function isCommonExcludedResearch(text: string | null | undefined, catego
   if ((WEEKLY_RE.test(t) && !UNLISTED_RE.test(t)) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
   if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
   if (category === "기업") return false;
-  if (GOVERNANCE_RE.test(t)) return true;
+  if (GOVERNANCE_RE.test(t) || REAL_ESTATE_RE.test(t)) return true;
   return ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t);
 }

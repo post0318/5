@@ -69,6 +69,7 @@ import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { refineSectorLabels } from "./lib/sector-label.mjs";
+import { resolveUsTickerByName } from "./lib/overseas-market.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -342,6 +343,17 @@ async function classify(it) {
   // 8. 나머지
   if (STRATEGISTS.has(analyst)) {
     return { kind: "research", category: "산업", market: "kr", stockName: LABEL_STRATEGY, symbol: null, title: full, rule: "8 스트래티지스트(추정)" };
+  }
+  // 미국 종목 프리뷰: 시리즈 태그가 "[코스트코 26Q4 Preview] …"처럼 "회사명 + 분기 + Preview"이면 종목 리포트다 — 회사명으로
+  // 미국 티커를 조회해 기업/us 로(오너 지적 2026-09-27 — "종목분석 같은데", 라벨 "26Q4 Preview"로 산업분석에 새던 건).
+  // 태그가 "[26Q4 Preview] 코스트코: 헤드라인"처럼 분기 Preview 만 있고 회사명이 헤드라인 앞 "회사명:"에 있는 형태도 같다.
+  const pv = series.map((x) => x.match(/^(.+?)\s+\d{2}Q\d\s+Preview$/i)).find(Boolean)
+    ?? (series.some((x) => /^\d{2}Q\d\s+Preview$/i.test(x)) ? headline.match(/^([^:：]{1,30})[:：]/) : null);
+  if (pv) {
+    const hit = await resolveUsTickerByName(pv[1].trim());
+    if (hit) {
+      return { kind: "research", category: "기업", market: "us", stockName: hit.stockName, symbol: hit.symbol, title: headline || full, rule: "8' 미국 종목 Preview" };
+    }
   }
   return {
     kind: "research",

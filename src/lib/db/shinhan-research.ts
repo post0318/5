@@ -884,8 +884,14 @@ const ISSUE_BOND_TITLE_RE = /채권|국채|회사채|크레딧|Credit|\bBond|Tre
  * 라벨(증권사 게시판 이름)이 우선이다(오너 지시 2026-09-27 — "iM증권 채권은 채권", "한화 채권전략은 채권"): 라벨에 채권 계열 단어면 채권,
  * 경제·매크로·원자재 계열이면 경제. 라벨이 "산업"·"시장"·"글로벌 인사이트"처럼 뭉뚱그려졌을 때만 제목의 채권 계열 단어로 판정한다.
  */
+// 경제 지표 해설과 금리·국채 코멘트가 한 라벨에 섞여 올라오는 게시판 — 라벨 우선이 아니라 제목의 채권 계열 단어로 가른다
+// (오너 지적 2026-09-27 — 대신증권 "매크로"에 "국채 발행, 물량 만큼 만기도 중요하다"·"버틸만한 장기금리 5%" 같은 채권 글이 경제에 섞임).
+// FOMC·기준금리 인상 같은 통화정책 글은 경제로 둔다(장·단기금리·국채·만기·입찰 등 채권시장 단어가 있을 때만 채권).
+const MIXED_ISSUE_LABELS: ReadonlySet<string> = new Set(["대신증권 매크로"]);
+const MIXED_BOND_TITLE_RE = /채권|국채|회사채|크레딧|스프레드|장기\s?금리|단기\s?금리|만기|입찰|\bBond|Credit|Treasur/i;
 export function classifyIssueKind(doc: Pick<ShinhanResearchDoc, "stockName" | "title">): IssueKind {
   const label = doc.stockName ?? "";
+  if (MIXED_ISSUE_LABELS.has(label)) return MIXED_BOND_TITLE_RE.test(doc.title ?? "") ? "채권" : "경제";
   if (ISSUE_BOND_LABEL_RE.test(label)) return "채권";
   if (ISSUE_ECON_LABEL_RE.test(label)) return "경제";
   return ISSUE_BOND_TITLE_RE.test(doc.title ?? "") ? "채권" : "경제";

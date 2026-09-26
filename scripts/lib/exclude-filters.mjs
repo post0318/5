@@ -46,6 +46,8 @@ export function isWeeklyRecurringContent(text) {
 const ESG_RE = /\bESG/i;
 // "거버넌스"는 ESG(지배구조)로 보고 제외(오너 지시 2026-09-27) — 종목 리포트(category "기업")에는 적용하지 않는다(서버 규칙과 동일).
 const GOVERNANCE_RE = /거버넌스|\bgovernance\b/i;
+// 부동산은 리츠와 함께 수집 제외(오너 지적 2026-09-27) — 서버 규칙과 동일하게 산업·거시 글(category "기업" 아님)에만 적용.
+const REAL_ESTATE_RE = /부동산|맨션/;
 
 /** 제목(또는 라벨+제목)에 ESG 신호가 있으면 true — 수집기가 이 항목을 건너뛴다. */
 export function isEsgContent(text) {
@@ -59,7 +61,8 @@ export function isEsgContent(text) {
  * 쓰는 수집기도 결과는 같다 — 수집기에서 쓰면 PDF 보강 등 헛일을 줄인다.
  * 정규식은 두 파일에서 같이 고칠 것.
  */
-const COMMON_WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*\d+\s*주(?!년)/i;
+// "다음주 시장은?"(대신증권 주간 시장 전망 시리즈, 오너 지적 2026-09-27 — "주간같은데")도 주간물이다.
+const COMMON_WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*\d+\s*주(?!년)|다음\s*주\s*시장/i;
 const UNLISTED_RE = /비상장/;
 const CALENDAR_RE = /캘린더|캘박|calendar|일정표/i;
 const RECOMMEND_RE = /추천\s*종목/;
@@ -124,7 +127,7 @@ export function isCommonExcludedContent(text, category, market) {
   if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
   // 대체투자 규칙은 종목 리포트에 적용하지 않는다(서버 규칙과 동일).
   if (category === "기업") return false;
-  if (GOVERNANCE_RE.test(t)) return true;
+  if (GOVERNANCE_RE.test(t) || REAL_ESTATE_RE.test(t)) return true;
   if (ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t)) return true;
   if ((market === undefined || market === "kr") && DIGITAL_ASSET_RE.test(t)) return true;
   return false;

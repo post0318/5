@@ -180,6 +180,30 @@ const COMPANY_BLOGS_BY_TOPIC: Record<string, string[]> = {
   "AI·반도체 수요(해외)": ["NVIDIA", "Microsoft", "Oracle", "Amazon"],
 };
 
+/**
+ * 대신증권 「글로벌 뉴스 다이제스트」 — 뉴스 검색 시 반드시 참조하는 소스(오너 지시 2026-09-27).
+ * 수집기가 kr_research 에 쌓은 일일 다이제스트(제목·요약 발췌·PDF 링크만, 원문 미저장)를 그 주 범위로
+ * 읽어, 주제 정규식에 걸리는 날의 것을 근거로 붙인다. 다이제스트는 요약 자료라 그대로 믿지 않고
+ * 검증 표시를 단다 — 같은 주제로 네이버·구글 기사가 따로 잡혔으면 "교차확인", 아니면 "검증 필요".
+ */
+async function fetchDigestDocs(week: ReportWeek): Promise<IssueEvidenceNews[]> {
+  const until = new Date(Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000).toISOString().slice(0, 10);
+  const col = await shinhanResearchCol();
+  const docs = await col
+    .find({ source: "대신증권", title: { $regex: "글로벌 뉴스 다이제스트" }, date: { $gte: week.weekStart, $lte: until } })
+    .sort({ date: -1 })
+    .limit(10)
+    .toArray();
+  return docs.map((d) => ({
+    title: d.title ?? "글로벌 뉴스 다이제스트",
+    source: "대신증권 글로벌 뉴스 다이제스트",
+    url: d.pdfUrl ?? "",
+    publishedAt: `${d.date}T09:00:00+09:00`,
+    excerpt: (d.summary ?? "").slice(0, 300) || undefined,
+    trusted: true,
+  }));
+}
+
 async function countFromNews(
   week: ReportWeek,
   opts: { maxPages?: number } = {},
@@ -187,6 +211,7 @@ async function countFromNews(
   const sinceMs = Date.parse(`${week.weekStart}T00:00:00+09:00`);
   const untilMs = Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000;
   const out = new Map<string, { count: number; news: IssueEvidenceNews[]; rejected: string[] }>();
+  const digests = await fetchDigestDocs(week).catch(() => []);
 
   const results = await Promise.all(
     WEEKLY_TOPICS.map(async (t) => {
@@ -258,7 +283,13 @@ async function countFromNews(
       seen.add(key);
       fresh.push(i);
     }
-    out.set(topic.label, { count: fresh.length, news: fresh.slice(0, 5), rejected });
+    // 다이제스트 참조 — 요약에 주제어가 나오는 날만. 교차확인 여부는 이미 통과한 다른 기사 유무로 판정.
+    const corroborated = fresh.length > 0;
+    const refs = digests
+      .filter((g) => topic.match.test(`${g.title} ${g.excerpt ?? ""}`))
+      .slice(0, 2)
+      .map((g) => ({ ...g, source: `${g.source} (${corroborated ? "교차확인" : "검증 필요"})` }));
+    out.set(topic.label, { count: fresh.length, news: [...refs, ...fresh].slice(0, 5), rejected });
   }
   return out;
 }
