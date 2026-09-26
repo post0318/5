@@ -40,6 +40,9 @@ const COMMODITY_RE = /원자재|commodit/i;
 const REIT_RE = /(?<!메)리츠|\bREITs?\b/i;
 const ETF_RE = /\bETFs?\b|\bETPs?\b|상장지수(?:펀드|증권)?/i;
 const ESG_RE = /\bESG/i;
+// "거버넌스"는 ESG(지배구조)로 보고 제외(오너 지시 2026-09-27 — "거버넌스는 esg다", DS "거버넌스 - 베어허그 시리즈"). 종목 리포트 제목의
+// "거버넌스 개선 기대"까지 지우지 않도록 산업·거시 글(category "기업" 아님)에만 적용한다.
+const GOVERNANCE_RE = /거버넌스|\bgovernance\b/i;
 
 /**
  * 디지털자산은 여기 없다(오너 결정 2026-09-26 — "이건 스크립트에서
@@ -63,5 +66,6 @@ export function isCommonExcludedResearch(text: string | null | undefined, catego
   if ((WEEKLY_RE.test(t) && !UNLISTED_RE.test(t)) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
   if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
   if (category === "기업") return false;
+  if (GOVERNANCE_RE.test(t)) return true;
   return ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t);
 }

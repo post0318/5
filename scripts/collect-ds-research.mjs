@@ -24,7 +24,7 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
-import { refineSectorLabels } from "./lib/sector-label.mjs";
+import { refineSectorLabels, normalizeSectorLabel } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -140,7 +140,13 @@ function bracketLabelAndRest(title) {
   const m = title.match(/^\[([^\]]*)\]\s*(.*)$/);
   if (!m) return { label: "산업", rest: title.trim() };
   const rest = m[2].trim();
-  return rest ? { label: m[1].trim(), rest } : { label: "산업", rest: m[1].trim() };
+  // "[DS 경제 서동화] Macro Issue …"(경제 담당 애널리스트 이름이 붙은 라벨)는 애널리스트 이름을 떼고 "DS 경제"로 고정 — 앱이 거시경제
+  // 이슈분석(경제)으로 분류한다(오너 지시 2026-09-27, "FOMC면 경제가 맞다").
+  // (한글 뒤에서는 \b 단어 경계가 동작하지 않아 "경제" 다음이 공백/끝인지를 lookahead 로 본다.)
+  // 애널리스트 이름이 라벨로 온 경우("[매태호] …")는 공통 정규화(normalizeSectorLabel)가 담당 업종으로 바꾼다.
+  const label0 = m[1].trim();
+  const rawLabel = /^DS\s*경제(?=\s|$)/.test(label0) ? "DS 경제" : label0;
+  return rest ? { label: normalizeSectorLabel(rawLabel), rest } : { label: "산업", rest: m[1].trim() };
 }
 
 console.log(`▶ DS투자증권 리서치 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -169,6 +175,7 @@ const usRows = await collectBoard("sub03_03");
 console.log(`  목록 — 기업분석 ${krRows.length}건 · 투자전략/경제분석 ${usRows.length}건`);
 
 const krItems = [];
+const usItems = []; // sub03_03 미국·글로벌 항목 + sub03_02 에 올라온 미국 이야기("[미국 …]")
 for (const r of krRows) {
   const body = stripBracket(r.title);
   const hit = resolveKrStock(body);
@@ -193,6 +200,27 @@ for (const r of krRows) {
   // Defense Daily·거버넌스 시리즈·섹터 전략 노트 등 종목 리포트가 아닌 것 —
   // 산업분석/투자전략으로 별도 수집(symbol 항상 null).
   const { label, rest } = bracketLabelAndRest(r.title);
+  const pdfUrl2 = `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_02&wr_id=${r.id}`;
+  // "[미드스몰캡] 세미티에스 - 반도체 생산성 개선의 숨은 조력자"는 업종 글이 아니라 종목 코멘트다(오너 지적 2026-09-27 — "아무리봐도
+  // 종목인데") — "종목명 - 부제" 형식이면 기업으로 올린다. 종목 목록에 없는 신규 종목은 symbol 없이(서버 이름 검색에 맡김).
+  const sm = label === "미드스몰캡" ? rest.match(/^(.+?)\s+-\s+(.+)$/) : null;
+  if (sm) {
+    const corp = CORPS.find((c) => c.n === sm[1].trim());
+    krItems.push({
+      id: r.id, date: r.date, title: sm[2].trim(), stockName: sm[1].trim(), symbol: corp?.s ?? null,
+      analyst: "", opinion: "", targetPrice: null, summary: "", pdfUrl: pdfUrl2, board: BOARD_LABEL.sub03_02, views: null, category: "기업",
+    });
+    continue;
+  }
+  // 대괄호 안이 제목 전체이고 "미국 …"으로 시작하면(예: "[미국 데이터센터 전력망 비용 부담 현실화, ‘All of the Above’의 균열]") 미국 산업분석 —
+  // 국내 기업분석 게시판에 올라와도 시장은 미국이다(오너 지적 2026-09-27 — "아무리봐도 미국인데").
+  if (label === "산업" && /^미국\s/.test(rest)) {
+    usItems.push({
+      id: r.id, date: r.date, title: rest, stockName: label, symbol: null,
+      analyst: "", opinion: "", targetPrice: null, summary: "", pdfUrl: pdfUrl2, board: BOARD_LABEL.sub03_02, views: null, category: "산업", market: "us",
+    });
+    continue;
+  }
   krItems.push({
     id: r.id,
     date: r.date,
@@ -210,7 +238,6 @@ for (const r of krRows) {
   });
 }
 
-const usItems = [];
 // 산업분석/투자전략(2026-09 추가): 이 게시판은 원래 이름 그대로 "투자전략/
 // 경제분석"이라 종목 매칭에 실패한(또는 애초에 종목 얘기가 아닌) 대다수
 // 글이 Macro Issue·투자전략·퀀트 노트 등 산업분석/투자전략 콘텐츠다(오너가
@@ -266,6 +293,8 @@ for (const r of usRows) {
 function pruneExcluded(arr) {
   for (let i = arr.length - 1; i >= 0; i--) {
     if (isCommonExcludedContent(`${arr[i].stockName} ${arr[i].title}`, arr[i].category)) arr.splice(i, 1);
+    // "DS Defense Daily" 방산 일간 시리즈 — 수집 제외(오너 지시 2026-09-27).
+    else if (/Defense\s*Daily/i.test(arr[i].stockName ?? "")) arr.splice(i, 1);
   }
 }
 pruneExcluded(krItems);

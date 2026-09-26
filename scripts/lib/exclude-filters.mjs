@@ -44,6 +44,8 @@ export function isWeeklyRecurringContent(text) {
  */
 // 붙여 쓴 시리즈명("The ESGVerse" — 메리츠, 2026-09-25 실측)도 잡도록 뒤쪽 \b 는 뺐다.
 const ESG_RE = /\bESG/i;
+// "거버넌스"는 ESG(지배구조)로 보고 제외(오너 지시 2026-09-27) — 종목 리포트(category "기업")에는 적용하지 않는다(서버 규칙과 동일).
+const GOVERNANCE_RE = /거버넌스|\bgovernance\b/i;
 
 /** 제목(또는 라벨+제목)에 ESG 신호가 있으면 true — 수집기가 이 항목을 건너뛴다. */
 export function isEsgContent(text) {
@@ -122,6 +124,7 @@ export function isCommonExcludedContent(text, category, market) {
   if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
   // 대체투자 규칙은 종목 리포트에 적용하지 않는다(서버 규칙과 동일).
   if (category === "기업") return false;
+  if (GOVERNANCE_RE.test(t)) return true;
   if (ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t)) return true;
   if ((market === undefined || market === "kr") && DIGITAL_ASSET_RE.test(t)) return true;
   return false;

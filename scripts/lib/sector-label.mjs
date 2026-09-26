@@ -57,6 +57,50 @@ export function isIpoCover(pdfText) {
   return /IPO\s*Report|공모\s*개요|수요\s*예측/i.test(cover);
 }
 
+
+/**
+ * 업종 라벨을 표준 이름으로 정규화(오너 지시 2026-09-27 — DS "[대조선]"은 "조선"이다, "업종 어휘는 표준 이름으로 정규화").
+ * 서로 다른 세부 업종을 합치지 않고 **표기 변형(동의어)만** 표준 이름으로 맞춘다 — 그래서 명시적 동의어 표를 쓴다
+ * (예: 태양광→에너지, 정유·화학→정유화학 같은 상위 통합은 하지 않는다). 접미어("업"·"산업"·"업종")와 한 글자 접두어
+ * (대·소·중·신·新)는 허용한다. 표에 없는 라벨(복합 라벨 "정유화학/철강금속/음식료", "비철금속" 등)은 그대로 둔다.
+ */
+const SECTOR_SYNONYMS = [
+  ["조선", ["조선", "조선해양", "조선/해양"]],
+  ["2차전지", ["2차전지", "2차 전지", "이차전지", "이차 전지", "배터리"]],
+  ["방산", ["방산", "방위산업", "방위 산업", "국방"]],
+  ["로보틱스", ["로보틱스", "로봇"]],
+  ["엔터", ["엔터", "엔터테인먼트"]],
+  ["자동차", ["자동차"]],
+  ["반도체", ["반도체"]],
+  ["기계", ["기계"]],
+  ["철강", ["철강"]],
+  ["건설", ["건설"]],
+  ["은행", ["은행"]],
+  ["보험", ["보험"]],
+  ["증권", ["증권"]],
+  ["항공", ["항공"]],
+  ["해운", ["해운"]],
+];
+const SYNONYM_TO_CANON = new Map(SECTOR_SYNONYMS.flatMap(([canon, list]) => list.map((w) => [w, canon])));
+// 업종 태그 자리에 담당 애널리스트 이름이 온 경우(예: DS "[매태호] …" — 방산 담당) → 그 애널리스트의 업종. 모든 증권사 공통
+// (오너 지시 2026-09-27 — "ds말고 다른 회사들도 공통으로 처리"). 새 사례가 확인되면 여기 한 줄 추가(서버 쪽
+// `src/lib/research-sector.ts` 의 ANALYST_SECTOR 와 같은 표 — verify-classification.mts 가 일치 검사).
+export const ANALYST_SECTOR = { 매태호: "방산" };
+export function normalizeSectorLabel(label) {
+  const raw = String(label ?? "").trim();
+  if (!raw) return raw;
+  if (Object.hasOwn(ANALYST_SECTOR, raw)) return ANALYST_SECTOR[raw];
+  const stem = raw.replace(/(?:산업|업종|섹터|부문|업)$/, "").trim();
+  const candidates = [stem];
+  const pre = stem.match(/^[대소중신新]\s?(.+)$/);
+  if (pre) candidates.push(pre[1].trim());
+  for (const c of candidates) {
+    const canon = SYNONYM_TO_CANON.get(c);
+    if (canon) return canon;
+  }
+  return raw;
+}
+
 /** 제목·PDF 표지에서 업종 라벨을 뽑는다(못 찾으면 null). pdfText 는 없으면 생략. */
 export function sectorFromTitleOrCover(title, pdfText = "") {
   const t = String(title ?? "").trim();

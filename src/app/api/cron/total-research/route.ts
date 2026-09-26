@@ -8,6 +8,7 @@ import {
 } from "@/lib/db/shinhan-research";
 import { searchCorps } from "@/lib/markets/kr/corpcode";
 import { isCommonExcludedResearch } from "@/lib/research-exclude";
+import { normalizeIndustryLabel } from "@/lib/research-sector";
 
 export const maxDuration = 60;
 
@@ -86,7 +87,8 @@ export async function POST(req: Request) {
       market,
       date: it.date,
       title: it.title,
-      stockName: it.stockName,
+      // 산업분석 업종 라벨은 표준 이름으로 정규화("대조선"→"조선") — 모든 수집기가 거치는 한 지점에서 보장(오너 지시 2026-09-27).
+      stockName: it.category === "산업" ? normalizeIndustryLabel(it.stockName) : it.stockName,
       // 산업분석 리포트는 stockName 이 업종명("반도체" 등)이라 이름 검색으로
       // 종목코드를 추측하면 안 됨(예: "반도체"가 우연히 어떤 회사명과 부분
       // 일치해 잘못된 종목에 달라붙을 위험) — 카테고리로 아예 이름 검색을 건너뜀.

@@ -10,6 +10,8 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { classifyResearchTopic, classifyIssueKind, INSIGHT_SOURCES } from "../src/lib/db/shinhan-research";
 import { isCommonExcludedResearch } from "../src/lib/research-exclude";
+import { normalizeIndustryLabel, INDUSTRY_LABEL_SYNONYMS, ANALYST_SECTOR } from "../src/lib/research-sector";
+import { normalizeSectorLabel } from "./lib/sector-label.mjs";
 
 const capture = process.argv.find((a) => a.startsWith("--capture="))?.split("=")[1];
 if (!capture) { console.error("--capture=<디렉터리> 필요"); process.exit(2); }
@@ -38,6 +40,8 @@ for (const f of readdirSync(dir)) for (const l of readFileSync(`${dir}/${f}`, "u
         : t === "이슈분석" ? "거시경제 이슈분석" : t === "환율분석" ? "거시경제 환율분석"
         : t === "시황분석:Daily" ? "거시경제 시황분석(Daily)" : t === "시황분석:Monthly" ? "거시경제 시황분석(Monthly)" : "거시경제 시황분석(투자전략)";
     }
+    // 서버 수신 라우트와 같은 업종 라벨 정규화(표준 이름).
+    if (cat === "산업") it.stockName = normalizeIndustryLabel(it.stockName);
     rows.push({ source: b.source, market, it, dest });
   }
 }
@@ -57,9 +61,23 @@ for (const c of golden.cases) {
   }
   if (hits.length === 0) { na++; console.log(`… ${c.id} 수집 결과에 없음(기간 밖이거나 미수집) — ${c.titleIncludes}`); continue; }
   // kind(경제/채권)가 지정된 사례는 이슈분석 탭의 경제/채권 구분까지 본다.
-  const bad = hits.filter((h) => h.dest !== c.expect || (c.kind && classifyIssueKind({ stockName: h.it.stockName ?? "", title: h.it.title ?? "" }) !== c.kind));
+  const bad = hits.filter((h) => h.dest !== c.expect || (c.label && h.it.stockName !== c.label) || (c.kind && classifyIssueKind({ stockName: h.it.stockName ?? "", title: h.it.title ?? "" }) !== c.kind));
   if (bad.length === 0) { pass++; console.log(`✔ ${c.id} ${c.expect} (${hits.length}건)`); }
   else { fail++; console.log(`✘ ${c.id} 기대 ${c.expect} / 실제 ${bad[0].dest} — ${c.titleIncludes}`); }
 }
+// 업종 라벨 정규화 — 서버(TS)와 수집기(mjs) 두 구현이 같은 결과를 내는지 검사한다.
+let syncBad = 0;
+for (const [canon, words] of INDUSTRY_LABEL_SYNONYMS) {
+  const variants = [canon, ...words].flatMap((x) => [x, `${x}업`, `대${x}`, `${x}산업`]);
+  for (const w of [...variants, ...Object.keys(ANALYST_SECTOR), "비철금속", "정유화학/철강금속/음식료"]) {
+    if (normalizeIndustryLabel(w) !== normalizeSectorLabel(w)) {
+      syncBad++;
+      console.log(`✘ 정규화 불일치(TS≠mjs): ${w} → ${normalizeIndustryLabel(w)} / ${normalizeSectorLabel(w)}`);
+    }
+  }
+}
+if (syncBad) fail += syncBad;
+else console.log("✔ 업종 라벨 정규화 TS·mjs 구현 일치");
+
 console.log(`\n정답 표 결과: 통과 ${pass} · 실패 ${fail} · 결과 없음 ${na} (총 ${golden.cases.length})`);
 process.exit(fail ? 1 : 0);

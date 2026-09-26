@@ -52,7 +52,8 @@ const LIST_URL = "https://www.bnkfn.co.kr/research/analysingCompany.jspx";
 // 제목이 기업분석과 똑같은 "[업종명] 헤드라인" 형식이라 같은 TITLE_RE 로
 // 파싱 가능), economyAnalyse.jspx(경제분석/투자전략, 대괄호 없는 평문 제목).
 const ISSUE_URL = "https://www.bnkfn.co.kr/research/analysingIssue.jspx";
-const ECON_URL = "https://www.bnkfn.co.kr/research/economyAnalyse.jspx";
+// economyAnalyse.jspx(경제분석/투자전략)는 사이트 메뉴가 "Quant분석"이고 글이 전부 퀀트(성장주 팩터·Factor Sentiment)라 게시판 통째로 수집 제외
+// (오너 지시 2026-09-27 — "bnk는 게시판으로 제외한다"). parseEconItems 는 금융시장(marketOverview2) 파서가 재사용한다.
 // 금융시장(marketOverview2.jspx) — 채권전략/크레딧 Monthly·"주가와 장기금리 공방"·甲論乙駁. 지금까지 이 게시판을
 // 안 봐서 통째로 빠져 있었다(오너 지적 2026-09-26 — "주가와 장기금리 공방은 이슈분석이 맞다").
 const MARKET_URL = "https://www.bnkfn.co.kr/research/marketOverview2.jspx";
@@ -294,7 +295,6 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
 
 for (const [listUrl, parser] of [
   [ISSUE_URL, parseIssueItems],
-  [ECON_URL, parseEconItems],
   [MARKET_URL, parseMarketItems],
 ]) {
   stop = false;

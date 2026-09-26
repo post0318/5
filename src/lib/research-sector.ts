@@ -83,3 +83,47 @@ export function classifySector(doc: { stockName?: string | null; title?: string 
   }
   return null;
 }
+
+/**
+ * 산업분석 업종 라벨을 표준 이름으로 정규화(오너 지시 2026-09-27 — DS "[대조선]"은 "조선", "업종 어휘는 표준 이름으로 정규화").
+ * 서로 다른 세부 업종을 합치지 않고 표기 변형(동의어)만 맞춘다. 접미어("업"·"산업")와 한 글자 접두어(대·소·중·신·新) 허용.
+ * 수집기 쪽 `scripts/lib/sector-label.mjs`의 `normalizeSectorLabel`과 같은 표 — 한쪽을 고치면 다른 쪽도 고칠 것
+ * (`scripts/verify-classification.mts`가 두 구현이 같은 결과를 내는지 검사한다).
+ */
+export const INDUSTRY_LABEL_SYNONYMS: readonly (readonly [string, readonly string[]])[] = [
+  ["조선", ["조선", "조선해양", "조선/해양"]],
+  ["2차전지", ["2차전지", "2차 전지", "이차전지", "이차 전지", "배터리"]],
+  ["방산", ["방산", "방위산업", "방위 산업", "국방"]],
+  ["로보틱스", ["로보틱스", "로봇"]],
+  ["엔터", ["엔터", "엔터테인먼트"]],
+  ["자동차", ["자동차"]],
+  ["반도체", ["반도체"]],
+  ["기계", ["기계"]],
+  ["철강", ["철강"]],
+  ["건설", ["건설"]],
+  ["은행", ["은행"]],
+  ["보험", ["보험"]],
+  ["증권", ["증권"]],
+  ["항공", ["항공"]],
+  ["해운", ["해운"]],
+];
+const SYNONYM_TO_CANON = new Map<string, string>(
+  INDUSTRY_LABEL_SYNONYMS.flatMap(([canon, list]) => list.map((w): [string, string] => [w, canon])),
+);
+// 업종 태그 자리에 담당 애널리스트 이름이 온 경우 → 그 애널리스트의 업종(모든 증권사 공통, 오너 지시 2026-09-27).
+// 수집기 쪽 `scripts/lib/sector-label.mjs` 의 ANALYST_SECTOR 와 같은 표.
+export const ANALYST_SECTOR: Readonly<Record<string, string>> = { 매태호: "방산" };
+export function normalizeIndustryLabel(label: string | null | undefined): string {
+  const raw = String(label ?? "").trim();
+  if (!raw) return raw;
+  if (Object.hasOwn(ANALYST_SECTOR, raw)) return ANALYST_SECTOR[raw];
+  const stem = raw.replace(/(?:산업|업종|섹터|부문|업)$/, "").trim();
+  const candidates = [stem];
+  const pre = stem.match(/^[대소중신新]\s?(.+)$/);
+  if (pre) candidates.push(pre[1].trim());
+  for (const c of candidates) {
+    const canon = SYNONYM_TO_CANON.get(c);
+    if (canon) return canon;
+  }
+  return raw;
+}
