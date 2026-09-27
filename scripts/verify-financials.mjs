@@ -4404,6 +4404,15 @@ async function verifyUs(sym) {
       yq = await y.fundamentalsTimeSeries(sym, { period1: new Date(Date.now() - 500 * 864e5), type: "quarterly", module: "all" }, { validateResult: false });
       extYq = yq;
       ya = await y.fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "all" }, { validateResult: false });
+      // Yahoo 는 52/53주 결산 분기말을 달력 월말로 적는다(PEP 2026-06-13 → 06-30). 월말이고 7일 안에 결산일이 없으면 같은 달 결산일(20일 이내 앞)로 맞춘다
+      const ends = [...new Set([...qEndOf.values(), ...Object.values(H).map((x) => x.date)].filter(Boolean))];
+      const snap = (r) => {
+        const d = iso(r.date), t = new Date(r.date);
+        if (new Date(t.getTime() + 864e5).getUTCDate() !== 1 || ends.some((e) => dayDiff(e, d) <= 7)) return r;
+        const e = ends.find((e) => e.slice(0, 7) === d.slice(0, 7) && e < d && dayDiff(e, d) <= 20);
+        return e ? { ...r, date: new Date(e) } : r;
+      };
+      yq = yq.map(snap); ya = ya.map(snap); extYq = yq;
     } catch (e) {
       errs.push(`Yahoo: ${String(e).slice(0, 60)}`);
     }
@@ -4454,6 +4463,7 @@ async function verifyUs(sym) {
       if (last4.every((r) => r.totalRevenue != null)) put("LTM 매출", L.rev, "Yahoo", last4.reduce((s, r) => s + r.totalRevenue, 0));
       if (COGS_MODE && last4.every((r) => r.costOfRevenue != null)) put("LTM 매출원가", IS.LTM?.cogs, "Yahoo", last4.reduce((s, r) => s + r.costOfRevenue, 0));
       if (COGS_MODE && last4.every((r) => r.grossProfit != null)) put("LTM 매출총이익", IS.LTM?.gp, "Yahoo", last4.reduce((s, r) => s + r.grossProfit, 0));
+      if (OPINC_MODE) put("LTM 영업이익", IS.LTM?.op, "Yahoo", last4.reduce((s, r) => s + r.totalOperatingIncomeAsReported, 0));
       if (DA_MODE && last4.every((r) => r.reconciledDepreciation != null)) put("LTM 감가상각비", IS.LTM?.da, "Yahoo", last4.reduce((s, r) => s + r.reconciledDepreciation, 0));
     }
     const bsq = yq.filter((r) => r.totalDebt != null).at(-1);
