@@ -87,7 +87,21 @@ const SECTOR_RULES: [SectorLabel, RegExp][] = [
   ["필수소비재", /음식료|담배|농업/],
 ];
 
+// 전력 생산은 유틸리티, 전력설비(기자재·변압기·전선·터빈 등 제조)는 산업재(오너 지시 2026-09-27 — "전력생산이면 유틸리티, 전력설비랑
+// 관련있으면 산업재"). 라벨이 유틸리티여도 제목이 설비 이야기면 산업재로 간다("유틸리티; 대미투자 윤곽, 발전 기자재 수혜에 주목").
+const POWER_EQUIPMENT_RE = /기자재|전력\s?설비|전력\s?기기|변압기|전선|케이블|배전반|개폐기|주기기|가스터빈|터빈|HVDC|초고압/;
+
 export function classifySector(doc: {
+  stockName?: string | null;
+  title?: string | null;
+  summary?: string | null;
+}): SectorLabel | null {
+  const base = classifySectorBase(doc);
+  if (base === "유틸리티" && POWER_EQUIPMENT_RE.test(doc.title ?? "")) return "산업재";
+  return base;
+}
+
+function classifySectorBase(doc: {
   stockName?: string | null;
   title?: string | null;
   summary?: string | null;
