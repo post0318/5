@@ -147,7 +147,9 @@ export function buildAudit({ app, cols, checks, review, closed }) {
         const yc = cls.Yahoo;
         // 외부 한 곳이라도 ①·② 면 통과(오너 결정) — 나머지 소스의 미규명 차이는 사유에만 적는다(A층 FAIL 은 위 fails 가 먼저 ③)
         const rest3 = of("③").length ? ` · 미규명(외부 확인으로 통과): ${of("③").map((n) => `${n} ${ext.causes?.[n] ?? "분해식 없음"}`).join("; ")}` : "";
-        if (yc === "①") { verdict = "①"; note = `Yahoo 일치${of("①").length > 1 ? `(${of("①").length}곳)` : ""}${passedA ? " · 앱 = SEC" : ""}${of("②").length ? ` · ${of("②").map((n) => `${n} ② ${ext.causes?.[n] ?? ""}`).join("; ")}` : ""}${extra ? ` · ${extra}` : ""}${rest3}`; }
+        // D형 구성 규칙 행(A층이 앱 규칙 재구현 — 공통모드)은 외부 2곳 이상 정확 일치일 때만 ①(cogs.md §10, 감사 2026-09-28 MEDIUM-1)
+        if (commonA && /구성 규칙/.test(aRow?.note ?? "") && of("①").length < 2) { verdict = COMMON_VERDICT; note = `${COMMON_LABEL}: 구성 규칙(D형) — 외부 정확 일치 ${of("①").length}곳(2곳 이상 필요)${extra ? ` · ${extra}` : ""}`; }
+        else if (yc === "①") { verdict = "①"; note = `Yahoo 일치${of("①").length > 1 ? `(${of("①").length}곳)` : ""}${passedA ? " · 앱 = SEC" : ""}${of("②").length ? ` · ${of("②").map((n) => `${n} ② ${ext.causes?.[n] ?? ""}`).join("; ")}` : ""}${extra ? ` · ${extra}` : ""}${rest3}`; }
         else if (yc === "②") { verdict = "②"; note = [`Yahoo: ${ext.causes?.Yahoo ?? ""}`, ...of("②").filter((n) => n !== "Yahoo").map((n) => `${n}: ${ext.causes?.[n] ?? ""}`), extra].filter(Boolean).join("; ") + rest3; }
         else if (of("③").length && !of("①").length && !of("②").length && !of("외부단독이탈").length) { verdict = isClosed ? "③" : "미결"; note = `미규명 차이: ${of("③").map((n) => `${n} ${ext.causes?.[n] ?? "분해식 없음"}`).join("; ")}`; }
         else if (of("②").length || of("외부단독이탈").length) {

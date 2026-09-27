@@ -189,7 +189,7 @@ const RECON = (() => {
       if (!r.verdict || !r.years) continue;
       const how = r.partition?.join(" · ") ?? Object.entries(r.explain ?? {}).filter(([, e]) => e.ok && !/외부 = SEC/.test(e.how ?? "")).map(([l, e]) => `${l}: ${e.how}`).join(" ; ");
       const ltmHow = r.ltm?.partition?.join(" · ") ?? how;
-      for (const y of r.years) m.set(`${r.sym}|${r.src}|${r.metric}|${y}`, { ok: r.yearOk ? !!r.yearOk[y] : r.verdict !== "미결", how: y === "LTM" ? ltmHow : how });
+      for (const y of r.years) m.set(`${r.sym}|${r.src}|${r.metric}|${y}`, { ok: r.yearOk ? !!r.yearOk[y] : r.verdict !== "미결", how: y === "LTM" ? ltmHow : how, ext: r.vals?.[y]?.ext ?? null, app: r.vals?.[y]?.app ?? null });
     }
   } catch { /* 결과 없음 — 분류 그대로 */ }
   return m;
@@ -3643,7 +3643,8 @@ async function verifyUs(sym) {
         add("A", "영업이익 앱 = SEC 세전이익 − 지분법(금융·보험)", c, secPt == null ? { status: NA, note: "SEC 세전이익 없음" } : vsSource(op, secPt - eq, EXACT));
       } else if (!synth) {
         if (opOnFace === false) add("A", "영업이익 앱 = SEC 영업이익", c, { status: FAIL, note: "SEC 영업이익 태그가 손익계산서 본표에 없음(부문 주석값) — 앱이 구조 판독에 실패해 주석값을 쓴 것으로 보임" });
-        else { secNotes.length = 0; const so = secAt("OperatingIncomeLoss"); add("A", "영업이익 앱 = SEC 영업이익", c, vsSource(op, so, EXACT, secNotes.join(" · "))); }
+        // 20-F(IFRS)는 us-gaap 영업이익 태그가 없어 옛 검사가 검증불가만 남겼다 — --metric=opinc 의 "앱 = SEC 본표 영업이익"(원통화 × 환율)이 대신한다(감사 LOW-1)
+        else if (!(OPINC_MODE && foreign)) { secNotes.length = 0; const so = secAt("OperatingIncomeLoss"); add("A", "영업이익 앱 = SEC 영업이익", c, vsSource(op, so, EXACT, secNotes.join(" · "))); }
       } else if (opOnFace === true && secAt("OperatingIncomeLoss") != null) {
         // 행 이름은 행 전체에 하나라 일부 기간만 합성일 수 있다 — 값으로 판정(SEC 태그 값과 정확히 같아야 통과)
         add("A", "영업이익 앱 = SEC 영업이익", c, vsSource(op, secAt("OperatingIncomeLoss"), EXACT, `SEC 본표에 영업이익 태그 있음 — 앱 행 "${opRowName}"`));
@@ -5836,9 +5837,12 @@ async function verifyUs(sym) {
       // 줄 단위 구성 대조 반영 — 연간 열만(LTM 은 도구 범위 밖이라 구성미분해)
       const reconApply = (cls, col0, m0) => {
         for (const n of Object.keys(cls)) {
-          if (cls[n] !== "외부정의분해불가" && cls[n] !== "외부단독이탈") continue;
+          // 외부단독이탈(외부 자기모순 — 숫자로 확인된 근거)은 덮어쓰지 않는다(감사 2026-09-28 HIGH-2)
+          if (cls[n] !== "외부정의분해불가") continue;
           const x = RECON.get(`${sym}|${n}|${m0}|${col0.replace(/Y$/, "")}`);
-          if (x?.ok) { cls[n] = "②"; causes[n] = { ok: `구성 분해(줄 단위 대조): ${x.how}` }; } else cls[n] = "구성미분해";
+          // 이번 실행의 외부값·앱값과 같을 때만 그 대조 결과를 쓴다(다른 실행 기준 결과를 붙이지 않음)
+          const same = x && x.ext === r.srcs[n]?.v && x.app === r.ours;
+          if (x?.ok && same) { cls[n] = "②"; causes[n] = { ok: `구성 분해(줄 단위 대조): ${x.how}` }; } else cls[n] = "구성미분해";
         }
       };
       if (revenueClass) reconApply(revenueClass, r.item.split(" ")[0], "매출");

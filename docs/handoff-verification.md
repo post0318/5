@@ -2,6 +2,19 @@
 
 브랜치: `wip/verification` (master 에 합치면 Vercel 프로덕션 배포 — 오너 지시 전까지 master 푸시 금지).
 
+## 판관비·연구개발비 정의 (오너 결정 2026-09-28) — 다음 지표, 착수 전
+- 판관비 = 본표 판관비 성격 줄 전부의 합 + 손익계산서에 하위 줄 표시(AMZN 물류+마케팅+일반관리 등 14종목).
+- AMZN "Technology and infrastructure" = 연구개발비(원래 이름 병기).
+- 본표 이름이 판관비가 아닌 줄(HLT·MAR·SBUX 일반관리비, MCD 기타 판관비)은 판관비 행에 넣고 원래 이름 병기.
+- 유형 D(DAL 등)·금융(AXP) = 빈칸 + 사유.
+- 현황 조사(scratchpad sga-survey.md): 소비처 5곳 모두 태그 목록(fin 없음) — 여러 줄 판관비 13종목이 일반관리비만 잡힐 위험, KO 기타 판관비 누락, MCD·AXP·DAL 판관비·AMZN 연구개발비 빈칸.
+
+## Fable 최종 점검 (2026-09-28) — REQUEST CHANGES, 결함 모아 수정 중
+HIGH-1 recon ② 우연 일치(SA 정밀도 1M 고정·허용치가 SEC 줄 수 비례 — 거짓 ② 31칸: BE SA 원가, VRT 인포맥스, MRVL 인포맥스 2022, AVGO SA 영업이익) ·
+HIGH-2 검증기 reconApply 가 외부단독이탈을 ② 로 덮어씀·이전 실행 recon 을 값 확인 없이 적용 · HIGH-3 recon 본표 줄이 최신 10-K 하나 기준(옛 연도 줄 0 —
+VRT·AMAT 2021, WMT 2023), 반올림 재게시 우선, 항등식이 역산이라 무의미 · MEDIUM-1 감사표 Yahoo ① 이 D형 "외부 2곳" 규칙 우회 · MEDIUM-2 배분 해
+비유일(SBUX ≥20) · LOW 20-F 옛 이름 검증불가 행 18건, 골든셋·CLOSED_METRICS 가 매출뿐.
+
 ## 구성 대조 4차 — 인포맥스 FactSet 세부 줄 (2026-09-27 밤, 오너 지시 "sss.html#/usa/4/2 로는 안되나") — verify-us-20260927-2140~2149
 - 인포맥스 대조를 `/facset/getStatementData`(로그인 불필요, getPreStatementData 로 업종·통화 → 손익계산서 연간 "A"·분기 "Q", 백만 달러)로 교체:
   상각비포함매출원가·판관비(연구개발비 포함)·기타영업비용·비경상비용·영업외손익·이자비용·법인세·관계기업투자이익·기타세후조정·중단사업이익·연결/당기순이익.

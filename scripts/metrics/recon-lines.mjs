@@ -172,6 +172,8 @@ function saUnflatten(arr) {
   };
   return h(0);
 }
+// 인포맥스 배분에서 허용하는 주석 이동 수(기본 2, 실험 RECON_MOVES=3)
+const MAX_MOVES = Number(process.env.RECON_MOVES ?? 2);
 const SA_UNUSUAL = ["mergerRestructureCharges", "assetWritedown", "otherUnusualItems", "gainAssets", "legalSettlements", "impairmentGoodwill", "gainInvestments", "currencyGains"];
 async function saLines(sym) {
   const get = async (path, q = false) => {
@@ -201,7 +203,7 @@ async function saLines(sym) {
   // SA TTM 기준일 = 분기 손익의 최신 분기말(TTM 이 몇 분기 늦을 수 있다 — 앱 LTM 기준일과 20일 안일 때만 쓴다)
   let ltmEnd = null;
   try { ltmEnd = (await get("income-statement", true)).datekey?.find((d) => d !== "TTM") ?? null; } catch { /* 분기 없음 */ }
-  return { rows: out, ltm, ltmEnd, unit: 1e6, lines: { sga: "sgna", rnd: "rnd", amort: "goodwillIntangibleAmortization", other: "opex − sgna − rnd − 상각" } };
+  return { rows: out, ltm, ltmEnd, unit: unitOf([...out.values(), ltm].filter(Boolean)), lines: { sga: "sgna", rnd: "rnd", amort: "goodwillIntangibleAmortization", other: "opex − sgna − rnd − 상각" } };
 }
 let yf = null;
 async function yahooLines(sym) {
@@ -223,6 +225,12 @@ async function yahooLines(sym) {
   const yq = (await yf.fundamentalsTimeSeries(sym, { period1: new Date(Date.now() - 500 * 864e5), type: "quarterly", module: "all" }, { validateResult: false })).filter((r) => r.totalRevenue != null).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(-4);
   const { ltm, ltmEnd } = sum4(yq.map((r) => ({ end: new Date(r.date).toISOString().slice(0, 10), ...row(r) })));
   return { rows: out, ltm, ltmEnd, unit: 1, lines: { sga: "sellingGeneralAndAdministration", rnd: "researchAndDevelopment", other: "operatingExpense − 판관비 − 연구개발비" } };
+}
+/** 외부 표기 정밀도(감사 HIGH-1) — 값 전부가 나누어떨어지는 가장 큰 10의 거듭제곱(1e3~1e6). SA 는 종목마다 천·백만 단위가 섞인다 */
+function unitOf(rows) {
+  const vals = rows.flatMap((r) => ["rev", "cogs", "gp", "sga", "rnd", "amort", "op", "da"].map((k) => r[k])).filter((v) => typeof v === "number" && v !== 0);
+  for (const u of [1e6, 1e5, 1e4, 1e3]) if (vals.every((v) => Math.abs(Math.round(v / u) * u - v) < 0.5)) return u;
+  return 1;
 }
 /** 분기 4개 → LTM 줄(한 분기라도 값이 없으면 그 줄은 null) */
 function sum4(qs) {
@@ -262,7 +270,7 @@ async function infomaxLines(sym) {
     for (const k of ["pretax", "niCons", "niParent"]) ltm[k] = qs.every((q) => q[k] != null) ? qs.reduce((t, q) => t + q[k], 0) : null;
   }
   // 인포맥스(FactSet) 판관비 = 판관비 + 연구개발비, 원가 = 감가·무형상각 포함 원가
-  return { rows: out, ltm, ltmEnd, unit: 1e6, sgaIncludesRnd: true, full: true, lines: { cogs: "상각비포함매출원가", sga: "판매비와관리비(연구개발비 포함)", other: "기타영업비용" } };
+  return { rows: out, ltm, ltmEnd, unit: unitOf([...out.values(), ltm].filter(Boolean)), sgaIncludesRnd: true, full: true, lines: { cogs: "상각비포함매출원가", sga: "판매비와관리비(연구개발비 포함)", other: "기타영업비용" } };
 }
 
 // ── 본표 줄 분류 ─────────────────────────────────────────────────────────
@@ -339,9 +347,15 @@ for (const [sym, r] of latest) {
   if (!tenK.length) continue;
   // 항목 풀 — 최신 10-K 우선(재작성), 없으면 이전 10-K
   const pool = new Map();
-  for (const t of tenK) for (const [k, vs] of t.facts) { if (!pool.has(k)) pool.set(k, new Map()); for (const [y, v] of vs) if (!pool.get(k).has(y)) pool.get(k).set(y, v); }
+  // 판본(감사 2026-09-28 HIGH-3): 나중 공시가 앞선 정밀값의 반올림으로 다시 태깅한 값(MCD 2023)이면 앞선 정밀값 — 앱 dropRoundedRetags 와 같은 원칙
+  const isRoundOf = (late, early) => late !== early && [1e5, 1e6, 1e7, 1e8, 1e9].some((u) => late % u === 0 && early % u !== 0 && Math.round(early / u) * u === late);
+  for (const t of tenK) for (const [k, vs] of t.facts) {
+    if (!pool.has(k)) pool.set(k, new Map());
+    for (const [y, v] of vs) { const cur = pool.get(k).get(y); if (cur == null) pool.get(k).set(y, v); else if (isRoundOf(cur, v)) pool.get(k).set(y, v); }
+  }
   // 옛 10-K 의 본표 줄 개념 이름이 다르면(MDLZ 이자·기타 영업외 줄) 최신 본표 줄에 이어 붙인다 — 같은 식의 말단 줄 목록이 같은 길이면 같은 위치,
   // 아니면 같은 라벨. 최신 개념에 그 해 값이 없을 때만 채운다
+  const aliased = new Set();
   for (const key of ["face", "facePre", "faceNi"]) {
     const cur = tenK[0][key];
     if (!cur) continue;
@@ -352,12 +366,20 @@ for (const [sym, r] of latest) {
         const lab = tenK[0].labels.get(cur[j].id);
         const m = o.length === cur.length && o[j].w === cur[j].w ? o[j] : o.find((x) => old.labels.get(x.id) && old.labels.get(x.id) === lab);
         if (!m || m.id === cur[j].id) continue;
+        aliased.add(m.id);
         const src = old.facts.get(m.id);
         if (!src) continue;
         if (!pool.has(cur[j].id)) pool.set(cur[j].id, new Map());
         for (const [y, v] of src) if (!pool.get(cur[j].id).has(y)) pool.get(cur[j].id).set(y, v);
       }
     }
+  }
+  // 본표 줄 목록 = 최신 10-K + 옛 10-K 에만 있는 줄(감사 HIGH-3 — VRT 2021 자산손상·AMAT 2021 구조조정이 0 으로 사라지던 문제). 개념 이름만 바뀐 줄(aliased)은 제외
+  for (const key of ["face", "facePre", "faceNi"]) {
+    const cur = tenK[0][key];
+    if (!cur) continue;
+    const have = new Set(cur.map((f) => f.id));
+    for (const old of tenK.slice(1)) for (const f of old[key] ?? []) if (!have.has(f.id) && !aliased.has(f.id)) { cur.push(f); have.add(f.id); if (!tenK[0].labels.has(f.id) && old.labels.has(f.id)) tenK[0].labels.set(f.id, old.labels.get(f.id)); }
   }
   // LTM — 최신 10-K 뒤 10-Q 가 있으면 줄마다 사업연도 + 당기 누적 − 전년 동기(10-Q 원본), 없으면 사업연도 값
   const fyEnd = tenK[0].report;
@@ -402,7 +424,9 @@ for (const [sym, r] of latest) {
     const rowOf = (end) => end === "LTM" ? (S.ltm && S.ltmEnd && Math.abs(Date.parse(S.ltmEnd) - Date.parse(ltmEnd)) <= 20 * 864e5 ? S.ltm : null) : [...S.rows].find(([d]) => Math.abs(Date.parse(d) - Date.parse(end)) <= 10 * 864e5)?.[1] ?? null;
     // 앱(= SEC) 연도별 값 — 본표 줄 합으로 분해할 때 쓰는 SEC 줄 값
     // 앱 값(= SEC 본표, A층 통과) — 같은 해 매출·매출원가·영업이익
-    const appOf = (yr, m) => (r.review ?? []).find((x) => x.item === (yr === "LTM" ? `LTM ${m}` : `${yr}Y ${m}`))?.ours ?? null;
+    // 앱 값은 그 칸 A층(앱 = SEC 본표)이 통과했을 때만 SEC 값으로 쓴다(감사 HIGH-3)
+    const aPass = (yr, m) => (r.checks ?? []).some((c) => c.layer === "A" && c.col === (yr === "LTM" ? "LTM" : `${yr}Y`) && c.status === "pass" && c.name.includes(`${m} 앱 = SEC`));
+    const appOf = (yr, m) => aPass(yr, m) ? (r.review ?? []).find((x) => x.item === (yr === "LTM" ? `LTM ${m}` : `${yr}Y ${m}`))?.ours ?? null : null;
     const yrs = [];
     for (const c of cs) {
       const end = yEnd(c.year);
@@ -427,9 +451,10 @@ for (const [sym, r] of latest) {
         sec.cogs = aCogs;
         if (Math.abs(moved) > 0.5) secLines.other.push({ id: "(앱 매출원가 경계)", label: `원가 줄 분류 차 ${moved / 1e6}백만`, v: moved });
       }
-      if (aOp != null && aRev != null && aCogs != null) sec.other = aRev - aCogs - sec.sga - sec.rnd - sec.amort - aOp;
+      // 본표 줄 완전성(감사 HIGH-3): 본표 줄 합(매출 − 비용 줄) = 앱 영업이익(A층 통과)이어야 줄 배분을 믿는다. 기타는 역산하지 않는다(항등식이 무의미해짐)
+      const complete = aRev != null && aOp != null && Math.abs(sec.rev - sec.cogs - sec.sga - sec.rnd - sec.amort - sec.other - aOp) <= 1;
       if (S.sgaIncludesRnd) { sec.sga += sec.rnd; secLines.sga.push(...secLines.rnd); sec.rnd = 0; secLines.rnd = []; }
-      yrs.push({ ...c, end, row, sec, secLines });
+      yrs.push({ ...c, end, row, sec, secLines, complete });
     }
     if (!yrs.length) { results.push({ sym, src, metric, verdict: "미결", why: "연도 대응 없음(SEC 결산일 ↔ 외부 기간)", cells: cs.length }); continue; }
     // 연간 열로 구성을 찾고, LTM 은 연간 + LTM 을 함께 다시 판정(같은 구성이 LTM 에서도 성립할 때만 LTM ②) — LTM 하나가 연간 판정을 깨지 않게
@@ -489,14 +514,15 @@ for (const [sym, r] of latest) {
       }
       // 본표 줄 배분(2026-09-27) — 외부는 SEC 본표 비용 줄을 자기 분류(원가·판관비·연구개발비·상각·영업이익 밖)로 다시 묶는다(인포맥스 V·XOM·UBER:
       // 원가 +차 = 기타 −차). 외부 분류마다 본표 줄 부분집합의 합이 **모든 해에서** 외부 값과 같은 배분을 찾는다 — 찾으면 그 배분이 구성 설명
-      let partition = null, fsDiag = null;
+      let partition = null, fsDiag = null, partitionWhy = null;
       if (!Object.values(explain).every((x) => x.ok) && idOk && ["영업이익", "매출원가", "매출총이익"].includes(metric) && explain.rev?.ok) {
         // 매출 줄 제외 — 개념 이름 분류가 놓치는 매출 줄(MCD "Sales by Company-operated restaurants" 회사 고유 개념)은 가산(+) 줄 중 이름·라벨이 매출
         const isRev = (f) => catOf(f.id, labels.get(f.id)) === "rev" || (f.w > 0 && /Revenue|Sales|Fees|Rent/i.test(`${NM(f.id)} ${labels.get(f.id) ?? ""}`) && !/Gain|Loss|Cost|Expense/i.test(NM(f.id)));
         const lines = face.filter((f) => !isRev(f)).map((f) => ({ id: f.id, label: labels.get(f.id) ?? NM(f.id), amt: Object.fromEntries(yrs.map((y) => [y.year, -f.w * (faceVal(f.id, y.end) ?? 0)])) }))
           .filter((l) => yrs.some((y) => Math.abs(l.amt[y.year]) > 0.5));
         const targets = (metric === "영업이익" ? ["cogs", "sga", "rnd", "amort", "other"] : ["cogs"]).filter((c) => yrs.every((y) => y.row[c] != null) && !(c === "rnd" && S.sgaIncludesRnd));
-        if (lines.length <= 16 && targets.length) {
+        if (!yrs.every((y) => y.complete)) partitionWhy = "본표 줄 합 ≠ 매출 − 영업이익(줄 누락·판본 차) — 배분 불가";
+        else if (lines.length <= 16 && targets.length) {
           // 외부 비경상 줄(SA — 영업이익 아래로 옮긴 금액): 외부 분류 + 비경상 줄 일부 = 본표 줄 부분집합이면 "본표 한 줄을 외부가 쪼갬"(TSLA "Restructuring
           // and other" 176 = SA 기타 영업비용 140 + SA 구조조정 36). 비경상 줄은 모든 해 같은 이름 집합으로만 쓴다
           const uNames = [...new Set(yrs.flatMap((y) => Object.keys(y.row.unusual ?? {})))].slice(0, 8);
@@ -523,8 +549,10 @@ for (const [sym, r] of latest) {
             adjs.push({ t: [[a, A.k], [b, B.k]], v: (y) => a * A.vals.get(y.end) + b * B.vals.get(y.end) });
           }
           const popc = (x) => { let n = 0; while (x) { x &= x - 1; n++; } return n; };
-          const solve = (ti, used, uUsed, withNotes) => {
-            if (ti === targets.length) return [];
+          // 해를 2개까지 모은다(감사 MEDIUM-2 — 해가 여럿이면 어느 구성인지 확정 못 함 → 미결)
+          const solveAll = (ti, used, uUsed, withNotes) => {
+            if (ti === targets.length) return [[]];
+            const found = [];
             const c = targets[ti];
             const adjList = withNotes ? adjs : adjs.slice(0, 1);
             for (let ai = 0; ai < adjList.length; ai++) {
@@ -536,23 +564,25 @@ for (const [sym, r] of latest) {
                 const k0 = Math.round(want0 / 1e6);
                 for (let k = k0 - 1; k <= k0 + 1; k++) for (const mask of bucket.get(k) ?? []) {
                   if (mask & used) continue;
-                  if (!yrs.every((y) => Math.abs(sumAt(mask, y) - (y.row[c] + uSum(um, y) + ad.v(y))) <= tolOf(1 + popc(um) + popc(mask) / 2))) continue;
+                  if (!yrs.every((y) => Math.abs(sumAt(mask, y) - (y.row[c] + uSum(um, y) + ad.v(y))) <= tolOf(1 + popc(um)))) continue;
                   // 우연 일치 기대 건수 = 이 분류에서 시도한 조합 수 × Π해(허용 폭 ÷ 가능한 합 범위) — 0.01 이상이면 인정하지 않는다
                   const trials = adjList.length * (1 << uNames.length) * (1 << N);
                   let pr = trials;
                   for (const y of yrs) {
                     const span = lines.reduce((t, l) => t + Math.abs(l.amt[y.year]), 0) + uNames.reduce((t, _, i) => t + Math.abs(uAmt(i, y)), 0) + Math.abs(ad.v(y)) + Math.abs(y.row[c]);
-                    pr *= Math.min(1, (2 * tolOf(1 + popc(um) + popc(mask) / 2)) / Math.max(span, 1));
+                    pr *= Math.min(1, (2 * tolOf(1 + popc(um))) / Math.max(span, 1));
                   }
                   if (pr >= 0.01) continue;
-                  const rest = solve(ti + 1, used | mask, uUsed | um, withNotes);
-                  if (rest) return [{ c, mask, um, adj: ad.t }, ...rest];
+                  for (const rest of solveAll(ti + 1, used | mask, uUsed | um, withNotes)) { found.push([{ c, mask, um, adj: ad.t }, ...rest]); if (found.length >= 2) return found; }
                 }
               }
             }
-            return null;
+            return found;
           };
-          const sol = solve(0, 0, 0, false) ?? (notes.length ? solve(0, 0, 0, true) : null);
+          let sols = solveAll(0, 0, 0, false);
+          if (!sols.length && notes.length) sols = solveAll(0, 0, 0, true);
+          const sol = sols.length === 1 ? sols[0] : null;
+          if (sols.length > 1) partitionWhy = "본표 줄 배분 해가 여러 개 — 구성 확정 불가";
           if (sol) {
             const used = sol.reduce((m, x) => m | x.mask, 0);
             const nm = { cogs: "원가", sga: S.sgaIncludesRnd ? "판관비(연구개발비 포함)" : "판관비", rnd: "연구개발비", amort: "무형상각", other: "기타 영업비용" };
@@ -581,8 +611,11 @@ for (const [sym, r] of latest) {
         // FactSet 순이익은 중단사업이익을 뺀 값(AMD 2025 — SEC 4,335 = FactSet 4,269 + 중단사업 66)
         const anchor = yrs.every((y) => { const f = (niIsCons ? y.row.niCons : y.row.niParent); return f != null && secPre(y) != null && Math.abs(secPre(y) - (f - y.row.below.disc)) <= tol * 3; });
         const N = lines.length;
-        fsDiag = { anchor, lines: N };
-        if (anchor && N <= 22) {
+        // SEC 쪽 완전성 — 순이익 식 비매출 줄 합 = 매출 − SEC 순이익
+        const niComplete = yrs.every((y) => secPre(y) != null && Math.abs(y.sec.rev - lines.reduce((t, l) => t + l.amt[y.year], 0) - secPre(y)) <= 1);
+        fsDiag = { anchor, lines: N, niComplete };
+        if (anchor && !niComplete) partitionWhy = "SEC 순이익 식 줄 합 ≠ 매출 − 순이익(줄 누락·판본 차) — 배분 불가";
+        if (anchor && niComplete && N <= 22) {
           const full = (1 << N) - 1, y0 = yrs[0];
           const sums0 = new Float64Array(1 << N);
           for (let m = 1; m < 1 << N; m++) { const b = 31 - Math.clz32(m & -m); sums0[m] = sums0[m & (m - 1)] + lines[b].amt[y0.year]; }
@@ -603,9 +636,9 @@ for (const [sym, r] of latest) {
             for (const ad of adjOpts) {
               const want0 = val(y0) + ad.v(y0), k0 = Math.round(want0 / 1e6);
               for (let k = k0 - 1; k <= k0 + 1; k++) for (const mask of bucket.get(k) ?? []) {
-                if (!yrs.every((y) => Math.abs(sumAt(mask, y) - (val(y) + ad.v(y))) <= tol * (1 + popc(mask) / 2))) continue;
+                if (!yrs.every((y) => Math.abs(sumAt(mask, y) - (val(y) + ad.v(y))) <= tol)) continue;
                 let pr = adjOpts.length * (1 << N);
-                for (const y of yrs) { const span = lines.reduce((t2, l) => t2 + Math.abs(l.amt[y.year]), 0) + Math.abs(val(y)) + Math.abs(ad.v(y)); pr *= Math.min(1, (2 * tol * (1 + popc(mask) / 2)) / Math.max(span, 1)); }
+                for (const y of yrs) { const span = lines.reduce((t2, l) => t2 + Math.abs(l.amt[y.year]), 0) + Math.abs(val(y)) + Math.abs(ad.v(y)); pr *= Math.min(1, (2 * tol) / Math.max(span, 1)); }
                 if (ad.k && pr >= 0.01) continue;
                 if (!ad.k && pr * (adjOpts.length > 1 ? 1 : 1) >= 0.01 * adjOpts.length) continue;
                 out.push({ c, mask, ad });
@@ -614,11 +647,11 @@ for (const [sym, r] of latest) {
             }
             return out.sort((a, b) => (a.ad.k ? 1 : 0) - (b.ad.k ? 1 : 0));
           });
-          let sol = null;
+          const sols2 = [];
           const go = (ti, used, bal, pick) => {
-            if (sol) return;
+            if (sols2.length >= 2) return;
             if (ti === tg.length) {
-              if (used === full && [...bal.values()].every((v) => v === 0) && bal.size <= 2) sol = pick.slice();
+              if (used === full && [...bal.values()].every((v) => v === 0) && bal.size <= MAX_MOVES) sols2.push(pick.slice());
               return;
             }
             for (const o of opts[ti]) {
@@ -626,12 +659,14 @@ for (const [sym, r] of latest) {
               const nb = new Map(bal);
               if (o.ad.k) { nb.set(o.ad.k, (nb.get(o.ad.k) ?? 0) + o.ad.sg); if (nb.get(o.ad.k) === 0) nb.set(o.ad.k, 0); }
               const open = [...nb.entries()].filter(([, v]) => v !== 0).length;
-              if (nb.size > 2 || open > tg.length - ti - 1) continue;
+              if (nb.size > MAX_MOVES || open > tg.length - ti - 1) continue;
               pick.push(o); go(ti + 1, used | o.mask, nb, pick); pick.pop();
-              if (sol) return;
+              if (sols2.length >= 2) return;
             }
           };
           if (opts.every((o) => o.length)) go(0, 0, new Map(), []);
+          const sol = sols2.length === 1 ? sols2[0] : null;
+          if (sols2.length > 1) partitionWhy = "인포맥스 줄 배분 해가 여러 개 — 구성 확정 불가";
           const moves = sol ? [...new Set(sol.filter((o) => o.ad.k).map((o) => o.ad.k))].map((k) => ({ k, from: sol.find((o) => o.ad.k === k && o.ad.sg > 0).c, to: sol.find((o) => o.ad.k === k && o.ad.sg < 0).c })) : [];
           if (sol) {
             const nm = { cogs: "상각비포함 원가", sga: "판관비(연구개발비 포함)", other: "기타영업비용", unusual: "비경상비용", nonop: "영업외손익(비용 부호)", interest: "이자비용", tax: "법인세", equity: "관계기업이익(비용 부호)", afterTax: "기타세후조정(비용 부호)", disc: "중단사업이익(비용 부호)", minority: "비지배주주귀속분" };
@@ -647,7 +682,8 @@ for (const [sym, r] of latest) {
       // 다시 나눠(판관비 속 감가상각 등) 구성을 SEC 로 재현할 수 없음 — FactSet 정의서 미확보
       if (S.full && fsDiag?.anchor && !partition) for (const l of Object.keys(explain)) if (!explain[l].ok) explain[l].why = `${explain[l].why ?? ""} · FactSet 자체 배분 — 정의서 미확보(원데이터 매출·순이익은 SEC 일치)`;
       const ok = idOk && Object.values(explain).every((x) => x.ok);
-      return { verdict: ok ? "②구성분해" : "미결", identity: idOk, explain, partition, fsDiag, years: table.map((t) => t.year), table, resid, std };
+      if (!ok && partitionWhy) for (const l of Object.keys(explain)) if (!explain[l].ok) explain[l].why = `${explain[l].why ?? ""} · ${partitionWhy}`;
+      return { verdict: ok ? "②구성분해" : "미결", identity: idOk, explain, partition, partitionWhy, fsDiag, years: table.map((t) => t.year), table, resid, std };
     };
     const annualYrs = yrs.filter((y) => y.year !== "LTM"), hasLtm = yrs.some((y) => y.year === "LTM");
     const a1 = annualYrs.length ? analyze(annualYrs) : null;
@@ -656,7 +692,9 @@ for (const [sym, r] of latest) {
     for (const y of annualYrs) yearOk[y.year] = a1?.verdict !== "미결";
     if (hasLtm) yearOk.LTM = a2?.verdict !== "미결" && (a1 == null || a1.verdict !== "미결" || annualYrs.length === 0);
     const main = a1 ?? a2;
-    results.push({ sym, src, metric, ...main, verdict: main.verdict, yearOk, ltm: a2 ? { verdict: a2.verdict, explain: a2.explain, partition: a2.partition } : null, years: yrs.map((y) => y.year), cells: cs.length });
+    results.push({ sym, src, metric, ...main, verdict: main.verdict, yearOk, ltm: a2 ? { verdict: a2.verdict, explain: a2.explain, partition: a2.partition } : null, years: yrs.map((y) => y.year), cells: cs.length,
+      // 검증기가 이 결과를 쓸 때 같은 값인지 확인(감사 HIGH-2 — 이전 실행 결과를 값 확인 없이 붙이던 문제)
+      vals: Object.fromEntries(yrs.map((y) => [y.year, { ext: y.ext, app: y.ours }])) });
   }
   const mine = results.filter((x) => x.sym === sym);
   console.log(`${sym.padEnd(5)} ${mine.map((x) => `${x.src}/${x.metric}:${x.verdict ?? "오류"}`).join("  ")}`);
