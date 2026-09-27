@@ -151,9 +151,12 @@ export function classifySector(doc: {
   ) {
     return "산업재";
   }
-  // 신재생 설비("풍력 터빈 기자재")도 산업재 — 태양광 셀·모듈은 위 소재 규칙이 먼저 잡는다.
-  if (base === "에너지/화학" && /태양광|풍력|연료전지|수소/.test(doc.title ?? "") && POWER_EQUIPMENT_RE.test(doc.title ?? "")) {
-    return "산업재";
+  // 라벨이 넓은 에너지/화학이어도 제목이 신재생이면 세분화한다(오너 지적 2026-09-27 — 미래에셋 "Energy Bites" 시리즈의 "2Q26 미국 태양광 설치량
+  // 발표 코멘트"가 라벨의 "Energy"에 걸려 에너지/화학으로 갔다). 셀·모듈은 소재, 설비(터빈·기자재)는 산업재, 그 외 신재생 사업·설치는 유틸리티.
+  if (base === "에너지/화학") {
+    const t = doc.title ?? "";
+    if (/태양광\s?(?:셀|모듈|웨이퍼|잉곳)|태양전지|폴리실리콘/.test(t)) return "소재";
+    if (RENEWABLE_OPERATOR_RE.test(t)) return POWER_EQUIPMENT_RE.test(t) ? "산업재" : "유틸리티";
   }
   return base;
 }
