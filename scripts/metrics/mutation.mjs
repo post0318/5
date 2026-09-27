@@ -85,6 +85,17 @@ const fillCogsCell = (col, cogs, gp) => (j) => {
   return n === 2 ? n : 0;
 };
 
+/** 손익계산서 행(accountName 정확 일치)의 빈칸 열 col 에 값 v 를 넣는다(기준 혼합 빈칸 → 값 표시). 빈칸이 아니거나 행·열이 없으면 심지 않음 */
+const fillIsCell = (name, col, v) => (j) => {
+  let n = 0;
+  for (const sec of j.sections ?? []) for (const it of sec.items ?? []) {
+    if (it.accountName !== name || !it.values || !(col in it.values) || it.values[col] != null) continue;
+    it.values[col] = v;
+    n++;
+  }
+  return n;
+};
+
 // TSM FY2024(2024-01-01 ~ 2024-12-31) 매출 — 원통화 공시 × 연준 H.10 기간 평균(2026-09-27 환율 원천 H.10 전환 후 앱 값).
 // TSM_REV_2024_YAHOO = 같은 원통화 × 옛 Yahoo 일별 종가 평균(전환 전 앱 값 — "앱이 H.10 대신 Yahoo 를 쓴" 오류의 전형적인 작은 차이 −0.15%)
 const FX_K = 1.005;
@@ -166,6 +177,9 @@ export const MUTATIONS = [
     expect: "A", plants: [{ op: "replace", kinds: ["is"], from: 3451000000, to: 4178000000 }] },
   { id: "M22", cat: 18, sym: "AAPL", col: "2026 Q2", what: "분기 감가상각비 = 6개월 누적 그대로 3,439,000,000 → 6,653,000,000(누적 차 6,653 − 3,214 를 안 함)", origin: "현금흐름표는 누적 공시 — Q2·Q3 는 누적 차여야 한다(Q4 = 사업연도 − 9개월 M07·M19 의 누적판)",
     expect: "A", plants: [{ op: "replace", kinds: ["isq"], from: 3439000000, to: 6653000000 }] },
+  // 감가상각 줄 기준 혼합(2026-09-27) — 앱은 빈칸 + "기준 혼합"이어야 한다. 검증기 secFaceDa mixOf 가 구성 공시의 현금흐름표 줄 구성 합을 따로 비교한다
+  { id: "M23", cat: 14, sym: "HLT", col: "2025 Q4", what: "감가상각 줄 기준 혼합 칸에 값 표시 — 분기 감가상각비 빈칸 → 5,000,000(사업연도 177 − 9개월 172)", origin: "HLT 10-Q 는 계약획득원가 상각을 감가상각 줄(AmortizationOfIntangibleAssets)로, 10-K 는 제외 줄(AmortizationOfAcquisitionCosts)로 실음 — 2025 9개월 합 10-K 구성 130 · 10-Q 구성 172",
+    expect: "A", plants: [{ op: "fn", kinds: ["isq"], name: "2025 Q4 감가상각비 칸 채움", fn: fillIsCell("감가상각비", "2025 Q4", 5000000) }] },
 ];
 
 // ── 응답 종류 판정 ───────────────────────────────────────────────────────────────────────────────────────────────

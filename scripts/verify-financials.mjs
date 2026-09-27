@@ -1992,7 +1992,7 @@ async function cfDaFace(cik, p, content) {
   const xml = await secInstance(`${base}/${instN}`);
   const ctx = parseContexts(xml);
   const want = new Set([...st.lines, ...st.excl.map((t) => t.id)]);
-  const vals = new Map(), periods = new Set(), adj = [], dupA = new Set();
+  const vals = new Map(), periods = new Set(), adj = [], dupA = new Set(), cfPeriods = new Set();
   for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+)\s*</g)) {
     const id = `${m[1]}_${m[2]}`, attrs = `${m[3]} ${m[5]}`;
     if (!/unitRef="[^"]*usd/i.test(attrs)) continue;
@@ -2011,7 +2011,12 @@ async function cfDaFace(cik, p, content) {
       const k = `${id}|${c.start}|${c.end}|${c.dims.flat().join(",")}`;
       if (!dupA.has(k)) { dupA.add(k); adj.push({ id, start: c.start, end: c.end, dims: c.dims, v }); }
     }
+    if (CF_OP_ROOT.test(id) && !c.dims.length) cfPeriods.add(`${c.start}|${c.end}`);
   }
+  // 현금흐름표 기간만(이 공시 원본에서 영업활동 현금흐름이 실린 기간) — 감가상각 줄 개념이 주석에만 실은 기간(ISRG 10-Q 무형상각 3개월
+  // 3.2M, HLT 10-Q 감가상각 3개월 값)은 현금흐름표 줄 값이 아니다(2026-09-27, 앱 import 없이 원본에서 독립 판정)
+  for (const k of [...vals.keys()]) if (!cfPeriods.has(k.slice(k.indexOf("|") + 1))) vals.delete(k);
+  for (const k of [...periods]) if (!cfPeriods.has(k)) periods.delete(k);
   return { ...p, ...st, vals, periods, adj };
 }
 /** 한 기간 조정 — 손상 포함 줄이면 손상 금액, 중단사업 포함 현금흐름표면 중단사업 감가상각(10-K·10-Q 원본 태그). 규칙은 앱과 같은 성격(공통모드) */
@@ -2144,6 +2149,44 @@ async function secFaceDa({ cik, sub, content }) {
     };
   };
   const find = (pred) => { for (const f of faces) { const r = one(f, pred); if (r) return r; } return null; };
+  // ── 구성 공시 간 감가상각 줄 기준 혼합(2026-09-27 — 매출원가 기준 혼합과 같은 원칙, 앱 import 없이 원본에서 독립 판정) ──
+  // 파생 열(누적 차·Q4·LTM)의 구성분이 서로 다른 공시의 현금흐름표 줄 구성으로 계산됐으면, 두 줄 구성의 합을 두 구성의 줄이 모두
+  // **현금흐름표에 실린** 같은 기간에서 비교한다(줄 값은 그 줄을 현금흐름표에 실은 공시의 값만 — 주석 전용 값 제외). 합이 다르면
+  // (decimals 반올림 범위 밖) 한 열 = 한 기준이 깨진다 — 정답은 "앱 빈칸 + 기준 혼합". 합이 같은 개명(ISRG 회사 고유 개념 ↔ 표준 개념이
+  // 같은 금액)은 혼합 아님. 예: HLT 10-Q 는 계약획득원가 상각을 감가상각 줄(AmortizationOfIntangibleAssets)로, 10-K 는 제외 줄
+  // (AmortizationOfAcquisitionCosts)로 실어 2025 9개월 합이 10-K 구성 130 · 10-Q 구성 172
+  const cfLineAt = (id, p) => {
+    for (const g of faces) {
+      if (!g.lines.includes(id) || !g.periods.has(p)) continue;
+      const x = g.vals.get(`${id}|${p}`);
+      if (x) return x;
+    }
+    return null;
+  };
+  const mixCache = new Map();
+  const mixOf = (fa, fb) => {
+    if (fa.accn === fb.accn) return null;
+    const key = [fa.accn, fb.accn].sort().join("|");
+    if (mixCache.has(key)) return mixCache.get(key);
+    let res = null;
+    if (!(fa.lines.length === fb.lines.length && fa.lines.every((l) => fb.lines.includes(l)))) {
+      const all = [...new Set(faces.flatMap((g) => [...g.periods]))].sort();
+      for (const p of all) {
+        const va = fa.lines.map((id) => cfLineAt(id, p)), vb = fb.lines.map((id) => cfLineAt(id, p));
+        if (va.some((x) => !x) || vb.some((x) => !x)) continue;
+        const sa = va.reduce((t, x) => t + x.val, 0), sb = vb.reduce((t, x) => t + x.val, 0);
+        // decimals 반올림 재게시 허용 — 두 구성의 줄 값 각자의 반올림 반폭 합(decimals 없음·INF 는 0)
+        const tol = [...va, ...vb].reduce((t, x) => t + (x.dec == null || !Number.isFinite(x.dec) ? 0 : 0.5 * 10 ** -x.dec), 0);
+        if (Math.abs(sa - sb) > tol + 0.5) {
+          const [s0, e0] = p.split("|");
+          res = `${fa.form} ${fa.report} 줄 구성(${fa.lines.map(DA_NM).join("+")}) 합 ${sa} ≠ ${fb.form} ${fb.report} 줄 구성(${fb.lines.map(DA_NM).join("+")}) 합 ${sb} (${s0}~${e0}, 현금흐름표 실린 값)`;
+          break;
+        }
+      }
+    }
+    mixCache.set(key, res);
+    return res;
+  };
   const comb = (xs, label) => {
     if (xs.some(([r]) => !r)) return null;
     const u = xs.find(([r]) => r.unres);
@@ -2153,6 +2196,11 @@ async function secFaceDa({ cik, sub, content }) {
     return {
       v: sum("v"), vLatest: sum("vLatest"), lineSum: sum("lineSum"), adj: sum("adj"), unres: u ? u[0].unres : null, start: xs[0][0].start, end: xs[0][0].end,
       lines: byId("lines"), excl: byId("excl"), comps: xs.flatMap(([r, k]) => r.comps.map((c) => ({ ...c, k: c.k * k }))),
+      mix: (() => {
+        const fs = [...new Set(xs.flatMap(([r]) => r.comps.map((c) => c.faceAccn)))].map((a) => faces.find((g) => g.accn === a)).filter(Boolean);
+        for (let i = 0; i < fs.length; i++) for (let j = i + 1; j < fs.length; j++) { const m = mixOf(fs[i], fs[j]); if (m) return m; }
+        return null;
+      })(),
       how: `${label} — ${xs.map(([r, k]) => `${k < 0 ? "− " : ""}[${r.start}~${r.end} ${r.v}: ${r.how}]`).join(" ")}`,
     };
   };
@@ -3617,7 +3665,16 @@ async function verifyUs(sym) {
     // LTM 기대치 — 연도 열만 보던 EBITDA·PBR 기대치를 LTM 에도(감사). 기준은 SEC TTM·최신 분기 자본
     if (!isFy && !bank && !foreign) {
       const t = ["OperatingIncomeLoss", ...PRETAX_TAGS].map((tag) => ({ tag, t: secTtm(tag) })).find((r) => r.t && dayDiff(r.t.end, x.date) <= 7);
-      if (t) add("D", "LTM EBITDA 기대치(SEC TTM 영업이익·세전이익 있음)", c, x.ebitda != null ? { status: PASS } : { status: FAIL, note: `SEC TTM ${t.tag} ${t.t.v}(${t.t.end}) 있는데 앱 LTM EBITDA 빈칸` });
+      // 감가상각비 모드: LTM 감가상각 줄이 구성 공시 간 기준 혼합(secFaceDa mixOf)이면 EBITDA 도 빈칸이 정답(감가상각비 빈칸 + 사유)
+      const daMix = DA_MODE && daFace ? daFace.ltmAt(x.date)?.mix ?? null : null;
+      // 감가상각비 모드: 검증기 자체 판독으로도 LTM 감가상각비를 만들 수 없으면(DAL — 10-Q 가 요약 현금흐름표라 감가상각 줄 없음) EBITDA 빈칸이
+      // 정답(태그 값 대체 금지 — 오너 규칙). 앱이 값을 내면 실패(2026-09-27)
+      const daLtm = DA_MODE && typeof daFace?.ltmAt === "function" && !daMix ? daFace.ltmAt(x.date) : undefined;
+      const daNone = daLtm !== undefined && (daLtm == null || daLtm.v == null) ? (daLtm?.why ?? "SEC 현금흐름표 계산 구조로 LTM 감가상각비 계산 불가") : null;
+      if (t && daNone) add("D", "LTM EBITDA 기대치(SEC TTM 영업이익·세전이익 있음)", c, x.ebitda == null ? { status: PASS, note: `LTM 감가상각비 계산 불가(${daNone}) — EBITDA 빈칸이 정답` } : { status: FAIL, note: `LTM 감가상각비 계산 불가(${daNone})인데 앱 LTM EBITDA ${x.ebitda}` });
+      else if (t) add("D", "LTM EBITDA 기대치(SEC TTM 영업이익·세전이익 있음)", c, daMix
+        ? x.ebitda == null ? { status: PASS, note: `감가상각 줄 ${COGS_MIX} — LTM 감가상각비 빈칸이라 EBITDA 빈칸이 정답 · ${daMix}` } : { status: FAIL, note: `감가상각 줄 ${COGS_MIX}인데 앱 LTM EBITDA ${x.ebitda} · ${daMix}` }
+        : x.ebitda != null ? { status: PASS } : { status: FAIL, note: `SEC TTM ${t.tag} ${t.t.v}(${t.t.end}) 있는데 앱 LTM EBITDA 빈칸` });
     }
     if (!isFy && (x.mc != null || ov?.quote?.last != null)) {
       const ql = (G.StockholdersEquity?.units?.USD ?? []).filter((e) => !e.start && /^10-[QK]/.test(e.form) && dayDiff(e.end, x.date) <= 7);
@@ -4070,6 +4127,14 @@ async function verifyUs(sym) {
         // 연간·LTM 은 그 기간을 담은 공시까지 읽었으므로 검증불가(사유). 분기는 그 분기말 10-Q 가 판독 제외(요약 현금흐름표 등)일 때만 검증불가 — 그 밖은 분기 창 범위라 검사를 만들지 않는다
         const sk = daFace.skipped.filter((x) => (Date.parse(x.report) - Date.parse(E)) / 864e5 >= -7 && (Date.parse(x.report) - Date.parse(E)) / 864e5 <= (q ? 7 : 400));
         if (!q || sk.length) add("A", name, col, { status: NA, note: `기간 ${E} — 구성 공시 현금흐름표에서 감가상각 줄 값을 찾지 못함${sk.length ? ` · 판독 제외 공시 ${sk.map((x) => x.txt).join(" · ")}` : ""}`, app, src: null });
+        return;
+      }
+      // 구성 공시 간 감가상각 줄 기준 혼합(secFaceDa mixOf) — 정답은 앱 빈칸 + "기준 혼합" 사유(값을 내면 FAIL, 사유 없는 빈칸도 FAIL)
+      if (e0.mix) {
+        const why = row?.cellNotes?.[key] ?? "";
+        add("A", name, col, app != null ? { status: FAIL, note: `감가상각 줄 ${COGS_MIX} 열에 앱 값 ${app} — 빈칸이어야 함(한 열 = 한 기준) · ${e0.mix}`, app, src: null }
+          : why.includes(COGS_MIX) ? { status: PASS, note: `감가상각 줄 ${COGS_MIX} 확인 — 앱 빈칸 + 사유 · ${e0.mix}`, app: null, src: null }
+          : { status: FAIL, note: `감가상각 줄 ${COGS_MIX}인데 앱 빈칸 사유에 "${COGS_MIX}" 없음(${why || "사유 없음"}) · ${e0.mix}`, app: null, src: null });
         return;
       }
       if (e0.unres) { add("A", name, col, { status: NA, note: `미결 — ${e0.unres}(앱 ${app ?? "빈칸"}, SEC 줄 합 ${e0.lineSum}) · ${e0.how}`, app, src: null }); return; }
