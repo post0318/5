@@ -157,8 +157,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="mx-auto max-w-[1400px] overflow-x-auto px-4">
             <div className="flex w-max min-w-full gap-4">
               {SUBNAV.filter((s) =>
-                // 인사이트(해외 IB)는 해외 시장 전용, 비상장은 국내 전용(오너 지시 2026-09-26).
-                s.seg === "insights" ? market !== "kr" : s.seg === "unlisted" ? market === "kr" : true,
+                // 인사이트(해외 IB)는 해외 시장 전용(오너 지시 2026-09-26), 비상장은 국내·미국(2026-09-27 — "미국과 중국도 비상장을
+                // 추가한다", 중국은 시장 화면이 없어 데이터만 쌓는다).
+                s.seg === "insights"
+                  ? market !== "kr"
+                  : s.seg === "unlisted"
+                    ? market === "kr" || market === "us"
+                    : true,
               ).map((s) => {
                 const active = s.seg === sub;
                 const label = s.seg === "unlisted" ? "비상장 리서치" : s.label;

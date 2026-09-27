@@ -599,7 +599,16 @@ export const INSIGHT_SOURCES = [
   // 삼성증권 국내기업·국내산업 게시판의 비상장 글("BPMG (비상장): …",
   // "비상장 위클리 업데이트") — 위와 같은 국내 비상장 규칙(2026-09-25).
   "삼성증권 비상장리서치",
+  // 한화투자증권 해외주식분석의 상장 전 기업 리포트("[IPO 101] [스페이스X]") — 미국·중국 비상장(오너 지시 2026-09-27).
+  "한화투자증권 비상장리서치",
 ] as const;
+
+/**
+ * 비상장 리서치 source 판별 — 시장과 무관하다(오너 지시 2026-09-27 — "미국과 중국도 비상장을 추가한다").
+ * 같은 source 이름을 시장별로 재사용한다(예: "삼성증권 비상장리서치"는 kr·us·ch 모두). 화면은 미국에서 인사이트(해외 IB)와
+ * 비상장을 별도 탭으로 나눠 보여주므로 이 접미어로 두 그룹을 가른다.
+ */
+export const isUnlistedSource = (source: string): boolean => /비상장리서치$/.test(source);
 
 /**
  * "해외리서치" — 산업분석 탭의 새 세그먼트(오너 지시, 2026-09-19 —
@@ -1048,13 +1057,16 @@ export async function getInsightResearch(
   market: MarketId,
   limit = 100,
   source?: string,
+  kind: "insight" | "unlisted" = market === "kr" ? "unlisted" : "insight",
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
+  // kind: 해외 IB 인사이트와 비상장 리서치는 같은 source 목록(INSIGHT_SOURCES)을 공유하지만 화면(탭)은 갈라져 있다.
+  const pool = (INSIGHT_SOURCES as readonly string[]).filter((s) => isUnlistedSource(s) === (kind === "unlisted"));
   const filter: Record<string, unknown> = {
     market,
     category: "산업",
     pdfUrl: { $ne: null },
-    source: source ? source : { $in: INSIGHT_SOURCES as unknown as string[] },
+    source: source && pool.includes(source) ? source : { $in: pool },
   };
   const docs = await col.find(filter).sort({ date: -1 }).limit(limit * 3).toArray();
   const kept = docs.filter((d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"));

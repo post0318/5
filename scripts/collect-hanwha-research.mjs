@@ -55,7 +55,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent, isDigitalAssetContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent, isDigitalAssetContent, isUnlistedCompanyTag } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 import { looksLikeSectorLabel } from "./lib/sector-label.mjs";
 
@@ -92,6 +92,9 @@ const SITE = "https://www.hanwhawm.com";
 const LIST_URL = `${SITE}/main/research/main/list.cmd`;
 const VIEW_URL = `${SITE}/main/research/main/view.cmd`;
 const SOURCE = "한화투자증권";
+const UNLISTED_SOURCE = "한화투자증권 비상장리서치";
+// 시장 전체 노트 신호 — 종목·업종이 아니라 시장·유동성·통화정책·지수 얘기(투자전략(주식) 대상).
+const MARKET_NOTE_RE = /유동성|FOMC|연준|\bFed\b|금리|정상회담|증시|나스닥|다우|S&P|코스피|지수|셀온|신고가/i;
 const STRATEGY_LABEL = "한화 투자전략";
 
 const BOARDS = [
@@ -340,6 +343,11 @@ async function classify(row, board) {
   }
   if (isCommodityContent(title)) return commodityItem(base, title, market);
   const it = industryItem(base, rest || title, market);
+  // 상장 전 기업 리포트("[IPO 101] [스페이스X (SPCX)] …")는 비상장 리서치(오너 지시 2026-09-27 — 미국·중국도 비상장 추가).
+  if (IPO_RE.test(rest) || isUnlistedCompanyTag(rest)) {
+    it.source = UNLISTED_SOURCE;
+    return it;
+  }
   // 대괄호·콜론 라벨이 없으면 지역 태그를 라벨로.
   // "[해외시황]"(박제인, 해외 시장 이슈·자금조달 등)은 일간 시황이 아니라 이슈분석 — 고정 라벨로 붙여 앱이 거시경제
   // 이슈분석으로 분류(오너 지시 2026-09-27, "AI 자금조달, 넓어지는 시장과 높아지는 비용").
@@ -347,7 +355,9 @@ async function classify(row, board) {
   else if (it.stockName === "산업" && region) it.stockName = region;
   // 종목도 업종도 없는 미국·중국 시장 노트("[미국주식] 호르무즈보다 중요한 건 유동성", "[미중 정상회담] 높아질 기대, 숨 고를 증시")는
   // 산업분석이 아니라 투자전략(주식)이다(오너 지적 2026-09-27). 라벨이 실제 업종 어휘일 때만 산업분석으로 남긴다.
-  if (!it.symbol && it.category === "산업" && (region === "미국주식" || region === "중국주식")) {
+  // 제목에 시장 전체 신호(유동성·FOMC·증시·지수 등)가 있을 때만 — 90일 실측에서 종목·업종 글(알리바바 2분기 실적, CXMT 메모리, 정유주)도
+  // 종목 없는 미국·중국 글이라 통째로 전략으로 끌려가서 좁혔다.
+  if (!it.symbol && it.category === "산업" && (region === "미국주식" || region === "중국주식") && MARKET_NOTE_RE.test(rest)) {
     const label = it.stockName === region ? "" : it.stockName;
     if (!looksLikeSectorLabel(label)) it.stockName = "한화 해외주식 전략";
   }

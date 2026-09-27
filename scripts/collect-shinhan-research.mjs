@@ -27,7 +27,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { isCommonExcludedContent, isUnlistedCompanyTag } from "./lib/exclude-filters.mjs";
 import { refineSectorLabels } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
@@ -503,11 +503,18 @@ if (DRY_RUN) {
 // 비상장 분석(오너 지시 2026-09-27 — "신한투자증권 기업분석 비상장분석은 비상장으로 분류"): 국내 항목 중 종목명·제목에
 // "비상장"이 있으면 종목 리포트가 아니라 비상장 리서치로 — source 를 분리해 산업 카테고리·종목코드 없음으로 보낸다.
 const UNLISTED_SOURCE = "신한투자증권 비상장리서치";
+// 미국·중국도 같다(오너 지시 2026-09-27 — "미국과 중국도 비상장을 추가한다"): 해외 글은 "비상장" 표기가 있거나, 종목 없는 산업 글의 제목이
+// IPO 설명서·IPO 프리뷰처럼 상장 전 기업 이야기면 비상장으로. 중국 기업이면 시장을 ch 로 태깅(us 로 합치지 않음).
 for (const it of items) {
-  if ((it.market ?? "kr") === "kr" && /비상장/.test(`${it.stockName} ${it.title}`)) {
+  const hay = `${it.stockName} ${it.title}`;
+  const market = it.market ?? "kr";
+  const preIpo = market !== "kr" && it.category === "산업" && !it.symbol && /\bIPO\b/.test(String(it.title));
+  // 국내는 기존대로 "비상장" 포함이면 비상장(비상장분석 게시판 등), 해외는 명시 태그만("비상장주식 평가이익" 같은 상장사 글 오탐 방지).
+  if (market === "kr" ? /비상장/.test(hay) : isUnlistedCompanyTag(hay) || preIpo) {
     it.unlisted = true;
     it.category = "산업";
     it.symbol = null;
+    if (market !== "kr" && /중국|China/i.test(hay)) it.market = "ch";
   }
 }
 

@@ -12,5 +12,5 @@ export default async function InsightsPage({
   const { market } = await params;
   if (!isMarketId(market)) notFound();
   if (market === "kr") redirect("/kr/unlisted");
-  return <InsightsBoard market={market} />;
+  return <InsightsBoard market={market} kind="insight" />;
 }

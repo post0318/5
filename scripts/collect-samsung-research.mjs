@@ -78,7 +78,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent, isDigitalAssetContent } from "./lib/exclude-filters.mjs";
+import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent, isDigitalAssetContent, isUnlistedCompanyTag } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -208,7 +208,8 @@ function industryItem(base, title, board) {
     market = "us";
   }
   if (market === "kr" && isDigitalAssetContent(`${label} ${title}`)) return null;
-  const unlisted = market === "kr" && UNLISTED_LABEL_RE.test(label);
+  // 비상장은 시장과 무관(오너 지시 2026-09-27 — "미국과 중국도 비상장을 추가한다"): 미국 "오픈AI(OpenAI, 미국 비상장)"·"앤스로픽(…비상장)"도 비상장 리서치.
+  const unlisted = market === "kr" ? UNLISTED_LABEL_RE.test(label) : isUnlistedCompanyTag(label);
   return {
     ...base,
     // "[Tech Talk 시즌2]: 애플 …"처럼 대괄호 뒤에 콜론이 또 붙는 경우 정리.

@@ -74,7 +74,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { isCommonExcludedContent, isUnlistedCompanyTag } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 import { sectorFromTitleOrCover, looksLikeSectorLabel, isIpoCover } from "./lib/sector-label.mjs";
 import { readPdfText } from "./lib/research-extract.mjs";
@@ -431,6 +431,18 @@ for (const it of collected) {
   }
 }
 console.log(`▶ 미국(CC) 티커 없는 영문 회사명 → 종목 ${usPromoted}건`);
+
+// 미국·중국도 비상장 리서치(오너 지시 2026-09-27 — "미국과 중국도 비상장을 추가한다"): 종목 없는 해외 산업 글 중 "비상장" 표기이거나
+// 제목이 상장 전 기업의 IPO 이야기("Anthropic IPO - 프론티어 AI의 첫 단독 상장")면 비상장으로 분리해 보낸다.
+let overseasUnlisted = 0;
+for (const it of collected) {
+  if (it.market === "kr" || it.category !== "산업" || it.symbol || it.unlisted) continue;
+  if (isUnlistedCompanyTag(`${it.stockName} ${it.title}`) || /\bIPO\b/.test(String(it.title))) {
+    it.unlisted = true;
+    overseasUnlisted++;
+  }
+}
+console.log(`▶ 해외 비상장(IPO 포함) 분리: ${overseasUnlisted}건`);
 
 const stockItems = collected.filter((it) => it.category !== "산업");
 console.log(`▶ 투자의견/목표주가 조회 중 (PDF 포함, 로그인 불필요) — ${stockItems.length}건...`);
