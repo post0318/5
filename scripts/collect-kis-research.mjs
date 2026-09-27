@@ -38,6 +38,19 @@ import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
+// 해외 기업분석(jkGubun=7) 산업분석 글의 market 판별(오너 지적 2026-09-27, 연속 4건 — "유럽 산업재인데?"·
+// "중국 이차전지인데"·"중국제일자동차...중국자동차이다"·"중국 에너지/화학이다"): 이 게시판 자체가 이미
+// "해외" 전용이라(국내 종목이 섞일 일이 없음) marketFromTitleLead 같은 일반 공용 함수의 "미국·일본은
+// 오탐 위험 커서 보류" 제약이 적용 안 된다 — 라벨(업종명)만으론 국가를 알 수 없어 market: "us" 로
+// 통째로 고정돼 있던 것을 제목+목록 요약(둘 다 PDF 없이 이미 확보되는 값) 전체에서 국가 신호를 찾아 override한다.
+// 신호가 없으면 그대로 미국(기존 기본값) — 완전하지 않음(본문 PDF까지 봐야 알 수 있는 경우는 못 잡음).
+function globalIndustryMarket(text) {
+  if (/중국|차이나|China\b/i.test(text)) return "ch";
+  if (/유럽|유로존|Europe\b|\bEU\d*\b/.test(text)) return "eu";
+  if (/일본|Japan\b/i.test(text)) return "jp";
+  return "us";
+}
+
 function loadEnvLocal() {
   const env = { ...process.env };
   try {
@@ -158,6 +171,7 @@ function parseGlobalItems(html) {
     if (headM && /산업분석/.test(headM[1])) {
       const sm = titleM[1].match(/^([^:：]+)[:：]\s*(.+)$/);
       if (isCommonExcludedContent(titleM[1], "산업")) continue;
+      const rawSummary = summaryM ? excerpt(stripHtml(summaryM[1])) : "";
       items.push({
         id: idM[1],
         date,
@@ -165,12 +179,12 @@ function parseGlobalItems(html) {
         stockNameOverride: sm ? sm[1].trim() : titleM[1].trim(),
         symbolHint: null,
         analyst: analystM[1].trim(),
-        summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
+        summary: rawSummary,
+        market: globalIndustryMarket(`${titleM[1]} ${rawSummary}`),
         detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
         pdfUrl: kisPdfUrl(chunk),
         category: "산업",
         board: "한국투자증권 > 리서치 > 해외 기업분석(Strategy.jsp, jkGubun=7)",
-        market: "us",
       });
       continue;
     }
@@ -286,6 +300,8 @@ function parseItems(html) {
     const im = titleM[1].match(INDUSTRY_TITLE_RE);
     if (!im) continue; // 콜론 형식도 아닌 예외적 제목 — 건너뜀
     if (isCommonExcludedContent(`${im[1].trim()} ${im[2].trim()}`, "산업")) continue;
+    // "해외주식 369"(정정영) 정기 시리즈 — 오너 결정 2026-09-27 "수집제외다".
+    if (/^해외주식\s*369$/.test(im[1].trim())) continue;
     items.push({
       id: idM[1],
       date,

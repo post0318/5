@@ -55,8 +55,8 @@
  *   | 193/75/76  | 자산배분/매크로 > 대체투자(가상자산/원자재/부동산리츠) | kr | 산업 | ❌ 미수집 — 다른 증권사의 "대체투자 제외" 전례 있음(CLAUDE.md) |
  *   | 174        | 자산배분/매크로 > 자산배분기타 > 기타발간   | kr     | 산업     | ❌ 미수집 |
  *   | 84         | 한국 투자 > 시황코멘트                      | kr     | 산업     | ❌ 수집 제외(오너 결정, 2026-09-24) |
- *   | 81("KB 전략") | 한국 투자 > 주식전략                     | kr     | 산업     | ✅ 이 스크립트(`tab=3`, docTitle="KB 전략"만) — 투자전략(주식) 고정(오너 지시 — "kb전략은 투자전략(주식)에 해당된다") |
- *   | 81("이그전")/83("KB Quant") | 한국 투자 > 주식전략        | kr     | 산업     | ❌ 수집 제외(오너 결정 — "나머지는 수집에서 제외한다") |
+ *   | 81("KB 전략"/"이그전") | 한국 투자 > 주식전략             | kr     | 산업     | ✅ 이 스크립트(`tab=3`, docTitle="KB 전략"·"이그전"만) — 투자전략(주식) 고정(오너 지시 — "kb전략은 투자전략(주식)에 해당된다" + "이그전은 투자전략이다", 2026-09-27) |
+ *   | 83("KB Quant") | 한국 투자 > 주식전략                     | kr     | 산업     | ❌ 수집 제외(오너 결정 — "나머지는 수집에서 제외한다") |
  *   | 70("KB Bond"/"KB Fed Watch") | 한국 투자 > 채권/크레딧    | kr     | 산업     | ✅ 이 스크립트(`tab=3`, docTitle 정확 일치) — 고정 stockName으로 kr_research에 합류, classifyResearchTopic()이 거시경제 > 이슈분석으로 분류(오너 지시 — "kb bond는 거시경제>이슈분석에 해당된다" + "KB Fed Watch는 이슈분석에 포함한다") |
  *   | 71("KB Credit Weekly") | 한국 투자 > 채권/크레딧          | kr     | -        | ❌ 수집 제외(오너 결정) |
  *   | 192        | 한국 투자 > 종목컨설팅("KB 이슈 플러스")    | kr     | 산업     | ❌ 수집 제외(오너 결정) |
@@ -126,6 +126,12 @@ const IMPORT_URL = (
 // 자산배분/매크로(tab=2) 전용 Weekly 판정 — 공용 isWeeklyRecurringContent()
 // (Weekly/위클리만)보다 넓게 "주간"까지 포함한다(오너 지시, 이 게시판 한정).
 const MACRO_WEEKLY_RE = /\bWeekly\b|위클리|주간/i;
+// "기타발간"(174) 게시판의 "금리 전망 테이블" — 본문이 표뿐이라 발췌기가 실제 문장을 못 찾고 KB 표준 면책
+// 문구로 폴백한다(오너 확인 — "수집제외"). 제목만으로 정확히 걸러 매일 여러 건 올라오는 이 시리즈를 전량 제외.
+const RATE_TABLE_RE = /^금리\s*전망\s*테이블$/;
+// "자산배분"(77) 게시판의 "KB Asset Compass" 시리즈(docTitle, 헤드라인은 docTitleSub) — 오너 결정
+// 2026-09-27 "KB Asset Compass 수집제외"로 전량 제외.
+const EXCLUDED_TAB2_SERIES_RE = /^KB\s*Asset\s*Compass$/i;
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
@@ -194,9 +200,17 @@ async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
 }
 
 // 리포트가 올라온 KB 게시판 표시 — 응답 행의 사이트 메뉴 경로(foldertemplate)·categoryid 와
-// 조회한 tab 을 그대로 조합한 대조·검수용 메타(서버는 무시).
+// 조회한 tab 을 그대로 조합한 대조·검수용 메타(서버는 무시). foldertemplate 원본이 하위 폴더명을
+// 연속으로 그대로 반복해서 주는 경우가 있어(예: "자산배분/매크로>자산배분>자산배분>자산배분",
+// 오너 지적 2026-09-27 — "매크로>매크로>매크로>매크로 이런식이라고") 표시용으로만 연속 중복 세그먼트를 접는다.
+function foldTemplate(raw) {
+  const segs = String(raw ?? "").trim().split(">").map((s) => s.trim());
+  const out = [];
+  for (const s of segs) if (s && out[out.length - 1] !== s) out.push(s);
+  return out.join(">");
+}
 const kbBoard = (r) =>
-  `KB증권 > ${String(r.foldertemplate ?? "").trim() || "리서치"}(tab=${r.__tab ?? "?"}, categoryid=${r.categoryid ?? "?"})`;
+  `KB증권 > ${foldTemplate(r.foldertemplate) || "리서치"}(tab=${r.__tab ?? "?"}, categoryid=${r.categoryid ?? "?"})`;
 
 function parseTargetPrice(tp) {
   const n = Number(tp);
@@ -246,6 +260,10 @@ function classifyGlobalRow(r) {
   const docTitle = String(r.docTitle ?? "").trim();
   const docTitleSub = String(r.docTitleSub ?? "").trim();
   const title = (docTitleSub || docTitle).trim();
+
+  // "글로벌기업 | 포트폴리오+"(김세환) — 모델포트폴리오 성과·Top Picks 위주의 퀀트 시리즈(오너 확인 2026-09-27,
+  // PDF 확인 후 "퀀트다 수집제외"). 공용 QUANT_RE 는 "퀀트"/"quant" 문구가 없으면 못 잡아 여기서 직접 제외.
+  if (/글로벌기업\s*\|\s*포트폴리오\+?/i.test(docTitle)) return null;
 
   if (/미국/.test(folder)) {
     const tm = docTitle.match(US_TICKER_RE);
@@ -430,20 +448,26 @@ for (const r of dailyRows) {
 // 채권/크레딧·종목컨설팅·기타발간이 섞여 있고, 응답의 `categoryid` 필드로
 // 걸러도 같은 categoryid 안에 "이그전"(자산배분 계열) 같은 다른 시리즈가
 // 섞여 나오는 게 실측 확인돼(categoryid만으론 부정확) **docTitle 정확히
-// 일치**로만 골랐다. "KB 전략"만 수집하고 그 옆의 "KB Quant"·"이그전" 등은
-// 명시적으로 제외(오너 지시의 "나머지는 제외"). stockName을 고정 라벨로 둬
-// `shinhan-research.ts`의 `STRATEGY_STOCKNAMES`에 등록, 투자전략(주식)으로
-// 확정 분류한다.
+// 일치**로만 골랐다. "이그전"은 이후 오너 결정(2026-09-27 — "이그전은
+// 투자전략이다")으로 "KB 전략"과 함께 수집·투자전략(주식) 확정. "KB
+// Quant" 등 나머지는 여전히 제외. stockName을 고정 라벨로 둬
+// `shinhan-research.ts`의 `STRATEGY_STOCKNAMES`/`LABEL_FIRST_STRATEGY_
+// STOCKNAMES`에 등록, 투자전략(주식)으로 확정 분류한다.
+const TAB3_STRATEGY_TITLES = new Map([
+  ["KB 전략", "KB 전략"],
+  ["이그전", "KB 이그전"],
+]);
 const tab3Rows = await fetchList("3");
 for (const r of tab3Rows) {
   const date = r.publicDate;
   if (!date || new Date(date) < cutoff) continue;
-  if (String(r.docTitle ?? "").trim() !== "KB 전략") continue;
+  const stockName = TAB3_STRATEGY_TITLES.get(String(r.docTitle ?? "").trim());
+  if (!stockName) continue;
   collected.push({
     id: r.documentid,
     date,
     title: (r.docTitleSub || r.docTitle || "").trim(),
-    stockName: "KB 전략",
+    stockName,
     symbol: null,
     analyst: r.analystNm ?? "",
     opinion: "",
@@ -497,6 +521,8 @@ for (const r of tab2Rows) {
   const docTitleSub = String(r.docTitleSub ?? "").trim();
   if (!docTitle) continue;
   if (MACRO_WEEKLY_RE.test(`${docTitle} ${docTitleSub}`)) continue;
+  if (RATE_TABLE_RE.test(docTitle)) continue;
+  if (EXCLUDED_TAB2_SERIES_RE.test(docTitle)) continue;
   const folder = String(r.foldertemplate ?? "");
   if (/대체투자/.test(folder) && !/원자재|commodit/i.test(`${folder} ${docTitle} ${docTitleSub}`)) continue;
   const folderTail = folder.split(">").pop()?.trim() ?? "";

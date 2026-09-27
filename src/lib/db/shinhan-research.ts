@@ -429,9 +429,9 @@ const MARKET_CONDITION_STOCKNAMES = new Set([
 // 사례로 발견한 기존 누락, 2026-09).
 const MARKET_CONDITION_STOCKNAME_PREFIXES = ["KB Global Tracker+"];
 const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
-// KB증권 "Global Insights" — 오너 지시, 2026-09("KB증권 Global Insights는
-// 투자전략임"). 제목에 "전략"/Strategy 등 키워드가 없는 경우가 많아 시리즈명
-// 기준으로 강제.
+// KB증권 "Global Insights"는 이후 오너 결정(2026-09-27 — "KB데일리는 종합판이네 이거 있으면 KB 다른 데일리자료는
+// 불필요다. Market Pulse 글로벌인사이트는 별도로 수집하지 않는다")으로 수집 자체를 제외(research-exclude.ts
+// DAILY_BRIEFING_RE)해 여기서도 뺐다 — 어차피 수집 단계에서 걸러져 이 Set에 남아있어도 도달하지 않는다.
 // "NAV Dashboard Weekly"(미래에셋 — 지주회사 NAV 할인율 스크리닝 시리즈,
 // 업종 얘기가 아니라 밸류에이션 갭을 노리는 투자전략물, 오너 지적 2026-09)
 // 추가.
@@ -441,7 +441,6 @@ const STRATEGY_STOCKNAMES = new Set([
   "신한 해외주식 탑픽", // 신한 월간 해외주식 탑픽 10선 — 투자전략(주식)(오너 지적 2026-09-27)
   "한화 해외주식 전략", // 한화 해외주식분석 게시판의 종목·업종 없는 미국·중국 시장 노트 — "호르무즈보다 중요한 건 유동성"·"미중 정상회담: 높아질 기대, 숨 고를 증시"(오너 지적 2026-09-27)
   "Now Japan 시리즈", // 삼성증권 일본 시장 시리즈 — "10월, 新 TOPIX 시대 개막"(오너 지적 2026-09-27)
-  "Global Insights",
   "Global Watchlist",
   "마켓픽",
   "NAV Dashboard Weekly",
@@ -450,6 +449,8 @@ const STRATEGY_STOCKNAMES = new Set([
   // KB증권 "KB 전략" 게시판(tab=3, "한국 투자 > 주식전략") — 오너 지시,
   // 2026-09-24 — "한국투자에서 kb전략은 투자전략(주식)에 해당된다".
   "KB 전략",
+  // KB증권 "이그전"(같은 게시판) — 오너 지시, 2026-09-27 — "이그전은 투자전략이다".
+  "KB 이그전",
   // 삼성증권 "투자전략"(GUBUN=market)·"SPOT코멘트(전략)"(GUBUN=spot1) — 오너
   // 지시, 2026-09-25 — "투자전략은 투자전략(주식)으로", "spot코멘트(전략)은
   // 투자전략(주식)으로".
@@ -692,11 +693,15 @@ function isBond(doc: { stockName: string; title: string }, hayWithSummary: strin
   return isGenericOrBoardLabel(doc) && BOND_MACRO_RE.test(hayWithSummary) && !EQUITY_HINT_RE.test(hayWithSummary);
 }
 
-const LABEL_FIRST_STRATEGY_STOCKNAMES = new Set<string>(["삼성증권 투자전략"]);
+// "KB 전략" 추가(오너 지시 2026-09-27 — "kb전략은 투자전략이다" — "9월 인상이 기정 사실이라면"이 금리·연준
+// 언급이 많아 채권 신호로 오인돼 이슈분석으로 샜다). 삼성증권 투자전략과 같은 라벨 우선 원칙.
+const LABEL_FIRST_STRATEGY_STOCKNAMES = new Set<string>(["삼성증권 투자전략", "KB 전략", "KB 이그전"]);
 
-// 거시 지표·통화정책 발표로 시작하는 제목: "미국 8월 CPI: …", "9월 FOMC: …", "한국 7월 산업활동동향", "미국 2분기 GDP; …".
+// 거시 지표·통화정책 발표로 시작하는 제목: "미국 8월 CPI: …", "9월 FOMC: …", "한국 7월 산업활동동향", "미국 2분기 GDP; …",
+// "유럽 7월 산업생산: …"(한국투자증권 해외 기업분석, 오너 지적 2026-09-27 — "유럽 산업재인데?", stockName이 "산업재"라
+// 업종 라벨처럼 보여도 실제로는 EU 통계청의 거시 지표 발표라 이슈분석이어야 함 — "유럽" 국가 접두어와 "산업생산" 지표명 추가).
 const MACRO_DATA_TITLE_RE =
-  /^\s*(?:\[[^\]]*\]\s*)?(?:(?:미국|한국|중국|일본|유로존|글로벌)\s*)?(?:\d{1,2}월\s*|\d분기\s*)?(?:CPI|PPI|PCE|FOMC|ISM|GDP|소비자물가|생산자물가|비농업|고용지표|소매판매)/i;
+  /^\s*(?:\[[^\]]*\]\s*)?(?:(?:미국|한국|중국|일본|유럽|유로존|글로벌)\s*)?(?:\d{1,2}월\s*|\d분기\s*)?(?:CPI|PPI|PCE|FOMC|ISM|GDP|소비자물가|생산자물가|비농업|고용지표|소매판매|산업생산)/i;
 
 function classifyLegacyTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
@@ -780,6 +785,9 @@ const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b|이\.글\.스\.|Econ\s?Sig
 const FORCED_ISSUE_STOCKNAMES = new Set([
   "신한 채권전략",
   "신한 경제",
+  // NH투자증권 "전략 인사이드/경제"(투자전략 게시판) — 오너 지적 2026-09-27, "글로벌 전략"·"자산배분 전략"
+  // 형제 라벨은 투자전략 그대로 두고 "경제"만 이슈분석으로 분리.
+  "NH 전략인사이드 경제",
   "Macro Week Ahead",
   "Weekly Economic Issue",
   "Market Issue",

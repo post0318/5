@@ -30,7 +30,9 @@
  *   수집기·전 소스에 한 번에 적용한다.
  */
 // "다음주 시장은?"(대신증권 주간 시장 전망 시리즈, 오너 지적 2026-09-27 — "주간같은데")도 주간물이다.
-const WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*\d+\s*주(?!년)|다음\s*주\s*시장/i;
+// "9월 넷째 주: …"(KB증권 자산배분/매크로, 오너 지적 2026-09-27 — "주간 아니냐? 주간이 왜 수집되지?")처럼
+// 숫자 대신 서수(첫째/둘째/셋째/넷째/다섯째)로 쓴 주차 표기도 주간물이다.
+const WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*(?:\d+|첫째|둘째|셋째|넷째|다섯째)\s*주(?!년)|다음\s*주\s*시장/i;
 // 주간물 제외의 예외 — 비상장 리서치는 수집해 비상장으로 분류(오너 지시 2026-09-26).
 const UNLISTED_RE = /비상장/;
 // 주간물이지만 수집하는 거시 시리즈(오너 지시 2026-09-27 — 삼성 "Macro Week Ahead"(채권)·"Weekly Economic Issue"(경제)).
@@ -51,7 +53,11 @@ const GOVERNANCE_RE = /거버넌스|\bgovernance\b/i;
 const REAL_ESTATE_RE = /부동산|맨션/;
 // 미래에셋 "글로벌 마켓 브리핑" 일일 시리즈 수집 제외(오너 지시 2026-09-27) — 기업 리포트에는 적용하지 않는다.
 const CREDIT_RE = /크레딧|신용|회사채|\bCredit\b/i; // 크레딧 계열 수집 제외(오너 지시 2026-09-27 — "크레딧은 아예 제외다"). 기업 리포트에는 적용하지 않는다.
-const DAILY_BRIEFING_RE = /글로벌\s*마켓\s*브리핑|(?:^|\s)마켓\s*(?:뷰|클로징)(?=\s|\(|$)|Earnings\s*Revision|자산가격\s*[메매]커니즘\s*변화|신한\s*FX\s*Check-?up|마켓\s*레이더|Global\s*Portfolio/i; // 미래에셋 일일 시리즈(글로벌 마켓 브리핑·마켓 뷰·마켓 클로징)·Earnings Revision·신한 자산가격 메커니즘 변화·신한 FX Check-up·마켓레이더·Global Portfolio(추천 포트폴리오) 시리즈 수집 제외(오너 지시 2026-09-27)
+// "US Market Pulse"(KB증권 미국전략, 오너 지적 2026-09-27 — "Market Pulse는 수집제외대상아니었나?")도 마켓레이더와 같은 성격의 일일
+// 시장 브리핑 시리즈라 영문 표기(Market Pulse/Radar/Insight)까지 포함한다. "Global Insights"(KB증권 미국전략, 같은 게시판)도
+// 오너 결정(2026-09-27 — "KB데일리는 종합판이네 이거 있으면 KB 다른 데일리자료는 불필요다. Market Pulse 글로벌인사이트는
+// 별도로 수집하지 않는다")으로 제외 — KB데일리(종합판)가 이미 다루는 내용이라 별도 시리즈로 안 모은다.
+const DAILY_BRIEFING_RE = /글로벌\s*마켓\s*브리핑|(?:^|\s)마켓\s*(?:뷰|클로징)(?=\s|\(|$)|Earnings\s*Revision|자산가격\s*[메매]커니즘\s*변화|신한\s*FX\s*Check-?up|마켓\s*레이더|Global\s*Portfolio|Market\s?(?:Pulse|Radar|Insight)\b|\bGlobal\s*Insights\b/i; // 미래에셋 일일 시리즈(글로벌 마켓 브리핑·마켓 뷰·마켓 클로징)·Earnings Revision·신한 자산가격 메커니즘 변화·신한 FX Check-up·마켓레이더·Global Portfolio(추천 포트폴리오)·Market Pulse/Radar/Insight·Global Insights 시리즈 수집 제외(오너 지시 2026-09-27)
 
 /**
  * 디지털자산은 여기 없다(오너 결정 2026-09-26 — "이건 스크립트에서

@@ -210,12 +210,13 @@ async function resolveUsTicker(name) {
   return hit;
 }
 
-// ── 투자전략/FICC/자산관리솔루션/모닝미팅브리프(구 collect-nh-strategy-research.mjs) ──
+// ── 투자전략/FICC/자산관리솔루션(구 collect-nh-strategy-research.mjs) ──
+// 모닝미팅브리프(06)는 그날 다른 게시판(투자전략/FICC/기업분석) 리포트를 요약·재수록한 다이제스트라
+// 개별 리포트와 내용이 겹친다(오너 지적 2026-09-27 — "겹친다 수집제외다") — 수집 대상에서 제외.
 const STRATEGY_BOARDS = [
   { ditCd: "02", label: "투자전략", forceMarket: null },
   { ditCd: "04", label: "FICC", forceMarket: "us" },
   { ditCd: "05", label: "자산관리솔루션", forceMarket: null },
-  { ditCd: "06", label: "모닝미팅브리프", forceMarket: "us" },
 ];
 // 리포트가 올라온 NH 게시판 표시(rsh_ppr_dit_cd) — 대조·검수용 메타(서버는 무시).
 const NH_BOARD_LABEL = { "01": "기업/산업분석", "02": "투자전략", "03": "해외주식", "04": "FICC", "05": "자산관리솔루션", "06": "모닝미팅브리프" };
@@ -448,6 +449,11 @@ for (const board of STRATEGY_BOARDS) {
       const bm = rawTitle.match(BRACKET_RE);
       let stockName = bm ? bm[1].trim() : r.rsh_ppr_ser_cd_nm || board.label;
       const title = bm ? bm[2].trim() : rawTitle;
+      // "전략 인사이드/경제"(투자전략 게시판) — "전략 인사이드/글로벌 전략"·"전략 인사이드/자산배분 전략"과 같은
+      // 대괄호 라벨이지만 부제가 "경제"면 실제로는 거시경제 이슈분석이다(오너 지적 2026-09-27 — "AI 시대
+      // 워시의 질문..."·"한국 메가프로젝트와 잠재성장률"이 투자전략에 가있는데 이슈분석이어야 함). "전략 인사이드/{그 외}"는
+      // 오너가 확인해준 대로 투자전략 그대로 둔다.
+      if (/^전략\s*인사이드\s*\/\s*경제$/.test(stockName)) stockName = "NH 전략인사이드 경제";
       if (board.ditCd === "04" && /대체투자|부동산/.test(stockName) && !/원자재|commodit/i.test(`${stockName} ${title}`)) continue;
       if (board.ditCd === "04") stockName = `FICC · ${stockName}`;
       const isDomesticFicc = board.ditCd === "04" && /\(국내\)/.test(stockName);
