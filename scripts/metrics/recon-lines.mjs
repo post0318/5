@@ -76,7 +76,7 @@ function calcRoles(xml) {
 function labelsOf(lab) {
   const loc = new Map(), text = new Map(), labels = new Map();
   for (const l of lab.matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) loc.set(id, h); }
-  for (const m of lab.matchAll(/<(?:link:)?label\b([^>]*)>([^<]*)<\/(?:link:)?label>/g)) { const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1]; if (id && !/documentation|verbose/i.test(m[1])) text.set(id, [...(text.get(id) ?? []), m[2].trim()]); }
+  for (const m of lab.matchAll(/<(?:link:)?label\b([^>]*)>([^<]*)<\/(?:link:)?label>/g)) { const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1]; if (!id || /documentation|verbose/i.test(m[1])) continue; const t = m[2].trim().replace(/&#160;/g, " ").replace(/&amp;/g, "&"); text.set(id, /role\/label"/.test(m[1]) ? [t, ...(text.get(id) ?? [])] : [...(text.get(id) ?? []), t]); }
   for (const a of lab.matchAll(/<(?:link:)?labelArc\b([^>]*)\/?>/g)) { const f = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? ""); if (f && t && !labels.has(f)) labels.set(f, t[0]); }
   return labels;
 }
@@ -217,6 +217,8 @@ const catOf = (id, label = "") => {
   return "other";
 };
 
+/** 정의 가설 분석용 표준 항목(회사 고유 태그 제외, 차원은 손익 위치 축만) */
+const STD_RE = /^us-gaap_(DepreciationDepletionAndAmortization|DepreciationAndAmortization|Depreciation|DepreciationAmortizationAndAccretionNet|AmortizationOfIntangibleAssets|CostOfGoodsAndServicesSoldDepreciationAndAmortization|RestructuringCharges|RestructuringSettlementAndImpairmentProvisions|RestructuringCosts|SeveranceCosts1|AssetImpairmentCharges|GoodwillImpairmentLoss|ImpairmentOfIntangibleAssets\w*|ShareBasedCompensation|AllocatedShareBasedCompensationExpense|BusinessCombinationAcquisitionRelatedCosts|BusinessCombinationIntegrationRelatedCosts|OtherCostAndExpenseOperating|OtherOperatingIncomeExpenseNet|GainLossOnDispositionOfAssets1?|GainLossOnSaleOfPropertyPlantEquipment|LitigationSettlementExpense|LossContingencyLossInPeriod|UnrealizedGainLossOnDerivatives\w*|ExciseAndSalesTaxes|OperatingLeaseCost|OperatingLeaseRightOfUseAssetAmortizationExpense|FinanceLeaseRightOfUseAssetAmortization|CapitalizedComputerSoftwareAmortization1|InventoryWriteDown|ResearchAndDevelopmentExpense|SellingGeneralAndAdministrativeExpense|GeneralAndAdministrativeExpense|SellingAndMarketingExpense|OtherNonoperatingIncomeExpense)(\[(IncomeStatementLocationAxis|ConsolidationItemsAxis)=[^\]]+\])?$/;
 // ── 잔차 검색 ────────────────────────────────────────────────────────────
 /** d: Map(연도끝 → 잔차), pool: [{ k, vals: Map(연도끝 → 값) }] → 설명 문자열 | null. 모든 연도에서 |s·f − d| ≤ tol */
 // 우연 일치 방지(2026-09-27 — 한 해짜리 무작위 조합이 "기타포괄손익"·"이자비용"으로 맞던 문제): 손익·현금흐름 성격 항목만,
@@ -372,8 +374,48 @@ for (const [sym, r] of latest) {
       explain[l] = hit ? { ok: true, how: hit.how ?? `SEC ${hit.terms.map((x) => `${x.s > 0 ? "+" : "−"}${x.k}`).join(" ")}${hit.alt ? ` (같은 값 후보 ${hit.alt}개 더)` : ""}` }
         : { ok: false, why: `잔차 ${[...d].map(([y, v]) => `${y.slice(0, 4)} ${Math.round(v / 1e6)}`).join(" / ")}백만 — SEC 손익 성격 항목 1~2개 조합 없음(또는 근거 연도 부족: 단일 2년·조합 3년 필요)` };
     }
+    // 정의 가설 분석용 — 줄별 잔차(연도별)와 자주 쓰는 SEC 표준 항목 값
+    const resid = {};
+    for (const l of lineTargets) resid[l] = Object.fromEntries(table.map((t) => [t.year, t.lines[l]?.ext == null ? null : t.lines[l].ext - t.lines[l].sec]));
+    const std = {};
+    for (const [k, vals] of pool) {
+      if (!STD_RE.test(k)) continue;
+      std[k] = Object.fromEntries(yrs.map((y) => [y.year, vals.get(y.end) ?? null]));
+    }
+    // 본표 줄 배분(2026-09-27) — 외부는 SEC 본표 비용 줄을 자기 분류(원가·판관비·연구개발비·상각·영업이익 밖)로 다시 묶는다(인포맥스 V·XOM·UBER:
+    // 원가 +차 = 기타 −차). 외부 분류마다 본표 줄 부분집합의 합이 **모든 해에서** 외부 값과 같은 배분을 찾는다 — 찾으면 그 배분이 구성 설명
+    let partition = null;
+    if (!Object.values(explain).every((x) => x.ok) && idOk && ["영업이익", "매출원가", "매출총이익"].includes(metric) && explain.rev?.ok) {
+      // 매출 줄 제외 — 개념 이름 분류가 놓치는 매출 줄(MCD "Sales by Company-operated restaurants" 회사 고유 개념)은 가산(+) 줄 중 이름·라벨이 매출
+      const isRev = (f) => catOf(f.id, labels.get(f.id)) === "rev" || (f.w > 0 && /Revenue|Sales|Fees|Rent/i.test(`${NM(f.id)} ${labels.get(f.id) ?? ""}`) && !/Gain|Loss|Cost|Expense/i.test(NM(f.id)));
+      const lines = face.filter((f) => !isRev(f)).map((f) => ({ id: f.id, label: labels.get(f.id) ?? NM(f.id), amt: Object.fromEntries(yrs.map((y) => [y.year, -f.w * (faceVal(f.id, y.end) ?? 0)])) }))
+        .filter((l) => yrs.some((y) => Math.abs(l.amt[y.year]) > 0.5));
+      const targets = (metric === "영업이익" ? ["cogs", "sga", "rnd", "amort", "other"] : ["cogs"]).filter((c) => yrs.every((y) => y.row[c] != null) && !(c === "rnd" && S.sgaIncludesRnd));
+      if (lines.length <= 16 && targets.length) {
+        const fits = (mask, c) => yrs.every((y) => { let s = 0; lines.forEach((l, i) => { if (mask & (1 << i)) s += l.amt[y.year]; }); return Math.abs(s - y.row[c]) <= tol * Math.max(1, lines.length / 2); });
+        const solve = (ti, used) => {
+          if (ti === targets.length) return [];
+          for (let mask = 0; mask < 1 << lines.length; mask++) {
+            if (mask & used) continue;
+            if (!fits(mask, targets[ti])) continue;
+            const rest = solve(ti + 1, used | mask);
+            if (rest) return [{ c: targets[ti], mask }, ...rest];
+          }
+          return null;
+        };
+        const sol = solve(0, 0);
+        if (sol) {
+          const used = sol.reduce((m, x) => m | x.mask, 0);
+          const nm = { cogs: "원가", sga: S.sgaIncludesRnd ? "판관비(연구개발비 포함)" : "판관비", rnd: "연구개발비", amort: "무형상각", other: "기타 영업비용" };
+          const names = (mask) => lines.filter((_, i) => mask & (1 << i)).map((l) => l.label);
+          partition = [...sol.map((x) => `외부 ${nm[x.c]} = SEC 본표 [${names(x.mask).join(" + ") || "없음"}]`), `외부 영업이익에서 제외 = [${names(((1 << lines.length) - 1) & ~used).join(" + ") || "없음"}]`];
+          if (metric !== "영업이익") partition.pop();
+          for (const l of lineTargets) if (l !== "rev") explain[l] = { ok: true, how: `본표 줄 배분(모든 해 정확): ${partition.join(" · ")}` };
+        }
+      }
+    }
     const ok = idOk && Object.values(explain).every((x) => x.ok);
-    results.push({ sym, src, metric, verdict: ok ? "②구성분해" : "미결", identity: idOk, explain, years: table.map((t) => t.year), cells: cs.length, table });
+    results.push({ sym, src, metric, verdict: ok ? "②구성분해" : "미결", identity: idOk, explain, partition, years: table.map((t) => t.year), cells: cs.length, table, resid, std });
   }
   const mine = results.filter((x) => x.sym === sym);
   console.log(`${sym.padEnd(5)} ${mine.map((x) => `${x.src}/${x.metric}:${x.verdict ?? "오류"}`).join("  ")}`);
