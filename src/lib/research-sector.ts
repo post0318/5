@@ -50,7 +50,14 @@ export type SectorLabel = (typeof SECTOR_LABELS)[number];
 
 // 순서가 우선순위다 — 위에서부터 먼저 매칭된 규칙을 쓴다(예: "건설리츠"는
 // 부동산 규칙이 건설보다 먼저 와야 리츠로 분류됨).
+// 회사 이름 기준(오너 지시 2026-09-27): 한국전력·비스트라·GE 버노바·블룸에너지 등 전력 생산·발전 솔루션 사업자는 유틸리티,
+// 두산에너빌리티·지멘스·LS ELECTRIC·HD현대일렉트릭 등 전력설비 제조사는 산업재. 맨 앞에 두어 "블룸에너지"의 "에너지" 같은 업종 단어보다 먼저 잡힌다.
+const UTILITY_COMPANY_RE = /한국전력|비스트라|Vistra|GE\s?(?:버노바|베르노바|Vernova)|블룸에너지|Bloom\s?Energy/i;
+const EQUIPMENT_COMPANY_RE = /두산에너빌리티|지멘스|Siemens|LS\s?ELECTRIC|LS\s?일렉트릭|(?:HD)?현대\s?일렉트릭/i;
+
 const SECTOR_RULES: [SectorLabel, RegExp][] = [
+  ["유틸리티", UTILITY_COMPANY_RE],
+  ["산업재", EQUIPMENT_COMPANY_RE],
   ["부동산", /부동산|리츠|REIT/i],
   // "우주"는 단독으로 쓰면 제목의 수사("우주의 기회")에 걸리므로 업종 표기일 때만 인정 — 라벨 전체가 "우주"이거나 복합어.
   // 조선과 방산은 하나의 섹터 "조선/방산"(오너 지시 2026-09-27 — 구 "중공업"의 이름을 바꾸고 항공우주·우주 표기도 여기에 둔다).
@@ -97,7 +104,10 @@ export function classifySector(doc: {
   summary?: string | null;
 }): SectorLabel | null {
   const base = classifySectorBase(doc);
-  if (base === "유틸리티" && POWER_EQUIPMENT_RE.test(doc.title ?? "")) return "산업재";
+  // 유틸리티로 지정한 회사(GE 버노바·블룸에너지 등)는 제목에 설비 단어("가스터빈")가 있어도 유틸리티다.
+  if (base === "유틸리티" && POWER_EQUIPMENT_RE.test(doc.title ?? "") && !UTILITY_COMPANY_RE.test(`${doc.stockName ?? ""} ${doc.title ?? ""}`)) {
+    return "산업재";
+  }
   return base;
 }
 
