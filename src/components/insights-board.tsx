@@ -34,6 +34,7 @@ const KR_SOURCES = [
   { key: "키움증권 비상장리서치", label: "키움증권" },
   { key: "KB증권 비상장리서치", label: "KB증권" },
   { key: "NH투자증권 비상장리서치", label: "NH투자증권" },
+  { key: "신한투자증권 비상장리서치", label: "신한투자증권" },
   { key: "삼성증권 비상장리서치", label: "삼성증권" },
 ] as const;
 type SourceKey = (typeof US_SOURCES)[number]["key"] | (typeof KR_SOURCES)[number]["key"];

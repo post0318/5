@@ -286,6 +286,8 @@ function splitStrategyLabel(title) {
   if (dm) return { label: dm[1].trim(), rest: dm[2].trim() };
   return { label: "투자전략", rest: title };
 }
+const STRATEGY_SERIES_LABEL_RE =
+  /^(?:국내\s*주식\s*마감\s*시황|마켓레이더|국내\s*주식\s*전략|글로벌\s*주식\s*전략|자산가격\s*[메매]커니즘\s*변화|신한\s*(?:FX|Econ)\s*Check-?up)$/i;
 const STRATEGY_NON_US_RE =
   /중국|차이나|China|일본|엔화|엔캐리|Japan|유럽|Europe|베트남|Vietnam|인도(?!네시아)|India\b|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan/i;
 const STRATEGY_US_HINT_RE = /미국|\bUS\b|나스닥|Nasdaq|S&P|다우|연준|\bFed\b|FOMC|월가|Wall Street|글로벌|Global/i;
@@ -310,8 +312,13 @@ for (const board of ["gicomment", "gieconomy"]) {
         break;
       }
       const rawTitle = decodeEntities(String(it.f1 ?? "")).trim();
-      const { label, rest } = splitStrategyLabel(rawTitle);
-      const market = classifyStrategyMarket(label, rawTitle);
+      // 정기 시리즈 라벨만 살리고, 한 번 나오는 제목 앞머리("미국 FOMC"·"10월 Econ Signal")는 시리즈가 아니므로 라벨을 "투자전략"으로
+      // 두고 제목을 통째로 유지한다(오너 지적 2026-09-27 — 1건짜리 폴더가 리포트마다 생김). 분류는 제목 키워드가 이어받는다.
+      const split = splitStrategyLabel(rawTitle);
+      const isSeries = STRATEGY_SERIES_LABEL_RE.test(split.label);
+      const label = isSeries ? split.label : "투자전략";
+      const rest = isSeries ? split.rest : rawTitle;
+      const market = classifyStrategyMarket(split.label, rawTitle);
       if (!market) continue;
       if (isCommonExcludedContent(`${label} ${rawTitle}`, "산업")) continue;
       items.push({
@@ -355,23 +362,36 @@ if (DRY_RUN) {
   process.exit(0);
 }
 
-// 산업분석·해외·투자전략 병합으로 market이 kr/us 섞이므로 market별로 나눠 전송.
+// 비상장 분석(오너 지시 2026-09-27 — "신한투자증권 기업분석 비상장분석은 비상장으로 분류"): 국내 항목 중 종목명·제목에
+// "비상장"이 있으면 종목 리포트가 아니라 비상장 리서치로 — source 를 분리해 산업 카테고리·종목코드 없음으로 보낸다.
+const UNLISTED_SOURCE = "신한투자증권 비상장리서치";
+for (const it of items) {
+  if ((it.market ?? "kr") === "kr" && /비상장/.test(`${it.stockName} ${it.title}`)) {
+    it.unlisted = true;
+    it.category = "산업";
+    it.symbol = null;
+  }
+}
+
+// 산업분석·해외·투자전략·비상장 병합으로 market/source가 섞이므로 나눠 전송.
 const byMarket = new Map();
 for (const it of items) {
   const market = it.market ?? "kr";
-  if (!byMarket.has(market)) byMarket.set(market, []);
-  byMarket.get(market).push(it);
+  const key = `${market}|${it.unlisted ? "u" : ""}`;
+  if (!byMarket.has(key)) byMarket.set(key, []);
+  byMarket.get(key).push(it);
 }
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
-for (const [market, group] of byMarket) {
+for (const [key, group] of byMarket) {
+  const [market, u] = key.split("|");
   const up = await fetch(IMPORT_URL, {
     method: "POST",
     headers,
-    body: JSON.stringify({ items: group, source: "신한투자증권", market }),
+    body: JSON.stringify({ items: group, source: u ? UNLISTED_SOURCE : "신한투자증권", market }),
   });
   const upBody = await up.text();
   if (!up.ok) {

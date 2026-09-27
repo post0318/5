@@ -115,7 +115,7 @@ export function normalizeSectorLabel(label) {
   if (!raw) return raw;
   if (Object.hasOwn(ANALYST_SECTOR, raw)) return ANALYST_SECTOR[raw];
   const stem = raw.replace(/(?:산업|업종|섹터|부문|업)$/, "").trim();
-  const candidates = [stem];
+  const candidates = [raw, stem];
   const pre = stem.match(/^[대소중신新]\s?(.+)$/);
   if (pre) candidates.push(pre[1].trim());
   for (const c of candidates) {
