@@ -647,6 +647,27 @@
       "titleIncludes": "중국 전기차, 지금은 배로",
       "expect": "ch 산업분석",
       "why": "라벨이 그냥 자동차여도 제목이 중국으로 시작하면 중국 산업분석(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "X26",
+      "source": "IBK투자증권",
+      "titleIncludes": "IBKS Daily 인터넷/게임",
+      "expect": "EXCLUDE",
+      "why": "IBKS Daily 시리즈는 형식과 무관하게 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X27",
+      "source": "IBK투자증권",
+      "titleIncludes": "Start with IBKS(2026.09.23)",
+      "expect": "EXCLUDE",
+      "why": "IBKS Daily 시리즈는 형식과 무관하게 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X28",
+      "source": "IBK투자증권",
+      "titleIncludes": "Morning Brief(260923)",
+      "expect": "EXCLUDE",
+      "why": "IBKS Daily 시리즈는 형식과 무관하게 수집 제외(오너 지시 2026-09-27)"
     }
   ]
 }

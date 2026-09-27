@@ -67,6 +67,10 @@ const RENEWABLE_OPERATOR_RE =
 // 수소차가 가장 먼저 — "수소차용 연료전지"가 아래 연료전지(산업재) 규칙에 먼저 걸리지 않게.
 const HYDROGEN_VEHICLE_RE = /수소\s?(?:자동차|전기차|차|트럭|버스)|수소차|넥쏘/;
 
+// 태양광 셀·모듈·웨이퍼·폴리실리콘과 태양광 "업체"(제조사 — OCI·한화솔루션·JA·진코 같은 패널·소재 회사)는 소재(오너 지시 2026-09-27 —
+// IBK "Solar를 지우는 태양광 업체들"이 라벨 "에너지/소재"의 첫 업종(에너지)로 분류됐다). 태양광 발전 "사업자"는 유틸리티라 업체와 구분한다.
+const SOLAR_MATERIAL_RE = /태양광\s?(?:셀|모듈|웨이퍼|잉곳|업체)|태양전지|폴리실리콘/i;
+
 // 반도체 신호 — 규칙(아래)과 "Tech" 같은 넓은 정보기술 라벨 뒤 세분화(classifySector)가 같이 쓴다.
 const SEMICONDUCTOR_RE = /반도체|파운드리|소부장|메모리|HBM|DRAM|NAND|\bCPU\b|\bGPU\b/i;
 
@@ -75,7 +79,7 @@ const SECTOR_RULES: [SectorLabel, RegExp][] = [
   ["산업재", EQUIPMENT_COMPANY_RE],
   ["자동차", HYDROGEN_VEHICLE_RE],
   // 태양광 셀·모듈·웨이퍼·폴리실리콘은 소재 산업(오너 지시 2026-09-27) — 아래 신재생 유틸리티 규칙보다 먼저.
-  ["소재", /태양광\s?(?:셀|모듈|웨이퍼|잉곳)|태양전지|폴리실리콘/i],
+  ["소재", SOLAR_MATERIAL_RE],
   ["유틸리티", RENEWABLE_OPERATOR_RE],
   ["부동산", /부동산|리츠|REIT/i],
   // "우주"는 단독으로 쓰면 제목의 수사("우주의 기회")에 걸리므로 업종 표기일 때만 인정 — 라벨 전체가 "우주"이거나 복합어.
@@ -155,7 +159,7 @@ export function classifySector(doc: {
   // 발표 코멘트"가 라벨의 "Energy"에 걸려 에너지/화학으로 갔다). 셀·모듈은 소재, 설비(터빈·기자재)는 산업재, 그 외 신재생 사업·설치는 유틸리티.
   if (base === "에너지/화학") {
     const t = doc.title ?? "";
-    if (/태양광\s?(?:셀|모듈|웨이퍼|잉곳)|태양전지|폴리실리콘/.test(t)) return "소재";
+    if (SOLAR_MATERIAL_RE.test(t)) return "소재";
     if (RENEWABLE_OPERATOR_RE.test(t)) return POWER_EQUIPMENT_RE.test(t) ? "산업재" : "유틸리티";
   }
   return base;

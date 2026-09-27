@@ -286,6 +286,12 @@ for (const board of BOARDS) {
       skipped.noTicker++;
       continue;
     }
+    // IBKS Daily 시리즈는 형식과 무관하게 전부 수집 제외(오너 지시 2026-09-27 — "IBKS Daily 인터넷/게임"·"Start with IBKS(2026.09.23)"·
+    // "Morning Brief(260923)" 세 형식 모두): 업종 일간 다이제스트(제목 "IBKS Daily <업종>")와 시황 브리핑(라벨 "IBKS Daily").
+    if (dest.title.startsWith("IBKS Daily ") || dest.stockName === DAILY_LABEL) {
+      skipped.excluded++;
+      continue;
+    }
     if (isCommonExcludedContent(title, dest.category)) {
       skipped.excluded++;
       continue;
