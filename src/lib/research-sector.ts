@@ -67,6 +67,9 @@ const RENEWABLE_OPERATOR_RE =
 // 수소차가 가장 먼저 — "수소차용 연료전지"가 아래 연료전지(산업재) 규칙에 먼저 걸리지 않게.
 const HYDROGEN_VEHICLE_RE = /수소\s?(?:자동차|전기차|차|트럭|버스)|수소차|넥쏘/;
 
+// 반도체 신호 — 규칙(아래)과 "Tech" 같은 넓은 정보기술 라벨 뒤 세분화(classifySector)가 같이 쓴다.
+const SEMICONDUCTOR_RE = /반도체|파운드리|소부장|메모리|HBM|DRAM|NAND|\bCPU\b|\bGPU\b/i;
+
 const SECTOR_RULES: [SectorLabel, RegExp][] = [
   ["유틸리티", UTILITY_COMPANY_RE],
   ["산업재", EQUIPMENT_COMPANY_RE],
@@ -96,7 +99,7 @@ const SECTOR_RULES: [SectorLabel, RegExp][] = [
   ["헬스케어", /(?<![가-힣])제약|바이오|헬스케어|의료|디지털헬스|백신|신약|임상/],
   ["금융", /은행|증권|보험|금융|카드\/?결제|\bGA\b/],
   // 반도체는 정보기술에서 분리(오너 지시 2026-09-27) — 원래 정보기술 자리(금융 뒤)를 그대로 써서 다른 분류의 우선순위는 바뀌지 않는다.
-  ["반도체", /반도체|파운드리|소부장|메모리|HBM|DRAM|NAND|\bCPU\b|\bGPU\b/i],
+  ["반도체", SEMICONDUCTOR_RE],
   [
     "정보기술",
     /\bIT\b|\bAI\b|아이티|소프트웨어|컴퓨터|인터넷|하드웨어|전자상거래|테크|디지털자산|클라우드|사이버보안|로보틱스|통신기기|통신장비|\bTech\b|정보기술|전기전자|디스플레이|LCD|OLED|MLCC|휴머노이드|로봇|양자|Quantum|데이터센터|AIDC|\bGPT|OpenAI|오픈AI|에이전트|에이전틱|\bAgent|광학|아이웨어/i,
@@ -125,6 +128,9 @@ export function classifySector(doc: {
   summary?: string | null;
 }): SectorLabel | null {
   const base = classifySectorBase(doc);
+  // 라벨이 넓은 정보기술("Tech"·"IT")이어도 제목이 메모리·HBM·반도체 이야기면 반도체다(오너 지적 2026-09-27 — 삼성 Tech 라벨
+  // "메모리 외주 확대 수혜주 점검"·"HBM 디스펙 논란"). 반도체는 정보기술의 하위 업종이라 라벨을 어기는 게 아니라 세분화다.
+  if (base === "정보기술" && SEMICONDUCTOR_RE.test(doc.title ?? "")) return "반도체";
   // 유틸리티로 지정한 회사(GE 버노바·블룸에너지 등)는 제목에 설비 단어("가스터빈")가 있어도 유틸리티다.
   if (base === "유틸리티" && POWER_EQUIPMENT_RE.test(doc.title ?? "") && !UTILITY_COMPANY_RE.test(`${doc.stockName ?? ""} ${doc.title ?? ""}`)) {
     return "산업재";

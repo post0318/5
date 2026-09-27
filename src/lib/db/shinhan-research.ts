@@ -694,6 +694,10 @@ function isBond(doc: { stockName: string; title: string }, hayWithSummary: strin
 
 const LABEL_FIRST_STRATEGY_STOCKNAMES = new Set<string>(["삼성증권 투자전략"]);
 
+// 거시 지표·통화정책 발표로 시작하는 제목: "미국 8월 CPI: …", "9월 FOMC: …", "한국 7월 산업활동동향", "미국 2분기 GDP; …".
+const MACRO_DATA_TITLE_RE =
+  /^\s*(?:\[[^\]]*\]\s*)?(?:(?:미국|한국|중국|일본|유로존|글로벌)\s*)?(?:\d{1,2}월\s*|\d분기\s*)?(?:CPI|PPI|PCE|FOMC|ISM|GDP|소비자물가|생산자물가|비농업|고용지표|소매판매)/i;
+
 function classifyLegacyTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
 ): LegacyResearchTopic {
@@ -717,6 +721,9 @@ function classifyLegacyTopic(
   // 제목·요약의 채권·환율·전략·시황 신호로 승격하지 않고 산업분석이다. 안 그러면 은행 리포트에 흔한 "부채·채권" 요약 하나로 투자전략(채권)→환율분석이 된다
   // (하나증권 "속절없이 하락하는 환율. 은행은 환율 하락의 수혜주"). 라벨이 짧은 업종명일 때만 — 문장형·게시판형 라벨은 기존대로 내용을 본다.
   if (looksLikeSectorLabel(doc.stockName) && !STRATEGY_HINT_RE.test(doc.stockName) && classifySector({ stockName: doc.stockName }) !== null) {
+    // 예외: 제목이 거시 지표 발표로 시작하면("미국 8월 CPI: …"·"9월 FOMC: …") 라벨이 업종("에너지"·"은행")이어도 산업분석이 아니라 이슈분석이다
+    // (오너 지시 2026-09-27 — "cpi ppi는 이슈분석이 맞다"). 한경·KIS 가 거시 글에 업종 라벨을 잘못 다는 경우.
+    if (MACRO_DATA_TITLE_RE.test(doc.title)) return "투자전략(채권)";
     return "산업분석";
   }
   // 게시판 우선: 게시판 이름이 그대로 라벨로 들어온 경우("글로벌 산업분석" — 하나증권 pid=8 게시판)는 게시판이 곧 산업분석이다. 실제 업종은 제목의
