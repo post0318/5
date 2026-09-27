@@ -27,6 +27,8 @@ export async function GET(request: Request) {
     const topic = (VALID_TOPICS as readonly string[]).includes(topicParam ?? "")
       ? (topicParam as "산업분석" | "글로벌IB" | "투자전략")
       : undefined;
+    // 글로벌IB 는 미국 탭 전용(오너 지시 2026-09-28) — 다른 시장 요청은 빈 목록
+    if (topic === "글로벌IB" && market !== "us") return ok({ items: [] });
 
     // 90일 백필인데도 화면엔 최근 1주일치만 보인다는 지적(오너, 2026-09) —
     // 수집기가 20곳 넘게 늘면서 하루 유입량 자체가 커져 30건 한도로는 며칠

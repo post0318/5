@@ -22,6 +22,9 @@ const TOPICS = [
   { key: "글로벌IB", label: "글로벌IB" },
 ] as const;
 type TopicKey = (typeof TOPICS)[number]["key"];
+// 글로벌IB(골드만삭스·블랙록 리서치)는 미국 탭에만 둔다(오너 지시 2026-09-28 — "한국의 산업분석에서
+// 글로벌ib는 삭제 미국만 유지"). 수집 문서가 전부 market:"us" 라 다른 시장에선 늘 빈 세그먼트였다.
+const topicsFor = (market: MarketId) => TOPICS.filter((t) => t.key !== "글로벌IB" || market === "us");
 
 // 업종 필터 노출 대상(오너 지시, 2026-09-22 — "산업분석 중 산업분석과
 // 전체에만 업종선택을 넣는다"): 전체·산업분석 탭에서만 보이고, 글로벌IB에서는
@@ -131,7 +134,7 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
             {q.data && <span className="text-muted-foreground ml-1.5 text-xs font-normal">({items.length})</span>}
           </CardTitle>
           <div className="flex gap-1">
-            {TOPICS.map((t) => (
+            {topicsFor(market).map((t) => (
               <button
                 key={t.key}
                 type="button"
