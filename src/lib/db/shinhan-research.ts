@@ -98,11 +98,30 @@ export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDo
   return col;
 }
 
+/**
+ * 같은 제목이 여러 번 올라온 것은 내용 업데이트본이라 최신 1건만 남긴다(오너 지시 2026-09-27 — 모든 수집기 공통).
+ * 키 = 출처·시장·카테고리·종목·제목(공백 정규화). 최신 = 날짜가 늦은 것, 같은 날이면 _id 가 큰 것.
+ */
+const dupKey = (d: ShinhanResearchDoc) =>
+  [d.source, d.market ?? "kr", d.category ?? "", d.symbol ?? "", (d.title ?? "").replace(/\s+/g, " ").trim()].join("|");
+const isNewer = (a: ShinhanResearchDoc, b: ShinhanResearchDoc) =>
+  a.date > b.date || (a.date === b.date && a._id > b._id);
+function keepLatestPerTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
+  const latest = new Map<string, ShinhanResearchDoc>();
+  for (const d of docs) {
+    const k = dupKey(d);
+    const cur = latest.get(k);
+    if (!cur || isNewer(d, cur)) latest.set(k, d);
+  }
+  return [...latest.values()];
+}
+
 export async function upsertShinhanResearch(
-  docs: ShinhanResearchDoc[],
+  allDocs: ShinhanResearchDoc[],
 ): Promise<{ upserted: number; pruned: number }> {
   const col = await shinhanResearchCol();
   let upserted = 0;
+  const docs = keepLatestPerTitle(allDocs);
   if (docs.length > 0) {
     // 문서 수가 많을 때(예: 초기 백필) 건별 replaceOne 순차 호출은 Vercel
     // 서버리스 함수 60초 제한을 넘겨 FUNCTION_INVOCATION_TIMEOUT 이 났다
@@ -115,6 +134,23 @@ export async function upsertShinhanResearch(
       { ordered: false },
     );
     upserted = result.upsertedCount + result.modifiedCount;
+  }
+  // DB 에 이미 있는 같은 제목의 옛 문서는 지운다(들어온 문서가 더 최신일 때만).
+  if (docs.length > 0) {
+    await col.bulkWrite(
+      docs.map((d) => ({
+        deleteMany: {
+          filter: {
+            _id: { $ne: d._id },
+            source: d.source,
+            title: d.title,
+            category: d.category,
+            $or: [{ date: { $lt: d.date } }, { date: d.date, _id: { $lt: d._id } }],
+          },
+        },
+      })),
+      { ordered: false },
+    );
   }
   const cutoff = new Date(Date.now() - MAX_AGE_MS).toISOString().slice(0, 10);
   const del = await col.deleteMany({

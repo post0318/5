@@ -562,6 +562,13 @@
       "titleIncludes": "주요국 긴축 강화, 충격은 차별적",
       "expect": "거시경제 시황분석(Monthly)",
       "why": "Econ Signal은 월간 시황(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X24",
+      "source": "신한투자증권",
+      "titleIncludes": "글로벌 전략; Global Portfolio (9월 23일)",
+      "expect": "EXCLUDE",
+      "why": "Global Portfolio는 추천 포트폴리오 시리즈 — 수집 제외(오너 지적 2026-09-27)"
     }
   ]
 }

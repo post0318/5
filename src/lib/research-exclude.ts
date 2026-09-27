@@ -51,7 +51,7 @@ const GOVERNANCE_RE = /거버넌스|\bgovernance\b/i;
 const REAL_ESTATE_RE = /부동산|맨션/;
 // 미래에셋 "글로벌 마켓 브리핑" 일일 시리즈 수집 제외(오너 지시 2026-09-27) — 기업 리포트에는 적용하지 않는다.
 const CREDIT_RE = /크레딧|신용|회사채|\bCredit\b/i; // 크레딧 계열 수집 제외(오너 지시 2026-09-27 — "크레딧은 아예 제외다"). 기업 리포트에는 적용하지 않는다.
-const DAILY_BRIEFING_RE = /글로벌\s*마켓\s*브리핑|(?:^|\s)마켓\s*(?:뷰|클로징)(?=\s|\(|$)|Earnings\s*Revision|자산가격\s*[메매]커니즘\s*변화|신한\s*FX\s*Check-?up|마켓\s*레이더/i; // 미래에셋 일일 시리즈(글로벌 마켓 브리핑·마켓 뷰·마켓 클로징)·Earnings Revision·신한 자산가격 메커니즘 변화·신한 FX Check-up·마켓레이더 시리즈 수집 제외(오너 지시 2026-09-27)
+const DAILY_BRIEFING_RE = /글로벌\s*마켓\s*브리핑|(?:^|\s)마켓\s*(?:뷰|클로징)(?=\s|\(|$)|Earnings\s*Revision|자산가격\s*[메매]커니즘\s*변화|신한\s*FX\s*Check-?up|마켓\s*레이더|Global\s*Portfolio/i; // 미래에셋 일일 시리즈(글로벌 마켓 브리핑·마켓 뷰·마켓 클로징)·Earnings Revision·신한 자산가격 메커니즘 변화·신한 FX Check-up·마켓레이더·Global Portfolio(추천 포트폴리오) 시리즈 수집 제외(오너 지시 2026-09-27)
 
 /**
  * 디지털자산은 여기 없다(오너 결정 2026-09-26 — "이건 스크립트에서

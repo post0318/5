@@ -389,6 +389,52 @@ const BOND_STRATEGY_TITLE_RE = /채권\s?전략|Fixed\s?Income/i;
   }
 }
 
+// 기업분석 > 비상장분석(boardName=giresearchIPO, 리서치 탐색기 이름 "스몰캡") — 오너 지시 2026-09-27: 비상장으로 분류.
+// 게시판 전체가 비상장 리서치라 종목코드 없이 "신한투자증권 비상장리서치" source 로 보낸다.
+console.log(`▶ 신한투자증권 비상장분석 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+{
+  let uStartId;
+  let uStop = false;
+  for (let page = 1; page <= MAX_PAGES && !uStop; page++) {
+    const data = await fetchPage("giresearchIPO", page, uStartId);
+    const list = data.list ?? [];
+    if (list.length === 0) break;
+    for (const it of list) {
+      const date = isoDate(it.f0);
+      if (!date) continue;
+      if (new Date(date) < cutoff) {
+        uStop = true;
+        break;
+      }
+      const title = decodeEntities(String(it.f1 ?? "")).trim();
+      if (isCommonExcludedContent(title, "산업")) continue;
+      const head = title.match(/^([^;:]+)[;:]/)?.[1]?.replace(/\(\s*비상장[^)]*\)/, "").trim();
+      const f2 = String(it.f2 ?? "").trim();
+      items.push({
+        id: String(it.fn),
+        date,
+        title,
+        stockName: f2 && f2 !== "-" ? f2 : head || "비상장",
+        symbol: null,
+        analyst: it.f4 ?? "",
+        opinion: "",
+        targetPrice: null,
+        summary: excerpt(it.f7),
+        pdfUrl: it.f3 || null,
+        views: Number(it.f5) || null,
+        category: "산업",
+        board: "신한투자증권 > 기업분석 > 비상장분석(giresearchIPO)",
+        market: "kr",
+        unlisted: true,
+      });
+    }
+    const pages = data.pageInfo?.pages ?? [];
+    uStartId = pages.length > 1 ? pages[1] : undefined;
+    if (!uStartId) break;
+    await sleep(400);
+  }
+}
+
 if (items.length === 0) {
   console.error("✗ 파싱 결과 0건. 게시판 구조가 바뀌었을 수 있음.");
   process.exit(1);
