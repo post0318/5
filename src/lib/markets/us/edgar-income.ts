@@ -591,16 +591,29 @@ export function buildUsIncome(
   // 판관비·연구개발비 — 한 줄이 표준 이름이 아니면 행 이름에 원래 이름 병기(오너 결정 2026-09-28: HLT·MAR·SBUX 일반관리비, MCD "Other",
   // AMZN "Technology and infrastructure"), 여러 줄 합이면 하위 줄을 행으로. 빈칸 사유(본표에 줄 없음 제외)는 각주
   const faceName = (pick: (c: RevCol) => string | null): string | null => {
-    const ns = [...new Set(labels.map((l) => (finColOf.get(l) ? pick(finColOf.get(l)!) : null)).filter((t): t is string => !!t?.startsWith(SGA_NOTE.face)))];
-    return ns.length === 1 ? ns[0].slice(SGA_NOTE.face.length + 2).replace(/^"|"$/g, "") : null;
+    // 열마다 라벨 원천(연간 = 최신 10-K, 분기·LTM = 최신 10-Q)이 달라 같은 줄 이름이 갈릴 수 있다 — 가장 많은 열의 이름(칸 주석에 열별 이름)
+    const n = new Map<string, number>();
+    for (const l of [...labels].reverse()) {
+      const t = finColOf.get(l) ? pick(finColOf.get(l)!) : null;
+      if (t?.startsWith(SGA_NOTE.face)) n.set(t, (n.get(t) ?? 0) + 1);
+    }
+    const top = [...n].sort((a, b) => b[1] - a[1])[0]?.[0];
+    return top ? top.slice(SGA_NOTE.face.length + 2).replace(/^"|"$/g, "") : null;
   };
   const opexRow = (title: string, values: Record<string, number | null>, pick: (c: RevCol) => string | null, parts: FinSubLine[], id: string): FinancialLineItem[] => {
     const fname = faceName(pick);
-    const subs = parts
-      .map((sp) => ({ sp, v: Object.fromEntries(labels.map((l) => [l, finColOf.get(l) ? (sp.v.get(finColOf.get(l)!.key) ?? null) : null])) as Record<string, number | null> }))
-      .filter((x) => labels.some((l) => x.v[l] != null));
+    const subs: { sp: FinSubLine; v: Record<string, number | null> }[] = [];
+    for (const sp of parts) {
+      const v = Object.fromEntries(labels.map((l) => [l, finColOf.get(l) ? (sp.v.get(finColOf.get(l)!.key) ?? null) : null])) as Record<string, number | null>;
+      if (!labels.some((l) => v[l] != null)) continue;
+      // 공시마다 개념만 다른 같은 이름 줄(KO "Other operating charges" — 10-K 와 10-Q 태그가 다름)은 열이 겹치지 않으면 한 행으로
+      const same = subs.find((x) => x.sp.label === sp.label && labels.every((l) => x.v[l] == null || v[l] == null));
+      if (same) for (const l of labels) same.v[l] ??= v[l];
+      else subs.push({ sp, v });
+    }
     return [
-      row(fname ? `${title} (본표: ${fname})` : title, values, { accountId: `is:${id}` }),
+      // 행 id 는 원래 행 이름 그대로(is:(−) 판매관리비) — 원래 이름 병기는 표시 이름만
+      row(fname ? `${title} (본표: ${fname})` : title, values, { accountId: `is:${title}` }),
       ...subs.map((x) => row(x.sp.label, x.v, { depth: 2, italic: true, accountId: `is:${id}:${x.sp.id}` })),
     ];
   };

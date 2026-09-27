@@ -2,7 +2,12 @@
 
 브랜치: `wip/verification` (master 에 합치면 Vercel 프로덕션 배포 — 오너 지시 전까지 master 푸시 금지).
 
-## 판관비·연구개발비 정의 (오너 결정 2026-09-28) — 다음 지표, 착수 전
+## 판관비·연구개발비 앱 전환 (2026-09-28, 엔진판 12) — docs/metrics/sga.md
+- fin 지표 sga·rnd(본표 영업이익 식의 판관비·연구개발비 성격 줄 합, 회사별 예외 metrics/sga-rules.ts: AMZN·NFLX·KO 지정, DAL 제외), 소비처 전환
+  (손익계산서·기본 재무제표·20-F LTM), 태그 목록 삭제·eslint SGA_TAG. 유니버스 47종목 저장 완료. 손익계산서 바뀐 칸 486(다른 행·화면 0).
+- 검증기 쪽(--metric=sga)은 미착수. 미결: UBER Operations and support, AMZN Technology and content(옛 열), MCD "Other" 만, KO Other operating charges.
+
+## 판관비·연구개발비 정의 (오너 결정 2026-09-28) — 적용 완료(위)
 - 판관비 = 본표 판관비 성격 줄 전부의 합 + 손익계산서에 하위 줄 표시(AMZN 물류+마케팅+일반관리 등 14종목).
 - AMZN "Technology and infrastructure" = 연구개발비(원래 이름 병기).
 - 본표 이름이 판관비가 아닌 줄(HLT·MAR·SBUX 일반관리비, MCD 기타 판관비)은 판관비 행에 넣고 원래 이름 병기.
