@@ -27,7 +27,6 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
-import { resolveKrStock } from "./lib/company-match.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { refineSectorLabels } from "./lib/sector-label.mjs";
 
@@ -433,25 +432,25 @@ console.log(`▶ 신한투자증권 비상장분석 수집: 최근 ${DAYS}일, �
       const head = title.match(/^([^;:]+)[;:]/)?.[1]?.replace(/\(\s*비상장[^)]*\)/, "").trim();
       const f2 = String(it.f2 ?? "").trim();
       const name = f2 && f2 !== "-" ? f2 : head || "비상장";
-      // 발간 시점 기준 분류(오너 지시 2026-09-27): 제목에 "(비상장)" 표기가 있으면 그때 비상장이었으므로 비상장으로, 표기 없이
-      // 지금 상장사로 확인되는 회사의 리포트(상장 이후 발간분)는 개별 종목분석으로 보낸다. 상장사 매칭이 안 되면 비상장.
-      const listed = /비상장/.test(title) ? null : resolveKrStock(name);
+      // 수집 시점 게시판 기준(오너 지시 2026-09-27): 이 게시판에 올라온 글은 그 시점에 비상장이므로 비상장이다.
+      // 이후 상장하면 신한 종목(기업분석) 게시판으로 올라와 종목분석으로 받으니 상장사 매칭 휴리스틱은 두지 않는다.
+      // (과거 백필분에 상장 이후 발간글이 섞이는 건 일회성 한계 — 향후 수집에는 발생하지 않음.)
       items.push({
         id: String(it.fn),
         date,
         title,
-        stockName: listed ? listed.stockName : name,
-        symbol: listed ? listed.symbol : null,
+        stockName: name,
+        symbol: null,
         analyst: it.f4 ?? "",
         opinion: "",
         targetPrice: null,
         summary: excerpt(it.f7),
         pdfUrl: it.f3 || null,
         views: Number(it.f5) || null,
-        category: listed ? "기업" : "산업",
+        category: "산업",
         board: "신한투자증권 > 기업분석 > 비상장분석(giresearchIPO)",
         market: "kr",
-        unlisted: !listed,
+        unlisted: true,
       });
     }
     const pages = data.pageInfo?.pages ?? [];
