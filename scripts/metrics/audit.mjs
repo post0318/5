@@ -143,7 +143,11 @@ export function buildAudit({ app, cols, checks, review, closed }) {
         const of = (k) => Object.keys(cls).filter((n) => cls[n] === k);
         // 닫히지 않은 지표(매출원가·매출총이익)의 ③ 은 다른 미규명 차이처럼 "미결"로 둔다(닫힌 지표만 ③)
         const extra = [...of("공통모드").map((n) => `${n} 공통모드`), ...of("NA").map((n) => `${n} ${naLab(n)}`), ...of("외부정의분해불가").map((n) => `${n} 외부 정의 분해 불가`)].join(", ");
+        // Yahoo 1순위(오너 결정 2026-09-27 — 멀티플 비교점이 Yahoo): Yahoo 가 ①·② 면 행 판정은 Yahoo 분류, 아니면 다른 소스 ①·② 로 통과
+        const yc = cls.Yahoo;
         if (of("③").length) { verdict = isClosed ? "③" : "미결"; note = `미규명 차이: ${of("③").map((n) => `${n} ${ext.causes?.[n] ?? "분해식 없음"}`).join("; ")}`; }
+        else if (yc === "①") { verdict = "①"; note = `Yahoo 일치${of("①").length > 1 ? `(${of("①").length}곳)` : ""}${passedA ? " · 앱 = SEC" : ""}${of("②").length ? ` · ${of("②").map((n) => `${n} ② ${ext.causes?.[n] ?? ""}`).join("; ")}` : ""}${extra ? ` · ${extra}` : ""}`; }
+        else if (yc === "②") { verdict = "②"; note = [`Yahoo: ${ext.causes?.Yahoo ?? ""}`, ...of("②").filter((n) => n !== "Yahoo").map((n) => `${n}: ${ext.causes?.[n] ?? ""}`), extra].filter(Boolean).join("; "); }
         else if (of("②").length || of("외부단독이탈").length) {
           verdict = "②";
           note = [...of("②").map((n) => `${n}: ${ext.causes?.[n] ?? ""}`), ...of("외부단독이탈").map((n) => `${n}: 외부 단독 이탈${ext.causes?.[n] ? ` — ${ext.causes[n]}` : ""}`), extra].filter(Boolean).join("; ");
