@@ -12,12 +12,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const PAGE_SIZE = 10;
 
-// 전면 개편(오너 지시 2026-09-26)으로 투자전략(주식)/(채권)·시황은 이 탭에서
-// 완전히 제거되고 /macro/market-condition·/macro/issues·/macro/fx로 이동했다.
-// 해외리서치는 "글로벌IB"로 이름만 바꿨다.
+// 전면 개편(오너 지시 2026-09-26)으로 시황·이슈분석·환율분석은 /macro 로 이동했고, 해외리서치는 "글로벌IB"로 이름만 바꿨다.
+// 투자전략은 다시 이 탭으로(오너 지시 2026-09-27 — "각 국가별 산업분석으로 다시 변경한다. 국가별로 나눠라") —
+// 시장 탭(국내/미국/일본)별로 그 국가의 투자전략만 나온다.
 const TOPICS = [
   { key: "all", label: "전체" },
   { key: "산업분석", label: "산업분석" },
+  { key: "투자전략", label: "투자전략" },
   { key: "글로벌IB", label: "글로벌IB" },
 ] as const;
 type TopicKey = (typeof TOPICS)[number]["key"];

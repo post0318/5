@@ -13,8 +13,7 @@ const PAGE_SIZE = 10;
 const SEGMENTS = [
   { key: "Daily", label: "Daily" },
   { key: "Monthly", label: "Monthly" },
-  { key: "투자전략", label: "투자전략" },
-] as const;
+] as const; // 투자전략은 각 국가 산업분석 탭으로 이동(오너 지시 2026-09-27)
 type SegmentKey = (typeof SEGMENTS)[number]["key"];
 
 function fmtAgo(iso: string): string {

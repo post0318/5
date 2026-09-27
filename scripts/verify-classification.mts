@@ -38,7 +38,7 @@ for (const f of readdirSync(dir)) for (const l of readFileSync(`${dir}/${f}`, "u
       const t = classifyResearchTopic({ stockName: it.stockName ?? "", title: it.title ?? "", source: b.source ?? "", market, summary: it.summary ?? "" });
       dest = t === "산업분석" ? `${market} 산업분석` : t === "글로벌IB" ? `${market} 산업분석(글로벌IB)` : t === "비상장" ? `${market} 비상장`
         : t === "이슈분석" ? "거시경제 이슈분석" : t === "환율분석" ? "거시경제 환율분석"
-        : t === "시황분석:Daily" ? "거시경제 시황분석(Daily)" : t === "시황분석:Monthly" ? "거시경제 시황분석(Monthly)" : "거시경제 시황분석(투자전략)";
+        : t === "시황분석:Daily" ? "거시경제 시황분석(Daily)" : t === "시황분석:Monthly" ? "거시경제 시황분석(Monthly)" : `${market} 산업분석(투자전략)`;
     }
     // 서버 수신 라우트와 같은 업종 라벨 정규화(표준 이름).
     if (cat === "산업") it.stockName = normalizeIndustryLabel(it.stockName);

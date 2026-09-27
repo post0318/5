@@ -9,9 +9,9 @@ export const revalidate = 1800;
  * 산업분석 리포트 — 종목 무관, 시장 전체용(`/[market]/research`). DB만
  * 읽는다(수집은 로컬 스크립트, CLAUDE.md 예외 참고). 종목별 기업분석
  * (`/api/markets/[market]/[symbol]/research`)과는 별개 라우트.
- * **전면 개편(오너 지시 2026-09-26)**: 이 탭은 이제 "산업분석"·"글로벌IB"만
- * 다룬다 — 시황·투자전략·이슈분석·환율분석·비상장은 완전히 제거됐다
- * (각자 `/macro/issues`·`/macro/fx`·`/macro/market-condition`으로 이동).
+ * 이 탭은 "산업분석"·"글로벌IB"·"투자전략"을 다룬다. 시황(Daily/Monthly)·이슈분석·환율분석·비상장은 각자의
+ * 전용 화면(`/macro/market-condition`·`/macro/issues`·`/macro/fx`·`/[market]/unlisted`)으로 갔다.
+ * 투자전략은 오너 지시(2026-09-27 — "각 국가별 산업분석으로 다시 변경한다")로 시장(국가)별 조회로 되돌아왔다.
  */
 export async function GET(request: Request) {
   try {
@@ -23,9 +23,9 @@ export async function GET(request: Request) {
     if (!isDbConfigured()) return ok({ items: [] });
 
     const topicParam = url.searchParams.get("topic");
-    const VALID_TOPICS = ["산업분석", "글로벌IB"] as const;
+    const VALID_TOPICS = ["산업분석", "글로벌IB", "투자전략"] as const;
     const topic = (VALID_TOPICS as readonly string[]).includes(topicParam ?? "")
-      ? (topicParam as "산업분석" | "글로벌IB")
+      ? (topicParam as "산업분석" | "글로벌IB" | "투자전략")
       : undefined;
 
     // 90일 백필인데도 화면엔 최근 1주일치만 보인다는 지적(오너, 2026-09) —

@@ -85,7 +85,6 @@ const ISSUE_MAX_AGE_MS = 30 * 24 * 3600_000;
 const FX_MAX_AGE_MS = 30 * 24 * 3600_000;
 const MARKET_DAILY_MAX_AGE_MS = 7 * 24 * 3600_000;
 const MARKET_MONTHLY_MAX_AGE_MS = 30 * 24 * 3600_000;
-const MARKET_STRATEGY_MAX_AGE_MS = 90 * 24 * 3600_000; // == MAX_AGE_MS, 별도 조기 정리 불필요
 const UNLISTED_MAX_AGE_MS = 180 * 24 * 3600_000;
 const GLOBAL_IB_MAX_AGE_MS = 90 * 24 * 3600_000;
 /** 해외리서치(골드만삭스 리서치 노트) 전용 보존기간 — 오너 지시,
@@ -870,16 +869,19 @@ export function classifyResearchTopic(
  * 기업분석)과 달리 symbol 로 좁히지 않고 market+category="산업"으로만
  * 조회한다.
  *
- * **전면 개편(오너 지시 2026-09-26)**: 이 탭은 이제 "산업분석"·"글로벌IB"
- * 두 토픽만 다룬다 — 시황·투자전략·이슈분석·환율분석·비상장은 완전히
- * 제거해 각자의 전용 함수(`getMacroIssueResearch`·`getMarketConditionResearch`)
- * 로 옮겼다("산업분석 탭에서 완전히 제거"). `topic`을 주면
- * classifyResearchTopic() 기준으로 한 번 더 걸러낸다.
+ * **전면 개편(오너 지시 2026-09-26)**: 이 탭은 "산업분석"·"글로벌IB" 두 토픽만
+ * 다뤘고 시황·투자전략·이슈분석·환율분석·비상장은 각자의 전용 함수
+ * (`getMacroIssueResearch`·`getMarketConditionResearch`)로 옮겼다.
+ * **투자전략은 다시 이 탭으로(오너 지시 2026-09-27 — "투자전략은 각 국가별
+ * 산업분석으로 다시 변경한다. 국가별로 나눠라")**: 내부 토픽 이름은 그대로
+ * `시황분석:투자전략` 이지만 화면은 이 탭의 "투자전략" 세그먼트이고, market
+ * (국가)별로 조회한다 — 거시경제 시황분석 탭은 이제 Daily·Monthly 만 본다.
+ * `topic`을 주면 classifyResearchTopic() 기준으로 한 번 더 걸러낸다.
  */
 export async function getIndustryResearch(
   market: MarketId,
   limit = 30,
-  topic?: "산업분석" | "글로벌IB",
+  topic?: "산업분석" | "글로벌IB" | "투자전략",
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
   // "글로벌IB"는 국내 고빈도 소스들과 같은 900건 풀에서 걸러내면 밀려서
@@ -916,13 +918,15 @@ export async function getIndustryResearch(
     (d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
   );
   const deduped = dedupeBySourceTitle(withoutEsg);
-  // 이 탭은 "산업분석"·"글로벌IB"만 다룬다 — 나머지 토픽(이슈분석·환율분석·
-  // 시황분석·비상장)은 여기서 완전히 제외한다(오너 지시 — "완전히 제거").
+  // 이 탭은 "산업분석"·"글로벌IB"·"투자전략"만 다룬다 — 나머지 토픽(이슈분석·환율분석·
+  // 시황 Daily/Monthly·비상장)은 여기서 제외한다.
   const scoped = deduped.filter((d) => {
     const t = classifyResearchTopic(d);
-    return t === "산업분석" || t === "글로벌IB";
+    return t === "산업분석" || t === "글로벌IB" || t === "시황분석:투자전략";
   });
-  const filtered = topic ? scoped.filter((d) => classifyResearchTopic(d) === topic) : scoped;
+  const filtered = topic
+    ? scoped.filter((d) => classifyResearchTopic(d) === (topic === "투자전략" ? "시황분석:투자전략" : topic))
+    : scoped;
   return filtered.slice(0, limit);
 }
 
@@ -1014,20 +1018,15 @@ export async function getMacroIssueSources(topic: "이슈분석" | "환율분석
 
 /**
  * 신규 "시황분석" 탭(오너 지시 2026-09-26) — `/macro/market-condition`.
- * Daily/Monthly/투자전략 3개 세그먼트로 구분. 구 "시황"·"투자전략(주식)"이
- * 여기로 이동했다(산업분석 탭에서 완전히 제거).
+ * Daily/Monthly 2개 세그먼트. 투자전략은 2026-09-27 오너 지시로 각 국가 산업분석 탭으로
+ * 되돌아갔다(`getIndustryResearch(..., "투자전략")`).
  */
 export async function getMarketConditionResearch(
-  segment: "Daily" | "Monthly" | "투자전략",
+  segment: "Daily" | "Monthly",
   limit = 150,
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
-  const cutoffMs =
-    segment === "Daily"
-      ? MARKET_DAILY_MAX_AGE_MS
-      : segment === "Monthly"
-        ? MARKET_MONTHLY_MAX_AGE_MS
-        : MARKET_STRATEGY_MAX_AGE_MS;
+  const cutoffMs = segment === "Daily" ? MARKET_DAILY_MAX_AGE_MS : MARKET_MONTHLY_MAX_AGE_MS;
   const cutoff = new Date(Date.now() - cutoffMs).toISOString().slice(0, 10);
   const wantedTopic: ResearchTopic = `시황분석:${segment}`;
   const docs = await col
