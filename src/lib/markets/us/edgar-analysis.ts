@@ -1,5 +1,5 @@
 import "server-only";
-import { unavailableNote, unavailableOn } from "./sec-unavailable";
+import { unavailableNote } from "./sec-unavailable";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import type { QuoteBar } from "../types";
@@ -29,6 +29,7 @@ import {
 import {
   buildEvResolver,
   daAnnualByYear,
+  daTtmCell,
   daTtm,
   opIncomeAnnualByYear,
   opIncomeAnnualCells,
@@ -331,7 +332,7 @@ export function buildUsAnalysis(
     const o = blank();
     for (const y of years) o[`${y}Y`] = daByYear.get(y) ?? null;
     o[LTM] = daTtm(facts);
-    if (o[LTM] == null) note(o, LTM, unavailableOn(facts, "da") ? "원본 조회 실패 — 감가상각비 공란" : "LTM 감가상각비 구성 분기 없음");
+    if (o[LTM] == null) note(o, LTM, daTtmCell(facts).reason);
     return o;
   })();
   const ocf = flow(["NetCashProvidedByUsedInOperatingActivities"]);

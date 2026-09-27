@@ -264,18 +264,33 @@ function durationValues(xml: string, ids: Set<string>): Map<string, Map<string, 
   return out;
 }
 
+/**
+ * 감가상각비 본표 판독 대상 정기공시(최신순) — 10-K 최근 `nK` 건 + 두 번째 최근 10-K 이후 제출된 10-Q 전부.
+ * 분기 열 5개(최신 분기가 1분기여도 직전 사업연도 1분기까지)와 그 누적 차감·Q4(사업연도 − 9개월)·LTM 전년 동기 누적이 모두
+ * 이 범위의 10-Q(당기 누적 + 전년 동기 비교 누적)에 실린다. 콘텐츠 상각(edgar-content.ts)도 같은 범위를 쓴다.
+ */
+export function filingsForDa(recent: RecentFilings, nK = 5): Filing[] {
+  const out: Filing[] = [];
+  let k10 = 0;
+  for (let i = 0; i < recent.form.length && k10 < nK; i++) {
+    const form = recent.form[i];
+    if (form === "10-K") k10++;
+    else if (!(form === "10-Q" && k10 <= 1)) continue;
+    out.push({ accn: recent.accessionNumber[i], form, filed: recent.filingDate[i] });
+  }
+  return out;
+}
+
 export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: RecentFilings | null): Promise<CompanyFacts> {
   // 콘텐츠 상각 회사(NFLX)는 edgar-content.ts 합성값이 감가상각비 — 본표 줄과 섞지 않는다
   if (!recent || (facts as CompanyFacts & { contentAmortization?: boolean }).contentAmortization) return facts;
   const g = facts.facts["us-gaap"] ?? {};
   const filings: (Filing & { instName: string; base: string; lines: CashFlowDaStructure | null })[] = [];
-  let k10 = 0;
-  for (let i = 0; i < recent.form.length && k10 < 5; i++) {
-    const form = recent.form[i];
-    if (form === "10-K") k10++;
-    else if (!(form === "10-Q" && k10 === 0 && !filings.some((x) => x.form === "10-Q"))) continue;
-    filings.push({ accn: recent.accessionNumber[i], form, filed: recent.filingDate[i], instName: "", base: "", lines: null });
-  }
+  // 10-K 5건 + **두 번째 최근 10-K 이후의 10-Q 전부**(2026-09-27) — 분기 열(최근 5개, Q4 = 사업연도 − 9개월)·LTM 이 연간과 같은
+  // 본표 규칙으로 계산되도록 각 분기를 담은 10-Q(누적)를 모두 읽는다. 예전엔 최신 10-Q 1건만 읽어 나머지 분기가 태그 규칙으로
+  // 대체됐다(PEP 2025 Q4 1,192 vs 본표 1,136 · XOM 2025 Q4 손상 2,000 미조정 · AVGO 분기마다 약 34 — 검증기 --metric=da)
+  const periodicFilings = filingsForDa(recent);
+  for (const p of periodicFilings) filings.push({ ...p, instName: "", base: "", lines: null });
   if (!filings.length) return facts;
   const opt = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 };
   // 조회 실패는 올린다(로더가 감가상각비를 공란 + 사유로 — sec-unavailable.ts). 예전엔 삼키고 태그 규칙으로 조용히 대체했다
@@ -301,6 +316,12 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
   };
   const out: FactUnitEntry[] = [];
   const done = new Set<string>();
+  /** 기간별 조정 미확인 사유 — 손상(imp)·중단사업 감가상각(disc) */
+  const unresolvedOf = new Map<FactUnitEntry, "imp" | "disc" | null>();
+  /** 중단사업 감가상각을 차감한 기간이 있었는가 */
+  let discAdjusted = false;
+  /** 판독한 구조(공시별 감가상각 줄·현금흐름표 기간·그 공시 현금흐름표의 줄 값) — 기준 혼합 판정용 */
+  const structs: { accn: string; lines: string[]; periods: Set<string>; vals: Map<string, number> }[] = [];
   for (const f of filings) {
     const struct = f.lines;
     const lines = struct?.lines;
@@ -324,11 +345,26 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
     if ((!cfComplete || needAdj) && f.instName) {
       const xml = await fetchText(`${f.base}/${f.instName}`, { headers: H, revalidate: false, timeoutMs: 30_000 });
       if (!cfComplete) {
-        inst = durationValues(xml, new Set(lines));
-        for (const l of lines) for (const p of inst.get(l)?.keys() ?? []) periods.add(p);
+        const roots = ["us-gaap_NetCashProvidedByUsedInOperatingActivities", "us-gaap_NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"];
+        inst = durationValues(xml, new Set([...lines, ...roots]));
+        // 현금흐름표 기간만(영업활동 현금흐름이 실린 기간) — 줄 개념이 주석에만 실은 기간(ISRG 10-Q 무형상각 3개월 값 3.2M)을
+        // 감가상각 줄 합으로 쓰지 않는다(2026-09-27, 분기 열 확장 때 발견 — 3개월 값이 그 분기 감가상각비로 잡혔다)
+        const cfPeriods = new Set(roots.flatMap((r) => [...(inst!.get(r)?.keys() ?? [])]));
+        for (const l of lines) for (const p of inst.get(l)?.keys() ?? []) if (cfPeriods.has(p)) periods.add(p);
       }
-      if (needAdj) adj = instanceFacts(xml, (id) => isImpair(id) || isDiscDa(id));
+      if (needAdj) adj = instanceFacts(xml, (id) => isImpair(id) || isDiscDa(id) || (DISC_NI.test(local(id)) && !/Share/.test(id)));
     } else if (needAdj) return facts; // 원본이 없으면 전체 미적용 — 기간마다 방식이 섞이지 않게
+    // 이 공시 현금흐름표에 실린 줄 값(원본 또는 같은 공시의 companyfacts 값) — 주석 값·다른 공시 값은 쓰지 않는다
+    const own = new Map<string, number>();
+    for (const p of periods)
+      for (const l of lines) {
+        const [a, b] = p.split("|");
+        const v =
+          inst?.get(l)?.get(p) ??
+          (l.startsWith("us-gaap_") ? (g[l.slice(8)]?.units?.USD ?? []).find((e) => e.start === a && e.end === b && e.filed === f.filed)?.val : undefined);
+        if (v !== undefined) own.set(`${l}|${p}`, v);
+      }
+    structs.push({ accn: f.accn, lines, periods, vals: own });
     const exclude = new Set(struct.separateImpair);
     for (const p of periods) {
       if (done.has(p)) continue;
@@ -343,23 +379,80 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
       }
       if (!any) continue;
       done.add(p);
+      // 연간 집계(annualByYear·ttmOf)는 fp "FY" 인 1년 기간만 받는다
+      const fullYear = (Date.parse(end) - Date.parse(start)) / 864e5 > 300;
+      let unresolvedImp = false;
+      let unresolvedDisc = false;
       if (adj) {
         // ① 손상 포함 줄: 그 기간 손상 금액을 뺀다(줄 합 이상이면 확인 불가 — 그대로 둔다)
         if (struct.impairLines.length) {
           const imp = impairmentOf(adj, p, exclude);
           if (imp > 0 && imp < sum) sum -= imp;
+          else if (imp > 0) unresolvedImp = true;
         }
         // ② 중단사업 포함 현금흐름표: 중단사업 감가상각을 뺀다(태그가 없으면 확인 불가 — 그대로 둔다)
         if (!struct.continuing) {
           const disc = discontinuedDaOf(adj, p);
-          if (disc != null && disc > 0 && disc < sum) sum -= disc;
+          if (disc != null && disc > 0 && disc < sum) {
+            sum -= disc;
+            discAdjusted = true;
+          } else if (adj.some((x) => x.period === p && x.dims.length === 0 && x.val !== 0 && DISC_NI.test(local(x.id)))) unresolvedDisc = true;
         }
       }
-      // 연간 집계(annualByYear·ttmOf)는 fp "FY" 인 1년 기간만 받는다
-      const fullYear = (Date.parse(end) - Date.parse(start)) / 864e5 > 300;
-      out.push({ start, end, val: sum, fy: 0, fp: fullYear ? "FY" : "Q", form: f.form, filed: f.filed });
+      out.push({ start, end, val: sum, fy: 0, fp: fullYear ? "FY" : "Q", form: f.form, filed: f.filed, basis: f.accn });
+      unresolvedOf.set(out[out.length - 1], unresolvedImp ? "imp" : unresolvedDisc ? "disc" : null);
     }
   }
-  if (!out.length) return facts;
-  return { ...facts, facts: { ...facts.facts, "us-gaap": { ...g, [SYN_DA_CF]: { units: { USD: out } } } } } as CompanyFacts;
+  // 조정 금액을 확인하지 못한 **누적(분기) 기간**은 내보내지 않는다(2026-09-27) — 분기 열·LTM 은 누적 차라, 조정한 누적과 조정 못 한 누적을
+  // 빼면 엉뚱한 값이 된다(WDC 2025 3분기 −7M: 9개월은 중단사업 감가상각 차감, 6개월은 태그 없어 미차감). 그 칸은 공란 + 사유(edgar-ev.ts
+  // DA_QUARTER_NO_STRUCT). 중단사업은 **이 회사에 차감한 기간이 하나라도 있을 때만**(차감이 실제로 적용되는 회사) — 중단사업 손익만 조금
+  // 있고 감가상각 차감이 어느 기간에도 없는 회사(IBM)는 모든 기간이 같은 기준(줄 값 그대로)이라 섞이지 않는다. 사업연도 값은 종전대로
+  // 줄 값 그대로(연간 공란은 영업이익 대체 경로와 함께 봐야 해 범위 밖)
+  const kept = out.filter((e) => {
+    const u = unresolvedOf.get(e);
+    return e.fp === "FY" || !(u === "imp" || (u === "disc" && discAdjusted));
+  });
+  if (!kept.length) return facts;
+  // 구성 공시 간 감가상각 줄 기준 혼합(2026-09-27) — 줄 구성이 다른 두 구조를 두 구조의 줄이 모두 값을 가진 같은 현금흐름표 기간에서
+  // 합으로 비교한다(매출원가 기준 혼합과 같은 원칙 — 합이 같은 개명은 허용). 다르면 두 구조의 값을 빼서 만든 열(누적 차·Q4·LTM)은
+  // 공란(edgar-ev.ts daBasisMixed). 예: HLT 10-Q 는 계약획득원가 상각을 AmortizationOfIntangibleAssets(포함 개념)로, 10-K 는
+  // AmortizationOfAcquisitionCosts(제외 개념)로 태깅 — 2025 9개월에서 10-K 기준 130 vs 10-Q 기준 172 → 혼합(Q4 = 177 − 172 = 5 가 나왔다)
+  // 줄 값은 **그 줄을 현금흐름표에 실은 공시**의 그 기간 값만(최신 공시 우선) — 주석 전용 값(AMD 무형상각 주석 합계 2,300 ↔ 현금흐름표
+  // 2,254)을 비교에 섞지 않는다
+  const valAt = (id: string, p: string): number | undefined => {
+    for (const x of structs) {
+      const v = x.vals.get(`${id}|${p}`);
+      if (v !== undefined) return v;
+    }
+    return undefined;
+  };
+  const unit = (v: number) => {
+    let u = 1;
+    while (u < 1e6 && v % (u * 10) === 0) u *= 10;
+    return u;
+  };
+  const mix: string[] = [];
+  const allPeriods = [...new Set(structs.flatMap((x) => [...x.periods]))];
+  for (let i = 0; i < structs.length; i++)
+    for (let j = i + 1; j < structs.length; j++) {
+      const A = structs[i], B = structs[j];
+      if (A.lines.length === B.lines.length && A.lines.every((l) => B.lines.includes(l))) continue;
+      for (const p of allPeriods) {
+        const va = A.lines.map((l) => valAt(l, p));
+        const vb = B.lines.map((l) => valAt(l, p));
+        if (va.some((v) => v === undefined) || vb.some((v) => v === undefined)) continue;
+        const sa = (va as number[]).reduce((x, y) => x + y, 0);
+        const sb = (vb as number[]).reduce((x, y) => x + y, 0);
+        const tol = Math.max(...[...va, ...vb].map((v) => unit(Math.abs(v as number)))) * (A.lines.length + B.lines.length);
+        if (Math.abs(sa - sb) > tol) {
+          mix.push([A.accn, B.accn].sort().join("|"));
+          break;
+        }
+      }
+    }
+  return {
+    ...facts,
+    ...(mix.length ? { daBasisMix: mix } : {}),
+    facts: { ...facts.facts, "us-gaap": { ...g, [SYN_DA_CF]: { units: { USD: kept } } } },
+  } as CompanyFacts;
 }

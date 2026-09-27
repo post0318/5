@@ -17,11 +17,12 @@ import {
   ltmAnchor,
   ltmFlowOf,
   shiftYear,
-  singleQuarter,
+  singleQuarterParts,
+  type QuarterParts,
   splitFactorsByYear,
   type QuarterCol,
 } from "./edgar-series";
-import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, OPINC_FIN_FAIL, opIncomeIsDerived, opIncomeViaFin, pickDa, SYN_DA_CF, SYN_OP_INCOME } from "./edgar-ev";
+import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, OPINC_FIN_FAIL, opIncomeIsDerived, opIncomeViaFin, pickDa, pickDaPeriod, SYN_OP_INCOME } from "./edgar-ev";
 import { FY_EPS_NOTE, fyEps, ltmEpsOf, ltmNetIncomeOf, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
 import { buildShareResolver } from "./edgar-shares";
 import { classAEps, type ClassAFacts } from "./edgar-classfacts";
@@ -122,18 +123,21 @@ export function buildUsIncome(
     return finQ.find((x) => x.fy === c.fy && x.fq === 3)?.end ?? null;
   };
   /** 분기 값 — 1~3분기는 종전 규칙(직접 → 누적 차감), Q4 = 사업연도(최신 판본) − 9개월 누적(최신 판본). 주식수·주당 값은 Q4 없음 */
-  const quarterValue = (entries: FactUnitEntry[], i: number, flow: boolean): number | null => {
+  /** quarterValue 와 같은 값 + 구성 항목(감가상각비 기준 혼합 판정 — edgar-ev.ts daBasisMixed) */
+  const quarterParts = (entries: FactUnitEntry[], i: number, flow: boolean): QuarterParts => {
     const q = qShow[i];
-    if (!q4Labels.has(q.label)) return singleQuarter(entries, q, prevOf(i));
-    if (!flow) return null;
+    if (!q4Labels.has(q.label)) return singleQuarterParts(entries, q, prevOf(i));
+    const none: QuarterParts = { value: null, parts: [], reason: null };
+    if (!flow) return none;
     const q3End = q3EndOf(i);
-    if (!q3End) return null;
+    if (!q3End) return none;
     const newest = (xs: FactUnitEntry[]) => xs.sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0];
     const fy = newest(entries.filter((e) => e.start && ANNUAL_FORMS.includes(e.form) && isFullYearDuration(e) && Math.abs(days(q.end, e.end)) <= 6));
     const nine = newest(entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form) && Math.abs(days(q3End, e.end)) <= 6 && days(e.start, e.end) >= 250 && days(e.start, e.end) <= 290));
-    if (!fy?.start || !nine?.start || Math.abs(days(fy.start, nine.start)) > 12) return null;
-    return fy.val - nine.val;
+    if (!fy?.start || !nine?.start || Math.abs(days(fy.start, nine.start)) > 12) return none;
+    return { value: fy.val - nine.val, parts: [fy, nine], reason: null };
   };
+  const quarterValue = (entries: FactUnitEntry[], i: number, flow: boolean): number | null => quarterParts(entries, i, flow).value;
 
   let periods: FinancialPeriod[];
   if (quarterly) {
@@ -504,11 +508,33 @@ export function buildUsIncome(
     const totals = DA_TOTAL.map((c) => val([c]));
     const dep = val(DA_DEPRECIATION);
     const am = val([DA_INTANGIBLE]);
-    const cf = val([SYN_DA_CF]);
+    // 본표 계열(현금흐름표 계산 구조·NFLX 콘텐츠 상각 포함 — edgar-ev.ts daStructConcept). 분기·LTM 칸은 본표 값만(없으면 공란 + 사유)
+    const sc = daStructConcept(facts);
+    const cf = sc ? val([sc]) : blank();
     const o = blank();
     // 본표 판독이 원본 조회 실패로 빠졌으면 태그 규칙으로 대체하지 않고 공란(sec-unavailable.ts)
     if (unavailableOn(facts, "da")) return o;
-    for (const l of labels) o[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
+    for (const l of labels) {
+      const strict = !!sc && (quarterly || l === LTM);
+      o[l] = strict ? pickDaPeriod(true, [], null, null, cf[l]) : pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
+      if (strict && o[l] == null) note(o, l, l === LTM ? DA_LTM_NO_STRUCT : DA_QUARTER_NO_STRUCT);
+    }
+    if (sc) {
+      // 파생 열(누적 차·Q4·LTM)의 구성 공시끼리 감가상각 줄 기준이 다르면 공란 + 사유(edgar-ev.ts daBasisMixed). 분기 3개월 값은 그대로
+      if (quarterly)
+        qShow.forEach((q, i) => {
+          const r = quarterParts(entriesOf(facts, sc), i, true);
+          if (o[q.label] != null && daBasisMixed(facts, r.parts)) {
+            o[q.label] = null;
+            WHY.set(o, { ...(WHY.get(o) ?? {}), [q.label]: DA_BASIS_MIX });
+          } else if (o[q.label] == null && r.reason) WHY.set(o, { ...(WHY.get(o) ?? {}), [q.label]: r.reason });
+        });
+      else if (labels.includes(LTM)) {
+        const c = daTtmCell(facts);
+        o[LTM] = c.value;
+        if (c.value == null && c.reason) WHY.set(o, { ...(WHY.get(o) ?? {}), [LTM]: c.reason });
+      }
+    }
     // LTM — 최근 연도엔 있는데 LTM 에 없는 합계 태그가 있으면(구성항목 합이면 구성 태그도) 나머지로 낸 값은 부분값 — 공란
     if (!quarterly && cf[LTM] == null) {
       const prevL = labels[labels.length - 2];

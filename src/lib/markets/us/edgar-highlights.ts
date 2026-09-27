@@ -26,6 +26,7 @@ import {
 import {
   buildEvResolver,
   daAnnualByYear,
+  daTtmCell,
   daTtm,
   opIncomeAnnualCells,
   opIncomeIsDerived,
@@ -526,7 +527,7 @@ export function buildUsHighlights(
     const o: (string | null)[] = Array(nCol).fill(null);
     if (ltmIdxC >= 0 && ebitda[ltmIdxC] == null) {
       const oi = opViaFin ? opLtm : ltm(E.opIncome);
-      o[ltmIdxC] = oi.value == null ? oi.reason : daTtm(facts) == null ? "LTM 감가상각비 구성 분기 없음" : null;
+      o[ltmIdxC] = oi.value == null ? oi.reason : daTtm(facts) == null ? daTtmCell(facts).reason : null;
     }
     // 사업연도 열 — fin 영업이익이 빈칸이면 그 사유(정의 대기 등)
     if (opViaFin)

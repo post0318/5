@@ -7,6 +7,7 @@ import { opUnitsFrom } from "../op-units";
 import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT, SYN_MIXED_LEASE_CURRENT, SYN_MIXED_LEASE_NONCURRENT } from "./edgar-bs-structure";
 import { unavailableOn } from "./sec-unavailable";
 import { SYN_DA_CF } from "./edgar-cf-structure";
+import { SYN_DA_WITH_CONTENT } from "./edgar-content";
 export { SYN_DA_CF };
 
 /**
@@ -443,6 +444,54 @@ export function pickDa(
   return total;
 }
 
+/**
+ * **감가상각비 본표 계열** — 현금흐름표 계산 구조 판독값(SYN_DA_CF, edgar-cf-structure.ts) 또는 콘텐츠 상각 포함 합성값
+ * (NFLX, edgar-content.ts — 본표 판독 대신 이 값이 기준). 둘 다 없으면 null(태그 규칙 회사 — 20-F·구조 없는 공시).
+ * 연간·분기·LTM 모든 화면이 이 계열을 pickDa 의 cashFlow 인자로 쓴다.
+ */
+export function daStructConcept(facts: CompanyFacts): string | null {
+  if (facts.contentAmortization && entriesOf(facts, SYN_DA_WITH_CONTENT).length) return SYN_DA_WITH_CONTENT;
+  if (entriesOf(facts, SYN_DA_CF).length) return SYN_DA_CF;
+  return null;
+}
+
+/** 본표 판독 회사의 분기 칸이 본표로 계산되지 않을 때(그 분기를 실은 10-Q·10-K 구조 판독 불가·누적 기간 없음) 칸 주석 */
+export const DA_QUARTER_NO_STRUCT = "감가상각비 공란 — 이 분기를 실은 10-Q·10-K 현금흐름표 계산 구조로 계산할 수 없음(요약 현금흐름표 등 구조 판독 불가·누적 기간 없음·손상/중단사업 조정 금액 미확인), 태그 값으로 대체하지 않음";
+/** 본표 판독 회사의 LTM 칸이 본표로 계산되지 않을 때 칸 주석 */
+export const DA_LTM_NO_STRUCT = "LTM 감가상각비 구성 분기 없음(현금흐름표 계산 구조 누적 기간 없음·조정 금액 미확인 — 태그 값으로 대체하지 않음)";
+
+/** 파생 열(누적 차·Q4·LTM)의 구성 공시끼리 감가상각 줄 기준이 다를 때 칸 주석 */
+export const DA_BASIS_MIX = "구성 공시 간 감가상각 줄 기준 혼합 — 감가상각비 공란(한쪽은 포함, 다른 쪽은 제외한 줄이 있어 차감하면 기준이 섞임)";
+
+/**
+ * 파생 열 구성 항목(본표 판독값)끼리 감가상각 줄 기준이 섞였는가 — edgar-cf-structure.ts 가 판정한 혼합 쌍(daBasisMix) 중 하나라도
+ * 구성 항목의 판독 구조 쌍이면 true. 단일 항목(분기 3개월 값·사업연도 값)은 그 공시 기준 그대로라 false.
+ */
+export function daBasisMixed(facts: CompanyFacts, parts: (FactUnitEntry | null | undefined)[]): boolean {
+  const mix = facts.daBasisMix;
+  if (!mix?.length) return false;
+  const bs = [...new Set(parts.map((p) => p?.basis).filter((b): b is string => !!b))];
+  for (let i = 0; i < bs.length; i++)
+    for (let j = i + 1; j < bs.length; j++) if (mix.includes([bs[i], bs[j]].sort().join("|"))) return true;
+  return false;
+}
+
+/**
+ * **분기·LTM 칸 감가상각비**(2026-09-27) — 본표 판독 회사(daStructConcept ≠ null)는 본표 값만 쓴다. 본표 값이 없으면 공란 —
+ * 연간은 현금흐름표 구조인데 분기만 태그 규칙으로 대체되던 결함(PEP·XOM·AVGO·NFLX 분기)의 재발 방지. 그 밖의 회사는 pickDa.
+ * 연간 칸은 pickDa 그대로(구조로 덮이지 않는 옛 연도는 태그 규칙 — edgar-cf-structure.ts 주석).
+ */
+export function pickDaPeriod(
+  structured: boolean,
+  totals: (number | null | undefined)[],
+  depreciation: number | null | undefined,
+  intangible: number | null | undefined,
+  cashFlow: number | null | undefined,
+): number | null {
+  if (structured) return cashFlow ?? null;
+  return pickDa(totals, depreciation, intangible, cashFlow);
+}
+
 /** 연도별 감가상각비 (pickDa 규칙). 본표 판독이 원본 조회 실패로 빠졌으면 비운다(sec-unavailable.ts) */
 export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
   const out = new Map<number, number>();
@@ -456,7 +505,8 @@ export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
     return new Map<number, number>();
   })();
   const am = annualByYear(entriesOf(facts, DA_INTANGIBLE));
-  const cf = annualByYear(entriesOf(facts, SYN_DA_CF));
+  const sc = daStructConcept(facts);
+  const cf = sc ? annualByYear(entriesOf(facts, sc)) : new Map<number, number>();
   const years = new Set<number>([...totals.flatMap((m) => [...m.keys()]), ...dep.keys(), ...am.keys(), ...cf.keys()]);
   for (const y of years) {
     const v = pickDa(totals.map((m) => m.get(y)), dep.get(y), am.get(y), cf.get(y));
@@ -465,13 +515,29 @@ export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
   return out;
 }
 
+/**
+ * LTM 감가상각비와 공란 사유 — 모든 화면(하이라이트·재무분석·손익계산서·현금흐름표·TTM·개요)이 이것(또는 daTtm)만 쓴다.
+ * 본표 판독 회사는 본표 LTM(사업연도 + 당기 누적 − 전년 동기)만, 구성 공시끼리 감가상각 줄 기준이 섞이면 공란 + DA_BASIS_MIX.
+ */
+export function daTtmCell(facts: CompanyFacts): { value: number | null; reason: string | null } {
+  if (unavailableOn(facts, "da")) return { value: null, reason: "원본 조회 실패 — 감가상각비 공란" };
+  const sc = daStructConcept(facts);
+  if (!sc) {
+    const v = daTtm(facts);
+    return { value: v, reason: v == null ? "LTM 감가상각비 구성 분기 없음" : null };
+  }
+  const r = ltmFlowOf(entriesOf(facts, sc), ltmAnchor(facts));
+  if (r.value == null) return { value: null, reason: DA_LTM_NO_STRUCT };
+  if (daBasisMixed(facts, [r.fy, r.cur, r.prior])) return { value: null, reason: DA_BASIS_MIX };
+  return { value: r.value, reason: null };
+}
+
 /** 최근 12개월 감가상각비 (pickDa 규칙). 본표 판독이 원본 조회 실패로 빠졌으면 null(sec-unavailable.ts) */
 export function daTtm(facts: CompanyFacts): number | null {
   if (unavailableOn(facts, "da")) return null;
   const anchor = ltmAnchor(facts);
-  // 현금흐름표 본표 감가상각 줄(edgar-cf-structure.ts)이 LTM 으로 있으면 그 값
-  const cfv = ttmOf(entriesOf(facts, SYN_DA_CF), anchor);
-  if (cfv != null) return cfv;
+  // 본표 판독 회사(현금흐름표 계산 구조·콘텐츠 상각)는 본표 LTM 만 — 구성 누적이 없거나 기준 혼합이면 공란(태그 규칙으로 대체하지 않음)
+  if (daStructConcept(facts)) return daTtmCell(facts).value;
   // 최근 사업연도엔 있는데 분기에 없는 감가상각 합계 태그가 있으면, 나머지 태그 중 최댓값은 부분값일 수 있다 — 공란(그림자 채우기
   // 금지). 합계 태그가 하나도 LTM 이 없을 때(구성항목 합)는 감가상각·무형상각 태그의 공백도 같은 이유로 공란
   const gap = (cs: string[]) => cs.some((c) => ltmGapConcept(facts, entriesOf(facts, c)));
@@ -488,7 +554,6 @@ export function daTtm(facts: CompanyFacts): number | null {
     DA_TOTAL.map((c) => ttmOf(entriesOf(facts, c), anchor)),
     dep,
     ttmOf(entriesOf(facts, DA_INTANGIBLE), anchor),
-    ttmOf(entriesOf(facts, SYN_DA_CF), anchor),
   );
 }
 

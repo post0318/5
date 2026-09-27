@@ -24,7 +24,7 @@ import {
 } from "../types";
 import { type FactEntry, ttmFlow } from "./edgar-fundamentals";
 import { dropRoundedRetags, entriesOf, instantOn, ltmAnchor, splitFactorsByYear, fiscalYearOf } from "./edgar-series";
-import { buildEvResolver, daAnnualByYear, daTtm, opIncomeLtm, SYN_OP_INCOME, withOpIncome, type EvContext } from "./edgar-ev";
+import { buildEvResolver, daAnnualByYear, daTtm, daTtmCell, opIncomeLtm, SYN_OP_INCOME, withOpIncome, type EvContext } from "./edgar-ev";
 import { loadCaptiveDebt } from "./edgar-captive";
 import { buildShareResolver } from "./edgar-shares";
 import { withFilingGapFill } from "./edgar-gapfill";
@@ -43,7 +43,7 @@ import { loadUsRevenue, revLtm, revQuarterAt, type RevCol, type UsRevenue } from
 import { loadClassAFactsMarked } from "./class-facts-loader";
 import { dartAdrFinancials, dartAdrOf, dartAdrTtm } from "./dart-adr";
 import type { ClassAFacts } from "./edgar-classfacts";
-import { fetchFailureReason, unavailableOn, type SourceFeature, type SourceUnavailableMap } from "./sec-unavailable";
+import { fetchFailureReason, type SourceFeature, type SourceUnavailableMap } from "./sec-unavailable";
 
 const UA =
   process.env.SEC_USER_AGENT ??
@@ -352,6 +352,8 @@ export interface FactUnitEntry {
    * 이자비용 (− 지분법), "structure" = 손익계산서 계산 구조로 영업외 항목 차감, "fin" = 금융업 세전이익. 화면 라벨용(G6)
    */
   synBasis?: "pretax" | "ebit" | "structure" | "fin";
+  /** 감가상각비 본표 판독값(edgar-cf-structure.ts SYN_DA_CF)의 판독 구조 식별자(그 값을 낸 공시 접수번호) — 파생 열 기준 혼합 판정 */
+  basis?: string;
 }
 export interface CompanyFacts {
   entityName: string;
@@ -373,6 +375,8 @@ export interface CompanyFacts {
   adrRatio?: number;
   /** 감가상각비에 콘텐츠 상각을 포함했는지(edgar-content.ts) */
   contentAmortization?: boolean;
+  /** 감가상각 줄 기준이 서로 다른 판독 구조 쌍("접수번호A|접수번호B", 정렬) — 두 구조의 값을 빼서 만든 열(누적 차·Q4·LTM)은 공란(edgar-cf-structure.ts) */
+  daBasisMix?: string[];
   /** 총수익에서 지분법·기타수익을 분리했는지(edgar-revenue-dims.ts) */
   nonopInRevenues?: boolean;
   /** 은행·증권·보험(SIC 6000~6499) — 이자가 본업이라 영업이익 근사에 이자를 더하지 않는다. 리츠·부동산(65xx·67xx)은
@@ -466,7 +470,7 @@ function buildUsTtm(
     annual: daLatestYear != null ? (daByYear.get(daLatestYear) ?? null) : null,
     ttm: daTtm(facts),
   };
-  if (da.ttm == null) reasons.daTtm = unavailableOn(facts, "da") ? "원본 조회 실패 — 감가상각비 공란" : "LTM 감가상각비 구성 분기 없음";
+  if (da.ttm == null) reasons.daTtm = daTtmCell(facts).reason ?? "LTM 감가상각비 구성 분기 없음";
   const dps = ttmFlow(
     factEntries(facts, "us-gaap", ["CommonStockDividendsPerShareDeclared"], ["USD/shares"]),
     anchor,

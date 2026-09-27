@@ -286,16 +286,37 @@ export function directQuarterValue(entries: FactUnitEntry[], col: QuarterCol): n
   return direct ? direct.val : null;
 }
 
-export function singleQuarter(
+/** 분기 누적 차에 필요한 직전 누적이 없음(같은 사업연도의 직전 분기 누적 미공시·열 누락) — 칸 주석 */
+export const QUARTER_NO_PREV_YTD = "분기 누적 차에 필요한 직전 누적 없음 — 누적값을 분기로 쓰지 않음";
+
+export interface QuarterParts {
+  value: number | null;
+  /** 값을 만든 항목(직접 단일분기 1개, 누적 차 2개 — 누적 · 직전 누적) */
+  parts: FactUnitEntry[];
+  /** value 가 null 인 이유(값이 원래 없으면 null) */
+  reason: string | null;
+}
+
+/**
+ * 단일 분기 값과 구성 항목: 직접 태깅(≈90일) → 없으면 당기 YTD − 직전분기 YTD(같은 사업연도).
+ * 직전 누적이 없거나 사업연도가 다르면(열 누락 — ORCL 현금흐름표 2026-09-27) 누적값을 분기로 쓰지 않는다: 당기 누적이 3개월
+ * 이하(사업연도 첫 분기)일 때만 그 값, 아니면 공란 + QUARTER_NO_PREV_YTD. 예전엔 사업연도가 바뀌면 누적값(6개월)을 그대로 냈다.
+ */
+export function singleQuarterParts(
   entries: FactUnitEntry[],
   col: QuarterCol,
   prevCol: QuarterCol | undefined,
-): number | null {
-  const direct = directQuarterValue(entries, col);
-  if (direct != null) return direct;
+): QuarterParts {
   const interim = entries.filter(
     (e) => INTERIM_FORMS.includes(e.form) && e.fp !== "FY" && e.start,
   );
+  const direct = interim.find(
+    (e) =>
+      Math.abs(days(e.start!, e.end)) >= 55 &&
+      Math.abs(days(e.start!, e.end)) <= 100 &&
+      Math.abs(days(col.end, e.end)) <= 6,
+  );
+  if (direct) return { value: direct.val, parts: [direct], reason: null };
   // 2) YTD 차감
   const ytd = (end: string) =>
     interim
@@ -303,19 +324,27 @@ export function singleQuarter(
       .sort((a, b) => Math.abs(days(a.start!, a.end)) - Math.abs(days(b.start!, b.end)))
       .pop(); // 가장 긴 기간 = YTD
   const cur = ytd(col.end);
-  if (!cur) return null;
+  if (!cur) return { value: null, parts: [], reason: null };
+  const firstQuarter = Math.abs(days(cur.start!, cur.end)) <= 100;
   if (!prevCol) {
     // 회계연도 첫 분기로 추정 (start 가 fy 시작 근처면 YTD == 단일분기)
-    return Math.abs(days(col.fyStartApprox, cur.start!)) <= 20 &&
-      Math.abs(days(cur.start!, cur.end)) <= 100
-      ? cur.val
-      : null;
+    return Math.abs(days(col.fyStartApprox, cur.start!)) <= 20 && firstQuarter
+      ? { value: cur.val, parts: [cur], reason: null }
+      : { value: null, parts: [], reason: QUARTER_NO_PREV_YTD };
   }
   const prev = ytd(prevCol.end);
-  if (!prev) return null;
-  // 서로 같은 회계연도인지 (prev.start ≈ cur.start)
-  if (Math.abs(days(cur.start!, prev.start!)) > 20) return cur.val; // 회계연도 바뀜 → cur 이 곧 단일분기 성격
-  return cur.val - prev.val;
+  // 서로 같은 회계연도인지 (prev.start ≈ cur.start) — 다르면 cur 가 사업연도 첫 분기(3개월)일 때만 그 값
+  if (!prev || Math.abs(days(cur.start!, prev.start!)) > 20)
+    return firstQuarter ? { value: cur.val, parts: [cur], reason: null } : { value: null, parts: [], reason: QUARTER_NO_PREV_YTD };
+  return { value: cur.val - prev.val, parts: [cur, prev], reason: null };
+}
+
+export function singleQuarter(
+  entries: FactUnitEntry[],
+  col: QuarterCol,
+  prevCol: QuarterCol | undefined,
+): number | null {
+  return singleQuarterParts(entries, col, prevCol).value;
 }
 
 /**

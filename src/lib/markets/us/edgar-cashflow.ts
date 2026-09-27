@@ -2,8 +2,9 @@ import "server-only";
 import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { recentQuarters, singleQuarter, fiscalYearOf, ltmAnchor, ltmFlowOf } from "./edgar-series";
-import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa, SYN_DA_CF } from "./edgar-ev";
+import { recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
+import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, pickDa, pickDaPeriod } from "./edgar-ev";
+import { revQuarterLabel } from "./fin-revenue";
 import { isFinancialCompany } from "./edgar-financial";
 
 /**
@@ -212,22 +213,46 @@ export function buildUsCashFlow(
   let valOf: (concepts: string[]) => Record<string, number | null>;
   // LTM 칸 주석(그림자 채우기 금지, 2026-09-27) — 줄별 LTM 공란 사유
   const ltmWhy = new WeakMap<Record<string, number | null>, string>();
+  /** 분기 칸 주석(값이 빈 칸의 사유 — 누적 차에 필요한 직전 누적 없음 등) */
+  const qWhy = new WeakMap<Record<string, number | null>, Record<string, string>>();
   const anchor = ltmAnchor(facts);
+  /** 분기 모드 — 열별 값과 구성 항목(감가상각비 기준 혼합 판정용) */
+  let quarterPartsOf: ((concepts: string[]) => Record<string, QuarterParts>) | null = null;
 
   if (mode === "quarter") {
-    const chron = [...recentQuarters(opEntries, 6)].reverse(); // 6개 (0번은 prev 전용)
+    // 분기 열 = 손익계산서와 같은 달력(재무 5층 구조 매출 지표의 분기 열, fin-revenue.ts)에서 Q4 를 뺀 열(현금흐름표는 누적 공시라
+    // Q4 열 없음). 예전엔 companyfacts 의 fy·fp 라벨(공시의 회계연도 초점 — 비교 기간에도 같은 라벨이 붙는다)로 열을 묶어 ORCL 은
+    // 2025-08-31 분기가 빠졌고, 누적 차에 쓸 직전 열이 전 사업연도가 되어 6개월 누적(3,881M)이 2026 Q2 값으로 나왔다(2026-09-27).
+    // fin 분기 열이 없는 회사(20-F 등)만 종전 라벨
+    const finQ = (facts.revenue?.quarters ?? []).filter((c) => c.fq !== 4);
+    const chron: QuarterCol[] = finQ.length
+      ? finQ.slice(-6).map((c) => ({ label: revQuarterLabel(c), end: c.end, fyStartApprox: shiftYear(c.end, -1) }))
+      : [...recentQuarters(opEntries, 6)].reverse(); // 6개 (0번은 prev 전용)
     periods = chron.slice(-5).map((q) => ({
       label: q.label,
       fiscalYear: Number(q.label.slice(0, 4)),
       fiscalQuarter: Number(q.label.slice(-1)) || null,
       endDate: q.end,
     }));
-    valOf = (concepts) => {
+    const firstIsPrevOnly = chron.length > 5;
+    quarterPartsOf = (concepts) => {
       const e = firstConcept(facts, concepts);
-      const out: Record<string, number | null> = {};
+      const out: Record<string, QuarterParts> = {};
       chron.forEach((q, i) => {
-        if (i > 0) out[q.label] = singleQuarter(e, q, chron[i - 1]);
+        if (i === 0 && firstIsPrevOnly) return;
+        out[q.label] = singleQuarterParts(e, q, chron[i - 1]);
       });
+      return out;
+    };
+    valOf = (concepts) => {
+      const parts = quarterPartsOf!(concepts);
+      const out: Record<string, number | null> = {};
+      const why: Record<string, string> = {};
+      for (const [l, r] of Object.entries(parts)) {
+        out[l] = r.value;
+        if (r.value == null && r.reason) why[l] = r.reason;
+      }
+      if (Object.keys(why).length) qWhy.set(out, why);
       return out;
     };
   } else {
@@ -268,7 +293,10 @@ export function buildUsCashFlow(
   /** 줄의 LTM 칸 주석 — 값이 빈 칸만 */
   const ltmCell = (v: Record<string, number | null>): { cellNotes?: Record<string, string> } => {
     const w = ltmWhy.get(v);
-    return w && labels.includes(LTM) && v[LTM] == null ? { cellNotes: { [LTM]: w } } : {};
+    const m: Record<string, string> = {};
+    if (w && labels.includes(LTM) && v[LTM] == null) m[LTM] = w;
+    for (const [l, t] of Object.entries(qWhy.get(v) ?? {})) if (v[l] == null && !m[l]) m[l] = t;
+    return Object.keys(m).length ? { cellNotes: m } : {};
   };
   // 최근 연도엔 있는데 LTM 만 빈 값(분기 공시에 없음·Yahoo 분기 미매핑)은 합산·차감에서 0 으로 보지 않는다 — 부분 합·"기타"
   // 잔여가 부푸는 것 방지(20-F 뿐 아니라 모든 회사 — 그림자 채우기 금지, 2026-09-27)
@@ -306,7 +334,17 @@ export function buildUsCashFlow(
   };
 
   const items: FinancialLineItem[] = [];
+  /** 줄 칸 주석 — LTM 사유(ltmCell) + 분기 칸 사유(cellWhy, 값이 빈 칸만) */
+  const cellsOf = (v: Record<string, number | null>): { cellNotes?: Record<string, string> } => {
+    const m: Record<string, string> = { ...(ltmCell(v).cellNotes ?? {}) };
+    for (const [l, t] of Object.entries(cellWhy.get(v) ?? {})) if (v[l] == null && !m[l]) m[l] = t;
+    return Object.keys(m).length ? { cellNotes: m } : {};
+  };
   const daOut = unavailableOn(facts, "da");
+  /** 본표 판독 회사인데 본표 값이 없어 감가상각비를 비운 칸(분기·LTM) — 같은 구간의 잔여("기타") 줄도 함께 비운다 */
+  const daBlank = new Set<string>();
+  /** 분기 칸 주석(감가상각비 공란 사유) */
+  const cellWhy = new WeakMap<Record<string, number | null>, Record<string, string>>();
 
   for (const block of BLOCKS) {
     const totalVals = valOf(block.total.concepts);
@@ -319,16 +357,44 @@ export function buildUsCashFlow(
         const totals = DA_TOTAL.map((c) => valOf([c]));
         const dep = valOf(DA_DEPRECIATION);
         const am = valOf([DA_INTANGIBLE]);
-        const cf = valOf([SYN_DA_CF]);
+        // 본표 계열(현금흐름표 계산 구조·NFLX 콘텐츠 상각 포함 — edgar-ev.ts daStructConcept). 분기·LTM 칸은 본표 값만(없으면 공란 + 사유)
+        const sc = daStructConcept(facts);
+        const cf = sc ? valOf([sc]) : blank();
         v = {};
         // 본표 판독이 원본 조회 실패로 빠졌으면 공란 — 태그 규칙 값으로 대체하지 않는다(sec-unavailable.ts)
-        for (const l of labels) v[l] = daOut ? null : pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
+        for (const l of labels) {
+          const strict = !!sc && (mode === "quarter" || l === LTM);
+          v[l] = daOut ? null : strict ? pickDaPeriod(true, [], null, null, cf[l]) : pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
+          if (!daOut && strict && v[l] == null) {
+            daBlank.add(l);
+            if (l === LTM) ltmWhy.set(v, DA_LTM_NO_STRUCT);
+            else cellWhy.set(v, { ...(cellWhy.get(v) ?? {}), [l]: qWhy.get(cf)?.[l] ?? DA_QUARTER_NO_STRUCT });
+          }
+        }
+        if (sc && !daOut) {
+          // 파생 열(누적 차·LTM)의 구성 공시끼리 감가상각 줄 기준이 다르면 공란 + 사유(edgar-ev.ts daBasisMixed). 분기 3개월 값은 그대로
+          if (quarterPartsOf) {
+            for (const [l, r] of Object.entries(quarterPartsOf([sc])))
+              if (v[l] != null && daBasisMixed(facts, r.parts)) {
+                v[l] = null;
+                daBlank.add(l);
+                cellWhy.set(v, { ...(cellWhy.get(v) ?? {}), [l]: DA_BASIS_MIX });
+              }
+          } else if (labels.includes(LTM)) {
+            const c = daTtmCell(facts);
+            v[LTM] = c.value;
+            if (c.value == null) {
+              daBlank.add(LTM);
+              if (c.reason) ltmWhy.set(v, c.reason);
+            }
+          }
+        }
         // 최근 연도엔 있는데 LTM 에 없는 합계 태그가 있으면(구성항목 합이면 구성 태그도) 나머지로 낸 값은 부분값 — 공란
         if (labels.includes(LTM) && !daOut && cf[LTM] == null) {
           const totalLtm = totals.some((t) => t[LTM] != null);
           if (totals.some(ltmGap) || (!totalLtm && (ltmGap(dep) || ltmGap(am)))) v[LTM] = null;
         }
-        if (labels.includes(LTM) && !daOut && v[LTM] == null && v[prevLbl] != null) ltmWhy.set(v, "LTM 감가상각비 구성 분기 없음");
+        if (labels.includes(LTM) && !daOut && v[LTM] == null && v[prevLbl] != null && !ltmWhy.get(v)) ltmWhy.set(v, "LTM 감가상각비 구성 분기 없음");
       } else if (line.combine) v = combineVals(line.combine);
       else v = valOf(line.concepts ?? []);
       if (line.fallbackCombine && labels.some((l) => v[l] == null)) {
@@ -338,8 +404,10 @@ export function buildUsCashFlow(
       }
       if (line.negate) {
         const why = ltmWhy.get(v);
+        const qw = qWhy.get(v);
         v = applyNegate(v);
         if (why) ltmWhy.set(v, why);
+        if (qw) qWhy.set(v, qw);
       }
       resolved[line.label] = v;
     }
@@ -370,9 +438,14 @@ export function buildUsCashFlow(
         for (const lbl of labels) {
           const tot = totalVals[lbl];
           // 감가상각비가 공란(원본 조회 실패)인 구간의 잔여 줄은 감가상각비를 떠안아 다른 숫자가 되므로 함께 공란
-          if (tot == null || (daOut && block.lines.some((l) => l.pickDa))) {
+          if (tot == null || ((daOut || daBlank.has(lbl)) && block.lines.some((l) => l.pickDa))) {
             values[lbl] = null;
             if (lbl === LTM && tot == null && ltmWhy.get(totalVals)) plugWhyNote = ltmWhy.get(totalVals)!;
+            else if (tot != null && daBlank.has(lbl)) {
+              const t = "감가상각비 공란 구간 — 잔여 줄이 감가상각비를 떠안지 않게 함께 공란";
+              if (lbl === LTM) plugWhyNote = t;
+              else cellWhy.set(values, { ...(cellWhy.get(values) ?? {}), [lbl]: t });
+            }
             continue;
           }
           let mapped = 0;
@@ -400,7 +473,7 @@ export function buildUsCashFlow(
         isSubtotal: line.kind === "subtotal",
         isHighlight: false,
         values,
-        ...ltmCell(values),
+        ...cellsOf(values),
       });
     }
     items.push({
