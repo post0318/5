@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchShinhanSchedule } from "./shinhan-schedule";
 import {
   BANK_BOJ,
   BANK_BOK,
@@ -119,6 +120,10 @@ const INPUT_DATA_DESC = `# 입력 데이터
 - economyEvidence: 관세·통상/중국 경기/고용/브라질 국채/금/원달러 환율/
   구리 등 산업금속/BDI·해운운임 주제로 이미 수집된 증권사 리포트·뉴스
   근거(근거 있는 주제만 포함). economySummary 를 쓸 때 최우선으로 활용한다.
+- nextWeekSchedule: 신한투자증권 「이슈 및 섹터 스케줄」에서 가져온 nextWeek 기간의
+  거시·시장 일정(해외/국내 지표·이슈, 없을 수 있음). calendar 를 쓸 때 **반드시
+  참조**하는 1차 후보 목록이다 — 다만 그대로 옮기지 말고 웹검색으로 날짜가 확인되는
+  항목만 채택한다(검증). 요일·시차(현지시간)가 애매하면 뺀다.
 - sectors: 이번 주 한국·미국·일본 증시의 상승/하락 상위 섹터(등락률은 코드가
   이미 계산해 확정). 왜 그 섹터가 그렇게 움직였는지는 안 채워져 있다 —
   네가 웹검색으로 원인을 찾아 채운다.
@@ -175,7 +180,8 @@ ${INPUT_DATA_DESC}
    전혀 없으면 그 줄은 통째로 뺀다(세 줄을 억지로 채우지 마라).
    policyEvidence 에도 없고 웹검색으로도 확인 안 되는 은행만 아는 범위
    까지 쓰고, 셋 다 없으면 null 로 남긴다.
-4. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. "관련
+4. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. 입력의
+   nextWeekSchedule(신한투자증권 스케줄)을 반드시 먼저 참조하고, 웹검색으로 확인되는 것만 담는다. "관련
    기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
    예정된 이벤트를 날짜별로 확인해서 적는다. 대상: 중앙은행 회의·주요
    경제지표 발표일·옵션선물 동시만기일 같은 거시·시장 이벤트 **더하여
@@ -1020,7 +1026,8 @@ export async function generateWeeklyComments(
   // 로직이 있는 이유)의 실패율을 더 키운다(실측 — sectors 추가 이후 "다음 주
   // 일정"이 옛 기사-표 폴백으로 자주 떨어짐). 매크로 콜에는 sectors 를 뺀
   // 별도 payload 를 준다.
-  const macroJson = JSON.stringify({ ...payload, sectors: undefined });
+  const nextWeekSchedule = await fetchShinhanSchedule(payload.nextWeek.start, payload.nextWeek.end);
+  const macroJson = JSON.stringify({ ...payload, sectors: undefined, nextWeekSchedule });
 
   const [macroCall, commentCall] = await Promise.all([
     callWithGroundingRetry(MACRO_PROMPT, macroJson, "매크로", modelOverride),
