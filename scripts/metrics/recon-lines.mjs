@@ -594,41 +594,51 @@ for (const [sym, r] of latest) {
           const notes = yrs.length >= 3 ? poolArr.filter((f) => !faceIds.has(f.k) && POOL_OK.test(f.k) && !POOL_NO.test(f.k.replace(/\[.*$/, "")) && yrs.every((y) => f.vals.has(y.end)) && yrs.filter((y) => Math.abs(f.vals.get(y.end)) > tol).length >= 2) : [];
           const adjs = [{ t: [], v: () => 0 }];
           for (const f of notes) for (const sg of [1, -1]) adjs.push({ t: [[sg, f.k]], v: (y) => sg * f.vals.get(y.end) });
-          // 기본 배분(주석 이동 없음) → 실패 시 주석 항목 하나를 칸 a 에서 빼 칸 b 에 더하는 이동(FactSet 이 한 줄의 일부를 다른 칸으로 옮김)
-          const solveWith = (vals, trialsMul) => {
-            const go = (ti, used) => {
-              if (ti === tg.length) return used === full ? [] : null;
-              const val = vals[ti];
-              const k0 = Math.round(val(y0) / 1e6);
+          // 칸별 후보 → 조합(2026-09-27, 이동 2개까지). 칸마다 "본표 줄 부분집합 = 인포맥스 칸 값 ± 주석 항목 0~1개"가 모든 해에서 맞는 후보를 모은 뒤,
+          // 줄이 겹치지 않고 전부 쓰이며 주석이 한 칸 +·다른 칸 − 로 짝지어지는(이동) 조합을 찾는다. 이동은 2개까지. 칸별 우연 일치 기대 건수 0.01 미만
+          const adjOpts = [{ k: null, sg: 0, v: () => 0 }];
+          if (notes.length <= 400) for (const f of notes) for (const sg of [1, -1]) adjOpts.push({ k: f.k, sg, v: (y) => sg * f.vals.get(y.end) });
+          const opts = tg.map(([c, val]) => {
+            const out = [];
+            for (const ad of adjOpts) {
+              const want0 = val(y0) + ad.v(y0), k0 = Math.round(want0 / 1e6);
               for (let k = k0 - 1; k <= k0 + 1; k++) for (const mask of bucket.get(k) ?? []) {
-                if (mask & used) continue;
-                if (!yrs.every((y) => Math.abs(sumAt(mask, y) - val(y)) <= tol * (1 + popc(mask) / 2))) continue;
-                let pr = trialsMul * (1 << N);
-                for (const y of yrs) { const span = lines.reduce((t2, l) => t2 + Math.abs(l.amt[y.year]), 0) + Math.abs(val(y)); pr *= Math.min(1, (2 * tol * (1 + popc(mask) / 2)) / Math.max(span, 1)); }
-                if (pr >= 0.01) continue;
-                const rest = go(ti + 1, used | mask);
-                if (rest) return [{ c: tg[ti][0], mask }, ...rest];
+                if (!yrs.every((y) => Math.abs(sumAt(mask, y) - (val(y) + ad.v(y))) <= tol * (1 + popc(mask) / 2))) continue;
+                let pr = adjOpts.length * (1 << N);
+                for (const y of yrs) { const span = lines.reduce((t2, l) => t2 + Math.abs(l.amt[y.year]), 0) + Math.abs(val(y)) + Math.abs(ad.v(y)); pr *= Math.min(1, (2 * tol * (1 + popc(mask) / 2)) / Math.max(span, 1)); }
+                if (ad.k && pr >= 0.01) continue;
+                if (!ad.k && pr * (adjOpts.length > 1 ? 1 : 1) >= 0.01 * adjOpts.length) continue;
+                out.push({ c, mask, ad });
+                if (out.length > 200) break;
               }
-              return null;
-            };
-            return go(0, 0);
-          };
-          let sol = solveWith(tg.map(([, v]) => v), 1), move = null;
-          if (!sol && notes.length && notes.length <= 400) {
-            const trials = notes.length * 2 * tg.length * (tg.length - 1);
-            outer: for (const f of notes) for (let a = 0; a < tg.length; a++) for (let b = 0; b < tg.length; b++) {
-              if (a === b) continue;
-              const nv = (y) => f.vals.get(y.end);
-              const vals = tg.map(([, v], i) => (i === a ? (y) => v(y) + nv(y) : i === b ? (y) => v(y) - nv(y) : v));
-              const r = solveWith(vals, trials);
-              if (r) { sol = r; move = { k: f.k, a: tg[a][0], b: tg[b][0] }; break outer; }
             }
-          }
+            return out.sort((a, b) => (a.ad.k ? 1 : 0) - (b.ad.k ? 1 : 0));
+          });
+          let sol = null;
+          const go = (ti, used, bal, pick) => {
+            if (sol) return;
+            if (ti === tg.length) {
+              if (used === full && [...bal.values()].every((v) => v === 0) && bal.size <= 2) sol = pick.slice();
+              return;
+            }
+            for (const o of opts[ti]) {
+              if (o.mask & used) continue;
+              const nb = new Map(bal);
+              if (o.ad.k) { nb.set(o.ad.k, (nb.get(o.ad.k) ?? 0) + o.ad.sg); if (nb.get(o.ad.k) === 0) nb.set(o.ad.k, 0); }
+              const open = [...nb.entries()].filter(([, v]) => v !== 0).length;
+              if (nb.size > 2 || open > tg.length - ti - 1) continue;
+              pick.push(o); go(ti + 1, used | o.mask, nb, pick); pick.pop();
+              if (sol) return;
+            }
+          };
+          if (opts.every((o) => o.length)) go(0, 0, new Map(), []);
+          const moves = sol ? [...new Set(sol.filter((o) => o.ad.k).map((o) => o.ad.k))].map((k) => ({ k, from: sol.find((o) => o.ad.k === k && o.ad.sg > 0).c, to: sol.find((o) => o.ad.k === k && o.ad.sg < 0).c })) : [];
           if (sol) {
             const nm = { cogs: "상각비포함 원가", sga: "판관비(연구개발비 포함)", other: "기타영업비용", unusual: "비경상비용", nonop: "영업외손익(비용 부호)", interest: "이자비용", tax: "법인세", equity: "관계기업이익(비용 부호)", afterTax: "기타세후조정(비용 부호)", disc: "중단사업이익(비용 부호)", minority: "비지배주주귀속분" };
             const names = (mask) => lines.filter((_, i) => mask & (1 << i)).map((l) => l.label);
-            partition = [`원데이터 일치: 매출·${niIsCons ? "연결" : "지배주주"} 순이익 = SEC(모든 해)`, ...(move ? [`주석[${move.k.replace(/^us-gaap_/, "")}] 을 SEC ${nm[move.a]} 쪽 줄에서 인포맥스 ${nm[move.b]}(으)로 옮김`] : []),
-              ...sol.map((x) => `인포맥스 ${nm[x.c]}${move && x.c === move.a ? ` + 옮긴 주석` : move && x.c === move.b ? ` − 옮긴 주석` : ""} = SEC [${names(x.mask).join(" + ") || "없음"}]`)];
+            // 주석 부호: 칸 값 + 주석 = 본표 줄 합 → +칸(from)은 본표 줄에 주석 금액이 더 있고(인포맥스는 그 금액을 뺌), −칸(to)은 인포맥스가 그 금액을 더 담음
+            partition = [`원데이터 일치: 매출·${niIsCons ? "연결" : "지배주주"} 순이익 = SEC(모든 해)`, ...moves.map((m) => `주석[${m.k.replace(/^us-gaap_/, "")}] 금액을 SEC 쪽 ${nm[m.from]} 줄에서 인포맥스 ${nm[m.to]}(으)로 옮김`),
+              ...sol.map((x) => `인포맥스 ${nm[x.c]}${x.ad.k ? ` ${x.ad.sg > 0 ? "+" : "−"} 주석[${x.ad.k.replace(/^us-gaap_/, "")}]` : ""} = SEC [${names(x.mask).join(" + ") || "없음"}]`)];
             for (const l of lineTargets) if (l !== "rev") explain[l] = { ok: true, how: `인포맥스 세부 줄 배분(모든 해 정확): ${partition.join(" · ")}` };
           }
         }
