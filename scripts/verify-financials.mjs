@@ -188,7 +188,8 @@ const RECON = (() => {
     for (const r of JSON.parse(readFileSync(f.includes("/") || f.includes("\\") ? f : pathJoin(dir, f), "utf8")).results ?? []) {
       if (!r.verdict || !r.years) continue;
       const how = r.partition?.join(" · ") ?? Object.entries(r.explain ?? {}).filter(([, e]) => e.ok && !/외부 = SEC/.test(e.how ?? "")).map(([l, e]) => `${l}: ${e.how}`).join(" ; ");
-      for (const y of r.years) m.set(`${r.sym}|${r.src}|${r.metric}|${y}`, { ok: r.verdict !== "미결", how });
+      const ltmHow = r.ltm?.partition?.join(" · ") ?? how;
+      for (const y of r.years) m.set(`${r.sym}|${r.src}|${r.metric}|${y}`, { ok: r.yearOk ? !!r.yearOk[y] : r.verdict !== "미결", how: y === "LTM" ? ltmHow : how });
     }
   } catch { /* 결과 없음 — 분류 그대로 */ }
   return m;
