@@ -111,7 +111,7 @@ async function readTenK(cik, p) {
   const labels = labN ? labelsOf(await secRaw(`${base}/${labN}`)) : new Map();
   // 손익계산서 역할 — 영업이익(없으면 세전이익) 식이 있는 역할 중 상세·괄호 아닌 것
   const roles = calcRoles(await secRaw(`${base}/${calN}`)).filter((r) => !/Detail|Parenth|Segment|Table|Policies/i.test(r.role));
-  let face = [], root = null;
+  let face = [], root = null, facePre = null, preRoot = null, faceNi = null, niRoot = null;
   for (const r of roles) {
     const rt = r.arcs.find((a) => OPINC.test(a.fr))?.fr ?? r.arcs.find((a) => PRETAX.test(a.fr))?.fr;
     if (!rt) continue;
@@ -125,9 +125,14 @@ async function readTenK(cik, p) {
     };
     walk(rt, 1, 0);
     face = leaves; root = rt;
+    // 세전이익 식 전체의 말단 줄(영업이익 아래 이자·영업외·비경상 포함) — 인포맥스 세부 줄 배분용(인포맥스 세전이익 = SEC 세전이익이 기준)
+    const pt = r.arcs.find((a) => PRETAX.test(a.fr))?.fr;
+    const nr = r.arcs.find((a) => /^us-gaap_ProfitLoss$/.test(a.fr))?.fr ?? r.arcs.find((a) => /^(us-gaap_NetIncomeLoss|ifrs-full_ProfitLoss)$/.test(a.fr))?.fr;
+    if (nr) { const lv = []; const w3 = (id, w, depth) => { const ch = kids.get(id); if (!ch || depth > 8) { lv.push({ id, w }); return; } for (const a of ch) w3(a.to, w * a.w, depth + 1); }; w3(nr, 1, 0); faceNi = lv; niRoot = nr; }
+    if (pt) { const lv = []; const w2 = (id, w, depth) => { const ch = kids.get(id); if (!ch || depth > 6) { lv.push({ id, w }); return; } for (const a of ch) w2(a.to, w * a.w, depth + 1); }; w2(pt, 1, 0); facePre = lv; preRoot = pt; }
     break;
   }
-  return { ...p, facts, face, root, labels };
+  return { ...p, facts, face, root, labels, facePre, preRoot, faceNi, niRoot };
 }
 
 /** 10-Q 한 건 → Map(개념[차원] → Map("시작|끝" → 값)) — 기간(누적) 사실 전부 */
@@ -228,24 +233,36 @@ function sum4(qs) {
 }
 const IM = "https://globalmonitor.einfomax.co.kr";
 async function infomaxLines(sym) {
-  const post = (p, b) => fetch(IM + p, { method: "POST", headers: { "content-type": "application/json", referer: IM + "/sss.html" }, body: JSON.stringify(b), signal: AbortSignal.timeout(15_000) }).then((r) => r.json());
+  const post = (p, b) => fetch(IM + p, { method: "POST", headers: { "content-type": "application/json", referer: IM + "/sss.html" }, body: JSON.stringify(b), signal: AbortSignal.timeout(20_000) }).then((r) => r.json());
   const t = await post("/facset/tickerlist/usa", { ticker: sym });
   const code = t?._source?.["인포맥스코드"];
   if (!code || t._source["티커"]?.toUpperCase() !== sym) return null;
-  const k = await post("/facset/getKeyData", { param: code });
-  const M = (v) => (v != null ? Math.round(v * 1e6) : null);
-  const row = (r) => {
-    const rev = M(r["매출"]), gp = M(r["매출총이익"]), op = M(r["영업이익"]), sga = M(r["판관비"]);
-    // 인포맥스(FactSet) 영업이익 = 매출총이익 − 판관비 인지 칸마다 확인 — 아니면 그 차이가 "기타"
-    return { rev, gp, cogs: rev != null && gp != null ? rev - gp : null, sga, rnd: null, amort: null,
-      other: gp != null && sga != null && op != null ? gp - sga - op : null, op, da: M(r["ebitda"]) != null && op != null ? M(r["ebitda"]) - op : null };
+  // FactSet 손익계산서 세부 줄(오너 지시 2026-09-27 — sss.html 종목분석 > 재무제표, /facset/getStatementData). 금액 백만 달러 정수
+  const F = { frequency: "A", frequency2: "0", infocode: code, pagetype: "", type: "", curr: "" };
+  const pre = await post("/facset/getPreStatementData", { param: F });
+  const stmt = async (freq) => {
+    const d = await post("/facset/getStatementData", { param: { ...F, frequency: freq, frequency2: freq === "A" ? "0" : "", type: pre.step1["업종"], curr: "USD", pagetype: "손익계산서" }, type: { key: "IO", name: "손익계산서" } });
+    return Array.isArray(d) ? d : d?.data ?? [];
   };
+  const M = (v) => (v != null ? Math.round(v * 1e6) : null);
+  const row = (r) => ({
+    rev: M(r["매출액"]), cogs: M(r["상각비포함매출원가"]), gp: M(r["매출총이익"]), sga: M(r["판매비와관리비"]), rnd: null, amort: null,
+    other: M(r["기타영업비용"]) ?? 0, op: M(r["영업이익"]), da: M(r["감가및감모상각비"]),
+    // 영업이익 아래(비용 양수): 비경상비용, 영업외손익(수익이면 음수 비용), 이자비용, 관계기업이익(세전이익 밖 — 음수 비용)
+    below: { unusual: M(r["비경상비용"]) ?? 0, nonop: -(M(r["영업외손익"]) ?? 0), interest: M(r["이자비용"]) ?? 0, tax: M(r["법인세"]) ?? 0, equity: -(M(r["관계기업투자이익"]) ?? 0),
+      afterTax: -(M(r["기타세후조정"]) ?? 0), disc: -(M(r["중단사업이익"]) ?? 0), minority: M(r["비지배주주귀속분"]) ?? 0 },
+    pretax: M(r["세전이익"]), niCons: M(r["연결순이익"]), niParent: M(r["당기순이익"]),
+  });
   const out = new Map();
-  for (const r of k?.y_report ?? []) out.set(String(r["결산년월"]).slice(0, 10), row(r));
-  const qs = (k?.q_report ?? []).map((r) => ({ end: String(r["결산년월"]).slice(0, 10), ...row(r) })).sort((a, b) => a.end.localeCompare(b.end)).slice(-4);
-  const { ltm, ltmEnd } = sum4(qs);
-  // 인포맥스(FactSet) 판관비 = 판관비 + 연구개발비(AMAT·AMD 실측 — 연구개발비 줄이 따로 없음)
-  return { rows: out, ltm, ltmEnd, unit: 1e3, sgaIncludesRnd: true, lines: { sga: "판관비(연구개발비 포함)", other: "매출총이익 − 판관비 − 영업이익" } };
+  for (const r of await stmt("A")) out.set(String(r["결산년월"]).slice(0, 10), row(r));
+  const qs = (await stmt("Q")).map((r) => ({ end: String(r["결산년월"]).slice(0, 10), ...row(r) })).sort((a, b) => a.end.localeCompare(b.end)).slice(-4);
+  let { ltm, ltmEnd } = sum4(qs);
+  if (ltm && qs.length === 4) {
+    ltm.below = Object.fromEntries(["unusual", "nonop", "interest", "tax", "equity", "afterTax", "disc", "minority"].map((k) => [k, qs.reduce((t, q) => t + (q.below[k] ?? 0), 0)]));
+    for (const k of ["pretax", "niCons", "niParent"]) ltm[k] = qs.every((q) => q[k] != null) ? qs.reduce((t, q) => t + q[k], 0) : null;
+  }
+  // 인포맥스(FactSet) 판관비 = 판관비 + 연구개발비, 원가 = 감가·무형상각 포함 원가
+  return { rows: out, ltm, ltmEnd, unit: 1e6, sgaIncludesRnd: true, full: true, lines: { cogs: "상각비포함매출원가", sga: "판매비와관리비(연구개발비 포함)", other: "기타영업비용" } };
 }
 
 // ── 본표 줄 분류 ─────────────────────────────────────────────────────────
@@ -323,6 +340,25 @@ for (const [sym, r] of latest) {
   // 항목 풀 — 최신 10-K 우선(재작성), 없으면 이전 10-K
   const pool = new Map();
   for (const t of tenK) for (const [k, vs] of t.facts) { if (!pool.has(k)) pool.set(k, new Map()); for (const [y, v] of vs) if (!pool.get(k).has(y)) pool.get(k).set(y, v); }
+  // 옛 10-K 의 본표 줄 개념 이름이 다르면(MDLZ 이자·기타 영업외 줄) 최신 본표 줄에 이어 붙인다 — 같은 식의 말단 줄 목록이 같은 길이면 같은 위치,
+  // 아니면 같은 라벨. 최신 개념에 그 해 값이 없을 때만 채운다
+  for (const key of ["face", "facePre", "faceNi"]) {
+    const cur = tenK[0][key];
+    if (!cur) continue;
+    for (const old of tenK.slice(1)) {
+      const o = old[key];
+      if (!o) continue;
+      for (let j = 0; j < cur.length; j++) {
+        const lab = tenK[0].labels.get(cur[j].id);
+        const m = o.length === cur.length && o[j].w === cur[j].w ? o[j] : o.find((x) => old.labels.get(x.id) && old.labels.get(x.id) === lab);
+        if (!m || m.id === cur[j].id) continue;
+        const src = old.facts.get(m.id);
+        if (!src) continue;
+        if (!pool.has(cur[j].id)) pool.set(cur[j].id, new Map());
+        for (const [y, v] of src) if (!pool.get(cur[j].id).has(y)) pool.get(cur[j].id).set(y, v);
+      }
+    }
+  }
   // LTM — 최신 10-K 뒤 10-Q 가 있으면 줄마다 사업연도 + 당기 누적 − 전년 동기(10-Q 원본), 없으면 사업연도 값
   const fyEnd = tenK[0].report;
   let ltmEnd = fyEnd;
@@ -453,7 +489,7 @@ for (const [sym, r] of latest) {
       }
       // 본표 줄 배분(2026-09-27) — 외부는 SEC 본표 비용 줄을 자기 분류(원가·판관비·연구개발비·상각·영업이익 밖)로 다시 묶는다(인포맥스 V·XOM·UBER:
       // 원가 +차 = 기타 −차). 외부 분류마다 본표 줄 부분집합의 합이 **모든 해에서** 외부 값과 같은 배분을 찾는다 — 찾으면 그 배분이 구성 설명
-      let partition = null;
+      let partition = null, fsDiag = null;
       if (!Object.values(explain).every((x) => x.ok) && idOk && ["영업이익", "매출원가", "매출총이익"].includes(metric) && explain.rev?.ok) {
         // 매출 줄 제외 — 개념 이름 분류가 놓치는 매출 줄(MCD "Sales by Company-operated restaurants" 회사 고유 개념)은 가산(+) 줄 중 이름·라벨이 매출
         const isRev = (f) => catOf(f.id, labels.get(f.id)) === "rev" || (f.w > 0 && /Revenue|Sales|Fees|Rent/i.test(`${NM(f.id)} ${labels.get(f.id) ?? ""}`) && !/Gain|Loss|Cost|Expense/i.test(NM(f.id)));
@@ -528,8 +564,77 @@ for (const [sym, r] of latest) {
           }
         }
       }
+      // 인포맥스(FactSet) 세부 줄 배분 — SEC 세전이익 식의 비매출 말단 줄 전부를 FactSet 칸(원가·판관비·기타영업비용·비경상·영업외·이자·관계기업)에
+      // 빠짐없이 나눈다(세전이익이 같으면 남는 줄이 없어야 한다). 필요하면 주석 항목 1개로 한 줄을 두 칸에 쪼갠다. 우연 일치 기대 건수 0.01 미만
+      if (!partition && S.full && tenK[0].faceNi && ["영업이익", "매출원가", "매출총이익"].includes(metric) && explain.rev?.ok && yrs.every((y) => y.row.below)) {
+        const isRev = (f) => catOf(f.id, labels.get(f.id)) === "rev" || (f.w > 0 && /Revenue|Sales|Fees|Rent/i.test(`${NM(f.id)} ${labels.get(f.id) ?? ""}`) && !/Gain|Loss|Cost|Expense/i.test(NM(f.id)));
+        // 기준을 순이익으로 — SEC 는 일부 항목(MDLZ 지분법 투자 처분이익)을 세전이익 아래에 두고 FactSet 은 세전이익 안에 둔다
+        const preLeaves = tenK[0].faceNi;
+        const niIsCons = /ProfitLoss$/.test(tenK[0].niRoot);
+        const lines = preLeaves.filter((f) => !isRev(f)).map((f) => ({ id: f.id, label: labels.get(f.id) ?? NM(f.id), amt: Object.fromEntries(yrs.map((y) => [y.year, -f.w * (faceVal(f.id, y.end) ?? 0)])) }))
+          .filter((l) => yrs.some((y) => Math.abs(l.amt[y.year]) > 0.5));
+        const tg = [["cogs", (y) => y.row.cogs], ["sga", (y) => y.row.sga], ["other", (y) => y.row.other ?? 0], ["unusual", (y) => y.row.below.unusual], ["nonop", (y) => y.row.below.nonop],
+          ["interest", (y) => y.row.below.interest], ["tax", (y) => y.row.below.tax], ["equity", (y) => y.row.below.equity], ["afterTax", (y) => y.row.below.afterTax], ["disc", (y) => y.row.below.disc],
+          ...(niIsCons ? [] : [["minority", (y) => y.row.below.minority]])].filter(([, v]) => yrs.some((y) => Math.abs(v(y)) > tol) || true);
+        // 기준(원데이터 일치): SEC 순이익(식의 뿌리 — ProfitLoss 면 연결, NetIncomeLoss 면 지배주주) = FactSet 연결순이익/당기순이익
+        const secPre = (y) => faceVal(tenK[0].niRoot, y.end);
+        // FactSet 순이익은 중단사업이익을 뺀 값(AMD 2025 — SEC 4,335 = FactSet 4,269 + 중단사업 66)
+        const anchor = yrs.every((y) => { const f = (niIsCons ? y.row.niCons : y.row.niParent); return f != null && secPre(y) != null && Math.abs(secPre(y) - (f - y.row.below.disc)) <= tol * 3; });
+        const N = lines.length;
+        fsDiag = { anchor, lines: N };
+        if (anchor && N <= 22) {
+          const full = (1 << N) - 1, y0 = yrs[0];
+          const sums0 = new Float64Array(1 << N);
+          for (let m = 1; m < 1 << N; m++) { const b = 31 - Math.clz32(m & -m); sums0[m] = sums0[m & (m - 1)] + lines[b].amt[y0.year]; }
+          const bucket = new Map();
+          for (let m = 0; m < 1 << N; m++) { const k = Math.round(sums0[m] / 1e6); if (!bucket.has(k)) bucket.set(k, []); bucket.get(k).push(m); }
+          const sumAt = (mask, y) => { let t = 0; for (let i = 0; i < N; i++) if (mask & (1 << i)) t += lines[i].amt[y.year]; return t; };
+          const popc = (x) => { let n = 0; while (x) { x &= x - 1; n++; } return n; };
+          const faceIds = new Set(preLeaves.map((f) => f.id));
+          const notes = yrs.length >= 3 ? poolArr.filter((f) => !faceIds.has(f.k) && POOL_OK.test(f.k) && !POOL_NO.test(f.k.replace(/\[.*$/, "")) && yrs.every((y) => f.vals.has(y.end)) && yrs.filter((y) => Math.abs(f.vals.get(y.end)) > tol).length >= 2) : [];
+          const adjs = [{ t: [], v: () => 0 }];
+          for (const f of notes) for (const sg of [1, -1]) adjs.push({ t: [[sg, f.k]], v: (y) => sg * f.vals.get(y.end) });
+          // 기본 배분(주석 이동 없음) → 실패 시 주석 항목 하나를 칸 a 에서 빼 칸 b 에 더하는 이동(FactSet 이 한 줄의 일부를 다른 칸으로 옮김)
+          const solveWith = (vals, trialsMul) => {
+            const go = (ti, used) => {
+              if (ti === tg.length) return used === full ? [] : null;
+              const val = vals[ti];
+              const k0 = Math.round(val(y0) / 1e6);
+              for (let k = k0 - 1; k <= k0 + 1; k++) for (const mask of bucket.get(k) ?? []) {
+                if (mask & used) continue;
+                if (!yrs.every((y) => Math.abs(sumAt(mask, y) - val(y)) <= tol * (1 + popc(mask) / 2))) continue;
+                let pr = trialsMul * (1 << N);
+                for (const y of yrs) { const span = lines.reduce((t2, l) => t2 + Math.abs(l.amt[y.year]), 0) + Math.abs(val(y)); pr *= Math.min(1, (2 * tol * (1 + popc(mask) / 2)) / Math.max(span, 1)); }
+                if (pr >= 0.01) continue;
+                const rest = go(ti + 1, used | mask);
+                if (rest) return [{ c: tg[ti][0], mask }, ...rest];
+              }
+              return null;
+            };
+            return go(0, 0);
+          };
+          let sol = solveWith(tg.map(([, v]) => v), 1), move = null;
+          if (!sol && notes.length && notes.length <= 400) {
+            const trials = notes.length * 2 * tg.length * (tg.length - 1);
+            outer: for (const f of notes) for (let a = 0; a < tg.length; a++) for (let b = 0; b < tg.length; b++) {
+              if (a === b) continue;
+              const nv = (y) => f.vals.get(y.end);
+              const vals = tg.map(([, v], i) => (i === a ? (y) => v(y) + nv(y) : i === b ? (y) => v(y) - nv(y) : v));
+              const r = solveWith(vals, trials);
+              if (r) { sol = r; move = { k: f.k, a: tg[a][0], b: tg[b][0] }; break outer; }
+            }
+          }
+          if (sol) {
+            const nm = { cogs: "상각비포함 원가", sga: "판관비(연구개발비 포함)", other: "기타영업비용", unusual: "비경상비용", nonop: "영업외손익(비용 부호)", interest: "이자비용", tax: "법인세", equity: "관계기업이익(비용 부호)", afterTax: "기타세후조정(비용 부호)", disc: "중단사업이익(비용 부호)", minority: "비지배주주귀속분" };
+            const names = (mask) => lines.filter((_, i) => mask & (1 << i)).map((l) => l.label);
+            partition = [`원데이터 일치: 매출·${niIsCons ? "연결" : "지배주주"} 순이익 = SEC(모든 해)`, ...(move ? [`주석[${move.k.replace(/^us-gaap_/, "")}] 을 SEC ${nm[move.a]} 쪽 줄에서 인포맥스 ${nm[move.b]}(으)로 옮김`] : []),
+              ...sol.map((x) => `인포맥스 ${nm[x.c]}${move && x.c === move.a ? ` + 옮긴 주석` : move && x.c === move.b ? ` − 옮긴 주석` : ""} = SEC [${names(x.mask).join(" + ") || "없음"}]`)];
+            for (const l of lineTargets) if (l !== "rev") explain[l] = { ok: true, how: `인포맥스 세부 줄 배분(모든 해 정확): ${partition.join(" · ")}` };
+          }
+        }
+      }
       const ok = idOk && Object.values(explain).every((x) => x.ok);
-      return { verdict: ok ? "②구성분해" : "미결", identity: idOk, explain, partition, years: table.map((t) => t.year), table, resid, std };
+      return { verdict: ok ? "②구성분해" : "미결", identity: idOk, explain, partition, fsDiag, years: table.map((t) => t.year), table, resid, std };
     };
     const annualYrs = yrs.filter((y) => y.year !== "LTM"), hasLtm = yrs.some((y) => y.year === "LTM");
     const a1 = annualYrs.length ? analyze(annualYrs) : null;
