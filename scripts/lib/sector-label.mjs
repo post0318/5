@@ -109,7 +109,9 @@ export function normalizeSectorLabel(label) {
     .replace(/^(FICC · [^/]+)\/.*$/, "$1")
     .replace(/^(FICC · .*?)크레딧\((?:국내|KP|해외)\)/, "$1크레딧")
     .replace(/^(투자전략 · .*?)[,，]\s*#\d+.*$/, "$1")
-    .replace(/매커니즘/g, "메커니즘");
+    .replace(/매커니즘/g, "메커니즘")
+    // 업종 의견 꼬리("통신서비스 (비중확대/유지)")도 떼어 업종당 한 묶음으로
+    .replace(/\s*\((?:비중확대|비중축소|중립|Overweight|Neutral|Underweight)[^)]*\)$/, "");
   if (!raw) return raw;
   if (Object.hasOwn(ANALYST_SECTOR, raw)) return ANALYST_SECTOR[raw];
   const stem = raw.replace(/(?:산업|업종|섹터|부문|업)$/, "").trim();

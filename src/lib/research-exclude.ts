@@ -33,6 +33,8 @@
 const WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*\d+\s*주(?!년)|다음\s*주\s*시장/i;
 // 주간물 제외의 예외 — 비상장 리서치는 수집해 비상장으로 분류(오너 지시 2026-09-26).
 const UNLISTED_RE = /비상장/;
+// 주간물이지만 수집하는 거시 시리즈(오너 지시 2026-09-27 — 삼성 "Macro Week Ahead"(채권)·"Weekly Economic Issue"(경제)).
+const WEEKLY_KEEP_RE = /Macro\s*Week\s*Ahead|Weekly\s*Economic\s*Issue/i;
 const CALENDAR_RE = /캘린더|캘박|calendar|일정표/i;
 const RECOMMEND_RE = /추천\s*종목/;
 const ALT_INVEST_RE = /대체투자/;
@@ -47,6 +49,8 @@ const GOVERNANCE_RE = /거버넌스|\bgovernance\b/i;
 // 부동산은 리츠와 함께 수집 제외(오너 지적 2026-09-27 — 대신 "한국 상업용 부동산", "리츠, 부동산은 수집제외라고 했을텐데"). 리츠는 기업 리포트까지
 // 제외하지만, 부동산은 종목 리포트 제목에 사업 얘기로 흔히 나와("…부동산 PF 부담") 산업·거시 글(category "기업" 아님)에만 적용한다.
 const REAL_ESTATE_RE = /부동산|맨션/;
+// 미래에셋 "글로벌 마켓 브리핑" 일일 시리즈 수집 제외(오너 지시 2026-09-27) — 기업 리포트에는 적용하지 않는다.
+const DAILY_BRIEFING_RE = /글로벌\s*마켓\s*브리핑|(?:^|\s)마켓\s*(?:뷰|클로징)(?=\s|\(|$)|Earnings\s*Revision/i; // 미래에셋 일일 시리즈(글로벌 마켓 브리핑·마켓 뷰·마켓 클로징)·Earnings Revision 수집 제외(오너 지시 2026-09-27)
 
 /**
  * 디지털자산은 여기 없다(오너 결정 2026-09-26 — "이건 스크립트에서
@@ -67,9 +71,9 @@ const isQuant = (t: string) => QUANT_RE.test(t) && !(QUANT_EXCEPT_RE && QUANT_EX
 
 export function isCommonExcludedResearch(text: string | null | undefined, category?: string): boolean {
   const t = String(text ?? "");
-  if ((WEEKLY_RE.test(t) && !UNLISTED_RE.test(t)) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
+  if ((WEEKLY_RE.test(t) && !UNLISTED_RE.test(t) && !WEEKLY_KEEP_RE.test(t)) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
   if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
   if (category === "기업") return false;
-  if (GOVERNANCE_RE.test(t) || REAL_ESTATE_RE.test(t)) return true;
+  if (GOVERNANCE_RE.test(t) || REAL_ESTATE_RE.test(t) || DAILY_BRIEFING_RE.test(t)) return true;
   return ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t);
 }

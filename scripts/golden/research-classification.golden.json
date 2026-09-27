@@ -466,6 +466,51 @@
       "titleIncludes": "양자컴퓨터가 AIDC에 들어가려면",
       "expect": "us 산업분석",
       "why": "Monthly Quantum 시리즈는 미국 주제 — 미래에셋 시리즈 접두로 us 강제(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "X17",
+      "source": "미래에셋증권",
+      "titleIncludes": "미중 세기의 만남 속 관망세",
+      "expect": "EXCLUDE",
+      "why": "글로벌 마켓 브리핑 일일 시리즈 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K09",
+      "source": "미래에셋증권",
+      "titleIncludes": "미중 정상회담: 빅딜보다 중요한 것은",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "Market Issue 시리즈는 이슈분석(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "X18",
+      "source": "미래에셋증권",
+      "titleIncludes": "연휴 전 쾌조의 스타트",
+      "expect": "EXCLUDE",
+      "why": "마켓 뷰 일일 시리즈 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X19",
+      "source": "미래에셋증권",
+      "titleIncludes": "FOMC 경계감 속 5거래일 만에 반등",
+      "expect": "EXCLUDE",
+      "why": "한국 마켓 클로징 일일 시리즈 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K10",
+      "source": "미래에셋증권",
+      "titleIncludes": "안심하기 어려운 백투백 인상 옵션",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "주간물이지만 수집 — Macro Week Ahead는 이슈분석 채권(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K11",
+      "source": "미래에셋증권",
+      "titleIncludes": "최근 전쟁 격화가 한국과 미국에 미치는 영향",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "주간물이지만 수집 — Weekly Economic Issue는 이슈분석 경제(오너 지시 2026-09-27)"
     }
   ]
 }
