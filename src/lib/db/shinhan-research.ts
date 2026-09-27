@@ -542,7 +542,10 @@ const BOND_STRONG_RE =
   /(?<!매출)(?<!연체)(?<!부실)채권(?!단|자|회수|추심)|크레딧|국채|부채|Beige\s?Book|\bCredit\b|\bBond\b|\bDebt\b|Fixed\s?Income/i;
 // "환율"(FX) 추가 — 한국투자증권 "경제분석 Note" 환율 FAQ 사례가 채권/
 // FICC 데스크 소관인데 신호가 없어 투자전략(주식)으로 잘못 넘어감(오너
-// 지적, 2026-09).
+// 지적, 2026-09). 개별 통화명(위안화 등)은 넣지 않는다 — FX_RE 가 이미 그
+// 단어들을 갖고 있어 "투자전략(채권)"으로 들어오면 곧장 환율분석으로 갈리는데,
+// 메리츠 "Charts of China: 금으로 쌓는 위안화"는 오너가 "이슈분석 경제다"로
+// 확정해(환율분석 아님) 아래 CHINA_MACRO_TITLE_RE 로 별도 처리한다.
 const BOND_MACRO_RE =
   /금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|환율|\bCPI\b(?!\()|\bPPI\b(?!\()|\bPCE\b(?!\()|\bGDP\b|Retail\s?Sales|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|\bECB\b/i;
 // "코스피/코스닥/나스닥" 등 지수명 자체가 이미 주식시장 얘기라는 강한 신호
@@ -681,11 +684,17 @@ function looksLikeSectorLabel(stockName: string): boolean {
   );
 }
 
+// GlobalMonitor 등에서 라벨이 "Global Eco..."(Global Economics/Economy) 같은 경제 코멘터리 시리즈명일 때 —
+// 특정 업종명이 아니라 "경제분석"과 같은 성격의 게시판 라벨이다(오너 지적 2026-09-27 — 유진투자증권 "8월 물가:
+// 근원 +0.3% 서프라이즈"가 investment로 새던 문제). "경제/Econ"이 라벨에 있어도 구체 업종명이면(예: "반도체
+// 산업경제") 걸리지 않도록 looksLikeSectorLabel 이 아닐 때만 인정한다.
+const GENERIC_ECON_LABEL_RE = /경제|\bEcon(?:omy|omics|omic)?\b/i;
 function isGenericOrBoardLabel(doc: { stockName: string; title: string }): boolean {
   if (!doc.stockName || doc.stockName === "산업" || doc.stockName === "시장") return true;
   if (doc.stockName === doc.title && !looksLikeSectorLabel(doc.stockName)) return true;
   if (KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)) return true;
-  return STRATEGY_HINT_RE.test(doc.stockName);
+  if (STRATEGY_HINT_RE.test(doc.stockName)) return true;
+  return GENERIC_ECON_LABEL_RE.test(doc.stockName) && !looksLikeSectorLabel(doc.stockName);
 }
 
 function isBond(doc: { stockName: string; title: string }, hayWithSummary: string): boolean {
@@ -695,7 +704,15 @@ function isBond(doc: { stockName: string; title: string }, hayWithSummary: strin
 
 // "KB 전략" 추가(오너 지시 2026-09-27 — "kb전략은 투자전략이다" — "9월 인상이 기정 사실이라면"이 금리·연준
 // 언급이 많아 채권 신호로 오인돼 이슈분석으로 샜다). 삼성증권 투자전략과 같은 라벨 우선 원칙.
-const LABEL_FIRST_STRATEGY_STOCKNAMES = new Set<string>(["삼성증권 투자전략", "KB 전략", "KB 이그전"]);
+// NH "전략 인사이드/글로벌 전략"·"전략 인사이드/자산배분 전략" 추가(오너 확인 2026-09-27 — 둘 다 투자전략) —
+// "그래도 주식이 낫다"(하재석)가 본문의 채권 대비 서술(bondStrong) 때문에 이슈분석으로 샜다.
+const LABEL_FIRST_STRATEGY_STOCKNAMES = new Set<string>([
+  "삼성증권 투자전략",
+  "KB 전략",
+  "KB 이그전",
+  "전략 인사이드/글로벌 전략",
+  "전략 인사이드/자산배분 전략",
+]);
 
 // 거시 지표·통화정책 발표로 시작하는 제목: "미국 8월 CPI: …", "9월 FOMC: …", "한국 7월 산업활동동향", "미국 2분기 GDP; …",
 // "유럽 7월 산업생산: …"(한국투자증권 해외 기업분석, 오너 지적 2026-09-27 — "유럽 산업재인데?", stockName이 "산업재"라
@@ -809,6 +826,11 @@ const FORCED_ISSUE_STOCKNAMES = new Set([
   "IBK 경제",
   "IBK 채권", // 경제/채권 게시판의 채권 담당 애널리스트 글(정형주) — 이슈분석 채권(오너 지적 2026-09-27)
   "IBK 원자재",
+  "NH 원자재", // NH투자증권 FICC 게시판의 금/유가 등 원자재 코멘트(오너 지적 2026-09-27)
+  // DB증권(GlobalMonitor 경유) "Econ Guide" — 짧은 2단어 라벨이라 looksLikeSectorLabel에 걸려
+  // isGenericOrBoardLabel의 GENERIC_ECON_LABEL_RE 가 못 잡고, 제목만으론 강한 매크로 신호가
+  // 없어 "산업분석 기타"로 새었다(오너 지적 2026-09-27 — "인플레이션 억제 의지... 이슈 경제분석이다").
+  "Econ Guide",
   "대신증권 매크로",
   "대신증권 원자재",
   "한화 국내외경제",
@@ -871,6 +893,10 @@ export function classifyResearchTopic(
   // 신한 경제분석 게시판(gieconomy)의 비시리즈 글 — 다른 증권사 경제·채권 게시판과 같이 게시판이 곧 이슈분석이다. 제목 키워드에만 맡기면
   // 키워드가 없는 글("한국 7월 산업활동동향" 등)이 산업분석 기타로 새었다(2026-09-27). 환율 글만 환율분석으로 가른다.
   if (doc.stockName === "경제분석 · 경제분석") return FX_RE.test(doc.title) ? "환율분석" : "이슈분석";
+  // 메리츠 "Charts of China" 시리즈(최설화) — stockName이 공용 "메리츠 투자전략"이라 일반 분기를 타면
+  // 제목의 통화명(위안화 등)이 FX_RE에 걸려 환율분석으로 새는데, 오너가 "이슈분석 경제다"로 확정(2026-09-27,
+  // "금으로 쌓는 위안화"는 환율 시황이 아니라 중국 경제/지정학 이슈).
+  if (doc.source === "메리츠증권" && /^Charts\s*of\s*China\b/i.test(doc.title ?? "")) return "이슈분석";
   const legacy = classifyLegacyTopic(doc);
   switch (legacy) {
     case "산업분석":

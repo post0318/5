@@ -51,7 +51,7 @@
  *   |------------|--------------------------------------------|--------|----------|------|
  *   | 79         | 자산배분/매크로 > KB데일리                  | kr     | 산업     | ✅ 이 스크립트(`tab=1`) — 시황 고정(오너 지시 2026-09-24 "kb데일리는 산업분석>시황에 해당한다") |
  *   | 69/65/63   | 자산배분/매크로 > 매크로                    | kr     | 산업     | ❌ 미수집 — 투자전략(주식) 라벨 후보 |
- *   | 77         | 자산배분/매크로 > 자산배분("이그전")        | kr     | 산업     | ❌ 미수집 — 투자전략(주식) 후보 |
+ *   | 77         | 자산배분/매크로 > 자산배분("이그전")        | kr     | 산업     | ✅ 이 스크립트(`tab=2`, categoryid=77) — tab=3 "이그전"과 사이트 중복 게시(오너 확인 2026-09-27), stockName "KB 이그전"로 투자전략(주식) 고정 |
  *   | 193/75/76  | 자산배분/매크로 > 대체투자(가상자산/원자재/부동산리츠) | kr | 산업 | ❌ 미수집 — 다른 증권사의 "대체투자 제외" 전례 있음(CLAUDE.md) |
  *   | 174        | 자산배분/매크로 > 자산배분기타 > 기타발간   | kr     | 산업     | ❌ 미수집 |
  *   | 84         | 한국 투자 > 시황코멘트                      | kr     | 산업     | ❌ 수집 제외(오너 결정, 2026-09-24) |
@@ -526,13 +526,16 @@ for (const r of tab2Rows) {
   const folder = String(r.foldertemplate ?? "");
   if (/대체투자/.test(folder) && !/원자재|commodit/i.test(`${folder} ${docTitle} ${docTitleSub}`)) continue;
   const folderTail = folder.split(">").pop()?.trim() ?? "";
+  // categoryid 77("자산배분")은 tab=3 "이그전"과 사이트에 중복 게시되는 같은 시리즈다(오너 확인 2026-09-27 —
+  // "둘 다 이그전이다(사이트에 중복 게시)") — 여기도 "KB 이그전"으로 둬 LABEL_FIRST_STRATEGY_STOCKNAMES가
+  // 투자전략(주식)으로 확정하게 한다. FX 항목은 기존처럼 환율분석 유지.
   const isFx = isFxContent(docTitle) || isFxContent(folderTail);
   macroCount++;
   collected.push({
     id: r.documentid,
     date,
     title: (docTitleSub || docTitle).trim(),
-    stockName: isFx ? "KB 자산배분매크로 FX" : "KB 자산배분매크로",
+    stockName: isFx ? "KB 자산배분매크로 FX" : String(r.categoryid ?? "") === "77" ? "KB 이그전" : "KB 자산배분매크로",
     symbol: null,
     analyst: r.analystNm ?? "",
     opinion: "",

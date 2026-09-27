@@ -35,8 +35,23 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichResearch } from "./lib/research-extract.mjs";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+
+// 한국투자증권 해외 리포트는 자체 작성이 아니라 해외 증권사 리서치를 국문으로 재작성한 것 — PDF 상단에
+// "본 보고서는 {국가} {증권사}의 리서치 자료를 기초로 한국투자증권이 국문으로 재작성하여 발간하는
+// 리포트입니다"라는 고정 문구로 원 저작 증권사 국적이 밝혀져 있다(오너 지적 2026-09-27 — "2020~2024년
+// 리튬이온배터리 산업 심층 리뷰"가 中 国泰海通증권 리포트인데 미국으로 잘못 분류됨, "중국 증권사가 있으면
+// 중국관련 자료다"). 제목·요약 키워드 추측보다 이게 훨씬 정확해 산업분석 글은 이걸 우선 신뢰한다.
+const ORIGIN_ATTRIBUTION_RE = /본\s*보고서는\s*(중국|미국|일본|유럽|영국|홍콩)?\s*[^\s,.]{1,20}증권/;
+const ORIGIN_COUNTRY_MARKET = { 중국: "ch", 홍콩: "ch", 일본: "jp", 유럽: "eu", 영국: "eu", 미국: "us" };
+async function originMarketFromPdf(pdfUrl) {
+  if (!pdfUrl) return null;
+  const text = await readPdfText(pdfUrl);
+  const m = text.match(ORIGIN_ATTRIBUTION_RE);
+  if (!m) return null;
+  return ORIGIN_COUNTRY_MARKET[m[1]] ?? null;
+}
 
 // 해외 기업분석(jkGubun=7) 산업분석 글의 market 판별(오너 지적 2026-09-27, 연속 4건 — "유럽 산업재인데?"·
 // "중국 이차전지인데"·"중국제일자동차...중국자동차이다"·"중국 에너지/화학이다"): 이 게시판 자체가 이미
@@ -44,7 +59,23 @@ import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 // 오탐 위험 커서 보류" 제약이 적용 안 된다 — 라벨(업종명)만으론 국가를 알 수 없어 market: "us" 로
 // 통째로 고정돼 있던 것을 제목+목록 요약(둘 다 PDF 없이 이미 확보되는 값) 전체에서 국가 신호를 찾아 override한다.
 // 신호가 없으면 그대로 미국(기존 기본값) — 완전하지 않음(본문 PDF까지 봐야 알 수 있는 경우는 못 잡음).
-function globalIndustryMarket(text) {
+//
+// 라벨이 국가 아닌 "산업 버티컬"(반도체·차세대 운송 등)인 글은 본문에 협력사·행사 개최지·경쟁사 국적으로
+// 중국/유럽이 언급돼도 실제 주인공은 미국 기업인 경우가 많아 오탐이 실측됐다(오너 지적 2026-09-27 — ECOC
+// 2026(반도체, 스페인 개최)은 미국, "포드-중국기업 간 관계"(차세대 운송)도 미국 자동차라고 확인). 이런
+// 라벨은 국가 판별 없이 미국으로 고정한다.
+const US_VERTICAL_LABELS = new Set(["반도체", "차세대 운송"]);
+// 업종 리포트인데 헤드라인이 특정 기업 하나만 다루는 경우("프리미엄 카드의 왕좌를 지키는 아멕스") 종목분석으로
+// 승격(오너 지적 2026-09-27). 네트워크 조회 없이 자주 나오는 회사명만 소규모로 대응 — 완전하지 않음.
+const KNOWN_HEADLINE_COMPANIES = [{ re: /아멕스|American\s*Express/i, name: "아메리칸 익스프레스", symbol: "AXP" }];
+// jkGubun=10(기업/산업분석) 라벨 중 사실상 항상 미국 얘기인 것 — 오너 확인 2026-09-27("우주는 미국
+// 산업분석이다", 스타십·SpaceX 확인). 실측 라벨은 "우주산업"(null 종목코드)으로 나온다. PDF 저작권
+// 문구가 있으면 그게 우선(originMarketFromPdf 가 나중에 덮어씀).
+const US_VERTICAL_LABEL_10_RE = /^우주(?:산업)?$/;
+// "매크로 & 포트폴리오 전략"(Running Hot 시리즈) — 오너 지시 2026-09-27 "수집제외다".
+const EXCLUDED_INDUSTRY_LABELS = new Set(["매크로 & 포트폴리오 전략"]);
+function globalIndustryMarket(label, text) {
+  if (US_VERTICAL_LABELS.has(label)) return "us";
   if (/중국|차이나|China\b/i.test(text)) return "ch";
   if (/유럽|유로존|Europe\b|\bEU\d*\b/.test(text)) return "eu";
   if (/일본|Japan\b/i.test(text)) return "jp";
@@ -172,20 +203,43 @@ function parseGlobalItems(html) {
       const sm = titleM[1].match(/^([^:：]+)[:：]\s*(.+)$/);
       if (isCommonExcludedContent(titleM[1], "산업")) continue;
       const rawSummary = summaryM ? excerpt(stripHtml(summaryM[1])) : "";
-      items.push({
-        id: idM[1],
-        date,
-        title: sm ? sm[2].trim() : titleM[1].trim(),
-        stockNameOverride: sm ? sm[1].trim() : titleM[1].trim(),
-        symbolHint: null,
-        analyst: analystM[1].trim(),
-        summary: rawSummary,
-        market: globalIndustryMarket(`${titleM[1]} ${rawSummary}`),
-        detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
-        pdfUrl: kisPdfUrl(chunk),
-        category: "산업",
-        board: "한국투자증권 > 리서치 > 해외 기업분석(Strategy.jsp, jkGubun=7)",
-      });
+      const headline = sm ? sm[2].trim() : titleM[1].trim();
+      const label = sm ? sm[1].trim() : titleM[1].trim();
+      if (EXCLUDED_INDUSTRY_LABELS.has(label)) continue;
+      // 업종 라벨이지만 헤드라인이 특정 기업 하나만 다루는 경우("프리미엄 카드의 왕좌를 지키는 아멕스")는
+      // 산업분석이 아니라 종목분석이다(오너 지적 2026-09-27 — "아멕스 종목분석인데"). 흔한 사명만 소규모로
+      // 대응(네트워크 호출 없이) — 놓치는 사명은 산업분석에 남는다.
+      const singleCompany = KNOWN_HEADLINE_COMPANIES.find((c) => c.re.test(headline));
+      const rawSummary2 = rawSummary;
+      items.push(singleCompany
+        ? {
+            id: idM[1],
+            date,
+            title: headline,
+            stockName: singleCompany.name,
+            symbol: singleCompany.symbol,
+            analyst: analystM[1].trim(),
+            summary: rawSummary2,
+            market: "us",
+            detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
+            pdfUrl: kisPdfUrl(chunk),
+            category: "기업",
+            board: "한국투자증권 > 리서치 > 해외 기업분석(Strategy.jsp, jkGubun=7)",
+          }
+        : {
+            id: idM[1],
+            date,
+            title: headline,
+            stockNameOverride: label,
+            symbolHint: null,
+            analyst: analystM[1].trim(),
+            summary: rawSummary2,
+            market: globalIndustryMarket(label, `${titleM[1]} ${rawSummary}`),
+            detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=7&id=${idM[1]}`,
+            pdfUrl: kisPdfUrl(chunk),
+            category: "산업",
+            board: "한국투자증권 > 리서치 > 해외 기업분석(Strategy.jsp, jkGubun=7)",
+          });
       continue;
     }
     const tm = titleM[1].match(GLOBAL_TITLE_RE);
@@ -302,15 +356,19 @@ function parseItems(html) {
     if (isCommonExcludedContent(`${im[1].trim()} ${im[2].trim()}`, "산업")) continue;
     // "해외주식 369"(정정영) 정기 시리즈 — 오너 결정 2026-09-27 "수집제외다".
     if (/^해외주식\s*369$/.test(im[1].trim())) continue;
+    const label10 = im[1].trim();
     items.push({
       id: idM[1],
       date,
       title: im[2].trim() || titleM[1].trim(),
-      stockNameOverride: im[1].trim(),
+      stockNameOverride: label10,
       symbolHint: null,
       analyst: analystM[1].trim(),
       summary: summaryM ? excerpt(stripHtml(summaryM[1])) : "",
-      detailUrl: `https://securities.koreainvestment.com/main/research/research/StrategyDetail.jsp?jkGubun=10&id=${idM[1]}`,
+      // "우주"(SpaceX·Starship 등, 오너 확인 2026-09-27 — "미국 산업분석이다") 라벨은 PDF 저작권 문구가
+      // 없는 자체 작성 코너라도 사실상 전부 미국 우주산업 얘기라 고정한다. "방산"(UAE·사우디 수출 등)은
+      // 국내 방산 수출 얘기일 수 있어 그대로 두고(기본 kr) PDF 저작권 확인에 맡긴다.
+      market: US_VERTICAL_LABEL_10_RE.test(label10) ? "us" : undefined,
       pdfUrl: kisPdfUrl(chunk),
       category: "산업",
       board: "한국투자증권 > 리서치 > 기업/산업분석(Strategy.jsp, jkGubun=10)",
@@ -393,6 +451,16 @@ console.log(
         `${i.date} ${i.stockNameOverride ?? nameByCode.get(i.symbolHint) ?? i.symbolHint}(${i.symbolHint}) — ${i.title}`,
     ),
 );
+// 산업분석 글은 PDF 상단 저작권 문구로 원 저작 증권사 국적을 확인해 market을 정확히 잡는다(오너 지시
+// 2026-09-27) — jkGubun=10(국내 게시판 fallback "kr")·jkGubun=7(키워드 추측 fallback) 둘 다 적용.
+// 국내 자체 리포트는 이 문구가 없어 기존 기본값(kr/키워드 추측) 그대로 유지된다.
+const industryItems = collected.filter((it) => it.category === "산업" && it.pdfUrl);
+console.log(`▶ 산업분석 원 저작 국가 확인 중 (PDF, ${industryItems.length}건)...`);
+for (const it of industryItems) {
+  const origin = await originMarketFromPdf(it.pdfUrl);
+  if (origin) it.market = origin;
+  await sleep(300);
+}
 console.log(`▶ 투자의견/목표주가 조회 중 (${collected.length}건)...`);
 for (const it of collected) {
   // 산업분석은 특정 종목 얘기가 아니므로 투자의견·목표주가 개념이 없음.

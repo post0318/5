@@ -232,6 +232,28 @@ async function classify(row, board) {
     board: board.bbsId,
   };
   if (isExcluded(title)) return null;
+  // "9월 하반월 LCD 패널가" 같은 정기 패널가 업데이트 — 오너 지시 2026-09-27 "LCD패널가 수집제외".
+  // 목록 제목은 "디스플레이:9월 하반월 LCD 패널가"처럼 업종 라벨이 앞에 붙어 나와 헤드라인만 비교한다.
+  if (/^\d{1,2}월\s*(?:상|하)반월\s*LCD\s*패널가$/.test(industryLabelAndHeadline(title).headline.trim())) return null;
+  // "Meritz Overnight Tech" 정기 데일리(반도체/디스플레이, 김선우) — 오너 지시 2026-09-27 "수집제외".
+  if (/^Meritz\s*Overnight\s*Tech\b/i.test(industryLabelAndHeadline(title).headline.trim())) return null;
+  // "Mobility at a glance" 정기 데일리(모빌리티, 김준성) — 오너 지시 2026-09-27 "수집제외".
+  if (/^Mobility\s*at\s*a\s*glance\b/i.test(industryLabelAndHeadline(title).headline.trim())) return null;
+  // "Morning Talk" 정기 데일리(음식료, 김정욱) — 오너 지시 2026-09-27 "수집제외".
+  if (/^Morning\s*Talk\b/i.test(industryLabelAndHeadline(title).headline.trim())) return null;
+  // "Daily (날짜)" 정기 데일리(금융·조선/기계 등 업종 불문, 오너 지시 2026-09-27 "수집제외" — 반복 확인).
+  if (/^Daily\s*\(\d{4}[.\s]*\d{1,2}[.\s]*\d{1,2}\)$/i.test(industryLabelAndHeadline(title).headline.trim())) return null;
+  // "Try Everything 2026" 시리즈 — 스타트업 얘기라 국내 비상장(오너 지적 2026-09-27 — "AI 스타트업의
+  // 확산 국내 비상장이다"). 종목분석>인사이트와 같은 인프라(INSIGHT_SOURCES 재사용)로 별도 source 전송.
+  if (/^Try\s*Everything\b/i.test(title)) {
+    const { headline } = industryLabelAndHeadline(title);
+    return { ...base, title: headline, stockName: headline, symbol: null, category: "산업", unlisted: true };
+  }
+  // "AI 속도 조절 제안에 대한 생각"(황수욱, 메리츠 투자전략) — 오너 확인 2026-09-27 "us 산업이다".
+  // 목록 제목은 "메리츠 투자전략:AI 속도 조절 제안에 대한 생각"처럼 시리즈명이 앞에 붙어 나와 헤드라인만 비교한다.
+  if (industryLabelAndHeadline(title).headline.trim() === "AI 속도 조절 제안에 대한 생각") {
+    return { ...base, title: "AI 속도 조절 제안에 대한 생각", stockName: "글로벌 AI", symbol: null, category: "산업", market: "us" };
+  }
 
   if (board.kind === "company") {
     const ov = parseOverseasTitle(title);
@@ -394,11 +416,15 @@ const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
-// 라우트가 POST 1회당 source·market 하나만 받는다 — 지금은 전부 국내(kr).
-const byMarket = new Map();
+// 라우트가 POST 1회당 source·market 하나만 받는다. "Try Everything" 비상장 시리즈는
+// 일반 산업분석 풀과 안 섞이도록 "메리츠증권 비상장리서치"로 따로 보낸다(오너 지시 2026-09-27).
+const UNLISTED_SOURCE = "메리츠증권 비상장리서치";
+const byGroup = new Map();
 for (const it of research) {
-  if (!byMarket.has(it.market)) byMarket.set(it.market, []);
-  byMarket.get(it.market).push({
+  const source = it.unlisted ? UNLISTED_SOURCE : SOURCE;
+  const key = `${it.market}::${source}`;
+  if (!byGroup.has(key)) byGroup.set(key, { market: it.market, source, items: [] });
+  byGroup.get(key).items.push({
     id: it.id,
     date: it.date,
     title: it.title,
@@ -415,16 +441,16 @@ for (const it of research) {
     board: `메리츠증권 > ${BOARDS.find((b) => b.bbsId === it.board)?.label ?? it.board}(${it.board})`,
   });
 }
-for (const [market, items] of byMarket) {
+for (const { market, source, items } of byGroup.values()) {
   const up = await fetch(IMPORT_URL, {
     method: "POST",
     headers,
-    body: JSON.stringify({ items, source: SOURCE, market }),
+    body: JSON.stringify({ items, source, market }),
   });
   const upBody = await up.text();
   if (!up.ok) {
-    console.error(`✗ [${SOURCE}/${market}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    console.error(`✗ [${source}/${market}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }
-  console.log(`✔ [${SOURCE}/${market}] 앱 전송 완료 (${items.length}건): ${upBody}`);
+  console.log(`✔ [${source}/${market}] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

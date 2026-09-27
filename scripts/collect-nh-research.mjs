@@ -455,7 +455,13 @@ for (const board of STRATEGY_BOARDS) {
       // 오너가 확인해준 대로 투자전략 그대로 둔다.
       if (/^전략\s*인사이드\s*\/\s*경제$/.test(stockName)) stockName = "NH 전략인사이드 경제";
       if (board.ditCd === "04" && /대체투자|부동산/.test(stockName) && !/원자재|commodit/i.test(`${stockName} ${title}`)) continue;
-      if (board.ditCd === "04") stockName = `FICC · ${stockName}`;
+      // FICC 게시판 글이 실제로는 금(Gold)·유가·구리 등 원자재 얘기인데 괄호 라벨이 없어(예: "N2 FICC 인사이드"
+      // 시리즈명 폴백) "FICC · " 접두어만 붙던 문제(오너 지적 2026-09-27 — "추가 '긴축' 경계에도 저가 금(Gold)
+      // 매수세"가 원자재 이슈분석인데 투자전략에 가 있었음). 다른 증권사의 "{증권사} 원자재" 고정 라벨과
+      // 같은 패턴으로 확정한다.
+      const isCommodityContent = board.ditCd === "04" && /금\s*\(?Gold\)?|원유|유가|구리|Copper|천연가스|Natural\s?Gas|원자재|Commodit(y|ies)/i.test(`${stockName} ${title}`);
+      if (isCommodityContent) stockName = "NH 원자재";
+      else if (board.ditCd === "04") stockName = `FICC · ${stockName}`;
       const isDomesticFicc = board.ditCd === "04" && /\(국내\)/.test(stockName);
       const market = isDomesticFicc ? "kr" : (board.forceMarket ?? classifyMarket(`${stockName} ${title}`));
       if (!market) continue;

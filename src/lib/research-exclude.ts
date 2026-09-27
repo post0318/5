@@ -58,6 +58,12 @@ const CREDIT_RE = /크레딧|신용|회사채|\bCredit\b/i; // 크레딧 계열 
 // 오너 결정(2026-09-27 — "KB데일리는 종합판이네 이거 있으면 KB 다른 데일리자료는 불필요다. Market Pulse 글로벌인사이트는
 // 별도로 수집하지 않는다")으로 제외 — KB데일리(종합판)가 이미 다루는 내용이라 별도 시리즈로 안 모은다.
 const DAILY_BRIEFING_RE = /글로벌\s*마켓\s*브리핑|(?:^|\s)마켓\s*(?:뷰|클로징)(?=\s|\(|$)|Earnings\s*Revision|자산가격\s*[메매]커니즘\s*변화|신한\s*FX\s*Check-?up|마켓\s*레이더|Global\s*Portfolio|Market\s?(?:Pulse|Radar|Insight)\b|\bGlobal\s*Insights\b/i; // 미래에셋 일일 시리즈(글로벌 마켓 브리핑·마켓 뷰·마켓 클로징)·Earnings Revision·신한 자산가격 메커니즘 변화·신한 FX Check-up·마켓레이더·Global Portfolio(추천 포트폴리오)·Market Pulse/Radar/Insight·Global Insights 시리즈 수집 제외(오너 지시 2026-09-27)
+// "포트폴리오" 라벨은 기본 수집 제외(오너 지시 2026-09-27 — "기본은 포트폴리오는 수집제외다" + "예외만 수집한다").
+// 지금까지 KB(EXCLUDE_LABEL_RE)·DAILY_BRIEFING_RE(Global Portfolio) 등 개별 수집기·시리즈명마다 따로
+// 걸려있던 걸 공통 필터로 승격 — 한국투자증권 "매크로 & 포트폴리오 전략"(Running Hot)이 안 걸려 발견됨.
+// 예외가 생기면 PORTFOLIO_KEEP_RE 에 추가(지금은 없음, QUANT_EXCEPT_RE 와 같은 관례).
+const PORTFOLIO_RE = /포트폴리오|\bPortfolio\b/i;
+const PORTFOLIO_KEEP_RE = null as RegExp | null;
 
 /**
  * 디지털자산은 여기 없다(오너 결정 2026-09-26 — "이건 스크립트에서
@@ -81,6 +87,7 @@ export function isCommonExcludedResearch(text: string | null | undefined, catego
   if ((WEEKLY_RE.test(t) && !UNLISTED_RE.test(t) && !WEEKLY_KEEP_RE.test(t)) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
   if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
   if (DAILY_BRIEFING_RE.test(t)) return true; // 시리즈 제외는 기업 카테고리에도 적용
+  if (PORTFOLIO_RE.test(t) && !(PORTFOLIO_KEEP_RE && PORTFOLIO_KEEP_RE.test(t))) return true; // 포트폴리오는 기본 제외(오너 지시 2026-09-27)
   if (category === "기업") return false;
   if (GOVERNANCE_RE.test(t) || REAL_ESTATE_RE.test(t) || CREDIT_RE.test(t)) return true;
   return ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t);
