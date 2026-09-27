@@ -100,6 +100,14 @@ export function classifySector(doc: {
   for (const [label, re] of SECTOR_RULES) {
     if (re.test(stockName)) return label;
   }
+  // 제목 앞 대괄호는 수집기 라벨이 게시판 이름("글로벌 산업분석")일 때 실제 업종 라벨이다("[미국 건설] …") — 제목 내용보다 먼저 본다
+  // (오너 지시 2026-09-27 — 라벨부터). 안 그러면 제목 속 "부동산" 같은 다른 단어가 라벨을 이긴다.
+  const bracket = (doc.title ?? "").match(/^\s*\[([^\]]{1,25})\]/)?.[1];
+  if (bracket) {
+    for (const [label, re] of SECTOR_RULES) {
+      if (re.test(bracket)) return label;
+    }
+  }
   const hay = `${stockName} ${doc.title ?? ""}`;
   for (const [label, re] of SECTOR_RULES) {
     if (re.test(hay)) return label;

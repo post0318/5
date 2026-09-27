@@ -3,6 +3,7 @@ import type { Collection } from "mongodb";
 import { getDb } from "./index";
 import type { MarketId } from "../markets/types";
 import { isCommonExcludedResearch } from "../research-exclude";
+import { classifySector } from "../research-sector";
 
 /**
  * 산업/기업분석 리서치는 이 앱의 4대 시장(`MarketId`: kr/us/jp) 밖의 소스도
@@ -712,6 +713,15 @@ function classifyLegacyTopic(
   // 게시판이 곧 분류라 항상 투자전략(주식)이다. 다른 증권사 투자전략 라벨은 기존대로 채권 여부를 따진다.
   if (LABEL_FIRST_STRATEGY_STOCKNAMES.has(doc.stockName)) return "투자전략(주식)";
   if (isStrategyStockname(doc.stockName)) return isBond(doc, hayWithSummary) ? "투자전략(채권)" : "투자전략(주식)";
+  // 라벨 우선(오너 지시 2026-09-27 — "라벨이 있으면 라벨부터 봐라. 게시판명, 라벨명, 내용 순"): 라벨 자체가 분명한 업종("은행"·"반도체"·"자동차"…)이면
+  // 제목·요약의 채권·환율·전략·시황 신호로 승격하지 않고 산업분석이다. 안 그러면 은행 리포트에 흔한 "부채·채권" 요약 하나로 투자전략(채권)→환율분석이 된다
+  // (하나증권 "속절없이 하락하는 환율. 은행은 환율 하락의 수혜주"). 라벨이 짧은 업종명일 때만 — 문장형·게시판형 라벨은 기존대로 내용을 본다.
+  if (looksLikeSectorLabel(doc.stockName) && !STRATEGY_HINT_RE.test(doc.stockName) && classifySector({ stockName: doc.stockName }) !== null) {
+    return "산업분석";
+  }
+  // 게시판 우선: 게시판 이름이 그대로 라벨로 들어온 경우("글로벌 산업분석" — 하나증권 pid=8 게시판)는 게시판이 곧 산업분석이다. 실제 업종은 제목의
+  // "[미국 건설]" 처럼 뒤에 있어 라벨이 못 알려주지만, 내용(주택담보부채·금리)으로 이슈분석에 올리면 안 된다(오너 지적 2026-09-27).
+  if (/산업분석$/.test(doc.stockName.trim()) && !STRATEGY_HINT_RE.test(doc.stockName)) return "산업분석";
   if (MARKET_CONDITION_STRONG_RE.test(hay)) return "시황";
   const generic = isGenericOrBoardLabel(doc);
   if (MARKET_CONDITION_PERIOD_RE.test(hay) && generic) return "시황";
