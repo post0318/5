@@ -232,6 +232,7 @@ function unitOf(rows) {
   for (const u of [1e6, 1e5, 1e4, 1e3]) if (vals.every((v) => Math.abs(Math.round(v / u) * u - v) < 0.5)) return u;
   return 1;
 }
+const annualCount = (yrs) => yrs.filter((y) => y.year !== "LTM").length;
 /** 분기 4개 → LTM 줄(한 분기라도 값이 없으면 그 줄은 null) */
 function sum4(qs) {
   if (qs.length !== 4) return { ltm: null, ltmEnd: null };
@@ -303,13 +304,19 @@ function searchPool(d, pool, tol) {
   if (nz >= 2) for (const f of cand) for (const s of [1, -1]) if (ys.every((y) => Math.abs(s * f.vals.get(y) - d.get(y)) <= tol)) fit1.push([{ k: f.k, s }]);
   if (fit1.length) return { terms: fit1[0], alt: fit1.length - 1 };
   if (nz < 3) return null;
+  let hit2 = null;
   // 두 항목 — 크기로 가지치기(첫 해 기준)
   const y0 = ys[0], t0 = d.get(y0);
   const byV = cand.map((f) => ({ f, v: f.vals.get(y0) })).filter((x) => x.v !== 0 && Math.abs(x.v) <= Math.abs(t0) * 20 + 1e9);
   for (let i = 0; i < byV.length; i++) for (let j = i + 1; j < byV.length; j++) for (const a of [1, -1]) for (const b of [1, -1]) {
     if (Math.abs(a * byV[i].v + b * byV[j].v - t0) > tol) continue;
-    if (ys.every((y) => Math.abs(a * byV[i].f.vals.get(y) + b * byV[j].f.vals.get(y) - d.get(y)) <= tol)) return { terms: [{ k: byV[i].f.k, s: a }, { k: byV[j].f.k, s: b }] };
+    if (ys.every((y) => Math.abs(a * byV[i].f.vals.get(y) + b * byV[j].f.vals.get(y) - d.get(y)) <= tol)) {
+      // 해 유일성(재감사 LOW-2) — 다른 두 항목 조합이 또 맞으면 확정 불가
+      if (hit2) return null;
+      hit2 = { terms: [{ k: byV[i].f.k, s: a }, { k: byV[j].f.k, s: b }] };
+    }
   }
+  if (hit2) return hit2;
   return null;
 }
 
@@ -522,6 +529,7 @@ for (const [sym, r] of latest) {
           .filter((l) => yrs.some((y) => Math.abs(l.amt[y.year]) > 0.5));
         const targets = (metric === "영업이익" ? ["cogs", "sga", "rnd", "amort", "other"] : ["cogs"]).filter((c) => yrs.every((y) => y.row[c] != null) && !(c === "rnd" && S.sgaIncludesRnd));
         if (!yrs.every((y) => y.complete)) partitionWhy = "본표 줄 합 ≠ 매출 − 영업이익(줄 누락·판본 차) — 배분 불가";
+        else if (annualCount(yrs) < 2) partitionWhy = "근거 연도 1개 — 배분은 2개 연도 이상 필요";
         else if (lines.length <= 16 && targets.length) {
           // 외부 비경상 줄(SA — 영업이익 아래로 옮긴 금액): 외부 분류 + 비경상 줄 일부 = 본표 줄 부분집합이면 "본표 한 줄을 외부가 쪼갬"(TSLA "Restructuring
           // and other" 176 = SA 기타 영업비용 140 + SA 구조조정 36). 비경상 줄은 모든 해 같은 이름 집합으로만 쓴다
@@ -615,7 +623,8 @@ for (const [sym, r] of latest) {
         const niComplete = yrs.every((y) => secPre(y) != null && Math.abs(y.sec.rev - lines.reduce((t, l) => t + l.amt[y.year], 0) - secPre(y)) <= 1);
         fsDiag = { anchor, lines: N, niComplete };
         if (anchor && !niComplete) partitionWhy = "SEC 순이익 식 줄 합 ≠ 매출 − 순이익(줄 누락·판본 차) — 배분 불가";
-        if (anchor && niComplete && N <= 22) {
+        if (anchor && niComplete && annualCount(yrs) < 2) partitionWhy = "근거 연도 1개 — 배분은 2개 연도 이상 필요";
+        if (anchor && niComplete && annualCount(yrs) >= 2 && N <= 22) {
           const full = (1 << N) - 1, y0 = yrs[0];
           const sums0 = new Float64Array(1 << N);
           for (let m = 1; m < 1 << N; m++) { const b = 31 - Math.clz32(m & -m); sums0[m] = sums0[m & (m - 1)] + lines[b].amt[y0.year]; }

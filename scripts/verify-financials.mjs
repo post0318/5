@@ -5834,7 +5834,7 @@ async function verifyUs(sym) {
       }
       // 매출원가·매출총이익 분류(--metric=cogs) — 매출과 같은 §0 기준. 외부 단독 이탈 = 앱 = SEC 본표 + 다른 외부 2곳 이상 일치 + 이 소스만
       // 이탈, 또는 외부 자기 모순(인포맥스 연간 ≠ 자기 분기 합 = 앱 = SEC)
-      // 줄 단위 구성 대조 반영 — 연간 열만(LTM 은 도구 범위 밖이라 구성미분해)
+      // 줄 단위 구성 대조 반영 — 연간·LTM(LTM 은 연간과 같은 구성이 LTM 에서도 성립할 때만 recon 이 ②)
       const reconApply = (cls, col0, m0) => {
         for (const n of Object.keys(cls)) {
           // 외부단독이탈(외부 자기모순 — 숫자로 확인된 근거)은 덮어쓰지 않는다(감사 2026-09-28 HIGH-2)
