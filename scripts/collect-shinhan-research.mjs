@@ -229,6 +229,29 @@ const TITLE_US_RE = /\(([A-Z][A-Z.]{0,5})\.US\)\s*$/;
       }
       const stockField = String(it.f2 ?? "").trim();
       const tm = stockField.match(TITLE_US_RE);
+      // "글로벌 이슈; 주제" 시리즈는 테마·산업 리포트라 f2 에 대표 종목이 붙어 있어도 종목분석이 아니다(오너 지적 2026-09-27 — 네오클라우드·
+      // 모더나 암 백신·헬스케어 실적 리뷰 등이 종목분석으로 새던 것). 대표 종목과 무관하게 산업으로 받는다.
+      if (/^글로벌\s*이슈\s*;/.test(String(it.f1 ?? "").trim())) {
+        if (!isCommonExcludedContent(it.f1, "산업")) {
+          items.push({
+            id: String(it.fn),
+            date,
+            title: it.f1,
+            stockName: "글로벌 이슈",
+            symbol: null,
+            analyst: it.f4 ?? "",
+            opinion: "",
+            targetPrice: null,
+            summary: excerpt(it.f7),
+            pdfUrl: it.f3 || null,
+            views: Number(it.f5) || null,
+            category: "산업",
+            board: "신한투자증권 > 해외 산업 및 기업분석(foreignstock)",
+            market: "us",
+          });
+        }
+        continue;
+      }
       if (!tm) {
         if ((stockField === "-" || stockField === "") && !isCommonExcludedContent(it.f1, "산업")) {
           items.push({
