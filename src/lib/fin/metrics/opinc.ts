@@ -38,6 +38,9 @@ const NONOP = new Set([
   "InterestIncomeExpenseNonoperatingNet", "InvestmentIncomeInterest", "InvestmentIncomeInterestAndDividend",
   "InvestmentIncomeNonoperating", "InterestAndOtherIncome",
   "NonoperatingIncomeExpense", "OtherNonoperatingIncomeExpense", "OtherNonoperatingIncome", "OtherNonoperatingExpense",
+  // 연금 비근무원가 — FASB ASU 2017-07 은 영업이익 밖(영업외)에 두게 한다. XOM 비용 합계 안 줄(2025 약 4억 달러) — 검증기(FASB 택사노미
+  // 계산 구조 기준) 값이 인포맥스와 정확 일치(2026-09-27)
+  "NetPeriodicDefinedBenefitsExpenseReversalOfExpenseExcludingServiceCostComponent",
   "IncomeLossFromEquityMethodInvestments", "IncomeLossFromEquityMethodInvestmentsNetOfDividendsOrDistributions",
   "GainLossOnInvestments", "GainLossOnSaleOfInvestments", "ForeignCurrencyTransactionGainLossBeforeTax",
   "GainsLossesOnExtinguishmentOfDebt",

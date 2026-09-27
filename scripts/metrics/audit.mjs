@@ -66,6 +66,9 @@ export function commonModeOf(c) {
   // D형 구성 규칙 행 — 앱과 검증기가 같은 규칙표(src 표 ↔ scripts/metrics/cogs-rules.json)를 쓴다. 외부 2곳 이상 정확 일치일 때만 독립(COGS_RULE_COMMON)
   if (c.layer === "A" && /매출원가|매출총이익/.test(n) && /구성 규칙/.test(note)) return COGS_RULE_COMMON;
   if (c.layer === "A" && /매출원가|매출총이익/.test(n)) return "본표 원가 판독 = 앱 identifyCogs 와 같은 알고리즘";
+  // 영업이익 합성(소계 없는 본표) — 표준 개념의 영업외 판정은 FASB 택사노미(독립)지만, 회사 고유 줄의 라벨 판정·총수익 비영업 분리는 앱과 같은
+  // 성격의 규칙이다(2026-09-27, --metric=opinc). 판본 decimals 독립 확인 메모가 붙어도 이 사유는 남는다
+  if (c.layer === "A" && /^(분기 )?영업이익\(합성\)/.test(n) && /회사 고유 줄 라벨로 영업외 판정|총수익 비영업 분리/.test(note)) return "영업외 판정 — 회사 고유 줄 라벨·총수익 비영업 분리 = 앱과 같은 성격의 규칙";
   if (/Q4 = 사업연도 − 9개월/.test(n) || (c.layer === "A" && /당기 ?누적|− 9개월/.test(note))) return "Q4·LTM 식(사업연도 − 9개월 / 사업연도 + 당기 누적 − 전년 동기) = 앱과 같은 식";
   // 판본 선택이 공시 원본 decimals 로 독립 확인된 행(검증기 applyVintage — "판본 decimals 독립 확인")은 이 사유에서 뺀다(오너 승인 2단계)
   if (c.layer === "A" && /반올림 재태깅 제외/.test(note) && !/판본 decimals 독립 확인|회사 decimals 표기 불일치 — 외부 독립 확인/.test(note)) return "판본·반올림 재태깅 선택 = 앱과 같은 규칙(decimals 근거 없음)";

@@ -181,3 +181,13 @@ CostOfGoodsSold·CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortizat
   XOM 인포맥스(2025 만 DD&A + 탐사비 성립), DAL SA·인포맥스, CAT 매출총이익 SA·인포맥스, MCD 인포맥스 2022·2023, PEP 2021 SA −29·LTM,
   IBM 인포맥스 2021·LTM, Yahoo 미대조 2021 열(AVGO·CEG·HLT·MAR·SBUX·UBER·VST·GLW·MU)·WDC·DELL·MRVL 2022, GEV LTM, CL LTM SA −2.
   외부 정의가 밝혀지면 재분류한다.
+
+## 11. 영업이익 — 1차 닫힘 (2026-09-27, 오너 방침 "영업손익·감가상각까지 큰 틀, 미세 항목은 그 뒤 일괄")
+
+- 앱: 전 화면이 fin 영업이익(본표 소계 · 소계 없는 본표 = 세전이익 − 영업외 항목(공시 계산 구조) · 금융 자회사 보유사 소계 없음 = 빈칸+사유,
+  IBM 예외 · 영업외 목록에 연금 비근무원가(FASB ASU 2017-07) 추가 — XOM, 엔진판 11).
+- 검증기 `--metric=opinc`(매출원가 모드 포함): A층 본표 독립 판독(소계 · 없으면 FASB 택사노미 계산 구조로 영업외 판정). 47종목 실행
+  (묶음마다 개발 서버 재시작, 11분): 영업이익 검사 실패 0, 전체 실패 3(MRVL 2022 세전이익·자산총계 옛 반올림, SPOT LTM EV — 다른 지표).
+  감사표 영업이익 ① 47 · ② 12 · 공통모드 3 · SEC 2 · 미결 30.
+- 미결 30행(뒤에 일괄): 28행이 LTM — Yahoo 가 LTM 영업이익을 주지 않아 외부 일치가 없고, StockAnalysis·인포맥스가 모두 앱보다 크다
+  (일회성비용 제외 조정 영업이익으로 추정 — 미증명). IBM 2025Y·LTM 은 공통모드 성격(영업외 판정이 회사 고유 줄 라벨). NVDA ② 는 비자명 열 1개.

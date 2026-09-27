@@ -55,6 +55,7 @@ export const CATEGORIES = {
   13: "사유 없는 빈칸",
   14: "빈칸이어야 할 곳에 값",
   15: "화면 간 불일치",
+  16: "영업이익 합성(소계 없는 본표) 영업외 항목 누락",
 };
 
 /** MCD(유형 D — 본표에 매출원가 줄 없음) 손익계산서에 매출원가·매출총이익 행을 끼워 넣고 "구성 규칙 대기" 각주를 지운다 */
@@ -149,6 +150,13 @@ export const MUTATIONS = [
   // 부대사업·정유 22,023백만)와 파생 판본(2026 10-Q 재분류 21,936백만)을 따로 읽어 혼합을 판정한다
   { id: "M16", cat: 14, sym: "DAL", col: "LTM", what: "기준 혼합 열(LTM)에 값 표시 — 매출원가 50,504,000,000·매출총이익 17,783,000,000", origin: "DAL LTM — 2026 10-Q 가 2025 상반기 부대사업을 정유 + MRO 로 나누며 87백만을 기타로 옮김(FY2025 10-K 와 기준 다름)",
     expect: "A", plants: [{ op: "fn", kinds: ["is"], name: "LTM 매출원가·매출총이익 칸 채움", fn: fillCogsCell("현재/LTM", 50504000000, 17783000000) }] },
+  // 영업이익(--metric=opinc, 2026-09-27) — 검증기 영업이익 A층(본표 소계 · 소계 없는 본표는 FASB 택사노미 분류로 세전이익 − 영업외 항목)
+  { id: "M17", cat: 1, sym: "AAPL", col: "2025Y", what: "연간 영업이익 +1달러 133,050,000,000 → 133,050,000,001", origin: "M01a 의 영업이익판 — 본표 영업이익 소계 정확 대조",
+    expect: "A", plants: [{ op: "replace", from: 133050000000, to: 133050000001 }] },
+  { id: "M18", cat: 16, sym: "IBM", col: "2025Y", what: "합성 영업이익에서 이자비용(1,935,000,000) 되돌림 누락 — 11,821,000,000 → 9,886,000,000(세전이익 10,328 + 기타(수익)·비용 −442 만)", origin: "소계 없는 본표(IBM) 합성 — 영업외 판정 목록에서 us-gaap:InterestExpense 가 빠진 경우(2024 택사노미에서 SOI 계산 구조 밖으로 빠진 개념)",
+    expect: "A", plants: [{ op: "replace", kinds: ["is"], from: 11821000000, to: 9886000000 }] },
+  { id: "M19", cat: 7, sym: "AAPL", col: "2025 Q4", what: "분기 영업이익 Q4 = FY − 6개월 32,427,000,000 → 60,629,000,000(133,050 − 72,421)", origin: "M07 의 영업이익판 — Q4 = 사업연도 − 9개월 규칙의 반대 사례",
+    expect: "A", plants: [{ op: "replace", kinds: ["isq"], from: 32427000000, to: 60629000000 }] },
 ];
 
 // ── 응답 종류 판정 ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -258,7 +266,7 @@ function installHook() {
 }
 
 // ── 결과 대조 ─────────────────────────────────────────────────────────────────────────────────────────────────────
-const metricOf = (name) => (/매출원가|매출총이익/.test(name) ? "cogs" : /매출|순수익|PSR/.test(name) ? "rev" : "other");
+const metricOf = (name) => (/매출원가|매출총이익/.test(name) ? "cogs" : /^(분기 )?영업이익(\(합성\)| 앱| 빈칸| 합성)/.test(name) ? "opinc" : /매출|순수익|PSR/.test(name) ? "rev" : "other");
 function indexRun(r) {
   const checks = new Map(), seen = new Map();
   for (const c of r?.checks ?? []) {
@@ -268,7 +276,7 @@ function indexRun(r) {
     checks.set(`${base}#${n}`, c);
   }
   const errs = new Map();
-  for (const [kind, list] of [["rev", r?.revErrors], ["cogs", r?.cogsErrors]])
+  for (const [kind, list] of [["rev", r?.revErrors], ["cogs", r?.cogsErrors], ["opinc", r?.opincErrors]])
     for (const e of list ?? []) errs.set(`${kind}|${e.item}|${e.source}`, { ...e, kind });
   const cls = new Map();
   for (const x of r?.review ?? []) for (const [src, v] of Object.entries({ ...(x.revenueClass ?? {}), ...(x.metricClass ?? {}) })) cls.set(`${x.item}|${src}`, v);
@@ -287,7 +295,7 @@ function diffRuns(base, mut, m) {
   }
   for (const [k, e] of M.errs) {
     const b = B.errs.get(k);
-    const x = { layer: "F", name: `③ 오류(${e.kind === "rev" ? "매출" : "매출원가·매출총이익"}) ${e.item} — ${e.source}`, col: "", metric: e.kind, note: `앱 ${e.ours} vs ${e.other}` };
+    const x = { layer: "F", name: `③ 오류(${e.kind === "rev" ? "매출" : e.kind === "opinc" ? "영업이익" : "매출원가·매출총이익"}) ${e.item} — ${e.source}`, col: "", metric: e.kind, note: `앱 ${e.ours} vs ${e.other}` };
     if (b) { if (b.ours !== e.ours) (counts(x) ? masked : noise).push(x); continue; }
     (counts(x) ? fired : noise).push(x);
   }
@@ -308,7 +316,7 @@ function runVerify({ sym, id, work, cache, base, external }) {
     "--import", pathToFileURL(SELF).href,
     path.join(ROOT, "scripts", "verify-financials.mjs"),
     // 매출원가 구성 규칙(D형) 파일 필수 — 빠지면 D형 종목(MCD·DAL 등)이 기준선부터 전부 실패로 잡혀 심은 오류가 가려진다(2026-09-27 발견)
-    `--symbols=${sym}`, "--metric=cogs", "--cogs-rules=scripts/metrics/cogs-rules.json", "--concurrency=1", `--base=${base}`, ...(external ? [] : ["--no-external"]),
+    `--symbols=${sym}`, "--metric=opinc", "--cogs-rules=scripts/metrics/cogs-rules.json", "--concurrency=1", `--base=${base}`, ...(external ? [] : ["--no-external"]),
   ], {
     cwd: ROOT, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, timeout: 30 * 60_000,
     env: { ...process.env, MUT_HOOK: "1", MUT_ID: id ?? "", MUT_CACHE: cache, MUT_BASE: base, MUT_LOG: logFile },
@@ -413,7 +421,7 @@ async function main() {
   };
   const esc = (s) => String(s).replace(/\|/g, "\\|").replace(/\n/g, " ");
   const md = [];
-  md.push(`# 심은 오류 시험 결과 ${stamp} (KST)`, "", `기준 ${base} · 외부대조 ${external ? "켬" : "끔"} · 검증기 --metric=cogs(기본 검사 + 매출원가 검사 전부)`, "");
+  md.push(`# 심은 오류 시험 결과 ${stamp} (KST)`, "", `기준 ${base} · 외부대조 ${external ? "켬" : "끔"} · 검증기 --metric=opinc(기본 검사 + 매출원가·영업이익 검사 전부)`, "");
   md.push("| mutation | symbol / column | expected detection | detected? | by which check (layer/name) | status |", "|---|---|---|---|---|---|");
   for (const x of rows) md.push(`| ${x.id} ${esc(x.catName)} — ${esc(x.what)} | ${x.sym} / ${esc(x.col)} | ${x.knownGap ? `미검출 예상(알려진 공백) — 기대 층 ${x.expect}` : `${x.expect}층`} | ${x.detected == null ? "—" : x.detected ? "예" : "아니오"} | ${esc(byTxt(x))} | ${esc(x.status)} |`);
   const valid = rows.filter((x) => x.detected != null);
