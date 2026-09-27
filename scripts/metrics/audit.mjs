@@ -145,13 +145,15 @@ export function buildAudit({ app, cols, checks, review, closed }) {
         const extra = [...of("공통모드").map((n) => `${n} 공통모드`), ...of("NA").map((n) => `${n} ${naLab(n)}`), ...of("외부정의분해불가").map((n) => `${n} 외부 정의 분해 불가`)].join(", ");
         // Yahoo 1순위(오너 결정 2026-09-27 — 멀티플 비교점이 Yahoo): Yahoo 가 ①·② 면 행 판정은 Yahoo 분류, 아니면 다른 소스 ①·② 로 통과
         const yc = cls.Yahoo;
-        if (of("③").length) { verdict = isClosed ? "③" : "미결"; note = `미규명 차이: ${of("③").map((n) => `${n} ${ext.causes?.[n] ?? "분해식 없음"}`).join("; ")}`; }
-        else if (yc === "①") { verdict = "①"; note = `Yahoo 일치${of("①").length > 1 ? `(${of("①").length}곳)` : ""}${passedA ? " · 앱 = SEC" : ""}${of("②").length ? ` · ${of("②").map((n) => `${n} ② ${ext.causes?.[n] ?? ""}`).join("; ")}` : ""}${extra ? ` · ${extra}` : ""}`; }
-        else if (yc === "②") { verdict = "②"; note = [`Yahoo: ${ext.causes?.Yahoo ?? ""}`, ...of("②").filter((n) => n !== "Yahoo").map((n) => `${n}: ${ext.causes?.[n] ?? ""}`), extra].filter(Boolean).join("; "); }
+        // 외부 한 곳이라도 ①·② 면 통과(오너 결정) — 나머지 소스의 미규명 차이는 사유에만 적는다(A층 FAIL 은 위 fails 가 먼저 ③)
+        const rest3 = of("③").length ? ` · 미규명(외부 확인으로 통과): ${of("③").map((n) => `${n} ${ext.causes?.[n] ?? "분해식 없음"}`).join("; ")}` : "";
+        if (yc === "①") { verdict = "①"; note = `Yahoo 일치${of("①").length > 1 ? `(${of("①").length}곳)` : ""}${passedA ? " · 앱 = SEC" : ""}${of("②").length ? ` · ${of("②").map((n) => `${n} ② ${ext.causes?.[n] ?? ""}`).join("; ")}` : ""}${extra ? ` · ${extra}` : ""}${rest3}`; }
+        else if (yc === "②") { verdict = "②"; note = [`Yahoo: ${ext.causes?.Yahoo ?? ""}`, ...of("②").filter((n) => n !== "Yahoo").map((n) => `${n}: ${ext.causes?.[n] ?? ""}`), extra].filter(Boolean).join("; ") + rest3; }
+        else if (of("③").length && !of("①").length && !of("②").length && !of("외부단독이탈").length) { verdict = isClosed ? "③" : "미결"; note = `미규명 차이: ${of("③").map((n) => `${n} ${ext.causes?.[n] ?? "분해식 없음"}`).join("; ")}`; }
         else if (of("②").length || of("외부단독이탈").length) {
           verdict = "②";
-          note = [...of("②").map((n) => `${n}: ${ext.causes?.[n] ?? ""}`), ...of("외부단독이탈").map((n) => `${n}: 외부 단독 이탈${ext.causes?.[n] ? ` — ${ext.causes[n]}` : ""}`), extra].filter(Boolean).join("; ");
-        } else if (of("①").length) { verdict = "①"; note = `${of("①").length}곳 일치${passedA ? " · 앱 = SEC" : ""}${extra ? ` · ${extra}` : ""}`; }
+          note = [...of("②").map((n) => `${n}: ${ext.causes?.[n] ?? ""}`), ...of("외부단독이탈").map((n) => `${n}: 외부 단독 이탈${ext.causes?.[n] ? ` — ${ext.causes[n]}` : ""}`), extra].filter(Boolean).join("; ") + rest3;
+        } else if (of("①").length) { verdict = "①"; note = `${of("①").length}곳 일치${passedA ? " · 앱 = SEC" : ""}${extra ? ` · ${extra}` : ""}${rest3}`; }
         else if (of("공통모드").length) { verdict = COMMON_VERDICT; note = `${COMMON_LABEL}: ${of("공통모드").map((n) => `${n} ${cmSrc[n] ?? ext.causes?.[n] ?? ""}`).join("; ")}`; }
         else { verdict = "NA"; note = of("NA").map((n) => `검증불가(${naLab(n)}): ${n} ${naSrc[n] ?? ""}`).join("; "); }
       } else if (unmatched.some((n) => !cmSrc[n] && !naSrc[n])) {
