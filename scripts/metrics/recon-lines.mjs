@@ -643,6 +643,9 @@ for (const [sym, r] of latest) {
           }
         }
       }
+      // 인포맥스 미결 사유(오너 결정 2026-09-28 — 외부 대조는 여기까지): 원데이터(매출·순이익)는 SEC 와 같은데 FactSet 이 SEC 미공시 금액으로 줄을
+      // 다시 나눠(판관비 속 감가상각 등) 구성을 SEC 로 재현할 수 없음 — FactSet 정의서 미확보
+      if (S.full && fsDiag?.anchor && !partition) for (const l of Object.keys(explain)) if (!explain[l].ok) explain[l].why = `${explain[l].why ?? ""} · FactSet 자체 배분 — 정의서 미확보(원데이터 매출·순이익은 SEC 일치)`;
       const ok = idOk && Object.values(explain).every((x) => x.ok);
       return { verdict: ok ? "②구성분해" : "미결", identity: idOk, explain, partition, fsDiag, years: table.map((t) => t.year), table, resid, std };
     };
