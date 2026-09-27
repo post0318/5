@@ -1,7 +1,7 @@
 /** 어댑터 공통 HTTP 헬퍼. 서버 전용. */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AdapterError } from "./types";
 import { checkBackoff, isSecUrl, noteFetchFailure, noteFetchSuccess } from "./fetch-health";
@@ -118,9 +118,49 @@ const secInflight = new Map<string, Promise<string>>();
 // 위치: SEC_ARCHIVE_CACHE_DIR, 없으면 로컬 .cache/sec-archives(gitignore), Vercel 운영은 /tmp(인스턴스 수명 동안). 로컬 .env.local 에도
 // vercel env pull 로 VERCEL="1" 이 들어오므로 NODE_ENV=production 일 때만 /tmp(개발 서버가 C:	mp 에 쓰던 문제, 2026-09-27).
 const SEC_ARCHIVE_RE = /^https:\/\/www\.sec\.gov\/Archives\/edgar\/data\/\d+\/\d{18}\//;
+/**
+ * SEC 캐시 루트 — `SEC_CACHE_DIR`(집·회사 PC 가 같은 캐시를 쓰려면 동기화 폴더로 지정), 없으면 로컬 `.cache`(gitignore),
+ * Vercel 운영은 /tmp. 옛 `SEC_ARCHIVE_CACHE_DIR` 는 공시 원본 폴더로 계속 인정한다.
+ */
+function secCacheRoot(): string {
+  return process.env.SEC_CACHE_DIR ?? path.join(process.env.VERCEL && process.env.NODE_ENV === "production" ? "/tmp" : process.cwd(), ".cache");
+}
 function archiveCachePath(key: string): string {
-  const dir = process.env.SEC_ARCHIVE_CACHE_DIR ?? path.join(process.env.VERCEL && process.env.NODE_ENV === "production" ? "/tmp" : process.cwd(), ".cache", "sec-archives");
+  const dir = process.env.SEC_ARCHIVE_CACHE_DIR ?? path.join(secCacheRoot(), "sec-archives");
   return path.join(dir, createHash("sha1").update(key).digest("hex"));
+}
+
+// ── SEC 갱신형 파일 디스크 캐시(2026-09-28, 오너 지시 — "sec 자료는 디스크에 넣어두고 사용") ──
+// companyfacts·submissions(data.sec.gov)·company_tickers.json 은 새 공시가 나오면 바뀐다. 디스크에 두고 SEC_API_CACHE_TTL_H
+// (기본 12시간) 안이면 디스크 것을 쓰고, 넘었으면 새로 받는다. **새로 받기가 실패하면(429 차단·시간 초과 등) 오래된 디스크 사본으로
+// 대신한다** — SEC 차단(보통 10분) 동안 화면이 통째로 비던 문제. 사본 나이는 secApiCacheAge() 로 알 수 있다.
+const SEC_API_RE = /^https:\/\/(data\.sec\.gov\/(api\/xbrl\/companyfacts|submissions)\/|www\.sec\.gov\/files\/company_tickers)/;
+const SEC_API_TTL_MS = Number(process.env.SEC_API_CACHE_TTL_H ?? 12) * 3_600_000;
+function apiCachePath(key: string): string {
+  return path.join(secCacheRoot(), "sec-api", createHash("sha1").update(key).digest("hex"));
+}
+async function apiRead(key: string): Promise<{ body: string; ageMs: number } | null> {
+  try {
+    const f = apiCachePath(key);
+    const [body, st] = await Promise.all([readFile(f, "utf8"), stat(f)]);
+    return { body, ageMs: Date.now() - st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+async function apiWrite(key: string, body: string): Promise<void> {
+  try {
+    const f = apiCachePath(key);
+    await mkdir(path.dirname(f), { recursive: true });
+    await writeFile(f, body, "utf8");
+  } catch {
+    /* 캐시 실패는 조회 결과에 영향 없음 */
+  }
+}
+/** 디스크 사본으로 대신한 URL → 사본 나이(ms). 화면·로그가 "최신이 아닐 수 있음"을 알릴 때 쓴다 */
+const staleServed = new Map<string, number>();
+export function secApiCacheAge(url: string): number | null {
+  return staleServed.get(url) ?? null;
 }
 async function archiveRead(key: string): Promise<string | null> {
   try {
@@ -144,14 +184,32 @@ function secText(url: string, opts: FetchJsonOpts, accept: Record<string, string
   let p = secInflight.get(key);
   if (!p) {
     const archive = SEC_ARCHIVE_RE.test(url);
-    p = (archive ? archiveRead(key) : Promise.resolve(null))
-      .then(async (hit) => {
+    const api = !archive && SEC_API_RE.test(url);
+    p = (async () => {
+      if (archive) {
+        const hit = await archiveRead(key);
         if (hit != null) return hit;
+      }
+      const cached = api ? await apiRead(key) : null;
+      if (cached && cached.ageMs <= SEC_API_TTL_MS) return cached.body;
+      try {
         await secSlot();
         const body = await request(url, opts, accept, (res) => res.text());
         if (archive) await archiveWrite(key, body);
+        if (api) {
+          await apiWrite(key, body);
+          staleServed.delete(url);
+        }
         return body;
-      })
+      } catch (err) {
+        // 새로 받기 실패 — 디스크 사본이 있으면(나이 무관) 그걸 쓴다. 조회 실패만 대신하고 코드 오류는 그대로 던진다.
+        if (cached && err instanceof FetchError) {
+          staleServed.set(url, cached.ageMs);
+          return cached.body;
+        }
+        throw err;
+      }
+    })()
       .finally(() => secInflight.delete(key));
     secInflight.set(key, p);
   }

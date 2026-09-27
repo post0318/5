@@ -63,7 +63,7 @@
  * 결과: reports/verify/verify-{market}-{YYYYMMDD-HHmm KST}.json. 실패·오류·누락이 있으면 종료코드 1.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
 import { buildAudit, COGS_RULE_COMMON, commonModeOf, decimalsVintage, extItemOf, isDecimalsRounding } from "./metrics/audit.mjs";
@@ -198,20 +198,38 @@ const SEC_UA = env.SEC_USER_AGENT || "global-market-research (personal use) cont
 // SEC 요청 공통 — 초당 3건 이하(앱 개발 서버 초당 5건과 합쳐 8건 — SEC 한도 10건/초 안), 429 면 65초 기다렸다 최대 3회 재시도(2026-09-26 — 판본 decimals
 // 판정 도입 뒤 인스턴스 요청이 늘어 429 가 났다). 공시 원본(www.sec.gov/Archives)은 제출 후 바뀌지 않으므로 디스크에 영구 캐시
 // (reports/.sec-cache — gitignore). companyfacts·submissions(data.sec.gov)는 매일 바뀌어 캐시하지 않는다.
-const SEC_DISK = pathResolve("reports/.sec-cache");
+// companyfacts·submissions·company_tickers(갱신형)도 디스크에 두고(2026-09-28 오너 지시) SEC_API_CACHE_TTL_H(기본 12시간) 안이면
+// 그걸 쓴다. 새로 받기가 실패하면(429 차단 재시도 소진·시간 초과) 오래된 사본으로 대신하고 콘솔에 사본 나이를 남긴다. 위치는
+// SEC_CACHE_DIR(앱과 같은 루트 — 집·회사 PC 동기화 폴더 가능) 아래 verify-archives·verify-api, 없으면 reports/.sec-cache.
+const SEC_ROOT = env.SEC_CACHE_DIR ? pathResolve(env.SEC_CACHE_DIR) : null;
+const SEC_DISK = SEC_ROOT ? pathJoin(SEC_ROOT, "verify-archives") : pathResolve("reports/.sec-cache");
+const SEC_API_DISK = SEC_ROOT ? pathJoin(SEC_ROOT, "verify-api") : pathResolve("reports/.sec-cache/api");
+const SEC_API_TTL_MS = Number(env.SEC_API_CACHE_TTL_H ?? 12) * 3_600_000;
+const SEC_API_RE = /^https:\/\/(data\.sec\.gov\/(api\/xbrl\/companyfacts|submissions)\/|www\.sec\.gov\/files\/company_tickers)/;
 let secChain = Promise.resolve(), secLast = 0;
 async function secFetchRaw(url, timeoutMs) {
   const ARCH = "https://www.sec.gov/Archives/edgar/data/";
+  const safe = (u) => u.replace(/^https:\/\//, "").replace(/[^A-Za-z0-9._-]/g, "_");
   const disk = url.startsWith(ARCH) ? pathJoin(SEC_DISK, url.slice(ARCH.length).replace(/[^A-Za-z0-9._-]/g, "_")) : null;
   if (disk && existsSync(disk)) return readFileSync(disk, "utf8");
-  for (let attempt = 0; ; attempt++) {
-    await (secChain = secChain.then(async () => { const w = secLast + 334 - Date.now(); if (w > 0) await new Promise((r) => setTimeout(r, w)); secLast = Date.now(); }));
-    const r = await fetch(url, { headers: { "user-agent": SEC_UA }, signal: AbortSignal.timeout(timeoutMs) });
-    if (r.status === 429 && attempt < 3) { await new Promise((res) => setTimeout(res, 65_000)); continue; }
-    if (!r.ok) throw new Error(`SEC ${url} → HTTP ${r.status}`);
-    const t = await r.text();
-    if (disk) { mkdirSync(SEC_DISK, { recursive: true }); writeFileSync(disk, t); }
-    return t;
+  const apiDisk = SEC_API_RE.test(url) ? pathJoin(SEC_API_DISK, safe(url)) : null;
+  const apiAge = apiDisk && existsSync(apiDisk) ? Date.now() - statSync(apiDisk).mtimeMs : null;
+  if (apiAge != null && apiAge <= SEC_API_TTL_MS) return readFileSync(apiDisk, "utf8");
+  try {
+    for (let attempt = 0; ; attempt++) {
+      await (secChain = secChain.then(async () => { const w = secLast + 334 - Date.now(); if (w > 0) await new Promise((r) => setTimeout(r, w)); secLast = Date.now(); }));
+      const r = await fetch(url, { headers: { "user-agent": SEC_UA }, signal: AbortSignal.timeout(timeoutMs) });
+      if (r.status === 429 && attempt < 3) { await new Promise((res) => setTimeout(res, 65_000)); continue; }
+      if (!r.ok) throw new Error(`SEC ${url} → HTTP ${r.status}`);
+      const t = await r.text();
+      if (disk) { mkdirSync(SEC_DISK, { recursive: true }); writeFileSync(disk, t); }
+      if (apiDisk) { mkdirSync(SEC_API_DISK, { recursive: true }); writeFileSync(apiDisk, t); }
+      return t;
+    }
+  } catch (e) {
+    if (apiAge == null) throw e;
+    console.warn(`  [SEC 사본 사용] ${url} — 새로 받기 실패(${String(e).slice(0, 80)}), 디스크 사본 ${(apiAge / 3_600_000).toFixed(1)}시간 전`);
+    return readFileSync(apiDisk, "utf8");
   }
 }
 async function secJson(url) {
