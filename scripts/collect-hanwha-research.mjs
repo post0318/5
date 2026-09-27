@@ -57,6 +57,7 @@ import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent, isDigitalAssetContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
+import { looksLikeSectorLabel } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -344,6 +345,12 @@ async function classify(row, board) {
   // 이슈분석으로 분류(오너 지시 2026-09-27, "AI 자금조달, 넓어지는 시장과 높아지는 비용").
   if (region === "해외시황") it.stockName = "한화 해외시황";
   else if (it.stockName === "산업" && region) it.stockName = region;
+  // 종목도 업종도 없는 미국·중국 시장 노트("[미국주식] 호르무즈보다 중요한 건 유동성", "[미중 정상회담] 높아질 기대, 숨 고를 증시")는
+  // 산업분석이 아니라 투자전략(주식)이다(오너 지적 2026-09-27). 라벨이 실제 업종 어휘일 때만 산업분석으로 남긴다.
+  if (!it.symbol && it.category === "산업" && (region === "미국주식" || region === "중국주식")) {
+    const label = it.stockName === region ? "" : it.stockName;
+    if (!looksLikeSectorLabel(label)) it.stockName = "한화 해외주식 전략";
+  }
   return it;
 }
 

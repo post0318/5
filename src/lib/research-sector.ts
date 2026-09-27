@@ -69,7 +69,11 @@ const SECTOR_RULES: [SectorLabel, RegExp][] = [
   ["필수소비재", /음식료|담배|농업/],
 ];
 
-export function classifySector(doc: { stockName?: string | null; title?: string | null }): SectorLabel | null {
+export function classifySector(doc: {
+  stockName?: string | null;
+  title?: string | null;
+  summary?: string | null;
+}): SectorLabel | null {
   // stockName은 원문 수집기가 붙인 업종 라벨 그대로("운송" 등)라 title보다
   // 신뢰도가 높다 — 먼저 stockName만으로 판정하고, 거기서 못 정하면 title까지
   // 합쳐서 본다. 순서를 안 나누면 "운송" 리포트 제목에 "조선업" 같은 단어가
@@ -82,6 +86,15 @@ export function classifySector(doc: { stockName?: string | null; title?: string 
   const hay = `${stockName} ${doc.title ?? ""}`;
   for (const [label, re] of SECTOR_RULES) {
     if (re.test(hay)) return label;
+  }
+  // 마지막 근거 — 요약 첫머리. 라벨이 시리즈명("Same But Differ")이고 제목도 테마("변수가 된 환율…")인 업종 리포트는 본문 첫 소제목
+  // ("1. 전기전자 현황 점검")에만 업종이 나온다(오너 지적 2026-09-27). 요약 전체는 잡음이 많아 앞 60자만 본다.
+  // 한글 요약만 — 영문 요약은 대소문자 무시 규칙(\bIT\b 가 문장 속 "it" 에 걸림)이 잡음을 만든다.
+  const lead = (doc.summary ?? "").trim().slice(0, 60);
+  if (lead && /[가-힣]/.test(lead)) {
+    for (const [label, re] of SECTOR_RULES) {
+      if (re.test(lead)) return label;
+    }
   }
   return null;
 }
