@@ -5,6 +5,8 @@ import { revenue } from "./metrics/revenue";
 import { cogsGp } from "./metrics/cogs";
 import { opincOpex } from "./metrics/opinc";
 import { cogsRuleFor } from "./metrics/cogs-rules";
+import { sgaRnd } from "./metrics/sga";
+import { sgaRuleFor } from "./metrics/sga-rules";
 import { finalizeDerived } from "./derived";
 import { ENGINE_VERSION, markFailed, persist, readStmt, readSym, readSymMeta, toStmtDoc, toSymDoc, touchChecked } from "./store";
 import { Gap, gapNames, type FinAssembly, type Market } from "./types";
@@ -22,6 +24,7 @@ export type { FinStmtDoc, FinSymDoc } from "../db/fin";
 export { gapNames } from "./types";
 export { COGS_NOTE, FIN_TYPES } from "./metrics/cogs";
 export { OPINC_NOTE } from "./metrics/opinc";
+export { SGA_NOTE } from "./metrics/sga";
 
 export interface AssembleOpts {
   persist?: boolean;
@@ -39,7 +42,7 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
     if (opts.persist) await markFailed(`${market}:${sym}`, Gap.CF_FETCH).catch(() => {});
     throw e;
   }
-  const st = await assembleIncomeStatements(reader, { annual: opts.annual ?? 10, quarterly: opts.quarterly ?? 20 }, cogsRuleFor(sym)?.rule?.terms);
+  const st = await assembleIncomeStatements(reader, { annual: opts.annual ?? 10, quarterly: opts.quarterly ?? 20 }, cogsRuleFor(sym)?.rule?.terms, sgaRuleFor(sym)?.hint);
   const colsGaps = [...st.annual, ...st.quarterly].reduce((g, a) => g | a.col.gaps, 0);
   const cols = dedupe([...st.annual, ...st.quarterly]);
   const rev = revenue(cols, reader.profile);
@@ -47,15 +50,17 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
   const { cogs, gp } = cogsGp(cols, reader.profile, rev);
   // 영업이익·영업비용(본표 소계, 없으면 공시 계산 구조 합성 — cogs.md §8). 화면은 markets/us/edgar-ev.ts 영업이익 함수로 이 값을 쓴다
   const { opinc, opex } = opincOpex(cols, reader.profile, gp);
+  // 판관비·연구개발비(본표 영업이익 식의 판관비·연구개발비 성격 줄 — docs/metrics/sga.md)
+  const { sga, rnd } = sgaRnd(cols, reader.profile);
   const at = new Date().toISOString();
   // 파생값 입력 참조 압축·자기 검사(입력 합 = 값) — 불일치는 값을 두고 issues.der·경고로(조용히 통과시키지 않음)
-  const derErr = await finalizeDerived(reader, cols, [rev, cogs, gp, opinc, opex], at);
+  const derErr = await finalizeDerived(reader, cols, [rev, cogs, gp, opinc, opex, sga, rnd], at);
   // 조립 항등식 불성립(Gap.IDENTITY) 노출 — 매출 경로는 3층이 이미 값을 비웠고(reason), 그 외 줄은 값을 두고 경고로만
   const issues: FinAssembly["issues"] = [];
   const warnings = [...reader.warnings];
   // H.10 공식 환율 미고시 창(최신 고시일 뒤) — 빈칸의 사유로 남기고 경고(Yahoo 등으로 대체하지 않는다, architecture.md §1.3)
   for (const [key, why] of reader.fxPending) {
-    for (const s of [rev, cogs, gp, opinc, opex]) {
+    for (const s of [rev, cogs, gp, opinc, opex, sga, rnd]) {
       const mv = s.values[key];
       if (mv && mv.v == null && !mv.reason) s.values[key] = { ...mv, reason: why };
     }
@@ -79,12 +84,14 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
     if (idf.length) warnings.push(`${a.col.key} 매출원가·매출총이익 비움 — 조립 항등식 불성립: ${idf.join("; ")}`);
     const xn = opex.values[a.col.key]?.note;
     if (xn) warnings.push(`${a.col.key} 영업비용: ${xn}`);
+    const sf = [...new Set([...(sga.values[a.col.key]?.idFails ?? []), ...(rnd.values[a.col.key]?.idFails ?? [])])];
+    if (sf.length) warnings.push(`${a.col.key} 판관비·연구개발비 비움 — 조립 항등식 불성립: ${sf.join("; ")}`);
   }
   const result: FinAssembly = {
     profile: reader.profile,
     annual: st.annual,
     quarterly: st.quarterly,
-    metrics: { revenue: rev, cogs, gp, opinc, opex },
+    metrics: { revenue: rev, cogs, gp, opinc, opex, sga, rnd },
     gaps: reader.gaps | colsGaps,
     warnings,
     issues,
@@ -147,16 +154,23 @@ export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | 
   return entry.p;
 }
 
-const METRIC_KEY = { revenue: "rev", cogs: "cogs", gp: "gp", opinc: "opinc", opex: "opex" } as const;
+const METRIC_KEY = { revenue: "rev", cogs: "cogs", gp: "gp", opinc: "opinc", opex: "opex", sga: "sga", rnd: "rnd" } as const;
 export function metricAt(sym: FinSymDoc, metric: keyof typeof METRIC_KEY, colKey: string): number | null {
   const i = sym.c.findIndex((c) => c[0] === colKey);
   return i < 0 ? null : (sym.m[METRIC_KEY[metric]]?.[i] ?? null);
 }
 
 /** 저장본에서 지표 한 칸의 사유·주석(빈칸 사유 또는 정의 메모 — 예: COGS_NOTE.synth). 없으면 null */
-export function metricNoteAt(sym: FinSymDoc, metric: "cogs" | "gp" | "opinc" | "opex", colKey: string): string | null {
+export function metricNoteAt(sym: FinSymDoc, metric: "cogs" | "gp" | "opinc" | "opex" | "sga" | "rnd", colKey: string): string | null {
   for (const [text, keys] of sym.n?.[METRIC_KEY[metric]] ?? []) if (keys.includes(colKey)) return text;
   return null;
+}
+
+/**
+ * 저장본의 판관비·연구개발비 하위 줄(여러 줄 합·소계의 항 — docs/metrics/sga.md §4) — [줄 id, 라벨, 열키 → 값]. 하위 줄이 없으면 빈 목록
+ */
+export function metricPartsAt(sym: FinSymDoc, metric: "sga" | "rnd"): { id: string; label: string; v: Map<string, number | null> }[] {
+  return (sym.sp?.[metric] ?? []).map(([id, label, vs]) => ({ id, label, v: new Map(sym.c.map((c, i) => [c[0], vs[i] ?? null])) }));
 }
 
 /**

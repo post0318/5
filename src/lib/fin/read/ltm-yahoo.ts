@@ -20,6 +20,17 @@ export const YAHOO_FIELD: Record<string, string> = {
   "us-gaap:CostOfGoodsAndServicesSold": "costOfRevenue",
   "us-gaap:GrossProfit": "grossProfit",
   "us-gaap:OperatingIncomeLoss": "totalOperatingIncomeAsReported",
+  // 판관비·연구개발비 줄(docs/metrics/sga.md §2) — Yahoo 는 합계(sellingGeneralAndAdministration)와 판매·마케팅·일반관리 줄을 따로 준다.
+  // 줄마다 연간 경계 확인(Yahoo 연간 = SEC FY)은 다른 항목과 같다. IFRS 줄(TSM·SPOT)은 개념 이름 그대로 대응(canonical 대응 없음)
+  "us-gaap:SellingGeneralAndAdministrativeExpense": "sellingGeneralAndAdministration",
+  "ifrs-full:SellingGeneralAndAdministrativeExpense": "sellingGeneralAndAdministration",
+  "us-gaap:SellingAndMarketingExpense": "sellingAndMarketingExpense",
+  "ifrs-full:SalesAndMarketingExpense": "sellingAndMarketingExpense",
+  "us-gaap:GeneralAndAdministrativeExpense": "generalAndAdministrativeExpense",
+  "ifrs-full:GeneralAndAdministrativeExpense": "generalAndAdministrativeExpense",
+  "us-gaap:ResearchAndDevelopmentExpense": "researchAndDevelopment",
+  "us-gaap:ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost": "researchAndDevelopment",
+  "ifrs-full:ResearchAndDevelopmentExpense": "researchAndDevelopment",
   "us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": "pretaxIncome",
   "us-gaap:IncomeTaxExpenseBenefit": "taxProvision",
   "us-gaap:NetIncomeLoss": "netIncome",

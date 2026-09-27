@@ -1,5 +1,5 @@
 import "server-only";
-import { FIN_TYPES, gapNames, loadFinSym, metricAt, metricNoteAt, type FinSymDoc } from "@/lib/fin";
+import { FIN_TYPES, gapNames, loadFinSym, metricAt, metricNoteAt, metricPartsAt, type FinSymDoc } from "@/lib/fin";
 
 /**
  * 미국 매출 — **재무 5층 구조(src/lib/fin)의 매출 지표만** 받아 화면 모듈에 나눠 준다(docs/metrics/revenue.md §3).
@@ -7,6 +7,8 @@ import { FIN_TYPES, gapNames, loadFinSym, metricAt, metricNoteAt, type FinSymDoc
  * 다시 고르거나 기간·판본을 다시 정하지 않는다(eslint: 매출 태그 직접 사용 금지).
  *
  * 열 = fin 열 그대로: 연간(FY, 최신 판본), 분기(3개월 — Q4 는 사업연도 − 9개월 누적), LTM.
+ *
+ * 판관비·연구개발비(docs/metrics/sga.md)도 같은 열에 싣는다(sga·rnd, 하위 줄 sgaParts·rndParts — 손익계산서·기본 재무제표가 이 값만 쓴다).
  *
  * 매출원가·매출총이익(docs/metrics/cogs.md)도 같은 열에 싣는다 — 손익계산서·재무분석·기본 재무제표가 이 값만 쓴다(eslint: 매출원가·
  * 매출총이익 태그 직접 사용 금지). 칸마다 사유·주석(cogsNote·gpNote — 합성 "본표 소계 없음 · 매출 − 매출원가", 빈칸 "구성 규칙 대기" 등).
@@ -35,6 +37,19 @@ export interface RevCol {
   /** 칸 사유·주석(빈칸이면 사유 "정의 대기 — …", 값이면 정의 메모 — 합성 OPINC_NOTE.synth 등) */
   opincNote: string | null;
   opexNote: string | null;
+  /** 판관비·연구개발비(fin sga·rnd — 본표 판관비·연구개발비 성격 줄 합, docs/metrics/sga.md) */
+  sga: number | null;
+  rnd: number | null;
+  /** 칸 사유·주석(빈칸 사유 — "본표에 줄 없음 …"(SGA_NOTE.noLine)·금융사·기준 혼합, 값이면 "본표 줄 이름: …"·"본표 줄 합: …") */
+  sgaNote: string | null;
+  rndNote: string | null;
+}
+
+/** 판관비·연구개발비 하위 줄(여러 줄 합 — 화면 손익계산서 합계 아래 줄) — 열키 → 값 */
+export interface FinSubLine {
+  id: string;
+  label: string;
+  v: Map<string, number | null>;
 }
 
 export interface UsRevenue {
@@ -52,6 +67,9 @@ export interface UsRevenue {
    * 비어 있음), other = 매출과 무관한 줄의 불성립(매출 값은 유지 — 다음 지표 착수 때 닫을 미결)
    */
   issues: FinColIssue[];
+  /** 판관비·연구개발비 하위 줄(docs/metrics/sga.md §4) — 없으면 빈 목록 */
+  sgaParts: FinSubLine[];
+  rndParts: FinSubLine[];
 }
 
 export interface FinColIssue {
@@ -81,6 +99,8 @@ export function revenueFromFinSym(sym: FinSymDoc): UsRevenue {
       cogsNote: metricNoteAt(sym, "cogs", key), gpNote: metricNoteAt(sym, "gp", key),
       opinc: metricAt(sym, "opinc", key), opex: metricAt(sym, "opex", key),
       opincNote: metricNoteAt(sym, "opinc", key), opexNote: metricNoteAt(sym, "opex", key),
+      sga: metricAt(sym, "sga", key), rnd: metricAt(sym, "rnd", key),
+      sgaNote: metricNoteAt(sym, "sga", key), rndNote: metricNoteAt(sym, "rnd", key),
     };
     if (key === "LTM") ltm = { key, kind: "LTM", fy: 0, fq: 0, start, end, v, ...x };
     else if (/^FY\d{4}$/.test(key)) annual.push({ key, kind: "FY", fy: Number(key.slice(2)), fq: 0, start, end, v, ...x });
@@ -98,7 +118,7 @@ export function revenueFromFinSym(sym: FinSymDoc): UsRevenue {
       col: c[0], start: c[1], end: c[2], v: metricAt(sym, "revenue", c[0]), gaps: gapNames(c[6]),
       rev: idf.get(c[0])?.rev ?? [], other: idf.get(c[0])?.other ?? [], unv: idf.get(c[0])?.unv ?? [],
     }));
-  return { annual, quarters, ltm, gaps: sym.g, financial: FIN_TYPES.has(sym.p.t), issues };
+  return { annual, quarters, ltm, gaps: sym.g, financial: FIN_TYPES.has(sym.p.t), issues, sgaParts: metricPartsAt(sym, "sga"), rndParts: metricPartsAt(sym, "rnd") };
 }
 
 /** 종목의 매출 — 저장본(유니버스) 또는 비저장 조립(fin loadFinSym). 실패하면 null(소비처는 빈칸) */

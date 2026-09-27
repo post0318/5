@@ -19,7 +19,7 @@ const nearDay = (a: string | null | undefined, b: string | null | undefined) =>
 const noise = (abs: number, n: number) => Number.EPSILON * 8 * (n + 1) * Math.max(abs, 1);
 
 /** 지표 이름(자기 검사 메시지용) */
-const METRIC_NAME: Record<MetricSeries["metric"], string> = { revenue: "매출", cogs: "매출원가", gp: "매출총이익", opinc: "영업이익", opex: "영업비용" };
+const METRIC_NAME: Record<MetricSeries["metric"], string> = { revenue: "매출", cogs: "매출원가", gp: "매출총이익", opinc: "영업이익", opex: "영업비용", sga: "판관비", rnd: "연구개발비" };
 
 export async function finalizeDerived(reader: UsReader, cols: AssembledIs[], series: MetricSeries[], at: string): Promise<Map<string, string[]>> {
   const byKey = new Map(cols.map((a) => [a.col.key, a] as const));

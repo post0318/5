@@ -578,9 +578,7 @@ interface ConceptSpec {
 
 const CONCEPTS: ConceptSpec[] = [
   // 손익계산서
-  // 매출·매출원가·매출총이익 행은 태그가 아니라 재무 5층 구조 지표(fin-revenue.ts)로 따로 채운다(getFinancials) — FIN_IS_ROWS
-  { concept: "ResearchAndDevelopmentExpense", label: "R&D Expense", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
-  { concept: "SellingGeneralAndAdministrativeExpense", label: "SG&A Expense", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
+  // 매출·매출원가·매출총이익·연구개발비·판관비 행은 태그가 아니라 재무 5층 구조 지표(fin-revenue.ts)로 따로 채운다(getFinancials) — FIN_IS_ROWS
   { concept: "OperatingIncomeLoss", label: "Operating Income", section: "손익계산서", depth: 0, isSubtotal: true, isHighlight: true },
   { concept: "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", label: "Pretax Income", section: "손익계산서", depth: 0, isSubtotal: true, isHighlight: false },
   { concept: "IncomeTaxExpenseBenefit", label: "Income Tax Expense", section: "손익계산서", depth: 1, isSubtotal: false, isHighlight: false },
@@ -610,11 +608,17 @@ export const REVENUE_ROW_ID = "fin:revenue";
 export const COGS_ROW_ID = "fin:cogs";
 export const GROSS_PROFIT_ROW_ID = "fin:grossProfit";
 
-/** fin 지표 행(매출·매출원가·매출총이익) — 태그가 아니라 fin-revenue.ts 열 값 */
-const FIN_IS_ROWS: { id: string; label: string; pick: "v" | "cogs" | "gp"; depth: number; isSubtotal: boolean; isHighlight: boolean }[] = [
+/** getFinancials 의 연구개발비·판관비 행 id(fin rnd·sga 지표, docs/metrics/sga.md) */
+export const RND_ROW_ID = "fin:rnd";
+export const SGA_ROW_ID = "fin:sga";
+
+/** fin 지표 행(매출·매출원가·매출총이익·연구개발비·판관비) — 태그가 아니라 fin-revenue.ts 열 값 */
+const FIN_IS_ROWS: { id: string; label: string; pick: "v" | "cogs" | "gp" | "rnd" | "sga"; depth: number; isSubtotal: boolean; isHighlight: boolean }[] = [
   { id: REVENUE_ROW_ID, label: "Revenue", pick: "v", depth: 0, isSubtotal: false, isHighlight: true },
   { id: COGS_ROW_ID, label: "Cost of Revenue", pick: "cogs", depth: 1, isSubtotal: false, isHighlight: false },
   { id: GROSS_PROFIT_ROW_ID, label: "Gross Profit", pick: "gp", depth: 0, isSubtotal: true, isHighlight: false },
+  { id: RND_ROW_ID, label: "R&D Expense", pick: "rnd", depth: 1, isSubtotal: false, isHighlight: false },
+  { id: SGA_ROW_ID, label: "SG&A Expense", pick: "sga", depth: 1, isSubtotal: false, isHighlight: false },
 ];
 
 function periodKey(e: FactUnitEntry): string {

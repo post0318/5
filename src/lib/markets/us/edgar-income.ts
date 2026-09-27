@@ -31,8 +31,8 @@ import {
   FIN_PROVISION,
   isFinancialCompany,
 } from "./edgar-financial";
-import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm, revQuarterLabel, type RevCol } from "./fin-revenue";
-import { COGS_NOTE, OPINC_NOTE } from "@/lib/fin";
+import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm, revQuarterLabel, type FinSubLine, type RevCol } from "./fin-revenue";
+import { COGS_NOTE, OPINC_NOTE, SGA_NOTE } from "@/lib/fin";
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
@@ -42,13 +42,8 @@ import { COGS_NOTE, OPINC_NOTE } from "@/lib/fin";
  */
 
 const OPEX = ["OperatingExpenses", "CostsAndExpenses"];
-const SGA = [
-  "SellingGeneralAndAdministrativeExpense",
-  "GeneralAndAdministrativeExpense",
-];
-// 취득 IPR&D 를 별도 줄로 공시하는 회사(LLY 2023~)는 R&D 태그가 "취득 IPR&D 제외"로 바뀐다 — 없으면 연구개발비·
-// 기타 영업비용 행이 통째로 비었다. 취득 IPR&D 는 기타 영업비용(차감 계산)에 남는다.
-const RND = ["ResearchAndDevelopmentExpense", "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"];
+// 판관비·연구개발비는 태그로 고르지 않는다 — 재무 5층 구조 지표(fin-revenue.ts 열의 sga·rnd, docs/metrics/sga.md): 본표 영업이익 식의
+// 판관비·연구개발비 성격 줄 합(여러 줄이면 하위 줄 표시). 예전 태그 목록(SG&A → G&A 순)은 판매·마케팅 줄을 기타 영업비용으로 흘렸다
 // 영업이익 — edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전, 로더가 합성).
 // 하이라이트·재무분석·개요 멀티플과 같은 값(예전엔 여기만 매출 − 원가로 만든 매출총이익
 // 에서 판관비·연구개발비를 빼 BMY 등에서 EBITDA 가 화면마다 달랐다).
@@ -261,8 +256,6 @@ export function buildUsIncome(
     }
     return finVal((c) => c.gp);
   })();
-  const sga = val(SGA);
-  const rnd = val(RND);
   const opex = val(OPEX);
   const pretax = val(PRETAX);
   // 세전이익 태그가 없는 칸 — 순이익 + 법인세 등으로 만들지 않는다(사유)
@@ -279,6 +272,16 @@ export function buildUsIncome(
     return o;
   };
   const finOpex = opViaFin ? finCellVal((c) => c.opex, (c) => c.opexNote) : null;
+  // 판관비·연구개발비 = fin 지표(본표 판관비·연구개발비 성격 줄 합). 빈칸은 fin 사유(칸 주석)
+  const sga = finCellVal((c) => c.sga, (c) => c.sgaNote);
+  const rnd = finCellVal((c) => c.rnd, (c) => c.rndNote);
+  /** 기타 영업비용 차감용 — 본표에 그 줄이 없는 칸(SGA_NOTE.noLine)은 0, 그 밖의 빈칸은 빈칸(차감 불가) */
+  const asZeroIfNoLine = (o: Record<string, number | null>): Record<string, number | null> => {
+    const r = blank();
+    for (const l of labels) r[l] = o[l] ?? (WHY.get(o)?.[l]?.startsWith(SGA_NOTE.noLine) ? 0 : null);
+    WHY.set(r, Object.fromEntries(labels.filter((l) => r[l] == null && WHY.get(o)?.[l]).map((l) => [l, WHY.get(o)![l]])));
+    return r;
+  };
   // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 fin 영업이익(금융사 유형 증권·보험은 옛 단일 기준 시계열)
   const opIncome = (() => {
     if (isFin) {
@@ -307,11 +310,11 @@ export function buildUsIncome(
   })();
   // 기타 영업비용 = OPEX − SGA − RND, 없으면 GrossProfit − OpIncome − SGA − RND. fin 경로는 fin 영업비용(매출총이익 − 영업이익) − SGA − RND
   const otherOpex = (() => {
-    if (finOpex) return diff(finOpex, sga, rnd);
+    if (finOpex) return diff(finOpex, asZeroIfNoLine(sga), asZeroIfNoLine(rnd));
     const base = labels.some((l) => opex[l] != null)
       ? opex
       : diff(grossProfit, opIncome);
-    return diff(base, sga, rnd);
+    return diff(base, asZeroIfNoLine(sga), asZeroIfNoLine(rnd));
   })();
   // (−)영업외손익 = 세전이익 − 영업이익 (부호 반전). 워터폴 정합을 위해 이 정의만.
   // NonoperatingIncomeExpense 태그는 일부 항목만 담는 기업(IBM 등)이 많아 대신 쓰지 않는다(그림자 채우기 금지, 2026-09-27)
@@ -585,6 +588,26 @@ export function buildUsIncome(
     return [...by];
   };
   const gpNotes = noteGroups((c) => c.gpNote);
+  // 판관비·연구개발비 — 한 줄이 표준 이름이 아니면 행 이름에 원래 이름 병기(오너 결정 2026-09-28: HLT·MAR·SBUX 일반관리비, MCD "Other",
+  // AMZN "Technology and infrastructure"), 여러 줄 합이면 하위 줄을 행으로. 빈칸 사유(본표에 줄 없음 제외)는 각주
+  const faceName = (pick: (c: RevCol) => string | null): string | null => {
+    const ns = [...new Set(labels.map((l) => (finColOf.get(l) ? pick(finColOf.get(l)!) : null)).filter((t): t is string => !!t?.startsWith(SGA_NOTE.face)))];
+    return ns.length === 1 ? ns[0].slice(SGA_NOTE.face.length + 2).replace(/^"|"$/g, "") : null;
+  };
+  const opexRow = (title: string, values: Record<string, number | null>, pick: (c: RevCol) => string | null, parts: FinSubLine[], id: string): FinancialLineItem[] => {
+    const fname = faceName(pick);
+    const subs = parts
+      .map((sp) => ({ sp, v: Object.fromEntries(labels.map((l) => [l, finColOf.get(l) ? (sp.v.get(finColOf.get(l)!.key) ?? null) : null])) as Record<string, number | null> }))
+      .filter((x) => labels.some((l) => x.v[l] != null));
+    return [
+      row(fname ? `${title} (본표: ${fname})` : title, values, { accountId: `is:${id}` }),
+      ...subs.map((x) => row(x.sp.label, x.v, { depth: 2, italic: true, accountId: `is:${id}:${x.sp.id}` })),
+    ];
+  };
+  const opexFootnotes = ([["판매관리비", (c: RevCol) => (c.sga == null ? c.sgaNote : null)], ["연구개발비", (c: RevCol) => (c.rnd == null ? c.rndNote : null)]] as const).flatMap(([what, pick]) =>
+    noteGroups(pick)
+      .filter(([t]) => !t.startsWith(SGA_NOTE.noLine))
+      .map(([t, ls]) => row(`※ ${what}: ${t}${ls.length === labels.length ? "" : ` (${ls.join(", ")})`}`, blank(), { depth: 1, italic: true })));
   const cogsNotes = noteGroups((c) => c.cogsNote);
   const synthNote = gpNotes.find(([t]) => t.startsWith(COGS_NOTE.synth))?.[0] ?? null;
   const sameCols = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -606,8 +629,8 @@ export function buildUsIncome(
         ? [
             row("(−) 매출원가", cogs),
             row(synthNote ? `매출총이익 (${synthNote})` : "매출총이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
-            row("(−) 판매관리비", sga),
-            row("(−) 연구개발비", rnd),
+            ...opexRow("(−) 판매관리비", sga, (c) => c.sgaNote, rev?.sgaParts ?? [], "sga"),
+            ...opexRow("(−) 연구개발비", rnd, (c) => c.rndNote, rev?.rndParts ?? [], "rnd"),
             row("(−) 기타 영업비용", otherOpex),
           ]
         : [row("(−) 영업비용", totalOpex)]),
@@ -648,6 +671,7 @@ export function buildUsIncome(
     row("일회성비용(구조조정·손상차손·위약금·합의금 등)", oneOff),
   ];
   items.push(...cogsFootnotes);
+  if (!isFin && hasGross) items.push(...opexFootnotes);
   // SEC 원본 조회 실패로 공란이 된 값(영업이익·감가상각비·EBITDA·일회성비용 — 대체 계산 없음, sec-unavailable.ts)
   const unavailable = unavailableNote(facts);
   if (unavailable) items.push(row(`※ ${unavailable}`, blank(), { depth: 1, italic: true }));

@@ -134,7 +134,9 @@ export interface Column {
 }
 export type LineRole =
   | "revenue" | "revenue.total" | "revenue.net" | "revenue.nonop"
-  | "cogs" | "cogs.part" | "gross" | "opinc" | "pretax" | "tax" | "ni" | "ni.parent";
+  | "cogs" | "cogs.part" | "gross" | "opinc" | "pretax" | "tax" | "ni" | "ni.parent"
+  // 판관비·연구개발비(docs/metrics/sga.md) — 한 줄(또는 소계)이면 sga·rnd, 소계 없는 여러 줄이면 각 줄 sga.part·rnd.part
+  | "sga" | "sga.part" | "rnd" | "rnd.part";
 export interface StmtLine {
   id: string;
   label: string;
@@ -158,6 +160,31 @@ export interface CogsTerm {
   sign: 1 | -1;
   /** 본표에 없거나 값이 없으면 0(없으면 빈칸) */
   optional?: boolean;
+}
+
+/** 판관비·연구개발비 회사별 지정(3층 metrics/sga-rules.ts) — 성격을 개념 이름·라벨로 알 수 없는 회사 고유 줄 개념 id */
+export interface SgaHint {
+  sga?: string[];
+  rnd?: string[];
+}
+/** 판관비·연구개발비 줄 판정 결과(2층 assemble/is.ts identifySgaRnd) — 지표에 쓰는 줄과 부호(영업이익 식에서 빼는 비용 줄 = +1) */
+export interface OpexLines {
+  /** 판정 뿌리 줄(본표 영업이익, 없으면 세전이익) — 없으면 null(why) */
+  root: string | null;
+  /** 지표 줄 — 한 줄·소계면 1개, 소계 없는 여러 줄이면 각 줄 */
+  sga: { id: string; sign: 1 | -1 }[];
+  rnd: { id: string; sign: 1 | -1 }[];
+  /** 화면 하위 줄(여러 줄이면 그 줄들, 소계면 소계의 항 줄) — 한 줄이면 빈 목록 */
+  sgaSub: string[];
+  rndSub: string[];
+  why?: string;
+  /** 파생 열(Q4·누적 차·LTM)의 구성 공시끼리 판관비·연구개발비 줄 구성이 다름 — 한 열 = 한 기준이라 비움 */
+  mix?: { sga?: string; rnd?: string };
+  /**
+   * 파생 열의 구성 공시끼리 줄 개념이 다르지만 합이 같을 때(개념 이름만 바뀜) — 구성 공시마다 그 공시 자체 줄의 합으로 만든 값. 있으면 3층은
+   * 줄 대신 이 값을 쓴다(note 는 화면 주석)
+   */
+  cell?: Partial<Record<"sga" | "rnd", { v: number | null; inputs?: DerivedInput[]; note: string }>>;
 }
 
 export interface AssembledIs {
@@ -187,6 +214,8 @@ export interface AssembledIs {
    * mix = 구성 공시 간 기준 혼합(후보 합이 다름·재작성 — is.ts readCogsTerms ①②) — 있으면 v null
    */
   cogsTerms?: { group: string; sign: 1 | -1; v: number | null; inputs: DerivedInput[]; concepts: string[]; alts: string[]; mix?: string }[];
+  /** 판관비·연구개발비 줄(docs/metrics/sga.md) — 본표 구조를 못 읽은 열은 없음 */
+  opx?: OpexLines;
 }
 
 /** 3층 — 지표 값. */
@@ -211,7 +240,7 @@ export interface MetricValue {
   /** 값은 두되 화면에 알릴 정의 메모(예: 매출총이익 합성 "본표 소계 없음 · 매출 − 매출원가", "회사 공시 자체") */
   note?: string;
 }
-export type MetricId = "revenue" | "cogs" | "gp" | "opinc" | "opex";
+export type MetricId = "revenue" | "cogs" | "gp" | "opinc" | "opex" | "sga" | "rnd";
 export interface MetricSeries {
   metric: MetricId;
   unit: "USD" | "KRW";
@@ -234,7 +263,7 @@ export interface FinAssembly {
   profile: CompanyProfile;
   annual: AssembledIs[];
   quarterly: AssembledIs[];
-  metrics: { revenue: MetricSeries; cogs: MetricSeries; gp: MetricSeries; opinc: MetricSeries; opex: MetricSeries };
+  metrics: { revenue: MetricSeries; cogs: MetricSeries; gp: MetricSeries; opinc: MetricSeries; opex: MetricSeries; sga: MetricSeries; rnd: MetricSeries };
   gaps: number;
   /** 원천 조회 실패 등 사람이 읽는 경고(조립 항등식 불성립 포함) */
   warnings: string[];

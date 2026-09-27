@@ -1,5 +1,5 @@
 import "server-only";
-import { Gap, type AssembledIs, type CogsTerm, type Column, type LineRole, type Prov, type StmtLine } from "../types";
+import { Gap, type AssembledIs, type CogsTerm, type Column, type LineRole, type OpexLines, type Prov, type SgaHint, type StmtLine } from "../types";
 import { asPartRead, canonical, REVENUE_ALIAS_CONCEPTS, type CellValue, type ColumnSpec, type FilingStructure, type Part, type PartRead, type UsReader } from "../read";
 
 /**
@@ -91,6 +91,222 @@ function identifyCogs(lines: StmtLine[], sums: Sums, ownLabel: (l: StmtLine) => 
   return { by: null, why: gross ? "매출총이익 식 없음 · 원가 라벨 줄 없음" : "본표에 매출원가 줄 없음" };
 }
 
+/**
+ * 판관비·연구개발비 성격 개념(docs/metrics/sga.md §1) — 표준 네임스페이스(us-gaap·ifrs-full)는 **개념 이름**으로, 회사 고유 개념은 그 공시 자체
+ * 라벨로 판정한다. 오너 결정(2026-09-28): 판관비 = 본표 판관비 성격 줄 전부의 합 — 판매·마케팅·광고·일반관리·기타 판관비(MCD "Other", KO
+ * "Other operating charges" 는 개념이 OtherSellingGeneralAndAdministrativeExpense).
+ */
+const SGA_LOCAL = new Set([
+  "SellingGeneralAndAdministrativeExpense", "GeneralAndAdministrativeExpense", "SellingAndMarketingExpense", "SellingExpense",
+  "MarketingExpense", "MarketingAndAdvertisingExpense", "AdvertisingExpense", "OtherSellingGeneralAndAdministrativeExpense",
+  // IFRS
+  "SalesAndMarketingExpense", "DistributionCosts", "AdministrativeExpense",
+]);
+const RND_LOCAL = new Set([
+  "ResearchAndDevelopmentExpense", "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost", "ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost",
+]);
+/** 회사 고유 개념의 라벨 판정 — 판관비(판매·일반관리 계열 이름으로 시작), 연구개발비("research" 포함, 취득 IPR&D 제외) */
+const SGA_OWN_LABEL = /^(total )?((selling|sales),? general,? (and|&) administrative|general (and|&) administrative|(selling|sales|marketing) (and|&) (marketing|selling|sales))\b/i;
+const RND_OWN_LABEL = /research/i;
+const RND_OWN_EXCL = /in[- ]?process|acquired/i;
+const STD_NS = new Set(["us-gaap", "ifrs-full"]);
+
+type OpexPick = { id: string; sign: 1 | -1 }[];
+/**
+ * 판관비·연구개발비 줄 판정 — 본표 계산 구조의 영업이익 식(없으면 세전이익 식)을 뿌리에서 내려가며 판관비·연구개발비 성격 줄을 모은다
+ * (그 줄 아래로는 내려가지 않음 — 소계면 소계). 매출·매출총이익 식(매출·원가 줄)과 skip 이 참인 줄(원가 줄·유형 D 원가 구성 항)은
+ * 들어가지 않는다. sign = 뿌리 식에서 빼는 비용이면 +1.
+ *
+ * 계산 구조가 뿌리와 끊긴 본표(PLTR 2023 이전 10-Q — 영업비용 합계 식이 영업이익 식에 매달리지 않음): 표시 순서상 영업이익 줄(없으면
+ * 뿌리) 앞의 줄 중 뿌리에서 닿지 않은 판관비·연구개발비 성격 줄도 모은다. 부호는 그 줄이 속한 식의 꼭대기(영업비용 합계)까지의
+ * 가중치 곱 — 꼭대기는 비용 합계로 본다(비용 개념은 차변 양수).
+ */
+function pickSgaRnd(
+  sums: Sums, ids: string[], rootId: string, labelOf: (id: string) => string | null,
+  hint: SgaHint | undefined, skip: (id: string) => boolean,
+): { sga: OpexPick; rnd: OpexPick } {
+  const sga: OpexPick = [], rnd: OpexPick = [];
+  const present = new Set(ids);
+  const natureOf = (id: string): "sga" | "rnd" | null => {
+    if (hint?.sga?.includes(id)) return "sga";
+    if (hint?.rnd?.includes(id)) return "rnd";
+    const ns = id.slice(0, id.indexOf(":")), local = id.slice(id.indexOf(":") + 1);
+    if (STD_NS.has(ns)) return SGA_LOCAL.has(local) ? "sga" : RND_LOCAL.has(local) ? "rnd" : null;
+    const lab = (labelOf(id) ?? "").trim();
+    if (SGA_OWN_LABEL.test(lab)) return "sga";
+    if (RND_OWN_LABEL.test(lab) && !RND_OWN_EXCL.test(lab)) return "rnd";
+    return null;
+  };
+  const blocked = (id: string) => {
+    const role = ROLE[canonical(id)];
+    return role === "gross" || !!role?.startsWith("revenue") || REVENUE_CANON.has(canonical(id)) || skip(id);
+  };
+  const reached = new Set<string>();
+  const add = (id: string, expenseSign: 1 | -1) => {
+    const n = natureOf(id);
+    if (!n) return false;
+    (n === "sga" ? sga : rnd).push({ id, sign: expenseSign });
+    return true;
+  };
+  const walk = (id: string, w: number, depth: number) => {
+    if (depth > 8) return;
+    for (const t of sums.get(id) ?? []) {
+      if (!present.has(t.to) || reached.has(t.to)) continue;
+      reached.add(t.to);
+      const ww = w * (t.w < 0 ? -1 : 1);
+      if (blocked(t.to)) continue;
+      if (add(t.to, ww < 0 ? 1 : -1)) continue;
+      if (sums.get(t.to)?.length) walk(t.to, ww, depth + 1);
+    }
+  };
+  walk(rootId, 1, 0);
+  // 뿌리에서 닿지 않은 줄 — 표시 순서상 영업이익(없으면 뿌리) 앞. 이미 모은 줄·막힌 줄의 식 아래는 제외
+  const parentOf = new Map<string, { to: string; w: number }>();
+  for (const [par, ts] of sums) for (const t of ts) if (!parentOf.has(t.to)) parentOf.set(t.to, { to: par, w: t.w });
+  const opIdx = ids.findIndex((id) => ROLE[canonical(id)] === "opinc");
+  const end = opIdx >= 0 ? opIdx : ids.indexOf(rootId);
+  const taken = new Set([...sga, ...rnd].map((x) => x.id));
+  for (const id of ids.slice(0, end < 0 ? ids.length : end)) {
+    if (reached.has(id) || taken.has(id) || blocked(id) || !natureOf(id)) continue;
+    let w = 1, cur = id, ok = true;
+    for (let d = 0; d < 8; d++) {
+      const pp = parentOf.get(cur);
+      if (!pp) break;
+      if (taken.has(pp.to) || blocked(pp.to) || natureOf(pp.to)) { ok = false; break; }
+      w *= pp.w < 0 ? -1 : 1;
+      cur = pp.to;
+    }
+    if (ok && add(id, w > 0 ? 1 : -1)) taken.add(id);
+  }
+  return { sga, rnd };
+}
+
+/** 뿌리 줄 — 영업이익 소계(계산식 있음), 없으면 세전이익(계산식 있음) */
+function opexRoot(ids: string[], sums: Sums): string | null {
+  const find = (r: LineRole) => ids.find((id) => ROLE[canonical(id)] === r && (sums.get(id)?.length ?? 0) > 0);
+  return find("opinc") ?? find("pretax") ?? null;
+}
+
+/**
+ * 한 열의 판관비·연구개발비 줄(역할 sga·sga.part·rnd·rnd.part 를 붙인다).
+ * 파생 열(Q4·누적 차·LTM — 구성 공시가 둘 이상)은 구성 공시마다 **그 공시 자체 본표**로 같은 판정을 한다(한 열 = 한 기준, 매출원가
+ * cogs.md §1-3 과 같은 원칙):
+ *  - 줄 구성(개념 목록)이 같으면 줄 값 그대로(1층이 줄마다 파생).
+ *  - 다르면 **합 동일성**(cogs.md §1 유형 D 와 같은 기준): 두 줄 구성이 모두 공시된 같은 기간의 합이 반올림 단위 안에서 같으면(개념 이름만
+ *    바뀜 — NFLX Marketing → Sales and marketing) 구성 공시마다 그 공시 자체 줄의 합으로 파생값을 만든다(cell). 합이 다르거나 비교할
+ *    기간이 없으면 mix(빈칸 + "기준 혼합" 사유).
+ */
+async function identifySgaRnd(
+  reader: UsReader, col: ColumnSpec, sp: Part, lines: StmtLine[], sums: Sums, ownLabel: (l: StmtLine) => string | null,
+  hint: SgaHint | undefined, cogsConcepts: Set<string>,
+): Promise<OpexLines> {
+  const at = new Map(lines.map((l) => [l.id, l] as const));
+  const root = opexRoot(lines.map((l) => l.id), sums);
+  const out: OpexLines = { root, sga: [], rnd: [], sgaSub: [], rndSub: [] };
+  if (!root) { out.why = "본표에 영업이익·세전이익 계산식 없음"; return out; }
+  const skip = (id: string) => cogsConcepts.has(id) || at.get(id)?.role === "cogs" || at.get(id)?.role === "cogs.part";
+  const labelOf = (id: string) => (at.has(id) ? ownLabel(at.get(id)!) : null);
+  const got = pickSgaRnd(sums, lines.map((l) => l.id), root, labelOf, hint, skip);
+  const key = (xs: OpexPick) => xs.map((x) => x.id).sort().join("|");
+  for (const kind of ["sga", "rnd"] as const) {
+    const ps = got[kind];
+    if (ps.length === 1) { at.get(ps[0].id)!.role = kind; out[kind] = ps; continue; }
+    if (!ps.length) continue;
+    const want = key(ps);
+    const subtotal = lines.find((l) => { const f = sums.get(l.id); return !!f?.length && f.every((t) => t.w > 0) && key(f.map((t) => ({ id: t.to, sign: 1 }))) === want; });
+    for (const p of ps) at.get(p.id)!.role = `${kind}.part`;
+    const sign = ps[0].sign;
+    if (subtotal && ps.every((p) => p.sign === sign)) { subtotal.role = kind; out[kind] = [{ id: subtotal.id, sign }]; }
+    else out[kind] = ps;
+    out[kind === "sga" ? "sgaSub" : "rndSub"] = ps.map((p) => p.id);
+  }
+  if (col.yahoo) return out;
+  // 파생 열 — 구성 공시마다 그 공시 본표로 같은 판정
+  const parts = col.segments.flatMap((s) => s.parts);
+  const accns = [...new Set(parts.map((p) => p.accn).filter((x): x is string => !!x && x !== sp.accn))];
+  const byAccn = new Map<string, { sga: OpexPick; rnd: OpexPick }>([[sp.accn ?? "", got]]);
+  const diff: Partial<Record<"sga" | "rnd", string[]>> = {};
+  for (const oa of accns) {
+    const o = await reader.structure(oa, true);
+    const ids = o.shape?.lines.map((l) => l.id) ?? [];
+    const oroot = o.shape ? opexRoot(ids, o.sums as Sums) : null;
+    const why = !o.shape ? `구성 공시 ${oa} 본표 구조 판독 실패` : !oroot ? `구성 공시 ${oa} 본표에 영업이익·세전이익 계산식 없음` : null;
+    const oLabel = (id: string) => {
+      const m = o.labels?.get(id);
+      return m ? ([...m.entries()].find(([r]) => /terseLabel$/i.test(r))?.[1] ?? m.get("http://www.xbrl.org/2003/role/label") ?? [...m.values()][0]) : null;
+    };
+    const og = why ? null : pickSgaRnd(o.sums as Sums, ids, oroot!, oLabel, hint, (id) => cogsConcepts.has(id));
+    if (og) byAccn.set(oa, og);
+    for (const kind of ["sga", "rnd"] as const) {
+      if (out.mix?.[kind]) continue;
+      if (why) { if (got[kind].length) (out.mix ??= {})[kind] = why; continue; }
+      if (key(og![kind]) === key(got[kind])) continue;
+      if (!got[kind].length || !og![kind].length) { (out.mix ??= {})[kind] = `${sp.accn} ${key(got[kind]) || "줄 없음"} ≠ ${oa} ${key(og![kind]) || "줄 없음"}`; continue; }
+      const eq = sameTotal(reader, got[kind], og![kind]);
+      if (eq !== true) (out.mix ??= {})[kind] = `${sp.accn} ${key(got[kind])} ≠ ${oa} ${key(og![kind])} — ${eq}`;
+      else (diff[kind] ??= []).push(`${key(got[kind])} ↔ ${key(og![kind])}`);
+    }
+  }
+  // 합 동일 — 구성 공시마다 그 공시 자체 줄의 합으로 파생값
+  for (const kind of ["sga", "rnd"] as const) {
+    if (out.mix?.[kind] || !diff[kind]) continue;
+    const get = async (p: Part): Promise<PartRead | null | "gap"> => {
+      const picks = byAccn.get(p.accn ?? "")?.[kind];
+      if (!picks?.length) return null;
+      const r: PartRead = { val: 0, leaves: [] };
+      for (const x of picks) {
+        const v = await reader.partValue(x.id, p);
+        if (v === "gap") return "gap";
+        if (v == null) return null;
+        r.val += x.sign * v.val;
+        r.leaves.push({ rv: v, op: x.sign });
+      }
+      return r;
+    };
+    const cell = await reader.value(`syn:${kind}`, col, get);
+    (out.cell ??= {})[kind] = { v: cell.v, ...(cell.inputs ? { inputs: cell.inputs } : {}), note: `구성 공시마다 줄 개념 다름 — 합 동일(${[...new Set(diff[kind])].join("; ")})` };
+    // 하위 줄은 비운다(구성 공시마다 줄이 달라 줄 단위 파생값이 없다)
+    out[kind === "sga" ? "sgaSub" : "rndSub"] = [];
+  }
+  return out;
+}
+
+/**
+ * 두 줄 구성(A·B)이 같은 합인가 — 두 구성이 모두 공시된 같은 기간(각 구성의 최신 공시)의 합을 비교(반올림 단위 × 줄 수 허용).
+ * true 또는 사유 문자열. 무차원·보고 통화 사실만(1층 facts — 판본 규칙이 아니라 비교 증거라 모든 공시를 본다)
+ */
+function sameTotal(reader: UsReader, A: OpexPick, B: OpexPick): true | string {
+  const cur = reader.profile.reportingCurrency;
+  const sums = (xs: OpexPick): Map<string, { v: number; filed: string }> => {
+    const by = new Map<string, { n: number; v: number; filed: string }>();
+    for (const x of xs)
+      for (const f of reader.facts(x.id)) {
+        if (f.unit !== cur || Object.keys(f.dims).length || !f.start || !f.prov.accn) continue;
+        const k = `${f.start}|${f.end}|${f.prov.accn}`;
+        const e = by.get(k) ?? { n: 0, v: 0, filed: f.prov.filed ?? "" };
+        by.set(k, { n: e.n + 1, v: e.v + x.sign * f.val, filed: e.filed });
+      }
+    const out = new Map<string, { v: number; filed: string }>();
+    for (const [k, e] of by) {
+      if (e.n !== xs.length) continue;
+      const per = k.split("|").slice(0, 2).join("|");
+      const prev = out.get(per);
+      if (!prev || e.filed > prev.filed) out.set(per, { v: e.v, filed: e.filed });
+    }
+    return out;
+  };
+  const a = sums(A), b = sums(B);
+  let n = 0;
+  for (const [per, x] of a) {
+    const y = b.get(per);
+    if (!y) continue;
+    n++;
+    const tol = Math.max(roundingUnit([x.v]), roundingUnit([y.v])) * (A.length + B.length);
+    if (Math.abs(x.v - y.v) > tol) return `합 다름(${per.replace("|", "~")} ${x.v} ≠ ${y.v})`;
+  }
+  return n ? true : "두 구성이 함께 공시된 기간 없음 — 합 동일성 확인 불가";
+}
+
 /** 구조를 못 읽었을 때의 기본 줄(원본 표현 아님 — Gap.LINKBASE) */
 const FALLBACK = [
   "us-gaap:Revenues", "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax", "us-gaap:RevenuesNetOfInterestExpense",
@@ -159,7 +375,7 @@ async function assembleColumn(
   col: ColumnSpec,
   labelSrc: FilingStructure,
   labelsOut: Map<string, string>,
-  opts: { dimSplit: boolean; cogsTerms?: CogsTerm[] },
+  opts: { dimSplit: boolean; cogsTerms?: CogsTerm[]; sgaHint?: SgaHint },
 ): Promise<AssembledIs> {
   const sp = structureAccn(col);
   const st = sp.accn ? await reader.structure(sp.accn) : { shape: null, parents: new Map(), sums: new Map(), labels: null, gaps: Gap.LINKBASE };
@@ -272,6 +488,11 @@ async function assembleColumn(
     }
   }
 
+  // 판관비·연구개발비 줄 — 본표 영업이익 식(없으면 세전이익 식)의 판관비·연구개발비 성격 줄(identifySgaRnd, docs/metrics/sga.md §1).
+  // 유형 D 매출원가 구성 항 개념은 판관비로 세지 않는다(원가와 겹치지 않게)
+  const cogsConcepts = new Set((opts.cogsTerms ?? []).flatMap((t) => t.concepts.flatMap((c) => ([] as string[]).concat(c))).map((id) => DIM_TERM.exec(id)?.[1] ?? id));
+  const opx = st.shape ? await identifySgaRnd(reader, col, sp, lines, st.sums as Sums, ownLabel, opts.sgaHint, cogsConcepts) : undefined;
+
   // 항등식 — 계산 구조의 합계식마다 부모 = Σ 가중치 × 항(원통화 값, 공시 반올림 단위 × 항 수 허용). 값 없는 항은 0.
   // 표시 부모(ln.parent)가 아니라 합계식 전체(st.sums)로 판정한다 — 한 줄이 둘 이상 식의 항일 수 있다(AMD 매출원가 세부 줄).
   // 불성립 식은 다음 중 하나면 "판정 불완전(partial)" — 식 자체를 믿을 수 없어 값 섞임의 증거가 아니다(3층은 매출을 비우지 않고
@@ -346,6 +567,7 @@ async function assembleColumn(
     col: column, lines, identity: { ok: fails.length === 0, fails, at: failAt, partial: failPartial, terms: failTerms, uncovered },
     cogsBy: cogsId.by, ...(cogsId.why ? { cogsWhy: cogsId.why } : {}), faceShape: !!st.shape,
     ...(cogsTerms ? { cogsTerms } : {}),
+    ...(opx ? { opx } : {}),
   };
 }
 
@@ -475,7 +697,8 @@ async function readCogsTerms(reader: UsReader, col: ColumnSpec, terms: CogsTerm[
 
 /** 연간·분기(+Q4D)·LTM 열을 조립한다. LTM 은 연간·분기 목록 끝에 각각 붙는다(같은 값). */
 /** cogsTerms = 유형 D 매출원가 구성 규칙 항(3층 metrics/cogs-rules.ts — 호출부 index.ts 가 넘긴다, 2층은 3층을 import 하지 않음) */
-export async function assembleIncomeStatements(reader: UsReader, n: { annual: number; quarterly: number } = { annual: 10, quarterly: 20 }, cogsTerms?: CogsTerm[]): Promise<AssembledStatements> {
+/** sgaHint = 판관비·연구개발비 회사별 지정(3층 metrics/sga-rules.ts — 같은 방식으로 index.ts 가 넘긴다) */
+export async function assembleIncomeStatements(reader: UsReader, n: { annual: number; quarterly: number } = { annual: 10, quarterly: 20 }, cogsTerms?: CogsTerm[], sgaHint?: SgaHint): Promise<AssembledStatements> {
   const annualCols = await reader.annualCols(n.annual);
   const allQ = await reader.quarterCols(1000);
   const quarterCols = allQ.slice(-n.quarterly);
@@ -487,11 +710,11 @@ export async function assembleIncomeStatements(reader: UsReader, n: { annual: nu
   const labA = lastA ? await reader.structure(structureAccn(lastA).accn ?? "", true) : { shape: null, parents: new Map(), sums: new Map(), labels: null, gaps: 0 };
   const labQ = lastQ && structureAccn(lastQ).accn ? await reader.structure(structureAccn(lastQ).accn!, true) : labA;
   const annual: AssembledIs[] = [];
-  for (const c of annualCols) annual.push(await assembleColumn(reader, c, labA, labels, { dimSplit, cogsTerms }));
+  for (const c of annualCols) annual.push(await assembleColumn(reader, c, labA, labels, { dimSplit, cogsTerms, sgaHint }));
   const quarterly: AssembledIs[] = [];
-  for (const c of quarterCols) quarterly.push(await assembleColumn(reader, c, labQ, labels, { dimSplit, cogsTerms }));
+  for (const c of quarterCols) quarterly.push(await assembleColumn(reader, c, labQ, labels, { dimSplit, cogsTerms, sgaHint }));
   if (ltm) {
-    const l = await assembleColumn(reader, ltm, labQ.labels ? labQ : labA, labels, { dimSplit, cogsTerms });
+    const l = await assembleColumn(reader, ltm, labQ.labels ? labQ : labA, labels, { dimSplit, cogsTerms, sgaHint });
     annual.push(l);
     quarterly.push(l);
   }

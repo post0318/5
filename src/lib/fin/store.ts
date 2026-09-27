@@ -8,7 +8,7 @@ import { Gap, type AssembledIs, type Column, type DerivedInput, type FinAssembly
  */
 
 /** 엔진판 — 판독·조립 규칙이 바뀌면 올린다(fin_chg 사유 "ev") */
-export const ENGINE_VERSION = 11; // 5: 파생값 입력 구조(fin_sym.d, 2026-09-26) · 6: 매출원가·매출총이익·영업이익·영업비용 지표(fin_sym.m.cogs·gp·opinc·opex·d·n, 2026-09-26) · 7: 외화 환산 환율 Yahoo → 연준 H.10(TSM·ASML·SPOT 등 값 변경, 2026-09-27) · 8: 유형 D 매출원가 구성 규칙 10종목(XOM·MCD·V·ORCL·MAR·HLT·SBUX·DAL·CEG·VST 매출원가·매출총이익·영업비용 채움, 2026-09-27) · 9: 영업이익 소계 없는 본표 = 공시 계산 구조 합성(IBM·XOM)·CAT 본표 소계 그대로(fin_sym.m.opinc·opex 채움, 화면 전환, 2026-09-27) · 10: 금융 자회사 보유사 소계 없는 본표는 빈칸+사유(IBM 예외, 2026-09-27) · 11: 영업외 목록에 연금 비근무원가 추가(XOM 합성 영업이익, 2026-09-27)
+export const ENGINE_VERSION = 12; // 12: 판관비·연구개발비 지표(fin_sym.m.sga·rnd·d·n·sp, fin_stmt.r — docs/metrics/sga.md, 2026-09-28) · 5: 파생값 입력 구조(fin_sym.d, 2026-09-26) · 6: 매출원가·매출총이익·영업이익·영업비용 지표(fin_sym.m.cogs·gp·opinc·opex·d·n, 2026-09-26) · 7: 외화 환산 환율 Yahoo → 연준 H.10(TSM·ASML·SPOT 등 값 변경, 2026-09-27) · 8: 유형 D 매출원가 구성 규칙 10종목(XOM·MCD·V·ORCL·MAR·HLT·SBUX·DAL·CEG·VST 매출원가·매출총이익·영업비용 채움, 2026-09-27) · 9: 영업이익 소계 없는 본표 = 공시 계산 구조 합성(IBM·XOM)·CAT 본표 소계 그대로(fin_sym.m.opinc·opex 채움, 화면 전환, 2026-09-27) · 10: 금융 자회사 보유사 소계 없는 본표는 빈칸+사유(IBM 예외, 2026-09-27) · 11: 영업외 목록에 연금 비근무원가 추가(XOM 합성 영업이익, 2026-09-27)
 /** 문서 스키마판 — 압축 형식이 바뀌면 올린다 */
 export const SCHEMA_VERSION = 1;
 
@@ -92,10 +92,13 @@ function toDer(a: FinAssembly, cols: Column[]): FinDer | null {
   const gp = templated("gp", series(a.metrics.gp));
   const opinc = templated("opinc", series(a.metrics.opinc));
   const opex = templated("opex", series(a.metrics.opex));
+  const sga = templated("sga", series(a.metrics.sga));
+  const rnd = templated("rnd", series(a.metrics.rnd));
   if (!at) return null;
   return {
     rev, ...(Object.keys(cogs).length ? { cogs } : {}), ...(Object.keys(gp).length ? { gp } : {}),
     ...(Object.keys(opinc).length ? { opinc } : {}), ...(Object.keys(opex).length ? { opex } : {}),
+    ...(Object.keys(sga).length ? { sga } : {}), ...(Object.keys(rnd).length ? { rnd } : {}),
     ...(Object.keys(tp).length ? { tp } : {}),
     ...(Object.keys(ln).length ? { ln } : {}), ...(asOf.length ? { a: asOf } : {}), at,
   };
@@ -116,7 +119,7 @@ export function toSymDoc(a: FinAssembly): FinSymDoc {
   const der = toDer(a, cols);
   // 지표 칸 사유·주석 — 문구 → 열키 목록(같은 문구는 한 번만)
   const notes: Record<string, [string, string[]][]> = {};
-  for (const [k, s] of [["cogs", a.metrics.cogs], ["gp", a.metrics.gp], ["opinc", a.metrics.opinc], ["opex", a.metrics.opex]] as const) {
+  for (const [k, s] of [["cogs", a.metrics.cogs], ["gp", a.metrics.gp], ["opinc", a.metrics.opinc], ["opex", a.metrics.opex], ["sga", a.metrics.sga], ["rnd", a.metrics.rnd]] as const) {
     const by = new Map<string, string[]>();
     for (const c of cols) {
       const mv = s.values[c.key];
@@ -137,12 +140,40 @@ export function toSymDoc(a: FinAssembly): FinSymDoc {
       gp: cols.map((c) => a.metrics.gp.values[c.key]?.v ?? null),
       opinc: cols.map((c) => a.metrics.opinc.values[c.key]?.v ?? null),
       opex: cols.map((c) => a.metrics.opex.values[c.key]?.v ?? null),
+      sga: cols.map((c) => a.metrics.sga.values[c.key]?.v ?? null),
+      rnd: cols.map((c) => a.metrics.rnd.values[c.key]?.v ?? null),
     },
     x: { rev: x },
     ...(der ? { d: der } : {}),
     ...(Object.keys(notes).length ? { n: notes } : {}),
+    ...subLines(a, cols),
     ...(a.issues.length ? { i: a.issues.map((q) => (q.der?.length ? [q.col, q.rev, q.other, q.unv, q.der] : [q.col, q.rev, q.other, q.unv]) as [string, string[], string[], string[], string[]?]) } : {}),
   };
+}
+
+/**
+ * 판관비·연구개발비 하위 줄(docs/metrics/sga.md §4) — 열마다 지표의 하위 줄(opx.sgaSub·rndSub)의 값. 줄 id 는 열을 통틀어 처음 나온 순서,
+ * 라벨은 최근 열 것. 하위 줄이 있는 열이 하나도 없으면 생략. 화면 손익계산서가 합계 아래 줄로 보인다(fin_stmt 없이 fin_sym 만으로)
+ */
+function subLines(a: FinAssembly, cols: Column[]): Pick<FinSymDoc, "sp"> {
+  const byKey = new Map([...a.annual, ...a.quarterly].map((x) => [x.col.key, x] as const));
+  const sp: NonNullable<FinSymDoc["sp"]> = {};
+  for (const kind of ["sga", "rnd"] as const) {
+    const ids: string[] = [];
+    const label = new Map<string, string>();
+    for (const c of cols) for (const id of byKey.get(c.key)?.opx?.[kind === "sga" ? "sgaSub" : "rndSub"] ?? []) {
+      if (!ids.includes(id)) ids.push(id);
+      label.set(id, byKey.get(c.key)!.lines.find((l) => l.id === id)?.label ?? id);
+    }
+    if (!ids.length) continue;
+    sp[kind] = ids.map((id) => [id, label.get(id)!, cols.map((c) => {
+      const x = byKey.get(c.key);
+      // 그 열 지표의 하위 줄일 때만(지표를 비운 열은 하위 줄도 비움 — 합계 없이 조각만 보이지 않게)
+      if (!x?.opx?.[kind === "sga" ? "sgaSub" : "rndSub"].includes(id) || a.metrics[kind].values[c.key]?.v == null) return null;
+      return x.lines.find((l) => l.id === id)?.v ?? null;
+    })]);
+  }
+  return Object.keys(sp).length ? { sp } : {};
 }
 
 export function toStmtDoc(id: string, cols: AssembledIs[], labels: Map<string, string>): FinStmtDoc {
@@ -166,7 +197,17 @@ export function toStmtDoc(id: string, cols: AssembledIs[], labels: Map<string, s
     s.push(row);
     v.push(a.lines.map((l) => l.v));
   }
-  return { _id: id, ev: ENGINE_VERSION, l: dict, c: cols.map((a) => a.col.key), s, v };
+  // 판관비·연구개발비 줄 역할(docs/metrics/sga.md §4) — 역할 → [줄 사전 번호, 열키[]][]
+  const r: NonNullable<FinStmtDoc["r"]> = {};
+  for (const a of cols)
+    for (const ln of a.lines) {
+      if (!ln.role || !/^(sga|rnd)(.part)?$/.test(ln.role)) continue;
+      const k = di.get(ln.id)!;
+      const e = (r[ln.role] ??= []).find((x) => x[0] === k);
+      if (e) e[1].push(a.col.key);
+      else r[ln.role].push([k, [a.col.key]]);
+    }
+  return { _id: id, ev: ENGINE_VERSION, l: dict, c: cols.map((a) => a.col.key), s, v, ...(Object.keys(r).length ? { r } : {}) };
 }
 
 /** 압축 구조 → (줄 id, 부모 위치, 가중치) */
@@ -209,7 +250,7 @@ export async function persist(a: FinAssembly, stmts: { annual: FinStmtDoc; quart
   const chg: FinChgDoc[] = [];
   const r: FinChgDoc["r"] = old && old.ev !== ENGINE_VERSION ? "ev" : "data";
   if (old)
-    for (const mk of ["rev", "cogs", "gp", "opinc", "opex"]) {
+    for (const mk of ["rev", "cogs", "gp", "opinc", "opex", "sga", "rnd"]) {
       const o = new Map(old.c.map((c, i) => [c[0], old.m[mk]?.[i] ?? null]));
       sym.c.forEach((c, i) => {
         const n = sym.m[mk]?.[i] ?? null;

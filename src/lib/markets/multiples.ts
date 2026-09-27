@@ -301,18 +301,6 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "営業利益",
     "営業利益 (IFRS)",
   ]);
-  // 영업이익 태그가 없으면 매출총이익 − 판관비 − 연구개발비로 파생 (IBM 등)
-  if (opIncome == null) {
-    // 미국: getFinancials 매출총이익 행(재무 5층 구조 매출총이익 지표 — us/edgar.ts GROSS_PROFIT_ROW_ID). 태그를 여기서 고르지 않는다
-    const gp = flowValue(annual, quarterly, ["fin:grossProfit", "매출총이익", "売上総利益"]);
-    const sgaV = flowValue(annual, quarterly, [
-      "SellingGeneralAndAdministrativeExpense",
-      "GeneralAndAdministrativeExpense",
-    ]);
-    const rndV = flowValue(annual, quarterly, ["ResearchAndDevelopmentExpense"]);
-    if (gp != null && (sgaV != null || rndV != null))
-      opIncome = gp - (sgaV ?? 0) - (rndV ?? 0);
-  }
   // 그래도 없으면 세전이익으로 근사 (XOM·AXP 등 영업이익 태그 자체가 없는 회사 —
   // 비영업 손익이 포함될 수 있음. 하이라이트/재무분석/IS 상세와 동일한 최후 폴백).
   if (opIncome == null) {

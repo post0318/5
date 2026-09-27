@@ -27,6 +27,9 @@ export interface FinDer {
   gp?: Record<string, FinDerIn[]>;
   opinc?: Record<string, FinDerIn[]>;
   opex?: Record<string, FinDerIn[]>;
+  /** 판관비·연구개발비(엔진판 12부터, docs/metrics/sga.md) */
+  sga?: Record<string, FinDerIn[]>;
+  rnd?: Record<string, FinDerIn[]>;
   /**
    * 같은 열 칸만 가리키는 입력 틀(엔진판 6부터, cogs·gp·opinc·opex) — 지표 키 → [틀, 열키[]][]. 틀의 참조 `c:*|줄id` 의 "*" 는 그 열
    * 키(예: 영업비용 = `c:*|us-gaap:GrossProfit` − `c:*|us-gaap:OperatingIncomeLoss`). 여기 묶인 열은 지표 키 사전(cogs 등)에 따로 없다
@@ -55,6 +58,11 @@ export interface FinSymDoc {
    * ("본표 소계 없음 · 매출 − 매출원가", "회사 공시 자체 — …")를 문구 한 번 + 열 목록으로 압축해 둔다
    */
   n?: Record<string, [string, string[]][]>;
+  /**
+   * 판관비·연구개발비 하위 줄(엔진판 12부터, docs/metrics/sga.md §4) — 지표 키(sga·rnd) → [줄 id, 라벨, 값[]][] (값 순서 = c). 지표가 여러 줄
+   * 합(또는 소계)인 열의 줄 값만, 그 밖은 null
+   */
+  sp?: Partial<Record<"sga" | "rnd", [string, string, (number | null)[]][]>>;
   /** 배치가 "새 정기공시 없음"을 마지막으로 확인한 시각(/api/cron/fin-build) */
   ck?: Date;
   /**
@@ -71,6 +79,8 @@ export interface FinStmtDoc {
   c: string[];
   s: number[][];
   v: (number | null)[][];
+  /** 판관비·연구개발비 줄 역할(엔진판 12부터, docs/metrics/sga.md §4) — 역할(sga·sga.part·rnd·rnd.part) → [줄 사전 번호(l), 열키[]][] */
+  r?: Record<string, [number, string[]][]>;
 }
 
 export interface FinChgDoc {

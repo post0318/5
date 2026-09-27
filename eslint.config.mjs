@@ -18,10 +18,19 @@ const COGS_TAG_RULES = [
   { selector: `MemberExpression > Identifier.property[name=/${COGS_TAG}/]`, message: "매출원가·매출총이익 태그 직접 사용 금지 — lib/markets/us/fin-revenue.ts 열의 cogs·gp(재무 5층 구조 지표)에서만 받는다(architecture.md §8, cogs.md §2)." },
 ];
 
+// 판관비·연구개발비 태그 직접 사용 금지(docs/metrics/sga.md §3) — 두 값은 재무 5층 구조(src/lib/fin)의 sga·rnd 지표(fin-revenue.ts 열의
+// sga·rnd)에서만 받는다. 태그 목록(SG&A → G&A 순)으로 고르면 판매·마케팅 줄이 여러 줄인 회사(AMAT·GOOG·META 등 13곳)에서 일반관리비만
+// 판관비로 잡혔다(sga.md §5).
+const SGA_TAG = "^((us-gaap|ifrs-full):)?(SellingGeneralAndAdministrativeExpense|GeneralAndAdministrativeExpense|SellingAndMarketingExpense|SalesAndMarketingExpense|MarketingExpense|OtherSellingGeneralAndAdministrativeExpense|ResearchAndDevelopmentExpense|ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost)$";
+const SGA_TAG_RULES = [
+  { selector: `Literal[value=/${SGA_TAG}/]`, message: "판관비·연구개발비 태그 직접 사용 금지 — lib/markets/us/fin-revenue.ts 열의 sga·rnd(재무 5층 구조 지표)에서만 받는다(sga.md §3)." },
+  { selector: `MemberExpression > Identifier.property[name=/${SGA_TAG}/]`, message: "판관비·연구개발비 태그 직접 사용 금지 — lib/markets/us/fin-revenue.ts 열의 sga·rnd(재무 5층 구조 지표)에서만 받는다(sga.md §3)." },
+];
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
-  // 매출·매출원가·매출총이익 태그 직접 사용 금지. 문서화된 예외(표시 값이 아닌 판정·구조 보조 — architecture.md §1 표):
+  // 매출·매출원가·매출총이익·판관비·연구개발비 태그 직접 사용 금지. 문서화된 예외(표시 값이 아닌 판정·구조 보조 — architecture.md §1 표):
   //  - edgar-series.ts        액면분할 판정(splitFactorsByYear) 휴리스틱
   //  - edgar-ev.ts            모기지 리츠 판정(이자수익 ÷ 매출 비중)
   //  - edgar-foreign.ts       IFRS → us-gaap 개념 매핑·보고 통화 판정(판독 단계)
@@ -40,7 +49,7 @@ const eslintConfig = defineConfig([
       "src/lib/markets/us/edgar-is-structure.ts",
       "src/lib/markets/us/edgar-revenue-dims.ts",
     ],
-    rules: { "no-restricted-syntax": ["error", ...REVENUE_TAG_RULES, ...COGS_TAG_RULES] },
+    rules: { "no-restricted-syntax": ["error", ...REVENUE_TAG_RULES, ...COGS_TAG_RULES, ...SGA_TAG_RULES] },
   },
   // 검증 체계 1층(오너 지시 2026-09-23 — "숫자는 화면 간 불일치가 완벽하게 없어야"):
   // 미국 멀티플 계산 모듈은 차입금·리스·감가상각비·장기투자 태그를 직접 고르지 말고
@@ -65,6 +74,7 @@ const eslintConfig = defineConfig([
         // 같은 규칙 이름이라 위(전역) 설정을 덮어쓴다 — 매출·매출원가·매출총이익 태그 금지도 여기에 함께
         ...REVENUE_TAG_RULES,
         ...COGS_TAG_RULES,
+        ...SGA_TAG_RULES,
       ],
     },
   },
