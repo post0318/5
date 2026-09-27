@@ -1923,9 +1923,11 @@ async function secFaceOpinc({ cik, sub, facts, unit, foreign, revFace }) {
 // 기간 P 의 기대값 = P 를 실은 가장 최근 공시의 본표 줄 구성, 줄 값은 P 를 실은 공시들의 decimals 판정(decimalsVintage — 정밀도만 낮춘 재게시는
 // 앞선 정밀값). 현금흐름표는 누적이라 분기 = 누적 차(Q1 은 3개월 그대로, Q4 = 사업연도 − 9개월), LTM = 사업연도 + 당기 누적 − 전년 동기.
 // 줄 선택 정규식은 앱과 같은 성격이라 이 A층은 공통모드 사유가 붙는다(외부 정확 일치 시만 독립 — commonModeOf).
-const CF_DA_RE = /deprecia|amortiz/i;
+const CF_DA_RE = /deprecia|amorti[sz]/i;
 const CF_DA_EXCL = /debt|discount|premium|issuance|financing\s*costs?|deferred\s*(financing|charges)|stock|share-?based|compensation|operating[\s-]*lease|lease\s*expense|content|contract\s*(cost|acquisition)|capitalized\s*software|investment|securities|bond|inventory|incentive|acquisition\s*costs|defined\s*benefit|pension|postretirement/i;
-const CF_OP_ROOT = /^us-gaap_NetCashProvidedByUsedInOperatingActivities(ContinuingOperations)?$/;
+// 20-F IFRS(TSM·SPOT) 영업활동 루트 = ifrs-full_CashFlowsFromUsedInOperatingActivities(오너 결정 2026-09-27 — 20-F 현금흐름표 대조 추가)
+const CF_OP_ROOT = /^(us-gaap_NetCashProvidedByUsedInOperatingActivities(ContinuingOperations)?|ifrs-full_CashFlowsFromUsedInOperatingActivities)$/;
+const CF_STD = /^(us-gaap|ifrs-full)_/;
 /** 콘텐츠 상각 줄(NFLX — 오너 결정: 감가상각비에 포함). 콘텐츠 자산 취득·부채 증감 줄은 제외 */
 const CF_CONTENT_RE = /content/i, CF_CONTENT_EXCL = /addition|payment|change|increase|decrease|liabilit/i;
 /** 감가상각비에 넣지 않는 현금흐름표 줄 중 외부 소스가 넣을 수 있는 후보(외부 정의 분해 — 주식보상) */
@@ -1947,10 +1949,10 @@ function cfDaStruct(cal, labels, content) {
       for (const a of c.arcs) {
         if (a.fr !== id || seen.has(a.to)) continue;
         seen.add(a.to);
-        const std = a.to.startsWith("us-gaap_");
+        const std = CF_STD.test(a.to);
         const labs = labels.get(a.to) ?? [];
-        const text = std ? a.to.slice(8) : labs.join(" | ") || a.to;
-        const leads = !std && labs.some((l) => /^(depreciation|amortization of (acquired |acquisition-related )?intangible)/i.test(l));
+        const text = std ? a.to.replace(CF_STD, "") : labs.join(" | ") || a.to;
+        const leads = !std && labs.some((l) => /^(depreciation|amorti[sz]ation of (acquired |acquisition-related )?intangible)/i.test(l));
         const isContent = content && CF_DA_RE.test(text) && CF_CONTENT_RE.test(text) && !CF_CONTENT_EXCL.test(text);
         const isDa = isContent || (CF_DA_RE.test(text) && (!CF_DA_EXCL.test(text) || leads));
         if (/impair/i.test(`${a.to} ${labs.join(" ")}`)) (isDa ? impairLines : separateImpair).push(a.to);
@@ -1978,7 +1980,7 @@ function cfDaStruct(cal, labels, content) {
   return null;
 }
 /** 공시 한 건의 현금흐름표 감가상각 판독 — 구조 + 원본 인스턴스의 줄 값(차원 없음, decimals 포함)·손상·중단사업 사실 */
-async function cfDaFace(cik, p, content) {
+async function cfDaFace(cik, p, content, unitRe = /usd/i) {
   const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${p.accn.replace(/-/g, "")}`;
   const names = await filingNames(base);
   const xsd = names.find((x) => /\.xsd$/i.test(x));
@@ -1995,7 +1997,7 @@ async function cfDaFace(cik, p, content) {
   const vals = new Map(), periods = new Set(), adj = [], dupA = new Set(), cfPeriods = new Set();
   for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+)\s*</g)) {
     const id = `${m[1]}_${m[2]}`, attrs = `${m[3]} ${m[5]}`;
-    if (!/unitRef="[^"]*usd/i.test(attrs)) continue;
+    if (!unitRe.test(/unitRef="([^"]*)"/.exec(attrs)?.[1] ?? "")) continue;
     const c = ctx.get(m[4]);
     if (!c?.start || !c.end) continue;
     const v = Number(m[6]);
@@ -2072,20 +2074,23 @@ function cfDaAdjust(f, s, e, sum) {
  * 감가상각비 SEC 기대값 모델 → { annualAt(E), quarterAt(E, isQ4), ltmAt(L), extend(E, kind), faces } | { why }.
  * 결과: { v(조정 후 · decimals 판본), vLatest(최신 공시 값 그대로), lineSum, adj, unres?, start, end, lines, excl, comps, how }
  */
-async function secFaceDa({ cik, sub, content }) {
+async function secFaceDa({ cik, sub, content, natCur = null }) {
+  // 20-F: 원통화 단위·연차보고서만(분기 현금흐름표 없음 — LTM 은 "20-F LTM = Yahoo 분기" 검사가 따로 본다)
+  const unitRe = natCur ? new RegExp(natCur, "i") : /usd/i;
+  const annualForm = natCur ? /^20-F$/ : /^10-K$/;
   const rc = sub.filings?.recent ?? {};
   const picks = [];
   let nK = 0, nQ = 0;
   for (let i = 0; i < (rc.form ?? []).length && (nK < 3 || nQ < 4); i++) {
     const fm = rc.form[i];
-    if (fm === "10-K" && nK < 3) nK++; else if (fm === "10-Q" && nQ < 4) nQ++; else continue;
+    if (annualForm.test(fm) && nK < 3) nK++; else if (!natCur && fm === "10-Q" && nQ < 4) nQ++; else continue;
     picks.push({ accn: rc.accessionNumber[i], form: fm, filed: rc.filingDate[i], report: rc.reportDate[i] });
   }
   const faces = [], skipped = [], read = new Set();
   const addFiling = async (p) => {
     if (read.has(p.accn)) return;
     read.add(p.accn);
-    const f = await cfDaFace(cik, p, content);
+    const f = await cfDaFace(cik, p, content, unitRe);
     if (f.why) skipped.push({ form: p.form, report: p.report, why: f.why, txt: `${p.form} ${p.report}: ${f.why}` }); else faces.push(f);
     faces.sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""));
   };
@@ -2096,7 +2101,7 @@ async function secFaceDa({ cik, sub, content }) {
     const t = Date.parse(E), day = 864e5;
     const want = (form, rep) => {
       const d = (Date.parse(rep) - t) / day;
-      if (kind === "FY") return form === "10-K" && d >= -7 && d <= 800;
+      if (kind === "FY") return annualForm.test(form) && d >= -7 && d <= 800;
       return (form === "10-Q" && d >= -100 && d <= 400) || (form === "10-K" && d >= -100 && d <= 400);
     };
     const oldest = (rc.filingDate ?? []).at(-1) ?? "";
@@ -3237,9 +3242,9 @@ async function verifyUs(sym) {
   // --metric=da: 감가상각비 A층 기대값 — 최근 10-K 3건·10-Q 4건 + 앱 열을 담은 과거 공시(secFaceDa). 은행 레이아웃·외화 공시는 범위 밖(검사 없음).
   // NFLX 는 콘텐츠 상각 줄을 포함한 정의로 대조한다(오너 결정 — 앱 감가상각비 = 현금흐름표 감가상각 줄 + 콘텐츠 상각 줄)
   let daFace = null, daWhy = "";
-  if (DA_MODE && !bank && !foreign) {
+  if (DA_MODE && !bank && (!foreign || natCur)) {
     try {
-      const r = await secFaceDa({ cik, sub, content: CONTENT_DA.has(sym) });
+      const r = await secFaceDa({ cik, sub, content: CONTENT_DA.has(sym), natCur: foreign ? natCur : null });
       if (r.why) daWhy = r.why; else daFace = r;
     } catch (e) { daWhy = `현금흐름표 감가상각 판독 실패: ${String(e).slice(0, 80)}`; hardErrors.push(daWhy); }
   }
@@ -4114,7 +4119,7 @@ async function verifyUs(sym) {
   // Q4 = 사업연도 − 9개월). 은행 레이아웃·외화 공시는 범위 밖(검사 없음). 분기가 읽은 공시 범위 밖이면 검사를 만들지 않는다(분기 창 범위)
   const daExp = new Map(); // 열("2025Y"·"LTM") → 판독 결과(F층 원인 규칙용)
   const DA_NAME = "감가상각비 앱 = SEC 현금흐름표 감가상각·상각 줄 합";
-  if (DA_MODE && !bank && !foreign) {
+  if (DA_MODE && !bank && (!foreign || natCur)) {
     const dRowA = isItem(is, /^감가상각비$/), dRowQ = isItem(isq, /^감가상각비$/);
     const judgeD = (kind, col, key, E, isQ4, row) => {
       const q = kind === "Q";
@@ -4138,20 +4143,30 @@ async function verifyUs(sym) {
         return;
       }
       if (e0.unres) { add("A", name, col, { status: NA, note: `미결 — ${e0.unres}(앱 ${app ?? "빈칸"}, SEC 줄 합 ${e0.lineSum}) · ${e0.how}`, app, src: null }); return; }
-      add("A", name, col, vsSource(app, e0.v, EXACT, `규칙 재구현(줄 선택은 공통모드) · ${e0.how}`));
+      // 20-F — 원통화 현금흐름표 줄 합 × 기간 평균 환율(연준 H.10, 매출원가 외화 대조와 같은 방식)
+      let k = 1, fxNote = "";
+      if (foreign) {
+        const pend = fxPendingWhy(fxRows, e0.end);
+        if (pend) { add("A", name, col, app == null ? { status: PASS, note: `${pend} — 앱 빈칸(대체 없음)` } : { status: FAIL, note: `${pend}인데 앱 값 ${app} — 다른 환율로 대체한 것으로 보임` }); return; }
+        const avg = fxRows ? fxAvg(fxRows, e0.start, e0.end) : null;
+        if (avg == null) { hardErrors.push(`감가상각비 기간 평균 환율 없음(${e0.start}~${e0.end})${fxErr ? `: ${fxErr}` : ""}`); return; }
+        k = avg;
+        fxNote = ` · 원통화(${natCur}) × 기간 평균 환율 ${avg.toPrecision(6)}${fxWin(e0.start, e0.end)}`;
+      }
+      add("A", name, col, vsSource(app, e0.v * k, EXACT, `규칙 재구현(줄 선택은 공통모드) · ${e0.how}${fxNote}`));
       if (!q) daExp.set(col, e0);
     };
     // 앱 연도 열·분기 열을 담은 공시를 먼저 더 읽는다(최근 10-K 3건·10-Q 4건 밖 — 과거 목록 파일까지)
     try {
       for (const per of is?.periods ?? []) if (per.label !== "현재/LTM" && per.endDate && daFace && !daFace.annualAt(per.endDate)) await daFace.extend(per.endDate, "FY");
-      for (const p of isq?.periods ?? []) if (p.endDate && daFace && !daFace.quarterAt(p.endDate, p.fiscalQuarter === 4)) await daFace.extend(p.endDate, "Q");
+      if (!foreign) for (const p of isq?.periods ?? []) if (p.endDate && daFace && !daFace.quarterAt(p.endDate, p.fiscalQuarter === 4)) await daFace.extend(p.endDate, "Q");
     } catch (e) { hardErrors.push(`감가상각비 과거 공시 판독 실패: ${String(e).slice(0, 120)}`); }
     for (const per of is?.periods ?? []) {
       const key = per.label;
-      if (key === "현재/LTM") { if (H.LTM) judgeD("LTM", "LTM", key, H.LTM.date, false, dRowA); continue; }
+      if (key === "현재/LTM") { if (H.LTM && !foreign) judgeD("LTM", "LTM", key, H.LTM.date, false, dRowA); continue; }
       if (per.endDate) judgeD("FY", key.replace(/^FY(\d{4})$/, "$1Y"), key, per.endDate, false, dRowA);
     }
-    for (const p of isq?.periods ?? []) { qEndOf.set(p.label, p.endDate); if (p.endDate) judgeD("Q", p.label, p.label, p.endDate, p.fiscalQuarter === 4, dRowQ); }
+    if (!foreign) for (const p of isq?.periods ?? []) { qEndOf.set(p.label, p.endDate); if (p.endDate) judgeD("Q", p.label, p.label, p.endDate, p.fiscalQuarter === 4, dRowQ); }
   }
 
   // ── D. 손익 항등식 — 연간 전 열(감사 2026-09-25: LTM 만 보던 것을 확장). 매출총이익 = 매출 − 매출원가, 세전이익 = 영업이익 − 영업외손익.
@@ -4455,6 +4470,15 @@ async function verifyUs(sym) {
         if (r?.totalOperatingIncomeAsReported != null && avg != null) put(`${c} 영업이익`, IS[c]?.op, "Yahoo", r.totalOperatingIncomeAsReported * avg, null);
         const im = imAnnual?.find((q) => dayDiff(q.end, x.date) <= 7);
         if (im?.op != null) put(`${c} 영업이익`, IS[c]?.op, "인포맥스", im.op, imAnnual.unit);
+      }
+    }
+    // 외화 공시 감가상각비 연간(--metric=da) — 매출원가와 같은 방식(Yahoo 원통화 × 검증기 H.10 기간 평균)
+    if (DA_MODE && foreign && fxRows) {
+      for (const [c, x] of Object.entries(H)) {
+        if (c === "LTM") continue;
+        const e = daExp.get(c), r = ya.find((r) => dayDiff(iso(r.date), x.date) <= 7);
+        const avg = e?.start && e.end ? fxAvg(fxRows, e.start, e.end) : null;
+        if (r?.reconciledDepreciation != null && avg != null) put(`${c} 감가상각비`, IS[c]?.da, "Yahoo", r.reconciledDepreciation * avg, null);
       }
     }
     const last4 = foreign ? [] : yq.filter((r) => r.totalOperatingIncomeAsReported != null).slice(-4);
