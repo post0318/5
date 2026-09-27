@@ -831,6 +831,9 @@ export function classifyResearchTopic(
 ): ResearchTopic {
   if (FORCED_ISSUE_STOCKNAMES.has(doc.stockName)) return "이슈분석";
   if (FORCED_FX_STOCKNAMES.has(doc.stockName)) return "환율분석";
+  // 신한 경제분석 게시판(gieconomy)의 비시리즈 글 — 다른 증권사 경제·채권 게시판과 같이 게시판이 곧 이슈분석이다. 제목 키워드에만 맡기면
+  // 키워드가 없는 글("한국 7월 산업활동동향" 등)이 산업분석 기타로 새었다(2026-09-27). 환율 글만 환율분석으로 가른다.
+  if (doc.stockName === "경제분석 · 경제분석") return FX_RE.test(doc.title) ? "환율분석" : "이슈분석";
   const legacy = classifyLegacyTopic(doc);
   switch (legacy) {
     case "산업분석":
