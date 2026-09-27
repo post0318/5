@@ -1,5 +1,8 @@
 /** 어댑터 공통 HTTP 헬퍼. 서버 전용. */
 
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { AdapterError } from "./types";
 import { checkBackoff, isSecUrl, noteFetchFailure, noteFetchSuccess } from "./fetch-health";
 
@@ -107,12 +110,48 @@ function secSlot(): Promise<void> {
   return secChain;
 }
 const secInflight = new Map<string, Promise<string>>();
+
+// ── SEC 공시 원본 디스크 캐시(2026-09-27, 오너 지적 — "sec 자료는 확정치인데 왜 계속 받지?") ──
+// 접수번호 폴더 아래 파일(/Archives/edgar/data/{CIK}/{접수번호 18자리}/…)은 제출 후 바뀌지 않는다. Next 데이터 캐시는 2MB 넘는
+// 응답을 저장하지 못해("Failed to set fetch cache") 10-K·10-Q 인스턴스를 요청마다 다시 받아 SEC 줄 서기에 수십 분이 걸렸다 —
+// 한 번 받으면 디스크에 두고 계속 쓴다. companyfacts·submissions 처럼 갱신되는 파일은 대상 아님(기존 revalidate 그대로).
+// 위치: SEC_ARCHIVE_CACHE_DIR, 없으면 로컬 .cache/sec-archives(gitignore), Vercel 운영은 /tmp(인스턴스 수명 동안). 로컬 .env.local 에도
+// vercel env pull 로 VERCEL="1" 이 들어오므로 NODE_ENV=production 일 때만 /tmp(개발 서버가 C:	mp 에 쓰던 문제, 2026-09-27).
+const SEC_ARCHIVE_RE = /^https:\/\/www\.sec\.gov\/Archives\/edgar\/data\/\d+\/\d{18}\//;
+function archiveCachePath(key: string): string {
+  const dir = process.env.SEC_ARCHIVE_CACHE_DIR ?? path.join(process.env.VERCEL && process.env.NODE_ENV === "production" ? "/tmp" : process.cwd(), ".cache", "sec-archives");
+  return path.join(dir, createHash("sha1").update(key).digest("hex"));
+}
+async function archiveRead(key: string): Promise<string | null> {
+  try {
+    return await readFile(archiveCachePath(key), "utf8");
+  } catch {
+    return null;
+  }
+}
+async function archiveWrite(key: string, body: string): Promise<void> {
+  try {
+    const f = archiveCachePath(key);
+    await mkdir(path.dirname(f), { recursive: true });
+    await writeFile(f, body, "utf8");
+  } catch {
+    /* 캐시 실패는 조회 결과에 영향 없음 */
+  }
+}
+
 function secText(url: string, opts: FetchJsonOpts, accept: Record<string, string>): Promise<string> {
   const key = `${url}|${accept.accept ?? ""}`;
   let p = secInflight.get(key);
   if (!p) {
-    p = secSlot()
-      .then(() => request(url, opts, accept, (res) => res.text()))
+    const archive = SEC_ARCHIVE_RE.test(url);
+    p = (archive ? archiveRead(key) : Promise.resolve(null))
+      .then(async (hit) => {
+        if (hit != null) return hit;
+        await secSlot();
+        const body = await request(url, opts, accept, (res) => res.text());
+        if (archive) await archiveWrite(key, body);
+        return body;
+      })
       .finally(() => secInflight.delete(key));
     secInflight.set(key, p);
   }

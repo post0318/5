@@ -1,6 +1,8 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
-import { annualByYear, entriesOf, ltmAnchor, ltmGapConcept, provenAbsentAt, ttmOf } from "./edgar-series";
+import { annualByYear, entriesOf, ltmAnchor, ltmFlowOf, ltmGapConcept, provenAbsentAt, ttmOf } from "./edgar-series";
+import { revQuarterAt, type RevCol } from "./fin-revenue";
+import { OPINC_NOTE } from "@/lib/fin";
 import { opUnitsFrom } from "../op-units";
 import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT, SYN_MIXED_LEASE_CURRENT, SYN_MIXED_LEASE_NONCURRENT } from "./edgar-bs-structure";
 import { unavailableOn } from "./sec-unavailable";
@@ -610,6 +612,8 @@ export function opIncomeEntries(facts: CompanyFacts): FactUnitEntry[] {
 
 /** 영업이익을 합성(②·③)으로 채운 기간이 있는지 — 화면 주석용. */
 export function opIncomeIsDerived(facts: CompanyFacts): boolean {
+  // fin 경로(금융사 외)는 옛 합성 시계열을 쓰지 않는다 — 합성 표기는 fin 주석(opIncomeSynthNote)
+  if (opIncomeViaFin(facts)) return false;
   const oi = entriesOf(facts, "OperatingIncomeLoss");
   const lastOi = oi.reduce((m, e) => (e.end > m ? e.end : m), "");
   const firstOi = oi.reduce((m, e) => (m === "" || e.end < m ? e.end : m), "");
@@ -632,14 +636,79 @@ export function withOpIncome(facts: CompanyFacts): CompanyFacts {
   } as CompanyFacts;
 }
 
-/** 연도별 영업이익 — 단일 기준 시계열(opIncomeEntries)의 사업연도 값. */
-export function opIncomeAnnualByYear(facts: CompanyFacts): Map<number, number> {
-  return annualByYear(entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts));
+// ── 영업이익 원천 — 재무 5층 구조(fin) 전환(2026-09-27, docs/metrics/cogs.md §8) ─────────────────
+//
+// 영업이익은 **fin opinc 지표**(src/lib/fin metrics/opinc.ts — 본표 영업이익 소계, 소계 없으면 공시 계산 구조 "세전이익 − 영업외 항목")
+// 한 곳에서 받는다. 하이라이트·재무분석·손익계산서·개요 TTM·컨센서스가 모두 아래 함수만 거친다(열 = fin 연간·분기·LTM 열 그대로).
+// fin 값이 없는 칸은 빈칸 + fin 사유 — 옛 합성 시계열(SYN_OP_INCOME: 세전 + 이자 근사 등)로 채우지 않는다(그림자 채우기 금지).
+// 금융사(은행·증권·보험 — fin 회사 유형)만 옛 경로(SYN_OP_INCOME·금융사 화면 구성) 그대로 — fin 전환 대상 아님.
+
+/** fin 조립 실패(유형도 모름) — 금융업 SIC 가 아니면 fin 경로로 보고 빈칸 + 이 사유 */
+export const OPINC_FIN_FAIL = "재무 5층 구조(fin) 조립 실패 — 영업이익 공란";
+
+/** 영업이익을 fin 에서 받는가 — 금융사(fin 유형 bank·broker·insurer)만 아니오. fin 조립 실패면 SIC(6000~6499)로 가른다 */
+export function opIncomeViaFin(facts: CompanyFacts): boolean {
+  if (facts.revenue) return !facts.revenue.financial;
+  return !facts.financialSector;
 }
 
-/** 최근 12개월 영업이익 — 같은 시계열. */
+export interface OpIncCell {
+  v: number | null;
+  /** 빈칸이면 사유, 값이면 정의 주석(합성 "소계 없음 · 세전이익 − 영업외 항목(공시 계산 구조)") — 없으면 null */
+  note: string | null;
+}
+
+const finCell = (c: RevCol): OpIncCell => ({ v: c.opinc, note: c.opincNote ?? (c.opinc == null ? "영업이익 없음(fin)" : null) });
+
+/** 사업연도 → 영업이익 칸. fin 경로는 fin 연간 열 전부(값 없는 열도 사유와 함께), 금융사는 옛 시계열(값 있는 해만) */
+export function opIncomeAnnualCells(facts: CompanyFacts): Map<number, OpIncCell> {
+  if (!opIncomeViaFin(facts)) {
+    const src = entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts);
+    return new Map([...annualByYear(src)].map(([y, v]) => [y, { v, note: null }]));
+  }
+  return new Map((facts.revenue?.annual ?? []).map((c) => [c.fy, finCell(c)]));
+}
+
+/** 연도별 영업이익(값 있는 해만) — opIncomeAnnualCells 의 값. */
+export function opIncomeAnnualByYear(facts: CompanyFacts): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const [y, c] of opIncomeAnnualCells(facts)) if (c.v != null) out.set(y, c.v);
+  return out;
+}
+
+/** 최근 12개월 영업이익 — fin LTM 열(금융사는 옛 시계열 LTM). reason = 빈칸 사유, note = 값의 정의 주석 */
+export function opIncomeLtm(facts: CompanyFacts): { value: number | null; reason: string | null; note: string | null } {
+  if (!opIncomeViaFin(facts)) {
+    const src = entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts);
+    const r = ltmFlowOf(src, ltmAnchor(facts));
+    return { value: r.value, reason: r.value == null ? (r.reason ?? "LTM 영업이익 없음") : null, note: null };
+  }
+  if (!facts.revenue) return { value: null, reason: OPINC_FIN_FAIL, note: null };
+  const l = facts.revenue.ltm;
+  if (!l) return { value: null, reason: "LTM 열 없음(fin)", note: null };
+  const c = finCell(l);
+  return c.v == null ? { value: null, reason: c.note, note: null } : { value: c.v, reason: null, note: c.note };
+}
+
+/** 최근 12개월 영업이익 값 */
 export function opIncomeTtm(facts: CompanyFacts): number | null {
-  return ttmOf(entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts), ltmAnchor(facts));
+  return opIncomeLtm(facts).value;
+}
+
+/** 분기 영업이익 칸(fin 분기 열 — Q4 포함, 결산일 ±6일). fin 경로가 아니면 null(호출부가 옛 경로) */
+export function opIncomeQuarterAt(facts: CompanyFacts, end: string): OpIncCell | null {
+  if (!opIncomeViaFin(facts)) return null;
+  if (!facts.revenue) return { v: null, note: OPINC_FIN_FAIL };
+  const q = revQuarterAt(facts.revenue, end);
+  return q ? finCell(q) : { v: null, note: "fin 분기 열 없음" };
+}
+
+/** 표시 연도 중 fin 합성(본표 소계 없음 — 공시 계산 구조) 영업이익이 있으면 그 주석 문구. 없으면 null */
+export function opIncomeSynthNote(facts: CompanyFacts, years: number[], withLtm = false): string | null {
+  if (!opIncomeViaFin(facts)) return null;
+  const ys = new Set(years);
+  const cols = [...(facts.revenue?.annual ?? []).filter((c) => ys.has(c.fy)), ...(withLtm && facts.revenue?.ltm ? [facts.revenue.ltm] : [])];
+  return cols.find((c) => c.opinc != null && c.opincNote?.startsWith(OPINC_NOTE.synth))?.opincNote ?? null;
 }
 
 // ── 모기지 리츠 판정 ──────────────────────────────────────────────────

@@ -8,7 +8,7 @@ import { Gap, type AssembledIs, type Column, type DerivedInput, type FinAssembly
  */
 
 /** 엔진판 — 판독·조립 규칙이 바뀌면 올린다(fin_chg 사유 "ev") */
-export const ENGINE_VERSION = 8; // 5: 파생값 입력 구조(fin_sym.d, 2026-09-26) · 6: 매출원가·매출총이익·영업이익·영업비용 지표(fin_sym.m.cogs·gp·opinc·opex·d·n, 2026-09-26) · 7: 외화 환산 환율 Yahoo → 연준 H.10(TSM·ASML·SPOT 등 값 변경, 2026-09-27) · 8: 유형 D 매출원가 구성 규칙 10종목(XOM·MCD·V·ORCL·MAR·HLT·SBUX·DAL·CEG·VST 매출원가·매출총이익·영업비용 채움, 2026-09-27)
+export const ENGINE_VERSION = 10; // 5: 파생값 입력 구조(fin_sym.d, 2026-09-26) · 6: 매출원가·매출총이익·영업이익·영업비용 지표(fin_sym.m.cogs·gp·opinc·opex·d·n, 2026-09-26) · 7: 외화 환산 환율 Yahoo → 연준 H.10(TSM·ASML·SPOT 등 값 변경, 2026-09-27) · 8: 유형 D 매출원가 구성 규칙 10종목(XOM·MCD·V·ORCL·MAR·HLT·SBUX·DAL·CEG·VST 매출원가·매출총이익·영업비용 채움, 2026-09-27) · 9: 영업이익 소계 없는 본표 = 공시 계산 구조 합성(IBM·XOM)·CAT 본표 소계 그대로(fin_sym.m.opinc·opex 채움, 화면 전환, 2026-09-27) · 10: 금융 자회사 보유사 소계 없는 본표는 빈칸+사유(IBM 예외, 2026-09-27)
 /** 문서 스키마판 — 압축 형식이 바뀌면 올린다 */
 export const SCHEMA_VERSION = 1;
 

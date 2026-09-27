@@ -24,7 +24,7 @@ import {
 } from "../types";
 import { type FactEntry, ttmFlow } from "./edgar-fundamentals";
 import { dropRoundedRetags, entriesOf, instantOn, ltmAnchor, splitFactorsByYear, fiscalYearOf } from "./edgar-series";
-import { buildEvResolver, daAnnualByYear, daTtm, SYN_OP_INCOME, withOpIncome, type EvContext } from "./edgar-ev";
+import { buildEvResolver, daAnnualByYear, daTtm, opIncomeLtm, SYN_OP_INCOME, withOpIncome, type EvContext } from "./edgar-ev";
 import { loadCaptiveDebt } from "./edgar-captive";
 import { buildShareResolver } from "./edgar-shares";
 import { withFilingGapFill } from "./edgar-gapfill";
@@ -454,10 +454,11 @@ function buildUsTtm(
   // 매출 LTM = 재무 5층 구조 매출 지표(fin-revenue.ts) — 하이라이트·손익계산서·재무분석과 같은 값
   const revenueLtm = revLtm(facts.revenue);
   if (revenueLtm == null) reasons.revenue = facts.revenue?.ltm ? "LTM 매출 조립 불완전(fin)" : "LTM 매출 없음(fin)";
-  // 영업이익 — edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전). 하이라이트·
-  // 재무분석·손익계산서와 같은 값.
-  const opIncome = ttmFlow(factEntries(facts, "us-gaap", [SYN_OP_INCOME], ["USD"]), anchor);
-  if (opIncome.ttm == null) reasons.opIncome = opIncome.reason ?? "LTM 영업이익 없음";
+  // 영업이익 LTM — 재무 5층 구조 영업이익 지표(edgar-ev.ts opIncomeLtm — fin LTM 열, 금융사만 옛 시계열). 하이라이트·재무분석·
+  // 손익계산서와 같은 값. 빈칸은 fin 사유 그대로(옛 합성 시계열로 채우지 않음)
+  const opL = opIncomeLtm(facts);
+  const opIncome = { ttm: opL.value, ttmLabel: ttmFlow(factEntries(facts, "us-gaap", [SYN_OP_INCOME], ["USD"]), anchor).ttmLabel };
+  if (opIncome.ttm == null) reasons.opIncome = opL.reason ?? "LTM 영업이익 없음";
   // 감가상각비 — edgar-ev.ts 단일 규칙(하이라이트·분석 지표와 동일).
   const daByYear = daAnnualByYear(facts);
   const daLatestYear = [...daByYear.keys()].sort((a, b) => b - a)[0];

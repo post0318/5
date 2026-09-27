@@ -69,3 +69,6 @@ scripts/metrics/expected/
 
 # 독립 기준(scripts/reference) — SEC 원문·모델 응답 캐시
 scripts/reference/.cache/
+
+# SEC 공시 원본 디스크 캐시(src/lib/markets/http.ts)
+.cache/sec-archives/

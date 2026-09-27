@@ -21,7 +21,7 @@ import {
   splitFactorsByYear,
   type QuarterCol,
 } from "./edgar-series";
-import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, opIncomeIsDerived, pickDa, SYN_DA_CF, SYN_OP_INCOME } from "./edgar-ev";
+import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, OPINC_FIN_FAIL, opIncomeIsDerived, opIncomeViaFin, pickDa, SYN_DA_CF, SYN_OP_INCOME } from "./edgar-ev";
 import { FY_EPS_NOTE, fyEps, ltmEpsOf, ltmNetIncomeOf, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
 import { buildShareResolver } from "./edgar-shares";
 import { classAEps, type ClassAFacts } from "./edgar-classfacts";
@@ -31,7 +31,7 @@ import {
   isFinancialCompany,
 } from "./edgar-financial";
 import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm, revQuarterLabel, type RevCol } from "./fin-revenue";
-import { COGS_NOTE } from "@/lib/fin";
+import { COGS_NOTE, OPINC_NOTE } from "@/lib/fin";
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
@@ -263,7 +263,19 @@ export function buildUsIncome(
   const pretax = val(PRETAX);
   // 세전이익 태그가 없는 칸 — 순이익 + 법인세 등으로 만들지 않는다(사유)
   for (const l of labels) if (pretax[l] == null && !WHY.get(pretax)?.[l]) note(pretax, l, "세전이익 공시 없음");
-  // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 단일 기준 시계열
+  // 영업이익·영업비용 = 재무 5층 구조 지표(fin opinc·opex — 본표 영업이익 소계, 없으면 공시 계산 구조 합성, docs/metrics/cogs.md §8).
+  // 열은 매출과 같은 fin 열. 빈칸은 fin 사유(옛 합성 시계열로 채우지 않음). 금융사(fin 유형)는 옛 경로(아래)
+  const opViaFin = !isFin && opIncomeViaFin(facts);
+  const finCellVal = (pick: (c: RevCol) => number | null, why: (c: RevCol) => string | null): Record<string, number | null> => {
+    const o = finVal(pick);
+    for (const l of labels) {
+      const c = finColOf.get(l);
+      note(o, l, !rev ? OPINC_FIN_FAIL : !c ? "fin 열 없음" : (why(c) ?? (pick(c) == null ? "fin 값 없음" : null)));
+    }
+    return o;
+  };
+  const finOpex = opViaFin ? finCellVal((c) => c.opex, (c) => c.opexNote) : null;
+  // 영업이익: 금융회사는 충당금전이익 − 대손충당금. 그 외는 fin 영업이익(금융사 유형 증권·보험은 옛 단일 기준 시계열)
   const opIncome = (() => {
     if (isFin) {
       // 대손충당금이 그 기간에 없으면 0 으로 보지 않는다(태그 자체가 없는 회사만 0 — 그림자 채우기 금지)
@@ -273,6 +285,7 @@ export function buildUsIncome(
         if (grossProfit[l] != null && (finProvision[l] != null || !provEver)) o[l] = Math.round(grossProfit[l]! - (finProvision[l] ?? 0));
       return inheritWhy(o, grossProfit, finProvision);
     }
+    if (opViaFin) return finCellVal((c) => c.opinc, (c) => c.opincNote);
     const o = val(OP_INCOME);
     // 합성 영업이익 산식이 "세전이익 그대로"(이자비용 태그 없음)인 칸 — 칸마다 라벨(G6)
     if (!quarterly) {
@@ -288,8 +301,9 @@ export function buildUsIncome(
     }
     return o;
   })();
-  // 기타 영업비용 = OPEX − SGA − RND, 없으면 GrossProfit − OpIncome − SGA − RND
+  // 기타 영업비용 = OPEX − SGA − RND, 없으면 GrossProfit − OpIncome − SGA − RND. fin 경로는 fin 영업비용(매출총이익 − 영업이익) − SGA − RND
   const otherOpex = (() => {
+    if (finOpex) return diff(finOpex, sga, rnd);
     const base = labels.some((l) => opex[l] != null)
       ? opex
       : diff(grossProfit, opIncome);
@@ -572,7 +586,11 @@ export function buildUsIncome(
           ]
         : [row("(−) 영업비용", totalOpex)]),
     row(
-      !isFin && opIncomeIsDerived(facts)
+      opViaFin
+        ? labels.some((l) => opIncome[l] != null && WHY.get(opIncome)?.[l]?.startsWith(OPINC_NOTE.synth))
+          ? `영업이익 (${OPINC_NOTE.synth})`
+          : "영업이익"
+        : !isFin && opIncomeIsDerived(facts)
         ? facts.opIncomeFromStructure
           ? "영업이익 (소계 없음 · 세전이익−영업외 항목, 공시 계산 구조)"
           : facts.financialSector

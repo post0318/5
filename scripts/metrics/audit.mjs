@@ -139,7 +139,7 @@ export function buildAudit({ app, cols, checks, review, closed }) {
         const cls = ext.revenueClass ?? ext.metricClass;
         const of = (k) => Object.keys(cls).filter((n) => cls[n] === k);
         // 닫히지 않은 지표(매출원가·매출총이익)의 ③ 은 다른 미규명 차이처럼 "미결"로 둔다(닫힌 지표만 ③)
-        const extra = [...of("공통모드").map((n) => `${n} 공통모드`), ...of("NA").map((n) => `${n} ${naLab(n)}`)].join(", ");
+        const extra = [...of("공통모드").map((n) => `${n} 공통모드`), ...of("NA").map((n) => `${n} ${naLab(n)}`), ...of("외부정의분해불가").map((n) => `${n} 외부 정의 분해 불가`)].join(", ");
         if (of("③").length) { verdict = isClosed ? "③" : "미결"; note = `미규명 차이: ${of("③").map((n) => `${n} ${ext.causes?.[n] ?? "분해식 없음"}`).join("; ")}`; }
         else if (of("②").length || of("외부단독이탈").length) {
           verdict = "②";

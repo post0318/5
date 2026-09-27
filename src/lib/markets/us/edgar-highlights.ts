@@ -27,7 +27,11 @@ import {
   buildEvResolver,
   daAnnualByYear,
   daTtm,
+  opIncomeAnnualCells,
   opIncomeIsDerived,
+  opIncomeLtm,
+  opIncomeSynthNote,
+  opIncomeViaFin,
   SYN_OP_INCOME,
   type EvBlocker,
   type EvContext,
@@ -258,10 +262,15 @@ export function buildUsHighlights(
     }
     return out;
   };
-  // 영업이익 — edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전). 로더가 합성
-  // 개념으로 끼워 넣어 두었다 — 재무분석·손익계산서·개요 멀티플과 같은 값.
+  // 영업이익 — 재무 5층 구조 영업이익 지표(edgar-ev.ts opIncomeAnnualCells·opIncomeLtm — fin 열, 본표 소계 · 없으면 공시 계산
+  // 구조 합성). 재무분석·손익계산서·개요 멀티플·컨센서스와 같은 값. 금융사(fin 유형)만 옛 단일 기준 시계열(로더 합성 개념)
+  const opViaFin = opIncomeViaFin(facts);
   const usedPretaxAsOpIncome = opIncomeIsDerived(facts);
-  const opIncS = annualSeries(unitEntries(facts, SYN_OP_INCOME, "USD"));
+  const opCells = opIncomeAnnualCells(facts);
+  const opLtm = opIncomeLtm(facts);
+  const opIncS = opViaFin
+    ? [...opCells].flatMap(([year, c]) => (c.v == null ? [] : [{ year, val: c.v, end: `${year}-12-31` }])).sort((a, b) => a.year - b.year)
+    : annualSeries(unitEntries(facts, SYN_OP_INCOME, "USD"));
   // 감가상각비 — edgar-ev.ts 규칙(합계 태그 최댓값, 무형상각 누락 시 구성항목 합).
   // "앞 태그 우선"이던 예전 방식은 MCD 등에서 일부 항목만 담긴 태그를 집었다.
   const daS = [...daAnnualByYear(facts)]
@@ -419,7 +428,7 @@ export function buildUsHighlights(
       return oi != null && d != null ? oi + d : null;
     }
     if (col.kind === "ltm") {
-      const oi = ltm(E.opIncome).value;
+      const oi = opViaFin ? opLtm.value : ltm(E.opIncome).value;
       const d = daTtm(facts);
       // 감가상각비를 못 채웠으면 EBITDA 도 공란(0 으로 보지 않음) — Yahoo 분기
       // LTM 여부와 무관(독립 감사 지적 2026-09-25, 예전엔 yl 있을 때만 비웠다)
@@ -516,9 +525,16 @@ export function buildUsHighlights(
   const nEbitda = (() => {
     const o: (string | null)[] = Array(nCol).fill(null);
     if (ltmIdxC >= 0 && ebitda[ltmIdxC] == null) {
-      const oi = ltm(E.opIncome);
+      const oi = opViaFin ? opLtm : ltm(E.opIncome);
       o[ltmIdxC] = oi.value == null ? oi.reason : daTtm(facts) == null ? "LTM 감가상각비 구성 분기 없음" : null;
     }
+    // 사업연도 열 — fin 영업이익이 빈칸이면 그 사유(정의 대기 등)
+    if (opViaFin)
+      columns.forEach((c, i) => {
+        if (c.kind !== "fy" || ebitda[i] != null) return;
+        const oc = opCells.get(Number(c.key.slice(2)));
+        if (oc?.v == null) o[i] = oc?.note ?? "영업이익 없음(fin)";
+      });
     return o;
   })();
   const nOcf = ltmNote(E.ocf);
@@ -625,6 +641,11 @@ export function buildUsHighlights(
   if (estCols.length)
     notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
   notes.push("EBITDA = 보고 영업이익 + 감가상각비·무형자산상각비 (블룸버그 '조정'과 다를 수 있음)");
+  {
+    // fin 영업이익 합성 열(본표 영업이익 소계 없음 — IBM·XOM 등) 표기
+    const syn = opIncomeSynthNote(facts, columns.filter((c) => c.kind === "fy").map((c) => Number(c.key.slice(2))), true);
+    if (syn) notes.push(`영업이익 ${syn} — 본표에 영업이익 소계가 없는 회사(IBM·XOM 등): 세전이익에서 이자·지분법·기타 영업외손익 줄을 뺀 값`);
+  }
   if (usedPretaxAsOpIncome) {
     // 산식을 실제로 쓴 것만 적는다(G6) — 이자비용 태그가 없는 기간은 세전이익 그대로라 "세전 + 이자" 문구가 틀렸다
     const shown = new Set(columns.filter((c) => c.kind === "fy").map((c) => Number(c.key.slice(2))));

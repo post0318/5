@@ -30,6 +30,10 @@ import {
   buildEvResolver,
   daAnnualByYear,
   daTtm,
+  opIncomeAnnualByYear,
+  opIncomeAnnualCells,
+  opIncomeLtm,
+  opIncomeViaFin,
   SYN_OP_INCOME,
   type EvBlocker,
   type EvContext,
@@ -249,8 +253,20 @@ export function buildUsAnalysis(
         if (grossProfit0[l] != null && (finProvision[l] != null || !provEver)) o[l] = grossProfit0[l]! - (finProvision[l] ?? 0);
       return inheritWhy(o, grossProfit0, finProvision);
     }
-    // edgar-ev.ts 단일 기준 시계열(공시 → 세전+이자 → 세전) — 하이라이트·손익계산서와 같은 값
-    return flow([SYN_OP_INCOME]);
+    // 금융사(fin 유형 증권·보험 — 은행 레이아웃 아님)는 옛 단일 기준 시계열(공시 → 세전)
+    if (!opIncomeViaFin(facts)) return flow([SYN_OP_INCOME]);
+    // 재무 5층 구조 영업이익 지표(edgar-ev.ts — fin 열, 본표 소계 · 없으면 공시 계산 구조 합성) — 하이라이트·손익계산서와 같은 값.
+    // 빈칸은 fin 사유, 합성 값은 그 표기를 칸 주석으로(파생 지표가 물려받는다)
+    const cells = opIncomeAnnualCells(facts);
+    for (const y of years) {
+      const c = cells.get(y);
+      o[`${y}Y`] = c?.v ?? null;
+      note(o, `${y}Y`, c ? c.note : "영업이익 없음(fin 열 없음)");
+    }
+    const l = opIncomeLtm(facts);
+    o[LTM] = l.value;
+    note(o, LTM, l.value == null ? l.reason : l.note);
+    return o;
   })();
   // 지배주주 순이익 — edgar-pershare.ts 공통 규칙(NetIncomeLoss 없으면 ProfitLoss − 비지배지분)
   const niByYear = netIncomeAnnualByYear(facts);
@@ -338,7 +354,7 @@ export function buildUsAnalysis(
       for (const [y, v] of rev) if (nie.has(y) && (prov.has(y) || !provEver)) out.set(y, v - nie.get(y)! - (prov.get(y) ?? 0));
       return out;
     }
-    return fullAnnual([SYN_OP_INCOME]);
+    return opIncomeViaFin(facts) ? opIncomeAnnualByYear(facts) : fullAnnual([SYN_OP_INCOME]);
   })();
   const niFull = niByYear;
   const daFull = daByYear;

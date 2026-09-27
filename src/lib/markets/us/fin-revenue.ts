@@ -1,5 +1,5 @@
 import "server-only";
-import { gapNames, loadFinSym, metricAt, metricNoteAt, type FinSymDoc } from "@/lib/fin";
+import { FIN_TYPES, gapNames, loadFinSym, metricAt, metricNoteAt, type FinSymDoc } from "@/lib/fin";
 
 /**
  * 미국 매출 — **재무 5층 구조(src/lib/fin)의 매출 지표만** 받아 화면 모듈에 나눠 준다(docs/metrics/revenue.md §3).
@@ -29,6 +29,12 @@ export interface RevCol {
   /** 칸 사유·주석(빈칸이면 사유, 값 있으면 정의 메모 — fin COGS_NOTE 문구 포함) */
   cogsNote: string | null;
   gpNote: string | null;
+  /** 영업이익(fin opinc — 본표 소계, 없으면 공시 계산 구조 합성)·영업비용(fin opex = 매출총이익 − 영업이익) */
+  opinc: number | null;
+  opex: number | null;
+  /** 칸 사유·주석(빈칸이면 사유 "정의 대기 — …", 값이면 정의 메모 — 합성 OPINC_NOTE.synth 등) */
+  opincNote: string | null;
+  opexNote: string | null;
 }
 
 export interface UsRevenue {
@@ -39,6 +45,8 @@ export interface UsRevenue {
   ltm: RevCol | null;
   /** fin 완전성 비트(0 = 완전) */
   gaps: number;
+  /** 금융사 기준(fin 회사 유형 bank·broker·insurer) — 영업이익은 fin 전환 대상 아님(기존 금융사 화면 경로) */
+  financial: boolean;
   /**
    * 완전하지 않은 열 — gaps 이름(IDENTITY·BASIS_SHIFT 등)과 조립 항등식 불성립. rev = 매출 줄이 걸린 불성립(그 열 매출은
    * 비어 있음), other = 매출과 무관한 줄의 불성립(매출 값은 유지 — 다음 지표 착수 때 닫을 미결)
@@ -71,6 +79,8 @@ export function revenueFromFinSym(sym: FinSymDoc): UsRevenue {
     const x = {
       cogs: metricAt(sym, "cogs", key), gp: metricAt(sym, "gp", key),
       cogsNote: metricNoteAt(sym, "cogs", key), gpNote: metricNoteAt(sym, "gp", key),
+      opinc: metricAt(sym, "opinc", key), opex: metricAt(sym, "opex", key),
+      opincNote: metricNoteAt(sym, "opinc", key), opexNote: metricNoteAt(sym, "opex", key),
     };
     if (key === "LTM") ltm = { key, kind: "LTM", fy: 0, fq: 0, start, end, v, ...x };
     else if (/^FY\d{4}$/.test(key)) annual.push({ key, kind: "FY", fy: Number(key.slice(2)), fq: 0, start, end, v, ...x });
@@ -88,7 +98,7 @@ export function revenueFromFinSym(sym: FinSymDoc): UsRevenue {
       col: c[0], start: c[1], end: c[2], v: metricAt(sym, "revenue", c[0]), gaps: gapNames(c[6]),
       rev: idf.get(c[0])?.rev ?? [], other: idf.get(c[0])?.other ?? [], unv: idf.get(c[0])?.unv ?? [],
     }));
-  return { annual, quarters, ltm, gaps: sym.g, issues };
+  return { annual, quarters, ltm, gaps: sym.g, financial: FIN_TYPES.has(sym.p.t), issues };
 }
 
 /** 종목의 매출 — 저장본(유니버스) 또는 비저장 조립(fin loadFinSym). 실패하면 null(소비처는 빈칸) */

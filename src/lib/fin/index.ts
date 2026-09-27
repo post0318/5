@@ -20,7 +20,7 @@ import type { FinStmtDoc, FinSymDoc } from "../db/fin";
 export type { FinAssembly, Market } from "./types";
 export type { FinStmtDoc, FinSymDoc } from "../db/fin";
 export { gapNames } from "./types";
-export { COGS_NOTE } from "./metrics/cogs";
+export { COGS_NOTE, FIN_TYPES } from "./metrics/cogs";
 export { OPINC_NOTE } from "./metrics/opinc";
 
 export interface AssembleOpts {
@@ -45,7 +45,7 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
   const rev = revenue(cols, reader.profile);
   // 매출원가·매출총이익(docs/metrics/cogs.md) — 매출 지표 값을 받아 합성 매출총이익을 만든다
   const { cogs, gp } = cogsGp(cols, reader.profile, rev);
-  // 영업이익·영업비용 1단계(본표 소계만 — cogs.md §8). 소비처 전환 전이라 화면은 아직 옛 계산을 쓴다
+  // 영업이익·영업비용(본표 소계, 없으면 공시 계산 구조 합성 — cogs.md §8). 화면은 markets/us/edgar-ev.ts 영업이익 함수로 이 값을 쓴다
   const { opinc, opex } = opincOpex(cols, reader.profile, gp);
   const at = new Date().toISOString();
   // 파생값 입력 참조 압축·자기 검사(입력 합 = 값) — 불일치는 값을 두고 issues.der·경고로(조용히 통과시키지 않음)
@@ -124,7 +124,9 @@ const lookupCache: Map<string, LookupEntry> = ((globalThis as { __finSymLookup?:
 
 export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | null> {
   const id = `${market}:${symbol.toUpperCase()}`;
-  const hit = lookupCache.get(id);
+  // 캐시 키에 엔진판 — 캐시가 globalThis 라 코드 교체(개발 서버 HMR)를 넘어 살아남는다. 판이 바뀌면 옛 규칙의 비저장 조립을 쓰지 않게
+  const ck = `${id}@${ENGINE_VERSION}`;
+  const hit = lookupCache.get(ck);
   if (hit && Date.now() - hit.at < hit.ttl) return hit.p;
   const entry: LookupEntry = { at: Date.now(), ttl: LOOKUP_TTL_MS.stored, p: Promise.resolve(null) };
   entry.p = (async () => {
@@ -141,7 +143,7 @@ export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | 
       return null;
     }
   })();
-  lookupCache.set(id, entry);
+  lookupCache.set(ck, entry);
   return entry.p;
 }
 

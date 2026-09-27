@@ -74,7 +74,7 @@ const insertCogsRows = (col, cogs, gp) => (j) => {
 const fillCogsCell = (col, cogs, gp) => (j) => {
   let n = 0;
   for (const sec of j.sections ?? []) for (const it of sec.items ?? []) {
-    const v = /^(−) 매출원가$/.test(it.accountName) ? cogs : /^매출총이익/.test(it.accountName) ? gp : null;
+    const v = /^\(−\) 매출원가$/.test(it.accountName) ? cogs : /^매출총이익/.test(it.accountName) ? gp : null;
     if (v == null || !it.values || !(col in it.values) || it.values[col] != null) continue;
     it.values[col] = v;
     n++;
@@ -128,8 +128,8 @@ export const MUTATIONS = [
     expect: "A", plants: [{ op: "replace", from: 50129000000, to: 50130000000 }] },
   { id: "M09a", cat: 9, sym: "CAT", col: "2023Y", what: "매출원가 = 주석 조각 160,000,000(42,767,000,000 대신), 매출총이익 합성 66,900,000,000", origin: "cogs.md C1 — CAT FY2022~25 CostOfGoodsAndServicesSold 주석 조각 413/160/33/49백만",
     expect: "A", plants: [{ op: "replace", from: 42767000000, to: 160000000 }, { op: "replace", from: 24293000000, to: 66900000000 }] },
-  { id: "M09b", cat: 9, sym: "MCD", col: "2026 Q2", what: "가맹점 임차비용(10-Q 680,000,000)을 매출원가로, 매출총이익 6,419,000,000", origin: "cogs.md C2 — MCD 10-Q 가 가맹점 임차비용을 원가 태그로",
-    expect: "A", plants: [{ op: "fn", kinds: ["isq"], name: "매출원가·매출총이익 행 삽입(2026 Q2)", fn: insertCogsRows("2026 Q2", 680000000, 6419000000) }] },
+  { id: "M09b", cat: 9, sym: "MCD", col: "2026 Q2", what: "주석 조각(가맹점 임차비용 10-Q 680,000,000)을 매출원가에 더 얹음 — 매출원가 2,981,000,000 → 3,661,000,000, 매출총이익 4,118,000,000 → 3,438,000,000", origin: "cogs.md C2 — MCD 10-Q 가 가맹점 임차비용을 원가 태그로(2026-09-27 D형 규칙 적용 후 원가 행이 생겨 '행 삽입' 대신 값 가산으로 갱신)",
+    expect: "A", plants: [{ op: "replace", kinds: ["isq"], from: 2981000000, to: 3661000000 }, { op: "replace", kinds: ["isq"], from: 4118000000, to: 3438000000 }] },
   { id: "M10", cat: 10, knownGap: "검증기에 총차입금 SEC 본표 독립 대조 없음 — 총차입금·EV 지표를 닫을 때 막는다(docs/metrics/mutation.md 새 구멍 처리). 앱 쪽 조용한 대체 자체는 2026-09-26 수정(원본 조회 실패 → 공란+주석)", sym: "DE", col: "LTM", what: "총차입금 63,836,000,000 → 17,120,000,000(순차입금도 같이 54,908,000,000 → 8,192,000,000), 경고 문구 없음", origin: "handoff 긴급 결함 — SEC Archives 429 때 DE 총차입금 연결 → 장비 부문만으로 조용히 대체",
     expect: "A", plants: [{ op: "replace", from: 63836000000, to: 17120000000 }, { op: "replace", from: 54908000000, to: 8192000000 }] },
   { id: "M11", cat: 11, sym: "KO", col: "FY2025", what: "시가총액 = 4,302,000,000주 × float32 종가(69.91 → 69.91000366210938) 300,752,820,000 → 300,752,835,754.39453", origin: "시가총액 종가 센트 보정(price-tick.ts cleanUsdPrice) 이전 — 146.92 가 146.9199981689453",
@@ -307,7 +307,8 @@ function runVerify({ sym, id, work, cache, base, external }) {
   const r = spawnSync(process.execPath, [
     "--import", pathToFileURL(SELF).href,
     path.join(ROOT, "scripts", "verify-financials.mjs"),
-    `--symbols=${sym}`, "--metric=cogs", "--concurrency=1", `--base=${base}`, ...(external ? [] : ["--no-external"]),
+    // 매출원가 구성 규칙(D형) 파일 필수 — 빠지면 D형 종목(MCD·DAL 등)이 기준선부터 전부 실패로 잡혀 심은 오류가 가려진다(2026-09-27 발견)
+    `--symbols=${sym}`, "--metric=cogs", "--cogs-rules=scripts/metrics/cogs-rules.json", "--concurrency=1", `--base=${base}`, ...(external ? [] : ["--no-external"]),
   ], {
     cwd: ROOT, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, timeout: 30 * 60_000,
     env: { ...process.env, MUT_HOOK: "1", MUT_ID: id ?? "", MUT_CACHE: cache, MUT_BASE: base, MUT_LOG: logFile },

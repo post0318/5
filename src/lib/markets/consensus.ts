@@ -8,8 +8,10 @@ import { fetchUsCompanyFacts, fetchUsSic } from "./us/edgar";
 import {
   buildEvResolver,
   daAnnualByYear,
-  opIncomeAnnualByYear,
+  opIncomeAnnualCells,
+  opIncomeViaFin,
   reitOpUnits,
+  type OpIncCell,
   type EvResolver,
 } from "./us/edgar-ev";
 import { loadCaptiveDebt } from "./us/edgar-captive";
@@ -240,7 +242,8 @@ export async function getConsensusData(
     shares: ShareResolver;
     ev: EvResolver;
     da: Map<number, number>;
-    op: Map<number, number>;
+    /** 영업이익 칸(값·사유) — edgar-ev.ts 영업이익 원천(fin 지표, 금융사만 옛 시계열) */
+    op: Map<number, OpIncCell>;
     facts: CompanyFacts;
     classFacts: ClassAFacts | null;
   } | null = null;
@@ -265,7 +268,7 @@ export async function getConsensusData(
         shares: buildShareResolver(facts, { classFacts, sharesHint: usSharesHint(quote, fwd) }),
         ev: buildEvResolver(facts, { sic, captive, opUnits, isFinancial: isFinancialCompany(facts, sic) }),
         da: daAnnualByYear(facts),
-        op: opIncomeAnnualByYear(facts),
+        op: opIncomeAnnualCells(facts),
         facts,
         classFacts,
       };
@@ -354,10 +357,10 @@ export async function getConsensusData(
   const actualRows: ConsensusRow[] = [];
   for (const fy of years) {
     const revenue = valueForYear(annual, fy, ACCT.revenue);
-    // 미국: 영업이익 단일 기준 시계열(edgar-ev.ts — 공시 → 세전+이자 → 세전)
+    // 미국: 재무 5층 구조 영업이익 지표(edgar-ev.ts opIncomeAnnualCells — 하이라이트·손익계산서와 같은 값, 금융사만 옛 시계열)
     // 한국: dart-ev.ts 공통 영업이익(하이라이트·재무분석과 같은 값)
     const opIncome = us
-      ? (us.op.get(fy) ?? null)
+      ? (us.op.get(fy)?.v ?? null)
       : usFailed
         ? null
         : kr
@@ -401,6 +404,13 @@ export async function getConsensusData(
     if (us && periodEnd0) {
       const sn = us.shares.yearEndNote(fy);
       if (sn) cellNotes.bps = cellNotes.pbr = sn;
+    }
+    // 미국 영업이익 칸 주석 — 빈칸 사유(fin "정의 대기" 등)·합성 표기. EV/EBITDA 빈칸도 영업이익 사유를 물려받는다
+    if (us) {
+      const oc = us.op.get(fy);
+      const t = oc ? oc.note : opIncomeViaFin(us.facts) ? "영업이익 없음(fin 열 없음)" : null;
+      if (t) cellNotes.opIncome = t;
+      if (opIncome == null && t) cellNotes.evEbitda = t;
     }
     if (usFailed) cellNotes.eps = cellNotes.per = cellNotes.pbr = cellNotes.evEbitda = cellNotes.opIncome = cellNotes.netIncome = "SEC 조회 실패";
     const eps = us
