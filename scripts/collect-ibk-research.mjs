@@ -87,6 +87,7 @@ const BASE = "https://www.ibks.com";
 const RESEARCH = `${BASE}/investment/research`;
 const SOURCE = "IBK투자증권";
 const DAILY_LABEL = "IBKS Daily";
+const BOND_ANALYSTS = new Set(["정형주"]);
 const STRATEGY_LABEL = "IBK 투자전략";
 const SUMMARY_CHARS = 300;
 
@@ -194,7 +195,10 @@ function classify(board, row, title) {
   // (이 게시판은 경제·채권을 함께 다뤄 별도 board 구분이 없다).
   if (board.kind === "macro") {
     const isFx = isFxContent(title);
-    return { category: "산업", market: "kr", stockName: isFx ? "IBK 경제 FX" : "IBK 경제", symbol: null, title };
+    // 경제/채권 게시판은 라벨이 하나라 채권 글도 경제로 갔다 — 채권 담당 애널리스트 글은 "IBK 채권"(오너 지적 2026-09-27 — "Warsh in Mirrorland · 정형주
+    // 채권이다"). 이슈분석의 경제/채권 구분은 라벨로 정해진다. 채권 애널리스트가 더 확인되면 BOND_ANALYSTS 에 추가.
+    const label = BOND_ANALYSTS.has(String(row.analyst ?? "").trim()) ? "IBK 채권" : "IBK 경제";
+    return { category: "산업", market: "kr", stockName: isFx ? `${label} FX` : label, symbol: null, title };
   }
   const { label, headline } = industryLabelAndHeadline(title);
   if (board.kind === "krCompany") {
@@ -223,6 +227,11 @@ function classify(board, row, title) {
     return { category: "산업", market: "kr", stockName: isFx ? "IBK 원자재 FX" : "IBK 원자재", symbol: null, title };
   }
   if (board.kind === "strategy") {
+    // 투자전략 게시판 글이라도 제목이 트럼프·중간선거 정치·정책 이야기면 주식 투자전략이 아니라 거시 이슈분석(경제)이다(오너 지적 2026-09-27 —
+    // "중간선거 앞둔 트럼프, 유가 상승이 부담스러운 이유"). 삼성 "美 중간선거 스냅샷"이 이슈분석(경제)인 선례와 같다.
+    if (row.gubun !== "DAIL" && /트럼프|중간선거/.test(title)) {
+      return { category: "산업", market: "kr", stockName: "IBK 경제", symbol: null, title: headline || title };
+    }
     const fixed = row.gubun === "DAIL" ? DAILY_LABEL : STRATEGY_LABEL;
     return { category: "산업", market: "kr", stockName: fixed, symbol: null, title: headline || title };
   }

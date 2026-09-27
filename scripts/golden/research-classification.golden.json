@@ -668,6 +668,38 @@
       "titleIncludes": "Morning Brief(260923)",
       "expect": "EXCLUDE",
       "why": "IBKS Daily 시리즈는 형식과 무관하게 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K14",
+      "source": "IBK투자증권",
+      "titleIncludes": "Warsh in Mirrorland",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "IBK 경제/채권 게시판의 채권 담당(정형주) 글은 이슈분석 채권(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "K15",
+      "source": "IBK투자증권",
+      "titleIncludes": "중간선거 앞둔 트럼프, 유가 상승이 부담스러운 이유",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "트럼프·중간선거 정치·정책 글은 투자전략이 아니라 이슈분석(경제)(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "J01",
+      "source": "KB증권",
+      "market": "jp",
+      "titleIncludes": "어드밴테스트",
+      "expect": "jp 종목분석",
+      "why": "일본 종목 표기 (6857 JP)가 있으면 산업분석이 아니라 종목분석(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "K16",
+      "source": "NH투자증권",
+      "market": "kr",
+      "titleIncludes": "8월 중국 자동차 판매",
+      "expect": "ch 산업분석",
+      "why": "라벨은 \"자동차산업\"이라 나라 표기가 없지만 제목이 \"N월 중국 …\"으로 시작 — 중국 산업분석(오너 지적 2026-09-27)"
     }
   ]
 }

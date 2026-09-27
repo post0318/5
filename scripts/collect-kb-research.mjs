@@ -237,6 +237,8 @@ const US_TICKER_RE = /\(([A-Z][A-Z.]{0,5})\s+[A-Z]{2,3}\)/;
 // 중국(158): "SMIC (688981 CH, 00981 HK)"·"텐센트 (00700 HK)" — 코드+공백+
 // 거래소, 복수 상장 시 콤마로 이어짐(첫 번째만 사용).
 const CN_TICKER_RE = /^(.+?)\s*\(([A-Za-z0-9]{2,10})\s+([A-Za-z]{2,3})[,)]/;
+// 일본(160): "커스텀 AI 반도체의 출하 관문, 어드밴테스트 (6857 JP)" — 제목 끝 "(코드 JP)", 회사명은 마지막 쉼표 뒤(쉼표 없으면 제목 앞부분 전체).
+const JP_TICKER_RE = /(?:^|[,，]\s*)([^,，()]+?)\s*\((\d{4}[A-Z]?)\s+JP\)\s*$/;
 
 function classifyGlobalRow(r) {
   const folder = String(r.foldertemplate ?? "");
@@ -279,8 +281,12 @@ function classifyGlobalRow(r) {
     return { market: "ch", category: "산업", stockName: "KB Asia Market Headline", symbol: null, title, enrichable: false };
   }
   if (categoryid === "160") {
-    // 일본 — 표본이 적고(6개월 2건) 제목 형식도 일정치 않아 티커 추출 없이
-    // 시리즈 라벨로만 수집.
+    // 일본 — 제목 끝에 "(6857 JP)" 표기가 있으면 종목(jp 종목분석)이다(오너 지적 2026-09-27 — "커스텀 AI 반도체의 출하 관문, 어드밴테스트 (6857 JP)"는
+    // 종목분석). 회사명은 마지막 쉼표 뒤. 표기가 없는 글은 예전처럼 시리즈 라벨("글로벌기업+")로 산업분석.
+    const jm = title.match(JP_TICKER_RE);
+    if (jm) {
+      return { market: "jp", category: "기업", stockName: jm[1].trim(), symbol: `${jm[2]}.JP`, title, enrichable: false };
+    }
     return { market: "jp", category: "산업", stockName: docTitle || "산업", symbol: null, title, enrichable: false };
   }
   return null; // 인디아 등 그 외 지역은 대상 아님

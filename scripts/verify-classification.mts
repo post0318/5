@@ -10,8 +10,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { classifyResearchTopic, classifyIssueKind, INSIGHT_SOURCES } from "../src/lib/db/shinhan-research";
 import { isCommonExcludedResearch } from "../src/lib/research-exclude";
-import { normalizeIndustryLabel, INDUSTRY_LABEL_SYNONYMS, ANALYST_SECTOR } from "../src/lib/research-sector";
+import { normalizeIndustryLabel, INDUSTRY_LABEL_SYNONYMS, ANALYST_SECTOR, marketFromIndustryLabel, marketFromTitleLead } from "../src/lib/research-sector";
 import { normalizeSectorLabel } from "./lib/sector-label.mjs";
+import { marketFromLabel, marketFromTitleLead as marketFromTitleLeadMjs } from "./lib/overseas-market.mjs";
 
 const capture = process.argv.find((a) => a.startsWith("--capture="))?.split("=")[1];
 if (!capture) { console.error("--capture=<디렉터리> 필요"); process.exit(2); }
@@ -26,10 +27,12 @@ for (const f of readdirSync(dir)) for (const l of readFileSync(`${dir}/${f}`, "u
   if (!Array.isArray(b.items)) continue;
   const items = b.items;
   const MARKETS = ["kr", "us", "jp", "ch", "eu"] as const;
-  const market = MARKETS.find((m) => m === b.market) ?? "kr";
+  const postMarket = MARKETS.find((m) => m === b.market) ?? "kr";
   for (const it of items) {
     const cat = it.category ?? "기업";
     if (isCommonExcludedResearch(`${it.stockName ?? ""} ${it.title ?? ""}`, cat)) continue;
+    // 서버 수신 라우트와 같은 항목별 국가 규칙 — 국내 게시판의 산업 글도 라벨이 국가명으로 시작하면 그 시장.
+    const market = postMarket === "kr" && cat === "산업" ? (marketFromIndustryLabel(it.stockName ?? "") ?? marketFromTitleLead(it.title ?? "") ?? postMarket) : postMarket;
     let dest: string;
     if (/비상장리서치$/.test(b.source)) dest = `${market} 비상장`;
     else if ((INSIGHT_SOURCES as readonly string[]).includes(b.source)) dest = `${market} 인사이트`;
@@ -78,6 +81,31 @@ for (const [canon, words] of INDUSTRY_LABEL_SYNONYMS) {
 }
 if (syncBad) fail += syncBad;
 else console.log("✔ 업종 라벨 정규화 TS·mjs 구현 일치");
+
+// 국가 라벨 규칙 — 서버(TS marketFromIndustryLabel)와 수집기(mjs marketFromLabel)가 같은 결과를 내는지 검사한다.
+let mktBad = 0;
+for (const w of ["중국 자동차 판매동향", "중국전기차", "China EV", "일본 공작기계", "미국 건설", "유럽 화학", "자동차", "건설", "중국집 프랜차이즈", "은행", "", "USA 에너지", "Japan 반도체"]) {
+  if (marketFromIndustryLabel(w) !== marketFromLabel(w)) {
+    mktBad++;
+    console.log(`✘ 국가 라벨 규칙 불일치(TS≠mjs): "${w}" → ${marketFromIndustryLabel(w)} / ${marketFromLabel(w)}`);
+  }
+}
+if (mktBad) fail += mktBad;
+else console.log("✔ 국가 라벨 규칙 TS·mjs 구현 일치");
+
+// 제목 머리 국가 규칙 — 서버(TS marketFromTitleLead)와 수집기(mjs marketFromTitleLead)가 같은 결과를 내는지 검사한다.
+let titleMktBad = 0;
+for (const w of [
+  "8월 중국 자동차 판매: 가격 인하 경쟁 확대 조짐", "중국 전기차, 지금은 배로 2027년부터는 공장에서",
+  "12월 중국 수출 동향", "일본과 한국의 공작기계 수주 호조", "중국집 프랜차이즈 성장세", "반도체 업황 점검",
+]) {
+  if (marketFromTitleLead(w) !== marketFromTitleLeadMjs(w)) {
+    titleMktBad++;
+    console.log(`✘ 제목 머리 국가 규칙 불일치(TS≠mjs): "${w}" → ${marketFromTitleLead(w)} / ${marketFromTitleLeadMjs(w)}`);
+  }
+}
+if (titleMktBad) fail += titleMktBad;
+else console.log("✔ 제목 머리 국가 규칙 TS·mjs 구현 일치");
 
 console.log(`\n정답 표 결과: 통과 ${pass} · 실패 ${fail} · 결과 없음 ${na} (총 ${golden.cases.length})`);
 process.exit(fail ? 1 : 0);

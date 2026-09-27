@@ -8,7 +8,7 @@ import {
 } from "@/lib/db/shinhan-research";
 import { searchCorps } from "@/lib/markets/kr/corpcode";
 import { isCommonExcludedResearch } from "@/lib/research-exclude";
-import { normalizeIndustryLabel } from "@/lib/research-sector";
+import { normalizeIndustryLabel, marketFromIndustryLabel, marketFromTitleLead } from "@/lib/research-sector";
 
 export const maxDuration = 60;
 
@@ -84,7 +84,9 @@ export async function POST(req: Request) {
     const docs: ShinhanResearchDoc[] = kept.map((it) => ({
       _id: `${source}:${it.id}`,
       source,
-      market,
+      // 국내 게시판으로 들어온 산업 글도 라벨이 국가명으로 시작하면 그 나라 시장("중국 자동차 판매동향" → ch) — 모든 수집기 공통(오너 지시 2026-09-27).
+      // 이미 해외 시장으로 온 항목은 건드리지 않는다.
+      market: market === "kr" && it.category === "산업" ? (marketFromIndustryLabel(it.stockName) ?? marketFromTitleLead(it.title) ?? market) : market,
       date: it.date,
       title: it.title,
       // 산업분석 업종 라벨은 표준 이름으로 정규화("대조선"→"조선") — 모든 수집기가 거치는 한 지점에서 보장(오너 지시 2026-09-27).

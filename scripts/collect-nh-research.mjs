@@ -441,6 +441,9 @@ for (const board of STRATEGY_BOARDS) {
         sStop = true;
         break;
       }
+      // 링크가 없으면 화면에서 클릭할 게 없어 그대로 버린다(오너 지적, 2026-09-27 — "링크가 null 안열리면 수집하지마").
+      // 위 산업(01) 게시판과 같은 규칙 — "테마/이슈 10시 Check" 등 일부 항목이 첨부파일 필드 자체가 비어있음(실측).
+      if (!r.hpge_fle_url_cts) continue;
       const rawTitle = decodeEntities(String(r.rsh_ppr_til_cts ?? "")).replace(DECOR_RE, "").trim();
       const bm = rawTitle.match(BRACKET_RE);
       let stockName = bm ? bm[1].trim() : r.rsh_ppr_ser_cd_nm || board.label;

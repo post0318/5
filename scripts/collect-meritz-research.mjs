@@ -52,10 +52,10 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichResearch } from "./lib/research-extract.mjs";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { promoteKrIndustryToStock } from "./lib/company-match.mjs";
-import { parseOverseasTitle, resolveUsTickerByName } from "./lib/overseas-market.mjs";
+import { parseOverseasTitle, parseOverseasPdfHeader, resolveUsTickerByName } from "./lib/overseas-market.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 
 function loadEnvLocal() {
@@ -351,6 +351,23 @@ console.log(`✔ PDF 링크 ${collected.length - noPdf}/${collected.length}건 (
 
 // 산업 게시판에 섞인 종목 리포트를 종목분석으로 승격(공통 lib — 목표주가 추출 전에).
 for (let i = 0; i < collected.length; i++) collected[i] = promoteKrIndustryToStock(collected[i]);
+// 기업분석 게시판인데 제목에 티커가 없어 산업으로 떨어진 글("2Q26 Review", 라벨만 "CATL") — PDF 첫머리의 "이름 (3750 HK)" 로 종목을
+// 확정한다(오너 지적 2026-09-27). 시장을 아는 거래소만 승격, 모르는 거래소(사우디 "2222 AB")는 산업에 두고 로그로 남긴다.
+if (!NO_ENRICH) {
+  for (let i = 0; i < collected.length; i++) {
+    const it = collected[i];
+    if (it.category !== "산업" || it.symbol || it.market !== "kr" || it.board !== "invest02") continue;
+    if (!/\.pdf(\?|$)/i.test(it.pdfUrl ?? "")) continue;
+    const hdr = parseOverseasPdfHeader(await readPdfText(it.pdfUrl));
+    if (!hdr) continue;
+    if (!hdr.market) {
+      console.log(`  ⚠ 거래소 미상(${hdr.name} ${hdr.ticker} ${hdr.suffix}) — 산업 유지: ${it.title}`);
+      continue;
+    }
+    if (isCommonExcludedContent(it.title, "기업")) continue;
+    collected[i] = { ...it, category: "기업", market: hdr.market, stockName: hdr.name, symbol: hdr.symbol };
+  }
+}
 const research = collected;
 console.log(`✔ 파싱 완료: ${research.length}건`);
 

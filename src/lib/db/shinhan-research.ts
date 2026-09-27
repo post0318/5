@@ -799,6 +799,7 @@ const FORCED_ISSUE_STOCKNAMES = new Set([
   "메리츠 채권분석",
   "메리츠 원자재",
   "IBK 경제",
+  "IBK 채권", // 경제/채권 게시판의 채권 담당 애널리스트 글(정형주) — 이슈분석 채권(오너 지적 2026-09-27)
   "IBK 원자재",
   "대신증권 매크로",
   "대신증권 원자재",
@@ -833,6 +834,7 @@ const FORCED_FX_STOCKNAMES = new Set([
   "메리츠 채권분석 FX",
   "메리츠 원자재 FX",
   "IBK 경제 FX",
+  "IBK 채권 FX",
   "IBK 원자재 FX",
   "대신증권 매크로 FX",
   "대신증권 원자재 FX",

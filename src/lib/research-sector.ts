@@ -165,6 +165,32 @@ export function classifySector(doc: {
   return base;
 }
 
+/**
+ * 산업분석 라벨이 국가명으로 시작하면 그 나라 시장이다("중국 자동차 판매동향" → ch, "일본 …" → jp, "미국 …" → us, "유럽 …" → eu) — 오너 지시 2026-09-27
+ * ("국가 규칙을 하나증권 외 다른 증권사에도 넣을지 당연하지"). 국내(kr) 게시판으로 들어온 산업 글이 해외 업종을 다룰 때 kr 로 흘리지 않게, 모든 수집기가
+ * 거치는 수신 라우트(`/api/cron/total-research`)가 항목별로 적용한다. 라벨 첫머리만 본다(제목 내용으로 나라를 추측하지 않음). 모르면 null.
+ * 수집기 쪽 쌍둥이: `scripts/lib/overseas-market.mjs` 의 `marketFromLabel` — 한쪽을 고치면 다른 쪽도 고칠 것(verify-classification.mts 가 일치 검사).
+ */
+export function marketFromIndustryLabel(label: string | null | undefined): "ch" | "jp" | "us" | "eu" | null {
+  const l = String(label ?? "").trim();
+  if (/^(?:중국|차이나)(?!집)/.test(l) || /^China\b/i.test(l)) return "ch";
+  if (/^(?:일본|Japan)/i.test(l)) return "jp";
+  if (/^(?:미국|USA?\b)/i.test(l)) return "us";
+  if (/^(?:유럽|Europe)/i.test(l)) return "eu";
+  return null;
+}
+
+/**
+ * 제목이 "중국 …"으로 시작하는 산업 리포트도 중국 시장(오너 지시 2026-09-27 — "중국 전기차 글은 중국 산업이 맞다"). 라벨이 업종명뿐이고("자동차산업")
+ * 나라 표기가 없는 글이 제목에만 나라를 담는 경우("8월 중국 자동차 판매: 가격 인하 경쟁 확대 조짐" — 오너 지적 2026-09-27) 때문에, "N월 " 같은 날짜
+ * 접두어는 벗겨내고 그 뒤 첫머리를 본다. 중국만 적용한다 — 미국·일본은 제목 머리가 나라여도 국내 업종 글인 경우가 많고, 나라 뒤에 조사가 붙으면(여러
+ * 나라 얘기, "일본과 한국의 공작기계…") 제외(뒤에 한글이 바로 오면 안 됨). 수집기 쪽 쌍둥이: `scripts/lib/overseas-market.mjs` 의 `marketFromTitleLead`.
+ */
+export function marketFromTitleLead(title: string | null | undefined): "ch" | null {
+  const t = String(title ?? "").trim().replace(/^\d{1,2}\s*월\s*/, "");
+  return /^중국(?![가-힣])/.test(t) ? "ch" : null;
+}
+
 /** 라벨 조각 하나가 가리키는 업종(규칙 순서대로 첫 매치). */
 function sectorOfPart(part: string): SectorLabel | null {
   for (const [label, re] of SECTOR_RULES) if (re.test(part)) return label;

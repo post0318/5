@@ -46,6 +46,22 @@ export function parseOverseasTitle(title) {
 }
 
 /**
+ * PDF 첫머리("www.imeritz.com | CATL (3750 HK) | Issue Comment …")의 종목 표기를 읽는다(오너 지적 2026-09-27 — "pdf가면 티커있는데?").
+ * 제목에 티커가 없는 해외 종목 리포트("2Q26 Review", 라벨만 "CATL")용. 처음 600자 안의 첫 "이름 (TICKER SFX)" 만 본다.
+ * → parseOverseasTitle 과 같은 모양({ name, ticker, suffix, market, symbol }) | null. 거래소를 모르는 접미사("2222 AB")는 market null 로
+ * 돌려 준다(종목인 건 확실하나 시장을 지어내지 않는다 — 호출자가 판단).
+ */
+export function parseOverseasPdfHeader(text) {
+  const head = String(text ?? "").slice(0, 600);
+  const m = head.match(/(?:^|[\n|])\s*([^\n|()]{2,40}?)\s*\(([A-Z0-9][A-Z0-9-]{0,7})(?:\.([A-Z]{1,3})|\s+([A-Z]{1,3}))\)/);
+  if (!m) return null;
+  const [, name, ticker, dot, space] = m;
+  const suffix = dot ?? space;
+  const market = marketFromExchangeSuffix(suffix);
+  return { name: name.trim(), ticker, suffix, market, symbol: market === "us" ? ticker : `${ticker}.${suffix}` };
+}
+
+/**
  * 산업 리포트 라벨이 국가명으로 시작하면 그 나라 시장이다("중국 자동차 판매동향" → ch, "일본 …" → jp, "미국 …" → us, "유럽 …" → eu).
  * 국내 산업분석 게시판 글이 라벨로 해외 업종을 다룰 때 kr 로 흘리지 않기 위한 공통 규칙(오너 지시 2026-09-27 — "중국 자동차 판매 동향은 중국 자동차 산업분석이다").
  * 라벨 첫머리만 본다 — 제목 내용으로 나라를 추측하지 않는다(한국 업종 글이 "중국 소비 회복" 같은 제목을 달 수 있다). 모르면 null.
@@ -65,7 +81,8 @@ export function marketFromLabel(label) {
  * "일본과 한국의 공작기계…"처럼 나라 뒤에 조사가 붙은 제목은 여러 나라 이야기라 제외(뒤에 한글이 바로 오면 안 됨).
  */
 export function marketFromTitleLead(title) {
-  return /^\s*중국(?![가-힣])/.test(String(title ?? "")) ? "ch" : null;
+  const t = String(title ?? "").trim().replace(/^\d{1,2}\s*월\s*/, "");
+  return /^중국(?![가-힣])/.test(t) ? "ch" : null;
 }
 
 const NATION_MARKET = {
