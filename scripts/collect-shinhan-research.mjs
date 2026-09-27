@@ -287,7 +287,7 @@ function splitStrategyLabel(title) {
   return { label: "투자전략", rest: title };
 }
 const STRATEGY_SERIES_LABEL_RE =
-  /^(?:국내\s*주식\s*마감\s*시황|마켓레이더|국내\s*주식\s*전략|글로벌\s*주식\s*전략|자산가격\s*[메매]커니즘\s*변화|신한\s*(?:FX|Econ)\s*Check-?up)$/i;
+  /^(?:(?:\d{1,2}월\s*)?Econ\s*Signal|국내\s*주식\s*마감\s*시황|마켓레이더|국내\s*주식\s*전략|글로벌\s*주식\s*전략|자산가격\s*[메매]커니즘\s*변화|신한\s*(?:FX|Econ)\s*Check-?up)$/i;
 const STRATEGY_NON_US_RE =
   /중국|차이나|China|일본|엔화|엔캐리|Japan|유럽|Europe|베트남|Vietnam|인도(?!네시아)|India\b|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan/i;
 const STRATEGY_US_HINT_RE = /미국|\bUS\b|나스닥|Nasdaq|S&P|다우|연준|\bFed\b|FOMC|월가|Wall Street|글로벌|Global/i;
@@ -316,7 +316,7 @@ for (const board of ["gicomment", "gieconomy"]) {
       // 두고 제목을 통째로 유지한다(오너 지적 2026-09-27 — 1건짜리 폴더가 리포트마다 생김). 분류는 제목 키워드가 이어받는다.
       const split = splitStrategyLabel(rawTitle);
       const isSeries = STRATEGY_SERIES_LABEL_RE.test(split.label);
-      const label = isSeries ? split.label : "투자전략";
+      const label = isSeries ? split.label.replace(/^\d{1,2}월\s*(?=Econ)/i, "") : "투자전략";
       const rest = isSeries ? split.rest : rawTitle;
       const market = classifyStrategyMarket(split.label, rawTitle);
       if (!market) continue;
@@ -341,6 +341,50 @@ for (const board of ["gicomment", "gieconomy"]) {
     const pages = data.pageInfo?.pages ?? [];
     sStartId = pages.length > 1 ? pages[1] : undefined;
     if (!sStartId) break;
+    await sleep(400);
+  }
+}
+
+// 국내외 채권전략(gibond) — 오너 지시 2026-09-27: "채권전략"이라고 되어 있으면(또는 Fixed Income) 이슈분석 채권, 없으면 경제.
+// 크레딧·신용·회사채 글은 공통 제외(isCommonExcludedContent)로 빠지고, 크레딧 전용 게시판(foreignbond)은 수집하지 않는다.
+console.log(`▶ 신한투자증권 국내외 채권전략 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+const BOND_STRATEGY_TITLE_RE = /채권\s?전략|Fixed\s?Income/i;
+{
+  let bStartId;
+  let bStop = false;
+  for (let page = 1; page <= MAX_PAGES && !bStop; page++) {
+    const data = await fetchPage("gibond", page, bStartId);
+    const list = data.list ?? [];
+    if (list.length === 0) break;
+    for (const it of list) {
+      const date = isoDate(it.f0);
+      if (!date) continue;
+      if (new Date(date) < cutoff) {
+        bStop = true;
+        break;
+      }
+      const title = decodeEntities(String(it.f1 ?? "")).trim();
+      if (isCommonExcludedContent(title, "산업")) continue;
+      items.push({
+        id: String(it.fn),
+        date,
+        title,
+        stockName: BOND_STRATEGY_TITLE_RE.test(title) ? "신한 채권전략" : "신한 경제",
+        symbol: null,
+        analyst: it.f4 ?? "",
+        opinion: "",
+        targetPrice: null,
+        summary: excerpt(it.f7),
+        pdfUrl: it.f3 || null,
+        views: Number(it.f5) || null,
+        category: "산업",
+        board: "신한투자증권 > 국내외 채권전략(gibond)",
+        market: "kr",
+      });
+    }
+    const pages = data.pageInfo?.pages ?? [];
+    bStartId = pages.length > 1 ? pages[1] : undefined;
+    if (!bStartId) break;
     await sleep(400);
   }
 }
@@ -370,6 +414,21 @@ for (const it of items) {
     it.unlisted = true;
     it.category = "산업";
     it.symbol = null;
+  }
+}
+
+// 같은 제목이 여러 번 올라온 것은 내용 업데이트본이라 최신 1건만 수집한다(오너 지시 2026-09-27).
+{
+  const latest = new Map();
+  for (const it of items) {
+    const key = `${it.market ?? "kr"}|${it.category}|${it.stockName}|${String(it.title).replace(/\s+/g, " ").trim()}`;
+    const cur = latest.get(key);
+    if (!cur || it.date > cur.date || (it.date === cur.date && Number(it.id) > Number(cur.id))) latest.set(key, it);
+  }
+  if (latest.size !== items.length) {
+    console.log(`  동일 제목 중복 ${items.length - latest.size}건 제거(최신만 유지)`);
+    const keep = new Set(latest.values());
+    for (let i = items.length - 1; i >= 0; i--) if (!keep.has(items[i])) items.splice(i, 1);
   }
 }
 

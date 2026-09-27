@@ -49,7 +49,8 @@ const GOVERNANCE_RE = /거버넌스|\bgovernance\b/i;
 // 부동산은 리츠와 함께 수집 제외(오너 지적 2026-09-27) — 서버 규칙과 동일하게 산업·거시 글(category "기업" 아님)에만 적용.
 const REAL_ESTATE_RE = /부동산|맨션/;
 // 미래에셋 "글로벌 마켓 브리핑" 일일 시리즈 수집 제외(오너 지시 2026-09-27) — 기업 리포트에는 적용하지 않는다.
-const DAILY_BRIEFING_RE = /글로벌\s*마켓\s*브리핑|(?:^|\s)마켓\s*(?:뷰|클로징)(?=\s|\(|$)|Earnings\s*Revision/i; // 미래에셋 일일 시리즈(글로벌 마켓 브리핑·마켓 뷰·마켓 클로징)·Earnings Revision 수집 제외(오너 지시 2026-09-27)
+const CREDIT_RE = /크레딧|신용|회사채|\bCredit\b/i; // 크레딧 계열 수집 제외(오너 지시 2026-09-27 — "크레딧은 아예 제외다"). 기업 리포트에는 적용하지 않는다.
+const DAILY_BRIEFING_RE = /글로벌\s*마켓\s*브리핑|(?:^|\s)마켓\s*(?:뷰|클로징)(?=\s|\(|$)|Earnings\s*Revision|자산가격\s*[메매]커니즘\s*변화|신한\s*FX\s*Check-?up|마켓\s*레이더/i; // 미래에셋 일일 시리즈(글로벌 마켓 브리핑·마켓 뷰·마켓 클로징)·Earnings Revision·신한 자산가격 메커니즘 변화·신한 FX Check-up·마켓레이더 시리즈 수집 제외(오너 지시 2026-09-27)
 
 /** 제목(또는 라벨+제목)에 ESG 신호가 있으면 true — 수집기가 이 항목을 건너뛴다. */
 export function isEsgContent(text) {
@@ -131,7 +132,7 @@ export function isCommonExcludedContent(text, category, market) {
   if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
   // 대체투자 규칙은 종목 리포트에 적용하지 않는다(서버 규칙과 동일).
   if (category === "기업") return false;
-  if (GOVERNANCE_RE.test(t) || REAL_ESTATE_RE.test(t) || DAILY_BRIEFING_RE.test(t)) return true;
+  if (GOVERNANCE_RE.test(t) || REAL_ESTATE_RE.test(t) || DAILY_BRIEFING_RE.test(t) || CREDIT_RE.test(t)) return true;
   if (ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t)) return true;
   if ((market === undefined || market === "kr") && DIGITAL_ASSET_RE.test(t)) return true;
   return false;

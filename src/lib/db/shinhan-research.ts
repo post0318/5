@@ -350,6 +350,7 @@ const MARKET_CONDITION_STRONG_RE =
 // 로 이 둘을 가른다.
 const MARKET_CONDITION_PERIOD_RE = /일간|위클리|주간|데일리|모닝|아침|\bWeek(ly)?\b|\bDaily\b|\bMorning\b/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
+  "투자전략 · Econ Signal", // 신한 월간 거시 시황(하건형, 오너 지시 2026-09-27)
   "이.글.스.", // 한화 "이번달 글로벌 스토리" 월간 글로벌 주식 전략(글로벌리서치팀) — 월간 시황(오너 지시 2026-09-27)
   "KB Global Tracker+",
   "KB데일리", // 오너 지적, 2026-09
@@ -701,7 +702,7 @@ const FX_RE =
 // 모닝브리프 등을 분류, Monthly는 월간, month 등을 분류"). 기본값은 Daily —
 // 기존 "시황" 판정 자체가 이미 데일리성 신호(MARKET_CONDITION_STRONG_RE·
 // PERIOD_RE)로 확정된 것들이라 Monthly만 명시적으로 가르면 된다.
-const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b|이\.글\.스\./i;
+const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b|이\.글\.스\.|Econ\s?Signal/i;
 
 // macro_issues에서 흡수한 콘텐츠 중 "게시판 코드가 topic을 확정"하던
 // 것들(제목 텍스트만으론 이슈분석/환율분석이 안 갈리는 경우)을 위한 고정
@@ -712,6 +713,8 @@ const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b|이\.글\.스\./i;
 // 약한 고정 시리즈(예: "KB Bond"·"KB Fed Watch"·키움 SI/FE 게시판)는 여기
 // 등록해 안전망으로 확정한다.
 const FORCED_ISSUE_STOCKNAMES = new Set([
+  "신한 채권전략",
+  "신한 경제",
   "Macro Week Ahead",
   "Weekly Economic Issue",
   "Market Issue",
@@ -885,7 +888,7 @@ export type IssueKind = "경제" | "채권";
 // 통화정책 등 거시)는 경제. FOMC·금리 인상 같은 통화정책은 경제로 둔다(채권 리포트는 라벨/제목에 채권 계열 단어가 있음).
 const ISSUE_BOND_LABEL_RE = /채권|Bond|크레딧|Credit|Fixed\s?Income|\bFICC\b/i;
 const ISSUE_ECON_LABEL_RE = /경제|매크로|Macro|원자재|Econ/i;
-const ISSUE_BOND_TITLE_RE = /채권|국채|회사채|크레딧|Credit|\bBond|Treasur|스프레드|\bSpread/i;
+const ISSUE_BOND_TITLE_RE = /Fixed\s?Income|채권|국채|회사채|크레딧|Credit|\bBond|Treasur|스프레드|\bSpread/i;
 /**
  * 라벨(증권사 게시판 이름)이 우선이다(오너 지시 2026-09-27 — "iM증권 채권은 채권", "한화 채권전략은 채권"): 라벨에 채권 계열 단어면 채권,
  * 경제·매크로·원자재 계열이면 경제. 라벨이 "산업"·"시장"·"글로벌 인사이트"처럼 뭉뚱그려졌을 때만 제목의 채권 계열 단어로 판정한다.
