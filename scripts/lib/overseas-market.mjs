@@ -59,6 +59,15 @@ export function marketFromLabel(label) {
   return null;
 }
 
+/**
+ * 제목이 "중국 …"으로 시작하는 산업 리포트도 중국 시장(오너 지시 2026-09-27 — "중국 전기차 글은 중국 산업이 맞다": 하나 "중국 전기차, 지금은 배로
+ * 2027년부터는 공장에서"는 라벨이 그냥 "자동차"). 중국만 적용한다 — 미국·일본은 "미국 금리 인하와 은행"처럼 제목 머리가 나라여도 국내 업종 글인 경우가 많고,
+ * "일본과 한국의 공작기계…"처럼 나라 뒤에 조사가 붙은 제목은 여러 나라 이야기라 제외(뒤에 한글이 바로 오면 안 됨).
+ */
+export function marketFromTitleLead(title) {
+  return /^\s*중국(?![가-힣])/.test(String(title ?? "")) ? "ch" : null;
+}
+
 const NATION_MARKET = {
   USA: "us", JPN: "jp", CHN: "ch", HKG: "ch", TWN: "ch",
   FRA: "eu", DEU: "eu", GBR: "eu", ITA: "eu", NLD: "eu", CHE: "eu", ESP: "eu", SWE: "eu", DNK: "eu",

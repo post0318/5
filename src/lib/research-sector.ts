@@ -131,6 +131,8 @@ export function classifySector(doc: {
   summary?: string | null;
 }): SectorLabel | null {
   const base = classifySectorBase(doc);
+  // 공작기계·건설기계는 기계 = 산업재(오너 지시 2026-09-27 — 하나 "일본과 한국의 공작기계 수주 호조"는 자동차 담당 라벨이 붙었지만 산업재).
+  if (base === "자동차" && /공작기계|건설기계|산업기계/.test(doc.title ?? "")) return "산업재";
   // 라벨이 넓은 정보기술("Tech"·"IT")이어도 제목이 메모리·HBM·반도체 이야기면 반도체다(오너 지적 2026-09-27 — 삼성 Tech 라벨
   // "메모리 외주 확대 수혜주 점검"·"HBM 디스펙 논란"). 반도체는 정보기술의 하위 업종이라 라벨을 어기는 게 아니라 세분화다.
   if (base === "정보기술" && SEMICONDUCTOR_RE.test(doc.title ?? "")) return "반도체";
