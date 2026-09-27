@@ -386,6 +386,7 @@ const MARKET_CONDITION_STRONG_RE =
 // 로 이 둘을 가른다.
 const MARKET_CONDITION_PERIOD_RE = /일간|위클리|주간|데일리|모닝|아침|\bWeek(ly)?\b|\bDaily\b|\bMorning\b/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
+  "경제분석 · Econ Signal",
   "투자전략 · Econ Signal", // 신한 월간 거시 시황(하건형, 오너 지시 2026-09-27)
   "이.글.스.", // 한화 "이번달 글로벌 스토리" 월간 글로벌 주식 전략(글로벌리서치팀) — 월간 시황(오너 지시 2026-09-27)
   "KB Global Tracker+",
@@ -437,6 +438,7 @@ const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 // 키움증권 "월간증시전망"·"중장기증시전망" 게시판(오너 지시, 2026-09-24 —
 // "월간증시전망은 투자전략(주식)", "중장기증시전망은 투자전략(주식)이다").
 const STRATEGY_STOCKNAMES = new Set([
+  "신한 해외주식 탑픽", // 신한 월간 해외주식 탑픽 10선 — 투자전략(주식)(오너 지적 2026-09-27)
   "Global Insights",
   "Global Watchlist",
   "마켓픽",

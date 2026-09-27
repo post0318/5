@@ -74,7 +74,8 @@ export function isCommonExcludedResearch(text: string | null | undefined, catego
   const t = String(text ?? "");
   if ((WEEKLY_RE.test(t) && !UNLISTED_RE.test(t) && !WEEKLY_KEEP_RE.test(t)) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
   if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
+  if (DAILY_BRIEFING_RE.test(t)) return true; // 시리즈 제외는 기업 카테고리에도 적용
   if (category === "기업") return false;
-  if (GOVERNANCE_RE.test(t) || REAL_ESTATE_RE.test(t) || DAILY_BRIEFING_RE.test(t) || CREDIT_RE.test(t)) return true;
+  if (GOVERNANCE_RE.test(t) || REAL_ESTATE_RE.test(t) || CREDIT_RE.test(t)) return true;
   return ALT_INVEST_RE.test(t) && !COMMODITY_RE.test(t);
 }

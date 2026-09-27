@@ -27,6 +27,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
+import { resolveKrStock } from "./lib/company-match.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { refineSectorLabels } from "./lib/sector-label.mjs";
 
@@ -250,6 +251,26 @@ const TITLE_US_RE = /\(([A-Z][A-Z.]{0,5})\.US\)\s*$/;
         }
         continue;
       }
+      // "9월 해외주식 탑픽 10선"은 종목 리포트가 아니라 투자전략(오너 지적 2026-09-27) — 첫 종목명이 붙어 종목분석으로 새던 것.
+      if (/해외주식\s*탑픽/.test(String(it.f1 ?? ""))) {
+        items.push({
+          id: String(it.fn),
+          date,
+          title: it.f1,
+          stockName: "신한 해외주식 탑픽",
+          symbol: null,
+          analyst: it.f4 ?? "",
+          opinion: "",
+          targetPrice: null,
+          summary: excerpt(it.f7),
+          pdfUrl: it.f3 || null,
+          views: Number(it.f5) || null,
+          category: "산업",
+          board: "신한투자증권 > 해외 산업 및 기업분석(foreignstock)",
+          market: "us",
+        });
+        continue;
+      }
       if (isCommonExcludedContent(`${stockField} ${it.f1}`, "기업")) continue;
       items.push({
         id: String(it.fn),
@@ -316,7 +337,8 @@ for (const board of ["gicomment", "gieconomy"]) {
       // 두고 제목을 통째로 유지한다(오너 지적 2026-09-27 — 1건짜리 폴더가 리포트마다 생김). 분류는 제목 키워드가 이어받는다.
       const split = splitStrategyLabel(rawTitle);
       const isSeries = STRATEGY_SERIES_LABEL_RE.test(split.label);
-      const label = isSeries ? split.label.replace(/^\d{1,2}월\s*(?=Econ)/i, "") : "투자전략";
+      const boardLabel = board === "gieconomy" ? "경제분석" : "투자전략";
+      const label = isSeries ? split.label.replace(/^\d{1,2}월\s*(?=Econ)/i, "") : boardLabel;
       const rest = isSeries ? split.rest : rawTitle;
       const market = classifyStrategyMarket(split.label, rawTitle);
       if (!market) continue;
@@ -325,7 +347,7 @@ for (const board of ["gicomment", "gieconomy"]) {
         id: String(it.fn),
         date,
         title: rest,
-        stockName: `투자전략 · ${label}`,
+        stockName: `${boardLabel} · ${label}`,
         symbol: null,
         analyst: it.f4 ?? "",
         opinion: "",
@@ -410,22 +432,26 @@ console.log(`▶ 신한투자증권 비상장분석 수집: 최근 ${DAYS}일, �
       if (isCommonExcludedContent(title, "산업")) continue;
       const head = title.match(/^([^;:]+)[;:]/)?.[1]?.replace(/\(\s*비상장[^)]*\)/, "").trim();
       const f2 = String(it.f2 ?? "").trim();
+      const name = f2 && f2 !== "-" ? f2 : head || "비상장";
+      // 발간 시점 기준 분류(오너 지시 2026-09-27): 제목에 "(비상장)" 표기가 있으면 그때 비상장이었으므로 비상장으로, 표기 없이
+      // 지금 상장사로 확인되는 회사의 리포트(상장 이후 발간분)는 개별 종목분석으로 보낸다. 상장사 매칭이 안 되면 비상장.
+      const listed = /비상장/.test(title) ? null : resolveKrStock(name);
       items.push({
         id: String(it.fn),
         date,
         title,
-        stockName: f2 && f2 !== "-" ? f2 : head || "비상장",
-        symbol: null,
+        stockName: listed ? listed.stockName : name,
+        symbol: listed ? listed.symbol : null,
         analyst: it.f4 ?? "",
         opinion: "",
         targetPrice: null,
         summary: excerpt(it.f7),
         pdfUrl: it.f3 || null,
         views: Number(it.f5) || null,
-        category: "산업",
+        category: listed ? "기업" : "산업",
         board: "신한투자증권 > 기업분석 > 비상장분석(giresearchIPO)",
         market: "kr",
-        unlisted: true,
+        unlisted: !listed,
       });
     }
     const pages = data.pageInfo?.pages ?? [];
