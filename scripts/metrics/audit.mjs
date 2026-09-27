@@ -1,6 +1,6 @@
 // 관리자 검증 화면(/admin/verify)의 종목별 감사표 — 오너 결정 2026-09-26.
 //
-// 지표 14개(매출원가·매출총이익 2026-09-26 추가 — 지표 미종결이라 흐리게) × (최근 사업연도 열 · LTM) 한 줄씩, 앱 값과 SEC 원자료·Yahoo·StockAnalysis·인포맥스 값을 나란히 두고 판정한다.
+// 지표 15개(매출원가·매출총이익 2026-09-26 추가, 감가상각비 2026-09-27 추가 — 지표 미종결이라 흐리게) × (최근 사업연도 열 · LTM) 한 줄씩, 앱 값과 SEC 원자료·Yahoo·StockAnalysis·인포맥스 값을 나란히 두고 판정한다.
 // 검증기(scripts/verify-financials.mjs)가 이미 계산한 값만 옮긴다 — 새 외부 조회 없음. 정의가 다른 값으로 칸을 채우지 않는다
 // (그 칸은 null — 예: LTM 시가총액 칸에 인포맥스 "현재 주식수" 를 쓰지 않는다, 인포맥스 EV(현금 미차감)는 대조 제외).
 //
@@ -11,14 +11,14 @@
 //      미결(닫히지 않은 지표의 원인 미규명 차이). 매출은 검증기의 revenueClass 를 그대로 따른다.
 // 순수 함수 — 검증 결과 JSON 으로 따로 시험할 수 있게 검증기 밖에 둔다.
 
-export const AUDIT_METRICS = ["매출", "매출원가", "매출총이익", "영업이익", "순이익", "EPS", "BPS", "시가총액", "EV", "EBITDA", "PER", "PBR", "PSR", "EV/EBITDA"];
+export const AUDIT_METRICS = ["매출", "매출원가", "매출총이익", "영업이익", "감가상각비", "순이익", "EPS", "BPS", "시가총액", "EV", "EBITDA", "PER", "PBR", "PSR", "EV/EBITDA"];
 /** SEC 원자료 칸을 두지 않는 지표 — 배수는 원자료가 없다 */
 const MULTIPLES = new Set(["PER", "PBR", "PSR", "EV/EBITDA"]);
 /** 흐름(기간) 지표 — 기준 표기가 FY/TTM. 나머지는 시점(결산일·현재가) */
-const FLOW = new Set(["매출", "매출원가", "매출총이익", "영업이익", "순이익", "EPS", "EBITDA"]);
+const FLOW = new Set(["매출", "매출원가", "매출총이익", "영업이익", "감가상각비", "순이익", "EPS", "EBITDA"]);
 /** 외부 대조(F층) 항목 이름 — 열 이름 뒤에 붙는 부분. LTM 은 검증기가 따로 만드는 이름만 */
-const EXT_ITEM = { 매출: "매출", 매출원가: "매출원가", 매출총이익: "매출총이익", 영업이익: "영업이익", 순이익: "순이익", EBITDA: "EBITDA", EPS: "희석 EPS", 시가총액: "시가총액(결산일)" };
-const EXT_LTM = new Set(["매출", "매출원가", "매출총이익", "영업이익", "순이익", "EBITDA"]);
+const EXT_ITEM = { 매출: "매출", 매출원가: "매출원가", 매출총이익: "매출총이익", 영업이익: "영업이익", 감가상각비: "감가상각비", 순이익: "순이익", EBITDA: "EBITDA", EPS: "희석 EPS", 시가총액: "시가총액(결산일)" };
+const EXT_LTM = new Set(["매출", "매출원가", "매출총이익", "영업이익", "감가상각비", "순이익", "EBITDA"]);
 const SRC_KEY = { Yahoo: "yahoo", StockAnalysis: "sa", 인포맥스: "infomax" };
 
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -62,7 +62,7 @@ export function commonModeOf(c) {
   if (/^20-F /.test(n)) return "20-F 앱 규칙 재구현(차입금 규칙 공통)";
   if (/^결산일 주식수 /.test(n)) return "결산일 주식수 후보 순서·1.2배 검사 = 앱과 같은 규칙";
   if (/^결산일 시가총액 /.test(n)) return "Yahoo 부동소수 종가·분할 되돌림·주식수 후보 순서 = 앱과 같은 데이터·규칙";
-  if (/^감가상각비 앱 = SEC 현금흐름표/.test(n)) return "현금흐름표 감가상각 줄 선택 규칙 = 앱과 같은 규칙";
+  if (/^(분기 )?감가상각비 앱 = SEC 현금흐름표/.test(n)) return "현금흐름표 감가상각 줄 선택 규칙 = 앱과 같은 규칙";
   // D형 구성 규칙 행 — 앱과 검증기가 같은 규칙표(src 표 ↔ scripts/metrics/cogs-rules.json)를 쓴다. 외부 2곳 이상 정확 일치일 때만 독립(COGS_RULE_COMMON)
   if (c.layer === "A" && /매출원가|매출총이익/.test(n) && /구성 규칙/.test(note)) return COGS_RULE_COMMON;
   if (c.layer === "A" && /매출원가|매출총이익/.test(n)) return "본표 원가 판독 = 앱 identifyCogs 와 같은 알고리즘";

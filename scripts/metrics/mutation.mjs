@@ -56,6 +56,8 @@ export const CATEGORIES = {
   14: "빈칸이어야 할 곳에 값",
   15: "화면 간 불일치",
   16: "영업이익 합성(소계 없는 본표) 영업외 항목 누락",
+  17: "감가상각비 정의 오류(운용리스 사용권자산 상각 포함)",
+  18: "분기 누적 차 오류(현금흐름표 누적값을 분기로)",
 };
 
 /** MCD(유형 D — 본표에 매출원가 줄 없음) 손익계산서에 매출원가·매출총이익 행을 끼워 넣고 "구성 규칙 대기" 각주를 지운다 */
@@ -157,6 +159,13 @@ export const MUTATIONS = [
     expect: "A", plants: [{ op: "replace", kinds: ["is"], from: 11821000000, to: 9886000000 }] },
   { id: "M19", cat: 7, sym: "AAPL", col: "2025 Q4", what: "분기 영업이익 Q4 = FY − 6개월 32,427,000,000 → 60,629,000,000(133,050 − 72,421)", origin: "M07 의 영업이익판 — Q4 = 사업연도 − 9개월 규칙의 반대 사례",
     expect: "A", plants: [{ op: "replace", kinds: ["isq"], from: 32427000000, to: 60629000000 }] },
+  // 감가상각비(--metric=da, 2026-09-27) — 검증기 감가상각비 A층(현금흐름표 영업활동 조정 항목의 감가상각·상각 줄 합 — 연간·분기 누적 차·LTM)
+  { id: "M20", cat: 1, sym: "AAPL", col: "2025Y", what: "연간 감가상각비 +1달러 11,698,000,000 → 11,698,000,001", origin: "M01a 의 감가상각비판 — 현금흐름표 줄 합 정확 대조",
+    expect: "A", plants: [{ op: "replace", kinds: ["is"], from: 11698000000, to: 11698000001 }] },
+  { id: "M21", cat: 17, sym: "PEP", col: "2025Y", what: "감가상각비에 운용리스 사용권자산 상각(727,000,000) 포함 — 3,451,000,000 → 4,178,000,000(Yahoo·인포맥스 값과 같아짐)", origin: "CLAUDE.md 감가상각비 규칙 — 운용리스 사용권자산 상각은 임차료 성격이라 제외(PEP 2025 Yahoo 4,178 = 3,451 + 727). 외부 두 곳이 오류 값과 일치해도 A층이 잡아야 한다",
+    expect: "A", plants: [{ op: "replace", kinds: ["is"], from: 3451000000, to: 4178000000 }] },
+  { id: "M22", cat: 18, sym: "AAPL", col: "2026 Q2", what: "분기 감가상각비 = 6개월 누적 그대로 3,439,000,000 → 6,653,000,000(누적 차 6,653 − 3,214 를 안 함)", origin: "현금흐름표는 누적 공시 — Q2·Q3 는 누적 차여야 한다(Q4 = 사업연도 − 9개월 M07·M19 의 누적판)",
+    expect: "A", plants: [{ op: "replace", kinds: ["isq"], from: 3439000000, to: 6653000000 }] },
 ];
 
 // ── 응답 종류 판정 ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -266,7 +275,7 @@ function installHook() {
 }
 
 // ── 결과 대조 ─────────────────────────────────────────────────────────────────────────────────────────────────────
-const metricOf = (name) => (/매출원가|매출총이익/.test(name) ? "cogs" : /^(분기 )?영업이익(\(합성\)| 앱| 빈칸| 합성)/.test(name) ? "opinc" : /매출|순수익|PSR/.test(name) ? "rev" : "other");
+const metricOf = (name) => (/매출원가|매출총이익/.test(name) ? "cogs" : /^(분기 )?영업이익(\(합성\)| 앱| 빈칸| 합성)/.test(name) ? "opinc" : /^(분기 )?감가상각비 앱/.test(name) ? "da" : /매출|순수익|PSR/.test(name) ? "rev" : "other");
 function indexRun(r) {
   const checks = new Map(), seen = new Map();
   for (const c of r?.checks ?? []) {
@@ -276,7 +285,7 @@ function indexRun(r) {
     checks.set(`${base}#${n}`, c);
   }
   const errs = new Map();
-  for (const [kind, list] of [["rev", r?.revErrors], ["cogs", r?.cogsErrors], ["opinc", r?.opincErrors]])
+  for (const [kind, list] of [["rev", r?.revErrors], ["cogs", r?.cogsErrors], ["opinc", r?.opincErrors], ["da", r?.daErrors]])
     for (const e of list ?? []) errs.set(`${kind}|${e.item}|${e.source}`, { ...e, kind });
   const cls = new Map();
   for (const x of r?.review ?? []) for (const [src, v] of Object.entries({ ...(x.revenueClass ?? {}), ...(x.metricClass ?? {}) })) cls.set(`${x.item}|${src}`, v);
@@ -295,7 +304,7 @@ function diffRuns(base, mut, m) {
   }
   for (const [k, e] of M.errs) {
     const b = B.errs.get(k);
-    const x = { layer: "F", name: `③ 오류(${e.kind === "rev" ? "매출" : e.kind === "opinc" ? "영업이익" : "매출원가·매출총이익"}) ${e.item} — ${e.source}`, col: "", metric: e.kind, note: `앱 ${e.ours} vs ${e.other}` };
+    const x = { layer: "F", name: `③ 오류(${e.kind === "rev" ? "매출" : e.kind === "opinc" ? "영업이익" : e.kind === "da" ? "감가상각비" : "매출원가·매출총이익"}) ${e.item} — ${e.source}`, col: "", metric: e.kind, note: `앱 ${e.ours} vs ${e.other}` };
     if (b) { if (b.ours !== e.ours) (counts(x) ? masked : noise).push(x); continue; }
     (counts(x) ? fired : noise).push(x);
   }
@@ -316,7 +325,8 @@ function runVerify({ sym, id, work, cache, base, external }) {
     "--import", pathToFileURL(SELF).href,
     path.join(ROOT, "scripts", "verify-financials.mjs"),
     // 매출원가 구성 규칙(D형) 파일 필수 — 빠지면 D형 종목(MCD·DAL 등)이 기준선부터 전부 실패로 잡혀 심은 오류가 가려진다(2026-09-27 발견)
-    `--symbols=${sym}`, "--metric=opinc", "--cogs-rules=scripts/metrics/cogs-rules.json", "--concurrency=1", `--base=${base}`, ...(external ? [] : ["--no-external"]),
+    // --metric=da — 영업이익 모드(매출원가 포함) 전부 + 감가상각비 검사(2026-09-27)
+    `--symbols=${sym}`, "--metric=da", "--cogs-rules=scripts/metrics/cogs-rules.json", "--concurrency=1", `--base=${base}`, ...(external ? [] : ["--no-external"]),
   ], {
     cwd: ROOT, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, timeout: 30 * 60_000,
     env: { ...process.env, MUT_HOOK: "1", MUT_ID: id ?? "", MUT_CACHE: cache, MUT_BASE: base, MUT_LOG: logFile },
@@ -421,7 +431,7 @@ async function main() {
   };
   const esc = (s) => String(s).replace(/\|/g, "\\|").replace(/\n/g, " ");
   const md = [];
-  md.push(`# 심은 오류 시험 결과 ${stamp} (KST)`, "", `기준 ${base} · 외부대조 ${external ? "켬" : "끔"} · 검증기 --metric=opinc(기본 검사 + 매출원가·영업이익 검사 전부)`, "");
+  md.push(`# 심은 오류 시험 결과 ${stamp} (KST)`, "", `기준 ${base} · 외부대조 ${external ? "켬" : "끔"} · 검증기 --metric=da(기본 검사 + 매출원가·영업이익·감가상각비 검사 전부)`, "");
   md.push("| mutation | symbol / column | expected detection | detected? | by which check (layer/name) | status |", "|---|---|---|---|---|---|");
   for (const x of rows) md.push(`| ${x.id} ${esc(x.catName)} — ${esc(x.what)} | ${x.sym} / ${esc(x.col)} | ${x.knownGap ? `미검출 예상(알려진 공백) — 기대 층 ${x.expect}` : `${x.expect}층`} | ${x.detected == null ? "—" : x.detected ? "예" : "아니오"} | ${esc(byTxt(x))} | ${esc(x.status)} |`);
   const valid = rows.filter((x) => x.detected != null);
