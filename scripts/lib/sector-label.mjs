@@ -145,8 +145,50 @@ export function sectorFromTitleOrCover(title, pdfText = "") {
  * symbol 이 없으며 stockName 이 기본값("산업")인 항목만 대상. 제목에서 못 찾으면 PDF 표지를 읽는다.
  * 반환: 바꾼 건수.
  */
+/**
+ * 묶음 라벨("2차전지/정유/화학", "정유화학/철강금속/음식료")의 구성 업종. 각 조각이 모두 업종 어휘이고 서로 다른 업종이 둘 이상일 때만
+ * { parts, canon } 을 돌려준다("제약/바이오"·"정유/석유화학"처럼 한 업종의 다른 표기는 묶음이 아니다).
+ */
+export function compositeLabelParts(label) {
+  const raw = String(label ?? "").trim();
+  if (!/[\/,·]/.test(raw)) return null;
+  const parts = raw.split(/[\/,·]/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const canon = parts.map((p) => singleVocabLabel(p) ?? fromVocab(p));
+  if (canon.some((c) => !c)) return null;
+  if (new Set(canon).size < 2) return null;
+  return { parts, canon };
+}
+
+/**
+ * 묶음 라벨 리포트가 실제로 다루는 업종을 PDF 본문 어휘 빈도로 고른다(오너 지시 2026-09-27 — 삼성 "유럽 NDR 및 마케팅 후기"는 라벨이
+ * "2차전지/정유/화학"이지만 LG화학 NDR·정유·석유화학 구조조정 이야기인데 앱은 라벨 첫 업종(2차전지)로 분류했다). 라벨 자체(표지 머리말)는 세지 않고,
+ * 1등이 충분히 많고(3회 이상) 2등의 1.5배 이상일 때만 그 업종의 조각들로 라벨을 좁힌다 — 애매하면 null(라벨을 바꾸지 않는다).
+ */
+export function pickCompositeLabel(label, pdfText) {
+  const c = compositeLabelParts(label);
+  if (!c) return null;
+  const text = String(pdfText ?? "").split(label).join(" ").slice(0, 8000);
+  const scores = [...new Set(c.canon)].map((canon) => {
+    const entry = VOCAB.find(([, l]) => l === canon);
+    return [canon, entry ? (text.match(new RegExp(entry[0].source, "g")) ?? []).length : 0];
+  });
+  scores.sort((a, b) => b[1] - a[1]);
+  const [top, second] = [scores[0], scores[1]];
+  if (!top || top[1] < 3 || (second && top[1] < second[1] * 1.5)) return null;
+  return c.parts.filter((_, i) => c.canon[i] === top[0]).join("/");
+}
+
 export async function refineSectorLabels(items, { sleepMs = 200 } = {}) {
   let changed = 0;
+  // 묶음 라벨 → PDF 본문으로 좁힘(위 pickCompositeLabel). 일반 라벨 보정과 별개로 먼저 돈다.
+  for (const it of items) {
+    if (it.category !== "산업" || it.symbol || !it.pdfUrl || !compositeLabelParts(it.stockName)) continue;
+    const text = await readPdfText(it.pdfUrl).catch(() => "");
+    await new Promise((r) => setTimeout(r, sleepMs));
+    const narrowed = pickCompositeLabel(String(it.stockName).trim(), text);
+    if (narrowed) { it.stockName = narrowed; changed++; }
+  }
   for (const it of items) {
     if (it.category !== "산업" || it.symbol || !GENERIC_SECTOR_LABELS.test(String(it.stockName ?? "").trim())) continue;
     let label = sectorFromTitleOrCover(it.title);

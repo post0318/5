@@ -45,6 +45,20 @@ export function parseOverseasTitle(title) {
   };
 }
 
+/**
+ * 산업 리포트 라벨이 국가명으로 시작하면 그 나라 시장이다("중국 자동차 판매동향" → ch, "일본 …" → jp, "미국 …" → us, "유럽 …" → eu).
+ * 국내 산업분석 게시판 글이 라벨로 해외 업종을 다룰 때 kr 로 흘리지 않기 위한 공통 규칙(오너 지시 2026-09-27 — "중국 자동차 판매 동향은 중국 자동차 산업분석이다").
+ * 라벨 첫머리만 본다 — 제목 내용으로 나라를 추측하지 않는다(한국 업종 글이 "중국 소비 회복" 같은 제목을 달 수 있다). 모르면 null.
+ */
+export function marketFromLabel(label) {
+  const l = String(label ?? "").trim();
+  if (/^(?:중국|차이나)(?!집)/.test(l) || /^China\b/i.test(l)) return "ch";
+  if (/^(?:일본|Japan)/i.test(l)) return "jp";
+  if (/^(?:미국|USA?\b)/i.test(l)) return "us";
+  if (/^(?:유럽|Europe)/i.test(l)) return "eu";
+  return null;
+}
+
 const NATION_MARKET = {
   USA: "us", JPN: "jp", CHN: "ch", HKG: "ch", TWN: "ch",
   FRA: "eu", DEU: "eu", GBR: "eu", ITA: "eu", NLD: "eu", CHE: "eu", ESP: "eu", SWE: "eu", DNK: "eu",

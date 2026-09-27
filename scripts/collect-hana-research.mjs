@@ -33,6 +33,7 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { marketFromLabel } from "./lib/overseas-market.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -149,11 +150,14 @@ function parseIndustryItems(html) {
     const date = isoDate(rawDate);
     if (!date || isCommonExcludedContent(title, "산업")) continue;
     const tm = title.match(INDUSTRY_TITLE_RE);
+    const label = tm ? tm[1].trim() : "산업";
     items.push({
       id: `${bbsCd}_${bbsSeq}`,
       date,
       title: tm ? tm[2].trim() : title,
-      stockName: tm ? tm[1].trim() : "산업",
+      stockName: label,
+      // 라벨이 국가명으로 시작하면 그 나라 시장("중국 자동차 판매동향" → ch). 아니면 국내(kr).
+      market: marketFromLabel(label) ?? "kr",
       symbolHint: null,
       opinion: "",
       targetPrice: null,

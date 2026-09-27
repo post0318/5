@@ -80,6 +80,7 @@ import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent, isDigitalAssetContent, isUnlistedCompanyTag } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
+import { refineSectorLabels } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -361,6 +362,9 @@ if (collected.length === 0) {
 }
 const research = collected;
 console.log(`✔ 파싱 완료: ${research.length}건`);
+// 묶음 라벨("2차전지/정유/화학")은 PDF 본문에서 실제로 다루는 업종 하나로 좁힌다(오너 지시 2026-09-27 — 삼성 "유럽 NDR 및 마케팅 후기"는
+// LG화학 NDR·정유화학 이야기인데 라벨 첫 업종(2차전지)로 분류됐다). 애매하면 라벨을 그대로 두고 앱이 기타로 둔다.
+console.log(`▶ 업종 라벨 보정: ${await refineSectorLabels(research)}건`);
 for (const i of collected) {
   console.log(
     `  [${i.board}→${i.market}/${i.category}/${i.source}] ${i.date} ${i.symbol ?? i.stockName ?? ""}${i.opinion ? `(${i.opinion})` : ""} — ${i.title} [${i.analyst}]`,

@@ -121,6 +121,9 @@ const SECTOR_RULES: [SectorLabel, RegExp][] = [
 // 전력 생산은 유틸리티, 전력설비(기자재·변압기·전선·터빈 등 제조)는 산업재(오너 지시 2026-09-27 — "전력생산이면 유틸리티, 전력설비랑
 // 관련있으면 산업재"). 라벨이 유틸리티여도 제목이 설비 이야기면 산업재로 간다("유틸리티; 대미투자 윤곽, 발전 기자재 수혜에 주목").
 const POWER_EQUIPMENT_RE = /기자재|전력\s?설비|전력\s?기기|변압기|전선|케이블|배전반|개폐기|주기기|가스터빈|터빈|HVDC|초고압/;
+const NUCLEAR_BUILD_RE = /기자재|주기기|\bEPC\b|설계·시공/;
+// 원전 문맥일 때만 — 요약에 기자재라는 단어가 스친 전력망·신재생 운영 글까지 산업재로 가지 않게(2026-09-27 회귀 검사에서 2건 오이동 확인).
+const NUCLEAR_CONTEXT_RE = /원전|원자력|AP1000|APR1400|\bSMR\b/;
 
 export function classifySector(doc: {
   stockName?: string | null;
@@ -135,11 +138,41 @@ export function classifySector(doc: {
   if (base === "유틸리티" && POWER_EQUIPMENT_RE.test(doc.title ?? "") && !UTILITY_COMPANY_RE.test(`${doc.stockName ?? ""} ${doc.title ?? ""}`)) {
     return "산업재";
   }
+  // 제목엔 없어도 요약이 설비·시공 이야기면 산업재 — "원전 관련 대미투자 관전 포인트"(신한, 요약: "AP1000 장납기 기자재 조달", 본문: 설계·주기기·EPC
+  // 한국 기업 참여 범위)는 원전 건설·기자재 밸류체인이라 산업재(오너 지적 2026-09-27). 제목의 설비 단어보다 좁게(주기기·기자재·EPC)만 본다.
+  if (
+    base === "유틸리티" &&
+    NUCLEAR_CONTEXT_RE.test(`${doc.title ?? ""} ${doc.summary ?? ""}`) &&
+    NUCLEAR_BUILD_RE.test(doc.summary ?? "") &&
+    !UTILITY_COMPANY_RE.test(`${doc.stockName ?? ""} ${doc.title ?? ""}`)
+  ) {
+    return "산업재";
+  }
   // 신재생 설비("풍력 터빈 기자재")도 산업재 — 태양광 셀·모듈은 위 소재 규칙이 먼저 잡는다.
   if (base === "에너지/화학" && /태양광|풍력|연료전지|수소/.test(doc.title ?? "") && POWER_EQUIPMENT_RE.test(doc.title ?? "")) {
     return "산업재";
   }
   return base;
+}
+
+/** 라벨 조각 하나가 가리키는 업종(규칙 순서대로 첫 매치). */
+function sectorOfPart(part: string): SectorLabel | null {
+  for (const [label, re] of SECTOR_RULES) if (re.test(part)) return label;
+  return null;
+}
+
+/**
+ * "A/B/C" 처럼 서로 다른 업종을 **셋 이상** 나열한 라벨인가 — 한 업종의 다른 표기("정유/석유화학"·"제약/바이오")나 반도체⊂정보기술 관계는 묶음이 아니고,
+ * 두 업종 묶음("조선/기계"·"인터넷/게임"·"엔터/레저/미디어")은 서로 가까워 첫 업종을 그대로 쓴다(64건 이동을 회귀 검사에서 확인해 셋 이상으로 좁힘).
+ */
+function isMultiSectorLabel(label: string): boolean {
+  const parts = label.split(/[\/,·]/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return false;
+  const sectors = parts.map(sectorOfPart);
+  if (sectors.some((s) => s === null)) return false;
+  const distinct = new Set(sectors);
+  if (distinct.has("반도체")) distinct.delete("정보기술"); // 반도체는 정보기술의 하위 업종
+  return distinct.size >= 3;
 }
 
 function classifySectorBase(doc: {
@@ -153,6 +186,9 @@ function classifySectorBase(doc: {
   // 우연히 섞였을 때 중공업으로 새는 문제가 있었다(오너 지적, 2026-09-22 —
   // "중공업에도 운송이 들어가있다 업종분류는 운송인데").
   const stockName = doc.stockName ?? "";
+  // 서로 다른 업종을 나열한 묶음 라벨("정유화학/철강금속/음식료")은 어느 한 업종으로 정할 수 없다 → 기타(오너 지시 2026-09-27 — "이건 어디라고
+  // 분류하기 어렵다 기타가 맞다"). 수집기가 PDF 본문으로 한 업종으로 좁힌 라벨(sector-label.mjs pickCompositeLabel)은 묶음이 아니라 여기 안 걸린다.
+  if (isMultiSectorLabel(stockName)) return null;
   for (const [label, re] of SECTOR_RULES) {
     if (re.test(stockName)) return label;
   }
