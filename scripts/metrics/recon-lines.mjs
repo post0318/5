@@ -474,31 +474,55 @@ for (const [sym, r] of latest) {
           for (let m = 0; m < 1 << N; m++) { const k = Math.round(sums0[m] / 1e6); if (!bucket.has(k)) bucket.set(k, []); bucket.get(k).push(m); }
           const sumAt = (mask, y) => { let t = 0; for (let i = 0; i < N; i++) if (mask & (1 << i)) t += lines[i].amt[y.year]; return t; };
           const uSum = (um, y) => { let t = 0; for (let i = 0; i < uNames.length; i++) if (um & (1 << i)) t += uAmt(i, y); return t; };
-          const solve = (ti, used, uUsed) => {
+          // 주석 항목 조정(오너 지시 2026-09-27 "주석도 봐야지") — 본표 밖 사실(비용 위치별 구조조정·퇴직급여, 원가 속 감가상각 등)을 외부 분류에
+          // ± 1~2개 더해 본표 줄 부분집합과 맞춘다. 우연 일치 방지: 주석 조정 배분은 3개 연도 이상, 조정 항목은 2개 연도 이상 0 아님, 손익 성격 항목만
+          const faceIds = new Set(face.map((f) => f.id));
+          const notes = yrs.length >= 3 ? poolArr.filter((f) => !faceIds.has(f.k) && POOL_OK.test(f.k) && !POOL_NO.test(f.k.replace(/\[.*$/, ""))
+            && yrs.every((y) => f.vals.has(y.end)) && yrs.filter((y) => Math.abs(f.vals.get(y.end)) > tol).length >= 2) : [];
+          const adjs = [{ t: [], v: (y) => 0 }];
+          for (const f of notes) for (const sg of [1, -1]) adjs.push({ t: [[sg, f.k]], v: (y) => sg * f.vals.get(y.end) });
+          const singles = adjs.length;
+          if (notes.length <= 300) for (let i = 0; i < notes.length; i++) for (let j = i + 1; j < notes.length; j++) for (const a of [1, -1]) for (const b of [1, -1]) {
+            const A = notes[i], B = notes[j];
+            adjs.push({ t: [[a, A.k], [b, B.k]], v: (y) => a * A.vals.get(y.end) + b * B.vals.get(y.end) });
+          }
+          const popc = (x) => { let n = 0; while (x) { x &= x - 1; n++; } return n; };
+          const solve = (ti, used, uUsed, withNotes) => {
             if (ti === targets.length) return [];
             const c = targets[ti];
-            for (let um = 0; um < 1 << uNames.length; um++) {
-              if (um & uUsed) continue;
-              const want0 = y0.row[c] + uSum(um, y0);
-              const cand = [];
-              for (let k = Math.round(want0 / 1e6) - 1; k <= Math.round(want0 / 1e6) + 1; k++) for (const m of bucket.get(k) ?? []) cand.push(m);
-              for (const mask of cand) {
-                if (mask & used) continue;
-                if (!yrs.every((y) => Math.abs(sumAt(mask, y) - (y.row[c] + uSum(um, y))) <= tolOf(1 + popc(um) + popc(mask) / 2))) continue;
-                const rest = solve(ti + 1, used | mask, uUsed | um);
-                if (rest) return [{ c, mask, um }, ...rest];
+            const adjList = withNotes ? adjs : adjs.slice(0, 1);
+            for (let ai = 0; ai < adjList.length; ai++) {
+              const ad = adjList[ai];
+              for (let um = 0; um < 1 << uNames.length; um++) {
+                if (um & uUsed) continue;
+                if (ai >= singles && um) break; // 주석 두 항목 조정은 비경상 줄과 섞지 않는다
+                const want0 = y0.row[c] + uSum(um, y0) + ad.v(y0);
+                const k0 = Math.round(want0 / 1e6);
+                for (let k = k0 - 1; k <= k0 + 1; k++) for (const mask of bucket.get(k) ?? []) {
+                  if (mask & used) continue;
+                  if (!yrs.every((y) => Math.abs(sumAt(mask, y) - (y.row[c] + uSum(um, y) + ad.v(y))) <= tolOf(1 + popc(um) + popc(mask) / 2))) continue;
+                  // 우연 일치 기대 건수 = 이 분류에서 시도한 조합 수 × Π해(허용 폭 ÷ 가능한 합 범위) — 0.01 이상이면 인정하지 않는다
+                  const trials = adjList.length * (1 << uNames.length) * (1 << N);
+                  let pr = trials;
+                  for (const y of yrs) {
+                    const span = lines.reduce((t, l) => t + Math.abs(l.amt[y.year]), 0) + uNames.reduce((t, _, i) => t + Math.abs(uAmt(i, y)), 0) + Math.abs(ad.v(y)) + Math.abs(y.row[c]);
+                    pr *= Math.min(1, (2 * tolOf(1 + popc(um) + popc(mask) / 2)) / Math.max(span, 1));
+                  }
+                  if (pr >= 0.01) continue;
+                  const rest = solve(ti + 1, used | mask, uUsed | um, withNotes);
+                  if (rest) return [{ c, mask, um, adj: ad.t }, ...rest];
+                }
               }
             }
             return null;
           };
-          const popc = (x) => { let n = 0; while (x) { x &= x - 1; n++; } return n; };
-          const sol = solve(0, 0, 0);
+          const sol = solve(0, 0, 0, false) ?? (notes.length ? solve(0, 0, 0, true) : null);
           if (sol) {
             const used = sol.reduce((m, x) => m | x.mask, 0);
             const nm = { cogs: "원가", sga: S.sgaIncludesRnd ? "판관비(연구개발비 포함)" : "판관비", rnd: "연구개발비", amort: "무형상각", other: "기타 영업비용" };
             const names = (mask) => lines.filter((_, i) => mask & (1 << i)).map((l) => l.label);
             const uTxt = (um) => uNames.filter((_, i) => um & (1 << i));
-            partition = [...sol.map((x) => `외부 ${nm[x.c]}${x.um ? ` + 외부 비경상 줄[${uTxt(x.um).join(" + ")}]` : ""} = SEC 본표 [${names(x.mask).join(" + ") || "없음"}]`), `외부 영업이익에서 제외 = [${names(full & ~used).join(" + ") || "없음"}]`];
+            partition = [...sol.map((x) => `외부 ${nm[x.c]}${x.um ? ` + 외부 비경상 줄[${uTxt(x.um).join(" + ")}]` : ""}${x.adj?.length ? ` ${x.adj.map(([sg, k]) => `${sg > 0 ? "+" : "−"} 주석[${k.replace(/^us-gaap_/, "")}]`).join(" ")}` : ""} = SEC 본표 [${names(x.mask).join(" + ") || "없음"}]`), `외부 영업이익에서 제외 = [${names(full & ~used).join(" + ") || "없음"}]`];
             if (metric !== "영업이익") partition.pop();
             for (const l of lineTargets) if (l !== "rev") explain[l] = { ok: true, how: `본표 줄 배분(모든 해 정확): ${partition.join(" · ")}` };
           }
