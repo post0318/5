@@ -27,7 +27,7 @@ MDLZ·XOM·CAT·DELL·ORCL·MRVL)은 BBG 조정(비정상항목) 부분집합으
 | MCD 2021 | StockAnalysis | −197.9 | 본표 "Other operating (income) expense, net" 483.3 중 "Impairment and other charges" 285.4 를 뺀 나머지(매각이익 등) 제외 |
 | XOM 2023 | StockAnalysis | +2,586 | 손상 3,300 제외 − 비근무 연금 714 (XOM 영업이익은 합성) |
 
-**미해결 49건** — AMAT·CAT(SA)·CEG·CL·DAL 외·DELL(인포맥스)·GLW·HLT·IBM 2021~2025·INTC(인포맥스)·KO·MCD(인포맥스)·MDLZ·
+**미해결 52건(LTM 6건 별도)** — AMAT·CAT(SA)·CEG·CL·DAL 외·DELL(인포맥스)·GLW·HLT·IBM 2021~2025·INTC(인포맥스)·KO·MCD(인포맥스)·MDLZ·
 MRVL·MU·PEP·ORCL·SBUX·TER·VRT·VST·WDC·XOM 2021·2022·2024. LTM 6건(IBM·MDLZ·XOM)은 분기 원본 합성이 필요해 이번 범위 밖.
 - 블룸버그 비정상항목 부분집합으로 맞는 건 CAT 인포맥스 1건뿐. BBG 자체도 세 번째 정의(ORCL 조정 영업이익 20,530 = GAAP +
   소송합의 4,700 + 구조조정 191 + 기타 4,713 — SA 4,910·인포맥스 4,936 어느 조합과도 불일치; IBM·XOM 은 BBG GAAP 영업이익부터
