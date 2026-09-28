@@ -338,3 +338,24 @@ ${it.bodyText ?? ""}`;
   );
   return { withOpinion, withTarget, dropped };
 }
+
+
+/**
+ * PDF 본문에서 화면용 짧은 발췌(150자 내외). 한경 수집기의 규칙을 공용으로 뺐다
+ * (2026-09-28, DS 수집기가 요약을 전혀 안 채우던 문제 — 감사 5번). 한글 비중이
+ * 낮은 줄(표·숫자·영문 헤더)은 버리고 문장 경계에서 자른다.
+ */
+export function excerptFromPdfText(text, maxLen = 150) {
+  const hangulRatio = (l) => {
+    const h = (l.match(/[가-힣]/g) || []).length;
+    return l.length ? h / l.length : 0;
+  };
+  const lines = String(text || "").split(String.fromCharCode(10)).map((l) => l.trim()).filter(Boolean);
+  const prose = lines.filter((l) => l.length >= 20 && hangulRatio(l) >= 0.4);
+  const flat = prose.join(" ").replace(/\s{2,}/g, " ").trim();
+  if (!flat) return "";
+  if (flat.length <= maxLen) return flat;
+  const cut = flat.slice(0, maxLen);
+  const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
+  return (boundary > maxLen * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
+}

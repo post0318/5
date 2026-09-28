@@ -22,7 +22,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { enrichResearch, excerptFromPdfText, readPdfText } from "./lib/research-extract.mjs";
 import { resolveKrStock } from "./lib/company-match.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { refineSectorLabels, normalizeSectorLabel } from "./lib/sector-label.mjs";
@@ -313,7 +313,11 @@ async function readDsAttachmentText(postUrl) {
     const html = await view.text();
     const m = html.match(/href="([^"]*\/bbs\/download\.php\?[^"]+)"/);
     if (!m) return "";
-    return await readPdfText(m[1].replace(/&amp;/g, "&"), { headers: { cookie, referer: postUrl } });
+    // User-Agent 를 명시해 둔다(readPdfText 기본값과 같지만, 게시글 열기와 첨부
+    // 받기가 같은 브라우저로 보이게 — 실측 2026-09-28 이 PC 에서 12,871자 정상).
+    return await readPdfText(m[1].replace(/&amp;/g, "&"), {
+      headers: { cookie, referer: postUrl, "User-Agent": UA },
+    });
   } catch {
     return "";
   }
@@ -322,6 +326,9 @@ const stockItems = [...krItems, ...usItems].filter((it) => it.category === "기�
 console.log(`▶ 투자의견/목표주가 조회 중 (첨부 PDF) — ${stockItems.length}건...`);
 for (const it of stockItems) {
   it.pdfText = await readDsAttachmentText(it.pdfUrl);
+  // 목록에 요약이 없는 게시판이라 PDF 본문에서 짧게 발췌한다(다른 소스와 같은
+  // "요약 발췌만 저장" 정책 — 원문 전체는 저장하지 않음).
+  if (it.pdfText && !it.summary) it.summary = excerptFromPdfText(it.pdfText);
   await sleep(400);
 }
 for (const it of krItems) it.market ??= "kr";
