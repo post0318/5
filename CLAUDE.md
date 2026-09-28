@@ -717,6 +717,16 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-bnk-research.mjs`, GitHub Actions
       `.github/workflows/bnk-research.yml`)가 같은 라우트를 `source: "BNK투자
       증권"` 으로 재사용.
+      **GitHub 실행 서버 IP 차단(감사 2026-09-28 — "bnk kirs 원인확인하고
+      방법찾아줘")**: `www.bnkfn.co.kr` 이 2026-09-14 부터 GitHub Actions
+      러너 IP 를 막고 있다(TCP 연결 자체가 10초 타임아웃 — `ConnectTimeoutError`,
+      403 같은 HTTP 응답조차 없음. 이 PC 에서는 0.2초에 정상 접속되는 걸로 봐
+      해외/클라우드 IP 대역 차단으로 추정). 저장소가 public 이라 self-hosted
+      러너는 포크 PR 공격면이 생겨 배제(오너 선택, 2026-09-28) — 대신
+      `scripts/retry-blocked-sites.mjs` 를 Windows 작업 스케줄러
+      (`MarketResearch-BlockedSitesRetry`, 장중 08/11/14/17시 KST)에 등록해
+      이 PC 가 직접 돈다. GitHub 워크플로 자체는 그대로 둔다(실패해도 해
+      없음 — 로컬 수집이 사실상 주 경로).
       - **산업분석/투자전략 수집 추가(오너 지시, 2026-09 — "한국과 미국 모두
         동일하게 수집 기반 구축")**: 같은 사이트의 형제 게시판을 확인 —
         `analysingIssue.jspx`(업종분석, 제목이 기업분석과 똑같은 "[업종명]
