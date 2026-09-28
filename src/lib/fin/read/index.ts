@@ -348,11 +348,12 @@ export class UsReader {
     const start = addDays(shiftYear(cur.end, -1), 1);
     const curPart = await this.partOf(cur, "ytd");
     const priorPart = await this.partOf(prior, "ytd-prior", -1);
-    if (this.profile.reportingCurrency !== "USD") {
-      const last4 = quarters.filter((q) => q.end <= cur.end).slice(-4);
-      if (last4.length === 4 && near(last4[3].end, cur.end) && near(addDays(shiftYear(cur.end, -1), 1), last4[0].start, 12))
-        return { ...base, start: last4[0].start, end: cur.end, segments: last4.flatMap((q) => q.segments) };
-    }
+    // LTM = 최근 4개 분기 열의 합(오너 결정 2026-09-28 "LTM 분기합") — 화면의 분기 열 4개 합과 LTM 이 정확히 같다. 회사가 연간·누적·분기를
+    // 따로 반올림해 "사업연도 + 당기 누적 − 전년 동기"와 ±1(백만) 어긋나던 것(CL 2026 Q2 매출 21,047 vs 분기 합 21,046 = 블룸버그·Yahoo).
+    // 분기 열 4개가 갖춰지지 않으면 종전 식(외화 10-Q 제출사도 같은 규칙 — 분기 평균 환율)
+    const last4 = quarters.filter((q) => q.end <= cur.end).slice(-4);
+    if (last4.length === 4 && near(last4[3].end, cur.end) && near(addDays(shiftYear(cur.end, -1), 1), last4[0].start, 12))
+      return { ...base, start: last4[0].start, end: cur.end, segments: last4.flatMap((q) => q.segments) };
     return { ...base, start, end: cur.end, segments: [{ start, end: cur.end, parts: [fyPart, curPart, priorPart] }] };
   }
 

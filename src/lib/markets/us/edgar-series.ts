@@ -567,8 +567,39 @@ export function ltmFlowOf(entries: FactUnitEntry[], anchor: string | null): LtmF
     .filter((e) => Math.abs(days(wS, e.start!)) <= 12 && Math.abs(days(wE, e.end)) <= 12)
     .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
   if (!prior) return none(LTM_NO_QUARTER);
-  const v = ttmCombine(fy, cur, prior);
+  // LTM = 최근 4개 분기 합(오너 결정 2026-09-28 "LTM 분기합" — fin/read ltmCol 과 같은 규칙). Yahoo 분기로 만든 20-F LTM(ltmQ)은 종전 식
+  const qs = fy.ltmQ == null && cur.form !== YAHOO_Q_FORM && prior.form !== YAHOO_Q_FORM ? quarterSumLtm(interims, fy, cur) : null;
+  const v = qs ?? ttmCombine(fy, cur, prior);
   return { value: v, reason: v == null ? LTM_YAHOO_GAP : null, fy, cur, prior };
+}
+
+/**
+ * 최근 4개 분기 합 — 분기 = 3개월 공시값(최신 판본), 없으면 누적 차(누적_j − 누적_{j−1}), 4분기 = 사업연도 − 9개월 누적. 화면의 분기 열
+ * (edgar-income.ts quarterParts)과 같은 규칙이라 분기 열 4개 합 = LTM. 회사가 연간·누적·분기를 따로 반올림해 종전 식("사업연도 + 당기 누적
+ * − 전년 동기")과 ±1(백만) 어긋났다(CL 2026 Q2 매출 21,047 → 21,046 = 블룸버그·Yahoo). 분기 하나라도 못 만들면 null(종전 식)
+ */
+function quarterSumLtm(interims: FactUnitEntry[], fy: FactUnitEntry, cur: FactUnitEntry): number | null {
+  if (!fy.start || !cur.start) return null;
+  const k = Math.round(days(cur.start, cur.end) / 91.3);
+  if (k < 1 || k > 3) return null;
+  const newest = (xs: FactUnitEntry[]) => xs.sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0];
+  /** 사업연도 시작 s 부터 j 분기 누적(j = 0 이면 0) */
+  const ytd = (s: string, j: number): FactUnitEntry | null | 0 =>
+    j === 0 ? 0 : newest(interims.filter((e) => e.start && Math.abs(days(s, e.start)) <= 12 && Math.abs(days(e.start, e.end) - j * 91.3) <= 20)) ?? null;
+  /** 사업연도 시작 s 의 j 분기(1~3) 값 */
+  const quarter = (s: string, j: number): number | null => {
+    const c = ytd(s, j), p = ytd(s, j - 1);
+    if (!c) return null;
+    const direct = newest(interims.filter((e) => e.start && Math.abs(days(c.end, e.end)) <= 6 && days(e.start, e.end) >= 80 && days(e.start, e.end) <= 100));
+    if (direct) return direct.val;
+    return p === null ? null : c.val - (p === 0 ? 0 : p.val);
+  };
+  let sum = 0;
+  for (let j = 1; j <= k; j++) { const v = quarter(cur.start, j); if (v == null) return null; sum += v; }
+  for (let j = k + 1; j <= 3; j++) { const v = quarter(fy.start, j); if (v == null) return null; sum += v; }
+  const nine = ytd(fy.start, 3);
+  if (!nine) return null;
+  return sum + fy.val - nine.val;
 }
 
 /** 회사의 최근 사업연도 결산일(연간 공시의 자산총계 기준일) */
