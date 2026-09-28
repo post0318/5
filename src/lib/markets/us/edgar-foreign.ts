@@ -51,6 +51,9 @@ const IFRS_MAP: [string, string][] = [
   ["NoncontrollingInterests", "MinorityInterest"],
   ["EquityAndLiabilities", "LiabilitiesAndStockholdersEquity"],
   ["CashAndCashEquivalents", "CashAndCashEquivalentsAtCarryingValue"],
+  // SPOT 본표 "Short term investments" = ifrs-full CurrentInvestments(2025 4,209 백만 EUR = Yahoo otherShortTermInvestments) — 없으면
+  // 연간 EV 가 단기투자만큼 컸고, LTM 은 단기투자 "미상"으로 EV 가 비었다(검증 2026-09-28)
+  ["CurrentInvestments", "ShortTermInvestments"],
   ["CashFlowsFromUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivities"],
   ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", "PaymentsToAcquirePropertyPlantAndEquipment"],
   // SAP 은 현금흐름표 본표 CapEx 가 유형·무형 합산 줄 하나(739·797·785 백만 EUR = Yahoo capitalExpenditure, 2026-09-25) —
