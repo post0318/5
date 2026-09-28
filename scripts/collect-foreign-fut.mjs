@@ -3,12 +3,20 @@
  *
  * 투자자별 선물 거래실적은 공식 무료 API(KRX OPEN API / KIS) 어디에도 없고,
  * KRX 정보데이터시스템 화면은 로그인 필수 + Vercel(데이터센터 IP) 차단이라
- * 서버 배치로는 못 가져온다. 네이버페이 증권의 "투자자별 매매동향(선물)"
- * 페이지에서 로그인 없이 같은 데이터를 얻는다(값이 KRX 원자료와 정확히 일치).
+ * 서버 배치로는 못 가져온다.
  *
- * ⚠️ finance.naver.com/robots.txt 는 일반 UA 에 Disallow: / 이다.
- *    프로젝트 오너가 "개인용, 하루 1회, 단일 소형 페이지" 조건으로 예외 승인
- *    (CLAUDE.md 참조). 빈번한 폴링 금지 — 하루 1회로 고정.
+ * 소스 교체(2026-09-28, 오너 지시 — "finance.daum.net 에는 있다, 가능한가?"):
+ * 네이버페이 증권 "투자자별 매매동향(선물)" 페이지가 2026-09-18 부터 HTTP 410
+ * 으로 폐지돼(사이트 개편) 9월 17일 이후 데이터가 끊겼다. **다음 금융의
+ * 투자주체별 동향(선물) JSON API** 로 바꾼다 — 브라우저 네트워크 로그로
+ * 역추적한 엔드포인트(`/api/investor/future/days?terms=days`)이고, referer
+ * 헤더가 없으면 403, 있으면 로그인 없이 200(실측). 값은 옛 네이버 수집분과
+ * 2026-09-09~16 전 구간 정확히 일치(9/17 만 네이버가 장중 부분값 113 을
+ * 잡았고 다음은 마감값 802 — 다음 쪽이 맞다).
+ *
+ * ⚠️ finance.daum.net 은 robots.txt 자체가 없다(404). 다른 예외들과 같은
+ *    "개인용, 하루 1회, 단일 소형 요청" 조건으로 오너 승인(CLAUDE.md 참조).
+ *    빈번한 폴링 금지 — 하루 1회로 고정.
  *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-foreign-fut.mjs             # 최근 40일 수집 → 앱 전송
@@ -70,69 +78,60 @@ if (STATUS) {
   }
 }
 
-// ── 네이버 조회 ────────────────────────────────────────────────────
-// finance.naver.com/sise/investorDealTrendDay.naver?bizdate=YYYYMMDD&sosok=03&page=N
+// ── 다음 금융 조회 ──────────────────────────────────────────────────
+// finance.daum.net/api/investor/future/days?page=N&perPage=50&terms=days&pagination=true
 //  sosok=03 = 선물(코스피200), 한 페이지 10거래일, 최신순. EUC-KR.
-//  행 셀: [0]날짜(YY.MM.DD) [1]개인 [2]외국인 [3]기관계 [4]금융투자 ... [10]기타법인
-const NAVER = "https://finance.naver.com/sise/investorDealTrendDay.naver";
-const REFERER = "https://finance.naver.com/sise/sise_trans_style.naver?sosok=03";
-const FOREIGN_CELL = 2;
+// 다음 금융 투자주체별 동향(선물) — 일자별 JSON. 필드: date("YYYY-MM-DD 00:00:00"),
+// privateSettlement(개인)·foreignSettlement(외국인)·institutionalSettlement(기관계)·
+// etcCorporationSettlement(기타법인) … 단위는 계약수. 페이지당 최대 50건, 최신순.
+const DAUM = "https://finance.daum.net/api/investor/future/days";
+const REFERER = "https://finance.daum.net/domestic/investors/DERIVATIVES";
+const PER_PAGE = 50;
 
-const ymd = (d) =>
-  `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
-const bizdate = ymd(new Date());
 // 항목 날짜가 'YYYY-MM-DD'(=UTC 자정)라 컷오프도 자정으로 맞춘다.
 // Date.now() 기준 그대로 두면 '정확히 DAYS일 전' 리포트가 시:분 차이로
 // 매번 잘려나간다(실측 2026-09: 미래에셋 최신 리포트가 3시간 차이로 탈락).
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
 
-const num = (s) => {
-  const n = Number(String(s).replace(/,/g, "").replace(/[^\d.-]/g, "").trim());
-  return Number.isFinite(n) ? n : null;
-};
-const isoFromNaver = (s) => {
-  const m = String(s).trim().match(/^(\d{2})\.(\d{2})\.(\d{2})$/);
-  return m ? `20${m[1]}-${m[2]}-${m[3]}` : null;
-};
-
 async function fetchPage(page) {
-  const res = await fetch(`${NAVER}?bizdate=${bizdate}&sosok=03&page=${page}`, {
-    headers: { "User-Agent": UA, Referer: REFERER },
+  const res = await fetch(`${DAUM}?page=${page}&perPage=${PER_PAGE}&terms=days&pagination=true`, {
+    headers: { "User-Agent": UA, Referer: REFERER, Accept: "application/json" },
   });
-  if (!res.ok) throw new Error(`네이버 HTTP ${res.status}`);
-  // EUC-KR 이지만 숫자·날짜·구분자는 전부 ASCII 라 latin1(바이트 1:1)로 읽으면 충분
-  return Buffer.from(await res.arrayBuffer()).toString("latin1");
+  if (!res.ok) throw new Error(`다음 HTTP ${res.status}`);
+  const j = await res.json();
+  return Array.isArray(j?.data) ? j.data : [];
 }
 
-function parseRows(html) {
-  const table = html.match(/<table[^>]*class="type_1"[\s\S]*?<\/table>/i)?.[0] || html.match(/<table[\s\S]*?<\/table>/i)?.[0];
-  if (!table) return [];
+function toRows(data) {
   const out = [];
-  for (const tr of table.match(/<tr[\s\S]*?<\/tr>/gi) || []) {
-    const cells = (tr.match(/<td[\s\S]*?<\/td>/gi) || []).map((td) =>
-      td.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim(),
-    );
-    const date = isoFromNaver(cells[0]);
-    if (!date) continue;
-    const foreign = num(cells[FOREIGN_CELL]);
-    if (foreign == null) continue;
-    // zero-sum: 개인 + 외국인 + 기관계 + 기타법인 = 0
-    const parts = [num(cells[1]), foreign, num(cells[3]), num(cells[cells.length - 1])];
-    const zeroSum = parts.every((v) => v != null) ? parts.reduce((a, b) => a + b, 0) : null;
+  for (const r of data) {
+    const date = String(r?.date ?? "").slice(0, 10);
+    const foreign = Number(r?.foreignSettlement);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(foreign)) continue;
+    // zero-sum: 개인 + 외국인 + 기관계 + 기타법인 = 0 — 필드 의미가 바뀌면 여기서 걸린다
+    const parts = [r.privateSettlement, r.foreignSettlement, r.institutionalSettlement, r.etcCorporationSettlement].map(Number);
+    const zeroSum = parts.every(Number.isFinite) ? parts.reduce((a, b) => a + b, 0) : null;
     out.push({ date, value: foreign, zeroSum });
   }
   return out;
 }
 
-console.log(`▶ 네이버 조회: 선물(코스피200) 투자자별 순매수, 최근 ${DAYS}일`);
+console.log(`▶ 다음 금융 조회: 선물(코스피200) 투자자별 순매수, 최근 ${DAYS}일`);
 
+const kstNow = new Date(Date.now() + 9 * 3600_000);
+const todayKst = kstNow.toISOString().slice(0, 10);
+const nowKstMinutes = kstNow.getUTCHours() * 60 + kstNow.getUTCMinutes();
 const series = [];
 let zsFail = 0;
 for (let page = 1; page <= 20; page++) {
-  const rows = parseRows(await fetchPage(page));
+  const rows = toRows(await fetchPage(page));
   if (rows.length === 0) break;
   for (const r of rows) {
     if (r.zeroSum != null && Math.abs(r.zeroSum) > 0.5) zsFail++;
+    // 당일 행은 장 마감(선물 15:45 KST) 전이면 장중 부분값이라 건너뛴다 — 옛 네이버
+    // 수집분의 9/17 값(113)이 오전 실행 때 잡힌 부분값이었고 마감값은 802 였다.
+    // 워크플로가 10:00 KST 에 돌므로 당일 값은 다음 날 실행에서 확정값으로 들어온다.
+    if (r.date === todayKst && nowKstMinutes < 16 * 60) continue;
     series.push({ date: r.date, value: r.value });
   }
   if (rows.at(-1) && new Date(rows.at(-1).date) < cutoff) break;
@@ -140,7 +139,7 @@ for (let page = 1; page <= 20; page++) {
 }
 
 if (series.length === 0) {
-  console.error("✗ 파싱 결과 0건. 네이버 페이지 구조가 바뀌었을 수 있음.");
+  console.error("✗ 파싱 결과 0건. 다음 API 응답 구조가 바뀌었을 수 있음.");
   // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
   // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
   // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
@@ -164,7 +163,7 @@ console.log(`✔ 파싱 완료: ${clean.length}건  (${clean[0].date} ~ ${clean.
 console.log("  최근 5건:", clean.slice(-5));
 
 if (STATUS) {
-  console.log(`\n✔ 소스 정상. 네이버 최신 거래일: ${clean.at(-1).date}`);
+  console.log(`\n✔ 소스 정상. 다음 최신 거래일: ${clean.at(-1).date}`);
   process.exit(0);
 }
 if (DRY_RUN) {

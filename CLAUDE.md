@@ -168,6 +168,17 @@ npm run db:studio    # drizzle studio
   - **예외 1건 (개인용, 오너 명시 승인)**: 외국인 코스피200 선물 순매수(투자자별
     거래실적)는 어떤 공식 무료 API에도 없고(KRX OPEN API·KIS 확인), KRX 정보데이터
     시스템 화면은 로그인 필수 + Vercel IP 차단. **로컬 전용 스크립트**
+    - **소스 교체(2026-09-28, 오너 지시 — "finance.daum.net 에는 있다, 가능한가?")**:
+      네이버 페이지가 2026-09-18 부터 HTTP 410 으로 폐지돼(사이트 개편, 새 주소
+      `stock.naver.com/market/stock/kr/trend/trader`) 9월 17일 이후 데이터가 끊겼다.
+      같은 스크립트가 이제 **다음 금융 투자주체별 동향(선물) JSON API**
+      (`finance.daum.net/api/investor/future/days?terms=days`, 브라우저 네트워크
+      로그로 역추적)를 쓴다. referer 헤더 없이는 403, 있으면 로그인 없이 200.
+      값은 옛 네이버 수집분과 9/9~9/16 전 구간 정확히 일치(9/17 은 네이버가
+      오전 실행 때 장중 부분값 113 을 잡았고 다음은 마감값 802). 그래서 당일
+      행은 마감(15:45 KST) 전이면 건너뛰게 했다. `finance.daum.net` 은
+      robots.txt 자체가 없다(404) — 다른 예외와 같은 개인용·하루 1회 조건으로
+      오너 승인. 아래 네이버 관련 서술은 교체 전 이력이다.
     (`scripts/collect-foreign-fut.mjs`)가 네이버페이 증권 "투자자별 매매동향(선물)"
     페이지를 **하루 1회** 파싱해 `/api/cron/kr-fg` 로 POST 한다.
     - `finance.naver.com/robots.txt` 는 일반 UA 에 `Disallow: /` (FnGuide 와 동일
