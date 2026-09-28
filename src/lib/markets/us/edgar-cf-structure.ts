@@ -314,6 +314,22 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
       if (e.start === start && e.end === end && (!best || (e.filed ?? "") > (best.filed ?? ""))) best = e;
     return best?.val;
   };
+  /**
+   * 공시 원본 값이 companyfacts 정밀값을 거친 단위(10^3~10^9)로 반올림한 값과 정확히 같으면 정밀값 — 최신 10-K 가 과거 연도를 백만
+   * 단위로 다시 실은 경우(MCD 2022·2023 감가상각비: 원 10-K 1,870.6·1,978.2 → 2025 10-K 1,871·1,978, 검증 2026-09-28 — 검증기
+   * coarseRounding 과 같은 기준). companyfacts 는 반올림 재태깅을 이미 걸러냈다(dropRoundedRetags).
+   */
+  const precise = (l: string, start: string, end: string, v: number): number => {
+    if (!l.startsWith("us-gaap_")) return v;
+    // 같은 기간의 모든 공시 값 중 먼저 공시된 정밀값(원 10-K)을 찾는다 — 최신 값(cfVal)은 재게시 반올림값일 수 있다.
+    const cands = (g[l.slice(8)]?.units?.USD ?? [])
+      .filter((e) => e.start === start && e.end === end && e.val !== v)
+      .sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""));
+    for (const e of cands)
+      for (let p = 1e3; p <= 1e9; p *= 10)
+        if (Math.abs(v) >= 100 * p && v % p === 0 && e.val % p !== 0 && Math.round(e.val / p) * p === v) return e.val;
+    return v;
+  };
   const out: FactUnitEntry[] = [];
   const done = new Set<string>();
   /** 기간별 조정 미확인 사유 — 손상(imp)·중단사업 감가상각(disc) */
@@ -372,8 +388,9 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
       let sum = 0;
       let any = false;
       for (const l of lines) {
-        const v = inst?.get(l)?.get(p) ?? (l.startsWith("us-gaap_") ? cfVal(l.slice(8), start, end) : undefined);
-        if (v === undefined) continue;
+        const v0 = inst?.get(l)?.get(p) ?? (l.startsWith("us-gaap_") ? cfVal(l.slice(8), start, end) : undefined);
+        if (v0 === undefined) continue;
+        const v = precise(l, start, end, v0);
         sum += v;
         any = true;
       }
