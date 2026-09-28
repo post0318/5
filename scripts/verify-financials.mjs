@@ -5817,6 +5817,25 @@ async function verifyUs(sym) {
       const latestOf = (e) => { const ks = kinds.map((k) => e[k]); if (ks[0]?.vLatest == null) return null; return ks.reduce((t, x) => t + (x?.empty ? 0 : x?.vLatest ?? NaN), 0); };
       const hl = sgaAllCols(n, m, "latest", (c, x, e) => { const v = latestOf(e); return v == null || Number.isNaN(v) ? null : { exp: v, ev: extEq(v, x.ours) ? "재게시 없음(= 앱)" : `최신 판본 ${v}(앱 ${x.ours})` }; });
       if (hl && hl.cols.has(col)) return { label: "나중 공시의 반올림 재게시 값(앱은 decimals 판정 정밀값)", ...hl };
+      // 주석 금액·원 공시(2026-09-28 블룸버그 대조로 확인 — 소스 무관, 전 열 정확 성립일 때만)
+      //  · 외부 = 앱 − 주석 연구개발비: 손익계산서에 연구개발비 줄이 없어 판관비 안에 든 회사(XOM·MDLZ·CL — 블룸버그가 주석 연구개발비를 떼어냄)
+      //  · 외부 = 앱 + 주석 광고비: 광고비가 매장 운영비 안에 든 회사(SBUX — 블룸버그 판관비 = 일반관리비 + 광고비)
+      //  · 외부 = 성격 줄의 원 10-K 값: 나중 10-K 가 과거 연도 판관비를 재작성(MAR 2023 1,011 → 867) — 앱은 최신 10-K(오너 결정 2026-09-28 GOOG 와 같음)
+      const fyNote = (concept, date, first = false) => { const es = (G[concept]?.units?.USD ?? []).filter((y) => y.start && /^10-K/.test(y.form ?? "") && date && dayDiff(y.end, date) <= 7 && (Date.parse(y.end) - Date.parse(y.start)) / 864e5 > 300).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? "")); return es.length ? (first ? es[0] : es.at(-1)).val : null; };
+      const noteRules = [];
+      if (m === "판관비") noteRules.push(["note-rnd", "앱 − 주석 연구개발비(손익계산서 줄 없음 — 판관비 안) — 외부는 연구개발비를 판관비에서 떼어냄", (c) => { const v = fyNote("ResearchAndDevelopmentExpense", H[c]?.date, true); return v == null ? null : [-v, `− 주석 연구개발비 ${v}`]; }]);
+      if (m !== "연구개발비") noteRules.push(["note-adv", `앱 + 주석 광고비 — 외부는 광고비를 ${m}에 넣음`, (c) => { const v = fyNote("AdvertisingExpense", H[c]?.date, true); return v == null ? null : [v, `+ 주석 광고비 ${v}`]; }]);
+      noteRules.push(["orig-10k", "성격 줄의 원 10-K 값(앱은 최신 10-K 재작성값) — 외부는 최초 공시 값", (c, e) => {
+        const ids = kinds.flatMap((k) => (e[k]?.lines ?? []).map((t) => t.id)).filter((id) => /^us-gaap_/.test(id));
+        if (!ids.length) return null;
+        let d = 0; const ev = [];
+        for (const id of ids) { const o = fyNote(id.slice(8), H[c]?.date, true), l = fyNote(id.slice(8), H[c]?.date); if (o == null || l == null) return null; d += o - l; if (o !== l) ev.push(`${sgaNm(id)} 원 ${o}(최신 ${l})`); }
+        return [d, ev.length ? ev.join(" · ") : "재작성 없음(= 앱)"];
+      }]);
+      for (const [key, label, f] of noteRules) {
+        const h = sgaAllCols(n, m, key, (c, x, e) => { const r = f(c, e); return r ? { exp: x.ours + r[0], ev: `앱 ${x.ours} ${r[1]}` } : null; });
+        if (h && h.cols.has(col)) return { label, ...h };
+      }
       for (const [minus, add] of combos) {
         if (minus.length && own.length && own.every((id) => minus.includes(id))) continue; // 성격 줄 전부 빼기는 규칙 아님
         const key = `${minus.join("+")}|${add.join("+")}`;
