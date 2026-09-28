@@ -311,6 +311,9 @@ function vsSource(app, src, tol, srcNote = "") {
     : { status: FAIL, note: `앱 ${app} vs 원자료 ${src} (차 ${(d * 100).toFixed(3)}%)${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
 }
 const dayDiff = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
+/** 영업이익 F층 원인 후보 — 주석에만 있는 일회성 비용 표준 태그(양수 = 비용). 오너 결정 2026-09-28 */
+const NOTE_ONEOFF = ["RestructuringCharges", "RestructuringCosts", "RestructuringCostsAndAssetImpairmentCharges", "RestructuringSettlementAndImpairmentProvisions",
+  "AssetImpairmentCharges", "GoodwillImpairmentLoss", "LitigationSettlementExpense", "LossContingencyLossInPeriod", "BusinessCombinationAcquisitionRelatedCosts"];
 /** SEC 세전이익 개념 — 앱 edgar-ev.ts 와 같은 두 개념(지분법 포함/제외) */
 const PRETAX_TAGS = [
   "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
@@ -5494,11 +5497,36 @@ async function verifyUs(sym) {
       const chIds = [...new Set(exps.flatMap((e) => (e.charges ?? []).map((t) => t.id)))].slice(0, 5);
       for (let mask = 1; mask < 1 << chIds.length; mask++) {
         const use = chIds.filter((_, i) => mask & (1 << i));
-        rules.push([`ch-${use.join("+")}`, `앱 − 영업이익 식 안 일회성·인수 무형상각 줄(${use.map(shortId).join(" · ")}) — 외부는 이 줄을 영업이익 밖으로 뺌`, (c, x, e) => {
+        rules.push([`ch-${use.join("+")}`, `앱은 영업이익 식 안 일회성·인수 무형상각 줄(${use.map(shortId).join(" · ")})을 비용으로 차감, 외부는 차감하지 않음`, (c, x, e) => {
           if (e.type !== "F") return null;
-          const ts = use.map((id) => (e.charges ?? []).find((t) => t.id === id));
-          if (ts.some((t) => !t || t.v == null)) return { skip: `${use.map(shortId).join("·")} 중 그 열 본표에 값 없는 줄` };
-          return { exp: x.ours - ts.reduce((s, t) => s + t.w * t.v, 0) * (e.k ?? 1), ev: `앱 ${x.ours} ${ts.map((t) => `${t.w < 0 ? "+" : "−"} ${t.label} ${t.v}`).join(" ")}` };
+          // 그 열 본표에 줄이 없거나 값이 없으면 0(항목 없는 해 — 오너 결정 2026-09-28): 그 해는 외부 = 앱이어야 성립한다(증거에서 빼지 않음)
+          // 개념 이름만 바뀐 같은 줄(MAR: 2021 …IntegrationRelatedCosts → 2022~ …IntegrationRelatedCostsAndOther)은 없음(0)이 아니다 — 한 줄 규칙에서
+          // 그 열 본표에 같은 종류(일회성·상각) 줄이 하나뿐이면 그 줄을 같은 줄로 본다(판관비 개념 변경과 같은 원칙)
+          const kindOf = (id) => exps.flatMap((y) => y.charges ?? []).find((t) => t.id === id)?.kind;
+          const ts = use.map((id) => {
+            const t = (e.charges ?? []).find((y) => y.id === id);
+            if (t && t.v != null) return t;
+            const same = use.length === 1 && !t ? (e.charges ?? []).filter((y) => y.kind === kindOf(id) && y.v != null) : [];
+            if (same.length === 1) return { ...same[0], label: `${same[0].label}(개념 변경 — ${shortId(id)} 자리)` };
+            return { id, w: -1, label: shortId(id), v: 0, none: true };
+          });
+          return { exp: x.ours - ts.reduce((s, t) => s + t.w * t.v, 0) * (e.k ?? 1), ev: `앱 ${x.ours} ${ts.map((t) => `${t.w < 0 ? "+" : "−"} ${t.label} ${t.v}${t.none ? "(그 열 본표에 없음 → 0)" : ""}`).join(" ")}` };
+        }]);
+      }
+      // (나-2) 주석에만 있는 일회성 금액(오너 결정 2026-09-28 — DELL 퇴직 관련 비용·ORCL 구조조정은 본표 줄이 아니라 주석 태그): 표준 태그 하나만
+      //    (조합 금지 — 우연 일치 방지), 본표 일회성 줄과 겹치지 않는 개념만. 앱(GAAP)은 이 금액을 어느 비용 줄 안에서 차감했고 외부는 차감하지 않음:
+      //    외부 = 앱 + 금액. 그 연도 10-K 의 연간 값(최신 제출분), 없으면 0 — 모든 연간 열에서 정확 성립해야 한다(opAllCols)
+      const faceIds = new Set(exps.flatMap((e) => (e.charges ?? []).map((t) => t.id)));
+      const noteVal = (concept, e) => {
+        const es = (G[concept]?.units?.USD ?? []).filter((y) => y.start && /^10-K/.test(y.form ?? "") && dayDiff(y.end, e.end) <= 7 && (Date.parse(y.end) - Date.parse(y.start)) / 864e5 > 300);
+        return es.length ? es.sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0].val : null;
+      };
+      for (const concept of NOTE_ONEOFF) {
+        if (faceIds.has(`us-gaap_${concept}`) || !exps.some((e) => e.type === "F" && e.end && noteVal(concept, e))) continue;
+        rules.push([`note-${concept}`, `앱은 주석 일회성 금액(${concept})을 비용 줄 안에서 차감, 외부는 차감하지 않음`, (c, x, e) => {
+          if (e.type !== "F" || !e.end) return null;
+          const v = noteVal(concept, e);
+          return { exp: x.ours + (v ?? 0) * (e.k ?? 1), ev: `앱 ${x.ours} + 주석 ${concept} ${v ?? "0(그 해 없음)"}` };
         }]);
       }
       // (다) 소계 없는 본표 — 외부가 영업외 줄 일부를 영업이익에 남긴다: 외부 = 앱 + Σ(부호 × 남긴 줄). 줄 조합은 모든 열 같게
