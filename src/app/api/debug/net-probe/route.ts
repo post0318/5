@@ -1,5 +1,9 @@
 import { jsonError, ok } from "@/lib/api";
 
+// 기본 리전(iad1=미국 동부)에서는 BNK·kirs 가 그대로 막혀서, 서울 리전으로
+// 고정했을 때도 막히는지 추가로 확인한다.
+export const preferredRegion = "icn1";
+
 /**
  * 임시 진단 라우트 — Vercel 서버(icn1 서울 리전)가 BNK투자증권에 직접 접속
  * 가능한지 1회성으로 확인한다(오너 질문 2026-09-28 — "bnk는 로컬 말고는
