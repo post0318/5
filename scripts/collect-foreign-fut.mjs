@@ -51,6 +51,9 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const IMPORT_URL = (ENV.KR_FG_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/kr-fg").trim();
 const MACRO_URL = (ENV.KR_FG_MACRO_URL || "https://macroresearch.vercel.app/api/macro/kr-fg").trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
@@ -167,6 +170,7 @@ if (DRY_RUN) {
 // ── 앱으로 전송 ────────────────────────────────────────────────────
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = `Bearer ${CRON_SECRET}`;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 const up = await fetch(IMPORT_URL, {
   method: "POST",
   headers,

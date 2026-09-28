@@ -57,6 +57,51 @@ while ((m = RE.exec(xml))) {
   });
 }
 
+// ── 현재 상장 종목만 남긴다 ─────────────────────────────────────────
+// DART corpCode.xml 은 stock_code 가 있는 법인을 "상장사"로 보이게 하지만
+// 실제로는 상장폐지·합병 소멸 법인도 옛 코드를 그대로 달고 남아 있다(실측
+// 2026-09-28: 삼성물산이 000830(2015년 소멸)과 028260(현행) 둘 다, 씨제이인터넷
+// 037150·한빛네트 036720 등 상폐 종목 다수). 이 표로 이름→종목코드를 풀면
+// 완전일치도 옛 법인에 붙어 리포트가 현행 종목 페이지에 안 뜬다. 그래서 KRX
+// 전종목 시세(코스피+코스닥)에 오늘 기준으로 존재하는 코드만 남긴다.
+// KONEX 는 이 키로 조회 권한이 없어(401) 제외 — 리서치 커버리지에 거의 없다.
+const krxKey = process.env.KRX_API_KEY || (() => {
+  try {
+    const env = readFileSync(new URL("../.env.local", import.meta.url), "utf8");
+    return env.match(/^KRX_API_KEY="?([^"\n]+)"?/m)?.[1];
+  } catch { return undefined; }
+})();
+if (!krxKey) {
+  console.error("KRX_API_KEY 없음 — 상장 여부 필터를 못 걸어 중단");
+  process.exit(1);
+}
+async function krxCodes(service, basDd) {
+  const r = await fetch(`https://data-dbg.krx.co.kr/svc/apis/sto/${service}?basDd=${basDd}`, {
+    headers: { AUTH_KEY: krxKey },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!r.ok) throw new Error(`KRX ${service} ${r.status}`);
+  return ((await r.json()).OutBlock_1 ?? []).map((x) => x.ISU_CD);
+}
+const listed = new Set();
+// 휴장일이면 응답이 비므로 최근 거래일을 찾을 때까지 하루씩 거슬러 간다
+for (let back = 0; back < 10 && listed.size === 0; back++) {
+  const d = new Date(Date.now() - back * 86_400_000);
+  const basDd = d.toISOString().slice(0, 10).replace(/-/g, "");
+  const [a, b] = await Promise.all([krxCodes("stk_bydd_trd", basDd), krxCodes("ksq_bydd_trd", basDd)]);
+  for (const c of [...a, ...b]) listed.add(c);
+  if (listed.size) console.log(`KRX 상장종목 ${listed.size}개 (기준일 ${basDd})`);
+}
+if (listed.size < 2000) {
+  console.error(`KRX 상장종목 수가 비정상(${listed.size}) — 표를 갱신하지 않고 중단`);
+  process.exit(1);
+}
+const before = out.length;
+const kept = out.filter((x) => listed.has(x.s));
+console.log(`DART 코드 보유 법인 ${before}개 중 현재 상장 ${kept.length}개 (제외 ${before - kept.length})`);
+out.length = 0;
+out.push(...kept);
+
 mkdirSync(new URL("../src/lib/markets/kr/data/", import.meta.url), { recursive: true });
 const path = new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url);
 writeFileSync(path, JSON.stringify(out));
