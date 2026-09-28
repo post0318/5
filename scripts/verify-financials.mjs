@@ -2072,32 +2072,9 @@ function cfDaAdjust(f, s, e, sum) {
   const at = f.adj.filter((x) => x.start === s && x.end === e);
   let amt = 0, unres = null;
   const notes = [];
-  const isImp = (id) => /Impairment|WriteDown|Writeoff|WriteOff/.test(DA_NM(id))
-    && !/Inventor|Receivable|Loan|Credit|Securit|Investment|EquityMethod|OtherThanTemporary|Tax|Accumulated|Reversal|Recover|PerShare|Percent|Discontinued|Allowance|Debt|Contract|Unrealized|Gain|Restructuring|Deprecia|Amortiz|Number|Count/.test(DA_NM(id))
-    && !f.separateImpair.includes(id);
   const isDiscDa = (id) => /Discontinued|DisposalGroup/.test(DA_NM(id)) && /Depreciation\w*Amortization/.test(DA_NM(id)) && !/Accumulated|PerShare/.test(DA_NM(id));
   const isDiscNi = (id) => /^us-gaap_(IncomeLossFromDiscontinuedOperations|DiscontinuedOperationIncomeLossFromDiscontinuedOperation)/.test(id) && !/Share/.test(id);
-  if (f.impairLines.length) {
-    let imp = 0, how = "";
-    for (const id of new Set(at.filter((x) => isImp(x.id)).map((x) => x.id))) {
-      const fs = at.filter((x) => x.id === id);
-      const n = fs.find((x) => !x.dims.length)?.v;
-      const axes = new Map();
-      for (const x of fs) {
-        if (x.dims.length !== 1 || /OperatingSegmentsMember$/.test(x.dims[0][1])) continue;
-        const a = axes.get(x.dims[0][0]) ?? new Map();
-        if (!a.has(x.dims[0][1])) a.set(x.dims[0][1], x.v);
-        axes.set(x.dims[0][0], a);
-      }
-      const sums = [];
-      for (const a of axes.values()) { const t = [...a.values()].reduce((p, q) => p + q, 0); if (!sums.some((y) => Math.abs(y - t) < 1)) sums.push(t); }
-      const breakdown = n != null && sums.some((t) => Math.abs(t - n) < 1);
-      const total = breakdown ? n : (n ?? 0) + sums.reduce((p, q) => p + q, 0);
-      if (total > imp) { imp = total; how = DA_NM(id); }
-    }
-    if (imp > 0 && imp < sum) { amt += imp; notes.push(`손상 포함 줄 − 손상 ${imp}(${how} · 공통모드(규칙 재구현 — 손상 개념 제외 목록·축 합산이 앱과 같은 규칙))`); }
-    else if (imp > 0) unres = `손상 ${imp} ≥ 감가상각 줄 ${sum} — 손상 금액 확인 불가`;
-  }
+  // 손상 포함 줄은 줄 값 그대로 — 손상을 빼지 않는다(오너 결정 2026-09-28: 손상이 영업이익 안에 있으면 감가상각비에 넣는다, 미국은 ASC 360 으로 영업이익 안)
   if (!f.continuing) {
     let disc = null;
     for (const id of new Set(at.filter((x) => isDiscDa(x.id)).map((x) => x.id))) {
@@ -3043,9 +3020,6 @@ async function secCashFlowDa(cik, sub, G = null) {
     }
   }
   const nm = (id) => id.replace(/^[a-z-]+_/, "");
-  const isImp = (id) => /Impairment|WriteDown|Writeoff|WriteOff/.test(nm(id))
-    && !/Inventor|Receivable|Loan|Credit|Securit|Investment|EquityMethod|OtherThanTemporary|Tax|Accumulated|Reversal|Recover|PerShare|Percent|Discontinued|Allowance|Debt|Contract|Unrealized|Gain|Restructuring|Deprecia|Amortiz|Number|Count/.test(nm(id))
-    && !cfMeta.separateImpair.includes(id);
   const isDiscDa = (id) => /Discontinued|DisposalGroup/.test(nm(id)) && /Depreciation\w*Amortization/.test(nm(id)) && !/Accumulated|PerShare/.test(nm(id));
   const isDiscNi = (id) => /^us-gaap_(IncomeLossFromDiscontinuedOperations|DiscontinuedOperationIncomeLossFromDiscontinuedOperation)/.test(id) && !/Share/.test(id);
   const notes = new Map(vintNotes), unresolved = new Map();
@@ -3054,28 +3028,6 @@ async function secCashFlowDa(cik, sub, G = null) {
   for (const [end, sum0] of byEnd) {
     let sum = sum0;
     const at = facts.filter((f) => f.end === end);
-    if (cfMeta.impairLines.length) {
-      // 손상: 개념마다 차원 없는 값 N + 단일 축 차원 합(어느 축 합이 N 과 같으면 내역 → N). 개념 사이는 포함관계라 최댓값
-      let imp = 0, how = "";
-      for (const id of new Set(at.filter((f) => isImp(f.id)).map((f) => f.id))) {
-        const fs = at.filter((f) => f.id === id);
-        const n = fs.find((f) => !f.dims.length)?.v;
-        const axes = new Map();
-        for (const f of fs) {
-          if (f.dims.length !== 1 || /OperatingSegmentsMember$/.test(f.dims[0][1])) continue;
-          const a = axes.get(f.dims[0][0]) ?? new Map();
-          if (!a.has(f.dims[0][1])) a.set(f.dims[0][1], f.v);
-          axes.set(f.dims[0][0], a);
-        }
-        const sums = [];
-        for (const a of axes.values()) { const t = [...a.values()].reduce((x, y) => x + y, 0); if (!sums.some((x) => Math.abs(x - t) < 1)) sums.push(t); }
-        const breakdown = n != null && sums.some((t) => Math.abs(t - n) < 1);
-        const total = breakdown ? n : (n ?? 0) + sums.reduce((x, y) => x + y, 0);
-        if (total > imp) { imp = total; how = `${nm(id)}${n != null ? " 차원 없는 값" : ""}${!breakdown && sums.length ? " + 차원 합(공통모드 — 앱과 같은 합산 규칙)" : ""}`; }
-      }
-      if (imp > 0 && imp < sum) { sum -= imp; notes.set(end, [notes.get(end), `손상 포함 줄 − 손상 ${imp}(${how} · 공통모드(규칙 재구현 — 손상 개념 제외 목록·축 합산이 앱과 같은 규칙))`].filter(Boolean).join(" · ")); }
-      else if (imp > 0) unresolved.set(end, `손상 ${imp} ≥ 감가상각 줄 ${sum} — 손상 금액 확인 불가`);
-    }
     if (!cfMeta.continuing) {
       let disc = null;
       for (const id of new Set(at.filter((f) => isDiscDa(f.id)).map((f) => f.id))) {

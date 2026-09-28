@@ -136,11 +136,11 @@ export function cashFlowDaLines(cal: string, lab: Map<string, string[]>): CashFl
 }
 
 // ── 감가상각 줄에 섞인 손상차손·중단사업 감가상각 (오너 결정 2026-09-24) ─────────────────────
-// 원칙: EBITDA = 영업이익 + 감가상각비, 둘은 같은 범위여야 하고 감가상각비에 손상차손은 들어가지 않는다.
-// ① 손상 포함 줄(TSLA·XOM): 그 공시 원본의 손상 태그 금액을 뺀다. TSLA 2022 3,747 − 디지털자산 손상 204 = 3,543,
-//    XOM 2022 24,040 − (사할린 4,500 + 기타 업스트림 1,500 + 에너지제품 400) = 17,640 — StockAnalysis 와 일치, 10-K 본문
-//    ("Other before-tax impairment charges … included $1.5 billion in Upstream and $0.4 billion in Energy Products")과도 일치.
-//    손상이 공시되지 않은 기간(태그 없음 — XOM 2024 "immaterial")은 빼지 않는다.
+// 원칙: EBITDA = 영업이익 + 감가상각비, 둘은 같은 범위여야 한다.
+// ① 손상 포함 줄(TSLA "Depreciation, amortization and impairment"·XOM "(includes impairments)"): **줄 값 그대로 — 손상을 빼지
+//    않는다**(오너 결정 2026-09-28 "미국은 넣는다"; 2026-09-24 의 "손상 차감" 결정을 뒤집음). 미국은 장기자산 손상이 영업이익 안에
+//    있어(ASC 360) 넣어야 EBITDA 가 손상 영향을 받지 않고, 실측에서 Yahoo·팩트셋(인포맥스)·블룸버그가 모두 줄 값 그대로다(XOM 2021~
+//    2025 세 곳 정확 일치 — 2022 24,040 = 17,640 + 손상 6,400). 예외 TSLA 2022 팩트셋·StockAnalysis 3,543(손상 204 차감, 원인 미분해).
 // ② 중단사업(WDC 샌디스크 분사·MMM 솔벤텀·JNJ 켄뷰): 영업이익은 계속사업 기준인데 현금흐름표 감가상각 줄은 중단사업을
 //    포함한다(현금흐름표가 전체 순이익에서 출발) → 같은 공시의 중단사업 감가상각 태그를 뺀다. WDC FY2025 451 − 115 = 336.
 //    현금흐름표가 계속사업 소계로 나뉘어 있으면(GE·EMR·DD) 이미 계속사업 값이라 손대지 않는다.
@@ -176,48 +176,9 @@ function instanceFacts(xml: string, want: (id: string) => boolean): InstFact[] {
 }
 
 const local = (id: string) => id.slice(id.indexOf("_") + 1);
-// 손상차손 태그 — 유형·무형자산·영업권 손상. 재고·채권·투자·지분법·세후·누계·처분손익 결합·구조조정 결합은 제외
-const IMPAIR = /Impairment|WriteDown|Writeoff|WriteOff/;
-const IMPAIR_EXCL = /Inventor|Receivable|Loan|Credit|Securit|Investment|EquityMethod|OtherThanTemporary|Tax|Accumulated|Reversal|Recover|PerShare|Percent|Discontinued|Allowance|Debt|Contract|Unrealized|Gain|Restructuring|Deprecia|Amortiz|Number|Count/;
-const isImpair = (id: string) => IMPAIR.test(local(id)) && !IMPAIR_EXCL.test(local(id));
 // 중단사업 감가상각·상각 태그(WDC·MMM DepreciationAndAmortizationDiscontinuedOperations, JNJ
 // DisposalGroupIncludingDiscontinuedOperationDepreciationAndAmortization). 상각만 있는 태그(DD 무형상각)는 일부라 제외
 const isDiscDa = (id: string) => /Discontinued|DisposalGroup/.test(local(id)) && /Depreciation\w*Amortization/.test(local(id)) && !/Accumulated|PerShare/.test(local(id));
-const near = (a: number, b: number) => Math.abs(a - b) <= Math.max(1, Math.abs(b) * 1e-9);
-
-/**
- * 한 기간의 손상차손 합(공시 원본). 개념마다: 차원 없는 값 N, 단일 축 차원 값은 축별 합.
- * - 어떤 축의 합이 N 과 같으면 N 의 내역 → N.
- * - 아니면 N + 축별 합(같은 합의 축은 한 번) — XOM 2023: N 3,300(산타이네즈) + 부문 "기타" 300·300·100 = 4,000,
- *   XOM 2025: 부문 1,600·100 + 본사 300 = 2,000(차원 값만). 10-K 본문 문장과 대조해 확인한 구조.
- * - 부문 합계 멤버(OperatingSegmentsMember)는 중복이라 뺀다.
- * 개념 사이(TSLA ImpairmentOfIntangibleAssetsExcludingGoodwill ⊇ …Indefinitelived…)는 포함관계라 최댓값.
- */
-function impairmentOf(facts: InstFact[], period: string, exclude: Set<string>): number {
-  const byConcept = new Map<string, { n?: number; axes: Map<string, Map<string, number>> }>();
-  for (const f of facts) {
-    if (f.period !== period || !isImpair(f.id) || exclude.has(f.id)) continue;
-    const c: { n?: number; axes: Map<string, Map<string, number>> } = byConcept.get(f.id) ?? { axes: new Map() };
-    if (f.dims.length === 0) c.n ??= f.val;
-    else if (f.dims.length === 1 && !/OperatingSegmentsMember$/.test(f.dims[0][1])) {
-      const ax = c.axes.get(f.dims[0][0]) ?? new Map<string, number>();
-      if (!ax.has(f.dims[0][1])) ax.set(f.dims[0][1], f.val);
-      c.axes.set(f.dims[0][0], ax);
-    }
-    byConcept.set(f.id, c);
-  }
-  let best = 0;
-  for (const c of byConcept.values()) {
-    const sums: number[] = [];
-    for (const ax of c.axes.values()) {
-      const s = [...ax.values()].reduce((a, b) => a + b, 0);
-      if (!sums.some((x) => near(x, s))) sums.push(s);
-    }
-    const total = c.n != null && sums.some((s) => near(s, c.n!)) ? c.n : (c.n ?? 0) + sums.reduce((a, b) => a + b, 0);
-    best = Math.max(best, total);
-  }
-  return best;
-}
 
 /** 한 기간의 중단사업 감가상각·상각(공시 원본). 차원 없는 값 우선, 없으면 처분그룹별 값의 합. 없으면 null */
 function discontinuedDaOf(facts: InstFact[], period: string): number | null {
@@ -332,8 +293,8 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
   };
   const out: FactUnitEntry[] = [];
   const done = new Set<string>();
-  /** 기간별 조정 미확인 사유 — 손상(imp)·중단사업 감가상각(disc) */
-  const unresolvedOf = new Map<FactUnitEntry, "imp" | "disc" | null>();
+  /** 기간별 조정 미확인 사유 — 중단사업 감가상각(disc) */
+  const unresolvedOf = new Map<FactUnitEntry, "disc" | null>();
   /** 중단사업 감가상각을 차감한 기간이 있었는가 */
   let discAdjusted = false;
   /** 판독한 구조(공시별 감가상각 줄·현금흐름표 기간·그 공시 현금흐름표의 줄 값) — 기준 혼합 판정용 */
@@ -355,7 +316,8 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
     const discInFiling =
       !struct.continuing &&
       Object.entries(g).some(([k, c]) => DISC_NI.test(k) && !/Share/.test(k) && (c.units?.USD ?? []).some((e) => e.start && e.filed === f.filed && e.val !== 0));
-    const needAdj = struct.impairLines.length > 0 || discInFiling;
+    // 손상 포함 줄(TSLA·XOM)은 줄 값 그대로 — 손상을 빼지 않는다(오너 결정 2026-09-28, 아래 머리 주석)
+    const needAdj = discInFiling;
     let inst: Map<string, Map<string, number>> | null = null;
     let adj: InstFact[] | null = null;
     if ((!cfComplete || needAdj) && f.instName) {
@@ -368,7 +330,7 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
         const cfPeriods = new Set(roots.flatMap((r) => [...(inst!.get(r)?.keys() ?? [])]));
         for (const l of lines) for (const p of inst.get(l)?.keys() ?? []) if (cfPeriods.has(p)) periods.add(p);
       }
-      if (needAdj) adj = instanceFacts(xml, (id) => isImpair(id) || isDiscDa(id) || (DISC_NI.test(local(id)) && !/Share/.test(id)));
+      if (needAdj) adj = instanceFacts(xml, (id) => isDiscDa(id) || (DISC_NI.test(local(id)) && !/Share/.test(id)));
     } else if (needAdj) return facts; // 원본이 없으면 전체 미적용 — 기간마다 방식이 섞이지 않게
     // 이 공시 현금흐름표에 실린 줄 값(원본 또는 같은 공시의 companyfacts 값) — 주석 값·다른 공시 값은 쓰지 않는다
     const own = new Map<string, number>();
@@ -381,7 +343,6 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
         if (v !== undefined) own.set(`${l}|${p}`, v);
       }
     structs.push({ accn: f.accn, lines, periods, vals: own });
-    const exclude = new Set(struct.separateImpair);
     for (const p of periods) {
       if (done.has(p)) continue;
       const [start, end] = p.split("|");
@@ -398,15 +359,8 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
       done.add(p);
       // 연간 집계(annualByYear·ttmOf)는 fp "FY" 인 1년 기간만 받는다
       const fullYear = (Date.parse(end) - Date.parse(start)) / 864e5 > 300;
-      let unresolvedImp = false;
       let unresolvedDisc = false;
       if (adj) {
-        // ① 손상 포함 줄: 그 기간 손상 금액을 뺀다(줄 합 이상이면 확인 불가 — 그대로 둔다)
-        if (struct.impairLines.length) {
-          const imp = impairmentOf(adj, p, exclude);
-          if (imp > 0 && imp < sum) sum -= imp;
-          else if (imp > 0) unresolvedImp = true;
-        }
         // ② 중단사업 포함 현금흐름표: 중단사업 감가상각을 뺀다(태그가 없으면 확인 불가 — 그대로 둔다)
         if (!struct.continuing) {
           const disc = discontinuedDaOf(adj, p);
@@ -417,7 +371,7 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
         }
       }
       out.push({ start, end, val: sum, fy: 0, fp: fullYear ? "FY" : "Q", form: f.form, filed: f.filed, basis: f.accn });
-      unresolvedOf.set(out[out.length - 1], unresolvedImp ? "imp" : unresolvedDisc ? "disc" : null);
+      unresolvedOf.set(out[out.length - 1], unresolvedDisc ? "disc" : null);
     }
   }
   // 조정 금액을 확인하지 못한 **누적(분기) 기간**은 내보내지 않는다(2026-09-27) — 분기 열·LTM 은 누적 차라, 조정한 누적과 조정 못 한 누적을
@@ -427,7 +381,7 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
   // 줄 값 그대로(연간 공란은 영업이익 대체 경로와 함께 봐야 해 범위 밖)
   const kept = out.filter((e) => {
     const u = unresolvedOf.get(e);
-    return e.fp === "FY" || !(u === "imp" || (u === "disc" && discAdjusted));
+    return e.fp === "FY" || !(u === "disc" && discAdjusted);
   });
   if (!kept.length) return facts;
   // 구성 공시 간 감가상각 줄 기준 혼합(2026-09-27) — 줄 구성이 다른 두 구조를 두 구조의 줄이 모두 값을 가진 같은 현금흐름표 기간에서
