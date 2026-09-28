@@ -23,6 +23,7 @@
 
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { resolveKrStock } from "./lib/company-match.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { refineSectorLabels, normalizeSectorLabel } from "./lib/sector-label.mjs";
 
@@ -64,20 +65,10 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 국내 종목명 → 코드. 긴 이름부터 봐야 "한국전력"이 "한국전력기술"을 가리지 않는다.
-const CORPS = JSON.parse(
-  readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
-)
-  .filter((c) => c.s && c.n)
-  .sort((a, b) => b.n.length - a.n.length);
-
-function resolveKrStock(text) {
-  const t = text.trim();
-  for (const c of CORPS) {
-    if (t.startsWith(c.n)) return { symbol: c.s, stockName: c.n };
-  }
-  return null;
-}
+// 국내 종목명 → 코드는 공통 lib 를 쓴다. 예전엔 여기 startsWith 만 있는 복사본이
+// 있어서 "신흥국 통화 약세…"→신흥(004080), "LG그룹 지배구조…"→LG, "SK온 상장…"→SK
+// 처럼 접두어가 겹치는 종목에 기업 리포트가 잘못 붙었다(감사 2026-09-28). 한경
+// 수집기에서 고친 조사·구두점 경계 검사가 담긴 resolveKrStock 을 공유한다.
 
 /** 한글 종목명 → 미국 티커(네이버 해외종목 자동완성). 실패하면 null. */
 const usCache = new Map();
