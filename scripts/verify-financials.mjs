@@ -6623,6 +6623,9 @@ async function verifyUs(sym) {
     const ordered = [...recon.values()].sort((a, b) => rank(a) - rank(b));
     for (const r of ordered) {
       const names = Object.keys(r.srcs);
+      // 인포맥스 = 참고(오너 결정 2026-09-28 — "인포맥스만 유일하게 차이가 나는 게 대부분"): 값·원인은 표시하되 ①②③·외부 단독 이탈 분류와
+      // 원인 미확인 목록에서 뺀다. 예외 — 외화 공시 종목(USD 환산 대조는 인포맥스만 가능)·시가총액·주식수 항목은 정식 소스 유지
+      const clsNames = names.filter((n) => n !== "인포맥스" || process.env.IM_REFERENCE === "0" || foreign || /시가총액|주식수/.test(r.item));
       // 공통모드 소스(앱과 같은 데이터·규칙으로 만든 외부 값)의 일치는 ① 이 아니다 — matched 에서 빼고 commonMode 로 따로 남긴다
       const commonMode = Object.fromEntries(names.filter((n) => r.srcs[n].common && extEq(r.ours, r.srcs[n].v)).map((n) => [n, `일치 — ${r.srcs[n].common}`]));
       const matched = names.filter((n) => extEq(r.ours, r.srcs[n].v) && !commonMode[n]);
@@ -6646,9 +6649,10 @@ async function verifyUs(sym) {
         const col0 = r.item.split(" ")[0];
         // 외부 단독 이탈 두 경로: §0(앱 = SEC + 외부 2곳 이상 일치 + 이 소스만 이탈), 또는 그 소스 자체 집계 불일치가 숫자로 확인됨
         // (causes.outlier — 인포맥스 연간 ≠ 자기 분기 4개 합 = 앱 = SEC). 둘 다 앱 = SEC 본표(A층 정확 일치) 전제
-        revenueClass = Object.fromEntries(names.map((n) => [n, matched.includes(n) ? "①" : commonMode[n] ? "공통모드" : precisionNa[n] ? "NA" : causes[n]?.ok ? "②"
-          : aPassed(col0, "매출") && ((matched.length >= 2 && names.length - matched.length === 1) || causes[n]?.outlier) ? "외부단독이탈" : "③"]));
-        for (const n of names) if (revenueClass[n] === "③") revErrors.push({ item: r.item, source: n, ours: r.ours, other: r.srcs[n].v, note: `${why(n).trim() || "분해식 없음"}${aPassed(col0, "매출") ? "" : " · 앱 ≠ SEC 본표(A층 미통과)"}` });
+        const clsMatched = matched.filter((n) => clsNames.includes(n));
+        revenueClass = Object.fromEntries(clsNames.map((n) => [n, matched.includes(n) ? "①" : commonMode[n] ? "공통모드" : precisionNa[n] ? "NA" : causes[n]?.ok ? "②"
+          : aPassed(col0, "매출") && ((clsMatched.length >= 2 && clsNames.length - clsMatched.length === 1) || causes[n]?.outlier) ? "외부단독이탈" : "③"]));
+        for (const n of clsNames) if (revenueClass[n] === "③") revErrors.push({ item: r.item, source: n, ours: r.ours, other: r.srcs[n].v, note: `${why(n).trim() || "분해식 없음"}${aPassed(col0, "매출") ? "" : " · 앱 ≠ SEC 본표(A층 미통과)"}` });
       }
       // 매출원가·매출총이익 분류(--metric=cogs) — 매출과 같은 §0 기준. 외부 단독 이탈 = 앱 = SEC 본표 + 다른 외부 2곳 이상 일치 + 이 소스만
       // 이탈, 또는 외부 자기 모순(인포맥스 연간 ≠ 자기 분기 합 = 앱 = SEC)
@@ -6671,15 +6675,16 @@ async function verifyUs(sym) {
       let metricClass = null;
       if ((COGS_MODE && /^(\d{4}Y|LTM) (매출원가|매출총이익)$/.test(r.item)) || (OPINC_MODE && /^(\d{4}Y|LTM) 영업이익$/.test(r.item)) || (DA_MODE && /^(\d{4}Y|LTM) 감가상각비$/.test(r.item)) || (SGA_MODE && SGA_METRIC_RE.test(r.item))) {
         const [col0, m0] = r.item.split(" ");
-        metricClass = Object.fromEntries(names.map((n) => [n, matched.includes(n) ? "①" : commonMode[n] ? "공통모드" : precisionNa[n] ? "NA" : causes[n]?.ok ? "②"
-          : aPassed(col0, m0) && ((matched.length >= 2 && names.length - matched.length === 1) || causes[n]?.outlier) ? "외부단독이탈"
+        const clsMatched = matched.filter((n) => clsNames.includes(n));
+        metricClass = Object.fromEntries(clsNames.map((n) => [n, matched.includes(n) ? "①" : commonMode[n] ? "공통모드" : precisionNa[n] ? "NA" : causes[n]?.ok ? "②"
+          : aPassed(col0, m0) && ((clsMatched.length >= 2 && clsNames.length - clsMatched.length === 1) || causes[n]?.outlier) ? "외부단독이탈"
           // 외부 정의 분해 불가(오너 결정 2026-09-27): 앱 = SEC 본표(A층 정확 일치) + 다른 외부 1곳 이상 정확 일치(공통모드 아님)인데 이 소스는
           // 해마다 다른 재분류로 식이 성립하지 않는 경우. ①·② 로 세지 않고 따로 표기. 외부 일치 0곳이면 ③(미결) 유지.
           // 기준 소스는 ② 도 인정(오너 결정 2026-09-27 — 분기마다 SEC 와 정확 일치하고 앱과의 차이 원인이 규명된 소스)
-          : aPassed(col0, m0) && names.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok)) ? "외부정의분해불가" : "③"]));
+          : aPassed(col0, m0) && clsNames.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok)) ? "외부정의분해불가" : "③"]));
         reconApply(metricClass, col0, m0);
         fxHold(metricClass);
-        for (const n of names) if (metricClass[n] === "③") (m0 === "영업이익" ? opincErrors : m0 === "감가상각비" ? daErrors : /^(판관비|연구개발비)/.test(m0) ? sgaErrors : cogsErrors).push({ item: r.item, source: n, ours: r.ours, other: r.srcs[n].v, note: `${why(n).trim() || "분해식 없음"}${aPassed(col0, m0) ? "" : " · 앱 ≠ SEC 본표(A층 미통과)"}` });
+        for (const n of clsNames) if (metricClass[n] === "③") (m0 === "영업이익" ? opincErrors : m0 === "감가상각비" ? daErrors : /^(판관비|연구개발비)/.test(m0) ? sgaErrors : cogsErrors).push({ item: r.item, source: n, ours: r.ours, other: r.srcs[n].v, note: `${why(n).trim() || "분해식 없음"}${aPassed(col0, m0) ? "" : " · 앱 ≠ SEC 본표(A층 미통과)"}` });
       }
       review.push({
         ...(revenueClass ? { revenueClass } : {}),
