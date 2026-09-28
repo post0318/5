@@ -312,6 +312,37 @@ function vsSource(app, src, tol, srcNote = "") {
     : { status: FAIL, note: `앱 ${app} vs 원자료 ${src} (차 ${(d * 100).toFixed(3)}%)${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
 }
 const dayDiff = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
+/**
+ * LTM = 최근 4개 분기 합(오너 결정 2026-09-28 — 앱 edgar-series.ts quarterSumLtm·fin/read ltmCol 과 같은 정의, 검증기가 SEC 원자료로 따로
+ * 판독). 분기 = 3개월 공시값(최신 판본), 없으면 누적 차(누적_j − 누적_{j−1}), 4분기 = 사업연도 − 9개월 누적. 본표 판독 모듈마다 find·dd·
+ * annualAt·quarterAt·comb 를 넘긴다. 분기 하나라도 못 만들면 null(호출부가 종전 식 "사업연도 + 당기 누적 − 전년 동기"로 — 메모에 표기)
+ */
+function faceQuarterSum(L, m) {
+  const fy = m.find((e) => m.dd(e) >= 300 && m.dd(e) <= 400 && e.end < L && (Date.parse(L) - Date.parse(e.end)) / 864e5 < 370);
+  if (!fy || fy.err || fy.blank || !fy.start) return null;
+  const s0 = new Date(Date.parse(fy.end) + 864e5).toISOString().slice(0, 10);
+  const cur = m.find((e) => dayDiff(e.start, s0) <= 5 && dayDiff(e.end, L) <= 3);
+  if (!cur) return null;
+  const k = Math.round(m.dd(cur) / 91.3);
+  if (k < 1 || k > 3) return null;
+  const ytd = (S, j) => m.find((e) => dayDiff(e.start, S) <= 5 && Math.abs(m.dd(e) - j * 91.3) <= 20);
+  const qv = (S, j) => {
+    const c = ytd(S, j);
+    if (!c) return null;
+    if (j === 1) return c;
+    const d = m.quarterAt(c.end, false);
+    if (d) return d;
+    const pv = ytd(S, j - 1);
+    return pv ? m.comb([[c, 1], [pv, -1]], "분기 = 누적 차") : null;
+  };
+  const list = [];
+  for (let j = k + 1; j <= 3; j++) list.push(qv(fy.start, j));
+  list.push(m.quarterAt(fy.end, true));
+  for (let j = 1; j <= k; j++) list.push(qv(s0, j));
+  if (list.length !== 4 || list.some((q) => !q || q.err || q.blank)) return null;
+  const r = m.comb(list.map((q) => [q, 1]), "분기 4개 합(앱 LTM 과 같은 정의)");
+  return r ? { ...r, end: L } : null;
+}
 /** 영업이익 F층 원인 후보 — 주석에만 있는 일회성 비용 표준 태그(양수 = 비용). 오너 결정 2026-09-28 */
 const NOTE_ONEOFF = ["RestructuringCharges", "RestructuringCosts", "RestructuringCostsAndAssetImpairmentCharges", "RestructuringSettlementAndImpairmentProvisions",
   "AssetImpairmentCharges", "GoodwillImpairmentLoss", "LitigationSettlementExpense", "LossContingencyLossInPeriod", "BusinessCombinationAcquisitionRelatedCosts"];
@@ -1175,9 +1206,11 @@ async function secFaceRevenue(cik, sub, G, bank) {
     if (q) return { v: q.v, split: q.split, how: `3개월 ${q.how}` };
     return null;
   };
-  const ltmAt = (L) => {
+  const ltmAt = (L, old = false) => {
     const fy0 = annualAt(L);
     if (fy0) return { ...fy0, how: `최근 사업연도 ${fy0.how}` };
+    const qsum = old ? null : faceQuarterSum(L, { find, dd, annualAt, quarterAt, comb: (xs, label) => ({ v: xs.reduce((t, [r, k]) => t + k * r.v, 0), split: xs[0][0].split, start: xs[0][0].start, how: `${label} — ${xs.map(([r, k]) => `${k < 0 ? "− " : ""}[${r.v}: ${r.how}]`).join(" ")}` }) });
+    if (qsum) return qsum;
     const fy = find((e) => dd(e) >= 300 && dd(e) <= 400 && e.end < L && (Date.parse(L) - Date.parse(e.end)) / 864e5 < 370);
     if (!fy) return null;
     const s = new Date(Date.parse(fy.end) + 864e5).toISOString().slice(0, 10);
@@ -1186,7 +1219,7 @@ async function secFaceRevenue(cik, sub, G, bank) {
     const ys = (d) => new Date(Date.parse(d) - 365 * 864e5).toISOString().slice(0, 10);
     const prior = find((e) => dayDiff(e.start, ys(cur.start)) <= 7 && dayDiff(e.end, ys(L)) <= 7 && Math.abs(dd(e) - dd(cur)) <= 10);
     if (!prior) return null;
-    return { v: fy.v + cur.v - prior.v, split: fy.split, how: `사업연도 ${fy.v} + 당기 누적 ${cur.v} − 전년 동기 ${prior.v} (${fy.how})` };
+    return { v: fy.v + cur.v - prior.v, split: fy.split, how: `분기 4개 구성 불가 — 종전 식: 사업연도 ${fy.v} + 당기 누적 ${cur.v} − 전년 동기 ${prior.v} (${fy.how})` };
   };
   return { annualAt, quarterAt, ltmAt, extend, split: faces.some((f) => f.split), faces };
 }
@@ -1500,7 +1533,7 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
         .map((p) => ({ id: p.id, label: p.label, v: xs.reduce((s, [r, k]) => s + k * r.terms.find((y) => y.label === p.label).v, 0) })), start: xs[0][0].start, end: xs[0][0].end,
       fpInt: sum((r) => r.fpInt), fpIntLabel: xs[0][0].fpIntLabel ?? null,
       how: `${label} — ${xs.map(([r, k]) => `${k < 0 ? "− " : ""}[${r.how}]`).join(" ")}`,
-      comps: xs.map(([r, k]) => ({ start: r.start, end: r.end, k, v: r.cogs, faceAccn: r.faceAccn })),
+      comps: xs.flatMap(([r, k]) => (r.comps ? r.comps.map((c) => ({ ...c, k: c.k * k })) : [{ start: r.start, end: r.end, k, v: r.cogs, faceAccn: r.faceAccn }])),
     };
   };
   /**
@@ -1624,10 +1657,12 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
     const nine = find((e) => dayDiff(e.start, fy.start) <= 5 && dd(e) >= 250 && dd(e) <= 290 && e.end < fy.end);
     return comb([[fy, 1], [nine, -1]], "사업연도 − 9개월");
   };
-  const ltmAt = (L) => withMix(ltmRaw(L));
-  const ltmRaw = (L) => {
+  const ltmAt = (L, old = false) => withMix(ltmRaw(L, old));
+  const ltmRaw = (L, old = false) => {
     const fy0 = annualAt(L);
     if (fy0) return fy0;
+    const qsum = old ? null : faceQuarterSum(L, { find, dd, annualAt, quarterAt, comb });
+    if (qsum) return qsum;
     const fy = find((e) => dd(e) >= 300 && dd(e) <= 400 && e.end < L && (Date.parse(L) - Date.parse(e.end)) / 864e5 < 370);
     if (!fy || fy.cogs == null) return fy;
     const s = new Date(Date.parse(fy.end) + 864e5).toISOString().slice(0, 10);
@@ -1635,7 +1670,7 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
     if (!cur) return null;
     const ys = (d) => new Date(Date.parse(d) - 365 * 864e5).toISOString().slice(0, 10);
     const prior = find((e) => dayDiff(e.start, ys(cur.start)) <= 7 && dayDiff(e.end, ys(L)) <= 7 && Math.abs(dd(e) - dd(cur)) <= 10);
-    return comb([[fy, 1], [cur, 1], [prior, -1]], "사업연도 + 당기 누적 − 전년 동기");
+    return comb([[fy, 1], [cur, 1], [prior, -1]], "분기 4개 구성 불가 — 종전 식: 사업연도 + 당기 누적 − 전년 동기");
   };
   return { annualAt, quarterAt, ltmAt, faces, addOriginals };
 }
@@ -1980,9 +2015,11 @@ async function secFaceOpinc({ cik, sub, facts, unit, foreign, revFace }) {
     const nine = find((e) => dayDiff(e.start, fy.start) <= 5 && dd(e) >= 250 && dd(e) <= 290 && e.end < fy.end);
     return comb([[fy, 1], [nine, -1]], "사업연도 − 9개월");
   };
-  const ltmAt = (L) => {
+  const ltmAt = (L, old = false) => {
     const fy0 = annualAt(L);
     if (fy0) return fy0;
+    const qsum = old ? null : faceQuarterSum(L, { find, dd, annualAt, quarterAt, comb });
+    if (qsum) return qsum;
     const fy = find((e) => dd(e) >= 300 && dd(e) <= 400 && e.end < L && (Date.parse(L) - Date.parse(e.end)) / 864e5 < 370);
     if (!fy || fy.err || fy.blank) return fy;
     const s = new Date(Date.parse(fy.end) + 864e5).toISOString().slice(0, 10);
@@ -1990,7 +2027,7 @@ async function secFaceOpinc({ cik, sub, facts, unit, foreign, revFace }) {
     if (!cur) return null;
     const ys = (d) => new Date(Date.parse(d) - 365 * 864e5).toISOString().slice(0, 10);
     const prior = find((e) => dayDiff(e.start, ys(cur.start)) <= 7 && dayDiff(e.end, ys(L)) <= 7 && Math.abs(dd(e) - dd(cur)) <= 10);
-    return comb([[fy, 1], [cur, 1], [prior, -1]], "사업연도 + 당기 누적 − 전년 동기");
+    return comb([[fy, 1], [cur, 1], [prior, -1]], "분기 4개 구성 불가 — 종전 식: 사업연도 + 당기 누적 − 전년 동기");
   };
   return { annualAt, quarterAt, ltmAt, faces, split };
 }
@@ -2001,7 +2038,7 @@ async function secFaceOpinc({ cik, sub, facts, unit, foreign, revFace }) {
 // 손상, 중단사업 포함 현금흐름표는 중단사업 감가상각을 원본 태그로 뺀다 · NFLX 는 콘텐츠 상각 줄 포함 — 오너 결정). 검증기는 앱 모듈을 import
 // 하지 않고 공시 원본을 따로 읽는다 — 최근 10-K 3건·10-Q 4건 + 앱 열이 그 밖이면 그 기간을 실은 공시를 과거 목록 파일까지 더 읽는다.
 // 기간 P 의 기대값 = P 를 실은 가장 최근 공시의 본표 줄 구성, 줄 값은 P 를 실은 공시들의 decimals 판정(decimalsVintage — 정밀도만 낮춘 재게시는
-// 앞선 정밀값). 현금흐름표는 누적이라 분기 = 누적 차(Q1 은 3개월 그대로, Q4 = 사업연도 − 9개월), LTM = 사업연도 + 당기 누적 − 전년 동기.
+// 앞선 정밀값). 현금흐름표는 누적이라 분기 = 누적 차(Q1 은 3개월 그대로, Q4 = 사업연도 − 9개월), LTM = 최근 4개 분기 합(분기 못 채우면 종전 식 — 사업연도 + 당기 누적 − 전년 동기, 오너 결정 2026-09-28).
 // 줄 선택 정규식은 앱과 같은 성격이라 이 A층은 공통모드 사유가 붙는다(외부 정확 일치 시만 독립 — commonModeOf).
 const CF_DA_RE = /deprecia|amorti[sz]/i;
 const CF_DA_EXCL = /debt|discount|premium|issuance|financing\s*costs?|deferred\s*(financing|charges)|stock|share-?based|compensation|operating[\s-]*lease|lease\s*expense|content|contract\s*(cost|acquisition)|capitalized\s*software|investment|securities|bond|inventory|incentive|acquisition\s*costs|defined\s*benefit|pension|postretirement/i;
@@ -2281,9 +2318,11 @@ async function secFaceDa({ cik, sub, content, natCur = null }) {
     const prev = find((e) => dayDiff(e.start, cum.start) <= 5 && e.end < cum.end && dd(e) >= dd(cum) - 100 && dd(e) <= dd(cum) - 80);
     return comb([[cum, 1], [prev, -1]], "분기 = 누적 차(현금흐름표 누적)");
   };
-  const ltmAt = (L) => {
+  const ltmAt = (L, old = false) => {
     const fy0 = annualAt(L);
     if (fy0) return fy0;
+    const qsum = old ? null : faceQuarterSum(L, { find, dd, annualAt, quarterAt, comb });
+    if (qsum) return qsum;
     const fy = find((e) => dd(e) >= 300 && dd(e) <= 400 && e.end < L && (Date.parse(L) - Date.parse(e.end)) / 864e5 < 370);
     if (!fy) return null;
     const s = new Date(Date.parse(fy.end) + 864e5).toISOString().slice(0, 10);
@@ -2291,7 +2330,7 @@ async function secFaceDa({ cik, sub, content, natCur = null }) {
     if (!cur) return null;
     const ys = (d) => new Date(Date.parse(d) - 365 * 864e5).toISOString().slice(0, 10);
     const prior = find((e) => dayDiff(e.start, ys(cur.start)) <= 7 && dayDiff(e.end, ys(L)) <= 7 && Math.abs(dd(e) - dd(cur)) <= 10);
-    return comb([[fy, 1], [cur, 1], [prior, -1]], "사업연도 + 당기 누적 − 전년 동기");
+    return comb([[fy, 1], [cur, 1], [prior, -1]], "분기 4개 구성 불가 — 종전 식: 사업연도 + 당기 누적 − 전년 동기");
   };
   return { annualAt, quarterAt, ltmAt, extend, faces, skipped };
 }
@@ -2607,9 +2646,11 @@ async function secFaceSga({ cik, sub, sym, natCur = null }) {
     const nine = find((e) => dayDiff(e.start, fy.start) <= 5 && dd(e) >= 250 && dd(e) <= 290 && e.end < fy.end);
     return comb([[fy, 1], [nine, -1]], "사업연도 − 9개월");
   };
-  const ltmAt = (L) => {
+  const ltmAt = (L, old = false) => {
     const fy0 = annualAt(L);
     if (fy0) return fy0;
+    const qsum = old ? null : faceQuarterSum(L, { find, dd, annualAt, quarterAt, comb });
+    if (qsum) return qsum;
     const fy = find((e) => dd(e) >= 300 && dd(e) <= 400 && e.end < L && (Date.parse(L) - Date.parse(e.end)) / 864e5 < 370);
     if (!fy) return null;
     const s = new Date(Date.parse(fy.end) + 864e5).toISOString().slice(0, 10);
@@ -2617,7 +2658,7 @@ async function secFaceSga({ cik, sub, sym, natCur = null }) {
     if (!cur) return null;
     const ys = (d) => new Date(Date.parse(d) - 365 * 864e5).toISOString().slice(0, 10);
     const prior = find((e) => dayDiff(e.start, ys(cur.start)) <= 7 && dayDiff(e.end, ys(L)) <= 7 && Math.abs(dd(e) - dd(cur)) <= 10);
-    return comb([[fy, 1], [cur, 1], [prior, -1]], "사업연도 + 당기 누적 − 전년 동기");
+    return comb([[fy, 1], [cur, 1], [prior, -1]], "분기 4개 구성 불가 — 종전 식: 사업연도 + 당기 누적 − 전년 동기");
   };
   return { annualAt, quarterAt, ltmAt, extend, faces, skipped };
 }
@@ -3364,10 +3405,10 @@ async function verifyUs(sym) {
     return { v: null, why: "순이익 태그 없음" };
   }
   /**
-   * SEC 원자료로 직접 계산한 TTM(최근 사업연도 + 당기 누적 − 전년 동기 누적) — { v, end } | null.
+   * SEC 원자료로 직접 계산한 TTM — 최근 4개 분기 합(secQuarterSum, 앱 LTM 정의 — 오너 결정 2026-09-28), 못 채우면 종전 식(최근 사업연도 + 당기 누적 − 전년 동기 누적). old = true 면 종전 식만 — { v, end } | null.
    * 앱 LTM 계산을 재현하려는 게 아니라 공시 숫자만으로 같은 기간의 합계를 따로 낸다.
    */
-  function secTtm(tag) {
+  function secTtm(tag, old = false) {
     const arr = (G[tag]?.units?.USD ?? []).filter((e) => e.start && /^(10-K|10-Q)/.test(e.form));
     if (!arr.length) return null;
     const dur = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
@@ -3383,8 +3424,11 @@ async function verifyUs(sym) {
     if (!cur) return null;
     const prior = pick((e) => Math.abs(dayDiff(e.end, cur.end) - 365) <= 10 && Math.abs(dur(e) - dur(cur)) <= 10);
     const fy = pick((e) => dur(e) > 300 && dur(e) < 400 && dayDiff(e.end, cur.start) <= 10);
+    // 분기 4개 합(앱 LTM 정의 — 오너 결정 2026-09-28). 못 채우면 종전 식
+    const qs = old ? null : secQuarterSum(tag, latestEnd);
+    if (qs) return { v: qs.sum, end: latestEnd, how: `분기 4개 합(${qs.parts.map((p) => `${p.end} ${p.v}(${p.how})`).join(" + ")})` };
     if (!prior || !fy) return null;
-    return { v: fy.val + cur.val - prior.val, end: latestEnd, how: ["사업연도 + 당기누적 − 전년동기", ...[fy, prior].map(retagNote)].filter(Boolean).join(" · ") };
+    return { v: fy.val + cur.val - prior.val, end: latestEnd, how: ["분기 4개 구성 불가 — 종전 식: 사업연도 + 당기누적 − 전년동기", ...[fy, prior].map(retagNote)].filter(Boolean).join(" · ") };
   }
   /**
    * SEC 3개월값 4개 합(원인 R4 — Yahoo·인포맥스 LTM 은 분기 값 합이다). 기준일 ltmEnd 로 끝나는 최근 1년 안의 분기 종료일
@@ -3979,7 +4023,7 @@ async function verifyUs(sym) {
       else if (Date.parse(x.date) < Date.parse(t.end) - 7 * 864e5) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: FAIL, note: `앱 LTM 기준일 ${x.date} 이 SEC 최신 결산 ${t.end} 보다 늦음(분기 누락)` });
       else if (dayDiff(t.end, x.date) > 7) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: NA, note: `기준일 다름(앱 ${x.date} / SEC ${t.end})` });
       else add("A", "LTM 순이익 앱 = SEC TTM", c, vsSource(x.ni, t.v, EXACT, t.how));
-      // LTM 매출 = SEC 본표 매출 줄로 사업연도 + 당기 누적 − 전년 동기 누적(전부 최신 판본, revenue.md §2)
+      // LTM 매출 = SEC 본표 매출 줄 최근 4개 분기 합(앱 LTM 정의, 오너 결정 2026-09-28 — 분기 못 채우면 종전 식)
       const lr = revFace?.ltmAt(x.date) ?? null;
       add("A", "매출 앱 = SEC 매출", c, !revFace ? { status: NA, note: revFaceWhy } : vsSource(x.rev, lr?.v ?? null, EXACT, lr?.how ?? `기준일 ${x.date} 의 SEC 누적 매출 조합 불가`));
     }
@@ -5286,7 +5330,7 @@ async function verifyUs(sym) {
     };
     const shortId = (id) => id.replace(/^[a-z0-9-]+_/i, "");
     /**
-     * 열 col 의 공시 원본 사실 합 — 원가 판독 구성분(연간 = 그 사업연도 본표 공시, LTM = 사업연도 + 당기 누적 − 전년 동기)마다 그 본표 공시
+     * 열 col 의 공시 원본 사실 합 — 원가 판독 구성분(연간 = 그 사업연도 본표 공시, LTM = 분기 4개 — 각 분기의 3개월·누적·사업연도·9개월, 분기 못 채우면 사업연도 + 당기 누적 − 전년 동기)마다 그 본표 공시
      * 원본(cogsInst — 준비 단계에서 읽음)에서 pick 이 고른 사실 합 × 부호. 구성분 원본에 그 사실이 없으면 { skip }(10-Q 가 연간 주석 항목을
      * 싣지 않는 경우 — 0 으로 채우지 않는다). 원본을 못 읽었으면 null(규칙 불성립)
      */
@@ -5440,7 +5484,7 @@ async function verifyUs(sym) {
     };
     /**
      * LTM 분기 합 — 소스 n 의 LTM 매출원가 = 자기 분기 4개 합이고 분기마다 SEC 본표 3개월값(4분기 = 사업연도 − 9개월)과 정확히 같다(인포맥스·SA 는
-     * 자기 표기 단위 반올림 식도 분기마다 인정). 앱 LTM(사업연도 + 당기 누적 − 전년 동기)과의 차이는 회사가 분기·누적을 따로 반올림한 몫(매출 R4 와 같은 성격)
+     * 자기 표기 단위 반올림 식도 분기마다 인정). 앱 LTM 도 분기 4개 합(오너 결정 2026-09-28)이라 대개 ①로 끝나고, 이 규칙은 앱이 분기를 못 채워 종전 식을 쓴 열에서만 성립(차이는 회사가 분기·누적을 따로 반올림한 몫)
      */
     const qSumMemo = new Map();
     const cogsQuarterSum = (n) => {
@@ -5990,6 +6034,31 @@ async function verifyUs(sym) {
       // 외부가 자기 표기 단위로 반올림해 실었다면 roundHalfAway(exp, 단위) 와 완전히 같을 때만. 둘 이상의 외부 값을 섞는 식(⑦·④)은 완전 일치만
       const eqExp = (exp) => exp != null && (extEq(v, exp) || (unit != null && unit !== 1 && extEq(v, roundHalfAway(exp, unit))));
       const rnd = (exp) => (extEq(v, exp) ? "" : ` · 외부 표기 단위 ${unit} 반올림(0.5 는 0 에서 먼 쪽): round(${exp}) = ${v}`);
+      // ⑬ 외부 LTM = SEC 종전 식(사업연도 + 당기 누적 − 전년 동기), 앱 LTM = 최근 4개 분기 합(오너 결정 2026-09-28). 두 식 모두 SEC 원자료로
+      //    검증기가 따로 계산 — 외부 = 앱 + (종전 식 − 분기 합) 이 정확히 성립할 때만(회사가 연간·누적·분기를 따로 반올림한 ±1 등)
+      if (col === "LTM" && H.LTM?.date && aPassed(col, metric === "판관비·연구개발비" ? "판관비" : metric)) {
+        const L0 = H.LTM.date;
+        const pick = (old) => {
+          if (metric === "매출") return revFace?.ltmAt(L0, old)?.v ?? null;
+          if (metric === "매출원가") return cogsFace?.ltmAt(L0, old)?.cogs ?? null;
+          if (metric === "매출총이익") { const e = cogsFace?.ltmAt(L0, old), rv = revFace?.ltmAt(L0, old)?.v; return e?.gp ?? (e?.cogs != null && rv != null ? rv - e.cogs : null); }
+          if (metric === "영업이익") return opincFace?.ltmAt(L0, old)?.v ?? null;
+          if (metric === "감가상각비") return daFace?.ltmAt(L0, old)?.v ?? null;
+          if (metric === "판관비" || metric === "연구개발비" || metric === "판관비·연구개발비") {
+            const e = sgaFace?.ltmAt(L0, old);
+            const sg = e?.sga?.v ?? null, rd = e?.rnd?.empty ? 0 : e?.rnd?.v ?? null;
+            return metric === "판관비" ? sg : metric === "연구개발비" ? rd : sg != null && rd != null ? sg + rd : null;
+          }
+          if (metric === "순이익" || metric === "세전이익") {
+            const tags = metric === "순이익" ? ["NetIncomeLoss", "ProfitLoss"] : PRETAX_TAGS;
+            for (const t of tags) { const x = secTtm(t, old); if (x && dayDiff(x.end, L0) <= 7) return x.v; }
+          }
+          return null;
+        };
+        const oldV = pick(true), newV = pick(false);
+        if (oldV != null && newV != null && oldV !== newV && eqExp(r.ours + (oldV - newV)))
+          return { ok: `${n} LTM ${metric} = SEC 종전 식(사업연도 + 당기 누적 − 전년 동기) ${oldV} — 앱 LTM 은 최근 4개 분기 합 ${newV}(오너 결정 2026-09-28), 회사가 연간·누적·분기를 따로 반올림한 차 ${oldV - newV}${rnd(r.ours + oldV - newV)}` };
+      }
       // ⑪ 외부 = 그 결산기를 처음 실은 10-K 의 원 공시 값(재작성 전), 앱 = 최신 공시(재작성본) — 2026-09-28 실측: WDC FY2023·FY2024 인포맥스
       //    매출 12,318·13,003 = 샌디스크 분사 재작성 전 원 10-K(앱 6,255·6,317 = 2025 10-K 재작성본), 매출원가·매출총이익도 같은 판본.
       //    같은 개념의 연간 사실이 공시마다 다르고, 앱 = 최신 공시 값(A층 통과)이며 외부 = 최초 공시 값일 때만 — 허용 오차 없음
@@ -6039,7 +6108,7 @@ async function verifyUs(sym) {
         if (col === "LTM") {
           const qs = opQuarterSum(n);
           if (qs?.outlier) return { outlier: qs.outlier };
-          if (qs) return { ok: `${n} LTM 영업이익 = 자기 분기 4개 합, 분기마다 SEC 본표 분기값과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(사업연도 + 당기 누적 − 전년 동기: 회사가 분기·누적을 따로 반올림) · ${tail}` };
+          if (qs) return { ok: `${n} LTM 영업이익 = 자기 분기 4개 합, 분기마다 SEC 본표 분기값과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(앱이 분기 4개를 못 채워 종전 식 — 사업연도 + 당기 누적 − 전년 동기 — 을 쓴 열: 회사가 분기·누적을 따로 반올림) · ${tail}` };
         }
         const hit = opRule(n, col);
         if (hit) return { ok: `${n} 영업이익 = ${hit.label} — 식을 계산할 수 있는 모든 연간 열 정확 성립(${hit.ev.join(" · ")})${hit.skipped.length ? ` · 계산 불가 열 ${hit.skipped.map(([c, w]) => `${c}(${w})`).join(", ")}` : ""} · ${tail}` };
@@ -6054,7 +6123,7 @@ async function verifyUs(sym) {
         const tail = "앱 = SEC 현금흐름표 감가상각·상각 줄 합(A층 정확 일치)";
         if (col === "LTM") {
           const qs = daQuarterSum(n);
-          if (qs) return { ok: `${n} LTM 감가상각비 = 자기 분기 4개 합, 분기마다 SEC 현금흐름표 분기값(누적 차)과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(사업연도 + 당기 누적 − 전년 동기: 회사가 분기·누적을 따로 반올림) · ${tail}` };
+          if (qs) return { ok: `${n} LTM 감가상각비 = 자기 분기 4개 합, 분기마다 SEC 현금흐름표 분기값(누적 차)과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(앱이 분기 4개를 못 채워 종전 식 — 사업연도 + 당기 누적 − 전년 동기 — 을 쓴 열: 회사가 분기·누적을 따로 반올림) · ${tail}` };
         }
         const hit = daRule(n, col);
         if (hit) return { ok: `${n} 감가상각비 = ${hit.label} — 식을 계산할 수 있는 모든 연간 열 정확 성립(${hit.ev.join(" · ")})${hit.skipped.length ? ` · 계산 불가 열 ${hit.skipped.map(([c, w]) => `${c}(${w})`).join(", ")}` : ""} · ${tail}` };
@@ -6068,7 +6137,7 @@ async function verifyUs(sym) {
         const tail = "앱 = SEC 본표 성격 줄 합(A층 정확 일치)";
         if (col === "LTM") {
           const qs = sgaQuarterSum(n, metric);
-          if (qs) return { ok: `${n} LTM ${metric} = 자기 분기 4개 합, 분기마다 SEC 본표 분기값과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(사업연도 + 당기 누적 − 전년 동기: 회사가 분기·누적을 따로 반올림) · ${tail}` };
+          if (qs) return { ok: `${n} LTM ${metric} = 자기 분기 4개 합, 분기마다 SEC 본표 분기값과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(앱이 분기 4개를 못 채워 종전 식 — 사업연도 + 당기 누적 − 전년 동기 — 을 쓴 열: 회사가 분기·누적을 따로 반올림) · ${tail}` };
         }
         const hit = sgaRule(n, metric, col);
         if (hit) return { ok: `${n} ${metric} = ${hit.label} — 식을 계산할 수 있는 모든 연간 열 정확 성립(${hit.ev.join(" · ")})${hit.skipped.length ? ` · 계산 불가 열 ${hit.skipped.map(([c, w]) => `${c}(${w})`).join(", ")}` : ""} · ${tail}` };
@@ -6432,7 +6501,7 @@ async function verifyUs(sym) {
         if (col === "LTM") {
           const qs = cogsQuarterSum(n);
           if (qs?.outlier) return { outlier: qs.outlier };
-          if (qs) return { ok: `${n} LTM 매출원가 = 자기 분기 4개 합, 분기마다 SEC 본표 분기값과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(사업연도 + 당기 누적 − 전년 동기: 회사가 분기·누적을 따로 반올림) · ${tail}` };
+          if (qs) return { ok: `${n} LTM 매출원가 = 자기 분기 4개 합, 분기마다 SEC 본표 분기값과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(앱이 분기 4개를 못 채워 종전 식 — 사업연도 + 당기 누적 − 전년 동기 — 을 쓴 열: 회사가 분기·누적을 따로 반올림) · ${tail}` };
         }
         if (n === "StockAnalysis") {
           const si = saCogsInst();
