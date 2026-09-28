@@ -259,6 +259,14 @@ export function decimalsVintage(facts) {
     if (isDecimalsRounding(A, L)) { represented.push({ val: L.val, accn: L.accn, dec: L.dec, of: A.val }); log.push(`${L.filed} ${L.val}(d${decTxt(L.dec)}) = round(${A.val}) 재게시`); continue; }
     const k = coarseRounding(A, L);
     if (k != null) { represented.push({ val: L.val, accn: L.accn, dec: -k, of: A.val, declared: L.dec }); log.push(`${L.filed} ${L.val}(d${decTxt(L.dec)} 선언, 실제 10^${k} 단위) = round(${A.val}, 10^${k}) 재게시`); continue; }
+    // 반올림 맞춤(오너 결정 2026-09-28 "원 공시 정밀값으로 통일"): 나중 공시가 더 거친 단위로 다시 실으며 합계를 맞추려 한 줄을 1단위
+    // 조정한 경우 — |나중 − 먼저| ≤ 1.5 × 나중 단위(반올림 0.5 + 조정 1). MRVL FY2022 연구개발비 1,424,306,000(d−3) → 1,424,200,000(d−5),
+    // 판관비 955,245,000 → 955,300,000 — 두 줄이 0.1백만을 맞바꿔 합 2,379.5 보존. 먼저 값(정밀값)을 유지한다
+    if (L.accn !== A.accn && Number.isFinite(L.dec) && A.dec > L.dec && Math.abs(L.val - A.val) <= 1.5 * 10 ** -L.dec) {
+      represented.push({ val: L.val, accn: L.accn, dec: L.dec, of: A.val, footing: true });
+      log.push(`${L.filed} ${L.val}(d${decTxt(L.dec)}) ≈ ${A.val} 반올림 맞춤(1단위 조정) — 정밀값 유지`);
+      continue;
+    }
     if (L.accn === A.accn) return { ok: false, why: `같은 공시 ${L.accn} 에 반올림 관계가 아닌 두 값 ${A.val}·${L.val}` };
     restated.push({ val: L.val, accn: L.accn, from: A.val });
     log.push(`${L.filed} ${L.val}(d${decTxt(L.dec)}) 재작성`);

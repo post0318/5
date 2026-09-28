@@ -2475,9 +2475,16 @@ async function secFaceSga({ cik, sub, sym, natCur = null }) {
   const dd = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
   const nm = (id) => id.replace(/^[a-z0-9-]+_/i, "");
   /** 줄 id 의 기간 값 — 그 기간을 손익계산서에 실은 공시들의 decimals 판정 */
-  const lineVal = (id, s, e) => {
+  // kind: 이 줄이 그 성격(sga·rnd)의 유일한 줄일 때 — 그 기간을 실은 옛 공시가 같은 자리 줄을 다른 개념으로 태깅했으면(MRVL 판관비:
+  // 2022·2023 10-K SellingAndMarketingExpense → 2024 10-K SellingGeneralAndAdministrativeExpense, 라벨 동일) 그 줄도 같은 줄의 판본으로 본다
+  const lineVal = (id, s, e, kind = null) => {
     const fs = [];
-    for (const g of faces) { if (!g.periods.has(`${s}|${e}`)) continue; const x = g.vals.get(`${id}|${s}|${e}`); if (x) fs.push({ accn: g.accn, filed: g.filed, val: x.val, dec: x.dec }); }
+    for (const g of faces) {
+      if (!g.periods.has(`${s}|${e}`)) continue;
+      let x = g.vals.get(`${id}|${s}|${e}`);
+      if (!x && kind) { const ls = g.tot[kind] ? [g.tot[kind]] : g[kind]; if (ls.length === 1) x = g.vals.get(`${ls[0].id}|${s}|${e}`); }
+      if (x) fs.push({ accn: g.accn, filed: g.filed, val: x.val, dec: x.dec });
+    }
     if (!fs.length) return null;
     const latest = [...fs].sort((a, b) => b.filed.localeCompare(a.filed))[0];
     const dv = decimalsVintage(fs);
@@ -2491,7 +2498,7 @@ async function secFaceSga({ cik, sub, sym, natCur = null }) {
     const main = f.tot[k] ? [f.tot[k]] : lines;
     const notes = [], missing = [];
     let v = 0, vLatest = 0;
-    for (const t of main) { const x = lineVal(t.id, s, e); if (!x) { missing.push(nm(t.id)); continue; } v += t.sign * x.val; vLatest += t.sign * x.latest; if (x.note) notes.push(x.note); }
+    for (const t of main) { const x = lineVal(t.id, s, e, main.length === 1 ? k : null); if (!x) { missing.push(nm(t.id)); continue; } v += t.sign * x.val; vLatest += t.sign * x.latest; if (x.note) notes.push(x.note); }
     const ls = lines.map((t) => { const x = lineVal(t.id, s, e); return { id: t.id, label: t.label, v: x ? t.sign * x.val : null }; });
     return {
       ...base, v: missing.length ? null : v, vLatest: missing.length ? null : vLatest, missing, lines: ls, tot: f.tot[k]?.id ?? null,

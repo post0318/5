@@ -76,10 +76,8 @@ export function isFullYearDuration(e: FactUnitEntry): boolean {
  */
 export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
   const P = [1e6, 1e8, 1e9, 1e10];
-  // 작은 단위(1e3·1e4·1e5) 반올림 판정은 이 옛 모듈에 넣지 않는다(2026-09-26 시도 후 되돌림) — 줄 단위 판정이라 본표 구조 없이
-  // 오판이 대량으로 나 NVO·SAP(20-F)·TRV·PSA 연간 열이 통째로 사라졌다. 정밀값 선택은 fin 판독층의 열 단위 규칙
-  // (read/vintage.ts columnFiling)과 검증기만 한다. 이 모듈이 담당하는 비매출 행의 반올림 섞임(MRVL FY2021 등)은 fin 전환 때 해소
-  // (architecture.md §1.1·§9).
+  // 작은 단위(1e3·1e4·1e5) 반올림은 **버리지 않고 값만 교체**한다(usdSmallRounds — 2026-09-28). 버리는 방식(2026-09-26 시도)은
+  // NVO·SAP(20-F)·TRV·PSA 연간 열을 통째로 없앴다.
   const usdRounds = (x: number, y: number) =>
     Math.abs(x) >= 1e8 && x !== y && P.some((p) => Math.round(y / p) * p === x && y % p !== 0);
   // 주식수(shares)도 같은 규칙 — MRVL 2022-01-29 유통주식수: 그 해 10-K 846,695,000 → 2023 10-K 846,700,000(10만 주
@@ -87,7 +85,10 @@ export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
   // 자사주 매입·발행 같은 실제 변동이 우연히 원래 값의 반올림과 같아질 여지를 없앤다).
   const sharesRounds = (x: number, y: number) =>
     x !== y && [1e3, 1e4, 1e5, 1e6].some((p) => Math.abs(x) >= 100 * p && Math.round(y / p) * p === x && y % p !== 0);
-  const clean = (es: FactUnitEntry[], roundsTo: (x: number, y: number) => boolean): FactUnitEntry[] => {
+  // 작은 단위 반올림(값만 교체 — 아래 clean). |x| ≥ 1e8 이고 단위의 100배 이상일 때만 — 상대 오차 0.05% 이하
+  const usdSmallRounds = (x: number, y: number) =>
+    Math.abs(x) >= 1e8 && x !== y && [1e3, 1e4, 1e5].some((p) => Math.round(y / p) * p === x && y % p !== 0);
+  const clean = (es: FactUnitEntry[], roundsTo: (x: number, y: number) => boolean, smallRounds?: (x: number, y: number) => boolean): FactUnitEntry[] => {
     const groups = new Map<string, FactUnitEntry[]>();
     for (const e of es) {
       const k = `${e.start ?? ""}|${e.end}`;
@@ -96,13 +97,22 @@ export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
       else groups.set(k, [e]);
     }
     const drop = new Set<FactUnitEntry>();
+    const fix = new Map<FactUnitEntry, number>();
     for (const g of groups.values()) {
       if (g.length < 2) continue;
       for (const x of g) {
         if (g.some((y) => (y.filed ?? "") < (x.filed ?? "") && roundsTo(x.val, y.val))) drop.add(x);
+        else if (smallRounds) {
+          // 작은 단위(10^3~10^5) 반올림 재게시는 항목을 버리지 않고 값만 먼저 공시된 정밀값으로 바꾼다 — 항목(fy·fp·공시)이 남아
+          // 열이 사라지지 않는다(2026-09-26 버리는 방식이 NVO·SAP·TRV·PSA 연간 열을 없앴던 문제). 오너 결정 2026-09-28 "원 공시
+          // 정밀값으로 통일": MRVL 2022 세전이익 −483,495,000(2022-03 10-K, 천 달러) → 2023 10-K −483,500,000(0.1백만 단위 재게시)
+          const y = g.filter((y) => (y.filed ?? "") < (x.filed ?? "") && smallRounds(x.val, y.val)).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))[0];
+          if (y) fix.set(x, y.val);
+        }
       }
     }
-    return drop.size ? es.filter((e) => !drop.has(e)) : es;
+    if (!drop.size && !fix.size) return es;
+    return es.filter((e) => !drop.has(e)).map((e) => (fix.has(e) ? { ...e, val: fix.get(e)! } : e));
   };
   const out: CompanyFacts = { ...facts, facts: { ...facts.facts } };
   const gaap = facts.facts["us-gaap"];
@@ -110,7 +120,7 @@ export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
     const ng: NonNullable<CompanyFacts["facts"]["us-gaap"]> = {};
     for (const [concept, o] of Object.entries(gaap)) {
       const units: Record<string, FactUnitEntry[]> = {};
-      for (const [u, es] of Object.entries(o.units)) units[u] = u === "USD" ? clean(es, usdRounds) : u === "shares" ? clean(es, sharesRounds) : es;
+      for (const [u, es] of Object.entries(o.units)) units[u] = u === "USD" ? clean(es, usdRounds, usdSmallRounds) : u === "shares" ? clean(es, sharesRounds) : es;
       ng[concept] = { ...o, units };
     }
     out.facts["us-gaap"] = ng;
