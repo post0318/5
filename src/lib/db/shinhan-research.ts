@@ -127,10 +127,47 @@ export async function upsertShinhanResearch(
     // 서버리스 함수 60초 제한을 넘겨 FUNCTION_INVOCATION_TIMEOUT 이 났다
     // (실측: KB·신한·하나 각 68~391건 배치에서 재현). bulkWrite 로 한 번에
     // 보내 라운드트립을 줄인다.
+    // 문서 통째 교체(replaceOne)를 쓰지 않는다 — 수집기들이 매일 같은 항목을
+    // 다시 보내는데, PDF 가 그날 잠깐 실패하면 targetPrice:null·opinion:""·
+    // summary:"" 로 돌아와 어제 뽑아 둔 값을 빈값으로 덮어썼다(감사 2026-09-28,
+    // 한경·KB·BNK 가 --days 기본으로 매일 재전송). 목록에서 항상 확정되는
+    // 필드만 무조건 갱신하고, 추출로 얻는 필드는 **값이 있을 때만** 갱신한다.
+    // 처음 들어오는 문서는 $setOnInsert 로 빈 기본값을 채워 스키마를 맞춘다
+    // ($set 과 $setOnInsert 는 같은 키를 가질 수 없어 둘로 나눈다).
     const result = await col.bulkWrite(
-      docs.map((d) => ({
-        replaceOne: { filter: { _id: d._id }, replacement: d, upsert: true },
-      })),
+      docs.map((d) => {
+        const set: Partial<ShinhanResearchDoc> = {
+          source: d.source,
+          market: d.market,
+          date: d.date,
+          title: d.title,
+          stockName: d.stockName,
+          analyst: d.analyst,
+          pdfUrl: d.pdfUrl,
+          views: d.views,
+          category: d.category,
+          collectedAt: d.collectedAt,
+        };
+        const onInsert: Partial<ShinhanResearchDoc> = {};
+        if (d.targetPrice != null) set.targetPrice = d.targetPrice;
+        else onInsert.targetPrice = null;
+        if (d.opinion) set.opinion = d.opinion;
+        else onInsert.opinion = "";
+        if (d.summary) set.summary = d.summary;
+        else onInsert.summary = "";
+        // 종목코드도 같은 취지 — 이번에 못 풀었다고(null) 이미 붙어 있는 값을
+        // 지우지 않는다(옛 오매칭은 2026-09-28 일회성 보정으로 정리됨).
+        if (d.symbol != null) set.symbol = d.symbol;
+        else onInsert.symbol = null;
+        if (d.relatedSymbols && d.relatedSymbols.length > 0) set.relatedSymbols = d.relatedSymbols;
+        return {
+          updateOne: {
+            filter: { _id: d._id },
+            update: { $set: set, $setOnInsert: onInsert },
+            upsert: true,
+          },
+        };
+      }),
       { ordered: false },
     );
     upserted = result.upsertedCount + result.modifiedCount;
