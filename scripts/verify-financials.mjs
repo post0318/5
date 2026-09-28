@@ -6338,7 +6338,38 @@ async function verifyUs(sym) {
           const lt = cogsAllCols(n, "latest", (c, x, e) => (e.cogsLatest == null ? null : { exp: e.cogsLatest, ev: e.latestEv?.length ? `최신 공시 판본 줄 값 합(${e.latestEv.join(", ")})` : "재게시 없음(= 앱)" }));
           if (lt && lt.cols.has(col)) return { ok: `${n} 매출원가 = 나중 공시의 반올림 재게시 값 합(앱은 먼저 공시된 정밀값) — 식을 계산할 수 있는 모든 열 정확 성립(${lt.ev.join(" · ")}) · ${tail}` };
         }
-        if (n === "Yahoo" || n === "인포맥스") {
+        if (n === "블룸버그") {
+          // 블룸버그(오너 결정 2026-09-28) — D형 원가를 자기 템플릿으로 다시 구성한다. 앱 규칙은 Yahoo·StockAnalysis 와 같은 쪽 유지.
+          // ① 구성 규칙 줄 일부만(MCD: 기타 매장비용 제외 · CEG: 운영·유지 제외 — 연료·구매전력만)
+          const ts = termSubsetAll(n);
+          if (ts && ts.cols.has(col)) return { ok: `블룸버그 매출원가 = 구성 규칙 줄 중 ${ts.use.join("·")}만(${ts.drop.join("·")} 제외) — 대조한 모든 열 정확 성립(${ts.ev.join(" · ")}) · ${tail}` };
+          // ② 구성 규칙 원가 + 본표 감가상각 줄 + 소득세 외 세금(XOM: 원가 + 기타 세금 25,167 + 감가상각 25,993 = 277,832, 2025)
+          // 사업연도 10-K 연간 값(filed 순) — first: 원 공시(정밀값), 아니면 최신
+          const fyVal = (concept, date, first = false) => { const es = (G[concept]?.units?.USD ?? []).filter((y) => y.start && /^10-K/.test(y.form ?? "") && date && dayDiff(y.end, date) <= 7 && (Date.parse(y.end) - Date.parse(y.start)) / 864e5 > 300).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? "")); return es.length ? (first ? es[0] : es.at(-1)).val : null; };
+          const taxAt = (col) => fyVal("TaxesOther", H[col]?.date);
+          // ①-b 구성 규칙 줄 하나를 원 공시 정밀값으로 뺀다(MCD 기타 매장비용 2022 244.8·2023 232.5 — 나중 10-K 는 245·232 로 반올림 재게시)
+          for (const ln of COGS_RULES[sym]?.lines ?? []) {
+            const cs = [ln.concept].flat().filter((c) => /^us-gaap_/.test(c)).map((c) => c.slice(8));
+            if (!cs.length) continue;
+            const hit = cogsAllCols(n, `drop-${cs[0]}`, (c2, x) => {
+              const v0 = cs.map((c) => fyVal(c, H[c2]?.date, true)).find((v) => v != null);
+              return v0 == null ? { skip: `${cs[0]} 연간 값 없음` } : { exp: x.ours - v0, ev: `앱 ${x.ours} − ${ln.label ?? cs[0]}(원 공시) ${v0}` };
+            });
+            if (hit && hit.cols.has(col)) return { ok: `블룸버그 매출원가 = 앱 − 구성 규칙 줄 ${ln.label ?? cs[0]}(원 공시 정밀값) — 대조한 모든 열 정확 성립(${hit.ev.join(" · ")}) · ${tail}` };
+          }
+          const e0 = [...cogsExp.values()].find((e) => /D/.test(e?.type ?? "") && e.da?.length);
+          if (e0) {
+            const hit = cogsAllCols(n, "da+taxes", (c2, x, e) => {
+              if (!/D/.test(e.type ?? "")) return null;
+              const tx = taxAt(c2);
+              if (tx == null || e.da?.some((t) => t.v == null)) return { skip: "기타 세금·본표 감가상각 값 없음" };
+              const d = (e.da ?? []).reduce((t, y) => t + y.v, 0);
+              return { exp: x.ours + tx + d, ev: `앱 ${x.ours} + 기타 세금(TaxesOther) ${tx} + 본표 감가상각 ${d}` };
+            });
+            if (hit && hit.cols.has(col)) return { ok: `블룸버그 매출원가 = 구성 규칙 원가 + 소득세 외 세금 + 본표 감가상각 — 대조한 모든 열 정확 성립(${hit.ev.join(" · ")}) · ${tail}` };
+          }
+        }
+        if (n === "Yahoo" || n === "인포맥스" || n === "블룸버그") {
           const da = daAddAll(n);
           if (da && da.cols.has(col)) return { ok: `${n} 매출원가 = 구성 규칙 원가 + 본표 감가상각·상각 줄 — 대조한 모든 열 정확 성립(${da.ev.join(" · ")}) · ${tail}` };
         }
