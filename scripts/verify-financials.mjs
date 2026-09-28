@@ -1008,6 +1008,36 @@ async function faceRevenueParts(faces) {
  * 10-Q 본표 매출 하위 줄의 3개월 합(원인 R4 분기별 — 외부 분기값이 합계 줄 대신 하위 줄 합인 경우. MCD 2025-09-30: 2,563 + 4,363 + 151
  * = 7,077, 합계 줄 7,078). 그 10-Q 의 자기 분기(보고일 ±7일, 80~100일)만. → Map(결산일 → { src, total, sums: [[설명, 합]] })
  */
+/**
+ * 분기별 "매출 − 비용 환급 매출"(ProductOrServiceAxis …Reimburs…, "제외" 멤버 아님) — 10-Q 3개월값, 4분기 = 10-K 연간 − 같은 사업연도 9개월.
+ * StockAnalysis 가 호텔(HLT)의 분기 매출을 환급 제외로 싣는 경우의 LTM 대조용(연간은 기존 R 규칙). → Map(분기말 → { v, how })
+ */
+async function reimbExQuarterValues(faces) {
+  const per = new Map(); // "start|end" → { tot, re }
+  for (const f of faces.filter((x) => x.instUrl && /^10-[QK]/.test(x.form ?? ""))) {
+    const facts = usdFacts(await secInstance(f.instUrl), (id) => /_(Revenues|RevenueFromContractWithCustomerExcludingAssessedTax)$/.test(id));
+    for (const x of facts) {
+      const k = `${x.start}|${x.end}`;
+      const o = per.get(k) ?? {}; per.set(k, o);
+      const c = x.id.replace(/^[a-z0-9-]+_/, "");
+      if (!x.dims.length) { o[c] ??= x.v; continue; }
+      if (x.dims.length === 1 && /ProductOrServiceAxis$/.test(x.dims[0][0]) && /Reimburs/i.test(x.dims[0][1]) && !/Exclud/i.test(x.dims[0][1])) o[`re:${c}`] ??= x.v;
+    }
+  }
+  const exOf = (o) => { for (const c of ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"]) if (o?.[c] != null && o[`re:${c}`] != null) return o[c] - o[`re:${c}`]; return null; };
+  const dd = (k) => { const [a, b] = k.split("|"); return (Date.parse(b) - Date.parse(a)) / 864e5; };
+  const out = new Map();
+  for (const [k, o] of per) {
+    const [st, en] = k.split("|"); const d = dd(k);
+    if (d >= 80 && d <= 100) { const v = exOf(o); if (v != null) out.set(en, { v, how: "3개월" }); }
+    else if (d > 350 && d < 380 && !out.has(en)) {
+      const nine = [...per].find(([k2]) => k2.startsWith(`${st}|`) && dd(k2) > 260 && dd(k2) < 290);
+      const a = exOf(o), b = nine ? exOf(nine[1]) : null;
+      if (a != null && b != null) out.set(en, { v: a - b, how: "사업연도 − 9개월" });
+    }
+  }
+  return out;
+}
 async function faceRevenueQuarterParts(faces) {
   const out = new Map();
   for (const f of faces.filter((x) => x.form === "10-Q" && !x.any && x.instUrl)) {
@@ -5414,6 +5444,7 @@ async function verifyUs(sym) {
      */
     const qSumMemo = new Map();
     const cogsQuarterSum = (n) => {
+      if (!["Yahoo", "인포맥스", "StockAnalysis"].includes(n)) return null; // 분기 자료가 있는 소스만(블룸버그는 LTM 합계뿐 — 예전엔 기본 분기로 StockAnalysis 값을 써서 블룸버그가 잘못 ② 판정)
       if (qSumMemo.has(n)) return qSumMemo.get(n);
       qSumMemo.set(n, null);
       const x = recon.get("LTM 매출원가");
@@ -5608,6 +5639,7 @@ async function verifyUs(sym) {
     /** LTM 분기 합 — 소스 n 의 LTM 영업이익 = 자기 분기 4개 합이고 분기마다 SEC 본표 분기값과 정확히 같다(매출원가 cogsQuarterSum 과 같은 모양) */
     const opQMemo = new Map();
     const opQuarterSum = (n) => {
+      if (!["Yahoo", "인포맥스", "StockAnalysis"].includes(n)) return null; // 분기 자료가 있는 소스만(블룸버그는 LTM 합계뿐 — 예전엔 기본 분기로 StockAnalysis 값을 써서 블룸버그가 잘못 ② 판정)
       if (opQMemo.has(n)) return opQMemo.get(n);
       opQMemo.set(n, null);
       const x = recon.get("LTM 영업이익");
@@ -5738,6 +5770,7 @@ async function verifyUs(sym) {
     /** LTM 분기 합 — 소스 n 의 LTM 감가상각비 = 자기 분기 4개 합이고 분기마다 SEC 분기값과 정확히 같다(영업이익 opQuarterSum 과 같은 모양) */
     const daQMemo = new Map();
     const daQuarterSum = (n) => {
+      if (!["Yahoo", "인포맥스", "StockAnalysis"].includes(n)) return null; // 분기 자료가 있는 소스만(블룸버그는 LTM 합계뿐 — 예전엔 기본 분기로 StockAnalysis 값을 써서 블룸버그가 잘못 ② 판정)
       if (daQMemo.has(n)) return daQMemo.get(n);
       daQMemo.set(n, null);
       const x = recon.get("LTM 감가상각비");
@@ -5769,6 +5802,29 @@ async function verifyUs(sym) {
     //    비용 줄(판관비·연구개발비·원가 밖 — D&A·구조조정·기타 영업비용 등) 일부, (다) 판관비만: 외부 = 앱 + 앱 연구개발비(외부가 연구개발비를
     //    판관비에 합침), 각 2개 이하·(가)(나) 한 개씩 조합까지. 식을 계산할 수 없는 열(그 열 본표에 그 줄 없음)은 증거에서 빼고 0 으로 채우지 않는다
     const SGA_METRIC_RE = /^(\d{4}Y|LTM) (판관비|연구개발비|판관비·연구개발비)$/;
+    // 손익 위치 차원 사실(연간 열마다 그 사업연도 10-K 원본 — 차원 1개, 손익 위치 축 = 연구개발비·판관비). 외부 원인 규칙(noteRules "loc-")용.
+    //   실측 2026-09-28: DELL StockAnalysis 연구개발비 = 앱 − SeveranceCosts1[위치=연구개발비] FY2022~2026(7·56·40·119·130),
+    //   BE StockAnalysis 연구개발비 = 앱 − AssetImpairmentCharges[위치=연구개발비] 2025 3.0(그 밖 해 없음·차이 0)
+    const locFacts = new Map(); // 열 → [{ c: 개념, loc: "rnd"|"sga", v }]
+    if (SGA_MODE && !foreign) {
+      for (const [col, e] of sgaExp) {
+        if (col === "LTM" || !e?.start || !e?.end) continue;
+        const accn = (e.comps?.length === 1 ? e.comps[0].faceAccn : null) ?? e.sga?.faceAccn ?? null;
+        if (!accn) continue;
+        let idx = null;
+        try { idx = await instanceDecimals(cik, accn); } catch { continue; }
+        const arr = [];
+        for (const [k, fs0] of idx ?? []) {
+          const [c, st, en, dim] = k.split("|");
+          if (st !== e.start || en !== e.end || !dim) continue;
+          const [ax, mem] = dim.split("=");
+          if (!/IncomeStatementLocationAxis|StatementOfIncomeLocationBalanceAxis/.test(ax)) continue;
+          const loc = /^ResearchAndDevelopmentExpense/.test(mem) ? "rnd" : /^SellingGeneralAndAdministrativeExpense/.test(mem) ? "sga" : null;
+          if (loc && fs0.length) arr.push({ c, loc, v: fs0[fs0.length - 1].v });
+        }
+        locFacts.set(col, arr);
+      }
+    }
     const sgaCols = (n, m) => [...recon.values()].filter((x) => x.item.endsWith(` ${m}`) && SGA_METRIC_RE.test(x.item) && x.srcs[n]);
     const sgaMemo = new Map();
     const sgaAllCols = (n, m, key, expOf) => {
@@ -5834,6 +5890,15 @@ async function verifyUs(sym) {
         for (const id of ids) { const o = fyNote(id.slice(8), H[c]?.date, true), l = fyNote(id.slice(8), H[c]?.date); if (o == null || l == null) return null; d += o - l; if (o !== l) ev.push(`${sgaNm(id)} 원 ${o}(최신 ${l})`); }
         return [d, ev.length ? ev.join(" · ") : "재작성 없음(= 앱)"];
       }]);
+      // 성격 줄 안의 항목(손익 위치 차원) — 외부 = 앱 − 그 항목(없는 해 0). 한 개념씩만(조합 금지)
+      const locWant = m === "연구개발비" ? "rnd" : m === "판관비" ? "sga" : null;
+      if (locWant) for (const c of [...new Set([...locFacts.values()].flat().filter((x) => x.loc === locWant).map((x) => x.c))]) {
+        noteRules.push([`loc-${c}`, `앱 − ${m} 줄 안의 ${c}(손익 위치 차원, 없는 해 0) — 외부는 이 금액을 ${m}에서 뺌`, (col0) => {
+          if (!locFacts.has(col0)) return null;
+          const v = locFacts.get(col0).find((x) => x.c === c && x.loc === locWant)?.v ?? 0;
+          return [-v, `− ${c}[위치=${m}] ${v}`];
+        }]);
+      }
       for (const [key, label, f] of noteRules) {
         const h = sgaAllCols(n, m, key, (c, x, e) => { const r = f(c, e); return r ? { exp: x.ours + r[0], ev: `앱 ${x.ours} ${r[1]}` } : null; });
         if (h && h.cols.has(col)) return { label, ...h };
@@ -5870,6 +5935,7 @@ async function verifyUs(sym) {
     /** LTM 분기 합 — 소스 n 의 LTM = 자기 분기 4개 합이고 분기마다 SEC 본표 분기값과 정확히 같다(감가상각비 daQuarterSum 과 같은 모양) */
     const sgaQMemo = new Map();
     const sgaQuarterSum = (n, m) => {
+      if (!["Yahoo", "인포맥스", "StockAnalysis"].includes(n)) return null; // 분기 자료가 있는 소스만(블룸버그는 LTM 합계뿐 — 예전엔 기본 분기로 StockAnalysis 값을 써서 블룸버그가 잘못 ② 판정)
       const mk = `${n}|${m}`;
       if (sgaQMemo.has(mk)) return sgaQMemo.get(mk);
       sgaQMemo.set(mk, null);
@@ -5988,6 +6054,15 @@ async function verifyUs(sym) {
         if (!aPassed(col, metric)) return { guess: "앱 ≠ SEC 본표 판관비·연구개발비 성격 줄 합(A층 미통과) — 원인 판정 전제 없음" };
         const tail = "앱 = SEC 본표 성격 줄 합(A층 정확 일치)";
         if (col === "LTM") {
+          // 블룸버그 LTM = SEC 3개월 분기 4개 합(합계 정확 일치 — 블룸버그는 분기 자료 없음). 실측 IBM LTM 연구개발비 8,753 = 2,082 + 2,187 + 2,173 + 2,311(앱 8,754)
+          if (n === "블룸버그" && L?.date) {
+            const ends = [...new Set([...qEndOf.values()].filter(Boolean))].filter((e) => e <= L.date || dayDiff(e, L.date) <= 7).sort().slice(-4);
+            const qv = ends.map((e) => secSgaQuarter(e, metric));
+            if (qv.length === 4 && qv.every(Boolean)) {
+              const sum = qv.reduce((t0, q) => t0 + q.v, 0);
+              if (eqExp(sum)) return { ok: `블룸버그 LTM ${metric} = SEC 분기 4개 합 ${sum}(${ends.map((e, i) => `${e} ${qv[i].v}(${qv[i].how})`).join(" + ")}) — 앱 LTM ${r.ours}(사업연도 + 당기 누적 − 전년 동기), 차 = 누적과 분기 합의 반올림 차 · 블룸버그는 LTM 합계만(분기별 대조 불가) · ${tail}` };
+            }
+          }
           const qs = sgaQuarterSum(n, metric);
           if (qs) return { ok: `${n} LTM ${metric} = 자기 분기 4개 합, 분기마다 SEC 본표 분기값과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(사업연도 + 당기 누적 − 전년 동기: 회사가 분기·누적을 따로 반올림) · ${tail}` };
         }
@@ -6165,6 +6240,28 @@ async function verifyUs(sym) {
       //    누적 − 전년 누적(SEC TTM) — 전제: 앱 LTM 매출 = SEC TTM(같은 태그, 1달러 안). 차이 = 누적값과 분기값 합의 재작성·반올림 차.
       //    합계만 맞추지 않는다 — 분기마다 식이 완전히 성립해야 한다(허용 오차 없음, 2026-09-26: MCD 는 합계 27,703 이 SEC 3개월 합과 같지만
       //    분기 두 곳이 −1·+1 로 상쇄된 것이었다). 공통모드 아님(SEC 분기 공시값으로 외부 값을 독립 재현). 실측 CL·GOOG·NVDA·ORCL·IBM·MCD.
+      // StockAnalysis LTM 매출 = 자기 분기 4개 합, 분기마다 SEC "매출 − 비용 환급 매출"(3개월, 4분기 = 연간 − 9개월)과 정확 일치 — 분기별 전부 성립할 때만.
+      //    실측 2026-09-28 HLT: 1,283 + 1,280(= 4,954 − 3,674) + 1,182 + 1,359 = 5,104(앱 LTM 12,485 는 환급 포함 총매출)
+      if (metric === "매출" && col === "LTM" && n === "StockAnalysis" && saQInc && reimbExQ?.size && L?.date) {
+        const qs = saQInc.datekey.map((d, i) => ({ end: d, v: saQInc.revenue?.[i] ?? null })).filter((q) => q.end !== "TTM" && (q.end <= L.date || dayDiff(q.end, L.date) <= 7)).sort((a, b) => a.end.localeCompare(b.end)).slice(-4);
+        const u = r.srcs[n]?.unit ?? 1;
+        const rows = qs.map((q) => { const e = [...reimbExQ].find(([k]) => dayDiff(k, q.end) <= 7)?.[1]; return { q, e, ok: e != null && q.v != null && (extEq(q.v, e.v) || (u !== 1 && extEq(q.v, roundHalfAway(e.v, u)))) }; });
+        if (qs.length === 4 && rows.every((x) => x.ok) && eqExp(qs.reduce((t0, q) => t0 + q.v, 0)))
+          return { ok: `StockAnalysis LTM 매출 = 자기 분기 4개 합, 분기마다 SEC "매출 − 비용 환급 매출"과 정확 일치(${rows.map((x) => `${x.q.end} ${x.q.v} = ${x.e.v}(${x.e.how})`).join(" · ")}) — StockAnalysis 는 분기 매출을 환급 제외로, 연간은 총매출로 싣는다 · 앱 = SEC TTM(총매출)` };
+      }
+      // 블룸버그 LTM 매출 = SEC 3개월 분기 4개 합(4분기 = 사업연도 − 9개월) — 블룸버그는 LTM 합계만 주므로 분기별 대조는 불가, 합계 정확 일치만.
+      //    실측 2026-09-28: CL 21,046 = 5,131 + 5,230 + 5,324 + 5,361(앱 LTM 21,047), IBM 69,096(앱 69,095), ORCL 71,777(앱 71,776)
+      if (metric === "매출" && col === "LTM" && n === "블룸버그" && L?.date && L?.rev != null) {
+        for (const tag of REV_TAGS) {
+          const t = secTtm(tag);
+          if (!t || dayDiff(t.end, L.date) > 7 || !extEq(t.v, L.rev)) continue;
+          const qs = secQuarterSum(tag, L.date);
+          if (!qs) break;
+          const sum = qs.parts.reduce((t0, x) => t0 + x.v, 0);
+          if (eqExp(sum)) return { ok: `블룸버그 LTM 매출 = SEC 3개월 분기 4개 합 ${sum}(${qs.parts.map((x) => `${x.end} ${x.v}`).join(" + ")}) — 앱 LTM(사업연도 + 당기 누적 − 전년 동기) ${r.ours}, 차 = 누적과 분기 합의 반올림 차 · 블룸버그는 LTM 합계만(분기별 대조 불가)` };
+          break;
+        }
+      }
       if (metric === "매출" && col === "LTM" && (n === "Yahoo" || n === "인포맥스") && L?.date) {
         const q = r4Quarters(n);
         if (q?.ok) return { ok: `${n} LTM 매출 = Σ 분기 ${q.sum} — ${q.rows.join(" · ")} — 앱 = SEC TTM(${q.t.how}) ${q.t.v}, 차 ${r.ours - q.sum} = 누적과 분기 합의 차 · 공통모드 아님(SEC 원자료로 독립 재현)` };
@@ -6607,6 +6704,13 @@ async function verifyUs(sym) {
       const from = new Date(Date.parse(L.date) - 370 * 864e5).toISOString().slice(0, 10);
       try { revQParts = await faceRevenueQuarterParts(revFace.faces.filter((f) => f.form === "10-Q" && f.report >= from && f.report <= L.date)); }
       catch (e) { errs.push(`매출 분기 본표 하위 줄 공시 원본 조회 실패: ${String(e).slice(0, 60)}`); }
+    }
+    // StockAnalysis LTM 매출이 다를 때만 — LTM 창의 10-Q·10-K 원본에서 분기별 "매출 − 비용 환급 매출"(HLT: StockAnalysis 분기 매출 = 환급 제외)
+    let reimbExQ = null;
+    if (revFace && !foreign && saQInc && mism("LTM 매출", "StockAnalysis")) {
+      const from = new Date(Date.parse(L.date) - 470 * 864e5).toISOString().slice(0, 10);
+      try { reimbExQ = await reimbExQuarterValues(revFace.faces.filter((f) => f.report >= from && f.report <= L.date)); }
+      catch (e) { errs.push(`매출 분기 환급 제외 공시 원본 조회 실패: ${String(e).slice(0, 60)}`); }
     }
     // R8 분기 확장 — 인포맥스 LTM 매출이 다를 때만, 인포맥스 최근 4분기 결산일의 10-Q·10-K 원본에서 매출 위치 파생상품 손익
     if (mism("LTM 매출", "인포맥스") && revFace && !foreign && imAnnual?.quarters) {
