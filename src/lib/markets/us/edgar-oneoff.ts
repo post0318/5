@@ -25,11 +25,16 @@ import type { RecentFilings } from "./edgar-gapfill";
 export const SYN_ONE_OFF = "OneOffChargesDerived";
 
 const ONE_OFF_TEXT =
-  /restructur|impairment|litigation|legal (settlement|matters)|settlement|lawsuit|termination|severance|written off|write-?off|write-?down|acquisition[- ]related|merger[- ]related|transaction costs|corporate matters|opioid/i;
+  /restructur|impairment|litigation|legal (settlement|matters)|settlement|lawsuit|termination|severance|written off|write-?off|write-?down|acquisition[- ]related|merger[- ]related|transaction costs|corporate matters|opioid|other operating charges/i;
+// "기타 영업손익" 류 합산 줄 — 줄 자체는 일회성이 아니지만(매각이익·지분법 등이 섞임) 주석 계산 구조(Details 역할)에서 하위 줄로
+// 나뉘어 있으면 그중 일회성 줄만 쓴다(오너 결정 2026-09-28 — MCD "Other operating (income) expense, net" → "Impairment and other
+// charges (gains), net" RestructuringCostsAndAssetImpairmentCharges). KO "Other operating charges" 는 회사가 일회성 항목으로 정의한
+// 줄이라 줄 전체(ONE_OFF_TEXT)
+const OTHER_OP = /^(OtherOperatingIncomeExpenseNet|OtherCostAndExpenseOperating|OtherOperatingCostAndExpense|OtherOperatingIncome|OtherExpenses)$/;
 /** 이름·라벨이 걸려도 제외 — 영업외·세금·주당이익·누계 */
 const EXCLUDE = /Tax|PerShare|Nonoperating|Interest|ExtinguishmentOfDebt|Accumulated|Pension|Postretirement/;
 /** 일반 비용·합계 줄 — 라벨에 일회성 단어가 있어도 줄 자체는 아니다(KHC "판관비, 손상차손 제외"). 하위 줄은 계속 본다. */
-const GENERAL_COST = /SellingGeneralAndAdministrative|^CostOf|^OperatingExpenses$|CostsAndExpenses|^GeneralAndAdministrativeExpense$|^ResearchAndDevelopmentExpense/;
+const GENERAL_COST = /^SellingGeneralAndAdministrative|^CostOf|^OperatingExpenses$|CostsAndExpenses|^GeneralAndAdministrativeExpense$|^ResearchAndDevelopmentExpense/;
 /** 라벨의 부정 문맥("excluding impairment losses") 이후는 판정에서 뺀다 */
 const NEGATED = /\b(excluding|excl\.?|exclusive of|other than|before)\b.*$/i;
 /** 상각 줄 — 취득 무형자산 상각은 매년 반복되는 비용이지 일회성이 아니다(AMD·AVGO: "Amortization of acquisition-related
@@ -46,7 +51,9 @@ const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) 
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 
 interface Filing { accn: string; form: string; filed: string; doc: string; report: string }
-interface Line { ns: string; concept: string; w: number } // w: 루트(세전이익·영업이익) 기준 부호
+interface Line { ns: string; concept: string; w: number; via?: string } // w: 루트(세전이익·영업이익) 기준 부호, via: 주석 내역을 읽은 기타 영업손익 줄
+/** 공시별 판독 — lines 와, 본표에 있으나 이 공시엔 주석 내역이 없는 기타 영업손익 줄(opaque) */
+interface Face { lines: Line[]; opaque: string[] }
 
 async function files(cik: number, f: Filing): Promise<{ cal: string; lab: string } | null> {
   const base = `https://www.sec.gov/Archives/edgar/data/${cik}/${f.accn.replace(/-/g, "")}`;
@@ -86,7 +93,24 @@ function labels(lab: string): Map<string, string[]> {
 }
 
 /** 손익계산서 계산 구조에서 일회성 줄(루트 기준 부호). 영업외·매출 노드 아래로는 내려가지 않는다. */
-function oneOffLines(cal: string, lab: Map<string, string[]>): Line[] | null {
+function oneOffLines(cal: string, lab: Map<string, string[]>): Face | null {
+  // 주석 계산 구조(모든 역할)의 부모 → 하위 줄 — 기타 영업손익 줄의 내역을 찾는다
+  const noteKids = new Map<string, { to: string; w: number }[]>();
+  for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
+    if (!/Detail/i.test(m[1].split("/").pop() ?? "")) continue;
+    const loc = new Map<string, string>();
+    for (const l of m[2].matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) {
+      const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1];
+      const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
+      if (id && href) loc.set(id, href);
+    }
+    for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {
+      const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
+      const to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
+      const w = Number(/weight="([^"]+)"/.exec(a[1])?.[1]);
+      if (from && to && Number.isFinite(w) && !(noteKids.get(from) ?? []).some((x) => x.to === to)) noteKids.set(from, [...(noteKids.get(from) ?? []), { to, w }]);
+    }
+  }
   for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
     if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Segment/i.test(role)) continue;
@@ -107,6 +131,7 @@ function oneOffLines(cal: string, lab: Map<string, string[]>): Line[] | null {
     if (!root) continue;
     const split = (id: string) => { const i = id.indexOf("_"); return { ns: id.slice(0, i), concept: id.slice(i + 1) }; };
     const out: Line[] = [];
+    const opaque: string[] = [];
     const seen = new Set<string>();
     const walk = (id: string, w: number, depth: number) => {
       if (depth > 6) return;
@@ -118,12 +143,21 @@ function oneOffLines(cal: string, lab: Map<string, string[]>): Line[] | null {
         // 회사 라벨이 있으면 라벨로만 판정하고, 라벨이 없을 때만 개념명을 본다(회사가 표준 개념을 다른 뜻으로 쓴 경우)
         const labs = lab.get(a.to);
         const text = labs?.length ? labs.join(" ") : c.concept;
-        if (!GENERAL_COST.test(c.concept) && !SALE_GAIN.test(text) && !AMORTIZATION.test(text) && ONE_OFF_TEXT.test(text)) out.push({ ...c, w: w * a.w });
-        else walk(a.to, w * a.w, depth + 1);
+        const isOneOff = (t: string, concept: string) => !GENERAL_COST.test(concept) && !SALE_GAIN.test(t) && !AMORTIZATION.test(t) && ONE_OFF_TEXT.test(t);
+        if (isOneOff(text, c.concept)) out.push({ ...c, w: w * a.w });
+        else if (OTHER_OP.test(c.concept) && !arcs.some((x) => x.from === a.to)) {
+          // 본표에서 더 내려가지 않는 기타 영업손익 줄 — 주석 내역 중 일회성 줄
+          if (!noteKids.has(a.to)) opaque.push(a.to);
+          for (const k of noteKids.get(a.to) ?? []) {
+            const kc = split(k.to);
+            const kl = lab.get(k.to);
+            if (!EXCLUDE.test(kc.concept) && isOneOff(kl?.length ? kl.join(" ") : kc.concept, kc.concept)) out.push({ ...kc, w: w * a.w * k.w, via: a.to });
+          }
+        } else walk(a.to, w * a.w, depth + 1);
       }
     };
     walk(root, 1, 0);
-    return out;
+    return { lines: out, opaque };
   }
   return null;
 }
@@ -156,7 +190,9 @@ export async function withOneOffCharges(cik: string, facts: CompanyFacts, recent
   const g = facts.facts["us-gaap"] ?? {};
   const filings: Filing[] = [];
   let k10 = 0;
-  for (let i = 0; i < recent.form.length && k10 < 3; i++) {
+  // 10-K 5건 — 손익계산서가 3개 연도라 화면의 5개 연도를 모두 덮으려면 3건이면 되지만, 결산기 변경·정정 공시(10-K/A 는 제외)로
+  // 가장 오래된 연도가 2.2년 창 밖에 걸리는 경우를 막는다
+  for (let i = 0; i < recent.form.length && k10 < 5; i++) {
     const form = recent.form[i];
     if (form === "10-K") k10++;
     else if (!(form === "10-Q" && k10 === 0 && !filings.some((x) => x.form === "10-Q"))) continue;
@@ -164,12 +200,13 @@ export async function withOneOffCharges(cik: string, facts: CompanyFacts, recent
   }
   // 공시별 일회성 줄 — 하나라도 없으면 전체 미적용(기간마다 정의가 섞이지 않게). 조회 실패는 올린다(로더가 일회성비용을
   // 공란 + "원본 조회 실패" 사유로 — sec-unavailable.ts; 예전엔 사유 없는 빈칸이었다)
-  const perFiling: { f: Filing; lines: Line[]; ext: Map<string, FactUnitEntry[]> }[] = [];
+  const perFiling: { f: Filing; lines: Line[]; opaque: string[]; ext: Map<string, FactUnitEntry[]> }[] = [];
   for (const f of filings) {
     const fl = await files(Number(cik), f);
     if (!fl) return facts;
-    const lines = oneOffLines(fl.cal, labels(fl.lab));
-    if (!lines) return facts;
+    const face = oneOffLines(fl.cal, labels(fl.lab));
+    if (!face) return facts;
+    const { lines, opaque } = face;
     let ext = new Map<string, FactUnitEntry[]>();
     const extIds = new Set(lines.filter((l) => l.ns !== "us-gaap").map((l) => `${l.ns}_${l.concept}`));
     if (extIds.size) {
@@ -178,9 +215,8 @@ export async function withOneOffCharges(cik: string, facts: CompanyFacts, recent
       const xml = await fetchText(url, { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 });
       ext = instanceValues(xml, extIds, f);
     }
-    perFiling.push({ f, lines, ext });
+    perFiling.push({ f, lines, opaque, ext });
   }
-  if (!perFiling.some((p) => p.lines.length)) return facts;
 
   // 기간 목록 = 세전이익이 있는 기간. 연간은 그 결산일을 담은 가장 최근 10-K(보고일 ≥ 결산일, 손익계산서가 담는 3개 연도 = 2.2년 안),
   // 분기·누적은 최신 10-Q(없으면 최신 10-K)의 구조
@@ -198,7 +234,10 @@ export async function withOneOffCharges(cik: string, facts: CompanyFacts, recent
       if (x.start === e.start && x.end === e.end && (!best || (x.filed ?? "") > (best.filed ?? ""))) best = x;
     return best?.val;
   };
-  const pretaxEntries = PRETAX.flatMap((p) => g[p]?.units?.USD ?? []).filter((e) => e.start);
+  // 기간 목록 = 세전이익 ∪ 영업이익이 있는 기간. 세전이익을 회사 고유 태그로 공시하는 회사(ORCL 2018~)는 표준 세전이익 태그가
+  // 없어 기간이 0개였다(2026-09-28 — ORCL 일회성비용 전 연도 빈칸)
+  const pretaxEntries = [...PRETAX, "OperatingIncomeLoss"].flatMap((p) => g[p]?.units?.USD ?? []).filter((e) => e.start);
+  const viaUsed = new Set(perFiling.flatMap((q) => q.lines.map((l) => l.via).filter((x): x is string => !!x)));
   const out: FactUnitEntry[] = [];
   const done = new Set<string>();
   for (const e of pretaxEntries) {
@@ -206,7 +245,12 @@ export async function withOneOffCharges(cik: string, facts: CompanyFacts, recent
     if (done.has(k)) continue;
     done.add(k);
     const p = pickFor(e);
-    if (!p || !p.lines.length) continue;
+    if (!p) continue;
+    // 그 기간을 담은 손익계산서에 일회성 줄이 없으면 0 — 빈칸(값 모름)과 구분한다(AMD 2021·NVDA FY2024~ 가 옆 연도는 0 인데 빈칸이었다)
+    // 다른 공시에서는 주석 내역으로 일회성 줄을 읽은 기타 영업손익 줄이 이 공시엔 내역 없이 본표에만 있으면 값 모름 — 0 이 아니라 빈칸
+    // (MCD 10-Q: 연간 10-K 만 "Impairment and other charges" 내역을 실어 분기가 0 → LTM = 연간 229 가 됐다, 2026-09-28)
+    if (p.opaque.some((x) => viaUsed.has(x))) continue;
+    if (!p.lines.length) { out.push({ ...e, val: 0 }); continue; }
     let cost = 0, any = false;
     for (const l of p.lines) {
       const v = l.ns === "us-gaap" ? usVal(l.concept, e) : p.ext.get(`${l.ns}_${l.concept}`)?.find((x) => x.start === e.start && x.end === e.end)?.val;
