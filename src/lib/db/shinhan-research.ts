@@ -3,7 +3,7 @@ import type { Collection } from "mongodb";
 import { getDb } from "./index";
 import type { MarketId } from "../markets/types";
 import { isCommonExcludedResearch } from "../research-exclude";
-import { classifySector } from "../research-sector";
+import { classifySector, SECTOR_LABELS, normalizeIndustryLabel } from "../research-sector";
 
 /**
  * 산업/기업분석 리서치는 이 앱의 4대 시장(`MarketId`: kr/us/jp) 밖의 소스도
@@ -246,10 +246,14 @@ export async function upsertShinhanResearch(
       // 삭제는 라벨이 게시판 기본값/전략 라벨이거나 시리즈명·소스 규칙으로
       // **강제** 분류된 문서에만 적용하고, 업종명이 달린 문서는 분류 결과와
       // 무관하게 일반 90일 정리에 맡긴다(화면 분류 자체는 그대로 둔다).
+      // "업종명"의 기준은 표준 업종 목록(SECTOR_LABELS)에 매핑되는지다 — 짧은
+      // 라벨이면 다 업종으로 보면 "글로벌 인사이트"·"모닝브리핑"·"경제분석 Note"
+      // 같은 시리즈명(실측 147건)까지 보호돼 오너가 정한 7·30일 보관이 무너진다.
       const forced =
         isMarketConditionStockname(d.stockName) ||
         MARKET_CONDITION_SOURCE_MARKETS.has(`${d.source}:${d.market}`);
-      if (!forced && !isGenericOrBoardLabel(d)) return false;
+      const isSector = (SECTOR_LABELS as readonly string[]).includes(normalizeIndustryLabel(d.stockName));
+      if (!forced && isSector) return false;
       const t = classifyResearchTopic(d);
       if (t === "이슈분석") return d.date < issueCutoff;
       if (t === "환율분석") return d.date < fxCutoff;
