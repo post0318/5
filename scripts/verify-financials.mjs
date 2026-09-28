@@ -3891,14 +3891,21 @@ async function verifyUs(sym) {
         add("A", "EPS 앱 = SEC 공시 EPS(분할 보정)", c, { status: NA, note: splitErr });
       } else if (e) {
         const k = splitAdj(e);
-        const expected = e.val / k;
+        let expected = e.val / k, splitNote = "";
+        // 분할 재게시(오너 결정 2026-09-28 "원 공시 정밀값") — 분할 뒤 10-K 가 과거 EPS 를 분할 소급 후 소수 둘째 자리로 반올림해 다시 실으면
+        // (NVDA FY2023 원 공시 1.74 → 0.17) 기준은 원 공시 ÷ 그 뒤 분할 배수(Yahoo 분할 이력으로 독립 산출) = 0.174. 반올림 관계일 때만
+        const e0 = annualAllAt("EarningsPerShareDiluted", "USD/shares", x.date)[0];
+        if (e0 && e0.val !== e.val && (e0.filed ?? "") < (e.filed ?? "")) {
+          const k0 = splitAdj(e0), pre = e0.val / k0;
+          if (k0 !== k && Math.abs(Math.round(pre * k * 100) / 100 - e.val) < 1e-9) { expected = pre; splitNote = `분할 재게시 — 원 공시 ${e0.val}(${e0.filed}) ÷ 분할 ${k0}(Yahoo 분할 이력) = ${pre}, 최신 공시 ${e.val} 는 그 반올림`; }
+        }
         // 정확 비교(오너 원칙 — 허용치 통과 금지, 2026-09-25). 앱 fyEps = 공시값 × splitFactorsByYear 계수이고 반올림하지
         // 않는다(edgar-pershare.ts) → 기준 = 공시값 ÷ Yahoo 분할 배수, 부동소수 오차(상대 1e-9)만. 예전 허용치(0.006 + 0.3%)는
         // 작은 EPS 의 1% 오류·+0.004 오류를 통과시켰다(자체 주입).
         const r = vsSource(x.eps, expected, EXACT, "");
         const ok = x.eps != null && Math.abs(x.eps - expected) <= EXACT * Math.max(1, Math.abs(expected));
         add("A", "EPS 앱 = SEC 공시 EPS(분할 보정)", c, x.eps == null ? r : ok
-          ? { status: PASS, ...(k !== 1 || retagNote(e) ? { note: [k !== 1 && `분할 보정 ÷${k}(Yahoo 분할 이력)`, retagNote(e)].filter(Boolean).join(" · ") } : {}), app: x.eps, src: expected }
+          ? { status: PASS, ...(k !== 1 || retagNote(e) || splitNote ? { note: [splitNote, k !== 1 && !splitNote && `분할 보정 ÷${k}(Yahoo 분할 이력)`, retagNote(e)].filter(Boolean).join(" · ") } : {}), app: x.eps, src: expected }
           : { status: FAIL, note: `앱 ${x.eps} vs 공시 ${e.val}${k !== 1 ? ` ÷ 분할 ${k}` : ""} = ${expected}${splitErr ? ` · ${splitErr}` : ""}${retagNote(e) ? ` · ${retagNote(e)}` : ""}`, app: x.eps, src: expected });
       } else if (contDiscEps(x.date)) {
         // 총 희석 EPS 태그가 없고 계속영업·중단영업 희석 EPS 가 같은 10-K 에 둘 다 공시된 해 — 두 태그값의 합이 SEC 기준
@@ -4954,6 +4961,8 @@ async function verifyUs(sym) {
       if (!r) continue;
       put(`${c} 매출`, x.rev, "Yahoo", r.totalRevenue);
       put(`${c} 순이익`, x.ni, "Yahoo", r.netIncome ?? r.netIncomeCommonStockholders);
+      // 희석 EPS — 공시 EPS 를 그대로 주는 소스(인포맥스는 순이익 ÷ 주식수 자체 계산이라 공시 EPS 의 독립 대조가 없었다, 2026-09-28)
+      put(`${c} 희석 EPS`, x.eps, "Yahoo", r.dilutedEPS);
       put(`${c} EBITDA`, x.ebitda, "Yahoo", yEbitda(r));
       put(`${c} 영업이익`, IS[c]?.op, "Yahoo", r.totalOperatingIncomeAsReported);
       put(`${c} 감가상각비`, IS[c]?.da, "Yahoo", r.reconciledDepreciation);
@@ -5029,6 +5038,8 @@ async function verifyUs(sym) {
           if (k < 0) continue;
           put(`${c} 매출`, x.rev, "StockAnalysis", inc.revenue?.[k], saUnit);
           put(`${c} 순이익`, x.ni, "StockAnalysis", inc.netinc?.[k], saUnit);
+          // 희석 EPS(소수 둘째 자리 표기, 분할 소급) — 외화 공시는 원통화라 제외
+          if (!foreign && c !== "LTM") put(`${c} 희석 EPS`, x.eps, "StockAnalysis", inc.epsdil?.[k], 0.01);
           put(`${c} EBITDA`, x.ebitda, "StockAnalysis", inc.ebitda?.[k], saUnit);
           put(`${c} 영업이익`, IS[c]?.op, "StockAnalysis", inc.opinc?.[k], saUnit);
           put(`${c} 감가상각비`, IS[c]?.da, "StockAnalysis", inc.depAmorEbitda?.[k], saUnit);

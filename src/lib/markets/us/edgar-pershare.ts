@@ -1,6 +1,24 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
-import { annualByYear, entriesOf, ltmAnchor, ltmFlowOf, provenAbsentAt, reportedInFiling, splitFactorsByYear } from "./edgar-series";
+import { ANNUAL_FORMS, annualByYear, entriesOf, fiscalYearOf, isFullYearDuration, ltmAnchor, ltmFlowOf, provenAbsentAt, reportedInFiling, splitFactorsByYear } from "./edgar-series";
+
+/**
+ * 분할 뒤 다시 실린 과거 EPS 의 정밀값 — 원 공시 EPS ÷ 분할 배수(오너 결정 2026-09-28 "원 공시 정밀값"). 회사는 분할 뒤 10-K 에
+ * 과거 연도 EPS 를 분할 소급 후 소수 둘째 자리로 반올림해 다시 싣는다(NVDA FY2023: 원 공시 1.74 → FY2025 10-K 0.17 = round(1.74 ÷ 10)).
+ * 최초 공시값 ÷ 최신 공시값이 정수 배수 k(2~100)이고 round(최초 ÷ k, 0.01) = 최신이면 최초 ÷ k(0.174). 분할이 여러 번이면 누적 배수
+ * (NVDA FY2021 6.90 → 0.17 = round(6.90 ÷ 40)). 그 밖(재작성 등)은 최신 공시값 그대로.
+ */
+function preciseSplitEps(facts: CompanyFacts, year: number, latest: number): number {
+  const es = entriesOf(facts, "EarningsPerShareDiluted", "USD/shares")
+    .filter((e) => fiscalYearOf(e.end) === year && isFullYearDuration(e) && ANNUAL_FORMS.includes(e.form ?? ""))
+    .sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""));
+  const orig = es[0]?.val;
+  if (orig == null || orig === latest || latest === 0) return latest;
+  const k = Math.round(orig / latest);
+  if (k < 2 || k > 100) return latest;
+  const precise = orig / k;
+  return Math.abs(Math.round(precise * 100) / 100 - latest) < 1e-9 ? precise : latest;
+}
 import { classAEps, type ClassAFacts } from "./edgar-classfacts";
 
 /**
@@ -145,7 +163,7 @@ export function fyEps(
   // (검증 2026-09-24). 상장 전이라 주당 값이 없는 해이므로 근사로 만들지 않고 비운다.
   const netForCheck = ni ?? opts.fyNetIncome ?? null;
   if (rep === 0 && netForCheck != null && netForCheck !== 0) return { eps: null, approx: false, note: "공시 EPS 0(상장 전 자리표시자)" };
-  if (rep != null) return { eps: rep * sf, approx: false, note: null };
+  if (rep != null) return { eps: preciseSplitEps(facts, year, rep) * sf, approx: false, note: null };
   const ca = classAEps(opts.classFacts ?? null, year, "diluted");
   if (ca != null) return { eps: ca, approx: false, note: FY_EPS_NOTE.classA };
   // 총 희석 EPS 태그 없이 계속·중단영업 주당이익만 공시한 해 — 두 공시값의 합이 공시 총 희석 EPS 다(DELL FY2022,
