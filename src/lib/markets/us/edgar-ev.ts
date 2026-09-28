@@ -378,6 +378,12 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     const pref = partOn(PREFERRED, bal, "first");
     const prefUnits = partOn(PREFERRED_UNITS, bal, "sum");
     if (pref === "unknown" || prefUnits === "unknown") return miss("우선주");
+    // 우선주 장부가를 액면가로만 태깅하는 회사 — AVGO 2021 의무전환우선주: PreferredStockValue 0(주당 0.001달러), 실제 금액은
+    // 청산우선권 37.37억(PreferredStockLiquidationPreferenceValue). EV 에 들어갈 우선주는 청산가치라 발행 주식이 남아 있으면
+    // 둘 중 큰 쪽(블룸버그 대조 2026-09-28 — 블룸버그 우선주 3,737 = 이 값)
+    const prefShares = instantOn(entriesOf(facts, "PreferredStockSharesOutstanding", "shares"), bal);
+    const prefLiq = prefShares != null && prefShares > 0 ? on("PreferredStockLiquidationPreferenceValue", bal) : null;
+    const prefVal = Math.max(pref ?? 0, prefLiq ?? 0);
     const nci0 = partOn(NCI, bal, "first");
     if (nci0 === "unknown") return miss("비지배지분");
     let nci = nci0 ?? 0;
@@ -396,7 +402,7 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
         debtNoncurrent: cp ? null : noncurrent,
         operatingLease,
         cash,
-        preferred: (pref ?? 0) + (prefUnits ?? 0),
+        preferred: prefVal + (prefUnits ?? 0),
         nci,
         debtPartial: partial,
         captiveDebtExcluded: cp ? cp.financialDebt : null,
