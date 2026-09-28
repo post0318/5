@@ -5823,6 +5823,29 @@ async function verifyUs(sym) {
       // 외부가 자기 표기 단위로 반올림해 실었다면 roundHalfAway(exp, 단위) 와 완전히 같을 때만. 둘 이상의 외부 값을 섞는 식(⑦·④)은 완전 일치만
       const eqExp = (exp) => exp != null && (extEq(v, exp) || (unit != null && unit !== 1 && extEq(v, roundHalfAway(exp, unit))));
       const rnd = (exp) => (extEq(v, exp) ? "" : ` · 외부 표기 단위 ${unit} 반올림(0.5 는 0 에서 먼 쪽): round(${exp}) = ${v}`);
+      // ⑪ 외부 = 그 결산기를 처음 실은 10-K 의 원 공시 값(재작성 전), 앱 = 최신 공시(재작성본) — 2026-09-28 실측: WDC FY2023·FY2024 인포맥스
+      //    매출 12,318·13,003 = 샌디스크 분사 재작성 전 원 10-K(앱 6,255·6,317 = 2025 10-K 재작성본), 매출원가·매출총이익도 같은 판본.
+      //    같은 개념의 연간 사실이 공시마다 다르고, 앱 = 최신 공시 값(A층 통과)이며 외부 = 최초 공시 값일 때만 — 허용 오차 없음
+      if (col !== "LTM" && H[col]?.date && aPassed(col, metric) && /^(매출|매출원가|매출총이익)$/.test(metric)) {
+        const cs = metric === "매출" ? ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"]
+          : metric === "매출원가" ? ["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"] : ["GrossProfit"];
+        for (const c of cs) {
+          const L = annualAllAt(c, "USD", H[col].date);
+          if (L.length < 2) continue;
+          const first = L[0], last = L.at(-1);
+          if (first.val !== last.val && extEq(r.ours, last.val) && eqExp(first.val))
+            return { ok: `${n} ${metric} = 재작성 전 원 공시 값 — ${c} ${first.form} ${first.filed} ${first.val}${rnd(first.val)}, 앱 = 최신 공시 ${last.form} ${last.filed} ${last.val}(A층 통과) · 공통모드 아님(SEC 판본으로 독립 재현)` };
+        }
+      }
+      // ⑫ 외부 매출원가 = 앱 + 무형자산 상각(AmortizationOfIntangibleAssets, 차원 없는 연간 값), 매출총이익 = 앱 − 같은 금액 — 외부가 본표 영업비용의
+      //    무형자산 상각 줄을 원가로 옮긴다. 2026-09-28 실측: ORCL FY2023~2026 인포맥스 원가 차 3,582·3,010·2,307·1,671 = 그 해 무형자산 상각 정확 일치
+      if (col !== "LTM" && H[col]?.date && aPassed(col, metric) && /^(매출원가|매출총이익)$/.test(metric)) {
+        const am = annualAllAt("AmortizationOfIntangibleAssets", "USD", H[col].date).at(-1);
+        if (am?.val) {
+          const exp = metric === "매출원가" ? r.ours + am.val : r.ours - am.val;
+          if (eqExp(exp)) return { ok: `${n} ${metric} = 앱 ${metric === "매출원가" ? "+" : "−"} 무형자산 상각 ${am.val}(AmortizationOfIntangibleAssets ${am.form} ${am.filed}) = ${exp}${rnd(exp)} — 외부는 영업비용의 무형자산 상각을 원가에 넣음 · 공통모드 아님` };
+        }
+      }
       // 인포맥스 값 하나(분기·연간) = SEC 식 — 완전 일치 또는 인포맥스 표기 단위 반올림 식
       const iu = imAnnual?.unit ?? 1;
       const imEq = (a, b) => extEq(a, b) || (iu !== 1 && b != null && extEq(a, roundHalfAway(b, iu)));
