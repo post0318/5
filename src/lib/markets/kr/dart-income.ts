@@ -84,6 +84,17 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   const tax = S(C.tax);
   const netIncome = S(C.netIncome);
   const niParent = S(C.niParent);
+  // 비지배지분이 없는 회사는 DART 손익계산서에 "지배기업 소유주지분" 줄 자체를 생략한다(LS마린솔루션 전 기간·한전기술 2022 —
+  // FnGuide 순이익(지배) = 당기순이익, 검증 2026-09-28). 그 기간에 비지배지분 순이익 줄도, 재무상태표 비지배지분 줄도 없을 때만
+  // (없음 증명) 지배주주 귀속 = 당기순이익으로 채우고 칸 주석을 단다. 한쪽이라도 있으면 비운 그대로.
+  const niNci = S({ ids: ["ifrs-full_ProfitLossAttributableToNonControllingInterests"], names: ["비지배지분"] });
+  const bsNci = seriesOf(facts, ["ifrs-full_NoncontrollingInterests"], ["비지배지분"], "BS");
+  const niParentNotes: Record<string, string> = {};
+  for (const l of labels)
+    if (niParent[l] == null && netIncome[l] != null && niNci[l] == null && !bsNci[l]) {
+      niParent[l] = netIncome[l];
+      niParentNotes[l] = "비지배지분 없음(손익·재무상태표에 비지배지분 줄 없음) — 당기순이익 = 지배주주 귀속";
+    }
   const otherToNi = blank();
   for (const l of labels)
     if (pretax[l] != null && tax[l] != null && netIncome[l] != null)
@@ -162,7 +173,7 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     row("(−) 기타", otherToNi),
     row("당기순이익", netIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     ...(labels.some((l) => niParent[l] != null)
-      ? [row("(지배주주 귀속)", niParent, { depth: 2, italic: true, paren: true })]
+      ? [row("(지배주주 귀속)", niParent, { depth: 2, italic: true, paren: true, ...(Object.keys(niParentNotes).length ? { cellNotes: niParentNotes } : {}) })]
       : []),
     row("기본 EPS", epsBasic, { numberFormat: "eps" }),
     row("희석 EPS", epsDil, { numberFormat: "eps" }),
