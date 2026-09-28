@@ -19,7 +19,9 @@ async function importOne(src) {
   let dir = src;
   if (/\.zip$/i.test(src)) {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "bbg-"));
-    execFileSync("tar", ["-xf", src, "-C", dir]); // Windows 10+ tar·GNU tar 모두 zip 을 푼다
+    // Windows 는 PowerShell Expand-Archive(Git Bash 의 GNU tar 는 "C:" 를 원격 호스트로 오인한다), 그 밖은 unzip
+    if (process.platform === "win32") execFileSync("powershell", ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${src.replace(/'/g, "''")}' -DestinationPath '${dir}' -Force`]);
+    else execFileSync("unzip", ["-o", "-q", src, "-d", dir]);
   }
   const pdfs = fs.readdirSync(dir, { recursive: true }).map(String).filter((f) => /\.pdf$/i.test(f));
   const out = [];
