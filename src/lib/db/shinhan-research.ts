@@ -240,6 +240,16 @@ export async function upsertShinhanResearch(
     .toArray();
   const staleStrategyIds = staleIndustryCandidates
     .filter((d) => {
+      // 분류 오류가 곧 영구 삭제로 이어지지 않게(감사 2026-09-28): 화면 분류는
+      // 정규식 부분일치("52주 신고가"→시황, "파이프라인 포트폴리오"→투자전략,
+      // "부채비율"→채권 등)로 흔들리는데, 삭제는 되돌릴 수 없다. 그래서 조기
+      // 삭제는 라벨이 게시판 기본값/전략 라벨이거나 시리즈명·소스 규칙으로
+      // **강제** 분류된 문서에만 적용하고, 업종명이 달린 문서는 분류 결과와
+      // 무관하게 일반 90일 정리에 맡긴다(화면 분류 자체는 그대로 둔다).
+      const forced =
+        isMarketConditionStockname(d.stockName) ||
+        MARKET_CONDITION_SOURCE_MARKETS.has(`${d.source}:${d.market}`);
+      if (!forced && !isGenericOrBoardLabel(d)) return false;
       const t = classifyResearchTopic(d);
       if (t === "이슈분석") return d.date < issueCutoff;
       if (t === "환율분석") return d.date < fxCutoff;

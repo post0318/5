@@ -297,7 +297,12 @@ pruneExcluded(usItems);
 console.log(`✔ 종목 매핑 — 국내 ${krItems.length}건 · 미국 ${usItems.length}건`);
 if (krItems.length + usItems.length === 0) {
   console.error("✗ 파싱 결과 0건. 게시판 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log("  국내 예시:", krItems.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbol})`));
 console.log("  미국 예시:", usItems.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbol})`));
