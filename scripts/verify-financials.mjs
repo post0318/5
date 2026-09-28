@@ -6054,15 +6054,6 @@ async function verifyUs(sym) {
         if (!aPassed(col, metric)) return { guess: "앱 ≠ SEC 본표 판관비·연구개발비 성격 줄 합(A층 미통과) — 원인 판정 전제 없음" };
         const tail = "앱 = SEC 본표 성격 줄 합(A층 정확 일치)";
         if (col === "LTM") {
-          // 블룸버그 LTM = SEC 3개월 분기 4개 합(합계 정확 일치 — 블룸버그는 분기 자료 없음). 실측 IBM LTM 연구개발비 8,753 = 2,082 + 2,187 + 2,173 + 2,311(앱 8,754)
-          if (n === "블룸버그" && L?.date) {
-            const ends = [...new Set([...qEndOf.values()].filter(Boolean))].filter((e) => e <= L.date || dayDiff(e, L.date) <= 7).sort().slice(-4);
-            const qv = ends.map((e) => secSgaQuarter(e, metric));
-            if (qv.length === 4 && qv.every(Boolean)) {
-              const sum = qv.reduce((t0, q) => t0 + q.v, 0);
-              if (eqExp(sum)) return { ok: `블룸버그 LTM ${metric} = SEC 분기 4개 합 ${sum}(${ends.map((e, i) => `${e} ${qv[i].v}(${qv[i].how})`).join(" + ")}) — 앱 LTM ${r.ours}(사업연도 + 당기 누적 − 전년 동기), 차 = 누적과 분기 합의 반올림 차 · 블룸버그는 LTM 합계만(분기별 대조 불가) · ${tail}` };
-            }
-          }
           const qs = sgaQuarterSum(n, metric);
           if (qs) return { ok: `${n} LTM ${metric} = 자기 분기 4개 합, 분기마다 SEC 본표 분기값과 정확 일치(${qs.rows.join(" · ")}) — SEC 분기 합 ${qs.sec} ≠ 앱 LTM ${r.ours}(사업연도 + 당기 누적 − 전년 동기: 회사가 분기·누적을 따로 반올림) · ${tail}` };
         }
@@ -6248,19 +6239,6 @@ async function verifyUs(sym) {
         const rows = qs.map((q) => { const e = [...reimbExQ].find(([k]) => dayDiff(k, q.end) <= 7)?.[1]; return { q, e, ok: e != null && q.v != null && (extEq(q.v, e.v) || (u !== 1 && extEq(q.v, roundHalfAway(e.v, u)))) }; });
         if (qs.length === 4 && rows.every((x) => x.ok) && eqExp(qs.reduce((t0, q) => t0 + q.v, 0)))
           return { ok: `StockAnalysis LTM 매출 = 자기 분기 4개 합, 분기마다 SEC "매출 − 비용 환급 매출"과 정확 일치(${rows.map((x) => `${x.q.end} ${x.q.v} = ${x.e.v}(${x.e.how})`).join(" · ")}) — StockAnalysis 는 분기 매출을 환급 제외로, 연간은 총매출로 싣는다 · 앱 = SEC TTM(총매출)` };
-      }
-      // 블룸버그 LTM 매출 = SEC 3개월 분기 4개 합(4분기 = 사업연도 − 9개월) — 블룸버그는 LTM 합계만 주므로 분기별 대조는 불가, 합계 정확 일치만.
-      //    실측 2026-09-28: CL 21,046 = 5,131 + 5,230 + 5,324 + 5,361(앱 LTM 21,047), IBM 69,096(앱 69,095), ORCL 71,777(앱 71,776)
-      if (metric === "매출" && col === "LTM" && n === "블룸버그" && L?.date && L?.rev != null) {
-        for (const tag of REV_TAGS) {
-          const t = secTtm(tag);
-          if (!t || dayDiff(t.end, L.date) > 7 || !extEq(t.v, L.rev)) continue;
-          const qs = secQuarterSum(tag, L.date);
-          if (!qs) break;
-          const sum = qs.parts.reduce((t0, x) => t0 + x.v, 0);
-          if (eqExp(sum)) return { ok: `블룸버그 LTM 매출 = SEC 3개월 분기 4개 합 ${sum}(${qs.parts.map((x) => `${x.end} ${x.v}`).join(" + ")}) — 앱 LTM(사업연도 + 당기 누적 − 전년 동기) ${r.ours}, 차 = 누적과 분기 합의 반올림 차 · 블룸버그는 LTM 합계만(분기별 대조 불가)` };
-          break;
-        }
       }
       if (metric === "매출" && col === "LTM" && (n === "Yahoo" || n === "인포맥스") && L?.date) {
         const q = r4Quarters(n);
