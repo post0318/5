@@ -343,11 +343,14 @@ for (const r of rows) {
     // 업종명("반도체" 등)·정기 전략 노트 — 종목코드 없음. 포트폴리오/
     // 추천종목/ESG 라벨은 위에서 걸러졌고, IPO/비상장 라벨은 일반 산업분석이
     // 아니라 "비상장 리서치"(unlisted) 대상.
+    // "제약 (350510)"처럼 KB 내부 업종 코드가 붙은 제목은 코드를 떼고 업종명만
+    // 라벨로 남긴다(감사 2026-09-28 — 코드째 저장돼 분류·표시가 어긋났음).
+    const label = tm ? tm[1].trim() : docTitle;
     collected.push({
       id: r.documentid,
       date,
-      title: (r.docTitleSub || docTitle).trim(),
-      stockName: docTitle,
+      title: (r.docTitleSub || label).trim(),
+      stockName: label,
       symbol: null,
       analyst: r.analystNm ?? "",
       opinion: "",

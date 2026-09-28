@@ -6,7 +6,7 @@ import {
   isResearchMarketId,
   type ShinhanResearchDoc,
 } from "@/lib/db/shinhan-research";
-import { searchCorps } from "@/lib/markets/kr/corpcode";
+import { findCorpsByExactName } from "@/lib/markets/kr/corpcode";
 import { isCommonExcludedResearch } from "@/lib/research-exclude";
 import { normalizeIndustryLabel, marketFromIndustryLabel, marketFromTitleLead } from "@/lib/research-sector";
 
@@ -57,12 +57,48 @@ interface RawItem {
   relatedSymbols?: string[];
 }
 
+/**
+ * 리포트에 자주 쓰이는 약칭 → 정식 회사명. 완전일치가 안 될 때만 이걸로 한 번
+ * 더 찾는다. 여기 없는 약칭은 못 푼 것으로 남긴다(symbol null) — "비슷한
+ * 이름"을 고르는 것보다 안 붙이는 쪽이 낫다.
+ */
+const CORP_ALIASES: Record<string, string> = {
+  현대차: "현대자동차",
+  기아차: "기아",
+  하이닉스: "SK하이닉스",
+  LG엔솔: "LG에너지솔루션",
+  포스코: "POSCO홀딩스",
+  포스코홀딩스: "POSCO홀딩스",
+  한전: "한국전력",
+  한국전력공사: "한국전력",
+  SKT: "SK텔레콤",
+  삼바: "삼성바이오로직스",
+  엔씨: "엔씨소프트",
+  카뱅: "카카오뱅크",
+  네이버: "NAVER",
+  현대중공업: "HD현대중공업",
+  두산에너빌: "두산에너빌리티",
+  KT: "케이티",
+};
+
+/**
+ * 이름 → 종목코드. **완전일치만** 인정한다(정규화: 대소문자·공백·(주)).
+ *
+ * 예전엔 완전일치가 없으면 검색 첫 후보를 그냥 썼는데, 그게 리서치 감사
+ * (2026-09-28)에서 오매칭의 주원인이었다 — 현대차→현대차증권, CJ→씨제이
+ * 인터넷(상폐), 삼성물산→000830(2015년 소멸 법인). 첫 후보 폴백을 없애고,
+ * 동명이 2건 이상이면 애매하므로 붙이지 않는다. 약칭은 CORP_ALIASES 로만
+ * 푼다. 종목표 자체도 현재 상장사만 담게 정제했다(build-kr-corpcodes.mjs).
+ */
 function resolveSymbol(stockName: string): string | null {
   const q = stockName.trim();
   if (!q) return null;
-  const candidates = searchCorps("", q);
-  const exact = candidates.find((c) => c.corpName === q);
-  return (exact ?? candidates[0])?.stockCode ?? null;
+  let hits = findCorpsByExactName(q);
+  if (hits.length === 0) {
+    const alias = CORP_ALIASES[q] ?? CORP_ALIASES[q.split(" ").join("")];
+    if (alias) hits = findCorpsByExactName(alias);
+  }
+  return hits.length === 1 ? hits[0].stockCode : null;
 }
 
 export async function POST(req: Request) {
