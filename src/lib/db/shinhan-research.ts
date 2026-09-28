@@ -234,11 +234,38 @@ export async function upsertShinhanResearch(
  * 경유 유안타증권) 의도적으로 별개 카드로 남겨둔다(CLAUDE.md 참고 — 기능상
  * 문제 없는 것으로 이미 합의된 트레이드오프).
  */
+/**
+ * 중복 판정용 제목 정규화. 같은 리포트가 경로에 따라 제목 형식이 다르게
+ * 들어온다(감사 2026-09-28 — 같은 증권사·날짜·종목 중복 225그룹, 제목이 그대로
+ * 같은 건 31그룹뿐):
+ *  - 한경 경유: "HDC(012630) 나의 계절이 왔다"
+ *  - 한화 자체: "[건설/부동산] HDC[012630/Buy] 나의 계절이 왔다"
+ *  - KB 자체:   "나의 계절이 왔다"
+ * 앞에 붙는 [업종] 태그, "종목명(코드)"/"종목명[코드/의견]" 접두, 공백·문장부호
+ * 차이를 걷어내고 소문자로 비교한다. 수집기 쪽(한경)도 헤드라인만 저장하게
+ * 고쳤지만, 보관 기간(90일) 안의 옛 문서는 그대로라 읽기 쪽에서도 맞춘다.
+ */
+export function normalizeTitleForDedupe(title: string): string {
+  let t = title.trim();
+  t = t.replace(/^\[[^\]]{1,40}\]\s*/, ""); // [업종] 태그
+  t = t.replace(/^[^()\[\]]{1,40}\((\d{6})\)\s*/, ""); // 종목명(코드)
+  t = t.replace(/^[^()\[\]]{1,40}\[\d{6}\/[^\]]{0,20}\]\s*/, ""); // 종목명[코드/의견]
+  t = t.replace(/^[^()\[\]]{1,40}\((\d{6})[.\w]*\/[^)]{0,20}\)\s*:?\s*/, ""); // 종목명(코드.KS/의견):
+  // 접두를 걷어낸 뒤에도 [태그]가 남는 형식이 있어 한 번 더(예: 유안타
+  // "티엘비(356860) [[NDR 후기] …" — 실측).
+  t = t.replace(/^\[+[^\]]{1,40}\]\s*/, "");
+  t = t.replace(/[\s"'“”‘’.,:;!?~\-–—·]+/g, "");
+  return t.toLowerCase();
+}
+
 function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
   const seen = new Set<string>();
   const result: ShinhanResearchDoc[] = [];
   for (const d of docs) {
-    const key = `${d.source}|${d.title.trim()}`;
+    // 날짜까지 키에 넣는다 — 다른 날 같은 제목의 정기물(위클리 등)을 잘못
+    // 합치지 않기 위해. 같은 리포트가 경로별로 다른 날짜를 달고 오는 경우는
+    // 실측에서 없었다(중복 225그룹 전부 같은 날짜).
+    const key = `${d.source}|${d.date}|${normalizeTitleForDedupe(d.title ?? "")}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(d);

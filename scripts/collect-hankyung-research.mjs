@@ -176,7 +176,12 @@ function parseItems(html) {
     items.push({
       id: reportIdx,
       date: dateM[1],
-      title,
+      // 자체 수집기들은 헤드라인만 title 로 저장하는데 여기만 "종목명(코드) 헤드라인"
+      // 전체를 저장해 같은 리포트가 source|title 중복 제거에 한 번도 안 걸렸다
+      // (감사 2026-09-28: 같은 증권사·날짜·종목 중복 225그룹, 그중 유안타 65·
+      // 한화 58·KB 36). 종목명·코드는 stockName/symbol 에 따로 있으니 title 은
+      // 헤드라인만 남긴다.
+      title: (tm[3] ?? "").trim() || title,
       stockName: tm[1].trim(),
       symbolHint: tm[2],
       opinion,

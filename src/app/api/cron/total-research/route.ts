@@ -90,6 +90,13 @@ const CORP_ALIASES: Record<string, string> = {
  * 동명이 2건 이상이면 애매하므로 붙이지 않는다. 약칭은 CORP_ALIASES 로만
  * 푼다. 종목표 자체도 현재 상장사만 담게 정제했다(build-kr-corpcodes.mjs).
  */
+/** 출처명 표기 통일(저장 직전 1회). 왼쪽이 들어오는 라벨, 오른쪽이 정식 표기. */
+const SOURCE_ALIASES: Record<string, string> = {
+  한화증권: "한화투자증권",
+  "Goldman Sachs Research": "Goldman Sachs",
+  "BlackRock Research": "BlackRock",
+};
+
 function resolveSymbol(stockName: string): string | null {
   const q = stockName.trim();
   if (!q) return null;
@@ -109,7 +116,12 @@ export async function POST(req: Request) {
     const body = (await req.json()) as { items?: RawItem[]; source?: string; market?: string };
     if (!Array.isArray(body.items)) return Response.json({ error: "items 배열 필요" }, { status: 400 });
     const source = body.source?.trim();
+    // 출처명 정규화 — 한경 컨센서스의 "제공출처" 라벨이 자체 수집기와 다르게
+    // 표기돼 같은 증권사가 둘로 갈라졌다(감사 2026-09-28: 한화증권 46건 vs
+    // 한화투자증권 246건). 배지가 갈라지고 source|title 중복 제거도 못 묶는다.
+    // 저장 직전 이 한 곳에서만 맞춘다.
     if (!source) return Response.json({ error: "source 필요" }, { status: 400 });
+    const sourceCanon = SOURCE_ALIASES[source] ?? source;
     const market = body.market && isResearchMarketId(body.market) ? body.market : "kr";
 
     const now = new Date().toISOString();
@@ -118,8 +130,8 @@ export async function POST(req: Request) {
     const kept = body.items.filter((it) => !isCommonExcludedResearch(`${it.stockName ?? ""} ${it.title ?? ""}`, it.category ?? "기업"));
     const excluded = body.items.length - kept.length;
     const docs: ShinhanResearchDoc[] = kept.map((it) => ({
-      _id: `${source}:${it.id}`,
-      source,
+      _id: `${sourceCanon}:${it.id}`,
+      source: sourceCanon,
       // 국내 게시판으로 들어온 산업 글도 라벨이 국가명으로 시작하면 그 나라 시장("중국 자동차 판매동향" → ch) — 모든 수집기 공통(오너 지시 2026-09-27).
       // 이미 해외 시장으로 온 항목은 건드리지 않는다.
       market: market === "kr" && it.category === "산업" ? (marketFromIndustryLabel(it.stockName) ?? marketFromTitleLead(it.title) ?? market) : market,
