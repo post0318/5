@@ -2895,7 +2895,7 @@ async function secMortgageReit(sym) {
  * 연금. 표준 개념은 개념명으로만, 회사 고유 개념은 라벨로 판정하고, 고유 줄의 주 라벨이 "Depreciation…"/"Amortization
  * of intangible…" 로 시작하면 제외어가 있어도 포함한다(AMZN·ISRG). → { byEnd: Map(결산일 → 합), lines } | { why }
  */
-async function secCashFlowDa(cik, sub) {
+async function secCashFlowDa(cik, sub, G = null) {
   const rk = sub.filings?.recent ?? {};
   const ik = (rk.form ?? []).findIndex((fm) => fm === "10-K");
   if (ik < 0) return { why: "10-K 없음" };
@@ -3000,6 +3000,24 @@ async function secCashFlowDa(cik, sub) {
     const p = ctx.get(/contextRef="([^"]+)"/.exec(m[3])?.[1] ?? "");
     if (p && !vals.has(`${id}|${p}`)) vals.set(`${id}|${p}`, Number(m[4]));
   }
+  // 줄 값 판본 — 최신 10-K 가 과거 연도를 더 거친 단위로 다시 실은 경우(MCD 2023 감가상각비 1,978,200,000(d−5) → 2026 10-K
+  // 1,978,000,000) 그 기간을 실은 공시들의 decimals 로 판정한다(decimalsVintage — 다른 A층 검사와 같은 판정, 값 모양 안 씀)
+  const vintNotes = new Map();
+  for (const [k, v] of [...vals]) {
+    const [id, s, e] = k.split("|");
+    if (!G || !id.startsWith("us-gaap_")) continue;
+    const es = (G[id.slice(8)]?.units?.USD ?? []).filter((x) => x.start === s && x.end === e && x.accn);
+    if (new Set(es.map((x) => x.val)).size < 2) continue;
+    const fs = [];
+    try {
+      for (const x of new Map(es.map((x) => [`${x.accn}|${x.val}`, x])).values()) {
+        const hit = ((await instanceDecimals(cik, x.accn))?.get(`${id.slice(8)}|${s}|${e}`) ?? []).filter((f) => f.v === x.val && f.dec != null);
+        fs.push({ accn: x.accn, filed: x.filed ?? "", val: x.val, dec: hit.length ? Math.max(...hit.map((f) => f.dec)) : null });
+      }
+    } catch { continue; }
+    const dv = decimalsVintage(fs);
+    if (dv.ok && dv.val !== v) { vals.set(k, dv.val); vintNotes.set(e, `${id.slice(8)} 판본 decimals: ${dv.txt} — 최신 10-K 값 ${v} 대신 ${dv.val}`); }
+  }
   const byEnd = new Map();
   for (const [k, v] of vals) { const end = k.split("|").at(-1); byEnd.set(end, (byEnd.get(end) ?? 0) + v); }
   // ── 감가상각 줄에 섞인 손상차손·중단사업 감가상각(오너 결정 2026-09-24 — EBITDA = 영업이익 + 감가상각비는 같은 범위,
@@ -3030,7 +3048,7 @@ async function secCashFlowDa(cik, sub) {
     && !cfMeta.separateImpair.includes(id);
   const isDiscDa = (id) => /Discontinued|DisposalGroup/.test(nm(id)) && /Depreciation\w*Amortization/.test(nm(id)) && !/Accumulated|PerShare/.test(nm(id));
   const isDiscNi = (id) => /^us-gaap_(IncomeLossFromDiscontinuedOperations|DiscontinuedOperationIncomeLossFromDiscontinuedOperation)/.test(id) && !/Share/.test(id);
-  const notes = new Map(), unresolved = new Map();
+  const notes = new Map(vintNotes), unresolved = new Map();
   const lineByEnd = new Map(byEnd); // 조정 전 줄 합(외부 소스 원인 판정 ⑧)
   let anyDisc = false;
   for (const [end, sum0] of byEnd) {
@@ -3615,7 +3633,7 @@ async function verifyUs(sym) {
   else if (CONTENT_DA.has(sym)) cfDaWhy = "콘텐츠 상각 포함 종목(오너 결정) — 현금흐름표 기준과 정의 다름";
   else {
     try {
-      const r = await secCashFlowDa(cik, sub);
+      const r = await secCashFlowDa(cik, sub, G);
       if (r.byEnd) cfDa = r; else cfDaWhy = r.why;
     } catch (e) {
       cfDaWhy = `현금흐름표 계산 구조 조회 실패: ${String(e).slice(0, 60)}`;
