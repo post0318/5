@@ -217,6 +217,21 @@ export function faceStiLines(cal: string, lab: Map<string, string>): { lines: st
   return null;
 }
 
+/** 금융리스의 본표 위치 표시 항목(ASC 842 공시 요구) — "" = 합계, Current·Noncurrent → 그 줄 개념 로컬 이름들 */
+function financeLeaseFaceLoc(xml: string): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const m of xml.matchAll(/<us-gaap:FinanceLeaseLiability(Current|Noncurrent)?StatementOfFinancialPositionExtensibleList\b[^>]*>([^<]*)</g)) {
+    const kind = m[1] ?? "";
+    const set = out.get(kind) ?? new Set<string>();
+    for (const uri of m[2].trim().split(/\s+/)) {
+      const local = uri.split("#").pop();
+      if (local) set.add(local);
+    }
+    out.set(kind, set);
+  }
+  return out;
+}
+
 interface DimValue { axis: string; member: string; val: number }
 type InstantValues = Map<string, Map<string, number>> & { dimOnly?: Set<string>; dimVals?: Map<string, DimValue[]> };
 
@@ -389,10 +404,24 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
     const cfComplete = !fx && allUsGaap && cfDates.size > 0 && [...cfDates].every((d) => faceIds.every((l) => cfVal(l.slice(8), d) !== undefined));
     // 회사 고유 줄·companyfacts 미반영 공시·빈 줄이 있으면 인스턴스에서 읽는다
     let inst: InstantValues | null = null;
+    let xml: string | null = null;
     if (!cfComplete) {
-      const xml = await fetchText(p.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 });
+      xml = await fetchText(p.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 });
       inst = instantValues(xml, new Set([...faceIds, ...noteIds]), cur);
     }
+    // 금융리스가 본표 어느 줄에 들어 있는지(아래 ③ — 이미 차입금 줄 안이면 주석 금융리스를 더하지 않는다). 표시 항목은
+    // 연차보고서 리스 주석에만 있는 경우가 많아(IBM 10-Q 에 없음) 이 공시에 없으면 가장 가까운 옛 공시(10-K)의 것을 쓴다
+    let leaseLoc = new Map<string, Set<string>>();
+    if (!face.hasLease && !face.ifrs) {
+      for (let j = k; j < parsed.length && !leaseLoc.size; j++) {
+        const x = j === k && xml != null ? xml : await fetchText(parsed[j].instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 });
+        leaseLoc = financeLeaseFaceLoc(x);
+      }
+    }
+    const leaseInFace = (kind: "" | "Current" | "Noncurrent") => {
+      const locals = leaseLoc.get(kind);
+      return !!locals?.size && [...locals].every((n) => face.lines.some((l) => l.slice(l.indexOf("_") + 1) === n));
+    };
     const dates = new Set<string>(cfDates);
     if (inst)
       for (const l of face.lines) {
@@ -467,13 +496,24 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
       // 주석 금융리스로 차입금에 더한 몫(비유동·유동) — 운용·금융 합산 줄에서 운용리스 몫을 가를 때 뺀다
       let finNcAdded = 0;
       let finCurAdded = 0;
-      if (!face.hasLease && !face.ifrs) {
+      if (!face.hasLease && !face.ifrs && !leaseInFace("")) {
+        // 공시가 금융리스의 본표 위치를 밝히면(표시 항목 …StatementOfFinancialPositionExtensibleList) 이미 차입금 줄 안에 있는
+        // 쪽은 더하지 않는다 — IBM 은 유동 금융리스를 단기차입금, 비유동을 장기차입금 줄에 넣는데 주석 합계 1,153 을 또 더해
+        // 블룸버그·SEC 본표(61,260)보다 컸다(블룸버그 대조 2026-09-28). 위치를 밝히지 않은 공시는 예전 규칙 그대로
+        const curIn = leaseInFace("Current");
+        const ncIn = leaseInFace("Noncurrent");
         const t = v("us-gaap_FinanceLeaseLiability");
         const cur = v("us-gaap_FinanceLeaseLiabilityCurrent") ?? 0;
         const ncl = v("us-gaap_FinanceLeaseLiabilityNoncurrent") ?? 0;
-        sum += t ?? cur + ncl;
-        finNcAdded = t !== undefined ? t - cur : ncl;
-        finCurAdded = cur;
+        if (curIn || ncIn) {
+          finCurAdded = curIn ? 0 : cur;
+          finNcAdded = ncIn ? 0 : ncl;
+          sum += finCurAdded + finNcAdded;
+        } else {
+          sum += t ?? cur + ncl;
+          finNcAdded = t !== undefined ? t - cur : ncl;
+          finCurAdded = cur;
+        }
         nc += finNcAdded;
       }
       done.add(d);
