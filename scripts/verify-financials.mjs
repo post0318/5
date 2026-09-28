@@ -5824,6 +5824,8 @@ async function verifyUs(sym) {
       const fyNote = (concept, date, first = false) => { const es = (G[concept]?.units?.USD ?? []).filter((y) => y.start && /^10-K/.test(y.form ?? "") && date && dayDiff(y.end, date) <= 7 && (Date.parse(y.end) - Date.parse(y.start)) / 864e5 > 300).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? "")); return es.length ? (first ? es[0] : es.at(-1)).val : null; };
       const noteRules = [];
       if (m === "판관비") noteRules.push(["note-rnd", "앱 − 주석 연구개발비(손익계산서 줄 없음 — 판관비 안) — 외부는 연구개발비를 판관비에서 떼어냄", (c) => { const v = fyNote("ResearchAndDevelopmentExpense", H[c]?.date, true); return v == null ? null : [-v, `− 주석 연구개발비 ${v}`]; }]);
+      // 영업권 손상(AMAT 2025 — StockAnalysis 가 판관비에서 뺌). 손상이 없는 해는 0(항목 없는 해 = 0, 오너 결정 2026-09-28)
+      if (m === "판관비") noteRules.push(["note-gw", "앱 − 영업권 손상 — 외부는 영업권 손상을 판관비에서 뺌", (c) => { const v = fyNote("GoodwillImpairmentLoss", H[c]?.date, true) ?? 0; return [-v, `− 영업권 손상 ${v}`]; }]);
       if (m !== "연구개발비") noteRules.push(["note-adv", `앱 + 주석 광고비 — 외부는 광고비를 ${m}에 넣음`, (c) => { const v = fyNote("AdvertisingExpense", H[c]?.date, true); return v == null ? null : [v, `+ 주석 광고비 ${v}`]; }]);
       noteRules.push(["orig-10k", "성격 줄의 원 10-K 값(앱은 최신 10-K 재작성값) — 외부는 최초 공시 값", (c, e) => {
         const ids = kinds.flatMap((k) => (e[k]?.lines ?? []).map((t) => t.id)).filter((id) => /^us-gaap_/.test(id));
