@@ -2623,7 +2623,8 @@ async function secFaceSga({ cik, sub, sym, natCur = null }) {
         out[k] = { key: keys[0], hows, loose, missing, lines, tot: rs[0][0].tot, v: missing.length ? null : rs.reduce((s, [r, w]) => s + w * r.v, 0), vLatest: missing.length ? null : rs.reduce((s, [r, w]) => s + w * r.vLatest, 0), how };
         continue;
       }
-      const fs = [...new Set(rs.map(([r]) => r.faceAccn))].map((a) => faces.find((g) => g.accn === a));
+      // 파생 성분(분기 = 누적 차·Q4, LTM 분기 합 — 2026-09-28)은 faceAccn 이 없다 — 구성분(comps)의 공시로 펼친다
+      const fs = [...new Set(xs.flatMap(([r], i) => rs[i][0].faceAccn ? [rs[i][0].faceAccn] : r.comps.map((c) => c.faceAccn)))].map((a) => faces.find((g) => g.accn === a)).filter(Boolean);
       let mix = null;
       if (rs.some(([r]) => r.empty)) mix = rs.map(([r]) => `${r.form} ${r.report} ${r.key ? r.key.split("|").map(nm).join("+") : "줄 없음"}`).join(" ≠ ");
       else for (let i = 0; i < fs.length && !mix; i++) for (let j = i + 1; j < fs.length && !mix; j++) {
@@ -7195,7 +7196,7 @@ async function worker() {
       const cm = r.checks.filter((c) => c.status === COMMON).length;
       console.log(`${s.padEnd(7)} ${r.skipped ? `건너뜀: ${r.skipped}` : r.error ? `오류: ${r.error}` : `실패 ${f} · 검증불가 ${n} · 통과 ${p} · 공통모드 ${cm} · 외부 전부일치 ${r.review.filter(extAllMatch).length} · 외부 공통모드 ${r.review.filter(extCommonOnly).length} · 외부 불일치 ${r.review.filter((x) => /불일치/.test(x.verdict ?? "")).length} · 기타검토 ${r.review.filter((x) => !x.matched).length} · 조회실패 ${r.hardErrors?.length ?? 0}${MARKET === "us" ? ` · 매출 ③ 오류 ${r.revErrors?.length ?? 0}` : ""}${COGS_MODE ? ` · 매출원가·매출총이익 ③ 오류 ${r.cogsErrors?.length ?? 0}` : ""}${OPINC_MODE ? ` · 영업이익 ③ 오류 ${r.opincErrors?.length ?? 0}` : ""}${DA_MODE ? ` · 감가상각비 ③ 오류 ${r.daErrors?.length ?? 0}` : ""}${SGA_MODE ? ` · 판관비·연구개발비 ③ 오류 ${r.sgaErrors?.length ?? 0}` : ""}`}`);
     } catch (e) {
-      results.push({ sym: s, error: String(e).slice(0, 160), checks: [], review: [] });
+      if (process.env.VERIFY_STACK) console.error(e?.stack); results.push({ sym: s, error: String(e).slice(0, 160), checks: [], review: [] });
       console.log(`${s.padEnd(7)} 오류: ${String(e).slice(0, 120)}`);
     }
     if (results.length % 10 === 0) writeFileSync(partialFile, JSON.stringify({ base: BASE, market: MARKET, total: syms.length, results }));
