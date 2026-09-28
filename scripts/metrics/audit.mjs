@@ -85,7 +85,8 @@ export function commonModeOf(c) {
 export function extItemOf(c) {
   if (c.layer !== "A" || /환산 환율|^20-F FY |^첫 열 전년 /.test(c.name)) return null;
   const n = c.name.replace(/^(20-F LTM |20-F |LTM |분기 |결산일 |항등식 미검증 열 )/, "");
-  const m = /^매출원가/.test(n) ? "매출원가" : /^매출총이익/.test(n) ? "매출총이익" : /^매출/.test(n) ? "매출" : /^영업이익/.test(n) ? "영업이익"
+  // 판관비·연구개발비(--metric=sga) — 대조 행 본체만(하위 줄·빈칸 행은 외부 값이 없다)
+  const m = /^판관비 앱 = /.test(n) ? "판관비" : /^연구개발비 앱 = /.test(n) ? "연구개발비" : /^매출원가/.test(n) ? "매출원가" : /^매출총이익/.test(n) ? "매출총이익" : /^매출/.test(n) ? "매출" : /^영업이익/.test(n) ? "영업이익"
     : /^순이익/.test(n) ? "순이익" : /^감가상각비/.test(n) ? "감가상각비" : /^(시가총액|주식수)/.test(n) ? "시가총액(결산일)" : null;
   if (!m) return null;
   if (/^\d{4} Q[1-4]$/.test(c.col)) return m === "시가총액(결산일)" ? null : { quarter: true, metric: m };
@@ -224,6 +225,23 @@ export function isDecimalsRounding(earlier, later) {
   return cands.some((c) => (neg ? -c : c) === b);
 }
 /**
+ * 선언 정밀도보다 거친 반올림 재게시(2026-09-28 — MCD 2022 순이익: 2023-02-24·2024-02-22 10-K 6,177,400,000(d−5) → 2025-02-25 10-K
+ * 6,177,000,000 — 같은 공시 안에서 같은 값을 d−6(본표)·d−5(자본변동표)로 함께 선언. 2023 자산총계 56,146,800,000(d−5) → 2024-05-08 10-Q
+ * 56,147,000,000(d−5 만)). 나중 값이 선언 단위(10^−d)보다 큰 10^k(k = 3~10)의 배수이고, 그 단위로 먼저 값을 반올림한 값과 정확히 같으면
+ * (위 반올림 정의 — isDecimalsRounding 을 d = −k 로) 실제로는 10^k 단위 반올림 재게시로 본다 → k | null. 작은 값 오판정 방지 — |나중 값| ≥ 100 × 10^k.
+ * 한계: 진짜 재작성이 우연히 먼저 값의 반올림값과 정확히 같으면 재게시로 오판한다(선언 decimals 가 그 반올림을 부정하는데도 값 모양을 믿는 규칙)
+ */
+export function coarseRounding(earlier, later) {
+  if (later.val === earlier.val || later.dec == null || !Number.isFinite(later.dec) || earlier.dec == null) return null;
+  for (let k = Math.max(3, -later.dec + 1); k <= 10; k++) {
+    const u = 10 ** k;
+    if (Math.abs(later.val) < 100 * u || later.val % u !== 0) continue;
+    if (!(-k < earlier.dec)) continue;
+    if (isDecimalsRounding(earlier, { val: later.val, dec: -k })) return k;
+  }
+  return null;
+}
+/**
  * @param {{ accn: string, filed: string, val: number, dec: number | null }[]} facts 한 개념·한 기간의 공시별 사실(값이 다른 판본 전부)
  * @returns {{ ok: true, val: number, accn: string, represented: { val: number, accn: string, dec: number, of: number }[], restated: { val: number, accn: string, from: number }[], txt: string }
  *          | { ok: false, why: string }}
@@ -239,6 +257,8 @@ export function decimalsVintage(facts) {
   for (const L of order.slice(1)) {
     if (L.val === A.val) { if (L.dec >= A.dec) A = L; continue; }
     if (isDecimalsRounding(A, L)) { represented.push({ val: L.val, accn: L.accn, dec: L.dec, of: A.val }); log.push(`${L.filed} ${L.val}(d${decTxt(L.dec)}) = round(${A.val}) 재게시`); continue; }
+    const k = coarseRounding(A, L);
+    if (k != null) { represented.push({ val: L.val, accn: L.accn, dec: -k, of: A.val, declared: L.dec }); log.push(`${L.filed} ${L.val}(d${decTxt(L.dec)} 선언, 실제 10^${k} 단위) = round(${A.val}, 10^${k}) 재게시`); continue; }
     if (L.accn === A.accn) return { ok: false, why: `같은 공시 ${L.accn} 에 반올림 관계가 아닌 두 값 ${A.val}·${L.val}` };
     restated.push({ val: L.val, accn: L.accn, from: A.val });
     log.push(`${L.filed} ${L.val}(d${decTxt(L.dec)}) 재작성`);

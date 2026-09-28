@@ -2,6 +2,19 @@
 
 브랜치: `wip/verification` (master 에 합치면 Vercel 프로덕션 배포 — 오너 지시 전까지 master 푸시 금지).
 
+## 판관비·연구개발비 검증기 모드 `--metric=sga` (2026-09-28) — docs/metrics/sga.md §7 · verify-us-20260928-110855(+MRVL 111444)
+- `cogs ⊂ opinc ⊂ da ⊂ sga`. A층 = 공시 원본 계산 구조로 판관비·연구개발비 성격 줄 독립 판독(회사별 예외 AMZN·NFLX·KO·DAL 은 검증기 안에 따로 — 공통모드),
+  하위 줄·하위 줄 합·빈칸 사유(본표에 줄 없음·기준 혼합·합 동일·금융사). F층 = Yahoo·SA 따로 + 인포맥스(FactSet 판관비 = R&D 포함) 합 항목.
+- 47종목: A층 통과 1,137 · 공통모드 115 · 실패 2(MRVL FY2022 — 원 10-K d−3 정밀값 vs 나중 10-K d−5 값이 반올림 관계 아님, 앱은 원 공시값 — 오너 결정 대기).
+  외부: 판관비 Yahoo ①186 ②19 ③7 / SA ①128 ②2 구성미분해 81 ③27 · 연구개발비 Yahoo ①143 ②3 / SA ①152 구성미분해 9 ③5 · 합 ①440 ②21 단독이탈 58 ③46.
+  ③ 대부분 DELL·IBM(Yahoo·SA 가 주석 수준 항목을 판관비에서 뺌)·2021 SA·인포맥스 재분류 — 본표 줄 식으로 안 풀림(미결).
+- 검증기 결함 수정: 판관비 원 공시(열 결산일 보고서) 추가 판독(MRVL decimals 판정 근거 누락).
+- 같이 고침(리드 요청): ① 기본 모드 "LTM EBITDA 기대치" — 앱이 LTM 감가상각비를 사유와 함께 비웠으면 검증기 현금흐름표 판독(secFaceDa)으로
+  기준 혼합·계산 불가를 독립 확인해 PASS(DAL 계산 불가·HLT 기준 혼합 확인), 판독 불가면 공통모드. ② decimals 판본 판정에 "선언보다 거친 반올림
+  재게시"(`audit.mjs coarseRounding` — 나중 값이 선언 단위보다 큰 10^k 배수이고 = round(먼저 값, 10^k)) 추가 — MCD 2022·2023 순이익·2023 자산총계
+  (2025-02-25 10-K 가 6,177,000,000 을 d−6·d−5 로 함께 선언) 판정 일치. 부작용: MCD 2022·2023 **감가상각비 A층 실패 2**(앱 1,871·1,978 = 나중 재게시값,
+  원 10-K 0000063908-24-000072 정밀값 1,870.6·1,978.2, 인포맥스 1,870.6 = 정밀값) — 같은 원칙이면 앱 감가상각비 판본 선택 결함.
+
 ## 판관비·연구개발비 앱 전환 (2026-09-28, 엔진판 12) — docs/metrics/sga.md
 - fin 지표 sga·rnd(본표 영업이익 식의 판관비·연구개발비 성격 줄 합, 회사별 예외 metrics/sga-rules.ts: AMZN·NFLX·KO 지정, DAL 제외), 소비처 전환
   (손익계산서·기본 재무제표·20-F LTM), 태그 목록 삭제·eslint SGA_TAG. 유니버스 47종목 저장 완료. 손익계산서 바뀐 칸 486(다른 행·화면 0).
@@ -133,7 +146,7 @@ SEC 본표 줄과 하나씩 맞춰 식이 성립할 때만 ② (예: MDLZ SA 영
 - 로컬 Clerk 키 불일치: `.env.local` 의 CLERK_SECRET_KEY 가 4번 프로젝트 것이었음 → 오너가 교체(공개키 = 운영과 같은 informed-macaque).
 
 ### 검증기(`scripts/verify-financials.mjs`) 모드
-`--metric=cogs` ⊂ `opinc` ⊂ `da` (누적). 닫기 실행: `--metric=da --cogs-rules=scripts/metrics/cogs-rules.json --concurrency=1 --post`.
+`--metric=cogs` ⊂ `opinc` ⊂ `da` ⊂ `sga` (누적). 닫기 실행: `--metric=da --cogs-rules=scripts/metrics/cogs-rules.json --concurrency=1 --post`.
 결과 저장(--post)은 CRON_SECRET 필요 — 로컬은 `.env.local` 에 넣지 말고(수집 스크립트가 운영에 틀린 값 보냄) 개발 서버·검증기 프로세스에만
 환경변수로. 47종목은 7묶음으로 나누고 **묶음마다 개발 서버 재시작**(PC 메모리 16GB 빠듯 — 개발 서버가 3.5GB 까지 커져 백그라운드 작업이
 강제 종료된 적 있음). 표시·분류 규칙만 바꿀 때는 SEC 재조회 없이 저장된 결과 JSON 을 다시 계산해 올린다(전체 재실행 금지).
