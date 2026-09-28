@@ -3566,7 +3566,7 @@ async function verifyUs(sym) {
 
   // 영업이익 태그가 손익계산서 본표(계산 구조)에 실제로 있는가 — 앱이 구조 판독에 실패해 부문 주석 영업이익(DIS 형)으로
   // 조용히 돌아가도 같은 태그와 비교하면 통과해 버린다(재감사 HIGH). 최신 10-K 계산 구조(.xsd 내장 포함)로 따로 확인.
-  let opOnFace = null;
+  let opOnFace = null, pretaxBeforeEq = false; // pretaxBeforeEq: 본표 세전이익 소계가 지분법 차감 전 태그(AMD 형)
   try {
     const rk = sub.filings?.recent ?? {};
     const ik = (rk.form ?? []).findIndex((fm) => fm === "10-K");
@@ -3580,6 +3580,9 @@ async function verifyUs(sym) {
         for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
           const role = m[1].split("/").pop() ?? "";
           if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Segment/i.test(role)) continue;
+          const hb = /#us-gaap_IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"/.test(m[2]);
+          const ha = /#us-gaap_IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"/.test(m[2]);
+          if (hb && !ha) pretaxBeforeEq = true;
           if (/#us-gaap_OperatingIncomeLoss"/.test(m[2])) { opOnFace = true; break; }
         }
       }
@@ -3995,8 +3998,10 @@ async function verifyUs(sym) {
         if (t && /반올림 재태깅|\[판본 #/.test(t.how)) secNotes.push(`${tag}: ${t.how}`);
         return t && dayDiff(t.end, x.date) <= 7 ? t.v : null;
       };
-      const secPt = PRETAX_TAGS.map(secAt).find((v) => v != null) ?? null;
-      add("A", "세전이익 앱 = SEC 세전이익", c, vsSource(pt, secPt, EXACT, secNotes.join(" · ")));
+      // 본표 세전이익 소계가 지분법 차감 전 태그인 회사(AMD)는 그 태그가 기준(다른 태그는 법인세 주석 합계 — 오너 원칙 "본표 기준")
+      const ptTags = pretaxBeforeEq ? ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments", ...PRETAX_TAGS] : PRETAX_TAGS;
+      const secPt = ptTags.map(secAt).find((v) => v != null) ?? null;
+      add("A", "세전이익 앱 = SEC 세전이익", c, vsSource(pt, secPt, EXACT, [pretaxBeforeEq ? "본표 세전이익 = 지분법 차감 전 소계" : "", ...secNotes].filter(Boolean).join(" · ")));
       // 앱 라벨(합성 여부)은 판정 근거가 아니다(감사) — 합성(미결)은 SEC 쪽 근거(최신 10-K 본표에 영업이익 태그 없음)일
       // 때만. SEC 본표에 영업이익 태그가 있는데 앱이 합성했으면 실패.
       const synth = opRowName != null && opRowName !== "영업이익";

@@ -33,6 +33,7 @@ import { withContentAmortization } from "./edgar-content";
 import { withRevenueDims } from "./edgar-revenue-dims";
 import { needsOpIncomeStructure, withIncomeStatementStructure } from "./edgar-is-structure";
 import { withOneOffCharges } from "./edgar-oneoff";
+import { withFacePretax } from "./edgar-pretax";
 import { withBalanceSheetDebt } from "./edgar-bs-structure";
 import { withCashFlowDa } from "./edgar-cf-structure";
 import { withEquityStatementShares } from "./edgar-equity-shares";
@@ -226,7 +227,9 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       // 콘텐츠 상각(NFLX 등 미디어) → 감가상각비에 포함(edgar-content.ts, 오너 결정 2026-09-24)
       const withContent = await step("da", normalized, () => withContentAmortization(cik, normalized, recent, sicN));
       // 총수익 안의 지분법·기타수익 분리(XOM — 영업이익 태그 없는 회사, edgar-revenue-dims.ts)
-      const withDims = await step("opIncome", withContent, () => withRevenueDims(cik, withContent, recent));
+      // 세전이익 = 손익계산서 본표 소계(지분법 이익을 법인세 아래에 두는 AMD 형 — edgar-pretax.ts)
+      const withPt = await step("opIncome", withContent, () => withFacePretax(cik, withContent, recent));
+      const withDims = await step("opIncome", withPt, () => withRevenueDims(cik, withPt, recent));
       // 영업이익 소계가 없는 손익계산서 — 계산 구조로 영업외 항목 분리(DIS·FOXA, edgar-is-structure.ts)
       const withIs = await step("opIncome", withDims, () => withIncomeStatementStructure(cik, withDims, recent, sicN));
       // 손익계산서 별도 줄로 공시된 일회성비용(주석 행, edgar-oneoff.ts)
