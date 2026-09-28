@@ -329,7 +329,8 @@ function faceQuarterSum(L, m) {
   const qv = (S, j) => {
     const c = ytd(S, j);
     if (!c) return null;
-    if (j === 1) return c;
+    // 1분기 = quarterAt(3개월 값 + 회사 재분류 규칙 recastQ1V — 앱 분기 합 LTM 과 같게)
+    if (j === 1) return m.quarterAt(c.end, false) ?? c;
     const d = m.quarterAt(c.end, false);
     if (d) return d;
     const pv = ytd(S, j - 1);
@@ -342,6 +343,55 @@ function faceQuarterSum(L, m) {
   if (list.length !== 4 || list.some((q) => !q || q.err || q.blank)) return null;
   const r = m.comb(list.map((q) => [q, 1]), "분기 4개 합(앱 LTM 과 같은 정의)");
   return r ? { ...r, end: L } : null;
+}
+/**
+ * **회사 재분류 — 1분기(오너 결정 2026-09-29)** — 앱(markets/us/edgar-series.ts recastFirstQuarter · fin/read recastQ1)과 같은 규칙, 검증기 독립 구현(코드
+ * 공유 없음). q = 1분기 3개월 값(최신 공시 판본). 같은 공시에 실린 "6개월 누적 − 2분기 3개월"(가장 나중 공시의 쌍, 역산 시점 = 그 값 쌍이 처음 실린 공시)이
+ * 원공시(가장 이른 공시의 1분기 3개월)와 다르면(허용치 = 비교 값들 중 가장 굵은 표기 단위(백만 상한)의 2배) 재분류 —
+ *  (b) 역산 시점 이후 1분기 3개월을 직접 다시 실은 공시가 있거나 그 재게시 값 = 역산값이면 그 값(= q, 최신 판본) — 근거 "최신공시변경 — 1분기 {form} 공시값 {원래 값}"
+ *  (a) 아니면 역산값 — 근거 "역산추정 — 1분기 {form} 공시값 {원래 값}". 재게시 값 = 원공시면(2분기 쪽이 바뀜) 그대로.
+ * M = { dd, facesOf(pred) → [{ accn, filed, form, r }](공시마다 그 공시가 실은 기간 값), derive(y, d, label), keys: [{ name, get(r), put(out, dr) }] }
+ */
+function recastQ1V(M, q) {
+  if (!q || q.err || q.blank || !q.start || !q.end) return q;
+  const q3 = (e) => M.dd(e) >= 55 && M.dd(e) <= 100;
+  const q1s = M.facesOf((e) => dayDiff(e.start, q.start) <= 6 && dayDiff(e.end, q.end) <= 6 && q3(e)).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""));
+  if (!q1s.length) return q;
+  const orig = q1s[0], latest = q1s.at(-1);
+  const pairs = [];
+  for (const y of M.facesOf((e) => dayDiff(e.start, q.start) <= 12 && Math.abs(M.dd(e) - 182.6) <= 20)) {
+    const d = M.facesOf((e) => dayDiff(e.end, y.r.end) <= 6 && q3(e)).find((x) => x.accn === y.accn);
+    if (d) pairs.push({ y, d });
+  }
+  if (!pairs.length) return q;
+  const best = pairs.reduce((b, x) => (!b || (x.y.filed ?? "") > (b.y.filed ?? "") ? x : b), null);
+  const unit = (v) => { let u = 1; while (u < 1e6 && v % (u * 10) === 0) u *= 10; return u; };
+  const same = (a, b, ...vs) => Math.abs(a - b) <= 2 * Math.max(...vs.map((v) => unit(Math.abs(v))));
+  const mm = (v) => (v / 1e6).toLocaleString("en-US", { maximumFractionDigits: 3 });
+  let out = null;
+  const notes = [];
+  for (const k of M.keys) {
+    const o = k.get(orig.r), l = k.get(latest.r), yv = k.get(best.y.r), dv = k.get(best.d.r);
+    if ([o, l, yv, dv].some((v) => v == null)) continue;
+    const info = pairs.filter((x) => k.get(x.y.r) === yv && k.get(x.d.r) === dv).reduce((mn, x) => ((x.y.filed ?? "") < mn ? x.y.filed ?? "" : mn), best.y.filed ?? "");
+    if (info <= (orig.filed ?? "")) continue;
+    const der = yv - dv;
+    if (same(der, o, o, yv, dv)) continue;
+    const tag = k.name ? `${k.name} ` : "";
+    if (latest !== orig && ((latest.filed ?? "") >= info || same(l, der, l, yv, dv))) {
+      if (same(l, o, l, o)) continue;
+      notes.push(`${tag}최신공시변경 — 1분기 ${orig.form} 공시값 ${mm(o)} → ${latest.form} ${latest.filed} 직접 재게시 ${l}(역산 ${best.y.form} ${best.y.filed} 6개월 ${yv} − 2분기 ${dv} = ${der})`);
+      continue;
+    }
+    const dr = M.derive(best.y.r, best.d.r, `${tag}역산추정 — 1분기 ${orig.form} 공시값 ${mm(o)}: ${best.y.form} ${best.y.filed} 6개월 − 2분기 3개월`);
+    if (!dr) continue;
+    out ??= { ...q };
+    k.put(out, dr);
+    notes.push(`${tag}역산추정 — 1분기 ${orig.form} 공시값 ${mm(o)} → ${der}(${best.y.form} ${best.y.filed} 6개월 ${yv} − 2분기 ${dv}, 역산 시점 ${info})`);
+  }
+  if (!notes.length) return q;
+  const res = out ?? { ...q };
+  return { ...res, recast: notes, how: `${res.how ?? q.how ?? ""} · ${notes.join(" · ")}` };
 }
 /** 영업이익 F층 원인 후보 — 주석에만 있는 일회성 비용 표준 태그(양수 = 비용). 오너 결정 2026-09-28 */
 const NOTE_ONEOFF = ["RestructuringCharges", "RestructuringCosts", "RestructuringCostsAndAssetImpairmentCharges", "RestructuringSettlementAndImpairmentProvisions",
@@ -1203,8 +1253,18 @@ async function secFaceRevenue(cik, sub, G, bank) {
       return nine ? { v: fy.v - nine.v, split: fy.split, how: `사업연도 ${fy.v}(${fy.how}) − 9개월 ${nine.v}(${nine.how})` } : null;
     }
     const q = find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100);
-    if (q) return { v: q.v, split: q.split, how: `3개월 ${q.how}` };
+    if (q) return recastQ1V(REV_M, { v: q.v, split: q.split, start: q.start, end: q.end, how: `3개월 ${q.how}` });
     return null;
+  };
+  // 회사 재분류 1분기(recastQ1V) — 공시마다 그 공시가 실은 본표 매출 줄 값
+  const REV_M = {
+    dd,
+    facesOf: (pred) => faces.filter((f) => !f.any).flatMap((f) => {
+      const e = (pools.get(f.key) ?? []).find((x) => x.accn === f.accn && pred(x));
+      return e ? [{ accn: f.accn, filed: e.filed ?? f.filed, form: e.form ?? f.form, r: { v: e.val, split: !!f.split, start: e.start, end: e.end, how: `${f.form} ${f.report} 본표 매출 줄 ${f.label}` } }] : [];
+    }),
+    derive: (y, d, label) => ({ v: y.v - d.v, split: y.split, start: y.start, end: d.end, how: `${label} — [${y.v}: ${y.how}] − [${d.v}: ${d.how}]` }),
+    keys: [{ name: "", get: (r) => r.v, put: (o, dr) => Object.assign(o, { v: dr.v }) }],
   };
   const ltmAt = (L, old = false) => {
     const fy0 = annualAt(L);
@@ -1650,7 +1710,12 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
     }
   };
   const annualAt = (E) => find((e) => dayDiff(e.end, E) <= 7 && dd(e) >= 300 && dd(e) <= 400);
-  const quarterAt = (E, isQ4) => (isQ4 ? withMix(q4Raw(E)) : find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100));
+  const quarterAt = (E, isQ4) => (isQ4 ? withMix(q4Raw(E)) : recastQ1V({
+    dd,
+    facesOf: (pred) => faces.map((f) => ({ accn: f.accn, filed: f.filed ?? "", form: f.form, r: one(f, pred) })).filter((x) => x.r && !x.r.err && x.r.start && x.r.type !== "D"),
+    derive: (y, d, label) => comb([[y, 1], [d, -1]], label),
+    keys: [{ name: "매출원가", get: (r) => r.cogs, put: (o, dr) => { o.cogs = dr.cogs; } }, { name: "매출총이익", get: (r) => r.gp, put: (o, dr) => { o.gp = dr.gp; } }],
+  }, find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100)));
   const q4Raw = (E) => {
     const fy = annualAt(E);
     if (!fy || fy.cogs == null) return fy;
@@ -2009,7 +2074,12 @@ async function secFaceOpinc({ cik, sub, facts, unit, foreign, revFace }) {
   };
   const annualAt = (E) => find((e) => dayDiff(e.end, E) <= 7 && dd(e) >= 300 && dd(e) <= 400);
   const quarterAt = (E, isQ4) => {
-    if (!isQ4) return find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100);
+    if (!isQ4) return recastQ1V({
+      dd,
+      facesOf: (pred) => faces.map((f) => ({ accn: f.accn, filed: f.filed ?? "", form: f.form, r: one(f, pred) })).filter((x) => x.r && !x.r.err && !x.r.blank && x.r.start),
+      derive: (y, d, label) => comb([[y, 1], [d, -1]], label),
+      keys: [{ name: "", get: (r) => r.v, put: (o, dr) => Object.assign(o, dr) }],
+    }, find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100));
     const fy = annualAt(E);
     if (!fy || fy.err || fy.blank) return fy;
     const nine = find((e) => dayDiff(e.start, fy.start) <= 5 && dd(e) >= 250 && dd(e) <= 290 && e.end < fy.end);
@@ -2168,6 +2238,8 @@ function cfDaAdjust(f, s, e, sum) {
  * 감가상각비 SEC 기대값 모델 → { annualAt(E), quarterAt(E, isQ4), ltmAt(L), extend(E, kind), faces } | { why }.
  * 결과: { v(조정 후 · decimals 판본), vLatest(최신 공시 값 그대로), lineSum, adj, unres?, start, end, lines, excl, comps, how }
  */
+/** 앱 edgar-ev.ts DA_LTM_FALLBACK 과 같은 문구 — LTM 감가상각비 분기 합이 기준 혼합이라 종전 식으로 낸 칸의 주석 */
+const DA_LTM_FALLBACK = "분기 기준 혼합 — 사업연도 + 당기 누적 − 전년 동기 식";
 async function secFaceDa({ cik, sub, content, natCur = null }) {
   // 20-F: 원통화 단위·연차보고서만(분기 현금흐름표 없음 — LTM 은 "20-F LTM = Yahoo 분기" 검사가 따로 본다)
   const unitRe = natCur ? new RegExp(natCur, "i") : /usd/i;
@@ -2212,6 +2284,7 @@ async function secFaceDa({ cik, sub, content, natCur = null }) {
     // 기간에 가까운 공시부터(원공시 → 후속 공시)
     more.sort((a, b) => Math.abs(Date.parse(a.report) - t) - Math.abs(Date.parse(b.report) - t));
     for (const p of more.slice(0, kind === "FY" ? 3 : 4)) await addFiling(p);
+    proveBasis(); // 새로 읽은 공시까지 기준 증명 다시
   };
   if (!faces.length) return { why: `최근 정기공시 ${picks.length}건 현금흐름표 판독 실패 — ${skipped.map((x) => x.txt).join(" · ")}` };
   const dd = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
@@ -2244,7 +2317,7 @@ async function secFaceDa({ cik, sub, content, natCur = null }) {
       v: sum - a.amt, vLatest: sumL - a.amt, lineSum: sum, adj: a.amt, adjNote: a.note, unres: a.unres, start: p.start, end: p.end, faceAccn: f.accn,
       lines, excl, comps: [{ start: p.start, end: p.end, k: 1, faceAccn: f.accn }],
       how: [`${f.form} ${f.report} 현금흐름표 줄 ${lines.map((t) => `${DA_NM(t.id)} ${t.v}`).join(" + ")}${content ? "(콘텐츠 상각 줄 포함 — 오너 결정)" : ""}`,
-        zero.length ? `그 기간 값 없는 줄 0: ${zero.join("·")}` : "", a.note, ...notes].filter(Boolean).join(" · "),
+        zero.length ? `그 기간 값 없는 줄 0: ${zero.join("·")}` : "", a.note, f.proof ?? "", ...notes].filter(Boolean).join(" · "),
     };
   };
   const find = (pred) => { for (const f of faces) { const r = one(f, pred); if (r) return r; } return null; };
@@ -2263,6 +2336,50 @@ async function secFaceDa({ cik, sub, content, natCur = null }) {
     return null;
   };
   const mixCache = new Map();
+  // ── 기준 증명(오너 결정 2026-09-29 — 앱 edgar-cf-structure.ts 와 같은 규칙, 독립 구현) ── 나중 공시가 줄을 합쳐 과거 기간을 다시 실었고(ISRG FY2025 10-K~
+  // isrg:AmortizationOfIntangibleAssetsContractAcquisitionAndOtherAssets) 그 값이 옛 공시의 줄 합(제외했던 상각 줄 포함 — 2025 10-Q AmortizationOfIntangibleAssets +
+  // CapitalizedContractCostAmortization)과 정확히 같으면 같은 기준 — 옛 공시(와 같은 줄 구성의 공시)에 그 제외 줄을 더한다(모든 기간에 값이 있을 때만)
+  const lines0 = new Map();
+  const proveBasis = () => {
+    for (const f of faces) if (!lines0.has(f.accn)) lines0.set(f.accn, f.lines);
+    for (const f of faces) { f.lines = lines0.get(f.accn); f.proof = null; }
+    const keyOf = (f) => [...lines0.get(f.accn)].sort().join("+");
+    const proven = new Map();
+    for (const A of faces) {
+      if (proven.has(keyOf(A))) continue;
+      const cand = A.excl.map((t) => t.id).filter((id) => CF_DA_RE.test(DA_NM(id)));
+      if (!cand.length) continue;
+      search: for (const B of faces) {
+        if ((B.filed ?? "") <= (A.filed ?? "")) continue;
+        const LA = lines0.get(A.accn), LB = lines0.get(B.accn);
+        const onlyB = LB.filter((l) => !LA.includes(l)), onlyA = LA.filter((l) => !LB.includes(l));
+        if (!onlyB.length) continue;
+        for (const per of A.periods) {
+          if (!B.periods.has(per)) continue;
+          const vb = onlyB.map((id) => B.vals.get(`${id}|${per}`)?.val), va = onlyA.map((id) => A.vals.get(`${id}|${per}`)?.val);
+          if (vb.some((v) => v == null) || va.some((v) => v == null)) continue;
+          const sb = vb.reduce((t, v) => t + v, 0), sa = va.reduce((t, v) => t + v, 0);
+          const ex = cand.filter((id) => A.vals.has(`${id}|${per}`));
+          for (let m = 1; m < 1 << Math.min(ex.length, 4); m++) {
+            const sub = ex.filter((_, i) => m & (1 << i));
+            const sx = sa + sub.reduce((t, id) => t + A.vals.get(`${id}|${per}`).val, 0);
+            if (Math.abs(sx - sb) < 0.5) {
+              proven.set(keyOf(A), { sub, ev: `${B.form} ${B.report} ${onlyB.map(DA_NM).join("+")} ${sb} = ${A.form} ${A.report} ${[...onlyA, ...sub].map(DA_NM).join("+")} ${sx}(${per.replace("|", "~")})` });
+              break search;
+            }
+          }
+        }
+      }
+    }
+    for (const f of faces) {
+      const pr = proven.get(keyOf(f));
+      if (!pr || ![...f.periods].every((per) => pr.sub.every((id) => f.vals.has(`${id}|${per}`)))) continue;
+      f.lines = [...lines0.get(f.accn), ...pr.sub];
+      f.proof = `기준 증명(합친 줄 = 옛 줄 합, 제외 줄 ${pr.sub.map(DA_NM).join("·")} 포함): ${pr.ev}`;
+    }
+    mixCache.clear();
+  };
+  proveBasis();
   const mixOf = (fa, fb) => {
     if (fa.accn === fb.accn) return null;
     const key = [fa.accn, fb.accn].sort().join("|");
@@ -2312,7 +2429,12 @@ async function secFaceDa({ cik, sub, content, natCur = null }) {
       return comb([[fy, 1], [nine, -1]], "사업연도 − 9개월");
     }
     const q = find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100);
-    if (q) return { ...q, how: `3개월 ${q.how}` };
+    if (q) return recastQ1V({
+      dd,
+      facesOf: (pred) => faces.map((f) => ({ accn: f.accn, filed: f.filed ?? "", form: f.form, r: one(f, pred) })).filter((x) => x.r && x.r.start),
+      derive: (y, d, label) => comb([[y, 1], [d, -1]], label),
+      keys: [{ name: "", get: (r) => r.v, put: (o, dr) => Object.assign(o, dr) }],
+    }, { ...q, how: `3개월 ${q.how}` });
     const cum = find((e) => dayDiff(e.end, E) <= 3 && dd(e) > 100 && dd(e) <= 290);
     if (!cum) return null;
     const prev = find((e) => dayDiff(e.start, cum.start) <= 5 && e.end < cum.end && dd(e) >= dd(cum) - 100 && dd(e) <= dd(cum) - 80);
@@ -2322,6 +2444,11 @@ async function secFaceDa({ cik, sub, content, natCur = null }) {
     const fy0 = annualAt(L);
     if (fy0) return fy0;
     const qsum = old ? null : faceQuarterSum(L, { find, dd, annualAt, quarterAt, comb });
+    // 분기 합 구성 공시끼리 기준 혼합(기준 증명 못 함)이면 종전 식 — 그 구성 공시가 한 기준일 때만, 앱 칸 주석 DA_LTM_FALLBACK(오너 결정 2026-09-29)
+    if (qsum?.mix) {
+      const o = ltmAt(L, true);
+      if (o && !o.mix) return { ...o, fallback: DA_LTM_FALLBACK, how: `${DA_LTM_FALLBACK} — 분기 합은 기준 혼합(${qsum.mix}) · ${o.how}` };
+    }
     if (qsum) return qsum;
     const fy = find((e) => dd(e) >= 300 && dd(e) <= 400 && e.end < L && (Date.parse(L) - Date.parse(e.end)) / 864e5 < 370);
     if (!fy) return null;
@@ -2641,7 +2768,12 @@ async function secFaceSga({ cik, sub, sym, natCur = null }) {
   };
   const annualAt = (E) => find((e) => dayDiff(e.end, E) <= 7 && dd(e) >= 300 && dd(e) <= 400);
   const quarterAt = (E, isQ4) => {
-    if (!isQ4) return find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100);
+    if (!isQ4) return recastQ1V({
+      dd,
+      facesOf: (pred) => faces.map((f) => ({ accn: f.accn, filed: f.filed ?? "", form: f.form, r: one(f, pred) })).filter((x) => x.r && x.r.start),
+      derive: (y, d, label) => comb([[y, 1], [d, -1]], label),
+      keys: [{ name: "판관비", get: (r) => r.sga?.v ?? null, put: (o, dr) => { o.sga = dr.sga; } }, { name: "연구개발비", get: (r) => r.rnd?.v ?? null, put: (o, dr) => { o.rnd = dr.rnd; } }],
+    }, find((e) => dayDiff(e.end, E) <= 3 && dd(e) >= 80 && dd(e) <= 100));
     const fy = annualAt(E);
     if (!fy) return null;
     const nine = find((e) => dayDiff(e.start, fy.start) <= 5 && dd(e) >= 250 && dd(e) <= 290 && e.end < fy.end);
@@ -4624,6 +4756,8 @@ async function verifyUs(sym) {
         return;
       }
       if (e0.unres) { add("A", name, col, { status: NA, note: `미결 — ${e0.unres}(앱 ${app ?? "빈칸"}, SEC 줄 합 ${e0.lineSum}) · ${e0.how}`, app, src: null }); return; }
+      // LTM 종전 식 폴백 — 값 대조와 함께 칸 주석(DA_LTM_FALLBACK)이 있어야 한다
+      if (e0.fallback && app != null && !(row?.cellNotes?.[key] ?? "").includes(e0.fallback)) { add("A", name, col, { status: FAIL, note: `LTM 분기 합 기준 혼합 → 종전 식인데 앱 칸 주석에 "${e0.fallback}" 없음 · ${e0.how}`, app, src: e0.v }); return; }
       // 20-F — 원통화 현금흐름표 줄 합 × 기간 평균 환율(연준 H.10, 매출원가 외화 대조와 같은 방식)
       let k = 1, fxNote = "";
       if (foreign) {

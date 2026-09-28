@@ -147,6 +147,8 @@ export interface StmtLine {
   why?: ReadWhy;
   /** 파생 칸(Q4·누적 차·LTM·환산)의 입력 — 없으면 열 출처 = 칸 출처 */
   inputs?: DerivedInput[];
+  /** 칸 주석 — 회사 재분류 1분기(read/index.ts recastQ1) */
+  note?: string;
 }
 /** 유형 D 매출원가 구성 규칙의 항(규칙표는 3층 metrics/cogs-rules.ts, 값 판독은 2층 assemble/is.ts readCogsTerms) */
 export interface CogsTerm {

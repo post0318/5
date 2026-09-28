@@ -73,6 +73,8 @@ export interface CashFlowDaStructure {
   separateImpair: string[];
   /** 감가상각 줄이 계속사업 소계 아래(또는 계속사업 이익에서 출발)에 있다 — 중단사업 감가상각이 이미 빠져 있다 */
   continuing: boolean;
+  /** 상각 계열이지만 제외어(계약획득원가 등)로 뺀 줄 — 나중 공시가 합친 줄과 같은 기준인지 증명할 때만 쓴다(withCashFlowDa) */
+  excluded: string[];
 }
 
 /** 현금흐름표 영업활동 조정 항목 중 감가상각·상각 줄. 현금흐름표 역할이 없으면 null */
@@ -92,6 +94,7 @@ export function cashFlowDaLines(cal: string, lab: Map<string, string[]>): CashFl
     const out: string[] = [];
     const impairLines: string[] = [];
     const separateImpair: string[] = [];
+    const excluded: string[] = [];
     const contFlags: boolean[] = [];
     const seen = new Set<string>();
     const walk = (id: string, depth: number, cont: boolean) => {
@@ -125,12 +128,13 @@ export function cashFlowDaLines(cal: string, lab: Map<string, string[]>): CashFl
           if (impairText) impairLines.push(a.to);
         } else {
           if (impairText && !/inventor/i.test(`${concept} ${labs.join(" ")}`)) separateImpair.push(a.to);
+          if (DA.test(text)) excluded.push(a.to);
           walk(a.to, depth + 1, childCont);
         }
       }
     };
     walk(root, 0, /ContinuingOperations/.test(root));
-    return { lines: out, impairLines, separateImpair, continuing: contFlags.length > 0 && contFlags.every(Boolean) };
+    return { lines: out, impairLines, separateImpair, continuing: contFlags.length > 0 && contFlags.every(Boolean), excluded };
   }
   return null;
 }
@@ -298,11 +302,16 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
   /** 중단사업 감가상각을 차감한 기간이 있었는가 */
   let discAdjusted = false;
   /** 판독한 구조(공시별 감가상각 줄·현금흐름표 기간·그 공시 현금흐름표의 줄 값) — 기준 혼합 판정용 */
-  const structs: { accn: string; lines: string[]; periods: Set<string>; vals: Map<string, number> }[] = [];
+  const structs: { accn: string; filed: string; lines: string[]; periods: Set<string>; vals: Map<string, number> }[] = [];
+  /** 같은 기준으로 증명된 줄 묶음 — 옛 공시 줄 구성(정렬 키) → 더할 제외 줄(아래 기준 증명) */
+  const proven = new Map<string, string[]>();
+  /** 공시·기간 → 그 공시가 만든 기간 값(증명이 나중에 난 옛 공시 값을 고치는 데 — 아래 루프 뒤) */
+  const produced = new Map<string, FactUnitEntry>();
   for (const f of filings) {
     const struct = f.lines;
-    const lines = struct?.lines;
-    if (!struct || !lines?.length) continue;
+    const declared = struct?.lines;
+    if (!struct || !declared?.length) continue;
+    let lines = declared;
     // 이 공시의 현금흐름표 기간 — 같은 날 제출된 영업활동 현금흐름(당기·전기, 10-Q 는 누적)
     const periods = new Set<string>();
     for (const e of g.NetCashProvidedByUsedInOperatingActivities?.units?.USD ?? [])
@@ -324,7 +333,7 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
       const xml = await fetchText(`${f.base}/${f.instName}`, { headers: H, revalidate: false, timeoutMs: 30_000 });
       if (!cfComplete) {
         const roots = ["us-gaap_NetCashProvidedByUsedInOperatingActivities", "us-gaap_NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"];
-        inst = durationValues(xml, new Set([...lines, ...roots]));
+        inst = durationValues(xml, new Set([...lines, ...struct.excluded, ...roots]));
         // 현금흐름표 기간만(영업활동 현금흐름이 실린 기간) — 줄 개념이 주석에만 실은 기간(ISRG 10-Q 무형상각 3개월 값 3.2M)을
         // 감가상각 줄 합으로 쓰지 않는다(2026-09-27, 분기 열 확장 때 발견 — 3개월 값이 그 분기 감가상각비로 잡혔다)
         const cfPeriods = new Set(roots.flatMap((r) => [...(inst!.get(r)?.keys() ?? [])]));
@@ -335,14 +344,49 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
     // 이 공시 현금흐름표에 실린 줄 값(원본 또는 같은 공시의 companyfacts 값) — 주석 값·다른 공시 값은 쓰지 않는다
     const own = new Map<string, number>();
     for (const p of periods)
-      for (const l of lines) {
+      for (const l of [...lines, ...struct.excluded]) {
         const [a, b] = p.split("|");
         const v =
           inst?.get(l)?.get(p) ??
           (l.startsWith("us-gaap_") ? (g[l.slice(8)]?.units?.USD ?? []).find((e) => e.start === a && e.end === b && e.filed === f.filed)?.val : undefined);
         if (v !== undefined) own.set(`${l}|${p}`, v);
       }
-    structs.push({ accn: f.accn, lines, periods, vals: own });
+    // **기준 증명(오너 결정 2026-09-29)** — 나중 공시가 줄을 합쳐(ISRG FY2025 10-K~: isrg:AmortizationOfIntangibleAssetsContractAcquisitionAndOtherAssets
+    // 한 줄) 과거 기간을 다시 실었고, 그 값이 이 공시의 줄 합(제외했던 계약획득원가 상각 줄 포함 — 2025 10-Q: AmortizationOfIntangibleAssets +
+    // CapitalizedContractCostAmortization)과 **정확히** 같으면 같은 기준으로 본다: 이 공시 값에 그 제외 줄을 더한다. 증명 예: 2025 1분기 12.1 =
+    // 3.4 + 8.7, 2025 상반기 24.4 = 6.6 + 17.8, FY2024 54.4 = 16.7 + 37.7, FY2023 53.2 = 20.2 + 33.0. 겹치는 기간은 나중 공시 값이 먼저 쓰인다
+    // (공시는 최신순, done). 증명된 줄 구성은 겹치는 기간이 없는 같은 구성의 옛 공시(2025 3분기 10-Q)에도 쓴다 — 그 공시의 모든 기간에 제외
+    // 줄 값이 있을 때만. 증명 못 하면 그대로(기준 혼합 → edgar-ev.ts daTtmCell 이 종전 식 또는 공란)
+    if (struct.excluded.length) {
+      const key = [...declared].sort().join("+");
+      const complete = (xs: string[]) => [...periods].every((p) => xs.every((l) => own.has(`${l}|${p}`)));
+      let add = proven.get(key);
+      if (add && !complete(add)) add = undefined;
+      if (!add)
+        search: for (const B of structs) {
+          if (B.filed <= f.filed) continue;
+          const onlyB = B.lines.filter((l) => !lines.includes(l)), onlyA = lines.filter((l) => !B.lines.includes(l));
+          if (!onlyB.length) continue;
+          for (const p of periods) {
+            const vb = onlyB.map((l) => B.vals.get(`${l}|${p}`)), va = onlyA.map((l) => own.get(`${l}|${p}`));
+            if (vb.some((v) => v === undefined) || va.some((v) => v === undefined)) continue;
+            const sb = (vb as number[]).reduce((x, y) => x + y, 0), sa = (va as number[]).reduce((x, y) => x + y, 0);
+            const ex = struct.excluded.filter((l) => own.has(`${l}|${p}`));
+            for (let m = 1; m < 1 << Math.min(ex.length, 4); m++) {
+              const sub = ex.filter((_, i) => m & (1 << i));
+              if (Math.abs(sa + sub.reduce((x, l) => x + own.get(`${l}|${p}`)!, 0) - sb) < 0.5 && complete(sub)) {
+                add = sub;
+                break search;
+              }
+            }
+          }
+        }
+      if (add) {
+        proven.set(key, add);
+        lines = [...lines, ...add];
+      }
+    }
+    structs.push({ accn: f.accn, filed: f.filed ?? "", lines, periods, vals: own });
     for (const p of periods) {
       if (done.has(p)) continue;
       const [start, end] = p.split("|");
@@ -371,8 +415,21 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
         }
       }
       out.push({ start, end, val: sum, fy: 0, fp: fullYear ? "FY" : "Q", form: f.form, filed: f.filed, basis: f.accn });
+      produced.set(`${f.accn}|${p}`, out[out.length - 1]);
       unresolvedOf.set(out[out.length - 1], unresolvedDisc ? "disc" : null);
     }
+  }
+  // 증명이 더 옛 공시에서 나서(공시는 최신순) 그보다 먼저 처리된 같은 줄 구성의 공시(ISRG 2025 3분기 10-Q — 나중 공시와 겹치는 기간 없음)는
+  // 여기서 제외 줄을 더한다 — 그 공시의 모든 기간에 제외 줄 값이 있을 때만
+  for (const x of structs) {
+    const add = proven.get([...x.lines].sort().join("+"));
+    if (!add || add.some((l) => x.lines.includes(l))) continue;
+    if (![...x.periods].every((p) => add.every((l) => x.vals.has(`${l}|${p}`)))) continue;
+    for (const p of x.periods) {
+      const e = produced.get(`${x.accn}|${p}`);
+      if (e) e.val += add.reduce((t, l) => t + x.vals.get(`${l}|${p}`)!, 0);
+    }
+    x.lines = [...x.lines, ...add];
   }
   // 조정 금액을 확인하지 못한 **누적(분기) 기간**은 내보내지 않는다(2026-09-27) — 분기 열·LTM 은 누적 차라, 조정한 누적과 조정 못 한 누적을
   // 빼면 엉뚱한 값이 된다(WDC 2025 3분기 −7M: 9개월은 중단사업 감가상각 차감, 6개월은 태그 없어 미차감). 그 칸은 공란 + 사유(edgar-ev.ts

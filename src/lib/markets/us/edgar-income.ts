@@ -132,7 +132,6 @@ export function buildUsIncome(
     if (!fy?.start || !nine?.start || Math.abs(days(fy.start, nine.start)) > 12) return none;
     return { value: fy.val - nine.val, parts: [fy, nine], reason: null };
   };
-  const quarterValue = (entries: FactUnitEntry[], i: number, flow: boolean): number | null => quarterParts(entries, i, flow).value;
 
   let periods: FinancialPeriod[];
   if (quarterly) {
@@ -168,11 +167,20 @@ export function buildUsIncome(
     if (!m[l]) m[l] = t;
     WHY.set(o, m);
   };
+  /** 회사 재분류 1분기 칸 주석(edgar-series.ts recastFirstQuarter)을 파생 행에 물려줄 때 붙일 원 행 이름 — 없으면 물려주지 않는다(원래 값이 어느 줄 값인지 모름) */
+  const ROW_NAME = new WeakMap<Record<string, number | null>, string>();
+  const RECAST_NOTE = /^(역산추정|최신공시변경) — /;
   const inheritWhy = (out: Record<string, number | null>, ...ins: Record<string, number | null>[]) => {
     for (const l of labels)
       for (const i of ins) {
         const w = WHY.get(i)?.[l];
         if (w && (i[l] == null ? out[l] == null : true)) {
+          if (RECAST_NOTE.test(w)) {
+            const nm = ROW_NAME.get(i);
+            if (!nm) continue;
+            note(out, l, `${nm} ${w}`);
+            break;
+          }
           note(out, l, w);
           break;
         }
@@ -185,8 +193,8 @@ export function buildUsIncome(
     if (quarterly) {
       qShow.forEach((q, i) => {
         for (const c of concepts) {
-          const v = quarterValue(entriesOf(facts, c, unit), i, unit === "USD");
-          if (v != null) { out[q.label] = v; break; }
+          const r = quarterParts(entriesOf(facts, c, unit), i, unit === "USD");
+          if (r.value != null) { out[q.label] = r.value; if (r.note) note(out, q.label, r.note); break; }
         }
       });
       return out;
@@ -370,7 +378,9 @@ export function buildUsIncome(
     const entries = netIncomeToParentEntries(facts);
     if (quarterly) {
       qShow.forEach((q, i) => {
-        out[q.label] = quarterValue(entries, i, true);
+        const r = quarterParts(entries, i, true);
+        out[q.label] = r.value;
+        if (r.note) note(out, q.label, r.note);
       });
       return out;
     }
@@ -531,11 +541,13 @@ export function buildUsIncome(
             o[q.label] = null;
             WHY.set(o, { ...(WHY.get(o) ?? {}), [q.label]: DA_BASIS_MIX });
           } else if (o[q.label] == null && r.reason) WHY.set(o, { ...(WHY.get(o) ?? {}), [q.label]: r.reason });
+          else if (o[q.label] != null && r.note) WHY.set(o, { ...(WHY.get(o) ?? {}), [q.label]: r.note });
         });
       else if (labels.includes(LTM)) {
         const c = daTtmCell(facts);
         o[LTM] = c.value;
         if (c.value == null && c.reason) WHY.set(o, { ...(WHY.get(o) ?? {}), [LTM]: c.reason });
+        else if (c.value != null && c.note) WHY.set(o, { ...(WHY.get(o) ?? {}), [LTM]: c.note });
       }
     }
     // LTM — 최근 연도엔 있는데 LTM 에 없는 합계 태그가 있으면(구성항목 합이면 구성 태그도) 나머지로 낸 값은 부분값 — 공란
@@ -550,6 +562,7 @@ export function buildUsIncome(
   const oneOff = unavailableOn(facts, "oneOff") ? blank() : val(["OneOffChargesDerived"]);
   // 감가상각비 구성요소가 없으면(매핑 누락 — IFRS 20-F 등) EBITDA 도 공란(0 으로
   // 보지 않음, Yahoo 분기 LTM 여부와 무관 — 독립 감사 지적 2026-09-25 NVO·SAP)
+  for (const [r, nm] of [[grossProfit, "매출총이익"], [pretax, "세전이익"], [opIncome, "영업이익"], [tax, "법인세"], [netIncome, "당기순이익"], [da, "감가상각비"]] as const) ROW_NAME.set(r, nm);
   const ebitda = blank();
   for (const l of labels)
     if (opIncome[l] != null && da[l] != null) ebitda[l] = opIncome[l]! + da[l]!;

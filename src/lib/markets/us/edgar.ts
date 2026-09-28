@@ -23,7 +23,7 @@ import {
   type TtmFlows,
 } from "../types";
 import { type FactEntry, ttmFlow } from "./edgar-fundamentals";
-import { dropRoundedRetags, entriesOf, instantOn, ltmAnchor, splitFactorsByYear, fiscalYearOf } from "./edgar-series";
+import { dropRoundedRetags, entriesOf, instantOn, ltmAnchor, markNoRecast, splitFactorsByYear, fiscalYearOf } from "./edgar-series";
 import { buildEvResolver, daAnnualByYear, daTtm, daTtmCell, opIncomeLtm, SYN_OP_INCOME, withOpIncome, type EvContext } from "./edgar-ev";
 import { loadCaptiveDebt } from "./edgar-captive";
 import { buildShareResolver } from "./edgar-shares";
@@ -283,6 +283,8 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
         sourceUnavailable: Object.keys(sourceUnavailable).length ? sourceUnavailable : undefined,
         ...(warnings.length ? { fetchWarnings: warnings } : {}),
       }));
+      // 현금흐름표 개념(감가상각비 제외)은 회사 재분류 1분기 규칙 대상 밖 — 배열 표시(edgar-series.ts markNoRecast)
+      markNoRecast(data);
       // 불완전한 결과가 연달아 나오면(늘 실패하는 원본) 짧은 캐시를 2분·4분·8분 …(최대 1시간)으로 늘린다
       const streak = warnings.length ? (degradedStreak.get(cik) ?? 0) + 1 : 0;
       if (streak) degradedStreak.set(cik, streak);

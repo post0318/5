@@ -1,6 +1,6 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
-import { annualByYear, entriesOf, ltmAnchor, ltmFlowOf, ltmGapConcept, provenAbsentAt, ttmOf } from "./edgar-series";
+import { annualByYear, entriesOf, ltmAnchor, ltmFlowOf, ltmGapConcept, provenAbsentAt, ttmCombine, ttmOf } from "./edgar-series";
 import { revQuarterAt, type RevCol } from "./fin-revenue";
 import { OPINC_NOTE } from "@/lib/fin";
 import { opUnitsFrom } from "../op-units";
@@ -529,7 +529,10 @@ export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
  * LTM 감가상각비와 공란 사유 — 모든 화면(하이라이트·재무분석·손익계산서·현금흐름표·TTM·개요)이 이것(또는 daTtm)만 쓴다.
  * 본표 판독 회사는 본표 LTM(사업연도 + 당기 누적 − 전년 동기)만, 구성 공시끼리 감가상각 줄 기준이 섞이면 공란 + DA_BASIS_MIX.
  */
-export function daTtmCell(facts: CompanyFacts): { value: number | null; reason: string | null } {
+/** LTM 감가상각비 칸 주석 — 분기 합 구성 공시끼리 줄 기준이 섞여 종전 식으로 낸 값(오너 결정 2026-09-29) */
+export const DA_LTM_FALLBACK = "분기 기준 혼합 — 사업연도 + 당기 누적 − 전년 동기 식";
+
+export function daTtmCell(facts: CompanyFacts): { value: number | null; reason: string | null; note?: string } {
   if (unavailableOn(facts, "da")) return { value: null, reason: "원본 조회 실패 — 감가상각비 공란" };
   const sc = daStructConcept(facts);
   if (!sc) {
@@ -538,7 +541,17 @@ export function daTtmCell(facts: CompanyFacts): { value: number | null; reason: 
   }
   const r = ltmFlowOf(entriesOf(facts, sc), ltmAnchor(facts));
   if (r.value == null) return { value: null, reason: DA_LTM_NO_STRUCT };
-  if (daBasisMixed(facts, [r.fy, r.cur, r.prior])) return { value: null, reason: DA_BASIS_MIX };
+  // 분기 합 LTM(오너 결정 2026-09-28)이면 그 구성 공시끼리 판정 — 섞였으면 종전 식(사업연도 + 당기 누적 − 전년 동기)의 구성 공시가
+  // 한 기준일 때 그 값 + 칸 주석, 종전 식도 섞였으면 공란(오너 결정 2026-09-29). ISRG: 2025-09-30 10-Q 만 줄 구성이 달라 분기 합은
+  // 섞이고, 종전 식(FY2025 10-K·2026 2분기 10-Q·2025 2분기 10-Q)은 그 공시를 쓰지 않는다
+  if (r.parts && daBasisMixed(facts, r.parts)) {
+    if (r.fy && !daBasisMixed(facts, [r.fy, r.cur, r.prior])) {
+      const v = ttmCombine(r.fy, r.cur, r.prior);
+      if (v != null) return { value: v, reason: null, note: DA_LTM_FALLBACK };
+    }
+    return { value: null, reason: DA_BASIS_MIX };
+  }
+  if (!r.parts && daBasisMixed(facts, [r.fy, r.cur, r.prior])) return { value: null, reason: DA_BASIS_MIX };
   return { value: r.value, reason: null };
 }
 

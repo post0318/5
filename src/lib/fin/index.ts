@@ -52,6 +52,13 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
   const { opinc, opex } = opincOpex(cols, reader.profile, gp);
   // 판관비·연구개발비(본표 영업이익 식의 판관비·연구개발비 성격 줄 — docs/metrics/sga.md)
   const { sga, rnd } = sgaRnd(cols, reader.profile);
+  // 회사 재분류 1분기 칸 주석(read/index.ts recastQ1) — 줄 하나를 그대로 쓴 지표 칸에 줄 주석을 싣는다(다른 정의 메모가 있으면 그것 우선)
+  for (const s of [rev, cogs, gp, opinc, opex, sga, rnd])
+    for (const a of cols) {
+      const mv = s.values[a.col.key];
+      const ln = mv?.line && mv.v != null && !mv.note ? a.lines.find((l) => l.id === mv.line) : null;
+      if (ln?.note) s.values[a.col.key] = { ...mv!, note: ln.note };
+    }
   const at = new Date().toISOString();
   // 파생값 입력 참조 압축·자기 검사(입력 합 = 값) — 불일치는 값을 두고 issues.der·경고로(조용히 통과시키지 않음)
   const derErr = await finalizeDerived(reader, cols, [rev, cogs, gp, opinc, opex, sga, rnd], at);

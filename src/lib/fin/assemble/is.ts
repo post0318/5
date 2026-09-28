@@ -396,7 +396,7 @@ async function assembleColumn(
     pos.set(l.id, lines.length);
     const label = labelOf(l.id, l.preferredLabel, labelSrc.labels, reader);
     if (!labelsOut.has(l.id)) labelsOut.set(l.id, label);
-    lines.push({ id: l.id, label, parent: null, w: 0, role: null, v: cell.v, ...(cell.why ? { why: cell.why } : {}), ...(cell.inputs ? { inputs: cell.inputs } : {}) });
+    lines.push({ id: l.id, label, parent: null, w: 0, role: null, v: cell.v, ...(cell.why ? { why: cell.why } : {}), ...(cell.inputs ? { inputs: cell.inputs } : {}), ...(cell.note ? { note: cell.note } : {}) });
     raws.push(cell.raw);
   }
   // 계산 부모·가중치

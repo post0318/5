@@ -332,7 +332,8 @@ export function buildUsAnalysis(
     const o = blank();
     for (const y of years) o[`${y}Y`] = daByYear.get(y) ?? null;
     o[LTM] = daTtm(facts);
-    if (o[LTM] == null) note(o, LTM, daTtmCell(facts).reason);
+    const c = daTtmCell(facts);
+    note(o, LTM, o[LTM] == null ? c.reason : (c.note ?? null));
     return o;
   })();
   const ocf = flow(["NetCashProvidedByUsedInOperatingActivities"]);

@@ -529,6 +529,8 @@ export function buildUsHighlights(
       const oi = opViaFin ? opLtm : ltm(E.opIncome);
       o[ltmIdxC] = oi.value == null ? oi.reason : daTtm(facts) == null ? daTtmCell(facts).reason : null;
     }
+    // LTM 감가상각비를 종전 식으로 낸 경우(분기 기준 혼합 — edgar-ev.ts DA_LTM_FALLBACK) 칸 주석
+    else if (ltmIdxC >= 0) o[ltmIdxC] = daTtmCell(facts).note ?? null;
     // 사업연도 열 — fin 영업이익이 빈칸이면 그 사유(정의 대기 등)
     if (opViaFin)
       columns.forEach((c, i) => {

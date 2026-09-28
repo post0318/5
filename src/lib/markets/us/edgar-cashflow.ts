@@ -2,7 +2,7 @@ import "server-only";
 import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
+import { inheritNoRecast, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
 import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, pickDa, pickDaPeriod } from "./edgar-ev";
 import { revQuarterLabel } from "./fin-revenue";
 import { isFinancialCompany } from "./edgar-financial";
@@ -38,7 +38,7 @@ function firstConcept(facts: CompanyFacts, concepts: string[]): FactUnitEntry[] 
       out.push(e);
     }
   }
-  return out;
+  return inheritNoRecast(out, concepts.map((c) => entriesOf(facts, c)));
 }
 
 /** 사업연도별 duration 값. */
@@ -215,6 +215,8 @@ export function buildUsCashFlow(
   const ltmWhy = new WeakMap<Record<string, number | null>, string>();
   /** 분기 칸 주석(값이 빈 칸의 사유 — 누적 차에 필요한 직전 누적 없음 등) */
   const qWhy = new WeakMap<Record<string, number | null>, Record<string, string>>();
+  /** 값이 있는 분기 칸 주석 — 회사 재분류 역산("공시수정 — 1분기 10-Q 공시값 …", edgar-series.ts recastFirstQuarter) */
+  const qNote = new WeakMap<Record<string, number | null>, Record<string, string>>();
   const anchor = ltmAnchor(facts);
   /** 분기 모드 — 열별 값과 구성 항목(감가상각비 기준 혼합 판정용) */
   let quarterPartsOf: ((concepts: string[]) => Record<string, QuarterParts>) | null = null;
@@ -248,11 +250,14 @@ export function buildUsCashFlow(
       const parts = quarterPartsOf!(concepts);
       const out: Record<string, number | null> = {};
       const why: Record<string, string> = {};
+      const notes: Record<string, string> = {};
       for (const [l, r] of Object.entries(parts)) {
         out[l] = r.value;
         if (r.value == null && r.reason) why[l] = r.reason;
+        if (r.value != null && r.note) notes[l] = r.note;
       }
       if (Object.keys(why).length) qWhy.set(out, why);
+      if (Object.keys(notes).length) qNote.set(out, notes);
       return out;
     };
   } else {
@@ -296,6 +301,7 @@ export function buildUsCashFlow(
     const m: Record<string, string> = {};
     if (w && labels.includes(LTM) && v[LTM] == null) m[LTM] = w;
     for (const [l, t] of Object.entries(qWhy.get(v) ?? {})) if (v[l] == null && !m[l]) m[l] = t;
+    for (const [l, t] of Object.entries(qNote.get(v) ?? {})) if (v[l] != null && !m[l]) m[l] = t;
     return Object.keys(m).length ? { cellNotes: m } : {};
   };
   // 최근 연도엔 있는데 LTM 만 빈 값(분기 공시에 없음·Yahoo 분기 미매핑)은 합산·차감에서 0 으로 보지 않는다 — 부분 합·"기타"
@@ -361,6 +367,7 @@ export function buildUsCashFlow(
         const sc = daStructConcept(facts);
         const cf = sc ? valOf([sc]) : blank();
         v = {};
+        if (qNote.get(cf)) qNote.set(v, qNote.get(cf)!);
         // 본표 판독이 원본 조회 실패로 빠졌으면 공란 — 태그 규칙 값으로 대체하지 않는다(sec-unavailable.ts)
         for (const l of labels) {
           const strict = !!sc && (mode === "quarter" || l === LTM);
@@ -386,7 +393,7 @@ export function buildUsCashFlow(
             if (c.value == null) {
               daBlank.add(LTM);
               if (c.reason) ltmWhy.set(v, c.reason);
-            }
+            } else if (c.note) qNote.set(v, { ...(qNote.get(v) ?? {}), [LTM]: c.note });
           }
         }
         // 최근 연도엔 있는데 LTM 에 없는 합계 태그가 있으면(구성항목 합이면 구성 태그도) 나머지로 낸 값은 부분값 — 공란

@@ -17,6 +17,26 @@ export function shiftYear(iso: string, n: number): string {
   return `${Number(y) + n}-${m}-${d}`;
 }
 
+/**
+ * 회사 재분류 1분기 규칙(recastFirstQuarter) 대상 밖 — 현금흐름표 개념(감가상각비 제외, 오너 결정 2026-09-29 "현금흐름표는 감가상각비"). 현금흐름표가
+ * 누적만 싣는 회사는 2분기 3개월 값이 주석 표 값이라(주식보상비용 — GOOG·META·ISRG·MAR) 6개월 누적과 빼면 정의가 섞인다. 로더(edgar.ts)가 개념
+ * 이름으로 배열에 표시하고(markNoRecast), 분기·LTM 함수가 배열만 보고 판정 — 화면마다 같은 판정.
+ */
+const NO_RECAST = new WeakSet<FactUnitEntry[]>();
+const CF_NO_RECAST_RE = /^(NetCashProvidedBy|PaymentsTo|PaymentsFor|PaymentsOf|ProceedsFrom|RepaymentsOf|IncreaseDecrease|ShareBasedCompensation$|OtherNoncash|DeferredIncomeTaxExpenseBenefit$|DeferredIncomeTaxesAndTaxCredits$|CashCashEquivalents|EffectOfExchangeRate)/;
+export function markNoRecast(facts: CompanyFacts): void {
+  for (const [c, o] of Object.entries(facts.facts["us-gaap"] ?? {}))
+    if (CF_NO_RECAST_RE.test(c)) for (const arr of Object.values(o.units ?? {})) NO_RECAST.add(arr);
+}
+/** 병합 배열 — 입력 중 하나라도 대상 밖이면 대상 밖 */
+export function inheritNoRecast(out: FactUnitEntry[], srcs: FactUnitEntry[][]): FactUnitEntry[] {
+  if (srcs.some((s) => NO_RECAST.has(s))) NO_RECAST.add(out);
+  return out;
+}
+export function recastAllowed(entries: FactUnitEntry[]): boolean {
+  return !NO_RECAST.has(entries);
+}
+
 export function entriesOf(
   facts: CompanyFacts,
   concept: string,
@@ -45,7 +65,7 @@ export function firstConcept(
       out.push(e);
     }
   }
-  return out;
+  return inheritNoRecast(out, concepts.map((c) => entriesOf(facts, c, unit)));
 }
 
 /**
@@ -301,6 +321,8 @@ export const QUARTER_NO_PREV_YTD = "분기 누적 차에 필요한 직전 누적
 
 export interface QuarterParts {
   value: number | null;
+  /** 값이 공시 3개월 값이 아닌 재분류 역산값일 때 칸 주석(recastFirstQuarter) */
+  note?: string | null;
   /** 값을 만든 항목(직접 단일분기 1개, 누적 차 2개 — 누적 · 직전 누적) */
   parts: FactUnitEntry[];
   /** value 가 null 인 이유(값이 원래 없으면 null) */
@@ -316,6 +338,8 @@ export function singleQuarterParts(
   entries: FactUnitEntry[],
   col: QuarterCol,
   prevCol: QuarterCol | undefined,
+  /** 회사 재분류 1분기 규칙 적용 — 기본은 배열 표시(markNoRecast: 현금흐름표 개념은 감가상각비만) */
+  recast = recastAllowed(entries),
 ): QuarterParts {
   const interim = entries.filter(
     (e) => INTERIM_FORMS.includes(e.form) && e.fp !== "FY" && e.start,
@@ -326,7 +350,13 @@ export function singleQuarterParts(
       Math.abs(days(e.start!, e.end)) <= 100 &&
       Math.abs(days(col.end, e.end)) <= 6,
   );
-  if (direct) return { value: direct.val, parts: [direct], reason: null };
+  if (direct) {
+    // 1분기(3개월 = 사업연도 누적)면 이후 공시의 누적과 모순되는지(회사 재분류) 본다 — 모순이면 최신 누적에서 역산
+    // (1분기 판정은 recastFirstQuarter 안에서 — 이 분기 시작일로 시작하는 6·9개월 누적이 있어야 사업연도 첫 분기)
+    const rc = recast ? recastFirstQuarter(interim, direct.start!, direct) : null;
+    if (rc) return { value: rc.value, parts: rc.parts, reason: null, note: rc.note };
+    return { value: direct.val, parts: [direct], reason: null };
+  }
   // 2) YTD 차감
   const ytd = (end: string) =>
     interim
@@ -336,6 +366,10 @@ export function singleQuarterParts(
   const cur = ytd(col.end);
   if (!cur) return { value: null, parts: [], reason: null };
   const firstQuarter = Math.abs(days(cur.start!, cur.end)) <= 100;
+  if (firstQuarter && recast) {
+    const rc = recastFirstQuarter(interim, cur.start!, cur);
+    if (rc) return { value: rc.value, parts: rc.parts, reason: null, note: rc.note };
+  }
   if (!prevCol) {
     // 회계연도 첫 분기로 추정 (start 가 fy 시작 근처면 YTD == 단일분기)
     return Math.abs(days(col.fyStartApprox, cur.start!)) <= 20 && firstQuarter
@@ -347,6 +381,60 @@ export function singleQuarterParts(
   if (!prev || Math.abs(days(cur.start!, prev.start!)) > 20)
     return firstQuarter ? { value: cur.val, parts: [cur], reason: null } : { value: null, parts: [], reason: QUARTER_NO_PREV_YTD };
   return { value: cur.val - prev.val, parts: [cur, prev], reason: null };
+}
+
+/**
+ * **회사 재분류 — 1분기(오너 결정 2026-09-29)**. 회사가 이후 공시에서 과거 분기를 재분류하면(합계 불변, 줄 사이 이동) 1분기 3개월
+ * 공시값이 이후 누적과 모순된다. 두 상태:
+ *  (a) 역산추정 — 같은 사업연도 6개월 누적을 실은 **한 공시** 안에서 1분기 = 6개월 누적 − 2분기 3개월(서로 다른 공시 값을 섞지 않는다 —
+ *      WDC 는 샌디스크 분사로 나중 공시가 9개월만 재작성해, 섞으면 매출 −471 같은 값이 나왔다). 가장 나중 공시의 쌍을 쓰되, 그 쌍이
+ *      처음 실린 공시(역산 시점)가 1분기 3개월 값의 최신 공시보다 나중이고 역산값이 다르면 역산값 + "역산추정 — 1분기 {form} 공시값 {원래 값}".
+ *      예: MSFT FY2026 현금흐름표 "Depreciation, amortization, and other" — 1분기 10-Q 13,061, 2분기 10-Q("We have recast certain
+ *      prior period amounts on our consolidated cash flows statements") 6개월 17,345 − 2분기 9,198 = 8,147(분기 합 = 연간 38,534).
+ *  (b) 최신공시변경 — 나중 공시(다음 해 같은 분기 10-Q 의 전년 열 등)가 1분기 3개월 값을 직접 다시 실었고, 그 공시가 역산 시점
+ *      이후이거나 역산값과 같으면 그 값(앱 기본 = 최신 판본) + "최신공시변경 — 1분기 {form} 공시값 {원래 값}". 역산 근거 이후의 직접
+ *      공시는 역산값과 달라도 공시값이 우선. 직접 공시값이 원공시와 같으면(1분기가 아니라 2분기 쪽이 바뀐 것 — BE 2022 감가상각비) null.
+ *      예: IBM 2021 1분기 매출 10-Q 17,730 → 2022 1분기 10-Q 전년 열 13,187(킨드릴 분사 재작성, 2분기 10-Q 역산 13,187과 같음).
+ * 재분류가 없으면(역산값 = 공시값) null — 종전과 같다. 반올림 차는 모순으로 보지 않는다 — 허용치 = 비교하는 값들 중 가장 굵은 표기 단위의
+ * 2배(MCD 2023 1분기 매출: 원공시 5,897.8(0.1 백만 단위) vs 이후 공시 백만 단위 12,395 − 6,498 = 5,897 — 반올림 차 1).
+ */
+export function recastFirstQuarter(
+  interims: FactUnitEntry[],
+  fyStart: string,
+  q1: FactUnitEntry,
+): { value: number; parts: FactUnitEntry[]; note: string } | null {
+  const q1s = interims
+    .filter((e) => e.start && Math.abs(days(q1.start!, e.start)) <= 6 && Math.abs(days(q1.end, e.end)) <= 6 && days(e.start, e.end) >= 55 && days(e.start, e.end) <= 100)
+    .sort((x, y) => (x.filed ?? "").localeCompare(y.filed ?? ""));
+  const orig = q1s[0] ?? q1, latest = q1s.at(-1) ?? q1;
+  // 6개월 누적과 2분기 3개월을 **같은 공시**에 실은 공시 중 가장 나중 것
+  const six = interims.filter((e) => e.start && Math.abs(days(fyStart, e.start)) <= 12 && Math.abs(days(e.start, e.end) - 2 * 91.3) <= 20);
+  let best: { y: FactUnitEntry; d: FactUnitEntry } | null = null;
+  for (const y of six) {
+    const d = interims.find((e) => e.start && e.filed === y.filed && e.form === y.form && (e.basis ?? "") === (y.basis ?? "") && Math.abs(days(y.end, e.end)) <= 6 && days(e.start, e.end) >= 55 && days(e.start, e.end) <= 100);
+    if (d && (!best || (y.filed ?? "") > (best.y.filed ?? ""))) best = { y, d };
+  }
+  if (!best) return null;
+  // 역산 근거의 시점 = 지금 쓰는 6개월·2분기 값 쌍이 처음 실린 공시 — 다음 해 2분기 10-Q 가 전년 열로 같은 값을 되풀이한 것은 새 정보가 아니다
+  // (MRVL FY2023: 2분기 10-Q(2022-08) 6개월 432.4 − 2분기 211.7 = 220.7 ≠ 1분기 235.7, 그런데 다음 해 1분기 10-Q(2023-05)가 1분기를 235.7 로
+  // 다시 실었다 — 역산보다 나중의 직접 공시라 그 값)
+  const b = best;
+  const info = six
+    .filter((y) => y.val === b.y.val && interims.some((e) => e.filed === y.filed && e.form === y.form && (e.basis ?? "") === (y.basis ?? "") && e.val === b.d.val && e.start === b.d.start && e.end === b.d.end))
+    .reduce((m, y) => ((y.filed ?? "") < m ? (y.filed ?? "") : m), b.y.filed ?? "");
+  if (info <= (orig.filed ?? "")) return null;
+  const derived = best.y.val - best.d.val;
+  // 표기 단위 — 끝자리 0 때문에 과대 판정되지 않게 백만 단위로 상한(AMD 2024 1분기 판관비 620 은 백만 단위 공시)
+  const unit = (v: number) => { let u = 1; while (u < 1e6 && v % (u * 10) === 0) u *= 10; return u; };
+  const same = (a: number, b: number, ...es: FactUnitEntry[]) => Math.abs(a - b) <= 2 * Math.max(...es.map((e) => unit(e.val)));
+  if (same(derived, orig.val, orig, best.y, best.d)) return null; // 재분류 없음
+  const m = (v: number) => (v / 1e6).toLocaleString("en-US", { maximumFractionDigits: 3 });
+  // (b) 1분기 3개월 값을 나중에 직접 다시 실은 공시 — 역산 근거 이후이거나 역산값과 같으면 그 값
+  if (latest !== orig && ((latest.filed ?? "") >= info || same(latest.val, derived, latest, best.y, best.d))) {
+    if (same(latest.val, orig.val, latest, orig)) return null;
+    return { value: latest.val, parts: [latest], note: "최신공시변경 — 1분기 " + orig.form + " 공시값 " + m(orig.val) };
+  }
+  return { value: derived, parts: [best.y, best.d], note: "역산추정 — 1분기 " + orig.form + " 공시값 " + m(orig.val) };
 }
 
 export function singleQuarter(
@@ -494,6 +582,8 @@ export interface LtmFlow {
   fy: FactUnitEntry | null;
   cur: FactUnitEntry | null;
   prior: FactUnitEntry | null;
+  /** 분기 합 LTM 을 만든 항목(기준 혼합 판정용 — edgar-ev.ts daBasisMixed). 종전 식이면 없음 */
+  parts?: FactUnitEntry[];
 }
 
 const anchorCache = new WeakMap<object, string | null>();
@@ -537,7 +627,7 @@ export function ltmAnchor(facts: CompanyFacts): string | null {
  *  - 당기 누적은 있는데 전년 동기 누적이 없으면 공란 — LTM_NO_QUARTER(사업연도 값으로 대신하지 않음)
  *  - 사업연도 뒤 정기공시가 아직 없으면(anchor ≈ FY 말) LTM = 사업연도 값(정의상 같은 기간)
  */
-export function ltmFlowOf(entries: FactUnitEntry[], anchor: string | null): LtmFlow {
+export function ltmFlowOf(entries: FactUnitEntry[], anchor: string | null, recast = recastAllowed(entries)): LtmFlow {
   const none = (reason: string | null): LtmFlow => ({ value: null, reason, fy: null, cur: null, prior: null });
   const annuals = entries
     .filter((e) => e.val != null && e.fp === "FY" && isFullYearDuration(e) && ANNUAL_FORMS.includes(e.form))
@@ -568,9 +658,9 @@ export function ltmFlowOf(entries: FactUnitEntry[], anchor: string | null): LtmF
     .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
   if (!prior) return none(LTM_NO_QUARTER);
   // LTM = 최근 4개 분기 합(오너 결정 2026-09-28 "LTM 분기합" — fin/read ltmCol 과 같은 규칙). Yahoo 분기로 만든 20-F LTM(ltmQ)은 종전 식
-  const qs = fy.ltmQ == null && cur.form !== YAHOO_Q_FORM && prior.form !== YAHOO_Q_FORM ? quarterSumLtm(interims, fy, cur) : null;
-  const v = qs ?? ttmCombine(fy, cur, prior);
-  return { value: v, reason: v == null ? LTM_YAHOO_GAP : null, fy, cur, prior };
+  const qs = fy.ltmQ == null && cur.form !== YAHOO_Q_FORM && prior.form !== YAHOO_Q_FORM ? quarterSumLtm(interims, fy, cur, recast) : null;
+  const v = qs?.value ?? ttmCombine(fy, cur, prior);
+  return { value: v, reason: v == null ? LTM_YAHOO_GAP : null, fy, cur, prior, ...(qs ? { parts: qs.parts } : {}) };
 }
 
 /**
@@ -578,7 +668,7 @@ export function ltmFlowOf(entries: FactUnitEntry[], anchor: string | null): LtmF
  * (edgar-income.ts quarterParts)과 같은 규칙이라 분기 열 4개 합 = LTM. 회사가 연간·누적·분기를 따로 반올림해 종전 식("사업연도 + 당기 누적
  * − 전년 동기")과 ±1(백만) 어긋났다(CL 2026 Q2 매출 21,047 → 21,046 = 블룸버그·Yahoo). 분기 하나라도 못 만들면 null(종전 식)
  */
-function quarterSumLtm(interims: FactUnitEntry[], fy: FactUnitEntry, cur: FactUnitEntry): number | null {
+function quarterSumLtm(interims: FactUnitEntry[], fy: FactUnitEntry, cur: FactUnitEntry, recast = true): { value: number; parts: FactUnitEntry[] } | null {
   if (!fy.start || !cur.start) return null;
   const k = Math.round(days(cur.start, cur.end) / 91.3);
   if (k < 1 || k > 3) return null;
@@ -587,19 +677,26 @@ function quarterSumLtm(interims: FactUnitEntry[], fy: FactUnitEntry, cur: FactUn
   const ytd = (s: string, j: number): FactUnitEntry | null | 0 =>
     j === 0 ? 0 : newest(interims.filter((e) => e.start && Math.abs(days(s, e.start)) <= 12 && Math.abs(days(e.start, e.end) - j * 91.3) <= 20)) ?? null;
   /** 사업연도 시작 s 의 j 분기(1~3) 값 */
+  const parts: FactUnitEntry[] = [];
   const quarter = (s: string, j: number): number | null => {
     const c = ytd(s, j), p = ytd(s, j - 1);
     if (!c) return null;
     const direct = newest(interims.filter((e) => e.start && Math.abs(days(c.end, e.end)) <= 6 && days(e.start, e.end) >= 80 && days(e.start, e.end) <= 100));
-    if (direct) return direct.val;
-    return p === null ? null : c.val - (p === 0 ? 0 : p.val);
+    const q1 = direct ?? (j === 1 ? c : null);
+    // 1분기는 재분류 역산(화면 분기 열 singleQuarterParts 와 같은 규칙)
+    if (j === 1 && q1 && recast) { const rc = recastFirstQuarter(interims, s, q1); if (rc) { parts.push(...rc.parts); return rc.value; } }
+    if (direct) { parts.push(direct); return direct.val; }
+    if (p === null) return null;
+    parts.push(c, ...(p === 0 ? [] : [p]));
+    return c.val - (p === 0 ? 0 : p.val);
   };
   let sum = 0;
   for (let j = 1; j <= k; j++) { const v = quarter(cur.start, j); if (v == null) return null; sum += v; }
   for (let j = k + 1; j <= 3; j++) { const v = quarter(fy.start, j); if (v == null) return null; sum += v; }
   const nine = ytd(fy.start, 3);
   if (!nine) return null;
-  return sum + fy.val - nine.val;
+  parts.push(fy, nine);
+  return { value: sum + fy.val - nine.val, parts };
 }
 
 /** 회사의 최근 사업연도 결산일(연간 공시의 자산총계 기준일) */

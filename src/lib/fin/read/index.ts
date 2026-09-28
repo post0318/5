@@ -77,6 +77,8 @@ export interface CellValue {
   /** 파생 값(구성 사실 2개 이상 또는 환산)의 입력 — 값 = Σ op × 사실 × 환율 */
   inputs?: DerivedInput[];
   gaps: number;
+  /** 칸 주석 — 회사 재분류 1분기(recastQ1: "역산추정 — …" / "최신공시변경 — …") */
+  note?: string;
 }
 export interface FilingStructure {
   shape: StatementShape | null;
@@ -464,7 +466,18 @@ export class UsReader {
     let fxWhy: ReadWhy | undefined;
     const inputs: DerivedInput[] = [];
     let other = false; // 이 줄 개념의 그 공시 값이 아닌 사실(차원 값·개념 대체·앞선 판본 정밀값)을 읽음
-    for (const s of col.segments) {
+    let note: string | undefined;
+    const used: Part[] = [];
+    for (const s0 of col.segments) {
+      // 1분기 3개월 구간 — 회사 재분류(recastQ1). 역산이면 그 구간을 같은 공시의 6개월 누적 − 2분기 3개월로(LTM 분기 합에도 같은 값).
+      // 주석은 분기 열에만(LTM 칸은 값만 — markets/us/edgar-series.ts quarterSumLtm 과 같게)
+      let s = s0;
+      if (!get && s0.parts.length === 1 && s0.parts[0].role === "q" && CF_NS.has(qname.split(":")[0])) {
+        const rc = this.recastQ1(qname, s0.parts[0]);
+        if (rc?.parts) s = { ...s0, parts: rc.parts };
+        if (rc && col.kind === "Q") note = rc.note;
+      }
+      used.push(...s.parts);
       let sum = 0, present = 0;
       const segIn: DerivedInput[] = [];
       for (const p of s.parts) {
@@ -490,12 +503,50 @@ export class UsReader {
       total += sum * rate;
       rawTotal += sum;
     }
-    const parts = col.segments.flatMap((s) => s.parts);
+    const parts = used;
     const why: ReadWhy | undefined =
       parts.length > 1 ? { k: "derived", parts: parts.map((p) => ({ accn: p.accn ?? "", form: p.form, sign: p.sign })) } : fxWhy;
     // 파생(사실 2개 이상)·환산·다른 사실일 때만 입력을 남긴다 — 그 공시의 이 개념 사실 1개 그대로면 열 출처 = 칸 출처(architecture.md §3.2)
     const derived = inputs.length > 1 || other || inputs.some((i) => i.x);
-    return { v: total, raw: rawTotal, why, ...(derived ? { inputs } : {}), gaps };
+    return { v: total, raw: rawTotal, why, ...(derived ? { inputs } : {}), gaps, ...(note ? { note } : {}) };
+  }
+
+  /**
+   * **회사 재분류 — 1분기(오너 결정 2026-09-29)** — markets/us/edgar-series.ts recastFirstQuarter 와 같은 규칙(코드 공유 없이 같은 식). 1분기 3개월
+   * 공시값(원공시 = 가장 이른 10-Q)이 그 뒤 **한 공시** 안의 "6개월 누적 − 2분기 3개월"과 다르면(허용치 = 비교 값들 중 가장 굵은 표기 단위(백만 상한)의
+   * 2배) 재분류: (a) 역산추정 — 역산 근거 공시 이후에 1분기 3개월을 직접 다시 실은 공시가 없고 그 전 재게시 값도 역산값과 다르면 역산값(구간을 그
+   * 공시의 6개월 +, 2분기 3개월 − 로), (b) 최신공시변경 — 그런 직접 재게시가 있으면 값은 열 판본 그대로(주석만). 직접 재게시 값이 원공시와 같으면
+   * (2분기 쪽이 바뀐 것) 없음. 표준 개념(companyfacts)만 — 회사 고유 개념은 인스턴스를 공시마다 읽어야 해 대상 밖.
+   */
+  private recastQ1(qname: string, p: Part): { parts?: Part[]; note: string } | null {
+    const fs = this.rawFacts(qname).filter((f) => f.start && f.unit === this.profile.reportingCurrency && INTERIM_FORM.test(f.prov.form));
+    const dur = (f: RawFact) => days(f.start!, f.end);
+    const threeM = (f: RawFact) => dur(f) >= 55 && dur(f) <= 100;
+    const q1s = fs.filter((f) => near(f.start, p.start, 6) && near(f.end, p.end, 6) && threeM(f)).sort((a, b) => (a.prov.filed ?? "").localeCompare(b.prov.filed ?? ""));
+    if (!q1s.length) return null;
+    const orig = q1s[0], latest = q1s[q1s.length - 1];
+    const pairs: { y: RawFact; d: RawFact }[] = [];
+    for (const y of fs) {
+      if (!near(y.start, p.start, 12) || Math.abs(dur(y) - 182.6) > 20) continue;
+      const d = fs.find((e) => e.prov.accn === y.prov.accn && near(e.end, y.end, 6) && threeM(e));
+      if (d) pairs.push({ y, d });
+    }
+    const best = pairs.reduce<{ y: RawFact; d: RawFact } | null>((b, x) => (!b || (x.y.prov.filed ?? "") > (b.y.prov.filed ?? "") ? x : b), null);
+    if (!best) return null;
+    // 역산 시점 = 그 값 쌍이 처음 실린 공시(다음 해 전년 열 되풀이는 새 정보가 아님 — MRVL FY2023 판관비)
+    const info = pairs.filter((x) => x.y.val === best.y.val && x.d.val === best.d.val).reduce((m, x) => ((x.y.prov.filed ?? "") < m ? (x.y.prov.filed ?? "") : m), best.y.prov.filed ?? "");
+    if (info <= (orig.prov.filed ?? "")) return null;
+    const derived = best.y.val - best.d.val;
+    const unit = (v: number) => { let u = 1; while (u < 1e6 && v % (u * 10) === 0) u *= 10; return u; };
+    const same = (a: number, b: number, ...xs: RawFact[]) => Math.abs(a - b) <= 2 * Math.max(...xs.map((x) => unit(x.val)));
+    if (same(derived, orig.val, orig, best.y, best.d)) return null;
+    const m = (v: number) => (v / 1e6).toLocaleString("en-US", { maximumFractionDigits: 3 });
+    if (latest !== orig && ((latest.prov.filed ?? "") >= info || same(latest.val, derived, latest, best.y, best.d))) {
+      if (same(latest.val, orig.val, latest, orig)) return null;
+      return { note: "최신공시변경 — 1분기 " + orig.prov.form + " 공시값 " + m(orig.val) };
+    }
+    const part = (f: RawFact, sign: 1 | -1, role: string): Part => ({ start: f.start!, end: f.end, accn: f.prov.accn, form: f.prov.form, filed: f.prov.filed, sign, role });
+    return { parts: [part(best.y, 1, "6m"), part(best.d, -1, "q2")], note: "역산추정 — 1분기 " + orig.prov.form + " 공시값 " + m(orig.val) };
   }
 
   private async yahooValue(qname: string, col: ColumnSpec): Promise<CellValue> {
