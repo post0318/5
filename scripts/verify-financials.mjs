@@ -74,6 +74,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
+import { loadBbg } from "./reference/bbg.mjs";
 import { buildAudit, COGS_RULE_COMMON, commonModeOf, decimalsVintage, extItemOf, isDecimalsRounding } from "./metrics/audit.mjs";
 
 // ── 인자 ─────────────────────────────────────────────────────────────
@@ -5119,6 +5120,28 @@ async function verifyUs(sym) {
     // 연구개발비(연구개발비가 "본표에 줄 없음" 빈칸이면 0). 20-F 는 Yahoo 연간 원통화 × 검증기 H.10 기간 평균만(매출원가와 같은 방식)
     const sgaSum = (c) => (IS[c]?.sga == null ? null : IS[c].rnd != null ? IS[c].sga + IS[c].rnd : IS[c].rndNoLine ? IS[c].sga : null);
     let saQSga = null, imSga = null; // StockAnalysis 분기 손익·인포맥스 판관비(LTM 분기 합 원인 규칙용)
+    // 블룸버그(오너 결정 2026-09-28 — 정식 외부 소스): 오너가 준 FA 스냅샷(.cache/bbg, scripts/reference/bbg-import.mjs). 없는 종목은 건너뛴다.
+    // BBG GAAP 화면은 SEC 공시 GAAP 를 그대로 싣는 기준이라 앱 로직 오류를 가장 직접 드러낸다. 외화 공시는 원통화라 제외
+    try {
+      const bb = foreign ? null : loadBbg(sym);
+      if (bb) for (const [c, x] of Object.entries(H)) {
+        const b = bb.at(x.date);
+        const P = (item, ours, k) => { if (b[k]) put(item, ours, "블룸버그", b[k].v, b[k].unit); };
+        P(`${c} 매출`, x.rev, "rev");
+        P(`${c} 순이익`, x.ni, "ni");
+        if (c !== "LTM") P(`${c} 희석 EPS`, x.eps, "eps");
+        P(`${c} EBITDA`, x.ebitda, "ebitda");
+        P(`${c} 영업이익`, IS[c]?.op, "op");
+        P(`${c} 감가상각비`, IS[c]?.da, "da");
+        P(`${c} 세전이익`, IS[c]?.pretax, "pretax");
+        if (COGS_MODE) { P(`${c} 매출원가`, IS[c]?.cogs, "cogs"); P(`${c} 매출총이익`, IS[c]?.gp, "gp"); }
+        if (SGA_MODE) {
+          P(`${c} 판관비`, IS[c]?.sga, "sga");
+          P(`${c} 연구개발비`, IS[c]?.rnd, "rnd");
+          if (b.sga) put(`${c} 판관비·연구개발비`, sgaSum(c), "블룸버그", b.sga.v + (b.rnd?.v ?? 0), b.sga.unit, IS[c]?.rnd != null && b.rnd ? [[1, IS[c].sga], [1, IS[c].rnd]] : null);
+        }
+      }
+    } catch (e) { errs.push(`블룸버그: ${String(e).slice(0, 80)}`); }
     if (SGA_MODE) {
       const put3 = (c, name, sga, rnd, unit, fxk = 1) => {
         if (sga != null) put(`${c} 판관비`, IS[c]?.sga, name, sga * fxk, fxk === 1 ? unit : null);
