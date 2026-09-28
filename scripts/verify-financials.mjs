@@ -6522,6 +6522,10 @@ async function verifyUs(sym) {
         }
       };
       if (revenueClass) reconApply(revenueClass, r.item.split(" ")[0], "매출");
+      // 환율 영향(보류, 오너 지시 2026-09-28): 외화 공시(20-F·IFRS — TSM·ASML·SPOT·NVO 등)의 외부 단독 이탈은 외부가 USD 로 역산한
+      // 환율 차이가 섞여 따로 둔다 — 미국 10-K 종목부터 닫고 이 구분은 뒤로 뺀다
+      const fxHold = (cls) => { if (cls && foreign) for (const n of Object.keys(cls)) if (cls[n] === "외부단독이탈") cls[n] = "환율영향"; };
+      fxHold(revenueClass);
       let metricClass = null;
       if ((COGS_MODE && /^(\d{4}Y|LTM) (매출원가|매출총이익)$/.test(r.item)) || (OPINC_MODE && /^(\d{4}Y|LTM) 영업이익$/.test(r.item)) || (DA_MODE && /^(\d{4}Y|LTM) 감가상각비$/.test(r.item)) || (SGA_MODE && SGA_METRIC_RE.test(r.item))) {
         const [col0, m0] = r.item.split(" ");
@@ -6532,6 +6536,7 @@ async function verifyUs(sym) {
           // 기준 소스는 ② 도 인정(오너 결정 2026-09-27 — 분기마다 SEC 와 정확 일치하고 앱과의 차이 원인이 규명된 소스)
           : aPassed(col0, m0) && names.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok)) ? "외부정의분해불가" : "③"]));
         reconApply(metricClass, col0, m0);
+        fxHold(metricClass);
         for (const n of names) if (metricClass[n] === "③") (m0 === "영업이익" ? opincErrors : m0 === "감가상각비" ? daErrors : /^(판관비|연구개발비)/.test(m0) ? sgaErrors : cogsErrors).push({ item: r.item, source: n, ours: r.ours, other: r.srcs[n].v, note: `${why(n).trim() || "분해식 없음"}${aPassed(col0, m0) ? "" : " · 앱 ≠ SEC 본표(A층 미통과)"}` });
       }
       review.push({
@@ -6968,10 +6973,10 @@ if (args.post) {
 const isRevCheck = (c) => /매출(?!총이익|원가)|순수익|PSR/.test(c.name);
 const revFails = fails.filter(isRevCheck);
 const revErrs = results.flatMap((r) => (r.revErrors ?? []).map((e) => ({ sym: r.sym, ...e })));
-const revCls = { "①": 0, "②": 0, 외부단독이탈: 0, 공통모드: 0, NA: 0, "③": 0 };
+const revCls = { "①": 0, "②": 0, 외부단독이탈: 0, 환율영향: 0, 공통모드: 0, NA: 0, "③": 0 };
 for (const x of reviews) for (const v of Object.values(x.revenueClass ?? {})) revCls[v]++;
 if (MARKET === "us") {
-  console.log(`\n── 매출 외부 대조 분류 — ① 일치 ${revCls["①"]} · ② 정의 차이 ${revCls["②"]} · 외부 단독 이탈 ${revCls.외부단독이탈} · 공통모드 ${revCls.공통모드} · ${NA_PRECISION} ${revCls.NA} · ③ 오류 ${revErrs.length}건 ──`);
+  console.log(`\n── 매출 외부 대조 분류 — ① 일치 ${revCls["①"]} · ② 정의 차이 ${revCls["②"]} · 외부 단독 이탈 ${revCls.외부단독이탈} · 환율 영향(보류) ${revCls.환율영향} · 공통모드 ${revCls.공통모드} · ${NA_PRECISION} ${revCls.NA} · ③ 오류 ${revErrs.length}건 ──`);
   for (const x of reviews.filter((y) => Object.values(y.revenueClass ?? {}).includes("외부단독이탈"))) console.log(`  [외부 단독 이탈] ${x.sym} ${x.item}: ${x.verdict}`);
   for (const e of revErrs) console.log(`  [③ 오류] ${e.sym} ${e.item} — ${e.source} ${e.other} vs 앱 ${e.ours} (차 ${e.ours - e.other}) · ${e.note}`);
   console.log(`매출 검사 실패 ${revFails.length} · 매출 ③ 오류 ${revErrs.length}건${METRIC === "revenue" ? " (매출 닫기 모드 — 종료코드 기준)" : ""}`);
@@ -6989,9 +6994,9 @@ const isCogsCheck = (c) => /매출원가|매출총이익/.test(c.name);
 const cogsFails = fails.filter(isCogsCheck);
 const cogsErrs = results.flatMap((r) => (r.cogsErrors ?? []).map((e) => ({ sym: r.sym, ...e })));
 if (MARKET === "us" && COGS_MODE) {
-  const cls = { "①": 0, "②": 0, 외부단독이탈: 0, 외부정의분해불가: 0, 구성미분해: 0, 공통모드: 0, NA: 0, "③": 0 };
+  const cls = { "①": 0, "②": 0, 외부단독이탈: 0, 환율영향: 0, 외부정의분해불가: 0, 구성미분해: 0, 공통모드: 0, NA: 0, "③": 0 };
   for (const x of reviews.filter((y) => /(매출원가|매출총이익)$/.test(y.item ?? ""))) for (const v of Object.values(x.metricClass ?? {})) cls[v]++;
-  console.log(`\n── 매출원가·매출총이익 외부 대조 분류 — ① 일치 ${cls["①"]} · ② 정의 차이 ${cls["②"]} · 외부 단독 이탈 ${cls.외부단독이탈} · 외부 정의 분해 불가 ${cls.외부정의분해불가} · 구성 미분해 ${cls.구성미분해} · 공통모드 ${cls.공통모드} · ${NA_PRECISION} ${cls.NA} · ③ 오류 ${cogsErrs.length}건 ──`);
+  console.log(`\n── 매출원가·매출총이익 외부 대조 분류 — ① 일치 ${cls["①"]} · ② 정의 차이 ${cls["②"]} · 외부 단독 이탈 ${cls.외부단독이탈} · 환율 영향(보류) ${cls.환율영향} · 외부 정의 분해 불가 ${cls.외부정의분해불가} · 구성 미분해 ${cls.구성미분해} · 공통모드 ${cls.공통모드} · ${NA_PRECISION} ${cls.NA} · ③ 오류 ${cogsErrs.length}건 ──`);
   for (const x of reviews.filter((y) => /(매출원가|매출총이익)$/.test(y.item ?? "") && Object.values(y.metricClass ?? {}).includes("외부단독이탈"))) console.log(`  [외부 단독 이탈] ${x.sym} ${x.item}: ${x.verdict}`);
   for (const e of cogsErrs) console.log(`  [③ 오류] ${e.sym} ${e.item} — ${e.source} ${e.other} vs 앱 ${e.ours} (차 ${e.ours - e.other}) · ${e.note}`);
   const naWait = all.filter((c) => isCogsCheck(c) && c.status === NA && (c.note ?? "").startsWith(COGS_WAIT)).length;
@@ -7002,10 +7007,10 @@ const isOpincCheck = (c) => /^(분기 )?영업이익(\(합성\))? 앱 = SEC (본
 const opincFails = fails.filter(isOpincCheck);
 const opincErrs = results.flatMap((r) => (r.opincErrors ?? []).map((e) => ({ sym: r.sym, ...e })));
 if (MARKET === "us" && OPINC_MODE) {
-  const cls = { "①": 0, "②": 0, 외부단독이탈: 0, 외부정의분해불가: 0, 구성미분해: 0, 공통모드: 0, NA: 0, "③": 0 };
+  const cls = { "①": 0, "②": 0, 외부단독이탈: 0, 환율영향: 0, 외부정의분해불가: 0, 구성미분해: 0, 공통모드: 0, NA: 0, "③": 0 };
   const isOp = (x) => /^(\d{4}Y|LTM) 영업이익$/.test(x.item ?? "");
   for (const x of reviews.filter(isOp)) for (const v of Object.values(x.metricClass ?? {})) cls[v]++;
-  console.log(`\n── 영업이익 외부 대조 분류 — ① 일치 ${cls["①"]} · ② 정의 차이 ${cls["②"]} · 외부 단독 이탈 ${cls.외부단독이탈} · 외부 정의 분해 불가 ${cls.외부정의분해불가} · 구성 미분해 ${cls.구성미분해} · 공통모드 ${cls.공통모드} · ${NA_PRECISION} ${cls.NA} · ③ 오류 ${opincErrs.length}건 ──`);
+  console.log(`\n── 영업이익 외부 대조 분류 — ① 일치 ${cls["①"]} · ② 정의 차이 ${cls["②"]} · 외부 단독 이탈 ${cls.외부단독이탈} · 환율 영향(보류) ${cls.환율영향} · 외부 정의 분해 불가 ${cls.외부정의분해불가} · 구성 미분해 ${cls.구성미분해} · 공통모드 ${cls.공통모드} · ${NA_PRECISION} ${cls.NA} · ③ 오류 ${opincErrs.length}건 ──`);
   for (const x of reviews.filter((y) => isOp(y) && Object.values(y.metricClass ?? {}).includes("외부단독이탈"))) console.log(`  [외부 단독 이탈] ${x.sym} ${x.item}: ${x.verdict}`);
   for (const e of opincErrs) console.log(`  [③ 오류] ${e.sym} ${e.item} — ${e.source} ${e.other} vs 앱 ${e.ours} (차 ${e.ours - e.other}) · ${e.note}`);
   const opAll = all.filter(isOpincCheck);
@@ -7016,10 +7021,10 @@ const isDaCheck = (c) => /^(분기 )?감가상각비 앱 = SEC 현금흐름표/.
 const daFails = fails.filter(isDaCheck);
 const daErrs = results.flatMap((r) => (r.daErrors ?? []).map((e) => ({ sym: r.sym, ...e })));
 if (MARKET === "us" && DA_MODE) {
-  const cls = { "①": 0, "②": 0, 외부단독이탈: 0, 외부정의분해불가: 0, 구성미분해: 0, 공통모드: 0, NA: 0, "③": 0 };
+  const cls = { "①": 0, "②": 0, 외부단독이탈: 0, 환율영향: 0, 외부정의분해불가: 0, 구성미분해: 0, 공통모드: 0, NA: 0, "③": 0 };
   const isDa = (x) => /^(\d{4}Y|LTM) 감가상각비$/.test(x.item ?? "");
   for (const x of reviews.filter(isDa)) for (const v of Object.values(x.metricClass ?? {})) cls[v]++;
-  console.log(`\n── 감가상각비 외부 대조 분류 — ① 일치 ${cls["①"]} · ② 정의 차이 ${cls["②"]} · 외부 단독 이탈 ${cls.외부단독이탈} · 외부 정의 분해 불가 ${cls.외부정의분해불가} · 구성 미분해 ${cls.구성미분해} · 공통모드 ${cls.공통모드} · ${NA_PRECISION} ${cls.NA} · ③ 오류 ${daErrs.length}건 ──`);
+  console.log(`\n── 감가상각비 외부 대조 분류 — ① 일치 ${cls["①"]} · ② 정의 차이 ${cls["②"]} · 외부 단독 이탈 ${cls.외부단독이탈} · 환율 영향(보류) ${cls.환율영향} · 외부 정의 분해 불가 ${cls.외부정의분해불가} · 구성 미분해 ${cls.구성미분해} · 공통모드 ${cls.공통모드} · ${NA_PRECISION} ${cls.NA} · ③ 오류 ${daErrs.length}건 ──`);
   for (const x of reviews.filter((y) => isDa(y) && Object.values(y.metricClass ?? {}).includes("외부단독이탈"))) console.log(`  [외부 단독 이탈] ${x.sym} ${x.item}: ${x.verdict}`);
   for (const e of daErrs) console.log(`  [③ 오류] ${e.sym} ${e.item} — ${e.source} ${e.other} vs 앱 ${e.ours} (차 ${e.ours - e.other}) · ${e.note}`);
   const dAll = all.filter(isDaCheck);
@@ -7031,12 +7036,12 @@ const sgaFails = fails.filter(isSgaCheck);
 const sgaErrs = results.flatMap((r) => (r.sgaErrors ?? []).map((e) => ({ sym: r.sym, ...e })));
 if (MARKET === "us" && SGA_MODE) {
   for (const m of ["판관비", "연구개발비", "판관비·연구개발비"]) {
-    const cls = { "①": 0, "②": 0, 외부단독이탈: 0, 외부정의분해불가: 0, 구성미분해: 0, 공통모드: 0, NA: 0, "③": 0 };
+    const cls = { "①": 0, "②": 0, 외부단독이탈: 0, 환율영향: 0, 외부정의분해불가: 0, 구성미분해: 0, 공통모드: 0, NA: 0, "③": 0 };
     const isM = (x) => (x.item ?? "").replace(/^(\d{4}Y|LTM) /, "") === m && /^(\d{4}Y|LTM) /.test(x.item ?? "");
     for (const x of reviews.filter(isM)) for (const v of Object.values(x.metricClass ?? {})) cls[v]++;
     const errsM = sgaErrs.filter((e) => isM(e));
     console.log(`
-── ${m} 외부 대조 분류 — ① 일치 ${cls["①"]} · ② 정의 차이 ${cls["②"]} · 외부 단독 이탈 ${cls.외부단독이탈} · 외부 정의 분해 불가 ${cls.외부정의분해불가} · 구성 미분해 ${cls.구성미분해} · 공통모드 ${cls.공통모드} · ${NA_PRECISION} ${cls.NA} · ③ 오류 ${errsM.length}건 ──`);
+── ${m} 외부 대조 분류 — ① 일치 ${cls["①"]} · ② 정의 차이 ${cls["②"]} · 외부 단독 이탈 ${cls.외부단독이탈} · 환율 영향(보류) ${cls.환율영향} · 외부 정의 분해 불가 ${cls.외부정의분해불가} · 구성 미분해 ${cls.구성미분해} · 공통모드 ${cls.공통모드} · ${NA_PRECISION} ${cls.NA} · ③ 오류 ${errsM.length}건 ──`);
     for (const x of reviews.filter((y) => isM(y) && Object.values(y.metricClass ?? {}).includes("외부단독이탈"))) console.log(`  [외부 단독 이탈] ${x.sym} ${x.item}: ${x.verdict}`);
     for (const e of errsM) console.log(`  [③ 오류] ${e.sym} ${e.item} — ${e.source} ${e.other} vs 앱 ${e.ours} (차 ${e.ours - e.other}) · ${e.note}`);
   }
