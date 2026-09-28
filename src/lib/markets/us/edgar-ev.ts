@@ -4,7 +4,7 @@ import { annualByYear, entriesOf, ltmAnchor, ltmFlowOf, ltmGapConcept, provenAbs
 import { revQuarterAt, type RevCol } from "./fin-revenue";
 import { OPINC_NOTE } from "@/lib/fin";
 import { opUnitsFrom } from "../op-units";
-import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT, SYN_MIXED_LEASE_CURRENT, SYN_MIXED_LEASE_NONCURRENT } from "./edgar-bs-structure";
+import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT, SYN_MIXED_LEASE_CURRENT, SYN_MIXED_LEASE_NONCURRENT, SYN_STI_FACE } from "./edgar-bs-structure";
 import { unavailableOn } from "./sec-unavailable";
 import { SYN_DA_CF } from "./edgar-cf-structure";
 import { SYN_DA_WITH_CONTENT } from "./edgar-content";
@@ -75,6 +75,8 @@ const DEBT_ACTIVITY = [
  *  "현금+제한현금" 합계만 공시한다. 사이트들도 이 합계를 쓴다. */
 const CASH = [
   "CashAndCashEquivalentsAtCarryingValue",
+  // MDLZ 는 본표 현금 줄을 이 태그로 단다 — 없으면 제한현금 포함 합계로 넘어가 제한현금(2025 70)만큼 컸다(블룸버그 대조 2026-09-28)
+  "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
   "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
 ];
 /** 단기투자 — 같은 금액을 두 태그로 다는 회사가 있어 최댓값. */
@@ -356,7 +358,9 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     // 현금 — 현금 줄이 없는 재무상태표는 없다: 태그가 없으면 0 이 아니라 공란
     const c0 = firstOn(CASH, bal);
     if (c0 == null) return miss("현금");
-    const sti = partOn(STI, bal, "max");
+    // 단기투자 — 본표 유동자산 줄 합(edgar-bs-structure SYN_STI_FACE)이 있으면 그것, 없으면 태그 규칙
+    const stiFace = on(SYN_STI_FACE, bal);
+    const sti = stiFace != null ? stiFace : partOn(STI, bal, "max");
     const lts = partOn(LT_SECURITIES, bal, "max");
     if (sti === "unknown") return miss("단기투자");
     if (lts === "unknown") return miss("장기 투자증권");

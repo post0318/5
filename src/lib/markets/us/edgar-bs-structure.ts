@@ -36,6 +36,14 @@ export const SYN_DEBT_FACE_NONCURRENT = "DebtFaceNoncurrentDerived";
 /** 본표 운용·금융리스 합산 줄에서 차입금에 넣은 금융리스분을 뺀 값(운용리스 몫) — 비유동·유동 */
 export const SYN_MIXED_LEASE_NONCURRENT = "OperatingLeaseNoncurrentMixedFaceDerived";
 export const SYN_MIXED_LEASE_CURRENT = "OperatingLeaseCurrentMixedFaceDerived";
+/**
+ * 본표 유동자산의 **단기투자 줄 합**(2026-09-28, 블룸버그 대조 — KO·IBM·V 현금이 블룸버그 "현금+단기투자"보다 단기투자만큼
+ * 작았다). 태그 우선순위("최댓값")로는 두 줄로 나눠 공시한 회사(KO `OtherShortTermInvestments` 3,602 + `MarketableSecurities`
+ * 1,934)를 한 줄만 읽었고, 목록에 없는 태그(IBM `DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent` 830)·일반
+ * 이름 태그(V `Investments` 1,833 — 유동자산 "Investment securities" 줄)는 못 읽었다. 본표 줄이면 이름이 무엇이든 유동자산
+ * 아래 투자 줄이므로 모두 더한다.
+ */
+export const SYN_STI_FACE = "ShortTermInvestmentsFaceDerived";
 
 const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) contact@example.com";
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
@@ -158,6 +166,53 @@ export function faceDebtLines(cal: string, lab: Map<string, string>): Face | nul
       mixedCurrent: new Set(mixed.filter((l) => (classified ? underCurrent.has(l) : isCurrentName(l)))),
       ifrs,
     };
+  }
+  return null;
+}
+
+// 단기투자 줄 — 표준 개념은 이름, 회사 고유 개념은 라벨. 현금·제한현금·지분법·매출채권·파생상품은 아니다.
+const STI_CONCEPT = /ShortTermInvestments|MarketableSecurities|DebtSecurities|AvailableForSale|HeldToMaturity|TradingSecurities|EquitySecuritiesFvNi|TimeDeposits|CertificatesOfDeposit|^Investments$|InvestmentsCurrent|OtherInvestments/;
+const NOT_STI = /^Cash|RestrictedCash|EquityMethod|Receivable|Derivative|Noncurrent|Pledged|Collateral|HeldInTrust/;
+const STI_LABEL = /\b(short[- ]term investments?|marketable securities|investment securities|investments?|time deposits?|certificates? of deposit|trading securities|available[- ]for[- ]sale)\b/i;
+const NOT_STI_LABEL = /cash|restricted|equity method|receivable|derivative|long[- ]term|noncurrent|held in trust/i;
+
+/** 본표 유동자산(`AssetsCurrent`) 아래 단기투자 줄. "현금·현금성자산 및 단기투자" 합계 줄(CashCashEquivalentsAndShortTermInvestments)이
+ *  말단이면 combined 로 따로 돌려준다(값 = 그 줄 − 현금 줄). 유동자산 소계가 없는 본표면 null */
+export function faceStiLines(cal: string, lab: Map<string, string>): { lines: string[]; combined: string | null } | null {
+  for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
+    const role = m[1].split("/").pop() ?? "";
+    if (!/BALANCE|FINANCIALPOSITION|FINANCIALCONDITION/i.test(role) || /Detail|Table|Parenth/i.test(role)) continue;
+    const loc = locs(m[2]);
+    const arcs: { from: string; to: string }[] = [];
+    for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {
+      const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
+      const to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
+      if (from && to) arcs.push({ from, to });
+    }
+    if (!arcs.some((a) => a.from === "us-gaap_AssetsCurrent")) continue;
+    const lines: string[] = [];
+    let combined: string | null = null;
+    const seen = new Set<string>();
+    const walk = (id: string, depth: number) => {
+      if (depth > 4) return;
+      for (const a of arcs.filter((x) => x.from === id)) {
+        if (seen.has(a.to)) continue;
+        seen.add(a.to);
+        const concept = a.to.slice(a.to.indexOf("_") + 1);
+        const std = a.to.startsWith("us-gaap_");
+        const lb = lab.get(a.to) ?? "";
+        if (std && concept === "CashCashEquivalentsAndShortTermInvestments") {
+          if (arcs.some((x) => x.from === a.to)) walk(a.to, depth + 1);
+          else combined = a.to;
+          continue;
+        }
+        const isSti = std ? STI_CONCEPT.test(concept) && !NOT_STI.test(concept) : STI_LABEL.test(lb) && !NOT_STI_LABEL.test(lb);
+        if (isSti) lines.push(a.to);
+        else if (arcs.some((x) => x.from === a.to)) walk(a.to, depth + 1);
+      }
+    };
+    walk("us-gaap_AssetsCurrent", 0);
+    return { lines, combined };
   }
   return null;
 }
@@ -308,12 +363,13 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
   const mixedNc: FactUnitEntry[] = [];
   const mixedCur: FactUnitEntry[] = [];
   const done = new Set<string>();
-  const parsed: { f: Filing; face: Face | null; instUrl: string; defUrl: string | null }[] = [];
+  const parsed: { f: Filing; face: Face | null; instUrl: string; defUrl: string | null; cal: string | null; lab: Map<string, string> }[] = [];
   for (const f of filings) {
     // 조회 실패는 올린다(로더가 총차입금을 공란 + 사유로 — sec-unavailable.ts). null = 라벨·인스턴스 파일이 원래 없음
     const fl = await filingFiles(Number(cik), f);
     if (!fl) return facts; // 하나라도 없으면 전체 미적용 — 기간마다 방식이 섞이지 않게
-    parsed.push({ f, face: fl.cal ? faceDebtLines(fl.cal, labels(fl.lab)) : null, instUrl: fl.instUrl, defUrl: fl.defUrl });
+    const lab = labels(fl.lab);
+    parsed.push({ f, face: fl.cal ? faceDebtLines(fl.cal, lab) : null, instUrl: fl.instUrl, defUrl: fl.defUrl, cal: fl.cal || null, lab });
   }
   const noteIds = [
     ...[...NOTE_CURRENT_TOTAL, ...NOTE_CURRENT_PARTS, "FinanceLeaseLiability", ...NOTE_FIN_LEASE_PARTS].map((c) => `us-gaap_${c}`),
@@ -433,13 +489,54 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
       mixedPart(face.mixed.filter((l) => face.mixedCurrent.has(l)), finCurAdded, mixedCur);
     }
   }
-  if (!total.length) return facts;
+  // ── 단기투자(본표 유동자산 줄 합) — 기간마다 그 날짜를 담은 가장 최근 공시의 본표 줄 ──
+  const sti: FactUnitEntry[] = [];
+  const doneSti = new Set<string>();
+  for (let k = 0; k < parsed.length; k++) {
+    const p = parsed[k];
+    const cal = p.cal ?? parsed.slice(k + 1).find((q) => q.cal)?.cal ?? null;
+    const fs = cal ? faceStiLines(cal, p.lab) : null;
+    if (!fs) continue;
+    const ids = [...fs.lines, ...(fs.combined ? [fs.combined] : [])];
+    const cfDates = new Set<string>();
+    for (const e of g["AssetsCurrent"]?.units?.USD ?? []) if (!e.start && e.filed === p.f.filed) cfDates.add(e.end);
+    let inst: InstantValues | null = null;
+    const needInst = !!fx || ids.some((l) => !l.startsWith("us-gaap_")) || [...cfDates].some((d) => ids.some((l) => cfVal(l.slice(8), d) === undefined));
+    if (needInst && ids.length) {
+      const xml = await fetchText(p.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 });
+      inst = instantValues(xml, new Set([...ids, "us-gaap_CashAndCashEquivalentsAtCarryingValue"]), cur);
+    }
+    for (const d of cfDates) {
+      if (doneSti.has(d)) continue;
+      const rate = fx ? fx.at(d) : 1;
+      if (rate == null) continue;
+      const v = (id: string): number | undefined => {
+        const x = inst?.get(id)?.get(d);
+        if (x !== undefined) return x * rate;
+        return id.startsWith("us-gaap_") ? cfVal(id.slice(8), d) : undefined;
+      };
+      // 단기투자 줄이 없는 본표 = 0(없음 증명). 줄이 있는데 값이 비면 본표의 "—" = 0
+      let sum = fs.lines.reduce((acc, l) => acc + (v(l) ?? 0), 0);
+      if (fs.combined) {
+        const comb = v(fs.combined);
+        const cash = v("us-gaap_CashAndCashEquivalentsAtCarryingValue");
+        if (comb === undefined || cash === undefined) continue;
+        sum += comb - cash;
+      }
+      doneSti.add(d);
+      sti.push({ end: d, fy: 0, fp: "", form: p.f.form, filed: p.f.filed, val: sum });
+    }
+  }
+  if (!total.length && !sti.length) return facts;
+  if (!total.length)
+    return { ...facts, facts: { ...facts.facts, "us-gaap": { ...g, [SYN_STI_FACE]: { units: { USD: sti } } } } } as CompanyFacts;
   return {
     ...facts,
     facts: {
       ...facts.facts,
       "us-gaap": {
         ...g,
+        ...(sti.length ? { [SYN_STI_FACE]: { units: { USD: sti } } } : {}),
         [SYN_DEBT_FACE]: { units: { USD: total } },
         [SYN_DEBT_FACE_NONCURRENT]: { units: { USD: noncurrent } },
         ...(mixedNc.length ? { [SYN_MIXED_LEASE_NONCURRENT]: { units: { USD: mixedNc } } } : {}),
