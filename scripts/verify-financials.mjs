@@ -5825,6 +5825,19 @@ async function verifyUs(sym) {
         locFacts.set(col, arr);
       }
     }
+    // 금융 부문 이자비용(FinancingInterestExpense[ProductOrServiceAxis=…Financ…], 그 사업연도 10-K 원본) — 블룸버그 원가 원인 규칙용.
+    //   실측 2026-09-28 CAT: 블룸버그 원가 = 앱 + 금융상품 이자비용 455·565·1,030·1,286·1,359(2021~2025)
+    const finIntFacts = new Map();
+    if (COGS_MODE && !foreign) for (const [col, e] of cogsExp) {
+      const accn = e?.comps?.length === 1 ? e.comps[0].faceAccn : e?.faceAccn;
+      if (col === "LTM" || !accn || !e.start || !e.end) continue;
+      let idx = null;
+      try { idx = await instanceDecimals(cik, accn); } catch { continue; }
+      for (const [k, fs0] of idx ?? []) {
+        const [c, st, en, dim] = k.split("|");
+        if (c === "FinancingInterestExpense" && st === e.start && en === e.end && /^ProductOrServiceAxis=.*Financ/i.test(dim ?? "") && fs0.length) finIntFacts.set(col, fs0[fs0.length - 1].v);
+      }
+    }
     const sgaCols = (n, m) => [...recon.values()].filter((x) => x.item.endsWith(` ${m}`) && SGA_METRIC_RE.test(x.item) && x.srcs[n]);
     const sgaMemo = new Map();
     const sgaAllCols = (n, m, key, expOf) => {
@@ -6439,6 +6452,11 @@ async function verifyUs(sym) {
           // ① 구성 규칙 줄 일부만(MCD: 기타 매장비용 제외 · CEG: 운영·유지 제외 — 연료·구매전력만)
           const ts = termSubsetAll(n);
           if (ts && ts.cols.has(col)) return { ok: `블룸버그 매출원가 = 구성 규칙 줄 중 ${ts.use.join("·")}만(${ts.drop.join("·")} 제외) — 대조한 모든 열 정확 성립(${ts.ev.join(" · ")}) · ${tail}` };
+          // ③ 앱 + 금융 부문 이자비용(없는 해 0 — 전 열 성립)
+          if (finIntFacts.size) {
+            const fh = cogsAllCols(n, "fin-int", (c2, x) => c2 === "LTM" ? { skip: "LTM — 연간 10-K 차원 사실만" } : ({ exp: x.ours + (finIntFacts.get(c2) ?? 0), ev: `앱 ${x.ours} + 금융상품 이자비용 ${finIntFacts.get(c2) ?? 0}` }));
+            if (fh && fh.cols.has(col)) return { ok: `블룸버그 매출원가 = 앱 + 금융 부문 이자비용(FinancingInterestExpense[금융상품]) — 대조한 모든 열 정확 성립(${fh.ev.join(" · ")}) · ${tail}` };
+          }
           // ② 구성 규칙 원가 + 본표 감가상각 줄 + 소득세 외 세금(XOM: 원가 + 기타 세금 25,167 + 감가상각 25,993 = 277,832, 2025)
           // 사업연도 10-K 연간 값(filed 순) — first: 원 공시(정밀값), 아니면 최신
           const fyVal = (concept, date, first = false) => { const es = (G[concept]?.units?.USD ?? []).filter((y) => y.start && /^10-K/.test(y.form ?? "") && date && dayDiff(y.end, date) <= 7 && (Date.parse(y.end) - Date.parse(y.start)) / 864e5 > 300).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? "")); return es.length ? (first ? es[0] : es.at(-1)).val : null; };

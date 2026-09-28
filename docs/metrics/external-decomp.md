@@ -32,3 +32,20 @@
 
 분기 합 규칙(`cogsQuarterSum`·`opQuarterSum`·`daQuarterSum`·`sgaQuarterSum`)이 분기 자료가 없는 블룸버그에 StockAnalysis 분기값을 써서
 "블룸버그 LTM = 자기 분기 4개 합"으로 잘못 ② 판정했다(IBM LTM 연구개발비). 분기 자료가 있는 소스(Yahoo·StockAnalysis·인포맥스)만 적용.
+
+### 연간 영업이익·원가·판관비·감가상각비(83개 그룹 전수 탐색)
+
+방법: 그룹(종목 × 소스 × 지표)마다 최근 5개 10-K 원본의 모든 USD 연간 사실(차원 2개까지)을 모아, 모든 연도 차이가 한 사실(부호 ±, 원 공시·최신
+판본)과 정확히 같은지 탐색(scratchpad `dimdisc2.mjs`). 83개 중 일치 6개:
+
+| 그룹 | 식(모든 연도) | 처리 |
+|---|---|---|
+| CAT · 블룸버그 · 매출원가 | 외부 = 앱 + `FinancingInterestExpense`[금융상품] 455·565·1,030·1,286·1,359 | ② 규칙 추가(`fin-int`) |
+| DELL · StockAnalysis · 판관비 | 외부 = 앱 − `SeveranceCosts1`[위치 = 판관비] 98·363·522·419·297 | ②(위치 차원 규칙) |
+| BE · StockAnalysis · 감가상각비 | 외부 = 앱 − `OperatingLeaseRightOfUseAssetAmortizationExpense`[VIE] 23.5·12.1·10.9·0·0 | **앱 확인 필요** — 앱 감가상각비(현금흐름표 줄)에 VIE 운용리스 사용권자산 상각이 들어 있다는 뜻(앱 규칙은 운용리스 상각 제외). 규칙 추가 안 함 |
+| MAR · 블룸버그 · 매출원가 | 외부 = 앱 − `mar:CostOfRevenueAmountReclassified`[FeeService] (2023 144 · 2024 129) | 2026 10-K 재분류 금액 — 블룸버그 = 원 10-K(앱 = 최신 10-K, 오너 결정). 규칙 미추가 |
+| MAR · 블룸버그 · 감가상각비 | 외부 = 앱 − `mar:DepreciationAndAmortizationReclassified` (2022 118 · 2023 159) | 위와 같음 |
+| NVDA · Yahoo · 감가상각비 | 2023 차이 −1 — 일치 사실은 무관(AOCI 재분류) | 미해결(우연 일치로 불인정) |
+
+나머지 77개 그룹: 전 연도 단일 사실 일치 없음 — 미해결(목록 scratchpad `annual-groups.tsv`·`annual-disc.out`). LTM 열은 앱 LTM 산식 변경(분기 합)
+뒤 재검 대기.
