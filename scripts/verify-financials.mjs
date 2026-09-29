@@ -5382,7 +5382,7 @@ async function verifyUs(sym) {
           put(`${c} 영업이익`, IS[c]?.op, "StockAnalysis", inc.opinc?.[k], saUnit);
           put(`${c} 감가상각비`, IS[c]?.da, "StockAnalysis", inc.depAmorEbitda?.[k], saUnit);
           if (COGS_MODE) { put(`${c} 매출원가`, IS[c]?.cogs, "StockAnalysis", inc.cor?.[k], saUnit); put(`${c} 매출총이익`, IS[c]?.gp, "StockAnalysis", inc.gp?.[k], saUnit); }
-          saIsAdj.set(c, { aw: inc.assetWritedown?.[k] ?? 0, mr: inc.mergerRestructureCharges?.[k] ?? 0, ou: inc.otherUnusualItems?.[k] ?? 0, orv: inc.otherRevenue?.[k] ?? 0, opRev: inc.operatingRevenue?.[k] ?? null, ga: inc.gainAssets?.[k] ?? 0, cg: inc.currencyGains?.[k] ?? 0, ig: inc.impairmentGoodwill?.[k] ?? 0, ls: inc.legalSettlements?.[k] ?? 0, gi: inc.gainInvestments?.[k] ?? 0 });
+          saIsAdj.set(c, { aw: inc.assetWritedown?.[k] ?? 0, mr: inc.mergerRestructureCharges?.[k] ?? 0, ou: inc.otherUnusualItems?.[k] ?? 0, orv: inc.otherRevenue?.[k] ?? 0, opRev: inc.operatingRevenue?.[k] ?? null, ga: inc.gainAssets?.[k] ?? 0, cg: inc.currencyGains?.[k] ?? 0, ig: inc.impairmentGoodwill?.[k] ?? 0, ls: inc.legalSettlements?.[k] ?? 0, gi: inc.gainInvestments?.[k] ?? 0, ox: inc.otheropex?.[k] ?? 0 });
         }
         // 현금흐름표의 기타 상각 줄 — StockAnalysis 는 이 줄을 EBITDA 용 감가상각(depAmorEbitda)에서 뺀다(원인 ⑦)
         const cfs = await saStatement(sym, "cash-flow-statement");
@@ -5567,14 +5567,14 @@ async function verifyUs(sym) {
     //    줄(매출원가·판관비)과 영업이익에서 빼서 이 줄로 옮긴다 — 최근 연도 As Reported 대조로 확인(ORCL·INTC·DELL·AMD 구조조정, SBUX·BE 자산 상각,
     //    AMAT 영업권 손상). 값은 S&P 자신이 적은 금액(손익 부호 — 비용이 음수), 그 해 줄이 없으면 0. 한두 줄 ·세 줄 조합까지(ORCL 2022 = 구조조정 + 소송 합의 + 기타 비경상 — 우연 일치 방지로 네 줄 이상 금지), 각 지표의 전 열
     //    규칙(모든 연간 열 정확 성립)으로만 쓴다. 비용 줄: 외부 = 앱 + Σ줄, 영업이익: 외부 = 앱 − Σ줄
-    const SP_UNUSUAL = [["mr", "합병·구조조정"], ["aw", "자산 상각"], ["ig", "영업권 손상"], ["ls", "소송 합의"], ["ou", "기타 비경상"], ["ga", "자산 처분손익"], ["gi", "투자 처분손익"]];
+    const SP_UNUSUAL = [["mr", "합병·구조조정"], ["aw", "자산 상각"], ["ig", "영업권 손상"], ["ls", "소송 합의"], ["ou", "기타 비경상"], ["ga", "자산 처분손익"], ["gi", "투자 처분손익"], ["cg", "외환손익"]]; // cg: VRT 외환손실을 영업이익에서 뺌(2026-09-29)
     const spSubsets = []; // VERIFY_NO_SP=1 — 규칙 끄기(전후 비교용)
     if (!process.env.VERIFY_NO_SP) for (let i = 0; i < SP_UNUSUAL.length; i++) { spSubsets.push([SP_UNUSUAL[i]]); for (let j = i + 1; j < SP_UNUSUAL.length; j++) { spSubsets.push([SP_UNUSUAL[i], SP_UNUSUAL[j]]); for (let l = j + 1; l < SP_UNUSUAL.length; l++) spSubsets.push([SP_UNUSUAL[i], SP_UNUSUAL[j], SP_UNUSUAL[l]]); } }
     spSubsets.sort((a, b) => a.length - b.length); // 가장 작은 조합 먼저 — 금액 0 인 줄이 규칙 이름에 섞이지 않게
     const spTerm = (use, c) => {
       const a = saIsAdj.get(c);
       if (!a) return { skip: "그 열 StockAnalysis 비경상 줄 미조회" };
-      return { s: use.reduce((t, [k]) => t + (a[k] ?? 0), 0), ev: use.map(([k, l]) => `S&P ${l} ${a[k] ?? 0}`).join(" + ") };
+      const nzr = use.filter(([k]) => a[k]).length; return { s: use.reduce((t, [k]) => t + (a[k] ?? 0), 0), tol: nzr >= 1 ? 0.5e6 * (nzr + 1) : null, ev: use.map(([k, l]) => `S&P ${l} ${a[k] ?? 0}`).join(" + ") + (nzr >= 1 ? ` (S&P 줄 ${nzr}개와 SA 값이 각각 백만 단위 표기 — 성분별 반올림 허용 ±${0.5 * (nzr + 1)}백만)` : "") };
     };
     const spLabel = (use, m) => `StockAnalysis(S&P 표준화)는 ${use.map(([, l]) => l).join("·")} 금액을 ${m}에서 빼서 비경상 줄로 옮김 — S&P 자신이 적은 비경상 줄 금액으로 정확 성립`;
     const cogsCols = (n) => [...recon.values()].filter((x) => /^(\d{4}Y|LTM) 매출원가$/.test(x.item) && x.srcs[n]);
@@ -5591,7 +5591,7 @@ async function verifyUs(sym) {
         const r0 = e && e.cogs != null && aPassed(col, "매출원가") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
         const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
-        if (!r0 || r0.exp == null || !(extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)))) { ok = false; break; }
+        if (!r0 || r0.exp == null || !(extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)) || (r0.tol != null && Math.abs(x.srcs[n].v - r0.exp) <= r0.tol))) { ok = false; break; }
         if (!extEq(r0.exp, x.ours)) nonTrivial = true;
         cols.add(col);
         ev.push(`${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}`);
@@ -5876,7 +5876,7 @@ async function verifyUs(sym) {
         const r0 = e && aPassed(col, "영업이익") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
         const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
-        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)));
+        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)) || (r0.tol != null && Math.abs(x.srcs[n].v - r0.exp) <= r0.tol));
         const txt = hit ? `${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}` : "";
         if (col === "LTM") { if (hit) { cols.add(col); ev.push(txt); } continue; }
         if (!hit) { ok = false; break; }
@@ -5952,10 +5952,28 @@ async function verifyUs(sym) {
       // (라) S&P 비경상 줄 — StockAnalysis 영업이익 = 앱 − Σ(S&P 비경상 줄). 소계 있는 본표만(소계 없는 본표는 R7 이 따로 본다)
       if (n === "StockAnalysis") for (const use of spSubsets) {
         rules.push([`sp-${use.map(([k]) => k).join("+")}`, spLabel(use, "영업이익"), (c, x, e) => {
-          if (e.type !== "F") return null;
+          if (!e) return null; // F·S 모두(MRK 합성 영업이익)
           const t = spTerm(use, c);
-          return t.skip ? t : { exp: x.ours - t.s, ev: `앱 ${x.ours} − (${t.ev})` };
+          return t.skip ? t : { exp: x.ours - t.s, tol: t.tol, ev: `앱 ${x.ours} − (${t.ev})` };
         }]);
+      }
+      // (마) S&P 비경상 줄(0~2개) + SEC 항목 1개(2026-09-29 탐색으로 확인한 두 가지만): 연금 비근무원가(MRK — S&P 는 영업이익에 넣는다),
+      //    기타 영업손익(MCD — S&P 는 회사의 기타 영업손익 줄 대신 자기 기타 영업비용 줄을 쓴다, 그 줄은 아래 S&P 줄 후보로). 그 해 10-K 값, 없으면 0
+      if (n === "StockAnalysis") {
+        const secFy = (concept, end) => { const es = (G[concept]?.units?.USD ?? []).filter((y) => y.start && /^10-K/.test(y.form ?? "") && dayDiff(y.end, end) <= 7 && (Date.parse(y.end) - Date.parse(y.start)) / 864e5 > 300).sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? "")); return es.length ? es[0].val : 0; };
+        const EXTRA = [["NetPeriodicDefinedBenefitsExpenseReversalOfExpenseExcludingServiceCostComponent", "연금 비근무원가"], ["OtherOperatingIncomeExpenseNet", "회사 기타 영업손익"]];
+        const OPX = [["otheropex", "기타 영업비용"]];
+        for (const [concept, cl] of EXTRA) for (const sg of [1, -1]) for (const use of [[], ...spSubsets.filter((u) => u.length <= 2)]) for (const opx of [[], OPX]) {
+          const all = [...use];
+          rules.push([`sp+sec-${concept}-${sg}-${use.map(([k]) => k).join("+")}-${opx.length}`, `StockAnalysis(S&P 표준화) 영업이익 = 앱 − (${[...use.map(([, l]) => l), ...opx.map(([, l]) => `S&P ${l}`)].join("·") || "없음"}) ${sg < 0 ? "−" : "+"} ${cl}(SEC ${concept})`, (c, x, e) => {
+            if (!e.end) return null; // 소계 있는 본표(F)·합성(S, MRK) 모두 — 식은 앱 영업이익 값 기준
+            const t = spTerm(all, c); if (t.skip) return t;
+            const a0 = saIsAdj.get(c), ox = opx.length ? (a0?.ox ?? 0) : 0;
+            const sv = secFy(concept, e.end);
+            const nzr = all.filter(([k]) => a0?.[k]).length + (ox ? 1 : 0);
+            return { exp: x.ours - t.s - ox + sg * sv, tol: 0.5e6 * (nzr + 2) /* S&P 줄·SEC 항목·SA 값 각각 백만 단위 반올림 */, ev: `앱 ${x.ours} − (${t.ev}${ox ? ` + S&P 기타 영업비용 ${ox}` : ""}) ${sg < 0 ? "−" : "+"} ${concept} ${sv}` };
+          }]);
+        }
       }
       for (const [key, label, fn] of rules) { const h = opAllCols(n, key, fn); if (h && h.cols.has(col)) return { label, ...h }; }
       return null;
@@ -6037,7 +6055,7 @@ async function verifyUs(sym) {
         const r0 = e && aPassed(col, "감가상각비") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
         const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
-        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)));
+        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)) || (r0.tol != null && Math.abs(x.srcs[n].v - r0.exp) <= r0.tol));
         const txt = hit ? `${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}` : "";
         if (col === "LTM") { if (hit) { cols.add(col); ev.push(txt); } continue; }
         if (!hit) { ok = false; break; }
@@ -6190,7 +6208,7 @@ async function verifyUs(sym) {
         const r0 = e && aPassed(col, m) ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
         const u = x.srcs[n].unit ?? 1;
-        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)));
+        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)) || (r0.tol != null && Math.abs(x.srcs[n].v - r0.exp) <= r0.tol));
         const txt = hit ? `${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}` : "";
         if (col === "LTM") { if (hit) { cols.add(col); ev.push(txt); } continue; }
         if (!hit) { ok = false; break; }
@@ -6257,7 +6275,7 @@ async function verifyUs(sym) {
         if (h && h.cols.has(col)) return { label, ...h };
       }
       if (n === "StockAnalysis") for (const use of spSubsets) {
-        const h = sgaAllCols(n, m, `sp-${use.map(([k]) => k).join("+")}`, (c, x) => { const t = spTerm(use, c); return t.skip ? t : { exp: x.ours + t.s, ev: `앱 ${x.ours} + ${t.ev}` }; });
+        const h = sgaAllCols(n, m, `sp-${use.map(([k]) => k).join("+")}`, (c, x) => { const t = spTerm(use, c); return t.skip ? t : { exp: x.ours + t.s, tol: t.tol, ev: `앱 ${x.ours} + ${t.ev}` }; });
         if (h && h.cols.has(col)) return { label: spLabel(use, m), ...h };
       }
       for (const [minus, add] of combos) {
@@ -6858,7 +6876,7 @@ async function verifyUs(sym) {
           const ts = termSubsetAll(n);
           if (ts && ts.cols.has(col)) return { ok: `StockAnalysis 매출원가 = 구성 규칙 줄 중 ${ts.use.join("·")}만(${ts.drop.join("·")} 제외) — 대조한 모든 열 정확 성립(${ts.ev.join(" · ")}) · ${tail}` };
           for (const use of spSubsets) {
-            const h = cogsAllCols(n, `sp-${use.map(([k]) => k).join("+")}`, (c2, x) => { const t = spTerm(use, c2); return t.skip ? t : { exp: x.ours + t.s, ev: `앱 ${x.ours} + ${t.ev}` }; });
+            const h = cogsAllCols(n, `sp-${use.map(([k]) => k).join("+")}`, (c2, x) => { const t = spTerm(use, c2); return t.skip ? t : { exp: x.ours + t.s, tol: t.tol, ev: `앱 ${x.ours} + ${t.ev}` }; });
             if (h && h.cols.has(col)) return { ok: `${spLabel(use, "매출원가")} — 대조한 모든 열 정확 성립(${h.ev.join(" · ")}) · ${tail}` };
           }
         }
