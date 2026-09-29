@@ -6493,6 +6493,32 @@ async function verifyUs(sym) {
         if (x?.srcs[n] && extEq(x.ours, r.ours) && extEq(x.srcs[n].v, x.ours))
           return { outlier: `외부 자체 불일치 — LTM 기간 = ${fyc}(결산일 ${H[fyc].date}), ${n} ${fyc} 연간 값 ${x.srcs[n].v} = 앱 ${r.ours}인데 ${n} LTM 만 ${v}` };
       }
+      // 블룸버그 "정정" 열 순이익 끼워 맞춤(2026-09-30 WDC FY2022, 블룸버그 "공시기준" 화면 "정정:2022 A" 확인) — 나중 10-K 가 그 해 순이익을 재작성
+      //    (원 10-K 1,500 → 1,546)했을 때 블룸버그는 재작성 순이익만 받고 나머지 줄은 원 10-K 값을 둔 채 차이(ΔNI = +46)를 판관비에서 뺀다:
+      //    판관비 = 원 판관비 − ΔNI(1,117 → 1,071), 영업이익 = 원 영업이익 + ΔNI(2,391 → 2,437), 세전이익 = 원 세전이익 + ΔNI(2,123 → 2,169 — 실제 재작성
+      //    세전이익은 2,171), EBITDA 도 + ΔNI. 판관비·영업이익·세전이익·순이익은 모두 SEC 원 10-K 판본·최신 판본 값으로 정확히 성립할 때만
+      if (n === "블룸버그" && col !== "LTM" && H[col]?.date && /^(판관비|판관비·연구개발비|영업이익|세전이익|EBITDA)$/.test(metric)) {
+        const all = (t) => annualAllAt(t, "USD", H[col].date);
+        const NI = all("NetIncomeLoss"), ni0 = NI[0], ni1 = NI.at(-1), dNi = ni0 && ni1 ? ni1.val - ni0.val : 0;
+        if (dNi !== 0) {
+          const first = (t) => all(t)[0] ?? null;
+          const tagOf = { 판관비: "SellingGeneralAndAdministrativeExpense", 영업이익: "OperatingIncomeLoss", 세전이익: "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest" };
+          let exp = null, ev = "";
+          if (metric === "판관비" || metric === "판관비·연구개발비") {
+            const sg = first(tagOf.판관비);
+            const rd = metric === "판관비·연구개발비" ? (first("ResearchAndDevelopmentExpense") ?? first("ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost")) : null;
+            if (sg && (metric === "판관비" || rd)) { exp = sg.val - dNi + (rd?.val ?? 0); ev = `원 10-K 판관비 ${sg.val}(${sg.filed})${rd ? ` + 연구개발비 ${rd.val}` : ""} − ΔNI ${dNi}`; }
+          } else if (metric === "EBITDA") {
+            const op = first(tagOf.영업이익), da = recon.get(`${col} 감가상각비`)?.srcs[n]?.v;
+            if (op && da != null) { exp = op.val + dNi + da; ev = `원 10-K 영업이익 ${op.val}(${op.filed}) + ΔNI ${dNi} + 블룸버그 감가상각비 ${da}`; }
+          } else {
+            const x = first(tagOf[metric]);
+            if (x) { exp = x.val + dNi; ev = `원 10-K ${metric} ${x.val}(${x.filed}) + ΔNI ${dNi}`; }
+          }
+          if (exp != null && eqExp(exp) && !extEq(exp, r.ours))
+            return { ok: `블룸버그 "정정" 열 — 재작성 순이익만 반영(원 10-K ${ni0.val}(${ni0.filed}) → ${ni1.val}(${ni1.filed}), ΔNI ${dNi})하고 차이를 판관비에서 뺌: ${ev} = ${exp}${rnd(exp)} · 앱은 SEC 최신 판본` };
+        }
+      }
       // EBITDA 성분 판정(오너 지시 2026-09-30 "에비타만 떼서도") — 외부 EBITDA = 외부 영업이익 + 외부 감가상각비(같은 소스·같은 열, 정확 일치 또는
       //    블룸버그 성분별 반올림)이고 두 성분이 모두 ①(앱과 일치) 또는 원인 확인·외부 정밀도 부족이면 EBITDA 도 그 원인을 물려받는다
       if (metric === "EBITDA") {
