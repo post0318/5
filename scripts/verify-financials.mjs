@@ -6480,6 +6480,13 @@ async function verifyUs(sym) {
         return { na: `StockAnalysis 표기 끝자리 — 앱(공시 EPS) ${r.ours} 와 정확히 0.000001 차(0 쪽), 순이익 ÷ 주식수로는 재현 안 됨` };
       // 외부 자체 불일치(2026-09-30) — LTM 기간 = 최근 사업연도(결산일 ±7일, 결산 직후 분기 공시 전 — MSFT FY2026)이고 그 소스의 같은 사업연도 연간
       //    값은 앱과 정확히 같은데 LTM 값만 다르면, 같은 기간에 대한 외부 자신의 두 값이 서로 다르다 → 외부 단독 이탈
+      // 외부 자체 불일치(감가상각비) — 외부 EBITDA − 외부 영업이익 = 앱 감가상각비인데 외부 감가상각비 칸만 다르다(SNDK FY2026 블룸버그: EBITDA 12,538
+      //    − 영업이익 = 149 = 앱, 감가상각비 칸 113 = 149 − 1분기 36)
+      if (metric === "감가상각비" && !extEq(v, r.ours)) {
+        const eb = recon.get(`${col} EBITDA`)?.srcs[n]?.v, op = recon.get(`${col} 영업이익`)?.srcs[n]?.v;
+        if (eb != null && op != null && extEq(eb - op, r.ours) && !extEq(eb - op, v))
+          return { outlier: `외부 자체 불일치 — ${n} EBITDA ${eb} − ${n} 영업이익 ${op} = ${eb - op} = 앱 감가상각비인데 ${n} 감가상각비 칸만 ${v}` };
+      }
       if (col === "LTM" && H.LTM?.date && !extEq(v, r.ours) && !(metric === "감가상각비" && daRule(n, col))) {
         const fyc = Object.keys(H).find((c) => c !== "LTM" && H[c]?.date && dayDiff(H[c].date, H.LTM.date) <= 7);
         const x = fyc ? recon.get(`${fyc} ${metric}`) : null;
@@ -6727,7 +6734,16 @@ async function verifyUs(sym) {
             const qs = q3m.map((e) => e.val / splitAdj(e)), s3 = qs.reduce((t, x) => t + x, 0), q4ref = fy0.val / splitAdj(fy0) - nine.val / splitAdj(nine);
             for (const R of rel.vals) {
               const q4 = R / k;
-              if (Math.abs(q4 - q4ref) > 0.02 + 1e-9 || !same(s3 + q4) || extEq(s3 + q4, r.ours)) continue;
+              // 4분기 값 확인: 연간 − 9개월 EPS 와 0.02 안, 또는 4분기 순이익(연간 − 9개월) ÷ 3분기 희석 가중평균과 5% 안(주식수가 크게 변한 해 — SNDK FY2026
+              // 43.97: 연간 − 9개월 EPS 는 44.34)
+              const niQ4 = (() => {
+                const f = annualAllAt("NetIncomeLoss", "USD", H[col].date)[0];
+                const n9 = (G.NetIncomeLoss?.units?.USD ?? []).filter((e) => e.start && dayDiff(e.start, fy0.start) <= 5 && dOf(e) >= 250 && dOf(e) <= 290).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))[0];
+                const sh = (G.WeightedAverageNumberOfDilutedSharesOutstanding?.units?.shares ?? []).find((e) => e.start && q3m[2] && e.end === q3m[2].end && dOf(e) <= 100);
+                return f && n9 && sh ? (f.val - n9.val) / sh.val : null;
+              })();
+              const q4ok = Math.abs(q4 - q4ref) <= 0.02 + 1e-9 || (niQ4 != null && Math.abs(q4 - niQ4) <= 0.05 * Math.abs(q4));
+              if (!q4ok || !same(s3 + q4) || extEq(s3 + q4, r.ours)) continue;
               return { ok: `${n} 희석 EPS = 분기 EPS 합 ${[...qs, q4].map((x) => +x.toFixed(6)).join(" + ")} = ${+(s3 + q4).toFixed(6)} — 1~3분기 원 10-Q 공시(${q3m.map((e) => e.filed).join("·")}) + 4분기 실적발표 8-K(${rel.filed}) ${R}${k !== 1 ? ` ÷ 분할 ${k}` : ""} · 앱은 연간 공시 희석 EPS ${r.ours}(분기 반올림값 합과 다름)` };
             }
           }
@@ -7449,6 +7465,7 @@ async function verifyUs(sym) {
           for (const dct of docs) {
             const txt = (await secText(`${base}/${dct.name}`)).replace(/<[^>]+>/g, " ").replace(/&#160;|&nbsp;|&#36;|&#x24;/gi, " ").replace(/&#59;/g, ";").replace(/\s+/g, " ");
             for (const m of txt.matchAll(/(?:GAAP EPS|earnings per share|EPS)[^.$\d]{0,40}(?:of|was)\s*\$?\s*(\(?-?\d+\.\d{2}\)?)/gi)) { const v0 = num(m[1]); if (v0 != null) vals.add(v0); }
+            for (const m of txt.matchAll(/\$\s*(\(?-?\d+\.\d{2}\)?)\s*(?:of\s*)?(?:GAAP\s*)?diluted/gi)) { const v0 = num(m[1]); if (v0 != null) vals.add(v0); } // "($43.97 diluted net income per share)" — SNDK FY2026
             for (const m of txt.matchAll(/diluted[^0-9()$]{0,80}((?:\s*\$?\s*\(?-?\d{1,3}\.\d{2}\)?){1,10})/gi))
               for (const t of m[1].match(/\(?-?\d{1,3}\.\d{2}\)?/g) ?? []) { const v0 = num(t); if (v0 != null) vals.add(v0); }
           }
