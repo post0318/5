@@ -1813,7 +1813,7 @@ const PRETAX_ID_RE = /^(us-gaap_IncomeLossFromContinuingOperationsBeforeIncomeTa
 /** 회사 고유 말단 줄의 영업외 라벨 — "Other (income) and expense"·"Nonoperating …"(검증기 자체 판정, 공통모드 표기) */
 const EXT_NONOP_RE = /\bnon-?operating\b|^\s*other\s*(\(\s*)?(income|expense|gains?|losses?)\b/i;
 /** 외부 영업이익 차이 후보 — 영업이익 계산식 안의 일회성 비용 줄(구조조정·손상·소송·인수합병 등)과 인수 무형자산 상각 줄 */
-const OP_CHARGE_RE = /Restructur|Impair|Severance|Litigation|Settlement|AcquisitionRelated|BusinessCombination|Merger|Integration|Separation|Divestiture|GainLossOnDisposition|GainLossOnSale|Terminat/i;
+const OP_CHARGE_RE = /Restructur|Impair|Severance|Litigation|Settlement|AcquisitionRelated|BusinessCombination|Merger|Integration|Separation|Divestiture|GainLossOnDisposition|GainLossOnSale|Terminat|other operating charges/i; // other operating charges: KO 본표 줄(구조조정·손상 등 — 앱 일회성비용 규칙과 같은 판정, 2026-09-29)
 const OP_AMORT_RE = /AmortizationOfIntangible|AmortizationOfAcquired|IntangibleAssets?\w*Amortiz|amortization of (acquired |purchased |acquisition-related )?intangible/i;
 /** 금융 부문 표지 — 본표 매출 줄(금융서비스 수익)·제품·서비스 멤버(금융) */
 const FIN_REV_ID_RE = /FinancialServicesRevenue|FinancingRevenue|FinanceAndInterestIncome|FinancialProductsRevenue/i;
@@ -3767,6 +3767,14 @@ async function verifyUs(sym) {
   for (const [k, v] of Object.entries(isItem(is, GP_ROW_RE)?.values ?? {})) (IS[lab(k)] ??= {}).gp = v;
   // 앱 일회성비용 주석 행(edgar-oneoff.ts) — 외부 영업이익 차이의 원인 확인용
   for (const [k, v] of Object.entries(rowStarts(is, "일회성비용"))) (IS[lab(k)] ??= {}).oneOff = v;
+  // 손익계산서 나머지 줄(2026-09-29 — 오너 지시 "안 한 항목도 다") — 법인세·기타·영업외손익·순이자비용·기타 영업비용·기본 EPS·판관비·연구개발비
+  for (const [name, key] of [["(−) 법인세비용", "tax"], ["(−) 기타", "otherNi"], ["(−) 영업외손익", "nonop"], ["(순이자비용)", "netInt"], ["(−) 기타 영업비용", "otherOpex"], ["기본 EPS", "epsB"]])
+    for (const [k, v] of Object.entries(rowOf(is, name))) (IS[lab(k)] ??= {})[key] = v;
+  for (const [prefix, key] of [["(−) 판매관리비", "sga"], ["(−) 연구개발비", "rnd"]])
+    for (const [k, v] of Object.entries(rowStarts(is, prefix))) (IS[lab(k)] ??= {})[key] = v;
+  // 판관비·연구개발비 빈칸 사유 — "본표에 줄 없음"(= 0)이 아니면 기타 영업비용도 정할 수 없다(DAL 성격별 비용 본표 — 오너 결정 2026-09-28)
+  for (const [re, key] of [[/^\(−\) 판매관리비/, "sgaWhy"], [/^\(−\) 연구개발비/, "rndWhy"]])
+    for (const [k, v] of Object.entries(isItem(is, re)?.cellNotes ?? {})) (IS[lab(k)] ??= {})[key] = v;
   // 앱 영업이익 행 이름 — "영업이익" 그대로면 공시 태그, 뒤에 설명이 붙으면 합성(소계 없는 손익계산서 등)
   const opRowName = is?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.startsWith("영업이익"))?.accountName ?? null;
   for (const [name, key] of [["총차입금", "debt"], ["순차입금", "nd"], ["자산 총계", "assets"], ["부채와 자본 총계", "le"]])
@@ -4223,6 +4231,44 @@ async function verifyUs(sym) {
       const ptTags = pretaxBeforeEq ? ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments", ...PRETAX_TAGS] : PRETAX_TAGS;
       const secPt = ptTags.map(secAt).find((v) => v != null) ?? null;
       add("A", "세전이익 앱 = SEC 세전이익", c, vsSource(pt, secPt, EXACT, [pretaxBeforeEq ? "본표 세전이익 = 지분법 차감 전 소계" : "", ...secNotes].filter(Boolean).join(" · ")));
+      // ── 손익계산서 나머지 줄(2026-09-29) ──
+      if (!bank) {
+        const I = IS[c] ?? {};
+        // 항등식 — 계산 줄이 이미 SEC 로 확인한 줄들과 맞물리는지(한 줄이라도 빈칸이면 계산 줄도 빈칸이어야 한다)
+        const ident = (name, got, parts, f, round = false) => {
+          if (parts.some((v) => v == null)) return add("D", name, c, got == null ? { status: PASS, note: "구성 줄 빈칸 → 빈칸" } : { status: FAIL, note: `구성 줄 빈칸인데 앱 ${got}` });
+          const exp = round ? Math.round(f(...parts)) : f(...parts);
+          add("D", name, c, got != null && Math.abs(got - exp) <= 1e-6 * Math.max(1, Math.abs(exp)) ? { status: PASS, app: got, src: exp } : { status: FAIL, note: `앱 ${got} vs 식 ${exp}`, app: got, src: exp });
+        };
+        ident("영업외손익 = 영업이익 − 세전이익", I.nonop, [I.op, I.pretax], (o, p) => o - p);
+        ident("기타(비지배지분·중단영업 등) = 세전이익 − 법인세 − 순이익", I.otherNi, [I.pretax, I.tax, I.ni], (p, t, n) => p - t - n, true);
+        const opexUnknown = (I.sga == null && I.sgaWhy && !/^본표에 줄 없음/.test(I.sgaWhy)) || (I.rnd == null && I.rndWhy && !/^본표에 줄 없음/.test(I.rndWhy));
+        if (I.gp != null && I.op != null && opexUnknown) add("D", "기타 영업비용 = 매출총이익 − 판관비 − 연구개발비 − 영업이익", c, I.otherOpex == null ? { status: PASS, note: `판관비·연구개발비 빈칸(${(I.sga == null ? I.sgaWhy : I.rndWhy).slice(0, 60)}) → 빈칸` } : { status: FAIL, note: `판관비·연구개발비를 정할 수 없는데 앱 ${I.otherOpex}` });
+        else if (I.gp != null && I.op != null) ident("기타 영업비용 = 매출총이익 − 판관비 − 연구개발비 − 영업이익", I.otherOpex, [I.gp, I.op], (g, o) => g - (I.sga ?? 0) - (I.rnd ?? 0) - o);
+        // 법인세 = SEC IncomeTaxExpenseBenefit(연간 10-K · LTM = SEC TTM)
+        secNotes.length = 0;
+        const st = secAt("IncomeTaxExpenseBenefit");
+        add("A", "법인세 앱 = SEC 법인세비용", c, st == null && I.tax == null ? { status: NA, note: "SEC 법인세 태그 없음" } : vsSource(I.tax, st, EXACT, secNotes.join(" · ")));
+        // 순이자비용 = SEC 이자비용 − 이자수익(태그 목록 첫 값 — 앱과 같은 규칙 재구현, 공통모드)
+        const firstOf = (tags) => { for (const t of tags) { const v = secAt(t); if (v != null) return { t, v }; } return null; };
+        const ie = firstOf(["InterestExpense", "InterestExpenseNonoperating", "InterestAndDebtExpense", "InterestExpenseDebt"]);
+        const ii = firstOf(["InvestmentIncomeInterestAndDividend", "InvestmentIncomeInterest", "InterestAndDividendIncomeOperating", "InterestIncomeOperating", "InterestIncomeNonoperating"]);
+        // 한쪽 태그를 이 회사가 다른 기간엔 썼는데 이 기간에 없으면 0 이 아니라 빈칸(그 기간 이자수익이 다른 줄에 합쳐짐 — XOM 2024~) — 앱과 같은 원칙
+        const everUsed = (tags) => tags.some((t) => (G[t]?.units?.USD ?? []).length > 0);
+        const missingSide = (!ie && everUsed(["InterestExpense", "InterestExpenseNonoperating", "InterestAndDebtExpense", "InterestExpenseDebt"])) || (!ii && everUsed(["InvestmentIncomeInterestAndDividend", "InvestmentIncomeInterest", "InterestAndDividendIncomeOperating", "InterestIncomeOperating", "InterestIncomeNonoperating"]));
+        if ((ie || ii) && missingSide) add("A", "순이자비용 앱 = SEC 이자비용 − 이자수익", c, I.netInt == null ? { status: PASS, note: `한쪽 태그가 이 기간에 없음(다른 기간엔 사용) → 빈칸 · ${ie ? `이자비용 ${ie.v}` : "이자비용 없음"} / ${ii ? `이자수익 ${ii.v}` : "이자수익 없음"}` } : { status: FAIL, note: `한쪽 태그가 이 기간에 없는데 앱 ${I.netInt}` });
+        else if (ie || ii) {
+          const exp = (ie?.v ?? 0) - (ii?.v ?? 0);
+          add("A", "순이자비용 앱 = SEC 이자비용 − 이자수익", c, { ...vsSource(I.netInt, exp, EXACT, `${ie ? `${ie.t} ${ie.v}` : "이자비용 태그 없음 0"} − ${ii ? `${ii.t} ${ii.v}` : "이자수익 태그 없음 0"} · 규칙 재구현(태그 선택은 공통모드)`) });
+        }
+        // 기본 EPS = SEC 공시 기본 EPS ÷ 분할 배수(Yahoo 분할 이력) — 연간만(앱은 LTM 기본 EPS 를 내지 않는다)
+        if (isFy) {
+          const eb = atEnd(epsBP, x.date);
+          if (!eb) add("A", "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)", c, I.epsB == null ? { status: PASS, note: "공시 기본 EPS 없음 → 앱 빈칸" } : { status: NA, note: `공시 기본 EPS 없음(앱 ${I.epsB} — 클래스별 등)` });
+          else if (splitErr) add("A", "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)", c, { status: NA, note: splitErr });
+          else { const k = splitAdj(eb); add("A", "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)", c, vsSource(I.epsB, eb.val / k, EXACT, k !== 1 ? `공시 ${eb.val} ÷ 분할 ${k}(Yahoo 분할 이력)` : "")); }
+        } else if (I.epsB != null) add("D", "LTM 기본 EPS 빈칸(앱 규칙)", c, { status: FAIL, note: `앱 LTM 기본 EPS ${I.epsB}` });
+      }
       // 앱 라벨(합성 여부)은 판정 근거가 아니다(감사) — 합성(미결)은 SEC 쪽 근거(최신 10-K 본표에 영업이익 태그 없음)일
       // 때만. SEC 본표에 영업이익 태그가 있는데 앱이 합성했으면 실패.
       const synth = opRowName != null && opRowName !== "영업이익";
@@ -4738,6 +4784,19 @@ async function verifyUs(sym) {
     }
     // 20-F 는 SEC 분기 원자료가 없다 — 분기·LTM 은 만들지 않는다
     if (!foreign) for (const p of isq?.periods ?? []) { qEndOf.set(p.label, p.endDate); if (p.endDate) judgeO("Q", p.label, p.label, p.endDate, p.fiscalQuarter === 4, oRowQ); }
+    // 일회성비용 주석 행(2026-09-29 — 오너 지시 "안 한 항목도 다") = 본표 영업이익 식 안 일회성 줄(구조조정·손상·위약금·합의금 등) 합.
+    // 검증기가 공시 원본 계산 구조에서 따로 고른 줄(OP_CHARGE_RE — 개념명·회사 라벨)이라 앱(edgar-oneoff)과 줄 선택 규칙이 다를 수 있다 — 규칙 재구현
+    for (const [col, e] of opincExp) {
+      if (col === "LTM" || e.type !== "F" || !(col in (IS ?? {}))) continue;
+      // 비용만(오너 결정 2026-09-28 — 일회성손익(순)으로 확장하지 않음): 처분손익 줄 제외
+      const ch = (e.charges ?? []).filter((t) => t.kind === "charge" && !/GainLoss|Gain on|gain/i.test(`${t.id} ${t.label}`));
+      const missing = ch.filter((t) => t.v == null);
+      const exp = ch.reduce((s, t) => s + (t.v == null ? 0 : -t.w * t.v), 0) * (e.k ?? 1);
+      const app = IS[col]?.oneOff ?? null;
+      const ev = ch.length ? ch.map((t) => `${t.label} ${t.v ?? "그 해 없음 0"}`).join(" + ") : "본표 영업이익 식에 일회성 줄 없음 → 0";
+      if (missing.length && !extEq(app, exp)) { add("A", "일회성비용 앱 = SEC 본표 일회성 줄 합", col, { status: NA, note: `최신 본표 일회성 줄 ${missing.map((t) => t.label).join("·")} 의 그 해 값 없음(개념 변경 가능 — ORCL FY2026 10-K) · 앱 ${app} vs 찾은 줄 합 ${exp}`, app, src: null }); continue; }
+      add("A", "일회성비용 앱 = SEC 본표 일회성 줄 합", col, app == null && !ch.length ? { status: PASS, note: "일회성 줄 없음 · 앱 빈칸" } : vsSource(app, exp, EXACT, `${ev} · 규칙 재구현(줄 선택 규칙이 앱과 다를 수 있음)`));
+    }
   }
 
   // ── 감가상각비 A층(--metric=da, 2026-09-27 — 지표 미종결) ────────────────────────────────────────────────────────

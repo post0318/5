@@ -105,9 +105,10 @@ export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
   // 자사주 매입·발행 같은 실제 변동이 우연히 원래 값의 반올림과 같아질 여지를 없앤다).
   const sharesRounds = (x: number, y: number) =>
     x !== y && [1e3, 1e4, 1e5, 1e6].some((p) => Math.abs(x) >= 100 * p && Math.round(y / p) * p === x && y % p !== 0);
-  // 작은 단위 반올림(값만 교체 — 아래 clean). |x| ≥ 1e8 이고 단위의 100배 이상일 때만 — 상대 오차 0.05% 이하
+  // 작은 단위 반올림(값만 교체 — 아래 clean). 값이 반올림 단위의 100배 이상일 때(상대 오차 0.5% 이하 — 주식수 규칙과 같은 폭). 예전 하한 1억은
+  // MRVL FY2022 법인세 −62,461,000(원 공시) → −62,500,000(2024 10-K 재게시)을 놓쳤다(2026-09-29, 검증기 법인세 대조로 발견)
   const usdSmallRounds = (x: number, y: number) =>
-    Math.abs(x) >= 1e8 && x !== y && [1e3, 1e4, 1e5].some((p) => Math.round(y / p) * p === x && y % p !== 0);
+    x !== y && [1e3, 1e4, 1e5].some((p) => Math.abs(x) >= 100 * p && Math.round(y / p) * p === x && y % p !== 0);
   const clean = (es: FactUnitEntry[], roundsTo: (x: number, y: number) => boolean, smallRounds?: (x: number, y: number) => boolean): FactUnitEntry[] => {
     const groups = new Map<string, FactUnitEntry[]>();
     for (const e of es) {
