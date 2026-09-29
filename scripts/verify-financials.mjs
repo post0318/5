@@ -2791,9 +2791,19 @@ async function secFaceSga({ cik, sub, sym, natCur = null }) {
       }
       if (mix) { out[k] = { key: keys.join(" / "), hows, loose, mix, v: null, lines: [], missing: [], how }; continue; }
       const missing = [...new Set(rs.flatMap(([r]) => r.missing))];
-      out[k] = { key: keys.join(" / "), hows, loose, missing, lines: [], same: `구성 공시마다 줄 개념 다름 — ${SGA_SAME}(${keys.map((x) => x.split("|").map(nm).join("+")).join(" ↔ ")})`, v: missing.length ? null : rs.reduce((s, [r, w]) => s + w * r.v, 0), vLatest: missing.length ? null : rs.reduce((s, [r, w]) => s + w * r.vLatest, 0), how };
+      // 라벨로 짝지은 줄(F층 원인 규칙 전용 — A층 하위 줄 대조에는 쓰지 않는다): 구성분마다 같은 라벨 집합이면 첫 구성분의 줄 id 로 값 합
+      // (KO LTM: 10-K OtherSellingGeneralAndAdministrativeExpense ↔ 10-Q OtherCostAndExpenseOperating, 둘 다 "Other operating charges")
+      const lk = (t) => String(t.label ?? "").trim().toLowerCase();
+      const labSet = (r) => r.lines?.map(lk).sort().join("|");
+      const aligned = rs.every(([r]) => r.lines?.length && labSet(r) === labSet(rs[0][0]) && new Set(r.lines.map(lk)).size === r.lines.length)
+        ? rs[0][0].lines.map((t) => ({ ...t, v: rs.every(([r]) => r.lines.find((y) => lk(y) === lk(t))?.v != null) ? rs.reduce((s, [r, w]) => s + w * r.lines.find((y) => lk(y) === lk(t)).v, 0) : null }))
+        : [];
+      out[k] = { key: keys.join(" / "), hows, loose, missing, lines: [], aligned, same: `구성 공시마다 줄 개념 다름 — ${SGA_SAME}(${keys.map((x) => x.split("|").map(nm).join("+")).join(" ↔ ")})`, v: missing.length ? null : rs.reduce((s, [r, w]) => s + w * r.v, 0), vLatest: missing.length ? null : rs.reduce((s, [r, w]) => s + w * r.vLatest, 0), how };
     }
-    out.others = xs[0][0].others.map((t) => ({ ...t, v: xs.every(([r]) => r.others.find((y) => y.id === t.id)?.v != null) ? xs.reduce((s, [r, w]) => s + w * r.others.find((y) => y.id === t.id).v, 0) : null }));
+    // 그 밖 줄 — 구성분 전체의 합집합(첫 구성분에 없는 줄도 — KO LTM: 첫 분기 성분에 Other operating charges 가 없어 LTM 규칙이 계산 불가였다)
+    const othIds = new Map();
+    for (const [r] of xs) for (const t of r?.others ?? []) if (!othIds.has(t.id)) othIds.set(t.id, t);
+    out.others = [...othIds.values()].map((t) => ({ ...t, v: xs.every(([r]) => r?.others?.find((y) => y.id === t.id)?.v != null) ? xs.reduce((s, [r, w]) => s + w * r.others.find((y) => y.id === t.id).v, 0) : null }));
     return out;
   };
   const annualAt = (E) => find((e) => dayDiff(e.end, E) <= 7 && dd(e) >= 300 && dd(e) <= 400);
@@ -3962,10 +3972,10 @@ async function verifyUs(sym) {
   const secYearEndShares = (date, tol = 7) => {
     const firstAt = (t) => (G[t]?.units?.shares ?? []).filter((e) => !e.start && /^10-K/.test(e.form ?? "") && dayDiff(e.end, date) <= tol)
       .sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))[0] ?? null;
-    for (const t of ["CommonStockSharesOutstanding", "SharesOutstanding"]) { const e = firstAt(t); if (e) return { v: e.val, how: `${t}(${e.filed} 10-K)` }; }
+    for (const t of ["CommonStockSharesOutstanding", "SharesOutstanding"]) { const e = firstAt(t); if (e) return { v: e.val, filed: e.filed, how: `${t}(${e.filed} 10-K)` }; }
     const iss = firstAt("CommonStockSharesIssued"), trs = firstAt("TreasuryStockShares") ?? firstAt("TreasuryStockCommonShares");
-    if (iss && trs && iss.accn && iss.accn === trs.accn) return { v: iss.val - trs.val, how: `발행 ${iss.val} − 자기주식 ${trs.val}(${iss.filed} 10-K)` };
-    if (iss && !trs) return { v: iss.val, how: `발행주식수(${iss.filed} 10-K, 자기주식 태그 없음)` };
+    if (iss && trs && iss.accn && iss.accn === trs.accn) return { v: iss.val - trs.val, filed: iss.filed, how: `발행 ${iss.val} − 자기주식 ${trs.val}(${iss.filed} 10-K)` };
+    if (iss && !trs) return { v: iss.val, filed: iss.filed, how: `발행주식수(${iss.filed} 10-K, 자기주식 태그 없음)` };
     return null;
   };
   /** SEC 자산총계(결산일 ±7일, 최신 기준일 묶음) — 반올림 재태깅 제외 */
@@ -6236,7 +6246,7 @@ async function verifyUs(sym) {
     /** 열 e 에서 줄 id 값 — 성격 줄(sga·rnd lines) 또는 그 밖 말단 줄(others). "rnd:app" = 앱 연구개발비 */
     const sgaTermOf = (id, c, e) => {
       if (id === "rnd:app") return IS[c]?.rnd != null && aPassed(c, "연구개발비") ? { v: IS[c].rnd, lab: `앱 연구개발비 ${IS[c].rnd}` } : { skip: "그 열 연구개발비 없음(또는 A층 미통과)" };
-      const t = [...(e.sga?.lines ?? []), ...(e.rnd?.lines ?? []), ...(e.others ?? [])].find((y) => y.id === id);
+      const t = [...(e.sga?.lines ?? []), ...(e.rnd?.lines ?? []), ...(e.others ?? []), ...(e.sga?.aligned ?? []), ...(e.rnd?.aligned ?? [])].find((y) => y.id === id);
       return !t || t.v == null ? { skip: `${sgaNm(id)} 그 열 본표에 값 없음` } : { v: t.v, lab: `${t.label} ${t.v}` };
     };
     /** 소스 n 의 지표 m 열 col 에 성립하는 첫 전 열 규칙 → { label, ev, cols, skipped } | null */
@@ -6363,6 +6373,14 @@ async function verifyUs(sym) {
       // 외부가 자기 표기 단위로 반올림해 실었다면 roundHalfAway(exp, 단위) 와 완전히 같을 때만. 둘 이상의 외부 값을 섞는 식(⑦·④)은 완전 일치만
       const eqExp = (exp) => exp != null && (extEq(v, exp) || (unit != null && unit !== 1 && extEq(v, roundHalfAway(exp, unit))));
       const rnd = (exp) => (extEq(v, exp) ? "" : ` · 외부 표기 단위 ${unit} 반올림(0.5 는 0 에서 먼 쪽): round(${exp}) = ${v}`);
+      // 외부 자체 불일치(2026-09-30) — LTM 기간 = 최근 사업연도(결산일 ±7일, 결산 직후 분기 공시 전 — MSFT FY2026)이고 그 소스의 같은 사업연도 연간
+      //    값은 앱과 정확히 같은데 LTM 값만 다르면, 같은 기간에 대한 외부 자신의 두 값이 서로 다르다 → 외부 단독 이탈
+      if (col === "LTM" && H.LTM?.date && !extEq(v, r.ours)) {
+        const fyc = Object.keys(H).find((c) => c !== "LTM" && H[c]?.date && dayDiff(H[c].date, H.LTM.date) <= 7);
+        const x = fyc ? recon.get(`${fyc} ${metric}`) : null;
+        if (x?.srcs[n] && extEq(x.ours, r.ours) && extEq(x.srcs[n].v, x.ours))
+          return { outlier: `외부 자체 불일치 — LTM 기간 = ${fyc}(결산일 ${H[fyc].date}), ${n} ${fyc} 연간 값 ${x.srcs[n].v} = 앱 ${r.ours}인데 ${n} LTM 만 ${v}` };
+      }
       // EBITDA 성분 판정(오너 지시 2026-09-30 "에비타만 떼서도") — 외부 EBITDA = 외부 영업이익 + 외부 감가상각비(같은 소스·같은 열, 정확 일치 또는
       //    블룸버그 성분별 반올림)이고 두 성분이 모두 ①(앱과 일치) 또는 원인 확인·외부 정밀도 부족이면 EBITDA 도 그 원인을 물려받는다
       if (metric === "EBITDA") {
@@ -6568,6 +6586,10 @@ async function verifyUs(sym) {
         const L = at("NetIncomeLoss"), last = L.at(-1);
         if (last && extEq(v, last.val) && !extEq(last.val, r.ours) && L.some((e) => extEq(e.val, r.ours)))
           return { ok: `${n} 순이익 = 나중 10-K(${last.filed})의 반올림 재게시 값 ${last.val} — 앱은 원 공시 정밀값 ${r.ours}(오너 결정 2026-09-28) · 판본: ${L.map((e) => `${e.filed} ${e.val}`).join(" · ")}` };
+        // (다) 지배주주 순이익 − 상환가능 비지배지분 귀속 순이익(같은 10-K) — Yahoo BE 2022 −301,408천 = −301,708 − (−300)(2026-09-30)
+        { const Rs = at("NetIncomeLossAttributableToRedeemableNoncontrollingInterest"), R = Rs.find((e) => e.accn === last?.accn) ?? Rs.at(-1);
+          if (last && R && R.val !== 0 && extEq(v, last.val - R.val) && extEq(last.val, r.ours))
+            return { ok: `${n} 순이익 = SEC NetIncomeLoss ${last.val} − 상환가능 비지배지분 귀속 순이익 ${R.val}(${R.filed} 10-K) — 앱은 지배주주 순이익` }; }
         for (const tag of ["NetIncomeLossAvailableToCommonStockholdersBasic", "NetIncomeLossAvailableToCommonStockholdersDiluted"]) {
           const e = at(tag).at(-1);
           if (e && extEq(v, e.val)) return { ok: `${n} 순이익 = 보통주 귀속 순이익 SEC ${tag} ${e.val}(${e.filed} 10-K) — 앱은 지배주주 순이익(NetIncomeLoss ${r.ours}), 차이는 우선주 배당·참가증권 배분 등` };
@@ -6576,11 +6598,23 @@ async function verifyUs(sym) {
       // ⑪ 희석 EPS — 외부가 다른 공시 값을 쓴 경우(2026-09-29): (가) 공시 기본 EPS(VRT 2022 블룸버그 0.20 — 공시 희석 −0.04),
       //    (나) 분할 뒤 10-K 의 반올림 재게시 EPS(NVDA FY2024 Yahoo 1.19 — 앱은 원 공시 ÷ 분할 1.193, 오너 결정 2026-09-28).
       //    SEC 태그 값(분할 보정)과 정확히 같을 때만. 앱 EPS = SEC(A층) 기간만
-      if (metric === "희석 EPS" && col !== "LTM" && H[col]?.date && epsExact && !splitErr) {
+      if (metric === "희석 EPS" && col !== "LTM" && H[col]?.date && !splitErr
+        && (epsExact || checks.some((k) => k.col === col && k.status === PASS && k.name === "EPS 앱 = SEC 공시 EPS(분할 보정)"))) {
+        // (라) 외부 = 앱 EPS(원 공시 ÷ 분할)를 외부 값 자신의 소수 자릿수(3자리 이상)로 반올림(Yahoo WMT FY2023 1.423333 = 4.27 ÷ 3)
+        { const dec = (String(v).split(".")[1] ?? "").length, u = 10 ** -Math.min(dec, 6);
+          if (dec >= 3 && Math.round(roundHalfAway(r.ours, u) / u) === Math.round(v / u)) return { ok: `${n} 희석 EPS = 앱 ${r.ours}(원 공시 ÷ 분할, A층 통과)의 소수 ${Math.min(dec, 6)}자리 반올림` }; }
         const B = annualAllAt("EarningsPerShareBasic", "USD/shares", H[col].date).at(-1);
         if (B && Math.abs(B.val / splitAdj(B) - v) < 1e-9 && Math.abs(B.val / splitAdj(B) - r.ours) > 1e-9) return { ok: `${n} 희석 EPS = 공시 기본 EPS ${B.val}(${B.filed} 10-K${splitAdj(B) !== 1 ? ` ÷ 분할 ${splitAdj(B)}` : ""}) — 앱은 공시 희석 EPS ${r.ours}` };
         const D = annualAllAt("EarningsPerShareDiluted", "USD/shares", H[col].date);
         const last = D.at(-1);
+        // (다) 최초 공시 희석 EPS ÷ 분할을 외부 값 자신의 소수 자릿수(3자리 이상)로 반올림(Yahoo WMT FY2024 1.913333 = 5.74 ÷ 3 — 앱은 분할 뒤
+        //    10-K 의 재게시 1.91). 분할이 있었던 기간만
+        const first = D[0], dec = (String(v).split(".")[1] ?? "").length;
+        if (first && splitAdj(first) !== 1 && dec >= 3 && Math.abs(v - r.ours) > 1e-9) {
+          const u = 10 ** -Math.min(dec, 6);
+          if (Math.round(roundHalfAway(first.val / splitAdj(first), u) / u) === Math.round(v / u))
+            return { ok: `${n} 희석 EPS = 최초 공시(${first.filed}) ${first.val} ÷ 분할 ${splitAdj(first)} = ${first.val / splitAdj(first)}, 소수 ${Math.min(dec, 6)}자리 반올림 — 앱은 분할 뒤 10-K 재게시 값 ${r.ours} · 판본: ${D.map((e) => `${e.filed} ${e.val}`).join(" · ")}` };
+        }
         if (last && D.length > 1 && Math.abs(last.val / splitAdj(last) - v) < 1e-9 && Math.abs(v - r.ours) > 1e-9) return { ok: `${n} 희석 EPS = 나중 10-K(${last.filed})의 재게시 값 ${last.val}${splitAdj(last) !== 1 ? ` ÷ 분할 ${splitAdj(last)}` : ""} — 앱은 원 공시 정밀값 ${r.ours}(분할 소급 반올림 전) · 판본: ${D.map((e) => `${e.filed} ${e.val}`).join(" · ")}` };
       }
       // ⑨' StockAnalysis·Yahoo 희석 EPS = SEC 순이익(보통주 귀속 또는 지배주주) ÷ SEC 희석 가중평균, 외부 값 자신의 소수 자릿수로 반올림
@@ -6591,7 +6625,9 @@ async function verifyUs(sym) {
         const dec = (String(v).split(".")[1] ?? "").length;
         // 분모: 희석 가중평균(없으면·손실이면 기본 — AMD 2023 SA 0.52912 = 순이익 ÷ 기본), 반올림 또는 버림(SA 는 소수 여섯째 자리 버림 —
         // INTC 2024 −4.3822427 → −4.382242). 소수 자릿수 전부 정확히 같아야
-        const shs = [["희석 가중평균", annualAllAt("WeightedAverageNumberOfDilutedSharesOutstanding", "shares", H[col].date).at(-1)], ["기본 가중평균", annualAllAt("WeightedAverageNumberOfSharesOutstandingBasic", "shares", H[col].date).at(-1)]].filter(([, x]) => x?.val);
+        const shs = [["희석 가중평균", annualAllAt("WeightedAverageNumberOfDilutedSharesOutstanding", "shares", H[col].date).at(-1)], ["기본 가중평균", annualAllAt("WeightedAverageNumberOfSharesOutstandingBasic", "shares", H[col].date).at(-1)],
+          // 결산일 유통주식수(Yahoo VST 2022~2025 = 순이익 ÷ 결산일 CommonStockSharesOutstanding, CEG 2022 — 2026-09-30 실측)
+          ...(() => { const y = secYearEndShares(H[col].date); return y ? [[`결산일 유통주식수 ${y.how}`, { val: y.v, filed: y.filed }]] : []; })()].filter(([, x]) => x?.val);
         if (dec >= 3 && shs.length) {
           const u = 10 ** -Math.min(dec, 6), ui = Math.round(1 / u);
           for (const [sl, sh] of shs) {
@@ -6650,6 +6686,9 @@ async function verifyUs(sym) {
         if (sym === "SNDK") { const x = d.val0("us-gaap_OperatingLeaseLiabilityNoncurrent"); if (x != null && !d.onFace("us-gaap_OperatingLeaseLiabilityNoncurrent")) variants.push(["종목별 식(SNDK): Yahoo 는 본표 밖 비유동 운용리스 포함", d.faceSum + x]); }
         for (const [how, exp] of variants)
           if (eqExp(exp)) return { common: `Yahoo 총차입금 = SEC 본표 차입금·리스 줄 합 ${exp}${rnd(exp)}(${d.fl.form} ${d.fl.date}: ${d.faceVals.map((x) => `${d.nm(x.id)} ${x.v}`).join(" + ")})${how ? ` · ${how}` : ""} — 앱 = 본표 합 + ${d.off.map((x) => `${x.why} ${d.nm(x.id)} ${x.v}`).join(" + ") || "없음"} (SEC 값으로 정확 성립) · 공통모드(본표 줄 선택 규칙 재구현)` };
+        // 앱 − 본표 밖 항목 하나(BE: 비유동 금융리스 3,395천 — 본표 "기타 비유동부채" 안, Yahoo 는 유동분만 넣음, 2026-09-30)
+        if (d.off?.length > 1) for (const x of d.off) if (x.v && eqExp(r.ours - x.v))
+          return { common: `Yahoo 총차입금 = 앱 ${r.ours} − 본표 밖 ${x.why} ${d.nm(x.id)} ${x.v}${rnd(r.ours - x.v)} — Yahoo 는 앱의 본표 밖 항목(${d.off.map((y) => `${y.why} ${d.nm(y.id)} ${y.v}`).join(" + ")}) 중 이것만 뺌 · 앱 = 본표 합 + 본표 밖 항목(SEC 값으로 정확 성립) · 공통모드(본표 줄 선택 규칙 재구현)` };
       }
       // R2·R3 StockAnalysis 총차입금 = 앱 + 금리·통화금리 파생상품 부채(R2) + 본표 밖 회사 고유 금융 의무(R3, AMZN). 앱 차입금이
       //    SEC 본표·주석 값으로 정확히 분해될 때(R1 과 같은 전제)만 원인 확인, 아니면 추정. 파생상품 값이 금리 외 멤버에도 있으면 추정.
@@ -7107,7 +7146,8 @@ async function verifyUs(sym) {
           if (!opCur && !opNon && !genNon && !genCur && !faceVals.some((x) => /OperatingLease/.test(nm(x.id)))) { const t = firstOff(["us-gaap_OperatingLeaseLiability"]); if (t) off.push({ ...t, why: "본표 밖 운용리스" }); }
           // 유동 운용리스 태그 없이 총액만 있고 본표엔 비유동만(MSFT: 유동분은 OperatingLeaseLiability[기타유동부채] 차원) → 총액 − 본표 비유동
           const faceOpNon = faceVals.find((x) => nm(x.id) === "OperatingLeaseLiabilityNoncurrent"), opTot = val0("us-gaap_OperatingLeaseLiability");
-          if (!opCur && !genCur && faceOpNon && opTot != null && !onFace("us-gaap_OperatingLeaseLiability") && opTot - faceOpNon.v > 0) off.push({ id: "us-gaap_OperatingLeaseLiability", v: opTot - faceOpNon.v, why: `본표 밖 유동 운용리스(총액 ${opTot} − 본표 비유동)` });
+          // 본표에 유동 운용리스 줄이 이미 있으면 적용하지 않는다(BE 2026-06-30 — 본표 유동 23,094천을 두 번 셌다, 2026-09-30)
+          if (!opCur && !genCur && faceOpNon && opTot != null && !onFace("us-gaap_OperatingLeaseLiability") && !onFace("us-gaap_OperatingLeaseLiabilityCurrent") && opTot - faceOpNon.v > 0) off.push({ id: "us-gaap_OperatingLeaseLiability", v: opTot - faceOpNon.v, why: `본표 밖 유동 운용리스(총액 ${opTot} − 본표 비유동)` });
           const offSum = off.reduce((t, x) => t + x.v, 0);
           debtDec = { fl, faceVals, faceSum, off, offSum, appOk: withLease != null && Math.abs(withLease - (faceSum + offSum)) <= 1, val0, onFace, nm };
           if (!debtDec.appOk) review.push({ item: "LTM 총차입금 SEC 본표 분해 불성립", note: `앱(운용리스 포함) ${withLease} ≠ 본표 줄 합 ${faceSum}(${faceVals.map((x) => `${nm(x.id)} ${x.v}`).join(" + ")}) + 주석·본표 밖 ${offSum}(${off.map((x) => `${x.why} ${nm(x.id)} ${x.v}`).join(" + ") || "없음"}) — ${fl.form} ${fl.date}. 차입금 원인 R1·R2·R3 은 추정까지만` });
