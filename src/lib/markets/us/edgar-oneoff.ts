@@ -231,10 +231,16 @@ export async function withOneOffCharges(cik: string, facts: CompanyFacts, recent
   // 금액은 **줄 구성을 준 그 공시**에 실린 값만(2026-09-29) — 예전엔 아무 공시의 최신값을 써서 판본이 섞였다: ORCL FY2024 는
   // FY2026 10-K 구성(구조조정·기타 718 = 구조조정 404 + 인수 관련 314 를 합친 줄)을 쓰면서 그 10-K 에 없는 인수 관련 비용 314 를
   // 옛 10-K 에서 끌어와 또 더했다(1,032). 그 공시에 값이 없으면 그 줄은 이 기간에 없는 것으로 본다
+  // 그 공시의 값이 먼저 공시된 정밀값의 반올림 재게시면(천~백만 단위, 원래 값은 그 단위 배수 아님) 원 공시 정밀값(오너 결정 2026-09-28
+  // "원 공시 정밀값으로 통일") — MCD 2025 10-K 가 표기를 백만 단위로 바꿔 2022 기타 영업손익 내역 1,009.8 → 1,010, 2023 362.3 → 362
+  const rounded = (x: number, y: number) => x !== y && [1e3, 1e4, 1e5, 1e6].some((p) => Math.abs(x) >= 100 * p && Math.round(y / p) * p === x && y % p !== 0);
   const usVal = (concept: string, e: FactUnitEntry, f: Filing): number | undefined => {
-    for (const x of g[concept]?.units?.USD ?? []) {
+    const same = (g[concept]?.units?.USD ?? []).filter((x) => x.start === e.start && x.end === e.end);
+    for (const x of same) {
       const accn = (x as FactUnitEntry & { accn?: string }).accn;
-      if (x.start === e.start && x.end === e.end && (accn ? accn === f.accn : x.filed === f.filed)) return x.val;
+      if (!(accn ? accn === f.accn : x.filed === f.filed)) continue;
+      const orig = same.filter((y) => (y.filed ?? "") < (x.filed ?? "") && rounded(x.val, y.val)).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))[0];
+      return orig ? orig.val : x.val;
     }
     return undefined;
   };
