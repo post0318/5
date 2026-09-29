@@ -6603,6 +6603,30 @@ async function verifyUs(sym) {
         // (라) 외부 = 앱 EPS(원 공시 ÷ 분할)를 외부 값 자신의 소수 자릿수(3자리 이상)로 반올림(Yahoo WMT FY2023 1.423333 = 4.27 ÷ 3)
         { const dec = (String(v).split(".")[1] ?? "").length, u = 10 ** -Math.min(dec, 6);
           if (dec >= 3 && Math.round(roundHalfAway(r.ours, u) / u) === Math.round(v / u)) return { ok: `${n} 희석 EPS = 앱 ${r.ours}(원 공시 ÷ 분할, A층 통과)의 소수 ${Math.min(dec, 6)}자리 반올림` }; }
+        // (마)·(바) 실적발표 8-K(항목 2.02, 오너 지시 2026-09-30) — (마) 분할 전 연간 GAAP 희석 EPS ÷ 분할(WMT FY2024 5.74 ÷ 3 = 1.913333 — 그 해
+        //    10-K 는 분할 뒤 제출돼 분할 전 값은 8-K 에만 있다), (바) 1~3분기 원 10-Q 희석 EPS + 4분기 실적발표 값(TSLA 2023 0.73 + 0.78 + 0.53 + 2.27
+        //    = 4.31 — 연간 공시 4.30). 4분기 값은 연간 − 9개월 누적(둘 다 원 공시)과 0.02 안이어야
+        const rel = relEps.get(col);
+        if (rel) {
+          const dec = (String(v).split(".")[1] ?? "").length, u = 10 ** -Math.min(Math.max(dec, 2), 6), same = (x) => Math.round(roundHalfAway(x, u) / u) === Math.round(v / u);
+          const k = splitAdj({ filed: rel.filed, end: H[col].date });
+          if (k !== 1) for (const R of rel.vals) if (same(R / k) && !extEq(R / k, r.ours) && Math.abs(R / k - r.ours) < 0.02 * Math.max(1, Math.abs(r.ours)))
+            return { ok: `${n} 희석 EPS = 실적발표 8-K(${rel.filed}) GAAP 희석 EPS ${R} ÷ 분할 ${k} = ${R / k} — 분할 전 발표값(그 해 10-K 는 분할 뒤 제출 — 재게시 ${r.ours}) · ${rel.url}` };
+          const dOf = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
+          const fy0 = annualAllAt("EarningsPerShareDiluted", "USD/shares", H[col].date)[0];
+          const all = !fy0 ? [] : (G.EarningsPerShareDiluted?.units?.["USD/shares"] ?? []).filter((e) => e.start && Date.parse(e.start) >= Date.parse(fy0.start) - 5 * 864e5 && Date.parse(e.end) < Date.parse(H[col].date) - 20 * 864e5);
+          const orig = (l) => l.sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))[0];
+          const q3m = [...new Set(all.filter((e) => dOf(e) >= 80 && dOf(e) <= 100).map((e) => e.end))].sort().map((end) => orig(all.filter((e) => e.end === end && dOf(e) >= 80 && dOf(e) <= 100)));
+          const nine = orig(all.filter((e) => dOf(e) >= 250 && dOf(e) <= 290));
+          if (fy0 && nine && q3m.length === 3) {
+            const qs = q3m.map((e) => e.val / splitAdj(e)), s3 = qs.reduce((t, x) => t + x, 0), q4ref = fy0.val / splitAdj(fy0) - nine.val / splitAdj(nine);
+            for (const R of rel.vals) {
+              const q4 = R / k;
+              if (Math.abs(q4 - q4ref) > 0.02 + 1e-9 || !same(s3 + q4) || extEq(s3 + q4, r.ours)) continue;
+              return { ok: `${n} 희석 EPS = 분기 EPS 합 ${[...qs, q4].map((x) => +x.toFixed(6)).join(" + ")} = ${+(s3 + q4).toFixed(6)} — 1~3분기 원 10-Q 공시(${q3m.map((e) => e.filed).join("·")}) + 4분기 실적발표 8-K(${rel.filed}) ${R}${k !== 1 ? ` ÷ 분할 ${k}` : ""} · 앱은 연간 공시 희석 EPS ${r.ours}(분기 반올림값 합과 다름)` };
+            }
+          }
+        }
         const B = annualAllAt("EarningsPerShareBasic", "USD/shares", H[col].date).at(-1);
         if (B && Math.abs(B.val / splitAdj(B) - v) < 1e-9 && Math.abs(B.val / splitAdj(B) - r.ours) > 1e-9) return { ok: `${n} 희석 EPS = 공시 기본 EPS ${B.val}(${B.filed} 10-K${splitAdj(B) !== 1 ? ` ÷ 분할 ${splitAdj(B)}` : ""}) — 앱은 공시 희석 EPS ${r.ours}` };
         const D = annualAllAt("EarningsPerShareDiluted", "USD/shares", H[col].date);
@@ -7256,6 +7280,38 @@ async function verifyUs(sym) {
       const from = qEnds.length ? new Date(Date.parse(qEnds[0]) - 100 * 864e5).toISOString().slice(0, 10) : "";
       try { if (qEnds.length === 4) revQDeriv = await derivFactsOf(revFace.faces.filter((f) => !f.any && f.instUrl && (qEnds.some((E) => dayDiff(f.report, E) <= 7) || (f.report >= from && f.report <= L.date)))); }
       catch (e) { errs.push(`매출 분기 파생상품 공시 원본 조회 실패: ${String(e).slice(0, 60)}`); }
+    }
+    // 실적발표 8-K(항목 2.02) GAAP 희석 EPS(오너 지시 2026-09-30 — "8k 도 반영"). 10-K 에 없는 값 두 가지를 확인한다: 분할 전 연간 EPS
+    // (WMT FY2024 5.74 — 그 해 10-K 는 분할 뒤 제출돼 1.91 로 실림, 분할 전 값의 출처는 8-K 뿐), 4분기 EPS(TSLA 2023 2.27 — XBRL 에 4분기
+    // 3개월 값이 없음). 앱 EPS 와 다른 외부 값이 있는 연도만 받는다(원문은 디스크 캐시). 숫자: "GAAP EPS of $X" 류 · "diluted" 뒤 숫자열(괄호 = 음수)
+    const relEps = new Map(); // 연도 열 → { filed, url, vals }
+    {
+      const want = [...recon.values()].filter((x) => /^\d{4}Y 희석 EPS$/.test(x.item) && Object.entries(x.srcs).some(([k, y]) => k !== "인포맥스" && !extEq(y.v, x.ours))).map((x) => x.item.split(" ")[0]);
+      let pages = null;
+      const num = (t) => { const neg = t.includes("(") || t.trim().startsWith("-"); const n0 = Number(t.replace(/[^\d.]/g, "")); return Number.isFinite(n0) ? (neg ? -n0 : n0) : null; };
+      for (const col of want) {
+        const E = H[col]?.date;
+        if (!E) continue;
+        try {
+          pages ??= [sub.filings.recent];
+          const hits = () => pages.flatMap((pg) => (pg.form ?? []).map((fm, i) => ({ fm, i, pg })).filter(({ fm, i, pg }) => fm === "8-K" && /2\.02/.test(pg.items?.[i] ?? "")
+            && pg.filingDate[i] > E && dayDiff(pg.filingDate[i], E) >= 10 && dayDiff(pg.filingDate[i], E) <= 80));
+          for (const fl of sub.filings.files ?? []) { if (hits().length || (fl.filingTo ?? "") < E) break; pages.push(await secJson(`https://data.sec.gov/submissions/${fl.name}`)); }
+          const h = hits().sort((a, b) => a.pg.filingDate[a.i].localeCompare(b.pg.filingDate[b.i]))[0];
+          if (!h) continue;
+          const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${h.pg.accessionNumber[h.i].replace(/-/g, "")}`;
+          const idx = await secJson(`${base}/index.json`);
+          const docs = idx.directory.item.filter((x) => /\.htm$/i.test(x.name) && /ex-?99|earnings|release|press/i.test(x.name) && !/presentation/i.test(x.name));
+          const vals = new Set();
+          for (const dct of docs) {
+            const txt = (await secText(`${base}/${dct.name}`)).replace(/<[^>]+>/g, " ").replace(/&#160;|&nbsp;|&#36;|&#x24;/gi, " ").replace(/&#59;/g, ";").replace(/\s+/g, " ");
+            for (const m of txt.matchAll(/(?:GAAP EPS|earnings per share|EPS)[^.$\d]{0,40}(?:of|was)\s*\$?\s*(\(?-?\d+\.\d{2}\)?)/gi)) { const v0 = num(m[1]); if (v0 != null) vals.add(v0); }
+            for (const m of txt.matchAll(/diluted[^0-9()$]{0,80}((?:\s*\$?\s*\(?-?\d{1,3}\.\d{2}\)?){1,10})/gi))
+              for (const t of m[1].match(/\(?-?\d{1,3}\.\d{2}\)?/g) ?? []) { const v0 = num(t); if (v0 != null) vals.add(v0); }
+          }
+          if (vals.size) relEps.set(col, { filed: h.pg.filingDate[h.i], url: base, vals: [...vals] });
+        } catch (e) { errs.push(`${col} 실적발표 8-K 조회 실패: ${String(e).slice(0, 60)}`); }
+      }
     }
     // 1차: EBITDA 외 항목 → 2차: EBITDA(구성요소 판정 결과를 쓴다)
     const done = new Map();
