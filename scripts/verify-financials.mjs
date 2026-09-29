@@ -2489,7 +2489,17 @@ async function secFaceDa({ cik, sub, content, natCur = null }) {
     const prior = find((e) => dayDiff(e.start, ys(cur.start)) <= 7 && dayDiff(e.end, ys(L)) <= 7 && Math.abs(dd(e) - dd(cur)) <= 10);
     return comb([[fy, 1], [cur, 1], [prior, -1]], "분기 4개 구성 불가 — 종전 식: 사업연도 + 당기 누적 − 전년 동기");
   };
-  return { annualAt, quarterAt, ltmAt, extend, faces, skipped };
+  /** 기간 s~e 의 최초 공시 값 — 그 기간을 실은 공시 중 가장 먼저 제출된 공시의 자기 현금흐름표 감가상각 줄 합(조정 없음) → { v, accn, filed, form } | null */
+  const origAt = (s, e) => {
+    const f = [...faces].filter((g) => g.periods.has(`${s}|${e}`)).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))[0];
+    if (!f) return null;
+    const xs = (lines0.get(f.accn) ?? f.lines).map((id) => f.vals.get(`${id}|${s}|${e}`)?.val);
+    if (xs.every((x) => x == null)) return null;
+    return { v: xs.reduce((t, x) => t + (x ?? 0), 0), accn: f.accn, filed: f.filed, form: f.form };
+  };
+  /** 사업연도 [s, e] 안 기간 목록(읽은 공시 전체) — 누적·3개월 분기(현금흐름표에 3개월 열을 싣는 회사 — MSFT) */
+  const periodsIn = (s, e) => [...new Set(faces.flatMap((g) => [...g.periods]))].map((k) => k.split("|")).filter(([a, b]) => a >= new Date(Date.parse(s) - 5 * 864e5).toISOString().slice(0, 10) && b <= e);
+  return { annualAt, quarterAt, ltmAt, extend, faces, skipped, origAt, periodsIn };
 }
 // ▲ 감가상각비 판독 구획 ────────────────────────────────────────────────────────────────────────────────────
 
@@ -4885,6 +4895,8 @@ async function verifyUs(sym) {
     // 앱 연도 열·분기 열을 담은 공시를 먼저 더 읽는다(최근 10-K 3건·10-Q 4건 밖 — 과거 목록 파일까지)
     try {
       for (const per of is?.periods ?? []) if (per.label !== "현재/LTM" && per.endDate && daFace && !daFace.annualAt(per.endDate)) await daFace.extend(per.endDate, "FY");
+      // 최초 공시 규칙(orig-first)용 — 연간 열마다 그 해 1~3분기 10-Q 를 읽어 둔다(원공시 판본)
+      for (const per of is?.periods ?? []) { const fy = per.label !== "현재/LTM" && per.endDate && daFace ? daFace.annualAt(per.endDate) : null; if (fy?.start) { await daFace.extend(per.endDate, "FY"); } if (fy?.start) await daFace.extend(new Date(Date.parse(fy.start) + 80 * 864e5).toISOString().slice(0, 10), "Q"); }
       if (!foreign) for (const p of isq?.periods ?? []) if (p.endDate && daFace && !daFace.quarterAt(p.endDate, p.fiscalQuarter === 4)) await daFace.extend(p.endDate, "Q");
     } catch (e) { hardErrors.push(`감가상각비 과거 공시 판독 실패: ${String(e).slice(0, 120)}`); }
     for (const per of is?.periods ?? []) {
@@ -6129,6 +6141,29 @@ async function verifyUs(sym) {
           return { exp: s, ev: ev.join(" + ") };
         }]);
       }
+      // (라) 외부 = 최초 공시 값(2026-09-30 블룸버그 MSFT — FY2024 22,287·FY2025 34,153 = 원 10-K, 나중 10-K 가 20,958·29,433 으로 재작성. FY2026 43,448
+      //    = 원 10-Q 분기 13,061 + 9,198 + 10,167 + 4분기 11,022 — 1분기를 다음 10-Q 가 8,147 로 재작성). 식: 연간 원공시 + (1~3분기 원공시 합 − 9개월
+      //    누적 원공시). 그 해 안 재작성이 없으면 연간 원공시와 같다. 1~3분기 3개월 원공시·9개월 누적 원공시가 모두 읽혔을 때만(연간 열만)
+      if (daFace?.origAt) rules.push(["orig-first", "최초 공시 값(연간 원 10-K + 그 해 분기 재작성 되돌림) — 외부는 재작성 전 값, 앱은 최신 판본", (c, x, e) => {
+        if (!e.start || !e.end || (Date.parse(e.end) - Date.parse(e.start)) / 864e5 < 300) return null; // LTM 은 그 기간이 사업연도 자체일 때만(MSFT 6월 결산 직후)
+        const fy = daFace.origAt(e.start, e.end);
+        const ps = daFace.periodsIn(e.start, e.end);
+        const ddp = ([a, b]) => (Date.parse(b) - Date.parse(a)) / 864e5;
+        const n9 = ps.filter((p) => ddp(p) >= 250 && ddp(p) <= 290)[0];
+        const qs = ps.filter((p) => ddp(p) >= 80 && ddp(p) <= 100 && p[1] < e.end);
+        if (!fy) return null;
+        const q3 = qs.filter((p) => ddp([e.start, p[1]]) <= 290).sort((a, b) => a[1].localeCompare(b[1]));
+        // 분기 3개월 값: 1분기는 3개월 = 누적. 2·3분기는 3개월 기간 자체
+        const q1 = ps.filter((p) => ddp(p) >= 80 && ddp(p) <= 100 && dayDiff(p[0], e.start) <= 5)[0];
+        const quarters = [q1, ...q3.filter((p) => !q1 || p[1] !== q1[1])].filter(Boolean);
+        // 현금흐름표에 누적 열만 싣는 회사(3개월 열 없음 — GOOG): 분기 = 원공시 누적 차라 분기 합 = 9개월 원공시 → 식이 연간 원공시로 줄어든다
+        if (!quarters.length || (quarters.length === 1 && q1)) return { exp: fy.v, ev: `연간 원공시 ${fy.v}(${fy.form} ${fy.filed} — 현금흐름표 누적 열만)` };
+        if (!n9 || quarters.length !== 3) return { skip: "1~3분기 원공시 또는 9개월 누적 원공시를 읽지 못함" };
+        const qo = quarters.map((p) => daFace.origAt(p[0], p[1])), no = daFace.origAt(n9[0], n9[1]);
+        if (qo.some((q) => !q) || !no) return { skip: "분기 원공시 값 없음" };
+        const exp = fy.v + qo.reduce((t, q) => t + q.v, 0) - no.v;
+        return { exp, ev: `연간 원공시 ${fy.v}(${fy.form} ${fy.filed}) + 분기 원공시 ${qo.map((q) => `${q.v}(${q.filed})`).join(" + ")} − 9개월 원공시 ${no.v}(${no.filed})` };
+      }]);
       for (const [key, label, fn] of rules) { const h = daAllCols(n, key, fn); if (h && h.cols.has(col)) return { label, ...h }; }
       return null;
     };
@@ -6246,7 +6281,16 @@ async function verifyUs(sym) {
     /** 열 e 에서 줄 id 값 — 성격 줄(sga·rnd lines) 또는 그 밖 말단 줄(others). "rnd:app" = 앱 연구개발비 */
     const sgaTermOf = (id, c, e) => {
       if (id === "rnd:app") return IS[c]?.rnd != null && aPassed(c, "연구개발비") ? { v: IS[c].rnd, lab: `앱 연구개발비 ${IS[c].rnd}` } : { skip: "그 열 연구개발비 없음(또는 A층 미통과)" };
-      const t = [...(e.sga?.lines ?? []), ...(e.rnd?.lines ?? []), ...(e.others ?? []), ...(e.sga?.aligned ?? []), ...(e.rnd?.aligned ?? [])].find((y) => y.id === id);
+      const pool = (x) => [...(x.sga?.lines ?? []), ...(x.rnd?.lines ?? []), ...(x.others ?? []), ...(x.sga?.aligned ?? []), ...(x.rnd?.aligned ?? [])];
+      let t = pool(e).find((y) => y.id === id);
+      // 그 열 공시가 같은 줄을 다른 개념으로 태깅했으면(KO 2021 10-K "Other operating charges" = OtherCostAndExpenseOperating) 라벨로 찾는다 —
+      // 다른 열에서 이 id 의 라벨을 얻고, 이 열에 같은 라벨 줄이 정확히 하나일 때만
+      if (!t) {
+        const lk = (y) => String(y?.label ?? "").trim().toLowerCase();
+        const lab0 = [...sgaExp.values()].map((x) => pool(x).find((y) => y.id === id)).find(Boolean);
+        const same = lab0 ? pool(e).filter((y) => lk(y) === lk(lab0)) : [];
+        if (same.length === 1) t = { ...same[0], label: `${same[0].label}(라벨 일치 — ${sgaNm(same[0].id)})` };
+      }
       return !t || t.v == null ? { skip: `${sgaNm(id)} 그 열 본표에 값 없음` } : { v: t.v, lab: `${t.label} ${t.v}` };
     };
     /** 소스 n 의 지표 m 열 col 에 성립하는 첫 전 열 규칙 → { label, ev, cols, skipped } | null */
@@ -6375,7 +6419,7 @@ async function verifyUs(sym) {
       const rnd = (exp) => (extEq(v, exp) ? "" : ` · 외부 표기 단위 ${unit} 반올림(0.5 는 0 에서 먼 쪽): round(${exp}) = ${v}`);
       // 외부 자체 불일치(2026-09-30) — LTM 기간 = 최근 사업연도(결산일 ±7일, 결산 직후 분기 공시 전 — MSFT FY2026)이고 그 소스의 같은 사업연도 연간
       //    값은 앱과 정확히 같은데 LTM 값만 다르면, 같은 기간에 대한 외부 자신의 두 값이 서로 다르다 → 외부 단독 이탈
-      if (col === "LTM" && H.LTM?.date && !extEq(v, r.ours)) {
+      if (col === "LTM" && H.LTM?.date && !extEq(v, r.ours) && !(metric === "감가상각비" && daRule(n, col))) {
         const fyc = Object.keys(H).find((c) => c !== "LTM" && H[c]?.date && dayDiff(H[c].date, H.LTM.date) <= 7);
         const x = fyc ? recon.get(`${fyc} ${metric}`) : null;
         if (x?.srcs[n] && extEq(x.ours, r.ours) && extEq(x.srcs[n].v, x.ours))
@@ -6387,7 +6431,7 @@ async function verifyUs(sym) {
         const it = (m) => recon.get(`${col} ${m}`);
         const st = (m) => { const x = it(m), s0 = x?.srcs[n]; if (!s0) return null; if (extEq(x.ours, s0.v)) return "①"; const d = done.get(`${x.item}|${n}`); return d?.ok ? "②" : d?.na ? "NA" : null; };
         const o = it("영업이익")?.srcs[n]?.v, d = it("감가상각비")?.srcs[n]?.v, so = st("영업이익"), sd = st("감가상각비");
-        if (o != null && d != null && so && sd && (extEq(v, o + d) || (n === "블룸버그" && unit >= 1 && [roundHalfAway, roundHalfEven].some((f) => extEq(v, f(o, unit) + f(d, unit))))))
+        if (o != null && d != null && so && sd && (extEq(v, o + d) || (n === "블룸버그" && unit >= 1 && ([roundHalfAway, roundHalfEven].some((f) => extEq(v, f(o, unit) + f(d, unit))) || (Math.abs(v - (o + d)) <= unit + 1e-6 && (so === "NA" || sd === "NA"))))))
           return (so === "NA" || sd === "NA") && so !== "②" && sd !== "②"
             ? { na: `EBITDA = ${n} 영업이익 ${o}(${so}) + ${n} 감가상각비 ${d}(${sd}) — 성분 외부 정밀도 부족` }
             : { ok: `EBITDA = ${n} 영업이익 ${o}(${so}) + ${n} 감가상각비 ${d}(${sd}) — 두 성분 모두 앱과 일치 또는 원인 확인` };
@@ -6588,7 +6632,7 @@ async function verifyUs(sym) {
           return { ok: `${n} 순이익 = 나중 10-K(${last.filed})의 반올림 재게시 값 ${last.val} — 앱은 원 공시 정밀값 ${r.ours}(오너 결정 2026-09-28) · 판본: ${L.map((e) => `${e.filed} ${e.val}`).join(" · ")}` };
         // (다) 지배주주 순이익 − 상환가능 비지배지분 귀속 순이익(같은 10-K) — Yahoo BE 2022 −301,408천 = −301,708 − (−300)(2026-09-30)
         { const Rs = at("NetIncomeLossAttributableToRedeemableNoncontrollingInterest"), R = Rs.find((e) => e.accn === last?.accn) ?? Rs.at(-1);
-          if (last && R && R.val !== 0 && extEq(v, last.val - R.val) && extEq(last.val, r.ours))
+          if (last && R && R.val !== 0 && (extEq(v, last.val - R.val) || (unit != null && unit !== 1 && extRound(n, v, last.val - R.val, unit))) && extEq(last.val, r.ours))
             return { ok: `${n} 순이익 = SEC NetIncomeLoss ${last.val} − 상환가능 비지배지분 귀속 순이익 ${R.val}(${R.filed} 10-K) — 앱은 지배주주 순이익` }; }
         for (const tag of ["NetIncomeLossAvailableToCommonStockholdersBasic", "NetIncomeLossAvailableToCommonStockholdersDiluted"]) {
           const e = at(tag).at(-1);
@@ -7039,7 +7083,7 @@ async function verifyUs(sym) {
           // ② 구성 규칙 원가 + 본표 감가상각 줄 + 소득세 외 세금(XOM: 원가 + 기타 세금 25,167 + 감가상각 25,993 = 277,832, 2025)
           // 사업연도 10-K 연간 값(filed 순) — first: 원 공시(정밀값), 아니면 최신
           const fyVal = (concept, date, first = false) => { const es = (G[concept]?.units?.USD ?? []).filter((y) => y.start && /^10-K/.test(y.form ?? "") && date && dayDiff(y.end, date) <= 7 && (Date.parse(y.end) - Date.parse(y.start)) / 864e5 > 300).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? "")); return es.length ? (first ? es[0] : es.at(-1)).val : null; };
-          const taxAt = (col) => fyVal("TaxesOther", H[col]?.date);
+          const taxAt = (col) => { if (col !== "LTM") return fyVal("TaxesOther", H[col]?.date); const t = secTtm("TaxesOther"); return t && H.LTM?.date && dayDiff(t.end, H.LTM.date) <= 7 ? t.v : null; }; // LTM = SEC TTM(분기 합)
           // ①-b 구성 규칙 줄 하나를 원 공시 정밀값으로 뺀다(MCD 기타 매장비용 2022 244.8·2023 232.5 — 나중 10-K 는 245·232 로 반올림 재게시)
           for (const ln of COGS_RULES[sym]?.lines ?? []) {
             const cs = [ln.concept].flat().filter((c) => /^us-gaap_/.test(c)).map((c) => c.slice(8));
