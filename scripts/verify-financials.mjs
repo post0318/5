@@ -6108,6 +6108,17 @@ async function verifyUs(sym) {
           }]);
         }
       }
+      // (다) 외부 = SEC 태그 1~2개의 합(현금흐름표 줄이 아닌 다른 구성 — 2026-09-30 CEG Yahoo: 손익계산서 감가상각 줄 1,091 + 핵연료 상각 758
+      //    = 1,849. 앱은 현금흐름표 줄 2,427 = 둘 + 자산복구충당부채 증가 543 + 전력계약 상각 35). 모든 연간 열 정확 성립일 때만
+      const BUILD = ["CostOfGoodsAndServicesSoldDepreciationAndAmortization", "DepreciationAndAmortization", "DepreciationDepletionAndAmortization", "AmortizationOfNuclearFuelLease", "Depreciation", "AmortizationOfIntangibleAssets"];
+      for (let i = 0; i < BUILD.length; i++) for (let j = i; j < BUILD.length; j++) {
+        const use = i === j ? [BUILD[i]] : [BUILD[i], BUILD[j]];
+        rules.push([`build-${use.join("+")}`, `외부 감가상각비 = ${use.map((t) => `SEC ${t}`).join(" + ")} — 앱은 현금흐름표 감가상각·상각 줄 합`, (c, x, e) => {
+          let s = 0; const ev = [];
+          for (const t of use) { const v0 = noteOf(t, c, e); if (v0 == null) return { skip: `SEC ${t} 값 없음` }; s += v0; ev.push(`${t} ${v0}`); }
+          return { exp: s, ev: ev.join(" + ") };
+        }]);
+      }
       for (const [key, label, fn] of rules) { const h = daAllCols(n, key, fn); if (h && h.cols.has(col)) return { label, ...h }; }
       return null;
     };
