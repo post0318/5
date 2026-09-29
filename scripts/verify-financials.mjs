@@ -2099,7 +2099,9 @@ async function secFaceOpinc({ cik, sub, facts, unit, foreign, revFace }) {
     const prior = find((e) => dayDiff(e.start, ys(cur.start)) <= 7 && dayDiff(e.end, ys(L)) <= 7 && Math.abs(dd(e) - dd(cur)) <= 10);
     return comb([[fy, 1], [cur, 1], [prior, -1]], "분기 4개 구성 불가 — 종전 식: 사업연도 + 당기 누적 − 전년 동기");
   };
-  return { annualAt, quarterAt, ltmAt, faces, split };
+  // 그 사업연도 자기 10-K 의 본표로 판독(일회성 줄 대조용 — 최신 10-K 는 과거 연도 줄 구성을 바꿀 수 있다: PEP 2022 무형자산 손상 줄, WDC FY2024 소송 손실 줄)
+  const ownAnnualAt = (E) => { const pred = (e) => dayDiff(e.end, E) <= 7 && dd(e) >= 300 && dd(e) <= 400; for (const f of faces) if (f.report && dayDiff(f.report, E) <= 7 && /^10-K/.test(f.form ?? "")) { const r = one(f, pred); if (r) return r; } return null; };
+  return { annualAt, ownAnnualAt, quarterAt, ltmAt, faces, split };
 }
 // ▲ 영업이익 판독 구획 ────────────────────────────────────────────────────────────────────────────────────
 
@@ -4797,8 +4799,9 @@ async function verifyUs(sym) {
     // 검증기가 공시 원본 계산 구조에서 따로 고른 줄(OP_CHARGE_RE — 개념명·회사 라벨)이라 앱(edgar-oneoff)과 줄 선택 규칙이 다를 수 있다 — 규칙 재구현
     for (const [col, e] of opincExp) {
       if (col === "LTM" || e.type !== "F" || !(col in (IS ?? {}))) continue;
+      // 줄 구성·금액 = 그 해를 담은 가장 최근 10-K(앱과 같은 판본 — 재작성 반영, WDC 분사 후 FY2024). 자기 10-K 본표는 ownAnnualAt(참고용)
       // 비용만(오너 결정 2026-09-28 — 일회성손익(순)으로 확장하지 않음): 처분손익 줄 제외
-      const ch = (e.charges ?? []).filter((t) => t.kind === "charge" && !/GainLoss|Gain on|gain/i.test(`${t.id} ${t.label}`));
+      const ch = (e.charges ?? []).filter((t) => t.kind === "charge" && !/GainLossOn(Disposition|Sale)|Gain(Loss)?OnSale|gain on (the )?(sale|disposal|disposition)/i.test(`${t.id} ${t.label}`)); // 처분손익만 제외 — 위약금(GainLossOnContractTermination, AMAT)·소송 합의(WDC)는 일회성
       const missing = ch.filter((t) => t.v == null);
       const exp = ch.reduce((s, t) => s + (t.v == null ? 0 : -t.w * t.v), 0) * (e.k ?? 1);
       const app = IS[col]?.oneOff ?? null;

@@ -18,7 +18,7 @@ import type { RecentFilings } from "./edgar-gapfill";
  * 한계: 다른 비용 줄 안에 섞인 금액(WMT 오피오이드 소송 합의금 — 판관비 안)은 잡히지 않는다. 영업외 항목
  * (채무소멸손익 등)은 대상이 아니다. 이미 영업이익에 반영(차감)된 금액이다 — 주석 행이라 합계에 영향 없음.
  *
- * 금액: us-gaap 개념은 companyfacts(최근 제출분), 회사 고유 개념만 그 공시의 인스턴스에서 읽는다(인스턴스는
+ * 금액: us-gaap 개념은 companyfacts 중 **그 공시(줄 구성을 준 공시)에 실린 값**, 회사 고유 개념은 그 공시의 인스턴스에서 읽는다(인스턴스는
  * 수 MB 라 필요할 때만). 기간마다 그 기간을 담은 가장 최근 공시의 구조를 쓴다. 비용은 양수.
  */
 
@@ -228,11 +228,15 @@ export async function withOneOffCharges(cik: string, facts: CompanyFacts, recent
     const ks = perFiling.filter((p) => p.f.form === "10-K" && p.f.report >= e.end && Date.parse(p.f.report) - Date.parse(e.end) < 2.2 * 365 * 864e5);
     return ks.length ? ks.reduce((a, b) => (a.f.report >= b.f.report ? a : b)) : undefined; // 그 기간을 담은 가장 최근 10-K
   };
-  const usVal = (concept: string, e: FactUnitEntry): number | undefined => {
-    let best: FactUnitEntry | undefined;
-    for (const x of g[concept]?.units?.USD ?? [])
-      if (x.start === e.start && x.end === e.end && (!best || (x.filed ?? "") > (best.filed ?? ""))) best = x;
-    return best?.val;
+  // 금액은 **줄 구성을 준 그 공시**에 실린 값만(2026-09-29) — 예전엔 아무 공시의 최신값을 써서 판본이 섞였다: ORCL FY2024 는
+  // FY2026 10-K 구성(구조조정·기타 718 = 구조조정 404 + 인수 관련 314 를 합친 줄)을 쓰면서 그 10-K 에 없는 인수 관련 비용 314 를
+  // 옛 10-K 에서 끌어와 또 더했다(1,032). 그 공시에 값이 없으면 그 줄은 이 기간에 없는 것으로 본다
+  const usVal = (concept: string, e: FactUnitEntry, f: Filing): number | undefined => {
+    for (const x of g[concept]?.units?.USD ?? []) {
+      const accn = (x as FactUnitEntry & { accn?: string }).accn;
+      if (x.start === e.start && x.end === e.end && (accn ? accn === f.accn : x.filed === f.filed)) return x.val;
+    }
+    return undefined;
   };
   // 기간 목록 = 세전이익 ∪ 영업이익이 있는 기간. 세전이익을 회사 고유 태그로 공시하는 회사(ORCL 2018~)는 표준 세전이익 태그가
   // 없어 기간이 0개였다(2026-09-28 — ORCL 일회성비용 전 연도 빈칸)
@@ -253,7 +257,7 @@ export async function withOneOffCharges(cik: string, facts: CompanyFacts, recent
     if (!p.lines.length) { out.push({ ...e, val: 0 }); continue; }
     let cost = 0, any = false;
     for (const l of p.lines) {
-      const v = l.ns === "us-gaap" ? usVal(l.concept, e) : p.ext.get(`${l.ns}_${l.concept}`)?.find((x) => x.start === e.start && x.end === e.end)?.val;
+      const v = l.ns === "us-gaap" ? usVal(l.concept, e, p.f) : p.ext.get(`${l.ns}_${l.concept}`)?.find((x) => x.start === e.start && x.end === e.end)?.val;
       if (v === undefined) continue;
       cost += -l.w * v; // 루트에서 빼는 줄(가중치 −1)의 양수 값 = 비용
       any = true;
