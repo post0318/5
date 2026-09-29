@@ -6277,6 +6277,32 @@ async function verifyUs(sym) {
         if (c === "FinancingInterestExpense" && st === e.start && en === e.end && /^ProductOrServiceAxis=.*Financ/i.test(dim ?? "") && fs0.length) finIntFacts.set(col, fs0[fs0.length - 1].v);
       }
     }
+    // LTM(2026-09-30 CAT 블룸버그 LTM 매출원가 = 앱 + 1,404 = 2025 연간 1,359 + 2026 상반기 707 − 2025 상반기 662) — LTM 기준일 10-Q 원본의
+    // 당기 누적·전년 동기 누적 차원 사실. LTM 이 사업연도 자체면 그 연간 값
+    if (COGS_MODE && !foreign && finIntFacts.size && H.LTM?.date) {
+      const L0 = H.LTM.date;
+      const fyc = Object.keys(H).filter((k) => k !== "LTM" && H[k]?.date && H[k].date <= new Date(Date.parse(L0) + 7 * 864e5).toISOString().slice(0, 10)).sort((p1, p2) => H[p2].date.localeCompare(H[p1].date))[0];
+      if (fyc && dayDiff(H[fyc].date, L0) <= 7) { if (finIntFacts.has(fyc)) finIntFacts.set("LTM", finIntFacts.get(fyc)); }
+      else if (fyc && finIntFacts.has(fyc)) {
+        const rc0 = sub.filings?.recent ?? {};
+        const i = (rc0.form ?? []).findIndex((fm, j) => fm === "10-Q" && rc0.reportDate[j] && dayDiff(rc0.reportDate[j], L0) <= 7);
+        if (i >= 0) {
+          try {
+            const idx = await instanceDecimals(cik, rc0.accessionNumber[i]);
+            const fy = cogsExp.get(fyc), s0 = fy?.end ? new Date(Date.parse(fy.end) + 864e5).toISOString().slice(0, 10) : null;
+            const yb = (d0) => new Date(Date.parse(d0) - 365 * 864e5).toISOString().slice(0, 10);
+            let cur = null, pri = null;
+            for (const [k, fs0] of idx ?? []) {
+              const [c, st, en, dim] = k.split("|");
+              if (c !== "FinancingInterestExpense" || !/^ProductOrServiceAxis=.*Financ/i.test(dim ?? "") || !fs0.length) continue;
+              if (s0 && dayDiff(st, s0) <= 5 && dayDiff(en, L0) <= 7) cur = fs0[fs0.length - 1].v;
+              if (s0 && dayDiff(st, yb(s0)) <= 7 && dayDiff(en, yb(L0)) <= 7) pri = fs0[fs0.length - 1].v;
+            }
+            if (cur != null && pri != null) finIntFacts.set("LTM", finIntFacts.get(fyc) + cur - pri);
+          } catch { /* 10-Q 원본 조회 실패 — LTM 규칙 없음 */ }
+        }
+      }
+    }
     const sgaCols = (n, m) => [...recon.values()].filter((x) => x.item.endsWith(` ${m}`) && SGA_METRIC_RE.test(x.item) && x.srcs[n]);
     const sgaMemo = new Map();
     const sgaAllCols = (n, m, key, expOf) => {
@@ -7123,7 +7149,7 @@ async function verifyUs(sym) {
           if (ts && ts.cols.has(col)) return { ok: `블룸버그 매출원가 = 구성 규칙 줄 중 ${ts.use.join("·")}만(${ts.drop.join("·")} 제외) — 대조한 모든 열 정확 성립(${ts.ev.join(" · ")}) · ${tail}` };
           // ③ 앱 + 금융 부문 이자비용(없는 해 0 — 전 열 성립)
           if (finIntFacts.size) {
-            const fh = cogsAllCols(n, "fin-int", (c2, x) => c2 === "LTM" ? { skip: "LTM — 연간 10-K 차원 사실만" } : ({ exp: x.ours + (finIntFacts.get(c2) ?? 0), ev: `앱 ${x.ours} + 금융상품 이자비용 ${finIntFacts.get(c2) ?? 0}` }));
+            const fh = cogsAllCols(n, "fin-int", (c2, x) => c2 === "LTM" && !finIntFacts.has("LTM") ? { skip: "LTM — 10-Q 차원 사실 없음" } : ({ exp: x.ours + (finIntFacts.get(c2) ?? 0), ev: `앱 ${x.ours} + 금융상품 이자비용 ${finIntFacts.get(c2) ?? 0}` }));
             if (fh && fh.cols.has(col)) return { ok: `블룸버그 매출원가 = 앱 + 금융 부문 이자비용(FinancingInterestExpense[금융상품]) — 대조한 모든 열 정확 성립(${fh.ev.join(" · ")}) · ${tail}` };
           }
           // ② 구성 규칙 원가 + 본표 감가상각 줄 + 소득세 외 세금(XOM: 원가 + 기타 세금 25,167 + 감가상각 25,993 = 277,832, 2025)
