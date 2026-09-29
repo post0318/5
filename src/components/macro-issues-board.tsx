@@ -55,9 +55,9 @@ function Pager({
  */
 export function MacroIssuesBoard({ topic, title }: { topic: "이슈분석" | "환율분석"; title: string }) {
   const [page, setPage] = useState(1);
-  const [source, setSource] = useState<string>("전체");
-  // 이슈분석 구분: 전체/경제/채권, 환율분석 구분: 전체/증권사명(오너 지시 2026-09-27)
+  // 이슈분석 구분: 경제/채권(전체 없음 — 오너 지시 2026-09-29), 환율분석 구분: 전체/증권사명(오너 지시 2026-09-27)
   const byKind = topic === "이슈분석";
+  const [source, setSource] = useState<string>(byKind ? "경제" : "전체");
 
   const q = useQuery({
     queryKey: ["macro-issues", topic, byKind ? "kind" : "source", source],
@@ -91,16 +91,18 @@ export function MacroIssuesBoard({ topic, title }: { topic: "이슈분석" | "�
             {q.data && <span className="text-muted-foreground ml-1.5 text-xs font-normal">({items.length})</span>}
           </CardTitle>
           <div className="flex flex-wrap gap-1">
-            <button
-              type="button"
-              onClick={() => selectSource("전체")}
-              className={cn(
-                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                source === "전체" ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:bg-muted",
-              )}
-            >
-              전체
-            </button>
+            {!byKind && (
+              <button
+                type="button"
+                onClick={() => selectSource("전체")}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                  source === "전체" ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:bg-muted",
+                )}
+              >
+                전체
+              </button>
+            )}
             {sources.map((s) => (
               <button
                 key={s}
