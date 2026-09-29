@@ -6516,7 +6516,7 @@ async function verifyUs(sym) {
             if (x) { exp = x.val + dNi; ev = `원 10-K ${metric} ${x.val}(${x.filed}) + ΔNI ${dNi}`; }
           }
           if (exp != null && eqExp(exp) && !extEq(exp, r.ours))
-            return { ok: `블룸버그 "정정" 열 — 재작성 순이익만 반영(원 10-K ${ni0.val}(${ni0.filed}) → ${ni1.val}(${ni1.filed}), ΔNI ${dNi})하고 차이를 판관비에서 뺌: ${ev} = ${exp}${rnd(exp)} · 앱은 SEC 최신 판본` };
+            return { outlier: `외부 단독 이탈(블룸버그 자체 구성, 오너 판단 2026-09-30 — 공시에 없는 값) — 블룸버그 "정정" 열 — 재작성 순이익만 반영(원 10-K ${ni0.val}(${ni0.filed}) → ${ni1.val}(${ni1.filed}), ΔNI ${dNi})하고 차이를 판관비에서 뺌: ${ev} = ${exp}${rnd(exp)} · 앱은 SEC 최신 판본` };
         }
       }
       // EBITDA 성분 판정(오너 지시 2026-09-30 "에비타만 떼서도") — 외부 EBITDA = 외부 영업이익 + 외부 감가상각비(같은 소스·같은 열, 정확 일치 또는
