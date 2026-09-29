@@ -5567,9 +5567,13 @@ async function verifyUs(sym) {
       // 감가상각비 전제(--metric=da)는 과거 10-K 까지 읽는 현금흐름표 줄 합 A층 — 기본 실행은 종전 원인 규칙(⑥⑦⑧)이 따로 판정하므로 넣지 않는다
       ...(DA_MODE ? { 감가상각비: /^감가상각비 앱 = SEC 현금흐름표 감가상각·상각 줄 합$/ } : {}),
       // 판관비·연구개발비(--metric=sga) — 본표 성격 줄 합 A층. 합 항목은 판관비 통과 + 연구개발비 통과(또는 "본표에 줄 없음" 빈칸 확인)
-      ...(SGA_MODE ? { 판관비: /^판관비 앱 = SEC 본표 판관비 성격 줄 합$/, 연구개발비: /^연구개발비 앱 = SEC 본표 연구개발비 성격 줄 합$/, 연구개발비빈칸: /^연구개발비 빈칸 = SEC 본표에 줄 없음$/ } : {}) };
+      ...(SGA_MODE ? { 판관비: /^판관비 앱 = SEC 본표 판관비 성격 줄 합$/, 연구개발비: /^연구개발비 앱 = SEC 본표 연구개발비 성격 줄 합$/, 연구개발비빈칸: /^연구개발비 빈칸 = SEC 본표에 줄 없음$/ } : {}),
+      // 외부 단독 이탈 §0 을 EPS·세전이익·EBITDA 에도(오너 판단 2026-09-30 — "스탁만 다르면 단독 이탈") — 그 전제인 A층 검사 이름
+      "희석 EPS": /^EPS 앱 = SEC 공시 EPS\(분할 보정\)$/, 세전이익: /^세전이익 앱 = SEC 세전이익$/ };
     const aPassed0 = (col, metric) => EXACT_A[metric] && checks.some((k) => k.col === col && k.status === PASS && EXACT_A[metric].test(k.name));
-    const aPassed = (col, metric) => (metric === "판관비·연구개발비" ? aPassed0(col, "판관비") && (aPassed0(col, "연구개발비") || aPassed0(col, "연구개발비빈칸")) : aPassed0(col, metric));
+    const aPassed = (col, metric) => (metric === "판관비·연구개발비" ? aPassed0(col, "판관비") && (aPassed0(col, "연구개발비") || aPassed0(col, "연구개발비빈칸"))
+      : metric === "EBITDA" ? aPassed0(col, "영업이익") && aPassed0(col, "감가상각비") // EBITDA = 영업이익 + 감가상각비, 두 성분 모두 A층 통과
+      : aPassed0(col, metric));
     /**
      * CAT 형 Yahoo 매출원가 = 본표 원가 + 본표 금융 부문 이자비용 줄("Interest expense of Financial Products"). ② 는 Yahoo 매출원가를
      * 대조한 **모든** 열(연간·LTM)에서 앱 = SEC 본표(A층) 이고 달러 단위까지 정확히 성립할 때만 — 한 기간이라도 안 맞거나 그 줄 값이
@@ -7568,6 +7572,15 @@ async function verifyUs(sym) {
         reconApply(metricClass, col0, m0);
         fxHold(metricClass);
         for (const n of clsNames) if (metricClass[n] === "③") (m0 === "영업이익" ? opincErrors : m0 === "감가상각비" ? daErrors : /^(판관비|연구개발비)/.test(m0) ? sgaErrors : cogsErrors).push({ item: r.item, source: n, ours: r.ours, other: r.srcs[n].v, note: `${why(n).trim() || "분해식 없음"}${aPassed(col0, m0) ? "" : " · 앱 ≠ SEC 본표(A층 미통과)"}` });
+      }
+      // 그 밖 항목(희석 EPS·순이익·세전이익·EBITDA — 2026-09-30): ①·②·NA·공통모드는 원인 판정 그대로, 외부 단독 이탈은 §0(앱 = SEC(A층) + 다른
+      // 외부 2곳 이상 일치 + 이 소스만 이탈) 또는 원인 규칙의 이탈 판정. 그 밖은 ③. 오류 목록(종료코드)에는 넣지 않는다(분류 표시만)
+      if (!metricClass && !revenueClass && /^(\d{4}Y|LTM) (희석 EPS|순이익|세전이익|EBITDA)$/.test(r.item)) {
+        const [col0, ...mm] = r.item.split(" "), m0 = mm.join(" ");
+        const clsMatched = matched.filter((n) => clsNames.includes(n));
+        metricClass = Object.fromEntries(clsNames.map((n) => [n, matched.includes(n) ? "①" : commonMode[n] ? "공통모드" : precisionNa[n] ? "NA" : causes[n]?.ok ? "②"
+          : causes[n]?.outlier || (aPassed(col0, m0) && clsMatched.length >= 2 && clsNames.length - clsMatched.length === 1) ? "외부단독이탈" : "③"]));
+        fxHold(metricClass);
       }
       review.push({
         ...(revenueClass ? { revenueClass } : {}),
