@@ -337,6 +337,10 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
   const partOn = (cs: string[], d: string, pick: "first" | "max" | "sum"): number | null | "unknown" => {
     const vals = cs.map((c) => on(c, d)).filter((v): v is number => v != null);
     if (vals.length) return pick === "first" ? vals[0] : pick === "max" ? Math.max(0, ...vals) : vals.reduce((x, y) => x + y, 0);
+    // 이 회사가 그 개념을 어느 기간에도 공시한 적이 없으면 없음(0) — 기준일 공시로 없음을 증명할 수 없는 날(20-F LTM: 분기 재무상태표가
+    // Yahoo 분기라 SEC 공시 없음)에 "모름"으로 EV 전체를 비우지 않는다(SPOT 2026-06-30 — 장기 투자증권을 한 번도 공시한 적 없음,
+    // 2026-09-29). 다른 기간엔 있다가 이 날만 없으면 종전대로 모름
+    if (cs.every((c) => E(c).length === 0)) return null;
     return provenAbsentAt(facts, cs, d) ? null : "unknown";
   };
 
