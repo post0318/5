@@ -2167,6 +2167,8 @@ function cfDaStruct(cal, labels, content) {
   return null;
 }
 /** 공시 한 건의 현금흐름표 감가상각 판독 — 구조 + 원본 인스턴스의 줄 값(차원 없음, decimals 포함)·손상·중단사업 사실 */
+/** 제외 항목 개념 — 포함 개념으로 태깅된 현금흐름표 줄의 짝(같은 공시·모든 기간 값이 같으면 제외 항목, HLT) */
+const CF_EXCL_TWINS = ["AmortizationOfAcquisitionCosts", "CapitalizedContractCostAmortization"];
 async function cfDaFace(cik, p, content, unitRe = /usd/i) {
   const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${p.accn.replace(/-/g, "")}`;
   const names = await filingNames(base);
@@ -2180,7 +2182,7 @@ async function cfDaFace(cik, p, content, unitRe = /usd/i) {
   if (!st.lines.length) return { ...p, why: "현금흐름표 영업활동 조정 항목에 감가상각·상각 줄 없음" };
   const xml = await secInstance(`${base}/${instN}`);
   const ctx = parseContexts(xml);
-  const want = new Set([...st.lines, ...st.excl.map((t) => t.id)]);
+  const want = new Set([...st.lines, ...st.excl.map((t) => t.id), ...CF_EXCL_TWINS.map((t) => `us-gaap_${t}`)]);
   const vals = new Map(), periods = new Set(), adj = [], dupA = new Set(), cfPeriods = new Set();
   for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+)\s*</g)) {
     const id = `${m[1]}_${m[2]}`, attrs = `${m[3]} ${m[5]}`;
@@ -2206,6 +2208,17 @@ async function cfDaFace(cik, p, content, unitRe = /usd/i) {
   // 3.2M, HLT 10-Q 감가상각 3개월 값)은 현금흐름표 줄 값이 아니다(2026-09-27, 앱 import 없이 원본에서 독립 판정)
   for (const k of [...vals.keys()]) if (!cfPeriods.has(k.slice(k.indexOf("|") + 1))) vals.delete(k);
   for (const k of [...periods]) if (!cfPeriods.has(k)) periods.delete(k);
+  // 태그만 다른 제외 항목(2026-09-29, 앱 edgar-cf-structure 와 같은 원칙 — 원본에서 독립 판정): 포함 개념 줄이 같은 공시의 제외 항목 개념
+  // (계약획득원가 상각)과 이 공시 현금흐름표의 모든 기간에서 값이 정확히 같으면 그 제외 항목이다(HLT 10-Q AmortizationOfIntangibleAssets = AmortizationOfAcquisitionCosts)
+  for (const id of [...st.lines]) {
+    if (!id.startsWith("us-gaap_") || st.lines.length < 2 || !periods.size) continue;
+    const twin = CF_EXCL_TWINS.map((t) => `us-gaap_${t}`).find((t) => t !== id && [...periods].every((pp) => vals.get(`${id}|${pp}`) && vals.get(`${t}|${pp}`)?.val === vals.get(`${id}|${pp}`).val)
+      && [...periods].some((pp) => vals.get(`${id}|${pp}`).val !== 0));
+    if (!twin) continue;
+    st.lines = st.lines.filter((x) => x !== id);
+    st.excl = [...st.excl, { id, label: (st.labelOf?.(id) ?? DA_NM(id)) }];
+    st.proof = [st.proof, `${DA_NM(id)} = 같은 공시 ${DA_NM(twin)} (현금흐름표 모든 기간 ${[...periods].map((pp) => vals.get(`${id}|${pp}`).val).join("·")}) — 제외 항목`].filter(Boolean).join(" · ");
+  }
   return { ...p, ...st, vals, periods, adj };
 }
 /** 한 기간 조정 — 손상 포함 줄이면 손상 금액, 중단사업 포함 현금흐름표면 중단사업 감가상각(10-K·10-Q 원본 태그). 규칙은 앱과 같은 성격(공통모드) */
@@ -2967,10 +2980,11 @@ const roundHalfAway = (x, u) => {
   return (Math.sign(x) * Math.round(Math.abs(x) * k)) / k;
 };
 /** 값들의 표기 단위 — 모두 1e6 배수면 1e6, 모두 1e3 배수면 1e3, 아니면 1(달러). 소스 한 곳·한 종목의 실제 데이터로 정한다(값 하나로 추정하지 않는다) */
+// 표기 단위 — 모든 값이 나누어떨어지는 가장 큰 단위. 10만·1만 단위 추가(2026-09-29 — StockAnalysis 는 MRVL 을 0.1백만 달러로 표기하는데 1,000 달러로 판정해 반올림 식이 안 맞았다)
 const unitOfAll = (vals) => {
   const xs = vals.filter((v) => v != null && Number.isFinite(v));
   if (!xs.length) return 1;
-  for (const u of [1e6, 1e3]) if (xs.every((v) => Math.round(v) % u === 0)) return u;
+  for (const u of [1e6, 1e5, 1e4, 1e3]) if (xs.every((v) => Math.round(v) % u === 0)) return u;
   return 1;
 };
 
@@ -5140,6 +5154,28 @@ async function verifyUs(sym) {
       recon.set(item, r);
     };
     const errs = [];
+    // 연구개발비 원 10-K 본문 표 값(2026-09-29, XOM) — XBRL 이 1억 단위로만 태깅된 해("1.2 billion", decimals −8)는 판관비 규칙(note-rnd)이
+    // 정밀값을 못 쓴다. 그 해 자기 10-K 본문의 "Research and development costs 1,228 987 879" 행 첫 값(백만)을 쓴다 — XBRL 값과 5% 안일 때만
+    const rndText = new Map(); // 결산일 → 달러
+    {
+      const es = (G.ResearchAndDevelopmentExpense?.units?.USD ?? []).filter((e) => e.start && /^10-K/.test(e.form ?? "") && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 > 300)
+        .sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""));
+      const first = new Map();
+      for (const e of es) if (!first.has(e.end)) first.set(e.end, e);
+      for (const e of first.values()) {
+        if (e.val % 1e8 !== 0) continue;
+        try {
+          const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${e.accn.replace(/-/g, "")}`;
+          const idx = await secJson(`${base}/index.json`);
+          const doc = idx.directory.item.filter((x) => /\.htm$/i.test(x.name) && !/^(ex|R\d)/i.test(x.name)).sort((a, b) => Number(b.size || 0) - Number(a.size || 0))[0];
+          if (!doc) continue;
+          const txt = (await secText(`${base}/${doc.name}`)).replace(/<[^>]+>/g, " ").replace(/&#160;|&nbsp;/g, " ").replace(/\s+/g, " ");
+          const m = /Research and development costs\s+\$?\s*([\d,]+)/i.exec(txt);
+          const v = m ? Number(m[1].replace(/,/g, "")) * 1e6 : null;
+          if (v != null && Math.abs(v - e.val) <= 0.05 * e.val) rndText.set(e.end, { v, accn: e.accn });
+        } catch { /* 본문 판독 실패 — XBRL 값 그대로 */ }
+      }
+    }
     // StockAnalysis 현금흐름표 "기타 상각"(otherAmortization, 기간별) — 원인 판정 ⑦ 용
     const saOtherAmort = new Map();
     // StockAnalysis 손익 조정 항목(기간별) — 원인 R7(합성 영업이익 회사의 SA 영업이익 분류) 용
@@ -5543,9 +5579,25 @@ async function verifyUs(sym) {
     };
     /** 원가 멤버 줄 전부의 합(줄마다 회사 반올림 — 합계 줄과 다를 수 있음). 멤버 2개 이상일 때만 */
     const pickAllMembers = (fs, e) => { const ms = costMembers(fs, e); return ms.length >= 2 ? sumEv(ms) : { v: 0, ev: "" }; };
+    /** ⓐ' 원가 위치 비용(부호 그대로 — 환입은 음수) + 인수 재고 공정가치 조정 상각(본표 줄). MRVL(2026-09-29): S&P 는 둘 다 원가에서 빼서
+     *  "합병·구조조정"으로 옮긴다 — FY2022 재고 조정 194.3 + 원가 구조조정 환입 −0.753 = 193.5, FY2023 38.7, FY2025 원가 구조조정 357.9. 위치 사실이
+     *  개념 여럿이면 크기가 가장 큰 것(합계)만 — 세분과 겹치지 않게. 재고 조정 줄이 그 공시에 없으면 0(항목 없는 해). 둘 다 없으면 사실 없음 */
+    const STEPUP_RE = /Inventor\w*(FairValue|StepUp|Stepup)|(FairValue|StepUp|Stepup)\w*Inventor/i;
+    const pickLocStepUp = (fs) => {
+      const loc = new Map(), su = new Map();
+      for (const x of fs) {
+        if (x.dims.length === 1 && LOC_AXES.includes(x.dims[0][0]) && COST_LOC_RE.test(x.dims[0][1]) && COST_CHARGE_RE.test(x.id) && !/Gain|Income/i.test(x.id)) loc.set(x.id, x);
+        if (!x.dims.length && STEPUP_RE.test(x.id)) su.set(x.id, x);
+      }
+      if (!loc.size && !su.size) return { v: 0, ev: "" };
+      const l = [...loc.values()].sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0], s = [...su.values()][0];
+      const ev = [l ? `${shortId(l.id)}[${l.dims[0][1]}] ${l.v}` : "원가 위치 비용 없음 0", s ? `${shortId(s.id)} ${s.v}` : "재고 조정 상각 줄 없음 0"];
+      return { v: (l?.v ?? 0) + (s?.v ?? 0), ev: ev.join(" + ") };
+    };
     // [키, 설명, 사실 선택, keep(true = SA = 고른 사실 합 / false = SA = 앱 − 고른 사실 합)]
     const SA_COGS_RULES = [
       ["loc", "원가 위치 구조조정·손상·인수합병 비용(IncomeStatementLocationAxis)", pickCostLoc, false],
+      ["loc-stepup", "원가 위치 구조조정 비용(환입 포함) + 인수 재고 공정가치 조정 상각 — S&P 는 둘 다 합병·구조조정 줄로 옮김", pickLocStepUp, false],
       ["incl", "원가 줄 안 포함 항목(…IncludedIn{원가 줄})", pickIncluded, false],
       ["fin", "원가 멤버 줄 중 금융 부문(ProductOrServiceAxis=…Financ…) 제외 합", pickNonFinMembers, true],
     ];
@@ -6093,7 +6145,7 @@ async function verifyUs(sym) {
       //  · 외부 = 성격 줄의 원 10-K 값: 나중 10-K 가 과거 연도 판관비를 재작성(MAR 2023 1,011 → 867) — 앱은 최신 10-K(오너 결정 2026-09-28 GOOG 와 같음)
       const fyNote = (concept, date, first = false) => { const es = (G[concept]?.units?.USD ?? []).filter((y) => y.start && /^10-K/.test(y.form ?? "") && date && dayDiff(y.end, date) <= 7 && (Date.parse(y.end) - Date.parse(y.start)) / 864e5 > 300).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? "")); return es.length ? (first ? es[0] : es.at(-1)).val : null; };
       const noteRules = [];
-      if (m === "판관비") noteRules.push(["note-rnd", "앱 − 주석 연구개발비(손익계산서 줄 없음 — 판관비 안) — 외부는 연구개발비를 판관비에서 떼어냄", (c) => { const v = fyNote("ResearchAndDevelopmentExpense", H[c]?.date, true); return v == null ? null : [-v, `− 주석 연구개발비 ${v}`]; }]);
+      if (m === "판관비") noteRules.push(["note-rnd", "앱 − 주석 연구개발비(손익계산서 줄 없음 — 판관비 안) — 외부는 연구개발비를 판관비에서 떼어냄", (c) => { const v = fyNote("ResearchAndDevelopmentExpense", H[c]?.date, true); if (v == null) return null; const t = [...rndText.entries()].find(([d]) => H[c]?.date && dayDiff(d, H[c].date) <= 7)?.[1]; return t ? [-t.v, `− 연구개발비 ${t.v}(10-K ${t.accn} 본문 표 — XBRL ${v} 는 1억 단위)`] : [-v, `− 주석 연구개발비 ${v}`]; }]);
       // 영업권 손상(AMAT 2025 — StockAnalysis 가 판관비에서 뺌). 손상이 없는 해는 0(항목 없는 해 = 0, 오너 결정 2026-09-28)
       if (m === "판관비") noteRules.push(["note-gw", "앱 − 영업권 손상 — 외부는 영업권 손상을 판관비에서 뺌", (c) => { const v = fyNote("GoodwillImpairmentLoss", H[c]?.date, true) ?? 0; return [-v, `− 영업권 손상 ${v}`]; }]);
       if (m !== "연구개발비") noteRules.push(["note-adv", `앱 + 주석 광고비 — 외부는 광고비를 ${m}에 넣음`, (c) => { const v = fyNote("AdvertisingExpense", H[c]?.date, true); return v == null ? null : [v, `+ 주석 광고비 ${v}`]; }]);

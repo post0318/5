@@ -32,6 +32,8 @@ const DA = /deprecia|amortiz/i;
 // 임차료 성격이라 EBITDA 에 이미 반영, 대차대조표 차입금의 운용·금융 혼합 리스 줄 제외와 같은 원칙). 금융리스 단독 줄은 포함.
 const NOT_DA = /debt|discount|premium|issuance|financing ?costs?|deferred ?(financing|charges)|stock|share-?based|compensation|operating\w*lease|lease ?expense|content|contract ?(cost|acquisition)|capitalized ?software|investment|securities|bond|inventory|incentive|acquisition ?costs|defined ?benefit|pension|postretirement/i;
 const OP_CF_ROOT = /^us-gaap_NetCashProvidedByUsedInOperatingActivities(ContinuingOperations)?$/;
+/** 제외 항목 개념 — 포함 개념으로 잘못 태깅된 줄을 판정하는 짝(같은 공시·같은 기간 값이 모두 같으면 제외 항목) */
+const EXCLUDED_TWINS = ["AmortizationOfAcquisitionCosts", "CapitalizedContractCostAmortization"];
 
 interface Filing { accn: string; form: string; filed: string }
 
@@ -351,6 +353,26 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
           (l.startsWith("us-gaap_") ? (g[l.slice(8)]?.units?.USD ?? []).find((e) => e.start === a && e.end === b && e.filed === f.filed)?.val : undefined);
         if (v !== undefined) own.set(`${l}|${p}`, v);
       }
+    // **태그만 다른 제외 항목(2026-09-29, HLT)** — 포함 개념으로 태깅된 현금흐름표 줄이 같은 공시의 제외 항목 개념(계약획득원가 상각)과
+    // 이 공시 현금흐름표의 **모든** 기간에서 값이 정확히 같으면 그 제외 항목으로 본다(줄에서 뺀다). HLT 10-Q 는 "Amortization of contract
+    // acquisition costs" 줄을 AmortizationOfIntangibleAssets 로 태깅하고 같은 공시에 AmortizationOfAcquisitionCosts 를 같은 값으로 싣는다
+    // (2025 1분기 14 = 14, 상반기 27 = 27, 9개월 42 = 42, 2026 1분기 15 = 15, 상반기 32 = 32) — 10-K 는 이 줄을 제외 개념으로 태깅
+    for (const l of [...lines]) {
+      if (!l.startsWith("us-gaap_") || lines.length < 2) continue;
+      for (const twin of EXCLUDED_TWINS) {
+        if (l === `us-gaap_${twin}`) continue;
+        const same = [...periods].every((p) => {
+          const [a, b] = p.split("|");
+          const v = own.get(`${l}|${p}`);
+          const t = (g[twin]?.units?.USD ?? []).find((e) => e.start === a && e.end === b && e.filed === f.filed)?.val;
+          return v !== undefined && t !== undefined && v === t;
+        });
+        if (same && periods.size && [...periods].some((p) => own.get(`${l}|${p}`) !== 0)) {
+          lines = lines.filter((x) => x !== l);
+          break;
+        }
+      }
+    }
     // **기준 증명(오너 결정 2026-09-29)** — 나중 공시가 줄을 합쳐(ISRG FY2025 10-K~: isrg:AmortizationOfIntangibleAssetsContractAcquisitionAndOtherAssets
     // 한 줄) 과거 기간을 다시 실었고, 그 값이 이 공시의 줄 합(제외했던 계약획득원가 상각 줄 포함 — 2025 10-Q: AmortizationOfIntangibleAssets +
     // CapitalizedContractCostAmortization)과 **정확히** 같으면 같은 기준으로 본다: 이 공시 값에 그 제외 줄을 더한다. 증명 예: 2025 1분기 12.1 =
