@@ -6641,6 +6641,21 @@ async function verifyUs(sym) {
         }
         if (last && D.length > 1 && Math.abs(last.val / splitAdj(last) - v) < 1e-9 && Math.abs(v - r.ours) > 1e-9) return { ok: `${n} 희석 EPS = 나중 10-K(${last.filed})의 재게시 값 ${last.val}${splitAdj(last) !== 1 ? ` ÷ 분할 ${splitAdj(last)}` : ""} — 앱은 원 공시 정밀값 ${r.ours}(분할 소급 반올림 전) · 판본: ${D.map((e) => `${e.filed} ${e.val}`).join(" · ")}` };
       }
+      // Yahoo 희석 EPS = 앱(공시 EPS) × 종목 고정 배수(2026-09-30 — DAL 1.000004·MDLZ 1.00004, 4개 연도 모두 소수 6자리까지 정확). 배수 후보는
+      //    1 ± d×10^-k(d 1~9, k 3~7) 하나 — 그 종목 Yahoo 희석 EPS 가 있는 연도 전부(2개 이상)에서 round(앱 × 배수, 소수 6자리) = Yahoo 이고,
+      //    이 열의 다른 외부 소스(인포맥스 제외)는 앱과 일치해야 한다. 배수의 이유는 공시로 설명되지 않아 외부 단독 이탈로만 분류
+      if (metric === "희석 EPS" && n === "Yahoo" && col !== "LTM") {
+        const others = Object.entries(r.srcs).filter(([k]) => k !== n && k !== "인포맥스");
+        const yrs = [...recon.values()].filter((x) => /^\d{4}Y 희석 EPS$/.test(x.item) && x.srcs.Yahoo && x.ours);
+        if (others.length && others.every(([, y]) => extEq(y.v, r.ours)) && yrs.length >= 2) {
+          const r6 = (x) => Math.round(x * 1e6);
+          for (let k = 3; k <= 7; k++) for (let d = 1; d <= 9; d++) for (const sg of [1, -1]) {
+            const c = 1 + sg * d * 10 ** -k;
+            if (yrs.every((x) => r6(x.ours * c) === r6(x.srcs.Yahoo.v)))
+              return { outlier: `Yahoo 희석 EPS = 앱(공시 EPS) × 고정 배수 ${c} — Yahoo 가 있는 ${yrs.length}개 연도 전부 소수 6자리까지 정확(${yrs.map((x) => `${x.item.split(" ")[0]} ${x.ours}×${c} = ${x.srcs.Yahoo.v}`).join(" · ")}), 이 열 ${others.map(([k]) => k).join("·")} = 앱 · 배수의 근거는 공시에 없음` };
+          }
+        }
+      }
       // ⑨' StockAnalysis·Yahoo 희석 EPS = SEC 순이익(보통주 귀속 또는 지배주주) ÷ SEC 희석 가중평균, 외부 값 자신의 소수 자릿수로 반올림
       //    (2026-09-29 — SA AMD 2023 0.52912·Yahoo PLTR 2023 0.090131 등 공시 EPS(둘째 자리)가 아닌 자체 계산). 외부 값이 소수 셋째 자리
       //    이상일 때만(둘째 자리면 공시 EPS 와 구분 불가). 앱 EPS = SEC 공시 EPS(A층 통과) 기간만. 공통모드 아님 — SEC 원자료로 독립 재현
