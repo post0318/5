@@ -6493,6 +6493,16 @@ async function verifyUs(sym) {
           if (e && extEq(v, e.val)) return { ok: `${n} 순이익 = 보통주 귀속 순이익 SEC ${tag} ${e.val}(${e.filed} 10-K) — 앱은 지배주주 순이익(NetIncomeLoss ${r.ours}), 차이는 우선주 배당·참가증권 배분 등` };
         }
       }
+      // ⑪ 희석 EPS — 외부가 다른 공시 값을 쓴 경우(2026-09-29): (가) 공시 기본 EPS(VRT 2022 블룸버그 0.20 — 공시 희석 −0.04),
+      //    (나) 분할 뒤 10-K 의 반올림 재게시 EPS(NVDA FY2024 Yahoo 1.19 — 앱은 원 공시 ÷ 분할 1.193, 오너 결정 2026-09-28).
+      //    SEC 태그 값(분할 보정)과 정확히 같을 때만. 앱 EPS = SEC(A층) 기간만
+      if (metric === "희석 EPS" && col !== "LTM" && H[col]?.date && epsExact && !splitErr) {
+        const B = annualAllAt("EarningsPerShareBasic", "USD/shares", H[col].date).at(-1);
+        if (B && Math.abs(B.val / splitAdj(B) - v) < 1e-9 && Math.abs(B.val / splitAdj(B) - r.ours) > 1e-9) return { ok: `${n} 희석 EPS = 공시 기본 EPS ${B.val}(${B.filed} 10-K${splitAdj(B) !== 1 ? ` ÷ 분할 ${splitAdj(B)}` : ""}) — 앱은 공시 희석 EPS ${r.ours}` };
+        const D = annualAllAt("EarningsPerShareDiluted", "USD/shares", H[col].date);
+        const last = D.at(-1);
+        if (last && D.length > 1 && Math.abs(last.val / splitAdj(last) - v) < 1e-9 && Math.abs(v - r.ours) > 1e-9) return { ok: `${n} 희석 EPS = 나중 10-K(${last.filed})의 재게시 값 ${last.val}${splitAdj(last) !== 1 ? ` ÷ 분할 ${splitAdj(last)}` : ""} — 앱은 원 공시 정밀값 ${r.ours}(분할 소급 반올림 전) · 판본: ${D.map((e) => `${e.filed} ${e.val}`).join(" · ")}` };
+      }
       // ⑨' StockAnalysis·Yahoo 희석 EPS = SEC 순이익(보통주 귀속 또는 지배주주) ÷ SEC 희석 가중평균, 외부 값 자신의 소수 자릿수로 반올림
       //    (2026-09-29 — SA AMD 2023 0.52912·Yahoo PLTR 2023 0.090131 등 공시 EPS(둘째 자리)가 아닌 자체 계산). 외부 값이 소수 셋째 자리
       //    이상일 때만(둘째 자리면 공시 EPS 와 구분 불가). 앱 EPS = SEC 공시 EPS(A층 통과) 기간만. 공통모드 아님 — SEC 원자료로 독립 재현
