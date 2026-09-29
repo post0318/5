@@ -5503,7 +5503,7 @@ async function verifyUs(sym) {
         const col = x.item.split(" ")[0], e = cogsExp.get(col);
         const r0 = e && e.cogs != null && aPassed(col, "매출원가") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
-        const u = n === "StockAnalysis" ? x.srcs[n].unit ?? 1 : 1;
+        const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
         if (!r0 || r0.exp == null || !(extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extEq(x.srcs[n].v, roundHalfAway(r0.exp, u))))) { ok = false; break; }
         if (!extEq(r0.exp, x.ours)) nonTrivial = true;
         cols.add(col);
@@ -5788,7 +5788,7 @@ async function verifyUs(sym) {
         const col = x.item.split(" ")[0], e = opincExp.get(col);
         const r0 = e && aPassed(col, "영업이익") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
-        const u = n === "StockAnalysis" ? x.srcs[n].unit ?? 1 : 1;
+        const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
         const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extEq(x.srcs[n].v, roundHalfAway(r0.exp, u))));
         const txt = hit ? `${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}` : "";
         if (col === "LTM") { if (hit) { cols.add(col); ev.push(txt); } continue; }
@@ -5949,7 +5949,7 @@ async function verifyUs(sym) {
         const col = x.item.split(" ")[0], e = daExp.get(col);
         const r0 = e && aPassed(col, "감가상각비") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
-        const u = n === "StockAnalysis" ? x.srcs[n].unit ?? 1 : 1;
+        const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
         const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extEq(x.srcs[n].v, roundHalfAway(r0.exp, u))));
         const txt = hit ? `${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}` : "";
         if (col === "LTM") { if (hit) { cols.add(col); ev.push(txt); } continue; }
