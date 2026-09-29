@@ -1813,6 +1813,8 @@ const PRETAX_ID_RE = /^(us-gaap_IncomeLossFromContinuingOperationsBeforeIncomeTa
 /** 회사 고유 말단 줄의 영업외 라벨 — "Other (income) and expense"·"Nonoperating …"(검증기 자체 판정, 공통모드 표기) */
 const EXT_NONOP_RE = /\bnon-?operating\b|^\s*other\s*(\(\s*)?(income|expense|gains?|losses?)\b/i;
 /** 외부 영업이익 차이 후보 — 영업이익 계산식 안의 일회성 비용 줄(구조조정·손상·소송·인수합병 등)과 인수 무형자산 상각 줄 */
+// 일반 비용·합계 줄 — 개념명에 일회성 단어가 있어도 줄 자체는 아니다(LRCX CostOfGoodsSold…ExcludingRestructuring). 하위 줄은 계속 본다
+const GENERAL_COST_ID = /_(SellingGeneralAndAdministrative|CostOf|OperatingExpenses$|CostsAndExpenses|GeneralAndAdministrativeExpense$|ResearchAndDevelopmentExpense)/;
 const OTHER_OP_ID = /_(OtherOperatingIncomeExpenseNet|OtherCostAndExpenseOperating|OtherOperatingCostAndExpense|OtherOperatingIncome|OtherExpenses)$/;
 const OP_CHARGE_RE = /Restructur|Impair|Severance|Litigation|Settlement|AcquisitionRelated|BusinessCombination|Merger|Integration|Separation|Divestiture|GainLossOnDisposition|GainLossOnSale|Terminat|other operating charges/i; // other operating charges: KO 본표 줄(구조조정·손상 등 — 앱 일회성비용 규칙과 같은 판정, 2026-09-29)
 const OP_AMORT_RE = /AmortizationOfIntangible|AmortizationOfAcquired|IntangibleAssets?\w*Amortiz|amortization of (acquired |purchased |acquisition-related )?intangible/i;
@@ -1920,7 +1922,7 @@ async function faceOpincLine(cik, accn, revConcept) {
           if (seen.has(a.to)) continue;
           seen.add(a.to);
           const lab = await nameOf(a.to);
-          const kind = OP_AMORT_RE.test(`${a.to} ${lab}`) ? "amort" : OP_CHARGE_RE.test(`${a.to} ${lab}`) && !/exclu/i.test(lab) /* 라벨의 "~제외" 문구만 — 개념명 ImpairmentOfIntangibleAssetsExcludingGoodwill(PEP)은 손상 줄 */ ? "charge" : null;
+          const kind = OP_AMORT_RE.test(`${a.to} ${lab}`) ? "amort" : OP_CHARGE_RE.test(`${a.to} ${lab}`) && !/exclu/i.test(lab) && !GENERAL_COST_ID.test(a.to) /* 라벨의 "~제외" 문구만 — 개념명 ImpairmentOfIntangibleAssetsExcludingGoodwill(PEP)은 손상 줄 */ ? "charge" : null;
           if (kind) { charges.push({ id: a.to, w: w * a.w, label: lab, kind }); continue; }
           // "기타 영업손익" 합산 줄(오너 결정 2026-09-28 — 앱 edgar-oneoff 와 같은 원칙, 검증기 독립 판독): 주석 계산 구조(Details 역할)에
           // 하위 내역이 있으면 그중 일회성 줄을 charges 로(MCD "Impairment and other charges (gains), net" · CL · MU). 줄 자체는 넘어간다
@@ -4815,7 +4817,7 @@ async function verifyUs(sym) {
       if (process.env.VERIFY_DEBUG_ONEOFF) console.error("[oneoff]", sym, col, e.type, JSON.stringify(e.charges), String(e.how).slice(0, 160));
       // 줄 구성·금액 = 그 해를 담은 가장 최근 10-K(앱과 같은 판본 — 재작성 반영, WDC 분사 후 FY2024). 자기 10-K 본표는 ownAnnualAt(참고용)
       // 비용만(오너 결정 2026-09-28 — 일회성손익(순)으로 확장하지 않음): 처분손익 줄 제외
-      const ch = (e.charges ?? []).filter((t) => t.kind === "charge" && !/GainLossOn(Disposition|Sale)|Gain(Loss)?OnSale|gain on (the )?(sale|disposal|disposition)/i.test(`${t.id} ${t.label}`)); // 처분손익만 제외 — 위약금(GainLossOnContractTermination, AMAT)·소송 합의(WDC)는 일회성
+      const ch = (e.charges ?? []).filter((t) => t.kind === "charge" && !/GainLossOn(Disposition|Sale)|Gain(Loss)?OnSale|Divestiture|gains? on (the )?(sale|disposal|disposition|divest)/i.test(`${t.id} ${t.label}`)); // 처분손익만 제외 — 위약금(GainLossOnContractTermination, AMAT)·소송 합의(WDC)는 일회성
       const missing = ch.filter((t) => t.v == null);
       const exp = ch.reduce((s, t) => s + (t.v == null ? 0 : -t.w * t.v), 0) * (e.k ?? 1);
       const app = IS[col]?.oneOff ?? null;
