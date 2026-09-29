@@ -5624,12 +5624,16 @@ async function verifyUs(sym) {
         const r0 = e && e.cogs != null && aPassed(col, "매출원가") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
         const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
-        if (!r0 || r0.exp == null || !(extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)) || (r0.tol != null && Math.abs(x.srcs[n].v - r0.exp) <= r0.tol))) { ok = false; break; }
+        const hit0 = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)) || (r0.tol != null && Math.abs(x.srcs[n].v - r0.exp) <= r0.tol));
+        // LTM 은 식이 정확 성립할 때만 증거에 넣고, 안 맞아도 연간 규칙을 깨지 않는다(감가상각비 daAllCols 와 같은 원칙 — 2026-09-30 MAR StockAnalysis:
+        // 연간 5개 열 = "자가·임차 등 원가" 줄, LTM 만 외부 자기 분기 합이라 다름). 연간 열은 2개 이상 성립해야
+        if (col === "LTM" && !hit0) continue;
+        if (!hit0) { ok = false; break; }
         if (!extEq(r0.exp, x.ours)) nonTrivial = true;
         cols.add(col);
         ev.push(`${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}`);
       }
-      if (ok && nonTrivial && cols.size >= 2) out = { ev, cols, skipped };
+      if (ok && nonTrivial && [...cols].filter((c) => c !== "LTM").length >= 2) out = { ev, cols, skipped };
       allColsMemo.set(k, out);
       return out;
     };
@@ -6468,6 +6472,12 @@ async function verifyUs(sym) {
       // 외부가 자기 표기 단위로 반올림해 실었다면 roundHalfAway(exp, 단위) 와 완전히 같을 때만. 둘 이상의 외부 값을 섞는 식(⑦·④)은 완전 일치만
       const eqExp = (exp) => exp != null && (extEq(v, exp) || (unit != null && unit !== 1 && extEq(v, roundHalfAway(exp, unit))));
       const rnd = (exp) => (extEq(v, exp) ? "" : ` · 외부 표기 단위 ${unit} 반올림(0.5 는 0 에서 먼 쪽): round(${exp}) = ${v}`);
+      // StockAnalysis 희석 EPS 끝자리(2026-09-30) — 공시 EPS(소수 둘째 자리, A층 통과)와 정확히 1e-6(SA 표기 마지막 자리)만 0 쪽으로 다르다
+      //    (VRT 2024 1.279999·VST 2021~2025 −2.689999·−3.259999·2.179999). 순이익 ÷ 주식수 반올림·버림, float32 변환 모두 일관되게 재현 안 됨
+      //    → 식 없는 표기 끝자리 차로 외부 정밀도 부족(NA)에만 넣는다
+      if (metric === "희석 EPS" && n === "StockAnalysis" && col !== "LTM" && Math.abs(Math.abs(v - r.ours) - 1e-6) < 1e-9 && Math.abs(v) < Math.abs(r.ours)
+        && Math.abs(r.ours * 100 - Math.round(r.ours * 100)) < 1e-9 && checks.some((k) => k.col === col && k.status === PASS && k.name === "EPS 앱 = SEC 공시 EPS(분할 보정)"))
+        return { na: `StockAnalysis 표기 끝자리 — 앱(공시 EPS) ${r.ours} 와 정확히 0.000001 차(0 쪽), 순이익 ÷ 주식수로는 재현 안 됨` };
       // 외부 자체 불일치(2026-09-30) — LTM 기간 = 최근 사업연도(결산일 ±7일, 결산 직후 분기 공시 전 — MSFT FY2026)이고 그 소스의 같은 사업연도 연간
       //    값은 앱과 정확히 같은데 LTM 값만 다르면, 같은 기간에 대한 외부 자신의 두 값이 서로 다르다 → 외부 단독 이탈
       if (col === "LTM" && H.LTM?.date && !extEq(v, r.ours) && !(metric === "감가상각비" && daRule(n, col))) {
