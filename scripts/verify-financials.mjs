@@ -6722,8 +6722,10 @@ async function verifyUs(sym) {
             }
           }
         }
-        const B = annualAllAt("EarningsPerShareBasic", "USD/shares", H[col].date).at(-1);
-        if (B && Math.abs(B.val / splitAdj(B) - v) < 1e-9 && Math.abs(B.val / splitAdj(B) - r.ours) > 1e-9) return { ok: `${n} 희석 EPS = 공시 기본 EPS ${B.val}(${B.filed} 10-K${splitAdj(B) !== 1 ? ` ÷ 분할 ${splitAdj(B)}` : ""}) — 앱은 공시 희석 EPS ${r.ours}` };
+        // 기본 EPS 판본: 최신 → 원 공시 순(WDC FY2022 블룸버그 4.81 = 원 10-K 기본 EPS)
+        const Bs = annualAllAt("EarningsPerShareBasic", "USD/shares", H[col].date);
+        const B = [Bs.at(-1), Bs[0]].find((b) => b && Math.abs(b.val / splitAdj(b) - v) < 1e-9);
+        if (B && Math.abs(B.val / splitAdj(B) - r.ours) > 1e-9) return { ok: `${n} 희석 EPS = 공시 기본 EPS ${B.val}(${B.filed} 10-K${splitAdj(B) !== 1 ? ` ÷ 분할 ${splitAdj(B)}` : ""}) — 앱은 공시 희석 EPS ${r.ours}` };
         const D = annualAllAt("EarningsPerShareDiluted", "USD/shares", H[col].date);
         const last = D.at(-1);
         // (다) 최초 공시 희석 EPS ÷ 분할을 외부 값 자신의 소수 자릿수(3자리 이상)로 반올림(Yahoo WMT FY2024 1.913333 = 5.74 ÷ 3 — 앱은 분할 뒤
@@ -6754,7 +6756,7 @@ async function verifyUs(sym) {
       // ⑨' StockAnalysis·Yahoo 희석 EPS = SEC 순이익(보통주 귀속 또는 지배주주) ÷ SEC 희석 가중평균, 외부 값 자신의 소수 자릿수로 반올림
       //    (2026-09-29 — SA AMD 2023 0.52912·Yahoo PLTR 2023 0.090131 등 공시 EPS(둘째 자리)가 아닌 자체 계산). 외부 값이 소수 셋째 자리
       //    이상일 때만(둘째 자리면 공시 EPS 와 구분 불가). 앱 EPS = SEC 공시 EPS(A층 통과) 기간만. 공통모드 아님 — SEC 원자료로 독립 재현
-      if (metric === "희석 EPS" && (n === "StockAnalysis" || n === "Yahoo") && col !== "LTM" && epsExact && !splitErr
+      if (metric === "희석 EPS" && (n === "StockAnalysis" || n === "Yahoo" || n === "블룸버그") && col !== "LTM" && epsExact && !splitErr
         && checks.some((k) => k.col === col && k.status === PASS && k.name === "EPS 앱 = SEC 공시 EPS(분할 보정)")) {
         const dec = (String(v).split(".")[1] ?? "").length;
         // 분모: 희석 가중평균(없으면·손실이면 기본 — AMD 2023 SA 0.52912 = 순이익 ÷ 기본), 반올림 또는 버림(SA 는 소수 여섯째 자리 버림 —
@@ -6762,7 +6764,7 @@ async function verifyUs(sym) {
         const shs = [["희석 가중평균", annualAllAt("WeightedAverageNumberOfDilutedSharesOutstanding", "shares", H[col].date).at(-1)], ["기본 가중평균", annualAllAt("WeightedAverageNumberOfSharesOutstandingBasic", "shares", H[col].date).at(-1)],
           // 결산일 유통주식수(Yahoo VST 2022~2025 = 순이익 ÷ 결산일 CommonStockSharesOutstanding, CEG 2022 — 2026-09-30 실측)
           ...(() => { const y = secYearEndShares(H[col].date); return y ? [[`결산일 유통주식수 ${y.how}`, { val: y.v, filed: y.filed }]] : []; })()].filter(([, x]) => x?.val);
-        if (dec >= 3 && shs.length) {
+        if ((dec >= 3 || (n === "블룸버그" && dec === 2)) && shs.length) { // 블룸버그는 둘째 자리 표기 — 공시 EPS 와 다른 값일 때만 여기 온다
           const u = 10 ** -Math.min(dec, 6), ui = Math.round(1 / u);
           for (const [sl, sh] of shs) {
             const k = splitAdj(sh);
