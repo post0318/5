@@ -6480,6 +6480,44 @@ async function verifyUs(sym) {
           }
         }
       }
+      // ⑩ 순이익 — 외부가 다른 SEC 판본·줄을 쓴 경우(2026-09-29): (가) 나중 10-K 의 반올림 재게시 값(MCD 2022 6,177.4 → 2025 10-K 6,177 —
+      //    앱은 원 공시 정밀값), (나) 보통주 귀속 순이익(TSLA Yahoo 12,583 · WDC 2026 Yahoo 9,298 — 앱은 지배주주 순이익 NetIncomeLoss).
+      //    그 해 10-K 태그 값과 정확히 같을 때만. 공통모드 아님(SEC 원자료)
+      if (metric === "순이익" && col !== "LTM" && H[col]?.date && aPassed(col, "순이익")) {
+        const at = (tag) => annualAllAt(tag, "USD", H[col].date);
+        const L = at("NetIncomeLoss"), last = L.at(-1);
+        if (last && extEq(v, last.val) && !extEq(last.val, r.ours) && L.some((e) => extEq(e.val, r.ours)))
+          return { ok: `${n} 순이익 = 나중 10-K(${last.filed})의 반올림 재게시 값 ${last.val} — 앱은 원 공시 정밀값 ${r.ours}(오너 결정 2026-09-28) · 판본: ${L.map((e) => `${e.filed} ${e.val}`).join(" · ")}` };
+        for (const tag of ["NetIncomeLossAvailableToCommonStockholdersBasic", "NetIncomeLossAvailableToCommonStockholdersDiluted"]) {
+          const e = at(tag).at(-1);
+          if (e && extEq(v, e.val)) return { ok: `${n} 순이익 = 보통주 귀속 순이익 SEC ${tag} ${e.val}(${e.filed} 10-K) — 앱은 지배주주 순이익(NetIncomeLoss ${r.ours}), 차이는 우선주 배당·참가증권 배분 등` };
+        }
+      }
+      // ⑨' StockAnalysis·Yahoo 희석 EPS = SEC 순이익(보통주 귀속 또는 지배주주) ÷ SEC 희석 가중평균, 외부 값 자신의 소수 자릿수로 반올림
+      //    (2026-09-29 — SA AMD 2023 0.52912·Yahoo PLTR 2023 0.090131 등 공시 EPS(둘째 자리)가 아닌 자체 계산). 외부 값이 소수 셋째 자리
+      //    이상일 때만(둘째 자리면 공시 EPS 와 구분 불가). 앱 EPS = SEC 공시 EPS(A층 통과) 기간만. 공통모드 아님 — SEC 원자료로 독립 재현
+      if (metric === "희석 EPS" && (n === "StockAnalysis" || n === "Yahoo") && col !== "LTM" && epsExact && !splitErr
+        && checks.some((k) => k.col === col && k.status === PASS && k.name === "EPS 앱 = SEC 공시 EPS(분할 보정)")) {
+        const dec = (String(v).split(".")[1] ?? "").length;
+        // 분모: 희석 가중평균(없으면·손실이면 기본 — AMD 2023 SA 0.52912 = 순이익 ÷ 기본), 반올림 또는 버림(SA 는 소수 여섯째 자리 버림 —
+        // INTC 2024 −4.3822427 → −4.382242). 소수 자릿수 전부 정확히 같아야
+        const shs = [["희석 가중평균", annualAllAt("WeightedAverageNumberOfDilutedSharesOutstanding", "shares", H[col].date).at(-1)], ["기본 가중평균", annualAllAt("WeightedAverageNumberOfSharesOutstandingBasic", "shares", H[col].date).at(-1)]].filter(([, x]) => x?.val);
+        if (dec >= 3 && shs.length) {
+          const u = 10 ** -Math.min(dec, 6), ui = Math.round(1 / u);
+          for (const [sl, sh] of shs) {
+            const k = splitAdj(sh);
+            for (const tag of ["NetIncomeLossAvailableToCommonStockholdersDiluted", "NetIncomeLossAvailableToCommonStockholdersBasic", "NetIncomeLoss"]) {
+              const nis = annualAllAt(tag, "USD", H[col].date);
+              for (const [lab, ni] of [["최신 공시", nis.at(-1)], ["최초 공시", nis[0]]]) {
+                if (!ni) continue;
+                const q = ni.val / (sh.val * k), vi = Math.round(v * ui);
+                const how = Math.round(roundHalfAway(q, u) * ui) === vi ? "반올림" : Math.trunc(q * ui + (q < 0 ? -1e-9 : 1e-9)) === vi ? "버림" : null;
+                if (how) return { ok: `${n} 는 순이익 ÷ 주식수로 자체 계산(공시 EPS 아님) — SEC ${tag}(${lab} ${ni.filed}) ${ni.val} ÷ ${sl} ${sh.val}${k !== 1 ? `×분할 ${k}` : ""} = ${q}, 소수 ${Math.min(dec, 6)}자리 ${how} = ${n} ${v}, 앱 EPS = SEC 공시 EPS 정확 일치(A층 통과) · 공통모드 아님(SEC 원자료로 독립 재현)` };
+              }
+            }
+          }
+        }
+      }
       // ⑩ 인포맥스 결산일 시가총액 ÷ 결산일 실제 종가 = 앱 직전 연도 결산일 주식수(센트 종가 곱이 인포맥스 시총과 센트까지 완전 일치) — 인포맥스가 전년도 주식수를 쓴다
       //    (실측 MCD 2022·2023, MU 2022). 앱 그 해·직전 연도 주식수가 둘 다 A층 SEC 본표 주식수와 일치한 경우만.
       //    그 해 앱 = SEC 본표 = StockAnalysis(SEC 공시 단위 안)인데 인포맥스만 다르면 원인 확인이 아니라 "외부 단독 이탈"(PLTR 2021).
