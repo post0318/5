@@ -2979,6 +2979,15 @@ const roundHalfAway = (x, u) => {
   const k = Math.round(1 / u); // 소수 단위(EPS 1e-4)는 정수 배율로 계산해 0.1 같은 표현 오차를 피한다
   return (Math.sign(x) * Math.round(Math.abs(x) * k)) / k;
 };
+/** 짝수 반올림(0.5 는 가까운 짝수 — 은행가 반올림). 블룸버그 표기가 이 방식(2026-09-29 실측 — PLTR 순이익 373.705 → 373.70, 209.825 → 209.82,
+ *  TER 매출원가 1,496.225 → 1,496.22; 버림이 아닌 근거 PLTR 매출총이익 2,299.517 → 2,299.52). u ≥ 1 만(금액) */
+const roundHalfEven = (x, u) => {
+  const q = Math.abs(x) / u, f = Math.floor(q), d = q - f;
+  const r = Math.abs(d - 0.5) < 1e-9 ? (f % 2 === 0 ? f : f + 1) : Math.round(q);
+  return Math.sign(x) * r * u;
+};
+/** 외부 값 = 표기 단위 반올림(앱 식) — 블룸버그만 짝수 반올림도 인정 */
+const extRound = (n, v, e, u) => extEq(v, roundHalfAway(e, u)) || (n === "블룸버그" && u >= 1 && extEq(v, roundHalfEven(e, u)));
 /** 값들의 표기 단위 — 모두 1e6 배수면 1e6, 모두 1e3 배수면 1e3, 아니면 1(달러). 소스 한 곳·한 종목의 실제 데이터로 정한다(값 하나로 추정하지 않는다) */
 // 표기 단위 — 모든 값이 나누어떨어지는 가장 큰 단위. 10만·1만 단위 추가(2026-09-29 — StockAnalysis 는 MRVL 을 0.1백만 달러로 표기하는데 1,000 달러로 판정해 반올림 식이 안 맞았다)
 const unitOfAll = (vals) => {
@@ -4238,7 +4247,7 @@ async function verifyUs(sym) {
         const ident = (name, got, parts, f, round = false) => {
           if (parts.some((v) => v == null)) return add("D", name, c, got == null ? { status: PASS, note: "구성 줄 빈칸 → 빈칸" } : { status: FAIL, note: `구성 줄 빈칸인데 앱 ${got}` });
           const exp = round ? Math.round(f(...parts)) : f(...parts);
-          add("D", name, c, got != null && Math.abs(got - exp) <= Math.max(0.01, 1e-9 * Math.abs(exp)) /* 1센트 — 외화 환산 부동소수 오차(ASML 1.9e-6) */ ? { status: PASS, app: got, src: exp } : { status: FAIL, note: `앱 ${got} vs 식 ${exp}`, app: got, src: exp });
+          add("D", name, c, got != null && Math.abs(got - exp) < 1 /* 1달러 미만 — 외화 환산 금액의 달러 반올림(TSM 11,934,861 vs 11,934,860.96 · ASML 1.9e-6). 달러 공시는 값이 정수라 영향 없음 */ ? { status: PASS, app: got, src: exp } : { status: FAIL, note: `앱 ${got} vs 식 ${exp}`, app: got, src: exp });
         };
         ident("영업외손익 = 영업이익 − 세전이익", I.nonop, [I.op, I.pretax], (o, p) => o - p);
         ident("기타(비지배지분·중단영업 등) = 세전이익 − 법인세 − 순이익", I.otherNi, [I.pretax, I.tax, I.ni], (p, t, n) => p - t - n, true);
@@ -5563,7 +5572,7 @@ async function verifyUs(sym) {
         const r0 = e && e.cogs != null && aPassed(col, "매출원가") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
         const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
-        if (!r0 || r0.exp == null || !(extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extEq(x.srcs[n].v, roundHalfAway(r0.exp, u))))) { ok = false; break; }
+        if (!r0 || r0.exp == null || !(extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)))) { ok = false; break; }
         if (!extEq(r0.exp, x.ours)) nonTrivial = true;
         cols.add(col);
         ev.push(`${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}`);
@@ -5848,7 +5857,7 @@ async function verifyUs(sym) {
         const r0 = e && aPassed(col, "영업이익") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
         const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
-        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extEq(x.srcs[n].v, roundHalfAway(r0.exp, u))));
+        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)));
         const txt = hit ? `${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}` : "";
         if (col === "LTM") { if (hit) { cols.add(col); ev.push(txt); } continue; }
         if (!hit) { ok = false; break; }
@@ -6009,7 +6018,7 @@ async function verifyUs(sym) {
         const r0 = e && aPassed(col, "감가상각비") ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
         const u = x.srcs[n].unit ?? 1; // 외부 표기 단위 반올림 식 1회 — 모든 소스(2026-09-29: 블룸버그 0.01백만 표기 — NFLX 감가상각비 336.682 → 336.68)
-        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extEq(x.srcs[n].v, roundHalfAway(r0.exp, u))));
+        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)));
         const txt = hit ? `${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}` : "";
         if (col === "LTM") { if (hit) { cols.add(col); ev.push(txt); } continue; }
         if (!hit) { ok = false; break; }
@@ -6162,7 +6171,7 @@ async function verifyUs(sym) {
         const r0 = e && aPassed(col, m) ? expOf(col, x, e) : null;
         if (r0?.skip) { skipped.push([col, r0.skip]); continue; }
         const u = x.srcs[n].unit ?? 1;
-        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extEq(x.srcs[n].v, roundHalfAway(r0.exp, u))));
+        const hit = !!r0 && r0.exp != null && (extEq(x.srcs[n].v, r0.exp) || (u !== 1 && extRound(n, x.srcs[n].v, r0.exp, u)));
         const txt = hit ? `${col} ${r0.ev} = ${r0.exp}${extEq(x.srcs[n].v, r0.exp) ? "" : `(표기 단위 ${u} 반올림 → ${x.srcs[n].v})`}` : "";
         if (col === "LTM") { if (hit) { cols.add(col); ev.push(txt); } continue; }
         if (!hit) { ok = false; break; }
@@ -6362,11 +6371,11 @@ async function verifyUs(sym) {
       //    바로 돌려주지 않고 표시만 해 둔다 — 아래 독립 규칙(SEC 원자료 식)이 성립하면 그쪽이 우선
       let unitNa = null;
       if (unit != null && unit !== 1) {
-        if (!parts && extEq(v, roundHalfAway(r.ours, unit)))
-          unitNa = `외부 표기 단위 반올림 — round(앱 ${r.ours}, ${unit}, 0.5 는 0 에서 먼 쪽) = ${n} ${v}`;
+        if (!parts && extRound(n, v, r.ours, unit))
+          unitNa = `외부 표기 단위 반올림 — round(앱 ${r.ours}, ${unit}${n === "블룸버그" ? ", 0.5 는 0 에서 먼 쪽 또는 짝수 쪽" : ", 0.5 는 0 에서 먼 쪽"}) = ${n} ${v}`;
         else if (parts) {
-          const s = parts.reduce((t, [sg, a]) => t + sg * roundHalfAway(a, unit), 0);
-          if (extEq(v, s)) unitNa = `외부 표기 단위 반올림(성분별) — ${parts.map(([sg, a]) => `${sg < 0 ? "− " : ""}round(앱 ${a}, ${unit})`).join(" ")} = ${n} ${v}`;
+          const s = parts.reduce((t, [sg, a]) => t + sg * roundHalfAway(a, unit), 0), se = n === "블룸버그" && unit >= 1 ? parts.reduce((t, [sg, a]) => t + sg * roundHalfEven(a, unit), 0) : null;
+          if (extEq(v, s) || (se != null && extEq(v, se))) unitNa = `외부 표기 단위 반올림(성분별) — ${parts.map(([sg, a]) => `${sg < 0 ? "− " : ""}round(앱 ${a}, ${unit})`).join(" ")} = ${n} ${v}`;
         }
       }
       // (삭제 2026-09-26) 예전 "종가 표기 단위(센트)" NA 규칙 — 앱이 Yahoo 부동소수 종가를 곱해 인포맥스(센트 종가)와 주식수 × 꼬리만큼
