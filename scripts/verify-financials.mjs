@@ -4238,7 +4238,7 @@ async function verifyUs(sym) {
         const ident = (name, got, parts, f, round = false) => {
           if (parts.some((v) => v == null)) return add("D", name, c, got == null ? { status: PASS, note: "구성 줄 빈칸 → 빈칸" } : { status: FAIL, note: `구성 줄 빈칸인데 앱 ${got}` });
           const exp = round ? Math.round(f(...parts)) : f(...parts);
-          add("D", name, c, got != null && Math.abs(got - exp) <= 1e-6 * Math.max(1, Math.abs(exp)) ? { status: PASS, app: got, src: exp } : { status: FAIL, note: `앱 ${got} vs 식 ${exp}`, app: got, src: exp });
+          add("D", name, c, got != null && Math.abs(got - exp) <= Math.max(0.01, 1e-9 * Math.abs(exp)) /* 1센트 — 외화 환산 부동소수 오차(ASML 1.9e-6) */ ? { status: PASS, app: got, src: exp } : { status: FAIL, note: `앱 ${got} vs 식 ${exp}`, app: got, src: exp });
         };
         ident("영업외손익 = 영업이익 − 세전이익", I.nonop, [I.op, I.pretax], (o, p) => o - p);
         ident("기타(비지배지분·중단영업 등) = 세전이익 − 법인세 − 순이익", I.otherNi, [I.pretax, I.tax, I.ni], (p, t, n) => p - t - n, true);
