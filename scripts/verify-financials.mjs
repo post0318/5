@@ -1737,7 +1737,18 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
     const prior = find((e) => dayDiff(e.start, ys(cur.start)) <= 7 && dayDiff(e.end, ys(L)) <= 7 && Math.abs(dd(e) - dd(cur)) <= 10);
     return comb([[fy, 1], [cur, 1], [prior, -1]], "분기 4개 구성 불가 — 종전 식: 사업연도 + 당기 누적 − 전년 동기");
   };
-  return { annualAt, quarterAt, ltmAt, faces, addOriginals };
+  /** 기간 s~e 의 최초 공시 원가 — 그 기간을 실은 공시 중 가장 먼저 제출된 공시 자기 값(원 판본) → { cogs, filed, form } | null */
+  const origAt = (s, e) => {
+    const pred = (x) => dayDiff(x.start, s) <= 3 && dayDiff(x.end, e) <= 3;
+    for (const f of [...faces].sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))) {
+      const r = one(f, pred, true);
+      if (r && !r.err && r.cogs != null && r.start) return { cogs: r.cogs, filed: f.filed, form: f.form };
+    }
+    return null;
+  };
+  /** 읽은 공시 전체의 기간 목록 [start, end] */
+  const periodsAll = () => [...new Set(faces.flatMap((g) => [...(g.periods ?? [])]))].map((k) => k.split("|"));
+  return { annualAt, quarterAt, ltmAt, faces, addOriginals, origAt, periodsAll };
 }
 
 /** 외부 값(백만 단위 부동소수 환산 포함)을 달러 정수로 — 표현 오차만 없앤다(허용치 아님) */
@@ -6145,6 +6156,20 @@ async function verifyUs(sym) {
       //    = 원 10-Q 분기 13,061 + 9,198 + 10,167 + 4분기 11,022 — 1분기를 다음 10-Q 가 8,147 로 재작성). 식: 연간 원공시 + (1~3분기 원공시 합 − 9개월
       //    누적 원공시). 그 해 안 재작성이 없으면 연간 원공시와 같다. 1~3분기 3개월 원공시·9개월 누적 원공시가 모두 읽혔을 때만(연간 열만)
       if (daFace?.origAt) rules.push(["orig-first", "최초 공시 값(연간 원 10-K + 그 해 분기 재작성 되돌림) — 외부는 재작성 전 값, 앱은 최신 판본", (c, x, e) => {
+        // LTM(사업연도 도중) — 직전 사업연도 원공시 + 당기 누적 원공시 − 전년 동기 누적 원공시(ISRG LTM 812.0 — 전년 동기 상반기 원공시는 계약원가 상각 17.8 제외)
+        if (c === "LTM" && H.LTM?.date && !Object.keys(H).some((k) => k !== "LTM" && H[k]?.date && dayDiff(H[k].date, H.LTM.date) <= 7)) {
+          const L0 = H.LTM.date, fyc = Object.keys(H).filter((k) => k !== "LTM" && H[k]?.date && H[k].date < L0).sort((p1, p2) => H[p2].date.localeCompare(H[p1].date))[0];
+          const fe = fyc ? daExp.get(fyc) : null;
+          if (!fe?.start || !fe?.end) return null;
+          const all = [...new Set(daFace.faces.flatMap((g) => [...g.periods]))].map((k) => k.split("|"));
+          const cur = all.find(([a1, b1]) => dayDiff(a1, new Date(Date.parse(fe.end) + 864e5).toISOString().slice(0, 10)) <= 5 && dayDiff(b1, L0) <= 7);
+          if (!cur) return null;
+          const yb = (d0) => new Date(Date.parse(d0) - 365 * 864e5).toISOString().slice(0, 10);
+          const pri = all.find(([a1, b1]) => dayDiff(a1, yb(cur[0])) <= 7 && dayDiff(b1, yb(cur[1])) <= 7);
+          const f0 = daFace.origAt(fe.start, fe.end), c0 = daFace.origAt(cur[0], cur[1]), p0 = pri ? daFace.origAt(pri[0], pri[1]) : null;
+          if (!f0 || !c0 || !p0) return { skip: "LTM 구성 원공시 없음" };
+          return { exp: f0.v + c0.v - p0.v, ev: `사업연도 원공시 ${f0.v}(${f0.filed}) + 당기 누적 원공시 ${c0.v}(${c0.filed}) − 전년 동기 원공시 ${p0.v}(${p0.filed})` };
+        }
         if (!e.start || !e.end || (Date.parse(e.end) - Date.parse(e.start)) / 864e5 < 300) return null; // LTM 은 그 기간이 사업연도 자체일 때만(MSFT 6월 결산 직후)
         const fy = daFace.origAt(e.start, e.end);
         const ps = daFace.periodsIn(e.start, e.end);
@@ -7069,6 +7094,27 @@ async function verifyUs(sym) {
           // 그 값을, 앱은 먼저 공시된 정밀값(반올림 재태깅 제외 규칙)을 쓴다. 전 열 성립(재게시 없는 열은 식 = 앱)
           const lt = cogsAllCols(n, "latest", (c, x, e) => (e.cogsLatest == null ? null : { exp: e.cogsLatest, ev: e.latestEv?.length ? `최신 공시 판본 줄 값 합(${e.latestEv.join(", ")})` : "재게시 없음(= 앱)" }));
           if (lt && lt.cols.has(col)) return { ok: `${n} 매출원가 = 나중 공시의 반올림 재게시 값 합(앱은 먼저 공시된 정밀값) — 식을 계산할 수 있는 모든 열 정확 성립(${lt.ev.join(" · ")}) · ${tail}` };
+        }
+        // 외부 = 최초 공시 판본 원가(2026-09-30 블룸버그 MAR — 2023·2024 을 나중 10-K 가 일반관리비 144·129 를 원가로 옮겨 재작성, 블룸버그는 원 10-K 값).
+        //    연간 = 그 사업연도를 처음 실은 공시의 원가, LTM(사업연도 도중) = 사업연도 원공시 + 당기 누적 원공시 − 전년 동기 원공시. 전 열 성립일 때만
+        if (cogsFace?.origAt) {
+          const oh = cogsAllCols(n, "orig-first", (c2, x, e) => {
+            if (!e.start || !e.end) return null;
+            const L0 = H.LTM?.date;
+            if (c2 === "LTM" && L0 && !Object.keys(H).some((k) => k !== "LTM" && H[k]?.date && dayDiff(H[k].date, L0) <= 7)) {
+              const fyc = Object.keys(H).filter((k) => k !== "LTM" && H[k]?.date && H[k].date < L0).sort((p1, p2) => H[p2].date.localeCompare(H[p1].date))[0];
+              const fe = fyc ? cogsExp.get(fyc) : null;
+              if (!fe?.start || !fe?.end) return null;
+              const all = cogsFace.periodsAll(), s0 = new Date(Date.parse(fe.end) + 864e5).toISOString().slice(0, 10), yb = (d0) => new Date(Date.parse(d0) - 365 * 864e5).toISOString().slice(0, 10);
+              const cur = all.find(([a1, b1]) => dayDiff(a1, s0) <= 5 && dayDiff(b1, L0) <= 7), pri = cur && all.find(([a1, b1]) => dayDiff(a1, yb(cur[0])) <= 7 && dayDiff(b1, yb(cur[1])) <= 7);
+              const f0 = cogsFace.origAt(fe.start, fe.end), c0 = cur && cogsFace.origAt(cur[0], cur[1]), p0 = pri && cogsFace.origAt(pri[0], pri[1]);
+              if (!f0 || !c0 || !p0) return { skip: "LTM 구성 원공시 없음" };
+              return { exp: f0.cogs + c0.cogs - p0.cogs, ev: `사업연도 원공시 ${f0.cogs}(${f0.filed}) + 당기 누적 원공시 ${c0.cogs}(${c0.filed}) − 전년 동기 원공시 ${p0.cogs}(${p0.filed})` };
+            }
+            const o = cogsFace.origAt(e.start, e.end);
+            return o ? { exp: o.cogs, ev: `원공시 ${o.form} ${o.filed} ${o.cogs}` } : { skip: "원공시 원가 없음" };
+          });
+          if (oh && oh.cols.has(col)) return { ok: `${n} 매출원가 = 최초 공시 판본(외부는 재작성 전 값, 앱은 최신 판본) — 대조한 모든 열 정확 성립(${oh.ev.join(" · ")}) · ${tail}` };
         }
         if (n === "블룸버그") {
           // 블룸버그(오너 결정 2026-09-28) — D형 원가를 자기 템플릿으로 다시 구성한다. 앱 규칙은 Yahoo·StockAnalysis 와 같은 쪽 유지.
