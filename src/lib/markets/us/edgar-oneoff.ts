@@ -25,7 +25,7 @@ import type { RecentFilings } from "./edgar-gapfill";
 export const SYN_ONE_OFF = "OneOffChargesDerived";
 
 const ONE_OFF_TEXT =
-  /restructur|impairment|litigation|legal (settlement|matters)|settlement|lawsuit|termination|severance|written off|write-?off|write-?down|acquisition[- ]related|merger[- ]related|transaction costs|corporate matters|opioid|other operating charges/i;
+  /restructur|impairment|litigation|legal (settlement|matters)|settlement|lawsuit|termination|severance|written off|write-?off|write-?down|acquisition[- ]related|merger[- ]related|transaction costs|corporate matters|opioid|other operating charges|separation/i; // separation: 사업 분리(분사) 비용 — SNDK·WDC "Business separation costs"(오너 확인 2026-09-29 "1회성")
 // "기타 영업손익" 류 합산 줄 — 줄 자체는 일회성이 아니지만(매각이익·지분법 등이 섞임) 주석 계산 구조(Details 역할)에서 하위 줄로
 // 나뉘어 있으면 그중 일회성 줄만 쓴다(오너 결정 2026-09-28 — MCD "Other operating (income) expense, net" → "Impairment and other
 // charges (gains), net" RestructuringCostsAndAssetImpairmentCharges). KO "Other operating charges" 는 회사가 일회성 항목으로 정의한
