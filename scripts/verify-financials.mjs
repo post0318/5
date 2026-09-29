@@ -6352,6 +6352,40 @@ async function verifyUs(sym) {
       // 외부가 자기 표기 단위로 반올림해 실었다면 roundHalfAway(exp, 단위) 와 완전히 같을 때만. 둘 이상의 외부 값을 섞는 식(⑦·④)은 완전 일치만
       const eqExp = (exp) => exp != null && (extEq(v, exp) || (unit != null && unit !== 1 && extEq(v, roundHalfAway(exp, unit))));
       const rnd = (exp) => (extEq(v, exp) ? "" : ` · 외부 표기 단위 ${unit} 반올림(0.5 는 0 에서 먼 쪽): round(${exp}) = ${v}`);
+      // EBITDA 성분 판정(오너 지시 2026-09-30 "에비타만 떼서도") — 외부 EBITDA = 외부 영업이익 + 외부 감가상각비(같은 소스·같은 열, 정확 일치 또는
+      //    블룸버그 성분별 반올림)이고 두 성분이 모두 ①(앱과 일치) 또는 원인 확인·외부 정밀도 부족이면 EBITDA 도 그 원인을 물려받는다
+      if (metric === "EBITDA") {
+        const it = (m) => recon.get(`${col} ${m}`);
+        const st = (m) => { const x = it(m), s0 = x?.srcs[n]; if (!s0) return null; if (extEq(x.ours, s0.v)) return "①"; const d = done.get(`${x.item}|${n}`); return d?.ok ? "②" : d?.na ? "NA" : null; };
+        const o = it("영업이익")?.srcs[n]?.v, d = it("감가상각비")?.srcs[n]?.v, so = st("영업이익"), sd = st("감가상각비");
+        if (o != null && d != null && so && sd && (extEq(v, o + d) || (n === "블룸버그" && unit >= 1 && [roundHalfAway, roundHalfEven].some((f) => extEq(v, f(o, unit) + f(d, unit))))))
+          return (so === "NA" || sd === "NA") && so !== "②" && sd !== "②"
+            ? { na: `EBITDA = ${n} 영업이익 ${o}(${so}) + ${n} 감가상각비 ${d}(${sd}) — 성분 외부 정밀도 부족` }
+            : { ok: `EBITDA = ${n} 영업이익 ${o}(${so}) + ${n} 감가상각비 ${d}(${sd}) — 두 성분 모두 앱과 일치 또는 원인 확인` };
+      }
+      // 영업이익 = 외부 매출총이익 − 판관비 − 연구개발비(오너 지시 2026-09-30 "IBM 진행") — 외부가 본표의 기타 영업수익·손익 줄(IBM "지식재산·
+      //    주문개발 수익" 612·663·860·996·964)을 영업이익에서 뺀다. 판관비·연구개발비가 그 소스에서 앱과 일치(①)할 때만, 외부 자기 매출총이익으로
+      //    정확 일치. 매출총이익 칸의 차이(IBM 블룸버그 매출원가 ±1)는 그 칸에 따로 남는다
+      if (metric === "영업이익" && col !== "LTM") {
+        const it = (m) => recon.get(`${col} ${m}`);
+        const same = (m) => { const x = it(m); return x?.srcs[n] && extEq(x.ours, x.srcs[n].v) ? x.ours : null; };
+        const gpx = it("매출총이익")?.srcs[n]?.v, sg = same("판관비"), rd = it("연구개발비")?.srcs[n] ? same("연구개발비") : 0;
+        if (gpx != null && sg != null && rd != null && IS[col]?.gp != null) {
+          const exp = gpx - sg - rd, other = r.ours - (IS[col].gp - sg - rd);
+          if (extEq(v, exp) && Math.abs(other) >= 1e6) {
+            const ip = annualAllAt("IntellectualPropertyAndCustomDevelopmentIncome", "USD", H[col]?.date ?? "").at(-1);
+            return { ok: `${n} 영업이익 = ${n} 매출총이익 ${gpx} − 판관비 ${sg} − 연구개발비 ${rd} = ${exp} — 앱 영업이익은 본표의 기타 영업 항목 ${other}${ip ? `(지식재산·주문개발 수익 ${ip.val} 포함)` : ""}을 포함, 외부는 제외` };
+          }
+        }
+      }
+      // 블룸버그 매출총이익 0.5 관계식(오너 지시 2026-09-30) — 블룸버그 = round(앱 매출) − round(앱 매출원가)(각자 표기 단위, 0.5 먼 쪽·짝수 쪽).
+      //    매출총이익 성분 판정(gpCause)보다 먼저 — 식이 정확히 같을 때만 NA(외부 정밀도 부족)
+      if (n === "블룸버그" && metric === "매출총이익" && col !== "LTM" && unit >= 1 && IS[col]?.rev != null && IS[col]?.cogs != null && !extEq(v, r.ours)) {
+        for (const f of [roundHalfAway, roundHalfEven]) {
+          const s = f(IS[col].rev, unit) - f(IS[col].cogs, unit);
+          if (extEq(v, s)) return { na: `블룸버그 표기 단위(${unit}) 반올림 관계식 — round(앱 매출 ${IS[col].rev}) − round(앱 매출원가 ${IS[col].cogs}) = ${v}(0.5 는 ${f === roundHalfEven ? "짝수 쪽" : "0 에서 먼 쪽"})` };
+        }
+      }
       // ⑬ 외부 LTM = SEC 종전 식(사업연도 + 당기 누적 − 전년 동기), 앱 LTM = 최근 4개 분기 합(오너 결정 2026-09-28). 두 식 모두 SEC 원자료로
       //    검증기가 따로 계산 — 외부 = 앱 + (종전 식 − 분기 합) 이 정확히 성립할 때만(회사가 연간·누적·분기를 따로 반올림한 ±1 등)
       if (col === "LTM" && H.LTM?.date && aPassed(col, metric === "판관비·연구개발비" ? "판관비" : metric)) {
@@ -6413,6 +6447,23 @@ async function verifyUs(sym) {
         else if (parts) {
           const s = parts.reduce((t, [sg, a]) => t + sg * roundHalfAway(a, unit), 0), se = n === "블룸버그" && unit >= 1 ? parts.reduce((t, [sg, a]) => t + sg * roundHalfEven(a, unit), 0) : null;
           if (extEq(v, s) || (se != null && extEq(v, se))) unitNa = `외부 표기 단위 반올림(성분별) — ${parts.map(([sg, a]) => `${sg < 0 ? "− " : ""}round(앱 ${a}, ${unit})`).join(" ")} = ${n} ${v}`;
+        }
+      }
+      // 블룸버그 0.5 관계식(오너 지시 2026-09-30 — "±1백만도 0.5 관계식을 찾아라"): 블룸버그는 분기·성분을 각자 표기 단위로 반올림한 뒤 더한다.
+      //    (가) LTM = Σ round(앱 분기 4개 — SEC 분기 대조 통과 값, 블룸버그 표기 단위), (나) 매출총이익 = round(앱 매출) − round(앱 매출원가)
+      //    (LTM 이면 분기마다 반올림한 매출 − 매출원가의 합). 반올림은 0.5 먼 쪽·짝수 쪽 둘 다. 식이 정확히 같을 때만 NA(외부 정밀도 부족)
+      if (!unitNa && n === "블룸버그" && unit != null && unit >= 1) {
+        const RR = { 매출: /^(매출액|순수익)(\s|$)/, 매출원가: COGS_ROW_RE, 매출총이익: GP_ROW_RE, 판관비: /^\(−\) 판매관리비/, 연구개발비: /^\(−\) 연구개발비/, 영업이익: /^영업이익/, 순이익: /^당기순이익$/, 감가상각비: /^감가상각비$/, 세전이익: /^세전이익/ };
+        const qRow = (re) => { const it = isItem(isq, re); const ps = (isq?.periods ?? []).slice(-4); if (!it || ps.length !== 4) return null; const vs = ps.map((p) => it.values?.[p.label]); return vs.every((x) => x != null) ? vs : null; };
+        const rsum = (vs, f) => vs.reduce((t, x) => t + f(x, unit), 0);
+        const comp = metric === "판관비·연구개발비" ? [[1, "판관비"], [1, "연구개발비"]] : metric === "매출총이익" ? [[1, "매출"], [-1, "매출원가"]] : [[1, metric]];
+        for (const f of [roundHalfAway, roundHalfEven]) {
+          let s = 0, ok = true, how = [];
+          for (const [sg, m] of comp) {
+            if (col === "LTM") { const vs = RR[m] ? qRow(RR[m]) : null; if (!vs) { ok = false; break; } s += sg * rsum(vs, f); how.push(`${sg < 0 ? "− " : ""}Σround(앱 ${m} 분기 ${vs.join("·")})`); }
+            else { const a = m === "매출" ? IS[col]?.rev : m === "매출원가" ? IS[col]?.cogs : m === "판관비" ? IS[col]?.sga : m === "연구개발비" ? IS[col]?.rnd : null; if (a == null || comp.length === 1) { ok = false; break; } s += sg * f(a, unit); how.push(`${sg < 0 ? "− " : ""}round(앱 ${m} ${a})`); }
+          }
+          if (ok && extEq(v, s) && !extEq(v, r.ours)) { unitNa = `블룸버그 표기 단위(${unit}) 반올림 관계식 — ${how.join(" ")} = ${v}(0.5 는 ${f === roundHalfEven ? "짝수 쪽" : "0 에서 먼 쪽"})`; break; }
         }
       }
       // (삭제 2026-09-26) 예전 "종가 표기 단위(센트)" NA 규칙 — 앱이 Yahoo 부동소수 종가를 곱해 인포맥스(센트 종가)와 주식수 × 꼬리만큼
