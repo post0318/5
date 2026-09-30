@@ -5571,6 +5571,11 @@ async function verifyUs(sym) {
       // 외부 단독 이탈 §0 을 EPS·세전이익·EBITDA 에도(오너 판단 2026-09-30 — "스탁만 다르면 단독 이탈") — 그 전제인 A층 검사 이름
       "희석 EPS": /^EPS 앱 = SEC 공시 EPS\(분할 보정\)$/, 세전이익: /^세전이익 앱 = SEC 세전이익$/ };
     const aPassed0 = (col, metric) => EXACT_A[metric] && checks.some((k) => k.col === col && k.status === PASS && EXACT_A[metric].test(k.name));
+    /** A층 검증불가 — 그 칸의 전제 검사(EXACT_A)가 통과는 없고 검증불가(NA)만 있음(2026-09-30 IBM 감가상각비: 중단사업 손익이 있는데 중단사업 감가상각
+     *  태그 없음 — 계속사업분인지 확인 불가). ③(앱 문제 후보)과 구분해 "A층검증불가"로 표시 */
+    const aNa0 = (col, metric) => EXACT_A[metric] && !aPassed0(col, metric) && checks.some((k) => k.col === col && k.status === NA && EXACT_A[metric].test(k.name));
+    const aNa = (col, metric) => (metric === "EBITDA" ? (aNa0(col, "영업이익") || aNa0(col, "감가상각비")) && !(aPassed0(col, "영업이익") && aPassed0(col, "감가상각비"))
+      : metric === "판관비·연구개발비" ? aNa0(col, "판관비") || aNa0(col, "연구개발비") : aNa0(col, metric));
     const aPassed = (col, metric) => (metric === "판관비·연구개발비" ? aPassed0(col, "판관비") && (aPassed0(col, "연구개발비") || aPassed0(col, "연구개발비빈칸"))
       : metric === "EBITDA" ? aPassed0(col, "영업이익") && aPassed0(col, "감가상각비") // EBITDA = 영업이익 + 감가상각비, 두 성분 모두 A층 통과
       : aPassed0(col, metric));
@@ -7576,7 +7581,7 @@ async function verifyUs(sym) {
           // 외부 정의 분해 불가(오너 결정 2026-09-27): 앱 = SEC 본표(A층 정확 일치) + 다른 외부 1곳 이상 정확 일치(공통모드 아님)인데 이 소스는
           // 해마다 다른 재분류로 식이 성립하지 않는 경우. ①·② 로 세지 않고 따로 표기. 외부 일치 0곳이면 ③(미결) 유지.
           // 기준 소스는 ② 도 인정(오너 결정 2026-09-27 — 분기마다 SEC 와 정확 일치하고 앱과의 차이 원인이 규명된 소스)
-          : aPassed(col0, m0) && clsNames.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok)) ? "외부정의분해불가" : "③"]));
+          : aPassed(col0, m0) && clsNames.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok)) ? "외부정의분해불가" : aNa(col0, m0) ? "A층검증불가" : "③"]));
         reconApply(metricClass, col0, m0);
         fxHold(metricClass);
         for (const n of clsNames) if (metricClass[n] === "③") (m0 === "영업이익" ? opincErrors : m0 === "감가상각비" ? daErrors : /^(판관비|연구개발비)/.test(m0) ? sgaErrors : cogsErrors).push({ item: r.item, source: n, ours: r.ours, other: r.srcs[n].v, note: `${why(n).trim() || "분해식 없음"}${aPassed(col0, m0) ? "" : " · 앱 ≠ SEC 본표(A층 미통과)"}` });
@@ -7587,7 +7592,9 @@ async function verifyUs(sym) {
         const [col0, ...mm] = r.item.split(" "), m0 = mm.join(" ");
         const clsMatched = matched.filter((n) => clsNames.includes(n));
         metricClass = Object.fromEntries(clsNames.map((n) => [n, matched.includes(n) ? "①" : commonMode[n] ? "공통모드" : precisionNa[n] ? "NA" : causes[n]?.ok ? "②"
-          : causes[n]?.outlier || (aPassed(col0, m0) && clsMatched.length >= 2 && clsNames.length - clsMatched.length === 1) ? "외부단독이탈" : "③"]));
+          : causes[n]?.outlier || (aPassed(col0, m0) && clsMatched.length >= 2 && clsNames.length - clsMatched.length === 1) ? "외부단독이탈"
+          // 다른 외부 1곳 이상 일치(또는 원인 확인)면 외부 단독 이탈(오너 결정 2026-09-30 — 옛 "구성 미분해"와 같은 기준)
+          : aPassed(col0, m0) && clsNames.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok)) ? "외부단독이탈" : aNa(col0, m0) ? "A층검증불가" : "③"]));
         fxHold(metricClass);
       }
       review.push({
