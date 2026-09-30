@@ -55,7 +55,8 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
     lines: [
       {
         label: "현금·현금성자산",
-        concepts: ["CashAndCashEquivalentsAtCarryingValue"],
+        // 중단사업 현금 포함 태그(2026-10-01 MDLZ — 2023~ 이 태그만 써서 제한현금 포함 총액 별도 줄로 빠졌다: 1,884 → 1,810 = 야후·SA·블룸버그)
+        concepts: ["CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations"],
         // 제한현금 포함 총액 하나로만 공시하는 회사(AXP 등) — 별도 줄
         fallback: ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
         fallbackLabel: "현금·현금성자산 (제한현금 포함 총액)",
@@ -345,7 +346,9 @@ export function buildUsBalance(
   const lTotal = blank();
   for (const l of labels) {
     const be = leTotal[l] ?? aTotal[l] ?? null;
-    eqTotal[l] = eqRaw[l] ?? (be != null && lRaw[l] != null ? be - lRaw[l]! : null);
+    // 지배주주 자본 태그가 없고 비지배지분 포함 자본만 있으면 비지배지분을 뺀다(2026-10-01 CAT — StockholdersEquity 를 한 번도 태그하지 않아
+    // 자본 총계에 비지배지분 22 가 섞였다: 15,891 → 15,869 = 야후·블룸버그)
+    eqTotal[l] = seOnly[l] ?? (eqAllRaw[l] != null ? eqAllRaw[l]! - (miRaw[l] ?? 0) : null) ?? eqRaw[l] ?? (be != null && lRaw[l] != null ? be - lRaw[l]! : null);
     const eqForL = eqAllRaw[l] ?? (eqTotal[l] != null ? eqTotal[l]! + (miRaw[l] ?? 0) : null);
     lTotal[l] = lRaw[l] ?? (be != null && eqForL != null ? be - eqForL - (tempEq[l] ?? 0) : null);
   }
@@ -498,7 +501,9 @@ export function buildUsBalance(
       if (line.label === "자본 총계" && !isFin) {
         const nci = blank();
         for (const l of labels) {
-          if (values[l] == null || seOnly[l] == null || values[l] !== seOnly[l]) continue;
+          if (values[l] == null) continue;
+          if (seOnly[l] == null) { if (eqAllRaw[l] != null && miRaw[l] != null && values[l] === eqAllRaw[l]! - miRaw[l]!) nci[l] = miRaw[l]; continue; }
+          if (values[l] !== seOnly[l]) continue;
           nci[l] = miRaw[l] ?? (eqAllRaw[l] != null ? eqAllRaw[l]! - seOnly[l]! : null);
         }
         if (labels.some((l) => nci[l] != null && nci[l] !== 0))

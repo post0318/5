@@ -4965,7 +4965,7 @@ async function verifyUs(sym) {
       return pa || nc ? { v: (pa?.val ?? 0) + (nc?.val ?? 0), how: [pa && "TemporaryEquityCarryingAmountAttributableToParent", nc && "RedeemableNoncontrollingInterest"].filter(Boolean).join(" + ") } : null;
     };
     const A_BS = [
-      ["bs:자산:현금·현금성자산", "현금·현금성자산", ["CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash"]],
+      ["bs:자산:현금·현금성자산", "현금·현금성자산", ["CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash"]],
       ["bs:자산:유동자산 총계", "유동자산 총계", ["AssetsCurrent"]],
       ["bs:부채:유동부채 총계", "유동부채 총계", ["LiabilitiesCurrent"]],
       ["bs:부채:부채 총계", "부채 총계", ["Liabilities"]],
@@ -4991,11 +4991,11 @@ async function verifyUs(sym) {
         // 앱이 표준 태그 대신 다른 정의의 태그를 별도 줄(:alt — 제한현금 포함 총액 등)로 실은 칸은 그 줄 값을 대체 개념과 대조
         const alt = byId(bsItems, `${id}:alt`);
         let csUse = cs;
-        if (val(it, c) == null && alt && val(alt, c) != null) { it = alt; csUse = cs.slice(1); }
+        if (val(it, c) == null && alt && val(alt, c) != null) { it = alt; csUse = cs.filter((x) => /Restricted|^Cash$/.test(x)); }
         const app = val(it, c), why = noteOf(it, c);
         let hit = null, usedIdx = -1;
         for (let i = 0; i < csUse.length && !hit; i++) { hit = inst(csUse[i], date, c !== "LTM"); if (hit) usedIdx = i; }
-        if (csUse !== cs) usedIdx += 1;
+        if (csUse !== cs && hit) usedIdx = cs.indexOf(csUse[usedIdx]);
         const cm = usedIdx > 0 ? ` · 공통모드(대체 개념 ${cs[usedIdx]} — 앱과 같은 개념 목록${csUse !== cs ? ", 앱 별도 줄 :alt" : ""})` : "";
         // 부채 총계 태그가 없으면 부채와 자본 총계 − 비지배지분 포함 자본(없으면 지배주주 자본 + 비지배지분)으로(2026-10-01 KO — 독립 계산)
         if (!hit && id === "bs:부채:부채 총계") {
@@ -5003,6 +5003,11 @@ async function verifyUs(sym) {
           const se = inst("StockholdersEquity", date, c !== "LTM"), mi = inst("MinorityInterest", date, c !== "LTM");
           const eAll = ea?.val ?? (se ? se.val + (mi?.val ?? 0) : null), tq = tempSec(date, c !== "LTM");
           if (le && eAll != null) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, le.val - eAll - (tq?.v ?? 0), EXACT, `Liabilities 미태깅 — 부채와 자본 ${le.val} − 비지배지분 포함 자본 ${eAll}(${ea ? "포함 자본 태그" : "지배주주 자본 + 비지배지분"})${tq ? ` − 임시자본 ${tq.v}` : ""}`)); continue; }
+        }
+        // 자본 총계 — 지배주주 자본 태그가 없으면 비지배지분 포함 자본 − 비지배지분(2026-10-01 CAT — StockholdersEquity 미태깅)
+        if (id === "bs:자본:자본 총계" && !inst("StockholdersEquity", date, c !== "LTM")) {
+          const ea = inst("StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", date, c !== "LTM"), mi = inst("MinorityInterest", date, c !== "LTM");
+          if (ea) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, ea.val - (mi?.val ?? 0), EXACT, `StockholdersEquity 미태깅 — 비지배지분 포함 자본 ${ea.val}${mi ? ` − 비지배지분 ${mi.val}` : "(비지배지분 태그 없음)"}`)); continue; }
         }
         if (!hit) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, app == null ? { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 빈칸${why ? `(${why})` : ""}`, app, src: null } : { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 ${app}(파생값 가능: ${why || "사유 없음"})`, app, src: null }); continue; }
         const r0 = vsSource(app, hit.val, EXACT, `${cs[usedIdx]} ${hit.form} ${hit.filed}${retagNote(hit) ? ` · ${retagNote(hit)}` : ""}${cm}`);
@@ -5567,6 +5572,8 @@ async function verifyUs(sym) {
     }
     const bsq = yq.filter((r) => r.totalDebt != null).at(-1);
     if (bsq && !foreign && dayDiff(iso(bsq.date), L.date) <= 7) put("LTM 총차입금(운용리스 포함)", withLease, "Yahoo", bsq.totalDebt);
+    // 블룸버그 표준화 B/S(분기) 단기 부채 + 장기 부채(2026-10-01)
+    try { const bq0 = foreign ? null : loadBbg(sym)?.at(L.date); if (bq0?.bsStDebt && bq0?.bsLtDebt) put("LTM 총차입금(운용리스 포함)", withLease, "블룸버그", bq0.bsStDebt.v + bq0.bsLtDebt.v, bq0.bsStDebt.unit); } catch (e) { errs.push(`블룸버그 총차입금: ${String(e).slice(0, 80)}`); }
 
     // StockAnalysis — TTM 은 최근 분기말이 앱 LTM 기준일과 같을 때만
     if (!foreign) {
@@ -5723,7 +5730,11 @@ async function verifyUs(sym) {
           for (const [item, id, k] of [["재무상태표 현금·현금성자산", "bs:자산:현금·현금성자산", "bsCash"], ["재무상태표 유동자산 총계", "bs:자산:유동자산 총계", "bsCa"], ["재무상태표 유동부채 총계", "bs:부채:유동부채 총계", "bsCl"],
             ["재무상태표 부채 총계", "bs:부채:부채 총계", "bsL"], ["재무상태표 자본 총계", "bs:자본:자본 총계", "bsEq"]])
             if (b[k]) put(`${c} ${item}`, appv(bsI, id, c), "블룸버그", b[k].v, b[k].unit);
-          for (const [item, id, k] of [["현금흐름표 영업활동 현금흐름", "cf:total:영업활동 현금흐름", "cfOcf"], ["현금흐름표 유형자산 취득(CAPEX)", "cf:투자활동 현금흐름:유형자산 취득", "cfCapex"]])
+          // 요약 화면 값 우선, 없으면 현금흐름표(표준화) — 같은 소스를 한 칸에 두 번 싣지 않는다
+          b.cfOcf ??= b.cfOcfS; b.cfCapex ??= b.cfCapexS;
+          for (const [item, id, k] of [["현금흐름표 영업활동 현금흐름", "cf:total:영업활동 현금흐름", "cfOcf"], ["현금흐름표 유형자산 취득(CAPEX)", "cf:투자활동 현금흐름:유형자산 취득", "cfCapex"],
+            ["현금흐름표 투자활동 현금흐름", "cf:total:투자활동 현금흐름", "cfIcf"], ["현금흐름표 재무활동 현금흐름", "cf:total:재무활동 현금흐름", "cfFcf"],
+            ["현금흐름표 배당금 지급", "cf:재무활동 현금흐름:배당금 지급", "cfDiv"], ["현금흐름표 자기주식 취득", "cf:재무활동 현금흐름:자기주식 취득", "cfBuyback"]])
             if (b[k]) put(`${c} ${item}`, appv(cfI, id, c), "블룸버그", b[k].v, b[k].unit);
         }
       } catch (e) { errs.push(`블룸버그 재무상태표·현금흐름표: ${String(e).slice(0, 80)}`); }
@@ -6735,6 +6746,38 @@ async function verifyUs(sym) {
       if (metric === "희석 EPS" && n === "StockAnalysis" && col !== "LTM" && Math.abs(Math.abs(v - r.ours) - 1e-6) < 1e-9 && Math.abs(v) < Math.abs(r.ours)
         && Math.abs(r.ours * 100 - Math.round(r.ours * 100)) < 1e-9 && checks.some((k) => k.col === col && k.status === PASS && k.name === "EPS 앱 = SEC 공시 EPS(분할 보정)"))
         return { na: `StockAnalysis 표기 끝자리 — 앱(공시 EPS) ${r.ours} 와 정확히 0.000001 차(0 쪽), 순이익 ÷ 주식수로는 재현 안 됨` };
+      // 현금흐름표 정의 차이(2026-10-01 — 블룸버그 분기·연간 현금흐름표 제공분 대조로 발견). 외부 = 앱 + SEC 태그 값(그 사업연도 10-K, LTM = SEC TTM), 정확 성립만
+      //  · 자본지출 + 임대장비 취득(CAT 2024 블룸버그·야후·SA 3,215 = 1,988 + PaymentsToAcquireEquipmentOnLease 1,227)
+      //  · 배당 + 우선주 배당(VST 463 = 313 + 150, WDC 184 = 174 + 10) · 비지배지분 배당(DELL FY2022 2,240 — VMware 특별배당 비지배분) · 계열사 분배(CEG 2021 Exelon 분배 1,832)
+      //  · 영업·투자·재무활동 합계 + 중단사업 현금흐름(MRK 2021 — 앱은 계속사업분, 외부는 중단사업 포함 987 · −134 · −504)
+      if (/^현금흐름표 /.test(metric) && H[col]?.date) {
+        const CF_ADD = {
+          "현금흐름표 유형자산 취득(CAPEX)": [[-1, "PaymentsToAcquireEquipmentOnLease", "임대장비 취득"]],
+          "현금흐름표 배당금 지급": [[-1, "PaymentsOfDividendsPreferredStockAndPreferenceStock", "우선주 배당"], [-1, "PaymentsOfDividendsMinorityInterest", "비지배지분 배당"], [-1, "PaymentsOfDistributionsToAffiliates", "계열사(모회사) 분배"]],
+          "현금흐름표 영업활동 현금흐름": [[1, "CashProvidedByUsedInOperatingActivitiesDiscontinuedOperations", "중단사업 영업활동 현금흐름"]],
+          "현금흐름표 투자활동 현금흐름": [[1, "CashProvidedByUsedInInvestingActivitiesDiscontinuedOperations", "중단사업 투자활동 현금흐름"]],
+          "현금흐름표 재무활동 현금흐름": [[1, "CashProvidedByUsedInFinancingActivitiesDiscontinuedOperations", "중단사업 재무활동 현금흐름"]],
+        }[metric];
+        const tv = (tag) => {
+          if (col === "LTM") { const t = secTtm(tag); return t && dayDiff(t.end, H.LTM.date) <= 7 ? t.v : null; }
+          const l = (G[tag]?.units?.USD ?? []).filter((e) => e.start && /^10-K/.test(e.form ?? "") && dayDiff(e.end, H[col].date) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300);
+          return l.length ? latestPrecise(l).val : null;
+        };
+        const terms = (CF_ADD ?? []).map(([sg, tag, lab]) => ({ sg, tag, lab, v: tv(tag) })).filter((t) => t.v);
+        if (metric === "현금흐름표 유형자산 취득(CAPEX)") for (const f of capexCustom.get(col) ?? []) terms.push({ sg: -1, tag: f.id, lab: `회사 고유 설비 취득 줄(${f.form} 원본)`, v: f.v });
+        for (let m = 1; m < 1 << terms.length; m++) {
+          const use = terms.filter((_, i) => m & (1 << i)), exp = r.ours + use.reduce((t, x) => t + x.sg * x.v, 0);
+          if (eqExp(exp)) return { ok: `${n} = 앱 ${r.ours} ${use.map((x) => `${x.sg > 0 ? "+" : "−"} ${x.lab} ${x.v}(${x.tag})`).join(" ")} = ${exp}${rnd(exp)} — 외부는 이 금액을 포함` };
+        }
+      }
+      // 블룸버그 자체 불일치(2026-10-01 GEV 2025 세전이익) — 블룸버그 분기 화면의 그 사업연도 네 분기 합이 앱(= SEC 연간, A층)과 정확히 같은데 블룸버그 연간 열만
+      //    다르다 → 같은 기간에 대한 블룸버그 자신의 두 값이 서로 다름. 외부 단독 이탈
+      if (n === "블룸버그" && col !== "LTM" && H[col]?.date && aPassed(col, metric)) {
+        const BK = { 매출: "rev", 순이익: "ni", 영업이익: "op", 세전이익: "pretax", 감가상각비: "da", 매출원가: "cogs", 매출총이익: "gp", 판관비: "sga", 연구개발비: "rnd" }[metric];
+        const q = BK ? loadBbg(sym)?.qSum(BK, H[col].date) : null;
+        if (q && extEq(q.v, r.ours) && !extEq(v, r.ours))
+          return { outlier: `외부 자체 불일치 — 블룸버그 분기 화면 ${col} 네 분기 합(${q.parts.join(" + ")}) = ${q.v / 1e6} = 앱(SEC 연간)인데 블룸버그 연간 열만 ${v / 1e6}` };
+      }
       // 외부 자체 불일치(2026-09-30) — LTM 기간 = 최근 사업연도(결산일 ±7일, 결산 직후 분기 공시 전 — MSFT FY2026)이고 그 소스의 같은 사업연도 연간
       //    값은 앱과 정확히 같은데 LTM 값만 다르면, 같은 기간에 대한 외부 자신의 두 값이 서로 다르다 → 외부 단독 이탈
       // 자사주 취득(외부) = 앱 − 주식보상 원천징수 세금 납부(2026-10-01 — AAPL StockAnalysis 95,625 = 89,402 + 6,223, DELL 야후·StockAnalysis 3,281 = 2,883 + 398).
@@ -7791,6 +7834,20 @@ async function verifyUs(sym) {
     // 분기값(CL 107, IBM 4,144), 앱 4분기 = 연간 − 9개월 누적(108·4,143 — 회사가 연간·누적·분기를 따로 반올림)). LTM 창 안의 사업연도 결산 뒤 첫 항목
     // 2.02 8-K 에서 "Income before income taxes" 행의 첫 숫자(당분기)를 읽는다. 블룸버그 LTM 칸이 앱과 다를 때만(원문 디스크 캐시)
     const q4Rel = new Map(); // 지표 → { v, filed, url, fyEnd, q4sec }
+    // 회사 고유 설비 취득 줄(2026-10-01 INTC 2021 — 현금흐름표 투자활동에 "매각 예정 NAND 설비 취득" 1,596 이 별도 줄, 태그 intc_DivestitureAdditionsTo
+    // PropertyPlantAndEquipmentHeldForSale). 자본지출 외부값이 앱과 다른 연간 열만 그 결산일 10-K 원본을 읽는다 → 열 → [{ id, v }]
+    const capexCustom = new Map();
+    for (const [c0, x] of Object.entries(H)) {
+      if (c0 === "LTM" || !x?.date) continue;
+      const rr = recon.get(`${c0} 현금흐름표 유형자산 취득(CAPEX)`);
+      if (!rr || rr.ours == null || !Object.values(rr.srcs).some((z) => !extEq(z.v, rr.ours))) continue;
+      try {
+        const fa = await filingAtDate(cik, sub, x.date);
+        const hits = (fa?.durFacts ?? []).filter((f) => !f.dims.length && !/^us-gaap_/.test(f.id) && /PropertyPlantAndEquipment|CapitalExpenditure/i.test(f.id) && /Addition|Purchase|Payment|Acqui|Expenditure/i.test(f.id)
+          && (Date.parse(f.end) - Date.parse(f.start)) / 864e5 >= 300 && f.v);
+        if (hits.length) capexCustom.set(c0, [...new Map(hits.map((f) => [f.id, f.v])).entries()].map(([id, v]) => ({ id, v, form: fa.form })));
+      } catch (e) { errs.push(`자본지출 회사 고유 줄 조회 실패(${c0}): ${String(e).slice(0, 60)}`); }
+    }
     {
       const lt = recon.get("LTM 세전이익");
       const fyc = Object.keys(H).filter((k) => k !== "LTM" && H[k]?.date && H.LTM?.date && H[k].date < H.LTM.date).sort((a, b) => H[b].date.localeCompare(H[a].date))[0];
