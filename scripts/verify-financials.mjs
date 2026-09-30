@@ -4937,7 +4937,12 @@ async function verifyUs(sym) {
       const l = (G[c0]?.units?.USD ?? []).filter((e) => !e.start && (annual ? /^(10-K|20-F|40-F)/ : /^(10-[KQ]|20-F|40-F)/).test(e.form ?? "") && dayDiff(e.end, date) <= 7);
       if (!l.length) return null;
       const end = l.map((e) => e.end).sort((p, q) => dayDiff(p, date) - dayDiff(q, date))[0];
-      return latestPrecise(l.filter((e) => e.end === end));
+      const same = l.filter((e) => e.end === end).sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""));
+      const pick = latestPrecise(same);
+      // 작은 단위(천·만·10만) 반올림 재게시 — 재게시 값이 그 단위의 배수이고 먼저 공시된 정밀값과 한 단위 이내면 정밀값(검증기 독립 구현 — 짝수 반올림·
+      // 합계 맞춤 1단위 조정 포함, MRVL 2022-01-29 유동자산 2,493,450천 → 2,493.4백만). 오너 결정 "원 공시 정밀값"
+      const y = pick && same.find((e) => (e.filed ?? "") < (pick.filed ?? "") && e.val !== pick.val && [1e3, 1e4, 1e5].some((p) => Math.abs(pick.val) >= 100 * p && pick.val % p === 0 && e.val % p !== 0 && Math.abs(pick.val - e.val) <= p));
+      return y ? { ...y, retag: { val: pick.val, filed: pick.filed, unit: "작은 단위 반올림 재게시" } } : pick;
     };
     const dur = (c0, date) => {
       const l = (G[c0]?.units?.USD ?? []).filter((e) => e.start && /^(10-K|20-F|40-F)/.test(e.form ?? "") && dayDiff(e.end, date) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 <= 400);
@@ -5020,7 +5025,19 @@ async function verifyUs(sym) {
       }
       const o = f("cf:total:영업활동 현금흐름"), iv = f("cf:total:투자활동 현금흐름"), fi = f("cf:total:재무활동 현금흐름"), fx = f("cf:fx"), nc = f("cf:netchange");
       const dsc = f("cf:disc"); // 중단사업 현금흐름(앱 2026-09-30 추가 — MRK 2021)
-      if (o != null && iv != null && fi != null && nc != null) eqD("현금흐름표 현금 증감 = 영업 + 투자 + 재무 + 환율", nc, o + iv + fi + (fx ?? 0) + (dsc ?? 0), dsc ? `중단사업 현금흐름 ${dsc} 포함` : "");
+      if (o != null && iv != null && fi != null && nc != null) {
+        const d0 = nc - (o + iv + fi + (fx ?? 0) + (dsc ?? 0));
+        // 회사 공시 반올림 — SEC 사업연도 값(영업·투자·재무·환율·중단사업·순증감)으로도 같은 차이가 나면 통과(IBM 2022·2024, MCD 2024·2025 ±1)
+        const sv = (cs) => { for (const c0 of cs) { const e = dur(c0, date); if (e) return e.val; } return null; };
+        const secD = c === "LTM" || Math.abs(d0) < 1 ? null : (() => {
+          const so = sv(["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"]), si = sv(["NetCashProvidedByUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"]), sf = sv(["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"]);
+          const sx = sv(["EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "EffectOfExchangeRateOnCashAndCashEquivalents"]) ?? 0, sd = sv(["NetCashProvidedByUsedInDiscontinuedOperations"]) ?? 0;
+          const sn = sv(["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect", "CashAndCashEquivalentsPeriodIncreaseDecrease"]);
+          return so != null && si != null && sf != null && sn != null ? sn - (so + si + sf + sx + sd) : null;
+        })();
+        if (secD != null && Math.abs(secD - d0) < 1) add("D", "현금흐름표 현금 증감 = 영업 + 투자 + 재무 + 환율", c, { status: PASS, note: `회사 공시 반올림 — SEC 사업연도 값으로도 순증감 − 구간 합 = ${secD}(앱과 같은 차이)${dsc ? ` · 중단사업 현금흐름 ${dsc} 포함` : ""}` });
+        else eqD("현금흐름표 현금 증감 = 영업 + 투자 + 재무 + 환율", nc, o + iv + fi + (fx ?? 0) + (dsc ?? 0), dsc ? `중단사업 현금흐름 ${dsc} 포함` : "");
+      }
       const capex = f("cf:note:capex"), ppe = f("cf:투자활동 현금흐름:유형자산 취득"), fcf = f("cf:note:fcf");
       if (capex != null && ppe != null) eqD("현금흐름표 CAPEX = −유형자산 취득", capex, -ppe);
       if (fcf != null && o != null && capex != null) eqD("현금흐름표 FCF = 영업현금흐름 − CAPEX", fcf, o - capex);

@@ -113,8 +113,10 @@ export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
     x !== y && [1e3, 1e4, 1e5, 1e6].some((p) => Math.abs(x) >= 100 * p && Math.round(y / p) * p === x && y % p !== 0);
   // 작은 단위 반올림(값만 교체 — 아래 clean). 값이 반올림 단위의 100배 이상일 때(상대 오차 0.5% 이하 — 주식수 규칙과 같은 폭). 예전 하한 1억은
   // MRVL FY2022 법인세 −62,461,000(원 공시) → −62,500,000(2024 10-K 재게시)을 놓쳤다(2026-09-29, 검증기 법인세 대조로 발견)
+  // 반올림 방식은 회사마다 다르다 — 짝수 반올림(MRVL 2022-01-29 유동자산 2,493,450천 → 2,493.4백만)·합계 맞춤 1단위 조정(유동부채 1,388,542천
+  // → 1,388.6백만, 2026-09-30 재무상태표 검증으로 발견). 재게시 값이 단위의 배수이고 원 정밀값과 한 단위 이내면 반올림 재게시로 본다
   const usdSmallRounds = (x: number, y: number) =>
-    x !== y && [1e3, 1e4, 1e5].some((p) => Math.abs(x) >= 100 * p && Math.round(y / p) * p === x && y % p !== 0);
+    x !== y && [1e3, 1e4, 1e5].some((p) => Math.abs(x) >= 100 * p && x % p === 0 && y % p !== 0 && Math.abs(x - y) <= p);
   const clean = (es: FactUnitEntry[], roundsTo: (x: number, y: number) => boolean, smallRounds?: (x: number, y: number) => boolean): FactUnitEntry[] => {
     const groups = new Map<string, FactUnitEntry[]>();
     for (const e of es) {
@@ -337,6 +339,18 @@ export interface QuarterParts {
 }
 
 /**
+ * 3개월 공시값이 본문식 반올림 값인지(2026-09-30 NVDA FY2027 2분기 배당: 3개월 6,000(decimals −8, "$6.0 billion") — 6개월 누적 6,290 −
+ * 1분기 243 = 6,047(백만 단위 정밀값)). 3개월 값이 10억·1억 단위의 배수이고, 같은 사업연도 누적 차(정밀값)는 그 단위의 배수가
+ * 아니며 차이가 반단위 이내면 반올림 값 → 누적 차를 쓴다(원 공시 정밀값 우선 원칙 — dropRoundedRetags 와 같은 성격).
+ */
+export function coarseQuarterValue(direct: number, derived: number): boolean {
+  if (direct === derived) return false;
+  // 1억·10억 단위만, 차이 200만 초과만 — 1천만 단위까지 보면 백만 단위 값이 우연히 0 으로 끝날 때 회사 반올림 ±1 을 잘못 잡았다(AXP LTM 순이익·DAL 법인세)
+  for (const u of [1e9, 1e8]) if (direct % u === 0 && derived % u !== 0 && Math.abs(direct - derived) <= u / 2 && Math.abs(direct - derived) > 2e6) return true;
+  return false;
+}
+
+/**
  * 단일 분기 값과 구성 항목: 직접 태깅(≈90일) → 없으면 당기 YTD − 직전분기 YTD(같은 사업연도).
  * 직전 누적이 없거나 사업연도가 다르면(열 누락 — ORCL 현금흐름표 2026-09-27) 누적값을 분기로 쓰지 않는다: 당기 누적이 3개월
  * 이하(사업연도 첫 분기)일 때만 그 값, 아니면 공란 + QUARTER_NO_PREV_YTD. 예전엔 사업연도가 바뀌면 누적값(6개월)을 그대로 냈다.
@@ -362,6 +376,13 @@ export function singleQuarterParts(
     // (1분기 판정은 recastFirstQuarter 안에서 — 이 분기 시작일로 시작하는 6·9개월 누적이 있어야 사업연도 첫 분기)
     const rc = recast ? recastFirstQuarter(interim, direct.start!, direct) : null;
     if (rc) return { value: rc.value, parts: rc.parts, reason: null, note: rc.note };
+    // 3개월 공시값이 반올림 값이면 같은 사업연도 누적 차(정밀값)
+    if (prevCol) {
+      const ytd0 = (end: string) => interim.filter((e) => Math.abs(days(end, e.end)) <= 6).sort((a, b) => Math.abs(days(a.start!, a.end)) - Math.abs(days(b.start!, b.end))).pop();
+      const c0 = ytd0(col.end), p0 = ytd0(prevCol.end);
+      if (c0 && p0 && c0 !== direct && Math.abs(days(c0.start!, p0.start!)) <= 20 && coarseQuarterValue(direct.val, c0.val - p0.val))
+        return { value: c0.val - p0.val, parts: [c0, p0], reason: null };
+    }
     return { value: direct.val, parts: [direct], reason: null };
   }
   // 2) YTD 차감
@@ -692,7 +713,8 @@ function quarterSumLtm(interims: FactUnitEntry[], fy: FactUnitEntry, cur: FactUn
     const q1 = direct ?? (j === 1 ? c : null);
     // 1분기는 재분류 역산(화면 분기 열 singleQuarterParts 와 같은 규칙)
     if (j === 1 && q1 && recast) { const rc = recastFirstQuarter(interims, s, q1); if (rc) { parts.push(...rc.parts); return rc.value; } }
-    if (direct) { parts.push(direct); return direct.val; }
+    // 3개월 공시값이 반올림 값이면 누적 차(정밀값) — singleQuarterParts 와 같은 규칙(NVDA 배당 6,000 → 6,047)
+    if (direct && !(p !== null && coarseQuarterValue(direct.val, c.val - (p === 0 ? 0 : p.val)) && j > 1)) { parts.push(direct); return direct.val; }
     if (p === null) return null;
     parts.push(c, ...(p === 0 ? [] : [p]));
     return c.val - (p === 0 ? 0 : p.val);
