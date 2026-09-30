@@ -2,7 +2,7 @@ import "server-only";
 import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { inheritNoRecast, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
+import { firstConcept, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
 import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, pickDa, pickDaPeriod } from "./edgar-ev";
 import { revQuarterLabel } from "./fin-revenue";
 import { isFinancialCompany } from "./edgar-financial";
@@ -22,24 +22,8 @@ function days(a: string, b: string) {
 function isFullYear(e: FactUnitEntry): boolean {
   return Boolean(e.start) && days(e.start!, e.end) >= 300 && days(e.start!, e.end) <= 400;
 }
-function entriesOf(facts: CompanyFacts, concept: string): FactUnitEntry[] {
-  return facts.facts["us-gaap"]?.[concept]?.units?.["USD"] ?? [];
-}
-// 대체 태그를 우선순위대로 병합 (같은 보고기간은 앞 개념 우선, 빈 기간만 뒤 개념이 채움).
-function firstConcept(facts: CompanyFacts, concepts: string[]): FactUnitEntry[] {
-  if (concepts.length === 1) return entriesOf(facts, concepts[0]);
-  const out: FactUnitEntry[] = [];
-  const seen = new Set<string>();
-  for (const c of concepts) {
-    for (const e of entriesOf(facts, c)) {
-      const key = `${e.start ?? ""}|${e.end}|${e.form}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(e);
-    }
-  }
-  return inheritNoRecast(out, concepts.map((c) => entriesOf(facts, c)));
-}
+// 대체 태그 병합 — edgar-series.ts firstConcept 단일 함수(한 결산일 = 한 개념, 2026-09-30 — 예전 지역 사본은 결산일이 같은 다른 개념 값으로
+// 기간을 채워 GOOG 주식보상비용 LTM 이 손익 쪽 태그 3개월 값과 섞였다)
 
 /** 사업연도별 duration 값. */
 function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
@@ -194,6 +178,8 @@ const NET_CHANGE = [
   "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
   "CashAndCashEquivalentsPeriodIncreaseDecrease",
 ];
+// 중단사업 현금흐름(영업·투자·재무 합계 밖 — 2026-09-30 MRK 2021 Organon 분사 349: 없으면 순증감 = 3개 구간 + 환율이 맞지 않았다)
+const DISC = ["NetCashProvidedByUsedInDiscontinuedOperations"];
 const TAX_PAID = ["IncomeTaxesPaidNet", "IncomeTaxesPaid"];
 const INT_PAID = ["InterestPaidNet", "InterestPaid"];
 
@@ -497,6 +483,8 @@ export function buildUsCashFlow(
   // 순증감 · 환율효과(= 순증감 − 3개 구간 합, 미보고 시 잔여)
   const netChange = valOf(NET_CHANGE);
   const fxReported = valOf(FX);
+  const disc = valOf(DISC);
+  const hasDisc = labels.some((l) => disc[l] != null && disc[l] !== 0);
   const sect = (i: number) => {
     const it = items.find((x) => x.accountId === `cf:total:${BLOCKS[i].title}`);
     return it?.values ?? {};
@@ -514,12 +502,14 @@ export function buildUsCashFlow(
     const s2 = sect(2)[lbl];
     fx[lbl] =
       nc != null && s0 != null && s1 != null && s2 != null
-        ? Math.round(nc - s0 - s1 - s2)
+        ? Math.round(nc - s0 - s1 - s2 - (disc[lbl] ?? 0))
         : null;
     if (lbl === LTM && fx[lbl] == null)
       fxWhy = ltmWhy.get(netChange) ?? ltmWhy.get(fxReported) ?? "환율변동 효과 산정 불가(순증감·구간 합계 중 LTM 없음)";
   }
   if (fxWhy) ltmWhy.set(fx, fxWhy);
+  if (hasDisc)
+    items.push({ accountName: "중단사업 현금흐름", accountId: "cf:disc", depth: 0, isSubtotal: false, isHighlight: false, values: disc, ...ltmCell(disc) });
   items.push({
     accountName: "환율변동 효과",
     accountId: "cf:fx",

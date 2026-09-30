@@ -91,9 +91,11 @@ function die(msg) {
 const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing", "metric", "cogs-rules"]);
 // 매출 닫기 모드(revenue.md §8) — 종료코드를 매출 검사 실패·매출 ③ 오류·조회 실패 기준으로. 기본 실행은 종전 그대로
 const METRIC = args.metric == null ? null : String(args.metric).toLowerCase();
-if (METRIC != null && !["revenue", "cogs", "opinc", "da", "sga"].includes(METRIC)) die(`--metric 은 revenue·cogs·opinc·da·sga 중 하나 (받은 값: ${args.metric})`);
+if (METRIC != null && !["revenue", "cogs", "opinc", "da", "sga", "bscf"].includes(METRIC)) die(`--metric 은 revenue·cogs·opinc·da·sga·bscf 중 하나 (받은 값: ${args.metric})`);
 // 판관비·연구개발비 모드(2026-09-28) — 감가상각비 모드를 포함한다(누적 닫힘) + 판관비·연구개발비 A층(본표 영업이익 식의 성격 줄 합)·F층 분류
-const SGA_MODE = METRIC === "sga";
+// 재무상태표·현금흐름표 모드(2026-09-30) — 판관비 모드를 포함한다(누적 닫힘) + 재무상태표·현금흐름표 A층·D층
+const BSCF_MODE = METRIC === "bscf";
+const SGA_MODE = METRIC === "sga" || BSCF_MODE;
 // 영업이익 모드(2026-09-27) — 매출원가 모드를 포함한다(누적 닫힘: 매출원가·매출총이익 검사가 계속 돈다) + 영업이익 A층·F층 분류
 const OPINC_MODE = METRIC === "opinc" || METRIC === "da" || SGA_MODE;
 // 감가상각비 모드(2026-09-27) — 영업이익 모드를 포함한다(누적 닫힘) + 감가상각비 A층(현금흐름표 줄 합 — 연간·분기·LTM, 과거 10-K 까지)·F층 분류
@@ -3376,6 +3378,7 @@ async function verifyUs(sym) {
   for (const [k, p] of Object.entries({
     hl: `${u}/highlights`, an: `${u}/financials?view=analysis`, ov: `${u}/overview`, tt: `${u}/ttm`,
     cs: `${u}/consensus`, is: `${u}/financials?view=is&period=annual`, bs: `${u}/financials?view=bs&period=annual`,
+    ...(BSCF_MODE ? { cf: `${u}/financials?view=cf&period=annual` } : {}),
     // 매출 소비처(revenue.md §3) — 총괄(연간·분기)·손익계산서 분기
     sm: `${u}/financials?view=summary&period=annual`, smq: `${u}/financials?view=summary&period=quarter`, isq: `${u}/financials?view=is&period=quarter`,
   })) {
@@ -4918,6 +4921,111 @@ async function verifyUs(sym) {
     if (!foreign) for (const p of isq?.periods ?? []) { qEndOf.set(p.label, p.endDate); if (p.endDate) judgeD("Q", p.label, p.label, p.endDate, p.fiscalQuarter === 4, dRowQ); }
   }
 
+  // ── 재무상태표·현금흐름표 A층·D층(--metric=bscf, 2026-09-30 — 오너 "계속 진행": 손익 다음 단계) ─────────────────────────────
+  // A층: 합계·핵심 줄을 SEC 원자료와 정확 대조(재무상태표 = 결산일 ±7일 시점 값, 현금흐름표 = 사업연도 기간 값 · LTM = SEC TTM, 최신 공시 판본
+  //      · 반올림 재태깅 제외). 개념 목록은 앱과 같은 순서(첫 개념 = 표준 합계 태그 — 대체 개념을 쓴 칸은 공통모드 표시).
+  // D층: 기타 줄(나머지 채움)이 없는 항등식 — 자산 = 유동 + 비유동, 부채 = 유동 + 비유동, 영업·투자·재무 소계 = depth 1 줄 합,
+  //      운전자본 변동 = 하위 줄 합, 현금 증감 = 영업 + 투자 + 재무 + 환율, FCF = 영업현금흐름 − CAPEX, CAPEX = −유형자산 취득
+  if (BSCF_MODE && bs && fetched.cf) {
+    const stItems = (st) => (st?.sections ?? []).flatMap((s0) => s0.items ?? []);
+    const bsItems = stItems(bs), cfItems = stItems(fetched.cf);
+    const byId = (items, id) => items.find((it) => it.accountId === id);
+    const val = (it, col) => (it ? it.values?.[col === "LTM" ? "현재/LTM" : col] ?? null : null);
+    const noteOf = (it, col) => String(it?.cellNotes?.[col === "LTM" ? "현재/LTM" : col] ?? "");
+    // 연간 열 = 10-K(20-F·40-F) 값만 — 10-Q 비교 열의 연말 값은 쓰지 않는다(앱 연간 열과 같은 공시 종류). LTM = 10-Q·10-K
+    const inst = (c0, date, annual = true) => {
+      const l = (G[c0]?.units?.USD ?? []).filter((e) => !e.start && (annual ? /^(10-K|20-F|40-F)/ : /^(10-[KQ]|20-F|40-F)/).test(e.form ?? "") && dayDiff(e.end, date) <= 7);
+      if (!l.length) return null;
+      const end = l.map((e) => e.end).sort((p, q) => dayDiff(p, date) - dayDiff(q, date))[0];
+      return latestPrecise(l.filter((e) => e.end === end));
+    };
+    const dur = (c0, date) => {
+      const l = (G[c0]?.units?.USD ?? []).filter((e) => e.start && /^(10-K|20-F|40-F)/.test(e.form ?? "") && dayDiff(e.end, date) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 <= 400);
+      return l.length ? latestPrecise(l) : null;
+    };
+    const cols = Object.keys(H).filter((c) => H[c]?.date);
+    const A_BS = [
+      ["bs:자산:현금·현금성자산", "현금·현금성자산", ["CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash"]],
+      ["bs:자산:유동자산 총계", "유동자산 총계", ["AssetsCurrent"]],
+      ["bs:부채:유동부채 총계", "유동부채 총계", ["LiabilitiesCurrent"]],
+      ["bs:부채:부채 총계", "부채 총계", ["Liabilities"]],
+      ["bs:자본:자본 총계", "자본 총계", ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]],
+    ];
+    const A_CF = [
+      ["cf:total:영업활동 현금흐름", "영업활동 현금흐름", ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"], 1],
+      ["cf:total:투자활동 현금흐름", "투자활동 현금흐름", ["NetCashProvidedByUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"], 1],
+      ["cf:total:재무활동 현금흐름", "재무활동 현금흐름", ["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"], 1],
+      ["cf:투자활동 현금흐름:유형자산 취득", "유형자산 취득(CAPEX)", ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"], -1],
+      ["cf:재무활동 현금흐름:배당금 지급", "배당금 지급", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], -1],
+      ["cf:재무활동 현금흐름:자기주식 취득", "자기주식 취득", ["PaymentsForRepurchaseOfCommonStock"], -1],
+      ["cf:영업활동 현금흐름:주식보상비용", "주식보상비용", ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], 1],
+    ];
+    const hasCol = (st, c) => (st?.periods ?? []).some((p) => p.label === (c === "LTM" ? "현재/LTM" : c));
+    for (const c of cols) {
+      const date = H[c].date;
+      // 재무상태표 — 연간 열 + LTM(최근 분기말). 앱 표에 그 열이 없으면(상장 전 연도 — GEV 2022·SNDK 2023) 검사하지 않는다
+      if (!hasCol(bs, c)) continue;
+      for (const [id, nm, cs] of A_BS) {
+        let it = byId(bsItems, id);
+        if (!it) continue;
+        // 앱이 표준 태그 대신 다른 정의의 태그를 별도 줄(:alt — 제한현금 포함 총액 등)로 실은 칸은 그 줄 값을 대체 개념과 대조
+        const alt = byId(bsItems, `${id}:alt`);
+        let csUse = cs;
+        if (val(it, c) == null && alt && val(alt, c) != null) { it = alt; csUse = cs.slice(1); }
+        const app = val(it, c), why = noteOf(it, c);
+        let hit = null, usedIdx = -1;
+        for (let i = 0; i < csUse.length && !hit; i++) { hit = inst(csUse[i], date, c !== "LTM"); if (hit) usedIdx = i; }
+        if (csUse !== cs) usedIdx += 1;
+        const cm = usedIdx > 0 ? ` · 공통모드(대체 개념 ${cs[usedIdx]} — 앱과 같은 개념 목록${csUse !== cs ? ", 앱 별도 줄 :alt" : ""})` : "";
+        if (!hit) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, app == null ? { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 빈칸${why ? `(${why})` : ""}`, app, src: null } : { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 ${app}(파생값 가능: ${why || "사유 없음"})`, app, src: null }); continue; }
+        const r0 = vsSource(app, hit.val, EXACT, `${cs[usedIdx]} ${hit.form} ${hit.filed}${retagNote(hit) ? ` · ${retagNote(hit)}` : ""}${cm}`);
+        add("A", `재무상태표 ${nm} 앱 = SEC`, c, usedIdx > 0 && r0.status === PASS ? { ...r0, status: COMMON } : r0);
+      }
+      // 현금흐름표 — 연간 열 = 10-K 사업연도 값, LTM = SEC TTM
+      for (const [id, nm, cs, sg] of hasCol(fetched.cf, c) ? A_CF : []) {
+        const it = byId(cfItems, id);
+        if (!it) continue;
+        const app = val(it, c), why = noteOf(it, c);
+        let v = null, how = "", usedIdx = -1;
+        for (let i = 0; i < cs.length && v == null; i++) {
+          if (c === "LTM") { const t = secTtm(cs[i]); if (t && dayDiff(t.end, date) <= 7) { v = t.v; how = `${cs[i]} SEC TTM(${t.how ?? t.end})`; usedIdx = i; } }
+          else { const e = dur(cs[i], date); if (e) { v = e.val; how = `${cs[i]} ${e.form} ${e.filed}${retagNote(e) ? ` · ${retagNote(e)}` : ""}`; usedIdx = i; } }
+        }
+        const cm = usedIdx > 0 ? ` · 공통모드(대체 개념 — 앱과 같은 개념 목록)` : "";
+        if (v == null) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: NA, note: `SEC ${cs.join("/")} 기간 값 없음 — 앱 ${app ?? `빈칸(${why || "사유 없음"})`}`, app, src: null }); continue; }
+        const r0 = vsSource(app, sg * v, EXACT, `${how}${sg < 0 ? " × −1(현금 유출 표기)" : ""}${cm}`);
+        add("A", `현금흐름표 ${nm} 앱 = SEC`, c, usedIdx > 0 && r0.status === PASS ? { ...r0, status: COMMON } : r0);
+      }
+      // D층 — 재무상태표
+      const g = (id) => val(byId(bsItems, id), c);
+      const eqD = (name, a, b, extra = "") => { if (a == null || b == null) return; add("D", name, c, Math.abs(a - b) < 1 ? { status: PASS, ...(extra ? { note: extra } : {}) } : { status: FAIL, note: `${a} ≠ ${b}(차 ${a - b})${extra ? ` · ${extra}` : ""}` }); };
+      const cur = g("bs:자산:유동자산 총계"), non = g("bs:자산:비유동자산 총계"), tot = g("bs:자산:자산 총계");
+      if (cur != null && non != null) eqD("재무상태표 자산 총계 = 유동 + 비유동", tot, cur + non);
+      const lc = g("bs:부채:유동부채 총계"), ln = g("bs:부채:비유동부채 총계"), lt = g("bs:부채:부채 총계");
+      if (lc != null && ln != null) eqD("재무상태표 부채 총계 = 유동 + 비유동", lt, lc + ln);
+      // D층 — 현금흐름표
+      const f = (id) => val(byId(cfItems, id), c);
+      for (const [sec, tid] of [["영업활동 현금흐름", "cf:total:영업활동 현금흐름"], ["투자활동 현금흐름", "cf:total:투자활동 현금흐름"], ["재무활동 현금흐름", "cf:total:재무활동 현금흐름"]]) {
+        const rows = cfItems.filter((it) => it.accountId.startsWith(`cf:${sec}:`) && it.depth === 1);
+        const vs = rows.map((it) => val(it, c));
+        const blankWhy = rows.filter((it) => val(it, c) == null && noteOf(it, c)).map((it) => `${it.accountId.split(":").pop()}(${noteOf(it, c).slice(0, 40)})`);
+        if (f(tid) != null && blankWhy.length) add("D", `현금흐름표 ${sec} = 구성 줄 합`, c, { status: NA, note: `구성 줄 일부 빈칸(사유 있음) — ${blankWhy.join(" · ")}` });
+        else if (f(tid) != null && vs.some((x) => x != null)) eqD(`현금흐름표 ${sec} = 구성 줄 합`, f(tid), vs.reduce((t, x) => t + (x ?? 0), 0));
+      }
+      const wc = byId(cfItems, "cf:영업활동 현금흐름:운전자본 변동");
+      if (wc) {
+        const i0 = cfItems.indexOf(wc), kids = [];
+        for (let i = i0 + 1; i < cfItems.length && cfItems[i].depth === 2; i++) kids.push(val(cfItems[i], c));
+        if (kids.length && val(wc, c) != null && kids.some((x) => x != null)) eqD("현금흐름표 운전자본 변동 = 하위 줄 합", val(wc, c), kids.reduce((t, x) => t + (x ?? 0), 0));
+      }
+      const o = f("cf:total:영업활동 현금흐름"), iv = f("cf:total:투자활동 현금흐름"), fi = f("cf:total:재무활동 현금흐름"), fx = f("cf:fx"), nc = f("cf:netchange");
+      const dsc = f("cf:disc"); // 중단사업 현금흐름(앱 2026-09-30 추가 — MRK 2021)
+      if (o != null && iv != null && fi != null && nc != null) eqD("현금흐름표 현금 증감 = 영업 + 투자 + 재무 + 환율", nc, o + iv + fi + (fx ?? 0) + (dsc ?? 0), dsc ? `중단사업 현금흐름 ${dsc} 포함` : "");
+      const capex = f("cf:note:capex"), ppe = f("cf:투자활동 현금흐름:유형자산 취득"), fcf = f("cf:note:fcf");
+      if (capex != null && ppe != null) eqD("현금흐름표 CAPEX = −유형자산 취득", capex, -ppe);
+      if (fcf != null && o != null && capex != null) eqD("현금흐름표 FCF = 영업현금흐름 − CAPEX", fcf, o - capex);
+    }
+  }
   // ── 판관비·연구개발비 A층(--metric=sga, 2026-09-28 — 지표 미종결) ────────────────────────────────────────────────────────
   // 기대값 = 검증기가 공시 원본에서 따로 판독한 본표 판관비·연구개발비 성격 줄 합(secFaceSga). 연간·분기(3개월, Q4 = 사업연도 − 9개월)·LTM
   // (20-F 는 연간만 — 원통화 × H.10). 빈칸 기대: 성격 줄 없음 → "본표에 줄 없음", 구성 공시 간 줄 구성 다름(합도 다름) → "기준 혼합",

@@ -48,6 +48,9 @@ export function entriesOf(
  * 나열된 개념(대체 태그)을 우선순위대로 병합한 엔트리 배열.
  * 같은 보고기간(start·end·form)은 앞선 개념 값을 쓰고, 없는 기간만 뒤 개념이 채운다.
  * → 회사가 연도에 따라 태그를 바꾼 경우(NVIDIA 등) 시계열이 끊기지 않음.
+ * 단, 앞선 개념에 **같은 결산일(end)**로 끝나는 값이 하나라도 있으면 그 날짜는 뒤 개념으로 채우지 않는다(2026-09-30 — GOOG 주식보상비용:
+ * 현금흐름표 ShareBasedCompensation 은 누적만 있고 3개월 값이 없어, LTM 분기 합의 3개월 칸이 손익 쪽 AllocatedShareBasedCompensationExpense
+ * (1억 단위·다른 정의)로 채워져 28,222 ≠ 현금흐름표 기준 28,147). 한 결산일 = 한 개념.
  */
 export function firstConcept(
   facts: CompanyFacts,
@@ -57,13 +60,16 @@ export function firstConcept(
   if (concepts.length === 1) return entriesOf(facts, concepts[0], unit);
   const out: FactUnitEntry[] = [];
   const seen = new Set<string>();
+  const endsTaken = new Set<string>(); // 앞선 개념이 이미 값을 가진 결산일
   for (const c of concepts) {
-    for (const e of entriesOf(facts, c, unit)) {
+    const own = entriesOf(facts, c, unit);
+    for (const e of own) {
       const key = `${e.start ?? ""}|${e.end}|${e.form}`;
-      if (seen.has(key)) continue;
+      if (seen.has(key) || endsTaken.has(e.end)) continue;
       seen.add(key);
       out.push(e);
     }
+    for (const e of own) endsTaken.add(e.end);
   }
   return inheritNoRecast(out, concepts.map((c) => entriesOf(facts, c, unit)));
 }
