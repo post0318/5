@@ -318,13 +318,19 @@ export function buildUsBalance(
   const leTotal = value(LE_TOTAL); // 부채와 자본 총계 (= 자산 총계)
   const eqRaw = value(["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]);
   const lRaw = value(L_TOTAL);
+  // 부채 파생용 자본은 비지배지분 포함(2026-10-01 KO — 부채총계 미태깅: 92,763 − 지배주주 자본 24,105 = 68,658 로 비지배지분 1,721 이 부채에
+  // 섞였다. 맞는 값 = 92,763 − 비지배지분 포함 자본 25,826 = 66,937 = 야후·StockAnalysis). 포함 자본 태그가 없으면 지배주주 자본 + 비지배지분
+  const eqAllRaw = value(["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]);
+  const miRaw = value(["MinorityInterest"]);
+  const seOnly = value(["StockholdersEquity"]);
   // 자기자본·부채총계 한쪽이라도 미태깅이면 (부채와자본총계 or 자산총계) 로 상호 파생
   const eqTotal = blank();
   const lTotal = blank();
   for (const l of labels) {
     const be = leTotal[l] ?? aTotal[l] ?? null;
     eqTotal[l] = eqRaw[l] ?? (be != null && lRaw[l] != null ? be - lRaw[l]! : null);
-    lTotal[l] = lRaw[l] ?? (be != null && eqTotal[l] != null ? be - eqTotal[l]! : null);
+    const eqForL = eqAllRaw[l] ?? (eqTotal[l] != null ? eqTotal[l]! + (miRaw[l] ?? 0) : null);
+    lTotal[l] = lRaw[l] ?? (be != null && eqForL != null ? be - eqForL : null);
   }
   const totalOf: Record<string, Record<string, number | null>> = {
     cur: curTotal,
@@ -470,6 +476,17 @@ export function buildUsBalance(
         values,
         ...ltmNote,
       });
+      // 비지배지분 줄(2026-10-01) — 자본 총계가 지배주주 자본(StockholdersEquity)인 칸에 비지배지분이 있으면 자본 총계 다음에 따로 싣는다.
+      // 없으면 부채 + 자본 ≠ 부채와 자본 총계(KO 2022: 66,937 + 24,105 ≠ 92,763 — 차이 1,721 = 비지배지분)
+      if (line.label === "자본 총계" && !isFin) {
+        const nci = blank();
+        for (const l of labels) {
+          if (values[l] == null || seOnly[l] == null || values[l] !== seOnly[l]) continue;
+          nci[l] = miRaw[l] ?? (eqAllRaw[l] != null ? eqAllRaw[l]! - seOnly[l]! : null);
+        }
+        if (labels.some((l) => nci[l] != null && nci[l] !== 0))
+          items.push({ accountName: "비지배지분", accountId: "bs:자본:비지배지분", depth: 0, isSubtotal: false, isHighlight: false, values: nci });
+      }
       const fb = fbRows[line.label];
       if (fb && line.fallbackLabel)
         items.push({
