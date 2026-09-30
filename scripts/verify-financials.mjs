@@ -5576,6 +5576,7 @@ async function verifyUs(sym) {
     const aNa0 = (col, metric) => EXACT_A[metric] && !aPassed0(col, metric) && checks.some((k) => k.col === col && k.status === NA && EXACT_A[metric].test(k.name));
     const aNa = (col, metric) => (metric === "EBITDA" ? (aNa0(col, "영업이익") || aNa0(col, "감가상각비")) && !(aPassed0(col, "영업이익") && aPassed0(col, "감가상각비"))
       : metric === "판관비·연구개발비" ? aNa0(col, "판관비") || aNa0(col, "연구개발비") : aNa0(col, metric));
+    const aPassedOuter = (col, metric) => aPassed(col, metric);
     const aPassed = (col, metric) => (metric === "판관비·연구개발비" ? aPassed0(col, "판관비") && (aPassed0(col, "연구개발비") || aPassed0(col, "연구개발비빈칸"))
       : metric === "EBITDA" ? aPassed0(col, "영업이익") && aPassed0(col, "감가상각비") // EBITDA = 영업이익 + 감가상각비, 두 성분 모두 A층 통과
       : aPassed0(col, metric));
@@ -6549,7 +6550,7 @@ async function verifyUs(sym) {
       // 영업이익 = 외부 매출총이익 − 판관비 − 연구개발비(오너 지시 2026-09-30 "IBM 진행") — 외부가 본표의 기타 영업수익·손익 줄(IBM "지식재산·
       //    주문개발 수익" 612·663·860·996·964)을 영업이익에서 뺀다. 판관비·연구개발비가 그 소스에서 앱과 일치(①)할 때만, 외부 자기 매출총이익으로
       //    정확 일치. 매출총이익 칸의 차이(IBM 블룸버그 매출원가 ±1)는 그 칸에 따로 남는다
-      if (metric === "영업이익" && col !== "LTM") {
+      if (metric === "영업이익" && true /* LTM 도(2026-09-30 IBM LTM 블룸버그) */) {
         const it = (m) => recon.get(`${col} ${m}`);
         const same = (m) => { const x = it(m); return x?.srcs[n] && extEq(x.ours, x.srcs[n].v) ? x.ours : null; };
         const gpx = it("매출총이익")?.srcs[n]?.v, sg = same("판관비"), rd = it("연구개발비")?.srcs[n] ? same("연구개발비") : 0;
@@ -7581,20 +7582,22 @@ async function verifyUs(sym) {
           // 외부 정의 분해 불가(오너 결정 2026-09-27): 앱 = SEC 본표(A층 정확 일치) + 다른 외부 1곳 이상 정확 일치(공통모드 아님)인데 이 소스는
           // 해마다 다른 재분류로 식이 성립하지 않는 경우. ①·② 로 세지 않고 따로 표기. 외부 일치 0곳이면 ③(미결) 유지.
           // 기준 소스는 ② 도 인정(오너 결정 2026-09-27 — 분기마다 SEC 와 정확 일치하고 앱과의 차이 원인이 규명된 소스)
-          : aPassed(col0, m0) && clsNames.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok)) ? "외부정의분해불가" : aNa(col0, m0) ? "A층검증불가" : "③"]));
+          : aPassed(col0, m0) && clsNames.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok || precisionNa[o])) ? "외부정의분해불가" : aNa(col0, m0) ? "A층검증불가" : "③"]));
         reconApply(metricClass, col0, m0);
         fxHold(metricClass);
         for (const n of clsNames) if (metricClass[n] === "③") (m0 === "영업이익" ? opincErrors : m0 === "감가상각비" ? daErrors : /^(판관비|연구개발비)/.test(m0) ? sgaErrors : cogsErrors).push({ item: r.item, source: n, ours: r.ours, other: r.srcs[n].v, note: `${why(n).trim() || "분해식 없음"}${aPassed(col0, m0) ? "" : " · 앱 ≠ SEC 본표(A층 미통과)"}` });
       }
       // 그 밖 항목(희석 EPS·순이익·세전이익·EBITDA — 2026-09-30): ①·②·NA·공통모드는 원인 판정 그대로, 외부 단독 이탈은 §0(앱 = SEC(A층) + 다른
       // 외부 2곳 이상 일치 + 이 소스만 이탈) 또는 원인 규칙의 이탈 판정. 그 밖은 ③. 오류 목록(종료코드)에는 넣지 않는다(분류 표시만)
-      if (!metricClass && !revenueClass && /^(\d{4}Y|LTM) (희석 EPS|순이익|세전이익|EBITDA)$/.test(r.item)) {
+      if (!metricClass && !revenueClass && /^(\d{4}Y|LTM) (희석 EPS|순이익|세전이익|EBITDA|총차입금\(운용리스 포함\))$/.test(r.item)) {
         const [col0, ...mm] = r.item.split(" "), m0 = mm.join(" ");
+        // 총차입금은 A층 전제를 SEC 본표·주석 분해 성립(debtDec.appOk)으로 본다(앱 = 본표 차입금·리스 줄 합 + 주석 항목, 1달러 안)
+        const aPassed = (c, m) => (m === "총차입금(운용리스 포함)" ? !!debtDec?.appOk && c === "LTM" : aPassedOuter(c, m));
         const clsMatched = matched.filter((n) => clsNames.includes(n));
         metricClass = Object.fromEntries(clsNames.map((n) => [n, matched.includes(n) ? "①" : commonMode[n] ? "공통모드" : precisionNa[n] ? "NA" : causes[n]?.ok ? "②"
           : causes[n]?.outlier || (aPassed(col0, m0) && clsMatched.length >= 2 && clsNames.length - clsMatched.length === 1) ? "외부단독이탈"
           // 다른 외부 1곳 이상 일치(또는 원인 확인)면 외부 단독 이탈(오너 결정 2026-09-30 — 옛 "구성 미분해"와 같은 기준)
-          : aPassed(col0, m0) && clsNames.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok)) ? "외부단독이탈" : aNa(col0, m0) ? "A층검증불가" : "③"]));
+          : aPassed(col0, m0) && clsNames.some((o) => o !== n && (matched.includes(o) || causes[o]?.ok || precisionNa[o])) ? "외부단독이탈" : aNa(col0, m0) ? "A층검증불가" : "③"]));
         fxHold(metricClass);
       }
       review.push({
@@ -7679,6 +7682,18 @@ async function verifyUs(sym) {
     시가총액: H[c].mc, EV: H[c].ev, EBITDA: H[c].ebitda, PER: H[c].per, PBR: H[c].pbr, PSR: H[c].psr, "EV/EBITDA": H[c].evx,
   }]));
   const audit = buildAudit({ app: auditApp, cols: [fyLast, "LTM"].filter(Boolean), checks, review, closed: CLOSED_METRICS });
+  // LTM ③ 보정(2026-09-30) — LTM 열은 비교 소스(블룸버그 등)가 없어 ③ 으로 남기 쉽다. 같은 소스·같은 지표의 연간 열이 2개 이상이고 **모두**
+  //  외부 단독 이탈이면(앱 = SEC 는 LTM 에서도 A층 통과) LTM 도 외부 단독 이탈 — 그 소스의 정의가 연간 내내 앱과 다르다는 근거
+  for (const o of review) {
+    const cls = o.metricClass;
+    if (!cls || !/^LTM /.test(o.item ?? "")) continue;
+    const m = o.item.slice(4);
+    for (const n of Object.keys(cls)) {
+      if (cls[n] !== "③") continue;
+      const ann = review.filter((x) => x.metricClass?.[n] && /^\d{4}Y /.test(x.item ?? "") && x.item.slice(6) === m);
+      if (ann.length >= 2 && ann.every((x) => x.metricClass[n] === "외부단독이탈")) cls[n] = "외부단독이탈";
+    }
+  }
   return { sym, checks, review, hardErrors, revErrors, cogsErrors, opincErrors, daErrors, sgaErrors, audit };
 }
 
