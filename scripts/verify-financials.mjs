@@ -189,7 +189,7 @@ async function symbolList() {
 
 // ── SEC ──────────────────────────────────────────────────────────────
 // 외부 소스 줄 단위 구성 대조 결과(scripts/metrics/recon-lines.mjs, 오너 지시 2026-09-27) — 이름만 붙이던 '외부 정의 분해 불가'·'외부 단독 이탈'
-// 칸을 구성 분해 결과로 바꾼다: 분해되면 ②(구성 설명), 아니면 "구성미분해"(정의 차이로 인정하지 않음)
+// 칸을 구성 분해 결과로 바꾼다: 분해되면 ②(구성 설명), 아니면 외부 단독 이탈(오너 결정 2026-09-30 — 옛 "구성미분해")
 const RECON = (() => {
   const m = new Map();
   try {
@@ -6149,6 +6149,13 @@ async function verifyUs(sym) {
           }]);
         }
       }
+      // (나-2) 외부 = 현금흐름표 줄 합(앱의 손상·중단사업 조정 전) − SEC 주석 항목 하나(2026-09-30 DELL StockAnalysis: FY2022 4,288 = 줄 합 4,551(VMware
+      //    중단사업 포함) − 자본화 소프트웨어 상각 263, FY2023~2026 = 앱 − 소프트웨어 상각 — 조정이 없는 해는 조정 0)
+      for (const t of DA_NOTE_MINUS) rules.push([`unadj-minus-${t}`, `현금흐름표 줄 합(앱의 손상·중단사업 조정 전) − ${t}(SEC 주석) — 외부는 중단사업 감가상각을 빼지 않고 이 항목만 뺌`, (c, x, e) => {
+        const v0 = noteOf(t, c, e);
+        if (v0 == null) return { skip: `SEC 주석 ${t} 값 없음` };
+        return { exp: x.ours + (e.adj ?? 0) - v0, ev: `앱 ${x.ours}${e.adj ? ` + 조정 되돌림 ${e.adj}` : ""} − ${t} ${v0}` };
+      }]);
       // (다) 외부 = SEC 태그 1~2개의 합(현금흐름표 줄이 아닌 다른 구성 — 2026-09-30 CEG Yahoo: 손익계산서 감가상각 줄 1,091 + 핵연료 상각 758
       //    = 1,849. 앱은 현금흐름표 줄 2,427 = 둘 + 자산복구충당부채 증가 543 + 전력계약 상각 35). 모든 연간 열 정확 성립일 때만
       const BUILD = ["CostOfGoodsAndServicesSoldDepreciationAndAmortization", "DepreciationAndAmortization", "DepreciationDepletionAndAmortization", "AmortizationOfNuclearFuelLease", "Depreciation", "AmortizationOfIntangibleAssets"];
@@ -7551,7 +7558,8 @@ async function verifyUs(sym) {
           const x = RECON.get(`${sym}|${n}|${m0}|${col0.replace(/Y$/, "")}`);
           // 이번 실행의 외부값·앱값과 같을 때만 그 대조 결과를 쓴다(다른 실행 기준 결과를 붙이지 않음)
           const same = x && x.ext === r.srcs[n]?.v && x.app === r.ours;
-          if (x?.ok && same) { cls[n] = "②"; causes[n] = { ok: `구성 분해(줄 단위 대조): ${x.how}` }; } else cls[n] = "구성미분해";
+          // 분해 안 되면 외부 단독 이탈(오너 결정 2026-09-30 — "구성 미분해" 폐지: 앱 = SEC 본표 + 다른 외부 1곳 이상 일치인데 이 소스만 해마다 기준이 바뀌면 외부 쪽 문제)
+          if (x?.ok && same) { cls[n] = "②"; causes[n] = { ok: `구성 분해(줄 단위 대조): ${x.how}` }; } else cls[n] = "외부단독이탈";
         }
       };
       if (revenueClass) reconApply(revenueClass, r.item.split(" ")[0], "매출");
