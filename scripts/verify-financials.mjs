@@ -5714,6 +5714,19 @@ async function verifyUs(sym) {
           if (kc >= 0) for (const [item, id, , sk] of CFX) if (sc[sk]?.[kc] != null) put(`${c} ${item}`, appv(cfI, id, c), "StockAnalysis", sc[sk][kc], uC);
         }
       } catch (e) { errs.push(`StockAnalysis 재무상태표·현금흐름표: ${String(e).slice(0, 80)}`); }
+      // 블룸버그(2026-10-01) — 표준화 B/S(재무상태표 5줄) + 요약 화면 영업활동 현금흐름·자본지출. 현금흐름표 전체 화면은 스냅샷에 없어 나머지 줄은 대조 안 함
+      try {
+        const bb = loadBbg(sym);
+        if (bb) for (const [c, x] of Object.entries(H)) {
+          if (!x?.date) continue;
+          const b = bb.at(x.date);
+          for (const [item, id, k] of [["재무상태표 현금·현금성자산", "bs:자산:현금·현금성자산", "bsCash"], ["재무상태표 유동자산 총계", "bs:자산:유동자산 총계", "bsCa"], ["재무상태표 유동부채 총계", "bs:부채:유동부채 총계", "bsCl"],
+            ["재무상태표 부채 총계", "bs:부채:부채 총계", "bsL"], ["재무상태표 자본 총계", "bs:자본:자본 총계", "bsEq"]])
+            if (b[k]) put(`${c} ${item}`, appv(bsI, id, c), "블룸버그", b[k].v, b[k].unit);
+          for (const [item, id, k] of [["현금흐름표 영업활동 현금흐름", "cf:total:영업활동 현금흐름", "cfOcf"], ["현금흐름표 유형자산 취득(CAPEX)", "cf:투자활동 현금흐름:유형자산 취득", "cfCapex"]])
+            if (b[k]) put(`${c} ${item}`, appv(cfI, id, c), "블룸버그", b[k].v, b[k].unit);
+        }
+      } catch (e) { errs.push(`블룸버그 재무상태표·현금흐름표: ${String(e).slice(0, 80)}`); }
     }
     // 블룸버그(오너 결정 2026-09-28 — 정식 외부 소스): 오너가 준 FA 스냅샷(.cache/bbg, scripts/reference/bbg-import.mjs). 없는 종목은 건너뛴다.
     // BBG GAAP 화면은 SEC 공시 GAAP 를 그대로 싣는 기준이라 앱 로직 오류를 가장 직접 드러낸다. 외화 공시는 원통화라 제외
