@@ -26,15 +26,29 @@ function isFullYear(e: FactUnitEntry): boolean {
 // 기간을 채워 GOOG 주식보상비용 LTM 이 손익 쪽 태그 3개월 값과 섞였다)
 
 /** 사업연도별 duration 값. */
+/**
+ * 사업연도별 연간 값 — **나중 공시 우선**(오너 결정 2026-09-30 "나중공시우선" — 손익계산서와 같은 원칙. 예전엔 먼저 나온 원 공시 값을 썼다:
+ * INTC 2021 영업현금흐름 29,991 → 재작성 29,456, META 2022 CAPEX 31,431 → 31,186 등). 단, 나중 공시 값이 앞선 공시 값의 **부호만 뒤집은**
+ * 값이면(AMD 2021 투자·재무활동 −686·−1,895 → 2024 10-K +686·+1,895 — 회사 태깅 오류) 앞선 값을 유지한다.
+ */
 function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
-  const m = new Map<number, { val: number; end: string }>();
+  const byYear = new Map<number, FactUnitEntry[]>();
   for (const e of entries) {
     if (e.fp !== "FY" || !isFullYear(e) || !ANNUAL_FORMS.includes(e.form)) continue;
     const y = fiscalYearOf(e.end);
-    const prev = m.get(y);
-    if (!prev || e.end > prev.end) m.set(y, { val: e.val, end: e.end });
+    const g = byYear.get(y);
+    if (g) g.push(e);
+    else byYear.set(y, [e]);
   }
-  return new Map([...m].map(([y, v]) => [y, v.val]));
+  const out = new Map<number, number>();
+  for (const [y, g] of byYear) {
+    const end = g.reduce((m, e) => (e.end > m ? e.end : m), "");
+    const same = g.filter((e) => e.end === end).sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""));
+    const latest = same[0];
+    const earlier = same.find((e) => e.val !== latest.val);
+    out.set(y, latest.val !== 0 && earlier && earlier.val === -latest.val ? earlier.val : latest.val);
+  }
+  return out;
 }
 
 interface Line {

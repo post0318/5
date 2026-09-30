@@ -58,18 +58,19 @@ export function firstConcept(
   unit = "USD",
 ): FactUnitEntry[] {
   if (concepts.length === 1) return entriesOf(facts, concepts[0], unit);
+  // 중복은 **개념 사이에서만** 거른다 — 같은 개념 안의 여러 판본(원 공시·나중 10-K 재게시)은 모두 남긴다(2026-09-30: 예전엔 (시작·종료·공시 종류)
+  // 키로 같은 개념 안의 나중 10-K 까지 버려, 대체 태그가 둘 이상인 줄(현금흐름표 대부분)이 원 공시 값만 보고 "나중 공시 우선"이 적용되지 않았다 —
+  // META 2022 CAPEX 31,431(원) vs 31,186(2025 10-K), INTC 2021 영업현금흐름 29,991 vs 29,456)
   const out: FactUnitEntry[] = [];
-  const seen = new Set<string>();
+  const seen = new Set<string>(); // 앞선 개념들이 가진 (시작·종료·공시 종류)
   const endsTaken = new Set<string>(); // 앞선 개념이 이미 값을 가진 결산일
   for (const c of concepts) {
     const own = entriesOf(facts, c, unit);
     for (const e of own) {
-      const key = `${e.start ?? ""}|${e.end}|${e.form}`;
-      if (seen.has(key) || endsTaken.has(e.end)) continue;
-      seen.add(key);
+      if (seen.has(`${e.start ?? ""}|${e.end}|${e.form}`) || endsTaken.has(e.end)) continue;
       out.push(e);
     }
-    for (const e of own) endsTaken.add(e.end);
+    for (const e of own) { seen.add(`${e.start ?? ""}|${e.end}|${e.form}`); endsTaken.add(e.end); }
   }
   return inheritNoRecast(out, concepts.map((c) => entriesOf(facts, c, unit)));
 }
@@ -100,17 +101,19 @@ export function isFullYearDuration(e: FactUnitEntry): boolean {
  * 값이 백만 단위 반올림값으로 재태깅된다(MCD 2025-02 10-K — 2022-12-31 총자산 50,435.6 → 50,436 백만 달러, 자산 ≠
  * 부채+자본). 대상 값은 1억 이상만(아래 하한 — 상대 오차 0.5% 이하라 작은 값의 실제 재작성을 반올림으로 오인하지 않는다).
  */
+/** 0 에서 먼 쪽 반올림(음수 대칭) — Math.round 는 −3,184.5 → −3,184 라 음수 반올림 재게시를 놓쳤다(MCD 2023 투자활동 −3,184.5 → −3,185, 2026-09-30) */
+const roundAway = (y: number, p: number) => Math.sign(y) * Math.round(Math.abs(y) / p) * p;
 export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
   const P = [1e6, 1e8, 1e9, 1e10];
   // 작은 단위(1e3·1e4·1e5) 반올림은 **버리지 않고 값만 교체**한다(usdSmallRounds — 2026-09-28). 버리는 방식(2026-09-26 시도)은
   // NVO·SAP(20-F)·TRV·PSA 연간 열을 통째로 없앴다.
   const usdRounds = (x: number, y: number) =>
-    Math.abs(x) >= 1e8 && x !== y && P.some((p) => Math.round(y / p) * p === x && y % p !== 0);
+    Math.abs(x) >= 1e8 && x !== y && P.some((p) => roundAway(y, p) === x && y % p !== 0);
   // 주식수(shares)도 같은 규칙 — MRVL 2022-01-29 유통주식수: 그 해 10-K 846,695,000 → 2023 10-K 846,700,000(10만 주
   // 반올림). 주식수 공시 관행 단위(천·만·10만·백만 주)마다 값이 그 단위의 100배 이상일 때만(상대 오차 0.5% 이하 — USD 규칙과 같은 폭.
   // 자사주 매입·발행 같은 실제 변동이 우연히 원래 값의 반올림과 같아질 여지를 없앤다).
   const sharesRounds = (x: number, y: number) =>
-    x !== y && [1e3, 1e4, 1e5, 1e6].some((p) => Math.abs(x) >= 100 * p && Math.round(y / p) * p === x && y % p !== 0);
+    x !== y && [1e3, 1e4, 1e5, 1e6].some((p) => Math.abs(x) >= 100 * p && roundAway(y, p) === x && y % p !== 0);
   // 작은 단위 반올림(값만 교체 — 아래 clean). 값이 반올림 단위의 100배 이상일 때(상대 오차 0.5% 이하 — 주식수 규칙과 같은 폭). 예전 하한 1억은
   // MRVL FY2022 법인세 −62,461,000(원 공시) → −62,500,000(2024 10-K 재게시)을 놓쳤다(2026-09-29, 검증기 법인세 대조로 발견)
   // 반올림 방식은 회사마다 다르다 — 짝수 반올림(MRVL 2022-01-29 유동자산 2,493,450천 → 2,493.4백만)·합계 맞춤 1단위 조정(유동부채 1,388,542천
@@ -152,9 +155,59 @@ export function dropRoundedRetags(facts: CompanyFacts): CompanyFacts {
       for (const [u, es] of Object.entries(o.units)) units[u] = u === "USD" ? clean(es, usdRounds, usdSmallRounds) : u === "shares" ? clean(es, sharesRounds) : es;
       ng[concept] = { ...o, units };
     }
-    out.facts["us-gaap"] = ng;
+    out.facts["us-gaap"] = unitSwitchReposts(ng);
   }
   return out;
+}
+
+/**
+ * **표기 단위 변경 재게시(공시 단위 판정, 2026-09-30)** — 회사가 천 달러 → 백만 달러로 표기를 바꾼 공시는 과거 기간 값을 **한꺼번에**
+ * 백만(또는 10만) 단위로 반올림해 다시 싣는다(MRVL 2023 10-K FY2022 CAPEX 169,324천 → 169.2백만, MCD 2025-02 10-K: 2022 순증감 −2,125.4 → −2,126(합계 맞춤 1단위 조정), 2023 환율 효과 −57.8 → −58).
+ * 값 하나씩 보는 규칙(usdRounds — 1억 이상·정확 반올림만)은 작은 값·1단위 조정을 놓친다. 공시(accn)·기간마다, 먼저 공시된 정밀값(백만의
+ * 배수가 아님)이 있는 항목을 모아 **3건 이상이고 80% 이상**이(공시 = 제출일 + 공시 종류) "백만의 배수 + 원 정밀값과 백만 1단위 이내"면 그 공시·기간 전체를 반올림
+ * 재게시로 보고 그 조건을 만족하는 값을 원 정밀값으로 바꾼다(실제 재작성은 한 공시의 여러 줄이 동시에 원 값의 반올림이 되지 않는다).
+ */
+function unitSwitchReposts(gaap: NonNullable<CompanyFacts["facts"]["us-gaap"]>): NonNullable<CompanyFacts["facts"]["us-gaap"]> {
+  type Pair = { x: FactUnitEntry; y: FactUnitEntry; ok: boolean };
+  const byFiling = new Map<string, Pair[]>();
+  for (const o of Object.values(gaap)) {
+    const es = o.units?.USD;
+    if (!es?.length) continue;
+    const groups = new Map<string, FactUnitEntry[]>();
+    for (const e of es) {
+      const k = `${e.start ?? ""}|${e.end}`;
+      const g = groups.get(k);
+      if (g) g.push(e);
+      else groups.set(k, [e]);
+    }
+    for (const [k, g] of groups) {
+      if (g.length < 2) continue;
+      const first = [...g].sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))[0];
+      if (first.val % 1e6 === 0) continue; // 원 공시가 이미 백만 단위 — 비교 대상 아님(10만 단위 판정은 아래 단위별로)
+      for (const x of g) {
+        // 원 값 그대로 다시 실었거나 앞 단계(clean)가 이미 정밀값으로 바꾼 항목은 판정에서 뺀다(다른 값만 센다)
+        if (x === first || (x.filed ?? "") <= (first.filed ?? "") || !x.filed || x.val === first.val) continue;
+        // 백만(MCD)·10만(MRVL 2023 10-K) 단위 — 재게시 값이 그 단위의 배수이고 원 정밀값의 반올림에서 한 단위 이내(합계 맞춤 조정 포함)
+        const ok = [1e6, 1e5].some((P) => first.val % P !== 0 && x.val % P === 0 && Math.abs(x.val - roundAway(first.val, P)) <= P);
+        const fk = `${x.filed}|${x.form}|${k}`; // 공시 = 제출일 + 공시 종류(FactUnitEntry 에 공시번호 없음)
+        const arr = byFiling.get(fk);
+        if (arr) arr.push({ x, y: first, ok });
+        else byFiling.set(fk, [{ x, y: first, ok }]);
+      }
+    }
+  }
+  const fix = new Map<FactUnitEntry, number>();
+  for (const pairs of byFiling.values()) {
+    const n = pairs.filter((q) => q.ok).length;
+    if (n >= 3 && n >= 0.8 * pairs.length) for (const q of pairs) if (q.ok && q.x.val !== q.y.val) fix.set(q.x, q.y.val);
+  }
+  if (!fix.size) return gaap;
+  const ng: NonNullable<CompanyFacts["facts"]["us-gaap"]> = {};
+  for (const [concept, o] of Object.entries(gaap)) {
+    const es = o.units?.USD;
+    ng[concept] = es?.some((e) => fix.has(e)) ? { ...o, units: { ...o.units, USD: es.map((e) => (fix.has(e) ? { ...e, val: fix.get(e)! } : e)) } } : o;
+  }
+  return ng;
 }
 
 /** 같은 회계기간의 두 값 중 채택할 것 — 최신 종료일, 동률이면 최신 공시(재작성) 우선. */

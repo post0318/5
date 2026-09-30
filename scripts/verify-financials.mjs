@@ -4946,7 +4946,11 @@ async function verifyUs(sym) {
     };
     const dur = (c0, date) => {
       const l = (G[c0]?.units?.USD ?? []).filter((e) => e.start && /^(10-K|20-F|40-F)/.test(e.form ?? "") && dayDiff(e.end, date) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 <= 400);
-      return l.length ? latestPrecise(l) : null;
+      if (!l.length) return null;
+      const pick = latestPrecise(l);
+      // 부호만 뒤집힌 재게시(회사 XBRL 태깅 오류 — AMD 2021 투자·재무활동: 10-K 본문 표 (686)·(1,895), 2024 10-K 태그 +686·+1,895)는 앞선 값(앱과 같은 규칙, 오너 결정 2026-09-30)
+      const prev = pick && pick.val !== 0 ? l.filter((e) => (e.filed ?? "") < (pick.filed ?? "")).sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? "")).find((e) => e.val !== pick.val) : null;
+      return prev && prev.val === -pick.val ? { ...prev, retag: { val: pick.val, filed: pick.filed, unit: "부호 반전 재게시(태깅 오류)" } } : pick;
     };
     const cols = Object.keys(H).filter((c) => H[c]?.date);
     const A_BS = [
@@ -6622,6 +6626,19 @@ async function verifyUs(sym) {
         return { na: `StockAnalysis 표기 끝자리 — 앱(공시 EPS) ${r.ours} 와 정확히 0.000001 차(0 쪽), 순이익 ÷ 주식수로는 재현 안 됨` };
       // 외부 자체 불일치(2026-09-30) — LTM 기간 = 최근 사업연도(결산일 ±7일, 결산 직후 분기 공시 전 — MSFT FY2026)이고 그 소스의 같은 사업연도 연간
       //    값은 앱과 정확히 같은데 LTM 값만 다르면, 같은 기간에 대한 외부 자신의 두 값이 서로 다르다 → 외부 단독 이탈
+      // 블룸버그 LTM = 앱 LTM − 앱 4분기(연간 − 9개월 누적, SEC) + 4분기 실적발표 8-K 분기값(CL·IBM 세전이익, 블룸버그 분기 화면으로 확인 2026-09-30)
+      if (n === "블룸버그" && col === "LTM" && q4Rel.has(metric)) {
+        const q = q4Rel.get(metric);
+        const TAG = { 세전이익: "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest" }[metric];
+        const l = (G[TAG]?.units?.USD ?? []).filter((e) => e.start && /^10-[KQ]/.test(e.form ?? ""));
+        const fyE = latestPrecise(l.filter((e) => dayDiff(e.end, q.fyEnd) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300));
+        const nine = fyE ? latestPrecise(l.filter((e) => dayDiff(e.start, fyE.start) <= 5 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 250 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 <= 290)) : null;
+        if (fyE && nine) {
+          const q4sec = fyE.val - nine.val, exp = r.ours - q4sec + q.v;
+          if (q.v !== q4sec && eqExp(exp))
+            return { ok: `블룸버그 LTM ${metric} = 앱 LTM ${r.ours} − 앱 4분기(연간 ${fyE.val} − 9개월 ${nine.val} = ${q4sec}) + 4분기 실적발표 8-K(${q.filed}) 분기값 ${q.v} = ${exp}${rnd(exp)} — 회사가 연간·누적·분기를 따로 반올림, 블룸버그는 발표 분기값 사용 · ${q.url}` };
+        }
+      }
       // 외부 자체 불일치(감가상각비) — 외부 EBITDA − 외부 영업이익 = 앱 감가상각비인데 외부 감가상각비 칸만 다르다(SNDK FY2026 블룸버그: EBITDA 12,538
       //    − 영업이익 = 149 = 앱, 감가상각비 칸 113 = 149 − 1분기 36)
       if (metric === "감가상각비" && !extEq(v, r.ours)) {
@@ -7607,6 +7624,33 @@ async function verifyUs(sym) {
       const from = qEnds.length ? new Date(Date.parse(qEnds[0]) - 100 * 864e5).toISOString().slice(0, 10) : "";
       try { if (qEnds.length === 4) revQDeriv = await derivFactsOf(revFace.faces.filter((f) => !f.any && f.instUrl && (qEnds.some((E) => dayDiff(f.report, E) <= 7) || (f.report >= from && f.report <= L.date)))); }
       catch (e) { errs.push(`매출 분기 파생상품 공시 원본 조회 실패: ${String(e).slice(0, 60)}`); }
+    }
+    // 4분기 실적발표 8-K 분기값(2026-09-30 — 블룸버그 LTM 세전이익 CL 2,941·IBM 10,440: 블룸버그 분기 화면 확인 결과 4분기 = 회사 실적발표 8-K 표의
+    // 분기값(CL 107, IBM 4,144), 앱 4분기 = 연간 − 9개월 누적(108·4,143 — 회사가 연간·누적·분기를 따로 반올림)). LTM 창 안의 사업연도 결산 뒤 첫 항목
+    // 2.02 8-K 에서 "Income before income taxes" 행의 첫 숫자(당분기)를 읽는다. 블룸버그 LTM 칸이 앱과 다를 때만(원문 디스크 캐시)
+    const q4Rel = new Map(); // 지표 → { v, filed, url, fyEnd, q4sec }
+    {
+      const lt = recon.get("LTM 세전이익");
+      const fyc = Object.keys(H).filter((k) => k !== "LTM" && H[k]?.date && H.LTM?.date && H[k].date < H.LTM.date).sort((a, b) => H[b].date.localeCompare(H[a].date))[0];
+      if (lt?.srcs?.["블룸버그"] && !extEq(lt.srcs["블룸버그"].v, lt.ours) && fyc) {
+        const E = H[fyc].date;
+        try {
+          const rc0 = sub.filings.recent;
+          const i = (rc0.form ?? []).map((fm, j) => j).filter((j) => rc0.form[j] === "8-K" && /2\.02/.test(rc0.items?.[j] ?? "") && rc0.filingDate[j] > E && dayDiff(rc0.filingDate[j], E) <= 80).sort((a, b) => rc0.filingDate[a].localeCompare(rc0.filingDate[b]))[0];
+          if (i != null) {
+            const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rc0.accessionNumber[i].replace(/-/g, "")}`;
+            const idx = await secJson(`${base}/index.json`);
+            for (const d0 of idx.directory.item.filter((x) => /\.htm$/i.test(x.name) && !/^R\d+\.htm$/i.test(x.name))) {
+              const txt = (await secText(`${base}/${d0.name}`)).replace(/<[^>]+>/g, " ").replace(/&#160;|&nbsp;|&#36;|&#x24;/gi, " ").replace(/\s+/g, " ");
+              const m = txt.match(/income (?:\(loss\) )?(?:from continuing operations )?before income taxes\s*\$?\s*(\(?-?[\d,]+(?:\.\d+)?\)?)/i);
+              if (!m) continue;
+              const raw = m[1], neg = /\(|-/.test(raw), num = Number(raw.replace(/[^\d.]/g, ""));
+              const scale = /in thousands/i.test(txt.slice(0, 20000)) ? 1e3 : 1e6;
+              if (Number.isFinite(num)) { q4Rel.set("세전이익", { v: (neg ? -num : num) * scale, filed: rc0.filingDate[i], url: `${base}/${d0.name}`, fyEnd: E }); break; }
+            }
+          }
+        } catch (e) { errs.push(`4분기 실적발표 8-K 조회 실패: ${String(e).slice(0, 60)}`); }
+      }
     }
     // 실적발표 8-K(항목 2.02) GAAP 희석 EPS(오너 지시 2026-09-30 — "8k 도 반영"). 10-K 에 없는 값 두 가지를 확인한다: 분할 전 연간 EPS
     // (WMT FY2024 5.74 — 그 해 10-K 는 분할 뒤 제출돼 1.91 로 실림, 분할 전 값의 출처는 8-K 뿐), 4분기 EPS(TSLA 2023 2.27 — XBRL 에 4분기
