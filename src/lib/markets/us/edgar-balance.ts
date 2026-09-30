@@ -293,8 +293,17 @@ export function buildUsBalance(
       yl?.through ?? recentInstantQuarters(anchor, 1)[0] ?? new Date().toISOString().slice(0, 10);
     periods.push({ label: LTM, fiscalYear: (years.at(-1) ?? 0) + 1, fiscalQuarter: null, endDate: latestEnd });
     ltmDate = latestEnd;
+    // 재무상태표 한 열 = 그 결산일 자산총계를 실은 공시(연간)의 값(2026-10-01 WDC FY2022 — 자본만 2024 10-K 자본변동표 기초 잔액(재작성
+    // 12,323)이 들어가고 부채와 자본·부채는 원 공시(26,259·14,038)라 열 안에서 합이 102 어긋났다). 그 공시들에 값이 없는 줄만 다른 공시
+    const bsFiled = new Map<string, Set<string>>();
+    for (const x of anchor) if (!x.start && ANNUAL_FORMS.includes(x.form) && x.filed) bsFiled.set(x.end, (bsFiled.get(x.end) ?? new Set()).add(x.filed));
     value = (concepts) => {
-      const e = firstConcept(facts, concepts);
+      const e0 = firstConcept(facts, concepts);
+      const e = e0.filter((x) => {
+        const fs0 = x.start || !ANNUAL_FORMS.includes(x.form) ? null : bsFiled.get(x.end);
+        if (!fs0 || (x.filed && fs0.has(x.filed))) return true;
+        return !e0.some((y) => y.end === x.end && !y.start && ANNUAL_FORMS.includes(y.form) && y.filed && fs0.has(y.filed));
+      });
       const ann = instantByYear(e);
       const out: Record<string, number | null> = {};
       for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
@@ -323,6 +332,14 @@ export function buildUsBalance(
   const eqAllRaw = value(["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]);
   const miRaw = value(["MinorityInterest"]);
   const seOnly = value(["StockholdersEquity"]);
+  // 임시자본(메자닌, 2026-10-01) — 부채도 자본도 아닌 상환가능 지분(TSLA·UBER·HLT 상환가능 비지배지분, WDC·BE 전환우선주).
+  // 부채와 자본 총계 = 부채 + 임시자본 + 자본 + 비지배지분. 포함 합계 태그 → 지배주주분 + 상환가능 비지배지분
+  const tmpAll = value(["TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests"]);
+  const tmpParent = value(["TemporaryEquityCarryingAmountAttributableToParent"]);
+  const tmpNci = value(["RedeemableNoncontrollingInterestEquityCarryingAmount", "RedeemableNoncontrollingInterestEquityCommonCarryingAmount"]);
+  const tempEq = blank();
+  for (const l of labels)
+    tempEq[l] = tmpAll[l] ?? (tmpParent[l] != null || tmpNci[l] != null ? (tmpParent[l] ?? 0) + (tmpNci[l] ?? 0) : null);
   // 자기자본·부채총계 한쪽이라도 미태깅이면 (부채와자본총계 or 자산총계) 로 상호 파생
   const eqTotal = blank();
   const lTotal = blank();
@@ -330,7 +347,7 @@ export function buildUsBalance(
     const be = leTotal[l] ?? aTotal[l] ?? null;
     eqTotal[l] = eqRaw[l] ?? (be != null && lRaw[l] != null ? be - lRaw[l]! : null);
     const eqForL = eqAllRaw[l] ?? (eqTotal[l] != null ? eqTotal[l]! + (miRaw[l] ?? 0) : null);
-    lTotal[l] = lRaw[l] ?? (be != null && eqForL != null ? be - eqForL : null);
+    lTotal[l] = lRaw[l] ?? (be != null && eqForL != null ? be - eqForL - (tempEq[l] ?? 0) : null);
   }
   const totalOf: Record<string, Record<string, number | null>> = {
     cur: curTotal,
@@ -486,6 +503,19 @@ export function buildUsBalance(
         }
         if (labels.some((l) => nci[l] != null && nci[l] !== 0))
           items.push({ accountName: "비지배지분", accountId: "bs:자본:비지배지분", depth: 0, isSubtotal: false, isHighlight: false, values: nci });
+        // 임시자본 줄 — 표준 태그가 없으면 부채와 자본 − 부채 − 비지배지분 포함 자본(세 값 모두 공시값일 때만, 표기 한 단위(100만) 넘는 차만 —
+        // AVGO FY2021 우선주 배당 미지급 27 은 회사 고유 태그라 companyfacts 에 없다)
+        const tmp = blank(), tmpNote: Record<string, string> = {};
+        for (const l of labels) {
+          if (tempEq[l] != null) { tmp[l] = tempEq[l]; continue; }
+          const eAll = eqAllRaw[l] ?? (seOnly[l] != null ? seOnly[l]! + (miRaw[l] ?? 0) : null);
+          if (leTotal[l] == null || lRaw[l] == null || eAll == null) continue;
+          const r = leTotal[l]! - lRaw[l]! - eAll;
+          if (Math.abs(r) > 1e6 + 0.5) { tmp[l] = r; tmpNote[l] = "표준 태그 없음 — 부채와 자본 − 부채 − 자본(비지배지분 포함)"; }
+        }
+        if (labels.some((l) => tmp[l] != null && tmp[l] !== 0))
+          items.push({ accountName: "임시자본(상환가능 지분)", accountId: "bs:자본:임시자본", depth: 0, isSubtotal: false, isHighlight: false, values: tmp,
+            ...(Object.keys(tmpNote).length ? { cellNotes: tmpNote } : {}) });
       }
       const fb = fbRows[line.label];
       if (fb && line.fallbackLabel)
