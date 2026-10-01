@@ -83,8 +83,16 @@ function pickEntity(xml, nameRe, prefix) {
 }
 const AMO_C = ["AdjustmentsForAmortisationExpense"];
 
+// 별도 재무제표 회사(그 해 연결 재무제표가 없음 — 제룡전기, LS마린솔루션 2022 이전 KT서브마린)는 별도 값. 앱도 연도별로 연결이 없으면 별도를
+// 쓴다(opendart.ts CFS → OFS)
+let SEP = false;
 function ctxOk(ctx, prefix) {
   if (!ctx.startsWith(prefix + "_") && ctx !== prefix) return false;
+  if (SEP) {
+    if (/_ConsolidatedMember/.test(ctx)) return false;
+    if (/SegmentConsolidationItemsAxis|OperatingSegments|ClassesOfAssets|ClassesOfPropertyPlantAndEquipment|ClassesOfIntangibleAssets/.test(ctx)) return false;
+    return ctx === prefix || /SeparateMember$/.test(ctx) || /ReportedAmountMember$/.test(ctx);
+  }
   if (!ctx.includes("_ConsolidatedMember")) return false;
   if (/SegmentConsolidationItemsAxis|OperatingSegments|ClassesOfAssets|ClassesOfPropertyPlantAndEquipment|ClassesOfIntangibleAssets/.test(ctx))
     return false;
@@ -173,13 +181,18 @@ async function docDa(rcpNo) {
   const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
   if (!res.ok) throw new Error(`document ${res.status}`);
   const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
-  for (const b of Object.values(files)) {
+  const docs = Object.values(files).map((b) => {
     // 인코딩 — 선언은 늘 utf-8 이지만 2021 이전 문서는 실제 EUC-KR(실측). UTF-8 로 읽어 깨진 글자가 많으면 EUC-KR
     let x = new TextDecoder("utf-8").decode(b);
     if ((x.match(/�/g) ?? []).length > 50) x = new TextDecoder("euc-kr").decode(b);
-    if (!/연결감사보고서/.test(clean(x.slice(0, 3000)))) continue;
-    const t = parseDocDa(x);
-    if (t) return t;
+    const h = clean(x.slice(0, 3000));
+    return { x, kind: /연결감사보고서/.test(h) ? "con" : /감사보고서/.test(h) ? "sep" : null };
+  });
+  // 연결감사보고서가 있으면 그것만, 없으면(별도 재무제표 회사) 감사보고서
+  const want = docs.some((d) => d.kind === "con") ? "con" : "sep";
+  for (const d of docs.filter((d) => d.kind === want)) {
+    const t = parseDocDa(d.x);
+    if (t) return { ...t, sep: want === "sep" };
   }
   return null;
 }
@@ -239,9 +252,18 @@ async function daByYear(corp) {
     // 정정본 XBRL 에 그 해 값이 없으면 다음(원본) 접수본
     for (const rcp of rcps[y]) {
       try {
-        const part = fromReport(await loadXbrl(rcp), y);
+        const xml = await loadXbrl(rcp);
+        let part = fromReport(xml, y);
+        let src = "xbrl";
+        // 연결 재무제표가 없는 보고서(연결 컨텍스트 자체가 없음)는 별도 값
+        if (!(y in part) && !/contextRef="[^"]*_ConsolidatedMember/.test(xml)) {
+          SEP = true;
+          part = fromReport(xml, y);
+          SEP = false;
+          src = "xbrl(별도)";
+        }
         for (const [k, { xp, ...v }] of Object.entries(part))
-          if (!(k in byYear)) { byYear[k] = { ...v, src: "xbrl" }; srcOf[k] = [y, Number(k) === y ? 0 : 1]; xbrlParts[k] = xp; }
+          if (!(k in byYear)) { byYear[k] = { ...v, src }; srcOf[k] = [y, Number(k) === y ? 0 : 1]; xbrlParts[k] = xp; }
         if (y in part) break;
       } catch (e) {
         console.log(`    (${y} ${rcp} XBRL 실패: ${e.message})`);
@@ -301,7 +323,7 @@ async function daByYear(corp) {
       rcps[ry] ??= await annualRcps(corp, ry);
       const t = await docOf(ry);
       if (t && t.dep[col] != null)
-        byYear[y] = { depreciation: t.dep[col], amortisation: byYear[y]?.amortisation ?? t.amo[col] ?? null, src: y in byYear ? "xbrl+doc" : "doc" };
+        byYear[y] = { depreciation: t.dep[col], amortisation: byYear[y]?.amortisation ?? t.amo[col] ?? null, src: (y in byYear ? "xbrl+doc" : "doc") + (t.sep ? "(별도)" : "") };
     }
     if (byYear[y]?.depreciation == null) console.log(`    (${y} 감가상각비 — XBRL·원문 주석 모두 못 찾음)`);
   }
