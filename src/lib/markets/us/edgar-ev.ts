@@ -316,18 +316,15 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
   };
 
   const blocker = (asOf: string): EvBlocker | null => {
-    if (ctx.isFinancial) return "financial";
+    // 은행·카드사도 EV 를 비우지 않는다(오너 지시 2026-10-01 "EV를 비워두면 안된다") — 블룸버그와 같이 시가총액 + 차입금 + 우선주·비지배지분 − 현금
+    // (차입금 = 이자부 차입 태그 — 예금은 들어가지 않는다). AXP 2021 블룸버그 142,268.6 = 124,499.6 + 39,797 − 22,028
     // 금융 자회사 여부를 판별할 최신 공시 조회가 실패 — "금융 자회사 없음"으로
     // 단정하지 않고 보수적으로 EV 를 비운다(edgar-captive.ts loadCaptiveDebt "unknown").
     if (ctx.captive === "unknown") return "captive-unknown";
     if (ctx.captive === "unsplit") return "captive-unsplit";
-    // **임시(오너 지시 2026-09-23 — "ev/ebitda 최종은 뒤로 미루고")**: 금융
-    // 자회사가 있으면 부문 분리가 되더라도 EV 를 비운다. 차입금만 제조 부문으로
-    // 빼면 EBITDA 는 연결 기준이라 리스 차량 감가상각(GM 약 70억 달러)이 섞여
-    // EV/EBITDA 가 GM 1.8배·포드 1.79배처럼 무의미해진다. 제조 부문 현금·EBITDA·
-    // 금융 자회사 자본까지 맞출지 최종 방식이 정해지면 이 줄을 걷어낸다.
-    // (부문 분리 로직 captivePoint·industrialDebt 는 그때 쓰려고 남겨 둔다.)
-    if (ctx.captive) return "captive-unsplit";
+    // 금융 자회사 보유사(CAT 등) — EV 를 비우지 않는다(오너 지시 2026-10-01 "EV를 비워두면 안된다"). 블룸버그와 같은 방식: 시가총액 + 제조 부문
+    // 차입금(연결 차입금 − 금융 부문 차입금) + 우선주·비지배지분 − 연결 현금. CAT 2021 블룸버그 111,551.5 = 110,789.5 + 37,789 + 32 − 9,254 − 조정액 27,805.
+    // (예전 임시 미표시 사유: 연결 EBITDA 에 리스 차량 감가상각이 섞여 GM·포드 EV/EBITDA 가 낮게 나온다 — 블룸버그도 같은 연결 EBITDA 를 쓴다)
     if (unavailableOn(facts, "debt", asOf)) return "source-unavailable";
     if (!ctx.captive && !debtDateFor(asOf) && hasDebtActivity(asOf)) return "debt-untagged";
     return null;
@@ -349,6 +346,8 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     if (blocker(asOf)) return { bridge: null, reason: null };
     const miss = (what: string) => ({ bridge: null, reason: `분기 공시에 없음(${what} — ${asOf} 재무상태표)` });
     const cp = captivePoint(asOf);
+    // 금융 자회사 보유사인데 그 기준일 부문 분리값이 없으면 연결 차입금으로 섞지 않는다(사유 표시)
+    if (ctx.captive && typeof ctx.captive === "object" && !cp) return { bridge: null, reason: `금융 자회사 부문 차입금 분리값 없음(${asOf})` };
     const bal = asOf;
     let rawDebt = 0;
     let noncurrent: number | null = null;
@@ -378,6 +377,7 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     const olParts = olNc != null || olCur != null ? (olNc ?? 0) + (olCur ?? 0) : null;
     const olTotal = on("OperatingLeaseLiability", bal);
     const operatingLease = olParts == null ? olTotal : olTotal == null ? olParts : Math.max(olParts, olTotal);
+    // 금융 자회사 보유사: 제조 부문 차입금(부문 항목 합 — CAT 2021 9 + 45 + 9,746 = 9,800, 금융 27,989 와 합하면 연결 37,789 로 정확히 맞는다)
     const debt = cp ? cp.industrialDebt : rawDebt;
     const pref = partOn(PREFERRED, bal, "first");
     const prefUnits = partOn(PREFERRED_UNITS, bal, "sum");

@@ -2,7 +2,7 @@ import "server-only";
 import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { firstConcept, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
+import { entriesOf, firstConcept, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
 import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, pickDa, pickDaPeriod } from "./edgar-ev";
 import { revQuarterLabel } from "./fin-revenue";
 import { isFinancialCompany } from "./edgar-financial";
@@ -199,6 +199,22 @@ const INT_PAID = ["InterestPaidNet", "InterestPaid"];
 
 const LTM = "현재/LTM";
 const fyKey = (y: number) => `${y}Y`;
+
+/**
+ * 보통주 배당 근거 — 현금흐름표 "배당 지급"(PaymentsOfDividends, 포괄 태그)이 보통주 배당인지. 포괄 태그에는 비지배지분·종속회사 파트너 분배가 섞일 수
+ * 있다(BE: 자회사 Bloom Electrons 의 세금형평 파트너 분배 146.8만·94.7만 달러 — 보통주 배당은 한 번도 없음). 근거가 하나라도 있으면 보통주 배당:
+ * 주당배당 태그(USD/shares), 보통주 지급 태그, 자본변동표 배당 결의액 = 지급액(VRT), IFRS 주주 배당 주당액(TSM). 현금흐름표 화면·재무분석이 같이 쓴다
+ */
+export function hasCommonDividendEvidence(facts: CompanyFacts): boolean {
+  return (
+    entriesOf(facts, "CommonStockDividendsPerShareDeclared", "USD/shares").length > 0 ||
+    entriesOf(facts, "CommonStockDividendsPerShareCashPaid", "USD/shares").length > 0 ||
+    entriesOf(facts, "PaymentsOfDividendsCommonStock").length > 0 ||
+    Object.values((facts.facts as Record<string, Record<string, { units: Record<string, unknown[]> }> | undefined>)["ifrs-full"]?.["DividendsRecognisedAsDistributionsToOwnersPerShare"]?.units ?? {}).some((l) => l.length > 0) ||
+    ["Dividends", "DividendsCommonStock", "DividendsCommonStockCash"].some((c) =>
+      entriesOf(facts, c).some((e) => e.start && e.val !== 0 && entriesOf(facts, "PaymentsOfDividends").some((d) => d.start === e.start && d.end === e.end && d.val === e.val)))
+  );
+}
 
 export function buildUsCashFlow(
   facts: CompanyFacts,
@@ -583,6 +599,11 @@ export function buildUsCashFlow(
       ...ltmCell(intp),
     });
 
+  // 보통주 배당 근거가 없는데 포괄 배당 태그 금액이 있으면 그 줄은 보통주 배당이 아니다(BE — 비지배지분·파트너 분배) — 이름으로 밝힌다(2026-10-01)
+  if (!hasCommonDividendEvidence(facts)) {
+    const it = items.find((x) => x.accountId === "cf:재무활동 현금흐름:배당금 지급");
+    if (it && Object.values(it.values ?? {}).some((v) => v != null && v !== 0)) it.accountName = "배당·분배 지급 (보통주 배당 아님 — 비지배지분·파트너 분배)";
+  }
   return {
     symbol: "",
     market: "us",

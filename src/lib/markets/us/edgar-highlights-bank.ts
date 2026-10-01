@@ -17,6 +17,7 @@
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { buildShareResolver } from "./edgar-shares";
+import { buildEvResolver } from "./edgar-ev";
 import { fiscalYearOf, instantOn, ltmAnchor, ltmFlowOf } from "./edgar-series";
 import {
   fyEps,
@@ -282,8 +283,21 @@ export function buildUsBankHighlights(
   const nProv = ltmNote(E.provision);
   const inherit = (vals: (number | null)[], ...srcs: (string | null)[][]): (string | null)[] =>
     vals.map((v, i) => (v != null ? null : (srcs.map((x) => x[i]).find((x) => x) ?? null)));
+  // EV(오너 지시 2026-10-01 "EV를 비워두면 안된다") — 제조업 하이라이트와 같은 단일 기준(edgar-ev.ts): 시가총액 + 이자부 차입금 + 우선주·비지배지분 − 현금
+  // (예금은 차입금에 넣지 않는다). 블룸버그 금융사 EV 와 같은 구성(AXP 2021 142,268.6 = 124,499.6 + 39,797 − 22,028)
+  const evRes = buildEvResolver(facts);
+  const bridges = columns.map((col) => (col.kind === "estimate" || !col.date ? null : evRes.bridgeAt(col.kind === "ltm" ? (evRes.latestBalanceDate() ?? col.date) : col.date)));
+  const evDebt = bridges.map((b) => (b ? b.debt : null));
+  const evCash = bridges.map((b) => (b ? -b.cash : null));
+  const evPref = bridges.map((b) => (b ? b.preferred + b.nci : null));
+  const evVal = bridges.map((b, i) => (b && marketCap[i] != null ? marketCap[i]! + b.debt + b.preferred + b.nci - b.cash : null));
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap, cellNotes: nMktcap },
+    { key: "cash", label: "− 현금·단기투자·장기 투자증권", format: "money", indent: true, values: evCash },
+    { key: "debt", label: "+ 차입금", format: "money", indent: true, values: evDebt },
+    { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", indent: true, values: evPref },
+    { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: evVal },
+    { key: "sp0", label: "", format: "money", spacer: true, values: blank() },
     { key: "equity", label: "자기자본 장부가치", format: "money", values: equity, cellNotes: nEquity },
     { key: "deposits", label: "총예금", format: "money", values: deposits, cellNotes: nBal },
     { key: "assets", label: "자산총계", format: "money", emphasis: true, values: assets },

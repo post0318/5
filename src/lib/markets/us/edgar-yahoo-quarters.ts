@@ -41,6 +41,8 @@ export type YahooLtmResult =
       filled: string[];
       /** 비운 항목과 사유 */
       blanked: { label: string; reason: string }[];
+      /** SEC 연말 값 + Yahoo 분기 변동분으로 채운 EV 구성요소(Yahoo 연말 값이 SEC 와 정의가 조금 달라 그대로 못 쓴 것 — 오너 결정 2026-10-01 (가)) */
+      approx?: { label: string; reason: string }[];
       /** LTM EV·순차입금을 같은 기준일로 계산할 수 있는지 */
       evComplete: boolean;
       evReason: string | null;
@@ -270,6 +272,7 @@ export function withYahooLtm(
   };
   const yAt = (d: string, key: string) => (d === E ? (qBy.get(E)?.[key] ?? ya[key]) : qBy.get(d)?.[key]) ?? null;
   const instOk = new Map<string, boolean>();
+  const approx: { label: string; reason: string }[] = [];
   for (const it of INSTANTS) {
     const present = it.concepts.filter((c) => on(c, E) != null);
     if (!present.length) continue;
@@ -277,6 +280,19 @@ export function withYahooLtm(
     const yE = yAt(E, it.y), yL = yAt(last, it.y);
     if (yE == null) { fail("Yahoo FY말 값 없음"); continue; }
     const bad = present.find((c) => !sameInUnit(on(c, E)! / eRate, yE));
+    // EV 구성요소(현금·단기투자·비지배지분) — Yahoo 연말 값이 SEC 와 정의가 조금 다르면(TSM 단기투자) SEC 연말 값 + Yahoo 분기 변동분(오너 결정 2026-10-01 (가) —
+    // "EV를 비워두면 안된다"). 그 밖 잔액은 종전대로 공란
+    if (bad && it.ev && yAt(last, it.y) != null) {
+      const yL0 = yAt(last, it.y)!, yP0 = yearAgoRate != null ? yAt(yearAgo, it.y) : null;
+      for (const c of present) {
+        const secE = on(c, E)! / eRate;
+        put(c, last, (secE + (yL0 - yE)) * lastRate);
+        if (yP0 != null) put(c, yearAgo, (secE + (yP0 - yE)) * yearAgoRate!);
+      }
+      instOk.set(it.label, true);
+      approx.push({ label: it.label, reason: `SEC ${E} ${Math.round(on(bad, E)! / eRate).toLocaleString("en-US")} + Yahoo 변동(${Math.round(yE).toLocaleString("en-US")} → ${Math.round(yL0).toLocaleString("en-US")}) ${currency}` });
+      continue;
+    }
     if (bad) { fail(`Yahoo FY말 ≠ SEC(${bad}) — SEC ${Math.round(on(bad, E)! / eRate).toLocaleString("en-US")} vs Yahoo ${Math.round(yE).toLocaleString("en-US")} ${currency}`); continue; }
     if (yL == null) { fail(`Yahoo ${last} 값 없음`); continue; }
     const yP = yearAgoRate != null ? yAt(yearAgo, it.y) : null;
@@ -294,7 +310,15 @@ export function withYahooLtm(
   let debtOk = false;
   if (!debtE && !yDebtE) debtOk = true; // 차입금 없음
   else if (!debtE || yDebtE == null) blanked.push({ label: "총차입금", reason: debtE ? "Yahoo FY말 값 없음" : "SEC FY말 차입금 없음" });
-  else if (!sameInUnit(debtE.debt / eRate, yDebtE))
+  else if (!sameInUnit(debtE.debt / eRate, yDebtE) && yDebtL != null) {
+    // 정의가 조금 다름(ASML 0.37%·TSM 0.36%) — SEC 연말 + Yahoo 분기 변동분(오너 결정 2026-10-01 (가))
+    debtOk = true;
+    const secE = debtE.debt / eRate;
+    put(SYN_DEBT_FACE, last, (secE + (yDebtL - yDebtE)) * lastRate);
+    const yPD = yearAgoRate != null ? yAt(yearAgo, "totalDebt") : null;
+    if (yPD != null) put(SYN_DEBT_FACE, yearAgo, (secE + (yPD - yDebtE)) * yearAgoRate!);
+    approx.push({ label: "총차입금", reason: `SEC ${E} ${Math.round(secE).toLocaleString("en-US")} + Yahoo 변동(${Math.round(yDebtE).toLocaleString("en-US")} → ${Math.round(yDebtL).toLocaleString("en-US")}) ${currency}` });
+  } else if (!sameInUnit(debtE.debt / eRate, yDebtE))
     blanked.push({ label: "총차입금", reason: `Yahoo FY말 ≠ SEC — SEC ${Math.round(debtE.debt / eRate).toLocaleString("en-US")} vs Yahoo ${Math.round(yDebtE).toLocaleString("en-US")} ${currency}` });
   else if (yDebtL == null) blanked.push({ label: "총차입금", reason: `Yahoo ${last} 값 없음` });
   else {
@@ -313,6 +337,11 @@ export function withYahooLtm(
     } else if (debtE.noncurrent != null) blanked.push({ label: "비유동 차입금", reason: "Yahoo 값 없음 또는 SEC 와 다름" });
   }
 
+  // SEC 연말 값이 0 이거나 그 줄이 없는 EV 구성요소(우선주·비지배지분)는 분기말에도 0 — 태그만 남은 회사가 LTM 에서 "모름"으로 EV 전체가 비던 문제(ASML 우선주, 2026-10-01)
+  for (const c of [...PREFERRED, "MinorityInterest"]) {
+    // 연말 재무상태표에 그 줄이 없거나(ASML 우선주 — 2016 년 이후 태그 없음) 0 이면 분기말도 0
+    if ((on(c, E) ?? 0) === 0 && on(c, last) == null) { put(c, last, 0); if (yearAgoRate != null && on(c, yearAgo) == null) put(c, yearAgo, 0); }
+  }
   // EV 완결성 — SEC FY말에 있는 구성요소는 전부 같은 기준일로 채워져야 한다
   const evMiss: string[] = [];
   if (!debtOk) evMiss.push("총차입금");
@@ -331,6 +360,7 @@ export function withYahooLtm(
       currency,
       filled,
       blanked,
+      approx,
       evComplete: evMiss.length === 0,
       evReason: evMiss.length ? `LTM EV 미표시(Yahoo 분기 LTM) — ${evMiss.join("·")}을(를) ${last} 기준으로 못 채움` : null,
     },
@@ -349,6 +379,7 @@ export function yahooLtmLabel(r: YahooLtmResult): string {
   return (
     `LTM 열 = Yahoo 분기(원통화 ${r.currency}, 연준 H.10 분기 평균·기말 환율 환산, ~${r.through}), 결측 항목 공란` +
     (r.blanked.length ? ` — 공란: ${r.blanked.map((b) => `${b.label}(${b.reason})`).join(", ")}` : "") +
+    (r.approx?.length ? ` — SEC 연말 + Yahoo 분기 변동분: ${r.approx.map((b) => `${b.label}(${b.reason})`).join(", ")}` : "") +
     (r.evReason ? ` · ${r.evReason}` : "")
   );
 }

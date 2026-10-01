@@ -3712,7 +3712,18 @@ async function verifyUs(sym) {
   };
 
   let inst = new Map(), instErr = "";
-  const bank = !h.rows.some((r) => r.key === "ev");
+  // 은행 레이아웃 = 은행 전용 줄(총예금·순수익) — 2026-10-01 부터 은행 하이라이트에도 EV 줄이 있다(오너 지시 "EV를 비워두면 안된다")
+  const bank = h.rows.some((r) => r.key === "deposits" || r.key === "net_revenue");
+  if (bank) {
+    // 은행 EV 항등식 — EV = 시가총액 + 차입금 + 우선주·비지배지분 − 현금(같은 열 화면 값)
+    const ix = (k0) => h.rows.find((r) => r.key === k0)?.values ?? [];
+    const [mcB, dB, cB, pB, eB] = ["mktcap", "debt", "cash", "pref_nci", "ev"].map(ix);
+    h.columns.forEach((col, i) => {
+      if (col.kind === "estimate" || eB[i] == null) return;
+      const exp = mcB[i] != null && dB[i] != null && cB[i] != null && pB[i] != null ? mcB[i] + dB[i] + cB[i] + pB[i] : null;
+      add("D", "은행 EV = 시가총액 + 차입금 + 우선주·비지배지분 − 현금", col.kind === "ltm" ? "LTM" : col.label, same(eB[i], exp));
+    });
+  }
   const secBank = sic >= 6020 && sic <= 6199;
   add("B", "금융 레이아웃 = SEC 업종(SIC 6020~6199 은행·신용)", "-", bank === secBank || (bank && sic >= 6000 && sic < 6800)
     ? { status: PASS, note: `SIC ${sic}` } : { status: FAIL, note: `앱 ${bank ? "은행" : "일반"} 레이아웃 vs SIC ${sic}` });
@@ -3804,6 +3815,23 @@ async function verifyUs(sym) {
     captiveSec = a && tot / a.val >= 0.1 ? `금융 자회사 보유(오너 결정 목록 + SEC 금융채권 ${tot} = 자산의 ${(tot / a.val * 100).toFixed(1)}%, ${a.end})` : null;
     if (!captiveSec) review.push({ item: "금융 자회사 보유 판정", note: `오너 결정 목록 종목이나 SEC 금융채권 비중 10% 미만·태그 없음 — EV 미표시 강제 검사 생략` });
   }
+  // 금융 부문 차입금(열 → { v, how }) — 그 열 기준일 정기공시 원본에서 부문 축(제품·사업부문·사업그룹) 금융 멤버(Financ·Credit, "Excluding" 제외) 한 차원 값.
+  //    같은 부문을 두 멤버로 이중 태깅한 경우(CAT FinancialProductsMember·FinancialProductsSegmentMember)는 개념별 최댓값 하나만. 단기 = 단기차입금 + CP,
+  //    유동성 장기 = 둘 중 큰 태그, 비유동 = 둘 중 큰 태그(검증기 독립 구현 — 앱 edgar-captive.ts 와 별개)
+  const capFin = new Map();
+  if (captiveSec) for (const [c0, x0] of Object.entries(H)) {
+    if (!x0?.date) continue;
+    try {
+      const fa = await filingAtDate(cik, sub, x0.date);
+      if (!fa) continue;
+      const fin = fa.facts.filter((f) => f.dims.length === 1 && /^(ProductOrServiceAxis|StatementBusinessSegmentsAxis|SegmentsAxis|BusinessGroupAxis)$/.test(f.dims[0][0]) && /Financ|Credit/i.test(f.dims[0][1]) && !/Excluding/i.test(f.dims[0][1]));
+      const mx = (ids) => Math.max(0, ...fin.filter((f) => ids.includes(f.id)).map((f) => f.v));
+      const st = mx(["us-gaap_ShortTermBorrowings"]) + mx(["us-gaap_CommercialPaper"]);
+      const cur = mx(["us-gaap_LongTermDebtAndCapitalLeaseObligationsCurrent", "us-gaap_LongTermDebtCurrent"]);
+      const nc = mx(["us-gaap_LongTermDebtAndCapitalLeaseObligations", "us-gaap_LongTermDebtNoncurrent"]);
+      if (st + cur + nc > 0) capFin.set(c0, { v: st + cur + nc, how: `${fa.form} ${fa.filed} 금융 부문 단기 ${st} + 유동성 장기 ${cur} + 장기 ${nc}` });
+    } catch (e) { review.push({ item: "금융 부문 차입금 원본 판독 실패", note: `${c0}: ${String(e).slice(0, 60)}` }); }
+  }
   const evBlockOkAt = (date) => {
     if (!evBlocked) return null;
     // 20-F LTM(Yahoo 분기)에서 앱이 EV 구성요소를 못 채워 LTM EV 를 비운 경우 — 사유("Yahoo FY말 총차입금 ≠ SEC")를 검증기가 따로
@@ -3841,10 +3869,28 @@ async function verifyUs(sym) {
     const byName = (st) => Object.fromEntries((st?.sections ?? []).flatMap((x) => x.items ?? []).map((it) => [String(it.accountName ?? "").trim(), it.values ?? {}]));
     const byId = (st) => Object.fromEntries((st?.sections ?? []).flatMap((x) => x.items ?? []).map((it) => [it.accountId, it.values ?? {}]));
     const AN = byName(an), IN = byName(is), BI = byId(bs), CI = byId(fetched.cf);
+    // 섹션 구분(성장률 1년·3년 CAGR 에 같은 이름 행) — "섹션|행" 키
+    const AS = {};
+    { let sec = ""; for (const it of (an?.sections ?? []).flatMap((x) => x.items ?? [])) { const nm = String(it.accountName ?? "").trim(); if (String(it.accountId ?? "").startsWith("an:h:")) sec = nm; AS[`${sec}|${nm}`] = it.values ?? {}; } }
+    const HLm = {};
+    { const h0 = hl?.highlights; if (h0) { const cl = h0.columns.map((x) => x.label); for (const r0 of h0.rows ?? []) HLm[r0.key] = Object.fromEntries(cl.map((l, i) => [l, r0.values?.[i] ?? null])); } }
     const iv = (re, k) => { const n0 = Object.keys(IN).find((n) => re.test(n)); return n0 ? IN[n0][k] ?? null : null; };
     const keys = (an.periods ?? []).map((p0) => p0.label);
     const near = (a, e) => Math.abs(a - e) <= Math.max(1e-9, Math.abs(e) * 1e-9);
     for (const k of keys) {
+      // 3년 CAGR(연간 열, 3년 전 열이 화면에 있을 때) — 매출액·EPS·주당배당금
+      { const i0 = keys.indexOf(k), b3 = i0 >= 3 && k !== "현재/LTM" ? keys[i0 - 3] : null;
+        if (b3) {
+          const cg = (cur, base) => (cur != null && base != null && cur > 0 && base > 0 ? (Math.pow(cur / base, 1 / 3) - 1) * 100 : null);
+          const hl3 = (key, kk) => { const h0 = hl?.highlights; if (!h0) return null; const ix = h0.columns.findIndex((x) => x.label === kk); const r0 = (h0.rows ?? []).find((x) => x.key === key); return ix >= 0 ? r0?.values?.[ix] ?? null : null; };
+          const ivx = (re0, kk) => { const n0 = Object.keys(IN).find((n) => re0.test(n)); return n0 ? IN[n0][kk] ?? null : null; };
+          for (const [nm, f0] of [["매출액", (kk) => ivx(/^매출액/, kk)], ["EPS", (kk) => ivx(/^희석 EPS/, kk)], ["주당배당금", (kk) => hl3("dps", kk)]]) {
+            const exp = cg(f0(k), f0(b3)), a = AS[`성장률 (3년 CAGR)|${nm}`]?.[k];
+            if (exp == null) continue;
+            add("C", `재무분석 3년 CAGR ${nm} = 재무제표 화면 재계산`, lab(k), a == null ? { status: NA, note: `재무분석 빈칸(화면 재계산 ${exp})` } : Math.abs(a - exp) <= Math.max(1e-9, Math.abs(exp) * 1e-9) ? { status: PASS, note: `${nm} ${b3}→${k} 3년 CAGR` } : { status: FAIL, note: `재무분석 ${a} ≠ 화면 재계산 ${exp}` });
+          }
+        }
+      }
       const c = lab(k), prev = keys[keys.indexOf(k) - 1], ann = k !== "현재/LTM" && prev && prev !== "현재/LTM";
       const rev = iv(/^매출액/, k), gp = iv(/^매출총이익/, k), ni = iv(/^당기순이익/, k), pre = iv(/^세전이익/, k), tax = iv(/법인세비용/, k);
       const ocf = CI["cf:total:영업활동 현금흐름"]?.[k] ?? null, capex = CI["cf:투자활동 현금흐름:유형자산 취득"]?.[k] ?? null;
@@ -3853,7 +3899,7 @@ async function verifyUs(sym) {
       const ca = b("bs:자산:유동자산 총계"), cl = b("bs:부채:유동부채 총계"), lt = b("bs:부채:부채 총계"), eq = b("bs:자본:자본 총계"), at = b("bs:자산:자산 총계");
       const cash = b("bs:자산:현금·현금성자산"), sti = b("bs:자산:단기 투자자산");
       const R = (name, row, exp, why) => {
-        const a = AN[row]?.[k];
+        const a = (row.includes("|") ? AS[row] : AN[row])?.[k];
         if (exp == null || !Number.isFinite(exp)) return;
         if (a == null) { add("C", `재무분석 ${name} = 재무제표 화면 재계산`, c, { status: NA, note: `재무분석 빈칸(화면 재계산 ${exp})` }); return; }
         add("C", `재무분석 ${name} = 재무제표 화면 재계산`, c, near(a, exp) ? { status: PASS, note: why } : { status: FAIL, note: `재무분석 ${a} ≠ 화면 재계산 ${exp} · ${why}` });
@@ -3865,10 +3911,57 @@ async function verifyUs(sym) {
       R("유동비율", "유동비율", ca != null && cl ? ca / cl : null, "유동자산 ÷ 유동부채");
       R("부채비율", "부채비율 (%)", lt != null && eq ? (lt / eq) * 100 : null, "부채 총계 ÷ 자본 총계");
       R("현금비율", "현금비율", cash != null && cl ? (cash + (sti ?? 0)) / cl : null, "(현금·현금성자산 + 단기 투자자산) ÷ 유동부채");
-      R("배당성향", "배당성향 (%)", div != null && ni ? (Math.abs(div) / ni) * 100 : null, "배당금 지급 ÷ 당기순이익");
-      R("총주주환원율", "총주주환원율 (%)", div != null && bb != null && ni ? ((Math.abs(div) + Math.abs(bb)) / ni) * 100 : null, "(배당 + 자사주 취득) ÷ 당기순이익");
+      // 현금흐름표 배당 줄이 "보통주 배당 아님"(BE — 파트너 분배)이면 보통주 배당 0 → 배당성향 0(오너 결정 2026-10-01)
+      const divRowName = String((fetched.cf?.sections ?? []).flatMap((x) => x.items ?? []).find((it) => it.accountId === "cf:재무활동 현금흐름:배당금 지급")?.accountName ?? "");
+      const notCommon = /보통주 배당 아님/.test(divRowName);
+      R("배당성향", "배당성향 (%)", notCommon ? (ni ? 0 : null) : div != null && ni ? (Math.abs(div) / ni) * 100 : null, notCommon ? "보통주 배당 없음(배당 줄은 파트너 분배) → 0" : "배당금 지급 ÷ 당기순이익");
+      R("총주주환원율", "총주주환원율 (%)", (notCommon || div != null) && bb != null && ni ? (((notCommon ? 0 : Math.abs(div)) + Math.abs(bb)) / ni) * 100 : null, "(보통주 배당 + 자사주 취득) ÷ 당기순이익");
+      // ── 전 지표(2026-10-01 오너 지시 "미국은 재무분석 전반내용까지") — 화면 값: 하이라이트(시가총액·EBITDA·FCF·DPS·영업현금흐름·자본지출), 재무상태표 주석
+      //    (총차입금·순차입금·장기차입금(운용리스 제외)·운용리스 포함 총차입금), 본표 줄(매출채권·재고·매입채무·이익잉여금)
+      const hv = (key) => HLm[key]?.[k] ?? null;
+      const mc = hv("mktcap"), ebitda = hv("ebitda"), fcf = hv("fcf"), ocfH = hv("ocf");
+      const debt = b("bs:note:총차입금"), nd = b("bs:note:순차입금"), ltd = b("bs:note:장기차입금 (운용리스 제외)"), debtL = b("bs:note:총차입금 (운용리스 포함)");
+      const ar = b("bs:자산:매출채권"), inv = b("bs:자산:재고자산"), ap = b("bs:부채:매입채무"), re = b("bs:자본:이익잉여금(결손금)");
+      const op = iv(/^영업이익/, k), cogs = iv(/^\(−\) 매출원가/, k);
+      R("주가/FCF", "밸류에이션|주가 / FCF", mc != null && fcf ? mc / fcf : null, "시가총액 ÷ 잉여현금흐름(하이라이트)");
+      R("FCF 수익률", "현금창출|FCF 수익률 (%)", mc && fcf != null ? (fcf / mc) * 100 : null, "잉여현금흐름 ÷ 시가총액");
+      R("영업이익률", "수익성|영업이익률 (%)", op != null && rev ? (op / rev) * 100 : null, "영업이익 ÷ 매출액");
+      R("총차입금/자기자본", "레버리지|총차입금 / 자기자본 (%)", debt != null && eq ? (debt / eq) * 100 : null, "총차입금(주석) ÷ 자본 총계");
+      R("총차입금(운용리스 포함)/자기자본", "레버리지|총차입금(운용리스 포함) / 자기자본 (%)", debtL != null && eq ? (debtL / eq) * 100 : null, "운용리스 포함 총차입금(주석) ÷ 자본 총계");
+      R("총차입금/총자산", "레버리지|총차입금 / 총자산 (%)", debt != null && at ? (debt / at) * 100 : null, "총차입금 ÷ 자산 총계");
+      R("장기차입금/자기자본", "레버리지|장기차입금 / 자기자본 (%)", ltd != null && eq ? (ltd / eq) * 100 : null, "장기차입금(운용리스 제외, 주석) ÷ 자본 총계");
+      R("장기차입금/총자산", "레버리지|장기차입금 / 총자산 (%)", ltd != null && at ? (ltd / at) * 100 : null, "장기차입금 ÷ 자산 총계");
+      R("순차입금/자기자본", "레버리지|순차입금 / 자기자본 (%)", nd != null && eq ? (nd / eq) * 100 : null, "순차입금(주석) ÷ 자본 총계");
+      R("총차입금/EBITDA", "재무건전성|총차입금 / EBITDA", debt != null && ebitda ? debt / ebitda : null, "총차입금 ÷ EBITDA(하이라이트)");
+      R("순차입금/EBITDA", "재무건전성|순차입금 / EBITDA", nd != null && ebitda ? nd / ebitda : null, "순차입금 ÷ EBITDA");
+      R("영업이익/총차입금", "재무건전성|영업이익 / 총차입금", op != null && debt ? op / debt : null, "영업이익 ÷ 총차입금");
+      R("CFO/총차입금", "재무건전성|CFO / 총차입금", ocfH != null && debt ? ocfH / debt : null, "영업현금흐름 ÷ 총차입금");
+      R("FCF/총차입금", "재무건전성|FCF / 총차입금", fcf != null && debt ? fcf / debt : null, "잉여현금흐름 ÷ 총차입금");
+      R("당좌비율", "유동성|당좌비율", cash != null && cl ? (cash + (sti ?? 0) + (ar ?? 0)) / cl : null, "(현금 + 단기투자 + 매출채권) ÷ 유동부채");
+      R("알트만 Z", "재무건전성|알트만 Z-스코어", at && ca != null && cl != null && re != null && op != null && mc != null && lt && rev != null
+        ? 1.2 * ((ca - cl) / at) + 1.4 * (re / at) + 3.3 * (op / at) + 0.6 * (mc / lt) + 1.0 * (rev / at) : null, "1.2·운전자본/자산 + 1.4·이익잉여금/자산 + 3.3·영업이익/자산 + 0.6·시가총액/부채 + 1.0·매출/자산");
       if (ann) {
-        const eqP = b("bs:자본:자본 총계", prev), atP = b("bs:자산:자산 총계", prev);
+        const eqP = b("bs:자본:자본 총계", prev), atP = b("bs:자산:자산 총계", prev), clP = b("bs:부채:유동부채 총계", prev);
+        const avg2 = (x, y) => (x != null && y != null ? (x + y) / 2 : null);
+        const atA = avg2(at, atP), eqA = avg2(eq, eqP), clA = avg2(cl, clP);
+        R("재무레버리지", "수익성|× 재무레버리지 (배)", atA != null && eqA ? atA / eqA : null, "평균 자산 ÷ 평균 자본");
+        R("CFO/유동부채", "유동성|CFO / 유동부채", ocfH != null && clA ? ocfH / clA : null, "영업현금흐름 ÷ 평균 유동부채");
+        const arP = b("bs:자산:매출채권", prev), invP = b("bs:자산:재고자산", prev), apP = b("bs:부채:매입채무", prev);
+        R("DSO", "운전자본|매출채권 회전일수 (DSO)", ar != null && arP != null && rev ? (avg2(ar, arP) / rev) * 365 : null, "평균 매출채권 ÷ 매출 × 365");
+        R("DIO", "운전자본|재고자산 회전일수 (DIO)", cogs && inv != null && invP != null ? (avg2(inv, invP) / Math.abs(cogs)) * 365 : null, "평균 재고 ÷ 매출원가 × 365");
+        R("DPO", "운전자본|매입채무 회전일수 (DPO)", cogs && ap != null && apP != null ? (avg2(ap, apP) / Math.abs(cogs)) * 365 : null, "평균 매입채무 ÷ 매출원가 × 365");
+        const pv = (key) => HLm[key]?.[prev] ?? null;
+        const yo = (c0, p0, abs) => (c0 != null && p0 ? (((abs ? Math.abs(c0) : c0) - (abs ? Math.abs(p0) : p0)) / Math.abs(p0)) * 100 : null);
+        const SG = "성장률 (1년 YoY)";
+        R("성장률 매출액", `${SG}|매출액`, yo(rev, iv(/^매출액/, prev)), "매출액 전년 대비");
+        R("성장률 EBITDA", `${SG}|EBITDA`, yo(ebitda, pv("ebitda")), "EBITDA(하이라이트) 전년 대비");
+        R("성장률 영업이익", `${SG}|영업이익`, yo(op, iv(/^영업이익/, prev)), "영업이익 전년 대비");
+        R("성장률 순이익", `${SG}|순이익`, yo(ni, iv(/^당기순이익/, prev)), "당기순이익 전년 대비");
+        R("성장률 희석 EPS", `${SG}|희석 EPS`, yo(iv(/^희석 EPS/, k), iv(/^희석 EPS/, prev)), "희석 EPS 전년 대비");
+        R("성장률 주당배당금", `${SG}|주당배당금`, yo(hv("dps"), pv("dps")), "주당배당금(하이라이트) 전년 대비");
+        R("성장률 영업활동 현금흐름", `${SG}|영업활동 현금흐름`, yo(ocfH, pv("ocf")), "영업현금흐름 전년 대비");
+        R("성장률 자본지출", `${SG}|자본지출`, yo(hv("capex"), pv("capex"), true), "자본지출(지출 크기) 전년 대비");
+        R("성장률 잉여현금흐름", `${SG}|잉여현금흐름`, yo(fcf, pv("fcf")), "잉여현금흐름 전년 대비");
         R("ROE", "ROE (%)", ni != null && eq != null && eqP != null ? (ni / ((eq + eqP) / 2)) * 100 : null, "당기순이익 ÷ 평균 자본(기초·기말)");
         R("ROA", "ROA (%)", ni != null && at != null && atP != null ? (ni / ((at + atP) / 2)) * 100 : null, "당기순이익 ÷ 평균 자산");
         R("총자산회전율", "× 총자산회전율 (회)", rev != null && at != null && atP != null ? rev / ((at + atP) / 2) : null, "매출액 ÷ 평균 자산");
@@ -4331,8 +4424,13 @@ async function verifyUs(sym) {
     }
     if (!bank) {
       add("C", "EBITDA 하이라이트=손익계산서", c, same(IS[c]?.ebitda ?? null, x.ebitda));
-      add("C", "차입금 하이라이트=대차대조표 주석", c, same(BS[c]?.debt ?? null, x.debt));
-      add("C", "순차입금 하이라이트=대차대조표 주석", c, same(BS[c]?.nd ?? null, x.debt == null ? null : x.debt + (x.cash ?? 0)));
+      if (!captiveSec) {
+        add("C", "차입금 하이라이트=대차대조표 주석", c, same(BS[c]?.debt ?? null, x.debt));
+        add("C", "순차입금 하이라이트=대차대조표 주석", c, same(BS[c]?.nd ?? null, x.debt == null ? null : x.debt + (x.cash ?? 0)));
+      } else {
+        const fin = capFin.get(c);
+        if (fin && x.debt != null) add("C", "순차입금 하이라이트 + 금융 부문 차입금 = 대차대조표 주석", c, same(BS[c]?.nd ?? null, x.debt + fin.v + (x.cash ?? 0)));
+      }
     }
     // ── D. 항등식·부호 규칙·기대치
     const signRule = (name, mult, den) => {
@@ -4490,9 +4588,14 @@ async function verifyUs(sym) {
     }
     if (x.mc != null && x.rev != null) signRule("PSR", x.psr, x.rev);
     if (isFy && x.mc != null) { const eq = atEnd(eqP, x.date)?.val; if (eq != null) signRule("PBR", x.pbr, eq); }
-    // 감사 m3: 금융 자회사 보유사(오너 결정 목록 + SEC 금융채권 비중으로 독립 확인)는 EV 를 표시하면 안 된다
-    if (captiveSec && x.ev != null) add("D", "금융 자회사 보유사 EV 미표시", c, { status: FAIL, note: `EV ${x.ev} 가 표시됨 — ${captiveSec}` });
-    else if (captiveSec) add("D", "금융 자회사 보유사 EV 미표시", c, { status: PASS, note: captiveSec });
+    // 금융 자회사 보유사(오너 지시 2026-10-01 "EV를 비워두면 안된다"): EV 를 표시하고, 하이라이트 차입금(제조 부문) + 금융 부문 차입금(공시 원본 부문 차원 태그,
+    //    검증기 독립 계산) = 재무상태표 주석 연결 총차입금. EV 가 비면 실패
+    if (captiveSec) {
+      const fin = capFin.get(c);
+      if (x.ev == null && x.mc != null) add("D", "금융 자회사 보유사 EV 표시", c, { status: FAIL, note: `EV 빈칸 — ${captiveSec}` });
+      if (fin && x.debt != null && BS[c]?.debt != null) add("C", "금융 자회사 보유사 제조 부문 차입금 + 금융 부문 차입금 = 연결 총차입금", c, { ...same(x.debt + fin.v, BS[c].debt), note: `하이라이트 ${x.debt} + 금융 부문 ${fin.v}(${fin.how}) vs 주석 ${BS[c].debt}` });
+      else if (x.debt != null) add("C", "금융 자회사 보유사 제조 부문 차입금 + 금융 부문 차입금 = 연결 총차입금", c, { status: NA, note: `금융 부문 차입금 원본 판독 없음(${fin ? "주석 없음" : "부문 차원 태그 없음"})` });
+    }
     if (!bank && x.mc != null) {
       if (x.ev == null) {
         const ok = evBlockOkAt(x.date);

@@ -607,6 +607,7 @@ export function buildUsBalance(
   const evRes = buildEvResolver(facts);
   const debt = blank();
   const netDebt = blank();
+  const ltDebtN = blank();
   const opLease = blank();
   const bridgeWhy: Record<string, string> = {};
   for (const p of periods) {
@@ -624,6 +625,7 @@ export function buildUsBalance(
       continue;
     }
     debt[p.label] = br.debt;
+    ltDebtN[p.label] = br.debtNoncurrent ?? null;
     netDebt[p.label] = br.debt - br.cash;
     opLease[p.label] = br.operatingLease;
   }
@@ -642,6 +644,8 @@ export function buildUsBalance(
       : {}),
   });
   items.push(nrow("총차입금", debt));
+  // 비유동 차입금(운용리스 제외 — 총차입금과 같은 기준, EV 브릿지). 본표 "장기부채" 줄은 운용리스 부채를 포함할 수 있어 기준이 다르다(재무분석 장기차입금 비율의 분자, 2026-10-01)
+  items.push(nrow("장기차입금 (운용리스 제외)", ltDebtN));
   items.push(nrow("순차입금", netDebt));
   // 운용리스는 차입금·순차입금에 넣지 않는다(미국 회계기준상 영업부채, 오너 결정
   // 2026-09-23) — 규모는 여기서 따로 보인다. 분기 공시에 없는 회사는 빈칸.

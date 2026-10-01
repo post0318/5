@@ -97,7 +97,12 @@ export function extractCaptiveDebt(xml: string): CaptiveDebtPoint[] {
     let financial = 0;
     let hasFin = false;
     let hasInd = false;
+    // 같은 부문을 두 멤버로 이중 태깅한 경우(CAT FinancialProductsMember·FinancialProductsSegmentMember — 장기차입금 16,287 이 양쪽에) 개념·값이 다른 멤버에
+    // 모두 포함된 멤버는 건너뛴다(2026-10-01 — 금융 부문 차입금 44,276 으로 이중 합산되던 문제, 맞는 값 27,989)
+    const subsumed = (mem: string, cs: Map<string, number>) =>
+      [...members].some(([m2, c2]) => m2 !== mem && isFinancialMember(m2) === isFinancialMember(mem) && c2.size > cs.size && [...cs].every(([k, v]) => c2.get(k) === v));
     for (const [member, concepts] of members) {
+      if (subsumed(member, concepts)) continue;
       const r = resolveDebt((c) => concepts.get(c) ?? null);
       if (!r) continue;
       if (isFinancialMember(member)) {

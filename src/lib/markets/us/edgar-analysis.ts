@@ -1,7 +1,7 @@
 import "server-only";
 import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
 import { equityRestatement } from "./edgar-balance";
-import { buildUsCashFlow } from "./edgar-cashflow";
+import { buildUsCashFlow, hasCommonDividendEvidence } from "./edgar-cashflow";
 import { unavailableNote } from "./sec-unavailable";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
@@ -76,6 +76,11 @@ function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   let best: number | null = null;
   for (const b of bars) if (b.date <= iso && b.close != null) best = b.close;
   return best;
+}
+
+/** 금융 자회사 차입금을 뺀 브릿지가 하나라도 있는가 */
+function bridgeCaptive(b: Record<string, { captiveDebtExcluded: number | null } | null>): boolean {
+  return Object.values(b).some((x) => x?.captiveDebtExcluded != null);
 }
 
 export function buildUsAnalysis(
@@ -373,19 +378,9 @@ export function buildUsAnalysis(
   // 으로 "보통주"라고 못박은 `PaymentsOfDividendsCommonStock`도 전혀 없으면
   // 포괄 개념 하나만 믿고 보통주 지표(DPS·배당성향·총주주환원율의 배당분)를
   // 만들지 않는다(빈 칸/버뱩만 반영 — 오배당 신호보다 안전).
-  const hasCommonDivEvidence =
-    // 주당배당 태그는 단위가 USD/shares — 기본값(USD)으로 조회하면 항상 빈
-    // 배열이라 이 조건이 한 번도 참이 된 적이 없었다(감사 2026-09-23).
-    entriesOf(facts, "CommonStockDividendsPerShareDeclared", "USD/shares").length > 0 ||
-    entriesOf(facts, "CommonStockDividendsPerShareCashPaid", "USD/shares").length > 0 ||
-    entriesOf(facts, "PaymentsOfDividendsCommonStock").length > 0 ||
-    // 자본변동표 배당 결의액(Dividends·DividendsCommonStock·DividendsCommonStockCash)이 포괄 지급액과 같은 기간에 정확히 같으면 보통주 배당(2026-10-01 VRT —
-    // 주당배당·보통주 지급 태그 없이 PaymentsOfDividends 만 쓰는데, 자본변동표 Dividends 3.8·9.5·42.2·66.6 이 지급액과 매년 일치). BE 는 자본변동표에 이런 줄이 없다
-    // IFRS 공시(TSM 등 20-F) — 주주 배당 주당액(DividendsRecognisedAsDistributionsToOwnersPerShare) = 미국 기준 주당 배당 결의 태그와 같은 성격(2026-10-01)
-    Object.values((facts.facts as Record<string, Record<string, { units: Record<string, unknown[]> }> | undefined>)["ifrs-full"]?.["DividendsRecognisedAsDistributionsToOwnersPerShare"]?.units ?? {}).some((l) => l.length > 0) ||
-    ["Dividends", "DividendsCommonStock", "DividendsCommonStockCash"].some((c) =>
-      entriesOf(facts, c).some((e) => e.start && e.val !== 0 && entriesOf(facts, "PaymentsOfDividends").some((d) => d.start === e.start && d.end === e.end && d.val === e.val)));
-  const commonDividends = hasCommonDivEvidence ? dividends : blank();
+  const hasCommonDivEvidence = hasCommonDividendEvidence(facts); // edgar-cashflow.ts 공용 판정
+  // 보통주 배당 근거가 없으면 보통주 배당 = 0(오너 결정 2026-10-01 — BE 배당성향은 빈칸이 아니라 0%: 포괄 배당 태그 금액은 파트너 분배라 보통주 배당이 아니다)
+  const commonDividends = hasCommonDivEvidence ? dividends : (() => { const o = blank(); for (const l of labels) o[l] = 0; return o; })();
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const INT_PAID_C = ["InterestPaidNet", "InterestPaid"];
   const intPaid = flow(INT_PAID_C); // 현금 이자 지급액
@@ -474,10 +469,14 @@ export function buildUsAnalysis(
       return [l, b];
     }),
   );
+  // 신용지표(부채비율·차입금/EBITDA 등)는 연결 총차입금 — 재무상태표 주석과 같은 값(2026-10-01). EV 만 금융 자회사 차입금을 뺀 제조 부문 차입금을 쓴다
+  // (CAT: EV 9,800 · 신용지표 37,789 — 블룸버그 "총부채/총자본"도 연결 기준). 금융 자회사 보유사만 연결 기준 브릿지를 따로 읽는다
+  const plainRes = bridgeCaptive(bridge) ? buildEvResolver(facts) : null;
+  const credit = Object.fromEntries(labels.map((l) => [l, plainRes && bridge[l] ? plainRes.bridgeAt(balDate(l)) ?? bridge[l] : bridge[l]]));
   const debt = blank();
   const cash = blank();
   for (const l of labels) {
-    debt[l] = bridge[l]?.debt ?? null;
+    debt[l] = credit[l]?.debt ?? null;
     cash[l] = bridge[l]?.cash ?? null;
     note(debt, l, bridgeWhy[l]);
     note(cash, l, bridgeWhy[l]);
@@ -489,7 +488,7 @@ export function buildUsAnalysis(
   const debtTotal = debt;
   // 장기차입금 = 비유동 차입금(+비유동 금융리스) — 같은 단일 기준(태그 목록)
   const ltDebt = blank();
-  for (const l of labels) ltDebt[l] = bridge[l]?.debtNoncurrent ?? null;
+  for (const l of labels) ltDebt[l] = credit[l]?.debtNoncurrent ?? null;
   inheritWhy(ltDebt, debt);
   // 부채비율 참고용 — 신용평가사(S&P·Moody's)처럼 운용리스까지 넣은 총차입금.
   // 이름을 따로 붙인 별도 행으로만 쓴다(다른 지표는 위 debtTotal 기준).
@@ -497,7 +496,7 @@ export function buildUsAnalysis(
   // 보이지 않게).
   const debtWithOpLease = blank();
   for (const l of labels) {
-    const b = bridge[l];
+    const b = credit[l];
     if (b && b.operatingLease != null) debtWithOpLease[l] = b.debt + b.operatingLease;
   }
   // 유동성 지표용 현금(장기투자 제외) — 현금 줄은 없음 증명 불가(현금 없는 재무상태표는 없다 — 제한현금 포함 총액만 공시하는 회사는 공란)

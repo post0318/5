@@ -404,6 +404,22 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
     const p = parsed[k];
     // 10-Q 에 대차대조표 계산 구조가 없으면(ORCL) 직전 공시의 줄 목록을 쓴다
     const face = p.face ?? parsed.slice(k + 1).find((q) => q.face)?.face ?? null;
+    // 본표를 판독했는데 차입금 줄이 하나도 없으면 그 공시의 재무상태표 날짜 차입금 = 0(없음 증명, 2026-10-01 PLTR 2023 — 차입금 없음인데 "차입금 태그 없음"
+    // 으로 EV 가 비었다). 그 날짜에 표준 차입금 태그 값이 하나라도 있으면(본표 판독이 줄을 놓친 경우) 0 으로 두지 않는다
+    if (p.face && !p.face.lines.length) {
+      const DEBT_RE = /^(LongTermDebt\w*|ShortTermBorrowings|OtherShortTermBorrowings|CommercialPaper|DebtCurrent|NotesPayable\w*|LoansPayable\w*|LineOfCredit|FinanceLeaseLiability\w*|DebtLongtermAndShorttermCombinedAmount)$/;
+      for (const c of ["Liabilities", "LiabilitiesAndStockholdersEquity"])
+        for (const e of g[c]?.units?.USD ?? []) {
+          if (e.start || e.filed !== p.f.filed || done.has(e.end)) continue;
+          const tagged = Object.entries(g).some(([cn, o]) => DEBT_RE.test(cn) && (o.units?.USD ?? []).some((x) => !x.start && x.end === e.end && x.val > 0));
+          if (tagged) continue;
+          done.add(e.end);
+          const base = { end: e.end, fy: 0, fp: "", form: p.f.form, filed: p.f.filed };
+          total.push({ ...base, val: 0 });
+          noncurrent.push({ ...base, val: 0 });
+        }
+      continue;
+    }
     if (!face || !face.lines.length) continue;
     // 이 공시의 대차대조표 날짜 — companyfacts 에서 같은 날 제출된 부채 총계(당기말·전기말)
     const cfDates = new Set<string>();

@@ -8,6 +8,7 @@
  */
 
 import { unavailableNote } from "./sec-unavailable";
+import { buildUsCashFlow } from "./edgar-cashflow";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { splitFactorsByYear, fiscalYearOf, ltmAnchor, ltmFlowOf } from "./edgar-series";
@@ -379,7 +380,9 @@ export function buildUsHighlights(
     sharesByCol[i] = shares;
     const mc = price != null && shares != null ? price * shares : null;
     marketCap[i] = mc;
-    if (mc == null && price == null) nMktcap[i] = "주가 없음";
+    // 그 결산일에 거래 기록이 없으면 상장 전(분사 — CEG 2021·GEV 2022~23·SNDK 2023~24): 시가총액·EV 를 만들 수 없다
+    const firstBar = bars.find((b) => b.close != null)?.date ?? null;
+    if (mc == null && price == null) nMktcap[i] = firstBar && firstBar > asOf ? `상장 전(첫 거래일 ${firstBar}) — 시가총액·EV 없음` : "주가 없음";
 
     // EV 브릿지 — edgar-ev.ts 단일 기준(운용리스 제외, 장기투자자산 미차감,
     // 금융 자회사 차입금 제외, UP-REIT 파트너 지분 시가 반영).
@@ -498,9 +501,19 @@ export function buildUsHighlights(
   );
 
   // ── 현금흐름 ────────────────────────────────────────────────────
-  const ocf = columns.map((col) => flowVal(S.ocf, E.ocf, col));
+  // 영업현금흐름·자본지출 = 현금흐름표 화면 값(edgar-cashflow.ts, 2026-10-01 — 하이라이트가 LTM 을 "사업연도 + 누적 − 전년 동기"로 따로 계산해
+  // 화면(분기 4개 합)과 갈렸다: MCD LTM 자본지출 −3,586 vs −3,583). 현금흐름표에 그 열이 없을 때만 종전 계산
+  const cfStmt = buildUsCashFlow(facts, "annual");
+  const cfRow = (id: string) => (cfStmt.sections ?? []).flatMap((x) => x.items ?? []).find((it) => it.accountId === id);
+  const cfAt = (id: string, col: HighlightColumn): { has: boolean; v: number | null } => {
+    const it = cfRow(id);
+    if (!it || col.kind === "estimate" || !(col.label in (it.values ?? {}))) return { has: false, v: null };
+    return { has: true, v: it.values[col.label] ?? null };
+  };
+  const ocf = columns.map((col) => { const c = cfAt("cf:total:영업활동 현금흐름", col); return c.has ? c.v : flowVal(S.ocf, E.ocf, col); });
   const capex = columns.map((col) => {
-    const v = flowVal(S.capex, E.capex, col);
+    const c = cfAt("cf:투자활동 현금흐름:유형자산 취득", col);
+    const v = c.has ? c.v : flowVal(S.capex, E.capex, col);
     return v == null ? null : -Math.abs(v);
   });
   const fcf = columns.map((_, i) =>
