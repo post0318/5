@@ -3,6 +3,7 @@ import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
+import { readTtmSnap, writeTtmSnap } from "@/lib/db/ttm-snap";
 
 export const maxDuration = 60;
 
@@ -22,7 +23,19 @@ export async function GET(
     const adapter = getAdapter(market);
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
     const [ttm, krDividend] = await Promise.all([
-      adapter.getTtm ? adapter.getTtm(sym) : Promise.resolve(null),
+      // 미국: TTM 스냅샷 저장본(같은 배포판·24시간 안)을 바로 쓰고, 없으면 계산해 저장(db/ttm-snap.ts — 첫 조회 6~40초 문제)
+      market === "us"
+        ? readTtmSnap(market, sym)
+            .catch(() => null)
+            .then(async (hit) => {
+              if (hit) return hit;
+              const t = adapter.getTtm ? await adapter.getTtm(sym) : null;
+              if (t) await writeTtmSnap(market, sym, t).catch(() => {});
+              return t;
+            })
+        : adapter.getTtm
+          ? adapter.getTtm(sym)
+          : Promise.resolve(null),
       market === "kr"
         ? getKrJurirNo(sym)
             .then((crno) => fetchKrAnnualDps(crno))

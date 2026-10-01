@@ -194,6 +194,8 @@ export interface TtmFlows {
   periodLabel: string;
   /** 조회 자체가 실패했으면 그 사유 — 모든 값이 null(대체 계산 금지, 화면은 이 사유를 보여준다) */
   error?: string | null;
+  /** 불완전한 계산의 사유(SEC 원본 판독 경고·매출 조립 실패 등) — 있으면 TTM 스냅샷을 저장하지 않는다(db/ttm-snap.ts) */
+  degraded?: string[];
   /** 값이 null 이거나 근사인 항목의 사유·라벨(미국) — 화면 칸 주석 */
   reasons?: Partial<Record<"netIncome" | "revenue" | "opIncome" | "eps" | "daTtm" | "equity" | "evNetDebt" | "evShares" | "dpsTtm" | "fyEps", string>>;
   /**

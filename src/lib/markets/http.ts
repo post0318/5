@@ -11,6 +11,8 @@ export interface FetchJsonOpts {
   /** 초 단위. Next fetch 캐시 revalidate */
   revalidate?: number | false;
   timeoutMs?: number;
+  /** Next 데이터 캐시를 쓰지 않는다(캐시에 빈 응답이 남았을 때 다시 받기 — secText) */
+  noStore?: boolean;
 }
 
 /**
@@ -50,7 +52,7 @@ async function request<T>(
   defaultHeaders: Record<string, string>,
   read: (res: Response) => Promise<T>,
 ): Promise<T> {
-  const { headers = {}, revalidate = 60 * 30, timeoutMs = 15_000 } = opts;
+  const { headers = {}, revalidate = 60 * 30, timeoutMs = 15_000, noStore = false } = opts;
   // 같은 URL 이 연속으로 일시 오류였으면 백오프 동안 조회하지 않는다(fetch-health.ts)
   if (checkBackoff(url) > 0) throw new FetchError(`재시도 대기(연속 실패) — ${url}`, { status: 503 });
   const retries = isSecUrl(url) ? SEC_RETRIES : 0;
@@ -63,7 +65,7 @@ async function request<T>(
       const res = await fetch(url, {
         headers: { ...defaultHeaders, ...headers },
         signal: controller.signal,
-        next: revalidate === false ? undefined : { revalidate },
+        ...(noStore ? { cache: "no-store" as const } : { next: revalidate === false ? undefined : { revalidate } }),
       });
       if (res.ok) {
         const body = await read(res);
@@ -179,22 +181,45 @@ async function archiveWrite(key: string, body: string): Promise<void> {
   }
 }
 
+/**
+ * 쓸 수 있는 본문인지 — 빈 응답·JSON 이어야 하는데 파싱 안 되는 응답은 저장·사용하지 않는다(2026-10-01: SEC 요청 제한 때 받은 빈 응답이
+ * 캐시에 남아 같은 종목만 계속 "Unexpected end of JSON input" 으로 조립 실패 — 재무 배치 17종목)
+ */
+function usableBody(body: string | null, json: boolean): body is string {
+  if (body == null || body.trim() === "") return false;
+  if (!json) return true;
+  try {
+    JSON.parse(body);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function secText(url: string, opts: FetchJsonOpts, accept: Record<string, string>): Promise<string> {
   const key = `${url}|${accept.accept ?? ""}`;
   let p = secInflight.get(key);
   if (!p) {
     const archive = SEC_ARCHIVE_RE.test(url);
     const api = !archive && SEC_API_RE.test(url);
+    const json = accept.accept === "application/json";
     p = (async () => {
       if (archive) {
         const hit = await archiveRead(key);
-        if (hit != null) return hit;
+        if (usableBody(hit, json)) return hit;
       }
-      const cached = api ? await apiRead(key) : null;
+      const c0 = api ? await apiRead(key) : null;
+      const cached = c0 && usableBody(c0.body, json) ? c0 : null;
       if (cached && cached.ageMs <= SEC_API_TTL_MS) return cached.body;
       try {
         await secSlot();
-        const body = await request(url, opts, accept, (res) => res.text());
+        let body = await request(url, opts, accept, (res) => res.text());
+        // 빈 응답·깨진 JSON — Next 데이터 캐시에 남은 것일 수 있어 캐시 없이 한 번 더, 그래도면 조회 실패(저장하지 않음)
+        if (!usableBody(body, json)) {
+          await secSlot();
+          body = await request(url, { ...opts, noStore: true }, accept, (res) => res.text());
+          if (!usableBody(body, json)) throw new FetchError(`빈 응답·JSON 아님 — ${url}`, { status: 502 });
+        }
         if (archive) await archiveWrite(key, body);
         if (api) {
           await apiWrite(key, body);
@@ -218,7 +243,13 @@ function secText(url: string, opts: FetchJsonOpts, accept: Record<string, string
 
 export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promise<T> {
   if (isSecUrl(url)) return JSON.parse(await secText(url, opts, { accept: "application/json" })) as T;
-  return request(url, opts, { accept: "application/json" }, (res) => res.json() as Promise<T>);
+  // 빈 응답·깨진 JSON(Next 데이터 캐시에 남은 것일 수 있음)은 캐시 없이 한 번 더, 그래도면 조회 실패 — SyntaxError 가 코드 오류처럼 새지 않게
+  let body = await request(url, opts, { accept: "application/json" }, (res) => res.text());
+  if (!usableBody(body, true)) {
+    body = await request(url, { ...opts, noStore: true }, { accept: "application/json" }, (res) => res.text());
+    if (!usableBody(body, true)) throw new FetchError(`빈 응답·JSON 아님 — ${url}`, { status: 502 });
+  }
+  return JSON.parse(body) as T;
 }
 
 export async function fetchText(url: string, opts: FetchJsonOpts = {}): Promise<string> {
