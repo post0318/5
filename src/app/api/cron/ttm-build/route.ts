@@ -11,7 +11,7 @@ export const maxDuration = 300;
 /**
  * 미국 TTM 스냅샷 미리 채우기(db/ttm-snap.ts, 오너 결정 2026-10-01 (가)) — GitHub Actions(`.github/workflows/ttm-build.yml`)가
  * 매일 재무 배치 뒤·배포 직후 부른다. 유니버스(전 계정 합집합) 미국 종목 중 유효한 저장본(같은 배포판·24시간 안)이 없는 것만 계산·저장.
- * 종목을 하나씩 순서대로(SEC 요청 제한 — 동시 조회로 막힌 실측 2026-10-01), 마감 60초 전부터는 새 종목을 시작하지 않는다.
+ * 종목을 하나씩 순서대로(SEC 요청 제한 — 동시 조회로 막힌 실측 2026-10-01), 마감 120초 전부터는 새 종목을 시작하지 않는다.
  *
  *  GET               — 현재 배포판(커밋)만 돌려준다(워크플로가 새 배포 반영을 기다리는 용도, 인증 불필요·작업 없음)
  *  POST ?n=10        — CRON_SECRET(Bearer) 또는 로컬 수동 실행용 x-app-token: APP_PASSWORD
@@ -38,7 +38,8 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const started = Date.now();
-  const deadline = started + (maxDuration - 60) * 1000;
+  // 마감 120초 전부터 새 종목을 시작하지 않는다 — 재무(fin) 저장본이 없는 종목은 종목당 35초+(실측 2026-10-01, 60초 여유로 504)
+  const deadline = started + (maxDuration - 120) * 1000;
   try {
     if (!authorized(req)) return Response.json({ error: "unauthorized" }, { status: 401 });
     if (!isDbConfigured()) return Response.json({ error: "MONGODB_URI 미설정" }, { status: 503 });

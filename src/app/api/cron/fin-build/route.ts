@@ -10,7 +10,7 @@ export const maxDuration = 300;
  * 재무 5층 구조 배치 갱신(docs/metrics/architecture.md §5.1) — GitHub Actions(`.github/workflows/fin-build.yml`)가 호출한다.
  * 유니버스(전 계정 합집합, 미국) 종목 중 **저장본이 없거나 · 엔진판이 다르거나 · 저장 후 새 정기공시가 나온** 종목만 조립해
  * fin_sym·fin_stmt 에 저장한다(`refreshStored`). 호출당 최대 n 종목(기본 3) — 종목당 SEC 원본 조회로 수십 초가 걸려
- * 함수 시간(maxDuration) 안에 끝나도록 마감 60초 전부터는 새 조립을 시작하지 않는다. 남은 종목은 `pending` 으로 돌려주고
+ * 함수 시간(maxDuration) 안에 끝나도록 마감 150초 전부터는 새 조립을 시작하지 않는다. 남은 종목은 `pending` 으로 돌려주고
  * 워크플로가 pending 0 이 될 때까지 다시 부른다.
  *
  *  POST ?n=3            — CRON_SECRET(Bearer) 또는 로컬 수동 실행용 x-app-token: APP_PASSWORD
@@ -40,7 +40,8 @@ export async function POST(req: Request) {
     const symbols = sp.get("symbols")
       ? sp.get("symbols")!.split(",").map((s) => s.trim().toUpperCase()).filter((s) => SYMBOL_RE.test(s))
       : (await listUniverseDistinct({ market: "us" })).map((u) => u.symbol.toUpperCase());
-    const r = await refreshStored("us", symbols, { max: n, deadline: started + (maxDuration - 20) * 1000 });
+    // 마감 150초 전부터 새 조립을 시작하지 않는다 — 종목당 조립 30~100초(실측 2026-10-01: 3종목 호출 130초, 마감 20초 전 시작한 조립이 300초를 넘겨 504)
+    const r = await refreshStored("us", symbols, { max: n, deadline: started + (maxDuration - 150) * 1000 });
     return ok({ total: symbols.length, ...r, ms: Date.now() - started }, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     return jsonError(err);
