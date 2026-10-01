@@ -17,6 +17,8 @@ export interface TtmSnapDoc {
   v: string;
   at: Date;
   ttm: TtmFlows;
+  /** 화면에서 마지막으로 조회된 시각(배치가 쓴 것은 갱신 안 함) — 유니버스 밖 종목을 배치 갱신 대상에 넣는 기준(listRecentlyViewed) */
+  seen?: Date;
 }
 
 const MAX_AGE_MS = 24 * 3_600_000;
@@ -44,11 +46,35 @@ export function isStorableTtm(t: TtmFlows | null): boolean {
   return !!t && !t.error && !t.degraded?.length;
 }
 
-export async function writeTtmSnap(market: string, symbol: string, ttm: TtmFlows): Promise<void> {
+/** 저장 — viewed: 화면 조회로 계산한 것(seen 도 갱신). 배치가 쓴 것은 seen 을 건드리지 않는다 */
+export async function writeTtmSnap(market: string, symbol: string, ttm: TtmFlows, opts: { viewed?: boolean } = {}): Promise<void> {
   if (!isDbConfigured() || !isStorableTtm(ttm)) return;
-  await (await col()).replaceOne(
+  const now = new Date();
+  await (await col()).updateOne(
     { _id: key(market, symbol) },
-    { v: ttmSnapVersion(), at: new Date(), ttm },
+    { $set: { v: ttmSnapVersion(), at: now, ttm, ...(opts.viewed ? { seen: now } : {}) } },
     { upsert: true },
   );
+}
+
+/** 화면 조회 기록 — 저장본을 읽어 바로 돌려줄 때(1시간에 한 번만 쓴다) */
+export async function touchTtmSeen(market: string, symbol: string): Promise<void> {
+  if (!isDbConfigured()) return;
+  const now = new Date();
+  await (await col()).updateOne(
+    { _id: key(market, symbol), $or: [{ seen: { $exists: false } }, { seen: { $lt: new Date(now.getTime() - 3_600_000) } }] },
+    { $set: { seen: now } },
+  );
+}
+
+/**
+ * 최근 days 일 안에 화면에서 조회된 종목(유니버스 밖 포함) — 재무 배치(fin-build)·TTM 채우기(ttm-build)가 유니버스와 함께 갱신한다
+ * (오너 결정 2026-10-01 ① — 한 번 연 종목은 저장본을 쓰고, 새 공시가 나오면 배치가 갱신. 안 보는 종목은 자연히 빠진다)
+ */
+export async function listRecentlyViewed(market: string, days = 30): Promise<string[]> {
+  if (!isDbConfigured()) return [];
+  const docs = await (await col())
+    .find({ _id: { $regex: `^${market}:` }, seen: { $gte: new Date(Date.now() - days * 86_400_000) } }, { projection: { _id: 1 } })
+    .toArray();
+  return docs.map((d) => d._id.slice(market.length + 1));
 }

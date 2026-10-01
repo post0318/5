@@ -3,6 +3,7 @@ import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
 import { refreshStored } from "@/lib/fin";
 import { listUniverseDistinct } from "@/lib/universe/repo";
+import { listRecentlyViewed } from "@/lib/db/ttm-snap";
 
 export const maxDuration = 300;
 
@@ -39,7 +40,8 @@ export async function POST(req: Request) {
     const n = Math.min(Math.max(Number(sp.get("n")) || 3, 1), 10);
     const symbols = sp.get("symbols")
       ? sp.get("symbols")!.split(",").map((s) => s.trim().toUpperCase()).filter((s) => SYMBOL_RE.test(s))
-      : (await listUniverseDistinct({ market: "us" })).map((u) => u.symbol.toUpperCase());
+      : // 유니버스 + 최근 30일 안에 화면에서 조회된 종목(유니버스 밖 종목도 조회 때 저장되므로 새 공시 갱신 대상, 오너 결정 2026-10-01 ①)
+        [...new Set([...(await listUniverseDistinct({ market: "us" })).map((u) => u.symbol.toUpperCase()), ...(await listRecentlyViewed("us"))])];
     // 마감 150초 전부터 새 조립을 시작하지 않는다 — 종목당 조립 30~100초(실측 2026-10-01: 3종목 호출 130초, 마감 20초 전 시작한 조립이 300초를 넘겨 504)
     const r = await refreshStored("us", symbols, { max: n, deadline: started + (maxDuration - 150) * 1000 });
     return ok({ total: symbols.length, ...r, ms: Date.now() - started }, { headers: { "Cache-Control": "no-store" } });

@@ -8487,9 +8487,9 @@ async function verifyUs(sym) {
 // 앱 연간 로더 규칙(연도별 최신 보고서)과 같다. 처음 공시값(Y 보고서의 당기)도 함께 남겨 정정 공시 여부를 구분한다.
 const KR_CORP = new Map(JSON.parse(readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8")).map((r) => [r.s, r.c]));
 const dartCache = new Map();
-// DART 요청 간격 — 동시에 몰아 보내면 연결이 끊긴다(실측 "fetch failed", 30종목 동시 3)
+// DART 요청 간격 — 몰아 보내면 이 PC 연결이 약 1시간 막힌다(실측 2026-10-01 "fetch failed" → 58분 차단, 30종목 동시 3)
 let dartChain = Promise.resolve();
-const dartSlot = () => (dartChain = dartChain.then(() => new Promise((r) => setTimeout(r, 150))));
+const dartSlot = () => (dartChain = dartChain.then(() => new Promise((r) => setTimeout(r, 300))));
 async function dartFy(corp, year, fsDiv) {
   const k = `${corp}|${year}|${fsDiv}`;
   if (!dartCache.has(k)) dartCache.set(k, (async () => {
@@ -8519,6 +8519,53 @@ function dartPick(list, sjs, ids, names, field) {
   const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
   const hit = rows.find((r) => ids.includes(r.account_id)) ?? rows.find((r) => names.includes(nm(r.account_nm)));
   return hit ? dartNum(hit[field]) : null;
+}
+/** 계정 후보 줄 전부 — account_id 가 맞는 줄이 있으면 그것들, 없으면 계정명(공백·괄호 제거)이 같은 줄들 */
+function dartRows(list, sjs, ids, names) {
+  const rows = (list ?? []).filter((r) => sjs.includes(r.sj_div));
+  const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
+  const byId = rows.filter((r) => ids.includes(r.account_id));
+  return byId.length ? byId : rows.filter((r) => names.includes(nm(r.account_nm)));
+}
+/**
+ * 사업연도 y 값 — 최신 판본(y+2 보고서 전전기 → y+1 보고서 전기 → y 보고서 당기)과 처음 공시값. 한 보고서에 같은 계정 후보가 여럿이면
+ * (카카오 2023 "현금및현금성자산" 두 줄 — 본 계정·부문 표시, 둘 다 표준 코드 없음) 다른 보고서에서 한 줄로만 나온 값과 겹치는 연도 값이
+ * 같은 줄 하나를 고른다. 못 고르면 null(검증불가 — 사유 ambiguous)
+ */
+function dartYearValue(cur, next, next2, y, sjs, ids, names) {
+  const reps = [[next2, y + 2], [next, y + 1], [cur, y]];
+  const COL = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
+  const valsOf = (r, by) => new Map(COL.map((c, i) => [by - i, dartNum(r[c])]).filter(([, v]) => v != null));
+  const known = new Map();
+  for (const [L, by] of reps) {
+    const rows = dartRows(L, sjs, ids, names);
+    if (rows.length === 1) for (const [yr, v] of valsOf(rows[0], by)) if (!known.has(yr)) known.set(yr, v);
+  }
+  let ambiguous = false;
+  const pickAt = (L, by) => {
+    const rows = dartRows(L, sjs, ids, names);
+    if (!rows.length) return undefined;
+    const col = COL[by - y];
+    if (rows.length === 1) return dartNum(rows[0][col]);
+    // 현금: 같은 이름 줄이 여럿이면 합계가 같은 보고서 현금흐름표 기말 현금과 정확히 같을 때 합계(카카오 2021 — 금융업 소항목 현금)
+    if (ids.includes("ifrs-full_CashAndCashEquivalents")) {
+      const vs = rows.map((r) => dartNum(r[col]));
+      const end = (L ?? []).find((r) => r.sj_div === "CF" && (r.account_id === "dart_CashAndCashEquivalentsAtEndOfPeriodCf" || String(r.account_nm ?? "").replace(/\s/g, "") === "기말현금및현금성자산"));
+      if (vs.every((v) => v != null) && end && dartNum(end[col]) === vs.reduce((a, b) => a + b, 0)) return vs.reduce((a, b) => a + b, 0);
+    }
+    const fit = rows.filter((r) => [...valsOf(r, by)].some(([yr, v]) => yr !== y && known.get(yr) === v && v !== 0));
+    if (fit.length === 1) return dartNum(fit[0][col]);
+    ambiguous = true;
+    return null;
+  };
+  let latest;
+  for (const [L, by] of reps) {
+    const v = pickAt(L, by);
+    if (v !== undefined && v !== null) { latest = v; break; }
+    if (v === null) { latest = null; break; }
+  }
+  const o = pickAt(cur, y);
+  return { latest: latest ?? null, orig: o ?? null, ambiguous };
 }
 // [이름, 앱 위치(손익 계정명 · 재무상태표/현금흐름 accountId), 보고서 구분, account_id, 계정명 폴백]
 const KR_A_ITEMS = [
@@ -8622,11 +8669,11 @@ async function verifyKr(sym) {
         if (!cur && !next && !next2) { add("A", "DART 사업보고서 존재", col, { status: FAIL, note: "앱에 연도 열이 있는데 DART 사업보고서 없음(CFS·OFS)" }); continue; }
         for (const [name, loc, sjs, ids, names] of KR_A_ITEMS) {
           const app = loc.is ? isByName(loc.is, k) : loc.bs ? byId(bs, loc.bs, k) : byId(cf, loc.cf, k);
-          const orig = dartPick(cur, sjs, ids, names, "thstrm_amount");
           // 최신 판본 = Y+2 보고서 전전기 → Y+1 보고서 전기 → Y 보고서 당기(앱 규칙 "연도별 가장 최신 보고서" — 현대차 2021 매출은
           // 2023 보고서 전전기에서 재작성 116.45조, 2022 보고서 전기는 117.61조)
-          const latest = (next2 ? dartPick(next2, sjs, ids, names, "bfefrmtrm_amount") : null) ?? (next ? dartPick(next, sjs, ids, names, "frmtrm_amount") : null) ?? orig;
-          const r = vsSource(app, latest, 0, fsDiv === "OFS" ? "별도 재무제표" : "");
+          const yv = dartYearValue(cur, next, next2, y, sjs, ids, names);
+          const orig = yv.orig, latest = yv.latest;
+          const r = vsSource(app, latest, 0, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : ""].filter(Boolean).join(" · "));
           if (r.status === FAIL && app != null && orig != null && app === orig && latest !== orig)
             r.note = `앱 = 처음 공시 ${orig} · 최신 보고서 값 ${latest} — 앱이 재작성 값을 안 씀`;
           else if (r.status === PASS && orig != null && latest !== orig) r.note = `최신 보고서의 재작성 값 — 처음 공시 ${orig}`;

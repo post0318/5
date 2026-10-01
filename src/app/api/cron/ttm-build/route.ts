@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
-import { isStorableTtm, readTtmSnap, ttmSnapVersion, writeTtmSnap } from "@/lib/db/ttm-snap";
+import { isStorableTtm, listRecentlyViewed, readTtmSnap, ttmSnapVersion, writeTtmSnap } from "@/lib/db/ttm-snap";
 import { getAdapter } from "@/lib/markets/registry";
 import type { TtmFlows } from "@/lib/markets/types";
 import { listUniverseDistinct } from "@/lib/universe/repo";
@@ -48,7 +48,8 @@ export async function POST(req: Request) {
     const n = Math.min(Math.max(Number(sp.get("n")) || 10, 1), 30);
     const symbols = sp.get("symbols")
       ? sp.get("symbols")!.split(",").map((s) => s.trim().toUpperCase()).filter((s) => SYMBOL_RE.test(s))
-      : [...new Set((await listUniverseDistinct({ market: "us" })).map((u) => u.symbol.toUpperCase()))];
+      : // 유니버스 + 최근 30일 안에 화면에서 조회된 종목(유니버스 밖 포함, 오너 결정 2026-10-01 ①)
+        [...new Set([...(await listUniverseDistinct({ market: "us" })).map((u) => u.symbol.toUpperCase()), ...(await listRecentlyViewed("us"))])];
     const exclude = new Set((sp.get("exclude") ?? "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean));
     const adapter = getAdapter("us");
     const built: { symbol: string; ms: number }[] = [];
