@@ -295,7 +295,7 @@ ${INPUT_DATA_DESC}
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
-{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": {"facts": ["사실1", "사실2"], "reading": "해석"}}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
+{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": {"headline": "그 주 화두 제목(구체적으로, label 복사 금지)", "facts": ["사실1", "사실2"], "reading": "해석"}}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
 snapshot·issues·sectors 에 없는 키를 새로 만들지 말 것.`;
 
 interface CommentPayload {
