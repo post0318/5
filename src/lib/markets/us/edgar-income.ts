@@ -645,7 +645,22 @@ export function buildUsIncome(
     row(`※ ${what}: ${t}${ls.length === labels.length ? "" : ` (${ls.join(", ")})`}`, blank(), { depth: 1, italic: true }));
 
   const items: FinancialLineItem[] = [
-    row(isFin ? "순수익" : "매출액", revenue, { depth: 0, isSubtotal: true, isHighlight: true }),
+    row(isFin ? "순수익" : "매출액", revenue, {
+      depth: 0,
+      isSubtotal: true,
+      isHighlight: true,
+      // 매출이 빈 칸의 사유 — 조립 항등식 불성립으로 비운 열(fin-revenue.ts issues). 예전엔 출처 문구에만 내부 진단으로 붙었다(2026-10-01)
+      ...(() => {
+        const notes: Record<string, string> = {};
+        for (const l of labels) {
+          const c = finColOf.get(l);
+          if (revenue[l] != null || !c) continue;
+          const iss = rev?.issues.find((x) => x.col === c.key);
+          if (iss?.rev.length) notes[l] = "매출 비움 — 회사 공시의 소계와 하위 줄 합이 맞지 않음(값을 대신 채우지 않음)";
+        }
+        return Object.keys(notes).length ? { cellNotes: notes } : {};
+      })(),
+    }),
     ...(isFin
       ? [
           row("(−) 총이자외비용", finNoninterestExpense),
