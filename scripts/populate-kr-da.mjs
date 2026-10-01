@@ -37,15 +37,20 @@ const corpOf = (code) => {
 };
 const jget = (url) => fetch(url).then((r) => r.json());
 
-/** 특정 사업연도 사업보고서 접수번호 (정정본 우선). */
-async function annualRcp(corp, year) {
+/**
+ * 특정 사업연도 사업보고서 접수번호들(최신 = 정정본 먼저). 보고서명의 대상 연도("(2023.12)")가 맞는 것만 — 이듬해 접수 목록에 지난 연도
+ * 정정본도 섞인다(현대차 2024-03-14 "[기재정정]사업보고서 (2022.12)"를 2023 보고서로 잡았다, 2026-10-02). 정정본은 정정한 부분만 담아
+ * 감사보고서가 없을 수 있어(SK 2021 기재정정) 순서대로 시도한다
+ */
+async function annualRcps(corp, year) {
+  await new Promise((r) => setTimeout(r, 400));
   const j = await jget(
     `${B}/list.json?crtfc_key=${DART}&corp_code=${corp}` +
-      `&bgn_de=${year + 1}0101&end_de=${year + 1}0930&pblntf_detail_ty=A001&page_count=100`,
+      `&bgn_de=${year + 1}0101&end_de=${year + 1}1231&pblntf_detail_ty=A001&page_count=100`,
   );
-  const rows = (j.list ?? []).filter((r) => /사업보고서/.test(r.report_nm));
+  const rows = (j.list ?? []).filter((r) => /사업보고서/.test(r.report_nm) && r.report_nm.includes(`(${year}.`));
   rows.sort((a, b) => b.rcept_no.localeCompare(a.rcept_no));
-  return rows[0]?.rcept_no ?? null;
+  return rows.map((r) => r.rcept_no);
 }
 
 async function loadXbrl(rcpNo) {
@@ -78,6 +83,60 @@ function pick(xml, concepts, prefix) {
   return null;
 }
 
+// ── 사업보고서 원문(연결감사보고서) 현금흐름 조정 주석 — XBRL 에 주석 태깅이 없는 해(2021 이전 보고서 등). "주석에 없을리가 없다"(오너, 2026-10-02):
+//    연결현금흐름표의 "비현금항목 조정"·"영업으로부터 창출된 현금흐름" 주석 표의 감가상각비·무형자산상각비 줄. XBRL 이 있는 해(삼성전자 2022~2024,
+//    LG화학 2023, SK 2023)와 값이 같음을 확인
+const clean = (t) => t.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&cr;|&amp;/g, " ").replace(/\s+/g, " ").trim();
+const UNIT = { 원: 1, 천원: 1e3, 백만원: 1e6, 억원: 1e8 };
+const UNIT_RE = /단위\s*:\s*(원|천원|백만원|억원)/;
+const numOf = (t) => {
+  const u = t.replace(/\s/g, "");
+  if (!/^\(?-?[\d,]+\)?$/.test(u)) return null;
+  const neg = u.startsWith("(") || u.startsWith("-");
+  const v = Number(u.replace(/[(),-]/g, ""));
+  return Number.isFinite(v) ? (neg ? -v : v) : null;
+};
+/** 문서에서 현금흐름 조정 표(감가상각비 줄)를 찾아 [당기, 전기] */
+function parseDocDa(xml) {
+  for (const m of xml.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
+    const html = m[0];
+    const rows = [...html.matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
+    // 줄 이름 앞 기호("- 감가상각비" — LG화학) 떼고 공백·괄호 제거
+    const label = (r) => (r[0] ?? "").replace(/^[\s\-–·ㆍ•]+/, "").replace(/\s|\(.*?\)/g, "");
+    const dep = rows.find((r) => /^감가상각비$/.test(label(r)));
+    if (!dep) continue;
+    const names = rows.map(label).join("|");
+    const before = clean(xml.slice(Math.max(0, m.index - 1500), m.index));
+    const head = before.slice(-300);
+    // 현금흐름 조정 표 — 표 앞 제목이나 조정 항목 줄로 판별. 비용 분류·판관비 표는 제외
+    const isCf = (/현금흐름/.test(head) && /창출|조정|영업활동/.test(head)) || /조정항목|배당금수익|이자수익|법인세비용|유형자산처분/.test(names);
+    if (!isCf || /복리후생비|광고선전비|외주용역비|운반보관비/.test(names)) continue;
+    const amo = rows.find((r) => /^무형자산상각비$/.test(label(r)));
+    // 단위 — 표 안 첫 줄("(단위: 백만원)")이 우선, 없으면 표 바로 앞 문장
+    const u = clean(html).match(UNIT_RE)?.[1] ?? [...before.matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
+    if (!u) continue;
+    const nums = (r) => r.slice(1).map(numOf).filter((v) => v != null);
+    return { dep: nums(dep).map((v) => v * UNIT[u]), amo: amo ? nums(amo).map((v) => v * UNIT[u]) : [] };
+  }
+  return null;
+}
+/** 사업보고서 원문 — 연결감사보고서 파일의 첫 현금흐름 조정 표 */
+async function docDa(rcpNo) {
+  await new Promise((r) => setTimeout(r, 1000));
+  const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
+  if (!res.ok) throw new Error(`document ${res.status}`);
+  const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
+  for (const b of Object.values(files)) {
+    // 인코딩 — 선언은 늘 utf-8 이지만 2021 이전 문서는 실제 EUC-KR(실측). UTF-8 로 읽어 깨진 글자가 많으면 EUC-KR
+    let x = new TextDecoder("utf-8").decode(b);
+    if ((x.match(/�/g) ?? []).length > 50) x = new TextDecoder("euc-kr").decode(b);
+    if (!/연결감사보고서/.test(clean(x.slice(0, 3000)))) continue;
+    const t = parseDocDa(x);
+    if (t) return t;
+  }
+  return null;
+}
+
 /** 한 보고서에서 당기·전기 2개년. */
 function fromReport(xml, year) {
   const out = {};
@@ -96,22 +155,46 @@ async function daByYear(corp) {
   const now = new Date();
   // 최신 확정 사업연도 탐색
   let latest = 0;
+  const rcps = {};
   for (const y of [now.getFullYear() - 1, now.getFullYear() - 2]) {
-    if (await annualRcp(corp, y)) { latest = y; break; }
+    rcps[y] = await annualRcps(corp, y);
+    if (rcps[y].length) { latest = y; break; }
   }
   if (!latest) return null;
   const byYear = {};
   // 매년 보고서(최신부터 — 겹치는 해는 최신 보고서 값). 2년 간격이면 2022 보고서를 건너뛰어 2021 값(2022 보고서 전기)이 빠졌다 —
   // 2021 보고서 XBRL 은 주석 태깅 자체가 없다(삼성전자 실측 2026-10-02)
   for (let y = latest; y >= latest - 5; y -= 1) {
-    const rcp = await annualRcp(corp, y);
-    if (!rcp) continue;
-    try {
-      const part = fromReport(await loadXbrl(rcp), y);
-      for (const [k, v] of Object.entries(part)) if (!(k in byYear)) byYear[k] = v;
-    } catch (e) {
-      console.log(`    (${y} 보고서 실패: ${e.message})`);
+    rcps[y] ??= await annualRcps(corp, y);
+    // 정정본 XBRL 에 그 해 값이 없으면 다음(원본) 접수본
+    for (const rcp of rcps[y]) {
+      try {
+        const part = fromReport(await loadXbrl(rcp), y);
+        for (const [k, v] of Object.entries(part)) if (!(k in byYear)) byYear[k] = { ...v, src: "xbrl" };
+        if (y in part) break;
+      } catch (e) {
+        console.log(`    (${y} ${rcp} XBRL 실패: ${e.message})`);
+      }
     }
+  }
+  // XBRL 로 못 채운 해 — 그 해(없으면 이듬해 보고서의 전기 열) 사업보고서 원문 주석
+  for (let y = latest; y >= latest - 5; y -= 1) {
+    if (y in byYear) continue;
+    for (const [ry, col] of [[y, 0], [y + 1, 1]]) {
+      if (y in byYear || ry > latest) continue;
+      for (const rcp of rcps[ry] ?? []) {
+        try {
+          const t = await docDa(rcp);
+          if (t && t.dep[col] != null) {
+            byYear[y] = { depreciation: t.dep[col], amortisation: t.amo[col] ?? null, src: "doc" };
+            break;
+          }
+        } catch (e) {
+          console.log(`    (${ry} ${rcp} 원문 실패: ${e.message})`);
+        }
+      }
+    }
+    if (!(y in byYear)) console.log(`    (${y} 감가상각비 — XBRL·원문 주석 모두 못 찾음)`);
   }
   return Object.keys(byYear).length ? byYear : null;
 }
@@ -138,7 +221,7 @@ for (const sym of symbols) {
   );
   const yrs = Object.keys(byYear).map(Number).sort((a, b) => b - a);
   const y = yrs[0];
-  console.log(`  ${sym}  ${yrs.length}개년 (${yrs.at(-1)}~${y})  최근: 감가 ${t(byYear[y].depreciation)} / 무형 ${t(byYear[y].amortisation)}`);
+  console.log(`  ${sym}  ${yrs.length}개년 (${yrs.at(-1)}~${y})  ` + yrs.map((k) => `${k}:${byYear[k].src} 감가 ${t(byYear[k].depreciation)}/무형 ${t(byYear[k].amortisation)}`).join("  "));
 }
 await cli.close();
 console.log("완료");

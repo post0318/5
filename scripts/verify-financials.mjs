@@ -3871,7 +3871,8 @@ async function verifyUs(sym) {
       "cf:영업활동 현금흐름:운전자본 변동": ["changeInWorkingCapital"],
       "cf:영업활동 현금흐름:매출채권 증감": ["changesInAccountReceivables", "changeInReceivables"],
       "cf:영업활동 현금흐름:재고자산 증감": ["changeInInventory"],
-      "cf:영업활동 현금흐름:매입채무 증감": ["changeInAccountPayable", "changeInPayable"],
+      // changeInPayable 은 야후가 미지급 항목을 묶은 값이라 매입채무가 아니다(VST 분기 = 미지급법인세 변동 — 2026 Q1 −110 = 세금 −110, 10-Q 에 매입채무 줄 없음)
+      "cf:영업활동 현금흐름:매입채무 증감": ["changeInAccountPayable"],
       "cf:투자활동 현금흐름:투자자산 취득": ["purchaseOfInvestment"],
       "cf:투자활동 현금흐름:투자자산 처분·만기": ["saleOfInvestment"],
       "cf:투자활동 현금흐름:사업 인수 (순현금)": ["purchaseOfBusiness"],

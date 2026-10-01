@@ -84,6 +84,11 @@ const FIN_PROVISION_LINE: Line = {
   depth: 1,
 };
 
+/** 투자·재무활동 줄의 태그 묶음 — 분기 본표에서 빠진 줄(당기·전년 동기 모두 0)을 0 으로 채울 대상(edgar-cf-wc.ts) */
+export function cfZeroFillGroups(): string[][] {
+  return getBlocks(false).slice(1).flatMap((b) => b.lines.filter((l) => l.concepts && !l.plug).map((l) => l.concepts as string[]));
+}
+
 function getBlocks(isFin: boolean): Block[] {
   return [
   {
@@ -172,9 +177,9 @@ function getBlocks(isFin: boolean): Block[] {
       concepts: ["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"],
     },
     lines: [
-      { label: "배당금 지급", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], depth: 1, negate: true },
+      { label: "배당금 지급", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], depth: 1, negate: true },
       { label: "자기주식 취득", concepts: ["PaymentsForRepurchaseOfCommonStock"], depth: 1, negate: true },
-      { label: "장기차입금 조달", concepts: ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt"], depth: 1 },
+      { label: "장기차입금 조달", concepts: ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts"], depth: 1 },
       // 전환사채 상환도 장기차입금 상환(TSLA 2024~ "Repayments of debt" = RepaymentsOfConvertibleDebt — 옛 태그 중단으로 2025 연간·LTM 이 비었다, 2026-10-02).
       // firstConcept 는 앞 태그에 값이 없는 결산일만 뒤 태그로 채우므로 다른 태그를 쓰는 회사는 그대로
       { label: "장기차입금 상환", concepts: ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt", "RepaymentsOfConvertibleDebt", "RepaymentsOfDebtAndCapitalLeaseObligations"], depth: 1, negate: true },
@@ -429,7 +434,8 @@ export function buildUsCashFlow(
   // **운전자본 변동 = 회사가 공시한 영업 자산·부채 순변동 합계가 있으면 그 값(2026-10-02)** — KO 등은 분기 현금흐름표를 요약형으로 내
   // 매출채권·재고·매입채무를 나누지 않고 IncreaseDecreaseInOperatingCapital 한 줄만 공시한다. 하위 줄 합으로만 만들면 분기에 하위 줄이 없어
   // LTM 운전자본·기타 영업활동이 통째로 비었고(오너 지적), 연간도 하위 세 줄 밖 운전자본(선급·미지급 등)이 "기타 영업활동"으로 샜다
-  const wcCo = applyNegate(valOf(["IncreaseDecreaseInOperatingCapital"]));
+  // 회사 공시 순변동 → 본표 운전자본 줄 합(edgar-cf-wc.ts, 10-K 는 항목별·10-Q 는 한 줄인 회사도 같은 정의)
+  const wcCo = applyNegate(valOf(["IncreaseDecreaseInOperatingCapital", "OperatingCapitalCashFlowDerived"]));
   for (const block of BLOCKS) {
     const totalVals = valOf(block.total.concepts);
     // 매핑된 형제 라인(플러그 제외, subtotal 제외) 합 — 플러그 계산용
