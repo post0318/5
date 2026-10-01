@@ -30,7 +30,7 @@ import { usSharesHint } from "@/lib/markets/us/shares-hint";
 import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
 import { dartAdrAnalysis, dartAdrDetail, dartAdrOf } from "@/lib/markets/us/dart-adr";
 
-export const maxDuration = 60;
+export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
 /**
  * 이 라우트 응답은 캐시하지 않는다(오너 지적 2026-09-21 — "재무제표 분기
@@ -205,12 +205,10 @@ export async function GET(
       if (facts.ltmQuarterSource) stmt.source += ` · ${yahooLtmLabel(facts.ltmQuarterSource)}`;
       // 외화 환산 — 연준 H.10 최신 고시일 뒤 기간은 비움(edgar-foreign.ts, 다른 환율로 대체하지 않음)
       if (facts.fxPending) stmt.source += ` · ⚠ ${facts.fxPending} — 해당 기간 환산 값 비움`;
-      // 재무 5층 구조 매출의 미완전 열(gaps·조립 항등식 불성립) — 매출 경로면 그 열 매출은 비어 있다(fin-revenue.ts)
-      const finNote = finIssueNote(facts.revenue);
-      if (finNote) {
-        stmt.source += ` · ⚠ ${finNote}`;
-        stmt.finIssues = facts.revenue!.issues;
-      }
+      // 재무 5층 구조 조립 점검 결과(gaps·조립 항등식) — 검증기·관리자용 구조화 필드로만 싣고 화면 출처 문구에는 넣지 않는다(오너 지적
+      // 2026-10-01 — MU "fin 조립 미완전 열 …" 내부 진단이 화면에 그대로 떠 숫자가 틀린 것처럼 보였다. 숫자는 SEC 와 일치). 매출이 실제로
+      // 비는 열은 그 칸의 사유 주석으로 따로 보인다
+      if (finIssueNote(facts.revenue)) stmt.finIssues = facts.revenue!.issues;
       return ok(stmt, { headers: NO_CACHE });
     }
 

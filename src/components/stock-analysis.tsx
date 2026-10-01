@@ -41,7 +41,7 @@ import { ShinhanResearch } from "@/components/shinhan-research";
 import { CompanyBlog } from "@/components/company-blog";
 import { PriceChartPanel } from "@/components/price-chart-panel";
 
-/** 시장별로 마지막에 보던 종목을 담아 두는 sessionStorage 키 */
+/** 시장별로 마지막에 보던 종목을 담아 두는 localStorage 키 */
 function lastViewedKey(market: MarketId): string {
   return `stock-analysis:last:${market}`;
 }
@@ -76,15 +76,16 @@ export function StockAnalysis({
    * 지워져 있다"). 통합 뷰에서 넘어올 때만 주소에 종목이 실리고, 검색으로 고른
    * 종목이나 헤더의 「종목분석」 링크(`/{market}/analysis`)에는 쿼리가 없어
    * 화면을 벗어나면 선택이 통째로 날아갔다. 시장별로 마지막 종목을
-   * sessionStorage 에 남겨 두고, **주소에 종목이 없을 때만** 복원한다 —
+   * localStorage 에 남겨 두고, **주소에 종목이 없을 때만** 복원한다 —
    * 통합 뷰에서 특정 종목을 눌러 들어온 경우를 덮어쓰지 않기 위해서다.
-   * 탭(브라우저 탭) 단위 저장이라 새로고침에는 남고 창을 닫으면 사라진다.
+   * 고른 종목은 주소(?symbol=)에도 써 넣는다 — 새로고침·공유에도 남게(오너 지적 2026-10-02 "새로고침하면 종목 선택이
+   * 사라진다" — 예전 sessionStorage 는 탭 세션 단위라 모바일 새로고침에서 지워졌다).
    */
   useEffect(() => {
     if (initialSymbol) return;
     let saved: { symbol?: string; yahoo?: string | null; name?: string | null };
     try {
-      const raw = sessionStorage.getItem(lastViewedKey(market));
+      const raw = localStorage.getItem(lastViewedKey(market));
       if (!raw) return;
       saved = JSON.parse(raw);
     } catch {
@@ -126,12 +127,26 @@ export function StockAnalysis({
   useEffect(() => {
     if (!symbol) return;
     try {
-      sessionStorage.setItem(
+      localStorage.setItem(
         lastViewedKey(market),
         JSON.stringify({ symbol, yahoo: yahooOverride, name }),
       );
     } catch {
       // 저장 실패는 조용히 무시 — 기억만 안 될 뿐 화면은 그대로 동작
+    }
+    // 주소에도 반영(페이지 이동 없이 주소만 교체) — 새로고침하면 페이지가 ?symbol= 로 같은 종목을 연다
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("symbol") !== symbol) {
+        url.searchParams.set("symbol", symbol);
+        if (yahooOverride) url.searchParams.set("yahoo", yahooOverride);
+        else url.searchParams.delete("yahoo");
+        if (name) url.searchParams.set("name", name);
+        else url.searchParams.delete("name");
+        window.history.replaceState(window.history.state, "", url.toString());
+      }
+    } catch {
+      // 주소 교체 실패도 무시
     }
   }, [market, symbol, yahooOverride, name]);
 
@@ -678,18 +693,24 @@ export function StockAnalysis({
                 )}
               >
                 <Stat
-                  label="종가"
+                  label={ov.quote?.live ? "현재가" : "종가"}
                   className="order-1 lg:order-none"
                   onClick={() => setShowPriceChart((v) => !v)}
                 >
+                  {/* 장중(미국)엔 진행 중 가격을 표시만 — 시가총액·멀티플은 마감 종가 기준(오너 결정 2026-10-02 (나)) */}
                   <span className="inline-flex items-baseline gap-1.5">
-                    <Money value={ov.quote?.last} currency={ccy} />
-                    {ov.quote?.changePct != null && (
+                    <Money value={ov.quote?.live?.price ?? ov.quote?.last} currency={ccy} />
+                    {(ov.quote?.live ? ov.quote.live.changePct : ov.quote?.changePct) != null && (
                       <span className="text-sm font-normal">
-                        (<ChangePercent value={ov.quote.changePct} market={market} />)
+                        (<ChangePercent value={(ov.quote?.live ? ov.quote.live.changePct : ov.quote?.changePct)!} market={market} />)
                       </span>
                     )}
                   </span>
+                  {ov.quote?.live && (
+                    <div className="text-muted-foreground mt-1 text-[11px]">
+                      계산 기준 종가 <Money value={ov.quote.last} currency={ccy} /> ({ov.quote.lastDate ?? "-"})
+                    </div>
+                  )}
                   {/* 출처 주석 삭제(오너 지시 2026-09-21) — "KRX 정보데이터시스템
                       + Yahoo Finance (최신 종가 보강)" 같은 내부 폴백 설명이
                       화면에 그대로 노출됐다. 날짜만 남긴다. */}

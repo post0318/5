@@ -3864,6 +3864,49 @@ async function verifyUs(sym) {
 
   // ── C층 화면 간 일치(2026-10-01, 오너 지시 "화면별로 수치가 다르게 나오는 것이 없는지") — 분기 화면 열(손익·재무상태표·현금흐름·총괄),
   //    총괄 = 각 재무제표(연간·분기), 하이라이트 영업현금흐름·자본지출 = 현금흐름표, 연간 LTM = 분기 최근 4개 합(손익·현금흐름), 재무상태표 LTM = 최근 분기
+  // ── 현금흐름표 LTM 공란 정당성(2026-10-02 — 오너 지적 "현금흐름 감사가 제대로 이루어진거 맞음?": TSLA 투자자산·KO 운전자본 LTM 공란을
+  //    놓쳤다). 앱 LTM 이 비었는데 야후 분기 현금흐름에 같은 항목이 앱의 최근 4개 분기(결산일 ±10일) 모두 있으면 실패 — 데이터가 있는데 앱이 못 이은 것
+  if (BSCF_MODE && fetched.cf && fetched.cfq) {
+    const CF_Y = {
+      "cf:영업활동 현금흐름:운전자본 변동": ["changeInWorkingCapital"],
+      "cf:영업활동 현금흐름:매출채권 증감": ["changesInAccountReceivables", "changeInReceivables"],
+      "cf:영업활동 현금흐름:재고자산 증감": ["changeInInventory"],
+      // changeInPayable 은 야후가 미지급 항목을 묶은 값이라 매입채무가 아니다(VST 분기 = 미지급법인세 변동 — 2026 Q1 −110 = 세금 −110, 10-Q 에 매입채무 줄 없음)
+      "cf:영업활동 현금흐름:매입채무 증감": ["changeInAccountPayable"],
+      "cf:투자활동 현금흐름:투자자산 취득": ["purchaseOfInvestment"],
+      "cf:투자활동 현금흐름:투자자산 처분·만기": ["saleOfInvestment"],
+      "cf:투자활동 현금흐름:사업 인수 (순현금)": ["purchaseOfBusiness"],
+      "cf:재무활동 현금흐름:장기차입금 조달": ["longTermDebtIssuance", "issuanceOfDebt"],
+      "cf:재무활동 현금흐름:장기차입금 상환": ["longTermDebtPayments", "repaymentOfDebt"],
+      "cf:재무활동 현금흐름:배당금 지급": ["cashDividendsPaid", "commonStockDividendPaid"],
+      "cf:재무활동 현금흐름:자기주식 취득": ["repurchaseOfCapitalStock", "commonStockPayments"],
+      "cf:taxpaid": ["incomeTaxPaidSupplementalData"],
+      "cf:intpaid": ["interestPaidSupplementalData"],
+    };
+    const items0 = (fetched.cf.sections ?? []).flatMap((x) => x.items ?? []);
+    const qEnds = (fetched.cfq.periods ?? []).map((p0) => p0.endDate).slice(-4);
+    const blanks = items0.filter((it) => CF_Y[it.accountId] && it.values?.["현재/LTM"] == null && Object.values(it.values ?? {}).some((v0) => v0 != null && v0 !== 0));
+    if (blanks.length && qEnds.length === 4) {
+      let yq = null;
+      try {
+        yq = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: new Date(Date.parse(qEnds[0]) - 40 * 864e5), type: "quarterly", module: "cash-flow" }, { validateResult: false });
+      } catch (e) {
+        add("C", "현금흐름 LTM 공란 정당성(야후 분기)", "LTM", { status: NA, note: `야후 분기 조회 실패 ${String(e).slice(0, 60)}` });
+      }
+      for (const it of yq ? blanks : []) {
+        const keys = CF_Y[it.accountId];
+        const vals = qEnds.map((e0) => {
+          const r = yq.find((x) => Math.abs(Date.parse(new Date(x.date).toISOString().slice(0, 10)) - Date.parse(e0)) <= 10 * 864e5);
+          const k = r ? keys.find((k0) => r[k0] != null) : null;
+          return k ? r[k] : null;
+        });
+        const note0 = it.cellNotes?.["현재/LTM"] ?? "";
+        add("C", `현금흐름 LTM 공란 정당성 ${it.accountName}`, "LTM", vals.every((v0) => v0 != null)
+          ? { status: FAIL, note: `앱 LTM 공란(${note0.slice(0, 50)})인데 야후 분기 4개 값 있음 — 합 ${vals.reduce((a0, b0) => a0 + b0, 0)}` }
+          : { status: PASS, note: `야후 분기에도 없음(${vals.map((v0) => (v0 == null ? "-" : "값")).join("·")}) — 앱 공란 정당` });
+      }
+    }
+  }
   if (BSCF_MODE && fetched.cfq && fetched.bsq && smq && isq && sm) {
     const rid = (st) => Object.fromEntries((st?.sections ?? []).flatMap((x) => x.items ?? []).map((it) => [it.accountId, it.values ?? {}]));
     const rnm = (st) => { const o = {}; for (const it of (st?.sections ?? []).flatMap((x) => x.items ?? [])) { const k0 = String(it.accountName ?? "").trim(); if (!(k0 in o)) o[k0] = it.values ?? {}; } return o; };
@@ -8481,6 +8524,118 @@ async function verifyUs(sym) {
 
 // ── 한국 종목 1개 (kr/dart-ev.ts 단일 기준) ─────────────────────────────
 // 한국은 아직 원자료(DART) 직접 대조 층이 없다 — 화면 간·항등식·기대치·LTM 기준일만.
+// ── 한국 A층 — DART 원자료(fnlttSinglAcntAll, 2026-10-01) ──
+// 앱과 무관하게 DART 를 직접 불러 사업연도 값을 얻는다(미국 A층이 SEC companyfacts 를 직접 읽는 것과 같은 구조). 연결(CFS) 우선,
+// 없으면 별도(OFS) — 앱과 같은 순서. 판본: 사업연도 Y 값 = 가장 최근 사업보고서의 값(Y+1 보고서의 전기, 없으면 Y 보고서의 당기) —
+// 앱 연간 로더 규칙(연도별 최신 보고서)과 같다. 처음 공시값(Y 보고서의 당기)도 함께 남겨 정정 공시 여부를 구분한다.
+const KR_CORP = new Map(JSON.parse(readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8")).map((r) => [r.s, r.c]));
+const dartCache = new Map();
+// DART 요청 간격 — 몰아 보내면 이 PC 연결이 약 1시간 막힌다(실측 2026-10-01 "fetch failed" → 58분 차단, 30종목 동시 3)
+let dartChain = Promise.resolve();
+const dartSlot = () => (dartChain = dartChain.then(() => new Promise((r) => setTimeout(r, 300))));
+async function dartFy(corp, year, fsDiv) {
+  const k = `${corp}|${year}|${fsDiv}`;
+  if (!dartCache.has(k)) dartCache.set(k, (async () => {
+    if (!env.DART_API_KEY) throw new Error("DART_API_KEY 미설정");
+    const u = `https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?crtfc_key=${env.DART_API_KEY}&corp_code=${corp}&bsns_year=${year}&reprt_code=11011&fs_div=${fsDiv}`;
+    for (let i = 0; ; i++) {
+      try {
+        await dartSlot();
+        const r = await fetch(u, { signal: AbortSignal.timeout(30_000) });
+        if (!r.ok) throw new Error(`DART HTTP ${r.status}`);
+        const j = await r.json();
+        if (j.status === "013") return null; // 조회된 데이터 없음(그해 보고서 미제출·연결 없음)
+        if (j.status !== "000") throw new Error(`DART ${j.status} ${j.message}`);
+        return j.list ?? [];
+      } catch (e) {
+        if (i >= 2) throw e;
+        await new Promise((res) => setTimeout(res, 2000 * (i + 1)));
+      }
+    }
+  })());
+  return dartCache.get(k);
+}
+const dartNum = (v) => (v == null || v === "" || v === "-" ? null : Number(String(v).replace(/,/g, "")));
+/** 계정 하나 — account_id 우선(보고서 구분 sj 집합 안), 없으면 계정명(공백·괄호 제거) */
+function dartPick(list, sjs, ids, names, field) {
+  // 우선주 줄에 단 보통주 EPS 코드는 무시(삼성SDI 2021 원자료 태그 오류)
+  const rows = (list ?? []).filter((r) => sjs.includes(r.sj_div) && !(/우선주/.test(r.account_nm ?? "") && /EarningsLossPerShare/.test(r.account_id ?? "")));
+  const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
+  const hit = rows.find((r) => ids.includes(r.account_id)) ?? rows.find((r) => names.includes(nm(r.account_nm)));
+  return hit ? dartNum(hit[field]) : null;
+}
+/** 계정 후보 줄 전부 — account_id 가 맞는 줄이 있으면 그것들, 없으면 계정명(공백·괄호 제거)이 같은 줄들 */
+function dartRows(list, sjs, ids, names) {
+  const rows = (list ?? []).filter((r) => sjs.includes(r.sj_div) && !(/우선주/.test(r.account_nm ?? "") && /EarningsLossPerShare/.test(r.account_id ?? "")));
+  const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
+  const byId = rows.filter((r) => ids.includes(r.account_id));
+  return byId.length ? byId : rows.filter((r) => names.includes(nm(r.account_nm)));
+}
+/**
+ * 사업연도 y 값 — 최신 판본(y+2 보고서 전전기 → y+1 보고서 전기 → y 보고서 당기)과 처음 공시값. 한 보고서에 같은 계정 후보가 여럿이면
+ * (카카오 2023 "현금및현금성자산" 두 줄 — 본 계정·부문 표시, 둘 다 표준 코드 없음) 다른 보고서에서 한 줄로만 나온 값과 겹치는 연도 값이
+ * 같은 줄 하나를 고른다. 못 고르면 null(검증불가 — 사유 ambiguous)
+ */
+function dartYearValue(cur, next, next2, y, sjs, ids, names) {
+  const reps = [[next2, y + 2], [next, y + 1], [cur, y]];
+  const COL = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
+  const valsOf = (r, by) => new Map(COL.map((c, i) => [by - i, dartNum(r[c])]).filter(([, v]) => v != null));
+  const known = new Map();
+  for (const [L, by] of reps) {
+    const rows = dartRows(L, sjs, ids, names);
+    if (rows.length === 1) for (const [yr, v] of valsOf(rows[0], by)) if (!known.has(yr)) known.set(yr, v);
+  }
+  let ambiguous = false;
+  const pickAt = (L, by) => {
+    const rows = dartRows(L, sjs, ids, names);
+    if (!rows.length) return undefined;
+    const col = COL[by - y];
+    if (rows.length === 1) return dartNum(rows[0][col]);
+    // 후보가 여럿이어도 값이 모두 같으면 그 값(손익계산서·포괄손익계산서에 같은 당기순이익 줄)
+    { const vs = rows.map((r) => dartNum(r[col])); if (vs.every((v) => v != null && v === vs[0])) return vs[0]; }
+    // 현금: 같은 이름 줄이 여럿이면 합계가 같은 보고서 현금흐름표 기말 현금과 정확히 같을 때 합계(카카오 2021 — 금융업 소항목 현금)
+    if (ids.includes("ifrs-full_CashAndCashEquivalents")) {
+      const vs = rows.map((r) => dartNum(r[col]));
+      const end = (L ?? []).find((r) => r.sj_div === "CF" && (r.account_id === "dart_CashAndCashEquivalentsAtEndOfPeriodCf" || String(r.account_nm ?? "").replace(/\s/g, "") === "기말현금및현금성자산"));
+      if (vs.every((v) => v != null) && end && dartNum(end[col]) === vs.reduce((a, b) => a + b, 0)) return vs.reduce((a, b) => a + b, 0);
+    }
+    const fit = rows.filter((r) => [...valsOf(r, by)].some(([yr, v]) => yr !== y && known.get(yr) === v && v !== 0));
+    if (fit.length === 1) return dartNum(fit[0][col]);
+    ambiguous = true;
+    return null;
+  };
+  // 기준 보고서 = 그 해 값이 하나라도 실린 가장 최근 보고서(앱 연간 로더의 "연도별 주인 보고서" 규칙 — 옛 보고서와 섞으면 같은 계정이 다른 키로
+  // 두 번 잡혔다). 기준 보고서에 이 계정이 없으면 빈칸(옛 보고서로 내려가지 않음)
+  let latest = null;
+  for (const [L, by] of reps) {
+    const col = COL[by - y];
+    if (!L || !L.some((r) => dartNum(r[col]) != null)) continue;
+    latest = pickAt(L, by) ?? null;
+    break;
+  }
+  const o = pickAt(cur, y);
+  return { latest: latest ?? null, orig: o ?? null, ambiguous };
+}
+// [이름, 앱 위치(손익 계정명 · 재무상태표/현금흐름 accountId), 보고서 구분, account_id, 계정명 폴백]
+const KR_A_ITEMS = [
+  ["매출액", { is: "매출액" }, ["IS", "CIS"], ["ifrs-full_Revenue"], ["매출액", "수익매출액", "영업수익", "매출"]],
+  ["영업이익", { is: "영업이익" }, ["IS", "CIS"], ["dart_OperatingIncomeLoss"], ["영업이익", "영업이익손실"]],
+  ["세전이익", { is: "세전이익" }, ["IS", "CIS"], ["ifrs-full_ProfitLossBeforeTax"], ["법인세비용차감전순이익", "법인세비용차감전순이익손실"]],
+  ["당기순이익(연결)", { is: "당기순이익" }, ["IS", "CIS"], ["ifrs-full_ProfitLoss"], ["당기순이익", "당기순이익손실"]],
+  ["당기순이익(지배)", { is: "(지배주주 귀속)" }, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], []],
+  ["자산총계", { bs: "bs:자산:자산 총계" }, ["BS"], ["ifrs-full_Assets"], ["자산총계"]],
+  ["유동자산", { bs: "bs:자산:유동자산 총계" }, ["BS"], ["ifrs-full_CurrentAssets"], ["유동자산"]],
+  ["현금및현금성자산", { bs: "bs:자산:현금·현금성자산" }, ["BS"], ["ifrs-full_CashAndCashEquivalents"], ["현금및현금성자산"]],
+  ["부채총계", { bs: "bs:부채:부채 총계" }, ["BS"], ["ifrs-full_Liabilities"], ["부채총계"]],
+  ["유동부채", { bs: "bs:부채:유동부채 총계" }, ["BS"], ["ifrs-full_CurrentLiabilities"], ["유동부채"]],
+  ["자본총계", { bs: "bs:자본:자본 총계" }, ["BS"], ["ifrs-full_Equity"], ["자본총계"]],
+  ["지배주주 지분", { bs: "bs:note:지배주주 지분" }, ["BS"], ["ifrs-full_EquityAttributableToOwnersOfParent"], ["지배기업의소유주에게귀속되는자본", "지배기업소유주지분"]],
+  ["비지배지분", { bs: "bs:note:비지배지분" }, ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]],
+  ["영업활동 현금흐름", { cf: "cf:total:영업활동 현금흐름" }, ["CF"], ["ifrs-full_CashFlowsFromUsedInOperatingActivities"], ["영업활동현금흐름", "영업활동으로인한현금흐름"]],
+  ["투자활동 현금흐름", { cf: "cf:total:투자활동 현금흐름" }, ["CF"], ["ifrs-full_CashFlowsFromUsedInInvestingActivities"], ["투자활동현금흐름", "투자활동으로인한현금흐름"]],
+  ["재무활동 현금흐름", { cf: "cf:total:재무활동 현금흐름" }, ["CF"], ["ifrs-full_CashFlowsFromUsedInFinancingActivities"], ["재무활동현금흐름", "재무활동으로인한현금흐름"]],
+];
+
 async function verifyKr(sym) {
   const u = `/api/markets/kr/${encodeURIComponent(sym)}`;
   const checks = [];
@@ -8489,13 +8644,16 @@ async function verifyKr(sym) {
   for (const [k, p] of Object.entries({
     hl: `${u}/highlights`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm`,
     cs: `${u}/consensus`, bs: `${u}/financials?view=bs&period=annual`, is: `${u}/financials?view=is&period=annual`,
+    cf: `${u}/financials?view=cf&period=annual`,
+    isq: `${u}/financials?view=is&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter`, cfq: `${u}/financials?view=cf&period=quarter`,
+    sm: `${u}/financials?view=summary&period=annual`, smq: `${u}/financials?view=summary&period=quarter`,
   })) {
     try { fetched[k] = await getJson(p); } catch (e) { fetched[k] = null; add("응답", `API 응답 ${k}`, "-", { status: FAIL, note: String(e).slice(0, 120) }); }
   }
   let row = null;
   try { row = await getJson(`/api/cron/verify-row?market=kr&symbol=${encodeURIComponent(sym)}`, 240_000, AUTH); }
   catch (e) { add("응답", "API 응답 verify-row", "-", { status: FAIL, note: String(e).slice(0, 120) }); }
-  const { hl, an, tt, cs, bs, is } = fetched;
+  const { hl, an, tt, cs, bs, is, cf, isq, bsq, cfq, sm, smq } = fetched;
   const h = hl?.highlights;
   if (!h) return { sym, error: "하이라이트 없음", checks, review: [] };
   const fyCols = h.columns.filter((c) => c.kind === "fy");
@@ -8533,6 +8691,85 @@ async function verifyKr(sym) {
   const BS = {};
   for (const [name, key] of [["총차입금", "debt"], ["순차입금", "nd"]])
     for (const [k, v] of Object.entries(rowOf(bs, name))) (BS[k.replace(/^FY(\d{4})$/, "$1Y")] ??= {})[key] = v;
+
+  // ── A. DART 원자료 대조(사업연도 열, 허용 오차 없음 — 원 단위 정수) ──
+  /** 항목별 DART 처음 공시·최신 판본 — F층 원인 확인(외부 = 처음 공시, 앱 = 최신 재작성)에 쓴다 */
+  const dartVint = {};
+  {
+    const corp = KR_CORP.get(sym);
+    const itemsOf = (st) => (st?.sections ?? []).flatMap((x) => x.items ?? []);
+    const isByName = (name, k) => itemsOf(is).find((x) => x.accountName?.trim() === name)?.values?.[k] ?? null;
+    const byId = (st, id, k) => itemsOf(st).find((x) => x.accountId === id)?.values?.[k] ?? null;
+    if (!corp) add("A", "DART 고유번호", "-", { status: FAIL, note: "corpcodes.json 에 종목코드 없음" });
+    else {
+      const years = (is?.periods ?? []).map((p0) => p0.label).filter((l) => /^FY\d{4}$/.test(l)).map((l) => Number(l.slice(2)));
+      for (const y of years) {
+        const k = `FY${y}`, col = `${y}Y`;
+        let cur, next, next2, fsDiv = "CFS";
+        try {
+          // 연결이 그해·다음 해·다다음 해 보고서 어디에든 있으면 연결(금융지주는 2021·2022 보고서에 연결 XBRL 이 없고 2023 보고서 전기·전전기에
+          // 있다 — 앱도 그 값을 쓴다). 조회 실패는 "없음"으로 넘기지 않고 오류(예전엔 SK 2025 보고서 조회 실패가 판본 차이로 보였다)
+          [cur, next, next2] = await Promise.all([dartFy(corp, y, "CFS"), dartFy(corp, y + 1, "CFS"), dartFy(corp, y + 2, "CFS")]);
+          if (!cur && !next && !next2) {
+            fsDiv = "OFS";
+            [cur, next, next2] = await Promise.all([dartFy(corp, y, "OFS"), dartFy(corp, y + 1, "OFS"), dartFy(corp, y + 2, "OFS")]);
+          }
+        } catch (e) {
+          add("A", "DART 원자료 조회", col, { status: FAIL, note: String(e).slice(0, 120) });
+          hardErrors.push(`DART 조회 실패 ${col}: ${String(e).slice(0, 80)}`);
+          continue;
+        }
+        if (!cur && !next && !next2) { add("A", "DART 사업보고서 존재", col, { status: FAIL, note: "앱에 연도 열이 있는데 DART 사업보고서 없음(CFS·OFS)" }); continue; }
+        for (const [name, loc, sjs, ids, names] of KR_A_ITEMS) {
+          const app = loc.is ? isByName(loc.is, k) : loc.bs ? byId(bs, loc.bs, k) : byId(cf, loc.cf, k);
+          // 최신 판본 = Y+2 보고서 전전기 → Y+1 보고서 전기 → Y 보고서 당기(앱 규칙 "연도별 가장 최신 보고서" — 현대차 2021 매출은
+          // 2023 보고서 전전기에서 재작성 116.45조, 2022 보고서 전기는 117.61조)
+          const yv = dartYearValue(cur, next, next2, y, sjs, ids, names);
+          const orig = yv.orig, latest = yv.latest;
+          const r = vsSource(app, latest, 0, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : ""].filter(Boolean).join(" · "));
+          if (r.status === FAIL && app != null && orig != null && app === orig && latest !== orig)
+            r.note = `앱 = 처음 공시 ${orig} · 최신 보고서 값 ${latest} — 앱이 재작성 값을 안 씀`;
+          else if (r.status === PASS && orig != null && latest !== orig) r.note = `최신 보고서의 재작성 값 — 처음 공시 ${orig}`;
+          add("A", `${name} = DART`, col, r);
+          const vAll = [[cur, y, "thstrm_amount"], [next, y + 1, "frmtrm_amount"], [next2, y + 2, "bfefrmtrm_amount"]]
+            .map(([L, by, f]) => { const rs = L ? dartRows(L, sjs, ids, names) : []; return rs.length === 1 ? { by, v: dartNum(rs[0][f]) } : null; })
+            .filter((x) => x && x.v != null);
+          dartVint[`${col}|${name}`] = { orig, latest, app, pass: r.status === PASS, vAll };
+        }
+        // EPS(기본·희석) — 전체 EPS 줄(표준 ID 또는 "보통주 기본주당이익" 같은 이름 — 현대차는 표준 코드 없음). 전체 EPS 를 공시하지
+        // 않았으면 계속영업 + 중단영업 주당이익(같은 기준끼리, NAVER 2021) — 앱 코드와 무관하게 DART 값만으로 계산.
+        // 희석 EPS 미공시(희석 증권 없음)면 앱 희석 EPS 는 기본 EPS 와 같아야 한다
+        const epsOf = (L, f, kind) => {
+          if (!L) return null;
+          const T = kind === "d" ? [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "희석주당이익손실"]]
+            : [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익"]];
+          const tot = dartPick(L, ["IS", "CIS"], ...T, f);
+          if (tot != null) return { v: tot, how: "" };
+          // 기본·희석 합친 줄(LG "보통주 기본/희석주당순이익") — 하나거나 값이 같으면 그 값, 둘이 다르면 차이가 그 해 중단영업손익과 부호가 같은 쪽
+          { const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
+            const CMB = ["보통주기본/희석주당순이익", "기본/희석주당순이익", "보통주기본/희석주당이익", "기본/희석주당이익"];
+            const vs = L.filter((r) => ["IS", "CIS"].includes(r.sj_div) && CMB.includes(nm(r.account_nm))).map((r) => dartNum(r[f])).filter((v) => v != null);
+            if (vs.length === 1 || (vs.length === 2 && vs[0] === vs[1])) return { v: vs[0], how: "기본·희석 합친 줄" };
+            if (vs.length === 2) {
+              const disc = dartPick(L, ["IS", "CIS"], ["ifrs-full_ProfitLossFromDiscontinuedOperations"], [], f);
+              if (disc) return { v: Math.sign(vs[0] - vs[1]) === Math.sign(disc) ? vs[0] : vs[1], how: `기본·희석 합친 줄 둘(전체·계속영업) — 차이 부호 = 중단영업손익 ${disc}` };
+            } }
+          const pre = kind === "d" ? "Diluted" : "Basic";
+          const c = dartPick(L, ["IS", "CIS"], [`ifrs-full_${pre}EarningsLossPerShareFromContinuingOperations`], [], f);
+          if (c == null) return null;
+          const d = dartPick(L, ["IS", "CIS"], [`ifrs-full_${pre}EarningsLossPerShareFromDiscontinuedOperations`], [], f) ?? 0;
+          return { v: c + d, how: `전체 EPS 미공시 — 계속영업 ${c} + 중단영업 ${d}` };
+        };
+        // 기준 보고서 = 그 해 값이 실린 가장 최근 보고서(dartYearValue 와 같은 규칙)
+        const ownerOf = () => { for (const [L, f] of [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]]) if (L && L.some((r) => dartNum(r[f]) != null)) return [L, f]; return [null, null]; };
+        const latestEps = (kind) => { const [L, f] = ownerOf(); return L ? epsOf(L, f, kind) : null; };
+        const bE = latestEps("b"), dE = latestEps("d");
+        add("A", "기본 EPS = DART", col, vsSource(isByName("기본 EPS", k), bE?.v ?? null, 0, bE?.how ?? ""));
+        { const rr = vsSource(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, 0); dartVint[`${col}|희석 EPS`] = { app: rr.app, latest: rr.src, pass: rr.status === PASS, vAll: [] }; }
+        add("A", "희석 EPS = DART", col, vsSource(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, 0, dE ? dE.how : bE ? `DART 희석 EPS 미공시 — 기본 EPS 와 대조${bE.how ? " · " + bE.how : ""}` : ""));
+      }
+    }
+  }
 
   // LTM 기준일 — 손익 TTM 이 분기까지 왔는데 재무상태표 스냅샷이 연말값이면 현금·차입금·자본이 낡았다
   const t = tt?.ttm;
@@ -8585,6 +8822,45 @@ async function verifyKr(sym) {
       }
     }
   }
+  // ── C층 화면 간 일치(한국, 2026-10-02 — 미국과 같은 검사): 분기 열 · 총괄 = 각 재무제표(연간·분기) · 하이라이트 LTM = 최근 4개 분기 합(손익)·
+  //    최근 분기 재무상태표(총차입금·비지배지분)
+  if (isq && bsq && cfq && sm && smq) {
+    const itemsK = (st) => (st?.sections ?? []).flatMap((x) => x.items ?? []);
+    const rid = (st) => Object.fromEntries(itemsK(st).map((it) => [it.accountId, it.values ?? {}]));
+    const rnm = (st) => { const o = {}; for (const it of itemsK(st)) { const k0 = String(it.accountName ?? "").trim(); if (!(k0 in o)) o[k0] = it.values ?? {}; } return o; };
+    const qcols = (st) => (st?.periods ?? []).map((p0) => `${p0.label}@${p0.endDate}`).join(",");
+    const qI = qcols(isq);
+    for (const [nm, st] of [["재무상태표", bsq], ["현금흐름표", cfq], ["총괄", smq]])
+      add("C", `분기 화면 열 손익계산서 = ${nm}`, "-", qI === qcols(st) ? { status: PASS, note: qI } : { status: FAIL, note: `${qI} ≠ ${qcols(st)}` });
+    const eqv = (nm, col, a, b0) => { if (a == null && b0 == null) return; add("C", nm, col, same(a, b0)); };
+    for (const [S0, I0, B0, C0, per] of [[rid(sm), rnm(is), rid(bs), rid(cf), is?.periods], [rid(smq), rnm(isq), rid(bsq), rid(cfq), isq?.periods]]) for (const p0 of per ?? []) {
+      const k0 = p0.label, c0 = k0.replace(/^FY(\d{4})$/, "$1Y");
+      eqv("총괄 매출 = 손익계산서", c0, S0["sum:is:rev"]?.[k0], I0["매출액"]?.[k0]);
+      eqv("총괄 영업이익 = 손익계산서", c0, S0["sum:is:op"]?.[k0], I0["영업이익"]?.[k0]);
+      eqv("총괄 순이익 = 손익계산서", c0, S0["sum:is:ni"]?.[k0], I0["당기순이익"]?.[k0]);
+      eqv("총괄 자산 = 재무상태표", c0, S0["sum:bs:자산"]?.[k0], B0["bs:자산:자산 총계"]?.[k0]);
+      eqv("총괄 부채 = 재무상태표", c0, S0["sum:bs:부채"]?.[k0], B0["bs:부채:부채 총계"]?.[k0]);
+      eqv("총괄 자본 = 재무상태표", c0, S0["sum:bs:자본"]?.[k0], B0["bs:자본:자본 총계"]?.[k0]);
+      eqv("총괄 영업현금흐름 = 현금흐름표", c0, S0["sum:cf:영업활동으로 인한 현금흐름"]?.[k0], C0["cf:total:영업활동 현금흐름"]?.[k0]);
+      eqv("총괄 투자현금흐름 = 현금흐름표", c0, S0["sum:cf:투자활동으로 인한 현금흐름"]?.[k0], C0["cf:total:투자활동 현금흐름"]?.[k0]);
+      eqv("총괄 재무현금흐름 = 현금흐름표", c0, S0["sum:cf:재무활동으로 인한 현금흐름"]?.[k0], C0["cf:total:재무활동 현금흐름"]?.[k0]);
+    }
+    // 하이라이트 LTM — 손익 TTM 기준 분기(ttm.periodLabel "… + 2026 반기 − 2025 반기")가 분기 화면 마지막 열과 같을 때만
+    const LH = H.LTM, IQn = rnm(isq), BQi = rid(bsq);
+    const ql = (isq.periods ?? []).map((p0) => p0.label), l4 = ql.slice(-4), lq = ql.at(-1);
+    const fq = (tt?.ttm?.periodLabel ?? "").match(/\+\s*(\d{4})\s*(1분기|반기|3분기)/);
+    const want = fq ? `${fq[1]} Q${{ "1분기": 1, 반기: 2, "3분기": 3 }[fq[2]]}` : null;
+    if (LH && l4.length === 4 && want && lq === want) {
+      const s4 = (nm) => { const xs = l4.map((k0) => IQn[nm]?.[k0]); return xs.every((v0) => v0 != null) ? xs.reduce((a0, b1) => a0 + b1, 0) : null; };
+      const hRow = (key) => { const i0 = h.columns.findIndex((c) => c.kind === "ltm"); return h.rows.find((r1) => r1.key === key)?.values[i0] ?? null; };
+      eqv("하이라이트 LTM 매출 = 분기 최근 4개 합", "LTM", hRow("revenue"), s4("매출액"));
+      eqv("하이라이트 LTM 영업이익 = 분기 최근 4개 합", "LTM", hRow("opinc"), s4("영업이익"));
+      eqv("하이라이트 LTM 순이익 = 분기 최근 4개 합", "LTM", LH.ni, s4("당기순이익"));
+      eqv("하이라이트 LTM 총차입금 = 최근 분기 재무상태표", "LTM", LH.debt, BQi["bs:note:총차입금"]?.[lq]);
+      eqv("하이라이트 LTM 비지배지분 = 최근 분기 재무상태표", "LTM", LH.nci, BQi["bs:note:비지배지분"]?.[lq]);
+    } else if (LH) add("C", "하이라이트 LTM = 분기 화면", "LTM", { status: NA, note: `손익 TTM 기준 분기 ${want ?? "없음"} · 분기 화면 마지막 열 ${lq ?? "없음"}` });
+  }
+
   const L = H.LTM;
   if (row && L) {
     const m = row.overview?.multiples ?? null, uv = row.universe ?? null;
@@ -8609,6 +8885,21 @@ async function verifyKr(sym) {
   const review = [];
   if (EXTERNAL) {
     const items = new Map(); // 항목 → { ours, src: { 소스: { v, unit, cause } } }
+    // 판본 차이 원인 확인 — 외부 값 = DART 처음 공시(보고 단위 안) 이고 앱 값 = DART 최신 재작성(A층 통과)일 때만. 숫자로 성립할 때만 원인
+    // 원인 확인(숫자로 성립할 때만): ① 외부 = DART 이전 판본(처음 공시·다음 해 보고서 전기)이고 앱 = 최신 재작성 ② 앱 = DART 공시값(A층 정확 일치)
+    //    — 미국 F층 "앱 = SEC(A층 일치)" 와 같은 원칙(외부는 자체 계산·자체 정의)
+    const F2A = { "매출": "매출액", "영업이익": "영업이익", "순이익(연결)": "당기순이익(연결)", "순이익(지배)": "당기순이익(지배)", "EPS": "희석 EPS" };
+    const vintCause = (item) => {
+      const [c, ...rest] = item.split(" ");
+      const a = dartVint[`${c}|${F2A[rest.join(" ")] ?? ""}`];
+      if (!a || !a.pass) return null;
+      return (ours, v, unit) => {
+        if (ours !== a.app) return null;
+        const old = (a.vAll ?? []).find((x) => x.v !== a.latest && sameAt(x.v, v, unit));
+        if (old) return `외부 = DART ${old.by} 사업보고서 판본 ${old.v}, 앱 = 최신 보고서 ${a.latest}`;
+        return `앱 = DART 공시값 ${a.latest}(A층 정확 일치) — 외부는 자체 계산·정의`;
+      };
+    };
     const putS = (src, item, ours, v, unit, cause) => {
       if (ours == null || v == null) return;
       const it = items.get(item) ?? { ours, src: {} };
@@ -8619,7 +8910,7 @@ async function verifyKr(sym) {
       const fg = await fnguideInvest(sym);
       const fin = await fnguideFinance(sym);
       const ymOf = (d) => (d ? `${d.slice(0, 4)}/${d.slice(5, 7)}` : null);
-      const put = (item, ours, v, unit, cause) => putS("FnGuide", item, ours, v, unit, cause);
+      const put = (item, ours, v, unit, cause) => putS("FnGuide", item, ours, v, unit, cause ?? vintCause(item));
       for (const [c, x] of Object.entries(H)) {
         const ym = ymOf(x.date);
         if (!ym || !fg.cols.includes(ym)) continue;
@@ -8665,7 +8956,7 @@ async function verifyKr(sym) {
       if (!ya.length) throw new Error("연간 재무 없음(.KS·.KQ)");
       const iso = (d) => new Date(d).toISOString().slice(0, 10);
       const yEbitda = (r) => (r.totalOperatingIncomeAsReported != null && r.reconciledDepreciation != null ? r.totalOperatingIncomeAsReported + r.reconciledDepreciation : null);
-      const put = (item, ours, v, unit) => putS("Yahoo", item, ours, v, unit);
+      const put = (item, ours, v, unit) => putS("Yahoo", item, ours, v, unit, vintCause(item));
       for (const [c, x] of Object.entries(H)) {
         if (c === "LTM") continue;
         const r = ya.find((r) => dayDiff(iso(r.date), x.date) <= 7);
@@ -8692,7 +8983,7 @@ async function verifyKr(sym) {
       for (const n of names) {
         const s = it.src[n];
         if (sameAt(it.ours, s.v, s.unit)) { matched.push(n); continue; }
-        const why = s.cause?.(it.ours, s.v) ?? null;
+        const why = s.cause?.(it.ours, s.v, s.unit) ?? null;
         if (why) { explained.push(n); causes[n] = why; }
         off.push(`${n} ${s.v} (${(((it.ours - s.v) / Math.abs(s.v || 1)) * 100).toFixed(2)}%)${why ? ` [원인 확인: ${why}]` : ""}`);
       }

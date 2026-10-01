@@ -157,6 +157,11 @@ export interface EodQuote {
   marketCap?: number | null;
   /** 시세가 Yahoo 일 때만 — 종가에 소급 반영된 분할·분사 이력 */
   splits?: YahooSplit[];
+  /**
+   * 진행 중인 거래일 가격(미국 — 장 마감 전 야후 일봉의 마지막 봉). **표시 전용**(개요 현재가). 시가총액·멀티플 등 계산은 last(마감 종가)만
+   * 쓴다(오너 결정 2026-10-02 (나) — 화면마다 조회 시점이 달라 0.01~0.08% 어긋나던 문제). 장 마감 뒤·주말이면 없음
+   */
+  live?: { price: number; date: string; change: number | null; changePct: number | null } | null;
 }
 
 /** 트레일링 멀티플 (L3, 자체 계산). */
@@ -194,6 +199,8 @@ export interface TtmFlows {
   periodLabel: string;
   /** 조회 자체가 실패했으면 그 사유 — 모든 값이 null(대체 계산 금지, 화면은 이 사유를 보여준다) */
   error?: string | null;
+  /** 불완전한 계산의 사유(SEC 원본 판독 경고·매출 조립 실패 등) — 있으면 TTM 스냅샷을 저장하지 않는다(db/ttm-snap.ts) */
+  degraded?: string[];
   /** 값이 null 이거나 근사인 항목의 사유·라벨(미국) — 화면 칸 주석 */
   reasons?: Partial<Record<"netIncome" | "revenue" | "opIncome" | "eps" | "daTtm" | "equity" | "evNetDebt" | "evShares" | "dpsTtm" | "fyEps", string>>;
   /**

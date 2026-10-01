@@ -22,6 +22,7 @@ import {
 import { resolveCorpCode } from "./corpcode";
 import { annualSeries, daAndAmortSeries, fetchKrFacts, seriesOf } from "./dart-facts";
 import { buildKrEvResolver, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCaps } from "./dart-ev";
+import { krIsFlows } from "./dart-income";
 import { getKrDaDoc } from "@/lib/db/kr-da";
 
 const HINT =
@@ -333,13 +334,13 @@ const TTM_IDS: Record<keyof typeof TTM_ACCOUNTS, readonly string[]> = {
   netIncome: ["ifrs-full_ProfitLoss"],
   revenue: ["ifrs-full_Revenue", "dart_Revenue"],
   opIncome: ["dart_OperatingIncomeLoss", "ifrs-full_ProfitLossFromOperatingActivities"],
-  eps: [
-    "ifrs-full_DilutedEarningsLossPerShare",
-    "ifrs-full_BasicEarningsLossPerShare",
-    "ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations",
-    "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations",
-  ],
+  // 전체 EPS 만 — 계속영업 EPS 로 대신하지 않는다(미공시면 epsValue 가 계속 + 중단영업 합, dart-ev.ts krEpsSeries 와 같은 규칙)
+  eps: ["ifrs-full_DilutedEarningsLossPerShare", "ifrs-full_BasicEarningsLossPerShare"],
 };
+const EPS_PAIRS = [
+  ["ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations", "ifrs-full_DilutedEarningsLossPerShareFromDiscontinuedOperations"],
+  ["ifrs-full_BasicEarningsLossPerShareFromContinuingOperations", "ifrs-full_BasicEarningsLossPerShareFromDiscontinuedOperations"],
+] as const;
 // EPS 계정명은 회사·보고서별 편차가 커서 부분일치 허용
 const EPS_LOOSE = /주당(순)?이익/;
 
@@ -374,6 +375,21 @@ function isValue(
     if (loose && looseHit == null && loose.test(nm)) looseHit = pick(r);
   }
   return looseHit;
+}
+
+/**
+ * 전체 EPS — 전체 EPS 줄(ID·이름, 계속·중단영업 줄은 느슨 매칭에서 제외)이 없으면 계속영업 + 중단영업 주당이익(같은 기준끼리 — 희석 우선)의
+ * 합(NAVER 2021: 계속영업 9,887 + 중단영업 99,973). 하이라이트·손익계산서(dart-ev.ts krEpsSeries)와 같은 규칙
+ */
+function epsValue(rows: FnlttRow[], col: "cumCur" | "cumPrior" | "annual"): number | null {
+  const plain = rows.filter((r) => !/계속영업|중단영업/.test(norm(r.account_nm ?? "")));
+  const total = isValue(plain, TTM_ACCOUNTS.eps, col, EPS_LOOSE, TTM_IDS.eps);
+  if (total != null) return total;
+  for (const [c, d] of EPS_PAIRS) {
+    const cv = isValue(rows, [], col, undefined, [c]);
+    if (cv != null) return cv + (isValue(rows, [], col, undefined, [d]) ?? 0);
+  }
+  return null;
 }
 
 const INTERIM_RANK: Record<string, number> = { "11014": 3, "11012": 2, "11013": 1 };
@@ -458,13 +474,14 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
 
   const ttm = (key: keyof typeof TTM_ACCOUNTS): { v: number | null; ttm: boolean; parts: KrTtmPart[] } => {
     const names = TTM_ACCOUNTS[key];
-    const lz = key === "eps" ? EPS_LOOSE : undefined;
     const ids = TTM_IDS[key];
-    const annual = isValue(annualRows!, names, "annual", lz, ids);
-    const cur = isValue(interim!.rows, names, "cumCur", lz, ids);
-    let prior = isValue(interim!.rows, names, "cumPrior", lz, ids);
+    const get = (rows: FnlttRow[], col: "cumCur" | "cumPrior" | "annual") =>
+      key === "eps" ? epsValue(rows, col) : isValue(rows, names, col, undefined, ids);
+    const annual = get(annualRows!, "annual");
+    const cur = get(interim!.rows, "cumCur");
+    let prior = get(interim!.rows, "cumPrior");
     if (prior == null && priorInterimRows)
-      prior = isValue(priorInterimRows, names, "cumCur", lz, ids);
+      prior = get(priorInterimRows, "cumCur");
     if (annual == null) return { v: null, ttm: false, parts: [] };
     if (cur == null || prior == null) return { v: annual, ttm: false, parts: [{ v: annual, ...fySpan }] }; // 분기 데이터 부족 → 연간값
     return {
@@ -486,7 +503,7 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   let epsParts: KrTtmPart[] = eps != null ? epsR.parts : [];
   if (eps == null && ni.ttm && ni.v != null) {
     const annualNi = isValue(annualRows!, TTM_ACCOUNTS.netIncome, "annual", undefined, TTM_IDS.netIncome);
-    const annualEps = isValue(annualRows!, TTM_ACCOUNTS.eps, "annual", EPS_LOOSE, TTM_IDS.eps);
+    const annualEps = epsValue(annualRows!, "annual");
     // 주식수 환산은 연간 순이익·EPS 부호가 같으면(적자 해 포함) 성립
     if (annualNi && annualEps) {
       const shares = annualNi / annualEps;
@@ -538,6 +555,26 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
       ? { periodLabel: ttmRes.periodLabel, netIncome: ttmRes.netIncome, revenue: ttmRes.revenue, opIncome: ttmRes.opIncome, eps: ttmRes.eps }
       : null;
     const parts: KrTtmParts = { ...(ttmRes?.parts ?? {}) };
+    // **LTM = 최근 4개 분기 열 합(매출·영업이익·순이익, 2026-10-02 — 미국과 같은 원칙, 오너 결정 2026-09-28)**: 분기 손익계산서 화면의
+    // 4개 열(같은 계정 선택 krIsFlows)이 모두 있으면 그 합. 누적 공식(연간 + 당기 누적 − 전년 동기 누적)은 회사가 전년 동기를 재작성하면
+    // 판본이 섞이고(LG화학 2026 반기보고서가 2025 상반기 재작성 → 1.94% 차이) 3개월·누적 값이 따로 반올림돼 ±1백만원 어긋났다
+    if (flows && quarterFacts && lastQuarter) {
+      const want: string[] = [];
+      for (let i = 3; i >= 0; i--) {
+        const idx = lastQuarter.year * 4 + (lastQuarter.quarter - 1) - i;
+        want.push(`${Math.floor(idx / 4)} Q${(idx % 4) + 1}`);
+      }
+      const qp = want.map((l) => quarterFacts.periods.find((p) => p.label === l));
+      if (qp.every(Boolean)) {
+        const f = krIsFlows(quarterFacts);
+        for (const [k, series] of [["revenue", f.revenue], ["opIncome", f.opIncome], ["netIncome", f.netIncome]] as const) {
+          const qs = qp.map((p) => ({ v: series[p!.label], start: `${p!.year}-${String(p!.quarter! * 3 - 2).padStart(2, "0")}-01`, end: p!.endDate }));
+          if (qs.some((q) => q.v == null)) continue;
+          flows[k] = qs.reduce((a, q) => a + q.v!, 0);
+          parts[k] = qs.map((q) => ({ v: q.v!, start: q.start, end: q.end }));
+        }
+      }
+    }
     // 구성 기간을 최근 4개 분기로 다시 쪼갠다(외화 환산 LTM = 분기별 평균 환율 합, 오너 결정 2026-09-25 —
     // 인포맥스·Finviz 방식). 분기 재무제표(fetchKrFacts quarter)의 단일분기 값 4개 합이 원화 TTM 과 정확히 같을
     // 때만 바꾼다 — 계정 선택이 달라 합이 안 맞으면 종전 구성 기간(연간·누적)을 그대로 둔다.

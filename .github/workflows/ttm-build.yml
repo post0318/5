@@ -1,0 +1,66 @@
+name: 미국 TTM 스냅샷 미리 채우기 (ttm_snap)
+
+# 개요 시가총액·멀티플이 쓰는 미국 TTM(현재 주식수·LTM·EV 구성요소)을 종목별로 DB 에 미리 계산해 둔다(src/lib/db/ttm-snap.ts,
+# 오너 결정 2026-10-01 (가)). 저장본은 같은 배포판(커밋)·24시간 안일 때만 쓰이므로 매일 + 배포 직후 다시 채운다.
+#   - 하루 1회: 21:50 UTC = 06:50 KST (재무 배치 fin-build 06:10 KST 뒤 — 매출(fin) 저장본이 먼저 갱신돼야 TTM 계산이 빠르다)
+#   - master push: 운영 배포판이 이 커밋으로 바뀔 때까지 기다린 뒤(최대 20분) 채운다
+#   - 수동: workflow_dispatch (symbols 를 주면 그 종목만)
+# 호출당 최대 10종목, 종목은 하나씩 순서대로(SEC 요청 제한). pending 0 이 되면 멈춘다. 저장 못 한 종목(failed — SEC 판독 경고 등)은
+# 경고로만 남긴다(다음 화면 조회 때 다시 계산). pending 이 남았는데 진행 0 이면 실패.
+
+on:
+  schedule:
+    - cron: "50 21 * * *"
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "쉼표 구분 종목(비우면 유니버스 미국 전체 중 저장본 없는 것만)"
+        default: ""
+
+concurrency:
+  group: ttm-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      BASE: https://macroresearch.vercel.app
+      SYMBOLS: ${{ inputs.symbols }}
+      SHA: ${{ github.sha }}
+      EVENT: ${{ github.event_name }}
+    steps:
+      - name: 배포 반영 대기(push 일 때만)
+        if: github.event_name == 'push'
+        run: |
+          for i in $(seq 1 40); do
+            v=$(curl -sS --max-time 20 "$BASE/api/cron/ttm-build" | jq -r '.version // ""' || echo "")
+            if [ "$v" = "$SHA" ]; then echo "배포 반영 확인: $v"; exit 0; fi
+            echo "대기 $i — 운영 배포판 ${v:-?} ≠ $SHA"; sleep 30
+          done
+          echo "::error::20분 안에 운영 배포판이 $SHA 로 바뀌지 않음"; exit 1
+      - name: 저장본 없는 종목 계산·저장(반복 호출)
+        run: |
+          set -u
+          q="n=10"
+          if [ -n "${SYMBOLS:-}" ]; then q="$q&symbols=$SYMBOLS"; fi
+          fail=0
+          exc=""
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o res.json -w "%{http_code}" -X POST --max-time 320 \
+              -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/ttm-build?$q&exclude=$exc" || echo 000)
+            echo "── 호출 $i (HTTP $code)"; cat res.json; echo
+            if [ "$code" != "200" ]; then fail=1; break; fi
+            nf=$(jq '.failed | length' res.json)
+            # 실패 종목은 이번 실행에서 제외(같은 종목만 반복 재시도하지 않게) — 다음 화면 조회·다음 실행에서 다시 계산
+            if [ "$nf" != "0" ]; then echo "::warning::저장 못 한 종목: $(jq -c '.failed' res.json)"; exc="$exc$(jq -r '[.failed[].symbol] | join(",")' res.json),"; fi
+            pending=$(jq '.pending' res.json)
+            did=$(jq '(.built | length) + (.failed | length)' res.json)
+            if [ "$pending" = "0" ]; then break; fi
+            if [ "$did" = "0" ]; then echo "::error::pending $pending 인데 진행 0"; fail=1; break; fi
+          done
+          if [ "$fail" = "1" ]; then exit 1; fi

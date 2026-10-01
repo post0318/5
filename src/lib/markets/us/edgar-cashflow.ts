@@ -84,6 +84,11 @@ const FIN_PROVISION_LINE: Line = {
   depth: 1,
 };
 
+/** 투자·재무활동 줄의 태그 묶음 — 분기 본표에서 빠진 줄(당기·전년 동기 모두 0)을 0 으로 채울 대상(edgar-cf-wc.ts) */
+export function cfZeroFillGroups(): string[][] {
+  return getBlocks(false).slice(1).flatMap((b) => b.lines.filter((l) => l.concepts && !l.plug).map((l) => l.concepts as string[]));
+}
+
 function getBlocks(isFin: boolean): Block[] {
   return [
   {
@@ -142,6 +147,10 @@ function getBlocks(isFin: boolean): Block[] {
           ["ProceedsFromSaleMaturityAndCollectionOfShorttermInvestments", false],
           ["ProceedsFromSaleAndMaturityOfMarketableSecurities", false],
           ["ProceedsFromSaleOfShortTermInvestments", false],
+          // 분기·연간이 서로 다른 태그(META 연간 MarketableSecurities·분기 AvailableForSale, AMAT OtherInvestments — 2026-10-02 검증기 LTM 공란 검사)
+          ["ProceedsFromSaleAndMaturityOfAvailableForSaleSecurities", false],
+          ["ProceedsFromSaleAndMaturityOfOtherInvestments", false],
+          ["ProceedsFromSaleOfEquitySecuritiesFvNi", false],
         ],
       },
       {
@@ -154,6 +163,7 @@ function getBlocks(isFin: boolean): Block[] {
           ["PaymentsToAcquireShortTermInvestments", false],
           ["PaymentsToAcquireLongtermInvestments", false],
           ["PaymentsToAcquireMarketableSecurities", false],
+          ["PaymentsToAcquireEquitySecuritiesFvNi", false],
         ],
       },
       { label: "사업 인수 (순현금)", concepts: ["PaymentsToAcquireBusinessesNetOfCashAcquired"], depth: 1, negate: true },
@@ -167,10 +177,12 @@ function getBlocks(isFin: boolean): Block[] {
       concepts: ["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"],
     },
     lines: [
-      { label: "배당금 지급", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], depth: 1, negate: true },
+      { label: "배당금 지급", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], depth: 1, negate: true },
       { label: "자기주식 취득", concepts: ["PaymentsForRepurchaseOfCommonStock"], depth: 1, negate: true },
-      { label: "장기차입금 조달", concepts: ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt"], depth: 1 },
-      { label: "장기차입금 상환", concepts: ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt"], depth: 1, negate: true },
+      { label: "장기차입금 조달", concepts: ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts"], depth: 1 },
+      // 전환사채 상환도 장기차입금 상환(TSLA 2024~ "Repayments of debt" = RepaymentsOfConvertibleDebt — 옛 태그 중단으로 2025 연간·LTM 이 비었다, 2026-10-02).
+      // firstConcept 는 앞 태그에 값이 없는 결산일만 뒤 태그로 채우므로 다른 태그를 쓰는 회사는 그대로
+      { label: "장기차입금 상환", concepts: ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt", "RepaymentsOfConvertibleDebt", "RepaymentsOfDebtAndCapitalLeaseObligations"], depth: 1, negate: true },
       {
         label: "단기차입금 순증감",
         depth: 1,
@@ -337,17 +349,57 @@ export function buildUsCashFlow(
   const prevLbl = labels[labels.length - 2];
   const ltmGap = (v: Record<string, number | null> | undefined) => !!ylCf && !!v && v[LTM] == null && v[prevLbl] != null;
   const GAP_NOTE = "LTM 구성 분기 없음(구성 항목이 분기 공시에 없음)";
+  // 합계 태그 → 그 구성 태그(같은 기간에 합계가 있으면 구성은 더하지 않는다 — 이중 합산 방지, NVDA 는 셋 다 공시, 2026-10-02)
+  const SUPERSEDES: Record<string, string[]> = {
+    ProceedsFromSaleAndMaturityOfAvailableForSaleSecurities: ["ProceedsFromSaleOfAvailableForSaleSecuritiesDebt", "ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities"],
+  };
   const combineVals = (parts: [string, boolean][]): Record<string, number | null> => {
     const out: Record<string, number | null> = {};
     for (const lbl of labels) out[lbl] = null;
     let gap = false;
+    const vals = new Map(parts.map(([c]) => [c, valOf([c])] as const));
+    const skipAt = (concept: string, lbl: string) =>
+      Object.entries(SUPERSEDES).some(([tot, comps]) => comps.includes(concept) && vals.get(tot)?.[lbl] != null);
     for (const [concept, neg] of parts) {
-      const v = valOf([concept]);
-      if (ltmGap(v)) gap = true;
+      const v = vals.get(concept)!;
+      if (ltmGap(v) && !skipAt(concept, LTM)) gap = true;
       for (const lbl of labels) {
         const x = v[lbl];
-        if (x == null) continue;
+        if (x == null || skipAt(concept, lbl)) continue;
         out[lbl] = (out[lbl] ?? 0) + (neg ? -x : x);
+      }
+    }
+    // 태그를 기간 중간에 바꾼 줄(TSLA 2026 분기 "투자자산 취득" — PaymentsToAcquireInvestments → PaymentsToAcquireShortTermInvestments)은
+    // 태그별 LTM 이 모두 빈다 — 기간마다 가장 최근 공시 한 건에 실린 구성 태그 합으로 기간 값을 만든 뒤 같은 LTM 함수로(2026-10-02, 야후 분기 합과 일치).
+    // 같은 기간을 옛 태그(옛 공시)와 새 태그(새 공시 비교 열)가 함께 담아도 한 공시만 쓰므로 이중 합산되지 않는다
+    if (gap && mode !== "quarter" && labels.includes(LTM)) {
+      // 공시 구분 = 제출일(filed) + 양식(form) — companyfacts 항목에는 접수번호가 없다
+      const byPeriod = new Map<string, { filed: string; form: string; e: FactUnitEntry; sum: number }>();
+      for (const [concept, neg] of parts)
+        for (const e of entriesOf(facts, concept)) {
+          if (!e.start) continue;
+          const k = `${e.start}|${e.end}`;
+          const cur = byPeriod.get(k);
+          const filed = e.filed ?? "";
+          if (!cur || filed > cur.filed) byPeriod.set(k, { filed, form: e.form, e, sum: neg ? -e.val : e.val });
+          else if (filed === cur.filed && e.form === cur.form) cur.sum += neg ? -e.val : e.val;
+        }
+      // 합계 태그와 구성 태그가 같은 공시·기간에 함께 있으면 구성 분을 뺀다
+      for (const [k, x] of byPeriod)
+        for (const [tot, comps] of Object.entries(SUPERSEDES)) {
+          const has = (c: string) => entriesOf(facts, c).find((e) => `${e.start}|${e.end}` === k && (e.filed ?? "") === x.filed && e.form === x.form);
+          if (!parts.some(([c]) => c === tot) || !has(tot)) continue;
+          for (const c of comps) {
+            const e = has(c);
+            const neg = parts.find(([pc]) => pc === c)?.[1];
+            if (e && neg != null) x.sum -= neg ? -e.val : e.val;
+          }
+        }
+      const merged = [...byPeriod.values()].map((x) => ({ ...x.e, val: x.sum }));
+      const r = ltmFlowOf(merged, anchor);
+      if (r.value != null) {
+        out[LTM] = r.value;
+        gap = false;
       }
     }
     if (gap) {
@@ -379,6 +431,11 @@ export function buildUsCashFlow(
   /** 분기 칸 주석(감가상각비 공란 사유) */
   const cellWhy = new WeakMap<Record<string, number | null>, Record<string, string>>();
 
+  // **운전자본 변동 = 회사가 공시한 영업 자산·부채 순변동 합계가 있으면 그 값(2026-10-02)** — KO 등은 분기 현금흐름표를 요약형으로 내
+  // 매출채권·재고·매입채무를 나누지 않고 IncreaseDecreaseInOperatingCapital 한 줄만 공시한다. 하위 줄 합으로만 만들면 분기에 하위 줄이 없어
+  // LTM 운전자본·기타 영업활동이 통째로 비었고(오너 지적), 연간도 하위 세 줄 밖 운전자본(선급·미지급 등)이 "기타 영업활동"으로 샜다
+  // 회사 공시 순변동 → 본표 운전자본 줄 합(edgar-cf-wc.ts, 10-K 는 항목별·10-Q 는 한 줄인 회사도 같은 정의)
+  const wcCo = applyNegate(valOf(["IncreaseDecreaseInOperatingCapital", "OperatingCapitalCashFlowDerived"]));
   for (const block of BLOCKS) {
     const totalVals = valOf(block.total.concepts);
     // 매핑된 형제 라인(플러그 제외, subtotal 제외) 합 — 플러그 계산용
@@ -455,6 +512,7 @@ export function buildUsCashFlow(
         );
         values = {};
         for (const lbl of labels) {
+          if (wcCo[lbl] != null) { values[lbl] = wcCo[lbl]; continue; }
           let s: number | null = null;
           for (const k of kids) {
             const x = resolved[k.label]?.[lbl];
@@ -488,11 +546,14 @@ export function buildUsCashFlow(
             if (l.depth !== 1) continue; // depth1 형제만
             mapped += resolved[l.label]?.[lbl] ?? 0;
           }
-          // depth2 (운전자본 하위)는 subtotal 로 depth1 에 이미 반영 안 됨 → 별도 가산
-          for (const l of block.lines) {
-            if (l.depth === 2 && !l.plug) mapped += resolved[l.label]?.[lbl] ?? 0;
-          }
-          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && (l.depth === 1 || l.depth === 2) && ltmGap(resolved[l.label]));
+          // depth2 (운전자본 하위)는 subtotal 로 depth1 에 이미 반영 안 됨 → 별도 가산. 회사 공시 운전자본 합계가 있는 칸은 그 합계(하위 줄 대신)
+          const hasWc = block.lines.some((l) => l.kind === "subtotal") && wcCo[lbl] != null;
+          if (hasWc) mapped += wcCo[lbl]!;
+          else
+            for (const l of block.lines) {
+              if (l.depth === 2 && !l.plug) mapped += resolved[l.label]?.[lbl] ?? 0;
+            }
+          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && (l.depth === 1 || (l.depth === 2 && !hasWc)) && ltmGap(resolved[l.label]));
           values[lbl] = gap ? null : Math.round(tot - mapped);
           if (gap) ltmWhy.set(values, GAP_NOTE);
         }
