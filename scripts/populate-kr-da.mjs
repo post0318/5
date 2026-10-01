@@ -177,6 +177,90 @@ function parseDocDa(xml, mode = "cf") {
   }
   return null;
 }
+/**
+ * 성격별 비용 주석(계속영업) — [당기, 전기]. 두 형식: ① "구분 | 당기 | 전기" 한 표, ② "구분 | 재고변동 | 판관비 | 원가명세서 | 성격별 비용"
+ * 처럼 열이 여럿이고 당기·전기 표가 따로(LS ELECTRIC) — 마지막 합계 열을 읽고 앞 표가 당기, 다음 표가 전기. 감가·무형을 한 줄로 합친
+ * 표(삼성전기·LS·두산에너빌리티)는 combined 만
+ */
+function parseNatureDa(xml) {
+  const lbl = (r) => (r[0] ?? "").replace(/^[\s\-–·ㆍ•]+/, "").replace(/\s|\(.*?\)/g, "");
+  const kind = (r) => {
+    const t = (r[0] ?? "").replace(/^[\s\-–·ㆍ•]+/, "").replace(/\s/g, "");
+    if (/^(감가상각비(및|와)무형자산상각비|감가상각비\(\*\)(및|와)무형자산상각비)$/.test(t) || /^감가상각비(및|와)무형자산상각비$/.test(lbl(r))) return "comb";
+    if (/^(유형자산(감가)?상각비|감가상각비\(유형자산\))$/.test(t) || lbl(r) === "감가상각비") return "base";
+    if (/^(투자부동산(감가)?상각비|감가상각비\(투자부동산\))$/.test(t)) return "inv";
+    if (/^(사용권자산(감가)?상각비|감가상각비\(사용권자산\))$/.test(t)) return "rou";
+    if (lbl(r) === "무형자산상각비") return "amo";
+    return null;
+  };
+  const wide = [];
+  for (const m of xml.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
+    const html = m[0];
+    const rows = [...html.matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
+    const before = clean(xml.slice(Math.max(0, m.index - 1500), m.index));
+    const head = before.slice(-300);
+    if (!/성격별/.test(head + " " + (rows[0] ?? []).join(" "))) continue;
+    const names = rows.map(lbl).join("|");
+    if (/조정항목|법인세비용|이자수익/.test(names)) continue; // 현금흐름 조정 표
+    const by = {};
+    for (const r of rows) { const k = kind(r); if (k && !by[k]) by[k] = r; }
+    if (!by.comb && !by.base) continue;
+    const u = clean(html).match(UNIT_RE)?.[1] ?? [...before.matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
+    if (!u) continue;
+    const nums = (r) => r.slice(1).map((c) => (/^[-–]$/.test(c.trim()) ? 0 : numOf(c))).filter((v) => v != null);
+    const key = by.comb ?? by.base;
+    const isWide = nums(key).length > 2;
+    const take = (r) => (r ? (isWide ? [nums(r).at(-1)] : nums(r).slice(0, 2)).map((v) => v * UNIT[u]) : null);
+    const one = {
+      unit: UNIT[u],
+      combined: take(by.comb),
+      base: take(by.base),
+      inv: take(by.inv),
+      rou: take(by.rou),
+      amo: take(by.amo),
+    };
+    if (!isWide) return one;
+    wide.push(one);
+    if (wide.length === 2) break;
+  }
+  if (!wide.length) return null;
+  // 여러 열 형식: 당기 표 + 전기 표를 [당기, 전기] 로
+  const [c, p] = wide;
+  const cat = (k) => (c[k] || p?.[k] ? [c[k]?.[0] ?? null, p?.[k]?.[0] ?? null] : null);
+  return { unit: c.unit, combined: cat("combined"), base: cat("base"), inv: cat("inv"), rou: cat("rou"), amo: cat("amo") };
+}
+/** 성격별 결과 → 감가(기본+투자부동산+사용권)·무형 열 값 */
+function natureCols(n) {
+  if (!n?.base) return { dep: [], amo: n?.amo ?? [] };
+  const dep = n.base.map((v, i) => (v == null ? null : v + (n.inv?.[i] ?? 0) + (n.rou?.[i] ?? 0)));
+  return { dep, amo: n.amo ?? [] };
+}
+/**
+ * 투자부동산 변동표의 감가상각비(현금흐름 조정 표에 줄이 없는 회사 — LS: 성격별 합계 518,954 = 현금흐름 감가 401,424 + 사용권 48,826 +
+ * 무형 64,955 + 투자부동산 3,749). 표 앞 문장에 "투자부동산"이 있고 "감가상각비" 줄이 있는 표, 마지막 열(합계)의 절대값 — 앞 표 당기, 다음 표 전기
+ */
+function parseInvPropDep(xml) {
+  const out = [];
+  let ti = 0;
+  let firstAt = -1;
+  for (const m of xml.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
+    ti += 1;
+    const head = clean(xml.slice(Math.max(0, m.index - 600), m.index)).slice(-250);
+    // 전기 표는 당기 표 바로 뒤(표 3개 안)에 "(전기)"로 붙어 제목에 "투자부동산"이 없을 수 있다
+    const isPrior = firstAt > 0 && ti - firstAt <= 3;
+    if (!isPrior && (!/투자부동산/.test(head) || /유형자산|사용권자산|무형자산/.test(head.slice(-80)))) continue;
+    const rows = [...m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
+    const r = rows.find((x) => (x[0] ?? "").replace(/\s/g, "") === "감가상각비");
+    if (!r) continue;
+    const u = clean(m[0]).match(UNIT_RE)?.[1] ?? [...clean(xml.slice(Math.max(0, m.index - 1500), m.index)).matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
+    const v = numOf(r.at(-1) ?? "");
+    if (!u || v == null) continue;
+    out.push(Math.abs(v) * UNIT[u]);
+    if (firstAt < 0) firstAt = ti;
+    if (out.length === 2) break;
+  }
+  return out;
+}
 /** 원문 [col] 열이 XBRL 값과 같은가 — 원문 표시 단위(백만원·천원) 반올림 이내. 무형자산상각비는 둘 다 있을 때만 비교 */
 function docAgrees(d, col, x) {
   const near = (a, b) => a != null && b != null && Math.abs(a - b) < d.unit;
@@ -200,7 +284,7 @@ async function docDa(rcpNo) {
   const want = docs.some((d) => d.kind === "con") ? "con" : "sep";
   for (const d of docs.filter((d) => d.kind === want)) {
     const t = parseDocDa(d.x);
-    if (t) return { ...t, sep: want === "sep", nature: parseDocDa(d.x, "nature") };
+    if (t) return { ...t, sep: want === "sep", nature: parseNatureDa(d.x), invDep: parseInvPropDep(d.x) };
   }
   return null;
 }
@@ -339,21 +423,54 @@ async function daByYear(corp) {
   }
   // 중단영업이 있는 해 — 현금흐름 조정 상각에 중단영업분이 섞여 계속영업 영업이익과 정의가 어긋난다(과대). 같은 보고서·열의 성격별 비용
   // 주석(계속영업) 값으로 바꾼다. 성격별 비용 표를 못 찾으면 그대로 두고 로그(과대 가능)
+  // XBRL 에 무형자산상각비 조정 태그가 없는 해(삼성SDI 2022 — 성격별 합계와의 차이 55,233 이 정확히 원문 무형자산상각비) — 원문 기본
+  // 감가상각 줄이 XBRL 기본 줄과 같을 때(같은 표) 원문 무형자산상각비로 채운다
   for (const y of Object.keys(byYear).map(Number)) {
-    const disc = xbrlParts[y]?.disc;
-    if (!disc || !srcOf[y]) continue;
+    if (byYear[y].amortisation != null || xbrlParts[y]?.base == null || !srcOf[y]) continue;
     const [ry, col] = srcOf[y];
-    const n = (await docOf(ry))?.nature;
-    // 합친 줄만 있으면 나눌 수 없다 — 현금흐름 조정 감가 + 무형 = 성격별 합계(단위 반올림 이내)면 중단영업분이 섞이지 않은 것(같은 기준
-    // 확인), 다르면 미해결
-    if (n?.combined?.[col] != null) {
-      const cf = (byYear[y].depreciation ?? 0) + (byYear[y].amortisation ?? 0);
-      if (Math.abs(cf - n.combined[col]) <= n.unit) {
-        byYear[y].src += "+계속영업확인";
-        console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} = 성격별 합계 ${n.combined[col]}: 같은 기준)`);
-      } else console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} ≠ 성격별 합계 ${n.combined[col]}: 미해결)`);
+    const d = await docOf(ry);
+    const a = d?.amo?.[col];
+    if (a == null || d.parts?.base?.[col] == null || Math.abs(d.parts.base[col] - xbrlParts[y].base) > d.unit) continue;
+    byYear[y] = { ...byYear[y], amortisation: a, src: `${byYear[y].src}+원문무형` };
+    console.log(`    (${y} XBRL 무형자산상각비 없음 — 원문 ${a})`);
+  }
+  // 같은 기준 대조는 XBRL 이 있는 모든 해(오너 원칙 — 투자부동산 상각이 현금흐름 조정 표에서 빠지는 일은 중단영업과 무관, LS). 중단영업이
+  // 없는 해는 일치 확인·투자부동산 보완만 하고, 그 밖의 차이는 로그만
+  for (const y of Object.keys(byYear).map(Number)) {
+    const disc = xbrlParts[y]?.disc || 0;
+    if (!srcOf[y] || byYear[y].depreciation == null) continue;
+    const [ry, col] = srcOf[y];
+    const dd = await docOf(ry);
+    const nat = dd?.nature;
+    if (!disc) {
+      // 성격별 값이 그 열에 실제로 있을 때만(전기 표를 못 찾은 여러 열 형식은 null — 0 으로 보지 않는다)
+      const ncol = nat?.base ? natureCols(nat) : null;
+      const nc = nat?.combined?.[col] ?? (ncol?.dep[col] != null && ncol.amo[col] != null ? ncol.dep[col] + ncol.amo[col] : null);
+      if (nc == null) continue;
+      const cf = byYear[y].depreciation + (byYear[y].amortisation ?? 0);
+      const inv = dd.invDep?.[col];
+      if (Math.abs(cf - nc) <= nat.unit) continue;
+      if (inv != null && xbrlParts[y]?.inv == null && Math.abs(cf + inv - nc) <= nat.unit) {
+        byYear[y] = { ...byYear[y], depreciation: byYear[y].depreciation + inv, src: `${byYear[y].src}+투자부동산` };
+        console.log(`    (${y} 현금흐름 감가+무형 ${cf} + 투자부동산 감가 ${inv} = 성격별 합계 ${nc}: 투자부동산분 추가)`);
+      } else console.log(`    (${y} 현금흐름 감가+무형 ${cf} ≠ 성격별 합계 ${nc}(투자부동산 감가 ${inv ?? "없음"}): 미해결)`);
       continue;
     }
+    // 합친 줄만 있으면 나눌 수 없다 — 현금흐름 조정 감가 + 무형 = 성격별 합계(단위 이하)면 중단영업분이 섞이지 않은 것(같은 기준 확인).
+    // 차이가 정확히 투자부동산 변동표 감가상각이고 현금흐름 조정에 투자부동산 줄이 없으면 그 금액을 감가상각비에 더한다(LS). 그 밖은 미해결
+    if (nat?.combined?.[col] != null) {
+      const cf = (byYear[y].depreciation ?? 0) + (byYear[y].amortisation ?? 0);
+      const inv = dd.invDep?.[col];
+      if (Math.abs(cf - nat.combined[col]) <= nat.unit) {
+        byYear[y].src += "+계속영업확인";
+        console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} = 성격별 합계 ${nat.combined[col]}: 같은 기준)`);
+      } else if (inv != null && xbrlParts[y]?.inv == null && byYear[y].depreciation != null && Math.abs(cf + inv - nat.combined[col]) <= nat.unit) {
+        byYear[y] = { ...byYear[y], depreciation: byYear[y].depreciation + inv, src: `${byYear[y].src}+투자부동산+계속영업확인` };
+        console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} + 투자부동산 감가 ${inv} = 성격별 합계 ${nat.combined[col]}: 같은 기준, 투자부동산분 추가)`);
+      } else console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} ≠ 성격별 합계 ${nat.combined[col]}(투자부동산 감가 ${inv ?? "없음"}): 미해결)`);
+      continue;
+    }
+    const n = nat ? { unit: nat.unit, ...natureCols(nat) } : null;
     if (!n || n.dep[col] == null) {
       console.log(`    (${y} 중단영업 ${disc} — 성격별 비용 주석 못 찾음, 현금흐름 조정 값 유지·중단영업분 포함 가능)`);
       continue;
