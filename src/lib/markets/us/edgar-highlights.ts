@@ -447,9 +447,12 @@ export function buildUsHighlights(
   const nNetIncome: (string | null)[] = Array(nCol).fill(null);
   const netIncome = columns.map((col, i) => {
     if (col.kind === "estimate") {
-      // 예상 순이익 = 무료 컨센서스 없음. "예상 EPS × 현재 주식수"는 다른 정의라 쓰지 않는다(그림자 채우기 금지)
-      nNetIncome[i] = "예상 순이익: 무료 컨센서스 없음(EPS × 현재 주식수로 대신하지 않음)";
-      return null;
+      // 예상 순이익 = 예상 희석 EPS × 현재 주식수(오너 결정 2026-10-01 — "희석 EPS 가 있는데 순이익이 없다는 것은 말이 안된다". 야후 무료
+      // 컨센서스는 EPS·매출만 준다). 칸 주석에 산식
+      const e0 = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
+      if (e0 == null || currentShares == null) { nNetIncome[i] = "예상 순이익: 예상 EPS 또는 현재 주식수 없음"; return null; }
+      nNetIncome[i] = `예상 순이익 = 예상 희석 EPS ${e0} × 현재 주식수 ${Math.round(currentShares).toLocaleString("en-US")}(야후 컨센서스는 EPS·매출만 제공)`;
+      return e0 * currentShares;
     }
     // LTM 순이익은 공통 함수(재무분석·개요 멀티플과 같은 값)
     if (col.kind === "ltm") {
@@ -655,7 +658,7 @@ export function buildUsHighlights(
       "운영 파트너십 지분: 보통주로 교환 가능한 외부 파트너 지분을 시가로 반영(수량 출처: Yahoo implied shares)",
     );
   if (estCols.length)
-    notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
+    notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 예상 순이익 = 예상 희석 EPS × 현재 주식수 · 나머지 항목은 무료 컨센서스 없음");
   notes.push("EBITDA = 보고 영업이익 + 감가상각비·무형자산상각비 (블룸버그 '조정'과 다를 수 있음)");
   {
     // fin 영업이익 합성 열(본표 영업이익 소계 없음 — IBM·XOM 등) 표기

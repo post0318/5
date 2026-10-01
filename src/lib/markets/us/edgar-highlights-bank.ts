@@ -248,9 +248,11 @@ export function buildUsBankHighlights(
   const nNetIncome = ltmNote(E.netIncome);
   const netIncome = columns.map((col, i) => {
     if (col.kind === "estimate") {
-      // 예상 순이익 = 무료 컨센서스 없음. "예상 EPS × 현재 주식수"로 대신하지 않는다(그림자 채우기 금지)
-      nNetIncome[i] = "예상 순이익: 무료 컨센서스 없음(EPS × 현재 주식수로 대신하지 않음)";
-      return null;
+      // 예상 순이익 = 예상 희석 EPS × 현재 주식수(오너 결정 2026-10-01, 제조업 하이라이트와 같은 산식)
+      const e0 = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
+      if (e0 == null || currentShares == null) { nNetIncome[i] = "예상 순이익: 예상 EPS 또는 현재 주식수 없음"; return null; }
+      nNetIncome[i] = `예상 순이익 = 예상 희석 EPS ${e0} × 현재 주식수 ${Math.round(currentShares).toLocaleString("en-US")}(야후 컨센서스는 EPS·매출만 제공)`;
+      return e0 * currentShares;
     }
     return flowVal(S.netIncome, E.netIncome, col);
   });
@@ -338,7 +340,7 @@ export function buildUsBankHighlights(
       "무차원 API 로는 조회 불가 — 이 표에서 제공하지 않음 (구조적 한계)",
   );
   if (estCols.length)
-    notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 나머지 항목은 무료 컨센서스 없음");
+    notes.push("예상(수익·EPS): yahoo-finance2 컨센서스 · 예상 순이익 = 예상 희석 EPS × 현재 주식수 · 나머지 항목은 무료 컨센서스 없음");
 
   // 보조행(마진%·성장률%)의 빈칸 — 바로 위 기준 행의 칸 사유를 물려준다(빈칸 사유가 화면에서 빠지지 않게)
   {
