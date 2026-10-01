@@ -120,8 +120,11 @@ const numOf = (t) => {
   const v = Number(u.replace(/[(),-]/g, ""));
   return Number.isFinite(v) ? (neg ? -v : v) : null;
 };
-/** 문서에서 현금흐름 조정 표(감가상각비 줄)를 찾아 [당기, 전기] */
-function parseDocDa(xml) {
+/**
+ * 문서에서 현금흐름 조정 표(감가상각비 줄)를 찾아 [당기, 전기]. mode "nature" 는 성격별 비용 주석 표(계속영업만 — 중단영업이 있는 해에
+ * 쓴다: 한화에어로스페이스 2024 현금흐름 조정은 인적분할 사업 상각까지 포함, 회사 주석 "전기 중 인적분할한 … 감가상각비가 포함")
+ */
+function parseDocDa(xml, mode = "cf") {
   for (const m of xml.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
     const html = m[0];
     const rows = [...html.matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
@@ -140,7 +143,9 @@ function parseDocDa(xml) {
     };
     const byKind = new Map();
     for (const r of rows) { const k = kindOf(r); if (k && !byKind.has(k)) byKind.set(k, r); }
-    if (!byKind.has("base")) continue;
+    // 성격별 비용 표의 감가·무형 합친 줄(삼성전기 "감가상각비(*) 및 무형자산상각비") — 나눌 수 없어 합계만
+    const combined = mode === "nature" ? rows.find((r) => /^감가상각비(및|와)무형자산상각비$/.test(label(r))) : null;
+    if (!byKind.has("base") && !combined) continue;
     const depRows = [...byKind.values()];
     const names = rows.map(label).join("|");
     const before = clean(xml.slice(Math.max(0, m.index - 1500), m.index));
@@ -150,13 +155,16 @@ function parseDocDa(xml) {
     // 비용 항목 줄(복리후생비 등)이 있으면 성격별 비용 표로 보고 거르되, 현금흐름 조정 표라는 근거가 뚜렷하면 그대로(한화오션 조정 표에
     // "복리후생비" 줄이 있다 — 2026-10-02)
     const strongCf = (/현금흐름/.test(head) && /창출|조정/.test(head)) || (/조정항목|법인세비용/.test(names) && /처분/.test(names));
-    if (!isCf || (!strongCf && /복리후생비|광고선전비|외주용역비|운반보관비/.test(names))) continue;
+    if (mode === "nature") {
+      if (!/성격별/.test(head) || isCf) continue;
+    } else if (!isCf || (!strongCf && /복리후생비|광고선전비|외주용역비|운반보관비/.test(names))) continue;
     const amo = rows.find((r) => /^무형자산상각비$/.test(label(r)));
     // 단위 — 표 안 첫 줄("(단위: 백만원)")이 우선, 없으면 표 바로 앞 문장
     const u = clean(html).match(UNIT_RE)?.[1] ?? [...before.matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
     if (!u) continue;
     // 숫자 칸만(주석 번호 칸 등 제외) — "-" 는 0
     const nums = (r) => r.slice(1).map((c) => (/^[-–]$/.test(c.trim()) ? 0 : numOf(c))).filter((v) => v != null);
+    if (!byKind.has("base")) return { unit: UNIT[u], dep: [], amo: [], combined: nums(combined).map((v) => v * UNIT[u]) };
     const cols = Math.min(...depRows.map((r) => nums(r).length));
     const dep = Array.from({ length: cols }, (_, i) => depRows.reduce((a, r) => a + nums(r)[i], 0));
     const part = (k) => (byKind.has(k) ? nums(byKind.get(k)).map((v) => v * UNIT[u]) : null);
@@ -192,7 +200,7 @@ async function docDa(rcpNo) {
   const want = docs.some((d) => d.kind === "con") ? "con" : "sep";
   for (const d of docs.filter((d) => d.kind === want)) {
     const t = parseDocDa(d.x);
-    if (t) return { ...t, sep: want === "sep" };
+    if (t) return { ...t, sep: want === "sep", nature: parseDocDa(d.x, "nature") };
   }
   return null;
 }
@@ -209,7 +217,9 @@ function fromReport(xml, year) {
     // 기본 감가상각 줄이 없으면 부분합(사용권자산만)이 되므로 비운다 — 원문 주석으로 채움(한화에어로스페이스 2024·2025)
     const d = d0 == null ? null : d0 + (rou ?? 0) + (inv ?? 0);
     const a = pick(xml, AMO_C, prefix);
-    if (d != null || a != null) out[y] = { depreciation: d, amortisation: a, xp: { base: d0, rou, inv } };
+    // 중단영업손익(연결) — 0 이 아니면 그 해 현금흐름 조정 상각에 중단영업분이 섞여 있다
+    const disc = pick(xml, ["ProfitLossFromDiscontinuedOperations"], prefix);
+    if (d != null || a != null) out[y] = { depreciation: d, amortisation: a, xp: { base: d0, rou, inv, disc } };
   }
   return out;
 }
@@ -326,6 +336,35 @@ async function daByYear(corp) {
         byYear[y] = { depreciation: t.dep[col], amortisation: byYear[y]?.amortisation ?? t.amo[col] ?? null, src: (y in byYear ? "xbrl+doc" : "doc") + (t.sep ? "(별도)" : "") };
     }
     if (byYear[y]?.depreciation == null) console.log(`    (${y} 감가상각비 — XBRL·원문 주석 모두 못 찾음)`);
+  }
+  // 중단영업이 있는 해 — 현금흐름 조정 상각에 중단영업분이 섞여 계속영업 영업이익과 정의가 어긋난다(과대). 같은 보고서·열의 성격별 비용
+  // 주석(계속영업) 값으로 바꾼다. 성격별 비용 표를 못 찾으면 그대로 두고 로그(과대 가능)
+  for (const y of Object.keys(byYear).map(Number)) {
+    const disc = xbrlParts[y]?.disc;
+    if (!disc || !srcOf[y]) continue;
+    const [ry, col] = srcOf[y];
+    const n = (await docOf(ry))?.nature;
+    // 합친 줄만 있으면 나눌 수 없다 — 현금흐름 조정 감가 + 무형 = 성격별 합계(단위 반올림 이내)면 중단영업분이 섞이지 않은 것(같은 기준
+    // 확인), 다르면 미해결
+    if (n?.combined?.[col] != null) {
+      const cf = (byYear[y].depreciation ?? 0) + (byYear[y].amortisation ?? 0);
+      if (Math.abs(cf - n.combined[col]) <= n.unit) {
+        byYear[y].src += "+계속영업확인";
+        console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} = 성격별 합계 ${n.combined[col]}: 같은 기준)`);
+      } else console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} ≠ 성격별 합계 ${n.combined[col]}: 미해결)`);
+      continue;
+    }
+    if (!n || n.dep[col] == null) {
+      console.log(`    (${y} 중단영업 ${disc} — 성격별 비용 주석 못 찾음, 현금흐름 조정 값 유지·중단영업분 포함 가능)`);
+      continue;
+    }
+    // 계속영업 값이 현금흐름 조정 값보다 크면 표를 잘못 잡은 것 — 바꾸지 않는다
+    if (byYear[y].depreciation != null && n.dep[col] > byYear[y].depreciation + n.unit) {
+      console.log(`    (${y} 성격별 비용 감가 ${n.dep[col]} > 현금흐름 조정 ${byYear[y].depreciation} — 바꾸지 않음)`);
+      continue;
+    }
+    console.log(`    (${y} 중단영업 ${disc} — 계속영업 감가 ${byYear[y].depreciation} → ${n.dep[col]}, 무형 ${byYear[y].amortisation} → ${n.amo[col] ?? byYear[y].amortisation})`);
+    byYear[y] = { depreciation: n.dep[col], amortisation: n.amo[col] ?? byYear[y].amortisation, src: `${byYear[y].src}+계속영업` };
   }
   return Object.keys(byYear).length ? byYear : null;
 }
