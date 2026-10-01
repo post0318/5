@@ -821,12 +821,19 @@ export const usEdgarAdapter: MarketAdapter = {
         loadClassAFactsMarked(cik, facts0),
       ]);
       const facts = cls.facts;
-      return buildUsTtm(facts, {
+      const ttm = buildUsTtm(facts, {
         sic,
         captive,
         classFacts: cls.classFacts,
         isFinancial: isFinancialCompany(facts, sic),
       });
+      // 불완전한 계산 표시(TTM 스냅샷 저장 제외 — db/ttm-snap.ts): SEC 원본 판독 경고, 매출(fin) 조립 실패, 금융 자회사 판별 실패
+      const degraded = [
+        ...(facts.fetchWarnings ?? []),
+        ...(facts.revenue == null ? ["매출(fin) 조립 실패"] : []),
+        ...(captive === "unknown" ? ["금융 자회사 판별 조회 실패"] : []),
+      ];
+      return degraded.length ? { ...ttm, degraded } : ttm;
     } catch (e) {
       return failedTtm(`TTM 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
     }
