@@ -659,6 +659,8 @@ export function buildUsBalance(
   for (const l of labels)
     if (debt[l] != null && opLease[l] != null) debtWithOpLease[l] = debt[l]! + opLease[l]!;
   items.push(nrow("총차입금 (운용리스 포함)", debtWithOpLease));
+  // 순차입금이 음수인 해가 있으면 뜻을 표 아래 주석으로(오너 결정 2026-10-01 (가) — 음수 그대로, FnGuide·블룸버그 관행)
+  if (labels.some((l) => (netDebt[l] ?? 0) < 0)) items.push({ ...nrow("※ 순차입금 음수 = 순현금(현금성자산이 총차입금보다 많음)", blank()), italic: true });
   // SEC 원본 조회 실패로 공란이 된 값(총차입금 등 — 태그 규칙으로 대체하지 않음, sec-unavailable.ts)
   const unavailable = unavailableNote(facts);
   if (unavailable) items.push({ ...nrow(`※ ${unavailable}`, blank()), italic: true });
