@@ -4045,6 +4045,20 @@ async function verifyUs(sym) {
     return null;
   };
   /** SEC 자산총계(결산일 ±7일, 최신 기준일 묶음) — 반올림 재태깅 제외 */
+  /** 자본 정정(검증기 독립 구현, 오너 결정 2026-10-01 (다) — WDC FY2022): 그 결산일 자산총계를 실은 연간 공시의 지배주주 자본과 나중 정기공시가 다시 실은 자본이
+   *  다르면(재무상태표 전체 재공시 없이 자본변동표 기초 잔액만 — 오류 정정) → { base, delta, filed }. 1억 단위 배수·자본 5% 초과 차이는 제외 */
+  const eqRestate = (date) => {
+    const af = new Set((G.Assets?.units?.USD ?? []).filter((e) => !e.start && /^(10-K|20-F|40-F)/.test(e.form ?? "") && dayDiff(e.end, date) <= 6).map((e) => e.filed));
+    const se = (G.StockholdersEquity?.units?.USD ?? []).filter((e) => !e.start && /^(10-[KQ]|20-F|40-F)/.test(e.form ?? "") && dayDiff(e.end, date) <= 6);
+    const col = se.filter((e) => af.has(e.filed));
+    if (!col.length) return null;
+    const last = (xs) => xs.reduce((a, b) => ((b.filed ?? "") > (a.filed ?? "") ? b : a));
+    const base = last(col), lt = last(se);
+    if (lt.val === base.val || (lt.filed ?? "") <= (base.filed ?? "")) return null;
+    const delta = lt.val - base.val;
+    if (Math.abs(delta) > Math.abs(base.val) * 0.05 || lt.val % 1e8 === 0) return null;
+    return { base: base.val, delta, filed: lt.filed };
+  };
   const assetsAt = (date) => {
     // 정기공시(10-K·10-Q·20-F)만 — 앱 재무상태표는 정기공시 판본으로 짠다(edgar-series ANNUAL_FORMS). 8-K 재작성본(GE 2021: 2023-04 8-K 가
     // LDTI 소급 적용으로 자산 198,874 → 205,378 백만, 자본 40,310 → 32,044)은 재무상태표 표시 기준이 아니다(자기자본만 PBR 분모에 재작성본 우선).
@@ -4482,8 +4496,9 @@ async function verifyUs(sym) {
     // 자산총계 = SEC Assets(결산일 시점 값, 최신 제출분)
     if (BS[c]?.assets != null) {
       // 최신 제출분 — 나중 공시의 반올림 재태깅(100만·1억·10억·100억 단위)은 제외(latestPrecise, 검증기 독립 판정)
-      const a = assetsAt(x.date);
-      add("A", "자산총계 앱 = SEC 자산총계", c, vsSource(BS[c].assets, a?.val ?? null, EXACT, retagNote(a)));
+      const a = assetsAt(x.date), rs = c !== "LTM" ? eqRestate(x.date) : null;
+      // 자본 정정 열 — 자산 = SEC 자산 + 정정 금액(정정된 재무상태표 전체는 공시되지 않아 부채 + 자본으로 산출)
+      add("A", "자산총계 앱 = SEC 자산총계", c, rs && a ? vsSource(BS[c].assets, a.val + rs.delta, EXACT, `SEC 자산 ${a.val} + 자본 정정 ${rs.delta}(${rs.filed}) — 오너 결정 (다)`) : vsSource(BS[c].assets, a?.val ?? null, EXACT, retagNote(a)));
     }
     if (BS[c]) {
       // 대차대조표 항등식 — 같은 공시의 두 합계라 정확 일치(예전 허용 0.05% 제거). 반올림 재태깅이 갈리는 날짜면 SEC 두 값을 메모에
@@ -5045,6 +5060,11 @@ async function verifyUs(sym) {
           const se = inst("StockholdersEquity", date, c !== "LTM"), mi = inst("MinorityInterest", date, c !== "LTM");
           const eAll = ea?.val ?? (se ? se.val + (mi?.val ?? 0) : null), tq = tempSec(date, c !== "LTM");
           if (le && eAll != null) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, le.val - eAll - (tq?.v ?? 0), EXACT, `Liabilities 미태깅 — 부채와 자본 ${le.val} − 비지배지분 포함 자본 ${eAll}(${ea ? "포함 자본 태그" : "지배주주 자본 + 비지배지분"})${tq ? ` − 임시자본 ${tq.v}` : ""}`)); continue; }
+        }
+        // 자본 정정 열(오너 결정 (다)) — 그 열 재무상태표 자본 + 나중 정기공시의 정정 금액
+        if (c !== "LTM" && (id === "bs:자본:자본 총계" || id === "bs:부채:부채 총계")) {
+          const rs = eqRestate(date);
+          if (rs && id === "bs:자본:자본 총계") { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, rs.base + rs.delta, EXACT, `자본 정정 — 재무상태표 공시 ${rs.base} + 정정 ${rs.delta}(${rs.filed} 정기공시)`)); continue; }
         }
         // 자본 총계 — 지배주주 자본 태그가 없으면 비지배지분 포함 자본 − 비지배지분(2026-10-01 CAT — StockholdersEquity 미태깅)
         if (id === "bs:자본:자본 총계" && !inst("StockholdersEquity", date, c !== "LTM")) {
@@ -5792,6 +5812,7 @@ async function verifyUs(sym) {
       const bb = foreign ? null : loadBbg(sym);
       if (bb) for (const [c, x] of Object.entries(H)) {
         const b = bb.at(x.date);
+        b.da ??= b.daCf; // 조정 화면에 감가상각 칸이 없으면 현금흐름표(표준화) 감가상각비
         const P = (item, ours, k) => { if (b[k]) put(item, ours, "블룸버그", b[k].v, b[k].unit); };
         P(`${c} 매출`, x.rev, "rev");
         P(`${c} 순이익`, x.ni, "ni");
@@ -6839,6 +6860,27 @@ async function verifyUs(sym) {
           const old = l.find((e) => (e.filed ?? "") < (last.filed ?? "") && e.val !== last.val && eqExp(e.val));
           if (old && extEq(last.val, r.ours)) return { ok: `${n} = SEC ${tag} 이전 판본 ${old.val}(${old.form} ${old.filed}) — 앱은 최신 판본 ${last.val}(${last.form} ${last.filed}, 재작성), 나중 공시 우선` };
         }
+      }
+      // 현금흐름 LTM 다른 산식(2026-10-01 MCD LTM 투자활동 SA −3,829 = 사업연도 −3,822 + 당기 누적 −1,648 − 전년 동기 −1,641): 앱은 분기 4개 합(−3,826) —
+      //    회사가 분기·누적을 따로 반올림해 두 산식이 백만 단위로 갈린다. 외부 = SEC 사업연도 + 10-Q 누적 − 전년 동기 누적이 정확 성립하면 ②
+      if (col === "LTM" && /^현금흐름표 /.test(metric) && H.LTM?.date) {
+        const T = { "현금흐름표 영업활동 현금흐름": ["NetCashProvidedByUsedInOperatingActivities", 1], "현금흐름표 투자활동 현금흐름": ["NetCashProvidedByUsedInInvestingActivities", 1],
+          "현금흐름표 재무활동 현금흐름": ["NetCashProvidedByUsedInFinancingActivities", 1], "현금흐름표 유형자산 취득(CAPEX)": ["PaymentsToAcquirePropertyPlantAndEquipment", -1],
+          "현금흐름표 배당금 지급": ["PaymentsOfDividendsCommonStock", -1], "현금흐름표 자기주식 취득": ["PaymentsForRepurchaseOfCommonStock", -1] }[metric];
+        const l = T ? (G[T[0]]?.units?.USD ?? []).filter((e) => e.start && /^10-[KQ]/.test(e.form ?? "")) : [];
+        const dur = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
+        const cur = latestPrecise(l.filter((e) => dayDiff(e.end, H.LTM.date) <= 7 && dur(e) >= 80 && dur(e) <= 300 && /^10-Q/.test(e.form)));
+        const fy = cur ? latestPrecise(l.filter((e) => dur(e) >= 300 && dayDiff(e.start, cur.start) > 300 && dayDiff(e.start, cur.start) < 430 && dayDiff(e.end, cur.start) <= 7)) : null;
+        const prior = cur && fy ? latestPrecise(l.filter((e) => dayDiff(e.start, fy.start) <= 7 && Math.abs(dur(e) - dur(cur)) <= 7)) : null;
+        if (cur && fy && prior) {
+          const exp = T[1] * (fy.val + cur.val - prior.val);
+          if (!extEq(exp, r.ours) && eqExp(exp)) return { ok: `${n} LTM = SEC 사업연도 ${fy.val} + 당기 누적 ${cur.val} − 전년 동기 ${prior.val} = ${exp}${T[1] < 0 ? "(유출 표기)" : ""} — 앱은 분기 4개 합 ${r.ours}(회사가 분기·누적을 따로 반올림)` };
+        }
+      }
+      // 자본 정정 전 값(오너 결정 (다), WDC FY2022): 외부 = 그 열 재무상태표 원 공시 자본(정정 전) — 앱은 나중 정기공시의 정정 값
+      if (metric === "재무상태표 자본 총계" && col !== "LTM" && H[col]?.date) {
+        const rs = eqRestate(H[col].date);
+        if (rs && extEq(r.ours, rs.base + rs.delta) && eqExp(rs.base)) return { ok: `${n} = 정정 전 원 공시 자본 ${rs.base} — 앱은 ${rs.filed} 정기공시의 정정 값 ${rs.base + rs.delta}(오류 정정 +${rs.delta}, 나중 공시 우선)` };
       }
       // 블룸버그 자체 불일치(2026-10-01 GEV 2025 세전이익) — 블룸버그 분기 화면의 그 사업연도 네 분기 합이 앱(= SEC 연간, A층)과 정확히 같은데 블룸버그 연간 열만
       //    다르다 → 같은 기간에 대한 블룸버그 자신의 두 값이 서로 다름. 외부 단독 이탈

@@ -1,5 +1,6 @@
 import "server-only";
 import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
+import { equityRestatement } from "./edgar-balance";
 import { unavailableNote } from "./sec-unavailable";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
@@ -305,7 +306,9 @@ export function buildUsAnalysis(
     note(o, LTM, o[LTM] == null ? c.reason : (c.note ?? null));
     return o;
   })();
-  const ocf = flow(["NetCashProvidedByUsedInOperatingActivities"]);
+  // 현금흐름표 화면과 같은 개념 목록(계속사업 태그만 쓰는 해 — MRK 2021, 2026-10-01)
+  const OCF_C = ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"];
+  const ocf = flow(OCF_C);
   const CAPEX_C = [
     "PaymentsToAcquirePropertyPlantAndEquipment",
     "PaymentsToAcquireProductiveAssets",
@@ -329,7 +332,7 @@ export function buildUsAnalysis(
   })();
   const niFull = niByYear;
   const daFull = daByYear;
-  const ocfFull = fullAnnual(["NetCashProvidedByUsedInOperatingActivities"]);
+  const ocfFull = fullAnnual(OCF_C);
   const capexFull = fullAnnual(CAPEX_C);
   // 감가상각비 구성요소가 없는 해는 공란(0 으로 보지 않음) — 표시 EBITDA 와 같은 원칙
   const ebitdaFull = new Map<number, number>();
@@ -407,6 +410,15 @@ export function buildUsAnalysis(
 
   const assets = stock(["Assets"]);
   const liabAndEquity = stock(["LiabilitiesAndStockholdersEquity"]);
+  // 자본 정정 열(재무상태표 화면과 같은 규칙, edgar-balance.ts equityRestatement — WDC FY2022): 자본은 나중 공시 값(parentEquityOf)이므로 자산·부채와 자본 총계도
+  // 정정 금액만큼 올린다(정정 대상이 자산 쪽 — 지분법 투자). ROA·회전율·부채 파생이 화면과 같은 값을 쓰게
+  for (const p of periods) {
+    if (p.label === LTM || !p.endDate) continue;
+    const r = equityRestatement(facts, p.endDate);
+    if (!r) continue;
+    if (assets[p.label] != null) assets[p.label] = assets[p.label]! + r.delta;
+    if (liabAndEquity[p.label] != null) liabAndEquity[p.label] = liabAndEquity[p.label]! + r.delta;
+  }
   // 자기자본 — edgar-pershare.ts 단일 기준(재작성본 우선). 예전엔 연간 보고서 양식만
   // 봐서 8-K 재작성본(GE 2021 LDTI 소급)을 놓쳐 PBR 이 하이라이트와 달랐다.
   const equity = (() => {
@@ -474,7 +486,8 @@ export function buildUsAnalysis(
   // 현금·단기투자 — 단기투자는 본표 유동자산 단기투자 줄 합(SYN_STI_FACE, 재무상태표 화면·EV 와 같은 값, 2026-10-01 — 태그를 모두 더하던 방식은
   // 화면과 달랐다: CAT·INTC·KO·DELL 현금비율). 본표 판독이 없는 기간만 종전 태그 합
   const cashCur = (() => {
-    const c0 = stock(["CashAndCashEquivalentsAtCarryingValue"]);
+    // 재무상태표 화면 현금 줄과 같은 개념 목록(MDLZ 2023~ 중단사업 현금 포함 태그, 2026-10-01)
+    const c0 = stock(["CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations"]);
     // 판독값이 없는 기간 = 현금 + 재무상태표 화면과 같은 단기투자 태그 목록(STI_TAGS, 앞 태그 우선 — 예전 CASH_CUR 태그 전부 합은 화면과 달랐다: DELL 2022)
     const stiTag = stock(STI_TAGS);
     const old = blank();
@@ -567,6 +580,13 @@ export function buildUsAnalysis(
     for (const c of concepts)
       for (const [y, v] of instantByYear(entriesOf(facts, c)))
         if (!full.has(y)) full.set(y, v);
+    // 자산 평균 — 자본 정정 연도는 정정 금액 반영(equityRestatement, 재무상태표 화면과 같은 값)
+    if (concepts.includes("Assets"))
+      for (const [y, v] of full) {
+        const end = ends.get(y);
+        const r = end ? equityRestatement(facts, end) : null;
+        if (r) full.set(y, v + r.delta);
+      }
     const o = blank();
     // 기초 잔액이 없으면 기말 잔액으로 대신하지 않는다(평균이 아님 — 그림자 채우기 금지, 2026-09-27)
     for (const y of years) {

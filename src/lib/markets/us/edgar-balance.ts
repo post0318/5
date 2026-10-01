@@ -221,6 +221,28 @@ const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
 ];
 
 
+/**
+ * 자본 정정 감지(오너 결정 2026-10-01 (다) — WDC FY2022) — 그 결산일 재무상태표(자산총계를 실은 연간 공시)의 지배주주 자본(base)과 나중 공시가 다시 실은
+ * 자본이 다르고, 그 나중 공시가 그 날짜 재무상태표 전체를 다시 싣지 않은 경우(자본변동표 기초 잔액만 — WDC 2024-02 10-Q 지분법 투자 오류 정정 +102).
+ * 반올림 재게시(1억 단위 배수)·큰 차이(자본의 5% 초과)는 정정으로 보지 않는다. 재무상태표 화면·재무분석이 같이 쓴다
+ */
+export function equityRestatement(facts: CompanyFacts, end: string): { base: number; delta: number; filed: string } | null {
+  const near = (e: { end: string }) => Math.abs(Date.parse(e.end) - Date.parse(end)) <= 6 * 864e5;
+  const assetsFiled = new Set(firstConcept(facts, ["Assets"]).filter((e) => !e.start && near(e) && ANNUAL_FORMS.includes(e.form) && e.filed).map((e) => e.filed!));
+  // 정기공시만 — 8-K 재작성본(GE 2021 LDTI 소급)은 재무상태표 표시 기준이 아니다(PBR 분모만 재작성본 우선, edgar-pershare)
+  const se = firstConcept(facts, ["StockholdersEquity"]).filter((e) => !e.start && near(e) && /^(10-[KQ]|20-F|40-F)/.test(e.form ?? ""));
+  const col = se.filter((e) => e.filed && assetsFiled.has(e.filed));
+  if (!col.length || !se.length) return null;
+  const pick = (xs: typeof se) => xs.reduce((a, b) => ((b.filed ?? "") > (a.filed ?? "") ? b : a));
+  const base = pick(col), latest = pick(se);
+  if (latest.val === base.val || (latest.filed ?? "") <= (base.filed ?? "")) return null;
+  const delta = latest.val - base.val;
+  if (Math.abs(delta) > Math.abs(base.val) * 0.05 || latest.val % 1e8 === 0) return null;
+  // 정정을 처음 실은 공시(주석 표시용 — WDC 2024-02-12 10-Q)
+  const first = se.filter((e) => e.val === latest.val && (e.filed ?? "") > (base.filed ?? "")).reduce((a, b) => ((b.filed ?? "") < (a.filed ?? "") ? b : a));
+  return { base: base.val, delta, filed: `${first.filed ?? ""} ${first.form}` };
+}
+
 export function buildUsBalance(
   facts: CompanyFacts,
   mode: "annual" | "quarter" = "annual",
@@ -345,6 +367,26 @@ export function buildUsBalance(
     const eqForL = eqAllRaw[l] ?? (eqTotal[l] != null ? eqTotal[l]! + (miRaw[l] ?? 0) : null);
     lTotal[l] = lRaw[l] ?? (be != null && eqForL != null ? be - eqForL - (tempEq[l] ?? 0) : null);
   }
+  // 자본 정정(오너 결정 2026-10-01 (다) — WDC FY2022): 나중 공시가 그 결산일 자본만 다시 실었고(자본변동표 기초 잔액, 오류 정정) 그 날짜 재무상태표 전체는
+  // 다시 공시되지 않은 경우. 자본은 나중 공시 값(나중 공시 우선), 자산 총계·부채와 자본 총계는 부채 + 자본으로 산출해 항등식을 지킨다. 정정 금액은
+  // 비유동자산 잔여(기타 비유동자산)에 들어간다 — WDC 정정 대상이 지분법 투자(비유동자산)라 그 위치가 맞다. 연간 열만(LTM 은 최신 공시 그대로)
+  const restated = new Map<string, { delta: number; filed: string }>();
+  {
+    for (const p of periods) {
+      const l = p.label;
+      if (l === LTM || seOnly[l] == null || !p.endDate) continue;
+      const r = equityRestatement(facts, p.endDate);
+      if (!r || r.base !== seOnly[l]) continue;
+      const delta = r.delta;
+      restated.set(l, { delta, filed: r.filed });
+      seOnly[l] = r.base + delta;
+      const latest = { val: r.base + delta };
+      eqTotal[l] = latest.val;
+      if (eqAllRaw[l] != null) eqAllRaw[l] = eqAllRaw[l]! + delta;
+      if (aTotal[l] != null) aTotal[l] = aTotal[l]! + delta;
+      if (leTotal[l] != null) leTotal[l] = leTotal[l]! + delta;
+    }
+  }
   const totalOf: Record<string, Record<string, number | null>> = {
     cur: curTotal,
     lcur: lcurTotal,
@@ -447,6 +489,13 @@ export function buildUsBalance(
         values = blank();
         for (const l of labels)
           values[l] = direct?.[l] ?? derived?.[l] ?? plug?.[l] ?? null;
+        // 자본 정정 열 — 자산·자본·부채와 자본 총계는 조정 값(위 restated)
+        for (const [l] of restated) {
+          if (line.label === "자산 총계" && aTotal[l] != null) values[l] = aTotal[l];
+          else if (line.label === "자본 총계") values[l] = eqTotal[l];
+          else if (line.label === "부채와 자본 총계") values[l] = leTotal[l] ?? aTotal[l];
+          else if (line.label === "비유동자산 총계" && totalOf.noncurTotal[l] != null) values[l] = totalOf.noncurTotal[l];
+        }
       } else if (line.plugOf) {
         // (구간 총계 − 직전 소계 이후 ~ 이 라인 이전의 depth1 item 합)
         const tot = totalOf[line.plugOf.replace(/Total$/, "")];
@@ -490,6 +539,11 @@ export function buildUsBalance(
       // 다른 정의 값을 별도 줄로 옮긴 칸 — 본 줄은 공란 + 사유
       const fbv = fbRows[line.label];
       if (fbv) for (const l of labels) if (fbv[l] != null && values[l] == null) notes[l] = `태그 없음 — 아래 「${line.fallbackLabel}」 줄 참조(다른 정의)`;
+      for (const [l, r] of restated) {
+        if (line.label === "자본 총계") notes[l] = `자본 정정 반영(+${r.delta / 1e6}백만, ${r.filed} 공시 — 오류 정정) · 나중 공시 우선`;
+        else if (["자산 총계", "부채와 자본 총계", "비유동자산 총계"].includes(line.label) || line.plugOf === "noncur")
+          notes[l] = `자본 정정(+${r.delta / 1e6}백만)을 반영해 부채 + 자본으로 산출 — 정정된 재무상태표 전체는 공시되지 않음`;
+      }
       const ltmNote = Object.keys(notes).length ? { cellNotes: notes } : {};
       items.push({
         accountName: line.label,
