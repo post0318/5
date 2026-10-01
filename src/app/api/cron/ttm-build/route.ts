@@ -31,6 +31,7 @@ function authorized(req: Request): boolean {
 }
 
 const SYMBOL_RE = /^[A-Z0-9.-]{1,12}$/;
+const PER_SYMBOL_MS = 100_000;
 
 export async function GET() {
   return ok({ version: ttmSnapVersion() }, { headers: { "Cache-Control": "no-store" } });
@@ -65,7 +66,16 @@ export async function POST(req: Request) {
         continue;
       }
       const t0 = Date.now();
-      const ttm: TtmFlows | null = adapter.getTtm ? await adapter.getTtm(sym).catch((e) => ({ periodLabel: "", error: String(e) }) as TtmFlows) : null;
+      // 종목당 시간 제한 — 한 종목이 오래 걸려 호출 전체가 300초를 넘기지 않게(실측: 재무 저장본 없는 종목 46초+, 504). 제한을 넘긴 계산은
+      // 서버에서 계속 돌아 끝나면 화면 조회 때 다시 계산·저장된다
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<TtmFlows>((resolve) => {
+        timer = setTimeout(() => resolve({ periodLabel: "", error: `시간 초과(${PER_SYMBOL_MS / 1000}초)`, netIncome: null, revenue: null, opIncome: null, eps: null }), PER_SYMBOL_MS);
+      });
+      const ttm: TtmFlows | null = adapter.getTtm
+        ? await Promise.race([adapter.getTtm(sym).catch((e) => ({ periodLabel: "", error: String(e) }) as TtmFlows), timeout])
+        : null;
+      clearTimeout(timer);
       if (ttm && isStorableTtm(ttm)) {
         await writeTtmSnap("us", sym, ttm);
         built.push({ symbol: sym, ms: Date.now() - t0 });

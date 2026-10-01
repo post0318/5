@@ -30,7 +30,7 @@ import { usSharesHint } from "@/lib/markets/us/shares-hint";
 import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
 import { dartAdrAnalysis, dartAdrDetail, dartAdrOf } from "@/lib/markets/us/dart-adr";
 
-export const maxDuration = 60;
+export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
 /**
  * 이 라우트 응답은 캐시하지 않는다(오너 지적 2026-09-21 — "재무제표 분기
