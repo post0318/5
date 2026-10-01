@@ -3,6 +3,16 @@ import type { FinancialStatement, FinancialLineItem } from "../types";
 import { type KrFacts, type KrDaInput, daAndAmortSeries, seriesOf, sumOf } from "./dart-facts";
 import { KR_EPS_SUM_NOTE, krEpsSeries } from "./dart-ev";
 
+/** 손익계산서 화면과 같은 계정 선택의 매출·영업이익·당기순이익(기간 라벨별) — LTM = 최근 4개 분기 열 합(opendart.ts)이 쓴다 */
+export function krIsFlows(facts: KrFacts): { revenue: Record<string, number | null>; opIncome: Record<string, number | null>; netIncome: Record<string, number | null> } {
+  const IS = ["IS", "CIS"];
+  return {
+    revenue: seriesOf(facts, C.revenue.ids, C.revenue.names, IS),
+    opIncome: seriesOf(facts, C.opIncome.ids, C.opIncome.names, IS),
+    netIncome: seriesOf(facts, C.netIncome.ids, C.netIncome.names, IS),
+  };
+}
+
 /**
  * 한국 상세 손익계산서 — DART `fnlttSinglAcntAll` 정규화 재분류.
  * `edgar-income.ts` 의 행 구조·라벨을 그대로 따른다 (총괄 요약·재무분석 칩이 라벨에 의존).

@@ -8602,13 +8602,15 @@ async function verifyKr(sym) {
     hl: `${u}/highlights`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm`,
     cs: `${u}/consensus`, bs: `${u}/financials?view=bs&period=annual`, is: `${u}/financials?view=is&period=annual`,
     cf: `${u}/financials?view=cf&period=annual`,
+    isq: `${u}/financials?view=is&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter`, cfq: `${u}/financials?view=cf&period=quarter`,
+    sm: `${u}/financials?view=summary&period=annual`, smq: `${u}/financials?view=summary&period=quarter`,
   })) {
     try { fetched[k] = await getJson(p); } catch (e) { fetched[k] = null; add("응답", `API 응답 ${k}`, "-", { status: FAIL, note: String(e).slice(0, 120) }); }
   }
   let row = null;
   try { row = await getJson(`/api/cron/verify-row?market=kr&symbol=${encodeURIComponent(sym)}`, 240_000, AUTH); }
   catch (e) { add("응답", "API 응답 verify-row", "-", { status: FAIL, note: String(e).slice(0, 120) }); }
-  const { hl, an, tt, cs, bs, is, cf } = fetched;
+  const { hl, an, tt, cs, bs, is, cf, isq, bsq, cfq, sm, smq } = fetched;
   const h = hl?.highlights;
   if (!h) return { sym, error: "하이라이트 없음", checks, review: [] };
   const fyCols = h.columns.filter((c) => c.kind === "fy");
@@ -8777,6 +8779,45 @@ async function verifyKr(sym) {
       }
     }
   }
+  // ── C층 화면 간 일치(한국, 2026-10-02 — 미국과 같은 검사): 분기 열 · 총괄 = 각 재무제표(연간·분기) · 하이라이트 LTM = 최근 4개 분기 합(손익)·
+  //    최근 분기 재무상태표(총차입금·비지배지분)
+  if (isq && bsq && cfq && sm && smq) {
+    const itemsK = (st) => (st?.sections ?? []).flatMap((x) => x.items ?? []);
+    const rid = (st) => Object.fromEntries(itemsK(st).map((it) => [it.accountId, it.values ?? {}]));
+    const rnm = (st) => { const o = {}; for (const it of itemsK(st)) { const k0 = String(it.accountName ?? "").trim(); if (!(k0 in o)) o[k0] = it.values ?? {}; } return o; };
+    const qcols = (st) => (st?.periods ?? []).map((p0) => `${p0.label}@${p0.endDate}`).join(",");
+    const qI = qcols(isq);
+    for (const [nm, st] of [["재무상태표", bsq], ["현금흐름표", cfq], ["총괄", smq]])
+      add("C", `분기 화면 열 손익계산서 = ${nm}`, "-", qI === qcols(st) ? { status: PASS, note: qI } : { status: FAIL, note: `${qI} ≠ ${qcols(st)}` });
+    const eqv = (nm, col, a, b0) => { if (a == null && b0 == null) return; add("C", nm, col, same(a, b0)); };
+    for (const [S0, I0, B0, C0, per] of [[rid(sm), rnm(is), rid(bs), rid(cf), is?.periods], [rid(smq), rnm(isq), rid(bsq), rid(cfq), isq?.periods]]) for (const p0 of per ?? []) {
+      const k0 = p0.label, c0 = k0.replace(/^FY(\d{4})$/, "$1Y");
+      eqv("총괄 매출 = 손익계산서", c0, S0["sum:is:rev"]?.[k0], I0["매출액"]?.[k0]);
+      eqv("총괄 영업이익 = 손익계산서", c0, S0["sum:is:op"]?.[k0], I0["영업이익"]?.[k0]);
+      eqv("총괄 순이익 = 손익계산서", c0, S0["sum:is:ni"]?.[k0], I0["당기순이익"]?.[k0]);
+      eqv("총괄 자산 = 재무상태표", c0, S0["sum:bs:자산"]?.[k0], B0["bs:자산:자산 총계"]?.[k0]);
+      eqv("총괄 부채 = 재무상태표", c0, S0["sum:bs:부채"]?.[k0], B0["bs:부채:부채 총계"]?.[k0]);
+      eqv("총괄 자본 = 재무상태표", c0, S0["sum:bs:자본"]?.[k0], B0["bs:자본:자본 총계"]?.[k0]);
+      eqv("총괄 영업현금흐름 = 현금흐름표", c0, S0["sum:cf:영업활동으로 인한 현금흐름"]?.[k0], C0["cf:total:영업활동 현금흐름"]?.[k0]);
+      eqv("총괄 투자현금흐름 = 현금흐름표", c0, S0["sum:cf:투자활동으로 인한 현금흐름"]?.[k0], C0["cf:total:투자활동 현금흐름"]?.[k0]);
+      eqv("총괄 재무현금흐름 = 현금흐름표", c0, S0["sum:cf:재무활동으로 인한 현금흐름"]?.[k0], C0["cf:total:재무활동 현금흐름"]?.[k0]);
+    }
+    // 하이라이트 LTM — 손익 TTM 기준 분기(ttm.periodLabel "… + 2026 반기 − 2025 반기")가 분기 화면 마지막 열과 같을 때만
+    const LH = H.LTM, IQn = rnm(isq), BQi = rid(bsq);
+    const ql = (isq.periods ?? []).map((p0) => p0.label), l4 = ql.slice(-4), lq = ql.at(-1);
+    const fq = (tt?.ttm?.periodLabel ?? "").match(/\+\s*(\d{4})\s*(1분기|반기|3분기)/);
+    const want = fq ? `${fq[1]} Q${{ "1분기": 1, 반기: 2, "3분기": 3 }[fq[2]]}` : null;
+    if (LH && l4.length === 4 && want && lq === want) {
+      const s4 = (nm) => { const xs = l4.map((k0) => IQn[nm]?.[k0]); return xs.every((v0) => v0 != null) ? xs.reduce((a0, b1) => a0 + b1, 0) : null; };
+      const hRow = (key) => { const i0 = h.columns.findIndex((c) => c.kind === "ltm"); return h.rows.find((r1) => r1.key === key)?.values[i0] ?? null; };
+      eqv("하이라이트 LTM 매출 = 분기 최근 4개 합", "LTM", hRow("revenue"), s4("매출액"));
+      eqv("하이라이트 LTM 영업이익 = 분기 최근 4개 합", "LTM", hRow("opinc"), s4("영업이익"));
+      eqv("하이라이트 LTM 순이익 = 분기 최근 4개 합", "LTM", LH.ni, s4("당기순이익"));
+      eqv("하이라이트 LTM 총차입금 = 최근 분기 재무상태표", "LTM", LH.debt, BQi["bs:note:총차입금"]?.[lq]);
+      eqv("하이라이트 LTM 비지배지분 = 최근 분기 재무상태표", "LTM", LH.nci, BQi["bs:note:비지배지분"]?.[lq]);
+    } else if (LH) add("C", "하이라이트 LTM = 분기 화면", "LTM", { status: NA, note: `손익 TTM 기준 분기 ${want ?? "없음"} · 분기 화면 마지막 열 ${lq ?? "없음"}` });
+  }
+
   const L = H.LTM;
   if (row && L) {
     const m = row.overview?.multiples ?? null, uv = row.universe ?? null;
