@@ -212,6 +212,7 @@ function parseNatureDa(xml) {
     const isWide = nums(key).length > 2;
     const take = (r) => (r ? (isWide ? [nums(r).at(-1)] : nums(r).slice(0, 2)).map((v) => v * UNIT[u]) : null);
     const one = {
+      wide: isWide,
       unit: UNIT[u],
       combined: take(by.comb),
       base: take(by.base),
@@ -227,7 +228,7 @@ function parseNatureDa(xml) {
   // 여러 열 형식: 당기 표 + 전기 표를 [당기, 전기] 로
   const [c, p] = wide;
   const cat = (k) => (c[k] || p?.[k] ? [c[k]?.[0] ?? null, p?.[k]?.[0] ?? null] : null);
-  return { unit: c.unit, combined: cat("combined"), base: cat("base"), inv: cat("inv"), rou: cat("rou"), amo: cat("amo") };
+  return { wide: true, unit: c.unit, combined: cat("combined"), base: cat("base"), inv: cat("inv"), rou: cat("rou"), amo: cat("amo") };
 }
 /** 성격별 결과 → 감가(기본+투자부동산+사용권)·무형 열 값 */
 function natureCols(n) {
@@ -324,6 +325,7 @@ async function daByYear(corp) {
   const srcOf = {};
   // XBRL 감가상각 구성(기본·사용권자산·투자부동산) — 원문에서 빠진 줄을 보완할 때
   const xbrlParts = {};
+  const xbrlAll = {};
   // 보고서 연도별 원문(정정본에 감사보고서가 없으면 원본) — 한 번만 받는다
   const docCache = {};
   const docOf = async (ry) => {
@@ -358,6 +360,8 @@ async function daByYear(corp) {
         }
         for (const [k, { xp, ...v }] of Object.entries(part))
           if (!(k in byYear)) { byYear[k] = { ...v, src }; srcOf[k] = [y, Number(k) === y ? 0 : 1]; xbrlParts[k] = xp; }
+        // 보고서별 XBRL 값(재작성 전 판본 포함) — 원문 표 확인은 같은 보고서·같은 열과 대조
+        if (y in part) xbrlAll[y] = Object.fromEntries(Object.entries(part).map(([k, { xp, ...v }]) => [k, v]));
         if (y in part) break;
       } catch (e) {
         console.log(`    (${y} ${rcp} XBRL 실패: ${e.message})`);
@@ -397,32 +401,6 @@ async function daByYear(corp) {
       console.log(`    점검 ${y}(${ry} 보고서 ${col ? "전기" : "당기"}): XBRL 감가 ${x.depreciation}/무형 ${x.amortisation} · 원문 ${d ? `${d.dep[col]}/${d.amo[col] ?? null}` : "없음"} ${ok ? "일치" : "불일치"}`);
     }
   }
-  // XBRL 로 못 채운 해(감가상각비 없음 포함) — 그 해(없으면 이듬해 보고서의 전기 열) 사업보고서 원문 주석. 원문 파서는 회사마다 표 구성이
-  // 달라 다른 표를 잡거나(SK스퀘어·LS — 종속회사 요약 표) 정의가 다를 수 있어(HD현대일렉트릭 원문 감가상각비 > XBRL), 그 회사의 XBRL 해 중
-  // 가장 오래된 해에서 원문 값이 XBRL 과 같을 때(단위 반올림 이내)만 쓴다 — 전 유니버스 점검(2026-10-02): 114건 정확 일치, 어긋난 회사는 채우지 않음
-  const gaps = [];
-  for (let y = latest; y >= latest - 5; y -= 1) if (!(y in byYear) || byYear[y].depreciation == null) gaps.push(y);
-  let trusted = false;
-  if (gaps.length) {
-    const yv = Object.keys(byYear).map(Number).filter((y) => byYear[y].depreciation != null).sort((a, b) => a - b)[0];
-    const [ry, col] = yv ? srcOf[yv] : [null, 0];
-    const d = yv ? await docOf(ry) : null;
-    trusted = !!d && docAgrees(d, col, byYear[yv]);
-    if (!trusted) console.log(`    (원문 파서 검증 실패 — ${yv ?? "XBRL 해 없음"} XBRL 감가 ${yv ? byYear[yv].depreciation : "-"} vs 원문(${ry} 보고서) ${d?.dep[col] ?? "없음"}: 빈 해 ${gaps.join("·")} 채우지 않음)`);
-  }
-  for (const y of trusted ? gaps : []) {
-    // 이듬해 보고서 전기 열(재작성본 — XBRL 과 같은 "최신 보고서 우선") → 그 해 보고서 당기 열
-    for (const [ry, col] of [[y + 1, 1], [y, 0]]) {
-      if (byYear[y]?.depreciation != null || ry > latest) continue;
-      rcps[ry] ??= await annualRcps(corp, ry);
-      const t = await docOf(ry);
-      if (t && t.dep[col] != null)
-        byYear[y] = { depreciation: t.dep[col], amortisation: byYear[y]?.amortisation ?? t.amo[col] ?? null, src: (y in byYear ? "xbrl+doc" : "doc") + (t.sep ? "(별도)" : "") };
-    }
-    if (byYear[y]?.depreciation == null) console.log(`    (${y} 감가상각비 — XBRL·원문 주석 모두 못 찾음)`);
-  }
-  // 중단영업이 있는 해 — 현금흐름 조정 상각에 중단영업분이 섞여 계속영업 영업이익과 정의가 어긋난다(과대). 같은 보고서·열의 성격별 비용
-  // 주석(계속영업) 값으로 바꾼다. 성격별 비용 표를 못 찾으면 그대로 두고 로그(과대 가능)
   // XBRL 에 무형자산상각비 조정 태그가 없는 해(삼성SDI 2022 — 성격별 합계와의 차이 55,233 이 정확히 원문 무형자산상각비) — 원문 기본
   // 감가상각 줄이 XBRL 기본 줄과 같을 때(같은 표) 원문 무형자산상각비로 채운다
   for (const y of Object.keys(byYear).map(Number)) {
@@ -434,54 +412,120 @@ async function daByYear(corp) {
     byYear[y] = { ...byYear[y], amortisation: a, src: `${byYear[y].src}+원문무형` };
     console.log(`    (${y} XBRL 무형자산상각비 없음 — 원문 ${a})`);
   }
-  // 같은 기준 대조는 XBRL 이 있는 모든 해(오너 원칙 — 투자부동산 상각이 현금흐름 조정 표에서 빠지는 일은 중단영업과 무관, LS). 중단영업이
-  // 없는 해는 일치 확인·투자부동산 보완만 하고, 그 밖의 차이는 로그만
-  for (const y of Object.keys(byYear).map(Number)) {
+
+  // ── 원문은 보고서 단위로 확인(2026-10-02): 회사의 XBRL 해 하나만 대조하면 형식이 다른 옛 보고서에서 엉뚱한 표를 잡아도 걸러지지 않았다
+  //    (LS 2020·2021 현금흐름 838억 — 실제 규모의 1/4). 보고서는 ① 같은 보고서 XBRL 의 같은 열(감가 + 무형 합계 또는 무형상각)과 단위
+  //    이하로 같거나(재작성과 무관), ② XBRL 이 없는 옛 보고서는 이미 확인된 다른 보고서의 같은 해 값과 같을 때 믿는다. 확인이 퍼지도록 바뀌는
+  //    게 없을 때까지 반복. 확인 못 한 해는 빈칸 + 로그(틀린 값보다 빈칸).
+  const years = [];
+  for (let y = latest; y >= latest - 5; y -= 1) years.push(y);
+  const near = (a, b, u) => a != null && b != null && Math.abs(a - b) <= u;
+  const tot = (dep, amo) => (dep == null ? null : dep + (amo ?? 0));
+  const docs = {};
+  for (const ry of years) {
+    rcps[ry] ??= await annualRcps(corp, ry);
+    docs[ry] = await docOf(ry);
+  }
+  // 한 표(원문 현금흐름 또는 성격별)의 보고서별 열 합계 → 확인된 보고서 집합
+  const confirm = (colTot, sameReport, unitOf = (ry) => docs[ry].unit) => {
+    const ok = new Set();
+    const vals = {}; // 해 → 확인된 값들
+    for (let pass = 0; pass < 8; pass += 1) {
+      let changed = false;
+      for (const ry of years) {
+        if (ok.has(ry) || !docs[ry]) continue;
+        const u = unitOf(ry);
+        const t = [colTot(ry, 0), colTot(ry, 1)];
+        const hit = [0, 1].some((col) => sameReport(ry, col, t[col], u) || (vals[ry - col] ?? []).some((v) => near(t[col], v, u)));
+        if (!hit) continue;
+        ok.add(ry);
+        changed = true;
+        for (const col of [0, 1]) if (t[col] != null) (vals[ry - col] ??= []).push(t[col]);
+      }
+      if (!changed) break;
+    }
+    return ok;
+  };
+  const xTot = (ry, y) => (xbrlAll[ry]?.[y] ? tot(xbrlAll[ry][y].depreciation, xbrlAll[ry][y].amortisation) : null);
+  const cfTot = (ry, col) => tot(docs[ry]?.dep[col], docs[ry]?.amo[col]);
+  const cfOk = confirm(cfTot, (ry, col, t, u) => {
+    const x = xbrlAll[ry]?.[ry - col];
+    // 같은 보고서 XBRL: 합계 일치, 또는 무형상각 일치(XBRL 감가 줄이 부분합·없을 때 — 한화에어로스페이스 2024)
+    return near(t, xTot(ry, ry - col), u) || (x?.amortisation > 0 && near(docs[ry].amo[col], x.amortisation, u));
+  });
+  if (process.env.KRDA_DEBUG)
+    for (const ry of years)
+      console.log(`    [debug] ${ry} 보고서 원문 현금흐름 ${cfTot(ry, 0)}/${cfTot(ry, 1)} 무형 ${docs[ry]?.amo[0]}/${docs[ry]?.amo[1]} · XBRL ${JSON.stringify(xbrlAll[ry] ?? null)} · 확인 ${cfOk.has(ry)}`);
+  // 확인된 원문으로 빈 해 채우기 — 최신 보고서 우선(이듬해 보고서 전기 열 → 그 해 보고서 당기 열)
+  for (const y of years) {
+    if (byYear[y]?.depreciation != null) continue;
+    for (const [ry, col] of [[y + 1, 1], [y, 0]]) {
+      const d = docs[ry];
+      if (!cfOk.has(ry) || d?.dep[col] == null) continue;
+      byYear[y] = { depreciation: d.dep[col], amortisation: byYear[y]?.amortisation ?? d.amo[col] ?? null, src: (y in byYear ? "xbrl+doc" : "doc") + (d.sep ? "(별도)" : "") };
+      srcOf[y] ??= [ry, col];
+      break;
+    }
+  }
+  const T = {};
+  for (const y of years) if (byYear[y]?.depreciation != null) T[y] = tot(byYear[y].depreciation, byYear[y].amortisation);
+
+  // ── 감가상각 = 영업비용 기준(오너 결정 2026-10-02 — "기준은 동일하게": EBITDA 의 영업이익과 같은 범위). 성격별 비용 주석은 매출원가·
+  //    판관비, 즉 영업비용의 감가·무형상각(계속영업)이다. 현금흐름 조정 값엔 영업외(기타비용) 상각·중단영업분이 섞일 수 있다(현대로템 2025
+  //    기타비용 투자부동산 상각 129,319, 한화에어로스페이스 2024 인적분할 사업분, LS 는 반대로 영업비용 안의 투자부동산 상각이 현금흐름 조정
+  //    표에 없다). 앱은 감가 + 무형 합계만 쓴다. 성격별 표 확인: 같은 보고서의 확인된 현금흐름 합계(원문 또는 XBRL)와 한 열이 같거나(같은 표라는
+  //    근거), 다른 확인된 성격별 보고서의 같은 해 값과 같을 때.
+  const natTot = (nat, col) => {
+    if (nat?.combined?.[col] != null) return nat.combined[col];
+    if (!nat?.base) return null;
+    const c = natureCols(nat);
+    return c.dep[col] != null && c.amo[col] != null ? c.dep[col] + c.amo[col] : null;
+  };
+  const nTot = (ry, col) => natTot(docs[ry]?.nature, col);
+  // 허용치 = 성격별·현금흐름 원문 표시 단위 중 큰 쪽(LS ELECTRIC 현금흐름 원 단위 vs 성격별 백만원 — 반올림 28만 원 차이)
+  const natOk = confirm(
+    nTot,
+    (ry, col, t, u) => near(t, xTot(ry, ry - col), u) || (cfOk.has(ry) && near(t, cfTot(ry, col), u)),
+    (ry) => Math.max(docs[ry]?.nature?.unit ?? 1, docs[ry]?.unit ?? 1),
+  );
+  // 보조 확인 — 중단영업이 두 해 다 있거나 재작성으로 이어지지 않아 위 대조가 불가능한 보고서(삼성SDI 2024·2025 — 성격별 2,009,936 이
+  // 부문 정보 표 계속영업 합계와 같음을 원문으로 확인): 같은 회사의 확인된 성격별 보고서와 표 형식(열 구조·합친 줄 여부·자산별 줄·단위)이
+  // 같으면 같은 표로 본다. 성격별 표에만 — 현금흐름 원문엔 쓰지 않는다(LS 옛 보고서 오판독 사례)
+  const sig = (n) => (n ? `${n.wide ? "W" : "N"}${n.combined ? "C" : "S"}${n.rou ? "R" : ""}${n.inv ? "I" : ""}${n.unit}` : null);
+  const okSigs = new Set([...natOk].map((ry) => sig(docs[ry]?.nature)));
+  for (const ry of years) {
+    if (natOk.has(ry) || !okSigs.has(sig(docs[ry]?.nature))) continue;
+    natOk.add(ry);
+    console.log(`    (${ry} 보고서 성격별 표 — 값 대조 불가(중단영업·재작성), 확인된 보고서와 표 형식 일치로 인정)`);
+  }
+  const N = {};
+  const natFrom = {};
+  for (const y of years)
+    for (const [ry, col] of [[y + 1, 1], [y, 0]]) {
+      if (!natOk.has(ry) || nTot(ry, col) == null) continue;
+      N[y] = nTot(ry, col);
+      natFrom[y] = { nat: docs[ry].nature, col };
+      break;
+    }
+  for (const y of years) {
     const disc = xbrlParts[y]?.disc || 0;
-    if (!srcOf[y] || byYear[y].depreciation == null) continue;
-    const [ry, col] = srcOf[y];
-    const dd = await docOf(ry);
-    const nat = dd?.nature;
-    if (!disc) {
-      // 성격별 값이 그 열에 실제로 있을 때만(전기 표를 못 찾은 여러 열 형식은 null — 0 으로 보지 않는다)
-      const ncol = nat?.base ? natureCols(nat) : null;
-      const nc = nat?.combined?.[col] ?? (ncol?.dep[col] != null && ncol.amo[col] != null ? ncol.dep[col] + ncol.amo[col] : null);
-      if (nc == null) continue;
-      const cf = byYear[y].depreciation + (byYear[y].amortisation ?? 0);
-      const inv = dd.invDep?.[col];
-      if (Math.abs(cf - nc) <= nat.unit) continue;
-      if (inv != null && xbrlParts[y]?.inv == null && Math.abs(cf + inv - nc) <= nat.unit) {
-        byYear[y] = { ...byYear[y], depreciation: byYear[y].depreciation + inv, src: `${byYear[y].src}+투자부동산` };
-        console.log(`    (${y} 현금흐름 감가+무형 ${cf} + 투자부동산 감가 ${inv} = 성격별 합계 ${nc}: 투자부동산분 추가)`);
-      } else console.log(`    (${y} 현금흐름 감가+무형 ${cf} ≠ 성격별 합계 ${nc}(투자부동산 감가 ${inv ?? "없음"}): 미해결)`);
+    const tag = disc ? `중단영업 ${disc} — ` : "";
+    if (y in N) {
+      if (byYear[y]?.depreciation != null && near(N[y], T[y], natFrom[y].nat.unit)) {
+        byYear[y].src += "+영업비용확인";
+        continue;
+      }
+      const { nat, col } = natFrom[y];
+      const amo = nat.amo?.[col] ?? byYear[y]?.amortisation ?? 0;
+      console.log(`    (${y} ${tag}영업비용 기준 — 감가+무형 ${T[y] ?? "없음"} → ${N[y]})`);
+      byYear[y] = { depreciation: N[y] - amo, amortisation: amo, src: `${byYear[y]?.src ?? "doc"}+영업비용` };
       continue;
     }
-    // 합친 줄만 있으면 나눌 수 없다 — 현금흐름 조정 감가 + 무형 = 성격별 합계(단위 이하)면 중단영업분이 섞이지 않은 것(같은 기준 확인).
-    // 차이가 정확히 투자부동산 변동표 감가상각이고 현금흐름 조정에 투자부동산 줄이 없으면 그 금액을 감가상각비에 더한다(LS). 그 밖은 미해결
-    if (nat?.combined?.[col] != null) {
-      const cf = (byYear[y].depreciation ?? 0) + (byYear[y].amortisation ?? 0);
-      const inv = dd.invDep?.[col];
-      if (Math.abs(cf - nat.combined[col]) <= nat.unit) {
-        byYear[y].src += "+계속영업확인";
-        console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} = 성격별 합계 ${nat.combined[col]}: 같은 기준)`);
-      } else if (inv != null && xbrlParts[y]?.inv == null && byYear[y].depreciation != null && Math.abs(cf + inv - nat.combined[col]) <= nat.unit) {
-        byYear[y] = { ...byYear[y], depreciation: byYear[y].depreciation + inv, src: `${byYear[y].src}+투자부동산+계속영업확인` };
-        console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} + 투자부동산 감가 ${inv} = 성격별 합계 ${nat.combined[col]}: 같은 기준, 투자부동산분 추가)`);
-      } else console.log(`    (${y} 중단영업 ${disc} — 현금흐름 감가+무형 ${cf} ≠ 성격별 합계 ${nat.combined[col]}(투자부동산 감가 ${inv ?? "없음"}): 미해결)`);
-      continue;
-    }
-    const n = nat ? { unit: nat.unit, ...natureCols(nat) } : null;
-    if (!n || n.dep[col] == null) {
-      console.log(`    (${y} 중단영업 ${disc} — 성격별 비용 주석 못 찾음, 현금흐름 조정 값 유지·중단영업분 포함 가능)`);
-      continue;
-    }
-    // 계속영업 값이 현금흐름 조정 값보다 크면 표를 잘못 잡은 것 — 바꾸지 않는다
-    if (byYear[y].depreciation != null && n.dep[col] > byYear[y].depreciation + n.unit) {
-      console.log(`    (${y} 성격별 비용 감가 ${n.dep[col]} > 현금흐름 조정 ${byYear[y].depreciation} — 바꾸지 않음)`);
-      continue;
-    }
-    console.log(`    (${y} 중단영업 ${disc} — 계속영업 감가 ${byYear[y].depreciation} → ${n.dep[col]}, 무형 ${byYear[y].amortisation} → ${n.amo[col] ?? byYear[y].amortisation})`);
-    byYear[y] = { depreciation: n.dep[col], amortisation: n.amo[col] ?? byYear[y].amortisation, src: `${byYear[y].src}+계속영업` };
+    if (byYear[y]?.depreciation == null) {
+      console.log(`    (${y} 감가상각비 — XBRL·확인된 원문 모두 없음(보고서 사슬 끊김 포함): 빈칸)`);
+      delete byYear[y];
+    } else if (disc) console.log(`    (${y} ${tag}성격별 비용 확인 안 됨 — 현금흐름 조정 값 유지, 중단영업분 포함 가능: 미해결)`);
+    // 그 밖은 현금흐름 값 유지(성격별 표가 없거나 사슬이 닿지 않은 해)
   }
   return Object.keys(byYear).length ? byYear : null;
 }
