@@ -6772,7 +6772,7 @@ async function verifyUs(sym) {
         if (metric === "현금흐름표 유형자산 취득(CAPEX)") for (const f of capexCustom.get(col) ?? []) terms.push({ sg: -1, tag: f.id, lab: `회사 고유 설비 취득 줄(${f.form} 원본)`, v: f.v });
         // 자사주: 소비세 줄 + 주식 발행 순유출(ProceedsFromIssuanceOrSaleOfEquity 가 음수 = 원천징수 차감 후 순유출) — 외부는 이 줄을 자사주 취득에 합친다
         if (metric === "현금흐름표 자기주식 취득") {
-          for (const f of buybackCustom.get(col) ?? []) terms.push({ sg: -1, tag: f.id, lab: `자사주 매입 소비세(${f.form} 원본)`, v: f.v });
+          for (const f of buybackCustom.get(col) ?? []) terms.push({ sg: -1, tag: f.id, lab: `자사주 매입 소비세(${col === "LTM" ? f.form : `${f.form} 원본`})`, v: f.v });
           const iss = tv("ProceedsFromIssuanceOrSaleOfEquity");
           if (iss != null && iss < 0) terms.push({ sg: 1, tag: "ProceedsFromIssuanceOrSaleOfEquity", lab: "주식 발행(원천징수 차감) 순유출", v: iss });
         }
@@ -7859,6 +7859,29 @@ async function verifyUs(sym) {
         const hits = (fa?.durFacts ?? []).filter((f) => !f.dims.length && /Excise/i.test(f.id) && /Repurchase|Purchase|Buyback|Treasury|CommonStock/i.test(f.id) && (Date.parse(f.end) - Date.parse(f.start)) / 864e5 >= 300 && f.v);
         if (hits.length) buybackCustom.set(c0, [...new Map(hits.map((f) => [f.id, f.v])).entries()].map(([id, v]) => ({ id, v, form: fa.form })));
       } catch (e) { errs.push(`자사주 회사 고유 줄 조회 실패(${c0}): ${String(e).slice(0, 60)}`); }
+    }
+    // LTM 소비세 = 직전 사업연도 + 최근 10-Q 당기 누적 − 전년 동기 누적(2026-10-01 CAT LTM: 73 + 49 − 73 = 49 → SA 7,273 = 7,224 + 49). 같은 회사 고유 태그만
+    {
+      const rr = recon.get("LTM 현금흐름표 자기주식 취득"), fyc = Object.keys(H).filter((k) => k !== "LTM" && H[k]?.date && H.LTM?.date && H[k].date < H.LTM.date).sort((a, b) => H[b].date.localeCompare(H[a].date))[0];
+      const fyv = fyc ? buybackCustom.get(fyc) : null;
+      if (rr && rr.ours != null && fyv?.length && Object.values(rr.srcs).some((z) => !extEq(z.v, rr.ours))) {
+        try {
+          const rc = sub.filings.recent, k = (rc.form ?? []).findIndex((fm, i) => fm === "10-Q" && rc.reportDate?.[i] && dayDiff(rc.reportDate[i], H.LTM.date) <= 7);
+          if (k >= 0) {
+            const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rc.accessionNumber[k].replace(/-/g, "")}`;
+            const nm = (await secJson(`${base}/index.json`)).directory.item.map((x) => x.name).find((x) => /_htm\.xml$/i.test(x));
+            const xml = nm ? await secInstance(`${base}/${nm}`) : "";
+            const ctx = parseContexts(xml), out = [];
+            for (const f of fyv) {
+              const [ns, local] = [f.id.slice(0, f.id.indexOf("_")), f.id.slice(f.id.indexOf("_") + 1)];
+              const vals = [...xml.matchAll(new RegExp(`<${ns}:${local}\\b[^>]*contextRef="([^"]+)"[^>]*>\\s*(-?[\\d.]+)\\s*<`, "g"))].map((m) => ({ c: ctx.get(m[1]), v: Number(m[2]) })).filter((x) => x.c?.start && !x.c.dims.length);
+              const cur = vals.find((x) => dayDiff(x.c.end, H.LTM.date) <= 7 && dayDiff(x.c.start, H.LTM.date) > 60), prior = cur && vals.find((x) => dayDiff(x.c.end, H.LTM.date) >= 358 && dayDiff(x.c.end, H.LTM.date) <= 372 && Math.abs(dayDiff(x.c.start, x.c.end) - dayDiff(cur.c.start, cur.c.end)) <= 7);
+              if (cur && prior) out.push({ id: f.id, v: f.v + cur.v - prior.v, form: `${fyc} 10-K ${f.v} + 10-Q 누적 ${cur.v} − 전년 동기 ${prior.v}` });
+            }
+            if (out.length) buybackCustom.set("LTM", out);
+          }
+        } catch (e) { errs.push(`자사주 회사 고유 줄 LTM 조회 실패: ${String(e).slice(0, 60)}`); }
+      }
     }
     for (const [c0, x] of Object.entries(H)) {
       if (c0 === "LTM" || !x?.date) continue;
