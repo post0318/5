@@ -67,28 +67,23 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: IssueComment | un
   lines.push(`### ${rank}. ${comment?.headline || issue.label}`);
   lines.push("");
 
-  // 사실·해석을 **"사실"/"해석" 같은 라벨 없이** 자연스럽게 이어 쓴다(오너
-  // 지시 2026-10-01 — "굳이 사실, 해석을 명시하면서 하는 것은 금지한다.
-  // 사실관계를 적시하고 자연스럽게 이에 대한 해석을 이어주면 된다"). facts
-  // 는 이제 LLM 이 아니라 **코드**가 issue.reports/news 에서 직접 뽑아
-  // 채운 값이다(오너 지시 — "핵심이슈를 뽑아서 작성할때 깊이가 이정도가
-  // 필요하다. LLM아니어도 가능하지않냐?" → "해봐", evidence.ts
-  // `buildFactsFromEvidence`) — comment 가 아니라 issue 에서 읽는다.
-  // reading 만 여전히 LLM(comment) 몫.
-  const facts = issue.facts;
+  // facts(issue.facts, 코드가 reports/news 에서 뽑은 사실 줄)는 **화면에
+  // 안 보여준다** — LLM(reading)에 근거로만 먹인다. 리포트·뉴스 제목을
+  // 그대로 나열하는 건 초기 버전에서 쓰다 버린 방식이다(오너 지적
+  // 2026-10-02 — "단순 리포트 기사 보여주는거 초기버전일때쓰다 버린건데
+  // 왜 다시끄집어낸거지?", "팩트나열은 필요없고 팩트기반으로 ... 이거처럼
+  // 구체적인 내용정리가 필요함" — "미·이란 외교 협상 진전으로 유가가
+  // 급락하며 물가 부담을 던 가운데, AMD 시총 1조 달러 돌파 등 AI 인프라
+  // 투자 지속 기대감이 가세해 기술주가 지수 상승을 견인함..."처럼 여러
+  // 사실을 하나의 자연스러운 문단으로 종합한 것만 화면에 낸다). 화면엔
+  // reading 한 문단만 나간다.
   const reading = comment?.reading ?? "";
-  if (facts.length === 0 && !reading) {
+  if (!reading) {
     lines.push("_(코멘트가 생성되지 않았습니다 — 재생성하거나 편집기에서 직접 작성하세요)_");
     lines.push("");
   } else {
-    if (facts.length > 0) {
-      for (const f of facts) lines.push(`- ${f}`);
-      lines.push("");
-    }
-    if (reading) {
-      lines.push(reading);
-      lines.push("");
-    }
+    lines.push(reading);
+    lines.push("");
   }
 
   if (issue.metrics && issue.metrics.length > 0) {

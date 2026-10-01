@@ -329,6 +329,9 @@ interface CommentPayload {
     researchCount: number;
     newsCount: number;
     searchInterest: number | null;
+    /** 코드가 reports/news 에서 이미 뽑아 포맷한 사실 줄(evidence.ts
+     * `buildFactsFromEvidence`) — headline·reading 작성의 1차 근거. */
+    facts: string[];
     reports: { date: string; source: string; stockName: string; title: string }[];
     news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
     earnings?: { ticker: string; period: string; epsActual: number | null; epsEstimate: number | null; surprisePct: number | null }[];
@@ -675,6 +678,7 @@ function buildPayload(
       researchCount: i.researchCount,
       newsCount: i.newsCount,
       searchInterest: i.searchInterest,
+      facts: i.facts,
       reports: i.reports.map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
       news: i.news.map((n) => ({
         title: n.title,
