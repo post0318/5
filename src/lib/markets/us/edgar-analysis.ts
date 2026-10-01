@@ -1,4 +1,5 @@
 import "server-only";
+import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
 import { unavailableNote } from "./sec-unavailable";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
@@ -11,7 +12,6 @@ import {
   firstConcept,
   instantByYear,
   instantOn,
-  provenAbsentAt,
   shiftYear,
   splitFactorsByYear,
 } from "./edgar-series";
@@ -69,13 +69,6 @@ const INT_EXP = [
 // EV·순차입금용 차입금·현금은 edgar-ev.ts 가 계산한다(단일 기준).
 // ※ 한국식 '부채비율'의 부채총계(Liabilities)와 다름 — 이건 이자 내는 빚만.
 // 유동성 지표용 현금 (장기 투자자산 제외)
-const CASH_CUR = [
-  "CashAndCashEquivalentsAtCarryingValue",
-  "MarketableSecuritiesCurrent",
-  "ShortTermInvestments",
-  "DebtSecuritiesCurrent",
-  "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent",
-];
 
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   let best: number | null = null;
@@ -180,31 +173,7 @@ export function buildUsAnalysis(
     if (o[LTM] == null && o[prevLabel] != null) note(o, LTM, `분기 재무상태표에 없음(${ltmBal})`);
     return o;
   };
-  /** 여러 잔액의 합 — 칸마다 구성 줄이 그 재무상태표에 없으면 0(없음 증명), 값만 빠졌으면 합을 내지 않는다(부분 합 금지). required 는 없음 증명을 허용하지 않는 줄(현금) */
-  const stockSum = (list: string[], required: string[] = []): Record<string, number | null> => {
-    const o = blank();
-    const parts = list.map((c) => ({ c, v: stock([c]) }));
-    for (const p of periods) {
-      const l = p.label;
-      const d = l === LTM ? ltmBal : (p.endDate ?? "");
-      let sum: number | null = null;
-      let miss: string | null = null;
-      for (const { c, v } of parts) {
-        if (v[l] != null) {
-          sum = (sum ?? 0) + v[l]!;
-          continue;
-        }
-        if (required.includes(c)) miss = `${c} 공시 없음(${d})`;
-        else if (d && !provenAbsentAt(facts, [c], d) && list.some((x) => entriesOf(facts, x).length)) {
-          // 이 줄을 쓰는 회사인데(다른 기간엔 있음) 그 날짜 값이 없다
-          if (entriesOf(facts, c).length) miss = `구성 항목이 재무상태표에 없음(${d})`;
-        }
-      }
-      o[l] = miss ? null : sum;
-      if (miss) note(o, l, miss);
-    }
-    return o;
-  };
+
   // 액면분할 보정 계수 (소급 재작성 안 된 과거 연도의 주당 지표를 최신 연도 기준으로 환산)
   const splitF = splitFactorsByYear(facts);
   const adjPerShare = (o: Record<string, number | null>): Record<string, number | null> => {
@@ -390,7 +359,11 @@ export function buildUsAnalysis(
     // 배열이라 이 조건이 한 번도 참이 된 적이 없었다(감사 2026-09-23).
     entriesOf(facts, "CommonStockDividendsPerShareDeclared", "USD/shares").length > 0 ||
     entriesOf(facts, "CommonStockDividendsPerShareCashPaid", "USD/shares").length > 0 ||
-    entriesOf(facts, "PaymentsOfDividendsCommonStock").length > 0;
+    entriesOf(facts, "PaymentsOfDividendsCommonStock").length > 0 ||
+    // 자본변동표 배당 결의액(Dividends·DividendsCommonStock·DividendsCommonStockCash)이 포괄 지급액과 같은 기간에 정확히 같으면 보통주 배당(2026-10-01 VRT —
+    // 주당배당·보통주 지급 태그 없이 PaymentsOfDividends 만 쓰는데, 자본변동표 Dividends 3.8·9.5·42.2·66.6 이 지급액과 매년 일치). BE 는 자본변동표에 이런 줄이 없다
+    ["Dividends", "DividendsCommonStock", "DividendsCommonStockCash"].some((c) =>
+      entriesOf(facts, c).some((e) => e.start && e.val !== 0 && entriesOf(facts, "PaymentsOfDividends").some((d) => d.start === e.start && d.end === e.end && d.val === e.val)));
   const commonDividends = hasCommonDivEvidence ? dividends : blank();
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const INT_PAID_C = ["InterestPaidNet", "InterestPaid"];
@@ -498,7 +471,25 @@ export function buildUsAnalysis(
     if (b && b.operatingLease != null) debtWithOpLease[l] = b.debt + b.operatingLease;
   }
   // 유동성 지표용 현금(장기투자 제외) — 현금 줄은 없음 증명 불가(현금 없는 재무상태표는 없다 — 제한현금 포함 총액만 공시하는 회사는 공란)
-  const cashCur = stockSum(CASH_CUR, ["CashAndCashEquivalentsAtCarryingValue"]);
+  // 현금·단기투자 — 단기투자는 본표 유동자산 단기투자 줄 합(SYN_STI_FACE, 재무상태표 화면·EV 와 같은 값, 2026-10-01 — 태그를 모두 더하던 방식은
+  // 화면과 달랐다: CAT·INTC·KO·DELL 현금비율). 본표 판독이 없는 기간만 종전 태그 합
+  const cashCur = (() => {
+    const c0 = stock(["CashAndCashEquivalentsAtCarryingValue"]);
+    // 판독값이 없는 기간 = 현금 + 재무상태표 화면과 같은 단기투자 태그 목록(STI_TAGS, 앞 태그 우선 — 예전 CASH_CUR 태그 전부 합은 화면과 달랐다: DELL 2022)
+    const stiTag = stock(STI_TAGS);
+    const old = blank();
+    for (const l of labels) old[l] = c0[l] != null ? c0[l]! + (stiTag[l] ?? 0) : null;
+    inheritWhy(old, c0);
+    // 본표 판독값은 날짜마다 그 날짜를 담은 가장 최근 공시(10-Q 비교 열 포함) 하나 — 공시 종류가 아니라 기준일로 읽는다(재무상태표 화면과 같은 방식)
+    const faceE = firstConcept(facts, [SYN_STI_FACE]).filter((e) => !e.start);
+    const o = blank();
+    for (const p of periods) {
+      const l = p.label, d = l === LTM ? ltmBal : (p.endDate ?? "");
+      const f = d ? faceE.find((x) => Math.abs(Date.parse(x.end) - Date.parse(d)) <= 6 * 864e5) : undefined;
+      o[l] = c0[l] != null && f ? c0[l]! + f.val : old[l];
+    }
+    return inheritWhy(o, old);
+  })();
   const AR_C = [
     "AccountsReceivableNetCurrent",
     "ReceivablesNetCurrent",
@@ -552,10 +543,20 @@ export function buildUsAnalysis(
   inheritWhy(nopat, opIncome);
   const liabTotal = (() => {
     const o = stock(["Liabilities"]);
-    // 파생: (부채와자본 총계 또는 자산) − 자기자본
-    for (const l of labels)
-      if (o[l] == null && (liabAndEquity[l] ?? assets[l]) != null && equity[l] != null)
-        o[l] = (liabAndEquity[l] ?? assets[l])! - equity[l]!;
+    // 파생: (부채와자본 총계 또는 자산) − 비지배지분 포함 자본 − 임시자본(재무상태표 화면 edgar-balance.ts 와 같은 정의, 2026-10-01 —
+    // 지배주주 자본만 빼면 비지배지분·임시자본이 부채에 섞여 부채비율이 화면 재계산과 달랐다: KO·WMT·INTC·MRK·ORCL)
+    const eqAll = stock(["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]);
+    const tmpAll = stock(["TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests"]);
+    const tmpParent = stock(["TemporaryEquityCarryingAmountAttributableToParent"]);
+    const tmpNci = stock(["RedeemableNoncontrollingInterestEquityCarryingAmount", "RedeemableNoncontrollingInterestEquityCommonCarryingAmount"]);
+    for (const l of labels) {
+      if (o[l] != null) continue;
+      const be = liabAndEquity[l] ?? assets[l];
+      // 포함 자본 태그가 없으면 지배주주 자본 + 비지배지분(비지배지분은 EV 브리지 값 — 태그는 edgar-ev.ts 에서만 고른다)
+      const eAll = eqAll[l] ?? (equity[l] != null ? equity[l]! + (bridge[l]?.nci ?? 0) : null);
+      const tmp = tmpAll[l] ?? (tmpParent[l] != null || tmpNci[l] != null ? (tmpParent[l] ?? 0) + (tmpNci[l] ?? 0) : 0);
+      if (be != null && eAll != null) o[l] = be - eAll - tmp;
+    }
     return o;
   })();
 

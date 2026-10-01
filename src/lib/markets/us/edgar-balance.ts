@@ -1,4 +1,5 @@
 import "server-only";
+import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
 import { unavailableNote } from "./sec-unavailable";
 import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts } from "./edgar";
@@ -64,15 +65,7 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
       },
       {
         label: "단기 투자자산",
-        concepts: [
-          "MarketableSecuritiesCurrent",
-          "ShortTermInvestments",
-          "DebtSecuritiesCurrent",
-          "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent", // IBM
-          "AvailableForSaleSecuritiesCurrent",
-          // NVIDIA FY2026~: AFS 채무증권 전액 단기 분류, 10-K 는 이 태그만
-          "AvailableForSaleSecuritiesDebtSecurities",
-        ],
+        concepts: STI_TAGS, // 본표 판독(SYN_STI_FACE)이 없는 칸만 — 아래 resolved 단계에서 판독값으로 덮는다
         depth: 1,
       },
       { label: "매출채권", concepts: ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"], depth: 1 },
@@ -412,6 +405,17 @@ export function buildUsBalance(
             return o;
           })()
         : value(line.concepts ?? []);
+      // 단기 투자자산 = 본표 유동자산의 단기투자 줄 합(edgar-bs-structure SYN_STI_FACE — EV 현금·재무분석 현금비율과 같은 값, 2026-10-01). 태그 목록의
+      // AvailableForSaleSecuritiesDebtSecurities 는 장기분까지 포함한 매도가능 채권 총액이라 INTC(32,393)·CAT·KO 에서 유동자산 줄이 부풀었다.
+      // 판독값은 날짜마다 그 날짜를 담은 가장 최근 공시(10-Q 비교 열 포함) 하나라 공시 종류가 아니라 기준일로 읽는다. 판독이 없는 칸만 태그 목록
+      if (line.label === "단기 투자자산") {
+        const face = firstConcept(facts, [SYN_STI_FACE]).filter((e) => !e.start);
+        const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 6 * 864e5;
+        for (const p of periods) {
+          const e = p.endDate ? face.find((x) => near(x.end, p.endDate!)) : undefined;
+          if (e) resolved[line.label][p.label] = e.val;
+        }
+      }
       if (line.fallback) {
         const fb = value(line.fallback);
         const primaryGap = ltmGap(resolved[line.label]);

@@ -3820,6 +3820,48 @@ async function verifyUs(sym) {
   for (const [prefix, key] of [["영업이익", "op"], ["세전이익", "pretax"]])
     for (const [k, v] of Object.entries(rowStarts(is, prefix))) (IS[lab(k)] ??= {})[key] = v;
   for (const [k, v] of Object.entries(rowOf(is, "감가상각비"))) (IS[lab(k)] ??= {}).da = v;
+
+  // ── C층 재무분석 지표 = 재무제표 화면 값으로 재계산(2026-10-01, 오너 지시 — "해결이 완료되는 부분들은 재무분석도"). 손익·재무상태표·현금흐름표 화면 값은
+  //    A층(SEC)·외부 대조를 거친 값이므로, 재무분석이 같은 값을 쓰면 식대로 정확히 나와야 한다. 재무분석 모듈이 태그를 따로 읽어 생기던 차이를 잡는다
+  //    (부채 파생에 비지배지분·임시자본 혼입 — KO·WMT·INTC·MRK·ORCL, 단기투자 정의 — CAT·INTC·KO·DELL, 포괄 배당 태그 — VRT). --metric=bscf 에서만(현금흐름표 필요)
+  if (BSCF_MODE && fetched.cf && an && bs && is) {
+    const byName = (st) => Object.fromEntries((st?.sections ?? []).flatMap((x) => x.items ?? []).map((it) => [String(it.accountName ?? "").trim(), it.values ?? {}]));
+    const byId = (st) => Object.fromEntries((st?.sections ?? []).flatMap((x) => x.items ?? []).map((it) => [it.accountId, it.values ?? {}]));
+    const AN = byName(an), IN = byName(is), BI = byId(bs), CI = byId(fetched.cf);
+    const iv = (re, k) => { const n0 = Object.keys(IN).find((n) => re.test(n)); return n0 ? IN[n0][k] ?? null : null; };
+    const keys = (an.periods ?? []).map((p0) => p0.label);
+    const near = (a, e) => Math.abs(a - e) <= Math.max(1e-9, Math.abs(e) * 1e-9);
+    for (const k of keys) {
+      const c = lab(k), prev = keys[keys.indexOf(k) - 1], ann = k !== "현재/LTM" && prev && prev !== "현재/LTM";
+      const rev = iv(/^매출액/, k), gp = iv(/^매출총이익/, k), ni = iv(/^당기순이익/, k), pre = iv(/^세전이익/, k), tax = iv(/법인세비용/, k);
+      const ocf = CI["cf:total:영업활동 현금흐름"]?.[k] ?? null, capex = CI["cf:투자활동 현금흐름:유형자산 취득"]?.[k] ?? null;
+      const div = CI["cf:재무활동 현금흐름:배당금 지급"]?.[k] ?? null, bb = CI["cf:재무활동 현금흐름:자기주식 취득"]?.[k] ?? null;
+      const b = (id, kk = k) => BI[id]?.[kk] ?? null;
+      const ca = b("bs:자산:유동자산 총계"), cl = b("bs:부채:유동부채 총계"), lt = b("bs:부채:부채 총계"), eq = b("bs:자본:자본 총계"), at = b("bs:자산:자산 총계");
+      const cash = b("bs:자산:현금·현금성자산"), sti = b("bs:자산:단기 투자자산");
+      const R = (name, row, exp, why) => {
+        const a = AN[row]?.[k];
+        if (exp == null || !Number.isFinite(exp)) return;
+        if (a == null) { add("C", `재무분석 ${name} = 재무제표 화면 재계산`, c, { status: NA, note: `재무분석 빈칸(화면 재계산 ${exp})` }); return; }
+        add("C", `재무분석 ${name} = 재무제표 화면 재계산`, c, near(a, exp) ? { status: PASS, note: why } : { status: FAIL, note: `재무분석 ${a} ≠ 화면 재계산 ${exp} · ${why}` });
+      };
+      R("매출총이익률", "매출총이익률 (%)", gp != null && rev ? (gp / rev) * 100 : null, "매출총이익 ÷ 매출액");
+      R("유효세율", "유효세율 (%)", tax != null && pre ? (tax / pre) * 100 : null, "법인세비용 ÷ 세전이익");
+      R("FCF 마진", "FCF 마진 (%)", ocf != null && capex != null && rev ? ((ocf - Math.abs(capex)) / rev) * 100 : null, "(영업현금흐름 − 유형자산 취득) ÷ 매출액");
+      R("영업현금흐름/순이익", "영업현금흐름 / 순이익", ocf != null && ni ? ocf / ni : null, "영업현금흐름 ÷ 당기순이익");
+      R("유동비율", "유동비율", ca != null && cl ? ca / cl : null, "유동자산 ÷ 유동부채");
+      R("부채비율", "부채비율 (%)", lt != null && eq ? (lt / eq) * 100 : null, "부채 총계 ÷ 자본 총계");
+      R("현금비율", "현금비율", cash != null && cl ? (cash + (sti ?? 0)) / cl : null, "(현금·현금성자산 + 단기 투자자산) ÷ 유동부채");
+      R("배당성향", "배당성향 (%)", div != null && ni ? (Math.abs(div) / ni) * 100 : null, "배당금 지급 ÷ 당기순이익");
+      R("총주주환원율", "총주주환원율 (%)", div != null && bb != null && ni ? ((Math.abs(div) + Math.abs(bb)) / ni) * 100 : null, "(배당 + 자사주 취득) ÷ 당기순이익");
+      if (ann) {
+        const eqP = b("bs:자본:자본 총계", prev), atP = b("bs:자산:자산 총계", prev);
+        R("ROE", "ROE (%)", ni != null && eq != null && eqP != null ? (ni / ((eq + eqP) / 2)) * 100 : null, "당기순이익 ÷ 평균 자본(기초·기말)");
+        R("ROA", "ROA (%)", ni != null && at != null && atP != null ? (ni / ((at + atP) / 2)) * 100 : null, "당기순이익 ÷ 평균 자산");
+        R("총자산회전율", "× 총자산회전율 (회)", rev != null && at != null && atP != null ? rev / ((at + atP) / 2) : null, "매출액 ÷ 평균 자산");
+      }
+    }
+  }
   // 매출원가·매출총이익 행 — 이름 뒤에 설명이 붙을 수 있다("매출총이익 (합성 …)")
   const isItem = (stmt, re) => stmt?.sections?.flatMap((s) => s.items ?? []).find((x) => re.test(x.accountName ?? "")) ?? null;
   const COGS_ROW_RE = /^\(−\) 매출원가(\s|\(|$)/, GP_ROW_RE = /^매출총이익(\s|\(|$)/;
@@ -6748,6 +6790,10 @@ async function verifyUs(sym) {
       // StockAnalysis 희석 EPS 끝자리(2026-09-30) — 공시 EPS(소수 둘째 자리, A층 통과)와 정확히 1e-6(SA 표기 마지막 자리)만 0 쪽으로 다르다
       //    (VRT 2024 1.279999·VST 2021~2025 −2.689999·−3.259999·2.179999). 순이익 ÷ 주식수 반올림·버림, float32 변환 모두 일관되게 재현 안 됨
       //    → 식 없는 표기 끝자리 차로 외부 정밀도 부족(NA)에만 넣는다
+      // StockAnalysis 자체 계산 EPS(소수 6자리, 2026-10-01 V 2021 5.626599) — 공시 EPS 자릿수(소수 둘째 자리)로 반올림하면 앱(공시 EPS, A층 통과)과 같다 → 외부 표기 정밀도 차
+      if (metric === "희석 EPS" && n === "StockAnalysis" && col !== "LTM" && !extEq(v, r.ours) && Math.abs(r.ours * 100 - Math.round(r.ours * 100)) < 1e-9 && Math.abs(Math.round(v * 100) / 100 - r.ours) < 1e-9
+        && checks.some((k) => k.col === col && k.status === PASS && k.name === "EPS 앱 = SEC 공시 EPS(분할 보정)"))
+        return { na: `StockAnalysis 자체 계산 EPS ${v}(소수 6자리) — 공시 EPS 자릿수로 반올림하면 앱 ${r.ours}` };
       if (metric === "희석 EPS" && n === "StockAnalysis" && col !== "LTM" && Math.abs(Math.abs(v - r.ours) - 1e-6) < 1e-9 && Math.abs(v) < Math.abs(r.ours)
         && Math.abs(r.ours * 100 - Math.round(r.ours * 100)) < 1e-9 && checks.some((k) => k.col === col && k.status === PASS && k.name === "EPS 앱 = SEC 공시 EPS(분할 보정)"))
         return { na: `StockAnalysis 표기 끝자리 — 앱(공시 EPS) ${r.ours} 와 정확히 0.000001 차(0 쪽), 순이익 ÷ 주식수로는 재현 안 됨` };
@@ -6779,6 +6825,19 @@ async function verifyUs(sym) {
         for (let m = 1; m < 1 << terms.length; m++) {
           const use = terms.filter((_, i) => m & (1 << i)), exp = r.ours + use.reduce((t, x) => t + x.sg * x.v, 0);
           if (eqExp(exp)) return { ok: `${n} = 앱 ${r.ours} ${use.map((x) => `${x.sg > 0 ? "+" : "−"} ${x.lab} ${x.v}(${x.tag})`).join(" ")} = ${exp}${rnd(exp)} — 외부는 이 금액을 포함` };
+        }
+      }
+      // 외부 = 같은 SEC 태그의 이전 10-K 판본 값(2026-10-01 WDC FY2023 세전이익 — 2024 10-K −1,550(SanDisk 분할 전 연결), 2025 10-K −849(분할 후 계속사업으로
+      //    재작성). 앱은 나중 공시 우선(오너 결정), 외부는 재작성 전 판본을 유지. 판본 값과 정확히 같을 때만 ②
+      if (col !== "LTM" && H[col]?.date && aPassed(col, metric)) {
+        const VT = { 세전이익: ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"],
+          순이익: ["NetIncomeLoss"], 매출: ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"], 영업이익: ["OperatingIncomeLoss"], 매출원가: ["CostOfRevenue", "CostOfGoodsAndServicesSold"] }[metric];
+        for (const tag of VT ?? []) {
+          const l = (G[tag]?.units?.USD ?? []).filter((e) => e.start && /^10-K/.test(e.form ?? "") && dayDiff(e.end, H[col].date) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300);
+          if (!l.length) continue;
+          const last = l.reduce((x, y) => ((y.filed ?? "") > (x.filed ?? "") ? y : x));
+          const old = l.find((e) => (e.filed ?? "") < (last.filed ?? "") && e.val !== last.val && eqExp(e.val));
+          if (old && extEq(last.val, r.ours)) return { ok: `${n} = SEC ${tag} 이전 판본 ${old.val}(${old.form} ${old.filed}) — 앱은 최신 판본 ${last.val}(${last.form} ${last.filed}, 재작성), 나중 공시 우선` };
         }
       }
       // 블룸버그 자체 불일치(2026-10-01 GEV 2025 세전이익) — 블룸버그 분기 화면의 그 사업연도 네 분기 합이 앱(= SEC 연간, A층)과 정확히 같은데 블룸버그 연간 열만
@@ -6861,6 +6920,15 @@ async function verifyUs(sym) {
         const eb = recon.get(`${col} EBITDA`)?.srcs[n]?.v, op = recon.get(`${col} 영업이익`)?.srcs[n]?.v;
         if (eb != null && op != null && extEq(eb - op, r.ours) && !extEq(eb - op, v))
           return { outlier: `외부 자체 불일치 — ${n} EBITDA ${eb} − ${n} 영업이익 ${op} = ${eb - op} = 앱 감가상각비인데 ${n} 감가상각비 칸만 ${v}` };
+      }
+      // 블룸버그 암묵 감가상각비(2026-10-01 CEG·VST 2021 — 블룸버그에 감가상각비 칸이 없음): 블룸버그 EBITDA − 블룸버그 영업이익 = 앱 감가상각비(A층 통과)면
+      //    블룸버그도 앱과 같은 감가상각비를 쓴 것 → 이 소스만 다름(외부 단독 이탈)
+      // A층이 공통모드(줄 선택 규칙 = 앱)여도 블룸버그 암묵값이 앱과 정확히 같으면 그것이 독립 확인(independentOr 원칙)
+      if (metric === "감가상각비" && n !== "블룸버그" && !extEq(v, r.ours) && checks.some((k) => k.col === col && (k.status === PASS || k.status === COMMON) && /^감가상각비 앱 = SEC 현금흐름표 감가상각·상각 줄 합$/.test(k.name))) {
+        const B = (k) => recon.get(`${col} ${k}`)?.srcs["블룸버그"]?.v;
+        const eb = B("EBITDA"), op = B("영업이익");
+        if (B("감가상각비") == null && eb != null && op != null && extEq(eb - op, r.ours))
+          return { outlier: `블룸버그 EBITDA ${eb} − 영업이익 ${op} = ${eb - op} = 앱 감가상각비(블룸버그 감가상각비 칸 없음) — ${n} 만 ${v}` };
       }
       if (col === "LTM" && H.LTM?.date && !extEq(v, r.ours) && !(metric === "감가상각비" && daRule(n, col))) {
         const fyc = Object.keys(H).find((c) => c !== "LTM" && H[c]?.date && dayDiff(H[c].date, H.LTM.date) <= 7);
@@ -8134,6 +8202,18 @@ async function verifyUs(sym) {
       const fyc = Object.keys(fyDates).find((c) => fyDates.LTM && c !== "LTM" && dayDiff(fyDates[c], fyDates.LTM) <= 7);
       const same = fyc && review.find((x) => x.item === `${fyc} ${m}` && x.metricClass?.[n] && x.ours === o.ours && x.sources?.[n] === o.sources?.[n]);
       if (same && same.metricClass[n] !== "③") cls[n] = same.metricClass[n];
+    }
+  }
+  // 연간 ③ 보정(2026-10-01 DAL 2021 SA 매출원가 — 다른 소스가 그 연도만 없어 비교 대상이 없음): 같은 소스·같은 지표의 다른 연간 열이 3개 이상이고 **모두**
+  //  외부 단독 이탈이면 이 열도 외부 단독 이탈(그 소스 정의가 연도 내내 앱과 다르다는 근거 — LTM 보정과 같은 원칙). A층 통과 열만
+  for (const o of review) {
+    const cls = o.metricClass;
+    if (!cls || !/^\d{4}Y /.test(o.item ?? "")) continue;
+    const m = o.item.slice(6), col = o.item.slice(0, 5);
+    for (const n of Object.keys(cls)) {
+      if (cls[n] !== "③") continue;
+      const oth = review.filter((x) => x !== o && x.metricClass?.[n] && /^\d{4}Y /.test(x.item ?? "") && x.item.slice(6) === m);
+      if (oth.length >= 3 && oth.every((x) => x.metricClass[n] === "외부단독이탈") && !checks.some((k) => k.col === col && k.status === FAIL)) cls[n] = "외부단독이탈";
     }
   }
   return { sym, checks, review, hardErrors, revErrors, cogsErrors, opincErrors, daErrors, sgaErrors, audit };

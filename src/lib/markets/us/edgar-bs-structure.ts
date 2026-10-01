@@ -44,6 +44,16 @@ export const SYN_MIXED_LEASE_CURRENT = "OperatingLeaseCurrentMixedFaceDerived";
  * 아래 투자 줄이므로 모두 더한다.
  */
 export const SYN_STI_FACE = "ShortTermInvestmentsFaceDerived";
+/** 본표 판독(SYN_STI_FACE)이 없는 기간의 단기투자 태그 — 앞 태그 우선(firstConcept). 재무상태표 화면 "단기 투자자산" 줄과 재무분석 현금비율이 같은 목록을 쓴다(2026-10-01) */
+export const STI_TAGS = [
+  "MarketableSecuritiesCurrent",
+  "ShortTermInvestments",
+  "DebtSecuritiesCurrent",
+  "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent", // IBM
+  "AvailableForSaleSecuritiesCurrent",
+  // NVIDIA FY2026~: AFS 채무증권 전액 단기 분류, 10-K 는 이 태그만
+  "AvailableForSaleSecuritiesDebtSecurities",
+];
 
 const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) contact@example.com";
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
