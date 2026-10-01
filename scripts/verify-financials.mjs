@@ -2252,6 +2252,15 @@ async function cfDaFace(cik, p, content, unitRe = /usd/i) {
   return { ...p, ...st, vals, periods, adj };
 }
 /** 한 기간 조정 — 손상 포함 줄이면 손상 금액, 중단사업 포함 현금흐름표면 중단사업 감가상각(10-K·10-Q 원본 태그). 규칙은 앱과 같은 성격(공통모드) */
+/** 그 기간에 중단사업 영업이 있었는가(2026-10-01 IBM — Kyndryl 2021 분리): 기간 시작 직전(전년 말)·기간 안 어느 시점이든 재무상태표 중단사업 자산(모든 공시 판본)이
+ *  0 보다 크면 영업 있음. 시작일을 모르면(start null) 종료일 1년 전부터. 종목마다 verifyUs 가 CUR_G(SEC companyfacts us-gaap)를 채운다 */
+let CUR_G = null;
+function discOpsDuring(start, end) {
+  if (!CUR_G) return true; // 모르면 보수적으로 영업 있음(종전 판정 유지)
+  const s0 = Date.parse(start ?? end) - (start ? 7 : 372) * 864e5, e0 = Date.parse(end) + 7 * 864e5;
+  return Object.entries(CUR_G).some(([c, o]) => /^(AssetsOfDisposalGroupIncludingDiscontinuedOperation\w*|DisposalGroupIncludingDiscontinuedOperationAssets\w*)$/.test(c)
+    && (o.units?.USD ?? []).some((x) => !x.start && x.val > 0 && Date.parse(x.end) >= s0 && Date.parse(x.end) <= e0));
+}
 function cfDaAdjust(f, s, e, sum) {
   const at = f.adj.filter((x) => x.start === s && x.end === e);
   let amt = 0, unres = null;
@@ -2273,6 +2282,8 @@ function cfDaAdjust(f, s, e, sum) {
     }
     const discNi = at.some((x) => isDiscNi(x.id) && !x.dims.length && x.v !== 0);
     if (disc != null && disc > 0 && disc < sum - amt) { amt += disc; notes.push(`중단사업 감가상각 ${disc} 차감(현금흐름표가 중단사업 포함 · 공통모드(규칙 재구현 — 중단사업 태그·차원 판정이 앱과 같은 규칙))`); }
+    // 중단사업에 영업이 없는 기간(매출·원가·영업/투자현금흐름 공시가 없거나 0 — 분리 뒤 세금·정산 잔여 손익만, IBM 2022~ Kyndryl) = 중단사업 감가상각 0(2026-10-01)
+    else if (discNi && !(disc > 0) && !discOpsDuring(s, e)) notes.push("중단사업 손익은 있으나 영업 없음(기초·기중 재무상태표에 중단사업 자산 없음 — 분리 뒤 정산 잔여) — 중단사업 감가상각 0");
     else if (discNi && !(disc > 0)) unres = unres ?? "중단사업 손익이 있는데 중단사업 감가상각 태그 없음 — 계속사업 감가상각 확인 불가";
   }
   return { amt, unres, note: notes.join(" · ") };
@@ -3331,6 +3342,7 @@ async function secCashFlowDa(cik, sub, G = null) {
       const discNi = at.some((f) => isDiscNi(f.id) && !f.dims.length && f.v !== 0);
       if (discNi || disc != null) anyDisc = true;
       if (disc != null && disc > 0 && disc < sum) { sum -= disc; notes.set(end, [notes.get(end), `중단사업 감가상각 ${disc} 차감(현금흐름표가 중단사업 포함 · 공통모드(규칙 재구현 — 중단사업 태그·차원 판정이 앱과 같은 규칙))`].filter(Boolean).join(" · ")); }
+      else if (discNi && !(disc > 0) && !discOpsDuring(null, end)) notes.set(end, [notes.get(end), "중단사업 손익은 있으나 영업 없음(기초·기중 재무상태표에 중단사업 자산 없음 — 분리 뒤 정산 잔여) — 중단사업 감가상각 0"].filter(Boolean).join(" · "));
       else if (discNi && !(disc > 0)) unresolved.set(end, "중단사업 손익이 있는데 중단사업 감가상각 태그 없음 — 계속사업 감가상각 확인 불가");
     }
     byEnd.set(end, sum);
@@ -3405,6 +3417,7 @@ async function verifyUs(sym) {
   const sub = await secJson(`https://data.sec.gov/submissions/CIK${cik}.json`);
   const sic = Number(sub.sic ?? 0);
   const G = f.facts["us-gaap"] ?? {};
+  CUR_G = G; // 중단사업 영업 판정(discOpsDuring)용
   // companyfacts 가 앱 LTM 기준일의 공시(10-Q/10-K)를 아직 반영하지 않은 경우(KO·MDLZ·V — 앱은 공시 원본으로 채운다)
   // 그 공시 원본에서 차원 없는 USD 기간 값을 읽어 채운다. 검증기가 따로 구현한 것이고, 이미 있는 기간은 건드리지 않는다.
   // 이게 없으면 LTM 은 "기준일 다름"으로 SEC 대조가 빠졌다.
@@ -5106,6 +5119,21 @@ async function verifyUs(sym) {
           else { const e = dur(cs[i], date); if (e) { v = e.val; how = `${cs[i]} ${e.form} ${e.filed}${retagNote(e) ? ` · ${retagNote(e)}` : ""}`; usedIdx = i; } }
         }
         const cm = usedIdx > 0 ? ` · 공통모드(대체 개념 — 앱과 같은 개념 목록)` : "";
+        // LTM — 회사가 사업연도(10-K)와 분기(10-Q)에 다른 태그를 단 경우(2026-10-01 MAR: 10-K PaymentsToAcquireProductiveAssets 604, 10-Q PaymentsToAcquirePropertyPlantAndEquipment)
+        //    같은 개념 목록 안에서 사업연도 + 당기 누적 − 전년 동기(태그를 넘나듦 — 앱과 같은 목록이라 공통모드)
+        if (v == null && c === "LTM") {
+          const all = cs.flatMap((t) => (G[t]?.units?.USD ?? []).filter((e) => e.start && /^10-[KQ]/.test(e.form ?? "")).map((e) => ({ ...e, t })));
+          const dd = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
+          const curs = all.filter((e) => /^10-Q/.test(e.form) && dayDiff(e.end, date) <= 7 && dd(e) >= 80 && dd(e) <= 300);
+          const mx = Math.max(0, ...curs.map(dd)), cur = latestPrecise(curs.filter((e) => dd(e) >= mx - 3));
+          const fy = cur ? latestPrecise(all.filter((e) => dd(e) >= 300 && dayDiff(e.end, cur.start) <= 7)) : null;
+          const prior = cur && fy ? latestPrecise(all.filter((e) => dayDiff(e.start, fy.start) <= 7 && Math.abs(dd(e) - dd(cur)) <= 7 && /^10-Q/.test(e.form))) : null;
+          if (cur && fy && prior && new Set([cur.t, fy.t, prior.t]).size > 1) {
+            const r1 = vsSource(app, sg * (fy.val + cur.val - prior.val), EXACT, `사업연도 ${fy.t} ${fy.val} + 당기 누적 ${cur.t} ${cur.val} − 전년 동기 ${prior.t} ${prior.val}(공시마다 태그가 다름)${sg < 0 ? " × −1" : ""}`);
+            add("A", `현금흐름표 ${nm} 앱 = SEC`, c, r1.status === PASS ? { ...r1, status: COMMON } : r1);
+            continue;
+          }
+        }
         if (v == null) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: NA, note: `SEC ${cs.join("/")} 기간 값 없음 — 앱 ${app ?? `빈칸(${why || "사유 없음"})`}`, app, src: null }); continue; }
         const r0 = vsSource(app, sg * v, EXACT, `${how}${sg < 0 ? " × −1(현금 유출 표기)" : ""}${cm}`);
         add("A", `현금흐름표 ${nm} 앱 = SEC`, c, usedIdx > 0 && r0.status === PASS ? { ...r0, status: COMMON } : r0);
@@ -6947,7 +6975,17 @@ async function verifyUs(sym) {
         }
       }
       // 블룸버그 LTM = 앱 LTM − 앱 4분기(연간 − 9개월 누적, SEC) + 4분기 실적발표 8-K 분기값(CL·IBM 세전이익, 블룸버그 분기 화면으로 확인 2026-09-30)
-      if (n === "블룸버그" && col === "LTM" && q4Rel.has(metric)) {
+      if (n === "블룸버그" && col === "LTM" && metric === "감가상각비" && q4Rel.has(metric)) {
+        const q = q4Rel.get(metric);
+        const qrow = (isq?.sections ?? []).flatMap((x) => x.items ?? []).find((it) => it.accountName === "감가상각비");
+        const qp = (isq?.periods ?? []).find((pp) => pp.endDate && dayDiff(pp.endDate, q.fyEnd) <= 7);
+        const appQ4 = qp ? qrow?.values?.[qp.label] ?? null : null;
+        if (appQ4 != null && q.v !== appQ4) {
+          const exp = r.ours - appQ4 + q.v;
+          if (eqExp(exp)) return { ok: `블룸버그 LTM 감가상각비 = 앱 LTM ${r.ours} − 앱 4분기(${qp.label}, 사업연도 − 9개월) ${appQ4} + 4분기 실적발표 8-K(${q.filed}) 분기값 ${q.v} = ${exp}${rnd(exp)} — 회사가 연간·누적·분기를 따로 반올림, 블룸버그는 발표 분기값 사용 · ${q.url}` };
+        }
+      }
+      if (n === "블룸버그" && col === "LTM" && q4Rel.has(metric) && metric !== "감가상각비") {
         const q = q4Rel.get(metric);
         const TAG = { 세전이익: "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest" }[metric];
         const l = (G[TAG]?.units?.USD ?? []).filter((e) => e.start && /^10-[KQ]/.test(e.form ?? ""));
@@ -7011,9 +7049,12 @@ async function verifyUs(sym) {
       //    블룸버그 성분별 반올림)이고 두 성분이 모두 ①(앱과 일치) 또는 원인 확인·외부 정밀도 부족이면 EBITDA 도 그 원인을 물려받는다
       if (metric === "EBITDA") {
         const it = (m) => recon.get(`${col} ${m}`);
-        const st = (m) => { const x = it(m), s0 = x?.srcs[n]; if (!s0) return null; if (extEq(x.ours, s0.v)) return "①"; const d = done.get(`${x.item}|${n}`); return d?.ok ? "②" : d?.na ? "NA" : null; };
+        // 성분이 이 소스만 앱과 다르고 다른 외부가 앱과 정확히 일치하면 "이탈"(2026-10-01 CEG LTM — 야후 감가상각비 2,334, 블룸버그 3,669 = 앱)
+        const st = (m) => { const x = it(m), s0 = x?.srcs[n]; if (!s0) return null; if (extEq(x.ours, s0.v)) return "①"; const d = done.get(`${x.item}|${n}`); if (d?.ok) return "②"; if (d?.na) return "NA"; if (d?.outlier || Object.entries(x.srcs).some(([k, z]) => k !== n && k !== "인포맥스" && (extEq(z.v, x.ours) || done.get(`${x.item}|${k}`)?.ok))) return "이탈"; return null; };
         const o = it("영업이익")?.srcs[n]?.v, d = it("감가상각비")?.srcs[n]?.v, so = st("영업이익"), sd = st("감가상각비");
-        if (o != null && d != null && so && sd && (extEq(v, o + d) || (n === "블룸버그" && unit >= 1 && ([roundHalfAway, roundHalfEven].some((f) => extEq(v, f(o, unit) + f(d, unit))) || (Math.abs(v - (o + d)) <= unit + 1e-6 && (so === "NA" || sd === "NA"))))))
+        if (o != null && d != null && so && sd && (so === "이탈" || sd === "이탈") && extEq(v, o + d))
+          return { outlier: `EBITDA = ${n} 영업이익 ${o}(${so}) + ${n} 감가상각비 ${d}(${sd}) — 차이는 ${n} 단독 이탈 성분 몫` };
+        if (o != null && d != null && so && sd && so !== "이탈" && sd !== "이탈" && (extEq(v, o + d) || (n === "블룸버그" && unit >= 1 && ([roundHalfAway, roundHalfEven].some((f) => extEq(v, f(o, unit) + f(d, unit))) || (Math.abs(v - (o + d)) <= unit + 1e-6 && (so === "NA" || sd === "NA"))))))
           return (so === "NA" || sd === "NA") && so !== "②" && sd !== "②"
             ? { na: `EBITDA = ${n} 영업이익 ${o}(${so}) + ${n} 감가상각비 ${d}(${sd}) — 성분 외부 정밀도 부족` }
             : { ok: `EBITDA = ${n} 영업이익 ${o}(${so}) + ${n} 감가상각비 ${d}(${sd}) — 두 성분 모두 앱과 일치 또는 원인 확인` };
@@ -8028,6 +8069,30 @@ async function verifyUs(sym) {
             }
           }
         } catch (e) { errs.push(`4분기 실적발표 8-K 조회 실패: ${String(e).slice(0, 60)}`); }
+      }
+    }
+    // 4분기 실적발표 8-K 의 분기 감가상각·상각(2026-10-01 IBM — 8-K 현금흐름 요약 "Depreciation/Amortization of Intangibles" 4분기 1,297, 10-K·10-Q 로는
+    //    사업연도 5,021 − 9개월 3,725 = 1,296). 블룸버그 LTM 이 앱과 다를 때만 읽는다
+    {
+      const lt = recon.get("LTM 감가상각비");
+      const fyc = Object.keys(H).filter((k) => k !== "LTM" && H[k]?.date && H.LTM?.date && H[k].date < H.LTM.date).sort((a, b) => H[b].date.localeCompare(H[a].date))[0];
+      if (lt?.srcs?.["블룸버그"] && !extEq(lt.srcs["블룸버그"].v, lt.ours) && fyc) {
+        const E = H[fyc].date;
+        try {
+          const rc0 = sub.filings.recent;
+          const i = (rc0.form ?? []).map((fm, j) => j).filter((j) => rc0.form[j] === "8-K" && /2\.02/.test(rc0.items?.[j] ?? "") && rc0.filingDate[j] > E && dayDiff(rc0.filingDate[j], E) <= 80).sort((a, b) => rc0.filingDate[a].localeCompare(rc0.filingDate[b]))[0];
+          if (i != null) {
+            const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rc0.accessionNumber[i].replace(/-/g, "")}`;
+            const idx = await secJson(`${base}/index.json`);
+            for (const d0 of idx.directory.item.filter((x) => /\.htm$/i.test(x.name) && !/^R\d+\.htm$/i.test(x.name))) {
+              const txt = (await secText(`${base}/${d0.name}`)).replace(/<[^>]+>/g, " ").replace(/&#47;/g, "/").replace(/&#160;|&nbsp;|&#x200B;|&#36;|&#x24;/gi, " ").replace(/\s+/g, " ");
+              const m = txt.match(/Depreciation\s*\/\s*Amortization of Intangibles\s*(?:\(\d\))?\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
+              if (!m) continue;
+              const num = Number(m[1].replace(/,/g, "")), scale = /in thousands/i.test(txt.slice(0, 20000)) ? 1e3 : 1e6;
+              if (Number.isFinite(num)) { q4Rel.set("감가상각비", { v: num * scale, filed: rc0.filingDate[i], url: `${base}/${d0.name}`, fyEnd: E }); break; }
+            }
+          }
+        } catch (e) { errs.push(`4분기 실적발표 8-K(감가상각비) 조회 실패: ${String(e).slice(0, 60)}`); }
       }
     }
     // 실적발표 8-K(항목 2.02) GAAP 희석 EPS(오너 지시 2026-09-30 — "8k 도 반영"). 10-K 에 없는 값 두 가지를 확인한다: 분할 전 연간 EPS

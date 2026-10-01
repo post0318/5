@@ -1,6 +1,7 @@
 import "server-only";
 import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
 import { equityRestatement } from "./edgar-balance";
+import { buildUsCashFlow } from "./edgar-cashflow";
 import { unavailableNote } from "./sec-unavailable";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
@@ -308,14 +309,29 @@ export function buildUsAnalysis(
   })();
   // 현금흐름표 화면과 같은 개념 목록(계속사업 태그만 쓰는 해 — MRK 2021, 2026-10-01)
   const OCF_C = ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"];
-  const ocf = flow(OCF_C);
   const CAPEX_C = [
     "PaymentsToAcquirePropertyPlantAndEquipment",
     "PaymentsToAcquireProductiveAssets",
     "PaymentsForCapitalImprovements",
     "PaymentsToAcquireOtherProductiveAssets",
   ];
-  const capexRaw = flow(CAPEX_C);
+  // 영업현금흐름·유형자산 취득 = 현금흐름표 화면 값(edgar-cashflow.ts, 2026-10-01 — 따로 읽으면 화면과 갈렸다: MAR 2025 태그 교체로 LTM 공란,
+  // MRK 2021 계속사업 태그). 화면에 그 열이 없을 때만(연도 범위 차이) 종전 태그 조회
+  const cfStmt = buildUsCashFlow(facts, "annual", opts.sic ?? null);
+  const cfRow = (id: string) => (cfStmt.sections ?? []).flatMap((x) => x.items ?? []).find((it) => it.accountId === id);
+  const fromCf = (id: string, fb: Record<string, number | null>, abs = false) => {
+    const it = cfRow(id);
+    const o = blank();
+    for (const l of labels) {
+      const v = it?.values?.[l];
+      o[l] = v != null ? (abs ? Math.abs(v) : v) : (it && l in (it.values ?? {}) ? null : fb[l]);
+      const w = it?.cellNotes?.[l];
+      if (o[l] == null && w) note(o, l, w);
+    }
+    return inheritWhy(o, fb);
+  };
+  const ocf = fromCf("cf:total:영업활동 현금흐름", flow(OCF_C));
+  const capexRaw = fromCf("cf:투자활동 현금흐름:유형자산 취득", flow(CAPEX_C), true);
   // 1년 성장률 첫 해(표시 첫 컬럼) 보정용 전체 시계열 — 전년 값 소스
   const opIncFull = (() => {
     if (isFin) {
@@ -365,6 +381,8 @@ export function buildUsAnalysis(
     entriesOf(facts, "PaymentsOfDividendsCommonStock").length > 0 ||
     // 자본변동표 배당 결의액(Dividends·DividendsCommonStock·DividendsCommonStockCash)이 포괄 지급액과 같은 기간에 정확히 같으면 보통주 배당(2026-10-01 VRT —
     // 주당배당·보통주 지급 태그 없이 PaymentsOfDividends 만 쓰는데, 자본변동표 Dividends 3.8·9.5·42.2·66.6 이 지급액과 매년 일치). BE 는 자본변동표에 이런 줄이 없다
+    // IFRS 공시(TSM 등 20-F) — 주주 배당 주당액(DividendsRecognisedAsDistributionsToOwnersPerShare) = 미국 기준 주당 배당 결의 태그와 같은 성격(2026-10-01)
+    Object.values((facts.facts as Record<string, Record<string, { units: Record<string, unknown[]> }> | undefined>)["ifrs-full"]?.["DividendsRecognisedAsDistributionsToOwnersPerShare"]?.units ?? {}).some((l) => l.length > 0) ||
     ["Dividends", "DividendsCommonStock", "DividendsCommonStockCash"].some((c) =>
       entriesOf(facts, c).some((e) => e.start && e.val !== 0 && entriesOf(facts, "PaymentsOfDividends").some((d) => d.start === e.start && d.end === e.end && d.val === e.val)));
   const commonDividends = hasCommonDivEvidence ? dividends : blank();
