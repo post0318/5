@@ -5713,9 +5713,14 @@ async function verifyUs(sym) {
       try {
         const sb = await saStatement(sym, "balance-sheet"), sc = await saStatement(sym, "cash-flow-statement");
         const uB = unitOfAll([sb.assetsc, sb.liabilities, sb.equity].flat()), uC = unitOfAll([sc.ncfo, sc.ncfi, sc.ncff].flat());
+        // TTM 열은 그 끝(분기 화면 첫 열)이 앱 LTM 기준일과 같을 때만(2026-10-01 MU — SA 는 FY2026 10-K(2026-09-03)까지 반영, 앱 LTM 은 직전 분기 → 기간이 달라
+        // 투자활동 −61,641 vs −24,886 등이 ③ 으로 잡혔다)
+        let saQEnd = null;
+        try { saQEnd = (await saStatement(sym, "cash-flow-statement", true)).datekey.find((d) => d !== "TTM") ?? null; } catch { /* 분기 화면 실패 — TTM 대조 안 함 */ }
+        const ttmOk = !!(saQEnd && H.LTM?.date && dayDiff(saQEnd, H.LTM.date) <= 7);
         for (const [c, x] of Object.entries(H)) {
           if (!x?.date) continue;
-          const kOf = (f) => (c === "LTM" ? f.datekey.indexOf("TTM") : f.datekey.findIndex((d) => d !== "TTM" && dayDiff(d, x.date) <= 7));
+          const kOf = (f) => (c === "LTM" ? (ttmOk ? f.datekey.indexOf("TTM") : -1) : f.datekey.findIndex((d) => d !== "TTM" && dayDiff(d, x.date) <= 7));
           const kb = kOf(sb), kc = kOf(sc);
           if (kb >= 0) for (const [item, id, , sk] of BSX) if (sb[sk]?.[kb] != null) put(`${c} ${item}`, appv(bsI, id, c), "StockAnalysis", sb[sk][kb], uB);
           if (kc >= 0) for (const [item, id, , sk] of CFX) if (sc[sk]?.[kc] != null) put(`${c} ${item}`, appv(cfI, id, c), "StockAnalysis", sc[sk][kc], uC);
@@ -6765,6 +6770,12 @@ async function verifyUs(sym) {
         };
         const terms = (CF_ADD ?? []).map(([sg, tag, lab]) => ({ sg, tag, lab, v: tv(tag) })).filter((t) => t.v);
         if (metric === "현금흐름표 유형자산 취득(CAPEX)") for (const f of capexCustom.get(col) ?? []) terms.push({ sg: -1, tag: f.id, lab: `회사 고유 설비 취득 줄(${f.form} 원본)`, v: f.v });
+        // 자사주: 소비세 줄 + 주식 발행 순유출(ProceedsFromIssuanceOrSaleOfEquity 가 음수 = 원천징수 차감 후 순유출) — 외부는 이 줄을 자사주 취득에 합친다
+        if (metric === "현금흐름표 자기주식 취득") {
+          for (const f of buybackCustom.get(col) ?? []) terms.push({ sg: -1, tag: f.id, lab: `자사주 매입 소비세(${f.form} 원본)`, v: f.v });
+          const iss = tv("ProceedsFromIssuanceOrSaleOfEquity");
+          if (iss != null && iss < 0) terms.push({ sg: 1, tag: "ProceedsFromIssuanceOrSaleOfEquity", lab: "주식 발행(원천징수 차감) 순유출", v: iss });
+        }
         for (let m = 1; m < 1 << terms.length; m++) {
           const use = terms.filter((_, i) => m & (1 << i)), exp = r.ours + use.reduce((t, x) => t + x.sg * x.v, 0);
           if (eqExp(exp)) return { ok: `${n} = 앱 ${r.ours} ${use.map((x) => `${x.sg > 0 ? "+" : "−"} ${x.lab} ${x.v}(${x.tag})`).join(" ")} = ${exp}${rnd(exp)} — 외부는 이 금액을 포함` };
@@ -7837,6 +7848,18 @@ async function verifyUs(sym) {
     // 회사 고유 설비 취득 줄(2026-10-01 INTC 2021 — 현금흐름표 투자활동에 "매각 예정 NAND 설비 취득" 1,596 이 별도 줄, 태그 intc_DivestitureAdditionsTo
     // PropertyPlantAndEquipmentHeldForSale). 자본지출 외부값이 앱과 다른 연간 열만 그 결산일 10-K 원본을 읽는다 → 열 → [{ id, v }]
     const capexCustom = new Map();
+    // 자사주 매입 소비세 회사 고유 줄(2026-10-01 CAT 2025 — 재무활동 "Excise tax paid on purchase of common stock" 73, cat_PaymentsForExciseTaxOnPurchaseOfCommonStock)
+    const buybackCustom = new Map();
+    for (const [c0, x] of Object.entries(H)) {
+      if (c0 === "LTM" || !x?.date) continue;
+      const rr = recon.get(`${c0} 현금흐름표 자기주식 취득`);
+      if (!rr || rr.ours == null || !Object.values(rr.srcs).some((z) => !extEq(z.v, rr.ours))) continue;
+      try {
+        const fa = await filingAtDate(cik, sub, x.date);
+        const hits = (fa?.durFacts ?? []).filter((f) => !f.dims.length && /Excise/i.test(f.id) && /Repurchase|Purchase|Buyback|Treasury|CommonStock/i.test(f.id) && (Date.parse(f.end) - Date.parse(f.start)) / 864e5 >= 300 && f.v);
+        if (hits.length) buybackCustom.set(c0, [...new Map(hits.map((f) => [f.id, f.v])).entries()].map(([id, v]) => ({ id, v, form: fa.form })));
+      } catch (e) { errs.push(`자사주 회사 고유 줄 조회 실패(${c0}): ${String(e).slice(0, 60)}`); }
+    }
     for (const [c0, x] of Object.entries(H)) {
       if (c0 === "LTM" || !x?.date) continue;
       const rr = recon.get(`${c0} 현금흐름표 유형자산 취득(CAPEX)`);
@@ -7980,8 +8003,11 @@ async function verifyUs(sym) {
       if (!metricClass && !revenueClass && /^(\d{4}Y|LTM) (희석 EPS|순이익|세전이익|EBITDA|총차입금\(운용리스 포함\)|재무상태표 .+|현금흐름표 .+)$/.test(r.item)) {
         const [col0, ...mm] = r.item.split(" "), m0 = mm.join(" ");
         // 총차입금은 A층 전제를 SEC 본표·주석 분해 성립(debtDec.appOk)으로 본다(앱 = 본표 차입금·리스 줄 합 + 주석 항목, 1달러 안)
-        const aPassed = (c, m) => (m === "총차입금(운용리스 포함)" ? !!debtDec?.appOk && c === "LTM" : aPassedOuter(c, m));
         const clsMatched = matched.filter((n) => clsNames.includes(n));
+        // 재무상태표·현금흐름표 A층이 공통모드(앱 = SEC 값, 대체 개념 선택만 앱과 같은 목록 — GEV 제한현금 포함 현금, MCD·ORCL 보통주 배당 태그)여도 외부 1곳 이상이
+        // 앱과 정확히 일치하면 독립 확인(independentOr 와 같은 원칙, 2026-10-01) — 단독 이탈 판정 전제로 인정
+        const aCommonOk = (c, m) => /^(재무상태표|현금흐름표) /.test(m) && clsMatched.length >= 1 && EXACT_A[m] && checks.some((k) => k.col === c && k.status === COMMON && EXACT_A[m].test(k.name));
+        const aPassed = (c, m) => (m === "총차입금(운용리스 포함)" ? !!debtDec?.appOk && c === "LTM" : aPassedOuter(c, m) || aCommonOk(c, m));
         metricClass = Object.fromEntries(clsNames.map((n) => [n, matched.includes(n) ? "①" : commonMode[n] ? "공통모드" : precisionNa[n] ? "NA" : causes[n]?.ok ? "②"
           : causes[n]?.outlier || (aPassed(col0, m0) && clsMatched.length >= 2 && clsNames.length - clsMatched.length === 1) ? "외부단독이탈"
           // 다른 외부 1곳 이상 일치(또는 원인 확인)면 외부 단독 이탈(오너 결정 2026-09-30 — 옛 "구성 미분해"와 같은 기준)
@@ -8070,6 +8096,7 @@ async function verifyUs(sym) {
     시가총액: H[c].mc, EV: H[c].ev, EBITDA: H[c].ebitda, PER: H[c].per, PBR: H[c].pbr, PSR: H[c].psr, "EV/EBITDA": H[c].evx,
   }]));
   const audit = buildAudit({ app: auditApp, cols: [fyLast, "LTM"].filter(Boolean), checks, review, closed: CLOSED_METRICS });
+  const fyDates = Object.fromEntries(Object.entries(H ?? {}).filter(([, x]) => x?.date).map(([c, x]) => [c, x.date]));
   // LTM ③ 보정(2026-09-30) — LTM 열은 비교 소스(블룸버그 등)가 없어 ③ 으로 남기 쉽다. 같은 소스·같은 지표의 연간 열이 2개 이상이고 **모두**
   //  외부 단독 이탈이면(앱 = SEC 는 LTM 에서도 A층 통과) LTM 도 외부 단독 이탈 — 그 소스의 정의가 연간 내내 앱과 다르다는 근거
   for (const o of review) {
@@ -8079,7 +8106,11 @@ async function verifyUs(sym) {
     for (const n of Object.keys(cls)) {
       if (cls[n] !== "③") continue;
       const ann = review.filter((x) => x.metricClass?.[n] && /^\d{4}Y /.test(x.item ?? "") && x.item.slice(6) === m);
-      if (ann.length >= 2 && ann.every((x) => x.metricClass[n] === "외부단독이탈")) cls[n] = "외부단독이탈";
+      if (ann.length >= 2 && ann.every((x) => x.metricClass[n] === "외부단독이탈")) { cls[n] = "외부단독이탈"; continue; }
+      // LTM 기간 = 사업연도(결산일 ±7일 — 결산 직후, WDC FY2026 2026-07-03)이고 그 소스의 연간 칸 값·앱 값이 LTM 과 같으면 같은 칸 — 연간 판정을 따른다(2026-10-01)
+      const fyc = Object.keys(fyDates).find((c) => fyDates.LTM && c !== "LTM" && dayDiff(fyDates[c], fyDates.LTM) <= 7);
+      const same = fyc && review.find((x) => x.item === `${fyc} ${m}` && x.metricClass?.[n] && x.ours === o.ours && x.sources?.[n] === o.sources?.[n]);
+      if (same && same.metricClass[n] !== "③") cls[n] = same.metricClass[n];
     }
   }
   return { sym, checks, review, hardErrors, revErrors, cogsErrors, opincErrors, daErrors, sgaErrors, audit };
