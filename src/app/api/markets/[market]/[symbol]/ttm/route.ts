@@ -3,14 +3,12 @@ import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
-import { computeKr52wBeta } from "@/lib/markets/kr/beta";
-import { computeUs52wBeta } from "@/lib/markets/us/beta";
 
 export const maxDuration = 60;
 
 /**
- * TTM(최근 4분기) 플로우 + 국내 보조지표(주당배당금, 52주 베타).
- * 미구현 시장은 { ttm: null, dividend: null, beta: null }.
+ * TTM(최근 4분기) 플로우 + 국내 보조지표(주당배당금). 52주 베타는 ../beta 라우트(TTM 첫 조회가 느려 분리, 2026-10-01).
+ * 미구현 시장은 { ttm: null, dividend: null }.
  */
 export async function GET(
   request: Request,
@@ -23,19 +21,13 @@ export async function GET(
     }
     const adapter = getAdapter(market);
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
-    const yahoo = new URL(request.url).searchParams.get("yahoo");
-    const [ttm, krDividend, beta] = await Promise.all([
+    const [ttm, krDividend] = await Promise.all([
       adapter.getTtm ? adapter.getTtm(sym) : Promise.resolve(null),
       market === "kr"
         ? getKrJurirNo(sym)
             .then((crno) => fetchKrAnnualDps(crno))
             .catch(() => null)
         : Promise.resolve(null),
-      market === "kr"
-        ? computeKr52wBeta(sym, yahoo).catch(() => null)
-        : market === "us"
-          ? computeUs52wBeta(sym, yahoo).catch(() => null)
-          : Promise.resolve(null),
     ]);
 
     // 미국(EDGAR)은 주당배당금도 TTM 페이로드에 실려 온다 → 국내와 동일 형태로 변환.
@@ -54,7 +46,7 @@ export async function GET(
     }
 
     return ok(
-      { ttm, dividend, beta },
+      { ttm, dividend },
       {
         headers: {
           "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400",

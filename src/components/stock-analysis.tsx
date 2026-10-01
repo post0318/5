@@ -246,6 +246,19 @@ export function StockAnalysis({
           annual: { dps: number; year: number } | null;
           ttm: { dps: number; from: string; to: string } | null;
         } | null;
+      }>(
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm` +
+          (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
+      ),
+    enabled: Boolean(symbol),
+    retry: false,
+  });
+
+  // 52주 베타·최고·최저 — TTM 과 분리된 가벼운 라우트(TTM 첫 조회가 느려도 바로 표시, 2026-10-01)
+  const betaQ = useQuery({
+    queryKey: ["beta", market, symbol, yahooOverride],
+    queryFn: () =>
+      apiFetch<{
         beta: {
           beta: number;
           change: number | null;
@@ -254,7 +267,7 @@ export function StockAnalysis({
           low52: number | null;
         } | null;
       }>(
-        `/api/markets/${market}/${encodeURIComponent(symbol!)}/ttm` +
+        `/api/markets/${market}/${encodeURIComponent(symbol!)}/beta` +
           (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
       ),
     enabled: Boolean(symbol),
@@ -713,25 +726,25 @@ export function StockAnalysis({
                 <Stat label="52주 베타" className="order-4 lg:order-none">
                   <span className="tnum text-base">
                     <NumberText
-                      value={ttmQ.data?.beta?.beta ?? ov.consensus?.beta ?? null}
+                      value={betaQ.data?.beta?.beta ?? ov.consensus?.beta ?? null}
                       digits={2}
                       fallback="-"
                     />
-                    {ttmQ.data?.beta?.change != null && (
+                    {betaQ.data?.beta?.change != null && (
                       <span
                         className={cn(
                           "tnum ml-1 text-sm font-normal",
-                          ttmQ.data.beta.change > 0 && "text-up",
-                          ttmQ.data.beta.change < 0 && "text-down",
-                          ttmQ.data.beta.change === 0 && "text-muted-foreground",
+                          betaQ.data.beta.change > 0 && "text-up",
+                          betaQ.data.beta.change < 0 && "text-down",
+                          betaQ.data.beta.change === 0 && "text-muted-foreground",
                         )}
                       >
-                        ({ttmQ.data.beta.change > 0 ? "+" : ""}
-                        {formatNumber(ttmQ.data.beta.change, 3)})
+                        ({betaQ.data.beta.change > 0 ? "+" : ""}
+                        {formatNumber(betaQ.data.beta.change, 3)})
                       </span>
                     )}
                   </span>
-                  {ttmQ.data?.beta?.beta != null ? (
+                  {betaQ.data?.beta?.beta != null ? (
                     <div className="text-muted-foreground mt-1 text-[11px]">
                       {market === "kr" ? "KOSPI" : "S&P 500"} · 52주 일간
                     </div>
@@ -742,9 +755,9 @@ export function StockAnalysis({
                 <Stat label="52주 최고 / 최저" className="order-2 lg:order-none">
                   {(() => {
                     const hi52 =
-                      ttmQ.data?.beta?.high52 ?? ov.consensus?.fiftyTwoWeekHigh ?? null;
+                      betaQ.data?.beta?.high52 ?? ov.consensus?.fiftyTwoWeekHigh ?? null;
                     const lo52 =
-                      ttmQ.data?.beta?.low52 ?? ov.consensus?.fiftyTwoWeekLow ?? null;
+                      betaQ.data?.beta?.low52 ?? ov.consensus?.fiftyTwoWeekLow ?? null;
                     return (
                       <>
                         <span className="tnum text-base">
