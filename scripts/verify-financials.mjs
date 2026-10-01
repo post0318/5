@@ -6869,7 +6869,10 @@ async function verifyUs(sym) {
           "현금흐름표 배당금 지급": ["PaymentsOfDividendsCommonStock", -1], "현금흐름표 자기주식 취득": ["PaymentsForRepurchaseOfCommonStock", -1] }[metric];
         const l = T ? (G[T[0]]?.units?.USD ?? []).filter((e) => e.start && /^10-[KQ]/.test(e.form ?? "")) : [];
         const dur = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
-        const cur = latestPrecise(l.filter((e) => dayDiff(e.end, H.LTM.date) <= 7 && dur(e) >= 80 && dur(e) <= 300 && /^10-Q/.test(e.form)));
+        // 당기 누적 = 그 기준일 10-Q 값 중 가장 긴 기간(3개월 값이 아니라 사업연도 초부터의 누적)
+        const curAll = l.filter((e) => dayDiff(e.end, H.LTM.date) <= 7 && dur(e) >= 80 && dur(e) <= 300 && /^10-Q/.test(e.form));
+        const maxDur = Math.max(0, ...curAll.map(dur));
+        const cur = latestPrecise(curAll.filter((e) => dur(e) >= maxDur - 3));
         const fy = cur ? latestPrecise(l.filter((e) => dur(e) >= 300 && dayDiff(e.start, cur.start) > 300 && dayDiff(e.start, cur.start) < 430 && dayDiff(e.end, cur.start) <= 7)) : null;
         const prior = cur && fy ? latestPrecise(l.filter((e) => dayDiff(e.start, fy.start) <= 7 && Math.abs(dur(e) - dur(cur)) <= 7)) : null;
         if (cur && fy && prior) {
