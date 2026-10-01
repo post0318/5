@@ -155,9 +155,9 @@ export function cashFlowDaLines(cal: string, lab: Map<string, string[]>): CashFl
 // 그대로·근사 표시)를 모든 화면에서 함께 막아야 해서 이번 범위에서 하지 않았다(검증 도구가 그 기간을 미결로 표시).
 
 /** 인스턴스의 기간 값(차원 포함): 개념 id·기간·차원(축=멤버) 목록 */
-interface InstFact { id: string; period: string; dims: [string, string][]; val: number }
+export interface InstFact { id: string; period: string; dims: [string, string][]; val: number }
 
-function instanceFacts(xml: string, want: (id: string) => boolean): InstFact[] {
+export function instanceFacts(xml: string, want: (id: string) => boolean): InstFact[] {
   const ctx = new Map<string, { period: string; dims: [string, string][] }>();
   for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
     const s = /<(?:xbrli:)?startDate>\s*([^<\s]+)/.exec(m[2])?.[1];

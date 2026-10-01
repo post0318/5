@@ -31,6 +31,7 @@ import { withFilingGapFill } from "./edgar-gapfill";
 import { toAdrBasis, withForeignNormalization } from "./edgar-foreign";
 import { withContentAmortization } from "./edgar-content";
 import { withRevenueDims } from "./edgar-revenue-dims";
+import { withCashFlowWc } from "./edgar-cf-wc";
 import { needsOpIncomeStructure, withIncomeStatementStructure } from "./edgar-is-structure";
 import { withOneOffCharges } from "./edgar-oneoff";
 import { withFacePretax } from "./edgar-pretax";
@@ -239,8 +240,10 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       // 감가상각비 = 현금흐름표 본표 감가상각·상각 줄(edgar-cf-structure.ts). 콘텐츠 상각 판독이 실패했으면(NFLX) 본표 줄로
       // 대신하지 않는다 — 콘텐츠 상각이 빠진 값이 된다
       const withDa = unavailable.da ? withDebt : await step("da", withDebt, () => withCashFlowDa(cik, withDebt, recent));
+      // 운전자본 변동 합계 = 현금흐름표 본표 운전자본 줄 합(edgar-cf-wc.ts — 분기 요약형 공시 회사의 LTM 운전자본)
+      const withWc = await step("da", withDa, () => withCashFlowWc(cik, withDa, recent));
       // 연말 유통주식수가 자본변동표 차원으로만 있는 회사(WMT·BE·META, edgar-equity-shares.ts)
-      const withShares = await step("yearEndShares", withDa, () => withEquityStatementShares(cik, withDa, recent));
+      const withShares = await step("yearEndShares", withWc, () => withEquityStatementShares(cik, withWc, recent));
       // 20-F 발행사(분기 XBRL 없음) — LTM 열을 Yahoo 분기(원통화) 최근 4개 분기로(edgar-yahoo-quarters.ts, 오너 결정
       // 2026-09-25). 조회 실패 시 SEC 사업연도 유지 + 경고(짧은 캐시), 다른 원천으로 대체하지 않는다.
       let withLtm = withShares;
