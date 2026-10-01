@@ -307,7 +307,17 @@ export async function buildWeeklyIssues(
   const { fetchSearchInterest } = await import("./datalab");
   const [research, news, interest] = await Promise.all([
     countFromResearch(week),
-    countFromNews(week),
+    // maxPages 를 네이버 API 가 허용하는 상한(10페이지=1,000건, fetchNaverNewsInRange
+    // 의 "start>1000 이면 중단" 가드)까지 올린다(오너 지적 2026-10-01 —
+    // "0건이라는 자체가 말이 안되는데?"). 기본값 5페이지(500건)로는 넓은
+    // 범용어(예: "나스닥")가 리포트 주 이후 1,000건대 최신 기사를 쏟아내는
+    // 주엔 날짜순 페이지네이션이 리포트 주까지 거슬러 올라가기 전에 예산을
+    // 다 써버려 실제로는 기사가 많은데도 0건으로 집계된다(실측: 조회 시점이
+    // 대상 주에서 6일 지난 상태로 "나스닥" 단독 질의 시 0건 — 원본 API 는
+    // 그 질의로 88만 건 이상을 갖고 있었음). 상한까지 늘려도 완전히 없어지는
+    // 문제는 아니지만(초고빈도어는 여전히 위험) 예산을 2배로 늘려 안전지대를
+    // 넓힌다.
+    countFromNews(week, { maxPages: 10 }),
     // 가중치가 0 이면 결과를 쓰지 않으므로 호출 자체를 건너뛴다.
     WEIGHT.search > 0
       ? fetchSearchInterest(week, WEEKLY_TOPICS).catch(() => new Map<string, number>())
