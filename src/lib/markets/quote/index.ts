@@ -67,7 +67,27 @@ export async function getEodQuote(
   let yahooErr: unknown;
   try {
     const { bars, splits } = await fetchYahooEodWithSplits(market, symbol, opts);
-    if (bars.length > 0) return buildQuote(market, symbol, bars, "Yahoo Finance", { splits });
+    if (bars.length > 0) {
+      // 미국: 장 마감 전 오늘 봉(진행 중)은 계산용 봉에서 빼고 표시용 live 로만(오너 결정 2026-10-02 (나))
+      if (market === "us" && !opts.to) {
+        const lastBar = bars.at(-1)!;
+        if (isUsSessionInProgress(lastBar.date) && bars.length >= 2 && lastBar.close != null) {
+          const done = bars.slice(0, -1);
+          const q = buildQuote(market, symbol, done, "Yahoo Finance", { splits });
+          const prevClose = q.last;
+          return {
+            ...q,
+            live: {
+              price: lastBar.close,
+              date: lastBar.date,
+              change: prevClose != null ? lastBar.close - prevClose : null,
+              changePct: prevClose ? ((lastBar.close - prevClose) / prevClose) * 100 : null,
+            },
+          };
+        }
+      }
+      return buildQuote(market, symbol, bars, "Yahoo Finance", { splits });
+    }
   } catch (e) {
     yahooErr = e;
   }
@@ -78,6 +98,19 @@ export async function getEodQuote(
     // Stooq 도 실패 — Yahoo 오류를 올린다
   }
   throw yahooErr ?? new Error(`시세 없음: ${market}:${symbol}`);
+}
+
+/**
+ * 뉴욕 장이 그 날짜에 아직 진행 중인지(정규장 마감 16:00 ET + 15분 여유 전). 날짜가 뉴욕 오늘이 아니면(과거 봉) false.
+ * 공휴일 달력은 없다 — 휴장일엔 야후가 그날 봉을 만들지 않으므로 영향 없음
+ */
+function isUsSessionInProgress(barDate: string, now: Date = new Date()): boolean {
+  const f = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  const p = Object.fromEntries(f.formatToParts(now).map((x) => [x.type, x.value]));
+  const today = `${p.year}-${p.month}-${p.day}`;
+  if (barDate !== today) return false;
+  const hh = p.hour === "24" ? 0 : Number(p.hour), mm = Number(p.minute);
+  return hh * 60 + mm < 16 * 60 + 15;
 }
 
 /** KST 기준 현재 시각의 연/월/일/시/분/요일(0=일 ~ 6=토). 서버 실행 TZ와 무관하게 항상 KST로 계산. */

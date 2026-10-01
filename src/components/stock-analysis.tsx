@@ -693,18 +693,24 @@ export function StockAnalysis({
                 )}
               >
                 <Stat
-                  label="종가"
+                  label={ov.quote?.live ? "현재가" : "종가"}
                   className="order-1 lg:order-none"
                   onClick={() => setShowPriceChart((v) => !v)}
                 >
+                  {/* 장중(미국)엔 진행 중 가격을 표시만 — 시가총액·멀티플은 마감 종가 기준(오너 결정 2026-10-02 (나)) */}
                   <span className="inline-flex items-baseline gap-1.5">
-                    <Money value={ov.quote?.last} currency={ccy} />
-                    {ov.quote?.changePct != null && (
+                    <Money value={ov.quote?.live?.price ?? ov.quote?.last} currency={ccy} />
+                    {(ov.quote?.live ? ov.quote.live.changePct : ov.quote?.changePct) != null && (
                       <span className="text-sm font-normal">
-                        (<ChangePercent value={ov.quote.changePct} market={market} />)
+                        (<ChangePercent value={(ov.quote?.live ? ov.quote.live.changePct : ov.quote?.changePct)!} market={market} />)
                       </span>
                     )}
                   </span>
+                  {ov.quote?.live && (
+                    <div className="text-muted-foreground mt-1 text-[11px]">
+                      계산 기준 종가 <Money value={ov.quote.last} currency={ccy} /> ({ov.quote.lastDate ?? "-"})
+                    </div>
+                  )}
                   {/* 출처 주석 삭제(오너 지시 2026-09-21) — "KRX 정보데이터시스템
                       + Yahoo Finance (최신 종가 보강)" 같은 내부 폴백 설명이
                       화면에 그대로 노출됐다. 날짜만 남긴다. */}
