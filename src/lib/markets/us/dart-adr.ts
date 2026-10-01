@@ -512,23 +512,26 @@ export async function dartAdrHighlights(spec: Spec, yahoo: string | null): Promi
           // 빌더는 네이버 표시 단위(억)를 받는다 — USD 를 1e8 로 나눠 넘기면 빌더가 다시 곱한다
           estRevenue: est.revenueAvg == null ? null : est.revenueAvg / 1e8,
           estOpIncome: null,
-          estNetIncome: null,
+          // 예상 순이익 = 예상 EPS(ADR 1주) × ADR 환산 주식수(오너 결정 2026-10-01 — 미국 하이라이트와 같은 산식), 억 단위
+          estNetIncome: est.epsAvg != null && x.adrShares != null ? (est.epsAvg * x.adrShares) / 1e8 : null,
           estEps: est.epsAvg,
           estPer: null,
           estPbr: null,
         }
       : null,
   });
-  // 빈칸 사유 — 과거 연도 시가총액(결산일 유통주식수 없음)·추정 순이익(무료 컨센서스 없음, EPS × 주식수로 대신하지 않음)
+  // 칸 주석 — 과거 연도 시가총액 빈칸 사유·예상 순이익 산식
   for (const r of hl.rows) {
     if (r.key !== "mktcap" && r.key !== "ni") continue;
     r.cellNotes = hl.columns.map((c, i) =>
-      r.values[i] != null
-        ? null
-        : r.key === "mktcap" && c.kind === "fy"
-          ? "결산일 유통주식수 없음(DART 주식총수 현황) — 현재 주식수로 대신하지 않음"
-          : r.key === "ni" && c.kind === "estimate"
-            ? "예상 순이익: 무료 컨센서스 없음(EPS × 주식수로 대신하지 않음)"
+      r.key === "ni" && c.kind === "estimate"
+        ? r.values[i] != null
+          ? `예상 순이익 = 예상 희석 EPS ${est?.epsAvg} × ADR 환산 주식수 ${Math.round(x.adrShares ?? 0).toLocaleString("en-US")}(야후 컨센서스는 EPS·매출만 제공)`
+          : "예상 순이익: 예상 EPS 또는 주식수 없음"
+        : r.values[i] != null
+          ? null
+          : r.key === "mktcap" && c.kind === "fy"
+            ? "결산일 유통주식수 없음(DART 주식총수 현황) — 현재 주식수로 대신하지 않음"
             : null,
     );
   }

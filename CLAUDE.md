@@ -1957,6 +1957,11 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   `--post` 가 `/api/cron/verify-results` 로 종목별 최신 결과를 저장(MongoDB `verify_results`, 통과는 건수만).
   유니버스에 새로 담긴 종목은 결과가 올 때까지 "미검증". GitHub Actions `verify-financials.yml`: 매일 07:40 KST
   전 종목(`--universe`), 3시간마다 미검증 종목만(`--missing`). master 에 합쳐 배포해야 동작한다.
+- **`ENGINE_VERSION`(`src/lib/fin/store.ts`)은 fin 조립(`src/lib/fin` — 매출·원가·영업이익 등 5층 구조) 규칙이 바뀔 때만
+  올린다(2026-10-01).** 저장본(`fin_sym`)은 엔진판이 같을 때만 쓰이고, 다르면 종목마다 요청 시점에 다시 조립한다
+  (미국 첫 조회 약 30~40초 — 개요 시가총액·하이라이트가 그만큼 늦는다). 하이라이트·손익계산서 표시처럼 요청 시점에
+  계산되는 화면 변경으로 올리면 저장본 전체가 무효가 된다(실측: 43·44 를 표시 변경으로 올려 개요가 30초씩 걸림). 올렸으면
+  배포 직후 `gh workflow run fin-build.yml` 로 저장본을 다시 채운다(하루 1회 06:10 KST 배치를 기다리지 않게).
 - **주의**: `.env.local` 을 `vercel env pull` 로 받으면 민감 변수(MONGODB_URI·
   KRX_API_KEY 등)가 빈 값으로 온다 — 유니버스 검증·한국 시가총액이 안 된다.
 - `edgar-pershare.ts`: 지배주주 순이익(NetIncomeLoss 없으면 ProfitLoss − 비지배지분),

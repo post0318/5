@@ -653,7 +653,7 @@ export function ttmCombine(
 
 /** LTM 공란 사유 — 화면 칸 주석 문구(그림자 채우기 금지, 오너 규칙 2026-09-27) */
 export const LTM_NO_QUARTER = "LTM 구성 분기 없음";
-export const LTM_STALE = "LTM 구성 분기 없음(최근 사업연도 공시가 550일 넘게 지남 — 태그 중단)";
+export const LTM_STALE = "회사가 이 항목 공시를 중단함(이 항목이 마지막으로 실린 사업연도 공시가 550일 넘게 지남 — 이후 10-K·10-Q 에 없음) — LTM 계산 불가";
 export const LTM_YAHOO_GAP = "LTM 구성 분기 없음(Yahoo 분기에 없는 항목)";
 
 export interface LtmFlow {

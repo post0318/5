@@ -242,7 +242,8 @@ export function buildUsCashFlow(
     // Q4 열 없음). 예전엔 companyfacts 의 fy·fp 라벨(공시의 회계연도 초점 — 비교 기간에도 같은 라벨이 붙는다)로 열을 묶어 ORCL 은
     // 2025-08-31 분기가 빠졌고, 누적 차에 쓸 직전 열이 전 사업연도가 되어 6개월 누적(3,881M)이 2026 Q2 값으로 나왔다(2026-09-27).
     // fin 분기 열이 없는 회사(20-F 등)만 종전 라벨
-    const finQ = (facts.revenue?.quarters ?? []).filter((c) => c.fq !== 4);
+    // 4분기 열도 넣는다(2026-10-01 — 손익·재무상태표 분기 화면과 같은 열. 4분기 = 사업연도(10-K) − 9개월 누적(10-Q), 손익 분기 화면과 같은 방식)
+    const finQ = facts.revenue?.quarters ?? [];
     const chron: QuarterCol[] = finQ.length
       ? finQ.slice(-6).map((c) => ({ label: revQuarterLabel(c), end: c.end, fyStartApprox: shiftYear(c.end, -1) }))
       : [...recentQuarters(opEntries, 6)].reverse(); // 6개 (0번은 prev 전용)
@@ -256,8 +257,18 @@ export function buildUsCashFlow(
     quarterPartsOf = (concepts) => {
       const e = firstConcept(facts, concepts);
       const out: Record<string, QuarterParts> = {};
+      const dd = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
+      const latestOf = (xs: FactUnitEntry[]) => xs.reduce<FactUnitEntry | null>((m, x) => (!m || (x.filed ?? "") > (m.filed ?? "") ? x : m), null);
       chron.forEach((q, i) => {
         if (i === 0 && firstIsPrevOnly) return;
+        if (/Q4$/.test(q.label)) {
+          const fy = latestOf(e.filter((x) => x.start && ANNUAL_FORMS.includes(x.form) && dd(x.end, q.end) <= 6 && dd(x.start, x.end) >= 350 && dd(x.start, x.end) <= 380));
+          const nine = fy ? latestOf(e.filter((x) => x.start && !ANNUAL_FORMS.includes(x.form) && dd(x.start, fy.start!) <= 6 && dd(x.start, x.end) >= 250 && dd(x.start, x.end) <= 290)) : null;
+          out[q.label] = fy && nine
+            ? { value: fy.val - nine.val, parts: [fy, nine], reason: null }
+            : { value: null, parts: [], reason: fy ? "9개월 누적 공시 없음 — 4분기 산정 불가" : "사업연도 공시 없음 — 4분기 산정 불가" };
+          return;
+        }
         out[q.label] = singleQuarterParts(e, q, chron[i - 1]);
       });
       return out;
