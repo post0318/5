@@ -264,8 +264,12 @@ export function buildUsBalance(
   if (mode === "quarter") {
     // 분기 라벨·기말은 손익계산서와 같은 달력 — 재무 5층 구조 매출 지표의 분기 열(Q4 = 사업연도말 포함, fin-revenue.ts)
     const cal = revQuarterCols(facts.revenue, 5).map((c) => ({ label: revQuarterLabel(c), end: c.end, fyStartApprox: c.end }));
+    // 분기 공시(10-Q)가 없는 20-F 발행사(ASML·TSM·SPOT)는 분기 열을 만들지 않는다 — 연말 날짜를 분기처럼 보이지 않게(손익·현금흐름 분기 화면과 같은 빈 화면, 2026-10-01)
+    const hasInterim = anchor.some((e) => /^10-Q/.test(e.form ?? ""));
     const fallback =
-      cal.length === 0
+      cal.length === 0 && !hasInterim
+        ? []
+        : cal.length === 0
         ? [...recentInstantQuarters(anchor, 5)].reverse().map((end) => ({
             label: end,
             end,

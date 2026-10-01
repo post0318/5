@@ -3390,7 +3390,7 @@ async function verifyUs(sym) {
   for (const [k, p] of Object.entries({
     hl: `${u}/highlights`, an: `${u}/financials?view=analysis`, ov: `${u}/overview`, tt: `${u}/ttm`,
     cs: `${u}/consensus`, is: `${u}/financials?view=is&period=annual`, bs: `${u}/financials?view=bs&period=annual`,
-    ...(BSCF_MODE ? { cf: `${u}/financials?view=cf&period=annual` } : {}),
+    ...(BSCF_MODE ? { cf: `${u}/financials?view=cf&period=annual`, cfq: `${u}/financials?view=cf&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter` } : {}),
     // 매출 소비처(revenue.md §3) — 총괄(연간·분기)·손익계산서 분기
     sm: `${u}/financials?view=summary&period=annual`, smq: `${u}/financials?view=summary&period=quarter`, isq: `${u}/financials?view=is&period=quarter`,
   })) {
@@ -3862,6 +3862,53 @@ async function verifyUs(sym) {
     for (const [k, v] of Object.entries(rowStarts(is, prefix))) (IS[lab(k)] ??= {})[key] = v;
   for (const [k, v] of Object.entries(rowOf(is, "감가상각비"))) (IS[lab(k)] ??= {}).da = v;
 
+  // ── C층 화면 간 일치(2026-10-01, 오너 지시 "화면별로 수치가 다르게 나오는 것이 없는지") — 분기 화면 열(손익·재무상태표·현금흐름·총괄),
+  //    총괄 = 각 재무제표(연간·분기), 하이라이트 영업현금흐름·자본지출 = 현금흐름표, 연간 LTM = 분기 최근 4개 합(손익·현금흐름), 재무상태표 LTM = 최근 분기
+  if (BSCF_MODE && fetched.cfq && fetched.bsq && smq && isq && sm) {
+    const rid = (st) => Object.fromEntries((st?.sections ?? []).flatMap((x) => x.items ?? []).map((it) => [it.accountId, it.values ?? {}]));
+    const rnm = (st) => { const o = {}; for (const it of (st?.sections ?? []).flatMap((x) => x.items ?? [])) { const k0 = String(it.accountName ?? "").trim(); if (!(k0 in o)) o[k0] = it.values ?? {}; } return o; };
+    const qcols = (st) => (st?.periods ?? []).map((p0) => `${p0.label}@${p0.endDate}`).join(",");
+    const qI = qcols(isq);
+    for (const [nm, st] of [["재무상태표", fetched.bsq], ["현금흐름표", fetched.cfq], ["총괄", smq]])
+      add("C", `분기 화면 열 손익계산서 = ${nm}`, "-", qI === qcols(st) ? { status: PASS, note: qI } : { status: FAIL, note: `${qI} ≠ ${qcols(st)}` });
+    const IAn = rnm(is), IQn = rnm(isq), BAi = rid(bs), BQi = rid(fetched.bsq), CAi = rid(fetched.cf), CQi = rid(fetched.cfq), SAi = rid(sm), SQi = rid(smq);
+    const ivn = (I, re0, k0) => { const n0 = Object.keys(I).find((n) => re0.test(n)); return n0 ? I[n0][k0] ?? null : null; };
+    const eqv = (nm, col, a, b0) => { if (a == null && b0 == null) return; add("C", nm, col, same(a, b0)); };
+    for (const [S0, I0, B0, C0, per] of [[SAi, IAn, BAi, CAi, is?.periods], [SQi, IQn, BQi, CQi, isq?.periods]]) for (const p0 of per ?? []) {
+      const k0 = p0.label, c0 = lab(k0);
+      eqv("총괄 매출 = 손익계산서", c0, S0["sum:is:rev"]?.[k0], ivn(I0, /^매출액|^순수익/, k0));
+      eqv("총괄 영업이익 = 손익계산서", c0, S0["sum:is:op"]?.[k0], ivn(I0, /^영업이익/, k0));
+      eqv("총괄 순이익 = 손익계산서", c0, S0["sum:is:ni"]?.[k0], ivn(I0, /^당기순이익/, k0));
+      eqv("총괄 자산 = 재무상태표", c0, S0["sum:bs:자산"]?.[k0], B0["bs:자산:자산 총계"]?.[k0]);
+      eqv("총괄 부채 = 재무상태표", c0, S0["sum:bs:부채"]?.[k0], B0["bs:부채:부채 총계"]?.[k0]);
+      eqv("총괄 자본 = 재무상태표", c0, S0["sum:bs:자본"]?.[k0], B0["bs:자본:자본 총계"]?.[k0]);
+      eqv("총괄 영업현금흐름 = 현금흐름표", c0, S0["sum:cf:영업활동으로 인한 현금흐름"]?.[k0], C0["cf:total:영업활동 현금흐름"]?.[k0]);
+      eqv("총괄 투자현금흐름 = 현금흐름표", c0, S0["sum:cf:투자활동으로 인한 현금흐름"]?.[k0], C0["cf:total:투자활동 현금흐름"]?.[k0]);
+      eqv("총괄 재무현금흐름 = 현금흐름표", c0, S0["sum:cf:재무활동으로 인한 현금흐름"]?.[k0], C0["cf:total:재무활동 현금흐름"]?.[k0]);
+    }
+    const h0 = hl?.highlights;
+    if (h0) for (const [i0, col] of h0.columns.entries()) {
+      if (col.kind === "estimate") continue;
+      const hr = (k1) => (h0.rows ?? []).find((r1) => r1.key === k1);
+      if (hr("ocf")) eqv("하이라이트 영업현금흐름 = 현금흐름표", lab(col.label), hr("ocf").values[i0], CAi["cf:total:영업활동 현금흐름"]?.[col.label]);
+      const cx = CAi["cf:투자활동 현금흐름:유형자산 취득"]?.[col.label];
+      if (hr("capex")) eqv("하이라이트 자본지출 = 현금흐름표", lab(col.label), hr("capex").values[i0] == null ? null : Math.abs(hr("capex").values[i0]), cx == null ? null : Math.abs(cx));
+    }
+    const ql = (isq.periods ?? []).map((p0) => p0.label), l4 = ql.slice(-4), lq = ql.at(-1);
+    const ltmEnd = (bs.periods ?? []).find((p0) => p0.label === "현재/LTM")?.endDate, qEnd = (isq.periods ?? []).at(-1)?.endDate;
+    if (l4.length === 4 && ltmEnd && qEnd && dayDiff(ltmEnd, qEnd) <= 7) {
+      const s4 = (I0, re0) => { const xs = l4.map((k0) => ivn(I0, re0, k0)); return xs.every((v0) => v0 != null) ? xs.reduce((a0, b1) => a0 + b1, 0) : null; };
+      for (const [nm, re0] of [["매출", /^매출액|^순수익/], ["영업이익", /^영업이익/], ["당기순이익", /^당기순이익/], ["EBITDA", /^EBITDA/], ["감가상각비", /^감가상각비/]])
+        eqv(`손익계산서 LTM = 분기 최근 4개 합 ${nm}`, "LTM", ivn(IAn, re0, "현재/LTM"), s4(IQn, re0));
+      const cq = (fetched.cfq.periods ?? []).map((p0) => p0.label).slice(-4);
+      for (const id of ["cf:total:영업활동 현금흐름", "cf:total:투자활동 현금흐름", "cf:total:재무활동 현금흐름", "cf:투자활동 현금흐름:유형자산 취득"]) {
+        const xs = cq.map((k0) => CQi[id]?.[k0]);
+        eqv(`현금흐름표 LTM = 분기 최근 4개 합 ${id.split(":").pop()}`, "LTM", CAi[id]?.["현재/LTM"], xs.length === 4 && xs.every((v0) => v0 != null) ? xs.reduce((a0, b1) => a0 + b1, 0) : null);
+      }
+      for (const id of ["bs:자산:자산 총계", "bs:부채:부채 총계", "bs:자본:자본 총계", "bs:자산:현금·현금성자산", "bs:note:총차입금"])
+        eqv(`재무상태표 LTM = 최근 분기 ${id.split(":").pop()}`, "LTM", BAi[id]?.["현재/LTM"], BQi[id]?.[lq]);
+    }
+  }
   // ── C층 재무분석 지표 = 재무제표 화면 값으로 재계산(2026-10-01, 오너 지시 — "해결이 완료되는 부분들은 재무분석도"). 손익·재무상태표·현금흐름표 화면 값은
   //    A층(SEC)·외부 대조를 거친 값이므로, 재무분석이 같은 값을 쓰면 식대로 정확히 나와야 한다. 재무분석 모듈이 태그를 따로 읽어 생기던 차이를 잡는다
   //    (부채 파생에 비지배지분·임시자본 혼입 — KO·WMT·INTC·MRK·ORCL, 단기투자 정의 — CAT·INTC·KO·DELL, 포괄 배당 태그 — VRT). --metric=bscf 에서만(현금흐름표 필요)
