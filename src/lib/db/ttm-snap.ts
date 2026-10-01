@@ -35,10 +35,19 @@ const key = (market: string, symbol: string) => `${market}:${symbol.toUpperCase(
 
 /** 유효한 저장본(같은 배포판·24시간 안)만. 없거나 DB 미설정이면 null */
 export async function readTtmSnap(market: string, symbol: string): Promise<TtmFlows | null> {
+  const r = await readTtmSnapAny(market, symbol);
+  return r && r.current ? r.ttm : null;
+}
+
+/**
+ * 24시간 안 저장본(배포판 무관) — current = 같은 배포판. 배포판만 다른 저장본은 화면이 먼저 바로 쓰고 뒤에서 다시 계산해 덮어쓴다(오너 지적
+ * 2026-10-02 — 배포 직후 다시 채우기가 끝날 때까지 첫 조회가 수십 초, AXP). 계산 규칙이 바뀐 배포면 처음 한 번만 옛 규칙 값이 보일 수 있다
+ */
+export async function readTtmSnapAny(market: string, symbol: string): Promise<{ ttm: TtmFlows; current: boolean } | null> {
   if (!isDbConfigured()) return null;
   const d = await (await col()).findOne({ _id: key(market, symbol) });
-  if (!d || d.v !== ttmSnapVersion() || Date.now() - d.at.getTime() > MAX_AGE_MS) return null;
-  return d.ttm;
+  if (!d || Date.now() - d.at.getTime() > MAX_AGE_MS) return null;
+  return { ttm: d.ttm, current: d.v === ttmSnapVersion() };
 }
 
 /** 저장해도 되는 완전한 결과인지 — 조회 실패·원본 판독 경고가 있으면 저장하지 않는다 */

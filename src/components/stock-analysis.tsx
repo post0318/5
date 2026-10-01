@@ -41,7 +41,7 @@ import { ShinhanResearch } from "@/components/shinhan-research";
 import { CompanyBlog } from "@/components/company-blog";
 import { PriceChartPanel } from "@/components/price-chart-panel";
 
-/** 시장별로 마지막에 보던 종목을 담아 두는 sessionStorage 키 */
+/** 시장별로 마지막에 보던 종목을 담아 두는 localStorage 키 */
 function lastViewedKey(market: MarketId): string {
   return `stock-analysis:last:${market}`;
 }
@@ -76,15 +76,16 @@ export function StockAnalysis({
    * 지워져 있다"). 통합 뷰에서 넘어올 때만 주소에 종목이 실리고, 검색으로 고른
    * 종목이나 헤더의 「종목분석」 링크(`/{market}/analysis`)에는 쿼리가 없어
    * 화면을 벗어나면 선택이 통째로 날아갔다. 시장별로 마지막 종목을
-   * sessionStorage 에 남겨 두고, **주소에 종목이 없을 때만** 복원한다 —
+   * localStorage 에 남겨 두고, **주소에 종목이 없을 때만** 복원한다 —
    * 통합 뷰에서 특정 종목을 눌러 들어온 경우를 덮어쓰지 않기 위해서다.
-   * 탭(브라우저 탭) 단위 저장이라 새로고침에는 남고 창을 닫으면 사라진다.
+   * 고른 종목은 주소(?symbol=)에도 써 넣는다 — 새로고침·공유에도 남게(오너 지적 2026-10-02 "새로고침하면 종목 선택이
+   * 사라진다" — 예전 sessionStorage 는 탭 세션 단위라 모바일 새로고침에서 지워졌다).
    */
   useEffect(() => {
     if (initialSymbol) return;
     let saved: { symbol?: string; yahoo?: string | null; name?: string | null };
     try {
-      const raw = sessionStorage.getItem(lastViewedKey(market));
+      const raw = localStorage.getItem(lastViewedKey(market));
       if (!raw) return;
       saved = JSON.parse(raw);
     } catch {
@@ -126,12 +127,26 @@ export function StockAnalysis({
   useEffect(() => {
     if (!symbol) return;
     try {
-      sessionStorage.setItem(
+      localStorage.setItem(
         lastViewedKey(market),
         JSON.stringify({ symbol, yahoo: yahooOverride, name }),
       );
     } catch {
       // 저장 실패는 조용히 무시 — 기억만 안 될 뿐 화면은 그대로 동작
+    }
+    // 주소에도 반영(페이지 이동 없이 주소만 교체) — 새로고침하면 페이지가 ?symbol= 로 같은 종목을 연다
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("symbol") !== symbol) {
+        url.searchParams.set("symbol", symbol);
+        if (yahooOverride) url.searchParams.set("yahoo", yahooOverride);
+        else url.searchParams.delete("yahoo");
+        if (name) url.searchParams.set("name", name);
+        else url.searchParams.delete("name");
+        window.history.replaceState(window.history.state, "", url.toString());
+      }
+    } catch {
+      // 주소 교체 실패도 무시
     }
   }, [market, symbol, yahooOverride, name]);
 
