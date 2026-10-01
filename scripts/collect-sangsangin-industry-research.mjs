@@ -188,6 +188,9 @@ for (const board of BOARDS) {
       if (/Quant\s*Variation/i.test(`${stockName} ${title}`)) continue;
       // "[상상인 US Monitor]" 미국시황 시리즈 — 수집 제외(오너 지시 2026-09-27, "상상인은 미국시황 수집제외").
       if (/US\s*Monitor/i.test(stockName)) continue;
+      // "상상인 Macro Daily" — 거의 매일 올라오는 국내 시황 코멘트. 수집 제외(오너 지시 2026-10-01,
+      // "시황분석에서 상상인 macro daily는 수집제외").
+      if (/Macro\s*Daily/i.test(`${stockName} ${title}`)) continue;
       if (isCommonExcludedContent(`${stockName} ${title}`, "산업")) continue;
       collected.push({
         id: String(r.NT_NO),

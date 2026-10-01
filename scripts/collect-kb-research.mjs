@@ -294,9 +294,10 @@ function classifyGlobalRow(r) {
     return { market: "ch", category: "산업", stockName: docTitle || "산업", symbol: null, title, enrichable: false };
   }
   if (categoryid === "86") {
-    // "KB Asia Market Headline" — 거의 매일 올라오는 시황 코멘트라 고정
-    // 라벨로 둔다(MARKET_CONDITION_STOCKNAMES 등록, KB데일리와 동일 패턴).
-    return { market: "ch", category: "산업", stockName: "KB Asia Market Headline", symbol: null, title, enrichable: false };
+    // "KB Asia Market Headline" — 거의 매일 올라오는 시황 코멘트. 한동안
+    // 고정 라벨(MARKET_CONDITION_STOCKNAMES)로 수집했으나 수집 제외로
+    // 전환(오너 지시 2026-10-01).
+    return null;
   }
   if (categoryid === "160") {
     // 일본 — 제목 끝에 "(6857 JP)" 표기가 있으면 종목(jp 종목분석)이다(오너 지적 2026-09-27 — "커스텀 AI 반도체의 출하 관문, 어드밴테스트 (6857 JP)"는

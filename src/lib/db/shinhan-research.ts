@@ -790,6 +790,12 @@ const LABEL_FIRST_STRATEGY_STOCKNAMES = new Set<string>([
   "KB 이그전",
   "전략 인사이드/글로벌 전략",
   "전략 인사이드/자산배분 전략",
+  // 현대차증권(GM 경유) "What if" 시나리오 분석 시리즈 — "블루 오디세이, 한국
+  // 증시는 돌아올 수 있을까 - 미국 중간선거의 한국 증시 및 업종별 영향 분석"이
+  // 요약의 "금리" 언급(bondStrong, generic 과 무관하게 항상 승격)으로 이슈분석에
+  // 샜다(오너 지적 2026-10-01 — "이것도 투자전략인데?"). 실제로는 선거 이벤트가
+  // 한국 증시·업종에 미치는 영향을 다루는 투자전략 시리즈.
+  "What if",
 ]);
 
 // 거시 지표·통화정책 발표로 시작하는 제목: "미국 8월 CPI: …", "9월 FOMC: …", "한국 7월 산업활동동향", "미국 2분기 GDP; …",
@@ -824,6 +830,18 @@ function classifyLegacyTopic(
     // 예외: 제목이 거시 지표 발표로 시작하면("미국 8월 CPI: …"·"9월 FOMC: …") 라벨이 업종("에너지"·"은행")이어도 산업분석이 아니라 이슈분석이다
     // (오너 지시 2026-09-27 — "cpi ppi는 이슈분석이 맞다"). 한경·KIS 가 거시 글에 업종 라벨을 잘못 다는 경우.
     if (MACRO_DATA_TITLE_RE.test(doc.title)) return "투자전략(채권)";
+    return "산업분석";
+  }
+  // 위 분기와 같은 취지를 stockName 대신 title 로 본다 — stockName 이 "산업"
+  // 같은 게시판 기본값이라 업종을 못 알려주는 경우(제목에만 업종이 있음).
+  // 제목이 "<실제 업종명>주 …" 로 시작하면("전력기기주 환율변동 영향 진단")
+  // "그 업종 종목들"에 대한 글이지 매크로 분석이 아니다 — 환율 언급이 있어도
+  // 산업분석(오너 지적 2026-10-01, "전력기기주 환율변동 영향 진단... 산업재
+  // 분석인데"). "<실제업종>주" 패턴이 DB 전수에서 이 문서 1건에만 걸려(실측)
+  // 범위를 넓게 잡아도 안전하다 — stockName 자체를 title 로 넓히는 건(다른
+  // 접근) 245건이 바뀌어 기각했다.
+  const sectorStockLead = doc.title.match(/^([가-힣A-Za-z0-9]{2,10})주(?=[\s,:.)]|$)/);
+  if (sectorStockLead && classifySector({ stockName: sectorStockLead[1] }) !== null) {
     return "산업분석";
   }
   // 게시판 우선: 게시판 이름이 그대로 라벨로 들어온 경우("글로벌 산업분석" — 하나증권 pid=8 게시판)는 게시판이 곧 산업분석이다. 실제 업종은 제목의
@@ -861,8 +879,14 @@ function classifyLegacyTopic(
 // isFxContent()·구 macro-issues.ts의 escalateToFxTopic()과 같은 정규식.
 // 배제가 아니라 분류라 research-exclude.ts로 옮기지 않고 이 파일에 로컬로
 // 둔다(이 파일의 다른 분류용 정규식 BOND_STRONG_RE 등과 같은 관례).
+//
+// "외환"·"원/달러"(슬래시 표기)·"달러와 원화"(산문형 대구) 추가(오너 지적
+// 2026-10-01 — 신한 "외환이슈; 원/달러 장기 균형은 어디인가"가 이슈분석으로,
+// iM "달러와 원화의 동상이몽"이 FX 스킵됨). 둘 다 "환율"이라는 단어 자체를
+// 안 쓰면서 환율을 다루는 흔한 한국어 헤드라인 표현이라 기존 FX_RE 가 놓쳤다.
+// scripts/lib/exclude-filters.mjs 의 사본도 같이 맞춘다.
 const FX_RE =
-  /\bFX\b|환율|엔화|달러화|위안화|유로화|파운드화|원화\s*(?:강세|약세|절상|절하)|달러[-\s]?엔|달러\s*인덱스|\bDXY\b/i;
+  /\bFX\b|환율|외환|엔화|달러화|위안화|유로화|파운드화|원화\s*(?:강세|약세|절상|절하)|달러[-\s]?엔|달러\s*인덱스|\bDXY\b|원\s*\/\s*달러|달러\s*\/\s*원|달러\s*[와과]\s*원화|원화\s*[와과]\s*달러/i;
 // 시황분석 Daily/Monthly 분기(오너 지시 2026-09-26 — "Daily는 일간, 데일리,
 // 모닝브리프 등을 분류, Monthly는 월간, month 등을 분류"). 기본값은 Daily —
 // 기존 "시황" 판정 자체가 이미 데일리성 신호(MARKET_CONDITION_STRONG_RE·
@@ -966,7 +990,24 @@ const FORCED_FX_STOCKNAMES = new Set([
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
 ): ResearchTopic {
-  if (FORCED_ISSUE_STOCKNAMES.has(doc.stockName)) return "이슈분석";
+  // NH투자증권 "NH 하우스 뷰 N월호" — 자산배분 월간 발간물인데 stockName이
+  // "자산배분"이라 STRATEGY_HINT_STRONG_RE("자산배분" 포함)에 걸려 투자전략
+  // 으로 갔다(오너 지적 2026-10-01 — "이건 월간이다"). 제목이 "N월호"로
+  // 끝나는 월간 고정 시리즈라 시황분석:Monthly 로 직접 보낸다 — 기존
+  // MARKET_CONDITION_MONTHLY_RE("월간" 리터럴)는 "10월호"엔 안 걸린다.
+  if (doc.source === "NH투자증권" && /^NH\s*하우스\s*뷰/.test(doc.title ?? "")) {
+    return "시황분석:Monthly";
+  }
+  // FORCED_ISSUE_STOCKNAMES 는 수집기가 FX 내용을 감지하면 " FX" 를 붙인
+  // 별도 라벨(FORCED_FX_STOCKNAMES)로 보내는 게 원래 설계인데, 수집기의 FX
+  // 감지(isFxContent)가 놓치면 그 라벨 없이 그냥 "xxx 경제분석"으로 들어와
+  // 여기서 title 과 무관하게 항상 이슈분석으로 확정돼 버린다(오너 지적
+  // 2026-10-01 — 신한 "경제분석 · 경제분석" 전용으로만 있던 title 기반 FX
+  // 재확인을 모든 FORCED_ISSUE 라벨로 일반화. 실측: DB 전수 검사로 영향은
+  // 신한 1건뿐, 다른 라벨은 전부 그대로).
+  if (FORCED_ISSUE_STOCKNAMES.has(doc.stockName)) {
+    return FX_RE.test(doc.title ?? "") ? "환율분석" : "이슈분석";
+  }
   if (FORCED_FX_STOCKNAMES.has(doc.stockName)) return "환율분석";
   // 신한 경제분석 게시판(gieconomy)의 비시리즈 글 — 다른 증권사 경제·채권 게시판과 같이 게시판이 곧 이슈분석이다. 제목 키워드에만 맡기면
   // 키워드가 없는 글("한국 7월 산업활동동향" 등)이 산업분석 기타로 새었다(2026-09-27). 환율 글만 환율분석으로 가른다.

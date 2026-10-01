@@ -148,6 +148,10 @@ function parseItems(rows) {
     // 리츠·캘린더·추천종목·대체투자까지 한 번에 걸러진다(이전엔 ETF/ESG만
     // 개별로 걸렀음). 종목코드 매칭 여부로 category를 먼저 정해서 넘긴다.
     if (isCommonExcludedContent(r.title, tm ? "기업" : "산업")) continue;
+    // "DB Morning Express" — DB증권의 매일 아침 시황 요약. 수집 제외(오너 지시
+    // 2026-10-01). 위 주석에 이 시리즈를 수집 예시로 들었던 2026-09-27 당시의
+    // 방침을 뒤집는 결정 — 제외가 맞다.
+    if (/Morning\s*Express/i.test(String(r.title ?? ""))) continue;
     if (tm) {
       const [, stockName, , ticker, headline] = tm;
       items.push({
