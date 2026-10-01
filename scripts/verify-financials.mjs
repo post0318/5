@@ -1935,7 +1935,7 @@ async function faceOpincLine(cik, accn, revConcept) {
           if (seen.has(a.to)) continue;
           seen.add(a.to);
           const lab = await nameOf(a.to);
-          const kind = OP_AMORT_RE.test(`${a.to} ${lab}`) ? "amort" : OP_CHARGE_RE.test(`${a.to} ${lab}`) && !/exclu/i.test(lab) && !GENERAL_COST_ID.test(a.to) /* 라벨의 "~제외" 문구만 — 개념명 ImpairmentOfIntangibleAssetsExcludingGoodwill(PEP)은 손상 줄 */ ? "charge" : null;
+          const kind = OP_AMORT_RE.test(`${a.to} ${lab}`) ? "amort" : OP_CHARGE_RE.test(`${a.to} ${lab}`) && !/\bexclu/i.test(lab) && !GENERAL_COST_ID.test(a.to) /* 라벨의 "~제외" 문구만 — 개념명 ImpairmentOfIntangibleAssetsExcludingGoodwill(PEP)은 손상 줄 */ ? "charge" : null;
           if (kind) { charges.push({ id: a.to, w: w * a.w, label: lab, kind }); continue; }
           // "기타 영업손익" 합산 줄(오너 결정 2026-09-28 — 앱 edgar-oneoff 와 같은 원칙, 검증기 독립 판독): 주석 계산 구조(Details 역할)에
           // 하위 내역이 있으면 그중 일회성 줄을 charges 로(MCD "Impairment and other charges (gains), net" · CL · MU). 줄 자체는 넘어간다
@@ -1945,7 +1945,7 @@ async function faceOpincLine(cik, accn, revConcept) {
             for (const x of det) {
               if (seen.has(x.to)) continue;
               const l2 = await nameOf(x.to);
-              if (!OP_AMORT_RE.test(`${x.to} ${l2}`) && OP_CHARGE_RE.test(`${x.to} ${l2}`) && !/exclu/i.test(l2)) { seen.add(x.to); charges.push({ id: x.to, w: w * a.w * x.w, label: `${l2}(주석 — ${lab} 내역)`, kind: "charge" }); found = true; }
+              if (!OP_AMORT_RE.test(`${x.to} ${l2}`) && OP_CHARGE_RE.test(`${x.to} ${l2}`) && !/\bexclu/i.test(l2)) { seen.add(x.to); charges.push({ id: x.to, w: w * a.w * x.w, label: `${l2}(주석 — ${lab} 내역)`, kind: "charge" }); found = true; }
             }
             if (found) continue;
           }
