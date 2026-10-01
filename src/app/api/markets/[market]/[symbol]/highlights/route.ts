@@ -125,17 +125,25 @@ export async function GET(
 
     // 저장본 먼저(배포 직후·CDN 캐시 비었을 때도 바로) — 묵었으면 응답 뒤 다시 계산(api-snap.ts)
     const snapKey = `hl:us:${sym}|${yahoo ?? ""}`;
-    const snap = await readApiSnap<FinancialHighlights>(snapKey).catch(() => null);
+    // 저장본은 계산 때 주가가 지금 주가와 같을 때만(시가총액·EV·PER 등이 개요·재무분석과 같은 주가로 — 화면 간 같은 값). 주가는 캐시된 조회라 빠르다
+    const [snap0, q0] = await Promise.all([
+      readApiSnap<{ highlights: FinancialHighlights; price: number | null }>(snapKey).catch(() => null),
+      getEodQuote(market, sym, { yahooOverride: yahoo }).catch(() => null),
+    ]);
+    // 구조 확인 — 형식이 다른 저장본(옛 형식·다른 판)은 쓰지 않는다
+    const okShape = (h: unknown): h is FinancialHighlights =>
+      !!h && Array.isArray((h as FinancialHighlights).columns) && Array.isArray((h as FinancialHighlights).rows);
+    const snap = snap0 && okShape(snap0.data?.highlights) && snap0.data.price === (q0?.last ?? null) ? { data: snap0.data.highlights, stale: snap0.stale } : null;
     if (snap) {
       if (snap.stale)
         after(async () => {
           const r = await computeUsHighlights(market, sym, yahoo).catch(() => null);
-          if (r && !r.degraded) await writeApiSnap(snapKey, r.highlights).catch(() => {});
+          if (r && !r.degraded) await writeApiSnap(snapKey, { highlights: r.highlights, price: r.price }).catch(() => {});
         });
       return ok({ highlights: snap.data }, { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600" } });
     }
-    const { highlights, degraded } = await computeUsHighlights(market, sym, yahoo);
-    if (!degraded) await writeApiSnap(snapKey, highlights).catch(() => {});
+    const { highlights, degraded, price } = await computeUsHighlights(market, sym, yahoo);
+    if (!degraded) await writeApiSnap(snapKey, { highlights, price }).catch(() => {});
     return ok(
       { highlights },
       {
@@ -201,5 +209,5 @@ async function computeUsHighlights(market: "us", sym: string, yahoo: string | nu
 
   // 조회 실패로 불완전한 결과는 CDN 에 1시간 붙잡히지 않게 캐시하지 않는다(다음 요청이 다시 계산)
   const degraded = !!factsRes.facts.fetchWarnings?.length || !!factsRes.facts.sourceUnavailable;
-  return { highlights, degraded };
+  return { highlights, degraded, price: quote?.last ?? null };
 }
