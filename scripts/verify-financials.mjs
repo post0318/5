@@ -8547,6 +8547,8 @@ function dartYearValue(cur, next, next2, y, sjs, ids, names) {
     if (!rows.length) return undefined;
     const col = COL[by - y];
     if (rows.length === 1) return dartNum(rows[0][col]);
+    // 후보가 여럿이어도 값이 모두 같으면 그 값(손익계산서·포괄손익계산서에 같은 당기순이익 줄)
+    { const vs = rows.map((r) => dartNum(r[col])); if (vs.every((v) => v != null && v === vs[0])) return vs[0]; }
     // 현금: 같은 이름 줄이 여럿이면 합계가 같은 보고서 현금흐름표 기말 현금과 정확히 같을 때 합계(카카오 2021 — 금융업 소항목 현금)
     if (ids.includes("ifrs-full_CashAndCashEquivalents")) {
       const vs = rows.map((r) => dartNum(r[col]));
@@ -8558,11 +8560,14 @@ function dartYearValue(cur, next, next2, y, sjs, ids, names) {
     ambiguous = true;
     return null;
   };
-  let latest;
+  // 기준 보고서 = 그 해 값이 하나라도 실린 가장 최근 보고서(앱 연간 로더의 "연도별 주인 보고서" 규칙 — 옛 보고서와 섞으면 같은 계정이 다른 키로
+  // 두 번 잡혔다). 기준 보고서에 이 계정이 없으면 빈칸(옛 보고서로 내려가지 않음)
+  let latest = null;
   for (const [L, by] of reps) {
-    const v = pickAt(L, by);
-    if (v !== undefined && v !== null) { latest = v; break; }
-    if (v === null) { latest = null; break; }
+    const col = COL[by - y];
+    if (!L || !L.some((r) => dartNum(r[col]) != null)) continue;
+    latest = pickAt(L, by) ?? null;
+    break;
   }
   const o = pickAt(cur, y);
   return { latest: latest ?? null, orig: o ?? null, ambiguous };
@@ -8688,13 +8693,24 @@ async function verifyKr(sym) {
             : [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익"]];
           const tot = dartPick(L, ["IS", "CIS"], ...T, f);
           if (tot != null) return { v: tot, how: "" };
+          // 기본·희석 합친 줄(LG "보통주 기본/희석주당순이익") — 하나거나 값이 같으면 그 값, 둘이 다르면 차이가 그 해 중단영업손익과 부호가 같은 쪽
+          { const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
+            const CMB = ["보통주기본/희석주당순이익", "기본/희석주당순이익", "보통주기본/희석주당이익", "기본/희석주당이익"];
+            const vs = L.filter((r) => ["IS", "CIS"].includes(r.sj_div) && CMB.includes(nm(r.account_nm))).map((r) => dartNum(r[f])).filter((v) => v != null);
+            if (vs.length === 1 || (vs.length === 2 && vs[0] === vs[1])) return { v: vs[0], how: "기본·희석 합친 줄" };
+            if (vs.length === 2) {
+              const disc = dartPick(L, ["IS", "CIS"], ["ifrs-full_ProfitLossFromDiscontinuedOperations"], [], f);
+              if (disc) return { v: Math.sign(vs[0] - vs[1]) === Math.sign(disc) ? vs[0] : vs[1], how: `기본·희석 합친 줄 둘(전체·계속영업) — 차이 부호 = 중단영업손익 ${disc}` };
+            } }
           const pre = kind === "d" ? "Diluted" : "Basic";
           const c = dartPick(L, ["IS", "CIS"], [`ifrs-full_${pre}EarningsLossPerShareFromContinuingOperations`], [], f);
           if (c == null) return null;
           const d = dartPick(L, ["IS", "CIS"], [`ifrs-full_${pre}EarningsLossPerShareFromDiscontinuedOperations`], [], f) ?? 0;
           return { v: c + d, how: `전체 EPS 미공시 — 계속영업 ${c} + 중단영업 ${d}` };
         };
-        const latestEps = (kind) => (next2 ? epsOf(next2, "bfefrmtrm_amount", kind) : null) ?? (next ? epsOf(next, "frmtrm_amount", kind) : null) ?? epsOf(cur, "thstrm_amount", kind);
+        // 기준 보고서 = 그 해 값이 실린 가장 최근 보고서(dartYearValue 와 같은 규칙)
+        const ownerOf = () => { for (const [L, f] of [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]]) if (L && L.some((r) => dartNum(r[f]) != null)) return [L, f]; return [null, null]; };
+        const latestEps = (kind) => { const [L, f] = ownerOf(); return L ? epsOf(L, f, kind) : null; };
         const bE = latestEps("b"), dE = latestEps("d");
         add("A", "기본 EPS = DART", col, vsSource(isByName("기본 EPS", k), bE?.v ?? null, 0, bE?.how ?? ""));
         add("A", "희석 EPS = DART", col, vsSource(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, 0, dE ? dE.how : bE ? `DART 희석 EPS 미공시 — 기본 EPS 와 대조${bE.how ? " · " + bE.how : ""}` : ""));
