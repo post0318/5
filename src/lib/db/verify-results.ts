@@ -27,6 +27,8 @@ export interface VerifyExternal {
   verdict?: string;
   note?: string;
 }
+export { AUDIT_VERDICTS, AUDIT_VERDICT_LABEL, type AuditVerdict, type AuditRow } from "../verify-audit";
+import type { AuditRow } from "../verify-audit";
 export interface VerifyResultDoc {
   /** `${market}:${symbol}` */
   _id: string;
@@ -37,12 +39,17 @@ export interface VerifyResultDoc {
   base: string;
   /** 검증 당시 저장소 커밋(Actions 의 GITHUB_SHA) */
   commit: string | null;
-  counts: { fail: number; unverifiable: number; pass: number; extAllMatch: number; extMismatch: number; otherReview: number };
+  /** common = 공통모드 검사(통과에 세지 않음), extCommon = 공통모드 소스만 일치한 외부 대조 — 2026-09-26 이전 결과엔 없음 */
+  counts: { fail: number; unverifiable: number; pass: number; common?: number; extAllMatch: number; extCommon?: number; extMismatch: number; otherReview: number };
   fails: VerifyIssue[];
   unverifiable: VerifyIssue[];
+  /** 공통모드 — 독립 검증 아님(앱과 같은 규칙·데이터로 판정한 통과). 2026-09-26 이전 결과엔 없음 */
+  common?: VerifyIssue[];
   external: VerifyExternal[];
   /** 조회 실패 등 실행 자체의 문제 */
   errors: string[];
+  /** 감사표 — 2026-09-26 이전 결과·한국 종목엔 없음 */
+  audit?: AuditRow[];
 }
 
 export async function verifyResultsCol(): Promise<Collection<VerifyResultDoc>> {

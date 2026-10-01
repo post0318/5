@@ -22,7 +22,7 @@ export const maxDuration = 30;
  * 응답 뒤(`after`)로 미뤄 사용자를 기다리게 하지 않는다. 유니버스 밖 종목만
  * 실시간 조회하고 결과를 같은 컬렉션에 남긴다.
  *
- * 갱신 주기는 KST 기준 오전 9시~오후 5시 30분, 그 외 1시간(오너 지정) —
+ * 갱신 주기는 시장별 현지 장중 30분, 그 외 2시간(오너 지정 2026-10-01, stock-news-cache.ts inSession) —
  * DB 신선도 판정과 HTTP 캐시(s-maxage)가 같은 기준을 쓴다. CDN 에서 걸리면
  * 서버까지 오지도 않으므로 HTTP 캐시는 그대로 둔다.
  */
@@ -49,7 +49,7 @@ export async function GET(
       });
     }
 
-    const maxAge = Math.round(freshMs() / 1000);
+    const maxAge = Math.round(freshMs(market) / 1000);
     return ok(
       {
         domestic: payload.domestic,

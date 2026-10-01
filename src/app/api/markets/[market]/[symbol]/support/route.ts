@@ -24,7 +24,7 @@ export async function GET(
 
     const sym = getAdapter(market).normalizeSymbol(decodeURIComponent(symbol));
     try {
-      const [{ facts }, sic] = await Promise.all([fetchUsCompanyFacts(sym), fetchUsSic(sym)]);
+      const [{ facts }, sic] = await Promise.all([fetchUsCompanyFacts(sym, { revenue: false }), fetchUsSic(sym)]);
       if (isMortgageReit(facts, sic)) {
         return ok(
           {

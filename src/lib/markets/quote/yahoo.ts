@@ -16,18 +16,31 @@ import {
   type ForwardConsensus,
   type MarketId,
   type QuoteBar,
+  type YahooSplit,
 } from "../types";
 import { yahooSymbol } from "./symbols";
+import { cleanUsdBars } from "./price-tick";
 
 const YahooFinance = (YahooFinancePkg as { default?: unknown }).default ?? YahooFinancePkg;
 
 type YFInstance = {
-  chart: (s: string, o: Record<string, unknown>) => Promise<{ quotes: RawBar[] }>;
+  chart: (
+    s: string,
+    o: Record<string, unknown>,
+  ) => Promise<{
+    quotes: RawBar[];
+    events?: { splits?: { date: Date | string; numerator?: number; denominator?: number }[] };
+  }>;
   quoteSummary: (
     s: string,
     o: Record<string, unknown>,
     m?: Record<string, unknown>,
   ) => Promise<QuoteSummaryResult>;
+  fundamentalsTimeSeries: (
+    s: string,
+    o: Record<string, unknown>,
+    m?: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>[]>;
 };
 
 interface RawBar {
@@ -376,6 +389,19 @@ export async function fetchYahooEod(
   symbol: string,
   opts: { from?: string; to?: string; yahooOverride?: string | null } = {},
 ): Promise<QuoteBar[]> {
+  return (await fetchYahooEodWithSplits(market, symbol, opts)).bars;
+}
+
+/**
+ * 시세 + Yahoo 가 가격을 소급 조정한 "분할" 이력. Yahoo 종가는 분할뿐 아니라 **분사(spin-off)도 분할로
+ * 기록해** 그 이전 가격을 나눠 둔다(WDC 2025-02-24 "1323:1000" 샌디스크 분사, GE 2023·2024). 과거 결산일
+ * 시가총액을 as-reported 주식수와 맞출 때 이 이력으로 되돌린다(us/edgar-shares.ts `secBasisBars`).
+ */
+export async function fetchYahooEodWithSplits(
+  market: MarketId,
+  symbol: string,
+  opts: { from?: string; to?: string; yahooOverride?: string | null } = {},
+): Promise<{ bars: QuoteBar[]; splits: YahooSplit[] }> {
   const candidates = candidateSymbols(market, symbol, opts.yahooOverride);
   let lastErr: unknown;
   for (const s of candidates) {
@@ -400,7 +426,13 @@ export async function fetchYahooEod(
           close: q.close ?? null,
           volume: q.volume ?? null,
         }));
-      if (bars.length) return bars;
+      const splits = (res.events?.splits ?? [])
+        .filter((e) => e.numerator && e.denominator)
+        .map((e) => ({ date: isoDate(e.date), ratio: (e.numerator as number) / (e.denominator as number) }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+      // 미국(달러 호가) — 실제 체결가를 호가 단위로 정리(price-tick.ts, 오너 결정 2026-09-26). 분할 이력이 오늘까지
+      // 다 있을 때만(opts.to 를 과거로 주면 그 뒤 분할이 빠져 조정가를 실제 가격으로 되돌릴 수 없다)
+      if (bars.length) return { bars: market === "us" && !opts.to ? cleanUsdBars(bars, splits) : bars, splits };
     } catch (err) {
       lastErr = err;
     }
@@ -412,27 +444,34 @@ export async function fetchYahooEod(
  * Yahoo 기준 현재 발행주식수 = 시가총액 ÷ 현재가(전 클래스 경제적 주식수 — usSharesHint 와
  * 같은 정의). 미국 현재 주식수의 최후 폴백(us/current-shares.ts) 전용.
  */
+/** Yahoo 재무 시계열 한 행 — 기간 말일(YYYY-MM-DD) + 항목별 숫자(원통화, 공시 통화 그대로) */
+export interface YahooFundamentalsRow {
+  end: string;
+  values: Record<string, number>;
+}
+
 /**
- * 환율 일별 종가 — "통화 1단위당 USD". 외화 공시 기업(20-F·외화 10-K)의 재무를 USD 로
- * 환산할 때 쓴다(us/edgar-foreign.ts). Yahoo 는 EURUSD=X(USD/EUR)·TWD=X(TWD/USD)처럼
- * 쌍마다 방향이 달라, `{통화}USD=X` 를 먼저 보고 없으면 `{통화}=X` 를 뒤집는다.
+ * Yahoo 분기·연간 재무 시계열(fundamentalsTimeSeries, 원통화). 20-F 발행사 LTM 최신 분기 보강 전용
+ * (us/edgar-yahoo-quarters.ts). 조회 실패는 예외.
  */
-export async function fetchFxToUsdDaily(currency: string, from = "2014-01-01"): Promise<{ date: string; rate: number }[]> {
-  const pull = async (sym: string) => {
-    const c = await yf().chart(sym, { period1: from, interval: "1d" });
-    return c.quotes
-      .filter((q) => q.close != null && q.close > 0)
-      .map((q) => ({ date: isoDate(q.date), close: q.close as number }));
-  };
-  try {
-    const direct = await pull(`${currency}USD=X`);
-    if (direct.length > 100) return direct.map((q) => ({ date: q.date, rate: q.close }));
-  } catch {
-    /* 반대 방향 쌍으로 */
-  }
-  const inv = await pull(`${currency}=X`);
-  if (!inv.length) throw new AdapterError(`환율 없음: ${currency}`, { status: 502 });
-  return inv.map((q) => ({ date: q.date, rate: 1 / q.close }));
+export async function fetchYahooFundamentals(
+  symbol: string,
+): Promise<{ quarterly: YahooFundamentalsRow[]; annual: YahooFundamentalsRow[] }> {
+  const s = yahooSymbol("us", symbol);
+  const rows = (rs: Record<string, unknown>[]): YahooFundamentalsRow[] =>
+    rs
+      .filter((r) => r.date != null)
+      .map((r) => {
+        const values: Record<string, number> = {};
+        for (const [k, v] of Object.entries(r)) if (typeof v === "number" && Number.isFinite(v)) values[k] = v;
+        return { end: isoDate(r.date as Date | string), values };
+      })
+      .sort((a, b) => a.end.localeCompare(b.end));
+  const [q, a] = await Promise.all([
+    yf().fundamentalsTimeSeries(s, { period1: isoDate(new Date(Date.now() - 800 * 864e5)), type: "quarterly", module: "all" }, { validateResult: false }),
+    yf().fundamentalsTimeSeries(s, { period1: isoDate(new Date(Date.now() - 1500 * 864e5)), type: "annual", module: "all" }, { validateResult: false }),
+  ]);
+  return { quarterly: rows(q), annual: rows(a) };
 }
 
 export async function fetchYahooShares(symbol: string): Promise<number | null> {

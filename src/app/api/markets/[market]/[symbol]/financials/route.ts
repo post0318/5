@@ -2,11 +2,15 @@ import { jsonError, ok } from "@/lib/api";
 import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { fetchUsCompanyFacts, fetchUsSic } from "@/lib/markets/us/edgar";
-import { loadClassAFacts } from "@/lib/markets/us/class-facts-loader";
+import { blankLtmIfFilingsUnavailable } from "@/lib/markets/us/sec-unavailable";
+import { loadClassAFactsMarked } from "@/lib/markets/us/class-facts-loader";
+import { secBasisBars } from "@/lib/markets/us/edgar-shares";
+import { yahooLtmLabel } from "@/lib/markets/us/edgar-yahoo-quarters";
 import { loadCaptiveDebt } from "@/lib/markets/us/edgar-captive";
 import { reitOpUnits } from "@/lib/markets/us/edgar-ev";
 import { buildUsCashFlow } from "@/lib/markets/us/edgar-cashflow";
 import { buildUsIncome } from "@/lib/markets/us/edgar-income";
+import { finIssueNote } from "@/lib/markets/us/fin-revenue";
 import { buildUsBalance } from "@/lib/markets/us/edgar-balance";
 import { buildUsAnalysis } from "@/lib/markets/us/edgar-analysis";
 import { buildUsSummary } from "@/lib/markets/us/edgar-summary";
@@ -24,6 +28,7 @@ import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { getKrDaDoc } from "@/lib/db/kr-da";
 import { usSharesHint } from "@/lib/markets/us/shares-hint";
 import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
+import { dartAdrAnalysis, dartAdrDetail, dartAdrOf } from "@/lib/markets/us/dart-adr";
 
 export const maxDuration = 60;
 
@@ -135,25 +140,37 @@ export async function GET(
       return ok(stmt, { headers: NO_CACHE });
     }
 
+    // SEC XBRL 이 없는 ADR(SKHY) — 본국 DART 재무를 USD·ADR 기준으로(dart-adr.ts)
+    const dartAdr = market === "us" && isDetail ? dartAdrOf(sym) : null;
+    if (dartAdr) {
+      const stmt =
+        detailView === "analysis"
+          ? await dartAdrAnalysis(dartAdr, searchParams.get("yahoo"))
+          : await dartAdrDetail(dartAdr, detailView as "is" | "bs" | "cf" | "summary", period);
+      return ok(stmt, { headers: NO_CACHE });
+    }
+
     if (market === "us" && isDetail) {
       const yahoo = searchParams.get("yahoo");
       const needsShares =
         detailView === "analysis" || detailView === "is" || detailView === "summary";
-      const { cik, facts } = await fetchUsCompanyFacts(sym);
-      const [quote, consensus, classFacts, sic] = await Promise.all([
+      const { cik, facts: facts0 } = await fetchUsCompanyFacts(sym);
+      const [quote, consensus, cls, sic] = await Promise.all([
         needsShares
           ? getEodQuote("us", sym, { yahooOverride: yahoo }).catch(() => null)
           : Promise.resolve(null),
         needsShares
           ? fetchForwardConsensus("us", sym, yahoo).catch(() => null)
           : Promise.resolve(null),
+        // 듀얼클래스 보정 — 원본 판독 실패는 facts 에 기록(클래스별 값이 필요한 칸 공란 + 사유)
         needsShares
-          ? loadClassAFacts(cik, facts).catch(() => null)
-          : Promise.resolve(null),
+          ? loadClassAFactsMarked(cik, facts0)
+          : Promise.resolve({ classFacts: null, facts: facts0 }),
         fetchUsSic(sym).catch(() => null),
       ]);
-      // 현재 발행주식수 근사(클래스별로만 공시하는 Visa 등의 EPS·PBR 계산용):
-      // 시가총액÷주가(전 클래스 경제적 주식수) 우선, 없으면 yahoo sharesOutstanding.
+      const facts = cls.facts;
+      const classFacts = cls.classFacts;
+      // Yahoo 현재 주식수 힌트 — ADR 비율 판정에만(주식수 값으로 대신 쓰지 않음, edgar-shares.ts)
       const sharesHint = usSharesHint(quote, consensus);
       const stmt =
         detailView === "cf"
@@ -164,13 +181,14 @@ export async function GET(
               ? buildUsBalance(facts, period, sic)
               : detailView === "summary"
                 ? buildUsSummary(facts, period, { sharesHint, classFacts, sic })
-                : buildUsAnalysis(facts, quote?.bars ?? [], {
+                : buildUsAnalysis(facts, secBasisBars(facts, quote), {
                     sharesHint,
                     classFacts,
                     sic,
                     evCtx: {
                       sic,
-                      captive: await loadCaptiveDebt(cik, sic).catch(() => null),
+                      // 판별 조회 실패 = "unknown"(금융 자회사 없음으로 단정하지 않음 — EV 미표시)
+                      captive: await loadCaptiveDebt(cik, sic).catch(() => "unknown" as const),
                       opUnits: reitOpUnits(
                         sic,
                         consensus?.sharesOutstanding,
@@ -179,6 +197,20 @@ export async function GET(
                     },
                   });
       stmt.symbol = sym;
+      // 최신 공시 보완이 원본 조회 실패면 LTM 열은 공란(더 오래된 기간 값을 LTM 으로 내지 않음 — sec-unavailable.ts)
+      blankLtmIfFilingsUnavailable(facts, stmt);
+      // 원본 조회 일시 오류(SEC 429 등) — 일부 공시가 빠졌을 수 있다(fetch-health.ts)
+      if (facts.fetchWarnings?.length) stmt.source += ` · ⚠ 일부 공시 조회 실패(${facts.fetchWarnings.slice(0, 3).join(", ")}) — 잠시 뒤 다시 계산`;
+      // 20-F 발행사 LTM 열 = Yahoo 분기(edgar-yahoo-quarters.ts) — 기준일·공란 항목 명시
+      if (facts.ltmQuarterSource) stmt.source += ` · ${yahooLtmLabel(facts.ltmQuarterSource)}`;
+      // 외화 환산 — 연준 H.10 최신 고시일 뒤 기간은 비움(edgar-foreign.ts, 다른 환율로 대체하지 않음)
+      if (facts.fxPending) stmt.source += ` · ⚠ ${facts.fxPending} — 해당 기간 환산 값 비움`;
+      // 재무 5층 구조 매출의 미완전 열(gaps·조립 항등식 불성립) — 매출 경로면 그 열 매출은 비어 있다(fin-revenue.ts)
+      const finNote = finIssueNote(facts.revenue);
+      if (finNote) {
+        stmt.source += ` · ⚠ ${finNote}`;
+        stmt.finIssues = facts.revenue!.issues;
+      }
       return ok(stmt, { headers: NO_CACHE });
     }
 

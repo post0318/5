@@ -1,8 +1,10 @@
 import "server-only";
-import { fetchText } from "../http";
+import { fetchText, isFetchFailure } from "../http";
+import { fetchFailureReason } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import { instanceUrl } from "./edgar-classfacts";
 import type { RecentFilings } from "./edgar-gapfill";
+import { filingsForDa } from "./edgar-cf-structure";
 
 /**
  * **콘텐츠 상각을 감가상각비에 포함** (오너 결정 2026-09-24 — "너무 심하게 차이가 나기에 포함하는 게
@@ -73,14 +75,10 @@ export async function withContentAmortization(
   sic: number | null,
 ): Promise<CompanyFacts> {
   if (!recent || sic == null || !MEDIA_SIC.has(sic) || !CONTENT_CIKS.has(cik.padStart(10, "0"))) return facts;
-  const pick = (re: RegExp, n: number): Filing[] => {
-    const out: Filing[] = [];
-    for (let i = 0; i < recent.form.length && out.length < n; i++)
-      if (re.test(recent.form[i]))
-        out.push({ accn: recent.accessionNumber[i], form: recent.form[i], filed: recent.filingDate[i], doc: recent.primaryDocument[i] });
-    return out;
-  };
-  const filings = [...pick(/^10-K$/, 3), ...pick(/^10-Q$/, 1)];
+  // 10-K 3건 + 두 번째 최근 10-K 이후 10-Q 전부(최신순, edgar-cf-structure.ts filingsForDa — 2026-09-27). 예전엔 최신 10-Q 1건만
+  // 읽어 그 밖의 분기 열(NFLX 2025 Q3·Q4, 2026 Q1)이 콘텐츠 상각 없는 태그 값(약 87M, 본표 4,090M)으로 대체됐다
+  const docOf = new Map(recent.accessionNumber.map((a, i) => [a, recent.primaryDocument[i]]));
+  const filings: Filing[] = filingsForDa(recent, 3).map((p) => ({ ...p, doc: docOf.get(p.accn) ?? "" }));
   const cikNum = Number(cik);
   const content: FactUnitEntry[] = [];
   for (const f of filings) {
@@ -92,16 +90,23 @@ export async function withContentAmortization(
       // 더하지 않는다(검증 2026-09-24: DIS 를 주석 값으로 더해 인포맥스 대비 +76~138% 가 됐었다)
       const pre = await fetchText(url.replace(/_htm\.xml$/i, "_pre.xml").replace(/\.xml$/i, (m) => (url.endsWith("_htm.xml") ? m : "_pre.xml")), {
         headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000,
-      }).catch(() => "");
+      }).catch((e) => {
+        // 이름을 추정한 파일이라 404 는 "원래 없음". 그 밖의 조회 실패(429·시간 초과 등)는 올린다
+        if (isFetchFailure(e) && e.opts.status === 404) return "";
+        throw e;
+      });
       const cfTags = new Set<string>();
-      for (const m of pre.matchAll(/<link:presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:presentationLink>/g)) {
+      for (const m of pre.matchAll(/<(?:link:)?presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?presentationLink>/g)) {
         if (!/CASH\s*FLOWS?/i.test(m[1].split("/").pop() ?? "") || /Detail|Table|Polic|Parenthetical/i.test(m[1])) continue;
         for (const h of m[2].matchAll(/xlink:href="[^"#]*#[a-z0-9-]+_([A-Za-z0-9]+)"/g)) cfTags.add(h[1]);
       }
+      // 기간마다 그 기간을 실은 가장 최근 공시 값 하나(공시를 최신순으로 읽음 — 본표 판독 edgar-cf-structure.ts 와 같은 판본 규칙)
       for (const e of parse(xml, f, cfTags))
-        if (!content.some((x) => x.start === e.start && x.end === e.end && x.form === e.form && x.filed === e.filed)) content.push(e);
-    } catch {
-      /* 이 공시만 건너뜀 */
+        if (!content.some((x) => x.start === e.start && x.end === e.end)) content.push(e);
+    } catch (e) {
+      // 조회 실패는 올린다 — 콘텐츠 상각이 빠진 감가상각비(NFLX 약 1/10)를 조용히 내지 않게 로더가 감가상각비를 공란 + 사유로
+      // (sec-unavailable.ts). 파싱 오류만 이 공시를 건너뜀
+      if (fetchFailureReason(e) != null) throw e;
     }
   }
   if (!content.length) return facts;

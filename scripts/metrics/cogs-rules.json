@@ -1,0 +1,104 @@
+{
+  "XOM": {
+    "lines": [
+      { "concept": "xom_CrudeOilAndProductPurchases", "label": "원유·제품 매입" },
+      { "concept": "xom_ProductionAndManufacturingExpenses", "label": "생산·제조비" }
+    ],
+    "gp": "synth",
+    "note": "원유·제품 매입 + 생산·제조비 (10-K 0000034088-26-000045 FY2025 184,248 + 42,424 = 226,672)"
+  },
+  "MCD": {
+    "lines": [
+      { "concept": "mcd_FoodAndPaperCosts", "label": "식자재" },
+      { "concept": "mcd_PayrollAndEmployeeBenefits", "label": "인건비" },
+      { "concept": "mcd_OccupancyAndOtherOperatingExpenses", "label": "임차 및 기타" },
+      { "concept": "mcd_Franchisedrestaurantsoccupancyexpenses", "label": "가맹점 임차비용" },
+      { "concept": "us-gaap_OtherExpenses", "label": "기타 매장비용" }
+    ],
+    "linesByForm": {
+      "10-Q": [
+        { "concept": "mcd_CompanyOperatedRestaurantExpenses", "label": "직영점 비용" },
+        { "concept": "us-gaap_CostOfGoodsAndServicesSold", "label": "가맹점 임차비용(10-Q 태깅)" },
+        { "concept": "us-gaap_OtherExpenses", "label": "기타 매장비용" }
+      ]
+    },
+    "gp": "synth",
+    "note": "직영점 비용 + 가맹점 임차비용 + 기타 매장비용 (10-K 0000063908-26-000035 FY2025 8,269 + 2,618 + 564 = 11,451)"
+  },
+  "V": {
+    "lines": [
+      { "concept": "us-gaap_LaborAndRelatedExpense", "label": "인건비" },
+      { "concept": "us-gaap_CommunicationsAndInformationTechnology", "label": "네트워크·처리비" }
+    ],
+    "gp": "synth",
+    "note": "인건비 + 네트워크·처리비 (10-K 0001403161-25-000089 FY2025 6,961 + 894 = 7,855)"
+  },
+  "ORCL": {
+    "lines": [
+      { "concept": ["orcl_CloudAndSoftwareExpenses", "orcl_CloudServicesAndLicenseSupportExpenses"], "label": "클라우드·SW" },
+      { "concept": "orcl_HardwareExpenses", "label": "하드웨어" },
+      { "concept": "orcl_ServicesExpense", "label": "서비스" }
+    ],
+    "gp": "synth",
+    "note": "클라우드·SW + 하드웨어 + 서비스 원가 (10-K 0001193125-26-277521 FY2025 11,569 + 782 + 4,576 = 16,927)"
+  },
+  "MAR": {
+    "lines": [
+      { "concept": "us-gaap_CostOfRevenue", "member": "ProductOrServiceAxis=OwnedLeasedandOtherMember", "label": "자가·임차 등 원가" },
+      { "concept": "us-gaap_CostOfRevenue", "member": "ProductOrServiceAxis=ReimbursementsMember", "label": "환급 비용" }
+    ],
+    "gp": "synth",
+    "note": "Operating costs 차원 줄 합 (10-K 0001048286-26-000007 FY2025 1,461 + 19,503 = 20,964)"
+  },
+  "HLT": {
+    "lines": [
+      { "concept": ["hlt_OwnershipExpenses", "hlt_OwnedAndLeasedHotelExpenses"], "label": "소유 호텔 비용" },
+      { "concept": ["hlt_ReimbursedExpenses", "hlt_OtherExpensesFromManagedAndFranchisedProperties"], "label": "환급 비용" }
+    ],
+    "gp": "synth",
+    "note": "소유 호텔 비용 + 환급 비용 (10-K 0001585689-26-000007 FY2025 1,094 + 7,550 = 8,644)"
+  },
+  "SBUX": {
+    "lines": [
+      { "concept": "us-gaap_ProductionAndDistributionCosts", "label": "제품·유통 원가" },
+      { "concept": "sbux_StoreOperatingExpenses", "label": "매장 운영비" }
+    ],
+    "gp": "synth",
+    "note": "제품·유통 원가 + 매장 운영비 (10-K 0000829224-25-000114 FY2025 11,658.2 + 17,058.9 = 28,717.1)"
+  },
+  "DAL": {
+    "lines": [
+      { "concept": "us-gaap_LaborAndRelatedExpense", "label": "인건비" },
+      { "concept": "us-gaap_FuelCosts", "label": "연료" },
+      { "concept": ["dal_AncillaryBusinessesAndRefineryExpenses", "dal_RefineryExpenses"], "label": "부대사업·정유(2026 10-Q 부터 정유)" },
+      { "concept": "dal_AncillaryBusinessExpense", "optional": true, "label": "부대사업(MRO, 2026 10-Q 부터 별도 줄)" },
+      { "concept": "us-gaap_LandingFeesAndOtherRentals", "label": "착륙료·임차" },
+      { "concept": "us-gaap_AirlineCapacityPurchaseArrangements", "label": "지역항공" },
+      { "concept": "us-gaap_AircraftMaintenanceMaterialsAndRepairs", "label": "정비" },
+      { "concept": "us-gaap_CostOfServicesCatering", "label": "승객 서비스" },
+      { "concept": "us-gaap_OtherLaborRelatedExpenses", "label": "이익분배" },
+      { "concept": "us-gaap_AircraftRental", "label": "항공기 임차" },
+      { "concept": "dal_PilotAgreementAndRelatedExpenses", "optional": true, "label": "조종사 합의금" }
+    ],
+    "gp": "synth",
+    "note": "운항 원가(외주 서비스 제외) (10-K 0000027904-26-000013 FY2025 합 45,609)"
+  },
+  "CEG": {
+    "lines": [
+      { "concept": "us-gaap_CostDirectMaterial", "label": "구매전력·연료" },
+      { "concept": "us-gaap_RelatedPartyTransactionAmountsOfTransaction", "optional": true, "label": "구매전력·연료(계열사)" },
+      { "concept": "us-gaap_UtilitiesOperatingExpenseMaintenanceOperationsAndOtherCostsAndExpenses", "label": "운영·유지" },
+      { "concept": "ceg_RelatedPartyCostsOperatingAndMaintenance", "optional": true, "label": "운영·유지(계열사)" }
+    ],
+    "gp": "synth",
+    "note": "구매전력·연료 + 운영·유지(계열사 포함) (10-K 0001868275-26-000032 FY2025 14,681 + 6,159 = 20,840)"
+  },
+  "VST": {
+    "lines": [
+      { "concept": "vistra_CostOfFuelPurchasedPowerAndDelivery", "label": "연료·구매전력·송배전" },
+      { "concept": "us-gaap_OtherCostAndExpenseOperating", "label": "운영비" }
+    ],
+    "gp": "synth",
+    "note": "연료·구매전력·송배전 + 운영비 (10-K 0001692819-26-000006 FY2025 9,101 + 2,803 = 11,904)"
+  }
+}

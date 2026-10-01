@@ -1,5 +1,6 @@
 import "server-only";
 import { fetchText } from "../http";
+import { fetchFailureReason, markUnavailable } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import { instanceUrl, needsClassAFacts } from "./edgar-classfacts";
 
@@ -231,20 +232,33 @@ export async function withFilingGapFill(
   let dei = facts.facts.dei as Ns | undefined;
   const parsed = new Map<string, ParsedInstance>();
   // 오래된 것부터 붙여 "최신 filed 우선" 규칙과 맞춘다
+  // 조회 실패한 누락 공시 — 그 공시가 빠진 채로 계산한 최근 12개월(LTM)은 같은 "LTM" 열에 더 오래된 기간 값이 들어가므로
+  // 화면이 LTM 열을 공란 + 사유로 둔다(sec-unavailable.ts "filings"). 연도 열은 해당 연도가 통째로 빠질 뿐 값은 바뀌지 않는다
+  const failed: string[] = [];
+  let failReason = "";
   for (const f of [...gaps].reverse()) {
     try {
       const xml = await loadInstance(cik, f);
-      if (!xml) continue;
+      if (!xml) {
+        // companyfacts 에 없는 공시인데 인스턴스도 없다 — 그 공시가 빠진 채 LTM 을 내지 않는다(그림자 채우기 금지)
+        failed.push(f.filed);
+        failReason ||= `${f.form} ${f.filed} · XBRL 인스턴스 없음`;
+        continue;
+      }
       const p = parseInstanceFacts(xml, f);
       parsed.set(f.accn, p);
       usGaap = mergeNs(usGaap, p.usGaap);
       if (Object.keys(p.ifrs).length) ifrsOut = mergeNs(ifrsOut, p.ifrs);
       dei = mergeNs(dei, p.dei);
-    } catch {
-      /* 이 공시만 건너뜀 */
+    } catch (e) {
+      // 조회 실패·판독 오류 모두 기록 — 이 공시가 빠진 LTM 은 공란(예전엔 판독 오류를 조용히 건너뛰었다)
+      const why = fetchFailureReason(e) ?? `판독 오류 · ${e instanceof Error ? e.message : String(e)}`;
+      failed.push(f.filed);
+      failReason ||= `${f.form} ${f.filed} · ${why}`;
     }
   }
 
+  let coverFail: string | null = null;
   if (wantCover) {
     try {
       let p = parsed.get(latest.accn) ?? null;
@@ -263,13 +277,16 @@ export async function withFilingGapFill(
         };
         dei = mergeNs(dei, { EntityCommonStockSharesOutstanding: { shares: [entry] } });
       }
-    } catch {
-      /* 표지 보완 실패 — 기존 경로 유지 */
+    } catch (e) {
+      // 표지 보완 실패 — 옛 표지 주식수를 현재 주식수로 쓰지 않게 기록(edgar-shares.ts current)
+      coverFail = `${latest.form} ${latest.filed} 표지 · ${fetchFailureReason(e) ?? `판독 오류 · ${e instanceof Error ? e.message : String(e)}`}`;
     }
   }
 
-  return {
+  const merged: CompanyFacts = {
     ...facts,
     facts: { ...facts.facts, "us-gaap": usGaap, dei, ...(ifrsOut ? { "ifrs-full": ifrsOut } : {}) } as CompanyFacts["facts"],
   };
+  const withFail = failed.length ? markUnavailable(merged, "filings", failReason, failed) : merged;
+  return coverFail ? markUnavailable(withFail, "cover", coverFail) : withFail;
 }

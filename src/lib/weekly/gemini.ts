@@ -43,9 +43,8 @@ const PRICE = { input: 0.75 / 1e6, output: 3.75 / 1e6 };
  * to Google Search. You will be charged for each individual search query
  * performed.").
  *
- * 이 앱에서 그라운딩을 쓰는 곳은 둘뿐이다 — 주간 리포트 코멘트(`comment.ts`,
- * 주 1회 × 2~3콜)와 발표자료 기업 프로필(`lib/ppt/gemini-profile.ts`, PPT
- * 내보내기 할 때마다 1콜). 쿼리를 넉넉히 잡아도 월 수백 건이라 무료 한도의
+ * 이 앱에서 그라운딩을 쓰는 곳은 주간 리포트 코멘트(`comment.ts`, 주 1회 × 2~3콜)
+ * 하나뿐이다(발표자료 PPT 는 2026-09-25 삭제). 쿼리를 넉넉히 잡아도 월 수백 건이라 무료 한도의
  * 한 자릿수 % 수준 — 실제 청구액은 $0 이다.
  *
  * 그래서 추정치를 얹지 않는다. 종전 $0.035(근거 없는 추정)는 회당 $0.07~0.10 을

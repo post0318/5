@@ -60,6 +60,11 @@ export interface FinancialLineItem {
   italic?: boolean;
   /** 값을 괄호로 감싸 표시 (참고/내역 라인) */
   paren?: boolean;
+  /**
+   * 칸 주석(period.label → 문구) — 빈칸의 사유 또는 근사값의 라벨(그림자 채우기 금지, 오너 규칙 2026-09-27).
+   * 화면은 그 칸에 표시(※번호)를 달고 표 아래에 번호별 문구를 보여준다.
+   */
+  cellNotes?: Record<string, string>;
 }
 
 export interface FinancialStatement {
@@ -81,6 +86,8 @@ export interface FinancialStatement {
   source: string;
   /** 원문/딥링크 */
   sourceUrl?: string;
+  /** 미국 — 재무 5층 구조(fin) 조립이 완전하지 않은 열(gaps·조립 항등식 불성립, fin-revenue.ts FinColIssue) */
+  finIssues?: { col: string; start: string; end: string; v: number | null; gaps: string[]; rev: string[]; other: string[]; unv: string[] }[];
 }
 
 export interface CompanyProfile {
@@ -115,6 +122,13 @@ export interface Filing {
   source: string;
 }
 
+/** Yahoo 가 종가를 소급 조정한 분할(분사 포함) — ratio = 분할 전 1주가 분할 후 몇 주인지(1323:1000 → 1.323) */
+export interface YahooSplit {
+  /** YYYY-MM-DD */
+  date: string;
+  ratio: number;
+}
+
 export interface QuoteBar {
   /** YYYY-MM-DD */
   date: string;
@@ -141,6 +155,8 @@ export interface EodQuote {
   sharesOutstanding?: number | null;
   /** 시가총액 (제공 소스에서만) */
   marketCap?: number | null;
+  /** 시세가 Yahoo 일 때만 — 종가에 소급 반영된 분할·분사 이력 */
+  splits?: YahooSplit[];
 }
 
 /** 트레일링 멀티플 (L3, 자체 계산). */
@@ -165,12 +181,26 @@ export interface TrailingMultiples {
   currency: Currency;
   /** 계산에 쓴 값들 (감사 추적용) */
   inputs: Record<string, number | null>;
+  /**
+   * 값이 비었거나 근사인 칸의 사유·라벨(그림자 채우기 금지, 오너 규칙 2026-09-27) — 화면이 그 칸 옆에 보여준다.
+   * 키: per·perTtm·pbr·psr·evEbitda·eps·bps·marketCap
+   */
+  reasons?: Partial<Record<"per" | "perTtm" | "pbr" | "psr" | "evEbitda" | "eps" | "bps" | "marketCap", string>>;
 }
 
 /** TTM(최근 4분기 누적) 플로우 지표. */
 export interface TtmFlows {
   /** 계산 기준 라벨 (예: "FY2025 + 2026 반기 − 2025 반기") */
   periodLabel: string;
+  /** 조회 자체가 실패했으면 그 사유 — 모든 값이 null(대체 계산 금지, 화면은 이 사유를 보여준다) */
+  error?: string | null;
+  /** 값이 null 이거나 근사인 항목의 사유·라벨(미국) — 화면 칸 주석 */
+  reasons?: Partial<Record<"netIncome" | "revenue" | "opIncome" | "eps" | "daTtm" | "equity" | "evNetDebt" | "evShares" | "dpsTtm" | "fyEps", string>>;
+  /**
+   * 최근 사업연도 희석 EPS(미국 — edgar-pershare.ts fyEps, 20-F ADR 은 ADR 1주 기준). 개요 PER(연간)의 분모 —
+   * 재무제표 원 태그 EPS 를 쓰면 ADR·클래스 공시에서 기준이 틀린다.
+   */
+  fyEps?: { eps: number | null; year: number | null; note: string | null } | null;
   netIncome: number | null;
   revenue: number | null;
   opIncome: number | null;
@@ -203,6 +233,11 @@ export interface TtmFlows {
     is20F?: boolean;
     /** 우선주 시가총액(한국 — KRX 우선주 자체 시세) — EV 에 더한다 */
     evPreferredMcap?: number | null;
+    /**
+     * 주당 장부 지표(BPS) 분모 — 시가총액 주식수(evShares)와 따로 둘 때만(DART 연결 ADR: 자사주 제외 유통주식수,
+     * us/dart-adr.ts). 있으면 PBR 은 시가총액 ÷ 자본(주식수 무관)으로 낸다.
+     */
+    bookShares?: number | null;
     /** evNetDebt 에 들어 있는 운영 파트너십 지분 장부가 — 지분을 시가로 더할 때 뺀다 */
     evOpNciBook?: number | null;
     /**

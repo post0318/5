@@ -65,11 +65,30 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
         ? computeKrOverviewMetrics(item.symbol, item.yahooSymbol).catch(() => null)
         : Promise.resolve(null),
     ]);
+    // 미국 매출·마진 = LTM(오너 결정 2026-09-25) — 매출은 재무 5층 구조 매출 지표 LTM(getTtm), 마진 분자도 같은 LTM
+    // (영업이익·순이익 TTM). 예전엔 연간 재무제표의 부분 매출 태그(고객계약 매출)를 써서 MET·AXP 등이 총매출과 크게
+    // 갈렸다(revenue.md D1).
     const inp = ov.multiples?.inputs;
-    const rev = isKr ? (krMetrics?.revenueAnnual ?? null) : (inp?.revenueAnnual ?? null);
+    const isUs = item.market === "us";
+    const usTtm = isUs ? ov.ttm : null;
+    const rev = isKr ? (krMetrics?.revenueAnnual ?? null) : isUs ? (usTtm?.revenue ?? null) : (inp?.revenueAnnual ?? null);
     const margin = (n: number | null | undefined) => (n != null && rev ? n / rev : null);
     const warnings = [...ov.warnings];
     if (isKr && krMetrics?.last == null) warnings.push("시세 조회 실패");
+    // 미국 — 빈 칸·근사 칸의 사유(그림자 채우기 금지, 2026-09-27): 멀티플은 multiples.reasons, 매출·마진은 TTM reasons
+    if (isUs) {
+      const mr = ov.multiples?.reasons ?? {};
+      const tr = usTtm?.reasons ?? {};
+      const push = (label: string, r: string | undefined) => { if (r) warnings.push(`${label}: ${r}`); };
+      if (!ov.multiples && usTtm?.error) push("멀티플", usTtm.error);
+      push("PER", mr.per);
+      push("PER(TTM)", mr.perTtm);
+      push("PBR", mr.pbr);
+      push("시가총액", mr.marketCap);
+      push("매출(LTM)", tr.revenue);
+      push("영업이익률", tr.opIncome);
+      push("순이익률", tr.netIncome);
+    }
     return {
       ...base,
       name: item.name ?? ov.profile?.name ?? null,
@@ -88,8 +107,8 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       recommendationKey: ov.consensus?.recommendationKey ?? null,
       marketCap: isKr ? (krMetrics?.marketCap ?? null) : (ov.multiples?.marketCap ?? null),
       revenueAnnual: rev,
-      opMargin: isKr ? (krMetrics?.opMargin ?? null) : margin(inp?.opIncomeAnnual),
-      netMargin: isKr ? (krMetrics?.netMargin ?? null) : margin(inp?.netIncomeAnnual),
+      opMargin: isKr ? (krMetrics?.opMargin ?? null) : margin(isUs ? usTtm?.opIncome : inp?.opIncomeAnnual),
+      netMargin: isKr ? (krMetrics?.netMargin ?? null) : margin(isUs ? usTtm?.netIncome : inp?.netIncomeAnnual),
       foreignRatio: foreign?.ratio ?? null,
       foreignRatioAsOf: foreign?.asOf ?? null,
       highDividend: isKr && isHighDividendKr(item.symbol),

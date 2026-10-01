@@ -2,7 +2,7 @@ import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
 import { ageMs, getCachedStockNews } from "@/lib/db/stock-news";
 import { getAdapter } from "@/lib/markets/registry";
-import { refreshStockNews } from "@/lib/markets/stock-news-cache";
+import { freshMs, refreshStockNews } from "@/lib/markets/stock-news-cache";
 import { isMarketId, type MarketId } from "@/lib/markets/types";
 import { listUniverseDistinct } from "@/lib/universe/repo";
 
@@ -35,8 +35,7 @@ function authorized(req: Request): boolean {
 const CONCURRENCY = 4;
 /** 함수 한도(300초)에 여유를 두고 끊는다 */
 const TIME_BUDGET_MS = 240_000;
-/** 이보다 최근에 받은 종목은 건너뛴다 — 크론이 자주 돌아도 헛일하지 않게 */
-const SKIP_IF_NEWER_MS = 30 * 60_000;
+
 
 export async function GET(req: Request) {
   try {
@@ -62,7 +61,8 @@ export async function GET(req: Request) {
       }),
     );
     let targets = withAge
-      .filter((t) => force || t.age >= SKIP_IF_NEWER_MS)
+      // 시장별 신선도(현지 장중 30분, 그 외 2시간) 안에 받은 종목은 건너뛴다 — 크론은 30분마다 돌고 종목마다 자기 시장 기준으로 판단
+      .filter((t) => force || t.age >= freshMs(t.market) - 5 * 60_000) // 5분 여유 — 30분 회차 사이 경과가 29분대라 한 회차를 건너뛰지 않게
       .sort((a, b) => b.age - a.age);
     const skipped = withAge.length - targets.length;
     if (limit > 0) targets = targets.slice(0, limit);

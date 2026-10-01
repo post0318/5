@@ -38,18 +38,28 @@ function useIsMobile(): boolean {
   return mobile;
 }
 
+/** 칸 주석 번호 — 표 전체에서 같은 문구는 같은 번호(그림자 채우기 금지 — 빈칸 사유·근사 라벨을 칸마다 표시) */
+function noteIndex(rowsList: HighlightRow[][]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const rows of rowsList)
+    for (const r of rows) for (const n of r.cellNotes ?? []) if (n && !m.has(n)) m.set(n, m.size + 1);
+  return m;
+}
+
 function HighlightGrid({
   columns,
   rows,
   showHeader = true,
   scale,
   mobile,
+  notes,
 }: {
   columns: HighlightColumn[];
   rows: HighlightRow[];
   showHeader?: boolean;
   scale: Scale;
   mobile: boolean;
+  notes: Map<string, number>;
 }) {
   const emBg = "bg-[oklch(0.94_0.045_67)] dark:bg-[oklch(0.32_0.05_55)]";
   return (
@@ -126,6 +136,11 @@ function HighlightGrid({
                   )}
                 >
                   {fmt(v, r.format, scale)}
+                  {r.cellNotes?.[i] && (
+                    <sup className="text-muted-foreground ml-0.5 text-[9px] font-normal" title={r.cellNotes[i]!}>
+                      ※{notes.get(r.cellNotes[i]!)}
+                    </sup>
+                  )}
                 </td>
               ))}
             </tr>
@@ -151,15 +166,17 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
     const ltm = data.columns.findIndex((c) => c.kind === "ltm");
     const est = data.columns.findIndex((c) => c.kind === "estimate");
     const pick = [lastFy, ltm, est].filter((i): i is number => i != null && i >= 0);
-    const slice = <T extends { values: (number | null)[] }>(r: T) => ({
+    const slice = <T extends { values: (number | null)[]; cellNotes?: (string | null)[] }>(r: T) => ({
       ...r,
       values: pick.map((i) => r.values[i]),
+      cellNotes: r.cellNotes ? pick.map((i) => r.cellNotes![i] ?? null) : undefined,
     });
     columns = pick.map((i) => data.columns[i]);
     rows = data.rows.map(slice);
     valuationRows = valuationRows.map(slice);
   }
 
+  const notes = noteIndex([rows, valuationRows]);
   const splitAt = rows.findIndex((r) => r.spacer);
   const evRows = splitAt >= 0 ? rows.slice(0, splitAt) : rows;
   const flowRows = splitAt >= 0 ? rows.slice(splitAt + 1) : [];
@@ -174,7 +191,7 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
       </div>
 
       <div className={cn("rounded-lg border", !mobile && "overflow-x-auto")}>
-        <HighlightGrid columns={columns} rows={evRows} scale={scale} mobile={mobile} />
+        <HighlightGrid columns={columns} rows={evRows} scale={scale} mobile={mobile} notes={notes} />
         {flowRows.length > 0 && (
           <>
             <div className={cn("bg-muted/40 h-2", !mobile && "min-w-[1040px]")} />
@@ -184,6 +201,7 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
               showHeader={false}
               scale={scale}
               mobile={mobile}
+              notes={notes}
             />
           </>
         )}
@@ -196,10 +214,18 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
             rows={valuationRows}
             scale={scale}
             mobile={mobile}
+            notes={notes}
           />
         </div>
       )}
 
+      {notes.size > 0 && (
+        <ul className="text-muted-foreground space-y-0.5 text-xs">
+          {[...notes].map(([n, k]) => (
+            <li key={k}>※{k} {n}</li>
+          ))}
+        </ul>
+      )}
       <ul className="text-muted-foreground/70 space-y-0.5 text-xs">
         {data.notes.map((n, i) => (
           <li key={i}>· {n}</li>

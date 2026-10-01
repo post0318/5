@@ -63,6 +63,8 @@ export interface KrAnalysisInput {
   bars: QuoteBar[];
   fyCloseByYear?: Map<number, number>;
   sharesOutstanding: number | null;
+  /** 연도별 결산일 주식수(DART 연결 ADR) — 주면 연도 열은 이 값만(현재 주식수로 대신하지 않음 — 그림자 채우기 금지) */
+  sharesByYear?: Map<number, number> | null;
   currentPrice: number | null;
   currentMarketCap: number | null;
   ttm: TtmFlows | null;
@@ -201,7 +203,7 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   for (const y of years) {
     const kx = caps?.byYear.get(y);
     const px = closeOnOrBefore(bars, `${y}-12-31`) ?? fyCloseByYear?.get(y) ?? null;
-    mktcap[`${y}Y`] = kx?.common ?? (px != null && shares != null ? px * shares : null);
+    mktcap[`${y}Y`] = kx?.common ?? (input.sharesByYear ? null : px != null && shares != null ? px * shares : null);
     prefMcap[`${y}Y`] = kx?.preferred ?? null;
   }
   const curMktcap =
@@ -406,7 +408,11 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     R("영업현금흐름 / 순이익", ratio(ocf, ni), "mult"),
     R("주당 FCF", (() => {
       const o = blank();
-      for (const l of labels) if (fcf[l] != null && shares) o[l] = fcf[l]! / shares;
+      for (const l of labels) {
+        // 연도 열 분모 — 결산일 주식수가 주어지면(DART 연결 ADR) 그 값만
+        const sh = input.sharesByYear && l !== LTM ? (input.sharesByYear.get(Number(l.slice(0, 4))) ?? null) : shares;
+        if (fcf[l] != null && sh) o[l] = fcf[l]! / sh;
+      }
       return o;
     })(), "eps"),
     SP("3"),

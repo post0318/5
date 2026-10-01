@@ -33,21 +33,34 @@ export function buildUsSummary(
     keys: string[],
   ): Map<string, Record<string, number | null>> => {
     const src = stmt.periods.map((p) => p.label);
-    const by = new Map(stmt.sections[0].items.map((it) => [it.accountName, it]));
+    // 순서(index) 대응은 라벨이 하나도 겹치지 않을 때만 — 분기 열에 Q4 가 있는 표(손익·재무상태표)와 없는 표(현금흐름표)를
+    // 순서로 맞추면 한 칸씩 밀린 값이 들어간다
+    const byIndex = src.length === tLabels.length && !tLabels.some((tl) => src.includes(tl));
+    const items = stmt.sections[0].items;
+    const by = new Map(items.map((it) => [it.accountName, it]));
     const out = new Map<string, Record<string, number | null>>();
     for (const k of keys) {
-      const it = by.get(k);
+      // 영업이익 줄은 합성 산식을 이름에 붙인다("영업이익 (태그 없음 · …)") — 접두 일치(예전엔 정확 일치라 합성 영업이익이 총괄에서 빠졌다)
+      const it = by.get(k) ?? (k === "영업이익" ? items.find((x) => x.accountName.startsWith("영업이익 (")) : undefined);
       if (!it) continue;
       const v: Record<string, number | null> = {};
       tLabels.forEach((tl, i) => {
-        v[tl] =
-          it.values[tl] ??
-          (src.length === tLabels.length ? (it.values[src[i]] ?? null) : null);
+        v[tl] = it.values[tl] ?? (byIndex ? (it.values[src[i]] ?? null) : null);
       });
       out.set(k, v);
+      // 칸 주석(빈칸 사유·근사 라벨)도 같은 열로
+      if (it.cellNotes) {
+        const n: Record<string, string> = {};
+        tLabels.forEach((tl, i) => {
+          const t = it.cellNotes![tl] ?? (byIndex ? it.cellNotes![src[i]] : undefined);
+          if (t) n[tl] = t;
+        });
+        if (Object.keys(n).length) notesOf.set(v, n);
+      }
     }
     return out;
   };
+  const notesOf = new WeakMap<Record<string, number | null>, Record<string, string>>();
 
   const mkItem = (
     name: string,
@@ -60,6 +73,7 @@ export function buildUsSummary(
     isSubtotal: false,
     isHighlight: false,
     values,
+    ...(notesOf.get(values) ? { cellNotes: notesOf.get(values) } : {}),
   });
 
   // ── 손익계산서: 매출액(순수익) / 영업비용 / 영업이익 / 당기순이익 ──

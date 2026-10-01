@@ -22,10 +22,35 @@ import {
  *  · 없거나 STALE_MAX 초과 : 어쩔 수 없이 기다렸다 긁는다
  */
 
-/** KST 09~17시는 뉴스 흐름이 빨라 더 자주 갱신 — 기존 s-maxage 정책과 같은 기준 */
-export function freshMs(): number {
-  const kstHour = (new Date().getUTCHours() + 9) % 24;
-  return kstHour >= 9 && kstHour < 17 ? 30 * 60_000 : 60 * 60_000;
+/**
+ * 시장별 장중 판정(오너 지시 2026-10-01 — "한국종목은 한국시간으로 장중 30분, 미국종목은 미국시간으로 장중 30분(한국시간으로는 야간), 그 외 2시간").
+ * 예전엔 시장 구분 없이 KST 09~17시만 장중으로 봐서, 미국 종목은 실제 장중(한국 새벽)에 2시간 간격으로만 갱신됐다.
+ * 각 시장 현지 시각·평일로 판정한다(미국은 서머타임을 Intl 이 처리). 공휴일은 따로 보지 않는다(장이 닫혀도 30분 갱신 — 손해 없음).
+ *  · kr: KST 09:00~17:30(기존 오너 지정 구간 — 정규장 15:30 뒤 공시·마감 기사까지)
+ *  · us: 뉴욕 09:30~16:00(정규장)
+ *  · jp: 도쿄 09:00~15:30
+ */
+const SESSION: Record<MarketId, { tz: string; open: number; close: number }> = {
+  kr: { tz: "Asia/Seoul", open: 9 * 60, close: 17 * 60 + 30 },
+  us: { tz: "America/New_York", open: 9 * 60 + 30, close: 16 * 60 },
+  jp: { tz: "Asia/Tokyo", open: 9 * 60, close: 15 * 60 + 30 },
+};
+
+export function inSession(market: MarketId, now = new Date()): boolean {
+  const s0 = SESSION[market];
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: s0.tz, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(now)
+      .map((x) => [x.type, x.value]),
+  );
+  if (parts.weekday === "Sat" || parts.weekday === "Sun") return false;
+  const m = Number(parts.hour) * 60 + Number(parts.minute);
+  return m >= s0.open && m < s0.close;
+}
+
+/** 이 시간보다 최근에 받은 뉴스는 다시 긁지 않는다 — 장중 30분, 그 외 2시간 */
+export function freshMs(market: MarketId, now = new Date()): number {
+  return inSession(market, now) ? 30 * 60_000 : 2 * 3600_000;
 }
 
 /** 이보다 오래되면 묵은 값을 그냥 주지 않고 기다렸다 새로 긁는다 */
@@ -102,7 +127,7 @@ export async function readStockNews(
   const doc = await getCachedStockNews(market, sym);
   const age = ageMs(doc);
 
-  if (doc && age < freshMs()) {
+  if (doc && age < freshMs(market)) {
     return { payload: fromDoc(doc), source: "db", refreshInBackground: false };
   }
   if (doc && age < STALE_MAX_MS) {

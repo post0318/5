@@ -1,29 +1,21 @@
 import "server-only";
+import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
+import { unavailableNote } from "./sec-unavailable";
+import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import {
   ANNUAL_FORMS,
   annualEnds,
-  days,
   firstConcept,
   instantByYear,
   instantOn,
+  provenAbsentAt,
   recentInstantQuarters,
-  recentQuarters, fiscalYearOf } from "./edgar-series";
+  fiscalYearOf } from "./edgar-series";
+import { revQuarterCols, revQuarterLabel } from "./fin-revenue";
 import { buildEvResolver } from "./edgar-ev";
 import { isFinancialCompany } from "./edgar-financial";
-
-/** 분기 컬럼 달력용 (duration 개념 — instant 개념엔 분기 기간이 없음). */
-const REVENUE_CAL = [
-  // 총매출(손익계산서 첫 줄)을 먼저 — 고객계약 매출(ASC 606)은 회원비·리스 매출 등을 빼 WMT·BE 가
-  // 인포맥스·Yahoo·SEC 총매출보다 1~7% 작았다(오너 결정 2026-09-24).
-  "OperatingRevenueExcludingNonoperatingDerived", // 총수익 − 지분법·기타수익(XOM, edgar-revenue-dims.ts)
-  "Revenues",
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
-  "RevenueFromContractWithCustomerIncludingAssessedTax",
-  "SalesRevenueNet",
-  "RevenuesNetOfInterestExpense", // 증권사·투자은행(GS·MS) — 하이라이트와 같은 목록
-];
 
 /**
  * 미국 상세 재무상태표 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 B/S 근사).
@@ -45,9 +37,13 @@ interface Line {
   label: string;
   concepts?: string[];
   combine?: string[]; // 합산
-  /** concepts/combine 결과가 없는 기(period)만 이 개념으로 대체 — 유동/비유동 분리 없이
-   * 미분류 총액 하나로만 공시하는 회사(AXP 등 금융사) 대응. */
+  /**
+   * concepts/combine 결과가 없는 기(period)의 **다른 정의** 값(제한현금 포함 현금·매입채무+미지급비용·미분류 장기부채 등 —
+   * AXP·XOM 등). 그림자 채우기 금지(2026-09-27): 이 값은 본 줄 이름으로 보이지 않고 fallbackLabel 의 별도 줄로 보인다.
+   */
   fallback?: string[];
+  /** fallback 값의 별도 줄 이름 */
+  fallbackLabel?: string;
   depth: number;
   kind?: "item" | "subtotal" | "total";
   plugOf?: string; // 이 구간 총계 개념군의 키 → (총계 − 앞선 depth1 형제합)
@@ -60,22 +56,16 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
     lines: [
       {
         label: "현금·현금성자산",
-        concepts: ["CashAndCashEquivalentsAtCarryingValue"],
-        // 제한현금 포함 총액 하나로만 공시하는 회사(AXP 등) 폴백
+        // 중단사업 현금 포함 태그(2026-10-01 MDLZ — 2023~ 이 태그만 써서 제한현금 포함 총액 별도 줄로 빠졌다: 1,884 → 1,810 = 야후·SA·블룸버그)
+        concepts: ["CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations"],
+        // 제한현금 포함 총액 하나로만 공시하는 회사(AXP 등) — 별도 줄
         fallback: ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+        fallbackLabel: "현금·현금성자산 (제한현금 포함 총액)",
         depth: 1,
       },
       {
         label: "단기 투자자산",
-        concepts: [
-          "MarketableSecuritiesCurrent",
-          "ShortTermInvestments",
-          "DebtSecuritiesCurrent",
-          "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent", // IBM
-          "AvailableForSaleSecuritiesCurrent",
-          // NVIDIA FY2026~: AFS 채무증권 전액 단기 분류, 10-K 는 이 태그만
-          "AvailableForSaleSecuritiesDebtSecurities",
-        ],
+        concepts: STI_TAGS, // 본표 판독(SYN_STI_FACE)이 없는 칸만 — 아래 resolved 단계에서 판독값으로 덮는다
         depth: 1,
       },
       { label: "매출채권", concepts: ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"], depth: 1 },
@@ -111,8 +101,9 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
       {
         label: "매입채무",
         concepts: ["AccountsPayableCurrent", "AccountsPayableTradeCurrent"],
-        // 유동/비유동 미분류 회사(AXP 등) 또는 매입채무·미지급비용 통합 태깅 회사(XOM 등)
+        // 유동/비유동 미분류 회사(AXP 등) 또는 매입채무·미지급비용 통합 태깅 회사(XOM 등) — 별도 줄
         fallback: ["AccountsPayableCurrentAndNoncurrent", "AccountsPayableAndAccruedLiabilitiesCurrent"],
+        fallbackLabel: "매입채무·미지급비용 (통합 공시)",
         depth: 1,
       },
       {
@@ -135,8 +126,9 @@ const BLOCKS: { title: string; lines: Line[] }[] = [
           "FinanceLeaseLiabilityNoncurrent",
           "OperatingLeaseLiabilityNoncurrent",
         ],
-        // 유동/비유동 분리 없이 미분류 총액(LongTermDebt) 하나로만 공시하는 회사(AXP 등) 폴백
+        // 유동/비유동 분리 없이 미분류 총액(LongTermDebt) 하나로만 공시하는 회사(AXP 등) — 별도 줄
         fallback: ["LongTermDebt"],
+        fallbackLabel: "장기부채 (유동성 포함 미분류 총액)",
         depth: 1,
       },
       { label: "기타 장기부채", depth: 1, plugOf: "lnoncur" },
@@ -183,6 +175,7 @@ const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
         label: "현금·현금성자산",
         concepts: ["CashAndCashEquivalentsAtCarryingValue"],
         fallback: ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+        fallbackLabel: "현금·현금성자산 (제한현금 포함 총액)",
         depth: 1,
       },
       {
@@ -206,6 +199,7 @@ const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
         label: "매입채무",
         concepts: ["AccountsPayableCurrent"],
         fallback: ["AccountsPayableCurrentAndNoncurrent"],
+        fallbackLabel: "매입채무 (유동·비유동 미분류)",
         depth: 1,
       },
       {
@@ -217,6 +211,7 @@ const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
         label: "장기부채",
         combine: ["LongTermDebtNoncurrent", "FinanceLeaseLiabilityNoncurrent", "OperatingLeaseLiabilityNoncurrent"],
         fallback: ["LongTermDebt"],
+        fallbackLabel: "장기부채 (유동성 포함 미분류 총액)",
         depth: 1,
       },
       { label: "기타부채", depth: 1, plugOf: "finL" },
@@ -225,6 +220,28 @@ const FIN_BLOCKS: { title: string; lines: Line[] }[] = [
   },
 ];
 
+
+/**
+ * 자본 정정 감지(오너 결정 2026-10-01 (다) — WDC FY2022) — 그 결산일 재무상태표(자산총계를 실은 연간 공시)의 지배주주 자본(base)과 나중 공시가 다시 실은
+ * 자본이 다르고, 그 나중 공시가 그 날짜 재무상태표 전체를 다시 싣지 않은 경우(자본변동표 기초 잔액만 — WDC 2024-02 10-Q 지분법 투자 오류 정정 +102).
+ * 반올림 재게시(1억 단위 배수)·큰 차이(자본의 5% 초과)는 정정으로 보지 않는다. 재무상태표 화면·재무분석이 같이 쓴다
+ */
+export function equityRestatement(facts: CompanyFacts, end: string): { base: number; delta: number; filed: string } | null {
+  const near = (e: { end: string }) => Math.abs(Date.parse(e.end) - Date.parse(end)) <= 6 * 864e5;
+  const assetsFiled = new Set(firstConcept(facts, ["Assets"]).filter((e) => !e.start && near(e) && ANNUAL_FORMS.includes(e.form) && e.filed).map((e) => e.filed!));
+  // 정기공시만 — 8-K 재작성본(GE 2021 LDTI 소급)은 재무상태표 표시 기준이 아니다(PBR 분모만 재작성본 우선, edgar-pershare)
+  const se = firstConcept(facts, ["StockholdersEquity"]).filter((e) => !e.start && near(e) && /^(10-[KQ]|20-F|40-F)/.test(e.form ?? ""));
+  const col = se.filter((e) => e.filed && assetsFiled.has(e.filed));
+  if (!col.length || !se.length) return null;
+  const pick = (xs: typeof se) => xs.reduce((a, b) => ((b.filed ?? "") > (a.filed ?? "") ? b : a));
+  const base = pick(col), latest = pick(se);
+  if (latest.val === base.val || (latest.filed ?? "") <= (base.filed ?? "")) return null;
+  const delta = latest.val - base.val;
+  if (Math.abs(delta) > Math.abs(base.val) * 0.05 || latest.val % 1e8 === 0) return null;
+  // 정정을 처음 실은 공시(주석 표시용 — WDC 2024-02-12 10-Q)
+  const first = se.filter((e) => e.val === latest.val && (e.filed ?? "") > (base.filed ?? "")).reduce((a, b) => ((b.filed ?? "") < (a.filed ?? "") ? b : a));
+  return { base: base.val, delta, filed: `${first.filed ?? ""} ${first.form}` };
+}
 
 export function buildUsBalance(
   facts: CompanyFacts,
@@ -236,10 +253,17 @@ export function buildUsBalance(
 
   let periods: FinancialPeriod[];
   let value: (concepts: string[]) => Record<string, number | null>;
+  // LTM 칸이 빈 이유가 "그 재무상태표에 줄이 없음"(없음 증명)이 아니라 "분기 공시에 값이 없음"인 줄 — 합산·차감에서 0 으로 보지 않는다
+  const ltmUnknown = new WeakSet<Record<string, number | null>>();
+  /** LTM 칸이 비었는데 그 분기 재무상태표에 줄이 아예 없는(없음 증명) 줄 — 사유 "별도 줄 없음" */
+  const ltmAbsent = new WeakSet<Record<string, number | null>>();
+  /** 합산 줄 중 일부 구성 줄이 분기 재무상태표에 없어 빠진 줄 — 라벨 */
+  const ltmPartialAbsent = new WeakMap<Record<string, number | null>, string[]>();
+  let ltmDate = "";
 
   if (mode === "quarter") {
-    // 분기 라벨·기말은 IS/CF 와 동일하게 (duration 개념 달력 기준)
-    const cal = [...recentQuarters(firstConcept(facts, REVENUE_CAL), 5)].reverse();
+    // 분기 라벨·기말은 손익계산서와 같은 달력 — 재무 5층 구조 매출 지표의 분기 열(Q4 = 사업연도말 포함, fin-revenue.ts)
+    const cal = revQuarterCols(facts.revenue, 5).map((c) => ({ label: revQuarterLabel(c), end: c.end, fyStartApprox: c.end }));
     const fallback =
       cal.length === 0
         ? [...recentInstantQuarters(anchor, 5)].reverse().map((end) => ({
@@ -279,20 +303,33 @@ export function buildUsBalance(
       fiscalQuarter: null,
       endDate: ends.get(y) ?? `${y}-12-31`,
     }));
+    // 20-F Yahoo 분기 LTM — LTM 열 = 그 기준일(최신 분기말) 값만, 채우지 못한 줄은 공란(FY말 값으로 대신하지 않음)
+    const yl = yahooLtm(facts);
     const latestEnd =
-      recentInstantQuarters(anchor, 1)[0] ?? new Date().toISOString().slice(0, 10);
+      yl?.through ?? recentInstantQuarters(anchor, 1)[0] ?? new Date().toISOString().slice(0, 10);
     periods.push({ label: LTM, fiscalYear: (years.at(-1) ?? 0) + 1, fiscalQuarter: null, endDate: latestEnd });
+    ltmDate = latestEnd;
+    // 재무상태표 한 열 = 그 결산일 자산총계를 실은 공시(연간)의 값(2026-10-01 WDC FY2022 — 자본만 2024 10-K 자본변동표 기초 잔액(재작성
+    // 12,323)이 들어가고 부채와 자본·부채는 원 공시(26,259·14,038)라 열 안에서 합이 102 어긋났다). 그 공시들에 값이 없는 줄만 다른 공시
+    const bsFiled = new Map<string, Set<string>>();
+    for (const x of anchor) if (!x.start && ANNUAL_FORMS.includes(x.form) && x.filed) bsFiled.set(x.end, (bsFiled.get(x.end) ?? new Set()).add(x.filed));
     value = (concepts) => {
-      const e = firstConcept(facts, concepts);
+      const e0 = firstConcept(facts, concepts);
+      const e = e0.filter((x) => {
+        const fs0 = x.start || !ANNUAL_FORMS.includes(x.form) ? null : bsFiled.get(x.end);
+        if (!fs0 || (x.filed && fs0.has(x.filed))) return true;
+        return !e0.some((y) => y.end === x.end && !y.start && ANNUAL_FORMS.includes(y.form) && y.filed && fs0.has(y.filed));
+      });
       const ann = instantByYear(e);
       const out: Record<string, number | null> = {};
       for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-      // LTM: 최근 분기말 값. 없으면 최근 재무상태표 값(단, 너무 오래된 건 제외 —
-      // 회사가 해당 라인 보고를 중단한 경우 옛 값이 잔존하지 않도록)
-      const latest = e.filter((x) => !x.start).sort((a, b) => (a.end < b.end ? 1 : -1))[0];
-      const fresh =
-        latest && Math.abs(days(latest.end, latestEnd)) <= 400 ? latest.val : null;
-      out[LTM] = instantOn(e, latestEnd) ?? fresh;
+      // LTM: 최근 분기말(±6일) 값만 — 그 전 가장 최근 값으로 대신하지 않는다(그림자 채우기 금지, 2026-09-27)
+      out[LTM] = instantOn(e, latestEnd);
+      if (out[LTM] == null) {
+        if (!provenAbsentAt(facts, concepts, latestEnd)) ltmUnknown.add(out);
+        // 분기 재무상태표에 이 줄이 따로 없다(다른 줄에 포함) — 연말 값으로 대신하지 않고 사유만
+        else if (years.length && out[fyKey(years[years.length - 1])] != null) ltmAbsent.add(out);
+      }
       return out;
     };
   }
@@ -306,13 +343,49 @@ export function buildUsBalance(
   const leTotal = value(LE_TOTAL); // 부채와 자본 총계 (= 자산 총계)
   const eqRaw = value(["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]);
   const lRaw = value(L_TOTAL);
+  // 부채 파생용 자본은 비지배지분 포함(2026-10-01 KO — 부채총계 미태깅: 92,763 − 지배주주 자본 24,105 = 68,658 로 비지배지분 1,721 이 부채에
+  // 섞였다. 맞는 값 = 92,763 − 비지배지분 포함 자본 25,826 = 66,937 = 야후·StockAnalysis). 포함 자본 태그가 없으면 지배주주 자본 + 비지배지분
+  const eqAllRaw = value(["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]);
+  const miRaw = value(["MinorityInterest"]);
+  const seOnly = value(["StockholdersEquity"]);
+  // 임시자본(메자닌, 2026-10-01) — 부채도 자본도 아닌 상환가능 지분(TSLA·UBER·HLT 상환가능 비지배지분, WDC·BE 전환우선주).
+  // 부채와 자본 총계 = 부채 + 임시자본 + 자본 + 비지배지분. 포함 합계 태그 → 지배주주분 + 상환가능 비지배지분
+  const tmpAll = value(["TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests"]);
+  const tmpParent = value(["TemporaryEquityCarryingAmountAttributableToParent"]);
+  const tmpNci = value(["RedeemableNoncontrollingInterestEquityCarryingAmount", "RedeemableNoncontrollingInterestEquityCommonCarryingAmount"]);
+  const tempEq = blank();
+  for (const l of labels)
+    tempEq[l] = tmpAll[l] ?? (tmpParent[l] != null || tmpNci[l] != null ? (tmpParent[l] ?? 0) + (tmpNci[l] ?? 0) : null);
   // 자기자본·부채총계 한쪽이라도 미태깅이면 (부채와자본총계 or 자산총계) 로 상호 파생
   const eqTotal = blank();
   const lTotal = blank();
   for (const l of labels) {
     const be = leTotal[l] ?? aTotal[l] ?? null;
-    eqTotal[l] = eqRaw[l] ?? (be != null && lRaw[l] != null ? be - lRaw[l]! : null);
-    lTotal[l] = lRaw[l] ?? (be != null && eqTotal[l] != null ? be - eqTotal[l]! : null);
+    // 지배주주 자본 태그가 없고 비지배지분 포함 자본만 있으면 비지배지분을 뺀다(2026-10-01 CAT — StockholdersEquity 를 한 번도 태그하지 않아
+    // 자본 총계에 비지배지분 22 가 섞였다: 15,891 → 15,869 = 야후·블룸버그)
+    eqTotal[l] = seOnly[l] ?? (eqAllRaw[l] != null ? eqAllRaw[l]! - (miRaw[l] ?? 0) : null) ?? eqRaw[l] ?? (be != null && lRaw[l] != null ? be - lRaw[l]! : null);
+    const eqForL = eqAllRaw[l] ?? (eqTotal[l] != null ? eqTotal[l]! + (miRaw[l] ?? 0) : null);
+    lTotal[l] = lRaw[l] ?? (be != null && eqForL != null ? be - eqForL - (tempEq[l] ?? 0) : null);
+  }
+  // 자본 정정(오너 결정 2026-10-01 (다) — WDC FY2022): 나중 공시가 그 결산일 자본만 다시 실었고(자본변동표 기초 잔액, 오류 정정) 그 날짜 재무상태표 전체는
+  // 다시 공시되지 않은 경우. 자본은 나중 공시 값(나중 공시 우선), 자산 총계·부채와 자본 총계는 부채 + 자본으로 산출해 항등식을 지킨다. 정정 금액은
+  // 비유동자산 잔여(기타 비유동자산)에 들어간다 — WDC 정정 대상이 지분법 투자(비유동자산)라 그 위치가 맞다. 연간 열만(LTM 은 최신 공시 그대로)
+  const restated = new Map<string, { delta: number; filed: string }>();
+  {
+    for (const p of periods) {
+      const l = p.label;
+      if (l === LTM || seOnly[l] == null || !p.endDate) continue;
+      const r = equityRestatement(facts, p.endDate);
+      if (!r || r.base !== seOnly[l]) continue;
+      const delta = r.delta;
+      restated.set(l, { delta, filed: r.filed });
+      seOnly[l] = r.base + delta;
+      const latest = { val: r.base + delta };
+      eqTotal[l] = latest.val;
+      if (eqAllRaw[l] != null) eqAllRaw[l] = eqAllRaw[l]! + delta;
+      if (aTotal[l] != null) aTotal[l] = aTotal[l]! + delta;
+      if (leTotal[l] != null) leTotal[l] = leTotal[l]! + delta;
+    }
   }
   const totalOf: Record<string, Record<string, number | null>> = {
     cur: curTotal,
@@ -344,26 +417,54 @@ export function buildUsBalance(
   };
 
   const items: FinancialLineItem[] = [];
+  const plugWhy = new WeakSet<Record<string, number | null>>();
   const blocks = isFin ? [FIN_BLOCKS[0], FIN_BLOCKS[1], BLOCKS[2]] : BLOCKS;
   for (const block of blocks) {
     // 매핑된 depth1 라인 (플러그 제외)
     const resolved: Record<string, Record<string, number | null>> = {};
+    /** 다른 정의 값(제한현금 포함 현금 등)의 별도 줄 — 본 줄 이름으로 보이지 않는다(그림자 채우기 금지) */
+    const fbRows: Record<string, Record<string, number | null>> = {};
     for (const line of block.lines) {
       if (line.kind === "subtotal" || line.kind === "total" || line.plugOf) continue;
+      // LTM 에서만 빈 값(분기 공시에 없음 — 없음 증명 안 됨)은 합산·대체하지 않는다(부분 합·다른 개념 혼합 방지)
+      const ltmGap = (v: Record<string, number | null>) => labels.includes(LTM) && v[LTM] == null && ltmUnknown.has(v);
       resolved[line.label] = line.combine
         ? (() => {
             const o = blank();
+            let gap = false;
+            const dropped: string[] = [];
             for (const c of line.combine) {
               const v = value([c]);
+              if (ltmGap(v)) gap = true;
+              if (ltmAbsent.has(v)) dropped.push(c);
               for (const l of labels) if (v[l] != null) o[l] = (o[l] ?? 0) + v[l]!;
+            }
+            if (dropped.length && o[LTM] != null) ltmPartialAbsent.set(o, dropped);
+            if (gap) {
+              o[LTM] = null;
+              ltmUnknown.add(o);
             }
             return o;
           })()
         : value(line.concepts ?? []);
+      // 단기 투자자산 = 본표 유동자산의 단기투자 줄 합(edgar-bs-structure SYN_STI_FACE — EV 현금·재무분석 현금비율과 같은 값, 2026-10-01). 태그 목록의
+      // AvailableForSaleSecuritiesDebtSecurities 는 장기분까지 포함한 매도가능 채권 총액이라 INTC(32,393)·CAT·KO 에서 유동자산 줄이 부풀었다.
+      // 판독값은 날짜마다 그 날짜를 담은 가장 최근 공시(10-Q 비교 열 포함) 하나라 공시 종류가 아니라 기준일로 읽는다. 판독이 없는 칸만 태그 목록
+      if (line.label === "단기 투자자산") {
+        const face = firstConcept(facts, [SYN_STI_FACE]).filter((e) => !e.start);
+        const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 6 * 864e5;
+        for (const p of periods) {
+          const e = p.endDate ? face.find((x) => near(x.end, p.endDate!)) : undefined;
+          if (e) resolved[line.label][p.label] = e.val;
+        }
+      }
       if (line.fallback) {
         const fb = value(line.fallback);
+        const primaryGap = ltmGap(resolved[line.label]);
+        const alt = blank();
         for (const l of labels)
-          if (resolved[line.label][l] == null && fb[l] != null) resolved[line.label][l] = fb[l];
+          if (resolved[line.label][l] == null && fb[l] != null && !(l === LTM && primaryGap)) alt[l] = fb[l];
+        if (labels.some((l) => alt[l] != null)) fbRows[line.label] = alt;
       }
     }
 
@@ -388,6 +489,13 @@ export function buildUsBalance(
         values = blank();
         for (const l of labels)
           values[l] = direct?.[l] ?? derived?.[l] ?? plug?.[l] ?? null;
+        // 자본 정정 열 — 자산·자본·부채와 자본 총계는 조정 값(위 restated)
+        for (const [l] of restated) {
+          if (line.label === "자산 총계" && aTotal[l] != null) values[l] = aTotal[l];
+          else if (line.label === "자본 총계") values[l] = eqTotal[l];
+          else if (line.label === "부채와 자본 총계") values[l] = leTotal[l] ?? aTotal[l];
+          else if (line.label === "비유동자산 총계" && totalOf.noncurTotal[l] != null) values[l] = totalOf.noncurTotal[l];
+        }
       } else if (line.plugOf) {
         // (구간 총계 − 직전 소계 이후 ~ 이 라인 이전의 depth1 item 합)
         const tot = totalOf[line.plugOf.replace(/Total$/, "")];
@@ -399,19 +507,44 @@ export function buildUsBalance(
             break;
           }
         values = blank();
+        // 구성 줄이 LTM 에서만 비었으면(분기 공시에 없음) 차감 잔여(기타)도 비운다 — 0 으로 보면 기타가 부푼다(모든 회사)
         for (const l of labels) {
           if (tot[l] == null) continue;
           let mapped = 0;
+          let unknown = false;
           for (let i = bound + 1; i < idx; i++) {
             const s = block.lines[i];
             if (s.kind || s.plugOf) continue;
-            mapped += resolved[s.label]?.[l] ?? 0;
+            const r = resolved[s.label];
+            const v = r?.[l];
+            if (l === LTM && v == null && r && ltmUnknown.has(r) && fbRows[s.label]?.[l] == null) unknown = true;
+            // 별도 줄(다른 정의 값)도 구간 합에는 들어간다 — 기타 줄이 그 금액을 떠안지 않게
+            mapped += (v ?? 0) + (fbRows[s.label]?.[l] ?? 0);
           }
-          values[l] = Math.round(tot[l]! - mapped);
+          values[l] = unknown ? null : Math.round(tot[l]! - mapped);
+          if (unknown) plugWhy.add(values);
         }
       } else {
         values = resolved[line.label];
       }
+      const notes: Record<string, string> = {};
+      if (labels.includes(LTM)) {
+        if (values[LTM] == null && plugWhy.has(values)) notes[LTM] = "구성 줄이 분기 재무상태표에 없음 — 잔여 산정 불가";
+        else if (values[LTM] == null && ltmUnknown.has(values)) notes[LTM] = `분기 재무상태표에 없음(${ltmDate})`;
+        else if (values[LTM] == null && ltmAbsent.has(values) && fbRows[line.label]?.[LTM] == null)
+          notes[LTM] = `분기 재무상태표에 별도 줄 없음(${ltmDate} — 다른 줄에 포함, 연말 값으로 대신하지 않음)`;
+        else if (values[LTM] != null && ltmPartialAbsent.has(values))
+          notes[LTM] = `일부 구성 줄(${ltmPartialAbsent.get(values)!.join(", ")})이 분기 재무상태표에 따로 없음 — 제외(다른 줄에 포함)`;
+      }
+      // 다른 정의 값을 별도 줄로 옮긴 칸 — 본 줄은 공란 + 사유
+      const fbv = fbRows[line.label];
+      if (fbv) for (const l of labels) if (fbv[l] != null && values[l] == null) notes[l] = `태그 없음 — 아래 「${line.fallbackLabel}」 줄 참조(다른 정의)`;
+      for (const [l, r] of restated) {
+        if (line.label === "자본 총계") notes[l] = `자본 정정 반영(+${r.delta / 1e6}백만, ${r.filed} 공시 — 오류 정정) · 나중 공시 우선`;
+        else if (["자산 총계", "부채와 자본 총계", "비유동자산 총계"].includes(line.label) || line.plugOf === "noncur")
+          notes[l] = `자본 정정(+${r.delta / 1e6}백만)을 반영해 부채 + 자본으로 산출 — 정정된 재무상태표 전체는 공시되지 않음`;
+      }
+      const ltmNote = Object.keys(notes).length ? { cellNotes: notes } : {};
       items.push({
         accountName: line.label,
         accountId: `bs:${block.title}:${line.label}`,
@@ -419,7 +552,48 @@ export function buildUsBalance(
         isSubtotal: line.kind === "subtotal" || line.kind === "total",
         isHighlight: Boolean(line.highlight),
         values,
+        ...ltmNote,
       });
+      // 비지배지분 줄(2026-10-01) — 자본 총계가 지배주주 자본(StockholdersEquity)인 칸에 비지배지분이 있으면 자본 총계 다음에 따로 싣는다.
+      // 없으면 부채 + 자본 ≠ 부채와 자본 총계(KO 2022: 66,937 + 24,105 ≠ 92,763 — 차이 1,721 = 비지배지분)
+      if (line.label === "자본 총계" && !isFin) {
+        const nci = blank();
+        for (const l of labels) {
+          if (values[l] == null) continue;
+          if (seOnly[l] == null) { if (eqAllRaw[l] != null && miRaw[l] != null && values[l] === eqAllRaw[l]! - miRaw[l]!) nci[l] = miRaw[l]; continue; }
+          if (values[l] !== seOnly[l]) continue;
+          nci[l] = miRaw[l] ?? (eqAllRaw[l] != null ? eqAllRaw[l]! - seOnly[l]! : null);
+        }
+        if (labels.some((l) => nci[l] != null && nci[l] !== 0))
+          items.push({ accountName: "비지배지분", accountId: "bs:자본:비지배지분", depth: 0, isSubtotal: false, isHighlight: false, values: nci });
+        // 임시자본 줄 — 표준 태그가 없으면 부채와 자본 − 부채 − 비지배지분 포함 자본(세 값 모두 공시값일 때만, 표기 한 단위(100만) 넘는 차만 —
+        // AVGO FY2021 우선주 배당 미지급 27 은 회사 고유 태그라 companyfacts 에 없다)
+        const tmp = blank(), tmpNote: Record<string, string> = {};
+        for (const l of labels) {
+          if (tempEq[l] != null) { tmp[l] = tempEq[l]; continue; }
+          const eAll = eqAllRaw[l] ?? (seOnly[l] != null ? seOnly[l]! + (miRaw[l] ?? 0) : null);
+          if (leTotal[l] == null || lRaw[l] == null || eAll == null) continue;
+          const r = leTotal[l]! - lRaw[l]! - eAll;
+          if (Math.abs(r) > 1e6 + 0.5) { tmp[l] = r; tmpNote[l] = "표준 태그 없음 — 부채와 자본 − 부채 − 자본(비지배지분 포함)"; }
+        }
+        if (labels.some((l) => tmp[l] != null && tmp[l] !== 0))
+          items.push({ accountName: "임시자본(상환가능 지분)", accountId: "bs:자본:임시자본", depth: 0, isSubtotal: false, isHighlight: false, values: tmp,
+            ...(Object.keys(tmpNote).length ? { cellNotes: tmpNote } : {}) });
+      }
+      const fb = fbRows[line.label];
+      if (fb && line.fallbackLabel)
+        items.push({
+          accountName: line.fallbackLabel,
+          accountId: `bs:${block.title}:${line.label}:alt`,
+          depth: line.depth + 1,
+          isSubtotal: false,
+          isHighlight: false,
+          italic: true,
+          values: fb,
+          cellNotes: Object.fromEntries(
+            labels.filter((l) => fb[l] != null).map((l) => [l, `「${line.label}」 태그 없음 — 다른 정의(${line.fallbackLabel}) 값을 별도 줄로 표시`]),
+          ),
+        });
     }
   }
 
@@ -433,12 +607,25 @@ export function buildUsBalance(
   const evRes = buildEvResolver(facts);
   const debt = blank();
   const netDebt = blank();
+  const ltDebtN = blank();
   const opLease = blank();
+  const bridgeWhy: Record<string, string> = {};
   for (const p of periods) {
-    const d = p.label === LTM ? (evRes.latestBalanceDate() ?? p.endDate ?? "") : (p.endDate ?? "");
+    const ylE = p.label === LTM ? yahooLtm(facts) : null;
+    const d = p.label === LTM ? (ylE?.through ?? evRes.latestBalanceDate() ?? p.endDate ?? "") : (p.endDate ?? "");
     const br = d ? evRes.bridgeAt(d) : null;
-    if (!br) continue;
+    if (!br) {
+      const why = d && !evRes.blocker(d) ? evRes.bridgeReason(d) : null;
+      if (why) bridgeWhy[p.label] = why;
+      continue;
+    }
+    // Yahoo 분기 LTM: 차입금·현금이 같은 기준일로 다 채워졌을 때만(edgar-yahoo-quarters.ts evComplete)
+    if (ylE && (!ylE.evComplete || br.balanceDate !== ylE.through)) {
+      bridgeWhy[p.label] = ylE.evReason ?? "Yahoo 분기 EV 구성요소 불완전";
+      continue;
+    }
     debt[p.label] = br.debt;
+    ltDebtN[p.label] = br.debtNoncurrent ?? null;
     netDebt[p.label] = br.debt - br.cash;
     opLease[p.label] = br.operatingLease;
   }
@@ -451,8 +638,14 @@ export function buildUsBalance(
     isHighlight: false,
     values,
     numberFormat: nf,
+    // 차입금·현금이 그 기준일 공시에 없으면 사유(이전 연말 값으로 대신하지 않음)
+    ...(Object.keys(bridgeWhy).some((l) => values[l] == null)
+      ? { cellNotes: Object.fromEntries(Object.entries(bridgeWhy).filter(([l]) => values[l] == null)) }
+      : {}),
   });
   items.push(nrow("총차입금", debt));
+  // 비유동 차입금(운용리스 제외 — 총차입금과 같은 기준, EV 브릿지). 본표 "장기부채" 줄은 운용리스 부채를 포함할 수 있어 기준이 다르다(재무분석 장기차입금 비율의 분자, 2026-10-01)
+  items.push(nrow("장기차입금 (운용리스 제외)", ltDebtN));
   items.push(nrow("순차입금", netDebt));
   // 운용리스는 차입금·순차입금에 넣지 않는다(미국 회계기준상 영업부채, 오너 결정
   // 2026-09-23) — 규모는 여기서 따로 보인다. 분기 공시에 없는 회사는 빈칸.
@@ -462,6 +655,9 @@ export function buildUsBalance(
   for (const l of labels)
     if (debt[l] != null && opLease[l] != null) debtWithOpLease[l] = debt[l]! + opLease[l]!;
   items.push(nrow("총차입금 (운용리스 포함)", debtWithOpLease));
+  // SEC 원본 조회 실패로 공란이 된 값(총차입금 등 — 태그 규칙으로 대체하지 않음, sec-unavailable.ts)
+  const unavailable = unavailableNote(facts);
+  if (unavailable) items.push({ ...nrow(`※ ${unavailable}`, blank()), italic: true });
 
   return {
     symbol: "",

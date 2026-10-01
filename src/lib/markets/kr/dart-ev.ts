@@ -233,6 +233,9 @@ export interface KrLtmBalance {
   label: string;
   bridge: KrBalanceBridge | null;
   parentEquity: number | null;
+  /** bridge·parentEquity 각각의 재무상태표 기준일(YYYY-MM-DD) — 외화 환산(DART 연결 ADR) 기말 환율용 */
+  bridgeEnd: string | null;
+  equityEnd: string | null;
 }
 
 /**
@@ -255,16 +258,20 @@ export function krLtmBalance(
   const fyEq = lastFy != null ? (krParentEquityByYear(annual).get(lastFy) ?? null) : null;
   const fyBridge = lastFy != null ? res.bridgeAt(lastFy) : null;
   const fyLabel = lastFy != null ? `FY${lastFy}` : "";
-  if (!target) return { label: fyLabel, bridge: fyBridge, parentEquity: fyEq };
+  const fyEnd = lastFy != null ? (annual.annualEndByYear.get(lastFy) ?? `${lastFy}-12-31`) : null;
+  if (!target) return { label: fyLabel, bridge: fyBridge, parentEquity: fyEq, bridgeEnd: fyEnd, equityEnd: fyEnd };
 
   const qLabel = `${target.year} Q${target.quarter}`;
   const fallback = (why: string): KrLtmBalance => ({
     label: `${fyLabel} (${qLabel} ${why} — 연말값)`,
     bridge: fyBridge,
     parentEquity: fyEq,
+    bridgeEnd: fyEnd,
+    equityEnd: fyEnd,
   });
   if (!quarter || !quarter.periods.some((p) => p.label === qLabel)) return fallback("재무상태표 없음");
 
+  const qEnd = quarter.periods.find((p) => p.label === qLabel)?.endDate ?? null;
   const L = krBridgeLines(quarter);
   const at = (lines: KrFactLine[]) => sumLinesByPeriod(quarter, lines)[qLabel] ?? null;
   const debt = at(L.debt);
@@ -288,6 +295,8 @@ export function krLtmBalance(
         }
       : fyBridge,
     parentEquity: equity ?? fyEq,
+    bridgeEnd: hasBridge ? qEnd : fyEnd,
+    equityEnd: equity != null ? qEnd : fyEnd,
   };
 }
 

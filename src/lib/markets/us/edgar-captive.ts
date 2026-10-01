@@ -1,5 +1,6 @@
 import "server-only";
 import { fetchJson, fetchText } from "../http";
+import { withFetchScope } from "../fetch-health";
 import { instanceUrl } from "./edgar-classfacts";
 import { resolveDebt, type CaptiveDebtPoint } from "./edgar-ev";
 
@@ -96,7 +97,12 @@ export function extractCaptiveDebt(xml: string): CaptiveDebtPoint[] {
     let financial = 0;
     let hasFin = false;
     let hasInd = false;
+    // 같은 부문을 두 멤버로 이중 태깅한 경우(CAT FinancialProductsMember·FinancialProductsSegmentMember — 장기차입금 16,287 이 양쪽에) 개념·값이 다른 멤버에
+    // 모두 포함된 멤버는 건너뛴다(2026-10-01 — 금융 부문 차입금 44,276 으로 이중 합산되던 문제, 맞는 값 27,989)
+    const subsumed = (mem: string, cs: Map<string, number>) =>
+      [...members].some(([m2, c2]) => m2 !== mem && isFinancialMember(m2) === isFinancialMember(mem) && c2.size > cs.size && [...cs].every(([k, v]) => c2.get(k) === v));
     for (const [member, concepts] of members) {
+      if (subsumed(member, concepts)) continue;
       const r = resolveDebt((c) => concepts.get(c) ?? null);
       if (!r) continue;
       if (isFinancialMember(member)) {
@@ -137,19 +143,23 @@ interface SubmissionsRecent {
   };
 }
 
-const mem = new Map<string, { at: number; data: { points: CaptiveDebtPoint[] } | "unsplit" | null }>();
+const mem = new Map<string, { at: number; data: { points: CaptiveDebtPoint[] } | null }>();
 const TTL = 1000 * 60 * 60 * 12;
 
 /**
  * 금융 자회사 차입금 부문 분리 로드. 금융 자회사가 없으면 null.
  * 부문 분리가 없는 금융 자회사(목록)는 "unsplit" — EV 를 비운다.
+ * **최신 파일링(idx===0) 조회 자체가 실패하면 "unknown"** — "금융 자회사
+ * 없음"(null)으로 단정하지 않는다(독립 감사 지적 2026-09-25: 예전엔 이 경우도
+ * null 로 떨어져 CAT·GM·F·DE 가 일시적 SEC 오류(429 등)만으로 EV 가 표시될 뻔했다).
+ * blocker() 가 "unknown"·"unsplit" 을 모두 EV 미표시로 처리한다(edgar-ev.ts).
  * 최신 파일링 1건으로 판별하고, 금융 자회사면 10-K 4건을 더 받아 과거 연도를
  * 채운다(각 10-K 는 당기·전기 재무상태표를 담아 5개년 커버).
  */
 export async function loadCaptiveDebt(
   cik: string,
   sic: string | null | undefined,
-): Promise<{ points: CaptiveDebtPoint[] } | "unsplit" | null> {
+): Promise<{ points: CaptiveDebtPoint[] } | "unsplit" | "unknown" | null> {
   // 은행·보험 등 금융 SIC 는 EV 자체를 계산하지 않으므로 볼 필요 없음
   if (sic && /^6/.test(sic)) return null;
   const key = String(cik).replace(/\D/g, "").padStart(10, "0");
@@ -158,49 +168,61 @@ export async function loadCaptiveDebt(
   if (hit && Date.now() - hit.at < TTL) return hit.data;
 
   const cikNum = Number(key);
-  let data: { points: CaptiveDebtPoint[] } | "unsplit" | null = null;
-  try {
-    const sub = await fetchJson<SubmissionsRecent>(
-      `https://data.sec.gov/submissions/CIK${key}.json`,
-      { headers: SEC_HEADERS, revalidate: 60 * 60 * 6 },
-    );
-    const r = sub.filings.recent;
-    const picks: { accn: string; doc: string }[] = [];
-    let q = 0;
-    let k = 0;
-    for (let i = 0; i < r.accessionNumber.length && (q < 1 || k < 4); i++) {
-      const f = r.form[i];
-      if (f === "10-Q" && q < 1 && k === 0) {
-        picks.push({ accn: r.accessionNumber[i], doc: r.primaryDocument[i] });
-        q++;
-      } else if (f === "10-K" && k < 4) {
-        picks.push({ accn: r.accessionNumber[i], doc: r.primaryDocument[i] });
-        k++;
-      }
-    }
-    const byDate = new Map<string, CaptiveDebtPoint>();
-    for (const [idx, p] of picks.entries()) {
-      try {
-        const url = await instanceUrl(cikNum, p.accn.replace(/-/g, ""), p.doc);
-        if (!url) {
-          if (idx === 0) break; // 최신 건을 못 읽으면 판별 불가 — 과거 10-K 로 대신 판별하지 않는다
-          continue;
+  let data: { points: CaptiveDebtPoint[] } | null = null;
+  // 최신 파일링(idx===0) 조회가 실패해 금융 자회사 여부를 판별하지 못했는가
+  let latestUnresolved = false;
+  // 이 로더가 부른 SEC 조회의 실패만 본다(fetch-health.ts)
+  const { failures } = await withFetchScope(async () => {
+    try {
+      const sub = await fetchJson<SubmissionsRecent>(
+        `https://data.sec.gov/submissions/CIK${key}.json`,
+        { headers: SEC_HEADERS, revalidate: 60 * 60 * 6 },
+      );
+      const r = sub.filings.recent;
+      const picks: { accn: string; doc: string }[] = [];
+      let q = 0;
+      let k = 0;
+      for (let i = 0; i < r.accessionNumber.length && (q < 1 || k < 4); i++) {
+        const f = r.form[i];
+        if (f === "10-Q" && q < 1 && k === 0) {
+          picks.push({ accn: r.accessionNumber[i], doc: r.primaryDocument[i] });
+          q++;
+        } else if (f === "10-K" && k < 4) {
+          picks.push({ accn: r.accessionNumber[i], doc: r.primaryDocument[i] });
+          k++;
         }
-        const xml = await fetchText(url, { headers: SEC_HEADERS, revalidate: false, timeoutMs: 25_000 });
-        // 최신 파일링을 먼저 넣고 유지 — 이후(과거) 파일링은 빈 날짜만 채운다(재작성본 우선)
-        const pts = extractCaptiveDebt(xml);
-        // 판별: 가장 최근 파일링에 금융 부문 차입금이 없으면 금융 자회사 없음 —
-        // 나머지 파일링은 받지 않는다(대부분의 종목이 여기서 끝나 비용이 1건).
-        if (idx === 0 && !pts.length) break;
-        for (const pt of pts) if (!byDate.has(pt.date)) byDate.set(pt.date, pt);
-      } catch {
-        if (idx === 0) break; // 최신 건조차 실패 → 판단 불가, 금융 자회사 없음으로 둔다
       }
+      const byDate = new Map<string, CaptiveDebtPoint>();
+      for (const [idx, p] of picks.entries()) {
+        try {
+          const url = await instanceUrl(cikNum, p.accn.replace(/-/g, ""), p.doc);
+          if (!url) {
+            // 최신 건을 못 읽으면 판별 불가 — 과거 10-K 로 대신 판별하지 않는다
+            if (idx === 0) { latestUnresolved = true; break; }
+            continue;
+          }
+          const xml = await fetchText(url, { headers: SEC_HEADERS, revalidate: false, timeoutMs: 25_000 });
+          // 최신 파일링을 먼저 넣고 유지 — 이후(과거) 파일링은 빈 날짜만 채운다(재작성본 우선)
+          const pts = extractCaptiveDebt(xml);
+          // 판별: 가장 최근 파일링에 금융 부문 차입금이 없으면 금융 자회사 없음 —
+          // 나머지 파일링은 받지 않는다(대부분의 종목이 여기서 끝나 비용이 1건).
+          if (idx === 0 && !pts.length) break;
+          for (const pt of pts) if (!byDate.has(pt.date)) byDate.set(pt.date, pt);
+        } catch {
+          // 최신 건조차 실패 → 판단 불가(금융 자회사 없음으로 단정하지 않는다)
+          if (idx === 0) { latestUnresolved = true; break; }
+        }
+      }
+      data = byDate.size ? { points: [...byDate.values()] } : null;
+    } catch {
+      latestUnresolved = true;
+      data = null;
     }
-    data = byDate.size ? { points: [...byDate.values()] } : null;
-  } catch {
-    data = null;
-  }
-  mem.set(key, { at: Date.now(), data });
+  });
+  // 최신 공시 조회가 일시 오류(SEC 429 등)로 실패했으면 "금융 자회사 없음"으로 단정하지
+  // 않는다 — "unknown" 을 반환하고(EV 미표시), 다음 조회에서 다시 판별하도록 캐시하지 않는다.
+  if (latestUnresolved) return "unknown";
+  // 최신 공시 조회가 일시 오류(SEC 429 등)로 실패하면 "금융 자회사 없음"으로 12시간 굳지 않게 캐시하지 않는다
+  if (!failures.length) mem.set(key, { at: Date.now(), data });
   return data;
 }

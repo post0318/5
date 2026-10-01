@@ -97,7 +97,125 @@ export interface MultiplesInput {
   opUnits?: number | null;
 }
 
+const EV_BLOCKER_REASON: Record<string, string> = {
+  financial: "금융회사 — EV 미산정",
+  "captive-unsplit": "금융 자회사(할부금융) 보유 — EV 산정 기준 확정 전까지 비움",
+  "captive-unknown": "금융 자회사 여부 판별 공시 조회 실패 — EV 미표시",
+  "debt-untagged": "차입금이 표준 태그로 공시되지 않음 — EV 미표시",
+  "source-unavailable": "원본 조회 실패 — 차입금·EV 공란",
+};
+
+/**
+ * **미국 — TTM 스냅샷(getTtm)만으로** 계산한다(그림자 채우기 금지, 오너 규칙 2026-09-27). 예전엔 TTM 이 없거나 값이 비면
+ * 연간 재무제표 계정명 매칭·Yahoo 주식수·Yahoo 시가총액·부채총계 EV·영업이익 근사로 채웠다. 이제 값이 없으면 null 과
+ * reasons 의 사유(화면이 그 칸에 표시).
+ */
+/** 최근 사업연도 열(첫 열)의 매출 지표(fin:revenue) 값 — 빈칸이면 null. 옛 열로 내려가지 않는다(latestValue 는 빈 열을 건너뜀) */
+function latestAnnualRevenue(annual: FinancialStatement | null): number | null {
+  const first = annual?.periods[0]?.label;
+  if (!annual || !first) return null;
+  for (const s of annual.sections) for (const it of s.items) if (it.accountId === "fin:revenue") return it.values[first] ?? null;
+  return null;
+}
+
+function computeUsMultiples(input: MultiplesInput): TrailingMultiples {
+  const { market, symbol, quote, annual, ttm } = input;
+  const price = quote.last;
+  const reasons: NonNullable<TrailingMultiples["reasons"]> = {};
+  const base = {
+    symbol,
+    market,
+    asOf: quote.lastDate ?? new Date().toISOString().slice(0, 10),
+    evEbitdaIsApprox: false,
+    dividendYield: null,
+    currency: MARKET_CURRENCY[market],
+  };
+  const snap = ttm?.snapshot ?? null;
+  if (!ttm || ttm.error || !snap) {
+    const why = ttm?.error ?? "TTM 조회 실패";
+    for (const k of ["per", "perTtm", "pbr", "psr", "evEbitda", "eps", "bps", "marketCap"] as const) reasons[k] = why;
+    return { ...base, per: null, perTtm: null, pbr: null, psr: null, evEbitda: null, eps: null, bps: null, marketCap: null, inputs: { price: price ?? null }, reasons };
+  }
+  const tr = ttm.reasons ?? {};
+  const noPrice = "현재가 없음";
+  // 주식수·시가총액 — 공통 기준(edgar-shares 현재 주식수, 20-F ADR 은 로더가 ADR 1주 기준으로 환산)
+  const shares = snap.evShares ?? null;
+  const marketCap = price != null && shares != null ? price * shares : null;
+  if (marketCap == null) reasons.marketCap = price == null ? noPrice : (tr.evShares ?? "현재 주식수 없음");
+  else if (tr.evShares) reasons.marketCap = tr.evShares; // 오너 승인 근사 라벨(Yahoo 현재 주식수 등)
+  // PER(연간) = 현재가 ÷ 최근 사업연도 희석 EPS(edgar-pershare fyEps — ADR 1주 기준). DART 연결 ADR 은 재무제표 EPS 가 이미
+  // DART EPS 의 USD·ADR 환산(us/dart-adr.ts)이라 그 값
+  const fyE = ttm.fyEps !== undefined ? (ttm.fyEps?.eps ?? null) : latestValue(annual ?? emptyFs(market, symbol), ["EPS (Diluted)", "희석주당이익", "희석주당순이익", "기본주당이익", "주당이익"], /주당(순)?이익/);
+  const per = price != null && fyE ? price / fyE : null;
+  if (per == null) reasons.per = price == null ? noPrice : (tr.fyEps ?? "최근 사업연도 EPS 없음");
+  else if (tr.fyEps) reasons.per = tr.fyEps;
+  const pos = (n: number | null, d: number | null) => (n != null && d != null && d > 0 ? n / d : null);
+  const epsTtm = ttm.eps;
+  const perTtm = pos(price, epsTtm);
+  if (perTtm == null) reasons.perTtm = price == null ? noPrice : epsTtm == null ? (tr.eps ?? "LTM EPS 없음") : "적자(EPS ≤ 0) — PER 미표시";
+  const equity = snap.equity;
+  const hasBookShares = snap.bookShares !== undefined;
+  const bookShares = hasBookShares ? (snap.bookShares ?? null) : shares;
+  const bps = equity != null && bookShares ? equity / bookShares : null;
+  if (bps == null) reasons.bps = equity == null ? (tr.equity ?? "자기자본 없음") : (tr.evShares ?? "주식수 없음");
+  const pbr = pos(marketCap, equity);
+  if (pbr == null) reasons.pbr = marketCap == null ? reasons.marketCap! : equity == null ? (tr.equity ?? "자기자본 없음") : "자본잠식(자본 ≤ 0) — PBR 미표시";
+  const revenue = ttm.revenue;
+  const psr = marketCap != null && revenue ? marketCap / revenue : null;
+  if (psr == null) reasons.psr = marketCap == null ? reasons.marketCap! : (tr.revenue ?? "LTM 매출 없음");
+  // EV = 보통주 시가총액 + (운영 파트너십 지분 시가 − 장부가) + 우선주 시가총액 + 순차입금 브릿지(edgar-ev.ts 단일 기준)
+  const ev =
+    snap.evBlocker || snap.evNetDebt == null || marketCap == null || price == null
+      ? null
+      : marketCap +
+        (input.opUnits ? input.opUnits * price - (snap.evOpNciBook ?? 0) : 0) +
+        (snap.evPreferredMcap ?? 0) +
+        snap.evNetDebt;
+  // EBITDA = LTM 영업이익 + LTM 감가상각비 — 둘 중 하나라도 없으면 공란(EV/EBIT 근사 안 함)
+  const ebitda = ttm.opIncome != null && ttm.daTtm != null ? ttm.opIncome + ttm.daTtm : null;
+  const evEbitda = ev != null && ebitda != null && ebitda > 0 ? ev / ebitda : null;
+  if (evEbitda == null)
+    reasons.evEbitda = snap.evBlocker
+      ? (EV_BLOCKER_REASON[snap.evBlocker] ?? `EV 미표시(${snap.evBlocker})`)
+      : snap.evNetDebt == null
+        ? (tr.evNetDebt ?? "EV 구성요소 없음")
+        : marketCap == null
+          ? reasons.marketCap!
+          : ttm.opIncome == null
+            ? (tr.opIncome ?? "LTM 영업이익 없음")
+            : ttm.daTtm == null
+              ? (tr.daTtm ?? "LTM 감가상각비 없음")
+              : "EBITDA ≤ 0 — 미표시";
+  if (fyE == null) reasons.eps = tr.fyEps ?? "최근 사업연도 EPS 없음";
+  else if (tr.fyEps) reasons.eps = tr.fyEps;
+  return {
+    ...base,
+    per: finite(per),
+    perTtm: finite(perTtm),
+    pbr: finite(pbr),
+    psr: finite(psr),
+    evEbitda: finite(evEbitda),
+    eps: finite(fyE),
+    bps: finite(bps),
+    marketCap: finite(marketCap),
+    inputs: {
+      price: price ?? null,
+      epsDiluted: finite(fyE),
+      equity: finite(equity),
+      shares: finite(shares),
+      epsTtm: finite(epsTtm),
+      netIncomeTtm: finite(ttm.netIncome),
+      revenueTtm: finite(ttm.revenue),
+      revenueAnnual: finite(latestAnnualRevenue(annual)),
+      opIncomeTtm: finite(ttm.opIncome),
+      daTtm: finite(ttm.daTtm),
+    },
+    reasons,
+  };
+}
+
 export function computeTrailingMultiples(input: MultiplesInput): TrailingMultiples {
+  if (input.market === "us") return computeUsMultiples(input);
   const { market, symbol, quote, annual, quarterly, sharesOutstanding, ttm } = input;
   // 미국(EDGAR): 최근분기 재무상태표 스냅샷·D&A 가 있으면 우선 사용.
   // 없으면(국내 등) 종전대로 최근 "연간" 재무제표에서 뽑는다.
@@ -139,8 +257,8 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "当期純利益",
   ]);
   const revenue = flowValue(annual, quarterly, [
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "Revenues",
+    // 미국: getFinancials 매출 행(재무 5층 구조 매출 지표 — us/edgar.ts REVENUE_ROW_ID). 매출 태그를 여기서 고르지 않는다
+    "fin:revenue",
     "매출액",
     "수익(매출액)",
     "매출",
@@ -183,17 +301,6 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     "営業利益",
     "営業利益 (IFRS)",
   ]);
-  // 영업이익 태그가 없으면 매출총이익 − 판관비 − 연구개발비로 파생 (IBM 등)
-  if (opIncome == null) {
-    const gp = flowValue(annual, quarterly, ["GrossProfit", "매출총이익", "売上総利益"]);
-    const sgaV = flowValue(annual, quarterly, [
-      "SellingGeneralAndAdministrativeExpense",
-      "GeneralAndAdministrativeExpense",
-    ]);
-    const rndV = flowValue(annual, quarterly, ["ResearchAndDevelopmentExpense"]);
-    if (gp != null && (sgaV != null || rndV != null))
-      opIncome = gp - (sgaV ?? 0) - (rndV ?? 0);
-  }
   // 그래도 없으면 세전이익으로 근사 (XOM·AXP 등 영업이익 태그 자체가 없는 회사 —
   // 비영업 손익이 포함될 수 있음. 하이라이트/재무분석/IS 상세와 동일한 최후 폴백).
   if (opIncome == null) {
@@ -237,8 +344,17 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   // PER(TTM)은 전 시장으로: 한국 적자 EPS 를 음수로 내면서 음수 PER 이 나오지 않게, 2026-09-24)
   const pos = (n: number | null, d: number | null) => (n != null && d != null && d > 0 ? n / d : null);
   const perTtm = pos(price, epsTtm);
-  const bps = equity != null && shares ? equity / shares : null;
-  const pbr = usShares != null ? pos(price, bps) : price != null && bps ? price / bps : null;
+  // 장부 주식수를 따로 받은 경우(DART 연결 ADR — 자사주 제외 유통주식수)만 BPS 분모를 바꾸고, PBR 은
+  // 시가총액 ÷ 자본(하이라이트와 같은 식 — 두 주식수가 달라도 PBR 은 주식수와 무관)
+  // (키가 있는데 값이 null 이면 장부 주식수를 못 구한 것 — 다른 주식수로 대체하지 않고 BPS 를 비운다)
+  const hasBookShares = snap?.bookShares !== undefined;
+  const bookShares = snap?.bookShares ?? null;
+  const bps = hasBookShares
+    ? equity != null && bookShares ? equity / bookShares : null
+    : equity != null && shares ? equity / shares : null;
+  const pbr = hasBookShares
+    ? pos(marketCap, equity)
+    : usShares != null ? pos(price, bps) : price != null && bps ? price / bps : null;
   // PSR·EV/EBITDA: 분자(시가총액·EV)가 현재가 기준이므로 분모도 TTM 으로 맞춘다.
   // 미국(snapshot 존재)은 EDGAR TTM 사용, 그 외(국내 등)는 종전대로 최근 "연간".
   const revenueForPsr = snap && ttm?.revenue != null ? ttm.revenue : revenue;

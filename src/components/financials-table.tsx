@@ -112,6 +112,14 @@ export function FinancialsTable({
     : view === "all"
       ? statement.sections
       : statement.sections.filter((s) => groupOf(s.title) === view);
+  // 칸 주석 번호(표시 중인 열만) — 빈칸 사유·근사 라벨(그림자 채우기 금지, 2026-09-27)
+  const cellNoteIdx = new Map<string, number>();
+  for (const sec of shown)
+    for (const it of sec.items)
+      for (const p of periods) {
+        const n = it.cellNotes?.[p.label];
+        if (n && !cellNoteIdx.has(n)) cellNoteIdx.set(n, cellNoteIdx.size + 1);
+      }
 
   return (
     <div className="space-y-3">
@@ -349,6 +357,14 @@ export function FinancialsTable({
                                   : useDetail
                                     ? fmtDetail(v, item.numberFormat, mobileDetail, detail.currency)
                                     : formatNumber(v, perShare ? 2 : 0)}
+                            {!labelOnly && item.cellNotes?.[p.label] && (
+                              <sup
+                                className="text-muted-foreground ml-0.5 text-[9px] font-normal"
+                                title={item.cellNotes[p.label]}
+                              >
+                                ※{cellNoteIdx.get(item.cellNotes[p.label])}
+                              </sup>
+                            )}
                           </td>
                         );
                       })}
@@ -365,6 +381,15 @@ export function FinancialsTable({
         )}
       </div>
 
+      {cellNoteIdx.size > 0 && (
+        <ul className="text-muted-foreground space-y-0.5 text-[11px]">
+          {[...cellNoteIdx].map(([n, k]) => (
+            <li key={k}>
+              ※{k} {n}
+            </li>
+          ))}
+        </ul>
+      )}
       {useDetail && (
         <p className="text-muted-foreground/80 text-[11px]">출처: {detail.source}</p>
       )}

@@ -113,14 +113,17 @@ export async function getStockOverview(
   ]);
 
   let multiples: TrailingMultiples | null = null;
-  if (quote) {
+  // 미국은 TTM 스냅샷(getTtm)으로만 계산한다 — 재무를 건너뛴 호출(개요 화면 첫 응답)은 TTM 이 없으므로 계산하지 않는다
+  // (화면이 TTM 도착 후 같은 함수로 계산 — stock-analysis.tsx). Yahoo 주식수·시가총액으로 미리 채우지 않는다(그림자 채우기 금지)
+  if (quote && !(market === "us" && !wantAnnual)) {
     // 듀얼클래스(V 등)는 EDGAR·Yahoo 시세에 undimensioned 주식수·시총이 없다 →
-    // Yahoo 컨센서스(quoteSummary)의 값으로 폴백.
+    // Yahoo 컨센서스(quoteSummary)의 값으로 폴백 — 미국 외 시장만(미국은 edgar-shares 공통 주식수만)
     const cShares = (consensus as { sharesOutstanding?: number | null } | null)?.sharesOutstanding ?? null;
     const cMktCap = (consensus as { marketCap?: number | null } | null)?.marketCap ?? null;
     const quoteForMultiples =
-      (quote.sharesOutstanding == null && cShares != null) ||
-      (quote.marketCap == null && cMktCap != null)
+      market !== "us" &&
+      ((quote.sharesOutstanding == null && cShares != null) ||
+        (quote.marketCap == null && cMktCap != null))
         ? {
             ...quote,
             sharesOutstanding: quote.sharesOutstanding ?? cShares,
@@ -143,11 +146,8 @@ export async function getStockOverview(
     });
   }
 
-  // 미국은 시가총액을 공통 주식수(edgar-shares — EDGAR·인포맥스 보정)로만 낸다. 재무를
-  // 건너뛴 호출(개요 화면 첫 응답)은 그 주식수가 없어 Yahoo 시가총액이 남는데, Yahoo
-  // 주식수는 한 분기 늦는 경우가 있다(WMT = 직전 분기 표지, 2026-09-24 실측) → 비운다.
-  // 화면은 재무 도착 후 같은 기준으로 다시 계산한다(stock-analysis.tsx).
-  if (market === "us" && !wantAnnual && multiples) multiples = { ...multiples, marketCap: null };
+  // 미국 TTM 조회 실패 사유를 경고에도(개요 멀티플은 reasons 로 칸마다)
+  if (market === "us" && wantAnnual && (ttm as TtmFlows | null)?.error) warnings.push((ttm as TtmFlows).error!);
 
   return {
     market,

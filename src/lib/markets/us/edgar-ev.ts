@@ -1,9 +1,13 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
-import { annualByYear, entriesOf, ttmOf } from "./edgar-series";
+import { annualByYear, entriesOf, ltmAnchor, ltmFlowOf, ltmGapConcept, provenAbsentAt, ttmCombine, ttmOf } from "./edgar-series";
+import { revQuarterAt, type RevCol } from "./fin-revenue";
+import { OPINC_NOTE } from "@/lib/fin";
 import { opUnitsFrom } from "../op-units";
-import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT } from "./edgar-bs-structure";
+import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT, SYN_MIXED_LEASE_CURRENT, SYN_MIXED_LEASE_NONCURRENT, SYN_STI_FACE } from "./edgar-bs-structure";
+import { unavailableOn } from "./sec-unavailable";
 import { SYN_DA_CF } from "./edgar-cf-structure";
+import { SYN_DA_WITH_CONTENT } from "./edgar-content";
 export { SYN_DA_CF };
 
 /**
@@ -71,6 +75,8 @@ const DEBT_ACTIVITY = [
  *  "현금+제한현금" 합계만 공시한다. 사이트들도 이 합계를 쓴다. */
 const CASH = [
   "CashAndCashEquivalentsAtCarryingValue",
+  // MDLZ 는 본표 현금 줄을 이 태그로 단다 — 없으면 제한현금 포함 합계로 넘어가 제한현금(2025 70)만큼 컸다(블룸버그 대조 2026-09-28)
+  "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
   "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
 ];
 /** 단기투자 — 같은 금액을 두 태그로 다는 회사가 있어 최댓값. */
@@ -184,14 +190,18 @@ function instantOn(entries: FactUnitEntry[], date: string): number | null {
  * EV 를 계산할 수 없는 이유. null 이면 계산 가능.
  * - financial: 은행·카드사(차입금이 영업용) — 기존 isFinancialCompany 판정
  * - captive-unsplit: 금융 자회사가 있는데 XBRL 에서 부문 구분이 안 됨(DE)
+ * - captive-unknown: 금융 자회사 여부를 판별할 최신 공시 조회가 실패(edgar-captive.ts
+ *   "unknown") — 일시적 오류일 수 있어 "금융 자회사 없음"으로 단정하지 않고 보수적으로 비운다
  * - debt-untagged: 차입금이 있는데 표준 태그가 없음(Ford — 부문별로만 태깅)
+ * - source-unavailable: 대차대조표 본표 판독(edgar-bs-structure.ts)이 SEC 원본 조회 실패로 빠짐 — 태그 규칙 값으로 대체하지
+ *   않고 차입금·순차입금·EV 를 비운다(sec-unavailable.ts, 2026-09-26 — DE 651.9억 → 136.4억으로 조용히 바뀌던 결함)
  */
-export type EvBlocker = "financial" | "captive-unsplit" | "debt-untagged";
+export type EvBlocker = "financial" | "captive-unsplit" | "captive-unknown" | "debt-untagged" | "source-unavailable";
 
 export interface EvBridge {
-  /** 재무상태표 값을 실제로 가져온 날짜 */
+  /** 재무상태표 값을 실제로 가져온 날짜 — 항상 요청 기준일(이전 연말 값으로 대신하지 않음, 2026-09-27) */
   balanceDate: string;
-  /** 요청 기준일에 값이 없어 이전 연말 값을 썼는지 (CAT·CVX·TMUS·ORCL — 10-K 만 태깅) */
+  /** 항상 false — 요청 기준일에 값이 없으면 브릿지 자체가 null(bridgeReason 에 사유). 호환용 */
   stale: boolean;
   /** 이자부 차입금 + 금융리스 (금융 자회사가 있으면 제조 부문분만) */
   debt: number;
@@ -227,8 +237,8 @@ export interface EvContext {
   sic?: string | null;
   /** 은행·카드사 등 — 호출 측의 isFinancialCompany 결과 */
   isFinancial?: boolean;
-  /** 금융 자회사 판정 결과. null 이면 금융 자회사 없음. */
-  captive?: { points: CaptiveDebtPoint[] } | "unsplit" | null;
+  /** 금융 자회사 판정 결과. null 이면 금융 자회사 없음. "unknown" 이면 판별 조회 실패(EV 미표시). */
+  captive?: { points: CaptiveDebtPoint[] } | "unsplit" | "unknown" | null;
   /**
    * UP-REIT 운영 파트너십 지분 수(Yahoo impliedShares − sharesOutstanding).
    * 리츠(SIC 6798)만 호출 측이 넘긴다 — 일반 기업은 implied 가 다른 뜻
@@ -242,8 +252,10 @@ export interface EvResolver {
   latestBalanceDate(): string | null;
   /** EV 를 계산할 수 없으면 그 이유, 가능하면 null */
   blocker(asOf: string): EvBlocker | null;
-  /** 기준일의 EV 브릿지. 계산 불가(blocker)면 null. */
+  /** 기준일의 EV 브릿지. 계산 불가(blocker)·구성요소가 그 기준일 공시에 없으면 null. */
   bridgeAt(asOf: string): EvBridge | null;
+  /** bridgeAt 이 blocker 없이 null 인 사유(예: "분기 공시에 없음(차입금)") — 화면 칸 주석 */
+  bridgeReason(asOf: string): string | null;
   /** 시가총액(보통주) → EV. UP-REIT 는 파트너 지분 시가를 더한다. 계산 불가면 null. */
   evAt(asOf: string, commonMarketCap: number | null, price: number | null): number | null;
 }
@@ -260,20 +272,6 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     }
     return null;
   };
-  const maxOn = (cs: string[], d: string): number => {
-    let m = 0;
-    for (const c of cs) {
-      const v = on(c, d);
-      if (v != null && v > m) m = v;
-    }
-    return m;
-  };
-  const sumOn = (cs: string[], d: string): number => {
-    let s = 0;
-    for (const c of cs) s += on(c, d) ?? 0;
-    return s;
-  };
-
   const assets = E("Assets");
   const latest = (() => {
     let best: string | null = null;
@@ -284,7 +282,7 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
   /** 날짜 d 에 차입금 태그가 있는가 */
   const hasDebtOn = (d: string) => ANY_DEBT.some((c) => on(c, d) != null);
 
-  /** 요청일에 없으면 1년 안쪽의 가장 최근 연말(10-K) 날짜로 폴백. */
+  /** 차입금 태그가 요청일 또는 1년 안쪽에 있는가 — "태그 미공시(Ford)" 판정 전용. 값에는 쓰지 않는다(옛 연말 값 대체 금지) */
   const debtDateFor = (asOf: string): { date: string; stale: boolean } | null => {
     if (hasDebtOn(asOf)) return { date: asOf, stale: false };
     let best: string | null = null;
@@ -310,86 +308,120 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
 
   const debtOn = (d: string) => resolveDebt((c) => on(c, d));
 
-  const cashOn = (d: string): number | null => {
-    const c = firstOn(CASH, d);
-    if (c == null) return null;
-    return c.v + maxOn(STI, d) + maxOn(LT_SECURITIES, d);
-  };
-  const cashDateFor = (asOf: string): { date: string; stale: boolean } | null => {
-    if (firstOn(CASH, asOf)) return { date: asOf, stale: false };
-    // TT: 분기 보고서에 현금 태그가 없고 10-K 에만 있다.
-    let best: string | null = null;
-    for (const c of CASH)
-      for (const e of E(c)) {
-        if (e.start || !e.end || e.end > asOf) continue;
-        if ((Date.parse(asOf) - Date.parse(e.end)) / 86_400_000 > 400) continue;
-        if (!best || e.end > best) best = e.end;
-      }
-    return best ? { date: best, stale: true } : null;
-  };
-
   const captivePoint = (d: string): CaptiveDebtPoint | null => {
-    if (!ctx.captive || ctx.captive === "unsplit") return null;
+    if (!ctx.captive || ctx.captive === "unsplit" || ctx.captive === "unknown") return null;
     for (const p of ctx.captive.points)
       if (Math.abs(Date.parse(p.date) - Date.parse(d)) / 86_400_000 <= 6) return p;
     return null;
   };
 
   const blocker = (asOf: string): EvBlocker | null => {
-    if (ctx.isFinancial) return "financial";
+    // 은행·카드사도 EV 를 비우지 않는다(오너 지시 2026-10-01 "EV를 비워두면 안된다") — 블룸버그와 같이 시가총액 + 차입금 + 우선주·비지배지분 − 현금
+    // (차입금 = 이자부 차입 태그 — 예금은 들어가지 않는다). AXP 2021 블룸버그 142,268.6 = 124,499.6 + 39,797 − 22,028
+    // 금융 자회사 여부를 판별할 최신 공시 조회가 실패 — "금융 자회사 없음"으로
+    // 단정하지 않고 보수적으로 EV 를 비운다(edgar-captive.ts loadCaptiveDebt "unknown").
+    if (ctx.captive === "unknown") return "captive-unknown";
     if (ctx.captive === "unsplit") return "captive-unsplit";
-    // **임시(오너 지시 2026-09-23 — "ev/ebitda 최종은 뒤로 미루고")**: 금융
-    // 자회사가 있으면 부문 분리가 되더라도 EV 를 비운다. 차입금만 제조 부문으로
-    // 빼면 EBITDA 는 연결 기준이라 리스 차량 감가상각(GM 약 70억 달러)이 섞여
-    // EV/EBITDA 가 GM 1.8배·포드 1.79배처럼 무의미해진다. 제조 부문 현금·EBITDA·
-    // 금융 자회사 자본까지 맞출지 최종 방식이 정해지면 이 줄을 걷어낸다.
-    // (부문 분리 로직 captivePoint·industrialDebt 는 그때 쓰려고 남겨 둔다.)
-    if (ctx.captive) return "captive-unsplit";
+    // 금융 자회사 보유사(CAT 등) — EV 를 비우지 않는다(오너 지시 2026-10-01 "EV를 비워두면 안된다"). 블룸버그와 같은 방식: 시가총액 + 제조 부문
+    // 차입금(연결 차입금 − 금융 부문 차입금) + 우선주·비지배지분 − 연결 현금. CAT 2021 블룸버그 111,551.5 = 110,789.5 + 37,789 + 32 − 9,254 − 조정액 27,805.
+    // (예전 임시 미표시 사유: 연결 EBITDA 에 리스 차량 감가상각이 섞여 GM·포드 EV/EBITDA 가 낮게 나온다 — 블룸버그도 같은 연결 EBITDA 를 쓴다)
+    if (unavailableOn(facts, "debt", asOf)) return "source-unavailable";
     if (!ctx.captive && !debtDateFor(asOf) && hasDebtActivity(asOf)) return "debt-untagged";
     return null;
   };
 
-  const bridgeAt = (asOf: string): EvBridge | null => {
-    if (blocker(asOf)) return null;
+  /** 브릿지 구성요소 — 그 기준일(±6일) 값만. 값이 없으면 그 재무상태표 공시에 줄이 아예 없을 때만(없음 증명) 0 */
+  const partOn = (cs: string[], d: string, pick: "first" | "max" | "sum"): number | null | "unknown" => {
+    const vals = cs.map((c) => on(c, d)).filter((v): v is number => v != null);
+    if (vals.length) return pick === "first" ? vals[0] : pick === "max" ? Math.max(0, ...vals) : vals.reduce((x, y) => x + y, 0);
+    // 이 회사가 그 개념을 어느 기간에도 공시한 적이 없으면 없음(0) — 기준일 공시로 없음을 증명할 수 없는 날(20-F LTM: 분기 재무상태표가
+    // Yahoo 분기라 SEC 공시 없음)에 "모름"으로 EV 전체를 비우지 않는다(SPOT 2026-06-30 — 장기 투자증권을 한 번도 공시한 적 없음,
+    // 2026-09-29). 다른 기간엔 있다가 이 날만 없으면 종전대로 모름
+    if (cs.every((c) => E(c).length === 0)) return null;
+    return provenAbsentAt(facts, cs, d) ? null : "unknown";
+  };
+
+  /** 그 기준일(±6일)의 브릿지 — 이전 연말 값으로 대신하지 않고 기준일이 섞이지 않게(그림자 채우기 금지, 2026-09-27) */
+  const resolve = (asOf: string): { bridge: EvBridge | null; reason: string | null } => {
+    if (blocker(asOf)) return { bridge: null, reason: null };
+    const miss = (what: string) => ({ bridge: null, reason: `분기 공시에 없음(${what} — ${asOf} 재무상태표)` });
     const cp = captivePoint(asOf);
-    const dd = cp ? { date: asOf, stale: false } : debtDateFor(asOf);
-    const cd = cashDateFor(asOf);
-    // 차입금 날짜 기준으로 나머지를 맞춘다 (없으면 현금 날짜, 둘 다 없으면 요청일)
-    const bal = dd?.date ?? cd?.date ?? asOf;
-    const { debt: rawDebt, noncurrent, partial } = (dd ? debtOn(dd.date) : null) ?? {
-      debt: 0,
-      noncurrent: null,
-      partial: false,
-    };
-    const olNc = on("OperatingLeaseLiabilityNoncurrent", bal);
-    const olCur = on("OperatingLeaseLiabilityCurrent", bal);
-    const operatingLease =
-      olNc != null || olCur != null ? (olNc ?? 0) + (olCur ?? 0) : on("OperatingLeaseLiability", bal);
+    // 금융 자회사 보유사인데 그 기준일 부문 분리값이 없으면 연결 차입금으로 섞지 않는다(사유 표시)
+    if (ctx.captive && typeof ctx.captive === "object" && !cp) return { bridge: null, reason: `금융 자회사 부문 차입금 분리값 없음(${asOf})` };
+    const bal = asOf;
+    let rawDebt = 0;
+    let noncurrent: number | null = null;
+    let partial = false;
+    if (!cp) {
+      if (hasDebtOn(bal)) {
+        const r = debtOn(bal);
+        if (r) ({ debt: rawDebt, noncurrent, partial } = r);
+      } else if (!provenAbsentAt(facts, ANY_DEBT, bal)) return miss("차입금");
+    }
+    // 현금 — 현금 줄이 없는 재무상태표는 없다: 태그가 없으면 0 이 아니라 공란
+    const c0 = firstOn(CASH, bal);
+    if (c0 == null) return miss("현금");
+    // 단기투자 — 본표 유동자산 줄 합(edgar-bs-structure SYN_STI_FACE)이 있으면 그것, 없으면 태그 규칙
+    const stiFace = on(SYN_STI_FACE, bal);
+    const sti = stiFace != null ? stiFace : partOn(STI, bal, "max");
+    const lts = partOn(LT_SECURITIES, bal, "max");
+    if (sti === "unknown") return miss("단기투자");
+    if (lts === "unknown") return miss("장기 투자증권");
+    const cash = c0.v + (sti ?? 0) + (lts ?? 0);
+    // 운용리스 = 유동 + 비유동, 단 총액 태그가 더 크면 총액 — 한쪽 태그만 단 분기(MSFT: 비유동 16,532 만, 총액
+    // OperatingLeaseLiability 21,925)에 부분 합이 과소했다. 비유동 태그가 없으면 본표 운용·금융 합산 줄의 운용리스 몫
+    // (VRT 10-Q `vrt:OperatingAndFinanceLeaseLiabilityNoncurrent` — edgar-bs-structure.ts 가 차입금에 이미 넣은 주석
+    // 금융리스분을 빼서 넘긴다, 이중 계산 없음). 표시 전용(EV 에 안 들어감) — 없으면 null
+    const olNc = on("OperatingLeaseLiabilityNoncurrent", bal) ?? on(SYN_MIXED_LEASE_NONCURRENT, bal);
+    const olCur = on("OperatingLeaseLiabilityCurrent", bal) ?? on(SYN_MIXED_LEASE_CURRENT, bal);
+    const olParts = olNc != null || olCur != null ? (olNc ?? 0) + (olCur ?? 0) : null;
+    const olTotal = on("OperatingLeaseLiability", bal);
+    const operatingLease = olParts == null ? olTotal : olTotal == null ? olParts : Math.max(olParts, olTotal);
+    // 금융 자회사 보유사: 제조 부문 차입금(부문 항목 합 — CAT 2021 9 + 45 + 9,746 = 9,800, 금융 27,989 와 합하면 연결 37,789 로 정확히 맞는다)
     const debt = cp ? cp.industrialDebt : rawDebt;
-    const cash = cd ? (cashOn(cd.date) ?? 0) : 0;
-    const preferred = (firstOn(PREFERRED, bal)?.v ?? 0) + sumOn(PREFERRED_UNITS, bal);
-    let nci = firstOn(NCI, bal)?.v ?? 0;
-    const opUnitNciBook = on(NCI_OP_UNITS[0], bal) ?? 0;
-    if (ctx.opUnits && ctx.opUnits > 0) nci = Math.max(0, nci - opUnitNciBook);
+    const pref = partOn(PREFERRED, bal, "first");
+    const prefUnits = partOn(PREFERRED_UNITS, bal, "sum");
+    if (pref === "unknown" || prefUnits === "unknown") return miss("우선주");
+    // 우선주 장부가를 액면가로만 태깅하는 회사 — AVGO 2021 의무전환우선주: PreferredStockValue 0(주당 0.001달러), 실제 금액은
+    // 청산우선권 37.37억(PreferredStockLiquidationPreferenceValue). EV 에 들어갈 우선주는 청산가치라 발행 주식이 남아 있으면
+    // 둘 중 큰 쪽(블룸버그 대조 2026-09-28 — 블룸버그 우선주 3,737 = 이 값)
+    const prefShares = instantOn(entriesOf(facts, "PreferredStockSharesOutstanding", "shares"), bal);
+    const prefLiq = prefShares != null && prefShares > 0 ? on("PreferredStockLiquidationPreferenceValue", bal) : null;
+    const prefVal = Math.max(pref ?? 0, prefLiq ?? 0);
+    const nci0 = partOn(NCI, bal, "first");
+    if (nci0 === "unknown") return miss("비지배지분");
+    let nci = nci0 ?? 0;
+    let opUnitNciBook = 0;
+    if (ctx.opUnits && ctx.opUnits > 0) {
+      const op = partOn(NCI_OP_UNITS, bal, "first");
+      if (op === "unknown") return miss("운영 파트너십 지분 장부가");
+      opUnitNciBook = op ?? 0;
+      nci = Math.max(0, nci - opUnitNciBook);
+    } else opUnitNciBook = on(NCI_OP_UNITS[0], bal) ?? 0;
     return {
-      balanceDate: bal,
-      stale: Boolean(dd?.stale || cd?.stale),
-      debt,
-      debtNoncurrent: cp ? null : noncurrent,
-      operatingLease,
-      cash,
-      preferred,
-      nci,
-      debtPartial: partial,
-      captiveDebtExcluded: cp ? cp.financialDebt : null,
-      opUnitNciBook,
+      bridge: {
+        balanceDate: bal,
+        stale: false,
+        debt,
+        debtNoncurrent: cp ? null : noncurrent,
+        operatingLease,
+        cash,
+        preferred: prefVal + (prefUnits ?? 0),
+        nci,
+        debtPartial: partial,
+        captiveDebtExcluded: cp ? cp.financialDebt : null,
+        opUnitNciBook,
+      },
+      reason: null,
     };
   };
+  const bridgeAt = (asOf: string): EvBridge | null => resolve(asOf).bridge;
 
   return {
     latestBalanceDate: () => latest,
     blocker,
     bridgeAt,
+    bridgeReason: (asOf) => resolve(asOf).reason,
     evAt(asOf, commonMarketCap, price) {
       const b = bridgeAt(asOf);
       if (!b || commonMarketCap == null) return null;
@@ -417,17 +449,67 @@ export function pickDa(
   if (cashFlow != null) return cashFlow;
   const tv = totals.filter((v): v is number => v != null);
   const total = tv.length ? Math.max(...tv) : null;
-  const comp =
-    depreciation != null || intangible != null ? (depreciation ?? 0) + (intangible ?? 0) : null;
+  // 구성항목 합 — 감가상각비가 없으면(무형상각만) 부분값이라 쓰지 않는다(감가상각비를 0 으로 보지 않음 — 그림자 채우기 금지).
+  // 무형자산상각 태그가 없는 회사는 감가상각비 그대로
+  const comp = depreciation != null ? depreciation + (intangible ?? 0) : null;
   if (total == null) return comp;
   if (comp != null && depreciation != null && intangible != null && comp > total * DA_COMPONENT_MARGIN)
     return comp;
   return total;
 }
 
-/** 연도별 감가상각비 (pickDa 규칙). */
+/**
+ * **감가상각비 본표 계열** — 현금흐름표 계산 구조 판독값(SYN_DA_CF, edgar-cf-structure.ts) 또는 콘텐츠 상각 포함 합성값
+ * (NFLX, edgar-content.ts — 본표 판독 대신 이 값이 기준). 둘 다 없으면 null(태그 규칙 회사 — 20-F·구조 없는 공시).
+ * 연간·분기·LTM 모든 화면이 이 계열을 pickDa 의 cashFlow 인자로 쓴다.
+ */
+export function daStructConcept(facts: CompanyFacts): string | null {
+  if (facts.contentAmortization && entriesOf(facts, SYN_DA_WITH_CONTENT).length) return SYN_DA_WITH_CONTENT;
+  if (entriesOf(facts, SYN_DA_CF).length) return SYN_DA_CF;
+  return null;
+}
+
+/** 본표 판독 회사의 분기 칸이 본표로 계산되지 않을 때(그 분기를 실은 10-Q·10-K 구조 판독 불가·누적 기간 없음) 칸 주석 */
+export const DA_QUARTER_NO_STRUCT = "감가상각비 공란 — 이 분기를 실은 10-Q·10-K 현금흐름표 계산 구조로 계산할 수 없음(요약 현금흐름표 등 구조 판독 불가·누적 기간 없음·손상/중단사업 조정 금액 미확인), 태그 값으로 대체하지 않음";
+/** 본표 판독 회사의 LTM 칸이 본표로 계산되지 않을 때 칸 주석 */
+export const DA_LTM_NO_STRUCT = "LTM 감가상각비 구성 분기 없음(현금흐름표 계산 구조 누적 기간 없음·조정 금액 미확인 — 태그 값으로 대체하지 않음)";
+
+/** 파생 열(누적 차·Q4·LTM)의 구성 공시끼리 감가상각 줄 기준이 다를 때 칸 주석 */
+export const DA_BASIS_MIX = "구성 공시 간 감가상각 줄 기준 혼합 — 감가상각비 공란(한쪽은 포함, 다른 쪽은 제외한 줄이 있어 차감하면 기준이 섞임)";
+
+/**
+ * 파생 열 구성 항목(본표 판독값)끼리 감가상각 줄 기준이 섞였는가 — edgar-cf-structure.ts 가 판정한 혼합 쌍(daBasisMix) 중 하나라도
+ * 구성 항목의 판독 구조 쌍이면 true. 단일 항목(분기 3개월 값·사업연도 값)은 그 공시 기준 그대로라 false.
+ */
+export function daBasisMixed(facts: CompanyFacts, parts: (FactUnitEntry | null | undefined)[]): boolean {
+  const mix = facts.daBasisMix;
+  if (!mix?.length) return false;
+  const bs = [...new Set(parts.map((p) => p?.basis).filter((b): b is string => !!b))];
+  for (let i = 0; i < bs.length; i++)
+    for (let j = i + 1; j < bs.length; j++) if (mix.includes([bs[i], bs[j]].sort().join("|"))) return true;
+  return false;
+}
+
+/**
+ * **분기·LTM 칸 감가상각비**(2026-09-27) — 본표 판독 회사(daStructConcept ≠ null)는 본표 값만 쓴다. 본표 값이 없으면 공란 —
+ * 연간은 현금흐름표 구조인데 분기만 태그 규칙으로 대체되던 결함(PEP·XOM·AVGO·NFLX 분기)의 재발 방지. 그 밖의 회사는 pickDa.
+ * 연간 칸은 pickDa 그대로(구조로 덮이지 않는 옛 연도는 태그 규칙 — edgar-cf-structure.ts 주석).
+ */
+export function pickDaPeriod(
+  structured: boolean,
+  totals: (number | null | undefined)[],
+  depreciation: number | null | undefined,
+  intangible: number | null | undefined,
+  cashFlow: number | null | undefined,
+): number | null {
+  if (structured) return cashFlow ?? null;
+  return pickDa(totals, depreciation, intangible, cashFlow);
+}
+
+/** 연도별 감가상각비 (pickDa 규칙). 본표 판독이 원본 조회 실패로 빠졌으면 비운다(sec-unavailable.ts) */
 export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
   const out = new Map<number, number>();
+  if (unavailableOn(facts, "da")) return out;
   const totals = DA_TOTAL.map((c) => annualByYear(entriesOf(facts, c)));
   const dep = (() => {
     for (const c of DA_DEPRECIATION) {
@@ -437,7 +519,8 @@ export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
     return new Map<number, number>();
   })();
   const am = annualByYear(entriesOf(facts, DA_INTANGIBLE));
-  const cf = annualByYear(entriesOf(facts, SYN_DA_CF));
+  const sc = daStructConcept(facts);
+  const cf = sc ? annualByYear(entriesOf(facts, sc)) : new Map<number, number>();
   const years = new Set<number>([...totals.flatMap((m) => [...m.keys()]), ...dep.keys(), ...am.keys(), ...cf.keys()]);
   for (const y of years) {
     const v = pickDa(totals.map((m) => m.get(y)), dep.get(y), am.get(y), cf.get(y));
@@ -446,20 +529,58 @@ export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
   return out;
 }
 
-/** 최근 12개월 감가상각비 (pickDa 규칙). */
+/**
+ * LTM 감가상각비와 공란 사유 — 모든 화면(하이라이트·재무분석·손익계산서·현금흐름표·TTM·개요)이 이것(또는 daTtm)만 쓴다.
+ * 본표 판독 회사는 본표 LTM(사업연도 + 당기 누적 − 전년 동기)만, 구성 공시끼리 감가상각 줄 기준이 섞이면 공란 + DA_BASIS_MIX.
+ */
+/** LTM 감가상각비 칸 주석 — 분기 합 구성 공시끼리 줄 기준이 섞여 종전 식으로 낸 값(오너 결정 2026-09-29) */
+export const DA_LTM_FALLBACK = "분기 기준 혼합 — 사업연도 + 당기 누적 − 전년 동기 식";
+
+export function daTtmCell(facts: CompanyFacts): { value: number | null; reason: string | null; note?: string } {
+  if (unavailableOn(facts, "da")) return { value: null, reason: "원본 조회 실패 — 감가상각비 공란" };
+  const sc = daStructConcept(facts);
+  if (!sc) {
+    const v = daTtm(facts);
+    return { value: v, reason: v == null ? "LTM 감가상각비 구성 분기 없음" : null };
+  }
+  const r = ltmFlowOf(entriesOf(facts, sc), ltmAnchor(facts));
+  if (r.value == null) return { value: null, reason: DA_LTM_NO_STRUCT };
+  // 분기 합 LTM(오너 결정 2026-09-28)이면 그 구성 공시끼리 판정 — 섞였으면 종전 식(사업연도 + 당기 누적 − 전년 동기)의 구성 공시가
+  // 한 기준일 때 그 값 + 칸 주석, 종전 식도 섞였으면 공란(오너 결정 2026-09-29). ISRG: 2025-09-30 10-Q 만 줄 구성이 달라 분기 합은
+  // 섞이고, 종전 식(FY2025 10-K·2026 2분기 10-Q·2025 2분기 10-Q)은 그 공시를 쓰지 않는다
+  if (r.parts && daBasisMixed(facts, r.parts)) {
+    if (r.fy && !daBasisMixed(facts, [r.fy, r.cur, r.prior])) {
+      const v = ttmCombine(r.fy, r.cur, r.prior);
+      if (v != null) return { value: v, reason: null, note: DA_LTM_FALLBACK };
+    }
+    return { value: null, reason: DA_BASIS_MIX };
+  }
+  if (!r.parts && daBasisMixed(facts, [r.fy, r.cur, r.prior])) return { value: null, reason: DA_BASIS_MIX };
+  return { value: r.value, reason: null };
+}
+
+/** 최근 12개월 감가상각비 (pickDa 규칙). 본표 판독이 원본 조회 실패로 빠졌으면 null(sec-unavailable.ts) */
 export function daTtm(facts: CompanyFacts): number | null {
+  if (unavailableOn(facts, "da")) return null;
+  const anchor = ltmAnchor(facts);
+  // 본표 판독 회사(현금흐름표 계산 구조·콘텐츠 상각)는 본표 LTM 만 — 구성 누적이 없거나 기준 혼합이면 공란(태그 규칙으로 대체하지 않음)
+  if (daStructConcept(facts)) return daTtmCell(facts).value;
+  // 최근 사업연도엔 있는데 분기에 없는 감가상각 합계 태그가 있으면, 나머지 태그 중 최댓값은 부분값일 수 있다 — 공란(그림자 채우기
+  // 금지). 합계 태그가 하나도 LTM 이 없을 때(구성항목 합)는 감가상각·무형상각 태그의 공백도 같은 이유로 공란
+  const gap = (cs: string[]) => cs.some((c) => ltmGapConcept(facts, entriesOf(facts, c)));
+  if (gap(DA_TOTAL)) return null;
+  if (DA_TOTAL.every((c) => ttmOf(entriesOf(facts, c), anchor) == null) && gap([...DA_DEPRECIATION, DA_INTANGIBLE])) return null;
   const dep = (() => {
     for (const c of DA_DEPRECIATION) {
-      const v = ttmOf(entriesOf(facts, c));
+      const v = ttmOf(entriesOf(facts, c), anchor);
       if (v != null) return v;
     }
     return null;
   })();
   return pickDa(
-    DA_TOTAL.map((c) => ttmOf(entriesOf(facts, c))),
+    DA_TOTAL.map((c) => ttmOf(entriesOf(facts, c), anchor)),
     dep,
-    ttmOf(entriesOf(facts, DA_INTANGIBLE)),
-    ttmOf(entriesOf(facts, SYN_DA_CF)),
+    ttmOf(entriesOf(facts, DA_INTANGIBLE), anchor),
   );
 }
 
@@ -504,6 +625,9 @@ export const SYN_OP_INCOME = "OperatingIncomeLossUnified";
  * 회사는 중단 이후만 합성값으로 이어진다.
  */
 export function opIncomeEntries(facts: CompanyFacts): FactUnitEntry[] {
+  // 영업이익 판독(손익계산서 계산 구조·총수익 분리)이 원본 조회 실패로 빠졌으면 비운다 — 판독 대상 회사는 영업이익 태그가
+  // 없거나(근사) 부문 주석 값(DIS)이라 그대로 쓰면 다른 숫자가 된다(sec-unavailable.ts)
+  if (unavailableOn(facts, "opIncome")) return [];
   const oi = entriesOf(facts, "OperatingIncomeLoss");
   const lastOi = oi.reduce((m, e) => (e.end > m ? e.end : m), "");
   // 태그를 나중에 시작한 회사(MET — OperatingIncomeLoss가 FY2022부터만 있고 FY2021은
@@ -562,19 +686,26 @@ export function opIncomeEntries(facts: CompanyFacts): FactUnitEntry[] {
       // 총수익 분리 회사(XOM)인데 그 기간 분리값이 없으면(최근 10-K 3건 밖 옛 연도) 구조 경로를 쓰지 않는다 —
       // 지분법·기타수익이 빠지지 않아 영업이익이 부푼다(감사 2026-09-24: XOM 2018 +30%). 종전 근사로.
       if (st != null && !(facts.nonopInRevenues && !nonopInRev.has(k))) {
-        out.push({ ...e, val: e.val - st - (nonopInRev.get(k) ?? 0) });
+        out.push({ ...e, val: e.val - st - (nonopInRev.get(k) ?? 0), synBasis: "structure" });
         continue;
       }
       const eq = nonopInRev.get(k) ?? (PRETAX_INCLUDES_EQUITY.has(c) ? (equityInc.get(k) ?? 0) : 0);
       // 금융·보험업은 이자비용이 본업 비용이라 더하지 않는다 — 증권사(GS·SCHW, 은행 레이아웃 아님)가 세전이익의
       // 4배 영업이익을 냈다(검증 괴리 검사로 발견 2026-09-24: GS 2025 886.66억 vs 세전 218.52억)
-      out.push({ ...e, val: e.val + (facts.financialSector ? 0 : (interest.get(k) ?? 0)) - eq });
+      // 이자비용 태그가 없는 기간은 세전이익 그대로(산식 라벨 "pretax" — 화면이 칸마다 표시, G6)
+      out.push({
+        ...e,
+        val: e.val + (facts.financialSector ? 0 : (interest.get(k) ?? 0)) - eq,
+        synBasis: facts.financialSector ? "fin" : interest.has(k) ? "ebit" : "pretax",
+      });
     }
   return out;
 }
 
 /** 영업이익을 합성(②·③)으로 채운 기간이 있는지 — 화면 주석용. */
 export function opIncomeIsDerived(facts: CompanyFacts): boolean {
+  // fin 경로(금융사 외)는 옛 합성 시계열을 쓰지 않는다 — 합성 표기는 fin 주석(opIncomeSynthNote)
+  if (opIncomeViaFin(facts)) return false;
   const oi = entriesOf(facts, "OperatingIncomeLoss");
   const lastOi = oi.reduce((m, e) => (e.end > m ? e.end : m), "");
   const firstOi = oi.reduce((m, e) => (m === "" || e.end < m ? e.end : m), "");
@@ -597,14 +728,79 @@ export function withOpIncome(facts: CompanyFacts): CompanyFacts {
   } as CompanyFacts;
 }
 
-/** 연도별 영업이익 — 단일 기준 시계열(opIncomeEntries)의 사업연도 값. */
-export function opIncomeAnnualByYear(facts: CompanyFacts): Map<number, number> {
-  return annualByYear(entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts));
+// ── 영업이익 원천 — 재무 5층 구조(fin) 전환(2026-09-27, docs/metrics/cogs.md §8) ─────────────────
+//
+// 영업이익은 **fin opinc 지표**(src/lib/fin metrics/opinc.ts — 본표 영업이익 소계, 소계 없으면 공시 계산 구조 "세전이익 − 영업외 항목")
+// 한 곳에서 받는다. 하이라이트·재무분석·손익계산서·개요 TTM·컨센서스가 모두 아래 함수만 거친다(열 = fin 연간·분기·LTM 열 그대로).
+// fin 값이 없는 칸은 빈칸 + fin 사유 — 옛 합성 시계열(SYN_OP_INCOME: 세전 + 이자 근사 등)로 채우지 않는다(그림자 채우기 금지).
+// 금융사(은행·증권·보험 — fin 회사 유형)만 옛 경로(SYN_OP_INCOME·금융사 화면 구성) 그대로 — fin 전환 대상 아님.
+
+/** fin 조립 실패(유형도 모름) — 금융업 SIC 가 아니면 fin 경로로 보고 빈칸 + 이 사유 */
+export const OPINC_FIN_FAIL = "재무 5층 구조(fin) 조립 실패 — 영업이익 공란";
+
+/** 영업이익을 fin 에서 받는가 — 금융사(fin 유형 bank·broker·insurer)만 아니오. fin 조립 실패면 SIC(6000~6499)로 가른다 */
+export function opIncomeViaFin(facts: CompanyFacts): boolean {
+  if (facts.revenue) return !facts.revenue.financial;
+  return !facts.financialSector;
 }
 
-/** 최근 12개월 영업이익 — 같은 시계열. */
+export interface OpIncCell {
+  v: number | null;
+  /** 빈칸이면 사유, 값이면 정의 주석(합성 "소계 없음 · 세전이익 − 영업외 항목(공시 계산 구조)") — 없으면 null */
+  note: string | null;
+}
+
+const finCell = (c: RevCol): OpIncCell => ({ v: c.opinc, note: c.opincNote ?? (c.opinc == null ? "영업이익 없음(fin)" : null) });
+
+/** 사업연도 → 영업이익 칸. fin 경로는 fin 연간 열 전부(값 없는 열도 사유와 함께), 금융사는 옛 시계열(값 있는 해만) */
+export function opIncomeAnnualCells(facts: CompanyFacts): Map<number, OpIncCell> {
+  if (!opIncomeViaFin(facts)) {
+    const src = entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts);
+    return new Map([...annualByYear(src)].map(([y, v]) => [y, { v, note: null }]));
+  }
+  return new Map((facts.revenue?.annual ?? []).map((c) => [c.fy, finCell(c)]));
+}
+
+/** 연도별 영업이익(값 있는 해만) — opIncomeAnnualCells 의 값. */
+export function opIncomeAnnualByYear(facts: CompanyFacts): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const [y, c] of opIncomeAnnualCells(facts)) if (c.v != null) out.set(y, c.v);
+  return out;
+}
+
+/** 최근 12개월 영업이익 — fin LTM 열(금융사는 옛 시계열 LTM). reason = 빈칸 사유, note = 값의 정의 주석 */
+export function opIncomeLtm(facts: CompanyFacts): { value: number | null; reason: string | null; note: string | null } {
+  if (!opIncomeViaFin(facts)) {
+    const src = entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts);
+    const r = ltmFlowOf(src, ltmAnchor(facts));
+    return { value: r.value, reason: r.value == null ? (r.reason ?? "LTM 영업이익 없음") : null, note: null };
+  }
+  if (!facts.revenue) return { value: null, reason: OPINC_FIN_FAIL, note: null };
+  const l = facts.revenue.ltm;
+  if (!l) return { value: null, reason: "LTM 열 없음(fin)", note: null };
+  const c = finCell(l);
+  return c.v == null ? { value: null, reason: c.note, note: null } : { value: c.v, reason: null, note: c.note };
+}
+
+/** 최근 12개월 영업이익 값 */
 export function opIncomeTtm(facts: CompanyFacts): number | null {
-  return ttmOf(entriesOf(facts, SYN_OP_INCOME).length ? entriesOf(facts, SYN_OP_INCOME) : opIncomeEntries(facts));
+  return opIncomeLtm(facts).value;
+}
+
+/** 분기 영업이익 칸(fin 분기 열 — Q4 포함, 결산일 ±6일). fin 경로가 아니면 null(호출부가 옛 경로) */
+export function opIncomeQuarterAt(facts: CompanyFacts, end: string): OpIncCell | null {
+  if (!opIncomeViaFin(facts)) return null;
+  if (!facts.revenue) return { v: null, note: OPINC_FIN_FAIL };
+  const q = revQuarterAt(facts.revenue, end);
+  return q ? finCell(q) : { v: null, note: "fin 분기 열 없음" };
+}
+
+/** 표시 연도 중 fin 합성(본표 소계 없음 — 공시 계산 구조) 영업이익이 있으면 그 주석 문구. 없으면 null */
+export function opIncomeSynthNote(facts: CompanyFacts, years: number[], withLtm = false): string | null {
+  if (!opIncomeViaFin(facts)) return null;
+  const ys = new Set(years);
+  const cols = [...(facts.revenue?.annual ?? []).filter((c) => ys.has(c.fy)), ...(withLtm && facts.revenue?.ltm ? [facts.revenue.ltm] : [])];
+  return cols.find((c) => c.opinc != null && c.opincNote?.startsWith(OPINC_NOTE.synth))?.opincNote ?? null;
 }
 
 // ── 모기지 리츠 판정 ──────────────────────────────────────────────────

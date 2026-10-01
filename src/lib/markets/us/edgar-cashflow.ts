@@ -1,8 +1,10 @@
 import "server-only";
+import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { recentQuarters, singleQuarter, fiscalYearOf, vintageOrder } from "./edgar-series";
-import { DA_DEPRECIATION, DA_INTANGIBLE, DA_TOTAL, pickDa, SYN_DA_CF } from "./edgar-ev";
+import { entriesOf, firstConcept, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
+import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, pickDa, pickDaPeriod } from "./edgar-ev";
+import { revQuarterLabel } from "./fin-revenue";
 import { isFinancialCompany } from "./edgar-financial";
 
 /**
@@ -12,7 +14,6 @@ import { isFinancialCompany } from "./edgar-financial";
  */
 
 const ANNUAL_FORMS = ["10-K", "10-K/A", "20-F", "20-F/A"];
-const INTERIM_FORMS = ["10-Q", "10-Q/A"];
 
 function days(a: string, b: string) {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
@@ -21,65 +22,33 @@ function days(a: string, b: string) {
 function isFullYear(e: FactUnitEntry): boolean {
   return Boolean(e.start) && days(e.start!, e.end) >= 300 && days(e.start!, e.end) <= 400;
 }
-function shiftYear(iso: string, n: number) {
-  const [y, m, d] = iso.split("-");
-  return `${Number(y) + n}-${m}-${d}`;
-}
-function entriesOf(facts: CompanyFacts, concept: string): FactUnitEntry[] {
-  return facts.facts["us-gaap"]?.[concept]?.units?.["USD"] ?? [];
-}
-// 대체 태그를 우선순위대로 병합 (같은 보고기간은 앞 개념 우선, 빈 기간만 뒤 개념이 채움).
-function firstConcept(facts: CompanyFacts, concepts: string[]): FactUnitEntry[] {
-  if (concepts.length === 1) return entriesOf(facts, concepts[0]);
-  const out: FactUnitEntry[] = [];
-  const seen = new Set<string>();
-  for (const c of concepts) {
-    for (const e of entriesOf(facts, c)) {
-      const key = `${e.start ?? ""}|${e.end}|${e.form}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(e);
-    }
-  }
-  return out;
-}
+// 대체 태그 병합 — edgar-series.ts firstConcept 단일 함수(한 결산일 = 한 개념, 2026-09-30 — 예전 지역 사본은 결산일이 같은 다른 개념 값으로
+// 기간을 채워 GOOG 주식보상비용 LTM 이 손익 쪽 태그 3개월 값과 섞였다)
 
 /** 사업연도별 duration 값. */
+/**
+ * 사업연도별 연간 값 — **나중 공시 우선**(오너 결정 2026-09-30 "나중공시우선" — 손익계산서와 같은 원칙. 예전엔 먼저 나온 원 공시 값을 썼다:
+ * INTC 2021 영업현금흐름 29,991 → 재작성 29,456, META 2022 CAPEX 31,431 → 31,186 등). 단, 나중 공시 값이 앞선 공시 값의 **부호만 뒤집은**
+ * 값이면(AMD 2021 투자·재무활동 −686·−1,895 → 2024 10-K +686·+1,895 — 회사 태깅 오류) 앞선 값을 유지한다.
+ */
 function annualByYear(entries: FactUnitEntry[]): Map<number, number> {
-  const m = new Map<number, { val: number; end: string }>();
+  const byYear = new Map<number, FactUnitEntry[]>();
   for (const e of entries) {
     if (e.fp !== "FY" || !isFullYear(e) || !ANNUAL_FORMS.includes(e.form)) continue;
     const y = fiscalYearOf(e.end);
-    const prev = m.get(y);
-    if (!prev || e.end > prev.end) m.set(y, { val: e.val, end: e.end });
+    const g = byYear.get(y);
+    if (g) g.push(e);
+    else byYear.set(y, [e]);
   }
-  return new Map([...m].map(([y, v]) => [y, v.val]));
-}
-
-/** 흐름 TTM = 최근 FY + 당기누적 − 전년동기누적. */
-function ttmOf(entries: FactUnitEntry[]): number | null {
-  const annuals = entries
-    .filter((e) => e.fp === "FY" && isFullYear(e) && ANNUAL_FORMS.includes(e.form))
-    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b));
-  const fy = annuals[0];
-  if (!fy?.start) return null;
-  const interims = entries.filter((e) => e.start && INTERIM_FORMS.includes(e.form));
-  const cur = interims
-    .filter((e) => Math.abs(days(fy.end, e.start!)) <= 12 && e.end > fy.end)
-    .sort((a, b) => b.end.localeCompare(a.end) || vintageOrder(a, b))[0];
-  if (!cur?.start) return fy.val;
-  const wS = shiftYear(cur.start, -1);
-  const wE = shiftYear(cur.end, -1);
-  const prior = interims
-    .filter(
-      (e) =>
-        e.start &&
-        Math.abs(days(wS, e.start)) <= 12 &&
-        Math.abs(days(wE, e.end)) <= 12,
-    )
-    .sort((a, b) => Math.abs(days(wE, a.end)) - Math.abs(days(wE, b.end)) || vintageOrder(a, b, cur.filed))[0];
-  if (!prior) return fy.val;
-  return fy.val + cur.val - prior.val;
+  const out = new Map<number, number>();
+  for (const [y, g] of byYear) {
+    const end = g.reduce((m, e) => (e.end > m ? e.end : m), "");
+    const same = g.filter((e) => e.end === end).sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""));
+    const latest = same[0];
+    const earlier = same.find((e) => e.val !== latest.val);
+    out.set(y, latest.val !== 0 && earlier && earlier.val === -latest.val ? earlier.val : latest.val);
+  }
+  return out;
 }
 
 interface Line {
@@ -223,11 +192,29 @@ const NET_CHANGE = [
   "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
   "CashAndCashEquivalentsPeriodIncreaseDecrease",
 ];
+// 중단사업 현금흐름(영업·투자·재무 합계 밖 — 2026-09-30 MRK 2021 Organon 분사 349: 없으면 순증감 = 3개 구간 + 환율이 맞지 않았다)
+const DISC = ["NetCashProvidedByUsedInDiscontinuedOperations"];
 const TAX_PAID = ["IncomeTaxesPaidNet", "IncomeTaxesPaid"];
 const INT_PAID = ["InterestPaidNet", "InterestPaid"];
 
 const LTM = "현재/LTM";
 const fyKey = (y: number) => `${y}Y`;
+
+/**
+ * 보통주 배당 근거 — 현금흐름표 "배당 지급"(PaymentsOfDividends, 포괄 태그)이 보통주 배당인지. 포괄 태그에는 비지배지분·종속회사 파트너 분배가 섞일 수
+ * 있다(BE: 자회사 Bloom Electrons 의 세금형평 파트너 분배 146.8만·94.7만 달러 — 보통주 배당은 한 번도 없음). 근거가 하나라도 있으면 보통주 배당:
+ * 주당배당 태그(USD/shares), 보통주 지급 태그, 자본변동표 배당 결의액 = 지급액(VRT), IFRS 주주 배당 주당액(TSM). 현금흐름표 화면·재무분석이 같이 쓴다
+ */
+export function hasCommonDividendEvidence(facts: CompanyFacts): boolean {
+  return (
+    entriesOf(facts, "CommonStockDividendsPerShareDeclared", "USD/shares").length > 0 ||
+    entriesOf(facts, "CommonStockDividendsPerShareCashPaid", "USD/shares").length > 0 ||
+    entriesOf(facts, "PaymentsOfDividendsCommonStock").length > 0 ||
+    Object.values((facts.facts as Record<string, Record<string, { units: Record<string, unknown[]> }> | undefined>)["ifrs-full"]?.["DividendsRecognisedAsDistributionsToOwnersPerShare"]?.units ?? {}).some((l) => l.length > 0) ||
+    ["Dividends", "DividendsCommonStock", "DividendsCommonStockCash"].some((c) =>
+      entriesOf(facts, c).some((e) => e.start && e.val !== 0 && entriesOf(facts, "PaymentsOfDividends").some((d) => d.start === e.start && d.end === e.end && d.val === e.val)))
+  );
+}
 
 export function buildUsCashFlow(
   facts: CompanyFacts,
@@ -240,21 +227,53 @@ export function buildUsCashFlow(
 
   let periods: FinancialPeriod[];
   let valOf: (concepts: string[]) => Record<string, number | null>;
+  // LTM 칸 주석(그림자 채우기 금지, 2026-09-27) — 줄별 LTM 공란 사유
+  const ltmWhy = new WeakMap<Record<string, number | null>, string>();
+  /** 분기 칸 주석(값이 빈 칸의 사유 — 누적 차에 필요한 직전 누적 없음 등) */
+  const qWhy = new WeakMap<Record<string, number | null>, Record<string, string>>();
+  /** 값이 있는 분기 칸 주석 — 회사 재분류 역산("공시수정 — 1분기 10-Q 공시값 …", edgar-series.ts recastFirstQuarter) */
+  const qNote = new WeakMap<Record<string, number | null>, Record<string, string>>();
+  const anchor = ltmAnchor(facts);
+  /** 분기 모드 — 열별 값과 구성 항목(감가상각비 기준 혼합 판정용) */
+  let quarterPartsOf: ((concepts: string[]) => Record<string, QuarterParts>) | null = null;
 
   if (mode === "quarter") {
-    const chron = [...recentQuarters(opEntries, 6)].reverse(); // 6개 (0번은 prev 전용)
+    // 분기 열 = 손익계산서와 같은 달력(재무 5층 구조 매출 지표의 분기 열, fin-revenue.ts)에서 Q4 를 뺀 열(현금흐름표는 누적 공시라
+    // Q4 열 없음). 예전엔 companyfacts 의 fy·fp 라벨(공시의 회계연도 초점 — 비교 기간에도 같은 라벨이 붙는다)로 열을 묶어 ORCL 은
+    // 2025-08-31 분기가 빠졌고, 누적 차에 쓸 직전 열이 전 사업연도가 되어 6개월 누적(3,881M)이 2026 Q2 값으로 나왔다(2026-09-27).
+    // fin 분기 열이 없는 회사(20-F 등)만 종전 라벨
+    const finQ = (facts.revenue?.quarters ?? []).filter((c) => c.fq !== 4);
+    const chron: QuarterCol[] = finQ.length
+      ? finQ.slice(-6).map((c) => ({ label: revQuarterLabel(c), end: c.end, fyStartApprox: shiftYear(c.end, -1) }))
+      : [...recentQuarters(opEntries, 6)].reverse(); // 6개 (0번은 prev 전용)
     periods = chron.slice(-5).map((q) => ({
       label: q.label,
       fiscalYear: Number(q.label.slice(0, 4)),
       fiscalQuarter: Number(q.label.slice(-1)) || null,
       endDate: q.end,
     }));
-    valOf = (concepts) => {
+    const firstIsPrevOnly = chron.length > 5;
+    quarterPartsOf = (concepts) => {
       const e = firstConcept(facts, concepts);
-      const out: Record<string, number | null> = {};
+      const out: Record<string, QuarterParts> = {};
       chron.forEach((q, i) => {
-        if (i > 0) out[q.label] = singleQuarter(e, q, chron[i - 1]);
+        if (i === 0 && firstIsPrevOnly) return;
+        out[q.label] = singleQuarterParts(e, q, chron[i - 1]);
       });
+      return out;
+    };
+    valOf = (concepts) => {
+      const parts = quarterPartsOf!(concepts);
+      const out: Record<string, number | null> = {};
+      const why: Record<string, string> = {};
+      const notes: Record<string, string> = {};
+      for (const [l, r] of Object.entries(parts)) {
+        out[l] = r.value;
+        if (r.value == null && r.reason) why[l] = r.reason;
+        if (r.value != null && r.note) notes[l] = r.note;
+      }
+      if (Object.keys(why).length) qWhy.set(out, why);
+      if (Object.keys(notes).length) qNote.set(out, notes);
       return out;
     };
   } else {
@@ -282,23 +301,51 @@ export function buildUsCashFlow(
       const ann = annualByYear(entries);
       const out: Record<string, number | null> = {};
       for (const y of years) out[fyKey(y)] = ann.get(y) ?? null;
-      out[LTM] = ttmOf(entries);
+      // LTM — edgar-series.ts 단일 함수(사업연도 뒤 분기가 있는데 누적이 없으면 공란 + 사유, 550일 규칙 포함)
+      const r = ltmFlowOf(entries, anchor);
+      out[LTM] = r.value;
+      if (r.value == null && r.reason) ltmWhy.set(out, r.reason);
       return out;
     };
   }
   const labels = periods.map((p) => p.label);
   const blank = (): Record<string, number | null> =>
     Object.fromEntries(labels.map((l) => [l, null]));
+  /** 줄의 LTM 칸 주석 — 값이 빈 칸만 */
+  const ltmCell = (v: Record<string, number | null>): { cellNotes?: Record<string, string> } => {
+    const w = ltmWhy.get(v);
+    const m: Record<string, string> = {};
+    if (w && labels.includes(LTM) && v[LTM] == null) m[LTM] = w;
+    for (const [l, t] of Object.entries(qWhy.get(v) ?? {})) if (v[l] == null && !m[l]) m[l] = t;
+    for (const [l, t] of Object.entries(qNote.get(v) ?? {})) if (v[l] != null && !m[l]) m[l] = t;
+    return Object.keys(m).length ? { cellNotes: m } : {};
+  };
+  // 최근 연도엔 있는데 LTM 만 빈 값(분기 공시에 없음·Yahoo 분기 미매핑)은 합산·차감에서 0 으로 보지 않는다 — 부분 합·"기타"
+  // 잔여가 부푸는 것 방지(20-F 뿐 아니라 모든 회사 — 그림자 채우기 금지, 2026-09-27)
+  const ylCf = labels.includes(LTM);
+  const prevLbl = labels[labels.length - 2];
+  const ltmGap = (v: Record<string, number | null> | undefined) => !!ylCf && !!v && v[LTM] == null && v[prevLbl] != null;
+  const GAP_NOTE = "LTM 구성 분기 없음(구성 항목이 분기 공시에 없음)";
   const combineVals = (parts: [string, boolean][]): Record<string, number | null> => {
     const out: Record<string, number | null> = {};
     for (const lbl of labels) out[lbl] = null;
+    let gap = false;
     for (const [concept, neg] of parts) {
       const v = valOf([concept]);
+      if (ltmGap(v)) gap = true;
       for (const lbl of labels) {
         const x = v[lbl];
         if (x == null) continue;
         out[lbl] = (out[lbl] ?? 0) + (neg ? -x : x);
       }
+    }
+    if (gap) {
+      out[LTM] = null;
+      ltmWhy.set(out, GAP_NOTE);
+    } else if (labels.includes(LTM) && out[LTM] == null) {
+      // 구성 개념이 모두 LTM 에서 비었다(태그 중단 등) — 첫 구성 사유
+      const why = parts.map(([c]) => ltmWhy.get(valOf([c]))).find(Boolean);
+      if (why) ltmWhy.set(out, why);
     }
     return out;
   };
@@ -309,6 +356,17 @@ export function buildUsCashFlow(
   };
 
   const items: FinancialLineItem[] = [];
+  /** 줄 칸 주석 — LTM 사유(ltmCell) + 분기 칸 사유(cellWhy, 값이 빈 칸만) */
+  const cellsOf = (v: Record<string, number | null>): { cellNotes?: Record<string, string> } => {
+    const m: Record<string, string> = { ...(ltmCell(v).cellNotes ?? {}) };
+    for (const [l, t] of Object.entries(cellWhy.get(v) ?? {})) if (v[l] == null && !m[l]) m[l] = t;
+    return Object.keys(m).length ? { cellNotes: m } : {};
+  };
+  const daOut = unavailableOn(facts, "da");
+  /** 본표 판독 회사인데 본표 값이 없어 감가상각비를 비운 칸(분기·LTM) — 같은 구간의 잔여("기타") 줄도 함께 비운다 */
+  const daBlank = new Set<string>();
+  /** 분기 칸 주석(감가상각비 공란 사유) */
+  const cellWhy = new WeakMap<Record<string, number | null>, Record<string, string>>();
 
   for (const block of BLOCKS) {
     const totalVals = valOf(block.total.concepts);
@@ -321,16 +379,59 @@ export function buildUsCashFlow(
         const totals = DA_TOTAL.map((c) => valOf([c]));
         const dep = valOf(DA_DEPRECIATION);
         const am = valOf([DA_INTANGIBLE]);
-        const cf = valOf([SYN_DA_CF]);
+        // 본표 계열(현금흐름표 계산 구조·NFLX 콘텐츠 상각 포함 — edgar-ev.ts daStructConcept). 분기·LTM 칸은 본표 값만(없으면 공란 + 사유)
+        const sc = daStructConcept(facts);
+        const cf = sc ? valOf([sc]) : blank();
         v = {};
-        for (const l of labels) v[l] = pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
+        if (qNote.get(cf)) qNote.set(v, qNote.get(cf)!);
+        // 본표 판독이 원본 조회 실패로 빠졌으면 공란 — 태그 규칙 값으로 대체하지 않는다(sec-unavailable.ts)
+        for (const l of labels) {
+          const strict = !!sc && (mode === "quarter" || l === LTM);
+          v[l] = daOut ? null : strict ? pickDaPeriod(true, [], null, null, cf[l]) : pickDa(totals.map((t) => t[l]), dep[l], am[l], cf[l]);
+          if (!daOut && strict && v[l] == null) {
+            daBlank.add(l);
+            if (l === LTM) ltmWhy.set(v, DA_LTM_NO_STRUCT);
+            else cellWhy.set(v, { ...(cellWhy.get(v) ?? {}), [l]: qWhy.get(cf)?.[l] ?? DA_QUARTER_NO_STRUCT });
+          }
+        }
+        if (sc && !daOut) {
+          // 파생 열(누적 차·LTM)의 구성 공시끼리 감가상각 줄 기준이 다르면 공란 + 사유(edgar-ev.ts daBasisMixed). 분기 3개월 값은 그대로
+          if (quarterPartsOf) {
+            for (const [l, r] of Object.entries(quarterPartsOf([sc])))
+              if (v[l] != null && daBasisMixed(facts, r.parts)) {
+                v[l] = null;
+                daBlank.add(l);
+                cellWhy.set(v, { ...(cellWhy.get(v) ?? {}), [l]: DA_BASIS_MIX });
+              }
+          } else if (labels.includes(LTM)) {
+            const c = daTtmCell(facts);
+            v[LTM] = c.value;
+            if (c.value == null) {
+              daBlank.add(LTM);
+              if (c.reason) ltmWhy.set(v, c.reason);
+            } else if (c.note) qNote.set(v, { ...(qNote.get(v) ?? {}), [LTM]: c.note });
+          }
+        }
+        // 최근 연도엔 있는데 LTM 에 없는 합계 태그가 있으면(구성항목 합이면 구성 태그도) 나머지로 낸 값은 부분값 — 공란
+        if (labels.includes(LTM) && !daOut && cf[LTM] == null) {
+          const totalLtm = totals.some((t) => t[LTM] != null);
+          if (totals.some(ltmGap) || (!totalLtm && (ltmGap(dep) || ltmGap(am)))) v[LTM] = null;
+        }
+        if (labels.includes(LTM) && !daOut && v[LTM] == null && v[prevLbl] != null && !ltmWhy.get(v)) ltmWhy.set(v, "LTM 감가상각비 구성 분기 없음");
       } else if (line.combine) v = combineVals(line.combine);
       else v = valOf(line.concepts ?? []);
       if (line.fallbackCombine && labels.some((l) => v[l] == null)) {
         const fb = combineVals(line.fallbackCombine);
-        for (const l of labels) if (v[l] == null && fb[l] != null) v[l] = fb[l];
+        const primaryGap = ltmGap(v);
+        for (const l of labels) if (v[l] == null && fb[l] != null && !(l === LTM && primaryGap)) v[l] = fb[l];
       }
-      if (line.negate) v = applyNegate(v);
+      if (line.negate) {
+        const why = ltmWhy.get(v);
+        const qw = qWhy.get(v);
+        v = applyNegate(v);
+        if (why) ltmWhy.set(v, why);
+        if (qw) qWhy.set(v, qw);
+      }
       resolved[line.label] = v;
     }
 
@@ -348,14 +449,26 @@ export function buildUsCashFlow(
             const x = resolved[k.label]?.[lbl];
             if (x != null) s = (s ?? 0) + x;
           }
-          values[lbl] = s;
+          values[lbl] = lbl === LTM && kids.some((k) => ltmGap(resolved[k.label])) ? null : s;
+        }
+        if (labels.includes(LTM) && values[LTM] == null) {
+          const why = kids.some((k) => ltmGap(resolved[k.label])) ? GAP_NOTE : kids.map((k) => ltmWhy.get(resolved[k.label])).find(Boolean);
+          if (why) ltmWhy.set(values, why);
         }
       } else if (line.plug) {
         values = {};
+        let plugWhyNote: string | null = null;
         for (const lbl of labels) {
           const tot = totalVals[lbl];
-          if (tot == null) {
+          // 감가상각비가 공란(원본 조회 실패)인 구간의 잔여 줄은 감가상각비를 떠안아 다른 숫자가 되므로 함께 공란
+          if (tot == null || ((daOut || daBlank.has(lbl)) && block.lines.some((l) => l.pickDa))) {
             values[lbl] = null;
+            if (lbl === LTM && tot == null && ltmWhy.get(totalVals)) plugWhyNote = ltmWhy.get(totalVals)!;
+            else if (tot != null && daBlank.has(lbl)) {
+              const t = "감가상각비 공란 구간 — 잔여 줄이 감가상각비를 떠안지 않게 함께 공란";
+              if (lbl === LTM) plugWhyNote = t;
+              else cellWhy.set(values, { ...(cellWhy.get(values) ?? {}), [lbl]: t });
+            }
             continue;
           }
           let mapped = 0;
@@ -368,8 +481,11 @@ export function buildUsCashFlow(
           for (const l of block.lines) {
             if (l.depth === 2 && !l.plug) mapped += resolved[l.label]?.[lbl] ?? 0;
           }
-          values[lbl] = Math.round(tot - mapped);
+          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && (l.depth === 1 || l.depth === 2) && ltmGap(resolved[l.label]));
+          values[lbl] = gap ? null : Math.round(tot - mapped);
+          if (gap) ltmWhy.set(values, GAP_NOTE);
         }
+        if (plugWhyNote && !ltmWhy.get(values)) ltmWhy.set(values, plugWhyNote);
       } else {
         values = resolved[line.label];
       }
@@ -380,6 +496,7 @@ export function buildUsCashFlow(
         isSubtotal: line.kind === "subtotal",
         isHighlight: false,
         values,
+        ...cellsOf(values),
       });
     }
     items.push({
@@ -389,17 +506,21 @@ export function buildUsCashFlow(
       isSubtotal: true,
       isHighlight: true,
       values: totalVals,
+      ...ltmCell(totalVals),
     });
   }
 
   // 순증감 · 환율효과(= 순증감 − 3개 구간 합, 미보고 시 잔여)
   const netChange = valOf(NET_CHANGE);
   const fxReported = valOf(FX);
+  const disc = valOf(DISC);
+  const hasDisc = labels.some((l) => disc[l] != null && disc[l] !== 0);
   const sect = (i: number) => {
     const it = items.find((x) => x.accountId === `cf:total:${BLOCKS[i].title}`);
     return it?.values ?? {};
   };
   const fx: Record<string, number | null> = {};
+  let fxWhy: string | null = null;
   for (const lbl of labels) {
     if (fxReported[lbl] != null) {
       fx[lbl] = fxReported[lbl];
@@ -411,9 +532,14 @@ export function buildUsCashFlow(
     const s2 = sect(2)[lbl];
     fx[lbl] =
       nc != null && s0 != null && s1 != null && s2 != null
-        ? Math.round(nc - s0 - s1 - s2)
+        ? Math.round(nc - s0 - s1 - s2 - (disc[lbl] ?? 0))
         : null;
+    if (lbl === LTM && fx[lbl] == null)
+      fxWhy = ltmWhy.get(netChange) ?? ltmWhy.get(fxReported) ?? "환율변동 효과 산정 불가(순증감·구간 합계 중 LTM 없음)";
   }
+  if (fxWhy) ltmWhy.set(fx, fxWhy);
+  if (hasDisc)
+    items.push({ accountName: "중단사업 현금흐름", accountId: "cf:disc", depth: 0, isSubtotal: false, isHighlight: false, values: disc, ...ltmCell(disc) });
   items.push({
     accountName: "환율변동 효과",
     accountId: "cf:fx",
@@ -421,6 +547,7 @@ export function buildUsCashFlow(
     isSubtotal: false,
     isHighlight: false,
     values: fx,
+    ...ltmCell(fx),
   });
   items.push({
     accountName: "현금및현금성자산 순증감",
@@ -429,9 +556,14 @@ export function buildUsCashFlow(
     isSubtotal: true,
     isHighlight: true,
     values: netChange,
+    ...ltmCell(netChange),
   });
   // ── 주석 항목 ──
   items.push({ accountName: "", accountId: "cf:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() });
+  // SEC 원본 조회 실패로 공란이 된 값(감가상각비·기타 영업활동 — 대체 계산 없음, sec-unavailable.ts)
+  const unavailable = unavailableNote(facts);
+  if (unavailable)
+    items.push({ accountName: `※ ${unavailable}`, accountId: "cf:note:unavailable", depth: 1, isSubtotal: false, isHighlight: false, italic: true, values: blank() });
   items.push({ accountName: "[ 주석 항목 ]", accountId: "cf:note", depth: 0, isSubtotal: true, isHighlight: false, values: blank() });
 
   const capex = valOf(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"]);
@@ -439,8 +571,10 @@ export function buildUsCashFlow(
   const fcf: Record<string, number | null> = {};
   for (const l of labels)
     if (opCf[l] != null && capex[l] != null) fcf[l] = Math.round(opCf[l]! - Math.abs(capex[l]!));
-  items.push({ accountName: "자본적지출 (CapEx)", accountId: "cf:note:capex", depth: 1, isSubtotal: false, isHighlight: false, values: capex });
-  items.push({ accountName: "잉여현금흐름 (FCF)", accountId: "cf:note:fcf", depth: 1, isSubtotal: false, isHighlight: false, values: fcf });
+  const fcfWhy = ltmWhy.get(capex) ?? (labels.includes(LTM) && opCf[LTM] == null ? ltmWhy.get(valOf(BLOCKS[0].total.concepts)) : undefined);
+  if (fcfWhy) ltmWhy.set(fcf, fcfWhy);
+  items.push({ accountName: "자본적지출 (CapEx)", accountId: "cf:note:capex", depth: 1, isSubtotal: false, isHighlight: false, values: capex, ...ltmCell(capex) });
+  items.push({ accountName: "잉여현금흐름 (FCF)", accountId: "cf:note:fcf", depth: 1, isSubtotal: false, isHighlight: false, values: fcf, ...ltmCell(fcf) });
 
   const tax = valOf(TAX_PAID);
   const intp = valOf(INT_PAID);
@@ -452,6 +586,7 @@ export function buildUsCashFlow(
       isSubtotal: false,
       isHighlight: false,
       values: tax,
+      ...ltmCell(tax),
     });
   if (labels.some((l) => intp[l] != null))
     items.push({
@@ -461,8 +596,14 @@ export function buildUsCashFlow(
       isSubtotal: false,
       isHighlight: false,
       values: intp,
+      ...ltmCell(intp),
     });
 
+  // 보통주 배당 근거가 없는데 포괄 배당 태그 금액이 있으면 그 줄은 보통주 배당이 아니다(BE — 비지배지분·파트너 분배) — 이름으로 밝힌다(2026-10-01)
+  if (!hasCommonDividendEvidence(facts)) {
+    const it = items.find((x) => x.accountId === "cf:재무활동 현금흐름:배당금 지급");
+    if (it && Object.values(it.values ?? {}).some((v) => v != null && v !== 0)) it.accountName = "배당·분배 지급 (보통주 배당 아님 — 비지배지분·파트너 분배)";
+  }
   return {
     symbol: "",
     market: "us",
