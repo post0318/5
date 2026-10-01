@@ -157,6 +157,11 @@ export interface EodQuote {
   marketCap?: number | null;
   /** 시세가 Yahoo 일 때만 — 종가에 소급 반영된 분할·분사 이력 */
   splits?: YahooSplit[];
+  /**
+   * 진행 중인 거래일 가격(미국 — 장 마감 전 야후 일봉의 마지막 봉). **표시 전용**(개요 현재가). 시가총액·멀티플 등 계산은 last(마감 종가)만
+   * 쓴다(오너 결정 2026-10-02 (나) — 화면마다 조회 시점이 달라 0.01~0.08% 어긋나던 문제). 장 마감 뒤·주말이면 없음
+   */
+  live?: { price: number; date: string; change: number | null; changePct: number | null } | null;
 }
 
 /** 트레일링 멀티플 (L3, 자체 계산). */
