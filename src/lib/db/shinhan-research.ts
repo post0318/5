@@ -617,17 +617,7 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // 아니라 특정 기관명이라 별도로 안 걸림(오너 지적, 2026-09 — "ECB, 인상
 // 사이클 연장" 누락 확인).
 const BOND_STRONG_RE =
-  /(?<!매출)(?<!연체)(?<!부실)채권(?!단|자|회수|추심)|국채|부채|Beige\s?Book|\bBond\b|\bDebt\b|Fixed\s?Income/i;
-// "크레딧"/"Credit"만 따로 뺀다(오너 지적 2026-10-01 — 신한투자증권 "게임의
-// 룰은 바뀌지 않았다"(미국 주식시장 전략, stockName "투자전략 · 글로벌
-// 주식전략")가 요약의 "AI Capex+Credit 사이클"이라는 한 단어 때문에 투자전략
-// (채권)→이슈분석으로 샜다). 다른 BOND_STRONG_RE 단어(채권/국채/부채/Bond/
-// Debt 등)와 달리 "Credit"은 "credit cycle"(기업 레버리지 사이클)처럼 순수
-// 주식 전략 코멘트에도 흔히 섞여 나오는 영어 금융 상투어라 — 본문에 명시적
-// 주식 신호(S&P 500/코스피/나스닥 등, EQUITY_HINT_RE)가 있으면 이 신호만으론
-// 채권으로 보지 않는다. 다른 강한 신호(채권/국채/부채 등)는 여전히 무조건
-// 채권이다.
-const CREDIT_TERM_RE = /크레딧|\bCredit\b/i;
+  /(?<!매출)(?<!연체)(?<!부실)채권(?!단|자|회수|추심)|크레딧|국채|부채|Beige\s?Book|\bCredit\b|\bBond\b|\bDebt\b|Fixed\s?Income/i;
 // "환율"(FX) 추가 — 한국투자증권 "경제분석 Note" 환율 FAQ 사례가 채권/
 // FICC 데스크 소관인데 신호가 없어 투자전략(주식)으로 잘못 넘어감(오너
 // 지적, 2026-09). 개별 통화명(위안화 등)은 넣지 않는다 — FX_RE 가 이미 그
@@ -787,9 +777,7 @@ function isGenericOrBoardLabel(doc: { stockName: string; title: string }): boole
 
 function isBond(doc: { stockName: string; title: string }, hayWithSummary: string): boolean {
   if (BOND_STRONG_RE.test(hayWithSummary)) return true;
-  const equitySignal = EQUITY_HINT_RE.test(hayWithSummary);
-  if (CREDIT_TERM_RE.test(hayWithSummary) && !equitySignal) return true;
-  return isGenericOrBoardLabel(doc) && BOND_MACRO_RE.test(hayWithSummary) && !equitySignal;
+  return isGenericOrBoardLabel(doc) && BOND_MACRO_RE.test(hayWithSummary) && !EQUITY_HINT_RE.test(hayWithSummary);
 }
 
 // "KB 전략" 추가(오너 지시 2026-09-27 — "kb전략은 투자전략이다" — "9월 인상이 기정 사실이라면"이 금리·연준
@@ -808,6 +796,17 @@ const LABEL_FIRST_STRATEGY_STOCKNAMES = new Set<string>([
   // 샜다(오너 지적 2026-10-01 — "이것도 투자전략인데?"). 실제로는 선거 이벤트가
   // 한국 증시·업종에 미치는 영향을 다루는 투자전략 시리즈.
   "What if",
+  // 신한투자증권 "투자전략 · 글로벌 주식전략" 게시판 — 게시판명 자체가 이미
+  // "주식전략"이라고 밝히고 있는데도 "게임의 룰은 바뀌지 않았다"(미국 주식
+  // 시장 전략, S&P 500 목표밴드 제시)가 요약의 "AI Capex+Credit 사이클"
+  // 한 단어(bondStrong, generic 과 무관하게 항상 승격) 때문에 이슈분석으로
+  // 샜다(오너 지적 2026-10-01 — "제목이 주식시장 전략인데 본문의 credit이
+  // 왜 영향을 미치는거지?", "본문 상단에 이미 주식시장 전략이라고 되어있는데
+  // 그걸 무시하고 있다"). 본문 키워드로 역추정하지 말고 게시판명 자체가
+  // 이미 "주식전략"을 명시하면 그대로 믿는다(다른 LABEL_FIRST 항목과 동일
+  // 원칙) — 이 게시판 문서 4건 전수 확인(2026-09-01~09-30) 전부 미국
+  // 주식시장 전략 글이라 안전하게 적용 가능.
+  "투자전략 · 글로벌 주식전략",
 ]);
 
 // 거시 지표·통화정책 발표로 시작하는 제목: "미국 8월 CPI: …", "9월 FOMC: …", "한국 7월 산업활동동향", "미국 2분기 GDP; …",
@@ -868,10 +867,9 @@ function classifyLegacyTopic(
   // 코멘트, "우리는 이 게임을 해본 적이 있다"처럼 반도체·주식시장 얘기인데
   // 배경으로 "금리"만 잠깐 나오는 순수 주식 코멘트 둘 다 승격 자체가 안 돼
   // 산업분석으로 새던 문제, 오너 지적, 2026-09).
-  const rawEquitySignal = EQUITY_HINT_RE.test(hayWithSummary);
-  const bondStrong = BOND_STRONG_RE.test(hayWithSummary) || (CREDIT_TERM_RE.test(hayWithSummary) && !rawEquitySignal);
+  const bondStrong = BOND_STRONG_RE.test(hayWithSummary);
   const bondMacro = generic && BOND_MACRO_RE.test(hayWithSummary);
-  const equitySignal = generic && rawEquitySignal;
+  const equitySignal = generic && EQUITY_HINT_RE.test(hayWithSummary);
   const bond = bondStrong || (bondMacro && !equitySignal);
   // bare "전략"은 stockName이 업종명이 아닐 때만(generic) 승격 신호로 쓴다 —
   // 영문 Strategy/매크로 등 강한 신호는 항상.
