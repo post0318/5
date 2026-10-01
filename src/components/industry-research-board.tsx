@@ -12,21 +12,24 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const PAGE_SIZE = 10;
 
+// 전면 개편(오너 지시 2026-09-26)으로 시황·이슈분석·환율분석은 /macro 로 이동했고, 해외리서치는 "글로벌IB"로 이름만 바꿨다.
+// 투자전략은 다시 이 탭으로(오너 지시 2026-09-27 — "각 국가별 산업분석으로 다시 변경한다. 국가별로 나눠라") —
+// 시장 탭(국내/미국/일본)별로 그 국가의 투자전략만 나온다.
 const TOPICS = [
   { key: "all", label: "전체" },
   { key: "산업분석", label: "산업분석" },
-  { key: "투자전략(주식)", label: "투자전략(주식)" },
-  { key: "투자전략(채권)", label: "투자전략(채권)" },
-  { key: "시황", label: "시황" },
-  { key: "해외리서치", label: "해외리서치" },
+  { key: "투자전략", label: "투자전략" },
+  { key: "글로벌IB", label: "글로벌IB" },
 ] as const;
 type TopicKey = (typeof TOPICS)[number]["key"];
+// 글로벌IB(골드만삭스·블랙록 리서치)는 미국 탭에만 둔다(오너 지시 2026-09-28 — "한국의 산업분석에서
+// 글로벌ib는 삭제 미국만 유지"). 수집 문서가 전부 market:"us" 라 다른 시장에선 늘 빈 세그먼트였다.
+const topicsFor = (market: MarketId) => TOPICS.filter((t) => t.key !== "글로벌IB" || market === "us");
 
 // 업종 필터 노출 대상(오너 지시, 2026-09-22 — "산업분석 중 산업분석과
-// 전체에만 업종선택을 넣는다"): 전체·산업분석 탭에서만 보이고, 투자전략
-// (주식)/(채권)·시황·해외리서치에서는 숨긴다. 업종 분류값 자체는 한국·미국
-// 공통(`research-sector.ts` SECTOR_LABELS, 오너 확인 — "업종구분은 미국과
-// 동일하다").
+// 전체에만 업종선택을 넣는다"): 전체·산업분석 탭에서만 보이고, 글로벌IB에서는
+// 숨긴다. 업종 분류값 자체는 한국·미국 공통(`research-sector.ts` SECTOR_LABELS,
+// 오너 확인 — "업종구분은 미국과 동일하다").
 const SECTOR_FILTER_SHOWN: ReadonlySet<TopicKey> = new Set(["all", "산업분석"]);
 
 function fmtAgo(iso: string): string {
@@ -131,7 +134,7 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
             {q.data && <span className="text-muted-foreground ml-1.5 text-xs font-normal">({items.length})</span>}
           </CardTitle>
           <div className="flex gap-1">
-            {TOPICS.map((t) => (
+            {topicsFor(market).map((t) => (
               <button
                 key={t.key}
                 type="button"

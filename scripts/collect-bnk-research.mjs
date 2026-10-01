@@ -7,7 +7,7 @@
  *
  * 제목이 "[종목명/투자의견] 제목" 형식으로 고정돼 있어 종목명과 투자의견을
  * 함께 뽑는다. 종목코드는 목록에 없어 서버 라우트의 이름 검색(corpcode)에
- * 맡긴다(symbol: null 로 보내면 /api/cron/shinhan-research 가 resolveSymbol 로
+ * 맡긴다(symbol: null 로 보내면 /api/cron/total-research 가 resolveSymbol 로
  * 매핑한다 — 하나·교보 등과 같은 방식).
  *
  * PDF 는 로그인 없이 받아진다: /uploads/{글번호}/1/{파일명}.pdf (실측 확인).
@@ -22,7 +22,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -51,17 +52,30 @@ const LIST_URL = "https://www.bnkfn.co.kr/research/analysingCompany.jspx";
 // 제목이 기업분석과 똑같은 "[업종명] 헤드라인" 형식이라 같은 TITLE_RE 로
 // 파싱 가능), economyAnalyse.jspx(경제분석/투자전략, 대괄호 없는 평문 제목).
 const ISSUE_URL = "https://www.bnkfn.co.kr/research/analysingIssue.jspx";
-const ECON_URL = "https://www.bnkfn.co.kr/research/economyAnalyse.jspx";
+// economyAnalyse.jspx(경제분석/투자전략)는 사이트 메뉴가 "Quant분석"이고 글이 전부 퀀트(성장주 팩터·Factor Sentiment)라 게시판 통째로 수집 제외
+// (오너 지시 2026-09-27 — "bnk는 게시판으로 제외한다"). parseEconItems 는 금융시장(marketOverview2) 파서가 재사용한다.
+// 금융시장(marketOverview2.jspx) — 채권전략/크레딧 Monthly·"주가와 장기금리 공방"·甲論乙駁. 지금까지 이 게시판을
+// 안 봐서 통째로 빠져 있었다(오너 지적 2026-09-26 — "주가와 장기금리 공방은 이슈분석이 맞다").
+const MARKET_URL = "https://www.bnkfn.co.kr/research/marketOverview2.jspx";
+// 리포트가 원래 있던 사이트 게시판(연구 메뉴 페이지) — item 의 board 필드(분류 대조용).
+const BOARD_LABEL = {
+  company: "BNK투자증권 > 리서치 > 기업분석(analysingCompany)",
+  issue: "BNK투자증권 > 리서치 > 업종분석(analysingIssue)",
+  econ: "BNK투자증권 > 리서치 > 경제분석/투자전략(economyAnalyse)",
+  market: "BNK투자증권 > 리서치 > 금융시장(marketOverview2)",
+};
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const EXCERPT_LEN = 150;
 const stripHtml = (s) =>
   String(s ?? "")
     .replace(/<[^>]+>/g, " ")
@@ -74,13 +88,6 @@ const stripHtml = (s) =>
 /** 제목: "[종목명/투자의견] 나머지" — 의견이 없는 항목(예: "[종목명]")도 허용. */
 const TITLE_RE = /^\[([^/\]]+?)(?:\s*\/\s*([^\]]+))?\]\s*(.+)$/;
 
-/** 국내 리포트라 목표주가는 "N원" 표기. */
-function extractTargetPrice(text) {
-  const m = String(text ?? "").match(/목표\s*주가[^\d]{0,16}([\d,]{4,12})\s*원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, ""));
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
 
 /**
  * 산업분석 relatedSymbols 계산용 대형주 이름→코드(2026-09-19 추가, 오너
@@ -188,11 +195,13 @@ function parseItems(html) {
       title: tm[3].trim(),
       stockName: tm[1].trim(),
       opinion: (tm[2] ?? "").trim(),
+      opinionFrom: "title", // "[종목명/투자의견]" 제목에서 읽은 값 — 공용 추출기 C2 검증 제외
       analyst: analystM ? analystM[1].trim() : "",
       // /uploads/{글번호}/1/{파일명} — 목록의 onclick 인자를 그대로 조립.
       pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
       targetPrice: null,
       category: "기업",
+      board: BOARD_LABEL.company,
     });
   }
   return items;
@@ -220,6 +229,7 @@ function parseIssueItems(html) {
       pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
       targetPrice: null,
       category: "산업",
+      board: BOARD_LABEL.issue,
     });
   }
   return items;
@@ -245,28 +255,27 @@ function parseEconItems(html) {
       pdfUrl: idM[3] ? `https://www.bnkfn.co.kr${idM[2]}/${idM[3]}` : null,
       targetPrice: null,
       category: "산업",
+      board: BOARD_LABEL.econ,
     });
   }
   return items;
 }
 
-/** PDF 본문을 한 번만 열어 기업분석은 목표주가를, 산업분석은 relatedSymbols
- * 를 뽑는다(둘 다 필요 없으면 굳이 다시 안 엶) — 원문 텍스트 자체는 저장
- * 안 하고 이 두 결과만 남긴다. */
-async function analyzePdf(pdfUrl, category) {
-  if (!pdfUrl) return { targetPrice: null, relatedSymbols: [] };
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) return { targetPrice: null, relatedSymbols: [] };
-    const parser = new PDFParse({ data: Buffer.from(await res.arrayBuffer()) });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return category === "산업"
-      ? { targetPrice: null, relatedSymbols: findRelatedSymbols(text) }
-      : { targetPrice: extractTargetPrice(text), relatedSymbols: [] };
-  } catch {
-    return { targetPrice: null, relatedSymbols: [] };
-  }
+// marketOverview2.jspx(금융시장) — 대괄호 없는 평문 제목. "甲論乙駁"(주식시장 코멘트)만 별도 라벨이고, 나머지(채권전략·
+// 크레딧 Monthly·주가와 장기금리 공방 등 금리·크레딧 이슈)는 "BNK 금융시장" 고정 라벨 → 앱이 거시경제 이슈분석으로 분류.
+function parseMarketItems(html) {
+  return parseEconItems(html).map((it) => ({
+    ...it,
+    stockName: /甲論乙駁/.test(it.title) ? "BNK 甲論乙駁" : "BNK 금융시장",
+    board: BOARD_LABEL.market,
+  }));
+}
+
+/** 산업분석 PDF 에서 대형주 언급을 세어 relatedSymbols 를 뽑는다. 기업분석의
+ * 목표주가는 공용 추출기가 같은 PDF(캐시)에서 뽑는다 — 원문은 저장 안 함. */
+async function relatedSymbolsFromPdf(pdfUrl) {
+  const text = await readPdfText(pdfUrl);
+  return text ? findRelatedSymbols(text) : [];
 }
 
 console.log(`▶ BNK투자증권 기업분석 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -282,14 +291,14 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       stop = true;
       break;
     }
-    collected.push(it);
+    if (!isCommonExcludedContent(`${it.stockName} ${it.title}`, it.category)) collected.push(it);
   }
   await sleep(400);
 }
 
 for (const [listUrl, parser] of [
   [ISSUE_URL, parseIssueItems],
-  [ECON_URL, parseEconItems],
+  [MARKET_URL, parseMarketItems],
 ]) {
   stop = false;
   for (let page = 1; page <= MAX_PAGES && !stop; page++) {
@@ -300,7 +309,7 @@ for (const [listUrl, parser] of [
         stop = true;
         break;
       }
-      collected.push(it);
+      if (!isCommonExcludedContent(`${it.stockName} ${it.title}`, it.category)) collected.push(it);
     }
     await sleep(400);
   }
@@ -308,7 +317,12 @@ for (const [listUrl, parser] of [
 
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log(
@@ -318,12 +332,12 @@ console.log(
 
 console.log(`▶ 목표주가/관련종목 추출 중 (${collected.length}건)...`);
 for (const it of collected) {
-  const { targetPrice, relatedSymbols } = await analyzePdf(it.pdfUrl, it.category);
-  it.targetPrice = targetPrice;
-  it.relatedSymbols = relatedSymbols;
+  if (it.category !== "산업") continue;
+  it.relatedSymbols = await relatedSymbolsFromPdf(it.pdfUrl);
   await sleep(300);
 }
-console.log(`✔ 목표주가 ${collected.filter((i) => i.targetPrice != null).length}/${collected.length}건`);
+// 투자의견·목표주가 — 공용 추출기(기업분석만, PDF 는 URL 당 한 번).
+await enrichResearch(collected, { market: "kr", sleepMs: 300 });
 console.log(
   `✔ 관련종목 태그됨 ${collected.filter((i) => i.relatedSymbols?.length > 0).length}건`,
 );
@@ -347,11 +361,13 @@ const items = collected.map((it) => ({
   pdfUrl: it.pdfUrl,
   views: null,
   category: it.category,
+  board: it.board,
   relatedSymbols: it.relatedSymbols,
 }));
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 const up = await fetch(IMPORT_URL, {
   method: "POST",

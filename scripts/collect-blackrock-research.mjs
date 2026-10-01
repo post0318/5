@@ -36,6 +36,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -55,9 +56,12 @@ const ARGS = process.argv.slice(2);
 const DRY_RUN = ARGS.includes("--dry-run");
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 
 const UA =
@@ -107,6 +111,7 @@ async function sendBatch(items, source) {
   }
   const headers = { "Content-Type": "application/json" };
   if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
   else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
   const up = await fetch(IMPORT_URL, {
     method: "POST",
@@ -130,11 +135,12 @@ const weeklyItems = [];
   const title = metaContent(html, "articleTitle");
   const summary = metaContent(html, "pageSummary");
   const date = parsePublicationDate(metaContent(html, "publicationDate"));
-  if (title && date) {
+  if (title && date && !isCommonExcludedContent(title, "산업")) {
     weeklyItems.push({
       id: `weekly-commentary-${date}`,
       date,
       title,
+      board: "BlackRock > insights/global-weekly-commentary",
       stockName: "글로벌 위클리 시황",
       symbol: null,
       analyst: "BlackRock Investment Institute",
@@ -158,8 +164,9 @@ const outlookItems = [];
   const title = metaContent(html, "articleTitle");
   const summary = metaContent(html, "pageSummary");
   const date = guessSemiAnnualDate(title, summary);
-  if (title && date) {
+  if (title && date && !isCommonExcludedContent(title, "산업")) {
     outlookItems.push({
+      board: "BlackRock > insights/global-investment-outlook",
       id: `global-investment-outlook-${date}`,
       date,
       title,

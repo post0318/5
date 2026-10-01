@@ -6,15 +6,22 @@ import {
   isResearchMarketId,
   type ShinhanResearchDoc,
 } from "@/lib/db/shinhan-research";
-import { searchCorps } from "@/lib/markets/kr/corpcode";
+import { findCorpsByExactName } from "@/lib/markets/kr/corpcode";
+import { isCommonExcludedResearch } from "@/lib/research-exclude";
+import { normalizeIndustryLabel, marketFromIndustryLabel, marketFromTitleLead } from "@/lib/research-sector";
 
 export const maxDuration = 60;
 
 /**
- * 증권사 리서치 리포트 수집 수신처 — 신한투자증권 로컬 스크립트(scripts/
- * collect-shinhan-research.mjs)가 쓰지만, `source`를 body에 실어 보내면 다른
- * 증권사 수집 스크립트도 이 라우트를 그대로 재사용할 수 있게 만들었다(증권사
- * 하나로 한정하지 않음 — 스키마·라우트 모두 다중 소스 대비).
+ * 증권사·기관 리서치 리포트 수집 수신처(`kr_research`) — 47개 로컬 수집기
+ * 전부가 이 라우트 하나를 공유한다(오너 지시 2026-09-25 — "/cron/shinhan-
+ * research는 total-research로 수정이 맞고"). 원래 신한투자증권 수집기
+ * (scripts/collect-shinhan-research.mjs)가 첫 번째로 붙어 경로 이름이
+ * "shinhan-research"였지만, 처음부터 `source`를 body에 실어 보내는 다중
+ * 소스 스키마였고(증권사 하나로 한정하지 않음) 지금은 47곳 전부가 재사용
+ * 중이라 경로 이름을 실제 역할에 맞게 바꿨다. `source`는 이제 필수 —
+ * 기본값("신한투자증권")을 두지 않는다(오너 지시 — "source 미지정 시
+ * 기본값은 없는게 맞다", `/cron/macro-issues`와 동일 원칙).
  * bbs2.shinhansec.com/robots.txt 가 Disallow: / 라 다른 예외들과 동일하게
  * 개인용·로컬 실행 조건으로 오너 승인(CLAUDE.md 참조). 이 라우트 자체는
  * 크롤링을 하지 않는다 — 로컬에서 이미 수집된 결과를 받아 DB에 적재만 한다
@@ -50,12 +57,55 @@ interface RawItem {
   relatedSymbols?: string[];
 }
 
+/**
+ * 리포트에 자주 쓰이는 약칭 → 정식 회사명. 완전일치가 안 될 때만 이걸로 한 번
+ * 더 찾는다. 여기 없는 약칭은 못 푼 것으로 남긴다(symbol null) — "비슷한
+ * 이름"을 고르는 것보다 안 붙이는 쪽이 낫다.
+ */
+const CORP_ALIASES: Record<string, string> = {
+  현대차: "현대자동차",
+  기아차: "기아",
+  하이닉스: "SK하이닉스",
+  LG엔솔: "LG에너지솔루션",
+  포스코: "POSCO홀딩스",
+  포스코홀딩스: "POSCO홀딩스",
+  한전: "한국전력",
+  한국전력공사: "한국전력",
+  SKT: "SK텔레콤",
+  삼바: "삼성바이오로직스",
+  엔씨: "엔씨소프트",
+  카뱅: "카카오뱅크",
+  네이버: "NAVER",
+  현대중공업: "HD현대중공업",
+  두산에너빌: "두산에너빌리티",
+  KT: "케이티",
+};
+
+/**
+ * 이름 → 종목코드. **완전일치만** 인정한다(정규화: 대소문자·공백·(주)).
+ *
+ * 예전엔 완전일치가 없으면 검색 첫 후보를 그냥 썼는데, 그게 리서치 감사
+ * (2026-09-28)에서 오매칭의 주원인이었다 — 현대차→현대차증권, CJ→씨제이
+ * 인터넷(상폐), 삼성물산→000830(2015년 소멸 법인). 첫 후보 폴백을 없애고,
+ * 동명이 2건 이상이면 애매하므로 붙이지 않는다. 약칭은 CORP_ALIASES 로만
+ * 푼다. 종목표 자체도 현재 상장사만 담게 정제했다(build-kr-corpcodes.mjs).
+ */
+/** 출처명 표기 통일(저장 직전 1회). 왼쪽이 들어오는 라벨, 오른쪽이 정식 표기. */
+const SOURCE_ALIASES: Record<string, string> = {
+  한화증권: "한화투자증권",
+  "Goldman Sachs Research": "Goldman Sachs",
+  "BlackRock Research": "BlackRock",
+};
+
 function resolveSymbol(stockName: string): string | null {
   const q = stockName.trim();
   if (!q) return null;
-  const candidates = searchCorps("", q);
-  const exact = candidates.find((c) => c.corpName === q);
-  return (exact ?? candidates[0])?.stockCode ?? null;
+  let hits = findCorpsByExactName(q);
+  if (hits.length === 0) {
+    const alias = CORP_ALIASES[q] ?? CORP_ALIASES[q.split(" ").join("")];
+    if (alias) hits = findCorpsByExactName(alias);
+  }
+  return hits.length === 1 ? hits[0].stockCode : null;
 }
 
 export async function POST(req: Request) {
@@ -65,17 +115,30 @@ export async function POST(req: Request) {
 
     const body = (await req.json()) as { items?: RawItem[]; source?: string; market?: string };
     if (!Array.isArray(body.items)) return Response.json({ error: "items 배열 필요" }, { status: 400 });
-    const source = body.source?.trim() || "신한투자증권";
+    const source = body.source?.trim();
+    // 출처명 정규화 — 한경 컨센서스의 "제공출처" 라벨이 자체 수집기와 다르게
+    // 표기돼 같은 증권사가 둘로 갈라졌다(감사 2026-09-28: 한화증권 46건 vs
+    // 한화투자증권 246건). 배지가 갈라지고 source|title 중복 제거도 못 묶는다.
+    // 저장 직전 이 한 곳에서만 맞춘다.
+    if (!source) return Response.json({ error: "source 필요" }, { status: 400 });
+    const sourceCanon = SOURCE_ALIASES[source] ?? source;
     const market = body.market && isResearchMarketId(body.market) ? body.market : "kr";
 
     const now = new Date().toISOString();
-    const docs: ShinhanResearchDoc[] = body.items.map((it) => ({
-      _id: `${source}:${it.id}`,
-      source,
-      market,
+    // 공통 제외(주간물·일정표·추천종목·원자재 외 대체투자) — 모든 수집기가 이
+    // 라우트를 거치므로 여기서 한 번에 거른다(오너 지시 2026-09-25).
+    const kept = body.items.filter((it) => !isCommonExcludedResearch(`${it.stockName ?? ""} ${it.title ?? ""}`, it.category ?? "기업"));
+    const excluded = body.items.length - kept.length;
+    const docs: ShinhanResearchDoc[] = kept.map((it) => ({
+      _id: `${sourceCanon}:${it.id}`,
+      source: sourceCanon,
+      // 국내 게시판으로 들어온 산업 글도 라벨이 국가명으로 시작하면 그 나라 시장("중국 자동차 판매동향" → ch) — 모든 수집기 공통(오너 지시 2026-09-27).
+      // 이미 해외 시장으로 온 항목은 건드리지 않는다.
+      market: market === "kr" && it.category === "산업" ? (marketFromIndustryLabel(it.stockName) ?? marketFromTitleLead(it.title) ?? market) : market,
       date: it.date,
       title: it.title,
-      stockName: it.stockName,
+      // 산업분석 업종 라벨은 표준 이름으로 정규화("대조선"→"조선") — 모든 수집기가 거치는 한 지점에서 보장(오너 지시 2026-09-27).
+      stockName: it.category === "산업" ? normalizeIndustryLabel(it.stockName) : it.stockName,
       // 산업분석 리포트는 stockName 이 업종명("반도체" 등)이라 이름 검색으로
       // 종목코드를 추측하면 안 됨(예: "반도체"가 우연히 어떤 회사명과 부분
       // 일치해 잘못된 종목에 달라붙을 위험) — 카테고리로 아예 이름 검색을 건너뜀.
@@ -96,7 +159,7 @@ export async function POST(req: Request) {
 
     const result = await upsertShinhanResearch(docs);
     const unresolved = docs.filter((d) => d.symbol == null).length;
-    return ok({ received: docs.length, unresolved, ...result });
+    return ok({ received: body.items.length, excluded, unresolved, ...result });
   } catch (err) {
     return jsonError(err);
   }

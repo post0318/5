@@ -1,0 +1,28 @@
+name: 한국IR협의회 리포트 수집
+
+# CLAUDE.md 방침(오너 결정 2026-09-25): 한국IR협의회 기업리서치센터
+# (www.kirs.or.kr) 기업분석 보고서 목록을 하루 1회, 개인용으로만 조회한다.
+# robots.txt 는 Yeti 그룹만 있고 일반 UA 제한 없음. PDF 원문은 저장하지 않고
+# 1쪽 요약 앞부분 발췌·링크만 보낸다("무단 복제 및 배포할 수 없습니다" 문구).
+
+on:
+  schedule:
+    - cron: "18 23 * * *" # 23:18 UTC = 08:18 KST
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # kirs.or.kr 서버가 중간 인증서를 안 보내 스크립트가 보완한다 —
+          # tls.setDefaultCACertificates 가 필요해 Node 24.
+          node-version: 24
+          cache: npm
+      # 수집 스크립트가 pdf-parse 를 import 한다(로그인 없이 PDF 접근 가능).
+      - run: npm ci
+      - run: node scripts/collect-kirs-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

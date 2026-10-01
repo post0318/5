@@ -40,8 +40,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch } from "./lib/us-research-extract.mjs";
-import { isEtfOrEtpContent, isEsgContent } from "./lib/exclude-filters.mjs";
+import { enrichResearch } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -63,9 +63,12 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
@@ -75,6 +78,9 @@ const LIST_URL = "https://globalmonitor.einfomax.co.kr/bizrpt/reportlist";
 const PAGE_SIZE = 50;
 // module_constants_base_bundle.js 의 bizrptCodelist.usa_all 값(역추적 확인).
 const USA_ALL = { lscCd: 700, sscCd: "524910,521090,523050,523070" };
+// 리포트가 원래 있던 GlobalMonitor 화면 위치 — item 의 board 필드(분류 대조용). 응답에 소분류 라벨이
+// 따로 없어 조회한 카테고리 코드(usa_all)를 그대로 적는다(작성 증권사는 source 로 별도).
+const BOARD_LABEL = `GlobalMonitor > 미국주식 전체(usa_all: lscCd=${USA_ALL.lscCd}, sscCd=${USA_ALL.sscCd})`;
 
 // "[종목명 (거래소:티커)] 제목" — 거래소는 NYS/NAS 등, 표시엔 안 쓰고 티커만 사용.
 const TITLE_RE = /^\[(.+?)\s*\(([A-Z]{2,5}):([A-Z.]+)\)\]\s*(.*)$/;
@@ -136,11 +142,16 @@ function parseItems(rows) {
     const dateM = String(r.writeDate ?? "").match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
     if (!dateM) continue;
     const date = `${dateM[1]}-${dateM[2]}-${dateM[3]}`;
-    // ETF/ETP·ESG 리포트 제외(오너 지시 2026-09-24, 공용 필터 — 여러
-    // 증권사가 모이는 소스라 특히 잘 섞여 들어온다. ESG는 "esg는 공통으로
-    // 제외처리" 지시로 ETF와 동일하게 승격).
-    if (isEtfOrEtpContent(r.title) || isEsgContent(r.title)) continue;
     const tm = String(r.title ?? "").match(TITLE_RE);
+    // 공통 배제가 기본(오너 지시 2026-09-26 — "통합함수가 기본이고 예외가
+    // 필요할 때 개별함수 쓴다"). 여러 증권사가 모이는 소스라 ETF/ESG뿐 아니라
+    // 리츠·캘린더·추천종목·대체투자까지 한 번에 걸러진다(이전엔 ETF/ESG만
+    // 개별로 걸렀음). 종목코드 매칭 여부로 category를 먼저 정해서 넘긴다.
+    if (isCommonExcludedContent(r.title, tm ? "기업" : "산업")) continue;
+    // "DB Morning Express" — DB증권의 매일 아침 시황 요약. 수집 제외(오너 지시
+    // 2026-10-01). 위 주석에 이 시리즈를 수집 예시로 들었던 2026-09-27 당시의
+    // 방침을 뒤집는 결정 — 제외가 맞다.
+    if (/Morning\s*Express/i.test(String(r.title ?? ""))) continue;
     if (tm) {
       const [, stockName, , ticker, headline] = tm;
       items.push({
@@ -152,12 +163,13 @@ function parseItems(rows) {
         analyst: r.writer ?? "",
         source: r.auth ?? "",
         // 응답에 투자의견 필드가 있다(빈 값인 행도 많음) — 있으면 그대로 쓰고,
-        // 없으면 뒤의 enrichUsResearch 가 본문·PDF 에서 찾는다.
+        // 없으면 뒤의 enrichResearch 가 본문·PDF 에서 찾는다(칸 값은 본문 언급 확인 후 사용).
         opinion: String(r.rptopninvest ?? "").trim(),
         targetPrice: null,
         summary: excerpt(r.summary),
         pdfUrl: r.secureId ? `https://rreport.einfomax.co.kr/report/${r.secureId}.pdf` : null,
         category: "기업",
+        board: BOARD_LABEL,
       });
       continue;
     }
@@ -176,6 +188,7 @@ function parseItems(rows) {
       summary: excerpt(r.summary),
       pdfUrl: r.secureId ? `https://rreport.einfomax.co.kr/report/${r.secureId}.pdf` : null,
       category: "산업",
+      board: BOARD_LABEL,
     });
   }
   return items;
@@ -205,7 +218,12 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
 
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log(
@@ -214,7 +232,7 @@ console.log(
 );
 // 산업분석/투자전략은 특정 종목 얘기가 아니므로 목표주가·투자의견 개념이
 // 없음 — PDF에 우연히 등장하는 숫자를 잘못 채우지 않게 기업(종목) 항목만 보강.
-await enrichUsResearch(collected.filter((it) => it.category === "기업"));
+await enrichResearch(collected.filter((it) => it.category === "기업"), { market: "us" });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
@@ -228,7 +246,23 @@ if (DRY_RUN) {
 //    같은 14일 기준 8건 대비 34건, 미국 외에 일본·중국·유럽까지 커버(오너 지시, 2026-09).
 //  - 키움증권: 자체 수집기(collect-kiwoom-research.mjs, 2026-09-24 추가)가
 //    PDF까지 로그인 없이 받아 GM 경유(PDF 없음)보다 데이터가 낫다.
-const EXCLUDED_SOURCES = new Set(["신한투자증권", "키움증권"]);
+//  - 대신증권·iM증권(2026-09-25 직접 수집 전환): GM 경유분이 자체 수집기와 같은 글
+//    (대신 [Issue & News]·AI Economist·THE GLOBAL Note, iM 해외기업·채권일간)인데
+//    GM 제목엔 "[Issue & News]" 같은 머리말이 붙어 제목 기준 dedupe 가 안 걸린다.
+//    대신 수집기는 글번호를 연속 조회해 모바일 목록 누락분까지 받는다. 유안타는
+//    자체 수집기가 미국 종목 리포트를 받지 않아 GM 경유를 그대로 둔다.
+//  - 메리츠증권(오너 결정 2026-09-27 — "글로벌모니터에서 메리츠증권 제외다"): 자체 수집기가
+//    미국 종목을 안 받는 건 여전하지만 GM 경유분과의 중복이 확인돼 제외로 전환.
+const EXCLUDED_SOURCES = new Set(["신한투자증권", "키움증권", "대신증권", "iM증권", "메리츠증권"]);
+
+// 자체 수집기가 산업·거시(category:"산업") 게시판까지 이미 받는 증권사 — GM 의 "산업" 항목은 그 사본이라
+// 같은 리포트가 두 번(예: 상상인 "중간선거 이후의 미국 경제"가 자체 수집기에서는 거시경제 이슈분석,
+// GM 사본은 us 산업분석) 들어온다(오너 지시 2026-09-26 — "중복제외"). 이 증권사들은 산업 항목만 건너뛰고
+// 미국 종목(category:"기업") 리포트는 자체 수집기가 안 받으므로 GM 경유를 그대로 둔다.
+// 키는 GM 의 제공출처(auth) 표기.
+const OWN_INDUSTRY_COLLECTOR_SOURCES = new Set([
+  "상상인증권", "메리츠증권", "유안타증권", "하나증권", "한화증권", "교보증권", "DS투자증권",
+]);
 
 // 증권사(제공출처)별로 그룹핑해 나눠 전송 — 라우트가 body당 source 하나만 받음
 // (한경 컨센서스 스크립트와 동일 패턴).
@@ -236,6 +270,7 @@ const bySource = new Map();
 for (const it of collected) {
   const key = it.source || "GlobalMonitor";
   if (EXCLUDED_SOURCES.has(key)) continue;
+  if (it.category === "산업" && OWN_INDUSTRY_COLLECTOR_SOURCES.has(key)) continue;
   if (!bySource.has(key)) bySource.set(key, []);
   bySource.get(key).push({
     id: `GM:${it.id}`,
@@ -250,11 +285,13 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl,
     views: null,
     category: it.category,
+    board: it.board,
   });
 }
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
 let totalUpserted = 0;

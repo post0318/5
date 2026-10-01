@@ -26,3 +26,4 @@ jobs:
       - run: node scripts/collect-hana-research.mjs
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}

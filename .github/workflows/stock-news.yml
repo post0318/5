@@ -27,6 +27,7 @@ jobs:
         env:
           APP_URL: ${{ vars.APP_URL || 'https://macroresearch.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
           # 한 번 호출로 240초까지만 돌고 남은 종목 수를 remaining 으로 알려준다.

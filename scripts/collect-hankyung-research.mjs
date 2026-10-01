@@ -22,6 +22,9 @@
  *    로 전환한다. 같은 리포트가 유안타 자체 스크립트와 중복 저장될 수 있지만
  *    _id가 소스별로 네임스페이스돼 있고 읽기 단계에서 제목 기준 dedupe도
  *    되어 있어(getShinhanResearchBySymbol) 기능상 문제 없음.
+ *    → 2026-09-25 다시 직접 수집으로 전환(오너 결정): 재점검에서 옛 수집기가 정상
+ *    작동했고(과거 실패는 재현 안 됨) 한경 쪽 목표가 오류(IPARK 34,000 → 340,000)가
+ *    확인돼 아래 EXCLUDED_SOURCES 로 제외한다.
  *
  * 투자의견/목표주가(2026-09 갱신): 처음엔 PDF 본문에서 정규식으로 추측했으나,
  * 검색폼 파라미터 `report_type=CO`("기업" 탭 — 사이트 UI에서 종목 검색 시
@@ -49,7 +52,10 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { resolveKrStock, KR_PARTICLES } from "./lib/company-match.mjs";
+import { refineSectorLabels } from "./lib/sector-label.mjs";
 
 // IN/MA(산업/시장) 항목 중 대괄호 업종 태그가 없는 제목이 실은 특정 국내
 // 종목 얘기인 경우가 있다(실측, 오너 지적 2026-09 — 메리츠증권 "HD현대중공업
@@ -60,29 +66,8 @@ import { PDFParse } from "pdf-parse";
 // 승격한다 — 해외 개별종목(플래닛랩스 등)까지는 다루지 않음(네이버 자동완성
 // 해석이 필요해 국내보다 비용이 크고, 이 게시판은 국내·해외가 섞여 있어
 // 오탐 위험도 큼 — 국내 매칭만으로도 확인된 사례 다수 해결).
-const CORPS = JSON.parse(
-  readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
-).sort((a, b) => b.n.length - a.n.length);
-// startsWith만으로는 "신흥국 실적 상향..."이 "신흥"(실제 상장사, 004080)의
-// 접두어와 우연히 겹쳐 오매칭되는 사례가 실측됨(제목이 자연어 문장이라
-// DS의 "[업종] 종목명 - 부제" 처럼 구조화돼 있지 않아 이 게시판에서 특히
-// 위험) — 매칭 뒤 남는 글자가 없거나(제목이 회사명으로 끝남), 공백/구두점/
-// 영숫자이거나, 한글 조사(의/은/는/이/가/을/를/과/와/도/만 등)로 시작할
-// 때만 인정한다. "국"처럼 조사가 아닌 한글 음절이 바로 이어지면 다른 단어의
-// 일부로 보고 기각.
-const KR_PARTICLES = ["의", "은", "는", "이", "가", "을", "를", "과", "와", "도", "만", "에", "께", "이나", "나", "라도", "마저", "조차", "밖에", "부터", "까지", "로", "으로"];
-function resolveKrStock(text) {
-  const t = text.trim();
-  for (const c of CORPS) {
-    if (!t.startsWith(c.n)) continue;
-    const rest = t.slice(c.n.length);
-    if (!rest || !/^[가-힣]/.test(rest)) return { symbol: c.s, stockName: c.n }; // 제목이 그대로 끝나거나 공백/구두점/영숫자로 이어짐
-    const particle = KR_PARTICLES.find((p) => rest.startsWith(p));
-    if (particle && !/^[가-힣]/.test(rest.slice(particle.length))) return { symbol: c.s, stockName: c.n }; // 조사 뒤 공백 등으로 끊김
-    // 조사가 아닌 한글 음절이 바로 이어지면 다른 단어의 일부 — 기각, 더 짧은 후보로 계속.
-  }
-  return null;
-}
+// 상장사명 매칭·조사 경계 판정은 공통 lib(scripts/lib/company-match.mjs) — 산업 게시판
+// 종목 승격을 쓰는 모든 수집기가 같은 규칙을 쓴다.
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -104,9 +89,12 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
@@ -168,6 +156,7 @@ function parseItems(html) {
     const title = stripHtml(rawTitle);
     const tm = title.match(STOCK_TITLE_RE);
     if (!tm) continue; // 종목코드 형식이 아니면(드묾) 건너뜀
+    if (isCommonExcludedContent(`${tm[1].trim()} ${title}`, "기업")) continue;
 
     const targetM = rowHtml.match(TARGET_RE);
     let opinion = "";
@@ -187,7 +176,12 @@ function parseItems(html) {
     items.push({
       id: reportIdx,
       date: dateM[1],
-      title,
+      // 자체 수집기들은 헤드라인만 title 로 저장하는데 여기만 "종목명(코드) 헤드라인"
+      // 전체를 저장해 같은 리포트가 source|title 중복 제거에 한 번도 안 걸렸다
+      // (감사 2026-09-28: 같은 증권사·날짜·종목 중복 225그룹, 그중 유안타 65·
+      // 한화 58·KB 36). 종목명·코드는 stockName/symbol 에 따로 있으니 title 은
+      // 헤드라인만 남긴다.
+      title: (tm[3] ?? "").trim() || title,
       stockName: tm[1].trim(),
       symbolHint: tm[2],
       opinion,
@@ -196,6 +190,7 @@ function parseItems(html) {
       source: sourceName,
       pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
       category: "기업",
+      board: "한경 컨센서스 > 분류: 기업(CO)", // 사이트 안 위치(작성 증권사는 source 로 별도)
     });
   }
   return items;
@@ -229,10 +224,24 @@ const BRACKET_RE = /^\[([^\]]+)\]\s*(.*)$/;
 // "산업/시장" 전체 피드라 국내 신호가 없으면 해외로 본다). 완벽하진 않음
 // (국가 신호가 전혀 없는 애매한 글로벌 매크로 코멘트는 kr 기본값으로 남을
 // 수 있음) — 다른 산업분석 수집기와 동일한 트레이드오프.
+// "인도"는 넣지 않는다 — "KF-21 001 인도"(양산기 납품)처럼 국방·조선 리포트에서 "인도"(delivery/납품)로
+// 훨씬 흔하게 쓰여 나라 이름으로 오인되는 false positive가 실측됐다(오너 지적 2026-09-27 — "KF-21 001
+// 인도... 이게 왜 us지?"). "인도"국가는 "인도 시장"/"인도 정부"처럼 뒤에 명사가 붙는 경우가 많지만
+// 신뢰할 만한 경계 규칙을 세우기 어려워 아예 뺀다 — 다른 국가 신호가 없으면 kr 기본값으로 남는다.
 const OVERSEAS_HINT_RE =
-  /미국|글로벌|Global|해외|\bUS\b|나스닥|Nasdaq|다우|S&P|연준|\bFed\b|\bECB\b|FOMC|중국|대만|TSMC|일본|유럽|홍콩|베트남|인도|위안화|엔화|유로/i;
+  /미국|글로벌|Global|해외|\bUS\b|나스닥|Nasdaq|다우|S&P|연준|\bFed\b|\bECB\b|FOMC|중국|대만|TSMC|일본|유럽|홍콩|베트남|위안화|엔화|유로/i;
 function classifyIndustryMarket(hay) {
   return OVERSEAS_HINT_RE.test(hay) ? "us" : "kr";
+}
+
+// 증권사별 일간물 수집 제외(오너 지시 2026-09-26): SK증권 "wake up! 아침에 슼"(일간 시황)·"Global Carbon Daily",
+// 유진투자증권 "안녕하세요 데일리에요".
+const EXCLUDED_DAILY = [
+  [/SK증권/, /wake\s*up!?\s*아침에|Global\s*Carbon\s*Daily/i],
+  [/유진투자증권/, /안녕하세요\s*데일리에요/],
+];
+function isExcludedDaily(source, title) {
+  return EXCLUDED_DAILY.some(([src, re]) => src.test(source) && re.test(title));
 }
 
 function parseIndustryItems(html, label, reportCode) {
@@ -252,6 +261,7 @@ function parseIndustryItems(html, label, reportCode) {
     // 뒤바뀐다(실제로 배포된 채 발견한 버그).
     const cells = [...rowHtml.matchAll(/<td[^>]*>\s*([^<]*?)\s*<\/td>/g)].map((m) => stripHtml(m[1]));
     const [analyst, source] = reportCode === "MA" ? [cells[1] ?? "", cells[2] ?? ""] : [cells[2] ?? "", cells[3] ?? ""];
+    if (isExcludedDaily(source, title)) continue;
     const bm = title.match(BRACKET_RE);
     // 대괄호가 없는 제목만 종목명 매칭을 시도한다 — 있으면 이미 업종 태그가
     // 의도적으로 붙은 것이므로(예: "[화장품] ...") 그대로 산업분석으로 둔다.
@@ -263,6 +273,7 @@ function parseIndustryItems(html, label, reportCode) {
       const particle = KR_PARTICLES.find((p) => restTitle.startsWith(p));
       if (particle) restTitle = restTitle.slice(particle.length);
       restTitle = restTitle.replace(/^[\s\-–—:,]+/, "").trim();
+      if (isCommonExcludedContent(`${stockHit.stockName} ${restTitle}`, "기업")) continue;
       items.push({
         id: reportIdx,
         date: dateM[1],
@@ -275,11 +286,18 @@ function parseIndustryItems(html, label, reportCode) {
         source,
         pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
         category: "기업",
+        board: `한경 컨센서스 > 분류: ${label}(${reportCode})`,
       });
       continue;
     }
-    const sector = bm ? bm[1].trim() : label;
+    let sector = bm ? bm[1].trim() : label;
+    // 거시 성격 라벨은 앱이 거시경제 이슈분석으로 분류하도록 고정 이름을 붙인다(오너 지적
+    // 2026-09-26 — "경제는 거시경제이다 왜 산업에 계속붙이나"): LS증권 정기 거시 시리즈 "[TGIF]".
+    // 대괄호 없는 시장(MA) 분류는 고정하지 않는다 — 모닝 시황("wake up! 아침에")·NOWCAST·
+    // FOMC 코멘트가 섞여 있어 통째로 이슈분석에 넣으면 시황분석(Daily)이 사라진다(실측).
+    if (sector === "TGIF") sector = "LS TGIF";
     const restTitle = bm && bm[2].trim() ? bm[2].trim() : title;
+    if (isCommonExcludedContent(`${sector} ${restTitle}`, "산업")) continue;
 
     items.push({
       id: reportIdx,
@@ -293,6 +311,7 @@ function parseIndustryItems(html, label, reportCode) {
       source,
       pdfUrl: `https://consensus.hankyung.com/analysis/downpdf?report_idx=${reportIdx}`,
       category: "산업",
+      board: `한경 컨센서스 > 분류: ${label}(${reportCode})`,
     });
   }
   return items;
@@ -313,46 +332,14 @@ function excerptFromPdfText(text) {
   const boundary = Math.max(cut.lastIndexOf("다."), cut.lastIndexOf("요."), cut.lastIndexOf("함."));
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
-// 목록의 "적정가격" 컬럼이 0/공백인 경우(브로커가 그 값을 안 채웠거나, 목표가
-// 대신 "적정주가" 같은 자기들만의 표현을 써서 한경 쪽 정형 컬럼에 안 잡힌
-// 경우 — 메리츠증권 실측) PDF 본문에서 라벨을 폭넓게 잡아 폴백으로 뽑는다.
-function extractTargetPriceFallback(text) {
-  const m = text.match(
-    /(?:목표주가|목표가|적정주가|적정가격|TP)(?:를|는|가)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?\s*원/,
-  );
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-// 목록의 "적정가격"·"투자의견" 컬럼도 KB증권의 tp/recomm처럼 리포트 본문과
-// 무관하게 채워진 값일 위험이 있어(오너 지적, 2026-09 — 모든 소스에 공통
-// 적용하기로 함), 본문에 실제 언급이 있는 경우에만 쓰기로 한다.
-function mentionsTargetPrice(text) {
-  return /목표주가|목표가|적정주가|적정가격|\bTP\b/.test(text);
-}
-function mentionsOpinion(text) {
-  return /투자의견/.test(text);
-}
-
+// 목록의 "적정가격"·"투자의견" 칸은 공용 추출기(research-extract.mjs)가 본문 언급을
+// 확인한 뒤에만 쓰고(C2 — KB tp/recomm 과 같은 문제, 오너 결정 "모든 소스에 공통"),
+// 칸이 비면 PDF 본문에서 "목표주가/목표가/적정주가/적정가격/TP N원"을 찾는다
+// (메리츠 "적정주가" 실측).
 async function extractPdfExcerpt(pdfUrl) {
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return {
-      summary: excerptFromPdfText(text),
-      targetPriceFallback: extractTargetPriceFallback(text),
-      hasTargetMention: mentionsTargetPrice(text),
-      hasOpinionMention: mentionsOpinion(text),
-    };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", targetPriceFallback: null, hasTargetMention: false, hasOpinionMention: false };
-  }
+  const pdfText = await readPdfText(pdfUrl);
+  if (pdfUrl && !pdfText) console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl})`);
+  return { summary: pdfText ? excerptFromPdfText(pdfText) : "", pdfText };
 }
 
 console.log(`▶ 한경 컨센서스 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -380,7 +367,12 @@ for (const { code, label } of INDUSTRY_REPORT_TYPES) {
 
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log(
@@ -391,14 +383,10 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, targetPriceFallback, hasTargetMention, hasOpinionMention } = await extractPdfExcerpt(it.pdfUrl);
+  const { summary, pdfText } = await extractPdfExcerpt(it.pdfUrl);
   it.summary = summary;
-  // 산업/시장 분류는 특정 종목 얘기가 아니라 목표주가·투자의견 개념 자체가
-  // 없음 — PDF에 우연히 등장하는 숫자를 목표주가로 잘못 채우지 않게 건너뜀.
+  it.pdfText = pdfText;
   if (it.category !== "산업") {
-    if (it.targetPrice == null) it.targetPrice = targetPriceFallback;
-    if (it.targetPrice != null && !hasTargetMention) it.targetPrice = null; // 표 값이 본문에 없으면 버림
-    if (it.opinion && !hasOpinionMention) it.opinion = "";
     it.market = "kr"; // "기업" 분류는 "종목명(코드)" 제목 패턴상 항상 국내 상장 종목
   } else {
     it.market = classifyIndustryMarket(`${it.stockName} ${it.title} ${it.summary}`);
@@ -407,6 +395,10 @@ for (const it of collected) {
   await sleep(400);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+// 투자의견·목표주가 — 공용 추출기(산업/시장 분류는 내부에서 건너뜀). PDF 는 위에서 읽었다.
+// 업종 리포트의 뭉뚱그린 라벨("산업")을 제목·PDF 표지의 실제 업종명으로 보정(공통 lib) — 안 그러면 제목 키워드로 오분류.
+console.log(`▶ 업종 라벨 보정: ${await refineSectorLabels(collected)}건`);
+await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {
@@ -416,9 +408,10 @@ if (DRY_RUN) {
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
-// /api/cron/shinhan-research 는 body 최상위 하나의 source만 받아 그 안의 모든
+// /api/cron/total-research 는 body 최상위 하나의 source만 받아 그 안의 모든
 // items에 적용한다. 이 스크립트는 항목마다 작성 증권사(제공출처)가 달라서,
 // 실제 출처가 정확히 표시되도록(예: "iM증권") 증권사별로 그룹핑해 나눠 보낸다.
 // _id 충돌 방지를 위해 접두어를 "한경:" 로 네임스페이스(원 증권사 스크립트의
@@ -430,7 +423,20 @@ const SKIP_SOURCES = new Set(["상상인증권"]);
 
 // 자체 수집기가 훨씬 많이 가져오는 증권사는 여기서 뺀다 — 상상인증권은 한경
 // 경유 90일 12건인데 자사 API 로는 같은 기간 126건(전체 4,466건)이다(오너 지시).
-const EXCLUDED_SOURCES = new Set(["상상인증권"]);
+// 2026-09-25 직접 수집 전환(오너 결정 — 한경 경유 증권사 10곳 조사 결과 7곳이 로그인
+// 없이 직접 수집 가능, 대부분 한경보다 건수가 많고 한경 쪽 오류도 실측됨: 유안타 IPARK
+// 목표가 10배, 한화 한국가스공사 종목 오표기). SK증권·유진투자증권·LS증권은 직접
+// 수집이 막혀 한경 경유 유지.
+const EXCLUDED_SOURCES = new Set([
+  "상상인증권",
+  "iM증권",
+  "메리츠증권",
+  "IBK투자증권",
+  "유안타증권",
+  "한화투자증권",
+  "한국IR협의회",
+  "대신증권",
+]);
 
 // 라우트는 POST 한 번당 market 하나만 받으므로(전체 items에 일괄 적용),
 // source뿐 아니라 market까지 묶어서 그룹핑한다 — 같은 증권사라도 "산업"
@@ -457,6 +463,7 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl,
     views: null,
     category: it.category,
+    board: it.board,
   });
 }
 

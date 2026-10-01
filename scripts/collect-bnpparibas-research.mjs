@@ -34,6 +34,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -55,9 +56,12 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 
 const UA =
@@ -116,6 +120,7 @@ async function fetchText(url) {
 console.log("▶ BNP Paribas Economic Research 수집");
 
 const seenIds = new Set();
+const boardById = new Map(); // id → 처음 발견된 게시판(대조표 원본 화면 표시용)
 for (const board of BOARDS) {
   for (let page = 1; page <= MAX_PAGES; page++) {
     const url =
@@ -134,6 +139,7 @@ for (const board of BOARDS) {
     for (const id of ids) {
       if (!seenIds.has(id)) {
         seenIds.add(id);
+        boardById.set(id, board);
         newCount++;
       }
     }
@@ -153,7 +159,7 @@ for (const id of seenIds) {
     const h1 = html.match(/<h1[^>]*>([\s\S]{0,300}?)<\/h1>/);
     const title = decodeEntities(h1?.[1]?.replace(/<[^>]+>/g, "") ?? "");
     const date = parseTitleDate(title);
-    if (!title || !date || new Date(date) < cutoff) {
+    if (!title || !date || new Date(date) < cutoff || isCommonExcludedContent(title, "산업")) {
       await sleep(250);
       continue;
     }
@@ -175,6 +181,7 @@ for (const id of seenIds) {
       summary,
       pdfUrl: url,
       views: null,
+      board: `BNP Paribas > Publications/${boardById.get(id)}`,
       category: "산업",
     });
   } catch (err) {
@@ -185,7 +192,12 @@ for (const id of seenIds) {
 
 if (items.length === 0) {
   console.error("✗ 파싱 결과 0건. 게시판 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 
 console.log(`✔ 파싱 완료: ${items.length}건`);
@@ -198,6 +210,7 @@ if (DRY_RUN) {
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 const up = await fetch(IMPORT_URL, {
   method: "POST",

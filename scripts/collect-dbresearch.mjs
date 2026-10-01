@@ -29,6 +29,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -49,9 +50,12 @@ const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 14;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 
 const UA =
@@ -114,10 +118,10 @@ for (const hub of HUBS) {
       const pdfUrl = m[2].startsWith("http") ? m[2] : `https://www.dbresearch.com${m[2]}`;
       const title = decodeEntities(m[3]);
       const summary = decodeEntities(m[4]).slice(0, 300);
-      if (!date || !title || new Date(date) < cutoff) continue;
+      if (!date || !title || new Date(date) < cutoff || isCommonExcludedContent(title, "산업")) continue;
       const idMatch = pdfUrl.match(/PROD(\d+)/);
       const id = idMatch ? idMatch[1] : pdfUrl;
-      if (!byId.has(id)) byId.set(id, { id, date, title, pdfUrl, summary });
+      if (!byId.has(id)) byId.set(id, { id, date, title, pdfUrl, summary, hub: (hub.split("/IE-PROD/")[1] ?? hub).split("/")[0].replace(/\.alias$/, "") });
     }
   } catch (err) {
     console.error(`  ✗ ${hub}: ${err.message}`);
@@ -137,12 +141,18 @@ const items = [...byId.values()].map((it) => ({
   summary: it.summary,
   pdfUrl: it.pdfUrl,
   views: null,
+  board: `Deutsche Bank Research > ${it.hub}`,
   category: "산업",
 }));
 
 if (items.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 
 console.log(`✔ 파싱 완료: ${items.length}건`);
@@ -155,6 +165,7 @@ if (DRY_RUN) {
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 const up = await fetch(IMPORT_URL, {
   method: "POST",

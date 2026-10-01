@@ -1,0 +1,27 @@
+name: 메리츠증권 리서치 수집
+
+# CLAUDE.md 방침(오너 승인 예외, 2026-09-25): home.imeritz.com 게시판 엔진
+# (BbsList.go/BbsRead.go, 로그인 불필요)에서 기업분석·산업분석·투자전략·
+# 경제·채권 게시판을 하루 2회, 개인용으로만 조회한다. robots.txt 파일 자체가
+# 없음 — 다른 예외들과 동일 조건(개인용·저빈도)으로 진행.
+
+on:
+  schedule:
+    - cron: "35 23 * * *" # 23:35 UTC = 08:35 KST(1차)
+    - cron: "35 3 * * *" # 03:35 UTC = 12:35 KST(2차)
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # 수집 스크립트가 pdf-parse 를 import 한다(로그인 없이 PDF 접근 가능).
+      - run: npm ci
+      - run: node scripts/collect-meritz-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

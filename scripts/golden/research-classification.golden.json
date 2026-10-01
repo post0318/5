@@ -1,0 +1,705 @@
+{
+  "_설명": "리서치 분류 정답 표(오너 확인분, 2026-09-26). 각 항목: source(전송 source), titleIncludes(제목 일부, 수집기가 붙이는 제목 정리 후 형태), expect(있어야 할 분류 — 'kr 종목분석'|'kr 산업분석'|'ch 산업분석'|'거시경제 이슈분석'|'거시경제 환율분석'|'거시경제 시황분석(Daily|Monthly|투자전략)'|'kr 비상장'|'EXCLUDE'=수집되면 안 됨), why(사유). 이 표는 오너가 직접 짚어 준 사례만 담는다 — 추측으로 추가하지 말 것. 실행: npx tsx scripts/verify-classification.mts --capture=<수집 결과 디렉터리(research/*.jsonl)>",
+  "cases": [
+    {
+      "id": "G01",
+      "source": "상상인증권",
+      "titleIncludes": "증설 공시 코멘트",
+      "expect": "kr 종목분석",
+      "why": "산업리포트 게시판에 섞인 HD현대중공업 종목 코멘트"
+    },
+    {
+      "id": "G02",
+      "source": "상상인증권",
+      "market": "kr",
+      "titleIncludes": "중간선거 이후의 미국 경제",
+      "expect": "거시경제 이슈분석",
+      "why": "경제는 거시경제"
+    },
+    {
+      "id": "G03",
+      "source": "상상인증권",
+      "titleIncludes": "9월 STEO",
+      "expect": "거시경제 이슈분석",
+      "why": "원자재는 이슈분석"
+    },
+    {
+      "id": "G04",
+      "source": "BNK투자증권",
+      "titleIncludes": "주가와 장기금리 공방",
+      "expect": "거시경제 이슈분석",
+      "why": "금융시장 게시판 이슈보고서"
+    },
+    {
+      "id": "G05",
+      "source": "BNK투자증권",
+      "titleIncludes": "甲論乙駁",
+      "expect": "kr 산업분석(투자전략)",
+      "why": "갑론을박은 투자전략"
+    },
+    {
+      "id": "G06",
+      "source": "메리츠증권",
+      "titleIncludes": "엔진 증설 발표",
+      "expect": "kr 종목분석",
+      "why": "제목이 HD현대중공업으로 시작하는 종목 리포트"
+    },
+    {
+      "id": "G07",
+      "source": "IBK투자증권",
+      "titleIncludes": "Investor Day 2026 후기",
+      "expect": "kr 종목분석",
+      "why": "엘앤에프 종목 리포트"
+    },
+    {
+      "id": "G08",
+      "source": "KB증권",
+      "titleIncludes": "정유 산업 및 SK이노베이션 동향",
+      "expect": "kr 종목분석",
+      "why": "라벨이 회사명(SK이노베이션)"
+    },
+    {
+      "id": "G09",
+      "source": "LS증권",
+      "titleIncludes": "높은 수준의 한국 경제 성장률",
+      "expect": "거시경제 이슈분석",
+      "why": "LS TGIF 정기 거시 시리즈"
+    },
+    {
+      "id": "G10",
+      "source": "유안타증권",
+      "titleIncludes": "분기중 환율 자유낙하",
+      "expect": "kr 산업분석",
+      "why": "환율 소재의 자동차 업종 리포트(환율분석 아님)"
+    },
+    {
+      "id": "G11",
+      "source": "한화투자증권",
+      "titleIncludes": "같은 환율, 다른 충격",
+      "expect": "거시경제 이슈분석",
+      "why": "[경제분석] 태그 — 환율분석이 아니라 경제분석"
+    },
+    {
+      "id": "G12",
+      "source": "한화투자증권",
+      "titleIncludes": "조달 포트폴리오의 악화",
+      "expect": "kr 산업분석",
+      "why": "은행 업종 리포트(포트폴리오는 자금조달 구조)"
+    },
+    {
+      "id": "G13",
+      "source": "한화투자증권",
+      "titleIncludes": "7월 연체율",
+      "expect": "kr 산업분석",
+      "why": "은행 업종 리포트"
+    },
+    {
+      "id": "G14",
+      "source": "한화투자증권",
+      "titleIncludes": "높아질 기대, 숨 고를 증시",
+      "expect": "ch 산업분석(투자전략)",
+      "why": "미중 정상회담 시장 노트는 투자전략(오너 지적 2026-09-27 — 이전 \"ch 산업분석 유지\" 확인을 바꿈)"
+    },
+    {
+      "id": "G15",
+      "source": "하나증권",
+      "titleIncludes": "삼성전자 위상 강화는 국내 무선장비업체",
+      "expect": "kr 산업분석",
+      "why": "업종(통신장비) 이야기 — 오너 확인"
+    },
+    {
+      "id": "G16",
+      "source": "한국투자증권",
+      "titleIncludes": "효성중공업 수주가 준 힌트",
+      "expect": "kr 산업분석",
+      "why": "업종(전력기기) 이야기 — 오너 확인"
+    },
+    {
+      "id": "G17",
+      "source": "KB증권 비상장리서치",
+      "titleIncludes": "주간 비상장 투자 동향",
+      "expect": "kr 비상장",
+      "why": "주간이지만 비상장은 수집·비상장 분류"
+    },
+    {
+      "id": "G18",
+      "source": "메리츠증권",
+      "market": "us",
+      "titleIncludes": "증설 예정 물량에 대한 슬롯 예약",
+      "expect": "us 종목분석",
+      "why": "Innio(INIO) — 미국 상장 종목이라 미국 주식으로 표시(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "G19",
+      "source": "메리츠증권",
+      "market": "us",
+      "titleIncludes": "타이트해진 리튬 수급",
+      "expect": "us 종목분석",
+      "why": "제목에 티커가 없는 영문 종목명(Albemarle) → 이름→티커(ALB)로 미국 종목"
+    },
+    {
+      "id": "G20",
+      "source": "메리츠증권",
+      "market": "jp",
+      "titleIncludes": "MLCC로 성장 가속화",
+      "expect": "jp 종목분석",
+      "why": "일본 종목(Murata, .JP)은 일본 시장으로"
+    },
+    {
+      "id": "G21",
+      "source": "메리츠증권",
+      "market": "ch",
+      "titleIncludes": "사상 최고 BB Ratio",
+      "expect": "ch 종목분석",
+      "why": "대만 종목(Yageo, .TT)은 중국에 포함"
+    },
+    {
+      "id": "G22",
+      "source": "메리츠증권",
+      "market": "eu",
+      "titleIncludes": "AI 데이터센터향 엔진 시장",
+      "expect": "eu 종목분석",
+      "why": "유럽 종목(Wartsila, .HE)은 유럽 시장으로"
+    },
+    {
+      "id": "G23",
+      "source": "한화투자증권",
+      "titleIncludes": "AI 자금조달, 넓어지는 시장과 높아지는 비용",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "한화 해외시황 중 채권·회사채 내용 — 이슈분석(채권). 해외시황 기본은 시황분석(투자전략)(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "G24",
+      "source": "한화투자증권",
+      "titleIncludes": "이번달 글로벌 스토리",
+      "expect": "거시경제 시황분석(Monthly)",
+      "why": "이.글.스.는 월간 글로벌 주식 전략(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "K01",
+      "source": "iM증권",
+      "titleIncludes": "추석 전후 챙겨야할 이벤트",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "iM증권 채권 라벨은 채권(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K02",
+      "source": "iM증권",
+      "titleIncludes": "이번에도 신뢰를 주지 못한 워시 의장",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "iM증권 경제분석 — 제목에 국채금리가 있어도 라벨이 경제라 경제"
+    },
+    {
+      "id": "K03",
+      "source": "한화투자증권",
+      "titleIncludes": "[채권전략]",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "한화 채권전략은 채권(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "G25",
+      "source": "키움증권",
+      "market": "us",
+      "titleIncludes": "지속적 수익증가, 가이던스 상향",
+      "expect": "us 종목분석",
+      "why": "BNY Mellon 미국기업분석 — 티커 없이 영문 회사명만 있는 제목(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "G26",
+      "source": "키움증권 비상장리서치",
+      "titleIncludes": "항법과 항재밍으로 방산부터 드론, 우주까지",
+      "expect": "kr 비상장",
+      "why": "덕산넵코어스 IPO 리포트는 비상장(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "G27",
+      "source": "키움증권",
+      "titleIncludes": "상용화 초입 국면 진입",
+      "expect": "kr 산업분석",
+      "why": "소듐이온 전지 — 이차전지 업종 리포트"
+    },
+    {
+      "id": "K04",
+      "source": "키움증권",
+      "market": "ch",
+      "titleIncludes": "8월 실물 지표: 양극화 심화",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "[중국은 지금] 중국 거시 시리즈는 이슈분석(경제) — 삼성증권 경제와 같은 기준(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "G29",
+      "source": "삼성증권",
+      "titleIncludes": "업종 및 종목의 금리 민감도",
+      "expect": "kr 산업분석(투자전략)",
+      "why": "삼성증권 투자전략 게시판은 라벨 우선 — 제목에 금리가 있어도 투자전략(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "G30",
+      "source": "삼성증권",
+      "market": "ch",
+      "titleIncludes": "차이나 전기차 투자 전략",
+      "expect": "ch 산업분석",
+      "why": "삼성 투자전략 게시판이지만 중국 전기차 업종 리포트 — 중국 산업분석(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "G31",
+      "source": "삼성증권",
+      "titleIncludes": "중간선거 스냅샷 D-41",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "선거·지정학 시리즈는 이슈분석(경제) — 주식 얘기 약함(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "G32",
+      "source": "삼성증권",
+      "titleIncludes": "중간선거 스냅샷 D-47",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "선거·지정학 시리즈는 이슈분석(경제)(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "X10",
+      "source": "BNK투자증권",
+      "titleIncludes": "더 슬기로운 성장주 투자전략",
+      "expect": "EXCLUDE",
+      "why": "BNK Quant분석 게시판(economyAnalyse) — 게시판 통째로 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X11",
+      "source": "DS투자증권",
+      "titleIncludes": "거버넌스 - 베어허그",
+      "expect": "EXCLUDE",
+      "why": "거버넌스는 ESG — 공통 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "L01",
+      "source": "DS투자증권",
+      "titleIncludes": "LNG 벙커링선",
+      "expect": "kr 산업분석",
+      "label": "조선",
+      "why": "DS 원본 라벨 [대조선]은 표준 이름 조선으로 정규화(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "G33",
+      "source": "DS투자증권",
+      "titleIncludes": "반도체 생산성 개선의 숨은 조력자",
+      "expect": "kr 종목분석",
+      "why": "세미티에스 종목 코멘트 — [미드스몰캡] 종목명 - 부제(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "G34",
+      "source": "DS투자증권",
+      "market": "us",
+      "titleIncludes": "미국 데이터센터 전력망 비용 부담 현실화",
+      "expect": "us 산업분석",
+      "why": "국내 게시판에 올라왔지만 미국 이야기 — 미국 산업분석(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "K05",
+      "source": "DS투자증권",
+      "titleIncludes": "FOMC 리뷰: 물가 상승의 확산을 막는",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "[DS 경제 …] Macro Issue — FOMC면 경제(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "L02",
+      "source": "DS투자증권",
+      "titleIncludes": "UAE와 광범위한 방산 협력",
+      "expect": "kr 산업분석",
+      "label": "방산",
+      "why": "DS 라벨 [매태호]는 애널리스트 이름 — 방산(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X12",
+      "source": "DS투자증권",
+      "titleIncludes": "Defense Daily",
+      "expect": "EXCLUDE",
+      "why": "DS Defense Daily 방산 일간 시리즈 — 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K06",
+      "source": "대신증권",
+      "titleIncludes": "국채 발행, 물량 만큼 만기",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "대신 매크로 라벨은 경제·채권이 섞임 — 국채 글은 채권(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "K07",
+      "source": "대신증권",
+      "titleIncludes": "버틸만한 장기금리 5%",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "대신 매크로 라벨 중 장기금리 글은 채권(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "K08",
+      "source": "대신증권",
+      "titleIncludes": "9월 FOMC: 금리인상 단행",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "FOMC·통화정책은 경제(오너 확인 2026-09-27)"
+    },
+    {
+      "id": "X13",
+      "source": "대신증권",
+      "titleIncludes": "추석 연휴 전 변동성 확대는 비중확대 기회",
+      "expect": "EXCLUDE",
+      "why": "[다음주 시장은?] 주간 시장 전망 시리즈 — 주간물 제외(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "X01",
+      "source": "교보증권",
+      "titleIncludes": "Corporate Day 미팅노트",
+      "expect": "EXCLUDE",
+      "why": "기업 미팅 메모"
+    },
+    {
+      "id": "X02",
+      "source": "SK증권",
+      "titleIncludes": "wake up! 아침에",
+      "expect": "EXCLUDE",
+      "why": "SK증권 일간 시황"
+    },
+    {
+      "id": "X03",
+      "source": "SK증권",
+      "titleIncludes": "Global Carbon Daily",
+      "expect": "EXCLUDE",
+      "why": "SK증권 일간물"
+    },
+    {
+      "id": "X04",
+      "source": "유진투자증권",
+      "titleIncludes": "안녕하세요 데일리에요",
+      "expect": "EXCLUDE",
+      "why": "유진 데일리"
+    },
+    {
+      "id": "X05",
+      "source": "한화투자증권",
+      "titleIncludes": "EPS LIVE",
+      "expect": "EXCLUDE",
+      "why": "주간 이익 예상치 정기 자료"
+    },
+    {
+      "id": "X06",
+      "source": "한화투자증권",
+      "titleIncludes": "[MP전략]",
+      "expect": "EXCLUDE",
+      "why": "모델포트폴리오 정기 자료"
+    },
+    {
+      "id": "X08",
+      "source": "상상인증권",
+      "titleIncludes": "Quant Variation",
+      "expect": "EXCLUDE",
+      "why": "상상인 퀀트 리포트(Quant Variation) — 오너 지시 2026-09-27"
+    },
+    {
+      "id": "X09",
+      "source": "상상인증권",
+      "titleIncludes": "옵션 시장이 벌린 메모리 주가 격차",
+      "expect": "EXCLUDE",
+      "why": "상상인 US Monitor(미국시황) 시리즈 — 오너 지시 2026-09-27"
+    },
+    {
+      "id": "X07",
+      "source": "한화투자증권",
+      "stockName": "월간지수전망",
+      "expect": "EXCLUDE",
+      "why": "월간 6대 지수 전망(9월)"
+    },
+    {
+      "id": "X14",
+      "source": "대신증권",
+      "titleIncludes": "도쿄 맨션의 새로운 투자 기준",
+      "expect": "EXCLUDE",
+      "why": "부동산 성격이나 제목에 '부동산'이 없음 — '맨션'을 부동산 제외 규칙에 추가(오너 결정 2026-09-27)"
+    },
+    {
+      "id": "D01",
+      "source": "대신증권",
+      "titleIncludes": "코스트코: 매출은 잘 나오는데",
+      "expect": "us 종목분석",
+      "why": "[26Q4 Preview] 회사명: 형태 — 미국 종목 리포트(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "D02",
+      "source": "대신증권",
+      "titleIncludes": "제약업: ERS 2026",
+      "expect": "kr 산업분석",
+      "label": "제약/바이오",
+      "why": "Industry Report 라벨은 제목 업종으로 정규화(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "D03",
+      "source": "대신증권",
+      "titleIncludes": "우주, 숫자는 지상에서",
+      "expect": "kr 산업분석",
+      "label": "우주항공",
+      "why": "Industry Report 라벨은 제목 업종으로 정규화(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "X15",
+      "source": "대신증권",
+      "titleIncludes": "유가 반등에 상승 탄력 둔화",
+      "expect": "EXCLUDE",
+      "why": "퀀틴전시 플랜 시리즈는 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X16",
+      "source": "미래에셋증권",
+      "titleIncludes": "저PBR 공표를 앞두고 나타난 자회사 상장",
+      "expect": "EXCLUDE",
+      "why": "NAV Dashboard Weekly — 주간물 라벨(제목엔 Weekly 없음) 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "M01",
+      "source": "미래에셋증권",
+      "titleIncludes": "양자컴퓨터가 AIDC에 들어가려면",
+      "expect": "us 산업분석",
+      "why": "Monthly Quantum 시리즈는 미국 주제 — 미래에셋 시리즈 접두로 us 강제(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "X17",
+      "source": "미래에셋증권",
+      "titleIncludes": "미중 세기의 만남 속 관망세",
+      "expect": "EXCLUDE",
+      "why": "글로벌 마켓 브리핑 일일 시리즈 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K09",
+      "source": "미래에셋증권",
+      "titleIncludes": "미중 정상회담: 빅딜보다 중요한 것은",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "Market Issue 시리즈는 이슈분석(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "X18",
+      "source": "미래에셋증권",
+      "titleIncludes": "연휴 전 쾌조의 스타트",
+      "expect": "EXCLUDE",
+      "why": "마켓 뷰 일일 시리즈 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X19",
+      "source": "미래에셋증권",
+      "titleIncludes": "FOMC 경계감 속 5거래일 만에 반등",
+      "expect": "EXCLUDE",
+      "why": "한국 마켓 클로징 일일 시리즈 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K10",
+      "source": "미래에셋증권",
+      "titleIncludes": "안심하기 어려운 백투백 인상 옵션",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "주간물이지만 수집 — Macro Week Ahead는 이슈분석 채권(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K11",
+      "source": "미래에셋증권",
+      "titleIncludes": "최근 전쟁 격화가 한국과 미국에 미치는 영향",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "주간물이지만 수집 — Weekly Economic Issue는 이슈분석 경제(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K12",
+      "source": "신한투자증권",
+      "titleIncludes": "채권전략; WGBI 편입 종료를 앞두고",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "신한 국내외 채권전략 게시판 — 제목에 채권전략이 있으면 채권(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K13",
+      "source": "신한투자증권",
+      "titleIncludes": "BOJ 금융정책결정회의; 예상보다 약했던 매파 시그널",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "신한 국내외 채권전략 게시판 — 채권전략 표기가 없으면 경제(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X20",
+      "source": "신한투자증권",
+      "titleIncludes": "새로운 기준, 자산배분의 재구성",
+      "expect": "EXCLUDE",
+      "why": "자산가격 메커니즘 변화 시리즈 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X21",
+      "source": "신한투자증권",
+      "titleIncludes": "블록체인과 디지털 금융질서의 재편",
+      "expect": "EXCLUDE",
+      "why": "자산가격 메커니즘 변화 시리즈(디지털자산) 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X22",
+      "source": "신한투자증권",
+      "titleIncludes": "선반영 인식에 되돌림 예상되는 원/달러",
+      "expect": "EXCLUDE",
+      "why": "신한 FX Check-up 시리즈 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X23",
+      "source": "신한투자증권",
+      "titleIncludes": "연휴 대기, 매물 소화에 120일선 부근 숨고르기",
+      "expect": "EXCLUDE",
+      "why": "마켓레이더 시리즈 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "M02",
+      "source": "신한투자증권",
+      "titleIncludes": "주요국 긴축 강화, 충격은 차별적",
+      "expect": "거시경제 시황분석(Monthly)",
+      "why": "Econ Signal은 월간 시황(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X24",
+      "source": "신한투자증권",
+      "titleIncludes": "글로벌 전략; Global Portfolio (9월 23일)",
+      "expect": "EXCLUDE",
+      "why": "Global Portfolio는 추천 포트폴리오 시리즈 — 수집 제외(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "X25",
+      "source": "신한투자증권",
+      "titleIncludes": "글로벌 전략; Global Portfolio (9월 3일)",
+      "expect": "EXCLUDE",
+      "why": "Global Portfolio는 종목분석(us)으로도 새면 안 됨 — 시리즈 제외는 기업 카테고리에도 적용(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "S01",
+      "source": "신한투자증권",
+      "titleIncludes": "9월 해외주식 탑픽 10선",
+      "expect": "us 산업분석(투자전략)",
+      "why": "탑픽 10선은 종목 리포트가 아니라 투자전략(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "G35",
+      "source": "신한투자증권",
+      "market": "us",
+      "titleIncludes": "네오클라우드 실적, 높은 수요 재확인",
+      "expect": "us 산업분석",
+      "why": "글로벌 이슈 시리즈는 f2 에 대표 종목이 붙어도 테마·산업 리포트(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "G36",
+      "source": "신한투자증권",
+      "market": "us",
+      "titleIncludes": "모더나 암 백신 동반 수혜주",
+      "expect": "us 산업분석",
+      "why": "글로벌 이슈 시리즈 — 테마 리포트(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "G37",
+      "source": "신한투자증권",
+      "market": "us",
+      "titleIncludes": "2Q26 글로벌 헬스케어 실적 리뷰",
+      "expect": "us 산업분석",
+      "why": "글로벌 이슈 시리즈 — 섹터 실적 리뷰(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "S02",
+      "source": "한화투자증권",
+      "market": "us",
+      "titleIncludes": "호르무즈보다 중요한 건 유동성",
+      "expect": "us 산업분석(투자전략)",
+      "why": "종목·업종 없는 미국 시장 노트는 투자전략(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "S03",
+      "source": "삼성증권",
+      "market": "jp",
+      "titleIncludes": "新 TOPIX 시대 개막",
+      "expect": "jp 산업분석(투자전략)",
+      "why": "Now Japan 시리즈는 일본 시장 투자전략(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "C01",
+      "source": "하나증권",
+      "market": "ch",
+      "titleIncludes": "중국 전기차의 내수 부진",
+      "expect": "ch 산업분석",
+      "why": "라벨이 국가명(중국 자동차 판매동향)이면 그 나라 자동차 산업분석 — 국내(kr)로 흘리지 않는다(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "L03",
+      "source": "삼성증권",
+      "titleIncludes": "유럽 NDR 및 마케팅 후기",
+      "expect": "kr 산업분석",
+      "label": "정유/화학",
+      "why": "묶음 라벨(2차전지/정유/화학)은 PDF 본문(LG화학 NDR·정유·석유화학 구조조정)으로 정유/화학으로 좁힌다(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "C02",
+      "source": "하나증권",
+      "market": "ch",
+      "titleIncludes": "중국 전기차, 지금은 배로",
+      "expect": "ch 산업분석",
+      "why": "라벨이 그냥 자동차여도 제목이 중국으로 시작하면 중국 산업분석(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "X26",
+      "source": "IBK투자증권",
+      "titleIncludes": "IBKS Daily 인터넷/게임",
+      "expect": "EXCLUDE",
+      "why": "IBKS Daily 시리즈는 형식과 무관하게 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X27",
+      "source": "IBK투자증권",
+      "titleIncludes": "Start with IBKS(2026.09.23)",
+      "expect": "EXCLUDE",
+      "why": "IBKS Daily 시리즈는 형식과 무관하게 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "X28",
+      "source": "IBK투자증권",
+      "titleIncludes": "Morning Brief(260923)",
+      "expect": "EXCLUDE",
+      "why": "IBKS Daily 시리즈는 형식과 무관하게 수집 제외(오너 지시 2026-09-27)"
+    },
+    {
+      "id": "K14",
+      "source": "IBK투자증권",
+      "titleIncludes": "Warsh in Mirrorland",
+      "expect": "거시경제 이슈분석",
+      "kind": "채권",
+      "why": "IBK 경제/채권 게시판의 채권 담당(정형주) 글은 이슈분석 채권(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "K15",
+      "source": "IBK투자증권",
+      "titleIncludes": "중간선거 앞둔 트럼프, 유가 상승이 부담스러운 이유",
+      "expect": "거시경제 이슈분석",
+      "kind": "경제",
+      "why": "트럼프·중간선거 정치·정책 글은 투자전략이 아니라 이슈분석(경제)(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "J01",
+      "source": "KB증권",
+      "market": "jp",
+      "titleIncludes": "어드밴테스트",
+      "expect": "jp 종목분석",
+      "why": "일본 종목 표기 (6857 JP)가 있으면 산업분석이 아니라 종목분석(오너 지적 2026-09-27)"
+    },
+    {
+      "id": "K16",
+      "source": "NH투자증권",
+      "market": "kr",
+      "titleIncludes": "8월 중국 자동차 판매",
+      "expect": "ch 산업분석",
+      "why": "라벨은 \"자동차산업\"이라 나라 표기가 없지만 제목이 \"N월 중국 …\"으로 시작 — 중국 산업분석(오너 지적 2026-09-27)"
+    }
+  ]
+}

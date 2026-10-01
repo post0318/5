@@ -281,24 +281,22 @@ export function MacroDashboard() {
       {/* 카운트다운은 아래 "Fed 금리 확률" 제목 줄로 내렸다(오너 지시
           2026-09-21, 기존/변경 스크린샷 비교) — 페이지 헤더에 떠 있으면
           무엇까지 남은 시간인지 맥락에서 떨어진다. 헤더는 제목과 새로고침만
-          남긴다. */}
-      <div className="grid items-start gap-4 lg:grid-cols-2">
+          남긴다.
+          예전엔 이 줄이 `grid lg:grid-cols-2`(2단은 1024px부터)라 제목·
+          새로고침이 모바일에서 항상 세로로 쌓였다 — 카운트다운이 오른쪽
+          칸에 있을 때 필요했던 폭인데, 카운트다운을 내린 뒤로는 새로고침
+          버튼 하나뿐이라 둘이 합쳐도 좁은 화면에 그대로 들어간다(오너 실측
+          스크린샷 2026-09-30). flex 로 바꿔 기본적으로 한 줄, 정말 안 들어
+          갈 때만 wrap. */}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
         <div className="flex items-baseline gap-2">
           <h1 className="text-xl font-semibold">글로벌 핵심지표</h1>
           <span className="text-muted-foreground text-sm">{q.data?.asOf ?? "-"}</span>
         </div>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => q.refetch()}
-            disabled={q.isFetching}
-            className="ml-auto"
-          >
-            <RefreshCw className={q.isFetching ? "size-4 animate-spin" : "size-4"} />
-            새로고침
-          </Button>
-        </div>
+        <Button variant="outline" size="sm" onClick={() => q.refetch()} disabled={q.isFetching}>
+          <RefreshCw className={q.isFetching ? "size-4 animate-spin" : "size-4"} />
+          새로고침
+        </Button>
       </div>
 
       {q.isLoading && (

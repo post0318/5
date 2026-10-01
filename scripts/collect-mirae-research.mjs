@@ -33,6 +33,8 @@
  */
 
 import { readFileSync } from "node:fs";
+import { enrichResearch } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -54,9 +56,12 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
@@ -71,6 +76,9 @@ const CATEGORY_ID = "1800"; // 기업분석
 // 리포트처럼 제목에서 코드/티커를 뽑을 필요가 없음 — 굵은 글씨 부분을
 // 그대로 업종/전략 라벨(stockName)로 쓴다.
 const INDUSTRY_CATEGORY_IDS = ["1525", "1527"];
+// 리포트가 원래 있던 사이트 메뉴(각 categoryId 의 메뉴명 — 위 주석) — item 의 board 필드(분류 대조용).
+const MENU_LABEL = { 1800: "기업분석", 1525: "산업분석", 1527: "투자전략" };
+const boardLabel = (categoryId) => `미래에셋증권 > 투자정보 > 리서치 리포트 > ${MENU_LABEL[categoryId] ?? categoryId}(${categoryId})`;
 
 // "종목명 (코드/의견)" — 국내는 6자리 숫자 코드.
 const TITLE_RE = /^(.+?)\s*\((\d{6})\/([^)]+)\)$/;
@@ -100,6 +108,7 @@ function parseItems(html) {
     const tm = title.match(TITLE_RE);
     const um = tm ? null : title.match(TITLE_US_RE);
     if (!tm && !um) continue; // 종목 없는 리포트 또는 US 외 해외시장
+    if (isCommonExcludedContent(rawSummary.trim() || rawTitle.trim(), "기업")) continue;
     const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
     const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
     items.push({
@@ -111,9 +120,11 @@ function parseItems(html) {
       stockName: (tm ?? um)[1].trim(),
       symbolHint: tm ? tm[2] : um[2].toUpperCase(),
       opinion: (tm ?? um)[3].trim(),
+      opinionFrom: "title", // 목록 제목의 투자의견 — 공용 추출기 C2 검증 제외
       analyst: analystM ? analystM[1].trim() : "",
       pdfUrl: pdfM ? pdfM[1] : null,
       category: "기업",
+      board: boardLabel(CATEGORY_ID),
     });
   }
   return items;
@@ -138,7 +149,7 @@ const EXCLUDE_COUNTRY_RE = /중국|인도|인디아|일본|홍콩|대만|베트�
 const US_HINT_RE = /글로벌|Global|해외|미국|\bUS\b|나스닥|Nasdaq|S&P|다우존스|연준|\bFed\b/i;
 // 시리즈명만으로 해외(미국)로 강제 분류 — 신호 키워드 없이도 매회 미국 AI
 // 인프라/전력/자본시장 주제인 것을 실측 확인(2026-09, 오너 지적).
-const US_SERIES_PREFIXES = ["AI Infra Signal"];
+const US_SERIES_PREFIXES = ["AI Infra Signal", "Monthly Quantum"];
 function classifyMarket(label, headline) {
   const hay = `${label} ${headline}`;
   if (US_SERIES_PREFIXES.some((p) => label.trim().startsWith(p))) return "us";
@@ -161,6 +172,7 @@ function parseIndustryItems(html, categoryId) {
     const title = rawSummary.trim() || rawTitle.trim();
     const market = classifyMarket(rawTitle.trim(), title);
     if (!market) continue; // 중국/인도 등 이 프로젝트가 다루지 않는 시장
+    if (isCommonExcludedContent(`${rawTitle.trim()} ${title}`, "산업")) continue;
     const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
     const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
     items.push({
@@ -176,6 +188,7 @@ function parseIndustryItems(html, categoryId) {
       analyst: analystM ? analystM[1].trim() : "",
       pdfUrl: pdfM ? pdfM[1] : null,
       category: "산업",
+      board: boardLabel(categoryId),
     });
   }
   return items;
@@ -196,14 +209,8 @@ function excerptFromFlat(flat) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// 본문에 "목표주가를 310만원(기존 280만원)으로" 처럼 만원 단위로도 등장한다.
-function extractTargetPrice(flatText) {
-  const m = flatText.match(/목표주가(?:를|는|가)?\s*([\d,]+)\s*(만)?원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
+// 본문에 "목표주가를 310만원(기존 280만원)으로" 처럼 만원 단위로도 등장한다 —
+// 본문 전체(bodyText)를 공용 추출기에 넘긴다.
 async function extractDetail(id, messageNumber, categoryId = CATEGORY_ID) {
   try {
     const url = new URL(DETAIL_URL);
@@ -215,10 +222,10 @@ async function extractDetail(id, messageNumber, categoryId = CATEGORY_ID) {
     const html = new TextDecoder("euc-kr").decode(await res.arrayBuffer());
     const m = html.match(/id="messageContentsDiv"[^>]*>([\s\S]*?)<\/div>\s*<\/td>/);
     const flat = m ? stripHtml(m[1]).replace(/\s{2,}/g, " ").trim() : "";
-    return { summary: excerptFromFlat(flat), targetPrice: extractTargetPrice(flat) };
+    return { summary: excerptFromFlat(flat), bodyText: flat };
   } catch (err) {
     console.warn(`  ⚠ 본문 발췌 실패 (id=${id}): ${err.message}`);
-    return { summary: "", targetPrice: null };
+    return { summary: "", bodyText: "" };
   }
 }
 
@@ -262,7 +269,12 @@ for (const categoryId of INDUSTRY_CATEGORY_IDS) {
 
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log(
@@ -273,14 +285,15 @@ console.log(
 console.log(`▶ 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, targetPrice } = await extractDetail(it.id, it.messageNumber, it.srcCategoryId);
+  const { summary, bodyText } = await extractDetail(it.id, it.messageNumber, it.srcCategoryId);
   it.summary = summary;
-  // 산업분석/투자전략은 특정 종목 얘기가 아니므로 목표주가 개념이 없음.
-  it.targetPrice = it.category === "산업" ? null : targetPrice;
+  it.bodyText = bodyText;
   if (!it.summary) excerptFailCount++;
   await sleep(400);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+// 투자의견(제목)·목표주가 — 공용 추출기(항목별 market 통화, 본문 → PDF, 산업분석 제외).
+await enrichResearch(collected, { market: "kr" });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {
@@ -302,10 +315,12 @@ const items = collected.map((it) => ({
   pdfUrl: it.pdfUrl,
   views: null,
   category: it.category,
+  board: it.board,
 }));
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 // 국내·해외를 시장별로 나눠 보낸다 — 라우트가 호출당 market 하나만 받는다.
 for (const market of ["kr", "us"]) {

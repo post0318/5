@@ -57,11 +57,11 @@
  * 제외한다.
  *
  * `summary`는 대부분 `titl`과 동일하거나 더 짧아 별도 요약으로 쓸 가치가
- * 없다(실측 확인) — summary는 비워 두고, 미국(market:"us") 항목만 공용
- * 추출기(lib/us-research-extract.mjs)가 **PDF 본문**에서 투자의견·목표주가를
+ * 없다(실측 확인) — summary는 비워 두고, 종목 리포트는 국내·해외 공용
+ * 추출기(lib/research-extract.mjs)가 **PDF 본문**에서 투자의견·목표주가를
  * 채운다(usePdf:true — 로그인 없이 PDF를 받을 수 있는 몇 안 되는 소스).
- * 국내(market:"kr") 항목은 이 추출기가 달러 표기 기준이라 안 맞아 PDF
- * 보강을 하지 않는다(다른 국내 수집기들과 동일하게 opinion/targetPrice 공란).
+ * 통화는 시장별(kr 원·us 달러·ch 홍콩달러/위안 — 2026-09-25 공용화 전엔
+ * 미국만 했다).
  *
  * www3.kiwoom.com·bbn.kiwoom.com 모두 robots.txt 가 `Allow: /`(제한 없음) —
  * 지금까지 중 가장 깨끗한 케이스. 그래도 다른 예외들과 동일 조건(개인용·
@@ -73,9 +73,12 @@
  */
 
 import { readFileSync } from "node:fs";
-import { enrichUsResearch } from "./lib/us-research-extract.mjs";
-import { isEtfOrEtpContent, isWeeklyRecurringContent, isEsgContent } from "./lib/exclude-filters.mjs";
+import { enrichResearch } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent, isUnlistedCompanyTag } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
+import { sectorFromTitleOrCover, looksLikeSectorLabel, isIpoCover } from "./lib/sector-label.mjs";
+import { readPdfText } from "./lib/research-extract.mjs";
+import { resolveUsTickerByName } from "./lib/overseas-market.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -97,8 +100,12 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
+// 거시경제(이슈분석/환율분석) 전용 — 오너 지시 2026-09-26 "kb 키움은 개별수집기에
+// 통합되어야 맞아보인다. 따로 있을 이유가 없다"로 collect-kiwoom-macro-issues.mjs를
+// 이 파일에 흡수. 이후 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues
+// 컬렉션·라우트 자체가 폐지돼 kr_research(IMPORT_URL)로 완전히 합류했다.
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 const UA =
@@ -192,6 +199,9 @@ function parseChBoard(title) {
     };
   }
   const { label, headline } = industryLabelAndHeadline(title);
+  // "[중국은 지금] …" 중국 거시 시리즈(실물지표·정책 등)는 산업분석이 아니라 거시경제 이슈분석(경제) — 고정 라벨로 보내 앱이 분류
+  // (오너 지시 2026-09-27, 삼성증권 경제와 같은 기준).
+  if (/^중국은\s*지금$/.test(label)) return { title: headline, stockName: "키움 중국 경제", symbol: null, category: "산업" };
   return { title: headline, stockName: label, symbol: null, category: "산업" };
 }
 
@@ -208,6 +218,23 @@ function fixedLabelBoardParser(label) {
 // 밖이다(오너 지시 2026-09-24 — "월간증시전망에서 증시 캘린더는 수집대상에서
 // 제외한다").
 const CALENDAR_RE = /증시\s*캘린더/;
+
+// 실제 사이트 내비 경로(상단 표, 오너 확인 2026-09-24) — 리포트가 원래 어느 메뉴에 있었는지
+// 각 item 의 board 필드로 싣는다(분류 대조용).
+const MENU_LABEL = {
+  CC: "해외증시 > 미국/선진국",
+  AI: "해외증시 > AI보고서",
+  CA: "해외증시 > 글로벌테마/이슈",
+  CH: "해외증시 > 중국/신흥국",
+  CR: "기업/산업분석 > 기업분석",
+  SN: "기업/산업분석 > 스팟노트",
+  CI: "기업/산업분석 > 산업분석",
+  EM: "경제/전략 > 월간증시전망",
+  IM: "경제/전략 > 중장기증시전망",
+  SI: "경제/전략 > 이슈분석",
+  FE: "경제/전략 > 환율전망",
+};
+const boardLabel = (rMenuGb) => `키움증권 > ${MENU_LABEL[rMenuGb] ?? rMenuGb}(${rMenuGb})`;
 
 const BOARDS = [
   { rMenuGb: "CC", market: "us", parse: parseUsTickerBoard },
@@ -252,17 +279,17 @@ async function collectBoard(board, cutoff) {
       }
       const rawTitle = String(r.titl ?? "").trim();
       if (board.exclude && board.exclude(rawTitle)) continue; // 게시판별 개별 제외(예: EM 증시 캘린더)
-      if (isEtfOrEtpContent(rawTitle)) continue; // ETF/ETP 공용 제외(오너 지시 2026-09-24)
-      // Weekly 정기 시리즈 제외(오너 지시 2026-09-24 — "큠틴 아메리카처럼
-      // weekly 자료는 수집 제외다", CC 게시판 "09/21 큠틴 아메리카 (미국주식
-      // Weekly)"가 발견 계기).
-      if (isWeeklyRecurringContent(rawTitle)) continue;
-      // ESG 공용 제외(오너 지시 2026-09-24 — "esg는 공통으로 제외처리").
-      if (isEsgContent(rawTitle)) continue;
       const parsed = board.parse(rawTitle);
       if (!parsed) continue;
+      // 공통 배제가 기본(오너 지시 2026-09-26 — "통합함수가 기본이고 예외가
+      // 필요할 때 개별함수 쓴다"). category가 parse() 이후에야 정해지므로
+      // 여기로 옮겨 ETF/ESG/Weekly뿐 아니라 리츠·캘린더·추천종목·대체투자까지
+      // 한 번에 적용한다(이전엔 개별 함수 3개만 써서 이 4개는 서버 안전망에만
+      // 의존했음).
+      if (isCommonExcludedContent(rawTitle, parsed.category)) continue;
       out.push({
         id: `${board.rMenuGb}:${r.sqno}`,
+        board: boardLabel(board.rMenuGb),
         date,
         title: parsed.title,
         stockName: parsed.stockName,
@@ -286,6 +313,58 @@ async function collectBoard(board, cutoff) {
   return out;
 }
 
+// 거시경제(이슈분석/환율분석) — 원 collect-kiwoom-macro-issues.mjs 로직 그대로.
+// SI(rMenuGbNm "이슈분석", 실제 사이트 내비 확인됨)·FE(rMenuGbNm "일간환율전망")
+// 게시판 코드 자체가 topic을 확정하므로 FX 판정이 불필요(다른 증권사와 다른 점).
+// 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues 컬렉션 폐지 — 고정
+// stockName("키움 이슈분석"/"키움 환율분석", shinhan-research.ts
+// FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES 등록)으로 kr_research에 합류시킨다.
+const MACRO_BOARDS = [
+  { rMenuGb: "SI", stockName: "키움 이슈분석" },
+  { rMenuGb: "FE", stockName: "키움 환율분석" },
+];
+
+async function collectMacroBoard(board, cutoff) {
+  const out = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const data = await fetchPage(board.rMenuGb, page);
+    const rows = data?.researchList ?? [];
+    if (rows.length === 0) break;
+    let stop = false;
+    for (const r of rows) {
+      const date = isoDate(r.makeDt);
+      if (!date) continue;
+      if (new Date(date) < cutoff) {
+        stop = true;
+        break;
+      }
+      const title = String(r.titl ?? "").trim();
+      if (isCommonExcludedContent(title)) continue;
+      out.push({
+        id: `${board.rMenuGb}:${r.sqno}`,
+        board: boardLabel(board.rMenuGb),
+        date,
+        title,
+        stockName: board.stockName,
+        symbol: null,
+        analyst: r.workId ?? "",
+        opinion: "",
+        targetPrice: null,
+        summary: "",
+        pdfUrl: r.attaFile
+          ? `${PDF_BASE}?rMenuGb=${board.rMenuGb}&attaFile=${encodeURIComponent(r.attaFile)}&makeDt=${encodeURIComponent(r.makeDt)}`
+          : null,
+        views: null,
+        category: "산업",
+        market: "kr",
+      });
+    }
+    if (stop || rows.length < PAGE_SIZE) break;
+    await sleep(300);
+  }
+  return out;
+}
+
 console.log(`▶ 키움증권 리서치 수집(${BOARDS.map((b) => b.rMenuGb).join("/")}): 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
 const collected = [];
@@ -296,19 +375,83 @@ for (const board of BOARDS) {
   await sleep(300);
 }
 
+console.log(`▶ 키움증권 거시경제(이슈분석/환율분석) 수집: 최근 ${DAYS}일`);
+let macroCount = 0;
+for (const board of MACRO_BOARDS) {
+  const items = await collectMacroBoard(board, cutoff);
+  console.log(`  ${board.rMenuGb}(${board.stockName}): ${items.length}건`);
+  collected.push(...items);
+  macroCount += items.length;
+  await sleep(300);
+}
+
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
-console.log(`✔ 파싱 완료: 총 ${collected.length}건`);
+console.log(`✔ 파싱 완료: 총 ${collected.length}건 (거시경제 ${macroCount}건)`);
 console.log(
   "  샘플:",
   collected.slice(0, 8).map((i) => `[${i.market}/${i.category}] ${i.date} ${i.symbol ?? i.stockName} — ${i.title}`),
 );
 
-const usItems = collected.filter((it) => it.market === "us" && it.category !== "산업");
-console.log(`▶ 투자의견/목표주가 조회 중 (PDF 포함, 로그인 불필요, 미국 종목만) — ${usItems.length}건...`);
-await enrichUsResearch(usItems, { sleepMs: 400, usePdf: true });
+// 국내 산업분석(CI) 게시판 항목의 PDF 표지를 읽어 두 가지를 보정한다(오너 지시 2026-09-27):
+//  ① 표지가 "IPO Report"(공모 리포트)면 비상장 리서치로 — 예: "덕산넵코어스(266690) 항법과 항재밍으로…".
+//  ② 라벨이 업종명이 아니면(제목 조각이 라벨로 들어온 경우 — 예: "소듐이온 전지(SIB) 기대감 확산") 표지의 업종명으로 —
+//     안 그러면 산업분석 업종 필터에서 어느 업종에도 안 잡힌다.
+let ipoMoved = 0, sectorFixed = 0;
+for (const it of collected) {
+  if (it.category !== "산업" || it.market !== "kr" || it.unlisted || !/\(CI\)/.test(it.board ?? "") || !it.pdfUrl) continue;
+  const text = await readPdfText(it.pdfUrl).catch(() => "");
+  if (isIpoCover(text)) {
+    it.unlisted = true;
+    it.stockName = String(it.stockName).replace(/\s*\(\d{6}\)\s*$/, "").trim();
+    ipoMoved++;
+    continue;
+  }
+  if (!looksLikeSectorLabel(it.stockName)) {
+    const label = sectorFromTitleOrCover(it.title, text);
+    if (label) { it.stockName = label; sectorFixed++; }
+  }
+}
+console.log(`▶ 산업분석(CI) 표지 보정: IPO→비상장 ${ipoMoved}건 · 업종 라벨 보정 ${sectorFixed}건`);
+
+// 미국(CC) 게시판에서 제목에 "(TICKER.US)" 표기 없이 "Bank of New York Mellon Corp: 지속적 수익증가…"처럼 영문 회사명만 온 글은
+// 종목 리포트인데 산업분석으로 새고 있었다(오너 지적 2026-09-27 — "종목같은데"). 영문 회사명 라벨이면 이름→티커 조회로 종목으로 올린다.
+let usPromoted = 0;
+for (const it of collected) {
+  if (it.market !== "us" || it.category !== "산업" || !/\(CC\)/.test(it.board ?? "")) continue;
+  if (!/^[A-Za-z][A-Za-z0-9 .,&'-]{3,60}$/.test(String(it.stockName ?? ""))) continue;
+  const hit = await resolveUsTickerByName(it.stockName);
+  if (hit) {
+    it.category = "기업";
+    it.stockName = hit.stockName;
+    it.symbol = hit.symbol;
+    usPromoted++;
+  }
+}
+console.log(`▶ 미국(CC) 티커 없는 영문 회사명 → 종목 ${usPromoted}건`);
+
+// 미국·중국도 비상장 리서치(오너 지시 2026-09-27 — "미국과 중국도 비상장을 추가한다"): 종목 없는 해외 산업 글 중 "비상장" 표기이거나
+// 제목이 상장 전 기업의 IPO 이야기("Anthropic IPO - 프론티어 AI의 첫 단독 상장")면 비상장으로 분리해 보낸다.
+let overseasUnlisted = 0;
+for (const it of collected) {
+  if (it.market === "kr" || it.category !== "산업" || it.symbol || it.unlisted) continue;
+  if (isUnlistedCompanyTag(`${it.stockName} ${it.title}`) || /\bIPO\b/.test(String(it.title))) {
+    it.unlisted = true;
+    overseasUnlisted++;
+  }
+}
+console.log(`▶ 해외 비상장(IPO 포함) 분리: ${overseasUnlisted}건`);
+
+const stockItems = collected.filter((it) => it.category !== "산업");
+console.log(`▶ 투자의견/목표주가 조회 중 (PDF 포함, 로그인 불필요) — ${stockItems.length}건...`);
+await enrichResearch(stockItems, { sleepMs: 400, usePdf: true });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
@@ -338,6 +481,7 @@ for (const it of collected) {
     pdfUrl: it.pdfUrl,
     views: it.views,
     category: it.category,
+    board: it.board,
   });
 }
 
@@ -361,4 +505,5 @@ for (const [, group] of byGroup) {
   console.log(`✔ [${market}/${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
   totalSent += items.length;
 }
+
 console.log(`\n✔ 총 ${totalSent}건 전송 완료`);

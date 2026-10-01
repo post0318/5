@@ -24,17 +24,23 @@
  * null — 업종 드롭다운에서만 빠지고 "전체"/다른 조회에는 그대로 남는다.
  */
 
+// 자동차·이차전지·반도체는 별도 산업분류로 가져간다(오너 지시 2026-09-27 — 각각 경기소비재·소재·정보기술에서 분리), 게임은
+// 정보기술이 아니라 커뮤니케이션서비스.
 export const SECTOR_LABELS = [
   "정보기술",
+  "반도체",
   "커뮤니케이션서비스",
   "금융",
   "헬스케어",
   "산업재",
-  "중공업",
+  "운송",
+  "조선/방산",
   "건설",
-  "에너지",
+  "에너지/화학",
   "소재",
+  "이차전지",
   "경기소비재",
+  "자동차",
   "필수소비재",
   "유틸리티",
   "부동산",
@@ -44,42 +50,264 @@ export type SectorLabel = (typeof SECTOR_LABELS)[number];
 
 // 순서가 우선순위다 — 위에서부터 먼저 매칭된 규칙을 쓴다(예: "건설리츠"는
 // 부동산 규칙이 건설보다 먼저 와야 리츠로 분류됨).
+// 회사 이름 기준(오너 지시 2026-09-27): 한국전력·비스트라·GE 버노바·블룸에너지 등 전력 생산·발전 솔루션 사업자는 유틸리티,
+// 두산에너빌리티·지멘스·LS ELECTRIC·HD현대일렉트릭 등 전력설비 제조사는 산업재. 맨 앞에 두어 "블룸에너지"의 "에너지" 같은 업종 단어보다 먼저 잡힌다.
+// GE 버노바·블룸에너지는 산업재(오너 지시 2026-09-27 — 처음엔 유틸리티로 지정했다가 정정).
+const UTILITY_COMPANY_RE = /한국전력|비스트라|Vistra/i;
+const EQUIPMENT_COMPANY_RE =
+  /두산에너빌리티|지멘스|Siemens|LS\s?ELECTRIC|LS\s?일렉트릭|(?:HD)?현대\s?일렉트릭|GE\s?(?:버노바|베르노바|Vernova)|블룸에너지|Bloom\s?Energy/i;
+// 신재생 사업자는 유틸리티(오너 지시 2026-09-27) — 신재생·재생에너지 라벨, 그리고 "○○ 발전사업자·발전사업" 같은 사업자 표현. 에너지 규칙(태양광·풍력)보다 앞에 둔다.
+// 태양광·풍력 "설비"(터빈·기자재)는 아래 POWER_EQUIPMENT 예외가 산업재로 돌린다.
+// 태양광·풍력 자체도 신재생이라 유틸리티(오너 지시 2026-09-27 — "에너지로 분리되는 신재생은 유틸리티로"). 태양광 셀·모듈은 바로 앞 소재 규칙이,
+// 설비(터빈·기자재)는 POWER_EQUIPMENT 예외가 산업재로 돌린다. 수소는 발전사업자 표현일 때만 유틸리티(수소 경제·정책은 에너지/화학).
+const RENEWABLE_OPERATOR_RE =
+  /신재생|재생에너지|태양광|풍력|(?:연료전지|수소).{0,10}(?:발전\s?사업|사업자|발전사|운영사)|발전\s?사업자|발전사(?!\S*기자재)/;
+
+// 수소(오너 지시 2026-09-27): 수소 자동차는 자동차, 수소 발전 사업자는 유틸리티(위 RENEWABLE_OPERATOR_RE), 수소 연료전지·전해조 생산은 산업재.
+// 수소차가 가장 먼저 — "수소차용 연료전지"가 아래 연료전지(산업재) 규칙에 먼저 걸리지 않게.
+const HYDROGEN_VEHICLE_RE = /수소\s?(?:자동차|전기차|차|트럭|버스)|수소차|넥쏘/;
+
+// 태양광 셀·모듈·웨이퍼·폴리실리콘과 태양광 "업체"(제조사 — OCI·한화솔루션·JA·진코 같은 패널·소재 회사)는 소재(오너 지시 2026-09-27 —
+// IBK "Solar를 지우는 태양광 업체들"이 라벨 "에너지/소재"의 첫 업종(에너지)로 분류됐다). 태양광 발전 "사업자"는 유틸리티라 업체와 구분한다.
+const SOLAR_MATERIAL_RE = /태양광\s?(?:셀|모듈|웨이퍼|잉곳|업체)|태양전지|폴리실리콘/i;
+
+// 반도체 신호 — 규칙(아래)과 "Tech" 같은 넓은 정보기술 라벨 뒤 세분화(classifySector)가 같이 쓴다.
+const SEMICONDUCTOR_RE = /반도체|파운드리|소부장|메모리|HBM|DRAM|NAND|\bCPU\b|\bGPU\b/i;
+
 const SECTOR_RULES: [SectorLabel, RegExp][] = [
+  ["유틸리티", UTILITY_COMPANY_RE],
+  ["산업재", EQUIPMENT_COMPANY_RE],
+  ["자동차", HYDROGEN_VEHICLE_RE],
+  // 태양광 셀·모듈·웨이퍼·폴리실리콘은 소재 산업(오너 지시 2026-09-27) — 아래 신재생 유틸리티 규칙보다 먼저.
+  ["소재", SOLAR_MATERIAL_RE],
+  ["유틸리티", RENEWABLE_OPERATOR_RE],
   ["부동산", /부동산|리츠|REIT/i],
-  ["중공업", /조선|방산|방위산업|항공우주/],
-  ["소재", /철강|화학|소재|2차\s?전지|배터리|Battery/i],
+  // "우주"는 단독으로 쓰면 제목의 수사("우주의 기회")에 걸리므로 업종 표기일 때만 인정 — 라벨 전체가 "우주"이거나 복합어.
+  // 조선과 방산은 하나의 섹터 "조선/방산"(오너 지시 2026-09-27 — 구 "중공업"의 이름을 바꾸고 항공우주·우주 표기도 여기에 둔다).
+  // 해양플랜트(FPSO·드릴십)는 조선(오너 지시 2026-09-27).
+  ["조선/방산", /조선|방산|방위산업|항공우주|우주항공|우주산업|^우주$|스타십|Starship|SpaceX|해양\s?플랜트|FPSO|드릴십/i],
+  // 이차전지는 소재에서 분리(오너 지시 2026-09-27) — "2차전지 소재"·"양극재"도 이차전지가 먼저 잡는다.
+  ["이차전지", /2차\s?전지|이차\s?전지|배터리|Battery|CATL|양극재|음극재/i],
   // "원자재"는 여기 없었다가 빠졌다 — 해운(벌크선 원자재 운송)·구리 등 소재
   // 리포트에도 흔히 섞여 나와 산업재(해운)가 에너지로 잘못 분류되는 문제가
   // 있었다(오너 지적, 2026-09-22 — "산업분석에서 에너지업종에 해운이
   // 들어가있다"). 에너지 리포트는 아래 다른 키워드로 이미 충분히 잡힌다.
-  ["에너지", /에너지|정유|석유|가스전/],
-  ["헬스케어", /제약|바이오|헬스케어|의료|디지털헬스/],
-  ["금융", /은행|증권|보험|금융|카드\/?결제/],
+  // 신재생(태양광·풍력)은 코스피 "에너지/화학"에 묶이는 관행이라 에너지, 원전은 발전 사업이라 유틸리티로 둔다(2026-09-27 기타 정리).
+  // 수소 연료전지·수전해(전해조) 생산은 설비 제조라 산업재(오너 지시 2026-09-27) — 수소 자체(경제·정책)는 에너지.
+  ["산업재", /연료전지|수전해|전해조|SOFC/i],
+  // 정유·석유화학·화학·유전서비스는 하나의 밸류체인이라 "에너지/화학" 한 섹터(오너 지시 2026-09-27 — "석유화학 산업이 유전서비스부터 시작한다",
+  // 옛 소재의 화학과 에너지를 통합, 코스피200 에너지/화학 체계). 소재는 철강·비철·기타 소재만 남는다(아래).
+  ["에너지/화학", /에너지|Energy|정유|석유|화학|유전|가스전|아람코|Aramco|수소|APPEC/i],
+  ["소재", /철강|소재/i],
+  // "제약"은 다른 한글에 붙지 않을 때만("제약/바이오"·"제약업") — "공급제약"·"규제제약"의 제약(制約)이 걸리던 것(KIS 연료전지 글, 오너 지적 2026-09-27).
+  ["헬스케어", /(?<![가-힣])제약|바이오|헬스케어|의료|디지털헬스|백신|신약|임상/],
+  ["금융", /은행|증권|보험|금융|카드\/?결제|\bGA\b/],
+  // 반도체는 정보기술에서 분리(오너 지시 2026-09-27) — 원래 정보기술 자리(금융 뒤)를 그대로 써서 다른 분류의 우선순위는 바뀌지 않는다.
+  ["반도체", SEMICONDUCTOR_RE],
   [
     "정보기술",
-    /\bIT\b|\bAI\b|아이티|반도체|소프트웨어|인터넷|게임|파운드리|소부장|하드웨어|전자상거래|테크|디지털자산|클라우드|사이버보안|로보틱스|통신기기|통신장비/i,
+    /\bIT\b|\bAI\b|아이티|소프트웨어|컴퓨터|인터넷|하드웨어|전자상거래|테크|디지털자산|클라우드|사이버보안|로보틱스|통신기기|통신장비|\bTech\b|정보기술|전기전자|디스플레이|LCD|OLED|MLCC|휴머노이드|로봇|양자|Quantum|데이터센터|AIDC|\bGPT|OpenAI|오픈AI|에이전트|에이전틱|\bAgent|광학|아이웨어/i,
   ],
-  ["커뮤니케이션서비스", /통신서비스|통신|미디어|엔터|콘텐츠/],
-  ["건설", /건설|건자재/],
-  ["유틸리티", /유틸리티|전력\s?솔루션|전력\s?생산/],
-  ["산업재", /산업재|운송|물류|해운|항공(?!우주)|기계|전력기기/],
-  ["경기소비재", /자동차|화장품|유통|여행|레저|가전|라이프스타일|모빌리티/],
+  // 게임은 정보기술이 아니라 커뮤니케이션서비스(오너 지시 2026-09-27). "게임체인저"(game changer) 수사는 제외.
+  ["커뮤니케이션서비스", /통신서비스|통신|미디어|엔터|콘텐츠|(?<!왕좌의\s?)게임(?!\s?체인저)/],
+  ["건설", /건설|건자재|시멘트/],
+  // "전력 솔루션"(미래에셋 — 원전·전력망 설비 수혜 커버리지)은 전력설비라 산업재로 옮겼다(오너 지적 2026-09-27 — "원전과 전력망 투자는 필연적 아무리봐도 산업재").
+  ["유틸리티", /유틸리티|전력\s?생산|원전|원자력|\bSMR\b/],
+  // 운송은 산업재에서 분리(오너 지시 2026-09-27) — 원래 산업재 자리를 그대로 써서 다른 분류의 우선순위는 유지.
+  ["운송", /운송|물류|해운|항공(?!우주)|택배|항만|철도/],
+  ["산업재", /산업재|기계|전력기기|전력\s?솔루션/],
+  // 자동차는 경기소비재에서 분리(오너 지시 2026-09-27) — 원래 경기소비재 자리를 그대로 써서 "자동차보험"이 금융으로 가는 식의 우선순위는 유지.
+  ["자동차", /자동차|모빌리티|전기차|타이어|현대차|완성차/],
+  // 라벨 우선(오너 지시 2026-09-27 — "라벨이 있으면 라벨부터 봐라"): "컴퓨터"(정보기술)·"도소매"(유통) 같은 업종 라벨이 내용에 밀려 다른 섹터로 가던 것.
+  ["경기소비재", /화장품|유통|도소매|여행|레저|가전|라이프스타일|섬유|의복|호텔|카지노|면세|경공업|완구|토이/],
   ["필수소비재", /음식료|담배|농업/],
 ];
 
-export function classifySector(doc: { stockName?: string | null; title?: string | null }): SectorLabel | null {
+// 전력 생산은 유틸리티, 전력설비(기자재·변압기·전선·터빈 등 제조)는 산업재(오너 지시 2026-09-27 — "전력생산이면 유틸리티, 전력설비랑
+// 관련있으면 산업재"). 라벨이 유틸리티여도 제목이 설비 이야기면 산업재로 간다("유틸리티; 대미투자 윤곽, 발전 기자재 수혜에 주목").
+const POWER_EQUIPMENT_RE = /기자재|전력\s?설비|전력\s?기기|변압기|전선|케이블|배전반|개폐기|주기기|가스터빈|터빈|HVDC|초고압/;
+const NUCLEAR_BUILD_RE = /기자재|주기기|\bEPC\b|설계·시공/;
+// 원전 문맥일 때만 — 요약에 기자재라는 단어가 스친 전력망·신재생 운영 글까지 산업재로 가지 않게(2026-09-27 회귀 검사에서 2건 오이동 확인).
+const NUCLEAR_CONTEXT_RE = /원전|원자력|AP1000|APR1400|\bSMR\b/;
+
+export function classifySector(doc: {
+  stockName?: string | null;
+  title?: string | null;
+  summary?: string | null;
+}): SectorLabel | null {
+  const base = classifySectorBase(doc);
+  // 공작기계·건설기계는 기계 = 산업재(오너 지시 2026-09-27 — 하나 "일본과 한국의 공작기계 수주 호조"는 자동차 담당 라벨이 붙었지만 산업재).
+  if (base === "자동차" && /공작기계|건설기계|산업기계/.test(doc.title ?? "")) return "산업재";
+  // 라벨이 넓은 정보기술("Tech"·"IT")이어도 제목이 메모리·HBM·반도체 이야기면 반도체다(오너 지적 2026-09-27 — 삼성 Tech 라벨
+  // "메모리 외주 확대 수혜주 점검"·"HBM 디스펙 논란"). 반도체는 정보기술의 하위 업종이라 라벨을 어기는 게 아니라 세분화다.
+  if (base === "정보기술" && SEMICONDUCTOR_RE.test(doc.title ?? "")) return "반도체";
+  // 유틸리티로 지정한 회사(GE 버노바·블룸에너지 등)는 제목에 설비 단어("가스터빈")가 있어도 유틸리티다.
+  if (base === "유틸리티" && POWER_EQUIPMENT_RE.test(doc.title ?? "") && !UTILITY_COMPANY_RE.test(`${doc.stockName ?? ""} ${doc.title ?? ""}`)) {
+    return "산업재";
+  }
+  // 제목엔 없어도 요약이 설비·시공 이야기면 산업재 — "원전 관련 대미투자 관전 포인트"(신한, 요약: "AP1000 장납기 기자재 조달", 본문: 설계·주기기·EPC
+  // 한국 기업 참여 범위)는 원전 건설·기자재 밸류체인이라 산업재(오너 지적 2026-09-27). 제목의 설비 단어보다 좁게(주기기·기자재·EPC)만 본다.
+  if (
+    base === "유틸리티" &&
+    NUCLEAR_CONTEXT_RE.test(`${doc.title ?? ""} ${doc.summary ?? ""}`) &&
+    NUCLEAR_BUILD_RE.test(doc.summary ?? "") &&
+    !UTILITY_COMPANY_RE.test(`${doc.stockName ?? ""} ${doc.title ?? ""}`)
+  ) {
+    return "산업재";
+  }
+  // 라벨이 넓은 에너지/화학이어도 제목이 신재생이면 세분화한다(오너 지적 2026-09-27 — 미래에셋 "Energy Bites" 시리즈의 "2Q26 미국 태양광 설치량
+  // 발표 코멘트"가 라벨의 "Energy"에 걸려 에너지/화학으로 갔다). 셀·모듈은 소재, 설비(터빈·기자재)는 산업재, 그 외 신재생 사업·설치는 유틸리티.
+  if (base === "에너지/화학") {
+    const t = doc.title ?? "";
+    if (SOLAR_MATERIAL_RE.test(t)) return "소재";
+    if (RENEWABLE_OPERATOR_RE.test(t)) return POWER_EQUIPMENT_RE.test(t) ? "산업재" : "유틸리티";
+  }
+  return base;
+}
+
+/**
+ * 산업분석 라벨이 국가명으로 시작하면 그 나라 시장이다("중국 자동차 판매동향" → ch, "일본 …" → jp, "미국 …" → us, "유럽 …" → eu) — 오너 지시 2026-09-27
+ * ("국가 규칙을 하나증권 외 다른 증권사에도 넣을지 당연하지"). 국내(kr) 게시판으로 들어온 산업 글이 해외 업종을 다룰 때 kr 로 흘리지 않게, 모든 수집기가
+ * 거치는 수신 라우트(`/api/cron/total-research`)가 항목별로 적용한다. 라벨 첫머리만 본다(제목 내용으로 나라를 추측하지 않음). 모르면 null.
+ * 수집기 쪽 쌍둥이: `scripts/lib/overseas-market.mjs` 의 `marketFromLabel` — 한쪽을 고치면 다른 쪽도 고칠 것(verify-classification.mts 가 일치 검사).
+ */
+export function marketFromIndustryLabel(label: string | null | undefined): "ch" | "jp" | "us" | "eu" | null {
+  const l = String(label ?? "").trim();
+  if (/^(?:중국|차이나)(?!집)/.test(l) || /^China\b/i.test(l)) return "ch";
+  if (/^(?:일본|Japan)/i.test(l)) return "jp";
+  if (/^(?:미국|USA?\b)/i.test(l)) return "us";
+  if (/^(?:유럽|Europe)/i.test(l)) return "eu";
+  return null;
+}
+
+/**
+ * 제목이 "중국 …"으로 시작하는 산업 리포트도 중국 시장(오너 지시 2026-09-27 — "중국 전기차 글은 중국 산업이 맞다"). 라벨이 업종명뿐이고("자동차산업")
+ * 나라 표기가 없는 글이 제목에만 나라를 담는 경우("8월 중국 자동차 판매: 가격 인하 경쟁 확대 조짐" — 오너 지적 2026-09-27) 때문에, "N월 " 같은 날짜
+ * 접두어는 벗겨내고 그 뒤 첫머리를 본다. 중국만 적용한다 — 미국·일본은 제목 머리가 나라여도 국내 업종 글인 경우가 많고, 나라 뒤에 조사가 붙으면(여러
+ * 나라 얘기, "일본과 한국의 공작기계…") 제외(뒤에 한글이 바로 오면 안 됨). 수집기 쪽 쌍둥이: `scripts/lib/overseas-market.mjs` 의 `marketFromTitleLead`.
+ */
+export function marketFromTitleLead(title: string | null | undefined): "ch" | null {
+  const t = String(title ?? "").trim().replace(/^\d{1,2}\s*월\s*/, "");
+  return /^중국(?![가-힣])/.test(t) ? "ch" : null;
+}
+
+/** 라벨 조각 하나가 가리키는 업종(규칙 순서대로 첫 매치). */
+function sectorOfPart(part: string): SectorLabel | null {
+  for (const [label, re] of SECTOR_RULES) if (re.test(part)) return label;
+  return null;
+}
+
+/**
+ * "A/B/C" 처럼 서로 다른 업종을 **셋 이상** 나열한 라벨인가 — 한 업종의 다른 표기("정유/석유화학"·"제약/바이오")나 반도체⊂정보기술 관계는 묶음이 아니고,
+ * 두 업종 묶음("조선/기계"·"인터넷/게임"·"엔터/레저/미디어")은 서로 가까워 첫 업종을 그대로 쓴다(64건 이동을 회귀 검사에서 확인해 셋 이상으로 좁힘).
+ */
+function isMultiSectorLabel(label: string): boolean {
+  const parts = label.split(/[\/,·]/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return false;
+  const sectors = parts.map(sectorOfPart);
+  if (sectors.some((s) => s === null)) return false;
+  const distinct = new Set(sectors);
+  if (distinct.has("반도체")) distinct.delete("정보기술"); // 반도체는 정보기술의 하위 업종
+  return distinct.size >= 3;
+}
+
+function classifySectorBase(doc: {
+  stockName?: string | null;
+  title?: string | null;
+  summary?: string | null;
+}): SectorLabel | null {
   // stockName은 원문 수집기가 붙인 업종 라벨 그대로("운송" 등)라 title보다
   // 신뢰도가 높다 — 먼저 stockName만으로 판정하고, 거기서 못 정하면 title까지
   // 합쳐서 본다. 순서를 안 나누면 "운송" 리포트 제목에 "조선업" 같은 단어가
   // 우연히 섞였을 때 중공업으로 새는 문제가 있었다(오너 지적, 2026-09-22 —
   // "중공업에도 운송이 들어가있다 업종분류는 운송인데").
   const stockName = doc.stockName ?? "";
+  // 서로 다른 업종을 나열한 묶음 라벨("정유화학/철강금속/음식료")은 어느 한 업종으로 정할 수 없다 → 기타(오너 지시 2026-09-27 — "이건 어디라고
+  // 분류하기 어렵다 기타가 맞다"). 수집기가 PDF 본문으로 한 업종으로 좁힌 라벨(sector-label.mjs pickCompositeLabel)은 묶음이 아니라 여기 안 걸린다.
+  if (isMultiSectorLabel(stockName)) return null;
   for (const [label, re] of SECTOR_RULES) {
     if (re.test(stockName)) return label;
+  }
+  // 제목 앞 대괄호는 수집기 라벨이 게시판 이름("글로벌 산업분석")일 때 실제 업종 라벨이다("[미국 건설] …") — 제목 내용보다 먼저 본다
+  // (오너 지시 2026-09-27 — 라벨부터). 안 그러면 제목 속 "부동산" 같은 다른 단어가 라벨을 이긴다.
+  // 제목 앞 "업종: 헤드라인"·"업종; 헤드라인"도 같은 라벨이다("연료전지: 미국 광역전력망 공급제약의 해결책" — 라벨이 "중견중소" 같은 규모 구분일 때).
+  const titleText = doc.title ?? "";
+  const titleLabel =
+    titleText.match(/^\s*\[([^\]]{1,25})\]/)?.[1] ?? titleText.match(/^\s*([^:;：\[\]]{1,15})\s*[:;：]/)?.[1];
+  if (titleLabel) {
+    for (const [label, re] of SECTOR_RULES) {
+      if (re.test(titleLabel)) return label;
+    }
   }
   const hay = `${stockName} ${doc.title ?? ""}`;
   for (const [label, re] of SECTOR_RULES) {
     if (re.test(hay)) return label;
   }
+  // 마지막 근거 — 요약 첫머리. 라벨이 시리즈명("Same But Differ")이고 제목도 테마("변수가 된 환율…")인 업종 리포트는 본문 첫 소제목
+  // ("1. 전기전자 현황 점검")에만 업종이 나온다(오너 지적 2026-09-27). 요약 전체는 잡음이 많아 앞 60자만 본다.
+  // 한글 요약만 — 영문 요약은 대소문자 무시 규칙(\bIT\b 가 문장 속 "it" 에 걸림)이 잡음을 만든다.
+  const lead = (doc.summary ?? "").trim().slice(0, 60);
+  if (lead && /[가-힣]/.test(lead)) {
+    for (const [label, re] of SECTOR_RULES) {
+      if (re.test(lead)) return label;
+    }
+  }
   return null;
+}
+
+/**
+ * 산업분석 업종 라벨을 표준 이름으로 정규화(오너 지시 2026-09-27 — DS "[대조선]"은 "조선", "업종 어휘는 표준 이름으로 정규화").
+ * 서로 다른 세부 업종을 합치지 않고 표기 변형(동의어)만 맞춘다. 접미어("업"·"산업")와 한 글자 접두어(대·소·중·신·新) 허용.
+ * 수집기 쪽 `scripts/lib/sector-label.mjs`의 `normalizeSectorLabel`과 같은 표 — 한쪽을 고치면 다른 쪽도 고칠 것
+ * (`scripts/verify-classification.mts`가 두 구현이 같은 결과를 내는지 검사한다).
+ */
+export const INDUSTRY_LABEL_SYNONYMS: readonly (readonly [string, readonly string[]])[] = [
+  ["조선", ["조선", "조선해양", "조선/해양"]],
+  ["2차전지", ["2차전지", "2차 전지", "이차전지", "이차 전지", "배터리"]],
+  ["방산", ["방산", "방위산업", "방위 산업", "국방"]],
+  ["로보틱스", ["로보틱스", "로봇"]],
+  ["엔터", ["엔터", "엔터테인먼트"]],
+  ["자동차", ["자동차"]],
+  ["반도체", ["반도체"]],
+  ["기계", ["기계"]],
+  ["철강", ["철강"]],
+  ["건설", ["건설"]],
+  ["은행", ["은행"]],
+  ["보험", ["보험"]],
+  ["증권", ["증권"]],
+  ["항공", ["항공"]],
+  ["해운", ["해운"]],
+];
+const SYNONYM_TO_CANON = new Map<string, string>(
+  INDUSTRY_LABEL_SYNONYMS.flatMap(([canon, list]) => list.map((w): [string, string] => [w, canon])),
+);
+// 업종 태그 자리에 담당 애널리스트 이름이 온 경우 → 그 애널리스트의 업종(모든 증권사 공통, 오너 지시 2026-09-27).
+// 수집기 쪽 `scripts/lib/sector-label.mjs` 의 ANALYST_SECTOR 와 같은 표.
+export const ANALYST_SECTOR: Readonly<Record<string, string>> = { 매태호: "방산" };
+export function normalizeIndustryLabel(label: string | null | undefined): string {
+  // 날짜별 시황 시리즈 라벨("마켓 뷰(9월 16일)")은 날짜를 떼어 한 묶음으로(오너 지적 2026-09-27 — 날짜마다 폴더가 갈라짐)
+  const raw = String(label ?? "").trim().replace(/\s*\(\s*\d{1,2}월\s*\d{1,2}일\s*\)$/, "")
+    // 시리즈 회차 표기("AI Infra Signal 4호"·"월스트리트파인더 Ep.206"·"Energy Renaissance 6"·"Monthly Quantum #8"·"시즌2")도 떼어 시리즈당 한 묶음으로(오너 지적 2026-09-27)
+    .replace(/\s*(?:(?:제\s*)?\d+\s*호|\(\d{6}\)|(?:Ep|EP|Vol|No)\.?\s*\d+|#\d+|시즌\s*\d+|\(\d{1,3}\))$/, "")
+    .replace(/(?<=[A-Za-z])\s+\d{1,3}$/, "")
+    .replace(/^\d{1,2}\/\d{1,2}\s+/, "")
+    .replace(/^해외주식\s*369$/, "해외주식 369")
+    // 수집기가 붙인 게시판 접두("FICC · "·"투자전략 · ") 뒤의 하위 구분·회차 꼬리를 떼어 시리즈당 한 묶음으로(오너 지시 2026-09-27)
+    .replace(/^(FICC · [^/]+)\/.*$/, "$1")
+    .replace(/^(FICC · .*?)크레딧\((?:국내|KP|해외)\)/, "$1크레딧")
+    .replace(/^((?:투자전략|경제분석) · .*?)[,，]\s*#\d+.*$/, "$1")
+    .replace(/매커니즘/g, "메커니즘")
+    // 업종 의견 꼬리("통신서비스 (비중확대/유지)")도 떼어 업종당 한 묶음으로
+    .replace(/\s*\((?:비중확대|비중축소|중립|Overweight|Neutral|Underweight)[^)]*\)$/, "");
+  if (!raw) return raw;
+  if (Object.hasOwn(ANALYST_SECTOR, raw)) return ANALYST_SECTOR[raw];
+  const stem = raw.replace(/(?:산업|업종|섹터|부문|업)$/, "").trim();
+  const candidates = [raw, stem];
+  const pre = stem.match(/^[대소중신新]\s?(.+)$/);
+  if (pre) candidates.push(pre[1].trim());
+  for (const c of candidates) {
+    const canon = SYNONYM_TO_CANON.get(c);
+    if (canon) return canon;
+  }
+  return raw;
 }

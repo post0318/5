@@ -232,9 +232,15 @@ export async function attachSectorLeaders(
 /** 섹터 주도 종목 후보로 볼 시총 상위 종목 수(시장별) — 너무 넓히면 섹터
  * 조회(assetProfile) 호출만 늘고, 주도 종목으로 언급할 만한 종목도 아니다. */
 const KR_TOP_BY_MARKET = { KOSPI: 150, KOSDAQ: 80 };
-/** 한 번 실행에서 새로 조회할 섹터 최대 건수 — 첫 실행에 230건을 한꺼번에
- * 물면 오래 걸려서 몇 주에 걸쳐 나눠 채운다(캐시는 계속 쌓인다). */
-const KR_SECTOR_LOOKUP_BUDGET = 60;
+/** 한 번 실행에서 새로 조회할 섹터 최대 건수(시장별) — 첫 실행에 230건을
+ * 한꺼번에 물면 오래 걸려서 몇 주에 걸쳐 나눠 채운다(캐시는 계속 쌓인다).
+ * **시장별로 따로 예산을 둔다**(오너 지적 2026-10-01 — "코스닥은 주도주가
+ * 안나오네"): 예전엔 전체 230건(코스피 150+코스닥 80)을 하나의 예산 60건으로
+ * 순서대로(코스피 먼저) 채웠는데, 코스피 150건이 코스닥 80건보다 먼저 와서
+ * 예산을 코스피가 전부 소진해버려 코스닥 종목은 몇 주가 지나도 섹터 캐시가
+ * 하나도 안 채워졌다(실측 — 캐시 120건 전부 코스피, 코스닥 대형주 전수 미캐시
+ * 확인). 시장별로 예산을 나눠야 매주 양쪽 다 진행된다. */
+const KR_SECTOR_LOOKUP_BUDGET_BY_MARKET = { KOSPI: 30, KOSDAQ: 30 };
 
 export interface KrStockRow extends KrStockSector {
   pct: number | null;
@@ -286,7 +292,14 @@ export async function buildKrStocks(startDate: string, endDate: string): Promise
   const { getKrStockSectors, upsertKrStockSectors } = await import("@/lib/db/kr-stock-sectors");
   const cached = await getKrStockSectors(picked.map((r) => r.code)).catch(() => new Map());
 
-  const missing = picked.filter((r) => !cached.has(r.code)).slice(0, KR_SECTOR_LOOKUP_BUDGET);
+  const missing: typeof picked = [];
+  for (const m of ["KOSPI", "KOSDAQ"] as const) {
+    missing.push(
+      ...picked
+        .filter((r) => r.market === m && !cached.has(r.code))
+        .slice(0, KR_SECTOR_LOOKUP_BUDGET_BY_MARKET[m]),
+    );
+  }
   const fresh: { _id: string; name: string; sector: string | null; industry: string | null; checkedAt: string }[] = [];
   const yf = getYahooFinance();
   const now = new Date().toISOString();

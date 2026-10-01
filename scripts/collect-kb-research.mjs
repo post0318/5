@@ -51,13 +51,13 @@
  *   |------------|--------------------------------------------|--------|----------|------|
  *   | 79         | 자산배분/매크로 > KB데일리                  | kr     | 산업     | ✅ 이 스크립트(`tab=1`) — 시황 고정(오너 지시 2026-09-24 "kb데일리는 산업분석>시황에 해당한다") |
  *   | 69/65/63   | 자산배분/매크로 > 매크로                    | kr     | 산업     | ❌ 미수집 — 투자전략(주식) 라벨 후보 |
- *   | 77         | 자산배분/매크로 > 자산배분("이그전")        | kr     | 산업     | ❌ 미수집 — 투자전략(주식) 후보 |
+ *   | 77         | 자산배분/매크로 > 자산배분("이그전")        | kr     | 산업     | ✅ 이 스크립트(`tab=2`, categoryid=77) — tab=3 "이그전"과 사이트 중복 게시(오너 확인 2026-09-27), stockName "KB 이그전"로 투자전략(주식) 고정 |
  *   | 193/75/76  | 자산배분/매크로 > 대체투자(가상자산/원자재/부동산리츠) | kr | 산업 | ❌ 미수집 — 다른 증권사의 "대체투자 제외" 전례 있음(CLAUDE.md) |
  *   | 174        | 자산배분/매크로 > 자산배분기타 > 기타발간   | kr     | 산업     | ❌ 미수집 |
  *   | 84         | 한국 투자 > 시황코멘트                      | kr     | 산업     | ❌ 수집 제외(오너 결정, 2026-09-24) |
- *   | 81("KB 전략") | 한국 투자 > 주식전략                     | kr     | 산업     | ✅ 이 스크립트(`tab=3`, docTitle="KB 전략"만) — 투자전략(주식) 고정(오너 지시 — "kb전략은 투자전략(주식)에 해당된다") |
- *   | 81("이그전")/83("KB Quant") | 한국 투자 > 주식전략        | kr     | 산업     | ❌ 수집 제외(오너 결정 — "나머지는 수집에서 제외한다") |
- *   | 70("KB Bond"/"KB Fed Watch") | 한국 투자 > 채권/크레딧    | kr     | -        | ✅ `collect-kb-macro-issues.mjs`(docTitle 정확 일치) — `kr_research`가 아니라 거시경제 > 이슈분석(`macro_issues`, topic:"이슈분석")으로 별도 전송(오너 지시 — "kb bond는 거시경제>이슈분석에 해당된다" + "KB Fed Watch는 이슈분석에 포함한다") |
+ *   | 81("KB 전략"/"이그전") | 한국 투자 > 주식전략             | kr     | 산업     | ✅ 이 스크립트(`tab=3`, docTitle="KB 전략"·"이그전"만) — 투자전략(주식) 고정(오너 지시 — "kb전략은 투자전략(주식)에 해당된다" + "이그전은 투자전략이다", 2026-09-27) |
+ *   | 83("KB Quant") | 한국 투자 > 주식전략                     | kr     | 산업     | ❌ 수집 제외(오너 결정 — "나머지는 수집에서 제외한다") |
+ *   | 70("KB Bond"/"KB Fed Watch") | 한국 투자 > 채권/크레딧    | kr     | 산업     | ✅ 이 스크립트(`tab=3`, docTitle 정확 일치) — 고정 stockName으로 kr_research에 합류, classifyResearchTopic()이 거시경제 > 이슈분석으로 분류(오너 지시 — "kb bond는 거시경제>이슈분석에 해당된다" + "KB Fed Watch는 이슈분석에 포함한다") |
  *   | 71("KB Credit Weekly") | 한국 투자 > 채권/크레딧          | kr     | -        | ❌ 수집 제외(오너 결정) |
  *   | 192        | 한국 투자 > 종목컨설팅("KB 이슈 플러스")    | kr     | 산업     | ❌ 수집 제외(오너 결정) |
  *   | 177        | 한국투자 > 한국투자기타 > 기타발간           | kr     | 산업     | ❌ 수집 제외(오너 결정) |
@@ -94,8 +94,9 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
-import { isEsgContent } from "./lib/exclude-filters.mjs";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { isEsgContent, isFxContent, isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { promoteKrIndustryToStock } from "./lib/company-match.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -116,8 +117,21 @@ const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
+// 거시경제(이슈분석/환율분석) 전용 — 오너 지시 2026-09-26 "kb 키움은 개별수집기에
+// 통합되어야 맞아보인다. 따로 있을 이유가 없다"로 collect-kb-macro-issues.mjs를
+// 이 파일에 흡수. 이후 리서치 분류 체계 전면 개편(2026-09-26)으로 macro_issues
+// 컬렉션·라우트 자체가 폐지돼 kr_research(IMPORT_URL)로 완전히 합류했다.
+// 자산배분/매크로(tab=2) 전용 Weekly 판정 — 공용 isWeeklyRecurringContent()
+// (Weekly/위클리만)보다 넓게 "주간"까지 포함한다(오너 지시, 이 게시판 한정).
+const MACRO_WEEKLY_RE = /\bWeekly\b|위클리|주간/i;
+// "기타발간"(174) 게시판의 "금리 전망 테이블" — 본문이 표뿐이라 발췌기가 실제 문장을 못 찾고 KB 표준 면책
+// 문구로 폴백한다(오너 확인 — "수집제외"). 제목만으로 정확히 걸러 매일 여러 건 올라오는 이 시리즈를 전량 제외.
+const RATE_TABLE_RE = /^금리\s*전망\s*테이블$/;
+// "자산배분"(77) 게시판의 "KB Asset Compass" 시리즈(docTitle, 헤드라인은 docTitleSub) — 오너 결정
+// 2026-09-27 "KB Asset Compass 수집제외"로 전량 제외.
+const EXCLUDED_TAB2_SERIES_RE = /^KB\s*Asset\s*Compass$/i;
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
@@ -126,6 +140,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const AJAX_URL = "https://www.kbsec.com/go.able?linkcd=s040203010001";
 const TITLE_RE = /^(.+?)\s*\((\d{6})\)$/;
+// 괄호 안 6자리가 상장 종목코드인지 — "화학 (151010)"·"건설 (201030)" 같은 업종
+// 리포트는 업종 분류코드(GICS 계열로 보임)가 붙어 종목 리포트로 잘못 분류되고,
+// 업종 PDF 속 개별 종목 목표가가 그 "종목"에 붙었다(2026-09-25 공용 추출기 비교 중 발견).
+const LISTED_CODES = new Set(
+  JSON.parse(readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"))
+    .map((c) => c.s)
+    .filter(Boolean),
+);
 // 오너 지시(2026-09-24 — "산업/기업 중 코드나 종목명인 경우 종목분석에
 // 해당되고 그 외는 산업분석에 해당한다. 다만, 포트폴리오, 추천종목, ESG등은
 // 대상에서 제외한다. 또한 IPO나 비상장인 경우는 종목분석>인사이트에
@@ -167,36 +189,28 @@ function excerptFromPdfText(text, stockName, symbol) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// API의 tp(목표주가)·recomm(투자의견)은 "F I R S T TO THE MARKET" 같은
-// 뉴스 속보 노트에도 항상 채워져 있는 KB의 현재 유지값이라, 본문에 실제
-// 재언급된 경우만 쓰기로 함(오너 확인, 2026-09 — 목표주가·투자의견 둘 다
-// 동일 문제 지적). "목표주가"/"투자의견"이란 말이 PDF에 있는지만 검증.
-function mentionsTargetPrice(text) {
-  return /목표주가/.test(text);
-}
-function mentionsOpinion(text) {
-  return /투자의견/.test(text);
+// API의 tp(목표주가)·recomm(투자의견)은 "F I R S T TO THE MARKET" 같은 뉴스 속보
+// 노트에도 항상 채워져 있는 KB의 현재 유지값이라, 본문에 실제 재언급된 경우만
+// 쓴다(오너 확인 2026-09) — 이 검증(C2)은 이제 공용 추출기(research-extract.mjs)가
+// 모든 소스에 공통으로 한다.
+async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
+  const pdfText = await readPdfText(pdfUrl);
+  if (pdfUrl && !pdfText) console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl})`);
+  return { summary: pdfText ? excerptFromPdfText(pdfText, stockName, symbol) : "", pdfText };
 }
 
-async function extractPdfExcerpt(pdfUrl, stockName, symbol) {
-  if (!pdfUrl) return { summary: "", hasTargetMention: false, hasOpinionMention: false };
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return {
-      summary: excerptFromPdfText(text, stockName, symbol),
-      hasTargetMention: mentionsTargetPrice(text),
-      hasOpinionMention: mentionsOpinion(text),
-    };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", hasTargetMention: false, hasOpinionMention: false };
-  }
+// 리포트가 올라온 KB 게시판 표시 — 응답 행의 사이트 메뉴 경로(foldertemplate)·categoryid 와
+// 조회한 tab 을 그대로 조합한 대조·검수용 메타(서버는 무시). foldertemplate 원본이 하위 폴더명을
+// 연속으로 그대로 반복해서 주는 경우가 있어(예: "자산배분/매크로>자산배분>자산배분>자산배분",
+// 오너 지적 2026-09-27 — "매크로>매크로>매크로>매크로 이런식이라고") 표시용으로만 연속 중복 세그먼트를 접는다.
+function foldTemplate(raw) {
+  const segs = String(raw ?? "").trim().split(">").map((s) => s.trim());
+  const out = [];
+  for (const s of segs) if (s && out[out.length - 1] !== s) out.push(s);
+  return out.join(">");
 }
+const kbBoard = (r) =>
+  `KB증권 > ${foldTemplate(r.foldertemplate) || "리서치"}(tab=${r.__tab ?? "?"}, categoryid=${r.categoryid ?? "?"})`;
 
 function parseTargetPrice(tp) {
   const n = Number(tp);
@@ -226,7 +240,75 @@ async function fetchList(tab) {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json();
-  return json.list ?? [];
+  return (json.list ?? []).map((r) => ({ ...r, __tab: tab }));
+}
+
+// 해외주식(tab=4, 미국/중국/일본) — 원 collect-kb-global-research.mjs 로직 그대로.
+// 미국: "AI 실적속보: 어도비 (ADBE US)" 형식. 국가 코드가 "US"가 아닌 경우도
+// 있음(예: "ASML 홀딩 (ASML NL)") — foldertemplate로 "미국" 폴더만 걸러낸
+// 뒤라 국가 코드 종류와 무관하게 "(TICKER XX)" 형식이면 개별기업으로 본다.
+const US_TICKER_RE = /\(([A-Z][A-Z.]{0,5})\s+[A-Z]{2,3}\)/;
+// 중국(158): "SMIC (688981 CH, 00981 HK)"·"텐센트 (00700 HK)" — 코드+공백+
+// 거래소, 복수 상장 시 콤마로 이어짐(첫 번째만 사용).
+const CN_TICKER_RE = /^(.+?)\s*\(([A-Za-z0-9]{2,10})\s+([A-Za-z]{2,3})[,)]/;
+// 일본(160): "커스텀 AI 반도체의 출하 관문, 어드밴테스트 (6857 JP)" — 제목 끝 "(코드 JP)", 회사명은 마지막 쉼표 뒤(쉼표 없으면 제목 앞부분 전체).
+const JP_TICKER_RE = /(?:^|[,，]\s*)([^,，()]+?)\s*\((\d{4}[A-Z]?)\s+JP\)\s*$/;
+
+function classifyGlobalRow(r) {
+  const folder = String(r.foldertemplate ?? "");
+  const categoryid = String(r.categoryid ?? "");
+  const docTitle = String(r.docTitle ?? "").trim();
+  const docTitleSub = String(r.docTitleSub ?? "").trim();
+  const title = (docTitleSub || docTitle).trim();
+
+  // "글로벌기업 | 포트폴리오+"(김세환) — 모델포트폴리오 성과·Top Picks 위주의 퀀트 시리즈(오너 확인 2026-09-27,
+  // PDF 확인 후 "퀀트다 수집제외"). 공용 QUANT_RE 는 "퀀트"/"quant" 문구가 없으면 못 잡아 여기서 직접 제외.
+  if (/글로벌기업\s*\|\s*포트폴리오\+?/i.test(docTitle)) return null;
+
+  if (/미국/.test(folder)) {
+    const tm = docTitle.match(US_TICKER_RE);
+    if (tm) {
+      return {
+        market: "us",
+        category: "기업",
+        stockName: docTitle.split("(")[0].replace(/^[^:]*:\s*/, "").trim(),
+        symbol: tm[1],
+        title,
+        enrichable: true,
+      };
+    }
+    return { market: "us", category: "산업", stockName: docTitle || "산업", symbol: null, title, enrichable: false };
+  }
+  if (categoryid === "158") {
+    const tm = docTitle.match(CN_TICKER_RE);
+    if (tm) {
+      return {
+        market: "ch",
+        category: "기업",
+        stockName: tm[1].trim(),
+        symbol: `${tm[2].toUpperCase()}.${tm[3].toUpperCase()}`,
+        title,
+        enrichable: false,
+      };
+    }
+    return { market: "ch", category: "산업", stockName: docTitle || "산업", symbol: null, title, enrichable: false };
+  }
+  if (categoryid === "86") {
+    // "KB Asia Market Headline" — 거의 매일 올라오는 시황 코멘트. 한동안
+    // 고정 라벨(MARKET_CONDITION_STOCKNAMES)로 수집했으나 수집 제외로
+    // 전환(오너 지시 2026-10-01).
+    return null;
+  }
+  if (categoryid === "160") {
+    // 일본 — 제목 끝에 "(6857 JP)" 표기가 있으면 종목(jp 종목분석)이다(오너 지적 2026-09-27 — "커스텀 AI 반도체의 출하 관문, 어드밴테스트 (6857 JP)"는
+    // 종목분석). 회사명은 마지막 쉼표 뒤. 표기가 없는 글은 예전처럼 시리즈 라벨("글로벌기업+")로 산업분석.
+    const jm = title.match(JP_TICKER_RE);
+    if (jm) {
+      return { market: "jp", category: "기업", stockName: jm[1].trim(), symbol: `${jm[2]}.JP`, title, enrichable: false };
+    }
+    return { market: "jp", category: "산업", stockName: docTitle || "산업", symbol: null, title, enrichable: false };
+  }
+  return null; // 인디아 등 그 외 지역은 대상 아님
 }
 
 console.log(`▶ KB증권 산업/기업 + KB데일리 리포트 수집: 최근 ${DAYS}일`);
@@ -242,7 +324,7 @@ for (const r of rows) {
   if (!date || new Date(date) < cutoff) continue;
   const docTitle = String(r.docTitle ?? "").trim();
   const tm = docTitle.match(TITLE_RE);
-  if (tm) {
+  if (tm && LISTED_CODES.has(tm[2])) {
     collected.push({
       id: r.documentid,
       date,
@@ -256,16 +338,20 @@ for (const r of rows) {
       pdfUrl: r.urlLink || null,
       views: null,
       category: "기업",
+      board: kbBoard(r),
     });
   } else if (docTitle && !EXCLUDE_LABEL_RE.test(docTitle) && !isEsgContent(docTitle)) {
     // 업종명("반도체" 등)·정기 전략 노트 — 종목코드 없음. 포트폴리오/
     // 추천종목/ESG 라벨은 위에서 걸러졌고, IPO/비상장 라벨은 일반 산업분석이
     // 아니라 "비상장 리서치"(unlisted) 대상.
+    // "제약 (350510)"처럼 KB 내부 업종 코드가 붙은 제목은 코드를 떼고 업종명만
+    // 라벨로 남긴다(감사 2026-09-28 — 코드째 저장돼 분류·표시가 어긋났음).
+    const label = tm ? tm[1].trim() : docTitle;
     collected.push({
       id: r.documentid,
       date,
-      title: (r.docTitleSub || docTitle).trim(),
-      stockName: docTitle,
+      title: (r.docTitleSub || label).trim(),
+      stockName: label,
       symbol: null,
       analyst: r.analystNm ?? "",
       opinion: "",
@@ -274,6 +360,7 @@ for (const r of rows) {
       pdfUrl: r.urlLink || null,
       views: null,
       category: "산업",
+      board: kbBoard(r),
       unlisted: INSIGHT_LABEL_RE.test(docTitle),
     });
   }
@@ -306,7 +393,7 @@ async function fetchUnlistedBoard() {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json();
-  return json.list ?? [];
+  return (json.list ?? []).map((r) => ({ ...r, __tab: "5" }));
 }
 const unlistedRows = await fetchUnlistedBoard();
 for (const r of unlistedRows) {
@@ -327,6 +414,7 @@ for (const r of unlistedRows) {
     pdfUrl: r.urlLink || null,
     views: null,
     category: "산업",
+    board: kbBoard(r),
     unlisted: true,
   });
 }
@@ -354,6 +442,7 @@ for (const r of dailyRows) {
     pdfUrl: r.urlLink || null,
     views: null,
     category: "산업",
+    board: kbBoard(r),
   });
 }
 
@@ -363,20 +452,26 @@ for (const r of dailyRows) {
 // 채권/크레딧·종목컨설팅·기타발간이 섞여 있고, 응답의 `categoryid` 필드로
 // 걸러도 같은 categoryid 안에 "이그전"(자산배분 계열) 같은 다른 시리즈가
 // 섞여 나오는 게 실측 확인돼(categoryid만으론 부정확) **docTitle 정확히
-// 일치**로만 골랐다. "KB 전략"만 수집하고 그 옆의 "KB Quant"·"이그전" 등은
-// 명시적으로 제외(오너 지시의 "나머지는 제외"). stockName을 고정 라벨로 둬
-// `shinhan-research.ts`의 `STRATEGY_STOCKNAMES`에 등록, 투자전략(주식)으로
-// 확정 분류한다.
+// 일치**로만 골랐다. "이그전"은 이후 오너 결정(2026-09-27 — "이그전은
+// 투자전략이다")으로 "KB 전략"과 함께 수집·투자전략(주식) 확정. "KB
+// Quant" 등 나머지는 여전히 제외. stockName을 고정 라벨로 둬
+// `shinhan-research.ts`의 `STRATEGY_STOCKNAMES`/`LABEL_FIRST_STRATEGY_
+// STOCKNAMES`에 등록, 투자전략(주식)으로 확정 분류한다.
+const TAB3_STRATEGY_TITLES = new Map([
+  ["KB 전략", "KB 전략"],
+  ["이그전", "KB 이그전"],
+]);
 const tab3Rows = await fetchList("3");
 for (const r of tab3Rows) {
   const date = r.publicDate;
   if (!date || new Date(date) < cutoff) continue;
-  if (String(r.docTitle ?? "").trim() !== "KB 전략") continue;
+  const stockName = TAB3_STRATEGY_TITLES.get(String(r.docTitle ?? "").trim());
+  if (!stockName) continue;
   collected.push({
     id: r.documentid,
     date,
     title: (r.docTitleSub || r.docTitle || "").trim(),
-    stockName: "KB 전략",
+    stockName,
     symbol: null,
     analyst: r.analystNm ?? "",
     opinion: "",
@@ -385,12 +480,116 @@ for (const r of tab3Rows) {
     pdfUrl: r.urlLink || null,
     views: null,
     category: "산업",
+    board: kbBoard(r),
+  });
+}
+
+// 거시경제(이슈분석/환율분석) — 리서치 분류 체계 전면 개편(2026-09-26)으로
+// macro_issues 컬렉션 폐지, kr_research로 합류시킨다. 고정 stockName은
+// shinhan-research.ts FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES 등록값과
+// 일치시켜 classifyResearchTopic()이 이슈분석/환율분석으로 확정 분류하게 한다.
+// 1) KB Bond·KB Fed Watch(tab=3, 위에서 이미 받은 tab3Rows 재사용 — 같은
+//    게시판을 두 번 안 부른다) — 고정 이슈분석.
+const TAB3_ISSUE_TITLES = new Set(["KB Bond", "KB Fed Watch"]);
+let macroCount = 0;
+for (const r of tab3Rows) {
+  const date = r.publicDate;
+  if (!date || new Date(date) < cutoff) continue;
+  const docTitle = String(r.docTitle ?? "").trim();
+  if (!TAB3_ISSUE_TITLES.has(docTitle)) continue;
+  macroCount++;
+  collected.push({
+    id: r.documentid,
+    date,
+    title: (r.docTitleSub || r.docTitle || "").trim(),
+    stockName: docTitle,
+    symbol: null,
+    analyst: r.analystNm ?? "",
+    opinion: "",
+    targetPrice: null,
+    summary: "",
+    pdfUrl: r.urlLink || null,
+    views: null,
+    category: "산업",
+    board: kbBoard(r),
+    market: "kr",
+  });
+}
+
+// 2) 자산배분/매크로(tab=2) — Weekly/주간 제외, 대체투자는 원자재만, FX/환율은 환율분석.
+const tab2Rows = await fetchList("2");
+for (const r of tab2Rows) {
+  const date = r.publicDate;
+  if (!date || new Date(date) < cutoff) continue;
+  const docTitle = String(r.docTitle ?? "").trim();
+  const docTitleSub = String(r.docTitleSub ?? "").trim();
+  if (!docTitle) continue;
+  if (MACRO_WEEKLY_RE.test(`${docTitle} ${docTitleSub}`)) continue;
+  if (RATE_TABLE_RE.test(docTitle)) continue;
+  if (EXCLUDED_TAB2_SERIES_RE.test(docTitle)) continue;
+  const folder = String(r.foldertemplate ?? "");
+  if (/대체투자/.test(folder) && !/원자재|commodit/i.test(`${folder} ${docTitle} ${docTitleSub}`)) continue;
+  const folderTail = folder.split(">").pop()?.trim() ?? "";
+  // categoryid 77("자산배분")은 tab=3 "이그전"과 사이트에 중복 게시되는 같은 시리즈다(오너 확인 2026-09-27 —
+  // "둘 다 이그전이다(사이트에 중복 게시)") — 여기도 "KB 이그전"으로 둬 LABEL_FIRST_STRATEGY_STOCKNAMES가
+  // 투자전략(주식)으로 확정하게 한다. FX 항목은 기존처럼 환율분석 유지.
+  const isFx = isFxContent(docTitle) || isFxContent(folderTail);
+  macroCount++;
+  collected.push({
+    id: r.documentid,
+    date,
+    title: (docTitleSub || docTitle).trim(),
+    stockName: isFx ? "KB 자산배분매크로 FX" : String(r.categoryid ?? "") === "77" ? "KB 이그전" : "KB 자산배분매크로",
+    symbol: null,
+    analyst: r.analystNm ?? "",
+    opinion: "",
+    targetPrice: null,
+    summary: "",
+    pdfUrl: r.urlLink || null,
+    views: null,
+    category: "산업",
+    board: kbBoard(r),
+    market: "kr",
+  });
+}
+console.log(`✔ 거시경제 파싱 완료: ${macroCount}건`);
+
+// 해외주식(tab=4, 미국/중국/일본) — 국내 항목과 같은 collected 배열에 합친다
+// (market 필드로 구분되고, 최종 전송 시 market별로 나뉜다).
+console.log(`▶ KB증권 해외주식(미국/중국/일본) 리포트 수집: 최근 ${DAYS}일`);
+const globalRows = await fetchList("4");
+for (const r of globalRows) {
+  const date = r.publicDate;
+  if (!date || new Date(date) < cutoff) continue;
+  const parsed = classifyGlobalRow(r);
+  if (!parsed) continue;
+  if (isCommonExcludedContent(`${parsed.stockName} ${parsed.title}`, parsed.category)) continue;
+  collected.push({
+    id: r.documentid,
+    date,
+    title: parsed.title,
+    stockName: parsed.stockName,
+    symbol: parsed.symbol,
+    market: parsed.market,
+    analyst: r.analystNm ?? "",
+    opinion: parsed.enrichable ? (r.recomm ?? "") : "",
+    targetPrice: parsed.enrichable ? parseTargetPrice(r.tp) : null,
+    summary: "",
+    pdfUrl: r.urlLink || null,
+    views: null,
+    category: parsed.category,
+    board: kbBoard(r),
   });
 }
 
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. API 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log(
@@ -401,14 +600,17 @@ console.log(
 console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
 let excerptFailCount = 0;
 for (const it of collected) {
-  const { summary, hasTargetMention, hasOpinionMention } = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
+  const { summary, pdfText } = await extractPdfExcerpt(it.pdfUrl, it.stockName, it.symbol);
   it.summary = summary;
-  if (!hasTargetMention) it.targetPrice = null; // 본문에 언급 없으면 tp 메타데이터도 버림
-  if (!hasOpinionMention) it.opinion = ""; // 마찬가지로 recomm 메타데이터도 버림
+  it.pdfText = pdfText;
   if (it.pdfUrl && !it.summary) excerptFailCount++;
   await sleep(400);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
+// 투자의견·목표주가 — 공용 추출기(tp/recomm 은 본문 언급 확인 후, 없으면 PDF 에서 추출).
+// 산업 게시판에 섞인 종목 리포트(라벨이 회사명인 경우 포함)를 종목분석으로 승격(공통 lib).
+for (let i = 0; i < collected.length; i++) collected[i] = promoteKrIndustryToStock(collected[i]);
+await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {
@@ -420,29 +622,47 @@ if (DRY_RUN) {
 // 나눠 전송한다(오너 지시 — "IPO나 비상장인 경우는 종목분석>인사이트에
 // 해당한다" — 키움 CI 비상장 처리와 같은 패턴, INSIGHT_SOURCES 재사용).
 const UNLISTED_SOURCE = "KB증권 비상장리서치";
-// 라우트(RawItem)가 알려진 필드만 읽으므로 `unlisted` 플래그는 그대로 실려가도
-// 무해하다 — 굳이 벗겨내지 않는다.
-const normalItems = collected.filter((it) => !it.unlisted);
-const unlistedItems = collected.filter((it) => it.unlisted);
-
+// 라우트가 body당 market 하나만 받으므로(해외주식 병합으로 market이 여러
+// 개 섞임) market×source(비상장 여부)로 나눠 전송한다 — 키움 병합본의
+// byGroup(`${market}::${source}`) 패턴과 동일.
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
-for (const [source, items] of [
-  ["KB증권", normalItems],
-  [UNLISTED_SOURCE, unlistedItems],
-]) {
-  if (items.length === 0) continue;
+const byGroup = new Map();
+for (const it of collected) {
+  const source = it.unlisted ? UNLISTED_SOURCE : "KB증권";
+  const market = it.market ?? "kr";
+  const key = `${market}::${source}`;
+  if (!byGroup.has(key)) byGroup.set(key, { market, source, items: [] });
+  byGroup.get(key).items.push({
+    id: it.id,
+    date: it.date,
+    title: it.title,
+    stockName: it.stockName,
+    symbol: it.symbol,
+    analyst: it.analyst,
+    opinion: it.opinion,
+    targetPrice: it.targetPrice,
+    summary: it.summary,
+    pdfUrl: it.pdfUrl,
+    views: it.views,
+    category: it.category,
+    board: it.board,
+  });
+}
+
+for (const [, group] of byGroup) {
+  const { market, source, items } = group;
   const up = await fetch(IMPORT_URL, {
     method: "POST",
     headers,
-    body: JSON.stringify({ items, source }),
+    body: JSON.stringify({ items, source, market }),
   });
   const upBody = await up.text();
   if (!up.ok) {
-    console.error(`✗ [${source}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    console.error(`✗ [${market}/${source}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }
-  console.log(`\n✔ [${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
+  console.log(`\n✔ [${market}/${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

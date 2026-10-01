@@ -22,7 +22,7 @@
  *     둔다는 오너 판단("goldman-sachs-research는 산업분석으로 이동"). 다른
  *     4종과 달리 **백필·보존기간 180일**(오너 지시 — "여기만 백필기간을
  *     180일로", `shinhan-research.ts`의 `FOREIGN_RESEARCH_MAX_AGE_MS`).
- *     라우트(`/api/cron/shinhan-research`)는 POST 1회당 source 하나만
+ *     라우트(`/api/cron/total-research`)는 POST 1회당 source 하나만
  *     받으므로 두 그룹을 나눠 두 번 전송한다(한경 컨센서스 수집기와 동일
  *     패턴 — "항목별 실제 출처로 그룹핑해 나눠 전송").
  *
@@ -50,6 +50,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -73,9 +74,12 @@ const MAX_ITEMS = Number(ARGS.find((a) => a.startsWith("--max="))?.split("=")[1]
 const RESEARCH_DAYS = 180;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 
 const UA =
@@ -110,6 +114,7 @@ async function parseItem(url) {
   if (!titleM || !dateM) return null;
   const title = decodeEntities(titleM[1]);
   const date = dateM[1];
+  if (isCommonExcludedContent(title, "산업")) return null;
 
   const paras = [...html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
     .map((m) => decodeEntities(m[1].replace(/<[^>]+>/g, "")))
@@ -129,6 +134,8 @@ async function parseItem(url) {
     summary,
     pdfUrl: url,
     views: null,
+    // 사이트 내 섹션(insights 하위 첫 경로) — 대조표에서 원본 화면 확인용.
+    board: `Goldman Sachs > insights/${slug.split("/")[0]}`,
     category: "산업",
   };
 }
@@ -141,6 +148,7 @@ async function sendBatch(items, source) {
   }
   const headers = { "Content-Type": "application/json" };
   if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
   else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
   const up = await fetch(IMPORT_URL, {
     method: "POST",
@@ -210,7 +218,12 @@ for (const { url } of researchTargets) {
 
 if (insightItems.length === 0 && researchItems.length === 0) {
   console.error("✗ 파싱 결과 0건. 사이트맵/페이지 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 
 console.log(`✔ 파싱 완료: 인사이트 ${insightItems.length}건, 해외리서치 ${researchItems.length}건`);

@@ -25,13 +25,15 @@
  *   node scripts/collect-hana-research.mjs --dry-run   # 전송 안 하고 파싱 결과만
  *
  * ── 설정 (.env.local, 선택) ─────────────────────────────────────────
- *   SHINHAN_RESEARCH_IMPORT_URL="https://macroresearch.vercel.app/api/cron/shinhan-research"
+ *   SHINHAN_RESEARCH_IMPORT_URL="https://macroresearch.vercel.app/api/cron/total-research"
  *   CRON_SECRET="앱에 설정한 값이 있으면"
  * (신한 수집기와 같은 수신 라우트를 재사용 — source 로 구분됨)
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { marketFromLabel, marketFromTitleLead } from "./lib/overseas-market.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -53,9 +55,12 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 
 const UA =
@@ -84,33 +89,6 @@ function excerpt(text) {
     .replace(/\s{2,}/g, " ")
     .trim();
   return flat.length > EXCERPT_LEN ? `${flat.slice(0, EXCERPT_LEN)}…` : flat;
-}
-
-// 실적 속보성 리포트는 목표주가 언급이 없는 경우가 많음 — 있으면만 뽑는다.
-// PDF 표지의 "목표주가(12M) 220,000원"처럼 라벨 뒤에 괄호 주석이 붙기도 함.
-function extractTargetPrice(text) {
-  const m = String(text ?? "").match(
-    /목표주가(?:를|는|가)?\s*(?:\([^)]{0,10}\))?\s*[:：]?\s*([\d,]+)\s*(만)?원/,
-  );
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-async function extractTargetPriceFromPdf(pdfUrl) {
-  if (!pdfUrl) return null;
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return extractTargetPrice(text);
-  } catch (err) {
-    console.warn(`  ⚠ PDF 목표주가 추출 실패 (${pdfUrl}): ${err.message}`);
-    return null;
-  }
 }
 
 function stripHtml(s) {
@@ -146,7 +124,7 @@ function parseItems(html) {
     const [, bbsCd, bbsSeq, rawTitle, rawDate, rawBody] = m;
     const title = stripHtml(rawTitle);
     const date = isoDate(rawDate);
-    if (!date) continue;
+    if (!date || isCommonExcludedContent(title, "기업")) continue;
     const tm = title.match(TITLE_RE);
     items.push({
       id: `${bbsCd}_${bbsSeq}`,
@@ -155,10 +133,13 @@ function parseItems(html) {
       stockName: tm ? tm[1].trim() : title,
       symbolHint: tm ? tm[2].slice(0, 6) : null,
       opinion: tm ? tm[3].trim() : "",
-      targetPrice: extractTargetPrice(rawBody),
+      opinionFrom: "title", // "종목명(코드.거래소/의견)" 제목 — 공용 추출기 C2 검증 제외
+      targetPrice: null,
       summary: excerpt(stripHtml(rawBody)),
+      bodyText: stripHtml(rawBody),
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
       category: "기업",
+      board: "하나증권 > 산업/기업 > 기업분석(pid=3, cid=2)",
     });
   }
   return items;
@@ -170,16 +151,120 @@ function parseIndustryItems(html) {
     const [, bbsCd, bbsSeq, rawTitle, rawDate, rawBody] = m;
     const title = stripHtml(rawTitle);
     const date = isoDate(rawDate);
-    if (!date) continue;
+    if (!date || isCommonExcludedContent(title, "산업")) continue;
     const tm = title.match(INDUSTRY_TITLE_RE);
+    const label = tm ? tm[1].trim() : "산업";
+    const headline = tm ? tm[2].trim() : title;
     items.push({
       id: `${bbsCd}_${bbsSeq}`,
       date,
-      title: tm ? tm[2].trim() : title,
-      stockName: tm ? tm[1].trim() : "산업",
+      title: headline,
+      stockName: label,
+      // 라벨이 국가명으로 시작하면 그 나라 시장("중국 자동차 판매동향" → ch), 라벨에 국가가 없어도 제목이 "중국 …"으로 시작하면 ch. 아니면 국내(kr).
+      market: marketFromLabel(label) ?? marketFromTitleLead(headline) ?? "kr",
       symbolHint: null,
       opinion: "",
       targetPrice: null,
+      summary: excerpt(stripHtml(rawBody)),
+      pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
+      category: "산업",
+      board: "하나증권 > 산업/기업 > 산업분석(pid=3, cid=1)",
+    });
+  }
+  return items;
+}
+
+// 글로벌 기업분석(pid=8&cid=3, 미국만 .US 필터) — 구
+// collect-hana-global-research.mjs.
+const GLOBAL_TITLE_RE = /^(.+?)\(([A-Za-z0-9.-]{1,10})\.US\)\s*:\s*(.+)$/;
+async function fetchGlobalPage(page) {
+  const url = new URL(LIST_URL);
+  for (const [k, v] of Object.entries({ pid: "8", cid: "3", srchTitle: "", srchWord: "", startDate: "1900-01-01", endDate: "9999-12-31" })) {
+    url.searchParams.set(k, v);
+  }
+  url.searchParams.set("curPage", String(page));
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+function parseGlobalItems(html) {
+  const items = [];
+  let rawRows = 0;
+  for (const m of html.matchAll(ITEM_RE)) {
+    rawRows += 1;
+    const [, bbsCd, bbsSeq, rawTitle, rawDate, rawBody] = m;
+    const title = stripHtml(rawTitle);
+    const date = isoDate(rawDate);
+    if (!date) continue;
+    const tm = title.match(GLOBAL_TITLE_RE);
+    if (!tm) continue;
+    if (isCommonExcludedContent(title, "기업")) continue;
+    items.push({
+      id: `${bbsCd}_${bbsSeq}`,
+      date,
+      title,
+      stockName: tm[1].trim(),
+      symbolHint: tm[2].toUpperCase(),
+      opinion: "",
+      targetPrice: null,
+      summary: excerpt(stripHtml(rawBody)),
+      pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
+      category: "기업",
+      market: "us",
+      board: "하나증권 > 글로벌리서치 > 글로벌 기업분석(pid=8, cid=3)",
+    });
+  }
+  return { items, rawRows };
+}
+
+// 글로벌 산업분석(cid=2)/투자전략(cid=1) — 구
+// collect-hana-global-industry-research.mjs. 목록 구조는 같지만 애널리스트·
+// "해외주식 > {카테고리}" 라벨을 추가로 캡처하는 별도 정규식이 필요.
+const GLOBAL_INDUSTRY_BOARDS = [
+  { cid: "1", label: "글로벌 투자전략" },
+  { cid: "2", label: "글로벌 산업분석" },
+];
+const NON_US_RE =
+  /중국|차이나|China|인도(?!네시아)|India\b|베트남|Vietnam|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan|일본|Japan|유럽|Europe/i;
+const US_HINT_RE = /미국|\bUS\b|나스닥|Nasdaq|S&P|다우|연준|\bFed\b|FOMC|월가|Wall Street|빅테크/i;
+function classifyMarket(text) {
+  if (NON_US_RE.test(text)) return null;
+  if (US_HINT_RE.test(text)) return "us";
+  return null;
+}
+const INDUSTRY_ITEM_RE =
+  /<a href="#" class="more_btn title" title="더보기" id="(\d+)_(\d+)">([^<]+)<\/a>[\s\S]{0,80}?<li class="mb7 m-info info">[\s\S]*?<span class="none m-name">([^<]*)<\/span>[\s\S]*?<span class="txtbasic">([\d.]+)<\/span>[\s\S]{0,400}?해외주식\s*>\s*([^<]+?)<\/li>[\s\S]{0,400}?<li class="mb7 j_bbsContn[^"]*">([\s\S]*?)<\/li>[\s\S]{0,600}?class="j_fileLink"[^>]*>([^<]*)<\/a>/g;
+async function fetchGlobalIndustryPage(cid, page) {
+  const url = new URL(LIST_URL);
+  for (const [k, v] of Object.entries({ pid: "8", srchTitle: "", srchWord: "", startDate: "1900-01-01", endDate: "9999-12-31" })) {
+    url.searchParams.set(k, v);
+  }
+  url.searchParams.set("cid", cid);
+  url.searchParams.set("curPage", String(page));
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+function parseGlobalIndustryItems(html, boardLabel) {
+  const items = [];
+  for (const m of html.matchAll(INDUSTRY_ITEM_RE)) {
+    const [, bbsCd, bbsSeq, rawTitle, analyst, rawDate, category, rawBody] = m;
+    const title = stripHtml(rawTitle);
+    const date = isoDate(rawDate);
+    if (!date) continue;
+    const market = classifyMarket(`${title} ${stripHtml(rawBody)}`);
+    if (!market || isCommonExcludedContent(`${category.trim()} ${title}`, "산업")) continue;
+    items.push({
+      id: `${bbsCd}_${bbsSeq}`,
+      date,
+      title,
+      stockName: category.trim(),
+      symbolHint: null,
+      analyst: analyst.trim(),
+      opinion: "",
+      targetPrice: null,
+      market,
+      board: boardLabel,
       summary: excerpt(stripHtml(rawBody)),
       pdfUrl: `https://www.hanaw.com/main/research/research/download.cmd?bbsSeq=${bbsSeq}&attachFileSeq=1&bbsId=&dbType=&bbsCd=${bbsCd}`,
       category: "산업",
@@ -226,9 +311,58 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   await sleep(400); // 예의상 간격
 }
 
+// 글로벌 기업분석(pid=8&cid=3, .US만).
+console.log(`▶ 하나증권 글로벌 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+let gStop = false;
+let gTotalRows = 0;
+for (let page = 1; page <= MAX_PAGES && !gStop; page++) {
+  const html = await fetchGlobalPage(page);
+  const { items, rawRows } = parseGlobalItems(html);
+  gTotalRows += rawRows;
+  if (rawRows === 0) break;
+  if (items.length === 0) continue;
+  for (const it of items) {
+    if (new Date(it.date) < cutoff) {
+      gStop = true;
+      break;
+    }
+    collected.push(it);
+  }
+  await sleep(400);
+}
+if (gTotalRows > 0 && !collected.some((it) => it.market === "us" && it.category === "기업")) {
+  console.log(`· 최근 ${DAYS}일 안에 미국(.US) 종목 리포트가 없습니다(목록 ${gTotalRows}건 정상 조회).`);
+}
+
+// 글로벌 산업분석(cid=2)/투자전략(cid=1).
+console.log(`▶ 하나증권 글로벌 산업분석/투자전략 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지 × ${GLOBAL_INDUSTRY_BOARDS.length}개 게시판`);
+for (const board of GLOBAL_INDUSTRY_BOARDS) {
+  let iStop = false;
+  for (let page = 1; page <= MAX_PAGES && !iStop; page++) {
+    const html = await fetchGlobalIndustryPage(board.cid, page);
+    const items = parseGlobalIndustryItems(html, `하나증권 > 글로벌리서치 > ${board.label}(pid=8, cid=${board.cid})`);
+    const rawCount = [...html.matchAll(INDUSTRY_ITEM_RE)].length;
+    if (rawCount === 0) break;
+    for (const it of items) {
+      if (new Date(it.date) < cutoff) continue;
+      collected.push(it);
+    }
+    const rawDates = [...html.matchAll(INDUSTRY_ITEM_RE)].map((m) => isoDate(m[5])).filter(Boolean);
+    if (rawDates.length && new Date(Math.min(...rawDates.map((d) => new Date(d).getTime()))) < cutoff) {
+      iStop = true;
+    }
+    await sleep(400);
+  }
+}
+
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음(정규식 재확인 필요).");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 
 console.log(`✔ 파싱 완료: ${collected.length}건`);
@@ -238,13 +372,8 @@ console.log(
 );
 
 console.log(`▶ 목표주가 보강 중 (${collected.length}건)...`);
-for (const it of collected) {
-  // 산업분석은 특정 종목 얘기가 아니므로 목표주가 개념이 없음 — 건너뜀.
-  if (it.category !== "산업" && it.targetPrice == null) {
-    it.targetPrice = await extractTargetPriceFromPdf(it.pdfUrl);
-    await sleep(400);
-  }
-}
+// 공용 추출기(본문 → PDF, 산업분석은 내부에서 건너뜀).
+await enrichResearch(collected, { market: "kr" });
 console.log(
   "  예시:",
   collected.find((it) => it.targetPrice != null)?.targetPrice ?? "(없음)",
@@ -256,34 +385,45 @@ if (DRY_RUN) {
 }
 
 // analyst 필드는 이 정규식에서 안정적으로 못 뽑아 빈 값으로 보냄(제목·요약·PDF가
-// 핵심이라 우선순위 낮음) — /api/cron/shinhan-research 는 analyst 없어도 저장됨.
+// 핵심이라 우선순위 낮음) — /api/cron/total-research 는 analyst 없어도 저장됨.
 // symbol 은 제목에서 이미 뽑은 6자리 코드를 그대로 넘겨 서버의 이름 검색을 건너뛴다.
-const items = collected.map((it) => ({
-  id: it.id,
-  date: it.date,
-  title: it.title,
-  stockName: it.stockName,
-  symbol: it.symbolHint,
-  analyst: "",
-  opinion: it.opinion,
-  targetPrice: it.targetPrice,
-  summary: it.summary,
-  pdfUrl: it.pdfUrl,
-  views: null,
-  category: it.category,
-}));
+// 글로벌 기업분석·산업분석 병합으로 market이 kr/us 섞이므로 market별로 나눠 전송.
+const byMarket = new Map();
+for (const it of collected) {
+  const market = it.market ?? "kr";
+  if (!byMarket.has(market)) byMarket.set(market, []);
+  byMarket.get(market).push({
+    id: it.id,
+    date: it.date,
+    title: it.title,
+    stockName: it.stockName,
+    symbol: it.symbolHint,
+    analyst: it.analyst ?? "",
+    opinion: it.opinion,
+    targetPrice: it.targetPrice,
+    summary: it.summary,
+    pdfUrl: it.pdfUrl,
+    views: null,
+    category: it.category,
+    board: it.board,
+  });
+}
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const up = await fetch(IMPORT_URL, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ items, source: "하나증권" }),
-});
-const upBody = await up.text();
-if (!up.ok) {
-  console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+
+for (const [market, items] of byMarket) {
+  const up = await fetch(IMPORT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ items, source: "하나증권", market }),
+  });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ 앱 전송 실패(market=${market}) HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`\n✔ 앱 전송 완료(market=${market}, ${items.length}건): ${upBody}`);
 }
-console.log(`\n✔ 앱 전송 완료: ${upBody}`);

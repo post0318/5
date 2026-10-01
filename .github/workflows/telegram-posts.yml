@@ -40,6 +40,7 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           # 저장소가 공개라 Actions 사용 시간이 무료다 — 긴 실행이 비용이 아니다.
           LOOP_SECONDS: "19800" # 5시간 30분
           INTERVAL_SECONDS: "900" # 15분

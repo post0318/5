@@ -22,6 +22,10 @@
  */
 
 import { readFileSync } from "node:fs";
+import { enrichResearch, excerptFromPdfText, readPdfText } from "./lib/research-extract.mjs";
+import { resolveKrStock } from "./lib/company-match.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { refineSectorLabels, normalizeSectorLabel } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -44,29 +48,27 @@ const DAYS = Number(arg("days")) || 14;
 const MAX_PAGES = Number(arg("pages")) || 5;
 
 const BOARD_URL = "https://www.ds-sec.co.kr/bbs/board.php";
+// 리포트가 원래 있던 게시판(상단 주석의 bo_table) — item 의 board 필드(분류 대조용).
+const BOARD_LABEL = {
+  sub03_02: "DS투자증권 > 리서치 > 기업분석(sub03_02)",
+  sub03_03: "DS투자증권 > 리서치 > 투자전략/경제분석(sub03_03)",
+};
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 국내 종목명 → 코드. 긴 이름부터 봐야 "한국전력"이 "한국전력기술"을 가리지 않는다.
-const CORPS = JSON.parse(
-  readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
-)
-  .filter((c) => c.s && c.n)
-  .sort((a, b) => b.n.length - a.n.length);
-
-function resolveKrStock(text) {
-  const t = text.trim();
-  for (const c of CORPS) {
-    if (t.startsWith(c.n)) return { symbol: c.s, stockName: c.n };
-  }
-  return null;
-}
+// 국내 종목명 → 코드는 공통 lib 를 쓴다. 예전엔 여기 startsWith 만 있는 복사본이
+// 있어서 "신흥국 통화 약세…"→신흥(004080), "LG그룹 지배구조…"→LG, "SK온 상장…"→SK
+// 처럼 접두어가 겹치는 종목에 기업 리포트가 잘못 붙었다(감사 2026-09-28). 한경
+// 수집기에서 고친 조사·구두점 경계 검사가 담긴 resolveKrStock 을 공유한다.
 
 /** 한글 종목명 → 미국 티커(네이버 해외종목 자동완성). 실패하면 null. */
 const usCache = new Map();
@@ -132,7 +134,13 @@ function bracketLabelAndRest(title) {
   const m = title.match(/^\[([^\]]*)\]\s*(.*)$/);
   if (!m) return { label: "산업", rest: title.trim() };
   const rest = m[2].trim();
-  return rest ? { label: m[1].trim(), rest } : { label: "산업", rest: m[1].trim() };
+  // "[DS 경제 서동화] Macro Issue …"(경제 담당 애널리스트 이름이 붙은 라벨)는 애널리스트 이름을 떼고 "DS 경제"로 고정 — 앱이 거시경제
+  // 이슈분석(경제)으로 분류한다(오너 지시 2026-09-27, "FOMC면 경제가 맞다").
+  // (한글 뒤에서는 \b 단어 경계가 동작하지 않아 "경제" 다음이 공백/끝인지를 lookahead 로 본다.)
+  // 애널리스트 이름이 라벨로 온 경우("[매태호] …")는 공통 정규화(normalizeSectorLabel)가 담당 업종으로 바꾼다.
+  const label0 = m[1].trim();
+  const rawLabel = /^DS\s*경제(?=\s|$)/.test(label0) ? "DS 경제" : label0;
+  return rest ? { label: normalizeSectorLabel(rawLabel), rest } : { label: "산업", rest: m[1].trim() };
 }
 
 console.log(`▶ DS투자증권 리서치 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
@@ -161,6 +169,7 @@ const usRows = await collectBoard("sub03_03");
 console.log(`  목록 — 기업분석 ${krRows.length}건 · 투자전략/경제분석 ${usRows.length}건`);
 
 const krItems = [];
+const usItems = []; // sub03_03 미국·글로벌 항목 + sub03_02 에 올라온 미국 이야기("[미국 …]")
 for (const r of krRows) {
   const body = stripBracket(r.title);
   const hit = resolveKrStock(body);
@@ -176,6 +185,7 @@ for (const r of krRows) {
       targetPrice: null,
       summary: "",
       pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_02&wr_id=${r.id}`,
+      board: BOARD_LABEL.sub03_02,
       views: null,
       category: "기업",
     });
@@ -184,6 +194,27 @@ for (const r of krRows) {
   // Defense Daily·거버넌스 시리즈·섹터 전략 노트 등 종목 리포트가 아닌 것 —
   // 산업분석/투자전략으로 별도 수집(symbol 항상 null).
   const { label, rest } = bracketLabelAndRest(r.title);
+  const pdfUrl2 = `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_02&wr_id=${r.id}`;
+  // "[미드스몰캡] 세미티에스 - 반도체 생산성 개선의 숨은 조력자"는 업종 글이 아니라 종목 코멘트다(오너 지적 2026-09-27 — "아무리봐도
+  // 종목인데") — "종목명 - 부제" 형식이면 기업으로 올린다. 종목 목록에 없는 신규 종목은 symbol 없이(서버 이름 검색에 맡김).
+  const sm = label === "미드스몰캡" ? rest.match(/^(.+?)\s+-\s+(.+)$/) : null;
+  if (sm) {
+    const corp = CORPS.find((c) => c.n === sm[1].trim());
+    krItems.push({
+      id: r.id, date: r.date, title: sm[2].trim(), stockName: sm[1].trim(), symbol: corp?.s ?? null,
+      analyst: "", opinion: "", targetPrice: null, summary: "", pdfUrl: pdfUrl2, board: BOARD_LABEL.sub03_02, views: null, category: "기업",
+    });
+    continue;
+  }
+  // 대괄호 안이 제목 전체이고 "미국 …"으로 시작하면(예: "[미국 데이터센터 전력망 비용 부담 현실화, ‘All of the Above’의 균열]") 미국 산업분석 —
+  // 국내 기업분석 게시판에 올라와도 시장은 미국이다(오너 지적 2026-09-27 — "아무리봐도 미국인데").
+  if (label === "산업" && /^미국\s/.test(rest)) {
+    usItems.push({
+      id: r.id, date: r.date, title: rest, stockName: label, symbol: null,
+      analyst: "", opinion: "", targetPrice: null, summary: "", pdfUrl: pdfUrl2, board: BOARD_LABEL.sub03_02, views: null, category: "산업", market: "us",
+    });
+    continue;
+  }
   krItems.push({
     id: r.id,
     date: r.date,
@@ -195,12 +226,12 @@ for (const r of krRows) {
     targetPrice: null,
     summary: "",
     pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_02&wr_id=${r.id}`,
+    board: BOARD_LABEL.sub03_02,
     views: null,
     category: "산업",
   });
 }
 
-const usItems = [];
 // 산업분석/투자전략(2026-09 추가): 이 게시판은 원래 이름 그대로 "투자전략/
 // 경제분석"이라 종목 매칭에 실패한(또는 애초에 종목 얘기가 아닌) 대다수
 // 글이 Macro Issue·투자전략·퀀트 노트 등 산업분석/투자전략 콘텐츠다(오너가
@@ -225,6 +256,7 @@ for (const r of usRows) {
         targetPrice: null,
         summary: "",
         pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_03&wr_id=${r.id}`,
+        board: BOARD_LABEL.sub03_03,
         views: null,
         category: "기업",
         market: "us",
@@ -244,19 +276,70 @@ for (const r of usRows) {
     targetPrice: null,
     summary: "",
     pdfUrl: `https://www.ds-sec.co.kr/bbs/board.php?bo_table=sub03_03&wr_id=${r.id}`,
+    board: BOARD_LABEL.sub03_03,
     views: null,
     category: "산업",
     market: isUsTagged ? "us" : "kr",
   });
 }
 
+// 공통 배제(오너 지시 2026-09-25) — push 지점이 여러 곳이라 완성된 배열에서 한 번에 거른다.
+function pruneExcluded(arr) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (isCommonExcludedContent(`${arr[i].stockName} ${arr[i].title}`, arr[i].category)) arr.splice(i, 1);
+    // "DS Defense Daily" 방산 일간 시리즈 — 수집 제외(오너 지시 2026-09-27).
+    else if (/Defense\s*Daily/i.test(arr[i].stockName ?? "")) arr.splice(i, 1);
+  }
+}
+pruneExcluded(krItems);
+pruneExcluded(usItems);
+
 console.log(`✔ 종목 매핑 — 국내 ${krItems.length}건 · 미국 ${usItems.length}건`);
 if (krItems.length + usItems.length === 0) {
   console.error("✗ 파싱 결과 0건. 게시판 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log("  국내 예시:", krItems.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbol})`));
 console.log("  미국 예시:", usItems.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbol})`));
+
+// 투자의견·목표주가 — 종목 리포트만 첨부 PDF 를 읽어 공용 추출기에 넘긴다.
+// 그누보드 첨부(download.php)는 게시글을 먼저 열어 받은 세션 쿠키가 있어야
+// PDF 가 나온다(쿠키 없으면 "오류안내" HTML, 실측 2026-09-25) — 로그인은 불필요.
+// 목록 링크(pdfUrl)는 그대로 게시글 주소로 둔다.
+async function readDsAttachmentText(postUrl) {
+  try {
+    const view = await fetch(postUrl, { headers: { "User-Agent": UA } });
+    const cookie = (view.headers.getSetCookie?.() ?? []).map((c) => c.split(";")[0]).join("; ");
+    const html = await view.text();
+    const m = html.match(/href="([^"]*\/bbs\/download\.php\?[^"]+)"/);
+    if (!m) return "";
+    // User-Agent 를 명시해 둔다(readPdfText 기본값과 같지만, 게시글 열기와 첨부
+    // 받기가 같은 브라우저로 보이게 — 실측 2026-09-28 이 PC 에서 12,871자 정상).
+    return await readPdfText(m[1].replace(/&amp;/g, "&"), {
+      headers: { cookie, referer: postUrl, "User-Agent": UA },
+    });
+  } catch {
+    return "";
+  }
+}
+const stockItems = [...krItems, ...usItems].filter((it) => it.category === "기업");
+console.log(`▶ 투자의견/목표주가 조회 중 (첨부 PDF) — ${stockItems.length}건...`);
+for (const it of stockItems) {
+  it.pdfText = await readDsAttachmentText(it.pdfUrl);
+  // 목록에 요약이 없는 게시판이라 PDF 본문에서 짧게 발췌한다(다른 소스와 같은
+  // "요약 발췌만 저장" 정책 — 원문 전체는 저장하지 않음).
+  if (it.pdfText && !it.summary) it.summary = excerptFromPdfText(it.pdfText);
+  await sleep(400);
+}
+for (const it of krItems) it.market ??= "kr";
+// 업종 리포트의 뭉뚱그린 라벨("산업")을 제목·PDF 표지의 실제 업종명으로 보정(공통 lib) — 안 그러면 제목 키워드로 오분류.
+console.log(`▶ 업종 라벨 보정: ${await refineSectorLabels([...krItems, ...usItems])}건`);
+await enrichResearch([...krItems, ...usItems], { usePdf: false });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
@@ -265,6 +348,7 @@ if (DRY_RUN) {
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
 // usRows(sub03_03)에서 나온 항목은 market이 "kr"/"us" 로 섞여 있을 수 있어

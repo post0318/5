@@ -2,6 +2,8 @@ import "server-only";
 import type { Collection } from "mongodb";
 import { getDb } from "./index";
 import type { MarketId } from "../markets/types";
+import { isCommonExcludedResearch } from "../research-exclude";
+import { classifySector, SECTOR_LABELS, normalizeIndustryLabel } from "../research-sector";
 
 /**
  * 산업/기업분석 리서치는 이 앱의 4대 시장(`MarketId`: kr/us/jp) 밖의 소스도
@@ -12,9 +14,11 @@ import type { MarketId } from "../markets/types";
  * 없음. `/ch/research` 같은 전용 화면은 아직 없어(추후 과제) 이 태그가 붙은
  * 문서는 당장 화면에 노출되지 않지만, 최소한 "us"로 잘못 섞이는 것은 막는다.
  */
-export type ResearchMarketId = MarketId | "ch";
+// "eu" — 유럽(오너 지시 2026-09-25 — "중국 일본 유럽도 시장은 추가해놔라").
+// ch 와 같이 리서치 태깅 전용이고 종목분석 어댑터(MarketId)와는 별개.
+export type ResearchMarketId = MarketId | "ch" | "eu";
 export function isResearchMarketId(v: string): v is ResearchMarketId {
-  return v === "kr" || v === "us" || v === "jp" || v === "ch";
+  return v === "kr" || v === "us" || v === "jp" || v === "ch" || v === "eu";
 }
 
 /**
@@ -73,11 +77,19 @@ export interface ShinhanResearchDoc {
 // 것. 기업분석·산업분석은 기존 90일 그대로.
 const MAX_AGE_MS = 90 * 24 * 3600_000;
 const RECENT_WINDOW_MS = 90 * 24 * 3600_000;
-const STRATEGY_MAX_AGE_MS = 30 * 24 * 3600_000;
-const MARKET_CONDITION_MAX_AGE_MS = 14 * 24 * 3600_000;
+// 전면 개편(오너 지시 2026-09-26 — "macro_issues를 kr_research로 흡수").
+// 보관기간은 오너가 직접 지정한 값 그대로: 이슈분석 30일 · 환율분석 30일 ·
+// 시황분석:Daily 7일 · 시황분석:Monthly 30일 · 시황분석:투자전략 90일 ·
+// 비상장 180일 · 글로벌IB 90일(기존 180일에서 단축) · 인사이트/산업분석/
+// 종목분석은 기존 90일 그대로.
+const ISSUE_MAX_AGE_MS = 30 * 24 * 3600_000;
+const FX_MAX_AGE_MS = 30 * 24 * 3600_000;
+const MARKET_DAILY_MAX_AGE_MS = 7 * 24 * 3600_000;
+const MARKET_MONTHLY_MAX_AGE_MS = 30 * 24 * 3600_000;
+const UNLISTED_MAX_AGE_MS = 180 * 24 * 3600_000;
+const GLOBAL_IB_MAX_AGE_MS = 90 * 24 * 3600_000;
 /** 해외리서치(골드만삭스 리서치 노트) 전용 보존기간 — 오너 지시,
  * 2026-09-19 "여기만 백필기간을 180일로". 다른 "산업" 카테고리는 90일. */
-const FOREIGN_RESEARCH_MAX_AGE_MS = 180 * 24 * 3600_000;
 
 export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDoc>> {
   const db = await getDb();
@@ -86,55 +98,138 @@ export async function shinhanResearchCol(): Promise<Collection<ShinhanResearchDo
   return col;
 }
 
+/**
+ * 같은 제목이 여러 번 올라온 것은 내용 업데이트본이라 최신 1건만 남긴다(오너 지시 2026-09-27 — 모든 수집기 공통).
+ * 키 = 출처·시장·카테고리·종목·제목(공백 정규화). 최신 = 날짜가 늦은 것, 같은 날이면 _id 가 큰 것.
+ */
+const dupKey = (d: ShinhanResearchDoc) =>
+  [d.source, d.market ?? "kr", d.category ?? "", d.symbol ?? "", (d.title ?? "").replace(/\s+/g, " ").trim()].join("|");
+const isNewer = (a: ShinhanResearchDoc, b: ShinhanResearchDoc) =>
+  a.date > b.date || (a.date === b.date && a._id > b._id);
+function keepLatestPerTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
+  const latest = new Map<string, ShinhanResearchDoc>();
+  for (const d of docs) {
+    const k = dupKey(d);
+    const cur = latest.get(k);
+    if (!cur || isNewer(d, cur)) latest.set(k, d);
+  }
+  return [...latest.values()];
+}
+
 export async function upsertShinhanResearch(
-  docs: ShinhanResearchDoc[],
+  allDocs: ShinhanResearchDoc[],
 ): Promise<{ upserted: number; pruned: number }> {
   const col = await shinhanResearchCol();
   let upserted = 0;
+  const docs = keepLatestPerTitle(allDocs);
   if (docs.length > 0) {
     // 문서 수가 많을 때(예: 초기 백필) 건별 replaceOne 순차 호출은 Vercel
     // 서버리스 함수 60초 제한을 넘겨 FUNCTION_INVOCATION_TIMEOUT 이 났다
     // (실측: KB·신한·하나 각 68~391건 배치에서 재현). bulkWrite 로 한 번에
     // 보내 라운드트립을 줄인다.
+    // 문서 통째 교체(replaceOne)를 쓰지 않는다 — 수집기들이 매일 같은 항목을
+    // 다시 보내는데, PDF 가 그날 잠깐 실패하면 targetPrice:null·opinion:""·
+    // summary:"" 로 돌아와 어제 뽑아 둔 값을 빈값으로 덮어썼다(감사 2026-09-28,
+    // 한경·KB·BNK 가 --days 기본으로 매일 재전송). 목록에서 항상 확정되는
+    // 필드만 무조건 갱신하고, 추출로 얻는 필드는 **값이 있을 때만** 갱신한다.
+    // 처음 들어오는 문서는 $setOnInsert 로 빈 기본값을 채워 스키마를 맞춘다
+    // ($set 과 $setOnInsert 는 같은 키를 가질 수 없어 둘로 나눈다).
     const result = await col.bulkWrite(
-      docs.map((d) => ({
-        replaceOne: { filter: { _id: d._id }, replacement: d, upsert: true },
-      })),
+      docs.map((d) => {
+        const set: Partial<ShinhanResearchDoc> = {
+          source: d.source,
+          market: d.market,
+          date: d.date,
+          title: d.title,
+          stockName: d.stockName,
+          analyst: d.analyst,
+          pdfUrl: d.pdfUrl,
+          views: d.views,
+          category: d.category,
+          collectedAt: d.collectedAt,
+        };
+        const onInsert: Partial<ShinhanResearchDoc> = {};
+        if (d.targetPrice != null) set.targetPrice = d.targetPrice;
+        else onInsert.targetPrice = null;
+        if (d.opinion) set.opinion = d.opinion;
+        else onInsert.opinion = "";
+        if (d.summary) set.summary = d.summary;
+        else onInsert.summary = "";
+        // 종목코드도 같은 취지 — 이번에 못 풀었다고(null) 이미 붙어 있는 값을
+        // 지우지 않는다(옛 오매칭은 2026-09-28 일회성 보정으로 정리됨).
+        if (d.symbol != null) set.symbol = d.symbol;
+        else onInsert.symbol = null;
+        if (d.relatedSymbols && d.relatedSymbols.length > 0) set.relatedSymbols = d.relatedSymbols;
+        return {
+          updateOne: {
+            filter: { _id: d._id },
+            update: { $set: set, $setOnInsert: onInsert },
+            upsert: true,
+          },
+        };
+      }),
       { ordered: false },
     );
     upserted = result.upsertedCount + result.modifiedCount;
+  }
+  // DB 에 이미 있는 같은 제목의 옛 문서는 지운다(들어온 문서가 더 최신일 때만).
+  if (docs.length > 0) {
+    await col.bulkWrite(
+      docs.map((d) => ({
+        deleteMany: {
+          filter: {
+            _id: { $ne: d._id },
+            source: d.source,
+            title: d.title,
+            category: d.category,
+            $or: [{ date: { $lt: d.date } }, { date: d.date, _id: { $lt: d._id } }],
+          },
+        },
+      })),
+      { ordered: false },
+    );
   }
   const cutoff = new Date(Date.now() - MAX_AGE_MS).toISOString().slice(0, 10);
   const del = await col.deleteMany({
     date: { $lt: cutoff },
     source: { $nin: FOREIGN_RESEARCH_SOURCES as unknown as string[] },
   });
-  // 해외리서치(골드만삭스 리서치 노트)만 180일 보존(오너 지시, 2026-09-19).
-  const foreignResearchCutoff = new Date(Date.now() - FOREIGN_RESEARCH_MAX_AGE_MS)
-    .toISOString()
-    .slice(0, 10);
-  const delForeignResearch = await col.deleteMany({
-    date: { $lt: foreignResearchCutoff },
+  // 글로벌IB(market!=="kr")·비상장(market==="kr") — 소스는 같지만(FOREIGN_
+  // RESEARCH_SOURCES) market에 따라 보관기간이 다르다(오너 지시 2026-09-26 —
+  // 글로벌IB 90일, 비상장 180일).
+  const globalIbCutoff = new Date(Date.now() - GLOBAL_IB_MAX_AGE_MS).toISOString().slice(0, 10);
+  const unlistedCutoff = new Date(Date.now() - UNLISTED_MAX_AGE_MS).toISOString().slice(0, 10);
+  const delGlobalIb = await col.deleteMany({
+    date: { $lt: globalIbCutoff },
     source: { $in: FOREIGN_RESEARCH_SOURCES as unknown as string[] },
+    market: { $ne: "kr" },
+  });
+  const delUnlisted = await col.deleteMany({
+    date: { $lt: unlistedCutoff },
+    source: { $in: FOREIGN_RESEARCH_SOURCES as unknown as string[] },
+    market: "kr",
   });
 
-  // 투자전략·시황 조기 정리 — topic 은 DB 필드가 아니라 classifyResearchTopic()
-  // 의 계산 결과라 deleteMany 조건절에 바로 못 넣는다. 둘 중 더 짧은 컷오프
-  // (시황 14일)~90일 사이의 "산업" 카테고리 문서만 후보로 가져와(전체 대비
-  // 소수) JS 에서 분류 후 각자의 컷오프를 넘겼으면 id로 골라 지운다 —
-  // 산업분석은 그대로 90일 유지.
-  const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
-  const marketConditionCutoff = new Date(Date.now() - MARKET_CONDITION_MAX_AGE_MS).toISOString().slice(0, 10);
-  // 후보 조회는 둘 중 더 넓은(=더 최근인) 컷오프를 써야 한다 — 시황(14일)이
-  // 투자전략(30일)보다 짧아서, 14일 기준으로 가져와야 "14~30일 사이의
-  // 시황"도 후보에 걸린다(30일 기준으로만 가져오면 이 구간을 통째로 놓침).
+  // 이슈분석/환율분석/시황분석(Daily·Monthly) 조기 정리 — topic은 DB 필드가
+  // 아니라 classifyResearchTopic()의 계산 결과라 deleteMany 조건절에 바로
+  // 못 넣는다. 가장 짧은 컷오프(시황분석:Daily 7일)~90일 사이의 "산업"
+  // 카테고리 문서만 후보로 가져와(전체 대비 소수) JS에서 분류 후 각자의
+  // 컷오프를 넘겼으면 id로 골라 지운다. 산업분석·시황분석:투자전략(둘 다
+  // 90일)은 위 일반 del이 이미 처리하므로 여기서 안 건드린다.
+  const issueCutoff = new Date(Date.now() - ISSUE_MAX_AGE_MS).toISOString().slice(0, 10);
+  const fxCutoff = new Date(Date.now() - FX_MAX_AGE_MS).toISOString().slice(0, 10);
+  const dailyCutoff = new Date(Date.now() - MARKET_DAILY_MAX_AGE_MS).toISOString().slice(0, 10);
+  const monthlyCutoff = new Date(Date.now() - MARKET_MONTHLY_MAX_AGE_MS).toISOString().slice(0, 10);
+  // 후보 조회는 넷 중 가장 넓은(=가장 최근인) 컷오프를 써야 한다 — 시황분석:
+  // Daily(7일)가 가장 짧아서, 7일 기준으로 가져와야 "7~30일 사이의 이슈분석/
+  // 환율분석/Monthly"도 후보에 걸린다.
   const staleIndustryCandidates = await col
     .find({
       category: "산업",
-      date: { $lt: marketConditionCutoff },
+      date: { $lt: dailyCutoff },
       source: { $nin: [...INSIGHT_SOURCES, ...FOREIGN_RESEARCH_SOURCES] as unknown as string[] },
     })
-    .project<{ _id: string; date: string; stockName: string; title: string; source: string; market: MarketId; summary: string }>({
+    .project<{ _id: string; date: string; stockName: string; title: string; source: string; market: ResearchMarketId; summary: string }>({
       date: 1,
       stockName: 1,
       title: 1,
@@ -145,10 +240,26 @@ export async function upsertShinhanResearch(
     .toArray();
   const staleStrategyIds = staleIndustryCandidates
     .filter((d) => {
+      // 분류 오류가 곧 영구 삭제로 이어지지 않게(감사 2026-09-28): 화면 분류는
+      // 정규식 부분일치("52주 신고가"→시황, "파이프라인 포트폴리오"→투자전략,
+      // "부채비율"→채권 등)로 흔들리는데, 삭제는 되돌릴 수 없다. 그래서 조기
+      // 삭제는 라벨이 게시판 기본값/전략 라벨이거나 시리즈명·소스 규칙으로
+      // **강제** 분류된 문서에만 적용하고, 업종명이 달린 문서는 분류 결과와
+      // 무관하게 일반 90일 정리에 맡긴다(화면 분류 자체는 그대로 둔다).
+      // "업종명"의 기준은 표준 업종 목록(SECTOR_LABELS)에 매핑되는지다 — 짧은
+      // 라벨이면 다 업종으로 보면 "글로벌 인사이트"·"모닝브리핑"·"경제분석 Note"
+      // 같은 시리즈명(실측 147건)까지 보호돼 오너가 정한 7·30일 보관이 무너진다.
+      const forced =
+        isMarketConditionStockname(d.stockName) ||
+        MARKET_CONDITION_SOURCE_MARKETS.has(`${d.source}:${d.market}`);
+      const isSector = (SECTOR_LABELS as readonly string[]).includes(normalizeIndustryLabel(d.stockName));
+      if (!forced && isSector) return false;
       const t = classifyResearchTopic(d);
-      if (t === "산업분석") return false;
-      if (t === "시황") return true; // 후보 자체가 이미 14일 이전만 가져왔음
-      return d.date < strategyCutoff; // 투자전략(주식)/(채권) — 30일까지는 유지
+      if (t === "이슈분석") return d.date < issueCutoff;
+      if (t === "환율분석") return d.date < fxCutoff;
+      if (t === "시황분석:Daily") return true; // 후보 자체가 이미 7일 이전만 가져왔음
+      if (t === "시황분석:Monthly") return d.date < monthlyCutoff;
+      return false; // 산업분석·시황분석:투자전략은 일반 90일 정리에 맡김
     })
     .map((d) => d._id);
   let prunedStrategy = 0;
@@ -159,7 +270,11 @@ export async function upsertShinhanResearch(
 
   return {
     upserted,
-    pruned: (del.deletedCount ?? 0) + (delForeignResearch.deletedCount ?? 0) + prunedStrategy,
+    pruned:
+      (del.deletedCount ?? 0) +
+      (delGlobalIb.deletedCount ?? 0) +
+      (delUnlisted.deletedCount ?? 0) +
+      prunedStrategy,
   };
 }
 
@@ -170,11 +285,38 @@ export async function upsertShinhanResearch(
  * 경유 유안타증권) 의도적으로 별개 카드로 남겨둔다(CLAUDE.md 참고 — 기능상
  * 문제 없는 것으로 이미 합의된 트레이드오프).
  */
+/**
+ * 중복 판정용 제목 정규화. 같은 리포트가 경로에 따라 제목 형식이 다르게
+ * 들어온다(감사 2026-09-28 — 같은 증권사·날짜·종목 중복 225그룹, 제목이 그대로
+ * 같은 건 31그룹뿐):
+ *  - 한경 경유: "HDC(012630) 나의 계절이 왔다"
+ *  - 한화 자체: "[건설/부동산] HDC[012630/Buy] 나의 계절이 왔다"
+ *  - KB 자체:   "나의 계절이 왔다"
+ * 앞에 붙는 [업종] 태그, "종목명(코드)"/"종목명[코드/의견]" 접두, 공백·문장부호
+ * 차이를 걷어내고 소문자로 비교한다. 수집기 쪽(한경)도 헤드라인만 저장하게
+ * 고쳤지만, 보관 기간(90일) 안의 옛 문서는 그대로라 읽기 쪽에서도 맞춘다.
+ */
+export function normalizeTitleForDedupe(title: string): string {
+  let t = title.trim();
+  t = t.replace(/^\[[^\]]{1,40}\]\s*/, ""); // [업종] 태그
+  t = t.replace(/^[^()\[\]]{1,40}\((\d{6})\)\s*/, ""); // 종목명(코드)
+  t = t.replace(/^[^()\[\]]{1,40}\[\d{6}\/[^\]]{0,20}\]\s*/, ""); // 종목명[코드/의견]
+  t = t.replace(/^[^()\[\]]{1,40}\((\d{6})[.\w]*\/[^)]{0,20}\)\s*:?\s*/, ""); // 종목명(코드.KS/의견):
+  // 접두를 걷어낸 뒤에도 [태그]가 남는 형식이 있어 한 번 더(예: 유안타
+  // "티엘비(356860) [[NDR 후기] …" — 실측).
+  t = t.replace(/^\[+[^\]]{1,40}\]\s*/, "");
+  t = t.replace(/[\s"'“”‘’.,:;!?~\-–—·]+/g, "");
+  return t.toLowerCase();
+}
+
 function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
   const seen = new Set<string>();
   const result: ShinhanResearchDoc[] = [];
   for (const d of docs) {
-    const key = `${d.source}|${d.title.trim()}`;
+    // 날짜까지 키에 넣는다 — 다른 날 같은 제목의 정기물(위클리 등)을 잘못
+    // 합치지 않기 위해. 같은 리포트가 경로별로 다른 날짜를 달고 오는 경우는
+    // 실측에서 없었다(중복 225그룹 전부 같은 날짜).
+    const key = `${d.source}|${d.date}|${normalizeTitleForDedupe(d.title ?? "")}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(d);
@@ -182,7 +324,30 @@ function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
   return result;
 }
 
-export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전략(채권)" | "시황" | "해외리서치";
+/** 리매핑 전 내부 분류(과거 이름 그대로 유지, 잘 튜닝된 휴리스틱 그대로 재사용). */
+type LegacyResearchTopic = "산업분석" | "투자전략(주식)" | "투자전략(채권)" | "시황" | "해외리서치";
+
+/**
+ * 공개 분류 체계(오너 지시 2026-09-26, "리서치 파이프라인 구조 전면 개편") —
+ * macro_issues 컬렉션을 kr_research로 흡수하면서 이슈분석/환율분석이 이제
+ * 여기서도 판정된다. LegacyResearchTopic → ResearchTopic 매핑:
+ *   산업분석 → 산업분석(그대로)
+ *   투자전략(채권) → 이슈분석 | 환율분석(제목에 FX 신호 있으면 환율분석)
+ *   시황 → 시황분석:Daily | 시황분석:Monthly(제목에 "월간"/"month" 신호 있으면
+ *     Monthly, 그 외 기본값 Daily)
+ *   투자전략(주식) → 시황분석:투자전략
+ *   해외리서치 → 글로벌IB(market!=="kr") | 비상장(market==="kr", 현재
+ *     FOREIGN_RESEARCH_SOURCES가 전부 market:"us"라 이론적 케이스)
+ */
+export type ResearchTopic =
+  | "산업분석"
+  | "이슈분석"
+  | "환율분석"
+  | "시황분석:Daily"
+  | "시황분석:Monthly"
+  | "시황분석:투자전략"
+  | "글로벌IB"
+  | "비상장";
 
 /**
  * "산업" 카테고리 문서를 산업분석/투자전략/시황 세 갈래로 나눈다(오너 지시,
@@ -259,8 +424,11 @@ export type ResearchTopic = "산업분석" | "투자전략(주식)" | "투자전
 // 추천종목 등, stockName과 무관하게 항상 승격)와 BARE_STRATEGY_RE(한글
 // "전략" 단독, stockName이 업종명이 아닐 때만 승격 — isGenericOrBoardLabel).
 const STRATEGY_HINT_STRONG_RE =
-  /\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|포트폴리오|Portfolio|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC|실적\s?(상향|하향)/i;
-const BARE_STRATEGY_RE = /(?<!치료\s?)(?<!임상\s?)전략/;
+  /\bStrateg(y|ic)\b|매크로|\bMacro\b|추천종목|아웃룩|Outlook|자산배분|리밸런싱|Rebalancing|IPO\s?Brief|시장\s?전망|월간\s?전망|투자의견|Top\s?Picks?|\bFICC\b|Fixed\s?Income|고용|실업|비농업|물가|\bCPI\b|\bPPI\b|\bPCE\b|FOMC|실적\s?(상향|하향)/i;
+// "포트폴리오/Portfolio"도 여기(라벨이 업종명이 아닐 때만 전략 신호) — 은행 "조달 포트폴리오의 악화"처럼 업종 리포트의
+// 자금 조달·자산 구성 얘기에 걸려 투자전략으로 새던 오분류 수정(오너 지적 2026-09-26). 라벨 자체가 전략/보드 라벨이면
+// (STRATEGY_HINT_RE에 포트폴리오 포함) 그대로 걸린다.
+const BARE_STRATEGY_RE = /(?<!치료\s?)(?<!임상\s?)전략|포트폴리오|Portfolio/i;
 // isGenericOrBoardLabel()에서 stockName 자체가 전략/보드 라벨인지 판별할
 // 때는 강한 신호와 bare 전략을 합친 전체를 쓴다 — "글로벌 투자전략"처럼
 // stockName 자체에 "전략"이 있으면 그건 진짜 전략 게시판이라는 뜻이라
@@ -296,6 +464,9 @@ const MARKET_CONDITION_STRONG_RE =
 // 로 이 둘을 가른다.
 const MARKET_CONDITION_PERIOD_RE = /일간|위클리|주간|데일리|모닝|아침|\bWeek(ly)?\b|\bDaily\b|\bMorning\b/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
+  "경제분석 · Econ Signal",
+  "투자전략 · Econ Signal", // 신한 월간 거시 시황(하건형, 오너 지시 2026-09-27)
+  "이.글.스.", // 한화 "이번달 글로벌 스토리" 월간 글로벌 주식 전략(글로벌리서치팀) — 월간 시황(오너 지시 2026-09-27)
   "KB Global Tracker+",
   "KB데일리", // 오너 지적, 2026-09
   "상상인 US Monitor",
@@ -317,22 +488,37 @@ const MARKET_CONDITION_STOCKNAMES = new Set([
   // 거의 매일 올라오는 아시아 시장 헤드라인 코멘트, KB데일리와 같은 성격
   // (오너 지시 2026-09-24 — "kb 중국과 일본도 수집기는 만들어두고").
   "KB Asia Market Headline",
+  // 삼성증권 "Daily시황"(GUBUN=daily) — 오너 지시, 2026-09-25 — "daily시황은
+  // 시황으로". "국내 마감시황"은 이 라벨(market:"kr"), "미국 마감시황"은 아래
+  // "삼성증권 미국 시황"(market:"us")으로 갈린다(오너 지시 — "삼성 daily 시황에서
+  // 미국은 미국 시황으로 분류").
+  "삼성증권 Daily시황",
+  "삼성증권 미국 시황",
+  // 한경 경유 → 직접 수집 전환 증권사들의 데일리 시황 게시판(오너 결정 2026-09-25,
+  // 삼성증권과 같은 기준 — 데일리·시황은 시황). iM증권 Morning Brief(R_E010)는
+  // 이후 게시판째 수집 제외(오너 결정 2026-09-25 — "im증권 Morning Brief는
+  // 수집제외다") — 라벨은 더 이상 생성되지 않는다.
+  "메리츠 Strategy Daily",
+  "IBKS Daily",
+  "대신증권 시황",
 ]);
 // stockName 뒤에 " | Weekly" 같은 부가 표기가 붙어 정확히 일치하지 않는
 // 경우가 있어(예: "KB Global Tracker+ | Weekly") 접두어로도 매칭(오너 지적
 // 사례로 발견한 기존 누락, 2026-09).
 const MARKET_CONDITION_STOCKNAME_PREFIXES = ["KB Global Tracker+"];
 const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
-// KB증권 "Global Insights" — 오너 지시, 2026-09("KB증권 Global Insights는
-// 투자전략임"). 제목에 "전략"/Strategy 등 키워드가 없는 경우가 많아 시리즈명
-// 기준으로 강제.
+// KB증권 "Global Insights"는 이후 오너 결정(2026-09-27 — "KB데일리는 종합판이네 이거 있으면 KB 다른 데일리자료는
+// 불필요다. Market Pulse 글로벌인사이트는 별도로 수집하지 않는다")으로 수집 자체를 제외(research-exclude.ts
+// DAILY_BRIEFING_RE)해 여기서도 뺐다 — 어차피 수집 단계에서 걸러져 이 Set에 남아있어도 도달하지 않는다.
 // "NAV Dashboard Weekly"(미래에셋 — 지주회사 NAV 할인율 스크리닝 시리즈,
 // 업종 얘기가 아니라 밸류에이션 갭을 노리는 투자전략물, 오너 지적 2026-09)
 // 추가.
 // 키움증권 "월간증시전망"·"중장기증시전망" 게시판(오너 지시, 2026-09-24 —
 // "월간증시전망은 투자전략(주식)", "중장기증시전망은 투자전략(주식)이다").
 const STRATEGY_STOCKNAMES = new Set([
-  "Global Insights",
+  "신한 해외주식 탑픽", // 신한 월간 해외주식 탑픽 10선 — 투자전략(주식)(오너 지적 2026-09-27)
+  "한화 해외주식 전략", // 한화 해외주식분석 게시판의 종목·업종 없는 미국·중국 시장 노트 — "호르무즈보다 중요한 건 유동성"·"미중 정상회담: 높아질 기대, 숨 고를 증시"(오너 지적 2026-09-27)
+  "Now Japan 시리즈", // 삼성증권 일본 시장 시리즈 — "10월, 新 TOPIX 시대 개막"(오너 지적 2026-09-27)
   "Global Watchlist",
   "마켓픽",
   "NAV Dashboard Weekly",
@@ -341,6 +527,26 @@ const STRATEGY_STOCKNAMES = new Set([
   // KB증권 "KB 전략" 게시판(tab=3, "한국 투자 > 주식전략") — 오너 지시,
   // 2026-09-24 — "한국투자에서 kb전략은 투자전략(주식)에 해당된다".
   "KB 전략",
+  // KB증권 "이그전"(같은 게시판) — 오너 지시, 2026-09-27 — "이그전은 투자전략이다".
+  "KB 이그전",
+  // 삼성증권 "투자전략"(GUBUN=market)·"SPOT코멘트(전략)"(GUBUN=spot1) — 오너
+  // 지시, 2026-09-25 — "투자전략은 투자전략(주식)으로", "spot코멘트(전략)은
+  // 투자전략(주식)으로".
+  "삼성증권 투자전략",
+  "삼성증권 SPOT코멘트(전략)",
+  // 삼성증권 "이슈리포트"(GUBUN=issue) — 오너 지시, 2026-09-25.
+  "삼성증권 이슈리포트",
+  // 한경 경유 → 직접 수집 전환 증권사들의 투자전략 게시판(오너 결정 2026-09-25 —
+  // 삼성증권과 같은 기준, 투자전략은 투자전략(주식)).
+  "iM증권 투자전략",
+  "메리츠 투자전략",
+  "IBK 투자전략",
+  "대신증권 투자전략",
+  "한화 투자전략",
+  // BNK투자증권 금융시장 게시판의 "甲論乙駁"(주식시장 코멘트) — 오너 지시 2026-09-26.
+  "BNK 甲論乙駁",
+  // 한화 [해외시황](박제인) 기본은 투자전략 — 채권 관련 글만 "한화 해외시황 채권"(이슈분석)으로 수집기가 바꾼다(오너 지시 2026-09-27).
+  "한화 해외시황",
 ]);
 // 미래에셋증권 "월스트리트파인더 Ep.201, 202, ..." — 매회 에피소드 번호가
 // 붙어 정확히 일치하지 않아 접두어로 매칭. 계절성·금리 대응·엔비디아
@@ -414,7 +620,10 @@ const BOND_STRONG_RE =
   /(?<!매출)(?<!연체)(?<!부실)채권(?!단|자|회수|추심)|크레딧|국채|부채|Beige\s?Book|\bCredit\b|\bBond\b|\bDebt\b|Fixed\s?Income/i;
 // "환율"(FX) 추가 — 한국투자증권 "경제분석 Note" 환율 FAQ 사례가 채권/
 // FICC 데스크 소관인데 신호가 없어 투자전략(주식)으로 잘못 넘어감(오너
-// 지적, 2026-09).
+// 지적, 2026-09). 개별 통화명(위안화 등)은 넣지 않는다 — FX_RE 가 이미 그
+// 단어들을 갖고 있어 "투자전략(채권)"으로 들어오면 곧장 환율분석으로 갈리는데,
+// 메리츠 "Charts of China: 금으로 쌓는 위안화"는 오너가 "이슈분석 경제다"로
+// 확정해(환율분석 아님) 아래 CHINA_MACRO_TITLE_RE 로 별도 처리한다.
 const BOND_MACRO_RE =
   /금리|중앙은행|통화정책|고용|실업|비농업|물가|소매판매|환율|\bCPI\b(?!\()|\bPPI\b(?!\()|\bPCE\b(?!\()|\bGDP\b|Retail\s?Sales|\bRate[s]?\b|Central\s?Bank|Monetary\s?Policy|\bECB\b/i;
 // "코스피/코스닥/나스닥" 등 지수명 자체가 이미 주식시장 얘기라는 강한 신호
@@ -426,11 +635,6 @@ const EQUITY_HINT_RE =
 // ("FOMC Minutes"처럼 본문에 흔한 채권 키워드가 하나도 없는 경우 있음,
 // 오너 지적 2026-09).
 const BOND_SOURCES = new Set(["FRB"]);
-// ESG는 산업분석/투자전략/시황 어디에도 안 맞아 이 탭 범위 밖으로 보고
-// 제외한다(오너 지시, 2026-09 — "esg는 제외하라"). getIndustryResearch()
-// 조회 시점에 적용(분류가 아니라 제외라 classifyResearchTopic() 이 아닌
-// 별도 필터).
-const ESG_EXCLUDE_RE = /\bESG\b/i;
 
 /**
  * 해외 IB/자산운용사 리서치 5곳(오너 지시, 2026-09-19 — 골드만삭스·JP모간·
@@ -473,7 +677,20 @@ export const INSIGHT_SOURCES = [
   // 산업분석으로 유지"(국내(market:"kr")만 인사이트 대상, 삼성증권의 해외
   // (market:"us") 비상장 콘텐츠는 그대로 산업분석 유지 — 손대지 않음).
   "NH투자증권 비상장리서치",
+  "신한투자증권 비상장리서치",
+  // 삼성증권 국내기업·국내산업 게시판의 비상장 글("BPMG (비상장): …",
+  // "비상장 위클리 업데이트") — 위와 같은 국내 비상장 규칙(2026-09-25).
+  "삼성증권 비상장리서치",
+  // 한화투자증권 해외주식분석의 상장 전 기업 리포트("[IPO 101] [스페이스X]") — 미국·중국 비상장(오너 지시 2026-09-27).
+  "한화투자증권 비상장리서치",
 ] as const;
+
+/**
+ * 비상장 리서치 source 판별 — 시장과 무관하다(오너 지시 2026-09-27 — "미국과 중국도 비상장을 추가한다").
+ * 같은 source 이름을 시장별로 재사용한다(예: "삼성증권 비상장리서치"는 kr·us·ch 모두). 화면은 미국에서 인사이트(해외 IB)와
+ * 비상장을 별도 탭으로 나눠 보여주므로 이 접미어로 두 그룹을 가른다.
+ */
+export const isUnlistedSource = (source: string): boolean => /비상장리서치$/.test(source);
 
 /**
  * "해외리서치" — 산업분석 탭의 새 세그먼트(오너 지시, 2026-09-19 —
@@ -545,11 +762,17 @@ function looksLikeSectorLabel(stockName: string): boolean {
   );
 }
 
+// GlobalMonitor 등에서 라벨이 "Global Eco..."(Global Economics/Economy) 같은 경제 코멘터리 시리즈명일 때 —
+// 특정 업종명이 아니라 "경제분석"과 같은 성격의 게시판 라벨이다(오너 지적 2026-09-27 — 유진투자증권 "8월 물가:
+// 근원 +0.3% 서프라이즈"가 investment로 새던 문제). "경제/Econ"이 라벨에 있어도 구체 업종명이면(예: "반도체
+// 산업경제") 걸리지 않도록 looksLikeSectorLabel 이 아닐 때만 인정한다.
+const GENERIC_ECON_LABEL_RE = /경제|\bEcon(?:omy|omics|omic)?\b/i;
 function isGenericOrBoardLabel(doc: { stockName: string; title: string }): boolean {
   if (!doc.stockName || doc.stockName === "산업" || doc.stockName === "시장") return true;
   if (doc.stockName === doc.title && !looksLikeSectorLabel(doc.stockName)) return true;
   if (KIS_STRATEGY_DEFAULT_STOCKNAMES.has(doc.stockName)) return true;
-  return STRATEGY_HINT_RE.test(doc.stockName);
+  if (STRATEGY_HINT_RE.test(doc.stockName)) return true;
+  return GENERIC_ECON_LABEL_RE.test(doc.stockName) && !looksLikeSectorLabel(doc.stockName);
 }
 
 function isBond(doc: { stockName: string; title: string }, hayWithSummary: string): boolean {
@@ -557,9 +780,44 @@ function isBond(doc: { stockName: string; title: string }, hayWithSummary: strin
   return isGenericOrBoardLabel(doc) && BOND_MACRO_RE.test(hayWithSummary) && !EQUITY_HINT_RE.test(hayWithSummary);
 }
 
-export function classifyResearchTopic(
+// "KB 전략" 추가(오너 지시 2026-09-27 — "kb전략은 투자전략이다" — "9월 인상이 기정 사실이라면"이 금리·연준
+// 언급이 많아 채권 신호로 오인돼 이슈분석으로 샜다). 삼성증권 투자전략과 같은 라벨 우선 원칙.
+// NH "전략 인사이드/글로벌 전략"·"전략 인사이드/자산배분 전략" 추가(오너 확인 2026-09-27 — 둘 다 투자전략) —
+// "그래도 주식이 낫다"(하재석)가 본문의 채권 대비 서술(bondStrong) 때문에 이슈분석으로 샜다.
+const LABEL_FIRST_STRATEGY_STOCKNAMES = new Set<string>([
+  "삼성증권 투자전략",
+  "KB 전략",
+  "KB 이그전",
+  "전략 인사이드/글로벌 전략",
+  "전략 인사이드/자산배분 전략",
+  // 현대차증권(GM 경유) "What if" 시나리오 분석 시리즈 — "블루 오디세이, 한국
+  // 증시는 돌아올 수 있을까 - 미국 중간선거의 한국 증시 및 업종별 영향 분석"이
+  // 요약의 "금리" 언급(bondStrong, generic 과 무관하게 항상 승격)으로 이슈분석에
+  // 샜다(오너 지적 2026-10-01 — "이것도 투자전략인데?"). 실제로는 선거 이벤트가
+  // 한국 증시·업종에 미치는 영향을 다루는 투자전략 시리즈.
+  "What if",
+  // 신한투자증권 "투자전략 · 글로벌 주식전략" 게시판 — 게시판명 자체가 이미
+  // "주식전략"이라고 밝히고 있는데도 "게임의 룰은 바뀌지 않았다"(미국 주식
+  // 시장 전략, S&P 500 목표밴드 제시)가 요약의 "AI Capex+Credit 사이클"
+  // 한 단어(bondStrong, generic 과 무관하게 항상 승격) 때문에 이슈분석으로
+  // 샜다(오너 지적 2026-10-01 — "제목이 주식시장 전략인데 본문의 credit이
+  // 왜 영향을 미치는거지?", "본문 상단에 이미 주식시장 전략이라고 되어있는데
+  // 그걸 무시하고 있다"). 본문 키워드로 역추정하지 말고 게시판명 자체가
+  // 이미 "주식전략"을 명시하면 그대로 믿는다(다른 LABEL_FIRST 항목과 동일
+  // 원칙) — 이 게시판 문서 4건 전수 확인(2026-09-01~09-30) 전부 미국
+  // 주식시장 전략 글이라 안전하게 적용 가능.
+  "투자전략 · 글로벌 주식전략",
+]);
+
+// 거시 지표·통화정책 발표로 시작하는 제목: "미국 8월 CPI: …", "9월 FOMC: …", "한국 7월 산업활동동향", "미국 2분기 GDP; …",
+// "유럽 7월 산업생산: …"(한국투자증권 해외 기업분석, 오너 지적 2026-09-27 — "유럽 산업재인데?", stockName이 "산업재"라
+// 업종 라벨처럼 보여도 실제로는 EU 통계청의 거시 지표 발표라 이슈분석이어야 함 — "유럽" 국가 접두어와 "산업생산" 지표명 추가).
+const MACRO_DATA_TITLE_RE =
+  /^\s*(?:\[[^\]]*\]\s*)?(?:(?:미국|한국|중국|일본|유럽|유로존|글로벌)\s*)?(?:\d{1,2}월\s*|\d분기\s*)?(?:CPI|PPI|PCE|FOMC|ISM|GDP|소비자물가|생산자물가|비농업|고용지표|소매판매|산업생산)/i;
+
+function classifyLegacyTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
-): ResearchTopic {
+): LegacyResearchTopic {
   if ((FOREIGN_RESEARCH_SOURCES as readonly string[]).includes(doc.source)) return "해외리서치";
   if (isMarketConditionStockname(doc.stockName)) return "시황";
   if (MARKET_CONDITION_SOURCE_MARKETS.has(`${doc.source}:${doc.market}`)) return "시황";
@@ -572,7 +830,34 @@ export function classifyResearchTopic(
   // 키워드는 상대적으로 금융 용어라 그 위험이 작음).
   const hayWithSummary = `${hay} ${doc.summary ?? ""}`;
   if (BOND_SOURCES.has(doc.source)) return "투자전략(채권)";
+  // 라벨 우선(오너 지시 2026-09-27): 삼성증권 "투자전략(market)" 게시판 글은 제목에 금리·채권 단어가 있어도(예: "업종 및 종목의 금리 민감도")
+  // 게시판이 곧 분류라 항상 투자전략(주식)이다. 다른 증권사 투자전략 라벨은 기존대로 채권 여부를 따진다.
+  if (LABEL_FIRST_STRATEGY_STOCKNAMES.has(doc.stockName)) return "투자전략(주식)";
   if (isStrategyStockname(doc.stockName)) return isBond(doc, hayWithSummary) ? "투자전략(채권)" : "투자전략(주식)";
+  // 라벨 우선(오너 지시 2026-09-27 — "라벨이 있으면 라벨부터 봐라. 게시판명, 라벨명, 내용 순"): 라벨 자체가 분명한 업종("은행"·"반도체"·"자동차"…)이면
+  // 제목·요약의 채권·환율·전략·시황 신호로 승격하지 않고 산업분석이다. 안 그러면 은행 리포트에 흔한 "부채·채권" 요약 하나로 투자전략(채권)→환율분석이 된다
+  // (하나증권 "속절없이 하락하는 환율. 은행은 환율 하락의 수혜주"). 라벨이 짧은 업종명일 때만 — 문장형·게시판형 라벨은 기존대로 내용을 본다.
+  if (looksLikeSectorLabel(doc.stockName) && !STRATEGY_HINT_RE.test(doc.stockName) && classifySector({ stockName: doc.stockName }) !== null) {
+    // 예외: 제목이 거시 지표 발표로 시작하면("미국 8월 CPI: …"·"9월 FOMC: …") 라벨이 업종("에너지"·"은행")이어도 산업분석이 아니라 이슈분석이다
+    // (오너 지시 2026-09-27 — "cpi ppi는 이슈분석이 맞다"). 한경·KIS 가 거시 글에 업종 라벨을 잘못 다는 경우.
+    if (MACRO_DATA_TITLE_RE.test(doc.title)) return "투자전략(채권)";
+    return "산업분석";
+  }
+  // 위 분기와 같은 취지를 stockName 대신 title 로 본다 — stockName 이 "산업"
+  // 같은 게시판 기본값이라 업종을 못 알려주는 경우(제목에만 업종이 있음).
+  // 제목이 "<실제 업종명>주 …" 로 시작하면("전력기기주 환율변동 영향 진단")
+  // "그 업종 종목들"에 대한 글이지 매크로 분석이 아니다 — 환율 언급이 있어도
+  // 산업분석(오너 지적 2026-10-01, "전력기기주 환율변동 영향 진단... 산업재
+  // 분석인데"). "<실제업종>주" 패턴이 DB 전수에서 이 문서 1건에만 걸려(실측)
+  // 범위를 넓게 잡아도 안전하다 — stockName 자체를 title 로 넓히는 건(다른
+  // 접근) 245건이 바뀌어 기각했다.
+  const sectorStockLead = doc.title.match(/^([가-힣A-Za-z0-9]{2,10})주(?=[\s,:.)]|$)/);
+  if (sectorStockLead && classifySector({ stockName: sectorStockLead[1] }) !== null) {
+    return "산업분석";
+  }
+  // 게시판 우선: 게시판 이름이 그대로 라벨로 들어온 경우("글로벌 산업분석" — 하나증권 pid=8 게시판)는 게시판이 곧 산업분석이다. 실제 업종은 제목의
+  // "[미국 건설]" 처럼 뒤에 있어 라벨이 못 알려주지만, 내용(주택담보부채·금리)으로 이슈분석에 올리면 안 된다(오너 지적 2026-09-27).
+  if (/산업분석$/.test(doc.stockName.trim()) && !STRATEGY_HINT_RE.test(doc.stockName)) return "산업분석";
   if (MARKET_CONDITION_STRONG_RE.test(hay)) return "시황";
   const generic = isGenericOrBoardLabel(doc);
   if (MARKET_CONDITION_PERIOD_RE.test(hay) && generic) return "시황";
@@ -601,27 +886,220 @@ export function classifyResearchTopic(
   return "산업분석";
 }
 
+// FX 판정(오너 지시 2026-09-26) — scripts/lib/exclude-filters.mjs의
+// isFxContent()·구 macro-issues.ts의 escalateToFxTopic()과 같은 정규식.
+// 배제가 아니라 분류라 research-exclude.ts로 옮기지 않고 이 파일에 로컬로
+// 둔다(이 파일의 다른 분류용 정규식 BOND_STRONG_RE 등과 같은 관례).
+//
+// "외환"·"원/달러"(슬래시 표기)·"달러와 원화"(산문형 대구) 추가(오너 지적
+// 2026-10-01 — 신한 "외환이슈; 원/달러 장기 균형은 어디인가"가 이슈분석으로,
+// iM "달러와 원화의 동상이몽"이 FX 스킵됨). 둘 다 "환율"이라는 단어 자체를
+// 안 쓰면서 환율을 다루는 흔한 한국어 헤드라인 표현이라 기존 FX_RE 가 놓쳤다.
+// scripts/lib/exclude-filters.mjs 의 사본도 같이 맞춘다.
+const FX_RE =
+  /\bFX\b|환율|외환|엔화|달러화|위안화|유로화|파운드화|원화\s*(?:강세|약세|절상|절하)|달러[-\s]?엔|달러\s*인덱스|\bDXY\b|원\s*\/\s*달러|달러\s*\/\s*원|달러\s*[와과]\s*원화|원화\s*[와과]\s*달러/i;
+// 시황분석 Daily/Monthly 분기(오너 지시 2026-09-26 — "Daily는 일간, 데일리,
+// 모닝브리프 등을 분류, Monthly는 월간, month 등을 분류"). 기본값은 Daily —
+// 기존 "시황" 판정 자체가 이미 데일리성 신호(MARKET_CONDITION_STRONG_RE·
+// PERIOD_RE)로 확정된 것들이라 Monthly만 명시적으로 가르면 된다.
+const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b|이\.글\.스\.|Econ\s?Signal/i;
+
+// macro_issues에서 흡수한 콘텐츠 중 "게시판 코드가 topic을 확정"하던
+// 것들(제목 텍스트만으론 이슈분석/환율분석이 안 갈리는 경우)을 위한 고정
+// 라벨 강제 분류 — MARKET_CONDITION_STOCKNAMES/STRATEGY_STOCKNAMES와 같은
+// 패턴(오너 지시 2026-09-26). 대부분의 이관 콘텐츠는 제목에 채권/금리/환율
+// 신호가 실제로 있어 기존 휴리스틱(classifyLegacyTopic)만으로도 자연스럽게
+// "투자전략(채권)"으로 걸린 뒤 아래 FX_RE로 갈라지지만, 제목만으론 신호가
+// 약한 고정 시리즈(예: "KB Bond"·"KB Fed Watch"·키움 SI/FE 게시판)는 여기
+// 등록해 안전망으로 확정한다.
+const FORCED_ISSUE_STOCKNAMES = new Set([
+  "신한 채권전략",
+  "신한 경제",
+  // NH투자증권 "전략 인사이드/경제"(투자전략 게시판) — 오너 지적 2026-09-27, "글로벌 전략"·"자산배분 전략"
+  // 형제 라벨은 투자전략 그대로 두고 "경제"만 이슈분석으로 분리.
+  "NH 전략인사이드 경제",
+  "Macro Week Ahead",
+  "Weekly Economic Issue",
+  "Market Issue",
+  "투자전략 · 자산가격 메커니즘 변화",
+  "투자전략 · 자산가격 매커니즘 변화",
+  "KB Bond",
+  "KB Fed Watch",
+  "KB 자산배분매크로",
+  "키움 이슈분석",
+  "삼성증권 경제",
+  "삼성증권 채권",
+  "삼성증권 원자재",
+  "iM증권 경제분석",
+  "iM증권 채권",
+  "iM증권 원자재",
+  "메리츠 경제분석",
+  "메리츠 채권분석",
+  "메리츠 원자재",
+  "IBK 경제",
+  "IBK 채권", // 경제/채권 게시판의 채권 담당 애널리스트 글(정형주) — 이슈분석 채권(오너 지적 2026-09-27)
+  "IBK 원자재",
+  "NH 원자재", // NH투자증권 FICC 게시판의 금/유가 등 원자재 코멘트(오너 지적 2026-09-27)
+  // NH투자증권 "매크로분석" 게시판(Economist 명의) — stockName 자체에 "매크로"가
+  // 들어있어 STRATEGY_HINT_STRONG_RE(매크로 전략 시리즈용 키워드)에 걸려 본문에
+  // 채권/금리 신호가 없는 순수 지표 발표 글("한국 8월 수출: 반도체는 아직 등산
+  // 중")만 투자전략(주식)으로 새고, 같은 게시판의 FOMC·고용 글은 본문에 우연히
+  // 채권 키워드가 있어서만 이슈분석으로 간 상태였다(오너 지적 2026-10-01 —
+  // "반대로 다른 회사들도 다 그렇다는거잖아?" 감사 중 발견). 전수 3건(수출·고용·
+  // FOMC) 모두 Economist 가 쓴 순수 경제 지표 해설이라 안전하게 강제 분류.
+  "매크로분석",
+  // DB증권(GlobalMonitor 경유) "Econ Guide" — 짧은 2단어 라벨이라 looksLikeSectorLabel에 걸려
+  // isGenericOrBoardLabel의 GENERIC_ECON_LABEL_RE 가 못 잡고, 제목만으론 강한 매크로 신호가
+  // 없어 "산업분석 기타"로 새었다(오너 지적 2026-09-27 — "인플레이션 억제 의지... 이슈 경제분석이다").
+  "Econ Guide",
+  "대신증권 매크로",
+  "대신증권 원자재",
+  "한화 국내외경제",
+  "한화 채권전략",
+  "한화 원자재",
+  "유안타 경제분석",
+  "유안타 해외전략",
+  "유안타 원자재",
+  "상상인 경제",
+  "상상인 채권",
+  "상상인 원자재",
+  "LS TGIF",
+  "DS 경제", // DS투자증권 "[DS 경제 서동화] Macro Issue …" 경제 담당 시리즈 — 이슈분석(경제)(오너 지시 2026-09-27)
+  "키움 중국 경제", // 키움 중국/신흥국(CH) 게시판 "[중국은 지금]" 중국 거시 시리즈 — 이슈분석(경제)(오너 지시 2026-09-27)
+  "한화 해외시황 채권", // 한화 [해외시황] 중 채권·회사채·크레딧 내용 — 이슈분석(채권). 기본(채권 아님)은 STRATEGY_STOCKNAMES 의 "한화 해외시황"
+  "BNK 금융시장",
+  // macro_issues 컬렉션 이관(scripts/migrate-macro-issues.mjs) 중 알려진 소스
+  // (키움증권·KB증권) 매핑에 없는 예상 밖 source 가 나올 때만 쓰는 안전망.
+  "이슈분석",
+]);
+const FORCED_FX_STOCKNAMES = new Set([
+  "KB 자산배분매크로 FX",
+  "키움 환율분석",
+  "삼성증권 경제 FX",
+  "삼성증권 채권 FX",
+  "삼성증권 원자재 FX",
+  "iM증권 경제분석 FX",
+  "iM증권 채권 FX",
+  "iM증권 원자재 FX",
+  "메리츠 경제분석 FX",
+  "메리츠 채권분석 FX",
+  "메리츠 원자재 FX",
+  "IBK 경제 FX",
+  "IBK 채권 FX",
+  "IBK 원자재 FX",
+  "대신증권 매크로 FX",
+  "대신증권 원자재 FX",
+  "한화 국내외경제 FX",
+  "한화 채권전략 FX",
+  "한화 원자재 FX",
+  "유안타 경제분석 FX",
+  "유안타 해외전략 FX",
+  "유안타 원자재 FX",
+  "상상인 경제 FX",
+  "상상인 채권 FX",
+  "상상인 원자재 FX",
+  "환율분석", // macro_issues 이관 안전망(위 "이슈분석"과 동일 취지).
+]);
+
 /**
- * 산업분석/투자전략 리포트(종목 무관, `symbol: null`) — 시장 전체용 화면
+ * 공개 분류 함수 — classifyLegacyTopic()의 결과를 새 taxonomy로 리매핑한다.
+ * 레거시 휴리스틱 자체는 절대 건드리지 않는다(오너 지시 — 실측 이력이 많은
+ * 잘 튜닝된 로직).
+ */
+export function classifyResearchTopic(
+  doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
+): ResearchTopic {
+  // NH투자증권 "NH 하우스 뷰 N월호" — 자산배분 월간 발간물인데 stockName이
+  // "자산배분"이라 STRATEGY_HINT_STRONG_RE("자산배분" 포함)에 걸려 투자전략
+  // 으로 갔다(오너 지적 2026-10-01 — "이건 월간이다"). 제목이 "N월호"로
+  // 끝나는 월간 고정 시리즈라 시황분석:Monthly 로 직접 보낸다 — 기존
+  // MARKET_CONDITION_MONTHLY_RE("월간" 리터럴)는 "10월호"엔 안 걸린다.
+  if (doc.source === "NH투자증권" && /^NH\s*하우스\s*뷰/.test(doc.title ?? "")) {
+    return "시황분석:Monthly";
+  }
+  // 키움증권 "미국 중간선거와 코스피: 과거 패턴 점검과 대응" — SI 게시판은
+  // stockName이 "키움 이슈분석"으로 강제 라벨링돼(2026-09-26, 화면 스크린샷
+  // 대조로 "경제/전략 > 이슈분석" 확정) 대부분 FOMC·BOJ·유가 같은 순수 경제
+  // 이슈지만, 이 글은 같은 게시판에서도 유일하게 "Strategist 한지영"(키움
+  // 투자전략팀장, 다른 6건은 전부 경제 애널리스트 김유미·안예하·심수빈)이
+  // 쓴 중간선거-코스피 수익률 패턴과 대응전략 글이다(오너 지적 2026-10-01
+  // — "투자전략인데 왜 경제에 들어오나"). 같은 게시판 안에서도 글마다
+  // 성격이 섞여 일반 패턴으로는 못 가린다 — 제목 완전일치로 이 문서만 집는다.
+  if (doc.source === "키움증권" && (doc.title ?? "").trim() === "미국 중간선거와 코스피: 과거 패턴 점검과 대응") {
+    return "시황분석:투자전략";
+  }
+  // FORCED_ISSUE_STOCKNAMES 는 수집기가 FX 내용을 감지하면 " FX" 를 붙인
+  // 별도 라벨(FORCED_FX_STOCKNAMES)로 보내는 게 원래 설계인데, 수집기의 FX
+  // 감지(isFxContent)가 놓치면 그 라벨 없이 그냥 "xxx 경제분석"으로 들어와
+  // 여기서 title 과 무관하게 항상 이슈분석으로 확정돼 버린다(오너 지적
+  // 2026-10-01 — 신한 "경제분석 · 경제분석" 전용으로만 있던 title 기반 FX
+  // 재확인을 모든 FORCED_ISSUE 라벨로 일반화. 실측: DB 전수 검사로 영향은
+  // 신한 1건뿐, 다른 라벨은 전부 그대로).
+  if (FORCED_ISSUE_STOCKNAMES.has(doc.stockName)) {
+    return FX_RE.test(doc.title ?? "") ? "환율분석" : "이슈분석";
+  }
+  if (FORCED_FX_STOCKNAMES.has(doc.stockName)) return "환율분석";
+  // 신한 경제분석 게시판(gieconomy)의 비시리즈 글 — 다른 증권사 경제·채권 게시판과 같이 게시판이 곧 이슈분석이다. 제목 키워드에만 맡기면
+  // 키워드가 없는 글("한국 7월 산업활동동향" 등)이 산업분석 기타로 새었다(2026-09-27). 환율 글만 환율분석으로 가른다.
+  if (doc.stockName === "경제분석 · 경제분석") return FX_RE.test(doc.title) ? "환율분석" : "이슈분석";
+  // 메리츠 "Charts of China" 시리즈(최설화) — stockName이 공용 "메리츠 투자전략"이라 일반 분기를 타면
+  // 제목의 통화명(위안화 등)이 FX_RE에 걸려 환율분석으로 새는데, 오너가 "이슈분석 경제다"로 확정(2026-09-27,
+  // "금으로 쌓는 위안화"는 환율 시황이 아니라 중국 경제/지정학 이슈).
+  if (doc.source === "메리츠증권" && /^Charts\s*of\s*China\b/i.test(doc.title ?? "")) return "이슈분석";
+  // SK증권 "고금리 환경 장기화 속 AI 의존도 심화" — 요약의 "금리" 언급(bondStrong,
+  // generic 과 무관하게 항상 승격)으로 이슈분석에 샜지만 내용은 AI CAPEX 관련
+  // 기업의 상대적 매력을 금리 국면별로 짚는 투자전략(오너 지시 2026-10-01 —
+  // "sk 해당리포트는 그럼 투자전략으로 고정하자"). SK증권은 종목·매크로 리포트
+  // 80여 건이 전부 같은 "Signal/Key/Step" 요약 포맷을 공용으로 써서 포맷으로는
+  // 못 가린다 — 제목 완전일치로 이 문서 하나만 집는다.
+  if (doc.source === "SK증권" && (doc.title ?? "").trim() === "고금리 환경 장기화 속 AI 의존도 심화") {
+    return "시황분석:투자전략";
+  }
+  const legacy = classifyLegacyTopic(doc);
+  switch (legacy) {
+    case "산업분석":
+      return "산업분석";
+    case "해외리서치":
+      return doc.market === "kr" ? "비상장" : "글로벌IB";
+    case "투자전략(채권)": {
+      const hay = `${doc.stockName ?? ""} ${doc.title}`;
+      return FX_RE.test(hay) ? "환율분석" : "이슈분석";
+    }
+    case "투자전략(주식)":
+      return "시황분석:투자전략";
+    case "시황": {
+      const hay = `${doc.stockName ?? ""} ${doc.title}`;
+      return MARKET_CONDITION_MONTHLY_RE.test(hay) ? "시황분석:Monthly" : "시황분석:Daily";
+    }
+  }
+}
+
+/**
+ * 산업분석 리포트(종목 무관, `symbol: null`) — 시장 전체용 화면
  * (`/[market]/research`)에서 사용. `getShinhanResearchBySymbol`(종목별
  * 기업분석)과 달리 symbol 로 좁히지 않고 market+category="산업"으로만
- * 조회한다. 2026-09 기준 KB·미래에셋·한투·NH·하나·DS·BNK·GlobalMonitor·
- * 한경컨센서스 등 다수 소스가 이미 이 카테고리로 수집 중(수집기부터 먼저
- * 구축, 화면 연동은 이번에 처음). `topic` 을 주면 classifyResearchTopic()
- * 기준으로 한 번 더 걸러낸다 — DB 필드가 아니라 후처리 필터라, 필터링 후에도
- * limit 만큼 채우려고 원본을 넉넉히 가져온다.
+ * 조회한다.
+ *
+ * **전면 개편(오너 지시 2026-09-26)**: 이 탭은 "산업분석"·"글로벌IB" 두 토픽만
+ * 다뤘고 시황·투자전략·이슈분석·환율분석·비상장은 각자의 전용 함수
+ * (`getMacroIssueResearch`·`getMarketConditionResearch`)로 옮겼다.
+ * **투자전략은 다시 이 탭으로(오너 지시 2026-09-27 — "투자전략은 각 국가별
+ * 산업분석으로 다시 변경한다. 국가별로 나눠라")**: 내부 토픽 이름은 그대로
+ * `시황분석:투자전략` 이지만 화면은 이 탭의 "투자전략" 세그먼트이고, market
+ * (국가)별로 조회한다 — 거시경제 시황분석 탭은 이제 Daily·Monthly 만 본다.
+ * `topic`을 주면 classifyResearchTopic() 기준으로 한 번 더 걸러낸다.
  */
 export async function getIndustryResearch(
   market: MarketId,
   limit = 30,
-  topic?: ResearchTopic,
+  topic?: "산업분석" | "글로벌IB" | "투자전략",
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
-  // "해외리서치"는 국내 고빈도 소스들과 같은 900건 풀에서 걸러내면 밀려서
+  // "글로벌IB"는 국내 고빈도 소스들과 같은 900건 풀에서 걸러내면 밀려서
   // 안 보일 수 있어(실측 — 8건 중 2건만 노출됨) source로 직접 좁혀 조회.
-  // 180일 보존(FOREIGN_RESEARCH_MAX_AGE_MS)에 맞춰 볼륨이 원래 적어 별도
-  // 페이지네이션 없이 바로 반환해도 된다.
-  if (topic === "해외리서치") {
+  // 90일 보존(GLOBAL_IB_MAX_AGE_MS)에 맞춰 볼륨이 원래 적어 별도 페이지네이션
+  // 없이 바로 반환해도 된다.
+  if (topic === "글로벌IB") {
     const docs = await col
       .find({
         market,
@@ -635,49 +1113,144 @@ export async function getIndustryResearch(
     return dedupeBySourceTitle(docs).slice(0, limit);
   }
   // topic 유무와 무관하게 항상 넉넉히 가져온다(오너 지적, 2026-09 — "전체는
-  // 129개인데 산업분석만 150개로 표시되고... 머가맞는건가?"). "전체"만
-  // limit+20(150+20=170)으로 좁게 가져오던 게 버그였다 — 하루에 산업분석
-  // 항목이 가장 많이 올라오다 보니 최근 170건 풀이 산업분석 위주로 채워져
-  // 시황·투자전략 항목이 실제 비중보다 훨씬 적게(129건) 섞여 들어갔다.
-  // ESG·pdfUrl null 제외, dedup, 보존기간 컷오프까지 거치므로 "전체"도
-  // topic 필터와 똑같이 넉넉한 풀에서 뽑아야 각 topic 탭의 합과 "전체"가
-  // 어긋나지 않는다.
+  // 129개인데 산업분석만 150개로 표시되고... 머가맞는건가?").
   const fetchLimit = Math.max(limit * 6, 200);
   // pdfUrl 이 없으면 화면에서 클릭할 게 없어 조회 단계에서 제외한다(오너
-  // 지적, 2026-09 — "링크가 없다 링크안되면 삭제다", NH의 일부 "산업" 항목이
-  // API 응답 자체에 첨부파일이 없어 실측됨). 해당 수집기도 앞으로 이런
-  // 항목을 아예 안 보내도록 함께 수정.
+  // 지적, 2026-09 — "링크가 없다 링크안되면 삭제다").
   const docs = await col
     .find({ market, category: "산업", pdfUrl: { $ne: null }, source: { $nin: INSIGHT_SOURCES as unknown as string[] } })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
-  // ESG는 이 탭 범위 밖이라 제외한다(오너 지시, 2026-09 — "esg는 제외하라").
-  // KB "Global ESG Brief", SK증권 "ESG snapshot", NH "NH ESG Research",
-  // 미래에셋 "ESG Strategy"/"[ESG Issue Comment]" 등 여러 증권사 수집기에
-  // 걸쳐 있어(실측 90일 15건) 수집기별로 개별 제외하는 대신 조회 시점에
-  // 한 번에 걸러낸다.
-  const withoutEsg = docs.filter((d) => !ESG_EXCLUDE_RE.test(`${d.stockName} ${d.title}`));
+  // 공통 제외(리츠·ETF/ETP·ESG·주간물·일정표·추천종목·원자재 외 대체투자,
+  // 오너 지시 2026-09-25) — 이미 쌓인 문서에 함께 적용, 수신 라우트가 새
+  // 문서는 이미 거른다.
+  const withoutEsg = docs.filter(
+    (d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
+  );
   const deduped = dedupeBySourceTitle(withoutEsg);
-  // 투자전략(주식)/투자전략(채권)은 30일까지만(오너 지시, 2026-09 —
-  // "그 이상은 불필요하다. 화면에서도 제외한다", 최종 값), 시황은 14일까지만
-  // 화면에 노출(오너 지시 — "일단 14일까지 유지한다", 검증 기간 동안 임시,
-  // **시황만** 이후 7일로 되돌릴 예정). DB 정리(upsertShinhanResearch)는
-  // 다음 수집기 실행 때만 돌아 아직 안 지워진 초과 항목이 화면에 잠깐
-  // 남을 수 있어 조회 시점에도 한 번 더 걸러준다 — 산업분석은 기존 정책
-  // (90일 DB 정리) 그대로 유지, 여기선 따로 안 건드림.
-  const strategyCutoff = new Date(Date.now() - STRATEGY_MAX_AGE_MS).toISOString().slice(0, 10);
-  const marketConditionCutoff = new Date(Date.now() - MARKET_CONDITION_MAX_AGE_MS)
+  // 이 탭은 "산업분석"·"글로벌IB"·"투자전략"만 다룬다 — 나머지 토픽(이슈분석·환율분석·
+  // 시황 Daily/Monthly·비상장)은 여기서 제외한다.
+  const scoped = deduped.filter((d) => {
+    const t = classifyResearchTopic(d);
+    return t === "산업분석" || t === "글로벌IB" || t === "시황분석:투자전략";
+  });
+  const filtered = topic
+    ? scoped.filter((d) => classifyResearchTopic(d) === (topic === "투자전략" ? "시황분석:투자전략" : topic))
+    : scoped;
+  return filtered.slice(0, limit);
+}
+
+/**
+ * 거시경제 "이슈분석"/"환율분석" 탭 — `/macro/issues`, `/macro/fx`. 원래
+ * `macro_issues` 별도 컬렉션에서 읽었으나 오너 지시(2026-09-26 —
+ * "macro_issues를 kr_research로 흡수")로 kr_research에서 classifyResearchTopic()
+ * 결과를 기준으로 조회한다. market 구분이 없다(국내 매크로 코멘트 성격이라
+ * 원래도 시장 무관).
+ */
+export type IssueKind = "경제" | "채권";
+
+// 이슈분석 탭의 "경제/채권" 구분(오너 지시 2026-09-27 — 전체/증권사명 → 전체/경제/채권). 라벨(stockName)에
+// 채권·Bond·크레딧·Fixed Income 이 있거나 제목에 채권·국채·회사채·크레딧·스프레드가 있으면 채권, 그 외(경제·원자재·
+// 통화정책 등 거시)는 경제. FOMC·금리 인상 같은 통화정책은 경제로 둔다(채권 리포트는 라벨/제목에 채권 계열 단어가 있음).
+const ISSUE_BOND_LABEL_RE = /채권|Bond|크레딧|Credit|Fixed\s?Income|\bFICC\b/i;
+const ISSUE_ECON_LABEL_RE = /경제|매크로|Macro|원자재|Econ/i;
+const ISSUE_BOND_TITLE_RE = /Fixed\s?Income|채권|국채|회사채|크레딧|Credit|\bBond|Treasur|스프레드|\bSpread/i;
+/**
+ * 라벨(증권사 게시판 이름)이 우선이다(오너 지시 2026-09-27 — "iM증권 채권은 채권", "한화 채권전략은 채권"): 라벨에 채권 계열 단어면 채권,
+ * 경제·매크로·원자재 계열이면 경제. 라벨이 "산업"·"시장"·"글로벌 인사이트"처럼 뭉뚱그려졌을 때만 제목의 채권 계열 단어로 판정한다.
+ */
+// 경제 지표 해설과 금리·국채 코멘트가 한 라벨에 섞여 올라오는 게시판 — 라벨 우선이 아니라 제목의 채권 계열 단어로 가른다
+// (오너 지적 2026-09-27 — 대신증권 "매크로"에 "국채 발행, 물량 만큼 만기도 중요하다"·"버틸만한 장기금리 5%" 같은 채권 글이 경제에 섞임).
+// FOMC·기준금리 인상 같은 통화정책 글은 경제로 둔다(장·단기금리·국채·만기·입찰 등 채권시장 단어가 있을 때만 채권).
+// 라벨에 "Macro"가 있어 경제로 읽히지만 채권 콘텐츠인 시리즈(미래에셋 "Macro Week Ahead" — 오너 지시 2026-09-27 "채권으로 분류")
+const BOND_ISSUE_LABELS: ReadonlySet<string> = new Set(["Macro Week Ahead"]);
+const MIXED_ISSUE_LABELS: ReadonlySet<string> = new Set(["대신증권 매크로"]);
+const MIXED_BOND_TITLE_RE = /채권|국채|회사채|크레딧|스프레드|장기\s?금리|단기\s?금리|만기|입찰|\bBond|Credit|Treasur/i;
+export function classifyIssueKind(doc: Pick<ShinhanResearchDoc, "stockName" | "title">): IssueKind {
+  const label = doc.stockName ?? "";
+  if (BOND_ISSUE_LABELS.has(label)) return "채권";
+  if (MIXED_ISSUE_LABELS.has(label)) return MIXED_BOND_TITLE_RE.test(doc.title ?? "") ? "채권" : "경제";
+  if (ISSUE_BOND_LABEL_RE.test(label)) return "채권";
+  if (ISSUE_ECON_LABEL_RE.test(label)) return "경제";
+  return ISSUE_BOND_TITLE_RE.test(doc.title ?? "") ? "채권" : "경제";
+}
+
+export async function getMacroIssueResearch(
+  topic: "이슈분석" | "환율분석",
+  source?: string,
+  limit = 150,
+  kind?: IssueKind,
+): Promise<ShinhanResearchDoc[]> {
+  const col = await shinhanResearchCol();
+  const cutoff = new Date(Date.now() - (topic === "이슈분석" ? ISSUE_MAX_AGE_MS : FX_MAX_AGE_MS))
     .toISOString()
     .slice(0, 10);
-  const fresh = deduped.filter((d) => {
-    const t = classifyResearchTopic(d);
-    if (t === "시황") return d.date >= marketConditionCutoff;
-    if (t !== "투자전략(주식)" && t !== "투자전략(채권)") return true;
-    return d.date >= strategyCutoff;
-  });
-  const filtered = topic ? fresh.filter((d) => classifyResearchTopic(d) === topic) : fresh;
-  return filtered.slice(0, limit);
+  const filter: Record<string, unknown> = {
+    category: "산업",
+    date: { $gte: cutoff },
+    pdfUrl: { $ne: null },
+  };
+  if (source) filter.source = source;
+  const docs = await col.find(filter).sort({ date: -1 }).limit(limit * 4).toArray();
+  const withoutExcluded = docs.filter(
+    (d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
+  );
+  const deduped = dedupeBySourceTitle(withoutExcluded);
+  const scoped = deduped.filter(
+    (d) => classifyResearchTopic(d) === topic && (!kind || topic !== "이슈분석" || classifyIssueKind(d) === kind),
+  );
+  return scoped.slice(0, limit);
+}
+
+/** 탭 UI용 — 해당 topic에 실제로 존재하는 증권사명 목록(문서 수 많은 순). classifyResearchTopic 이 DB 필드가 아니라 JS에서 매번 계산해야 해서 $group 집계 대신 후보를 가져와 직접 센다. */
+export async function getMacroIssueSources(topic: "이슈분석" | "환율분석"): Promise<string[]> {
+  const col = await shinhanResearchCol();
+  const cutoff = new Date(Date.now() - (topic === "이슈분석" ? ISSUE_MAX_AGE_MS : FX_MAX_AGE_MS))
+    .toISOString()
+    .slice(0, 10);
+  const docs = await col
+    .find({ category: "산업", date: { $gte: cutoff }, pdfUrl: { $ne: null } })
+    .project<{ source: string; stockName: string; title: string; market: ResearchMarketId; summary: string }>({
+      source: 1,
+      stockName: 1,
+      title: 1,
+      market: 1,
+      summary: 1,
+    })
+    .toArray();
+  const counts = new Map<string, number>();
+  for (const d of docs) {
+    if (classifyResearchTopic(d) !== topic) continue;
+    counts.set(d.source, (counts.get(d.source) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([s]) => s);
+}
+
+/**
+ * 신규 "시황분석" 탭(오너 지시 2026-09-26) — `/macro/market-condition`.
+ * Daily/Monthly 2개 세그먼트. 투자전략은 2026-09-27 오너 지시로 각 국가 산업분석 탭으로
+ * 되돌아갔다(`getIndustryResearch(..., "투자전략")`).
+ */
+export async function getMarketConditionResearch(
+  segment: "Daily" | "Monthly",
+  limit = 150,
+): Promise<ShinhanResearchDoc[]> {
+  const col = await shinhanResearchCol();
+  const cutoffMs = segment === "Daily" ? MARKET_DAILY_MAX_AGE_MS : MARKET_MONTHLY_MAX_AGE_MS;
+  const cutoff = new Date(Date.now() - cutoffMs).toISOString().slice(0, 10);
+  const wantedTopic: ResearchTopic = `시황분석:${segment}`;
+  const docs = await col
+    .find({ category: "산업", date: { $gte: cutoff }, pdfUrl: { $ne: null } })
+    .sort({ date: -1 })
+    .limit(limit * 4)
+    .toArray();
+  const withoutExcluded = docs.filter(
+    (d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"),
+  );
+  const deduped = dedupeBySourceTitle(withoutExcluded);
+  const scoped = deduped.filter((d) => classifyResearchTopic(d) === wantedTopic);
+  return scoped.slice(0, limit);
 }
 
 /**
@@ -694,16 +1267,20 @@ export async function getInsightResearch(
   market: MarketId,
   limit = 100,
   source?: string,
+  kind: "insight" | "unlisted" = market === "kr" ? "unlisted" : "insight",
 ): Promise<ShinhanResearchDoc[]> {
   const col = await shinhanResearchCol();
+  // kind: 해외 IB 인사이트와 비상장 리서치는 같은 source 목록(INSIGHT_SOURCES)을 공유하지만 화면(탭)은 갈라져 있다.
+  const pool = (INSIGHT_SOURCES as readonly string[]).filter((s) => isUnlistedSource(s) === (kind === "unlisted"));
   const filter: Record<string, unknown> = {
     market,
     category: "산업",
     pdfUrl: { $ne: null },
-    source: source ? source : { $in: INSIGHT_SOURCES as unknown as string[] },
+    source: source && pool.includes(source) ? source : { $in: pool },
   };
   const docs = await col.find(filter).sort({ date: -1 }).limit(limit * 3).toArray();
-  return dedupeBySourceTitle(docs).slice(0, limit);
+  const kept = docs.filter((d) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업"));
+  return dedupeBySourceTitle(kept).slice(0, limit);
 }
 
 /**
@@ -735,11 +1312,14 @@ export async function getShinhanResearchBySymbol(
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
-  if (recent.length > 0) return dedupeBySourceTitle(recent).slice(0, limit);
+  // 공통 제외(오너 지시 2026-09-25) — 이미 쌓인 문서용 안전망.
+  const keep = (d: ShinhanResearchDoc) => !isCommonExcludedResearch(`${d.stockName} ${d.title}`, d.category ?? "기업");
+  const recentKept = recent.filter(keep);
+  if (recentKept.length > 0) return dedupeBySourceTitle(recentKept).slice(0, limit);
   const fallback = await col
     .find({ ...marketFilter, ...symbolFilter })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
-  return dedupeBySourceTitle(fallback).slice(0, Math.min(limit, 3));
+  return dedupeBySourceTitle(fallback.filter(keep)).slice(0, Math.min(limit, 3));
 }

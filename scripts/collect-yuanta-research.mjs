@@ -1,28 +1,44 @@
 /**
- * 유안타증권 "기업분석" 리포트 — 로컬 수집기.
+ * 유안타증권 리서치 — 로컬 수집기(기업분석·산업분석·투자전략·경제분석).
  *
- * www.myasset.com 기업분석 목록은 로그인 없이 서버렌더링 HTML로 나온다
+ * www.myasset.com 리서치 목록은 로그인 없이 서버렌더링 HTML로 나온다
  * (robots.txt 자체가 없음 — 명시적 Disallow는 없지만 다른 예외들과 동일하게
  * "개인용·로컬 실행·저빈도" 조건으로 오너 승인, CLAUDE.md 참조). 페이지네이션도
- * 평범한 GET(`&page=N&pgCnt=30`). 종목코드가 `data-jongcode="(코드)"` 속성에
- * 그대로 있어 이름 검색 없이 바로 뽑는다.
+ * 평범한 GET(`&page=N&pgCnt=30`). 게시판은 `cd007`(+`cd008`) 값으로 나뉜다.
+ *
+ *   | cd007 / cd008 | 게시판          | 앱 목적지                                       |
+ *   |---------------|-----------------|-------------------------------------------------|
+ *   | RE01          | 기업분석        | 국내 종목분석(`data-jongcode` 종목코드)          |
+ *   | RE02          | 산업분석        | 국내 산업분석(디지털 자산 Daily 제외)            |
+ *   | RB30 / RB30B  | 글로벌 투자전략 | 거시경제 이슈분석/환율분석(kr_research) —        |
+ *   |               |                 | "미국 주식시장 마감 시황"(데일리)은 미수집        |
+ *   | RB30 / RB30C  | 경제분석        | 거시경제 이슈분석/환율분석(kr_research)          |
+ *
+ * **RB30A(한국 투자전략) 제외(오너 결정, 2026-09-25 — "쓸만한게 없다")**: 처음엔
+ * 고정 라벨 "유안타 투자전략"으로 투자전략(주식) 수집했으나, 실제로는 "환율,
+ * 금리" 같은 배경 설명이 실린 거시 코멘트가 대부분이라 쓸 만한 종목·업종 얘기가
+ * 없어 게시판 자체를 뺐다.
+ *
+ * **2026-09-25 직접 수집 재개(오너 결정)**: 2026-09-13 에 "발췌·목표주가·투자의견
+ * 추출이 계속 실패"한다며 중단하고 한경 컨센서스 경유로 바꿨었다. 재점검에서 이
+ * 수집기가 그대로 정상 작동했고(7일치 12건 — 의견 12/12, BUY 목표가 10/10) 과거
+ * 실패는 재현되지 않았다(초기 버전이 빈 발췌·목표가로 넣은 문서가 남았던 것 + 한때의
+ * 다운로드 경로 정규식 결함으로 추정). 오히려 한경 쪽 목표가 오류(IPARK현대산업개발
+ * 34,000원이 340,000원으로 실림)가 확인돼 직접 수집으로 되돌리고, 한경 수집기에서
+ * 유안타를 제외했다. 게시판도 기업분석 → 위 5개로 넓혔다(삼성증권과 같은 분류 기준).
  *
  * PDF 원문 링크: 목록 행의 `cmd-type='download' data-seq='2026/0910/172546/
  * ..._ko.pdf'` 값이 그대로 `https://file.myasset.com/sitemanager/upload/`
- * 뒤에 붙는 경로다(2026-09 확인, 로그인 불필요·200 응답).
+ * 뒤에 붙는 경로다(로그인 불필요). 링크는 이 PDF 로 건다(공통 규칙 — PDF 우선).
  *
- * 본문 발췌: 다른 증권사와 달리 목록 HTML에 요약문이 없어, PDF를 내려받아
- * `pdf-parse`로 텍스트를 뽑고 "주가수익률 (%) ..." 통계 블록(항상 4줄: 헤더 +
- * 절대/상대/절대(달러환산)) 다음부터 150자 내외를 짧게 발췌한다. PDF 원문·
- * 전체 본문 텍스트는 저장하지 않고 이 짧은 발췌문만 DB에 보낸다(다른 증권사의
- * "요약 발췌만 저장" 정책과 동일 성격, 오너 확인 2026-09).
+ * 본문 발췌: 기업분석은 목록에 요약이 없어 PDF 에서 "주가수익률 (%) ..." 통계
+ * 블록 다음부터 150자 내외를 발췌한다. 산업·전략·경제 게시판은 목록 제목 아래
+ * 부제(<p>)가 곧 요약이라 그걸 쓴다(PDF 를 받지 않음). PDF 원문·전체 본문은
+ * 저장하지 않는다.
  *
- * ⚠️ 서버(/api/cron/shinhan-research)는 보낸 항목을 통째로 replace한다 —
- *    이미 수집된 옛 항목을 summary 없이 다시 보내면 예전에 뽑아둔 발췌가
- *    지워진다. 그래서 --days 기본값을 14 → 3으로 좁혀 "매일 최근 며칠만
- *    다시 훑는" 방식으로 바꿨다(하루 1회 크론 기준 안전 마진 확보 + PDF를
- *    매번 새로 받는 범위 최소화). 백필이 필요하면 --days=30 등으로 수동
- *    실행(그만큼 PDF도 더 많이 받으니 자주 돌리지 말 것).
+ * ⚠️ 서버(/api/cron/total-research)는 보낸 항목을 통째로 replace한다 —
+ *    그래서 --days 기본값을 3으로 좁혀 "매일 최근 며칠만 다시 훑는" 방식이다.
+ *    백필은 --days=30 등으로 수동 실행.
  *
  * ── 실행 ────────────────────────────────────────────────────────────
  *   node scripts/collect-yuanta-research.mjs
@@ -30,7 +46,17 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import {
+  isEtfOrEtpContent,
+  isEsgContent,
+  isFxContent,
+  isCommonExcludedContent,
+  isCommodityContent,
+  isDigitalAssetContent,
+} from "./lib/exclude-filters.mjs";
+import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
+import { refineSectorLabels } from "./lib/sector-label.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -52,15 +78,32 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const LIST_URL = "https://www.myasset.com/myasset/research/rs_list/rs_list.cmd";
+const SOURCE = "유안타증권";
+
+// kind: company(종목) / industry(업종 라벨) / global(해외 전략 — 거시 이슈로) / macro(이슈분석)
+const BOARDS = [
+  { cd007: "RE01", cd008: "", label: "기업분석", kind: "company" },
+  { cd007: "RE02", cd008: "", label: "산업분석", kind: "industry" },
+  { cd007: "RB30", cd008: "RB30B", label: "글로벌 투자전략", kind: "global" },
+  { cd007: "RB30", cd008: "RB30C", label: "경제분석", kind: "macro" },
+];
+// 다른 증권사도 디지털자산 게시판은 수집하지 않는다(키움 BC·iM 디지털자산 등과 동일).
+// "리서치 Top-Picks Follow up" — 월간 추천종목 목록(추천종목 공통 제외와 같은 취지).
+const TOP_PICKS_RE = /top\s*-?\s*picks/i;
+// 글로벌 전략 게시판의 데일리 미국 마감 시황(AI 생성) — 시황으로 확정 분류.
+const US_MARKET_CONDITION_RE = /미국\s*주식시장\s*(?:마감\s*)?시황/;
 
 const isoDate = (s) => {
   const m = String(s).trim().match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
@@ -92,35 +135,11 @@ function excerptFromPdfText(text) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// 통계 블록 첫 줄이 항상 "목표주가 470,000원 (D)" 또는 미제시 시 "목표주가 -원 (M)".
-function extractTargetPrice(text) {
-  const m = text.match(/목표주가\s*([\d,]+|-)\s*원/);
-  if (!m || m[1] === "-") return null;
-  const n = Number(m[1].replace(/,/g, ""));
-  return Number.isFinite(n) ? n : null;
-}
-
-async function extractPdfExcerpt(pdfUrl) {
-  if (!pdfUrl) return { summary: "", targetPrice: null };
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return { summary: excerptFromPdfText(text), targetPrice: extractTargetPrice(text) };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", targetPrice: null };
-  }
-}
-
-async function fetchPage(page) {
+async function fetchPage(board, page) {
   const url = new URL(LIST_URL);
   url.searchParams.set("cd006", "");
-  url.searchParams.set("cd007", "RE01"); // 기업분석
-  url.searchParams.set("cd008", "");
+  url.searchParams.set("cd007", board.cd007);
+  url.searchParams.set("cd008", board.cd008);
   url.searchParams.set("page", String(page));
   url.searchParams.set("pgCnt", "30");
   const res = await fetch(url, { headers: { "User-Agent": UA } });
@@ -136,87 +155,155 @@ const DATE_RE = /<td>(\d{4}\/\d{2}\/\d{2})<\/td>/;
 const JONG_RE = /data-jongcode="\(?(\d{6})\)?">([^<]+)<\/a>/;
 const OPINION_RE = /class="js-ivstComment">([^<]*)<\/td>/;
 const TITLE_RE = /cmd-type="view" data-seq="(\d+)"[^>]*>([^<]+)/;
+// 제목 아래 부제 — 산업·전략·경제 게시판의 요약으로 쓴다.
+const SUBTITLE_RE = /<p class="[^"]*ellipsis[^"]*">([\s\S]*?)<\/p>/;
 const DOWNLOAD_RE = /cmd-type='download' data-seq='([^']+)'/;
 
-function parseItems(html) {
-  const items = [];
+function parseRows(html, board) {
+  const rows = [];
   for (const rowMatch of html.matchAll(ROW_SPLIT_RE)) {
     const row = rowMatch[1];
     const dateM = row.match(DATE_RE);
-    const jongM = row.match(JONG_RE);
     const titleM = row.match(TITLE_RE);
-    if (!dateM || !jongM || !titleM) continue;
+    if (!dateM || !titleM) continue;
     const date = isoDate(dateM[1]);
     if (!date) continue;
-    const opinionM = row.match(OPINION_RE);
+    const jongM = row.match(JONG_RE);
+    if (board.kind === "company" && !jongM) continue; // 기업분석은 종목코드가 있는 행만
     const downloadM = row.match(DOWNLOAD_RE);
-    items.push({
+    rows.push({
       id: titleM[1],
       date,
       title: stripHtml(titleM[2]),
-      stockName: jongM[2].trim(),
-      symbolHint: jongM[1],
-      opinion: (opinionM?.[1] ?? "").trim(),
+      subtitle: stripHtml(row.match(SUBTITLE_RE)?.[1] ?? ""),
+      stockName: jongM ? jongM[2].trim() : "",
+      symbolHint: jongM ? jongM[1] : null,
+      opinion: (row.match(OPINION_RE)?.[1] ?? "").trim(),
       pdfUrl: downloadM ? FILE_BASE + downloadM[1] : null,
     });
   }
-  return items;
+  return rows;
 }
 
-console.log(`▶ 유안타증권 기업분석 리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
+// 게시판별 목적지로 변환. null 이면 수집 제외.
+function toItem(r, board) {
+  const text = `${r.title} ${r.subtitle}`;
+  if (isEtfOrEtpContent(text) || isEsgContent(text)) return null;
+  // 공통 제외 — 주간물·일정표·추천종목·원자재 외 대체투자(오너 지시 2026-09-25).
+  if (isCommonExcludedContent(r.title, board.kind === "company" ? "기업" : "산업")) return null;
+  const base = {
+    id: r.id,
+    date: r.date,
+    analyst: "",
+    opinion: "",
+    targetPrice: null,
+    summary: r.subtitle,
+    pdfUrl: r.pdfUrl,
+    views: null,
+  };
+  if (board.kind === "company") {
+    return {
+      ...base,
+      title: r.title,
+      stockName: r.stockName,
+      symbol: r.symbolHint,
+      opinion: r.opinion, // 목록 칸 — 공용 추출기가 본문 언급 확인 후 사용
+      summary: "",
+      category: "기업",
+      market: "kr",
+    };
+  }
+  if (board.kind === "industry") {
+    if (isDigitalAssetContent(r.title) || TOP_PICKS_RE.test(r.title)) return null; // 이 게시판은 국내 전용(market:"kr")
+    const { label, headline } = industryLabelAndHeadline(r.title);
+    return { ...base, title: headline, stockName: label, symbol: null, category: "산업", market: "kr" };
+  }
+  // macro(경제분석 RB30C) / global(글로벌 투자전략 RB30B, 2026-09-25 이슈분석으로
+  // 전환) / 원자재 글(어느 게시판이든) 전부 거시경제 이슈분석으로. 리서치 분류
+  // 체계 전면 개편(2026-09-26)으로 macro_issues 컬렉션 폐지 — 고정 stockName
+  // (shinhan-research.ts FORCED_ISSUE_STOCKNAMES/FORCED_FX_STOCKNAMES 등록)으로
+  // kr_research에 합류시킨다.
+  if (board.kind === "macro" || board.kind === "global" || isCommodityContent(r.title)) {
+    // global 게시판의 미국 시황(마감 코멘트)만 수집하지 않는다(오너 지시
+    // 2026-09-25 — "유안타 미국 시황은 수집하지 않는다").
+    if (board.kind === "global" && US_MARKET_CONDITION_RE.test(r.title)) return null;
+    const isFx = isFxContent(r.title);
+    const label = isCommodityContent(r.title)
+      ? isFx
+        ? "유안타 원자재 FX"
+        : "유안타 원자재"
+      : board.kind === "global"
+        ? isFx
+          ? "유안타 해외전략 FX"
+          : "유안타 해외전략"
+        : isFx
+          ? "유안타 경제분석 FX"
+          : "유안타 경제분석";
+    return { ...base, title: r.title, stockName: label, symbol: null, category: "산업", market: "kr" };
+  }
+  return null; // 정의되지 않은 게시판 kind — 안전하게 건너뜀
+}
+
+console.log(`▶ 유안타증권 리서치 수집(${BOARDS.map((b) => b.label).join("·")}): 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
 // 항목 날짜가 'YYYY-MM-DD'(=UTC 자정)라 컷오프도 자정으로 맞춘다.
-// Date.now() 기준 그대로 두면 '정확히 DAYS일 전' 리포트가 시:분 차이로
-// 매번 잘려나간다(실측 2026-09: 미래에셋 최신 리포트가 3시간 차이로 탈락).
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
 const collected = [];
-let stop = false;
-for (let page = 1; page <= MAX_PAGES && !stop; page++) {
-  const html = await fetchPage(page);
-  const items = parseItems(html);
-  if (items.length === 0) break;
-  for (const it of items) {
-    if (new Date(it.date) < cutoff) {
-      stop = true;
-      break;
+for (const board of BOARDS) {
+  let stop = false;
+  let count = 0;
+  for (let page = 1; page <= MAX_PAGES && !stop; page++) {
+    const rows = parseRows(await fetchPage(board, page), board);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      if (new Date(r.date) < cutoff) {
+        stop = true;
+        break;
+      }
+      const it = toItem(r, board);
+      if (it) {
+        collected.push({ ...it, board: board.label });
+        count++;
+      }
     }
-    collected.push(it);
+    await sleep(400);
   }
-  await sleep(400);
+  console.log(`  ${board.label}: ${count}건`);
 }
 
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
-console.log(`✔ 파싱 완료: ${collected.length}건`);
-console.log(
-  "  최근 3건:",
-  collected.slice(0, 3).map((i) => `${i.date} ${i.stockName}(${i.symbolHint}) — ${i.title}`),
-);
+const research = collected;
+console.log(`✔ 파싱 완료: ${research.length}건`);
 
-console.log(`▶ PDF 본문 발췌 중 (${collected.length}건)...`);
-const items = [];
+// 기업분석만 PDF 에서 발췌(목록에 요약이 없음). 텍스트는 공용 추출기가 다시 쓴다(캐시).
+const companyItems = research.filter((it) => it.category === "기업");
+console.log(`▶ 기업분석 PDF 본문 발췌 중 (${companyItems.length}건)...`);
 let excerptFailCount = 0;
-for (const it of collected) {
-  const { summary, targetPrice } = await extractPdfExcerpt(it.pdfUrl);
-  if (it.pdfUrl && !summary) excerptFailCount++;
-  items.push({
-    id: it.id,
-    date: it.date,
-    title: it.title,
-    stockName: it.stockName,
-    symbol: it.symbolHint,
-    analyst: "",
-    opinion: it.opinion,
-    targetPrice,
-    summary,
-    pdfUrl: it.pdfUrl,
-    views: null,
-  });
+for (const it of companyItems) {
+  const pdfText = await readPdfText(it.pdfUrl);
+  it.summary = pdfText ? excerptFromPdfText(pdfText) : "";
+  it.pdfText = pdfText;
+  if (it.pdfUrl && !it.summary) excerptFailCount++;
   await sleep(500);
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건)`);
-console.log("  예시:", items[0]?.summary || "(없음)");
+// 투자의견(목록 칸 → 본문 언급 확인)·목표주가 — 공용 추출기. PDF 는 위에서 이미 읽었다.
+// 업종 리포트의 뭉뚱그린 라벨("산업")을 제목·PDF 표지의 실제 업종명으로 보정(공통 lib) — 안 그러면 제목 키워드로 오분류.
+console.log(`▶ 업종 라벨 보정: ${await refineSectorLabels(research)}건`);
+await enrichResearch(research, { market: "kr", usePdf: false });
+for (const it of collected) {
+  console.log(
+    `  [${it.board}→${it.market}/${it.category}] ${it.date} ${it.symbol ?? it.stockName ?? ""}` +
+      `${it.opinion ? ` 의견=${it.opinion}` : ""}${it.targetPrice != null ? ` 목표가=${it.targetPrice}` : ""} — ${it.title}`,
+  );
+}
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
@@ -225,15 +312,43 @@ if (DRY_RUN) {
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const up = await fetch(IMPORT_URL, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ items, source: "유안타증권" }),
-});
-const upBody = await up.text();
-if (!up.ok) {
-  console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+
+// 라우트가 POST 1회당 market 하나만 받으므로 시장별로 나눠 전송.
+const byMarket = new Map();
+for (const it of research) {
+  if (!byMarket.has(it.market)) byMarket.set(it.market, []);
+  byMarket.get(it.market).push({
+    id: it.id,
+    date: it.date,
+    title: it.title,
+    stockName: it.stockName,
+    symbol: it.symbol,
+    analyst: it.analyst,
+    opinion: it.opinion,
+    targetPrice: it.targetPrice,
+    summary: it.summary,
+    pdfUrl: it.pdfUrl,
+    views: it.views,
+    category: it.category,
+    // 원 게시판(사이트 메뉴) — 대조·검수용. it.board 는 게시판 라벨.
+    board: (() => {
+      const b = BOARDS.find((x) => x.label === it.board);
+      return `유안타증권 > ${it.board}(${b ? `${b.cd007}${b.cd008 ? `/${b.cd008}` : ""}` : "?"})`;
+    })(),
+  });
 }
-console.log(`\n✔ 앱 전송 완료: ${upBody}`);
+for (const [market, items] of byMarket) {
+  const up = await fetch(IMPORT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ items, source: SOURCE, market }),
+  });
+  const upBody = await up.text();
+  if (!up.ok) {
+    console.error(`✗ [${market}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`✔ [${market}] 앱 전송 완료 (${items.length}건): ${upBody}`);
+}

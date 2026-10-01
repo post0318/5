@@ -40,14 +40,19 @@ const SUBNAV = [
   { seg: "analysis", label: "종목분석", icon: BarChart3 },
   { seg: "research", label: "산업분석", icon: Building2 },
   { seg: "insights", label: "인사이트", icon: Lightbulb },
+  { seg: "unlisted", label: "비상장", icon: Lightbulb },
 ] as const;
 
 // 거시경제 서브 내비(오너 지시 2026-09-24 — "거시경제 클릭시 상단 탭으로
 // 글로벌핵심지표 이슈분석을 구성"). seg가 빈 문자열이면 `/macro` 자체.
+// "시황분석" 탭 추가(오너 지시 2026-09-26 — "거시경제 환율분석 오른쪽에
+// 시황분석 탭 추가"). 산업분석 탭에서 완전히 제거된 구 "시황"·"투자전략
+// (주식)"이 여기로 이동(Daily/Monthly/투자전략 세그먼트).
 const MACRO_SUBNAV = [
   { seg: "", label: "글로벌핵심지표", icon: Globe },
   { seg: "issues", label: "이슈분석", icon: Newspaper },
   { seg: "fx", label: "환율분석", icon: TrendingUp },
+  { seg: "market-condition", label: "시황분석", icon: BarChart3 },
 ] as const;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -63,7 +68,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ? "research"
           : parts[1] === "insights"
             ? "insights"
-            : "universe";
+            : parts[1] === "unlisted"
+              ? "unlisted"
+              : "universe";
   const onManage = parts[0] === "manage";
   const onMacro = parts[0] === "macro";
   const onWeekly = parts[0] === "weekly";
@@ -72,7 +79,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-full flex-col">
       <header className="bg-background/80 sticky top-0 z-30 border-b backdrop-blur">
-        <div className="mx-auto flex min-h-14 max-w-[1400px] flex-wrap items-center gap-x-6 gap-y-1 px-4 py-2">
+        {/* 모바일에서 로고+시장탭(한국/미국/일본)+우측 아이콘 5개가 한 줄에
+            안 들어가 두 줄로 깨졌다(오너 실측 스크린샷 2026-09-30). 시장탭
+            글자는 핵심 내비라 계속 보이고, 그만큼 패딩·간격을 모바일에서만
+            좁혀 확보한다 — 실측(390px 기준 합 377px)으로 아이폰SE(375px)
+            까지 한 줄에 맞춘다. `sm:` 이상은 기존 값 그대로. */}
+        <div className="mx-auto flex min-h-14 max-w-[1400px] flex-wrap items-center gap-x-1 gap-y-1 px-2 py-2 sm:gap-x-6 sm:px-4">
           <Link href="/kr/universe" className="flex items-center gap-2 font-semibold">
             <span className="bg-primary text-primary-foreground grid size-6 place-items-center rounded text-xs">
               G
@@ -81,7 +93,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </Link>
 
           {/* 시장 탭 */}
-          <nav className="flex items-center gap-1">
+          <nav className="flex items-center gap-0.5 sm:gap-1">
             {MARKETS.map((m) => {
               const active = !onManage && !onMacro && !onWeekly && m.id === market;
               const Icon = MARKET_ICONS[m.id];
@@ -90,7 +102,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   key={m.id}
                   href={`/${m.id}/${sub}`}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                    "flex items-center gap-1 rounded-md px-1.5 py-1.5 text-sm font-medium transition-colors sm:gap-1.5 sm:px-3",
                     active
                       ? "bg-secondary text-secondary-foreground"
                       : "text-muted-foreground hover:text-foreground",
@@ -103,11 +115,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
 
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
             <Link
               href="/macro"
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                "flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium transition-colors sm:px-3",
                 onMacro
                   ? "bg-secondary text-secondary-foreground"
                   : "text-muted-foreground hover:text-foreground",
@@ -119,7 +131,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Link
               href="/weekly"
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                "flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium transition-colors sm:px-3",
                 onWeekly
                   ? "bg-secondary text-secondary-foreground"
                   : "text-muted-foreground hover:text-foreground",
@@ -131,7 +143,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Link
               href="/manage"
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                "flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium transition-colors sm:px-3",
                 onManage
                   ? "bg-secondary text-secondary-foreground"
                   : "text-muted-foreground hover:text-foreground",
@@ -149,11 +161,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {!onManage && !onMacro && !onWeekly && !onAdmin && (
           <div className="mx-auto max-w-[1400px] overflow-x-auto px-4">
             <div className="flex w-max min-w-full gap-4">
-              {SUBNAV.map((s) => {
+              {SUBNAV.filter((s) =>
+                // 인사이트(해외 IB)는 해외 시장 전용(오너 지시 2026-09-26), 비상장은 국내·미국(2026-09-27 — "미국과 중국도 비상장을
+                // 추가한다", 중국은 시장 화면이 없어 데이터만 쌓는다).
+                s.seg === "insights"
+                  ? market !== "kr"
+                  : s.seg === "unlisted"
+                    ? market === "kr" || market === "us"
+                    : true,
+              ).map((s) => {
                 const active = s.seg === sub;
-                // 국내는 해외IB 인사이트가 없어 비상장 리서치로 대체한다(오너
-                // 지시, 2026-09-24) — 탭 라벨도 시장에 따라 다르게 표시.
-                const label = s.seg === "insights" && market === "kr" ? "비상장 리서치" : s.label;
+                const label = s.seg === "unlisted" ? "비상장 리서치" : s.label;
                 return (
                   <Link
                     key={s.seg}

@@ -60,12 +60,18 @@ function movers(rows: SnapshotRow[]): string {
 function issueBlock(issue: WeeklyIssue, rank: number, comment: IssueComment | undefined): string {
   const lines: string[] = [];
 
-  lines.push(`### ${rank}. ${issue.label}`);
+  // 제목은 그 주 실제 화두를 담은 동적 headline 우선, 없으면 토픽 사전의
+  // 고정 분류명(label, 빈도 집계용 내부 키)으로 폴백한다(오너 지시
+  // 2026-10-01 — "미국 증시 밸류에이션이라고 했지만 AI 속도조절론이
+  // 화두였다", "단편적으로 정해진 제목을 쓰는건 금지한다").
+  lines.push(`### ${rank}. ${comment?.headline || issue.label}`);
   lines.push("");
 
-  // 사실과 해석을 눈으로 구분되게 나눠 놓는다(오너 지시 2026-09-22 — 타사
-  // 시황처럼 "사실 → 해석" 2단). 한 문단에 섞여 있으면 어디까지가 확인된
-  // 사실인지 읽는 사람이 가려낼 수 없다.
+  // 사실·해석을 **"사실"/"해석" 같은 라벨 없이** 자연스럽게 이어 쓴다(오너
+  // 지시 2026-10-01 — "굳이 사실, 해석을 명시하면서 하는 것은 금지한다.
+  // 사실관계를 적시하고 자연스럽게 이에 대한 해석을 이어주면 된다"). 데이터
+  // 상으로는 여전히 facts/reading 을 나눠 받는다(검증 단계에서 숫자 근거를
+  // 줄 단위로 대조하기 위해서일 뿐, 화면 표시 방식과는 별개).
   const facts = comment?.facts ?? [];
   const reading = comment?.reading ?? "";
   if (facts.length === 0 && !reading) {
@@ -73,13 +79,11 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: IssueComment | un
     lines.push("");
   } else {
     if (facts.length > 0) {
-      lines.push("**사실**");
-      lines.push("");
       for (const f of facts) lines.push(`- ${f}`);
       lines.push("");
     }
     if (reading) {
-      lines.push(`**해석** → ${reading}`);
+      lines.push(reading);
       lines.push("");
     }
   }
@@ -109,13 +113,11 @@ function tableCell(s: string): string {
   return s.replace(/\|/g, "/").replace(/\s+/g, " ").trim();
 }
 
-/** 실제 기준·비교일이 그 주의 일반적인 구간(baseFriday~weekEnd)과 다르면
- * (연휴로 기준점이 앞으로, 비교점이 뒤로 밀린 경우) 등락률 옆에 실제 날짜를
- * 밝힌다 — 평소엔 안 붙어 표가 깔끔하다. */
-function sectorPctCell(s: SectorHighlight, week: ReportWeek): string {
-  const pct = `${s.pct >= 0 ? "+" : ""}${s.pct.toFixed(2)}%`;
-  if (s.startDate === week.baseFriday && s.endDate === week.weekEnd) return pct;
-  return `${pct} (${s.startDate.slice(5)}→${s.endDate.slice(5)})`;
+/** 등락률만 보여준다 — 실제 비교 구간(연휴로 기준·비교일이 밀린 경우 포함)을
+ * 괄호로 병기했었으나, 모든 섹터에 똑같이 붙어 불필요한 반복이라는 오너
+ * 지적(2026-10-01 — "굳이 일자를 넣을 필요없다")으로 제거. */
+function sectorPctCell(s: SectorHighlight): string {
+  return `${s.pct >= 0 ? "+" : ""}${s.pct.toFixed(2)}%`;
 }
 
 /**
@@ -124,9 +126,9 @@ function sectorPctCell(s: SectorHighlight, week: ReportWeek): string {
  * 00때문이다 이런식으로"). 표(구분·섹터·등락률·코멘트)에 있던 내용을
  * 그대로 문장으로 풀어 쓴다 — 열 너비 문제도 구조적으로 사라진다.
  */
-function sectorSentence(s: SectorHighlight, week: ReportWeek, comment: string): string {
+function sectorSentence(s: SectorHighlight, comment: string): string {
   const verb = s.direction === "up" ? "상승" : "하락";
-  const pct = sectorPctCell(s, week);
+  const pct = sectorPctCell(s);
   const reason = comment.trim() || "주요 요인은 확인되지 않았습니다";
   // 섹터를 끌고 간 종목을 이름·등락률로 붙인다(오너 지시 2026-09-22) —
   // 등락률만 있으면 그 주에 무슨 일이 있었는지 감이 안 온다. 구성종목을 못
@@ -142,7 +144,6 @@ function sectorGroupSentences(
   title: string,
   up: SectorHighlight[],
   down: SectorHighlight[],
-  week: ReportWeek,
   comments: Map<string, string>,
 ): string {
   const lines: string[] = [`### ${title}`, ""];
@@ -150,24 +151,24 @@ function sectorGroupSentences(
     lines.push("_이번 주 집계된 섹터 데이터가 없습니다._");
     return lines.join("\n");
   }
-  for (const s of up) lines.push(sectorSentence(s, week, comments.get(s.id) ?? ""));
-  for (const s of down) lines.push(sectorSentence(s, week, comments.get(s.id) ?? ""));
+  for (const s of up) lines.push(sectorSentence(s, comments.get(s.id) ?? ""));
+  for (const s of down) lines.push(sectorSentence(s, comments.get(s.id) ?? ""));
   return lines.join("\n");
 }
 
-function sectorSection(sectors: WeeklySectors, week: ReportWeek, comments: Map<string, string>): string {
+function sectorSection(sectors: WeeklySectors, comments: Map<string, string>): string {
   const parts = [
     "_전주 금요일 종가 대비 당주 금요일 종가 기준, 시장별 상승·하락 상위 섹터입니다._",
     "",
-    sectorGroupSentences("코스피", sectors.kospi.up, sectors.kospi.down, week, comments),
+    sectorGroupSentences("코스피", sectors.kospi.up, sectors.kospi.down, comments),
     "",
-    sectorGroupSentences("코스닥", sectors.kosdaq.up, sectors.kosdaq.down, week, comments),
+    sectorGroupSentences("코스닥", sectors.kosdaq.up, sectors.kosdaq.down, comments),
     "",
-    sectorGroupSentences("미국", sectors.us.up, sectors.us.down, week, comments),
+    sectorGroupSentences("미국", sectors.us.up, sectors.us.down, comments),
     "",
-    sectorGroupSentences("일본", sectors.jp.up, sectors.jp.down, week, comments),
+    sectorGroupSentences("일본", sectors.jp.up, sectors.jp.down, comments),
     "",
-    sectorGroupSentences("유럽", sectors.eu.up, sectors.eu.down, week, comments),
+    sectorGroupSentences("유럽", sectors.eu.up, sectors.eu.down, comments),
   ];
   return parts.join("\n");
 }
@@ -214,7 +215,7 @@ export async function renderWeeklyReport(opts: {
   }
   parts.push("## 4. 주요 섹터 이슈");
   parts.push("");
-  parts.push(sectorSection(sectors, week, sectorComments));
+  parts.push(sectorSection(sectors, sectorComments));
   parts.push("");
   // "5. 경제"(오너 지시 2026-09-21 — "금리정책처럼 경제를 하나 추가하고
   // 경기와 관련된 내용은 여기서 요약하도록 하자. 위치는 금리정책보다

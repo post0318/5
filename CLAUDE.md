@@ -168,6 +168,17 @@ npm run db:studio    # drizzle studio
   - **예외 1건 (개인용, 오너 명시 승인)**: 외국인 코스피200 선물 순매수(투자자별
     거래실적)는 어떤 공식 무료 API에도 없고(KRX OPEN API·KIS 확인), KRX 정보데이터
     시스템 화면은 로그인 필수 + Vercel IP 차단. **로컬 전용 스크립트**
+    - **소스 교체(2026-09-28, 오너 지시 — "finance.daum.net 에는 있다, 가능한가?")**:
+      네이버 페이지가 2026-09-18 부터 HTTP 410 으로 폐지돼(사이트 개편, 새 주소
+      `stock.naver.com/market/stock/kr/trend/trader`) 9월 17일 이후 데이터가 끊겼다.
+      같은 스크립트가 이제 **다음 금융 투자주체별 동향(선물) JSON API**
+      (`finance.daum.net/api/investor/future/days?terms=days`, 브라우저 네트워크
+      로그로 역추적)를 쓴다. referer 헤더 없이는 403, 있으면 로그인 없이 200.
+      값은 옛 네이버 수집분과 9/9~9/16 전 구간 정확히 일치(9/17 은 네이버가
+      오전 실행 때 장중 부분값 113 을 잡았고 다음은 마감값 802). 그래서 당일
+      행은 마감(15:45 KST) 전이면 건너뛰게 했다. `finance.daum.net` 은
+      robots.txt 자체가 없다(404) — 다른 예외와 같은 개인용·하루 1회 조건으로
+      오너 승인. 아래 네이버 관련 서술은 교체 전 이력이다.
     (`scripts/collect-foreign-fut.mjs`)가 네이버페이 증권 "투자자별 매매동향(선물)"
     페이지를 **하루 1회** 파싱해 `/api/cron/kr-fg` 로 POST 한다.
     - `finance.naver.com/robots.txt` 는 일반 UA 에 `Disallow: /` (FnGuide 와 동일
@@ -213,7 +224,7 @@ npm run db:studio    # drizzle studio
       Knockout.js 바인딩에 찍힌 `boardName=foreignstock` 을 그대로 API
       슬러그로 써서 발견. 제목 "종목명(TICKER.US)" 에서 티커를 뽑고, 그 외
       시장(JP/SH/DE 등)은 건너뜀. 목표주가는 공용 추출기
-      (`us-research-extract.mjs`)의 컨센서스 패턴으로 PDF에서 보강. **로컬
+      (`research-extract.mjs`)의 컨센서스 패턴으로 PDF에서 보강. **로컬
       스크립트** (`scripts/collect-shinhan-overseas-research.mjs`, GitHub
       Actions `.github/workflows/shinhan-overseas-research.yml`, 하루
       1회)가 같은 라우트를 `source: "신한투자증권", market: "us"` 로 재사용.
@@ -245,7 +256,7 @@ npm run db:studio    # drizzle studio
       - **하나증권 해외(미국 종목) 추가**: 같은 사이트·같은 목록 구조인데
         게시판만 다르다(`pid=8&cid=3`, "글로벌 기업분석"). 제목이 "종목명
         (TICKER.거래소): 제목" 형식, .US 만 골라 미국 종목으로 저장. 목표
-        주가는 공용 추출기(`us-research-extract.mjs`)로 본문/PDF에서 추출
+        주가는 공용 추출기(`research-extract.mjs`)로 본문/PDF에서 추출
         (예: "TP(컨센서스) 308.9 USD"). **버그 수정(2026-09, 오너 지적 —
         "애플 하나증권에서 pdf에 pt가 있는데 보여주지 못하고 있다")**: 국내
         수집기에서 그대로 복사해온 원화(KRW) 기준 목표주가 추출 함수가
@@ -431,7 +442,7 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-nh-overseas-research.mjs`, GitHub Actions
       `.github/workflows/nh-overseas-research.yml`, 하루 1회)가 "03"과 "01"
       둘 다 스캔해 합친 뒤 같은 라우트를 `source: "NH투자증권", market: "us"`
-      로 재사용. 목표주가는 공용 추출기(`us-research-extract.mjs`)의
+      로 재사용. 목표주가는 공용 추출기(`research-extract.mjs`)의
       컨센서스 패턴으로 PDF에서 보강(90일 백필 46건 중 42건 확보). **미결**:
       투자의견(등급)은 현재 0건 추출 — NH 리포트 PDF의 등급 표기 위치/형식이
       다른 브로커와 달라 보이며, 우선순위 낮아 추후 재확인 필요.
@@ -584,7 +595,7 @@ npm run db:studio    # drizzle studio
           `INSIGHT_LABEL_RE`(IPO/비상장 라벨, "KB IPO Brief"·"비상장
           Tracker+"·"케이비 비상장 플러스")는 일반 산업분석 풀이 아니라
           `source:"KB증권 비상장리서치"`로 별도 전송 — 키움 CI 비상장과
-          같은 인프라(`INSIGHT_SOURCES`) 재사용, `/kr/insights`("비상장
+          같은 인프라(`INSIGHT_SOURCES`) 재사용, `/kr/unlisted`("비상장
           리서치" 탭)에서 "KB증권" 세그먼트로 노출(`insights-board.tsx`
           `KR_SOURCES`에 추가). "비상장기업" 게시판(categoryid 188)은
           `tab=5` 기본 조회에 안 잡히고 `pCatfolderid=186`을 따로 줘야
@@ -682,7 +693,7 @@ npm run db:studio    # drizzle studio
       게시판이라 로그인 없이 서버렌더 HTML이 그대로 나온다(오너가 URL
       제시). 게시판 두 곳 — `sub03_02`(기업분석, 국내), `sub03_03`(투자전략/
       경제분석, 미국 종목이 섞여 있음). 종목 식별이 까다로운 소스라(제목에
-      코드·티커가 아예 없음) 국내는 `corpcodes.json`(3,930개)에서 "제목이 그
+      코드·티커가 아예 없음) 국내는 `corpcodes.json`(현재 상장사만 정제한 2,588개 — 빌더가 KRX 전종목과 대조해 상폐·소멸 법인을 뺀다, 2026-09-28)에서 "제목이 그
       이름으로 시작하는 것 중 가장 긴 이름"을 찾고, 미국은 "[DS 미국주식]
       엔비디아: 제목"처럼 한글 종목명만 있어 네이버 해외종목 자동완성으로
       티커를 해석한다(뉴스 기능이 이미 쓰는 엔드포인트 재사용). **로컬
@@ -706,6 +717,16 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-bnk-research.mjs`, GitHub Actions
       `.github/workflows/bnk-research.yml`)가 같은 라우트를 `source: "BNK투자
       증권"` 으로 재사용.
+      **GitHub 실행 서버 IP 차단(감사 2026-09-28 — "bnk kirs 원인확인하고
+      방법찾아줘")**: `www.bnkfn.co.kr` 이 2026-09-14 부터 GitHub Actions
+      러너 IP 를 막고 있다(TCP 연결 자체가 10초 타임아웃 — `ConnectTimeoutError`,
+      403 같은 HTTP 응답조차 없음. 이 PC 에서는 0.2초에 정상 접속되는 걸로 봐
+      해외/클라우드 IP 대역 차단으로 추정). 저장소가 public 이라 self-hosted
+      러너는 포크 PR 공격면이 생겨 배제(오너 선택, 2026-09-28) — 대신
+      `scripts/retry-blocked-sites.mjs` 를 Windows 작업 스케줄러
+      (`MarketResearch-BlockedSitesRetry`, 장중 08/11/14/17시 KST)에 등록해
+      이 PC 가 직접 돈다. GitHub 워크플로 자체는 그대로 둔다(실패해도 해
+      없음 — 로컬 수집이 사실상 주 경로).
       - **산업분석/투자전략 수집 추가(오너 지시, 2026-09 — "한국과 미국 모두
         동일하게 수집 기반 구축")**: 같은 사이트의 형제 게시판을 확인 —
         `analysingIssue.jspx`(업종분석, 제목이 기업분석과 똑같은 "[업종명]
@@ -877,7 +898,7 @@ npm run db:studio    # drizzle studio
       깨끗한 케이스). 제목이 "종목명(TICKER.US): 헤드라인" 형식(종목명과
       괄호 사이 공백 유무가 섞여 있어 정규식에 `\s*` 허용)이라 이름 검색
       불필요. **로그인 없이 PDF를 받을 수 있는 몇 안 되는 소스**라 공용
-      추출기(`us-research-extract.mjs`)의 PDF 보강 단계(`usePdf:true`)를
+      추출기(`research-extract.mjs`)의 PDF 보강 단계(`usePdf:true`)를
       켜서 목표주가를 채운다(실측 백필 4/4 성공) — 투자의견은 PDF 안에서
       그래픽 배지로 표시돼 텍스트로 못 뽑음(실측 확인, 버그 아님). 종목
       티커 패턴이 아닌 항목("[미국은 지금] ...", "09/21 큠틴 아메리카
@@ -911,7 +932,7 @@ npm run db:studio    # drizzle studio
         `TP`(글로벌 ETF — 넣었어도 ETF 필터에 걸림),
         `BC`(디지털자산리서치). (`EM`·`CH`는 이후 추가됨, `SD`는 추가 후
         중단 — 아래 "게시판 추가 2차" 항목 참고.) 국내(market:"kr") 항목은 공용 추출기
-        (`us-research-extract.mjs`)가 달러 표기 기준이라 PDF 보강을 하지
+        (`research-extract.mjs`)가 달러 표기 기준이라 PDF 보강을 하지
         않음(투자의견·목표주가 공란, 다른 국내 수집기들과 동일) — 미국
         항목만 PDF 보강 대상.
       **로컬 스크립트** (`scripts/collect-kiwoom-research.mjs`,
@@ -1039,7 +1060,7 @@ npm run db:studio    # drizzle studio
       나온 사례). `www.samsungpop.com/robots.txt` 는 `Allow: /`(제한 없음,
       가장 깨끗한 케이스). 제목이 "(작성자) 종목명 (TICKER US): 헤드라인"
       형식(다른 증권사의 "TICKER.US"와 달리 마침표 없이 공백으로 구분)이라
-      그 패턴에서 티커를 뽑고, 공용 추출기(`us-research-extract.mjs`)가
+      그 패턴에서 티커를 뽑고, 공용 추출기(`research-extract.mjs`)가
       로그인 없이 PDF 본문까지 확인해 목표주가를 채운다(실측 확인 —
       투자의견은 다른 소스처럼 PDF 안에서 텍스트로 안 잡히는 경우가 많음).
       티커 패턴이 아닌 항목(예: "글로벌 포트폴리오 전략(9월 4주 차)...",
@@ -1063,9 +1084,10 @@ npm run db:studio    # drizzle studio
         나오는 시황 전략 칼럼(KB "이그전"에 가까움)이라 기계적 추천 리스트인
         KB "리서치 모델 포트폴리오"와 성격이 달라 제외 여부는 보류(오너
         확인 대기, 착수 안 함).
-    - **대신증권 — 제외(오너 결정, 2026-09)**: `www.daishin.com` 의 "기업분석"·
-      "글로벌 기업분석" 메뉴가 둘 다 로그인 페이지로 리다이렉트되는 것만
-      확인된 상태에서 오너가 진행 중단 결정. 재검토하지 않음.
+    - **대신증권 — 제외(오너 결정, 2026-09) → 2026-09-25 모바일 웹으로 전환**:
+      PC "기업분석"·"글로벌 기업분석" 메뉴가 로그인으로 리다이렉트되는 것만 보고 중단했었는데,
+      재조사에서 모바일 웹 리서치 화면이 로그인 없이 열려 직접 수집으로 전환(아래 "한경 컨센서스
+      경유 → 직접 수집 전환" 항목).
     - **StockAnalysis.com 개별 애널리스트 투자의견 추가(오너 승인, 2026-09)**:
       Yahoo `upgradeDowngradeHistory` 는 증권사(firm)까지만 주고 애널리스트
       개인명·정확도는 유료 데이터라 안 나온다. stockanalysis.com 의 종목별
@@ -1152,6 +1174,98 @@ npm run db:studio    # drizzle studio
     조회 시점의 `ESG_EXCLUDE_RE`(`shinhan-research.ts`)와 이중으로 걸러진다
     (수집 단계에서 막아 DB에 아예 안 쌓이게, 조회 단계는 그 전에 이미
     쌓인 문서·아직 이 필터를 안 쓰는 나머지 수집기의 안전망).
+  - **투자의견·목표주가 공용 추출기 — 국내·해외 통합(오너 지시, 2026-09-25 —
+    "종목리포트는 국내냐 해외냐 구분없이 공용추출기가 맞다", "어디서 찾는다·순서는
+    어떻게 본다는 국내도 해외도 동일하다", "통화단위는 각 시장의 통화단위를 적용한다",
+    "중국 일본 유럽도 시장은 추가해놔라")**: `scripts/lib/research-extract.mjs` 하나
+    (`enrichResearch`·`extractOpinion`·`extractTargetPrice`·`readPdfText`). 예전엔 해외만
+    공용(`us-research-extract.mjs`, 삭제)이고 국내 14곳이 각자 정규식을 뒀다 — 위 항목들에
+    "국내는 PDF 보강 안 함"·"달러 기준이라 국내 제외"라고 적힌 곳은 이 통합 전 기록이다.
+    - 공통 규칙: 찾는 순서 목록·API 칸 → 본문 → PDF / **목록 칸 값은 본문·PDF 에
+      "목표주가"·"투자의견" 언급이 있을 때만 사용**(KB tp/recomm 문제의 규칙을 전 소스로 —
+      제목에서 읽은 의견 `opinionFrom:"title"` 은 제외) / 면책·등급기준·목표주가 변동추이
+      구간 잘라냄 / 라벨 바로 뒤 값만 / 자체 목표가 → 컨센서스 / 애매하면 빈칸 / 의견 어휘
+      공통, "X 의견"·PDF 앞부분 줄 맨 앞 등급("Buy(유지)") 인정 / 산업분석 제외 / PDF 는
+      URL 당 1회(캐시), 수집기가 이미 읽은 텍스트는 `pdfText`·`bodyText` 로 넘기고 전송
+      전에 추출기가 지운다.
+    - 시장별(통화): kr 원(목표주가·목표가·적정주가·적정가격·TP, "N만원", "-원"=미제시,
+      100~1천만) / us 달러(자체 + 컨센서스 7종) / ch 홍콩달러·위안 / jp 엔 / eu 유로·파운드·
+      스위스프랑 등. 국내는 컨센서스 표기 없음(오너 확인). 규칙이 없는 시장은 추출 안 함.
+      ch·jp·eu 는 실측 표본이 적어 통화가 붙은 일반형 패턴뿐 — 놓치는 표기가 나오면 추가.
+    - 리서치 시장 구분에 유럽 `eu` 추가(`ResearchMarketId`, 수집기 쪽 유럽 종목 라우팅은
+      아직 없음 — 대부분 수집기가 유럽 티커를 건너뛴다).
+    - DS 는 이번에 처음 추출 대상이 됐다 — 그누보드 첨부는 게시글을 먼저 열어 받은 세션
+      쿠키가 있어야 PDF 가 나온다(로그인 불필요, 실측).
+    - 통합 전후 비교(20개 수집기, 최근 7일, 전송 내용을 로컬 수신기로 받아 문서 단위 대조)
+      중 발견·수정: ① 신한 PDF 는 "투자의견" 대신 "✓ 투자판단 매수 (유지)" 라벨이라 C2 가
+      목록 의견을 버렸다 → "투자판단"을 라벨·언급어에 추가, 신한 등급 설명("투자등급
+      (2017년 4월 1일부터 적용)")을 면책 구간으로. ② KB "화학 (151010)"·"건설 (201030)"
+      같은 업종 리포트가 괄호 속 업종코드 때문에 종목 리포트(기업)로 분류돼 업종 PDF 속
+      개별 종목 목표가가 붙었다 → 상장 종목코드(corpcodes.json)일 때만 기업으로.
+      ③ 메리츠(한경 경유) "Buy (Maintain)"은 라벨 단어가 없고 1페이지 중간이라 목록 의견이
+      버려졌다 → 괄호 등급변동 표시("(유지)·(Maintain)" 등)가 붙은 줄 맨 앞 등급은 위치
+      무관 인정, 문서에서 등급·목표가를 직접 찾았으면 그 자체를 "언급 있음"으로 본다.
+      목록·제목 값도 표기 통일(Not Rated → NR).
+  - **주간물·일정표·추천종목·대체투자 공통 제외(오너 지시, 2026-09-25 — "공통으로
+    캘린더나 주간, 추천종목은 수집 대상에서 제외, 대체투자에서 원자재는 수집으로
+    적용")**: 수집기가 40개가 넘어 각자 고치지 않고, 전부 거치는 수신 라우트
+    (`/api/cron/shinhan-research`·`/api/cron/macro-issues`)와 조회 함수(이미 쌓인
+    문서 안전망 — 산업분석·인사이트·종목별·이슈분석)에서
+    `src/lib/research-exclude.ts` 하나로 거른다(수집기용 같은 규칙:
+    `exclude-filters.mjs` `isCommonExcludedContent`). 주간물 = Weekly/위클리/
+    주간(주간사 제외)/Week Ahead/"9월 4주", Daily 는 대상 아님. 대체투자는 원자재
+    얘기만 남기고, 종목 리포트(category 기업)엔 대체투자 규칙을 안 건다(JPM
+    "대체투자 확장" 딜 기사 오탐 실측). 제목에 "대체투자"가 안 나오는 소스는
+    수집기에서 따로 처리 — 한투 "대체투자 Note"·NH FICC 대체투자/부동산 라벨·KB
+    tab=2 대체투자 폴더는 원자재만 통과. 적용 시점 DB 실측: kr_research 6,699건 중
+    282건이 화면에서 빠짐(신한 해외 Weekly 86·KB 추천종목/Biopharma Weekly 57·
+    하나 업종 Weekly 49 등).
+- **삼성증권 게시판 전체 매핑(오너 지시, 2026-09-25)**: 모바일 리포트 검색의
+  GUBUN 별로 목적지를 정했다 — 상세 표는 `collect-samsung-research.mjs` 헤더.
+  해외기업·Chief's Note → 미국 종목분석, 해외산업 → 미국 산업분석, 국내기업·
+  SPOT코멘트(기업) → 국내 종목분석, 국내산업·프리미엄 → 국내 산업분석,
+  투자전략·SPOT코멘트(전략)·이슈리포트 → 투자전략(주식), Daily시황 → 시황,
+  경제·채권 → 거시경제 이슈분석, 원자재 글(Commodity Issues 등)은 어느 게시판이든
+  이슈분석. 주간투자정보·선물옵션은 미수집. 국내 비상장은 "삼성증권
+  비상장리서치"(국내 인사이트). chief·spot1·spot2 는 모바일 검색에서 0건(실측),
+  프리미엄은 2022-12 이후 새 글 없음.
+- **한경 컨센서스 경유 → 직접 수집 전환(오너 결정, 2026-09-25)**: 한경으로만 받던
+  증권사 10곳을 NH·삼성 방식(화면은 로그인이어도 열려 있는 엔드포인트)으로 재조사했다.
+  | 소스 | 결과 | 방식 | 수집기 |
+  |---|---|---|---|
+  | iM증권 | 전환 | 모바일 화면 내부 JSON API(`/_json/source.jsp`, 세션키 등록 — 로그인 아님), 첨부 조회로 PDF·종목코드(파일명 끝 6자리) | `collect-im-research.mjs` |
+  | 메리츠증권 | 전환 | 메뉴는 로그인, 게시판 엔진 `/bbs/BbsList.go` 는 열림(삼성과 같은 패턴), 상세에 PDF 직링크 | `collect-meritz-research.mjs` |
+  | IBK투자증권 | 전환 | 서버렌더 HTML(EUC-KR), 정적 PDF 경로, robots `Allow: /`. 종목코드는 제목 종목명→corpcodes | `collect-ibk-research.mjs` |
+  | 유안타증권 | 재개 | 옛 수집기가 그대로 정상(과거 실패 재현 안 됨) + 산업·투자전략·경제 게시판 추가 | `collect-yuanta-research.mjs` |
+  | 한화투자증권 | 확장 | 자체 수집기에 산업·전략·경제·채권·해외 게시판 추가, new 배지 누락 버그 수정, PDF(`mode=attach_open`) | `collect-hanwha-research.mjs` |
+  | 한국IR협의회 | 전환 | 서버렌더 HTML(인소싱·아웃소싱), 의견·목표가 원래 없음. TLS 중간 인증서 누락 → 스크립트에 공개 중간 인증서 추가(Node 24) | `collect-kirs-research.mjs` |
+  | 대신증권 | 전환(예전 "재검토 안 함" 결정을 뒤집음) | PC 는 로그인, 모바일 웹(`money2.daishin.com/E5/ResearchCenter/DM_*`)은 열림. 모바일 목록이 글의 절반 가까이 빠뜨려 rowid 를 연속 조회, 재게시 제외. robots.txt 는 WAF 가 막아 확인 불가 | `collect-daishin-research.mjs` |
+  | SK증권 | 한경 유지 | 게시판은 로그인, 통합검색만 열리나 날짜 정렬이 없어 매일 증분 수집 불가 | — |
+  | 유진투자증권 | 한경 유지 | 목록 서버가 로그인 검사, 공개 게시판은 2022-01 에 멈춤 | — |
+  | LS증권 | 한경 유지 | "계좌고객만"(서버) + 모바일 API 봇 차단(Eversafe), robots `Disallow: /` | — |
+  - 전환한 7곳은 한경 수집기 `EXCLUDED_SOURCES` 에 넣었다 — 한경 쪽 오류가 실측됨
+    (유안타 IPARK 목표가 34,000 → 340,000, 한화 한국가스공사 리포트의 종목이 "한화투자증권"
+    으로 오표기·2중 게재). 대신·iM 은 GlobalMonitor 에서도 뺐다(같은 글인데 GM 제목에
+    "[Issue & News]" 머리말이 붙어 제목 dedupe 가 안 걸림). 메리츠·유안타는 자체 수집기가
+    미국 종목 리포트를 안 받아 GM 경유 유지.
+  - 게시판 분류는 삼성증권과 같은 기준: 기업→종목분석, 산업→산업분석, 투자전략→투자전략
+    (주식), 데일리·시황→시황, 경제·채권→거시경제 이슈분석(FX·환율은 환율분석), 원자재→이슈분석.
+    고정 라벨은 `shinhan-research.ts` STRATEGY_/MARKET_CONDITION_STOCKNAMES 에 등록.
+  - 오너 결정(2026-09-25): 메리츠 "Meritz Strategy Daily"는 같은 날 Strategy Idea 글의
+    재게시라 수집 제외. 대신 퀀틴전시 플랜(PDF 파일명 Strategy_Daily)은 매일 장 마감 코멘트라
+    시황("대신증권 시황"). 대신 "포트폴리오가 커지는 Stock"은 PDF(2026-08-10자) 확인 후 오너가
+    위클리 리테일 추천종목 모음으로 확정 — 제외 유지("위클리네 제외").
+  - **미결**: 한경 경유로 이미 쌓인 옛 문서(`{source}:한경:*`)는 id 가 달라 90일 보존이 끝날
+    때까지 새 직접 수집 문서와 중복될 수 있다 — 배포 후 `/api/cron/shinhan-research` DELETE
+    (source + idPrefix "한경:")로 7곳 정리 필요. 대신·iM 의 옛 GM 문서(idPrefix "GM:")도 같다.
+- **링크는 PDF 우선(오너 지시 2026-09-25 — "공통에 적용해라 pdf 우선으로 pdf 가능시
+  상세화면 연결 불필요. 즉시 pdf로 링크")**: 모든 수집기의 `pdfUrl` 은 로그인 없이 열리는
+  PDF 직링크가 1순위, PDF 가 안 되는 건만 상세 페이지 폴백. 이번에 한국투자증권 3개
+  수집기가 상세 페이지 → PDF 로 바뀌었다(공용 JS `doFiledownload()` 의 옛 다운로드 서블릿
+  `file.koreainvestment.com/servlet/Download?file_path=research/research{category1}/&file_name=`
+  이 로그인 없이 열림 — 파일로 내려받아지는 `attachment` 응답). 예외: DS투자증권은 그누보드
+  첨부가 게시글 세션 쿠키 없이는 오류 페이지라 브라우저 직링크가 안 돼 게시글 링크 유지,
+  교보는 PDF 조회 실패 건만 상세 폴백.
 - **산업분석 탭 (`/[market]/research`, 종목분석 옆 최상위 탭, 오너 지시
   2026-09)**: `kr_research` 의 `category:"산업"`(symbol 항상 null, 여러
   증권사가 이미 수집 중이었지만 종목별 조회(`getShinhanResearchBySymbol`)
@@ -1872,6 +1986,46 @@ LLM 수치 검증·지수 관행 때문에 이번 통일에서 제외(별도 결
   등에는 적용하지 않는다(그쪽은 시장 무관 고정 규칙, 별개).
 - 차트·테이블도 동일 디자인 토큰 공유.
 
+## 리서치 분류 체계 전면 개편 — macro_issues 폐기 (오너 지시 2026-09-26)
+
+"세관은 하나다" 원칙(라우터·컬렉션 통합)에 따라 `macro_issues`(이슈분석·환율분석
+전용, 데이터 적음)를 `kr_research`(투자전략(채권) 등 이미 훨씬 많음, 데이터
+많은 쪽)로 흡수 — **작은 쪽을 큰 쪽으로**(반대 방향 아님, 처음에 거꾸로
+설계했다가 오너가 정정: "현재 매크로 이슈에 있는 자료가 적다는 것이 투자전략
+(채권)은 엄청많다").
+
+- **새 8종 분류**(`classifyResearchTopic()`, `shinhan-research.ts`): 산업분석·
+  이슈분석(구 투자전략(채권))·환율분석(이슈분석 중 FX 신호)·시황분석:Daily
+  (구 시황, 기본값)·시황분석:Monthly(구 시황 중 "월간"/"month")·시황분석:투자전략
+  (구 투자전략(주식))·글로벌IB(구 해외리서치, market≠kr)·비상장(구 해외리서치,
+  market=kr — 현재 도달 사례 없음, 이론적 케이스). 기존 5종 휴리스틱
+  (`classifyLegacyTopic`, 실측 이력 많은 BOND_STRONG_RE 등)은 **전혀 안 건드리고**
+  그 결과를 새 taxonomy로 리매핑하는 계층만 얹었다.
+- **보관기간**(오너 지시로 확정): 이슈분석 30일·환율분석 30일·시황분석:Daily
+  7일·:Monthly 30일·:투자전략 90일·비상장 180일·글로벌IB 90일(기존 180일에서
+  단축)·산업분석/종목분석 90일(불변)·인사이트 90일(불변).
+- **`macro_issues` 컬렉션·`/api/cron/macro-issues`·`src/lib/db/macro-issues.ts`
+  삭제**. KB·키움·삼성·iM·메리츠·IBK·대신·한화·유안타 9개 수집기의 거시경제
+  게시판은 이제 `/cron/total-research`로 `category:"산업"` + 고정 stockName
+  라벨(`FORCED_ISSUE_STOCKNAMES`/`FORCED_FX_STOCKNAMES`, 예: "키움 이슈분석"·
+  "키움 환율분석"·"KB 자산배분매크로")로 합류해서 보낸다 — 게시판 코드가
+  topic을 확정하던 콘텐츠라 텍스트 키워드 휴리스틱을 못 믿고 기존
+  MARKET_CONDITION_STOCKNAMES와 같은 고정 라벨 강제 패턴을 재사용.
+- **`getIndustryResearch()`는 이제 산업분석·글로벌IB만** 반환(시황·투자전략·
+  해외리서치 완전 제거). 신규 `getMacroIssueResearch()`/`getMarketConditionResearch()`
+  추가. `/macro`에 "시황분석" 탭 신설(환율분석 오른쪽, Daily/Monthly/투자전략
+  세그먼트).
+- **데이터 이관 완료(2026-09-26)**: `scripts/migrate-macro-issues.mjs`를
+  메인 체크아웃의 `.env.local`(MONGODB_URI)로 실행 — `macro_issues` 원본
+  10건(키움증권 이슈분석 5·환율분석 5, KB증권 문서는 0건) 전부 `kr_research`로
+  이관 확인(`_id`에 `:이관:` 포함된 문서 10건 직접 카운트로 검증). 원본
+  `macro_issues` 컬렉션 문서는 그대로 남아있음(스크립트가 의도적으로 안 지움) —
+  당장 문제는 없으나 나중에 정리하려면 `macro_issues` 컬렉션을 수동으로 비워도
+  된다(더 이상 어떤 코드도 이 컬렉션을 읽지 않음).
+- 부수 발견: 삼성증권 수집기가 거시경제 항목에 `market:"kr"`을 안 붙여 null로
+  새던 버그, FX 여부 무관하게 항상 topic:"이슈분석"으로 보내던 버그를 이번
+  재작업 중 발견·수정.
+
 ## 대화
 
 - 사용자와는 **한국어**로 대화.
@@ -1880,3 +2034,8 @@ LLM 수치 검증·지수 관행 때문에 이번 통일에서 제외(별도 결
 
 `prd.md` §12 참조. 데이터 소스 평가는 §11 참조.
 관련 결정이 필요하면 임의로 정하지 말고 사용자에게 확인.
+
+- **국내 비상장 화면 분리(오너 지시 2026-09-26)**: 국내는 "인사이트" 탭을 없애고 **`/kr/unlisted`("비상장 리서치")**로
+  분리했다. 인사이트(해외 IB) 탭은 미국 등 해외 시장에서만 나온다(`app-shell.tsx` SUBNAV 시장별 필터).
+  `/kr/insights` 는 `/kr/unlisted` 로 리다이렉트. 데이터·API(`/api/research/insights`, `INSIGHT_SOURCES`)는
+  그대로 — `InsightsBoard market="kr"` 재사용.

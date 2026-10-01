@@ -17,9 +17,16 @@ import { Skeleton } from "@/components/ui/skeleton";
  * 생성·수정·발행은 로그인 필요(Clerk, 헤더 계정 메뉴) — 비로그인이면 401 메시지.
  */
 
+/** DB 에 저장된 생성/수정 시각은 UTC ISO 문자열이라 그대로 자르면 KST보다
+ * 9시간 느리게 보인다(오너 지적 2026-10-01 — "생성시간이 왜 계속 미국시간이지?
+ * 난 한국인데?"). week.ts 의 KST 계산과 같은 방식(+9시간 후 UTC 필드를
+ * 읽음)으로 변환해서 보여준다. */
 function fmtDate(iso: string | null): string {
   if (!iso) return "-";
-  return iso.slice(0, 16).replace("T", " ");
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  const kst = new Date(d.getTime() + 9 * 3600_000);
+  return kst.toISOString().slice(0, 16).replace("T", " ");
 }
 
 /**

@@ -56,8 +56,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
-import { isEsgContent } from "./lib/exclude-filters.mjs";
+import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
+import { isEsgContent, isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -79,9 +79,12 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim(); // 로컬 수동 실행 시 CRON_SECRET 없어도 인증 가능(라우트가 x-app-token도 허용)
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
@@ -132,45 +135,23 @@ function excerptFromPdfText(text) {
   return (boundary > EXCERPT_LEN * 0.5 ? cut.slice(0, boundary + 1) : cut) + "…";
 }
 
-// 헤더 블록에 "Buy(유지)" 같은 등급 줄과 "목표주가 30,000원 (상향)" 줄이
-// 고정으로 등장한다(Yuanta·KB와 동일 계열 템플릿).
-function extractOpinion(text) {
-  const m = text.match(/^(Strong Buy|Buy|Hold|Sell|매수|중립|매도)\s*[\(（]/m);
-  return m ? m[1] : "";
-}
-function extractTargetPrice(text) {
-  const m = text.match(/목표주가(?:를|는|가)?\s*([\d,]+)\s*(만)?\s*원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 10000 : 1);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
+// 헤더 블록의 "Buy(유지)"·"목표주가 30,000원 (상향)" 줄은 공용 추출기
+// (research-extract.mjs)의 국내 규칙·PDF 앞부분 등급 표기로 처리한다.
 async function extractPdfExcerpt(pdfUrl) {
-  if (!pdfUrl) return { summary: "", opinion: "", targetPrice: null };
-  try {
-    const res = await fetch(pdfUrl, { headers: { "User-Agent": UA } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const parser = new PDFParse({ data: buf });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return {
-      summary: excerptFromPdfText(text),
-      opinion: extractOpinion(text),
-      targetPrice: extractTargetPrice(text),
-    };
-  } catch (err) {
-    console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl}): ${err.message}`);
-    return { summary: "", opinion: "", targetPrice: null };
-  }
+  const pdfText = await readPdfText(pdfUrl);
+  if (pdfUrl && !pdfText) console.warn(`  ⚠ PDF 본문 추출 실패 (${pdfUrl})`);
+  return { summary: pdfText ? excerptFromPdfText(pdfText) : "", pdfText };
 }
 
-async function fetchPage(cursor) {
+// ditCd: 01=기업/산업분석 · 03=해외주식 · 02=투자전략 · 04=FICC ·
+// 05=자산관리솔루션 · 06=모닝미팅브리프(오너가 리서치 포털 스크린샷으로
+// 확인한 전체 메뉴 — collect-nh-overseas/-strategy-research.mjs 흡수).
+async function fetchPage(ditCd, cursor) {
   const body = new URLSearchParams({
     trName: "H3211",
     output: "json",
     isNext: cursor ? "true" : "false",
-    rsh_ppr_dit_cd: "01", // 기업/산업분석
+    rsh_ppr_dit_cd: ditCd,
     rsh_ppr_ser_cd: "",
     rmt_cnt: String(PAGE_SIZE),
     rsh_ppr_no: cursor?.no ?? "",
@@ -185,7 +166,7 @@ async function fetchPage(cursor) {
       "User-Agent": UA,
       "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
       "X-Requested-With": "XMLHttpRequest",
-      Referer: "https://www.nhsec.com/research/boardList.action?rsh_ppr_dit_cd=01",
+      Referer: `https://www.nhsec.com/research/boardList.action?rsh_ppr_dit_cd=${ditCd}`,
     },
     body: body.toString(),
   });
@@ -197,6 +178,69 @@ async function fetchPage(cursor) {
   // 정리한 뒤 파싱한다(JSON 구조 밖의 개행/탭도 공백으로 바뀌지만 무해).
   const text = raw.replace(/[\x00-\x1F]/g, " ");
   return JSON.parse(text);
+}
+
+// ── 해외기업분석(구 collect-nh-overseas-research.mjs) ──────────────────
+// "[해외기업분석/Apple] 아이폰18, 균형 잡힌 전략" — 회사명과 본문 제목 분리.
+const OVERSEAS_TITLE_RE = /^\[해외기업분석(?:\s+\S+)?\s*\/\s*([^\]]+)\]\s*(.+)$/;
+const STRATEGY_INSIDE_RE = /^\[전략\s*인사이드\/([^\]]+)\]\s*(.+)$/;
+const BRACKET_RE = /^\[([^\]]+)\]\s*(.+)$/;
+const NON_US_COUNTRY_RE = /중국|일본|유럽|홍콩|대만|동남아|한국|인도/;
+
+/** 한글/영문 회사명 → 미국 티커(네이버 해외종목 자동완성). 실패하면 null. */
+const usCache = new Map();
+async function resolveUsTicker(name) {
+  const key = name.trim();
+  if (usCache.has(key)) return usCache.get(key);
+  let hit = null;
+  try {
+    const res = await fetch(`https://ac.stock.naver.com/ac?q=${encodeURIComponent(key)}&target=stock`, {
+      headers: { "User-Agent": UA, accept: "application/json" },
+    });
+    if (res.ok) {
+      const items = (await res.json()).items ?? [];
+      hit =
+        items.find((i) => i.nationCode === "USA" && i.name?.trim() === key) ??
+        items.find((i) => i.nationCode === "USA") ??
+        null;
+      if (hit) hit = { symbol: String(hit.code).toUpperCase(), stockName: hit.name ?? key };
+    }
+  } catch {
+    /* 무시 */
+  }
+  usCache.set(key, hit);
+  await sleep(300);
+  return hit;
+}
+
+// ── 투자전략/FICC/자산관리솔루션(구 collect-nh-strategy-research.mjs) ──
+// 모닝미팅브리프(06)는 그날 다른 게시판(투자전략/FICC/기업분석) 리포트를 요약·재수록한 다이제스트라
+// 개별 리포트와 내용이 겹친다(오너 지적 2026-09-27 — "겹친다 수집제외다") — 수집 대상에서 제외.
+const STRATEGY_BOARDS = [
+  { ditCd: "02", label: "투자전략", forceMarket: null },
+  { ditCd: "04", label: "FICC", forceMarket: "us" },
+  { ditCd: "05", label: "자산관리솔루션", forceMarket: null },
+];
+// 리포트가 올라온 NH 게시판 표시(rsh_ppr_dit_cd) — 대조·검수용 메타(서버는 무시).
+const NH_BOARD_LABEL = { "01": "기업/산업분석", "02": "투자전략", "03": "해외주식", "04": "FICC", "05": "자산관리솔루션", "06": "모닝미팅브리프" };
+const nhBoard = (ditCd) => `NH투자증권 > ${NH_BOARD_LABEL[ditCd] ?? "리서치"}(rsh_ppr_dit_cd=${ditCd})`;
+
+const DECOR_RE = /^◆\s*|\s*◆$/g;
+function decodeEntities(s) {
+  return s
+    .replace(/&lsquo;|&rsquo;/g, "'")
+    .replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+const NON_US_RE =
+  /중국|차이나|China|일본|엔화|엔캐리|Japan|유럽|Europe|베트남|Vietnam|인도(?!네시아)|India\b|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan/i;
+const US_HINT_RE = /미국|\bUS\b|나스닥|Nasdaq|S&P|다우|연준|\bFed\b|FOMC|월가|Wall Street|Global\s?Markets/i;
+function classifyMarket(text) {
+  if (NON_US_RE.test(text)) return null;
+  if (US_HINT_RE.test(text)) return "us";
+  return "kr";
 }
 
 function parseRows(json) {
@@ -215,7 +259,7 @@ let cursor = null;
 let stop = false;
 
 for (let page = 1; page <= MAX_PAGES && !stop; page++) {
-  const json = await fetchPage(cursor);
+  const json = await fetchPage("01", cursor);
   const rows = parseRows(json);
   if (rows.length === 0) break;
 
@@ -244,6 +288,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
           pdfUrl: r.hpge_fle_url_cts || null,
           views: null,
           category: "기업",
+          board: nhBoard("01"),
         });
       }
       continue;
@@ -277,6 +322,7 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
       pdfUrl: r.hpge_fle_url_cts || null,
       views: null,
       category: "산업",
+      board: nhBoard("01"),
       unlisted,
     });
   }
@@ -286,9 +332,174 @@ for (let page = 1; page <= MAX_PAGES && !stop; page++) {
   await sleep(400);
 }
 
+// 해외기업분석 — "03"(해외주식 전용, 주력) + "01"(기업/산업분석, 드물게 해외
+// 리포트 섞임) 스캔. "01"은 위 국내 루프와 별개로 다시 훑는다(원본 3개
+// 스크립트일 때도 각자 따로 "01"을 불렀다 — 동작 동일, 중복 호출 신설 아님).
+console.log(`▶ NH투자증권 해외기업분석 수집: 최근 ${DAYS}일 (게시판 03+01)`);
+const overseasRawRows = [];
+for (const ditCd of ["03", "01"]) {
+  let oCursor = null;
+  let oStop = false;
+  for (let page = 1; page <= MAX_PAGES && !oStop; page++) {
+    const json = await fetchPage(ditCd, oCursor);
+    const rows = parseRows(json);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const date = isoDate(r.rsh_ppr_dru_dt);
+      if (date && new Date(date) < cutoff) {
+        oStop = true;
+        break;
+      }
+      overseasRawRows.push({ ...r, __ditCd: ditCd });
+    }
+    const last = rows[rows.length - 1];
+    oCursor = { no: last.rsh_ppr_no, date: last.rsh_ppr_dru_dt, time: last.rsh_ppr_dru_tm };
+    await sleep(400);
+  }
+}
+console.log(`  목록 ${overseasRawRows.length}건 중 해외기업분석 매핑 시도...`);
+for (const r of overseasRawRows) {
+  const rawTitle = String(r.rsh_ppr_til_cts ?? "");
+  const tm = rawTitle.match(OVERSEAS_TITLE_RE);
+  if (tm) {
+    const hit = await resolveUsTicker(tm[1]);
+    if (!hit) continue;
+    if (isCommonExcludedContent(tm[2].trim(), "기업")) continue;
+    collected.push({
+      id: r.rsh_ppr_no,
+      date: isoDate(r.rsh_ppr_dru_dt),
+      title: tm[2].trim(),
+      stockName: hit.stockName,
+      symbol: hit.symbol,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "기업",
+      board: nhBoard(r.__ditCd),
+      market: "us",
+    });
+    continue;
+  }
+  // 산업/전략 폴백은 "03"(해외주식 전용)에서만 — "01"은 평범한 국내 종목도
+  // "[종목명] 헤드라인" 형식을 쓰기 때문(실측으로 확인한 버그 재발 방지).
+  if (r.__ditCd !== "03") continue;
+  const sm = rawTitle.match(STRATEGY_INSIDE_RE);
+  if (sm) {
+    if (NON_US_COUNTRY_RE.test(sm[1])) continue;
+    if (!r.hpge_fle_url_cts) continue;
+    if (isCommonExcludedContent(sm[2].trim(), "산업")) continue;
+    collected.push({
+      id: r.rsh_ppr_no,
+      date: isoDate(r.rsh_ppr_dru_dt),
+      title: sm[2].trim(),
+      stockName: "투자전략",
+      symbol: null,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "산업",
+      board: nhBoard(r.__ditCd),
+      market: "us",
+    });
+    continue;
+  }
+  const gm = rawTitle.match(BRACKET_RE);
+  if (gm && !NON_US_COUNTRY_RE.test(gm[1]) && r.hpge_fle_url_cts && !isCommonExcludedContent(`${gm[1].trim()} ${gm[2].trim()}`, "산업")) {
+    collected.push({
+      id: r.rsh_ppr_no,
+      date: isoDate(r.rsh_ppr_dru_dt),
+      title: gm[2].trim(),
+      stockName: gm[1].trim(),
+      symbol: null,
+      analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+      opinion: "",
+      targetPrice: null,
+      summary: "",
+      pdfUrl: r.hpge_fle_url_cts || null,
+      views: null,
+      category: "산업",
+      board: nhBoard(r.__ditCd),
+      market: "us",
+    });
+  }
+}
+
+// 투자전략/FICC/자산관리솔루션/모닝미팅브리프(02/04/05/06).
+console.log(`▶ NH투자증권 투자전략/FICC/자산관리솔루션/모닝미팅브리프 수집: 최근 ${DAYS}일`);
+for (const board of STRATEGY_BOARDS) {
+  let sCursor = null;
+  let sStop = false;
+  for (let page = 1; page <= MAX_PAGES && !sStop; page++) {
+    const json = await fetchPage(board.ditCd, sCursor);
+    const rows = parseRows(json);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const date = isoDate(r.rsh_ppr_dru_dt);
+      if (date && new Date(date) < cutoff) {
+        sStop = true;
+        break;
+      }
+      // 링크가 없으면 화면에서 클릭할 게 없어 그대로 버린다(오너 지적, 2026-09-27 — "링크가 null 안열리면 수집하지마").
+      // 위 산업(01) 게시판과 같은 규칙 — "테마/이슈 10시 Check" 등 일부 항목이 첨부파일 필드 자체가 비어있음(실측).
+      if (!r.hpge_fle_url_cts) continue;
+      const rawTitle = decodeEntities(String(r.rsh_ppr_til_cts ?? "")).replace(DECOR_RE, "").trim();
+      const bm = rawTitle.match(BRACKET_RE);
+      let stockName = bm ? bm[1].trim() : r.rsh_ppr_ser_cd_nm || board.label;
+      const title = bm ? bm[2].trim() : rawTitle;
+      // "전략 인사이드/경제"(투자전략 게시판) — "전략 인사이드/글로벌 전략"·"전략 인사이드/자산배분 전략"과 같은
+      // 대괄호 라벨이지만 부제가 "경제"면 실제로는 거시경제 이슈분석이다(오너 지적 2026-09-27 — "AI 시대
+      // 워시의 질문..."·"한국 메가프로젝트와 잠재성장률"이 투자전략에 가있는데 이슈분석이어야 함). "전략 인사이드/{그 외}"는
+      // 오너가 확인해준 대로 투자전략 그대로 둔다.
+      if (/^전략\s*인사이드\s*\/\s*경제$/.test(stockName)) stockName = "NH 전략인사이드 경제";
+      if (board.ditCd === "04" && /대체투자|부동산/.test(stockName) && !/원자재|commodit/i.test(`${stockName} ${title}`)) continue;
+      // FICC 게시판 글이 실제로는 금(Gold)·유가·구리 등 원자재 얘기인데 괄호 라벨이 없어(예: "N2 FICC 인사이드"
+      // 시리즈명 폴백) "FICC · " 접두어만 붙던 문제(오너 지적 2026-09-27 — "추가 '긴축' 경계에도 저가 금(Gold)
+      // 매수세"가 원자재 이슈분석인데 투자전략에 가 있었음). 다른 증권사의 "{증권사} 원자재" 고정 라벨과
+      // 같은 패턴으로 확정한다.
+      const isCommodityContent = board.ditCd === "04" && /금\s*\(?Gold\)?|원유|유가|구리|Copper|천연가스|Natural\s?Gas|원자재|Commodit(y|ies)/i.test(`${stockName} ${title}`);
+      if (isCommodityContent) stockName = "NH 원자재";
+      else if (board.ditCd === "04") stockName = `FICC · ${stockName}`;
+      const isDomesticFicc = board.ditCd === "04" && /\(국내\)/.test(stockName);
+      const market = isDomesticFicc ? "kr" : (board.forceMarket ?? classifyMarket(`${stockName} ${title}`));
+      if (!market) continue;
+      if (isCommonExcludedContent(`${stockName} ${title}`, "산업")) continue;
+      collected.push({
+        id: r.rsh_ppr_no,
+        date,
+        title: title || rawTitle,
+        stockName,
+        symbol: null,
+        analyst: r.rsh_ppr_dru_emp_fnm ?? "",
+        opinion: "",
+        targetPrice: null,
+        summary: "",
+        pdfUrl: r.hpge_fle_url_cts || null,
+        views: null,
+        category: "산업",
+        board: nhBoard(board.ditCd),
+        market,
+      });
+    }
+    const last = rows[rows.length - 1];
+    sCursor = { no: last.rsh_ppr_no, date: last.rsh_ppr_dru_dt, time: last.rsh_ppr_dru_tm };
+    await sleep(400);
+  }
+}
+
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. API 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log(
@@ -307,17 +518,14 @@ for (const it of collected) {
     excerptCache.set(it.pdfUrl, await extractPdfExcerpt(it.pdfUrl));
     await sleep(500);
   }
-  const { summary, opinion, targetPrice } = excerptCache.get(it.pdfUrl);
+  const { summary, pdfText } = excerptCache.get(it.pdfUrl);
   it.summary = summary;
-  // 산업분석은 특정 종목 얘기가 아니므로 목표주가·투자의견 개념이 없음 —
-  // 본문 발췌(summary)는 유지하되 등급·목표가는 채우지 않는다.
-  if (it.category !== "산업") {
-    it.opinion = opinion;
-    it.targetPrice = targetPrice;
-  }
+  it.pdfText = pdfText;
   if (!it.summary) excerptFailCount++;
 }
 console.log(`✔ 발췌 완료 (실패 ${excerptFailCount}건, PDF ${excerptCache.size}개)`);
+// 투자의견·목표주가 — 공용 추출기(산업분석은 내부에서 건너뜀). PDF 는 위에서 이미 읽었다.
+await enrichResearch(collected, { market: "kr", usePdf: false });
 console.log("  예시:", collected[0]?.summary || "(없음)");
 
 if (DRY_RUN) {
@@ -328,27 +536,47 @@ if (DRY_RUN) {
 // 비상장(unlisted) 항목은 일반 산업분석 풀과 섞이지 않도록 별도 source로
 // 나눠 전송한다(키움/KB 비상장리서치와 동일 패턴).
 const UNLISTED_SOURCE = "NH투자증권 비상장리서치";
-const normalItems = collected.filter((it) => !it.unlisted);
-const unlistedItems = collected.filter((it) => it.unlisted);
-
+// 해외기업분석/투자전략 병합으로 market이 kr/us 둘 다 섞이므로 market×source
+// (비상장 여부)로 나눠 전송 — KB/키움 병합본과 동일한 byGroup 패턴.
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 
-for (const [source, items] of [
-  ["NH투자증권", normalItems],
-  [UNLISTED_SOURCE, unlistedItems],
-]) {
-  if (items.length === 0) continue;
+const byGroup = new Map();
+for (const it of collected) {
+  const source = it.unlisted ? UNLISTED_SOURCE : "NH투자증권";
+  const market = it.market ?? "kr";
+  const key = `${market}::${source}`;
+  if (!byGroup.has(key)) byGroup.set(key, { market, source, items: [] });
+  byGroup.get(key).items.push({
+    id: it.id,
+    date: it.date,
+    title: it.title,
+    stockName: it.stockName,
+    symbol: it.symbol ?? null,
+    analyst: it.analyst,
+    opinion: it.opinion ?? "",
+    targetPrice: it.targetPrice ?? null,
+    summary: it.summary ?? "",
+    pdfUrl: it.pdfUrl,
+    views: it.views ?? null,
+    category: it.category,
+    board: it.board,
+  });
+}
+
+for (const [, group] of byGroup) {
+  const { market, source, items } = group;
   const up = await fetch(IMPORT_URL, {
     method: "POST",
     headers,
-    body: JSON.stringify({ items, source }),
+    body: JSON.stringify({ items, source, market }),
   });
   const upBody = await up.text();
   if (!up.ok) {
-    console.error(`✗ [${source}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    console.error(`✗ [${market}/${source}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }
-  console.log(`\n✔ [${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
+  console.log(`\n✔ [${market}/${source}] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }

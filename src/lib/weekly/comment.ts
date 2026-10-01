@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchShinhanSchedule } from "./shinhan-schedule";
 import {
   BANK_BOJ,
   BANK_BOK,
@@ -49,6 +50,13 @@ import type { ReportWeek } from "./week";
 
 /** 이슈 코멘트 — 사실과 해석을 나눠 담는다(오너 지시 2026-09-22). */
 export interface IssueComment {
+  /** 그 주 실제 화두를 짧게 담은 제목(오너 지시 2026-10-01 — "미국 증시
+   * 밸류에이션이라고 했지만 AI 속도조절론이 화두였다... 단편적으로 정해진
+   * 제목을 쓰는건 금지한다"). `WeeklyIssue.label`(토픽 사전의 고정 분류명,
+   * 빈도 집계용 내부 키)을 화면 제목으로 그대로 쓰지 않고, facts 에 실린
+   * 그 주 근거를 보고 모델이 매주 새로 뽑는다 — 없으면 label 로 폴백
+   * (render.ts). */
+  headline: string | null;
   /** 확인된 사실. 각 줄에 구체 수치(금액·비율·건수·레벨)를 담는다. */
   facts: string[];
   /** 그 사실들이 왜 중요한지, 무엇을 주시해야 하는지. */
@@ -119,6 +127,10 @@ const INPUT_DATA_DESC = `# 입력 데이터
 - economyEvidence: 관세·통상/중국 경기/고용/브라질 국채/금/원달러 환율/
   구리 등 산업금속/BDI·해운운임 주제로 이미 수집된 증권사 리포트·뉴스
   근거(근거 있는 주제만 포함). economySummary 를 쓸 때 최우선으로 활용한다.
+- nextWeekSchedule: 신한투자증권 「이슈 및 섹터 스케줄」에서 가져온 nextWeek 기간의
+  거시·시장 일정(해외/국내 지표·이슈, 없을 수 있음). calendar 를 쓸 때 **반드시
+  참조**하는 1차 후보 목록이다 — 다만 그대로 옮기지 말고 웹검색으로 날짜가 확인되는
+  항목만 채택한다(검증). 요일·시차(현지시간)가 애매하면 뺀다.
 - sectors: 이번 주 한국·미국·일본 증시의 상승/하락 상위 섹터(등락률은 코드가
   이미 계산해 확정). 왜 그 섹터가 그렇게 움직였는지는 안 채워져 있다 —
   네가 웹검색으로 원인을 찾아 채운다.
@@ -175,7 +187,8 @@ ${INPUT_DATA_DESC}
    전혀 없으면 그 줄은 통째로 뺀다(세 줄을 억지로 채우지 마라).
    policyEvidence 에도 없고 웹검색으로도 확인 안 되는 은행만 아는 범위
    까지 쓰고, 셋 다 없으면 null 로 남긴다.
-4. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. "관련
+4. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. 입력의
+   nextWeekSchedule(신한투자증권 스케줄)을 반드시 먼저 참조하고, 웹검색으로 확인되는 것만 담는다. "관련
    기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
    예정된 이벤트를 날짜별로 확인해서 적는다. 대상: 중앙은행 회의·주요
    경제지표 발표일·옵션선물 동시만기일 같은 거시·시장 이벤트 **더하여
@@ -224,9 +237,31 @@ ${INPUT_DATA_DESC}
      채워라.** 같은 그룹(예: 채권) 안에서 더 크게 움직인 자산을 건너뛰고
      덜 움직인 자산만 채우는 건 앞뒤가 안 맞다(예: 미국채 3년이 10년보다
      더 움직였는데 10년만 쓰는 것 — 금지).
-2. **issues 는 사실(facts)과 해석(reading)을 반드시 나눠서 쓴다.** 한
-   문단에 섞으면 어디까지가 확인된 사실인지 구분이 안 된다(오너 지시
-   2026-09-22).
+2. **issues 는 headline(제목)·사실(facts)·해석(reading)을 반드시 나눠서
+   쓴다.** 한 문단에 섞으면 어디까지가 확인된 사실인지 구분이 안 된다
+   (오너 지시 2026-09-22).
+   - **headline: 그 주 실제 화두를 담은 자연스러운 제목, 10~30자.** issues
+     항목의 label 은 빈도를 집계하려고 미리 정해 둔 넓은 분류명일 뿐이지
+     제목이 아니다 — **label 을 그대로 베끼거나 label 의 동의어로만
+     채우는 건 금지**(오너 지시 2026-10-01 — "미국 증시 밸류에이션이라고
+     했지만 AI 속도조절론이 화두였다", "단편적으로 정해진 제목을 쓰는건
+     금지한다", "주제의 선정이 자연스러워야 한다" — 증권사 데일리 시황
+     ("AI 추론 수요 확산과 유가 급락으로 반도체 주도 강세"처럼 그 주의
+     여러 동인을 원인→결과로 자연스럽게 엮은 한 문구)과 같은 수준을
+     목표로 한다). facts 에 실제로 나오는 구체적 사건·동인의 이름을
+     붙이고, 그 주 facts 에 서로 관련된 동인이 여럿이면 "A에 B까지
+     겹치며 C" 식으로 자연스럽게 엮어 써도 된다(label 하나당 사건 하나로
+     쪼개 쓸 필요 없음).
+     - 나쁜 예(금지): label 이 "미국 증시·밸류에이션"일 때 headline 을
+       "미국 증시 밸류에이션"·"미국 증시 동향"처럼 label 과 같은 말로 채움.
+     - 좋은 예: 그 주 facts 가 빅테크 AI 투자 속도 논쟁이면 "AI 속도조절론
+       부상", facts 가 장기 국채 금리·텀프리미엄 급등이면 "글로벌 장기금리
+       급등"(label 이 "글로벌 금리시장"이어도 "미국채 10년물 급등"처럼 그
+       주 실제 진원지를 구체적으로 좁혀도 된다), facts 에 AI 수요·유가·
+       반도체가 함께 나오면 "AI 수요 확산과 유가 급락에 반도체 주도 강세"
+       처럼 엮어 쓴다.
+     - facts 만으로 구체적인 제목을 못 뽑겠으면 빈 문자열로 남겨라(그러면
+       화면이 label 로 대체한다) — label 을 억지로 바꿔 쓰지 말 것.
    - **facts: 2~4개.** 이번 주 실제로 일어난 일만. 각 항목에 **구체적인
      수치를 반드시 하나 이상** 넣는다 — 금액, 비율, 건수, 지수 레벨,
      날짜 중 무엇이든. 주체(회사·기관·국가)를 명시한다.
@@ -260,7 +295,7 @@ ${INPUT_DATA_DESC}
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
-{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": {"facts": ["사실1", "사실2"], "reading": "해석"}}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
+{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": {"headline": "그 주 화두 제목(구체적으로, label 복사 금지)", "facts": ["사실1", "사실2"], "reading": "해석"}}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
 snapshot·issues·sectors 에 없는 키를 새로 만들지 말 것.`;
 
 interface CommentPayload {
@@ -662,7 +697,7 @@ interface MacroResponse {
 
 interface CommentsOnlyResponse {
   snapshot?: Record<string, string>;
-  issues?: Record<string, string | { facts?: unknown; reading?: unknown }>;
+  issues?: Record<string, string | { headline?: unknown; facts?: unknown; reading?: unknown }>;
   sectors?: Record<string, string>;
 }
 
@@ -1020,7 +1055,8 @@ export async function generateWeeklyComments(
   // 로직이 있는 이유)의 실패율을 더 키운다(실측 — sectors 추가 이후 "다음 주
   // 일정"이 옛 기사-표 폴백으로 자주 떨어짐). 매크로 콜에는 sectors 를 뺀
   // 별도 payload 를 준다.
-  const macroJson = JSON.stringify({ ...payload, sectors: undefined });
+  const nextWeekSchedule = await fetchShinhanSchedule(payload.nextWeek.start, payload.nextWeek.end);
+  const macroJson = JSON.stringify({ ...payload, sectors: undefined, nextWeekSchedule });
 
   const [macroCall, commentCall] = await Promise.all([
     callWithGroundingRetry(MACRO_PROMPT, macroJson, "매크로", modelOverride),
@@ -1188,9 +1224,17 @@ export async function generateWeeklyComments(
     // 경우가 있어서다.
     const raw =
       typeof value === "string"
-        ? { facts: [] as unknown[], reading: value }
-        : ((value ?? {}) as { facts?: unknown; reading?: unknown });
+        ? { headline: undefined as unknown, facts: [] as unknown[], reading: value }
+        : ((value ?? {}) as { headline?: unknown; facts?: unknown; reading?: unknown });
     const rawFacts = Array.isArray(raw.facts) ? raw.facts : [];
+
+    // headline — label 을 그대로 베끼면 폴백(render.ts 가 label 을 쓰도록)과
+    // 다를 게 없으니 null 로 버린다(오너 지시 2026-10-01 — "단편적으로
+    // 정해진 제목을 쓰는건 금지"). 숫자가 섞여도(예: "유가 100달러 돌파")
+    // 근거 없는 수치면 verify() 가 걸러낸다 — facts/reading 과 동일 안전망.
+    const rawHeadline = String(raw.headline ?? "").trim();
+    const hv = rawHeadline ? verify(rawHeadline, commentTrustGrounded) : { text: "", reason: null };
+    const headline = hv.text && hv.text.trim() !== canonical.trim() ? hv.text : null;
 
     // 사실은 줄 단위로 검증한다 — 한 줄이 근거 없는 수치로 걸려도 나머지
     // 사실까지 같이 버리지 않기 위해서다(해석과 달리 서로 독립적).
@@ -1204,7 +1248,7 @@ export async function generateWeeklyComments(
     const rd = verify(String(raw.reading ?? ""), commentTrustGrounded);
 
     if (facts.length > 0 || rd.text) {
-      comments.issues.set(canonical, { facts, reading: rd.text });
+      comments.issues.set(canonical, { headline, facts, reading: rd.text });
       // 일부만 걸러졌으면 그 사유도 남긴다 — 검수 화면에서 왜 사실이
       // 적은지 알 수 있게.
       const partial = [...factReasons, ...(rd.reason ? [`해석: ${rd.reason}`] : [])];

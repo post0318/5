@@ -25,7 +25,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { PDFParse } from "pdf-parse";
+import { enrichResearch } from "./lib/research-extract.mjs";
+import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -50,28 +51,18 @@ const MAX_PAGES = Number(arg("pages")) || 10;
 
 const LIST_URL = "https://www.sangsanginib.com/notice/getNoticeList";
 const CMS_CD = "CM0079"; // 기업리포트
+const BOARD_LABEL = "상상인증권 > 리서치 > 기업리포트(CM0079)"; // item 의 board 필드(분류 대조용)
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/** 국내 리포트라 목표주가는 "N원" 표기. */
-function extractTargetPrice(text) {
-  const m = String(text ?? "").match(/목표\s*주가[^\d]{0,16}([\d,]{4,12})\s*원/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, ""));
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-function extractOpinion(text) {
-  const m = String(text ?? "").match(
-    /투자의견[^가-힣A-Za-z]{0,8}(매수|적극매수|중립|보유|매도|비중확대|비중축소|Buy|Hold|Sell|Not\s*Rated|N\.?R\.?)/i,
-  );
-  return m ? m[1].replace(/\s+/g, " ").trim() : "";
-}
 
 async function fetchPage(startRow) {
   const res = await fetch(LIST_URL, {
@@ -96,19 +87,6 @@ async function fetchPage(startRow) {
   return { rows: node?.getNoticeList ?? [], total: node?.getCount ?? 0 };
 }
 
-async function pdfText(url) {
-  try {
-    const res = await fetch(url, { headers: { "User-Agent": UA } });
-    if (!res.ok) return "";
-    const parser = new PDFParse({ data: Buffer.from(await res.arrayBuffer()) });
-    const { text } = await parser.getText();
-    await parser.destroy();
-    return String(text ?? "");
-  } catch {
-    return "";
-  }
-}
-
 console.log(`▶ 상상인증권 기업리포트 수집: 최근 ${DAYS}일, 최대 ${MAX_PAGES}페이지`);
 // 항목 날짜가 'YYYY-MM-DD'(=UTC 자정)라 컷오프도 자정으로 맞춘다.
 const cutoff = new Date(new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10));
@@ -130,6 +108,7 @@ for (let page = 0; page < MAX_PAGES && !stop; page++) {
     if (!/^\d{6}$/.test(code)) continue; // 종목 없는 공지/기타
     // 제목이 "종목명(코드):부제" 형식이라 부제만 남긴다.
     const title = String(r.TITLE ?? "").replace(/^.*?\(\d{6}\)\s*[:：]?\s*/, "").trim();
+    if (isCommonExcludedContent(`${String(r.STOCK_NM ?? "").trim()} ${title}`, "기업")) continue;
     collected.push({
       id: String(r.NT_NO),
       date,
@@ -145,6 +124,7 @@ for (let page = 0; page < MAX_PAGES && !stop; page++) {
           ? `https://www.sangsanginib.com/_upload/attFile/${CMS_CD}/${CMS_CD}_${r.NT_NO}_1.pdf`
           : null,
       views: typeof r.HIT === "number" ? r.HIT : null,
+      board: BOARD_LABEL,
     });
   }
   await sleep(400);
@@ -152,7 +132,12 @@ for (let page = 0; page < MAX_PAGES && !stop; page++) {
 
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. API 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건 (사이트 전체 ${total}건)`);
 console.log(
@@ -161,19 +146,8 @@ console.log(
 );
 
 console.log(`▶ 투자의견·목표주가 추출 중 (${collected.length}건)...`);
-for (const it of collected) {
-  if (!it.pdfUrl) continue;
-  const text = await pdfText(it.pdfUrl);
-  if (text) {
-    it.opinion = extractOpinion(text);
-    it.targetPrice = extractTargetPrice(text);
-  }
-  await sleep(300);
-}
-console.log(
-  `✔ 보강 완료 — 등급 ${collected.filter((i) => i.opinion).length}/${collected.length}` +
-    ` · 목표주가 ${collected.filter((i) => i.targetPrice != null).length}/${collected.length}`,
-);
+// 공용 추출기(국내 규칙) — 본문 → PDF 순.
+await enrichResearch(collected, { market: "kr", sleepMs: 300 });
 
 if (DRY_RUN) {
   console.log("\n--dry-run: 전송 생략");
@@ -182,6 +156,7 @@ if (DRY_RUN) {
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 const up = await fetch(IMPORT_URL, {
   method: "POST",

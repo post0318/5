@@ -37,6 +37,8 @@
  */
 
 import { readFileSync } from "node:fs";
+import { resolveKrStock, headlineAfterCompany } from "./lib/company-match.mjs";
+import { isFxContent, isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -64,10 +66,16 @@ const BOARDS = [
   { cmsCd: "CM0338", label: "산업" }, // 산업리포트 — STOCK_NM 을 그대로 씀
   { cmsCd: "CM0078", label: "시장" }, // 주식시장 — STOCK_NM 이 전부 "시장전체"라 브라켓 필요
 ];
+// 리포트가 원래 있던 사이트 게시판(위 BOARDS 주석의 화면 이름) — item 의 board 필드(분류 대조용).
+const BOARD_NAME = { CM0338: "산업리포트", CM0078: "주식시장" };
+const boardLabel = (cmsCd) => `상상인증권 > 리서치 > ${BOARD_NAME[cmsCd] ?? cmsCd}(${cmsCd})`;
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/shinhan-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
+// Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
+// 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).
+const VERCEL_BYPASS = (ENV.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
@@ -143,6 +151,47 @@ for (const board of BOARDS) {
         stockName = bm ? bm[1].trim() : "시장";
         title = bm ? (bm[2].trim() || bm[1].trim()) : rawTitle;
       }
+      // 매크로 성격 라벨(경제·채권·원자재)은 산업리포트(STOCK_NM)·주식시장(대괄호 라벨) 어느
+      // 게시판에서 오든 다른 증권사와 같은 "브로커 + 라벨" 고정 이름으로 바꿔 앱이 거시경제
+      // 이슈분석/환율분석으로 분류하게 한다(오너 지적 2026-09-26 — "경제는 거시경제이다 왜
+      // 산업에 계속붙이나"). FX 내용이면 " FX" 를 붙인다(환율분석).
+      if (/^(경제|채권|원자재)$/.test(stockName)) {
+        stockName = `상상인 ${stockName}${isFxContent(rawTitle) ? " FX" : ""}`;
+      }
+      // 산업리포트 게시판에 섞인 종목 코멘트("HD현대중공업 증설 공시 코멘트")는 종목분석으로
+      // 승격한다 — 제목이 국내 상장사명으로 시작하면(공통 lib, 조사 경계 판정 포함).
+      const hit = board.cmsCd === "CM0338" && !bm ? resolveKrStock(rawTitle) : null;
+      if (hit) {
+        const head = headlineAfterCompany(rawTitle, hit.stockName) || rawTitle;
+        if (isCommonExcludedContent(`${hit.stockName} ${head}`, "기업")) continue;
+        collected.push({
+          id: String(r.NT_NO),
+          date,
+          title: head,
+          stockName: hit.stockName,
+          symbol: hit.symbol,
+          analyst: String(r.NM ?? "").trim(),
+          opinion: "",
+          targetPrice: null,
+          summary: "",
+          pdfUrl:
+            r.FILE_YN === "Y"
+              ? `https://www.sangsanginib.com/_upload/attFile/${board.cmsCd}/${board.cmsCd}_${r.NT_NO}_1.pdf`
+              : null,
+          views: typeof r.HIT === "number" ? r.HIT : null,
+          category: "기업",
+          board: boardLabel(board.cmsCd),
+        });
+        continue;
+      }
+      // "Quant Variation Vol.N - Latent Alpha…" 퀀트 리포트 — 수집 제외(오너 지시 2026-09-27).
+      if (/Quant\s*Variation/i.test(`${stockName} ${title}`)) continue;
+      // "[상상인 US Monitor]" 미국시황 시리즈 — 수집 제외(오너 지시 2026-09-27, "상상인은 미국시황 수집제외").
+      if (/US\s*Monitor/i.test(stockName)) continue;
+      // "상상인 Macro Daily" — 거의 매일 올라오는 국내 시황 코멘트. 수집 제외(오너 지시 2026-10-01,
+      // "시황분석에서 상상인 macro daily는 수집제외").
+      if (/Macro\s*Daily/i.test(`${stockName} ${title}`)) continue;
+      if (isCommonExcludedContent(`${stockName} ${title}`, "산업")) continue;
       collected.push({
         id: String(r.NT_NO),
         date,
@@ -159,6 +208,7 @@ for (const board of BOARDS) {
             : null,
         views: typeof r.HIT === "number" ? r.HIT : null,
         category: "산업",
+        board: boardLabel(board.cmsCd),
       });
     }
     await sleep(400);
@@ -168,7 +218,12 @@ for (const board of BOARDS) {
 
 if (collected.length === 0) {
   console.error("✗ 파싱 결과 0건. API 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
+  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
+  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
+  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
+  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
+  process.exit(0);
 }
 console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log(
@@ -183,6 +238,7 @@ if (DRY_RUN) {
 
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
+  if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 const up = await fetch(IMPORT_URL, {
   method: "POST",

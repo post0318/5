@@ -29,13 +29,17 @@ const US_SOURCES = [
 // 국내는 해외 IB 인사이트가 없어(오너 지시, 2026-09-24 — "국내는 인사이트가
 // 없다. 따라서 미국은 유지하나 한국은 인사이트를 비상장 리서치로 대체한다")
 // 키움증권 CI 게시판의 비상장(프리IPO) 기업 리포트로 대체한다.
-const KR_SOURCES = [
+// 비상장 리서치는 국내·미국 공용(오너 지시 2026-09-27 — "미국과 중국도 비상장을 추가한다") — 같은 증권사 source 를 시장별로 재사용한다.
+const UNLISTED_SOURCES = [
   { key: "all", label: "전체" },
   { key: "키움증권 비상장리서치", label: "키움증권" },
   { key: "KB증권 비상장리서치", label: "KB증권" },
   { key: "NH투자증권 비상장리서치", label: "NH투자증권" },
+  { key: "신한투자증권 비상장리서치", label: "신한투자증권" },
+  { key: "삼성증권 비상장리서치", label: "삼성증권" },
+  { key: "한화투자증권 비상장리서치", label: "한화투자증권" },
 ] as const;
-type SourceKey = (typeof US_SOURCES)[number]["key"] | (typeof KR_SOURCES)[number]["key"];
+type SourceKey = (typeof US_SOURCES)[number]["key"] | (typeof UNLISTED_SOURCES)[number]["key"];
 
 function fmtAgo(iso: string): string {
   const days = Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000);
@@ -87,17 +91,17 @@ function Pager({
  * 보여준다. 같은 API·같은 인프라(`INSIGHT_SOURCES`)를 재사용하므로
  * 컴포넌트는 market에 따라 제목·소스탭·안내문구만 바꾼다.
  */
-export function InsightsBoard({ market }: { market: MarketId }) {
+export function InsightsBoard({ market, kind }: { market: MarketId; kind: "insight" | "unlisted" }) {
   const [page, setPage] = useState(1);
-  const isKr = market === "kr";
-  const SOURCES = isKr ? KR_SOURCES : US_SOURCES;
+  const isUnlisted = kind === "unlisted";
+  const SOURCES = isUnlisted ? UNLISTED_SOURCES : US_SOURCES;
   const [source, setSource] = useState<SourceKey>("all");
 
   const q = useQuery({
-    queryKey: ["insights-research", market, source],
+    queryKey: ["insights-research", market, kind, source],
     queryFn: () =>
       apiFetch<{ items: ShinhanResearchDoc[] }>(
-        `/api/research/insights?market=${market}${source === "all" ? "" : `&source=${encodeURIComponent(source)}`}`,
+        `/api/research/insights?market=${market}&kind=${kind}${source === "all" ? "" : `&source=${encodeURIComponent(source)}`}`,
       ),
     staleTime: 30 * 60_000,
   });
@@ -115,12 +119,12 @@ export function InsightsBoard({ market }: { market: MarketId }) {
   return (
     <div className="space-y-3">
       <div>
-        <h1 className="text-xl font-semibold">{isKr ? "비상장 리서치" : "인사이트"}</h1>
+        <h1 className="text-xl font-semibold">{isUnlisted ? "비상장 리서치" : "인사이트"}</h1>
       </div>
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
           <CardTitle className="text-sm">
-            {isKr ? "비상장(프리IPO) 기업 리서치" : "주요 해외IB 리서치 (딜레이자료)"}
+            {isUnlisted ? "비상장(프리IPO) 기업 리서치" : "주요 해외IB 리서치 (딜레이자료)"}
             {q.data && <span className="text-muted-foreground ml-1.5 text-xs font-normal">({items.length})</span>}
           </CardTitle>
           <div className="flex flex-wrap gap-1">
@@ -141,7 +145,7 @@ export function InsightsBoard({ market }: { market: MarketId }) {
             ))}
           </div>
         </CardHeader>
-        {!isKr && (
+        {!isUnlisted && (
           <p className="text-muted-foreground/80 -mt-1 px-6 text-[11px]">
             영문 원문 그대로 표시됩니다(번역 없음).
           </p>
@@ -155,7 +159,7 @@ export function InsightsBoard({ market }: { market: MarketId }) {
           )}
           {q.data && items.length === 0 && (
             <p className="text-muted-foreground py-4 text-sm">
-              {isKr ? "아직 수집된 비상장 리서치가 없습니다." : "아직 수집된 인사이트가 없습니다."}
+              {isUnlisted ? "아직 수집된 비상장 리서치가 없습니다." : "아직 수집된 인사이트가 없습니다."}
             </p>
           )}
           {q.data && items.length > 0 && (

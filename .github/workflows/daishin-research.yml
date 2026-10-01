@@ -1,0 +1,27 @@
+name: 대신증권 리서치 수집
+
+# CLAUDE.md 방침(오너 승인 예외, 2026-09-25): money2.daishin.com 모바일 웹
+# 리서치(로그인 불필요)를 하루 2회, 개인용으로만 조회한다. robots.txt 는 방화벽이
+# 요청을 400 으로 막아 확인 불가 — 다른 예외들과 동일 조건(개인용·저빈도,
+# 요청 간격 ≥400ms)으로 진행. 상세는 scripts/collect-daishin-research.mjs 헤더.
+
+on:
+  schedule:
+    - cron: "28 23 * * *" # 23:28 UTC = 08:28 KST(1차)
+    - cron: "28 3 * * *" # 03:28 UTC = 12:28 KST(2차)
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # 수집 스크립트가 pdf-parse 를 import 한다(로그인 없이 PDF 접근 가능).
+      - run: npm ci
+      - run: node scripts/collect-daishin-research.mjs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
