@@ -37,7 +37,8 @@ async function annualReportRcpNo(corpCode: string, year: number): Promise<string
       `&bgn_de=${year + 1}0101&end_de=${year + 1}0930&pblntf_detail_ty=A001&page_count=100`,
     { revalidate: 60 * 60 * 24 },
   );
-  const rows = (res.list ?? []).filter((r) => /사업보고서/.test(r.report_nm));
+  // 보고서명의 대상 연도가 맞는 것만 — 이듬해 목록에 지난 연도 정정본이 섞인다(현대차 2024-03 "[기재정정]사업보고서 (2022.12)")
+  const rows = (res.list ?? []).filter((r) => /사업보고서/.test(r.report_nm) && r.report_nm.includes(`(${year}.`));
   rows.sort((a, b) => b.rcept_no.localeCompare(a.rcept_no)); // 최신(정정본) 우선
   return rows[0]?.rcept_no ?? null;
 }
@@ -73,6 +74,18 @@ function pickFact(xml: string, concepts: string[], prefix: string): number | nul
 
 const DEP_C = ["AdjustmentsForDepreciationExpense", "AdjustmentsForDepreciationAndAmortisationExpense"];
 const AMO_C = ["AdjustmentsForAmortisationExpense"];
+// 따로 적은 사용권자산·투자부동산 감가상각은 더한다(scripts/populate-kr-da.mjs 와 같은 규칙 — 한국 EV 에 리스부채가 들어가므로)
+// [dart 표준 태그, 없을 때 회사 고유 태그] — 현대로템은 사용권자산 상각을 회사 고유 태그로 단다
+const DEP_EXTRA: [string, RegExp][] = [
+  ["AdjustmentsForDepreciationRightofuseAssets", /^Adjustments?For(?:Depreciation|Amorti[sz]ation)\w*?Right[Oo]f[Uu]seAssets/],
+  ["AdjustmentsForDepreciationInvestmentProperty", /^Adjustments?ForDepreciation\w*?InvestmentPropert/],
+];
+/** 회사 고유(entity…) 태그 중 이름이 맞는 첫 값 */
+function pickEntity(xml: string, nameRe: RegExp, prefix: string): number | null {
+  for (const m of xml.matchAll(/<entity\d+:(\w+)\b[^>]*contextRef="([^"]+)"[^>]*>(-?\d+(?:\.\d+)?)</g))
+    if (nameRe.test(m[1]) && ctxOk(m[2], prefix)) return Number(m[3]);
+  return null;
+}
 
 /** 한 사업보고서(rcpNo)에서 당기·전기 2개년 D&A 추출. */
 async function fromReport(
@@ -95,7 +108,9 @@ async function fromReport(
     [year, `CFY${year}dFY`],
     [year - 1, `PFY${year - 1}dFY`],
   ] as [number, string][]) {
-    const dep = pickFact(xml, DEP_C, prefix);
+    const dep0 = pickFact(xml, DEP_C, prefix);
+    // 기본 감가상각 줄이 없으면 부분합이 되므로 비운다
+    const dep = dep0 == null ? null : DEP_EXTRA.reduce((a, [c, ent]) => a + (pickFact(xml, [c], prefix) ?? pickEntity(xml, ent, prefix) ?? 0), dep0);
     const amo = pickFact(xml, AMO_C, prefix);
     if (dep != null || amo != null) out[y] = { depreciation: dep, amortisation: amo };
   }
