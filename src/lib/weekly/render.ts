@@ -60,12 +60,18 @@ function movers(rows: SnapshotRow[]): string {
 function issueBlock(issue: WeeklyIssue, rank: number, comment: IssueComment | undefined): string {
   const lines: string[] = [];
 
-  lines.push(`### ${rank}. ${issue.label}`);
+  // 제목은 그 주 실제 화두를 담은 동적 headline 우선, 없으면 토픽 사전의
+  // 고정 분류명(label, 빈도 집계용 내부 키)으로 폴백한다(오너 지시
+  // 2026-10-01 — "미국 증시 밸류에이션이라고 했지만 AI 속도조절론이
+  // 화두였다", "단편적으로 정해진 제목을 쓰는건 금지한다").
+  lines.push(`### ${rank}. ${comment?.headline || issue.label}`);
   lines.push("");
 
-  // 사실과 해석을 눈으로 구분되게 나눠 놓는다(오너 지시 2026-09-22 — 타사
-  // 시황처럼 "사실 → 해석" 2단). 한 문단에 섞여 있으면 어디까지가 확인된
-  // 사실인지 읽는 사람이 가려낼 수 없다.
+  // 사실·해석을 **"사실"/"해석" 같은 라벨 없이** 자연스럽게 이어 쓴다(오너
+  // 지시 2026-10-01 — "굳이 사실, 해석을 명시하면서 하는 것은 금지한다.
+  // 사실관계를 적시하고 자연스럽게 이에 대한 해석을 이어주면 된다"). 데이터
+  // 상으로는 여전히 facts/reading 을 나눠 받는다(검증 단계에서 숫자 근거를
+  // 줄 단위로 대조하기 위해서일 뿐, 화면 표시 방식과는 별개).
   const facts = comment?.facts ?? [];
   const reading = comment?.reading ?? "";
   if (facts.length === 0 && !reading) {
@@ -73,13 +79,11 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: IssueComment | un
     lines.push("");
   } else {
     if (facts.length > 0) {
-      lines.push("**사실**");
-      lines.push("");
       for (const f of facts) lines.push(`- ${f}`);
       lines.push("");
     }
     if (reading) {
-      lines.push(`**해석** → ${reading}`);
+      lines.push(reading);
       lines.push("");
     }
   }
