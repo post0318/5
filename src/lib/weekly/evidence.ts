@@ -161,6 +161,79 @@ async function fetchEarningsForTickers(tickers: string[]): Promise<Map<string, I
 const EARNINGS_REPORT_LAG_MIN_DAYS = 3 * 7;
 const EARNINGS_REPORT_LAG_MAX_DAYS = 6 * 7;
 
+/** facts 줄 하나의 목표 길이 — 너무 길면 요약문 전체를 그대로 박아 넣은
+ * 것처럼 보인다. */
+const FACT_LINE_MAX_CHARS = 140;
+/** 이슈 하나에 붙일 facts 최대 개수 — comment.ts 프롬프트의 "facts 3~6개"
+ * 지시와 맞춘다. */
+const FACTS_PER_ISSUE = 6;
+
+function truncate(s: string, max: number): string {
+  const t = s.trim();
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+}
+
+/**
+ * facts 를 **코드가 reports/news 증거에서 직접 포맷**한다(오너 지시
+ * 2026-10-01 — "핵심이슈를 뽑아서 작성할때 깊이가 이정도가 필요하다.
+ * LLM아니어도 가능하지않냐?" → "해봐"). 증권사 리포트 제목·뉴스 제목
+ * (+네이버 요약문)은 이미 실제 데이터라 LLM 이 웹검색으로 다시 찾아
+ * 검증할 필요가 없다 — 그 비용·환각 위험을 통째로 없앤다. LLM 은 이
+ * facts 를 입력으로 받아 headline·reading 만 쓴다(comment.ts).
+ *
+ * 숫자가 든 줄을 우선한다 — "구체적인 수치"가 facts 의 핵심 요건이었고
+ * (기존 LLM 프롬프트 규칙과 동일 기준), 뉴스는 제목보다 네이버 요약문
+ * (excerpt)에 수치가 더 많이 들어있다(실측). 중복은 정규화한 접두어로
+ * 간단히 걸러낸다 — 같은 사건을 다루는 제목·요약이 흔히 겹친다.
+ */
+/**
+ * `usedPrefixes` 는 이미 **다른 issue**에서 쓴 fact 를 걸러내는 공유
+ * Set 이다(오너 지적 2026-10-01 — "유가가 반복하네": LLM 이 facts를 직접
+ * 쓰던 시절, 서로 다른 issue 가 같은 WTI 유가 급락 수치를 거의 그대로
+ * 반복해 썼다). facts 가 이제 코드 생성이라 같은 뉴스/리포트가 여러 주제
+ * 정규식에 동시에 걸리면 똑같은 중복이 재발할 수 있어, 호출부(enrichTopIssues)
+ * 가 이슈 순서대로 처리하며 이 Set 을 누적해 넘긴다 — 먼저 처리된(점수 높은)
+ * 이슈가 우선권을 갖는다.
+ */
+function buildFactsFromEvidence(
+  issue: Pick<WeeklyIssue, "reports" | "news">,
+  usedPrefixes: Set<string>,
+): string[] {
+  const candidates: { text: string; hasNumber: boolean; date: string }[] = [];
+  for (const n of issue.news) {
+    const body = (n.excerpt?.trim() || n.title.trim()).replace(/\s+/g, " ");
+    if (!body) continue;
+    const date = n.publishedAt.slice(0, 10);
+    candidates.push({
+      text: truncate(`${body} (${n.source}, ${date})`, FACT_LINE_MAX_CHARS),
+      hasNumber: /\d/.test(body),
+      date,
+    });
+  }
+  for (const r of issue.reports) {
+    const title = r.title.trim().replace(/\s+/g, " ");
+    if (!title) continue;
+    candidates.push({
+      text: truncate(`${title} (${r.source}, ${r.date})`, FACT_LINE_MAX_CHARS),
+      hasNumber: /\d/.test(title),
+      date: r.date,
+    });
+  }
+
+  // 숫자 포함 우선, 그다음 최신순.
+  candidates.sort((a, b) => Number(b.hasNumber) - Number(a.hasNumber) || b.date.localeCompare(a.date));
+
+  const out: string[] = [];
+  for (const c of candidates) {
+    const prefix = c.text.replace(/\s+/g, "").slice(0, 16);
+    if (usedPrefixes.has(prefix)) continue;
+    usedPrefixes.add(prefix);
+    out.push(c.text);
+    if (out.length >= FACTS_PER_ISSUE) break;
+  }
+  return out;
+}
+
 export async function enrichTopIssues(
   issues: WeeklyIssue[],
   week: ReportWeek,
@@ -187,6 +260,7 @@ export async function enrichTopIssues(
     })(),
   ]);
 
+  const usedFactPrefixes = new Set<string>();
   return issues.map((issue) => {
     const tickers = EARNINGS_TICKERS_BY_TOPIC[issue.label];
     const weekEndMs = Date.parse(`${week.weekEnd}T00:00:00Z`);
@@ -202,6 +276,7 @@ export async function enrichTopIssues(
     const metrics = metricsByTopic.get(issue.label);
     return {
       ...issue,
+      facts: buildFactsFromEvidence(issue, usedFactPrefixes),
       ...(earnings && earnings.length > 0 ? { earnings } : {}),
       ...(metrics && metrics.length > 0 ? { metrics } : {}),
     };

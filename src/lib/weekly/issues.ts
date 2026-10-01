@@ -90,6 +90,16 @@ export interface WeeklyIssue {
   searchInterest: number | null;
   reports: IssueEvidenceReport[];
   news: IssueEvidenceNews[];
+  /**
+   * reports/news 에서 **코드가 직접** 뽑아 포맷한 사실 줄(오너 지시
+   * 2026-10-01 — "핵심이슈를 뽑아서 작성할때 깊이가 이정도가 필요하다.
+   * LLM아니어도 가능하지않냐?"). 상위 3개로 뽑힌 뒤에만 채워진다
+   * (`evidence.ts` enrichTopIssues) — 그 전엔 reports/news 가 가족
+   * 병합(selectTopIssues) 전이라 최종본이 아니다. LLM 은 이제 facts 를
+   * 쓰지 않고 이 줄들을 입력으로 받아 headline·reading 만 쓴다 — 실제
+   * 리포트·뉴스 제목이라 숫자 검증(verify) 대상이 아니다(이미 진짜 데이터).
+   */
+  facts: string[];
   /** 상위 3개로 뽑힌 뒤에만 채워진다(`evidence.ts` enrichTopIssues) */
   earnings?: IssueEvidenceEarnings[];
   metrics?: IssueEvidenceMetric[];
@@ -356,6 +366,7 @@ export async function buildWeeklyIssues(
     searchInterest: r.searchInterest,
     reports: r.reports.slice(0, 3),
     news: r.newsItems.slice(0, 3),
+    facts: [], // selectTopIssues 의 가족 병합 전이라 미완성 — enrichTopIssues 가 최종 계산
   }));
 
   return scored

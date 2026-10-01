@@ -69,10 +69,13 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: IssueComment | un
 
   // 사실·해석을 **"사실"/"해석" 같은 라벨 없이** 자연스럽게 이어 쓴다(오너
   // 지시 2026-10-01 — "굳이 사실, 해석을 명시하면서 하는 것은 금지한다.
-  // 사실관계를 적시하고 자연스럽게 이에 대한 해석을 이어주면 된다"). 데이터
-  // 상으로는 여전히 facts/reading 을 나눠 받는다(검증 단계에서 숫자 근거를
-  // 줄 단위로 대조하기 위해서일 뿐, 화면 표시 방식과는 별개).
-  const facts = comment?.facts ?? [];
+  // 사실관계를 적시하고 자연스럽게 이에 대한 해석을 이어주면 된다"). facts
+  // 는 이제 LLM 이 아니라 **코드**가 issue.reports/news 에서 직접 뽑아
+  // 채운 값이다(오너 지시 — "핵심이슈를 뽑아서 작성할때 깊이가 이정도가
+  // 필요하다. LLM아니어도 가능하지않냐?" → "해봐", evidence.ts
+  // `buildFactsFromEvidence`) — comment 가 아니라 issue 에서 읽는다.
+  // reading 만 여전히 LLM(comment) 몫.
+  const facts = issue.facts;
   const reading = comment?.reading ?? "";
   if (facts.length === 0 && !reading) {
     lines.push("_(코멘트가 생성되지 않았습니다 — 재생성하거나 편집기에서 직접 작성하세요)_");

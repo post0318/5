@@ -48,18 +48,24 @@ import type { ReportWeek } from "./week";
  * 여전히 10~20센트 수준.
  */
 
-/** 이슈 코멘트 — 사실과 해석을 나눠 담는다(오너 지시 2026-09-22). */
+/**
+ * 이슈 코멘트 — headline·reading 만 담는다(오너 지시 2026-10-01 — "핵심
+ * 이슈를 뽑아서 작성할 때 깊이가 이 정도는 필요하다. LLM 아니어도
+ * 가능하지 않냐?" → "해봐"). **facts 는 더 이상 LLM 이 쓰지 않는다** —
+ * `WeeklyIssue.facts`(evidence.ts `buildFactsFromEvidence`)가 그 이슈의
+ * 증권사 리포트·뉴스 제목에서 코드로 직접 뽑아 포맷한다(이미 실제
+ * 데이터라 LLM 이 웹검색으로 재확인할 필요도, 수치를 지어낼 위험도 없다).
+ * LLM 은 그 facts 를 **입력**으로 받아 headline·reading 만 쓴다.
+ */
 export interface IssueComment {
   /** 그 주 실제 화두를 짧게 담은 제목(오너 지시 2026-10-01 — "미국 증시
    * 밸류에이션이라고 했지만 AI 속도조절론이 화두였다... 단편적으로 정해진
    * 제목을 쓰는건 금지한다"). `WeeklyIssue.label`(토픽 사전의 고정 분류명,
-   * 빈도 집계용 내부 키)을 화면 제목으로 그대로 쓰지 않고, facts 에 실린
-   * 그 주 근거를 보고 모델이 매주 새로 뽑는다 — 없으면 label 로 폴백
+   * 빈도 집계용 내부 키)을 화면 제목으로 그대로 쓰지 않고, 입력으로 받은
+   * facts 를 보고 모델이 매주 새로 뽑는다 — 없으면 label 로 폴백
    * (render.ts). */
   headline: string | null;
-  /** 확인된 사실. 각 줄에 구체 수치(금액·비율·건수·레벨)를 담는다. */
-  facts: string[];
-  /** 그 사실들이 왜 중요한지, 무엇을 주시해야 하는지. */
+  /** facts(입력)가 왜 중요한지, 무엇을 주시해야 하는지. */
   reading: string;
 }
 
@@ -91,11 +97,9 @@ export interface WeeklyComments {
   calendar: { date: string; event: string }[] | null;
   /** key = SnapshotRow.name */
   snapshot: Map<string, string>;
-  /** key = WeeklyIssue.label.
-   * 사실과 해석을 분리해서 담는다(오너 지시 2026-09-22 — 타사 시황처럼
-   * "사실 → 해석" 2단으로. 한 문단에 섞여 있으면 어디까지가 확인된 사실인지
-   * 구분이 안 된다). facts 는 수치가 박힌 확인된 사실, reading 은 거기서
-   * 끌어낸 해석·전망. 둘 중 하나만 검증을 통과할 수도 있다. */
+  /** key = WeeklyIssue.label. facts(이젠 `WeeklyIssue.facts` — 코드가
+   * reports/news 에서 직접 뽑음)를 보고 LLM 이 headline·reading 만 쓴다
+   * (오너 지시 2026-10-01, 위 IssueComment 주석 참고). */
   issues: Map<string, IssueComment>;
   /** "주요 섹터 이슈"(오너 지시 2026-09-19) — key = SectorHighlight.id
    * (예: "kr-up-1", "combined-down-2"). 등락률·순위는 코드(sectors.ts)가
@@ -120,7 +124,10 @@ const INPUT_DATA_DESC = `# 입력 데이터
 - snapshot: 이번 주 자산별 종가·주간 변동(pct=주간 변동률%, diffBp=금리류
   변동폭 bp). value/pct/diffBp 가 null 이면 비교할 값이 없다는 뜻이다.
 - issues: 이번 주 핵심 이슈 후보(증권사 리포트·뉴스 빈도로 뽑힘). reports·
-  news·earnings(실적 서프라이즈)·metrics(FRED 거시지표)가 근거로 들어있다.
+  news·earnings(실적 서프라이즈)·metrics(FRED 거시지표)가 근거로 들어있고,
+  **facts 는 그 reports/news 에서 코드가 이미 뽑아 둔 사실 줄**이다(실제
+  리포트·뉴스 제목/요약이라 이미 진짜 데이터 — 다시 찾거나 검증할 필요
+  없음). headline·reading 을 쓸 때 이 facts 를 그대로 근거로 삼아라.
 - policyEvidence: 미국 금리·연준/한국은행/일본은행 주제로 이미 수집된
   증권사 리포트·뉴스 근거(근거 있는 주제만 포함). policySummary 를 쓸 때
   최우선으로 활용한다.
@@ -182,11 +189,20 @@ ${INPUT_DATA_DESC}
    종합 서술한다(포털 AI 검색 요약 수준을 목표로 한다 — 얕은 사실 나열
    금지). **한 문단으로 뭉쳐 쓰지 말고, 은행별로 줄을 바꿔라**(오너 지시
    2026-09-19 — "시장별로 줄바꿈"): 마크다운 리스트로 "- 미국 연준(Fed):
-   ...", "- 한국은행: ...", "- 일본은행(BOJ): ..." 세 줄(각 1~2문장)을
-   개행 문자로 구분해 하나의 문자열에 담아라. 그 은행 소식이 그 주에
-   전혀 없으면 그 줄은 통째로 뺀다(세 줄을 억지로 채우지 마라).
-   policyEvidence 에도 없고 웹검색으로도 확인 안 되는 은행만 아는 범위
-   까지 쓰고, 셋 다 없으면 null 로 남긴다.
+   ...", "- 한국은행: ...", "- 일본은행(BOJ): ..." 세 줄을 개행 문자로
+   구분해 하나의 문자열에 담아라. 그 은행 소식이 그 주에 전혀 없으면
+   그 줄은 통째로 뺀다(세 줄을 억지로 채우지 마라). policyEvidence 에도
+   없고 웹검색으로도 확인 안 되는 은행만 아는 범위까지 쓰고, 셋 다 없으면
+   null 로 남긴다. **각 줄 1~3문장, 구체적인 수준으로**(오너 지시
+   2026-10-01 — 타사가 만든 "글로벌 국채 매도세" 요약을 보여주며 "금리
+   정책을 너두 잘 정리했다": 그 글은 "BOJ가 물가 억제에 초점을 두며
+   초완화 정책 기대가 약해졌고 이에 일본 국채 금리가 상승"처럼 정책
+   스탠스 변화와 시장 반응(금리 수준·방향)을 구체적으로 짝지어 썼다).
+   "금리를 동결했다" 같은 한 줄 사실 나열에 그치지 말고, 가능하면
+   (a) 이번 주 실제로 밝힌 입장/발언, (b) 그로 인해 시장(국채금리·
+   환율 등)이 어떻게 움직였는지, (c) 다음 회의까지 시장이 주시하는
+   지점을 이어서 짚어라 — 단, 숫자는 이번에도 제공된 값이거나 웹검색
+   으로 확인한 것만(4번 규칙 그대로).
 4. **calendar** — nextWeek(다음 주) 기간의 날짜별 확정 경제 일정. 입력의
    nextWeekSchedule(신한투자증권 스케줄)을 반드시 먼저 참조하고, 웹검색으로 확인되는 것만 담는다. "관련
    기사 목록"이 아니라 **실제 캘린더**다 — 웹검색으로 그 주에 실제
@@ -237,9 +253,13 @@ ${INPUT_DATA_DESC}
      채워라.** 같은 그룹(예: 채권) 안에서 더 크게 움직인 자산을 건너뛰고
      덜 움직인 자산만 채우는 건 앞뒤가 안 맞다(예: 미국채 3년이 10년보다
      더 움직였는데 10년만 쓰는 것 — 금지).
-2. **issues 는 headline(제목)·사실(facts)·해석(reading)을 반드시 나눠서
-   쓴다.** 한 문단에 섞으면 어디까지가 확인된 사실인지 구분이 안 된다
-   (오너 지시 2026-09-22).
+2. **issues 는 headline(제목)·reading(해석)만 쓴다 — facts 는 이미 입력에
+   채워져 있다(코드가 reports/news 에서 직접 뽑음, 오너 지시 2026-10-01 —
+   "핵심이슈를 뽑아서 작성할때 깊이가 이정도가 필요하다. LLM아니어도
+   가능하지않냐?" → "해봐").** facts 를 다시 쓰거나 고치려 하지 마라 —
+   출력 스키마에 facts 자리 자체가 없다. headline·reading 을 쓸 때 그
+   이슈의 facts 배열(여러 줄, 동인별로 이미 나뉘어 있음)을 전부 읽고
+   근거로 삼아라.
    - **headline: 그 주 실제 화두를 담은 자연스러운 제목, 10~30자.** issues
      항목의 label 은 빈도를 집계하려고 미리 정해 둔 넓은 분류명일 뿐이지
      제목이 아니다 — **label 을 그대로 베끼거나 label 의 동의어로만
@@ -249,12 +269,12 @@ ${INPUT_DATA_DESC}
      ("AI 추론 수요 확산과 유가 급락으로 반도체 주도 강세"처럼 그 주의
      여러 동인을 원인→결과로 자연스럽게 엮은 한 문구)과 같은 수준을
      목표로 한다). facts 에 실제로 나오는 구체적 사건·동인의 이름을
-     붙이고, 그 주 facts 에 서로 관련된 동인이 여럿이면 "A에 B까지
-     겹치며 C" 식으로 자연스럽게 엮어 써도 된다(label 하나당 사건 하나로
-     쪼개 쓸 필요 없음).
+     붙이고, facts 에 서로 관련된 동인이 여럿이면 "A에 B까지 겹치며 C"
+     식으로 자연스럽게 엮어 써도 된다(label 하나당 사건 하나로 쪼개 쓸
+     필요 없음).
      - 나쁜 예(금지): label 이 "미국 증시·밸류에이션"일 때 headline 을
        "미국 증시 밸류에이션"·"미국 증시 동향"처럼 label 과 같은 말로 채움.
-     - 좋은 예: 그 주 facts 가 빅테크 AI 투자 속도 논쟁이면 "AI 속도조절론
+     - 좋은 예: facts 가 빅테크 AI 투자 속도 논쟁이면 "AI 속도조절론
        부상", facts 가 장기 국채 금리·텀프리미엄 급등이면 "글로벌 장기금리
        급등"(label 이 "글로벌 금리시장"이어도 "미국채 10년물 급등"처럼 그
        주 실제 진원지를 구체적으로 좁혀도 된다), facts 에 AI 수요·유가·
@@ -262,38 +282,14 @@ ${INPUT_DATA_DESC}
        처럼 엮어 쓴다.
      - facts 만으로 구체적인 제목을 못 뽑겠으면 빈 문자열로 남겨라(그러면
        화면이 label 로 대체한다) — label 을 억지로 바꿔 쓰지 말 것.
-   - **facts: 3~6개.** 이번 주 실제로 일어난 일만. 각 항목에 **구체적인
-     수치를 반드시 하나 이상** 넣는다 — 금액, 비율, 건수, 지수 레벨,
-     날짜 중 무엇이든. 주체(회사·기관·국가)를 명시한다. **그 이슈를 끌고
-     간 동인이 여러 개면(예: 유가 급등 + 고금리 장기화 전망 + 국채 발행
-     부담처럼 서로 다른 원인이 함께 작용) 한 fact 에 뭉뚱그리지 말고
-     동인별로 줄을 나눠 적는다**(오너 지시 2026-10-01 — 타사가 만든 "글로벌
-     국채 매도세" 요약처럼 "가장 큰 촉매" 하나 + 그걸 키운 여러 요인을
-     각각 구체적 사실로 짚는 구조를 참고하라고 공유함. 그 타사 글의 "10가지
-     요인" 같은 고정 개수나 번호 매긴 소제목 형식까지 그대로 베낄 필요는
-     없다 — 이 리포트는 섹터 표를 문장으로 풀어 쓸 만큼 간결함을 중시하므로
-     (오너 지시 2026-09-21), facts 3~6줄로 동인별 사실을 나열하고 reading
-     에서 그 동인들을 인과관계로 엮어 설명하는 정도면 충분하다).
-     - 나쁜 예(금지): "반도체 수출이 호조를 보였다." — 수치도 주체도 없음.
-     - 좋은 예: "9월 1~20일 수출 714억달러 중 반도체가 341억달러로 48%를
-       차지(전년동기 +31%)."
-     - 좋은 예: "엔비디아 2분기 EPS 2.22달러로 컨센서스 2.09달러를 6.2%
-       상회."
-     수치는 아래 4번 규칙을 그대로 따른다 — 제공된 JSON 값이거나 웹검색
-     으로 확인한 것만. 확인 못 한 숫자를 지어내면 그 줄은 통째로 버려진다.
-     각 줄은 60~100자. **issues 3개 사이에 같은 사실을 중복해서 쓰지
-     마라**(오너 지적 2026-10-01 — "유가가 반복하네": 서로 다른 issue 인데
-     둘 다 "WTI 92.41달러, 주간 7.87% 급락"을 거의 그대로 반복해서 썼다).
-     한 사건이 여러 이슈에 배경으로 깔릴 수는 있지만, 이미 다른 issue 의
-     facts 에 쓴 사실(수치·주체가 같은 문장)을 다시 facts 줄로 반복하지
-     말고, 꼭 필요하면 reading 에서 "앞선 유가 급락과 맞물려"처럼 **짧게
-     참조만** 해라.
-   - **reading: 해석.** facts 에 적은 사실이 왜 중요한지(어떤 메커니즘으로
+   - **reading: 해석.** facts 에 적힌 사실이 왜 중요한지(어떤 메커니즘으로
      시장·다른 자산에 영향을 주는지)와 다음에 무엇을 주시해야 하는지를
-     200~400자로 쓴다. facts 가 여러 동인을 다뤘으면 그 동인들을 단순
-     재나열하지 말고 "A가 촉발했고 B·C가 가세해" 식으로 **인과관계로
-     엮어서** 설명한다. 확정된 사실이 아니면 "~로 보임", "~가능성"처럼
-     조심스럽게 쓴다.
+     200~400자로 쓴다. facts 가 여러 동인을 다뤘으면(타사가 만든 "글로벌
+     국채 매도세" 요약처럼 "가장 큰 촉매" 하나 + 그걸 키운 여러 요인이
+     나열돼 있을 수 있다) 그 동인들을 단순 재나열하지 말고 "A가 촉발했고
+     B·C가 가세해" 식으로 **인과관계로 엮어서** 설명한다. facts 를
+     문장으로 바꿔 적기만 하는 건 금지 — facts 에 이미 있다. 확정된
+     사실이 아니면 "~로 보임", "~가능성"처럼 조심스럽게 쓴다.
 3. **sectors: 이번 주 왜 그 섹터가 그렇게 오르내렸는지를 쓴다.** 등락률·
    순위는 이미 코드가 계산해 확정했으니 다시 쓰지 마라 — "이번 주 X.X%
    상승" 처럼 표에 이미 있는 숫자를 문장으로 바꿔 적기만 하는 건 금지
@@ -312,7 +308,7 @@ ${INPUT_DATA_DESC}
 
 # 출력 형식
 마크다운 코드펜스나 설명 없이, 아래 스키마의 JSON 객체만 출력한다:
-{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": {"headline": "그 주 화두 제목(구체적으로, label 복사 금지)", "facts": ["사실1", "사실2"], "reading": "해석"}}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
+{"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": {"headline": "그 주 화두 제목(구체적으로, label 복사 금지)", "reading": "해석"}}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
 snapshot·issues·sectors 에 없는 키를 새로 만들지 말 것.`;
 
 interface CommentPayload {
@@ -714,7 +710,7 @@ interface MacroResponse {
 
 interface CommentsOnlyResponse {
   snapshot?: Record<string, string>;
-  issues?: Record<string, string | { headline?: unknown; facts?: unknown; reading?: unknown }>;
+  issues?: Record<string, string | { headline?: unknown; reading?: unknown }>;
   sectors?: Record<string, string>;
 }
 
@@ -1240,43 +1236,29 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 이슈 코멘트 키 불일치 — "${rawLabel}" 는 알려진 이슈명이 아님`);
       continue;
     }
-    // 사실/해석 분리 구조(오너 지시 2026-09-22). 예전 형식(문자열 하나)로
+    // facts 는 더 이상 LLM 응답에서 안 읽는다(evidence.ts `buildFactsFromEvidence`
+    // 가 이미 코드로 채워 둠, 오너 지시 2026-10-01). 예전 형식(문자열 하나)으로
     // 오는 응답도 버리지 않고 해석으로 받아 둔다 — 모델이 스키마를 놓치는
     // 경우가 있어서다.
     const raw =
       typeof value === "string"
-        ? { headline: undefined as unknown, facts: [] as unknown[], reading: value }
-        : ((value ?? {}) as { headline?: unknown; facts?: unknown; reading?: unknown });
-    const rawFacts = Array.isArray(raw.facts) ? raw.facts : [];
+        ? { headline: undefined as unknown, reading: value }
+        : ((value ?? {}) as { headline?: unknown; reading?: unknown });
 
     // headline — label 을 그대로 베끼면 폴백(render.ts 가 label 을 쓰도록)과
     // 다를 게 없으니 null 로 버린다(오너 지시 2026-10-01 — "단편적으로
     // 정해진 제목을 쓰는건 금지"). 숫자가 섞여도(예: "유가 100달러 돌파")
-    // 근거 없는 수치면 verify() 가 걸러낸다 — facts/reading 과 동일 안전망.
+    // 근거 없는 수치면 verify() 가 걸러낸다 — reading 과 동일 안전망.
     const rawHeadline = String(raw.headline ?? "").trim();
     const hv = rawHeadline ? verify(rawHeadline, commentTrustGrounded) : { text: "", reason: null };
     const headline = hv.text && hv.text.trim() !== canonical.trim() ? hv.text : null;
 
-    // 사실은 줄 단위로 검증한다 — 한 줄이 근거 없는 수치로 걸려도 나머지
-    // 사실까지 같이 버리지 않기 위해서다(해석과 달리 서로 독립적).
-    const facts: string[] = [];
-    const factReasons: string[] = [];
-    for (const f of rawFacts) {
-      const r = verify(String(f ?? ""), commentTrustGrounded);
-      if (r.text) facts.push(r.text);
-      else if (r.reason) factReasons.push(r.reason);
-    }
     const rd = verify(String(raw.reading ?? ""), commentTrustGrounded);
 
-    if (facts.length > 0 || rd.text) {
-      comments.issues.set(canonical, { headline, facts, reading: rd.text });
-      // 일부만 걸러졌으면 그 사유도 남긴다 — 검수 화면에서 왜 사실이
-      // 적은지 알 수 있게.
-      const partial = [...factReasons, ...(rd.reason ? [`해석: ${rd.reason}`] : [])];
-      if (partial.length > 0) dropReasons.set(`issue:${canonical}`, partial.join(" / "));
-    } else {
-      const reason = [...factReasons, rd.reason].filter(Boolean).join(" / ");
-      if (reason) dropReasons.set(`issue:${canonical}`, reason);
+    if (rd.text) {
+      comments.issues.set(canonical, { headline, reading: rd.text });
+    } else if (rd.reason) {
+      dropReasons.set(`issue:${canonical}`, rd.reason);
     }
   }
   for (const [rawId, text] of Object.entries(commentParsed?.sectors ?? {})) {
