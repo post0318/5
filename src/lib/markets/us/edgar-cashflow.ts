@@ -142,6 +142,10 @@ function getBlocks(isFin: boolean): Block[] {
           ["ProceedsFromSaleMaturityAndCollectionOfShorttermInvestments", false],
           ["ProceedsFromSaleAndMaturityOfMarketableSecurities", false],
           ["ProceedsFromSaleOfShortTermInvestments", false],
+          // 분기·연간이 서로 다른 태그(META 연간 MarketableSecurities·분기 AvailableForSale, AMAT OtherInvestments — 2026-10-02 검증기 LTM 공란 검사)
+          ["ProceedsFromSaleAndMaturityOfAvailableForSaleSecurities", false],
+          ["ProceedsFromSaleAndMaturityOfOtherInvestments", false],
+          ["ProceedsFromSaleOfEquitySecuritiesFvNi", false],
         ],
       },
       {
@@ -154,6 +158,7 @@ function getBlocks(isFin: boolean): Block[] {
           ["PaymentsToAcquireShortTermInvestments", false],
           ["PaymentsToAcquireLongtermInvestments", false],
           ["PaymentsToAcquireMarketableSecurities", false],
+          ["PaymentsToAcquireEquitySecuritiesFvNi", false],
         ],
       },
       { label: "사업 인수 (순현금)", concepts: ["PaymentsToAcquireBusinessesNetOfCashAcquired"], depth: 1, negate: true },
@@ -339,16 +344,23 @@ export function buildUsCashFlow(
   const prevLbl = labels[labels.length - 2];
   const ltmGap = (v: Record<string, number | null> | undefined) => !!ylCf && !!v && v[LTM] == null && v[prevLbl] != null;
   const GAP_NOTE = "LTM 구성 분기 없음(구성 항목이 분기 공시에 없음)";
+  // 합계 태그 → 그 구성 태그(같은 기간에 합계가 있으면 구성은 더하지 않는다 — 이중 합산 방지, NVDA 는 셋 다 공시, 2026-10-02)
+  const SUPERSEDES: Record<string, string[]> = {
+    ProceedsFromSaleAndMaturityOfAvailableForSaleSecurities: ["ProceedsFromSaleOfAvailableForSaleSecuritiesDebt", "ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities"],
+  };
   const combineVals = (parts: [string, boolean][]): Record<string, number | null> => {
     const out: Record<string, number | null> = {};
     for (const lbl of labels) out[lbl] = null;
     let gap = false;
+    const vals = new Map(parts.map(([c]) => [c, valOf([c])] as const));
+    const skipAt = (concept: string, lbl: string) =>
+      Object.entries(SUPERSEDES).some(([tot, comps]) => comps.includes(concept) && vals.get(tot)?.[lbl] != null);
     for (const [concept, neg] of parts) {
-      const v = valOf([concept]);
-      if (ltmGap(v)) gap = true;
+      const v = vals.get(concept)!;
+      if (ltmGap(v) && !skipAt(concept, LTM)) gap = true;
       for (const lbl of labels) {
         const x = v[lbl];
-        if (x == null) continue;
+        if (x == null || skipAt(concept, lbl)) continue;
         out[lbl] = (out[lbl] ?? 0) + (neg ? -x : x);
       }
     }
@@ -366,6 +378,17 @@ export function buildUsCashFlow(
           const filed = e.filed ?? "";
           if (!cur || filed > cur.filed) byPeriod.set(k, { filed, form: e.form, e, sum: neg ? -e.val : e.val });
           else if (filed === cur.filed && e.form === cur.form) cur.sum += neg ? -e.val : e.val;
+        }
+      // 합계 태그와 구성 태그가 같은 공시·기간에 함께 있으면 구성 분을 뺀다
+      for (const [k, x] of byPeriod)
+        for (const [tot, comps] of Object.entries(SUPERSEDES)) {
+          const has = (c: string) => entriesOf(facts, c).find((e) => `${e.start}|${e.end}` === k && (e.filed ?? "") === x.filed && e.form === x.form);
+          if (!parts.some(([c]) => c === tot) || !has(tot)) continue;
+          for (const c of comps) {
+            const e = has(c);
+            const neg = parts.find(([pc]) => pc === c)?.[1];
+            if (e && neg != null) x.sum -= neg ? -e.val : e.val;
+          }
         }
       const merged = [...byPeriod.values()].map((x) => ({ ...x.e, val: x.sum }));
       const r = ltmFlowOf(merged, anchor);

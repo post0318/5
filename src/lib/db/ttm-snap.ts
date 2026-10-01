@@ -47,6 +47,8 @@ export async function readTtmSnapAny(market: string, symbol: string): Promise<{ 
   if (!isDbConfigured()) return null;
   const d = await (await col()).findOne({ _id: key(market, symbol) });
   if (!d || Date.now() - d.at.getTime() > MAX_AGE_MS) return null;
+  // 다른 환경(로컬 ↔ 운영)이 쓴 저장본은 읽지 않는다(같은 DB — api-snap.ts 와 같은 이유)
+  if ((d.v === "local") !== (ttmSnapVersion() === "local")) return null;
   return { ttm: d.ttm, current: d.v === ttmSnapVersion() };
 }
 

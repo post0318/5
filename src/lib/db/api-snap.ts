@@ -26,6 +26,9 @@ export async function readApiSnap<T>(key: string): Promise<{ data: T; stale: boo
   if (!isDbConfigured()) return null;
   const d = await (await col()).findOne({ _id: key });
   if (!d) return null;
+  // 운영과 로컬이 같은 DB 를 쓴다 — 다른 환경(로컬 ↔ 운영)이 쓴 저장본은 읽지 않는다(2026-10-02: 로컬 시험이 새 형식으로 쓴 저장본을
+  // 운영 옛 코드가 읽어 MU 등 종목분석 화면이 깨졌다)
+  if ((d.v === "local") !== (ttmSnapVersion() === "local")) return null;
   const age = Date.now() - d.at.getTime();
   if (age > MAX_AGE_MS) return null;
   return { data: d.data as T, stale: d.v !== ttmSnapVersion() || age > REFRESH_MS };
