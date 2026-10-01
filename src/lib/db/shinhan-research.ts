@@ -1016,6 +1016,15 @@ export function classifyResearchTopic(
   // 제목의 통화명(위안화 등)이 FX_RE에 걸려 환율분석으로 새는데, 오너가 "이슈분석 경제다"로 확정(2026-09-27,
   // "금으로 쌓는 위안화"는 환율 시황이 아니라 중국 경제/지정학 이슈).
   if (doc.source === "메리츠증권" && /^Charts\s*of\s*China\b/i.test(doc.title ?? "")) return "이슈분석";
+  // SK증권 "고금리 환경 장기화 속 AI 의존도 심화" — 요약의 "금리" 언급(bondStrong,
+  // generic 과 무관하게 항상 승격)으로 이슈분석에 샜지만 내용은 AI CAPEX 관련
+  // 기업의 상대적 매력을 금리 국면별로 짚는 투자전략(오너 지시 2026-10-01 —
+  // "sk 해당리포트는 그럼 투자전략으로 고정하자"). SK증권은 종목·매크로 리포트
+  // 80여 건이 전부 같은 "Signal/Key/Step" 요약 포맷을 공용으로 써서 포맷으로는
+  // 못 가린다 — 제목 완전일치로 이 문서 하나만 집는다.
+  if (doc.source === "SK증권" && (doc.title ?? "").trim() === "고금리 환경 장기화 속 AI 의존도 심화") {
+    return "시황분석:투자전략";
+  }
   const legacy = classifyLegacyTopic(doc);
   switch (legacy) {
     case "산업분석":
