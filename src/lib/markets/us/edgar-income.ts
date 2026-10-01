@@ -560,6 +560,7 @@ export function buildUsIncome(
     return o;
   })();
   const oneOff = unavailableOn(facts, "oneOff") ? blank() : val(["OneOffChargesDerived"]);
+  const hasOneOff = labels.some((l) => oneOff[l] != null && oneOff[l] !== 0);
   // 감가상각비 구성요소가 없으면(매핑 누락 — IFRS 20-F 등) EBITDA 도 공란(0 으로
   // 보지 않음, Yahoo 분기 LTM 여부와 무관 — 독립 감사 지적 2026-09-25 NVO·SAP)
   for (const [r, nm] of [[grossProfit, "매출총이익"], [pretax, "세전이익"], [opIncome, "영업이익"], [tax, "법인세"], [netIncome, "당기순이익"], [da, "감가상각비"]] as const) ROW_NAME.set(r, nm);
@@ -693,15 +694,16 @@ export function buildUsIncome(
     row("[ 주석 항목 ]", blank(), { depth: 0, isSubtotal: true }),
     row("EBITDA", ebitda),
     row("감가상각비", da),
-    // 손익계산서에 별도 줄로 공시된 구조조정·손상·위약금·합의금 등의 합(edgar-oneoff.ts) — 영업이익에 이미 반영
-    row("일회성비용(구조조정·손상차손·위약금·합의금 등)", oneOff),
+    // 손익계산서에 별도 줄로 공시된 구조조정·손상·위약금·합의금 등의 합(edgar-oneoff.ts) — 영업이익에 이미 반영.
+    // 금액이 있는 경우에만 표시(오너 지시 2026-10-01 — 전 기간 0·빈칸이면 줄과 설명 모두 숨김, AAPL)
+    ...(hasOneOff ? [row("일회성비용(구조조정·손상차손·위약금·합의금 등)", oneOff)] : []),
   ];
   items.push(...cogsFootnotes);
   if (!isFin && hasGross) items.push(...opexFootnotes);
   // SEC 원본 조회 실패로 공란이 된 값(영업이익·감가상각비·EBITDA·일회성비용 — 대체 계산 없음, sec-unavailable.ts)
   const unavailable = unavailableNote(facts);
   if (unavailable) items.push(row(`※ ${unavailable}`, blank(), { depth: 1, italic: true }));
-  if (!isFin && labels.some((l) => oneOff[l] != null))
+  if (!isFin && hasOneOff)
     items.push(
       row("※ 일회성비용: 손익계산서에 별도 줄로 공시된 항목만(다른 비용 줄에 섞인 금액은 빠짐) · 영업이익에 이미 반영된 금액", blank(), {
         depth: 1,

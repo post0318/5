@@ -113,6 +113,21 @@ export function FinancialsTable({
       ? statement.sections
       : statement.sections.filter((s) => groupOf(s.title) === view);
   // 칸 주석 번호(표시 중인 열만) — 빈칸 사유·근사 라벨(그림자 채우기 금지, 2026-09-27)
+  // "※ …" 설명 행(값 없음)은 표 안에 두지 않고 표 아래 주석으로 뺀다(오너 지적 2026-10-01 — "주석이면 밑으로 빼야지, 왜 표 안에 넣지?")
+  const isFootRow = (it: { accountName: string; values: Record<string, number | null | undefined> }) =>
+    it.accountName.startsWith("※") && periods.every((p) => it.values[p.label] == null);
+  const footRows = [...new Set(shown.flatMap((sec) => sec.items.filter(isFootRow).map((it) => it.accountName.replace(/^※\s*/, ""))))];
+  // 표시 중인 전 기간이 0·빈칸인 일반 줄은 숨긴다(오너 지시 2026-10-01 — "있는 경우에만 표시", AAPL 자기주식 "-"·기타(자본) 0 이 한 표에 섞여 보이던 문제).
+  // 소계·강조·헤더·칸 주석 있는 줄은 남긴다. 재무분석(standalone)은 비율 0%(BE 배당성향)가 의미 있는 값이라 제외
+  const isEmptyRow = (it: FinancialLineItem) =>
+    !standalone &&
+    useDetail &&
+    !!it.accountName &&
+    !it.accountName.startsWith("[") &&
+    !it.isSubtotal &&
+    !it.isHighlight &&
+    !periods.some((p) => it.cellNotes?.[p.label]) &&
+    periods.every((p) => it.values[p.label] == null || it.values[p.label] === 0);
   const cellNoteIdx = new Map<string, number>();
   for (const sec of shown)
     for (const it of sec.items)
@@ -198,7 +213,7 @@ export function FinancialsTable({
           if (standalone) {
             let n = 0;
             section.items.forEach((it, i) => {
-              if (!it.accountName) return; // 공백행
+              if (!it.accountName || isFootRow(it)) return; // 공백행·표 아래 주석
               const isHead =
                 it.isSubtotal && periods.every((p) => it.values[p.label] == null);
               if (isHead) {
@@ -276,6 +291,7 @@ export function FinancialsTable({
               </thead>
               <tbody>
                 {section.items.map((item, idx) => {
+                  if (item.accountName && (isFootRow(item) || isEmptyRow(item))) return null;
                   if (!item.accountName) {
                     return (
                       <tr key={`sp${idx}`}>
@@ -381,6 +397,13 @@ export function FinancialsTable({
         )}
       </div>
 
+      {footRows.length > 0 && (
+        <ul className="text-muted-foreground space-y-0.5 text-[11px]">
+          {footRows.map((n) => (
+            <li key={n}>※ {n}</li>
+          ))}
+        </ul>
+      )}
       {cellNoteIdx.size > 0 && (
         <ul className="text-muted-foreground space-y-0.5 text-[11px]">
           {[...cellNoteIdx].map(([n, k]) => (
