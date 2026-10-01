@@ -49,6 +49,8 @@ async function annualRcp(corp, year) {
 }
 
 async function loadXbrl(rcpNo) {
+  // DART 는 몰아서 요청하면 이 PC 연결을 약 1시간 막는다(실측 2026-10-01) — XBRL 요청마다 1초 간격
+  await new Promise((r) => setTimeout(r, 1000));
   const res = await fetch(`${B}/fnlttXbrl.xml?crtfc_key=${DART}&rcept_no=${rcpNo}&reprt_code=11011`);
   if (!res.ok) throw new Error(`xbrl ${res.status}`);
   const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
@@ -99,7 +101,9 @@ async function daByYear(corp) {
   }
   if (!latest) return null;
   const byYear = {};
-  for (let y = latest; y >= latest - 5; y -= 2) {
+  // 매년 보고서(최신부터 — 겹치는 해는 최신 보고서 값). 2년 간격이면 2022 보고서를 건너뛰어 2021 값(2022 보고서 전기)이 빠졌다 —
+  // 2021 보고서 XBRL 은 주석 태깅 자체가 없다(삼성전자 실측 2026-10-02)
+  for (let y = latest; y >= latest - 5; y -= 1) {
     const rcp = await annualRcp(corp, y);
     if (!rcp) continue;
     try {

@@ -3864,6 +3864,48 @@ async function verifyUs(sym) {
 
   // ── C층 화면 간 일치(2026-10-01, 오너 지시 "화면별로 수치가 다르게 나오는 것이 없는지") — 분기 화면 열(손익·재무상태표·현금흐름·총괄),
   //    총괄 = 각 재무제표(연간·분기), 하이라이트 영업현금흐름·자본지출 = 현금흐름표, 연간 LTM = 분기 최근 4개 합(손익·현금흐름), 재무상태표 LTM = 최근 분기
+  // ── 현금흐름표 LTM 공란 정당성(2026-10-02 — 오너 지적 "현금흐름 감사가 제대로 이루어진거 맞음?": TSLA 투자자산·KO 운전자본 LTM 공란을
+  //    놓쳤다). 앱 LTM 이 비었는데 야후 분기 현금흐름에 같은 항목이 앱의 최근 4개 분기(결산일 ±10일) 모두 있으면 실패 — 데이터가 있는데 앱이 못 이은 것
+  if (BSCF_MODE && fetched.cf && fetched.cfq) {
+    const CF_Y = {
+      "cf:영업활동 현금흐름:운전자본 변동": ["changeInWorkingCapital"],
+      "cf:영업활동 현금흐름:매출채권 증감": ["changesInAccountReceivables", "changeInReceivables"],
+      "cf:영업활동 현금흐름:재고자산 증감": ["changeInInventory"],
+      "cf:영업활동 현금흐름:매입채무 증감": ["changeInAccountPayable", "changeInPayable"],
+      "cf:투자활동 현금흐름:투자자산 취득": ["purchaseOfInvestment"],
+      "cf:투자활동 현금흐름:투자자산 처분·만기": ["saleOfInvestment"],
+      "cf:투자활동 현금흐름:사업 인수 (순현금)": ["purchaseOfBusiness"],
+      "cf:재무활동 현금흐름:장기차입금 조달": ["longTermDebtIssuance", "issuanceOfDebt"],
+      "cf:재무활동 현금흐름:장기차입금 상환": ["longTermDebtPayments", "repaymentOfDebt"],
+      "cf:재무활동 현금흐름:배당금 지급": ["cashDividendsPaid", "commonStockDividendPaid"],
+      "cf:재무활동 현금흐름:자기주식 취득": ["repurchaseOfCapitalStock", "commonStockPayments"],
+      "cf:taxpaid": ["incomeTaxPaidSupplementalData"],
+      "cf:intpaid": ["interestPaidSupplementalData"],
+    };
+    const items0 = (fetched.cf.sections ?? []).flatMap((x) => x.items ?? []);
+    const qEnds = (fetched.cfq.periods ?? []).map((p0) => p0.endDate).slice(-4);
+    const blanks = items0.filter((it) => CF_Y[it.accountId] && it.values?.["현재/LTM"] == null && Object.values(it.values ?? {}).some((v0) => v0 != null && v0 !== 0));
+    if (blanks.length && qEnds.length === 4) {
+      let yq = null;
+      try {
+        yq = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: new Date(Date.parse(qEnds[0]) - 40 * 864e5), type: "quarterly", module: "cash-flow" }, { validateResult: false });
+      } catch (e) {
+        add("C", "현금흐름 LTM 공란 정당성(야후 분기)", "LTM", { status: NA, note: `야후 분기 조회 실패 ${String(e).slice(0, 60)}` });
+      }
+      for (const it of yq ? blanks : []) {
+        const keys = CF_Y[it.accountId];
+        const vals = qEnds.map((e0) => {
+          const r = yq.find((x) => Math.abs(Date.parse(new Date(x.date).toISOString().slice(0, 10)) - Date.parse(e0)) <= 10 * 864e5);
+          const k = r ? keys.find((k0) => r[k0] != null) : null;
+          return k ? r[k] : null;
+        });
+        const note0 = it.cellNotes?.["현재/LTM"] ?? "";
+        add("C", `현금흐름 LTM 공란 정당성 ${it.accountName}`, "LTM", vals.every((v0) => v0 != null)
+          ? { status: FAIL, note: `앱 LTM 공란(${note0.slice(0, 50)})인데 야후 분기 4개 값 있음 — 합 ${vals.reduce((a0, b0) => a0 + b0, 0)}` }
+          : { status: PASS, note: `야후 분기에도 없음(${vals.map((v0) => (v0 == null ? "-" : "값")).join("·")}) — 앱 공란 정당` });
+      }
+    }
+  }
   if (BSCF_MODE && fetched.cfq && fetched.bsq && smq && isq && sm) {
     const rid = (st) => Object.fromEntries((st?.sections ?? []).flatMap((x) => x.items ?? []).map((it) => [it.accountId, it.values ?? {}]));
     const rnm = (st) => { const o = {}; for (const it of (st?.sections ?? []).flatMap((x) => x.items ?? [])) { const k0 = String(it.accountName ?? "").trim(); if (!(k0 in o)) o[k0] = it.values ?? {}; } return o; };
