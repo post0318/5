@@ -8515,14 +8515,15 @@ async function dartFy(corp, year, fsDiv) {
 const dartNum = (v) => (v == null || v === "" || v === "-" ? null : Number(String(v).replace(/,/g, "")));
 /** 계정 하나 — account_id 우선(보고서 구분 sj 집합 안), 없으면 계정명(공백·괄호 제거) */
 function dartPick(list, sjs, ids, names, field) {
-  const rows = (list ?? []).filter((r) => sjs.includes(r.sj_div));
+  // 우선주 줄에 단 보통주 EPS 코드는 무시(삼성SDI 2021 원자료 태그 오류)
+  const rows = (list ?? []).filter((r) => sjs.includes(r.sj_div) && !(/우선주/.test(r.account_nm ?? "") && /EarningsLossPerShare/.test(r.account_id ?? "")));
   const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
   const hit = rows.find((r) => ids.includes(r.account_id)) ?? rows.find((r) => names.includes(nm(r.account_nm)));
   return hit ? dartNum(hit[field]) : null;
 }
 /** 계정 후보 줄 전부 — account_id 가 맞는 줄이 있으면 그것들, 없으면 계정명(공백·괄호 제거)이 같은 줄들 */
 function dartRows(list, sjs, ids, names) {
-  const rows = (list ?? []).filter((r) => sjs.includes(r.sj_div));
+  const rows = (list ?? []).filter((r) => sjs.includes(r.sj_div) && !(/우선주/.test(r.account_nm ?? "") && /EarningsLossPerShare/.test(r.account_id ?? "")));
   const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
   const byId = rows.filter((r) => ids.includes(r.account_id));
   return byId.length ? byId : rows.filter((r) => names.includes(nm(r.account_nm)));
