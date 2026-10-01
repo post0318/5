@@ -170,7 +170,9 @@ function getBlocks(isFin: boolean): Block[] {
       { label: "배당금 지급", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], depth: 1, negate: true },
       { label: "자기주식 취득", concepts: ["PaymentsForRepurchaseOfCommonStock"], depth: 1, negate: true },
       { label: "장기차입금 조달", concepts: ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt"], depth: 1 },
-      { label: "장기차입금 상환", concepts: ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt"], depth: 1, negate: true },
+      // 전환사채 상환도 장기차입금 상환(TSLA 2024~ "Repayments of debt" = RepaymentsOfConvertibleDebt — 옛 태그 중단으로 2025 연간·LTM 이 비었다, 2026-10-02).
+      // firstConcept 는 앞 태그에 값이 없는 결산일만 뒤 태그로 채우므로 다른 태그를 쓰는 회사는 그대로
+      { label: "장기차입금 상환", concepts: ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt", "RepaymentsOfConvertibleDebt"], depth: 1, negate: true },
       {
         label: "단기차입금 순증감",
         depth: 1,
@@ -348,6 +350,28 @@ export function buildUsCashFlow(
         const x = v[lbl];
         if (x == null) continue;
         out[lbl] = (out[lbl] ?? 0) + (neg ? -x : x);
+      }
+    }
+    // 태그를 기간 중간에 바꾼 줄(TSLA 2026 분기 "투자자산 취득" — PaymentsToAcquireInvestments → PaymentsToAcquireShortTermInvestments)은
+    // 태그별 LTM 이 모두 빈다 — 기간마다 가장 최근 공시 한 건에 실린 구성 태그 합으로 기간 값을 만든 뒤 같은 LTM 함수로(2026-10-02, 야후 분기 합과 일치).
+    // 같은 기간을 옛 태그(옛 공시)와 새 태그(새 공시 비교 열)가 함께 담아도 한 공시만 쓰므로 이중 합산되지 않는다
+    if (gap && mode !== "quarter" && labels.includes(LTM)) {
+      // 공시 구분 = 제출일(filed) + 양식(form) — companyfacts 항목에는 접수번호가 없다
+      const byPeriod = new Map<string, { filed: string; form: string; e: FactUnitEntry; sum: number }>();
+      for (const [concept, neg] of parts)
+        for (const e of entriesOf(facts, concept)) {
+          if (!e.start) continue;
+          const k = `${e.start}|${e.end}`;
+          const cur = byPeriod.get(k);
+          const filed = e.filed ?? "";
+          if (!cur || filed > cur.filed) byPeriod.set(k, { filed, form: e.form, e, sum: neg ? -e.val : e.val });
+          else if (filed === cur.filed && e.form === cur.form) cur.sum += neg ? -e.val : e.val;
+        }
+      const merged = [...byPeriod.values()].map((x) => ({ ...x.e, val: x.sum }));
+      const r = ltmFlowOf(merged, anchor);
+      if (r.value != null) {
+        out[LTM] = r.value;
+        gap = false;
       }
     }
     if (gap) {

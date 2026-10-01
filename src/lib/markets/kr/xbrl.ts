@@ -115,7 +115,8 @@ export async function fetchKrDA(symbol: string, latestYear: number, backYears = 
   }
   const byYear: KrDA["byYear"] = {};
   // 각 보고서가 당기+전기 2개년을 주므로 2년 간격으로 조회
-  for (let y = latestYear; y >= latestYear - backYears; y -= 2) {
+  // 매년 보고서(최신부터). 2년 간격이면 2022 보고서를 건너뛰어 2021 값이 빠졌다(2021 보고서 XBRL 은 주석 태깅 없음 — 2026-10-02)
+  for (let y = latestYear; y >= latestYear - backYears; y -= 1) {
     const rcp = await annualReportRcpNo(corpCode, y);
     if (!rcp) continue;
     try {
