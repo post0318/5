@@ -1,4 +1,7 @@
+import { after } from "next/server";
 import { jsonError, ok } from "@/lib/api";
+import { readApiSnap, writeApiSnap } from "@/lib/db/api-snap";
+import type { FinancialHighlights } from "@/lib/markets/us/edgar-highlights";
 import { isMarketId } from "@/lib/markets/types";
 import { yahooLtmLabel } from "@/lib/markets/us/edgar-yahoo-quarters";
 import { getAdapter } from "@/lib/markets/registry";
@@ -120,56 +123,19 @@ export async function GET(
       );
     }
 
-    const factsRes0 = await fetchUsCompanyFacts(sym);
-    const [quote, estimatesRaw, consensus, cls, sic] = await Promise.all([
-      getEodQuote(market, sym, { yahooOverride: yahoo }).catch(() => null),
-      fetchYahooEstimates(market, sym, yahoo).catch(() => null),
-      fetchForwardConsensus(market, sym, yahoo).catch(() => null),
-      // 듀얼클래스 보정 — 원본 판독 실패는 facts 에 기록(클래스별 값이 필요한 칸 공란 + 사유)
-      loadClassAFactsMarked(factsRes0.cik, factsRes0.facts),
-      fetchUsSic(sym).catch(() => null),
-    ]);
-    const factsRes = { cik: factsRes0.cik, facts: cls.facts };
-    const classFacts = cls.classFacts;
-    // EV 브릿지 맥락 — 금융 자회사 부문 차입금(XBRL 인스턴스), UP-REIT 파트너 지분. 판별 조회 실패 = "unknown"(EV 미표시)
-    const captive = await loadCaptiveDebt(factsRes.cik, sic).catch(() => "unknown" as const);
-    // 외화 공시 기업 예상치 → USD(edgar-foreign.ts). 환산 실패 시 예상치 숨김(원통화 숫자를 USD 로 섞지 않음)
-    const estimates = estimatesRaw ? await estimatesToUsd(estimatesRaw, factsRes.facts).catch(() => null) : null;
-    const opUnits = reitOpUnits(sic, consensus?.sharesOutstanding, consensus?.impliedSharesOutstanding);
-
-    const sharesHint = usSharesHint(quote, consensus);
-
-    const estCols = (estimates?.periods ?? []).map((p) => ({
-      period: p.period,
-      endDate: p.endDate,
-      epsAvg: p.epsAvg,
-      revenueAvg: p.revenueAvg,
-    }));
-
-    // 과거 결산일 가격을 주식수와 같은 기준으로 — Yahoo 가 분할로 기록한 분사 되돌림(edgar-shares.ts)
-    const usBars = secBasisBars(factsRes.facts, quote);
-    const highlights = isFinancialCompany(factsRes.facts, sic)
-      ? buildUsBankHighlights(factsRes.facts, usBars, estCols, sharesHint)
-      : buildUsHighlights(factsRes.facts, usBars, estCols, sharesHint, classFacts, {
-          sic,
-          captive,
-          opUnits,
+    // 저장본 먼저(배포 직후·CDN 캐시 비었을 때도 바로) — 묵었으면 응답 뒤 다시 계산(api-snap.ts)
+    const snapKey = `hl:us:${sym}|${yahoo ?? ""}`;
+    const snap = await readApiSnap<FinancialHighlights>(snapKey).catch(() => null);
+    if (snap) {
+      if (snap.stale)
+        after(async () => {
+          const r = await computeUsHighlights(market, sym, yahoo).catch(() => null);
+          if (r && !r.degraded) await writeApiSnap(snapKey, r.highlights).catch(() => {});
         });
-    if (estimates && "fxNote" in estimates && estimates.fxNote) highlights.notes.push(estimates.fxNote);
-    if (estimatesRaw && !estimates) highlights.notes.push("외화 예상치 환산 실패 — 예상치 숨김");
-    // 최신 공시 보완이 원본 조회 실패면 LTM 열은 공란(더 오래된 기간 값을 LTM 으로 내지 않음 — sec-unavailable.ts)
-    blankLtmColumnIfFilingsUnavailable(factsRes.facts, highlights);
-    // 원본 조회 일시 오류(SEC 429 등) — 일부 공시가 빠졌을 수 있다(fetch-health.ts, 2분 뒤 다시 계산)
-    if (factsRes.facts.fetchWarnings?.length)
-      highlights.notes.unshift(`⚠ 일부 공시 조회 실패(${factsRes.facts.fetchWarnings.slice(0, 3).join(", ")}) — 값이 빠지거나 오래됐을 수 있음, 잠시 뒤 다시 계산`);
-    // 20-F 발행사 LTM 열 = Yahoo 분기(edgar-yahoo-quarters.ts) — 기준일·공란 항목 명시
-    const lq = factsRes.facts.ltmQuarterSource;
-    if (lq) highlights.notes.push(yahooLtmLabel(lq));
-    // 외화 환산 — 연준 H.10 최신 고시일 뒤 기간은 비움(edgar-foreign.ts, 다른 환율로 대체하지 않음)
-    if (factsRes.facts.fxPending) highlights.notes.push(`⚠ ${factsRes.facts.fxPending} — 해당 기간 환산 값 비움`);
-
-    // 조회 실패로 불완전한 결과는 CDN 에 1시간 붙잡히지 않게 캐시하지 않는다(다음 요청이 다시 계산)
-    const degraded = !!factsRes.facts.fetchWarnings?.length || !!factsRes.facts.sourceUnavailable;
+      return ok({ highlights: snap.data }, { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600" } });
+    }
+    const { highlights, degraded } = await computeUsHighlights(market, sym, yahoo);
+    if (!degraded) await writeApiSnap(snapKey, highlights).catch(() => {});
     return ok(
       { highlights },
       {
@@ -181,4 +147,59 @@ export async function GET(
   } catch (err) {
     return jsonError(err);
   }
+}
+
+/** 미국 하이라이트 계산(SEC·Yahoo) — 저장본(api_snap) 갱신에도 쓴다 */
+async function computeUsHighlights(market: "us", sym: string, yahoo: string | null) {
+  const factsRes0 = await fetchUsCompanyFacts(sym);
+  const [quote, estimatesRaw, consensus, cls, sic] = await Promise.all([
+    getEodQuote(market, sym, { yahooOverride: yahoo }).catch(() => null),
+    fetchYahooEstimates(market, sym, yahoo).catch(() => null),
+    fetchForwardConsensus(market, sym, yahoo).catch(() => null),
+    // 듀얼클래스 보정 — 원본 판독 실패는 facts 에 기록(클래스별 값이 필요한 칸 공란 + 사유)
+    loadClassAFactsMarked(factsRes0.cik, factsRes0.facts),
+    fetchUsSic(sym).catch(() => null),
+  ]);
+  const factsRes = { cik: factsRes0.cik, facts: cls.facts };
+  const classFacts = cls.classFacts;
+  // EV 브릿지 맥락 — 금융 자회사 부문 차입금(XBRL 인스턴스), UP-REIT 파트너 지분. 판별 조회 실패 = "unknown"(EV 미표시)
+  const captive = await loadCaptiveDebt(factsRes.cik, sic).catch(() => "unknown" as const);
+  // 외화 공시 기업 예상치 → USD(edgar-foreign.ts). 환산 실패 시 예상치 숨김(원통화 숫자를 USD 로 섞지 않음)
+  const estimates = estimatesRaw ? await estimatesToUsd(estimatesRaw, factsRes.facts).catch(() => null) : null;
+  const opUnits = reitOpUnits(sic, consensus?.sharesOutstanding, consensus?.impliedSharesOutstanding);
+
+  const sharesHint = usSharesHint(quote, consensus);
+
+  const estCols = (estimates?.periods ?? []).map((p) => ({
+    period: p.period,
+    endDate: p.endDate,
+    epsAvg: p.epsAvg,
+    revenueAvg: p.revenueAvg,
+  }));
+
+  // 과거 결산일 가격을 주식수와 같은 기준으로 — Yahoo 가 분할로 기록한 분사 되돌림(edgar-shares.ts)
+  const usBars = secBasisBars(factsRes.facts, quote);
+  const highlights = isFinancialCompany(factsRes.facts, sic)
+    ? buildUsBankHighlights(factsRes.facts, usBars, estCols, sharesHint)
+    : buildUsHighlights(factsRes.facts, usBars, estCols, sharesHint, classFacts, {
+        sic,
+        captive,
+        opUnits,
+      });
+  if (estimates && "fxNote" in estimates && estimates.fxNote) highlights.notes.push(estimates.fxNote);
+  if (estimatesRaw && !estimates) highlights.notes.push("외화 예상치 환산 실패 — 예상치 숨김");
+  // 최신 공시 보완이 원본 조회 실패면 LTM 열은 공란(더 오래된 기간 값을 LTM 으로 내지 않음 — sec-unavailable.ts)
+  blankLtmColumnIfFilingsUnavailable(factsRes.facts, highlights);
+  // 원본 조회 일시 오류(SEC 429 등) — 일부 공시가 빠졌을 수 있다(fetch-health.ts, 2분 뒤 다시 계산)
+  if (factsRes.facts.fetchWarnings?.length)
+    highlights.notes.unshift(`⚠ 일부 공시 조회 실패(${factsRes.facts.fetchWarnings.slice(0, 3).join(", ")}) — 값이 빠지거나 오래됐을 수 있음, 잠시 뒤 다시 계산`);
+  // 20-F 발행사 LTM 열 = Yahoo 분기(edgar-yahoo-quarters.ts) — 기준일·공란 항목 명시
+  const lq = factsRes.facts.ltmQuarterSource;
+  if (lq) highlights.notes.push(yahooLtmLabel(lq));
+  // 외화 환산 — 연준 H.10 최신 고시일 뒤 기간은 비움(edgar-foreign.ts, 다른 환율로 대체하지 않음)
+  if (factsRes.facts.fxPending) highlights.notes.push(`⚠ ${factsRes.facts.fxPending} — 해당 기간 환산 값 비움`);
+
+  // 조회 실패로 불완전한 결과는 CDN 에 1시간 붙잡히지 않게 캐시하지 않는다(다음 요청이 다시 계산)
+  const degraded = !!factsRes.facts.fetchWarnings?.length || !!factsRes.facts.sourceUnavailable;
+  return { highlights, degraded };
 }
