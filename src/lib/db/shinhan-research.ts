@@ -617,7 +617,17 @@ const KIS_STRATEGY_DEFAULT_STOCKNAMES = new Set([
 // 아니라 특정 기관명이라 별도로 안 걸림(오너 지적, 2026-09 — "ECB, 인상
 // 사이클 연장" 누락 확인).
 const BOND_STRONG_RE =
-  /(?<!매출)(?<!연체)(?<!부실)채권(?!단|자|회수|추심)|크레딧|국채|부채|Beige\s?Book|\bCredit\b|\bBond\b|\bDebt\b|Fixed\s?Income/i;
+  /(?<!매출)(?<!연체)(?<!부실)채권(?!단|자|회수|추심)|국채|부채|Beige\s?Book|\bBond\b|\bDebt\b|Fixed\s?Income/i;
+// "크레딧"/"Credit"만 따로 뺀다(오너 지적 2026-10-01 — 신한투자증권 "게임의
+// 룰은 바뀌지 않았다"(미국 주식시장 전략, stockName "투자전략 · 글로벌
+// 주식전략")가 요약의 "AI Capex+Credit 사이클"이라는 한 단어 때문에 투자전략
+// (채권)→이슈분석으로 샜다). 다른 BOND_STRONG_RE 단어(채권/국채/부채/Bond/
+// Debt 등)와 달리 "Credit"은 "credit cycle"(기업 레버리지 사이클)처럼 순수
+// 주식 전략 코멘트에도 흔히 섞여 나오는 영어 금융 상투어라 — 본문에 명시적
+// 주식 신호(S&P 500/코스피/나스닥 등, EQUITY_HINT_RE)가 있으면 이 신호만으론
+// 채권으로 보지 않는다. 다른 강한 신호(채권/국채/부채 등)는 여전히 무조건
+// 채권이다.
+const CREDIT_TERM_RE = /크레딧|\bCredit\b/i;
 // "환율"(FX) 추가 — 한국투자증권 "경제분석 Note" 환율 FAQ 사례가 채권/
 // FICC 데스크 소관인데 신호가 없어 투자전략(주식)으로 잘못 넘어감(오너
 // 지적, 2026-09). 개별 통화명(위안화 등)은 넣지 않는다 — FX_RE 가 이미 그
@@ -777,7 +787,9 @@ function isGenericOrBoardLabel(doc: { stockName: string; title: string }): boole
 
 function isBond(doc: { stockName: string; title: string }, hayWithSummary: string): boolean {
   if (BOND_STRONG_RE.test(hayWithSummary)) return true;
-  return isGenericOrBoardLabel(doc) && BOND_MACRO_RE.test(hayWithSummary) && !EQUITY_HINT_RE.test(hayWithSummary);
+  const equitySignal = EQUITY_HINT_RE.test(hayWithSummary);
+  if (CREDIT_TERM_RE.test(hayWithSummary) && !equitySignal) return true;
+  return isGenericOrBoardLabel(doc) && BOND_MACRO_RE.test(hayWithSummary) && !equitySignal;
 }
 
 // "KB 전략" 추가(오너 지시 2026-09-27 — "kb전략은 투자전략이다" — "9월 인상이 기정 사실이라면"이 금리·연준
@@ -856,9 +868,10 @@ function classifyLegacyTopic(
   // 코멘트, "우리는 이 게임을 해본 적이 있다"처럼 반도체·주식시장 얘기인데
   // 배경으로 "금리"만 잠깐 나오는 순수 주식 코멘트 둘 다 승격 자체가 안 돼
   // 산업분석으로 새던 문제, 오너 지적, 2026-09).
-  const bondStrong = BOND_STRONG_RE.test(hayWithSummary);
+  const rawEquitySignal = EQUITY_HINT_RE.test(hayWithSummary);
+  const bondStrong = BOND_STRONG_RE.test(hayWithSummary) || (CREDIT_TERM_RE.test(hayWithSummary) && !rawEquitySignal);
   const bondMacro = generic && BOND_MACRO_RE.test(hayWithSummary);
-  const equitySignal = generic && EQUITY_HINT_RE.test(hayWithSummary);
+  const equitySignal = generic && rawEquitySignal;
   const bond = bondStrong || (bondMacro && !equitySignal);
   // bare "전략"은 stockName이 업종명이 아닐 때만(generic) 승격 신호로 쓴다 —
   // 영문 Strategy/매크로 등 강한 신호는 항상.
@@ -997,6 +1010,17 @@ export function classifyResearchTopic(
   // MARKET_CONDITION_MONTHLY_RE("월간" 리터럴)는 "10월호"엔 안 걸린다.
   if (doc.source === "NH투자증권" && /^NH\s*하우스\s*뷰/.test(doc.title ?? "")) {
     return "시황분석:Monthly";
+  }
+  // 키움증권 "미국 중간선거와 코스피: 과거 패턴 점검과 대응" — SI 게시판은
+  // stockName이 "키움 이슈분석"으로 강제 라벨링돼(2026-09-26, 화면 스크린샷
+  // 대조로 "경제/전략 > 이슈분석" 확정) 대부분 FOMC·BOJ·유가 같은 순수 경제
+  // 이슈지만, 이 글은 같은 게시판에서도 유일하게 "Strategist 한지영"(키움
+  // 투자전략팀장, 다른 6건은 전부 경제 애널리스트 김유미·안예하·심수빈)이
+  // 쓴 중간선거-코스피 수익률 패턴과 대응전략 글이다(오너 지적 2026-10-01
+  // — "투자전략인데 왜 경제에 들어오나"). 같은 게시판 안에서도 글마다
+  // 성격이 섞여 일반 패턴으로는 못 가린다 — 제목 완전일치로 이 문서만 집는다.
+  if (doc.source === "키움증권" && (doc.title ?? "").trim() === "미국 중간선거와 코스피: 과거 패턴 점검과 대응") {
+    return "시황분석:투자전략";
   }
   // FORCED_ISSUE_STOCKNAMES 는 수집기가 FX 내용을 감지하면 " FX" 를 붙인
   // 별도 라벨(FORCED_FX_STOCKNAMES)로 보내는 게 원래 설계인데, 수집기의 FX

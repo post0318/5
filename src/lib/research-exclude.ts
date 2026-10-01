@@ -44,6 +44,11 @@ const COMMODITY_RE = /원자재|commodit/i;
 // "메리츠"(증권사명)의 "리츠"에 걸리지 않게 앞글자가 "메"인 경우는 제외.
 const REIT_RE = /(?<!메)리츠|\bREITs?\b/i;
 const ETF_RE = /\bETFs?\b|\bETPs?\b|상장지수(?:펀드|증권)?/i;
+// ELS(주가연계증권) 제외(오너 지시 2026-10-01 — KB증권 "ELS 기초자산 밴드전망" 발견,
+// "ELS 전체 공통 수집제외"): ETF/ETP 와 같은 성격 — 개별 종목·업종 얘기가 아니라
+// 파생결합상품(기초자산 밴드·조기상환 조건 등) 얘기라 범위 밖. ETF/ETP 와 동일하게
+// 카테고리 구분 없이 전부 제외.
+const ELS_RE = /\bELS\b|주가연계증권/i;
 const ESG_RE = /\bESG/i;
 // "거버넌스"는 ESG(지배구조)로 보고 제외(오너 지시 2026-09-27 — "거버넌스는 esg다", DS "거버넌스 - 베어허그 시리즈"). 종목 리포트 제목의
 // "거버넌스 개선 기대"까지 지우지 않도록 산업·거시 글(category "기업" 아님)에만 적용한다.
@@ -85,7 +90,7 @@ const isQuant = (t: string) => QUANT_RE.test(t) && !(QUANT_EXCEPT_RE && QUANT_EX
 export function isCommonExcludedResearch(text: string | null | undefined, category?: string): boolean {
   const t = String(text ?? "");
   if ((WEEKLY_RE.test(t) && !UNLISTED_RE.test(t) && !WEEKLY_KEEP_RE.test(t)) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
-  if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
+  if (ETF_RE.test(t) || ESG_RE.test(t) || ELS_RE.test(t) || isQuant(t)) return true;
   if (DAILY_BRIEFING_RE.test(t)) return true; // 시리즈 제외는 기업 카테고리에도 적용
   if (PORTFOLIO_RE.test(t) && !(PORTFOLIO_KEEP_RE && PORTFOLIO_KEEP_RE.test(t))) return true; // 포트폴리오는 기본 제외(오너 지시 2026-09-27)
   if (category === "기업") return false;

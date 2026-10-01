@@ -10,6 +10,11 @@
  * 한 번에 반영된다.
  */
 const ETF_RE = /\bETFs?\b|\bETPs?\b|상장지수(?:펀드|증권)?/i;
+// ELS(주가연계증권) 제외(오너 지시 2026-10-01 — KB증권 "ELS 기초자산 밴드전망" 발견,
+// "ELS 전체 공통 수집제외"): ETF/ETP 와 같은 성격 — 개별 종목·업종 얘기가 아니라
+// 파생결합상품(기초자산 밴드·조기상환 조건 등) 얘기라 범위 밖. ETF/ETP 와 동일하게
+// 카테고리 구분 없이 전부 제외.
+const ELS_RE = /\bELS\b|주가연계증권/i;
 
 /** 제목(또는 라벨+제목)에 ETF/ETP 신호가 있으면 true — 수집기가 이 항목을 건너뛴다. */
 /**
@@ -147,7 +152,7 @@ export function isCommonExcludedContent(text, category, market) {
   const t = String(text ?? "");
   // 주간물 제외의 예외: 비상장 리서치("주간 비상장 투자 동향" 등)는 수집해 비상장으로 분류한다(오너 지시 2026-09-26).
   if ((COMMON_WEEKLY_RE.test(t) && !UNLISTED_RE.test(t) && !WEEKLY_KEEP_RE.test(t)) || CALENDAR_RE.test(t) || RECOMMEND_RE.test(t) || REIT_RE.test(t)) return true;
-  if (ETF_RE.test(t) || ESG_RE.test(t) || isQuant(t)) return true;
+  if (ETF_RE.test(t) || ESG_RE.test(t) || ELS_RE.test(t) || isQuant(t)) return true;
   // 대체투자 규칙은 종목 리포트에 적용하지 않는다(서버 규칙과 동일).
   if (DAILY_BRIEFING_RE.test(t)) return true; // 시리즈 제외는 기업 카테고리에도 적용
   if (PORTFOLIO_RE.test(t) && !(PORTFOLIO_KEEP_RE && PORTFOLIO_KEEP_RE.test(t))) return true; // 포트폴리오는 기본 제외(오너 지시 2026-09-27)
