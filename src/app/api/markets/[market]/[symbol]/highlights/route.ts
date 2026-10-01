@@ -27,7 +27,7 @@ import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
 import { dartAdrHighlights, dartAdrOf } from "@/lib/markets/us/dart-adr";
 
 export const revalidate = 3600;
-export const maxDuration = 45;
+export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
 /**
  * 재무 하이라이트 표 (EV 브릿지 + 5개년 손익·현금흐름 + 현재/LTM + 차기 추정).

@@ -5,7 +5,7 @@ import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
 import { readTtmSnap, writeTtmSnap } from "@/lib/db/ttm-snap";
 
-export const maxDuration = 60;
+export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
 /**
  * TTM(최근 4분기) 플로우 + 국내 보조지표(주당배당금). 52주 베타는 ../beta 라우트(TTM 첫 조회가 느려 분리, 2026-10-01).

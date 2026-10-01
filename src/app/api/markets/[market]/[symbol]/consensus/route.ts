@@ -2,7 +2,7 @@ import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
 import { getConsensusData } from "@/lib/markets/consensus";
 
-export const maxDuration = 60;
+export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
 export async function GET(
   request: Request,
