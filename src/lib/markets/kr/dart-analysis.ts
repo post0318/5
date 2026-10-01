@@ -19,15 +19,6 @@ const C = {
   pretax: { ids: ["ifrs-full_ProfitLossBeforeTax"], names: ["법인세비용차감전순이익"] },
   tax: { ids: ["ifrs-full_IncomeTaxExpenseContinuingOperations", "ifrs-full_IncomeTaxExpenseBenefit"], names: ["법인세비용"] },
   ni: { ids: ["ifrs-full_ProfitLoss"], names: ["당기순이익", "분기순이익", "반기순이익"] },
-  eps: {
-    ids: [
-      "ifrs-full_DilutedEarningsLossPerShare",
-      "ifrs-full_BasicEarningsLossPerShare",
-      "ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations",
-      "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations",
-    ],
-    names: ["희석주당이익", "희석주당순이익", "기본주당이익", "기본주당순이익", "보통주기본주당이익", "계속영업기본주당이익"],
-  },
   assets: { ids: ["ifrs-full_Assets"], names: ["자산총계"] },
   curAssets: { ids: ["ifrs-full_CurrentAssets"], names: ["유동자산"] },
   curLiab: { ids: ["ifrs-full_CurrentLiabilities"], names: ["유동부채"] },

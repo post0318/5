@@ -363,17 +363,62 @@ export function krParentEquityByYear(facts: KrFacts): Map<number, number> {
  * 현대차 PER 이 27% 갈렸다, 2026-09-23).
  */
 export function krEpsByYear(facts: KrFacts): Map<number, number> {
-  return annualSeries(
-    facts,
-    [
-      "ifrs-full_DilutedEarningsLossPerShare",
-      "ifrs-full_BasicEarningsLossPerShare",
-      "ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations",
-      "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations",
-    ],
-    ["희석주당이익", "희석주당순이익", "기본주당이익", "기본주당순이익", "보통주기본주당이익", "계속영업기본주당이익"],
-    ["IS", "CIS"],
-  );
+  const out = new Map(krEpsAnnual(facts, "diluted").values);
+  for (const [y, v] of krEpsAnnual(facts, "basic").values) if (!out.has(y)) out.set(y, v);
+  return out;
+}
+
+/**
+ * **EPS 단일 기준(2026-10-01)** — 전체(계속 + 중단영업) 주당이익. 전체 EPS 를 공시하지 않고 계속영업·중단영업 주당이익만
+ * 공시한 기간은 **두 공시값의 합**(K-IFRS 1033 의 표시 구조 — 전체 = 계속 + 중단). 계속영업 EPS 만 쓰면 중단영업 이익이 큰 해에
+ * 순이익과 EPS 의 정의가 갈린다(NAVER 2021: 순이익 16.48조(라인 지분 정리 이익 포함)인데 EPS 는 계속영업 9,887원 → PER 38배.
+ * 전체는 9,887 + 99,973 = 109,860원). 미국 원칙(계속영업 EPS 태그 미사용, DELL)과 같다. 손익계산서·하이라이트·재무분석 공통.
+ * 계속·중단영업 EPS 는 표준 계정 ID 로만 찾는다 — 계정명 "계속영업순이익" 은 NAVER 가 순이익 줄에도 쓴다.
+ */
+export type KrEpsKind = "basic" | "diluted";
+const EPS_TOTAL: Record<KrEpsKind, { ids: string[]; names: string[] }> = {
+  diluted: { ids: ["ifrs-full_DilutedEarningsLossPerShare"], names: ["희석주당이익", "희석주당순이익", "보통주희석주당이익"] },
+  basic: { ids: ["ifrs-full_BasicEarningsLossPerShare"], names: ["기본주당이익", "기본주당순이익", "기본및희석주당이익", "보통주기본주당이익"] },
+};
+// 계정명은 "주당" 이 들어간 것만(순이익 줄 "계속영업순이익" 과 겹치지 않게)
+const EPS_CONT: Record<KrEpsKind, { ids: string[]; names: string[] }> = {
+  diluted: { ids: ["ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations"], names: ["계속영업희석주당이익", "계속영업희석주당순이익"] },
+  basic: { ids: ["ifrs-full_BasicEarningsLossPerShareFromContinuingOperations"], names: ["계속영업기본주당이익", "계속영업기본주당순이익"] },
+};
+const EPS_DISC: Record<KrEpsKind, { ids: string[]; names: string[] }> = {
+  diluted: { ids: ["ifrs-full_DilutedEarningsLossPerShareFromDiscontinuedOperations"], names: ["중단영업희석주당이익", "중단영업희석주당순이익"] },
+  basic: { ids: ["ifrs-full_BasicEarningsLossPerShareFromDiscontinuedOperations"], names: ["중단영업기본주당이익", "중단영업기본주당순이익"] },
+};
+export const KR_EPS_SUM_NOTE = "전체 EPS 미공시 — 계속영업 + 중단영업 주당이익(회사 공시 두 값)의 합";
+
+/** 기간 라벨별(연간·분기 화면) 전체 EPS. summed = 계속 + 중단영업 합으로 채운 라벨 */
+export function krEpsSeries(facts: KrFacts, kind: KrEpsKind): { values: Record<string, number | null>; summed: Set<string> } {
+  const SJ = ["IS", "CIS"];
+  const values = seriesOf(facts, EPS_TOTAL[kind].ids, EPS_TOTAL[kind].names, SJ);
+  const cont = seriesOf(facts, EPS_CONT[kind].ids, EPS_CONT[kind].names, SJ);
+  const disc = seriesOf(facts, EPS_DISC[kind].ids, EPS_DISC[kind].names, SJ);
+  const summed = new Set<string>();
+  for (const l of Object.keys(values))
+    if (values[l] == null && cont[l] != null) {
+      values[l] = cont[l]! + (disc[l] ?? 0);
+      summed.add(l);
+    }
+  return { values, summed };
+}
+
+/** 사업연도별 전체 EPS(6개년 연간 시계열). summed = 계속 + 중단영업 합으로 채운 해 */
+export function krEpsAnnual(facts: KrFacts, kind: KrEpsKind): { values: Map<number, number>; summed: Set<number> } {
+  const SJ = ["IS", "CIS"];
+  const values = annualSeries(facts, EPS_TOTAL[kind].ids, EPS_TOTAL[kind].names, SJ);
+  const cont = annualSeries(facts, EPS_CONT[kind].ids, EPS_CONT[kind].names, SJ);
+  const disc = annualSeries(facts, EPS_DISC[kind].ids, EPS_DISC[kind].names, SJ);
+  const summed = new Set<number>();
+  for (const [y, c] of cont)
+    if (!values.has(y)) {
+      values.set(y, c + (disc.get(y) ?? 0));
+      summed.add(y);
+    }
+  return { values, summed };
 }
 
 /**

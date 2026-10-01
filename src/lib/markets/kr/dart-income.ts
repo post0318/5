@@ -1,6 +1,7 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem } from "../types";
 import { type KrFacts, type KrDaInput, daAndAmortSeries, seriesOf, sumOf } from "./dart-facts";
+import { KR_EPS_SUM_NOTE, krEpsSeries } from "./dart-ev";
 
 /**
  * 한국 상세 손익계산서 — DART `fnlttSinglAcntAll` 정규화 재분류.
@@ -25,14 +26,7 @@ const C = {
   tax: { ids: ["ifrs-full_IncomeTaxExpenseContinuingOperations", "ifrs-full_IncomeTaxExpenseBenefit"], names: ["법인세비용", "법인세비용(수익)"] },
   netIncome: { ids: ["ifrs-full_ProfitLoss"], names: ["당기순이익", "당기순이익(손실)", "분기순이익", "반기순이익"] },
   niParent: { ids: ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], names: ["지배기업 소유주지분", "지배기업의 소유주지분"] },
-  epsBasic: {
-    ids: ["ifrs-full_BasicEarningsLossPerShare", "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations"],
-    names: ["기본주당이익", "기본주당순이익", "기본및희석주당이익", "보통주기본주당이익", "계속영업기본주당이익", "계속영업 기본주당이익"],
-  },
-  epsDil: {
-    ids: ["ifrs-full_DilutedEarningsLossPerShare", "ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations"],
-    names: ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "계속영업희석주당이익", "계속영업 희석주당이익"],
-  },
+  // EPS 는 dart-ev.ts krEpsSeries(전체 EPS — 미공시면 계속 + 중단영업 합, 하이라이트·재무분석과 같은 기준)
   // 감가상각비: CF 조정 라인에서. 회사별 편차 큼.
   da: {
     ids: [
@@ -100,8 +94,10 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     if (pretax[l] != null && tax[l] != null && netIncome[l] != null)
       otherToNi[l] = Math.round(pretax[l]! - tax[l]! - netIncome[l]!);
 
-  const epsBasic = S(C.epsBasic);
-  const epsDil = S(C.epsDil);
+  const eB = krEpsSeries(facts, "basic"), eD = krEpsSeries(facts, "diluted");
+  const epsBasic = eB.values;
+  const epsDil = eD.values;
+  const epsNote = (sum: Set<string>): Record<string, string> => Object.fromEntries([...sum].map((l) => [l, KR_EPS_SUM_NOTE]));
   // 희석 EPS 를 따로 공시하지 않은 해(희석 증권 없음)는 기본 EPS 와 정의상 같다 — 하이라이트·
   // 재무분석·컨센서스가 쓰는 krEpsByYear(dart-ev.ts, 희석 → 기본 순)와 같은 값이 되게 채운다.
   // 예전엔 여기만 비워 LG에너지솔루션 2023~2025 가 화면마다 갈렸다(검증 2026-09-24).
@@ -175,8 +171,8 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     ...(labels.some((l) => niParent[l] != null)
       ? [row("(지배주주 귀속)", niParent, { depth: 2, italic: true, paren: true, ...(Object.keys(niParentNotes).length ? { cellNotes: niParentNotes } : {}) })]
       : []),
-    row("기본 EPS", epsBasic, { numberFormat: "eps" }),
-    row("희석 EPS", epsDil, { numberFormat: "eps" }),
+    row("기본 EPS", epsBasic, { numberFormat: "eps", ...(eB.summed.size ? { cellNotes: epsNote(eB.summed) } : {}) }),
+    row("희석 EPS", epsDil, { numberFormat: "eps", ...(eD.summed.size || eB.summed.size ? { cellNotes: epsNote(new Set([...eD.summed, ...[...eB.summed].filter((l) => eD.values[l] == null || eD.summed.has(l))])) } : {}) }),
     { accountName: "", accountId: "is:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() },
     row("[ 주석 항목 ]", blank(), { depth: 0, isSubtotal: true }),
     row("EBITDA", ebitda),

@@ -3,7 +3,7 @@ import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
-import { readTtmSnap, writeTtmSnap } from "@/lib/db/ttm-snap";
+import { readTtmSnap, touchTtmSeen, writeTtmSnap } from "@/lib/db/ttm-snap";
 
 export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
@@ -28,9 +28,12 @@ export async function GET(
         ? readTtmSnap(market, sym)
             .catch(() => null)
             .then(async (hit) => {
-              if (hit) return hit;
+              if (hit) {
+                await touchTtmSeen(market, sym).catch(() => {});
+                return hit;
+              }
               const t = adapter.getTtm ? await adapter.getTtm(sym) : null;
-              if (t) await writeTtmSnap(market, sym, t).catch(() => {});
+              if (t) await writeTtmSnap(market, sym, t, { viewed: true }).catch(() => {});
               return t;
             })
         : adapter.getTtm

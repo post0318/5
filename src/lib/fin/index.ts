@@ -10,6 +10,7 @@ import { sgaRuleFor } from "./metrics/sga-rules";
 import { finalizeDerived } from "./derived";
 import { ENGINE_VERSION, markFailed, persist, readStmt, readSym, readSymMeta, toStmtDoc, toSymDoc, touchChecked } from "./store";
 import { Gap, gapNames, type FinAssembly, type Market } from "./types";
+import { isDbConfigured } from "../db";
 import type { FinStmtDoc, FinSymDoc } from "../db/fin";
 
 /**
@@ -32,7 +33,7 @@ export interface AssembleOpts {
   quarterly?: number;
 }
 
-export async function assemble(market: Market, symbol: string, opts: AssembleOpts = {}): Promise<FinAssembly & { stmts: { annual: FinStmtDoc; quarterly: FinStmtDoc }; persisted?: { changed: number; kept: boolean } }> {
+export async function assemble(market: Market, symbol: string, opts: AssembleOpts = {}): Promise<FinAssembly & { stmts: { annual: FinStmtDoc; quarterly: FinStmtDoc }; persisted?: { changed: number; kept: boolean }; readerGaps: number }> {
   if (market !== "us") throw new Error("한국(DART) 어댑터는 아직 없음 — architecture.md §10");
   const sym = symbol.toUpperCase();
   let reader: UsReader;
@@ -107,10 +108,11 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
   };
   const id = `${market}:${sym}`;
   const stmts = { annual: toStmtDoc(`${id}:is:a`, st.annual, st.labels), quarterly: toStmtDoc(`${id}:is:q`, st.quarterly, st.labels) };
-  if (!opts.persist) return { ...result, stmts };
+  // readerGaps — 저장(persist)에 넘기는 결손 표시(배치 저장과 같은 값 — loadFinSym 의 조회 시 저장이 쓴다)
+  if (!opts.persist) return { ...result, stmts, readerGaps: reader.gaps };
   // 판독 단계 실패(최신 공시 판독 불가·원천 조회 실패)는 기존 문서를 유지 — store.persist 가 판정
   const persisted = await persist({ ...result, gaps: reader.gaps }, stmts);
-  return { ...result, stmts, persisted };
+  return { ...result, stmts, persisted, readerGaps: reader.gaps };
 }
 
 function dedupe<T extends { col: { key: string } }>(xs: T[]): T[] {
@@ -150,7 +152,11 @@ export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | 
     try {
       const a = await assemble(market, symbol, { persist: false });
       // 환율·Yahoo 조회 실패로 결손이 생긴 조립은 일시적 — 6시간 캐시하지 않고 실패와 같이 5분 뒤 다시 조립(2026-09-26)
-      entry.ttl = a.gaps & (Gap.FX | Gap.YAHOO) ? LOOKUP_TTL_MS.failed : LOOKUP_TTL_MS.assembled;
+      const transient = a.gaps & (Gap.FX | Gap.YAHOO | Gap.CF_FETCH | Gap.STALE);
+      entry.ttl = transient ? LOOKUP_TTL_MS.failed : LOOKUP_TTL_MS.assembled;
+      // 유니버스 밖 종목도 완전한 조립은 DB 에 저장(오너 결정 2026-10-01 ① — 두 번째 조회부터 어느 서버든 0.5초대). 새 공시 갱신은
+      // 배치(fin-build)가 최근 30일 안에 조회된 종목까지 맡는다(db/ttm-snap.ts listRecentlyViewed). 저장 실패는 조회 결과에 영향 없음
+      if (!transient && isDbConfigured()) await persist({ ...a, gaps: a.readerGaps }, a.stmts).catch(() => {});
       return toSymDoc(a);
     } catch {
       entry.ttl = LOOKUP_TTL_MS.failed;

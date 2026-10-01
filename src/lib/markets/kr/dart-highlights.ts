@@ -6,7 +6,7 @@ import type {
   HighlightRow,
 } from "../us/edgar-highlights";
 import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries } from "./dart-facts";
-import { buildKrEvResolver, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
+import { buildKrEvResolver, KR_EPS_SUM_NOTE, krEpsAnnual, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
  * 한국 재무 하이라이트 (개요) — `edgar-highlights.ts` 미러.
@@ -231,7 +231,18 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     { key: "ebitda_m", label: "마진 %", format: "pct", indent: true, values: ebitda.map((v, i) => margin(v, revenue[i])) },
     { key: "ni", label: "순이익", format: "money", values: netIncome },
     { key: "ni_m", label: "마진 %", format: "pct", indent: true, values: netIncome.map((v, i) => margin(v, revenue[i])) },
-    { key: "eps", label: "EPS (희석)", format: "eps", values: eps },
+    {
+      key: "eps",
+      label: "EPS (희석)",
+      format: "eps",
+      values: eps,
+      // 전체 EPS 미공시 해 — 계속 + 중단영업 주당이익 합(dart-ev.ts krEpsAnnual, 손익계산서와 같은 주석)
+      ...(() => {
+        const d = krEpsAnnual(facts, "diluted"), b = krEpsAnnual(facts, "basic");
+        const yrs = new Set([...d.summed, ...[...b.summed].filter((y) => !d.values.has(y) || d.summed.has(y))]);
+        return yrs.size ? { cellNotes: columns.map((c) => (c.kind === "fy" && yrs.has(Number(c.key.slice(2))) ? KR_EPS_SUM_NOTE : null)) } : {};
+      })(),
+    },
     { key: "eps_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(eps, aEps) },
     { key: "dps", label: "DPS", format: "eps", values: dps },
     { key: "divyield", label: "배당수익률 %", format: "pct", indent: true, values: divYield },
