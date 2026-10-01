@@ -22,6 +22,7 @@ import {
 import { resolveCorpCode } from "./corpcode";
 import { annualSeries, daAndAmortSeries, fetchKrFacts, seriesOf } from "./dart-facts";
 import { buildKrEvResolver, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCaps } from "./dart-ev";
+import { krIsFlows } from "./dart-income";
 import { getKrDaDoc } from "@/lib/db/kr-da";
 
 const HINT =
@@ -554,6 +555,26 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
       ? { periodLabel: ttmRes.periodLabel, netIncome: ttmRes.netIncome, revenue: ttmRes.revenue, opIncome: ttmRes.opIncome, eps: ttmRes.eps }
       : null;
     const parts: KrTtmParts = { ...(ttmRes?.parts ?? {}) };
+    // **LTM = 최근 4개 분기 열 합(매출·영업이익·순이익, 2026-10-02 — 미국과 같은 원칙, 오너 결정 2026-09-28)**: 분기 손익계산서 화면의
+    // 4개 열(같은 계정 선택 krIsFlows)이 모두 있으면 그 합. 누적 공식(연간 + 당기 누적 − 전년 동기 누적)은 회사가 전년 동기를 재작성하면
+    // 판본이 섞이고(LG화학 2026 반기보고서가 2025 상반기 재작성 → 1.94% 차이) 3개월·누적 값이 따로 반올림돼 ±1백만원 어긋났다
+    if (flows && quarterFacts && lastQuarter) {
+      const want: string[] = [];
+      for (let i = 3; i >= 0; i--) {
+        const idx = lastQuarter.year * 4 + (lastQuarter.quarter - 1) - i;
+        want.push(`${Math.floor(idx / 4)} Q${(idx % 4) + 1}`);
+      }
+      const qp = want.map((l) => quarterFacts.periods.find((p) => p.label === l));
+      if (qp.every(Boolean)) {
+        const f = krIsFlows(quarterFacts);
+        for (const [k, series] of [["revenue", f.revenue], ["opIncome", f.opIncome], ["netIncome", f.netIncome]] as const) {
+          const qs = qp.map((p) => ({ v: series[p!.label], start: `${p!.year}-${String(p!.quarter! * 3 - 2).padStart(2, "0")}-01`, end: p!.endDate }));
+          if (qs.some((q) => q.v == null)) continue;
+          flows[k] = qs.reduce((a, q) => a + q.v!, 0);
+          parts[k] = qs.map((q) => ({ v: q.v!, start: q.start, end: q.end }));
+        }
+      }
+    }
     // 구성 기간을 최근 4개 분기로 다시 쪼갠다(외화 환산 LTM = 분기별 평균 환율 합, 오너 결정 2026-09-25 —
     // 인포맥스·Finviz 방식). 분기 재무제표(fetchKrFacts quarter)의 단일분기 값 4개 합이 원화 TTM 과 정확히 같을
     // 때만 바꾼다 — 계정 선택이 달라 합이 안 맞으면 종전 구성 기간(연간·누적)을 그대로 둔다.

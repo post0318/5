@@ -8602,13 +8602,15 @@ async function verifyKr(sym) {
     hl: `${u}/highlights`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm`,
     cs: `${u}/consensus`, bs: `${u}/financials?view=bs&period=annual`, is: `${u}/financials?view=is&period=annual`,
     cf: `${u}/financials?view=cf&period=annual`,
+    isq: `${u}/financials?view=is&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter`, cfq: `${u}/financials?view=cf&period=quarter`,
+    sm: `${u}/financials?view=summary&period=annual`, smq: `${u}/financials?view=summary&period=quarter`,
   })) {
     try { fetched[k] = await getJson(p); } catch (e) { fetched[k] = null; add("응답", `API 응답 ${k}`, "-", { status: FAIL, note: String(e).slice(0, 120) }); }
   }
   let row = null;
   try { row = await getJson(`/api/cron/verify-row?market=kr&symbol=${encodeURIComponent(sym)}`, 240_000, AUTH); }
   catch (e) { add("응답", "API 응답 verify-row", "-", { status: FAIL, note: String(e).slice(0, 120) }); }
-  const { hl, an, tt, cs, bs, is, cf } = fetched;
+  const { hl, an, tt, cs, bs, is, cf, isq, bsq, cfq, sm, smq } = fetched;
   const h = hl?.highlights;
   if (!h) return { sym, error: "하이라이트 없음", checks, review: [] };
   const fyCols = h.columns.filter((c) => c.kind === "fy");
@@ -8648,6 +8650,8 @@ async function verifyKr(sym) {
     for (const [k, v] of Object.entries(rowOf(bs, name))) (BS[k.replace(/^FY(\d{4})$/, "$1Y")] ??= {})[key] = v;
 
   // ── A. DART 원자료 대조(사업연도 열, 허용 오차 없음 — 원 단위 정수) ──
+  /** 항목별 DART 처음 공시·최신 판본 — F층 원인 확인(외부 = 처음 공시, 앱 = 최신 재작성)에 쓴다 */
+  const dartVint = {};
   {
     const corp = KR_CORP.get(sym);
     const itemsOf = (st) => (st?.sections ?? []).flatMap((x) => x.items ?? []);
@@ -8684,6 +8688,10 @@ async function verifyKr(sym) {
             r.note = `앱 = 처음 공시 ${orig} · 최신 보고서 값 ${latest} — 앱이 재작성 값을 안 씀`;
           else if (r.status === PASS && orig != null && latest !== orig) r.note = `최신 보고서의 재작성 값 — 처음 공시 ${orig}`;
           add("A", `${name} = DART`, col, r);
+          const vAll = [[cur, y, "thstrm_amount"], [next, y + 1, "frmtrm_amount"], [next2, y + 2, "bfefrmtrm_amount"]]
+            .map(([L, by, f]) => { const rs = L ? dartRows(L, sjs, ids, names) : []; return rs.length === 1 ? { by, v: dartNum(rs[0][f]) } : null; })
+            .filter((x) => x && x.v != null);
+          dartVint[`${col}|${name}`] = { orig, latest, app, pass: r.status === PASS, vAll };
         }
         // EPS(기본·희석) — 전체 EPS 줄(표준 ID 또는 "보통주 기본주당이익" 같은 이름 — 현대차는 표준 코드 없음). 전체 EPS 를 공시하지
         // 않았으면 계속영업 + 중단영업 주당이익(같은 기준끼리, NAVER 2021) — 앱 코드와 무관하게 DART 값만으로 계산.
@@ -8714,6 +8722,7 @@ async function verifyKr(sym) {
         const latestEps = (kind) => { const [L, f] = ownerOf(); return L ? epsOf(L, f, kind) : null; };
         const bE = latestEps("b"), dE = latestEps("d");
         add("A", "기본 EPS = DART", col, vsSource(isByName("기본 EPS", k), bE?.v ?? null, 0, bE?.how ?? ""));
+        { const rr = vsSource(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, 0); dartVint[`${col}|희석 EPS`] = { app: rr.app, latest: rr.src, pass: rr.status === PASS, vAll: [] }; }
         add("A", "희석 EPS = DART", col, vsSource(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, 0, dE ? dE.how : bE ? `DART 희석 EPS 미공시 — 기본 EPS 와 대조${bE.how ? " · " + bE.how : ""}` : ""));
       }
     }
@@ -8770,6 +8779,45 @@ async function verifyKr(sym) {
       }
     }
   }
+  // ── C층 화면 간 일치(한국, 2026-10-02 — 미국과 같은 검사): 분기 열 · 총괄 = 각 재무제표(연간·분기) · 하이라이트 LTM = 최근 4개 분기 합(손익)·
+  //    최근 분기 재무상태표(총차입금·비지배지분)
+  if (isq && bsq && cfq && sm && smq) {
+    const itemsK = (st) => (st?.sections ?? []).flatMap((x) => x.items ?? []);
+    const rid = (st) => Object.fromEntries(itemsK(st).map((it) => [it.accountId, it.values ?? {}]));
+    const rnm = (st) => { const o = {}; for (const it of itemsK(st)) { const k0 = String(it.accountName ?? "").trim(); if (!(k0 in o)) o[k0] = it.values ?? {}; } return o; };
+    const qcols = (st) => (st?.periods ?? []).map((p0) => `${p0.label}@${p0.endDate}`).join(",");
+    const qI = qcols(isq);
+    for (const [nm, st] of [["재무상태표", bsq], ["현금흐름표", cfq], ["총괄", smq]])
+      add("C", `분기 화면 열 손익계산서 = ${nm}`, "-", qI === qcols(st) ? { status: PASS, note: qI } : { status: FAIL, note: `${qI} ≠ ${qcols(st)}` });
+    const eqv = (nm, col, a, b0) => { if (a == null && b0 == null) return; add("C", nm, col, same(a, b0)); };
+    for (const [S0, I0, B0, C0, per] of [[rid(sm), rnm(is), rid(bs), rid(cf), is?.periods], [rid(smq), rnm(isq), rid(bsq), rid(cfq), isq?.periods]]) for (const p0 of per ?? []) {
+      const k0 = p0.label, c0 = k0.replace(/^FY(\d{4})$/, "$1Y");
+      eqv("총괄 매출 = 손익계산서", c0, S0["sum:is:rev"]?.[k0], I0["매출액"]?.[k0]);
+      eqv("총괄 영업이익 = 손익계산서", c0, S0["sum:is:op"]?.[k0], I0["영업이익"]?.[k0]);
+      eqv("총괄 순이익 = 손익계산서", c0, S0["sum:is:ni"]?.[k0], I0["당기순이익"]?.[k0]);
+      eqv("총괄 자산 = 재무상태표", c0, S0["sum:bs:자산"]?.[k0], B0["bs:자산:자산 총계"]?.[k0]);
+      eqv("총괄 부채 = 재무상태표", c0, S0["sum:bs:부채"]?.[k0], B0["bs:부채:부채 총계"]?.[k0]);
+      eqv("총괄 자본 = 재무상태표", c0, S0["sum:bs:자본"]?.[k0], B0["bs:자본:자본 총계"]?.[k0]);
+      eqv("총괄 영업현금흐름 = 현금흐름표", c0, S0["sum:cf:영업활동으로 인한 현금흐름"]?.[k0], C0["cf:total:영업활동 현금흐름"]?.[k0]);
+      eqv("총괄 투자현금흐름 = 현금흐름표", c0, S0["sum:cf:투자활동으로 인한 현금흐름"]?.[k0], C0["cf:total:투자활동 현금흐름"]?.[k0]);
+      eqv("총괄 재무현금흐름 = 현금흐름표", c0, S0["sum:cf:재무활동으로 인한 현금흐름"]?.[k0], C0["cf:total:재무활동 현금흐름"]?.[k0]);
+    }
+    // 하이라이트 LTM — 손익 TTM 기준 분기(ttm.periodLabel "… + 2026 반기 − 2025 반기")가 분기 화면 마지막 열과 같을 때만
+    const LH = H.LTM, IQn = rnm(isq), BQi = rid(bsq);
+    const ql = (isq.periods ?? []).map((p0) => p0.label), l4 = ql.slice(-4), lq = ql.at(-1);
+    const fq = (tt?.ttm?.periodLabel ?? "").match(/\+\s*(\d{4})\s*(1분기|반기|3분기)/);
+    const want = fq ? `${fq[1]} Q${{ "1분기": 1, 반기: 2, "3분기": 3 }[fq[2]]}` : null;
+    if (LH && l4.length === 4 && want && lq === want) {
+      const s4 = (nm) => { const xs = l4.map((k0) => IQn[nm]?.[k0]); return xs.every((v0) => v0 != null) ? xs.reduce((a0, b1) => a0 + b1, 0) : null; };
+      const hRow = (key) => { const i0 = h.columns.findIndex((c) => c.kind === "ltm"); return h.rows.find((r1) => r1.key === key)?.values[i0] ?? null; };
+      eqv("하이라이트 LTM 매출 = 분기 최근 4개 합", "LTM", hRow("revenue"), s4("매출액"));
+      eqv("하이라이트 LTM 영업이익 = 분기 최근 4개 합", "LTM", hRow("opinc"), s4("영업이익"));
+      eqv("하이라이트 LTM 순이익 = 분기 최근 4개 합", "LTM", LH.ni, s4("당기순이익"));
+      eqv("하이라이트 LTM 총차입금 = 최근 분기 재무상태표", "LTM", LH.debt, BQi["bs:note:총차입금"]?.[lq]);
+      eqv("하이라이트 LTM 비지배지분 = 최근 분기 재무상태표", "LTM", LH.nci, BQi["bs:note:비지배지분"]?.[lq]);
+    } else if (LH) add("C", "하이라이트 LTM = 분기 화면", "LTM", { status: NA, note: `손익 TTM 기준 분기 ${want ?? "없음"} · 분기 화면 마지막 열 ${lq ?? "없음"}` });
+  }
+
   const L = H.LTM;
   if (row && L) {
     const m = row.overview?.multiples ?? null, uv = row.universe ?? null;
@@ -8794,6 +8842,21 @@ async function verifyKr(sym) {
   const review = [];
   if (EXTERNAL) {
     const items = new Map(); // 항목 → { ours, src: { 소스: { v, unit, cause } } }
+    // 판본 차이 원인 확인 — 외부 값 = DART 처음 공시(보고 단위 안) 이고 앱 값 = DART 최신 재작성(A층 통과)일 때만. 숫자로 성립할 때만 원인
+    // 원인 확인(숫자로 성립할 때만): ① 외부 = DART 이전 판본(처음 공시·다음 해 보고서 전기)이고 앱 = 최신 재작성 ② 앱 = DART 공시값(A층 정확 일치)
+    //    — 미국 F층 "앱 = SEC(A층 일치)" 와 같은 원칙(외부는 자체 계산·자체 정의)
+    const F2A = { "매출": "매출액", "영업이익": "영업이익", "순이익(연결)": "당기순이익(연결)", "순이익(지배)": "당기순이익(지배)", "EPS": "희석 EPS" };
+    const vintCause = (item) => {
+      const [c, ...rest] = item.split(" ");
+      const a = dartVint[`${c}|${F2A[rest.join(" ")] ?? ""}`];
+      if (!a || !a.pass) return null;
+      return (ours, v, unit) => {
+        if (ours !== a.app) return null;
+        const old = (a.vAll ?? []).find((x) => x.v !== a.latest && sameAt(x.v, v, unit));
+        if (old) return `외부 = DART ${old.by} 사업보고서 판본 ${old.v}, 앱 = 최신 보고서 ${a.latest}`;
+        return `앱 = DART 공시값 ${a.latest}(A층 정확 일치) — 외부는 자체 계산·정의`;
+      };
+    };
     const putS = (src, item, ours, v, unit, cause) => {
       if (ours == null || v == null) return;
       const it = items.get(item) ?? { ours, src: {} };
@@ -8804,7 +8867,7 @@ async function verifyKr(sym) {
       const fg = await fnguideInvest(sym);
       const fin = await fnguideFinance(sym);
       const ymOf = (d) => (d ? `${d.slice(0, 4)}/${d.slice(5, 7)}` : null);
-      const put = (item, ours, v, unit, cause) => putS("FnGuide", item, ours, v, unit, cause);
+      const put = (item, ours, v, unit, cause) => putS("FnGuide", item, ours, v, unit, cause ?? vintCause(item));
       for (const [c, x] of Object.entries(H)) {
         const ym = ymOf(x.date);
         if (!ym || !fg.cols.includes(ym)) continue;
@@ -8850,7 +8913,7 @@ async function verifyKr(sym) {
       if (!ya.length) throw new Error("연간 재무 없음(.KS·.KQ)");
       const iso = (d) => new Date(d).toISOString().slice(0, 10);
       const yEbitda = (r) => (r.totalOperatingIncomeAsReported != null && r.reconciledDepreciation != null ? r.totalOperatingIncomeAsReported + r.reconciledDepreciation : null);
-      const put = (item, ours, v, unit) => putS("Yahoo", item, ours, v, unit);
+      const put = (item, ours, v, unit) => putS("Yahoo", item, ours, v, unit, vintCause(item));
       for (const [c, x] of Object.entries(H)) {
         if (c === "LTM") continue;
         const r = ya.find((r) => dayDiff(iso(r.date), x.date) <= 7);
@@ -8877,7 +8940,7 @@ async function verifyKr(sym) {
       for (const n of names) {
         const s = it.src[n];
         if (sameAt(it.ours, s.v, s.unit)) { matched.push(n); continue; }
-        const why = s.cause?.(it.ours, s.v) ?? null;
+        const why = s.cause?.(it.ours, s.v, s.unit) ?? null;
         if (why) { explained.push(n); causes[n] = why; }
         off.push(`${n} ${s.v} (${(((it.ours - s.v) / Math.abs(s.v || 1)) * 100).toFixed(2)}%)${why ? ` [원인 확인: ${why}]` : ""}`);
       }
