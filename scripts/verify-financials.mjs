@@ -6150,8 +6150,51 @@ async function verifyUs(sym) {
         const bsSec = uniq.filter((y) => y.kind === "bs" && y.v !== 0);
         const rBs = repCur === "USD" ? 1 : fxEndRate(fxRows, row.ltm.E);
         let orphanN = 0, synthN = 0;
+        const near = (a0, b0) => Math.abs(a0 - b0) <= 1e-9 * Math.max(Math.abs(a0), Math.abs(b0)) || (a0 === 0 && b0 === 0);
+        // 합성 개념 구성 규칙 — 검증기 고정(재감사 11차: "아무 SEC 값 하나·두 값 합 / 대조 통과 개념 부분합"은 정의 바꿔치기를 통과시켰다).
+        //   부모 연결 = 20-F 재무상태표 계산 구조(검증기 판독). 유동·비유동 = 조상 노드 이름
+        const parentOf = new Map();
+        for (const [fr, ks] of secE.kids) for (const k0 of ks) if (!parentOf.has(k0)) parentOf.set(k0, fr);
+        const sideOf = (id) => {
+          for (let x = id, i = 0; x && i < 12; x = parentOf.get(x), i++) {
+            const n0 = shortId(x);
+            if (/Noncurrent|NonCurrent/.test(n0) && /Liabilit/.test(n0)) return "nc";
+            if (/^(LiabilitiesCurrent|CurrentLiabilities)$/.test(n0)) return "cur";
+            if (/^(AssetsCurrent|CurrentAssets)$/.test(n0)) return "curA";
+          }
+          return null;
+        };
+        const unitRe0 = new RegExp(`^(?:u_)?(?:iso4217[_:]?)?${repCur}$`, "i");
+        const exDebt = expectedForeignDebt(secE, unitRe0);
+        const synthExp = (d) => {
+          if (rBs == null) return { v: null, why: "H.10 기말 환율 없음" };
+          if (d === "DebtFaceDerived") {
+            if (!exDebt) return { v: null, why: "SEC 본표 차입금 판독 불가" };
+            return { v: exDebt.sum * rBs, how: `SEC 20-F 본표 차입금 + 리스(${exDebt.parts.map((x) => `${x.what} ${shortId(x.id)} ${x.v}`).join(" + ")}) × H.10 기말 ${rBs}` };
+          }
+          if (d === "DebtFaceNoncurrentDerived") {
+            if (!exDebt) return { v: null, why: "SEC 본표 차입금 판독 불가" };
+            const nc = [];
+            for (const x of exDebt.parts) {
+              if (x.kind === "note") continue;
+              if (x.kind === "face") { const sd = sideOf(x.id); if (sd === "nc") nc.push(x); else if (sd == null) return { v: null, why: `본표 차입금 줄 ${shortId(x.id)} 의 유동·비유동 판정 불가` }; continue; }
+              if (x.kind === "nonLease" || (x.kind === "finLease" && /Noncurrent/.test(x.id))) { nc.push(x); continue; }
+              if (x.kind === "curLease" || (x.kind === "finLease" && /Current$/.test(x.id))) continue;
+              return { v: null, why: `리스 구성(${x.kind}) 유동·비유동 판정 불가` };
+            }
+            return { v: nc.reduce((t, x) => t + x.v, 0) * rBs, how: `SEC 20-F 비유동 차입금·리스 줄(${nc.map((x) => `${shortId(x.id)} ${x.v}`).join(" + ") || "없음 — 0"}) × H.10 기말 ${rBs}` };
+          }
+          if (d === "ShortTermInvestmentsFaceDerived") {
+            const re = /ShortTermInvestments|CurrentInvestments|MarketableSecuritiesCurrent|AvailableForSaleSecuritiesDebtSecuritiesCurrent|ShorttermDeposits|CurrentFinancialAssets(AtAmortisedCost|AtFairValue)/;
+            const ls = bsSec.filter((y) => re.test(y.id) && secE.faceIds.has(y.id) && sideOf(y.id) === "curA");
+            return { v: ls.reduce((t, y) => t + y.v, 0) * rBs, how: `SEC 20-F 유동자산 본표 단기투자 줄(${ls.map((y) => `${shortId(y.id)} ${y.v}`).join(" + ") || "없음 — 0"}) × H.10 기말 ${rBs}` };
+          }
+          return null;
+        };
         for (const [d, v] of Object.entries(fyApp)) {
-          if (v == null || v === 0 || needDst.has(d)) continue;
+          if (v == null || needDst.has(d)) continue;
+          // 0 은 합성 개념만 대조(재감사 11차 — 합성 값을 0 으로 바꾸면 대조가 없었다). 그 밖의 0 은 원천 없음 대상 아님(값 없음과 같음)
+          if (v === 0 && !/Face\w*Derived$|Unified$/.test(d)) continue;
           const kindNm = fyKind[d] === "bs" ? "연말" : "흐름";
           if (/Unified$/.test(d)) {
             synthN++;
@@ -6163,28 +6206,12 @@ async function verifyUs(sym) {
           }
           if (/Face\w*Derived$/.test(d) && fyKind[d] === "bs") {
             synthN++;
-            // ① SEC 원본 연말 값 하나 또는 두 값 합 × H.10 기말(본표 합성 줄 — ShortTermInvestmentsFaceDerived 등)
-            // ② SEC 값 대조를 통과한 차입·리스·투자 계열 앱 개념들의 부분합(본표 차입금 합계 — DebtFaceDerived·DebtFaceNoncurrentDerived = 차입금 + 리스 줄 합)
-            let hit = null;
-            const near = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b));
-            if (rBs != null) {
-              outer: for (let i = 0; i < bsSec.length; i++) {
-                if (near(v, bsSec[i].v * rBs)) { hit = `SEC 20-F ${shortId(bsSec[i].id)} ${bsSec[i].v} × H.10 기말 ${rBs}`; break; }
-                for (let j = i + 1; j < bsSec.length; j++) if (near(v, (bsSec[i].v + bsSec[j].v) * rBs)) { hit = `SEC 20-F (${shortId(bsSec[i].id)} ${bsSec[i].v} + ${shortId(bsSec[j].id)} ${bsSec[j].v}) × H.10 기말 ${rBs}`; break outer; }
-              }
-            }
-            if (!hit) {
-              const pool = [...needDst.keys()].filter((k0) => fyKind[k0] === "bs" && fyApp[k0] && /Debt|Borrow|Lease|Note|Paper|Bond|Investment|Securit/.test(k0) && !/Derived$|FairValue|Maturit|Interest/.test(k0)).slice(0, 16);
-              for (let m = 1; m < 1 << pool.length && !hit; m++) {
-                let t = 0;
-                const used = [];
-                for (let b = 0; b < pool.length; b++) if (m & (1 << b)) { t += fyApp[pool[b]]; used.push(pool[b]); }
-                if (near(v, t)) hit = `SEC 대조 통과 개념 합 ${used.join(" + ")}`;
-              }
-            }
-            add("A", `20-F 사업연도 ${kindNm} 합성 ${d} @${row.ltm.E}`, "LTM", hit
-              ? { status: PASS, note: `앱 ${v} = ${hit} (정확 일치)` }
-              : { status: FAIL, note: `앱 본표 합성 값 ${v} — SEC 원본 값(하나·두 값 합)이나 SEC 대조 통과 차입·리스·투자 개념 부분합 어느 것과도 같지 않음(출처 불명)` });
+            const exp = synthExp(d);
+            add("A", `20-F 사업연도 ${kindNm} 합성 ${d} @${row.ltm.E}`, "LTM", !exp || exp.v == null
+              ? { status: FAIL, note: `앱 합성 값 ${v} — 검증기에 이 합성 개념의 구성 규칙이 없거나 SEC 원본으로 계산 불가${exp?.why ? `(${exp.why})` : ""}` }
+              : near(v, exp.v)
+                ? { status: PASS, note: `앱 ${v} = ${exp.how} (정확 일치)`, app: v, src: exp.v }
+                : { status: FAIL, note: `앱 합성 값 ${v} ≠ ${exp.how} = ${exp.v}`, app: v, src: exp.v });
             continue;
           }
           orphanN++;
