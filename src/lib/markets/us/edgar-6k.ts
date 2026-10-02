@@ -9,7 +9,7 @@ import type { RecentFilings } from "./edgar-gapfill";
  * 줄이 있다(TSM 매입채무 = 매입채무 + 설비 미지급금, 유동성 장기부채에서 사채 유동분 누락 등). 회사가 직접 낸 분기 보고서의 같은 줄을 읽으면
  * 정의가 SEC 연간과 같다. 줄 대응은 추측하지 않는다 — 같은 회사 최근 20-F 의 XBRL 라벨 파일(개념 ↔ 회사가 쓰는 줄 이름)로 이름이 정확히
  * 같은 줄만. 재무상태표는 보고서의 전년 연말 열이 SEC 연간 값과 정확히 같은 후보만 쓴다(호출부 edgar-yahoo-quarters.ts 가 확인).
- * 재무제표가 그림인 보고서(ASML)는 읽지 못한다 — null.
+ * 재무제표가 슬라이드 그림인 보고서(ASML)는 그림 아래 숨은 글자(같은 내용)를 읽는다(slideStatements, 오너 지적 2026-10-02 — ASML IR 공시 목록).
  */
 
 const UA = "post0318 research post0318@gmail.com";
@@ -34,6 +34,8 @@ export interface SixKStatements {
   labels: Map<string, { pos: Set<string>; neg: Set<string> }>;
   /** 개념 → 표시 구조(_pre.xml)상 부모 개념 */
   parents: Map<string, Set<string>>;
+  /** 슬라이드 글자 형식 — 줄 이름 앞에 구역 머리말이 붙어 나온다("cash flows from investing activities purchase of …"). 끝이 라벨과 같으면 대응 */
+  loose?: boolean;
 }
 
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
@@ -42,7 +44,11 @@ const decode = (s: string) =>
   s.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;|&#xa0;/gi, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;/g, "'").replace(/&#8211;|&#8212;|&ndash;|&mdash;/g, "-")
     .replace(/&[a-z#0-9]+;/gi, " ").replace(/\s+/g, " ").trim();
 /** 라벨 정규화 — 소문자, 주석 번호 "(Note 19)" 제거, 구두점·공백 정리 */
-export const normLabel = (s: string) => s.toLowerCase().replace(/\((?:notes?|note)[^)]*\)/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+export const normLabel = (s: string) =>
+  s.toLowerCase().replace(/\((?:notes?|note)[^)]*\)/g, "")
+    // 현금흐름 합계 줄 — 20-F "Net cash used in investing activities" ↔ 분기 "Net cash provided by (used in) investing activities"(같은 개념, 부호만 다른 표현)
+    .replace(/^net cash (?:provided by |used in |\(used in\) |provided by \(used in\) )+/, "net cash ")
+    .replace(/[^a-z0-9]+/g, " ").trim();
 
 const NUM_RE = /^\(?-?\$?\s*[\d,]+(?:\.\d+)?\)?$/;
 const parseNum = (s: string): number | null => {
@@ -67,10 +73,10 @@ async function filingLabels(cik: number, recent: RecentFilings): Promise<{ label
   if (!lab || !pre) return none;
   const [xml, pxml] = await Promise.all([fetchText(`${base}/${lab}`, OPT), fetchText(`${base}/${pre}`, OPT)]);
   const out: Lb = new Map();
-  const re = /<link:label\b[^>]*xlink:label="lab_[^_"]+_([A-Za-z0-9]+)"[^>]*xlink:role="[^"]*\/(label|terseLabel|verboseLabel|negatedLabel|negatedTerseLabel|totalLabel)"[^>]*>([^<]*)<\/link:label>/g;
+  const re = /<link:label\b[^>]*xlink:label="lab_[^_"]+_([A-Za-z0-9]+)"[^>]*xlink:role="[^"]*\/(label|terseLabel|verboseLabel|negatedLabel|negatedTerseLabel|negatedTotalLabel|totalLabel|netLabel)"[^>]*>([^<]*)<\/link:label>/g;
   for (let m: RegExpExecArray | null; (m = re.exec(xml)); ) {
     const s = out.get(m[1]) ?? { pos: new Set<string>(), neg: new Set<string>() };
-    (/^negated/.test(m[2]) ? s.neg : s.pos).add(normLabel(m[3]));
+    (/^negated/.test(m[2]) ? s.neg : s.pos).add(normLabel(m[3].replace(/&amp;/g, "&").replace(/&#39;|&apos;/g, "'")));
     out.set(m[1], s);
   }
   // 표시 구조 — loc(이름표 → 개념)·parent-child 연결
@@ -107,6 +113,64 @@ function sectionRows(html: string, head: RegExp, mustHave: RegExp, end: RegExp):
   return null;
 }
 
+/**
+ * 형식 2 — 재무제표가 슬라이드 그림이고 같은 내용이 그림 아래 숨은 글자(흰색 1pt)로 들어 있는 보고서(Workiva — ASML "Financial Statements
+ * US GAAP"). 글자는 "줄 이름  값  값 …"(두 칸 띄움)이고, 열 머리는 "Jun 29, Jun 28, (Unaudited, €, in millions) 2025 2026".
+ * 분기말이 달 말이 아닌 회사(ASML 6월 28일)는 같은 달 말로 맞춘다(야후 분기말·LTM 기준일이 달 말). 미국 기준(US GAAP) 슬라이드만.
+ * 현금흐름표는 누적 열(반기·3분기 보고서의 "Six/Nine months ended", 1분기는 3개월)
+ */
+const MON3 = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+function snapMonthEnd(y: number, m: number, d: number): string {
+  // 24일 이후면 그달 말, 7일 이전이면 전달 말(52·53주 결산), 그 밖은 그대로
+  const end = (yy: number, mm: number) => new Date(Date.UTC(yy, mm + 1, 0)).toISOString().slice(0, 10);
+  if (d >= 24) return end(y, m);
+  if (d <= 7) return end(y, m - 1);
+  return new Date(Date.UTC(y, m, d)).toISOString().slice(0, 10);
+}
+function slideDates(text: string): string[] {
+  const h = /((?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2},\s*)+)\s*\([^)]*\)\s*((?:(?:19|20)\d{2}\s+)+)/.exec(text);
+  if (!h) return [];
+  const md = [...h[1].matchAll(/([A-Za-z]{3})[a-z]*\.? (\d{1,2}),/g)].map((m) => [MON3.indexOf(m[1].toLowerCase()), Number(m[2])]);
+  const ys = h[2].trim().split(/\s+/).map(Number);
+  if (md.length !== ys.length || md.some(([m]) => m < 0)) return [];
+  return md.map(([m, d], k) => snapMonthEnd(ys[k], m, d));
+}
+function slideRows(text: string, n: number): SixKRow[] {
+  const rows: SixKRow[] = [];
+  let cur: SixKRow | null = null;
+  for (const tok of text.split(/\s{2,}/).map((t) => t.trim()).filter(Boolean)) {
+    const v = parseNum(tok);
+    if (v != null && cur) cur.vals.push(v);
+    else if (/[A-Za-z]/.test(tok)) rows.push((cur = { label: normLabel(tok), vals: [] }));
+    else cur = null;
+  }
+  return rows.filter((r) => r.vals.length === n);
+}
+function slideStatements(html: string, periodEnd: string, fyEnd: string, priorEnd: string): Omit<SixKStatements, "source" | "labels" | "parents"> | null {
+  const texts = [...html.matchAll(/<FONT[^>]*color:\s*white[^>]*>([\s\S]*?)<\/FONT>/gi)].map((m) =>
+    m[1].replace(/<[^>]+>/g, " ").replace(/&#8212;|&mdash;/g, "—").replace(/&#8364;|&euro;/g, "€").replace(/&#8217;|&rsquo;/g, "'").replace(/&amp;/g, "&").replace(/&nbsp;|&#160;/g, " ").replace(/[\r\n\t]/g, " "));
+  if (texts.length < 3) return null;
+  const unitOf = (t: string) => (/in millions/i.test(t) ? 1e6 : /in thousands/i.test(t) ? 1e3 : null);
+  // 재무상태표 — 기준일·연말·1년 전이 다 있는 슬라이드 중 열이 가장 많은 것(분기별 요약)
+  const bsCands = texts.filter((t) => /US GAAP/.test(t) && /total assets/i.test(t) && unitOf(t)).map((t) => ({ t, d: slideDates(t) }))
+    .filter((x) => x.d.includes(periodEnd) && x.d.includes(fyEnd)).sort((a, b) => b.d.length - a.d.length);
+  // 현금흐름표 — 누적 열
+  let cf: { t: string; d: string[]; cols: number[] } | null = null;
+  for (const t of texts) {
+    if (!/US GAAP/.test(t) || !/operating activities/i.test(t) || !/months ended/i.test(t) || !unitOf(t)) continue;
+    const d = slideDates(t);
+    const cols = d.length === 4 && /(six|nine) months ended/i.test(t) ? [2, 3] : d.length === 2 && !/(six|nine) months ended/i.test(t) ? [0, 1] : null;
+    if (!cols || !cols.every((k) => d[k] === periodEnd || d[k] === priorEnd) || d[cols[0]] === d[cols[1]]) continue;
+    cf = { t, d, cols };
+    break;
+  }
+  const bs = bsCands[0];
+  if (!bs || !cf || unitOf(bs.t) !== unitOf(cf.t)) return null;
+  const unit = unitOf(bs.t)!;
+  const cfRows = slideRows(cf.t, cf.d.length).map((r) => ({ ...r, vals: cf!.cols.map((k) => r.vals[k]) }));
+  return { unit, bsDates: bs.d, cfDates: cf.cols.map((k) => cf!.d[k]), bs: slideRows(bs.t, bs.d.length), cf: cfRows, loose: true };
+}
+
 /** 구간 머리말에 나온 날짜(ISO) — 등장 순서(열 순서) */
 function headerDates(text: string, candidates: string[]): string[] {
   return candidates.map((d) => ({ d, i: text.indexOf(longDate(d)) })).filter((x) => x.i >= 0).sort((a, b) => a.i - b.i).map((x) => x.d);
@@ -125,10 +189,18 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
   for (const i of cands) {
     const base = `https://www.sec.gov/Archives/edgar/data/${cikN}/${recent.accessionNumber[i].replace(/-/g, "")}`;
     const idx = await fetchJson<{ directory: { item: { name: string; size: string | number }[] } }>(`${base}/index.json`, OPT).catch(() => null);
-    const docs = (idx?.directory.item ?? []).filter((x) => /\.htm$/i.test(x.name) && Number(x.size) > 150_000).sort((a, b) => Number(b.size) - Number(a.size)).slice(0, 2);
+    const docs = (idx?.directory.item ?? []).filter((x) => /\.htm$/i.test(x.name) && !/-index/i.test(x.name) && Number(x.size) > 15_000).sort((a, b) => Number(b.size) - Number(a.size)).slice(0, 6);
     for (const d of docs) {
       const html = await fetchText(`${base}/${d.name}`, { ...OPT, timeoutMs: 60_000 }).catch(() => null);
       if (!html) continue;
+      // 형식 2 — 슬라이드 그림 + 숨은 글자(Workiva, ASML "Financial Statements US GAAP")
+      const sl = slideStatements(html, periodEnd, fyEnd, priorEnd);
+      if (sl) {
+        const { labels, parents } = await filingLabels(cikN, recent).catch(() => ({ labels: new Map(), parents: new Map() }));
+        if (!labels.size) return null;
+        return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, ...sl, labels, parents, loose: true };
+      }
+      if (Number(d.size) < 150_000) continue;
       const head = decode(html.slice(0, 200_000)).toLowerCase();
       if (!head.includes(longDate(periodEnd))) continue;
       const bs = sectionRows(html, /CONSOLIDATED (?:BALANCE SHEETS?|STATEMENTS? OF FINANCIAL POSITION)/, /total (?:current )?assets/i, /CONSOLIDATED STATEMENTS? OF (?:COMPREHENSIVE|PROFIT|INCOME|OPERATIONS)/i);
@@ -145,7 +217,7 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       const fix = (rows: SixKRow[], n: number) => rows.map((r) => ({ ...r, vals: r.vals.length === 2 * n ? r.vals.filter((_, k) => k % 2 === 0) : r.vals })).filter((r) => r.vals.length === n);
       const { labels, parents } = await filingLabels(cikN, recent).catch(() => ({ labels: new Map(), parents: new Map() }));
       if (!labels.size) return null;
-      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length), cf: fix(cf.rows, 2), labels, parents };
+      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length), cf: fix(cf.rows, 2), labels, parents, loose: false };
     }
   }
   return null;
@@ -158,11 +230,13 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
 export function sixKValueOf(st: SixKStatements, concept: string, sec: "bs" | "cf", check?: (vals: number[]) => boolean): number[] | null {
   const ls = st.labels.get(concept);
   if (!ls) return null;
+  // 슬라이드 형식은 줄 이름 앞에 머리말이 붙을 수 있어 끝부분이 라벨과 같은 줄도(단어 경계)
+  const tail = (r: SixKRow, set: Set<string>) => set.has(r.label) || (!!st.loose && [...set].some((l) => l.length > 3 && r.label.endsWith(` ${l}`)));
   const val = (r: SixKRow) => {
-    const p = ls.pos.has(r.label), n = ls.neg.has(r.label);
-    return p && n ? null : r.vals.map((v) => (n ? -v : v) * st.unit);
+    const p = tail(r, ls.pos), n = tail(r, ls.neg);
+    return p && n ? null : r.vals.map((v) => Math.round((n ? -v : v) * st.unit));
   };
-  let rows = st[sec].filter((r) => ls.pos.has(r.label) || ls.neg.has(r.label));
+  let rows = st[sec].filter((r) => tail(r, ls.pos) || tail(r, ls.neg));
   if (rows.length > 1) {
     // 같은 이름 줄이 여럿 — 머리 줄이 개념의 표시 구조 부모 라벨과 같은 줄만(유동 vs 비유동, 취득 vs 처분)
     const pl = new Set<string>();

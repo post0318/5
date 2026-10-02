@@ -308,6 +308,15 @@ export function withYahooLtm(
       }
       return { vals: tot!.map((v) => v * cand.sign), src: els.join(" + ") };
     }
+    // 미국 기준(US GAAP) 20-F 회사(ASML) — 개념 그대로. 재무상태표는 SEC 연말 값(원통화 역환산)과 보고서 연말 열이 같아야
+    if (!Object.keys(ifrsNs).length && sixK.labels.has(dst)) {
+      const fyB = kind === "bs" ? instantOn(usd(dst), E) : null;
+      if (kind === "bs" && (fyB == null || iE < 0)) return null;
+      const ok = (vals: number[]) => sameInUnit(fyB! / eRate!, vals[iE]);
+      const v = sixKValueOf(sixK, dst, kind, kind === "bs" ? ok : undefined);
+      if (!v || (kind === "bs" && !ok(v))) return null;
+      return { vals: v, src: dst };
+    }
     return null;
   };
   const sixKFilled: { label: string; reason: string }[] = [];
@@ -320,11 +329,19 @@ export function withYahooLtm(
     const fail = (reason: string) => { if (!flowSixK()) blanked.push({ label: it.label, reason }); };
     // 6-K 현금흐름표(당기·전기 누적) — LTM = SEC 사업연도 + 당기 누적 − 전기 누적. 감가상각(여러 개념 합)·손익 항목은 대상 밖
     const flowSixK = (): boolean => {
-      if (!sixK || it.da || it.concepts === PRETAX || it.concepts === INTEREST) return false;
+      if (!sixK || it.concepts === PRETAX || it.concepts === INTEREST) return false;
       const iC = sixK.cfDates.indexOf(last), iP = sixK.cfDates.indexOf(priorEnd);
       const curRate = fx.avg(addDay(E, 1), last);
       if (iC < 0 || iP < 0 || curRate == null) return false;
-      const got = present.map((c) => ({ c, r: sixKOf(c, "cf") }));
+      let got = present.map((c) => ({ c, r: sixKOf(c, "cf") }));
+      // 감가상각비 — SEC 값은 여러 개념 중 하나(또는 합). 보고서 줄이 있는 개념의 사업연도 값이 SEC 감가상각비와 같고, 다른 개념도 모두 같은
+      // 값일 때만(같은 금액의 다른 이름) 그 줄을 모든 개념에(ASML 현금흐름 "Depreciation and amortization")
+      if (it.da) {
+        const daFy = daAnnualByYear(facts).get(fyYear);
+        const hit = got.find((g) => g.r);
+        if (daFy == null || !hit || present.some((c) => !sameInUnit(daFy / fyRate, latestFy(c)!.val / fyRate))) return false;
+        got = present.map((c) => ({ c, r: hit.r }));
+      }
       if (got.some((g) => !g.r)) return false;
       for (const { c, r } of got) {
         const fy = latestFy(c)!;
