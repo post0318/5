@@ -259,7 +259,9 @@ export function flowSpecOf(c: string): { y: YKey; sign: 1 | -1; da: boolean } | 
 }
 
 /** 현금흐름표 개념인가(검증 전용 공란 목록) */
-export const isCfConcept = (c: string) => CF_CONCEPT.test(c) || FLOWS.some((f) => f.concepts.includes(c));
+// FLOWS 앞 7개(영업이익·이자비용·세전이익·법인세·순이익·보통주 귀속·연결 순이익)는 손익 항목 — 현금흐름 개념이 아니다
+const IS_FLOW_CONCEPTS = new Set(FLOWS.slice(0, 7).flatMap((f) => f.concepts));
+export const isCfConcept = (c: string) => !IS_FLOW_CONCEPTS.has(c) && (CF_CONCEPT.test(c) || FLOWS.some((f) => f.concepts.includes(c)));
 
 /** LTM 의 사업연도말(순이익 개념의 최근 20-F 사업연도말) */
 export function ltmBaseEnd(facts: CompanyFacts): string | null {

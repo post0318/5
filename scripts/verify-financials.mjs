@@ -824,7 +824,8 @@ async function sixKDocText(cik, report) {
   const url = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${m[1].replace(/-/g, "")}/${m[2]}`;
   if (!sixKDocCache.has(url)) {
     const html = await secText(url).catch(() => "");
-    sixKDocCache.set(url, html.replace(/<\/t[dh]>/gi, " ‖ ").replace(/<\/tr>/gi, "\n").replace(/<[^>]+>/g, " ")
+    // 슬라이드 그림(<img>)마다 구분표(§§) — 슬라이드 형식 문서는 슬라이드 단위로 재무제표 종류를 가른다
+    sixKDocCache.set(url, html.replace(/<img\b/gi, " §§ <img").replace(/<\/t[dh]>/gi, " ‖ ").replace(/<\/tr>/gi, "\n").replace(/<[^>]+>/g, " ")
       .replace(/&#8212;|&mdash;/g, "—").replace(/&#160;|&nbsp;|\u00a0/g, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;/g, "'").replace(/&#?[a-z0-9]+;/gi, " ").toLowerCase());
   }
   return sixKDocCache.get(url) || null;
@@ -5910,8 +5911,15 @@ async function verifyUs(sym) {
             const ce1 = text.slice(cs0 + 200).search(/notes to (?:the )?(?:interim )?(?:condensed )?(?:consolidated|summary)/);
             const cfText = text.slice(cs0, ce1 < 0 ? undefined : cs0 + 200 + ce1);
             // 현금흐름 줄 = 가장 가까운 열 머리가 "… months ended" 인 줄(같은 구간의 재무상태표 슬라이드 줄 제외 — ASML 분기별 재무상태표)
+            //   슬라이드 문서(§§ 구분 3개 이상)는 그 줄이 든 슬라이드에 "months ended" 가 있고 "total assets" 가 없어야 한다(머리가 표 중간에 있다 — ASML)
             const cfHd = [...cfText.matchAll(/months ended/g)].map((m) => m.index), bsHd = sixKBsHeaders(cfText).map((h) => h.i);
-            const rows0 = sixKRows(cfText, labs).filter((r) => { const c0 = cfHd.filter((i) => i < r.i).at(-1) ?? -1, b0 = bsHd.filter((i) => i < r.i).at(-1) ?? -1; return c0 > b0; });
+            const slides = cfText.split("§§").length > 3;
+            const slideOf = (i) => { const a0 = cfText.lastIndexOf("§§", i), b1 = cfText.indexOf("§§", i); return cfText.slice(a0 < 0 ? 0 : a0, b1 < 0 ? undefined : b1); };
+            const rows0 = sixKRows(cfText, labs).filter((r) => {
+              if (slides) { const sl = slideOf(r.i); return /months ended/.test(sl) && !/total assets/.test(sl); }
+              const c0 = cfHd.filter((i) => i < r.i).at(-1) ?? -1, b0 = bsHd.filter((i) => i < r.i).at(-1) ?? -1;
+              return c0 > b0;
+            });
             if (d.kind === "cfZero") {
               if (fy0.v !== 0) return { status: FAIL, note: `0 규칙인데 SEC 사업연도 ${shortId(id)} = ${fy0.v}` };
               const hd0 = rows0.filter((r) => /months ended/.test(cfText.slice(Math.max(0, r.i - 20_000), r.i + 20_000)));
