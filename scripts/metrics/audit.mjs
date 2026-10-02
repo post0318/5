@@ -63,6 +63,8 @@ export function commonModeOf(c) {
   // 6-K 기록 대조(재감사 e-1, 2026-10-02) — 재무상태표 값(bs·bsZero)은 6-K 문서 글자 판독 + SEC 20-F 연말 값 확인 + H.10 기말 환율로 따로 계산(독립).
   // 현금흐름(cf·cfZero)은 LTM 식이 앱과 같고, 변동분 근사(bsDelta)는 결정 (가) 식, 합성(derived)은 앱 합산 규칙이라 공통모드
   if (/^20-F LTM 6-K (bs|bsZero) /.test(n)) return null;
+  // 0 규칙(EV 구성요소) — SEC 연말 값만으로 확인(독립)
+  if (/^20-F LTM zero /.test(n)) return null;
   if (/^20-F LTM 6-K (cf|cfZero) /.test(n)) return "LTM 식(사업연도 + 당기 누적 − 전년 동기) = 앱과 같은 식 · 6-K 값은 검증기 독립 판독";
   if (/^20-F LTM 6-K bsDelta /.test(n)) return "SEC 연말 + 6-K 변동분 = 앱과 같은 식(결정 (가)) · 6-K 값은 검증기 독립 판독";
   if (/^20-F LTM /.test(n)) return "20-F LTM 앱 규칙 재구현(Yahoo 분기 원천 공통)";

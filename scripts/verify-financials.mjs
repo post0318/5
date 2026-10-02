@@ -5779,11 +5779,26 @@ async function verifyUs(sym) {
    * 다시 계산할 수 없는 기록은 실패(면제 없음)
    */
   const cfacts = f;
-  const checkSixKDetails = async () => {
-    const sixKNote = /회사 6-K 분기 재무제표: (.+?)(?: · |$)/.exec(ltmYahooNote ?? "")?.[1];
-    const det = row?.sixK ?? null;
-    if (sixKNote && !det?.length) { add("A", "20-F LTM 6-K 기록(verify-row)", "LTM", { status: FAIL, note: `앱 각주에 6-K 항목(${sixKNote})이 있는데 verify-row 기록 없음 — 독립 재계산 불가` }); return; }
-    if (!det?.length) return;
+  /**
+   * 재감사(2026-10-02): verify-row 의 LTM 항목 전부(최종 재무 데이터의 YAHOO-Q 항목 + 출처) — 앱이 따로 남긴 기록이 아니라 값 자체에 붙은 출처라
+   * 값만 넣고 기록을 빠뜨릴 수 없다. 출처 없는 항목·다시 계산할 수 없는 항목은 실패. yRows = 검증기가 따로 받은 야후 분기
+   */
+  const checkLtmItems = async (yRows, qStartOf) => {
+    const items = row?.ltm ?? null;
+    if (!items?.length) { add("A", "20-F LTM 항목 목록(verify-row)", "LTM", { status: FAIL, note: "verify-row 에 LTM 항목 목록 없음 — 독립 재계산 불가" }); return; }
+    const ya = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "all" }, { validateResult: false }).catch(() => []);
+    const yaRows = ya.map((r) => ({ ...r, end: new Date(r.date).toISOString().slice(0, 10) }));
+    const yv = (rec, k) => {
+      if (!rec) return null;
+      if (typeof k === "string") return k.includes("|") ? (k.split("|").map((x) => rec[x]).find((x) => x != null) ?? null) : (rec[k] ?? null);
+      let t = 0;
+      for (const x of k) { if (rec[x] == null) return null; t += rec[x]; }
+      return t;
+    };
+    const yQ = (d) => yRows.find((r) => dayDiff(r.end, d) <= 7);
+    const yAn = (d) => yaRows.find((r) => dayDiff(r.end, d) <= 7);
+    // 앱 6-K 기록 형식으로(값은 기록이 아니라 실제 항목 값)
+    const det = items.filter((x) => x.src?.via === "sixK").map((x) => ({ ...x.src.detail, usd: x.usd }));
     const fas = new Map();
     const fa = async (d) => { if (!fas.has(d)) fas.set(d, await filingAtDate(cik, sub, d).catch(() => null)); return fas.get(d); };
     const shortId = (id) => id.replace(/^[a-z-]+_/, "");
@@ -5791,13 +5806,83 @@ async function verifyUs(sym) {
     const labsOf = async (f0, id) => { const lf = latestFyEnd ? await fa(latestFyEnd) : null; return [...new Set([...(f0.labels.get(id) ?? []), ...(lf?.labels.get(id) ?? [])])]; };
     const negOf = async (f0, id) => { const lf = latestFyEnd ? await fa(latestFyEnd) : null; return new Set([...(f0.negLabels.get(id) ?? []), ...(lf?.negLabels.get(id) ?? [])].map((x) => x.toLowerCase())); };
     const expOf = new Map(); // `${concept}|${at}` → 검증기 기대값(USD) — 합성 개념 대조용
+    const fyE = Object.keys(H).filter((cc) => cc !== "LTM").sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1);
+    const secE = fyE ? await fa(H[fyE].date) : null;
+    const secAt = async (ids, d0) => {
+      const f0 = await fa(d0);
+      let t = 0;
+      for (const { id, sign } of ids) {
+        let v = f0?.facts.find((x) => x.id === id && !x.dims.length)?.v;
+        if (v == null) { const [ns0, nm0] = [id.slice(0, id.indexOf("_")), id.slice(id.indexOf("_") + 1)]; v = Object.values(cfacts?.facts?.[ns0]?.[nm0]?.units ?? {}).flat().filter((e) => !e.start && e.end === d0 && /^20-F/.test(e.form ?? "")).sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0]?.val; }
+        if (v == null) return null;
+        t += sign * v;
+      }
+      return t;
+    };
+    for (const it of items.filter((x) => x.src?.via !== "sixK")) {
+      const via = it.src?.via ?? "출처없음";
+      const nm = `20-F LTM ${via} ${it.concept.replace(/^[a-z-]+_/, "")} @${it.at}`;
+      const res = await (async () => {
+        if (!it.src) return { status: FAIL, note: "LTM 항목에 출처 없음 — 값만 넣고 출처를 빠뜨림" };
+        if (it.usd == null) return { status: FAIL, note: "흐름 LTM 조합 항목(사업연도·전기) 없음" };
+        const s0 = it.src;
+        if (s0.via === "yahoo") {
+          const v = yv(yQ(it.at), s0.y), r0 = fxEndRate(fxRows, it.at);
+          if (v == null || r0 == null) return { status: FAIL, note: `야후 분기 ${JSON.stringify(s0.y)} ${it.at} 값${v == null ? "" : "(환율)"} 없음` };
+          expOf.set(`${it.concept}|${it.at}`, v * r0);
+          return vsSource(it.usd, v * r0, EXACT, `야후 분기 ${JSON.stringify(s0.y)} ${it.at} ${v} × 기말 H.10`);
+        }
+        if (s0.via === "yahooFlow") {
+          let t = 0;
+          for (const q of s0.quarters ?? []) {
+            const v = yv(yQ(q), s0.y), r0 = fxAvg(fxRows, qStartOf(q), q);
+            if (v == null || r0 == null) return { status: FAIL, note: `야후 분기 ${JSON.stringify(s0.y)} ${q} 값 또는 환율 없음` };
+            t += s0.sign * v * r0;
+          }
+          let how = `야후 분기 ${(s0.quarters ?? []).join("·")} ${JSON.stringify(s0.y)} × 분기 평균 H.10`;
+          if (s0.adj) {
+            // 수준 보정 = (SEC 사업연도 − 야후 연간) × 사업연도 평균 환율 — 둘 다 검증기가 따로 읽는다
+            if (s0.adj.da || !s0.adj.ids?.length) return { status: FAIL, note: "흐름 수준 보정(감가상각 합산) — 검증기 재계산 미구현" };
+            const fy0 = secE?.durFacts.filter((x) => x.id === s0.adj.ids[0].id && !x.dims.length && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300)[0];
+            let secV = 0;
+            for (const { id, sign } of s0.adj.ids) { const x = secE?.durFacts.find((z) => z.id === id && !z.dims.length && (Date.parse(z.end) - Date.parse(z.start)) / 864e5 > 300); if (!x) return { status: FAIL, note: `수준 보정 SEC 사업연도 ${id} 없음` }; secV += sign * x.v; }
+            const yA = yv(yAn(fy0?.end ?? ""), s0.y), rF = fy0 ? fxAvg(fxRows, fy0.start, fy0.end) : null;
+            if (yA == null || rF == null) return { status: FAIL, note: "수준 보정 야후 연간 또는 환율 없음" };
+            t += (secV - s0.sign * yA) * rF;
+            how += ` + (SEC 사업연도 ${secV} − 야후 연간 ${s0.sign * yA}) × 사업연도 평균`;
+          }
+          expOf.set(`${it.concept}|${it.at}`, t);
+          return vsSource(it.usd, t, EXACT, how);
+        }
+        if (s0.via === "yahooApprox" || s0.via === "debtApprox") {
+          const yk = s0.via === "debtApprox" ? "totalDebt" : s0.y;
+          let secN = null;
+          if (s0.via === "yahooApprox") secN = s0.ids?.length ? await secAt(s0.ids, s0.E) : null;
+          else { const fyDebt = rowOf(bs, "총차입금")?.[fyE] ?? null, rE0 = fxEndRate(fxRows, s0.E); secN = fyDebt != null && rE0 ? fyDebt / rE0 : null; }
+          const yE0 = yv(yQ(s0.E), yk) ?? yv(yAn(s0.E), yk), yA0 = yv(yQ(it.at), yk), r0 = fxEndRate(fxRows, it.at);
+          if (secN == null || yE0 == null || yA0 == null || r0 == null) return { status: FAIL, note: `변동분 근사 재계산 불가 — SEC 연말 ${secN ?? "없음"}·야후 ${yE0 ?? "없음"}→${yA0 ?? "없음"}` };
+          const e0 = (secN + (yA0 - yE0)) * r0;
+          expOf.set(`${it.concept}|${it.at}`, e0);
+          return vsSource(it.usd, e0, EXACT, `${s0.via === "debtApprox" ? "앱 연말 총차입금(A층 별도 대조)" : "SEC 연말"} ${secN} + 야후 변동 ${yE0} → ${yA0} × 기말 H.10`);
+        }
+        if (s0.via === "zero") {
+          const v = s0.ids?.length ? await secAt(s0.ids, s0.E) : 0;
+          if (v !== 0 && v != null) return { status: FAIL, note: `0 규칙인데 SEC 연말 ${v}` };
+          expOf.set(`${it.concept}|${it.at}`, 0);
+          return vsSource(it.usd, 0, EXACT, `SEC 연말 ${v == null ? "줄 없음" : 0} → 분기말 0(EV 구성요소)`);
+        }
+        return { status: FAIL, note: `알 수 없는 출처 ${via}` };
+      })().catch((e) => ({ status: FAIL, note: `재계산 오류 ${String(e).slice(0, 80)}` }));
+      add("A", nm, "LTM", res);
+    }
+    det.sort((a, b) => (a.kind === "derived") - (b.kind === "derived"));
     for (const d of det) {
       const nm = `20-F LTM 6-K ${d.kind} ${shortId(d.concept)} @${d.at}`;
       const res = await (async () => {
         if (d.kind === "derived") {
           const parts = (d.parts ?? []).map((p) => expOf.get(`${p}|${d.at}`));
           if (!d.parts?.length) return { status: FAIL, note: "합성 개념 구성 줄 없음" };
-          if (parts.some((x) => x == null)) return { status: COMMON, note: `${COMMON_LABEL}: 합성 본표 개념 = ${d.parts.join(" + ")} — 구성 줄 중 6-K 대조 밖(야후 값) 있음, 합산 규칙은 앱과 같음` };
+          if (parts.some((x) => x == null)) return { status: FAIL, note: `합성 본표 개념 = ${d.parts.join(" + ")} — 구성 줄 기대값 없음(${d.parts.filter((p, i) => parts[i] == null).join(", ")})` };
           return vsSource(d.usd, parts.reduce((t, x) => t + x, 0), EXACT, `구성 줄 기대값 합 ${d.parts.join(" + ")}`);
         }
         const f = await fa(d.fyEnd);
@@ -6029,7 +6114,7 @@ async function verifyUs(sym) {
           add("A", name, "LTM", rel0 > 0.05 ? { status: NA, note: `앱 공란 — 사유 확인: Yahoo ${fyCol} 유형자산 취득 ${Math.abs(yr.purchaseOfPPE)} vs SEC ${secFy.form} ${Math.abs(cap.v)} ${natCur} — 차이 ${(rel0 * 100).toFixed(2)}% > 5%(정의 차이)` }
             : { status: FAIL, note: `앱 공란인데 Yahoo ${fyCol} 유형자산 취득 ${Math.abs(yr.purchaseOfPPE)} 와 SEC ${Math.abs(cap.v)} 차이 ${(rel0 * 100).toFixed(3)}% ≤ 5% — 변동분 보정으로 채울 수 있음(사유 불성립)` });
         }
-        await checkSixKDetails();
+        await checkLtmItems(rows, qStart);
       }
     } catch (e) {
       hardErrors.push(`20-F LTM 독립 재계산(Yahoo 분기·환율) 조회 실패: ${String(e).slice(0, 60)}`);
