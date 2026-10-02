@@ -5787,6 +5787,9 @@ async function verifyUs(sym) {
     const fas = new Map();
     const fa = async (d) => { if (!fas.has(d)) fas.set(d, await filingAtDate(cik, sub, d).catch(() => null)); return fas.get(d); };
     const shortId = (id) => id.replace(/^[a-z-]+_/, "");
+    const latestFyEnd = det.map((x) => x.fyEnd).filter(Boolean).sort().at(-1);
+    const labsOf = async (f0, id) => { const lf = latestFyEnd ? await fa(latestFyEnd) : null; return [...new Set([...(f0.labels.get(id) ?? []), ...(lf?.labels.get(id) ?? [])])]; };
+    const negOf = async (f0, id) => { const lf = latestFyEnd ? await fa(latestFyEnd) : null; return new Set([...(f0.negLabels.get(id) ?? []), ...(lf?.negLabels.get(id) ?? [])].map((x) => x.toLowerCase())); };
     const expOf = new Map(); // `${concept}|${at}` → 검증기 기대값(USD) — 합성 개념 대조용
     for (const d of det) {
       const nm = `20-F LTM 6-K ${d.kind} ${shortId(d.concept)} @${d.at}`;
@@ -5812,7 +5815,7 @@ async function verifyUs(sym) {
             const fyStart = fy0.start, nextDay = new Date(Date.parse(d.fyEnd) + 864e5).toISOString().slice(0, 10);
             const rF = fxAvg(fxRows, fyStart, d.fyEnd), rC = fxAvg(fxRows, nextDay, d.at), rP = fxAvg(fxRows, fyStart, priorEnd);
             if (rF == null || rC == null || rP == null) return { status: FAIL, note: "환율 없음" };
-            const labs = f.labels.get(id) ?? [], neg = new Set((f.negLabels.get(id) ?? []).map((x) => x.toLowerCase()));
+            const labs = await labsOf(f, id), neg = await negOf(f, id);
             // 현금흐름표 구간만 — 제목 뒤 4천 자 안에 "operating activities" 가 있는 첫 제목 ~ 주석 시작(목차·주석 표의 같은 이름 줄 제외)
             let cs0 = -1;
             for (const h0 of text.matchAll(/statements? of cash flows?/g)) if (text.slice(h0.index, h0.index + 4_000).includes("operating activities")) { cs0 = h0.index; break; }
@@ -5859,6 +5862,7 @@ async function verifyUs(sym) {
         const rAt = fxEndRate(fxRows, d.at);
         if (rAt == null) return { status: FAIL, note: "기말 환율 없음" };
         const hds = sixKBsHeaders(text);
+        const cfHeads = [...text.matchAll(/months ended/g)].map((m) => m.index);
         let tot = 0;
         const notes = [];
         for (const { id, sign } of d.ids) {
@@ -5869,9 +5873,11 @@ async function verifyUs(sym) {
             if (cf0) fyF = { id, v: cf0.val, dims: [], from: `companyfacts ${cf0.form} ${cf0.filed}` };
           }
           if (!fyF) return { status: FAIL, note: `SEC 20-F ${d.fyEnd} ${shortId(id)} 없음` };
-          const labs = f.labels.get(id) ?? [];
+          const labs = await labsOf(f, id);
           const rows0 = sixKRows(text, labs).map((r) => {
             const hd = hds.filter((x) => x.i < r.i && r.i - x.i < 60_000 && x.dates.includes(d.fyEnd)).at(-1);
+            // 가장 가까운 열 머리가 현금흐름표("… months ended")면 재무상태표 줄이 아니다(SPOT "Repayment of exchangeable notes")
+            if (hd && cfHeads.some((ci) => ci > hd.i && ci < r.i)) return null;
             const cols = hd ? sixKBsCols(r, hd) : null;
             const unit = sixKUnitAt(text, r.i);
             return hd && cols && unit ? { r, hd, cols: cols.map((x) => x * unit) } : null;
