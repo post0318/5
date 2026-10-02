@@ -238,8 +238,9 @@ export function buildKrBalance(facts: KrFacts): FinancialStatement {
   const bridge = krBridgeLines(facts);
   const debt = sumLinesByPeriod(facts, bridge.debt);
   const cashLike = sumLinesByPeriod(facts, bridge.cash);
-  // 차입금 계정이 아예 없는 무차입 회사(한전KPS)는 0 — 하이라이트 EV 브릿지와 같은 표시
-  if (!bridge.debt.length) for (const l of labels) if (cashLike[l] != null) debt[l] = 0;
+  // 그 기간에 차입금 줄이 없으면 0 — 하이라이트 EV 브릿지(dart-ev.ts `debt.get(year) ?? 0`)와 같은 규칙. 무차입 회사(한전KPS)뿐 아니라
+  // 다른 해엔 차입금 줄이 있는 회사의 무차입 연도도(060370 2022 — 하이라이트 0, 이 주석만 빈칸이었다, 2026-10-02)
+  for (const l of labels) if (debt[l] == null && cashLike[l] != null) debt[l] = 0;
   const netDebt = blank();
   for (const l of labels)
     if (debt[l] != null || cashLike[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashLike[l] ?? 0);
