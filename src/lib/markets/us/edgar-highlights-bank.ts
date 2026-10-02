@@ -295,7 +295,7 @@ export function buildUsBankHighlights(
   const evVal = bridges.map((b, i) => (b && marketCap[i] != null ? marketCap[i]! + b.debt + b.preferred + b.nci - b.cash : null));
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap, cellNotes: nMktcap },
-    { key: "cash", label: "− 현금·단기투자·장기 투자증권", format: "money", indent: true, values: evCash },
+    { key: "cash", label: "− 현금·단기투자·장기투자증권", format: "money", indent: true, values: evCash },
     { key: "debt", label: "+ 차입금", format: "money", indent: true, values: evDebt },
     { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", indent: true, values: evPref },
     { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: evVal },
