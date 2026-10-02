@@ -230,6 +230,21 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
  * 개념의 6-K 값(XBRL 부호, 원통화 = 표시값 × 단위) — 라벨이 정확히 같은 줄이 하나일 때만. 같은 라벨이 일반·부호 반전 양쪽에 있으면
  * 부호를 정할 수 없어 null(추측 금지)
  */
+/** 20-F 재무상태표 본표 줄인가 — 표시 구조 부모가 자산·부채·자본 구역 머리(유동자산·비유동부채·자본 등)일 때 */
+export function sixKOnBsFace(st: SixKStatements, concept: string): boolean {
+  const heads = new Set(["assets", "current assets", "non current assets", "noncurrent assets", "liabilities", "current liabilities", "non current liabilities", "noncurrent liabilities", "equity", "stockholders equity", "shareholders equity", "liabilities and equity", "equity and liabilities"]);
+  for (const pc of st.parents.get(concept) ?? []) for (const l of [...(st.labels.get(pc)?.pos ?? [])]) if (heads.has(l)) return true;
+  return false;
+}
+
+/** 그 개념의 라벨과 이름이 같은 줄이 보고서 표에 하나라도 있는가(없음 판정용 — 개념이 20-F 라벨 파일에 없으면 판정 불가로 null) */
+export function sixKHasRow(st: SixKStatements, concept: string, sec: "bs" | "cf"): boolean | null {
+  const ls = st.labels.get(concept);
+  if (!ls) return null;
+  const all = [...ls.pos, ...ls.neg];
+  return st[sec].some((r) => all.includes(r.label) || (!!st.loose && all.some((l) => l.length > 3 && r.label.endsWith(` ${l}`))));
+}
+
 export function sixKValueOf(st: SixKStatements, concept: string, sec: "bs" | "cf", check?: (vals: number[]) => boolean): number[] | null {
   const ls = st.labels.get(concept);
   if (!ls) return null;
@@ -237,7 +252,12 @@ export function sixKValueOf(st: SixKStatements, concept: string, sec: "bs" | "cf
   const tail = (r: SixKRow, set: Set<string>) => set.has(r.label) || (!!st.loose && [...set].some((l) => l.length > 3 && r.label.endsWith(` ${l}`)));
   const val = (r: SixKRow) => {
     const p = tail(r, ls.pos), n = tail(r, ls.neg);
-    return p && n ? null : r.vals.map((v) => Math.round((n ? -v : v) * st.unit));
+    if (!(p && n)) return r.vals.map((v) => Math.round((n ? -v : v) * st.unit));
+    // 같은 이름이 일반·부호 반전 라벨 양쪽에 있으면(SPOT "Treasury shares") 부호를 라벨로 못 정한다 — 재무상태표는 연말 열이 SEC 값과 정확히
+    // 맞는 부호가 하나일 때만(호출부 확인 함수), 그 밖은 null(추측 금지)
+    if (!check) return null;
+    const cands = [1, -1].map((sg) => r.vals.map((v) => Math.round(sg * v * st.unit))).filter((v) => check(v));
+    return cands.length === 1 ? cands[0] : null;
   };
   let rows = st[sec].filter((r) => tail(r, ls.pos) || tail(r, ls.neg));
   if (rows.length > 1) {

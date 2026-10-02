@@ -5,7 +5,7 @@ import { DA_TOTAL, SYN_DA_CF, daAnnualByYear, resolveDebt } from "./edgar-ev";
 import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT } from "./edgar-bs-structure";
 import { fiscalYearOf, instantOn } from "./edgar-series";
 import { ifrsSourcesOf } from "./edgar-foreign";
-import { sixKValueOf, type SixKStatements } from "./edgar-6k";
+import { sixKHasRow, sixKOnBsFace, sixKValueOf, type SixKStatements } from "./edgar-6k";
 
 /**
  * **20-F 발행사 LTM 열 = Yahoo 분기(원통화) 최근 4개 분기** (오너 결정 2026-09-25 — Yahoo·인포맥스 분기 구성 비교 후.
@@ -494,6 +494,19 @@ export function withYahooLtm(
       // 이미 채운 줄(야후·위 항목별 6-K)은 건너뜀 — 원본(gaap)이 아니라 채운 결과(out)에서 본다
       const outArr = out[c]?.units?.USD ?? [];
       if (vE == null || outArr.some((e) => !e.start && e.end === last) || !outArr.some((e) => !e.start && e.end === E)) continue;
+      // 연말 값 0 이고 분기 재무상태표에 그 줄(원 개념의 라벨)이 없으면 분기말도 0 — 본표 "—"(0 공시)와 같은 원칙(edgar-series provenAbsentAt).
+      // 원 개념이 라벨 파일에 없으면 판정 불가로 건너뜀
+      if (vE === 0) {
+        const srcs = Object.keys(ifrsNs).length
+          ? ifrsSourcesOf(c).flatMap((cd) => cd.sum.flatMap((el) => (typeof el === "string" ? [el] : el))).filter((x) => ifrsAtE(x, "bs") != null)
+          : [c];
+        // 20-F 재무상태표 본표 줄(표시 구조로 확인)인 경우만 — 주석에만 있는 0 값은 분기말을 알 수 없다
+        if (srcs.length && srcs.every((x) => sixKOnBsFace(sixK, x) && sixKHasRow(sixK, x, "bs") === false)) {
+          put(c, last, 0);
+          extra.push(`${c}(0 — 분기 본표에 줄 없음)`);
+        }
+        continue;
+      }
       const r = sixKOf(c, "bs");
       if (!r || !sameInUnit(vE / eRate, r.vals[sixK.bsDates.indexOf(E)])) continue;
       put(c, last, r.vals[iL] * lastRate);
