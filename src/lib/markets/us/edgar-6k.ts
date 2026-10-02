@@ -16,7 +16,8 @@ const UA = "post0318 research post0318@gmail.com";
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 const OPT = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 45_000 };
 
-export interface SixKRow { label: string; vals: number[] }
+/** parent = 바로 위 값 없는 머리 줄(예 "current assets"·"acquisitions of") — 같은 이름 줄(유동·비유동, 취득·처분) 구분용 */
+export interface SixKRow { label: string; vals: number[]; parent?: string }
 export interface SixKStatements {
   /** 보고서 출처(접수번호/파일) */
   source: string;
@@ -31,6 +32,8 @@ export interface SixKStatements {
   /** 개념(접두어 없는 이름, 예 "TradeAndOtherCurrentPayablesToTradeSuppliers") → 정규화 라벨 집합. neg = 부호 반전 라벨(negatedLabel 계열 —
    *  보고서에 음수로 보이는 지급액 등. XBRL 값 = −표시값) */
   labels: Map<string, { pos: Set<string>; neg: Set<string> }>;
+  /** 개념 → 표시 구조(_pre.xml)상 부모 개념 */
+  parents: Map<string, Set<string>>;
 }
 
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
@@ -52,22 +55,33 @@ const parseNum = (s: string): number | null => {
 };
 
 /** 20-F 라벨 파일 → 개념 이름 → 라벨 집합(label·terse·verbose·negated) */
-async function filingLabels(cik: number, recent: RecentFilings): Promise<Map<string, { pos: Set<string>; neg: Set<string> }>> {
+type Lb = Map<string, { pos: Set<string>; neg: Set<string> }>;
+async function filingLabels(cik: number, recent: RecentFilings): Promise<{ labels: Lb; parents: Map<string, Set<string>> }> {
+  const none = { labels: new Map(), parents: new Map() };
   const i = recent.form.findIndex((f) => /^20-F/.test(f));
-  if (i < 0) return new Map();
+  if (i < 0) return none;
   const base = `https://www.sec.gov/Archives/edgar/data/${cik}/${recent.accessionNumber[i].replace(/-/g, "")}`;
   const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, OPT);
-  const lab = idx.directory.item.map((x) => x.name).find((n) => /_lab\.xml$/i.test(n));
-  if (!lab) return new Map();
-  const xml = await fetchText(`${base}/${lab}`, OPT);
-  const out = new Map<string, { pos: Set<string>; neg: Set<string> }>();
+  const names = idx.directory.item.map((x) => x.name);
+  const lab = names.find((n) => /_lab\.xml$/i.test(n)), pre = names.find((n) => /_pre\.xml$/i.test(n));
+  if (!lab || !pre) return none;
+  const [xml, pxml] = await Promise.all([fetchText(`${base}/${lab}`, OPT), fetchText(`${base}/${pre}`, OPT)]);
+  const out: Lb = new Map();
   const re = /<link:label\b[^>]*xlink:label="lab_[^_"]+_([A-Za-z0-9]+)"[^>]*xlink:role="[^"]*\/(label|terseLabel|verboseLabel|negatedLabel|negatedTerseLabel|totalLabel)"[^>]*>([^<]*)<\/link:label>/g;
   for (let m: RegExpExecArray | null; (m = re.exec(xml)); ) {
     const s = out.get(m[1]) ?? { pos: new Set<string>(), neg: new Set<string>() };
     (/^negated/.test(m[2]) ? s.neg : s.pos).add(normLabel(m[3]));
     out.set(m[1], s);
   }
-  return out;
+  // 표시 구조 — loc(이름표 → 개념)·parent-child 연결
+  const loc = new Map<string, string>();
+  for (const m of pxml.matchAll(/<link:loc\b[^>]*xlink:label="([^"]+)"[^>]*xlink:href="[^"]*#[^_"]+_([A-Za-z0-9]+)"/g)) loc.set(m[1], m[2]);
+  const parents = new Map<string, Set<string>>();
+  for (const m of pxml.matchAll(/<link:presentationArc\b[^>]*xlink:from="([^"]+)"[^>]*xlink:to="([^"]+)"/g)) {
+    const f = loc.get(m[1]), t = loc.get(m[2]);
+    if (f && t) parents.set(t, (parents.get(t) ?? new Set<string>()).add(f));
+  }
+  return { labels: out, parents };
 }
 
 /** 보고서 HTML 안의 한 재무제표 구간(제목 ~ 다음 제목)에서 표의 줄 */
@@ -79,12 +93,14 @@ function sectionRows(html: string, head: RegExp, mustHave: RegExp, end: RegExp):
     const plain = decode(sec);
     if (!mustHave.test(plain)) continue; // 목차의 같은 제목은 건너뜀(서식 코드가 길어 구간 전체를 해독해 본다)
     const rows: SixKRow[] = [];
+    let parent: string | undefined;
     for (const tr of sec.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? []) {
       const cells = (tr.match(/<t[dh]\b[\s\S]*?<\/t[dh]>/gi) ?? []).map(decode).filter((c) => c !== "" && c !== "$");
       const label = cells.find((c) => /[A-Za-z]/.test(c));
       if (!label) continue;
       const vals = cells.slice(cells.indexOf(label) + 1).map(parseNum).filter((v): v is number => v != null);
-      if (vals.length) rows.push({ label: normLabel(label), vals });
+      if (vals.length) rows.push({ label: normLabel(label), vals, parent });
+      else parent = normLabel(label);
     }
     return { rows, text: plain.slice(0, 3_000).toLowerCase() };
   }
@@ -126,10 +142,10 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       const cfDates = iC >= 0 && iP >= 0 ? (iC < iP ? [periodEnd, priorEnd] : [priorEnd, periodEnd]) : [];
       if (bsDates.length < 2 || cfDates.length !== 2) continue;
       // 재무상태표 줄 값: 열마다 [금액, 비율%] 쌍인 보고서(TSM) — 값 개수가 열 수의 2배면 짝수 자리만
-      const fix = (rows: SixKRow[], n: number) => rows.map((r) => ({ label: r.label, vals: r.vals.length === 2 * n ? r.vals.filter((_, k) => k % 2 === 0) : r.vals })).filter((r) => r.vals.length === n);
-      const labels = await filingLabels(cikN, recent).catch(() => new Map<string, { pos: Set<string>; neg: Set<string> }>());
+      const fix = (rows: SixKRow[], n: number) => rows.map((r) => ({ ...r, vals: r.vals.length === 2 * n ? r.vals.filter((_, k) => k % 2 === 0) : r.vals })).filter((r) => r.vals.length === n);
+      const { labels, parents } = await filingLabels(cikN, recent).catch(() => ({ labels: new Map(), parents: new Map() }));
       if (!labels.size) return null;
-      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length), cf: fix(cf.rows, 2), labels };
+      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length), cf: fix(cf.rows, 2), labels, parents };
     }
   }
   return null;
@@ -139,13 +155,22 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
  * 개념의 6-K 값(XBRL 부호, 원통화 = 표시값 × 단위) — 라벨이 정확히 같은 줄이 하나일 때만. 같은 라벨이 일반·부호 반전 양쪽에 있으면
  * 부호를 정할 수 없어 null(추측 금지)
  */
-export function sixKValueOf(st: SixKStatements, concept: string, sec: "bs" | "cf"): number[] | null {
+export function sixKValueOf(st: SixKStatements, concept: string, sec: "bs" | "cf", check?: (vals: number[]) => boolean): number[] | null {
   const ls = st.labels.get(concept);
   if (!ls) return null;
-  const rows = st[sec].filter((r) => ls.pos.has(r.label) || ls.neg.has(r.label));
+  const val = (r: SixKRow) => {
+    const p = ls.pos.has(r.label), n = ls.neg.has(r.label);
+    return p && n ? null : r.vals.map((v) => (n ? -v : v) * st.unit);
+  };
+  let rows = st[sec].filter((r) => ls.pos.has(r.label) || ls.neg.has(r.label));
+  if (rows.length > 1) {
+    // 같은 이름 줄이 여럿 — 머리 줄이 개념의 표시 구조 부모 라벨과 같은 줄만(유동 vs 비유동, 취득 vs 처분)
+    const pl = new Set<string>();
+    for (const pc of st.parents.get(concept) ?? []) for (const x of [...(st.labels.get(pc)?.pos ?? []), ...(st.labels.get(pc)?.neg ?? [])]) pl.add(x);
+    const byParent = rows.filter((r) => r.parent && pl.has(r.parent));
+    // 그래도 못 가르면 호출부 확인(재무상태표 — 전년 연말 열 = SEC 연말 값)으로 정확히 하나만
+    rows = byParent.length === 1 ? byParent : check ? rows.filter((r) => { const v = val(r); return v != null && check(v); }) : [];
+  }
   if (rows.length !== 1) return null;
-  const r = rows[0];
-  const p = ls.pos.has(r.label), n = ls.neg.has(r.label);
-  if (p && n) return null;
-  return r.vals.map((v) => (n ? -v : v) * st.unit);
+  return val(rows[0]);
 }

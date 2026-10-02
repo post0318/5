@@ -280,22 +280,30 @@ export function withYahooLtm(
   // 야후 정의가 SEC 와 정확히 같지 않은 항목은 회사가 낸 분기 보고서의 같은 줄을 먼저 쓴다(야후 변동분 근사보다 정의가 SEC 와 같다).
   // us-gaap 개념 ← IFRS 원 개념(정규화 매핑의 역) ← 20-F 라벨 파일의 줄 이름. 원 개념은 그 회사가 SEC FY 에 실제로 공시한 것만
   const ifrsNs = ((facts.facts as Record<string, Ns | undefined>)["ifrs-full"] ?? {}) as Ns;
-  const ifrsHas = (c: string, kind: "bs" | "cf") =>
-    Object.values(ifrsNs[c]?.units ?? {}).some((arr) => arr.some((e) => e.end === E && (kind === "bs" ? !e.start : !!e.start && span(e.start, E) > 300)));
-  /** us-gaap 개념의 6-K 열 값(원통화) — 매핑 후보 중 원 개념이 SEC FY 에 있고 6-K 줄이 하나씩 정확히 대응하는 것 */
+  const ifrsAtE = (c: string, kind: "bs" | "cf"): number | null => {
+    for (const arr of Object.values(ifrsNs[c]?.units ?? {}))
+      for (const e of arr) if (e.end === E && (kind === "bs" ? !e.start : !!e.start && span(e.start, E) > 300)) return e.val;
+    return null;
+  };
+  /**
+   * us-gaap 개념의 6-K 열 값(원통화). 정규화(edgar-foreign mapIfrs)가 SEC FY 에 실제로 쓴 IFRS 원 개념과 같은 것만 — 매핑 후보 순서대로
+   * 첫 번째로 FY 값이 있는 후보(대안 묶음은 원 개념이 있는 첫 대안). 그 후보의 6-K 줄이 없으면 다른 후보로 넘어가지 않는다(정의가 달라짐).
+   * 재무상태표는 원 개념마다 6-K 전년 연말 열 = SEC 원 개념 연말 값(공시 단위 안)인 줄만
+   */
   const sixKOf = (dst: string, kind: "bs" | "cf"): { vals: number[]; src: string } | null => {
     if (!sixK) return null;
+    const iE = sixK.bsDates.indexOf(E);
     for (const cand of ifrsSourcesOf(dst)) {
+      const els = cand.sum.map((el) => (typeof el === "string" ? (ifrsNs[el] ? el : null) : (el.find((x) => ifrsNs[x]) ?? null))).filter((x): x is string => !!x && ifrsAtE(x, kind) != null);
+      if (!els.length) continue;
       let tot: number[] | null = null;
-      const used: string[] = [];
-      for (const el of cand.sum) {
-        const alts = (typeof el === "string" ? [el] : el).filter((c) => ifrsHas(c, kind));
-        const hit = alts.map((c) => ({ c, v: sixKValueOf(sixK, c, kind) })).find((x) => x.v != null);
-        if (!hit) { tot = null; break; }
-        used.push(hit.c);
-        tot = tot ? tot.map((t, i) => t + hit.v![i]) : hit.v!.slice();
+      for (const c of els) {
+        const fyV = ifrsAtE(c, kind)!;
+        const v = sixKValueOf(sixK, c, kind, kind === "bs" && iE >= 0 ? (vals) => sameInUnit(fyV, vals[iE]) : undefined);
+        if (!v || (kind === "bs" && (iE < 0 || !sameInUnit(fyV, v[iE])))) return null;
+        tot = tot ? tot.map((t, i) => t + v[i]) : v.slice();
       }
-      if (tot) return { vals: tot.map((v) => v * cand.sign), src: used.join(" + ") };
+      return { vals: tot!.map((v) => v * cand.sign), src: els.join(" + ") };
     }
     return null;
   };
