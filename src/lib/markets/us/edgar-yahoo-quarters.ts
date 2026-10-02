@@ -252,6 +252,12 @@ export function yahooLtmPeriods(facts: CompanyFacts, y: { quarterly: YahooFundam
   return last ? { E: fy.end, last, yearAgo: monthEndShift(last, -12) } : null;
 }
 
+/** 흐름 항목 규칙(야후 필드·부호) — 검증 전용 공란 목록(검증기가 야후로 채울 수 있었는지 판정) */
+export function flowSpecOf(c: string): { y: YKey; sign: 1 | -1; da: boolean } | null {
+  const f = FLOWS.find((x) => x.concepts.includes(c));
+  return f ? { y: f.y, sign: f.sign ?? 1, da: !!f.da } : null;
+}
+
 /** 현금흐름표 개념인가(검증 전용 공란 목록) */
 export const isCfConcept = (c: string) => CF_CONCEPT.test(c) || FLOWS.some((f) => f.concepts.includes(c));
 

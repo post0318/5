@@ -6005,9 +6005,26 @@ async function verifyUs(sym) {
     let gapOk = 0;
     const gapNa = [];
     for (const g of gaps) {
+      const gname = `20-F LTM 공란 ${g.kind} ${shortId(g.concept)} @${g.at}`;
+      // ① 야후로 채울 수 있었는가(흐름 항목 규칙이 있는 개념 — 앱이 적은 사유를 믿지 않고 검증기가 따로 판정, 재감사 T6):
+      //    야후 최근 4개 분기가 다 있고 야후 연간이 SEC 사업연도와 5% 안이면 앱 규칙상 채워야 한다
+      if (g.flow && !g.flow.da && g.ids?.length) {
+        const q4 = yRows.slice(-4), fy0 = secE?.durFacts.find((x) => x.id === g.ids[0].id && !x.dims.length && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300);
+        let secV = fy0 ? 0 : null;
+        for (const { id, sign } of g.ids) { const x = secE?.durFacts.find((z) => z.id === id && !z.dims.length && (Date.parse(z.end) - Date.parse(z.start)) / 864e5 > 300); if (!x) { secV = null; break; } secV += sign * x.v; }
+        const yA = fy0 ? yv(yAn(fy0.end), g.flow.y) : null;
+        const qOk = q4.length === 4 && q4.every((r0) => yv(r0, g.flow.y) != null);
+        if (secV != null && yA != null && qOk && Math.abs(secV - g.flow.sign * yA) <= Math.abs(secV) * 0.05) {
+          add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란${g.reason ? `(${g.reason})` : ""}인데 야후 최근 4개 분기가 다 있고 야후 연간 ${g.flow.sign * yA} ≈ SEC 사업연도 ${secV}(5% 안) — 채울 수 있음` });
+          continue;
+        }
+      }
+      // ② 6-K 에서 찾을 수 있는가
       if (!sixKSource || !g.ids?.length) { gapNa.push(`${shortId(g.concept)}(${!sixKSource ? "6-K 없음" : "원 개념 없음"})`); continue; }
       const r = await sixKExp({ concept: g.concept, kind: g.kind, at: g.at, ids: g.ids, report: sixKSource, fyEnd: row.ltm.E, usd: null });
-      if (r.exp != null) add("A", `20-F LTM 공란 ${g.kind} ${shortId(g.concept)} @${g.at}`, "LTM", { status: FAIL, note: `앱 LTM 공란${g.reason ? `(${g.reason})` : ""}인데 6-K 에서 기대값 ${r.exp} — 채울 수 있음 · ${r.how}` });
+      if (r.exp != null) add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란${g.reason ? `(${g.reason})` : ""}인데 6-K 에서 기대값 ${r.exp} — 채울 수 있음 · ${r.how}` });
+      // 검증기가 판정하지 못한 경우(후보 여럿 — 모호)는 정당한 공란으로 세지 않는다
+      else if (/모호/.test(r.note ?? "")) add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란 — 6-K 판독 모호로 채울 수 있는지 판정 불가: ${r.note}` });
       else gapOk++;
     }
     add("A", "20-F LTM 공란 완결성(6-K 대조)", "LTM", { status: PASS, note: `앱 LTM 공란 ${gaps.length}개 개념 중 6-K 에서 값을 찾은 것 없음(${gapOk}개 대조${gapNa.length ? `, 대조 불가 ${gapNa.length}개` : ""})` });
