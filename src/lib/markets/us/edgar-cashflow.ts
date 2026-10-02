@@ -1,4 +1,5 @@
 import "server-only";
+import { dividendFreeSince, dividendFreeYear, fillBlankReasons } from "./blank-reason";
 import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
@@ -683,6 +684,24 @@ export function buildUsCashFlow(
       for (const [k, v] of Object.entries(it.values ?? {})) if (v != null && v !== 0 && !cn[k]) cn[k] = why;
       it.cellNotes = cn;
     }
+  }
+  // 무배당 = 0(오너 결정 2026-10-02): 그 기간에 배당 공시가 하나도 없으면 배당금 지급 0. 그 밖의 사유 없는 빈 칸은 "본표에 별도 줄 없음"
+  // (0 으로 채우지 않는다 — 다른 줄에 합쳐 공시했을 수 있음). 열의 현금흐름표가 있을 때만(영업활동 현금흐름 값 있음)
+  {
+    const opTot = items.find((x) => x.accountId === "cf:total:영업활동 현금흐름");
+    const present = periods.map((p) => p.label).filter((l) => opTot?.values[l] != null);
+    const div = items.find((x) => x.accountId === "cf:재무활동 현금흐름:배당금 지급");
+    if (div)
+      for (const p of periods) {
+        if (!present.includes(p.label) || div.values[p.label] != null || div.cellNotes?.[p.label]) continue;
+        const free = p.endDate
+          ? p.fiscalQuarter == null && p.label !== "현재/LTM"
+            ? dividendFreeYear(facts, p.fiscalYear)
+            : dividendFreeSince(facts, new Date(Date.parse(p.endDate) - 365 * 864e5).toISOString().slice(0, 10), p.endDate)
+          : false;
+        if (free) div.values[p.label] = 0;
+      }
+    fillBlankReasons(items, present);
   }
   return {
     symbol: "",

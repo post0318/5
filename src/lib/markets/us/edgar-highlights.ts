@@ -493,10 +493,11 @@ export function buildUsHighlights(
   });
   const dps = columns.map((col) => {
     if (col.kind === "estimate") return null;
-    if (col.kind === "ltm") return ltm(E.dps).value;
+    // 무배당 기간 = 0(오너 결정 2026-10-02, blank-reason.ts — 재무분석·현금흐름표와 같은 판정)
+    if (col.kind === "ltm") return ltm(E.dps).value ?? (col.date && dividendFreeSince(facts, new Date(Date.parse(col.date) - 365 * 864e5).toISOString().slice(0, 10), col.date) ? 0 : null);
     const y = Number(col.key.slice(2));
     const v = annualAt(S.dps, y);
-    return v == null ? null : v * sf(y);
+    return v == null ? (dividendFreeYear(facts, y) ? 0 : null) : v * sf(y);
   });
   const divYield = dps.map((d, i) =>
     d != null && priceByCol[i] != null && priceByCol[i]! > 0 ? (d / priceByCol[i]!) * 100 : null,

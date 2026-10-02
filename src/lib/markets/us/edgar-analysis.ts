@@ -1,4 +1,5 @@
 import "server-only";
+import { dividendFreeSince, dividendFreeYear } from "./blank-reason";
 import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
 import { equityRestatement } from "./edgar-balance";
 import { buildUsCashFlow, hasCommonDividendEvidence } from "./edgar-cashflow";
@@ -382,6 +383,12 @@ export function buildUsAnalysis(
   const hasCommonDivEvidence = hasCommonDividendEvidence(facts); // edgar-cashflow.ts 공용 판정
   // 보통주 배당 근거가 없으면 보통주 배당 = 0(오너 결정 2026-10-01 — BE 배당성향은 빈칸이 아니라 0%: 포괄 배당 태그 금액은 파트너 분배라 보통주 배당이 아니다)
   const commonDividends = hasCommonDivEvidence ? dividends : (() => { const o = blank(); for (const l of labels) o[l] = 0; return o; })();
+  // 무배당 기간 = 0(오너 결정 2026-10-02 — 배당 공시가 하나도 없는 사업연도·최근 1년: AMD·AMZN 전 기간, META 2021)
+  const divFree = (p: FinancialPeriod) =>
+    p.label === LTM
+      ? dividendFreeSince(facts, new Date(Date.parse(p.endDate ?? nowIso) - 365 * 864e5).toISOString().slice(0, 10), p.endDate ?? nowIso)
+      : dividendFreeYear(facts, p.fiscalYear);
+  for (const p of periods) if (commonDividends[p.label] == null && divFree(p)) commonDividends[p.label] = 0;
   const buyback = flow(["PaymentsForRepurchaseOfCommonStock"]);
   const INT_PAID_C = ["InterestPaidNet", "InterestPaid"];
   const intPaid = flow(INT_PAID_C); // 현금 이자 지급액
@@ -540,6 +547,7 @@ export function buildUsAnalysis(
   // 예전엔 배당 지급 총액 ÷ 자체 주식수 사슬로 만들었다(정의가 다름 — 그림자 채우기 금지, 2026-09-27). 하이라이트 DPS 와 같은 원천
   const DPS_C = ["CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"];
   const dps = adjPerShare(flow(DPS_C, "USD/shares"));
+  for (const p of periods) if (dps[p.label] == null && divFree(p)) dps[p.label] = 0;
   inheritWhy(dps, flow(DPS_C, "USD/shares"));
   for (const l of labels) if (dps[l] == null && hasCommonDivEvidence) note(dps, l, WHY.get(dps)?.[l] ?? "주당배당금 공시 없음");
   const dpsFull = adjMap(fullAnnual(DPS_C, "USD/shares"));
@@ -791,9 +799,11 @@ export function buildUsAnalysis(
   const per = blank();
   for (const l of labels) per[l] = positiveRatio(price[l], eps[l]);
   inheritWhy(per, eps, price);
+  for (const l of labels) why0(per, l, price[l] == null ? "주가 없음" : eps[l] == null ? "EPS 없음" : "적자(EPS ≤ 0) — PER 미표시");
   const pbrV = blank();
   for (const l of labels) pbrV[l] = positiveRatio(mktcap[l], equity[l]);
   inheritWhy(pbrV, mktcap, equity);
+  for (const l of labels) why0(pbrV, l, mktcap[l] == null ? "시가총액 없음" : equity[l] == null ? "자기자본 없음" : "자본잠식(자본 ≤ 0) — PBR 미표시");
   const psrV = blank();
   for (const l of labels) {
     const mc = l === LTM ? curMktcap : mktcap[l];
@@ -821,6 +831,10 @@ export function buildUsAnalysis(
     if (per[l] != null && per[l]! > 0 && g != null && g >= 1) peg[l] = per[l]! / g;
   }
   inheritWhy(peg, per, epsCagr3);
+  for (const l of labels) {
+    const g = epsCagr3[l] ?? epsCagr2[l];
+    why0(peg, l, per[l] == null ? "PER 없음" : g == null ? "EPS 성장률 없음" : "EPS 성장률 1% 미만 — PEG 미표시");
+  }
 
   const effTax = ratio(taxExp, pretax, 100);
   // 듀퐁 분해: ROE(%) = 순이익률(%) × 총자산회전율 × 재무레버리지 (잔액은 평균)
@@ -841,7 +855,9 @@ export function buildUsAnalysis(
       const qa = cashCur[l]! + (ar[l] ?? 0);
       if (qa > 0) o[l] = qa / curLiab[l]!;
     }
-    return inheritWhy(o, cashCur, ar, curLiab);
+    inheritWhy(o, cashCur, ar, curLiab);
+    for (const l of labels) why0(o, l, !curLiab[l] ? "유동부채 없음" : cashCur[l] == null ? "현금성자산 없음" : "당좌자산 0 이하");
+    return o;
   })();
   const cogsAbs = (() => {
     const o = blank();
@@ -859,7 +875,9 @@ export function buildUsAnalysis(
   const dso = (() => {
     const o = blank();
     for (const l of labels) if (arAvg[l] != null && revenue[l]) o[l] = (arAvg[l]! / revenue[l]!) * 365;
-    return inheritWhy(o, arAvg, revenue);
+    inheritWhy(o, arAvg, revenue);
+    for (const l of labels) why0(o, l, arAvg[l] == null ? "매출채권 줄 없음(본표에 별도 줄 없음)" : "매출 없음");
+    return o;
   })();
   // 재고 태그가 없으면 재고 0 (플랫폼·서비스) → DIO 0, CCC 계산 가능
   // 재고 태그를 아예 안 쓰는 회사(플랫폼·서비스)만 재고 0 → DIO 0. 태그가 있는데 그 기간 값이 없으면 공란(0 으로 보지 않음)
@@ -868,10 +886,13 @@ export function buildUsAnalysis(
     const o = blank();
     for (const l of labels)
       if (cogsAbs[l] && (invAvg[l] != null || !invEver)) o[l] = ((invAvg[l] ?? 0) / cogsAbs[l]!) * 365;
-    return inheritWhy(o, invAvg, cogsAbs);
+    inheritWhy(o, invAvg, cogsAbs);
+    for (const l of labels) why0(o, l, !cogsAbs[l] ? "매출원가 없음" : "재고 줄 없음(그 기간)");
+    return o;
   })();
   const dpo = ratio(apAvg, cogsAbs, 365);
   const ccc = combine3(dso, dio, dpo);
+  for (const l of labels) why0(ccc, l, dso[l] == null ? "매출채권 회전일수 없음" : dio[l] == null ? "재고자산 회전일수 없음" : "매입채무 회전일수 없음");
   const altZ = (() => {
     const o: Record<string, number | null> = blank();
     for (const l of labels) {
@@ -891,6 +912,10 @@ export function buildUsAnalysis(
           3.3 * (opIncome[l]! / assets[l]!) +
           0.6 * (mc / liabTotal[l]!) +
           1.0 * (revenue[l]! / assets[l]!);
+    }
+    for (const l of labels) {
+      const mc = l === LTM ? curMktcap : mktcap[l];
+      why0(o, l, mc == null ? "시가총액 없음" : retained[l] == null ? "이익잉여금 없음" : wc[l] == null ? "운전자본 없음" : !liabTotal[l] ? "부채총계 없음" : "구성 값 없음");
     }
     return o;
   })();

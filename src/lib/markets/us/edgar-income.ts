@@ -1,4 +1,5 @@
 import "server-only";
+import { fillBlankReasons } from "./blank-reason";
 import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import { yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
@@ -714,6 +715,11 @@ export function buildUsIncome(
     );
 
 
+  // 사유 없는 빈 칸 = "본표에 별도 줄 없음"(오너 지시 2026-10-02) — 매출이 있는 열만
+  {
+    const revRow = items.find((x) => x.accountName === "매출액" || x.accountName === "순수익");
+    fillBlankReasons(items, labels.filter((l) => revRow?.values[l] != null));
+  }
   return {
     symbol: "",
     market: "us",
