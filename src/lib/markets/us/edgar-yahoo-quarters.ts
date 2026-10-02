@@ -102,7 +102,8 @@ const FLOWS: { label: string; y: string; concepts: string[]; sign?: 1 | -1; da?:
   { label: "영업활동현금흐름", y: "operatingCashFlow", concepts: ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"] },
   { label: "투자활동현금흐름", y: "investingCashFlow", concepts: ["NetCashProvidedByUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"] },
   { label: "재무활동현금흐름", y: "financingCashFlow", concepts: ["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"] },
-  { label: "CapEx", y: "capitalExpenditure", concepts: ["PaymentsToAcquirePropertyPlantAndEquipment"], sign: -1 },
+  // 야후 capitalExpenditure = 유형 + 무형 취득(TSM 2025: 1,272,450.3 + 10,146.9 = 1,282,597.2 백만 TWD) — SEC 개념(유형자산 취득)과 같은 정의인 purchaseOfPPE
+  { label: "CapEx", y: "purchaseOfPPE", concepts: ["PaymentsToAcquirePropertyPlantAndEquipment"], sign: -1 },
   { label: "배당금 지급", y: "cashDividendsPaid", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], sign: -1 },
   { label: "자사주 매입", y: "repurchaseOfCapitalStock", concepts: ["PaymentsForRepurchaseOfCommonStock"], sign: -1 },
 ];
@@ -378,8 +379,9 @@ export function yahooLtmLabel(r: YahooLtmResult): string {
   if (r.source !== "yahoo") return r.ltmBlank ? `⚠ LTM 열 공란: ${r.reason}(사업연도 값으로 대체하지 않음)` : `LTM 분기 보강 안 함(SEC 사업연도 유지): ${r.reason}`;
   return (
     `LTM 열 = Yahoo 분기(원통화 ${r.currency}, 연준 H.10 분기 평균·기말 환율 환산, ~${r.through}), 결측 항목 공란` +
-    (r.blanked.length ? ` — 공란: ${r.blanked.map((b) => `${b.label}(${b.reason})`).join(", ")}` : "") +
-    (r.approx?.length ? ` — SEC 연말 + Yahoo 분기 변동분: ${r.approx.map((b) => `${b.label}(${b.reason})`).join(", ")}` : "") +
+    // 화면 각주는 항목 이름만 — 판정 숫자(SEC vs Yahoo 금액)는 칸 주석·검증 결과에(오너 지적 2026-10-02 "주석에 이상한 내용을 잔뜩")
+    (r.blanked.length ? ` · 공란: ${r.blanked.map((b) => b.label).join(", ")}` : "") +
+    (r.approx?.length ? ` · SEC 연말 + Yahoo 분기 변동분: ${r.approx.map((b) => b.label).join(", ")}` : "") +
     (r.evReason ? ` · ${r.evReason}` : "")
   );
 }
