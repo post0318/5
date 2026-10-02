@@ -653,7 +653,14 @@ export function buildUsBalance(
   items.push(nrow("순차입금", netDebt));
   // 운용리스는 차입금·순차입금에 넣지 않는다(미국 회계기준상 영업부채, 오너 결정
   // 2026-09-23) — 규모는 여기서 따로 보인다. 분기 공시에 없는 회사는 빈칸.
-  items.push(nrow("운용리스 부채 (차입금 미포함)", opLease));
+  {
+    const olRow = nrow("운용리스 부채 (차입금 미포함)", opLease);
+    if ((facts.facts as Record<string, unknown>)["ifrs-full"]) {
+      const z = labels.filter((l) => opLease[l] === 0);
+      if (z.length) olRow.cellNotes = { ...(olRow.cellNotes ?? {}), ...Object.fromEntries(z.map((l) => [l, "IFRS — 운용·금융리스 구분 없음(리스부채는 총차입금에 포함)"])) };
+    }
+    items.push(olRow);
+  }
   // 신용평가사(S&P·Moody's) 기준 참고치 — 운용리스가 공시된 기간만
   const debtWithOpLease = blank();
   for (const l of labels)
