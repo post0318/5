@@ -507,7 +507,8 @@ export function withYahooLtm(
       const vE = instantOn(out[c]?.units?.USD ?? [], E);
       if (!vE || (out[c]?.units?.USD ?? []).some((e) => !e.start && e.end === last)) continue;
       // 한 줄과 같거나, 없으면 두 줄의 합과 정확히 같을 때(TSM 비유동 차입금 927,657 = 사채·장기차입금 896,062 + 리스 31,595 백만 TWD) — 후보가 하나일 때만
-      const pool = [...new Set([...fromSixK, ...extra.filter((d) => !d.includes("("))])].filter((d) => (on(d, E) ?? 0) !== 0);
+      // 후보 = 분기말 값이 채워진 모든 줄(야후 정확 일치로 채운 줄 포함 — ASML 단기투자·TSM 사채는 야후 값이 SEC 와 같아 야후로 채워졌다)
+      const pool = Object.keys(out).filter((d) => !/Derived$/.test(d) && (on(d, E) ?? 0) !== 0 && (out[d]?.units?.USD ?? []).some((e) => !e.start && e.end === last));
       let same: string[][] = pool.filter((d) => on(d, E) === vE).map((d) => [d]);
       if (!same.length) {
         same = [];
