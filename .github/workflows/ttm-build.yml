@@ -5,8 +5,10 @@ name: 미국 TTM 스냅샷 미리 채우기 (ttm_snap)
 #   - 하루 1회: 21:50 UTC = 06:50 KST (재무 배치 fin-build 06:10 KST 뒤 — 매출(fin) 저장본이 먼저 갱신돼야 TTM 계산이 빠르다)
 #   - master push(앱 파일 변경분만): 운영 배포판이 이 커밋으로 바뀔 때까지 기다린 뒤(최대 20분) 채운다
 #   - 수동: workflow_dispatch (symbols 를 주면 그 종목만)
-# 호출당 최대 10종목, 종목은 하나씩 순서대로(SEC 요청 제한). pending 0 이 되면 멈춘다. 저장 못 한 종목(failed — SEC 판독 경고 등)은
-# 경고로만 남긴다(다음 화면 조회 때 다시 계산). pending 이 남았는데 진행 0 이면 실패.
+# 계산은 이 실행 서버에서 한다(scripts/run/ttm-build.mts — 운영 서버 CPU 사용 안 함, 2026-10-03 오너 결정. 예전엔 운영 앱
+# /api/cron/ttm-build 를 불러 Vercel 이 종목당 30~40초씩 계산했고, Hobby Active CPU 한도 초과의 주원인이었다).
+# 운영에는 배포판 번호만 묻는다(GET — 계산 없음). 그 커밋을 받아 같은 코드로 계산하고 그 번호로 저장해야 운영이 저장본을 쓴다
+# (앱 파일이 안 바뀐 푸시는 배포를 생략하므로 master 최신 커밋과 운영 배포판이 다를 수 있다).
 
 on:
   schedule:
@@ -38,50 +40,51 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
-      CRON_SECRET: ${{ secrets.CRON_SECRET }}
       BASE: https://macroresearch.vercel.app
       SYMBOLS: ${{ inputs.symbols }}
       SHA: ${{ github.sha }}
-      EVENT: ${{ github.event_name }}
     steps:
-      - name: 배포 반영 대기(push 일 때만)
-        if: github.event_name == 'push'
+      - name: 운영 배포판 확인(push 면 이 커밋 반영까지 대기)
+        id: ver
         run: |
           for i in $(seq 1 40); do
-            v=$(curl -sS --max-time 20 "$BASE/api/cron/ttm-build" | jq -r '.version // ""' || echo "")
-            if [ "$v" = "$SHA" ]; then echo "배포 반영 확인: $v"; exit 0; fi
-            echo "대기 $i — 운영 배포판 ${v:-?} ≠ $SHA"; sleep 30
+            v=$(curl -sS --max-time 20 "$BASE/api/cron/ttm-build" | jq -r '.version // ""' 2>/dev/null || echo "")
+            if [ "${{ github.event_name }}" != "push" ] && [ -n "$v" ] && [ "$v" != "local" ]; then echo "운영 배포판: $v"; echo "v=$v" >> "$GITHUB_OUTPUT"; exit 0; fi
+            if [ "$v" = "$SHA" ]; then echo "배포 반영 확인: $v"; echo "v=$v" >> "$GITHUB_OUTPUT"; exit 0; fi
+            echo "대기 $i — 운영 배포판 ${v:-?}"; sleep 30
           done
-          echo "::error::20분 안에 운영 배포판이 $SHA 로 바뀌지 않음"; exit 1
-      - name: 저장본 없는 종목 계산·저장(반복 호출)
+          echo "::error::운영 배포판을 확인하지 못함(push 면 20분 안에 $SHA 로 바뀌지 않음)"; exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ver.outputs.v }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: 저장본 없는 종목 계산·저장(실행 서버)
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          VERCEL_GIT_COMMIT_SHA: ${{ steps.ver.outputs.v }}
+          NODE_OPTIONS: --conditions=react-server
         run: |
           set -u
-          q="n=10"
-          if [ -n "${SYMBOLS:-}" ]; then q="$q&symbols=$SYMBOLS"; fi
-          fail=0
-          exc=""
-          for i in $(seq 1 30); do
-            code=$(curl -sS -o res.json -w "%{http_code}" -X POST --max-time 320 \
-              -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/ttm-build?$q&exclude=$exc" || echo 000)
-            echo "── 호출 $i (HTTP $code)"; cat res.json; echo
-            if [ "$code" != "200" ]; then fail=1; break; fi
-            nf=$(jq '.failed | length' res.json)
-            # 실패 종목은 이번 실행에서 제외(같은 종목만 반복 재시도하지 않게) — 다음 화면 조회·다음 실행에서 다시 계산
-            if [ "$nf" != "0" ]; then echo "::warning::저장 못 한 종목: $(jq -c '.failed' res.json)"; exc="$exc$(jq -r '[.failed[].symbol] | join(",")' res.json),"; fi
-            pending=$(jq '.pending' res.json)
-            did=$(jq '(.built | length) + (.failed | length)' res.json)
-            if [ "$pending" = "0" ]; then break; fi
-            if [ "$did" = "0" ]; then echo "::error::pending $pending 인데 진행 0"; fail=1; break; fi
-            # 한 호출에서 저장 성공 0·실패만 — 공통 원인(SEC 빈 응답·요청 제한 등)일 가능성이 커서 남은 종목을 계속 계산하지 않고 멈춘다(운영 CPU 절약, 2026-10-03)
-            if [ "$(jq '.built | length' res.json)" = "0" ] && [ "$nf" != "0" ]; then echo "::error::이번 호출 저장 0 · 실패 $nf — 공통 원인 확인 후 수동 재실행"; fail=1; break; fi
-          done
-          if [ "$fail" = "1" ]; then exit 1; fi
-      - name: 하이라이트 저장본(api_snap) 갱신 요청
-        # 화면은 24시간 안 저장본을 배포판이 달라도 먼저 보여주고 뒤에서 다시 계산한다(api-snap.ts). 아무도 안 열면 옛 배포판 내용(지운 문구 등)이
-        # 다음 조회 때 그대로 보였다(2026-10-02 오너 지적 — "예상 순이익" 칸 주석). 배포 직후 유니버스 미국 종목을 한 번씩 열어 갱신을 걸어 둔다
-        if: always()
+          a=""
+          if [ -n "${SYMBOLS:-}" ]; then a="--symbols=$SYMBOLS"; fi
+          # 운영 배포판 커밋에 실행 스크립트가 없으면(이 방식 도입 전 배포판) master 의 스크립트를 쓴다 — 계산 함수는 체크아웃한 배포판 코드
+          f=scripts/run/ttm-build.mts
+          if [ ! -f "$f" ]; then mkdir -p scripts/run && git show origin/master:scripts/run/ttm-build.mts > "$f"; fi
+          npx -y tsx@4.23.15 --tsconfig tsconfig.json "$f" $a --minutes=100
+      - name: 하이라이트 저장본(api_snap) 갱신 요청(배포 직후만)
+        # 화면은 24시간 안 저장본을 배포판이 달라도 먼저 보여주고 뒤에서 다시 계산한다(api-snap.ts). 배포 직후 유니버스 미국 종목을 한 번씩
+        # 열어 갱신을 걸어 둔다(2026-10-02 오너 지적 — 옛 배포판 문구가 남음). 운영 서버 계산이라 하루 1회 예약에서는 하지 않는다(2026-10-03)
+        if: github.event_name == 'push'
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           curl -sS --max-time 30 -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/universe-symbols?market=us" > uni.json
           for s in $(jq -r '.items[].symbol' uni.json | sort -u); do

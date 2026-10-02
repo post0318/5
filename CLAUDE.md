@@ -2057,6 +2057,12 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   다시 조립했다(10-01~02 푸시 35회, ttm-build 351분). 이제 `vercel.json` `ignoreCommand` 가 직전 배포 이후 `src`·`public`·패키지·설정 파일이
   안 바뀌었으면 배포를 생략하고(배포판 그대로 → 저장본 유효), `ttm-build.yml` 푸시 트리거도 같은 경로만 본다. 재무 검증 워크플로는 삭제(검증은 로컬 전용).
   **푸시는 모아서** — 앱 코드 푸시 한 번 = 운영 서버 전 종목 재조립 한 번.
+- **fin-build·TTM 채우기 계산은 GitHub 실행 서버에서(오너 지시 2026-10-03 — "운영 cpu를 사용할 내용이 아닌데")**: 워크플로가
+  `scripts/run/fin-build.mts`·`scripts/run/ttm-build.mts` 를 직접 실행해 DB 에만 쓴다(라우트와 같은 함수 — AAPL·TSM·XOM 저장본과 칸별 일치 실측).
+  운영에는 배포판 번호만 묻고(`GET /api/cron/ttm-build`, 계산 없음) 그 커밋을 받아 계산한다 — 저장본 판번호(ttm_snap = 커밋, fin_sym =
+  ENGINE_VERSION)가 운영과 같아야 운영이 쓴다. 실행: `NODE_OPTIONS=--conditions=react-server npx -y tsx@4.23.15 --tsconfig tsconfig.json
+  scripts/run/….mts`(`server-only` 표시 통과). GitHub 비밀값 `MONGODB_URI`·`SEC_USER_AGENT` 필요(2026-10-03 등록). 하이라이트 저장본(api_snap)
+  갱신 요청만 운영 계산이라 배포 직후(push)에만 한다. 라우트 `/api/cron/fin-build`·`ttm-build`(POST)는 수동 비상용으로 남김.
 - **유니버스 밖 미국 종목도 조회 때 저장(오너 결정 2026-10-01 ①)**: 재무 조립(`loadFinSym`)이 완전하면(환율·Yahoo·SEC 조회
   결손 없음) `fin_sym` 에 저장하고, TTM 라우트는 화면 조회 시각(`ttm_snap.seen`)을 남긴다. 재무 배치(fin-build)·TTM 채우기(ttm-build)는
   유니버스 + **최근 30일 안에 조회된 종목**(`listRecentlyViewed`)을 갱신한다 — 안 보는 종목은 자연히 빠진다. 실측(LLY): 첫 조회 45초,
