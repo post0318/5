@@ -93,6 +93,11 @@ const IFRS_MAP: [string, string][] = [
   ["PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities", "PaymentsToAcquireIntangibleAssets"],
   ["PurchaseOfInvestmentsOtherThanInvestmentsAccountedForUsingEquityMethod", "PaymentsToAcquireInvestments"],
   ["PaymentsToAcquireOrRedeemEntitysShares", "PaymentsForRepurchaseOfCommonStock"],
+  ["PurchaseOfTreasuryShares", "PaymentsForRepurchaseOfCommonStock"],
+  // IFRS 사용권자산(리스 구분 없음) — 재무상태표 "사용권자산 (리스)" 줄(차입금·EV 와 무관)
+  ["RightofuseAssets", "OperatingLeaseRightOfUseAsset"],
+  // IFRS 기타자본구성요소(해외환산·FVOCI 평가 등 기타포괄손익 누계)
+  ["OtherReserves", "AccumulatedOtherComprehensiveIncomeLossNetOfTax"],
   ["InterestPaidClassifiedAsOperatingActivities", "InterestPaidNet"],
   ["InterestPaidClassifiedAsFinancingActivities", "InterestPaidNet"],
   // 손익계산서 금융원가 = 이자비용(자본화 이자 차감 후 — TSM 2024: 사채·차입·리스·기타 이자 19,805.7 − 자본화 9,310.3 = 10,495.4 백만 TWD)
@@ -107,7 +112,8 @@ const IFRS_NEG: [string, string][] = [
   ["AdjustmentsForDecreaseIncreaseInInventories", "IncreaseDecreaseInInventories"],
 ];
 /** 여러 IFRS 개념의 합 → us-gaap 개념 (같은 기간끼리) */
-const IFRS_SUM: [string[], string][] = [
+/** 원소가 배열이면 그 안에서 먼저 공시된 개념 하나만(같은 금액을 이름만 달리해 두 번 공시한 회사 — TSM FVOCI·FVTPL) */
+const IFRS_SUM: [(string | string[])[], string][] = [
   [["NoncurrentPortionOfNoncurrentBondsIssued", "LongtermBorrowings"], "LongTermDebtNoncurrent"],
   [["CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued", "CurrentPortionOfLongtermBorrowings", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"], "LongTermDebtCurrent"],
   [["DepreciationExpense", "AmortisationExpense"], "DepreciationDepletionAndAmortization"],
@@ -117,6 +123,16 @@ const IFRS_SUM: [string[], string][] = [
   [["IssuedCapital", "SharePremium", "CapitalReserve"], "CommonStocksIncludingAdditionalPaidInCapital"],
   [["ProceedsFromIssueOfBondsNotesAndDebentures", "ProceedsFromNoncurrentBorrowings"], "ProceedsFromIssuanceOfLongTermDebt"],
   [["RepaymentsOfBondsNotesAndDebentures", "RepaymentsOfNoncurrentBorrowings"], "RepaymentsOfLongTermDebt"],
+  // 투자활동 금융자산 취득·처분(TSM 2025 20-F — 상각후원가·FVOCI·FVTPL 별 개념). 현금흐름표 투자자산 취득·처분 줄이 합산하는 개념으로
+  [["PurchaseOfFinancialAssetsMeasuredAtAmortisedCostClassifiedAsInvestingActivities", "PurchaseOfFinancialAssetsMeasuredAtFairValueThroughOtherComprehensiveIncomeClassifiedAsInvestingActivities", "PurchaseOfFinancialAssetsMeasuredAtFairValueThroughProfitOrLossClassifiedAsInvestingActivities"], "PaymentsToAcquireMarketableSecurities"],
+  [["ProceedsFromSalesOrMaturityOfFinancialAssetsMeasuredAtAmortisedCostClassifiedAsInvestingActivities", "ProceedsFromSalesOrMaturityOfFinancialAssetsMeasuredAtFairValueThroughOtherComprehensiveIncomeClassifiedAsInvestingActivities", "ProceedsFromSalesOrMaturityOfFinancialAssetsMeasuredAtFairValueThroughProfitOrLossClassifiedAsInvestingActivities"], "ProceedsFromSaleAndMaturityOfMarketableSecurities"],
+  // 장기 투자자산 = 비유동 금융자산(상각후원가·FVOCI·FVTPL) + 지분법 투자 — EV 현금(장기 투자증권)과 무관한 표시 줄
+  [[
+    "NoncurrentFinancialAssetsAtAmortisedCost",
+    ["NoncurrentFinancialAssetsAtFairValueThroughOtherComprehensiveIncome", "NoncurrentFinancialAssetsMeasuredAtFairValueThroughOtherComprehensiveIncome"],
+    ["NoncurrentFinancialAssetsAtFairValueThroughProfitOrLoss", "NoncurrentFinancialAssetsAtFairValueThroughProfitOrLossMandatorilyMeasuredAtFairValue"],
+    "InvestmentsAccountedForUsingEquityMethod",
+  ], "LongTermInvestments"],
 ];
 
 const isCurrency = (u: string) => /^[A-Z]{3}$/.test(u);
@@ -160,7 +176,7 @@ function mapIfrs(gaap: Ns, ifrs: Ns): Ns {
   }
   for (const [srcs, dst] of IFRS_SUM) {
     if (out[dst]) continue;
-    const present = srcs.filter((s) => ifrs[s]);
+    const present = srcs.map((s) => (Array.isArray(s) ? s.find((x) => ifrs[x]) : ifrs[s] ? s : undefined)).filter((s): s is string => !!s);
     if (!present.length) continue;
     const units: Units = {};
     for (const s of present)
@@ -179,9 +195,19 @@ function mapIfrs(gaap: Ns, ifrs: Ns): Ns {
       }
     out[dst] = { units };
   }
+  // 부호 반전 — 앞 개념이 비운 기간만 뒤 개념으로(TSM 2025 는 매출채권 증감을 ...TradeAndOtherReceivables 로 바꿔 공시)
+  const negHere = new Set<string>();
   for (const [src, dst] of IFRS_NEG) {
-    if (!ifrs[src] || out[dst]) continue;
-    out[dst] = { units: Object.fromEntries(Object.entries(ifrs[src].units).map(([u, arr]) => [u, arr.map((e) => ({ ...e, val: -e.val }))])) };
+    if (!ifrs[src]) continue;
+    if (out[dst] && !negHere.has(dst)) continue; // us-gaap 원본이 있으면 건드리지 않음
+    const pkey = (e: FactUnitEntry) => `${e.start ?? ""}|${e.end}`;
+    const units: Units = { ...(out[dst]?.units ?? {}) };
+    for (const [u, arr] of Object.entries(ifrs[src].units)) {
+      const have = new Set((units[u] ?? []).map(pkey));
+      units[u] = [...(units[u] ?? []), ...arr.filter((e) => !have.has(pkey(e))).map((e) => ({ ...e, val: -e.val }))];
+    }
+    out[dst] = { units };
+    negHere.add(dst);
   }
   // 분기로만 공시된 주당배당금 → 사업연도 연간 합(그 해 4개 분기가 모두 있을 때만). TSM 은 분기 배당 결의액을 분기마다 단다(2024: 4 + 4 + 4.5 + 4.5 = 17 TWD)
   const dps = out.CommonStockDividendsPerShareDeclared;
