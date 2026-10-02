@@ -764,6 +764,52 @@ function parseContexts(xml) {
  * 기준일(±7일)의 정기공시(10-Q/10-K) 한 건 — 그 날짜 시점값 전부(차원 포함)·라벨·재무상태표 본표 계산 구조.
  * → { form, filed, date, facts: [{ id, dims, v }], labels: Map, kids: Map(부모 → 자식[]), faceIds: Set, roots }
  */
+/**
+ * 6-K 분기 현금흐름표의 당기·전기 누적 값(원통화) — 앱(edgar-6k.ts, 표 칸 단위 판독)과 다른 방식으로 따로 읽는다(검증 독립성, 2026-10-02):
+ * 문서를 글자로 풀어 20-F 라벨(SEC 라벨 파일) 뒤에 붙은 숫자 묶음을 찾는다. 같은 라벨이 여러 번 나오면 pick(숫자 묶음 → bool)으로 하나만
+ * (CapEx = 지출이라 음수인 묶음). 열: 숫자 2개 = 당기·전기(머리 연도 순서), 3개 = 주석 번호 + 2개, 4개 = 3개월 2열 + 누적 2열(슬라이드)
+ */
+async function sixKCfYtd(cik, sub, periodEnd, priorEnd, labels, pick) {
+  const rc = sub.filings?.recent ?? {};
+  const hi = new Date(Date.parse(periodEnd) + 120 * 864e5).toISOString().slice(0, 10);
+  const yC = periodEnd.slice(0, 4), yP = priorEnd.slice(0, 4);
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const labRe = labels.filter((l) => l.length > 3).sort((a, b) => b.length - a.length).map((l) => new RegExp(`(?:^|[^a-z])${l.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(esc).join("[^a-z0-9]+")}[^a-z0-9(—\\-]*((?:[\\s‖]*(?:\\(?[\\d,]+(?:\\.\\d+)?\\)?|—|-)(?![\\d,]))+)`, "g"));
+  for (let i = 0; i < (rc.form ?? []).length; i++) {
+    if (rc.form[i] !== "6-K" || !(rc.filingDate[i] > periodEnd && rc.filingDate[i] <= hi)) continue;
+    const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rc.accessionNumber[i].replace(/-/g, "")}`;
+    const items = (await secJson(base + "/index.json").catch(() => null))?.directory.item ?? [];
+    for (const d of items.filter((x) => /\.htm$/i.test(x.name) && !/-index/i.test(x.name) && Number(x.size) > 15_000)) {
+      const html = await secText(`${base}/${d.name}`).catch(() => "");
+      const text = html.replace(/<\/t[dh]>/gi, " ‖ ").replace(/<\/tr>/gi, "\n").replace(/<[^>]+>/g, " ")
+        .replace(/&#8212;|&mdash;/g, "—").replace(/&#160;|&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;/g, "'").replace(/&#?[a-z0-9]+;/gi, " ").toLowerCase();
+      if (!/operating activities/.test(text) || !/cash flows?/.test(text)) continue;
+      const unit = /in (?:\S+ )?thousands/.test(text) ? 1e3 : /in (?:\S+ )?millions/.test(text) ? 1e6 : null;
+      if (!unit) continue;
+      for (const re of labRe) {
+        const found = [];
+        for (const m of text.matchAll(re)) {
+          let nums = [...m[1].matchAll(/\(?[\d,]+(?:\.\d+)?\)?|—|-/g)].map((x) => (x[0] === "—" || x[0] === "-" ? 0 : (x[0].startsWith("(") ? -1 : 1) * Number(x[0].replace(/[(),]/g, ""))));
+          if (nums.length === 3 && Number.isInteger(nums[0]) && nums[0] > 0 && nums[0] < 100 && !/,/.test(m[1].trim().split(/[\s‖]+/)[0])) nums = nums.slice(1);
+          if (nums.length !== 2 && nums.length !== 4) continue;
+          // 열 순서 — "… months ended <날짜들> … 연도 연도" 머리 중 라벨에 가장 가까운 것(앞뒤 2만 자 — ASML 슬라이드는 머리가 표 중간에 있다)
+          const lo0 = Math.max(0, m.index - 20_000), win = text.slice(lo0, m.index + 20_000);
+          const ys = [...win.matchAll(/months ended[^0-9]{0,200}?(?:[a-z]{3,9}\.? \d{1,2},?[\s‖]*)+[^0-9]{0,80}?(20\d\d)[\s‖]+(20\d\d)/g)]
+            .sort((a, b) => Math.abs(lo0 + a.index - m.index) - Math.abs(lo0 + b.index - m.index))[0];
+          if (!ys || ![yC, yP].includes(ys[1]) || ![yC, yP].includes(ys[2]) || ys[1] === ys[2]) continue;
+          const pair = nums.length === 4 ? nums.slice(2) : nums;
+          const cur = ys[1] === yC ? pair[0] : pair[1], prior = ys[1] === yC ? pair[1] : pair[0];
+          found.push({ cur: cur * unit, prior: prior * unit, src: `${rc.accessionNumber[i]} ${d.name}` });
+        }
+        const uniq = [...new Map(found.map((f) => [`${f.cur}|${f.prior}`, f])).values()].filter((f) => !pick || pick(f));
+        if (uniq.length === 1) return uniq[0];
+        if (uniq.length > 1) return { ambiguous: uniq.length, src: `${rc.accessionNumber[i]} ${d.name}` };
+      }
+    }
+  }
+  return null;
+}
+
 async function filingAtDate(cik, sub, date) {
   const rc = sub.filings?.recent ?? {};
   const k = (rc.form ?? []).findIndex((fm, i) => /^(10-[QK]|20-F|40-F)$/.test(fm) && rc.reportDate?.[i] && dayDiff(rc.reportDate[i], date) <= 7);
@@ -5659,6 +5705,8 @@ async function verifyUs(sym) {
         const nm0 = (x) => x.replace(/\s/g, "");
         const blanksTxt = /공란(?::| —) (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1] ?? "";
         const approxSet = new Set((/SEC 연말 \+ Yahoo 분기 변동분: (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1]?.split(", ") ?? []).map(nm0));
+        // 앱이 회사 6-K 분기 재무제표에서 읽은 항목(2026-10-02) — 아래에서 검증기가 6-K 를 따로 읽어 다시 계산
+        const sixKSet = new Set((/회사 6-K 분기 재무제표: (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1]?.split(", ") ?? []).map(nm0));
         // 환율 = 검증기가 FRED 에서 따로 받은 연준 H.10(흐름 분기 창 4개 평균, 잔액 최신 분기말 기말) — 독립. Yahoo 분기 원천은 공통모드로 남는다
         const basis = `Yahoo 분기 ${last.map((r) => r.end).join("·")} × 분기 평균 환율(${natCur}→USD, 연준 H.10 ${fxRows.series})${pendQ ? "" : ` · ${FX_IND_MARK}(분기 창 4개 + 기말 ${last[3].end})`}`;
         const items = [
@@ -5679,6 +5727,30 @@ async function verifyUs(sym) {
           const name = `20-F LTM ${n0} = Yahoo 분기${bals.some((b) => b[0] === n0) ? " 최신 분기말 × 기말 환율" : " 4개 × 분기 평균 환율"}`;
           // 앱이 "SEC 사업연도 + 야후 분기 변동분"(결정 (가) 방식)으로 만든 흐름 항목 — 기대값 = 야후 4개 분기 + (SEC FY − 야후 FY) × 사업연도 평균 환율.
           // SEC FY 는 검증기가 공시 원본에서 따로 읽는다(CapEx 만 — 나머지 항목은 미구현으로 남긴다)
+          // 앱이 회사 6-K 분기 재무제표로 만든 흐름 항목 — 기대값 = SEC 20-F 사업연도(검증기 원본 판독) × 사업연도 평균 환율 + 6-K 당기 누적 × (사업연도 다음날~기준일)
+          // 평균 환율 − 6-K 전기 누적 × (사업연도 시작~1년 전 기준일) 평균 환율. 6-K 값은 검증기가 따로 읽는다(sixKCfYtd)
+          if (app != null && sixKSet.has(nm0(n0)) && !bals.some((b) => b[0] === n0)) {
+            secFy ??= fyCol ? await filingAtDate(cik, sub, H[fyCol].date) : null;
+            const reId = n0 === "CapEx" ? /_(?:PurchaseOfPropertyPlantAndEquipment\w*|PaymentsToAcquirePropertyPlantAndEquipment)$/
+              : n0 === "영업활동 현금흐름" ? /_(?:NetCashProvidedByUsedInOperatingActivities|CashFlowsFromUsedInOperatingActivities)$/
+              : n0 === "감가상각비" ? /_(?:DepreciationDepletionAndAmortization|DepreciationAndAmortization|AdjustmentsForDepreciationAndAmortisationExpense\w*)$/ : null;
+            const fyF = reId ? secFy?.durFacts.filter((x0) => !x0.dims.length && reId.test(x0.id) && (Date.parse(x0.end) - Date.parse(x0.start)) / 864e5 > 300) : [];
+            if (!reId || !fyF?.length) { add("A", name, "LTM", { status: FAIL, note: `앱이 "${n0}"을 회사 6-K 로 만듦 — 검증기 SEC 사업연도 값 ${reId ? "판독 실패" : "독립 재계산 미구현"}` }); continue; }
+            const f0 = fyF.sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0];
+            const labs = secFy.labels.get(f0.id) ?? [];
+            const priorEnd = new Date(Date.UTC(Number(H.LTM.date.slice(0, 4)) - 1, Number(H.LTM.date.slice(5, 7)), 0)).toISOString().slice(0, 10);
+            const yt = await sixKCfYtd(cik, sub, H.LTM.date, priorEnd, labs, n0 === "CapEx" ? (f) => f.cur <= 0 && f.prior <= 0 : null);
+            if (!yt || yt.ambiguous) { add("A", name, "LTM", { status: FAIL, note: `6-K 현금흐름표 "${labs[0] ?? f0.id}" 줄 ${yt ? `${yt.ambiguous}개 후보로 모호(${yt.src})` : "못 찾음"}` }); continue; }
+            const fyEnd = f0.end, fyStart = f0.start;
+            const sgn = n0 === "CapEx" ? -1 : 1, fyV = n0 === "CapEx" ? -Math.abs(f0.v) : f0.v;
+            const cur = sgn === -1 ? -Math.abs(yt.cur) : yt.cur, prior = sgn === -1 ? -Math.abs(yt.prior) : yt.prior;
+            const nextDay = new Date(Date.parse(fyEnd) + 864e5).toISOString().slice(0, 10);
+            const rF = fxAvg(fxRows, fyStart, fyEnd), rC = fxAvg(fxRows, nextDay, H.LTM.date), rP = fxAvg(fxRows, fyStart, priorEnd);
+            if (rF == null || rC == null || rP == null) { add("A", name, "LTM", { status: FAIL, note: "6-K 기대값 환율 없음" }); continue; }
+            const exp6 = fyV * rF + cur * rC - prior * rP;
+            add("A", name.replace(/= Yahoo 분기.*/, "= SEC 20-F + 6-K 누적(검증기 판독)"), "LTM", vsSource(app, exp6, EXACT, `SEC ${secFy.form} ${f0.id} ${fyV} + 6-K(${yt.src}) 당기 ${cur} − 전기 ${prior} ${natCur} × H.10 기간 평균`));
+            continue;
+          }
           if (app != null && approxSet.has(nm0(n0)) && !bals.some((b) => b[0] === n0)) {
             // CapEx 만 독립 재계산한다 — 다른 항목을 앱이 변동분 방식으로 만들었으면 검증되지 않은 값이므로 실패(재감사 지적: NA 면 앱이 스스로 검사를 면제받는다)
             if (n0 !== "CapEx") { add("A", name, "LTM", { status: FAIL, note: `앱이 "${n0}"을 SEC 사업연도 + 야후 분기 변동분으로 만듦 — 검증기 독립 재계산 미구현(구현 필요)` }); continue; }
