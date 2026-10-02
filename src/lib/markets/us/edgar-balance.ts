@@ -331,7 +331,10 @@ export function buildUsBalance(
       // LTM: 최근 분기말(±6일) 값만 — 그 전 가장 최근 값으로 대신하지 않는다(그림자 채우기 금지, 2026-09-27)
       out[LTM] = instantOn(e, latestEnd);
       if (out[LTM] == null) {
-        if (!provenAbsentAt(facts, concepts, latestEnd)) ltmUnknown.add(out);
+        // 20-F: 최근 연말에도 값이 없는 개념(그 회사가 공시하지 않는 줄 — TSM 운용리스·별도 자본잉여금 태그)은 "분기에 모름"이 아니다. 분기 공시가 없어
+        // 없음 증명(provenAbsentAt)을 못 하니, 합산 줄에서 이 개념이 모름으로 잡혀 단기부채·장기부채·자본금 LTM 이 통째로 비었다(2026-10-02)
+        if (yl && (!years.length || out[fyKey(years[years.length - 1])] == null)) { /* 공시하지 않는 줄 — 합산에 아무것도 더하지 않음 */ }
+        else if (!provenAbsentAt(facts, concepts, latestEnd)) ltmUnknown.add(out);
         // 분기 재무상태표에 이 줄이 따로 없다(다른 줄에 포함) — 연말 값으로 대신하지 않고 사유만
         else if (years.length && out[fyKey(years[years.length - 1])] != null) ltmAbsent.add(out);
       }

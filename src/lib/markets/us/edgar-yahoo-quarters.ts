@@ -342,6 +342,9 @@ export function withYahooLtm(
         if (daFy == null || !hit || present.some((c) => !sameInUnit(daFy / fyRate, latestFy(c)!.val / fyRate))) return false;
         got = present.map((c) => ({ c, r: hit.r }));
       }
+      // 사업연도 값이 0 이고 분기 현금흐름표(당기·전기 누적 모두)에 그 줄이 없으면 0 — 10-Q 회사의 "분기 본표에서 빠진 줄 = 0"(edgar-cf-wc)과 같은 규칙(TSM 자기주식 취득)
+      if (got.every((g) => !g.r) && sixK.cf.length && present.every((c) => latestFy(c)!.val === 0))
+        got = present.map((c) => ({ c, r: { vals: sixK.cfDates.map(() => 0), src: "분기 현금흐름표에 줄 없음(사업연도 0)" } }));
       if (got.some((g) => !g.r)) return false;
       for (const { c, r } of got) {
         const fy = latestFy(c)!;
