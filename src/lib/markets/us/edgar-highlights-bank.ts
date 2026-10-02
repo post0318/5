@@ -250,8 +250,8 @@ export function buildUsBankHighlights(
     if (col.kind === "estimate") {
       // 예상 순이익 = 예상 희석 EPS × 현재 주식수(오너 결정 2026-10-01, 제조업 하이라이트와 같은 산식)
       const e0 = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
+      // 산식은 표 아래 주석에만(칸 주석과 중복 — 오너 지시 2026-10-02), 칸 주석은 빈칸 사유만
       if (e0 == null || currentShares == null) { nNetIncome[i] = "예상 순이익: 예상 EPS 또는 현재 주식수 없음"; return null; }
-      nNetIncome[i] = `예상 순이익 = 예상 희석 EPS ${e0} × 현재 주식수 ${Math.round(currentShares).toLocaleString("en-US")}(야후 컨센서스는 EPS·매출만 제공)`;
       return e0 * currentShares;
     }
     return flowVal(S.netIncome, E.netIncome, col);

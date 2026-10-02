@@ -527,7 +527,7 @@ export async function dartAdrHighlights(spec: Spec, yahoo: string | null): Promi
     r.cellNotes = hl.columns.map((c, i) =>
       r.key === "ni" && c.kind === "estimate"
         ? r.values[i] != null
-          ? `예상 순이익 = 예상 희석 EPS ${est?.epsAvg} × ADR 환산 주식수 ${Math.round(x.adrShares ?? 0).toLocaleString("en-US")}(야후 컨센서스는 EPS·매출만 제공)`
+          ? null // 산식은 표 아래 주석에만(칸 주석과 중복 — 오너 지시 2026-10-02)
           : "예상 순이익: 예상 EPS 또는 주식수 없음"
         : r.values[i] != null
           ? null
@@ -542,7 +542,7 @@ export async function dartAdrHighlights(spec: Spec, yahoo: string | null): Promi
       : n,
   );
   notes.unshift(fxNote(spec, x.fx));
-  if (est) notes.push(x.estimates?.fxNote ?? "예상: Yahoo ADR 컨센서스");
+  if (est) notes.push(`${x.estimates?.fxNote ?? "예상: Yahoo ADR 컨센서스"} · 예상 순이익 = 예상 희석 EPS × ADR 환산 주식수`);
   if (x.estimatesFailed) notes.push("외화 예상치 환산 실패 — 예상치 숨김");
   return { ...hl, currency: "USD", unitLabel: "USD 백만", notes, source: `${hl.source} · USD 환산` };
 }
