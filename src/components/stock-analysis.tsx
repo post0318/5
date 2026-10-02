@@ -406,8 +406,12 @@ export function StockAnalysis({
   const multiples = useMemo(() => {
     // 미국은 TTM 스냅샷(getTtm)으로만 계산 — TTM 이 오기 전에는 계산하지 않는다(그림자 채우기 금지, 2026-09-27).
     // TTM 조회가 실패하면 computeTrailingMultiples 가 모든 멀티플을 비우고 사유("TTM 조회 실패")를 싣는다.
-    if (market === "us" && (ttmQ.isLoading || !ov?.quote || !annualForMultiples.data)) return null;
-    if (!ov?.quote || !annualForMultiples.data) return ov?.multiples ?? null;
+    // 미국은 연간 재무제표 표를 기다리지 않는다 — 멀티플은 TTM 스냅샷(사업연도 EPS 포함)만 쓰고, 표는 TTM 에 사업연도 EPS 가 없는
+    // 경로(DART 연결 ADR)에서만 필요. 표 요청이 느리거나 실패하면 시가총액이 사유 없이 "-"로 남았다(2026-10-02, DELL)
+    if (market === "us") {
+      if (ttmQ.isLoading || !ov?.quote) return null;
+      if (ttmForMultiples && ttmForMultiples.fyEps === undefined && !ttmQ.isError && annualForMultiples.isLoading) return null;
+    } else if (!ov?.quote || !annualForMultiples.data) return ov?.multiples ?? null;
     // 듀얼클래스(V·비자 등)는 발행주식수·EPS 를 EDGAR 에 클래스별로만 태깅 →
     // undimensioned 값이 없다. Yahoo 컨센서스의 주식수·시가총액으로 폴백 — 미국 외 시장만(미국은 edgar-shares 공통 주식수만)
     const cShares = ov.consensus?.sharesOutstanding ?? null;
@@ -426,7 +430,7 @@ export function StockAnalysis({
       market,
       symbol: ov.symbol,
       quote,
-      annual: annualForMultiples.data,
+      annual: annualForMultiples.data ?? null,
       quarterly: null,
       sharesOutstanding: quote.sharesOutstanding ?? null,
       depreciationAmortisation: daTotal,
@@ -439,7 +443,7 @@ export function StockAnalysis({
         ov.consensus?.impliedSharesOutstanding,
       ),
     });
-  }, [ov, annualForMultiples.data, market, daTotal, ttmForMultiples, ttmQ.isLoading]);
+  }, [ov, annualForMultiples.data, annualForMultiples.isLoading, market, daTotal, ttmForMultiples, ttmQ.isLoading, ttmQ.isError]);
   const multiplesFallback =
     annualForMultiples.isLoading ? "…" : annualForMultiples.isError ? "n/a" : "-";
   const ccy = ov?.quote?.currency ?? "USD";
