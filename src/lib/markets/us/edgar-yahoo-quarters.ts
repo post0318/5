@@ -549,7 +549,9 @@ export function withYahooLtm(
     filled.push("총차입금");
     // 비유동 차입금 — 같은 정의일 때만(없으면 LTM 장기차입금 공란)
     const yNcE = yAt(E, "longTermDebtAndCapitalLeaseObligation"), yNcL = yAt(last, "longTermDebtAndCapitalLeaseObligation");
-    if (debtE.noncurrent != null && yNcE != null && yNcL != null && sameInUnit(debtE.noncurrent / eRate, yNcE)) {
+    const ncDone = (out[SYN_DEBT_FACE_NONCURRENT]?.units?.USD ?? []).some((e) => !e.start && e.end === last); // 6-K 로 이미 채움
+    if (ncDone) filled.push("비유동 차입금");
+    else if (debtE.noncurrent != null && yNcE != null && yNcL != null && sameInUnit(debtE.noncurrent / eRate, yNcE)) {
       put(SYN_DEBT_FACE_NONCURRENT, last, yNcL * lastRate);
       const yPN = yearAgoRate != null ? yAt(yearAgo, "longTermDebtAndCapitalLeaseObligation") : null;
       if (yPN != null) put(SYN_DEBT_FACE_NONCURRENT, yearAgo, yPN * yearAgoRate!);
