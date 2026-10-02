@@ -8858,7 +8858,10 @@ async function verifyKr(sym) {
       eqv("하이라이트 LTM 영업이익 = 분기 최근 4개 합", "LTM", hRow("opinc"), s4("영업이익"));
       eqv("하이라이트 LTM 순이익 = 분기 최근 4개 합", "LTM", LH.ni, s4("당기순이익"));
       eqv("하이라이트 LTM 총차입금 = 최근 분기 재무상태표", "LTM", LH.debt, BQi["bs:note:총차입금"]?.[lq]);
-      eqv("하이라이트 LTM 비지배지분 = 최근 분기 재무상태표", "LTM", LH.nci, BQi["bs:note:비지배지분"]?.[lq]);
+      // 하이라이트는 비지배지분이 전 열 0(또는 없음)이면 줄을 숨긴다 — 숨긴 줄은 0 으로 읽는다. 재무상태표 값이 0 이 아니면 그대로 실패(2026-10-02)
+      const nciHidden = !h.rows.some((x) => x.key === "nci");
+      const bNci = BQi["bs:note:비지배지분"]?.[lq];
+      eqv("하이라이트 LTM 비지배지분 = 최근 분기 재무상태표", "LTM", LH.nci ?? (nciHidden && bNci != null ? 0 : null), bNci);
     } else if (LH) add("C", "하이라이트 LTM = 분기 화면", "LTM", { status: NA, note: `손익 TTM 기준 분기 ${want ?? "없음"} · 분기 화면 마지막 열 ${lq ?? "없음"}` });
   }
 
