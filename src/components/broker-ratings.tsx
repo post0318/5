@@ -263,17 +263,19 @@ export function BrokerRatings({
                       테이블 전체가 가로 스크롤됐다(오너 지적, 2026-09) —
                       모바일 전용 폭을 따로 정의(목표주가·최근변경일자에
                       여유를 더 줌), sm 이상에서는 기존 desktop 비율 유지. */}
-                  <col className="w-[22%] sm:w-[18%]" />
+                  {/* 모바일: 애널리스트 34%(이름 + 별점이 투자의견 칸을 침범 — 오너 지적 2026-10-02 "목표주가 열크기를 조절해서 겹치는 문제
+                      해결"), 목표주가 26% → 16%. 합 34+15+12+16+23 = 100 */}
+                  <col className="w-[34%] sm:w-[18%]" />
                   <col className="hidden sm:table-column" style={{ width: "13%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col className="w-[15%] sm:w-[7.78%]" />
-                  <col className="w-[13%] sm:w-[7.78%]" />
-                  <col className="w-[26%] sm:w-[7.78%]" />
+                  <col className="w-[12%] sm:w-[7.78%]" />
+                  <col className="w-[16%] sm:w-[7.78%]" />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
                   <col className="hidden sm:table-column" style={{ width: "7.78%" }} />
-                  <col className="w-[24%] sm:w-[7.78%]" />
+                  <col className="w-[23%] sm:w-[7.78%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-muted-foreground border-b">
@@ -319,8 +321,9 @@ export function BrokerRatings({
                         key={`${f.date}-${f.analystSlug ?? f.firm}`}
                         className={cn("border-b", i % 2 === 1 && "bg-muted/40")}
                       >
-                        <td className="py-1.5 pr-3 text-left">
-                          <div className="flex items-baseline gap-1.5">
+                        <td className="overflow-hidden py-1.5 pr-3 text-left">
+                          {/* 칸보다 길면 별점이 다음 줄로 — 옆 칸(투자의견)을 침범하지 않게 */}
+                          <div className="flex flex-wrap items-baseline gap-x-1.5">
                             {f.analystSlug ? (
                               <a
                                 href={`https://stockanalysis.com/analysts/${f.analystSlug}/`}
