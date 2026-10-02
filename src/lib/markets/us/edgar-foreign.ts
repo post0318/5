@@ -131,7 +131,8 @@ const IFRS_SUM: [(string | string[])[], string][] = [
     "NoncurrentFinancialAssetsAtAmortisedCost",
     ["NoncurrentFinancialAssetsAtFairValueThroughOtherComprehensiveIncome", "NoncurrentFinancialAssetsMeasuredAtFairValueThroughOtherComprehensiveIncome"],
     ["NoncurrentFinancialAssetsAtFairValueThroughProfitOrLoss", "NoncurrentFinancialAssetsAtFairValueThroughProfitOrLossMandatorilyMeasuredAtFairValue"],
-    "InvestmentsAccountedForUsingEquityMethod",
+    // 지분법 투자 — IFRS 개념 이름은 단수(InvestmentAccountedForUsingEquityMethod, TSM 37,247.8 백만 TWD — 빠뜨려 야후와 정의가 달랐다)
+    ["InvestmentAccountedForUsingEquityMethod", "InvestmentsAccountedForUsingEquityMethod"],
   ], "LongTermInvestments"],
 ];
 
