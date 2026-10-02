@@ -1,12 +1,12 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem, QuoteBar, TtmFlows } from "../types";
-import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries, seriesOf } from "./dart-facts";
+import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries, krDaSourceNote, seriesOf } from "./dart-facts";
 import { buildKrEvResolver, krCurrentDebtByPeriod, krCurrentDebtByYear, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
  * 한국 분석 지표 — `edgar-analysis.ts` 미러 (섹션·라벨 동일, 개요 요약칩 호환).
  * DART 전체재무제표 + 시세. 컬럼: 최근 5개 사업연도 + 현재/LTM.
- * EBITDA = 영업이익 + 감가상각비(유·무형자산 증감 기반 근사 — DART 미분리).
+ * EBITDA = 영업이익 + 감가상각비(daAndAmortSeries — 하이라이트·손익계산서와 같은 값, 출처는 source 에).
  * 이자비용 = CF '이자의 지급'.
  */
 
@@ -191,7 +191,7 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const netDebt = blank();
   for (const l of labels) if (debt[l] != null || cashTot[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashTot[l] ?? 0);
 
-  // 감가상각비: 사업보고서 XBRL 주석 실측(daDoc) + 이전 연도는 유·무형자산 롤포워드 보정
+  // 감가상각비: 하이라이트·손익계산서와 같은 함수(주석 영업비용 기준 → 공시 현금흐름 줄 → 근사)
   const daS = daAndAmortSeries(facts, daDoc, ttm?.periodLabel ?? null);
   const daEst = blank();
   for (const y of years) daEst[`${y}Y`] = daS.byYear.get(y) ?? null;
@@ -534,6 +534,7 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     source:
       facts.source +
       " + 시세 · 자체 계산" +
+      ` · ${krDaSourceNote(daS, years)}` +
       (ltmFromSnap ? ` · LTM 차입금·현금·PBR 자본: ${snap!.label} 기준` : " · LTM 재무상태표: 최신 분기 스냅샷 없음 — 연말값") +
       (qInfo.mode === "q"
         ? ` · LTM 흐름 = ${qInfo.last4[0]}~${qInfo.last4[3]} 4개 분기 합, 재무상태표 = ${qInfo.last} 말`

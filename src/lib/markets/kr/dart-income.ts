@@ -1,6 +1,6 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem } from "../types";
-import { type KrFacts, type KrDaInput, daAndAmortSeries, seriesOf, sumOf } from "./dart-facts";
+import { type KrFacts, type KrDaInput, daAndAmortSeries, krDaSourceNote, seriesOf, sumOf } from "./dart-facts";
 import { KR_EPS_SUM_NOTE, krEpsSeries } from "./dart-ev";
 
 /** 손익계산서 화면과 같은 계정 선택의 매출·영업이익·당기순이익(기간 라벨별) — LTM = 최근 4개 분기 열 합(opendart.ts)이 쓴다 */
@@ -114,7 +114,17 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   for (const l of labels) if (epsDil[l] == null && epsBasic[l] != null) epsDil[l] = epsBasic[l];
 
   let daApprox = false;
+  let daNote: string | null = null;
   const da = (() => {
+    // 연간: 하이라이트·재무분석과 같은 함수(daAndAmortSeries — 사업보고서 주석 영업비용 기준 → 공시 현금흐름 줄 → 근사). 예전엔 여기만
+    // DART 현금흐름 "감가상각비" 한 줄을 먼저 써서 LS ELECTRIC 2021 이 617.9억(하이라이트 1,014.6억)으로 갈렸다(2026-10-02)
+    if (facts.mode !== "quarter") {
+      const s = daAndAmortSeries(facts, daDoc);
+      const d = blank();
+      for (const p of facts.periods) if (p.kind === "fy") d[p.label] = s.byYear.get(p.year) ?? null;
+      daNote = krDaSourceNote(s, facts.periods.filter((p) => p.kind === "fy").map((p) => p.year));
+      return d;
+    }
     const d = seriesOf(facts, C.da.ids, C.da.names);
     // 폴백 1: CF 조정 세부 라인 합
     if (labels.every((l) => d[l] == null)) {
@@ -206,8 +216,10 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     source:
       facts.source +
       " · 표준화 재분류" +
-      (daApprox
-        ? " · 감가상각비: 최근연도는 사업보고서 주석 실측, 이전 연도는 유·무형자산 증감 기반 근사"
-        : ""),
+      (daNote
+        ? ` · ${daNote}`
+        : daApprox
+          ? " · 감가상각비: 최근연도는 사업보고서 주석 실측, 이전 연도는 유·무형자산 증감 기반 근사"
+          : ""),
   };
 }

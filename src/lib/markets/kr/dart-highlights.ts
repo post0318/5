@@ -5,7 +5,7 @@ import type {
   HighlightColumn,
   HighlightRow,
 } from "../us/edgar-highlights";
-import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries } from "./dart-facts";
+import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries, krDaSourceNote } from "./dart-facts";
 import { buildKrEvResolver, KR_EPS_SUM_NOTE, krEpsAnnual, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
@@ -203,7 +203,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
       return null;
     });
 
-  // 감가상각비 실측(사업보고서 XBRL 주석) — EBITDA = 영업이익 + 감가상각비
+  // 감가상각비(사업보고서 주석 영업비용 기준 → 공시 현금흐름 줄 → 근사, 출처는 표 아래 주석) — EBITDA = 영업이익 + 감가상각비
   const daS = daAndAmortSeries(facts, daDoc ?? null, ttm?.periodLabel ?? null);
   const ebitda = columns.map((c, i) => {
     if (opInc[i] == null) return null;
@@ -279,7 +279,8 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     "실적·재무상태표·현금흐름: OpenDART 전체 재무제표 (연결)",
     "시가총액: KRX 각 회계연도 마지막 거래일 시가총액(그날의 상장주식수 × 종가)",
     "EV = 보통주 + 우선주 시가총액(우선주 자체 시세) + 총차입금(차입금·사채·리스부채) + 비지배지분 − 현금성자산(현금 + 단기금융상품 + 단기 상각후원가·당기손익 금융자산)",
-    "EBITDA = 영업이익 + 감가상각비 (사업보고서 XBRL 주석 실측)",
+    "EBITDA = 영업이익 + 감가상각비",
+    krDaSourceNote(daS, columns.filter((c) => c.kind === "fy").map(cy)),
   ];
   notes.push(
     ltmFromSnap
