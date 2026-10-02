@@ -58,6 +58,8 @@ export function commonModeOf(c) {
     if (/EPS/.test(n)) return "20-F EPS 환산 — ADR 비율 = dei ÷ 인포맥스 주식수(1.5배 규칙)가 앱과 같은 규칙";
     return fxInd ? null : "20-F 환산 환율 — H.10 독립 조회 표식 없음";
   }
+  // 6-K 대조(2026-10-02): 6-K 값은 검증기가 따로 판독하지만 LTM 식(사업연도 + 당기 누적 − 전년 동기)이 앱과 같은 식이다
+  if (/^20-F LTM .*= SEC 20-F \+ 6-K/.test(n)) return "LTM 식(사업연도 + 당기 누적 − 전년 동기) = 앱과 같은 식 · 6-K 값은 검증기 독립 판독";
   if (/^20-F LTM /.test(n)) return "20-F LTM 앱 규칙 재구현(Yahoo 분기 원천 공통)";
   if (/^20-F /.test(n)) return "20-F 앱 규칙 재구현(차입금 규칙 공통)";
   if (/^결산일 주식수 /.test(n)) return "결산일 주식수 후보 순서·1.2배 검사 = 앱과 같은 규칙";

@@ -786,14 +786,20 @@ async function sixKCfYtd(cik, sub, periodEnd, priorEnd, labels, pick) {
       if (!/operating activities/.test(text) || !/cash flows?/.test(text)) continue;
       const unit = /in (?:\S+ )?thousands/.test(text) ? 1e3 : /in (?:\S+ )?millions/.test(text) ? 1e6 : null;
       if (!unit) continue;
+      // 현금흐름표 구간만 — 제목("statement(s) of cash flows") 뒤 4천 자 안에 "operating activities" 가 있는 첫 제목 ~ 주석 시작(목차·주석 표의 같은 이름 줄 제외)
+      let cs = -1;
+      for (const h0 of text.matchAll(/statements? of cash flows?/g)) if (text.slice(h0.index, h0.index + 4_000).includes("operating activities")) { cs = h0.index; break; }
+      if (cs < 0) continue;
+      const ce0 = text.slice(cs + 200).search(/notes to (?:the )?(?:interim )?(?:condensed )?(?:consolidated|summary)/);
+      const cfText = text.slice(cs, ce0 < 0 ? undefined : cs + 200 + ce0);
       for (const re of labRe) {
         const found = [];
-        for (const m of text.matchAll(re)) {
+        for (const m of cfText.matchAll(re)) {
           let nums = [...m[1].matchAll(/\(?[\d,]+(?:\.\d+)?\)?|—|-/g)].map((x) => (x[0] === "—" || x[0] === "-" ? 0 : (x[0].startsWith("(") ? -1 : 1) * Number(x[0].replace(/[(),]/g, ""))));
           if (nums.length === 3 && Number.isInteger(nums[0]) && nums[0] > 0 && nums[0] < 100 && !/,/.test(m[1].trim().split(/[\s‖]+/)[0])) nums = nums.slice(1);
           if (nums.length !== 2 && nums.length !== 4) continue;
           // 열 순서 — "… months ended <날짜들> … 연도 연도" 머리 중 라벨에 가장 가까운 것(앞뒤 2만 자 — ASML 슬라이드는 머리가 표 중간에 있다)
-          const lo0 = Math.max(0, m.index - 20_000), win = text.slice(lo0, m.index + 20_000);
+          const lo0 = Math.max(0, m.index - 20_000), win = cfText.slice(lo0, m.index + 20_000);
           const ys = [...win.matchAll(/months ended[^0-9]{0,200}?(?:[a-z]{3,9}\.? \d{1,2},?[\s‖]*)+[^0-9]{0,80}?(20\d\d)[\s‖]+(20\d\d)/g)]
             .sort((a, b) => Math.abs(lo0 + a.index - m.index) - Math.abs(lo0 + b.index - m.index))[0];
           if (!ys || ![yC, yP].includes(ys[1]) || ![yC, yP].includes(ys[2]) || ys[1] === ys[2]) continue;
