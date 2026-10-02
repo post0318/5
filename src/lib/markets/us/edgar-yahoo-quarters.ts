@@ -87,7 +87,16 @@ const PRETAX = [
 const INTEREST = ["InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt", "InterestAndDebtExpense"];
 
 /** 흐름 항목 — Yahoo 필드 → us-gaap 개념(외화·IFRS 정규화 후). sign: SEC 부호 = sign × Yahoo */
-const FLOWS: { label: string; y: string; concepts: string[]; sign?: 1 | -1; da?: true }[] = [
+/** Yahoo 필드 — 배열이면 그 필드들의 합(하나라도 없으면 없음) */
+type YKey = string | string[];
+const yv = (rec: Record<string, number> | undefined, k: YKey): number | null => {
+  if (!rec) return null;
+  if (typeof k === "string") return rec[k] ?? null;
+  let t = 0;
+  for (const x of k) { if (rec[x] == null) return null; t += rec[x]; }
+  return t;
+};
+const FLOWS: { label: string; y: YKey; concepts: string[]; sign?: 1 | -1; da?: true }[] = [
   // 매출원가·매출총이익·판관비·연구개발비는 여기서 다루지 않는다 — 20-F LTM 도 재무 5층 구조(src/lib/fin read/ltm-yahoo.ts)가 같은 규칙
   // (줄마다 Yahoo 분기 × 분기 평균 환율, 연간 경계 확인)으로 만든다(docs/metrics/cogs.md §2·sga.md §2, 태그 직접 사용 금지)
   // Yahoo operatingIncome 은 정규화 값(TSM FY2025 1,936,095.6백만 TWD) — 공시값은 totalOperatingIncomeAsReported(1,936,091.7 = SEC)
@@ -106,13 +115,28 @@ const FLOWS: { label: string; y: string; concepts: string[]; sign?: 1 | -1; da?:
   { label: "CapEx", y: "purchaseOfPPE", concepts: ["PaymentsToAcquirePropertyPlantAndEquipment"], sign: -1 },
   { label: "배당금 지급", y: "cashDividendsPaid", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], sign: -1 },
   { label: "자사주 매입", y: "repurchaseOfCapitalStock", concepts: ["PaymentsForRepurchaseOfCommonStock"], sign: -1 },
+  // ── 현금흐름표 세부 줄(2026-10-02, 오너 지시 "tsm은 값넣어" — 20-F LTM 현금흐름표 줄이 거의 다 비어 있었다) ──
+  { label: "주식보상비용", y: "stockBasedCompensation", concepts: ["ShareBasedCompensation"] },
+  { label: "매출채권 증감", y: "changeInReceivables", concepts: ["IncreaseDecreaseInAccountsReceivable"], sign: -1 },
+  { label: "재고자산 증감", y: "changeInInventory", concepts: ["IncreaseDecreaseInInventories"], sign: -1 },
+  { label: "매입채무 증감", y: "changeInAccountPayable", concepts: ["IncreaseDecreaseInAccountsPayable"] },
+  { label: "무형자산 취득", y: "purchaseOfIntangibles", concepts: ["PaymentsToAcquireIntangibleAssets"], sign: -1 },
+  { label: "투자자산 취득", y: "purchaseOfInvestment", concepts: ["PaymentsToAcquireMarketableSecurities", "PaymentsToAcquireInvestments"], sign: -1 },
+  { label: "투자자산 처분·만기", y: "saleOfInvestment", concepts: ["ProceedsFromSaleAndMaturityOfMarketableSecurities"] },
+  { label: "장기차입금 조달", y: "longTermDebtIssuance", concepts: ["ProceedsFromIssuanceOfLongTermDebt"] },
+  { label: "장기차입금 상환", y: "longTermDebtPayments", concepts: ["RepaymentsOfLongTermDebt"], sign: -1 },
+  { label: "환율변동 효과", y: "effectOfExchangeRateChanges", concepts: ["EffectOfExchangeRateOnCashAndCashEquivalents"] },
+  // SEC 순증감은 환율효과 반영 후, Yahoo changesInCash 는 반영 전 — 둘을 더한 값(TSM 2024: 615,033.3 + 47,165.9 = 662,199.2)
+  { label: "현금 순증감", y: ["changesInCash", "effectOfExchangeRateChanges"], concepts: ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect"] },
+  { label: "이자 지급액", y: "interestPaidCFF", concepts: ["InterestPaidNet"], sign: -1 },
+  { label: "법인세 납부액", y: "taxesRefundPaid", concepts: ["IncomeTaxesPaidNet", "IncomeTaxesPaid"], sign: -1 },
 ];
 
 /** 잔액 항목. ev: EV 구성요소 */
 const STI = ["MarketableSecuritiesCurrent", "ShortTermInvestments", "AvailableForSaleSecuritiesDebtSecuritiesCurrent", "DebtSecuritiesCurrent"];
 const LT_SECURITIES = ["MarketableSecuritiesNoncurrent", "AvailableForSaleSecuritiesDebtSecuritiesNoncurrent", "DebtSecuritiesNoncurrent"];
 const PREFERRED = ["PreferredStockValue", "PreferredStockValueOutstanding"];
-const INSTANTS: { label: string; y: string; concepts: string[]; ev?: true }[] = [
+const INSTANTS: { label: string; y: YKey; concepts: string[]; ev?: true }[] = [
   { label: "자산총계", y: "totalAssets", concepts: ["Assets"] },
   { label: "부채와자본총계", y: "totalAssets", concepts: ["LiabilitiesAndStockholdersEquity"] },
   { label: "부채총계", y: "totalLiabilitiesNetMinorityInterest", concepts: ["Liabilities"] },
@@ -126,6 +150,14 @@ const INSTANTS: { label: string; y: string; concepts: string[]; ev?: true }[] = 
   { label: "매출채권", y: "accountsReceivable", concepts: ["AccountsReceivableNetCurrent"] },
   { label: "재고자산", y: "inventory", concepts: ["InventoryNet"] },
   { label: "매입채무", y: "accountsPayable", concepts: ["AccountsPayableCurrent"] },
+  // ── 재무상태표 세부 줄(2026-10-02) — 야후 연말 값이 SEC 와 정의가 조금 다르면 SEC 연말 + 야후 분기 변동분(결정 (가) 방식) ──
+  { label: "유형자산", y: "netPPE", concepts: ["PropertyPlantAndEquipmentNet"] },
+  { label: "장기 투자자산", y: "investmentsAndAdvances", concepts: ["LongTermInvestments"] },
+  { label: "자본금·주식발행초과금", y: ["capitalStock", "additionalPaidInCapital"], concepts: ["CommonStocksIncludingAdditionalPaidInCapital"] },
+  { label: "이익잉여금", y: "retainedEarnings", concepts: ["RetainedEarningsAccumulatedDeficit"] },
+  { label: "기타포괄손익누계액", y: "gainsLossesNotAffectingRetainedEarnings", concepts: ["AccumulatedOtherComprehensiveIncomeLossNetOfTax"] },
+  { label: "유동성 장기부채", y: "currentDebt", concepts: ["LongTermDebtCurrent"] },
+  { label: "장기부채", y: "longTermDebt", concepts: ["LongTermDebtNoncurrent"] },
 ];
 
 /** 공시 단위 안에서 같은가 — 단위 = SEC 원통화 값의 끝자리 0 개수(최대 10^6). 역환산 부동소수 오차만큼 여유 */
@@ -222,6 +254,8 @@ export function withYahooLtm(
   const fyYear = fiscalYearOf(E);
   const opPresent = latestFy("OperatingIncomeLoss")?.end === E;
 
+  /** SEC 연말·사업연도 값 + 야후 분기 변동분으로 만든 항목(결정 (가) 방식) */
+  const approx: { label: string; reason: string }[] = [];
   // ── 흐름 ──
   for (const it of FLOWS) {
     const present = it.concepts.filter((c) => latestFy(c)?.end === E);
@@ -231,27 +265,38 @@ export function withYahooLtm(
     // 영업이익 태그가 없는 회사는 세전이익 기반 합성(edgar-ev opIncomeEntries)이 이 값을 가공한다 — 합성값의 ltmQ 를
     // 맞출 수 없어 세전이익·이자비용도 비운다(항목 간 기간 혼합 방지)
     if (!opPresent && (it.concepts === PRETAX || it.concepts === INTEREST)) { fail("영업이익 태그 없음(세전이익 기반 합성)"); continue; }
-    const yA = ya[it.y];
+    const yA = yv(ya, it.y);
     if (yA == null) { fail("Yahoo 연간 없음"); continue; }
     // 연간 경계: SEC FY(원통화) = Yahoo 연간
     const secVals = it.da
       ? [daAnnualByYear(facts).get(fyYear) ?? null]
       : present.map((c) => latestFy(c)!.val);
     const bad = secVals.find((v) => v == null || !sameInUnit(v / fyRate, sign * yA));
+    // 야후 연간이 SEC 와 정의가 조금 다르면 LTM = 야후 최근 4분기 + (SEC 사업연도 − 야후 연간) — 잔액의 결정 (가)와 같은 방식(2026-10-02,
+    // TSM CapEx 야후 1,272,450.3 vs SEC 1,272,410.5 백만 TWD). 차이가 SEC 값의 5% 를 넘으면 대응이 틀린 것으로 보고 비운다
+    let levelAdj = false;
     if (bad !== undefined) {
-      fail(`Yahoo 연간 ≠ SEC FY${E.slice(0, 4)}(정의 차이) — SEC ${bad == null ? "없음" : Math.round(bad / fyRate).toLocaleString("en-US")} vs Yahoo ${Math.round(sign * yA).toLocaleString("en-US")} ${currency}`);
-      continue;
+      const rel = bad == null ? Infinity : Math.abs(bad / fyRate - sign * yA) / Math.max(1, Math.abs(bad / fyRate));
+      if (rel > 0.05) {
+        fail(`Yahoo 연간 ≠ SEC FY${E.slice(0, 4)}(정의 차이) — SEC ${bad == null ? "없음" : Math.round(bad / fyRate).toLocaleString("en-US")} vs Yahoo ${Math.round(sign * yA).toLocaleString("en-US")} ${currency}`);
+        continue;
+      }
+      levelAdj = true;
     }
-    const missing = last4.filter((d) => qBy.get(d)?.[it.y] == null);
+    const missing = last4.filter((d) => yv(qBy.get(d), it.y) == null);
     if (missing.length) { fail(`Yahoo 분기 결측(${missing.join("·")})`); continue; }
-    const q = (d: string) => sign * qBy.get(d)![it.y] * qRate.get(d)!;
+    const q = (d: string) => sign * yv(qBy.get(d), it.y)! * qRate.get(d)!;
     const tailUsd = tail.reduce((s, d) => s + q(d), 0);
     const newUsd = newQ.reduce((s, d) => s + q(d), 0);
-    const priorOrig = sign * yA - tail.reduce((s, d) => s + sign * qBy.get(d)![it.y], 0);
+    const priorOrig = sign * yA - tail.reduce((s, d) => s + sign * yv(qBy.get(d), it.y)!, 0);
     const priorUsd = priorOrig * priorRate;
+    if (levelAdj) approx.push({ label: it.label, reason: `SEC FY${E.slice(0, 4)} ${Math.round(bad! / fyRate).toLocaleString("en-US")} vs Yahoo ${Math.round(sign * yA).toLocaleString("en-US")} ${currency}` });
     for (const c of present) {
       const fy = latestFy(c)!;
-      const arr = usd(c).map((e) => (isAnnualE(e) && e.end === E && e.start === fy.start ? { ...e, ltmQ: tailUsd + priorUsd } : e));
+      // 수준 보정 = SEC 연간 − 야후 연간(사업연도 평균 환율). 감가상각은 SEC 값이 여러 개념의 합(daAnnualByYear)이라 그 합으로
+      const secUsd = it.da ? (secVals[0] ?? fy.val) : fy.val;
+      const adjUsd = levelAdj ? secUsd - sign * yA * fyRate : 0;
+      const arr = usd(c).map((e) => (isAnnualE(e) && e.end === E && e.start === fy.start ? { ...e, ltmQ: tailUsd + priorUsd + adjUsd } : e));
       arr.push(
         { ...base, start: addDay(E, 1), end: last, val: newUsd, ltmQ: newUsd },
         { ...base, start: fyStart, end: priorEnd, val: priorUsd, ltmQ: priorUsd },
@@ -271,9 +316,8 @@ export function withYahooLtm(
     const arr = [...(out[c]?.units?.USD ?? []), { ...base, end: d, val: v }];
     out[c] = { ...(out[c] ?? {}), units: { ...(out[c]?.units ?? {}), USD: arr } };
   };
-  const yAt = (d: string, key: string) => (d === E ? (qBy.get(E)?.[key] ?? ya[key]) : qBy.get(d)?.[key]) ?? null;
+  const yAt = (d: string, key: YKey) => (d === E ? (yv(qBy.get(E), key) ?? yv(ya, key)) : yv(qBy.get(d), key)) ?? null;
   const instOk = new Map<string, boolean>();
-  const approx: { label: string; reason: string }[] = [];
   for (const it of INSTANTS) {
     const present = it.concepts.filter((c) => on(c, E) != null);
     if (!present.length) continue;
@@ -283,7 +327,9 @@ export function withYahooLtm(
     const bad = present.find((c) => !sameInUnit(on(c, E)! / eRate, yE));
     // EV 구성요소(현금·단기투자·비지배지분) — Yahoo 연말 값이 SEC 와 정의가 조금 다르면(TSM 단기투자) SEC 연말 값 + Yahoo 분기 변동분(오너 결정 2026-10-01 (가) —
     // "EV를 비워두면 안된다"). 그 밖 잔액은 종전대로 공란
-    if (bad && it.ev && yAt(last, it.y) != null) {
+    // 2026-10-02 부터 EV 구성요소만이 아니라 전 잔액 항목(오너 지시 "tsm은 값넣어") — 단 EV 밖 항목은 차이가 SEC 의 15% 를 넘으면 대응이 틀린 것으로 보고 비운다
+    const relI = bad ? Math.abs(on(bad, E)! / eRate - yE) / Math.max(1, Math.abs(on(bad, E)! / eRate)) : 0;
+    if (bad && (it.ev || relI <= 0.15) && yAt(last, it.y) != null) {
       const yL0 = yAt(last, it.y)!, yP0 = yearAgoRate != null ? yAt(yearAgo, it.y) : null;
       for (const c of present) {
         const secE = on(c, E)! / eRate;
