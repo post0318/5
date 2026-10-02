@@ -6057,7 +6057,12 @@ async function verifyUs(sym) {
       const fyApp = row?.ltm?.fy ?? null, pairs = row?.ltm?.ifrsPairs ?? null;
       if (!fyApp || !pairs || !secE) add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: FAIL, note: `${!secE ? "SEC 20-F 원본 판독 실패" : "verify-row 에 사업연도 값·대응표 없음"} — 대조 불가` });
       else {
-        const isCur = (u) => !/share|pure|ratio|percent|employee|item/i.test(u) && /[A-Z]{3}$/.test(u);
+        // 보고 통화 단위 = 인스턴스에서 가장 많이 쓴 통화 단위(단위 이름이 "twd"·"eur"·"iso4217_TWD" 등 회사마다 다르다). USD 편의 환산 값은 앱이 버리므로 대상 밖
+        const curCode = (u) => /^(?:u_)?(?:iso4217[_:]?)?([a-z]{3})$/i.exec(u)?.[1]?.toUpperCase() ?? null;
+        const cnt = new Map();
+        for (const x of [...secE.facts, ...secE.durFacts]) { const c0 = curCode(x.unit); if (c0) cnt.set(c0, (cnt.get(c0) ?? 0) + 1); }
+        const repCur = [...cnt].filter(([c0]) => c0 !== "USD").sort((a, b) => b[1] - a[1])[0]?.[0] ?? (cnt.has("USD") ? "USD" : null);
+        const isCur = (u) => repCur != null && curCode(u) === repCur;
         const secFy = [
           ...secE.facts.filter((x) => !x.dims.length && isCur(x.unit) && x.v !== 0).map((x) => ({ ...x, kind: "bs" })),
           ...secE.durFacts.filter((x) => !x.dims.length && isCur(x.unit) && x.v !== 0 && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300).map((x) => ({ ...x, kind: "cf" })),
@@ -6084,13 +6089,13 @@ async function verifyUs(sym) {
           const rivals = d0.dst === d0.src && x.id.startsWith("us-gaap_") ? [] : pairs.filter((p) => p.dst === d0.dst && p.src !== d0.src && uniq.some((y) => y.id === `ifrs-full_${p.src}` && y.kind === x.kind));
           if (rivals.length) continue;
           if (x.id.startsWith("ifrs-full_") && uniq.some((y) => y.id === `us-gaap_${d0.dst}` && y.kind === x.kind)) continue;
-          const r0 = x.kind === "bs" ? fxEndRate(fxRows, x.end ?? row.ltm.E) : fxAvg(fxRows, x.start, x.end);
+          const r0 = repCur === "USD" ? 1 : x.kind === "bs" ? fxEndRate(fxRows, x.end ?? row.ltm.E) : fxAvg(fxRows, x.start, x.end);
           if (r0 == null) continue;
           const exp = d0.sign * x.v * r0;
           valN++;
           add("A", `${nm} 값`, "LTM", vsSource(fyApp[d0.dst], exp, EXACT, `SEC 20-F ${x.id} ${x.v} ${x.unit} × H.10 ${x.kind === "bs" ? "기말" : "기간 평균"} ${r0}${d0.sign < 0 ? " × −1" : ""}`));
         }
-        add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: PASS, note: `SEC 20-F 통화 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖)` });
+        add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: uniq.length ? PASS : FAIL, note: `${uniq.length ? "" : "SEC 20-F 통화 값을 하나도 못 읽음 — 대조 불가 · "}SEC 20-F ${repCur ?? "?"} 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖)` });
       }
     }
     add("A", "20-F LTM 공란 완결성(6-K 대조)", "LTM", { status: PASS, note: `앱 LTM 공란 ${gaps.length}개 개념 중 6-K 에서 값을 찾은 것 없음(${gapOk}개 대조${gapNa.length ? `, 대조 불가 ${gapNa.length}개` : ""})` });

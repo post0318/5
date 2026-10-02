@@ -69,6 +69,8 @@ export function commonModeOf(c) {
   if (/^20-F LTM 공란 /.test(n)) return null;
   if (/^20-F LTM 6-K (cf|cfZero) /.test(n)) return "LTM 식(사업연도 + 당기 누적 − 전년 동기) = 앱과 같은 식 · 6-K 값은 검증기 독립 판독";
   if (/^20-F LTM 6-K bsDelta /.test(n)) return "SEC 연말 + 6-K 변동분 = 앱과 같은 식(결정 (가)) · 6-K 값은 검증기 독립 판독";
+  // 사업연도 완결성(재감사 7차) — 기대값 = 검증기가 읽은 SEC 20-F 원본 × 검증기가 받은 H.10(독립). 대응표(IFRS → 앱 개념)만 앱 것을 쓴다
+  if (/^20-F 사업연도 /.test(n)) return null;
   if (/^20-F LTM /.test(n)) return "20-F LTM 앱 규칙 재구현(Yahoo 분기 원천 공통)";
   if (/^20-F /.test(n)) return "20-F 앱 규칙 재구현(차입금 규칙 공통)";
   if (/^결산일 주식수 /.test(n)) return "결산일 주식수 후보 순서·1.2배 검사 = 앱과 같은 규칙";
