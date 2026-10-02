@@ -448,10 +448,9 @@ export function buildUsHighlights(
   const netIncome = columns.map((col, i) => {
     if (col.kind === "estimate") {
       // 예상 순이익 = 예상 희석 EPS × 현재 주식수(오너 결정 2026-10-01 — "희석 EPS 가 있는데 순이익이 없다는 것은 말이 안된다". 야후 무료
-      // 컨센서스는 EPS·매출만 준다). 칸 주석에 산식
+      // 컨센서스는 EPS·매출만 준다). 산식은 표 아래 주석에만(칸 주석과 중복 — 오너 지시 2026-10-02), 칸 주석은 빈칸 사유만
       const e0 = estCols.find((e) => `FY${e.year}E` === col.key)?.period.epsAvg ?? null;
       if (e0 == null || currentShares == null) { nNetIncome[i] = "예상 순이익: 예상 EPS 또는 현재 주식수 없음"; return null; }
-      nNetIncome[i] = `예상 순이익 = 예상 희석 EPS ${e0} × 현재 주식수 ${Math.round(currentShares).toLocaleString("en-US")}(야후 컨센서스는 EPS·매출만 제공)`;
       return e0 * currentShares;
     }
     // LTM 순이익은 공통 함수(재무분석·개요 멀티플과 같은 값)
