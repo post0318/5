@@ -24,7 +24,8 @@ export interface TtmSnapDoc {
 const MAX_AGE_MS = 24 * 3_600_000;
 
 export function ttmSnapVersion(): string {
-  return process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_DEPLOYMENT_ID || "local";
+  // APP_COMMIT_SHA — Vercel 밖(구글 Cloud Run·오라클) 배포가 넣는 배포 커밋. 여러 곳에 같은 커밋을 배포하면 저장본을 같이 쓴다(2026-10-03)
+  return process.env.VERCEL_GIT_COMMIT_SHA || process.env.APP_COMMIT_SHA || process.env.VERCEL_DEPLOYMENT_ID || "local";
 }
 
 async function col(): Promise<Collection<TtmSnapDoc>> {
