@@ -80,6 +80,8 @@ export type YahooLtmResult =
       sixK?: { label: string; reason: string }[];
       /** 검증 전용(verify-row) — 6-K 로 채운 값 하나하나(검증기가 SEC 20-F·6-K 를 따로 읽어 다시 계산한다) */
       sixKDetail?: SixKDetail[];
+      /** 이번 LTM 에 쓴 6-K 보고서("6-K 접수번호 문서") — 검증 전용 */
+      sixKSource?: string;
       /** LTM EV·순차입금을 같은 기준일로 계산할 수 있는지 */
       evComplete: boolean;
       evReason: string | null;
@@ -248,6 +250,27 @@ export function yahooLtmPeriods(facts: CompanyFacts, y: { quarterly: YahooFundam
   let last: string | null = null;
   for (let i = 1; i <= 3 && ends.has(monthEndShift(fy.end, 3 * i)); i++) last = monthEndShift(fy.end, 3 * i);
   return last ? { E: fy.end, last, yearAgo: monthEndShift(last, -12) } : null;
+}
+
+/** 현금흐름표 개념인가(검증 전용 공란 목록) */
+export const isCfConcept = (c: string) => CF_CONCEPT.test(c) || FLOWS.some((f) => f.concepts.includes(c));
+
+/** LTM 의 사업연도말(순이익 개념의 최근 20-F 사업연도말) */
+export function ltmBaseEnd(facts: CompanyFacts): string | null {
+  const gaap = (facts.facts["us-gaap"] ?? {}) as Ns;
+  return FY_ANCHOR.flatMap((c) => (gaap[c]?.units?.USD ?? []).filter(isAnnualE)).sort((a, b) => b.end.localeCompare(a.end))[0]?.end ?? null;
+}
+
+/** us-gaap 개념의 SEC 원 개념(정규화 매핑의 역 — 그 날짜에 값이 있는 첫 후보). IFRS 공시가 아니면 개념 그대로 */
+export function sourceIdsAt(facts: CompanyFacts, dst: string, kind: "bs" | "cf", at: string): { id: string; sign: 1 | -1 }[] {
+  const ifrsNs = ((facts.facts as Record<string, Ns | undefined>)["ifrs-full"] ?? {}) as Ns;
+  if (!Object.keys(ifrsNs).length) return [{ id: `us-gaap_${dst}`, sign: 1 }];
+  const has = (c: string) => Object.values(ifrsNs[c]?.units ?? {}).some((arr) => arr.some((e) => e.end === at && (kind === "bs" ? !e.start : !!e.start && span(e.start, at) > 300)));
+  for (const cand of ifrsSourcesOf(dst)) {
+    const els = cand.sum.map((el) => (typeof el === "string" ? (ifrsNs[el] ? el : null) : (el.find((x) => ifrsNs[x]) ?? null))).filter((x): x is string => !!x && has(x));
+    if (els.length) return els.map((x) => ({ id: `ifrs-full_${x}`, sign: cand.sign }));
+  }
+  return [];
 }
 
 /** 정규화(USD) 이후의 facts 에 Yahoo 분기 LTM 을 붙인다 */
@@ -704,6 +727,7 @@ export function withYahooLtm(
       approx,
       sixK: sixKFilled,
       sixKDetail,
+      sixKSource: sixK?.source,
       evComplete: evMiss.length === 0,
       evReason: evMiss.length ? `LTM EV 미표시(Yahoo 분기 LTM) — ${evMiss.join("·")}을(를) ${last} 기준으로 못 채움` : null,
     },

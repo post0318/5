@@ -5784,7 +5784,8 @@ async function verifyUs(sym) {
    * 값만 넣고 기록을 빠뜨릴 수 없다. 출처 없는 항목·다시 계산할 수 없는 항목은 실패. yRows = 검증기가 따로 받은 야후 분기
    */
   const checkLtmItems = async (yRows, qStartOf) => {
-    const items = row?.ltm ?? null;
+    // verify-row ltm = { items(화면과 같은 선택 규칙으로 고른 LTM 값 + 고른 항목의 출처), gaps(사업연도 값은 있는데 LTM 이 빈 개념), sixKSource }
+    const items = row?.ltm?.items ?? null, gaps = row?.ltm?.gaps ?? [], sixKSource = row?.ltm?.sixKSource ?? null;
     if (!items?.length) { add("A", "20-F LTM 항목 목록(verify-row)", "LTM", { status: FAIL, note: "verify-row 에 LTM 항목 목록 없음 — 독립 재계산 불가" }); return; }
     const ya = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "all" }, { validateResult: false }).catch(() => []);
     const yaRows = ya.map((r) => ({ ...r, end: new Date(r.date).toISOString().slice(0, 10) }));
@@ -5802,7 +5803,7 @@ async function verifyUs(sym) {
     const fas = new Map();
     const fa = async (d) => { if (!fas.has(d)) fas.set(d, await filingAtDate(cik, sub, d).catch(() => null)); return fas.get(d); };
     const shortId = (id) => id.replace(/^[a-z-]+_/, "");
-    const latestFyEnd = det.map((x) => x.fyEnd).filter(Boolean).sort().at(-1);
+    const latestFyEnd = [...det.map((x) => x.fyEnd), row?.ltm?.E].filter(Boolean).sort().at(-1);
     const labsOf = async (f0, id) => { const lf = latestFyEnd ? await fa(latestFyEnd) : null; return [...new Set([...(f0.labels.get(id) ?? []), ...(lf?.labels.get(id) ?? [])])]; };
     const negOf = async (f0, id) => { const lf = latestFyEnd ? await fa(latestFyEnd) : null; return new Set([...(f0.negLabels.get(id) ?? []), ...(lf?.negLabels.get(id) ?? [])].map((x) => x.toLowerCase())); };
     const expOf = new Map(); // `${concept}|${at}` → 검증기 기대값(USD) — 합성 개념 대조용
@@ -5876,14 +5877,14 @@ async function verifyUs(sym) {
       add("A", nm, "LTM", res);
     }
     det.sort((a, b) => (a.kind === "derived") - (b.kind === "derived"));
-    for (const d of det) {
-      const nm = `20-F LTM 6-K ${d.kind} ${shortId(d.concept)} @${d.at}`;
-      const res = await (async () => {
+    /** 6-K 기록 하나의 기대값 — { exp, how } 또는 판정 행(실패·검증불가) */
+    const sixKExp = async (d) => {
+      try {
         if (d.kind === "derived") {
           const parts = (d.parts ?? []).map((p) => expOf.get(`${p}|${d.at}`));
           if (!d.parts?.length) return { status: FAIL, note: "합성 개념 구성 줄 없음" };
           if (parts.some((x) => x == null)) return { status: FAIL, note: `합성 본표 개념 = ${d.parts.join(" + ")} — 구성 줄 기대값 없음(${d.parts.filter((p, i) => parts[i] == null).join(", ")})` };
-          return vsSource(d.usd, parts.reduce((t, x) => t + x, 0), EXACT, `구성 줄 기대값 합 ${d.parts.join(" + ")}`);
+          return { exp: parts.reduce((t, x) => t + x, 0), how: `구성 줄 기대값 합 ${d.parts.join(" + ")}` };
         }
         const f = await fa(d.fyEnd);
         if (!f) return { status: FAIL, note: `SEC 20-F(${d.fyEnd}) 원본 판독 실패` };
@@ -5940,8 +5941,7 @@ async function verifyUs(sym) {
             tot += sign * (fy0.v * rF + xs * c0.cur * rC - xs * c0.prior * rP);
             notes.push(`${shortId(id)}: SEC 사업연도 ${fy0.v} + 6-K "${c0.label}" 당기 ${xs * c0.cur} − 전기 ${xs * c0.prior}${c0.neg ? "(부호 반전 라벨)" : ""}`);
           }
-          expOf.set(`${d.concept}|${d.at}`, tot);
-          return vsSource(d.usd, tot, EXACT, `${notes.join(" · ")} · ${natCur} × H.10 기간 평균`);
+          return { exp: tot, how: `${notes.join(" · ")} · ${natCur} × H.10 기간 평균` };
         }
         // 재무상태표
         const rAt = fxEndRate(fxRows, d.at);
@@ -5992,12 +5992,24 @@ async function verifyUs(sym) {
           tot += sign * sg * x.cols[x.hd.dates.indexOf(d.at)];
           notes.push(`${shortId(id)}: 6-K "${x.r.label}" ${d.at} ${sg * x.cols[x.hd.dates.indexOf(d.at)]}(연말 열 = SEC ${fyF.v})`);
         }
-        const e0 = tot * rAt;
-        expOf.set(`${d.concept}|${d.at}`, e0);
-        return vsSource(d.usd, e0, EXACT, `${notes.join(" · ")} · ${natCur} × 기말 H.10 ${d.at}`);
-      })().catch((e) => ({ status: FAIL, note: `재계산 오류 ${String(e).slice(0, 80)}` }));
-      add("A", nm, "LTM", res);
+        return { exp: tot * rAt, how: `${notes.join(" · ")} · ${natCur} × 기말 H.10 ${d.at}` };
+      } catch (e) { return { status: FAIL, note: `재계산 오류 ${String(e).slice(0, 80)}` }; }
+    };
+    for (const d of det) {
+      const r = await sixKExp(d);
+      if (r.exp != null) expOf.set(`${d.concept}|${d.at}`, r.exp);
+      add("A", `20-F LTM 6-K ${d.kind} ${shortId(d.concept)} @${d.at}`, "LTM", r.exp != null ? vsSource(d.usd, r.exp, EXACT, r.how) : r);
     }
+    // 완결성(재감사 P5) — 앱이 비운 LTM(사업연도 값 있음)을 검증기가 6-K 에서 찾으면 실패(채울 수 있었음). 6-K 에도 없거나 판정 불가면 공란 정당
+    let gapOk = 0;
+    const gapNa = [];
+    for (const g of gaps) {
+      if (!sixKSource || !g.ids?.length) { gapNa.push(`${shortId(g.concept)}(${!sixKSource ? "6-K 없음" : "원 개념 없음"})`); continue; }
+      const r = await sixKExp({ concept: g.concept, kind: g.kind, at: g.at, ids: g.ids, report: sixKSource, fyEnd: row.ltm.E, usd: null });
+      if (r.exp != null) add("A", `20-F LTM 공란 ${g.kind} ${shortId(g.concept)} @${g.at}`, "LTM", { status: FAIL, note: `앱 LTM 공란${g.reason ? `(${g.reason})` : ""}인데 6-K 에서 기대값 ${r.exp} — 채울 수 있음 · ${r.how}` });
+      else gapOk++;
+    }
+    add("A", "20-F LTM 공란 완결성(6-K 대조)", "LTM", { status: PASS, note: `앱 LTM 공란 ${gaps.length}개 개념 중 6-K 에서 값을 찾은 것 없음(${gapOk}개 대조${gapNa.length ? `, 대조 불가 ${gapNa.length}개` : ""})` });
   };
   if (foreign && H.LTM && ltmYahooNote) {
     try {

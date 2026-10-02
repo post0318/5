@@ -2,7 +2,8 @@ import { jsonError, ok } from "@/lib/api";
 import { getStockOverview } from "@/lib/markets/service";
 import { computeUniverseRow } from "@/lib/universe/overview";
 import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
-import { YAHOO_Q_FORM, yahooLtm } from "@/lib/markets/us/edgar-yahoo-quarters";
+import { isCfConcept, ltmBaseEnd, sourceIdsAt, yahooLtm } from "@/lib/markets/us/edgar-yahoo-quarters";
+import { instantOn, ltmAnchor, ltmFlowOf } from "@/lib/markets/us/edgar-series";
 import type { CompanyFacts } from "@/lib/markets/us/edgar";
 
 /**
@@ -10,28 +11,35 @@ import type { CompanyFacts } from "@/lib/markets/us/edgar";
  * 출처 없는 항목도 그대로 내보낸다(검증기가 실패 처리 — 값만 넣고 출처를 빠뜨린 경우)
  */
 function ltmItems(facts: CompanyFacts) {
-  const out: { concept: string; at: string; usd: number | null; flow: boolean; src: unknown; form: string }[] = [];
-  const through = yahooLtm(facts)?.through;
-  if (!through) return out;
+  type Entry = import("@/lib/markets/us/edgar").FactUnitEntry;
+  const items: { concept: string; at: string; usd: number | null; flow: boolean; src: unknown; form: string; end: string }[] = [];
+  const gaps: { concept: string; kind: "bs" | "cf"; at: string; ids: { id: string; sign: 1 | -1 }[]; reason: string | null }[] = [];
+  const yl = yahooLtm(facts);
+  const through = yl?.through, E = ltmBaseEnd(facts);
+  if (!through || !E) return { items, gaps, sixKSource: null, through: null, E: null };
   const yearAgo = (() => { const x = new Date(`${through}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); })();
-  // 형식 표지와 관계없이 LTM 날짜(기준일·1년 전 분기말)의 항목 전부(재감사 R2b — YAHOO-Q 가 아닌 표지로 넣은 값이 목록에서 빠졌다).
-  // 20-F 회사는 SEC 분기 원본이 없어 이 날짜 항목은 전부 LTM 보강분이다 — 출처 없는 항목도 그대로 내보낸다(검증기 실패)
+  const anchor = ltmAnchor(facts);
+  const dd = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
+  // 화면과 같은 선택 규칙(재감사 P1·P2·P4 — 다시 고르지 않는다): 잔액 = instantOn(±6일, 가장 가까운 항목), 흐름 = ltmFlowOf(화면 함수)
+  const nearest = (arr: Entry[], d: string) => arr.filter((e) => !e.start && dd(e.end, d) <= 6).sort((a, b) => dd(a.end, d) - dd(b.end, d))[0];
   for (const [c, node] of Object.entries(facts.facts["us-gaap"] ?? {})) {
-    const arr = (node as { units?: Record<string, import("@/lib/markets/us/edgar").FactUnitEntry[]> }).units?.USD ?? [];
-    for (const e of arr) {
-      if (!e.start) {
-        if (e.end === through || e.end === yearAgo) out.push({ concept: c, at: e.end, usd: e.val, flow: false, src: e.ltmSrc ?? null, form: e.form });
-        continue;
+    const arr = (node as { units?: Record<string, Entry[]> }).units?.USD ?? [];
+    if (arr.some((e) => !e.start)) {
+      for (const d of [through, yearAgo]) {
+        const e = nearest(arr, d);
+        if (e) items.push({ concept: c, at: d, usd: e.val, flow: false, src: e.ltmSrc ?? null, form: e.form, end: e.end });
+        // 완결성(재감사 P5) — 사업연도말 값이 있는데 기준일 값이 없는 개념은 공란 목록으로(검증기가 6-K 에 그 줄이 있으면 실패)
+        else if (d === through && instantOn(arr, E) != null) gaps.push({ concept: c, kind: "bs", at: d, ids: sourceIdsAt(facts, c, "bs", E), reason: null });
       }
-      if (e.end !== through) continue;
-      // 흐름 — 당기 항목(끝 = 기준일). 사업연도 항목(ltmQ)·전기 항목(같은 시작·끝 < 당기)으로 LTM. 조합 항목이 없어도 내보낸다(재감사 G4 — usd null → 검증기 실패)
-      const fy = arr.find((x) => x.start && x.form !== YAHOO_Q_FORM && x.ltmQ != null && x.end < e.end && Date.parse(x.end) >= Date.parse(e.start!) - 864e5 * 2);
-      // 전기 항목 = 사업연도와 시작이 같고 사업연도말보다 앞에 끝나는 항목(사업연도 항목 자체는 아님)
-      const prior = fy ? arr.find((x) => x !== e && x !== fy && x.start === fy.start && x.end < fy.end) : undefined;
-      out.push({ concept: c, at: e.end, usd: fy && prior ? fy.ltmQ! + (e.ltmQ ?? e.val) - (prior.ltmQ ?? prior.val) : null, flow: true, src: e.ltmSrc ?? null, form: e.form });
+    }
+    if (arr.some((e) => e.start)) {
+      const r = ltmFlowOf(arr, anchor);
+      if (!r.fy || dd(r.fy.end, E) > 7) continue;
+      if (r.value != null) items.push({ concept: c, at: r.cur?.end ?? r.fy.end, usd: r.value, flow: true, src: r.cur?.ltmSrc ?? null, form: r.cur?.form ?? r.fy.form, end: r.cur?.end ?? r.fy.end });
+      else if (isCfConcept(c)) gaps.push({ concept: c, kind: "cf", at: through, ids: sourceIdsAt(facts, c, "cf", E), reason: r.reason });
     }
   }
-  return out;
+  return { items, gaps, sixKSource: yl?.sixKSource ?? null, through, E };
 }
 
 /**
