@@ -3,7 +3,7 @@ name: 미국 TTM 스냅샷 미리 채우기 (ttm_snap)
 # 개요 시가총액·멀티플이 쓰는 미국 TTM(현재 주식수·LTM·EV 구성요소)을 종목별로 DB 에 미리 계산해 둔다(src/lib/db/ttm-snap.ts,
 # 오너 결정 2026-10-01 (가)). 저장본은 같은 배포판(커밋)·24시간 안일 때만 쓰이므로 매일 + 배포 직후 다시 채운다.
 #   - 하루 1회: 21:50 UTC = 06:50 KST (재무 배치 fin-build 06:10 KST 뒤 — 매출(fin) 저장본이 먼저 갱신돼야 TTM 계산이 빠르다)
-#   - master push: 운영 배포판이 이 커밋으로 바뀔 때까지 기다린 뒤(최대 20분) 채운다
+#   - master push(앱 파일 변경분만): 운영 배포판이 이 커밋으로 바뀔 때까지 기다린 뒤(최대 20분) 채운다
 #   - 수동: workflow_dispatch (symbols 를 주면 그 종목만)
 # 호출당 최대 10종목, 종목은 하나씩 순서대로(SEC 요청 제한). pending 0 이 되면 멈춘다. 저장 못 한 종목(failed — SEC 판독 경고 등)은
 # 경고로만 남긴다(다음 화면 조회 때 다시 계산). pending 이 남았는데 진행 0 이면 실패.
@@ -13,6 +13,18 @@ on:
     - cron: "50 21 * * *"
   push:
     branches: [master]
+    # 앱 파일이 바뀐 푸시만(vercel.json ignoreCommand 와 같은 경로) — 검증기·수집기·문서만 바뀐 푸시는 배포도 생략되므로 다시 채울 필요가 없다.
+    # 2026-10-03: 푸시마다 전 종목을 다시 채워 이틀간 35회 실행, Vercel Hobby Active CPU 한도(월 4시간) 초과로 서비스 정지
+    paths:
+      - "src/**"
+      - "public/**"
+      - "package.json"
+      - "package-lock.json"
+      - "next.config.ts"
+      - "tsconfig.json"
+      - "postcss.config.mjs"
+      - "components.json"
+      - "vercel.json"
   workflow_dispatch:
     inputs:
       symbols:
