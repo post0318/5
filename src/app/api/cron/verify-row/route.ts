@@ -1,6 +1,8 @@
 import { jsonError, ok } from "@/lib/api";
 import { getStockOverview } from "@/lib/markets/service";
 import { computeUniverseRow } from "@/lib/universe/overview";
+import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
+import { yahooLtm } from "@/lib/markets/us/edgar-yahoo-quarters";
 
 /**
  * 재무 검증 스크립트(scripts/verify-financials.mjs) 전용 — 화면이 실제로 쓰는 계산 함수의
@@ -8,6 +10,7 @@ import { computeUniverseRow } from "@/lib/universe/overview";
  * 된다(검증 도구 감사 2026-09-24).
  *   - universe: 유니버스 통합 뷰 한 행(computeUniverseRow — 한국은 computeKrOverviewMetrics)
  *   - overview: 종목분석 개요 멀티플(getStockOverview + computeTrailingMultiples, 재무 포함)
+ *   - sixK: 20-F LTM 에서 회사 6-K 로 채운 값 목록(edgar-yahoo-quarters SixKDetail — 검증기가 SEC 20-F·6-K 를 따로 읽어 다시 계산, 2026-10-02 재감사 e-1)
  * 인증은 다른 cron 경로와 같다(CRON_SECRET, 로컬은 APP_PASSWORD). DB 불필요.
  */
 function authorized(req: Request): boolean {
@@ -31,7 +34,9 @@ export async function GET(req: Request) {
     // 순서대로 — 동시에 돌리면 같은 시세를 두 번 받다가 제한시간(12초)에 걸려 결과가 비었다
     const universe = await computeUniverseRow(market, symbol);
     const overview = await getStockOverview(market, symbol, null, { skipQuarterly: true });
-    return ok({ universe, overview: { multiples: overview.multiples, warnings: overview.warnings } });
+    // 20-F 만 값이 있다(10-K·10-Q 회사는 null)
+    const sixK = market === "us" ? (yahooLtm((await fetchUsCompanyFacts(symbol).catch(() => null))?.facts ?? ({} as never))?.sixKDetail ?? null) : null;
+    return ok({ universe, overview: { multiples: overview.multiples, warnings: overview.warnings }, sixK });
   } catch (e) {
     return jsonError(e);
   }

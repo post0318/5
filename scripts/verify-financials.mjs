@@ -816,6 +816,67 @@ async function sixKCfYtd(cik, sub, periodEnd, priorEnd, labels, pick) {
   return null;
 }
 
+const sixKDocCache = new Map();
+/** 6-K 문서(앱 기록의 report = "6-K 접수번호 문서") → 소문자 글자(표 칸 ‖, 줄 바꿈 \n) */
+async function sixKDocText(cik, report) {
+  const m = /^6-K (\S+) (\S+)$/.exec(report ?? "");
+  if (!m) return null;
+  const url = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${m[1].replace(/-/g, "")}/${m[2]}`;
+  if (!sixKDocCache.has(url)) {
+    const html = await secText(url).catch(() => "");
+    sixKDocCache.set(url, html.replace(/<\/t[dh]>/gi, " ‖ ").replace(/<\/tr>/gi, "\n").replace(/<[^>]+>/g, " ")
+      .replace(/&#8212;|&mdash;/g, "—").replace(/&#160;|&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;/g, "'").replace(/&#?[a-z0-9]+;/gi, " ").toLowerCase());
+  }
+  return sixKDocCache.get(url) || null;
+}
+const SIXK_MON = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+/** 분기말 표기(6월 28일 등)를 달 말로 — 24일 이후 그달 말, 7일 이전 전달 말 */
+const sixKSnap = (y, mo, d) => (d >= 24 ? new Date(Date.UTC(y, mo + 1, 0)) : d <= 7 ? new Date(Date.UTC(y, mo, 0)) : new Date(Date.UTC(y, mo, d))).toISOString().slice(0, 10);
+/** 재무상태표 열 머리(날짜 여럿) 위치·날짜 — "june 30, 2026 ‖ december 31, 2025" 형 / "jun 29, dec 31, (…) 2025 2025" 형(슬라이드) */
+function sixKBsHeaders(text) {
+  const out = [];
+  for (const m of text.matchAll(/((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2},? \d{4}[\s‖]*){2,})/g)) {
+    const ds = [...m[1].matchAll(/([a-z]{3})[a-z]*\.? (\d{1,2}),? (\d{4})/g)].map((x) => sixKSnap(Number(x[3]), SIXK_MON.indexOf(x[1]), Number(x[2])));
+    if (ds.length >= 2 && !ds.some((d) => d.includes("NaN"))) out.push({ i: m.index, dates: ds });
+  }
+  for (const m of text.matchAll(/((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2},\s*){2,})\s*\([^)]*\)\s*((?:(?:19|20)\d{2}\s+){2,})/g)) {
+    const md = [...m[1].matchAll(/([a-z]{3})[a-z]*\.? (\d{1,2}),/g)], ys = m[2].trim().split(/\s+/).map(Number);
+    if (md.length === ys.length) out.push({ i: m.index, dates: md.map((x, k) => sixKSnap(ys[k], SIXK_MON.indexOf(x[1]), Number(x[2]))) });
+  }
+  return out.sort((a, b) => a.i - b.i);
+}
+/** 라벨 뒤 숫자 묶음 — 같은 라벨의 모든 출현. 단어 사이 괄호 삽입구 하나 허용("provided by (used in)") */
+function sixKRows(text, labels) {
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const out = [];
+  for (const l of [...new Set(labels.map((x) => x.replace(/&amp;/g, "&").trim()))].filter((x) => x.length > 3).sort((a, b) => b.length - a.length)) {
+    const words = l.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    if (!words.length) continue;
+    const re = new RegExp(`(?:^|[^a-z])${words.map(esc).join("[^a-z0-9(]*(?:\\([^)]{0,30}\\)[^a-z0-9(]*)?")}[^a-z0-9(—\\-]*((?:[\\s‖]*(?:\\(?[\\d,]+(?:\\.\\d+)?\\)?|—|-)(?![\\d,]))+)`, "g");
+    for (const m of text.matchAll(re)) {
+      if (out.some((o) => Math.abs(o.i - m.index) < 5)) continue;
+      const toks = [...m[1].matchAll(/\(?[\d,]+(?:\.\d+)?\)?|—|-/g)].map((x) => x[0]);
+      out.push({ i: m.index, label: l, toks, nums: toks.map((t) => (t === "—" || t === "-" ? 0 : (t.startsWith("(") ? -1 : 1) * Number(t.replace(/[(),]/g, "")))) });
+    }
+  }
+  return out;
+}
+/** 문서 단위(천·백만) — 그 위치 앞에서 가장 가까운 "in thousands/millions" */
+function sixKUnitAt(text, i) {
+  const head = text.slice(Math.max(0, i - 60_000), i);
+  const t = head.lastIndexOf("thousands"), mn = head.lastIndexOf("millions");
+  if (t < 0 && mn < 0) { const any = /in (?:\S+ )?(thousands|millions)/.exec(text); return any ? (any[1] === "thousands" ? 1e3 : 1e6) : null; }
+  return t > mn ? 1e3 : 1e6;
+}
+/** 재무상태표 행 → 열 값(머리 날짜 순). 값 개수 = 열 수(그대로) / 2배(금액·비율 쌍 — 짝수 자리) / 열 수 + 1(주석 번호 열 — 첫 값 뺌) */
+function sixKBsCols(row, hd) {
+  const n = hd.dates.length, v = row.nums;
+  if (v.length === n) return v;
+  if (v.length === 2 * n) return v.filter((_, k) => k % 2 === 0);
+  if (v.length === n + 1 && Number.isInteger(v[0]) && v[0] > 0 && v[0] < 100 && !/,/.test(row.toks[0])) return v.slice(1);
+  return null;
+}
+
 async function filingAtDate(cik, sub, date) {
   const rc = sub.filings?.recent ?? {};
   const k = (rc.form ?? []).findIndex((fm, i) => /^(10-[QK]|20-F|40-F)$/.test(fm) && rc.reportDate?.[i] && dayDiff(rc.reportDate[i], date) <= 7);
@@ -839,10 +900,20 @@ async function filingAtDate(cik, sub, date) {
   const cal = await secText(`${base}/${calName}`);
   const lab = labName === calName ? cal : await secText(`${base}/${labName}`);
   const locMap = (x) => { const r = new Map(); for (const l of x.matchAll(/<link:loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) r.set(id, h); } return r; };
-  const labels = new Map();
-  { const loc = locMap(lab), text = new Map();
-    for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) { const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1]; if (id && !/documentation/i.test(m[1])) text.set(id, [...(text.get(id) ?? []), m[2].trim()]); }
-    for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) { const f = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? ""); if (f && t) labels.set(f, [...(labels.get(f) ?? []), ...t]); } }
+  const labels = new Map(), negLabels = new Map();
+  { const loc = locMap(lab), text = new Map(), negText = new Map();
+    for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+      const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
+      if (!id || /documentation/i.test(m[1])) continue;
+      text.set(id, [...(text.get(id) ?? []), m[2].trim()]);
+      // 부호 반전 역할(negatedLabel 계열) — 보고서 표시값 = −XBRL 값(6-K 대조의 부호 판정, 2026-10-02)
+      if (/role="[^"]*\/negated/i.test(m[1])) negText.set(id, [...(negText.get(id) ?? []), m[2].trim()]);
+    }
+    for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+      const f = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = /xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "", t = text.get(to);
+      if (f && t) labels.set(f, [...(labels.get(f) ?? []), ...t]);
+      if (f && negText.get(to)) negLabels.set(f, [...(negLabels.get(f) ?? []), ...negText.get(to)]);
+    } }
   const kids = new Map(), faceIds = new Set(), hasParent = new Set();
   for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
@@ -854,7 +925,7 @@ async function filingAtDate(cik, sub, date) {
       kids.set(fr, [...(kids.get(fr) ?? []), to]); faceIds.add(fr); faceIds.add(to); hasParent.add(to);
     }
   }
-  return { form: rc.form[k], filed: rc.filingDate[k], date: rc.reportDate[k], facts, durFacts, labels, kids, faceIds, roots: [...faceIds].filter((x) => !hasParent.has(x)) };
+  return { form: rc.form[k], filed: rc.filingDate[k], date: rc.reportDate[k], facts, durFacts, labels, negLabels, kids, faceIds, roots: [...faceIds].filter((x) => !hasParent.has(x)) };
 }
 /**
  * 재무상태표 본표 차입금·리스 줄 — 검증기 독립 판정(개념명·라벨 규칙, 앱과 같은 성격의 규칙이라 공통모드). 차입금 성격 노드를 만나면
@@ -5687,6 +5758,134 @@ async function verifyUs(sym) {
   // 분기 원천(Yahoo)이 앱과 같아 공통모드(환율은 H.10 독립) — 앱의 합산·환산 계산 오류를 잡는 검사이고 Yahoo 값 자체의 정합성은 보증하지 않는다.
   // 앱이 공란으로 둔 항목은 앱 notes 의 사유(Yahoo 연간 ≠ SEC FY)를 SEC 원본(검증기 판독)으로 따로 확인한다.
   const ltmYahooNote = (h.notes ?? []).find((n) => /LTM 열 = Yahoo 분기/.test(n));
+  // 재감사 e-3: 20-F 인데 LTM 기준일이 사업연도말과 다르고 앱 각주(「LTM 열 = Yahoo 분기」)가 없으면 — 20-F LTM 검사가 통째로 사라지지 않게 실패
+  if (foreign && H.LTM && !ltmYahooNote) {
+    const fyC = Object.keys(H).filter((cc) => cc !== "LTM").sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1);
+    if (!fyC || dayDiff(H.LTM.date, H[fyC].date) > 7) add("A", "20-F LTM 각주(LTM 열 = Yahoo 분기)", "LTM", { status: FAIL, note: `20-F 인데 LTM 기준일 ${H.LTM.date} ≠ 사업연도말 ${fyC ? H[fyC].date : "없음"}이고 앱 각주 「LTM 열 = Yahoo 분기」가 없음 — 20-F LTM 독립 재계산을 할 수 없음` });
+  }
+  /**
+   * 재감사 e-1(2026-10-02): 앱이 회사 6-K 로 채운 값 전부(verify-row sixK — 각주의 「그 밖 N개 줄」 포함)를 검증기가 SEC 20-F 원본과 6-K 문서를 따로 읽어
+   * 다시 계산한다(앱은 표 칸 판독, 검증기는 문서 글자 판독). 줄 선택: 라벨 = SEC 20-F 라벨 파일, 재무상태표는 연말 열 = SEC 값인 줄만, 현금흐름은 부호 반전 역할로 부호.
+   * 다시 계산할 수 없는 기록은 실패(면제 없음)
+   */
+  const checkSixKDetails = async () => {
+    const sixKNote = /회사 6-K 분기 재무제표: (.+?)(?: · |$)/.exec(ltmYahooNote ?? "")?.[1];
+    const det = row?.sixK ?? null;
+    if (sixKNote && !det?.length) { add("A", "20-F LTM 6-K 기록(verify-row)", "LTM", { status: FAIL, note: `앱 각주에 6-K 항목(${sixKNote})이 있는데 verify-row 기록 없음 — 독립 재계산 불가` }); return; }
+    if (!det?.length) return;
+    const fas = new Map();
+    const fa = async (d) => { if (!fas.has(d)) fas.set(d, await filingAtDate(cik, sub, d).catch(() => null)); return fas.get(d); };
+    const shortId = (id) => id.replace(/^[a-z-]+_/, "");
+    const expOf = new Map(); // `${concept}|${at}` → 검증기 기대값(USD) — 합성 개념 대조용
+    for (const d of det) {
+      const nm = `20-F LTM 6-K ${d.kind} ${shortId(d.concept)} @${d.at}`;
+      const res = await (async () => {
+        if (d.kind === "derived") {
+          const parts = (d.parts ?? []).map((p) => expOf.get(`${p}|${d.at}`));
+          if (!d.parts?.length) return { status: FAIL, note: "합성 개념 구성 줄 없음" };
+          if (parts.some((x) => x == null)) return { status: COMMON, note: `${COMMON_LABEL}: 합성 본표 개념 = ${d.parts.join(" + ")} — 구성 줄 중 6-K 대조 밖(야후 값) 있음, 합산 규칙은 앱과 같음` };
+          return vsSource(d.usd, parts.reduce((t, x) => t + x, 0), EXACT, `구성 줄 기대값 합 ${d.parts.join(" + ")}`);
+        }
+        const f = await fa(d.fyEnd);
+        if (!f) return { status: FAIL, note: `SEC 20-F(${d.fyEnd}) 원본 판독 실패` };
+        const text = await sixKDocText(cik, d.report);
+        if (!text) return { status: FAIL, note: `6-K 문서 판독 실패(${d.report})` };
+        if (!d.ids?.length) return { status: FAIL, note: "원 개념 기록 없음" };
+        if (d.kind === "cf" || d.kind === "cfZero") {
+          let tot = 0;
+          const notes = [];
+          const priorEnd = new Date(Date.UTC(Number(d.at.slice(0, 4)) - 1, Number(d.at.slice(5, 7)), 0)).toISOString().slice(0, 10);
+          for (const { id, sign } of d.ids) {
+            const fy0 = f.durFacts.filter((x) => x.id === id && !x.dims.length && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300)[0];
+            if (!fy0) return { status: FAIL, note: `SEC 20-F 사업연도 ${shortId(id)} 없음` };
+            const fyStart = fy0.start, nextDay = new Date(Date.parse(d.fyEnd) + 864e5).toISOString().slice(0, 10);
+            const rF = fxAvg(fxRows, fyStart, d.fyEnd), rC = fxAvg(fxRows, nextDay, d.at), rP = fxAvg(fxRows, fyStart, priorEnd);
+            if (rF == null || rC == null || rP == null) return { status: FAIL, note: "환율 없음" };
+            const labs = f.labels.get(id) ?? [], neg = new Set((f.negLabels.get(id) ?? []).map((x) => x.toLowerCase()));
+            const rows0 = sixKRows(text, labs);
+            if (d.kind === "cfZero") {
+              if (fy0.v !== 0) return { status: FAIL, note: `0 규칙인데 SEC 사업연도 ${shortId(id)} = ${fy0.v}` };
+              const hd0 = rows0.filter((r) => /months ended/.test(text.slice(Math.max(0, r.i - 20_000), r.i + 20_000)));
+              if (hd0.length) return { status: FAIL, note: `0 규칙인데 6-K 에 "${hd0[0].label}" 줄 있음` };
+              notes.push(`${shortId(id)} 사업연도 0·분기 현금흐름표에 줄 없음`);
+              continue;
+            }
+            // 열 — "… months ended <날짜들> … 연도 연도" 중 가장 가까운 머리, 누적 2열(4개면 뒤 2개)
+            const yC = d.at.slice(0, 4), yP = priorEnd.slice(0, 4);
+            const cands = [];
+            for (const r of rows0) {
+              let nums = r.nums;
+              if (nums.length === 3 && Number.isInteger(nums[0]) && nums[0] > 0 && nums[0] < 100 && !/,/.test(r.toks[0])) nums = nums.slice(1);
+              if (nums.length !== 2 && nums.length !== 4) continue;
+              const lo = Math.max(0, r.i - 20_000), win = text.slice(lo, r.i + 20_000);
+              const ys = [...win.matchAll(/months ended[^0-9]{0,200}?(?:[a-z]{3,9}\.? \d{1,2},?[\s‖]*)+[^0-9]{0,80}?(20\d\d)[\s‖]+(20\d\d)/g)].sort((a, b) => Math.abs(lo + a.index - r.i) - Math.abs(lo + b.index - r.i))[0];
+              if (!ys || ![yC, yP].includes(ys[1]) || ![yC, yP].includes(ys[2]) || ys[1] === ys[2]) continue;
+              const pair = nums.length === 4 ? nums.slice(2) : nums;
+              const unit = sixKUnitAt(text, r.i);
+              if (!unit) continue;
+              const isNeg = neg.has(r.label.toLowerCase()) && !labs.some((x) => x.toLowerCase() === r.label.toLowerCase() && !neg.has(x.toLowerCase()));
+              cands.push({ cur: (ys[1] === yC ? pair[0] : pair[1]) * unit, prior: (ys[1] === yC ? pair[1] : pair[0]) * unit, neg: isNeg, label: r.label });
+            }
+            let u = [...new Map(cands.map((c) => [`${c.cur}|${c.prior}|${c.neg}`, c])).values()];
+            // 같은 라벨이 여러 번(취득·처분) — 지급 개념은 유출(음수) 묶음, 수취 개념은 유입(양수) 묶음만
+            if (u.length > 1 && /Payment|Purchase|Acquir|Repayment/.test(id)) u = u.filter((c) => c.cur <= 0 && c.prior <= 0);
+            else if (u.length > 1 && /Proceeds|Sale|Disposal|Receipt/.test(id)) u = u.filter((c) => c.cur >= 0 && c.prior >= 0);
+            if (u.length !== 1) return { status: FAIL, note: `6-K 현금흐름 "${labs[0] ?? shortId(id)}" 줄 ${u.length ? `${u.length}개 후보로 모호` : "못 찾음"}(${d.report})` };
+            const c0 = u[0], xs = c0.neg ? -1 : 1;
+            tot += sign * (fy0.v * rF + xs * c0.cur * rC - xs * c0.prior * rP);
+            notes.push(`${shortId(id)}: SEC 사업연도 ${fy0.v} + 6-K "${c0.label}" 당기 ${xs * c0.cur} − 전기 ${xs * c0.prior}${c0.neg ? "(부호 반전 라벨)" : ""}`);
+          }
+          expOf.set(`${d.concept}|${d.at}`, tot);
+          return vsSource(d.usd, tot, EXACT, `${notes.join(" · ")} · ${natCur} × H.10 기간 평균`);
+        }
+        // 재무상태표
+        const rAt = fxEndRate(fxRows, d.at);
+        if (rAt == null) return { status: FAIL, note: "기말 환율 없음" };
+        const hds = sixKBsHeaders(text);
+        let tot = 0;
+        const notes = [];
+        for (const { id, sign } of d.ids) {
+          const fyF = f.facts.find((x) => x.id === id && !x.dims.length);
+          if (!fyF) return { status: FAIL, note: `SEC 20-F ${d.fyEnd} ${shortId(id)} 없음` };
+          const labs = f.labels.get(id) ?? [];
+          const rows0 = sixKRows(text, labs).map((r) => {
+            const hd = hds.filter((x) => x.i < r.i && r.i - x.i < 60_000 && x.dates.includes(d.fyEnd)).at(-1);
+            const cols = hd ? sixKBsCols(r, hd) : null;
+            const unit = sixKUnitAt(text, r.i);
+            return hd && cols && unit ? { r, hd, cols: cols.map((x) => x * unit) } : null;
+          }).filter(Boolean);
+          const unitOf = (v) => { let u0 = 1; const a = Math.abs(Math.round(v)); while (u0 < 1e6 && a !== 0 && a % (u0 * 10) === 0) u0 *= 10; return u0; };
+          const eqFy = (x) => [1, -1].some((sg) => Math.abs(sg * x.cols[x.hd.dates.indexOf(d.fyEnd)] - fyF.v) < unitOf(fyF.v) + Math.abs(fyF.v) * 1e-9);
+          if (d.kind === "bsZero") {
+            if (fyF.v !== 0) return { status: FAIL, note: `0 규칙인데 SEC ${shortId(id)} 연말 ${fyF.v}` };
+            const has = rows0.filter((x) => x.hd.dates.includes(d.at) && x.cols[x.hd.dates.indexOf(d.at)] !== 0 && x.cols[x.hd.dates.indexOf(d.fyEnd)] === 0);
+            if (has.length) return { status: FAIL, note: `0 규칙인데 6-K 재무상태표에 "${has[0].r.label}" 연말 0·기준일 ${has[0].cols[has[0].hd.dates.indexOf(d.at)]} 줄 있음` };
+            notes.push(`${shortId(id)} 연말 0·기준일 값 있는 줄 없음`);
+            continue;
+          }
+          if (d.kind === "bsDelta") {
+            const u = rows0.filter((x) => x.hd.dates.includes(d.at));
+            const uq = [...new Map(u.map((x) => [x.cols.join("|"), x])).values()];
+            if (uq.length !== 1) return { status: FAIL, note: `변동분 근사 "${labs[0] ?? shortId(id)}" 줄 ${uq.length}개(${d.report})` };
+            const x = uq[0], vE = x.cols[x.hd.dates.indexOf(d.fyEnd)], vA = x.cols[x.hd.dates.indexOf(d.at)];
+            tot += sign * (fyF.v + (vA - vE));
+            notes.push(`${shortId(id)}: SEC 연말 ${fyF.v} + 6-K 변동(${vE} → ${vA})`);
+            continue;
+          }
+          const ok = rows0.filter((x) => x.hd.dates.includes(d.at) && eqFy(x));
+          const uq = [...new Map(ok.map((x) => [x.cols.join("|"), x])).values()];
+          if (uq.length !== 1) return { status: FAIL, note: `6-K 재무상태표 "${labs[0] ?? shortId(id)}" 연말 열 = SEC ${fyF.v} 인 줄 ${uq.length}개(${d.report})` };
+          const x = uq[0], sg = Math.abs(x.cols[x.hd.dates.indexOf(d.fyEnd)] - fyF.v) < unitOf(fyF.v) + Math.abs(fyF.v) * 1e-9 ? 1 : -1;
+          tot += sign * sg * x.cols[x.hd.dates.indexOf(d.at)];
+          notes.push(`${shortId(id)}: 6-K "${x.r.label}" ${d.at} ${sg * x.cols[x.hd.dates.indexOf(d.at)]}(연말 열 = SEC ${fyF.v})`);
+        }
+        const e0 = tot * rAt;
+        expOf.set(`${d.concept}|${d.at}`, e0);
+        return vsSource(d.usd, e0, EXACT, `${notes.join(" · ")} · ${natCur} × 기말 H.10 ${d.at}`);
+      })().catch((e) => ({ status: FAIL, note: `재계산 오류 ${String(e).slice(0, 80)}` }));
+      add("A", nm, "LTM", res);
+    }
+  };
   if (foreign && H.LTM && ltmYahooNote) {
     try {
       if (!fxRows) throw new Error(fxErr || "환율 없음");
@@ -5773,7 +5972,20 @@ async function verifyUs(sym) {
             continue;
           }
           if (app != null) { add("A", name, "LTM", exp == null ? { status: FAIL, note: `앱 ${app} 있는데 Yahoo ${k} 없음` } : vsSource(app, exp, EXACT, basis)); continue; }
-          if (exp == null) { add("A", name, "LTM", { status: NA, note: `양쪽 빈칸(Yahoo ${k} 없음)` }); continue; }
+          if (exp == null) {
+            // 앱 공란 + 야후 없음 — 검증기가 6-K 에서 값을 찾으면 실패(있어야 할 값이 빈칸, 재감사 e-2). 6-K 에도 없을 때만 검증불가
+            const reId0 = n0 === "CapEx" ? /_(?:PurchaseOfPropertyPlantAndEquipment\w*|PaymentsToAcquirePropertyPlantAndEquipment)$/
+              : n0 === "영업활동 현금흐름" ? /_(?:NetCashProvidedByUsedInOperatingActivities|CashFlowsFromUsedInOperatingActivities)$/
+              : n0 === "감가상각비" ? /_(?:DepreciationDepletionAndAmortization|DepreciationAndAmortization|AdjustmentsForDepreciationAndAmortisationExpense\w*)$/ : null;
+            if (reId0) {
+              secFy ??= fyCol ? await filingAtDate(cik, sub, H[fyCol].date) : null;
+              const f0 = secFy?.durFacts.filter((x0) => !x0.dims.length && reId0.test(x0.id) && (Date.parse(x0.end) - Date.parse(x0.start)) / 864e5 > 300).sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0];
+              const priorEnd0 = new Date(Date.UTC(Number(H.LTM.date.slice(0, 4)) - 1, Number(H.LTM.date.slice(5, 7)), 0)).toISOString().slice(0, 10);
+              const yt0 = f0 ? await sixKCfYtd(cik, sub, H.LTM.date, priorEnd0, secFy.labels.get(f0.id) ?? [], n0 === "CapEx" ? (f) => f.cur <= 0 && f.prior <= 0 : null) : null;
+              if (yt0 && !yt0.ambiguous) { add("A", name, "LTM", { status: FAIL, note: `앱 공란(Yahoo ${k} 없음)인데 6-K(${yt0.src})에 당기 누적 ${yt0.cur}·전기 ${yt0.prior} — 채울 수 있음` }); continue; }
+            }
+            add("A", name, "LTM", { status: NA, note: `양쪽 빈칸(Yahoo ${k} 없음, 6-K 값도 없음)` }); continue;
+          }
           // 앱 공란 — notes 에 사유가 적힌 항목만, 사유(Yahoo 연간 ≠ SEC FY)를 SEC 원본으로 확인
           // 공란 목록 파싱: "사유: 항목, 항목 / 사유: 항목" — 조각마다 "사유: " 를 떼고 항목 단위로
           const blankItems = new Set(blanksTxt.split(" / ").flatMap((g0) => (g0.includes(": ") ? g0.slice(g0.indexOf(": ") + 2) : g0).split(", ")).map(nm0));
@@ -5789,6 +6001,7 @@ async function verifyUs(sym) {
           add("A", name, "LTM", rel0 > 0.05 ? { status: NA, note: `앱 공란 — 사유 확인: Yahoo ${fyCol} 유형자산 취득 ${Math.abs(yr.purchaseOfPPE)} vs SEC ${secFy.form} ${Math.abs(cap.v)} ${natCur} — 차이 ${(rel0 * 100).toFixed(2)}% > 5%(정의 차이)` }
             : { status: FAIL, note: `앱 공란인데 Yahoo ${fyCol} 유형자산 취득 ${Math.abs(yr.purchaseOfPPE)} 와 SEC ${Math.abs(cap.v)} 차이 ${(rel0 * 100).toFixed(3)}% ≤ 5% — 변동분 보정으로 채울 수 있음(사유 불성립)` });
         }
+        await checkSixKDetails();
       }
     } catch (e) {
       hardErrors.push(`20-F LTM 독립 재계산(Yahoo 분기·환율) 조회 실패: ${String(e).slice(0, 60)}`);
