@@ -199,6 +199,8 @@ function parseNatureDa(xml) {
     const rows = [...html.matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
     const before = clean(xml.slice(Math.max(0, m.index - 1500), m.index));
     const head = before.slice(-300);
+    const is = isByNature(rows, before);
+    if (is) return is;
     if (!/성격별/.test(head + " " + (rows[0] ?? []).join(" "))) continue;
     const names = rows.map(lbl).join("|");
     if (/조정항목|법인세비용|이자수익/.test(names)) continue; // 현금흐름 조정 표
@@ -229,6 +231,36 @@ function parseNatureDa(xml) {
   const [c, p] = wide;
   const cat = (k) => (c[k] || p?.[k] ? [c[k]?.[0] ?? null, p?.[k]?.[0] ?? null] : null);
   return { wide: true, unit: c.unit, combined: cat("combined"), base: cat("base"), inv: cat("inv"), rou: cat("rou"), amo: cat("amo") };
+}
+/**
+ * 손익계산서 본표가 성격별인 회사(SK스퀘어 — "Ⅱ.영업비용" 아래 종업원급여·지급수수료·감가상각비…). 본표 영업비용 항목의 감가상각비·
+ * 무형자산상각비. 항목 합 = 영업비용 합계(열마다, 단위 이하)일 때만 — 열을 바르게 읽었다는 확인. 주석 번호 열은 뺀다.
+ */
+function isByNature(rows, before) {
+  const strip = (c) => (c ?? "").replace(/^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩXIVL]+\.\s*/, "").replace(/\s/g, "");
+  const iOp = rows.findIndex((r) => strip(r[0]) === "영업비용");
+  // "영업이익(손실)" 처럼 괄호가 붙어도(SK스퀘어 2023·2024 보고서)
+  if (iOp < 0 || !rows.some((r) => strip(r[0]).replace(/\(.*?\)/g, "") === "영업이익")) return null;
+  const hdr = rows.find((r) => r.some((c) => /^주\s*석$/.test(c)));
+  const noteCol = hdr ? hdr.findIndex((c) => /^주\s*석$/.test(c)) : -1;
+  const vals = (r) => r.map((c, i) => (i === 0 || i === noteCol ? null : /^[-–]$/.test(c.trim()) ? 0 : numOf(c))).filter((v) => v != null);
+  const items = [];
+  for (let i = iOp + 1; i < rows.length; i += 1) {
+    if (/^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]/.test((rows[i][0] ?? "").trim())) break;
+    items.push(rows[i]);
+  }
+  const dep = items.find((r) => strip(r[0]) === "감가상각비" || strip(r[0]) === "감가상각비및무형자산상각비");
+  if (!dep) return null;
+  const total = vals(rows[iOp]);
+  for (let c = 0; c < Math.min(2, total.length); c += 1) {
+    const sum = items.reduce((a, r) => a + (vals(r)[c] ?? 0), 0);
+    if (Math.abs(sum - total[c]) > 1) return null;
+  }
+  const u = [...before.matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
+  if (!u) return null;
+  const amo = items.find((r) => strip(r[0]) === "무형자산상각비");
+  const scale = (r) => vals(r).slice(0, 2).map((v) => v * UNIT[u]);
+  return { isIS: true, wide: false, unit: UNIT[u], combined: null, base: scale(dep), inv: null, rou: null, amo: amo ? scale(amo) : [0, 0] };
 }
 /** 성격별 결과 → 감가(기본+투자부동산+사용권)·무형 열 값 */
 function natureCols(n) {
@@ -286,6 +318,11 @@ async function docDa(rcpNo) {
   for (const d of docs.filter((d) => d.kind === want)) {
     const t = parseDocDa(d.x);
     if (t) return { ...t, sep: want === "sep", nature: parseNatureDa(d.x), invDep: parseInvPropDep(d.x) };
+  }
+  // 현금흐름 조정 표를 못 읽어도 성격별 표·성격별 손익계산서는 쓴다(SK스퀘어 2024 보고서)
+  for (const d of docs.filter((d) => d.kind === want)) {
+    const nature = parseNatureDa(d.x);
+    if (nature) return { unit: nature.unit, dep: [], amo: [], parts: {}, sep: want === "sep", nature, invDep: parseInvPropDep(d.x) };
   }
   return null;
 }
@@ -427,8 +464,12 @@ async function daByYear(corp) {
     docs[ry] = await docOf(ry);
   }
   // 한 표(원문 현금흐름 또는 성격별)의 보고서별 열 합계 → 확인된 보고서 집합
-  const confirm = (colTot, sameReport, unitOf = (ry) => docs[ry].unit) => {
+  // dropOf(ry, col): 이 보고서에만 따로 있는 줄 금액(투자부동산 감가상각) — 그 줄을 빼면 다른 보고서 값과 같을 때도 같은 표로 본다
+  // (SK하이닉스 2021 보고서 10,658,498 − 투자부동산상각비 1,773 = 2022 보고서의 2021 값 10,656,725). 이렇게 확인한 보고서는 그 줄을 뺀
+  // 값을 쓴다(newer 판본과 같은 기준) — ok.drop 에 표시
+  const confirm = (colTot, sameReport, unitOf = (ry) => docs[ry].unit, dropOf = () => null) => {
     const ok = new Set();
+    ok.drop = new Set();
     const vals = {}; // 해 → 확인된 값들
     for (let pass = 0; pass < 8; pass += 1) {
       let changed = false;
@@ -436,11 +477,18 @@ async function daByYear(corp) {
         if (ok.has(ry) || !docs[ry]) continue;
         const u = unitOf(ry);
         const t = [colTot(ry, 0), colTot(ry, 1)];
-        const hit = [0, 1].some((col) => sameReport(ry, col, t[col], u) || (vals[ry - col] ?? []).some((v) => near(t[col], v, u)));
-        if (!hit) continue;
+        const td = [0, 1].map((col) => (t[col] != null && dropOf(ry, col) ? t[col] - dropOf(ry, col) : null));
+        const match = (col, x) => x != null && (sameReport(ry, col, x, u) || (vals[ry - col] ?? []).some((v) => near(x, v, u)));
+        let use = null;
+        if ([0, 1].some((col) => match(col, t[col]))) use = t;
+        else if ([0, 1].some((col) => match(col, td[col]))) {
+          use = [0, 1].map((col) => td[col] ?? t[col]);
+          ok.drop.add(ry);
+        }
+        if (!use) continue;
         ok.add(ry);
         changed = true;
-        for (const col of [0, 1]) if (t[col] != null) (vals[ry - col] ??= []).push(t[col]);
+        for (const col of [0, 1]) if (use[col] != null) (vals[ry - col] ??= []).push(use[col]);
       }
       if (!changed) break;
     }
@@ -452,7 +500,7 @@ async function daByYear(corp) {
     const x = xbrlAll[ry]?.[ry - col];
     // 같은 보고서 XBRL: 합계 일치, 또는 무형상각 일치(XBRL 감가 줄이 부분합·없을 때 — 한화에어로스페이스 2024)
     return near(t, xTot(ry, ry - col), u) || (x?.amortisation > 0 && near(docs[ry].amo[col], x.amortisation, u));
-  });
+  }, undefined, (ry, col) => docs[ry]?.parts?.inv?.[col] || null);
   if (process.env.KRDA_DEBUG)
     for (const ry of years)
       console.log(`    [debug] ${ry} 보고서 원문 현금흐름 ${cfTot(ry, 0)}/${cfTot(ry, 1)} 무형 ${docs[ry]?.amo[0]}/${docs[ry]?.amo[1]} · XBRL ${JSON.stringify(xbrlAll[ry] ?? null)} · 확인 ${cfOk.has(ry)}`);
@@ -462,7 +510,12 @@ async function daByYear(corp) {
     for (const [ry, col] of [[y + 1, 1], [y, 0]]) {
       const d = docs[ry];
       if (!cfOk.has(ry) || d?.dep[col] == null) continue;
-      byYear[y] = { depreciation: d.dep[col], amortisation: byYear[y]?.amortisation ?? d.amo[col] ?? null, src: (y in byYear ? "xbrl+doc" : "doc") + (d.sep ? "(별도)" : "") };
+      const drop = cfOk.drop.has(ry) ? d.parts?.inv?.[col] ?? 0 : 0;
+      byYear[y] = {
+        depreciation: d.dep[col] - drop,
+        amortisation: byYear[y]?.amortisation ?? d.amo[col] ?? null,
+        src: (y in byYear ? "xbrl+doc" : "doc") + (d.sep ? "(별도)" : "") + (drop ? "−투자부동산" : ""),
+      };
       srcOf[y] ??= [ry, col];
       break;
     }
@@ -485,7 +538,8 @@ async function daByYear(corp) {
   // 허용치 = 성격별·현금흐름 원문 표시 단위 중 큰 쪽(LS ELECTRIC 현금흐름 원 단위 vs 성격별 백만원 — 반올림 28만 원 차이)
   const natOk = confirm(
     nTot,
-    (ry, col, t, u) => near(t, xTot(ry, ry - col), u) || (cfOk.has(ry) && near(t, cfTot(ry, col), u)),
+    // 손익계산서 본표(성격별 — 항목 합 = 영업비용 확인됨)는 그 자체로 같은 표
+    (ry, col, t, u) => !!docs[ry]?.nature?.isIS || near(t, xTot(ry, ry - col), u) || (cfOk.has(ry) && near(t, cfTot(ry, col), u)),
     (ry) => Math.max(docs[ry]?.nature?.unit ?? 1, docs[ry]?.unit ?? 1),
   );
   // 보조 확인 — 중단영업이 두 해 다 있거나 재작성으로 이어지지 않아 위 대조가 불가능한 보고서(삼성SDI 2024·2025 — 성격별 2,009,936 이
