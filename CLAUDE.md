@@ -1777,8 +1777,8 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   통화(TSM·ASML 인포맥스 USD 컨센서스와 대조로 확정) → **현재 환율**로 환산(`estimatesToUsd`).
   환율 조회 실패 시 원본을 쓰지 않고 빈칸/숨김(원통화 숫자를 USD 로 섞지 않음). 누락 보완
   (`edgar-gapfill.ts`)은 20-F·ifrs-full 도 읽는다(TSM 2025 20-F 가 companyfacts 에 없었음).
-  **미결**: SKHY(SK하이닉스 ADR, 1 ADS = 보통주 1/10주)는 SEC XBRL 이 없어(20-F 미제출) DART
-  데이터 경로가 필요 — 아직 미지원.
+  SKHY(SK하이닉스 ADR, 1 ADS = 보통주 0.1주)는 SEC XBRL 이 없어(20-F 미제출) `us/dart-adr.ts` DART 연결 어댑터로 지원(오너 지시
+  2026-09-24).
 - **사업연도 키 = `fiscalYearOf(결산일)`**(`us/edgar-series.ts`): 결산일이 1월 1~7일이면 전년도
   (52/53주 결산 — WEN "fiscal 2022" = 2023-01-01 결산). 미국 모듈의 연도 키는 전부 이 함수.
 - **분할 계수**(`splitFactorsByYear`) 후보에 25·30·40·50·100 추가(CMG 50:1). 3:2 는 증자와 구분이
