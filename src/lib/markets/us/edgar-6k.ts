@@ -242,7 +242,12 @@ export function sixKHasRow(st: SixKStatements, concept: string, sec: "bs" | "cf"
   const ls = st.labels.get(concept);
   if (!ls) return null;
   const all = [...ls.pos, ...ls.neg];
-  return st[sec].some((r) => all.includes(r.label) || (!!st.loose && all.some((l) => l.length > 3 && r.label.endsWith(` ${l}`))));
+  const rows = st[sec].filter((r) => all.includes(r.label) || (!!st.loose && all.some((l) => l.length > 3 && r.label.endsWith(` ${l}`))));
+  // 머리 줄을 아는 표(형식 1)는 개념의 표시 구조 부모 구역에 있는 줄만 — SPOT 비유동 "Exchangeable notes"(연말 0)는 분기 본표에 유동부채 구역에만 있다
+  const pl = new Set<string>();
+  for (const pc of st.parents.get(concept) ?? []) for (const x of [...(st.labels.get(pc)?.pos ?? []), ...(st.labels.get(pc)?.neg ?? [])]) pl.add(x);
+  if (pl.size && rows.length && rows.every((r) => r.parent)) return rows.some((r) => pl.has(r.parent!));
+  return rows.length > 0;
 }
 
 export function sixKValueOf(st: SixKStatements, concept: string, sec: "bs" | "cf", check?: (vals: number[]) => boolean): number[] | null {
