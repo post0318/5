@@ -6180,6 +6180,8 @@ async function verifyUs(sym) {
               if (x.kind === "face") { const sd = sideOf(x.id); if (sd === "nc") nc.push(x); else if (sd == null) return { v: null, why: `본표 차입금 줄 ${shortId(x.id)} 의 유동·비유동 판정 불가` }; continue; }
               if (x.kind === "nonLease" || (x.kind === "finLease" && /Noncurrent/.test(x.id))) { nc.push(x); continue; }
               if (x.kind === "curLease" || (x.kind === "finLease" && /Current$/.test(x.id))) continue;
+              // 주석 금융리스 합계만 있는 경우(ASML) — 비유동 = 합계 − 주석 유동분(없으면 0). 미국 규칙(edgar-bs-structure)과 같은 정의
+              if (x.kind === "finLease" && x.id === "us-gaap_FinanceLeaseLiability") { nc.push({ ...x, v: x.v - (exDebt.v0("us-gaap_FinanceLeaseLiabilityCurrent") ?? 0) }); continue; }
               return { v: null, why: `리스 구성(${x.kind}) 유동·비유동 판정 불가` };
             }
             return { v: nc.reduce((t, x) => t + x.v, 0) * rBs, how: `SEC 20-F 비유동 차입금·리스 줄(${nc.map((x) => `${shortId(x.id)} ${x.v}`).join(" + ") || "없음 — 0"}) × H.10 기말 ${rBs}` };
