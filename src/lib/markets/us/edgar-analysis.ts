@@ -141,7 +141,8 @@ export function buildUsAnalysis(
       for (const i of ins) {
         const w = WHY.get(i)?.[l];
         if (!w) continue;
-        if (i[l] == null ? out[l] == null : true) {
+        // 빈 칸의 사유는 값이 없는 입력의 사유만 — 값이 있는 입력의 기준 주석(「지급 기준」 등)은 빈 칸 사유가 아니다(VRT 2021 주당배당금 증가율, 2026-10-02)
+        if (i[l] == null ? out[l] == null : out[l] != null) {
           note(out, l, w);
           break;
         }
@@ -562,6 +563,14 @@ export function buildUsAnalysis(
   inheritWhy(dps, flow(DPS_C, "USD/shares"));
   for (const l of labels) if (dps[l] == null && hasCommonDivEvidence) note(dps, l, WHY.get(dps)?.[l] ?? "주당배당금 공시 없음");
   const dpsFull = adjMap(fullAnnual(DPS_C, "USD/shares"));
+  // 첫 열 증가율의 전년 값 — 연도 열과 같은 규칙(무배당 0, 공시 없으면 지급 기준)
+  {
+    const y0 = Math.min(...periods.filter((p) => p.label !== LTM).map((p) => p.fiscalYear)) - 1;
+    if (Number.isFinite(y0) && !dpsFull.has(y0)) {
+      const v = dividendFreeYear(facts, y0) ? 0 : hasCommonDivEvidence ? dpsFromPaid(facts, y0) : null;
+      if (v != null) dpsFull.set(y0, v);
+    }
+  }
 
   // 파생
   // 감가상각비 구성요소가 없으면(매핑 누락 — IFRS 20-F 등) EBITDA 도 공란(0 으로

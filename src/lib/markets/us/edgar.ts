@@ -260,7 +260,12 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           // 회사 6-K 분기 재무제표(연결재무보고서 HTML) — 야후 정의가 SEC 와 다른 항목을 회사 줄로(edgar-6k.ts). 없거나 못 읽으면 null(야후 경로 그대로)
           const per = yahooLtmPeriods(withShares, yq);
           const sixK = per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(() => null) : null;
-          const r = withYahooLtm(withShares, yq, fx, cur, sixK);
+          // 이번 보고서에 1년 전 분기말 열이 없으면(SPOT) 1년 전 같은 분기 6-K — 평균 잔액(ROIC 등)의 기초 값
+          const shift12 = (d: string) => { const x = new Date(`${d}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); };
+          const sixKPrev = per && sixK && !sixK.bsDates.includes(per.yearAgo)
+            ? await sixKStatements(cik, recent, per.yearAgo, shift12(per.E), shift12(per.yearAgo)).catch(() => null)
+            : null;
+          const r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev);
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else if (!fx) {
           // H.10 조회 실패 — 사업연도 값을 LTM 으로 대체하지 않고 LTM 열 공란(미고시와 같은 처리)
