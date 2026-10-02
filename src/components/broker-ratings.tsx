@@ -399,7 +399,8 @@ export function BrokerRatings({
                 </tbody>
               </table>
             </div>
-            <p className="text-muted-foreground/70 mt-1.5 text-[11px]">
+            {/* 설명 대상 열(적중률·순위·현종목)이 모바일에선 숨겨져 있어 설명도 sm 이상에서만(오너 지시 2026-10-02) */}
+            <p className="text-muted-foreground/70 mt-1.5 hidden text-[11px] sm:block">
               적중률·순위는 애널리스트의 모든 종목 예측 기준 · 현종목 = 이 종목에 한정한 실적 ·
               순위는 전체 애널리스트{" "}
               {rankedExperts != null && `${formatNumber(rankedExperts, 0)}명 `}중 등수
