@@ -91,7 +91,7 @@ async function filingLabels(cik: number, recent: RecentFilings): Promise<{ label
 }
 
 /** 보고서 HTML 안의 한 재무제표 구간(제목 ~ 다음 제목)에서 표의 줄 */
-function sectionRows(html: string, head: RegExp, mustHave: RegExp, end: RegExp): { rows: SixKRow[]; text: string } | null {
+function sectionRows(html: string, head: RegExp, mustHave: RegExp, end: RegExp): { rows: SixKRow[]; text: string; noteCol: boolean } | null {
   for (let m: RegExpExecArray | null, re = new RegExp(head.source, "gi"); (m = re.exec(html)); ) {
     const rest = html.slice(m.index);
     const e = rest.slice(200).search(end);
@@ -108,7 +108,8 @@ function sectionRows(html: string, head: RegExp, mustHave: RegExp, end: RegExp):
       if (vals.length) rows.push({ label: normLabel(label), vals, parent });
       else parent = normLabel(label);
     }
-    return { rows, text: plain.slice(0, 3_000).toLowerCase() };
+    // 금액 앞 주석 번호 열(SPOT "Note" — 줄마다 "11" 같은 번호, 여러 개면 "7, 8" 이라 숫자로 안 읽힘): 머리에 note 칸이 있으면 표시해 둔다
+    return { rows, text: plain.slice(0, 3_000).toLowerCase(), noteCol: rows.some((r) => r.label === "note") || /\bnote\b/i.test(plain.slice(0, 1_500)) };
   }
   return null;
 }
@@ -206,7 +207,7 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       const bs = sectionRows(html, /CONSOLIDATED (?:BALANCE SHEETS?|STATEMENTS? OF FINANCIAL POSITION)/, /total (?:current )?assets/i, /CONSOLIDATED STATEMENTS? OF (?:COMPREHENSIVE|PROFIT|INCOME|OPERATIONS|CHANGES IN|CASH FLOWS?)/i); // 다음 재무제표 제목까지(SPOT 은 재무상태표 다음이 자본변동표)
       const cf = sectionRows(html, /CONSOLIDATED STATEMENTS? OF CASH FLOWS?/, /operating activities/i, /NOTES TO (?:THE )?(?:INTERIM )?(?:CONDENSED )?CONSOLIDATED/i); // SPOT "Notes to the interim condensed consolidated …"
       if (!bs || !cf) continue;
-      const unit = /in thousands/.test(bs.text) ? 1e3 : /in millions/.test(bs.text) ? 1e6 : 1;
+      const unit = /in (?:\S+ )?thousands/.test(bs.text) ? 1e3 : /in (?:\S+ )?millions/.test(bs.text) ? 1e6 : 1; // "in € millions"(SPOT)
       const bsDates = headerDates(bs.text, [periodEnd, fyEnd, priorEnd]);
       // 현금흐름 열 = 당기·전기 누적(종료일 표기는 "june 30" + 연도 열 머리) — 당기 → 전기 순서가 관행. 머리말에 두 연도가 그 순서로 나올 때만
       const yC = periodEnd.slice(0, 4), yP = priorEnd.slice(0, 4);
@@ -214,10 +215,12 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       const cfDates = iC >= 0 && iP >= 0 ? (iC < iP ? [periodEnd, priorEnd] : [priorEnd, periodEnd]) : [];
       if (bsDates.length < 2 || cfDates.length !== 2) continue;
       // 재무상태표 줄 값: 열마다 [금액, 비율%] 쌍인 보고서(TSM) — 값 개수가 열 수의 2배면 짝수 자리만
-      const fix = (rows: SixKRow[], n: number) => rows.map((r) => ({ ...r, vals: r.vals.length === 2 * n ? r.vals.filter((_, k) => k % 2 === 0) : r.vals })).filter((r) => r.vals.length === n);
+      // 주석 번호 열이 있는 표는 값이 하나 많은 줄의 첫 값(번호)을 뺀다
+      const fix = (rows: SixKRow[], n: number, noteCol: boolean) =>
+        rows.map((r) => ({ ...r, vals: r.vals.length === 2 * n ? r.vals.filter((_, k) => k % 2 === 0) : noteCol && r.vals.length === n + 1 ? r.vals.slice(1) : r.vals })).filter((r) => r.vals.length === n);
       const { labels, parents } = await filingLabels(cikN, recent).catch(() => ({ labels: new Map(), parents: new Map() }));
       if (!labels.size) return null;
-      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length), cf: fix(cf.rows, 2), labels, parents, loose: false };
+      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, 2, cf.noteCol), labels, parents, loose: false };
     }
   }
   return null;
