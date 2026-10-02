@@ -186,7 +186,7 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     { accountName: "", accountId: "is:sp", depth: 0, isSubtotal: false, isHighlight: false, values: blank() },
     row("[ 주석 항목 ]", blank(), { depth: 0, isSubtotal: true }),
     row("EBITDA", ebitda),
-    row("감가상각비·무형자산상각비", da),
+    row("감가·무형상각비", da),
   ];
 
   return {

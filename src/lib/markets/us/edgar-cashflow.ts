@@ -100,7 +100,7 @@ function getBlocks(isFin: boolean): Block[] {
     lines: [
       { label: "당기순이익", concepts: ["NetIncomeLoss", "ProfitLoss"], depth: 1 },
       {
-        label: "감가상각비·무형자산상각비",
+        label: "감가·무형상각비", // 모바일 한 줄 표시(오너 지시 2026-10-02)
         // 여러 합계 태그를 동시에 다는 회사(MCD: 일부 항목 4.6억 / 전체 22억)가 있어
         // "앞 태그 우선"이 아니라 하이라이트·분석 지표와 같은 pickDa 규칙을 쓴다.
         pickDa: true,

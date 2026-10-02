@@ -8680,8 +8680,9 @@ async function verifyKr(sym) {
   const cMin = cActual.length ? Math.min(...cActual.map((r) => r.fy)) : Infinity;
   // 손익계산서(연간 라벨 "FY2025" → "2025Y") — 순이익·EPS 화면 간 대조(재감사: 한국은 순이익·EPS 검사가 없었음)
   const IS = {};
-  for (const [name, key] of [["당기순이익", "ni"], ["희석 EPS", "eps"], ["매출액", "rev"], ["영업이익", "op"], ["EBITDA", "ebitda"], ["감가상각비·무형자산상각비", "da"]])
-    for (const [k, v] of Object.entries(rowOf(is, name))) (IS[k.replace(/^FY(\d{4})$/, "$1Y")] ??= {})[key] = v;
+  for (const [name, key] of [["당기순이익", "ni"], ["희석 EPS", "eps"], ["매출액", "rev"], ["영업이익", "op"], ["EBITDA", "ebitda"], ["감가상각비·무형자산상각비", "da"], ["감가·무형상각비", "da"]])
+    // 감가상각 행 이름은 모바일 한 줄 표시로 "감가·무형상각비"로 줄였다(2026-10-02) — 옛 이름도 인식(배포 시점 차이)
+    for (const [k, v] of Object.entries(rowOf(is, name))) (IS[k.replace(/^FY(\d{4})$/, "$1Y")] ??= {})[key] ??= v;
   // 지배주주 귀속 순이익 행 — FnGuide 당기순이익(지배)와 같은 정의(하이라이트 순이익은 연결·비지배 포함)
   // 정확 일치 — 부분일치는 "(비지배주주 귀속)" 에도 걸린다(감사 3차)
   const parentRow = is?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.trim() === "(지배주주 귀속)");
