@@ -200,9 +200,10 @@ export async function refreshUniverseOverview(opts?: {
       computeDoc,
     ),
   ]);
-  const rows = new Array<UniverseOverviewDoc>(items.length);
-  krIdx.forEach((i, j) => (rows[i] = krRows[j]));
-  otherIdx.forEach((i, j) => (rows[i] = otherRows[j]));
+  const fresh = new Array<UniverseOverviewDoc>(items.length);
+  krIdx.forEach((i, j) => (fresh[i] = krRows[j]));
+  otherIdx.forEach((i, j) => (fresh[i] = otherRows[j]));
+  const rows = await keepLastGood(fresh);
   await writeOverview(rows);
   if (!market && !ownerId) {
     // 전 계정·전 시장 배치일 때만 안전하게 정리할 수 있다.
@@ -214,7 +215,34 @@ export async function refreshUniverseOverview(opts?: {
 /** 종목 1개만 재계산 (편집 직후 즉시 반영). */
 export async function refreshOverviewItem(item: UniverseItem): Promise<void> {
   const doc = await computeDoc(item);
-  await writeOverview([doc]);
+  await writeOverview(await keepLastGood([doc]));
+}
+
+/**
+ * 갱신 결과가 시간 초과·조회 실패로 핵심 값(시가총액·매출)이 비었는데 직전 스냅샷엔 값이 있으면 **직전 스냅샷을 통째로 유지**한다
+ * (2026-10-02 — 배포 직후 콜드 상태 갱신이 미국 47종목 전부의 정상 스냅샷을 빈 값으로 덮어썼다). 가격만 새 값으로 바꾸면 시가총액·
+ * 멀티플과 기준 시점이 섞이므로 행 전체를 유지하고, 이름·그룹·태그만 새 값, 경고에 실패 사유와 유지 사실을 남긴다
+ */
+const FAIL_RE = /응답 지연|조회 실패/;
+const isDegraded = (d: UniverseOverviewDoc) =>
+  (d.warnings ?? []).some((w) => FAIL_RE.test(w)) && (d.marketCap == null || d.revenueAnnual == null);
+async function keepLastGood(rows: UniverseOverviewDoc[]): Promise<UniverseOverviewDoc[]> {
+  const bad = rows.filter(isDegraded);
+  if (!bad.length) return rows;
+  const prev = new Map((await readOverviewByIds(bad.map((r) => r._id)).catch(() => [])).map((p) => [p._id, p]));
+  return rows.map((r) => {
+    const p = prev.get(r._id);
+    if (!isDegraded(r) || !p || p.marketCap == null || isDegraded(p)) return r;
+    const fails = (r.warnings ?? []).filter((w) => FAIL_RE.test(w)).slice(0, 2).join(" · ");
+    return {
+      ...p,
+      itemId: r.itemId,
+      name: r.name ?? p.name,
+      groupName: r.groupName,
+      tags: r.tags,
+      warnings: [...(p.warnings ?? []).filter((w) => !w.startsWith("최근 갱신 실패")), `최근 갱신 실패(${fails}) — ${p.updatedAt} 값 유지`],
+    };
+  });
 }
 
 /**

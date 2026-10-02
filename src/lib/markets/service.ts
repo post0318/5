@@ -6,6 +6,7 @@ import { computeTrailingMultiples } from "./multiples";
 import { opUnitsFrom } from "./op-units";
 import { newsDeepLinks } from "./deeplinks";
 import { isHighDividendKr } from "./kr/high-dividend";
+import { isStorableTtm, readTtmSnapAny, writeTtmSnap } from "@/lib/db/ttm-snap";
 import {
   AdapterError,
   type CompanyProfile,
@@ -108,7 +109,17 @@ export async function getStockOverview(
       "포워드 컨센서스",
     ),
     wantAnnual && adapter.getTtm
-      ? safe(withTimeout(adapter.getTtm(symbol), 15_000, "TTM 재무"), warnings, "TTM 재무")
+      ? (async () => {
+          // 미국은 TTM 저장본(ttm_snap — TTM 라우트·ttm-build 가 채움)을 먼저 — 배포 직후 콜드 상태에서 통합 뷰 갱신이 47종목 전부
+          // 15초 제한에 걸려 시가총액·매출이 비었다(2026-10-02). 저장본이 없을 때만 계산하고, 완전한 결과면 저장
+          if (market === "us") {
+            const hit = await readTtmSnapAny(market, symbol).catch(() => null);
+            if (hit) return hit.ttm;
+          }
+          const t = await safe(withTimeout(adapter.getTtm!(symbol), 15_000, "TTM 재무"), warnings, "TTM 재무");
+          if (market === "us" && t && isStorableTtm(t as TtmFlows)) await writeTtmSnap(market, symbol, t as TtmFlows).catch(() => {});
+          return t;
+        })()
       : Promise.resolve(null),
   ]);
 
