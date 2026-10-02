@@ -6219,6 +6219,20 @@ async function verifyUs(sym) {
           orphanN++;
           add("A", `20-F 사업연도 ${kindNm} 원천 없음 ${d} @${row.ltm.E}`, "LTM", { status: FAIL, note: `앱 사업연도 값 ${v} 이 있는데 SEC 20-F 원본(${row.ltm.E})에 이 개념을 만드는 원천 값이 없음(대응표·같은 이름 모두 없음) — 출처 불명 값` });
         }
+        // 합성 개념 완결성(재감사 12차 — 합성 항목을 지우면 검사도 사라졌다): 구성 규칙이 있는 합성 개념은 앱 값 유무와 관계없이 기대값을 계산하고,
+        //   기대값이 0 이 아닌데 앱 사업연도 값이 없으면 실패. 대상 = 본표 차입금 두 개(모든 20-F), 본표 단기투자(us-gaap 공시사 — 앱 본표 판독이
+        //   us-gaap 재무상태표만 읽는다)
+        const usGaapFiler = uniq.some((y) => y.id.startsWith("us-gaap_")) && !uniq.some((y) => y.id.startsWith("ifrs-full_"));
+        for (const d of ["DebtFaceDerived", "DebtFaceNoncurrentDerived", ...(usGaapFiler ? ["ShortTermInvestmentsFaceDerived"] : [])]) {
+          if (fyApp[d] != null) continue;
+          synthN++;
+          const exp = synthExp(d);
+          add("A", `20-F 사업연도 연말 합성 ${d} @${row.ltm.E}`, "LTM", !exp || exp.v == null
+            ? { status: FAIL, note: `앱 합성 값 없음 — SEC 원본으로 기대값도 계산 불가${exp?.why ? `(${exp.why})` : ""}` }
+            : exp.v === 0
+              ? { status: PASS, note: `앱 합성 값 없음 · SEC 원본 기대값 0(${exp.how}) — 없음과 같음` }
+              : { status: FAIL, note: `앱 합성 값 없음인데 ${exp.how} = ${exp.v} — 있어야 할 값이 빠짐`, app: null, src: exp.v });
+        }
         add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: uniq.length ? PASS : FAIL, note: `${uniq.length ? "" : "SEC 20-F 통화 값을 하나도 못 읽음 — 대조 불가 · "}SEC 20-F ${repCur ?? "?"} 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(앱 개념 값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖), 합성 개념 대조 ${synthN}개, 원천 없는 앱 값 ${orphanN}개` });
       }
     }
