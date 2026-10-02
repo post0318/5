@@ -684,10 +684,14 @@ export function buildUsAnalysis(
   inheritWhy(mktcap, shares);
   const curMktcap = mktcap[LTM];
 
+  // 빈 칸 사유 — 입력에 사유가 없을 때 이 단계의 사유(오너 지적 2026-10-02 "SNDK 재무분석에 빈 공간이 너무 많음" — 사유 없는 빈칸)
+  const why0 = (o: Record<string, number | null>, l: string, t: string) => { if (o[l] == null && !WHY.get(o)?.[l]) note(o, l, t); };
   const ratio = (a: Record<string, number | null>, b: Record<string, number | null>, mul = 1) => {
     const o = blank();
     for (const l of labels) if (a[l] != null && b[l]) o[l] = (a[l]! / b[l]!) * mul;
-    return inheritWhy(o, a, b);
+    inheritWhy(o, a, b);
+    for (const l of labels) why0(o, l, b[l] === 0 ? "분모 0" : a[l] == null && b[l] == null ? "구성 값 없음" : a[l] == null ? "분자 값 없음" : "분모 값 없음");
+    return o;
   };
   // 주당 지표 — 분모는 공통 주식수(edgar-shares, 이미 현재 분할 기준)
   const perShare = (a: Record<string, number | null>) => {
@@ -710,6 +714,7 @@ export function buildUsAnalysis(
       const base = full.get(anchorY - n);
       if (cur != null && base != null && base > 0 && cur > 0)
         o[p.label] = (Math.pow(cur / base, 1 / n) - 1) * 100;
+      else why0(o, p.label, cur == null ? "값 없음" : base == null ? `${n}년 전 값 없음` : "음수·0 구간 — CAGR 미산정");
     }
     return o;
   };
@@ -730,7 +735,13 @@ export function buildUsAnalysis(
       }
       if (c != null && p != null && p !== 0) o[labels[i]] = ((c - p) / Math.abs(p)) * 100;
     }
-    return inheritWhy(o, a);
+    inheritWhy(o, a);
+    for (let i = 0; i < labels.length; i++) {
+      const c = a[labels[i]];
+      const p = i >= 1 ? a[labels[i - 1]] : full && labels[i] !== LTM ? (full.get(Number(labels[i].replace("Y", "")) - 1) ?? null) : null;
+      why0(o, labels[i], c == null ? "값 없음" : p == null ? "전년 값 없음" : "전년 0");
+    }
+    return o;
   };
   const combine3 = (
     a: Record<string, number | null>,
