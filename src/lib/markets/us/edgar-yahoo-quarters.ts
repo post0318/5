@@ -137,6 +137,9 @@ const FLOWS: { label: string; y: YKey; concepts: string[]; sign?: 1 | -1; da?: t
   { label: "법인세 납부액", y: "taxesRefundPaid", concepts: ["IncomeTaxesPaidNet", "IncomeTaxesPaid"], sign: -1 },
 ];
 
+/** 현금흐름표 개념 이름(6-K 현금흐름표에서 찾을 대상 — 손익 개념이 현금흐름 조정 줄과 이름이 같아 잘못 붙지 않게) */
+const CF_CONCEPT = /^(PaymentsTo|PaymentsFor|PaymentsOf|Proceeds|Repayments|IncreaseDecrease|NetCash|EffectOfExchangeRate|CashCashEquivalents.*PeriodIncreaseDecrease|InterestPaid|IncomeTaxesPaid|DividendsReceived|InterestReceived|ShareBasedCompensation|OtherNoncashIncomeExpense|PaymentsForProceedsFrom)/;
+
 /** 잔액 항목. ev: EV 구성요소 */
 const STI = ["MarketableSecuritiesCurrent", "ShortTermInvestments", "AvailableForSaleSecuritiesDebtSecuritiesCurrent", "DebtSecuritiesCurrent"];
 const LT_SECURITIES = ["MarketableSecuritiesNoncurrent", "AvailableForSaleSecuritiesDebtSecuritiesNoncurrent", "DebtSecuritiesNoncurrent"];
@@ -381,6 +384,27 @@ export function withYahooLtm(
   }
 
   // 매핑하지 않은(또는 비운) 흐름 개념 — 최근 FY 항목에 ltmNone(LTM 공란)
+  // 그 밖 현금흐름표 줄(FLOWS 에 없는 개념) — 6-K 현금흐름표에 같은 줄이 있으면 SEC 사업연도 + 당기 누적 − 전기 누적
+  if (sixK) {
+    const iC = sixK.cfDates.indexOf(last), iP = sixK.cfDates.indexOf(priorEnd);
+    const curRate = fx.avg(addDay(E, 1), last);
+    const handled = new Set([...FLOWS.flatMap((f) => f.concepts), ...DA_TOTAL, SYN_DA_CF]);
+    const extra: string[] = [];
+    for (const c of Object.keys(out)) {
+      if (handled.has(c) || filledConcepts.has(c) || !CF_CONCEPT.test(c) || iC < 0 || iP < 0 || curRate == null) continue;
+      const fy = latestFy(c);
+      if (fy?.end !== E) continue;
+      const r = sixKOf(c, "cf");
+      if (!r) continue;
+      const cur = r.vals[iC] * curRate, prior = r.vals[iP] * priorRate;
+      const arr = usd(c).map((e) => (isAnnualE(e) && e.end === E && e.start === fy.start ? { ...e, ltmQ: fy.val } : e));
+      arr.push({ ...base, start: addDay(E, 1), end: last, val: cur, ltmQ: cur }, { ...base, start: fyStart, end: priorEnd, val: prior, ltmQ: prior });
+      out[c] = { ...out[c], units: { ...out[c].units, USD: arr } };
+      filledConcepts.add(c);
+      extra.push(c);
+    }
+    if (extra.length) sixKFilled.push({ label: `현금흐름표 그 밖 ${extra.length}개 줄`, reason: `${sixK.source} · ${extra.join(", ")}` });
+  }
   markLtmNone(out, filledConcepts);
 
   // ── 잔액(최신 분기말) ──
@@ -439,6 +463,22 @@ export function withYahooLtm(
     }
     instOk.set(it.label, true);
     filled.push(it.label);
+  }
+
+  // 그 밖 재무상태표 줄(INSTANTS 에 없는 개념, 또는 위에서 못 채운 것) — 6-K 재무상태표 같은 줄, 원 개념별 전년 연말 열 = SEC 연말 값 확인
+  if (sixK && sixK.bsDates.includes(last)) {
+    const iL = sixK.bsDates.indexOf(last), iP = sixK.bsDates.indexOf(yearAgo);
+    const extra: string[] = [];
+    for (const c of Object.keys(out)) {
+      const vE = on(c, E);
+      if (vE == null || on(c, last) != null || !(out[c]?.units?.USD ?? []).some((e) => !e.start && e.end === E)) continue;
+      const r = sixKOf(c, "bs");
+      if (!r || !sameInUnit(vE / eRate, r.vals[sixK.bsDates.indexOf(E)])) continue;
+      put(c, last, r.vals[iL] * lastRate);
+      if (iP >= 0 && yearAgoRate != null) put(c, yearAgo, r.vals[iP] * yearAgoRate);
+      extra.push(c);
+    }
+    if (extra.length) sixKFilled.push({ label: `재무상태표 그 밖 ${extra.length}개 줄`, reason: `${sixK.source} · ${extra.join(", ")}` });
   }
 
   // 총차입금(본표 차입금 줄 합 — edgar-ev resolveDebt 와 같은 값)·비유동 차입금
