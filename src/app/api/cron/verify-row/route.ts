@@ -26,7 +26,8 @@ function ltmItems(facts: CompanyFacts) {
       if (e.end !== through) continue;
       // 흐름 — 당기 항목(끝 = 기준일). 사업연도 항목(ltmQ)·전기 항목(같은 시작·끝 < 당기)으로 LTM. 조합 항목이 없어도 내보낸다(재감사 G4 — usd null → 검증기 실패)
       const fy = arr.find((x) => x.start && x.form !== YAHOO_Q_FORM && x.ltmQ != null && x.end < e.end && Date.parse(x.end) >= Date.parse(e.start!) - 864e5 * 2);
-      const prior = arr.find((x) => x !== e && x.start === fy?.start && x.end < e.end && x.end > (fy?.start ?? ""));
+      // 전기 항목 = 사업연도와 시작이 같고 사업연도말보다 앞에 끝나는 항목(사업연도 항목 자체는 아님)
+      const prior = fy ? arr.find((x) => x !== e && x !== fy && x.start === fy.start && x.end < fy.end) : undefined;
       out.push({ concept: c, at: e.end, usd: fy && prior ? fy.ltmQ! + (e.ltmQ ?? e.val) - (prior.ltmQ ?? prior.val) : null, flow: true, src: e.ltmSrc ?? null, form: e.form });
     }
   }
