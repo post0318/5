@@ -7,6 +7,7 @@
  * - 추정(수익·EPS): yahoo-finance2 earningsTrend
  */
 
+import { dividendFreeSince, dividendFreeYear } from "./blank-reason";
 import { unavailableNote } from "./sec-unavailable";
 import { buildUsCashFlow } from "./edgar-cashflow";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
