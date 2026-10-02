@@ -825,7 +825,7 @@ async function sixKDocText(cik, report) {
   if (!sixKDocCache.has(url)) {
     const html = await secText(url).catch(() => "");
     sixKDocCache.set(url, html.replace(/<\/t[dh]>/gi, " ‖ ").replace(/<\/tr>/gi, "\n").replace(/<[^>]+>/g, " ")
-      .replace(/&#8212;|&mdash;/g, "—").replace(/&#160;|&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;/g, "'").replace(/&#?[a-z0-9]+;/gi, " ").toLowerCase());
+      .replace(/&#8212;|&mdash;/g, "—").replace(/&#160;|&nbsp;|\u00a0/g, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;/g, "'").replace(/&#?[a-z0-9]+;/gi, " ").toLowerCase());
   }
   return sixKDocCache.get(url) || null;
 }

@@ -365,8 +365,9 @@ export function withYahooLtm(
       for (const c of els) {
         const fyV = ifrsAtE(c, kind, at)!;
         // 본표에서 못 찾으면 본표 밖 표(주석) — 연말 열 = SEC 확인(SPOT 리스부채 유동분)
-        const v = sixKValueOf(st, c, kind, kind === "bs" && iE >= 0 ? (vals) => sameInUnit(fyV, vals[iE]) : undefined)
-          ?? (kind === "bs" && iE >= 0 ? sixKNoteValueOf(st, c, at, (x) => sameInUnit(fyV, x)) : null);
+        const v0 = sixKValueOf(st, c, kind, kind === "bs" && iE >= 0 ? (vals) => sameInUnit(fyV, vals[iE]) : undefined);
+        // 본표 줄이 없거나 연말 확인에서 떨어지면(같은 이름의 다른 줄 — SPOT 비유동 리스부채) 본표 밖 표(주석)
+        const v = kind === "bs" && iE >= 0 && (!v0 || !sameInUnit(fyV, v0[iE])) ? sixKNoteValueOf(st, c, at, (x) => sameInUnit(fyV, x)) : v0;
         if (!v || (kind === "bs" && (iE < 0 || !sameInUnit(fyV, v[iE])))) return null;
         tot = tot ? tot.map((t, i) => t + v[i]) : v.slice();
       }
@@ -377,8 +378,8 @@ export function withYahooLtm(
       const fyB = kind === "bs" ? instantOn(usd(dst), at) : null;
       if (kind === "bs" && (fyB == null || iE < 0 || atRate == null)) return null;
       const ok = (vals: number[]) => sameInUnit(fyB! / atRate!, vals[iE]);
-      const v = sixKValueOf(st, dst, kind, kind === "bs" ? ok : undefined)
-        ?? (kind === "bs" ? sixKNoteValueOf(st, dst, at, (x) => sameInUnit(fyB! / atRate!, x)) : null);
+      const v0 = sixKValueOf(st, dst, kind, kind === "bs" ? ok : undefined);
+      const v = kind === "bs" && (!v0 || !ok(v0)) ? sixKNoteValueOf(st, dst, at, (x) => sameInUnit(fyB! / atRate!, x)) : v0;
       if (!v || (kind === "bs" && !ok(v))) return null;
       return { vals: v, src: dst, ids: [{ id: `us-gaap_${dst}`, sign: 1 }] };
     }
