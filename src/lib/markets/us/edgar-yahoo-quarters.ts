@@ -104,7 +104,7 @@ const FLOWS: { label: string; y: string; concepts: string[]; sign?: 1 | -1; da?:
   { label: "재무활동현금흐름", y: "financingCashFlow", concepts: ["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"] },
   // 야후 capitalExpenditure = 유형 + 무형 취득(TSM 2025: 1,272,450.3 + 10,146.9 = 1,282,597.2 백만 TWD) — SEC 개념(유형자산 취득)과 같은 정의인 purchaseOfPPE
   { label: "CapEx", y: "purchaseOfPPE", concepts: ["PaymentsToAcquirePropertyPlantAndEquipment"], sign: -1 },
-  { label: "배당금 지급", y: "cashDividendsPaid", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], sign: -1 },
+  { label: "배당금 지급", y: "cashDividendsPaid", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], sign: -1 },
   { label: "자사주 매입", y: "repurchaseOfCapitalStock", concepts: ["PaymentsForRepurchaseOfCommonStock"], sign: -1 },
 ];
 

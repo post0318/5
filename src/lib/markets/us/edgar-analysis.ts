@@ -366,7 +366,8 @@ export function buildUsAnalysis(
     const cx = capexFull.get(y);
     if (cx != null) fcfFull.set(y, v - Math.abs(cx));
   }
-  const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]);
+  // 현금흐름표 "배당금 지급" 줄과 같은 태그 목록(ASML 2020~ PaymentsOfOrdinaryDividends — 없으면 배당성향이 "공시 중단"으로 비었다, 2026-10-02)
+  const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"]);
   // "PaymentsOfDividends"(포괄) 는 보통주 배당뿐 아니라 비지배지분(NCI)·종속회사
   // 우선주 분배까지 섞여 들어올 수 있다(실측, 2026-09-23 — Bloom Energy: 재무
   // 제표엔 보통주 배당이 전혀 없는데 "주당배당금 성장률"이 -47%로 나옴. 원인:
