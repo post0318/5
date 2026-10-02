@@ -835,12 +835,13 @@ const sixKSnap = (y, mo, d) => (d >= 24 ? new Date(Date.UTC(y, mo + 1, 0)) : d <
 /** 재무상태표 열 머리(날짜 여럿) 위치·날짜 — "june 30, 2026 ‖ december 31, 2025" 형 / "jun 29, dec 31, (…) 2025 2025" 형(슬라이드) */
 function sixKBsHeaders(text) {
   const out = [];
-  for (const m of text.matchAll(/((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2},? \d{4}[\s‖]*){2,})/g)) {
-    const ds = [...m[1].matchAll(/([a-z]{3})[a-z]*\.? (\d{1,2}),? (\d{4})/g)].map((x) => sixKSnap(Number(x[3]), SIXK_MON.indexOf(x[1]), Number(x[2])));
+  // 날짜 사이 공백이 여러 칸일 수 있다("june 30,    2026" — TSM 주석 표)
+  for (const m of text.matchAll(/((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}[\s‖]*){2,})/g)) {
+    const ds = [...m[1].matchAll(/([a-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/g)].map((x) => sixKSnap(Number(x[3]), SIXK_MON.indexOf(x[1]), Number(x[2])));
     if (ds.length >= 2 && !ds.some((d) => d.includes("NaN"))) out.push({ i: m.index, dates: ds });
   }
-  for (const m of text.matchAll(/((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2},\s*){2,})\s*\([^)]*\)\s*((?:(?:19|20)\d{2}\s+){2,})/g)) {
-    const md = [...m[1].matchAll(/([a-z]{3})[a-z]*\.? (\d{1,2}),/g)], ys = m[2].trim().split(/\s+/).map(Number);
+  for (const m of text.matchAll(/((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},\s*){2,})\s*\([^)]*\)\s*((?:(?:19|20)\d{2}\s+){2,})/g)) {
+    const md = [...m[1].matchAll(/([a-z]{3})[a-z]*\.?\s+(\d{1,2}),/g)], ys = m[2].trim().split(/\s+/).map(Number);
     if (md.length === ys.length) out.push({ i: m.index, dates: md.map((x, k) => sixKSnap(ys[k], SIXK_MON.indexOf(x[1]), Number(x[2]))) });
   }
   return out.sort((a, b) => a.i - b.i);
