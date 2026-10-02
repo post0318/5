@@ -51,6 +51,7 @@ export function fillBlankReasons(items: FinancialLineItem[], presentCols: string
 /** 주당배당금 공시가 없는 사업연도 — 배당금 지급액 ÷ 가중평균 주식수(지급 기준). 결의 기준 주당배당 공시가 다음 해 20-F 에 실리는 회사(ASML —
  * 2025 년분은 아직 미공시)라도 현금흐름표 배당 지급이 확정돼 있으면 비워 두지 않는다(오너 지시 2026-10-02 "cf 는 배당금 지급 확정지었는데") */
 export const DPS_FROM_PAID_NOTE = "주당배당금 공시 없음 — 배당금 지급액 ÷ 가중평균 주식수(지급 기준)";
+export const DPS_FROM_PAID_LTM_NOTE = "LTM 주당배당금 공시 없음 — LTM 배당금 지급액 ÷ 현재 주식수(LTM EPS 와 같은 주식수, 지급 기준)";
 export function dpsFromPaid(facts: CompanyFacts, fy: number): number | null {
   const g = (facts.facts as Record<string, Record<string, { units: Record<string, FactUnitEntry[]> }> | undefined>)["us-gaap"] ?? {};
   const annual = (c: string, u: string) =>

@@ -1,5 +1,5 @@
 import "server-only";
-import { DPS_FROM_PAID_NOTE, dividendFreeSince, dividendFreeYear, dpsFromPaid } from "./blank-reason";
+import { DPS_FROM_PAID_LTM_NOTE, DPS_FROM_PAID_NOTE, dividendFreeSince, dividendFreeYear, dpsFromPaid } from "./blank-reason";
 import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
 import { equityRestatement } from "./edgar-balance";
 import { buildUsCashFlow, hasCommonDividendEvidence } from "./edgar-cashflow";
@@ -554,6 +554,11 @@ export function buildUsAnalysis(
       const v = dpsFromPaid(facts, p.fiscalYear);
       if (v != null) { dps[p.label] = v; note(dps, p.label, DPS_FROM_PAID_NOTE); }
     }
+  // LTM 주당배당 공시가 없으면(20-F) LTM 배당금 지급액 ÷ 현재 주식수 — 하이라이트와 같은 규칙(DPS_FROM_PAID_LTM_NOTE)
+  if (labels.includes(LTM) && dps[LTM] == null && hasCommonDivEvidence && dividends[LTM] && shares[LTM]) {
+    dps[LTM] = Math.abs(dividends[LTM]!) / shares[LTM]!;
+    note(dps, LTM, DPS_FROM_PAID_LTM_NOTE);
+  }
   inheritWhy(dps, flow(DPS_C, "USD/shares"));
   for (const l of labels) if (dps[l] == null && hasCommonDivEvidence) note(dps, l, WHY.get(dps)?.[l] ?? "주당배당금 공시 없음");
   const dpsFull = adjMap(fullAnnual(DPS_C, "USD/shares"));
