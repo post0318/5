@@ -624,7 +624,7 @@ export function buildUsIncome(
       .filter(([t]) => !t.startsWith(SGA_NOTE.noLine))
       .map(([t, ls]) => row(`※ ${what}: ${t}${ls.length === labels.length ? "" : ` (${ls.join(", ")})`}`, blank(), { depth: 1, italic: true })));
   const cogsNotes = noteGroups((c) => c.cogsNote);
-  const synthNote = gpNotes.find(([t]) => t.startsWith(COGS_NOTE.synth))?.[0] ?? null;
+  // 매출총이익 합성(본표 소계 없음 · 매출 − 매출원가)은 줄 이름에 붙이지 않는다 — 불필요한 문구(오너 지시 2026-10-02, WMT)
   const sameCols = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
   const cogsFootnotes: FinancialLineItem[] = isFin && !cogsNotes.length ? [] : [
     ...cogsNotes.map(([t, ls]) => ({ what: gpNotes.some(([g, gl]) => g === t && sameCols(gl, ls)) ? "매출원가·매출총이익" : "매출원가", t, ls })),
@@ -658,7 +658,7 @@ export function buildUsIncome(
       : hasGross
         ? [
             row("(−) 매출원가", cogs),
-            row(synthNote ? `매출총이익 (${synthNote})` : "매출총이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
+            row("매출총이익", grossProfit, { depth: 0, isSubtotal: true, isHighlight: true }),
             ...opexRow("(−) 판매관리비", sga, rev?.sgaParts ?? [], "sga"),
             ...opexRow("(−) 연구개발비", rnd, rev?.rndParts ?? [], "rnd"),
             row("(−) 기타 영업비용", otherOpex),
