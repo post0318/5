@@ -10,17 +10,24 @@ import type { CompanyFacts } from "@/lib/markets/us/edgar";
  * 출처 없는 항목도 그대로 내보낸다(검증기가 실패 처리 — 값만 넣고 출처를 빠뜨린 경우)
  */
 function ltmItems(facts: CompanyFacts) {
-  const out: { concept: string; at: string; usd: number | null; flow: boolean; src: unknown }[] = [];
+  const out: { concept: string; at: string; usd: number | null; flow: boolean; src: unknown; form: string }[] = [];
+  const through = yahooLtm(facts)?.through;
+  if (!through) return out;
+  const yearAgo = (() => { const x = new Date(`${through}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); })();
+  // 형식 표지와 관계없이 LTM 날짜(기준일·1년 전 분기말)의 항목 전부(재감사 R2b — YAHOO-Q 가 아닌 표지로 넣은 값이 목록에서 빠졌다).
+  // 20-F 회사는 SEC 분기 원본이 없어 이 날짜 항목은 전부 LTM 보강분이다 — 출처 없는 항목도 그대로 내보낸다(검증기 실패)
   for (const [c, node] of Object.entries(facts.facts["us-gaap"] ?? {})) {
     const arr = (node as { units?: Record<string, import("@/lib/markets/us/edgar").FactUnitEntry[]> }).units?.USD ?? [];
     for (const e of arr) {
-      if (e.form !== YAHOO_Q_FORM) continue;
-      if (!e.start) { out.push({ concept: c, at: e.end, usd: e.val, flow: false, src: e.ltmSrc ?? null }); continue; }
-      // 흐름 — 당기 항목(끝 = 기준일)만. 사업연도 항목(같은 시작·1년)·전기 항목(같은 시작·끝 < 당기)으로 LTM
+      if (!e.start) {
+        if (e.end === through || e.end === yearAgo) out.push({ concept: c, at: e.end, usd: e.val, flow: false, src: e.ltmSrc ?? null, form: e.form });
+        continue;
+      }
+      if (e.end !== through) continue;
+      // 흐름 — 당기 항목(끝 = 기준일). 사업연도 항목(ltmQ)·전기 항목(같은 시작·끝 < 당기)으로 LTM. 조합 항목이 없어도 내보낸다(재감사 G4 — usd null → 검증기 실패)
       const fy = arr.find((x) => x.start && x.form !== YAHOO_Q_FORM && x.ltmQ != null && x.end < e.end && Date.parse(x.end) >= Date.parse(e.start!) - 864e5 * 2);
-      const prior = arr.find((x) => x.form === YAHOO_Q_FORM && x !== e && x.start === fy?.start && x.end < e.end);
-      if (!fy || !prior) { if (e.ltmSrc) out.push({ concept: c, at: e.end, usd: null, flow: true, src: e.ltmSrc }); continue; }
-      out.push({ concept: c, at: e.end, usd: fy.ltmQ! + (e.ltmQ ?? e.val) - (prior.ltmQ ?? prior.val), flow: true, src: e.ltmSrc ?? null });
+      const prior = arr.find((x) => x !== e && x.start === fy?.start && x.end < e.end && x.end > (fy?.start ?? ""));
+      out.push({ concept: c, at: e.end, usd: fy && prior ? fy.ltmQ! + (e.ltmQ ?? e.val) - (prior.ltmQ ?? prior.val) : null, flow: true, src: e.ltmSrc ?? null, form: e.form });
     }
   }
   return out;
