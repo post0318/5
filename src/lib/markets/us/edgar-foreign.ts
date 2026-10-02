@@ -115,7 +115,9 @@ const IFRS_NEG: [string, string][] = [
 /** 원소가 배열이면 그 안에서 먼저 공시된 개념 하나만(같은 금액을 이름만 달리해 두 번 공시한 회사 — TSM FVOCI·FVTPL) */
 const IFRS_SUM: [(string | string[])[], string][] = [
   [["NoncurrentPortionOfNoncurrentBondsIssued", "LongtermBorrowings"], "LongTermDebtNoncurrent"],
-  [["CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued", "CurrentPortionOfLongtermBorrowings", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"], "LongTermDebtCurrent"],
+  // 유동성 장기부채 — 셋 중 먼저 공시된 하나만(합하지 않음). TSM 본표 "Long-term liabilities - current portion"(CurrentPortionOfLongtermBorrowings)은
+  // 사채 유동분(CurrentBondsIssued…)을 이미 포함한다 — 합하면 사채가 두 번(2024: 57,148 + 59,857.9 백만 TWD, 6-K 본표로 확인 2026-10-02)
+  [[["CurrentPortionOfLongtermBorrowings", "CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"]], "LongTermDebtCurrent"],
   [["DepreciationExpense", "AmortisationExpense"], "DepreciationDepletionAndAmortization"],
   [["AdjustmentsForDepreciationExpense", "AdjustmentsForAmortisationExpense"], "DepreciationDepletionAndAmortization"],
   // 한국 IFRS 현금성자산과 같은 범위 — 현금 외 유동 상각후원가·당기손익 금융자산

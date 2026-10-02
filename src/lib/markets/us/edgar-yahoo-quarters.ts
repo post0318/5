@@ -488,12 +488,28 @@ export function withYahooLtm(
     const extra: string[] = [];
     for (const c of Object.keys(out)) {
       const vE = on(c, E);
-      if (vE == null || on(c, last) != null || !(out[c]?.units?.USD ?? []).some((e) => !e.start && e.end === E)) continue;
+      // 이미 채운 줄(야후·위 항목별 6-K)은 건너뜀 — 원본(gaap)이 아니라 채운 결과(out)에서 본다
+      const outArr = out[c]?.units?.USD ?? [];
+      if (vE == null || outArr.some((e) => !e.start && e.end === last) || !outArr.some((e) => !e.start && e.end === E)) continue;
       const r = sixKOf(c, "bs");
       if (!r || !sameInUnit(vE / eRate, r.vals[sixK.bsDates.indexOf(E)])) continue;
       put(c, last, r.vals[iL] * lastRate);
       if (iP >= 0 && yearAgoRate != null) put(c, yearAgo, r.vals[iP] * yearAgoRate);
       extra.push(c);
+    }
+    // 본표 판독 합성 개념(…FaceDerived — edgar-bs-structure)은 라벨이 없다. 연말 값이 6-K 로 채운 개념 하나와 정확히 같으면(0 제외) 같은 본표 줄로 보고
+    // 그 개념의 분기말 값을 쓴다(ASML 단기투자 405.9 = AvailableForSaleSecuritiesDebtSecuritiesCurrent)
+    for (const c of Object.keys(out)) {
+      if (!/Derived$/.test(c)) continue;
+      const vE = instantOn(out[c]?.units?.USD ?? [], E);
+      if (!vE || (out[c]?.units?.USD ?? []).some((e) => !e.start && e.end === last)) continue;
+      const same = extra.filter((d) => on(d, E) === vE);
+      if (same.length !== 1) continue;
+      const vL = instantOn(out[same[0]].units.USD, last), vP = instantOn(out[same[0]].units.USD, yearAgo);
+      if (vL == null) continue;
+      put(c, last, vL);
+      if (vP != null) put(c, yearAgo, vP);
+      extra.push(`${c}(= ${same[0]})`);
     }
     if (extra.length) sixKFilled.push({ label: `재무상태표 그 밖 ${extra.length}개 줄`, reason: `${sixK.source} · ${extra.join(", ")}` });
   }
