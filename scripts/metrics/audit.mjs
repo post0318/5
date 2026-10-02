@@ -65,6 +65,8 @@ export function commonModeOf(c) {
   if (/^20-F LTM 6-K (bs|bsZero) /.test(n)) return null;
   // 0 규칙(EV 구성요소) — SEC 연말 값만으로 확인(독립)
   if (/^20-F LTM zero /.test(n)) return null;
+  // 공란 완결성(앱이 비운 LTM 을 6-K 에서 찾는 검사) — 6-K 글자 판독 + SEC 연말 확인(독립)
+  if (/^20-F LTM 공란 /.test(n)) return null;
   if (/^20-F LTM 6-K (cf|cfZero) /.test(n)) return "LTM 식(사업연도 + 당기 누적 − 전년 동기) = 앱과 같은 식 · 6-K 값은 검증기 독립 판독";
   if (/^20-F LTM 6-K bsDelta /.test(n)) return "SEC 연말 + 6-K 변동분 = 앱과 같은 식(결정 (가)) · 6-K 값은 검증기 독립 판독";
   if (/^20-F LTM /.test(n)) return "20-F LTM 앱 규칙 재구현(Yahoo 분기 원천 공통)";
