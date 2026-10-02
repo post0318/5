@@ -3626,13 +3626,18 @@ async function verifyUs(sym) {
   const natRev = natCur ? natAnnual([["us-gaap", "Revenues"], ["us-gaap", "RevenueFromContractWithCustomerExcludingAssessedTax"], ["ifrs-full", "Revenue"], ["ifrs-full", "RevenueFromContractsWithCustomers"]], natCur) : new Map();
   const natNi = natCur ? natAnnual([["us-gaap", "NetIncomeLoss"], ["ifrs-full", "ProfitLossAttributableToOwnersOfParent"]], natCur) : new Map();
   const natEps = natCur ? natAnnual([["us-gaap", "EarningsPerShareDiluted"], ["ifrs-full", "DilutedEarningsLossPerShare"]], natCur + "/shares") : new Map();
+  // 손익 줄 연도 열 대조(재감사 N1, 2026-10-02 — 앱 데이터에서 사업연도 항목이 빠져도 화면 연도·LTM 이 빈칸이 되는 것을 잡는다)
+  const PT_TAGS = [["us-gaap", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"], ["us-gaap", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"], ["ifrs-full", "ProfitLossBeforeTax"]];
+  const natPt = natCur ? natAnnual(PT_TAGS, natCur) : new Map();
+  const natTax = natCur ? natAnnual([["us-gaap", "IncomeTaxExpenseBenefit"], ["ifrs-full", "IncomeTaxExpenseContinuingOperations"]], natCur) : new Map();
+  const natRd = natCur ? natAnnual([["us-gaap", "ResearchAndDevelopmentExpense"], ["ifrs-full", "ResearchAndDevelopmentExpense"]], natCur) : new Map();
   // companyfacts 가 최신 20-F/10-K 를 빠뜨린 경우(TSM 2025) — 원본 XBRL 인스턴스에서 원통화 값을 직접 읽는다
   if (natCur) {
     const rc2 = sub.filings?.recent ?? {};
     for (let i = 0; i < (rc2.form ?? []).length; i++) {
       if (!/^(10-K|20-F)$/.test(rc2.form[i]) || !rc2.reportDate?.[i]) continue;
       const end = rc2.reportDate[i];
-      if (atEnd(natRev, end) && atEnd(natNi, end) && atEnd(natEps, end)) continue;
+      if (atEnd(natRev, end) && atEnd(natNi, end) && atEnd(natEps, end) && atEnd(natPt, end) && atEnd(natTax, end) && atEnd(natRd, end)) continue;
       try {
         const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rc2.accessionNumber[i].replace(/-/g, "")}`;
         const idx = await secJson(base + "/index.json");
@@ -3659,6 +3664,9 @@ async function verifyUs(sym) {
         put(natRev, read("ifrs-full", "Revenue", cu) ?? read("ifrs-full", "RevenueFromContractsWithCustomers", cu) ?? read("us-gaap", "Revenues", cu));
         put(natNi, read("ifrs-full", "ProfitLossAttributableToOwnersOfParent", cu) ?? read("us-gaap", "NetIncomeLoss", cu));
         put(natEps, read("ifrs-full", "DilutedEarningsLossPerShare", cu) ?? read("us-gaap", "EarningsPerShareDiluted", cu));
+        put(natPt, read("ifrs-full", "ProfitLossBeforeTax", cu) ?? read("us-gaap", PT_TAGS[0][1], cu) ?? read("us-gaap", PT_TAGS[1][1], cu));
+        put(natTax, read("ifrs-full", "IncomeTaxExpenseContinuingOperations", cu) ?? read("us-gaap", "IncomeTaxExpenseBenefit", cu));
+        put(natRd, read("ifrs-full", "ResearchAndDevelopmentExpense", cu) ?? read("us-gaap", "ResearchAndDevelopmentExpense", cu));
       } catch (e) {
         hardErrors.push(`원통화 인스턴스 판독 실패(${end}): ${String(e).slice(0, 50)}`);
       }
@@ -3667,7 +3675,7 @@ async function verifyUs(sym) {
   const nativeAt = (date) => {
     const r = atEnd(natRev, date), n = atEnd(natNi, date), e = atEnd(natEps, date);
     const any = r ?? n ?? e; if (!any) return null;
-    return { start: any.start, end: any.end, rev: r?.val ?? null, ni: n?.val ?? null, eps: e?.val ?? null };
+    return { start: any.start, end: any.end, rev: r?.val ?? null, ni: n?.val ?? null, eps: e?.val ?? null, pt: atEnd(natPt, date)?.val ?? null, tax: atEnd(natTax, date)?.val ?? null, rd: atEnd(natRd, date)?.val ?? null };
   };
   let fxRows = null, fxErr = "", adrK = 1;
   /** 평균(흐름)·기말(잔액) 환율 출처 메모 — 검증기가 FRED 에서 따로 받은 H.10(FX_IND_MARK) 또는 미고시 사유 */
@@ -4506,6 +4514,10 @@ async function verifyUs(sym) {
       rateCheck("매출 환산 환율 = 기간 평균(외화)", x.rev, nat?.rev ?? null);
       rateCheck("순이익 환산 환율 = 기간 평균(외화)", x.ni, nat?.ni ?? null);
       rateCheck("EPS 환산 환율 = 기간 평균(외화·ADR)", x.eps, nat?.eps ?? null, adrK);
+      // 손익 줄(재감사 N1) — 손익계산서 화면 값 = SEC 원통화 × H.10 기간 평균. SEC 에 값이 있는데 화면이 비면 실패
+      rateCheck("세전이익 환산 환율 = 기간 평균(외화)", IS[c]?.pretax ?? null, nat?.pt ?? null);
+      rateCheck("법인세 환산 환율 = 기간 평균(외화)", IS[c]?.tax ?? null, nat?.tax ?? null);
+      rateCheck("연구개발비 환산 환율 = 기간 평균(외화)", IS[c]?.rnd ?? null, nat?.rd ?? null);
       const im = imAnnual?.find((r) => dayDiff(r.end, x.date) <= 7);
       // 인포맥스(FactSet) USD 환산은 자체 환율(미공개)이라 연준 H.10 환산과 값이 다르다. 공시된 원천 환율로 정확 분해가 성립할 때만 ②,
       // 아니면 ③ 미해명(환율 출처 정의 차이 추정) — 숨기지 않는다(오너 결정 2026-09-27). 매출은 외부 대조가 켜져 있으면 F층 분류(put → causeOf)가
@@ -6071,6 +6083,9 @@ async function verifyUs(sym) {
         const items = [
           ["매출", H.LTM.rev, flow("totalRevenue"), "totalRevenue"], ["매출원가", IS.LTM?.cogs ?? null, flow("costOfRevenue"), "costOfRevenue"],
           ["매출총이익", IS.LTM?.gp ?? null, flow("grossProfit"), "grossProfit"], ["영업이익", IS.LTM?.op ?? null, flow("totalOperatingIncomeAsReported"), "totalOperatingIncomeAsReported"],
+          // 재무 5층 손익 줄(재감사 N2 — 판관비·연구개발비는 YAHOO-Q 항목 목록 밖), 세전이익·법인세
+          ["판관비", IS.LTM?.sga ?? null, flow("sellingGeneralAndAdministration"), "sellingGeneralAndAdministration"], ["연구개발비", IS.LTM?.rnd ?? null, flow("researchAndDevelopment"), "researchAndDevelopment"],
+          ["세전이익", IS.LTM?.pretax ?? null, flow("pretaxIncome"), "pretaxIncome"], ["법인세", IS.LTM?.tax ?? null, flow("taxProvision"), "taxProvision"],
           ["순이익", H.LTM.ni, flow("netIncome"), "netIncome"], ["감가상각비", IS.LTM?.da ?? null, flow("reconciledDepreciation|depreciationAndAmortization"), "reconciledDepreciation|depreciationAndAmortization"],
           // CapEx = 유형자산 취득(purchaseOfPPE) — 야후 capitalExpenditure 는 무형자산 취득까지 합(앱 2026-10-02 와 같은 정의)
           ["영업활동 현금흐름", hv("ocf"), flow("operatingCashFlow"), "operatingCashFlow"], ["CapEx", hv("capex"), flow("purchaseOfPPE"), "purchaseOfPPE"],
