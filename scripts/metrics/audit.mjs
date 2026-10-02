@@ -70,6 +70,8 @@ export function commonModeOf(c) {
   if (/^20-F LTM 6-K (cf|cfZero) /.test(n)) return "LTM 식(사업연도 + 당기 누적 − 전년 동기) = 앱과 같은 식 · 6-K 값은 검증기 독립 판독";
   if (/^20-F LTM 6-K bsDelta /.test(n)) return "SEC 연말 + 6-K 변동분 = 앱과 같은 식(결정 (가)) · 6-K 값은 검증기 독립 판독";
   // 사업연도 완결성(재감사 7차) — 기대값 = 검증기가 읽은 SEC 20-F 원본 × 검증기가 받은 H.10(독립). 대응표(IFRS → 앱 개념)만 앱 것을 쓴다
+  // 합성 차입금(본표 차입금 + 리스) 기대값은 검증기가 SEC 원본으로 계산하지만 규칙 자체는 앱 차입금 규칙의 재구현 — 공통모드
+  if (/^20-F 사업연도 연말 합성 Debt/.test(n)) return "본표 차입금 + 리스 규칙 재구현(앱 차입금 규칙 공통)";
   if (/^20-F (사업연도|대응표) /.test(n)) return null;
   if (/^20-F LTM /.test(n)) return "20-F LTM 앱 규칙 재구현(Yahoo 분기 원천 공통)";
   if (/^20-F /.test(n)) return "20-F 앱 규칙 재구현(차입금 규칙 공통)";
