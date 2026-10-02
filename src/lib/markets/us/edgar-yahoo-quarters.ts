@@ -168,6 +168,9 @@ const INSTANTS: { label: string; y: YKey; concepts: string[]; ev?: true }[] = [
   { label: "장기부채", y: "longTermDebt", concepts: ["LongTermDebtNoncurrent"] },
 ];
 
+/** EV 구성요소 개념(1년 전 분기말 근사 허용 대상) */
+const EV_INSTANT = new Set(INSTANTS.filter((x) => x.ev).flatMap((x) => x.concepts));
+
 /** 공시 단위 안에서 같은가 — 단위 = SEC 원통화 값의 끝자리 0 개수(최대 10^6). 역환산 부동소수 오차만큼 여유 */
 function sameInUnit(sec: number, yv: number): boolean {
   const r = Math.round(Math.abs(sec));
@@ -535,7 +538,20 @@ export function withYahooLtm(
         const arr = out[c]?.units?.USD ?? [];
         if (/Derived$/.test(c) || on(c, E) == null || !arr.some((e) => !e.start && e.end === last) || arr.some((e) => !e.start && e.end === yearAgo)) continue;
         const r = iY >= 0 ? sixKOf(c, "bs") : null;
-        const v = r ? r.vals[iY] : yearAgoOf(c, null);
+        let v = r ? r.vals[iY] : yearAgoOf(c, null);
+        // EV 구성요소인데 보고서 연말 열이 SEC 와 조금 다르면(TSM 비지배지분 — 6-K 대만 IFRS 41,199.3 vs 20-F 41,180.5 백만 TWD) 오너 결정 (가)와 같이
+        // SEC 연말 + 6-K 변동분(1년 전 열 − 연말 열)
+        const iE6 = sixK.bsDates.indexOf(E);
+        if (v == null && EV_INSTANT.has(c) && iY >= 0 && iE6 >= 0) {
+          const src = Object.keys(ifrsNs).length ? ifrsSourcesOf(c).find((cd) => cd.sum.length === 1 && typeof cd.sum[0] === "string" && ifrsAtE(cd.sum[0], "bs") != null) : null;
+          const raw = src ? sixKValueOf(sixK, src.sum[0] as string, "bs") : !Object.keys(ifrsNs).length ? sixKValueOf(sixK, c, "bs") : null;
+          const secE = on(c, E)! / eRate;
+          const sg = src?.sign ?? 1;
+          if (raw && Math.abs(raw[iE6] * sg - secE) <= Math.abs(secE) * 0.15) {
+            v = secE + (raw[iY] - raw[iE6]) * sg;
+            sixKFilled.push({ label: `${INSTANTS.find((x) => x.concepts.includes(c))?.label ?? c} 1년 전 분기말(SEC 연말 + 6-K 변동분)`, reason: `${sixK.source} · ${c}` });
+          }
+        }
         if (v != null) put(c, yearAgo, v * yearAgoRate);
       }
     }
