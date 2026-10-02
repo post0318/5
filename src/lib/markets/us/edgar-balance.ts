@@ -1,4 +1,5 @@
 import "server-only";
+import { fillBlankReasons } from "./blank-reason";
 import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
 import { unavailableNote } from "./sec-unavailable";
 import { yahooLtm } from "./edgar-yahoo-quarters";
@@ -671,6 +672,11 @@ export function buildUsBalance(
   // SEC 원본 조회 실패로 공란이 된 값(총차입금 등 — 태그 규칙으로 대체하지 않음, sec-unavailable.ts)
   const unavailable = unavailableNote(facts);
   if (unavailable) items.push({ ...nrow(`※ ${unavailable}`, blank()), italic: true });
+  // 사유 없는 빈 칸 = "본표에 별도 줄 없음"(오너 지시 2026-10-02 — 0 으로 채우지 않음: 다른 줄에 합쳐 공시했을 수 있다). 자산 총계가 있는 열만
+  {
+    const tot = items.find((x) => x.accountName === "자산 총계");
+    fillBlankReasons(items, periods.map((p) => p.label).filter((l) => tot?.values[l] != null));
+  }
 
   return {
     symbol: "",
