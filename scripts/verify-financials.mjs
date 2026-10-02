@@ -290,6 +290,8 @@ function independentOr(res, extExact, reason) {
 }
 // 20-F IFRS 대응표 검증기 사본(재감사 8차) — [받는 us-gaap 개념, 원천 묶음, 부호]
 const IFRS_GROUPS_SNAPSHOT = JSON.parse(readFileSync(new URL("./lib/ifrs-groups-snapshot.json", import.meta.url), "utf8"));
+// 사본 묶음 중 IFRS_MAP(단순 대응) 출신 — 사본 앞부분에 같은 순서로 놓인다(ifrsDstGroups: MAP → SUM → NEG). SUM 의 원소 1개 묶음(배열 원소 하나 — LongTermDebtCurrent)은 원소가 배열이라 구분된다
+const IFRS_MAP_LIKE = (g) => g.sign > 0 && g.sum.length === 1 && typeof g.sum[0] === "string";
 const EXACT = 1e-9; // 화면 간 동일성 — 같은 모듈을 거치므로 부동소수 오차만
 function same(a, b, tol = EXACT) {
   if (a == null && b == null) return { status: NA, note: "양쪽 빈칸" };
@@ -6056,18 +6058,23 @@ async function verifyUs(sym) {
     //   20-F 인스턴스의 차원 없는 통화 값(연말 잔액·1년 흐름, 0 아님) 각각에 대해 그 값을 받는 앱 개념(IFRS 대응표, us-gaap 공시사는 같은 이름)이
     //   앱 사업연도 값에 하나도 없으면 실패. 원천이 하나뿐인 단순 대응은 값도 정확 대조(원통화 × H.10 — 잔액 기말, 흐름 기간 평균)
     {
-      const fyApp = row?.ltm?.fy ?? null, appGroups = row?.ltm?.ifrsGroups ?? null;
+      const fyRaw = row?.ltm?.fy ?? null, appGroups = row?.ltm?.ifrsGroups ?? null;
       // 대응표 = 검증기 고정 사본(scripts/lib/ifrs-groups-snapshot.json — 앱 edgar-foreign.ts ifrsDstGroups() 를 2026-10-03 에 떠 둔 것).
       // 앱 대응표가 사본과 다르면 실패(대응을 지워 값이 사라지는 경로 — 재감사 8차 ④). 대응표를 고치면 사본도 같이 고친다
       const gkey = (g) => `${g.dst}|${g.sign}|${JSON.stringify(g.sum)}`;
+      // 순서도 비교한다(재감사 9차 (가) — 대체 후보 순서가 바뀌면 앱이 고르는 정의가 바뀐다)
       const groups = IFRS_GROUPS_SNAPSHOT.map(([dst, sum, sign]) => ({ dst, sum, sign }));
       if (appGroups) {
         const appK = new Set(appGroups.map(gkey)), snapK = new Set(groups.map(gkey));
         const lost = groups.filter((g) => !appK.has(gkey(g))), extra = appGroups.filter((g) => !snapK.has(gkey(g)));
+        const orderOk = appGroups.length === groups.length && appGroups.every((g, i) => gkey(g) === gkey(groups[i]));
+        if (!lost.length && !extra.length && !orderOk) add("A", "20-F 대응표 순서 = 검증기 사본", "LTM", { status: FAIL, note: "앱 대응표 묶음 순서가 검증기 사본과 다름 — 대체 후보 우선순위가 바뀜(의도한 변경이면 사본 갱신)" });
         add("A", "20-F 대응표 = 검증기 사본", "LTM", !lost.length && !extra.length
           ? { status: PASS, note: `IFRS 대응 묶음 ${groups.length}개 일치` }
           : { status: FAIL, note: `앱 대응표가 검증기 사본과 다름 — 빠짐 ${lost.map(gkey).join("; ") || "없음"} / 추가 ${extra.map(gkey).join("; ") || "없음"} (의도한 변경이면 사본 갱신)` });
       }
+      const fyApp = fyRaw ? Object.fromEntries(Object.entries(fyRaw).map(([k0, x]) => [k0, x?.v ?? null])) : null;
+      const fyKind = fyRaw ? Object.fromEntries(Object.entries(fyRaw).map(([k0, x]) => [k0, x?.k ?? null])) : {};
       if (!fyApp || !appGroups || !secE) add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: FAIL, note: `${!secE ? "SEC 20-F 원본 판독 실패" : "verify-row 에 사업연도 값·대응표 없음"} — 대조 불가` });
       else {
         // 보고 통화 단위 = 인스턴스에서 가장 많이 쓴 통화 단위(단위 이름이 "twd"·"eur"·"iso4217_TWD" 등 회사마다 다르다). USD 편의 환산 값은 앱이 버리므로 대상 밖
@@ -6093,9 +6100,10 @@ async function verifyUs(sym) {
         let okN = 0, noMap = 0;
         const needDst = new Map(); // 앱 개념 → 그 값을 만드는 SEC 원천이 있는 종류(bs·cf)
         for (const x of uniq) {
-          if (x.v === 0) continue;
           const ds = dstsOf(x.id);
           if (!ds.length) { noMap++; continue; }
+          // SEC 값 0 — 앱에 없어도 공란은 허용(0 표시와 공란은 화면 정책 문제), 앱에 있으면 아래 값 대조(기대 0)
+          if (x.v === 0) { for (const d of ds) if (fyApp[d] != null && !needDst.has(d)) needDst.set(d, x.kind); continue; }
           const nm = `20-F 사업연도 ${x.kind === "bs" ? "연말" : "흐름"} ${shortId(x.id)} @${row.ltm.E}`;
           if (!ds.some((d) => fyApp[d] != null)) { add("A", nm, "LTM", { status: FAIL, note: `SEC 20-F 원본 ${x.id} = ${x.v} ${x.unit} 있는데 앱 사업연도 값 없음(받는 개념 ${ds.join("·")}) — 공란 사유와 무관하게 채워져야 함` }); continue; }
           okN++;
@@ -6108,9 +6116,16 @@ async function verifyUs(sym) {
           const nm = `20-F 사업연도 ${kind === "bs" ? "연말" : "흐름"} 값 ${d} @${row.ltm.E}`;
           const app = fyApp[d];
           if (app == null) continue;
+          // 후보 순서 = 앱 변환 규칙(edgar-foreign mapIfrs): us-gaap 같은 이름 원본 → 단순 대응(표 순서, 그 기간 값이 있는 첫 개념) → 합산 묶음(첫 묶음) → 부호 반전.
+          //   검증기는 그 순서에서 처음 성립하는 후보 하나와만 대조한다(재감사 9차 (가) — "후보 중 하나와 같음"은 정의 바꿔치기를 통과시켰다)
           const cands = [];
           if (uniq.some((y) => y.id === `us-gaap_${d}` && y.kind === kind)) { const y = uniq.find((z) => z.id === `us-gaap_${d}` && z.kind === kind); const r0 = rateOf(y); if (r0 != null) cands.push({ v: y.v * r0, how: `us-gaap_${d} ${y.v} × ${r0}` }); }
-          for (const g of groups.filter((g0) => g0.dst === d)) {
+          const ordered = [
+            ...groups.filter((g0) => g0.dst === d && g0.sign > 0 && g0.sum.length === 1 && typeof g0.sum[0] === "string" && IFRS_MAP_LIKE(g0)),
+            ...groups.filter((g0) => g0.dst === d && g0.sign > 0 && !IFRS_MAP_LIKE(g0)),
+            ...groups.filter((g0) => g0.dst === d && g0.sign < 0),
+          ];
+          for (const g of ordered) {
             let t = 0, n = 0, r0 = null;
             const parts = [];
             for (const e of g.sum) {
@@ -6124,12 +6139,24 @@ async function verifyUs(sym) {
           }
           if (!cands.length) { add("A", nm, "LTM", { status: FAIL, note: `앱 ${app} — SEC 원본으로 기대값을 만들 수 없음(환율 없음 등)` }); continue; }
           valN++;
-          const hit = cands.find((c0) => extEq(app, c0.v));
-          add("A", nm, "LTM", hit
-            ? { status: PASS, note: `앱 ${app} = SEC 20-F ${hit.how} (정확 일치${cands.length > 1 ? `, 후보 ${cands.length}개 중` : ""})`, app, src: hit.v }
-            : { status: FAIL, note: `앱 ${app} ≠ SEC 원본 후보 ${cands.map((c0) => `${c0.v} [${c0.how}]`).join(" / ")}`, app, src: cands[0].v });
+          const first = cands[0];
+          add("A", nm, "LTM", extEq(app, first.v)
+            ? { status: PASS, note: `앱 ${app} = SEC 20-F ${first.how} (정확 일치 — 앱 순서 규칙의 첫 후보)`, app, src: first.v }
+            : { status: FAIL, note: `앱 ${app} ≠ 앱 순서 규칙의 첫 후보 ${first.v} [${first.how}]${cands.length > 1 ? ` · 나머지 후보 ${cands.slice(1).map((c0) => `${c0.v} [${c0.how}]`).join(" / ")}` : ""}`, app, src: first.v });
         }
-        add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: uniq.length ? PASS : FAIL, note: `${uniq.length ? "" : "SEC 20-F 통화 값을 하나도 못 읽음 — 대조 불가 · "}SEC 20-F ${repCur ?? "?"} 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(앱 개념 값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖)` });
+        // 앱 사업연도 값(0 아님)이 있는데 SEC 원본에 그 개념을 만드는 원천이 전혀 없음(재감사 9차 (나) — 대조 대상 밖에서 값이 생기는 경로).
+        //   대상 = 대응표의 받는 개념(IFRS 회사), us-gaap 공시사는 그 20-F 인스턴스에 이름이 나오는 개념(다른 기간·차원 포함)
+        const isUsGaapFiler = uniq.some((y) => y.id.startsWith("us-gaap_")) && !uniq.some((y) => y.id.startsWith("ifrs-full_"));
+        const instIds = new Set([...secE.facts, ...secE.durFacts].map((y) => y.id));
+        const dstSet = new Set(groups.map((g) => g.dst));
+        let orphanN = 0;
+        for (const [d, v] of Object.entries(fyApp)) {
+          if (v == null || v === 0 || needDst.has(d)) continue;
+          if (!(isUsGaapFiler ? instIds.has(`us-gaap_${d}`) : dstSet.has(d))) continue;
+          orphanN++;
+          add("A", `20-F 사업연도 ${fyKind[d] === "bs" ? "연말" : "흐름"} 원천 없음 ${d} @${row.ltm.E}`, "LTM", { status: FAIL, note: `앱 사업연도 값 ${v} 이 있는데 SEC 20-F 원본(${row.ltm.E})에 이 개념을 만드는 원천 값이 없음 — 출처 불명 값` });
+        }
+        add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: uniq.length ? PASS : FAIL, note: `${uniq.length ? "" : "SEC 20-F 통화 값을 하나도 못 읽음 — 대조 불가 · "}SEC 20-F ${repCur ?? "?"} 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(앱 개념 값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖), 원천 없는 앱 값 ${orphanN}개` });
       }
     }
     add("A", "20-F LTM 공란 완결성(6-K 대조)", "LTM", { status: PASS, note: `앱 LTM 공란 ${gaps.length}개 개념 중 6-K 에서 값을 찾은 것 없음(${gapOk}개 대조${gapNa.length ? `, 대조 불가 ${gapNa.length}개` : ""})` });

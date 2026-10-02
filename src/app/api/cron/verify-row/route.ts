@@ -18,7 +18,7 @@ function ltmItems(facts: CompanyFacts) {
   const yl = yahooLtm(facts);
   const through = yl?.through, E = ltmBaseEnd(facts);
   // 사업연도 값(SEC 20-F 기준일 E — 잔액은 연말, 흐름은 1년 기간) — 검증기가 SEC 원본에서 직접 읽은 값과 대조(있어야 할 값이 앱에서 사라졌는지, 재감사 7차 E1·E3)
-  const fy: Record<string, number> = {};
+  const fy: Record<string, { v: number; k: "bs" | "cf" }> = {};
   if (!through || !E) return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: null, through: null, E: null };
   const yearAgo = (() => { const x = new Date(`${through}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); })();
   const anchor = ltmAnchor(facts);
@@ -30,7 +30,7 @@ function ltmItems(facts: CompanyFacts) {
     const fyE = arr
       .filter((e) => e.form !== "YAHOO-Q" && dd(e.end, E) <= 6 && (!e.start || (Date.parse(e.end) - Date.parse(e.start)) / 864e5 > 300))
       .sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0];
-    if (fyE) fy[c] = fyE.val;
+    if (fyE) fy[c] = { v: fyE.val, k: fyE.start ? "cf" : "bs" };
     if (arr.some((e) => !e.start)) {
       for (const d of [through, yearAgo]) {
         const e = nearest(arr, d);
