@@ -203,8 +203,8 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       if (Number(d.size) < 150_000) continue;
       const head = decode(html.slice(0, 200_000)).toLowerCase();
       if (!head.includes(longDate(periodEnd))) continue;
-      const bs = sectionRows(html, /CONSOLIDATED (?:BALANCE SHEETS?|STATEMENTS? OF FINANCIAL POSITION)/, /total (?:current )?assets/i, /CONSOLIDATED STATEMENTS? OF (?:COMPREHENSIVE|PROFIT|INCOME|OPERATIONS)/i);
-      const cf = sectionRows(html, /CONSOLIDATED STATEMENTS? OF CASH FLOWS?/, /operating activities/i, /NOTES TO (?:THE )?(?:CONDENSED )?CONSOLIDATED/i);
+      const bs = sectionRows(html, /CONSOLIDATED (?:BALANCE SHEETS?|STATEMENTS? OF FINANCIAL POSITION)/, /total (?:current )?assets/i, /CONSOLIDATED STATEMENTS? OF (?:COMPREHENSIVE|PROFIT|INCOME|OPERATIONS|CHANGES IN|CASH FLOWS?)/i); // 다음 재무제표 제목까지(SPOT 은 재무상태표 다음이 자본변동표)
+      const cf = sectionRows(html, /CONSOLIDATED STATEMENTS? OF CASH FLOWS?/, /operating activities/i, /NOTES TO (?:THE )?(?:INTERIM )?(?:CONDENSED )?CONSOLIDATED/i); // SPOT "Notes to the interim condensed consolidated …"
       if (!bs || !cf) continue;
       const unit = /in thousands/.test(bs.text) ? 1e3 : /in millions/.test(bs.text) ? 1e6 : 1;
       const bsDates = headerDates(bs.text, [periodEnd, fyEnd, priorEnd]);

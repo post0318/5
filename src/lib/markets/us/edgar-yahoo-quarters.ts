@@ -506,13 +506,20 @@ export function withYahooLtm(
       if (!/Derived$/.test(c)) continue;
       const vE = instantOn(out[c]?.units?.USD ?? [], E);
       if (!vE || (out[c]?.units?.USD ?? []).some((e) => !e.start && e.end === last)) continue;
-      const same = extra.filter((d) => on(d, E) === vE);
+      // 한 줄과 같거나, 없으면 두 줄의 합과 정확히 같을 때(TSM 비유동 차입금 927,657 = 사채·장기차입금 896,062 + 리스 31,595 백만 TWD) — 후보가 하나일 때만
+      const pool = [...new Set([...fromSixK, ...extra.filter((d) => !d.includes("("))])].filter((d) => (on(d, E) ?? 0) !== 0);
+      let same: string[][] = pool.filter((d) => on(d, E) === vE).map((d) => [d]);
+      if (!same.length) {
+        same = [];
+        for (let a = 0; a < pool.length; a++) for (let b = a + 1; b < pool.length; b++) if (Math.abs(on(pool[a], E)! + on(pool[b], E)! - vE) < 1) same.push([pool[a], pool[b]]);
+      }
       if (same.length !== 1) continue;
-      const vL = instantOn(out[same[0]].units.USD, last), vP = instantOn(out[same[0]].units.USD, yearAgo);
+      const at = (d: string) => same[0].reduce<number | null>((t, x) => { const v = instantOn(out[x].units.USD, d); return t == null || v == null ? null : t + v; }, 0);
+      const vL = at(last), vP = at(yearAgo);
       if (vL == null) continue;
       put(c, last, vL);
       if (vP != null) put(c, yearAgo, vP);
-      extra.push(`${c}(= ${same[0]})`);
+      extra.push(`${c}(= ${same[0].join(" + ")})`);
     }
     if (extra.length) sixKFilled.push({ label: `재무상태표 그 밖 ${extra.length}개 줄`, reason: `${sixK.source} · ${extra.join(", ")}` });
   }
