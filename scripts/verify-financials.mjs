@@ -5909,7 +5909,9 @@ async function verifyUs(sym) {
             if (cs0 < 0) return { status: FAIL, note: `6-K 현금흐름표 구간 못 찾음(${d.report})` };
             const ce1 = text.slice(cs0 + 200).search(/notes to (?:the )?(?:interim )?(?:condensed )?(?:consolidated|summary)/);
             const cfText = text.slice(cs0, ce1 < 0 ? undefined : cs0 + 200 + ce1);
-            const rows0 = sixKRows(cfText, labs);
+            // 현금흐름 줄 = 가장 가까운 열 머리가 "… months ended" 인 줄(같은 구간의 재무상태표 슬라이드 줄 제외 — ASML 분기별 재무상태표)
+            const cfHd = [...cfText.matchAll(/months ended/g)].map((m) => m.index), bsHd = sixKBsHeaders(cfText).map((h) => h.i);
+            const rows0 = sixKRows(cfText, labs).filter((r) => { const c0 = cfHd.filter((i) => i < r.i).at(-1) ?? -1, b0 = bsHd.filter((i) => i < r.i).at(-1) ?? -1; return c0 > b0; });
             if (d.kind === "cfZero") {
               if (fy0.v !== 0) return { status: FAIL, note: `0 규칙인데 SEC 사업연도 ${shortId(id)} = ${fy0.v}` };
               const hd0 = rows0.filter((r) => /months ended/.test(cfText.slice(Math.max(0, r.i - 20_000), r.i + 20_000)));
@@ -6019,7 +6021,8 @@ async function verifyUs(sym) {
           continue;
         }
       }
-      // ② 6-K 에서 찾을 수 있는가
+      // ② 6-K 에서 찾을 수 있는가 — 재무상태표와 현금흐름표 개념만(손익 개념을 현금흐름 조정 줄로 찾지 않는다 — SPOT "Finance costs")
+      if (g.kind === "cf" && !g.cf) { gapOk++; continue; }
       if (!sixKSource || !g.ids?.length) { gapNa.push(`${shortId(g.concept)}(${!sixKSource ? "6-K 없음" : "원 개념 없음"})`); continue; }
       const r = await sixKExp({ concept: g.concept, kind: g.kind, at: g.at, ids: g.ids, report: sixKSource, fyEnd: row.ltm.E, usd: null });
       if (r.exp != null) add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란${g.reason ? `(${g.reason})` : ""}인데 6-K 에서 기대값 ${r.exp} — 채울 수 있음 · ${r.how}` });

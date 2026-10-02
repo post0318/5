@@ -13,7 +13,7 @@ import type { CompanyFacts } from "@/lib/markets/us/edgar";
 function ltmItems(facts: CompanyFacts) {
   type Entry = import("@/lib/markets/us/edgar").FactUnitEntry;
   const items: { concept: string; at: string; usd: number | null; flow: boolean; src: unknown; form: string; end: string }[] = [];
-  const gaps: { concept: string; kind: "bs" | "cf"; at: string; ids: { id: string; sign: 1 | -1 }[]; reason: string | null; flow?: { y: unknown; sign: 1 | -1; da: boolean } | null }[] = [];
+  const gaps: { concept: string; kind: "bs" | "cf"; at: string; ids: { id: string; sign: 1 | -1 }[]; reason: string | null; flow?: { y: unknown; sign: 1 | -1; da: boolean } | null; cf?: boolean }[] = [];
   const yl = yahooLtm(facts);
   const through = yl?.through, E = ltmBaseEnd(facts);
   if (!through || !E) return { items, gaps, sixKSource: null, through: null, E: null };
@@ -37,7 +37,7 @@ function ltmItems(facts: CompanyFacts) {
       // 공란 판정은 화면 함수 결과(LTM 을 못 만들면 fy 도 null)가 아니라 그 개념에 사업연도(끝 ≈ E, 1년) 값이 있는지로(재감사 G4·T6)
       const hasFy = arr.some((e) => e.start && dd(e.end, E) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 > 300 && e.form !== "YAHOO-Q");
       if (r.value != null && r.fy && dd(r.fy.end, E) <= 7) items.push({ concept: c, at: r.cur?.end ?? r.fy.end, usd: r.value, flow: true, src: r.cur?.ltmSrc ?? null, form: r.cur?.form ?? r.fy.form, end: r.cur?.end ?? r.fy.end });
-      else if (hasFy && (isCfConcept(c) || flowSpecOf(c))) gaps.push({ concept: c, kind: "cf", at: through, ids: sourceIdsAt(facts, c, "cf", E), reason: r.reason, flow: flowSpecOf(c) });
+      else if (hasFy && (isCfConcept(c) || flowSpecOf(c))) gaps.push({ concept: c, kind: "cf", at: through, ids: sourceIdsAt(facts, c, "cf", E), reason: r.reason, flow: flowSpecOf(c), cf: isCfConcept(c) });
     }
   }
   return { items, gaps, sixKSource: yl?.sixKSource ?? null, through, E };
