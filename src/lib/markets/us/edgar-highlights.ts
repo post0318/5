@@ -7,9 +7,9 @@
  * - 추정(수익·EPS): yahoo-finance2 earningsTrend
  */
 
-import { dividendFreeSince, dividendFreeYear } from "./blank-reason";
+import { DPS_FROM_PAID_NOTE, dividendFreeSince, dividendFreeYear, dpsFromPaid } from "./blank-reason";
 import { unavailableNote } from "./sec-unavailable";
-import { buildUsCashFlow } from "./edgar-cashflow";
+import { buildUsCashFlow, hasCommonDividendEvidence } from "./edgar-cashflow";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { splitFactorsByYear, fiscalYearOf, ltmAnchor, ltmFlowOf } from "./edgar-series";
@@ -492,13 +492,18 @@ export function buildUsHighlights(
     nEps[i] = r.note;
     return r.eps;
   });
+  const dpsPaidCols = new Set<string>();
   const dps = columns.map((col) => {
     if (col.kind === "estimate") return null;
     // 무배당 기간 = 0(오너 결정 2026-10-02, blank-reason.ts — 재무분석·현금흐름표와 같은 판정)
     if (col.kind === "ltm") return ltm(E.dps).value ?? (col.date && dividendFreeSince(facts, new Date(Date.parse(col.date) - 365 * 864e5).toISOString().slice(0, 10), col.date) ? 0 : null);
     const y = Number(col.key.slice(2));
     const v = annualAt(S.dps, y);
-    return v == null ? (dividendFreeYear(facts, y) ? 0 : null) : v * sf(y);
+    if (v != null) return v * sf(y);
+    if (dividendFreeYear(facts, y)) return 0;
+    const p = hasCommonDividendEvidence(facts) ? dpsFromPaid(facts, y) : null;
+    if (p != null) dpsPaidCols.add(col.key);
+    return p;
   });
   const divYield = dps.map((d, i) =>
     d != null && priceByCol[i] != null && priceByCol[i]! > 0 ? (d / priceByCol[i]!) * 100 : null,
@@ -560,6 +565,7 @@ export function buildUsHighlights(
   const nOcf = ltmNote(E.ocf);
   const nCapex = ltmNote(E.capex);
   const nDps = ltmNote(E.dps);
+  columns.forEach((c, i) => { if (dpsPaidCols.has(c.key)) nDps[i] = DPS_FROM_PAID_NOTE; });
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap, cellNotes: nMktcap },
     ...(opUnitValue.some((v) => v != null)

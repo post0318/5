@@ -47,3 +47,18 @@ export function fillBlankReasons(items: FinancialLineItem[], presentCols: string
     }
   }
 }
+
+/** 주당배당금 공시가 없는 사업연도 — 배당금 지급액 ÷ 가중평균 주식수(지급 기준). 결의 기준 주당배당 공시가 다음 해 20-F 에 실리는 회사(ASML —
+ * 2025 년분은 아직 미공시)라도 현금흐름표 배당 지급이 확정돼 있으면 비워 두지 않는다(오너 지시 2026-10-02 "cf 는 배당금 지급 확정지었는데") */
+export const DPS_FROM_PAID_NOTE = "주당배당금 공시 없음 — 배당금 지급액 ÷ 가중평균 주식수(지급 기준)";
+export function dpsFromPaid(facts: CompanyFacts, fy: number): number | null {
+  const g = (facts.facts as Record<string, Record<string, { units: Record<string, FactUnitEntry[]> }> | undefined>)["us-gaap"] ?? {};
+  const annual = (c: string, u: string) =>
+    (g[c]?.units?.[u] ?? [])
+      .filter((e) => e.start && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 > 350 && fiscalYearOf(e.end) === fy)
+      .sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0]?.val ?? null;
+  const paid = ["PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends", "PaymentsOfDividends"].map((c) => annual(c, "USD")).find((v) => v != null) ?? null;
+  const sh = annual("WeightedAverageNumberOfSharesOutstandingBasic", "shares");
+  return paid != null && paid !== 0 && sh ? Math.abs(paid) / sh : null;
+}
+

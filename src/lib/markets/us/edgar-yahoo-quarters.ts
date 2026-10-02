@@ -421,13 +421,24 @@ export function yahooLtm(facts: CompanyFacts): Extract<YahooLtmResult, { source:
   return s?.source === "yahoo" ? s : null;
 }
 
+/** 공란 항목을 사유 종류별로(항목 이름만 — 판정 숫자는 빼고) */
+function blankGroups(bl: { label: string; reason: string }[]): string {
+  const g = new Map<string, string[]>();
+  for (const b of bl) {
+    const miss = /^Yahoo 분기 결측\(([^)]+)\)/.exec(b.reason);
+    const k = miss ? `야후 ${miss[1]} 분기 자료 없음` : /정의 차이|≠ SEC|SEC 와 다름/.test(b.reason) ? "SEC·야후 항목 정의 다름" : /Yahoo (연간|FY말) 값? ?없음|Yahoo 연간 없음|Yahoo FY말 값 없음/.test(b.reason) ? "야후에 항목 없음" : b.reason;
+    g.set(k, [...(g.get(k) ?? []), b.label]);
+  }
+  return [...g].map(([k, ls]) => `${k}: ${ls.join(", ")}`).join(" / ");
+}
+
 /** 화면 라벨 */
 export function yahooLtmLabel(r: YahooLtmResult): string {
   if (r.source !== "yahoo") return r.ltmBlank ? `⚠ LTM 열 공란: ${r.reason}(사업연도 값으로 대체하지 않음)` : `LTM 분기 보강 안 함(SEC 사업연도 유지): ${r.reason}`;
   return (
     `LTM 열 = Yahoo 분기(원통화 ${r.currency}, 연준 H.10 분기 평균·기말 환율 환산, ~${r.through}), 결측 항목 공란` +
     // 화면 각주는 항목 이름만 — 판정 숫자(SEC vs Yahoo 금액)는 칸 주석·검증 결과에(오너 지적 2026-10-02 "주석에 이상한 내용을 잔뜩")
-    (r.blanked.length ? ` · 공란: ${r.blanked.map((b) => b.label).join(", ")}` : "") +
+    (r.blanked.length ? ` · 공란 — ${blankGroups(r.blanked)}` : "") +
     (r.approx?.length ? ` · SEC 연말 + Yahoo 분기 변동분: ${r.approx.map((b) => b.label).join(", ")}` : "") +
     (r.evReason ? ` · ${r.evReason}` : "")
   );

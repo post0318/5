@@ -1,5 +1,5 @@
 import "server-only";
-import { dividendFreeSince, dividendFreeYear } from "./blank-reason";
+import { DPS_FROM_PAID_NOTE, dividendFreeSince, dividendFreeYear, dpsFromPaid } from "./blank-reason";
 import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
 import { equityRestatement } from "./edgar-balance";
 import { buildUsCashFlow, hasCommonDividendEvidence } from "./edgar-cashflow";
@@ -548,6 +548,12 @@ export function buildUsAnalysis(
   const DPS_C = ["CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"];
   const dps = adjPerShare(flow(DPS_C, "USD/shares"));
   for (const p of periods) if (dps[p.label] == null && divFree(p)) dps[p.label] = 0;
+  // 주당배당 공시가 없는 사업연도(ASML 2025 — 결의 기준 값은 다음 해 20-F) = 배당금 지급액 ÷ 가중평균 주식수(하이라이트와 같은 함수)
+  for (const p of periods)
+    if (p.label !== LTM && dps[p.label] == null && hasCommonDivEvidence) {
+      const v = dpsFromPaid(facts, p.fiscalYear);
+      if (v != null) { dps[p.label] = v; note(dps, p.label, DPS_FROM_PAID_NOTE); }
+    }
   inheritWhy(dps, flow(DPS_C, "USD/shares"));
   for (const l of labels) if (dps[l] == null && hasCommonDivEvidence) note(dps, l, WHY.get(dps)?.[l] ?? "주당배당금 공시 없음");
   const dpsFull = adjMap(fullAnnual(DPS_C, "USD/shares"));
