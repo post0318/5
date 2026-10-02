@@ -999,7 +999,7 @@ export function buildUsAnalysis(
   ];
 
   const evNotes: string[] = [
-    "※ EV = 시가총액 + 차입금(금융리스 포함·운용리스 제외) + 우선주·비지배지분 − 현금·단기투자·장기 투자증권",
+    "※ EV = 시가총액 + 차입금(금융리스 포함·운용리스 제외) + 우선주·비지배지분 − 현금·단기투자·장기투자증권",
   ];
   if (evBlockers.has("captive-unsplit"))
     evNotes.push("※ EV/EBITDA 미표시: 금융 자회사(할부금융) 보유 — 산정 기준 확정 전까지 비움");

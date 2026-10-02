@@ -20,7 +20,7 @@ import { fiscalYearOf, instantOn } from "./edgar-series";
  *    LTM 공란(FY 값 유지·다른 원천 혼합 금지). 최근 4개 분기 중 하나라도 결측이어도 공란.
  *  - 매핑하지 않은 흐름 개념은 최근 FY 항목에 `ltmNone` 을 달아 LTM 이 비게 한다(edgar-series.ttmCombine). 매핑하지 않은
  *    잔액 개념은 소비 모듈이 LTM 기준일(balanceDate)의 값만 읽어 자연히 빈다.
- *  - EV 구성요소(차입금·현금·단기투자·장기 투자증권·비지배지분·우선주) 중 SEC FY 말에 있는 것이 하나라도 Yahoo 로 같은
+ *  - EV 구성요소(차입금·현금·단기투자·장기투자증권·비지배지분·우선주) 중 SEC FY 말에 있는 것이 하나라도 Yahoo 로 같은
  *    기준일 값을 못 채우면 evComplete = false — 소비 모듈이 LTM EV·순차입금을 비운다(FY말 잔액과 최신 분기 흐름을 섞지 않음).
  *    비지배지분·우선주가 SEC FY 말에 아예 없으면(해당 없음) 0 으로 본다 — ASML·SPOT 처럼 없는 회사의 EV 를 비울 이유가 없다.
  *
@@ -347,7 +347,7 @@ export function withYahooLtm(
   if (!debtOk) evMiss.push("총차입금");
   if (instOk.get("현금및현금성자산") !== true) evMiss.push("현금");
   if (STI.some((c) => on(c, E) != null) && instOk.get("단기투자") !== true) evMiss.push("단기투자");
-  if (LT_SECURITIES.some((c) => (on(c, E) ?? 0) !== 0)) evMiss.push("장기 투자증권(Yahoo 대응 없음)");
+  if (LT_SECURITIES.some((c) => (on(c, E) ?? 0) !== 0)) evMiss.push("장기투자증권(Yahoo 대응 없음)");
   if ((on("MinorityInterest", E) ?? 0) !== 0 && instOk.get("비지배지분") !== true) evMiss.push("비지배지분");
   if (on("PartnersCapitalAttributableToNoncontrollingInterest", E) != null) evMiss.push("비지배지분(파트너십)");
   if (PREFERRED.some((c) => (on(c, E) ?? 0) !== 0)) evMiss.push("우선주(Yahoo 대응 없음)");

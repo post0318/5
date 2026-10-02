@@ -563,7 +563,7 @@ export function buildUsHighlights(
     ...(opUnitValue.some((v) => v != null)
       ? [{ key: "opunits", label: "+ 운영 파트너십 지분 (시가)", format: "money" as const, values: opUnitValue }]
       : []),
-    { key: "cash", label: "− 현금·단기투자·장기 투자증권", format: "money", values: cash.map((v) => (v == null ? null : -v)), cellNotes: nBridge },
+    { key: "cash", label: "− 현금·단기투자·장기투자증권", format: "money", values: cash.map((v) => (v == null ? null : -v)), cellNotes: nBridge },
     { key: "debt", label: "+ 차입금", format: "money", values: debt, cellNotes: nBridge },
     { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", values: preferred, cellNotes: nBridge },
     { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev, cellNotes: inherit(ev, nBridge, nMktcap) },
@@ -636,7 +636,7 @@ export function buildUsHighlights(
   notes.push(
     "차입금 = 이자부 차입금(장·단기·CP) + 금융리스 — 운용리스는 제외(리스비용이 이미 EBITDA 에 반영돼 있어 이중 계산 방지)",
   );
-  notes.push("현금 = 현금·단기투자·장기 투자증권 — 보험 투자자산·지분법 투자(장기투자자산)는 빼지 않음");
+  notes.push("현금 = 현금·단기투자·장기투자증권 — 보험 투자자산·지분법 투자(장기투자자산)는 빼지 않음");
   if (blockers.has("captive-unsplit"))
     notes.push(
       "EV·EV/EBITDA 미표시: 금융 자회사(할부금융) 보유 — 연결 차입금·EBITDA 에 금융 자회사분이 섞여 산정 기준 확정 전까지 비움",

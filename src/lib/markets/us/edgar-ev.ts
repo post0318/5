@@ -14,14 +14,14 @@ export { SYN_DA_CF };
  * 미국 종목 **EV 브릿지·EBITDA 단일 기준**.
  *
  * 왜 따로 뺐나 — 같은 회사의 EV/EBITDA 가 화면마다 달랐다(오너 지적
- * 2026-09-23, WMT). 하이라이트는 운용리스를 차입금에 넣고 장기 투자증권을
+ * 2026-09-23, WMT). 하이라이트는 운용리스를 차입금에 넣고 장기투자증권을
  * 현금으로 뺐고, 재무분석은 리스를 빼고 보험 투자자산(LongTermInvestments)까지
  * 현금으로 뺐으며, 컨센서스·멀티플은 차입금이 아니라 부채총계를 썼다.
  * 발행주식수를 edgar-shares.ts 로 모은 것과 같은 방식으로 여기 한 곳에 모은다.
  *
  * 정의(오너 결정 2026-09-23, 42종목·200종목 실측 후 확정):
  *   EV = 시가총액 + 이자부 차입금(금융리스 포함, **운용리스 제외**)
- *        + 우선주 + 비지배지분 − (현금 + 단기투자 + 장기 투자증권)
+ *        + 우선주 + 비지배지분 − (현금 + 단기투자 + 장기투자증권)
  *   EBITDA = 보고 영업이익 + 감가상각비 (SEC 보고 기준, 조정 없음)
  *
  * - 운용리스 제외: 미국 GAAP 은 운용리스 비용이 이미 EBITDA 안(영업비용)에
@@ -30,7 +30,7 @@ export { SYN_DA_CF };
  * - 장기투자자산(LongTermInvestments)은 현금으로 빼지 않는다: UNH(EV 의 15%)·
  *   GE(11%)에선 보험 가입자 지급용 투자자산, MSFT 등에선 지분법 투자라 영업용.
  *   조사한 사이트(Yahoo·Finviz·StockAnalysis·MarketScreener) 모두 제외.
- *   장기 투자증권(AAPL 841억 달러 등 채권형)은 여유현금이라 뺀다(MarketScreener
+ *   장기투자증권(AAPL 841억 달러 등 채권형)은 여유현금이라 뺀다(MarketScreener
  *   와 동일).
  */
 
@@ -86,7 +86,7 @@ const STI = [
   "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
   "DebtSecuritiesCurrent",
 ];
-/** 장기 투자증권(채권형) — 최댓값. LongTermInvestments 는 넣지 않는다(위 설명). */
+/** 장기투자증권(채권형) — 최댓값. LongTermInvestments 는 넣지 않는다(위 설명). */
 const LT_SECURITIES = [
   "MarketableSecuritiesNoncurrent",
   "AvailableForSaleSecuritiesDebtSecuritiesNoncurrent",
@@ -209,7 +209,7 @@ export interface EvBridge {
   debtNoncurrent: number | null;
   /** 운용리스 부채(유동+비유동) — 차입금에는 넣지 않고 주석 표시용. 미공시면 null */
   operatingLease: number | null;
-  /** 현금 + 단기투자 + 장기 투자증권 */
+  /** 현금 + 단기투자 + 장기투자증권 */
   cash: number;
   preferred: number;
   /** 비지배지분 (UP-REIT 운영 파트너십 지분을 시가로 대체한 경우 그 장부가는 제외) */
@@ -335,7 +335,7 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     const vals = cs.map((c) => on(c, d)).filter((v): v is number => v != null);
     if (vals.length) return pick === "first" ? vals[0] : pick === "max" ? Math.max(0, ...vals) : vals.reduce((x, y) => x + y, 0);
     // 이 회사가 그 개념을 어느 기간에도 공시한 적이 없으면 없음(0) — 기준일 공시로 없음을 증명할 수 없는 날(20-F LTM: 분기 재무상태표가
-    // Yahoo 분기라 SEC 공시 없음)에 "모름"으로 EV 전체를 비우지 않는다(SPOT 2026-06-30 — 장기 투자증권을 한 번도 공시한 적 없음,
+    // Yahoo 분기라 SEC 공시 없음)에 "모름"으로 EV 전체를 비우지 않는다(SPOT 2026-06-30 — 장기투자증권을 한 번도 공시한 적 없음,
     // 2026-09-29). 다른 기간엔 있다가 이 날만 없으면 종전대로 모름
     if (cs.every((c) => E(c).length === 0)) return null;
     return provenAbsentAt(facts, cs, d) ? null : "unknown";
@@ -366,7 +366,7 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     const sti = stiFace != null ? stiFace : partOn(STI, bal, "max");
     const lts = partOn(LT_SECURITIES, bal, "max");
     if (sti === "unknown") return miss("단기투자");
-    if (lts === "unknown") return miss("장기 투자증권");
+    if (lts === "unknown") return miss("장기투자증권");
     const cash = c0.v + (sti ?? 0) + (lts ?? 0);
     // 운용리스 = 유동 + 비유동, 단 총액 태그가 더 크면 총액 — 한쪽 태그만 단 분기(MSFT: 비유동 16,532 만, 총액
     // OperatingLeaseLiability 21,925)에 부분 합이 과소했다. 비유동 태그가 없으면 본표 운용·금융 합산 줄의 운용리스 몫
