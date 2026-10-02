@@ -527,6 +527,18 @@ export function withYahooLtm(
       if (vP != null && yearAgoRate != null) put(c, yearAgo, vP * yearAgoRate);
       extra.push(c);
     }
+    // 1년 전 분기말 값이 빠진 줄(야후 분기에 그 날짜가 없는 등 — TSM 비지배지분) — 6-K 1년 전 열(없으면 1년 전 분기 6-K), 연말 열 = SEC 확인.
+    // 평균 잔액(ROIC·ROE 등)의 기초 값
+    if (yearAgoRate != null) {
+      const iY = sixK.bsDates.indexOf(yearAgo);
+      for (const c of Object.keys(out)) {
+        const arr = out[c]?.units?.USD ?? [];
+        if (/Derived$/.test(c) || on(c, E) == null || !arr.some((e) => !e.start && e.end === last) || arr.some((e) => !e.start && e.end === yearAgo)) continue;
+        const r = iY >= 0 ? sixKOf(c, "bs") : null;
+        const v = r ? r.vals[iY] : yearAgoOf(c, null);
+        if (v != null) put(c, yearAgo, v * yearAgoRate);
+      }
+    }
     // 본표 판독 합성 개념(…FaceDerived — edgar-bs-structure)은 라벨이 없다. 연말 값이 6-K 로 채운 개념 하나와 정확히 같으면(0 제외) 같은 본표 줄로 보고
     // 그 개념의 분기말 값을 쓴다(ASML 단기투자 405.9 = AvailableForSaleSecuritiesDebtSecuritiesCurrent)
     for (const c of Object.keys(out)) {

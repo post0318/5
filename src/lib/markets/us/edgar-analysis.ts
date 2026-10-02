@@ -556,7 +556,7 @@ export function buildUsAnalysis(
       if (v != null) { dps[p.label] = v; note(dps, p.label, DPS_FROM_PAID_NOTE); }
     }
   // LTM 주당배당 공시가 없으면(20-F) LTM 배당금 지급액 ÷ 현재 주식수 — 하이라이트와 같은 규칙(DPS_FROM_PAID_LTM_NOTE)
-  if (labels.includes(LTM) && dps[LTM] == null && hasCommonDivEvidence && dividends[LTM] && shares[LTM]) {
+  if (labels.includes(LTM) && dps[LTM] == null && yahooLtm(facts) && hasCommonDivEvidence && dividends[LTM] && shares[LTM]) {
     dps[LTM] = Math.abs(dividends[LTM]!) / shares[LTM]!;
     note(dps, LTM, DPS_FROM_PAID_LTM_NOTE);
   }
@@ -725,7 +725,9 @@ export function buildUsAnalysis(
   const perShare = (a: Record<string, number | null>) => {
     const o = blank();
     for (const l of labels) if (a[l] != null && shares[l]) o[l] = a[l]! / shares[l]!;
-    return inheritWhy(o, a, shares);
+    inheritWhy(o, a, shares);
+    for (const l of labels) why0(o, l, a[l] == null ? "값 없음" : shares[l] == null ? "주식수 없음" : "주식수 0");
+    return o;
   };
   // CAGR: 전체 연도 시계열에서 각 컬럼 대비 n년 전 값.
   // 현재/LTM 은 최근 FY 보다 약 1년 뒤 시점 → 분자는 TTM 값, 기준연도도 1 앞으로

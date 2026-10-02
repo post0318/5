@@ -523,7 +523,8 @@ export function buildUsHighlights(
   // 분기 현금흐름표로 LTM 배당금 지급이 있다). 배당수익률도 같은 값으로
   const dpsPaidLtm = new Set<string>();
   columns.forEach((col, i) => {
-    if (col.kind !== "ltm" || dps[i] != null || !currentShares || !hasCommonDividendEvidence(facts)) return;
+    // 20-F(분기 XBRL 없음)만 — 10-Q 회사는 LTM 주당배당이 태그로 있고, 지급 기준을 섞으면 연도 열(결의 기준)과 기준이 갈린다(CEG LTM 증가율 301%)
+    if (col.kind !== "ltm" || dps[i] != null || !currentShares || !yahooLtm(facts) || !hasCommonDividendEvidence(facts)) return;
     const c = cfAt("cf:재무활동 현금흐름:배당금 지급", col);
     if (c.v == null || c.v === 0) return;
     dps[i] = Math.abs(c.v) / currentShares;
