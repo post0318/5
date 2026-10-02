@@ -74,6 +74,8 @@ jobs:
             did=$(jq '(.built | length) + (.failed | length)' res.json)
             if [ "$pending" = "0" ]; then break; fi
             if [ "$did" = "0" ]; then echo "::error::pending $pending 인데 진행 0"; fail=1; break; fi
+            # 한 호출에서 저장 성공 0·실패만 — 공통 원인(SEC 빈 응답·요청 제한 등)일 가능성이 커서 남은 종목을 계속 계산하지 않고 멈춘다(운영 CPU 절약, 2026-10-03)
+            if [ "$(jq '.built | length' res.json)" = "0" ] && [ "$nf" != "0" ]; then echo "::error::이번 호출 저장 0 · 실패 $nf — 공통 원인 확인 후 수동 재실행"; fail=1; break; fi
           done
           if [ "$fail" = "1" ]; then exit 1; fi
       - name: 하이라이트 저장본(api_snap) 갱신 요청
