@@ -4002,8 +4002,9 @@ async function verifyUs(sym) {
       R("부채비율", "부채비율 (%)", lt != null && eq ? (lt / eq) * 100 : null, "부채 총계 ÷ 자본 총계");
       R("현금비율", "현금비율", cash != null && cl ? (cash + (sti ?? 0)) / cl : null, "(현금·현금성자산 + 단기 투자자산) ÷ 유동부채");
       // 현금흐름표 배당 줄이 "보통주 배당 아님"(BE — 파트너 분배)이면 보통주 배당 0 → 배당성향 0(오너 결정 2026-10-01)
-      const divRowName = String((fetched.cf?.sections ?? []).flatMap((x) => x.items ?? []).find((it) => it.accountId === "cf:재무활동 현금흐름:배당금 지급")?.accountName ?? "");
-      const notCommon = /보통주 배당 아님/.test(divRowName);
+      // 설명은 2026-10-02 부터 칸 주석에 있다(줄 이름엔 없음) — 이름·칸 주석 둘 다 본다
+      const divRow = (fetched.cf?.sections ?? []).flatMap((x) => x.items ?? []).find((it) => it.accountId === "cf:재무활동 현금흐름:배당금 지급");
+      const notCommon = [divRow?.accountName ?? "", ...Object.values(divRow?.cellNotes ?? {})].some((t) => /보통주 배당 아님/.test(String(t)));
       R("배당성향", "배당성향 (%)", notCommon ? (ni ? 0 : null) : div != null && ni ? (Math.abs(div) / ni) * 100 : null, notCommon ? "보통주 배당 없음(배당 줄은 파트너 분배) → 0" : "배당금 지급 ÷ 당기순이익");
       R("총주주환원율", "총주주환원율 (%)", (notCommon || div != null) && bb != null && ni ? (((notCommon ? 0 : Math.abs(div)) + Math.abs(bb)) / ni) * 100 : null, "(보통주 배당 + 자사주 취득) ÷ 당기순이익");
       // ── 전 지표(2026-10-01 오너 지시 "미국은 재무분석 전반내용까지") — 화면 값: 하이라이트(시가총액·EBITDA·FCF·DPS·영업현금흐름·자본지출), 재무상태표 주석
@@ -4074,7 +4075,11 @@ async function verifyUs(sym) {
   for (const [re, key] of [[/^\(−\) 판매관리비/, "sgaWhy"], [/^\(−\) 연구개발비/, "rndWhy"]])
     for (const [k, v] of Object.entries(isItem(is, re)?.cellNotes ?? {})) (IS[lab(k)] ??= {})[key] = v;
   // 앱 영업이익 행 이름 — "영업이익" 그대로면 공시 태그, 뒤에 설명이 붙으면 합성(소계 없는 손익계산서 등)
-  const opRowName = is?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.startsWith("영업이익"))?.accountName ?? null;
+  // 합성 영업이익 판정 — 예전엔 줄 이름 뒤 설명("영업이익 (소계 없음 · …)")으로 알았는데, 2026-10-02 부터 설명은 칸 주석에만 있다(오너 지시
+  // "본문행과 주석에 같이 있는것은 주석만"). 칸 주석에 합성·근사 산식이 있으면 예전 이름 형식으로 되살려 아래 판정을 그대로 쓴다
+  const opRowItem = is?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.startsWith("영업이익")) ?? null;
+  const opSynthNote = Object.values(opRowItem?.cellNotes ?? {}).find((t) => /^(영업이익 (소계|태그) 없음|소계 없음 · 세전이익)/.test(t ?? "")) ?? null;
+  const opRowName = opRowItem ? (opRowItem.accountName === "영업이익" && opSynthNote ? `영업이익 (${opSynthNote})` : opRowItem.accountName) : null;
   for (const [name, key] of [["총차입금", "debt"], ["순차입금", "nd"], ["자산 총계", "assets"], ["부채와 자본 총계", "le"]])
     for (const [k, v] of Object.entries(rowOf(bs, name))) (BS[lab(k)] ??= {})[key] = v;
   const C = {};

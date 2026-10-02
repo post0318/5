@@ -64,3 +64,13 @@ jobs:
             if [ "$did" = "0" ]; then echo "::error::pending $pending 인데 진행 0"; fail=1; break; fi
           done
           if [ "$fail" = "1" ]; then exit 1; fi
+      - name: 하이라이트 저장본(api_snap) 갱신 요청
+        # 화면은 24시간 안 저장본을 배포판이 달라도 먼저 보여주고 뒤에서 다시 계산한다(api-snap.ts). 아무도 안 열면 옛 배포판 내용(지운 문구 등)이
+        # 다음 조회 때 그대로 보였다(2026-10-02 오너 지적 — "예상 순이익" 칸 주석). 배포 직후 유니버스 미국 종목을 한 번씩 열어 갱신을 걸어 둔다
+        if: always()
+        run: |
+          curl -sS --max-time 30 -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/universe-symbols?market=us" > uni.json
+          for s in $(jq -r '.items[].symbol' uni.json | sort -u); do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 200 "$BASE/api/markets/us/$s/highlights" || echo 000)
+            echo "$s $code"
+          done

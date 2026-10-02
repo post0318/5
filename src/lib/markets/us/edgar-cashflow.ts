@@ -674,7 +674,14 @@ export function buildUsCashFlow(
   // 보통주 배당 근거가 없는데 포괄 배당 태그 금액이 있으면 그 줄은 보통주 배당이 아니다(BE — 비지배지분·파트너 분배) — 이름으로 밝힌다(2026-10-01)
   if (!hasCommonDividendEvidence(facts)) {
     const it = items.find((x) => x.accountId === "cf:재무활동 현금흐름:배당금 지급");
-    if (it && Object.values(it.values ?? {}).some((v) => v != null && v !== 0)) it.accountName = "배당·분배 지급 (보통주 배당 아님 — 비지배지분·파트너 분배)";
+    if (it && Object.values(it.values ?? {}).some((v) => v != null && v !== 0)) {
+      // 설명은 칸 주석에만(오너 지시 2026-10-02 — 줄 이름에 설명을 넣지 않는다)
+      it.accountName = "배당·분배 지급";
+      const why = "보통주 배당 아님 — 비지배지분·파트너 분배(보통주 배당 근거 없음)";
+      const cn: Record<string, string> = { ...(it.cellNotes ?? {}) };
+      for (const [k, v] of Object.entries(it.values ?? {})) if (v != null && v !== 0 && !cn[k]) cn[k] = why;
+      it.cellNotes = cn;
+    }
   }
   return {
     symbol: "",

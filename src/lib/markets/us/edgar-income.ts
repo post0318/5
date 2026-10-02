@@ -32,7 +32,7 @@ import {
   isFinancialCompany,
 } from "./edgar-financial";
 import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm, revQuarterLabel, type FinSubLine, type RevCol } from "./fin-revenue";
-import { COGS_NOTE, OPINC_NOTE, SGA_NOTE } from "@/lib/fin";
+import { COGS_NOTE, SGA_NOTE } from "@/lib/fin";
 
 /**
  * 미국 상세 손익계산서 — SEC EDGAR companyfacts 정규화 재분류 (블룸버그 I/S 근사).
@@ -632,6 +632,19 @@ export function buildUsIncome(
   ].map(({ what, t, ls }) =>
     row(`※ ${what}: ${t}${ls.length === labels.length ? "" : ` (${ls.join(", ")})`}`, blank(), { depth: 1, italic: true }));
 
+  // 영업이익 산식(합성·근사)은 줄 이름이 아니라 칸 주석에만 — 줄 이름과 칸 주석이 같은 말을 두 번 했다(오너 지시 2026-10-02 "본문행과 주석에
+  // 같이 있는것은 주석만 남기고 지워라"). 이미 칸 주석(합성 산식·세전이익 그대로 등)이 있는 칸은 그대로 둔다
+  if (!opViaFin && !isFin && opIncomeIsDerived(facts)) {
+    const why = facts.opIncomeFromStructure
+      ? "영업이익 소계 없음 · 세전이익 − 영업외 항목(공시 계산 구조)"
+      : facts.financialSector
+        ? "영업이익 태그 없음 · 세전이익(금융업은 이자가 본업)"
+        : facts.nonopInRevenues
+          ? "영업이익 태그 없음 · 세전이익 + 이자비용 − 지분법·기타수익"
+          : "영업이익 태그 없음 · 세전이익 + 이자비용 − 지분법이익 근사";
+    for (const l of labels) if (opIncome[l] != null && !WHY.get(opIncome)?.[l]) note(opIncome, l, why);
+  }
+
   const items: FinancialLineItem[] = [
     row(isFin ? "순수익" : "매출액", revenue, {
       depth: 0,
@@ -665,21 +678,7 @@ export function buildUsIncome(
           ]
         : [row("(−) 영업비용", totalOpex)]),
     row(
-      opViaFin
-        ? labels.some((l) => opIncome[l] != null && WHY.get(opIncome)?.[l]?.startsWith(OPINC_NOTE.synth))
-          ? `영업이익 (${OPINC_NOTE.synth})`
-          : "영업이익"
-        : !isFin && opIncomeIsDerived(facts)
-        ? facts.opIncomeFromStructure
-          ? "영업이익 (소계 없음 · 세전이익−영업외 항목, 공시 계산 구조)"
-          : facts.financialSector
-          ? "영업이익 (태그 없음 · 세전이익 — 금융업은 이자가 본업)"
-          : facts.nonopInRevenues
-          ? "영업이익 (태그 없음 · 세전이익+이자비용−지분법·기타수익)"
-          : labels.every((l) => opIncome[l] == null || WHY.get(opIncome)?.[l] === PRETAX_ONLY_NOTE)
-          ? "영업이익 (태그 없음 · 세전이익 그대로 — 이자비용 태그 없음)"
-          : "영업이익 (태그 없음 · 세전이익+이자비용−지분법이익 근사)"
-        : "영업이익",
+      "영업이익",
       opIncome,
       { depth: 0, isSubtotal: true, isHighlight: true },
     ),
