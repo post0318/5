@@ -1,0 +1,16 @@
+name: 유니버스 통합 뷰 갱신(수동)
+
+# 통합 뷰 스냅샷(universe_overview)을 전 계정·전 시장 다시 계산한다. 평소엔 kr-fg 일일 크론이 같은 갱신을 돌린다 —
+# 이 워크플로는 갱신이 실패한 뒤(2026-10-02 배포 직후 콜드 상태에서 미국 47종목 전부 시간 초과) 즉시 복구할 때 쓴다.
+# 외국인 선물 수집(하루 1회 조건)과 분리하려고 overview=1 모드만 부른다.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sf --max-time 300 -X GET "https://macroresearch.vercel.app/api/cron/kr-fg?overview=1" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
