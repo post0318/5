@@ -91,7 +91,8 @@ const INTEREST = ["InterestExpense", "InterestExpenseNonoperating", "InterestExp
 type YKey = string | string[];
 const yv = (rec: Record<string, number> | undefined, k: YKey): number | null => {
   if (!rec) return null;
-  if (typeof k === "string") return rec[k] ?? null;
+  // "a|b" = 앞 필드가 없으면 뒤 필드(ASML — 야후가 reconciledDepreciation 을 주지 않고 depreciationAndAmortization 만, 2025 = SEC 1,025.9 백만 EUR)
+  if (typeof k === "string") return k.includes("|") ? (k.split("|").map((x) => rec[x]).find((x) => x != null) ?? null) : (rec[k] ?? null);
   let t = 0;
   for (const x of k) { if (rec[x] == null) return null; t += rec[x]; }
   return t;
@@ -107,7 +108,7 @@ const FLOWS: { label: string; y: YKey; concepts: string[]; sign?: 1 | -1; da?: t
   { label: "순이익", y: "netIncome", concepts: ["NetIncomeLoss"] },
   { label: "보통주 귀속 순이익", y: "netIncomeCommonStockholders", concepts: ["NetIncomeLossAvailableToCommonStockholdersBasic"] },
   { label: "연결 순이익", y: "netIncomeIncludingNoncontrollingInterests", concepts: ["ProfitLoss"] },
-  { label: "감가상각비", y: "reconciledDepreciation", concepts: [SYN_DA_CF, ...DA_TOTAL], da: true },
+  { label: "감가상각비", y: "reconciledDepreciation|depreciationAndAmortization", concepts: [SYN_DA_CF, ...DA_TOTAL], da: true },
   { label: "영업활동현금흐름", y: "operatingCashFlow", concepts: ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"] },
   { label: "투자활동현금흐름", y: "investingCashFlow", concepts: ["NetCashProvidedByUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"] },
   { label: "재무활동현금흐름", y: "financingCashFlow", concepts: ["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"] },
