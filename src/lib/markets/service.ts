@@ -80,6 +80,11 @@ export async function getStockOverview(
      * computeKrOverviewMetrics 가 별도로 시세를 받는다) 중복 호출을 피한다.
      */
     skipQuote?: boolean;
+    /**
+     * 연간 재무제표 표(getFinancials annual)만 건너뛴다 — TTM 은 그대로. 미국 멀티플은 TTM 스냅샷(fyEps 포함)만 쓰므로 통합 뷰
+     * 갱신에선 표가 필요 없는데, 콜드 상태에서 15초 제한에 걸려 값은 다 있는데 "연간 재무제표 응답 지연" 경고만 남았다(2026-10-02)
+     */
+    skipAnnualStatement?: boolean;
   } = {},
 ): Promise<StockOverview> {
   const adapter = getAdapter(market);
@@ -88,12 +93,12 @@ export async function getStockOverview(
 
   const wantAnnual = !opts.skipFinancials;
   const wantQuarterly = !opts.skipFinancials && !opts.skipQuarterly;
-  const [profile, quote, annual, quarterly, consensus, ttm] = await Promise.all([
+  const [profile, quote, annualFetched, quarterly, consensus, ttm] = await Promise.all([
     safe(withTimeout(adapter.getCompanyProfile(symbol), 10_000, "회사정보"), warnings, "회사정보"),
     opts.skipQuote
       ? Promise.resolve(null)
       : safe(withTimeout(getEodQuote(market, symbol, { yahooOverride }), 12_000, "시세"), warnings, "시세"),
-    wantAnnual
+    wantAnnual && !opts.skipAnnualStatement
       ? safe(withTimeout(adapter.getFinancials(symbol, "annual"), 15_000, "연간 재무제표"), warnings, "연간 재무제표")
       : Promise.resolve(null),
     wantQuarterly
@@ -122,6 +127,13 @@ export async function getStockOverview(
         })()
       : Promise.resolve(null),
   ]);
+
+  // 연간 표를 건너뛰었어도 TTM 에 사업연도 EPS 가 없는 경로(DART 연결 ADR — 표의 EPS 가 DART EPS 의 USD·ADR 환산)는 PER 에 표가 필요
+  const annual =
+    annualFetched ??
+    (wantAnnual && opts.skipAnnualStatement && ttm && (ttm as TtmFlows).fyEps === undefined
+      ? await safe(withTimeout(adapter.getFinancials(symbol, "annual"), 15_000, "연간 재무제표"), warnings, "연간 재무제표")
+      : null);
 
   let multiples: TrailingMultiples | null = null;
   // 미국은 TTM 스냅샷(getTtm)으로만 계산한다 — 재무를 건너뛴 호출(개요 화면 첫 응답)은 TTM 이 없으므로 계산하지 않는다

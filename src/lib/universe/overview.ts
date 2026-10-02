@@ -58,6 +58,8 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
         // getEodQuote 를 호출하면 종목당 KRX 요청이 중복(과거엔 두 군데서
         // 각각 fetchKrxEod 호출)돼 새로고침이 느려진다.
         skipQuote: isKr,
+        // 미국은 TTM 스냅샷만 쓴다(매출·마진·멀티플 전부) — 연간 표는 안 쓰므로 부르지 않는다
+        skipAnnualStatement: item.market === "us",
       }),
       isKr ? fetchKrForeignOwnership(item.symbol).catch(() => null) : Promise.resolve(null),
       isKr ? fetchKrNaverConsensus(item.symbol).catch(() => null) : Promise.resolve(null),
