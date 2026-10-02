@@ -4,6 +4,8 @@ import type { YahooFundamentalsRow } from "../quote/yahoo";
 import { DA_TOTAL, SYN_DA_CF, daAnnualByYear, resolveDebt } from "./edgar-ev";
 import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT } from "./edgar-bs-structure";
 import { fiscalYearOf, instantOn } from "./edgar-series";
+import { ifrsSourcesOf } from "./edgar-foreign";
+import { sixKValueOf, type SixKStatements } from "./edgar-6k";
 
 /**
  * **20-F 발행사 LTM 열 = Yahoo 분기(원통화) 최근 4개 분기** (오너 결정 2026-09-25 — Yahoo·인포맥스 분기 구성 비교 후.
@@ -43,6 +45,8 @@ export type YahooLtmResult =
       blanked: { label: string; reason: string }[];
       /** SEC 연말 값 + Yahoo 분기 변동분으로 채운 EV 구성요소(Yahoo 연말 값이 SEC 와 정의가 조금 달라 그대로 못 쓴 것 — 오너 결정 2026-10-01 (가)) */
       approx?: { label: string; reason: string }[];
+      /** 회사 6-K 분기 재무제표(연결재무보고서)에서 읽은 항목 — 야후 정의가 SEC 와 달라 못 쓴 항목을 회사 공시 줄로(2026-10-02) */
+      sixK?: { label: string; reason: string }[];
       /** LTM EV·순차입금을 같은 기준일로 계산할 수 있는지 */
       evComplete: boolean;
       evReason: string | null;
@@ -194,12 +198,26 @@ export function blankYahooLtm(facts: CompanyFacts, reason: string): { facts: Com
   return { facts: { ...facts, facts: { ...facts.facts, "us-gaap": out } } as CompanyFacts, result: { source: "none", reason, ltmBlank: true } };
 }
 
+/**
+ * LTM 기간(withYahooLtm 과 같은 판정) — 6-K 분기 보고서를 미리 찾을 때. E = SEC 최근 사업연도말, last = 최신 분기말, yearAgo = 1년 전 분기말
+ */
+export function yahooLtmPeriods(facts: CompanyFacts, y: { quarterly: YahooFundamentalsRow[] }): { E: string; last: string; yearAgo: string } | null {
+  const gaap = (facts.facts["us-gaap"] ?? {}) as Ns;
+  const fy = FY_ANCHOR.flatMap((c) => (gaap[c]?.units?.USD ?? []).filter(isAnnualE)).sort((a, b) => b.end.localeCompare(a.end))[0];
+  if (!fy || !isMonthEnd(fy.end)) return null;
+  const ends = new Set(y.quarterly.map((r) => r.end));
+  let last: string | null = null;
+  for (let i = 1; i <= 3 && ends.has(monthEndShift(fy.end, 3 * i)); i++) last = monthEndShift(fy.end, 3 * i);
+  return last ? { E: fy.end, last, yearAgo: monthEndShift(last, -12) } : null;
+}
+
 /** 정규화(USD) 이후의 facts 에 Yahoo 분기 LTM 을 붙인다 */
 export function withYahooLtm(
   facts: CompanyFacts,
   y: { quarterly: YahooFundamentalsRow[]; annual: YahooFundamentalsRow[] },
   fx: Fx,
   currency: string,
+  sixK: SixKStatements | null = null,
 ): { facts: CompanyFacts; result: YahooLtmResult } {
   // 보강 불가 = LTM 열 공란(사업연도 값을 LTM 으로 보이지 않는다 — 그림자 채우기 금지, 2026-09-27). 예외는 "사업연도 뒤
   // 분기가 아직 없음" 하나(그때는 사업연도 = 최근 12개월, 정의상 같은 기간) — noQuarter
@@ -257,12 +275,57 @@ export function withYahooLtm(
 
   /** SEC 연말·사업연도 값 + 야후 분기 변동분으로 만든 항목(결정 (가) 방식) */
   const approx: { label: string; reason: string }[] = [];
+
+  // ── 6-K 분기 재무제표(회사 공시 줄) ──
+  // 야후 정의가 SEC 와 정확히 같지 않은 항목은 회사가 낸 분기 보고서의 같은 줄을 먼저 쓴다(야후 변동분 근사보다 정의가 SEC 와 같다).
+  // us-gaap 개념 ← IFRS 원 개념(정규화 매핑의 역) ← 20-F 라벨 파일의 줄 이름. 원 개념은 그 회사가 SEC FY 에 실제로 공시한 것만
+  const ifrsNs = ((facts.facts as Record<string, Ns | undefined>)["ifrs-full"] ?? {}) as Ns;
+  const ifrsHas = (c: string, kind: "bs" | "cf") =>
+    Object.values(ifrsNs[c]?.units ?? {}).some((arr) => arr.some((e) => e.end === E && (kind === "bs" ? !e.start : !!e.start && span(e.start, E) > 300)));
+  /** us-gaap 개념의 6-K 열 값(원통화) — 매핑 후보 중 원 개념이 SEC FY 에 있고 6-K 줄이 하나씩 정확히 대응하는 것 */
+  const sixKOf = (dst: string, kind: "bs" | "cf"): { vals: number[]; src: string } | null => {
+    if (!sixK) return null;
+    for (const cand of ifrsSourcesOf(dst)) {
+      let tot: number[] | null = null;
+      const used: string[] = [];
+      for (const el of cand.sum) {
+        const alts = (typeof el === "string" ? [el] : el).filter((c) => ifrsHas(c, kind));
+        const hit = alts.map((c) => ({ c, v: sixKValueOf(sixK, c, kind) })).find((x) => x.v != null);
+        if (!hit) { tot = null; break; }
+        used.push(hit.c);
+        tot = tot ? tot.map((t, i) => t + hit.v![i]) : hit.v!.slice();
+      }
+      if (tot) return { vals: tot.map((v) => v * cand.sign), src: used.join(" + ") };
+    }
+    return null;
+  };
+  const sixKFilled: { label: string; reason: string }[] = [];
+  const fromSixK = new Set<string>();
   // ── 흐름 ──
   for (const it of FLOWS) {
     const present = it.concepts.filter((c) => latestFy(c)?.end === E);
     if (!present.length) continue;
     const sign = it.sign ?? 1;
-    const fail = (reason: string) => blanked.push({ label: it.label, reason });
+    const fail = (reason: string) => { if (!flowSixK()) blanked.push({ label: it.label, reason }); };
+    // 6-K 현금흐름표(당기·전기 누적) — LTM = SEC 사업연도 + 당기 누적 − 전기 누적. 감가상각(여러 개념 합)·손익 항목은 대상 밖
+    const flowSixK = (): boolean => {
+      if (!sixK || it.da || it.concepts === PRETAX || it.concepts === INTEREST) return false;
+      const iC = sixK.cfDates.indexOf(last), iP = sixK.cfDates.indexOf(priorEnd);
+      const curRate = fx.avg(addDay(E, 1), last);
+      if (iC < 0 || iP < 0 || curRate == null) return false;
+      const got = present.map((c) => ({ c, r: sixKOf(c, "cf") }));
+      if (got.some((g) => !g.r)) return false;
+      for (const { c, r } of got) {
+        const fy = latestFy(c)!;
+        const cur = r!.vals[iC] * curRate, prior = r!.vals[iP] * priorRate;
+        const arr = usd(c).map((e) => (isAnnualE(e) && e.end === E && e.start === fy.start ? { ...e, ltmQ: fy.val } : e));
+        arr.push({ ...base, start: addDay(E, 1), end: last, val: cur, ltmQ: cur }, { ...base, start: fyStart, end: priorEnd, val: prior, ltmQ: prior });
+        out[c] = { ...out[c], units: { ...out[c].units, USD: arr } };
+        filledConcepts.add(c);
+      }
+      sixKFilled.push({ label: it.label, reason: `${sixK.source} · ${got.map((g) => g.r!.src).join(", ")}` });
+      return true;
+    };
     // 영업이익 태그가 없는 회사는 세전이익 기반 합성(edgar-ev opIncomeEntries)이 이 값을 가공한다 — 합성값의 ltmQ 를
     // 맞출 수 없어 세전이익·이자비용도 비운다(항목 간 기간 혼합 방지)
     if (!opPresent && (it.concepts === PRETAX || it.concepts === INTEREST)) { fail("영업이익 태그 없음(세전이익 기반 합성)"); continue; }
@@ -273,6 +336,7 @@ export function withYahooLtm(
       ? [daAnnualByYear(facts).get(fyYear) ?? null]
       : present.map((c) => latestFy(c)!.val);
     const bad = secVals.find((v) => v == null || !sameInUnit(v / fyRate, sign * yA));
+    if (bad !== undefined && flowSixK()) continue;
     // 야후 연간이 SEC 와 정의가 조금 다르면 LTM = 야후 최근 4분기 + (SEC 사업연도 − 야후 연간) — 잔액의 결정 (가)와 같은 방식(2026-10-02,
     // TSM CapEx 야후 1,272,450.3 vs SEC 1,272,410.5 백만 TWD). 차이가 SEC 값의 5% 를 넘으면 대응이 틀린 것으로 보고 비운다
     let levelAdj = false;
@@ -322,13 +386,30 @@ export function withYahooLtm(
   for (const it of INSTANTS) {
     const present = it.concepts.filter((c) => on(c, E) != null);
     if (!present.length) continue;
-    const fail = (reason: string) => { blanked.push({ label: it.label, reason }); instOk.set(it.label, false); };
+    const fail = (reason: string) => { if (instSixK()) return; blanked.push({ label: it.label, reason }); instOk.set(it.label, false); };
+    // 6-K 재무상태표 — 전년 연말 열이 SEC 연말 값과 공시 단위 안에서 같을 때만(줄 대응 확인)
+    function instSixK(): boolean {
+      if (!sixK) return false;
+      const iE = sixK.bsDates.indexOf(E), iL = sixK.bsDates.indexOf(last), iP = sixK.bsDates.indexOf(yearAgo);
+      if (iE < 0 || iL < 0) return false;
+      const got = present.map((c) => ({ c, r: sixKOf(c, "bs") }));
+      if (got.some((g) => !g.r || !sameInUnit(on(g.c, E)! / eRate!, g.r.vals[iE]))) return false;
+      for (const { c, r } of got) {
+        put(c, last, r!.vals[iL] * lastRate!);
+        if (iP >= 0 && yearAgoRate != null) put(c, yearAgo, r!.vals[iP] * yearAgoRate);
+        fromSixK.add(c);
+      }
+      instOk.set(it.label, true);
+      sixKFilled.push({ label: it.label, reason: `${sixK.source} · ${got.map((g) => g.r!.src).join(", ")}` });
+      return true;
+    }
     const yE = yAt(E, it.y), yL = yAt(last, it.y);
     if (yE == null) { fail("Yahoo FY말 값 없음"); continue; }
     const bad = present.find((c) => !sameInUnit(on(c, E)! / eRate, yE));
     // EV 구성요소(현금·단기투자·비지배지분) — Yahoo 연말 값이 SEC 와 정의가 조금 다르면(TSM 단기투자) SEC 연말 값 + Yahoo 분기 변동분(오너 결정 2026-10-01 (가) —
     // "EV를 비워두면 안된다"). 그 밖 잔액은 종전대로 공란
     // 2026-10-02 부터 EV 구성요소만이 아니라 전 잔액 항목(오너 지시 "tsm은 값넣어") — 단 EV 밖 항목은 차이가 SEC 의 15% 를 넘으면 대응이 틀린 것으로 보고 비운다
+    if (bad && instSixK()) continue;
     const relI = bad ? Math.abs(on(bad, E)! / eRate - yE) / Math.max(1, Math.abs(on(bad, E)! / eRate)) : 0;
     if (bad && (it.ev || relI <= 0.15) && yAt(last, it.y) != null) {
       const yL0 = yAt(last, it.y)!, yP0 = yearAgoRate != null ? yAt(yearAgo, it.y) : null;
@@ -409,6 +490,7 @@ export function withYahooLtm(
       filled,
       blanked,
       approx,
+      sixK: sixKFilled,
       evComplete: evMiss.length === 0,
       evReason: evMiss.length ? `LTM EV 미표시(Yahoo 분기 LTM) — ${evMiss.join("·")}을(를) ${last} 기준으로 못 채움` : null,
     },
@@ -440,6 +522,7 @@ export function yahooLtmLabel(r: YahooLtmResult): string {
     // 화면 각주는 항목 이름만 — 판정 숫자(SEC vs Yahoo 금액)는 칸 주석·검증 결과에(오너 지적 2026-10-02 "주석에 이상한 내용을 잔뜩")
     (r.blanked.length ? ` · 공란 — ${blankGroups(r.blanked)}` : "") +
     (r.approx?.length ? ` · SEC 연말 + Yahoo 분기 변동분: ${r.approx.map((b) => b.label).join(", ")}` : "") +
+    (r.sixK?.length ? ` · 회사 6-K 분기 재무제표: ${r.sixK.map((b) => b.label).join(", ")}` : "") +
     (r.evReason ? ` · ${r.evReason}` : "")
   );
 }

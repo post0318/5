@@ -6,7 +6,8 @@
 
 import { fetchJson } from "../http";
 import { withFetchScope } from "../fetch-health";
-import { blankYahooLtm, withYahooLtm, yahooLtm, type YahooLtmResult } from "./edgar-yahoo-quarters";
+import { blankYahooLtm, withYahooLtm, yahooLtm, yahooLtmPeriods, type YahooLtmResult } from "./edgar-yahoo-quarters";
+import { sixKStatements } from "./edgar-6k";
 import { fetchYahooFundamentals } from "../quote/yahoo";
 import { fxToUsd } from "./edgar-foreign";
 import { consensusDeepLinks, filingsDeepLink, newsDeepLinks } from "../deeplinks";
@@ -256,7 +257,10 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           fxToUsd(cur).catch(() => null),
         ]);
         if (yq && fx) {
-          const r = withYahooLtm(withShares, yq, fx, cur);
+          // 회사 6-K 분기 재무제표(연결재무보고서 HTML) — 야후 정의가 SEC 와 다른 항목을 회사 줄로(edgar-6k.ts). 없거나 못 읽으면 null(야후 경로 그대로)
+          const per = yahooLtmPeriods(withShares, yq);
+          const sixK = per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(() => null) : null;
+          const r = withYahooLtm(withShares, yq, fx, cur, sixK);
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else if (!fx) {
           // H.10 조회 실패 — 사업연도 값을 LTM 으로 대체하지 않고 LTM 열 공란(미고시와 같은 처리)

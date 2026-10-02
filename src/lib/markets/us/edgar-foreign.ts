@@ -138,6 +138,18 @@ const IFRS_SUM: [(string | string[])[], string][] = [
   ], "LongTermInvestments"],
 ];
 
+/**
+ * us-gaap 개념 → 그 값을 만드는 IFRS 원천 개념(부호 포함) 후보 묶음 — 6-K 분기 재무제표 판독(edgar-6k.ts)이 같은 대응을 쓰게 한다.
+ * 묶음 하나 = 합계를 이루는 개념들(배열 원소가 배열이면 그 중 하나). 단순 대응은 원소 1개짜리 묶음
+ */
+export function ifrsSourcesOf(dst: string): { sum: (string | string[])[]; sign: 1 | -1 }[] {
+  const out: { sum: (string | string[])[]; sign: 1 | -1 }[] = [];
+  for (const [src, d] of IFRS_MAP) if (d === dst) out.push({ sum: [src], sign: 1 });
+  for (const [srcs, d] of IFRS_SUM) if (d === dst) out.push({ sum: srcs, sign: 1 });
+  for (const [src, d] of IFRS_NEG) if (d === dst) out.push({ sum: [src], sign: -1 });
+  return out;
+}
+
 const isCurrency = (u: string) => /^[A-Z]{3}$/.test(u);
 
 /** 보고 통화 — 매출·자산·순이익 개념의 USD 외 통화 단위 중 가장 많은 것. 없으면 null(USD 공시). */
