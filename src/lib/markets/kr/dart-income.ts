@@ -155,11 +155,23 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   });
 
   const hasGross = labels.some((l) => gross[l] != null);
+  // 영업 안에 지분법손익이 있는 투자회사(SK스퀘어 — 영업수익 + 지분법손익 − 영업비용 = 영업이익): 회사 영업비용 줄과 지분법손익 줄을 그대로.
+  // 예전엔 영업비용 = 매출 − 영업이익으로만 구해 −7.39조 같은 음수 영업비용이 나왔다(2026-10-02, FnGuide 대조). 그 식이 정확히 맞는 열만
+  const compOpex = S({ ids: ["ifrs-full_OperatingExpense"], names: ["영업비용"] });
+  const eqInOp = S({ ids: ["ifrs-full_AdjustmentsForUndistributedProfitsOfInvestmentsAccountedForUsingEquityMethod", "ifrs-full_ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod"], names: ["지분법손익"] });
+  const eqOp = blank();
   const totalOpex = (() => {
     const o = blank();
-    for (const l of labels) if (revenue[l] != null && opIncome[l] != null) o[l] = revenue[l]! - opIncome[l]!;
+    for (const l of labels) {
+      if (revenue[l] == null || opIncome[l] == null) continue;
+      if (compOpex[l] != null && eqInOp[l] != null && Math.round(revenue[l]! - compOpex[l]! + eqInOp[l]!) === Math.round(opIncome[l]!)) {
+        o[l] = compOpex[l];
+        eqOp[l] = eqInOp[l];
+      } else o[l] = revenue[l]! - opIncome[l]!;
+    }
     return o;
   })();
+  const hasEqOp = labels.some((l) => eqOp[l] != null);
 
   const items: FinancialLineItem[] = [
     row("매출액", revenue, { depth: 0, isSubtotal: true, isHighlight: true }),
@@ -170,7 +182,7 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
           row("(−) 판매관리비", sga),
           row("(−) 기타 영업비용", otherOpex),
         ]
-      : [row("(−) 영업비용", totalOpex)]),
+      : [row("(−) 영업비용", totalOpex), ...(hasEqOp ? [row("(+) 지분법손익(영업)", eqOp)] : [])]),
     row("영업이익", opIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("(−) 영업외손익", nonOpLoss),
     ...(hasInterest ? [row("(순이자비용)", netIntCost, { depth: 2, italic: true, paren: true })] : []),
