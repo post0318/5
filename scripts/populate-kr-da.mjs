@@ -401,7 +401,7 @@ async function daByYear(corp) {
         for (const [k, { xp, ...v }] of Object.entries(part))
           if (!(k in byYear)) { byYear[k] = { ...v, src }; srcOf[k] = [y, Number(k) === y ? 0 : 1]; xbrlParts[k] = xp; }
         // 보고서별 XBRL 값(재작성 전 판본 포함) — 원문 표 확인은 같은 보고서·같은 열과 대조
-        if (y in part) xbrlAll[y] = Object.fromEntries(Object.entries(part).map(([k, { xp, ...v }]) => [k, v]));
+        if (y in part) xbrlAll[y] = Object.fromEntries(Object.entries(part).map(([k, v]) => [k, { depreciation: v.depreciation, amortisation: v.amortisation }]));
         if (y in part) break;
       } catch (e) {
         console.log(`    (${y} ${rcp} XBRL 실패: ${e.message})`);
