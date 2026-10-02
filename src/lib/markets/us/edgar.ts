@@ -364,6 +364,8 @@ export interface FactUnitEntry {
   ltmQ?: number;
   /** 20-F Yahoo 분기 LTM 에서 채우지 못한 항목의 최근 FY(edgar-yahoo-quarters.ts) — LTM 공란 */
   ltmNone?: boolean;
+  /** 20-F LTM 항목의 출처(edgar-yahoo-quarters LtmSrc) — verify-row 가 나열하고 검증기가 다시 계산한다 */
+  ltmSrc?: { via: string } & Record<string, unknown>;
   /**
    * 합성 영업이익(edgar-ev.ts opIncomeEntries)의 산식 — "pretax" = 세전이익 그대로(이자비용 태그 없음), "ebit" = 세전이익 +
    * 이자비용 (− 지분법), "structure" = 손익계산서 계산 구조로 영업외 항목 차감, "fin" = 금융업 세전이익. 화면 라벨용(G6)
