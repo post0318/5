@@ -376,7 +376,9 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     const olCur = on("OperatingLeaseLiabilityCurrent", bal) ?? on(SYN_MIXED_LEASE_CURRENT, bal);
     const olParts = olNc != null || olCur != null ? (olNc ?? 0) + (olCur ?? 0) : null;
     const olTotal = on("OperatingLeaseLiability", bal);
-    const operatingLease = olParts == null ? olTotal : olTotal == null ? olParts : Math.max(olParts, olTotal);
+    // IFRS(20-F) 는 운용·금융리스 구분이 없고 리스부채 전부가 차입금(IFRS 16, edgar-foreign.ts) — 운용리스 = 0(2026-10-02, TSM 빈칸)
+    const ifrsFiler = !!(facts.facts as Record<string, unknown>)["ifrs-full"];
+    const operatingLease = olParts == null ? (olTotal ?? (ifrsFiler ? 0 : null)) : olTotal == null ? olParts : Math.max(olParts, olTotal);
     // 금융 자회사 보유사: 제조 부문 차입금(부문 항목 합 — CAT 2021 9 + 45 + 9,746 = 9,800, 금융 27,989 와 합하면 연결 37,789 로 정확히 맞는다)
     const debt = cp ? cp.industrialDebt : rawDebt;
     const pref = partOn(PREFERRED, bal, "first");
