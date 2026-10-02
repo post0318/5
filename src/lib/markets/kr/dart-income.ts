@@ -177,7 +177,20 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     row("세전이익", pretax, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("(−) 법인세비용", tax),
     row("(−) 기타", otherToNi),
-    row("당기순이익", netIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
+    row("당기순이익", netIncome, {
+      depth: 0,
+      isSubtotal: true,
+      isHighlight: true,
+      // 손익계산서에 순이익 줄이 없어 지배 + 비지배 귀속으로 채운 해(dart-facts.ts niFromParts)
+      ...(() => {
+        const cn: Record<string, string> = {};
+        for (const p of facts.periods) {
+          const t = p.kind === "fy" ? facts.niFromParts?.get(p.year) : undefined;
+          if (t && netIncome[p.label] != null) cn[p.label] = t;
+        }
+        return Object.keys(cn).length ? { cellNotes: cn } : {};
+      })(),
+    }),
     ...(labels.some((l) => niParent[l] != null)
       ? [row("(지배주주 귀속)", niParent, { depth: 2, italic: true, paren: true, ...(Object.keys(niParentNotes).length ? { cellNotes: niParentNotes } : {}) })]
       : []),
