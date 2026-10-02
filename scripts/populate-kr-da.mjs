@@ -587,6 +587,199 @@ async function daByYear(corp) {
   return Object.keys(byYear).length ? byYear : null;
 }
 
+// ── TTM 감가상각(2026-10-02 — LTM EBITDA 를 손익 TTM 과 같은 12개월로): 최근 사업연도 확정값(byYear) + 당기 누적 − 전년 동기 누적.
+//    누적값은 반기·분기보고서 원문 성격별 비용 표(영업비용 기준 — 연간과 같은 기준)의 누적 열. 연간이 현금흐름 조정 값과 같다고 확인된
+//    회사(src 에 "+영업비용" 없음)만 표가 없을 때 XBRL 현금흐름 조정 누적값으로 대신한다. 둘 다 없으면 TTM 없음(앱은 LTM EBITDA 빈칸).
+const Q_OF_MONTH = { "03": [1, "11013", "1분기"], "06": [2, "11012", "반기"], "09": [3, "11014", "3분기"] };
+async function latestInterim(corp, fy, month = null) {
+  await new Promise((r) => setTimeout(r, 400));
+  const j = await jget(`${B}/list.json?crtfc_key=${DART}&corp_code=${corp}&bgn_de=${fy + 1}0401&end_de=${fy + 2}0331&pblntf_detail_ty=A002&page_count=100`);
+  const rows = (j.list ?? [])
+    .map((r) => ({ r, m: r.report_nm.match(/\((\d{4})\.(\d{2})\)/) }))
+    .filter((x) => x.m && Number(x.m[1]) === fy + 1 && Q_OF_MONTH[x.m[2]] && (!month || x.m[2] === month))
+    .sort((a, b) => b.m[2].localeCompare(a.m[2]) || a.r.rcept_no.localeCompare(b.r.rcept_no));
+  if (!rows.length) return null;
+  const mon = rows[0].m[2];
+  // 같은 기간 접수본 — 원본 먼저(정정본엔 표가 없을 수 있다)
+  const rcps = rows.filter((x) => x.m[2] === mon).map((x) => x.r.rcept_no).sort();
+  const [q, code, label] = Q_OF_MONTH[mon];
+  return { year: fy + 1, q, code, label, rcps, month: mon };
+}
+/**
+ * 반기·분기보고서 원문 성격별 표 — 당기 누적 열 합계(감가 + 무형). 이 표엔 전년 동기 열이 없다(현대로템·LS 2026 반기 실측) — 전년 동기는
+ * 작년 같은 보고서의 당기 표로. 연결 표가 먼저, 별도 표가 뒤 — 첫 표. "매출의 성격별 분류" 표 제외
+ */
+function parseInterimNature(xml) {
+  const lbl = (c) => (c ?? "").replace(/^[\s\-–·ㆍ•]+/, "").replace(/\s|\(.*?\)/g, "");
+  const out = {};
+  for (const m of xml.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
+    const head = clean(xml.slice(Math.max(0, m.index - 400), m.index)).slice(-160);
+    // "비용의 성격별 분류"·"성격별 비용"(HD현대일렉트릭) — "성격별 비용의 기능별 배분" 표는 제외
+    if (!/비용의\s*성격별|성격별\s*비용/.test(head) || /기능별/.test(head.slice(-60))) continue;
+    const per = /당(반기|분기|기)/.test(head.slice(-60)) ? "cur" : null;
+    if (!per || out[per]) continue;
+    const rows = [...m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
+    // 값 열 — 머리 줄에 "누적"이 있으면 그 열, 없으면 첫 숫자 열(누적만 공시)
+    const hdr = rows.find((r) => r.some((c) => /누적/.test(c)));
+    const cumIdx = hdr ? hdr.findIndex((c) => /누적/.test(c)) : -1;
+    const valOf = (r) => {
+      if (cumIdx >= 0) return numOf(r[cumIdx] ?? "");
+      const v = r.slice(1).map((c) => (/^[-–]$/.test(c.trim()) ? 0 : numOf(c))).filter((x) => x != null);
+      return v[0] ?? null;
+    };
+    const kind = (r) => {
+      const t = lbl(r[0]);
+      if (/^감가상각비(및|와)무형자산상각비$/.test(t)) return "comb";
+      if (/^(감가상각비|유형자산(감가)?상각비)$/.test(t)) return "base";
+      if (/^투자부동산(감가)?상각비$/.test(t)) return "inv";
+      if (/^사용권자산(감가)?상각비$/.test(t)) return "rou";
+      if (t === "무형자산상각비") return "amo";
+      return null;
+    };
+    const by = {};
+    for (const r of rows) { const k = kind(r); if (k && !(k in by)) by[k] = valOf(r); }
+    if (by.comb == null && by.base == null) continue;
+    const u = clean(m[0]).match(UNIT_RE)?.[1] ?? head.match(UNIT_RE)?.[1];
+    if (!u) continue;
+    const total = by.comb ?? (by.base ?? 0) + (by.inv ?? 0) + (by.rou ?? 0) + (by.amo ?? 0);
+    out[per] = total * UNIT[u];
+    out.unit = UNIT[u];
+    break;
+  }
+  return out.cur != null ? out : null;
+}
+/**
+ * 반기·분기 손익계산서 본표가 성격별인 회사(SK스퀘어 — "3개월 | 누적 | 3개월 | 누적") — 누적 열(당기·전년 동기)의 감가상각비·무형상각.
+ * 영업비용 항목 합 = 영업비용 합계(누적 두 열)일 때만
+ */
+function interimIsByNature(rows, before) {
+  const strip = (c) => (c ?? "").replace(/^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩXIVL]+\.\s*/, "").replace(/\s/g, "");
+  const iOp = rows.findIndex((r) => strip(r[0]) === "영업비용");
+  if (iOp < 0 || !rows.some((r) => strip(r[0]).replace(/\(.*?\)/g, "") === "영업이익")) return null;
+  const hdr = rows.find((r) => r.filter((c) => /누적/.test(c)).length === 2);
+  if (!hdr) return null;
+  // 숫자 열 중 누적 위치(머리 줄의 누적 순번 → 숫자 열 순번)
+  const cumPos = hdr.map((c, i) => (/누적/.test(c) ? i : -1)).filter((i) => i >= 0).map((i) => hdr.slice(0, i).filter((c) => /3개월|누적/.test(c)).length);
+  const nums = (r) => r.slice(1).map((c) => (/^[-–]$/.test(c.trim()) ? 0 : numOf(c))).filter((v) => v != null);
+  const items = [];
+  for (let i = iOp + 1; i < rows.length; i += 1) {
+    if (/^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]/.test((rows[i][0] ?? "").trim()) || strip(rows[i][0]).replace(/\(.*?\)/g, "") === "영업이익") break;
+    if (/^(지분법|영업외)/.test(strip(rows[i][0]))) break;
+    items.push(rows[i]);
+  }
+  const dep = items.find((r) => strip(r[0]) === "감가상각비");
+  if (!dep) return null;
+  for (const p of cumPos) {
+    const sum = items.reduce((a, r) => a + (nums(r)[p] ?? 0), 0);
+    if (Math.abs(sum - (nums(rows[iOp])[p] ?? NaN)) > 1) return null;
+  }
+  const u = [...before.matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
+  if (!u) return null;
+  const amo = items.find((r) => strip(r[0]) === "무형자산상각비");
+  const at = (p) => ((nums(dep)[p] ?? 0) + (amo ? nums(amo)[p] ?? 0 : 0)) * UNIT[u];
+  return { cur: at(cumPos[0]), prior: at(cumPos[1]), unit: UNIT[u] };
+}
+async function interimDoc(rcpNo) {
+  await new Promise((r) => setTimeout(r, 1000));
+  const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
+  if (!res.ok) throw new Error(`document ${res.status}`);
+  const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
+  let nat = null;
+  let cf = null;
+  for (const b of Object.values(files)) {
+    let x = new TextDecoder("utf-8").decode(b);
+    if ((x.match(/�/g) ?? []).length > 50) x = new TextDecoder("euc-kr").decode(b);
+    nat ??= parseInterimNature(x);
+    if (!nat)
+      for (const m of x.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
+        const rows = [...m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
+        const is = interimIsByNature(rows, clean(x.slice(Math.max(0, m.index - 1500), m.index)));
+        if (is) { nat = is; break; }
+      }
+    // 현금흐름 조정 주석(당기 누적·전기 누적 열) — XBRL 에 조정 태그가 없는 회사(한전KPS 2026 반기)용
+    if (!cf) {
+      const c = parseDocDa(x);
+      if (c && c.dep[0] != null && c.dep[1] != null) cf = { cur: c.dep[0] + (c.amo[0] ?? 0), prior: c.dep[1] + (c.amo[1] ?? 0), unit: c.unit };
+    }
+  }
+  return nat || cf ? { ...(nat ?? {}), cf } : null;
+}
+/** 반기·분기보고서 XBRL 현금흐름 조정 누적(감가 + 사용권 + 투자부동산 + 무형) — 당기·전년 동기 */
+async function interimCf(rcpNo, code, year) {
+  await new Promise((r) => setTimeout(r, 1000));
+  const res = await fetch(`${B}/fnlttXbrl.xml?crtfc_key=${DART}&rcept_no=${rcpNo}&reprt_code=${code}`);
+  if (!res.ok) return null;
+  let xml;
+  try {
+    const f = unzipSync(new Uint8Array(await res.arrayBuffer()));
+    xml = strFromU8(f[Object.keys(f).find((n) => n.endsWith(".xbrl"))]);
+  } catch {
+    return null;
+  }
+  // 누적 컨텍스트 접두어(반기 CFY2026dHYA, 1분기·3분기는 회사 XBRL 마다 다를 수 있어 실제 값이 있는 접두어를 찾는다)
+  const prefixes = (y, cp) => [...new Set([...xml.matchAll(new RegExp(`contextRef="(${cp}${y}d[A-Z0-9]*?A)_`, "g"))].map((m) => m[1]))];
+  const tot = (prefix) => {
+    const d0 = pick(xml, DEP_C, prefix);
+    if (d0 == null) return null;
+    const [rou, inv] = DEP_EXTRA.map(([c, ent]) => pick(xml, [c], prefix) ?? pickEntity(xml, ent, prefix));
+    return d0 + (rou ?? 0) + (inv ?? 0) + (pick(xml, AMO_C, prefix) ?? 0);
+  };
+  const cp = prefixes(year, "CFY").map(tot).find((v) => v != null);
+  const pp = prefixes(year - 1, "PFY").map(tot).find((v) => v != null);
+  return cp != null && pp != null ? { cur: cp, prior: pp, unit: 1 } : null;
+}
+async function ttmDa(corp, byYear) {
+  const fy = Math.max(...Object.keys(byYear).map(Number));
+  const fyRow = byYear[fy];
+  if (!fyRow || fyRow.depreciation == null) return null;
+  const it = await latestInterim(corp, fy);
+  if (!it) return null;
+  const fyTot = fyRow.depreciation + (fyRow.amortisation ?? 0);
+  let part = null;
+  let how = "";
+  const firstDoc = async (rcps) => {
+    for (const rc of rcps) {
+      const d = await interimDoc(rc).catch(() => null);
+      if (d?.cur != null) return d;
+    }
+    return null;
+  };
+  const docs = [];
+  for (const rc of it.rcps) docs.push(await interimDoc(rc).catch(() => null));
+  const curN = docs.find((d) => d?.cur != null) ?? null;
+  if (curN?.prior != null) {
+    // 성격별 손익계산서 본표 — 같은 보고서에 전년 동기 누적이 있다
+    part = { cur: curN.cur, prior: curN.prior };
+    how = "성격별(손익계산서 본표)";
+  } else if (curN) {
+    // 전년 동기 = 작년 같은 기간 보고서의 당기 표
+    const prevIt = await latestInterim(corp, fy - 1, it.month);
+    const prevN = prevIt ? await firstDoc(prevIt.rcps) : null;
+    if (prevN) {
+      part = { cur: curN.cur, prior: prevN.cur };
+      how = "성격별";
+    }
+  }
+  // 연간이 현금흐름 조정 값과 다른(성격별로 바꾼) 회사는 XBRL 대체 불가 — 기준이 달라진다
+  if (!part && !/\+영업비용(?!확인)/.test(fyRow.src ?? "")) {
+    for (const rc of it.rcps) {
+      part = await interimCf(rc, it.code, it.year);
+      if (part) { how = "현금흐름 조정"; break; }
+    }
+    // XBRL 에 없으면 원문 현금흐름 조정 주석(당기·전기 누적 열)
+    if (!part) {
+      const c = docs.find((d) => d?.cf)?.cf;
+      if (c) { part = c; how = "현금흐름 조정(원문)"; }
+    }
+  }
+  if (!part) {
+    console.log(`    (TTM — ${it.year} ${it.label} 누적 감가상각 못 찾음: 없음)`);
+    return null;
+  }
+  const v = fyTot + part.cur - part.prior;
+  return { ttmDepreciation: v, ttmAmortisation: 0, ttmLabel: `FY${fy} + ${it.year} ${it.label} − ${it.year - 1} ${it.label}`, ttmSrc: how };
+}
+
 const cli = new MongoClient(URI);
 await cli.connect();
 const db = cli.db(DB);
@@ -603,9 +796,11 @@ for (const sym of symbols) {
   let byYear = null;
   try { byYear = await daByYear(corp); } catch (e) { console.log(`  ${sym}: ${e.message}`); }
   if (!byYear) { console.log(`  ${sym}: D&A 없음`); continue; }
+  const ttm = await ttmDa(corp, byYear).catch((e) => (console.log(`    (TTM 실패: ${e.message})`), null));
+  if (ttm) console.log(`    TTM ${ttm.ttmLabel} = ${t(ttm.ttmDepreciation)} (${ttm.ttmSrc})`);
   if (!CHECK) await db.collection(COLL).replaceOne(
     { _id: sym },
-    { _id: sym, byYear, updatedAt: new Date().toISOString() },
+    { _id: sym, byYear, ...(ttm ?? {}), updatedAt: new Date().toISOString() },
     { upsert: true },
   );
   const yrs = Object.keys(byYear).map(Number).sort((a, b) => b - a);

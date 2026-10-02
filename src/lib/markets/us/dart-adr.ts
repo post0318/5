@@ -473,7 +473,8 @@ async function loadValuationInputs(spec: Spec, yahoo: string | null) {
     daDoc: (() => {
       const conv = convertDaDoc(daDoc, fx, factsKrw);
       // 주석 TTM 이 있으면 LTM 감가상각비 = dartAdrTtm 의 구성 기간 환산값(원화 경로와 같은 값의 환산)
-      if (conv && daDoc?.ttmDepreciation != null && ttm?.daTtm != null) Object.assign(conv, { ttmDepreciation: ttm.daTtm, ttmAmortisation: 0 });
+      if (conv && daDoc?.ttmDepreciation != null && ttm?.daTtm != null)
+        Object.assign(conv, { ttmDepreciation: ttm.daTtm, ttmAmortisation: 0, ttmLabel: daDoc.ttmLabel ?? null });
       return conv;
     })(),
     estimates,

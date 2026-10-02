@@ -192,7 +192,7 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   for (const l of labels) if (debt[l] != null || cashTot[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashTot[l] ?? 0);
 
   // 감가상각비: 사업보고서 XBRL 주석 실측(daDoc) + 이전 연도는 유·무형자산 롤포워드 보정
-  const daS = daAndAmortSeries(facts, daDoc);
+  const daS = daAndAmortSeries(facts, daDoc, ttm?.periodLabel ?? null);
   const daEst = blank();
   for (const y of years) daEst[`${y}Y`] = daS.byYear.get(y) ?? null;
   daEst[LTM] = daS.ltm;

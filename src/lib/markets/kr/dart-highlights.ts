@@ -204,7 +204,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     });
 
   // 감가상각비 실측(사업보고서 XBRL 주석) — EBITDA = 영업이익 + 감가상각비
-  const daS = daAndAmortSeries(facts, daDoc ?? null);
+  const daS = daAndAmortSeries(facts, daDoc ?? null, ttm?.periodLabel ?? null);
   const ebitda = columns.map((c, i) => {
     if (opInc[i] == null) return null;
     const da = c.kind === "fy" ? (daS.byYear.get(cy(c)) ?? null) : c.kind === "ltm" ? daS.ltm : null;

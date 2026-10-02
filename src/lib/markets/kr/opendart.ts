@@ -635,7 +635,8 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
     const bal = krLtmBalance(facts, quarterFacts, lastQuarter, code);
     const b = bal.bridge;
     // LTM D&A — 하이라이트와 같은 함수(사업보고서 주석 실측 → 연간 폴백)
-    const da = daAndAmortSeries(facts, daDoc);
+    // 손익 TTM 과 같은 12개월의 감가상각 TTM 만(없으면 빈칸 — 기간 혼재 금지, 2026-10-02)
+    const da = daAndAmortSeries(facts, daDoc, filled.periodLabel);
     if (da.ltm != null) {
       const lastY = [...facts.annualEndByYear.keys()].sort((a, b) => a - b).at(-1);
       const docTtm = daDoc?.ttmDepreciation != null;
