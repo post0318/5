@@ -6144,19 +6144,41 @@ async function verifyUs(sym) {
             ? { status: PASS, note: `앱 ${app} = SEC 20-F ${first.how} (정확 일치 — 앱 순서 규칙의 첫 후보)`, app, src: first.v }
             : { status: FAIL, note: `앱 ${app} ≠ 앱 순서 규칙의 첫 후보 ${first.v} [${first.how}]${cands.length > 1 ? ` · 나머지 후보 ${cands.slice(1).map((c0) => `${c0.v} [${c0.how}]`).join(" / ")}` : ""}`, app, src: first.v });
         }
-        // 앱 사업연도 값(0 아님)이 있는데 SEC 원본에 그 개념을 만드는 원천이 전혀 없음(재감사 9차 (나) — 대조 대상 밖에서 값이 생기는 경로).
-        //   대상 = 대응표의 받는 개념(IFRS 회사), us-gaap 공시사는 그 20-F 인스턴스에 이름이 나오는 개념(다른 기간·차원 포함)
-        const isUsGaapFiler = uniq.some((y) => y.id.startsWith("us-gaap_")) && !uniq.some((y) => y.id.startsWith("ifrs-full_"));
-        const instIds = new Set([...secE.facts, ...secE.durFacts].map((y) => y.id));
-        const dstSet = new Set(groups.map((g) => g.dst));
-        let orphanN = 0;
+        // 앱 사업연도 값(0 아님) 전체 — 위 값 대조에 들지 않은 개념은 SEC 원본에 원천이 없는 값(재감사 9차 (나)·10차 — 대응표 밖 개념에 값을 만드는 경로).
+        //   예외는 앱 합성 개념뿐이고 각자 규칙으로 대조한다: …Unified(영업이익 단일 시계열) = 앱 영업이익(위에서 SEC 대조),
+        //   …FaceDerived(본표 합성 줄) = SEC 원본 연말 값 하나 또는 두 값의 합 × H.10 기말(정확 일치 — edgar-yahoo-quarters 본표 합성 규칙)
+        const bsSec = uniq.filter((y) => y.kind === "bs" && y.v !== 0);
+        const rBs = repCur === "USD" ? 1 : fxEndRate(fxRows, row.ltm.E);
+        let orphanN = 0, synthN = 0;
         for (const [d, v] of Object.entries(fyApp)) {
           if (v == null || v === 0 || needDst.has(d)) continue;
-          if (!(isUsGaapFiler ? instIds.has(`us-gaap_${d}`) : dstSet.has(d))) continue;
+          const kindNm = fyKind[d] === "bs" ? "연말" : "흐름";
+          if (/Unified$/.test(d)) {
+            synthN++;
+            const base = fyApp[d.replace(/Unified$/, "")];
+            add("A", `20-F 사업연도 ${kindNm} 합성 ${d} @${row.ltm.E}`, "LTM", base != null && needDst.has(d.replace(/Unified$/, "")) && extEq(v, base)
+              ? { status: PASS, note: `앱 ${v} = 앱 ${d.replace(/Unified$/, "")}(SEC 대조 통과 개념)` }
+              : { status: FAIL, note: `앱 합성 ${v} ≠ SEC 대조된 ${d.replace(/Unified$/, "")} ${base ?? "없음"}` });
+            continue;
+          }
+          if (/FaceDerived$/.test(d) && fyKind[d] === "bs") {
+            synthN++;
+            let hit = null;
+            if (rBs != null) {
+              outer: for (let i = 0; i < bsSec.length; i++) {
+                if (extEq(v, bsSec[i].v * rBs)) { hit = `${shortId(bsSec[i].id)} ${bsSec[i].v}`; break; }
+                for (let j = i + 1; j < bsSec.length; j++) if (extEq(v, (bsSec[i].v + bsSec[j].v) * rBs)) { hit = `${shortId(bsSec[i].id)} ${bsSec[i].v} + ${shortId(bsSec[j].id)} ${bsSec[j].v}`; break outer; }
+              }
+            }
+            add("A", `20-F 사업연도 ${kindNm} 합성 ${d} @${row.ltm.E}`, "LTM", hit
+              ? { status: PASS, note: `앱 ${v} = SEC 20-F (${hit}) × H.10 기말 ${rBs} (정확 일치)` }
+              : { status: FAIL, note: `앱 본표 합성 값 ${v} — SEC 원본 연말 값 하나·두 값 합 × H.10 기말 어느 것과도 같지 않음(출처 불명)` });
+            continue;
+          }
           orphanN++;
-          add("A", `20-F 사업연도 ${fyKind[d] === "bs" ? "연말" : "흐름"} 원천 없음 ${d} @${row.ltm.E}`, "LTM", { status: FAIL, note: `앱 사업연도 값 ${v} 이 있는데 SEC 20-F 원본(${row.ltm.E})에 이 개념을 만드는 원천 값이 없음 — 출처 불명 값` });
+          add("A", `20-F 사업연도 ${kindNm} 원천 없음 ${d} @${row.ltm.E}`, "LTM", { status: FAIL, note: `앱 사업연도 값 ${v} 이 있는데 SEC 20-F 원본(${row.ltm.E})에 이 개념을 만드는 원천 값이 없음(대응표·같은 이름 모두 없음) — 출처 불명 값` });
         }
-        add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: uniq.length ? PASS : FAIL, note: `${uniq.length ? "" : "SEC 20-F 통화 값을 하나도 못 읽음 — 대조 불가 · "}SEC 20-F ${repCur ?? "?"} 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(앱 개념 값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖), 원천 없는 앱 값 ${orphanN}개` });
+        add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: uniq.length ? PASS : FAIL, note: `${uniq.length ? "" : "SEC 20-F 통화 값을 하나도 못 읽음 — 대조 불가 · "}SEC 20-F ${repCur ?? "?"} 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(앱 개념 값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖), 합성 개념 대조 ${synthN}개, 원천 없는 앱 값 ${orphanN}개` });
       }
     }
     add("A", "20-F LTM 공란 완결성(6-K 대조)", "LTM", { status: PASS, note: `앱 LTM 공란 ${gaps.length}개 개념 중 6-K 에서 값을 찾은 것 없음(${gapOk}개 대조${gapNa.length ? `, 대조 불가 ${gapNa.length}개` : ""})` });
