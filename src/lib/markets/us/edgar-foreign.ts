@@ -120,7 +120,9 @@ const IFRS_SUM: [(string | string[])[], string][] = [
   [["AdjustmentsForDepreciationExpense", "AdjustmentsForAmortisationExpense"], "DepreciationDepletionAndAmortization"],
   // 한국 IFRS 현금성자산과 같은 범위 — 현금 외 유동 상각후원가·당기손익 금융자산
   [["CurrentFinancialAssetsAtAmortisedCost", "CurrentFinancialAssetsAtFairValueThroughProfitOrLoss"], "ShortTermInvestments"],
-  [["IssuedCapital", "SharePremium", "CapitalReserve"], "CommonStocksIncludingAdditionalPaidInCapital"],
+  // 자본금 + 주식발행초과금. CapitalReserve 는 넣지 않는다 — TSM 은 이 개념을 이익잉여금 안의 법정적립금(311,147 백만 TWD)에 달아
+  // 이익잉여금과 이중 계산됐다(2026-10-02, 6-K 연결재무보고서 "Appropriated as legal capital reserve" 로 확인). 회사마다 쓰임이 달라 쓰지 않음
+  [["IssuedCapital", "SharePremium"], "CommonStocksIncludingAdditionalPaidInCapital"],
   [["ProceedsFromIssueOfBondsNotesAndDebentures", "ProceedsFromNoncurrentBorrowings"], "ProceedsFromIssuanceOfLongTermDebt"],
   [["RepaymentsOfBondsNotesAndDebentures", "RepaymentsOfNoncurrentBorrowings"], "RepaymentsOfLongTermDebt"],
   // 투자활동 금융자산 취득·처분(TSM 2025 20-F — 상각후원가·FVOCI·FVTPL 별 개념). 현금흐름표 투자자산 취득·처분 줄이 합산하는 개념으로
