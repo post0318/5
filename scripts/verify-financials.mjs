@@ -849,13 +849,23 @@ function sixKBsHeaders(text) {
 function sixKRows(text, labels) {
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const out = [];
-  for (const l of [...new Set(labels.map((x) => x.replace(/&amp;/g, "&").trim()))].filter((x) => x.length > 3).sort((a, b) => b.length - a.length)) {
+  // 현금흐름 합계 줄 표현 차이 — 20-F "Net cash used in investing activities" ↔ 분기 "Net cash provided by (used in) investing activities"(앱 normLabel 과 같은 동치)
+  const variants = (l) => {
+    const m = /^net cash (?:provided by |used in |\(used in\) |provided by \(used in\) |\(used in\) provided by |used in \(provided by\) )+(.+)$/i.exec(l);
+    return m ? [l, `net cash provided by (used in) ${m[1]}`, `net cash used in ${m[1]}`, `net cash provided by ${m[1]}`, `net cash (used in) provided by ${m[1]}`] : [l];
+  };
+  for (const l of [...new Set(labels.map((x) => x.replace(/&amp;/g, "&").trim()).flatMap(variants))].filter((x) => x.length > 3).sort((a, b) => b.length - a.length)) {
     const words = l.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
     if (!words.length) continue;
-    const re = new RegExp(`(?:^|[^a-z])${words.map(esc).join("[^a-z0-9(]*(?:\\([^)]{0,30}\\)[^a-z0-9(]*)?")}[^a-z0-9(—\\-]*((?:[\\s‖]*(?:\\(?[\\d,]+(?:\\.\\d+)?\\)?|—|-)(?![\\d,]))+)`, "g");
+    // 단어 사이: 구두점·괄호(괄호 안 단어도 라벨 단어면 그대로 대응 — "(decrease)"), 또는 라벨에 없는 괄호 삽입구 하나("(used in)").
+    // 라벨 뒤: 주석 표기("(note 6)")·통화 기호 건너뜀. 숫자 사이: 공백·칸·$
+    const re = new RegExp(`(?:^|[^a-z])${words.map(esc).join("[^a-z0-9]*(?:\\([^)]{0,30}\\)[^a-z0-9]*)?")}(?:[^a-z0-9(—\\-]*\\(notes?[^)]{0,20}\\))?[^a-z0-9(—\\-]*((?:[\\s‖$]*(?:\\(?[\\d,]+(?:\\.\\d+)?\\)?|—|-)(?![\\d,]))+)`, "g");
     for (const m of text.matchAll(re)) {
       if (out.some((o) => Math.abs(o.i - m.index) < 5)) continue;
-      const toks = [...m[1].matchAll(/\(?[\d,]+(?:\.\d+)?\)?|—|-/g)].map((x) => x[0]);
+      // 주석 번호 묶음("15, 19" · "7, 8")은 값이 아니다 — 맨 앞에 있으면 뺀다
+      const body = m[1].replace(/^([\s‖$]*)\d{1,2}(?:,\s?\d{1,2})+(?=[\s‖])/, "$1");
+      const toks = [...body.matchAll(/\(?[\d,]+(?:\.\d+)?\)?|—|-/g)].map((x) => x[0]).filter((t) => /\d/.test(t) || t === "—" || t === "-");
+      if (!toks.length) continue;
       out.push({ i: m.index, label: l, toks, nums: toks.map((t) => (t === "—" || t === "-" ? 0 : (t.startsWith("(") ? -1 : 1) * Number(t.replace(/[(),]/g, "")))) });
     }
   }
@@ -5768,6 +5778,7 @@ async function verifyUs(sym) {
    * 다시 계산한다(앱은 표 칸 판독, 검증기는 문서 글자 판독). 줄 선택: 라벨 = SEC 20-F 라벨 파일, 재무상태표는 연말 열 = SEC 값인 줄만, 현금흐름은 부호 반전 역할로 부호.
    * 다시 계산할 수 없는 기록은 실패(면제 없음)
    */
+  const cfacts = f;
   const checkSixKDetails = async () => {
     const sixKNote = /회사 6-K 분기 재무제표: (.+?)(?: · |$)/.exec(ltmYahooNote ?? "")?.[1];
     const det = row?.sixK ?? null;
@@ -5802,10 +5813,16 @@ async function verifyUs(sym) {
             const rF = fxAvg(fxRows, fyStart, d.fyEnd), rC = fxAvg(fxRows, nextDay, d.at), rP = fxAvg(fxRows, fyStart, priorEnd);
             if (rF == null || rC == null || rP == null) return { status: FAIL, note: "환율 없음" };
             const labs = f.labels.get(id) ?? [], neg = new Set((f.negLabels.get(id) ?? []).map((x) => x.toLowerCase()));
-            const rows0 = sixKRows(text, labs);
+            // 현금흐름표 구간만 — 제목 뒤 4천 자 안에 "operating activities" 가 있는 첫 제목 ~ 주석 시작(목차·주석 표의 같은 이름 줄 제외)
+            let cs0 = -1;
+            for (const h0 of text.matchAll(/statements? of cash flows?/g)) if (text.slice(h0.index, h0.index + 4_000).includes("operating activities")) { cs0 = h0.index; break; }
+            if (cs0 < 0) return { status: FAIL, note: `6-K 현금흐름표 구간 못 찾음(${d.report})` };
+            const ce1 = text.slice(cs0 + 200).search(/notes to (?:the )?(?:interim )?(?:condensed )?(?:consolidated|summary)/);
+            const cfText = text.slice(cs0, ce1 < 0 ? undefined : cs0 + 200 + ce1);
+            const rows0 = sixKRows(cfText, labs);
             if (d.kind === "cfZero") {
               if (fy0.v !== 0) return { status: FAIL, note: `0 규칙인데 SEC 사업연도 ${shortId(id)} = ${fy0.v}` };
-              const hd0 = rows0.filter((r) => /months ended/.test(text.slice(Math.max(0, r.i - 20_000), r.i + 20_000)));
+              const hd0 = rows0.filter((r) => /months ended/.test(cfText.slice(Math.max(0, r.i - 20_000), r.i + 20_000)));
               if (hd0.length) return { status: FAIL, note: `0 규칙인데 6-K 에 "${hd0[0].label}" 줄 있음` };
               notes.push(`${shortId(id)} 사업연도 0·분기 현금흐름표에 줄 없음`);
               continue;
@@ -5817,11 +5834,11 @@ async function verifyUs(sym) {
               let nums = r.nums;
               if (nums.length === 3 && Number.isInteger(nums[0]) && nums[0] > 0 && nums[0] < 100 && !/,/.test(r.toks[0])) nums = nums.slice(1);
               if (nums.length !== 2 && nums.length !== 4) continue;
-              const lo = Math.max(0, r.i - 20_000), win = text.slice(lo, r.i + 20_000);
+              const lo = Math.max(0, r.i - 20_000), win = cfText.slice(lo, r.i + 20_000);
               const ys = [...win.matchAll(/months ended[^0-9]{0,200}?(?:[a-z]{3,9}\.? \d{1,2},?[\s‖]*)+[^0-9]{0,80}?(20\d\d)[\s‖]+(20\d\d)/g)].sort((a, b) => Math.abs(lo + a.index - r.i) - Math.abs(lo + b.index - r.i))[0];
               if (!ys || ![yC, yP].includes(ys[1]) || ![yC, yP].includes(ys[2]) || ys[1] === ys[2]) continue;
               const pair = nums.length === 4 ? nums.slice(2) : nums;
-              const unit = sixKUnitAt(text, r.i);
+              const unit = sixKUnitAt(text, cs0 + r.i);
               if (!unit) continue;
               const isNeg = neg.has(r.label.toLowerCase()) && !labs.some((x) => x.toLowerCase() === r.label.toLowerCase() && !neg.has(x.toLowerCase()));
               cands.push({ cur: (ys[1] === yC ? pair[0] : pair[1]) * unit, prior: (ys[1] === yC ? pair[1] : pair[0]) * unit, neg: isNeg, label: r.label });
@@ -5845,7 +5862,12 @@ async function verifyUs(sym) {
         let tot = 0;
         const notes = [];
         for (const { id, sign } of d.ids) {
-          const fyF = f.facts.find((x) => x.id === id && !x.dims.length);
+          let fyF = f.facts.find((x) => x.id === id && !x.dims.length);
+          if (!fyF) {
+            const [ns0, nm0] = [id.slice(0, id.indexOf("_")), id.slice(id.indexOf("_") + 1)];
+            const cf0 = Object.values(cfacts?.facts?.[ns0]?.[nm0]?.units ?? {}).flat().filter((e) => !e.start && e.end === d.fyEnd && /^20-F/.test(e.form ?? "")).sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0];
+            if (cf0) fyF = { id, v: cf0.val, dims: [], from: `companyfacts ${cf0.form} ${cf0.filed}` };
+          }
           if (!fyF) return { status: FAIL, note: `SEC 20-F ${d.fyEnd} ${shortId(id)} 없음` };
           const labs = f.labels.get(id) ?? [];
           const rows0 = sixKRows(text, labs).map((r) => {
@@ -5865,7 +5887,7 @@ async function verifyUs(sym) {
           }
           if (d.kind === "bsDelta") {
             const u = rows0.filter((x) => x.hd.dates.includes(d.at));
-            const uq = [...new Map(u.map((x) => [x.cols.join("|"), x])).values()];
+            const uq = [...new Map(u.map((x) => [`${x.cols[x.hd.dates.indexOf(d.at)]}|${x.cols[x.hd.dates.indexOf(d.fyEnd)]}`, x])).values()];
             if (uq.length !== 1) return { status: FAIL, note: `변동분 근사 "${labs[0] ?? shortId(id)}" 줄 ${uq.length}개(${d.report})` };
             const x = uq[0], vE = x.cols[x.hd.dates.indexOf(d.fyEnd)], vA = x.cols[x.hd.dates.indexOf(d.at)];
             tot += sign * (fyF.v + (vA - vE));
@@ -5873,7 +5895,7 @@ async function verifyUs(sym) {
             continue;
           }
           const ok = rows0.filter((x) => x.hd.dates.includes(d.at) && eqFy(x));
-          const uq = [...new Map(ok.map((x) => [x.cols.join("|"), x])).values()];
+          const uq = [...new Map(ok.map((x) => [`${x.cols[x.hd.dates.indexOf(d.at)]}|${x.cols[x.hd.dates.indexOf(d.fyEnd)]}`, x])).values()];
           if (uq.length !== 1) return { status: FAIL, note: `6-K 재무상태표 "${labs[0] ?? shortId(id)}" 연말 열 = SEC ${fyF.v} 인 줄 ${uq.length}개(${d.report})` };
           const x = uq[0], sg = Math.abs(x.cols[x.hd.dates.indexOf(d.fyEnd)] - fyF.v) < unitOf(fyF.v) + Math.abs(fyF.v) * 1e-9 ? 1 : -1;
           tot += sign * sg * x.cols[x.hd.dates.indexOf(d.at)];
