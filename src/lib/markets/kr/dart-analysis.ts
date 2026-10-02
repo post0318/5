@@ -1,7 +1,7 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem, QuoteBar, TtmFlows } from "../types";
 import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries, seriesOf } from "./dart-facts";
-import { buildKrEvResolver, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
+import { buildKrEvResolver, krCurrentDebtByPeriod, krCurrentDebtByYear, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
  * 한국 분석 지표 — `edgar-analysis.ts` 미러 (섹션·라벨 동일, 개요 요약칩 호환).
@@ -200,13 +200,14 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   for (const l of labels) if (opInc[l] != null && daEst[l] != null) ebitda[l] = opInc[l]! + daEst[l]!;
 
   // 평균잔액
-  // LTM 평균잔액 = (마지막 분기말 + 1년 전 같은 분기말) / 2 — 둘 다 있을 때만
+  // 평균잔액 = (기말 + 기초) / 2 — 기초가 없으면 기말로 대신하지 않는다(평균이 아님 — 미국 edgar-analysis 와 같은 규칙, 2026-10-02).
+  // LTM = (마지막 분기말 + 1년 전 같은 분기말) / 2 — 둘 다 있을 때만
   const avg = (m: Map<number, number>, c: { ids: string[]; names: string[] }): Record<string, number | null> => {
     const o = blank();
     for (const y of years) {
       const cur = m.get(y);
       const prev = m.get(y - 1);
-      o[`${y}Y`] = cur != null && prev != null ? (cur + prev) / 2 : (cur ?? null);
+      o[`${y}Y`] = cur != null && prev != null ? (cur + prev) / 2 : null;
     }
     const last = bsAt(c, "last");
     if (last === undefined) o[LTM] = o[`${years[years.length - 1]}Y`];
@@ -218,6 +219,25 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   };
   const equityAvg = avg(equity0, C.equity);
   const assetsAvg = avg(assets0, C.assets);
+  const curLiabAvg = avg(curLiab0, C.curLiab);
+  // 유동 차입금 평균(dart-ev.ts — EV 와 같은 차입금 줄을 유동/비유동으로 나눔)
+  const curDebtAvg = (() => {
+    const o = blank();
+    const byYear = krCurrentDebtByYear(facts);
+    for (const y of years) {
+      const c = byYear.get(y) ?? null;
+      const p = byYear.get(y - 1) ?? null;
+      o[`${y}Y`] = c != null && p != null ? (c + p) / 2 : null;
+    }
+    if (qInfo.mode === "fy") o[LTM] = o[`${years[years.length - 1]}Y`];
+    else if (qInfo.mode === "q" && qInfo.prev) {
+      const q = krCurrentDebtByPeriod(qInfo.qf);
+      const c = q[qInfo.last] ?? null;
+      const p = q[qInfo.prev] ?? null;
+      o[LTM] = c != null && p != null ? (c + p) / 2 : null;
+    }
+    return o;
+  })();
   const arAvg = avg(ar0, C.ar);
   const invAvg = avg(inv0, C.inv);
   const apAvg = avg(ap0, C.ap);
@@ -337,13 +357,19 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const assetTurn = ratio(rev, assetsAvg);
   const finLev = ratio(assetsAvg, equityAvg);
   const roa = ratio(ni, assetsAvg, 100);
-  // ROIC ≈ NOPAT / 투하자본. NOPAT = 영업이익 × (1 − 유효세율)
-  const effTax = ratio(tax, pretax);
+  // ROIC = NOPAT / 평균 투하자본 — 미국(edgar-analysis)과 같은 정의(2026-10-02): 투하자본 = 총자산 − (유동부채 − 유동 차입금),
+  // NOPAT = 영업이익 × (1 − 유효세율[0~40%]). 유효세율을 못 구하면 빈칸 — 25% 가정으로 채우지 않는다(그림자 채우기 금지)
   const nopat = blank();
-  for (const l of labels) if (opInc[l] != null) nopat[l] = opInc[l]! * (1 - (effTax[l] ?? 0.25));
-  const investedCap = blank();
-  for (const l of labels) if (equity[l] != null || debt[l] != null) investedCap[l] = (equity[l] ?? 0) + (debt[l] ?? 0);
-  const roic = ratio(nopat, avg2(investedCap), 100);
+  for (const l of labels) {
+    if (opInc[l] == null || !pretax[l] || tax[l] == null) continue;
+    const rate = Math.min(Math.max(tax[l]! / pretax[l]!, 0), 0.4);
+    nopat[l] = opInc[l]! * (1 - rate);
+  }
+  const investedCapAvg = blank();
+  for (const l of labels)
+    if (assetsAvg[l] != null && curLiabAvg[l] != null && curDebtAvg[l] != null)
+      investedCapAvg[l] = assetsAvg[l]! - (curLiabAvg[l]! - curDebtAvg[l]!);
+  const roic = ratio(nopat, investedCapAvg, 100);
   const fcfMargin = ratio(fcf, rev, 100);
   const grossMargin = ratio(gross, rev, 100);
   const opMargin = ratio(opInc, rev, 100);
@@ -389,7 +415,7 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     for (const l of labels) if (curLiab[l]) o[l] = ((cash[l] ?? 0) + (stInv[l] ?? 0)) / curLiab[l]!;
     return o;
   })();
-  const cfoToCurLiab = ratio(ocf, avg2(curLiab));
+  const cfoToCurLiab = ratio(ocf, curLiabAvg);
 
   // ── 운전자본 ──
   const dso = ratio(arAvg, rev, 365);
@@ -435,8 +461,16 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     R("주당 FCF", (() => {
       const o = blank();
       for (const l of labels) {
-        // 연도 열 분모 — 결산일 주식수가 주어지면(DART 연결 ADR) 그 값만
-        const sh = input.sharesByYear && l !== LTM ? (input.sharesByYear.get(Number(l.slice(0, 4))) ?? null) : shares;
+        // 연도 열 분모 = 그해 주식수(2026-10-02 — 예전엔 연도 FCF 를 현재 주식수로 나눴다). 결산일 주식수가 주어지면(DART 연결 ADR) 그 값,
+        // 아니면 KRX 연말 보통주 시가총액 ÷ 연말 종가(그날의 실제 상장주식수 — 시가총액과 같은 기준). 못 구하면 빈칸
+        let sh: number | null = shares;
+        if (l !== LTM) {
+          const y = Number(l.slice(0, 4));
+          const kx = caps?.byYear.get(y);
+          sh = input.sharesByYear
+            ? (input.sharesByYear.get(y) ?? null)
+            : kx?.common != null && kx.close ? kx.common / kx.close : null;
+        }
         if (fcf[l] != null && sh) o[l] = fcf[l]! / sh;
       }
       return o;
@@ -508,10 +542,6 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
           : ""),
   };
 
-  function avg2(m: Record<string, number | null>): Record<string, number | null> {
-    // 라벨 맵의 인접 평균 (연간 시계열이 아니므로 근사: 현재값 그대로)
-    return m;
-  }
   function fcfSeries(ocfM: Map<number, number>, capexM: Map<number, number>): Map<number, number> {
     const o = new Map<number, number>();
     for (const [y, v] of ocfM) {

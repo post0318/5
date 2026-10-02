@@ -154,6 +154,36 @@ export function krBridgeLines(facts: KrFacts): {
   };
 }
 
+/**
+ * 유동 차입금 — ROIC 투하자본(총자산 − (유동부채 − 유동 차입금), 미국 edgar-analysis 와 같은 정의, 2026-10-02). EV 와 같은 차입금 줄을
+ * 이름·ID 로 유동/비유동으로 나눈다("단기·유동·유동성장기" / "장기·비유동"). 어느 쪽인지 판정 못 하는 줄에 그 기간 값이 있으면 그 기간은
+ * null(0 으로 보지 않음).
+ */
+function debtSide(l: KrFactLine): "cur" | "non" | null {
+  const t = [...ids(l), nameOf(l)].join(" ");
+  if (/Noncurrent|NonCurrent|Longterm|LongTerm|비유동|^장기|\s장기/.test(t)) return "non";
+  if (/Current|Shortterm|ShortTerm|유동|단기/.test(t)) return "cur";
+  return null;
+}
+/** 연간 시계열판(표시 기간보다 1년 앞 기초값 포함 — 평균잔액용) */
+export function krCurrentDebtByYear(facts: KrFacts): Map<number, number | null> {
+  const L = krBridgeLines(facts).debt;
+  const cur = sumLines(facts, L.filter((l) => debtSide(l) === "cur"));
+  const amb = sumLines(facts, L.filter((l) => debtSide(l) == null));
+  const all = sumLines(facts, L);
+  const out = new Map<number, number | null>();
+  for (const y of all.keys()) out.set(y, amb.get(y) ? null : (cur.get(y) ?? 0));
+  return out;
+}
+export function krCurrentDebtByPeriod(facts: KrFacts): Record<string, number | null> {
+  const L = krBridgeLines(facts).debt;
+  const cur = sumLinesByPeriod(facts, L.filter((l) => debtSide(l) === "cur"));
+  const amb = sumLinesByPeriod(facts, L.filter((l) => debtSide(l) == null));
+  const out: Record<string, number | null> = {};
+  for (const p of facts.periods) out[p.label] = amb[p.label] ? null : (cur[p.label] ?? 0);
+  return out;
+}
+
 /** 기간 라벨별 합(대차대조표 주석용) — 같은 라인 키는 한 번만. */
 export function sumLinesByPeriod(facts: KrFacts, lines: KrFactLine[]): Record<string, number | null> {
   const out: Record<string, number | null> = {};
