@@ -222,6 +222,7 @@ export function hasCommonDividendEvidence(facts: CompanyFacts): boolean {
     entriesOf(facts, "CommonStockDividendsPerShareDeclared", "USD/shares").length > 0 ||
     entriesOf(facts, "CommonStockDividendsPerShareCashPaid", "USD/shares").length > 0 ||
     entriesOf(facts, "PaymentsOfDividendsCommonStock").length > 0 ||
+    entriesOf(facts, "PaymentsOfOrdinaryDividends").length > 0 ||
     Object.values((facts.facts as Record<string, Record<string, { units: Record<string, unknown[]> }> | undefined>)["ifrs-full"]?.["DividendsRecognisedAsDistributionsToOwnersPerShare"]?.units ?? {}).some((l) => l.length > 0) ||
     ["Dividends", "DividendsCommonStock", "DividendsCommonStockCash"].some((c) =>
       entriesOf(facts, c).some((e) => e.start && e.val !== 0 && entriesOf(facts, "PaymentsOfDividends").some((d) => d.start === e.start && d.end === e.end && d.val === e.val)))
