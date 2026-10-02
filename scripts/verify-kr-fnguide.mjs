@@ -47,8 +47,8 @@ async function yahoo(code) {
   for (const suf of [".KS", ".KQ"]) {
     try {
       const out = {};
-      for (const module of ["financials", "balance-sheet", "cash-flow"]) {
-        const r = await yf.fundamentalsTimeSeries(`${code}${suf}`, { period1: "2019-01-01", type: "annual", module }, { validateResult: false });
+      for (const mod of ["financials", "balance-sheet", "cash-flow"]) {
+        const r = await yf.fundamentalsTimeSeries(`${code}${suf}`, { period1: "2019-01-01", type: "annual", module: mod }, { validateResult: false });
         for (const q of r) { const y = new Date(q.date).getUTCFullYear(); out[y] = { ...(out[y] ?? {}), ...q }; }
       }
       if (Object.keys(out).length) return out;
