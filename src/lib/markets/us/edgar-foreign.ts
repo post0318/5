@@ -144,6 +144,15 @@ const IFRS_SUM: [(string | string[])[], string][] = [
  * us-gaap 개념 → 그 값을 만드는 IFRS 원천 개념(부호 포함) 후보 묶음 — 6-K 분기 재무제표 판독(edgar-6k.ts)이 같은 대응을 쓰게 한다.
  * 묶음 하나 = 합계를 이루는 개념들(배열 원소가 배열이면 그 중 하나). 단순 대응은 원소 1개짜리 묶음
  */
+/** IFRS 원천 개념 → 그 값을 받는 us-gaap 개념 쌍 전부(정적 대응표 — 검증기 사업연도 완결성 검사, 2026-10-03 재감사 7차) */
+export function ifrsDstPairs(): { src: string; dst: string; sign: 1 | -1 }[] {
+  const out: { src: string; dst: string; sign: 1 | -1 }[] = [];
+  for (const [src, dst] of IFRS_MAP) out.push({ src, dst, sign: 1 });
+  for (const [srcs, dst] of IFRS_SUM) for (const s of srcs) for (const src of Array.isArray(s) ? s : [s]) out.push({ src, dst, sign: 1 });
+  for (const [src, dst] of IFRS_NEG) out.push({ src, dst, sign: -1 });
+  return out;
+}
+
 export function ifrsSourcesOf(dst: string): { sum: (string | string[])[]; sign: 1 | -1 }[] {
   const out: { sum: (string | string[])[]; sign: 1 | -1 }[] = [];
   for (const [src, d] of IFRS_MAP) if (d === dst) out.push({ sum: [src], sign: 1 });

@@ -6050,6 +6050,49 @@ async function verifyUs(sym) {
       else if (/모호/.test(r.note ?? "")) add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란 — 6-K 판독 모호로 채울 수 있는지 판정 불가: ${r.note}` });
       else gapOk++;
     }
+    // 사업연도 완결성(재감사 7차 E1·E3) — "있어야 할 값"을 앱 데이터가 아니라 검증기가 읽은 SEC 20-F 원본으로 정한다.
+    //   20-F 인스턴스의 차원 없는 통화 값(연말 잔액·1년 흐름, 0 아님) 각각에 대해 그 값을 받는 앱 개념(IFRS 대응표, us-gaap 공시사는 같은 이름)이
+    //   앱 사업연도 값에 하나도 없으면 실패. 원천이 하나뿐인 단순 대응은 값도 정확 대조(원통화 × H.10 — 잔액 기말, 흐름 기간 평균)
+    {
+      const fyApp = row?.ltm?.fy ?? null, pairs = row?.ltm?.ifrsPairs ?? null;
+      if (!fyApp || !pairs || !secE) add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: FAIL, note: `${!secE ? "SEC 20-F 원본 판독 실패" : "verify-row 에 사업연도 값·대응표 없음"} — 대조 불가` });
+      else {
+        const isCur = (u) => !/share|pure|ratio|percent|employee|item/i.test(u) && /[A-Z]{3}$/.test(u);
+        const secFy = [
+          ...secE.facts.filter((x) => !x.dims.length && isCur(x.unit) && x.v !== 0).map((x) => ({ ...x, kind: "bs" })),
+          ...secE.durFacts.filter((x) => !x.dims.length && isCur(x.unit) && x.v !== 0 && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300).map((x) => ({ ...x, kind: "cf" })),
+        ];
+        // 같은 개념이 같은 기간에 두 번 달리면(반올림 반복) 하나만
+        const seen = new Set(), uniq = secFy.filter((x) => { const k = `${x.id}|${x.kind}|${x.start ?? ""}`; if (seen.has(k)) return false; seen.add(k); return true; });
+        const dstOf = (id) => {
+          const ns = id.slice(0, id.indexOf("_")), nm = id.slice(id.indexOf("_") + 1);
+          if (ns === "ifrs-full") return pairs.filter((p) => p.src === nm);
+          if (ns === "us-gaap") return [{ src: nm, dst: nm, sign: 1 }];
+          return [];
+        };
+        let okN = 0, valN = 0, noMap = 0;
+        for (const x of uniq) {
+          const ds = dstOf(x.id);
+          if (!ds.length) { noMap++; continue; }
+          const have = ds.filter((d) => fyApp[d.dst] != null);
+          const nm = `20-F 사업연도 ${x.kind === "bs" ? "연말" : "흐름"} ${shortId(x.id)} @${row.ltm.E}`;
+          if (!have.length) { add("A", nm, "LTM", { status: FAIL, note: `SEC 20-F 원본 ${x.id} = ${x.v} ${x.unit} 있는데 앱 사업연도 값 없음(받는 개념 ${ds.map((d) => d.dst).join("·")}) — 공란 사유와 무관하게 채워져야 함` }); continue; }
+          okN++;
+          // 값 대조: 받는 개념이 하나이고, 그 개념의 원천 후보 중 SEC 인스턴스에 있는 것이 이것 하나뿐일 때만(합산·대체 순서 판단을 검증기가 따로 하지 않는다)
+          if (ds.length !== 1) continue;
+          const d0 = ds[0];
+          const rivals = d0.dst === d0.src && x.id.startsWith("us-gaap_") ? [] : pairs.filter((p) => p.dst === d0.dst && p.src !== d0.src && uniq.some((y) => y.id === `ifrs-full_${p.src}` && y.kind === x.kind));
+          if (rivals.length) continue;
+          if (x.id.startsWith("ifrs-full_") && uniq.some((y) => y.id === `us-gaap_${d0.dst}` && y.kind === x.kind)) continue;
+          const r0 = x.kind === "bs" ? fxEndRate(fxRows, x.end ?? row.ltm.E) : fxAvg(fxRows, x.start, x.end);
+          if (r0 == null) continue;
+          const exp = d0.sign * x.v * r0;
+          valN++;
+          add("A", `${nm} 값`, "LTM", vsSource(fyApp[d0.dst], exp, EXACT, `SEC 20-F ${x.id} ${x.v} ${x.unit} × H.10 ${x.kind === "bs" ? "기말" : "기간 평균"} ${r0}${d0.sign < 0 ? " × −1" : ""}`));
+        }
+        add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: PASS, note: `SEC 20-F 통화 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖)` });
+      }
+    }
     add("A", "20-F LTM 공란 완결성(6-K 대조)", "LTM", { status: PASS, note: `앱 LTM 공란 ${gaps.length}개 개념 중 6-K 에서 값을 찾은 것 없음(${gapOk}개 대조${gapNa.length ? `, 대조 불가 ${gapNa.length}개` : ""})` });
   };
   if (foreign && H.LTM && ltmYahooNote) {

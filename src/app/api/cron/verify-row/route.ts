@@ -5,6 +5,7 @@ import { fetchUsCompanyFacts } from "@/lib/markets/us/edgar";
 import { flowSpecOf, isCfConcept, ltmBaseEnd, sourceIdsAt, yahooLtm } from "@/lib/markets/us/edgar-yahoo-quarters";
 import { instantOn, ltmAnchor, ltmFlowOf } from "@/lib/markets/us/edgar-series";
 import type { CompanyFacts } from "@/lib/markets/us/edgar";
+import { ifrsDstPairs } from "@/lib/markets/us/edgar-foreign";
 
 /**
  * 20-F LTM 항목 전부(최종 재무 데이터의 YAHOO-Q 항목) — 출처(ltmSrc)와 함께. 잔액 = 그 날짜 값, 흐름 = 사업연도(ltmQ) + 당기 − 전기(LTM 조합과 같은 식).
@@ -16,7 +17,9 @@ function ltmItems(facts: CompanyFacts) {
   const gaps: { concept: string; kind: "bs" | "cf"; at: string; ids: { id: string; sign: 1 | -1 }[]; reason: string | null; flow?: { y: unknown; sign: 1 | -1; da: boolean } | null; cf?: boolean }[] = [];
   const yl = yahooLtm(facts);
   const through = yl?.through, E = ltmBaseEnd(facts);
-  if (!through || !E) return { items, gaps, sixKSource: null, through: null, E: null };
+  // 사업연도 값(SEC 20-F 기준일 E — 잔액은 연말, 흐름은 1년 기간) — 검증기가 SEC 원본에서 직접 읽은 값과 대조(있어야 할 값이 앱에서 사라졌는지, 재감사 7차 E1·E3)
+  const fy: Record<string, number> = {};
+  if (!through || !E) return { items, gaps, fy, ifrsPairs: ifrsDstPairs(), sixKSource: null, through: null, E: null };
   const yearAgo = (() => { const x = new Date(`${through}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); })();
   const anchor = ltmAnchor(facts);
   const dd = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
@@ -24,6 +27,10 @@ function ltmItems(facts: CompanyFacts) {
   const nearest = (arr: Entry[], d: string) => arr.filter((e) => !e.start && dd(e.end, d) <= 6).sort((a, b) => dd(a.end, d) - dd(b.end, d))[0];
   for (const [c, node] of Object.entries(facts.facts["us-gaap"] ?? {})) {
     const arr = (node as { units?: Record<string, Entry[]> }).units?.USD ?? [];
+    const fyE = arr
+      .filter((e) => e.form !== "YAHOO-Q" && dd(e.end, E) <= 6 && (!e.start || (Date.parse(e.end) - Date.parse(e.start)) / 864e5 > 300))
+      .sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0];
+    if (fyE) fy[c] = fyE.val;
     if (arr.some((e) => !e.start)) {
       for (const d of [through, yearAgo]) {
         const e = nearest(arr, d);
@@ -40,7 +47,7 @@ function ltmItems(facts: CompanyFacts) {
       else if (hasFy && (isCfConcept(c) || flowSpecOf(c))) gaps.push({ concept: c, kind: "cf", at: through, ids: sourceIdsAt(facts, c, "cf", E), reason: r.reason, flow: flowSpecOf(c), cf: isCfConcept(c) });
     }
   }
-  return { items, gaps, sixKSource: yl?.sixKSource ?? null, through, E };
+  return { items, gaps, fy, ifrsPairs: ifrsDstPairs(), sixKSource: yl?.sixKSource ?? null, through, E };
 }
 
 /**
