@@ -1,6 +1,6 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem, QuoteBar, TtmFlows } from "../types";
-import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries } from "./dart-facts";
+import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries, seriesOf } from "./dart-facts";
 import { buildKrEvResolver, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
@@ -60,6 +60,8 @@ export interface KrAnalysisInput {
   currentMarketCap: number | null;
   ttm: TtmFlows | null;
   daDoc?: KrDaInput | null;
+  /** 분기 재무제표(fetchKrFacts quarter) — LTM 열의 흐름(최근 4개 분기 합)·재무상태표(마지막 분기말) */
+  quarterFacts?: KrFacts | null;
 }
 
 export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
@@ -111,38 +113,65 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     o[LTM] = ltm ?? null;
     return o;
   };
+  // ── LTM 열 기준 통일(2026-10-02 — 오너 원칙 "기준은 동일하게"): 매출·영업이익·순이익은 TTM(최근 4개 분기 합), 차입금·현금·지배주주
+  //    자본은 마지막 분기말인데, 나머지는 최근 사업연도 값이라 부채비율·매출총이익률(작년 매출총이익 ÷ TTM 매출)·배당성향 등 분자·분모
+  //    기준일이 갈렸다. 손익 TTM 이 분기 조합이면(periodLabel "FY… + 2026 반기 − …") 흐름은 같은 4개 분기 열의 합, 재무상태표는 마지막
+  //    분기말 — 분기 값이 하나라도 없으면 빈칸(연말값으로 채우지 않음). TTM 이 연간값이면 LTM = 최근 사업연도라 종전대로.
+  const qInfo = (() => {
+    const m = ttm?.periodLabel?.match(/\+\s*(\d{4})\s*(1분기|반기|3분기)/);
+    // 분기 재무제표를 아예 넘기지 않은 호출(DART 연결 ADR — 외화 환산 미적용, 미결)은 종전대로
+    if (!m || input.quarterFacts === undefined) return { mode: "fy" as const };
+    const q = ({ "1분기": 1, 반기: 2, "3분기": 3 } as Record<string, number>)[m[2]];
+    const idx0 = Number(m[1]) * 4 + (q - 1);
+    const lab = (i: number) => `${Math.floor((idx0 - i) / 4)} Q${((idx0 - i) % 4) + 1}`;
+    const last4 = [3, 2, 1, 0].map(lab);
+    const qf = input.quarterFacts;
+    if (!qf || !last4.every((l) => qf.periods.some((p) => p.label === l))) return { mode: "none" as const };
+    const prev = lab(4);
+    return { mode: "q" as const, qf, last4, last: last4[3], prev: qf.periods.some((p) => p.label === prev) ? prev : null };
+  })();
+  const ltmFlow = (c: { ids: string[]; names: string[] }, sj: string | string[]): number | null | undefined => {
+    if (qInfo.mode === "fy") return undefined;
+    if (qInfo.mode === "none") return null;
+    const s = seriesOf(qInfo.qf, c.ids, c.names, sj as never);
+    const v = qInfo.last4.map((l) => s[l]);
+    return v.every((x) => x != null) ? v.reduce((a, b) => a! + b!, 0)! : null;
+  };
+  const bsAt = (c: { ids: string[]; names: string[] }, at: "last" | "prev"): number | null | undefined => {
+    if (qInfo.mode === "fy") return undefined;
+    if (qInfo.mode === "none") return null;
+    const l = at === "last" ? qInfo.last : qInfo.prev;
+    return l ? (seriesOf(qInfo.qf, c.ids, c.names, "BS" as never)[l] ?? null) : null;
+  };
+  const mapL = (m: Map<number, number>, v: number | null | undefined): Record<string, number | null> => {
+    const o = map(m);
+    if (v !== undefined) o[LTM] = v;
+    return o;
+  };
+  const absL = (o: Record<string, number | null>) => {
+    for (const l of labels) if (o[l] != null) o[l] = Math.abs(o[l]!);
+    return o;
+  };
   const rev = mapTtm(rev0, ttm?.revenue);
-  const gross = map(gross0);
+  const gross = mapL(gross0, ltmFlow(C.gross, IS));
   const opInc = mapTtm(opInc0, ttm?.opIncome);
-  const pretax = map(pretax0);
-  const tax = map(tax0);
+  const pretax = mapL(pretax0, ltmFlow(C.pretax, IS));
+  const tax = mapL(tax0, ltmFlow(C.tax, IS));
   const ni = mapTtm(ni0, ttm?.netIncome);
   const eps = mapTtm(eps0, ttm?.eps);
-  const assets = map(assets0);
-  const curAssets = map(curAssets0);
-  const curLiab = map(curLiab0);
-  const liab = map(liab0);
-  const equity = map(equity0);
-  const retained = map(retained0);
-  const cash = map(cash0);
-  const stInv = map(stInv0);
-  const ar = map(ar0);
-  const ocf = map(ocf0);
-  const capexAbs = (() => {
-    const o = map(capex0);
-    for (const l of labels) if (o[l] != null) o[l] = Math.abs(o[l]!);
-    return o;
-  })();
-  const intPaid = (() => {
-    const o = map(intPaid0);
-    for (const l of labels) if (o[l] != null) o[l] = Math.abs(o[l]!);
-    return o;
-  })();
-  const divPaid = (() => {
-    const o = map(divPaid0);
-    for (const l of labels) if (o[l] != null) o[l] = Math.abs(o[l]!);
-    return o;
-  })();
+  const assets = mapL(assets0, bsAt(C.assets, "last"));
+  const curAssets = mapL(curAssets0, bsAt(C.curAssets, "last"));
+  const curLiab = mapL(curLiab0, bsAt(C.curLiab, "last"));
+  const liab = mapL(liab0, bsAt(C.liab, "last"));
+  const equity = mapL(equity0, bsAt(C.equity, "last"));
+  const retained = mapL(retained0, bsAt(C.retained, "last"));
+  const cash = mapL(cash0, bsAt(C.cash, "last"));
+  const stInv = mapL(stInv0, bsAt(C.stInv, "last"));
+  const ar = mapL(ar0, bsAt(C.ar, "last"));
+  const ocf = mapL(ocf0, ltmFlow(C.ocf, "CF"));
+  const capexAbs = absL(mapL(capex0, ltmFlow(C.capex, "CF")));
+  const intPaid = absL(mapL(intPaid0, ltmFlow(C.intPaid, "CF")));
+  const divPaid = absL(mapL(divPaid0, ltmFlow(C.divPaid, "CF")));
   // 차입금(리스부채 포함)·현금성자산 — LTM 열은 getTtm 스냅샷(dart-ev.ts krLtmBalance,
   // 손익 TTM 의 마지막 분기말 — 하이라이트·개요와 같은 값, 오너 결정 2026-09-24).
   // 스냅샷이 없을 때만 최근 사업연도말.
@@ -171,21 +200,27 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   for (const l of labels) if (opInc[l] != null && daEst[l] != null) ebitda[l] = opInc[l]! + daEst[l]!;
 
   // 평균잔액
-  const avg = (m: Map<number, number>): Record<string, number | null> => {
+  // LTM 평균잔액 = (마지막 분기말 + 1년 전 같은 분기말) / 2 — 둘 다 있을 때만
+  const avg = (m: Map<number, number>, c: { ids: string[]; names: string[] }): Record<string, number | null> => {
     const o = blank();
     for (const y of years) {
       const cur = m.get(y);
       const prev = m.get(y - 1);
       o[`${y}Y`] = cur != null && prev != null ? (cur + prev) / 2 : (cur ?? null);
     }
-    o[LTM] = o[`${years[years.length - 1]}Y`];
+    const last = bsAt(c, "last");
+    if (last === undefined) o[LTM] = o[`${years[years.length - 1]}Y`];
+    else {
+      const prev = bsAt(c, "prev");
+      o[LTM] = last != null && prev != null ? (last + prev) / 2 : null;
+    }
     return o;
   };
-  const equityAvg = avg(equity0);
-  const assetsAvg = avg(assets0);
-  const arAvg = avg(ar0);
-  const invAvg = avg(inv0);
-  const apAvg = avg(ap0);
+  const equityAvg = avg(equity0, C.equity);
+  const assetsAvg = avg(assets0, C.assets);
+  const arAvg = avg(ar0, C.ar);
+  const invAvg = avg(inv0, C.inv);
+  const apAvg = avg(ap0, C.ap);
 
   // 시가총액
   // KRX 실측(그날의 실제 상장주식수 × 종가) — 하이라이트와 같은 값. 없을 때만 근사.
@@ -465,7 +500,12 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     source:
       facts.source +
       " + 시세 · 자체 계산" +
-      (ltmFromSnap ? ` · LTM 차입금·현금·PBR 자본: ${snap!.label} 기준` : " · LTM 재무상태표: 최신 분기 스냅샷 없음 — 연말값"),
+      (ltmFromSnap ? ` · LTM 차입금·현금·PBR 자본: ${snap!.label} 기준` : " · LTM 재무상태표: 최신 분기 스냅샷 없음 — 연말값") +
+      (qInfo.mode === "q"
+        ? ` · LTM 흐름 = ${qInfo.last4[0]}~${qInfo.last4[3]} 4개 분기 합, 재무상태표 = ${qInfo.last} 말`
+        : qInfo.mode === "none"
+          ? " · LTM 분기 재무제표 없음 — 손익 외 LTM 지표 공란"
+          : ""),
   };
 
   function avg2(m: Record<string, number | null>): Record<string, number | null> {

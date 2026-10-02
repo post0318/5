@@ -82,7 +82,7 @@ export async function GET(
       const { corpCode } = resolveCorpCode("", sym);
 
       if (detailView === "analysis") {
-        const [facts, krx, bars, ttm, daDoc, live] = await Promise.all([
+        const [facts, krx, bars, ttm, daDoc, live, quarterFacts] = await Promise.all([
           fetchKrFacts(corpCode, "annual"),
           fetchKrxEod(sym).catch(() => null),
           fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
@@ -90,6 +90,8 @@ export async function GET(
           getKrDaDoc(sym).catch(() => null),
           // 현재가·시가총액은 개요·하이라이트와 같은 시세 함수
           getEodQuote("kr", sym).catch(() => null),
+          // LTM 열 — 흐름은 최근 4개 분기 합, 재무상태표는 마지막 분기말(손익 TTM 과 같은 기준, 분기 화면과 같은 캐시)
+          fetchKrFacts(corpCode, "quarter").catch(() => null),
         ]);
         if (!facts) return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });
         const fyCloseByYear = new Map<number, number>();
@@ -114,6 +116,7 @@ export async function GET(
           currentMarketCap: live?.marketCap ?? krx?.marketCap ?? null,
           ttm: ttm ?? null,
           daDoc: daDoc ?? null,
+          quarterFacts: quarterFacts ?? null,
         });
         stmt.symbol = sym;
         return ok(stmt, { headers: NO_CACHE });
