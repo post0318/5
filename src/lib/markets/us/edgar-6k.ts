@@ -34,6 +34,8 @@ export interface SixKStatements {
   labels: Map<string, { pos: Set<string>; neg: Set<string> }>;
   /** 개념 → 표시 구조(_pre.xml)상 부모 개념 */
   parents: Map<string, Set<string>>;
+  /** 본표 밖 표(주석 — 날짜 머리에 기준일·연말이 있는 표). 본표에 따로 없는 줄(SPOT 리스부채 유동분 — 미지급비용 주석 안)용 */
+  bsNotes?: { dates: string[]; rows: SixKRow[] }[];
   /** 슬라이드 글자 형식 — 줄 이름 앞에 구역 머리말이 붙어 나온다("cash flows from investing activities purchase of …"). 끝이 라벨과 같으면 대응 */
   loose?: boolean;
 }
@@ -220,7 +222,23 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
         rows.map((r) => ({ ...r, vals: r.vals.length === 2 * n ? r.vals.filter((_, k) => k % 2 === 0) : noteCol && r.vals.length === n + 1 ? r.vals.slice(1) : r.vals })).filter((r) => r.vals.length === n);
       const { labels, parents } = await filingLabels(cikN, recent).catch(() => ({ labels: new Map(), parents: new Map() }));
       if (!labels.size) return null;
-      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, 2, cf.noteCol), labels, parents, loose: false };
+      // 본표 밖 표 — 머리(앞 2천 자)에 기준일·연말이 둘 다 있는 표의 줄
+      const bsNotes: { dates: string[]; rows: SixKRow[] }[] = [];
+      for (const t of html.match(/<table\b[\s\S]*?<\/table>/gi) ?? []) {
+        const plain = decode(t).toLowerCase();
+        const ds = headerDates(plain.slice(0, 2_000), [periodEnd, fyEnd, priorEnd]);
+        if (!ds.includes(periodEnd) || !ds.includes(fyEnd)) continue;
+        const rows: SixKRow[] = [];
+        for (const tr of t.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? []) {
+          const cells = (tr.match(/<t[dh]\b[\s\S]*?<\/t[dh]>/gi) ?? []).map(decode).filter((c) => c !== "" && c !== "$");
+          const label = cells.find((c) => /[A-Za-z]/.test(c));
+          if (!label) continue;
+          const vals = cells.slice(cells.indexOf(label) + 1).map(parseNum).filter((v): v is number => v != null);
+          if (vals.length) rows.push({ label: normLabel(label), vals });
+        }
+        bsNotes.push({ dates: ds, rows: fix(rows, ds.length, /\bnote\b/i.test(plain.slice(0, 1_500))) });
+      }
+      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, 2, cf.noteCol), labels, parents, loose: false, bsNotes };
     }
   }
   return null;
@@ -230,6 +248,31 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
  * 개념의 6-K 값(XBRL 부호, 원통화 = 표시값 × 단위) — 라벨이 정확히 같은 줄이 하나일 때만. 같은 라벨이 일반·부호 반전 양쪽에 있으면
  * 부호를 정할 수 없어 null(추측 금지)
  */
+/**
+ * 본표에 없는 줄을 본표 밖 표(주석)에서 — 라벨이 같고 그 표의 연말 열이 check(연말 값) 를 통과하는 줄이 표 전체에서 값 하나로 모일 때만.
+ * 결과는 본표 열 순서(bsDates)에 맞춘 값(그 표에 없는 날짜는 NaN). 부호 반전 라벨은 반전
+ */
+export function sixKNoteValueOf(st: SixKStatements, concept: string, fyEnd: string, check: (fyV: number) => boolean): number[] | null {
+  const ls = st.labels.get(concept);
+  if (!ls || !st.bsNotes?.length) return null;
+  const found = new Map<string, number[]>();
+  for (const t of st.bsNotes) {
+    const iF = t.dates.indexOf(fyEnd);
+    if (iF < 0) continue;
+    for (const r of t.rows) {
+      const p = ls.pos.has(r.label), n = ls.neg.has(r.label);
+      if (!p && !n) continue;
+      for (const sg of p && n ? [1, -1] : [n ? -1 : 1]) {
+        const v = r.vals.map((x) => Math.round(sg * x * st.unit));
+        if (!check(v[iF])) continue;
+        const aligned = st.bsDates.map((d) => { const k = t.dates.indexOf(d); return k >= 0 ? v[k] : NaN; });
+        found.set(aligned.map(String).join("|"), aligned);
+      }
+    }
+  }
+  return found.size === 1 ? [...found.values()][0] : null;
+}
+
 /** 20-F 재무상태표 본표 줄인가 — 표시 구조 부모가 자산·부채·자본 구역 머리(유동자산·비유동부채·자본 등)일 때 */
 export function sixKOnBsFace(st: SixKStatements, concept: string): boolean {
   const heads = new Set(["assets", "current assets", "non current assets", "noncurrent assets", "liabilities", "current liabilities", "non current liabilities", "noncurrent liabilities", "equity", "stockholders equity", "shareholders equity", "liabilities and equity", "equity and liabilities"]);

@@ -5,7 +5,7 @@ import { DA_TOTAL, SYN_DA_CF, daAnnualByYear, resolveDebt } from "./edgar-ev";
 import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT } from "./edgar-bs-structure";
 import { fiscalYearOf, instantOn } from "./edgar-series";
 import { ifrsSourcesOf } from "./edgar-foreign";
-import { sixKHasRow, sixKOnBsFace, sixKValueOf, type SixKStatements } from "./edgar-6k";
+import { sixKHasRow, sixKNoteValueOf, sixKOnBsFace, sixKValueOf, type SixKStatements } from "./edgar-6k";
 
 /**
  * **20-F 발행사 LTM 열 = Yahoo 분기(원통화) 최근 4개 분기** (오너 결정 2026-09-25 — Yahoo·인포맥스 분기 구성 비교 후.
@@ -364,7 +364,9 @@ export function withYahooLtm(
       let tot: number[] | null = null;
       for (const c of els) {
         const fyV = ifrsAtE(c, kind, at)!;
-        const v = sixKValueOf(st, c, kind, kind === "bs" && iE >= 0 ? (vals) => sameInUnit(fyV, vals[iE]) : undefined);
+        // 본표에서 못 찾으면 본표 밖 표(주석) — 연말 열 = SEC 확인(SPOT 리스부채 유동분)
+        const v = sixKValueOf(st, c, kind, kind === "bs" && iE >= 0 ? (vals) => sameInUnit(fyV, vals[iE]) : undefined)
+          ?? (kind === "bs" && iE >= 0 ? sixKNoteValueOf(st, c, at, (x) => sameInUnit(fyV, x)) : null);
         if (!v || (kind === "bs" && (iE < 0 || !sameInUnit(fyV, v[iE])))) return null;
         tot = tot ? tot.map((t, i) => t + v[i]) : v.slice();
       }
@@ -375,7 +377,8 @@ export function withYahooLtm(
       const fyB = kind === "bs" ? instantOn(usd(dst), at) : null;
       if (kind === "bs" && (fyB == null || iE < 0 || atRate == null)) return null;
       const ok = (vals: number[]) => sameInUnit(fyB! / atRate!, vals[iE]);
-      const v = sixKValueOf(st, dst, kind, kind === "bs" ? ok : undefined);
+      const v = sixKValueOf(st, dst, kind, kind === "bs" ? ok : undefined)
+        ?? (kind === "bs" ? sixKNoteValueOf(st, dst, at, (x) => sameInUnit(fyB! / atRate!, x)) : null);
       if (!v || (kind === "bs" && !ok(v))) return null;
       return { vals: v, src: dst, ids: [{ id: `us-gaap_${dst}`, sign: 1 }] };
     }
@@ -522,6 +525,7 @@ export function withYahooLtm(
   };
   /** 재무상태표 값 넣기 + 기록(검증 전용) */
   const putBs = (c: string, d: string, usdV: number, kind: SixKDetail["kind"], ids: SixKDetail["ids"], report: string, fyEnd: string, parts?: string[]) => {
+    if (!Number.isFinite(usdV)) return; // 주석 표에 그 날짜 열이 없음(값 없음)
     const det: SixKDetail = { concept: c, kind, at: d, usd: usdV, ids, report, fyEnd, ...(parts ? { parts } : {}) };
     put(c, d, usdV, { via: "sixK", detail: det });
     sixKDetail.push(det);
