@@ -113,10 +113,9 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   // 예전엔 여기만 비워 LG에너지솔루션 2023~2025 가 화면마다 갈렸다(검증 2026-09-24).
   for (const l of labels) if (epsDil[l] == null && epsBasic[l] != null) epsDil[l] = epsBasic[l];
 
-  let daApprox = false;
   let daNote: string | null = null;
   const da = (() => {
-    // 연간: 하이라이트·재무분석과 같은 함수(daAndAmortSeries — 사업보고서 주석 영업비용 기준 → 공시 현금흐름 줄 → 근사). 예전엔 여기만
+    // 연간: 하이라이트·재무분석과 같은 함수(daAndAmortSeries — 사업보고서 주석 영업비용 기준 → 공시 현금흐름 줄, 없으면 빈칸). 예전엔 여기만
     // DART 현금흐름 "감가상각비" 한 줄을 먼저 써서 LS ELECTRIC 2021 이 617.9억(하이라이트 1,014.6억)으로 갈렸다(2026-10-02)
     if (facts.mode !== "quarter") {
       const s = daAndAmortSeries(facts, daDoc);
@@ -135,16 +134,7 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
       ]);
       for (const l of labels) if (alt[l] != null) d[l] = alt[l];
     }
-    // 폴백 2: 사업보고서 XBRL 주석(daDoc) 실측 + 나머지 연도 롤포워드 보정
-    if (labels.every((l) => d[l] == null)) {
-      const { byYear, ltm, exactYear } = daAndAmortSeries(facts, daDoc);
-      for (const p of facts.periods) {
-        const v = p.kind === "ltm" ? ltm : byYear.get(p.year) ?? null;
-        if (v == null) continue;
-        d[p.label] = v;
-        if (p.kind !== "ltm" && p.year !== exactYear) daApprox = true;
-      }
-    }
+    // 분기: 공시 줄이 없으면 빈칸(연간 주석값을 분기 열에 넣지 않는다 — 예전 폴백은 사업연도 값을 그해 분기마다 넣었다, 2026-10-02)
     return d;
   })();
   const ebitda = blank();
@@ -216,10 +206,6 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     source:
       facts.source +
       " · 표준화 재분류" +
-      (daNote
-        ? ` · ${daNote}`
-        : daApprox
-          ? " · 감가상각비: 최근연도는 사업보고서 주석 실측, 이전 연도는 유·무형자산 증감 기반 근사"
-          : ""),
+      (daNote ? ` · ${daNote}` : ""),
   };
 }
