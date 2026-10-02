@@ -6161,18 +6161,30 @@ async function verifyUs(sym) {
               : { status: FAIL, note: `앱 합성 ${v} ≠ SEC 대조된 ${d.replace(/Unified$/, "")} ${base ?? "없음"}` });
             continue;
           }
-          if (/FaceDerived$/.test(d) && fyKind[d] === "bs") {
+          if (/Face\w*Derived$/.test(d) && fyKind[d] === "bs") {
             synthN++;
+            // ① SEC 원본 연말 값 하나 또는 두 값 합 × H.10 기말(본표 합성 줄 — ShortTermInvestmentsFaceDerived 등)
+            // ② SEC 값 대조를 통과한 차입·리스·투자 계열 앱 개념들의 부분합(본표 차입금 합계 — DebtFaceDerived·DebtFaceNoncurrentDerived = 차입금 + 리스 줄 합)
             let hit = null;
+            const near = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b));
             if (rBs != null) {
               outer: for (let i = 0; i < bsSec.length; i++) {
-                if (extEq(v, bsSec[i].v * rBs)) { hit = `${shortId(bsSec[i].id)} ${bsSec[i].v}`; break; }
-                for (let j = i + 1; j < bsSec.length; j++) if (extEq(v, (bsSec[i].v + bsSec[j].v) * rBs)) { hit = `${shortId(bsSec[i].id)} ${bsSec[i].v} + ${shortId(bsSec[j].id)} ${bsSec[j].v}`; break outer; }
+                if (near(v, bsSec[i].v * rBs)) { hit = `SEC 20-F ${shortId(bsSec[i].id)} ${bsSec[i].v} × H.10 기말 ${rBs}`; break; }
+                for (let j = i + 1; j < bsSec.length; j++) if (near(v, (bsSec[i].v + bsSec[j].v) * rBs)) { hit = `SEC 20-F (${shortId(bsSec[i].id)} ${bsSec[i].v} + ${shortId(bsSec[j].id)} ${bsSec[j].v}) × H.10 기말 ${rBs}`; break outer; }
+              }
+            }
+            if (!hit) {
+              const pool = [...needDst.keys()].filter((k0) => fyKind[k0] === "bs" && fyApp[k0] && /Debt|Borrow|Lease|Note|Paper|Bond|Investment|Securit/.test(k0) && !/Derived$|FairValue|Maturit|Interest/.test(k0)).slice(0, 16);
+              for (let m = 1; m < 1 << pool.length && !hit; m++) {
+                let t = 0;
+                const used = [];
+                for (let b = 0; b < pool.length; b++) if (m & (1 << b)) { t += fyApp[pool[b]]; used.push(pool[b]); }
+                if (near(v, t)) hit = `SEC 대조 통과 개념 합 ${used.join(" + ")}`;
               }
             }
             add("A", `20-F 사업연도 ${kindNm} 합성 ${d} @${row.ltm.E}`, "LTM", hit
-              ? { status: PASS, note: `앱 ${v} = SEC 20-F (${hit}) × H.10 기말 ${rBs} (정확 일치)` }
-              : { status: FAIL, note: `앱 본표 합성 값 ${v} — SEC 원본 연말 값 하나·두 값 합 × H.10 기말 어느 것과도 같지 않음(출처 불명)` });
+              ? { status: PASS, note: `앱 ${v} = ${hit} (정확 일치)` }
+              : { status: FAIL, note: `앱 본표 합성 값 ${v} — SEC 원본 값(하나·두 값 합)이나 SEC 대조 통과 차입·리스·투자 개념 부분합 어느 것과도 같지 않음(출처 불명)` });
             continue;
           }
           orphanN++;
