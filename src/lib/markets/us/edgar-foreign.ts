@@ -73,6 +73,38 @@ const IFRS_MAP: [string, string][] = [
   // 섞여(실측 2025 220억 DKK vs 이 손익계산서 태그 147억 DKK) 매핑하지 않는다.
   ["DepreciationAndAmortisationExpense", "DepreciationDepletionAndAmortization"],
   ["AdjustmentsForDepreciationAndAmortisationExpense", "DepreciationDepletionAndAmortization"],
+  // ── 2026-10-02 추가(오너 지적 — TSM 재무상태표·현금흐름표 줄이 통째로 빈칸): 재무제표 화면이 읽는 개념 ──
+  ["CurrentTradeReceivables", "AccountsReceivableNetCurrent"],
+  ["TradeAndOtherCurrentReceivables", "AccountsReceivableNetCurrent"],
+  ["Inventories", "InventoryNet"],
+  ["PropertyPlantAndEquipment", "PropertyPlantAndEquipmentNet"],
+  ["TradeAndOtherCurrentPayablesToTradeSuppliers", "AccountsPayableCurrent"],
+  ["TradeAndOtherCurrentPayables", "AccountsPayableCurrent"],
+  ["RetainedEarnings", "RetainedEarningsAccumulatedDeficit"],
+  ["TreasuryShares", "TreasuryStockValue"],
+  ["AdjustmentsForSharebasedPayments", "ShareBasedCompensation"],
+  ["AdjustmentsForIncreaseDecreaseInTradeAccountPayable", "IncreaseDecreaseInAccountsPayable"],
+  ["AdjustmentsForIncreaseDecreaseInTradeAndOtherPayables", "IncreaseDecreaseInAccountsPayable"],
+  ["CashFlowsFromUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivities"],
+  ["CashFlowsFromUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivities"],
+  ["EffectOfExchangeRateChangesOnCashAndCashEquivalents", "EffectOfExchangeRateOnCashAndCashEquivalents"],
+  // IFRS 순증감은 환율효과 반영 후(TSM 2024: 영업 + 투자 + 재무 + 환율 = 662,199.2 백만 TWD) — 같은 정의의 us-gaap 개념
+  ["IncreaseDecreaseInCashAndCashEquivalents", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect"],
+  ["PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities", "PaymentsToAcquireIntangibleAssets"],
+  ["PurchaseOfInvestmentsOtherThanInvestmentsAccountedForUsingEquityMethod", "PaymentsToAcquireInvestments"],
+  ["PaymentsToAcquireOrRedeemEntitysShares", "PaymentsForRepurchaseOfCommonStock"],
+  ["InterestPaidClassifiedAsOperatingActivities", "InterestPaidNet"],
+  ["InterestPaidClassifiedAsFinancingActivities", "InterestPaidNet"],
+  // 손익계산서 금융원가 = 이자비용(자본화 이자 차감 후 — TSM 2024: 사채·차입·리스·기타 이자 19,805.7 − 자본화 9,310.3 = 10,495.4 백만 TWD)
+  ["FinanceCosts", "InterestExpense"],
+  // 주당배당금(분기 공시 — 연간 합은 아래 quarterlyToAnnual 이 만든다)
+  ["DividendsRecognisedAsDistributionsToOwnersPerShare", "CommonStockDividendsPerShareDeclared"],
+];
+/** 부호가 반대인 IFRS 개념(감소가 +) → us-gaap(증가가 +) */
+const IFRS_NEG: [string, string][] = [
+  ["AdjustmentsForDecreaseIncreaseInTradeAccountReceivable", "IncreaseDecreaseInAccountsReceivable"],
+  ["AdjustmentsForDecreaseIncreaseInTradeAndOtherReceivables", "IncreaseDecreaseInAccountsReceivable"],
+  ["AdjustmentsForDecreaseIncreaseInInventories", "IncreaseDecreaseInInventories"],
 ];
 /** 여러 IFRS 개념의 합 → us-gaap 개념 (같은 기간끼리) */
 const IFRS_SUM: [string[], string][] = [
@@ -82,6 +114,9 @@ const IFRS_SUM: [string[], string][] = [
   [["AdjustmentsForDepreciationExpense", "AdjustmentsForAmortisationExpense"], "DepreciationDepletionAndAmortization"],
   // 한국 IFRS 현금성자산과 같은 범위 — 현금 외 유동 상각후원가·당기손익 금융자산
   [["CurrentFinancialAssetsAtAmortisedCost", "CurrentFinancialAssetsAtFairValueThroughProfitOrLoss"], "ShortTermInvestments"],
+  [["IssuedCapital", "SharePremium", "CapitalReserve"], "CommonStocksIncludingAdditionalPaidInCapital"],
+  [["ProceedsFromIssueOfBondsNotesAndDebentures", "ProceedsFromNoncurrentBorrowings"], "ProceedsFromIssuanceOfLongTermDebt"],
+  [["RepaymentsOfBondsNotesAndDebentures", "RepaymentsOfNoncurrentBorrowings"], "RepaymentsOfLongTermDebt"],
 ];
 
 const isCurrency = (u: string) => /^[A-Z]{3}$/.test(u);
@@ -143,6 +178,36 @@ function mapIfrs(gaap: Ns, ifrs: Ns): Ns {
         units[u] = [...acc.values()];
       }
     out[dst] = { units };
+  }
+  for (const [src, dst] of IFRS_NEG) {
+    if (!ifrs[src] || out[dst]) continue;
+    out[dst] = { units: Object.fromEntries(Object.entries(ifrs[src].units).map(([u, arr]) => [u, arr.map((e) => ({ ...e, val: -e.val }))])) };
+  }
+  // 분기로만 공시된 주당배당금 → 사업연도 연간 합(그 해 4개 분기가 모두 있을 때만). TSM 은 분기 배당 결의액을 분기마다 단다(2024: 4 + 4 + 4.5 + 4.5 = 17 TWD)
+  const dps = out.CommonStockDividendsPerShareDeclared;
+  if (dps && !gaap.CommonStockDividendsPerShareDeclared) {
+    const fyEnds = new Map<string, string>(); // 연간 기간 끝 → 시작(매출 연간 항목에서)
+    for (const arr of Object.values(out.Revenues?.units ?? {}))
+      for (const e of arr) if (e.start && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 > 350) fyEnds.set(e.end, e.start);
+    const units: Units = {};
+    for (const [u, arr] of Object.entries(dps.units)) {
+      const add: FactUnitEntry[] = [];
+      for (const [end, start] of fyEnds) {
+        if (arr.some((e) => e.end === end && e.start === start)) continue;
+        const qs = new Map<string, FactUnitEntry>();
+        for (const e of arr)
+          if (e.start && e.start >= start && e.end <= end && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 < 100) {
+            const p = qs.get(e.end);
+            if (!p || (e.filed ?? "") > (p.filed ?? "")) qs.set(e.end, e);
+          }
+        if (qs.size !== 4) continue;
+        const q = [...qs.values()];
+        const last = q.sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? "")).at(-1)!;
+        add.push({ ...last, start, end, val: q.reduce((t, e) => t + e.val, 0), fp: "FY" });
+      }
+      units[u] = [...arr, ...add];
+    }
+    out.CommonStockDividendsPerShareDeclared = { ...dps, units };
   }
   return out;
 }
