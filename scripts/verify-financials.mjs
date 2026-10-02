@@ -5649,17 +5649,22 @@ async function verifyUs(sym) {
         // 앱이 Yahoo 분기 LTM 을 만들었는데 검증기 H.10 으로는 미고시 창이면 — 앱이 다른 환율을 쓴 것(대체 금지 위반)
         const pendQ = fxPendingWhy(fxRows, last[3].end);
         if (pendQ) add("A", "20-F LTM = Yahoo 분기 4개 × 분기 평균 환율", "LTM", { status: FAIL, note: `${pendQ}인데 앱이 LTM 열을 Yahoo 분기(~${last[3].end})로 채움 — 다른 환율로 대체한 것으로 보임` });
-        const flow = (k) => (last.every((r) => r[k] != null) && avgR.every((x) => x != null) ? last.reduce((t, r, i) => t + r[k] * avgR[i], 0) : null);
+        // k = "a|b" — 앞 필드가 없으면 뒤 필드(앱 edgar-yahoo-quarters.ts 와 같은 규칙 — ASML 감가상각 depreciationAndAmortization)
+        const fld = (r, k) => (k.includes("|") ? (k.split("|").map((x) => r[x]).find((x) => x != null) ?? null) : (r[k] ?? null));
+        const flow = (k) => (last.every((r) => fld(r, k) != null) && avgR.every((x) => x != null) ? last.reduce((t, r, i) => t + fld(r, k) * avgR[i], 0) : null);
         const hv = (key) => h.rows.find((r) => r.key === key)?.values[h.columns.findIndex((cc) => cc.kind === "ltm")] ?? null;
         const bsL = (name) => rowOf(bs, name)["현재/LTM"] ?? null;
-        const blanks = /공란: (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1] ?? "";
+        // 각주 형식(2026-10-02): "공란 — 사유: 항목, … / 사유: 항목" · "SEC 연말 + Yahoo 분기 변동분: 항목, …"
+        const blanks = /공란(?::| —) (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1] ?? "";
+        const approxL = /SEC 연말 \+ Yahoo 분기 변동분: (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1]?.split(", ") ?? [];
         // 환율 = 검증기가 FRED 에서 따로 받은 연준 H.10(흐름 분기 창 4개 평균, 잔액 최신 분기말 기말) — 독립. Yahoo 분기 원천은 공통모드로 남는다
         const basis = `Yahoo 분기 ${last.map((r) => r.end).join("·")} × 분기 평균 환율(${natCur}→USD, 연준 H.10 ${fxRows.series})${pendQ ? "" : ` · ${FX_IND_MARK}(분기 창 4개 + 기말 ${last[3].end})`}`;
         const items = [
           ["매출", H.LTM.rev, flow("totalRevenue"), "totalRevenue"], ["매출원가", IS.LTM?.cogs ?? null, flow("costOfRevenue"), "costOfRevenue"],
           ["매출총이익", IS.LTM?.gp ?? null, flow("grossProfit"), "grossProfit"], ["영업이익", IS.LTM?.op ?? null, flow("totalOperatingIncomeAsReported"), "totalOperatingIncomeAsReported"],
-          ["순이익", H.LTM.ni, flow("netIncome"), "netIncome"], ["감가상각비", IS.LTM?.da ?? null, flow("reconciledDepreciation"), "reconciledDepreciation"],
-          ["영업활동 현금흐름", hv("ocf"), flow("operatingCashFlow"), "operatingCashFlow"], ["CapEx", hv("capex"), flow("capitalExpenditure"), "capitalExpenditure"],
+          ["순이익", H.LTM.ni, flow("netIncome"), "netIncome"], ["감가상각비", IS.LTM?.da ?? null, flow("reconciledDepreciation|depreciationAndAmortization"), "reconciledDepreciation|depreciationAndAmortization"],
+          // CapEx = 유형자산 취득(purchaseOfPPE) — 야후 capitalExpenditure 는 무형자산 취득까지 합(앱 2026-10-02 와 같은 정의)
+          ["영업활동 현금흐름", hv("ocf"), flow("operatingCashFlow"), "operatingCashFlow"], ["CapEx", hv("capex"), flow("purchaseOfPPE"), "purchaseOfPPE"],
         ];
         const bals = [
           ["자산 총계", bsL("자산 총계"), "totalAssets"], ["부채 총계", bsL("부채 총계"), "totalLiabilitiesNetMinorityInterest"],
@@ -5670,6 +5675,21 @@ async function verifyUs(sym) {
         const fyCol = Object.keys(H).filter((cc) => cc !== "LTM").sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1);
         for (const [n0, app, exp, k] of [...items, ...bals]) {
           const name = `20-F LTM ${n0} = Yahoo 분기${bals.some((b) => b[0] === n0) ? " 최신 분기말 × 기말 환율" : " 4개 × 분기 평균 환율"}`;
+          // 앱이 "SEC 사업연도 + 야후 분기 변동분"(결정 (가) 방식)으로 만든 흐름 항목 — 기대값 = 야후 4개 분기 + (SEC FY − 야후 FY) × 사업연도 평균 환율.
+          // SEC FY 는 검증기가 공시 원본에서 따로 읽는다(CapEx 만 — 나머지 항목은 미구현으로 남긴다)
+          if (app != null && approxL.includes(n0) && !bals.some((b) => b[0] === n0)) {
+            if (n0 !== "CapEx" || exp == null) { add("A", name, "LTM", { status: NA, note: `앱 = SEC 사업연도 + 야후 분기 변동분 — "${n0}" 독립 재계산 미구현` }); continue; }
+            secFy ??= fyCol ? await filingAtDate(cik, sub, H[fyCol].date) : null;
+            const cap = secFy?.durFacts.filter((x0) => !x0.dims.length && /PurchaseOfPropertyPlantAndEquipment|PaymentsToAcquirePropertyPlantAndEquipment/.test(x0.id) && (Date.parse(x0.end) - Date.parse(x0.start)) / 864e5 > 300).sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0];
+            const ya2 = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "cash-flow" }, { validateResult: false });
+            const yr2 = ya2.find((r) => r.purchaseOfPPE != null && dayDiff(new Date(r.date).toISOString().slice(0, 10), H[fyCol].date) <= 7);
+            const fyEnd = H[fyCol].date, fyStart = new Date(Date.parse(fyEnd) - 364 * 864e5).toISOString().slice(0, 10);
+            const fyR = fxAvg(fxRows, fyStart, fyEnd);
+            if (!cap || !yr2 || fyR == null) { add("A", name, "LTM", { status: FAIL, note: `변동분 보정 기대값 계산 불가 — SEC ${cap ? "있음" : "없음"}·Yahoo 연간 ${yr2 ? "있음" : "없음"}·환율 ${fyR ?? "없음"}` }); continue; }
+            const adj = (-Math.abs(cap.v) - yr2.purchaseOfPPE) * fyR;
+            add("A", name, "LTM", vsSource(app, exp + adj, EXACT, `${basis} + (SEC ${secFy.form} ${-Math.abs(cap.v)} − Yahoo FY ${yr2.purchaseOfPPE}) × 사업연도 평균 환율`));
+            continue;
+          }
           if (app != null) { add("A", name, "LTM", exp == null ? { status: FAIL, note: `앱 ${app} 있는데 Yahoo ${k} 없음` } : vsSource(app, exp, EXACT, basis)); continue; }
           if (exp == null) { add("A", name, "LTM", { status: NA, note: `양쪽 빈칸(Yahoo ${k} 없음)` }); continue; }
           // 앱 공란 — notes 에 사유가 적힌 항목만, 사유(Yahoo 연간 ≠ SEC FY)를 SEC 원본으로 확인
