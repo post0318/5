@@ -26,7 +26,9 @@ export interface KrDaDoc {
 }
 
 export async function krDaCol(): Promise<Collection<KrDaDoc>> {
-  return (await getDb()).collection<KrDaDoc>("kr_da");
+  // 로컬 시험은 KR_DA_COLLECTION=kr_da_staging — 로컬과 운영이 같은 DB 라 브랜치 작업의 적재가 운영에 바로 섞이지 않게(오너 지시 2026-10-02
+  // "한국은 브랜치로 커밋, 마스터는 다 확인하고 배포")
+  return (await getDb()).collection<KrDaDoc>(process.env.KR_DA_COLLECTION || "kr_da");
 }
 
 export async function getKrDaDoc(symbol: string): Promise<KrDaDoc | null> {

@@ -28,6 +28,9 @@ if (!DART || !URI) throw new Error("DART_API_KEY / MONGODB_URI 필요 (.env.loca
 
 const B = "https://opendart.fss.or.kr/api";
 const CHECK = process.argv.includes("--check");
+// 적재 컬렉션 — 로컬 .env.local 은 KR_DA_COLLECTION=kr_da_staging(로컬·운영이 같은 DB, 브랜치 작업이 운영에 섞이지 않게). 운영 반영은 --prod
+// (master 배포 확인 뒤 — 오너 지시 2026-10-02 "마스터는 다 확인하고 배포다")
+const COLL = process.argv.includes("--prod") ? "kr_da" : process.env.KR_DA_COLLECTION || env.KR_DA_COLLECTION || "kr_da";
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
 );
@@ -591,7 +594,7 @@ let symbols = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 // 유니버스는 계정별 문서라 같은 종목이 여러 번 — 중복 제거
 if (symbols.length === 0)
   symbols = [...new Set((await db.collection("universe_items").find({ market: "kr" }).toArray()).map((d) => d.symbol))];
-console.log(`대상 ${symbols.length}종목`);
+console.log(`대상 ${symbols.length}종목 → ${CHECK ? "(점검 — 쓰기 없음)" : COLL}`);
 
 const t = (n) => (n == null ? "-" : (n / 1e12).toFixed(2) + "조");
 for (const sym of symbols) {
@@ -600,7 +603,7 @@ for (const sym of symbols) {
   let byYear = null;
   try { byYear = await daByYear(corp); } catch (e) { console.log(`  ${sym}: ${e.message}`); }
   if (!byYear) { console.log(`  ${sym}: D&A 없음`); continue; }
-  if (!CHECK) await db.collection("kr_da").replaceOne(
+  if (!CHECK) await db.collection(COLL).replaceOne(
     { _id: sym },
     { _id: sym, byYear, updatedAt: new Date().toISOString() },
     { upsert: true },
