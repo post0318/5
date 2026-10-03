@@ -1,0 +1,164 @@
+# 데이터 수집 일람
+
+이 앱이 외부에서 받아 오는 데이터를 **묶음별**로 정리한 문서다(2026-10-03 작성 — 오라클 이전과 함께).
+수집 방식·빈도·저장처를 바꾸면 이 문서부터 고친다. 사이트별 예외 승인의 근거·경위는 CLAUDE.md "데이터 레이어" 절에 있다.
+
+- **실행 위치**: 2026-10-03 부터 예약 작업은 **오라클 메인 서버**로 옮기는 중(DEPLOY.md §0). 옮기기 전까지는 GitHub Actions
+  `schedule`(실행 누락·지연이 잦음 — 텔레그램 실측 21%)과 Vercel Cron(Vercel 정지로 미실행)에서 돈다.
+- **전송 주소**: 수집기는 모두 `APP_URL`(저장소 변수, 지금 오라클)로 보낸다 — `scripts/lib/app-url.mjs`.
+- **시각은 전부 한국 시간(KST)**.
+- **빈도 원칙**: 실행을 정시로 확실하게 만드는 것과 횟수를 늘리는 것은 별개다. 크롤링 예외 승인 소스는 승인된 횟수를 넘기지 않는다.
+  공식 API(DART·SEC)는 공시가 날 때만 데이터가 바뀌므로 자주 부를 이유가 없다. 유료·크레딧 API(Gemini·Anthropic·PDFShift)는
+  예약이 아니라 필요할 때만 호출된다(주간 리포트 초안만 주 1회 예약).
+
+---
+
+## ① 리서치
+
+쓰는 화면: 산업분석 탭, 인사이트(해외 IB)·비상장 리서치 탭, 종목분석의 "리서치" 카드(종목별 리포트), 주간 리포트 입력.
+저장: MongoDB `kr_research`(라우트 `/api/cron/total-research`). 원문 PDF·전체 본문은 저장하지 않는다(요약 발췌·목표주가 등만).
+
+### ①-1 국내 · robots 제한 없음 — 하루 6회 (08·10·12·14·16·18시)
+
+| 소스 | 워크플로 | 스크립트 | 비고 |
+|---|---|---|---|
+| 한화투자증권 | `hanwha-research` | `collect-hanwha-research.mjs` | robots 가 경로를 막지 않음 |
+| 미래에셋증권 | `mirae-research` | `collect-mirae-research.mjs` | robots 에 Disallow 없음 |
+| 삼성증권 | `samsung-research` | `collect-samsung-research.mjs` | robots `Allow: /`, PDF 로 목표주가 보강 |
+| 키움증권 | `kiwoom-research` | `collect-kiwoom-research.mjs` | robots `Allow: /`, PDF 로그인 불필요 |
+| GlobalMonitor(연합인포맥스) | `globalmonitor-research` | `collect-globalmonitor-research.mjs` | robots 없음, 다수 증권사 미국주식 모음 |
+| KB증권 | `kb-research` | `collect-kb-research.mjs` | robots 없음(www·rdata 둘 다) |
+| 교보증권 | `kyobo-research` | `collect-kyobo-research.mjs` | robots `User-agent: * Allow: /` |
+| IBK투자증권 | `ibk-research` | `collect-ibk-research.mjs` | robots `User-agent: * Allow: /` |
+| KIRS(한국IR협의회) | `kirs-research` | `collect-kirs-research.mjs` | robots 는 네이버봇의 css·이미지 폴더만 막음. ⚠️ **해외 IP 차단**(오라클 일본 시간 초과) |
+| 유안타증권 | `yuanta-research` | `collect-yuanta-research.mjs` | robots 없음. 2026-09-25 직접 수집 재개(한경 경유에서 제외) |
+| 대신증권 | `daishin-research` | `collect-daishin-research.mjs` | robots 없음(money2.daishin.com) |
+| iM증권 | `im-research` | `collect-im-research.mjs` | robots 없음 |
+| 메리츠증권 | `meritz-research` | `collect-meritz-research.mjs` | robots 없음 |
+| 상상인증권(기업·산업) | `sangsangin-research`·`sangsangin-industry-research` | 같은 이름 | robots 파일은 있으나 규칙 없음 |
+| DS투자증권 | `ds-research` | `collect-ds-research.mjs` | robots 없음 |
+| BNK투자증권 | `bnk-research` | `collect-bnk-research.mjs` | robots 없음. ⚠️ **해외 IP 차단**(GitHub 미국·오라클 일본 모두 실패, 한국 IP 만 됨) |
+
+빈도 결정: 2026-10-03 오너 — "로봇 제한이 없는 것은 6회로"(처음 6곳), 이어 robots 실측으로 옮겨 온 10곳도 "하루 6회로 결정".
+robots 실측(2026-10-03, 수집기가 실제로 접속하는 주소 기준)으로 분류했다. CLAUDE.md 사이트별 항목의 "robots 차단·하루 1회"
+기록은 승인 당시 판단이고 이 표가 최신이다.
+
+### ①-2 국내 · robots 차단, 예외 승인 — 하루 2회 (08시대·12시대)
+
+| 소스 | 접속 주소 | robots |
+|---|---|---|
+| 신한투자증권 | bbs2.shinhansec.com | `User-agent: * Disallow: /` |
+| 하나증권 | www.hanaw.com | 구글·네이버봇만 허용, 나머지 `Disallow: /` |
+| NH투자증권 | www.nhsec.com | 일반 봇 `Disallow: /`, 일부 검색엔진만 허용 |
+| 한국투자증권 | securities.koreainvestment.com | 일반 봇 `Disallow: /`, 검색엔진만 허용 |
+| 한경 컨센서스 | consensus.hankyung.com | `User-agent: * Disallow: /` |
+
+- robots.txt 는 "자동 수집을 원하지 않는다"는 사이트의 의사 표시일 뿐 접속을 기술적으로 막지는 않는다. 그래서 이 5곳도 실제로는
+  받아진다. 이 프로젝트는 오너가 개인용·저빈도 조건으로 예외를 승인해 수집한다(CLAUDE.md 사이트별 항목). BNK·KIRS 처럼
+  방화벽에서 해외 IP 를 막는 것은 robots 와 별개다.
+- 빈도 근거: 2026-09-14 오너 지시 — "1차는 오전 8시~9시, 2차는 12시~1시. 하루 2번… 작성시간과 로드시간의 시차"
+  (커밋 6278730). CLAUDE.md 사이트별 항목에 남은 "하루 1회"는 그 이전 승인 기록이다.
+
+### ①-3 해외 IB·운용사 — 하루 1회
+
+골드만삭스, JP모간, 모간스탠리, 블랙록, PIMCO, BNP파리바, 씨티, BofA Institute, HSBC, 도이치방크 리서치
+— 공개 사이트맵(또는 게시판)과 글 페이지 메타. 인사이트 탭·산업분석 "해외리서치" 세그먼트로 나뉨. 빈도 확정(2026-10-03 오너).
+
+---
+
+## ② 거시경제
+
+쓰는 화면: 거시경제 대시보드(글로벌 핵심지표·한국/미국 공포·탐욕·Fed 금리 확률 등), 주간 리포트 스냅샷.
+
+### ②-1 예약 수집 → DB 저장 (스케줄 대상)
+
+| 항목 | 소스 | 실행(이전 전) | 빈도 | 저장 |
+|---|---|---|---|---|
+| 외국인 코스피200 선물 순매수 | **다음 금융(카카오)** 투자주체별 동향 JSON — 2026-09-28 네이버(410 폐지)에서 교체 | GitHub `foreign-futures` → `collect-foreign-fut.mjs` → `/api/cron/kr-fg` | 하루 1회 08:00 | `kr_fg_daily` |
+| 한국 공포·탐욕 원자료(전종목 일별매매·VKOSPI·옵션) | KRX OPEN API | ~~Vercel Cron~~ → **오라클 타이머 `macro-kr-fg`**(2026-10-03 이전 완료, 첫 실행 10-02분 정상) | 하루 1회 18:30 | `kr_fg_daily`·`kr_stock_roll`·`kr_index_daily` |
+| Fed 금리 확률 일별 스냅샷 | Kalshi | GitHub `fedwatch-snapshot` → `/api/cron/fedwatch` | 하루 1회 | DB |
+
+한국 공포·탐욕은 화면 조회 때 빠진 영업일을 백그라운드로 보충하는 자가 복구가 있다(`lib/macro/kr/batch.ts`, 10분 쿨다운).
+
+### ②-3 거시경제 DB 관리 (MongoDB Atlas, 2026-10-03 실측 크기)
+
+| 컬렉션 | 내용 | 키 | 보관 | 크기 |
+|---|---|---|---|---|
+| `kr_fg_daily` | 거래일별 한국 공포·탐욕 원자료 1문서(상승·하락 종목수, 52주 신고·신저, VKOSPI, 풋콜, 외국인 선물 순매수, 베이시스) | `_id`=거래일 | **영구**(문서당 약 250B) | 4,141건 · 1.3MB |
+| `kr_stock_roll` | 종목별 최근 252거래일 종가 롤링 창(52주 신고·신저 판정용) | `_id`=종목코드 | 종목당 1문서, 창 길이 고정 | 3,671건 · 6.5MB |
+| `kr_index_daily` | KOSPI 등 지수 일별 종가(모멘텀 125일선 등) | 날짜 | 영구 | 2,950건 · 0.4MB |
+| `kr_fg_meta` | 배치 쿨다운 잠금·진행 커서 | 키 | 덮어쓰기 | 2건 |
+| `fedwatch_daily` | Kalshi Fed 금리 확률 일별 스냅샷(전일·전주 비교용) | `_id`=수집일(UTC) | 영구(하루 1문서) | 62건 · 0.03MB |
+
+- 쓰기는 모두 `_id` 기준 upsert(같은 날을 다시 받아도 덮어쓰기라 중복이 안 쌓인다). 과거분 백필은 이미 있는 날짜를 건드리지 않는다
+  (`fedwatch_daily` `$setOnInsert`).
+- ②-2(화면 조회형) 데이터는 DB 에 넣지 않고 서버 캐시(Next fetch revalidate)로만 둔다.
+- 증가량: 하루 몇 문서·수 KB 수준이라 한도(512MB, 현재 전체 5.7%) 걱정이 없다. 전체 DB 크기는 `node scripts/db/size.mjs`.
+
+### ②-2 화면 조회 때 가져오기 + 캐시 (스케줄 불필요)
+
+| 항목 | 소스 | 캐시 | 코드 |
+|---|---|---|---|
+| 미국·일본 지수, 원자재, 환율, 지수 차트 | Yahoo(`yahoo-finance2`, 개인용) | 짧게 | `lib/macro/indices.ts`·`index-chart.ts` |
+| 한국 지수 | KRX 정보데이터시스템, 금융위 지수시세(data.go.kr) | 12시간 | `lib/macro/kr/krx.ts`·`fsc-index.ts` |
+| 미국 거시 지표 | FRED | 12~24시간 | `lib/macro/fred.ts` |
+| 국고채·회사채 금리 | 한국은행 ECOS | 12시간 | `lib/macro/kr/ecos.ts` |
+| CNN 공포·탐욕 | CNN 비공식 API(예외 승인) | 1시간 | `lib/macro/feargreed.ts` |
+| Fed 금리 확률(현재) | Kalshi(예외 승인) | 30분 | `lib/macro/fedwatch.ts` |
+| 미국 재무부 TGA 잔고 | 미 재무부 Fiscal Data | 6시간 | `lib/macro/tga.ts` |
+| 한국 공포·탐욕 지수 | `kr_fg_daily` 에서 계산 | — | `lib/macro/kr/fear-greed.ts` |
+
+---
+
+## ③ 뉴스·SNS
+
+쓰는 화면: 종목분석 "종목뉴스" 탭, 유니버스 통합 뉴스, 인플루언서(텔레그램) 화면, 주간 리포트 입력.
+
+| 항목 | 소스 | 실행(이전 전) | 오라클 빈도 | 저장 |
+|---|---|---|---|---|
+| 종목뉴스 | Google 뉴스 RSS, 네이버 뉴스 API(허브), 빅테크 공식 블로그 RSS | GitHub `stock-news` → `/api/cron/stock-news` | 30분 | DB |
+| 텔레그램 채널 | Telegram API(`collect-telegram-posts.mjs`) | GitHub 매시간 + cron-job.org 2시간마다 재기동 + 워크플로 안 5시간 30분 반복(우회책) | **15분** — 이전 후 우회책 제거 | DB(`_id` upsert) |
+| 뉴스 제목 번역 | Google 번역 웹, MyMemory | 화면 조회 때 | — | 캐시 |
+
+---
+
+## ④ 종목분석 (재무·투자의견)
+
+쓰는 화면: 종목분석(하이라이트·재무제표·멀티플·애널리스트 투자의견), 유니버스 통합 뷰. 재무 계산은 무거워서 한 번에 하나만 돌린다.
+
+| 항목 | 소스 | 실행(이전 전) | 빈도 | 비고 |
+|---|---|---|---|---|
+| 애널리스트 투자의견(미국, 종목당 상위 5건) | StockAnalysis | GitHub `analyst-forecasts`(`collect-analyst-forecasts.mjs`) | 하루 1회 | 저장 `analyst_forecasts`(종목 단위 스냅샷 교체). 승인 조건 하루 1회·종목당 5행. 빈도 확정(2026-10-03 오너) |
+| 재무 배치 | SEC EDGAR | GitHub 실행 서버 `fin-build`(`scripts/run/fin-build.mts`) | 하루 1회 06:10 | 운영 서버 CPU 사용 안 함(2026-10-03 결정) |
+| 미국 TTM 스냅샷 | SEC + 앱 계산 | GitHub 실행 서버 `ttm-build`(`scripts/run/ttm-build.mts`) | 하루 1회 06:50 + 앱 배포 직후 | 운영 배포판 번호(`APP_COMMIT_SHA`)로 저장 — 세 서버가 같은 커밋이면 공유 |
+| 미국 복수 클래스 주식수 | SEC | ~~Vercel Cron~~ → **오라클 타이머 `fin-us-class-facts`**(2026-10-03 이전) | 분기 1회(1·4·7·10월 5일 15:00) | 다음 2026-10-05. 저장 `us_class_facts` |
+| 종목 화면 재무·시세 | DART, SEC, KRX, Yahoo | 화면 조회 때 | — | 디스크 캐시 |
+
+---
+
+## ⑤ 주간 리포트
+
+| 항목 | 입력 | 실행(이전 전) | 빈도 |
+|---|---|---|---|
+| 초안 생성(`/api/cron/weekly-report`) | 위 DB(리서치·뉴스·텔레그램) + 시세 스냅샷(Yahoo·ECOS·브라질 SGS·4번 저장소 국채 JSON) + 네이버 검색어 트렌드 + Gemini 코멘트 | GitHub `weekly-report` | 월 06:00(2026-10-03 09:00 에서 앞당김) |
+
+발행은 자동이 아니다 — 오너가 `/weekly` 에서 검수 후 발행. Gemini 비용은 앱 예산 `WEEKLY_MONTHLY_BUDGET_USD`(10달러) +
+구글 지출 상한 `guard-gemini`(13,000원).
+
+---
+
+## 수동 실행 전용 (예약 없음)
+
+`gemini-grounding-check`, `news-relevance`, `normalize-sim`, `universe-overview-refresh`, `weekly-grounding-peek`,
+`weekly-model-compare`, `weekly-weight-sim`, 배포(`deploy-oracle`·`deploy-cloudrun`).
+
+## 합계
+
+| 묶음 | 예약 작업 수 |
+|---|---|
+| ① 리서치 | 32 (국내 22 + 해외 IB 10) |
+| ② 거시경제 | 3 (다음 선물, KRX 공포·탐욕 원자료[Vercel Cron], Fed 스냅샷) |
+| ③ 뉴스·SNS | 2 |
+| ④ 종목분석 | 4 (StockAnalysis 투자의견, fin-build, ttm-build, us-class-facts[Vercel Cron]) |
+| ⑤ 주간 리포트 | 1 |
+| **합계** | **42** (GitHub 40 + Vercel Cron 2) |
