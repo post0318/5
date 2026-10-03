@@ -11,7 +11,6 @@ import { NextResponse } from "next/server";
  *   /api/universe 이하 전부           유니버스 조회·등록·수정·삭제 (계정별)
  *   /api/news/universe                유니버스통합 뉴스 (계정별)
  *   /api/weekly (GET 제외)            주간 리포트 생성·수정·발행
- *   종목뉴스 summarize 라우트          LLM 비용 발생
  *
  * `/api/cron/*` 은 사람이 아니라 수집 스크립트가 부르는 경로라 여기와 무관하다
  * — CRON_SECRET(로컬 수동 실행 시 APP_PASSWORD)으로 각자 검증한다.

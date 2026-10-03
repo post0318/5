@@ -1057,10 +1057,17 @@ export async function fetchStockNewsBySide(
   market: MarketId,
   symbol: string,
   companyName?: string | null,
+  /** 검증 도구용 — 판정 전 원본 목록과 기사별 판정 사유를 함께 돌려준다(화면·저장에는 쓰지 않음) */
+  opts?: { includeRaw?: boolean },
 ): Promise<{
   domestic: NewsItem[];
   overseas: NewsItem[];
-  debug: { rawDomestic: number; rawOverseas: number; relevance: NewsRelevanceMode };
+  debug: {
+    rawDomestic: number;
+    rawOverseas: number;
+    relevance: NewsRelevanceMode;
+    raw?: { side: "domestic" | "overseas"; item: RawNewsItem; tagged: boolean; keep: boolean; reason: string }[];
+  };
 }> {
   const query = companyName || symbol;
   const oQuery = overseasQuery(market, symbol, query);
@@ -1142,6 +1149,7 @@ export async function fetchStockNewsBySide(
   let domesticSafe: RawNewsItem[];
   let overseasSafe: RawNewsItem[];
   let relevance: NewsRelevanceMode;
+  const rawLog: { side: "domestic" | "overseas"; item: RawNewsItem; tagged: boolean; keep: boolean; reason: string }[] = [];
   if (!name) {
     // 회사명을 모르면 태깅 기사·화이트리스트 매체만(예전 폴백과 같음)
     domesticSafe = domesticRaw.filter((it) => taggedUrls.has(it.url) || DOMESTIC_PUBLISHERS.has(it.publisher));
@@ -1157,8 +1165,16 @@ export async function fetchStockNewsBySide(
       domesticHit: (s) => isDomesticRelevant(koName, symbol, s) || (!isKr && overseasHit(s)),
       overseasHit,
     };
-    domesticSafe = domesticRaw.filter((it) => judgeDomestic(it, ctx).keep);
-    overseasSafe = overseasRaw.filter((it) => judgeOverseas(it, ctx).keep);
+    domesticSafe = domesticRaw.filter((it) => {
+      const v = judgeDomestic(it, ctx);
+      if (opts?.includeRaw) rawLog.push({ side: "domestic", item: it, tagged: taggedUrls.has(it.url), ...v });
+      return v.keep;
+    });
+    overseasSafe = overseasRaw.filter((it) => {
+      const v = judgeOverseas(it, ctx);
+      if (opts?.includeRaw) rawLog.push({ side: "overseas", item: it, tagged: false, ...v });
+      return v.keep;
+    });
     // 국내 태깅 기사가 있었는데 규칙이 전부 뺐으면(드묾) 태깅 기사는 살린다 — "관련 기사 없음"보다 낫다
     if (domesticSafe.length === 0 && domesticTagged.length > 0) domesticSafe = domesticRaw.filter((it) => taggedUrls.has(it.url));
     relevance = "rules";
@@ -1173,7 +1189,7 @@ export async function fetchStockNewsBySide(
   return {
     domestic,
     overseas,
-    debug: { rawDomestic: domesticRaw.length, rawOverseas: overseasRaw.length, relevance },
+    debug: { rawDomestic: domesticRaw.length, rawOverseas: overseasRaw.length, relevance, ...(opts?.includeRaw ? { raw: rawLog } : {}) },
   };
 }
 
@@ -1302,33 +1318,4 @@ export function isDomesticPublisher(publisher: string): boolean {
   return DOMESTIC_PUBLISHERS.has(publisher);
 }
 
-/** 서버가 기사 1건을 재검증(클라이언트값 신뢰 안 함) — summarize 라우트에서 사용. */
-export function isAllowedArticle(publisher: string, publishedAt: string): boolean {
-  if (!ALLOWED_PUBLISHERS.has(publisher.toLowerCase())) return false;
-  const t = Date.parse(publishedAt);
-  if (!Number.isFinite(t)) return false;
-  return t >= Date.now() - ONE_WEEK_MS;
-}
 
-/**
- * 체크한 기사 1건의 본문을 온디맨드로 가져와 텍스트만 추출(배치·주기적 수집 아님).
- * 완전한 본문 파싱은 아님 — 태그 제거 정도의 거친 추출이라 광고·내비 텍스트가
- * 섞일 수 있지만, LLM 이 번역·요약 시 자연스럽게 걸러낸다.
- */
-export async function fetchArticleBody(url: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: { "user-agent": "Mozilla/5.0 (compatible; research-bot)" },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) throw new Error(`기사 본문 요청 실패 ${res.status}`);
-  const html = await res.text();
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;|&#160;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, " ")
-    .trim();
-}
