@@ -75,8 +75,8 @@ robots 실측(2026-10-03, 수집기가 실제로 접속하는 주소 기준)으�
 
 | 항목 | 소스 | 실행(이전 전) | 빈도 | 저장 |
 |---|---|---|---|---|
-| 외국인 코스피200 선물 순매수 | **다음 금융(카카오)** 투자주체별 동향 JSON — 2026-09-28 네이버(410 폐지)에서 교체 | GitHub `foreign-futures` → `collect-foreign-fut.mjs` → `/api/cron/kr-fg` | 하루 1회 08:00 | `kr_fg_daily` |
-| 한국 공포·탐욕 원자료(전종목 일별매매·VKOSPI·옵션) | KRX OPEN API | ~~Vercel Cron~~ → **오라클 타이머 `macro-kr-fg`**(2026-10-03 이전 완료, 첫 실행 10-02분 정상) | 하루 1회 18:30 | `kr_fg_daily`·`kr_stock_roll`·`kr_index_daily` |
+| 외국인 코스피200 선물 순매수 | **다음 금융(카카오)** 투자주체별 동향 JSON — 2026-09-28 네이버(410 폐지)에서 교체 | **오라클 타이머 `macro-foreign-fut`**(2026-10-03 이전, `collect-foreign-fut.mjs` → 서버 안 `/api/cron/kr-fg`) | 하루 1회 06:31(KRX 배치와 1분 어긋남) | `kr_fg_daily` |
+| 한국 공포·탐욕 원자료(전종목 일별매매·VKOSPI·옵션) | KRX OPEN API | ~~Vercel Cron~~ → **오라클 타이머 `macro-kr-fg`**(2026-10-03 이전) | **다음 날 06:30**(전 영업일분 — KRX OPEN API 는 다음 영업일에 공개). 휴장 판정은 공휴일 달력(`market-calendar.ts`). 2026-10-03 09-14~10-01 휴장 오기록 11일 백필 | `kr_fg_daily`·`kr_stock_roll`·`kr_index_daily` |
 | Fed 금리 확률 일별 스냅샷 | Kalshi | GitHub `fedwatch-snapshot` → `/api/cron/fedwatch` | 하루 1회 | DB |
 
 한국 공포·탐욕은 화면 조회 때 빠진 영업일을 백그라운드로 보충하는 자가 복구가 있다(`lib/macro/kr/batch.ts`, 10분 쿨다운).
