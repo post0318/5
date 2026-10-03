@@ -1,0 +1,106 @@
+/**
+ * 텔레그램 채널 상주 수신기 — 새 글이 올라오는 즉시 받아 /api/cron/telegram-posts 로 보낸다(2026-10-03 오너 지시 "즉시 적용").
+ *
+ * 예전엔 GitHub Actions 가 매시간 접속 → 받기 → 끊기를 반복했는데, GitHub 예약 누락(실행률 21%)으로 몇 시간씩 비었고
+ * cron-job.org 재기동 + 5시간 30분 반복 루프 같은 우회책이 필요했다. 오라클 서버에서 연결을 계속 열어 두면 텔레그램이
+ * 새 메시지를 바로 밀어준다(일반 텔레그램 앱이 켜져 있는 것과 같은 방식이라 접속을 반복하는 것보다 차단 위험이 낮다).
+ *
+ * - 시작할 때: 채널별 커서 뒤의 글을 이어받는다(꺼져 있던 동안 놓친 글 보충) — collect-telegram-posts.mjs 와 같은 함수.
+ * - 실행 중: NewMessage 이벤트로 새 글을 바로 보낸다.
+ * - 안전망: 30분마다 이어받기를 한 번 더 돈다(이벤트를 놓쳤을 때 대비 — 같은 연결로 하므로 재접속 없음).
+ * ⚠️ 같은 세션(TELEGRAM_SESSION)을 다른 곳(GitHub 수집기 등)과 동시에 쓰면 세션이 끊길 수 있다 — 이 수신기를 켜면 다른 수집은 끈다.
+ *
+ * 실행: node scripts/listen-telegram.mjs (오라클: systemd 서비스 macro-telegram-listener)
+ */
+import { readFileSync } from "node:fs";
+import { TelegramClient } from "telegram";
+import { StringSession } from "telegram/sessions/index.js";
+import { NewMessage } from "telegram/events/index.js";
+import {
+  fetchCursors,
+  fetchSince,
+  parseTelegramChannels,
+  postItems,
+  usernameFromTelegramUrl,
+} from "./collect-telegram-posts.mjs";
+
+const CATCHUP_EVERY_MS = 30 * 60_000;
+const log = (...a) => console.log(new Date().toISOString(), ...a);
+
+const toItem = (m) => ({
+  messageId: String(m.id),
+  text: m.message.slice(0, 500),
+  publishedAt: new Date(m.date * 1000).toISOString(),
+});
+
+async function main() {
+  const apiId = Number(process.env.TELEGRAM_API_ID);
+  const apiHash = process.env.TELEGRAM_API_HASH;
+  const session = process.env.TELEGRAM_SESSION;
+  if (!apiId || !apiHash || !session) throw new Error("TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_SESSION 필요");
+
+  const md = readFileSync(new URL("../src/lib/influencers/influencers.md", import.meta.url), "utf8");
+  const channels = parseTelegramChannels(md)
+    .map((c) => ({ ...c, username: usernameFromTelegramUrl(c.url) }))
+    .filter((c) => c.username);
+  if (!channels.length) throw new Error("influencers.md 에 telegram: 항목이 없습니다");
+
+  const client = new TelegramClient(new StringSession(session), apiId, apiHash, { connectionRetries: 10, autoReconnect: true });
+  await client.connect();
+
+  // 채널 엔티티·제목
+  const byId = new Map();
+  for (const ch of channels) {
+    const entity = await client.getEntity(ch.username);
+    ch.entity = entity;
+    ch.title = entity.title ?? ch.name;
+    byId.set(String(entity.id), ch);
+  }
+  log(`연결됨 — 채널 ${channels.map((c) => "@" + c.username).join(", ")}`);
+
+  const catchUp = async (why) => {
+    const cursors = await fetchCursors();
+    for (const ch of channels) {
+      try {
+        const minId = cursors[ch.username] ?? 0;
+        const items = (await fetchSince(client, ch.entity, minId)).filter((m) => m.message?.trim()).map(toItem);
+        if (items.length) {
+          const r = await postItems(ch.username, ch.title, items);
+          log(`[이어받기:${why}] @${ch.username} ${items.length}건`, JSON.stringify(r));
+        }
+      } catch (e) {
+        log(`[이어받기:${why}] @${ch.username} 실패:`, e?.message ?? e);
+      }
+    }
+  };
+
+  await catchUp("시작");
+
+  client.addEventHandler(async (event) => {
+    const m = event.message;
+    const ch = byId.get(String(event.chatId ?? m?.peerId?.channelId ?? ""));
+    if (!ch || !m?.message?.trim()) return;
+    try {
+      const r = await postItems(ch.username, ch.title, [toItem(m)]);
+      log(`[즉시] @${ch.username} 글 ${m.id}`, JSON.stringify(r));
+    } catch (e) {
+      log(`[즉시] @${ch.username} 글 ${m.id} 전송 실패(다음 이어받기에서 보충):`, e?.message ?? e);
+    }
+  }, new NewMessage({ chats: channels.map((c) => c.entity) }));
+
+  setInterval(() => catchUp("정기").catch((e) => log("정기 이어받기 실패", e?.message ?? e)), CATCHUP_EVERY_MS);
+
+  // 정상 종료(systemd stop) 때 연결을 닫는다
+  for (const sig of ["SIGTERM", "SIGINT"]) {
+    process.on(sig, async () => {
+      log(`${sig} — 종료`);
+      await client.disconnect().catch(() => {});
+      process.exit(0);
+    });
+  }
+}
+
+main().catch((e) => {
+  console.error(new Date().toISOString(), "수신기 실패:", e);
+  process.exit(1); // systemd 가 다시 띄운다
+});

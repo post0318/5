@@ -14,6 +14,7 @@
  * 실행: node scripts/collect-telegram-posts.mjs
  */
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { appUrl } from "./lib/app-url.mjs";
@@ -48,7 +49,7 @@ const LIMIT_PER_CHANNEL = 50;
 // 아주 오래됐을 때 무한정 거슬러 올라가지 않게). 보관이 90일이라 넉넉하다.
 const MAX_CATCHUP_PER_CHANNEL = 500;
 
-function parseTelegramChannels(mdText) {
+export function parseTelegramChannels(mdText) {
   const blocks = mdText.split(/^##[ \t]+/m).slice(1);
   const out = [];
   for (const block of blocks) {
@@ -62,7 +63,7 @@ function parseTelegramChannels(mdText) {
   return out;
 }
 
-function usernameFromTelegramUrl(url) {
+export function usernameFromTelegramUrl(url) {
   const m = url.match(/t\.me\/([\w.]+)/i);
   return m ? m[1] : null;
 }
@@ -72,7 +73,7 @@ function usernameFromTelegramUrl(url) {
  * 객체 — 그 경우 예전처럼 최신 LIMIT_PER_CHANNEL 건만 가져간다(수집이 아예
  * 멈추는 것보다 낫다).
  */
-async function fetchCursors() {
+export async function fetchCursors() {
   const headers = {};
   if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
   if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
@@ -96,7 +97,7 @@ async function fetchCursors() {
  * `minId` 가 없으면(첫 수집) 최신 한 페이지만 받는다 — 채널 전체를 처음부터
  * 긁지 않기 위해서다.
  */
-async function fetchSince(client, entity, minId) {
+export async function fetchSince(client, entity, minId) {
   const all = [];
   let maxId = 0; // 0 = 제한 없음(최신부터)
   for (let page = 0; page < Math.ceil(MAX_CATCHUP_PER_CHANNEL / LIMIT_PER_CHANNEL); page++) {
@@ -114,7 +115,7 @@ async function fetchSince(client, entity, minId) {
   return all;
 }
 
-async function postItems(channelUsername, channelTitle, items) {
+export async function postItems(channelUsername, channelTitle, items) {
   const headers = { "content-type": "application/json" };
   if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
   if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
@@ -203,7 +204,10 @@ async function main() {
   setTimeout(() => process.exit(0), 5000).unref();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// 상주 수신기(listen-telegram.mjs)가 위 함수들을 가져다 쓰므로, 직접 실행할 때만 main() 을 돈다.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
