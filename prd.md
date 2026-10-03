@@ -42,10 +42,10 @@
 | 테이블 | TanStack Table |
 | 차트 | Recharts (필요 시 lightweight-charts 추가) |
 | 데이터 패칭 | TanStack Query + Next.js fetch 캐싱 |
-| DB | Postgres (Vercel Marketplace — Neon 등) |
+| DB | MongoDB Atlas (무료 M0) — 초안의 Postgres 계획은 쓰지 않음 |
 | 날짜 | date-fns |
 | 시세·컨센서스 | `yahoo-finance2` (npm, Python 불필요) — 개인용 한정 |
-| 배포 | Vercel (Cron 포함) |
+| 배포 | 오라클(메인)·구글 Cloud Run·Vercel(보조) — 예약 작업은 오라클(2026-10-03, `DEPLOY.md` §0) |
 
 - 외부 금융 API 호출은 **서버(Route Handler)에서만** — 키 은닉, CORS 회피, 캐싱, rate limit 관리
 - 시장별 로직은 어댑터로 분리: `lib/markets/{kr,us,jp}/`
@@ -111,9 +111,9 @@
 
 ### 4.5 수집 · 저장 전략
 
-- **매일 배치 수집 → Postgres 저장** (L1 공시·재무, L2 시세, L4 컨센서스 스냅샷).
+- **매일 배치 수집 → DB 저장**(실제는 MongoDB) (L1 공시·재무, L2 시세, L4 컨센서스 스냅샷).
   외부 API rate limit 회피 + 히스토리 축적 + 조회 속도.
-- **Vercel Cron**: 시세는 각 시장 마감 후, 공시는 주기 폴링(예: 30분), 컨센서스는 일 1회.
+- **예약 실행**(초안은 Vercel Cron — 지금은 오라클 타이머, 소스별 빈도는 `docs/data-collection.md`).
 - 온디맨드 조회는 **DB 우선**, 캐시 미스만 실시간 API 호출.
 - L3 멀티플은 조회 시점 계산 (또는 일 1회 스냅샷 저장).
 
@@ -319,6 +319,6 @@
 ### 다음
 1. 정확한 TTM 멀티플 (EDGAR 분기 start/end 구간 판별)
 2. 일본 IFRS 매출/영업이익 — 본재무제표(jppfs/jpigp) 파싱 보강
-3. 배치 수집 → DB 캐시 + Vercel Cron (§4.5)
+3. 배치 수집 → DB 캐시 + 예약 실행 (§4.5, 오라클로 이전 중)
 4. §12 미결 사항 확정 (강조 계정, 음수/null 표기, 인증, 그룹/태그 UI)
 5. 재무제표 차트(Recharts)

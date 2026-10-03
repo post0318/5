@@ -162,8 +162,8 @@ Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정
 | 묶음 | 예약 작업 수 |
 |---|---|
 | ① 리서치 | 31 (국내 21 — KIRS 는 한경 경유 — + 해외 IB 10) |
-| ② 거시경제 | 3 (다음 선물, KRX 공포·탐욕 원자료[Vercel Cron], Fed 스냅샷) |
-| ③ 뉴스·SNS | 2 |
-| ④ 종목분석 | 4 (StockAnalysis 투자의견, fin-build, ttm-build, us-class-facts[Vercel Cron]) |
+| ② 거시경제 | 3 (다음 선물·KRX 공포·탐욕 원자료 — **오라클 이전 완료**, Fed 스냅샷 — GitHub) |
+| ③ 뉴스·SNS | 3 (텔레그램 상주 수신기·유튜브 구독 갱신 — **오라클 이전 완료**, 종목뉴스 — 꺼짐, 판정 개선 뒤 오라클) |
+| ④ 종목분석 | 4 (fin-build·ttm-build·us-class-facts — **오라클 이전 완료**, StockAnalysis 투자의견 — GitHub) |
 | ⑤ 주간 리포트 | 1 |
-| **합계** | **41** (GitHub 39 + 오라클로 옮긴 Vercel Cron 2) |
+| **합계** | **42** — 오라클 7 이전 완료(2026-10-03~04), 남은 GitHub 예약: 리서치 31·Fed 스냅샷·StockAnalysis·주간 리포트(오라클 이전 예정) |
