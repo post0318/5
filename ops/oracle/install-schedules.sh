@@ -60,11 +60,13 @@ LIST
 unit macro-fedwatch-snapshot "거시경제: Fed 금리 확률 일별 스냅샷(Kalshi)" "/opt/macro/ops/call-cron.sh /api/cron/fedwatch 120" "*-*-* 06:00:00\n"
 # ④ 종목분석 — StockAnalysis 개별 애널리스트 투자의견(하루 1회 10:20)
 unit fin-analyst-forecasts "종목분석: StockAnalysis 애널리스트 투자의견" "/opt/macro/ops/run-script.sh collect-analyst-forecasts.mjs" "*-*-* 10:20:00\n"
+# ③ 종목뉴스 미리 수집 — 10분마다 깨우고 종목별 신선도(한국 장중 10분·미국 장중 30분·장외 1시간)가 지난 것만 받는다(판정은 규칙, 비용 0)
+unit news-stock-news "뉴스: 유니버스 종목뉴스 미리 수집" "/opt/macro/ops/call-cron.sh /api/cron/stock-news 290" "*-*-* *:00/10:00\n"
 # ⑤ 주간 리포트 초안 — 월요일 06:00(오너 2026-10-03)
 unit weekly-report "주간 리포트 초안 생성" "/opt/macro/ops/call-cron.sh /api/cron/weekly-report 330 '{\"force\":false}'" "Mon *-*-* 06:00:00\n"
 
 systemctl daemon-reload
-for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer; do
+for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer; do
   systemctl enable --now "$(basename "$t")" >/dev/null
 done
-systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|analyst-forecasts|weekly-report" | sed 's/^/타이머 수: /'
+systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|analyst-forecasts|weekly-report|news-stock-news" | sed 's/^/타이머 수: /'

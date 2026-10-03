@@ -5,6 +5,7 @@ import type { MarketId } from "./types";
 import { translateTitles, type TranslateOptions } from "../news/translate";
 import { fetchGoogleNewsRss, googleNewsUrl } from "../news/googleNews";
 import { resolveCorpCode } from "./kr/corpcode";
+import { KO_PRODUCT_ALIASES, KR_COMPANY_ALIASES, KR_CONTEXT_ALIASES, judgeDomesticTitle, judgeOverseasTitle, koAcronymName, koTitleHit } from "./news-rules";
 
 /**
  * 종목뉴스(선택 번역·요약용) — 한국·미국·일본.
@@ -489,7 +490,7 @@ async function fetchKrStockTaggedNews(
     try {
       groups = await fetchJson<NaverStockNewsGroup[]>(
         `https://m.stock.naver.com/api/news/stock/${encodeURIComponent(code)}?pageSize=${pageSize}&page=${page}`,
-        { headers: { "user-agent": NAVER_UA }, revalidate: 900 },
+        { headers: { "user-agent": NAVER_UA }, revalidate: 300 },
       );
     } catch {
       break;
@@ -598,7 +599,7 @@ async function fetchKrNewsBySearch(
       `https://naverapihub.apigw.ntruss.com/search/v1/news?query=${encodeURIComponent(query)}&display=${display}&sort=date`,
       {
         headers: { "X-NCP-APIGW-API-KEY-ID": keyId, "X-NCP-APIGW-API-KEY": keySecret },
-        revalidate: 900,
+        revalidate: 600,
       },
     );
   } catch {
@@ -698,33 +699,7 @@ export async function fetchStockNews(
  * 공통으로 "제목·요약 어디든 이름(또는 별칭)이 있으면 통과" — recall 우선.
  * 별칭 목록은 그 소수의 유명 대기업이 즐겨 쓰는 축약형/계열사 통칭만 보강.
  */
-const KR_COMPANY_ALIASES: Record<string, string[]> = {
-  삼성전자: ["삼성전자", "삼성", "삼전"],
-  "SK하이닉스": ["SK하이닉스", "하이닉스"],
-  LG전자: ["LG전자"],
-  "LG에너지솔루션": ["LG에너지솔루션", "LG엔솔"],
-  현대차: ["현대차", "현대자동차"],
-  기아: ["기아", "기아차"],
-  삼성바이오로직스: ["삼성바이오로직스", "삼성바이오"],
-  "삼성SDI": ["삼성SDI"],
-  "NAVER": ["네이버", "NAVER"],
-  카카오: ["카카오"],
-  셀트리온: ["셀트리온"],
-  "POSCO홀딩스": ["포스코"],
-};
-
-function isDomesticRelevant(
-  companyName: string | null | undefined,
-  _symbol: string,
-  title: string,
-  excerpt?: string,
-): boolean {
-  const name = companyName?.trim();
-  if (!name) return true;
-  const aliases = KR_COMPANY_ALIASES[name] ?? [name];
-  const hay = `${title} ${excerpt ?? ""}`;
-  return aliases.some((a) => hay.includes(a));
-}
+// (2026-10-04) 위 설명은 옛 판단이다 — 지금 판정은 news-rules.ts(제목 기준 + 기사가 적은 종목은 요약 보충).
 
 /**
  * 해외(야후) 검색어는 한국어 회사명을 그대로 넣으면 안 됨 — 실측(Yahoo Finance
@@ -788,29 +763,6 @@ function distinctiveFirstWord(cleanName: string): string | null {
   return first;
 }
 
-/**
- * 해외 폴백(LLM 미사용)용 관련성 판정기 — 기사 제목(+요약)에
- *  (1) 정리된 회사명 전체(정규화 비교: "AMAZON COM"→"amazoncom") 또는
- *  (2) 회사명 첫 단어(5자 이상, 흔한 단어 제외 — "Amazon", "Marriott", "Applied") 또는
- *  (3) 티커(대소문자 구분, 단어 경계 — "BE"가 영어 "be"에 걸리지 않게)
- * 가 있으면 통과. 실측(2026-09): EDGAR 명 "AMAZON COM INC"/"COCA COLA CO"/"MCDONALDS
- * CORP"는 단순 소문자 포함 비교로는 제목의 "Amazon"/"Coca-Cola"/"McDonald's"와
- * 안 맞았음.
- */
-function overseasNameMatcher(shortName: string, symbol: string): (hay: string) => boolean {
-  const nameNorm = normalizeForMatch(shortName);
-  const first = distinctiveFirstWord(shortName);
-  const firstWord = first ? normalizeForMatch(first) : "";
-  const useFirst = firstWord.length > 0;
-  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const tickerRe = new RegExp(`(^|[^A-Za-z0-9])${escaped}(?=$|[^A-Za-z0-9])`);
-  return (hay: string) => {
-    const hayNorm = normalizeForMatch(hay);
-    if (nameNorm && hayNorm.includes(nameNorm)) return true;
-    if (useFirst && hayNorm.includes(firstWord)) return true;
-    return tickerRe.test(hay);
-  };
-}
 
 /**
  * 회사가 직접 운영하는 페이지인지 — 해외뉴스에서 제외한다(오너 지시 2026-09:
@@ -952,47 +904,94 @@ function dedupeByMajorPublisher(items: RawNewsItem[]): RawNewsItem[] {
 }
 
 /**
- * 종목뉴스 관련성·중복 판정 — **규칙만으로, 비용 0**(2026-10-03 오너 지시: "종목뉴스에 llm 에이전트 사용 금지", "기사가 맞는지 아닌지에
- * 대하여 돈쓰겠다는 거 아니다"). 예전엔 갱신마다 기사 72건 전체를 Claude Haiku 로 다시 판정해, 30분마다 도는 미리 수집만으로 하루 약
- * 2.5달러(월 상한 10달러를 3~4일에 소진)가 나갔다.
+ * 종목뉴스 관련성·중복 판정 — **규칙만으로, 비용 0**(2026-10-03 오너 지시: "종목뉴스에 llm 에이전트 사용 금지", 필요 시 Gemini 만).
+ * 예전엔 갱신마다 기사 72건 전체를 Claude Haiku 로 다시 판정해 하루 약 2.5달러가 나갔다.
  *
- * 판정 기준(기사마다 하나의 사유를 남긴다 — 왜 남았는지/빠졌는지 확인용):
- *  - 시황·종목 나열 기사(ROUNDUP_RE)인데 제목에 이 회사가 없으면 뺀다(여러 종목 중 하나로 스치는 글).
- *  - 국내: 네이버가 종목코드로 태깅한 기사는 신뢰(위 시황 규칙만 적용). 검색으로 들어온 기사(미국 종목의 한글명 검색)는 제목에 회사명
- *    (별칭 포함)이 있거나, 요약에 있고 주요 매체일 때만 남긴다.
- *  - 해외: 제목에 회사명(EDGAR 정리명·고유한 첫 단어·티커)이 있으면 남기고, 요약에만 있으면 주요 매체(ALLOWED_PUBLISHERS)일 때만 남긴다.
+ * 판정(2026-10-04, 기준 세트로 잰 규칙 — news-rules.ts 머리 주석에 성적표):
+ *  - 국내·해외 모두 **제목**에 회사명(통칭·대표 제품·티커 포함, 낱말 경계 확인)이 있어야 남긴다. 네이버 태깅만으로는 믿지 않는다
+ *    (기준 세트에서 태깅 기사의 69%가 무관 — 부동산·유통·다른 회사).
+ *  - 시황·마감·나열 기사, 경쟁 제품 나란히, "…다음 타자·Not …", 할인 목록, 같은 낱말 다른 대상(사과·지명·Owens Corning)은 뺀다.
+ *  - 국내 기사가 MIN_DOMESTIC 건 미만인 종목(중소형주 — 제목에 회사명이 드물다)은 요약에 회사명이 있는 네이버 태깅 기사로 보충한다.
  *  - 중복: 정규화 제목이 같거나(통신사 재게재) 글자 유사도가 높고 48시간 안이면 같은 사건으로 보고 주요 매체 1건만 남긴다.
  */
 export type NewsRelevanceMode = "rules" | "no_company_name";
 
-const ROUNDUP_RE =
-  /특징주|강세s?종목|약세s?종목|급등주|급락주|상한가|하한가|마감s?시황|장s?마감|증시s?(브리핑|요약|마감|출발)|오늘의s?(증시|종목)|코스[피닥]s?(마감|출발|상승s?마감|하락s?마감)|순매수s?(상위|종목)|(top|biggest)s+(gainers|losers|movers)|stocks?s+tos+watch|stock market today|market wrap|(premarket|midday|after-hours)s+movers|stocks making the biggest moves|dow jones futures|stock futures (rise|fall|edge)/i;
+/** 국내 기사가 이보다 적으면 요약 기준 태깅 기사로 보충 */
+const MIN_DOMESTIC = 5;
 
-interface RuleCtx {
+/** 한국 종목 약칭 — DART 상장사 목록(corpcodes.json)의 이름. 목록에 없으면 null */
+function krShortName(symbol: string): string | null {
+  try {
+    return resolveCorpCode("", symbol).corpName || null;
+  } catch {
+    return null;
+  }
+}
+
+type JudgeLog = { side: "domestic" | "overseas"; item: RawNewsItem; tagged: boolean; keep: boolean; reason: string };
+
+/**
+ * 판정 본체(네트워크 없음) — fetchStockNewsBySide 와 기준 세트 채점 스크립트가 같은 함수를 쓴다.
+ * enShortName: 영문 회사명(EDGAR 정리명 / 한국 종목은 DART 영문명), koBase: 한글 회사명(한국 종목은 법인명, 미국 종목은 네이버 한글명)
+ */
+export function judgeStockNews(a: {
   isKr: boolean;
-  tagged: Set<string>;
-  /** 제목·요약 안에 이 회사를 가리키는 말이 있는가 */
-  domesticHit: (s: string) => boolean;
-  overseasHit: (s: string) => boolean;
-}
-
-function judgeDomestic(it: RawNewsItem, c: RuleCtx): { keep: boolean; reason: string } {
-  const inTitle = c.domesticHit(it.title);
-  if (ROUNDUP_RE.test(it.title) && !inTitle) return { keep: false, reason: "시황·종목 나열(제목에 회사명 없음)" };
-  if (c.tagged.has(it.url)) return { keep: true, reason: "네이버 종목 태깅" };
-  if (inTitle) return { keep: true, reason: "제목에 회사명" };
-  if (it.excerpt && c.domesticHit(it.excerpt) && DOMESTIC_PUBLISHERS.has(it.publisher))
-    return { keep: true, reason: "요약에 회사명·주요 매체" };
-  return { keep: false, reason: "회사명 없음" };
-}
-
-function judgeOverseas(it: RawNewsItem, c: RuleCtx): { keep: boolean; reason: string } {
-  const inTitle = c.overseasHit(it.title);
-  if (ROUNDUP_RE.test(it.title) && !inTitle) return { keep: false, reason: "시황·종목 나열(제목에 회사명 없음)" };
-  if (inTitle) return { keep: true, reason: "제목에 회사명" };
-  if (it.excerpt && c.overseasHit(it.excerpt) && ALLOWED_PUBLISHERS.has(it.publisher.toLowerCase()))
-    return { keep: true, reason: "요약에 회사명·주요 매체" };
-  return { keep: false, reason: "회사명 없음" };
+  symbol: string;
+  enShortName: string;
+  koBase: string;
+  /** 한국 종목: DART 상장사 목록 약칭(corpcodes) */
+  koShort?: string | null;
+  domesticRaw: RawNewsItem[];
+  overseasRaw: RawNewsItem[];
+  taggedUrls: Set<string>;
+}): { domestic: RawNewsItem[]; overseas: RawNewsItem[]; log: JudgeLog[] } {
+  // 영문 이름: 정리된 회사명 + 고유한 첫 낱말(티커는 대소문자 구분으로 따로)
+  const first = distinctiveFirstWord(a.enShortName);
+  const enNames = [a.enShortName, ...(first && first !== a.enShortName ? [first] : [])];
+  const enTicker = a.isKr ? null : a.symbol;
+  // 한글 이름: 한국 종목은 법인명(㈜ 뗌)·통칭, 미국 종목은 한글명·대표 제품
+  // 한국 종목은 DART 기업개황 정식명("에스케이하이닉스(주)")과 상장사 목록 약칭("SK하이닉스")이 다르다 — 기사 제목은 약칭을 쓴다(2026-10-04 실측:
+  // 정식명만 쓰면 SK하이닉스 국내 기사 0건). 둘 다 인정하고, 각각의 통칭 별칭도 합친다.
+  // 영문 약자를 한글로 적은 정식명("엘에스일렉트릭")은 기사 표기("LS일렉트릭")로도 바꿔 인정한다.
+  const formal = a.koBase.replace(/\(주\)|㈜|주식회사/g, "").trim();
+  const koKeys = a.isKr
+    ? [...new Set([a.koShort, formal, koAcronymName(formal), a.koShort ? koAcronymName(a.koShort) : null].filter((x): x is string => !!x))]
+    : [a.koBase];
+  const koNames = a.isKr
+    ? [...new Set(koKeys.flatMap((k) => KR_COMPANY_ALIASES[k] ?? [k]))]
+    : [a.koBase, ...(KO_PRODUCT_ALIASES[a.koBase] ?? [])];
+  const koContext = a.isKr ? (koKeys.map((k) => KR_CONTEXT_ALIASES[k]).find(Boolean) ?? null) : null;
+  const judgeDom = (it: RawNewsItem) => {
+    const v = judgeDomesticTitle(it.title, koNames, koContext);
+    // 미국 종목 국내 기사는 영문 회사명·티커로 쓴 제목도 인정
+    if (!v.keep && v.reason === "제목에 회사명 없음" && !a.isKr) {
+      const en = judgeOverseasTitle(it.title, enNames, enTicker);
+      if (en.keep) return en;
+    }
+    return v;
+  };
+  const dom = a.domesticRaw.map((it) => ({ it, v: judgeDom(it) }));
+  // 기사가 적은 종목(제목에 회사명이 드문 중소형주) — 요약에 회사명이 있는 네이버 태깅 기사로 MIN_DOMESTIC 건까지 보충(최신순)
+  let kept = dom.filter((d) => d.v.keep).length;
+  for (const d of dom) {
+    // 한국 종목만 — 미국 종목의 국내 기사는 한글명 검색 결과라 요약에 이름만 스치는 무관 기사가 많다(처음 보는 표본: MSFT 보충 3건 모두 오탐)
+    if (!a.isKr || kept >= MIN_DOMESTIC) break;
+    if (d.v.keep || d.v.reason !== "제목에 회사명 없음" || !a.taggedUrls.has(d.it.url) || !d.it.excerpt) continue;
+    const ex = d.it.excerpt;
+    if (koNames.some((n) => koTitleHit(ex, n))) {
+      d.v = { keep: true, reason: "요약에 회사명(기사 적은 종목 보충)" };
+      kept++;
+    }
+  }
+  const ovs = a.overseasRaw.map((it) => ({ it, v: judgeOverseasTitle(it.title, enNames, enTicker) }));
+  return {
+    domestic: dom.filter((d) => d.v.keep).map((d) => d.it),
+    overseas: ovs.filter((d) => d.v.keep).map((d) => d.it),
+    log: [
+      ...dom.map((d) => ({ side: "domestic" as const, item: d.it, tagged: a.taggedUrls.has(d.it.url), ...d.v })),
+      ...ovs.map((d) => ({ side: "overseas" as const, item: d.it, tagged: false, ...d.v })),
+    ],
+  };
 }
 
 /** 제목 글자 2-gram 집합 — 문구만 조금 다른 같은 사건 기사("팀 쿡이 갤럭시로 바꿨다"/"팀 쿡도 갤럭시로 바꿨다")를 잡는다 */
@@ -1156,27 +1155,19 @@ export async function fetchStockNewsBySide(
     overseasSafe = overseasRaw.filter((it) => ALLOWED_PUBLISHERS.has(it.publisher.toLowerCase()));
     relevance = "no_company_name";
   } else {
-    const shortName = isKr ? oQuery : cleanEdgarName(name);
-    const overseasHit = overseasNameMatcher(shortName, isKr ? oQuery : symbol);
-    const koName = isKr ? name : (naver?.koreanName ?? domesticQuery(market, name));
-    const ctx: RuleCtx = {
+    const j = judgeStockNews({
       isKr,
-      tagged: taggedUrls,
-      domesticHit: (s) => isDomesticRelevant(koName, symbol, s) || (!isKr && overseasHit(s)),
-      overseasHit,
-    };
-    domesticSafe = domesticRaw.filter((it) => {
-      const v = judgeDomestic(it, ctx);
-      if (opts?.includeRaw) rawLog.push({ side: "domestic", item: it, tagged: taggedUrls.has(it.url), ...v });
-      return v.keep;
+      symbol,
+      enShortName: isKr ? oQuery : cleanEdgarName(name),
+      koBase: isKr ? name : (naver?.koreanName ?? domesticQuery(market, name)),
+      koShort: isKr ? krShortName(symbol) : null,
+      domesticRaw,
+      overseasRaw,
+      taggedUrls,
     });
-    overseasSafe = overseasRaw.filter((it) => {
-      const v = judgeOverseas(it, ctx);
-      if (opts?.includeRaw) rawLog.push({ side: "overseas", item: it, tagged: false, ...v });
-      return v.keep;
-    });
-    // 국내 태깅 기사가 있었는데 규칙이 전부 뺐으면(드묾) 태깅 기사는 살린다 — "관련 기사 없음"보다 낫다
-    if (domesticSafe.length === 0 && domesticTagged.length > 0) domesticSafe = domesticRaw.filter((it) => taggedUrls.has(it.url));
+    domesticSafe = j.domestic;
+    overseasSafe = j.overseas;
+    if (opts?.includeRaw) rawLog.push(...j.log);
     relevance = "rules";
   }
   domesticSafe = dedupeSimilarTitles(dedupeByMajorPublisher(domesticSafe));

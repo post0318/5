@@ -32,6 +32,7 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 세 곳에 같은 커
 | `macro-fedwatch-snapshot` | 타이머 | 매일 06:00 | Fed 금리 확률 일별 스냅샷(Kalshi) |
 | `fin-analyst-forecasts` | 타이머 | 매일 10:20 | StockAnalysis 애널리스트 투자의견 |
 | `weekly-report` | 타이머 | 월 06:00 | 주간 리포트 초안 |
+| `news-stock-news` | 타이머 | 10분마다 | 유니버스 종목뉴스(신선도 지난 종목만) |
 
 - 확인: `ssh -i ~/.ssh/oracle_macro ubuntu@161.33.9.115 'systemctl list-timers --no-pager'`, 로그 `sudo journalctl -u <이름>`.
 - 실행기(저장소 `ops/oracle/`, 배포·동기화 때 `/opt/macro/ops/` 로 설치): `call-cron.sh`(앱 `/api/cron/*` 서버 안 호출, POST 가능),

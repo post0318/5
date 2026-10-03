@@ -61,8 +61,9 @@ export async function GET(req: Request) {
       }),
     );
     let targets = withAge
-      // 시장별 신선도(현지 장중 30분, 그 외 2시간) 안에 받은 종목은 건너뛴다 — 크론은 30분마다 돌고 종목마다 자기 시장 기준으로 판단
-      .filter((t) => force || t.age >= freshMs(t.market) - 5 * 60_000) // 5분 여유 — 30분 회차 사이 경과가 29분대라 한 회차를 건너뛰지 않게
+      // 시장별 신선도(한국 종목 장중 10분·미국 장중 30분·장외 1시간 — freshMs) 안에 받은 종목은 건너뛴다. 오라클 타이머가 10분마다 깨운다
+      // 2분 여유 — 오라클 타이머가 10분마다 깨우므로 경과가 9분대여도 이번 회차에 받는다(한국 종목 장중 10분 주기를 지키게)
+      .filter((t) => force || t.age >= freshMs(t.market) - 2 * 60_000)
       .sort((a, b) => b.age - a.age);
     const skipped = withAge.length - targets.length;
     if (limit > 0) targets = targets.slice(0, limit);
