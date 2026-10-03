@@ -105,6 +105,11 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
     const rollCol = await krStockRollCol();
     const rolls = await rollCol.find({}).toArray();
     const rollMap = new Map(rolls.map((r) => [r._id, r]));
+    // 창이 이미 이 날짜보다 뒤까지 쌓여 있으면(과거 날짜를 다시 받는 백필) 창을 건드리지도, 52주 판정을 다시 하지도 않는다.
+    // 창은 날짜를 앞으로만 덧붙이는 구조라, 과거 날짜를 끼워 넣으면 미래 종가가 섞인 창으로 판정하고 순서도 꼬인다
+    // (2026-10-03 실제로 발생 — 09-01~ 강제 백필이 9월 신고·신저를 틀어 놓음). 그날의 다른 항목만 갱신하고 신고·신저는 기존 값을 둔다.
+    const ahead = rolls.filter((r) => typeof r.lastDate === "string" && r.lastDate > date).length;
+    const rollAhead = ahead > rolls.length / 2;
 
     let newHigh52 = 0;
     let newLow52 = 0;
@@ -131,7 +136,8 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       //  2) 문서가 없으면(신규 상장 등) 1건짜리로 생성 — 이미 있으면 아무것도 안 함
       ops.push({
         updateOne: {
-          filter: { _id: s.code, lastDate: { $ne: date } },
+          // $lt: 같은 날 두 번(옛 중복 버그)도, 과거 날짜 끼워 넣기도 막는다(예전 $ne 는 과거 날짜를 막지 못했다)
+          filter: { _id: s.code, lastDate: { $lt: date } },
           update: {
             $set: { lastDate: date },
             $push: { closes: { $each: [s.close], $slice: -WINDOW } },
@@ -146,7 +152,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
         },
       });
     }
-    if (ops.length) await rollCol.bulkWrite(ops, { ordered: false });
+    if (ops.length && !rollAhead) await rollCol.bulkWrite(ops, { ordered: false });
 
     const col = await krFgDailyCol();
     // foreignFutNet 은 이 배치가 안 채우는 필드(별도 수동 업로드), vkospi/futBasis 는
@@ -154,7 +160,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
     // replaceOne 이 기존 값을 지우지 않도록 미리 읽어서 보존/병합 (2026-09 수정)
     const existing = await col.findOne(
       { _id: date },
-      { projection: { foreignFutNet: 1, vkospi: 1, futBasis: 1 } },
+      { projection: { foreignFutNet: 1, vkospi: 1, futBasis: 1, newHigh52: 1, newLow52: 1, totalWithHistory: 1 } },
     );
     const doc: KrFgDailyDoc = {
       _id: date,
@@ -164,9 +170,9 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       unchanged,
       upVolume,
       downVolume,
-      newHigh52,
-      newLow52,
-      totalWithHistory: totalWithHistory || null,
+      newHigh52: rollAhead ? (existing?.newHigh52 ?? null) : newHigh52,
+      newLow52: rollAhead ? (existing?.newLow52 ?? null) : newLow52,
+      totalWithHistory: rollAhead ? (existing?.totalWithHistory ?? null) : totalWithHistory || null,
       vkospi: vkospi ?? existing?.vkospi ?? null,
       gov3y: rates.gov3y,
       gov10y: rates.gov10y,
