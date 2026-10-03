@@ -105,7 +105,7 @@ robots 실측(2026-10-03, 수집기가 실제로 접속하는 주소 기준)으�
 | 미국 거시 지표 | FRED | 12~24시간 | `lib/macro/fred.ts` |
 | 국고채·회사채 금리 | 한국은행 ECOS | 12시간 | `lib/macro/kr/ecos.ts` |
 | CNN 공포·탐욕 | CNN 비공식 API(예외 승인) | 1시간 | `lib/macro/feargreed.ts` |
-| Fed 금리 확률(현재) | Kalshi(예외 승인) | 30분 | `lib/macro/fedwatch.ts` |
+| Fed 금리 확률(현재) | Kalshi(예외 승인) | 5분(2026-10-03 30분에서 단축) | `lib/macro/fedwatch.ts` |
 | 미국 재무부 TGA 잔고 | 미 재무부 Fiscal Data | 6시간 | `lib/macro/tga.ts` |
 | 한국 공포·탐욕 지수 | `kr_fg_daily` 에서 계산 | — | `lib/macro/kr/fear-greed.ts` |
 

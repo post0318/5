@@ -104,8 +104,9 @@ async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, {
     headers: { accept: "application/json" },
     signal: AbortSignal.timeout(12_000),
-    // 개인용 대시보드 — 분 단위 신선도가 필요 없다 (30분)
-    next: { revalidate: 30 * 60 },
+    // 5분(오너 결정 2026-10-03 — 30분에서 단축). 확률은 평소 몇 시간씩 그대로지만 미국 지표 발표·연준 발언 때
+    // 1시간에 20%p 넘게 움직인다(09-30 04시 -22%p 실측). 요청은 회당 2번이라 Kalshi 한도(읽기 초당 200토큰)에 비해 무시할 수준.
+    next: { revalidate: 5 * 60 },
   });
   if (!res.ok) throw new AdapterError(`Kalshi ${res.status}`, { status: res.status });
   return (await res.json()) as T;
