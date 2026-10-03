@@ -1649,7 +1649,7 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   **Google AI Pro 구독에 포함된 월 $10 Cloud 크레딧**으로 결제(유료 등급이라
   프롬프트가 학습에 안 쓰임). 기본 모델 **`gemini-3.8-flash`**
   (`GEMINI_MODEL`로 교체, 404면 폴백 체인), 웹검색 그라운딩 기본 ON
-  (`WEEKLY_GROUNDING=0`으로 끔). 월 상한 `WEEKLY_MONTHLY_BUDGET_USD`(기본 8).
+  (`WEEKLY_GROUNDING=0`으로 끔). 월 상한 `WEEKLY_MONTHLY_BUDGET_USD`(기본 10 — 2026-10-03 오너 결정, 구글 지출 상한 guard-gemini 13,000원과 짝).
   회당 추정 0.25~0.4달러. 키는 `GEMINI_API_KEY`(.env.local + Vercel).
 - **모델 선택 근거(오너 결정 2026-09-21)** — 원래 `gemini-3.1-pro-preview`
   였다. 같은 주(2026-09-14~18) 같은 입력으로 실측 비교한 결과 3.8 Flash 로

@@ -1,9 +1,12 @@
 # 구글 Cloud Run·오라클 서버용 컨테이너(2026-10-03). Vercel 배포와 무관 — GitHub Actions 가 빌드한다.
+# 오라클은 서버에서 직접 빌드한다(ARM, .github/workflows/deploy-oracle.yml).
 # 빌드: docker build --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=... --build-arg APP_COMMIT_SHA=$(git rev-parse HEAD) -t app .
 FROM node:24-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# 오라클(ARM) 서버는 bufferutil·utf-8-validate 의 미리 빌드된 파일이 없어 설치 때 컴파일한다(2026-10-03 실측). 이 단계는 최종 이미지에 안 들어간다.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/* \
+    && npm ci --no-audit --no-fund
 
 FROM node:24-slim AS build
 WORKDIR /app
