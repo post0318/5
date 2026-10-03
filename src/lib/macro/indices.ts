@@ -79,6 +79,9 @@ export async function fetchRecentKrxIndexBars(
         const r = await fetch(`${KRX_BASE}/${service}?basDd=${basDd}`, {
           headers: { AUTH_KEY: authKey },
           signal: AbortSignal.timeout(5_000),
+          // 1시간(오너 결정 2026-10-03). KRX OPEN API 는 일별 데이터를 다음 영업일에 내주므로 실시간성이 없다 —
+          // 캐시는 화면 속도(요청 10번·건당 최대 5초)와 KRX 키 하루 호출량 때문. 공개 직후 최대 1시간 늦을 수 있다.
+          next: { revalidate: 60 * 60 },
         });
         if (!r.ok) return null;
         const j = (await r.json()) as { OutBlock_1?: Record<string, string>[] };
