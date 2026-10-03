@@ -27,7 +27,7 @@ const notoKR = Noto_Sans_KR({
 });
 
 export const metadata: Metadata = {
-  title: "글로벌 종목 리서치",
+  title: "매크로 인사이트",
   description: "유니버스 종목의 재무제표 · 공시 · 뉴스 · 멀티플 통합 조회",
 };
 

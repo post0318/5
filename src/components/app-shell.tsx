@@ -87,9 +87,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="mx-auto flex min-h-14 max-w-[1400px] flex-wrap items-center gap-x-1 gap-y-1 px-2 py-2 sm:gap-x-6 sm:px-4">
           <Link href="/kr/universe" className="flex items-center gap-2 font-semibold">
             <span className="bg-primary text-primary-foreground grid size-6 place-items-center rounded text-xs">
-              G
+              M
             </span>
-            <span className="hidden sm:inline">글로벌 종목 리서치</span>
+            <span className="hidden sm:inline">매크로 인사이트</span>
           </Link>
 
           {/* 시장 탭 */}
