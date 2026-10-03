@@ -82,6 +82,8 @@ jobs:
             if [ -n "$v" ]; then printf '%s=%s\n' "$k" "$v" >> app.env; else echo "비어 있음(건너뜀): $k"; fi
           done
           printf 'APP_COMMIT_SHA=%s\nSEC_CACHE_DIR=/tmp/.cache\n' "${{ github.sha }}" >> app.env
+          # 메인 서버 공개 주소 — 유튜브 새 영상 알림(WebSub) 콜백 주소로 쓴다(/api/cron/youtube-subscribe)
+          printf 'PUBLIC_APP_URL=https://%s\n' "${{ vars.ORACLE_DOMAIN }}" >> app.env
           scp -q app.env "ubuntu@${{ vars.ORACLE_HOST }}:/opt/macro/app.env"
           rm -f app.env
       - name: 서버에서 빌드·재시작
