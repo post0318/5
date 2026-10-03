@@ -24,6 +24,10 @@ GH_REPO="${OPS_GH_REPO:-post0318/5}"
 DOMAIN="${OPS_DOMAIN:-macro-insights.duckdns.org}"
 HOST=$(hostname)
 
+# 시험 발송: healthcheck.sh --test — 텔레그램 메시지 + GitHub 이슈를 열었다 바로 닫는다(알림 경로 확인용)
+TEST_MODE=0
+[ "${1:-}" = "--test" ] && TEST_MODE=1
+
 tg() {
   [ -n "${OPS_TG_BOT_TOKEN:-}" ] && [ -n "${OPS_TG_CHAT_ID:-}" ] || return 0
   curl -fsS -m 15 -o /dev/null "https://api.telegram.org/bot${OPS_TG_BOT_TOKEN}/sendMessage" \
@@ -74,6 +78,14 @@ check() { # key ok(0/1) message
   return 0
 }
 
+if [ "$TEST_MODE" = 1 ]; then
+  open_alert test "알림 시험 발송입니다(조치 불필요)"
+  sleep 2
+  close_alert test
+  echo "시험 발송 완료(텔레그램 2건 + GitHub 이슈 열고 닫음)"
+  exit 0
+fi
+
 # 1) 앱 컨테이너 실행 중
 running=$(docker inspect -f '{{.State.Running}}' macro 2>/dev/null || echo false)
 check container "$([ "$running" = true ] && echo 1 || echo 0)" "앱 컨테이너(macro)가 실행 중이 아닙니다"
@@ -109,5 +121,16 @@ check memory "$([ "$avail" -ge 10 ] && echo 1 || echo 0)" "사용 가능한 메�
 
 # 8) 보안 업데이트 후 재부팅 필요
 check reboot-required "$([ -f /var/run/reboot-required ] && echo 0 || echo 1)" "보안 업데이트 적용을 위해 재부팅이 필요합니다"
+
+# 9) 예약 작업 실패(2026-10-04) — 수집·배치 서비스가 마지막 실행에서 실패한 상태면 알림, 다음 실행이 성공하면 자동 해제
+for u in $(systemctl list-units --all --type=service --no-legend --plain 'research-*' 'macro-*' 'fin-*' 'news-*' 'weekly-report*' | awk '{print $1}'); do
+  name=${u%.service}
+  [ "$name" = macro-health ] && continue
+  st=$(systemctl show -p Result --value "$u")
+  check "job-$name" "$([ "$st" = success ] && echo 1 || echo 0)" "예약 작업 $name 실패(결과 $st) — sudo journalctl -u $name -n 50"
+done
+
+# 10) 텔레그램 상주 수신기
+check telegram-listener "$(systemctl is-active --quiet macro-telegram-listener && echo 1 || echo 0)" "텔레그램 상주 수신기가 멈췄습니다"
 
 exit 0

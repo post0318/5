@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # 서버 자체 점검(healthcheck.sh)을 10분마다 돌리는 systemd 타이머 + 보안 업데이트 자동 설치를 켠다.
-# 사용: scp healthcheck.sh install-health.sh ubuntu@서버:/tmp/ && ssh ubuntu@서버 'sudo bash /tmp/install-health.sh'
+# 사용: sudo bash /opt/macro/jobs/ops/oracle/install-health.sh   (같은 폴더의 healthcheck.sh 를 설치)
 set -euo pipefail
 install -d -m 755 /opt/macro/ops
-install -m 755 /tmp/healthcheck.sh /opt/macro/ops/healthcheck.sh
+install -m 755 "$(dirname "$(readlink -f "$0")")/healthcheck.sh" /opt/macro/ops/healthcheck.sh
 [ -f /opt/macro/ops/alert.env ] || install -m 600 /dev/null /opt/macro/ops/alert.env
 
 cat > /etc/systemd/system/macro-health.service <<'EOF'
