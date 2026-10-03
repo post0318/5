@@ -21,7 +21,8 @@ const arg = (k: string) => process.argv.find((a) => a.startsWith(`--${k}=`))?.sl
 async function main() {
   if (!isDbConfigured()) throw new Error("MONGODB_URI 미설정");
   const dry = process.argv.includes("--dry");
-  if (!dry && !process.env.VERCEL_GIT_COMMIT_SHA) throw new Error("VERCEL_GIT_COMMIT_SHA(운영 배포판) 미설정 — 저장본 판번호가 운영과 달라 쓸모없는 저장이 된다");
+  if (!dry && ttmSnapVersion() === "local")
+    throw new Error("APP_COMMIT_SHA(또는 VERCEL_GIT_COMMIT_SHA) 미설정 — 로컬 판번호로 저장하면 운영이 읽지 않는다(값은 아무 배포 커밋이면 된다, 판번호는 계산 규칙으로 정해짐)");
   const minutes = Number(arg("minutes") ?? 90);
   const deadline = Date.now() + minutes * 60_000;
   const symbols = arg("symbols")

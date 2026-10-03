@@ -100,17 +100,22 @@ jobs:
             --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="$PK" \
             --build-arg APP_COMMIT_SHA="$SHA" \
             -t "macro:$SHA" .
+          sudo install -d -m 755 /opt/macro/sec-cache  # SEC 원본·갱신형 캐시 — 배포해도 남고 배치(run-ts.sh)와 같이 쓴다
           docker rm -f macro >/dev/null 2>&1 || true
           docker run -d --name macro --restart unless-stopped \
             -p 127.0.0.1:8080:8080 --env-file /opt/macro/app.env \
+            -v /opt/macro/sec-cache:/tmp/.cache \
             --memory 3g "macro:$SHA" >/dev/null
-          # 직전 이미지 몇 개만 남기고 정리(디스크 47GB)
-          docker image prune -af --filter "until=72h" >/dev/null || true
+          # 앱 이미지는 지금 것 + 직전 2개만 남긴다(배치·수집기가 쓰는 node 이미지는 지우지 않게 macro:* 만 정리)
+          docker images macro --format '{{.Tag}} {{.CreatedAt}}' | sort -k2 -r | awk 'NR>3 {print $1}' | while read -r t; do docker rmi "macro:$t" >/dev/null 2>&1 || true; done
           docker builder prune -af --filter "until=72h" >/dev/null || true
+          ok=0
           for i in $(seq 1 30); do
-            if curl -fsS -o /dev/null http://127.0.0.1:8080/api/auth/me; then echo "기동 확인"; exit 0; fi
+            if curl -fsS -o /dev/null http://127.0.0.1:8080/api/auth/me; then echo "기동 확인"; ok=1; break; fi
             sleep 2
           done
-          echo "기동 확인 실패"; docker logs --tail 50 macro; exit 1
+          if [ "$ok" != 1 ]; then echo "기동 확인 실패"; docker logs --tail 50 macro; exit 1; fi
+          # 배치·수집기 작업 폴더를 같은 커밋으로, 텔레그램 수신기 재시작, TTM 무효 저장본만 채우기(ops/oracle/post-deploy.sh)
+          bash /opt/macro/src/ops/oracle/post-deploy.sh "$SHA"
           EOF
           echo "주소: https://${{ vars.ORACLE_DOMAIN }}"

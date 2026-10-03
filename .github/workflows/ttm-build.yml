@@ -10,23 +10,9 @@ name: 미국 TTM 스냅샷 미리 채우기 (ttm_snap)
 # 운영에는 배포판 번호만 묻는다(GET — 계산 없음). 그 커밋을 받아 같은 코드로 계산하고 그 번호로 저장해야 운영이 저장본을 쓴다
 # (앱 파일이 안 바뀐 푸시는 배포를 생략하므로 master 최신 커밋과 운영 배포판이 다를 수 있다).
 
+# 2026-10-03 예약·푸시 트리거는 오라클로 이전 — 타이머 fin-ttm-build(매일 06:50 KST)와 배포 직후 post-deploy.sh. 저장본 판번호가
+# 커밋이 아니라 계산 판번호(e{엔진판}.t{TTM 규칙판})라, 계산과 무관한 배포에는 다시 채울 것이 없다. 여기는 수동 실행만(시험·비상용).
 on:
-  schedule:
-    - cron: "50 21 * * *"
-  push:
-    branches: [master]
-    # 앱 파일이 바뀐 푸시만(vercel.json ignoreCommand 와 같은 경로) — 검증기·수집기·문서만 바뀐 푸시는 배포도 생략되므로 다시 채울 필요가 없다.
-    # 2026-10-03: 푸시마다 전 종목을 다시 채워 이틀간 35회 실행, Vercel Hobby Active CPU 한도(월 4시간) 초과로 서비스 정지
-    paths:
-      - "src/**"
-      - "public/**"
-      - "package.json"
-      - "package-lock.json"
-      - "next.config.ts"
-      - "tsconfig.json"
-      - "postcss.config.mjs"
-      - "components.json"
-      - "vercel.json"
   workflow_dispatch:
     inputs:
       symbols:
@@ -46,19 +32,9 @@ jobs:
       SYMBOLS: ${{ inputs.symbols }}
       SHA: ${{ github.sha }}
     steps:
-      - name: 운영 배포판 확인(push 면 이 커밋 반영까지 대기)
-        id: ver
-        run: |
-          for i in $(seq 1 40); do
-            v=$(curl -sS --max-time 20 "$BASE/api/cron/ttm-build" | jq -r '.version // ""' 2>/dev/null || echo "")
-            if [ "${{ github.event_name }}" != "push" ] && [ -n "$v" ] && [ "$v" != "local" ]; then echo "운영 배포판: $v"; echo "v=$v" >> "$GITHUB_OUTPUT"; exit 0; fi
-            if [ "$v" = "$SHA" ]; then echo "배포 반영 확인: $v"; echo "v=$v" >> "$GITHUB_OUTPUT"; exit 0; fi
-            echo "대기 $i — 운영 배포판 ${v:-?}"; sleep 30
-          done
-          echo "::error::운영 배포판을 확인하지 못함(push 면 20분 안에 $SHA 로 바뀌지 않음)"; exit 1
       - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.ver.outputs.v }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -69,7 +45,7 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-          VERCEL_GIT_COMMIT_SHA: ${{ steps.ver.outputs.v }}
+          APP_COMMIT_SHA: ${{ github.sha }} # 배포 환경 표시(판번호는 계산 규칙으로 정해짐)
           NODE_OPTIONS: --conditions=react-server
         run: |
           set -u
@@ -79,15 +55,3 @@ jobs:
           f=scripts/run/ttm-build.mts
           if [ ! -f "$f" ]; then mkdir -p scripts/run && git show origin/master:scripts/run/ttm-build.mts > "$f"; fi
           npx -y tsx@4.23.15 --tsconfig tsconfig.json "$f" $a --minutes=100
-      - name: 하이라이트 저장본(api_snap) 갱신 요청(배포 직후만)
-        # 화면은 24시간 안 저장본을 배포판이 달라도 먼저 보여주고 뒤에서 다시 계산한다(api-snap.ts). 배포 직후 유니버스 미국 종목을 한 번씩
-        # 열어 갱신을 걸어 둔다(2026-10-02 오너 지적 — 옛 배포판 문구가 남음). 운영 서버 계산이라 하루 1회 예약에서는 하지 않는다(2026-10-03)
-        if: github.event_name == 'push'
-        env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        run: |
-          curl -sS --max-time 30 -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/universe-symbols?market=us" > uni.json
-          for s in $(jq -r '.items[].symbol' uni.json | sort -u); do
-            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 200 "$BASE/api/markets/us/$s/highlights" || echo 000)
-            echo "$s $code"
-          done
