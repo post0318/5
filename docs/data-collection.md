@@ -30,7 +30,7 @@
 | KB증권 | `kb-research` | `collect-kb-research.mjs` | robots 없음(www·rdata 둘 다) |
 | 교보증권 | `kyobo-research` | `collect-kyobo-research.mjs` | robots `User-agent: * Allow: /` |
 | IBK투자증권 | `ibk-research` | `collect-ibk-research.mjs` | robots `User-agent: * Allow: /` |
-| KIRS(한국IR협의회) | `kirs-research` | `collect-kirs-research.mjs` | robots 는 네이버봇의 css·이미지 폴더만 막음. ⚠️ **해외 IP 차단**(오라클 일본 시간 초과) |
+| ~~KIRS(한국IR협의회)~~ | ~~`kirs-research`~~ (예약 중단, 수동만) | — | **2026-10-03 한경 컨센서스 경유로 대체**(오너 결정). 해외 IP 차단으로 오라클에서 못 받음. 한경에 기업분석은 실리지만(30일 20건 = 직접 20건) **기술분석(30일 10건)은 빠진다** |
 | 유안타증권 | `yuanta-research` | `collect-yuanta-research.mjs` | robots 없음. 2026-09-25 직접 수집 재개(한경 경유에서 제외) |
 | 대신증권 | `daishin-research` | `collect-daishin-research.mjs` | robots 없음(money2.daishin.com) |
 | iM증권 | `im-research` | `collect-im-research.mjs` | robots 없음 |
@@ -51,7 +51,7 @@ robots 실측(2026-10-03, 수집기가 실제로 접속하는 주소 기준)으�
 | 하나증권 | www.hanaw.com | 구글·네이버봇만 허용, 나머지 `Disallow: /` |
 | NH투자증권 | www.nhsec.com | 일반 봇 `Disallow: /`, 일부 검색엔진만 허용 |
 | 한국투자증권 | securities.koreainvestment.com | 일반 봇 `Disallow: /`, 검색엔진만 허용 |
-| 한경 컨센서스 | consensus.hankyung.com | `User-agent: * Disallow: /` |
+| 한경 컨센서스 | consensus.hankyung.com | `User-agent: * Disallow: /` — 자체 수집 증권사는 제외하고 받는다(`EXCLUDED_SOURCES`). 2026-10-03 부터 한국IR협의회(KIRS)를 다시 포함 |
 
 - robots.txt 는 "자동 수집을 원하지 않는다"는 사이트의 의사 표시일 뿐 접속을 기술적으로 막지는 않는다. 그래서 이 5곳도 실제로는
   받아진다. 이 프로젝트는 오너가 개인용·저빈도 조건으로 예외를 승인해 수집한다(CLAUDE.md 사이트별 항목). BNK·KIRS 처럼
@@ -157,9 +157,9 @@ robots 실측(2026-10-03, 수집기가 실제로 접속하는 주소 기준)으�
 
 | 묶음 | 예약 작업 수 |
 |---|---|
-| ① 리서치 | 32 (국내 22 + 해외 IB 10) |
+| ① 리서치 | 31 (국내 21 — KIRS 는 한경 경유 — + 해외 IB 10) |
 | ② 거시경제 | 3 (다음 선물, KRX 공포·탐욕 원자료[Vercel Cron], Fed 스냅샷) |
 | ③ 뉴스·SNS | 2 |
 | ④ 종목분석 | 4 (StockAnalysis 투자의견, fin-build, ttm-build, us-class-facts[Vercel Cron]) |
 | ⑤ 주간 리포트 | 1 |
-| **합계** | **42** (GitHub 40 + Vercel Cron 2) |
+| **합계** | **41** (GitHub 39 + 오라클로 옮긴 Vercel Cron 2) |
