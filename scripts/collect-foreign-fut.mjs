@@ -25,7 +25,7 @@
  *   node scripts/collect-foreign-fut.mjs --status    # 앱 반영 현황 + 소스 확인만
  *
  * ── 설정 (.env.local, 선택) ─────────────────────────────────────────
- *   KR_FG_IMPORT_URL="https://macroresearch.vercel.app/api/cron/kr-fg"
+ *   KR_FG_IMPORT_URL="https://macro-insights.duckdns.org/api/cron/kr-fg"
  *   CRON_SECRET="앱에 설정한 값이 있으면"
  *
  * ── Windows 작업 스케줄러 (일 1회) ─────────────────────────────────
@@ -35,6 +35,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { appUrl } from "./lib/app-url.mjs";
 
 // ── config ─────────────────────────────────────────────────────────
 function loadEnvLocal() {
@@ -56,8 +57,8 @@ const STATUS = ARGS.includes("--status");
 const DRY_RUN = ARGS.includes("--dry-run") || STATUS;
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || (STATUS ? 15 : 40);
 
-const IMPORT_URL = (ENV.KR_FG_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/kr-fg").trim();
-const MACRO_URL = (ENV.KR_FG_MACRO_URL || "https://macroresearch.vercel.app/api/macro/kr-fg").trim();
+const IMPORT_URL = (ENV.KR_FG_IMPORT_URL || `${appUrl(ENV)}/api/cron/kr-fg`).trim();
+const MACRO_URL = (ENV.KR_FG_MACRO_URL || `${appUrl(ENV)}/api/macro/kr-fg`).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
 // 전에 401 이 난다 — 자동화 우회 비밀값이 있으면 헤더로 같이 보낸다(없으면 생략).

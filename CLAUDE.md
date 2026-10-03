@@ -1524,8 +1524,8 @@ npm run db:studio    # drizzle studio
 요약한다. 기업분석은 범위 밖(거시이므로 제외). 코드는 `src/lib/weekly/`,
 DB는 `weekly_reports`(주당 1건, `_id`=대상 주 월요일) + `weekly_llm_usage`.
 
-- **흐름**: GitHub Actions(`.github/workflows/weekly-report.yml`, 월 09:00
-  KST) → `POST /api/cron/weekly-report`(CRON_SECRET) → `generateWeeklyReport()`
+- **흐름**: GitHub Actions(`.github/workflows/weekly-report.yml`, 월 06:00
+  KST — 2026-10-03 09:00 에서 앞당김, 4번 저장소 브라질 국채 갱신(일 12:00 UTC = 일 21:00 KST)보다 뒤) → `POST /api/cron/weekly-report`(CRON_SECRET) → `generateWeeklyReport()`
   → 초안(draft) 저장 → 오너가 `/weekly` 화면에서 편집·발행. 화면의 "초안
   생성/재생성"은 로그인 세션으로 `POST /api/weekly`(proxy.ts 보호).
 - **입력 코퍼스**(`corpus.ts`, 원문 미저장): `kr_research` `category:"산업"`

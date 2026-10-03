@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      BASE: https://macroresearch.vercel.app
+      BASE: ${{ vars.APP_URL }}
       SYMBOLS: ${{ inputs.symbols }}
       REF: ${{ inputs.ref }}
     steps:

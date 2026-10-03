@@ -1,4 +1,32 @@
-# 배포 (Vercel)
+# 배포
+
+## 0. 서버 구성 (2026-10-03 오너 결정)
+
+Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 세 곳에 같은 커밋을 배포한다. 세 곳 모두 같은 MongoDB 를 쓴다.
+
+| 서버 | 역할 | 주소 | 배포 |
+|---|---|---|---|
+| **오라클** (오사카 ARM A1 2코어·12GB, 161.33.9.115) | **메인** — 화면 + 무거운 자동 작업 | https://macro-insights.duckdns.org | `deploy-oracle.yml`: master 푸시(앱 파일) → 서버가 해당 커밋을 받아 직접 빌드(ARM)·재시작 |
+| 구글 Cloud Run (`brave-smile-508510-g5`, asia-northeast1) | 보조 — 화면 | https://macroresearch-2x722d45qa-an.a.run.app | `deploy-cloudrun.yml` |
+| Vercel | 보조 — 화면 | https://macroresearch.vercel.app | Git 연동(`vercel.json` ignoreCommand) |
+
+- **자동 작업이 부르는 주소는 저장소 변수 `APP_URL` 하나**(지금 오라클). 워크플로는 `${{ vars.APP_URL }}`, 수집 스크립트는
+  `scripts/lib/app-url.mjs`(`APP_URL` 환경변수, 없으면 오라클 도메인). 메인을 바꿀 때는 이 변수만 고친다.
+- 오라클 서버: Docker 컨테이너 `macro`(127.0.0.1:8080, 재시작 자동) 앞에 Caddy(HTTPS 자동 발급). 환경변수는
+  `/opt/macro/app.env`(600, 배포 때 GitHub 비밀값으로 다시 씀). 최초 설치 `ops/oracle/setup.sh`, 점검 `ops/oracle/healthcheck.sh`.
+  배포 키는 비밀값 `ORACLE_SSH_KEY`, 주소는 변수 `ORACLE_HOST`·`ORACLE_DOMAIN`. 도메인은 DuckDNS(IP 가 바뀌면 duckdns.org 에서 갱신).
+
+### 과금 통제 (오너 지시 — 크레딧을 넘는 실제 지출 0)
+
+- **오라클**(종량제 계정): 할당량 정책 `free-only`(A1 4코어·24GB·디스크 200GB 외 생성 차단) + 1달러 예산 알림.
+  서버 CPU 는 고정 크기라 사용량과 무관하게 0원. 정책 밖 서비스(로드밸런서·오브젝트 스토리지·백업 등)는 만들지 않는다.
+  ⚠️ 할당량 이름은 `standard-a1-core-count`·`standard-a1-core-regional-count` 둘 다(메모리도 둘 다) 열어야 A1 을 만들 수 있다.
+- **구글**(결제 계정 원화, 월 10달러 크레딧): 예산 `guard-net`(크레딧 차감 후 0원, 알림) · `guard-gemini`(Gemini 총액
+  13,000원 **지출 상한**) · `guard-cloudrun`(Cloud Run 총액 1,000원 **지출 상한**). 이미지 저장소는 최근 2개만 보관.
+  지출 상한은 크레딧 차감 **전** 총액 기준·서비스 하나당 하나만 가능(구글 제약, 미리보기). Cloud Run 을 0원으로 두면
+  무료 범위 안에서도 차단된다(2026-10-03 실측 — 결제 비활성화 500). 앱 내부 Gemini 예산 `WEEKLY_MONTHLY_BUDGET_USD` 기본 10.
+
+---
 
 Vercel CLI는 설치·로그인(post0318) 완료 상태. 아래는 사용자가 직접 실행해야 하는 단계
 (자동 승인 정책이 `vercel link` / `vercel deploy` / `git push` 를 막음).
@@ -47,8 +75,8 @@ vercel --prod          # 프로덕션 배포
 
 ## 4-1. 배포 도메인
 
-- **프로덕션은 `https://macroresearch.vercel.app`** 이다(2026-09-24, 모든 수집
-  스크립트의 전송 URL도 이 도메인). 예전 도메인 `5-topaz-five.vercel.app` 은 더
+- **2026-10-03 부터 메인은 오라클**(§0) — 수집 스크립트 전송 URL 도 `APP_URL`(오라클)로 옮겼다. 아래는 Vercel 기록.
+- Vercel 프로덕션은 `https://macroresearch.vercel.app` 이다(2026-09-24). 예전 도메인 `5-topaz-five.vercel.app` 은 더
   이상 프로덕션이 아니며 Vercel 인증(배포 보호)에 막혀 있다 — 그쪽으로 요청하면
   앱에 닿기 전에 401/302(SSO) 가 난다. 로컬 체크아웃이 오래됐거나 `.env.local` 에
   옛 `*_IMPORT_URL` 이 남아 있으면 수집기가 "Protected deployment" 로 실패한다

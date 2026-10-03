@@ -22,6 +22,9 @@ concurrency:
   group: telegram-posts
   cancel-in-progress: true
 
+env:
+  APP_URL: ${{ vars.APP_URL }} # 자동 작업이 부르는 메인 서버(scripts/lib/app-url.mjs)
+
 jobs:
   collect:
     runs-on: ubuntu-latest

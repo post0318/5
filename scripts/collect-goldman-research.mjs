@@ -51,6 +51,7 @@
 
 import { readFileSync } from "node:fs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -74,7 +75,7 @@ const MAX_ITEMS = Number(ARGS.find((a) => a.startsWith("--max="))?.split("=")[1]
 const RESEARCH_DAYS = 180;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기

@@ -16,6 +16,7 @@
 import { readFileSync } from "node:fs";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -33,7 +34,7 @@ function loadEnvLocal() {
 
 const ENV = loadEnvLocal();
 const IMPORT_URL = (
-  ENV.TELEGRAM_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/telegram-posts"
+  ENV.TELEGRAM_IMPORT_URL || `${appUrl(ENV)}/api/cron/telegram-posts`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기

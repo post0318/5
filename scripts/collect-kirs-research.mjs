@@ -46,6 +46,7 @@
 import { readFileSync } from "node:fs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import tls from "node:tls";
+import { appUrl } from "./lib/app-url.mjs";
 
 // 서버가 빠뜨리는 중간 인증서(위 주석 참고).
 const KIRS_INTERMEDIATE_PEM = `-----BEGIN CERTIFICATE-----
@@ -111,7 +112,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = 20;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();

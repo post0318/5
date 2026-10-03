@@ -39,6 +39,7 @@
 import { readFileSync } from "node:fs";
 import { resolveKrStock, headlineAfterCompany } from "./lib/company-match.mjs";
 import { isFxContent, isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -70,7 +71,7 @@ const BOARDS = [
 const BOARD_NAME = { CM0338: "산업리포트", CM0078: "주식시장" };
 const boardLabel = (cmsCd) => `상상인증권 > 리서치 > ${BOARD_NAME[cmsCd] ?? cmsCd}(${cmsCd})`;
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기

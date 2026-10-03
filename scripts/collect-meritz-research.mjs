@@ -57,6 +57,7 @@ import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityCo
 import { promoteKrIndustryToStock } from "./lib/company-match.mjs";
 import { parseOverseasTitle, parseOverseasPdfHeader, resolveUsTickerByName } from "./lib/overseas-market.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -80,7 +81,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();

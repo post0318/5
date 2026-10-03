@@ -14,6 +14,9 @@ on:
     - cron: "22 3 * * *" # 03:22 UTC = 12:22 KST(2차)
   workflow_dispatch: {}
 
+env:
+  APP_URL: ${{ vars.APP_URL }} # 자동 작업이 부르는 메인 서버(scripts/lib/app-url.mjs)
+
 jobs:
   collect:
     runs-on: ubuntu-latest

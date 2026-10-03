@@ -25,6 +25,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -53,7 +54,7 @@ const MAX_ROWS = 8;
 // 저빈도 원칙 — 종목당 1요청, 기본 2초 간격.
 const DELAY_MS = Number(arg("delay")) || 2000;
 
-const APP_URL = (ENV.APP_URL || "https://macroresearch.vercel.app").replace(/\/$/, "");
+const APP_URL = appUrl(ENV);
 const IMPORT_URL = (ENV.ANALYST_FORECAST_IMPORT_URL || `${APP_URL}/api/cron/analyst-forecasts`).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기

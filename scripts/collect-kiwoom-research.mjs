@@ -79,6 +79,7 @@ import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 import { sectorFromTitleOrCover, looksLikeSectorLabel, isIpoCover } from "./lib/sector-label.mjs";
 import { readPdfText } from "./lib/research-extract.mjs";
 import { resolveUsTickerByName } from "./lib/overseas-market.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -100,7 +101,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 // 거시경제(이슈분석/환율분석) 전용 — 오너 지시 2026-09-26 "kb 키움은 개별수집기에
 // 통합되어야 맞아보인다. 따로 있을 이유가 없다"로 collect-kiwoom-macro-issues.mjs를
