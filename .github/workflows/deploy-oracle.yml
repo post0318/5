@@ -108,7 +108,7 @@ jobs:
             --memory 3g "macro:$SHA" >/dev/null
           # 앱 이미지는 지금 것 + 직전 2개만 남긴다(배치·수집기가 쓰는 node 이미지는 지우지 않게 macro:* 만 정리)
           docker images macro --format '{{.Tag}} {{.CreatedAt}}' | sort -k2 -r | awk 'NR>3 {print $1}' | while read -r t; do docker rmi "macro:$t" >/dev/null 2>&1 || true; done
-          docker builder prune -af --filter "until=72h" >/dev/null || true
+          docker builder prune -af --max-used-space 4gb >/dev/null || true  # 빌드 캐시 상한 4GB(Docker 29 옵션 — 지금 빌드가 쓰는 캐시는 남는다, 2026-10-03)
           ok=0
           for i in $(seq 1 30); do
             if curl -fsS -o /dev/null http://127.0.0.1:8080/api/auth/me; then echo "기동 확인"; ok=1; break; fi

@@ -133,8 +133,8 @@ Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정
 | 항목 | 소스 | 실행(이전 전) | 빈도 | 비고 |
 |---|---|---|---|---|
 | 애널리스트 투자의견(미국, 종목당 상위 5건) | StockAnalysis | GitHub `analyst-forecasts`(`collect-analyst-forecasts.mjs`) | 하루 1회 | 저장 `analyst_forecasts`(종목 단위 스냅샷 교체). 승인 조건 하루 1회·종목당 5행. 빈도 확정(2026-10-03 오너) |
-| 재무 배치 | SEC EDGAR | GitHub 실행 서버 `fin-build`(`scripts/run/fin-build.mts`) | 하루 1회 06:10 | 운영 서버 CPU 사용 안 함(2026-10-03 결정) |
-| 미국 TTM 스냅샷 | SEC + 앱 계산 | GitHub 실행 서버 `ttm-build`(`scripts/run/ttm-build.mts`) | 하루 1회 06:50 + 앱 배포 직후 | 운영 배포판 번호(`APP_COMMIT_SHA`)로 저장 — 세 서버가 같은 커밋이면 공유 |
+| 재무 배치(fin-build) | SEC EDGAR | **오라클 타이머 `fin-fin-build`**(`ops/oracle/run-ts.sh fin-build.mts`, 2026-10-03 이전) | 하루 1회 06:10 | 새 정기공시·엔진판 변경 종목만 조립. SEC 캐시 `/opt/macro/sec-cache` 상시 보관(앱과 공유) |
+| 미국 TTM 스냅샷(ttm-build) | SEC + 앱 계산 | **오라클 타이머 `fin-ttm-build`** + 배포 직후 `post-deploy.sh`(2026-10-03 이전) | 하루 1회 06:50 + 배포 직후(무효 저장본만) | 판번호 = 계산 판번호 `e{ENGINE_VERSION}.t{TTM_RULES_VERSION}`(커밋 아님, 2026-10-03 오너 결정) — 계산 규칙이 바뀔 때만 전 종목 재계산 |
 | 미국 복수 클래스 주식수 | SEC | ~~Vercel Cron~~ → **오라클 타이머 `fin-us-class-facts`**(2026-10-03 이전) | 분기 1회(1·4·7·10월 5일 15:00) | 다음 2026-10-05. 저장 `us_class_facts` |
 | 종목 화면 재무·시세 | DART, SEC, KRX, Yahoo | 화면 조회 때 | — | 디스크 캐시 |
 
