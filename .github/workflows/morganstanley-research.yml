@@ -5,8 +5,7 @@ name: 모간스탠리 인사이트 수집
 # 케이스) 기반으로 하루 1회 조회한다.
 
 on:
-  schedule:
-    - cron: "20 23 * * *" # 23:20 UTC = 08:20 KST
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
 
 env:

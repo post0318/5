@@ -5,8 +5,7 @@ name: BNP Paribas Economic Research 수집
 # 하루 1회 조회한다. robots.txt User-agent: * 기준 차단 없음.
 
 on:
-  schedule:
-    - cron: "30 23 * * *" # 23:30 UTC = 08:30 KST
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
 
 env:

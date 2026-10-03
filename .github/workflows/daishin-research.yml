@@ -6,9 +6,7 @@ name: 대신증권 리서치 수집
 # 요청 간격 ≥400ms)으로 진행. 상세는 scripts/collect-daishin-research.mjs 헤더.
 
 on:
-  schedule:
-    - cron: "28 23 * * *" # 23:28 UTC = 08:28 KST(1차)
-    - cron: "28 3 * * *" # 03:28 UTC = 12:28 KST(2차)
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
 
 env:

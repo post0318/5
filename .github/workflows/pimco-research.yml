@@ -5,8 +5,7 @@ name: PIMCO 인사이트 수집
 # 1회 조회한다. robots.txt User-agent: * 전체 허용, 차단 없음.
 
 on:
-  schedule:
-    - cron: "25 23 * * *" # 23:25 UTC = 08:25 KST
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
 
 env:

@@ -27,9 +27,16 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 세 곳에 같은 커
 | `fin-us-class-facts` | 타이머 | 1·4·7·10월 5일 15:00 | 미국 복수 클래스 주식수 |
 | `news-youtube-subscribe` | 타이머 | 매일 05:00 | 유튜브 새 영상 알림 구독 연장 + 최신 10개 동기화 |
 | `macro-telegram-listener` | 상주 | 상시 | 텔레그램 채널 새 글 즉시 수신 |
+| `research-*`(국내 20) | 타이머 | 08·10·12·14·16·18시(분은 수집기마다 다름) | 국내 증권사 리서치 — 08시만 넓게, 나머지 최근 1일 |
+| `research-*`(해외 IB 10) | 타이머 | 매일 08:05~08:52 | 해외 IB·운용사 인사이트 |
+| `macro-fedwatch-snapshot` | 타이머 | 매일 06:00 | Fed 금리 확률 일별 스냅샷(Kalshi) |
+| `fin-analyst-forecasts` | 타이머 | 매일 10:20 | StockAnalysis 애널리스트 투자의견 |
+| `weekly-report` | 타이머 | 월 06:00 | 주간 리포트 초안 |
 
 - 확인: `ssh -i ~/.ssh/oracle_macro ubuntu@161.33.9.115 'systemctl list-timers --no-pager'`, 로그 `sudo journalctl -u <이름>`.
-- 실행기: `/opt/macro/ops/call-cron.sh`(앱 `/api/cron/*` 서버 안 호출), `run-script.sh`(수집 스크립트), `run-ts.sh`(앱 계산 코드 배치).
+- 실행기(저장소 `ops/oracle/`, 배포·동기화 때 `/opt/macro/ops/` 로 설치): `call-cron.sh`(앱 `/api/cron/*` 서버 안 호출, POST 가능),
+  `run-script.sh`(수집 스크립트 — 작업 폴더 `/opt/macro/jobs`), `run-research.sh`(국내 리서치 회차별 범위), `run-ts.sh`(앱 계산 코드 배치).
+  타이머 정의는 `ops/oracle/install-schedules.sh`(다시 돌려도 같은 결과). 수집기·ops 만 바뀐 푸시는 `oracle-sync-jobs.yml` 이 작업 폴더만 맞춘다.
 - 사무실 PC 작업 스케줄러 `macro-research-bnk`(BNK — 해외 IP 차단, 한국 IP 필요).
 
 ### 과금 통제 (오너 지시 — 크레딧을 넘는 실제 지출 0)

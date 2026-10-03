@@ -7,10 +7,7 @@ name: DS투자증권 리서치 수집
 # 자동완성으로 티커를 해석한다.
 
 on:
-  schedule:
-    # 하루 2회(오너 지시, 2026-09 -- 작성시간과 로드시간의 시차 보완).
-    - cron: "55 23 * * *" # 23:55 UTC = 08:55 KST(1차)
-    - cron: "55 3 * * *" # 03:55 UTC = 12:55 KST(2차)
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
 
 env:

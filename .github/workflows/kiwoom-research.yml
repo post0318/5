@@ -6,11 +6,7 @@ name: 키움증권 미국 산업/기업분석 수집
 # 으로 진행.
 
 on:
-  schedule:
-    # 하루 3회(오너 지시, 2026-09-24 — 3차는 2차 4시간 뒤).
-    - cron: "15 23 * * *" # 23:15 UTC = 08:15 KST(1차)
-    - cron: "15 3 * * *" # 03:15 UTC = 12:15 KST(2차)
-    - cron: "15 7 * * *" # 07:15 UTC = 16:15 KST(3차, 2차+4시간)
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
 
 env:

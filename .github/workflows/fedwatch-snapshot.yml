@@ -6,9 +6,7 @@ name: Fed 금리 확률(Kalshi) 일별 스냅샷
 # "인플루언서 텔레그램 채널 수집 트리거" 항목과 동일 이유).
 
 on:
-  schedule:
-    # 21:00 UTC — 미국 장 마감(21:00 UTC = 16:00~17:00 ET, DST 무관하게 마감 후) 이후.
-    - cron: "0 21 * * *"
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch:
     inputs:
       backfill:
