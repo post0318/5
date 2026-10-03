@@ -86,7 +86,7 @@ async function main() {
     } catch (e) {
       log(`[즉시] @${ch.username} 글 ${m.id} 전송 실패(다음 이어받기에서 보충):`, e?.message ?? e);
     }
-  }, new NewMessage({ chats: channels.map((c) => c.entity) }));
+  }, new NewMessage({})); // 채널 필터는 위 byId 로 직접 건다(gramjs 의 chats 옵션에 엔티티 객체를 넘기면 해석 실패로 죽는다 — 실측)
 
   setInterval(() => catchUp("정기").catch((e) => log("정기 이어받기 실패", e?.message ?? e)), CATCHUP_EVERY_MS);
 
