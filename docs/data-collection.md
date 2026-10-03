@@ -37,7 +37,7 @@
 | 메리츠증권 | `meritz-research` | `collect-meritz-research.mjs` | robots 없음 |
 | 상상인증권(기업·산업) | `sangsangin-research`·`sangsangin-industry-research` | 같은 이름 | robots 파일은 있으나 규칙 없음 |
 | DS투자증권 | `ds-research` | `collect-ds-research.mjs` | robots 없음 |
-| BNK투자증권 | `bnk-research` | `collect-bnk-research.mjs` | robots 없음. ⚠️ **해외 IP 차단**(GitHub 미국·오라클 일본 모두 실패, 한국 IP 만 됨) |
+| BNK투자증권 | ~~`bnk-research`~~(GitHub 예약 중단) → **사무실 PC 작업 스케줄러 `macro-research-bnk`**(08·10·12·14·16·18시 05분, 꺼져 놓친 회차는 켜지면 따라잡음) | `collect-bnk-research.mjs --days=3` | robots 없음. ⚠️ **해외 IP 차단** — GitHub(미국)·오라클(일본)·구글 서울 Cloud Run(나가는 IP 가 미국) 모두 실패, 한국 IP 만 됨. 실행 스크립트 `C:Userspost0macro-localnk-research.cmd`(5-master 작업 폴더 사용) |
 
 빈도 결정: 2026-10-03 오너 — "로봇 제한이 없는 것은 6회로"(처음 6곳), 이어 robots 실측으로 옮겨 온 10곳도 "하루 6회로 결정".
 robots 실측(2026-10-03, 수집기가 실제로 접속하는 주소 기준)으로 분류했다. CLAUDE.md 사이트별 항목의 "robots 차단·하루 1회"
