@@ -121,7 +121,8 @@ Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정
 | 항목 | 소스 | 실행(이전 전) | 오라클 빈도 | 저장 |
 |---|---|---|---|---|
 | 종목뉴스 | Google 뉴스 RSS, 네이버 뉴스 API(허브), 빅테크 공식 블로그 RSS | GitHub `stock-news` → `/api/cron/stock-news` | 30분 | DB |
-| 텔레그램 채널 | Telegram API(`collect-telegram-posts.mjs`) | GitHub 매시간 + cron-job.org 2시간마다 재기동 + 워크플로 안 5시간 30분 반복(우회책) | **15분** — 이전 후 우회책 제거 | DB(`_id` upsert) |
+| 텔레그램 채널 | Telegram API — **오라클 상주 수신기 `macro-telegram-listener`**(`scripts/listen-telegram.mjs`, 2026-10-03) | 새 글 **즉시**(텔레그램이 밀어줌) + 시작·30분마다 이어받기 | — | DB(`_id` upsert). GitHub `telegram-posts` 는 비활성화, **cron-job.org 재기동 작업은 꺼야 함**(같은 세션 동시 접속 시 끊김) |
+| 유튜브(인플루언서) | 유튜브 공식 새 영상 알림(WebSub) → `/api/webhooks/youtube` → DB `youtube_videos`. 구독 갱신·최신 10개 동기화는 오라클 타이머 `news-youtube-subscribe`(매일 05:00, 구독 10일) | 새 영상 **즉시** | — | 화면은 DB 먼저, 비면 공식 API(15분 캐시). 피드 라우트 캐시 1분 |
 | 뉴스 제목 번역 | Google 번역 웹, MyMemory | 화면 조회 때 | — | 캐시 |
 
 ---
