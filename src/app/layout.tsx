@@ -29,6 +29,8 @@ const notoKR = Noto_Sans_KR({
 export const metadata: Metadata = {
   title: "매크로 인사이트",
   description: "유니버스 종목의 재무제표 · 공시 · 뉴스 · 멀티플 통합 조회",
+  // 구글 서치 콘솔 소유 확인(macro-insights.duckdns.org — 브라우저 위험 표시 검토 요청용, 2026-10-04). 공개 값이라 비밀 아님.
+  verification: { google: "5eTrw5LfXsUMLYTszXi3YyXYGC9wH0eyMezlAbAgRBM" },
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
