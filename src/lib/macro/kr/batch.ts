@@ -9,6 +9,7 @@ import {
 } from "@/lib/db/kr-fg";
 import { fetchAllStocks, fetchKospi200Futures, fetchKospiIndex, fetchPutCall, fetchVkospi } from "./krx";
 import { fetchLatestRates } from "./ecos";
+import { isKrxHoliday } from "./market-calendar";
 import { getYahooFinance } from "../yf-client";
 
 const WINDOW = 252; // 52주(거래일)
@@ -68,8 +69,17 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       // skipExisting 이 이 날짜를 "처리됨"으로 보게 함. 마커가 없으면 공휴일이
       // asOf(kospiClose 가 실제로 찍힌 최신일)를 영원히 못 앞지르게 만들어
       // autoBackfillKrFg 가 10분마다 무한 재시도(KRX 쿼터 소진)하게 됨(2026-09 발견).
-      await markClosed(date);
-      return { ...empty(date), ok: false, error: `거래 데이터 없음 (${stocks.length}건) — 휴장일?` };
+      // ⚠️ 빈 응답만으로 휴장으로 찍지 않는다(2026-10-03 발견·오너 지시 "캘린더 등으로 확인"): KRX OPEN API 는 일별
+      // 데이터를 다음 영업일에야 내주는데, 예전 크론(당일 18:30)이 빈 응답을 받아 실제 거래일 11일(09-14~10-01)을 휴장으로
+      // 찍었고, 휴장 마커 때문에 다시 받지도 않아 한국 공포·탐욕 원자료가 3주 가까이 비었다.
+      //   달력이 휴장이라고 하면 → 휴장 마커
+      //   달력이 거래일이라고 하면 → 마커 없이 "아직 미공개"(다음 실행에서 다시 받는다)
+      //   달력을 못 받으면 → 3일 넘게 지난 날짜만 마커(최근 날짜는 미공개일 수 있어 보류)
+      const holiday = await isKrxHoliday(date);
+      const old = Date.now() - Date.parse(`${date}T00:00:00+09:00`) > 3 * 864e5;
+      if (holiday === true || (holiday === null && old)) await markClosed(date);
+      const why = holiday === true ? "휴장일(달력 확인)" : holiday === false ? "거래일인데 KRX 미공개 — 다시 시도" : "달력 확인 실패";
+      return { ...empty(date), ok: false, error: `거래 데이터 없음 (${stocks.length}건) — ${why}` };
     }
 
     // 등락 종목수 + 등락 거래량
