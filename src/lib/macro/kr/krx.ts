@@ -113,6 +113,47 @@ export async function fetchKospiIndex(basDd: string): Promise<number | null> {
   return v ? n(v.CLSPRC_IDX) : null;
 }
 
+export interface KrxIndexDay {
+  market: "KOSPI" | "KOSDAQ";
+  date: string; // YYYY-MM-DD
+  close: number;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  change: number | null; // 전일 대비
+  pct: number | null; // 등락률(%)
+}
+
+/**
+ * 코스피·코스닥 지수 그날 일봉(종가·시고저·전일 대비·등락률). 일일 배치가 받아 kr_index_daily 에 저장하고, 거시경제 화면의
+ * 한국 지수 스냅샷은 DB 를 읽는다(오너 결정 2026-10-03 — 화면이 매번 KRX 를 부를 필요가 없다). 데이터가 없으면 빈 배열.
+ */
+export async function fetchKrIndexDay(basDd: string): Promise<KrxIndexDay[]> {
+  const date = `${basDd.slice(0, 4)}-${basDd.slice(4, 6)}-${basDd.slice(6, 8)}`;
+  const specs = [
+    { market: "KOSPI" as const, path: "idx/kospi_dd_trd", name: "코스피" },
+    { market: "KOSDAQ" as const, path: "idx/kosdaq_dd_trd", name: "코스닥" },
+  ];
+  const out: KrxIndexDay[] = [];
+  for (const s of specs) {
+    const rows = await krx(s.path, { basDd });
+    const v = rows.find((r) => (r.IDX_NM ?? "").trim() === s.name);
+    const close = v ? n(v.CLSPRC_IDX) : null;
+    if (!v || close == null || close <= 0) continue;
+    out.push({
+      market: s.market,
+      date,
+      close,
+      open: n(v.OPNPRC_IDX),
+      high: n(v.HGPRC_IDX),
+      low: n(v.LWPRC_IDX),
+      change: n(v.CMPPREVDD_IDX),
+      pct: n(v.FLUC_RT),
+    });
+  }
+  return out;
+}
+
 /** 코스피200 지수(현물) 종가 — 베이시스 계산용 */
 export async function fetchKospi200Index(basDd: string): Promise<number | null> {
   const rows = await krx("idx/kospi_dd_trd", { basDd });

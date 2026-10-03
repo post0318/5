@@ -7,7 +7,8 @@ import {
   type KrFgDailyDoc,
   type KrStockRollDoc,
 } from "@/lib/db/kr-fg";
-import { fetchAllStocks, fetchKospi200Futures, fetchKospiIndex, fetchPutCall, fetchVkospi } from "./krx";
+import { fetchAllStocks, fetchKospi200Futures, fetchKospiIndex, fetchKrIndexDay, fetchPutCall, fetchVkospi } from "./krx";
+import { saveKrIndexDays } from "@/lib/db/kr-index";
 import { fetchLatestRates } from "./ecos";
 import { isKrxHoliday } from "./market-calendar";
 import { getYahooFinance } from "../yf-client";
@@ -177,7 +178,21 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       futBasis: futBasis ?? existing?.futBasis ?? null,
       updatedAt: new Date().toISOString(),
     };
-    await col.replaceOne({ _id: date }, doc, { upsert: true });
+    // replaceOne 대신 $set — 외국인 선물 수집(06:31)이 이 배치(06:30)가 읽고 쓰는 사이에 foreignFutNet 을 넣으면
+    // replaceOne 이 그 값을 지운다(2026-10-03, 두 작업을 같은 시각대로 옮기며 확인). 휴장 오기록 마커(closed)는 지운다.
+    const { _id: _omit, foreignFutNet: _ff, ...owned } = doc;
+    void _omit;
+    void _ff;
+    await col.updateOne(
+      { _id: date },
+      { $set: owned, $unset: { closed: "" }, $setOnInsert: { foreignFutNet: null } },
+      { upsert: true },
+    );
+
+    // 코스피·코스닥 지수 일봉 → kr_index_daily(거시경제 한국 지수 스냅샷이 읽는다, 2026-10-03). 실패해도 배치는 성공으로 둔다.
+    await fetchKrIndexDay(ymd)
+      .then((days) => saveKrIndexDays(days))
+      .catch(() => 0);
 
     return {
       date,
