@@ -47,7 +47,7 @@ export async function fetchTgaSeries(): Promise<MacroPoint[]> {
 
   const body = await fetchJson<{ data?: Row[] }>(url, {
     headers: { accept: "application/json" },
-    revalidate: 60 * 60 * 6,
+    revalidate: 60 * 60 * 12, // 일별 데이터 캐시는 12시간으로 통일(오너 결정 2026-10-03, 6시간에서)
   });
 
   const out: MacroPoint[] = [];

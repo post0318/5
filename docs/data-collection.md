@@ -98,15 +98,18 @@ robots 실측(2026-10-03, 수집기가 실제로 접속하는 주소 기준)으�
 
 ### ②-2 화면 조회 때 가져오기 + 캐시 (스케줄 불필요)
 
+캐시 원칙(오너 결정 2026-10-03): **일별 이상으로 바뀌는 데이터는 12시간**으로 통일. 장중에 움직이는 데이터는 따로 —
+Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정), 한국 지수 스냅샷(예외, 2분).
+
 | 항목 | 소스 | 캐시 | 코드 |
 |---|---|---|---|
 | 미국·일본 지수, 원자재, 환율, 지수 차트 | Yahoo(`yahoo-finance2`, 개인용) | 짧게 | `lib/macro/indices.ts`·`index-chart.ts` |
-| 한국 지수 | KRX 정보데이터시스템, 금융위 지수시세(data.go.kr) | 12시간 | `lib/macro/kr/krx.ts`·`fsc-index.ts` |
-| 미국 거시 지표 | FRED | 12~24시간 | `lib/macro/fred.ts` |
+| 한국 지수(코스피·코스닥 스냅샷·차트) | KRX OPEN API(일별 시세), 금융위 지수시세(data.go.kr) | **예외**: 스냅샷은 화면 캐시(2분)만 — 장 마감 종가를 바로 반영(오너 결정 2026-10-03). 차트용 금융위 지수는 12시간 | `lib/macro/kr/krx.ts`·`fsc-index.ts` |
+| 미국 거시 지표 | FRED | 12시간 | `lib/macro/fred.ts` |
 | 국고채·회사채 금리 | 한국은행 ECOS | 12시간 | `lib/macro/kr/ecos.ts` |
 | CNN 공포·탐욕 | CNN 비공식 API(예외 승인) | 1시간 | `lib/macro/feargreed.ts` |
 | Fed 금리 확률(현재) | Kalshi(예외 승인) | 5분(2026-10-03 30분에서 단축) | `lib/macro/fedwatch.ts` |
-| 미국 재무부 TGA 잔고 | 미 재무부 Fiscal Data | 6시간 | `lib/macro/tga.ts` |
+| 미국 재무부 TGA 잔고 | 미 재무부 Fiscal Data | 12시간 | `lib/macro/tga.ts` |
 | 한국 공포·탐욕 지수 | `kr_fg_daily` 에서 계산 | — | `lib/macro/kr/fear-greed.ts` |
 
 ---
