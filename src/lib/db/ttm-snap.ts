@@ -3,6 +3,7 @@ import type { Collection } from "mongodb";
 import { getDb, isDbConfigured } from "./index";
 import type { TtmFlows } from "../markets/types";
 import { ENGINE_VERSION } from "../fin";
+import { snapshotBypassed } from "./snap-bypass";
 
 /**
  * TTM 스냅샷 저장본(오너 결정 2026-10-01 (가) — 개요 시가총액이 첫 조회 때 SEC 원본 판독으로 6~40초 걸리던 문제).
@@ -54,7 +55,7 @@ export async function readTtmSnap(market: string, symbol: string): Promise<TtmFl
  * 2026-10-02 — 배포 직후 다시 채우기가 끝날 때까지 첫 조회가 수십 초, AXP). 계산 규칙이 바뀐 배포면 처음 한 번만 옛 규칙 값이 보일 수 있다
  */
 export async function readTtmSnapAny(market: string, symbol: string): Promise<{ ttm: TtmFlows; current: boolean } | null> {
-  if (!isDbConfigured()) return null;
+  if (!isDbConfigured() || (await snapshotBypassed())) return null;
   const d = await (await col()).findOne({ _id: key(market, symbol) });
   if (!d || Date.now() - d.at.getTime() > MAX_AGE_MS) return null;
   // 다른 환경(로컬 ↔ 운영)이 쓴 저장본은 읽지 않는다(같은 DB — api-snap.ts 와 같은 이유)
@@ -69,7 +70,7 @@ export function isStorableTtm(t: TtmFlows | null): boolean {
 
 /** 저장 — viewed: 화면 조회로 계산한 것(seen 도 갱신). 배치가 쓴 것은 seen 을 건드리지 않는다 */
 export async function writeTtmSnap(market: string, symbol: string, ttm: TtmFlows, opts: { viewed?: boolean } = {}): Promise<void> {
-  if (!isDbConfigured() || !isStorableTtm(ttm)) return;
+  if (!isDbConfigured() || !isStorableTtm(ttm) || (await snapshotBypassed())) return;
   const now = new Date();
   await (await col()).updateOne(
     { _id: key(market, symbol) },

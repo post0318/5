@@ -2,6 +2,7 @@ import "server-only";
 import type { Collection } from "mongodb";
 import { getDb, isDbConfigured } from "./index";
 import { ttmSnapVersion } from "./ttm-snap";
+import { snapshotBypassed } from "./snap-bypass";
 
 /**
  * 화면 응답 저장본(api_snap, 2026-10-02 — 배포마다 CDN 캐시가 비어 미국 하이라이트 첫 조회가 8초씩 걸리던 문제, 오너 지적 KO). TTM 저장본
@@ -23,7 +24,7 @@ async function col(): Promise<Collection<ApiSnapDoc>> {
 
 /** 24시간 안 저장본 — stale = 배포판이 다르거나 1시간 지남(응답 뒤 다시 계산할 것) */
 export async function readApiSnap<T>(key: string): Promise<{ data: T; stale: boolean } | null> {
-  if (!isDbConfigured()) return null;
+  if (!isDbConfigured() || (await snapshotBypassed())) return null;
   const d = await (await col()).findOne({ _id: key });
   if (!d) return null;
   // 운영과 로컬이 같은 DB 를 쓴다 — 다른 환경(로컬 ↔ 운영)이 쓴 저장본은 읽지 않는다(2026-10-02: 로컬 시험이 새 형식으로 쓴 저장본을
@@ -35,6 +36,7 @@ export async function readApiSnap<T>(key: string): Promise<{ data: T; stale: boo
 }
 
 export async function writeApiSnap(key: string, data: unknown): Promise<void> {
-  if (!isDbConfigured()) return;
+  // 검증 요청(snap-bypass)이 계산한 값은 저장하지 않는다 — 다른 브랜치·PC 계산이 운영·다른 검증에 섞이지 않게
+  if (!isDbConfigured() || (await snapshotBypassed())) return;
   await (await col()).updateOne({ _id: key }, { $set: { v: ttmSnapVersion(), at: new Date(), data } }, { upsert: true });
 }
