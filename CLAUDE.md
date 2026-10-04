@@ -1973,8 +1973,9 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   (051600·267260·178320). 검증기도 같은 규칙을 따로 구현(앱 코드 공유 없음).
 - **줄 이름만 바꾼 "(유동|비유동)금융부채"(2026-10-05)**: 한전 2026 반기보고서가 같은 줄(같은 태그 `Other(Current|Noncurrent)FinancialLiabilities`,
   전기말 열 = 2025 사업보고서 "유동금융부채" 당기 값)을 "기타 유동 금융부채"로 이름만 바꿔 LTM 총차입금이 0(실제 약 133조)이 됐다 — 분기말 리스부채를
-  채우며 LTM EV 가 계산되자 드러남. 앱은 이 줄이 여러 보고서에서 쓴 이름 중 하나라도 그 꼴이면 같은 판정(`KrFactLine.names`), 검증기는 분기 보고서
-  전기말 값 = 직전 사업보고서 그 이름 줄 당기 값일 때만(`classifyBsRows(rows, own, priorFyRows)`).
+  채우며 LTM EV 가 계산되자 드러남. 앱은 이 줄이 여러 보고서에서 쓴 이름 중 하나라도 그 꼴이면 같은 판정(`KrFactLine.names`), 검증기는 값이 같은
+  줄일 때만 — LTM 은 분기 보고서 전기말 값 = 직전 사업보고서 그 이름 줄 당기 값, 사업연도는 기준 보고서 값 = 그해 자기 보고서 그 이름 줄 당기 값
+  (052690 2021: 2023 보고서 전전기 "기타유동금융부채" 10,000,000 = 2021 보고서 "유동금융부채")(`classifyBsRows(rows, own, rename)`).
 - **앱 DART 디스크 캐시(오너 결정 2026-10-05, `src/lib/markets/kr/dart-cache.ts`)**: `DART_CACHE_DIR` 가 있을 때만(오라클 운영 `/opt/macro/dart-cache`
   → 컨테이너 `/dart-cache`, 배치 `run-ts.sh` 도 같은 폴더). 대상 = 보고서에 매인 응답 전부(fnlttSinglAcntAll — 연간·분기·opendart 재무제표 화면,
   alotMatter, stockTotqySttus) + 접수번호로 받는 XBRL 원본(xbrl.ts). 판본 = 그 보고서 **최신 접수번호**(회사 정기공시 목록 list.json, 30분 캐시 —

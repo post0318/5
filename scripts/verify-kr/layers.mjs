@@ -159,7 +159,7 @@ export async function krOriginalLayers(ctx) {
     const own = bsOwner(src, y);
     if (!own) { exact("K2", "총차입금 = DART(B16)", col, x.debt, null, "그해 재무상태표 없음"); continue; }
     // 기타(유동)금융자산 성격은 그해 자기 보고서(src.cur)의 분류로 — 값은 기준 보고서(own)
-    const cl = classifyBsRows(own.rows, src.cur ?? own.rows);
+    const cl = classifyBsRows(own.rows, src.cur ?? own.rows, src.cur && src.cur !== own.rows ? { rows: src.cur, col: own.col } : null);
     const faceDebt = sumCol(cl.debt, own.col) ?? 0;
     let lease = { status: "face" }, why = `기준 보고서 ${own.by} ${own.col}${src.fsDiv === "OFS" ? " · 별도" : ""}`;
     if (!cl.leaseFace.length) {
@@ -334,7 +334,7 @@ async function ltmLayer(c) {
     else exact("K4", "LTM EPS = DART 사업연도 + 누적 − 전년 누적", "LTM", LT.eps, exp, `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − 전년 ${pc}`);
   }
   // LTM 재무상태표(최신 분기말) — 총차입금·현금·비지배지분, EV
-  const cl = classifyBsRows(cur.rows, cur.rows, await R(Y - 1, "11011"));
+  const cl = classifyBsRows(cur.rows, cur.rows, { rows: await R(Y - 1, "11011"), col: "frmtrm_amount" });
   const faceDebt = sumCol(cl.debt, "thstrm_amount") ?? 0;
   let lease = { status: "face" };
   if (!cl.leaseFace.length) {
