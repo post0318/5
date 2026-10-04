@@ -921,6 +921,37 @@ async function latestFy(corp) {
 }
 const LEASE_ONLY = process.argv.includes("--lease-only");
 
+/**
+ * 감가상각 출처 기준(연결·별도) = 그해 재무제표 기준(감사 1차 2026-10-05 — 060370 2022: 재무제표는 2024 보고서 전전기 열의 연결 재작성값인데
+ * 감가상각은 2022 보고서 원문 별도값이었다). 앱 재무제표 기준: 연결 보고서(그해·이듬해·다다음 해) 어디든 그해 손익 값이 있으면 연결, 아니면 별도.
+ * 기준이 다른 해는 지운다(빈칸 — 앱은 DART 공시 현금흐름 줄 또는 빈칸, 그림자 채우기 금지)
+ */
+async function alignBasis(corp, byYear) {
+  const cfs = {};
+  const cfsRows = async (ry) => {
+    if (ry in cfs) return cfs[ry];
+    await new Promise((r) => setTimeout(r, 400));
+    const j = await jget(`${B}/fnlttSinglAcntAll.json?crtfc_key=${DART}&corp_code=${corp}&bsns_year=${ry}&reprt_code=11011&fs_div=CFS`);
+    if (j.status !== "000" && j.status !== "013") throw new Error(`fnltt CFS ${ry} ${j.status} ${j.message ?? ""}`);
+    return (cfs[ry] = j.status === "000" ? j.list ?? [] : null);
+  };
+  const cy = new Date().getFullYear();
+  for (const y of Object.keys(byYear).map(Number)) {
+    let con = false;
+    for (const [ry, col] of [[y, "thstrm_amount"], [y + 1, "frmtrm_amount"], [y + 2, "bfefrmtrm_amount"]]) {
+      if (ry >= cy) continue;
+      const L = await cfsRows(ry);
+      if (L && L.some((r) => (r.sj_div === "IS" || r.sj_div === "CIS") && amt(r[col]) != null)) { con = true; break; }
+    }
+    const sep = /별도/.test(byYear[y].src ?? "");
+    if (sep === con) {
+      console.log(`    (${y} 감가상각 출처 ${byYear[y].src} ≠ 재무제표 ${con ? "연결" : "별도"} — 기준이 달라 지움)`);
+      delete byYear[y];
+    }
+  }
+  return Object.keys(byYear).length ? byYear : null;
+}
+
 const cli = new MongoClient(URI);
 await cli.connect();
 const db = cli.db(DB);
@@ -947,7 +978,7 @@ for (const sym of symbols) {
     continue;
   }
   let byYear = null;
-  try { byYear = await daByYear(corp); } catch (e) { console.log(`  ${sym}: ${e.message}`); }
+  try { byYear = await daByYear(corp); if (byYear) byYear = await alignBasis(corp, byYear); } catch (e) { console.log(`  ${sym}: ${e.message}`); }
   if (!byYear) { console.log(`  ${sym}: D&A 없음`); continue; }
   const ttm = await ttmDa(corp, byYear).catch((e) => (console.log(`    (TTM 실패: ${e.message})`), null));
   if (ttm) console.log(`    TTM ${ttm.ttmLabel} = ${t(ttm.ttmDepreciation)} (${ttm.ttmSrc})`);

@@ -297,7 +297,16 @@ async function ltmLayer(c) {
   // EPS = 사업연도 + 당기 누적 − 전년 동기 누적(희석, 없으면 기본)
   {
     const annual = await R(Y - 1, "11011");
-    const epsOf = (rows, f) => { for (const it of [EPS_D, EPS_B]) { const o = oneVal(pick(rows ?? [], it), f); if (o.v != null) return o.v; } return null; };
+    // 전체 EPS(희석 → 기본), 전체 EPS 미공시면 계속영업 + 중단영업 주당이익(공시 두 값 — CLAUDE.md EPS 단일 기준)
+    const epsOf = (rows, f) => {
+      for (const it of [EPS_D, EPS_B]) { const o = oneVal(pick(rows ?? [], it), f); if (o.v != null) return o.v; }
+      for (const k of ["Diluted", "Basic"]) {
+        const c0 = oneVal(pick(rows ?? [], [[`ifrs-full_${k}EarningsLossPerShareFromContinuingOperations`], []]), f).v;
+        if (c0 == null) continue;
+        return c0 + (oneVal(pick(rows ?? [], [[`ifrs-full_${k}EarningsLossPerShareFromDiscontinuedOperations`], []]), f).v ?? 0);
+      }
+      return null;
+    };
     const a = epsOf(annual, (r) => num(r.thstrm_amount));
     const cc = epsOf(cur.rows, (r) => num(r.thstrm_add_amount) ?? num(r.thstrm_amount));
     let pc = epsOf(cur.rows, (r) => num(r.frmtrm_add_amount) ?? num(r.frmtrm_amount));
@@ -323,6 +332,32 @@ async function ltmLayer(c) {
   const block = evBlockWhy ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!capCur || capCur.common == null ? "KRX 현재 시가총액 없음" : null);
   if (block) { if (LT.ev != null) fail("K2", "LTM EV = KRX + DART(B16)", "LTM", `기대 공란(${block})인데 앱 EV ${LT.ev}`); else add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: PASS, note: `공란 — ${block}` }); }
   else exact("K2", "LTM EV = KRX + DART(B16)", "LTM", LT.ev, LT.mc == null || ltmPrefOk == null ? null : LT.mc + ltmPrefOk + expDebt + (sumCol(cl.nci, "thstrm_amount") ?? 0) - (sumCol(cl.cash, "thstrm_amount") ?? 0), "보통주 시가총액은 K1 에서 따로 대조");
+}
+
+/** 그해 값이 실린 가장 최근 보고서(손익·현금흐름 포함 — y+2 전전기 → y+1 전기 → y 당기) */
+function bsOwnerAny(src, y) {
+  for (const [L, by] of [[src.next2, y + 2], [src.next, y + 1], [src.cur, y]]) {
+    const col = COL[by - y];
+    if (L && L.some((r) => num(r[col]) != null)) return { rows: L, col, by };
+  }
+  return null;
+}
+const hasIs = (L, i) => !!L && L.some((r) => (r.sj_div === "IS" || r.sj_div === "CIS") && num(r[COL[i]]) != null);
+/** DART 재무제표 현금흐름 감가상각 줄(검증기 판독 — 합계 줄, 없으면 유형·무형·사용권 세부 줄 합) */
+function daCfLine(rows, col) {
+  const cf = (rows ?? []).filter((r) => r.sj_div === "CF");
+  const n0 = (r) => String(r.account_nm ?? "").replace(/\s/g, "");
+  for (const id of ["ifrs-full_DepreciationAndAmortisationExpense", "ifrs-full_AdjustmentsForDepreciationAndAmortisationExpense", "dart_DepreciationAndAmortizationExpensePropertyPlantAndEquipment"]) {
+    const r = cf.find((x) => x.account_id === id && num(x[col]) != null);
+    if (r) return { v: num(r[col]), how: `DART 현금흐름 ${r.account_nm}(${id})` };
+  }
+  for (const nmx of ["감가상각비와무형자산상각비", "감가상각비", "유형자산감가상각비"]) {
+    const r = cf.find((x) => n0(x) === nmx && num(x[col]) != null);
+    if (r) return { v: num(r[col]), how: `DART 현금흐름 ${r.account_nm}` };
+  }
+  const parts = [["유형자산감가상각비", "유형자산의감가상각비", "감가상각비"], ["무형자산상각비", "무형자산의상각비"], ["사용권자산감가상각비"]]
+    .map((g) => cf.find((x) => g.includes(n0(x)) && num(x[col]) != null)).filter(Boolean);
+  return parts.length ? { v: parts.reduce((a, r) => a + num(r[col]), 0), how: `DART 현금흐름 ${parts.map((r) => r.account_nm).join("+")}` } : null;
 }
 
 // 감가상각 현금흐름 조정 태그(사업보고서 XBRL) — 검증기 판독
@@ -387,11 +422,17 @@ async function daLayer(c) {
       const op = IS[colY]?.op ?? null, eb = IS[colY]?.ebitda ?? null;
       if (op != null) exact("K3", "EBITDA = 영업이익 + 감가상각(적재본)", colY, eb, op + v);
     } else {
-      // 적재본에 없는 해 — 상장 전(KRX 연말 종목 없음)·설립 전만 빈칸 허용. 앱이 DART 공시 현금흐름 줄을 썼으면 값이 있을 수 있다
+      // 적재본에 없는 해 — 앱 규칙(오너 결정 2026-10-02 "가"): DART 공시 현금흐름 감가상각 줄, 없으면 빈칸. 검증기가 DART 줄을 따로 읽어 대조.
+      // 빈칸 허용: 상장 전(KRX 연말 종목 없음) · 연결 재작성 해(그해·이듬해 사업보고서엔 연결 손익이 없고 다다음 해 보고서 전전기 열에만 —
+      // 연결 기준 주석 원자료가 없다, 060370 2022)
       const k = caps.get(y);
       const pre = !k || k.common == null;
-      if (app == null) add("K3", "감가상각비 = 적재본(kr_da)", colY, pre ? { status: PASS, note: "적재본 없음 · 상장 전 해(KRX 연말 종목 없음) — 빈칸" } : { status: "fail", note: `적재본에 ${y} 없음 · 상장 후 해인데 빈칸(적재 누락)` });
-      else add("K3", "감가상각비 = 적재본(kr_da)", colY, pre ? { status: NA, note: `적재본 없음 · 상장 전 · 앱 ${app}(DART 공시 현금흐름 줄 — 앱 주석 규칙)` } : { status: "fail", note: `적재본에 ${y} 없음(적재 누락) · 앱 ${app}` });
+      const own = src ? bsOwnerAny(src, y) : null;
+      const cfLine = own ? daCfLine(own.rows, own.col) : null;
+      const restated = src?.fsDiv === "CFS" && !hasIs(src.cur, 0) && !hasIs(src.next, 1) && hasIs(src.next2, 2);
+      if (cfLine != null) exact("K3", "감가상각비 = DART 공시 현금흐름 줄(적재본 없는 해)", colY, app, cfLine.v, `${cfLine.how} · 기준 보고서 ${own.by}`);
+      else if (app == null) add("K3", "감가상각비 = 적재본(kr_da)", colY, pre ? { status: PASS, note: "적재본·공시 줄 없음 · 상장 전 해(KRX 연말 종목 없음) — 빈칸" } : restated ? { status: PASS, note: "적재본·공시 줄 없음 · 연결 재작성 해(연결 손익은 다다음 해 보고서 전전기 열뿐) — 빈칸" } : { status: "fail", note: `적재본에 ${y} 없음 · 공시 줄 없음 · 상장 후 해인데 빈칸(적재 누락)` });
+      else fail("K3", "감가상각비 = 적재본(kr_da)", colY, `적재본·DART 공시 현금흐름 줄 모두 없는데 앱 ${app}`);
     }
   }
   // LTM — 손익 TTM 과 같은 구성의 감가상각 TTM 만

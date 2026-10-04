@@ -9928,8 +9928,23 @@ async function verifyKr(sym) {
           // 최신 판본 = Y+2 보고서 전전기 → Y+1 보고서 전기 → Y 보고서 당기(앱 규칙 "연도별 가장 최신 보고서" — 현대차 2021 매출은
           // 2023 보고서 전전기에서 재작성 116.45조, 2022 보고서 전기는 117.61조)
           const yv = dartYearValue(cur, next, next2, y, sjs, ids, names);
-          const orig = yv.orig, latest = yv.latest;
-          const r = vsDart(app, latest, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : ""].filter(Boolean).join(" · "));
+          const orig = yv.orig;
+          let latest = yv.latest, rule = "";
+          // 승인된 규칙(2026-09-28, 앱 dart-income.ts — 칸 주석 표시): 연결 재무제표인데 DART 가 지배주주 귀속 줄을 생략했고, 같은 보고서에 비지배지분
+          // 순이익 줄 값도 없고 재무상태표 비지배지분도 없거나 0 이면 지배 = 당기순이익. 검증기가 DART 원자료로 조건을 따로 확인한다(앱 주석을 믿지 않음)
+          if (name === "당기순이익(지배)" && latest == null && fsDiv === "CFS") {
+            const own = [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]].find(([L0, f]) => L0 && L0.some((r0) => dartNum(r0[f]) != null));
+            if (own) {
+              const [L0, f] = own;
+              const isNci = dartRows(L0, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToNonControllingInterests"], ["비지배지분"]).map((r0) => dartNum(r0[f])).filter((v0) => v0 != null);
+              const bsNci = dartRows(L0, ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]).map((r0) => dartNum(r0[f])).filter((v0) => v0 != null && v0 !== 0);
+              if (!isNci.length && !bsNci.length) {
+                latest = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLoss"], ["당기순이익", "당기순이익손실"]).latest;
+                rule = "DART 지배주주 귀속 줄 생략 · 비지배지분 순이익·재무상태표 비지배지분 없음(검증기 확인) → 지배 = 당기순이익(승인 규칙)";
+              }
+            }
+          }
+          const r = vsDart(app, latest, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : "", rule].filter(Boolean).join(" · "));
           if (r.status === FAIL && app != null && orig != null && app === orig && latest !== orig)
             r.note = `앱 = 처음 공시 ${orig} · 최신 보고서 값 ${latest} — 앱이 재작성 값을 안 씀`;
           else if (r.status === PASS && orig != null && latest !== orig) r.note = `최신 보고서의 재작성 값 — 처음 공시 ${orig}`;
@@ -9983,7 +9998,10 @@ async function verifyKr(sym) {
       yahooBars: async (s) => {
         const y = await yahoo();
         for (const suf of [".KS", ".KQ"]) {
-          const r = await y.chart(s + suf, { period1: new Date(Date.now() - 20 * 864e5), interval: "1d" }, { validateResult: false });
+          let r;
+          // 코스닥 종목은 .KS 가 "No data found" 로 던진다 — 그때만 다음 접미사(다른 오류는 그대로 던짐)
+          try { r = await y.chart(s + suf, { period1: new Date(Date.now() - 20 * 864e5), interval: "1d" }, { validateResult: false }); }
+          catch (e) { if (/No data found/i.test(String(e?.message ?? e))) continue; throw e; }
           const q = (r?.quotes ?? []).filter((b) => b.close != null).map((b) => ({ date: new Date(new Date(b.date).getTime() + 9 * 3600e3).toISOString().slice(0, 10), close: b.close }));
           if (q.length) return q;
         }
