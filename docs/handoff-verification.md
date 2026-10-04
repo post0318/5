@@ -1,6 +1,21 @@
 # 재무 숫자 작업 인수인계
 
-브랜치: `wip/verification` (master 에 합치면 Vercel 프로덕션 배포 — 오너 지시 전까지 master 푸시 금지).
+브랜치: **`kr/verification`**(2026-10-03~ — 한국 재무 검증 브랜치, 검증 끝난 뒤 master 머지 예정. 옛 `wip/verification` 은 더 쓰지 않음).
+검증은 **오라클 2호기 `macro-verify`**(140.83.48.57, `~/5`, 개발 서버 `verify-dev` localhost:3000)에서 돌린다 — 운영과 IP·CPU 분리, PC 메모리 부족(DEPLOY.md §0).
+검증기는 기본으로 DB 저장본(api_snap·ttm_snap·fin_sym·us_class_facts)을 우회한다(인증된 `x-verify-no-snapshot` — 브랜치 코드로 새로 계산). `--use-snapshots` 로만 끈다.
+
+## 20-F(외국 회사) LTM 검증기 감사 종료 (2026-10-04, 오너 결정 "14차까지만")
+- 대상: 10-02 저녁(집 PC) 새로 만든 TSM·ASML·SPOT 20-F LTM(야후 분기·6-K 분기 재무제표·변동분 근사·0 규칙·합성 개념)과 그 검증기. 집에서 7~12차 수정까지 했으나 승인 기록이 없어 12차 재감사부터 다시 함.
+- 경과(독립 감사자 Opus, 틀린 값 심기): 12차 8/11 → 13차 20/24 → 14차 14/15. 각 회차 지적을 모아 고침(fb9ebd0·da4fb52·72cf25d·0564193·cce3ef7·e1380f3 등).
+  공통 원칙으로 정리됨 — **LTM 공란·0·근사·6-K·수준 보정 어느 경로든 SEC 개념과 야후 대응은 검증기가 직접 정하고(`secIdsOf`·`YAHOO_LTM_FIXED`·`isCfFixed`·합성 고정 규칙), 앱 기록은 대조 대상으로만.**
+- 감사 중 드러난 실제 앱 결함(수정): 검증 서버가 브랜치 코드가 아니라 10-01 저장본(fin_sym)으로 검증되던 것, DART 연결(CFS) 조회 실패가 별도(OFS)로 조용히 바뀌던 것, KRX 시가총액 조회 실패가 표시 없이 "종가 × 현재 주식수" 근사로 바뀌던 것(이제 공란 + ⚠ 주석), 6-K 조회 실패를 앱이 삼키던 것, SPOT 2025-06-30 유동 리스부채 누락(기준일 열 하나뿐인 주석 표).
+- 재발 방지: `npm run lint` 에 `scripts/lint/no-silent-catch.mjs`(오류 삼키는 catch 금지, `// silent-ok: 이유` 만 허용) — 오너 지적 "조용히 바꾸는 거 저번에 다 정리했는데 또 나왔다고?"(09-26 정리 뒤 10-02 새 코드에서 재발).
+- 최종 기준선(2호기, e1380f3): TSM·ASML·SPOT·AAPL 실패 0·오류 0(SPOT 검증불가 44). 마지막 회차 지적 3건은 고친 뒤 재감사 없이 기준선·심은 오류(N6b 실패 8)로만 확인.
+- **미결(경미, 기록만)**: lint 변형 형태(`.catch(() => null as X)`·`function(){}`·여러 줄 화살표) 미검출 / `secIdsOf` `instHas` 날짜 조건 / `recon-lines.mjs:205`·`verify-financials.mjs:1466` 조회 실패 기록 방식 / 1년 전 6-K 통째 누락 시 주석 표 행은 정당 공란으로 셈(같은 원인으로 다른 8행이 실패해 놓치지는 않음) / `opendart.ts` `loadKrTtmDetail` 전체 catch(lint 범위 밖) / 0 규칙 개념(우선주·비지배지분)은 사업연도말 0 이면 분기말에 값이 생겨도 0 — 설계 한계인지 오너 확인 필요.
+- **주의(한국 검증에서 확인)**: DART·KRX 조회 실패가 이제 화면 오류·공란으로 드러난다(그림자 채우기 금지). DART 요청 한도에 걸리면 한국 화면이 오류를 낸다 — master 머지 전 한국 검증 단계에서 동작 확인.
+- 다음: **한국 재무 검증**(`--market=kr --universe`, DART 는 `--concurrency=1`·간격 300ms).
+
+## (옛 기록) 브랜치 `wip/verification` (master 에 합치면 Vercel 프로덕션 배포 — 오너 지시 전까지 master 푸시 금지).
 
 ## 판관비·연구개발비 검증기 모드 `--metric=sga` (2026-09-28) — docs/metrics/sga.md §7 · verify-us-20260928-110855(+MRVL 111444)
 - `cogs ⊂ opinc ⊂ da ⊂ sga`. A층 = 공시 원본 계산 구조로 판관비·연구개발비 성격 줄 독립 판독(회사별 예외 AMZN·NFLX·KO·DAL 은 검증기 안에 따로 — 공통모드),
