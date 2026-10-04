@@ -272,6 +272,9 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
             : null;
           const r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev);
           // 6-K 경로를 시도했는데 보고서를 못 찾음(조회 실패 아님) — 검증 전용 사유
+          // 1년 전 분기 6-K 를 찾아야 했는데(이번 보고서에 1년 전 열 없음) 못 찾음 — 검증 전용 사유(조회 실패는 fetchWarnings)
+          if (r.result.source === "yahoo" && per && sixK && !sixK.bsDates.includes(per.yearAgo) && !sixKPrev)
+            r.result.sixKPrevMiss = sixKFailed ? "1년 전 분기 6-K 조회 실패(fetchWarnings 참조)" : `1년 전 분기말 ${per.yearAgo} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음`;
           if (r.result.source === "yahoo" && !sixK) r.result.sixKMiss = sixKFailed ? "6-K 조회 실패(fetchWarnings 참조)" : per ? `분기말 ${per.last} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음` : "LTM 기간 판정 불가(6-K 조회 안 함)";
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else if (!fx) {

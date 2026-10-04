@@ -27,6 +27,10 @@ export interface KrHighlightInput {
   facts: KrFacts; // annual
   /** KRX 연말·현재 보통주·우선주 시가총액(dart-ev.ts loadKrCaps) */
   caps?: KrCaps | null;
+  /** KRX 시가총액 조회 실패 사유 — 있으면 연도 열 시가총액을 근사(종가 × 현재 주식수)로 채우지 않고 공란 + 주석(재감사 14차 ③) */
+  capsError?: string | null;
+  /** 호출부가 모은 조회 실패 경고(KRX 시세·연말 종가 등) — 주석에 그대로 싣는다 */
+  warnings?: string[];
   bars: QuoteBar[]; // Stooq (다년) — 회계연도말 종가
   fyCloseByYear?: Map<number, number>; // KRX 회계연도말 종가 폴백
   sharesOutstanding: number | null; // KRX 현재 상장주식수
@@ -127,6 +131,8 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     if (c.kind === "ltm" && currentMarketCap != null) return currentMarketCap;
     if (kx != null) return kx;
     if (input.strictPastShares && c.kind === "fy") return null;
+    // KRX 조회 실패 — 근사로 바꾸지 않는다(그림자 채우기 금지). 자료 없음(상장 전 등)일 때만 아래 근사 + 주석
+    if (input.capsError && c.kind === "fy") return null;
     if (priceByCol[i] == null || shares == null) return null;
     if (c.kind === "fy") approxMcap = true;
     return priceByCol[i]! * shares;
@@ -287,7 +293,9 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
       ? `현재/LTM 열 재무상태표(현금·차입금·비지배지분·자본): ${snap!.label} 기준`
       : `현재/LTM 열 재무상태표: 최신 분기 스냅샷 없음 — FY${lastFy} 연말값`,
   );
-  if (approxMcap) notes.push("일부 연도 시가총액: KRX 조회 실패 → 연말 종가 × 현재 상장주식수 근사");
+  if (approxMcap) notes.push("일부 연도 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사");
+  for (const w of input.warnings ?? []) notes.push(`⚠ ${w}`);
+  if (input.capsError) notes.push(`⚠ KRX 시가총액 조회 실패(${input.capsError}) — 연도 열 시가총액·EV·우선주 시가총액 공란(근사로 대체하지 않음), 잠시 뒤 다시 계산`);
   if (evBlocker === "financial") notes.push("금융업 — EV·EV/EBITDA 는 계산하지 않음(예금·보험부채가 영업용 부채)");
   if (evBlocker === "captive-unsplit")
     notes.push("금융 자회사 연결(할부금융 차입금 미분리) — EV·EV/EBITDA 는 표시하지 않음(최종 기준 결정 전)");

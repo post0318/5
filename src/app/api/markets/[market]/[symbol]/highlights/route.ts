@@ -26,7 +26,7 @@ import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
 import { getKrDaDoc } from "@/lib/db/kr-da";
 import { usSharesHint } from "@/lib/markets/us/shares-hint";
 import { secBasisBars } from "@/lib/markets/us/edgar-shares";
-import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
+import { loadKrCapsChecked } from "@/lib/markets/kr/dart-ev";
 import { dartAdrHighlights, dartAdrOf } from "@/lib/markets/us/dart-adr";
 
 export const revalidate = 3600;
@@ -53,10 +53,12 @@ export async function GET(
 
     if (market === "kr") {
       const { corpCode } = resolveCorpCode("", sym);
+      const krxWarn: string[] = [];
       const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daDoc, live] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
         fetchKrDps(corpCode),
-        fetchKrxEod(sym).catch(() => null),
+        // KRX 일별 시세 조회 실패 — 경고로 남긴다(현재가·시가총액은 공통 시세 함수 우선, KRX 는 상장주식수 등 보조)
+        fetchKrxEod(sym).catch((e) => { krxWarn.push(`KRX 일별 시세 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; }),
         fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
         adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
         fetchKrNaverConsensus(sym).catch(() => null),
@@ -76,15 +78,17 @@ export async function GET(
         .filter((y) => !bars.some((b) => b.date <= `${y}-12-31` && b.date >= `${y}-11-01` && b.close != null));
       await Promise.all(
         needYears.map(async (y) => {
-          const c = await fetchKrxCloseOn(sym, `${y}1231`).catch(() => null);
+          const c = await fetchKrxCloseOn(sym, `${y}1231`).catch((e) => { krxWarn.push(`${y} 연말 종가(KRX) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; });
           if (c != null) fyCloseByYear.set(y, c);
         }),
       );
       // KRX 연말·현재 보통주·우선주 시가총액 (dart-ev.ts — EV·PBR·PSR 공통)
-      const caps = await loadKrCaps(sym, facts.periods.map((p) => p.year)).catch(() => null);
+      const capsR = await loadKrCapsChecked(sym, facts.periods.map((p) => p.year));
       const highlights = buildKrHighlights({
         code: sym,
-        caps,
+        caps: capsR.caps,
+        capsError: capsR.error,
+        warnings: krxWarn,
         facts,
         bars,
         fyCloseByYear,
@@ -110,7 +114,8 @@ export async function GET(
       });
       return ok(
         { highlights },
-        { headers: { "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400" } },
+        // KRX 조회 실패면 캐시하지 않는다(잠시 뒤 다시 계산)
+        { headers: { "Cache-Control": capsR.error || krxWarn.length ? "no-store" : "public, s-maxage=3600, stale-while-revalidate=86400" } },
       );
     }
 

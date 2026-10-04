@@ -51,6 +51,10 @@ export interface KrAnalysisInput {
   facts: KrFacts;
   /** KRX 연말·현재 보통주·우선주 시가총액(dart-ev.ts loadKrCaps) */
   caps?: KrCaps | null;
+  /** KRX 시가총액 조회 실패 사유 — 있으면 연도 열 시가총액을 근사하지 않고 공란 + 출처 주석(재감사 14차 ③) */
+  capsError?: string | null;
+  /** 호출부가 모은 조회 실패 경고(KRX 시세·연말 종가 등) — 출처 주석에 싣는다 */
+  warnings?: string[];
   bars: QuoteBar[];
   fyCloseByYear?: Map<number, number>;
   sharesOutstanding: number | null;
@@ -246,10 +250,14 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   // KRX 실측(그날의 실제 상장주식수 × 종가) — 하이라이트와 같은 값. 없을 때만 근사.
   const mktcap = blank();
   const prefMcap = blank();
+  const approxYears: number[] = [];
   for (const y of years) {
     const kx = caps?.byYear.get(y);
     const px = closeOnOrBefore(bars, `${y}-12-31`) ?? fyCloseByYear?.get(y) ?? null;
-    mktcap[`${y}Y`] = kx?.common ?? (input.sharesByYear ? null : px != null && shares != null ? px * shares : null);
+    // KRX 조회 실패면 근사(종가 × 현재 주식수)로 바꾸지 않는다 — 자료 없음일 때만 근사(출처 주석에 표시)
+    const approx = input.sharesByYear || input.capsError ? null : px != null && shares != null ? px * shares : null;
+    if (kx?.common == null && approx != null) approxYears.push(y);
+    mktcap[`${y}Y`] = kx?.common ?? approx;
     prefMcap[`${y}Y`] = kx?.preferred ?? null;
   }
   const curMktcap =
@@ -534,6 +542,9 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     source:
       facts.source +
       " + 시세 · 자체 계산" +
+      (input.warnings?.length ? ` · ⚠ ${input.warnings.join(" · ")}` : "") +
+      (input.capsError ? ` · ⚠ KRX 시가총액 조회 실패(${input.capsError}) — 연도 열 시가총액·EV 공란` : "") +
+      (approxYears.length ? ` · ${approxYears.join("·")} 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사` : "") +
       ` · ${krDaSourceNote(daS, years)}` +
       (ltmFromSnap ? ` · LTM 차입금·현금·PBR 자본: ${snap!.label} 기준` : " · LTM 재무상태표: 최신 분기 스냅샷 없음 — 연말값") +
       (qInfo.mode === "q"

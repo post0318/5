@@ -36,6 +36,9 @@ export interface SixKStatements {
   parents: Map<string, Set<string>>;
   /** 본표 밖 표(주석 — 날짜 머리에 기준일·연말이 있는 표). 본표에 따로 없는 줄(SPOT 리스부채 유동분 — 미지급비용 주석 안)용 */
   bsNotes?: { dates: string[]; rows: SixKRow[] }[];
+  /** 기준일 열 하나뿐인 본표 밖 표(연말 열이 없어 SEC 연말 확인 불가 — SPOT 1년 전 분기 리스부채 주석 "Current 68 Non-current 453").
+   *  같은 표의 다른 줄이 이미 확인된 값과 같을 때만 쓴다(edgar-yahoo-quarters 기준 줄 확인) */
+  bsNotes1?: { dates: string[]; rows: SixKRow[] }[];
   /** 슬라이드 글자 형식 — 줄 이름 앞에 구역 머리말이 붙어 나온다("cash flows from investing activities purchase of …"). 끝이 라벨과 같으면 대응 */
   loose?: boolean;
 }
@@ -227,10 +230,13 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       if (!labels.size) return null;
       // 본표 밖 표 — 머리(앞 2천 자)에 기준일·연말이 둘 다 있는 표의 줄
       const bsNotes: { dates: string[]; rows: SixKRow[] }[] = [];
+      const bsNotes1: { dates: string[]; rows: SixKRow[] }[] = [];
       for (const t of html.match(/<table\b[\s\S]*?<\/table>/gi) ?? []) {
         const plain = decode(t).toLowerCase();
         const ds = headerDates(plain.slice(0, 2_000), [periodEnd, fyEnd, priorEnd]);
-        if (!ds.includes(periodEnd) || !ds.includes(fyEnd)) continue;
+        // 기준일 열 하나뿐인 표(연말 열 없음)는 따로 — 연말 확인을 못 하므로 기준 줄 확인을 거쳐서만 쓴다(bsNotes1)
+        const single = ds.length === 1 && ds[0] === periodEnd;
+        if (!single && (!ds.includes(periodEnd) || !ds.includes(fyEnd))) continue;
         const rows: SixKRow[] = [];
         for (const tr of t.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? []) {
           const cells = (tr.match(/<t[dh]\b[\s\S]*?<\/t[dh]>/gi) ?? []).map(decode).filter((c) => c !== "" && c !== "$");
@@ -239,9 +245,9 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
           const vals = cells.slice(cells.indexOf(label) + 1).map(parseNum).filter((v): v is number => v != null);
           if (vals.length) rows.push({ label: normLabel(label), vals });
         }
-        bsNotes.push({ dates: ds, rows: fix(rows, ds.length, /\bnote\b/i.test(plain.slice(0, 1_500))) });
+        (single ? bsNotes1 : bsNotes).push({ dates: ds, rows: fix(rows, ds.length, /\bnote\b/i.test(plain.slice(0, 1_500))) });
       }
-      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, 2, cf.noteCol), labels, parents, loose: false, bsNotes };
+      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, 2, cf.noteCol), labels, parents, loose: false, bsNotes, bsNotes1 };
     }
   }
   if (errs.length) throw new Error(`6-K 분기 재무제표 조회 실패 — ${errs.join(" · ")}`);

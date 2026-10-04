@@ -27,7 +27,7 @@ import {
   krEv,
   krOpIncomeByYear,
   krParentEquityByYear,
-  loadKrCaps,
+  loadKrCapsChecked,
   type KrCaps,
   type KrEvResolver,
 } from "./kr/dart-ev";
@@ -305,6 +305,8 @@ export async function getConsensusData(
   let kr: {
     ev: KrEvResolver;
     caps: KrCaps | null;
+    /** KRX 시가총액 조회 실패 사유 — 있으면 연도 시가총액을 현재 주식수 근사로 대신하지 않는다 */
+    capsError?: string | null;
     da: Map<number, number>;
     eps: Map<number, number>;
     equity: Map<number, number>;
@@ -319,6 +321,7 @@ export async function getConsensusData(
         kr = {
           ev: buildKrEvResolver(x.facts, x.code),
           caps: x.caps,
+          capsError: x.capsError,
           da: daAndAmortSeries(x.facts, x.daDoc).byYear,
           eps: krEpsByYear(x.facts),
           equity: krParentEquityByYear(x.facts),
@@ -335,15 +338,18 @@ export async function getConsensusData(
   if (market === "kr") {
     try {
       const { corpCode } = resolveCorpCode("", symbol);
-      const [facts, daDoc, caps] = await Promise.all([
+      const [facts, daDoc, capsR] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
         getKrDaDoc(symbol).catch(() => null),
-        loadKrCaps(symbol, years).catch(() => null),
+        loadKrCapsChecked(symbol, years),
       ]);
+      // KRX 시가총액 조회 실패 — 연도 시가총액·EV 를 근사로 대신하지 않고(아래 capsError) 주석에 남긴다
+      if (capsR.error) notes.push(`⚠ ${capsR.error} — 연도 시가총액·EV/EBITDA 공란, 잠시 뒤 다시 계산`);
       if (facts)
         kr = {
           ev: buildKrEvResolver(facts, symbol),
-          caps,
+          caps: capsR.caps,
+          capsError: capsR.error,
           da: daAndAmortSeries(facts, daDoc).byYear,
           eps: krEpsByYear(facts),
           equity: krParentEquityByYear(facts),
@@ -435,7 +441,7 @@ export async function getConsensusData(
     } else if (market === "kr") {
       yePrice =
         kr?.caps?.byYear.get(fy)?.close ??
-        (await fetchKrxCloseOn(symbol, periodEnd.replace(/-/g, "")).catch(() => null));
+        (await fetchKrxCloseOn(symbol, periodEnd.replace(/-/g, "")).catch((e) => { notes.push(`⚠ ${fy} 연말 종가(KRX) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; }));
     } else if (us) {
       // 주식수와 같은 기준의 가격 — Yahoo 가 분할로 기록한 분사 되돌림(edgar-shares.ts secBasisBars)
       yePrice = closeFromBars(secBasisBars(us.facts, quote), periodEnd);
@@ -478,7 +484,7 @@ export async function getConsensusData(
       evEbitda = null;
     } else if (kr) {
       // DART 연결 ADR 은 결산일 유통주식수 기준 시가총액(convertCaps)만 — 없으면 공란(최근 주식수로 대신하지 않음)
-      const common = kr.caps?.byYear.get(fy)?.common ?? (dartAdr ? null : mcap);
+      const common = kr.caps?.byYear.get(fy)?.common ?? (dartAdr || kr.capsError ? null : mcap);
       const ev = krEv(kr.ev, fy, common, kr.caps?.byYear.get(fy)?.preferred ?? null);
       const d = kr.da.get(fy);
       const ebitda = opIncome != null && d != null ? opIncome + d : null;

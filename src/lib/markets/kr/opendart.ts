@@ -21,7 +21,7 @@ import {
 } from "../types";
 import { resolveCorpCode } from "./corpcode";
 import { annualSeries, daAndAmortSeries, fetchKrFacts, seriesOf } from "./dart-facts";
-import { buildKrEvResolver, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCaps } from "./dart-ev";
+import { buildKrEvResolver, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCapsChecked } from "./dart-ev";
 import { krIsFlows } from "./dart-income";
 import { getKrDaDoc } from "@/lib/db/kr-da";
 
@@ -542,13 +542,13 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
   const entry = await resolveCorpCode(key(), symbol);
   try {
     const code = symbol.replace(/\D/g, "").padStart(6, "0").slice(-6);
-    const [ttmRes, facts, quarterFacts, daDoc, caps] = await Promise.all([
+    const [ttmRes, facts, quarterFacts, daDoc, capsR] = await Promise.all([
       getKrTtm(entry.corpCode),
       fetchKrFacts(entry.corpCode, "annual").catch(() => null),
       // LTM 재무상태표(최신 분기말) — 분기 재무제표 화면과 같은 캐시(fetchKrFacts)를 공유
       fetchKrFacts(entry.corpCode, "quarter").catch(() => null),
       getKrDaDoc(code).catch(() => null),
-      loadKrCaps(code, []).catch(() => null),
+      loadKrCapsChecked(code, []),
     ]);
     const lastQuarter = ttmRes?.lastQuarter ?? null;
     const flows: TtmFlows | null = ttmRes
@@ -665,8 +665,9 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
           cash: b?.cash ?? null,
           shares: null,
           evNetDebt: b ? b.debt + b.nci - b.cash : null,
-          evBlocker: ev.blocker(),
-          evPreferredMcap: caps?.current?.preferred ?? 0,
+          // KRX 조회 실패면 우선주 시가총액을 모른다 — 0 으로 두지 않고 EV 를 비운다(사유 = 이 문자열)
+          evBlocker: ev.blocker() ?? (capsR.error ? `${capsR.error} — 우선주 시가총액 모름` : null),
+          evPreferredMcap: capsR.caps?.current?.preferred ?? 0,
           evBridge: b,
         },
       },

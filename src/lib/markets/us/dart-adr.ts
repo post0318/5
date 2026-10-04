@@ -9,7 +9,7 @@ import { fetchStooqEod } from "../quote/stooq";
 import { fetchKrxCloseOn } from "../quote/krx";
 import { resolveCorpCode } from "../kr/corpcode";
 import { daAndAmortSeries, fetchKrDistributedShares, fetchKrDps, fetchKrFacts, type KrDaInput, type KrFactLine, type KrFacts, type KrPeriod } from "../kr/dart-facts";
-import { loadKrCaps, type KrCaps } from "../kr/dart-ev";
+import { loadKrCapsChecked, type KrCaps } from "../kr/dart-ev";
 import { getKrJurirNo, krOpenDartAdapter, loadKrTtmDetail, type KrTtmPart } from "../kr/opendart";
 import { fetchKrAnnualDps } from "../kr/rights-schedule";
 import { buildKrHighlights } from "../kr/dart-highlights";
@@ -414,21 +414,23 @@ async function loadValuationInputs(spec: Spec, yahoo: string | null) {
   ]);
   if (!factsKrw) return null;
   // 회계연도말 종가 — Stooq 커버리지가 부족하면 KRX 로 개별 조회(한국 라우트와 같다)
+  const krxWarn: string[] = [];
   const fyCloseKrw = new Map<number, number>();
   const needYears = factsKrw.periods
     .map((p) => p.year)
     .filter((y) => !barsKrw.some((b) => b.date <= `${y}-12-31` && b.date >= `${y}-11-01` && b.close != null));
   await Promise.all(
     needYears.map(async (y) => {
-      const c = await fetchKrxCloseOn(spec.krCode, `${y}1231`).catch(() => null);
+      const c = await fetchKrxCloseOn(spec.krCode, `${y}1231`).catch((e) => { krxWarn.push(`${y} 연말 종가(KRX) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; });
       if (c != null) fyCloseKrw.set(y, c);
     }),
   );
   const years = factsKrw.periods.map((p) => p.year);
-  const [capsKrw, outstanding] = await Promise.all([
-    loadKrCaps(spec.krCode, years).catch(() => null),
+  const [capsR, outstanding] = await Promise.all([
+    loadKrCapsChecked(spec.krCode, years),
     outstandingByYearEnd(corpCode, years),
   ]);
+  const capsKrw = capsR.caps;
 
   const facts = convertFacts(factsKrw, fx, k);
   const fyCloseByYear = new Map<number, number>();
@@ -461,6 +463,8 @@ async function loadValuationInputs(spec: Spec, yahoo: string | null) {
     fx,
     sharesByYear,
     caps: convertCaps(capsKrw, fx, k, outstanding),
+    capsError: capsR.error,
+    krxWarn,
     bars,
     fyCloseByYear,
     adrShares,
@@ -494,6 +498,8 @@ export async function dartAdrHighlights(spec: Spec, yahoo: string | null): Promi
   const hl = buildKrHighlights({
     code: spec.krCode,
     caps: x.caps,
+    capsError: x.capsError,
+    warnings: x.krxWarn,
     facts: x.facts,
     bars: x.bars,
     fyCloseByYear: x.fyCloseByYear,
@@ -554,6 +560,8 @@ export async function dartAdrAnalysis(spec: Spec, yahoo: string | null): Promise
   const st = buildKrAnalysis({
     code: spec.krCode,
     caps: x.caps,
+    capsError: x.capsError,
+    warnings: x.krxWarn,
     facts: x.facts,
     bars: x.bars,
     fyCloseByYear: x.fyCloseByYear,
@@ -575,10 +583,10 @@ export async function dartAdrAnalysis(spec: Spec, yahoo: string | null): Promise
 export async function dartAdrConsensusInputs(spec: Spec, years: number[]) {
   const { corpCode } = resolveCorpCode("", spec.krCode);
   const k = spec.sharesPerAdr;
-  const [factsKrw, daDoc, capsKrw, fx, outstanding] = await Promise.all([
+  const [factsKrw, daDoc, capsR, fx, outstanding] = await Promise.all([
     fetchKrFacts(corpCode, "annual"),
     getKrDaDoc(spec.krCode).catch(() => null),
-    loadKrCaps(spec.krCode, years).catch(() => null),
+    loadKrCapsChecked(spec.krCode, years),
     krwFx(),
     // BPS 분모·연말 시가총액 — 각 사업연도말 자사주 제외 유통주식수
     outstandingByYearEnd(corpCode, years),
@@ -590,7 +598,8 @@ export async function dartAdrConsensusInputs(spec: Spec, years: number[]) {
     code: spec.krCode,
     facts: convertFacts(factsKrw, fx, k),
     daDoc: convertDaDoc(daDoc, fx, factsKrw),
-    caps: convertCaps(capsKrw, fx, k, outstanding),
+    caps: convertCaps(capsR.caps, fx, k, outstanding),
+    capsError: capsR.error,
     bookShares,
   };
 }

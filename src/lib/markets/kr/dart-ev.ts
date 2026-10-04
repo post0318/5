@@ -366,6 +366,18 @@ export async function loadKrCaps(code: string, years: number[]): Promise<KrCaps>
   };
 }
 
+/**
+ * loadKrCaps + 조회 실패 사유 — 호출부가 실패를 경고·공란 사유로 남기게(재감사 14차 ③ — 예전엔 호출부 6곳이 실패를 null 로 삼켜
+ * 연도 시가총액이 "종가 × 현재 주식수" 근사·우선주 0 으로 표시 없이 바뀌었다)
+ */
+export async function loadKrCapsChecked(code: string, years: number[]): Promise<{ caps: KrCaps | null; error: string | null }> {
+  try {
+    return { caps: await loadKrCaps(code, years), error: null };
+  } catch (e) {
+    return { caps: null, error: `KRX 시가총액 조회 실패 — ${e instanceof Error ? e.message : String(e)}`.slice(0, 200) };
+  }
+}
+
 // ── 지배주주 자본 (PBR 분모) ──────────────────────────────────────────
 
 /**

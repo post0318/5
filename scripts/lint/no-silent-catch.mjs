@@ -21,6 +21,8 @@ const TARGETS = [
   { dir: "src/lib/markets/us", re: /^edgar.*\.ts$/, deep: false },
   { dir: "src/lib/markets/kr", re: /^dart.*\.ts$/, deep: false },
   { dir: "src/app/api/cron/verify-row", re: /\.ts$/, deep: true },
+  // 한국 시가총액(KRX) 경로와 그 호출부(재감사 14차 ③ — fetchKrxCapsOn 이 조회 오류를 삼켜 loadKrCaps 수정이 무효였다)
+  { dir: "src/lib/markets/quote", re: /^krx\.ts$/, deep: false },
 ];
 function files() {
   const out = [];
@@ -41,7 +43,30 @@ const RE_CATCH_ARROW = new RegExp(String.raw`\.catch\(\s*${ARROW}${SILENT_VAL}\s
 // catch 블록: 비었거나 주석만, 또는 빈 값·변수 하나를 돌려주는 return 하나(주석 허용) — 함수 호출을 돌려주는 return(jsonError(e) 등)은 대상 아님
 const RE_CATCH_BLOCK = new RegExp(String.raw`\bcatch\s*(?:\(\s*[\w$]*\s*(?::\s*\w+)?\s*\))?\s*\{((?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*(?:return(?:\s+(?:${SILENT_VAL}|[\w$]+))?\s*;?)?(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*)\}`, "g");
 
+// 호출부 규칙 — 대상 함수(한국 시가총액·시세 KRX 경로)의 실패를 삼키는 호출은 파일 위치와 관계없이 src 전체에서 금지(재감사 14차 ③)
+const CALLEE = /(?:loadKrCaps|fetchKrxCapsOn|fetchKrxCloseOn|fetchKrxEod)\(/g;
+function srcFiles() {
+  const out = [];
+  const walk = (d) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else if (/\.tsx?$/.test(n)) out.push(p); } };
+  walk(join(ROOT, "src"));
+  return out;
+}
 const bad = [];
+for (const f of srcFiles()) {
+  const src = readFileSync(f, "utf8");
+  const lines = src.split("\n");
+  for (const m of src.matchAll(CALLEE)) {
+    // 호출 괄호 끝을 찾아 바로 뒤 .catch(빈 값) 인지
+    let depth = 0, i = m.index + m[0].length - 1;
+    for (; i < src.length; i++) { if (src[i] === "(") depth++; else if (src[i] === ")" && --depth === 0) break; }
+    const tail = src.slice(i + 1, i + 200);
+    const mm = new RegExp(String.raw`^\s*\.catch\(\s*${ARROW}${SILENT_VAL}\s*\)`).exec(tail);
+    if (!mm) continue;
+    const ln = src.slice(0, i).split("\n").length;
+    if (/\/\/\s*silent-ok:\s*\S/.test(lines[ln - 1] ?? "") || /\/\/\s*silent-ok:\s*\S/.test(lines[ln - 2] ?? "")) continue;
+    bad.push(`${relative(ROOT, f).split("\\").join("/")}:${ln}  ${m[0]}… ${mm[0].trim()} (KRX 경로 호출부)`);
+  }
+}
 for (const f of files()) {
   const src = readFileSync(f, "utf8");
   const lines = src.split("\n");

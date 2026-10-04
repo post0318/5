@@ -68,9 +68,11 @@ async function loadDay(basDd: string): Promise<Map<string, KrxRow>> {
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const isPast = basDd !== today;
 
+  // 조회 실패는 던진다(재감사 14차 ③) — 빈 목록으로 삼키면 휴장일과 구분되지 않아 과거 날짜가 "빈 날"로 영구 캐시되고,
+  // 연말 시가총액·EV 가 사유 없이 빠지거나 근사로 바뀌었다
   const [kospi, kosdaq] = await Promise.all([
-    fetchService("stk_bydd_trd", basDd, isPast).catch(() => [] as KrxRow[]),
-    fetchService("ksq_bydd_trd", basDd, isPast).catch(() => [] as KrxRow[]),
+    fetchService("stk_bydd_trd", basDd, isPast),
+    fetchService("ksq_bydd_trd", basDd, isPast),
   ]);
   const map = new Map<string, KrxRow>();
   for (const r of [...kospi, ...kosdaq]) {
@@ -137,13 +139,12 @@ export async function fetchKrxCloseOn(code: string, dateYmd: string): Promise<nu
     const basDd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(
       d.getDate(),
     ).padStart(2, "0")}`;
-    try {
+    {
+      // 조회 실패는 던진다 — 자료 없음(휴장)만 다음 날짜로
       const day = await getDay(basDd);
       const r = day.get(short);
       const c = r ? num(r.TDD_CLSPRC) : null;
       if (c != null) return c;
-    } catch {
-      // 다음 날짜 시도
     }
     d.setDate(d.getDate() - 1);
   }
@@ -182,7 +183,8 @@ export async function fetchKrxCapsOn(
     const basDd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(
       d.getDate(),
     ).padStart(2, "0")}`;
-    try {
+    {
+      // 조회 실패는 던진다 — 자료 없음(휴장·상장 전)만 다음 날짜로(재감사 14차 ③)
       const day = await getDay(basDd);
       const common = day.get(short);
       if (common) {
@@ -207,8 +209,6 @@ export async function fetchKrxCapsOn(
           preferredIssues: issues,
         };
       }
-    } catch {
-      // 다음 날짜 시도
     }
     d.setDate(d.getDate() - 1);
   }
@@ -235,12 +235,9 @@ export async function fetchKrxEod(code: string, days = 10): Promise<KrxQuoteResu
   const workers = Array.from({ length: 5 }, async () => {
     while (cursor < ordered.length) {
       const basDd = ordered[cursor++];
-      try {
-        const day = await getDay(basDd);
-        rowsByDate.set(basDd, day.get(short));
-      } catch {
-        rowsByDate.set(basDd, undefined);
-      }
+      // 날짜 하나라도 조회 실패면 던진다(호출자 시세 오케스트레이터가 다른 원천으로 + 경고) — 삼키면 최신 날짜가 빠진 채 옛 종가가 "최신"이 됐다
+      const day = await getDay(basDd);
+      rowsByDate.set(basDd, day.get(short));
     }
   });
   await Promise.all(workers);

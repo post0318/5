@@ -21,7 +21,7 @@ function ltmItems(facts: CompanyFacts) {
   const fy: Record<string, { v: number; k: "bs" | "cf" }> = {};
   // fetchWarnings — 재무 조립 중 조회 실패(6-K 포함) 경고. 검증기가 "조회 실패"를 오류로 잡는다(재감사 12차 ③)
   const fetchWarnings = facts.fetchWarnings ?? [];
-  if (!through || !E) return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: null, sixKMiss: yl?.sixKMiss ?? null, fetchWarnings, through: null, E: null };
+  if (!through || !E) return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: null, sixKMiss: yl?.sixKMiss ?? null, sixKPrevMiss: yl?.sixKPrevMiss ?? null, fetchWarnings, through: null, E: null };
   const yearAgo = (() => { const x = new Date(`${through}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); })();
   const anchor = ltmAnchor(facts);
   const dd = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
@@ -51,7 +51,7 @@ function ltmItems(facts: CompanyFacts) {
       else if (hasFy && (isCfConcept(c) || flowSpecOf(c))) gaps.push({ concept: c, kind: "cf", at: through, ids: sourceIdsAt(facts, c, "cf", E), reason: r.reason, flow: flowSpecOf(c), cf: isCfConcept(c) });
     }
   }
-  return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: yl?.sixKSource ?? null, sixKMiss: yl?.sixKMiss ?? null, fetchWarnings, through, E };
+  return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: yl?.sixKSource ?? null, sixKMiss: yl?.sixKMiss ?? null, sixKPrevMiss: yl?.sixKPrevMiss ?? null, fetchWarnings, through, E };
 }
 
 /**

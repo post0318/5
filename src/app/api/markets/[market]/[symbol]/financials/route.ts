@@ -27,7 +27,7 @@ import { fetchStooqEod } from "@/lib/markets/quote/stooq";
 import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { getKrDaDoc } from "@/lib/db/kr-da";
 import { usSharesHint } from "@/lib/markets/us/shares-hint";
-import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
+import { loadKrCapsChecked } from "@/lib/markets/kr/dart-ev";
 import { dartAdrAnalysis, dartAdrDetail, dartAdrOf } from "@/lib/markets/us/dart-adr";
 
 export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
@@ -82,9 +82,11 @@ export async function GET(
       const { corpCode } = resolveCorpCode("", sym);
 
       if (detailView === "analysis") {
+        const krxWarn: string[] = [];
         const [facts, krx, bars, ttm, daDoc, live, quarterFacts] = await Promise.all([
           fetchKrFacts(corpCode, "annual"),
-          fetchKrxEod(sym).catch(() => null),
+          // KRX 일별 시세 조회 실패 — 경고로 남긴다(현재가·시가총액은 공통 시세 함수 우선, KRX 는 상장주식수 등 보조)
+        fetchKrxEod(sym).catch((e) => { krxWarn.push(`KRX 일별 시세 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; }),
           fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
           adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
           getKrDaDoc(sym).catch(() => null),
@@ -100,14 +102,16 @@ export async function GET(
           .filter((y) => !bars.some((b) => b.date <= `${y}-12-31` && b.date >= `${y}-11-01` && b.close != null));
         await Promise.all(
           needYears.map(async (y) => {
-            const c = await fetchKrxCloseOn(sym, `${y}1231`).catch(() => null);
+            const c = await fetchKrxCloseOn(sym, `${y}1231`).catch((e) => { krxWarn.push(`${y} 연말 종가(KRX) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; });
             if (c != null) fyCloseByYear.set(y, c);
           }),
         );
-        const caps = await loadKrCaps(sym, facts.periods.map((p) => p.year)).catch(() => null);
+        const capsR = await loadKrCapsChecked(sym, facts.periods.map((p) => p.year));
         const stmt = buildKrAnalysis({
           code: sym,
-          caps,
+          caps: capsR.caps,
+          capsError: capsR.error,
+          warnings: krxWarn,
           facts,
           bars,
           fyCloseByYear,

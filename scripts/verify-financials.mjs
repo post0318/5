@@ -6096,7 +6096,9 @@ async function verifyUs(sym) {
       })().catch((e) => ({ status: FAIL, note: `재계산 오류 ${String(e).slice(0, 80)}` }));
       add("A", nm, "LTM", res);
     }
-    det.sort((a, b) => (a.kind === "derived") - (b.kind === "derived"));
+    // 기준 줄 확인형(bsNote1)은 기준 줄(다른 6-K 항목)의 기대값이 먼저 있어야 한다 — 합성 개념과 함께 뒤로
+    const detRank = (k) => (k === "derived" ? 2 : k === "bsNote1" ? 1 : 0);
+    det.sort((a, b) => detRank(a.kind) - detRank(b.kind));
     /** 6-K 기록 하나의 기대값 — { exp, how } 또는 판정 행(실패·검증불가) */
     const sixKExp = async (d) => {
       try {
@@ -6113,7 +6115,8 @@ async function verifyUs(sym) {
           const kd = d.kind === "cf" || d.kind === "cfZero" ? "cf" : "bs";
           const cands = DA_SIBLINGS.includes(d.concept) ? DA_SIBLINGS : [d.concept];
           const wants = [];
-          for (const c of cands) { const w = await secIdsOf(c, kd, d.fyEnd, d.kind === "bsDelta"); if (w.length) wants.push(w); }
+          // bsNote1 은 앱이 최근 사업연도말(E) 기준 원 개념을 쓴다(srcIdsOf) — 그 날짜로 대응
+          for (const c of cands) { const w = await secIdsOf(c, kd, d.kind === "bsNote1" ? row.ltm.E : d.fyEnd, d.kind === "bsDelta"); if (w.length) wants.push(w); }
           if (!wants.some((w) => idsKey(w) === idsKey(d.ids)))
             return { status: FAIL, note: `앱 6-K 원 개념 ${idsTxt(d.ids)} ≠ 검증기 대응 ${wants.map(idsTxt).join(" / ") || "없음"}(${shortId(d.concept)})` };
         }
@@ -6182,6 +6185,28 @@ async function verifyUs(sym) {
         // 재무상태표
         const rAt = fxEndRate(fxRows, d.at);
         if (rAt == null) return { status: FAIL, note: "기말 환율 없음" };
+        // 기준일 열 하나뿐인 주석 표(bsNote1, 재감사 14차 ②) — 연말 확인 대신 같은 표의 기준 줄이 검증기 기대값(기준 개념의 그 날짜 값)과 같아야 한다.
+        //   표 = 대상 줄과 기준 줄이 2천 자 안에 함께 있는 곳, 두 줄 모두 숫자 하나. 하이픈으로 앞 단어가 붙은 줄("non-current")은 같은 라벨로 보지 않는다
+        if (d.kind === "bsNote1") {
+          if (d.ids.length !== 1 || !d.anchor?.concept || d.anchor.ids?.length !== 1) return { status: FAIL, note: "기준 줄 확인형 기록 형식 오류(원 개념·기준 줄 하나씩)" };
+          const aw = await secIdsOf(d.anchor.concept, "bs", d.fyEnd);
+          if (idsKey(aw) !== idsKey(d.anchor.ids)) return { status: FAIL, note: `기준 줄 원 개념 앱 ${idsTxt(d.anchor.ids)} ≠ 검증기 ${idsTxt(aw)}` };
+          const aExp = expOf.get(`${d.anchor.concept}|${d.at}`);
+          if (aExp == null) return { status: FAIL, note: `기준 줄 ${shortId(d.anchor.concept)} @${d.at} 검증기 기대값 없음` };
+          const aOrig = aExp / rAt;
+          const solo = (r) => r.nums.length === 1 && text[r.i] !== "-";
+          const rowsT = sixKRows(text, await labsOf(f, d.ids[0].id)).filter(solo);
+          const rowsA = sixKRows(text, await labsOf(f, d.anchor.ids[0].id)).filter(solo);
+          const vals = new Set();
+          for (const rt of rowsT) {
+            const u0 = sixKUnitAt(text, rt.i);
+            if (!u0) continue;
+            if (rowsA.some((ra) => ra.i !== rt.i && Math.abs(ra.i - rt.i) < 2_000 && Math.abs(ra.nums[0] * u0 * d.anchor.ids[0].sign - aOrig) < 0.5 * u0)) vals.add(rt.nums[0] * u0);
+          }
+          if (vals.size !== 1) return { status: FAIL, note: `주석 표(기준 줄 ${shortId(d.anchor.concept)} ${aOrig}) 안 "${shortId(d.ids[0].id)}" 줄 ${vals.size ? `${vals.size}개 후보로 모호` : "못 찾음"}(${d.report})`, absent: !vals.size };
+          const v0 = [...vals][0] * d.ids[0].sign;
+          return { exp: v0 * rAt, how: `6-K 주석 표 "${shortId(d.ids[0].id)}" ${d.at} ${v0}(같은 표 기준 줄 ${shortId(d.anchor.concept)} = 검증기 기대값 ${aOrig}) · ${natCur} × 기말 H.10 ${d.at}` };
+        }
         const hds = sixKBsHeaders(text);
         const cfHeads = [...text.matchAll(/months ended/g)].map((m) => m.index);
         let tot = 0;
@@ -6238,6 +6263,28 @@ async function verifyUs(sym) {
       add("A", `20-F LTM 6-K ${d.kind} ${shortId(d.concept)} @${d.at}`, "LTM", r.exp != null ? vsSource(d.usd, r.exp, EXACT, r.how) : r);
     }
     // 완결성(재감사 P5) — 앱이 비운 LTM(사업연도 값 있음)을 검증기가 6-K 에서 찾으면 실패(채울 수 있었음). 6-K 에도 없거나 판정 불가면 공란 정당
+    /** 1년 전 분기 6-K 보고서("6-K 접수번호 문서") — 분기말 at 뒤 120일 안 6-K(최대 8건) 중 큰 문서부터, 재무상태표 머리에 at·prevE 가 함께 있는 첫 문서 */
+    const prevRep = new Map();
+    const prevSixKReport = async (at, prevE) => {
+      const k = `${at}|${prevE}`;
+      if (prevRep.has(k)) return prevRep.get(k);
+      const rc = sub.filings?.recent ?? {};
+      const hi = new Date(Date.parse(at) + 120 * 864e5).toISOString().slice(0, 10);
+      let out = { report: null, why: `${at} 뒤 120일 안 6-K 없음` };
+      const cands = [];
+      for (let i = 0; i < (rc.form ?? []).length && cands.length < 8; i++) if (rc.form[i] === "6-K" && rc.filingDate[i] > at && rc.filingDate[i] <= hi) cands.push(rc.accessionNumber[i]);
+      outer: for (const accn of cands) {
+        out = { report: null, why: `6-K ${cands.length}건에 ${at}·${prevE} 재무상태표 없음` };
+        const items0 = (await secJson(`https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}/index.json`)).directory.item;
+        for (const d0 of items0.filter((x) => /\.htm$/i.test(x.name) && !/-index/i.test(x.name) && Number(x.size) > 15_000).sort((a, b) => Number(b.size) - Number(a.size)).slice(0, 6)) {
+          const rep = `6-K ${accn} ${d0.name}`;
+          const t0 = await sixKDocText(cik, rep);
+          if (t0 && sixKBsHeaders(t0).some((h) => h.dates.includes(at) && h.dates.includes(prevE))) { out = { report: rep, why: null }; break outer; }
+        }
+      }
+      prevRep.set(k, out);
+      return out;
+    };
     let gapOk = 0;
     const gapNa = [];
     // 앱 6-K 조회 실패 경고(verify-row fetchWarnings) — 공란 판정에서 "줄 없음"으로 보지 않는다
@@ -6278,8 +6325,28 @@ async function verifyUs(sym) {
           const r1 = await sixKExp({ concept: g.concept, kind: "bs", at: g.at, ids: idsW, report: cur.detail.report, fyEnd: cur.detail.fyEnd ?? E0, usd: null });
           if (r1.exp != null) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란인데 6-K(${cur.detail.report})에 값 ${r1.exp} — 채울 수 있음` }); continue; }
           if (!r1.absent) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 6-K 판정 불가: ${r1.note}` }); continue; }
+          // 이번 보고서에 없으면 1년 전 분기 6-K(검증기가 앱과 같은 규칙 — 분기말 뒤 120일 안 6-K 중 재무상태표 머리에 그 분기말·전년 사업연도말이
+          // 있는 문서 — 로 직접 찾음, 재감사 14차 ①). 못 찾으면 실패, 찾으면 본표(연말 확인)·주석 표(기준 줄 확인) 두 규칙으로 판정
+          const prevE0 = new Date(Date.UTC(Number(E0.slice(0, 4)) - 1, Number(E0.slice(5, 7)), 0)).toISOString().slice(0, 10);
+          let pr;
+          try { pr = await prevSixKReport(g.at, prevE0); }
+          catch (e) { hardErrors.push(`1년 전 분기 6-K 조회 실패: ${String(e).slice(0, 80)}`); add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 1년 전 분기 6-K 조회 실패로 판정 불가` }); continue; }
+          if (!pr.report) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 검증기도 1년 전 분기 6-K 를 못 찾음(${pr.why})${row?.ltm?.sixKPrevMiss ? ` · 앱 사유: ${row.ltm.sixKPrevMiss}` : ""} — 판정 불가` }); continue; }
+          const idsP = await secIdsOf(g.concept, "bs", prevE0);
+          const r2 = await sixKExp({ concept: g.concept, kind: "bs", at: g.at, ids: idsP, report: pr.report, fyEnd: prevE0, usd: null });
+          if (r2.exp != null) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란인데 1년 전 6-K(${pr.report})에 값 ${r2.exp} — 채울 수 있음${row?.ltm?.sixKPrevMiss ? ` · 앱 사유: ${row.ltm.sixKPrevMiss}` : ""}` }); continue; }
+          if (!r2.absent) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 1년 전 6-K 판정 불가: ${r2.note}` }); continue; }
+          // 주석 표(기준일 열 하나) — 그 날짜 6-K 로 채운 다른 개념을 기준 줄로
+          let noteHit = null;
+          for (const a0 of items.filter((x) => x.at === g.at && x.src?.via === "sixK" && x.concept !== g.concept && expOf.has(`${x.concept}|${g.at}`))) {
+            const r3 = await sixKExp({ concept: g.concept, kind: "bsNote1", at: g.at, ids: idsW, report: pr.report, fyEnd: prevE0, usd: null, anchor: { concept: a0.concept, ids: await secIdsOf(a0.concept, "bs", prevE0) } });
+            if (r3.exp != null) { noteHit = { r3, a0 }; break; }
+          }
+          if (noteHit) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란인데 1년 전 6-K 주석 표에 값 ${noteHit.r3.exp} — 채울 수 있음 · ${noteHit.r3.how}` }); continue; }
+          gapOk++;
+          continue;
         }
-        add("A", gname, "LTM", { status: NA, note: `앱 1년 전 분기말 공란 — 기준일 출처 ${cur?.via ?? "없음"}, 야후·이번 6-K 에 값 없음(1년 전 6-K 보고서는 검증기 미대조)` });
+        add("A", gname, "LTM", { status: NA, note: `앱 1년 전 분기말 공란 — 기준일 출처 ${cur?.via ?? "없음"}, 야후에 1년 전 값 없음` });
         continue;
       }
       // ① 야후로 채울 수 있었는가(앱 규칙: 야후 최근 4개 분기가 다 있고 야후 연간이 SEC 사업연도와 5% 안이면 채운다 — 검증기 고정 필드·부호·원 개념으로)

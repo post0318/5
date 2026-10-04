@@ -54,7 +54,7 @@ export type LtmSrc =
 
 export interface SixKDetail {
   concept: string;
-  kind: "cf" | "cfZero" | "bs" | "bsZero" | "bsDelta" | "derived";
+  kind: "cf" | "cfZero" | "bs" | "bsZero" | "bsDelta" | "derived" | "bsNote1";
   at: string;
   usd: number;
   ids: { id: string; sign: 1 | -1 }[];
@@ -62,6 +62,8 @@ export interface SixKDetail {
   fyEnd: string;
   fyStart?: string;
   parts?: string[];
+  /** bsNote1 — 같은 주석 표에서 값이 확인된 기준 줄(이미 6-K 본표·연말 확인으로 채운 개념과 그 원 개념) */
+  anchor?: { concept: string; ids: { id: string; sign: 1 | -1 }[] };
 }
 
 export type YahooLtmResult =
@@ -84,6 +86,8 @@ export type YahooLtmResult =
       sixKSource?: string;
       /** 6-K 경로를 시도했으나 보고서를 못 찾은 사유(조회 실패는 fetchWarnings) — 검증 전용 */
       sixKMiss?: string;
+      /** 1년 전 분기 6-K 를 찾아야 했으나 못 찾은 사유 — 검증 전용 */
+      sixKPrevMiss?: string;
       /** LTM EV·순차입금을 같은 기준일로 계산할 수 있는지 */
       evComplete: boolean;
       evReason: string | null;
@@ -535,9 +539,12 @@ export function withYahooLtm(
     out[c] = { ...(out[c] ?? {}), units: { ...(out[c]?.units ?? {}), USD: arr } };
   };
   /** 재무상태표 값 넣기 + 기록(검증 전용) */
-  const putBs = (c: string, d: string, usdV: number, kind: SixKDetail["kind"], ids: SixKDetail["ids"], report: string, fyEnd: string, parts?: string[]) => {
+  /** 1년 전 분기 6-K(sixKPrev)에서 연말 확인을 거쳐 채운 1년 전 분기말 값(원통화) — 기준일 열 하나뿐인 주석 표의 기준 줄 확인용 */
+  const prevOrig = new Map<string, { ids: SixKDetail["ids"]; orig: number }>();
+  const putBs = (c: string, d: string, usdV: number, kind: SixKDetail["kind"], ids: SixKDetail["ids"], report: string, fyEnd: string, parts?: string[], anchor?: SixKDetail["anchor"]) => {
     if (!Number.isFinite(usdV)) return; // 주석 표에 그 날짜 열이 없음(값 없음)
-    const det: SixKDetail = { concept: c, kind, at: d, usd: usdV, ids, report, fyEnd, ...(parts ? { parts } : {}) };
+    if (kind === "bs" && d === yearAgo && sixKPrev && report === sixKPrev.source && yearAgoRate) prevOrig.set(c, { ids, orig: usdV / yearAgoRate });
+    const det: SixKDetail = { concept: c, kind, at: d, usd: usdV, ids, report, fyEnd, ...(parts ? { parts } : {}), ...(anchor ? { anchor } : {}) };
     put(c, d, usdV, { via: "sixK", detail: det });
     sixKDetail.push(det);
   };
@@ -650,6 +657,42 @@ export function withYahooLtm(
           }
         }
         if (v != null && det) putBs(c, yearAgo, v * yearAgoRate, det.kind, det.ids, det.report, det.fyEnd);
+      }
+      // 아직 1년 전 값이 없는 줄 — 1년 전 분기 6-K 의 기준일 열 하나뿐인 주석 표(연말 열이 없어 연말 확인 불가). 같은 표의 다른 줄이 이미
+      // 연말 확인으로 채운 값과 정확히 같을 때만(기준 줄 확인) 그 표의 줄을 쓴다(SPOT 2025-06-30 리스부채 유동 68 — 같은 표 "Non-current 453" =
+      // 본표 비유동 리스부채, 재감사 14차 ②). 원 개념 하나·라벨 하나로 정확히 한 줄일 때만
+      if (sixKPrev?.bsNotes1?.length) {
+        for (const c of Object.keys(out)) {
+          const arr = out[c]?.units?.USD ?? [];
+          if (/Derived$/.test(c) || on(c, E) == null || !arr.some((e) => !e.start && e.end === last) || arr.some((e) => !e.start && e.end === yearAgo)) continue;
+          const ids = srcIdsOf(c, "bs");
+          if (ids.length !== 1) continue;
+          const el = ids[0].id.replace(/^[a-z-]+_/, "");
+          const ls = sixKPrev.labels.get(el);
+          if (!ls) continue;
+          const hits: { v: number; anchor: SixKDetail["anchor"] }[] = [];
+          for (const t of sixKPrev.bsNotes1) {
+            const rows = t.rows.filter((r) => ls.pos.has(r.label) !== ls.neg.has(r.label));
+            if (rows.length !== 1) continue;
+            const anchorOf = () => {
+              for (const ra of t.rows) {
+                if (ra === rows[0]) continue;
+                for (const [d2, po] of prevOrig) {
+                  if (d2 === c || po.ids.length !== 1) continue;
+                  const l2 = sixKPrev.labels.get(po.ids[0].id.replace(/^[a-z-]+_/, ""));
+                  if (!l2?.pos.has(ra.label)) continue;
+                  if (Math.abs(ra.vals[0] * sixKPrev.unit * po.ids[0].sign - po.orig) < 0.5 * sixKPrev.unit) return { concept: d2, ids: po.ids };
+                }
+              }
+              return null;
+            };
+            const anchor = anchorOf();
+            if (anchor) hits.push({ v: rows[0].vals[0] * sixKPrev.unit * (ls.neg.has(rows[0].label) ? -1 : 1) * ids[0].sign, anchor });
+          }
+          if (new Set(hits.map((h) => h.v)).size !== 1) continue;
+          putBs(c, yearAgo, hits[0].v * yearAgoRate, "bsNote1", ids, sixKPrev.source, prevE, undefined, hits[0].anchor);
+          sixKFilled.push({ label: `${INSTANTS.find((x) => x.concepts.includes(c))?.label ?? c} 1년 전 분기말(주석 표 — 기준 줄 ${hits[0].anchor!.concept} 확인)`, reason: `${sixKPrev.source} · ${c}` });
+        }
       }
     }
     // 본표 판독 합성 개념(…FaceDerived — edgar-bs-structure)은 라벨이 없다. 연말 값이 6-K 로 채운 개념 하나와 정확히 같으면(0 제외) 같은 본표 줄로 보고
