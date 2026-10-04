@@ -12,5 +12,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          curl -sf --max-time 300 -X GET "https://macroresearch.vercel.app/api/cron/kr-fg?overview=1" \
+          curl -sf --max-time 300 -X GET "${{ vars.APP_URL }}/api/cron/kr-fg?overview=1" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"

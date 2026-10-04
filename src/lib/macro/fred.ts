@@ -367,7 +367,7 @@ export async function getSeriesLongTermMean(
   try {
     const csv = await fetchText(
       `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}&cosd=${since}`,
-      { headers: { "user-agent": "Mozilla/5.0", accept: "text/csv" }, revalidate: 60 * 60 * 24 },
+      { headers: { "user-agent": "Mozilla/5.0", accept: "text/csv" }, revalidate: 60 * 60 * 12 } /* 일별 이상 데이터 캐시는 12시간으로 통일(오너 결정 2026-10-03) */,
     );
     const lines = csv.trim().split(/\r?\n/);
     const vals: number[] = [];

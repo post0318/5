@@ -27,6 +27,7 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -53,7 +54,7 @@ const LIST_URL = "https://www.sangsanginib.com/notice/getNoticeList";
 const CMS_CD = "CM0079"; // 기업리포트
 const BOARD_LABEL = "상상인증권 > 리서치 > 기업리포트(CM0079)"; // item 의 board 필드(분류 대조용)
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기

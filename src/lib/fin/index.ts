@@ -26,6 +26,7 @@ export { gapNames } from "./types";
 export { COGS_NOTE, FIN_TYPES } from "./metrics/cogs";
 export { OPINC_NOTE } from "./metrics/opinc";
 export { SGA_NOTE } from "./metrics/sga";
+export { ENGINE_VERSION } from "./store"; // 재무 엔진판 — TTM 저장본 판번호(db/ttm-snap.ts)가 쓴다
 
 export interface AssembleOpts {
   persist?: boolean;

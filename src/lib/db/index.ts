@@ -26,7 +26,14 @@ async function getClient(): Promise<MongoClient> {
       serverSelectionTimeoutMS: 8000,
     }).connect();
   }
-  cached.client = await cached.promise;
+  try {
+    cached.client = await cached.promise;
+  } catch (err) {
+    // 실패한 연결 약속을 남겨 두면 인스턴스가 살아 있는 내내 모든 요청이 즉시 같은 오류를 낸다
+    // (2026-10-04 실측 — Cloud Run 이 첫 접속 한 번 실패 뒤 DB 화면 전부 500). 다음 요청에서 다시 접속한다.
+    cached.promise = null;
+    throw err;
+  }
   return cached.client;
 }
 

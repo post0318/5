@@ -5,10 +5,13 @@ name: 한국IR협의회 리포트 수집
 # robots.txt 는 Yeti 그룹만 있고 일반 UA 제한 없음. PDF 원문은 저장하지 않고
 # 1쪽 요약 앞부분 발췌·링크만 보낸다("무단 복제 및 배포할 수 없습니다" 문구).
 
+# 2026-10-03 예약 중단(오너 결정 — 한경 컨센서스 경유로 대체): KIRS 가 해외 IP 를 막아 메인 서버(오라클 일본)에서 못 받는다.
+# 수동 실행(한국 IP 환경)만 남긴다.
 on:
-  schedule:
-    - cron: "18 23 * * *" # 23:18 UTC = 08:18 KST
   workflow_dispatch: {}
+
+env:
+  APP_URL: ${{ vars.APP_URL }} # 자동 작업이 부르는 메인 서버(scripts/lib/app-url.mjs)
 
 jobs:
   collect:

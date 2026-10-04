@@ -25,7 +25,7 @@
  *   node scripts/collect-hana-research.mjs --dry-run   # 전송 안 하고 파싱 결과만
  *
  * ── 설정 (.env.local, 선택) ─────────────────────────────────────────
- *   SHINHAN_RESEARCH_IMPORT_URL="https://macroresearch.vercel.app/api/cron/total-research"
+ *   SHINHAN_RESEARCH_IMPORT_URL="https://macro-insights.duckdns.org/api/cron/total-research"
  *   CRON_SECRET="앱에 설정한 값이 있으면"
  * (신한 수집기와 같은 수신 라우트를 재사용 — source 로 구분됨)
  */
@@ -34,6 +34,7 @@ import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { marketFromLabel, marketFromTitleLead } from "./lib/overseas-market.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -55,7 +56,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기

@@ -2,8 +2,6 @@ import "server-only";
 import type { MarketId } from "@/lib/markets/types";
 import { listUniverse } from "@/lib/universe/repo";
 import { fetchStockNews as fetchCredibleStockNews } from "@/lib/markets/news";
-import { findUniverseNewsDuplicates } from "@/lib/llm/claude";
-import { isBudgetExceeded, incUsage } from "@/lib/db/llm-usage";
 
 export interface NewsItem {
   titleKo: string;
@@ -85,32 +83,35 @@ export async function fetchUniverseNews(
     return true;
   });
 
-  return dedupeUniverseNewsWithLlm(linkDeduped);
+  return dedupeUniverseNewsByTitle(linkDeduped);
 }
 
-/** LLM로 같은 사건 중복을 묶어 대표 1건만 남긴다. 키 미설정·예산초과·호출
- * 실패 시 조용히 원본 그대로 반환(뉴스 기능 자체가 죽지 않게 — 다른 LLM
- * 폴백들과 동일 원칙). */
-async function dedupeUniverseNewsWithLlm(items: NewsItem[]): Promise<NewsItem[]> {
-  if (items.length < 2 || !process.env.ANTHROPIC_API_KEY) return items;
-  try {
-    if (await isBudgetExceeded()) return items;
-    const candidates = items.map((it, i) => ({
-      id: String(i),
-      title: it.titleKo,
-      stockName: it.name,
-    }));
-    const { duplicateGroups, costUsd } = await findUniverseNewsDuplicates(candidates);
-    await incUsage(costUsd);
-    if (duplicateGroups.length === 0) return items;
-    const drop = new Set<number>();
-    for (const group of duplicateGroups) {
-      const indices = group.map(Number).sort((a, b) => a - b);
-      for (const idx of indices.slice(1)) drop.add(idx); // 그룹 내 첫 항목(유니버스 순서상 앞선 것)만 남김
-    }
-    return items.filter((_, i) => !drop.has(i));
-  } catch (err) {
-    console.error("[news] 유니버스통합뉴스 LLM 중복 판정 실패, 원본 그대로 표시:", err);
-    return items;
+/**
+ * 같은 사건 중복 묶기 — 규칙만(2026-10-03, 종목뉴스 LLM 금지). 한국어 제목의 글자 2-gram 유사도가 0.6 이상이고 48시간 안이면
+ * 같은 사건으로 보고 앞선 항목(유니버스 순서상 먼저인 것)만 남긴다. 예전엔 Claude 가 화면을 열 때마다 전 종목 제목을 판정했다.
+ */
+function dedupeUniverseNewsByTitle(items: NewsItem[]): NewsItem[] {
+  const norm = (t: string) => t.replace(/[s"'“”‘’.,·…[]()（）]/g, "").toLowerCase();
+  const grams = items.map((it) => {
+    const t = norm(it.titleKo || it.titleOrig);
+    const g = new Set<string>();
+    for (let i = 0; i < t.length - 1; i++) g.add(t.slice(i, i + 2));
+    return g;
+  });
+  const sim = (a: Set<string>, b: Set<string>) => {
+    if (!a.size || !b.size) return 0;
+    let n = 0;
+    for (const x of a) if (b.has(x)) n++;
+    return n / (a.size + b.size - n);
+  };
+  const keep: number[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const dup = keep.some(
+      (k) =>
+        Math.abs(Date.parse(items[k].publishedAt) - Date.parse(items[i].publishedAt)) <= 48 * 3600_000 &&
+        sim(grams[k], grams[i]) >= 0.6,
+    );
+    if (!dup) keep.push(i);
   }
+  return keep.map((i) => items[i]);
 }

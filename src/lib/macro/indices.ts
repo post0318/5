@@ -1,6 +1,7 @@
 import "server-only";
 import { hasKrxKey } from "@/lib/markets/quote/krx";
 import { getYahooFinance } from "./yf-client";
+import { getLatestKrIndex } from "@/lib/db/kr-index";
 
 /**
  * 주요 지수 스냅샷.
@@ -79,6 +80,9 @@ export async function fetchRecentKrxIndexBars(
         const r = await fetch(`${KRX_BASE}/${service}?basDd=${basDd}`, {
           headers: { AUTH_KEY: authKey },
           signal: AbortSignal.timeout(5_000),
+          // 1시간(오너 결정 2026-10-03). KRX OPEN API 는 일별 데이터를 다음 영업일에 내주므로 실시간성이 없다 —
+          // 캐시는 화면 속도(요청 10번·건당 최대 5초)와 KRX 키 하루 호출량 때문. 공개 직후 최대 1시간 늦을 수 있다.
+          next: { revalidate: 60 * 60 },
         });
         if (!r.ok) return null;
         const j = (await r.json()) as { OutBlock_1?: Record<string, string>[] };
@@ -119,12 +123,18 @@ function isoTime(t: Date | string | number | undefined): string | null {
 export async function getIndices(): Promise<IndexQuote[]> {
   const out: IndexQuote[] = [];
 
-  // 한국 (KRX 공식)
-  if (hasKrxKey()) {
-    const [kospi, kosdaq] = await Promise.all([
-      krxIndex("kospi_dd_trd", "코스피"),
-      krxIndex("kosdaq_dd_trd", "코스닥"),
-    ]);
+  // 한국 (KRX 공식) — 일일 배치(오라클 06:30)가 저장한 kr_index_daily 를 먼저 읽는다(오너 결정 2026-10-03 — 하루 한 번
+  // 바뀌는 데이터라 화면이 KRX 를 매번 부를 필요가 없다). DB 에 없거나 5일 넘게 묵었을 때만 KRX 를 직접 부른다(같은 소스).
+  {
+    const fresh = (d: { date: string } | null) => d != null && Date.now() - Date.parse(`${d.date}T00:00:00+09:00`) < 5 * 864e5;
+    const [dbKospi, dbKosdaq] = await Promise.all([getLatestKrIndex("KOSPI"), getLatestKrIndex("KOSDAQ")]);
+    const live = hasKrxKey() && (!fresh(dbKospi) || !fresh(dbKosdaq));
+    const [kospi, kosdaq] = live
+      ? await Promise.all([
+          fresh(dbKospi) ? dbKospi : krxIndex("kospi_dd_trd", "코스피"),
+          fresh(dbKosdaq) ? dbKosdaq : krxIndex("kosdaq_dd_trd", "코스닥"),
+        ])
+      : [dbKospi, dbKosdaq];
     if (kospi)
       out.push({ key: "KOSPI", name: "코스피", region: "kr", value: kospi.close, change: kospi.change, changePct: kospi.pct, asOf: kospi.date, source: "KRX" });
     if (kosdaq)

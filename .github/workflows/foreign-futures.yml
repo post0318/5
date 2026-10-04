@@ -7,11 +7,12 @@ name: 외국인 코스피200 선물 순매수 수집
 # 1회" 조건 자체를 벗어나는 건 아니다(공유 저장소가 아니라 이 프로젝트
 # 소유자만 쓰는 개인 자동화).
 
+# 2026-10-03 예약은 오라클 타이머 macro-foreign-fut(매일 06:31 KST)로 이전 — 여기는 수동 실행만 남긴다(GitHub 예약 누락 방지).
 on:
-  schedule:
-    # 23:00 UTC = 08:00 KST(장 시작 전) — 전날 장 마감분이 소스에 반영된 뒤.
-    - cron: "0 23 * * *"
   workflow_dispatch: {}
+
+env:
+  APP_URL: ${{ vars.APP_URL }} # 자동 작업이 부르는 메인 서버(scripts/lib/app-url.mjs)
 
 jobs:
   collect:

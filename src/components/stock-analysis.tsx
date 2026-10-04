@@ -28,7 +28,6 @@ import {
   formatSymbolLabel,
   type SymbolHit,
 } from "@/components/symbol-search";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";

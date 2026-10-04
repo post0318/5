@@ -1,17 +1,8 @@
 {
-  "crons": [
-    {
-      "path": "/api/cron/kr-fg",
-      "schedule": "30 9 * * *"
-    },
-    {
-      "path": "/api/cron/us-class-facts",
-      "schedule": "0 6 5 1,4,7,10 *"
-    }
-  ],
   "git": {
     "deploymentEnabled": {
       "wip/*": false
     }
-  }
+  },
+  "ignoreCommand": "if [ -n \"$VERCEL_GIT_PREVIOUS_SHA\" ] && git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" HEAD -- src public package.json package-lock.json next.config.ts tsconfig.json postcss.config.mjs components.json vercel.json; then echo \"앱 파일 변경 없음 - 배포 생략\"; exit 0; else exit 1; fi"
 }

@@ -65,6 +65,7 @@ import { readFileSync } from "node:fs";
 import { enrichResearch } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -85,7 +86,7 @@ const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 const APP_PASSWORD = (ENV.APP_PASSWORD || "").trim();
@@ -307,8 +308,10 @@ for (const board of BOARDS) {
   collected.push(...items);
 }
 if (rawTotal === 0) {
-  console.error("✗ 전 게시판 0건 — 세션 키 절차나 응답 구조가 바뀌었을 수 있음.");
-  process.exit(1);
+  // 0건은 실패가 아니다 — 오라클 10~18시 회차는 최근 1일만 보므로 주말·휴일엔 정상적으로 0건이다(2026-10-04 일요일 오경보).
+  // 세션 키·쿠키 거부는 위 요청 함수가 빈 응답을 오류로 던져 따로 잡는다.
+  console.log("· 전 게시판 0건 — 기간 안에 새 글 없음(주말·휴일이면 정상). 전송 생략.");
+  process.exit(0);
 }
 
 // 첨부 조회 → PDF 직링크(1순위), 기업분석은 파일명 끝 6자리로 종목코드.

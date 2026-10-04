@@ -13,7 +13,8 @@ import { autoBackfillKrFg } from "@/lib/macro/kr/batch";
 // 무력화됨 — FRED(일간 지표라 변동 적음)·CNN(자체 1시간 캐시)은 각자 내부
 // 캐시가 있어 이 라우트 캐시를 짧게 잡아도 상위 API 호출이 급증하지 않는다
 // (2026-09 수정).
-export const revalidate = 120;
+// 빌드 때 미리 만들지 않는다 — 빌드 시점엔 DB 가 없어 DB 항목이 빈 결과가 배포·재부팅 직후 첫 화면으로 나갔다(2026-10-04 실측). 외부 조회는 각 모듈 내부 캐시가 맡는다.
+export const dynamic = "force-dynamic";
 // KRX 지수 조회(최대 5영업일) 등 외부 호출이 겹치면 기본 제한(10~15s)을
 // 넘길 수 있어 명시 (2026-09 수정).
 export const maxDuration = 30;

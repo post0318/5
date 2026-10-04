@@ -6,7 +6,8 @@
 
 import { fetchJson } from "../http";
 import { withFetchScope } from "../fetch-health";
-import { blankYahooLtm, withYahooLtm, yahooLtm, type YahooLtmResult } from "./edgar-yahoo-quarters";
+import { blankYahooLtm, withYahooLtm, yahooLtm, yahooLtmPeriods, type YahooLtmResult } from "./edgar-yahoo-quarters";
+import { sixKStatements } from "./edgar-6k";
 import { fetchYahooFundamentals } from "../quote/yahoo";
 import { fxToUsd } from "./edgar-foreign";
 import { consensusDeepLinks, filingsDeepLink, newsDeepLinks } from "../deeplinks";
@@ -256,7 +257,15 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           fxToUsd(cur).catch(() => null),
         ]);
         if (yq && fx) {
-          const r = withYahooLtm(withShares, yq, fx, cur);
+          // 회사 6-K 분기 재무제표(연결재무보고서 HTML) — 야후 정의가 SEC 와 다른 항목을 회사 줄로(edgar-6k.ts). 없거나 못 읽으면 null(야후 경로 그대로)
+          const per = yahooLtmPeriods(withShares, yq);
+          const sixK = per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(() => null) : null;
+          // 이번 보고서에 1년 전 분기말 열이 없으면(SPOT) 1년 전 같은 분기 6-K — 평균 잔액(ROIC 등)의 기초 값
+          const shift12 = (d: string) => { const x = new Date(`${d}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); };
+          const sixKPrev = per && sixK && !sixK.bsDates.includes(per.yearAgo)
+            ? await sixKStatements(cik, recent, per.yearAgo, shift12(per.E), shift12(per.yearAgo)).catch(() => null)
+            : null;
+          const r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev);
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else if (!fx) {
           // H.10 조회 실패 — 사업연도 값을 LTM 으로 대체하지 않고 LTM 열 공란(미고시와 같은 처리)
@@ -355,6 +364,8 @@ export interface FactUnitEntry {
   ltmQ?: number;
   /** 20-F Yahoo 분기 LTM 에서 채우지 못한 항목의 최근 FY(edgar-yahoo-quarters.ts) — LTM 공란 */
   ltmNone?: boolean;
+  /** 20-F LTM 항목의 출처(edgar-yahoo-quarters LtmSrc) — verify-row 가 나열하고 검증기가 다시 계산한다 */
+  ltmSrc?: { via: string } & Record<string, unknown>;
   /**
    * 합성 영업이익(edgar-ev.ts opIncomeEntries)의 산식 — "pretax" = 세전이익 그대로(이자비용 태그 없음), "ebit" = 세전이익 +
    * 이자비용 (− 지분법), "structure" = 손익계산서 계산 구조로 영업외 항목 차감, "fin" = 금융업 세전이익. 화면 라벨용(G6)

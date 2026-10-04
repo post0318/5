@@ -48,9 +48,13 @@ export function inSession(market: MarketId, now = new Date()): boolean {
   return m >= s0.open && m < s0.close;
 }
 
-/** 이 시간보다 최근에 받은 뉴스는 다시 긁지 않는다 — 장중 30분, 그 외 2시간 */
+/**
+ * 이 시간보다 최근에 받은 뉴스는 다시 긁지 않는다(오너 지시 2026-10-03 — "네이버는 10분, 구글은 30분, 장외는 1시간").
+ * 국내·해외 기사를 한 번에 받는 구조라 종목의 시장으로 나눈다: 한국 종목(주 소스 네이버 태깅) 장중 10분, 미국·일본 종목 장중 30분, 장외 1시간.
+ */
 export function freshMs(market: MarketId, now = new Date()): number {
-  return inSession(market, now) ? 30 * 60_000 : 2 * 3600_000;
+  if (!inSession(market, now)) return 3600_000;
+  return market === "kr" ? 10 * 60_000 : 30 * 60_000;
 }
 
 /** 이보다 오래되면 묵은 값을 그냥 주지 않고 기다렸다 새로 긁는다 */

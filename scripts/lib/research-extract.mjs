@@ -34,6 +34,9 @@
  * ── 국내 전용(kr, KRW) ── 원화 표기(목표주가/목표가/적정주가/적정가격/TP N원·N만원,
  *    "목표주가 -원"=미제시), 가격 100~10,000,000. 국내는 컨센서스 표기 없음(오너 확인).
  */
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { PDFParse } from "pdf-parse";
 
 const UA =
@@ -222,6 +225,47 @@ export function mentionsOpinion(text) {
 }
 
 const pdfCache = new Map();
+
+/**
+ * PDF 텍스트 디스크 캐시(2026-10-04 — 오라클 하루 6회 수집, 오너 지시 "새로 나온 것만"). RESEARCH_PDF_CACHE_DIR 이 있으면
+ * URL 별 텍스트를 파일로 남겨 다음 회차에 같은 리포트 PDF 를 다시 내려받지 않는다. 받기에 성공한 것만 남기고(실패는 다음 회차에
+ * 재시도), 30일 지난 파일은 실행마다 한 번 지운다. 없으면(로컬·GitHub) 기존처럼 실행 안에서만 기억.
+ */
+const PDF_DISK_DIR = process.env.RESEARCH_PDF_CACHE_DIR || "";
+const PDF_DISK_MAX_AGE_MS = 30 * 86_400_000;
+let pdfDiskPruned = false;
+function pdfDiskPath(url) {
+  return path.join(PDF_DISK_DIR, createHash("sha1").update(url).digest("hex") + ".txt");
+}
+function pdfDiskGet(url) {
+  if (!PDF_DISK_DIR) return null;
+  if (!pdfDiskPruned) {
+    pdfDiskPruned = true;
+    try {
+      const now = Date.now();
+      for (const name of fs.readdirSync(PDF_DISK_DIR)) {
+        const p = path.join(PDF_DISK_DIR, name);
+        if (now - fs.statSync(p).mtimeMs > PDF_DISK_MAX_AGE_MS) fs.rmSync(p, { force: true });
+      }
+    } catch {
+      /* 폴더가 없거나 못 읽으면 캐시 없이 진행 */
+    }
+  }
+  try {
+    return fs.readFileSync(pdfDiskPath(url), "utf8");
+  } catch {
+    return null;
+  }
+}
+function pdfDiskSet(url, text) {
+  if (!PDF_DISK_DIR) return;
+  try {
+    fs.mkdirSync(PDF_DISK_DIR, { recursive: true });
+    fs.writeFileSync(pdfDiskPath(url), text);
+  } catch {
+    /* 캐시 실패는 수집에 영향 없음 */
+  }
+}
 /**
  * PDF 텍스트(URL 당 1회). 실패하면 빈 문자열 — 수집 자체는 계속.
  * `headers` 는 세션 쿠키가 필요한 게시판(DS 그누보드 첨부 등)용.
@@ -229,7 +273,13 @@ const pdfCache = new Map();
 export async function readPdfText(pdfUrl, { headers = {} } = {}) {
   if (!pdfUrl) return "";
   if (pdfCache.has(pdfUrl)) return pdfCache.get(pdfUrl);
+  const onDisk = pdfDiskGet(pdfUrl);
+  if (onDisk != null) {
+    pdfCache.set(pdfUrl, onDisk);
+    return onDisk;
+  }
   let text = "";
+  let fetched = false;
   try {
     const res = await fetch(pdfUrl, { headers: { "User-Agent": UA, ...headers } });
     if (res.ok) {
@@ -238,11 +288,13 @@ export async function readPdfText(pdfUrl, { headers = {} } = {}) {
       const parser = new PDFParse({ data: buf });
       text = String((await parser.getText()).text ?? "");
       await parser.destroy();
+      fetched = true;
     }
   } catch {
     text = "";
   }
   pdfCache.set(pdfUrl, text);
+  if (fetched) pdfDiskSet(pdfUrl, text);
   return text;
 }
 

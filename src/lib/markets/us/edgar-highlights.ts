@@ -7,7 +7,7 @@
  * - 추정(수익·EPS): yahoo-finance2 earningsTrend
  */
 
-import { DPS_FROM_PAID_NOTE, dividendFreeSince, dividendFreeYear, dpsFromPaid } from "./blank-reason";
+import { DPS_FROM_PAID_LTM_NOTE, DPS_FROM_PAID_NOTE, dividendFreeSince, dividendFreeYear, dpsFromPaid } from "./blank-reason";
 import { unavailableNote } from "./sec-unavailable";
 import { buildUsCashFlow, hasCommonDividendEvidence } from "./edgar-cashflow";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
@@ -519,6 +519,18 @@ export function buildUsHighlights(
     if (!it || col.kind === "estimate" || !(col.label in (it.values ?? {}))) return { has: false, v: null };
     return { has: true, v: it.values[col.label] ?? null };
   };
+  // LTM 주당배당금 공시가 없으면(20-F — 분기 XBRL 없음) LTM 배당금 지급액 ÷ 현재 주식수(LTM EPS 와 같은 주식수, 2026-10-02 — TSM·ASML 은 6-K
+  // 분기 현금흐름표로 LTM 배당금 지급이 있다). 배당수익률도 같은 값으로
+  const dpsPaidLtm = new Set<string>();
+  columns.forEach((col, i) => {
+    // 20-F(분기 XBRL 없음)만 — 10-Q 회사는 LTM 주당배당이 태그로 있고, 지급 기준을 섞으면 연도 열(결의 기준)과 기준이 갈린다(CEG LTM 증가율 301%)
+    if (col.kind !== "ltm" || dps[i] != null || !currentShares || !yahooLtm(facts) || !hasCommonDividendEvidence(facts)) return;
+    const c = cfAt("cf:재무활동 현금흐름:배당금 지급", col);
+    if (c.v == null || c.v === 0) return;
+    dps[i] = Math.abs(c.v) / currentShares;
+    dpsPaidLtm.add(col.key);
+    divYield[i] = priceByCol[i] != null && priceByCol[i]! > 0 ? (dps[i]! / priceByCol[i]!) * 100 : null;
+  });
   const ocf = columns.map((col) => { const c = cfAt("cf:total:영업활동 현금흐름", col); return c.has ? c.v : flowVal(S.ocf, E.ocf, col); });
   const capex = columns.map((col) => {
     const c = cfAt("cf:투자활동 현금흐름:유형자산 취득", col);
@@ -565,7 +577,7 @@ export function buildUsHighlights(
   const nOcf = ltmNote(E.ocf);
   const nCapex = ltmNote(E.capex);
   const nDps = ltmNote(E.dps);
-  columns.forEach((c, i) => { if (dpsPaidCols.has(c.key)) nDps[i] = DPS_FROM_PAID_NOTE; });
+  columns.forEach((c, i) => { if (dpsPaidCols.has(c.key)) nDps[i] = DPS_FROM_PAID_NOTE; else if (dpsPaidLtm.has(c.key)) nDps[i] = DPS_FROM_PAID_LTM_NOTE; });
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap, cellNotes: nMktcap },
     ...(opUnitValue.some((v) => v != null)

@@ -9,10 +9,11 @@ name: 유안타증권 리서치 수집
 # 오류가 확인돼 직접 수집으로 되돌리고 한경 수집기에서 유안타를 제외했다.
 
 on:
-  schedule:
-    - cron: "22 23 * * *" # 23:22 UTC = 08:22 KST(1차)
-    - cron: "22 3 * * *" # 03:22 UTC = 12:22 KST(2차)
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
+
+env:
+  APP_URL: ${{ vars.APP_URL }} # 자동 작업이 부르는 메인 서버(scripts/lib/app-url.mjs)
 
 jobs:
   collect:

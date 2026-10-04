@@ -8,9 +8,11 @@ name: 애널리스트 투자의견 수집 (StockAnalysis)
 # 유니버스의 미국 종목 수에 비례해 요청이 늘어나므로 종목당 2초 간격을 둔다.
 
 on:
-  schedule:
-    - cron: "20 1 * * *" # 01:20 UTC = 10:20 KST
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
+
+env:
+  APP_URL: ${{ vars.APP_URL }} # 자동 작업이 부르는 메인 서버(scripts/lib/app-url.mjs)
 
 jobs:
   collect:

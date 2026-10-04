@@ -12,7 +12,7 @@ export const maxDuration = 300;
  * companyfacts 에 EPS·주식수가 통째로 없는 종목만 10-K XBRL 인스턴스를 파싱해
  * `us_class_facts` 에 upsert 한다. 10-K 는 연 1회라 분기 실행이면 충분.
  *
- *  - Vercel Cron 이 호출 (분기 1회)
+ *  - 오라클 타이머 fin-us-class-facts 가 호출(분기 1회 — 1·4·7·10월 5일 15:00 KST, 2026-10-03 Vercel Cron 에서 이전)
  *  - ?symbol=V : 특정 종목만 (수동)
  */
 function authorized(req: Request): boolean {

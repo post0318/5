@@ -6,11 +6,11 @@ name: 신한투자증권 기업분석 리포트 수집
 # 앱 배포본(Vercel)에는 이 수집 코드가 없다 — DB 적재 라우트는 결과만 받는다.
 
 on:
-  schedule:
-    # 하루 2회(오너 지시, 2026-09 -- 작성시간과 로드시간의 시차 보완).
-    - cron: "0 23 * * *" # 23:00 UTC = 08:00 KST(1차)
-    - cron: "0 3 * * *" # 03:00 UTC = 12:00 KST(2차)
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
+
+env:
+  APP_URL: ${{ vars.APP_URL }} # 자동 작업이 부르는 메인 서버(scripts/lib/app-url.mjs)
 
 jobs:
   collect:

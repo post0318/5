@@ -14,7 +14,7 @@
 - Tailwind CSS 4 + shadcn/ui (radix-nova preset), next-themes 다크/라이트
 - TanStack Query (클라이언트 패칭), TanStack Table v8
 - Recharts (차트 — 아직 미사용)
-- Drizzle ORM + libSQL(SQLite, `data/app.db`) — 개인용. 확장 시 Postgres 이식
+- MongoDB Atlas(무료 M0, 512MB) — `src/lib/db/*`, 용량 점검 `node scripts/db/size.mjs`(예전 Drizzle·libSQL 은 쓰지 않음)
 - date-fns, zod
 - yahoo-finance2 (서버 전용, `serverExternalPackages` 등록됨)
 - Clerk (`@clerk/nextjs`) — 사용자 로그인·승인 대기제. 유니버스가 계정별로 분리됨
@@ -26,7 +26,7 @@ src/lib/server/app-auth.ts     Clerk 서버 검증 (requireAppUser / requireAdmi
 src/components/auth/           로그인 컨텍스트·게이트·가입 신청·계정 메뉴
 src/lib/format.ts              숫자·통화 포맷 (콤마, trunc)
 src/lib/dates.ts               날짜 방어 (연도 완성 판정, 루프 상한)
-src/lib/db/                    Drizzle 스키마 + 클라이언트
+src/lib/db/                    MongoDB 컬렉션 모듈
 src/lib/markets/
   types.ts                    MarketAdapter 인터페이스 + DTO
   registry.ts                 market → adapter
@@ -51,9 +51,6 @@ npm run dev          # 개발 서버 (Turbopack)
 npm run build        # 프로덕션 빌드 (타입체크 포함)
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
-npm run db:generate  # 스키마 변경 후 마이그레이션 생성
-npm run db:migrate   # 마이그레이션 적용 (로컬 data/app.db)
-npm run db:studio    # drizzle studio
 ```
 
 커밋 전 `npm run build` 와 `npm run lint` 통과 확인.
@@ -125,7 +122,12 @@ npm run db:studio    # drizzle studio
 - **외부 금융 API 호출은 반드시 서버(Route Handler `app/api/...`)에서만.**
   클라이언트에서 직접 호출 금지 — API 키 은닉, CORS 회피, 캐싱, rate limit 관리.
 - 시장별 로직은 어댑터 패턴으로 분리 (`lib/markets/{kr,us,jp}/`).
-- 매일 배치 수집 → Postgres 저장, 조회는 DB 우선. Vercel Cron 사용.
+- 매일 배치 수집 → MongoDB 저장, 조회는 DB 우선.
+- **메인 서버 = 오라클**(2026-10-03, 구글 Cloud Run·Vercel 은 보조). 예약 작업은 오라클 systemd 타이머·상주 프로그램이 돌고
+  (GitHub 예약은 이전 중), 자동 작업이 부르는 주소는 저장소 변수 `APP_URL` 하나. 서버 구성·과금 통제는 `DEPLOY.md` §0,
+  수집 일람(소스·빈도·실행 위치·저장처)은 `docs/data-collection.md`.
+- **비용 원칙(오너 지시 2026-10-03)**: 오라클·구글은 크레딧을 넘는 실제 지출 0. 종목뉴스에는 Claude/Anthropic 사용 금지 — 판정은 코드(규칙)가
+  먼저, LLM 이 꼭 필요할 때만 Gemini. 주기 작업은 직전 이후 **새로 나온 항목만** 처리(같은 데이터를 매번 다시 처리·과금하지 않는다).
 
 ### 배포 시나리오 = 개인용 시작, 확장 가능성 (prd.md §4.0)
 
@@ -133,6 +135,11 @@ npm run db:studio    # drizzle studio
 - 모든 외부 소스는 **어댑터 인터페이스 뒤에 격리** → 확장 시 교체가 파일/설정 수준이 되도록.
 
 ### 데이터 레이어 (prd.md §4)
+
+> **수집 일람(묶음별 — 리서치/거시경제/뉴스·SNS/종목분석/주간 리포트)은 `docs/data-collection.md`** 가 기준이다(2026-10-03).
+> 소스·실행 위치·빈도·저장처를 바꾸면 그 문서부터 고친다. 아래 사이트별 항목의 빈도·실행 위치(하루 1·2·3회, GitHub Actions 등)는 기록 당시 값이고, 국내 리서치는
+> 2026-09-14 오너 지시로 하루 2회(08시대·12시대), 2026-10-03 오너 결정으로
+> 국내 리서치 21곳 전부(robots 차단 5곳 포함) 하루 6회다(08·10·12·14·16·18시). 외국인 선물은 2026-09-28 네이버(폐지)에서 다음 금융(카카오)으로 바뀌었다.
 
 | 레이어 | 소스 | 개인용 렌더링 |
 |--------|------|--------------|
@@ -185,12 +192,8 @@ npm run db:studio    # drizzle studio
       상황). 오너가 "개인용·하루 1회·단일 소형 페이지" 조건으로 예외 승인.
       **빈번한 폴링 금지.**
     - 앱 배포본에는 크롤링 코드가 없다. 이 스크립트는 로컬 도구.
-    - **자동 실행 경로 확장 (2026-09, 오너 승인)**: 로컬 PC 전원 상태에 의존하지
-      않도록 동일 스크립트를 GitHub Actions(`.github/workflows/foreign-futures.yml`,
-      하루 1회 스케줄)로도 돌린다. "개인용·하루 1회" 조건은 그대로 유지 —
-      이 저장소 소유자만 쓰는 개인 자동화이고 앱 배포본(Vercel)에는 여전히
-      크롤링 코드가 안 들어간다는 점은 동일. 로컬 스크립트는 수동/백업용으로
-      계속 둔다.
+    - **실행 위치(2026-10-03)**: 오라클 타이머 `macro-foreign-fut`(매일 06:31 KST, 전 영업일분). GitHub
+      `foreign-futures.yml` 은 수동 비상용만 남겼다(그 전엔 하루 1회 예약).
   - **네이버(`stock.naver.com`/`m.stock.naver.com`) 종목 리서치 페이지 — 폐기
     (오너 결정, 2026-09)**: 예외 승인은 받았으나 실제 로딩에 쓰는 JSON
     엔드포인트를 끝내 못 찾아(추정 경로 시도 실패) 착수 전 단계에서 중단.
@@ -717,16 +720,10 @@ npm run db:studio    # drizzle studio
       (`scripts/collect-bnk-research.mjs`, GitHub Actions
       `.github/workflows/bnk-research.yml`)가 같은 라우트를 `source: "BNK투자
       증권"` 으로 재사용.
-      **GitHub 실행 서버 IP 차단(감사 2026-09-28 — "bnk kirs 원인확인하고
-      방법찾아줘")**: `www.bnkfn.co.kr` 이 2026-09-14 부터 GitHub Actions
-      러너 IP 를 막고 있다(TCP 연결 자체가 10초 타임아웃 — `ConnectTimeoutError`,
-      403 같은 HTTP 응답조차 없음. 이 PC 에서는 0.2초에 정상 접속되는 걸로 봐
-      해외/클라우드 IP 대역 차단으로 추정). 저장소가 public 이라 self-hosted
-      러너는 포크 PR 공격면이 생겨 배제(오너 선택, 2026-09-28) — 대신
-      `scripts/retry-blocked-sites.mjs` 를 Windows 작업 스케줄러
-      (`MarketResearch-BlockedSitesRetry`, 장중 08/11/14/17시 KST)에 등록해
-      이 PC 가 직접 돈다. GitHub 워크플로 자체는 그대로 둔다(실패해도 해
-      없음 — 로컬 수집이 사실상 주 경로).
+      **해외 IP 차단(2026-09-14~, 실측)**: GitHub(미국)·오라클(일본)·구글 서울 Cloud Run(나가는 IP 가 미국으로 잡힘) 모두 접속 시간
+      초과, 한국 IP 만 된다. 한경 컨센서스에도 BNK 리포트가 없다(30일 0건). 그래서 **사무실 PC 작업 스케줄러 `macro-research-bnk`**
+      (08·10·12·14·16·18시 05분, `C:Userspost0macro-localnk-research.cmd`, 놓친 회차는 켜지면 따라잡음)가 수집해 오라클로 보낸다
+      (2026-10-03). GitHub `bnk-research.yml` 은 수동만, 옛 `MarketResearch-BlockedSitesRetry`(집 PC) 작업은 정리 대상.
       - **산업분석/투자전략 수집 추가(오너 지시, 2026-09 — "한국과 미국 모두
         동일하게 수집 기반 구축")**: 같은 사이트의 형제 게시판을 확인 —
         `analysingIssue.jspx`(업종분석, 제목이 기업분석과 똑같은 "[업종명]
@@ -1238,12 +1235,12 @@ npm run db:studio    # drizzle studio
   | IBK투자증권 | 전환 | 서버렌더 HTML(EUC-KR), 정적 PDF 경로, robots `Allow: /`. 종목코드는 제목 종목명→corpcodes | `collect-ibk-research.mjs` |
   | 유안타증권 | 재개 | 옛 수집기가 그대로 정상(과거 실패 재현 안 됨) + 산업·투자전략·경제 게시판 추가 | `collect-yuanta-research.mjs` |
   | 한화투자증권 | 확장 | 자체 수집기에 산업·전략·경제·채권·해외 게시판 추가, new 배지 누락 버그 수정, PDF(`mode=attach_open`) | `collect-hanwha-research.mjs` |
-  | 한국IR협의회 | 전환 | 서버렌더 HTML(인소싱·아웃소싱), 의견·목표가 원래 없음. TLS 중간 인증서 누락 → 스크립트에 공개 중간 인증서 추가(Node 24) | `collect-kirs-research.mjs` |
+  | 한국IR협의회 | **한경 경유로 복귀(2026-10-03)** | 직접 수집은 해외 IP 차단으로 오라클에서 불가 — 한경에 기업분석은 실리지만 기술분석(30일 10건)은 빠진다. `collect-kirs-research.mjs` 는 수동만 | — |
   | 대신증권 | 전환(예전 "재검토 안 함" 결정을 뒤집음) | PC 는 로그인, 모바일 웹(`money2.daishin.com/E5/ResearchCenter/DM_*`)은 열림. 모바일 목록이 글의 절반 가까이 빠뜨려 rowid 를 연속 조회, 재게시 제외. robots.txt 는 WAF 가 막아 확인 불가 | `collect-daishin-research.mjs` |
   | SK증권 | 한경 유지 | 게시판은 로그인, 통합검색만 열리나 날짜 정렬이 없어 매일 증분 수집 불가 | — |
   | 유진투자증권 | 한경 유지 | 목록 서버가 로그인 검사, 공개 게시판은 2022-01 에 멈춤 | — |
   | LS증권 | 한경 유지 | "계좌고객만"(서버) + 모바일 API 봇 차단(Eversafe), robots `Disallow: /` | — |
-  - 전환한 7곳은 한경 수집기 `EXCLUDED_SOURCES` 에 넣었다 — 한경 쪽 오류가 실측됨
+  - 전환한 곳(한국IR협의회는 2026-10-03 다시 한경 경유라 빼고 6곳)은 한경 수집기 `EXCLUDED_SOURCES` 에 넣었다 — 한경 쪽 오류가 실측됨
     (유안타 IPARK 목표가 34,000 → 340,000, 한화 한국가스공사 리포트의 종목이 "한화투자증권"
     으로 오표기·2중 게재). 대신·iM 은 GlobalMonitor 에서도 뺐다(같은 글인데 GM 제목에
     "[Issue & News]" 머리말이 붙어 제목 dedupe 가 안 걸림). 메리츠·유안타는 자체 수집기가
@@ -1472,14 +1469,21 @@ npm run db:studio    # drizzle studio
 - **종목뉴스 / 주요 코멘트 탭 (`src/lib/news/`)**: Google 뉴스 RSS(`news.google.com/rss/...`,
   공개 신디케이션 피드 — 기사 본문 스크래핑 아님, 제목·출처·발행시각·원문 링크만)를
   구독하고, 영·일문 제목은 무인증 Google 번역 웹 엔드포인트(실패 시 MyMemory)로
-  한국어 번역한다. LLM 요약 없음(비용·본문 소스 미확보로 보류). `post0318/4`
+  한국어 번역한다(실패하면 원문 제목 — 유료 폴백 없음). **LLM 사용 금지**(오너 지시 2026-10-03 — Claude/Anthropic 금지, 필요하면
+  Gemini 만, 코드가 먼저). 기사 요약 기능은 2026-09-12 화면에서 삭제, 남아 있던 요약 주소·Claude 모듈은 2026-10-03 삭제. `post0318/4`
   프로젝트의 `src/lib/server/{brazilNews,translate}.ts` 와 동일 패턴을 이식.
-  - **갱신 주기 = 종목의 시장별 현지 장중 30분, 그 외 2시간(오너 지시 2026-10-01)**:
-    한국 종목은 KST 09:00~17:30, 미국 종목은 뉴욕 09:30~16:00(한국 시간 야간·새벽,
-    서머타임 자동), 주말 제외. 판정은 `stock-news-cache.ts` 의 `inSession`/`freshMs(market)`
-    한 곳 — 화면 신선도·HTTP 캐시·크론 건너뛰기가 모두 이걸 쓴다. 크론
-    (`.github/workflows/stock-news.yml`)은 24시간 30분마다 깨우고 라우트가 종목마다
-    자기 시장 기준으로 건너뛴다(예전엔 KST 기준 하나라 미국 장중에 2시간 간격이었다).
+  - **갱신 주기(오너 지시 2026-10-03 — "네이버 10분, 구글 30분, 장외 1시간")**: 국내·해외 기사를 한 번에 받는 구조라 종목의 시장으로
+    나눈다 — 한국 종목 장중(KST 09:00~17:30) 10분, 미국 종목 장중(뉴욕 09:30~16:00, 서머타임 자동) 30분, 장외·주말 1시간. 판정은
+    `stock-news-cache.ts` 의 `inSession`/`freshMs(market)` 한 곳(화면 신선도·HTTP 캐시·크론 건너뛰기 공통). 네이버 태깅 요청 캐시 5분.
+    미리 수집은 **오라클 타이머 `news-stock-news`**(10분마다 깨우고 신선도가 지난 종목만, 2026-10-04 재개). 2026-10-03 에 GitHub
+    `stock-news.yml` 을 껐던 이유는 갱신마다 기사 약 72건을 Claude 로 다시 판정해 하루 약 2.5달러가 나갔기 때문 — 지금 판정은 코드라 0원.
+  - **관련성 판정 = 규칙(`src/lib/markets/news-rules.ts`, 2026-10-04)**: 제목 기준(회사명·약칭·대표 제품·티커, 낱말 경계), 시황·나열·
+    경쟁 제품 나란히·"Not/Forget …"·판촉·동음이의(사과·지명·Owens Corning) 제외, 한국 중소형주는 기사가 5건 미만이면 요약 기준 태깅
+    기사로 보충. 사람이 정답을 붙인 표본으로 잼(대표 수치는 news-rules.ts 머리 주석) — 6종목 547건(규칙을 맞춘 표본) 국내 정밀도 97%·
+    재현율 86%·해외 91%·99%, 처음 보는 4종목 399건 국내 84%·88%·해외 98%·99%(이 표본으로도 일반 규칙 몇 개를 보강했으므로 완전한
+    독립 측정은 아님). 10-03 규칙은 국내 정밀도 31%, 옛 Claude 는 57%였다. LLM 이 필요해지면 Gemini 만(코드가 먼저).
+  - **회사명 주의**: DART 기업개황 정식명("에스케이하이닉스", "엘에스일렉트릭")과 기사 제목 표기("SK하이닉스", "LS일렉트릭")가 다르다 —
+    상장사 목록 약칭(corpcodes)과 영문 약자 한글 표기 변환(`koAcronymName`)을 함께 쓴다. 이걸 빠뜨리면 그 종목 국내 기사가 0건이 된다.
 - **빅테크 공식 블로그("기업 발표", `src/lib/news/companyBlog.ts`, 2026-09
   추가, 오너 지시 — "엔비디아처럼 블로그등을 통해 공개하는... 파급력이
   큰데")**: 로이터·블룸버그 등 3자 매체가 받아쓰기 전까진 기존 종목뉴스
@@ -1497,22 +1501,10 @@ npm run db:studio    # drizzle studio
   종목 페이지 "리서치" 탭의 "기업 발표" 카드(`/api/markets/us/[symbol]/
   company-blog`, DB 없이 매번 짧은 캐시로 직접 조회 — 새 탭 대신 기존
   탭에 통합, 종목이 4개뿐이라 별도 최상위 탭은 과하다고 판단).
-- **인플루언서 텔레그램 채널 수집 트리거(2026-09)**: 수집 자체는
-  다른 소스와 같은 구조(로컬/Actions 수집 → DB 적재 → 배포본은 조회만)이지만
-  **트리거만 두 겹**이다. GitHub `schedule` 이 이 저장소에서 실행률
-  21%(20시간 기대 29회 중 6회, 실측)에 그쳐 화면이 몇 시간씩 멈춰 보였고,
-  분 값을 정각에서 비껴도 개선되지 않았다(지연이 아니라 예약 자체가 누락).
-  그래서 ① 워크플로가 한 번 뜨면 그 안에서 5시간 30분 동안 15분 간격으로
-  반복 수집하고, ② 외부 크론(cron-job.org)이 2시간마다 `workflow_dispatch`
-  로 그 루프를 다시 띄운다. ②가 없으면 구멍이 난다 — 실측(30시간)에서
-  `schedule` 간격에 7시간 5분·5시간 34분 공백이 있었고 둘 다 루프 수명을
-  넘는다. **크론 간격을 짧게 두면 안 된다**: `cancel-in-progress: true` 라
-  새 실행이 돌던 루프를 끊어서, 15분 간격이면 준비 작업만 반복하고 실행
-  이력이 취소로 찬다. 이 채널만 분 단위 신선도가 의미 있어 예외로 두고,
-  하루 1회인 리서치 수집기들은 그대로 `schedule` 을 쓴다. 설정 절차와
-  401 대처는 `DEPLOY.md` §6 참고. 회당 채널당 50건을
-  가져오고 `_id` 로 upsert 하므로 실행이 밀려도 중간 글이 유실되지 않는다
-  (이전 10건 제한 때 63708~63713 유실 실측).
+- **인플루언서 텔레그램·유튜브 = 즉시 수신(2026-10-03)**: 텔레그램은 오라클 상주 수신기 `macro-telegram-listener`(`scripts/listen-telegram.mjs`,
+  새 글을 텔레그램이 밀어줌 + 시작·30분마다 이어받기). 유튜브는 공식 새 영상 알림(WebSub) → `/api/webhooks/youtube` → `youtube_videos`,
+  구독 갱신은 오라클 타이머 `news-youtube-subscribe`(매일 05:00). 예전 GitHub 예약 + cron-job.org 재기동 우회책(실행률 21% 때문)은 폐기 —
+  **같은 텔레그램 세션을 두 곳에서 동시에 쓰면 끊기므로** GitHub `telegram-posts.yml` 은 수동 비상용(수신기를 멈춘 뒤에만), cron-job.org 작업은 끈다.
 - `yahoo-finance2` / yfinance / Finnhub·FMP·Polygon 무료 = **개인용 한정.**
   팀/대외 확장 시 인앱 중단 → 딥링크 또는 정식 라이선스 (prd.md §4.3).
 - L1(공식 API)·L3(자체 계산)은 모든 시나리오에서 안전.
@@ -1524,8 +1516,8 @@ npm run db:studio    # drizzle studio
 요약한다. 기업분석은 범위 밖(거시이므로 제외). 코드는 `src/lib/weekly/`,
 DB는 `weekly_reports`(주당 1건, `_id`=대상 주 월요일) + `weekly_llm_usage`.
 
-- **흐름**: GitHub Actions(`.github/workflows/weekly-report.yml`, 월 09:00
-  KST) → `POST /api/cron/weekly-report`(CRON_SECRET) → `generateWeeklyReport()`
+- **흐름**: GitHub Actions(`.github/workflows/weekly-report.yml`, 월 06:00
+  KST — 2026-10-03 09:00 에서 앞당김, 4번 저장소 브라질 국채 갱신(일 12:00 UTC = 일 21:00 KST)보다 뒤) → `POST /api/cron/weekly-report`(CRON_SECRET) → `generateWeeklyReport()`
   → 초안(draft) 저장 → 오너가 `/weekly` 화면에서 편집·발행. 화면의 "초안
   생성/재생성"은 로그인 세션으로 `POST /api/weekly`(proxy.ts 보호).
 - **입력 코퍼스**(`corpus.ts`, 원문 미저장): `kr_research` `category:"산업"`
@@ -1649,7 +1641,7 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   **Google AI Pro 구독에 포함된 월 $10 Cloud 크레딧**으로 결제(유료 등급이라
   프롬프트가 학습에 안 쓰임). 기본 모델 **`gemini-3.8-flash`**
   (`GEMINI_MODEL`로 교체, 404면 폴백 체인), 웹검색 그라운딩 기본 ON
-  (`WEEKLY_GROUNDING=0`으로 끔). 월 상한 `WEEKLY_MONTHLY_BUDGET_USD`(기본 8).
+  (`WEEKLY_GROUNDING=0`으로 끔). 월 상한 `WEEKLY_MONTHLY_BUDGET_USD`(기본 10 — 2026-10-03 오너 결정, 구글 지출 상한 guard-gemini 13,000원과 짝).
   회당 추정 0.25~0.4달러. 키는 `GEMINI_API_KEY`(.env.local + Vercel).
 - **모델 선택 근거(오너 결정 2026-09-21)** — 원래 `gemini-3.1-pro-preview`
   였다. 같은 주(2026-09-14~18) 같은 입력으로 실측 비교한 결과 3.8 Flash 로
@@ -1779,6 +1771,20 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   (`edgar-gapfill.ts`)은 20-F·ifrs-full 도 읽는다(TSM 2025 20-F 가 companyfacts 에 없었음).
   SKHY(SK하이닉스 ADR, 1 ADS = 보통주 0.1주)는 SEC XBRL 이 없어(20-F 미제출) `us/dart-adr.ts` DART 연결 어댑터로 지원(오너 지시
   2026-09-24).
+- **20-F LTM = 야후 분기 + 회사 6-K 분기 재무제표**(`us/edgar-6k.ts`·`edgar-yahoo-quarters.ts`, 2026-10-02 — 오너 지적
+  "TSM 값넣어", "ASML 은 여기서 확인해봐라(IR 공시 목록)", "6-K 보면 GAAP 기준 데이터도 있던데?"): 야후 연간이 SEC 와 정확히
+  같지 않은 항목은 6-K 연결재무보고서의 같은 줄을 먼저 쓴다. 줄 대응 = 최근 20-F 라벨 파일(`_lab.xml`)의 이름이 같은 줄,
+  같은 이름이 여럿이면 표시 구조(`_pre.xml`) 부모 구역(유동·비유동, 취득·처분). 부호 = 부호 반전 라벨(negatedLabel). 재무상태표는
+  보고서 전년 연말 열 = SEC 연말 값(공시 단위 안)인 줄만 — 양쪽 라벨이면 그 확인으로 부호를 정한다. 흐름 = SEC 사업연도 + 당기
+  누적 − 전기 누적(환율: 각 기간 평균 H.10). 형식 2개: ① HTML 표(TSM·SPOT — 금액·비율 쌍, 주석 번호 열은 뺀다) ② 슬라이드
+  그림 아래 숨은 글자(ASML Exhibit 99.3 "Financial Statements US GAAP" — 분기말 6월 28일은 같은 달 말로). 연말 0 이고 분기 본표에
+  그 줄이 없으면(20-F 본표 줄만) 분기말 0, 사업연도 0 이고 분기 현금흐름표에 줄 없으면 0. 본표 합성 개념(…FaceDerived)은 연말 값이
+  채운 줄 하나 또는 두 줄 합과 정확히 같을 때만 그 값으로. 각주 「회사 6-K 분기 재무제표: …」. 남는 공란은 분기 보고서가 그 줄을 따로
+  싣지 않은 것(TSM·SPOT 리스 유동분 — 다른 부채 줄에 합산, ASML 요약본 — 유동부채·자본·운전자본이 합계 한 줄).
+  검증기는 6-K 를 다른 방식(문서 글자 판독)으로 따로 읽어 같은 식으로 대조한다(`sixKCfYtd`).
+  - 이때 함께 고친 것: TSM 유동성 장기부채 사채 이중 계산(본표 "Long-term liabilities - current portion" 이 사채 유동분을 이미
+    포함 — `IFRS_SUM` 을 대안 하나만으로), 20-F 합산 줄에 그 회사가 공시하지 않는 개념이 끼면 LTM 전체가 비던 문제(edgar-balance),
+    LTM 주당배당금 공시가 없으면 LTM 배당금 지급액 ÷ 현재 주식수(LTM EPS 와 같은 주식수, 칸 주석).
 - **사업연도 키 = `fiscalYearOf(결산일)`**(`us/edgar-series.ts`): 결산일이 1월 1~7일이면 전년도
   (52/53주 결산 — WEN "fiscal 2022" = 2023-01-01 결산). 미국 모듈의 연도 키는 전부 이 함수.
 - **분할 계수**(`splitFactorsByYear`) 후보에 25·30·40·50·100 추가(CMG 50:1). 3:2 는 증자와 구분이
@@ -2045,20 +2051,30 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   현황은 `docs/verification-status.md` §00.
 - **관리자 검증 화면(오너 결정 2026-09-24)**: `/admin/verify`(계정 메뉴 「재무 검증」, `requireAdmin`). 검증 스크립트
   `--post` 가 `/api/cron/verify-results` 로 종목별 최신 결과를 저장(MongoDB `verify_results`, 통과는 건수만).
-  유니버스에 새로 담긴 종목은 결과가 올 때까지 "미검증". GitHub Actions `verify-financials.yml`: 매일 07:40 KST
-  전 종목(`--universe`), 3시간마다 미검증 종목만(`--missing`). master 에 합쳐 배포해야 동작한다.
+  유니버스에 새로 담긴 종목은 결과가 올 때까지 "미검증". **검증은 로컬 개발 서버 대상으로만 돌린다**(오너 지시 2026-10-03 — "운영 cpu를
+  사용할 내용이 아닌데"): GitHub Actions `verify-financials.yml`(매일 운영 앱 API 를 종목마다 호출 → 운영 서버가 종목당 30~40초 조립)은
+  삭제했다. 로컬·운영이 같은 DB 라 로컬에서 `--post` 하면 관리자 화면에 그대로 보인다. 검증기 `--base` 를 운영 주소로 주지 말 것.
 - **`ENGINE_VERSION`(`src/lib/fin/store.ts`)은 fin 조립(`src/lib/fin` — 매출·원가·영업이익 등 5층 구조) 규칙이 바뀔 때만
   올린다(2026-10-01).** 저장본(`fin_sym`)은 엔진판이 같을 때만 쓰이고, 다르면 종목마다 요청 시점에 다시 조립한다
   (미국 첫 조회 약 30~40초 — 개요 시가총액·하이라이트가 그만큼 늦는다). 하이라이트·손익계산서 표시처럼 요청 시점에
   계산되는 화면 변경으로 올리면 저장본 전체가 무효가 된다(실측: 43·44 를 표시 변경으로 올려 개요가 30초씩 걸림). 올렸으면
-  배포 직후 `gh workflow run fin-build.yml` 로 저장본을 다시 채운다(하루 1회 06:10 KST 배치를 기다리지 않게).
+  배포 직후 오라클에서 `sudo systemctl start fin-fin-build` 로 저장본을 다시 채운다(하루 1회 06:10 KST 타이머를 기다리지 않게).
 - **미국 TTM 스냅샷 저장본 `ttm_snap`(오너 결정 2026-10-01 (가))**: 개요 시가총액·멀티플이 쓰는 TTM(`getTtm` 결과)을 종목별로
-  저장하고 TTM 라우트가 바로 읽는다(`src/lib/db/ttm-snap.ts`). 유효 = **같은 배포판(커밋 SHA) + 24시간 안** — 배포마다 전부 무효가
-  되고 `ttm-build.yml` 이 배포 반영을 기다렸다가 유니버스 미국 종목을 다시 채운다(매일 06:50 KST 도). 불완전한 결과(SEC 판독 경고·
+  저장하고 TTM 라우트가 바로 읽는다(`src/lib/db/ttm-snap.ts`). 유효 = **같은 계산 판번호 + 24시간 안**(2026-10-03 변경 — 판번호
+  `e{ENGINE_VERSION}.t{TTM_RULES_VERSION}`, TTM 규칙을 고치면 `TTM_RULES_VERSION` 을 올린다. 예전 "같은 배포판(커밋)"은 계산과 무관한 배포에도
+  전 종목을 무효로 만들어 Vercel CPU 한도 초과의 주원인이었다). 오라클 타이머 `fin-ttm-build`(매일 06:50 KST)와 배포 직후 `post-deploy.sh` 가
+  무효인 저장본만 채운다. 불완전한 결과(SEC 판독 경고·
   매출 조립 실패·금융 자회사 판별 실패 — `TtmFlows.degraded`)는 저장하지 않는다. 실측: 첫 조회 30~40초 → 0.55초. 52주 베타는
   별도 `/beta` 라우트(일봉만, 0.5초). 무거운 라우트(ttm·highlights·financials·consensus) 시간 한도는 180초 — 재무 저장본이
   없는 종목은 요청 시점 조립으로 40초+ 걸려 45~60초 한도에서 504 였다. 배치 경로는 마감 여유를 넉넉히(fin-build 150초·
   ttm-build 120초 + 종목당 100초 제한) — 마감 직전에 시작한 종목이 300초를 넘겨 504 로 배치가 멈췄다.
+- **Vercel CPU 한도 초과(2026-10-03, 경위)**: TTM 저장본이 커밋마다 무효라 푸시마다 전 종목 재조립(10-01~02 푸시 35회, 351분)·3시간마다
+  재무 검증이 운영 CPU 를 써 Hobby 한도(월 4시간)를 넘겨 정지됐다. 대책: 메인을 오라클로, TTM 판번호를 계산 판번호로, 무거운 계산을 오라클
+  타이머로, 재무 검증은 로컬 전용. `vercel.json` `ignoreCommand`(앱 파일이 안 바뀐 푸시는 배포 생략)는 Vercel·구글 보조용으로 유지.
+- **fin-build·TTM 채우기 = 오라클 타이머(2026-10-03)**: `fin-fin-build`(06:10)·`fin-ttm-build`(06:50)가 `ops/oracle/run-ts.sh` 로
+  `scripts/run/fin-build.mts`·`ttm-build.mts` 를 실행해 DB 에만 쓴다(라우트와 같은 함수). 작업 폴더 `/opt/macro/jobs` 는 배포 때 운영 앱과 같은
+  커밋으로 맞춰지고, SEC 캐시 `/opt/macro/sec-cache` 를 앱과 같이 쓴다. GitHub `fin-build.yml`·`ttm-build.yml` 은 수동 비상용.
+  라우트 `/api/cron/fin-build`·`ttm-build`(POST)도 수동 비상용으로 남김.
 - **유니버스 밖 미국 종목도 조회 때 저장(오너 결정 2026-10-01 ①)**: 재무 조립(`loadFinSym`)이 완전하면(환율·Yahoo·SEC 조회
   결손 없음) `fin_sym` 에 저장하고, TTM 라우트는 화면 조회 시각(`ttm_snap.seen`)을 남긴다. 재무 배치(fin-build)·TTM 채우기(ttm-build)는
   유니버스 + **최근 30일 안에 조회된 종목**(`listRecentlyViewed`)을 갱신한다 — 안 보는 종목은 자연히 빠진다. 실측(LLY): 첫 조회 45초,

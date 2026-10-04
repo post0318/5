@@ -85,11 +85,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             좁혀 확보한다 — 실측(390px 기준 합 377px)으로 아이폰SE(375px)
             까지 한 줄에 맞춘다. `sm:` 이상은 기존 값 그대로. */}
         <div className="mx-auto flex min-h-14 max-w-[1400px] flex-wrap items-center gap-x-1 gap-y-1 px-2 py-2 sm:gap-x-6 sm:px-4">
-          <Link href="/kr/universe" className="flex items-center gap-2 font-semibold">
+          {/* 로고 = 첫 화면(글로벌 핵심지표). 예전 "거시경제" 버튼을 대신한다(오너 지시 2026-10-04 — 매크로 인사이트를 누르면 거시경제와 같게,
+              모바일에서도 글자 표시 — 모바일 배치는 오너가 보고 다시 검토). */}
+          <Link
+            href="/macro"
+            className={cn("flex items-center gap-1.5 rounded-md text-sm font-semibold sm:gap-2 sm:text-base", onMacro && "text-foreground")}
+          >
             <span className="bg-primary text-primary-foreground grid size-6 place-items-center rounded text-xs">
-              G
+              M
             </span>
-            <span className="hidden sm:inline">글로벌 종목 리서치</span>
+            <span>매크로 인사이트</span>
           </Link>
 
           {/* 시장 탭 */}
@@ -116,18 +121,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
-            <Link
-              href="/macro"
-              className={cn(
-                "flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium transition-colors sm:px-3",
-                onMacro
-                  ? "bg-secondary text-secondary-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Globe className="size-4" />
-              <span className="hidden sm:inline">거시경제</span>
-            </Link>
             <Link
               href="/weekly"
               className={cn(

@@ -904,6 +904,12 @@ const FX_RE =
 // PERIOD_RE)로 확정된 것들이라 Monthly만 명시적으로 가르면 된다.
 const MARKET_CONDITION_MONTHLY_RE = /월간|\bmonth\b|이\.글\.스\.|Econ\s?Signal/i;
 
+// 월간 발간 전략물(오너 지시 2026-10-04 — "이거다 월간 아니니?" → 시황분석:Monthly 로 이동). 위 규칙("월간"·"month" 리터럴)이 놓치던
+// 표기: 한투 「글로벌전략 월보」, 키움 「10월 Monthly」, 미래에셋 「[10월] …」, 신한 「10월 해외주식 탑픽 10선」, NH 「…10월호」.
+// "9월 FOMC 리뷰"처럼 달 이름으로 시작하는 일반 글이 걸리지 않게, 맨 앞 "N월"은 월간물에 쓰는 낱말이 바로 뒤따를 때만 인정한다.
+const MONTHLY_PUBLICATION_RE =
+  /월간|월보|\bmonthly\b|\[\s*\d{1,2}\s*월\s*\]|\d{1,2}\s*월호|^\s*\d{1,2}\s*월\s+(해외주식|국내주식|주식|탑픽|Top\s?Picks?|추천|전망|증시|전략|포트폴리오|자산배분|투자)/i;
+
 // macro_issues에서 흡수한 콘텐츠 중 "게시판 코드가 topic을 확정"하던
 // 것들(제목 텍스트만으론 이슈분석/환율분석이 안 갈리는 경우)을 위한 고정
 // 라벨 강제 분류 — MARKET_CONDITION_STOCKNAMES/STRATEGY_STOCKNAMES와 같은
@@ -1007,6 +1013,24 @@ const FORCED_FX_STOCKNAMES = new Set([
  * 잘 튜닝된 로직).
  */
 export function classifyResearchTopic(
+  doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
+): ResearchTopic {
+  // 라벨이 업종명처럼 붙어 산업분석으로 새던 월간 시리즈(오너 지시 2026-10-04): 하나 「Hana 미국주식 Monthly」(미국 증시 Review/Preview)·
+  // NH 「N월 월간공유」(리서치센터 월간 종합 전망)는 시황 월간, 미래에셋 「Econ Monthly」(국내외 경제 분석)는 경제라 이슈분석.
+  // IBK 「IBKS Insight Monthly」는 업종 월간 점검 묶음이라 산업분석 그대로.
+  if (doc.source === "하나증권" && /Hana\s*미국주식\s*Monthly/i.test(doc.title ?? "")) return "시황분석:Monthly";
+  if (doc.source === "NH투자증권" && /월간\s*공유/.test(doc.stockName ?? "")) return "시황분석:Monthly";
+  if (doc.source === "미래에셋증권" && /^Econ\s*Monthly$/i.test((doc.stockName ?? "").trim())) {
+    return FX_RE.test(doc.title ?? "") ? "환율분석" : "이슈분석";
+  }
+  const topic = classifyResearchTopicBase(doc);
+  // 투자전략·시황 중 월간 발간물은 시황분석:Monthly(2026-10-04 오너 결정 — 신한 해외주식 탑픽·키움 월간증시전망 등 "투자전략(주식)" 고정
+  // 라벨도 포함). 산업분석·이슈분석은 그대로(월간 업종 리포트는 산업분석이다).
+  if (topic !== "시황분석:투자전략" && topic !== "시황분석:Daily") return topic;
+  return MONTHLY_PUBLICATION_RE.test(doc.stockName ?? "") || MONTHLY_PUBLICATION_RE.test(doc.title ?? "") ? "시황분석:Monthly" : topic;
+}
+
+function classifyResearchTopicBase(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
 ): ResearchTopic {
   // NH투자증권 "NH 하우스 뷰 N월호" — 자산배분 월간 발간물인데 stockName이

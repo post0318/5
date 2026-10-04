@@ -2,18 +2,22 @@ import "server-only";
 import type { Collection } from "mongodb";
 import { getDb, isDbConfigured } from "./index";
 import type { TtmFlows } from "../markets/types";
+import { ENGINE_VERSION } from "../fin";
 
 /**
  * TTM 스냅샷 저장본(오너 결정 2026-10-01 (가) — 개요 시가총액이 첫 조회 때 SEC 원본 판독으로 6~40초 걸리던 문제).
  * 종목 TTM(현재 주식수·LTM 손익·EV 구성요소 등, getTtm 결과)을 그대로 저장하고 개요가 바로 읽는다.
- *  - 유효 = **같은 배포판(커밋)** + 24시간 안. 계산 규칙이 바뀐 배포 뒤에 옛 규칙 값을 보이지 않게(화면 간 같은 값 원칙 — 하이라이트는
- *    요청 시점 계산). 판이 다르거나 오래됐으면 요청 시점에 다시 계산하고 저장한다.
+ *  - 유효 = **같은 계산 판번호** + 24시간 안(2026-10-03 오너 결정 — 예전엔 "같은 배포판(커밋)"이라 계산과 무관한 푸시에도 전 종목이
+ *    무효가 돼 매번 다시 계산했다: 이틀 푸시 35번 = Vercel CPU 351분, 한도 초과로 서비스 정지). 계산 판번호 = 재무 엔진판(ENGINE_VERSION,
+ *    재무 조립 규칙) + TTM 규칙 판(TTM_RULES_VERSION, 현재 주식수·LTM·EV 구성 규칙). 둘 중 하나라도 바뀌면 전 종목이 다시 계산된다.
+ *    ⚠️ TTM 계산 규칙(markets/us 의 getTtm·EV·주식수 등)을 고치면 TTM_RULES_VERSION 을 올린다 — 안 올리면 최대 24시간 옛 규칙 값이 남는다.
+ *  - 판이 다르거나 오래됐으면 요청 시점에 다시 계산하고 저장한다.
  *  - 불완전한 결과(조회 실패·SEC 원본 판독 경고·매출 조립 실패)는 저장하지 않는다 — 다음 조회에서 다시 계산.
- *  - 배치(/api/cron/ttm-build)가 매일·배포 직후 유니버스 미국 종목을 미리 채운다.
+ *  - 배치(오라클 타이머 fin-ttm-build, scripts/run/ttm-build.mts)가 매일 06:50·배포 직후 유니버스 미국 종목 중 무효인 것만 채운다.
  */
 export interface TtmSnapDoc {
   _id: string;
-  /** 배포판(커밋 SHA) */
+  /** 계산 판번호(e{엔진판}.t{TTM 규칙판}) — 2026-10-03 전 저장본은 커밋 SHA */
   v: string;
   at: Date;
   ttm: TtmFlows;
@@ -23,8 +27,14 @@ export interface TtmSnapDoc {
 
 const MAX_AGE_MS = 24 * 3_600_000;
 
+/** TTM 계산 규칙 판 — 현재 주식수·LTM·EV 구성 규칙을 고치면 올린다(재무 조립 규칙은 ENGINE_VERSION 이 따로 따라간다) */
+export const TTM_RULES_VERSION = 1;
+
 export function ttmSnapVersion(): string {
-  return process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_DEPLOYMENT_ID || "local";
+  // 배포 환경(Vercel·구글·오라클 — 배포 커밋 변수가 있음)과 로컬을 가른다: 같은 DB 라 로컬이 쓴 저장본을 운영이 읽지 않게.
+  const deployed = process.env.VERCEL_GIT_COMMIT_SHA || process.env.APP_COMMIT_SHA || process.env.VERCEL_DEPLOYMENT_ID;
+  if (!deployed) return "local";
+  return `e${ENGINE_VERSION}.t${TTM_RULES_VERSION}`;
 }
 
 async function col(): Promise<Collection<TtmSnapDoc>> {

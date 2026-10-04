@@ -19,7 +19,9 @@ import { refreshUniverseOverview } from "@/lib/universe/overview";
 export const maxDuration = 300;
 
 /**
- * 한국 F&G 일일 배치. Vercel Cron 이 호출 — 09:30 UTC(18:30 KST, 장마감 15:30
+ * 한국 F&G 일일 배치. **2026-10-03 부터 오라클 타이머 macro-kr-fg 가 다음 날 06:30 KST(= 21:30 UTC)에 호출**(오너 결정).
+ * KRX OPEN API 는 일별 데이터를 다음 영업일에야 내줘 예전 당일 18:30 실행은 빈 응답 → 휴장 오기록이 됐다. 06:30 KST 의
+ * UTC 날짜가 곧 전날(KST)이라 아래 계산 그대로 "전 영업일"을 받는다. 아래는 옛 설명 — Vercel Cron 이 호출 — 09:30 UTC(18:30 KST, 장마감 15:30
  * KST 로부터 3시간 뒤. 공공데이터 API 종가 반영 시차 감안한 여유)에 그날 KST
  * 거래일 데이터를 곧바로 수집한다("직전 영업일"이 아니라 "오늘"을 목표로 함 —
  * 예전엔 UTC 기준 하루를 통째로 더 빼서 실제로는 이틀 전 데이터를 모으고
@@ -147,7 +149,8 @@ export async function GET(req: Request) {
       return ok({ mode: "backfill-range", ...(await backfillRange(from, to, !force)) });
     }
 
-    // 오늘(KST 거래일 — 크론이 18:30 KST 에 도는 동안 UTC 날짜는 이미 같은 KST
+    // 대상 거래일 = 실행 시각의 UTC 날짜(주말이면 직전 금요일). 06:30 KST(21:30 UTC) 실행이면 전날 KST 거래일이 된다.
+    // (옛 설명: 오늘(KST 거래일 — 크론이 18:30 KST 에 도는 동안 UTC 날짜는 이미 같은 KST
     // 거래일과 일치하므로 추가로 하루를 빼지 않는다). 주말이면 직전 금요일.
     const d = new Date();
     while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);

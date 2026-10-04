@@ -156,8 +156,8 @@ export interface WeeklyLlmUsageDoc {
   callCount: number;
 }
 
-/** Google AI Pro 구독에 포함된 월 $10 Cloud 크레딧 안에서만 돈다 — 그 아래로 상한. */
-export const WEEKLY_MONTHLY_BUDGET_USD = Number(process.env.WEEKLY_MONTHLY_BUDGET_USD ?? 8);
+/** Google AI Pro 구독에 포함된 월 $10 Cloud 크레딧 안에서만 돈다(오너 결정 2026-10-03 — 앱 예산 $10, 실제 차단은 구글 지출 상한 guard-gemini 13,000원). */
+export const WEEKLY_MONTHLY_BUDGET_USD = Number(process.env.WEEKLY_MONTHLY_BUDGET_USD ?? 10);
 
 function monthId(d = new Date()): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;

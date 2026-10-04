@@ -56,6 +56,7 @@ import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { resolveKrStock, KR_PARTICLES } from "./lib/company-match.mjs";
 import { refineSectorLabels } from "./lib/sector-label.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 // IN/MA(산업/시장) 항목 중 대괄호 업종 태그가 없는 제목이 실은 특정 국내
 // 종목 얘기인 경우가 있다(실측, 오너 지적 2026-09 — 메리츠증권 "HD현대중공업
@@ -89,7 +90,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 10;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기
@@ -434,7 +435,8 @@ const EXCLUDED_SOURCES = new Set([
   "IBK투자증권",
   "유안타증권",
   "한화투자증권",
-  "한국IR협의회",
+  // "한국IR협의회" — 2026-10-03 다시 포함(오너 결정): KIRS 사이트가 해외 IP 를 막아(오라클 일본·GitHub 미국 모두 시간 초과)
+  // 메인 서버에서 직접 수집할 수 없어 한경 경유로 대체. 기업분석은 한경에 거의 다 실리지만 기술분석(월 10건 안팎)은 빠진다.
   "대신증권",
 ]);
 

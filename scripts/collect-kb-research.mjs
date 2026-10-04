@@ -97,6 +97,7 @@ import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isEsgContent, isFxContent, isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { promoteKrIndustryToStock } from "./lib/company-match.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -117,7 +118,7 @@ const DRY_RUN = ARGS.includes("--dry-run");
 const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) || 3;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 // 거시경제(이슈분석/환율분석) 전용 — 오너 지시 2026-09-26 "kb 키움은 개별수집기에
 // 통합되어야 맞아보인다. 따로 있을 이유가 없다"로 collect-kb-macro-issues.mjs를

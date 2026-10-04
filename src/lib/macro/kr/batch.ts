@@ -7,8 +7,10 @@ import {
   type KrFgDailyDoc,
   type KrStockRollDoc,
 } from "@/lib/db/kr-fg";
-import { fetchAllStocks, fetchKospi200Futures, fetchKospiIndex, fetchPutCall, fetchVkospi } from "./krx";
+import { fetchAllStocks, fetchKospi200Futures, fetchKospiIndex, fetchKrIndexDay, fetchPutCall, fetchVkospi } from "./krx";
+import { saveKrIndexDays } from "@/lib/db/kr-index";
 import { fetchLatestRates } from "./ecos";
+import { isKrxHoliday } from "./market-calendar";
 import { getYahooFinance } from "../yf-client";
 
 const WINDOW = 252; // 52주(거래일)
@@ -68,8 +70,17 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       // skipExisting 이 이 날짜를 "처리됨"으로 보게 함. 마커가 없으면 공휴일이
       // asOf(kospiClose 가 실제로 찍힌 최신일)를 영원히 못 앞지르게 만들어
       // autoBackfillKrFg 가 10분마다 무한 재시도(KRX 쿼터 소진)하게 됨(2026-09 발견).
-      await markClosed(date);
-      return { ...empty(date), ok: false, error: `거래 데이터 없음 (${stocks.length}건) — 휴장일?` };
+      // ⚠️ 빈 응답만으로 휴장으로 찍지 않는다(2026-10-03 발견·오너 지시 "캘린더 등으로 확인"): KRX OPEN API 는 일별
+      // 데이터를 다음 영업일에야 내주는데, 예전 크론(당일 18:30)이 빈 응답을 받아 실제 거래일 11일(09-14~10-01)을 휴장으로
+      // 찍었고, 휴장 마커 때문에 다시 받지도 않아 한국 공포·탐욕 원자료가 3주 가까이 비었다.
+      //   달력이 휴장이라고 하면 → 휴장 마커
+      //   달력이 거래일이라고 하면 → 마커 없이 "아직 미공개"(다음 실행에서 다시 받는다)
+      //   달력을 못 받으면 → 3일 넘게 지난 날짜만 마커(최근 날짜는 미공개일 수 있어 보류)
+      const holiday = await isKrxHoliday(date);
+      const old = Date.now() - Date.parse(`${date}T00:00:00+09:00`) > 3 * 864e5;
+      if (holiday === true || (holiday === null && old)) await markClosed(date);
+      const why = holiday === true ? "휴장일(달력 확인)" : holiday === false ? "거래일인데 KRX 미공개 — 다시 시도" : "달력 확인 실패";
+      return { ...empty(date), ok: false, error: `거래 데이터 없음 (${stocks.length}건) — ${why}` };
     }
 
     // 등락 종목수 + 등락 거래량
@@ -94,6 +105,11 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
     const rollCol = await krStockRollCol();
     const rolls = await rollCol.find({}).toArray();
     const rollMap = new Map(rolls.map((r) => [r._id, r]));
+    // 창이 이미 이 날짜보다 뒤까지 쌓여 있으면(과거 날짜를 다시 받는 백필) 창을 건드리지도, 52주 판정을 다시 하지도 않는다.
+    // 창은 날짜를 앞으로만 덧붙이는 구조라, 과거 날짜를 끼워 넣으면 미래 종가가 섞인 창으로 판정하고 순서도 꼬인다
+    // (2026-10-03 실제로 발생 — 09-01~ 강제 백필이 9월 신고·신저를 틀어 놓음). 그날의 다른 항목만 갱신하고 신고·신저는 기존 값을 둔다.
+    const ahead = rolls.filter((r) => typeof r.lastDate === "string" && r.lastDate > date).length;
+    const rollAhead = ahead > rolls.length / 2;
 
     let newHigh52 = 0;
     let newLow52 = 0;
@@ -120,7 +136,8 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       //  2) 문서가 없으면(신규 상장 등) 1건짜리로 생성 — 이미 있으면 아무것도 안 함
       ops.push({
         updateOne: {
-          filter: { _id: s.code, lastDate: { $ne: date } },
+          // $lt: 같은 날 두 번(옛 중복 버그)도, 과거 날짜 끼워 넣기도 막는다(예전 $ne 는 과거 날짜를 막지 못했다)
+          filter: { _id: s.code, lastDate: { $lt: date } },
           update: {
             $set: { lastDate: date },
             $push: { closes: { $each: [s.close], $slice: -WINDOW } },
@@ -135,7 +152,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
         },
       });
     }
-    if (ops.length) await rollCol.bulkWrite(ops, { ordered: false });
+    if (ops.length && !rollAhead) await rollCol.bulkWrite(ops, { ordered: false });
 
     const col = await krFgDailyCol();
     // foreignFutNet 은 이 배치가 안 채우는 필드(별도 수동 업로드), vkospi/futBasis 는
@@ -143,7 +160,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
     // replaceOne 이 기존 값을 지우지 않도록 미리 읽어서 보존/병합 (2026-09 수정)
     const existing = await col.findOne(
       { _id: date },
-      { projection: { foreignFutNet: 1, vkospi: 1, futBasis: 1 } },
+      { projection: { foreignFutNet: 1, vkospi: 1, futBasis: 1, newHigh52: 1, newLow52: 1, totalWithHistory: 1 } },
     );
     const doc: KrFgDailyDoc = {
       _id: date,
@@ -153,9 +170,9 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       unchanged,
       upVolume,
       downVolume,
-      newHigh52,
-      newLow52,
-      totalWithHistory: totalWithHistory || null,
+      newHigh52: rollAhead ? (existing?.newHigh52 ?? null) : newHigh52,
+      newLow52: rollAhead ? (existing?.newLow52 ?? null) : newLow52,
+      totalWithHistory: rollAhead ? (existing?.totalWithHistory ?? null) : totalWithHistory || null,
       vkospi: vkospi ?? existing?.vkospi ?? null,
       gov3y: rates.gov3y,
       gov10y: rates.gov10y,
@@ -167,7 +184,21 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       futBasis: futBasis ?? existing?.futBasis ?? null,
       updatedAt: new Date().toISOString(),
     };
-    await col.replaceOne({ _id: date }, doc, { upsert: true });
+    // replaceOne 대신 $set — 외국인 선물 수집(06:31)이 이 배치(06:30)가 읽고 쓰는 사이에 foreignFutNet 을 넣으면
+    // replaceOne 이 그 값을 지운다(2026-10-03, 두 작업을 같은 시각대로 옮기며 확인). 휴장 오기록 마커(closed)는 지운다.
+    const { _id: _omit, foreignFutNet: _ff, ...owned } = doc;
+    void _omit;
+    void _ff;
+    await col.updateOne(
+      { _id: date },
+      { $set: owned, $unset: { closed: "" }, $setOnInsert: { foreignFutNet: null } },
+      { upsert: true },
+    );
+
+    // 코스피·코스닥 지수 일봉 → kr_index_daily(거시경제 한국 지수 스냅샷이 읽는다, 2026-10-03). 실패해도 배치는 성공으로 둔다.
+    await fetchKrIndexDay(ymd)
+      .then((days) => saveKrIndexDays(days))
+      .catch(() => 0);
 
     return {
       date,

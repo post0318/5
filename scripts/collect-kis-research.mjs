@@ -37,6 +37,7 @@
 import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 // 한국투자증권 해외 리포트는 자체 작성이 아니라 해외 증권사 리서치를 국문으로 재작성한 것 — PDF 상단에
 // "본 보고서는 {국가} {증권사}의 리서치 자료를 기초로 한국투자증권이 국문으로 재작성하여 발간하는
@@ -102,7 +103,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 6;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기

@@ -1,13 +1,12 @@
 name: 주간 거시·시황 리포트 초안 생성
 
-# 매주 월요일 09:00 KST(= 일요일 24:00 UTC → "0 0 * * 1")에 배포 앱의 크론
+# 매주 월요일 06:00 KST(= 일요일 21:00 UTC → "0 21 * * 0", 2026-10-03 오너 결정 — 09:00 은 늦다)에 메인 서버의 크론
 # 라우트를 호출해 Gemini API(Google AI Pro 구독 크레딧)로 초안을 만든다.
-# 생성은 서버(Vercel)에서 돌고 이 워크플로는 트리거만 한다 — 크롤링 없음.
+# 생성은 메인 서버(vars.APP_URL — 오라클)에서 돌고 이 워크플로는 트리거만 한다 — 크롤링 없음.
 # 오너는 월요일 오후 /weekly 화면에서 검수·수정 후 발행.
 
 on:
-  schedule:
-    - cron: "0 0 * * 1"
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch:
     inputs:
       force:
@@ -21,7 +20,7 @@ jobs:
     steps:
       - name: 초안 생성 요청
         env:
-          APP_BASE_URL: ${{ secrets.APP_BASE_URL || 'https://macroresearch.vercel.app' }}
+          APP_BASE_URL: ${{ vars.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           FORCE: ${{ github.event.inputs.force || 'false' }}

@@ -57,6 +57,7 @@ import {
 } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 import { refineSectorLabels } from "./lib/sector-label.mjs";
+import { appUrl } from "./lib/app-url.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -78,7 +79,7 @@ const DAYS = Number(ARGS.find((a) => a.startsWith("--days="))?.split("=")[1]) ||
 const MAX_PAGES = Number(ARGS.find((a) => a.startsWith("--pages="))?.split("=")[1]) || 5;
 
 const IMPORT_URL = (
-  ENV.SHINHAN_RESEARCH_IMPORT_URL || "https://macroresearch.vercel.app/api/cron/total-research"
+  ENV.SHINHAN_RESEARCH_IMPORT_URL || `${appUrl(ENV)}/api/cron/total-research`
 ).trim();
 const CRON_SECRET = (ENV.CRON_SECRET || "").trim();
 // Vercel 배포 보호(Vercel Authentication)가 프로덕션에 켜져 있으면 앱에 닿기

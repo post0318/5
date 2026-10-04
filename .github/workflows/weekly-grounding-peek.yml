@@ -18,7 +18,7 @@ jobs:
     steps:
       - name: 조회
         run: |
-          URL="https://macroresearch.vercel.app/api/cron/weekly-grounding-peek"
+          URL="${{ vars.APP_URL }}/api/cron/weekly-grounding-peek"
           W="${{ github.event.inputs.week }}"
           if [ -n "$W" ]; then URL="$URL?week=$W"; fi
           curl -sf --max-time 60 "$URL" \

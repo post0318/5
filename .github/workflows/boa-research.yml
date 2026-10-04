@@ -5,9 +5,11 @@ name: Bank of America Institute 수집
 # /cgi-bin·/tmp 만 차단, 이 경로는 안 막힘.
 
 on:
-  schedule:
-    - cron: "40 23 * * *" # 23:40 UTC = 08:40 KST
+  # 예약 실행은 오라클 타이머(ops/oracle/install-schedules.sh, 2026-10-04) — 여기는 수동 비상용
   workflow_dispatch: {}
+
+env:
+  APP_URL: ${{ vars.APP_URL }} # 자동 작업이 부르는 메인 서버(scripts/lib/app-url.mjs)
 
 jobs:
   collect:

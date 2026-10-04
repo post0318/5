@@ -115,12 +115,16 @@ const IFRS_NEG: [string, string][] = [
 /** 원소가 배열이면 그 안에서 먼저 공시된 개념 하나만(같은 금액을 이름만 달리해 두 번 공시한 회사 — TSM FVOCI·FVTPL) */
 const IFRS_SUM: [(string | string[])[], string][] = [
   [["NoncurrentPortionOfNoncurrentBondsIssued", "LongtermBorrowings"], "LongTermDebtNoncurrent"],
-  [["CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued", "CurrentPortionOfLongtermBorrowings", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"], "LongTermDebtCurrent"],
+  // 유동성 장기부채 — 셋 중 먼저 공시된 하나만(합하지 않음). TSM 본표 "Long-term liabilities - current portion"(CurrentPortionOfLongtermBorrowings)은
+  // 사채 유동분(CurrentBondsIssued…)을 이미 포함한다 — 합하면 사채가 두 번(2024: 57,148 + 59,857.9 백만 TWD, 6-K 본표로 확인 2026-10-02)
+  [[["CurrentPortionOfLongtermBorrowings", "CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"]], "LongTermDebtCurrent"],
   [["DepreciationExpense", "AmortisationExpense"], "DepreciationDepletionAndAmortization"],
   [["AdjustmentsForDepreciationExpense", "AdjustmentsForAmortisationExpense"], "DepreciationDepletionAndAmortization"],
   // 한국 IFRS 현금성자산과 같은 범위 — 현금 외 유동 상각후원가·당기손익 금융자산
   [["CurrentFinancialAssetsAtAmortisedCost", "CurrentFinancialAssetsAtFairValueThroughProfitOrLoss"], "ShortTermInvestments"],
-  [["IssuedCapital", "SharePremium", "CapitalReserve"], "CommonStocksIncludingAdditionalPaidInCapital"],
+  // 자본금 + 주식발행초과금. CapitalReserve 는 넣지 않는다 — TSM 은 이 개념을 이익잉여금 안의 법정적립금(311,147 백만 TWD)에 달아
+  // 이익잉여금과 이중 계산됐다(2026-10-02, 6-K 연결재무보고서 "Appropriated as legal capital reserve" 로 확인). 회사마다 쓰임이 달라 쓰지 않음
+  [["IssuedCapital", "SharePremium"], "CommonStocksIncludingAdditionalPaidInCapital"],
   [["ProceedsFromIssueOfBondsNotesAndDebentures", "ProceedsFromNoncurrentBorrowings"], "ProceedsFromIssuanceOfLongTermDebt"],
   [["RepaymentsOfBondsNotesAndDebentures", "RepaymentsOfNoncurrentBorrowings"], "RepaymentsOfLongTermDebt"],
   // 투자활동 금융자산 취득·처분(TSM 2025 20-F — 상각후원가·FVOCI·FVTPL 별 개념). 현금흐름표 투자자산 취득·처분 줄이 합산하는 개념으로
@@ -135,6 +139,30 @@ const IFRS_SUM: [(string | string[])[], string][] = [
     ["InvestmentAccountedForUsingEquityMethod", "InvestmentsAccountedForUsingEquityMethod"],
   ], "LongTermInvestments"],
 ];
+
+/**
+ * us-gaap 개념 → 그 값을 만드는 IFRS 원천 개념(부호 포함) 후보 묶음 — 6-K 분기 재무제표 판독(edgar-6k.ts)이 같은 대응을 쓰게 한다.
+ * 묶음 하나 = 합계를 이루는 개념들(배열 원소가 배열이면 그 중 하나). 단순 대응은 원소 1개짜리 묶음
+ */
+/**
+ * 대응표 전체(받는 us-gaap 개념별 원천 후보 묶음, ifrsSourcesOf 와 같은 형태) — 검증기 사업연도 완결성·값 대조(2026-10-03 재감사 7·8차).
+ * 검증기는 이 값을 자기 사본과 비교해 대응표가 바뀌면 실패로 잡는다
+ */
+export function ifrsDstGroups(): { dst: string; sum: (string | string[])[]; sign: 1 | -1 }[] {
+  const out: { dst: string; sum: (string | string[])[]; sign: 1 | -1 }[] = [];
+  for (const [src, dst] of IFRS_MAP) out.push({ dst, sum: [src], sign: 1 });
+  for (const [srcs, dst] of IFRS_SUM) out.push({ dst, sum: srcs, sign: 1 });
+  for (const [src, dst] of IFRS_NEG) out.push({ dst, sum: [src], sign: -1 });
+  return out;
+}
+
+export function ifrsSourcesOf(dst: string): { sum: (string | string[])[]; sign: 1 | -1 }[] {
+  const out: { sum: (string | string[])[]; sign: 1 | -1 }[] = [];
+  for (const [src, d] of IFRS_MAP) if (d === dst) out.push({ sum: [src], sign: 1 });
+  for (const [srcs, d] of IFRS_SUM) if (d === dst) out.push({ sum: srcs, sign: 1 });
+  for (const [src, d] of IFRS_NEG) if (d === dst) out.push({ sum: [src], sign: -1 });
+  return out;
+}
 
 const isCurrency = (u: string) => /^[A-Z]{3}$/.test(u);
 
