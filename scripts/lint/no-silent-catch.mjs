@@ -23,18 +23,27 @@ const TARGETS = [
   { dir: "src/app/api/cron/verify-row", re: /\.ts$/, deep: true },
   // 한국 시가총액(KRX) 경로와 그 호출부(재감사 14차 ③ — fetchKrxCapsOn 이 조회 오류를 삼켜 loadKrCaps 수정이 무효였다)
   { dir: "src/lib/markets/quote", re: /^krx\.ts$/, deep: false },
+  // 한국 감사 1차(2026-10-05) — 검증기 한국 원자료 모듈, 감가상각 적재본 조회, 한국 어댑터(손익 TTM)
+  { dir: "scripts/verify-kr", re: /\.mjs$/, deep: false },
+  { dir: "src/lib/db", re: /^kr-da\.ts$/, deep: false },
+  { dir: "src/lib/markets/kr", re: /^opendart\.ts$/, deep: false },
+  // 미국·한국이 섞인 파일은 한국 경로만 — "// no-silent-catch:begin" ~ "// no-silent-catch:end" 구간(구간이 없으면 실패)
+  { dir: "src/app/api/markets/[market]/[symbol]/highlights", re: /^route\.ts$/, deep: false, region: true },
+  { dir: "src/app/api/markets/[market]/[symbol]/financials", re: /^route\.ts$/, deep: false, region: true },
+  { dir: "src/app/api/markets/[market]/[symbol]/ttm", re: /^route\.ts$/, deep: false, region: true },
+  { dir: "src/lib/markets", re: /^consensus\.ts$/, deep: false, region: true },
 ];
 function files() {
   const out = [];
-  const walk = (d, re, deep) => {
+  const walk = (d, re, deep, region) => {
     if (!existsSync(d)) return;
     for (const n of readdirSync(d)) {
       const p = join(d, n);
-      if (statSync(p).isDirectory()) { if (deep) walk(p, re, deep); continue; }
-      if (re.test(n)) out.push(p);
+      if (statSync(p).isDirectory()) { if (deep) walk(p, re, deep, region); continue; }
+      if (re.test(n)) out.push({ p, region: !!region });
     }
   };
-  for (const t of TARGETS) walk(join(ROOT, t.dir), t.re, t.deep);
+  for (const t of TARGETS) walk(join(ROOT, t.dir), t.re, t.deep, t.region);
   return out;
 }
 const ARROW = String.raw`(?:\(\s*[\w$]*\s*(?::\s*\w+)?\s*\)|[\w$]+)\s*=>\s*`;
@@ -67,8 +76,24 @@ for (const f of srcFiles()) {
     bad.push(`${relative(ROOT, f).split("\\").join("/")}:${ln}  ${m[0]}… ${mm[0].trim()} (KRX 경로 호출부)`);
   }
 }
-for (const f of files()) {
-  const src = readFileSync(f, "utf8");
+for (const { p: f, region } of files()) {
+  const src0 = readFileSync(f, "utf8");
+  // 구간 검사 — 구간 밖은 공백으로 바꿔 줄 번호를 유지
+  let src = src0;
+  if (region) {
+    const B = "// no-silent-catch:begin", E = "// no-silent-catch:end";
+    if (!src0.includes(B)) { bad.push(`${relative(ROOT, f).split("\\").join("/")}  검사 구간 표시(${B} … ${E}) 없음`); continue; }
+    let out = "", i = 0;
+    for (;;) {
+      const b = src0.indexOf(B, i);
+      if (b < 0) { out += src0.slice(i).replace(/[^\n]/g, " "); break; }
+      const e = src0.indexOf(E, b);
+      if (e < 0) { bad.push(`${relative(ROOT, f).split("\\").join("/")}  ${B} 뒤 ${E} 없음`); break; }
+      out += src0.slice(i, b).replace(/[^\n]/g, " ") + src0.slice(b, e);
+      i = e;
+    }
+    src = out;
+  }
   const lines = src.split("\n");
   const lineOf = (i) => src.slice(0, i).split("\n").length;
   const ok = (ln) => /\/\/\s*silent-ok:\s*\S/.test(lines[ln - 1] ?? "") || /\/\/\s*silent-ok:\s*\S/.test(lines[ln - 2] ?? "");

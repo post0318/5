@@ -75,6 +75,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
 import { loadBbg } from "./reference/bbg.mjs";
+import { makeDiskCache } from "./verify-kr/cache.mjs";
+import { configureDart, dartFnltt, dartStats } from "./verify-kr/dart.mjs";
+import { configureKrx, krxStats } from "./verify-kr/krx.mjs";
+import { krOriginalLayers, closeKrLayers } from "./verify-kr/layers.mjs";
 import { buildAudit, COGS_RULE_COMMON, commonModeOf, decimalsVintage, extItemOf, isDecimalsRounding } from "./metrics/audit.mjs";
 
 // ── 인자 ─────────────────────────────────────────────────────────────
@@ -9669,29 +9673,17 @@ async function verifyUs(sym) {
 // 앱 연간 로더 규칙(연도별 최신 보고서)과 같다. 처음 공시값(Y 보고서의 당기)도 함께 남겨 정정 공시 여부를 구분한다.
 const KR_CORP = new Map(JSON.parse(readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8")).map((r) => [r.s, r.c]));
 const dartCache = new Map();
-// DART 요청 간격 — 몰아 보내면 이 PC 연결이 약 1시간 막힌다(실측 2026-10-01 "fetch failed" → 58분 차단, 30종목 동시 3)
-let dartChain = Promise.resolve();
-const dartSlot = () => (dartChain = dartChain.then(() => new Promise((r) => setTimeout(r, 300))));
+// DART·KRX 디스크 캐시(오너 제안 2026-10-05) — 열쇠 = 보고서 최신 접수번호(verify-kr/dart.mjs). 상한 KR_CACHE_MAX_GB(기본 5), 90일 안 쓴 파일 삭제
+const KR_CACHE = MARKET === "kr" ? makeDiskCache(pathResolve(env.KR_VERIFY_CACHE_DIR || "reports/.dart-cache"), { maxBytes: Number(env.KR_CACHE_MAX_GB ?? 5) * 1024 ** 3, maxIdleDays: 90 }) : null;
+if (KR_CACHE) {
+  KR_CACHE.cleanup();
+  configureDart({ key: env.DART_API_KEY, cache: KR_CACHE });
+  configureKrx({ key: env.KRX_API_KEY, cache: KR_CACHE });
+}
+/** 사업보고서 재무제표(연결·별도) — 목록 또는 null(013). 조회 실패는 던진다(verify-kr/dart.mjs — 요청 간격 300ms 한 줄) */
 async function dartFy(corp, year, fsDiv) {
   const k = `${corp}|${year}|${fsDiv}`;
-  if (!dartCache.has(k)) dartCache.set(k, (async () => {
-    if (!env.DART_API_KEY) throw new Error("DART_API_KEY 미설정");
-    const u = `https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?crtfc_key=${env.DART_API_KEY}&corp_code=${corp}&bsns_year=${year}&reprt_code=11011&fs_div=${fsDiv}`;
-    for (let i = 0; ; i++) {
-      try {
-        await dartSlot();
-        const r = await fetch(u, { signal: AbortSignal.timeout(30_000) });
-        if (!r.ok) throw new Error(`DART HTTP ${r.status}`);
-        const j = await r.json();
-        if (j.status === "013") return null; // 조회된 데이터 없음(그해 보고서 미제출·연결 없음)
-        if (j.status !== "000") throw new Error(`DART ${j.status} ${j.message}`);
-        return j.list ?? [];
-      } catch (e) {
-        if (i >= 2) throw e;
-        await new Promise((res) => setTimeout(res, 2000 * (i + 1)));
-      }
-    }
-  })());
+  if (!dartCache.has(k)) dartCache.set(k, dartFnltt(corp, year, "11011", fsDiv));
   return dartCache.get(k);
 }
 const dartNum = (v) => (v == null || v === "" || v === "-" ? null : Number(String(v).replace(/,/g, "")));
@@ -9799,6 +9791,15 @@ const KR_A_ITEMS = [
   ["재무활동 현금흐름", { cf: "cf:total:재무활동 현금흐름" }, ["CF"], ["ifrs-full_CashFlowsFromUsedInFinancingActivities"], ["재무활동현금흐름", "재무활동으로인한현금흐름"]],
 ];
 
+/**
+ * 한국 A층 대조 — vsSource 와 같되 **앱에만 값이 있으면 실패**(감사 1차 ⑧ — 060370 2021 별도 재무제표 해의 "(지배주주 귀속)" 행이 연결 순이익을
+ * 복사한 값이었는데 원자료 없음 = 검증불가로 지나갔다). 승인·표시된 규칙으로 앱만 값을 내는 경우는 없다(있으면 여기 사유와 함께 추가)
+ */
+function vsDart(app, src, srcNote = "") {
+  if (src == null && app != null) return { status: FAIL, app, src: null, note: `원자료(DART) 없음인데 앱 값 ${app}${srcNote ? ` · ${srcNote}` : ""}` };
+  return vsSource(app, src, 0, srcNote);
+}
+
 async function verifyKr(sym) {
   const u = `/api/markets/kr/${encodeURIComponent(sym)}`;
   const checks = [];
@@ -9871,7 +9872,6 @@ async function verifyKr(sym) {
     const v = (k) => h.valuationRows.find((x) => x.key === k)?.values[i] ?? null;
     H[lab] = { date: c.date, mc: r("mktcap"), pref: r("pref_mcap"), cash: r("cash"), debt: r("debt"), nci: r("nci"), ev: r("ev"), ebitda: r("ebitda"), ni: r("ni"), eps: r("eps"), per: v("per"), pbr: v("pbr"), psr: v("psr"), evx: v("ev_ebitda") };
   });
-  const evBlocked = (h.notes ?? []).find((n) => /EV.*(미표시|표시하지 않|계산하지 않)/.test(n));
   const rowOf = (stmt, name) => stmt?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName === name)?.values ?? {};
   const lab = (k) => (k === "현재/LTM" ? "LTM" : k);
   const A = {};
@@ -9929,7 +9929,7 @@ async function verifyKr(sym) {
           // 2023 보고서 전전기에서 재작성 116.45조, 2022 보고서 전기는 117.61조)
           const yv = dartYearValue(cur, next, next2, y, sjs, ids, names);
           const orig = yv.orig, latest = yv.latest;
-          const r = vsSource(app, latest, 0, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : ""].filter(Boolean).join(" · "));
+          const r = vsDart(app, latest, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : ""].filter(Boolean).join(" · "));
           if (r.status === FAIL && app != null && orig != null && app === orig && latest !== orig)
             r.note = `앱 = 처음 공시 ${orig} · 최신 보고서 값 ${latest} — 앱이 재작성 값을 안 씀`;
           else if (r.status === PASS && orig != null && latest !== orig) r.note = `최신 보고서의 재작성 값 — 처음 공시 ${orig}`;
@@ -9967,11 +9967,29 @@ async function verifyKr(sym) {
         const ownerOf = () => { for (const [L, f] of [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]]) if (L && L.some((r) => dartNum(r[f]) != null)) return [L, f]; return [null, null]; };
         const latestEps = (kind) => { const [L, f] = ownerOf(); return L ? epsOf(L, f, kind) : null; };
         const bE = latestEps("b"), dE = latestEps("d");
-        add("A", "기본 EPS = DART", col, vsSource(isByName("기본 EPS", k), bE?.v ?? null, 0, bE?.how ?? ""));
+        add("A", "기본 EPS = DART", col, vsDart(isByName("기본 EPS", k), bE?.v ?? null, bE?.how ?? ""));
         { const rr = vsSource(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, 0); dartVint[`${col}|희석 EPS`] = { app: rr.app, latest: rr.src, pass: rr.status === PASS, vAll: [] }; }
-        add("A", "희석 EPS = DART", col, vsSource(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, 0, dE ? dE.how : bE ? `DART 희석 EPS 미공시 — 기본 EPS 와 대조${bE.how ? " · " + bE.how : ""}` : ""));
+        add("A", "희석 EPS = DART", col, vsDart(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, dE ? dE.how : bE ? `DART 희석 EPS 미공시 — 기본 EPS 와 대조${bE.how ? " · " + bE.how : ""}` : ""));
       }
     }
+  }
+
+  // ── 원자료 층 K1~K5(감사 1차 2026-10-05) — KRX·DART 를 검증기가 직접(verify-kr/layers.mjs)
+  {
+    const corp = KR_CORP.get(sym);
+    if (corp) await krOriginalLayers({
+      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same,
+      consts: { PASS, FAIL, NA },
+      yahooBars: async (s) => {
+        const y = await yahoo();
+        for (const suf of [".KS", ".KQ"]) {
+          const r = await y.chart(s + suf, { period1: new Date(Date.now() - 20 * 864e5), interval: "1d" }, { validateResult: false });
+          const q = (r?.quotes ?? []).filter((b) => b.close != null).map((b) => ({ date: new Date(new Date(b.date).getTime() + 9 * 3600e3).toISOString().slice(0, 10), close: b.close }));
+          if (q.length) return q;
+        }
+        throw new Error("Yahoo 일봉 없음(.KS·.KQ)");
+      },
+    });
   }
 
   // LTM 기준일 — 손익 TTM 이 분기까지 왔는데 재무상태표 스냅샷이 연말값이면 현금·차입금·자본이 낡았다
@@ -10015,9 +10033,9 @@ async function verifyKr(sym) {
       if (x.eps <= 0) add("D", "PER 부호 규칙(분모 ≤ 0 → 빈칸)", c, x.per == null ? { status: PASS } : { status: FAIL, note: `EPS ${x.eps} 인데 PER ${x.per}` });
       else add("D", "PER 기대치(분모 > 0 → 값 있음)", c, x.per != null ? { status: PASS } : { status: FAIL, note: `EPS ${x.eps} 인데 PER 빈칸` });
     }
-    if (!evBlocked && x.mc != null) {
-      if (x.ev == null) add("D", "EV 기대치", c, { status: FAIL, note: "EV 미표시 사유 없이 빈칸" });
-      else {
+    // EV 기대치(공란 여부)는 K2 층이 검증기 자체 판정(금융업·금융 자회사·리스 확인 불가·KRX)으로 정한다 — 앱 주석 문구를 근거로 쓰지 않는다(감사 1차 ⑤)
+    if (x.mc != null) {
+      if (x.ev != null) {
         const sum = (x.mc ?? 0) + (x.pref ?? 0) + (x.debt ?? 0) + (x.nci ?? 0) + (x.cash ?? 0);
         add("D", "EV = 보통주+우선주 시총+차입금+NCI−현금", c, same(x.ev, sum));
         if (x.ebitda != null && x.ebitda > 0) add("D", "EV/EBITDA = EV÷EBITDA", c, same(x.evx, x.ev / x.ebitda));
@@ -10400,6 +10418,12 @@ if (MARKET === "us" && SGA_MODE) {
   const sAll = all.filter(isSgaCheck);
   console.log(`판관비·연구개발비 검사 통과 ${sAll.filter((c) => c.status === PASS).length} · 실패 ${sgaFails.length} · 공통모드 ${sAll.filter((c) => c.status === COMMON).length} · 검증불가 ${sAll.filter((c) => c.status === NA).length} · ③ 오류 ${sgaErrs.length}건 (판관비·연구개발비 모드 — 종료코드 기준, 지표 미종결)`);
   for (const c of sgaFails) console.log(`  [실패] ${c.sym} [${c.col}] ${c.name} — ${String(c.note ?? "").slice(0, 300)}`);
+}
+if (KR_CACHE) {
+  const cs = KR_CACHE.summary();
+  console.log(`
+DART·KRX 디스크 캐시 — 적중 ${cs.hit} · 미스 ${cs.miss} · 새로 씀 ${cs.write} · 정리(옛 판본 ${cs.deletedOld} · 90일 미사용 ${cs.deletedIdle} · 상한 초과 ${cs.deletedCap}) · 총 ${cs.files}파일 ${(cs.bytes / 1024 ** 2).toFixed(1)}MB · DART 요청 ${dartStats.requests} · KRX 요청 ${krxStats.requests}`);
+  await closeKrLayers();
 }
 const infraBad = errors.length || badSkips.length || empty.length || missing.length;
 process.exit(METRIC === "revenue" ? (revFails.length || revErrs.length || infraBad ? 1 : 0)
