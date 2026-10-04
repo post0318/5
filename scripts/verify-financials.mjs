@@ -9939,7 +9939,7 @@ async function verifyKr(sym) {
             const own = [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]].find(([L0, f]) => L0 && L0.some((r0) => dartNum(r0[f]) != null));
             if (own) {
               const [L0, f] = own;
-              const isNci = dartRows(L0, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToNonControllingInterests"], ["비지배지분"]).map((r0) => dartNum(r0[f])).filter((v0) => v0 != null);
+              const isNci = dartRows(L0, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToNonControllingInterests", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"], ["비지배지분"]).map((r0) => dartNum(r0[f])).filter((v0) => v0 != null);
               const bsNci = dartRows(L0, ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]).map((r0) => dartNum(r0[f])).filter((v0) => v0 != null && v0 !== 0);
               if (!isNci.length && !bsNci.length) {
                 latest = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLoss"], ["당기순이익", "당기순이익손실"]).latest;
@@ -9951,8 +9951,10 @@ async function verifyKr(sym) {
           // 지배·비지배 귀속 줄이 둘 다 있으면 합(103590 2021·2022). 검증기가 DART 줄로 따로 계산
           if (name === "당기순이익(연결)" && latest == null) {
             const p0 = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], []).latest;
-            const n0 = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToNonControllingInterests"], []).latest;
+            const n0 = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToNonControllingInterests", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"], []).latest;
+            const b0 = dartYearValue(cur, next, next2, y, ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]).latest;
             if (p0 != null && n0 != null) { latest = p0 + n0; rule = `DART 당기순이익 줄 없음 → 지배 ${p0} + 비지배 ${n0}(승인 규칙)`; }
+            else if (p0 != null && n0 == null && (b0 == null || b0 === 0)) { latest = p0; rule = `DART 당기순이익 줄 없음 · 비지배지분 없음 → 지배 ${p0}(승인 규칙)`; }
           }
           const r = vsDart(app, latest, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : "", rule].filter(Boolean).join(" · "));
           if (r.status === FAIL && app != null && orig != null && app === orig && latest !== orig)

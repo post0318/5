@@ -165,7 +165,8 @@ export async function krOriginalLayers(ctx) {
         const r0 = L.latest(y, "11011"), r1 = L.latest(y + 1, "11011");
         // 회계정책 문장은 그 기간 보고서의 모든 판본(정정본은 바뀐 부분만 담기도 한다 — 103590 2022 정정본에 정책 문장 없음)
         const all = (yy) => L.reports.filter((x) => x.year === yy && x.code === "11011").map((x) => x.rcept);
-        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY` }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY` }], src.fsDiv, cl.debt.map((r) => nm(r.account_nm)));
+        const namesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => nm(r.account_nm));
+        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf);
       } catch (e) { err(`리스부채 주석 ${y}`, e); continue; }
       why += ` · 본표 리스부채 줄 없음 → ${lease.status === "added" ? `주석 리스부채 ${lease.amount} 가산` : lease.status === "included" ? "차입금 줄에 포함" : "리스부채 확인 불가"}(${lease.how})`;
       if (y === Math.max(...yearsShown)) policySrc.push(lease);

@@ -91,7 +91,8 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   // 비지배지분이 없는 회사는 DART 손익계산서에 "지배기업 소유주지분" 줄 자체를 생략한다(LS마린솔루션 전 기간·한전기술 2022 —
   // FnGuide 순이익(지배) = 당기순이익, 검증 2026-09-28). 그 기간에 비지배지분 순이익 줄도, 재무상태표 비지배지분 줄도 없을 때만
   // (없음 증명) 지배주주 귀속 = 당기순이익으로 채우고 칸 주석을 단다. 한쪽이라도 있으면 비운 그대로.
-  const niNci = S({ ids: ["ifrs-full_ProfitLossAttributableToNonControllingInterests"], names: ["비지배지분"] });
+  // DART 표준 ID 는 "Noncontrolling"(소문자 c) — 대문자 표기도 함께(감사 1차 2026-10-05: 대문자만 찾아 비지배 순이익 줄을 못 봤다)
+  const niNci = S({ ids: ["ifrs-full_ProfitLossAttributableToNoncontrollingInterests", "ifrs-full_ProfitLossAttributableToNonControllingInterests"], names: ["비지배지분"] });
   const bsNci = seriesOf(facts, ["ifrs-full_NoncontrollingInterests"], ["비지배지분"], "BS");
   const niParentNotes: Record<string, string> = {};
   // 별도 재무제표 해(연결 재무제표 없음)는 지배·비지배 구분 자체가 없다 — 지배주주 귀속 행은 빈칸 + 칸 주석(감사 1차 ⑧: 예전엔 별도 당기순이익을

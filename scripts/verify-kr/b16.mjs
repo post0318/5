@@ -129,13 +129,15 @@ export function leaseInDebtLines(sentences) {
  *  unknown: 둘 다 못 정함 → EV 공란이어야 한다
  * report = { rcept, prefix } (그 해 값이 실린 사업보고서와 컨텍스트 접두어)
  */
-export async function leaseNoteFor(reports, basis, faceDebtNames) {
+export async function leaseNoteFor(reports, basis, faceDebtNamesOf) {
   const tried = [];
   for (const rp of reports) {
     if (!rp) continue;
     const sents = [];
     for (const rc of rp.all?.length ? rp.all : [rp.rcept]) sents.push(...(await dartDocLeaseSentences(rc)));
     const names = leaseInDebtLines(sents);
+    // 정책 문장의 줄 이름은 그 보고서 본표의 차입금 줄과 맞춘다(같은 보고서 — 103590: 2022 보고서 "장기차입금", 2024 보고서는 줄 이름을 바꿨다)
+    const faceDebtNames = names.length ? await faceDebtNamesOf(rp.fy) : [];
     const hit = names.filter((n) => faceDebtNames.some((f) => f.includes(n) || n.includes(f)));
     const facts = await dartXbrlFacts(rp.rcept, "11011");
     const L = leaseFromFacts(facts, rp.prefix, basis);

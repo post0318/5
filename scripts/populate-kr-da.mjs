@@ -872,7 +872,6 @@ async function leaseNotes(corp, latest) {
   const years = [];
   for (let y = latest; y >= latest - 5; y -= 1) years.push(y);
   const faceLease = {}; // 해 → 본표 리스부채 줄 값이 있는가
-  const faceDebt = {}; // 해 → 본표 차입금류 줄 이름
   const sepOf = {};
   for (const ry of [latest, latest - 2, latest - 4]) {
     const r = await fnlttBs(corp, ry);
@@ -880,7 +879,6 @@ async function leaseNotes(corp, latest) {
     for (const [col, y] of [["thstrm_amount", ry], ["frmtrm_amount", ry - 1], ["bfefrmtrm_amount", ry - 2]]) {
       if (y in faceLease || !r.rows.some((x) => amt(x[col]) != null)) continue;
       faceLease[y] = r.rows.some((x) => isLeaseRow(x) && amt(x[col]) != null);
-      faceDebt[y] = r.rows.filter((x) => /차입|사채|장기부채/.test((x.account_nm ?? "").replace(/\s/g, "")) && amt(x[col]) != null).map((x) => x.account_nm.replace(/\s/g, ""));
       sepOf[y] = r.fs === "OFS";
     }
   }
@@ -896,6 +894,8 @@ async function leaseNotes(corp, latest) {
     for (const rc of ry ? rcpMemo[ry] : [rcp]) for (const n of await leasePolicyOf(rc)) out.add(n);
     return (polMemo[rcp] = [...out]);
   };
+  const faceNames = (rows) => rows.filter((x) => /차입|사채|장기부채/.test((x.account_nm ?? "").replace(/\s/g, ""))).map((x) => x.account_nm.replace(/\s/g, ""));
+  const faceDebtOfReport = {};
   const leaseNote = {};
   for (const y of years) {
     if (faceLease[y] !== false) continue; // 본표에 리스 줄이 있거나 그해 재무상태표 없음
@@ -906,7 +906,9 @@ async function leaseNotes(corp, latest) {
       const rcp = await rcpOf(ry);
       if (!rcp) continue;
       const names = await polOf(rcp);
-      const hit = names.filter((n) => (faceDebt[y] ?? []).some((f) => f.includes(n) || n.includes(f)));
+      // 정책 문장의 줄 이름은 그 보고서 본표의 차입금 줄과 맞춘다(103590: 2022 보고서 "장기차입금", 2024 보고서는 줄 이름을 바꿨다)
+      if (names.length && !(ry in faceDebtOfReport)) faceDebtOfReport[ry] = faceNames((await fnlttBs(corp, ry))?.rows ?? []);
+      const hit = names.filter((n) => (faceDebtOfReport[ry] ?? []).some((f) => f.includes(n) || n.includes(f)));
       const L = leaseAmountOf(await xmlOf(rcp), prefix, sepOf[y]);
       if (hit.length) { note = { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rcp})` }; break; }
       if (L.amount != null) { note = { status: "added", amount: L.amount, how: `사업보고서 ${rcp} XBRL 주석 ${prefix} — ${L.how}` }; break; }
@@ -919,7 +921,8 @@ async function leaseNotes(corp, latest) {
   const latestRcp = await rcpOf(latest);
   if (latestRcp && faceLease[latest] === false) {
     const names = await polOf(latestRcp);
-    const hit = names.filter((n) => (faceDebt[latest] ?? []).some((f) => f.includes(n) || n.includes(f)));
+    if (names.length && !(latest in faceDebtOfReport)) faceDebtOfReport[latest] = faceNames((await fnlttBs(corp, latest))?.rows ?? []);
+    const hit = names.filter((n) => (faceDebtOfReport[latest] ?? []).some((f) => f.includes(n) || n.includes(f)));
     leasePolicyLatest = hit.length
       ? { status: "included", amount: null, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${latestRcp})` }
       : { status: "unknown", amount: null, how: `최근 사업보고서 ${latestRcp} 회계정책에 차입금 포함 문장 없음` };
