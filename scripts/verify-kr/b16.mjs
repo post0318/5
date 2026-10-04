@@ -12,6 +12,7 @@ import { dartXbrlFacts, dartDocLeaseSentences } from "./dart.mjs";
 
 const nm = (s) => String(s ?? "").replace(/\s/g, "");
 const isStd = (id) => /^(ifrs-full|dart)_/.test(id ?? "");
+const thstrm = (r) => v(r, "thstrm_amount");
 const v = (r, col) => {
   const t = String(r?.[col] ?? "").trim();
   return t === "" || t === "-" ? null : Number(t.replace(/,/g, ""));
@@ -28,8 +29,16 @@ const CASH_STD = /^(ifrs-full|dart)_(CashAndCashEquivalents|Short[tT]ermDeposits
 // 이름(표준 코드 없음, 또는 포괄 태그 OtherCurrentFinancialAssets) — 단기금융상품·단기투자자산(단기투자증권)·단기금융자산. "기타(유동)금융자산"은 B16 제외
 const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기투자자산|단기투자증권|단기금융자산|유동상각후원가측정금융자산|상각후원가측정유동금융자산|유동당기손익-?공정가치측정금융자산|당기손익-?공정가치측정유동금융자산)$/;
 
-export function classifyBsRows(rows) {
+/**
+ * @param rows 값을 읽을 보고서 줄(그 해를 담은 가장 최근 보고서)
+ * @param ownRows 그 기간이 당기인 보고서의 줄(연간 = 그해 사업보고서, LTM = 그 분기 보고서) — "기타(유동)금융자산" 은 이 보고서가 같은 이름 줄에
+ *   단기예치금 표준 ID 를 달았을 때만 현금성자산(오너 결정 2026-10-05 — 064350 2020~2022 보고서 dart_ShortTermDepositsNotClassifiedAsCashEquivalents).
+ *   생략하면 rows 자신
+ */
+export function classifyBsRows(rows, ownRows = rows) {
   const bs = (rows ?? []).filter((r) => r.sj_div === "BS");
+  const DEP = /^(ifrs-full|dart)_Short[tT]ermDeposits(Not)?ClassifiedAsCashEquivalents$/;
+  const depositNamed = new Set((ownRows ?? []).filter((r) => r.sj_div === "BS" && DEP.test(r.account_id ?? "") && thstrm(r) != null).map((r) => nm(r.account_nm)));
   // 표준 차입금 태그여도 이름이 자산(대여금·채권)이면 아님
   const debt = bs.filter((r) => (isStd(r.account_id) ? DEBT_STD.test(r.account_id) && !DEBT_STD_NOT.test(r.account_id) && !/대여|자산|받을|리스채권/.test(nm(r.account_nm)) : DEBT_NAME.test(nm(r.account_nm)) && !DEBT_NAME_NOT.test(nm(r.account_nm))));
   const isLease = (r) => /LeaseLiabilities/.test(r.account_id ?? "") || /리스부채/.test(nm(r.account_nm));
@@ -40,8 +49,8 @@ export function classifyBsRows(rows) {
     leaseFace: debt.filter(isLease),
     plain,
     // 회사가 같은 줄을 해마다 다른 태그로 달기도 한다(267260·329180 "단기금융자산", 402340 "단기투자자산")
-    // 판정 순서: "기타(유동)금융자산" 제외 → B16 에 이름이 적힌 항목은 태그와 관계없이 포함 → 그 밖은 표준 태그
-    cash: bs.filter((r) => !/^기타(유동)?금융자산$/.test(nm(r.account_nm)) && (CASH_NAME.test(nm(r.account_nm)) || (isStd(r.account_id) && CASH_STD.test(r.account_id)))),
+    // 판정 순서: "기타(유동)금융자산" = 그 기간 자기 보고서가 단기예치금 ID 를 달았을 때만 → B16 에 이름이 적힌 항목은 태그와 관계없이 포함 → 그 밖은 표준 태그
+    cash: bs.filter((r) => (/^기타(유동)?금융자산$/.test(nm(r.account_nm)) ? depositNamed.has(nm(r.account_nm)) : CASH_NAME.test(nm(r.account_nm)) || (isStd(r.account_id) && CASH_STD.test(r.account_id)))),
     nci: bs.filter((r) => r.account_id === "ifrs-full_NoncontrollingInterests" || nm(r.account_nm) === "비지배지분"),
     // 금융업 판정(검증기 자체 규칙) — 예수부채·예금부채·보험계약부채·책임준비금·투자계약부채 줄이 있으면 은행·보험·증권. 일반 기업의 "예수금"(원천징수 등)은 아님(삼성전자 실측)
     financial: bs.some((r) => /^(예수부채|고객예수부채|예금부채|보험계약부채|책임준비금|투자계약부채)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? "")),
@@ -116,7 +125,7 @@ export function leaseFromFacts(facts, prefix, basis) {
 /** 회계정책 문장 — 리스부채를 본표의 어느 줄(차입금류)에 포함해 표시하는가. 그 이름들을 돌려준다(없으면 []) */
 export function leaseInDebtLines(sentences) {
   const Q = "['‘’\"“”]?";
-  const re = new RegExp(`리스부채[를는은]?[^.]{0,40}?${Q}([가-힣]*(?:차입금|장기부채|사채))${Q}(?:\\s*(?:또는|및|과|와|,)\\s*${Q}([가-힣]*(?:차입금|장기부채|사채))${Q})?\\s*(?:에|으로|로)\\s*(?:포함하여\\s*)?(?:분류|표시|포함)`);
+  const re = new RegExp(`리스부채[를는은]?[^.]{0,40}?${Q}([가-힣]*(?:차입금|차입부채|장기부채|사채))${Q}(?:\\s*(?:또는|및|과|와|,)\\s*${Q}([가-힣]*(?:차입금|차입부채|장기부채|사채))${Q})?\\s*(?:에|으로|로)\\s*(?:포함하여\\s*)?(?:분류|표시|포함)`);
   const out = new Set();
   for (const s of sentences) { const m = re.exec(s); if (m) { out.add(m[1]); if (m[2]) out.add(m[2]); } }
   return [...out];
@@ -146,4 +155,71 @@ export async function leaseNoteFor(reports, basis, faceDebtNamesOf) {
     tried.push(`${rp.rcept}: ${L.how}`);
   }
   return { status: "unknown", amount: null, how: tried.join(" / ") || "사업보고서 없음" };
+}
+
+// ── 분기말 리스부채(원문 주석 표 태그 칸) ──
+/**
+ * 본표에 리스부채 줄이 없고 회계정책도 "차입금 줄에 포함"이 아닌 회사의 최신 분기말 리스부채(오너 결정 2026-10-05). 규칙 문장만 보고 따로 짠 판독
+ * (앱 scripts/populate-kr-da.mjs leaseQuarterOf 를 가져오지 않는다):
+ *  - 칸 묶음 = (개념, 연결 축을 뺀 차원). 열 = 분기말(CFY{Y}e{P}A) · 전기말(PFY{Y-1}e{P}), P = FQ·HY·TQ
+ *  - 묶음을 믿는 조건: 그 보고서(또는 같은 해 앞 분기 보고서)의 전기말 값이 최근 사업연도 주석 리스부채와 정확히 같다
+ *  - 묶음 종류 순위: 리스부채 개념 > 금융부채 범주 표 리스부채 멤버 > 재무활동 부채 조정표 리스부채 멤버 > 유동 + 비유동 합(같은 차원)
+ *  - 가장 앞 순위의 믿는 묶음들이 분기말 값 하나로 모이면 그 값, 아니면 정하지 못함(빈칸이어야)
+ * reports: [{ q, rcept, cells }] — 같은 사업연도 Y 의 분기 보고서들, q 오름차순(같은 q 는 최신 판본 먼저). 결과 { amount, how } 또는 { amount: null, how }
+ */
+export function quarterLeaseFromCells(reports, Y, latestQ, annualAmount, basis) {
+  const P = { 1: "FQ", 2: "HY", 3: "TQ" };
+  const SKIP = /MaturityAxis|GrossCarryingAmountMember|PresentValueDiscountMember|AccumulatedDepreciation\w*Member|TypesOfRisksAxis/;
+  const kindOf = (concept, dims) => {
+    if (concept === "ifrs-full_LeaseLiabilities") return 1;
+    if ((concept === "ifrs-full_FinancialLiabilities" || concept === "ifrs-full_OtherFinancialLiabilities") && dims.endsWith("_ifrs-full_LeaseLiabilitiesMember")) return 2;
+    if (concept === "ifrs-full_LiabilitiesArisingFromFinancingActivities" && dims === "ifrs-full_LiabilitiesArisingFromFinancingActivitiesAxis_ifrs-full_LeaseLiabilitiesMember") return 3;
+    return null;
+  };
+  const groupsOf = (cells, q) => {
+    const heads = { cur: `CFY${Y}e${P[q]}A`, pfy: `PFY${Y - 1}e${P[q]}` };
+    const g = new Map(); // "종류|개념|차원" → { kind, cur:[], pfy:[] }
+    const pair = new Map(); // 차원 → { cur: {c:[], n:[]}, pfy: {...} }
+    for (const [concept, ctx, val] of cells) {
+      const col = Object.keys(heads).find((k) => ctx === heads[k] || ctx.startsWith(`${heads[k]}_`));
+      if (!col) continue;
+      const tail = ctx.slice(heads[col].length);
+      const con = /ConsolidatedMember/.test(tail), sepM = /SeparateMember/.test(tail), axis = /ConsolidatedAndSeparateFinancialStatementsAxis/.test(tail);
+      if (basis === "OFS" ? con : sepM || (axis && !con)) continue;
+      const dims = tail.replace(/_?ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_(?:Consolidated|Separate)Member/, "").replace(/^_/, "");
+      if (SKIP.test(dims)) continue;
+      const kind = kindOf(concept, dims);
+      if (kind) {
+        const key = `${kind}|${concept}|${dims}`;
+        if (!g.has(key)) g.set(key, { kind, cur: [], pfy: [] });
+        g.get(key)[col].push(val);
+      } else if (concept === "ifrs-full_CurrentLeaseLiabilities" || concept === "ifrs-full_NoncurrentLeaseLiabilities") {
+        if (!pair.has(dims)) pair.set(dims, { cur: { c: [], n: [] }, pfy: { c: [], n: [] } });
+        pair.get(dims)[col][concept.includes("Noncurrent") ? "n" : "c"].push(val);
+      }
+    }
+    const single = (xs) => (xs.length && xs.every((x) => x === xs[0]) ? xs[0] : null);
+    const out = new Map();
+    for (const [key, x] of g) out.set(key, { kind: x.kind, cur: single(x.cur), pfy: single(x.pfy) });
+    for (const [dims, x] of pair) {
+      const sum = (s) => { const c = single(s.c), n = single(s.n); return c != null && n != null ? c + n : null; };
+      out.set(`4|유동+비유동|${dims}`, { kind: 4, cur: sum(x.cur), pfy: sum(x.pfy) });
+    }
+    return out;
+  };
+  const trusted = new Map(); // 묶음 → 근거
+  const notes = [];
+  for (const r of reports) {
+    const gs = groupsOf(r.cells, r.q);
+    for (const [key, x] of gs) if (x.pfy != null && x.pfy === annualAmount && !trusted.has(key)) trusted.set(key, `${Y} Q${r.q} 보고서 ${r.rcept} 전기말 = 사업연도 주석 ${annualAmount}`);
+    if (r.q !== latestQ) continue;
+    const usable = [...gs].filter(([key, x]) => trusted.has(key) && x.cur != null && x.cur > 0);
+    if (!usable.length) { notes.push(`${r.rcept}: 전기말이 사업연도 주석과 같은 묶음 없음`); continue; }
+    const top = Math.min(...usable.map(([, x]) => x.kind));
+    const best = usable.filter(([, x]) => x.kind === top);
+    const vals = new Set(best.map(([, x]) => x.cur));
+    if (vals.size !== 1) { notes.push(`${r.rcept}: 같은 순위 묶음 분기말 값 불일치 ${best.map(([k, x]) => `${k}=${x.cur}`).join(", ")}`); continue; }
+    return { amount: best[0][1].cur, how: `분기 보고서 ${r.rcept} 주석 ${best[0][0]} 분기말 ${best[0][1].cur} (${trusted.get(best[0][0])})` };
+  }
+  return { amount: null, how: notes.join(" / ") || "분기 보고서 없음" };
 }

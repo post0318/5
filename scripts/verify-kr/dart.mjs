@@ -172,3 +172,45 @@ export async function dartDocLeaseSentences(rcept) {
     return [...out];
   });
 }
+
+const DOC_CELL_VER = "c1";
+const CELL_UNIT = { 원: 1, 천원: 1e3, 백만원: 1e6, 억원: 1e8 };
+/**
+ * 분기·반기 보고서 원문 주석 표의 태그 칸(리스부채 관련 — ACODE·ACONTEXT 가 달린 <TE>) → [개념, 컨텍스트, 원 단위 값]. 표 단위("(단위 : 천원)")는
+ * 그 표 안 첫 부분, 없으면 표 바로 앞 글자의 마지막 단위 표기. ADECIMAL 이 표 단위와 맞지 않는 칸(0 제외)은 버린다. 판본 = 접수번호
+ */
+export async function dartDocLeaseCells(rcept) {
+  return versioned("doc-lease-cells", rcept, `${rcept}-${DOC_CELL_VER}`, async () => {
+    const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const head = strFromU8(buf.slice(0, 300));
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const strip = (t) => t.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+    const unitIn = (t) => [...strip(t).matchAll(/단위\s*:\s*(천원|백만원|억원|원)/g)].map((m) => m[1]);
+    const out = [];
+    for (const b of Object.values(files)) {
+      let t = new TextDecoder("utf-8").decode(b);
+      if (/�/.test(t.slice(0, 20000))) t = new TextDecoder("euc-kr").decode(b);
+      const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
+      let m;
+      while ((m = re.exec(t))) {
+        const tab = m[0];
+        const u = CELL_UNIT[unitIn(tab.slice(0, 2000))[0] ?? unitIn(t.slice(Math.max(0, m.index - 1500), m.index)).at(-1)];
+        if (!u) continue;
+        for (const c of tab.matchAll(/<TE\s([^>]*)>([^<]*)<\/TE>/g)) {
+          const attr = (n) => new RegExp(`\b${n}="([^"]*)"`).exec(c[1])?.[1];
+          const code = attr("ACODE"), ctx = attr("ACONTEXT"), dec = attr("ADECIMAL");
+          if (!code || !ctx || !/Lease|LiabilitiesArisingFromFinancingActivities|FinancialLiabilities/.test(code + ctx)) continue;
+          const raw = c[2].replace(/[　\s]/g, "");
+          if (!/^\(?-?[\d,]+\)?$/.test(raw)) continue;
+          const val = Number(raw.replace(/[(),-]/g, "")) * (/^[(-]/.test(raw) ? -1 : 1);
+          if (dec != null && /^-?\d+$/.test(dec) && val !== 0 && 10 ** -Number(dec) !== u) continue;
+          out.push([code, ctx, val * u]);
+        }
+      }
+    }
+    return out;
+  });
+}

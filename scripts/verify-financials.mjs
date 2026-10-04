@@ -78,6 +78,7 @@ import { loadBbg } from "./reference/bbg.mjs";
 import { makeDiskCache } from "./verify-kr/cache.mjs";
 import { configureDart, dartFnltt, dartStats } from "./verify-kr/dart.mjs";
 import { configureKrx, krxStats } from "./verify-kr/krx.mjs";
+import { configureCalendar } from "./verify-kr/calendar.mjs";
 import { krOriginalLayers, closeKrLayers } from "./verify-kr/layers.mjs";
 import { buildAudit, COGS_RULE_COMMON, commonModeOf, decimalsVintage, extItemOf, isDecimalsRounding } from "./metrics/audit.mjs";
 
@@ -9679,6 +9680,7 @@ if (KR_CACHE) {
   KR_CACHE.cleanup();
   configureDart({ key: env.DART_API_KEY, cache: KR_CACHE });
   configureKrx({ key: env.KRX_API_KEY, cache: KR_CACHE });
+  configureCalendar({ cache: KR_CACHE });
 }
 /** 사업보고서 재무제표(연결·별도) — 목록 또는 null(013). 조회 실패는 던진다(verify-kr/dart.mjs — 요청 간격 300ms 한 줄) */
 async function dartFy(corp, year, fsDiv) {

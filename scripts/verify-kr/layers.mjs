@@ -10,9 +10,9 @@
  *     최신 정기보고서는 정기공시 목록(list.json)으로 정한다(앱 ttm.periodLabel 아님).
  *  K5 주당배당금(사업연도) = DART alotMatter, 배당수익률 = DPS ÷ KRX 연말 종가.
  */
-import { dartList, dartFnltt, dartAlot, dartXbrlFacts } from "./dart.mjs";
+import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartDocLeaseCells } from "./dart.mjs";
 import { krxCapsOn } from "./krx.mjs";
-import { classifyBsRows, sumCol, leaseNoteFor } from "./b16.mjs";
+import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells } from "./b16.mjs";
 
 const COL = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
 const num = (x) => { const t = String(x ?? "").trim(); return t === "" || t === "-" ? null : Number(t.replace(/,/g, "")); };
@@ -128,11 +128,12 @@ export async function krOriginalLayers(ctx) {
   let ltmPrefOk = null; // LTM EV 기대치에 쓸 우선주 시가총액(K1 에서 확인된 값)
   if (H.LTM && capCur && capCur.common != null) {
     const appPref = H.LTM.pref ?? (rowHidden("pref_mcap") ? 0 : null);
-    const gap = capCur.emptyWeekdays?.length ? capCur.emptyWeekdays.join("·") : null;
+    // 검증기가 건너뛴 게시 전 거래일(당일·다음 날 KST) — 앱은 그 날 자료를 이미 받았을 수 있다. 이틀 이상 지난 거래일의 빈 응답은 krx.mjs 가 조회 실패로 던진다
+    const gap = capCur.pendingDays?.length ? capCur.pendingDays.join("·") : null;
     if (appPref === capCur.preferred) { add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: PASS, app: appPref, src: capCur.preferred, note: `KRX ${capCur.date}` }); ltmPrefOk = appPref; }
     else if (gap && appPref != null && !(appPref === 0 && capCur.preferred > 0)) {
-      // KRX 가 최근 평일을 빈 응답으로 준 경우 — 앱은 그 날짜 자료로 계산했을 수 있다(원자료 불안정). 0 으로 비운 경우는 그대로 실패
-      add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX 최근 평일 ${gap} 빈 응답 — 검증기 최근 거래일 ${capCur.date}(${capCur.preferred})와 앱 기준일이 다를 수 있음(KRX 원자료 불안정)` });
+      // 게시 전 거래일을 건너뛴 경우 — 앱 기준일이 그 날일 수 있다. 0 으로 비운 경우는 그대로 실패
+      add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX ${gap} 게시 전(거래일 당일·다음 날) — 검증기 최근 거래일 ${capCur.date}(${capCur.preferred})와 앱 기준일이 다를 수 있음` });
       ltmPrefOk = appPref;
     } else exact("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", appPref, capCur.preferred, `KRX ${capCur.date}`);
     if (H.LTM.mc === capCur.common) add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: `KRX ${capCur.date}` });
@@ -157,7 +158,8 @@ export async function krOriginalLayers(ctx) {
     if (!src) continue;
     const own = bsOwner(src, y);
     if (!own) { exact("K2", "총차입금 = DART(B16)", col, x.debt, null, "그해 재무상태표 없음"); continue; }
-    const cl = classifyBsRows(own.rows);
+    // 기타(유동)금융자산 성격은 그해 자기 보고서(src.cur)의 분류로 — 값은 기준 보고서(own)
+    const cl = classifyBsRows(own.rows, src.cur ?? own.rows);
     const faceDebt = sumCol(cl.debt, own.col) ?? 0;
     let lease = { status: "face" }, why = `기준 보고서 ${own.by} ${own.col}${src.fsDiv === "OFS" ? " · 별도" : ""}`;
     if (!cl.leaseFace.length) {
@@ -169,8 +171,8 @@ export async function krOriginalLayers(ctx) {
         lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf);
       } catch (e) { err(`리스부채 주석 ${y}`, e); continue; }
       why += ` · 본표 리스부채 줄 없음 → ${lease.status === "added" ? `주석 리스부채 ${lease.amount} 가산` : lease.status === "included" ? "차입금 줄에 포함" : "리스부채 확인 불가"}(${lease.how})`;
-      if (y === Math.max(...yearsShown)) policySrc.push(lease);
-    } else if (y === Math.max(...yearsShown)) policySrc.push(lease);
+      if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
+    } else if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
     const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
     const expCash = sumCol(cl.cash, own.col) ?? 0;
     const expNci = sumCol(cl.nci, own.col) ?? 0;
@@ -245,7 +247,7 @@ function alotCommonDps(list) {
 }
 
 async function ltmLayer(c) {
-  const { corp, lp, LT, exact, fail, add, consts, tt, policySrc, capCur, ltmPrefOk, evBlockWhy, rowHidden } = c;
+  const { corp, L, lp, LT, exact, fail, add, consts, tt, policySrc, capCur, ltmPrefOk, evBlockWhy, rowHidden } = c;
   const { PASS } = consts;
   const fs = async (y, code) => {
     for (const d of ["CFS", "OFS"]) { const r = await dartFnltt(corp, y, code, d); if (r && r.length) return { rows: r, fsDiv: d }; }
@@ -336,11 +338,20 @@ async function ltmLayer(c) {
   const faceDebt = sumCol(cl.debt, "thstrm_amount") ?? 0;
   let lease = { status: "face" };
   if (!cl.leaseFace.length) {
-    // 분기·반기 보고서 XBRL 은 주석을 태깅하지 않는다(실측 2026 반기 006400·015760) — 금액은 못 구한다. 최근 사업보고서 회계정책이 차입금 줄 포함이면 포함
+    // 최근 사업보고서 회계정책이 차입금 줄 포함이면 포함. 아니면 분기 보고서 원문 주석 표의 태그 칸(오너 결정 2026-10-05 — 분기 XBRL 엔 주석이 없지만 원문
+    // 표 칸에 ACODE·ACONTEXT 가 달려 있다): 전기말 열이 최근 사업연도 주석 리스부채와 같은 묶음의 분기말 값
     const pol = policySrc.at(-1);
-    lease = pol?.status === "included" ? { status: "included", how: pol.how } : { status: "unknown", how: "분기 보고서 리스부채 주석 미태깅(XBRL) — 금액 확인 불가" };
+    if (pol?.status === "included") lease = { status: "included", how: pol.how };
+    else if (pol?.status === "added" && pol.amount != null && pol.fy === Y - 1) {
+      const reps = [];
+      for (let qq = 1; qq <= q; qq++)
+        for (const x of L.reports.filter((r) => r.year === Y && r.code === QCODE[qq]).sort((a, b) => b.rcept.localeCompare(a.rcept)))
+          reps.push({ q: qq, rcept: x.rcept, cells: await dartDocLeaseCells(x.rcept) });
+      const ql = quarterLeaseFromCells(reps, Y, q, pol.amount, basis);
+      lease = ql.amount != null ? { status: "added", amount: ql.amount, how: ql.how } : { status: "unknown", how: `분기 보고서 주석 리스부채 확인 불가 — ${ql.how}` };
+    } else lease = { status: "unknown", how: `FY${Y - 1} 주석 리스부채 ${pol?.status ?? "없음"} — 분기 보고서 전기말 열 확인 불가` };
   }
-  const expDebt = faceDebt;
+  const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
   exact("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", LT.debt, expDebt, `${lp.nm} ${basis}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}`);
   exact("K2", "LTM 현금성자산 = DART 최신 분기(B16)", "LTM", LT.cash == null ? null : -LT.cash, sumCol(cl.cash, "thstrm_amount") ?? 0);
   exact("K2", "LTM 비지배지분 = DART 최신 분기", "LTM", LT.nci ?? (rowHidden("nci") ? 0 : null), sumCol(cl.nci, "thstrm_amount") ?? 0);
