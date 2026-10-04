@@ -122,6 +122,9 @@ async function fetchPage(page, startDate) {
   // 진짜 실패이므로 그대로 던진다.
   if (!json.res) {
     if (page > 1) return null;
+    // 1페이지부터 빈 목록이면 기간 안에 리포트가 없는 것 — 오라클 10~18시 회차(최근 1일)는 주말·휴일에 정상적으로 이렇다
+    // (2026-10-04 일요일 오경보 2회). 목록 칸 자체가 없을 때만 진짜 실패로 던진다.
+    if (Array.isArray(json.reportlist) && json.reportlist.length === 0) return [];
     throw new Error(`API 응답 실패: ${JSON.stringify(json).slice(0, 200)}`);
   }
   return json.reportlist ?? [];
