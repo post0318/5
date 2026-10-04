@@ -6186,7 +6186,7 @@ async function verifyUs(sym) {
         const rAt = fxEndRate(fxRows, d.at);
         if (rAt == null) return { status: FAIL, note: "기말 환율 없음" };
         // 기준일 열 하나뿐인 주석 표(bsNote1, 재감사 14차 ②) — 연말 확인 대신 같은 표의 기준 줄이 검증기 기대값(기준 개념의 그 날짜 값)과 같아야 한다.
-        //   표 = 대상 줄과 기준 줄이 2천 자 안에 함께 있는 곳, 두 줄 모두 숫자 하나. 하이픈으로 앞 단어가 붙은 줄("non-current")은 같은 라벨로 보지 않는다
+        //   표 = 대상 줄과 기준 줄이 2천 자 안에 함께 있는 곳, 두 줄 모두 숫자 하나. 줄 머리가 아닌 곳의 같은 단어("non-current"·"total lease liabilities")는 같은 라벨로 보지 않는다
         if (d.kind === "bsNote1") {
           if (d.ids.length !== 1 || !d.anchor?.concept || d.anchor.ids?.length !== 1) return { status: FAIL, note: "기준 줄 확인형 기록 형식 오류(원 개념·기준 줄 하나씩)" };
           const aw = await secIdsOf(d.anchor.concept, "bs", d.fyEnd);
@@ -6194,7 +6194,8 @@ async function verifyUs(sym) {
           const aExp = expOf.get(`${d.anchor.concept}|${d.at}`);
           if (aExp == null) return { status: FAIL, note: `기준 줄 ${shortId(d.anchor.concept)} @${d.at} 검증기 기대값 없음` };
           const aOrig = aExp / rAt;
-          const solo = (r) => r.nums.length === 1 && text[r.i] !== "-";
+          // 줄(칸) 머리에서 시작하는 라벨만 — 앞에 다른 단어가 붙은 줄("Total lease liabilities", "Non-current")은 같은 라벨로 보지 않는다
+          const solo = (r) => r.nums.length === 1 && /^[\s‖]*$/.test(text.slice(text.lastIndexOf("\n", r.i) + 1, r.i + 1));
           const rowsT = sixKRows(text, await labsOf(f, d.ids[0].id)).filter(solo);
           const rowsA = sixKRows(text, await labsOf(f, d.anchor.ids[0].id)).filter(solo);
           const vals = new Set();
