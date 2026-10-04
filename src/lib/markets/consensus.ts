@@ -344,7 +344,8 @@ export async function getConsensusData(
         loadKrCapsChecked(symbol, years),
       ]);
       // KRX 시가총액 조회 실패 — 연도 시가총액·EV 를 근사로 대신하지 않고(아래 capsError) 주석에 남긴다
-      if (capsR.error) notes.push(`⚠ ${capsR.error} — 연도 시가총액·EV/EBITDA 공란, 잠시 뒤 다시 계산`);
+      // 재시도(1·3·9초) 뒤에도 실패 — EV 는 우선주 시가총액을 몰라 비운다(하이라이트·재무분석과 같은 규칙)
+      if (capsR.error) notes.push(`⚠ ${capsR.error}(3번 재시도 후) — 연도 EV/EBITDA 공란, 다음 조회 때 다시 계산`);
       if (facts)
         kr = {
           ev: buildKrEvResolver(facts, symbol),

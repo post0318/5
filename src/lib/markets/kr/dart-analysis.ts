@@ -254,8 +254,8 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   for (const y of years) {
     const kx = caps?.byYear.get(y);
     const px = closeOnOrBefore(bars, `${y}-12-31`) ?? fyCloseByYear?.get(y) ?? null;
-    // KRX 조회 실패면 근사(종가 × 현재 주식수)로 바꾸지 않는다 — 자료 없음일 때만 근사(출처 주석에 표시)
-    const approx = input.sharesByYear || input.capsError ? null : px != null && shares != null ? px * shares : null;
+    // KRX 자료 없음·조회 실패(3번 재시도 후) — 연말 종가 × 현재 주식수 근사(출처 주석에 표시, 오너 결정 2026-10-04 "근사 + ⚠ 표시")
+    const approx = input.sharesByYear ? null : px != null && shares != null ? px * shares : null;
     if (kx?.common == null && approx != null) approxYears.push(y);
     mktcap[`${y}Y`] = kx?.common ?? approx;
     prefMcap[`${y}Y`] = kx?.preferred ?? null;
@@ -346,7 +346,10 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const evV = blank();
   for (const l of labels)
     evV[l] =
-      l === LTM && ltmFromSnap
+      // KRX 조회 실패(재시도 후)면 연도 열 시가총액은 근사지만 우선주 시가총액을 몰라 EV 는 비운다(우선주 있는 회사 EV 과소 방지)
+      input.capsError && l !== LTM
+        ? null
+        : l === LTM && ltmFromSnap
         ? krEvFromBridge(evRes.blocker(), snap!.evBridge ?? null, mktcap[l], prefMcap[l])
         : krEv(evRes, l === LTM ? years[years.length - 1] : Number(l.slice(0, 4)), mktcap[l], prefMcap[l]);
   const evEbitda = pos(evV, ebitda);
@@ -543,7 +546,7 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
       facts.source +
       " + 시세 · 자체 계산" +
       (input.warnings?.length ? ` · ⚠ ${input.warnings.join(" · ")}` : "") +
-      (input.capsError ? ` · ⚠ KRX 시가총액 조회 실패(${input.capsError}) — 연도 열 시가총액·EV 공란` : "") +
+      (input.capsError ? ` · ⚠ KRX 시가총액 조회 실패(3번 재시도 후, ${input.capsError}) — 연도 열 시가총액은 근사(연말 종가 × 현재 주식수), EV 는 공란` : "") +
       (approxYears.length ? ` · ${approxYears.join("·")} 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사` : "") +
       ` · ${krDaSourceNote(daS, years)}` +
       (ltmFromSnap ? ` · LTM 차입금·현금·PBR 자본: ${snap!.label} 기준` : " · LTM 재무상태표: 최신 분기 스냅샷 없음 — 연말값") +

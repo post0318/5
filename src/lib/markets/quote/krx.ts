@@ -46,11 +46,10 @@ function num(v: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-async function fetchService(
-  service: string,
-  basDd: string,
-  isPast: boolean,
-): Promise<KrxRow[]> {
+/** 일시 장애 재시도 간격(오너 지시 2026-10-04 — "실패를 인식했으면 재시도해서 정상값을 채워넣는 게 맞다") */
+const RETRY_DELAYS_MS = [1_000, 3_000, 9_000];
+
+async function fetchServiceOnce(service: string, basDd: string, isPast: boolean): Promise<KrxRow[]> {
   const res = await fetch(`${BASE}/${service}?basDd=${basDd}`, {
     headers: { AUTH_KEY: key()! },
     signal: AbortSignal.timeout(15_000),
@@ -62,6 +61,23 @@ async function fetchService(
   if (!res.ok) throw new AdapterError(`KRX ${service} 실패 (${res.status})`, { status: res.status });
   const j = (await res.json()) as { OutBlock_1?: KrxRow[] };
   return j.OutBlock_1 ?? [];
+}
+
+/**
+ * KRX 일별 조회 — 일시 장애(네트워크·시간 초과·5xx·429·응답 깨짐)는 1·3·9초 쉬고 최대 3번 다시 시도한다. 인증 오류처럼 다시 해도 같은
+ * 4xx 는 바로 던진다. 끝내 실패하면 던지고, 화면 쪽이 "근사 + ⚠ 표시"로 처리한다(저장하지 않아 다음 요청 때 다시 조회).
+ */
+async function fetchService(service: string, basDd: string, isPast: boolean): Promise<KrxRow[]> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchServiceOnce(service, basDd, isPast);
+    } catch (e) {
+      const status = e instanceof AdapterError ? e.opts.status : undefined;
+      const retryable = status == null || status === 429 || status >= 500;
+      if (!retryable || attempt >= RETRY_DELAYS_MS.length) throw e;
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+    }
+  }
 }
 
 async function loadDay(basDd: string): Promise<Map<string, KrxRow>> {

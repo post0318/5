@@ -131,8 +131,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     if (c.kind === "ltm" && currentMarketCap != null) return currentMarketCap;
     if (kx != null) return kx;
     if (input.strictPastShares && c.kind === "fy") return null;
-    // KRX 조회 실패 — 근사로 바꾸지 않는다(그림자 채우기 금지). 자료 없음(상장 전 등)일 때만 아래 근사 + 주석
-    if (input.capsError && c.kind === "fy") return null;
+    // KRX 조회 실패(3번 재시도 후)·자료 없음 — 연말 종가 × 현재 주식수 근사, 주석에 표시(오너 결정 2026-10-04 "근사 + ⚠ 표시")
     if (priceByCol[i] == null || shares == null) return null;
     if (c.kind === "fy") approxMcap = true;
     return priceByCol[i]! * shares;
@@ -157,7 +156,10 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   const ev = columns.map((c, i) =>
     c.kind === "estimate"
       ? null
-      : c.kind === "ltm" && ltmFromSnap
+      : // KRX 조회 실패(재시도 후)면 연도 열 시가총액은 근사지만 우선주 시가총액을 몰라 EV 는 비운다(우선주 있는 회사 EV 과소 방지)
+        input.capsError && c.kind === "fy"
+        ? null
+        : c.kind === "ltm" && ltmFromSnap
         ? krEvFromBridge(evBlocker, bridge[i], marketCap[i], prefMcap[i])
         : krEv(evRes, c.kind === "fy" ? cy(c) : lastFy, marketCap[i], prefMcap[i]),
   );
@@ -295,7 +297,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   );
   if (approxMcap) notes.push("일부 연도 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사");
   for (const w of input.warnings ?? []) notes.push(`⚠ ${w}`);
-  if (input.capsError) notes.push(`⚠ KRX 시가총액 조회 실패(${input.capsError}) — 연도 열 시가총액·EV·우선주 시가총액 공란(근사로 대체하지 않음), 잠시 뒤 다시 계산`);
+  if (input.capsError) notes.push(`⚠ KRX 시가총액 조회 실패(3번 재시도 후, ${input.capsError}) — 연도 열 시가총액은 근사(연말 종가 × 현재 상장주식수), 우선주 시가총액·EV 는 공란. 저장하지 않으므로 다음 조회 때 다시 계산`);
   if (evBlocker === "financial") notes.push("금융업 — EV·EV/EBITDA 는 계산하지 않음(예금·보험부채가 영업용 부채)");
   if (evBlocker === "captive-unsplit")
     notes.push("금융 자회사 연결(할부금융 차입금 미분리) — EV·EV/EBITDA 는 표시하지 않음(최종 기준 결정 전)");
