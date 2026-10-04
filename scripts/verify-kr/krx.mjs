@@ -66,13 +66,16 @@ const ymd = (d) => `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(
  */
 export async function krxCapsOn(code, dateYmd, { maxBack = 10 } = {}) {
   const d = new Date(Date.UTC(Number(dateYmd.slice(0, 4)), Number(dateYmd.slice(4, 6)) - 1, Number(dateYmd.slice(6, 8))));
+  // 빈 응답 평일 — 휴장일일 수도, KRX 가 그 날짜를 일시적으로 비워 돌려준 것일 수도 있다(실측 2026-10-05: 10-02 은 앱 조회 때(10-04)
+  // 942종목이 있었는데 검증기 조회 때 빈 응답). 호출부가 앱 기준일과 다를 수 있음을 알도록 남긴다
+  const emptyWeekdays = [];
   for (let i = 0; i < maxBack; i++, d.setUTCDate(d.getUTCDate() - 1)) {
     const basDd = ymd(d);
     if (basDd > kstToday()) continue;
     const day = await krxDay(basDd);
-    if (!day.size) continue;
+    if (!day.size) { if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6 && basDd !== kstToday()) emptyWeekdays.push(basDd); continue; }
     const c = day.get(code);
-    if (!c) return { date: basDd, common: null, preferred: null, close: null, prefIssues: [], tradingDay: true };
+    if (!c) return { date: basDd, common: null, preferred: null, close: null, prefIssues: [], tradingDay: true, emptyWeekdays };
     const prefs = [...day].filter(([k, v]) => k !== code && k.slice(0, 5) === code.slice(0, 5) && /우선주/.test(v.kind ?? ""));
     if (prefs.some(([, v]) => v.mcap == null)) throw new Error(`KRX ${basDd} 우선주 시가총액 빈 값`);
     return {
@@ -83,6 +86,7 @@ export async function krxCapsOn(code, dateYmd, { maxBack = 10 } = {}) {
       preferred: prefs.reduce((a, [, v]) => a + v.mcap, 0),
       prefIssues: prefs.map(([k, v]) => `${k} ${v.n}`),
       kindOk: c.kind != null,
+      emptyWeekdays,
     };
   }
   return null;

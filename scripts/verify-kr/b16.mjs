@@ -38,8 +38,8 @@ export function classifyBsRows(rows) {
     plain,
     cash: bs.filter((r) => (isStd(r.account_id) ? CASH_STD.test(r.account_id) : CASH_NAME.test(nm(r.account_nm)))),
     nci: bs.filter((r) => r.account_id === "ifrs-full_NoncontrollingInterests" || nm(r.account_nm) === "비지배지분"),
-    // 금융업 판정(검증기 자체 규칙) — 예수부채·보험계약부채·책임준비금·투자계약부채 줄이 있으면 은행·보험·증권
-    financial: bs.some((r) => /^(예수부채|고객예수부채|보험계약부채|책임준비금|투자계약부채|예수금)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? "")),
+    // 금융업 판정(검증기 자체 규칙) — 예수부채·예금부채·보험계약부채·책임준비금·투자계약부채 줄이 있으면 은행·보험·증권. 일반 기업의 "예수금"(원천징수 등)은 아님(삼성전자 실측)
+    financial: bs.some((r) => /^(예수부채|고객예수부채|예금부채|보험계약부채|책임준비금|투자계약부채)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? "")),
   };
 }
 

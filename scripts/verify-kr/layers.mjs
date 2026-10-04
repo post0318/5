@@ -125,9 +125,16 @@ export async function krOriginalLayers(ctx) {
     const appPref = x.pref ?? (rowHidden("pref_mcap") ? 0 : null);
     exact("K1", "우선주 시가총액 = KRX 연말", col, appPref, k.preferred, `KRX ${k.date}${k.prefIssues.length ? ` ${k.prefIssues.join("·")}` : " 우선주 없음"}`);
   }
+  let ltmPrefOk = null; // LTM EV 기대치에 쓸 우선주 시가총액(K1 에서 확인된 값)
   if (H.LTM && capCur && capCur.common != null) {
     const appPref = H.LTM.pref ?? (rowHidden("pref_mcap") ? 0 : null);
-    exact("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", appPref, capCur.preferred, `KRX ${capCur.date}`);
+    const gap = capCur.emptyWeekdays?.length ? capCur.emptyWeekdays.join("·") : null;
+    if (appPref === capCur.preferred) { add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: PASS, app: appPref, src: capCur.preferred, note: `KRX ${capCur.date}` }); ltmPrefOk = appPref; }
+    else if (gap && appPref != null && !(appPref === 0 && capCur.preferred > 0)) {
+      // KRX 가 최근 평일을 빈 응답으로 준 경우 — 앱은 그 날짜 자료로 계산했을 수 있다(원자료 불안정). 0 으로 비운 경우는 그대로 실패
+      add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX 최근 평일 ${gap} 빈 응답 — 검증기 최근 거래일 ${capCur.date}(${capCur.preferred})와 앱 기준일이 다를 수 있음(KRX 원자료 불안정)` });
+      ltmPrefOk = appPref;
+    } else exact("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", appPref, capCur.preferred, `KRX ${capCur.date}`);
     if (H.LTM.mc === capCur.common) add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: `KRX ${capCur.date}` });
     else {
       // 앱 시세 규칙(quote/index.ts): KRX 일별 자료가 아직 안 나온 날은 Yahoo 종가 × KRX 상장주식수 — 검증기가 Yahoo 종가를 따로 받아 확인
@@ -178,7 +185,7 @@ export async function krOriginalLayers(ctx) {
   const LT = H.LTM;
   if (lp && LT) {
     try {
-      await ltmLayer({ ...ctx, L, lp, LT, exact, fail, err, policySrc, capCur, evBlockWhy, rowHidden });
+      await ltmLayer({ ...ctx, L, lp, LT, exact, fail, err, policySrc, capCur, ltmPrefOk, evBlockWhy, rowHidden });
     } catch (e) { err("LTM 원자료(DART 분기·반기 보고서)", e); }
   }
 
@@ -223,7 +230,7 @@ export async function krOriginalLayers(ctx) {
 }
 
 async function ltmLayer(c) {
-  const { corp, lp, LT, exact, fail, add, consts, tt, policySrc, capCur, evBlockWhy, rowHidden } = c;
+  const { corp, lp, LT, exact, fail, add, consts, tt, policySrc, capCur, ltmPrefOk, evBlockWhy, rowHidden } = c;
   const { PASS } = consts;
   const fs = async (y, code) => {
     for (const d of ["CFS", "OFS"]) { const r = await dartFnltt(corp, y, code, d); if (r && r.length) return { rows: r, fsDiv: d }; }
@@ -315,7 +322,7 @@ async function ltmLayer(c) {
   exact("K2", "LTM 비지배지분 = DART 최신 분기", "LTM", LT.nci ?? (rowHidden("nci") ? 0 : null), sumCol(cl.nci, "thstrm_amount") ?? 0);
   const block = evBlockWhy ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!capCur || capCur.common == null ? "KRX 현재 시가총액 없음" : null);
   if (block) { if (LT.ev != null) fail("K2", "LTM EV = KRX + DART(B16)", "LTM", `기대 공란(${block})인데 앱 EV ${LT.ev}`); else add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: PASS, note: `공란 — ${block}` }); }
-  else exact("K2", "LTM EV = KRX + DART(B16)", "LTM", LT.ev, LT.mc == null ? null : LT.mc + capCur.preferred + expDebt + (sumCol(cl.nci, "thstrm_amount") ?? 0) - (sumCol(cl.cash, "thstrm_amount") ?? 0), "보통주 시가총액은 K1 에서 따로 대조");
+  else exact("K2", "LTM EV = KRX + DART(B16)", "LTM", LT.ev, LT.mc == null || ltmPrefOk == null ? null : LT.mc + ltmPrefOk + expDebt + (sumCol(cl.nci, "thstrm_amount") ?? 0) - (sumCol(cl.cash, "thstrm_amount") ?? 0), "보통주 시가총액은 K1 에서 따로 대조");
 }
 
 // 감가상각 현금흐름 조정 태그(사업보고서 XBRL) — 검증기 판독
