@@ -379,6 +379,11 @@ function isValue(
  * 합(NAVER 2021: 계속영업 9,887 + 중단영업 99,973). 하이라이트·손익계산서(dart-ev.ts krEpsSeries)와 같은 규칙
  */
 function epsValue(rows: FnlttRow[], col: "cumCur" | "cumPrior" | "annual"): number | null {
+  // 전체 EPS 표준 ID 는 계정명과 관계없이 먼저(감사 1차 2026-10-05 — 006260·010120 반기보고서의 전체 EPS 줄 이름이 "계속영업과 중단영업 희석주당이익"
+  // 이라 아래 이름 걸러내기에 같이 빠져 계속영업 EPS 로 계산됐다: 006260 LTM EPS 15,426 → 15,574)
+  // 우선주 줄에 보통주 EPS 코드를 단 경우는 제외(삼성SDI 2021 원자료 태그 오류)
+  const byId = isValue(rows.filter((r) => !/우선주/.test(norm(r.account_nm ?? ""))), [], col, undefined, TTM_IDS.eps);
+  if (byId != null) return byId;
   const plain = rows.filter((r) => !/계속영업|중단영업/.test(norm(r.account_nm ?? "")));
   const total = isValue(plain, TTM_ACCOUNTS.eps, col, EPS_LOOSE, TTM_IDS.eps);
   if (total != null) return total;

@@ -201,7 +201,7 @@ export async function krOriginalLayers(ctx) {
         if (ry > new Date().getFullYear()) continue;
         if (!L.latest(ry, "11011")) continue;
         const list = await dartAlot(corp, ry);
-        const r = (list ?? []).find((r) => /주당\s*현금배당금/.test(r.se ?? "") && /보통/.test(r.stock_knd ?? ""));
+        const r = alotCommonDps(list);
         const v = r ? num(r[f]) : null;
         if (v != null) { dps = v; how = `DART 배당 ${ry} 사업보고서 ${f}`; break; }
       }
@@ -227,6 +227,18 @@ export async function krOriginalLayers(ctx) {
       add("K5", "LTM 주당배당금 = 최근 사업연도(주석 표시된 대체)", "LTM", same(appD, fyD));
     } else add("K5", "LTM 주당배당금(공공데이터 배당기준일 합)", "LTM", { status: NA, note: "독립 원천 없음 — 공공데이터포털 배당정보(앱 전용)" });
   }
+}
+
+/**
+ * 보통주 주당 현금배당금 줄 — 주식 종류가 "보통…"인 줄. 없으면 주식 종류가 "-"·빈칸인 줄 중 값이 있는 줄이 하나뿐일 때 그 줄(051600·267260 2024~ 보고서는
+ * 보통주 줄의 주식 종류를 "-"로 공시 — 우선주가 없는 회사)
+ */
+function alotCommonDps(list) {
+  const rows = (list ?? []).filter((r) => /주당\s*현금배당금/.test(r.se ?? ""));
+  const common = rows.find((r) => /보통/.test(r.stock_knd ?? ""));
+  if (common) return common;
+  const blank = rows.filter((r) => /^[-\s]*$/.test(r.stock_knd ?? "") && ["thstrm", "frmtrm", "lwfr"].some((f) => num(r[f]) != null));
+  return blank.length === 1 && !rows.some((r) => /우선/.test(r.stock_knd ?? "")) ? blank[0] : null;
 }
 
 async function ltmLayer(c) {
@@ -361,10 +373,11 @@ function daCfLine(rows, col) {
 }
 
 // 감가상각 현금흐름 조정 태그(사업보고서 XBRL) — 검증기 판독
-const DEP = ["ifrs-full:AdjustmentsForDepreciationExpense"];
-const AMO = ["ifrs-full:AdjustmentsForAmortisationExpense"];
-const DA = ["ifrs-full:AdjustmentsForDepreciationAndAmortisationExpense"];
-const EXTRA = ["dart:AdjustmentsForDepreciationRightofuseAssets", "dart:AdjustmentsForDepreciationInvestmentProperty"];
+// 접두어는 ifrs-full·dart 둘 다(2022 접수 사업보고서는 dart:AdjustmentsForDepreciationExpense — 000500·015760·052690 2021 실측)
+const DEP = ["AdjustmentsForDepreciationExpense"];
+const AMO = ["AdjustmentsForAmortisationExpense"];
+const DA = ["AdjustmentsForDepreciationAndAmortisationExpense"];
+const EXTRA = ["AdjustmentsForDepreciationRightofuseAssets", "AdjustmentsForDepreciationInvestmentProperty"];
 function xbrlDa(facts, prefix, basis) {
   const ok = (ctx) => {
     if (!(ctx === prefix || ctx.startsWith(prefix + "_"))) return false;
@@ -372,7 +385,7 @@ function xbrlDa(facts, prefix, basis) {
     if (basis === "CFS" ? !/ConsolidatedMember/.test(ctx) : /ConsolidatedMember/.test(ctx)) return false;
     return rest === "" || rest === "ifrs-full_CarryingAmountAccumulatedDepreciationAmortisationAndImpairmentAndGrossCarryingAmountAxis_dart_ReportedAmountMember";
   };
-  const get = (cs) => { for (const cpt of cs) { const vs = facts.filter(([k, ctx]) => k === cpt && ok(ctx)).map((f) => f[2]); if (vs.length) return vs.every((v) => v === vs[0]) ? vs[0] : NaN; } return null; };
+  const get = (cs) => { for (const cpt of cs) { const vs = facts.filter(([k, ctx]) => (k === `ifrs-full:${cpt}` || k === `dart:${cpt}`) && ok(ctx)).map((f) => f[2]); if (vs.length) return vs.every((v) => v === vs[0]) ? vs[0] : NaN; } return null; };
   const d = get(DEP), a = get(AMO), da = get(DA);
   if ([d, a, da].some((v) => Number.isNaN(v))) return { v: null, how: "같은 태그 값이 여럿(판독 불가)" };
   if (d != null) {

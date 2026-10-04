@@ -23,8 +23,10 @@ const DEBT_STD_NOT = /Derivative|Provision|Payable|Receivable|Asset|Interest/;
 const DEBT_NAME = /차입|사채|리스부채|장기부채/;
 const DEBT_NAME_NOT = /리스채권|투자|자산|받을|대여|이자|파생|확정계약|충당/;
 const PLAIN = /^(유동|비유동|단기|장기)금융부채$/;
-const CASH_STD = /^(ifrs-full|dart)_(CashAndCashEquivalents|ShorttermDepositsNotClassifiedAsCashEquivalents|ShortTermDepositsNotClassifiedAsCashEquivalents|CurrentInvestments|CurrentFinancialAssetsAtAmortisedCost|CurrentFinancialAssetsAtFairValueThroughProfitOrLoss\w*)$/;
-const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기투자자산|유동상각후원가측정금융자산|상각후원가측정유동금융자산|유동당기손익-?공정가치측정금융자산|당기손익-?공정가치측정유동금융자산)$/;
+// 단기 예치금은 회사가 "현금성자산으로 분류" 태그를 달아도 같은 성격(006260 2024 보고서 금융기관예치금 — 다른 해는 NotClassified)
+const CASH_STD = /^(ifrs-full|dart)_(CashAndCashEquivalents|Short[tT]ermDeposits(Not)?ClassifiedAsCashEquivalents|CurrentInvestments|CurrentFinancialAssetsAtAmortisedCost|CurrentFinancialAssetsAtFairValueThroughProfitOrLoss\w*)$/;
+// 이름(표준 코드 없음, 또는 포괄 태그 OtherCurrentFinancialAssets) — 단기금융상품·단기투자자산(단기투자증권)·단기금융자산. "기타(유동)금융자산"은 B16 제외
+const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기투자자산|단기투자증권|단기금융자산|유동상각후원가측정금융자산|상각후원가측정유동금융자산|유동당기손익-?공정가치측정금융자산|당기손익-?공정가치측정유동금융자산)$/;
 
 export function classifyBsRows(rows) {
   const bs = (rows ?? []).filter((r) => r.sj_div === "BS");
@@ -36,7 +38,9 @@ export function classifyBsRows(rows) {
     debt: [...debt, ...plain],
     leaseFace: debt.filter(isLease),
     plain,
-    cash: bs.filter((r) => (isStd(r.account_id) ? CASH_STD.test(r.account_id) : CASH_NAME.test(nm(r.account_nm)))),
+    // 회사가 같은 줄을 해마다 다른 태그로 달기도 한다(267260·329180 "단기금융자산": 2021~22 상각후원가·단기예치금 → 2023~ 포괄 OtherCurrentFinancialAssets) —
+    // 포괄 태그면 이름으로 판정
+    cash: bs.filter((r) => (isStd(r.account_id) && !/_OtherCurrentFinancialAssets$/.test(r.account_id) ? CASH_STD.test(r.account_id) : CASH_NAME.test(nm(r.account_nm)))),
     nci: bs.filter((r) => r.account_id === "ifrs-full_NoncontrollingInterests" || nm(r.account_nm) === "비지배지분"),
     // 금융업 판정(검증기 자체 규칙) — 예수부채·예금부채·보험계약부채·책임준비금·투자계약부채 줄이 있으면 은행·보험·증권. 일반 기업의 "예수금"(원천징수 등)은 아님(삼성전자 실측)
     financial: bs.some((r) => /^(예수부채|고객예수부채|예금부채|보험계약부채|책임준비금|투자계약부채)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? "")),

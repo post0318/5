@@ -9762,9 +9762,12 @@ function dartYearValue(cur, next, next2, y, sjs, ids, names) {
   // 기준 보고서 = 그 해 값이 하나라도 실린 가장 최근 보고서(앱 연간 로더의 "연도별 주인 보고서" 규칙 — 옛 보고서와 섞으면 같은 계정이 다른 키로
   // 두 번 잡혔다). 기준 보고서에 이 계정이 없으면 빈칸(옛 보고서로 내려가지 않음)
   let latest = null;
+  // 주인 보고서는 재무제표별(앱 dart-facts.ts loadAnnual 과 같은 규칙 — 재무상태표에만 전전기 열을 실은 보고서가 손익의 주인이 되지 않게, 052690
+  // 2021: 2023 보고서 전전기 열엔 재무상태표만 있다)
+  const stmtOk = (r) => sjs.includes(r.sj_div) || (sjs.includes("IS") && r.sj_div === "CIS") || (sjs.includes("CIS") && r.sj_div === "IS");
   for (const [L, by] of reps) {
     const col = COL[by - y];
-    if (!L || !L.some((r) => dartNum(r[col]) != null)) continue;
+    if (!L || !L.some((r) => stmtOk(r) && dartNum(r[col]) != null)) continue;
     latest = pickAt(L, by) ?? null;
     break;
   }
@@ -9959,8 +9962,8 @@ async function verifyKr(sym) {
         // 희석 EPS 미공시(희석 증권 없음)면 앱 희석 EPS 는 기본 EPS 와 같아야 한다
         const epsOf = (L, f, kind) => {
           if (!L) return null;
-          const T = kind === "d" ? [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "희석주당이익손실"]]
-            : [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익"]];
+          const T = kind === "d" ? [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "희석주당이익손실", "보통주기본및희석주당이익", "보통주기본및희석주당순이익", "기본및희석주당이익"]]
+            : [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익", "보통주기본및희석주당이익", "보통주기본및희석주당순이익"]];
           const tot = dartPick(L, ["IS", "CIS"], ...T, f);
           if (tot != null) return { v: tot, how: "" };
           // 기본·희석 합친 줄(LG "보통주 기본/희석주당순이익") — 하나거나 값이 같으면 그 값, 둘이 다르면 차이가 그 해 중단영업손익과 부호가 같은 쪽
@@ -9979,7 +9982,7 @@ async function verifyKr(sym) {
           return { v: c + d, how: `전체 EPS 미공시 — 계속영업 ${c} + 중단영업 ${d}` };
         };
         // 기준 보고서 = 그 해 값이 실린 가장 최근 보고서(dartYearValue 와 같은 규칙)
-        const ownerOf = () => { for (const [L, f] of [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]]) if (L && L.some((r) => dartNum(r[f]) != null)) return [L, f]; return [null, null]; };
+        const ownerOf = () => { for (const [L, f] of [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]]) if (L && L.some((r) => (r.sj_div === "IS" || r.sj_div === "CIS") && dartNum(r[f]) != null)) return [L, f]; return [null, null]; };
         const latestEps = (kind) => { const [L, f] = ownerOf(); return L ? epsOf(L, f, kind) : null; };
         const bE = latestEps("b"), dE = latestEps("d");
         add("A", "기본 EPS = DART", col, vsDart(isByName("기본 EPS", k), bE?.v ?? null, bE?.how ?? ""));
