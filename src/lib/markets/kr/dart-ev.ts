@@ -99,11 +99,15 @@ function isDebtLine(l: KrFactLine): boolean {
 function isLeaseLine(l: KrFactLine): boolean {
   return ids(l).some((id) => /LeaseLiabilities/.test(id)) || /리스부채/.test(nameOf(l));
 }
+/**
+ * 이름은 이 줄이 여러 보고서에서 쓴 이름 전부(KrFactLine.names) — 한전 2026 반기보고서는 같은 줄(같은 태그, 전기말 = 2025 사업보고서 "유동금융부채")을
+ * "기타 유동 금융부채"로 이름을 바꿔 달아 LTM 총차입금이 0(실제 약 133조)이 됐다(2026-10-05, 분기말 리스부채를 채우며 드러남)
+ */
 function isPlainFinLiabLine(l: KrFactLine): boolean {
   return (
     l.sjDiv === "BS" &&
     ids(l).some((id) => /Other(Current|Noncurrent)FinancialLiabilities/.test(id)) &&
-    PLAIN_FIN_LIAB.test(nameOf(l))
+    [nameOf(l), ...(l.names ?? [])].some((n) => PLAIN_FIN_LIAB.test(n))
   );
 }
 

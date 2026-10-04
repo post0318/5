@@ -5,7 +5,7 @@
  *    시작하고 '우'" 규칙과 다르게 KRX 가 준 주식 종류로 한다(같은 발행사 = 단축코드 앞 5자리)
  * 지난 날짜는 불변이라 디스크 캐시 — 빈 응답은 휴장일(검증기 달력 calendar.mjs)일 때만 캐시. 조회 실패는 던진다.
  * **거래일의 빈 응답 = KRX 조회 실패**(오너 결정 2026-10-05): 휴장일이 아닌데 비었으면 1·3·9초 뒤 다시 받고, 끝내 비면 던진다(호출부 오류 → 종료코드 1,
- * 검증불가 아님). 그 거래일 당일·다음 날(KST)은 아직 게시 전일 수 있어 앞 거래일로 넘어간다(앱 krx.ts 와 같은 규칙).
+ * 검증불가 아님). 그 거래일부터 다음 거래일까지(KST)는 아직 게시 전일 수 있어 앞 거래일로 넘어간다(앱 krx.ts 와 같은 규칙).
  */
 import { emptyKind } from "./calendar.mjs";
 const BASE = "https://data-dbg.krx.co.kr/svc/apis/sto";
@@ -80,7 +80,7 @@ const ymd = (d) => `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(
  */
 export async function krxCapsOn(code, dateYmd, { maxBack = 10 } = {}) {
   const d = new Date(Date.UTC(Number(dateYmd.slice(0, 4)), Number(dateYmd.slice(4, 6)) - 1, Number(dateYmd.slice(6, 8))));
-  // 건너뛴 게시 전 거래일(당일·다음 날) — 앱이 그 날 자료를 이미 받았을 수 있어 호출부가 사유를 남기도록(휴장일은 넣지 않음)
+  // 건너뛴 게시 전 거래일(그 거래일~다음 거래일) — 앱이 그 날 자료를 이미 받았을 수 있어 호출부가 사유를 남기도록(휴장일은 넣지 않음)
   const pendingDays = [];
   for (let i = 0; i < maxBack; i++, d.setUTCDate(d.getUTCDate() - 1)) {
     const basDd = ymd(d);

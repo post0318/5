@@ -173,7 +173,7 @@ export async function dartDocLeaseSentences(rcept) {
   });
 }
 
-const DOC_CELL_VER = "c1";
+const DOC_CELL_VER = "c2";
 const CELL_UNIT = { 원: 1, 천원: 1e3, 백만원: 1e6, 억원: 1e8 };
 /**
  * 분기·반기 보고서 원문 주석 표의 태그 칸(리스부채 관련 — ACODE·ACONTEXT 가 달린 <TE>) → [개념, 컨텍스트, 원 단위 값]. 표 단위("(단위 : 천원)")는
@@ -200,7 +200,7 @@ export async function dartDocLeaseCells(rcept) {
         const u = CELL_UNIT[unitIn(tab.slice(0, 2000))[0] ?? unitIn(t.slice(Math.max(0, m.index - 1500), m.index)).at(-1)];
         if (!u) continue;
         for (const c of tab.matchAll(/<TE\s([^>]*)>([^<]*)<\/TE>/g)) {
-          const attr = (n) => new RegExp(`\b${n}="([^"]*)"`).exec(c[1])?.[1];
+          const attr = (n) => new RegExp(`(?:^|\\s)${n}="([^"]*)"`).exec(c[1])?.[1];
           const code = attr("ACODE"), ctx = attr("ACONTEXT"), dec = attr("ADECIMAL");
           if (!code || !ctx || !/Lease|LiabilitiesArisingFromFinancingActivities|FinancialLiabilities/.test(code + ctx)) continue;
           const raw = c[2].replace(/[　\s]/g, "");

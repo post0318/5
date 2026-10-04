@@ -128,12 +128,12 @@ export async function krOriginalLayers(ctx) {
   let ltmPrefOk = null; // LTM EV 기대치에 쓸 우선주 시가총액(K1 에서 확인된 값)
   if (H.LTM && capCur && capCur.common != null) {
     const appPref = H.LTM.pref ?? (rowHidden("pref_mcap") ? 0 : null);
-    // 검증기가 건너뛴 게시 전 거래일(당일·다음 날 KST) — 앱은 그 날 자료를 이미 받았을 수 있다. 이틀 이상 지난 거래일의 빈 응답은 krx.mjs 가 조회 실패로 던진다
+    // 검증기가 건너뛴 게시 전 거래일(그 거래일~다음 거래일 KST) — 앱은 그 날 자료를 이미 받았을 수 있다. 다음 거래일도 지난 거래일의 빈 응답은 krx.mjs 가 조회 실패로 던진다
     const gap = capCur.pendingDays?.length ? capCur.pendingDays.join("·") : null;
     if (appPref === capCur.preferred) { add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: PASS, app: appPref, src: capCur.preferred, note: `KRX ${capCur.date}` }); ltmPrefOk = appPref; }
     else if (gap && appPref != null && !(appPref === 0 && capCur.preferred > 0)) {
       // 게시 전 거래일을 건너뛴 경우 — 앱 기준일이 그 날일 수 있다. 0 으로 비운 경우는 그대로 실패
-      add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX ${gap} 게시 전(거래일 당일·다음 날) — 검증기 최근 거래일 ${capCur.date}(${capCur.preferred})와 앱 기준일이 다를 수 있음` });
+      add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX ${gap} 게시 전(그 거래일~다음 거래일) — 검증기 최근 거래일 ${capCur.date}(${capCur.preferred})와 앱 기준일이 다를 수 있음` });
       ltmPrefOk = appPref;
     } else exact("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", appPref, capCur.preferred, `KRX ${capCur.date}`);
     if (H.LTM.mc === capCur.common) add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: `KRX ${capCur.date}` });
@@ -334,7 +334,7 @@ async function ltmLayer(c) {
     else exact("K4", "LTM EPS = DART 사업연도 + 누적 − 전년 누적", "LTM", LT.eps, exp, `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − 전년 ${pc}`);
   }
   // LTM 재무상태표(최신 분기말) — 총차입금·현금·비지배지분, EV
-  const cl = classifyBsRows(cur.rows);
+  const cl = classifyBsRows(cur.rows, cur.rows, await R(Y - 1, "11011"));
   const faceDebt = sumCol(cl.debt, "thstrm_amount") ?? 0;
   let lease = { status: "face" };
   if (!cl.leaseFace.length) {

@@ -14,6 +14,8 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 세 곳에 같은 커
   `scripts/lib/app-url.mjs`(`APP_URL` 환경변수, 없으면 오라클 도메인). 메인을 바꿀 때는 이 변수만 고친다.
 - 오라클 서버: Docker 컨테이너 `macro`(127.0.0.1:8080, 재시작 자동) 앞에 Caddy(HTTPS 자동 발급). 환경변수는
   `/opt/macro/app.env`(600, 배포 때 GitHub 비밀값으로 다시 씀). 최초 설치 `ops/oracle/setup.sh`, 점검 `ops/oracle/healthcheck.sh`.
+  디스크 캐시: SEC `/opt/macro/sec-cache`(앱 `/tmp/.cache`), DART `/opt/macro/dart-cache`(앱·배치 `DART_CACHE_DIR=/dart-cache`, 판본 = 보고서 최신
+  접수번호, 90일 미사용·`DART_CACHE_MAX_GB`(기본 2) 정리 — `src/lib/markets/kr/dart-cache.ts`). 배포·배치(`run-ts.sh`)가 같은 폴더를 쓴다.
   배포 키는 비밀값 `ORACLE_SSH_KEY`, 주소는 변수 `ORACLE_HOST`·`ORACLE_DOMAIN`. 도메인은 DuckDNS(IP 가 바뀌면 duckdns.org 에서 갱신).
 
 ### 오라클에서 도는 것 (상세·빈도는 docs/data-collection.md)

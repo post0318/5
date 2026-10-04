@@ -34,8 +34,11 @@ const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기투자자
  * @param ownRows 그 기간이 당기인 보고서의 줄(연간 = 그해 사업보고서, LTM = 그 분기 보고서) — "기타(유동)금융자산" 은 이 보고서가 같은 이름 줄에
  *   단기예치금 표준 ID 를 달았을 때만 현금성자산(오너 결정 2026-10-05 — 064350 2020~2022 보고서 dart_ShortTermDepositsNotClassifiedAsCashEquivalents).
  *   생략하면 rows 자신
+ * @param priorFyRows (분기 보고서용) 직전 사업연도 사업보고서 줄 — 분기 보고서가 "(유동|비유동)금융부채" 줄 이름을 "기타 (유동|비유동) 금융부채"로 바꿔
+ *   단 경우(015760 2026 반기 — 같은 태그, 전기말 열 = 2025 사업보고서 "유동금융부채" 당기 값) 같은 줄로 본다: 같은 표준 ID 이고 그 보고서 전기말 값이
+ *   직전 사업보고서의 그 이름 줄 당기 값과 정확히 같을 때만
  */
-export function classifyBsRows(rows, ownRows = rows) {
+export function classifyBsRows(rows, ownRows = rows, priorFyRows = null) {
   const bs = (rows ?? []).filter((r) => r.sj_div === "BS");
   const DEP = /^(ifrs-full|dart)_Short[tT]ermDeposits(Not)?ClassifiedAsCashEquivalents$/;
   const depositNamed = new Set((ownRows ?? []).filter((r) => r.sj_div === "BS" && DEP.test(r.account_id ?? "") && thstrm(r) != null).map((r) => nm(r.account_nm)));
@@ -43,7 +46,12 @@ export function classifyBsRows(rows, ownRows = rows) {
   const debt = bs.filter((r) => (isStd(r.account_id) ? DEBT_STD.test(r.account_id) && !DEBT_STD_NOT.test(r.account_id) && !/대여|자산|받을|리스채권/.test(nm(r.account_nm)) : DEBT_NAME.test(nm(r.account_nm)) && !DEBT_NAME_NOT.test(nm(r.account_nm))));
   const isLease = (r) => /LeaseLiabilities/.test(r.account_id ?? "") || /리스부채/.test(nm(r.account_nm));
   const borrow = debt.filter((r) => !isLease(r));
-  const plain = borrow.length ? [] : bs.filter((r) => PLAIN.test(nm(r.account_nm)));
+  const renamedPlain = (r) => {
+    if (!priorFyRows || !/^기타(유동|비유동)금융부채$/.test(nm(r.account_nm))) return false;
+    const was = priorFyRows.find((p) => p.sj_div === "BS" && p.account_id === r.account_id && PLAIN.test(nm(p.account_nm)));
+    return was != null && v(was, "thstrm_amount") != null && v(was, "thstrm_amount") === v(r, "frmtrm_amount");
+  };
+  const plain = borrow.length ? [] : bs.filter((r) => PLAIN.test(nm(r.account_nm)) || renamedPlain(r));
   return {
     debt: [...debt, ...plain],
     leaseFace: debt.filter(isLease),

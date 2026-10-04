@@ -66,17 +66,27 @@ export function krxHolidays(year) {
 }
 
 /**
- * 날짜(YYYYMMDD)의 빈 응답 뜻 — holiday(주말·휴장일) | pending(그 거래일 당일·다음 날 KST — 게시 전일 수 있음) | expected(이틀 이상 지난 거래일 —
- * 빈 응답이면 KRX 조회 실패) | unknown(달력 모름 — 실패로 본다). 앱 krx.ts krxEmptyKind 와 같은 규칙(규칙 문장만 보고 따로 짬)
+ * 날짜(YYYYMMDD)의 빈 응답 뜻 — holiday(주말·휴장일) | pending(그 거래일부터 다음 거래일까지 KST — 게시 전일 수 있음) | expected(다음 거래일도
+ * 지난 거래일 — 빈 응답이면 KRX 조회 실패) | unknown(달력 모름 — 실패로 본다). 앱 krx.ts krxEmptyKind 와 같은 규칙(규칙 문장만 보고 따로 짬)
  */
 export async function emptyKind(basDd) {
   const date = `${basDd.slice(0, 4)}-${basDd.slice(4, 6)}-${basDd.slice(6, 8)}`;
   const dow = new Date(`${date}T00:00:00Z`).getUTCDay();
   if (dow === 0 || dow === 6) return "holiday";
-  const y = new Date(Date.now() + 9 * 3600e3);
-  y.setUTCDate(y.getUTCDate() - 1);
+  const today = kstToday();
   const hs = await krxHolidays(Number(basDd.slice(0, 4)));
   if (hs?.has(date.slice(5))) return "holiday";
-  if (date >= y.toISOString().slice(0, 10)) return "pending";
-  return hs ? "expected" : "unknown";
+  if (date >= today) return "pending";
+  if (!hs) return "unknown";
+  // 다음 거래일(그날까지는 게시 전일 수 있음) — 그 뒤면 자료가 있어야 한다
+  const d = new Date(`${date}T00:00:00Z`);
+  for (let i = 0; i < 20; i++) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const s = d.toISOString().slice(0, 10);
+    if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
+    const h2 = await krxHolidays(Number(s.slice(0, 4)));
+    if (!h2) return "unknown";
+    if (!h2.has(s.slice(5))) return s >= today ? "pending" : "expected";
+  }
+  return "unknown";
 }

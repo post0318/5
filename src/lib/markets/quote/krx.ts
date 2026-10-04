@@ -84,20 +84,28 @@ async function fetchService(service: string, basDd: string, isPast: boolean, fre
 /**
  * 빈 응답의 뜻(오너 결정 2026-10-05 — "거래일의 빈 응답은 휴장이 아니라 조회 실패"). 휴장일 달력(macro/kr/market-calendar.ts, KRX 휴장일 조회)으로 가른다.
  *  - holiday: 주말·KRX 휴장일 → 빈 응답이 정상(앞 거래일로)
- *  - pending: 거래일 D 의 당일·다음 날(KST) — 아직 게시 전일 수 있다(앞 거래일로, 캐시 안 함). 실측: 10-02(금) 거래분이 10-04(토)에 942종목
- *    (게시 시각 실측은 오라클 measure-krx, 10-07 보고서)
- *  - expected: D 로부터 이틀 이상 지난 거래일 → 자료가 있어야 한다. 빈 응답 = 조회 실패(재시도 후 던짐)
+ *  - pending: 거래일 D 부터 D 의 다음 거래일(그날 포함)까지(KST) — KRX OPEN API 는 일별 자료를 다음 거래일에 낸다(실측 2026-10-05 07:01 KST:
+ *    10-02(금) 거래분 빈 응답 — 10-03·04 주말, 10-05 휴장, 다음 거래일 10-06). 앞 거래일로 넘어가고 캐시 안 함. 게시 시각 실측은 오라클 measure-krx(10-07 보고서)
+ *  - expected: 다음 거래일도 지난 거래일 → 자료가 있어야 한다. 빈 응답 = 조회 실패(재시도 후 던짐)
  *  - unknown: 달력에 그 해가 없음 → 조회 실패로 본다(모르는 걸 휴장으로 단정하지 않음 — 달력 갱신 필요)
  */
 export function krxEmptyKind(basDd: string, now = new Date()): "holiday" | "pending" | "expected" | "unknown" {
   const date = `${basDd.slice(0, 4)}-${basDd.slice(4, 6)}-${basDd.slice(6, 8)}`;
-  const kst = new Date(now.getTime() + 9 * 3600e3);
-  kst.setUTCDate(kst.getUTCDate() - 1);
-  const yesterday = kst.toISOString().slice(0, 10);
+  const today = new Date(now.getTime() + 9 * 3600e3).toISOString().slice(0, 10);
   const h = isKrxHolidaySync(date);
   if (h === true) return "holiday";
-  if (date >= yesterday) return "pending";
-  return h == null ? "unknown" : "expected";
+  if (date >= today) return "pending";
+  if (h == null) return "unknown";
+  // D 의 다음 거래일 — 그날이 끝나야(오늘이 그 뒤) 자료가 있어야 한다
+  const d = new Date(`${date}T00:00:00Z`);
+  for (let i = 0; i < 20; i++) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const s = d.toISOString().slice(0, 10);
+    const hh = isKrxHolidaySync(s);
+    if (hh == null) return "unknown";
+    if (!hh) return s >= today ? "pending" : "expected";
+  }
+  return "unknown";
 }
 
 async function loadDay(basDd: string): Promise<Map<string, KrxRow>> {
