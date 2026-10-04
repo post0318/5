@@ -12,7 +12,7 @@
  */
 import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartDocLeaseCells } from "./dart.mjs";
 import { krxCapsOn } from "./krx.mjs";
-import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells } from "./b16.mjs";
+import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts } from "./b16.mjs";
 
 const COL = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
 const num = (x) => { const t = String(x ?? "").trim(); return t === "" || t === "-" ? null : Number(t.replace(/,/g, "")); };
@@ -153,6 +153,20 @@ export async function krOriginalLayers(ctx) {
   // ── K2 EV 구성요소(사업연도) ──
   const policySrc = []; // LTM 판정에 쓸 최근 사업연도 리스 판정
   const leaseByYear = new Map(); // 단위 안전장치용 — 앱이 주석에서 더한 리스부채(사업연도)
+  // 단위 오류 보고서 — 사업보고서 R(y) 의 리스부채 주석이 앞뒤 보고서 모두와 같은 해 값이 정확히 1000^k 배로 갈리면 그 보고서 리스부채는 쓰지 않는다
+  // (079550 2024 보고서: 천원 숫자를 decimals="0" KRW 로 — 44,977,895·49,524,406 vs 앞뒤 보고서 ×1000). 규칙 문장만 보고 따로 짠 판정
+  const badLease = new Map();
+  try {
+    const amt = async (ry, pre, y) => { const r = L.latest(ry, "11011"); return r ? leaseFromFacts(await dartXbrlFacts(r.rcept, "11011"), pre, yearSrc.get(y)?.fsDiv ?? "CFS").amount : null; };
+    const off = (a, b) => a > 0 && b > 0 && [1e3, 1e6, 1e9].includes(Math.max(a, b) / Math.min(a, b));
+    for (const ry of new Set(yearsShown.flatMap((y) => [y, y + 1]))) {
+      const r = L.latest(ry, "11011");
+      if (!r) continue;
+      const left = off(await amt(ry, `PFY${ry - 1}eFY`, ry - 1), await amt(ry - 1, `CFY${ry - 1}eFY`, ry - 1));
+      const right = off(await amt(ry, `CFY${ry}eFY`, ry), await amt(ry + 1, `PFY${ry}eFY`, ry));
+      if (left && right) badLease.set(r.rcept, `FY${ry} 사업보고서 리스부채가 앞뒤 보고서와 1000^k 배`);
+    }
+  } catch (e) { err("리스부채 단위 대조(사업보고서 XBRL)", e); }
   for (const c of fyCols) {
     const y = Number(String(c.label).slice(0, 4)), col = `${y}Y`, x = H[col];
     const src = yearSrc.get(y);
@@ -169,7 +183,7 @@ export async function krOriginalLayers(ctx) {
         // 회계정책 문장은 그 기간 보고서의 모든 판본(정정본은 바뀐 부분만 담기도 한다 — 103590 2022 정정본에 정책 문장 없음)
         const all = (yy) => L.reports.filter((x) => x.year === yy && x.code === "11011").map((x) => x.rcept);
         const namesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => nm(r.account_nm));
-        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf);
+        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf, badLease);
       } catch (e) { err(`리스부채 주석 ${y}`, e); continue; }
       why += ` · 본표 리스부채 줄 없음 → ${lease.status === "added" ? `주석 리스부채 ${lease.amount} 가산` : lease.status === "included" ? "차입금 줄에 포함" : "리스부채 확인 불가"}(${lease.how})`;
       if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });

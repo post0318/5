@@ -895,6 +895,21 @@ async function leaseNotes(corp, latest) {
     return (polMemo[rcp] = [...out]);
   };
   const faceNames = (rows) => rows.filter((x) => /차입|사채|장기부채/.test((x.account_nm ?? "").replace(/\s/g, ""))).map((x) => x.account_nm.replace(/\s/g, ""));
+  // 단위 오류 보고서(2026-10-05 — 079550 2024 사업보고서가 천원 단위 숫자를 decimals="0" KRW 로 태깅: 리스부채 44,977,895, 전기말 49,524,406. 앞뒤
+  // 보고서는 같은 해를 44,977,895,000 · 49,524,406,000 으로 — 태그 꼴 넷이 서로 맞아 꼴 일치 검사로는 못 잡는다). 보고서 R(ry) 가 **양쪽 이웃 보고서와
+  // 모두**(R(ry) 전기말 vs R(ry-1) 당기말, R(ry) 당기말 vs R(ry+1) 전기말) 정확히 1000^k 배로 갈리면 그 보고서의 리스부채는 쓰지 않는다. 한쪽만 갈리고
+  // 다른 쪽이 없으면 어느 보고서가 틀렸는지 못 정하므로 둘 다 그대로(검증기 이웃 해 안전장치가 잡는다)
+  const amtAt = async (ry, prefix, y) => { const rc = await rcpOf(ry); return rc ? leaseAmountOf(await xmlOf(rc), prefix, sepOf[y]).amount : null; };
+  const k1000 = (a, b) => a != null && b != null && a > 0 && b > 0 && [1e3, 1e6, 1e9].includes(Math.max(a, b) / Math.min(a, b));
+  const unitBad = async (ry) => {
+    if (ry in unitBad.memo) return unitBad.memo[ry];
+    const left = ry - 1 >= latest - 6 && k1000(await amtAt(ry, `PFY${ry - 1}eFY`, ry - 1), await amtAt(ry - 1, `CFY${ry - 1}eFY`, ry - 1));
+    const right = ry + 1 <= latest && k1000(await amtAt(ry, `CFY${ry}eFY`, ry), await amtAt(ry + 1, `PFY${ry}eFY`, ry));
+    if (left && right) unitBad.why[ry] = "앞뒤 보고서와 같은 해 리스부채가 1000^k 배";
+    return (unitBad.memo[ry] = left && right);
+  };
+  unitBad.memo = {};
+  unitBad.why = {};
   const faceDebtOfReport = {};
   const leaseNote = {};
   for (const y of years) {
@@ -911,19 +926,8 @@ async function leaseNotes(corp, latest) {
       const hit = names.filter((n) => (faceDebtOfReport[ry] ?? []).some((f) => f.includes(n) || n.includes(f)));
       const L = leaseAmountOf(await xmlOf(rcp), prefix, sepOf[y]);
       if (hit.length) { note = { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rcp})` }; break; }
-      if (L.amount != null) {
-        note = { status: "added", amount: L.amount, how: `사업보고서 ${rcp} XBRL 주석 ${prefix} — ${L.how}` };
-        // 단위 대조(2026-10-05 — 079550 2024 보고서가 천원 단위 숫자를 decimals="0" KRW 로 태깅: 44,977,895 → 이듬해 보고서 전기말 44,977,895,000).
-        // 그해 보고서 값을 쓸 때 이듬해 보고서 전기말 값이 있으면 대조해, 정확히 1000^k 배로 갈리면 이듬해 값(나중 보고서 — 그해 보고서 단위 오류)
-        if (ry === y && y + 1 <= latest) {
-          const rcp1 = await rcpOf(y + 1);
-          const L1 = rcp1 ? leaseAmountOf(await xmlOf(rcp1), `PFY${y}eFY`, sepOf[y]) : null;
-          const r = L1?.amount ? Math.max(L.amount, L1.amount) / Math.min(L.amount, L1.amount) : 1;
-          if ([1e3, 1e6, 1e9].includes(r))
-            note = { status: "added", amount: L1.amount, how: `사업보고서 ${rcp1} XBRL 주석 PFY${y}eFY — ${L1.how} (그해 보고서 ${rcp} 값 ${L.amount} 은 ${r}배 단위 오류)` };
-        }
-        break;
-      }
+      if (L.amount != null && (await unitBad(ry))) { tried.push(`${rcp}: 단위 오류 보고서(${unitBad.why[ry]}) — 건너뜀`); continue; }
+      if (L.amount != null) { note = { status: "added", amount: L.amount, how: `사업보고서 ${rcp} XBRL 주석 ${prefix} — ${L.how}` }; break; }
       tried.push(`${rcp}: ${L.how}`);
     }
     leaseNote[y] = note ?? { status: "unknown", amount: null, how: tried.join(" / ") || "사업보고서 없음" };
