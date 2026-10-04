@@ -9694,6 +9694,30 @@ async function dartFy(corp, year, fsDiv) {
   })());
   return dartCache.get(k);
 }
+/** DART 사업보고서(정기공시 A001) 대상 사업연도 목록 — 보고서명 "(YYYY.MM)" 의 연도(정정 공시 포함, 중복 제거) */
+const dartYearsCache = new Map();
+async function dartAnnualYears(corp) {
+  if (!dartYearsCache.has(corp)) dartYearsCache.set(corp, (async () => {
+    if (!env.DART_API_KEY) throw new Error("DART_API_KEY 미설정");
+    const bgn = `${new Date().getFullYear() - 7}0101`;
+    const u = `https://opendart.fss.or.kr/api/list.json?crtfc_key=${env.DART_API_KEY}&corp_code=${corp}&bgn_de=${bgn}&pblntf_detail_ty=A001&page_count=100`;
+    for (let i = 0; ; i++) {
+      try {
+        await dartSlot();
+        const r = await fetch(u, { signal: AbortSignal.timeout(30_000) });
+        if (!r.ok) throw new Error(`DART list HTTP ${r.status}`);
+        const j = await r.json();
+        if (j.status === "013") return [];
+        if (j.status !== "000") throw new Error(`DART list ${j.status} ${j.message}`);
+        return [...new Set((j.list ?? []).map((x) => Number((String(x.report_nm).match(/\((\d{4})\.\d{2}\)/) ?? [])[1])).filter(Number.isFinite))];
+      } catch (e) {
+        if (i >= 2) throw e;
+        await new Promise((res) => setTimeout(res, 2000 * (i + 1)));
+      }
+    }
+  })());
+  return dartYearsCache.get(corp);
+}
 const dartNum = (v) => (v == null || v === "" || v === "-" ? null : Number(String(v).replace(/,/g, "")));
 /** 계정 하나 — account_id 우선(보고서 구분 sj 집합 안), 없으면 계정명(공백·괄호 제거) */
 function dartPick(list, sjs, ids, names, field) {
@@ -9796,7 +9820,23 @@ async function verifyKr(sym) {
   const h = hl?.highlights;
   if (!h) return { sym, error: "하이라이트 없음", checks, review: [] };
   const fyCols = h.columns.filter((c) => c.kind === "fy");
-  if (fyCols.length < 3) add("B", "연도 열 존재", "-", { status: FAIL, note: `연도 열 ${fyCols.length}개` });
+  // 기대 연도 열 = DART 사업보고서가 있는 사업연도(앱 표시 범위 최근 5개 안) — 고정 "3개 이상"은 2024 분할 신설 SK이터닉스(475150, 보고서
+  // 2024·2025 둘뿐)를 오판했다(2026-10-04). 미국이 SEC 10-K 목록으로 정하는 것과 같은 원칙. 조회 실패는 실패 + 오류.
+  {
+    const corp = KR_CORP.get(sym);
+    let years = null;
+    try { years = corp ? await dartAnnualYears(corp) : null; } catch (e) { add("응답", "DART 사업보고서 목록", "-", { status: FAIL, note: String(e).slice(0, 120) }); }
+    const shown = fyCols.map((c) => Number(String(c.label).slice(0, 4))).filter(Number.isFinite);
+    if (!fyCols.length) add("B", "연도 열 존재", "-", { status: FAIL, note: "하이라이트 연도 열 0개" });
+    else if (years) {
+      const last = Math.max(...years);
+      const exp = years.filter((y) => y > last - 5).sort();
+      const missing = exp.filter((y) => !shown.includes(y)), extra = shown.filter((y) => !exp.includes(y));
+      add("B", "연도 열 = DART 사업보고서 연도", "-", missing.length || extra.length
+        ? { status: FAIL, note: `기대 ${exp.join("·")} / 앱 ${shown.join("·")}${missing.length ? ` — 빠짐 ${missing.join("·")}` : ""}${extra.length ? ` — 보고서 없는 열 ${extra.join("·")}` : ""}` }
+        : { status: PASS, note: `${exp.length}개 연도(${exp.join("·")})` });
+    }
+  }
 
   const H = {};
   h.columns.forEach((c, i) => {
