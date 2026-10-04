@@ -6141,6 +6141,7 @@ async function verifyUs(sym) {
     // 완결성(재감사 P5) — 앱이 비운 LTM(사업연도 값 있음)을 검증기가 6-K 에서 찾으면 실패(채울 수 있었음). 6-K 에도 없거나 판정 불가면 공란 정당
     let gapOk = 0;
     const gapNa = [];
+    const derivedGaps = [];
     for (const g of gaps) {
       const gname = `20-F LTM 공란 ${g.kind} ${shortId(g.concept)} @${g.at}`;
       // ① 야후로 채울 수 있었는가(흐름 항목 규칙이 있는 개념 — 앱이 적은 사유를 믿지 않고 검증기가 따로 판정, 재감사 T6):
@@ -6158,6 +6159,8 @@ async function verifyUs(sym) {
       }
       // ② 6-K 에서 찾을 수 있는가 — 재무상태표와 현금흐름표 개념만(손익 개념을 현금흐름 조정 줄로 찾지 않는다 — SPOT "Finance costs")
       if (g.kind === "cf" && !g.cf) { gapOk++; continue; }
+      // 본표 합성 개념(…Derived)은 SEC 원 개념이 없다 — 검증기 고정 구성 규칙(synthExp)이 생긴 뒤 구성 줄 기준일 값으로 따로 판정
+      if (/Derived$/.test(g.concept)) { derivedGaps.push(g); continue; }
       // 6-K 가 없거나 원 개념이 없으면 판정 불가 — 실패(재감사 12차 ③: "대조 불가"를 통과 요약에 숨기면 6-K 조회 실패로 값이 사라져도 0 실패였다)
       if (!sixKSource || !g.ids?.length) {
         gapNa.push(`${shortId(g.concept)}(${!sixKSource ? "6-K 없음" : "원 개념 없음"})`);
@@ -6175,7 +6178,7 @@ async function verifyUs(sym) {
       }
     }
     /** 6-K 합성 개념(derived) 기대값 — 아래 사업연도 블록에서 검증기 고정 구성 규칙(synthExp)을 만든 뒤 정해진다. 못 만들면 null(전부 실패) */
-    let derivedEval = null;
+    let derivedEval = null, derivedGapEval = null;
     // 사업연도 완결성(재감사 7차 E1·E3) — "있어야 할 값"을 앱 데이터가 아니라 검증기가 읽은 SEC 20-F 원본으로 정한다.
     //   20-F 인스턴스의 차원 없는 통화 값(연말 잔액·1년 흐름, 0 아님) 각각에 대해 그 값을 받는 앱 개념(IFRS 대응표, us-gaap 공시사는 같은 이름)이
     //   앱 사업연도 값에 하나도 없으면 실패. 원천이 하나뿐인 단순 대응은 값도 정확 대조(원통화 × H.10 — 잔액 기말, 흐름 기간 평균)
@@ -6379,8 +6382,26 @@ async function verifyUs(sym) {
           if (ex.some((x) => x == null)) return { status: FAIL, note: `구성 줄 기대값 없음(${parts.filter((p, i) => ex[i] == null).join(", ")}) @${d.at}` };
           return { exp: ex.reduce((t, x) => t + x, 0), how: `검증기 고정 구성(${compTxt}) — 구성 개념 ${d.at} 기대값 합 ${parts.join(" + ")}` };
         };
+        // 앱이 비운 합성 개념 LTM — 검증기 구성 줄이 모두 기준일 기대값(검증기가 따로 계산한 값)을 가지면 채울 수 있었음(실패),
+        //   하나라도 기준일 값이 없으면 정당한 공란(그 구성 줄의 공란은 제 공란 행에서 따로 판정)
+        derivedGapEval = (g) => {
+          const exp = synthExp(g.concept);
+          if (!exp || exp.v == null || !exp.ids) return { status: FAIL, note: `합성 개념 ${g.concept} — 검증기 고정 구성 규칙 없음 또는 SEC 원본으로 계산 불가${exp?.why ? `(${exp.why})` : ""}` };
+          const comps = exp.ids.filter((x) => x.v !== 0);
+          if (!comps.length) return { absent: true, note: "구성 줄 연말 값 모두 0" };
+          const got = comps.map((x) => ({ x, d0: dstsOf(x.id).find((dd) => expOf.has(`${dd}|${g.at}`)) }));
+          const miss = got.filter((y) => !y.d0);
+          if (miss.length) return { absent: true, note: `구성 줄 ${miss.map((y) => `${shortId(y.x.id)}(${dstsOf(y.x.id).join("|") || "앱 개념 없음"})`).join(", ")} 의 기준일 값 없음` };
+          return { status: FAIL, note: `앱 LTM 공란인데 검증기 고정 구성 줄이 모두 기준일 기대값을 가짐(${got.map((y) => `${y.d0} ${expOf.get(`${y.d0}|${g.at}`)}`).join(" + ")}) — 채울 수 있음` };
+        };
         add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: uniq.length ? PASS : FAIL, note: `${uniq.length ? "" : "SEC 20-F 통화 값을 하나도 못 읽음 — 대조 불가 · "}SEC 20-F ${repCur ?? "?"} 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(앱 개념 값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖), 합성 개념 대조 ${synthN}개, 원천 없는 앱 값 ${orphanN}개` });
       }
+    }
+    for (const g of derivedGaps) {
+      const gname = `20-F LTM 공란 ${g.kind} ${shortId(g.concept)} @${g.at}`;
+      const r = derivedGapEval ? derivedGapEval(g) : { status: FAIL, note: "SEC 20-F 원본·verify-row 사업연도 값이 없어 합성 개념 구성 규칙을 만들 수 없음" };
+      if (r.absent) gapOk++;
+      else add("A", gname, "LTM", r);
     }
     for (const d of derivedDets) {
       const r = derivedEval ? derivedEval(d) : { status: FAIL, note: "SEC 20-F 원본·verify-row 사업연도 값이 없어 합성 개념 구성 규칙을 만들 수 없음" };
