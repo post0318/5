@@ -464,6 +464,7 @@ const MARKET_CONDITION_STRONG_RE =
 // 로 이 둘을 가른다.
 const MARKET_CONDITION_PERIOD_RE = /일간|위클리|주간|데일리|모닝|아침|\bWeek(ly)?\b|\bDaily\b|\bMorning\b/i;
 const MARKET_CONDITION_STOCKNAMES = new Set([
+  "다올 시황", // 다올투자증권 Morning Express·Morning Brief(2026-10-04 수집 추가)
   "경제분석 · Econ Signal",
   "투자전략 · Econ Signal", // 신한 월간 거시 시황(하건형, 오너 지시 2026-09-27)
   "이.글.스.", // 한화 "이번달 글로벌 스토리" 월간 글로벌 주식 전략(글로벌리서치팀) — 월간 시황(오너 지시 2026-09-27)
@@ -516,6 +517,7 @@ const MARKET_CONDITION_SOURCE_MARKETS = new Set(["LS증권:us"]);
 // 키움증권 "월간증시전망"·"중장기증시전망" 게시판(오너 지시, 2026-09-24 —
 // "월간증시전망은 투자전략(주식)", "중장기증시전망은 투자전략(주식)이다").
 const STRATEGY_STOCKNAMES = new Set([
+  "다올 투자전략", // 다올투자증권 주식전략 게시판(2026-10-04 수집 추가 — 월간은 Monthly 규칙이 따로 가른다)
   "신한 해외주식 탑픽", // 신한 월간 해외주식 탑픽 10선 — 투자전략(주식)(오너 지적 2026-09-27)
   "한화 해외주식 전략", // 한화 해외주식분석 게시판의 종목·업종 없는 미국·중국 시장 노트 — "호르무즈보다 중요한 건 유동성"·"미중 정상회담: 높아질 기대, 숨 고를 증시"(오너 지적 2026-09-27)
   "Now Japan 시리즈", // 삼성증권 일본 시장 시리즈 — "10월, 新 TOPIX 시대 개막"(오너 지적 2026-09-27)
@@ -919,6 +921,10 @@ const MONTHLY_PUBLICATION_RE =
 // 약한 고정 시리즈(예: "KB Bond"·"KB Fed Watch"·키움 SI/FE 게시판)는 여기
 // 등록해 안전망으로 확정한다.
 const FORCED_ISSUE_STOCKNAMES = new Set([
+  // 다올투자증권 경제분석·채권전략(크레딧 포함)·파생 게시판(2026-10-04 수집 추가, 오너 결정 — 이슈분석)
+  "다올 경제",
+  "다올 채권",
+  "다올 파생",
   "신한 채권전략",
   "신한 경제",
   // NH투자증권 "전략 인사이드/경제"(투자전략 게시판) — 오너 지적 2026-09-27, "글로벌 전략"·"자산배분 전략"
@@ -979,6 +985,8 @@ const FORCED_ISSUE_STOCKNAMES = new Set([
   "이슈분석",
 ]);
 const FORCED_FX_STOCKNAMES = new Set([
+  "다올 경제 FX",
+  "다올 채권 FX",
   "KB 자산배분매크로 FX",
   "키움 환율분석",
   "삼성증권 경제 FX",

@@ -18,6 +18,7 @@ while read -r name min; do
   unit "research-$name" "리서치(국내): $name" "/opt/macro/ops/run-research.sh collect-$name.mjs" "$(six "$min")"
 done <<'LIST'
 shinhan-research 00
+daol-research 06
 sangsangin-research 02
 sangsangin-industry-research 04
 hana-research 10
