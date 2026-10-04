@@ -881,9 +881,17 @@ async function leaseNotes(corp, latest) {
     }
   }
   const rcpMemo = {}, xmlMemo = {}, polMemo = {};
-  const rcpOf = async (ry) => (rcpMemo[ry] ??= (await annualRcps(corp, ry))[0] ?? null);
+  const rcpsOf = async (ry) => (rcpMemo[ry] ??= await annualRcps(corp, ry));
+  const rcpOf = async (ry) => (await rcpsOf(ry))[0] ?? null;
   const xmlOf = async (rcp) => (xmlMemo[rcp] ??= await loadXbrl(rcp));
-  const polOf = async (rcp) => (polMemo[rcp] ??= await leasePolicyOf(rcp));
+  // 회계정책 문장은 그 기간 보고서의 모든 판본에서(정정본은 바뀐 부분만 담기도 한다 — 103590 2022)
+  const polOf = async (rcp) => {
+    if (polMemo[rcp]) return polMemo[rcp];
+    const ry = Object.keys(rcpMemo).find((k) => rcpMemo[k].includes(rcp));
+    const out = new Set();
+    for (const rc of ry ? rcpMemo[ry] : [rcp]) for (const n of await leasePolicyOf(rc)) out.add(n);
+    return (polMemo[rcp] = [...out]);
+  };
   const leaseNote = {};
   for (const y of years) {
     if (faceLease[y] !== false) continue; // 본표에 리스 줄이 있거나 그해 재무상태표 없음

@@ -30,7 +30,8 @@ const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기투자자
 
 export function classifyBsRows(rows) {
   const bs = (rows ?? []).filter((r) => r.sj_div === "BS");
-  const debt = bs.filter((r) => (isStd(r.account_id) ? DEBT_STD.test(r.account_id) && !DEBT_STD_NOT.test(r.account_id) : DEBT_NAME.test(nm(r.account_nm)) && !DEBT_NAME_NOT.test(nm(r.account_nm))));
+  // 표준 차입금 태그여도 이름이 자산(대여금·채권)이면 아님
+  const debt = bs.filter((r) => (isStd(r.account_id) ? DEBT_STD.test(r.account_id) && !DEBT_STD_NOT.test(r.account_id) && !/대여|자산|받을|리스채권/.test(nm(r.account_nm)) : DEBT_NAME.test(nm(r.account_nm)) && !DEBT_NAME_NOT.test(nm(r.account_nm))));
   const isLease = (r) => /LeaseLiabilities/.test(r.account_id ?? "") || /리스부채/.test(nm(r.account_nm));
   const borrow = debt.filter((r) => !isLease(r));
   const plain = borrow.length ? [] : bs.filter((r) => PLAIN.test(nm(r.account_nm)));
@@ -40,7 +41,7 @@ export function classifyBsRows(rows) {
     plain,
     // 회사가 같은 줄을 해마다 다른 태그로 달기도 한다(267260·329180 "단기금융자산": 2021~22 상각후원가·단기예치금 → 2023~ 포괄 OtherCurrentFinancialAssets) —
     // 포괄 태그면 이름으로 판정
-    cash: bs.filter((r) => (isStd(r.account_id) && !/_OtherCurrentFinancialAssets$/.test(r.account_id) ? CASH_STD.test(r.account_id) : CASH_NAME.test(nm(r.account_nm)))),
+    cash: bs.filter((r) => !/^기타(유동)?금융자산$/.test(nm(r.account_nm)) && (isStd(r.account_id) && !/_OtherCurrentFinancialAssets$/.test(r.account_id) ? CASH_STD.test(r.account_id) : CASH_NAME.test(nm(r.account_nm)))),
     nci: bs.filter((r) => r.account_id === "ifrs-full_NoncontrollingInterests" || nm(r.account_nm) === "비지배지분"),
     // 금융업 판정(검증기 자체 규칙) — 예수부채·예금부채·보험계약부채·책임준비금·투자계약부채 줄이 있으면 은행·보험·증권. 일반 기업의 "예수금"(원천징수 등)은 아님(삼성전자 실측)
     financial: bs.some((r) => /^(예수부채|고객예수부채|예금부채|보험계약부채|책임준비금|투자계약부채)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? "")),
@@ -132,7 +133,8 @@ export async function leaseNoteFor(reports, basis, faceDebtNames) {
   const tried = [];
   for (const rp of reports) {
     if (!rp) continue;
-    const sents = await dartDocLeaseSentences(rp.rcept);
+    const sents = [];
+    for (const rc of rp.all?.length ? rp.all : [rp.rcept]) sents.push(...(await dartDocLeaseSentences(rc)));
     const names = leaseInDebtLines(sents);
     const hit = names.filter((n) => faceDebtNames.some((f) => f.includes(n) || n.includes(f)));
     const facts = await dartXbrlFacts(rp.rcept, "11011");

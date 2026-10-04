@@ -9947,6 +9947,13 @@ async function verifyKr(sym) {
               }
             }
           }
+          // 승인된 규칙(앱 dart-income.ts — 칸 주석 "손익계산서에 당기순이익 줄 없음 — 지배주주 귀속 + 비지배지분 귀속"): DART 에 당기순이익 줄이 없고
+          // 지배·비지배 귀속 줄이 둘 다 있으면 합(103590 2021·2022). 검증기가 DART 줄로 따로 계산
+          if (name === "당기순이익(연결)" && latest == null) {
+            const p0 = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], []).latest;
+            const n0 = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToNonControllingInterests"], []).latest;
+            if (p0 != null && n0 != null) { latest = p0 + n0; rule = `DART 당기순이익 줄 없음 → 지배 ${p0} + 비지배 ${n0}(승인 규칙)`; }
+          }
           const r = vsDart(app, latest, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : "", rule].filter(Boolean).join(" · "));
           if (r.status === FAIL && app != null && orig != null && app === orig && latest !== orig)
             r.note = `앱 = 처음 공시 ${orig} · 최신 보고서 값 ${latest} — 앱이 재작성 값을 안 씀`;

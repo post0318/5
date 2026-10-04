@@ -74,8 +74,11 @@ const isStandard = (id: string) => /^(ifrs-full|dart)_/.test(id);
 const ids = (l: KrFactLine) => (l.accountIds?.length ? l.accountIds : [l.accountId]).filter(Boolean);
 const nameOf = (l: KrFactLine) => l.accountName.replace(/\s/g, "");
 
+/** 차입금 태그가 붙어도 자산(대여금·채권)인 줄 — 회사가 해마다 태그를 바꾸면 같은 줄에 차입금 ID 가 섞여 들어온다(402340 "단기대여금" 이 총차입금에 들어갔다, 감사 1차) */
+const DEBT_STD_NAME_EXCLUDE = /대여|자산|받을|리스채권/;
 function isDebtLine(l: KrFactLine): boolean {
   if (l.sjDiv !== "BS") return false;
+  if (DEBT_STD_NAME_EXCLUDE.test(nameOf(l))) return false;
   const std = ids(l).filter(isStandard);
   if (std.length) return std.some((id) => DEBT_ID.test(id) && !DEBT_ID_EXCLUDE.test(id));
   const nm = nameOf(l);
@@ -95,13 +98,19 @@ function isPlainFinLiabLine(l: KrFactLine): boolean {
 // ── 현금 판정 ────────────────────────────────────────────────────────
 
 const CASH_ID =
-  /^(ifrs-full|dart)_(CashAndCashEquivalents|Short[tT]ermDepositsNotClassifiedAsCashEquivalents|CurrentInvestments|CurrentFinancialAssetsAtAmortisedCost|CurrentFinancialAssetsAtFairValueThroughProfitOrLoss\w*)$/;
-const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기금융자산)$/;
+  /^(ifrs-full|dart)_(CashAndCashEquivalents|Short[tT]ermDeposits(?:Not)?ClassifiedAsCashEquivalents|CurrentInvestments|CurrentFinancialAssetsAtAmortisedCost|CurrentFinancialAssetsAtFairValueThroughProfitOrLoss\w*)$/;
+const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기금융자산|단기투자자산|단기투자증권)$/;
+/** 포괄 태그 — 이 태그만 달린 줄은 이름으로 판정(267260·329180 "단기금융자산"·402340 "단기투자자산": 같은 줄을 2021~22 엔 상각후원가·단기예치금, 2023~ 엔 포괄 태그로 달아 해마다·연간/분기 판정이 갈렸다) */
+const CASH_GENERIC_ID = /_OtherCurrentFinancialAssets$/;
+/** B16 — "기타(유동)금융자산"은 태그와 관계없이 제외(064350 "기타금융자산": 2021~22 보고서가 단기예치금 태그를 달아 포함되고 있었다, 감사 1차) */
+const CASH_NAME_EXCLUDE = /^기타(유동)?금융자산$/;
 
 function isCashLine(l: KrFactLine): boolean {
   if (l.sjDiv !== "BS") return false;
+  if (CASH_NAME_EXCLUDE.test(nameOf(l))) return false;
   const std = ids(l).filter(isStandard);
-  if (std.length) return std.some((id) => CASH_ID.test(id));
+  if (std.some((id) => CASH_ID.test(id))) return true;
+  if (std.length && !std.every((id) => CASH_GENERIC_ID.test(id))) return false;
   return CASH_NAME.test(nameOf(l));
 }
 
