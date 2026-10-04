@@ -911,7 +911,19 @@ async function leaseNotes(corp, latest) {
       const hit = names.filter((n) => (faceDebtOfReport[ry] ?? []).some((f) => f.includes(n) || n.includes(f)));
       const L = leaseAmountOf(await xmlOf(rcp), prefix, sepOf[y]);
       if (hit.length) { note = { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rcp})` }; break; }
-      if (L.amount != null) { note = { status: "added", amount: L.amount, how: `사업보고서 ${rcp} XBRL 주석 ${prefix} — ${L.how}` }; break; }
+      if (L.amount != null) {
+        note = { status: "added", amount: L.amount, how: `사업보고서 ${rcp} XBRL 주석 ${prefix} — ${L.how}` };
+        // 단위 대조(2026-10-05 — 079550 2024 보고서가 천원 단위 숫자를 decimals="0" KRW 로 태깅: 44,977,895 → 이듬해 보고서 전기말 44,977,895,000).
+        // 그해 보고서 값을 쓸 때 이듬해 보고서 전기말 값이 있으면 대조해, 정확히 1000^k 배로 갈리면 이듬해 값(나중 보고서 — 그해 보고서 단위 오류)
+        if (ry === y && y + 1 <= latest) {
+          const rcp1 = await rcpOf(y + 1);
+          const L1 = rcp1 ? leaseAmountOf(await xmlOf(rcp1), `PFY${y}eFY`, sepOf[y]) : null;
+          const r = L1?.amount ? Math.max(L.amount, L1.amount) / Math.min(L.amount, L1.amount) : 1;
+          if ([1e3, 1e6, 1e9].includes(r))
+            note = { status: "added", amount: L1.amount, how: `사업보고서 ${rcp1} XBRL 주석 PFY${y}eFY — ${L1.how} (그해 보고서 ${rcp} 값 ${L.amount} 은 ${r}배 단위 오류)` };
+        }
+        break;
+      }
       tried.push(`${rcp}: ${L.how}`);
     }
     leaseNote[y] = note ?? { status: "unknown", amount: null, how: tried.join(" / ") || "사업보고서 없음" };

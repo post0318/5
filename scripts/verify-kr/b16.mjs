@@ -160,7 +160,16 @@ export async function leaseNoteFor(reports, basis, faceDebtNamesOf) {
     const facts = await dartXbrlFacts(rp.rcept, "11011");
     const L = leaseFromFacts(facts, rp.prefix, basis);
     if (hit.length) return { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rp.rcept})` };
-    if (L.amount != null) return { status: "added", amount: L.amount, how: `사업보고서 ${rp.rcept} XBRL 주석 ${rp.prefix} — ${L.how}` };
+    if (L.amount != null) {
+      // 그해 보고서 값이면 이듬해 보고서 전기말 값과 대조 — 정확히 1000^k 배 차이면 단위 오류로 보고 이듬해 값(079550 2024: 44,977,895 vs 44,977,895,000)
+      const later = reports.find((x, i) => x && i > reports.indexOf(rp));
+      if (later) {
+        const L1 = leaseFromFacts(await dartXbrlFacts(later.rcept, "11011"), later.prefix, basis);
+        const r = L1.amount ? Math.max(L.amount, L1.amount) / Math.min(L.amount, L1.amount) : 1;
+        if (r === 1e3 || r === 1e6 || r === 1e9) return { status: "added", amount: L1.amount, how: `사업보고서 ${later.rcept} XBRL 주석 ${later.prefix} — ${L1.how} (그해 보고서 ${rp.rcept} 값 ${L.amount} 은 ${r}배 단위 오류)`, unitFix: r };
+      }
+      return { status: "added", amount: L.amount, how: `사업보고서 ${rp.rcept} XBRL 주석 ${rp.prefix} — ${L.how}` };
+    }
     tried.push(`${rp.rcept}: ${L.how}`);
   }
   return { status: "unknown", amount: null, how: tried.join(" / ") || "사업보고서 없음" };

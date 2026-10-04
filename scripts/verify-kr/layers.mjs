@@ -152,6 +152,7 @@ export async function krOriginalLayers(ctx) {
 
   // ── K2 EV 구성요소(사업연도) ──
   const policySrc = []; // LTM 판정에 쓸 최근 사업연도 리스 판정
+  const leaseByYear = new Map(); // 단위 안전장치용 — 앱이 주석에서 더한 리스부채(사업연도)
   for (const c of fyCols) {
     const y = Number(String(c.label).slice(0, 4)), col = `${y}Y`, x = H[col];
     const src = yearSrc.get(y);
@@ -174,6 +175,8 @@ export async function krOriginalLayers(ctx) {
       if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
     } else if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
     const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
+    // 안전장치는 앱이 실제로 더한 값(앱 총차입금 − 본표 차입금)으로 — 검증기 판독과 같은 결함을 함께 가져도 잡히게
+    if (lease.status === "added" && x.debt != null) leaseByYear.set(y, x.debt - faceDebt);
     const expCash = sumCol(cl.cash, own.col) ?? 0;
     const expNci = sumCol(cl.nci, own.col) ?? 0;
     exact("K2", "총차입금 = DART(B16)", col, x.debt, expDebt, why);
@@ -184,6 +187,11 @@ export async function krOriginalLayers(ctx) {
     if (blockWhy) { if (x.ev != null) fail("K2", "EV = KRX + DART(B16)", col, `기대 공란(${blockWhy})인데 앱 EV ${x.ev}`); else add("K2", "EV = KRX + DART(B16)", col, { status: PASS, note: `공란 — ${blockWhy}` }); }
     else exact("K2", "EV = KRX + DART(B16)", col, x.ev, k.common + k.preferred + expDebt + expNci - expCash);
   }
+
+  // ── 단위 안전장치(2026-10-05 — 079550 2024 리스부채가 천원 숫자를 원으로 태깅해 앱·검증기가 같은 판독으로 함께 통과했다): 원문·주석 판독값을
+  //    태그·단위와 무관한 근거인 **이웃 해 값**과 대조 — 이웃 해와 100배 넘게 다르면 단위 오류로 보고 실패(실제 리스부채가 한 해에 100배 바뀌는 일은
+  //    없다고 본다. 리스부채가 처음 생긴 해처럼 진짜 급변이면 실패를 사람이 확인)
+  unitGuard(leaseByYear, "K2", "리스부채(주석) 크기 = 이웃 해와 100배 안(단위 안전장치)", add, fail, PASS);
 
   // ── K4 LTM(최신 정기보고서) ──
   const lp = L.latestPeriod();
@@ -349,6 +357,14 @@ async function ltmLayer(c) {
           reps.push({ q: qq, rcept: x.rcept, cells: await dartDocLeaseCells(x.rcept) });
       const ql = quarterLeaseFromCells(reps, Y, q, pol.amount, basis);
       lease = ql.amount != null ? { status: "added", amount: ql.amount, how: ql.how } : { status: "unknown", how: `분기 보고서 주석 리스부채 확인 불가 — ${ql.how}` };
+      // 단위 안전장치 — 분기말 리스부채 vs 최근 사업연도 주석 리스부채(100배 안)
+      // 앱이 더한 분기말 리스부채(앱 LTM 총차입금 − 본표 차입금)
+      const appQ = LT.debt != null ? LT.debt - faceDebt : null;
+      if (appQ != null && appQ !== 0) {
+        const r = Math.max(appQ, pol.amount) / Math.min(appQ, pol.amount);
+        if (!(r > 0) || r > 100) fail("K2", "분기말 리스부채 크기 = 사업연도 주석과 100배 안(단위 안전장치)", "LTM", `앱 분기말 ${appQ} vs FY${Y - 1} ${pol.amount}`);
+        else add("K2", "분기말 리스부채 크기 = 사업연도 주석과 100배 안(단위 안전장치)", "LTM", { status: PASS, note: `${r.toFixed(2)}배` });
+      }
     } else lease = { status: "unknown", how: `FY${Y - 1} 주석 리스부채 ${pol?.status ?? "없음"} — 분기 보고서 전기말 열 확인 불가` };
   }
   const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
@@ -417,6 +433,14 @@ async function daLayer(c) {
   const col = await daCol(env);
   const doc = await col.findOne({ _id: sym });
   if (!doc) { fail("K3", "감가상각 적재본(kr_da) 존재", "-", `유니버스 종목인데 ${env.KR_DA_COLLECTION || "kr_da"} 에 문서 없음`); return; }
+  // 단위 안전장치 — 적재 감가상각(원문 해 포함, 전 해)의 이웃 해 크기 대조 + TTM vs 최근 사업연도
+  const daBy = new Map(Object.entries(doc.byYear ?? {}).map(([y, d]) => [Number(y), (d.depreciation ?? 0) + (d.amortisation ?? 0)]).filter(([, v]) => v > 0));
+  unitGuard(daBy, "K3", "감가상각 적재본 크기 = 이웃 해와 100배 안(단위 안전장치)", add, fail, PASS);
+  if (doc.ttmDepreciation != null && daBy.size) {
+    const fy = Math.max(...daBy.keys()), t = doc.ttmDepreciation + (doc.ttmAmortisation ?? 0), r = Math.max(t, daBy.get(fy)) / Math.min(t, daBy.get(fy));
+    if (!(t > 0) || r > 100) fail("K3", "감가상각 TTM 크기 = 최근 사업연도와 100배 안(단위 안전장치)", "LTM", `TTM ${t} vs FY${fy} ${daBy.get(fy)}`);
+    else add("K3", "감가상각 TTM 크기 = 최근 사업연도와 100배 안(단위 안전장치)", "LTM", { status: PASS, note: `${r.toFixed(2)}배` });
+  }
   for (const y of yearsShown) {
     const colY = `${y}Y`;
     const d = doc.byYear?.[y];
@@ -474,5 +498,17 @@ async function daLayer(c) {
       const v = doc.ttmDepreciation + (doc.ttmAmortisation ?? 0);
       if (op != null) exact("K3", "LTM EBITDA = LTM 영업이익 + 감가상각 TTM(적재본)", "LTM", LT.ebitda, op + v, `적재 ${doc.ttmLabel}`);
     } else if (wantTok) add("K3", "LTM 감가상각 TTM 적재", "LTM", LT.ebitda == null ? { status: NA, note: `적재 TTM ${doc.ttmLabel ?? "없음"} ≠ 최신 ${wantTok} — 앱 LTM EBITDA 빈칸(규칙)` } : { status: "fail", note: `적재 TTM ${doc.ttmLabel ?? "없음"} ≠ 최신 ${wantTok} 인데 앱 LTM EBITDA ${LT.ebitda}` });
+  }
+}
+
+/** 단위 안전장치 — 해 → 값 지도에서 이웃 해(바로 앞 해)와 100배 넘게 다르면 실패(1000배 단위 오류를 태그·단위 표기와 무관하게 잡는다) */
+function unitGuard(byYear, layer, name, add, fail, PASS) {
+  const ys = [...byYear.keys()].sort((a, b) => a - b);
+  for (let i = 1; i < ys.length; i++) {
+    const a = byYear.get(ys[i - 1]), b = byYear.get(ys[i]);
+    if (!(a > 0) || !(b > 0) || ys[i] - ys[i - 1] !== 1) continue;
+    const r = Math.max(a, b) / Math.min(a, b);
+    if (r > 100) fail(layer, name, `${ys[i]}Y`, `FY${ys[i - 1]} ${a} vs FY${ys[i]} ${b} (${r.toFixed(0)}배) — 단위 오류 의심`);
+    else add(layer, name, `${ys[i]}Y`, { status: PASS, note: `FY${ys[i - 1]} 대비 ${r.toFixed(2)}배` });
   }
 }
