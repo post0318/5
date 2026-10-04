@@ -1015,6 +1015,14 @@ const FORCED_FX_STOCKNAMES = new Set([
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
 ): ResearchTopic {
+  // 라벨이 업종명처럼 붙어 산업분석으로 새던 월간 시리즈(오너 지시 2026-10-04): 하나 「Hana 미국주식 Monthly」(미국 증시 Review/Preview)·
+  // NH 「N월 월간공유」(리서치센터 월간 종합 전망)는 시황 월간, 미래에셋 「Econ Monthly」(국내외 경제 분석)는 경제라 이슈분석.
+  // IBK 「IBKS Insight Monthly」는 업종 월간 점검 묶음이라 산업분석 그대로.
+  if (doc.source === "하나증권" && /Hana\s*미국주식\s*Monthly/i.test(doc.title ?? "")) return "시황분석:Monthly";
+  if (doc.source === "NH투자증권" && /월간\s*공유/.test(doc.stockName ?? "")) return "시황분석:Monthly";
+  if (doc.source === "미래에셋증권" && /^Econ\s*Monthly$/i.test((doc.stockName ?? "").trim())) {
+    return FX_RE.test(doc.title ?? "") ? "환율분석" : "이슈분석";
+  }
   const topic = classifyResearchTopicBase(doc);
   // 투자전략·시황 중 월간 발간물은 시황분석:Monthly(2026-10-04 오너 결정 — 신한 해외주식 탑픽·키움 월간증시전망 등 "투자전략(주식)" 고정
   // 라벨도 포함). 산업분석·이슈분석은 그대로(월간 업종 리포트는 산업분석이다).
