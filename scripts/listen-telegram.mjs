@@ -24,7 +24,10 @@ import {
   usernameFromTelegramUrl,
 } from "./collect-telegram-posts.mjs";
 
-const CATCHUP_EVERY_MS = 30 * 60_000;
+// 2분마다 이어받기 — 텔레그램이 이 접속에 새 글 알림을 아예 보내지 않는다(2026-10-04 실측: getState 를 불러도 9시간 동안 이벤트 0건,
+// 다른 대화 이벤트도 0건 — 큰 공개 채널은 서버가 알림을 생략하고, gramjs 는 채널 차이 보충(getChannelDifference)을 하지 않는다).
+// 같은 연결에서 채널 2곳 최근 글만 묻는 가벼운 요청이라 재접속 반복과 달리 차단 위험이 낮다. 알림이 오면 그쪽이 먼저 보낸다.
+const CATCHUP_EVERY_MS = 2 * 60_000;
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 const toItem = (m) => ({
@@ -109,7 +112,7 @@ async function main() {
     }
   }, new NewMessage({})); // 채널 필터는 위 byId 로 직접 건다(gramjs 의 chats 옵션에 엔티티 객체를 넘기면 해석 실패로 죽는다 — 실측)
 
-  setInterval(() => catchUp("정기").catch((e) => log("정기 이어받기 실패", e?.message ?? e)), CATCHUP_EVERY_MS);
+  setInterval(() => catchUp("2분").catch((e) => log("정기 이어받기 실패", e?.message ?? e)), CATCHUP_EVERY_MS);
 
   // 정상 종료(systemd stop) 때 연결을 닫는다
   for (const sig of ["SIGTERM", "SIGINT"]) {
