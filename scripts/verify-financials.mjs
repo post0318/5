@@ -9694,31 +9694,31 @@ async function dartFy(corp, year, fsDiv) {
   })());
   return dartCache.get(k);
 }
-/** DART 사업보고서(정기공시 A001) 대상 사업연도 목록 — 보고서명 "(YYYY.MM)" 의 연도(정정 공시 포함, 중복 제거) */
-const dartYearsCache = new Map();
-async function dartAnnualYears(corp) {
-  if (!dartYearsCache.has(corp)) dartYearsCache.set(corp, (async () => {
-    if (!env.DART_API_KEY) throw new Error("DART_API_KEY 미설정");
-    const bgn = `${new Date().getFullYear() - 7}0101`;
-    const u = `https://opendart.fss.or.kr/api/list.json?crtfc_key=${env.DART_API_KEY}&corp_code=${corp}&bgn_de=${bgn}&pblntf_detail_ty=A001&page_count=100`;
-    for (let i = 0; ; i++) {
-      try {
-        await dartSlot();
-        const r = await fetch(u, { signal: AbortSignal.timeout(30_000) });
-        if (!r.ok) throw new Error(`DART list HTTP ${r.status}`);
-        const j = await r.json();
-        if (j.status === "013") return [];
-        if (j.status !== "000") throw new Error(`DART list ${j.status} ${j.message}`);
-        return [...new Set((j.list ?? []).map((x) => Number((String(x.report_nm).match(/\((\d{4})\.\d{2}\)/) ?? [])[1])).filter(Number.isFinite))];
-      } catch (e) {
-        if (i >= 2) throw e;
-        await new Promise((res) => setTimeout(res, 2000 * (i + 1)));
-      }
-    }
-  })());
-  return dartYearsCache.get(corp);
-}
 const dartNum = (v) => (v == null || v === "" || v === "-" ? null : Number(String(v).replace(/,/g, "")));
+/** 보고서 L(사업연도 by)의 사업연도 y 열에 손익계산서 값이 하나라도 있는가 — 당기·전기·전전기 열 */
+const KR_FY_COLS = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
+const dartHasIs = (L, by, y) => {
+  const f = KR_FY_COLS[by - y];
+  const val = (v) => { const t = String(v ?? "").trim(); return t === "" || t === "-" ? null : Number(t.replace(/,/g, "")); };
+  return !!(L && f && L.some((r) => (r.sj_div === "IS" || r.sj_div === "CIS") && Number.isFinite(val(r[f]))));
+};
+/**
+ * 사업연도 y 의 원자료 — 연결(CFS) 보고서 Y·Y+1·Y+2 어디든 y 손익 값이 있으면 연결, 없으면 별도(OFS) 같은 규칙, 둘 다 없으면 null.
+ * 해마다 따로 정한다(2026-10-04 — 연결을 2024 부터 낸 LS마린솔루션 2021 은 별도). 조회 실패는 던진다
+ */
+async function dartYearSource(corp, y) {
+  for (const fsDiv of ["CFS", "OFS"]) {
+    const [cur, next, next2] = await Promise.all([dartFy(corp, y, fsDiv), dartFy(corp, y + 1, fsDiv), dartFy(corp, y + 2, fsDiv)]);
+    if ([[cur, y], [next, y + 1], [next2, y + 2]].some(([L, by]) => dartHasIs(L, by, y))) return { fsDiv, cur, next, next2 };
+  }
+  return null;
+}
+/** 최근 사업연도 — 연결 사업보고서(작년·재작년) 먼저, 없으면 별도(앱 연간 로더와 같은 순서). 없으면 null */
+async function dartLatestFy(corp) {
+  const cy = new Date().getFullYear();
+  for (const fsDiv of ["CFS", "OFS"]) for (const y of [cy - 1, cy - 2]) if (await dartFy(corp, y, fsDiv)) return y;
+  return null;
+}
 /** 계정 하나 — account_id 우선(보고서 구분 sj 집합 안), 없으면 계정명(공백·괄호 제거) */
 function dartPick(list, sjs, ids, names, field) {
   // 우선주 줄에 단 보통주 EPS 코드는 무시(삼성SDI 2021 원자료 태그 오류)
@@ -9820,21 +9820,46 @@ async function verifyKr(sym) {
   const h = hl?.highlights;
   if (!h) return { sym, error: "하이라이트 없음", checks, review: [] };
   const fyCols = h.columns.filter((c) => c.kind === "fy");
-  // 기대 연도 열 = DART 사업보고서가 있는 사업연도(앱 표시 범위 최근 5개 안) — 고정 "3개 이상"은 2024 분할 신설 SK이터닉스(475150, 보고서
-  // 2024·2025 둘뿐)를 오판했다(2026-10-04). 미국이 SEC 10-K 목록으로 정하는 것과 같은 원칙. 조회 실패는 실패 + 오류.
+  const hardErrors0 = [];
+  // 기대 연도 열 = 앱 표시 범위(최근 사업연도 포함 5개 해) 중 DART 에 그 해 손익계산서 값이 있는 해 — 그해 보고서 당기, 다음 해 보고서 전기,
+  // 다다음 해 보고서 전전기 어디든(연결 먼저, 없으면 별도 — 해마다). 사업보고서 목록 기준(2026-10-04 앞 판)은 2024 상장 산일전기(062040)의
+  // 2024 보고서 전기 열 FY2023 을 "보고서 없는 열"로 오판했다. 검사기 자체 DART 조회로 정하고(앱 출력 아님), 조회 실패는 실패 + 오류
   {
     const corp = KR_CORP.get(sym);
-    let years = null;
-    try { years = corp ? await dartAnnualYears(corp) : null; } catch (e) { add("응답", "DART 사업보고서 목록", "-", { status: FAIL, note: String(e).slice(0, 120) }); }
     const shown = fyCols.map((c) => Number(String(c.label).slice(0, 4))).filter(Number.isFinite);
     if (!fyCols.length) add("B", "연도 열 존재", "-", { status: FAIL, note: "하이라이트 연도 열 0개" });
-    else if (years) {
-      const last = Math.max(...years);
-      const exp = years.filter((y) => y > last - 5).sort();
-      const missing = exp.filter((y) => !shown.includes(y)), extra = shown.filter((y) => !exp.includes(y));
-      add("B", "연도 열 = DART 사업보고서 연도", "-", missing.length || extra.length
-        ? { status: FAIL, note: `기대 ${exp.join("·")} / 앱 ${shown.join("·")}${missing.length ? ` — 빠짐 ${missing.join("·")}` : ""}${extra.length ? ` — 보고서 없는 열 ${extra.join("·")}` : ""}` }
-        : { status: PASS, note: `${exp.length}개 연도(${exp.join("·")})` });
+    if (!corp) add("B", "연도 열 = DART 손익 자료 연도", "-", { status: FAIL, note: "corpcodes.json 에 종목코드 없음" });
+    else {
+      try {
+        const last = await dartLatestFy(corp);
+        if (last == null) add("B", "연도 열 = DART 손익 자료 연도", "-", { status: FAIL, note: "DART 사업보고서 없음(최근 2개 연도, 연결·별도)" });
+        else {
+          const exp = [], ofs = [];
+          for (let y = last - 4; y <= last; y++) {
+            const src = await dartYearSource(corp, y);
+            if (src) { exp.push(y); if (src.fsDiv === "OFS") ofs.push(y); }
+          }
+          const missing = exp.filter((y) => !shown.includes(y)), extra = shown.filter((y) => !exp.includes(y));
+          const sep = ofs.length ? ` · 별도 재무제표 ${ofs.join("·")}` : "";
+          add("B", "연도 열 = DART 손익 자료 연도", "-", missing.length || extra.length
+            ? { status: FAIL, note: `기대 ${exp.join("·")}${sep} / 앱 ${shown.join("·")}${missing.length ? ` — 빠짐 ${missing.join("·")}` : ""}${extra.length ? ` — DART 손익 자료 없는 열 ${extra.join("·")}` : ""}` }
+            : { status: PASS, note: `${exp.length}개 연도(${exp.join("·")})${sep}` });
+          // 별도로 채운 해는 화면 주석이 있어야 한다(조용한 대체 금지)
+          if (ofs.length && fyCols.length) {
+            const fsSrc = await dartFy(corp, last, "CFS");
+            const allOfs = !fsSrc;
+            if (!allOfs) {
+              const note = (h.notes ?? []).find((n) => /연결 재무제표 없음 → 별도/.test(n)) ?? "";
+              const noted = ofs.filter((y) => shown.includes(y) && note.includes(`FY${y}`));
+              const lack = ofs.filter((y) => shown.includes(y) && !noted.includes(y));
+              add("B", "별도 재무제표 해 주석", "-", lack.length ? { status: FAIL, note: `별도로 채운 ${lack.join("·")} 주석 없음` } : { status: PASS, note: note || "해당 없음" });
+            }
+          }
+        }
+      } catch (e) {
+        add("응답", "DART 원자료(연도 열 기대치)", "-", { status: FAIL, note: String(e).slice(0, 120) });
+        hardErrors0.push(`DART 조회 실패(연도 열 기대치): ${String(e).slice(0, 80)}`);
+      }
     }
   }
 
@@ -9866,7 +9891,7 @@ async function verifyKr(sym) {
   // 정확 일치 — 부분일치는 "(비지배주주 귀속)" 에도 걸린다(감사 3차)
   const parentRow = is?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.trim() === "(지배주주 귀속)");
   for (const [k, v] of Object.entries(parentRow?.values ?? {})) (IS[k.replace(/^FY(\d{4})$/, "$1Y")] ??= {}).niParent = v;
-  const hardErrors = [];
+  const hardErrors = [...hardErrors0];
   for (const [k, v] of Object.entries({ ...fetched, "verify-row": row })) for (const w of appFetchWarnings(v)) hardErrors.push(`앱 조회 실패 경고(${k}): ${w}`);
   const BS = {};
   for (const [name, key] of [["총차입금", "debt"], ["순차입금", "nd"]])
@@ -9887,19 +9912,17 @@ async function verifyKr(sym) {
         const k = `FY${y}`, col = `${y}Y`;
         let cur, next, next2, fsDiv = "CFS";
         try {
-          // 연결이 그해·다음 해·다다음 해 보고서 어디에든 있으면 연결(금융지주는 2021·2022 보고서에 연결 XBRL 이 없고 2023 보고서 전기·전전기에
-          // 있다 — 앱도 그 값을 쓴다). 조회 실패는 "없음"으로 넘기지 않고 오류(예전엔 SK 2025 보고서 조회 실패가 판본 차이로 보였다)
-          [cur, next, next2] = await Promise.all([dartFy(corp, y, "CFS"), dartFy(corp, y + 1, "CFS"), dartFy(corp, y + 2, "CFS")]);
-          if (!cur && !next && !next2) {
-            fsDiv = "OFS";
-            [cur, next, next2] = await Promise.all([dartFy(corp, y, "OFS"), dartFy(corp, y + 1, "OFS"), dartFy(corp, y + 2, "OFS")]);
-          }
+          // 연결 보고서(그해·다음 해·다다음 해) 어디에든 그해 손익 값이 있으면 연결(금융지주는 2021·2022 보고서에 연결 XBRL 이 없고 2023
+          // 보고서 전기·전전기에 있다 — 앱도 그 값을 쓴다), 없으면 별도 — 해마다(dartYearSource). 조회 실패는 "없음"으로 넘기지 않고
+          // 오류(예전엔 SK 2025 보고서 조회 실패가 판본 차이로 보였다)
+          const src = await dartYearSource(corp, y);
+          if (src) ({ cur, next, next2, fsDiv } = src);
         } catch (e) {
           add("A", "DART 원자료 조회", col, { status: FAIL, note: String(e).slice(0, 120) });
           hardErrors.push(`DART 조회 실패 ${col}: ${String(e).slice(0, 80)}`);
           continue;
         }
-        if (!cur && !next && !next2) { add("A", "DART 사업보고서 존재", col, { status: FAIL, note: "앱에 연도 열이 있는데 DART 사업보고서 없음(CFS·OFS)" }); continue; }
+        if (!cur && !next && !next2) { add("A", "DART 손익 자료 존재", col, { status: FAIL, note: "앱에 연도 열이 있는데 DART 보고서(Y·Y+1·Y+2, 연결·별도)에 그해 손익 값 없음" }); continue; }
         for (const [name, loc, sjs, ids, names] of KR_A_ITEMS) {
           const app = loc.is ? isByName(loc.is, k) : loc.bs ? byId(bs, loc.bs, k) : byId(cf, loc.cf, k);
           // 최신 판본 = Y+2 보고서 전전기 → Y+1 보고서 전기 → Y 보고서 당기(앱 규칙 "연도별 가장 최신 보고서" — 현대차 2021 매출은

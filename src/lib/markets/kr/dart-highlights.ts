@@ -295,6 +295,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
       ? `현재/LTM 열 재무상태표(현금·차입금·비지배지분·자본): ${snap!.label} 기준`
       : `현재/LTM 열 재무상태표: 최신 분기 스냅샷 없음 — FY${lastFy} 연말값`,
   );
+  if (facts.ofsYears?.length) notes.push(`${facts.ofsYears.map((y) => `FY${y}`).join("·")}: 연결 재무제표 없음 → 별도 재무제표`);
   if (approxMcap) notes.push("일부 연도 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사");
   for (const w of input.warnings ?? []) notes.push(`⚠ ${w}`);
   if (input.capsError) notes.push(`⚠ KRX 시가총액 조회 실패(3번 재시도 후, ${input.capsError}) — 연도 열 시가총액은 근사(연말 종가 × 현재 상장주식수), 우선주 시가총액·EV 는 공란. 저장하지 않으므로 다음 조회 때 다시 계산`);
