@@ -39,9 +39,9 @@ export function classifyBsRows(rows) {
     debt: [...debt, ...plain],
     leaseFace: debt.filter(isLease),
     plain,
-    // 회사가 같은 줄을 해마다 다른 태그로 달기도 한다(267260·329180 "단기금융자산": 2021~22 상각후원가·단기예치금 → 2023~ 포괄 OtherCurrentFinancialAssets) —
-    // 포괄 태그면 이름으로 판정
-    cash: bs.filter((r) => !/^기타(유동)?금융자산$/.test(nm(r.account_nm)) && (isStd(r.account_id) && !/_OtherCurrentFinancialAssets$/.test(r.account_id) ? CASH_STD.test(r.account_id) : CASH_NAME.test(nm(r.account_nm)))),
+    // 회사가 같은 줄을 해마다 다른 태그로 달기도 한다(267260·329180 "단기금융자산", 402340 "단기투자자산")
+    // 판정 순서: "기타(유동)금융자산" 제외 → B16 에 이름이 적힌 항목은 태그와 관계없이 포함 → 그 밖은 표준 태그
+    cash: bs.filter((r) => !/^기타(유동)?금융자산$/.test(nm(r.account_nm)) && (CASH_NAME.test(nm(r.account_nm)) || (isStd(r.account_id) && CASH_STD.test(r.account_id)))),
     nci: bs.filter((r) => r.account_id === "ifrs-full_NoncontrollingInterests" || nm(r.account_nm) === "비지배지분"),
     // 금융업 판정(검증기 자체 규칙) — 예수부채·예금부채·보험계약부채·책임준비금·투자계약부채 줄이 있으면 은행·보험·증권. 일반 기업의 "예수금"(원천징수 등)은 아님(삼성전자 실측)
     financial: bs.some((r) => /^(예수부채|고객예수부채|예금부채|보험계약부채|책임준비금|투자계약부채)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? "")),

@@ -100,18 +100,16 @@ function isPlainFinLiabLine(l: KrFactLine): boolean {
 const CASH_ID =
   /^(ifrs-full|dart)_(CashAndCashEquivalents|Short[tT]ermDeposits(?:Not)?ClassifiedAsCashEquivalents|CurrentInvestments|CurrentFinancialAssetsAtAmortisedCost|CurrentFinancialAssetsAtFairValueThroughProfitOrLoss\w*)$/;
 const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기금융자산|단기투자자산|단기투자증권)$/;
-/** 포괄 태그 — 이 태그만 달린 줄은 이름으로 판정(267260·329180 "단기금융자산"·402340 "단기투자자산": 같은 줄을 2021~22 엔 상각후원가·단기예치금, 2023~ 엔 포괄 태그로 달아 해마다·연간/분기 판정이 갈렸다) */
-const CASH_GENERIC_ID = /_OtherCurrentFinancialAssets$/;
 /** B16 — "기타(유동)금융자산"은 태그와 관계없이 제외(064350 "기타금융자산": 2021~22 보고서가 단기예치금 태그를 달아 포함되고 있었다, 감사 1차) */
 const CASH_NAME_EXCLUDE = /^기타(유동)?금융자산$/;
 
 function isCashLine(l: KrFactLine): boolean {
   if (l.sjDiv !== "BS") return false;
   if (CASH_NAME_EXCLUDE.test(nameOf(l))) return false;
-  const std = ids(l).filter(isStandard);
-  if (std.some((id) => CASH_ID.test(id))) return true;
-  if (std.length && !std.every((id) => CASH_GENERIC_ID.test(id))) return false;
-  return CASH_NAME.test(nameOf(l));
+  // B16 에 이름이 적힌 항목(현금및현금성자산·단기금융상품·단기투자자산(증권)·단기금융자산)은 태그와 관계없이 — 회사가 같은 줄을 해마다 다른 태그로
+  // 단다(402340 "단기투자자산": 2023 보고서 InvestmentsOtherThan…, 2024~ 포괄 OtherCurrentFinancialAssets)
+  if (CASH_NAME.test(nameOf(l))) return true;
+  return ids(l).filter(isStandard).some((id) => CASH_ID.test(id));
 }
 
 const NCI_ID = /^ifrs-full_NoncontrollingInterests$/;
