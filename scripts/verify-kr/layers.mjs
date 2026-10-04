@@ -156,7 +156,9 @@ export async function krOriginalLayers(ctx) {
   // 단위 오류 보고서 — 사업보고서 R(y) 의 리스부채 주석이 앞뒤 보고서 모두와 같은 해 값이 정확히 1000^k 배로 갈리면 그 보고서 리스부채는 쓰지 않는다
   // (079550 2024 보고서: 천원 숫자를 decimals="0" KRW 로 — 44,977,895·49,524,406 vs 앞뒤 보고서 ×1000). 규칙 문장만 보고 따로 짠 판정
   const badLease = new Map();
-  try {
+  // 주석 리스부채를 쓰는 회사(표시 연도 중 본표에 리스부채 줄이 없는 해가 있음)만 — 나머지는 사업보고서 XBRL 을 받지 않는다(012450·402340 최신 판본엔 XBRL 이 없다, DART 014)
+  const needLease = yearsShown.some((y) => { const s0 = yearSrc.get(y), o = s0 ? bsOwner(s0, y) : null; return o && !classifyBsRows(o.rows).leaseFace.length; });
+  if (needLease) try {
     const amt = async (ry, pre, y) => { const r = L.latest(ry, "11011"); return r ? leaseFromFacts(await dartXbrlFacts(r.rcept, "11011"), pre, yearSrc.get(y)?.fsDiv ?? "CFS").amount : null; };
     const off = (a, b) => a > 0 && b > 0 && [1e3, 1e6, 1e9].includes(Math.max(a, b) / Math.min(a, b));
     for (const ry of new Set(yearsShown.flatMap((y) => [y, y + 1]))) {
