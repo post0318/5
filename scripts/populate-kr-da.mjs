@@ -849,7 +849,11 @@ async function leasePolicyOf(rcpNo) {
   await new Promise((r) => setTimeout(r, 1000));
   const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
   if (!res.ok) throw new Error(`document ${res.status}`);
-  const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
+  const buf = new Uint8Array(await res.arrayBuffer());
+  // 원문 파일이 없는 판본(DART 014 — [첨부정정], 001440 2024)은 문장 없음. 다른 상태는 실패
+  const head = strFromU8(buf.slice(0, 300));
+  if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+  const files = unzipSync(buf);
   const Q = "['‘’\"“”]?";
   const re = new RegExp(`리스부채[를는은]?[^.]{0,40}?${Q}([가-힣]*(?:차입금|장기부채|사채))${Q}(?:\\s*(?:또는|및|과|와|,)\\s*${Q}([가-힣]*(?:차입금|장기부채|사채))${Q})?\\s*(?:에|으로|로)\\s*(?:포함하여\\s*)?(?:분류|표시|포함)`);
   const names = new Set();

@@ -157,6 +157,9 @@ export async function dartDocLeaseSentences(rcept) {
   return versioned("doc-lease", rcept, `${rcept}-${DOC_FILTER_VER}`, async () => {
     const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
     const buf = new Uint8Array(await r.arrayBuffer());
+    // 원문 파일이 없는 판본(DART 014 "파일이 존재하지 않습니다" — [첨부정정]은 첨부만 바꿔 본문이 없다, 001440 2024)은 문장 없음. 다른 상태는 실패
+    const head = strFromU8(buf.slice(0, 300));
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
     const out = new Set();
