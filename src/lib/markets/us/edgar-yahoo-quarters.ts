@@ -82,6 +82,8 @@ export type YahooLtmResult =
       sixKDetail?: SixKDetail[];
       /** 이번 LTM 에 쓴 6-K 보고서("6-K 접수번호 문서") — 검증 전용 */
       sixKSource?: string;
+      /** 6-K 경로를 시도했으나 보고서를 못 찾은 사유(조회 실패는 fetchWarnings) — 검증 전용 */
+      sixKMiss?: string;
       /** LTM EV·순차입금을 같은 기준일로 계산할 수 있는지 */
       evComplete: boolean;
       evReason: string | null;

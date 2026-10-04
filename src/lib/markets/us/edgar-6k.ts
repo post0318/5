@@ -188,18 +188,21 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
   const cikN = Number(cik);
   const lo = periodEnd, hi = new Date(Date.parse(periodEnd) + 120 * 864e5).toISOString().slice(0, 10);
   const cands: number[] = [];
+  // 조회 실패 기록 — 값을 못 찾고 끝났는데 실패가 있었으면 던진다(재감사 12차 ③: null 로 삼키면 "6-K 없음"과 구분되지 않아 LTM 값이 조용히 사라졌다)
+  const errs: string[] = [];
+  const failed = (what: string) => (e: unknown) => { errs.push(`${what}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160)); return null; };
   for (let i = 0; i < recent.form.length && cands.length < 8; i++) if (recent.form[i] === "6-K" && recent.filingDate[i] > lo && recent.filingDate[i] <= hi) cands.push(i);
   for (const i of cands) {
     const base = `https://www.sec.gov/Archives/edgar/data/${cikN}/${recent.accessionNumber[i].replace(/-/g, "")}`;
-    const idx = await fetchJson<{ directory: { item: { name: string; size: string | number }[] } }>(`${base}/index.json`, OPT).catch(() => null);
+    const idx = await fetchJson<{ directory: { item: { name: string; size: string | number }[] } }>(`${base}/index.json`, OPT).catch(failed(`${recent.accessionNumber[i]} index`));
     const docs = (idx?.directory.item ?? []).filter((x) => /\.htm$/i.test(x.name) && !/-index/i.test(x.name) && Number(x.size) > 15_000).sort((a, b) => Number(b.size) - Number(a.size)).slice(0, 6);
     for (const d of docs) {
-      const html = await fetchText(`${base}/${d.name}`, { ...OPT, timeoutMs: 60_000 }).catch(() => null);
+      const html = await fetchText(`${base}/${d.name}`, { ...OPT, timeoutMs: 60_000 }).catch(failed(`${recent.accessionNumber[i]} ${d.name}`));
       if (!html) continue;
       // 형식 2 — 슬라이드 그림 + 숨은 글자(Workiva, ASML "Financial Statements US GAAP")
       const sl = slideStatements(html, periodEnd, fyEnd, priorEnd);
       if (sl) {
-        const { labels, parents } = await filingLabels(cikN, recent).catch(() => ({ labels: new Map(), parents: new Map() }));
+        const { labels, parents } = await filingLabels(cikN, recent); // 라벨 파일 조회 실패는 그대로 던진다(호출자가 경고로)
         if (!labels.size) return null;
         return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, ...sl, labels, parents, loose: true };
       }
@@ -220,7 +223,7 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       // 주석 번호 열이 있는 표는 값이 하나 많은 줄의 첫 값(번호)을 뺀다
       const fix = (rows: SixKRow[], n: number, noteCol: boolean) =>
         rows.map((r) => ({ ...r, vals: r.vals.length === 2 * n ? r.vals.filter((_, k) => k % 2 === 0) : noteCol && r.vals.length === n + 1 ? r.vals.slice(1) : r.vals })).filter((r) => r.vals.length === n);
-      const { labels, parents } = await filingLabels(cikN, recent).catch(() => ({ labels: new Map(), parents: new Map() }));
+      const { labels, parents } = await filingLabels(cikN, recent); // 라벨 파일 조회 실패는 그대로 던진다(호출자가 경고로)
       if (!labels.size) return null;
       // 본표 밖 표 — 머리(앞 2천 자)에 기준일·연말이 둘 다 있는 표의 줄
       const bsNotes: { dates: string[]; rows: SixKRow[] }[] = [];
@@ -241,6 +244,7 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, 2, cf.noteCol), labels, parents, loose: false, bsNotes };
     }
   }
+  if (errs.length) throw new Error(`6-K 분기 재무제표 조회 실패 — ${errs.join(" · ")}`);
   return null;
 }
 

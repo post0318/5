@@ -19,7 +19,9 @@ function ltmItems(facts: CompanyFacts) {
   const through = yl?.through, E = ltmBaseEnd(facts);
   // 사업연도 값(SEC 20-F 기준일 E — 잔액은 연말, 흐름은 1년 기간) — 검증기가 SEC 원본에서 직접 읽은 값과 대조(있어야 할 값이 앱에서 사라졌는지, 재감사 7차 E1·E3)
   const fy: Record<string, { v: number; k: "bs" | "cf" }> = {};
-  if (!through || !E) return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: null, through: null, E: null };
+  // fetchWarnings — 재무 조립 중 조회 실패(6-K 포함) 경고. 검증기가 "조회 실패"를 오류로 잡는다(재감사 12차 ③)
+  const fetchWarnings = facts.fetchWarnings ?? [];
+  if (!through || !E) return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: null, sixKMiss: yl?.sixKMiss ?? null, fetchWarnings, through: null, E: null };
   const yearAgo = (() => { const x = new Date(`${through}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); })();
   const anchor = ltmAnchor(facts);
   const dd = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
@@ -47,7 +49,7 @@ function ltmItems(facts: CompanyFacts) {
       else if (hasFy && (isCfConcept(c) || flowSpecOf(c))) gaps.push({ concept: c, kind: "cf", at: through, ids: sourceIdsAt(facts, c, "cf", E), reason: r.reason, flow: flowSpecOf(c), cf: isCfConcept(c) });
     }
   }
-  return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: yl?.sixKSource ?? null, through, E };
+  return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: yl?.sixKSource ?? null, sixKMiss: yl?.sixKMiss ?? null, fetchWarnings, through, E };
 }
 
 /**
