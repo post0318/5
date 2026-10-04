@@ -76,9 +76,25 @@ async function main() {
 
   await catchUp("시작");
 
+  // 채널 번호 맞추기 — event.chatId 는 채널이면 "-100<id>" 형태라 entity.id 와 그대로는 안 맞는다(2026-10-04 실측: 5시간 동안 즉시 수신 0건,
+  // 전부 30분 이어받기로만 들어옴). peerId.channelId(원래 번호)를 먼저 쓰고, 없으면 -100 접두어를 뗀다.
+  const chanKey = (event, m) => {
+    const raw = String(m?.peerId?.channelId ?? event.chatId ?? "");
+    return raw.replace(/^-100/, "").replace(/^-/, "");
+  };
+  // 이벤트가 오기는 하는지 진단용 — 1시간마다 받은 이벤트 수(우리 채널 / 그 밖)를 남긴다
+  let evOurs = 0, evOther = 0;
+  setInterval(() => {
+    log(`[진단] 지난 1시간 새 글 이벤트: 우리 채널 ${evOurs}건 · 그 밖 ${evOther}건`);
+    evOurs = 0;
+    evOther = 0;
+  }, 3600_000);
+
   client.addEventHandler(async (event) => {
     const m = event.message;
-    const ch = byId.get(String(event.chatId ?? m?.peerId?.channelId ?? ""));
+    const ch = byId.get(chanKey(event, m));
+    if (ch) evOurs++;
+    else evOther++;
     if (!ch || !m?.message?.trim()) return;
     try {
       const r = await postItems(ch.username, ch.title, [toItem(m)]);
