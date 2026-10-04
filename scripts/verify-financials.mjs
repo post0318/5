@@ -88,7 +88,7 @@ function die(msg) {
   console.error(`오류: ${msg}`);
   process.exit(2);
 }
-const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing", "metric", "cogs-rules"]);
+const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing", "metric", "cogs-rules", "use-snapshots"]);
 // 매출 닫기 모드(revenue.md §8) — 종료코드를 매출 검사 실패·매출 ③ 오류·조회 실패 기준으로. 기본 실행은 종전 그대로
 const METRIC = args.metric == null ? null : String(args.metric).toLowerCase();
 if (METRIC != null && !["revenue", "cogs", "opinc", "da", "sga", "bscf"].includes(METRIC)) die(`--metric 은 revenue·cogs·opinc·da·sga·bscf 중 하나 (받은 값: ${args.metric})`);
@@ -148,6 +148,7 @@ const AUTH = env.CRON_SECRET ? { authorization: `Bearer ${env.CRON_SECRET}` } : 
 // 앱 저장본(api_snap·ttm_snap) 우회(재감사 12차 ⑤) — 검증 기준값이 24시간 묵은 저장본이나 다른 PC·브랜치가 쓴 "local" 저장본이 되지 않게
 // 모든 요청에 인증 + x-verify-no-snapshot 을 붙인다(앱 db/snap-bypass.ts — 인증된 요청만 읽기·쓰기 모두 건너뜀). --use-snapshots 로 끔
 const NO_SNAP = args["use-snapshots"] ? {} : { ...AUTH, "x-verify-no-snapshot": "1" };
+if (args["use-snapshots"]) console.warn("⚠ --use-snapshots: 앱 저장본(api_snap·ttm_snap·fin_sym·us_class_facts)을 우회하지 않음 — 결과가 브랜치 코드 기준이 아닐 수 있음(저장본 영향 확인용)");
 async function getJson(path, timeoutMs = 240_000, headers = {}) {
   const r = await fetch(BASE + path, { signal: AbortSignal.timeout(timeoutMs), cache: "no-store", headers: { ...NO_SNAP, ...headers } });
   if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
