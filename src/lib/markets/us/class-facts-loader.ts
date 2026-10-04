@@ -1,6 +1,7 @@
 import "server-only";
 import { isDbConfigured } from "@/lib/db";
 import { getClassAFactsFromDb, saveClassAFactsToDb } from "@/lib/db/us-class-facts";
+import { snapshotBypassed } from "@/lib/db/snap-bypass";
 import type { CompanyFacts } from "./edgar";
 import { fetchClassAFacts, needsClassAFacts, type ClassAFacts } from "./edgar-classfacts";
 import { withFetchScope } from "../fetch-health";
@@ -23,12 +24,15 @@ export async function loadClassAFacts(
   if (!needsClassAFacts(facts)) return null;
 
   const key = String(cik).replace(/\D/g, "").padStart(10, "0");
-  const hit = mem.get(key);
+  // 검증 요청(db/snap-bypass)은 DB 저장본(us_class_facts)을 읽지도 쓰지도 않고 공시 원본을 다시 판독한다(재감사 13차 ⑤). 메모리 캐시도 따로
+  const noSnap = await snapshotBypassed();
+  const memKey = noSnap ? `${key}#nosnap` : key;
+  const hit = mem.get(memKey);
   if (hit && Date.now() - hit.at < TTL) return hit.data;
 
   let data: ClassAFacts | null = null;
   let failures: string[] = [];
-  if (isDbConfigured()) {
+  if (isDbConfigured() && !noSnap) {
     data = await getClassAFactsFromDb(key);
   }
   // 전환 기준 주식수(sharesAsConverted) 도입 전 캐시 — 필드가 아예 없으면 다시 파싱한다
@@ -46,12 +50,12 @@ export async function loadClassAFacts(
     const live = r.result;
     if (live && live.size > 0) {
       data = live;
-      if (isDbConfigured()) void saveClassAFactsToDb(key, live).catch(() => {});
+      if (isDbConfigured() && !noSnap) void saveClassAFactsToDb(key, live).catch(() => {});
     }
   }
 
   // SEC 조회가 일시 오류로 실패했으면 결과(보정 없음 등)를 캐시하지 않는다 — 다음 요청이 다시 시도(fetch-health.ts)
-  if (!failures.length) mem.set(key, { at: Date.now(), data: data ?? null });
+  if (!failures.length) mem.set(memKey, { at: Date.now(), data: data ?? null });
   // 보정이 필요한 회사인데 원본 판독이 실패해 값이 없다 — "보정 없음"(null)으로 삼키지 않고 올린다(그림자 채우기 금지, 2026-09-27)
   if (failures.length && (!data || data.size === 0)) throw new SecFetchError("classFacts", failures[0]);
   return data ?? null;

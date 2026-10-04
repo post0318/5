@@ -39,6 +39,8 @@ function ltmItems(facts: CompanyFacts) {
         if (e) items.push({ concept: c, at: d, usd: e.val, flow: false, src: e.ltmSrc ?? null, form: e.form, end: e.end });
         // 완결성(재감사 P5) — 사업연도말 값이 있는데 기준일 값이 없는 개념은 공란 목록으로(검증기가 6-K 에 그 줄이 있으면 실패)
         else if (d === through && instantOn(arr, E) != null) gaps.push({ concept: c, kind: "bs", at: d, ids: sourceIdsAt(facts, c, "bs", E), reason: null });
+        // 1년 전 분기말(평균 잔액 기초 값) — 기준일 값은 있는데 1년 전 값이 없는 개념도 공란 목록으로(재감사 13차 ⑦ — 1년 전 6-K 만 실패하면 값이 조용히 빠졌다)
+        else if (d === yearAgo && nearest(arr, through) && instantOn(arr, E) != null) gaps.push({ concept: c, kind: "bs", at: d, ids: sourceIdsAt(facts, c, "bs", E), reason: null });
       }
     }
     if (arr.some((e) => e.start)) {

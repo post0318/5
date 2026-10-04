@@ -8,6 +8,7 @@ import { cogsRuleFor } from "./metrics/cogs-rules";
 import { sgaRnd } from "./metrics/sga";
 import { sgaRuleFor } from "./metrics/sga-rules";
 import { finalizeDerived } from "./derived";
+import { snapshotBypassed } from "@/lib/db/snap-bypass";
 import { ENGINE_VERSION, markFailed, persist, readStmt, readSym, readSymMeta, toStmtDoc, toSymDoc, touchChecked } from "./store";
 import { Gap, gapNames, type FinAssembly, type Market } from "./types";
 import { isDbConfigured } from "../db";
@@ -139,15 +140,18 @@ const LOOKUP_TTL_MS = { stored: 10 * 60_000, assembled: 6 * 3_600_000, failed: 5
 type LookupEntry = { at: number; ttl: number; p: Promise<FinSymDoc | null> };
 const lookupCache: Map<string, LookupEntry> = ((globalThis as { __finSymLookup?: Map<string, LookupEntry> }).__finSymLookup ??= new Map());
 
-export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | null> {
+export async function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | null> {
   const id = `${market}:${symbol.toUpperCase()}`;
+  // 검증 요청(db/snap-bypass — 인증된 x-verify-no-snapshot 또는 VERIFY_NO_SNAPSHOT)은 저장본(fin_sym)을 읽지도 쓰지도 않고 이 코드로 조립한다
+  // (재감사 13차 ⑤ — 같은 엔진판 저장본이 다른 브랜치·PC 계산이어도 검증 기준값이 됐다). 요청 밖(배치)은 환경변수만 본다
+  const noSnap = await snapshotBypassed();
   // 캐시 키에 엔진판 — 캐시가 globalThis 라 코드 교체(개발 서버 HMR)를 넘어 살아남는다. 판이 바뀌면 옛 규칙의 비저장 조립을 쓰지 않게
-  const ck = `${id}@${ENGINE_VERSION}`;
+  const ck = `${id}@${ENGINE_VERSION}${noSnap ? "#nosnap" : ""}`;
   const hit = lookupCache.get(ck);
   if (hit && Date.now() - hit.at < hit.ttl) return hit.p;
   const entry: LookupEntry = { at: Date.now(), ttl: LOOKUP_TTL_MS.stored, p: Promise.resolve(null) };
   entry.p = (async () => {
-    const stored = await getFinSym(market, symbol).catch(() => null);
+    const stored = noSnap ? null : await getFinSym(market, symbol).catch(() => null);
     // 엔진판이 다른 저장본(판독·조립 규칙이 바뀌기 전 배치)은 쓰지 않는다 — 배치(/api/cron/fin-build)가 다시 적재할 때까지 비저장 조립
     if (stored && stored.ev === ENGINE_VERSION) return stored;
     try {
@@ -157,7 +161,7 @@ export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | 
       entry.ttl = transient ? LOOKUP_TTL_MS.failed : LOOKUP_TTL_MS.assembled;
       // 유니버스 밖 종목도 완전한 조립은 DB 에 저장(오너 결정 2026-10-01 ① — 두 번째 조회부터 어느 서버든 0.5초대). 새 공시 갱신은
       // 배치(fin-build)가 최근 30일 안에 조회된 종목까지 맡는다(db/ttm-snap.ts listRecentlyViewed). 저장 실패는 조회 결과에 영향 없음
-      if (!transient && isDbConfigured()) await persist({ ...a, gaps: a.readerGaps }, a.stmts).catch(() => {});
+      if (!transient && !noSnap && isDbConfigured()) await persist({ ...a, gaps: a.readerGaps }, a.stmts).catch(() => {});
       return toSymDoc(a);
     } catch {
       entry.ttl = LOOKUP_TTL_MS.failed;
