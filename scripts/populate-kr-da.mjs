@@ -780,6 +780,147 @@ async function ttmDa(corp, byYear) {
   return { ttmDepreciation: v, ttmAmortisation: 0, ttmLabel: `FY${fy} + ${it.year} ${it.label} − ${it.year - 1} ${it.label}`, ttmSrc: how };
 }
 
+// ── 리스부채 주석(오너 결정 2026-10-05) — 재무상태표 본표에 리스부채 줄이 없는 해는 사업보고서 주석의 리스부채 합계를 총차입금에 넣는다.
+//    앱 dart-ev.ts krLeaseFor 가 쓰는 leaseNote(사업연도별)·leasePolicyLatest(분기말 — 회계정책만) 를 만든다.
+//    ① 회계정책 문장이 리스부채를 본표 차입금류 줄에 포함한다고 밝히면 included(삼성전자 "'유동성장기부채' 또는 '장기차입금'으로 분류",
+//       LG에너지솔루션 "차입금에 포함하여 표시") — 더하지 않음
+//    ② 아니면 사업보고서 XBRL 주석의 리스부채 장부금액 — 태그 꼴 후보(LeaseLiabilities 무차원·보고금액 멤버, 유동+비유동, 부채종류 리스 멤버,
+//       재무활동부채 조정표 리스 멤버) 중 둘 이상이 정확히 같은 값(동수면 보고금액 묶음) → added
+//    ③ 둘 다 못 정하면 unknown(앱 EV 공란). 금액은 그해 보고서 당기말(CFY), 없으면 이듬해 보고서 전기말(PFY) — 2021 이전 보고서 XBRL 은
+//       주석 태깅이 없다(실측). 분기 보고서 XBRL 도 주석 미태깅이라 분기말은 회계정책 판정만(leasePolicyLatest)
+async function fnlttBs(corp, year) {
+  for (const fs of ["CFS", "OFS"]) {
+    await new Promise((r) => setTimeout(r, 400));
+    const j = await jget(`${B}/fnlttSinglAcntAll.json?crtfc_key=${DART}&corp_code=${corp}&bsns_year=${year}&reprt_code=11011&fs_div=${fs}`);
+    if (j.status === "013") continue;
+    if (j.status !== "000") throw new Error(`fnltt ${year} ${fs} ${j.status} ${j.message ?? ""}`);
+    return { rows: (j.list ?? []).filter((r) => r.sj_div === "BS"), fs };
+  }
+  return null;
+}
+const isLeaseRow = (r) => /LeaseLiabilities/.test(r.account_id ?? "") || /리스부채/.test((r.account_nm ?? "").replace(/\s/g, ""));
+const amt = (v) => { const t = String(v ?? "").trim(); return t === "" || t === "-" ? null : Number(t.replace(/,/g, "")); };
+/** 보고서 XBRL 원본에서 리스부채 장부금액(prefix = "CFY2025eFY"·"PFY2024eFY") */
+function leaseAmountOf(xml, prefix, sep) {
+  const facts = [];
+  for (const m of xml.matchAll(/<([\w-]+:\w+)\b[^>]*?contextRef="([^"]+)"[^>]*>(-?\d+(?:\.\d+)?)</g)) {
+    if (!(m[2] === prefix || m[2].startsWith(prefix + "_"))) continue;
+    let rest = m[2].slice(prefix.length);
+    const hasAxis = /ConsolidatedAndSeparateFinancialStatementsAxis/.test(rest);
+    if (sep ? /ConsolidatedMember/.test(rest) : /SeparateMember/.test(rest) || (hasAxis && !/ConsolidatedMember/.test(rest))) continue;
+    rest = rest.replace(/_?ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_(Consolidated|Separate)Member/, "").replace(/^_/, "");
+    facts.push({ c: m[1], d: rest, v: Number(m[3]) });
+  }
+  const RA = "ifrs-full_CarryingAmountAccumulatedDepreciationAmortisationAndImpairmentAndGrossCarryingAmountAxis_dart_ReportedAmountMember";
+  const one = (c, d) => { const vs = facts.filter((f) => f.c === c && f.d === d).map((f) => f.v); return vs.length && vs.every((v) => v === vs[0]) ? vs[0] : null; };
+  const cand = {};
+  const put = (k, v) => { if (v != null && v > 0) cand[k] = v; };
+  put("LeaseLiabilities(무차원)", one("ifrs-full:LeaseLiabilities", ""));
+  put("LeaseLiabilities(보고금액)", one("ifrs-full:LeaseLiabilities", RA));
+  for (const [k, d] of [["유동+비유동(보고금액)", RA], ["유동+비유동(무차원)", ""]]) {
+    const c = one("ifrs-full:CurrentLeaseLiabilities", d), n = one("ifrs-full:NoncurrentLeaseLiabilities", d);
+    if (c != null && n != null && c >= 0 && n >= 0) put(k, c + n);
+  }
+  put("LeaseLiabilities(부채종류=리스)", one("ifrs-full:LeaseLiabilities", "ifrs-full_ClassesOfLiabilitiesAxis_ifrs-full_LeaseLiabilitiesMember"));
+  put("재무활동부채(부채종류=리스)", one("ifrs-full:LiabilitiesArisingFromFinancingActivities", "ifrs-full_ClassesOfLiabilitiesAxis_ifrs-full_LeaseLiabilitiesMember"));
+  put("기타금융부채(금융부채종류=리스)", one("ifrs-full:OtherFinancialLiabilities", "ifrs-full_ClassesOfFinancialLiabilitiesAxis_ifrs-full_LeaseLiabilitiesMember"));
+  {
+    const AX = "ifrs-full_LiabilitiesArisingFromFinancingActivitiesAxis_";
+    const by = new Map();
+    for (const f of facts) if (f.c === "ifrs-full:LiabilitiesArisingFromFinancingActivities" && f.d.startsWith(AX) && /Lease/i.test(f.d) && !/Axis_/.test(f.d.slice(AX.length))) by.set(f.d, [...(by.get(f.d) ?? []), f.v]);
+    const ms = [...by].map(([k, vs]) => [k, vs.every((v) => v === vs[0]) ? vs[0] : null]);
+    if (ms.length === 1) put("재무활동부채 조정표 리스 멤버", ms[0][1]);
+    else if (ms.length === 2 && ms.every(([, v]) => v != null && v >= 0) && ms.filter(([k]) => /(?<!non)current/i.test(k.slice(AX.length))).length === 1)
+      put("재무활동부채 조정표 리스 멤버(유동+비유동)", ms[0][1] + ms[1][1]);
+  }
+  const groups = new Map();
+  for (const [k, v] of Object.entries(cand)) groups.set(v, [...(groups.get(v) ?? []), k]);
+  const g = [...groups].filter(([, ks]) => ks.length >= 2).sort((a, b) => b[1].length - a[1].length);
+  if (g.length && (g.length === 1 || g[0][1].length > g[1][1].length)) return { amount: g[0][0], how: g[0][1].join(" = ") };
+  if (g.length > 1) {
+    const top = g.filter(([, ks]) => ks.length === g[0][1].length);
+    const ra = top.filter(([, ks]) => ks.some((k) => /보고금액/.test(k)));
+    if (ra.length === 1) return { amount: ra[0][0], how: `${ra[0][1].join(" = ")} (동수 — 보고금액 묶음)` };
+  }
+  return { amount: null, how: Object.keys(cand).length ? `후보 불일치·근거 하나 ${JSON.stringify(cand)}` : "리스부채 주석 태그 없음" };
+}
+/** 원문에서 "리스부채" 가 든 회계정책 문장 → 리스부채를 포함해 표시하는 본표 차입금류 줄 이름들 */
+async function leasePolicyOf(rcpNo) {
+  await new Promise((r) => setTimeout(r, 1000));
+  const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
+  if (!res.ok) throw new Error(`document ${res.status}`);
+  const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
+  const Q = "['‘’\"“”]?";
+  const re = new RegExp(`리스부채[를는은]?[^.]{0,40}?${Q}([가-힣]*(?:차입금|장기부채|사채))${Q}(?:\\s*(?:또는|및|과|와|,)\\s*${Q}([가-힣]*(?:차입금|장기부채|사채))${Q})?\\s*(?:에|으로|로)\\s*(?:포함하여\\s*)?(?:분류|표시|포함)`);
+  const names = new Set();
+  for (const b of Object.values(files)) {
+    let x = new TextDecoder("utf-8").decode(b);
+    if ((x.match(/�/g) ?? []).length > 50) x = new TextDecoder("euc-kr").decode(b);
+    for (const s of clean(x).split(/(?<=[.다])\s/)) {
+      if (!s.includes("리스부채") || s.length >= 400) continue;
+      const m = re.exec(s);
+      if (m) { names.add(m[1]); if (m[2]) names.add(m[2]); }
+    }
+  }
+  return [...names];
+}
+async function leaseNotes(corp, latest) {
+  const years = [];
+  for (let y = latest; y >= latest - 5; y -= 1) years.push(y);
+  const faceLease = {}; // 해 → 본표 리스부채 줄 값이 있는가
+  const faceDebt = {}; // 해 → 본표 차입금류 줄 이름
+  const sepOf = {};
+  for (const ry of [latest, latest - 2, latest - 4]) {
+    const r = await fnlttBs(corp, ry);
+    if (!r) continue;
+    for (const [col, y] of [["thstrm_amount", ry], ["frmtrm_amount", ry - 1], ["bfefrmtrm_amount", ry - 2]]) {
+      if (y in faceLease || !r.rows.some((x) => amt(x[col]) != null)) continue;
+      faceLease[y] = r.rows.some((x) => isLeaseRow(x) && amt(x[col]) != null);
+      faceDebt[y] = r.rows.filter((x) => /차입|사채|장기부채/.test((x.account_nm ?? "").replace(/\s/g, "")) && amt(x[col]) != null).map((x) => x.account_nm.replace(/\s/g, ""));
+      sepOf[y] = r.fs === "OFS";
+    }
+  }
+  const rcpMemo = {}, xmlMemo = {}, polMemo = {};
+  const rcpOf = async (ry) => (rcpMemo[ry] ??= (await annualRcps(corp, ry))[0] ?? null);
+  const xmlOf = async (rcp) => (xmlMemo[rcp] ??= await loadXbrl(rcp));
+  const polOf = async (rcp) => (polMemo[rcp] ??= await leasePolicyOf(rcp));
+  const leaseNote = {};
+  for (const y of years) {
+    if (faceLease[y] !== false) continue; // 본표에 리스 줄이 있거나 그해 재무상태표 없음
+    const tried = [];
+    let note = null;
+    for (const [ry, prefix] of [[y, `CFY${y}eFY`], [y + 1, `PFY${y}eFY`]]) {
+      if (ry > latest) continue;
+      const rcp = await rcpOf(ry);
+      if (!rcp) continue;
+      const names = await polOf(rcp);
+      const hit = names.filter((n) => (faceDebt[y] ?? []).some((f) => f.includes(n) || n.includes(f)));
+      const L = leaseAmountOf(await xmlOf(rcp), prefix, sepOf[y]);
+      if (hit.length) { note = { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rcp})` }; break; }
+      if (L.amount != null) { note = { status: "added", amount: L.amount, how: `사업보고서 ${rcp} XBRL 주석 ${prefix} — ${L.how}` }; break; }
+      tried.push(`${rcp}: ${L.how}`);
+    }
+    leaseNote[y] = note ?? { status: "unknown", amount: null, how: tried.join(" / ") || "사업보고서 없음" };
+  }
+  // 분기말 — 최근 사업보고서 회계정책만(분기 보고서 XBRL 은 주석 미태깅). 본표에 리스 줄이 있으면 필요 없음
+  let leasePolicyLatest = null;
+  const latestRcp = await rcpOf(latest);
+  if (latestRcp && faceLease[latest] === false) {
+    const names = await polOf(latestRcp);
+    const hit = names.filter((n) => (faceDebt[latest] ?? []).some((f) => f.includes(n) || n.includes(f)));
+    leasePolicyLatest = hit.length
+      ? { status: "included", amount: null, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${latestRcp})` }
+      : { status: "unknown", amount: null, how: `최근 사업보고서 ${latestRcp} 회계정책에 차입금 포함 문장 없음` };
+  }
+  return { leaseNote, leasePolicyLatest };
+}
+async function latestFy(corp) {
+  const now = new Date();
+  for (const y of [now.getFullYear() - 1, now.getFullYear() - 2]) if ((await annualRcps(corp, y)).length) return y;
+  return null;
+}
+const LEASE_ONLY = process.argv.includes("--lease-only");
+
 const cli = new MongoClient(URI);
 await cli.connect();
 const db = cli.db(DB);
@@ -793,6 +934,18 @@ const t = (n) => (n == null ? "-" : (n / 1e12).toFixed(2) + "조");
 for (const sym of symbols) {
   const corp = corpOf(sym);
   if (!corp) { console.log(`  ${sym}: corp_code 없음`); continue; }
+  // 리스부채 주석 — 실패하면 적재하지 않는다(앱은 미적재 = EV 공란 + 사유)
+  let lease = null;
+  try {
+    const ly = await latestFy(corp);
+    if (ly) lease = await leaseNotes(corp, ly);
+    if (lease) for (const [y, n] of Object.entries(lease.leaseNote)) console.log(`    리스 ${y}: ${n.status}${n.amount != null ? ` ${t(n.amount)}` : ""} — ${n.how}`);
+    if (lease?.leasePolicyLatest) console.log(`    리스 분기말: ${lease.leasePolicyLatest.status} — ${lease.leasePolicyLatest.how}`);
+  } catch (e) { console.log(`    (리스부채 주석 실패: ${e.message})`); }
+  if (LEASE_ONLY) {
+    if (lease && !CHECK) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseAt: new Date().toISOString() } });
+    continue;
+  }
   let byYear = null;
   try { byYear = await daByYear(corp); } catch (e) { console.log(`  ${sym}: ${e.message}`); }
   if (!byYear) { console.log(`  ${sym}: D&A 없음`); continue; }
@@ -800,7 +953,7 @@ for (const sym of symbols) {
   if (ttm) console.log(`    TTM ${ttm.ttmLabel} = ${t(ttm.ttmDepreciation)} (${ttm.ttmSrc})`);
   if (!CHECK) await db.collection(COLL).replaceOne(
     { _id: sym },
-    { _id: sym, byYear, ...(ttm ?? {}), updatedAt: new Date().toISOString() },
+    { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest } : {}), updatedAt: new Date().toISOString() },
     { upsert: true },
   );
   const yrs = Object.keys(byYear).map(Number).sort((a, b) => b - a);

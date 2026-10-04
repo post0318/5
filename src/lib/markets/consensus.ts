@@ -33,7 +33,7 @@ import {
 } from "./kr/dart-ev";
 import { daAndAmortSeries, fetchKrFacts } from "./kr/dart-facts";
 import { resolveCorpCode } from "./kr/corpcode";
-import { getKrDaDoc } from "@/lib/db/kr-da";
+import { getKrDaDocChecked } from "@/lib/db/kr-da";
 import { isFinancialCompany } from "./us/edgar-financial";
 import { fyEps, netIncomeAnnualByYear, parentEquityAt, positiveRatio } from "./us/edgar-pershare";
 import type { ClassAFacts } from "./us/edgar-classfacts";
@@ -335,20 +335,23 @@ export async function getConsensusData(
       kr = null;
     }
   }
+  // no-silent-catch:begin — 한국 경로(감사 1차 ⑥: 조회 실패는 주석 경고로)
   if (market === "kr") {
     try {
       const { corpCode } = resolveCorpCode("", symbol);
-      const [facts, daDoc, capsR] = await Promise.all([
+      const [facts, daR, capsR] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
-        getKrDaDoc(symbol).catch(() => null),
+        getKrDaDocChecked(symbol),
         loadKrCapsChecked(symbol, years),
       ]);
+      const daDoc = daR.doc;
+      if (daR.warning) notes.push(`⚠ ${daR.warning} — 감가상각비·EBITDA 는 DART 공시 현금흐름 줄 또는 빈칸`);
       // KRX 시가총액 조회 실패 — 연도 시가총액·EV 를 근사로 대신하지 않고(아래 capsError) 주석에 남긴다
       // 재시도(1·3·9초) 뒤에도 실패 — EV 는 우선주 시가총액을 몰라 비운다(하이라이트·재무분석과 같은 규칙)
       if (capsR.error) notes.push(`⚠ ${capsR.error}(3번 재시도 후) — 연도 EV/EBITDA 공란, 다음 조회 때 다시 계산`);
       if (facts)
         kr = {
-          ev: buildKrEvResolver(facts, symbol),
+          ev: buildKrEvResolver(facts, symbol, daDoc),
           caps: capsR.caps,
           capsError: capsR.error,
           da: daAndAmortSeries(facts, daDoc).byYear,
@@ -356,10 +359,13 @@ export async function getConsensusData(
           equity: krParentEquityByYear(facts),
           op: krOpIncomeByYear(facts),
         };
-    } catch {
+    } catch (e) {
+      // 한국 재무 조회 실패 — 실적 열 EV·EPS·PBR 이 빠진다. 사유를 남긴다(예전엔 조용히 null)
+      notes.push(`⚠ 한국 재무(DART) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
       kr = null;
     }
   }
+  // no-silent-catch:end
 
   const actualRows: ConsensusRow[] = [];
   for (const fy of years) {

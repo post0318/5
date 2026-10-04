@@ -107,7 +107,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   // 자기자본 — 지배주주 기준(PBR 분모, dart-ev.ts — 재무분석·컨센서스·개요와 같은 값)
   const aEquity = krParentEquityByYear(facts);
   // EV 브릿지 — dart-ev.ts 단일 기준(재무분석·개요 멀티플·컨센서스와 같은 값)
-  const evRes = buildKrEvResolver(facts, code);
+  const evRes = buildKrEvResolver(facts, code, daDoc ?? null);
   const evBlocker = evRes.blocker();
 
   const at = (m: Map<number, number>, y: number): number | null => m.get(y) ?? null;
@@ -156,11 +156,12 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   const ev = columns.map((c, i) =>
     c.kind === "estimate"
       ? null
-      : // KRX 조회 실패(재시도 후)면 연도 열 시가총액은 근사지만 우선주 시가총액을 몰라 EV 는 비운다(우선주 있는 회사 EV 과소 방지)
-        input.capsError && c.kind === "fy"
+      : // KRX 조회 실패(재시도 후)면 우선주 시가총액을 몰라 EV 는 비운다(우선주 있는 회사 EV 과소 방지) — 연도 열·LTM 열 모두(감사 1차 ⑦: LTM 이
+        // 우선주 0 으로 계산돼 삼성전자 LTM EV 가 161조 과소였다)
+        input.capsError
         ? null
         : c.kind === "ltm" && ltmFromSnap
-        ? krEvFromBridge(evBlocker, bridge[i], marketCap[i], prefMcap[i])
+        ? krEvFromBridge(evBlocker ?? snap!.evBlocker ?? null, bridge[i], marketCap[i], prefMcap[i])
         : krEv(evRes, c.kind === "fy" ? cy(c) : lastFy, marketCap[i], prefMcap[i]),
   );
 
@@ -194,6 +195,8 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   const dps = columns.map((c) =>
     c.kind === "fy" ? (dpsByYear.get(cy(c)) ?? null) : c.kind === "ltm" ? (dpsTtm ?? dpsByYear.get(lastFy) ?? null) : null,
   );
+  // LTM 주당배당금이 최근 사업연도 값으로 대신된 경우 — 주석에 남긴다(감사 1차 ⑨)
+  const dpsLtmFallback = dpsTtm == null && dpsByYear.get(lastFy) != null;
   const divYield = dps.map((d, i) => (d != null && priceByCol[i] ? (d / priceByCol[i]!) * 100 : null));
   // OCF/CapEx 는 TTM 미보유 → LTM 컬럼은 최근 사업연도값
   const ocf = columns.map((c) => (c.kind === "ltm" ? at(aOcf, lastFy) : c.kind === "estimate" ? null : at(aOcf, cy(c))));
@@ -295,6 +298,13 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
       ? `현재/LTM 열 재무상태표(현금·차입금·비지배지분·자본): ${snap!.label} 기준`
       : `현재/LTM 열 재무상태표: 최신 분기 스냅샷 없음 — FY${lastFy} 연말값`,
   );
+  // 본표에 리스부채 줄이 없는 해 — 주석 리스부채 가산·차입금 포함·확인 불가(오너 결정 2026-10-05, dart-ev.ts krLeaseFor)
+  for (const t of new Set(bridge.flatMap((b) => [b?.leaseHow ? `총차입금 리스부채: ${b.leaseHow}` : null, b?.leaseUnknown ? `⚠ ${b.leaseUnknown} — 총차입금은 본표 차입금 줄만, EV·EV/EBITDA 공란` : null])))
+    if (t) notes.push(t);
+  // LTM 손익 항목별 대체·근사(분기 자료 부족 → 연간값, EPS 주식수 환산) — 조용한 대체 금지(감사 1차 ⑨)
+  const RK: Record<string, string> = { revenue: "매출액", opIncome: "영업이익", netIncome: "순이익", eps: "EPS" };
+  for (const [k, why] of Object.entries(ttm?.reasons ?? {})) if (why && RK[k]) notes.push(`현재/LTM ${RK[k]}: ${why}`);
+  if (dpsLtmFallback) notes.push(`현재/LTM 주당배당금: 최근 12개월 배당기준일 자료 없음 — FY${lastFy} 사업연도 값`);
   if (facts.ofsYears?.length) notes.push(`${facts.ofsYears.map((y) => `FY${y}`).join("·")}: 연결 재무제표 없음 → 별도 재무제표`);
   if (approxMcap) notes.push("일부 연도 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사");
   for (const w of input.warnings ?? []) notes.push(`⚠ ${w}`);

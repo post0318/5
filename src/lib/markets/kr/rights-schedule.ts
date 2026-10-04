@@ -110,12 +110,8 @@ export async function fetchKrAnnualDps(crno: string | null): Promise<{
   ttm: { dps: number; from: string; to: string } | null;
 } | null> {
   if (!isConfigured() || !crno) return null;
-  let rows: Record<string, string>[];
-  try {
-    rows = await fetchTail("GetStocDiviInfoService_V2", "getDiviInfo_V2", crno, 400);
-  } catch {
-    return null;
-  }
+  // 조회 실패는 던진다(감사 1차 ⑨ — 예전엔 null 로 삼켜 LTM 주당배당금이 사유 없이 최근 사업연도 값으로 바뀌었다). 호출부가 경고로 남긴다
+  const rows: Record<string, string>[] = await fetchTail("GetStocDiviInfoService_V2", "getDiviInfo_V2", crno, 400);
 
   const events: { bd: string; amt: number }[] = [];
   for (const r of rows) {

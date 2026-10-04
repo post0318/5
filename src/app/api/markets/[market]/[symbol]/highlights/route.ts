@@ -23,7 +23,7 @@ import { fetchStooqEod } from "@/lib/markets/quote/stooq";
 import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
-import { getKrDaDoc } from "@/lib/db/kr-da";
+import { getKrDaDocChecked } from "@/lib/db/kr-da";
 import { usSharesHint } from "@/lib/markets/us/shares-hint";
 import { secBasisBars } from "@/lib/markets/us/edgar-shares";
 import { loadKrCapsChecked } from "@/lib/markets/kr/dart-ev";
@@ -51,25 +51,31 @@ export async function GET(
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
     const yahoo = new URL(request.url).searchParams.get("yahoo");
 
+    // no-silent-catch:begin — 한국 경로(감사 1차 ⑥⑨: 조회 실패는 전부 경고로 남기고 캐시하지 않는다)
     if (market === "kr") {
       const { corpCode } = resolveCorpCode("", sym);
       const krxWarn: string[] = [];
-      const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daDoc, live] = await Promise.all([
+      const warnOf = (what: string) => (e: unknown) => { krxWarn.push(`${what} 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; };
+      const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daR, live] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
         fetchKrDps(corpCode),
         // KRX 일별 시세 조회 실패 — 경고로 남긴다(현재가·시가총액은 공통 시세 함수 우선, KRX 는 상장주식수 등 보조)
-        fetchKrxEod(sym).catch((e) => { krxWarn.push(`KRX 일별 시세 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; }),
+        fetchKrxEod(sym).catch(warnOf("KRX 일별 시세")),
+        // silent-ok: Stooq 는 보조(연말 종가는 KRX 시가총액 응답 종가 → 없으면 KRX 연말 종가를 따로 조회) — 실패해도 값이 바뀌지 않고 LTM 날짜만 오늘로
         fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
-        adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
-        fetchKrNaverConsensus(sym).catch(() => null),
+        adapter.getTtm?.(sym).catch(warnOf("손익 TTM(분기 보고서)")) ?? Promise.resolve(null),
+        fetchKrNaverConsensus(sym).catch(warnOf("네이버 컨센서스(예상 열)")),
         getKrJurirNo(sym)
-          .then((crno) => fetchKrAnnualDps(crno))
-          .catch(() => null),
-        getKrDaDoc(sym).catch(() => null),
+          .then((crno) => (crno ? fetchKrAnnualDps(crno) : null))
+          .catch(warnOf("배당기준일(공공데이터) — LTM 주당배당금은 최근 사업연도 값")),
+        getKrDaDocChecked(sym),
         // 현재가·시가총액은 개요(브라우저 멀티플)와 같은 시세 함수 — KRX 일별 전종목은 장
         // 마감 뒤에야 당일분이 나와 하루 늦을 수 있어 LTM 열이 개요와 갈렸다.
-        getEodQuote("kr", sym).catch(() => null),
+        getEodQuote("kr", sym).catch(warnOf("현재가(시세) — LTM 시가총액·주가는 KRX 일별 값")),
       ]);
+      const daDoc = daR.doc;
+      if (daR.warning) krxWarn.push(daR.warning);
+      for (const w of ttm?.degraded ?? []) krxWarn.push(w);
       if (!facts) return ok({ highlights: null });
       // 회계연도말 종가 — Stooq 커버리지가 부족하면 KRX 로 개별 조회
       const fyCloseByYear = new Map<number, number>();
@@ -118,6 +124,7 @@ export async function GET(
         { headers: { "Cache-Control": capsR.error || krxWarn.length ? "no-store" : "public, s-maxage=3600, stale-while-revalidate=86400" } },
       );
     }
+    // no-silent-catch:end
 
     // SEC XBRL 이 없는 ADR(SKHY) — 본국 DART 재무를 USD·ADR 기준으로(dart-adr.ts)
     const dartAdr = dartAdrOf(sym);

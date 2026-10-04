@@ -88,6 +88,8 @@ export interface FinancialStatement {
   sourceUrl?: string;
   /** 미국 — 재무 5층 구조(fin) 조립이 완전하지 않은 열(gaps·조립 항등식 불성립, fin-revenue.ts FinColIssue) */
   finIssues?: { col: string; start: string; end: string; v: number | null; gaps: string[]; rev: string[]; other: string[]; unv: string[] }[];
+  /** 조회 실패 경고(한국 — 감가상각 적재본 등). 있으면 일부 값이 폴백·빈칸이다 */
+  warnings?: string[];
 }
 
 export interface CompanyProfile {
@@ -251,7 +253,7 @@ export interface TtmFlows {
      * 한국 — LTM 열 EV 브릿지 내역(kr/dart-ev.ts krLtmBalance, 최신 분기말 재무상태표).
      * 하이라이트·재무분석 LTM 열이 이 값을 그대로 쓴다(개요 멀티플과 같은 기준일).
      */
-    evBridge?: { debt: number; lease: number; cash: number; nci: number; plainFinLiab: boolean } | null;
+    evBridge?: { debt: number; lease: number; cash: number; nci: number; plainFinLiab: boolean; leaseUnknown?: string | null; leaseHow?: string | null } | null;
   } | null;
   /** 감가상각비+무형자산상각비 — 최근 사업연도(연간, PER 과 동일 기준) */
   daAnnual?: number | null;

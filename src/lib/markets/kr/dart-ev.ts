@@ -1,6 +1,32 @@
 import "server-only";
 import { annualSeries, seriesOf, type KrFactLine, type KrFacts } from "./dart-facts";
 import { fetchKrxCapsOn } from "../quote/krx";
+import type { KrLeaseNote } from "@/lib/db/kr-da";
+
+/**
+ * 리스부채 주석 입력(오너 결정 2026-10-05) — 재무상태표 본표에 리스부채 줄이 없는 해는 주석의 리스부채 합계를 총차입금에 넣는다. 감가상각
+ * 적재본(kr_da)의 leaseNote·leasePolicyLatest(scripts/populate-kr-da.mjs 가 사업보고서 XBRL 주석·회계정책 문장에서 만든다).
+ */
+export interface KrLeaseInput {
+  leaseNote?: Record<string, KrLeaseNote>;
+  leasePolicyLatest?: KrLeaseNote | null;
+}
+/**
+ * 본표 리스부채 줄이 없는 기간의 판정 — add(총차입금에 더할 금액), unknown(EV 공란 사유), how(근거 — 주석 표시).
+ * 사업연도는 그해 주석(added·included), 분기말은 분기 보고서 XBRL 이 주석을 태깅하지 않아 금액을 못 구하므로 최근 사업보고서 회계정책이
+ * "차입금 줄에 포함"일 때만 계산하고 아니면 EV 공란(그림자 채우기 금지 — 연말 금액을 분기말에 쓰지 않는다).
+ */
+export function krLeaseFor(year: number | null, lease: KrLeaseInput | null | undefined): { add: number; unknown: string | null; how: string | null } {
+  if (year != null) {
+    const n = lease?.leaseNote?.[String(year)];
+    if (n?.status === "added" && n.amount != null) return { add: n.amount, unknown: null, how: `FY${year} 리스부채 ${n.amount} 주석 가산(${n.how})` };
+    if (n?.status === "included") return { add: 0, unknown: null, how: `FY${year} 리스부채는 본표 차입금 줄에 포함(${n.how})` };
+    return { add: 0, unknown: n ? `FY${year} 리스부채 확인 불가(${n.how})` : `FY${year} 리스부채 주석 미적재(본표에 리스부채 줄 없음)`, how: null };
+  }
+  const p = lease?.leasePolicyLatest;
+  if (p?.status === "included") return { add: 0, unknown: null, how: `분기말 리스부채는 본표 차입금 줄에 포함(최근 사업보고서 회계정책 — ${p.how})` };
+  return { add: 0, unknown: "분기말 리스부채 확인 불가(본표에 리스부채 줄 없음 · 분기 보고서 XBRL 주석 미태깅)", how: null };
+}
 
 /**
  * 한국 종목 **EV 브릿지 단일 기준** — 하이라이트·재무분석·개요 멀티플·컨센서스가 모두
@@ -104,6 +130,10 @@ export interface KrBalanceBridge {
   nci: number;
   /** 한전·HD현대식 "(유동|비유동)금융부채"를 차입금으로 쓴 경우 */
   plainFinLiab: boolean;
+  /** 본표 리스부채 줄 없음 — 리스부채를 확인 못한 사유(있으면 EV 공란) */
+  leaseUnknown?: string | null;
+  /** 본표 리스부채 줄 없음 — 주석 가산·차입금 포함 근거 */
+  leaseHow?: string | null;
 }
 
 /** 금융업(은행·보험·증권) — EV 개념이 맞지 않아 비운다(미국 은행과 같은 원칙). */
@@ -184,6 +214,27 @@ export function krCurrentDebtByPeriod(facts: KrFacts): Record<string, number | n
   return out;
 }
 
+/**
+ * 대차대조표 주석 총차입금(기간 라벨별) — 하이라이트 EV 브릿지와 같은 판정(본표 리스부채 줄이 없는 기간은 krLeaseFor). 연간 화면은 사업연도
+ * 주석, 분기 화면은 회계정책 판정만(금액 못 구함 → 본표 값 그대로 + 사유)
+ */
+export function krDebtByPeriod(facts: KrFacts, leaseIn?: KrLeaseInput | null): { debt: Record<string, number | null>; notes: string[] } {
+  const L = krBridgeLines(facts);
+  const debt = sumLinesByPeriod(facts, L.debt);
+  const lease = sumLinesByPeriod(facts, L.lease);
+  const cash = sumLinesByPeriod(facts, L.cash);
+  const notes: string[] = [];
+  for (const p of facts.periods) {
+    // 그 기간에 차입금 줄이 없으면 0(현금 줄이 있는 기간 — EV 브릿지 `debt.get(year) ?? 0` 과 같은 규칙)
+    if (debt[p.label] == null && cash[p.label] != null) debt[p.label] = 0;
+    if (lease[p.label] != null || debt[p.label] == null) continue;
+    const lz = krLeaseFor(facts.mode === "quarter" ? null : p.year, leaseIn);
+    debt[p.label] = debt[p.label]! + lz.add;
+    notes.push(`${p.label}: ${lz.how ?? `⚠ ${lz.unknown} — 총차입금은 본표 차입금 줄만`}`);
+  }
+  return { debt, notes };
+}
+
 /** 기간 라벨별 합(대차대조표 주석용) — 같은 라인 키는 한 번만. */
 export function sumLinesByPeriod(facts: KrFacts, lines: KrFactLine[]): Record<string, number | null> {
   const out: Record<string, number | null> = {};
@@ -200,7 +251,7 @@ export function sumLinesByPeriod(facts: KrFacts, lines: KrFactLine[]): Record<st
   return out;
 }
 
-export function buildKrEvResolver(facts: KrFacts, code: string): KrEvResolver {
+export function buildKrEvResolver(facts: KrFacts, code: string, leaseIn?: KrLeaseInput | null): KrEvResolver {
   const L = krBridgeLines(facts);
   const debt = sumLines(facts, L.debt);
   const lease = sumLines(facts, L.lease);
@@ -220,12 +271,16 @@ export function buildKrEvResolver(facts: KrFacts, code: string): KrEvResolver {
     years: () => yearsWithBs,
     bridgeAt(year) {
       if (!debt.has(year) && !cash.has(year)) return null;
+      // 본표에 그해 리스부채 줄 값이 없으면 주석 판정(오너 결정 2026-10-05)
+      const lz = lease.has(year) ? { add: 0, unknown: null, how: null } : krLeaseFor(year, leaseIn);
       return {
-        debt: debt.get(year) ?? 0,
-        lease: lease.get(year) ?? 0,
+        debt: (debt.get(year) ?? 0) + lz.add,
+        lease: (lease.get(year) ?? 0) + lz.add,
         cash: cash.get(year) ?? 0,
         nci: nci.get(year) ?? 0,
         plainFinLiab: L.plainFinLiab,
+        leaseUnknown: lz.unknown,
+        leaseHow: lz.how,
       };
     },
   };
@@ -244,11 +299,11 @@ export function krEv(
 /** krEv 의 브릿지 직접 입력판 — LTM 열(최신 분기말 재무상태표)용. 식은 같다. */
 export function krEvFromBridge(
   blocker: KrEvBlocker | string | null | undefined,
-  b: Pick<KrBalanceBridge, "debt" | "nci" | "cash"> | null,
+  b: Pick<KrBalanceBridge, "debt" | "nci" | "cash" | "leaseUnknown"> | null,
   commonMcap: number | null,
   preferredMcap: number | null,
 ): number | null {
-  if (blocker || commonMcap == null || !b) return null;
+  if (blocker || commonMcap == null || !b || b.leaseUnknown) return null;
   return commonMcap + (preferredMcap ?? 0) + b.debt + b.nci - b.cash;
 }
 
@@ -282,8 +337,9 @@ export function krLtmBalance(
   quarter: KrFacts | null,
   target: { year: number; quarter: number } | null,
   code: string,
+  leaseIn?: KrLeaseInput | null,
 ): KrLtmBalance {
-  const res = buildKrEvResolver(annual, code);
+  const res = buildKrEvResolver(annual, code, leaseIn);
   const lastFy = res.years().at(-1) ?? null;
   const fyEq = lastFy != null ? (krParentEquityByYear(annual).get(lastFy) ?? null) : null;
   const fyBridge = lastFy != null ? res.bridgeAt(lastFy) : null;
@@ -309,6 +365,8 @@ export function krLtmBalance(
   const parent = seriesOf(quarter, PARENT_EQ.ids, PARENT_EQ.names, "BS")[qLabel] ?? null;
   const equity = parent ?? seriesOf(quarter, TOTAL_EQ.ids, TOTAL_EQ.names, "BS")[qLabel] ?? null;
   const hasBridge = debt != null || cash != null;
+  const leaseQ = at(L.lease);
+  const lzQ = leaseQ != null ? { add: 0, unknown: null, how: null } : krLeaseFor(null, leaseIn);
   if (!hasBridge && equity == null) return fallback("재무상태표 계정 없음");
   // 한 쪽만 비면 그 항목만 연말값 — 라벨에 어느 항목인지 적는다
   const missing = [!hasBridge && "차입금·현금", equity == null && "자본"].filter(Boolean);
@@ -318,10 +376,12 @@ export function krLtmBalance(
       ? {
           // 연간 resolver 와 같은 규칙 — 현금만 있고 차입금 계정이 없으면 무차입(0)
           debt: debt ?? 0,
-          lease: at(L.lease) ?? 0,
+          lease: leaseQ ?? 0,
           cash: cash ?? 0,
           nci: at(L.nci) ?? 0,
           plainFinLiab: L.plainFinLiab,
+          leaseUnknown: lzQ.unknown,
+          leaseHow: lzQ.how,
         }
       : fyBridge,
     parentEquity: equity ?? fyEq,

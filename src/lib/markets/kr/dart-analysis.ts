@@ -77,7 +77,7 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const A = (c: { ids: string[]; names: string[] }, sj?: string | string[]) =>
     annualSeries(facts, c.ids, c.names, sj);
   // EV 브릿지·차입금·현금 — dart-ev.ts 단일 기준(하이라이트·개요 멀티플과 같은 값)
-  const evRes = buildKrEvResolver(facts, code);
+  const evRes = buildKrEvResolver(facts, code, input.daDoc ?? null);
 
   // 연간 시계열 (6개년) → 라벨 맵 (5개년 + LTM)
   const rev0 = A(C.rev, IS);
@@ -346,11 +346,11 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const evV = blank();
   for (const l of labels)
     evV[l] =
-      // KRX 조회 실패(재시도 후)면 연도 열 시가총액은 근사지만 우선주 시가총액을 몰라 EV 는 비운다(우선주 있는 회사 EV 과소 방지)
-      input.capsError && l !== LTM
+      // KRX 조회 실패(재시도 후)면 우선주 시가총액을 몰라 EV 는 비운다(우선주 있는 회사 EV 과소 방지) — LTM 열 포함(감사 1차 ⑦)
+      input.capsError
         ? null
         : l === LTM && ltmFromSnap
-        ? krEvFromBridge(evRes.blocker(), snap!.evBridge ?? null, mktcap[l], prefMcap[l])
+        ? krEvFromBridge(evRes.blocker() ?? snap!.evBlocker ?? null, snap!.evBridge ?? null, mktcap[l], prefMcap[l])
         : krEv(evRes, l === LTM ? years[years.length - 1] : Number(l.slice(0, 4)), mktcap[l], prefMcap[l]);
   const evEbitda = pos(evV, ebitda);
   const fcf = blank();
@@ -549,6 +549,8 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
       (input.capsError ? ` · ⚠ KRX 시가총액 조회 실패(3번 재시도 후, ${input.capsError}) — 연도 열 시가총액은 근사(연말 종가 × 현재 주식수), EV 는 공란` : "") +
       (approxYears.length ? ` · ${approxYears.join("·")} 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사` : "") +
       ` · ${krDaSourceNote(daS, years)}` +
+      // 본표에 리스부채 줄이 없는 해 — 주석 리스부채 가산·차입금 포함·확인 불가(오너 결정 2026-10-05)
+      [...new Set([...years.map((y) => evRes.bridgeAt(y)), ltmFromSnap ? snap!.evBridge ?? null : null].flatMap((b) => [b?.leaseHow ? `총차입금 리스부채: ${b.leaseHow}` : null, b?.leaseUnknown ? `⚠ ${b.leaseUnknown} — EV 공란` : null]).filter(Boolean))].map((t) => ` · ${t}`).join("") +
       (ltmFromSnap ? ` · LTM 차입금·현금·PBR 자본: ${snap!.label} 기준` : " · LTM 재무상태표: 최신 분기 스냅샷 없음 — 연말값") +
       (qInfo.mode === "q"
         ? ` · LTM 흐름 = ${qInfo.last4[0]}~${qInfo.last4[3]} 4개 분기 합, 재무상태표 = ${qInfo.last} 말`

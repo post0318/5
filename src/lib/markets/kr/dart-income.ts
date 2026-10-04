@@ -94,8 +94,17 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   const niNci = S({ ids: ["ifrs-full_ProfitLossAttributableToNonControllingInterests"], names: ["비지배지분"] });
   const bsNci = seriesOf(facts, ["ifrs-full_NoncontrollingInterests"], ["비지배지분"], "BS");
   const niParentNotes: Record<string, string> = {};
+  // 별도 재무제표 해(연결 재무제표 없음)는 지배·비지배 구분 자체가 없다 — 지배주주 귀속 행은 빈칸 + 칸 주석(감사 1차 ⑧: 예전엔 별도 당기순이익을
+  // 그대로 복사해 060370 2021 "(지배주주 귀속)" = 별도 순이익이었다)
+  const ofsLabel = (l: string) => {
+    const p = facts.periods.find((x) => x.label === l);
+    return facts.fsDiv === "OFS" || (p != null && (facts.ofsYears ?? []).includes(p.year));
+  };
   for (const l of labels)
-    if (niParent[l] == null && netIncome[l] != null && niNci[l] == null && !bsNci[l]) {
+    if (ofsLabel(l) && netIncome[l] != null) {
+      niParent[l] = null;
+      niParentNotes[l] = "별도 재무제표(연결 재무제표 없음) — 지배·비지배 구분 없음, 빈칸";
+    } else if (niParent[l] == null && netIncome[l] != null && niNci[l] == null && !bsNci[l]) {
       niParent[l] = netIncome[l];
       niParentNotes[l] = "비지배지분 없음(손익·재무상태표에 비지배지분 줄 없음) — 당기순이익 = 지배주주 귀속";
     }
@@ -203,7 +212,7 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
         return Object.keys(cn).length ? { cellNotes: cn } : {};
       })(),
     }),
-    ...(labels.some((l) => niParent[l] != null)
+    ...(labels.some((l) => niParent[l] != null) || Object.keys(niParentNotes).length
       ? [row("(지배주주 귀속)", niParent, { depth: 2, italic: true, paren: true, ...(Object.keys(niParentNotes).length ? { cellNotes: niParentNotes } : {}) })]
       : []),
     row("기본 EPS", epsBasic, { numberFormat: "eps", ...(eB.summed.size ? { cellNotes: epsNote(eB.summed) } : {}) }),

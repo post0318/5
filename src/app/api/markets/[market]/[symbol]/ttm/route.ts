@@ -23,6 +23,7 @@ export async function GET(
     }
     const adapter = getAdapter(market);
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
+    let dividendError: string | null = null;
     const [ttm, krDividend] = await Promise.all([
       // 미국: TTM 스냅샷 저장본(같은 배포판·24시간 안)을 바로 쓰고, 없으면 계산해 저장(db/ttm-snap.ts — 첫 조회 6~40초 문제)
       market === "us"
@@ -46,11 +47,13 @@ export async function GET(
         : adapter.getTtm
           ? adapter.getTtm(sym)
           : Promise.resolve(null),
+      // no-silent-catch:begin — 한국 배당(감사 1차 ⑨)
       market === "kr"
         ? getKrJurirNo(sym)
-            .then((crno) => fetchKrAnnualDps(crno))
-            .catch(() => null)
+            .then((crno) => (crno ? fetchKrAnnualDps(crno) : null))
+            .catch((e) => { dividendError = `배당기준일(공공데이터) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`; return null; })
         : Promise.resolve(null),
+      // no-silent-catch:end
     ]);
 
     // 미국(EDGAR)은 주당배당금도 TTM 페이로드에 실려 온다 → 국내와 동일 형태로 변환.
@@ -69,10 +72,10 @@ export async function GET(
     }
 
     return ok(
-      { ttm, dividend },
+      { ttm, dividend, ...(dividendError ? { dividendError } : {}) },
       {
         headers: {
-          "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400",
+          "Cache-Control": dividendError || ttm?.degraded?.length ? "no-store" : "public, s-maxage=1800, stale-while-revalidate=86400",
         },
       },
     );
