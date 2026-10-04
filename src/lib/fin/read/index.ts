@@ -153,7 +153,12 @@ export class UsReader {
         gaps |= Gap.YAHOO;
         warnings.push("Yahoo 분기 조회 실패(LTM)");
       }
-      quoteShares = await currentQuoteShares(symbol).catch(() => null);
+      // 시세 주식수 조회 실패 — ADR 비율을 판정 못 한다(TSM 1:5). 결손으로 기록해 짧게 캐시하고 저장하지 않는다(조용히 비율 1 로 두지 않음)
+      quoteShares = await currentQuoteShares(symbol).catch(() => {
+        gaps |= Gap.YAHOO;
+        warnings.push("Yahoo 시세 주식수 조회 실패(ADR 비율 판정)");
+        return null;
+      });
     }
     const profile: CompanyProfile = {
       market: "us", symbol: symbol.toUpperCase(), cik, sic: sub.sic, type: companyType(sub.sic, idx), filer,
@@ -599,7 +604,8 @@ export class UsReader {
           const { parents, sums } = calT ? calcParents(parseCalculation(calT), shape.role, new Set(shape.lines.map((l) => l.id))) : { parents: new Map(), sums: new Map() };
           let labels: FilingStructure["labels"] = null;
           if (withLabels) {
-            const labT = await linkbaseText(ff, "lab").catch(() => null);
+            // 라벨 파일 조회 실패는 던진다(아래 catch 가 조립 실패로) — 파일이 실제로 없으면 linkbaseText 가 null
+            const labT = await linkbaseText(ff, "lab");
             labels = labT ? parseLabels(labT) : null;
           }
           return { shape, parents, sums, labels, gaps: calT ? 0 : Gap.LINKBASE };

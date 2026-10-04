@@ -137,7 +137,7 @@ function loadEnvLocal() {
       const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"\n]*?)"?\s*$/);
       if (m && (env[m[1]] === undefined || env[m[1]] === "")) env[m[1]] = m[2];
     }
-  } catch {
+  } catch { // silent-ok: .env.local 은 선택 파일(없으면 환경변수만)
     /* .env.local 없어도 됨 */
   }
   return env;
@@ -208,7 +208,7 @@ const RECON = (() => {
       const ltmHow = r.ltm?.partition?.join(" · ") ?? how;
       for (const y of r.years) m.set(`${r.sym}|${r.src}|${r.metric}|${y}`, { ok: r.yearOk ? !!r.yearOk[y] : r.verdict !== "미결", how: y === "LTM" ? ltmHow : how, ext: r.vals?.[y]?.ext ?? null, app: r.vals?.[y]?.app ?? null });
     }
-  } catch { /* 결과 없음 — 분류 그대로 */ }
+  } catch (e) { die(`recon 결과 파일 판독 실패 — ${String(e).slice(0, 120)}(파일이 있는데 못 읽으면 분류가 조용히 바뀐다)`); }
   return m;
 })();
 const SEC_UA = env.SEC_USER_AGENT || "global-market-research (personal use) contact@example.com";
@@ -1463,6 +1463,7 @@ async function secFaceRevenue(cik, sub, G, bank) {
     for (const f of oldest > E ? sub.filings?.files ?? [] : []) {
       if (olderLoaded.has(f.name) || (f.filingTo ?? "") < E) continue;
       olderLoaded.add(f.name);
+      // silent-ok: 과거 목록 조회 실패 — 그 10-K 를 못 찾아 대응값 없음(FAIL)으로 드러난다
       try { pages.push(await secJson(`https://data.sec.gov/submissions/${f.name}`)); } catch { /* 과거 목록 조회 실패 — 대응값 없음(FAIL)으로 드러난다 */ }
     }
     const more = [];
@@ -2838,7 +2839,8 @@ async function faceSgaLine(cik, accn, sym) {
   let labs = null;
   const L = async () => (labs ??= labN ? xbrlLabelsRole(await secTextC(`${base}/${labN}`)) : new Map());
   // 원가 줄 — 검증기 매출원가 판독(faceCogsLine)의 매출총이익 식 차감 항·원가 소계 하위 줄 + D형 구성 규칙 줄(--cogs-rules)
-  const fc = await faceCogsLine(cik, accn).catch(() => null);
+  // 조회 실패는 던진다(호출자가 기록) — null 로 삼키면 원가 줄이 빠진 채 판관비 구성을 판정했다
+  const fc = await faceCogsLine(cik, accn);
   const cogsIds = new Set([...(fc?.terms ?? []), ...(fc?.parts ?? [])].map((t) => t.id.split("[")[0]));
   const rule = COGS_RULES[sym];
   for (const l of [...(rule?.lines ?? []), ...Object.values(rule?.linesByForm ?? {}).flat()]) for (const c of [].concat(l.concept)) cogsIds.add(c);
@@ -6830,7 +6832,7 @@ async function verifyUs(sym) {
           const m = /Research and development costs\s+\$?\s*([\d,]+)/i.exec(txt);
           const v = m ? Number(m[1].replace(/,/g, "")) * 1e6 : null;
           if (v != null && Math.abs(v - e.val) <= 0.05 * e.val) rndText.set(e.end, { v, accn: e.accn });
-        } catch { /* 본문 판독 실패 — XBRL 값 그대로 */ }
+        } catch (e) { hardErrors.push(`연구개발비 10-K 본문 조회 실패: ${String(e).slice(0, 80)}`); }
       }
     }
     // StockAnalysis 현금흐름표 "기타 상각"(otherAmortization, 기간별) — 원인 판정 ⑦ 용
@@ -7068,7 +7070,7 @@ async function verifyUs(sym) {
         // TTM 열은 그 끝(분기 화면 첫 열)이 앱 LTM 기준일과 같을 때만(2026-10-01 MU — SA 는 FY2026 10-K(2026-09-03)까지 반영, 앱 LTM 은 직전 분기 → 기간이 달라
         // 투자활동 −61,641 vs −24,886 등이 ③ 으로 잡혔다)
         let saQEnd = null;
-        try { saQEnd = (await saStatement(sym, "cash-flow-statement", true)).datekey.find((d) => d !== "TTM") ?? null; } catch { /* 분기 화면 실패 — TTM 대조 안 함 */ }
+        try { saQEnd = (await saStatement(sym, "cash-flow-statement", true)).datekey.find((d) => d !== "TTM") ?? null; } catch (e) { hardErrors.push(`StockAnalysis 분기 현금흐름 조회 실패(TTM 대조 안 함): ${String(e).slice(0, 80)}`); }
         const ttmOk = !!(saQEnd && H.LTM?.date && dayDiff(saQEnd, H.LTM.date) <= 7);
         for (const [c, x] of Object.entries(H)) {
           if (!x?.date) continue;
@@ -7929,7 +7931,7 @@ async function verifyUs(sym) {
               if (s0 && dayDiff(st, yb(s0)) <= 7 && dayDiff(en, yb(L0)) <= 7) pri = fs0[fs0.length - 1].v;
             }
             if (cur != null && pri != null) finIntFacts.set("LTM", finIntFacts.get(fyc) + cur - pri);
-          } catch { /* 10-Q 원본 조회 실패 — LTM 규칙 없음 */ }
+          } catch (e) { hardErrors.push(`금융 부문 이자비용 10-Q 원본 조회 실패(LTM 규칙 없음): ${String(e).slice(0, 80)}`); }
         }
       }
     }

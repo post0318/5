@@ -37,6 +37,7 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
       lastAt = Date.now();
     }
   });
+  // silent-ok: 요청 간격 줄(chain)만 이어 붙인다 — 실패는 run 으로 호출자에게 그대로 간다
   chain = run.catch(() => undefined);
   return run;
 }
@@ -50,7 +51,7 @@ function cacheGet(url: string, ttlMs: number | null): string | null {
   try {
     if (ttlMs != null && Date.now() - statSync(p).mtimeMs > ttlMs) return null;
     return readFileSync(p, "utf8");
-  } catch {
+  } catch { // silent-ok: 디스크 캐시 읽기 실패 = 캐시 없음(원본을 다시 받는다)
     return null;
   }
 }
@@ -60,7 +61,7 @@ function cachePut(url: string, body: string): void {
   try {
     mkdirSync(CACHE_DIR!, { recursive: true });
     writeFileSync(p, body);
-  } catch {
+  } catch { // silent-ok: 디스크 캐시 쓰기 실패는 값과 무관(다음에 원본을 다시 받음)
     /* 캐시 실패는 무시 */
   }
 }

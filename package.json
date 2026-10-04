@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint && node scripts/lint/no-silent-catch.mjs",
     "typecheck": "tsc --noEmit",
     "build:kr-corpcodes": "node scripts/build-kr-corpcodes.mjs",
     "batch:kr-da": "node scripts/populate-kr-da.mjs",

@@ -42,6 +42,7 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
   try {
     reader = await UsReader.open(sym);
   } catch (e) {
+    // silent-ok: 실패 표시 기록(DB 쓰기) 실패는 조립 결과와 무관 — 원래 오류는 바로 아래에서 다시 던진다
     if (opts.persist) await markFailed(`${market}:${sym}`, Gap.CF_FETCH).catch(() => {});
     throw e;
   }
@@ -151,6 +152,7 @@ export async function loadFinSym(market: Market, symbol: string): Promise<FinSym
   if (hit && Date.now() - hit.at < hit.ttl) return hit.p;
   const entry: LookupEntry = { at: Date.now(), ttl: LOOKUP_TTL_MS.stored, p: Promise.resolve(null) };
   entry.p = (async () => {
+    // silent-ok: 저장본 읽기 실패 = 저장본 없음과 같이 이 코드로 조립(다른 원천으로 대체가 아니라 같은 계산을 새로 함)
     const stored = noSnap ? null : await getFinSym(market, symbol).catch(() => null);
     // 엔진판이 다른 저장본(판독·조립 규칙이 바뀌기 전 배치)은 쓰지 않는다 — 배치(/api/cron/fin-build)가 다시 적재할 때까지 비저장 조립
     if (stored && stored.ev === ENGINE_VERSION) return stored;
@@ -161,6 +163,7 @@ export async function loadFinSym(market: Market, symbol: string): Promise<FinSym
       entry.ttl = transient ? LOOKUP_TTL_MS.failed : LOOKUP_TTL_MS.assembled;
       // 유니버스 밖 종목도 완전한 조립은 DB 에 저장(오너 결정 2026-10-01 ① — 두 번째 조회부터 어느 서버든 0.5초대). 새 공시 갱신은
       // 배치(fin-build)가 최근 30일 안에 조회된 종목까지 맡는다(db/ttm-snap.ts listRecentlyViewed). 저장 실패는 조회 결과에 영향 없음
+      // silent-ok: 저장(DB 쓰기) 실패는 조회 결과에 영향 없음 — 다음 조회·배치가 다시 저장
       if (!transient && !noSnap && isDbConfigured()) await persist({ ...a, gaps: a.readerGaps }, a.stmts).catch(() => {});
       return toSymDoc(a);
     } catch {
@@ -224,6 +227,7 @@ export async function refreshStored(market: Market, symbols: string[], opts: { m
     const s = queue[i];
     let why: RefreshResult["built"][number]["why"] | null = rank(s) === 0 ? "missing" : rank(s) === 1 ? "engine" : null;
     if (!why) {
+      // silent-ok: 조회 실패(null)는 바로 아래에서 skipped 로 돌려준다(새 공시 없음으로 보지 않음)
       const la = await latestPeriodicAccn(s).catch(() => null);
       // 제출 목록 조회 실패(la null)는 "새 공시 없음"으로 보지 않는다 — 확인 시각을 남기지 않고 skipped 로 돌려준다(다음 호출에서 다시)
       if (!la) { out.skipped.push(s); continue; }
@@ -232,6 +236,7 @@ export async function refreshStored(market: Market, symbols: string[], opts: { m
       const stale = m(s)!.la == null ? Date.now() - (m(s)!.at?.valueOf() ?? 0) > LA_NULL_REBUILD_MS : la !== m(s)!.la;
       if (stale) why = "filing";
       else {
+        // silent-ok: 확인 시각 기록(DB 쓰기) 실패는 다음 배치가 다시 확인할 뿐
         await touchChecked(`${market}:${s}`).catch(() => {});
         out.upToDate.push(s);
         continue;

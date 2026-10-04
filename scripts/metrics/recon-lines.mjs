@@ -202,6 +202,7 @@ async function saLines(sym) {
   });
   // SA TTM 기준일 = 분기 손익의 최신 분기말(TTM 이 몇 분기 늦을 수 있다 — 앱 LTM 기준일과 20일 안일 때만 쓴다)
   let ltmEnd = null;
+  // silent-ok: SA 분기 화면이 없으면 LTM 대조를 하지 않는다 — 결과에 ltmEnd null 로 남고 LTM 행이 생기지 않는다
   try { ltmEnd = (await get("income-statement", true)).datekey?.find((d) => d !== "TTM") ?? null; } catch { /* 분기 없음 */ }
   return { rows: out, ltm, ltmEnd, unit: unitOf([...out.values(), ltm].filter(Boolean)), lines: { sga: "sgna", rnd: "rnd", amort: "goodwillIntangibleAmortization", other: "opex − sgna − rnd − 상각" } };
 }

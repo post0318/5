@@ -277,6 +277,7 @@ function installHook() {
       const plants = mut.plants.filter((p) => !p.kinds || p.kinds.includes(kind));
       if (!plants.length) return res;
       let j;
+      // silent-ok: JSON 이 아닌 응답은 오류를 심을 대상이 아니라 그대로 통과(심은 오류 시험 도구)
       try { j = await res.clone().json(); } catch { return res; }
       for (const p of plants) {
         const n = p.op === "replace" ? deepReplace(j, p.from, p.to) : p.fn(j, kind);

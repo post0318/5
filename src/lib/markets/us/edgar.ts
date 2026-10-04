@@ -253,7 +253,9 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       if (latestPeriodic && /^20-F/.test(latestPeriodic) && ticker) {
         const cur = withShares.reportingCurrency ?? "USD";
         const [yq, fx] = await Promise.all([
+          // silent-ok: null 이면 바로 아래 분기에서 경고("… 조회 실패")와 LTM 열 공란으로 처리
           fetchYahooFundamentals(ticker).catch(() => null),
+          // silent-ok: 위와 같음(H.10 조회 실패 경고)
           fxToUsd(cur).catch(() => null),
         ]);
         if (yq && fx) {
@@ -334,6 +336,7 @@ export async function fetchUsCompanyFacts(
 async function getSymbolFacts(cik: string, symbol: string, opts: { revenue?: boolean } = {}): Promise<CompanyFacts> {
   const [facts, currentShares, revenue] = await Promise.all([
     getCompanyFacts(cik),
+    // silent-ok: loadUsCurrentShares 는 내부에서 실패를 처리해 거부하지 않는다(실패는 짧은 캐시 — current-shares.ts)
     loadUsCurrentShares(symbol).catch(() => null),
     // 매출 = 재무 5층 구조(src/lib/fin) 매출 지표(fin-revenue.ts). 매출을 안 쓰는 경로는 건너뛴다
     opts.revenue === false ? Promise.resolve(null) : loadUsRevenue(symbol),
@@ -829,9 +832,11 @@ export const usEdgarAdapter: MarketAdapter = {
       const dartAdr = dartAdrOf(symbol);
       if (dartAdr) return (await dartAdrTtm(dartAdr)) ?? failedTtm("TTM 조회 실패 — DART 분기 재무 없음");
       const { cik } = await resolveCik(symbol);
+      let sicFailed = false;
       const [facts0, sic] = await Promise.all([
         getSymbolFacts(cik, symbol),
-        getSubmissions(cik).then((s) => s.sic ?? null).catch(() => null),
+        // SIC 조회 실패 — 금융업 판정을 못 하므로 불완전 결과로 표시(저장 제외). null 로 삼키면 금융사가 일반 회사로 계산됐다
+        getSubmissions(cik).then((s) => s.sic ?? null).catch(() => { sicFailed = true; return null; }),
       ]);
       const [captive, cls] = await Promise.all([
         // 금융 자회사 판별 조회 실패 = "unknown"(금융 자회사 없음으로 단정하지 않음 — EV 미표시)
@@ -851,6 +856,7 @@ export const usEdgarAdapter: MarketAdapter = {
         ...(facts.fetchWarnings ?? []),
         ...(facts.revenue == null ? ["매출(fin) 조립 실패"] : []),
         ...(captive === "unknown" ? ["금융 자회사 판별 조회 실패"] : []),
+        ...(sicFailed ? ["SIC(업종) 조회 실패"] : []),
       ];
       return degraded.length ? { ...ttm, degraded } : ttm;
     } catch (e) {

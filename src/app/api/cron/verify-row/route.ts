@@ -85,9 +85,11 @@ export async function GET(req: Request) {
     const universe = await computeUniverseRow(market, symbol);
     const overview = await getStockOverview(market, symbol, null, { skipQuarterly: true });
     // 20-F 만 값이 있다(10-K·10-Q 회사는 null)
-    const usFacts = market === "us" ? ((await fetchUsCompanyFacts(symbol).catch(() => null))?.facts ?? null) : null;
+    // companyfacts 조회 실패는 응답에 "조회 실패"로 싣는다(검증기가 오류로 잡음) — null 로 삼키면 20-F LTM 검사가 "목록 없음"으로만 보였다
+    let ltmError: string | null = null;
+    const usFacts = market === "us" ? ((await fetchUsCompanyFacts(symbol).catch((e) => { ltmError = `SEC companyfacts 조회 실패 — ${e instanceof Error ? e.message : String(e)}`; return null; }))?.facts ?? null) : null;
     const ltm = usFacts && yahooLtm(usFacts) ? ltmItems(usFacts) : null;
-    return ok({ universe, overview: { multiples: overview.multiples, warnings: overview.warnings }, ltm });
+    return ok({ universe, overview: { multiples: overview.multiples, warnings: overview.warnings }, ltm, ...(ltmError ? { ltmError } : {}) });
   } catch (e) {
     return jsonError(e);
   }

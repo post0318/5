@@ -350,8 +350,9 @@ export async function loadKrCaps(code: string, years: number[]): Promise<KrCaps>
   const ymd = (d: Date) =>
     `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   const [cur, ...fy] = await Promise.all([
-    fetchKrxCapsOn(code, ymd(today)).catch(() => null),
-    ...years.map((y) => fetchKrxCapsOn(code, `${y}1231`).catch(() => null)),
+    // 조회 실패는 던진다(호출자가 처리) — 연도별 null 로 삼키면 그 해 시가총액·EV 가 사유 없이 빠졌다. 자료 없음은 fetchKrxCapsOn 이 null
+    fetchKrxCapsOn(code, ymd(today)),
+    ...years.map((y) => fetchKrxCapsOn(code, `${y}1231`)),
   ]);
   const byYear = new Map<number, { common: number | null; preferred: number; close: number | null }>();
   years.forEach((y, i) => {
