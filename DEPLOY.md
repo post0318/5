@@ -2,11 +2,12 @@
 
 ## 0. 서버 구성 (2026-10-03 오너 결정)
 
-Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 세 곳에 같은 커밋을 배포한다. 세 곳 모두 같은 MongoDB 를 쓴다.
+Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 세 곳에 같은 커밋을 배포한다. 모두 같은 MongoDB 를 쓴다. 오라클 두 대 합계 3코어·20GB(무료 한도 4코어·24GB 이내, 0원).
 
 | 서버 | 역할 | 주소 | 배포 |
 |---|---|---|---|
 | **오라클** (오사카 ARM A1 2코어·12GB, 161.33.9.115) | **메인** — 화면 + 무거운 자동 작업 | https://macro-insights.duckdns.org | `deploy-oracle.yml`: master 푸시(앱 파일) → 서버가 해당 커밋을 받아 직접 빌드(ARM)·재시작 |
+| **오라클 2호기 `macro-verify`** (1코어·8GB·스왑 4GB, 140.83.48.57) | **재무 검증 전용** — `kr/verification` 브랜치 개발 서버(`verify-dev`, localhost:3000, 외부 비공개) | 없음 | 수동(`cd ~/5 && git pull`) — 2026-10-04 생성. 운영과 IP·CPU 분리(DART·SEC 요청 제한이 운영에 번지지 않게). 환경변수 `~/5/.env.local`(운영 app.env + `KR_DA_COLLECTION=kr_da_staging`) |
 | 구글 Cloud Run (`brave-smile-508510-g5`, asia-northeast1) | 보조 — 화면 | https://macroresearch-2x722d45qa-an.a.run.app | `deploy-cloudrun.yml` |
 | Vercel | 보조 — 화면. **Hobby 한도 초과로 정지(402) 중** — 다음 달 사용량 초기화 때 풀림 | https://macroresearch.vercel.app | Git 연동(`vercel.json` ignoreCommand만, crons 는 2026-10-03 제거) |
 
