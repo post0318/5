@@ -13,7 +13,7 @@
  * 실행: node scripts/listen-telegram.mjs (오라클: systemd 서비스 macro-telegram-listener)
  */
 import { readFileSync } from "node:fs";
-import { TelegramClient } from "telegram";
+import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage } from "telegram/events/index.js";
 import {
@@ -47,6 +47,11 @@ async function main() {
 
   const client = new TelegramClient(new StringSession(session), apiId, apiHash, { connectionRetries: 10, autoReconnect: true });
   await client.connect();
+  // 어느 계정으로 붙었는지(채널 가입 여부 확인용 — 아이디·이름 일부만) + 새 소식 받기 요청. 텔레그램 서버는 접속한 프로그램이
+  // updates.getState 를 한 번 불러야 새 글 알림을 보내기 시작한다(휴대폰 앱은 자동) — 접속만 하면 연결은 살아도 알림이 0건이었다(2026-10-04).
+  const me = await client.getMe();
+  log(`계정 id …${String(me?.id ?? "").slice(-4)} · ${me?.username ? "@" + me.username.slice(0, 3) + "…" : "(아이디 없음)"}`);
+  await client.invoke(new Api.updates.GetState());
 
   // 채널 엔티티·제목
   const byId = new Map();
