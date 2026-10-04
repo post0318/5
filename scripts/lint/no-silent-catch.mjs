@@ -26,6 +26,8 @@ const TARGETS = [
   // 한국 감사 1차(2026-10-05) — 검증기 한국 원자료 모듈, 감가상각 적재본 조회, 한국 어댑터(손익 TTM)
   { dir: "scripts/verify-kr", re: /\.mjs$/, deep: false },
   { dir: "src/lib/db", re: /^kr-da\.ts$/, deep: false },
+  // SKHY(DART 연결 ADR) 어댑터 — 감가상각 적재본 조회 실패를 삼키던 곳
+  { dir: "src/lib/markets/us", re: /^dart-adr\.ts$/, deep: false, region: true },
   { dir: "src/lib/markets/kr", re: /^opendart\.ts$/, deep: false },
   // 미국·한국이 섞인 파일은 한국 경로만 — "// no-silent-catch:begin" ~ "// no-silent-catch:end" 구간(구간이 없으면 실패)
   { dir: "src/app/api/markets/[market]/[symbol]/highlights", re: /^route\.ts$/, deep: false, region: true },

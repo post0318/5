@@ -329,6 +329,7 @@ export async function getConsensusData(
         };
         // 과거 연도 주식수 = 각 결산일 유통주식수만(최근 값으로 대신하지 않음 — 그림자 채우기 금지)
         dartBookShares = x.bookShares;
+        if (x.daWarning) notes.push(`⚠ ${x.daWarning} — 감가상각비·EBITDA 는 DART 공시 현금흐름 줄 또는 빈칸`);
         notes.push(`실적: ${x.code} OpenDART 재무 USD 환산(손익 = 기간 평균 환율, 재무상태표·연말 시가총액 = 결산일 환율), 주당 값은 ADR 1주 기준`);
       }
     } catch {
