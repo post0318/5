@@ -32,8 +32,14 @@ export interface KrDaDoc {
    *  - unknown: 둘 다 못 정함 — EV 공란 + 사유
    */
   leaseNote?: Record<string, KrLeaseNote>;
-  /** 분기 보고서 기준(LTM) 판정 — 분기 보고서 XBRL 은 주석을 태깅하지 않아 금액은 못 구한다. 최근 사업보고서 회계정책이 "포함"이면 included */
+  /** 분기 보고서 기준(LTM) 판정 — 최근 사업보고서 회계정책이 "포함"이면 included(그러면 leaseQuarter 불필요) */
   leasePolicyLatest?: KrLeaseNote | null;
+  /**
+   * 최신 분기·반기 보고서 분기말 리스부채(오너 결정 2026-10-05) — 분기 보고서 XBRL(fnlttXbrl)엔 주석이 없지만 **원문(document.xml) 주석 표 칸에
+   * 태그(ACODE·ACONTEXT)가 달려 있다**. 그 표 칸 중 전기말 열이 최근 사업연도 주석 리스부채(leaseNote)와 정확히 같은 꼴만 믿고 그 꼴의 분기말 값을
+   * 쓴다(같은 해 앞 분기 보고서에서 확인된 꼴이면 그것도). label = 앱 분기 라벨("2026 Q2"). 못 정하면 unknown(앱 LTM EV 공란)
+   */
+  leaseQuarter?: (KrLeaseNote & { label: string }) | null;
 }
 
 export interface KrLeaseNote {

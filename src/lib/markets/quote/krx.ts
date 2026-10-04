@@ -1,5 +1,6 @@
 import "server-only";
 import { AdapterError, type QuoteBar } from "../types";
+import { isKrxHolidaySync } from "@/lib/macro/kr/market-calendar";
 
 /**
  * KRX 정보데이터시스템 OPEN API — 한국 일별 시세 (L2 주 소스)
@@ -49,14 +50,14 @@ function num(v: string | undefined): number | null {
 /** 일시 장애 재시도 간격(오너 지시 2026-10-04 — "실패를 인식했으면 재시도해서 정상값을 채워넣는 게 맞다") */
 const RETRY_DELAYS_MS = [1_000, 3_000, 9_000];
 
-async function fetchServiceOnce(service: string, basDd: string, isPast: boolean): Promise<KrxRow[]> {
+async function fetchServiceOnce(service: string, basDd: string, isPast: boolean, fresh = false): Promise<KrxRow[]> {
   const res = await fetch(`${BASE}/${service}?basDd=${basDd}`, {
     headers: { AUTH_KEY: key()! },
     signal: AbortSignal.timeout(15_000),
     // 과거 영업일 데이터는 불변 → 오래 캐시(Next Data Cache, 인스턴스·배포 간 공유).
     // 당일치만 1시간. 이게 없으면 종목 조회마다 전체 시장 일별 스냅샷 수십 개를
-    // 매번 새로 내려받아 개요가 10초 넘게 걸림.
-    next: { revalidate: isPast ? 60 * 60 * 24 * 30 : 60 * 60 },
+    // 매번 새로 내려받아 개요가 10초 넘게 걸림. 거래일 빈 응답을 다시 받을 때(fresh)는 캐시를 건너뛴다 — 빈 응답이 30일 캐시에 남아 있을 수 있다
+    ...(fresh ? { cache: "no-store" as const } : { next: { revalidate: isPast ? 60 * 60 * 24 * 30 : 60 * 60 } }),
   });
   if (!res.ok) throw new AdapterError(`KRX ${service} 실패 (${res.status})`, { status: res.status });
   const j = (await res.json()) as { OutBlock_1?: KrxRow[] };
@@ -67,10 +68,10 @@ async function fetchServiceOnce(service: string, basDd: string, isPast: boolean)
  * KRX 일별 조회 — 일시 장애(네트워크·시간 초과·5xx·429·응답 깨짐)는 1·3·9초 쉬고 최대 3번 다시 시도한다. 인증 오류처럼 다시 해도 같은
  * 4xx 는 바로 던진다. 끝내 실패하면 던지고, 화면 쪽이 "근사 + ⚠ 표시"로 처리한다(저장하지 않아 다음 요청 때 다시 조회).
  */
-async function fetchService(service: string, basDd: string, isPast: boolean): Promise<KrxRow[]> {
+async function fetchService(service: string, basDd: string, isPast: boolean, fresh = false): Promise<KrxRow[]> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await fetchServiceOnce(service, basDd, isPast);
+      return await fetchServiceOnce(service, basDd, isPast, fresh);
     } catch (e) {
       const status = e instanceof AdapterError ? e.opts.status : undefined;
       const retryable = status == null || status === 429 || status >= 500;
@@ -80,22 +81,59 @@ async function fetchService(service: string, basDd: string, isPast: boolean): Pr
   }
 }
 
+/**
+ * 빈 응답의 뜻(오너 결정 2026-10-05 — "거래일의 빈 응답은 휴장이 아니라 조회 실패"). 휴장일 달력(macro/kr/market-calendar.ts, KRX 휴장일 조회)으로 가른다.
+ *  - holiday: 주말·KRX 휴장일 → 빈 응답이 정상(앞 거래일로)
+ *  - pending: 거래일 D 의 당일·다음 날(KST) — 아직 게시 전일 수 있다(앞 거래일로, 캐시 안 함). 실측: 10-02(금) 거래분이 10-04(토)에 942종목
+ *    (게시 시각 실측은 오라클 measure-krx, 10-07 보고서)
+ *  - expected: D 로부터 이틀 이상 지난 거래일 → 자료가 있어야 한다. 빈 응답 = 조회 실패(재시도 후 던짐)
+ *  - unknown: 달력에 그 해가 없음 → 조회 실패로 본다(모르는 걸 휴장으로 단정하지 않음 — 달력 갱신 필요)
+ */
+export function krxEmptyKind(basDd: string, now = new Date()): "holiday" | "pending" | "expected" | "unknown" {
+  const date = `${basDd.slice(0, 4)}-${basDd.slice(4, 6)}-${basDd.slice(6, 8)}`;
+  const kst = new Date(now.getTime() + 9 * 3600e3);
+  kst.setUTCDate(kst.getUTCDate() - 1);
+  const yesterday = kst.toISOString().slice(0, 10);
+  const h = isKrxHolidaySync(date);
+  if (h === true) return "holiday";
+  if (date >= yesterday) return "pending";
+  return h == null ? "unknown" : "expected";
+}
+
 async function loadDay(basDd: string): Promise<Map<string, KrxRow>> {
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const isPast = basDd !== today;
 
   // 조회 실패는 던진다(재감사 14차 ③) — 빈 목록으로 삼키면 휴장일과 구분되지 않아 과거 날짜가 "빈 날"로 영구 캐시되고,
   // 연말 시가총액·EV 가 사유 없이 빠지거나 근사로 바뀌었다
-  const [kospi, kosdaq] = await Promise.all([
-    fetchService("stk_bydd_trd", basDd, isPast),
-    fetchService("ksq_bydd_trd", basDd, isPast),
-  ]);
+  const both = (fresh: boolean) =>
+    Promise.all([fetchService("stk_bydd_trd", basDd, isPast, fresh), fetchService("ksq_bydd_trd", basDd, isPast, fresh)]);
+  let [kospi, kosdaq] = await both(false);
+  // 거래일인데 한쪽이라도 비면(오너 결정 2026-10-05) — 1·3·9초 쉬고 캐시 없이 다시 받는다. 끝내 비면 조회 실패(던짐 → 근사 + ⚠, EV 공란)
+  let kind: ReturnType<typeof krxEmptyKind> | null = null;
+  if (!kospi.length || !kosdaq.length) {
+    kind = krxEmptyKind(basDd);
+    if (kind === "expected" || kind === "unknown") {
+      for (const ms of RETRY_DELAYS_MS) {
+        await new Promise((r) => setTimeout(r, ms));
+        [kospi, kosdaq] = await both(true);
+        if (kospi.length && kosdaq.length) break;
+      }
+      if (!kospi.length || !kosdaq.length)
+        throw new AdapterError(
+          kind === "unknown"
+            ? `KRX ${basDd} 빈 응답 — 휴장일 달력에 ${basDd.slice(0, 4)}년이 없어 휴장인지 모름(달력 갱신 필요)`
+            : `KRX ${basDd} 빈 응답(${!kospi.length && !kosdaq.length ? "유가·코스닥" : !kospi.length ? "유가" : "코스닥"}) — 휴장일 아닌 거래일, 3번 재시도 후`,
+          { status: 502 },
+        );
+    }
+  }
   const map = new Map<string, KrxRow>();
   for (const r of [...kospi, ...kosdaq]) {
     if (r.ISU_CD) map.set(r.ISU_CD.trim(), r);
   }
-  // 휴장일이면 빈 맵 — 캐시하되 오늘 날짜는 캐시하지 않음
-  if (isPast) dayCache.set(basDd, map);
+  // 자료가 있거나 휴장일이면 캐시(오늘 제외). 미게시(pending) 빈 응답은 캐시하지 않는다 — 나중에 다시 받는다
+  if (isPast && (map.size || kind === "holiday")) dayCache.set(basDd, map);
   return map;
 }
 
@@ -156,7 +194,7 @@ export async function fetchKrxCloseOn(code: string, dateYmd: string): Promise<nu
       d.getDate(),
     ).padStart(2, "0")}`;
     {
-      // 조회 실패는 던진다 — 자료 없음(휴장)만 다음 날짜로
+      // 조회 실패는 던진다 — 자료 없음(휴장·미게시)만 다음 날짜로. 지난 거래일의 빈 응답은 getDay 가 실패로 던진다(krxEmptyKind)
       const day = await getDay(basDd);
       const r = day.get(short);
       const c = r ? num(r.TDD_CLSPRC) : null;
@@ -200,7 +238,7 @@ export async function fetchKrxCapsOn(
       d.getDate(),
     ).padStart(2, "0")}`;
     {
-      // 조회 실패는 던진다 — 자료 없음(휴장·상장 전)만 다음 날짜로(재감사 14차 ③)
+      // 조회 실패는 던진다 — 자료 없음(휴장·미게시·상장 전)만 다음 날짜로(재감사 14차 ③). 지난 거래일의 빈 응답은 getDay 가 실패로 던진다
       const day = await getDay(basDd);
       const common = day.get(short);
       if (common) {

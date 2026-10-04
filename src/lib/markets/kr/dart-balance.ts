@@ -240,7 +240,7 @@ export function buildKrBalance(facts: KrFacts, lease?: KrLeaseInput | null): Fin
   // 다른 해엔 차입금 줄이 있는 회사의 무차입 연도도(060370 2022 — 하이라이트 0, 이 주석만 빈칸이었다, 2026-10-02).
   // 본표에 리스부채 줄이 없는 기간은 주석 리스부채(오너 결정 2026-10-05 — krDebtByPeriod)
   const { debt, notes: leaseNotes } = krDebtByPeriod(facts, lease);
-  const cashLike = sumLinesByPeriod(facts, bridge.cash);
+  const cashLike = sumLinesByPeriod(facts, bridge.cash, bridge.cashIn);
   const netDebt = blank();
   for (const l of labels)
     if (debt[l] != null || cashLike[l] != null) netDebt[l] = (debt[l] ?? 0) - (cashLike[l] ?? 0);

@@ -787,7 +787,7 @@ async function ttmDa(corp, byYear) {
 //    ② 아니면 사업보고서 XBRL 주석의 리스부채 장부금액 — 태그 꼴 후보(LeaseLiabilities 무차원·보고금액 멤버, 유동+비유동, 부채종류 리스 멤버,
 //       재무활동부채 조정표 리스 멤버) 중 둘 이상이 정확히 같은 값(동수면 보고금액 묶음) → added
 //    ③ 둘 다 못 정하면 unknown(앱 EV 공란). 금액은 그해 보고서 당기말(CFY), 없으면 이듬해 보고서 전기말(PFY) — 2021 이전 보고서 XBRL 은
-//       주석 태깅이 없다(실측). 분기 보고서 XBRL 도 주석 미태깅이라 분기말은 회계정책 판정만(leasePolicyLatest)
+//       주석 태깅이 없다(실측). 분기말은 회계정책 판정(leasePolicyLatest), 포함이 아니면 분기 보고서 원문 주석 표 칸(leaseQuarter — leaseQuarterOf)
 async function fnlttBs(corp, year) {
   for (const fs of ["CFS", "OFS"]) {
     await new Promise((r) => setTimeout(r, 400));
@@ -855,7 +855,7 @@ async function leasePolicyOf(rcpNo) {
   if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
   const files = unzipSync(buf);
   const Q = "['‘’\"“”]?";
-  const re = new RegExp(`리스부채[를는은]?[^.]{0,40}?${Q}([가-힣]*(?:차입금|장기부채|사채))${Q}(?:\\s*(?:또는|및|과|와|,)\\s*${Q}([가-힣]*(?:차입금|장기부채|사채))${Q})?\\s*(?:에|으로|로)\\s*(?:포함하여\\s*)?(?:분류|표시|포함)`);
+  const re = new RegExp(`리스부채[를는은]?[^.]{0,40}?${Q}([가-힣]*(?:차입금|차입부채|장기부채|사채))${Q}(?:\\s*(?:또는|및|과|와|,)\\s*${Q}([가-힣]*(?:차입금|차입부채|장기부채|사채))${Q})?\\s*(?:에|으로|로)\\s*(?:포함하여\\s*)?(?:분류|표시|포함)`);
   const names = new Set();
   for (const b of Object.values(files)) {
     let x = new TextDecoder("utf-8").decode(b);
@@ -916,7 +916,7 @@ async function leaseNotes(corp, latest) {
     }
     leaseNote[y] = note ?? { status: "unknown", amount: null, how: tried.join(" / ") || "사업보고서 없음" };
   }
-  // 분기말 — 최근 사업보고서 회계정책만(분기 보고서 XBRL 은 주석 미태깅). 본표에 리스 줄이 있으면 필요 없음
+  // 분기말 회계정책 — 최근 사업보고서(포함이 아니면 아래 leaseQuarterOf 가 분기 보고서 원문 주석으로). 본표에 리스 줄이 있으면 필요 없음
   let leasePolicyLatest = null;
   const latestRcp = await rcpOf(latest);
   if (latestRcp && faceLease[latest] === false) {
@@ -927,7 +927,132 @@ async function leaseNotes(corp, latest) {
       ? { status: "included", amount: null, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${latestRcp})` }
       : { status: "unknown", amount: null, how: `최근 사업보고서 ${latestRcp} 회계정책에 차입금 포함 문장 없음` };
   }
-  return { leaseNote, leasePolicyLatest };
+  // 분기말 — 회계정책이 포함이 아니면 최신 분기·반기 보고서 원문 주석(leaseQuarterOf)
+  const leaseQuarter = leasePolicyLatest?.status === "unknown" ? await leaseQuarterOf(corp, latest, leaseNote[latest], sepOf[latest]) : null;
+  return { leaseNote, leasePolicyLatest, leaseQuarter };
+}
+// ── 분기말 리스부채(오너 결정 2026-10-05) — 최신 분기·반기 보고서 원문 주석. 분기 보고서 XBRL(fnlttXbrl)엔 주석 사실이 없지만 원문(document.xml)
+//    주석 표 칸에 태그가 달려 있다(<TE ACODE="ifrs-full_LeaseLiabilities" ACONTEXT="CFY2026eHYA_…" ADECIMAL="-3">172,075,062</TE>, 표 단위 "천원").
+//    컨텍스트 접두어: 분기말 CFY{Y}e{FQ|HY|TQ}A, 전기말(직전 사업연도말) PFY{Y-1}e{FQ|HY|TQ}. 같은 표 칸 꼴(개념 + 차원) 하나가 전기말 열과 분기말 열을 다
+//    갖고 있으므로, **전기말 값이 최근 사업연도 주석 리스부채(leaseNote, 이미 쓰는 값)와 정확히 같은 꼴만 믿고 그 꼴의 분기말 값을 쓴다**(확인 사슬 ①).
+//    그런 꼴이 없으면 같은 해 앞 분기 보고서에서 ①로 확인된 꼴과 같은 꼴(②). 꼴 순위: ① 리스부채 개념(LeaseLiabilities, 차원 무관) ② 금융부채 범주
+//    표의 리스부채 멤버 ③ 재무활동 부채 조정표의 리스부채 멤버 ④ 유동 + 비유동 리스부채(같은 차원) — 확인된 꼴 중 가장 앞 순위를 쓰고, 같은 순위
+//    안에서 분기말 값이 다르면 정하지 않는다(빈칸 + 기록). 합(④)보다 한 칸 값(①~③)을 앞에 두는 이유: 반올림된 두 칸의 합은 한 칸 합계와 1~2단위
+//    다를 수 있다(006400 2026 반기 172,075,062 vs 54,217,278 + 117,857,786 = 172,075,064 천원).
+const QP = { 1: "FQ", 2: "HY", 3: "TQ" };
+/** 원문 주석 표의 태그 달린 칸 — [{ c, ctx, v }] (v = 표 단위를 곱한 원 단위 값). ADECIMAL 과 표 단위가 어긋나는 칸은 버린다 */
+function taggedCells(xml) {
+  const out = [];
+  for (const m of xml.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
+    const inTab = clean(m[0].slice(0, 2000)).match(UNIT_RE)?.[1];
+    const before = [...clean(xml.slice(Math.max(0, m.index - 1500), m.index)).matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
+    const u = UNIT[inTab ?? before];
+    for (const c of m[0].matchAll(/<TE\b([^>]*)>([^<]*)<\/TE>/g)) {
+      const code = /ACODE="([^"]+)"/.exec(c[1])?.[1], ctx = /ACONTEXT="([^"]+)"/.exec(c[1])?.[1], dec = /ADECIMAL="(-?\d+)"/.exec(c[1])?.[1];
+      if (!code || !ctx || !/Lease|LiabilitiesArisingFromFinancingActivities|FinancialLiabilities/.test(code + ctx)) continue;
+      const n = numOf(c[2].replace(/　/g, "").trim());
+      if (n == null || !u) continue;
+      if (dec != null && n !== 0 && 10 ** -Number(dec) !== u) continue;
+      out.push({ c: code, ctx, v: n * u });
+    }
+  }
+  return out;
+}
+/** 칸들 → 꼴별 { tier, cur, pfy } (접수본 하나). 같은 꼴에 값이 둘 이상이면 그 열은 null(모호) */
+function leaseForms(cells, Y, P, sep) {
+  const cur = `CFY${Y}e${P}A`, pfy = `PFY${Y - 1}e${P}`;
+  const which = (ctx) => (ctx === cur || ctx.startsWith(cur + "_") ? "cur" : ctx === pfy || ctx.startsWith(pfy + "_") ? "pfy" : null);
+  const forms = new Map();
+  const put = (key, tier, col, v) => {
+    const f = forms.get(key) ?? forms.set(key, { tier, cur: new Set(), pfy: new Set() }).get(key);
+    f[col].add(v);
+  };
+  const parts = new Map(); // 유동·비유동 짝
+  for (const { c, ctx, v } of cells) {
+    const col = which(ctx);
+    if (!col) continue;
+    let rest = ctx.slice((col === "cur" ? cur : pfy).length);
+    const hasAxis = /ConsolidatedAndSeparateFinancialStatementsAxis/.test(rest);
+    if (sep ? /ConsolidatedMember/.test(rest) : /SeparateMember/.test(rest) || (hasAxis && !/ConsolidatedMember/.test(rest))) continue;
+    rest = rest.replace(/_?ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_(Consolidated|Separate)Member/, "").replace(/^_/, "");
+    // 만기분석·할인 전 총액·현재가치할인 칸은 장부금액이 아니다
+    if (/MaturityAxis|GrossCarryingAmountMember|PresentValueDiscountMember|AccumulatedDepreciation\w*Member|TypesOfRisksAxis/.test(rest)) continue;
+    if (c === "ifrs-full_LeaseLiabilities") put(`리스부채[${rest}]`, 1, col, v);
+    else if (/^ifrs-full_(FinancialLiabilities|OtherFinancialLiabilities)$/.test(c) && /_ifrs-full_LeaseLiabilitiesMember$/.test(rest)) put(`금융부채 범주[${rest}]`, 2, col, v);
+    else if (c === "ifrs-full_LiabilitiesArisingFromFinancingActivities" && rest === "ifrs-full_LiabilitiesArisingFromFinancingActivitiesAxis_ifrs-full_LeaseLiabilitiesMember") put("재무활동부채 조정표 리스부채", 3, col, v);
+    else if (/^ifrs-full_(Current|Noncurrent)LeaseLiabilities$/.test(c)) {
+      const k = `${col}|${rest}`;
+      const p = parts.get(k) ?? parts.set(k, { cur: new Set(), non: new Set() }).get(k);
+      p[/Noncurrent/.test(c) ? "non" : "cur"].add(v);
+    }
+  }
+  for (const [k, p] of parts) {
+    const i = k.indexOf("|");
+    if (p.cur.size === 1 && p.non.size === 1) put(`유동+비유동[${k.slice(i + 1)}]`, 4, k.slice(0, i), [...p.cur][0] + [...p.non][0]);
+  }
+  const one = (set) => (set.size === 1 ? [...set][0] : null);
+  return new Map([...forms].map(([k, f]) => [k, { tier: f.tier, cur: one(f.cur), pfy: one(f.pfy) }]));
+}
+/** 원문 전체(파일 이어 붙임). 원문 파일 없는 판본(DART 014)은 "" */
+async function interimDocXml(rcpNo) {
+  await new Promise((r) => setTimeout(r, 1000));
+  const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
+  if (!res.ok) throw new Error(`document ${res.status}`);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const head = strFromU8(buf.slice(0, 300));
+  if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return "";
+  const files = unzipSync(buf);
+  let all = "";
+  for (const b of Object.values(files)) {
+    let x = new TextDecoder("utf-8").decode(b);
+    if ((x.match(/�/g) ?? []).length > 50) x = new TextDecoder("euc-kr").decode(b);
+    all += x;
+  }
+  return all;
+}
+/** 분기 재무상태표 본표에 리스부채 줄이 있는가(null = 재무제표 없음) */
+async function interimFaceLease(corp, year, code, sep) {
+  await new Promise((r) => setTimeout(r, 400));
+  const j = await jget(`${B}/fnlttSinglAcntAll.json?crtfc_key=${DART}&corp_code=${corp}&bsns_year=${year}&reprt_code=${code}&fs_div=${sep ? "OFS" : "CFS"}`);
+  if (j.status === "013") return null;
+  if (j.status !== "000") throw new Error(`fnltt ${year} ${code} ${j.status} ${j.message ?? ""}`);
+  return (j.list ?? []).some((r) => r.sj_div === "BS" && isLeaseRow(r) && amt(r.thstrm_amount) != null);
+}
+async function leaseQuarterOf(corp, fy, annual, sep) {
+  const it = await latestInterim(corp, fy);
+  if (!it) return null; // 최신 정기보고서가 사업보고서 — LTM = 사업연도
+  const label = `${it.year} Q${it.q}`;
+  if (await interimFaceLease(corp, it.year, it.code, sep)) return null; // 분기 본표에 리스부채 줄 — 본표가 기준
+  if (annual?.status !== "added" || annual.amount == null)
+    return { label, status: "unknown", amount: null, how: `FY${fy} 주석 리스부채가 확정되지 않아(${annual?.status ?? "없음"}) 분기 보고서 전기말 열을 확인할 수 없음` };
+  // 확인된 꼴 — 같은 해 앞 분기 보고서부터(②용). 접수본은 최신 판본 먼저
+  const verified = new Map(); // 꼴 → 확인 근거
+  const tried = [];
+  const months = { 1: "03", 2: "06", 3: "09" };
+  for (let q = 1; q <= it.q; q += 1) {
+    const rep = q === it.q ? it : await latestInterim(corp, fy, months[q]);
+    if (!rep) continue;
+    for (const rc of [...rep.rcps].reverse()) {
+      const forms = leaseForms(taggedCells(await interimDocXml(rc)), rep.year, QP[q], sep);
+      for (const [k, f] of forms) if (f.pfy === annual.amount && !verified.has(k)) verified.set(k, `${rep.year} ${rep.label}보고서(${rc}) 전기말 열 = FY${fy} 주석 ${annual.amount}`);
+      if (q !== it.q) continue;
+      const ok = [...forms].filter(([k, f]) => verified.has(k) && f.cur != null && f.cur > 0);
+      if (!ok.length) {
+        tried.push(`${rc}: 확인된 꼴 없음(${[...forms].map(([k, f]) => `${k} 전기말 ${f.pfy ?? "-"}`).join(", ") || "리스부채 태그 칸 없음"})`);
+        continue;
+      }
+      const best = Math.min(...ok.map(([, f]) => f.tier));
+      const top = ok.filter(([, f]) => f.tier === best);
+      const vals = [...new Set(top.map(([, f]) => f.cur))];
+      if (vals.length !== 1) {
+        tried.push(`${rc}: 같은 순위 꼴의 분기말 값 불일치 ${top.map(([k, f]) => `${k}=${f.cur}`).join(", ")}`);
+        continue;
+      }
+      const [k] = top[0];
+      return { label, status: "added", amount: vals[0], how: `${it.year} ${it.label}보고서(${rc}) 주석 ${k} 분기말 ${vals[0]} — 꼴 확인: ${verified.get(k)}` };
+    }
+  }
+  return { label, status: "unknown", amount: null, how: tried.join(" / ") || `${it.year} ${it.label}보고서 없음` };
 }
 async function latestFy(corp) {
   const now = new Date();
@@ -987,9 +1112,10 @@ for (const sym of symbols) {
     if (ly) lease = await leaseNotes(corp, ly);
     if (lease) for (const [y, n] of Object.entries(lease.leaseNote)) console.log(`    리스 ${y}: ${n.status}${n.amount != null ? ` ${t(n.amount)}` : ""} — ${n.how}`);
     if (lease?.leasePolicyLatest) console.log(`    리스 분기말: ${lease.leasePolicyLatest.status} — ${lease.leasePolicyLatest.how}`);
+    if (lease?.leaseQuarter) console.log(`    리스 ${lease.leaseQuarter.label}: ${lease.leaseQuarter.status}${lease.leaseQuarter.amount != null ? ` ${t(lease.leaseQuarter.amount)}` : ""} — ${lease.leaseQuarter.how}`);
   } catch (e) { console.log(`    (리스부채 주석 실패: ${e.message})`); }
   if (LEASE_ONLY) {
-    if (lease && !CHECK) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseAt: new Date().toISOString() } });
+    if (lease && !CHECK) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, leaseAt: new Date().toISOString() } });
     continue;
   }
   let byYear = null;
@@ -999,7 +1125,7 @@ for (const sym of symbols) {
   if (ttm) console.log(`    TTM ${ttm.ttmLabel} = ${t(ttm.ttmDepreciation)} (${ttm.ttmSrc})`);
   if (!CHECK) await db.collection(COLL).replaceOne(
     { _id: sym },
-    { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest } : {}), updatedAt: new Date().toISOString() },
+    { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter } : {}), updatedAt: new Date().toISOString() },
     { upsert: true },
   );
   const yrs = Object.keys(byYear).map(Number).sort((a, b) => b - a);
