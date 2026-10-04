@@ -260,7 +260,8 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           // 회사 6-K 분기 재무제표(연결재무보고서 HTML) — 야후 정의가 SEC 와 다른 항목을 회사 줄로(edgar-6k.ts). 없거나 못 읽으면 null(야후 경로 그대로)
           const per = yahooLtmPeriods(withShares, yq);
           // 6-K 조회 실패는 경고로 남긴다(재감사 12차 ③ — null 로 삼키면 6-K 값이 조용히 빈칸·야후 근사로 바뀌었다). 경고가 있으면 짧은 캐시
-          const sixKFail = (e: unknown) => { extraWarnings.push(`회사 6-K 분기 재무제표 조회 실패 — ${fetchFailureReason(e) ?? (e instanceof Error ? e.message : String(e))}`.slice(0, 240)); return null; };
+          let sixKFailed = false;
+          const sixKFail = (e: unknown) => { sixKFailed = true; extraWarnings.push(`회사 6-K 분기 재무제표 조회 실패 — ${fetchFailureReason(e) ?? (e instanceof Error ? e.message : String(e))}`.slice(0, 240)); return null; };
           const sixK = per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(sixKFail) : null;
           // 이번 보고서에 1년 전 분기말 열이 없으면(SPOT) 1년 전 같은 분기 6-K — 평균 잔액(ROIC 등)의 기초 값
           const shift12 = (d: string) => { const x = new Date(`${d}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); };
@@ -269,7 +270,7 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
             : null;
           const r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev);
           // 6-K 경로를 시도했는데 보고서를 못 찾음(조회 실패 아님) — 검증 전용 사유
-          if (r.result.source === "yahoo" && !sixK) r.result.sixKMiss = per ? `분기말 ${per.last} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음` : "LTM 기간 판정 불가(6-K 조회 안 함)";
+          if (r.result.source === "yahoo" && !sixK) r.result.sixKMiss = sixKFailed ? "6-K 조회 실패(fetchWarnings 참조)" : per ? `분기말 ${per.last} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음` : "LTM 기간 판정 불가(6-K 조회 안 함)";
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else if (!fx) {
           // H.10 조회 실패 — 사업연도 값을 LTM 으로 대체하지 않고 LTM 열 공란(미고시와 같은 처리)
