@@ -169,7 +169,9 @@ export async function leaseNoteFor(reports, basis, faceDebtNamesOf) {
  */
 export function quarterLeaseFromCells(reports, Y, latestQ, annualAmount, basis) {
   const P = { 1: "FQ", 2: "HY", 3: "TQ" };
-  const SKIP = /MaturityAxis|GrossCarryingAmountMember|PresentValueDiscountMember|AccumulatedDepreciation\w*Member|TypesOfRisksAxis/;
+  // 장부금액이 아닌 칸 — 축 이름(만기·위험 종류) 또는 정확한 멤버 이름(총액·현재가치할인·상각누계)
+  const NOT_CARRYING = ["ifrs-full_GrossCarryingAmountMember", "dart_PresentValueDiscountMember", "ifrs-full_PresentValueDiscountMember", "ifrs-full_AccumulatedDepreciationAmortisationAndImpairmentMember", "ifrs-full_AccumulatedImpairmentMember"];
+  const SKIP = { test: (dims) => /MaturityAxis|TypesOfRisksAxis/.test(dims) || NOT_CARRYING.some((m) => `_${dims}_`.includes(`_${m}_`)) };
   const kindOf = (concept, dims) => {
     if (concept === "ifrs-full_LeaseLiabilities") return 1;
     if ((concept === "ifrs-full_FinancialLiabilities" || concept === "ifrs-full_OtherFinancialLiabilities") && dims.endsWith("_ifrs-full_LeaseLiabilitiesMember")) return 2;

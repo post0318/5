@@ -975,8 +975,9 @@ function leaseForms(cells, Y, P, sep) {
     const hasAxis = /ConsolidatedAndSeparateFinancialStatementsAxis/.test(rest);
     if (sep ? /ConsolidatedMember/.test(rest) : /SeparateMember/.test(rest) || (hasAxis && !/ConsolidatedMember/.test(rest))) continue;
     rest = rest.replace(/_?ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_(Consolidated|Separate)Member/, "").replace(/^_/, "");
-    // 만기분석·할인 전 총액·현재가치할인 칸은 장부금액이 아니다
-    if (/MaturityAxis|GrossCarryingAmountMember|PresentValueDiscountMember|AccumulatedDepreciation\w*Member|TypesOfRisksAxis/.test(rest)) continue;
+    // 만기분석·할인 전 총액·현재가치할인·상각누계 칸은 장부금액이 아니다(멤버 이름 그대로 — "…AccumulatedDepreciation…GrossCarryingAmountAxis_dart_
+    // ReportedAmountMember"(보고금액, 장부금액 표)를 \w* 로 넘겨 잡아 001440 리스부채 칸을 통째로 버렸었다)
+    if (/MaturityAxis|TypesOfRisksAxis|_(?:ifrs-full|dart)_(?:GrossCarryingAmount|PresentValueDiscount|AccumulatedDepreciationAmortisationAndImpairment|AccumulatedImpairment)Member(?:_|$)/.test(`_${rest}`)) continue;
     if (c === "ifrs-full_LeaseLiabilities") put(`리스부채[${rest}]`, 1, col, v);
     else if (/^ifrs-full_(FinancialLiabilities|OtherFinancialLiabilities)$/.test(c) && /_ifrs-full_LeaseLiabilitiesMember$/.test(rest)) put(`금융부채 범주[${rest}]`, 2, col, v);
     else if (c === "ifrs-full_LiabilitiesArisingFromFinancingActivities" && rest === "ifrs-full_LiabilitiesArisingFromFinancingActivitiesAxis_ifrs-full_LeaseLiabilitiesMember") put("재무활동부채 조정표 리스부채", 3, col, v);
