@@ -104,6 +104,13 @@ async function resolveCik(symbol: string): Promise<{ cik: string; row: TickerRow
   return { cik: cik10(row.cik_str), row };
 }
 
+/** EDGAR 티커 목록 전체(대문자 티커 → 행). 유니버스 일괄 업로드가 정확 일치 판정에 쓴다 */
+export async function getEdgarTickerMap(): Promise<
+  ReadonlyMap<string, { ticker: string; title: string }>
+> {
+  return loadTickerMap();
+}
+
 /** 티커 또는 회사명으로 EDGAR 상장사 검색 */
 export async function searchEdgarTickers(
   query: string,

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Pencil, Trash2, Upload, X } from "lucide-react";
+import { Check, Pencil, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/query";
 import { MARKETS, type MarketId } from "@/lib/markets/types";
@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/dialog";
 import { SymbolSearch, type SymbolHit } from "@/components/symbol-search";
 import { useAppAuth } from "@/components/auth/app-auth";
+import { BulkUpload } from "@/components/universe-bulk-upload";
 
 interface Item {
   id: string;
@@ -38,12 +39,6 @@ interface Item {
   groupName: string | null;
   tags: string[];
   active: boolean;
-}
-
-interface BulkResult {
-  preview: { market: MarketId; symbol: string; name?: string | null }[];
-  errors: { line: number; raw: string; reason: string }[];
-  inserted: number;
 }
 
 export function UniverseManager() {
@@ -76,7 +71,7 @@ export function UniverseManager() {
           <SingleForm onDone={invalidate} />
         </TabsContent>
         <TabsContent value="bulk" className="pt-4">
-          <BulkForm onDone={invalidate} />
+          <BulkUpload existing={list.data?.items ?? []} onDone={invalidate} />
         </TabsContent>
         <TabsContent value="copy" className="pt-4">
           <CopyFromAccount active={tab === "copy"} onCopied={invalidate} />
@@ -321,107 +316,6 @@ function SingleForm({ onDone }: { onDone: () => void }) {
           >
             유니버스에 추가
           </Button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function BulkForm({ onDone }: { onDone: () => void }) {
-  const [text, setText] = useState("");
-  const [defaultMarket, setDefaultMarket] = useState<MarketId>("kr");
-
-  const preview = useMutation({
-    mutationFn: () =>
-      apiFetch<BulkResult>("/api/universe/bulk", {
-        method: "POST",
-        body: JSON.stringify({ text, defaultMarket, dryRun: true }),
-      }),
-  });
-  const commit = useMutation({
-    mutationFn: () =>
-      apiFetch<BulkResult>("/api/universe/bulk", {
-        method: "POST",
-        body: JSON.stringify({ text, defaultMarket }),
-      }),
-    onSuccess: (res) => {
-      toast.success(`${res.inserted}건 등록됨`);
-      setText("");
-      preview.reset();
-      onDone();
-    },
-  });
-
-  return (
-    <div className="space-y-3">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">붙여넣기 형식</CardTitle>
-        </CardHeader>
-        <CardContent className="text-muted-foreground space-y-1 text-xs">
-          <p>
-            한 줄에 하나씩. <code>market,symbol,이름,그룹</code> 또는 기본 시장 지정 시{" "}
-            <code>symbol</code>만.
-          </p>
-          <p>예: <code>us,AAPL,Apple,코어</code> / <code>005930</code> / <code>jp,7203</code></p>
-        </CardContent>
-      </Card>
-
-      <div className="flex items-center gap-3">
-        <Label className="text-sm">기본 시장</Label>
-        <Select value={defaultMarket} onValueChange={(v) => setDefaultMarket(v as MarketId)}>
-          <SelectTrigger className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {MARKETS.map((m) => (
-              <SelectItem key={m.id} value={m.id}>
-                {m.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <textarea
-        className="border-input bg-transparent focus-visible:ring-ring/50 min-h-[160px] w-full rounded-md border px-3 py-2 font-mono text-sm focus-visible:ring-[3px] focus-visible:outline-none"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder={"us,AAPL,Apple,코어\n005930,삼성전자\njp,7203"}
-      />
-
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          onClick={() => preview.mutate()}
-          disabled={!text.trim() || preview.isPending}
-        >
-          미리보기
-        </Button>
-        <Button
-          onClick={() => commit.mutate()}
-          disabled={!text.trim() || commit.isPending}
-        >
-          <Upload className="size-4" />
-          등록
-        </Button>
-      </div>
-
-      {preview.data && (
-        <div className="space-y-2 text-sm">
-          <p className="text-muted-foreground">
-            유효 {preview.data.preview.length}건
-            {preview.data.errors.length > 0 && `, 오류 ${preview.data.errors.length}건`}
-          </p>
-          {preview.data.errors.length > 0 && (
-            <ul className="text-destructive space-y-0.5 text-xs">
-              {preview.data.errors.map((e) => (
-                <li key={e.line}>
-                  {e.line}행: {e.reason} — <code>{e.raw}</code>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       )}
     </div>

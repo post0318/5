@@ -4,7 +4,7 @@ import { z } from "zod";
 import { universeCol } from "@/lib/db";
 import type { UniverseItem, UniverseItemDoc } from "@/lib/db/schema";
 import { getAdapter } from "@/lib/markets/registry";
-import { isMarketId, type MarketId } from "@/lib/markets/types";
+import type { MarketId } from "@/lib/markets/types";
 
 function toItem(doc: WithId<UniverseItemDoc>): UniverseItem {
   const { _id, ownerId, ...rest } = doc;
@@ -137,81 +137,63 @@ export async function updateUniverseItem(
   return doc ? toItem(doc) : null;
 }
 
+/** 일괄 업로드 저장 단위 — 이름은 해석 단계가 찾은 공식 종목명 */
+export interface BulkSaveItem {
+  market: MarketId;
+  symbol: string;
+  name: string;
+  yahooSymbol?: string | null;
+  groupName?: string | null;
+  tags?: string[];
+  note?: string | null;
+}
+
 /**
- * 일괄 업로드 파서 (prd.md §5.4)
- * CSV / 붙여넣기: 한 줄에 `market,symbol[,name[,group]]` 또는 `symbol` (단일 시장 지정 시)
+ * 일괄 업로드 저장 (오너 지시 2026-10-05).
+ * 개별 등록(upsertUniverseItem)과 달리 이미 있는 종목의 그룹·태그·메모·활성
+ * 상태·Yahoo 심볼은 **입력에 값이 있을 때만** 바꾼다 — 비워 둔 칸으로 내가 정리해
+ * 둔 값을 지우지 않게. 이름은 새 종목이면 공식 종목명, 이미 있으면 비어 있을 때만
+ * 채운다(목록에서 직접 고친 이름은 그대로).
  */
-export interface BulkParseResult {
-  ok: UniverseInput[];
-  errors: { line: number; raw: string; reason: string }[];
-}
+export async function bulkUpsertResolved(
+  ownerId: string,
+  items: BulkSaveItem[],
+): Promise<{ inserted: number; updated: number }> {
+  const col = await universeCol();
+  let inserted = 0;
+  let updated = 0;
+  for (const it of items) {
+    const now = new Date().toISOString();
+    const symbol = getAdapter(it.market).normalizeSymbol(it.symbol);
+    const set: Record<string, unknown> = { updatedAt: now };
+    const onInsert: Record<string, unknown> = {
+      ownerId,
+      name: it.name,
+      active: true,
+      createdAt: now,
+    };
+    const put = (field: string, value: unknown, empty: unknown) => {
+      if (value != null && value !== "" && !(Array.isArray(value) && value.length === 0)) set[field] = value;
+      else onInsert[field] = empty;
+    };
+    put("yahooSymbol", it.yahooSymbol?.trim() || null, null);
+    put("groupName", it.groupName?.trim() || null, null);
+    put("tags", it.tags ?? [], []);
+    put("note", it.note?.trim() || null, null);
 
-export function parseBulk(
-  text: string,
-  opts: { defaultMarket?: MarketId } = {},
-): BulkParseResult {
-  const ok: UniverseInput[] = [];
-  const errors: BulkParseResult["errors"] = [];
-  const lines = text.split(/\r?\n/);
-
-  lines.forEach((raw, i) => {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) return;
-    // 헤더 행 스킵
-    if (/^(market|시장)[,\t]/i.test(line)) return;
-
-    const parts = line.split(/[,\t;]/).map((p) => p.trim()).filter(Boolean);
-    let market: string | undefined;
-    let symbol: string | undefined;
-    let name: string | undefined;
-    let groupName: string | undefined;
-
-    if (parts.length === 1 && opts.defaultMarket) {
-      market = opts.defaultMarket;
-      symbol = parts[0];
-    } else if (parts.length >= 2 && isMarketId(parts[0].toLowerCase())) {
-      [market, symbol, name, groupName] = [
-        parts[0].toLowerCase(),
-        parts[1],
-        parts[2],
-        parts[3],
-      ];
-    } else if (parts.length >= 1 && opts.defaultMarket) {
-      market = opts.defaultMarket;
-      [symbol, name, groupName] = [parts[0], parts[1], parts[2]];
+    const filter = { ownerId, market: it.market, symbol };
+    const res = await col.updateOne(filter, { $set: set, $setOnInsert: onInsert }, { upsert: true });
+    if (res.upsertedCount > 0) {
+      inserted += 1;
+    } else {
+      updated += 1;
+      await col.updateOne(
+        { ...filter, $or: [{ name: null }, { name: "" }] },
+        { $set: { name: it.name } },
+      );
     }
-
-    if (!market || !isMarketId(market)) {
-      errors.push({ line: i + 1, raw: line, reason: "시장(kr/us/jp)을 판별할 수 없음" });
-      return;
-    }
-    if (!symbol) {
-      errors.push({ line: i + 1, raw: line, reason: "종목코드 없음" });
-      return;
-    }
-    const parsed = universeInputSchema.safeParse({
-      market,
-      symbol,
-      name: name || undefined,
-      groupName: groupName || undefined,
-    });
-    if (!parsed.success) {
-      errors.push({ line: i + 1, raw: line, reason: parsed.error.issues[0]?.message ?? "형식 오류" });
-      return;
-    }
-    ok.push(normalize(parsed.data));
-  });
-
-  return { ok, errors };
-}
-
-export async function bulkUpsert(ownerId: string, items: UniverseInput[]): Promise<number> {
-  let count = 0;
-  for (const item of items) {
-    await upsertUniverseItem(ownerId, item);
-    count++;
   }
-  return count;
+  return { inserted, updated };
 }
 
 /**
