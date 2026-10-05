@@ -6,6 +6,9 @@
  * 공유해도 된다. 검증기 캐시 scripts/verify-kr/cache.mjs 만 독립 구현):
  *  - <DART_CACHE_DIR>/<종류>/<요청 열쇠>/<판본>.(json|bin), 요청 하나에 판본 파일 하나, 새 판본을 쓰면 옛 판본 즉시 삭제, 읽을 때 파일 시각 갱신,
  *    프로세스당 1회 정리(90일 미사용 삭제, DART_CACHE_MAX_GB 기본 2 초과분 오래 안 쓴 것부터)
+ *  - 쓰기는 임시 이름(.tmp)에 쓴 뒤 rename(원자적) — 1호기에서 앱과 적재 배치가 같은 폴더를 동시에 쓰므로 잘린 파일을 읽지 않게. 읽은 파일이 깨졌으면
+ *    (JSON 파싱 실패·bin 이 zip(PK) 아님·100B 미만) 미스로 보고 지운 뒤 다시 받는다. 정리는 .tmp 를 건너뛰고 1시간 넘은 .tmp 는 지운다, 도는 중
+ *    사라진 파일(ENOENT)은 건너뛴다(앱 dart-cache.ts 와 같은 수정, 2026-10-05)
  *  - fnlttSinglAcntAll(종류 fnltt, 열쇠 corp_사업연도_보고서코드_연결별도): 판본 = 그 보고서 최신 접수번호(정기공시 목록), 목록에 없으면 "none".
  *    12월 결산이 아닌 회사는 디스크 캐시 안 씀. 상태 000·013 만 저장
  *  - 접수번호로 받는 원본(fnlttXbrl → 종류 xbrl, document.xml → 종류 doc): 판본 = 접수번호(바뀌지 않음). zip(PK) 만 저장(014 "파일 없음"은 저장 안 함)
@@ -14,7 +17,7 @@
  * DART_CACHE_DIR 가 없으면 디스크 캐시 없이 받는다(목록 한 번 받기는 그대로).
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const IDLE_MS = 90 * 864e5;
@@ -46,8 +49,10 @@ export function makeDartDisk({ key, root, maxGb = 2, take, check }) {
       try { names = await readdir(d); } catch (e) { if (e?.code === "ENOENT") return; throw e; }
       for (const n of names) {
         const p = path.join(d, n);
-        const s = await stat(p);
+        let s;
+        try { s = await stat(p); } catch (e) { if (e?.code === "ENOENT") continue; throw e; } // 다른 프로세스가 방금 지운 파일
         if (s.isDirectory()) await walk(p);
+        else if (n.endsWith(".tmp")) { if (Date.now() - s.mtimeMs > 3600e3) { await rm(p, { force: true }); stats.deleted++; } } // 쓰는 중인 임시 파일은 건너뜀
         else files.push({ p, size: s.size, t: s.mtimeMs });
       }
     };
@@ -80,9 +85,11 @@ export function makeDartDisk({ key, root, maxGb = 2, take, check }) {
   async function writeVer(dir, file, data) {
     try {
       await mkdir(dir, { recursive: true });
-      await writeFile(path.join(dir, file), data);
+      const tmp = path.join(dir, `${file}.${process.pid}.${Date.now()}.tmp`);
+      await writeFile(tmp, data);
+      await rename(tmp, path.join(dir, file));
       stats.write++;
-      for (const n of await readdir(dir)) if (n !== file) { await rm(path.join(dir, n), { force: true }); stats.deleted++; }
+      for (const n of await readdir(dir)) if (n !== file && !n.endsWith(".tmp")) { await rm(path.join(dir, n), { force: true }); stats.deleted++; }
     } catch (e) { console.log(`    [dart-cache] 쓰기 실패 ${dir}: ${e.message}`); } // 디스크 쓰기 실패는 받은 자료에 영향 없음(다음에 다시 받는다)
   }
 
@@ -140,7 +147,8 @@ export function makeDartDisk({ key, root, maxGb = 2, take, check }) {
       const rcept = u.searchParams.get("rcept_no");
       const ns = ep === "document.xml" ? "doc" : "xbrl";
       const dir = path.join(root, ns, safe(createHash("sha1").update(rcept).digest("hex").slice(0, 2) + "_" + rcept));
-      const hit = await readVer(dir, `${safe(rcept)}.bin`);
+      let hit = await readVer(dir, `${safe(rcept)}.bin`);
+      if (hit && !(hit.length >= 100 && hit[0] === 0x50 && hit[1] === 0x4b)) { await rm(path.join(dir, `${safe(rcept)}.bin`), { force: true }); stats.deleted++; hit = null; } // 깨진 파일 — 다시 받음
       if (hit) { stats.hit++; return new Response(hit, { status: 200 }); }
       stats.miss++;
       const r = await net(url);
@@ -153,7 +161,8 @@ export function makeDartDisk({ key, root, maxGb = 2, take, check }) {
       if (L.fyMonth === 12) {
         const ver = L.latest.get(`${year}|${reprt}`) ?? "none";
         const dir = path.join(root, "fnltt", safe(`${corp}_${year}_${reprt}_${fs}`));
-        const hit = await readVer(dir, `${safe(ver)}.json`);
+        let hit = await readVer(dir, `${safe(ver)}.json`);
+        if (hit) { try { JSON.parse(hit.toString("utf8")); } catch { await rm(path.join(dir, `${safe(ver)}.json`), { force: true }); stats.deleted++; hit = null; } } // silent-ok: 깨진 JSON 은 미스로 보고 다시 받음
         if (hit) { stats.hit++; return new Response(hit, { status: 200, headers: { "content-type": "application/json" } }); }
         stats.miss++;
         const r = await net(url);
