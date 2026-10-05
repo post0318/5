@@ -3,7 +3,8 @@
 # 1호기가 전용 키(/opt/macro/ops/verifypull_ed25519)로 2호기 /var/lib/macro-verify/latest.json 을 읽는다. 2호기 macrobak 계정의
 # authorized_keys 가 이 키를 `cat /var/lib/macro-verify/latest.json` 강제 명령으로만 허용한다(읽기 전용).
 # 크기·JSON·필수 필드를 검사한 뒤 운영 앱의 기존 수신 라우트(/api/cron/verify-results, 서버 내부 + CRON_SECRET)로 넣는다 — DB 를 직접 쓰지 않는다.
-# 같은 generatedAt 은 다시 넣지 않는다(새로 나온 결과만). 관리자 화면(/admin/verify)이 그 결과·시각·판본을 보인다.
+# 같은 generatedAt 은 다시 넣지 않는다(새로 나온 결과만). results 는 종목별 "마지막 결과"라 예전 것이 섞인다 — 운영에 더 새 결과가
+# 있으면 라우트가 건너뛴다(older). 관리자 화면(/admin/verify)이 그 결과·시각·판본을 보인다.
 # systemd 타이머(macro-verify-pull.timer, 매일 08:30 KST) + 수동: sudo systemctl start macro-verify-pull
 # 성공하면 /var/lib/macro-health/.verify-pull-ok 갱신, 결과 생성 시각은 .verify-pull-generated — healthcheck.sh 가 감시.
 set -euo pipefail
@@ -59,16 +60,17 @@ if [ "$(cat "$STATE/.verify-pull-generated" 2>/dev/null)" = "$GEN" ]; then
   echo "이미 반영한 결과(생성 ${GEN}) — 건너뜀"; touch "$STATE/.verify-pull-ok"; exit 0
 fi
 
-saved=0
+saved=0; older=0
 for f in "$W"/chunk-*.json; do
   code=$(curl -s -o "$W/resp.json" -w "%{http_code}" -m 120 -X POST -H "Authorization: Bearer ${SECRET}" \
     -H "content-type: application/json" --data-binary "@$f" http://127.0.0.1:8080/api/cron/verify-results)
   [ "$code" = 200 ] || { echo "반영 실패 HTTP ${code}: $(head -c 300 "$W/resp.json")" >&2; exit 1; }
-  read -r s rj < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("saved",0), d.get("rejected",0))' "$W/resp.json")
+  read -r s rj ol < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("saved",0), d.get("rejected",0), d.get("older",-1))' "$W/resp.json")
   [ "$rj" = 0 ] || { echo "수신 라우트가 ${rj}건 거부: $(head -c 300 "$W/resp.json")" >&2; exit 1; }
-  saved=$((saved + s))
+  [ "$ol" -ge 0 ] || { echo "운영 앱이 runAt 비교(older)를 모르는 판본 — 배포 후 다시" >&2; exit 1; }
+  saved=$((saved + s)); older=$((older + ol))
 done
-[ "$saved" = "$N" ] || { echo "반영 건수 불일치: ${saved}/${N}" >&2; exit 1; }
+[ $((saved + older)) = "$N" ] || { echo "반영 건수 불일치: 반영 ${saved} + 운영이 더 새것 ${older} ≠ ${N}" >&2; exit 1; }
 echo "$GEN" > "$STATE/.verify-pull-generated"
 touch "$STATE/.verify-pull-ok"
-echo "반영 완료 ${saved}종목"
+echo "반영 완료 ${saved}종목(운영 쪽이 더 새 결과라 건너뜀 ${older})"
