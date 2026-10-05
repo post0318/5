@@ -2143,3 +2143,7 @@ LLM 수치 검증·지수 관행 때문에 이번 통일에서 제외(별도 결
   분리했다. 인사이트(해외 IB) 탭은 미국 등 해외 시장에서만 나온다(`app-shell.tsx` SUBNAV 시장별 필터).
   `/kr/insights` 는 `/kr/unlisted` 로 리다이렉트. 데이터·API(`/api/research/insights`, `INSIGHT_SOURCES`)는
   그대로 — `InsightsBoard market="kr"` 재사용.
+  **미국 비상장은 산업분석에 합침(오너 지시 2026-10-05 — "미국은 비상장리서치를 별도 탭으로 만들 필요 없어 보인다", "국내는 그대로 유지")**:
+  `unlistedInIndustry(market)`(us 만) — `getIndustryResearch` 가 미국 "…비상장리서치" source 를 포함하고 토픽은 "산업분석" 고정, 배지·중복 판정은
+  증권사명(`brokerOfSource`). `/us/unlisted` → `/us/research`, 미국 서브내비의 비상장 탭 제거. 보존기간은 원래대로 90일(일반 정리 — 비상장 source 는
+  예전부터 180일 규칙 대상이 아니었다). 중국(ch) 비상장은 화면 없이 데이터만.
