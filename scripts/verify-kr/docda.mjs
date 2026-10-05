@@ -24,6 +24,11 @@ function kindOf(l) {
   const paren = l.match(/\((.*?)\)/)?.[1] ?? "";
   if (l.replace(/\(.*?\)/g, "") === "감가상각비" && /무형/.test(paren)) return "comb";
   if (/^(감가상각비(및|와|,)무형자산(감가)?상각(비)?|감가상각비및상각비|유·?무형자산상각비|유형및무형자산상각비)$/.test(l)) return "comb";
+  // XBRL 표준 이름 꼴 줄 이름("감가상각비, 유형자산"·"기타 상각비, 영업권 이외의 무형자산" — 051600 2025 성격별 표)
+  if (/^감가상각비,유형자산$/.test(l)) return "dep";
+  if (/^감가상각비,투자부동산$/.test(l)) return "inv";
+  if (/^감가상각비,사용권자산$/.test(l)) return "rou";
+  if (/^(기타)?상각비,영업권이외의무형자산$/.test(l)) return "amo";
   if (/사용권자산/.test(l) && /상각/.test(l)) return "rou";
   if (/투자부동산/.test(l) && /상각/.test(l)) return "inv";
   if (/^무형자산(감가)?상각비$/.test(l)) return "amo";
@@ -59,9 +64,7 @@ function columns(t) {
     }
     cols.push({ period: period ?? t.period ?? null, cum });
   }
-  // 같은 (기간, 누적) 열이 여럿이면 마지막 열만(성격별 표 합계 열)
-  const keep = cols.map((c, j) => !cols.some((d, k) => k > j && d.period === c.period && d.cum === c.cum));
-  return { cols, keep };
+  return { cols };
 }
 
 /**
@@ -72,7 +75,7 @@ export function daCandidates(tables) {
   tables.forEach((t, ti) => {
     const kind = tableKind(t);
     if (!t.unit || (kind !== "nature" && kind !== "cf")) return;
-    const { cols, keep } = columns(t);
+    const { cols } = columns(t);
     const segs = [];
     let cur = null;
     for (const r of t.rows) {
@@ -82,11 +85,12 @@ export function daCandidates(tables) {
       if (!(k in cur)) cur[k] = r.slice(1).map(num);
     }
     segs.forEach((s, si) => {
+      // 같은 (기간, 누적) 열이 여럿이면 그 묶음에 값이 있는 마지막 열만(성격별 표 합계 열, "당기 | 당기 | 전기 | 전기" 두 칸 머리 — 064350 2021)
+      const has = (j) => { const b = s.comb?.[j] ?? s.dep?.[j] ?? null; return b != null && b !== 0; };
       for (let j = 0; j < cols.length; j++) {
-        if (!keep[j]) continue;
+        if (!has(j) || cols.some((d, k) => k > j && has(k) && d.period === cols[j].period && d.cum === cols[j].cum)) continue;
         const g = (k) => s[k]?.[j] ?? null;
         const base = g("comb") ?? g("dep");
-        if (base == null || base === 0) continue;
         const rou = g("rou"), inv = g("inv"), amo = g("comb") != null ? null : g("amo");
         const sig = [g("comb") != null ? "comb" : "dep", rou != null && "rou", inv != null && "inv", amo != null && "amo"].filter(Boolean).join("+");
         const v = base + (rou ?? 0) + (inv ?? 0) + (amo ?? 0);
