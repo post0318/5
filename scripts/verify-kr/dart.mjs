@@ -227,7 +227,7 @@ export async function dartCompany(corp) {
   });
 }
 
-const DOC_DA_VER = "t3";
+const DOC_DA_VER = "t4";
 /**
  * 보고서 원문(사업·분기·반기)의 표 중 감가상각·상각 줄이 있는 표만 — [{ head, unit, scope, section, period, rows: [[셀…]] }].
  *  · head = 표 바로 앞 글자 마지막 300자, unit = 원 단위 배수(표 안 첫 부분 → 없으면 표 앞 1500자의 마지막 "(단위 : …)")
@@ -266,10 +266,11 @@ export async function dartDocDaTables(rcept) {
       let m, prevEnd = 0, section = null;
       while ((m = re.exec(t))) {
         const tab = m[0];
+        // 앞 자료 표(3줄 이상) 뒤부터 이 표까지의 글자 — 제목·단위만 담은 작은 표(DART 는 "당기 (단위 : 천원)"를 따로 작은 표에 넣는다)도 포함
         const between = txt(t.slice(prevEnd, m.index));
-        prevEnd = m.index + tab.length;
-        // 표 사이 글자의 마지막 "번호. 제목"(제목 = 번호 뒤 한글로 시작하는 어절들, 괄호 "(연결)" 포함) — 없으면 앞 표 제목을 잇는다
-        const hs = [...between.matchAll(/(?:^|\s)(\d{1,2})\.\s*([가-힣][가-힣A-Za-z·,\s]{0,40}?(?:\s*\(연결\))?)(?=\s|$)/g)];
+        if ((tab.match(/<TR/gi) ?? []).length >= 3) prevEnd = m.index + tab.length;
+        // 마지막 "번호. 제목"(번호 뒤 한글로 시작하는 30자) — 없으면 앞 표 제목을 잇는다
+        const hs = [...between.matchAll(/(?:^|\s)(\d{1,2})\.\s*([가-힣][^.]{0,30})/g)];
         if (hs.length) section = hs.at(-1)[2].trim();
         if (!/상각/.test(tab)) continue;
         const rows = [...tab.matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((x) => [...x[0].matchAll(/<T([DHEU])([^>]*)>([\s\S]*?)<\/T[DHEU]>/gi)].flatMap((c) => {
@@ -279,8 +280,8 @@ export async function dartDocDaTables(rcept) {
         if (!rows.some((row) => /상각/.test(row[0] ?? ""))) continue;
         const before = t.slice(Math.max(0, m.index - 1500), m.index);
         const unit = units(tab.slice(0, 2000))[0] ?? units(before).at(-1) ?? null;
-        const tail = between.slice(-40);
-        const period = /(당|금)\s*(반기|분기|기)(말)?\s*(\(단위|$)/.test(tail) ? "cur" : /전\s*(반기|분기|기)(말)?\s*(\(단위|$)/.test(tail) ? "prior" : null;
+        const tail = between.slice(-40).replace(/\s+/g, "");
+        const period = /(당|금)(반기|분기|기)(말)?(\(단위[^)]*\))?$/.test(tail) ? "cur" : /전(반기|분기|기)(말)?(\(단위[^)]*\))?$/.test(tail) ? "prior" : null;
         const secScope = section ? (/연결/.test(section) ? "con" : "sep") : null;
         out.push({ head: txt(before).slice(-300), unit, scope: fileScope ?? titleScope(m.index) ?? secScope, section, period, rows });
       }
