@@ -1,13 +1,13 @@
 import "server-only";
 
 /**
- * 금융위원회_지수시세정보 (data.go.kr, GetMarketIndexInfoService/getStockMarketIndex).
+ * 금융위원회_지수시세정보 (data.go.kr, GetMarketIndexInfoService_V2/getStockMarketIndex_V2 — 2026-10-05 V1 에서 전환, 응답 필드 동일).
  * KOSPI·KOSDAQ 일별 종가 — 지수차트용 Yahoo 대체 (KRX 데이터).
  * 커버리지 2020~ (그 이전은 호출자가 Yahoo 폴백).
  */
 
 const EP =
-  "https://apis.data.go.kr/1160100/service/GetMarketIndexInfoService/getStockMarketIndex";
+  "https://apis.data.go.kr/1160100/GetMarketIndexInfoService_V2/getStockMarketIndex_V2";
 
 const num = (s: unknown): number | null => {
   const n = Number(String(s ?? "").replace(/,/g, ""));
