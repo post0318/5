@@ -16,11 +16,14 @@
  *    반기/분기별·증분 판정)는 그 결과를 걸러 돌려준다. 그래서 디스크에 원문이 다 있으면 종목당 DART 요청 = 목록 1건
  * DART_CACHE_DIR 가 없으면 디스크 캐시 없이 받는다(목록 한 번 받기는 그대로).
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const IDLE_MS = 90 * 864e5;
+// 임시 파일 = "." 으로 시작하고 ".tmp" 로 끝나는 이름(앱 dart-cache.ts 와 같은 판정), 1시간 넘으면 죽은 프로세스가 남긴 것
+const isTmp = (n) => n.startsWith(".") && n.endsWith(".tmp");
+const TMP_STALE_MS = 3600e3;
 const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
 const RE_PERIODIC = /(사업|반기|분기)보고서\s*\((\d{4})\.(\d{2})\)/;
 const DETAIL = { A001: /사업보고서/, A002: /반기보고서/, A003: /분기보고서/ };
@@ -52,7 +55,7 @@ export function makeDartDisk({ key, root, maxGb = 2, take, check }) {
         let s;
         try { s = await stat(p); } catch (e) { if (e?.code === "ENOENT") continue; throw e; } // 다른 프로세스가 방금 지운 파일
         if (s.isDirectory()) await walk(p);
-        else if (n.endsWith(".tmp")) { if (Date.now() - s.mtimeMs > 3600e3) { await rm(p, { force: true }); stats.deleted++; } } // 쓰는 중인 임시 파일은 건너뜀
+        else if (isTmp(n)) { if (Date.now() - s.mtimeMs > TMP_STALE_MS) { await rm(p, { force: true }); stats.deleted++; } } // 쓰는 중인 임시 파일은 건너뜀
         else files.push({ p, size: s.size, t: s.mtimeMs });
       }
     };
@@ -85,11 +88,16 @@ export function makeDartDisk({ key, root, maxGb = 2, take, check }) {
   async function writeVer(dir, file, data) {
     try {
       await mkdir(dir, { recursive: true });
-      const tmp = path.join(dir, `${file}.${process.pid}.${Date.now()}.tmp`);
-      await writeFile(tmp, data);
-      await rename(tmp, path.join(dir, file));
+      const tmp = path.join(dir, `.${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
+      try {
+        await writeFile(tmp, data);
+        await rename(tmp, path.join(dir, file));
+      } catch (e) {
+        await rm(tmp, { force: true });
+        throw e;
+      }
       stats.write++;
-      for (const n of await readdir(dir)) if (n !== file && !n.endsWith(".tmp")) { await rm(path.join(dir, n), { force: true }); stats.deleted++; }
+      for (const n of await readdir(dir)) if (n !== file && !isTmp(n)) { await rm(path.join(dir, n), { force: true }); stats.deleted++; } // 다른 프로세스가 쓰는 중인 임시 파일은 건드리지 않는다
     } catch (e) { console.log(`    [dart-cache] 쓰기 실패 ${dir}: ${e.message}`); } // 디스크 쓰기 실패는 받은 자료에 영향 없음(다음에 다시 받는다)
   }
 
