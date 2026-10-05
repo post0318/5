@@ -3,7 +3,7 @@
 # systemd 타이머(macro-peer-health.timer)가 10분마다 root 로 실행한다. 설치는 install-health-peer.sh.
 #
 # 1) 1호기(운영) 감시 — 1호기가 죽으면 1호기 자체 점검은 알릴 수 없으므로 2호기가 바깥에서 본다. 연속 2회 실패해야 알림.
-# 2) 2호기 자체 점검 — verify-dev·ipo@prod·ipo@dev, 디스크·메모리·재부팅 필요.
+# 2) 2호기 자체 점검 — verify-dev·ipo@prod·ipo@dev, 검증 DB 복사(macro-db-check), 디스크·메모리·재부팅 필요.
 # 3) 하트비트 — 끝까지 돌면 /var/lib/macro-health/heartbeat 에 시각을 쓴다. 1호기 healthcheck.sh 가 전용 키(강제 명령으로
 #    이 파일 출력만 허용)로 읽어 30분 넘게 멈추면 알린다. 2호기에서 1호기로 가는 SSH 권한은 없다(2호기는 격리 서버).
 #
@@ -50,6 +50,10 @@ check2 op-ssh "$ok" "1호기(${PEER_IP}) SSH 포트 응답 없음 — 서버 정
 for u in verify-dev ipo@prod ipo@dev; do
   check "svc-$u" "$(systemctl is-active --quiet "$u" && echo 1 || echo 0)" "서비스 $u 가 멈췄습니다 — sudo journalctl -u $u -n 50"
 done
+
+# 검증 전용 MongoDB + 매일 복사(macro-db-sync 05:30) — 하루 한 번 작업이라 1회 실패로 알림
+dbmsg=$(timeout 60 /usr/local/bin/macro-db-check 2>&1 | head -c 200) && ok=1 || ok=0
+check db-sync "$ok" "검증 DB 점검 실패: ${dbmsg:-응답 없음} — sudo journalctl -u macro-db-sync -n 50"
 
 disk=$(df --output=pcent / | tail -1 | tr -dc 0-9)
 check disk "$([ "$disk" -lt 80 ] && echo 1 || echo 0)" "디스크 사용률 ${disk}%"

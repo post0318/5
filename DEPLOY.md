@@ -50,7 +50,7 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
 | 실행 위치 | 스크립트·타이머 | 점검 |
 |---|---|---|
 | 1호기 | `healthcheck.sh` · `macro-health.timer`(root, `/opt/macro/ops/`, 설정 `alert.env`) | 자체(컨테이너·앱·재시작·HTTPS·인증서·디스크·메모리·재부팅·예약 작업·텔레그램 수신기·한국 재무) + **2호기**: SSH 포트(`peer-ssh`), 하트비트 30분 초과·읽기 실패(`peer-heartbeat`) |
-| 2호기 | `healthcheck-peer.sh` · `macro-peer-health.timer`(root, `/opt/macro-health/`, 설정 `alert.env` — `OPS_TG_*`·`OPS_GH_*` 만) | **1호기**: 운영 `/api/auth/me` 200(`op-https`), 한국 재무 `/api/markets/kr/005930/financials?period=annual` 200(`op-dart-kr`), 인증서 14일(`op-cert-expiry`), SSH 포트(`op-ssh`) + 자체: `verify-dev`·`ipo@prod`·`ipo@dev`(`svc-*`), 디스크 80%·메모리 10%·재부팅 필요, 끝나면 하트비트 기록 |
+| 2호기 | `healthcheck-peer.sh` · `macro-peer-health.timer`(root, `/opt/macro-health/`, 설정 `alert.env` — `OPS_TG_*`·`OPS_GH_*` 만) | **1호기**: 운영 `/api/auth/me` 200(`op-https`), 한국 재무 `/api/markets/kr/005930/financials?period=annual` 200(`op-dart-kr`), 인증서 14일(`op-cert-expiry`), SSH 포트(`op-ssh`) + 자체: `verify-dev`·`ipo@prod`·`ipo@dev`(`svc-*`), 검증 DB 복사(`db-sync` — `macro-db-check`, 1회 실패로 알림), 디스크 80%·메모리 10%·재부팅 필요, 끝나면 하트비트 기록 |
 
 - **하트비트**: 2호기 점검이 끝까지 돌면 `/var/lib/macro-health/heartbeat`(644)에 `초 ISO시각 열린알림목록` 한 줄을 쓴다. 1호기가 전용 키
   `/opt/macro/ops/peer_ed25519`(root 600, 호스트 키 `peer_known_hosts`)로 읽는다. 2호기 `authorized_keys` 에는 이 키를
