@@ -14,10 +14,9 @@ import { MongoClient } from "mongodb";
 import { makeDartQuota } from "./lib/dart-quota.mjs";
 
 // 설정 — 개발 폴더(로컬·2호기)는 .env.local, 운영 1호기 배치는 컨테이너 환경변수(ops/oracle/run-kr-da.sh 가 /opt/macro/jobs.env 로 넣는다).
-// .env.local 이 있으면 그 값이 먼저(개발 폴더에서 셸 환경변수가 섞이지 않게)
+// 실행할 때 준 환경변수가 .env.local 보다 먼저(KR_DA_COLLECTION·DART_DAILY_CAP_POPULATE 를 명령줄에서 바꿀 수 있게 — 예전 동작)
 const ENV_FILE = new URL("../.env.local", import.meta.url);
 const env = {
-  ...process.env,
   ...(existsSync(ENV_FILE)
     ? Object.fromEntries(
         readFileSync(ENV_FILE, "utf8")
@@ -29,6 +28,7 @@ const env = {
           }),
       )
     : {}),
+  ...Object.fromEntries(Object.entries(process.env).filter(([, v]) => v != null && v !== "")),
 };
 const DART = env.DART_API_KEY;
 // 쓰는 곳 = MONGODB_URI + KR_DA_COLLECTION(기본 kr_da_staging) 하나뿐(오너 결정 2026-10-05 — "검증 쪽은 운영 DB 에 쓰지 않는다, 운영 반영은 master 병합
