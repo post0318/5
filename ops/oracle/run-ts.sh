@@ -6,8 +6,9 @@
 set -uo pipefail
 SHA=$(git -c safe.directory=/opt/macro/jobs -C /opt/macro/jobs rev-parse HEAD)  # 타이머는 root 로 돈다 — 소유자가 달라 git 이 거부하지 않게
 [ -n "$SHA" ] || { echo "작업 폴더 커밋을 못 읽음"; exit 1; }
-install -d -m 755 /opt/macro/sec-cache /opt/macro/dart-cache /opt/macro/npm-cache
+install -d -m 755 /opt/macro/sec-cache /opt/macro/dart-cache /opt/macro/npm-cache /opt/macro/usage
+# 외부 서비스 사용량 장부(배치 역할 — 그날 상한에 닿은 서비스는 요청을 멈춘다, src/lib/usage/ledger.mjs)를 usage-preload 로 켠다
 exec docker run --rm --network host --env-file /opt/macro/jobs.env \
-  -e APP_COMMIT_SHA="$SHA" -e NODE_OPTIONS=--conditions=react-server -e SEC_CACHE_DIR=/sec-cache -e DART_CACHE_DIR=/dart-cache -e npm_config_cache=/npm-cache \
-  -v /opt/macro/jobs:/app -v /opt/macro/sec-cache:/sec-cache -v /opt/macro/dart-cache:/dart-cache -v /opt/macro/npm-cache:/npm-cache -w /app \
+  -e APP_COMMIT_SHA="$SHA" -e "NODE_OPTIONS=--conditions=react-server --import=/app/scripts/lib/usage-preload.mjs" -e USAGE_DIR=/usage -e USAGE_ROLE=batch -e SEC_CACHE_DIR=/sec-cache -e DART_CACHE_DIR=/dart-cache -e npm_config_cache=/npm-cache \
+  -v /opt/macro/jobs:/app -v /opt/macro/sec-cache:/sec-cache -v /opt/macro/dart-cache:/dart-cache -v /opt/macro/npm-cache:/npm-cache -v /opt/macro/usage:/usage -w /app \
   --memory 3g --cpus 1.5 node:24-slim npx -y tsx@4.23.15 --tsconfig tsconfig.json "scripts/run/$1" "${@:2}"

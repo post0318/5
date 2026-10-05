@@ -6,6 +6,8 @@ install -d -m 755 /opt/macro/ops
 SRC="$(dirname "$(readlink -f "$0")")"
 install -m 755 "$SRC/healthcheck.sh" /opt/macro/ops/healthcheck.sh
 install -m 755 "$SRC/alert-lib.sh" /opt/macro/ops/alert-lib.sh
+install -m 755 "$SRC/usage-report.sh" /opt/macro/ops/usage-report.sh
+install -d -m 755 /opt/macro/usage  # 외부 서비스 사용량 장부(src/lib/usage/ledger.mjs) — 앱 컨테이너·배치가 같이 쓴다
 [ -f /opt/macro/ops/alert.env ] || install -m 600 /dev/null /opt/macro/ops/alert.env
 
 # 2호기 하트비트 읽기 전용 키(2026-10-05 상호 감시) — 공개키를 2호기 install-health-peer.sh 인자로 넘겨 강제 명령으로 등록한다
@@ -39,8 +41,33 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+# 외부 서비스 사용량 매일 보고(2026-10-06) — 08:00 KST 전날분 텔레그램
+cat > /etc/systemd/system/macro-usage-report.service <<'EOF'
+[Unit]
+Description=외부 서비스 사용량 매일 보고
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/macro/ops/usage-report.sh yesterday
+Nice=10
+EOF
+
+cat > /etc/systemd/system/macro-usage-report.timer <<'EOF'
+[Unit]
+Description=외부 서비스 사용량 매일 보고 08:00 KST
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 Asia/Seoul
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl daemon-reload
 systemctl enable --now macro-health.timer
+systemctl enable --now macro-usage-report.timer
 
 # 보안 업데이트 자동 설치(재부팅은 자동으로 하지 않고 점검이 알린다)
 DEBIAN_FRONTEND=noninteractive apt-get install -y -q unattended-upgrades >/dev/null

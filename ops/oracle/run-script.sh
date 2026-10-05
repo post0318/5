@@ -4,7 +4,9 @@
 # 리서치 PDF 텍스트는 /opt/macro/research-cache 에 남겨 다음 회차에 다시 받지 않는다(scripts/lib/research-extract.mjs).
 # 사용: run-script.sh <스크립트> [인자...]
 set -uo pipefail
-install -d -m 755 /opt/macro/research-cache
+install -d -m 755 /opt/macro/research-cache /opt/macro/usage
+# 외부 서비스 사용량 장부(배치 역할 — 그날 상한에 닿은 서비스는 요청을 멈춘다, src/lib/usage/ledger.mjs)를 usage-preload 로 켠다
 exec docker run --rm --network host --env-file /opt/macro/app.env -e APP_URL=http://127.0.0.1:8080 \
   -e RESEARCH_PDF_CACHE_DIR=/research-cache -v /opt/macro/research-cache:/research-cache \
+  -e USAGE_DIR=/usage -e USAGE_ROLE=batch -e NODE_OPTIONS=--import=/app/scripts/lib/usage-preload.mjs -v /opt/macro/usage:/usage \
   -v /opt/macro/jobs:/app:ro -w /app --memory 1g --cpus 1 node:24-slim node "scripts/$1" "${@:2}"
