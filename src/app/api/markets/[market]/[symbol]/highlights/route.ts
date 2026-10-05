@@ -76,6 +76,7 @@ export async function GET(
       const daDoc = daR.doc;
       if (daR.warning) krxWarn.push(daR.warning);
       for (const w of ttm?.degraded ?? []) krxWarn.push(w);
+      for (const w of live?.warnings ?? []) krxWarn.push(`현재가: ${w}`);
       if (!facts) return ok({ highlights: null });
       // 회계연도말 종가 — Stooq 커버리지가 부족하면 KRX 로 개별 조회
       const fyCloseByYear = new Map<number, number>();

@@ -330,10 +330,13 @@ export async function getConsensusData(
         // 과거 연도 주식수 = 각 결산일 유통주식수만(최근 값으로 대신하지 않음 — 그림자 채우기 금지)
         dartBookShares = x.bookShares;
         if (x.daWarning) notes.push(`⚠ ${x.daWarning} — 감가상각비·EBITDA 는 DART 공시 현금흐름 줄 또는 빈칸`);
+        for (const w of x.warnings) notes.push(`⚠ ${w}`);
         notes.push(`실적: ${x.code} OpenDART 재무 USD 환산(손익 = 기간 평균 환율, 재무상태표·연말 시가총액 = 결산일 환율), 주당 값은 ADR 1주 기준`);
       }
-    } catch {
+    } catch (e) {
+      // DART 연결 ADR 입력 조회 실패 — 실적 열을 비우고 사유를 주석에(감사 2차 ⑨)
       kr = null;
+      notes.push(`⚠ DART 연결 ADR 실적 입력 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   // no-silent-catch:begin — 한국 경로(감사 1차 ⑥: 조회 실패는 주석 경고로)

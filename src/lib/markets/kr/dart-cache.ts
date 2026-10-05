@@ -137,6 +137,16 @@ export function dartPeriodicLatest(corp: string): Promise<{ fyMonth: number; lat
   return p;
 }
 
+/**
+ * 회사 정기공시 판본 열쇠(최신 접수번호들) — 메모리 재무 캐시(dart-facts.ts factsCache)·Next 데이터 캐시 열쇠에 넣어 정정 공시가 나오면(목록 30분)
+ * 즉시 무효가 되게 한다(감사 2차 운영 참고 — 예전엔 6시간 동안 정정 전 값이 남았다). 목록 조회 실패는 던진다
+ */
+export async function dartVersionKey(corp: string): Promise<string> {
+  const L = await dartPeriodicLatest(corp);
+  const top = [...L.latest.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 12).map(([k, v]) => `${k}=${v}`).join(",");
+  return createHash("sha1").update(top).digest("hex").slice(0, 12);
+}
+
 // ── 읽기·쓰기 ──
 async function readVer(dir: string, file: string): Promise<Buffer | null> {
   const f = path.join(dir, file);
@@ -177,17 +187,15 @@ export async function dartReportJson<T extends { status: string }>(
   revalidate: number,
 ): Promise<T> {
   const r = root();
-  if (!r) {
+  const L = await dartPeriodicLatest(ref.corp);
+  const ver = L.latest.get(`${ref.year}|${ref.reprt}`) ?? "none";
+  // Next 데이터 캐시 열쇠(URL)에 판본을 넣는다 — 정정 공시가 나오면 새 URL 이라 6시간 캐시를 건너뛴다(DART 는 모르는 인자를 무시, 실측)
+  const vurl = `${url}&_v=${ver}`;
+  if (!r || L.fyMonth !== 12) {
     noteDartRequest(`${ns} ${ref.corp} ${ref.year} ${ref.reprt} ${ref.extra ?? ""}`);
-    return fetchJson<T>(url, { revalidate });
+    return fetchJson<T>(L.fyMonth !== 12 ? url : vurl, { revalidate });
   }
   await ensureCleaned(r);
-  const L = await dartPeriodicLatest(ref.corp);
-  if (L.fyMonth !== 12) {
-    noteDartRequest(`${ns} ${ref.corp} ${ref.year} ${ref.reprt} (판본 미상)`);
-    return fetchJson<T>(url, { revalidate });
-  }
-  const ver = L.latest.get(`${ref.year}|${ref.reprt}`) ?? "none";
   const dir = dirOf(r, ns, `${ref.corp}_${ref.year}_${ref.reprt}${ref.extra ? `_${ref.extra}` : ""}`);
   const file = `${safe(ver)}.json`;
   const hit = await readVer(dir, file);
@@ -197,7 +205,7 @@ export async function dartReportJson<T extends { status: string }>(
   }
   dartCacheStats.miss++;
   noteDartRequest(`${ns} ${ref.corp} ${ref.year} ${ref.reprt} ${ref.extra ?? ""}`);
-  const j = await fetchJson<T>(url, { revalidate, noStore: true });
+  const j = await fetchJson<T>(vurl, { revalidate, noStore: true });
   if (j && (j.status === "000" || j.status === "013")) await writeVer(dir, file, JSON.stringify(j));
   return j;
 }

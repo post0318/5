@@ -138,6 +138,7 @@ export async function getStockOverview(
   let multiples: TrailingMultiples | null = null;
   // 미국은 TTM 스냅샷(getTtm)으로만 계산한다 — 재무를 건너뛴 호출(개요 화면 첫 응답)은 TTM 이 없으므로 계산하지 않는다
   // (화면이 TTM 도착 후 같은 함수로 계산 — stock-analysis.tsx). Yahoo 주식수·시가총액으로 미리 채우지 않는다(그림자 채우기 금지)
+  for (const w of quote?.warnings ?? []) warnings.push(`시세: ${w}`);
   if (quote && !(market === "us" && !wantAnnual)) {
     // 듀얼클래스(V 등)는 EDGAR·Yahoo 시세에 undimensioned 주식수·시총이 없다 →
     // Yahoo 컨센서스(quoteSummary)의 값으로 폴백 — 미국 외 시장만(미국은 edgar-shares 공통 주식수만)

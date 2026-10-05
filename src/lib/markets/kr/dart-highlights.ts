@@ -45,7 +45,7 @@ export interface KrHighlightInput {
   /** 연도별 주당배당금 (원). alotMatter. */
   dpsByYear: Map<number, number>;
   payoutByYear: Map<number, number>; // 배당성향 %
-  /** 최근 12개월(366일) 배당기준일 합산 주당배당금 — 있으면 LTM 열에 우선 사용. */
+  /** 최근 12개월(기준일 > 1년 전 오늘) 배당기준일 합산 주당배당금 — 있으면 LTM 열에 우선 사용. */
   dpsTtm?: number | null;
   /** 감가상각비 실측(사업보고서 XBRL 주석) — 있으면 EBITDA = 영업이익 + 감가상각비. */
   daDoc?: KrDaInput | null;
@@ -190,7 +190,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     if (c.kind === "estimate") return consensus?.estEps ?? null;
     return at(aEps, cy(c));
   });
-  // LTM 배당금 = 최근 12개월(366일) 배당기준일 합산(공공데이터포털 배당정보,
+  // LTM 배당금 = 최근 12개월(기준일 > 1년 전 오늘) 배당기준일 합산(공공데이터포털 배당정보,
   // rights-schedule.ts fetchKrAnnualDps) — 없으면 최근 완결 사업연도값으로 폴백.
   const dps = columns.map((c) =>
     c.kind === "fy" ? (dpsByYear.get(cy(c)) ?? null) : c.kind === "ltm" ? (dpsTtm ?? dpsByYear.get(lastFy) ?? null) : null,

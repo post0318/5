@@ -101,6 +101,7 @@ export async function GET(
         const daDoc = daR.doc;
         if (daR.warning) krxWarn.push(daR.warning);
         for (const w of ttm?.degraded ?? []) krxWarn.push(w);
+        for (const w of live?.warnings ?? []) krxWarn.push(`현재가: ${w}`);
         if (!facts) return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });
         const fyCloseByYear = new Map<number, number>();
         const needYears = facts.periods

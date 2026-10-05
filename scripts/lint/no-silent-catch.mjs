@@ -27,8 +27,12 @@ const TARGETS = [
   { dir: "scripts/verify-kr", re: /\.mjs$/, deep: false },
   { dir: "src/lib/db", re: /^kr-da\.ts$/, deep: false },
   // SKHY(DART 연결 ADR) 어댑터 — 감가상각 적재본 조회 실패를 삼키던 곳
-  { dir: "src/lib/markets/us", re: /^dart-adr\.ts$/, deep: false, region: true },
   { dir: "src/lib/markets/kr", re: /^opendart\.ts$/, deep: false },
+  // 한국 감사 2차(2026-10-05) — 유니버스 지표·시세 폴백·라이브 XBRL 감가상각·DART 연결 ADR
+  { dir: "src/lib/markets/kr", re: /^(overview-metrics|xbrl|dart-cache)\.ts$/, deep: false },
+  { dir: "src/lib/markets/quote", re: /^index\.ts$/, deep: false },
+  { dir: "src/lib/markets/us", re: /^dart-adr\.ts$/, deep: false },
+  { dir: "src/app/api/markets/[market]/[symbol]/da", re: /^route\.ts$/, deep: false },
   // 미국·한국이 섞인 파일은 한국 경로만 — "// no-silent-catch:begin" ~ "// no-silent-catch:end" 구간(구간이 없으면 실패)
   { dir: "src/app/api/markets/[market]/[symbol]/highlights", re: /^route\.ts$/, deep: false, region: true },
   { dir: "src/app/api/markets/[market]/[symbol]/financials", re: /^route\.ts$/, deep: false, region: true },

@@ -164,6 +164,8 @@ export interface EodQuote {
    * 쓴다(오너 결정 2026-10-02 (나) — 화면마다 조회 시점이 달라 0.01~0.08% 어긋나던 문제). 장 마감 뒤·주말이면 없음
    */
   live?: { price: number; date: string; change: number | null; changePct: number | null } | null;
+  /** 원천 조회 실패로 다른 소스를 쓴 사유(감사 2차 ⑨ — KRX 실패 → Yahoo, 최신 봉 보강 실패) — 호출부가 화면 경고에 싣는다 */
+  warnings?: string[];
 }
 
 /** 트레일링 멀티플 (L3, 자체 계산). */

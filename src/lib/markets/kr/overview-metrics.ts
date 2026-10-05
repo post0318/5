@@ -20,6 +20,8 @@ export interface KrOverviewMetrics {
   last: number | null;
   changePct: number | null;
   currency: "KRW" | null;
+  /** 조회 실패·대체 사유(감사 2차 ⑥ — 예전엔 TTM 실패를 삼키고 연간 값으로 PER·PBR 을 계산해 캐시했다). 유니버스 행 warnings 로 */
+  warnings: string[];
 }
 
 const IS = ["IS", "CIS"];
@@ -49,13 +51,20 @@ export async function computeKrOverviewMetrics(
     corpCode = null;
   }
 
+  // 조회 실패는 경고로 남기고 그 값에 기대는 칸은 비운다(감사 2차 ⑥) — 경고 문구에 "조회 실패"가 들어가 keepLastGood 이 직전 정상 스냅샷을 유지한다
+  const warnings: string[] = [];
+  const warnOf = (what: string) => (e: unknown) => {
+    warnings.push(`${what} 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  };
   const [facts, quote, ttm] = await Promise.all([
-    corpCode ? fetchKrFacts(corpCode, "annual").catch(() => null) : Promise.resolve(null),
-    // KRX 가 실패해도 getEodQuote 내부에서 Stooq → Yahoo 로 자동 폴백된다
-    // (fetchKrxEod 를 직접 쓰면 KRX 실패 = 시세 전부 없음).
-    getEodQuote("kr", symbol, { yahooOverride }).catch(() => null),
-    adapter.getTtm?.(symbol).catch(() => null) ?? Promise.resolve(null),
+    corpCode ? fetchKrFacts(corpCode, "annual").catch(warnOf("연간 재무제표")) : Promise.resolve(null),
+    // KRX 가 실패해도 getEodQuote 내부에서 Stooq → Yahoo 로 폴백된다(사유는 quote.warnings)
+    getEodQuote("kr", symbol, { yahooOverride }).catch(warnOf("시세")),
+    adapter.getTtm?.(symbol).catch(warnOf("손익 TTM")) ?? Promise.resolve(null),
   ]);
+  for (const w of quote?.warnings ?? []) warnings.push(`시세: ${w}`);
+  const ttmFailed = adapter.getTtm != null && ttm == null;
 
   const price = quote?.last ?? quote?.bars.at(-1)?.close ?? null;
   const shares = quote?.sharesOutstanding ?? null;
@@ -65,18 +74,26 @@ export async function computeKrOverviewMetrics(
   // 지배주주 자본 — 하이라이트·개요와 같은 값, 오너 결정 2026-09-24). 스냅샷이 없을 때만
   // 최근 사업연도말.
   let equity: number | null = ttm?.snapshot ? (ttm.snapshot.equity ?? null) : null;
-  if (!ttm?.snapshot && facts) {
+  if (!ttm?.snapshot && facts && !ttmFailed) {
     // PBR 분모 = 지배주주 자본(dart-ev.ts 공통 — 하이라이트·재무분석·개요와 같은 값). 예전엔
     // 비지배지분 포함 자본총계를 써서 유니버스 PBR 만 최대 31% 달랐다(LG에너지솔루션, 검증 2026-09-24).
     const eq = krParentEquityByYear(facts);
     const years = [...eq.keys()].sort((a, b) => b - a);
     equity = years.length ? (eq.get(years[0]) ?? null) : null;
+    if (equity != null) warnings.push(`PBR 분모: LTM 재무상태표 없음 — FY${years[0]} 지배주주 자본`);
   }
 
-  // 레거시 getTtm(자체 한글 계정명 매칭)이 못 잡는 종목은 dart-facts 최근 연간값으로 폴백
-  const revenue = ttm?.revenue ?? (facts ? latestOf(facts, REV.ids, REV.names, IS) : null);
-  const opIncome = ttm?.opIncome ?? (facts ? latestOf(facts, OPI.ids, OPI.names, IS) : null);
-  const netIncome = ttm?.netIncome ?? (facts ? latestOf(facts, NI.ids, NI.names, IS) : null);
+  // TTM 이 성공했는데 항목이 비면 dart-facts 최근 연간값으로(대체 사실을 경고로). TTM 조회 자체가 실패하면 연간값으로 계산하지 않는다(칸 비움)
+  const fb = (v: number | null | undefined, ids: string[], names: string[], label: string): number | null => {
+    if (v != null) return v;
+    if (ttmFailed || !facts) return null;
+    const a = latestOf(facts, ids, names, IS);
+    if (a != null) warnings.push(`${label}: TTM 없음 — 최근 사업연도 값`);
+    return a;
+  };
+  const revenue = fb(ttm?.revenue, REV.ids, REV.names, "매출(LTM)");
+  const opIncome = fb(ttm?.opIncome, OPI.ids, OPI.names, "영업이익(LTM)");
+  const netIncome = fb(ttm?.netIncome, NI.ids, NI.names, "순이익(LTM)");
   const eps = ttm?.eps ?? null;
 
   // EPS 가 있으면(적자 포함) 그것만으로 판정 — 적자면 비움. 없을 때만 시총÷순이익
@@ -102,5 +119,6 @@ export async function computeKrOverviewMetrics(
     last: price,
     changePct: quote?.changePct ?? null,
     currency: quote ? "KRW" : null,
+    warnings,
   };
 }

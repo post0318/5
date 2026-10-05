@@ -31,12 +31,17 @@ export async function GET(
   }
 
   const fy = new Date().getFullYear() - 1;
-  const r = await fetchKrDA(sym, fy).catch(() => null);
+  let r: Awaited<ReturnType<typeof fetchKrDA>> = null;
+  try {
+    r = await fetchKrDA(sym, fy);
+  } catch (e) {
+    return ok({ da: null, warnings: [`감가상각비(라이브 XBRL) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`] });
+  }
   if (!r) return ok({ da: null });
   const yrs = Object.keys(r.byYear).map(Number).sort((a, b) => b - a);
   const latest = r.byYear[yrs[0]];
   return ok(
-    { da: { year: yrs[0], depreciation: latest.depreciation, amortisation: latest.amortisation, byYear: r.byYear } },
-    { headers: { "Cache-Control": "public, s-maxage=86400, stale-while-revalidate=86400" } },
+    { da: { year: yrs[0], depreciation: latest.depreciation, amortisation: latest.amortisation, byYear: r.byYear }, warnings: r.warnings },
+    { headers: { "Cache-Control": r.warnings.length ? "no-store" : "public, s-maxage=86400, stale-while-revalidate=86400" } },
   );
 }
