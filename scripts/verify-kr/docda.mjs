@@ -51,11 +51,11 @@ export function tableKind(t) {
   return null;
 }
 /** 열 j 의 (기간, 누적) — 머리행 판독. 기간: "cur"·"prior"·null(표 앞 기간 표시를 씀), 누적: true·false·null */
-function columns(t) {
+function columns(t, width) {
   const isData = (r) => r.slice(1).some((c) => num(c) != null && String(c).trim() !== "-");
   const first = t.rows.findIndex(isData);
   const hdrs = (first < 0 ? [] : t.rows.slice(0, first)).filter((r) => r.slice(1).some((c) => String(c).trim()));
-  const width = Math.max(0, ...t.rows.filter(isData).map((r) => r.length - 1));
+  // 열 수 = 그 묶음 감가상각 줄의 값 칸 수(표 전체 최대로 하면 칸이 하나 더 많은 합계 줄 때문에 맞춤이 어긋났다 — 052690 2025 반기)
   const cols = [];
   for (let j = 0; j < width; j++) {
     let period = null, cum = null;
@@ -83,7 +83,6 @@ export function daCandidates(tables) {
   tables.forEach((t, ti) => {
     const kind = tableKind(t);
     if (!t.unit || (kind !== "nature" && kind !== "cf")) return;
-    const { cols } = columns(t);
     const segs = [];
     let cur = null;
     for (const r of t.rows) {
@@ -93,6 +92,7 @@ export function daCandidates(tables) {
       if (!(k in cur)) cur[k] = r.slice(1).map(num);
     }
     segs.forEach((s, si) => {
+      const { cols } = columns(t, (s.comb ?? s.dep ?? []).length);
       // 같은 (기간, 누적) 열이 여럿이면 그 묶음에 값이 있는 마지막 열만(성격별 표 합계 열, "당기 | 당기 | 전기 | 전기" 두 칸 머리 — 064350 2021)
       const has = (j) => { const b = s.comb?.[j] ?? s.dep?.[j] ?? null; return b != null && b !== 0; };
       for (let j = 0; j < cols.length; j++) {
