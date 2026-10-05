@@ -11,7 +11,7 @@
  *  K5 주당배당금(사업연도) = DART alotMatter, 배당수익률 = DPS ÷ KRX 연말 종가.
  */
 import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartDocLeaseCells, dartDocDaTables, dartCompany } from "./dart.mjs";
-import { daCandidates, docExtraRows } from "./docda.mjs";
+import { daCandidates, invTableDep } from "./docda.mjs";
 import { dataGoDividends } from "./datago.mjs";
 import { krxCapsOn } from "./krx.mjs";
 import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts } from "./b16.mjs";
@@ -140,6 +140,7 @@ export async function krOriginalLayers(ctx) {
     exact("K1", "우선주 시가총액 = KRX 연말", col, appPref, k.preferred, `KRX ${k.date}${k.prefIssues.length ? ` ${k.prefIssues.join("·")}` : " 우선주 없음"}`);
   }
   let ltmPrefOk = null; // LTM EV 기대치에 쓸 우선주 시가총액(K1 에서 확인된 값)
+  let ltmPrefPending = false; // 우선주를 못 확인한 사유가 KRX 게시 전(재실행하면 풀림)인지 — 아니면 K1 실패·KRX 조회 실패(감사 3차 ⑤)
   let ltmPrice = null; // LTM 배당수익률 기대치에 쓸 현재가(K1 보통주 시가총액이 확인된 종가)
   // LTM 열은 DART 정기공시가 있으면 반드시 있어야 한다(감사 2차 ① — 열이 없으면 LTM 검사가 조용히 사라졌다)
   if (!H.LTM && L.latestPeriod()) fail("K1", "LTM 열 존재(하이라이트)", "LTM", `DART 정기공시 ${L.latestPeriod().nm} 이 있는데 하이라이트 LTM 열 없음`);
@@ -180,7 +181,7 @@ export async function krOriginalLayers(ctx) {
         const hit = exps.find((x) => x.v === appPref);
         if (hit) { add("K1", "우선주 시가총액 = KRX 최근 거래일(게시 전 — Yahoo 종가 × KRX 주식수)", "LTM", { status: PASS, app: appPref, src: hit.v, note: `KRX ${gap} 게시 전 · ${hit.how}` }); ltmPrefOk = appPref; }
         else fail("K1", "우선주 시가총액 = KRX 최근 거래일(게시 전 — Yahoo 종가 × KRX 주식수)", "LTM", `앱 ${appPref} — 게시 전 날 후보 ${exps.map((x) => `${x.v}(${x.how})`).join(" / ")} 어느 것과도 다름`);
-      } else add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX ${gap} 게시 전 — 우선주 독립 확인 불가(${why}) — 재실행 필요` });
+      } else { add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX ${gap} 게시 전 — 우선주 독립 확인 불가(${why}) — 재실행 필요` }); ltmPrefPending = true; }
     } else exact("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", appPref, capCur.preferred, `KRX ${capCur.date}`);
     if (H.LTM.mc === capCur.common) { add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: `KRX ${capCur.date}` }); ltmPrice = capCur.close; }
     else {
@@ -246,7 +247,10 @@ export async function krOriginalLayers(ctx) {
     exact("K2", "현금성자산 = DART(B16)", col, x.cash == null ? null : -x.cash, expCash, `${cl.cash.map((r) => nm(r.account_nm)).join("+")}`);
     exact("K2", "비지배지분 = DART", col, x.nci ?? (rowHidden("nci") ? 0 : null), expNci);
     const k = caps.get(y);
-    const blockWhy = evBlockWhy ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!k || k.common == null ? "KRX 연말 시가총액 없음" : null);
+    // 금융업·금융 자회사 판정은 해마다 그해 재무상태표로(감사 3차 ⑥ — 예전엔 최근 사업연도 판정을 전 연도에 썼다). LTM 은 최신 판정(evBlockWhy)
+    const capY = captiveOf(own.rows, own.col);
+    const evBlockY = cl.financial ? "금융업(검증기 판정 — 그해 예수부채·보험계약부채 등 줄)" : capY ? `금융 자회사 연결(검증기 판정 — 그해 ${capY})` : null;
+    const blockWhy = evBlockY ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!k || k.common == null ? "KRX 연말 시가총액 없음" : null);
     if (blockWhy) { if (x.ev != null) fail("K2", "EV = KRX + DART(B16)", col, `기대 공란(${blockWhy})인데 앱 EV ${x.ev}`); else add("K2", "EV = KRX + DART(B16)", col, { status: PASS, note: `공란 — ${blockWhy}` }); }
     else exact("K2", "EV = KRX + DART(B16)", col, x.ev, k.common + k.preferred + expDebt + expNci - expCash);
   }
@@ -261,12 +265,12 @@ export async function krOriginalLayers(ctx) {
   const LT = H.LTM;
   if (lp && LT) {
     try {
-      await ltmLayer({ ...ctx, L, lp, LT, exact, fail, err, policySrc, capCur, ltmPrefOk, evBlockWhy, rowHidden });
+      await ltmLayer({ ...ctx, L, lp, LT, exact, fail, err, policySrc, capCur, ltmPrefOk, ltmPrefPending, evBlockWhy, rowHidden });
     } catch (e) { err("LTM 원자료(DART 분기·반기 보고서)", e); }
   } // LTM 열이 없으면 위 K1 「LTM 열 존재」 실패
 
   // ── 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 분기·반기·3분기·사업보고서와 정확 대조 ──
-  try { await quarterLayer({ ...ctx, exact }); } catch (e) { err("분기 재무제표 원자료(DART)", e); }
+  try { await quarterLayer({ ...ctx, exact, L }); } catch (e) { err("분기 재무제표 원자료(DART)", e); }
 
   // ── K3 감가상각비 ──
   try { await daLayer({ ...ctx, exact, cmp, fail, err, yearSrc, yearsShown, caps, L }); } catch (e) { err("감가상각비 원자료(kr_da·XBRL·원문)", e); }
@@ -457,10 +461,10 @@ async function ltmLayer(c) {
 
 /** LTM EV 대조 — 공란 기대(block)·우선주 미확인(게시 전 — 검증불가, 통과로 세지 않음)·정확 대조 */
 function ltmEvCheck(c, block, expDebt, nci, cash) {
-  const { LT, add, fail, exact, ltmPrefOk, consts } = c;
+  const { LT, add, fail, exact, ltmPrefOk, ltmPrefPending, consts } = c;
   const { PASS, NA } = consts;
   if (block) { if (LT.ev != null) fail("K2", "LTM EV = KRX + DART(B16)", "LTM", `기대 공란(${block})인데 앱 EV ${LT.ev}`); else add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: PASS, note: `공란 — ${block}` }); return; }
-  if (ltmPrefOk == null && LT.ev != null) { add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: NA, app: LT.ev, note: "우선주 시가총액 확인 불가(KRX 게시 전 또는 K1 실패) — 재실행 필요" }); return; }
+  if (ltmPrefOk == null && LT.ev != null) { add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: NA, app: LT.ev, note: ltmPrefPending ? "우선주 시가총액 확인 불가(KRX 게시 전) — 재실행 필요" : "우선주 시가총액 확인 불가(K1 우선주·시가총액 검사 실패 또는 KRX 현재 조회 실패 — 그 실패가 이미 기록됨)" }); return; }
   exact("K2", "LTM EV = KRX + DART(B16)", "LTM", LT.ev, LT.mc == null ? null : LT.mc + ltmPrefOk + expDebt + nci - cash, "보통주 시가총액은 K1 에서 따로 대조");
 }
 
@@ -517,10 +521,24 @@ function epsOfRows(rows, f) {
  * 빈칸 모두 실패(exact)
  */
 async function quarterLayer(c) {
-  const { corp, quarter, items, exact, add, consts } = c;
+  const { corp, quarter, items, exact, add, consts, L } = c;
   const { isq, bsq, cfq } = quarter ?? {};
   if (!isq || !bsq || !cfq || !items) return; // 응답 실패는 호출부가 이미 실패로 기록
-  const per = (isq.periods ?? []).map((p) => p.label).filter((l) => /^\d{4} Q[1-4]$/.test(l));
+  const shown = (isq.periods ?? []).map((p) => p.label).filter((l) => /^\d{4} Q[1-4]$/.test(l));
+  // 기대 분기 열(감사 3차 ④ — 앱이 보여 주는 열만 돌아 2025 Q2 열을 지워도 실패 0): DART 정기공시 목록의 최신 기간부터 최근 5개 분기 중 그 분기
+  // 보고서(4분기는 사업보고서)가 있는 분기. 빠진 열은 실패, 그 열의 대조도 돈다(원자료 있는데 앱 빈칸 → 실패)
+  const lp = L?.latestPeriod();
+  const expected = [];
+  if (lp) {
+    const last = lp.year * 4 + ({ "11013": 1, "11012": 2, "11014": 3, "11011": 4 }[lp.code] - 1);
+    for (let i = 4; i >= 0; i--) {
+      const yy = Math.floor((last - i) / 4), qq = ((last - i) % 4) + 1;
+      if (L.latest(yy, qq === 4 ? "11011" : QCODE[qq])) expected.push(`${yy} Q${qq}`);
+    }
+  }
+  const lack = expected.filter((l) => !shown.includes(l));
+  add("A", "분기 열 = DART 정기공시 최근 5개 분기", "-", lack.length ? { status: consts.FAIL, note: `기대 ${expected.join("·")} / 앱 ${shown.join("·")} — 빠짐 ${lack.join("·")}` } : { status: consts.PASS, note: expected.join("·") || "정기공시 없음" });
+  const per = [...new Set([...shown, ...expected])].sort();
   if (!per.length) { add("A", "분기 열 존재", "-", { status: consts.FAIL, note: "분기 손익계산서 열 0개" }); return; }
   const lastY = Number(per.at(-1).slice(0, 4)), lastQ = Number(per.at(-1).slice(-1));
   const basis = (await dartFnltt(corp, lastY, lastQ === 4 ? "11011" : QCODE[lastQ], "CFS"))?.length ? "CFS" : "OFS";
@@ -554,6 +572,19 @@ async function quarterLayer(c) {
         }
       }
       exact("A", `분기 ${name} = DART`, lb, app, exp, how);
+    }
+    // 비지배 순이익(감사 3차 ⑥) — 앱은 비지배주주 귀속 줄을 따로 보이지 않으므로 「당기순이익 − (지배주주 귀속)」이 DART 비지배지분 순이익(3개월)과 같아야
+    // 한다. DART 줄이 없거나 0 이고 비지배지분이 없으면(승인 규칙) 0
+    if (basis === "CFS") {
+      const ni = isByName("당기순이익", lb), par = isByName("(지배주주 귀속)", lb);
+      const r = await Q.qval(y, qq, [["ifrs-full_ProfitLossAttributableToNonControllingInterests", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"], ["비지배지분"], ["IS", "CIS"]]);
+      let expN = r.v, howN = `${r.how} ${basis}`;
+      if (expN == null) {
+        const bsRows = await Q.R(y, qq === 4 ? "11011" : QCODE[qq]);
+        const bsNci = bsRows ? oneVal(pickRow(bsRows, ["ifrs-full_NoncontrollingInterests"], ["비지배지분"], ["BS"]), (x) => num(x.thstrm_amount)).v : null;
+        if (!bsNci) { expN = 0; howN = "DART 비지배지분 순이익 줄 없음 · 재무상태표 비지배지분 없음(0) → 0"; }
+      }
+      exact("A", "분기 비지배 순이익(당기순이익 − 지배주주 귀속) = DART", lb, ni != null && par != null ? ni - par : null, expN, howN);
     }
   }
 }
@@ -609,25 +640,25 @@ function xbrlDa(facts, prefix, basis) {
   if (base != null) {
     const ex = EXTRA.map((cpt, i) => get([cpt]) ?? getEnt(EXTRA_ENT[i]));
     if (ex.some((v) => Number.isNaN(v))) return { v: null, how: "사용권·투자부동산 태그 값이 여럿" };
-    return { v: base + ex.reduce((s, v) => s + (v ?? 0), 0) + (a ?? 0), how: `XBRL 감가${d == null ? "(합계 태그 — 무형 태그 별도)" : ""} ${base}${ex.some((v) => v != null) ? ` + 사용권·투자부동산 ${ex.map((v) => v ?? 0).join("+")}` : ""} + 무형 ${a ?? 0}` };
+    return { v: base + ex.reduce((s, v) => s + (v ?? 0), 0) + (a ?? 0), parts: { rou: ex[0], inv: ex[1], amo: a }, how: `XBRL 감가${d == null ? "(합계 태그 — 무형 태그 별도)" : ""} ${base}${ex.some((v) => v != null) ? ` + 사용권·투자부동산 ${ex.map((v) => v ?? 0).join("+")}` : ""} + 무형 ${a ?? 0}` };
   }
   if (da != null) return { v: da, how: `XBRL 감가·무형 합계 ${da}` };
   return { v: null, how: "XBRL 현금흐름 감가상각 태그 없음" };
 }
 
 /**
- * 원문 표(보고서 여러 개 — 같은 기간 판본 전부) → 감가상각 후보(daCandidates)·단독 줄(사용권·투자부동산·무형). basis(CFS·OFS)와 반대 범위(연결 ↔ 별도)
- * 표는 뺀다 — 연결 회사의 적재 값이 별도 재무제표 주석 값과 같아 통과하는 일이 없게(범위 미상 표는 남김)
+ * 원문 표(보고서 여러 개 — 같은 기간 판본 전부) → 확정 후보(daCandidates — 표 종류·한 조합·머리행 열) + 투자부동산 변동표 감가상각. 범위는 basis(CFS → 연결,
+ * OFS → 별도)와 **같다고 판정된 표만**(감사 3차: 범위 미상 표를 남겨 000660 별도 현금흐름표 누적이 연결 TTM 대조에 끼었다)
  */
 async function docReads(rcepts, basis) {
-  const cands = [], rows = [];
-  const other = basis === "OFS" ? "con" : "sep";
+  const want = basis === "OFS" ? "sep" : "con";
+  const cands = [], inv = [];
   for (const r of rcepts) {
     const t = await dartDocDaTables(r);
-    for (const x of daCandidates(t)) if (x.scope !== other) cands.push({ v: x.v, how: `${r} ${x.how}` });
-    for (const x of docExtraRows(t)) if (x.scope !== other) rows.push({ ...x, how: `${r} ${x.how}` });
+    for (const x of daCandidates(t)) if (x.scope === want) cands.push({ ...x, rcept: r, how: `${r} ${x.how}` });
+    for (const x of invTableDep(t)) if (x.scope === want) inv.push({ ...x, rcept: r, how: `${r} ${x.how}` });
   }
-  return { cands, rows };
+  return { cands, inv };
 }
 /** XBRL 사실 — 그 판본에 XBRL 파일이 없으면(DART 014) null. 다른 실패는 던진다 */
 async function xbrlFactsOrNone(rcept, code) {
@@ -668,7 +699,7 @@ function testShift(doc, sym) {
  */
 async function daLayer(c) {
   const { sym, env, IS, H, exact, fail, add, consts, yearSrc, yearsShown, caps, L, h } = c;
-  const { PASS, NA } = consts;
+  const { PASS, NA, COMMON } = consts;
   const col = await daCol(env);
   const doc0 = await col.findOne({ _id: sym });
   if (!doc0) { fail("K3", "감가상각 적재본(kr_da) 존재", "-", `유니버스 종목인데 ${env.KR_DA_COLLECTION || "kr_da"} 에 문서 없음`); return; }
@@ -720,29 +751,46 @@ async function daLayer(c) {
         else if (got.v !== v) fail("K3", nm0, colY, `적재 ${v}(${s}) vs XBRL ${got.v}(${got.how}, ${got.rcept})`);
         else { add("K3", nm0, colY, { status: PASS, note: `${got.how} (${got.rcept})${/영업비용확인/.test(s) ? " · 영업비용 기준 확인 해(값 = XBRL 그대로)" : ""}` }); indep = `XBRL ${got.rcept}`; }
       } else {
-        // 원문 표(그해·이듬해 사업보고서, 판본 전부) — 영업비용 기준 성격별 표·현금흐름 조정 주석 모두 같은 판독
-        const rd = await docReads([...annualReps(y + 1), ...annualReps(y)], basis);
-        const pool = [...rd.cands];
-        if (/xbrl/.test(s)) {
-          // XBRL 기본 값 + 원문 단독 줄(사용권·투자부동산 보완 「xbrl+doc」, 원문 무형 「+원문무형」)
+        // 원문 표(그해·이듬해 사업보고서, 판본 전부) — 확정 판독만(감사 3차): 그해 열(그해 보고서 당기·이듬해 보고서 전기), 범위 = 재무제표 기준,
+        // 표 종류 = 적재 출처(「+영업비용」 = 성격별 표, 원문 현금흐름 = 현금흐름 조정 표), 조합 = 그 표 묶음의 구성요소 전부 하나
+        const reps2 = [...annualReps(y + 1), ...annualReps(y)];
+        const rd = await docReads(reps2, basis);
+        const ryOf = (rc) => L.reports.find((x) => x.rcept === rc)?.year;
+        const inYear = (c0) => c0.cum !== false && c0.period === (ryOf(c0.rcept) === y ? "cur" : ryOf(c0.rcept) === y + 1 ? "prior" : "none");
+        const natureSrc = /\+영업비용(?!확인)/.test(s);
+        const kindOk = (c0) => (natureSrc ? c0.kind === "nature" : c0.kind === "cf");
+        const cs = rd.cands.filter((c0) => inYear(c0) && kindOk(c0));
+        const pool = [];
+        if (/^xbrl/.test(s) && !natureSrc) {
+          // XBRL 값 + 원문에서 보완한 줄 — 「xbrl+doc」: XBRL 에 없는 사용권·투자부동산 줄(같은 현금흐름 조정 표·같은 열에 있는 것 전부), 「+원문무형」: 원문 무형
           for (const x of await xbrlOf()) {
-            pool.push({ v: x.v, how: `XBRL ${x.how}` });
-            for (const r of rd.rows) pool.push({ v: x.v + r.v, how: `XBRL ${x.how} + 원문 ${r.how}` });
-            for (const r1 of rd.rows) for (const r2 of rd.rows) if (r1.kind !== r2.kind) pool.push({ v: x.v + r1.v + r2.v, how: `XBRL ${x.how} + 원문 ${r1.how} + ${r2.how}` });
+            for (const c0 of cs) {
+              let add0 = 0, used = [];
+              if (/xbrl\+doc/.test(s)) for (const k of ["rou", "inv"]) if (x.parts?.[k] == null && c0.comps[k] != null) { add0 += c0.comps[k]; used.push(k); }
+              if (/원문무형/.test(s) && x.parts?.amo == null && c0.comps.amo != null) { add0 += c0.comps.amo; used.push("amo"); }
+              if (used.length) pool.push({ v: x.v + add0, how: `XBRL ${x.how} + 원문 ${used.join("·")}(${c0.how})` });
+            }
+          }
+        } else {
+          for (const c0 of cs) {
+            const vv = /−투자부동산/.test(s) ? c0.vNoInv : c0.v;
+            if (vv == null) continue;
+            if (/\+투자부동산/.test(s)) {
+              // 성격별 합계 + 같은 보고서·같은 해 열의 투자부동산 변동표 감가상각(LS)
+              for (const iv of rd.inv) if (iv.rcept === c0.rcept && iv.period === c0.period) pool.push({ v: vv + iv.v, how: `${c0.how} + ${iv.how}` });
+            } else pool.push({ v: vv, how: c0.how });
           }
         }
-        // 성격별 합계 + 투자부동산 변동표 감가상각(「+투자부동산」 — LS) — 다른 표 두 값의 합
-        if (/\+투자부동산/.test(s)) for (const a of rd.cands) for (const b of rd.cands) if (a !== b) pool.push({ v: a.v + b.v, how: `${a.how} + ${b.how}` });
         const nm0 = "감가상각 적재본 = 사업보고서 원문(검증기 판독)";
         const hit = pool.find((p) => p.v === v);
-        // 원문 열(당기·전기)은 판독하지 않는다 — 대신 이웃 해 적재 값과 같으면(열을 잘못 읽은 적재) 실패
+        // 이웃 해 적재 값과 같으면(열을 잘못 읽은 적재) 실패
         const twin = [y - 1, y + 1].find((yy) => { const o = doc.byYear?.[yy]; return o && (o.depreciation ?? 0) + (o.amortisation ?? 0) === v; });
         if (hit && twin != null) fail("K3", nm0, colY, `적재 ${v} 가 원문 ${hit.how} 와 같지만 FY${twin} 적재 값과도 같음 — 열(해)을 잘못 읽은 적재 의심`);
         else if (hit) { add("K3", nm0, colY, { status: PASS, note: `${s} · ${hit.how}` }); indep = `원문 ${hit.how}`; }
-        else if (!rd.cands.length) add("K3", nm0, colY, { status: NA, note: `${s} · 원문에서 감가상각 표를 못 읽음(보고서 ${[...annualReps(y + 1), ...annualReps(y)].join("·") || "없음"}) — 적재 대조는 공통모드` });
+        else if (!pool.length) add("K3", nm0, colY, { status: COMMON, note: `${s} · 확정 판독 불가(그해 열·범위·표 종류가 정해진 원문 후보 없음 — 보고서 ${reps2.join("·") || "없음"}) — 공통모드` });
         else {
           const near = [...pool].sort((a, b) => Math.abs(a.v - v) - Math.abs(b.v - v))[0];
-          fail("K3", nm0, colY, `적재 ${v}(${s}) — 원문 후보 ${pool.length}개 중 같은 값 없음(가장 가까운 ${near.v} ${near.how}, 차 ${v - near.v})`);
+          fail("K3", nm0, colY, `적재 ${v}(${s}) — 확정 원문 후보 ${pool.length}개 중 같은 값 없음(가장 가까운 ${near.v} ${near.how}, 차 ${v - near.v})`);
         }
       }
       indepY.set(y, indep);
@@ -792,16 +840,25 @@ async function daLayer(c) {
   const basis = yearSrc.get(Y - 1)?.fsDiv ?? "CFS";
   const reps = (yy) => L.reports.filter((x) => x.year === yy && x.code === lp.code).sort((a, b) => b.rcept.localeCompare(a.rcept)).map((x) => x.rcept);
   const curR = reps(Y), prevR = reps(Y - 1);
+  // 확정 판독만(감사 3차 — 당기 후보가 전년 쪽에도 들어가 「FY + 표 − 같은 표」·당기·전년 뒤바꿈·별도 표가 통과했다):
+  //  a = 당기 보고서의 당기 누적 열, b = 전년 누적(당기 보고서의 전기 누적 열 또는 전년 같은 보고서의 당기 누적 열), 같은 표 종류·같은 구성, 같은 후보 금지.
+  //  범위 = 재무제표 기준과 같다고 판정된 표만. 적재 출처(ttmSrc)가 성격별이면 성격별 표, 현금흐름 조정(원문)이면 현금흐름 표, 현금흐름 조정이면 XBRL 만
   const cur = await docReads(curR, basis), prev = await docReads(prevR, basis);
-  const A = [...cur.cands], B = [...cur.cands, ...prev.cands];
-  for (const r of curR) { const f = await xbrlFactsOrNone(r, lp.code); if (f) { A.push(...xbrlCum(f, "CFY", Y, basis)); B.push(...xbrlCum(f, "PFY", Y - 1, basis)); } }
-  for (const r of prevR) { const f = await xbrlFactsOrNone(r, lp.code); if (f) B.push(...xbrlCum(f, "CFY", Y - 1, basis)); }
+  const ts = String(doc.ttmSrc ?? "");
+  const kind = /성격별\(손익계산서/.test(ts) ? null : /성격별/.test(ts) ? "nature" : /원문/.test(ts) ? "cf" : /현금흐름/.test(ts) ? "xbrl" : "any";
+  const okDoc = (c0) => c0.cum !== false && (kind === "any" || c0.kind === kind);
+  const A = cur.cands.filter((c0) => okDoc(c0) && c0.period === "cur").map((c0) => ({ ...c0, grp: `doc:${c0.kind}:${c0.sig}` }));
+  const B = [...cur.cands.filter((c0) => okDoc(c0) && c0.period === "prior"), ...prev.cands.filter((c0) => okDoc(c0) && c0.period === "cur")].map((c0) => ({ ...c0, grp: `doc:${c0.kind}:${c0.sig}` }));
+  if (kind === "xbrl" || kind === "any") {
+    for (const r of curR) { const f = await xbrlFactsOrNone(r, lp.code); if (f) { A.push(...xbrlCum(f, "CFY", Y, basis).map((x) => ({ ...x, grp: "xbrl" }))); B.push(...xbrlCum(f, "PFY", Y - 1, basis).map((x) => ({ ...x, grp: "xbrl" }))); } }
+    for (const r of prevR) { const f = await xbrlFactsOrNone(r, lp.code); if (f) B.push(...xbrlCum(f, "CFY", Y - 1, basis).map((x) => ({ ...x, grp: "xbrl" }))); }
+  }
   const nm0 = "LTM 감가상각 TTM 적재본 = 사업연도 + 당기 누적 − 전년 누적(검증기 원문·XBRL 판독)";
   let hit = null;
-  if (fyTot != null) for (const a of A) { for (const b of B) if (fyTot + a.v - b.v === v) { hit = `FY${Y - 1} ${fyTot} + ${a.how} ${a.v} − ${b.how} ${b.v}`; break; } if (hit) break; }
+  if (fyTot != null) for (const a of A) { for (const b of B) if (a !== b && a.grp === b.grp && fyTot + a.v - b.v === v) { hit = `FY${Y - 1} ${fyTot} + ${a.how} ${a.v} − ${b.how} ${b.v}`; break; } if (hit) break; }
   const fyInd = indepY.get(Y - 1);
   if (hit) add("K3", nm0, "LTM", { status: PASS, note: `${doc.ttmLabel} = ${hit}${fyInd ? "" : " · 사업연도 값은 독립 판독 안 됨"}` });
-  else if (fyTot == null || !A.length || !B.length) add("K3", nm0, "LTM", { status: NA, note: `${doc.ttmLabel} — ${fyTot == null ? `적재본 FY${Y - 1} 없음` : "분기 보고서 원문·XBRL 누적 판독 불가"} — 적재 대조는 공통모드` });
+  else if (fyTot == null || !A.length || !B.length || !A.some((a) => B.some((b) => a.grp === b.grp))) add("K3", nm0, "LTM", { status: COMMON, note: `${doc.ttmLabel}(${ts}) — ${fyTot == null ? `적재본 FY${Y - 1} 없음` : "확정 판독 불가(같은 종류·구성의 당기·전년 누적 후보 쌍 없음)"} — 공통모드` });
   else fail("K3", nm0, "LTM", `적재 TTM ${v}(${doc.ttmLabel}, ${doc.ttmSrc ?? ""}) — 사업연도 ${fyTot} + 누적 후보 ${A.length}개 − 전년 후보 ${B.length}개 조합 중 같은 값 없음`);
   const ind = hit && fyInd;
   if (op != null || LT.ebitda != null) exact("K3", "LTM EBITDA = LTM 영업이익 + 감가상각 TTM(적재본)", "LTM", LT.ebitda, op != null ? op + v : null, `적재 ${doc.ttmLabel}`, ind ? null : "감가상각 TTM 이 검증기 독립 판독으로 확인되지 않음");

@@ -227,13 +227,18 @@ export async function dartCompany(corp) {
   });
 }
 
-const DOC_DA_VER = "t2";
+const DOC_DA_VER = "t3";
 /**
- * 보고서 원문(사업·분기·반기)의 표 중 감가상각·상각 줄이 있는 표만 — [{ head, unit, scope, rows: [[셀…]] }]. head = 표 바로 앞 글자 마지막 300자,
- * scope = 연결("con")·별도("sep")·미상(null) — 첨부 문서 종류(연결감사보고서 00761 → con, 감사보고서 00760 → sep), 본문은 표 앞 마지막 목차 제목
- * (<TITLE>)이 "연결재무제표…"면 con, "재무제표…"면 sep(사업보고서 "3. 연결재무제표 주석"·"5. 재무제표 주석"),
- * unit = 원 단위 배수(표 안 첫 부분 → 없으면 표 앞 1500자의 마지막 "(단위 : …)"). 앱 적재 스크립트(populate-kr-da.mjs)와 코드를 나누지 않는 검증기 판독.
- * 판본 = 접수번호
+ * 보고서 원문(사업·분기·반기)의 표 중 감가상각·상각 줄이 있는 표만 — [{ head, unit, scope, section, period, rows: [[셀…]] }].
+ *  · head = 표 바로 앞 글자 마지막 300자, unit = 원 단위 배수(표 안 첫 부분 → 없으면 표 앞 1500자의 마지막 "(단위 : …)")
+ *  · section = 표가 속한 주석 제목(문서 순서로 표 사이 글자에 나온 마지막 "번호. 제목" — 제목이 없는 표는 앞 표의 제목을 잇는다: 당반기 표 뒤의
+ *    전반기 표 등). 감사 3차: 범위·표 종류(성격별·현금흐름)를 이 제목으로 판정한다
+ *  · scope = 연결("con")·별도("sep")·미상(null) — 첨부 문서 종류(연결감사보고서 00761 → con, 감사보고서 00760 → sep) → 본문 목차(<TITLE>)가
+ *    "연결재무제표…"면 con, "재무제표…"면 sep → 주석 제목에 "연결"이 있으면 con(「반기연결현금흐름표」·「비용의 성격별 분류 (연결)」), 제목은 있는데
+ *    "연결"이 없으면 sep(「현금흐름표」). 셋 다 못 정하면 null
+ *  · period = 표 바로 앞(제목 뒤) 기간 표시 — "cur"(당기·당반기·당분기)·"prior"(전기·전반기·전분기)·null
+ *  · rows 의 셀은 COLSPAN 만큼 반복(머리행 열 맞춤용)
+ * 앱 적재 스크립트(populate-kr-da.mjs)와 코드를 나누지 않는 검증기 판독. 판본 = 접수번호
  */
 export async function dartDocDaTables(rcept) {
   return versioned("doc-da-tables", rcept, `${rcept}-${DOC_DA_VER}`, async () => {
@@ -253,21 +258,31 @@ export async function dartDocDaTables(rcept) {
       const acode = t.match(/<DOCUMENT-NAME[^>]*ACODE="(\d+)"/)?.[1];
       const fileScope = acode === "00761" ? "con" : acode === "00760" ? "sep" : null;
       const titles = [...t.matchAll(/<TITLE[^>]*>([^<]*)<\/TITLE>/g)].map((x) => [x.index, x[1]]);
-      const scopeAt = (i) => {
-        if (fileScope) return fileScope;
+      const titleScope = (i) => {
         const ti = titles.filter(([k]) => k < i).at(-1)?.[1] ?? "";
         return /연결\s*재무제표/.test(ti) ? "con" : /재무제표/.test(ti) ? "sep" : null;
       };
       const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
-      let m;
+      let m, prevEnd = 0, section = null;
       while ((m = re.exec(t))) {
         const tab = m[0];
+        const between = txt(t.slice(prevEnd, m.index));
+        prevEnd = m.index + tab.length;
+        // 표 사이 글자의 마지막 "번호. 제목"(제목 = 번호 뒤 한글로 시작하는 어절들, 괄호 "(연결)" 포함) — 없으면 앞 표 제목을 잇는다
+        const hs = [...between.matchAll(/(?:^|\s)(\d{1,2})\.\s*([가-힣][가-힣A-Za-z·,\s]{0,40}?(?:\s*\(연결\))?)(?=\s|$)/g)];
+        if (hs.length) section = hs.at(-1)[2].trim();
         if (!/상각/.test(tab)) continue;
-        const rows = [...tab.matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((x) => [...x[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => txt(c[1])));
+        const rows = [...tab.matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((x) => [...x[0].matchAll(/<T([DHEU])([^>]*)>([\s\S]*?)<\/T[DHEU]>/gi)].flatMap((c) => {
+          const span = Number(c[2].match(/COLSPAN="?(\d+)/i)?.[1] ?? 1);
+          return Array(Math.min(Math.max(span, 1), 20)).fill(txt(c[3]));
+        }));
         if (!rows.some((row) => /상각/.test(row[0] ?? ""))) continue;
         const before = t.slice(Math.max(0, m.index - 1500), m.index);
         const unit = units(tab.slice(0, 2000))[0] ?? units(before).at(-1) ?? null;
-        out.push({ head: txt(before).slice(-300), unit, scope: scopeAt(m.index), rows });
+        const tail = between.slice(-40);
+        const period = /(당|금)\s*(반기|분기|기)(말)?\s*(\(단위|$)/.test(tail) ? "cur" : /전\s*(반기|분기|기)(말)?\s*(\(단위|$)/.test(tail) ? "prior" : null;
+        const secScope = section ? (/연결/.test(section) ? "con" : "sep") : null;
+        out.push({ head: txt(before).slice(-300), unit, scope: fileScope ?? titleScope(m.index) ?? secScope, section, period, rows });
       }
     }
     return out;

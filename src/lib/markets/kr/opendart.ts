@@ -409,7 +409,7 @@ export interface KrTtmPart {
 export type KrTtmParts = Partial<Record<"netIncome" | "revenue" | "opIncome" | "eps" | "daTtm", KrTtmPart[]>>;
 
 /** 손익 TTM + 그 TTM 의 마지막 분기(재무상태표 기준일 — getTtm 스냅샷용). */
-type KrTtmResult = TtmFlows & { lastQuarter: { year: number; quarter: number }; parts: KrTtmParts; reasons: NonNullable<TtmFlows["reasons"]> };
+type KrTtmResult = TtmFlows & { lastQuarter: { year: number; quarter: number } | null; parts: KrTtmParts; reasons: NonNullable<TtmFlows["reasons"]> };
 
 async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   const y = new Date().getFullYear();
@@ -436,6 +436,29 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
     if (interim) break;
   }
   if (!interim) return null;
+
+  // 1-1) 사업보고서 Y 가 이미 나왔고 최신 분기보고서가 그 해(Y) 이하면(3~5월 — 사업보고서 뒤, 다음 해 1분기 보고서 전) LTM = FY Y 그대로(감사 3차 2026-10-05:
+  //      예전엔 annual = interim.year − 1 이라 이 시기 005930 LTM 이 "FY2024 + 2025 3분기 − 2024 3분기"(매출 315.56조, 사업보고서 333.61조)였다).
+  //      lastQuarter 없음 → 재무상태표·감가상각도 사업연도 기준(krLtmBalance 연말, daAndAmortSeries 연간)
+  for (const fsDiv of interim.fsDiv === "CFS" ? (["CFS", "OFS"] as const) : (["OFS", "CFS"] as const)) {
+    const rows = await fetchFnlttYear(corpCode, interim.year, "11011", fsDiv);
+    if (!rows || !rows.length) continue;
+    const fy = interim.year;
+    const span = { start: `${fy}-01-01`, end: `${fy}-12-31` };
+    const val = (key: keyof typeof TTM_ACCOUNTS) => (key === "eps" ? epsValue(rows, "annual") : isValue(rows, TTM_ACCOUNTS[key], "annual", undefined, TTM_IDS[key]));
+    const pt = (v: number | null): KrTtmPart[] => (v == null ? [] : [{ v, ...span }]);
+    const [netIncome, revenue, opIncome, eps] = [val("netIncome"), val("revenue"), val("opIncome"), val("eps")];
+    return {
+      periodLabel: `FY${fy}`,
+      lastQuarter: null,
+      netIncome,
+      revenue,
+      opIncome,
+      eps,
+      parts: { netIncome: pt(netIncome), revenue: pt(revenue), opIncome: pt(opIncome), eps: pt(eps) },
+      reasons: {},
+    };
+  }
 
   // 2) 직전 사업보고서
   let annualRows: FnlttRow[] | null = null;

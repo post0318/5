@@ -1,39 +1,76 @@
 /**
- * 검증기 — 원문 감가상각 표 판독(감사 2차 2026-10-05). 감가상각 적재본(kr_da) 중 XBRL 로 재현되지 않는 칸(원문 현금흐름 조정 주석 해, 영업비용 기준
+ * 검증기 — 원문 감가상각 표 판독(감사 2차·3차 2026-10-05). 감가상각 적재본(kr_da) 중 XBRL 로 재현되지 않는 칸(원문 현금흐름 조정 주석 해, 영업비용 기준
  * 성격별 비용 표 해, 사용권자산 줄 원문 보완 해, TTM 누적)을 **검증기가 원문 표를 따로 읽어** 대조한다. 앱 적재 스크립트(populate-kr-da.mjs)의 판독
  * 코드(parseDocDa·parseNatureDa 등)를 가져오지 않는다 — 규칙 문장(감가상각 = 유형 + 사용권자산 + 투자부동산 감가상각 + 무형자산상각, 또는 합친 줄)만
  * 보고 다시 짠 판독.
  *
- * 판독: 감가상각 줄이 있는 표를 줄 이름으로 나눈다(같은 표에 당기·전기 묶음이 이어 실리면 감가상각 줄이 다시 나올 때 새 묶음). 묶음마다 숫자 열
- * 위치별로 후보 합을 만든다 — 합친 줄(감가상각비 및 무형자산상각비), 감가 + 무형, 감가 + 사용권 + 무형, 감가 + 투자부동산 + 무형, 감가 + 사용권 +
- * 투자부동산 + 무형. 값 × 표 단위. 적재 값이 후보 중 하나와 **정확히** 같으면 원문 근거가 있는 값이다(12자리 수가 우연히 같을 일은 없다고 본다).
- * 열 위치(당기·전기·누적)를 판독하지 않는 대신 이웃 해 값과 같은 후보는 실패 사유에 따로 적는다.
+ * 감사 3차(확정 판독만): 예전엔 표마다 다섯 가지 조합(감가 + 무형, 감가 + 사용권 + 무형 …)과 모든 열을 후보로 내 사용권·투자부동산을 뺀 값도 통과했다.
+ *  · 표 종류 = 주석 제목(dart.mjs section)으로 — 성격별(nature)·현금흐름(cf)·투자부동산 변동표(inv)만. 판관비·부문·유형자산 변동표는 쓰지 않는다
+ *  · 조합은 **하나** — 그 표 묶음에 있는 구성요소를 모두 더한다: (합친 줄 또는 감가) + 사용권 줄(있으면) + 투자부동산 줄(있으면) + 무형 줄(있으면, 합친 줄이
+ *    아니면). 투자부동산 줄을 뺀 값(vNoInv)은 적재 출처가 「−투자부동산」일 때만 호출부가 쓴다
+ *  · 열 = 머리행으로 판독 — 당기·전기(당반기·전반기)와 3개월·누적. 머리행에 기간이 없으면 표 앞 기간 표시(dart.mjs period). 같은 기간·누적 구분 열이
+ *    여럿이면(성격별 표의 매출원가·판관비·합계 등) 마지막 열(합계)만
  */
 const lab = (s) => String(s ?? "").replace(/^[\s\-–·ㆍ•\d.)]+/, "").replace(/\(주\s*\d+[^)]*\)/g, "").replace(/\s/g, "");
 const num = (c) => {
   const u = String(c ?? "").replace(/\s/g, "");
   if (/^[-–]$/.test(u)) return 0;
-  if (!/^\(?-?[\d,]+\)?$/.test(u)) return null;
-  const v = Number(u.replace(/[(),-]/g, ""));
-  return /^[(-]/.test(u) ? -v : v;
+  if (!/^[(△]?-?[\d,]+\)?$/.test(u)) return null;
+  const v = Number(u.replace(/[(),\-△]/g, ""));
+  return /^[(\-△]/.test(u) ? -v : v;
 };
 function kindOf(l) {
   // "감가상각비(유,무형자산 및 투자부동산)"(000500 성격별·현금흐름 조정) — 괄호 안이 무형자산을 포함한다고 밝힌 감가상각비 = 합친 줄
   const paren = l.match(/\((.*?)\)/)?.[1] ?? "";
   if (l.replace(/\(.*?\)/g, "") === "감가상각비" && /무형/.test(paren)) return "comb";
-  if (/^(감가상각비(및|와|,)무형자산(감가)?상각비|감가상각비및상각비|유·?무형자산상각비|유형및무형자산상각비)$/.test(l)) return "comb";
+  if (/^(감가상각비(및|와|,)무형자산(감가)?상각(비)?|감가상각비및상각비|유·?무형자산상각비|유형및무형자산상각비)$/.test(l)) return "comb";
   if (/사용권자산/.test(l) && /상각/.test(l)) return "rou";
   if (/투자부동산/.test(l) && /상각/.test(l)) return "inv";
   if (/^무형자산(감가)?상각비$/.test(l)) return "amo";
   if (/^(유형자산)?감가상각비$|^유형자산상각비$/.test(l)) return "dep";
   return null;
 }
+/** 표 종류 — 주석 제목으로 */
+export function tableKind(t) {
+  const s = t.section ?? "";
+  if (/성격별/.test(s)) return "nature";
+  if (/투자부동산/.test(s)) return "inv";
+  if (/현금흐름/.test(s)) return "cf";
+  return null;
+}
+/** 열 j 의 (기간, 누적) — 머리행 판독. 기간: "cur"·"prior"·null(표 앞 기간 표시를 씀), 누적: true·false·null */
+function columns(t) {
+  const isData = (r) => r.slice(1).some((c) => num(c) != null && String(c).trim() !== "-");
+  const first = t.rows.findIndex(isData);
+  const hdrs = (first < 0 ? [] : t.rows.slice(0, first)).filter((r) => r.slice(1).some((c) => String(c).trim()));
+  const width = Math.max(0, ...t.rows.filter(isData).map((r) => r.length - 1));
+  const cols = [];
+  for (let j = 0; j < width; j++) {
+    let period = null, cum = null;
+    for (const h of hdrs) {
+      if (h.length - 1 !== width) continue;
+      const l = String(h[j + 1] ?? "").replace(/\s/g, "");
+      if (/^(당|금)(반기|분기|기)/.test(l)) period = "cur";
+      else if (/^전(반기|분기|기)/.test(l)) period = "prior";
+      if (/누적/.test(l)) cum = true;
+      else if (/3개월/.test(l)) cum = false;
+    }
+    cols.push({ period: period ?? t.period ?? null, cum });
+  }
+  // 같은 (기간, 누적) 열이 여럿이면 마지막 열만(성격별 표 합계 열)
+  const keep = cols.map((c, j) => !cols.some((d, k) => k > j && d.period === c.period && d.cum === c.cum));
+  return { cols, keep };
+}
 
-/** 표 목록 → 후보 [{ v, how }] (원 단위). 표 단위를 모르면 그 표는 건너뛴다 */
+/**
+ * 표 목록 → 확정 후보 [{ v, vNoInv, comps, scope, kind, period, cum, sig, how }] (원 단위). 표 단위·종류를 모르면 그 표는 건너뛴다
+ */
 export function daCandidates(tables) {
   const out = [];
   tables.forEach((t, ti) => {
-    if (!t.unit) return;
+    const kind = tableKind(t);
+    if (!t.unit || (kind !== "nature" && kind !== "cf")) return;
+    const { cols, keep } = columns(t);
     const segs = [];
     let cur = null;
     for (const r of t.rows) {
@@ -43,35 +80,34 @@ export function daCandidates(tables) {
       if (!(k in cur)) cur[k] = r.slice(1).map(num);
     }
     segs.forEach((s, si) => {
-      const width = Math.max(0, ...Object.values(s).map((a) => a.length));
-      for (let j = 0; j < width; j++) {
+      for (let j = 0; j < cols.length; j++) {
+        if (!keep[j]) continue;
         const g = (k) => s[k]?.[j] ?? null;
-        const add = (v, how) => { if (v != null && Number.isFinite(v) && v !== 0) out.push({ v: v * t.unit, scope: t.scope ?? null, how: `표${ti + 1}${t.scope ? `(${t.scope === "con" ? "연결" : "별도"})` : ""}·묶음${si + 1}·열${j + 1} ${how}` }); };
-        if (g("comb") != null) { add(g("comb"), "합친 줄"); if (g("rou") != null) add(g("comb") + g("rou"), "합친 줄 + 사용권"); }
-        if (g("dep") != null) {
-          const d = g("dep"), a = g("amo") ?? 0, ro = g("rou"), iv = g("inv");
-          add(d + a, "감가 + 무형");
-          if (ro != null) add(d + ro + a, "감가 + 사용권 + 무형");
-          if (iv != null) add(d + iv + a, "감가 + 투자부동산 + 무형");
-          if (ro != null && iv != null) add(d + ro + iv + a, "감가 + 사용권 + 투자부동산 + 무형");
-          // 투자부동산 상각을 뺀 값(적재 「−투자부동산」 — 그 보고서에만 따로 있는 투자부동산 줄을 뺀 이듬해 판본 기준, SK하이닉스 2021)
-          if (iv != null) add(d - iv + a, "감가 − 투자부동산 + 무형");
-        }
+        const base = g("comb") ?? g("dep");
+        if (base == null || base === 0) continue;
+        const rou = g("rou"), inv = g("inv"), amo = g("comb") != null ? null : g("amo");
+        const sig = [g("comb") != null ? "comb" : "dep", rou != null && "rou", inv != null && "inv", amo != null && "amo"].filter(Boolean).join("+");
+        const v = base + (rou ?? 0) + (inv ?? 0) + (amo ?? 0);
+        out.push({
+          v: v * t.unit, vNoInv: inv != null ? (v - inv) * t.unit : null, comps: { rou: rou == null ? null : rou * t.unit, inv: inv == null ? null : inv * t.unit, amo: amo == null ? null : amo * t.unit },
+          scope: t.scope ?? null, kind, period: cols[j].period, cum: cols[j].cum, sig, unit: t.unit,
+          how: `표${ti + 1}[${t.section ?? "?"}${t.scope ? `·${t.scope === "con" ? "연결" : "별도"}` : ""}]·묶음${si + 1}·열${j + 1}(${cols[j].period ?? "?"}${cols[j].cum === true ? "·누적" : cols[j].cum === false ? "·3개월" : ""}) ${sig}`,
+        });
       }
     });
   });
   return out;
 }
 
-/** 원문 줄 하나(사용권자산·투자부동산 상각·무형자산상각)의 열별 값 [{ v, kind, how }] — XBRL 기본 감가상각에 원문 줄을 더한 적재 값(xbrl+doc·+원문무형) 대조용 */
-export function docExtraRows(tables) {
+/** 투자부동산 변동표의 감가상각(「+투자부동산」 적재 — 성격별 합계 + 투자부동산 감가상각) — [{ v, scope, period, how }], 마지막 숫자 열(합계)의 절댓값 */
+export function invTableDep(tables) {
   const out = [];
   tables.forEach((t, ti) => {
-    if (!t.unit) return;
+    if (!t.unit || tableKind(t) !== "inv") return;
     for (const r of t.rows) {
-      const k = kindOf(lab(r[0]));
-      if (k !== "rou" && k !== "inv" && k !== "amo") continue;
-      r.slice(1).map(num).forEach((v, j) => { if (v != null && v !== 0) out.push({ v: v * t.unit, kind: k, scope: t.scope ?? null, how: `표${ti + 1}·열${j + 1} ${{ rou: "사용권", inv: "투자부동산", amo: "무형" }[k]}` }); });
+      if (!/^감가상각(비)?$/.test(lab(r[0]))) continue;
+      const vs = r.slice(1).map(num).filter((x) => x != null && x !== 0);
+      if (vs.length) out.push({ v: Math.abs(vs.at(-1)) * t.unit, scope: t.scope ?? null, period: t.period ?? null, how: `표${ti + 1}[${t.section}] 투자부동산 감가상각` });
     }
   });
   return out;
