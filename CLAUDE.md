@@ -2104,7 +2104,11 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   **master 병합 체크리스트(한국)**: ① 병합 전 `kr/verification` 전체 검증 실패 0 ② 병합·배포 후 1호기에서 `sudo bash /opt/macro/jobs/ops/oracle/
   install-schedules.sh` 로 `fin-kr-da` 타이머 설치(작업 폴더 적재 코드에 규칙 판본이 있어야 설치된다 — master 의 옛 적재 코드가 운영 kr_da 를 옛 규칙으로
   덮지 않게 병합 전에는 설치 금지) ③ `fin-kr-da` 첫 실행(`sudo systemctl start fin-kr-da` 또는 배포 직후 자동)이 운영 kr_da 를 새 규칙으로 채움 —
-  `journalctl -u fin-kr-da` 로 실패 0·상한 미도달 확인, 운영 화면 한국 EBITDA·EV 확인.
+  `journalctl -u fin-kr-da` 로 실패 0·상한 미도달 확인, 운영 화면 한국 EBITDA·EV 확인. 첫 실행 DART 요청 추정 = 약 660건(2호기 실측: 빈 캐시에서 30종목
+  658건 — 목록 30 포함, 운영 키 적재 상한 2,000 안. 1호기 /opt/macro/dart-cache 에 앱이 이미 받은 fnltt·xbrl 이 있으면 더 적다). 그 뒤 매일 증분 = 종목당
+  목록 1건(30건), 규칙 판본만 바뀐 재처리 = 34건(디스크에서 다시 계산 — 2호기 실측).
+  **원문 디스크 캐시**: 적재 스크립트는 `DART_CACHE_DIR` 가 있으면 앱 `dart-cache.ts` 와 같은 배치·판본 규칙(`scripts/lib/dart-disk-cache.mjs` — 규칙을 바꾸면
+  두 파일을 같이)으로 원문을 디스크에 둔다. 2호기는 앱·적재가 `/home/ubuntu/dart-cache` 를 같이 쓴다(.env.local, 검증기 캐시 reports/.dart-cache 는 독립).
 - **2호기(검증 서버) = 검증 전용 MongoDB(오너 지시 2026-10-05 — "검증 서버가 운영 DB 에 저장하면 안 된다", "운영은 Atlas, 백업·검증은 2호기 DB")**:
   2호기 로컬 MongoDB 8.0(127.0.0.1, 인증)을 verify-dev 가 쓴다. 매일 05:30 KST `macro-db-sync` 타이머(`ops/verify/db-sync.sh`)가 운영 Atlas 를
   **읽기만** 해 덤프 → 임시 DB 복원 → 컬렉션 교체(실패하면 이전 복사본 유지). 압축본 = 정식 DB 백업(오너 결정 2026-10-05 "DB 백업은 구성하고 앱 백업은 하지 않는다")
