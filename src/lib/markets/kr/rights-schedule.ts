@@ -4,7 +4,7 @@ import "server-only";
  * 금융위원회 공공데이터포털 (data.go.kr, 1160100) — 한국 주식 권리일정 + 배당.
  *  권리일정 : GetStocRighScheService_V2/getRighExerReasSche_V2
  *  배당정보 : GetStocDiviInfoService_V2/getDiviInfo_V2
- *  시세     : GetStockSecuritiesInfoService/getStockPriceInfo (배당수익률 계산용 종가)
+ *  시세     : GetStockSecuritiesInfoService_V2/getStockPriceInfo_V2 (배당수익률 계산용 종가)
  *  DATA_GO_KR_KEY 필요 (Encoding 인증키 — 이미 URL 인코딩된 문자열).
  *
  * 종목 필터는 법인등록번호(crno). 일 1회 갱신(익영업일 오전 8시).
@@ -168,7 +168,7 @@ async function fetchCloseMap(
   const map = new Map<string, number>();
   try {
     const { rows } = await callApi(
-      "service/GetStockSecuritiesInfoService/getStockPriceInfo",
+      "GetStockSecuritiesInfoService_V2/getStockPriceInfo_V2",
       {
         resultType: "json",
         numOfRows: "400",

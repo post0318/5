@@ -25,7 +25,7 @@ export async function fetchKrDailyCloses(
   try {
     for (let page = 1; page <= 4; page++) {
       const url =
-        `https://apis.data.go.kr/1160100/service/GetStockSecuritiesInfoService/getStockPriceInfo` +
+        `https://apis.data.go.kr/1160100/GetStockSecuritiesInfoService_V2/getStockPriceInfo_V2` +
         `?serviceKey=${key}&resultType=json&numOfRows=500&pageNo=${page}` +
         `&beginBasDt=${beginYmd}&endBasDt=${endYmd}&likeSrtnCd=${digits}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(9000) });
