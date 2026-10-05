@@ -3,7 +3,7 @@
 # GitHub 에 없는 1호기 설정을 묶어 **1호기에서 age 로 암호화**한 뒤 2호기에 보낸다. 2호기에는 암호문만 남는다.
 # systemd 타이머(macro-config-backup.timer, 매일 05:40 KST)가 root 로 실행. 설치는 install-config-backup.sh.
 #
-# 담는 것: /opt/macro/{jobs.env,app.env}, /opt/macro/ops(복호화 키 제외), /etc/caddy/Caddyfile, /etc/iptables,
+# 담는 것: /opt/macro/{app.env,jobs.local.env,jobs.env}(운영 비밀값 원본 — GitHub 에는 없다), /opt/macro/ops(복호화 키 제외), /etc/caddy/Caddyfile, /etc/iptables,
 #   /etc/systemd/system 의 프로젝트 유닛(macro-*·news-*·research-*·fin-*·weekly-*·measure-*), 유닛 목록·활성 상태, crontab,
 #   MANIFEST.sha256(원본 파일별 해시 — 복원 대조용). 캐시(sec-cache·dart-cache·research-cache·npm-cache)·저장소 사본(jobs·src)은 제외.
 # 암호화: 수신자 공개키 /opt/macro/ops/config-backup.pub. 복호화 키는 1호기 /opt/macro/ops/config-backup.key(root 600)와
@@ -24,6 +24,7 @@ S="$W/stage"
 mkdir -p "$S/meta" "$S/etc/systemd/system"
 
 cp -a --parents /opt/macro/jobs.env /opt/macro/app.env /etc/caddy/Caddyfile "$S"/
+[ -f /opt/macro/jobs.local.env ] && cp -a --parents /opt/macro/jobs.local.env "$S"/
 [ -d /etc/iptables ] && cp -a --parents /etc/iptables "$S"/
 rsync -a --exclude 'config-backup.key' "$OPS/" "$S/opt/macro/ops/"
 for u in /etc/systemd/system/*; do

@@ -38,7 +38,7 @@ jobs:
               print(f"  응답: {r.get('textPreview')}")
           PY
       - name: 원본 JSON 아티팩트
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gemini-grounding-check
           path: g.json

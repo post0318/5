@@ -14,10 +14,41 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
 - **자동 작업이 부르는 주소는 저장소 변수 `APP_URL` 하나**(지금 오라클). 워크플로는 `${{ vars.APP_URL }}`, 수집 스크립트는
   `scripts/lib/app-url.mjs`(`APP_URL` 환경변수, 없으면 오라클 도메인). 메인을 바꿀 때는 이 변수만 고친다.
 - 오라클 서버: Docker 컨테이너 `macro`(127.0.0.1:8080, 재시작 자동) 앞에 Caddy(HTTPS 자동 발급). 환경변수는
-  `/opt/macro/app.env`(600, 배포 때 GitHub 비밀값으로 다시 씀). 최초 설치 `ops/oracle/setup.sh`, 점검 `ops/oracle/healthcheck.sh`.
+  `/opt/macro/app.env`(600, **서버가 원본 — 배포는 코드만**, 아래 「운영 비밀값」). 최초 설치 `ops/oracle/setup.sh`, 점검 `ops/oracle/healthcheck.sh`.
   디스크 캐시: SEC `/opt/macro/sec-cache`(앱 `/tmp/.cache`), DART `/opt/macro/dart-cache`(앱·배치 `DART_CACHE_DIR=/dart-cache`, 판본 = 보고서 최신
   접수번호, 90일 미사용·`DART_CACHE_MAX_GB`(기본 2) 정리 — `src/lib/markets/kr/dart-cache.ts`). 배포·배치(`run-ts.sh`)가 같은 폴더를 쓴다.
   배포 키는 비밀값 `ORACLE_SSH_KEY`, 주소는 변수 `ORACLE_HOST`·`ORACLE_DOMAIN`. 도메인은 DuckDNS(IP 가 바뀌면 duckdns.org 에서 갱신).
+
+### 운영 비밀값·GitHub 권한 (2026-10-06 오너 승인 — "GitHub 는 지금 방식(A) 유지 + 비밀값 서버 이전·배포 키 제한·Actions 버전 고정")
+
+GitHub 계정·저장소·Actions 가 뚫려도 운영 비밀값과 1호기 관리자 권한이 넘어가지 않게 한다.
+
+- **비밀값 원본 = 1호기 파일**(모두 ubuntu 600, 설정 백업에 포함): `/opt/macro/app.env`(앱 컨테이너 — DB 주소·DART·KRX·Clerk·Gemini 등 전부),
+  `/opt/macro/jobs.local.env`(배치 전용 — `TELEGRAM_*`), `/opt/macro/jobs.env`(**만들어지는 파일 — 손으로 고치지 않는다**: 배포·동기화 때
+  `ops/oracle/build-jobs-env.sh` 가 app.env(앱 전용 `APP_COMMIT_SHA`·`SEC_CACHE_DIR`·`DART_CACHE_DIR` 제외) + jobs.local.env 로 다시 만든다).
+  배포 워크플로는 app.env 를 쓰지 않는다. 빌드에 필요한 공개 키 `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` 도 서버 app.env 에서 읽는다.
+- **배포 흐름**: master 푸시 → `deploy-oracle.yml` 이 `ssh ubuntu@1호기 "deploy <커밋>"`(앱 파일 변경) / `oracle-sync-jobs.yml` 이
+  `"sync-jobs <커밋>"`(scripts·ops 변경). 배포 키는 1호기 `~ubuntu/.ssh/authorized_keys` 에서
+  `command="/opt/macro/ops/deploy-entry.sh",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding` 로 묶여 있다 — `deploy|sync-jobs <40자 커밋>`
+  외에는 거부(셸·scp·sftp·포트 포워딩 불가), **커밋은 GitHub master 에 들어간 것만**(포크·다른 브랜치 거부). 수락하면 그 커밋의
+  `ops/oracle/deploy-app.sh`(빌드·재시작·post-deploy) 또는 `post-deploy.sh` 를 실행. 기록은 `sudo journalctl -t macro-deploy-entry`.
+  `deploy-entry.sh` 는 배포가 자동으로 바꾸지 않는다 — 고치면 `sudo install -m 755 -o root ops/oracle/deploy-entry.sh /opt/macro/ops/`.
+  한계: 저장소 master 에 쓸 수 있는 사람은 그 커밋의 스크립트·Dockerfile 로 서버에서 코드를 돌릴 수 있다(방식 A 의 본질). 막는 것은
+  "배포 키만 새어 나간 경우"와 "GitHub 비밀값 열람"이다.
+- **키 교체(서버에서 직접)** — 개발 PC 에서 `ssh macro-prod`:
+  1. `nano /opt/macro/app.env`(배치 전용 값은 `/opt/macro/jobs.local.env`) — 값은 화면에 띄우지 말고 그 줄만 고친다.
+  2. 앱 재기동(같은 커밋, 빌드 캐시라 1~2분, 그동안 10~20초 끊김): `bash /opt/macro/src/ops/oracle/deploy-app.sh "$(git -C /opt/macro/src rev-parse HEAD)"`
+     — 끝에 post-deploy 가 jobs.env 를 다시 만들고 텔레그램 수신기를 재시작한다. jobs.local.env 만 바꿨으면
+     `bash /opt/macro/ops/build-jobs-env.sh && sudo systemctl restart macro-telegram-listener` 로 충분.
+  3. 설정 백업 즉시 반영: `sudo systemctl start macro-config-backup.service`(평소엔 매일 05:40).
+  4. 2호기 `~/5/.env.local` 도 같은 값을 쓰면 거기서도 고친다(2호기는 수동).
+- **GitHub 에 남긴 비밀값**: `ORACLE_SSH_KEY`(위 배포 키 — 제한됨), `CRON_SECRET`(수동 비상용 수집기 워크플로가 `/api/cron/*` 에 보냄),
+  `TELEGRAM_API_ID`·`TELEGRAM_API_HASH`·`TELEGRAM_SESSION`(수동 비상용 `telegram-posts.yml`, 비활성 — 쓰지 않을 거면 지워도 된다).
+  상태 점검이 이슈를 여는 `OPS_GH_TOKEN`(Issues 전용)은 1호기 `ops/alert.env` 에 있다. **운영 앱 키(DB 주소·DART·KRX·Clerk·Gemini·네이버·
+  유튜브 등 22개)는 2026-10-06 GitHub 에서 지웠다** — 그 값을 쓰던 `fin-build.yml`·`ttm-build.yml`(오라클 타이머로 대체)·`deploy-cloudrun.yml`
+  (종료)은 비활성.
+- **Actions 버전 고정**: 모든 워크플로의 외부 action 은 커밋 SHA 로 고정(주석에 원래 태그). 올릴 때는 새 태그의 커밋 SHA 로 바꾼다
+  (`gh api repos/<owner>/<repo>/git/ref/tags/<태그>` — annotated tag 면 한 번 더 `git/tags/<sha>`).
 
 ### 오라클에서 도는 것 (상세·빈도는 docs/data-collection.md)
 
@@ -71,7 +102,7 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
 
 1호기에만 있고 GitHub 에 없는 설정을 매일 묶어 **1호기에서 암호화(age)** 한 뒤 2호기에 보관한다. 2호기에는 암호문만 있다.
 
-- 담는 것: `/opt/macro/jobs.env`(손 관리 — 텔레그램 세션 포함)·`app.env`, `/opt/macro/ops` 전체(alert.env·감시 키·measure 스크립트 등, 복호화 키만 제외),
+- 담는 것: `/opt/macro/app.env`·`jobs.local.env`(텔레그램 세션)·`jobs.env`(운영 비밀값 원본 — GitHub 에는 없다), `/opt/macro/ops` 전체(alert.env·감시 키·measure 스크립트 등, 복호화 키만 제외),
   `/etc/caddy/Caddyfile`, `/etc/iptables`, `/etc/systemd/system` 의 프로젝트 유닛(`macro-*`·`news-*`·`research-*`·`fin-*`·`weekly-*`·`measure-*`),
   유닛 사용 여부·타이머 목록·crontab(`meta/`), 원본 해시 `MANIFEST.sha256`. 캐시(sec-cache·research-cache·npm-cache)와 저장소 사본(jobs·src)은 뺀다.
 - 1호기: `ops/oracle/config-backup.sh` · `macro-config-backup.timer`(매일 05:40 KST, root). 설치 `sudo bash /opt/macro/jobs/ops/oracle/install-config-backup.sh`
@@ -91,10 +122,11 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
 2. 2호기에서 최신 백업 받기: `ssh -i ~/.ssh/oracle_verify ubuntu@140.83.48.57 'sudo sh -c "cat \$(ls -1t /var/backups/macro-config/*.age | head -1)"' > latest.age`
 3. 개발 PC 에서 복호화·확인: `age -d -i ~/.ssh/macro-config-backup.key -o latest.tgz latest.age` → `tar -xzf latest.tgz -C restore/` →
    `cd restore && sha256sum -c MANIFEST.sha256`(age 는 https://github.com/FiloSottile/age/releases).
-4. 새 서버 제자리로: `opt/macro/{app.env,jobs.env}`(600), `opt/macro/ops/`(alert.env 600·키들), `etc/caddy/Caddyfile`, `etc/iptables/`,
+4. 새 서버 제자리로: `opt/macro/{app.env,jobs.local.env,jobs.env}`(ubuntu 600), `opt/macro/ops/`(alert.env 600·키들), `etc/caddy/Caddyfile`, `etc/iptables/`,
    `etc/systemd/system/` 유닛 → `sudo systemctl daemon-reload` → `meta/unit-files.txt` 에서 enabled 인 타이머를 `enable --now`.
    복호화 키 `config-backup.key` 는 백업에 없으므로 개발 PC 키를 `/opt/macro/ops/config-backup.key`(root 600)로 다시 올린다.
-5. master 를 한 번 배포(`deploy-oracle.yml` 수동 실행) → 앱 컨테이너·작업 폴더(`/opt/macro/jobs`)·실행기 설치.
+5. 배포 키 입구 설치: `sudo install -m 755 -o root ops/oracle/deploy-entry.sh /opt/macro/ops/` + `~ubuntu/.ssh/authorized_keys` 의 github-actions-deploy 줄에
+   위 「운영 비밀값」의 `command=…` 제한을 붙인다. 그다음 master 를 한 번 배포(`deploy-oracle.yml` 수동 실행) → 앱 컨테이너·작업 폴더(`/opt/macro/jobs`)·실행기 설치.
 6. IP 가 바뀌었으면 2호기 `authorized_keys`(ubuntu 하트비트 줄·macrobak 줄)의 `from=` 과 2호기 점검의 1호기 IP(`HC_PEER_IP` 기본값)를 고친다.
    `peer_known_hosts`·전송 키는 백업에서 복원되므로 그대로 쓴다. 끝으로 양쪽 `--test`.
 
@@ -186,4 +218,4 @@ vercel logs <배포URL> --level error --since 1h
 
 - cron-job.org 의 텔레그램 재기동 작업은 **끈다**(그때 발급한 GitHub 세분화 토큰도 폐기).
 - `telegram-posts.yml` 은 수동 비상용 — 수신기를 멈춘 뒤에만 실행한다(`sudo systemctl stop macro-telegram-listener`).
-- 세션(`TELEGRAM_SESSION`)은 오라클 `/opt/macro/jobs.env`(600)에 있다. 세션을 새로 만들면(`scripts/telegram-login.mjs`) 여기와 GitHub 비밀값을 함께 바꾼다.
+- 세션(`TELEGRAM_SESSION`) 원본은 오라클 `/opt/macro/jobs.local.env`(600)다(jobs.env 는 배포 때 다시 만들어진다). 세션을 새로 만들면(`scripts/telegram-login.mjs`) jobs.local.env 를 고치고 위 「키 교체」 절차대로(비상용 GitHub 비밀값을 남겨 뒀다면 그것도).

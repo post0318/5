@@ -2,6 +2,8 @@ name: 오라클 작업 폴더 동기화
 
 # 수집기(scripts/)·운영 스크립트(ops/oracle/)만 바뀐 푸시는 앱 재배포(deploy-oracle.yml — src 등 앱 파일만 감시)가 돌지 않아
 # 오라클 작업 폴더(/opt/macro/jobs)가 옛 커밋에 머문다. 이 워크플로가 작업 폴더만 그 커밋으로 맞춘다(앱은 재빌드하지 않음, 2026-10-04).
+# 배포 키는 서버에서 강제 명령(/opt/macro/ops/deploy-entry.sh)에 묶여 `sync-jobs <40자 커밋>` 만 된다(2026-10-06) —
+# 서버가 이 커밋의 ops/oracle/post-deploy.sh 를 받아 실행한다.
 
 on:
   push:
@@ -37,12 +39,4 @@ jobs:
         env:
           HOST: ${{ vars.ORACLE_HOST }}
           SHA: ${{ github.sha }}
-        run: |
-          ssh "ubuntu@$HOST" bash -s -- "$SHA" <<'SH'
-          set -euo pipefail
-          SHA="$1"
-          # post-deploy.sh 자체가 바뀌었을 수 있으니 이 커밋의 것을 받아 실행한다
-          git -C /opt/macro/jobs fetch -q origin "$SHA"
-          git -C /opt/macro/jobs show "$SHA:ops/oracle/post-deploy.sh" > /tmp/post-deploy.sh
-          bash /tmp/post-deploy.sh "$SHA"
-          SH
+        run: ssh -o BatchMode=yes "ubuntu@$HOST" "sync-jobs $SHA" < /dev/null

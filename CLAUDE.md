@@ -126,6 +126,9 @@ npm run lint         # eslint
 - **메인 서버 = 오라클**(2026-10-03, 구글 Cloud Run·Vercel 은 보조). 예약 작업은 오라클 systemd 타이머·상주 프로그램이 돌고
   (GitHub 예약은 이전 중), 자동 작업이 부르는 주소는 저장소 변수 `APP_URL` 하나. 서버 구성·과금 통제는 `DEPLOY.md` §0,
   수집 일람(소스·빈도·실행 위치·저장처)은 `docs/data-collection.md`.
+- **운영 비밀값은 1호기에만(2026-10-06 오너 승인)**: 원본 `/opt/macro/app.env`·`jobs.local.env`(jobs.env 는 배포 때 자동 생성), GitHub 에는
+  배포 키·CRON_SECRET·비상용 텔레그램 값만. 배포 키는 서버 강제 명령(`deploy|sync-jobs <커밋>`, master 커밋만)에 묶여 있고 워크플로 action 은
+  커밋 SHA 로 고정. 새 키·워크플로를 GitHub 비밀값에 의존하게 만들지 말 것 — 절차는 `DEPLOY.md` §0 「운영 비밀값」.
 - **비용 원칙(오너 지시 2026-10-03)**: 오라클·구글은 크레딧을 넘는 실제 지출 0. 종목뉴스에는 Claude/Anthropic 사용 금지 — 판정은 코드(규칙)가
   먼저, LLM 이 꼭 필요할 때만 Gemini. 주기 작업은 직전 이후 **새로 나온 항목만** 처리(같은 데이터를 매번 다시 처리·과금하지 않는다).
 
