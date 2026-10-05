@@ -48,8 +48,10 @@ function columns(t) {
   for (let j = 0; j < width; j++) {
     let period = null, cum = null;
     for (const h of hdrs) {
-      if (h.length - 1 !== width) continue;
-      const l = String(h[j + 1] ?? "").replace(/\s/g, "");
+      // 머리 줄이 자료 줄보다 길면(빈 머리 칸 — 052690 "| | 매출원가 3개월 | 누적 …") 오른쪽 끝에서 맞춘다. 짧으면 열을 정할 수 없어 쓰지 않는다
+      const off = h.length - 1 - width;
+      if (off < 0) continue;
+      const l = String(h[1 + off + j] ?? "").replace(/\s/g, "");
       if (/^(당|금)(반기|분기|기)/.test(l)) period = "cur";
       else if (/^전(반기|분기|기)/.test(l)) period = "prior";
       if (/누적/.test(l)) cum = true;
