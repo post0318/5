@@ -18,6 +18,9 @@ const num = (c) => {
   return /^[(-]/.test(u) ? -v : v;
 };
 function kindOf(l) {
+  // "감가상각비(유,무형자산 및 투자부동산)"(000500 성격별·현금흐름 조정) — 괄호 안이 무형자산을 포함한다고 밝힌 감가상각비 = 합친 줄
+  const paren = l.match(/\((.*?)\)/)?.[1] ?? "";
+  if (l.replace(/\(.*?\)/g, "") === "감가상각비" && /무형/.test(paren)) return "comb";
   if (/^(감가상각비(및|와|,)무형자산(감가)?상각비|감가상각비및상각비|유·?무형자산상각비|유형및무형자산상각비)$/.test(l)) return "comb";
   if (/사용권자산/.test(l) && /상각/.test(l)) return "rou";
   if (/투자부동산/.test(l) && /상각/.test(l)) return "inv";
