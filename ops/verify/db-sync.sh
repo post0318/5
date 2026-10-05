@@ -21,7 +21,7 @@ DB=market_research
 TMP=market_research_sync
 BK=/var/backups/macro-db
 STATE=/var/lib/macro-db
-PROTECTED=(kr_da_staging verify_results)
+PROTECTED=(kr_da_staging verify_results verify_state)
 if [[ -f /etc/macro-db/protected-collections ]]; then
   while read -r c; do [[ -n "$c" && "$c" != \#* ]] && PROTECTED+=("$c"); done </etc/macro-db/protected-collections
 fi

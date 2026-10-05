@@ -21,7 +21,7 @@
 - 월간본 `monthly-…` — 매월 1일(KST) 성공분, 최신 3개
 
 주간·월간본은 매일본의 하드링크라 같은 날짜면 공간을 더 쓰지 않는다. 1개 약 8MB(2026-10 기준) → 최대 14개 약 110MB.
-보호 컬렉션(`kr_da_staging`·`verify_results`·`*_staging` — 2호기 검증 전용)은 덤프에 들어가지 않는다 = 이 백업에도 없다.
+보호 컬렉션(`kr_da_staging`·`verify_results`·`verify_state`·`*_staging` — 2호기 검증 전용)은 덤프에 들어가지 않는다 = 이 백업에도 없다.
 
 ## 복원 시험 · 2호기로 복원
 
@@ -57,3 +57,46 @@ mongosh "$MONGO_ADMIN_URI" --quiet --eval 'db.getSiblingDB("restore_test").dropD
   4. `mongorestore --uri='<임시 readWrite 사용자 운영 주소>' --gzip --archive="$f" --nsInclude='market_research.<대상>' --drop`
   5. 컬렉션별 문서 수 대조, 앱 주요 화면 확인, 타이머·앱 재개, 임시 사용자 삭제.
 - Atlas M0 용량 512MB — 복원 전 `node scripts/db/size.mjs` 로 여유 확인.
+
+## 신규·변경 종목 자동 검증 (오너 지시 2026-10-06)
+
+`macro-auto-verify.timer`(06:00 KST — DB 복사 뒤, 11:00 KST — KRX 전 거래일 자료 게시 뒤 재실행 회차) → `ops/verify/auto-verify.mjs`(2호기 `~/5` = kr/verification 코드, ubuntu 사용자).
+설치 `sudo bash ops/verify/install-auto-verify.sh`, 점검 `macro-verify-check`(종료코드 0/1).
+
+- **대상**(우선순위): ⓪ 재실행(마지막 검증 종료코드 3 — KRX 게시 전 등으로 확인 못 한 항목, 06:00 한국 종목은 대개 여기 걸려 11:00 에 다시) ① 새 종목(유니버스에 있는데 검증 결과 없음) ② 새 정기보고서(한국 DART corp 별 정기공시 목록 최신 접수번호,
+  미국 SEC submissions 최신 10-K·10-Q·20-F·40-F(정정 포함) 접수번호가 마지막 검증 때와 다름 — 6-K 제외) ③ 마지막 검증 실패(실패 항목·오류,
+  오래된 것부터) ④ 7일 넘게 검증 안 됨(하루 5개). 하루 최대 20종목, 넘치면 다음 날(`last-run.json` 의 `deferred`).
+- **실행**: 종목 하나씩 — 한국 `populate-kr-da.mjs <종목>`(kr_da_staging, 증분) → `verify-financials.mjs --market=kr`, 미국
+  `verify-financials.mjs --market=us`, 모두 `--concurrency=1 --base=http://localhost:3000 --post`(2호기 `verify_results`).
+- **DART 하루 예산 5,000**(검증 키): 카운터 `reports/.dart-quota/YYYYMMDD.json`(적재·검증기·auto) + verify-dev 저널 `[dart-request]`(앱).
+  한국 종목 시작 전 남은 예산 < 300 이면 남은 한국 종목은 미룸, 자식 상한은 "지금 건수 + 남은 예산 − 150".
+- **상태**: 2호기 DB `verify_state`(보호 컬렉션) — `_id` = `market:symbol`, `lastRunAt`·`lastReason`·`lastCode`·`commit`·`filingId`·`filingDate`·`filingName`.
+- **로그**: `/var/lib/macro-verify/logs/auto-verify-YYYYMMDD-HHMM.log`(자식 출력 포함).
+
+### `/var/lib/macro-verify/latest.json` (1호기가 읽어 감 — 매 실행 뒤 임시 파일 → rename 으로 원자적 갱신)
+
+```jsonc
+{
+  "schema": "macro-verify/latest@1",
+  "generatedAt": "2026-10-06T…Z",            // ISO UTC
+  "host": "macro-verify(2호기)",
+  "code": { "branch": "kr/verification", "commit": "<40자 해시>" },   // 이번 실행 코드 판본
+  "run": { "startedAt": "…", "finishedAt": "…", "ok": true,          // ok = 실행 실패 0
+           "targets": 20, "done": 20, "failedRuns": 0, "deferred": 45,
+           "dartUsedToday": 1426, "dartBudget": 5000 },
+  "symbols": [                                // 2호기 verify_results 전부(한국·미국), market:symbol 순
+    { "market": "kr", "symbol": "005930",
+      "inUniverse": true,                     // 지금 유니버스(active≠false)에 있는지
+      "verifiedAt": "…Z",                     // 그 종목 마지막 검증 시각(이번 실행이 아니어도)
+      "commit": "<해시>|null",                // 그 검증에 쓴 코드 판본(자동 검증 전 결과는 null)
+      "result": "pass|fail|error",            // error = 조회 실패·부당 건너뜀 등 errors 가 있음, fail = 실패 항목 있음
+      "counts": { "pass": 0, "fail": 0, "unverifiable": 0, "common": 0, "extMismatch": 0 },
+      "errors": ["…"],                        // 최대 3개, 각 200자
+      "topFails": [{ "layer": "A", "name": "…", "col": "FY2025", "note": "…(160자)" }],   // 최대 5개
+      "lastReason": "rerun|new|filing|failed|stale|null",   // 자동 검증이 마지막으로 이 종목을 돌린 이유
+      "filing": { "id": "접수번호", "date": "YYYYMMDD", "name": "보고서명·서식" } | null }
+  ]
+}
+```
+
+`/var/lib/macro-verify/last-run.json` = 이번 실행 상세(대상·이유, 종목별 종료코드, 미룬 종목과 이유, DART 전후·도구별 건수·초과 여부, 로그 경로).
