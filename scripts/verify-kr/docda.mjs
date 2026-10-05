@@ -22,7 +22,14 @@ const num = (c) => {
 function kindOf(l) {
   // "감가상각비(유,무형자산 및 투자부동산)"(000500 성격별·현금흐름 조정) — 괄호 안이 무형자산을 포함한다고 밝힌 감가상각비 = 합친 줄
   const paren = l.match(/\((.*?)\)/)?.[1] ?? "";
-  if (l.replace(/\(.*?\)/g, "") === "감가상각비" && /무형/.test(paren)) return "comb";
+  if (l.replace(/\(.*?\)/g, "") === "감가상각비" && paren) {
+    // "감가상각비(유형자산)"·"(무형자산)"·"(투자부동산)"·"(사용권자산)"(298040 현금흐름 조정) — 괄호가 하나만 가리키면 그 구성요소
+    if (/유,?무형|유형.*무형/.test(paren)) return "comb";
+    if (/무형/.test(paren)) return "amo";
+    if (/투자부동산/.test(paren)) return "inv";
+    if (/사용권/.test(paren)) return "rou";
+    if (/유형/.test(paren)) return "dep";
+  }
   if (/^(감가상각비(및|와|,)무형자산(감가)?상각(비)?|감가상각비및상각비|유·?무형자산상각비|유형및무형자산상각비)$/.test(l)) return "comb";
   // XBRL 표준 이름 꼴 줄 이름("감가상각비, 유형자산"·"기타 상각비, 영업권 이외의 무형자산" — 051600 2025 성격별 표)
   if (/^감가상각비,유형자산$/.test(l)) return "dep";
@@ -40,7 +47,7 @@ export function tableKind(t) {
   const s = t.section ?? "";
   if (/성격별/.test(s)) return "nature";
   if (/투자부동산/.test(s)) return "inv";
-  if (/현금흐름/.test(s)) return "cf";
+  if (/현금흐름|영업으로부터\s*창출|영업활동/.test(s)) return "cf";
   return null;
 }
 /** 열 j 의 (기간, 누적) — 머리행 판독. 기간: "cur"·"prior"·null(표 앞 기간 표시를 씀), 누적: true·false·null */
@@ -57,8 +64,9 @@ function columns(t) {
       const off = h.length - 1 - width;
       if (off < 0) continue;
       const l = String(h[1 + off + j] ?? "").replace(/\s/g, "");
-      if (/^(당|금)(반기|분기|기)/.test(l)) period = "cur";
-      else if (/^전(반기|분기|기)/.test(l)) period = "prior";
+      // "당기"·"당반기"·"제 21(당) 기" / "전기"·"전반기"·"제 20(전) 기"
+      if (/^(당|금)(반기|분기|기)|\(당\)/.test(l)) period = "cur";
+      else if (/^전(반기|분기|기)|\(전\)/.test(l)) period = "prior";
       if (/누적/.test(l)) cum = true;
       else if (/3개월/.test(l)) cum = false;
     }

@@ -227,7 +227,7 @@ export async function dartCompany(corp) {
   });
 }
 
-const DOC_DA_VER = "t4";
+const DOC_DA_VER = "t5";
 /**
  * 보고서 원문(사업·분기·반기)의 표 중 감가상각·상각 줄이 있는 표만 — [{ head, unit, scope, section, period, rows: [[셀…]] }].
  *  · head = 표 바로 앞 글자 마지막 300자, unit = 원 단위 배수(표 안 첫 부분 → 없으면 표 앞 1500자의 마지막 "(단위 : …)")
@@ -281,7 +281,8 @@ export async function dartDocDaTables(rcept) {
         const before = t.slice(Math.max(0, m.index - 1500), m.index);
         const unit = units(tab.slice(0, 2000))[0] ?? units(before).at(-1) ?? null;
         const tail = between.slice(-40).replace(/\s+/g, "");
-        const period = /(당|금)(반기|분기|기)(말)?(\(단위[^)]*\))?$/.test(tail) ? "cur" : /전(반기|분기|기)(말)?(\(단위[^)]*\))?$/.test(tail) ? "prior" : null;
+        // "당기 (단위 : 천원)"·"(당기) (단위: 백만원)"·"(1) 당기" — 괄호 허용
+        const period = /(당|금)(반기|분기|기)(말)?\)?(\(단위[^)]*\))?$/.test(tail) ? "cur" : /전(반기|분기|기)(말)?\)?(\(단위[^)]*\))?$/.test(tail) ? "prior" : null;
         const secScope = section ? (/연결/.test(section) ? "con" : "sep") : null;
         out.push({ head: txt(before).slice(-300), unit, scope: fileScope ?? titleScope(m.index) ?? secScope, section, period, rows });
       }
