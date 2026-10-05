@@ -76,7 +76,7 @@ import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
 import { loadBbg } from "./reference/bbg.mjs";
 import { makeDiskCache } from "./verify-kr/cache.mjs";
-import { configureDart, dartFnltt, dartStats } from "./verify-kr/dart.mjs";
+import { configureDart, dartFnltt, dartStats, dartQuota } from "./verify-kr/dart.mjs";
 import { configureKrx, krxStats } from "./verify-kr/krx.mjs";
 import { configureCalendar } from "./verify-kr/calendar.mjs";
 import { krOriginalLayers, closeKrLayers } from "./verify-kr/layers.mjs";
@@ -9681,7 +9681,7 @@ const dartCache = new Map();
 const KR_CACHE = MARKET === "kr" ? makeDiskCache(pathResolve(env.KR_VERIFY_CACHE_DIR || "reports/.dart-cache"), { maxBytes: Number(env.KR_CACHE_MAX_GB ?? 5) * 1024 ** 3, maxIdleDays: 90 }) : null;
 if (KR_CACHE) {
   KR_CACHE.cleanup();
-  configureDart({ key: env.DART_API_KEY, cache: KR_CACHE });
+  configureDart({ key: env.DART_API_KEY, cache: KR_CACHE, cap: Number(env.DART_DAILY_CAP_VERIFY ?? 3000) });
   configureKrx({ key: env.KRX_API_KEY, cache: KR_CACHE });
   configureCalendar({ cache: KR_CACHE });
 }
@@ -10282,6 +10282,9 @@ const extAllMatch = (x) => !!x.matched && !!x.verdict && !/불일치/.test(x.ver
 async function worker() {
   while (idx < syms.length) {
     const s = syms[idx++];
+    // DART 하루 요청 상한·020 으로 멈췄으면 남은 종목은 검증하지 않고 오류로 남긴다(조용히 건너뛰지 않음 — 종료코드 1)
+    const dq = MARKET === "kr" ? dartQuota()?.stopped : null;
+    if (dq) { results.push({ sym: s, error: `${dq.message} — 상한 도달, 남은 종목 검증불가`, checks: [], review: [] }); console.log(`${s.padEnd(7)} 오류: 상한 도달 — 검증불가(${dq.kind})`); continue; }
     try {
       const r = MARKET === "kr" ? await verifyKr(s) : await verifyUs(s);
       results.push(r);
@@ -10465,6 +10468,8 @@ if (KR_CACHE) {
   const cs = KR_CACHE.summary();
   console.log(`
 DART·KRX 디스크 캐시 — 적중 ${cs.hit} · 미스 ${cs.miss} · 새로 씀 ${cs.write} · 정리(옛 판본 ${cs.deletedOld} · 90일 미사용 ${cs.deletedIdle} · 상한 초과 ${cs.deletedCap}) · 총 ${cs.files}파일 ${(cs.bytes / 1024 ** 2).toFixed(1)}MB · DART 요청 ${dartStats.requests} · KRX 요청 ${krxStats.requests}`);
+  const qs = dartQuota()?.state();
+  if (qs) console.log(`DART 하루 요청(검증기) ${qs.count}/${qs.cap} — ${qs.day} KST${qs.stopped ? ` · 중단: ${qs.stopped.message}` : ""}`);
   await closeKrLayers();
 }
 const infraBad = errors.length || badSkips.length || empty.length || missing.length;

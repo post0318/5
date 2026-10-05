@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs";
 import { unzipSync, strFromU8 } from "fflate";
 import { MongoClient } from "mongodb";
+import { makeDartQuota } from "./lib/dart-quota.mjs";
 
 const env = Object.fromEntries(
   readFileSync(new URL("../.env.local", import.meta.url), "utf8")
@@ -39,7 +40,17 @@ const corpOf = (code) => {
   const row = corpMap.find((r) => (r.s ?? r.stock_code) === d);
   return row ? (row.c ?? row.corp_code) : null;
 };
-const jget = (url) => fetch(url).then((r) => r.json());
+// DART 하루 요청 상한(2026-10-05 사고 — 운영과 같은 키의 한도를 다 써 운영 한국 재무가 멈췄다). DART_DAILY_CAP_POPULATE(기본 2,000), 020 이면 즉시 중단.
+// 중단되면 그 뒤 종목은 처리하지 않고(적재도 안 함) 목록을 남긴다
+const QUOTA = makeDartQuota({ tool: "populate", cap: Number(process.env.DART_DAILY_CAP_POPULATE ?? env.DART_DAILY_CAP_POPULATE ?? 2000), dir: new URL("../reports/.dart-quota/", import.meta.url) });
+async function dfetch(url) {
+  QUOTA.take();
+  const r = await fetch(url);
+  const buf = await r.arrayBuffer();
+  QUOTA.check(new TextDecoder("utf-8").decode(new Uint8Array(buf).slice(0, 400)));
+  return new Response(buf, { status: r.status, headers: r.headers });
+}
+const jget = (url) => dfetch(url).then((r) => r.json());
 
 /**
  * 특정 사업연도 사업보고서 접수번호들(최신 = 정정본 먼저). 보고서명의 대상 연도("(2023.12)")가 맞는 것만 — 이듬해 접수 목록에 지난 연도
@@ -60,7 +71,7 @@ async function annualRcps(corp, year) {
 async function loadXbrl(rcpNo) {
   // DART 는 몰아서 요청하면 이 PC 연결을 약 1시간 막는다(실측 2026-10-01) — XBRL 요청마다 1초 간격
   await new Promise((r) => setTimeout(r, 1000));
-  const res = await fetch(`${B}/fnlttXbrl.xml?crtfc_key=${DART}&rcept_no=${rcpNo}&reprt_code=11011`);
+  const res = await dfetch(`${B}/fnlttXbrl.xml?crtfc_key=${DART}&rcept_no=${rcpNo}&reprt_code=11011`);
   if (!res.ok) throw new Error(`xbrl ${res.status}`);
   const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
   const name = Object.keys(files).find((n) => n.endsWith(".xbrl"));
@@ -308,7 +319,7 @@ function docAgrees(d, col, x) {
 /** 사업보고서 원문 — 연결감사보고서 파일의 첫 현금흐름 조정 표 */
 async function docDa(rcpNo) {
   await new Promise((r) => setTimeout(r, 1000));
-  const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
+  const res = await dfetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
   if (!res.ok) throw new Error(`document ${res.status}`);
   const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
   const docs = Object.values(files).map((b) => {
@@ -633,7 +644,8 @@ function parseInterimNature(xml) {
     const valOf = (r) => {
       if (cumFromEnd >= 0) return numOf(r[r.length - 1 - cumFromEnd] ?? "");
       const v = r.slice(1).map((c) => (/^[-–]$/.test(c.trim()) ? 0 : numOf(c))).filter((x) => x != null);
-      return v.at(-1) ?? null;
+      // "당반기 | 전반기" 두 기간 표(누적 머리 없음 — 229640 2025 반기)는 첫 값(당기). 마지막 값을 쓰면 전반기를 읽는다
+      return (twoPeriods ? v[0] : v.at(-1)) ?? null;
     };
     const kind = (r) => {
       const t = lbl(r[0]);
@@ -689,7 +701,7 @@ function interimIsByNature(rows, before) {
 }
 async function interimDoc(rcpNo) {
   await new Promise((r) => setTimeout(r, 1000));
-  const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
+  const res = await dfetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
   if (!res.ok) throw new Error(`document ${res.status}`);
   const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
   let nat = null;
@@ -715,7 +727,7 @@ async function interimDoc(rcpNo) {
 /** 반기·분기보고서 XBRL 현금흐름 조정 누적(감가 + 사용권 + 투자부동산 + 무형) — 당기·전년 동기 */
 async function interimCf(rcpNo, code, year) {
   await new Promise((r) => setTimeout(r, 1000));
-  const res = await fetch(`${B}/fnlttXbrl.xml?crtfc_key=${DART}&rcept_no=${rcpNo}&reprt_code=${code}`);
+  const res = await dfetch(`${B}/fnlttXbrl.xml?crtfc_key=${DART}&rcept_no=${rcpNo}&reprt_code=${code}`);
   if (!res.ok) return null;
   let xml;
   try {
@@ -855,7 +867,7 @@ function leaseAmountOf(xml, prefix, sep) {
 /** 원문에서 "리스부채" 가 든 회계정책 문장 → 리스부채를 포함해 표시하는 본표 차입금류 줄 이름들 */
 async function leasePolicyOf(rcpNo) {
   await new Promise((r) => setTimeout(r, 1000));
-  const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
+  const res = await dfetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
   if (!res.ok) throw new Error(`document ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
   // 원문 파일이 없는 판본(DART 014 — [첨부정정], 001440 2024)은 문장 없음. 다른 상태는 실패
@@ -1021,7 +1033,7 @@ function leaseForms(cells, Y, P, sep) {
 /** 원문 전체(파일 이어 붙임). 원문 파일 없는 판본(DART 014)은 "" */
 async function interimDocXml(rcpNo) {
   await new Promise((r) => setTimeout(r, 1000));
-  const res = await fetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
+  const res = await dfetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
   if (!res.ok) throw new Error(`document ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
   const head = strFromU8(buf.slice(0, 300));
@@ -1127,7 +1139,9 @@ if (symbols.length === 0)
 console.log(`대상 ${symbols.length}종목 → ${CHECK ? "(점검 — 쓰기 없음)" : COLL}`);
 
 const t = (n) => (n == null ? "-" : (n / 1e12).toFixed(2) + "조");
+let stopAt = null; // 상한·020 으로 멈춘 종목(그 종목부터 미처리)
 for (const sym of symbols) {
+  if (QUOTA.stopped) { stopAt = sym; break; }
   const corp = corpOf(sym);
   if (!corp) { console.log(`  ${sym}: corp_code 없음`); continue; }
   // 리스부채 주석 — 실패하면 적재하지 않는다(앱은 미적재 = EV 공란 + 사유)
@@ -1140,14 +1154,17 @@ for (const sym of symbols) {
     if (lease?.leaseQuarter) console.log(`    리스 ${lease.leaseQuarter.label}: ${lease.leaseQuarter.status}${lease.leaseQuarter.amount != null ? ` ${t(lease.leaseQuarter.amount)}` : ""} — ${lease.leaseQuarter.how}`);
   } catch (e) { console.log(`    (리스부채 주석 실패: ${e.message})`); }
   if (LEASE_ONLY) {
-    if (lease && !CHECK) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, leaseAt: new Date().toISOString() } });
+    if (lease && !CHECK && !QUOTA.stopped) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, leaseAt: new Date().toISOString() } });
     continue;
   }
   let byYear = null;
   try { byYear = await daByYear(corp); if (byYear) byYear = await alignBasis(corp, byYear); } catch (e) { console.log(`  ${sym}: ${e.message}`); }
+  if (QUOTA.stopped) { console.log(`  ${sym}: ${QUOTA.stopped.message} — 적재 안 함`); stopAt = sym; break; }
   if (!byYear) { console.log(`  ${sym}: D&A 없음`); continue; }
   const ttm = await ttmDa(corp, byYear).catch((e) => (console.log(`    (TTM 실패: ${e.message})`), null));
   if (ttm) console.log(`    TTM ${ttm.ttmLabel} = ${t(ttm.ttmDepreciation)} (${ttm.ttmSrc})`);
+  // 상한·020 으로 중간에 멈춘 종목은 일부 요청이 실패한 결과라 적재하지 않는다
+  if (QUOTA.stopped) { console.log(`  ${sym}: ${QUOTA.stopped.message} — 적재 안 함`); stopAt = sym; break; }
   if (!CHECK) await db.collection(COLL).replaceOne(
     { _id: sym },
     { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter } : {}), updatedAt: new Date().toISOString() },
@@ -1157,5 +1174,13 @@ for (const sym of symbols) {
   const y = yrs[0];
   console.log(`  ${sym}  ${yrs.length}개년 (${yrs.at(-1)}~${y})  ` + yrs.map((k) => `${k}:${byYear[k].src} 감가 ${t(byYear[k].depreciation)}/무형 ${t(byYear[k].amortisation)}`).join("  "));
 }
+if (QUOTA.stopped) {
+  const left = stopAt ? symbols.slice(symbols.indexOf(stopAt)) : [];
+  console.log(`
+${QUOTA.stopped.message} — 상한 도달, 남은 ${left.length}종목 미처리: ${left.join(" ")}`);
+  process.exitCode = 1;
+}
+const qs = QUOTA.state();
+console.log(`DART 하루 요청(적재) ${qs.count}/${qs.cap} — ${qs.day} KST`);
 await cli.close();
 console.log("완료");

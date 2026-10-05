@@ -8,16 +8,22 @@
  * 조회 실패는 캐시하지 않고 던진다(호출부가 실패·종료코드 1).
  */
 import { unzipSync, strFromU8 } from "fflate";
+import { makeDartQuota, DartStopError } from "../lib/dart-quota.mjs";
 
 const B = "https://opendart.fss.or.kr/api";
 let KEY = null, CACHE = null;
 let chain = Promise.resolve();
 const slot = () => (chain = chain.then(() => new Promise((r) => setTimeout(r, 300))));
 export const dartStats = { requests: 0 };
+// 하루 요청 상한(2026-10-05 사고 — 운영과 같은 키의 한도를 다 써 운영 한국 재무가 멈췄다). DART_DAILY_CAP_VERIFY(기본 3,000)
+let QUOTA = null;
+export function dartQuota() { return QUOTA; }
+export { DartStopError };
 
-export function configureDart({ key, cache }) {
+export function configureDart({ key, cache, cap }) {
   KEY = key;
   CACHE = cache;
+  QUOTA = makeDartQuota({ tool: "verify", cap: cap ?? 3000, dir: new URL("../../reports/.dart-quota/", import.meta.url) });
 }
 
 async function getRaw(url, kind) {
@@ -25,12 +31,17 @@ async function getRaw(url, kind) {
   for (let i = 0; ; i++) {
     try {
       await slot();
+      if (!QUOTA) throw new Error("DART 요청 상한 미설정(configureDart 먼저)");
+      QUOTA.take();
       dartStats.requests++;
       const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });
       if (!r.ok) throw new Error(`DART ${kind} HTTP ${r.status}`);
-      return r;
+      // 020(사용한도 초과)은 그 자리에서 전체 중단 — 본문 앞부분 검사(JSON·XML 모두), 응답은 다시 만들어 돌려준다
+      const buf = await r.arrayBuffer();
+      QUOTA.check(new TextDecoder("utf-8").decode(new Uint8Array(buf).slice(0, 400)));
+      return new Response(buf, { status: r.status, headers: r.headers });
     } catch (e) {
-      if (i >= 2) throw e;
+      if (e instanceof DartStopError || i >= 2) throw e;
       await new Promise((res) => setTimeout(res, 2000 * (i + 1)));
     }
   }

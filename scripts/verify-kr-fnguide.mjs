@@ -8,6 +8,7 @@
  *   symbols 를 비우면 kr_da 적재 종목(유니버스) 전체.
  */
 import fs from "node:fs";
+import { makeDartQuota } from "./lib/dart-quota.mjs";
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => { const m = /^--([^=]+)=?(.*)$/.exec(a); return m ? [m[1], m[2] || true] : [a, true]; }));
 const BASE = String(args.base ?? "http://localhost:3000").replace(/\/$/, "");
@@ -61,12 +62,18 @@ async function yahoo(code) {
 const ENV = Object.fromEntries(fs.readFileSync(".env.local", "utf8").split(/\r?\n/).filter((l) => l.includes("=") && !l.startsWith("#")).map((l) => { const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^"|"$/g, "")]; }));
 const CORP = (() => { const cc = JSON.parse(fs.readFileSync("src/lib/markets/kr/data/corpcodes.json", "utf8")); return new Map((Array.isArray(cc) ? cc : Object.values(cc)).map((x) => [x.s, x.c])); })();
 const dartCache = new Map();
+// DART 하루 요청 상한(검증기와 같은 "verify" 카운터 — 2026-10-05 사고), 020 이면 그 자리에서 중단
+const QUOTA = makeDartQuota({ tool: "verify", cap: Number(ENV.DART_DAILY_CAP_VERIFY ?? process.env.DART_DAILY_CAP_VERIFY ?? 3000), dir: new URL("../reports/.dart-quota/", import.meta.url) });
 async function dartReport(code, year) {
   const k = `${code}:${year}`;
   if (dartCache.has(k)) return dartCache.get(k);
   await new Promise((r) => setTimeout(r, 350)); // DART 몰아서 요청하면 이 PC 를 1시간 막는다
   const u = `https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?crtfc_key=${ENV.DART_API_KEY}&corp_code=${CORP.get(code)}&bsns_year=${year}&reprt_code=11011&fs_div=CFS`;
-  const j = await (await fetch(u, { signal: AbortSignal.timeout(30_000) })).json().catch(() => ({}));
+  QUOTA.take();
+  const t = await (await fetch(u, { signal: AbortSignal.timeout(30_000) })).text();
+  QUOTA.check(t.slice(0, 400));
+  let j = {};
+  try { j = JSON.parse(t); } catch { /* silent-ok: 응답이 JSON 이 아니면 그 보고서 줄 없음(등식 설명만 못 함 — 대조 결과 자체는 안 바뀜) */ }
   const list = j.status === "000" ? j.list : [];
   dartCache.set(k, list);
   return list;
