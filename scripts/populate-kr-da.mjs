@@ -626,10 +626,14 @@ function parseInterimNature(xml) {
   const lbl = (c) => (c ?? "").replace(/^[\s\-–·ㆍ•]+/, "").replace(/\s|\(.*?\)/g, "");
   const out = {};
   const found = [];
+  let ti = -1, lastCurAt = -9; // 표 순번 · 마지막으로 받은 당기 성격별 표의 순번
   for (const m of xml.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
+    ti += 1;
     const head = clean(xml.slice(Math.max(0, m.index - 400), m.index)).slice(-160);
-    // "비용의 성격별 분류"·"성격별 비용"(HD현대일렉트릭) — "성격별 비용의 기능별 배분" 표는 제외
-    if (!/비용의\s*성격별|성격별\s*비용/.test(head) || /기능별/.test(head.slice(-60))) continue;
+    // "비용의 성격별 분류"·"성격별 비용"(HD현대일렉트릭) — "성격별 비용의 기능별 배분" 표는 제외. 당기 표 바로 뒤(표 2개 안)의 "전반기" 표는 제목이 앞 표
+    // 뒤에 가려 head 에 없다 — 그 자리면 같은 주석의 전기 표로 본다
+    const afterCur = ti - lastCurAt <= 2 && /전(반기|분기|기)/.test(head.slice(-60));
+    if ((!/비용의\s*성격별|성격별\s*비용/.test(head) && !afterCur) || /기능별/.test(head.slice(-60))) continue;
     // 당기 표 + 바로 뒤 전기 표(같은 보고서의 전년 동기 — 재작성 판본, XBRL 누적·검증기와 같은 기준). 전기 표는 당기 표 뒤에 이어 실린다
     const per = /당(반기|분기|기)/.test(head.slice(-60)) ? "cur" : /전(반기|분기|기)/.test(head.slice(-60)) ? "prior" : null;
     if (!per) continue;
@@ -666,6 +670,7 @@ function parseInterimNature(xml) {
     if (!u) continue;
     const total = by.comb ?? (by.base ?? 0) + (by.inv ?? 0) + (by.rou ?? 0) + (by.amo ?? 0);
     found.push({ per, con: /연결/.test(head), v: total * UNIT[u], unit: UNIT[u] });
+    if (per === "cur") lastCurAt = ti;
   }
   // 연결 표(주석 제목에 "연결")가 있으면 그것, 없으면 첫 표(별도 재무제표 회사) — 예전엔 "연결 표가 먼저"라고 보고 첫 표를 썼는데, 연결 표를 못 읽으면
   // 별도 표를 집었다(229640)
