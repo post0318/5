@@ -603,10 +603,13 @@ function xbrlDa(facts, prefix, basis) {
   if ([d, a, da].some((v) => Number.isNaN(v))) return { v: null, how: "같은 태그 값이 여럿(판독 불가)" };
   // 회사 고유(entity…) 태그 — 표준 태그가 없을 때 이름이 사용권자산·투자부동산 상각 조정인 것(현대로템 064350 "AdjustmentForAmortisationOfRightOfUseAssets…")
   const getEnt = (re) => { const vs = facts.filter(([k, ctx]) => /^entity\d+:/.test(k) && re.test(k.slice(k.indexOf(":") + 1)) && ok(ctx)).map((f) => f[2]); return !vs.length ? null : vs.every((v) => v === vs[0]) ? vs[0] : NaN; };
-  if (d != null) {
+  // 감가상각 태그가 없고 "감가상각 및 상각" 합계 태그와 무형자산상각 태그가 같은 문맥에 따로 있으면 합계 태그는 감가상각만 담은 것(무형을 두 번
+  // 세지 않게 — 012450 2026 반기: 합계 태그 230,705,668천원 = 유형자산 변동표 감가상각, 무형 194,531,698천원 별도)
+  const base = d ?? (da != null && a != null ? da : null);
+  if (base != null) {
     const ex = EXTRA.map((cpt, i) => get([cpt]) ?? getEnt(EXTRA_ENT[i]));
     if (ex.some((v) => Number.isNaN(v))) return { v: null, how: "사용권·투자부동산 태그 값이 여럿" };
-    return { v: d + ex.reduce((s, v) => s + (v ?? 0), 0) + (a ?? 0), how: `XBRL 감가 ${d}${ex.some((v) => v != null) ? ` + 사용권·투자부동산 ${ex.map((v) => v ?? 0).join("+")}` : ""} + 무형 ${a ?? 0}` };
+    return { v: base + ex.reduce((s, v) => s + (v ?? 0), 0) + (a ?? 0), how: `XBRL 감가${d == null ? "(합계 태그 — 무형 태그 별도)" : ""} ${base}${ex.some((v) => v != null) ? ` + 사용권·투자부동산 ${ex.map((v) => v ?? 0).join("+")}` : ""} + 무형 ${a ?? 0}` };
   }
   if (da != null) return { v: da, how: `XBRL 감가·무형 합계 ${da}` };
   return { v: null, how: "XBRL 현금흐름 감가상각 태그 없음" };
