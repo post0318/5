@@ -24,6 +24,8 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
 | 이름 | 종류 | 시각(KST) | 하는 일 |
 |---|---|---|---|
 | `macro-kr-fg` | 타이머 | 매일 06:30 | 한국 공포·탐욕 원자료 + 코스피·코스닥 일봉(전 영업일분) |
+| `macro-kr-fg-retry` | 타이머(필요할 때만) | 06:30 회차 + 1시간 | KRX 미공개(`retry:true`)면 1회 재시도 — 또 실패하면 알림 |
+| `macro-research-freshness` | 타이머 | 매일 19:30 | 출처별 데이터 신선도 점검(읽기 전용) → healthcheck 묶음 알림 `research-stale` |
 | `macro-foreign-fut` | 타이머 | 매일 06:31 | 다음 금융 외국인 선물 순매수 |
 | `fin-fin-build` | 타이머 | 매일 06:10 | 재무 조립(새 공시·엔진판 변경 종목만) |
 | `fin-ttm-build` | 타이머 | 매일 06:50 + 배포 직후 | TTM 스냅샷(무효인 것만) |
@@ -42,6 +44,10 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
   `run-script.sh`(수집 스크립트 — 작업 폴더 `/opt/macro/jobs`), `run-research.sh`(국내 리서치 회차별 범위), `run-ts.sh`(앱 계산 코드 배치).
   타이머 정의는 `ops/oracle/install-schedules.sh`(다시 돌려도 같은 결과). 수집기·ops 만 바뀐 푸시는 `oracle-sync-jobs.yml` 이 작업 폴더만 맞춘다.
 - 사무실 PC 작업 스케줄러 `macro-research-bnk`(BNK — 해외 IP 차단, 한국 IP 필요).
+- **실패 기준(2026-10-06)**: 수집기는 `scripts/lib/collector-status.mjs` 한 곳 — 앱 전송 실패(비 2xx·응답 `ok:false`·`error`)만 exit 1,
+  수집 0건은 exit 0(휴장일·주말이면 정상 로그, 거래일이면 경고 로그 — 휴장일은 앱과 같은 `market-calendar.ts` 표). 조회 자체가 실패(예외)하면 exit 1.
+  `call-cron.sh` 는 HTTP 200 이어도 본문 `ok:false`·`error` 면 실패, `holiday:true` 는 정상, `retry:true` 는 `CRON_RETRY_TIMER` 가 있으면 재시도 예약.
+  며칠째 0건(파서 고장·사이트 차단)은 출처별 신선도 감시(`scripts/db/research-freshness.mjs`, 평소 발행 간격 90일 실측 × 2)가 잡는다.
 
 ### 상호 감시 (2026-10-05 오너 지시 — "상태점검은 상호 감시해야 한다")
 

@@ -82,6 +82,7 @@ import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityCo
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 import { refineSectorLabels } from "./lib/sector-label.mjs";
 import { appUrl } from "./lib/app-url.mjs";
+import { appSendFailed, exitNoItems } from "./lib/collector-status.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -361,15 +362,7 @@ for (const board of BOARDS) {
   await sleep(400);
 }
 
-if (collected.length === 0) {
-  console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
-  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
-  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
-  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
-  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
-  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
-  process.exit(0);
-}
+if (collected.length === 0) exitNoItems({ market: "kr", label: "samsung" });
 const research = collected;
 console.log(`✔ 파싱 완료: ${research.length}건`);
 // 묶음 라벨("2차전지/정유/화학")은 PDF 본문에서 실제로 다루는 업종 하나로 좁힌다(오너 지시 2026-09-27 — 삼성 "유럽 NDR 및 마케팅 후기"는
@@ -424,7 +417,7 @@ for (const [key, items] of groups) {
     body: JSON.stringify({ items, source, market }),
   });
   const upBody = await up.text();
-  if (!up.ok) {
+  if (appSendFailed(up, upBody)) {
     console.error(`✗ [${source}/${market}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }

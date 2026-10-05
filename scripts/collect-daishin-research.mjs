@@ -71,6 +71,7 @@ import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityCo
 import { refineSectorLabels } from "./lib/sector-label.mjs";
 import { resolveUsTickerByName } from "./lib/overseas-market.mjs";
 import { appUrl } from "./lib/app-url.mjs";
+import { appSendFailed, exitNoItems } from "./lib/collector-status.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -414,7 +415,8 @@ const cutoffIso = new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0
 
 const listItems = await fetchList();
 if (listItems.length === 0) {
-  console.error("✗ 목록 파싱 0건. 페이지 구조가 바뀌었을 수 있음.");
+  // 목록은 기간과 무관하게 최신 글부터 쌓여 오므로 비면 휴장일이 아니라 조회·파서 고장 — 조회 실패와 같이 exit 1(공통 규칙의 "0건"과 다름).
+  console.error("✗ 목록 파싱 0건(기간 무관 전체 목록이 빔). 페이지 구조가 바뀌었을 수 있음.");
   process.exit(1);
 }
 const listByRowid = new Map(listItems.map((x) => [x.rowid, x]));
@@ -509,10 +511,8 @@ for (const it of candidates) {
   });
 }
 
-if (research.length === 0 && candidates.length === 0) {
-  console.error("✗ 범위 안 글 0건. 페이지 구조가 바뀌었을 수 있음.");
-  process.exit(1);
-}
+// 범위 안 0건은 공통 규칙대로 실패가 아니다(예전엔 exit 1 → 2026-10-05 대체공휴일 거짓 경보). 며칠째 0건은 신선도 감시가 잡는다.
+if (research.length === 0 && candidates.length === 0) exitNoItems({ market: "kr", label: "daishin" });
 
 // 분류별 건수
 const tally = new Map();
@@ -556,7 +556,7 @@ else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 async function post(url, body, label) {
   const up = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
   const upBody = await up.text();
-  if (!up.ok) {
+  if (appSendFailed(up, upBody)) {
     console.error(`✗ [${label}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }

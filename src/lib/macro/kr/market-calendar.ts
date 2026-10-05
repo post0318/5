@@ -4,43 +4,38 @@ import "server-only";
  * 한국 증시 휴장일 달력 — 휴장 판정을 "KRX 가 빈 응답을 줬다"는 데이터만으로 하지 않기 위한 근거(오너 지시 2026-10-03).
  * 예전엔 빈 응답 = 휴장으로 찍어, KRX OPEN API 가 아직 데이터를 안 낸 실제 거래일 11일(09-14~10-01)을 휴장으로 오기록했다.
  *
- * 소스: Nager.Date 공개 API(무료·인증 불필요, `lib/weekly/comment.ts` 가 이미 다른 나라 휴장일에 쓰는 것과 같은 소스).
- * 한국 공휴일(대체공휴일·선거일 포함, 실측 2026 — 예: 10-05 개천절 대체, 06-03 지방선거)에 KRX 고유 휴장일을 더한다:
- *   - 12-31 연말 휴장(공휴일 목록에 없음)
- *   - 05-01 근로자의 날(Nager 에 "노동절"로 이미 있음 — 없을 때를 대비해 고정 추가)
- * 달력을 못 받으면 null(모름)을 돌려주고 호출자가 판단한다 — 모르는 걸 휴장으로 단정하지 않는다.
+ * 소스: **KRX 휴장일 조회**(open.krx.co.kr "휴장일" 화면, MKD01100305 — 2026-10-05 내려받음). 평일 휴장일만 실린다(주말에 겹친 공휴일 제외).
+ * 예전 소스 Nager.Date 는 틀렸다(2026-10-05 대조): 제헌절(2008~2025 공휴일 아님)을 휴장으로, 선거일(2020-04-15·2022-03-09·2022-06-01·
+ * 2024-04-10·2025-06-03)·임시공휴일(2020-08-17·2023-10-02·2024-10-01·2025-01-27)을 거래일로 봤고, 연말 휴장을 늘 12-31 로 넣어 12-31 이
+ * 주말인 해(2022 → 12-30, 2023 → 12-29 휴장)를 놓쳤다.
+ * **해마다 갱신** — 다음 해 휴장일이 KRX 에 공지되면(보통 12월) 이 표에 한 줄을 더한다. 표에 없는 해는 null(모름)을 돌려주고 호출자가
+ * 판단한다 — 모르는 걸 휴장으로 단정하지 않는다. 검증기(scripts/verify-kr/calendar.mjs)는 같은 화면을 따로 받아 이 표와 대조한다.
  */
+export const KRX_HOLIDAYS: Record<number, string> = {
+  2015: "01-01 02-18 02-19 02-20 05-01 05-05 05-25 08-14 09-28 09-29 10-09 12-25 12-31",
+  2016: "01-01 02-08 02-09 02-10 03-01 04-13 05-05 05-06 06-06 08-15 09-14 09-15 09-16 10-03 12-30",
+  2017: "01-27 01-30 03-01 05-01 05-03 05-05 05-09 06-06 08-15 10-02 10-03 10-04 10-05 10-06 10-09 12-25 12-29",
+  2018: "01-01 02-15 02-16 03-01 05-01 05-07 05-22 06-06 06-13 08-15 09-24 09-25 09-26 10-03 10-09 12-25 12-31",
+  2019: "01-01 02-04 02-05 02-06 03-01 05-01 05-06 06-06 08-15 09-12 09-13 10-03 10-09 12-25 12-31",
+  2020: "01-01 01-24 01-27 04-15 04-30 05-01 05-05 08-17 09-30 10-01 10-02 10-09 12-25 12-31",
+  2021: "01-01 02-11 02-12 03-01 05-05 05-19 08-16 09-20 09-21 09-22 10-04 10-11 12-31",
+  2022: "01-31 02-01 02-02 03-01 03-09 05-05 06-01 06-06 08-15 09-09 09-12 10-03 10-10 12-30",
+  2023: "01-23 01-24 03-01 05-01 05-05 05-29 06-06 08-15 09-28 09-29 10-02 10-03 10-09 12-25 12-29",
+  2024: "01-01 02-09 02-12 03-01 04-10 05-01 05-06 05-15 06-06 08-15 09-16 09-17 09-18 10-01 10-03 10-09 12-25 12-31",
+  2025: "01-01 01-27 01-28 01-29 01-30 03-03 05-01 05-05 05-06 06-03 06-06 08-15 10-03 10-06 10-07 10-08 10-09 12-25 12-31",
+  2026: "01-01 02-16 02-17 02-18 03-02 05-01 05-05 05-25 06-03 07-17 08-17 09-24 09-25 10-05 10-09 12-25 12-31",
+};
 
-const cache = new Map<number, { at: number; days: Set<string> | null }>();
-const TTL_MS = 12 * 60 * 60 * 1000;
-
-async function holidaysOf(year: number): Promise<Set<string> | null> {
-  const hit = cache.get(year);
-  if (hit && Date.now() - hit.at < TTL_MS) return hit.days;
-  let days: Set<string> | null = null;
-  try {
-    const res = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/KR`, {
-      signal: AbortSignal.timeout(8_000),
-      next: { revalidate: TTL_MS / 1000 },
-    });
-    if (res.ok) {
-      const rows = (await res.json()) as { date: string }[];
-      days = new Set(rows.map((r) => r.date));
-      days.add(`${year}-05-01`);
-      days.add(`${year}-12-31`);
-    }
-  } catch {
-    days = null;
-  }
-  cache.set(year, { at: Date.now(), days });
-  return days;
-}
-
-/** 한국 증시 휴장일인가(YYYY-MM-DD). 주말·공휴일·KRX 고유 휴장이면 true, 거래일이면 false, 달력을 못 받으면 null. */
-export async function isKrxHoliday(date: string): Promise<boolean | null> {
+/** 한국 증시 휴장일인가(YYYY-MM-DD). 주말·KRX 휴장일이면 true, 거래일이면 false, 표에 없는 해면 null. */
+export function isKrxHolidaySync(date: string): boolean | null {
   const dow = new Date(`${date}T00:00:00Z`).getUTCDay();
   if (dow === 0 || dow === 6) return true;
-  const days = await holidaysOf(Number(date.slice(0, 4)));
-  if (!days) return null;
-  return days.has(date);
+  const row = KRX_HOLIDAYS[Number(date.slice(0, 4))];
+  if (row == null) return null;
+  return row.split(" ").includes(date.slice(5, 10));
+}
+
+/** 비동기판(예전 호출부 호환 — 거시 배치) */
+export async function isKrxHoliday(date: string): Promise<boolean | null> {
+  return isKrxHolidaySync(date);
 }

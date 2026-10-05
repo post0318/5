@@ -6,7 +6,33 @@ install -d -m 755 /opt/macro/ops
 SRC="$(dirname "$(readlink -f "$0")")"
 install -m 755 "$SRC/healthcheck.sh" /opt/macro/ops/healthcheck.sh
 install -m 755 "$SRC/alert-lib.sh" /opt/macro/ops/alert-lib.sh
+install -m 755 "$SRC/research-freshness.sh" /opt/macro/ops/research-freshness.sh
 [ -f /opt/macro/ops/alert.env ] || install -m 600 /dev/null /opt/macro/ops/alert.env
+[ -f /opt/macro/ops/freshness-ignore.txt ] || printf '# 신선도 감시에서 뺄 출처 이름(한 줄에 하나, 오너 결정 시) — research-freshness.sh\n' > /opt/macro/ops/freshness-ignore.txt
+
+# 출처별 데이터 신선도 점검 — 하루 1회 19:30 KST(국내 리서치 마지막 18시대 회차 뒤). DB 는 이때만 읽고, healthcheck 는 결과 파일만 본다.
+cat > /etc/systemd/system/macro-research-freshness.service <<'EOF'
+[Unit]
+Description=출처별 데이터 신선도 점검(하루 1회)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/macro/ops/research-freshness.sh
+Nice=10
+TimeoutStartSec=10min
+EOF
+cat > /etc/systemd/system/macro-research-freshness.timer <<'EOF'
+[Unit]
+Description=출처별 데이터 신선도 점검 매일 19:30
+
+[Timer]
+OnCalendar=*-*-* 19:30:00 Asia/Seoul
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
 
 # 2호기 하트비트 읽기 전용 키(2026-10-05 상호 감시) — 공개키를 2호기 install-health-peer.sh 인자로 넘겨 강제 명령으로 등록한다
 PEER_HOST="${OPS_PEER_HOST:-140.83.48.57}"
@@ -40,7 +66,7 @@ WantedBy=timers.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now macro-health.timer
+systemctl enable --now macro-health.timer macro-research-freshness.timer
 
 # 보안 업데이트 자동 설치(재부팅은 자동으로 하지 않고 점검이 알린다)
 DEBIAN_FRONTEND=noninteractive apt-get install -y -q unattended-upgrades >/dev/null

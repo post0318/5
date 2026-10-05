@@ -35,6 +35,7 @@ import { enrichResearch } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { marketFromLabel, marketFromTitleLead } from "./lib/overseas-market.mjs";
 import { appUrl } from "./lib/app-url.mjs";
+import { appSendFailed, exitNoItems } from "./lib/collector-status.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -356,15 +357,7 @@ for (const board of GLOBAL_INDUSTRY_BOARDS) {
   }
 }
 
-if (collected.length === 0) {
-  console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음(정규식 재확인 필요).");
-  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
-  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
-  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
-  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
-  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
-  process.exit(0);
-}
+if (collected.length === 0) exitNoItems({ market: "kr", label: "hana" });
 
 console.log(`✔ 파싱 완료: ${collected.length}건`);
 console.log(
@@ -422,7 +415,7 @@ for (const [market, items] of byMarket) {
     body: JSON.stringify({ items, source: "하나증권", market }),
   });
   const upBody = await up.text();
-  if (!up.ok) {
+  if (appSendFailed(up, upBody)) {
     console.error(`✗ 앱 전송 실패(market=${market}) HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }
