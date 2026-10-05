@@ -74,7 +74,7 @@ interface Indicator {
 interface IndexQuote {
   key: string;
   name: string;
-  region: "kr" | "us" | "jp" | "cm";
+  region: "kr" | "us" | "jp" | "cn" | "cm";
   value: number | null;
   change: number | null;
   changePct: number | null;
@@ -342,7 +342,7 @@ export function MacroDashboard() {
                       className={cn(
                         "tnum text-xs",
                         ix.changePct != null && ix.changePct !== 0
-                          ? stockDirClass(ix.changePct > 0, ix.region === "kr" ? "kr" : ix.region)
+                          ? stockDirClass(ix.changePct > 0, ix.region === "kr" || ix.region === "cn" ? "kr" : ix.region)
                           : "text-muted-foreground",
                       )}
                     >
@@ -502,7 +502,7 @@ function IndexChartPanel({ idxKey, onClose }: { idxKey: string; onClose: () => v
   const rows = useMemo(() => {
     const r = q.data?.rows ?? [];
     // 한국 지수만 등락 색상이 반대(상승=빨강) — CandleShape 가 payload.market 으로 가른다.
-    const market = idxKey === "KOSPI" || idxKey === "KOSDAQ" ? "kr" : "us";
+    const market = idxKey === "KOSPI" || idxKey === "KOSDAQ" || idxKey === "SSEC" ? "kr" : "us"; // 상해종합도 상승=빨강(중국 관행)
     return r.map((d) => ({
       ...d,
       histUp: d.hist != null && d.hist >= 0 ? d.hist : null,

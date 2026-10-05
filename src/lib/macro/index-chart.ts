@@ -24,8 +24,8 @@ const SYMBOLS: Record<string, { symbol: string; name: string }> = {
   KOSDAQ: { symbol: "^KQ11", name: "코스닥" },
   SPX: { symbol: "^GSPC", name: "S&P 500" },
   IXIC: { symbol: "^IXIC", name: "나스닥 종합" },
-  DJI: { symbol: "^DJI", name: "다우존스" },
   N225: { symbol: "^N225", name: "닛케이 225" },
+  SSEC: { symbol: "000001.SS", name: "상해종합" },
   GOLD: { symbol: "GC=F", name: "금 (Gold)" },
   WTI: { symbol: "CL=F", name: "WTI 원유" },
 };

@@ -11,7 +11,7 @@ import { getLatestKrIndex } from "@/lib/db/kr-index";
 export interface IndexQuote {
   key: string;
   name: string;
-  region: "kr" | "us" | "jp" | "cm";
+  region: "kr" | "us" | "jp" | "cn" | "cm";
   value: number | null;
   change: number | null;
   changePct: number | null;
@@ -141,12 +141,12 @@ export async function getIndices(): Promise<IndexQuote[]> {
       out.push({ key: "KOSDAQ", name: "코스닥", region: "kr", value: kosdaq.close, change: kosdaq.change, changePct: kosdaq.pct, asOf: kosdaq.date, source: "KRX" });
   }
 
-  // 미국·일본 (yahoo)
-  const yhSpecs: { sym: string; key: string; name: string; region: "us" | "jp" | "cm" }[] = [
+  // 미국·일본·중국 (yahoo) — 다우존스 대신 상해종합(오너 지시 2026-10-05)
+  const yhSpecs: { sym: string; key: string; name: string; region: "us" | "jp" | "cn" | "cm" }[] = [
     { sym: "^GSPC", key: "SPX", name: "S&P 500", region: "us" },
     { sym: "^IXIC", key: "IXIC", name: "나스닥 종합", region: "us" },
-    { sym: "^DJI", key: "DJI", name: "다우존스", region: "us" },
     { sym: "^N225", key: "N225", name: "닛케이 225", region: "jp" },
+    { sym: "000001.SS", key: "SSEC", name: "상해종합", region: "cn" },
     { sym: "GC=F", key: "GOLD", name: "금 (Gold)", region: "cm" },
     { sym: "CL=F", key: "WTI", name: "WTI 원유", region: "cm" },
   ];
@@ -167,7 +167,7 @@ export async function getIndices(): Promise<IndexQuote[]> {
       });
     }
   } catch {
-    // yahoo 실패 시 미국·일본 지수 생략
+    // yahoo 실패 시 미국·일본·중국 지수 생략
   }
 
   return out;
