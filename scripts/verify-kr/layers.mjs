@@ -541,6 +541,17 @@ async function quarterLayer(c) {
         const r = await Q.qval(y, qq, [ids, names, sjs]);
         exp = r.v;
         how = `${r.how} ${basis}`;
+        // 승인 규칙(앱 dart-income.ts, 연간 A층과 같은 조건 — 검증기가 DART 원자료로 따로 확인): 연결인데 그 분기 보고서들이 지배주주 귀속 줄을 생략했고
+        // 비지배지분 순이익(3개월)이 없거나 0, 분기말 재무상태표 비지배지분이 없거나 0 이면 지배 = 당기순이익(062040·060370 반기·3분기 보고서)
+        if (exp == null && name === "당기순이익(지배)" && basis === "CFS") {
+          const nciQ = await Q.qval(y, qq, [["ifrs-full_ProfitLossAttributableToNonControllingInterests", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"], [], ["IS", "CIS"]]);
+          const bsRows = await Q.R(y, qq === 4 ? "11011" : QCODE[qq]);
+          const bsNci = bsRows ? oneVal(pickRow(bsRows, ["ifrs-full_NoncontrollingInterests"], ["비지배지분"], ["BS"]), (x) => num(x.thstrm_amount)).v : null;
+          if (!nciQ.v && !bsNci) {
+            const ni = await Q.qval(y, qq, [["ifrs-full_ProfitLoss"], ["당기순이익", "당기순이익손실", "분기순이익", "반기순이익"], ["IS", "CIS"]]);
+            if (ni.v != null) { exp = ni.v; how = `DART 지배주주 귀속 줄 생략 · 비지배지분 순이익·재무상태표 비지배지분 없음(0) → 지배 = 당기순이익 ${ni.how}(승인 규칙) ${basis}`; }
+          }
+        }
       }
       exact("A", `분기 ${name} = DART`, lb, app, exp, how);
     }
@@ -579,6 +590,7 @@ const DEP = ["AdjustmentsForDepreciationExpense"];
 const AMO = ["AdjustmentsForAmortisationExpense"];
 const DA = ["AdjustmentsForDepreciationAndAmortisationExpense"];
 const EXTRA = ["AdjustmentsForDepreciationRightofuseAssets", "AdjustmentsForDepreciationInvestmentProperty"];
+const EXTRA_ENT = [/^Adjustments?For(Depreciation|Amorti[sz]ation)\w*Right[Oo]f[Uu]seAsset/, /^Adjustments?For(Depreciation|Amorti[sz]ation)\w*InvestmentPropert/];
 function xbrlDa(facts, prefix, basis) {
   const ok = (ctx) => {
     if (!(ctx === prefix || ctx.startsWith(prefix + "_"))) return false;
@@ -589,8 +601,10 @@ function xbrlDa(facts, prefix, basis) {
   const get = (cs) => { for (const cpt of cs) { const vs = facts.filter(([k, ctx]) => (k === `ifrs-full:${cpt}` || k === `dart:${cpt}`) && ok(ctx)).map((f) => f[2]); if (vs.length) return vs.every((v) => v === vs[0]) ? vs[0] : NaN; } return null; };
   const d = get(DEP), a = get(AMO), da = get(DA);
   if ([d, a, da].some((v) => Number.isNaN(v))) return { v: null, how: "같은 태그 값이 여럿(판독 불가)" };
+  // 회사 고유(entity…) 태그 — 표준 태그가 없을 때 이름이 사용권자산·투자부동산 상각 조정인 것(현대로템 064350 "AdjustmentForAmortisationOfRightOfUseAssets…")
+  const getEnt = (re) => { const vs = facts.filter(([k, ctx]) => /^entity\d+:/.test(k) && re.test(k.slice(k.indexOf(":") + 1)) && ok(ctx)).map((f) => f[2]); return !vs.length ? null : vs.every((v) => v === vs[0]) ? vs[0] : NaN; };
   if (d != null) {
-    const ex = EXTRA.map((cpt) => get([cpt]));
+    const ex = EXTRA.map((cpt, i) => get([cpt]) ?? getEnt(EXTRA_ENT[i]));
     if (ex.some((v) => Number.isNaN(v))) return { v: null, how: "사용권·투자부동산 태그 값이 여럿" };
     return { v: d + ex.reduce((s, v) => s + (v ?? 0), 0) + (a ?? 0), how: `XBRL 감가 ${d}${ex.some((v) => v != null) ? ` + 사용권·투자부동산 ${ex.map((v) => v ?? 0).join("+")}` : ""} + 무형 ${a ?? 0}` };
   }
@@ -611,6 +625,11 @@ async function docReads(rcepts, basis) {
     for (const x of docExtraRows(t)) if (x.scope !== other) rows.push({ ...x, how: `${r} ${x.how}` });
   }
   return { cands, rows };
+}
+/** XBRL 사실 — 그 판본에 XBRL 파일이 없으면(DART 014) null. 다른 실패는 던진다 */
+async function xbrlFactsOrNone(rcept, code) {
+  try { return await dartXbrlFacts(rcept, code); }
+  catch (e) { if (/<status>014<\/status>/.test(String(e?.message ?? e))) return null; throw e; }
 }
 /** 분기·반기 XBRL 현금흐름 조정 누적 — 컨텍스트 접두어(CFY2026dHYA 등, 끝이 A = 누적)마다 xbrlDa */
 function xbrlCum(facts, cp, y, basis) {
@@ -680,10 +699,14 @@ async function daLayer(c) {
       let indep = null;
       const xbrlOf = async () => {
         const out = [];
-        for (const [rp, pre] of [[L.latest(y + 1, "11011"), `PFY${y}dFY`], [L.latest(y, "11011"), `CFY${y}dFY`]]) {
-          if (!rp) continue;
-          const x = xbrlDa(await dartXbrlFacts(rp.rcept, "11011"), pre, basis);
-          if (x.v != null) out.push({ ...x, rcept: rp.rcept });
+        // 그 보고서의 판본마다(최신부터) — XBRL 파일이 없는 판본(DART 014 — [첨부정정] 등, 012450 2025·402340 2022)은 다음 판본. 보고서마다 첫 값
+        for (const [ry, pre] of [[y + 1, `PFY${y}dFY`], [y, `CFY${y}dFY`]]) {
+          for (const rc of annualReps(ry)) {
+            const f = await xbrlFactsOrNone(rc, "11011");
+            if (!f) continue;
+            const x = xbrlDa(f, pre, basis);
+            if (x.v != null) { out.push({ ...x, rcept: rc }); break; }
+          }
         }
         return out;
       };
@@ -768,8 +791,8 @@ async function daLayer(c) {
   const curR = reps(Y), prevR = reps(Y - 1);
   const cur = await docReads(curR, basis), prev = await docReads(prevR, basis);
   const A = [...cur.cands], B = [...cur.cands, ...prev.cands];
-  for (const r of curR) { const f = await dartXbrlFacts(r, lp.code); A.push(...xbrlCum(f, "CFY", Y, basis)); B.push(...xbrlCum(f, "PFY", Y - 1, basis)); }
-  for (const r of prevR) B.push(...xbrlCum(await dartXbrlFacts(r, lp.code), "CFY", Y - 1, basis));
+  for (const r of curR) { const f = await xbrlFactsOrNone(r, lp.code); if (f) { A.push(...xbrlCum(f, "CFY", Y, basis)); B.push(...xbrlCum(f, "PFY", Y - 1, basis)); } }
+  for (const r of prevR) { const f = await xbrlFactsOrNone(r, lp.code); if (f) B.push(...xbrlCum(f, "CFY", Y - 1, basis)); }
   const nm0 = "LTM 감가상각 TTM 적재본 = 사업연도 + 당기 누적 − 전년 누적(검증기 원문·XBRL 판독)";
   let hit = null;
   if (fyTot != null) for (const a of A) { for (const b of B) if (fyTot + a.v - b.v === v) { hit = `FY${Y - 1} ${fyTot} + ${a.how} ${a.v} − ${b.how} ${b.v}`; break; } if (hit) break; }
