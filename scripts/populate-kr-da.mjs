@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { unzipSync, strFromU8 } from "fflate";
 import { MongoClient } from "mongodb";
 import { makeDartQuota } from "./lib/dart-quota.mjs";
+import { makeDartDisk } from "./lib/dart-disk-cache.mjs";
 
 // 설정 — 개발 폴더(로컬·2호기)는 .env.local, 운영 1호기 배치는 컨테이너 환경변수(ops/oracle/run-kr-da.sh 가 /opt/macro/jobs.env 로 넣는다).
 // 실행할 때 준 환경변수가 .env.local 보다 먼저(KR_DA_COLLECTION·DART_DAILY_CAP_POPULATE 를 명령줄에서 바꿀 수 있게 — 예전 동작)
@@ -60,13 +61,10 @@ const corpOf = (code) => {
 // 중단되면 그 뒤 종목은 처리하지 않고(적재도 안 함) 목록을 남긴다
 // 카운터 폴더 — 개발 폴더는 reports/.dart-quota, 1호기는 DART_QUOTA_DIR(작업 폴더가 읽기 전용이라 바깥 폴더를 붙인다)
 const QUOTA = makeDartQuota({ tool: "populate", cap: Number(env.DART_DAILY_CAP_POPULATE ?? 2000), dir: env.DART_QUOTA_DIR ? new URL(`file://${env.DART_QUOTA_DIR.replace(/\/?$/, "/")}`) : new URL("../reports/.dart-quota/", import.meta.url) });
-async function dfetch(url) {
-  QUOTA.take();
-  const r = await fetch(url);
-  const buf = await r.arrayBuffer();
-  QUOTA.check(new TextDecoder("utf-8").decode(new Uint8Array(buf).slice(0, 400)));
-  return new Response(buf, { status: r.status, headers: r.headers });
-}
+// DART 요청은 전부 디스크 캐시 계층을 거친다(scripts/lib/dart-disk-cache.mjs — DART_CACHE_DIR 가 있으면 접수번호 판본 디스크 캐시, 정기공시 목록은
+// 회사마다 실행당 1회). 네트워크로 나갈 때만 하루 상한을 센다. 1호기는 /opt/macro/dart-cache(앱과 공유), 2호기는 DART_CACHE_DIR 를 .env.local 에
+const DISK = makeDartDisk({ key: DART, root: env.DART_CACHE_DIR || null, maxGb: Number(env.DART_CACHE_MAX_GB ?? 2), take: () => QUOTA.take(), check: (h) => QUOTA.check(h) });
+const dfetch = (url) => DISK.get(url);
 const jget = (url) => dfetch(url).then((r) => r.json());
 
 /**
@@ -90,11 +88,9 @@ async function annualRcps(corp, year) {
  * 적재본의 sourceRcepts·rulesVersion 과 같으면 그 종목은 다시 처리하지 않는다
  */
 async function latestPeriodicRcepts(corp) {
-  const now = new Date(Date.now() + 9 * 3600e3);
-  const end = now.toISOString().slice(0, 10).replace(/-/g, "");
-  const j = await jget(`${B}/list.json?crtfc_key=${DART}&corp_code=${corp}&bgn_de=${now.getUTCFullYear() - 3}0101&end_de=${end}&pblntf_ty=A&page_count=100`);
-  if (j.status !== "000" && j.status !== "013") throw new Error(`list.json ${j.status} ${j.message ?? ""}`);
-  const rows = (j.list ?? []).map((r) => ({ r, m: /(사업|반기|분기)보고서\s*\(\d{4}\.\d{2}\)/.exec(r.report_nm ?? "") })).filter((x) => x.m);
+  // 정기공시 목록은 회사마다 실행당 1회(디스크 캐시 계층) — 이 판정과 뒤 처리의 목록 조회가 같은 응답을 쓴다
+  const { rows: all } = await DISK.periodic(corp);
+  const rows = all.map((r) => ({ r, m: /(사업|반기|분기)보고서\s*\(\d{4}\.\d{2}\)/.exec(r.report_nm ?? "") })).filter((x) => x.m);
   const max = (f) => rows.filter(f).map((x) => x.r.rcept_no).sort().at(-1) ?? null;
   return { annual: max((x) => x.m[1] === "사업"), interim: max((x) => x.m[1] !== "사업") };
 }
@@ -1246,7 +1242,7 @@ ${QUOTA.stopped.message} — 상한 도달, 남은 ${left.length}종목 미처�
   process.exitCode = 1;
 }
 const qs = QUOTA.state();
-console.log(`DART 하루 요청(적재) ${qs.count}/${qs.cap} — ${qs.day} KST · 건너뜀(변화 없음) ${skipped}종목${FULL ? "(--full)" : ""}`);
+console.log(`DART 하루 요청(적재) ${qs.count}/${qs.cap} — ${qs.day} KST · 이번 실행 DART 요청 ${DISK.stats.requests}건(목록 ${DISK.stats.listPages}) · 디스크 캐시 ${env.DART_CACHE_DIR ? `적중 ${DISK.stats.hit} · 미스 ${DISK.stats.miss} · 새로 씀 ${DISK.stats.write}` : "꺼짐(DART_CACHE_DIR 없음)"} · 건너뜀(변화 없음) ${skipped}종목${FULL ? "(--full)" : ""}`);
 if (failed.length) {
   console.log(`실패 ${failed.length}종목: ${[...new Set(failed)].join(" ")}`);
   process.exitCode = 1;
