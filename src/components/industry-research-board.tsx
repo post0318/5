@@ -207,7 +207,10 @@ export function IndustryResearchBoard({ market }: { market: MarketId }) {
                         </p>
                       )}
                       <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 text-xs">
-                        <span className="bg-muted rounded px-1.5 py-0.5 font-medium">{it.source}</span>
+                        {/* 미국은 비상장 리서치가 이 탭에 합쳐졌다(2026-10-05) — 배지는 증권사명만("삼성증권 비상장리서치" → "삼성증권"). */}
+                        <span className="bg-muted rounded px-1.5 py-0.5 font-medium">
+                          {it.source.replace(/\s*비상장리서치$/, "")}
+                        </span>
                         {it.analyst && <span>{it.analyst}</span>}
                         <span>·</span>
                         <span className="tnum">{fmtAgo(it.date)}</span>

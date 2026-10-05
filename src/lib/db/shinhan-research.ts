@@ -316,7 +316,8 @@ function dedupeBySourceTitle(docs: ShinhanResearchDoc[]): ShinhanResearchDoc[] {
     // 날짜까지 키에 넣는다 — 다른 날 같은 제목의 정기물(위클리 등)을 잘못
     // 합치지 않기 위해. 같은 리포트가 경로별로 다른 날짜를 달고 오는 경우는
     // 실측에서 없었다(중복 225그룹 전부 같은 날짜).
-    const key = `${d.source}|${d.date}|${normalizeTitleForDedupe(d.title ?? "")}`;
+    // 비상장 source 는 증권사명으로 맞춘다 — 미국은 비상장 글이 산업분석에 합쳐져(2026-10-05) 같은 글이 일반 source 로도 들어오면 두 번 보이므로.
+    const key = `${brokerOfSource(d.source)}|${d.date}|${normalizeTitleForDedupe(d.title ?? "")}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(d);
@@ -695,6 +696,16 @@ export const INSIGHT_SOURCES = [
 export const isUnlistedSource = (source: string): boolean => /비상장리서치$/.test(source);
 
 /**
+ * 비상장 리서치를 별도 탭 없이 산업분석에 넣는 시장(오너 지시 2026-10-05 — "미국은 비상장리서치를 별도 탭으로 만들 필요 없어
+ * 보인다. 산업분석에 포함시키면 정리가 될 것", "국내는 비상장리서치를 그대로 유지한다"). 미국 산업분석에 이미 「앤트로픽 IPO
+ * 투자설명서」 같은 비상장 기업 글이 섞여 있어 탭을 나누면 오히려 갈린다. 국내는 비상장 탭 유지, 중국(ch)은 시장 화면이 없어 그대로.
+ */
+export const unlistedInIndustry = (market: ResearchMarketId | null | undefined): boolean => market === "us";
+
+/** 화면·중복 판정용 증권사명 — "삼성증권 비상장리서치" → "삼성증권"(산업분석에 합친 시장에서 일반 글과 같은 증권사로 보이게). */
+export const brokerOfSource = (source: string): string => source.replace(/\s*비상장리서치$/, "");
+
+/**
  * "해외리서치" — 산업분석 탭의 새 세그먼트(오너 지시, 2026-09-19 —
  * "goldman-sachs-research는 산업분석으로 이동하는데 시황 오른쪽에
  * 해외리서치라고 분류추가해서... video는 제외다... 정리하면 2개는 제외
@@ -1023,6 +1034,8 @@ const FORCED_FX_STOCKNAMES = new Set([
 export function classifyResearchTopic(
   doc: Pick<ShinhanResearchDoc, "stockName" | "title" | "source" | "market" | "summary">,
 ): ResearchTopic {
+  // 미국 비상장 리서치는 산업분석 탭의 "산업분석"으로 고정(오너 지시 2026-10-05) — 비상장 기업 글이라 내용 키워드로 거시·시황 탭에 새지 않게.
+  if (isUnlistedSource(doc.source ?? "") && unlistedInIndustry(doc.market)) return "산업분석";
   // 라벨이 업종명처럼 붙어 산업분석으로 새던 월간 시리즈(오너 지시 2026-10-04): 하나 「Hana 미국주식 Monthly」(미국 증시 Review/Preview)·
   // NH 「N월 월간공유」(리서치센터 월간 종합 전망)는 시황 월간, 미래에셋 「Econ Monthly」(국내외 경제 분석)는 경제라 이슈분석.
   // IBK 「IBKS Insight Monthly」는 업종 월간 점검 묶음이라 산업분석 그대로.
@@ -1149,8 +1162,12 @@ export async function getIndustryResearch(
   const fetchLimit = Math.max(limit * 6, 200);
   // pdfUrl 이 없으면 화면에서 클릭할 게 없어 조회 단계에서 제외한다(오너
   // 지적, 2026-09 — "링크가 없다 링크안되면 삭제다").
+  // 인사이트(해외 IB)·비상장 source 는 제외하되, 비상장을 산업분석에 합친 시장(미국, 2026-10-05)은 비상장 source 를 포함한다.
+  const excludedSources = (INSIGHT_SOURCES as readonly string[]).filter(
+    (s) => !(isUnlistedSource(s) && unlistedInIndustry(market)),
+  );
   const docs = await col
-    .find({ market, category: "산업", pdfUrl: { $ne: null }, source: { $nin: INSIGHT_SOURCES as unknown as string[] } })
+    .find({ market, category: "산업", pdfUrl: { $ne: null }, source: { $nin: excludedSources } })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
@@ -1301,6 +1318,8 @@ export async function getInsightResearch(
   source?: string,
   kind: "insight" | "unlisted" = market === "kr" ? "unlisted" : "insight",
 ): Promise<ShinhanResearchDoc[]> {
+  // 미국 비상장은 산업분석에 합쳤다(2026-10-05) — 비상장 조회에서는 빈 목록.
+  if (kind === "unlisted" && unlistedInIndustry(market)) return [];
   const col = await shinhanResearchCol();
   // kind: 해외 IB 인사이트와 비상장 리서치는 같은 source 목록(INSIGHT_SOURCES)을 공유하지만 화면(탭)은 갈라져 있다.
   const pool = (INSIGHT_SOURCES as readonly string[]).filter((s) => isUnlistedSource(s) === (kind === "unlisted"));

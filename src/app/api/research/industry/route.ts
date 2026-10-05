@@ -10,7 +10,8 @@ export const revalidate = 1800;
  * 읽는다(수집은 로컬 스크립트, CLAUDE.md 예외 참고). 종목별 기업분석
  * (`/api/markets/[market]/[symbol]/research`)과는 별개 라우트.
  * 이 탭은 "산업분석"·"글로벌IB"·"투자전략"을 다룬다. 시황(Daily/Monthly)·이슈분석·환율분석·비상장은 각자의
- * 전용 화면(`/macro/market-condition`·`/macro/issues`·`/macro/fx`·`/[market]/unlisted`)으로 갔다.
+ * 전용 화면(`/macro/market-condition`·`/macro/issues`·`/macro/fx`·`/kr/unlisted`)으로 갔다. 미국 비상장은 이 탭의 산업분석에
+ * 합쳤다(오너 지시 2026-10-05).
  * 투자전략은 오너 지시(2026-09-27 — "각 국가별 산업분석으로 다시 변경한다")로 시장(국가)별 조회로 되돌아왔다.
  */
 export async function GET(request: Request) {
