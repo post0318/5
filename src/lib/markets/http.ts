@@ -241,11 +241,26 @@ function secText(url: string, opts: FetchJsonOpts, accept: Record<string, string
   return p;
 }
 
+/**
+ * OpenDART 오류 응답인지 — DART 는 한도 초과(020)·키 오류 등도 HTTP 200 + JSON status 로 돌려준다. 캐시에서 꺼낸 본문이 이런
+ * 오류면 캐시 없이 다시 받는다(2026-10-05: 한도 초과 응답이 6~24시간 데이터 캐시에 남아 한도가 풀려도 운영 한국 재무가 계속 막힐 수 있었다).
+ * 000 정상·013 자료 없음만 정상으로 본다.
+ */
+function dartErrorBody(url: string, body: string | null): boolean {
+  if (body == null || !url.includes("opendart.fss.or.kr")) return false;
+  try {
+    const s = (JSON.parse(body) as { status?: unknown }).status;
+    return typeof s === "string" && s !== "000" && s !== "013";
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promise<T> {
   if (isSecUrl(url)) return JSON.parse(await secText(url, opts, { accept: "application/json" })) as T;
   // 빈 응답·깨진 JSON(Next 데이터 캐시에 남은 것일 수 있음)은 캐시 없이 한 번 더, 그래도면 조회 실패 — SyntaxError 가 코드 오류처럼 새지 않게
   let body = await request(url, opts, { accept: "application/json" }, (res) => res.text());
-  if (!usableBody(body, true)) {
+  if (!usableBody(body, true) || dartErrorBody(url, body)) {
     body = await request(url, { ...opts, noStore: true }, { accept: "application/json" }, (res) => res.text());
     if (!usableBody(body, true)) throw new FetchError(`빈 응답·JSON 아님 — ${url}`, { status: 502 });
   }
