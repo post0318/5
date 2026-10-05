@@ -90,10 +90,14 @@ export function dartList(corp) {
       fyMonth,
       reports,
       latest: (year, code) => latestMap.get(`${year}|${code}`) ?? null,
-      /** 기간이 가장 늦은 정기보고서(정정본 접수일이 아니라 보고 기간 기준) */
+      /**
+       * 기간이 가장 늦은 정기보고서(정정본 접수일이 아니라 보고 기간 기준). 시험 스위치 KR_VERIFY_ASSUME_ANNUAL=1 이면 사업보고서만(3~5월 —
+       * 최신 정기보고서가 사업보고서인 시기를 흉내, 감사 2차 ⑤)
+       */
       latestPeriod() {
         const ord = { "11013": 1, "11012": 2, "11014": 3, "11011": 4 };
-        return [...latestMap.values()].sort((a, b) => b.year - a.year || ord[b.code] - ord[a.code])[0] ?? null;
+        const vs = [...latestMap.values()].filter((x) => process.env.KR_VERIFY_ASSUME_ANNUAL !== "1" || x.code === "11011");
+        return vs.sort((a, b) => b.year - a.year || ord[b.code] - ord[a.code])[0] ?? null;
       },
     };
   })());
@@ -209,6 +213,51 @@ export async function dartDocLeaseCells(rcept) {
           if (dec != null && /^-?\d+$/.test(dec) && val !== 0 && 10 ** -Number(dec) !== u) continue;
           out.push([code, ctx, val * u]);
         }
+      }
+    }
+    return out;
+  });
+}
+
+/** 기업개황(company.json) — 법인등록번호(jurir_no) 등. 판본 고정(v1, 법인등록번호는 바뀌지 않음) */
+export async function dartCompany(corp) {
+  return versioned("company", corp, "v1", async () => {
+    const j = await getJson("company.json", { corp_code: corp }, `company ${corp}`);
+    return { jurir_no: j.jurir_no ?? null, corp_name: j.corp_name ?? null };
+  });
+}
+
+const DOC_DA_VER = "t1";
+/**
+ * 보고서 원문(사업·분기·반기)의 표 중 감가상각·상각 줄이 있는 표만 — [{ head, unit, rows: [[셀…]] }]. head = 표 바로 앞 글자 마지막 300자,
+ * unit = 원 단위 배수(표 안 첫 부분 → 없으면 표 앞 1500자의 마지막 "(단위 : …)"). 앱 적재 스크립트(populate-kr-da.mjs)와 코드를 나누지 않는 검증기 판독.
+ * 판본 = 접수번호
+ */
+export async function dartDocDaTables(rcept) {
+  return versioned("doc-da-tables", rcept, `${rcept}-${DOC_DA_VER}`, async () => {
+    const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const head = strFromU8(buf.slice(0, 300));
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const U = { 원: 1, 천원: 1e3, 백만원: 1e6, 억원: 1e8 };
+    const txt = (t) => t.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;|&cr;|&amp;/g, " ").replace(/\s+/g, " ").trim();
+    const units = (t) => [...txt(t).matchAll(/단위\s*:\s*(천원|백만원|억원|원)/g)].map((m) => U[m[1]]);
+    const out = [];
+    for (const b of Object.values(files)) {
+      let t = new TextDecoder("utf-8").decode(b);
+      if ((t.match(/�/g) ?? []).length > 50) t = new TextDecoder("euc-kr").decode(b);
+      const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
+      let m;
+      while ((m = re.exec(t))) {
+        const tab = m[0];
+        if (!/상각/.test(tab)) continue;
+        const rows = [...tab.matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((x) => [...x[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => txt(c[1])));
+        if (!rows.some((row) => /상각/.test(row[0] ?? ""))) continue;
+        const before = t.slice(Math.max(0, m.index - 1500), m.index);
+        const unit = units(tab.slice(0, 2000))[0] ?? units(before).at(-1) ?? null;
+        out.push({ head: txt(before).slice(-300), unit, rows });
       }
     }
     return out;

@@ -98,6 +98,7 @@ export async function krxCapsOn(code, dateYmd, { maxBack = 10 } = {}) {
       shares: c.shares,
       preferred: prefs.reduce((a, [, v]) => a + v.mcap, 0),
       prefIssues: prefs.map(([k, v]) => `${k} ${v.n}`),
+      prefShares: prefs.map(([k, v]) => [k, v.shares]),
       kindOk: c.kind != null,
       pendingDays,
     };
