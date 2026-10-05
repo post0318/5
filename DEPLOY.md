@@ -2,14 +2,14 @@
 
 ## 0. 서버 구성 (2026-10-03 오너 결정)
 
-Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 세 곳에 같은 커밋을 배포한다. 모두 같은 MongoDB 를 쓴다. 오라클 두 대 합계 3코어·20GB(무료 한도 4코어·24GB 이내, 0원).
+Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 메인으로 쓴다(2026-10-05 기준 — 구글 Cloud Run 종료, Vercel 은 정지 해제 후 재연동 예정). 모두 같은 MongoDB 를 쓴다. 오라클 두 대 합계 3코어·20GB(무료 한도 4코어·24GB 이내, 0원).
 
 | 서버 | 역할 | 주소 | 배포 |
 |---|---|---|---|
-| **오라클** (오사카 ARM A1 2코어·12GB, 161.33.9.115) | **메인** — 화면 + 무거운 자동 작업 | https://macro-insights.duckdns.org | `deploy-oracle.yml`: master 푸시(앱 파일) → 서버가 해당 커밋을 받아 직접 빌드(ARM)·재시작 |
-| **오라클 2호기 `macro-verify`** (1코어·8GB·스왑 4GB, 140.83.48.57) | **재무 검증 전용** — `kr/verification` 브랜치 개발 서버(`verify-dev`, localhost:3000, 외부 비공개) | 없음 | 수동(`cd ~/5 && git pull`) — 2026-10-04 생성. 운영과 IP·CPU 분리(DART·SEC 요청 제한이 운영에 번지지 않게). 환경변수 `~/5/.env.local`(운영 app.env + `KR_DA_COLLECTION=kr_da_staging`) |
-| 구글 Cloud Run (`brave-smile-508510-g5`, asia-northeast1) | 보조 — 화면 | https://macroresearch-2x722d45qa-an.a.run.app | `deploy-cloudrun.yml` |
-| Vercel | 보조 — 화면. **Hobby 한도 초과로 정지(402) 중** — 다음 달 사용량 초기화 때 풀림 | https://macroresearch.vercel.app | Git 연동(`vercel.json` ignoreCommand만, crons 는 2026-10-03 제거) |
+| **오라클 1호기** (오사카 ARM A1 2코어·12GB, 161.33.9.115) | **운영(1순위 주소)** — 화면 + 무거운 자동 작업 | https://macro-insights.duckdns.org | `deploy-oracle.yml`: master 푸시(앱 파일) → 서버가 해당 커밋을 받아 직접 빌드(ARM)·재시작 |
+| **오라클 2호기 `macro-verify`** (1코어·8GB·스왑 4GB, 140.83.48.57) | **검증 + IPO 운영(격리)** — `kr/verification` 브랜치 개발 서버(`verify-dev`, localhost:3000, 외부 비공개) + IPO 앱(`ipo@prod` :8000·`ipo@dev` :8001, Caddy 443·8443, ipo-auto.duckdns.org, 사무실·개발 PC IP 만 허용) | 없음(macro) | 수동(`cd ~/5 && git pull`) — 2026-10-04 생성. 운영과 IP·CPU 분리(DART·SEC 요청 제한이 운영에 번지지 않게). 환경변수 `~/5/.env.local`(운영 app.env + `KR_DA_COLLECTION=kr_da_staging`). SSH 키 `~/.ssh/oracle_verify` |
+| ~~구글 Cloud Run~~ (`brave-smile-508510-g5`, asia-northeast1) | **종료(2026-10-05 오너 결정)** — 서비스 삭제·배포 워크플로 비활성. 이미지(208MB)는 무료 범위라 보존 | — | `deploy-cloudrun.yml`(비활성) |
+| Vercel | **2순위 주소**. Hobby 한도 초과로 정지(402) 중 — 다음 달 사용량 초기화 때 풀리면 재연동 예정 | https://macroresearch.vercel.app | Git 연동(`vercel.json` ignoreCommand만, crons 는 2026-10-03 제거) |
 
 - **자동 작업이 부르는 주소는 저장소 변수 `APP_URL` 하나**(지금 오라클). 워크플로는 `${{ vars.APP_URL }}`, 수집 스크립트는
   `scripts/lib/app-url.mjs`(`APP_URL` 환경변수, 없으면 오라클 도메인). 메인을 바꿀 때는 이 변수만 고친다.
@@ -40,6 +40,30 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 세 곳에 같은 커
   `run-script.sh`(수집 스크립트 — 작업 폴더 `/opt/macro/jobs`), `run-research.sh`(국내 리서치 회차별 범위), `run-ts.sh`(앱 계산 코드 배치).
   타이머 정의는 `ops/oracle/install-schedules.sh`(다시 돌려도 같은 결과). 수집기·ops 만 바뀐 푸시는 `oracle-sync-jobs.yml` 이 작업 폴더만 맞춘다.
 - 사무실 PC 작업 스케줄러 `macro-research-bnk`(BNK — 해외 IP 차단, 한국 IP 필요).
+
+### 상호 감시 (2026-10-05 오너 지시 — "상태점검은 상호 감시해야 한다")
+
+두 호기가 10분마다 자기 자신과 상대를 점검한다. 알림은 같은 텔레그램 봇 + GitHub 이슈(라벨 `ops-alert`, 제목 `[ops-alert][N호기] 항목: 내용`).
+상태가 바뀔 때만 알리고(정상→문제 = 이슈 열기, 문제→정상 = 이슈 닫기), 상대 서버 항목은 **연속 2회(20분) 실패**해야 연다. 알림 함수는
+`ops/oracle/alert-lib.sh` 공용.
+
+| 실행 위치 | 스크립트·타이머 | 점검 |
+|---|---|---|
+| 1호기 | `healthcheck.sh` · `macro-health.timer`(root, `/opt/macro/ops/`, 설정 `alert.env`) | 자체(컨테이너·앱·재시작·HTTPS·인증서·디스크·메모리·재부팅·예약 작업·텔레그램 수신기·한국 재무) + **2호기**: SSH 포트(`peer-ssh`), 하트비트 30분 초과·읽기 실패(`peer-heartbeat`) |
+| 2호기 | `healthcheck-peer.sh` · `macro-peer-health.timer`(root, `/opt/macro-health/`, 설정 `alert.env` — `OPS_TG_*`·`OPS_GH_*` 만) | **1호기**: 운영 `/api/auth/me` 200(`op-https`), 한국 재무 `/api/markets/kr/005930/financials?period=annual` 200(`op-dart-kr`), 인증서 14일(`op-cert-expiry`), SSH 포트(`op-ssh`) + 자체: `verify-dev`·`ipo@prod`·`ipo@dev`(`svc-*`), 디스크 80%·메모리 10%·재부팅 필요, 끝나면 하트비트 기록 |
+
+- **하트비트**: 2호기 점검이 끝까지 돌면 `/var/lib/macro-health/heartbeat`(644)에 `초 ISO시각 열린알림목록` 한 줄을 쓴다. 1호기가 전용 키
+  `/opt/macro/ops/peer_ed25519`(root 600, 호스트 키 `peer_known_hosts`)로 읽는다. 2호기 `authorized_keys` 에는 이 키를
+  `from="161.33.9.115",command="cat /var/lib/macro-health/heartbeat",restrict` 로만 등록 — 어떤 명령을 보내도 그 파일 출력뿐이고 포워딩·터미널
+  불가(설치 때 확인). **2호기 → 1호기 SSH 권한은 없다**(2호기는 격리 서버, 1호기 감시는 공개 주소·포트 응답만).
+- 설치: 1호기 `sudo bash /opt/macro/jobs/ops/oracle/install-health.sh`(키가 없으면 만들고 공개키를 출력). 이후 `post-deploy.sh` 가 배포·동기화마다
+  `alert-lib.sh`·`healthcheck.sh` 를 다시 설치한다. 2호기는 master 작업 폴더가 없어 개발 PC 에서 올린다:
+  `scp -i ~/.ssh/oracle_verify ops/oracle/{alert-lib.sh,healthcheck-peer.sh,install-health-peer.sh} ubuntu@140.83.48.57:/tmp/hc/` →
+  `ssh … 'sudo bash /tmp/hc/install-health-peer.sh "<1호기 peer_ed25519.pub>"'`. **2호기 스크립트를 고치면 이 절차로 다시 올려야 한다**(자동 동기화 없음).
+- 시험: 양쪽 `--test`(텔레그램 + 이슈 열고 닫기). 실패 흉내 — 2호기 `sudo HC_PEER_IP=192.0.2.1 /opt/macro-health/healthcheck-peer.sh` 2회,
+  1호기 `sudo HC_PEER_HOST=192.0.2.1 /opt/macro/ops/healthcheck.sh` 2회 → 알림, 그냥 1회 → 복구(2026-10-05 양쪽 확인).
+- 한계: 두 대가 같은 리전(오사카)·같은 계정이라 리전 장애·계정 정지는 둘 다 못 알린다. 2호기 IPO 앱의 HTTPS 응답은 접속 IP 제한 때문에 보지 않고
+  서비스 active 만 본다.
 
 ### 과금 통제 (오너 지시 — 크레딧을 넘는 실제 지출 0)
 

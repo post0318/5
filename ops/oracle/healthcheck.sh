@@ -3,10 +3,11 @@
 # systemd 타이머(macro-health.timer)가 10분마다 root 로 실행한다.
 #
 # 점검 항목마다 상태를 기억해 두고, "정상 → 문제" 로 바뀔 때만 알림을 연다:
-#   - GitHub 이슈(라벨 ops-alert, 제목 "[ops-alert] 항목키: 내용") — 다음 대화에서 Claude 가 먼저 확인한다
+#   - GitHub 이슈(라벨 ops-alert, 제목 "[ops-alert][1호기] 항목키: 내용") — 다음 대화에서 Claude 가 먼저 확인한다
 #   - 텔레그램 봇 메시지
 # "문제 → 정상" 으로 돌아오면 이슈를 닫고 해결 메시지를 보낸다. 같은 문제를 10분마다 반복해서 알리지 않는다.
 #
+# 알림 함수는 같은 폴더 alert-lib.sh(2호기 healthcheck-peer.sh 와 공용).
 # 설정: /opt/macro/ops/alert.env (권한 600)
 #   OPS_GH_TOKEN=...   (post0318/5 Issues 읽기·쓰기만 가진 세분화 토큰)
 #   OPS_GH_REPO=post0318/5
@@ -20,69 +21,15 @@ STATE_DIR=/var/lib/macro-health
 mkdir -p "$STATE_DIR"
 # shellcheck disable=SC1090
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
-GH_REPO="${OPS_GH_REPO:-post0318/5}"
 DOMAIN="${OPS_DOMAIN:-macro-insights.duckdns.org}"
 HOST=$(hostname)
+ALERT_TAG=1호기
+ALERT_SOURCE=healthcheck.sh
+# shellcheck source=alert-lib.sh
+. "$(dirname "$(readlink -f "$0")")/alert-lib.sh"
 
-# 시험 발송: healthcheck.sh --test — 텔레그램 메시지 + GitHub 이슈를 열었다 바로 닫는다(알림 경로 확인용)
-TEST_MODE=0
-[ "${1:-}" = "--test" ] && TEST_MODE=1
-
-tg() {
-  [ -n "${OPS_TG_BOT_TOKEN:-}" ] && [ -n "${OPS_TG_CHAT_ID:-}" ] || return 0
-  curl -fsS -m 15 -o /dev/null "https://api.telegram.org/bot${OPS_TG_BOT_TOKEN}/sendMessage" \
-    --data-urlencode "chat_id=${OPS_TG_CHAT_ID}" --data-urlencode "text=$1" || true
-}
-
-gh_api() { # method path [json]
-  [ -n "${OPS_GH_TOKEN:-}" ] || return 1
-  local extra=()
-  [ -n "${3:-}" ] && extra=(-H "Content-Type: application/json" -d "$3")
-  curl -fsS -m 20 -X "$1" "https://api.github.com/repos/${GH_REPO}$2" \
-    -H "Authorization: Bearer ${OPS_GH_TOKEN}" -H "Accept: application/vnd.github+json" "${extra[@]}"
-}
-
-json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
-
-open_alert() { # key message
-  local key="$1" msg="$2" num
-  tg "🚨 [오라클 ${HOST}] ${key}: ${msg}"
-  num=$(gh_api POST /issues "{\"title\":$(json_str "[ops-alert] ${key}: ${msg}"),\"labels\":[\"ops-alert\"],\"body\":$(json_str "오라클 서버 자체 점검(healthcheck.sh)이 $(date -Is) 에 감지했습니다.
-
-- 항목: ${key}
-- 내용: ${msg}
-- 서버: ${HOST} (${DOMAIN})
-
-정상으로 돌아오면 이 이슈는 자동으로 닫힙니다.")}" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["number"])' 2>/dev/null)
-  echo "${num:-0}" > "$STATE_DIR/$key"
-}
-
-close_alert() { # key
-  local key="$1" num
-  num=$(cat "$STATE_DIR/$key" 2>/dev/null || echo 0)
-  tg "✅ [오라클 ${HOST}] ${key}: 정상으로 돌아왔습니다"
-  if [ "${num:-0}" != "0" ]; then
-    gh_api POST "/issues/${num}/comments" "{\"body\":$(json_str "$(date -Is) 정상 복귀 확인 — 자동으로 닫습니다.")}" >/dev/null 2>&1
-    gh_api PATCH "/issues/${num}" '{"state":"closed"}' >/dev/null 2>&1
-  fi
-  rm -f "$STATE_DIR/$key"
-}
-
-check() { # key ok(0/1) message
-  local key="$1" ok="$2" msg="$3"
-  if [ "$ok" = 0 ]; then
-    [ -f "$STATE_DIR/$key" ] || open_alert "$key" "$msg"
-  else
-    [ -f "$STATE_DIR/$key" ] && close_alert "$key"
-  fi
-  return 0
-}
-
-if [ "$TEST_MODE" = 1 ]; then
-  open_alert test "알림 시험 발송입니다(조치 불필요)"
-  sleep 2
-  close_alert test
-  echo "시험 발송 완료(텔레그램 2건 + GitHub 이슈 열고 닫음)"
+if [ "${1:-}" = "--test" ]; then
+  run_test
   exit 0
 fi
 
@@ -137,5 +84,21 @@ check telegram-listener "$(systemctl is-active --quiet macro-telegram-listener &
 # 운영 화면 경로를 그대로 불러 429(한도 초과)·5xx 면 바로 알림. 디스크 캐시 덕에 DART 실제 요청은 30분에 1건 남짓.
 code=$(curl -s -o /tmp/hc-dart.json -m 60 -w '%{http_code}' "http://127.0.0.1:8080/api/markets/kr/005930/financials?period=annual" || echo 000)
 check dart-kr "$([ "$code" = 200 ] && echo 1 || echo 0)" "한국 재무(OpenDART) 조회 실패(HTTP ${code}) $(head -c 120 /tmp/hc-dart.json 2>/dev/null) — 한도 초과(429)면 검증·적재 작업이 같은 키를 쓰는지 확인"
+
+# 11) 2호기(macro-verify, 검증 + IPO 운영) 감시(2026-10-05 상호 감시) — 연속 2회 실패해야 알림
+#   - SSH 포트 응답
+#   - 2호기 자체 점검(healthcheck-peer.sh)이 10분마다 쓰는 하트비트가 30분 넘게 갱신 안 되면 알림.
+#     읽기는 전용 키(/opt/macro/ops/peer_ed25519)로 — 2호기 authorized_keys 가 이 키에 "하트비트 파일 출력" 강제 명령만 허용한다.
+PEER_HOST="${HC_PEER_HOST:-${OPS_PEER_HOST:-140.83.48.57}}"
+nc -z -w 5 "$PEER_HOST" 22 >/dev/null 2>&1 && ok=1 || ok=0
+check2 peer-ssh "$ok" "2호기(${PEER_HOST}) SSH 포트 응답 없음 — 서버 정지·네트워크 확인"
+hb=$(timeout 25 ssh -i /opt/macro/ops/peer_ed25519 -o BatchMode=yes -o ConnectTimeout=10   -o UserKnownHostsFile=/opt/macro/ops/peer_known_hosts -o StrictHostKeyChecking=yes "ubuntu@${PEER_HOST}" 2>/dev/null | head -c 300)
+hb_ts=$(printf '%s' "$hb" | awk 'NR==1{print $1}')
+if [ -n "$hb_ts" ] && [ "$hb_ts" -eq "$hb_ts" ] 2>/dev/null; then
+  age=$(( $(date +%s) - hb_ts ))
+  check2 peer-heartbeat "$([ "$age" -le 1800 ] && echo 1 || echo 0)" "2호기 자체 점검이 $((age / 60))분째 멈춰 있습니다(마지막 $(date -d "@$hb_ts" '+%m-%d %H:%M')) — sudo systemctl status macro-peer-health.timer"
+else
+  check2 peer-heartbeat 0 "2호기 하트비트를 읽지 못했습니다 — 2호기 점검 미설치·SSH 키 문제"
+fi
 
 exit 0
