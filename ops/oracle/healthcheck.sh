@@ -85,6 +85,14 @@ check telegram-listener "$(systemctl is-active --quiet macro-telegram-listener &
 code=$(curl -s -o /tmp/hc-dart.json -m 60 -w '%{http_code}' "http://127.0.0.1:8080/api/markets/kr/005930/financials?period=annual" || echo 000)
 check dart-kr "$([ "$code" = 200 ] && echo 1 || echo 0)" "한국 재무(OpenDART) 조회 실패(HTTP ${code}) $(head -c 120 /tmp/hc-dart.json 2>/dev/null) — 한도 초과(429)면 검증·적재 작업이 같은 키를 쓰는지 확인"
 
+# 설정 백업(config-backup.sh, 매일 05:40 KST → 2호기) — 마지막 성공이 26시간 넘으면 알림
+if [ -f "$STATE_DIR/.config-backup-ok" ]; then
+  bk_age=$(( ($(date +%s) - $(stat -c %Y "$STATE_DIR/.config-backup-ok")) / 3600 ))
+else
+  bk_age=999
+fi
+check config-backup "$([ "$bk_age" -le 26 ] && echo 1 || echo 0)" "설정 백업이 ${bk_age}시간째 성공하지 못했습니다 — sudo journalctl -u macro-config-backup -n 50"
+
 # 11) 2호기(macro-verify, 검증 + IPO 운영) 감시(2026-10-05 상호 감시) — 연속 2회 실패해야 알림
 #   - SSH 포트 응답
 #   - 2호기 자체 점검(healthcheck-peer.sh)이 10분마다 쓰는 하트비트가 30분 넘게 갱신 안 되면 알림.

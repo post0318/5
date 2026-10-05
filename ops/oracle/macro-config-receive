@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# 2호기 설정 백업 수신(2026-10-05) — 1호기 config-backup.sh 의 전용 키가 강제 명령으로 이것만 실행한다(/usr/local/bin/macro-config-receive).
+# 표준입력(1호기에서 age 로 암호화한 묶음)을 /var/backups/macro-config 에 날짜 이름으로 저장만 한다. 복호화 키는 2호기에 없다.
+# 보관: 최근 7일 매일 + 일요일(KST) 것은 28일(주간 4주). 응답 "saved <파일명> <sha256>" 을 1호기가 보낸 해시와 대조한다.
+set -euo pipefail
+DIR=/var/backups/macro-config
+MAX_BYTES=$((100 * 1024 * 1024))
+umask 077
+name="macro-config-$(TZ=Asia/Seoul date +%Y%m%d-%H%M%S).age"
+tmp="$DIR/.incoming.$$"
+trap 'rm -f "$tmp"' EXIT
+head -c $((MAX_BYTES + 1)) > "$tmp"
+size=$(stat -c %s "$tmp")
+[ "$size" -gt 0 ] && [ "$size" -le "$MAX_BYTES" ] || { echo "rejected size=$size"; exit 1; }
+[ "$(head -c 21 "$tmp")" = "age-encryption.org/v1" ] || { echo "rejected not-age"; exit 1; }
+mv "$tmp" "$DIR/$name"
+trap - EXIT
+
+# 보관 정리 — 파일 이름의 날짜로 판단
+today=$(TZ=Asia/Seoul date +%s)
+for f in "$DIR"/macro-config-*.age; do
+  d=$(basename "$f" | sed -E 's/^macro-config-([0-9]{8})-.*/\1/')
+  ts=$(TZ=Asia/Seoul date -d "$d" +%s 2>/dev/null) || continue
+  age_days=$(( (today - ts) / 86400 ))
+  dow=$(TZ=Asia/Seoul date -d "$d" +%u)
+  if [ "$age_days" -ge 7 ] && { [ "$dow" != 7 ] || [ "$age_days" -ge 28 ]; }; then rm -f "$f"; fi
+done
+find "$DIR" -name '.incoming.*' -mmin +60 -delete 2>/dev/null || true
+echo "saved $name $(sha256sum "$DIR/$name" | cut -d' ' -f1)"

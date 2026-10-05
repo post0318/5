@@ -65,6 +65,37 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
 - 한계: 두 대가 같은 리전(오사카)·같은 계정이라 리전 장애·계정 정지는 둘 다 못 알린다. 2호기 IPO 앱의 HTTPS 응답은 접속 IP 제한 때문에 보지 않고
   서비스 active 만 본다.
 
+### 설정 백업 (2026-10-05 오너 지시 — "설정 백업 보관소도 2호기에 추가한다")
+
+1호기에만 있고 GitHub 에 없는 설정을 매일 묶어 **1호기에서 암호화(age)** 한 뒤 2호기에 보관한다. 2호기에는 암호문만 있다.
+
+- 담는 것: `/opt/macro/jobs.env`(손 관리 — 텔레그램 세션 포함)·`app.env`, `/opt/macro/ops` 전체(alert.env·감시 키·measure 스크립트 등, 복호화 키만 제외),
+  `/etc/caddy/Caddyfile`, `/etc/iptables`, `/etc/systemd/system` 의 프로젝트 유닛(`macro-*`·`news-*`·`research-*`·`fin-*`·`weekly-*`·`measure-*`),
+  유닛 사용 여부·타이머 목록·crontab(`meta/`), 원본 해시 `MANIFEST.sha256`. 캐시(sec-cache·research-cache·npm-cache)와 저장소 사본(jobs·src)은 뺀다.
+- 1호기: `ops/oracle/config-backup.sh` · `macro-config-backup.timer`(매일 05:40 KST, root). 설치 `sudo bash /opt/macro/jobs/ops/oracle/install-config-backup.sh`
+  (age 설치, 키는 없을 때만 생성). 암호화 공개키 `/opt/macro/ops/config-backup.pub`. **복호화 키는 1호기 `/opt/macro/ops/config-backup.key`(root 600)와
+  개발 PC `C:\Users\post0\.ssh\macro-config-backup.key`(본인만 읽기) 두 곳에만 있다** — 2호기에는 없다. 전송 키 `/opt/macro/ops/backup_ed25519`.
+- 2호기: 전용 계정 `macrobak`(비밀번호 잠금)의 `authorized_keys` 에 1호기 전송 키를 `from="161.33.9.115",command="/usr/local/bin/macro-config-receive",restrict`
+  로만 등록 — 표준입력을 `/var/backups/macro-config/macro-config-YYYYMMDD-HHMMSS.age`(700/600)로 저장만 한다(age 헤더·100MB 상한 검사, 저장본 해시를
+  돌려줘 1호기가 대조). 보관: 최근 7일 매일 + 일요일 것 4주. 설치는 개발 PC 에서
+  `scp -i ~/.ssh/oracle_verify ops/oracle/{macro-config-receive,install-config-receive.sh} ubuntu@140.83.48.57:/tmp/hc/` →
+  `ssh … 'sudo bash /tmp/hc/install-config-receive.sh "<1호기 backup_ed25519.pub>"'`. 2호기 → 1호기 접속 권한은 없다.
+- 감시: 성공하면 `/var/lib/macro-health/.config-backup-ok` 갱신, 1호기 `healthcheck.sh` 의 `config-backup` 항목이 26시간 넘으면 알림
+  (실패한 회차는 예약 작업 항목 `job-macro-config-backup` 으로도 알림).
+- 복원 시험(2026-10-05): 개발 PC 키로 2호기 최신본을 받아 임시 폴더에서 복호화 → 1호기 원본 126개 파일 해시 전부 일치 → 임시 폴더 삭제.
+
+**1호기 재구축 시 복원 순서** (1호기가 통째로 사라진 경우, 개발 PC 에서)
+1. 새 서버를 만들고 `ops/oracle/setup.sh` 로 기본 설치(DuckDNS 를 새 IP 로 갱신, 저장소 변수 `ORACLE_HOST` 도).
+2. 2호기에서 최신 백업 받기: `ssh -i ~/.ssh/oracle_verify ubuntu@140.83.48.57 'sudo sh -c "cat \$(ls -1t /var/backups/macro-config/*.age | head -1)"' > latest.age`
+3. 개발 PC 에서 복호화·확인: `age -d -i ~/.ssh/macro-config-backup.key -o latest.tgz latest.age` → `tar -xzf latest.tgz -C restore/` →
+   `cd restore && sha256sum -c MANIFEST.sha256`(age 는 https://github.com/FiloSottile/age/releases).
+4. 새 서버 제자리로: `opt/macro/{app.env,jobs.env}`(600), `opt/macro/ops/`(alert.env 600·키들), `etc/caddy/Caddyfile`, `etc/iptables/`,
+   `etc/systemd/system/` 유닛 → `sudo systemctl daemon-reload` → `meta/unit-files.txt` 에서 enabled 인 타이머를 `enable --now`.
+   복호화 키 `config-backup.key` 는 백업에 없으므로 개발 PC 키를 `/opt/macro/ops/config-backup.key`(root 600)로 다시 올린다.
+5. master 를 한 번 배포(`deploy-oracle.yml` 수동 실행) → 앱 컨테이너·작업 폴더(`/opt/macro/jobs`)·실행기 설치.
+6. IP 가 바뀌었으면 2호기 `authorized_keys`(ubuntu 하트비트 줄·macrobak 줄)의 `from=` 과 2호기 점검의 1호기 IP(`HC_PEER_IP` 기본값)를 고친다.
+   `peer_known_hosts`·전송 키는 백업에서 복원되므로 그대로 쓴다. 끝으로 양쪽 `--test`.
+
 ### 과금 통제 (오너 지시 — 크레딧을 넘는 실제 지출 0)
 
 - **오라클**(종량제 계정): 할당량 정책 `free-only`(A1 4코어·24GB·디스크 200GB 외 생성 차단) + 1달러 예산 알림.
