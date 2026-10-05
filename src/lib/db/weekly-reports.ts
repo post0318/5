@@ -57,6 +57,8 @@ export interface WeeklyReportDoc {
     groundingQueries: string[];
     /** 그라운딩이 인용한 출처(제목·URL) */
     groundingSources: { title: string; uri: string }[];
+    /** 웹검색 소형 호출(comment.ts researchWebFacts)이 출처와 함께 모은 그 주 사실 — 검수용 */
+    webFacts?: { topic: string; fact: string; source: string; date?: string }[];
     /**
      * 코멘트가 빈 채로 남은 이유(오너 지시 2026-09-21). 키는 comment.ts 의
      * WeeklyComments.dropReasons 와 같다("headline" | "policySummary" |

@@ -67,8 +67,8 @@ unit news-stock-news "뉴스: 유니버스 종목뉴스 미리 수집" "/opt/mac
 unit news-naver-blog "뉴스: 인플루언서 네이버 블로그 새 글 수집" "/opt/macro/ops/run-ts.sh naver-blog-poll.mts" "*-*-* *:00/5:00
 "
 sed -i 's/^TimeoutStartSec=.*/TimeoutStartSec=4min/' "$U/news-naver-blog.service" # 5분 주기라 멈춘 실행은 다음 회차 전에 정리
-# ⑤ 주간 리포트 초안 — 월요일 06:00(오너 2026-10-03)
-unit weekly-report "주간 리포트 초안 생성" "/opt/macro/ops/call-cron.sh /api/cron/weekly-report 330 '{\"force\":false}'" "Mon *-*-* 06:00:00\n"
+# ⑤ 주간 리포트 초안 — 월~금 06:00 에 깨우고 그 주 첫 한국 거래일에만 생성(월요일 휴장이면 화요일, 오너 2026-10-05). 판정은 앱(weeklyAutoRunGate)
+unit weekly-report "주간 리포트 초안 생성" "/opt/macro/ops/call-cron.sh /api/cron/weekly-report 330 '{\"force\":false,\"auto\":true}'" "Mon..Fri *-*-* 06:00:00\n"
 
 systemctl daemon-reload
 for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer; do

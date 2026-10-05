@@ -1524,8 +1524,9 @@ npm run lint         # eslint
 요약한다. 기업분석은 범위 밖(거시이므로 제외). 코드는 `src/lib/weekly/`,
 DB는 `weekly_reports`(주당 1건, `_id`=대상 주 월요일) + `weekly_llm_usage`.
 
-- **흐름**: GitHub Actions(`.github/workflows/weekly-report.yml`, 월 06:00
-  KST — 2026-10-03 09:00 에서 앞당김, 4번 저장소 브라질 국채 갱신(일 12:00 UTC = 일 21:00 KST)보다 뒤) → `POST /api/cron/weekly-report`(CRON_SECRET) → `generateWeeklyReport()`
+- **흐름**: 오라클 타이머 `weekly-report`(**월~금 06:00 KST** 에 깨우고 `{"auto":true}` — 그 주 **첫 한국 거래일**에만 생성, 월요일 휴장이면
+  화요일, 오너 지시 2026-10-05 "월요일이 휴일이면 화요일에 작업". 판정은 `weeklyAutoRunGate`: 오늘 휴장·이번 주 앞선 거래일 있음·그 주 초안 이미 있음이면
+  건너뛰고 로그. 휴장 판정은 앱 달력 `isKrxHoliday`, 대상 주는 그대로 지난주 월~금. GitHub `weekly-report.yml` 은 수동 비상용) → `POST /api/cron/weekly-report`(CRON_SECRET) → `generateWeeklyReport()`
   → 초안(draft) 저장 → 오너가 `/weekly` 화면에서 편집·발행. 화면의 "초안
   생성/재생성"은 로그인 세션으로 `POST /api/weekly`(proxy.ts 보호).
 - **입력 코퍼스**(`corpus.ts`, 원문 미저장): `kr_research` `category:"산업"`
@@ -1663,6 +1664,19 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   (post0318/4 Contents 읽기 전용 세분화 토큰)이 있으면 GitHub API 로 읽고, 없으면 표에 "자료 없음: 사유"로 남긴다. Selic 행은 예전
   오너 지시로 뺀 그대로다.
 - economyEvidence 수치가 허용 수치 목록에서 빠져 있어, 그라운딩이 안 된 실행에선 경제 요약이 근거 기사의 숫자를 인용만 해도 폐기됐다 — 포함.
+
+**배포 후 재생성본 결함 3건 수정(2026-10-05, 브랜치 `fix/weekly-report-quality-2`)**:
+- **한국 섹터 = 거래일 달력으로 정한 그 날짜 종가만**(`sectors.ts fetchKrSectorReturns`): KRX OPEN API 는 거래일 시세를 다음 거래일에 게시한다.
+  월 06:00 실행 땐 금요일(10-02) 지수가 빈 응답이라 예전 코드가 목요일 종가로 조용히 계산했다(코스피 산업재 +1.07%·주도 한화비전 → 같은 주
+  16:30 재생성 +3.67%·롯데에너지머티리얼즈). 이제 시작·끝 거래일 응답이 비거나 실패하면 그 시장 섹터를 "자료 없음: KRX YYYY-MM-DD 시세
+  미게시(빈 응답)"로 비운다(끝 날짜를 앞당기지 않는다). KRX 지수 응답은 캐시하지 않고(예전 "과거 영업일 불변 → 30일 캐시"가 게시 전 빈 응답도
+  가뒀다), `macro/kr/krx.ts` 의 `krx()` 도 빈 응답이면 캐시 없이 한 번 더 받는다(주도 종목 전종목 시세). **월 06:00 실행이면 매주 한국 섹터가
+  비게 된다** — 실행 시각을 KRX 게시 뒤로 옮길지는 오너 결정(게시 시각 실측 보고서 대기).
+- 스냅샷 표는 종가 기준일이 리포트 주 금요일보다 이르면 "(M/D)"를 붙인다(FRED DGS3 미국채 3년은 다음 영업일 오후 게시라 월요일 실행에선 늘 목요일 값,
+  상해 국경절 휴장 등).
+- 금리정책·경제 요약은 **줄 단위 검증**(`verifyLines`) — 한 은행 줄의 근거 없는 수치 때문에 세 줄 전체를 버리지 않는다. "70%대" 같은 구간 표현은
+  근거 수치가 그 구간 안이면 인정. webFacts 는 문서 `sources.webFacts` 에 남긴다(무엇을 근거로 썼는지 검수).
+- 경제 섹션 공식 지표 중복 제거는 지표명 뒤 "값 (기간, 발표일, 직전)" 부분으로 비교(모델이 지표명을 "미국 9월 비농업 고용…"처럼 고쳐 써서 빗나갔다).
 
 - **LLM = Gemini API**(`gemini.ts`, REST, SDK 없음). 모델 비교(Sonnet 5/
   Opus 5/Fable 5.1 샘플) 후 오너가 비용 문제로 Claude API 대신 선택 —

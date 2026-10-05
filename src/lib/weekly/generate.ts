@@ -14,6 +14,7 @@ import {
   generateWeeklyComments,
   nextWeekRange,
   type CommentExtras,
+  type WebFact,
   type IssueComment,
   type WeeklyComments,
 } from "./comment";
@@ -22,6 +23,7 @@ import { enrichTopIssues, fetchOfficialMetrics } from "./evidence";
 import { isGeminiConfigured } from "./gemini";
 import { buildWeeklyIssues, selectTopIssues, type WeeklyIssue } from "./issues";
 import { renderWeeklyReport } from "./render";
+import { isKrxHoliday } from "@/lib/macro/kr/market-calendar";
 import { buildSectorNews, type SectorNews } from "./sector-news";
 import { buildWeeklySectors, type WeeklySectors } from "./sectors";
 import { fetchShinhanSchedule } from "./shinhan-schedule";
@@ -90,6 +92,7 @@ type LlmOutcome = {
   groundingQueries: string[];
   groundingSources: { title: string; uri: string }[];
   dropReasons: Record<string, string>;
+  webFacts: WebFact[];
 };
 
 /**
@@ -128,6 +131,7 @@ async function tryGenerateComments(
       groundingQueries: out.result.groundingQueries,
       groundingSources: out.result.groundingSources,
       dropReasons: Object.fromEntries(out.comments.dropReasons),
+      webFacts: out.comments.webFacts,
     };
   } catch (err) {
     console.warn("[weekly] Gemini 코멘트 생성 실패 — rule-based로 폴백", err);
@@ -165,6 +169,8 @@ async function collectExtras(
   const top = await enrichTopIssues(selectTopIssues(all, 3), week, official.metrics);
   const notes: Record<string, string> = {};
   if (official.note) notes.officialMetrics = official.note;
+  if (sectors.notes?.kospi) notes["sector:kospi"] = sectors.notes.kospi;
+  if (sectors.notes?.kosdaq) notes["sector:kosdaq"] = sectors.notes.kosdaq;
   if (schedule.length === 0) notes.schedule = "신한 「이슈 및 섹터 스케줄」 다음 주 일정을 받지 못함";
   return { top, extras: { official: official.metrics, sectorNews, schedule, codeCalendar }, notes };
 }
@@ -250,12 +256,42 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
       ...doc.sources,
       groundingQueries: llm?.groundingQueries ?? doc.sources.groundingQueries,
       groundingSources: llm?.groundingSources ?? doc.sources.groundingSources,
+      webFacts: llm?.webFacts ?? doc.sources.webFacts ?? [],
       dropReasons: { ...notes, ...(llm?.dropReasons ?? doc.sources.dropReasons ?? {}) },
     },
     updatedAt: new Date().toISOString(),
   };
   await saveWeeklyReport(next);
   return next;
+}
+
+/**
+ * 자동 생성 실행 여부(오너 지시 2026-10-05 — "월요일이 휴일이면 화요일에 작업하는
+ * 거로 반영하라"). 오라클 타이머는 월~금 같은 시각에 깨우고, 여기서 **그 주 첫
+ * 한국 거래일**에만 통과시킨다(월요일 휴장이면 화요일, 화요일도 휴장이면 그다음).
+ * 대상 주는 여전히 지난주(월~금, `resolveReportWeek`).
+ *
+ * - 휴장 판정은 앱 휴장일 달력(`isKrxHoliday`). 달력을 못 받은 날(null)은 "거래일이었다"고
+ *   단정하지 않는다 — 대신 아래 "초안 이미 있음" 검사가 중복 생성을 막는다.
+ * - 그 주 초안이 이미 있으면(앞선 회차·화면에서 수동 생성) 건너뛴다. 자동 실행은
+ *   기존 초안을 덮어쓰지 않는다.
+ */
+export async function weeklyAutoRunGate(now = new Date()): Promise<{ run: boolean; reason: string }> {
+  const kstMs = now.getTime() + 9 * 3600_000;
+  const today = new Date(kstMs).toISOString().slice(0, 10);
+  const dow = new Date(kstMs).getUTCDay();
+  if (dow === 0 || dow === 6) return { run: false, reason: `${today} 주말` };
+  if ((await isKrxHoliday(today)) === true) return { run: false, reason: `${today} 한국 증시 휴장` };
+  for (let back = dow - 1; back >= 1; back--) {
+    const d = new Date(kstMs - back * 86_400_000).toISOString().slice(0, 10);
+    if ((await isKrxHoliday(d)) === false) {
+      return { run: false, reason: `이번 주 첫 거래일은 ${d} — 오늘(${today})은 건너뜀` };
+    }
+  }
+  const week = resolveReportWeek(now);
+  const existing = await getWeeklyReport(week.weekStart);
+  if (existing) return { run: false, reason: `${week.weekStart} 주 초안이 이미 있음(${existing.status})` };
+  return { run: true, reason: `${today} = 이번 주 첫 한국 거래일` };
 }
 
 export async function generateWeeklyReport(
@@ -309,6 +345,7 @@ export async function generateWeeklyReport(
       youtubeCount: 0,
       groundingQueries: llm?.groundingQueries ?? [],
       groundingSources: llm?.groundingSources ?? [],
+      webFacts: llm?.webFacts ?? [],
       dropReasons: { ...notes, ...(llm?.dropReasons ?? {}) },
     },
     // Gemini 미설정/예산 초과/실패 시 rule-based 로 폴백(모델·비용 0, 스키마 호환 유지).

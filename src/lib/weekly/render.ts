@@ -141,8 +141,14 @@ function sectorGroupSentences(
   up: SectorHighlight[],
   down: SectorHighlight[],
   comments: Map<string, string>,
+  note?: string,
 ): string {
   const lines: string[] = [`### ${title}`, ""];
+  if (note) {
+    // 끝 날짜를 앞당겨 다른 날 종가로 채우지 않는다(sectors.ts fetchKrSectorReturns)
+    lines.push(`_자료 없음: ${note}_`);
+    return lines.join("\n");
+  }
   if (up.length === 0 && down.length === 0) {
     lines.push("_이번 주 집계된 섹터 데이터가 없습니다._");
     return lines.join("\n");
@@ -156,9 +162,9 @@ function sectorSection(sectors: WeeklySectors, comments: Map<string, string>): s
   const parts = [
     "_전주 금요일 종가 대비 당주 금요일 종가 기준, 시장별 상승·하락 상위 섹터입니다._",
     "",
-    sectorGroupSentences("코스피", sectors.kospi.up, sectors.kospi.down, comments),
+    sectorGroupSentences("코스피", sectors.kospi.up, sectors.kospi.down, comments, sectors.notes?.kospi),
     "",
-    sectorGroupSentences("코스닥", sectors.kosdaq.up, sectors.kosdaq.down, comments),
+    sectorGroupSentences("코스닥", sectors.kosdaq.up, sectors.kosdaq.down, comments, sectors.notes?.kosdaq),
     "",
     sectorGroupSentences("미국", sectors.us.up, sectors.us.down, comments),
     "",
@@ -197,7 +203,7 @@ export async function renderWeeklyReport(opts: {
   parts.push("");
   parts.push("## 2. 시장 스냅샷");
   parts.push("");
-  parts.push(snapshotToMarkdownTable(snapshot, snapshotComments));
+  parts.push(snapshotToMarkdownTable(snapshot, snapshotComments, week.weekEnd));
   parts.push("");
   parts.push("## 3. 주간 핵심 이슈 3개");
   parts.push("");
@@ -230,7 +236,10 @@ export async function renderWeeklyReport(opts: {
   // 경제 요약 문단이 이미 그 문구를 그대로 인용했으면 중복이라 뺀다.
   const shown = new Set(issues.flatMap((i) => (i.metrics ?? []).map((m) => m.text)));
   const officialLines = (opts.official ?? [])
-    .filter((m) => !shown.has(m.text) && !(comments?.economySummary ?? "").includes(m.text))
+    // 지표명 뒤 "값 (기간, 발표일, 직전)" 부분으로 비교한다 — 모델이 지표명을
+    // 고쳐 쓰면("미국 9월 비농업 고용…") 전체 문구 비교가 안 맞아 같은 줄이 두 번
+    // 나갔다(2026-10-05 운영 재생성본).
+    .filter((m) => !shown.has(m.text) && !(comments?.economySummary ?? "").includes(m.text.slice(m.label.length).trim()))
     .map((m) => `  - ${m.text}`);
   if (comments?.economySummary) parts.push(comments.economySummary);
   if (officialLines.length > 0) {
