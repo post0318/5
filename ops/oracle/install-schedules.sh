@@ -67,11 +67,16 @@ unit news-stock-news "뉴스: 유니버스 종목뉴스 미리 수집" "/opt/mac
 unit news-naver-blog "뉴스: 인플루언서 네이버 블로그 새 글 수집" "/opt/macro/ops/run-ts.sh naver-blog-poll.mts" "*-*-* *:00/5:00
 "
 sed -i 's/^TimeoutStartSec=.*/TimeoutStartSec=4min/' "$U/news-naver-blog.service" # 5분 주기라 멈춘 실행은 다음 회차 전에 정리
+# ④ 종목분석 — 새 유니버스 종목 미리 계산(오너 승인 2026-10-06): 5분마다 대기열(precompute_queue)을 보고 전 계정 처음 담긴 종목만
+#    미국 재무 조립·TTM(회차당 10), 한국 감가상각 적재(fin-kr-da 설치 뒤, 회차당 5·24시간 30). 정기 배치가 돌고 있으면 쉰다. 실행기 설치는 post-deploy.sh
+install -m 755 "$(dirname "$(readlink -f "$0")")/run-precompute.sh" /opt/macro/ops/run-precompute.sh
+unit fin-precompute "종목분석: 새 유니버스 종목 미리 계산" "/opt/macro/ops/run-precompute.sh" "*-*-* *:02/5:00
+"
 # ⑤ 주간 리포트 초안 — 월요일 06:00(오너 2026-10-03)
 unit weekly-report "주간 리포트 초안 생성" "/opt/macro/ops/call-cron.sh /api/cron/weekly-report 330 '{\"force\":false}'" "Mon *-*-* 06:00:00\n"
 
 systemctl daemon-reload
-for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer; do
+for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer "$U"/fin-precompute.timer; do
   systemctl enable --now "$(basename "$t")" >/dev/null
 done
-systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog" | sed 's/^/타이머 수: /'
+systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog|fin-precompute" | sed 's/^/타이머 수: /'

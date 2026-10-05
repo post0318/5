@@ -2,6 +2,7 @@ import "server-only";
 import { ObjectId, type WithId } from "mongodb";
 import { z } from "zod";
 import { universeCol } from "@/lib/db";
+import { enqueueIfFirstInUniverse } from "@/lib/db/precompute-queue";
 import type { UniverseItem, UniverseItemDoc } from "@/lib/db/schema";
 import { getAdapter } from "@/lib/markets/registry";
 import type { MarketId } from "@/lib/markets/types";
@@ -92,6 +93,8 @@ export async function upsertUniverseItem(
     { upsert: true, returnDocument: "after" },
   );
   if (!doc) throw new Error("유니버스 저장 실패");
+  // 새로 담긴 종목이면(createdAt 이 이번 저장 시각) 전 계정 처음일 때만 미리 계산 대기열에 — 계산은 1호기 처리기가 한다
+  if (doc.createdAt === now) await enqueueIfFirstInUniverse([{ market: input.market, symbol: input.symbol }]);
   return toItem(doc);
 }
 
@@ -162,6 +165,7 @@ export async function bulkUpsertResolved(
   const col = await universeCol();
   let inserted = 0;
   let updated = 0;
+  const added: { market: string; symbol: string }[] = [];
   for (const it of items) {
     const now = new Date().toISOString();
     const symbol = getAdapter(it.market).normalizeSymbol(it.symbol);
@@ -185,6 +189,7 @@ export async function bulkUpsertResolved(
     const res = await col.updateOne(filter, { $set: set, $setOnInsert: onInsert }, { upsert: true });
     if (res.upsertedCount > 0) {
       inserted += 1;
+      added.push({ market: it.market, symbol });
     } else {
       updated += 1;
       await col.updateOne(
@@ -193,6 +198,8 @@ export async function bulkUpsertResolved(
       );
     }
   }
+  // 새로 담긴 종목 중 전 계정 처음인 것만 미리 계산 대기열에(한 번의 집계 — 1,000종목 업로드도 요청 안에서 계산하지 않는다)
+  if (added.length) await enqueueIfFirstInUniverse(added);
   return { inserted, updated };
 }
 

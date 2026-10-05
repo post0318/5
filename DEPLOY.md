@@ -36,6 +36,7 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
 | `fin-analyst-forecasts` | 타이머 | 매일 10:20 | StockAnalysis 애널리스트 투자의견 |
 | `weekly-report` | 타이머 | 월 06:00 | 주간 리포트 초안 |
 | `news-stock-news` | 타이머 | 10분마다 | 유니버스 종목뉴스(신선도 지난 종목만) |
+| `fin-precompute` | 타이머 | 5분마다(2·7·12…분) | 새 유니버스 종목 미리 계산 — 대기열 `precompute_queue`(전 계정 처음 담긴 종목만) → 미국 재무 조립·TTM(회차당 10), 한국 감가상각 적재(`fin-kr-da` 설치 뒤, 회차당 5·24시간 30). 정기 재무 배치가 돌면 쉰다(`run-precompute.sh`) |
 
 - 확인: `ssh -i ~/.ssh/oracle_macro ubuntu@161.33.9.115 'systemctl list-timers --no-pager'`, 로그 `sudo journalctl -u <이름>`.
 - 실행기(저장소 `ops/oracle/`, 배포·동기화 때 `/opt/macro/ops/` 로 설치): `call-cron.sh`(앱 `/api/cron/*` 서버 안 호출, POST 가능),

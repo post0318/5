@@ -142,6 +142,7 @@ Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정
 | 애널리스트 투자의견(미국, 종목당 상위 5건) | StockAnalysis | GitHub `analyst-forecasts`(`collect-analyst-forecasts.mjs`) | 하루 1회 | 저장 `analyst_forecasts`(종목 단위 스냅샷 교체). 승인 조건 하루 1회·종목당 5행. 빈도 확정(2026-10-03 오너) |
 | 재무 배치(fin-build) | SEC EDGAR | **오라클 타이머 `fin-fin-build`**(`ops/oracle/run-ts.sh fin-build.mts`, 2026-10-03 이전) | 하루 1회 06:10 | 새 정기공시·엔진판 변경 종목만 조립. SEC 캐시 `/opt/macro/sec-cache` 상시 보관(앱과 공유) |
 | 미국 TTM 스냅샷(ttm-build) | SEC + 앱 계산 | **오라클 타이머 `fin-ttm-build`** + 배포 직후 `post-deploy.sh`(2026-10-03 이전) | 하루 1회 06:50 + 배포 직후(무효 저장본만) | 판번호 = 계산 판번호 `e{ENGINE_VERSION}.t{TTM_RULES_VERSION}`(커밋 아님, 2026-10-03 오너 결정) — 계산 규칙이 바뀔 때만 전 종목 재계산 |
+| 새 유니버스 종목 미리 계산(precompute) | SEC(미국)·DART(한국) + 앱 계산 | **오라클 타이머 `fin-precompute`**(`ops/oracle/run-precompute.sh` → `run-ts.sh precompute.mts`, 오너 승인 2026-10-06) | 5분마다 — 대기열에 있을 때만 일함 | 유니버스에 **전 계정 처음 담긴** 종목만 대기열 `precompute_queue`(TTL 7일)에 → 미국 재무 조립·TTM(회차당 10종목, SEC 순차), 한국 감가상각 적재(`fin-kr-da` 설치 뒤, 회차당 5·24시간 30종목 — DART 운영 키 몫). 정기 배치(fin-fin-build·fin-ttm-build·fin-kr-da) 실행 중엔 쉼. 실패는 재시도 2회 뒤 failed(24시간 job 알림). 배치 분류 |
 | 미국 복수 클래스 주식수 | SEC | ~~Vercel Cron~~ → **오라클 타이머 `fin-us-class-facts`**(2026-10-03 이전) | 분기 1회(1·4·7·10월 5일 15:00) | 다음 2026-10-05. 저장 `us_class_facts` |
 | 종목 화면 재무·시세 | DART, SEC, KRX, Yahoo | 화면 조회 때 | — | 디스크 캐시 |
 
@@ -170,6 +171,6 @@ Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정
 | ① 리서치 | 31 (국내 21 — KIRS 는 한경 경유 — + 해외 IB 10) |
 | ② 거시경제 | 3 (다음 선물·KRX 공포·탐욕 원자료·Fed 스냅샷 06:00 — 오라클) |
 | ③ 뉴스·SNS | 3 (텔레그램 상주 수신기·유튜브 구독 갱신·종목뉴스 — 오라클) |
-| ④ 종목분석 | 4 (fin-build·ttm-build·us-class-facts·StockAnalysis 투자의견 10:20 — 오라클) |
+| ④ 종목분석 | 5 (fin-build·ttm-build·precompute(5분)·us-class-facts·StockAnalysis 투자의견 10:20 — 오라클) |
 | ⑤ 주간 리포트 | 1 |
-| **합계** | **42** — 오라클 41(타이머 40 + 텔레그램 상주 수신기), 사무실 PC 1(BNK). GitHub 예약 0(2026-10-04) |
+| **합계** | **43** — 오라클 42(타이머 41 + 텔레그램 상주 수신기), 사무실 PC 1(BNK). GitHub 예약 0(2026-10-04) |
