@@ -67,11 +67,14 @@ unit news-stock-news "뉴스: 유니버스 종목뉴스 미리 수집" "/opt/mac
 unit news-naver-blog "뉴스: 인플루언서 네이버 블로그 새 글 수집" "/opt/macro/ops/run-ts.sh naver-blog-poll.mts" "*-*-* *:00/5:00
 "
 sed -i 's/^TimeoutStartSec=.*/TimeoutStartSec=4min/' "$U/news-naver-blog.service" # 5분 주기라 멈춘 실행은 다음 회차 전에 정리
+# ② 거시경제 — 브라질 국채 NTN-F ~10년(재무부 CSV, 매일 약 10:20 UTC 에 전 영업일분 갱신 → 07:10 KST 수집, 새 날짜만 DB br_ntnf_daily). 2026-10-06 4번 저장소 의존 제거
+unit macro-br-ntnf "거시경제: 브라질 국채 NTN-F 10년(재무부 CSV)" "/opt/macro/ops/run-ts.sh ntnf-daily.mts" "*-*-* 07:10:00\n"
+sed -i 's/^TimeoutStartSec=.*/TimeoutStartSec=15min/' "$U/macro-br-ntnf.service"
 # ⑤ 주간 리포트 초안 — 월요일 06:00(오너 2026-10-03)
 unit weekly-report "주간 리포트 초안 생성" "/opt/macro/ops/call-cron.sh /api/cron/weekly-report 330 '{\"force\":false}'" "Mon *-*-* 06:00:00\n"
 
 systemctl daemon-reload
-for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer; do
+for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer; do
   systemctl enable --now "$(basename "$t")" >/dev/null
 done
-systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog" | sed 's/^/타이머 수: /'
+systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|br-ntnf|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog" | sed 's/^/타이머 수: /'

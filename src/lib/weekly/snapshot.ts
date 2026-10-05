@@ -3,6 +3,8 @@ import { getYahooFinance } from "@/lib/macro/yf-client";
 import { fetchRateSeries } from "@/lib/macro/kr/ecos";
 import { fetchText } from "@/lib/markets/http";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
+import { isDbConfigured } from "@/lib/db";
+import { getBrNtnfRange } from "@/lib/db/br-ntnf";
 import type { ReportWeek } from "./week";
 
 /**
@@ -11,11 +13,10 @@ import type { ReportWeek } from "./week";
  * 문제 방지). 소스: Yahoo(지수·원자재·환율·미국채 10년), FRED(미국채 3년 —
  * CBOE 가 3년물 지수 자체를 안 내서 Yahoo 티커가 없음, `^`류 대신 FRED
  * DGS3 공개 CSV 사용), ECOS(국고채, 키 있을 때), 브라질 장기 국채(NTN-F
- * ~10년 롤링)는 오너의 4번 프로젝트(github.com/post0318/4)가 재무부
- * CSV(14MB)를 매주 일요일 12:00 UTC 에 갱신해 커밋하는 JSON 을 GitHub raw
- * 로 읽는다(오너 안내, 2026-09 — Tesouro Direto 공개 JSON 은 410 Gone 으로
- * 폐기돼 못 씀). 갱신이 밀리면 asOf 를 그대로 표기하고 전주 대비는 그
- * 시점 기준 7일 전과 비교한다. 브라질 Selic(기준금리) 행은 표를 줄이라는
+ * ~10년 롤링)는 1호기 타이머 `macro-br-ntnf`가 재무부 CSV 에서 매일 수집해
+ * 둔 DB(`br_ntnf_daily`)를 읽는다(2026-10-06 — 예전엔 4번 프로젝트 저장소
+ * JSON 을 GitHub 로 읽었다, 의존 제거). 갱신이 밀리면 asOf 를 그대로 표기하고
+ * 전주 대비는 그 시점 기준 7일 전과 비교한다. 브라질 Selic(기준금리) 행은 표를 줄이라는
  * 오너 지시로 제거 — NTN-F 10년 수익률 하나만 남긴다(2026-09).
  */
 
@@ -194,48 +195,25 @@ async function ust3yRow(week: ReportWeek): Promise<SnapshotRow> {
   }
 }
 
-const NTNF_JSON_URL =
-  "https://raw.githubusercontent.com/post0318/4/main/src/lib/server/ntnf-yield-history.json";
-/** 같은 파일을 GitHub API 로(비공개 저장소용) */
-const NTNF_API_URL = "https://api.github.com/repos/post0318/4/contents/src/lib/server/ntnf-yield-history.json";
+const NTNF_SOURCE = "Tesouro Nacional CSV (1호기 매일 수집)";
 
 function ntnfMissing(note: string): SnapshotRow {
-  return { ...emptyRow({ key: "BR_NTNF10Y", group: "채권", name: "브라질 국채 NTN-F 10년", unit: "%", rate: true, source: "Tesouro Nacional (post0318/4 주간 갱신)" }), note };
+  return { ...emptyRow({ key: "BR_NTNF10Y", group: "채권", name: "브라질 국채 NTN-F 10년", unit: "%", rate: true, source: NTNF_SOURCE }), note };
 }
 
 /**
- * 브라질 NTN-F ~10년 수익률 — 4번 프로젝트가 주간 커밋하는 JSON.
- *
- * **2026-10-05 실측**: post0318/4 저장소가 비공개라 raw 주소가 404 다(9/7 주 이후
- * 초안 전부에서 이 행이 빠져 있었다 — 실패 시 null 을 돌려 표에서 소리 없이
- * 사라졌다). 읽기 전용 토큰(NTNF_GITHUB_TOKEN — post0318/4 Contents 읽기만
- * 가진 세분화 토큰)이 있으면 GitHub API 로 읽고, 없으면 공개 raw 주소를 시도한다.
- * 둘 다 안 되면 사유를 단 빈 행을 돌려 표에 "자료 없음"으로 남긴다.
+ * 브라질 NTN-F ~10년 수익률 — 1호기 타이머 `macro-br-ntnf`(scripts/run/ntnf-daily.mts)가 재무부 CSV 에서 매일 수집한
+ * `br_ntnf_daily`(계산 규칙은 ./ntnf.ts — 4번 프로젝트와 같은 규칙, 날짜별 정확 일치 확인).
+ * 값이 없으면 사유를 단 빈 행을 돌려 표에 "자료 없음"으로 남긴다(조용히 빠지지 않게 — 2026-10-05 9월 내내 빠져 있던 사고).
  */
 async function ntnfRow(week: ReportWeek): Promise<SnapshotRow> {
   try {
-    const token = process.env.NTNF_GITHUB_TOKEN;
-    const res = token
-      ? await fetch(NTNF_API_URL, {
-          headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github.raw", "user-agent": "macro-weekly" },
-          signal: AbortSignal.timeout(10_000),
-        })
-      : await fetch(NTNF_JSON_URL, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) {
-      return ntnfMissing(
-        token
-          ? `GitHub API ${res.status} — NTNF_GITHUB_TOKEN 권한 확인 필요`
-          : `post0318/4 저장소가 비공개라 읽을 수 없음(HTTP ${res.status}) — NTNF_GITHUB_TOKEN 필요`,
-      );
-    }
-    const j = (await res.json()) as {
-      asOfDate?: string;
-      points?: { date: string; ytm: number; maturityYear?: number }[];
-    };
-    const bars: Bar[] = (j.points ?? [])
-      .filter((p) => Number.isFinite(p.ytm))
-      .map((p) => ({ date: p.date, close: p.ytm }))
-      .sort((a, b) => a.date.localeCompare(b.date));
+    if (!isDbConfigured()) return ntnfMissing("MONGODB_URI 미설정");
+    // weekEnd 기준 7일 전 비교까지 넉넉히(휴일·갱신 지연 대비 30일)
+    const from = new Date(Date.parse(week.baseFriday) - 30 * 86_400_000).toISOString().slice(0, 10);
+    const docs = await getBrNtnfRange(from, week.weekEnd);
+    if (!docs.length) return ntnfMissing(`br_ntnf_daily 에 ${from}~${week.weekEnd} 값이 없음 — macro-br-ntnf 수집 확인`);
+    const bars: Bar[] = docs.filter((d) => Number.isFinite(d.ytm)).map((d) => ({ date: d._id, close: d.ytm }));
     const last = lastOnOrBefore(bars, week.weekEnd);
     if (!last) return ntnfMissing("리포트 주 이전 값이 없음");
     // 시계열이 지난주 금요일까지 못 미치면(갱신 지연) 그 시점 기준 7일 전과 비교
@@ -244,7 +222,7 @@ async function ntnfRow(week: ReportWeek): Promise<SnapshotRow> {
         ? week.baseFriday
         : new Date(Date.parse(last.date) - 7 * 86_400_000).toISOString().slice(0, 10);
     const base = lastOnOrBefore(bars, baseYmd);
-    const maturity = j.points?.at(-1)?.maturityYear;
+    const maturity = docs.find((d) => d._id === last.date)?.maturityYear;
     return {
       key: "BR_NTNF10Y",
       group: "채권",
@@ -255,7 +233,7 @@ async function ntnfRow(week: ReportWeek): Promise<SnapshotRow> {
       diff: base ? last.close - base.close : null,
       baseAsOf: base?.date ?? null,
       unit: "%",
-      source: "Tesouro Nacional (post0318/4 주간 갱신)",
+      source: NTNF_SOURCE,
     };
   } catch (err) {
     return ntnfMissing(`조회 실패: ${err instanceof Error ? err.message : String(err)}`);
