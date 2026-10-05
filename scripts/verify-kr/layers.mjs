@@ -582,13 +582,17 @@ function xbrlDa(facts, prefix, basis) {
   return { v: null, how: "XBRL 현금흐름 감가상각 태그 없음" };
 }
 
-/** 원문 표(보고서 여러 개 — 같은 기간 판본 전부) → 감가상각 후보(daCandidates)·단독 줄(사용권·투자부동산·무형) */
-async function docReads(rcepts) {
+/**
+ * 원문 표(보고서 여러 개 — 같은 기간 판본 전부) → 감가상각 후보(daCandidates)·단독 줄(사용권·투자부동산·무형). basis(CFS·OFS)와 반대 범위(연결 ↔ 별도)
+ * 표는 뺀다 — 연결 회사의 적재 값이 별도 재무제표 주석 값과 같아 통과하는 일이 없게(범위 미상 표는 남김)
+ */
+async function docReads(rcepts, basis) {
   const cands = [], rows = [];
+  const other = basis === "OFS" ? "con" : "sep";
   for (const r of rcepts) {
     const t = await dartDocDaTables(r);
-    for (const x of daCandidates(t)) cands.push({ v: x.v, how: `${r} ${x.how}` });
-    for (const x of docExtraRows(t)) rows.push({ ...x, how: `${r} ${x.how}` });
+    for (const x of daCandidates(t)) if (x.scope !== other) cands.push({ v: x.v, how: `${r} ${x.how}` });
+    for (const x of docExtraRows(t)) if (x.scope !== other) rows.push({ ...x, how: `${r} ${x.how}` });
   }
   return { cands, rows };
 }
@@ -675,7 +679,7 @@ async function daLayer(c) {
         else { add("K3", nm0, colY, { status: PASS, note: `${got.how} (${got.rcept})${/영업비용확인/.test(s) ? " · 영업비용 기준 확인 해(값 = XBRL 그대로)" : ""}` }); indep = `XBRL ${got.rcept}`; }
       } else {
         // 원문 표(그해·이듬해 사업보고서, 판본 전부) — 영업비용 기준 성격별 표·현금흐름 조정 주석 모두 같은 판독
-        const rd = await docReads([...annualReps(y + 1), ...annualReps(y)]);
+        const rd = await docReads([...annualReps(y + 1), ...annualReps(y)], basis);
         const pool = [...rd.cands];
         if (/xbrl/.test(s)) {
           // XBRL 기본 값 + 원문 단독 줄(사용권·투자부동산 보완 「xbrl+doc」, 원문 무형 「+원문무형」)
@@ -689,7 +693,10 @@ async function daLayer(c) {
         if (/\+투자부동산/.test(s)) for (const a of rd.cands) for (const b of rd.cands) if (a !== b) pool.push({ v: a.v + b.v, how: `${a.how} + ${b.how}` });
         const nm0 = "감가상각 적재본 = 사업보고서 원문(검증기 판독)";
         const hit = pool.find((p) => p.v === v);
-        if (hit) { add("K3", nm0, colY, { status: PASS, note: `${s} · ${hit.how}` }); indep = `원문 ${hit.how}`; }
+        // 원문 열(당기·전기)은 판독하지 않는다 — 대신 이웃 해 적재 값과 같으면(열을 잘못 읽은 적재) 실패
+        const twin = [y - 1, y + 1].find((yy) => { const o = doc.byYear?.[yy]; return o && (o.depreciation ?? 0) + (o.amortisation ?? 0) === v; });
+        if (hit && twin != null) fail("K3", nm0, colY, `적재 ${v} 가 원문 ${hit.how} 와 같지만 FY${twin} 적재 값과도 같음 — 열(해)을 잘못 읽은 적재 의심`);
+        else if (hit) { add("K3", nm0, colY, { status: PASS, note: `${s} · ${hit.how}` }); indep = `원문 ${hit.how}`; }
         else if (!rd.cands.length) add("K3", nm0, colY, { status: NA, note: `${s} · 원문에서 감가상각 표를 못 읽음(보고서 ${[...annualReps(y + 1), ...annualReps(y)].join("·") || "없음"}) — 적재 대조는 공통모드` });
         else {
           const near = [...pool].sort((a, b) => Math.abs(a.v - v) - Math.abs(b.v - v))[0];
@@ -743,7 +750,7 @@ async function daLayer(c) {
   const basis = yearSrc.get(Y - 1)?.fsDiv ?? "CFS";
   const reps = (yy) => L.reports.filter((x) => x.year === yy && x.code === lp.code).sort((a, b) => b.rcept.localeCompare(a.rcept)).map((x) => x.rcept);
   const curR = reps(Y), prevR = reps(Y - 1);
-  const cur = await docReads(curR), prev = await docReads(prevR);
+  const cur = await docReads(curR, basis), prev = await docReads(prevR, basis);
   const A = [...cur.cands], B = [...cur.cands, ...prev.cands];
   for (const r of curR) { const f = await dartXbrlFacts(r, lp.code); A.push(...xbrlCum(f, "CFY", Y, basis)); B.push(...xbrlCum(f, "PFY", Y - 1, basis)); }
   for (const r of prevR) B.push(...xbrlCum(await dartXbrlFacts(r, lp.code), "CFY", Y - 1, basis));

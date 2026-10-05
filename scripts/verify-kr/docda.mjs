@@ -43,7 +43,7 @@ export function daCandidates(tables) {
       const width = Math.max(0, ...Object.values(s).map((a) => a.length));
       for (let j = 0; j < width; j++) {
         const g = (k) => s[k]?.[j] ?? null;
-        const add = (v, how) => { if (v != null && Number.isFinite(v) && v !== 0) out.push({ v: v * t.unit, how: `표${ti + 1}·묶음${si + 1}·열${j + 1} ${how}` }); };
+        const add = (v, how) => { if (v != null && Number.isFinite(v) && v !== 0) out.push({ v: v * t.unit, scope: t.scope ?? null, how: `표${ti + 1}${t.scope ? `(${t.scope === "con" ? "연결" : "별도"})` : ""}·묶음${si + 1}·열${j + 1} ${how}` }); };
         if (g("comb") != null) { add(g("comb"), "합친 줄"); if (g("rou") != null) add(g("comb") + g("rou"), "합친 줄 + 사용권"); }
         if (g("dep") != null) {
           const d = g("dep"), a = g("amo") ?? 0, ro = g("rou"), iv = g("inv");
@@ -68,7 +68,7 @@ export function docExtraRows(tables) {
     for (const r of t.rows) {
       const k = kindOf(lab(r[0]));
       if (k !== "rou" && k !== "inv" && k !== "amo") continue;
-      r.slice(1).map(num).forEach((v, j) => { if (v != null && v !== 0) out.push({ v: v * t.unit, kind: k, how: `표${ti + 1}·열${j + 1} ${{ rou: "사용권", inv: "투자부동산", amo: "무형" }[k]}` }); });
+      r.slice(1).map(num).forEach((v, j) => { if (v != null && v !== 0) out.push({ v: v * t.unit, kind: k, scope: t.scope ?? null, how: `표${ti + 1}·열${j + 1} ${{ rou: "사용권", inv: "투자부동산", amo: "무형" }[k]}` }); });
     }
   });
   return out;

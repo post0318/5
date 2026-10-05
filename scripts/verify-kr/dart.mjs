@@ -227,9 +227,11 @@ export async function dartCompany(corp) {
   });
 }
 
-const DOC_DA_VER = "t1";
+const DOC_DA_VER = "t2";
 /**
- * 보고서 원문(사업·분기·반기)의 표 중 감가상각·상각 줄이 있는 표만 — [{ head, unit, rows: [[셀…]] }]. head = 표 바로 앞 글자 마지막 300자,
+ * 보고서 원문(사업·분기·반기)의 표 중 감가상각·상각 줄이 있는 표만 — [{ head, unit, scope, rows: [[셀…]] }]. head = 표 바로 앞 글자 마지막 300자,
+ * scope = 연결("con")·별도("sep")·미상(null) — 첨부 문서 종류(연결감사보고서 00761 → con, 감사보고서 00760 → sep), 본문은 표 앞 마지막 목차 제목
+ * (<TITLE>)이 "연결재무제표…"면 con, "재무제표…"면 sep(사업보고서 "3. 연결재무제표 주석"·"5. 재무제표 주석"),
  * unit = 원 단위 배수(표 안 첫 부분 → 없으면 표 앞 1500자의 마지막 "(단위 : …)"). 앱 적재 스크립트(populate-kr-da.mjs)와 코드를 나누지 않는 검증기 판독.
  * 판본 = 접수번호
  */
@@ -248,6 +250,14 @@ export async function dartDocDaTables(rcept) {
     for (const b of Object.values(files)) {
       let t = new TextDecoder("utf-8").decode(b);
       if ((t.match(/�/g) ?? []).length > 50) t = new TextDecoder("euc-kr").decode(b);
+      const acode = t.match(/<DOCUMENT-NAME[^>]*ACODE="(\d+)"/)?.[1];
+      const fileScope = acode === "00761" ? "con" : acode === "00760" ? "sep" : null;
+      const titles = [...t.matchAll(/<TITLE[^>]*>([^<]*)<\/TITLE>/g)].map((x) => [x.index, x[1]]);
+      const scopeAt = (i) => {
+        if (fileScope) return fileScope;
+        const ti = titles.filter(([k]) => k < i).at(-1)?.[1] ?? "";
+        return /연결\s*재무제표/.test(ti) ? "con" : /재무제표/.test(ti) ? "sep" : null;
+      };
       const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
       let m;
       while ((m = re.exec(t))) {
@@ -257,7 +267,7 @@ export async function dartDocDaTables(rcept) {
         if (!rows.some((row) => /상각/.test(row[0] ?? ""))) continue;
         const before = t.slice(Math.max(0, m.index - 1500), m.index);
         const unit = units(tab.slice(0, 2000))[0] ?? units(before).at(-1) ?? null;
-        out.push({ head: txt(before).slice(-300), unit, rows });
+        out.push({ head: txt(before).slice(-300), unit, scope: scopeAt(m.index), rows });
       }
     }
     return out;
