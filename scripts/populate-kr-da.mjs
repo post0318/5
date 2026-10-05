@@ -620,12 +620,18 @@ function parseInterimNature(xml) {
     if (!per || out[per]) continue;
     const rows = [...m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
     // 값 열 — 머리 줄에 "누적"이 있으면 그 열, 없으면 첫 숫자 열(누적만 공시)
+    // 값 열(감사 3차 2026-10-05 — 첫 숫자 열을 쓰면 기능별 배분 표(판관비 | 매출원가 | … | 합계)에서 판관비·재고변동 열을 읽었다: 010120·015760·
+    // 103590 TTM 이 틀렸다) — 머리 줄의 **마지막** "누적" 열(합계 쪽), 없으면 마지막 숫자 열(합계). 머리 줄과 자료 줄의 칸 수가 다를 수 있어(빈 머리 칸 —
+    // 052690) 오른쪽 끝에서 맞춘다
+    // 당기·전기가 한 표에 나란히 있으면(머리 줄에 "전반기"·"전분기"·"전기") 첫 "누적"(당기 쪽) — 033100 2025 반기 "당반기 3개월·누적 | 전반기 3개월·누적"
     const hdr = rows.find((r) => r.some((c) => /누적/.test(c)));
-    const cumIdx = hdr ? hdr.findIndex((c) => /누적/.test(c)) : -1;
+    const twoPeriods = rows.some((r) => !r.slice(1).some((c) => numOf(c) != null) && r.some((c) => /^전(반기|분기|기)/.test(c.replace(/\s/g, ""))));
+    const cumAt = hdr ? (twoPeriods ? hdr.findIndex((c) => /누적/.test(c)) : hdr.findLastIndex((c) => /누적/.test(c))) : -1;
+    const cumFromEnd = hdr ? hdr.length - 1 - cumAt : -1;
     const valOf = (r) => {
-      if (cumIdx >= 0) return numOf(r[cumIdx] ?? "");
+      if (cumFromEnd >= 0) return numOf(r[r.length - 1 - cumFromEnd] ?? "");
       const v = r.slice(1).map((c) => (/^[-–]$/.test(c.trim()) ? 0 : numOf(c))).filter((x) => x != null);
-      return v[0] ?? null;
+      return v.at(-1) ?? null;
     };
     const kind = (r) => {
       const t = lbl(r[0]);
