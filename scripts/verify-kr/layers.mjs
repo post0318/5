@@ -151,20 +151,35 @@ export async function krOriginalLayers(ctx) {
     else if (gap && appPref != null && !(appPref === 0 && capCur.preferred > 0)) {
       // 게시 전 거래일을 건너뛴 경우 — 앱 기준일이 그 날일 수 있다. 앱 값을 믿지 않고 우선주마다 Yahoo 종가(게시 전 날) × KRX 상장주식수(최근
       // 게시일)로 따로 확인(보통주와 같은 방식, 감사 2차 ③). 확인 못 하면 검증불가 — LTM EV 도 검증불가(통과로 세지 않음)
-      let exp = null, how = "", why = null;
+      // 앱 기준일은 게시 전 거래일 중 하나(앱이 그 날 KRX 자료를 받았거나 Yahoo 종가로 계산) 또는 오늘 — 후보 날짜마다 기대치를 만들고 앱이 그중
+      // 하나와 정확히 같아야 한다(가장 늦은 봉 하나만 보면 장중 봉이 끼어 거짓 실패가 났다)
+      let exps = null, why = null;
       try {
-        exp = 0;
+        const days = new Set([...capCur.pendingDays]);
+        const per = [];
         for (const [code, sh] of capCur.prefShares ?? []) {
-          const bars = await ctx.yahooBars(code);
-          const later = bars.filter((b) => b.date.replace(/-/g, "") > capCur.date && b.close != null).at(-1);
-          if (!later || sh == null) { exp = null; why = `${code} Yahoo 게시 전 날 종가 또는 KRX 상장주식수 없음`; break; }
-          exp += later.close * sh;
-          how += `${code} Yahoo ${later.date} ${later.close} × KRX 상장주식수 ${sh} `;
+          if (sh == null) throw new Error(`${code} KRX 상장주식수 없음`);
+          const bars = (await ctx.yahooBars(code)).filter((b) => b.date.replace(/-/g, "") > capCur.date && b.close != null);
+          for (const b of bars) days.add(b.date.replace(/-/g, ""));
+          per.push({ code, sh, bars });
         }
-      } catch (e) { exp = null; why = `Yahoo 일봉 조회 실패 — ${String(e?.message ?? e).slice(0, 80)}`; }
-      if (exp != null) {
-        exact("K1", "우선주 시가총액 = KRX 최근 거래일(게시 전 — Yahoo 종가 × KRX 주식수)", "LTM", appPref, exp, `KRX ${gap} 게시 전 · ${how.trim()}`);
-        if (appPref === exp) ltmPrefOk = appPref;
+        exps = [];
+        for (const dd of days) {
+          let v = 0, how = "";
+          for (const p of per) {
+            const b = p.bars.find((x) => x.date.replace(/-/g, "") === dd);
+            if (!b) { v = null; break; }
+            v += b.close * p.sh;
+            how += `${p.code} Yahoo ${b.date} ${b.close} × KRX 상장주식수 ${p.sh} `;
+          }
+          if (v != null) exps.push({ v, how: how.trim() || `${dd} 우선주 없음` });
+        }
+        if (!exps.length) { why = "게시 전 날의 Yahoo 우선주 종가 없음"; exps = null; }
+      } catch (e) { exps = null; why = `Yahoo 일봉 조회 실패 — ${String(e?.message ?? e).slice(0, 80)}`; }
+      if (exps) {
+        const hit = exps.find((x) => x.v === appPref);
+        if (hit) { add("K1", "우선주 시가총액 = KRX 최근 거래일(게시 전 — Yahoo 종가 × KRX 주식수)", "LTM", { status: PASS, app: appPref, src: hit.v, note: `KRX ${gap} 게시 전 · ${hit.how}` }); ltmPrefOk = appPref; }
+        else fail("K1", "우선주 시가총액 = KRX 최근 거래일(게시 전 — Yahoo 종가 × KRX 주식수)", "LTM", `앱 ${appPref} — 게시 전 날 후보 ${exps.map((x) => `${x.v}(${x.how})`).join(" / ")} 어느 것과도 다름`);
       } else add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX ${gap} 게시 전 — 우선주 독립 확인 불가(${why}) — 재실행 필요` });
     } else exact("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", appPref, capCur.preferred, `KRX ${capCur.date}`);
     if (H.LTM.mc === capCur.common) { add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: `KRX ${capCur.date}` }); ltmPrice = capCur.close; }
@@ -173,8 +188,9 @@ export async function krOriginalLayers(ctx) {
       let why = null;
       try {
         const y = await ctx.yahooBars(sym);
-        const later = y.filter((b) => b.date.replace(/-/g, "") > capCur.date && b.close != null).at(-1);
-        if (later && capCur.shares != null && H.LTM.mc === later.close * capCur.shares) { why = `KRX ${capCur.date} 뒤 Yahoo ${later.date} 종가 ${later.close} × KRX 상장주식수 ${capCur.shares}(앱 시세 규칙)`; ltmPrice = later.close; }
+        // KRX 기준일 뒤 Yahoo 봉 중 하나(게시 전 거래일·오늘) — 가장 늦은 봉만 보면 장중 봉이 끼어 거짓 실패
+        const later = y.filter((b) => b.date.replace(/-/g, "") > capCur.date && b.close != null).find((b) => capCur.shares != null && H.LTM.mc === b.close * capCur.shares);
+        if (later) { why = `KRX ${capCur.date} 뒤 Yahoo ${later.date} 종가 ${later.close} × KRX 상장주식수 ${capCur.shares}(앱 시세 규칙)`; ltmPrice = later.close; }
       } catch (e) { err("Yahoo 일봉(현재 시가총액 확인)", e); }
       if (why) add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: why });
       else fail("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", `앱 ${H.LTM.mc} vs KRX ${capCur.date} ${capCur.common}`);
