@@ -1967,6 +1967,17 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
 - **검증기 한국 A층 = DART 원자료 직접 대조**(fnlttSinglAcntAll, 최신 판본, 정확 일치 — 매출·영업이익·세전·순이익(연결·지배)·EPS·자산·부채·
   자본·지배/비지배·현금·유동·3개 현금흐름). **DART 는 몰아서 요청하면 이 PC 연결을 약 1시간 막는다**(실측 58분) — 검증은 `--concurrency=1`,
   요청 간격 300ms.
+- **앱 DART 디스크 캐시(오너 결정 2026-10-05, `src/lib/markets/kr/dart-cache.ts`)**: `DART_CACHE_DIR` 가 있을 때만(오라클 운영 `/opt/macro/dart-cache`
+  → 컨테이너 `/dart-cache`, 배치 `run-ts.sh` 도 같은 폴더). 대상 = 보고서에 매인 응답 전부(fnlttSinglAcntAll — 연간·분기·opendart 재무제표 화면,
+  alotMatter, stockTotqySttus) + 접수번호로 받는 XBRL 원본(xbrl.ts). 판본 = 그 보고서 **최신 접수번호**(회사 정기공시 목록 list.json, 30분 캐시 —
+  정정 공시가 나오면 30분 안에 새 판본), 목록에 없으면 "none"(그때의 013 자료 없음도 저장, 보고서가 생기면 무효). 새 판본을 쓰면 옛 파일 즉시 삭제,
+  프로세스당 1회 90일 미사용·`DART_CACHE_MAX_GB`(기본 2) 정리. 000·013 외 상태·빈 응답·깨진 JSON 은 저장 안 함, 디스크를 놓쳐 새로 받을 때는 Next
+  데이터 캐시를 건너뜀(no-store — 정정 전 판본이 6시간 캐시에서 새 판본 이름으로 저장되지 않게). 12월 결산이 아닌 회사는 판본을 못 정해 디스크 캐시
+  안 씀. 미설정이면 기존 동작. 요청 수 측정은 `DART_CACHE_LOG=1`(콘솔 `[dart-request]`). 검증기 캐시(`reports/.dart-cache`)와 코드를 나누지 않는다.
+  - **운영(master) 반영 2026-10-05**(오너 지시 "dart 디스크캐시를 1호기 마스터에 구축", `fix/prod-dart-cache`): kr/verification 의 `dart-cache.ts` 를
+    그대로 가져와 master 의 호출 지점(dart-facts fetchAll·fetchKrDps·fetchKrDistributedShares, opendart fetchFnlttYear, xbrl fromReport)에만 연결 —
+    kr 전용 기능은 안 가져옴. 판본은 Next 데이터 캐시 열쇠(URL `&_v=접수번호`)에도 들어가 캐시를 꺼도 정정 공시가 30분 안에 반영된다(대신 회사마다
+    list.json 1회 — 30분 메모). 로컬 실측(005930 하이라이트): 첫 조회 DART 18건(fnltt 15·alot 2·list 1), 서버 재시작 뒤 같은 조회 list 1건뿐·응답 동일.
 - **감가상각비 = XBRL 주석, 없으면 사업보고서 원문 주석**(`scripts/populate-kr-da.mjs`, 2026-10-02 — 오너 "주석에 없을리가 없다"):
   2021 이전 보고서 XBRL 엔 주석 태깅이 없다. 그 해는 연결감사보고서 원문의 현금흐름 조정 주석("비현금항목 조정"·"영업으로부터 창출된
   현금흐름") 표의 감가상각비·무형자산상각비 줄을 읽는다(`src:"doc"`). 겹치는 해에 XBRL 값과 같음을 확인. 원문은 선언은 UTF-8 이지만

@@ -20,6 +20,7 @@ import {
   type TtmFlows,
 } from "../types";
 import { resolveCorpCode } from "./corpcode";
+import { dartReportJson } from "./dart-cache";
 import { annualSeries, daAndAmortSeries, fetchKrFacts, seriesOf } from "./dart-facts";
 import { buildKrEvResolver, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCaps } from "./dart-ev";
 import { krIsFlows } from "./dart-income";
@@ -177,7 +178,7 @@ async function fetchFnlttYear(
   const url =
     `${BASE}/fnlttSinglAcntAll.json?crtfc_key=${key()}&corp_code=${corpCode}` +
     `&bsns_year=${bsnsYear}&reprt_code=${reprtCode}&fs_div=${fsDiv}`;
-  const res = await fetchJson<FnlttResponse>(url, { revalidate: 60 * 60 * 6 });
+  const res = await dartReportJson<FnlttResponse>("fnltt", { corp: corpCode, year: bsnsYear, reprt: reprtCode, extra: fsDiv }, url, 60 * 60 * 6);
   if (res.status === "013") return null; // 데이터 없음
   checkStatus(res, "재무제표");
   return res.list ?? null;

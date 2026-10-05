@@ -5,7 +5,7 @@
 #
 # 담는 것: /opt/macro/{jobs.env,app.env}, /opt/macro/ops(복호화 키 제외), /etc/caddy/Caddyfile, /etc/iptables,
 #   /etc/systemd/system 의 프로젝트 유닛(macro-*·news-*·research-*·fin-*·weekly-*·measure-*), 유닛 목록·활성 상태, crontab,
-#   MANIFEST.sha256(원본 파일별 해시 — 복원 대조용). 캐시(sec-cache·research-cache·npm-cache)·저장소 사본(jobs·src)은 제외.
+#   MANIFEST.sha256(원본 파일별 해시 — 복원 대조용). 캐시(sec-cache·dart-cache·research-cache·npm-cache)·저장소 사본(jobs·src)은 제외.
 # 암호화: 수신자 공개키 /opt/macro/ops/config-backup.pub. 복호화 키는 1호기 /opt/macro/ops/config-backup.key(root 600)와
 #   개발 PC C:\Users\post0\.ssh\macro-config-backup.key 에만 있다.
 # 전송: 전용 키 /opt/macro/ops/backup_ed25519 → 2호기 macrobak 계정. 그쪽 authorized_keys 가 이 키를

@@ -2,6 +2,7 @@ import "server-only";
 import { unzipSync, strFromU8 } from "fflate";
 import { fetchJson } from "../http";
 import { resolveCorpCode } from "./corpcode";
+import { dartRceptBinary } from "./dart-cache";
 
 /**
  * DART XBRL 원본에서 현금흐름표 주석의 감가상각비·무형자산상각비 추출.
@@ -92,11 +93,14 @@ async function fromReport(
   rcpNo: string,
   year: number,
 ): Promise<Record<number, { depreciation: number | null; amortisation: number | null }>> {
-  const res = await fetch(`${BASE}/fnlttXbrl.xml?crtfc_key=${key()}&rcept_no=${rcpNo}&reprt_code=11011`, {
-    signal: AbortSignal.timeout(45_000),
+  // 디스크 캐시(DART_CACHE_DIR — 판본 = 접수번호, dart-cache.ts)
+  const buf = await dartRceptBinary("xbrl", rcpNo, async () => {
+    const res = await fetch(`${BASE}/fnlttXbrl.xml?crtfc_key=${key()}&rcept_no=${rcpNo}&reprt_code=11011`, {
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (!res.ok) throw new Error(`fnlttXbrl ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
   });
-  if (!res.ok) throw new Error(`fnlttXbrl ${res.status}`);
-  const buf = new Uint8Array(await res.arrayBuffer());
   if (buf.length < 100) throw new Error(`xbrl empty (${buf.length}B)`);
   const files = unzipSync(buf);
   const name = Object.keys(files).find((n) => n.endsWith(".xbrl"));

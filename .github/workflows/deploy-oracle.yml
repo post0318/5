@@ -81,7 +81,7 @@ jobs:
             # docker --env-file 은 따옴표를 벗기지 않으므로 값을 그대로 쓴다(줄바꿈 있는 값은 없음)
             if [ -n "$v" ]; then printf '%s=%s\n' "$k" "$v" >> app.env; else echo "비어 있음(건너뜀): $k"; fi
           done
-          printf 'APP_COMMIT_SHA=%s\nSEC_CACHE_DIR=/tmp/.cache\n' "${{ github.sha }}" >> app.env
+          printf 'APP_COMMIT_SHA=%s\nSEC_CACHE_DIR=/tmp/.cache\nDART_CACHE_DIR=/dart-cache\n' "${{ github.sha }}" >> app.env
           # 메인 서버 공개 주소 — 유튜브 새 영상 알림(WebSub) 콜백 주소로 쓴다(/api/cron/youtube-subscribe)
           printf 'PUBLIC_APP_URL=https://%s\n' "${{ vars.ORACLE_DOMAIN }}" >> app.env
           scp -q app.env "ubuntu@${{ vars.ORACLE_HOST }}:/opt/macro/app.env"
@@ -103,10 +103,12 @@ jobs:
             --build-arg APP_COMMIT_SHA="$SHA" \
             -t "macro:$SHA" .
           sudo install -d -m 755 /opt/macro/sec-cache  # SEC 원본·갱신형 캐시 — 배포해도 남고 배치(run-ts.sh)와 같이 쓴다
+          sudo install -d -m 755 /opt/macro/dart-cache  # DART 디스크 캐시(판본 = 보고서 최신 접수번호, src/lib/markets/kr/dart-cache.ts) — 배치와 같이 쓴다
           docker rm -f macro >/dev/null 2>&1 || true
           docker run -d --name macro --restart unless-stopped \
             -p 127.0.0.1:8080:8080 --env-file /opt/macro/app.env \
             -v /opt/macro/sec-cache:/tmp/.cache \
+            -v /opt/macro/dart-cache:/dart-cache \
             --memory 3g "macro:$SHA" >/dev/null
           # 앱 이미지는 지금 것 + 직전 2개만 남긴다(배치·수집기가 쓰는 node 이미지는 지우지 않게 macro:* 만 정리)
           docker images macro --format '{{.Tag}} {{.CreatedAt}}' | sort -k2 -r | awk 'NR>3 {print $1}' | while read -r t; do docker rmi "macro:$t" >/dev/null 2>&1 || true; done
