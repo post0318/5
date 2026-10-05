@@ -1,5 +1,7 @@
 import "server-only";
-import { fetchShinhanSchedule } from "./shinhan-schedule";
+import { formatScheduleTitle, isMajorScheduleItem, type ScheduleItem } from "./shinhan-schedule";
+import type { OfficialMetric } from "./evidence";
+import type { SectorNews } from "./sector-news";
 import {
   BANK_BOJ,
   BANK_BOK,
@@ -9,6 +11,7 @@ import {
   type CbMeeting,
 } from "./cb-calendar";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
+import { snapshotChangeText, snapshotValueText } from "./snapshot";
 import type { WeeklyIssue } from "./issues";
 import { geminiGenerate, isGeminiConfigured, type GeminiResult } from "./gemini";
 import type { SectorHighlight, WeeklySectors } from "./sectors";
@@ -118,11 +121,22 @@ export interface WeeklyComments {
 
 const INPUT_DATA_DESC = `# 입력 데이터
 사용자 메시지는 JSON 객체 하나다.
+- webFacts: 별도 웹검색 호출이 **검색 출처를 확인하고** 모아 온 이번 주 사실(정책
+  발언·지표 결과·자산별 등락 원인, topic·fact·source). 검증된 검색 결과이므로
+  그대로 근거로 쓰고 숫자도 그대로 인용해도 된다. 네가 직접 검색할 필요가 줄어든다.
 - reportWeek: 이 리포트가 다루는 주(월~금).
 - nextWeek: reportWeek 바로 다음 주(월~금) — calendar 는 이 기간 대상.
 - topMovers: 이번 주 가장 많이 오른/내린 자산(코드가 계산한 값, 참고용).
 - snapshot: 이번 주 자산별 종가·주간 변동(pct=주간 변동률%, diffBp=금리류
   변동폭 bp). value/pct/diffBp 가 null 이면 비교할 값이 없다는 뜻이다.
+  **valueText·changeText 는 리포트 표에 그대로 찍히는 문자열**이다 — 본문에서
+  자산의 종가·변동을 인용할 땐 반드시 이 문자열을 그대로 쓴다(예: 표가
+  "5.28%"면 "5.277%"·"5.27%대"처럼 다른 자릿수로 쓰지 마라. 표와 본문 숫자가
+  다르면 리포트 신뢰가 깨진다).
+- economyMetrics: 이번 주(reportWeek)에 **새로 발표된** 미국 공식 지표(FRED, 코드가
+  계산). text 가 확정 표기다 — 인용할 땐 text 의 숫자·단위를 그대로 쓴다.
+  비어 있으면 그 주에 새로 나온 공식 지표가 없다는 뜻이다(지난 발표분을 이번 주
+  소식처럼 쓰지 마라).
 - issues: 이번 주 핵심 이슈 후보(증권사 리포트·뉴스 빈도로 뽑힘). reports·
   news·earnings(실적 서프라이즈)·metrics(FRED 거시지표)가 근거로 들어있고,
   **facts 는 그 reports/news 에서 코드가 이미 뽑아 둔 사실 줄**이다(실제
@@ -138,9 +152,11 @@ const INPUT_DATA_DESC = `# 입력 데이터
   거시·시장 일정(해외/국내 지표·이슈, 없을 수 있음). calendar 를 쓸 때 **반드시
   참조**하는 1차 후보 목록이다 — 다만 그대로 옮기지 말고 웹검색으로 날짜가 확인되는
   항목만 채택한다(검증). 요일·시차(현지시간)가 애매하면 뺀다.
-- sectors: 이번 주 한국·미국·일본 증시의 상승/하락 상위 섹터(등락률은 코드가
-  이미 계산해 확정). 왜 그 섹터가 그렇게 움직였는지는 안 채워져 있다 —
-  네가 웹검색으로 원인을 찾아 채운다.
+- sectors: 이번 주 한국·미국·일본·유럽 증시의 상승/하락 상위 섹터(등락률은 코드가
+  이미 계산해 확정). leaders 는 그 섹터를 실제로 끌고 간 종목(등락률 포함),
+  headlines 는 그 종목들의 그 주 기사 제목이다. 섹터 사유는 **leaders 와
+  headlines 로만** 설명한다 — 섹터 이름만 보고 업종 일반론(예: 소재 → 2차전지,
+  산업재 → 방산)을 붙이지 마라.
 - centralBankMeetings: 미국 FOMC·일본은행(BOJ)·한국은행 금통위의 **남은
   공식 회의 일정 전부**(각 중앙은행·Kalshi 공식 캘린더에서 실시간 조회).
 
@@ -174,8 +190,11 @@ ${INPUT_DATA_DESC}
    나열로 대체한다. 120자 내외.
 2. **economySummary** — 통화정책(중앙은행)을 뺀 그 외 거시경제 동향
    종합. 대상: 관세·통상, 중국 경기·부양책, 고용지표, 브라질 국채,
-   금 가격, 원달러 환율, 구리 등 산업금속, BDI·해운운임. **economyEvidence
-   의 근거를 최우선으로 활용**하고, 부족한 부분만 웹검색으로 보강해라.
+   금 가격, 원달러 환율, 구리 등 산업금속, BDI·해운운임. **economyMetrics(그
+   주에 새로 발표된 공식 지표)와 economyEvidence 의 근거를 최우선으로 활용**하고,
+   부족한 부분만 웹검색으로 보강해라. economyMetrics 가 비어 있지 않으면 그 지표
+   (예: 비농업 고용·실업률·PCE 물가)를 다루는 줄은 반드시 넣는다 — 그 주 가장 큰
+   거시 소식인데 경제 섹션에서 빠지면 안 된다. 공식 지표 수치는 text 그대로.
    이 항목들은 서로 인과관계가 뚜렷하지 않은 개별 신호(금은 안전자산
    수요, 구리·BDI는 경기 선행지표, 원달러는 환율 그 자체)라 **주제별로
    줄을 바꿔라** — policySummary 와 같은 원칙. 마크다운 리스트로
@@ -293,10 +312,13 @@ ${INPUT_DATA_DESC}
 3. **sectors: 이번 주 왜 그 섹터가 그렇게 오르내렸는지를 쓴다.** 등락률·
    순위는 이미 코드가 계산해 확정했으니 다시 쓰지 마라 — "이번 주 X.X%
    상승" 처럼 표에 이미 있는 숫자를 문장으로 바꿔 적기만 하는 건 금지
-   (snapshot 규칙 1과 같은 이유). 그 섹터 안에서 실제로 무슨 일이 있었는지
-   (실적·정책·수급·업황 뉴스 등)를 웹검색으로 확인해 1~2문장(60자 내외)
-   으로 쓴다. 확인 안 되면 빈 문자열로 남긴다. sectors 항목의 id 값을
-   그대로 키로 써서 응답한다(예: "kr-up-1").
+   (snapshot 규칙 1과 같은 이유). **그 섹터의 headlines(주도 종목 기사)에
+   나온 사건만 근거로** 1~2문장(60자 내외)으로 쓰고, 어떤 주도 종목(leaders)의
+   무슨 소식인지 종목명을 짚는다(예: "롯데에너지머티리얼즈 ○○ 소식에 급등").
+   headlines 가 비었거나 등락 이유를 설명하지 못하면 **빈 문자열**로 남긴다 —
+   섹터 이름만 보고 업종 일반론을 지어내는 건 금지(실측 오류: 솔브레인·
+   동진쎄미켐(반도체 소재)이 끈 섹터를 "2차전지 소재 매수"로 씀). sectors
+   항목의 id 값을 그대로 키로 써서 응답한다(예: "kr-up-1").
 4. 제공된 JSON의 수치는 그대로 인용해도 된다. 그 외의 새 수치(%, 가격,
    지표 등)를 쓸 때는 **실제 웹검색으로 확인한 것만** 쓴다 — 확인 안 되면
    수치 없이 정성적으로만("~영향", "~로 해석됨") 서술하고, 그마저 안 되면
@@ -311,14 +333,34 @@ ${INPUT_DATA_DESC}
 {"snapshot": {"<snapshot 항목의 name과 동일한 문자열>": "코멘트"}, "issues": {"<issues 항목의 label과 동일한 문자열>": {"headline": "그 주 화두 제목(구체적으로, label 복사 금지)", "reading": "해석"}}, "sectors": {"<sectors 항목의 id와 동일한 문자열>": "코멘트"}}
 snapshot·issues·sectors 에 없는 키를 새로 만들지 말 것.`;
 
+interface PayloadMetric {
+  label: string;
+  text: string;
+  value: number;
+  previous: number | null;
+  unit: string;
+}
+
+function toPayloadMetric(m: { label: string; text: string; value: number; previous: number | null; unit: string }): PayloadMetric {
+  return { label: m.label, text: m.text, value: m.value, previous: m.previous, unit: m.unit };
+}
+
 interface CommentPayload {
+  /** 웹검색 전용 호출(researchWebFacts)이 그 주에 확인한 사실 — 출처 도메인 포함 */
+  webFacts: WebFact[];
   reportWeek: { start: string; end: string };
   nextWeek: { start: string; end: string };
   topMovers: { up: { name: string; pct: number } | null; down: { name: string; pct: number } | null };
   snapshot: {
     name: string;
     group: string;
+    /** 표에 찍히는 값과 같은 자릿수로 반올림한 값 — 원값(5.277)을 주면 모델이
+     * 본문에 "5.277%"·"5.27%대"처럼 표(5.28%)와 다른 숫자를 쓴다(2026-10-05 실측). */
     value: number | null;
+    /** 표의 "종가" 칸과 같은 문자열 — 본문에서 수치를 인용할 땐 이것만 쓴다 */
+    valueText: string | null;
+    /** 표의 "주간 변동" 칸과 같은 문자열 */
+    changeText: string;
     unit: string;
     pct: number | null;
     diffBp: number | null;
@@ -335,8 +377,12 @@ interface CommentPayload {
     reports: { date: string; source: string; stockName: string; title: string }[];
     news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
     earnings?: { ticker: string; period: string; epsActual: number | null; epsEstimate: number | null; surprisePct: number | null }[];
-    metrics?: { label: string; date: string; current: number; previous: number; change: number; unit: string }[];
+    /** 그 주에 새로 발표된 공식 지표만(evidence.ts fetchOfficialMetrics) — text 가 확정 표기 */
+    metrics?: PayloadMetric[];
   }[];
+  /** 리포트 주에 새로 발표된 미국 공식 지표 전부(FRED, 코드가 계산·표기 확정) —
+   * economySummary 의 1차 근거. 화면 "5. 경제"에도 코드가 그대로 싣는다. */
+  economyMetrics: PayloadMetric[];
   /** 미국 금리·연준/한국은행/일본은행 주제로 이미 수집된 근거 — 핵심
    * 이슈 3개(issues)에 안 뽑혀도 policySummary 는 이걸 우선 활용한다
    * (오너 지시 2026-09-18 — "4번은 사실밖에 없는 정책을 이야기하는건데
@@ -363,6 +409,10 @@ interface CommentPayload {
     pct: number;
     startDate: string;
     endDate: string;
+    /** 섹터를 끌고 간 종목(코드 집계) */
+    leaders: { name: string; pct: number }[];
+    /** 그 종목들의 그 주 기사 제목(sector-news.ts) — 사유는 이것만 근거로 쓴다 */
+    headlines: string[];
   }[];
   /** 남은 중앙은행 회의 일정 — `cb-calendar.ts` 가 공식 소스에서 가져온다.
    * 이걸 안 주면 모델이 회의가 없는 달을 지어낸다(실측 2026-09: FOMC 가
@@ -528,6 +578,99 @@ interface FixedCalendarEvent {
   dedupe: RegExp;
 }
 
+/** 같은 날 같은 일정인지 가르는 핵심어 — 신한 스케줄·FRED·회의 일정·Gemini
+ * 항목이 서로 다른 표기로 같은 이벤트를 적는다("美) 9월 ISM 비제조업지수(현지시간)"
+ * vs "미국 9월 ISM 서비스업 PMI"). 핵심어가 하나라도 겹치면 같은 일정으로 본다. */
+const EVENT_KEYS: [string, RegExp][] = [
+  ["fomc-minutes", /FOMC.*의사록|의사록.*FOMC/],
+  ["fomc", /FOMC|연준.*금리\s*결정/],
+  ["ecb", /ECB|유럽중앙은행/],
+  ["boj", /BOJ|일본은행/],
+  ["bok", /금통위|금융통화위원회|한국은행.*(기준)?금리/],
+  ["cpi", /CPI|소비자물가/],
+  ["ppi", /PPI|생산자물가/],
+  ["pce", /PCE|개인소비지출/],
+  ["jobs", /비농업|고용지표|고용보고서|Employment Situation|Nonfarm/i],
+  ["ism-mfg", /ISM.*제조업/],
+  ["ism-svc", /ISM.*(비제조업|서비스업)/],
+  ["retail", /소매판매/],
+  ["gdp", /GDP|국내총생산/],
+  ["umich", /미시[건간]대/],
+  ["jolts", /JOLT|구인/],
+  ["quad", /네\s*마녀|동시\s*만기|옵션\s*만기/],
+];
+
+function eventKeys(event: string): string[] {
+  const keys = EVENT_KEYS.filter(([, re]) => re.test(event)).map(([k]) => k);
+  // FOMC 의사록은 FOMC 회의와 다른 일정이다
+  return keys.includes("fomc-minutes") ? keys.filter((k) => k !== "fomc") : keys;
+}
+
+/** 나라 접두어가 다르면(미국 CPI vs 유로존 CPI) 다른 일정이다. */
+function eventCountry(event: string): string | null {
+  const m = event.match(/^(미국|중국|일본|영국|독일|유로존|한국|국내)/);
+  return m ? m[1] : null;
+}
+
+function isSameEvent(a: { date: string; event: string }, b: { date: string; event: string }): boolean {
+  if (a.date !== b.date) return false;
+  const ca = eventCountry(a.event);
+  const cb = eventCountry(b.event);
+  if (ca && cb && ca !== cb) return false;
+  const ka = eventKeys(a.event);
+  const kb = eventKeys(b.event);
+  if (ka.length > 0 && kb.length > 0) return ka.some((k) => kb.includes(k));
+  return a.event.replace(/\s+/g, "") === b.event.replace(/\s+/g, "");
+}
+
+/** 다음 주(리포트 주 금요일 +3일 월 ~ +7일 금) */
+export function nextWeekRange(week: ReportWeek): { start: string; end: string } {
+  const weekEndMs = Date.parse(`${week.weekEnd}T00:00:00Z`);
+  return {
+    start: new Date(weekEndMs + 3 * 86_400_000).toISOString().slice(0, 10),
+    end: new Date(weekEndMs + 7 * 86_400_000).toISOString().slice(0, 10),
+  };
+}
+
+/**
+ * "다음 주 주시 일정" 중 **코드로 확정되는 부분** — 그라운딩(웹검색) 성공 여부와
+ * 무관하게 항상 표에 실린다. 예전엔 이 계산이 Gemini 호출 안에만 있어 Gemini 가
+ * 실패·미설정이면 표가 통째로 비었고, 신한 스케줄은 모델 입력으로만 쓰였다
+ * (2026-10-04 21:00 UTC 실행 — 검색 0건 + 그 주 고정 일정 없음 → "확인하지
+ * 못했습니다"). 이제 generate.ts 가 한 번 계산해 Gemini 병합과 렌더링 폴백에
+ * 같이 쓴다.
+ */
+export async function buildCodeCalendar(
+  week: ReportWeek,
+  schedule: ScheduleItem[],
+): Promise<{ date: string; event: string }[]> {
+  const { start, end } = nextWeekRange(week);
+  const meetings = (await getCentralBankMeetings().catch(() => [] as CbMeeting[])).filter((m) => m.date >= week.weekStart);
+  const fixed = await computeFixedCalendarEvents(start, end, meetings);
+  let list: { date: string; event: string }[] = [];
+  const add = (e: { date: string; event: string }) => {
+    if (!list.some((c) => isSameEvent(c, e))) list = [...list, e];
+  };
+  for (const f of fixed) add({ date: f.date, event: f.event });
+  for (const s of schedule) {
+    if (s.date < start || s.date > end || !isMajorScheduleItem(s)) continue;
+    const title = formatScheduleTitle(s.title);
+    // 국내 일정은 나라 접두어가 없다("옵션만기일", "8월 국제수지(잠정)") — 해외와 섞여 헷갈리지 않게
+    add({ date: s.date, event: s.category.startsWith("국내") && !/^한국/.test(title) ? `한국 ${title}` : title });
+  }
+  return list.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Gemini 캘린더(검색으로 확인한 것)에 코드 일정을 합친다 — 같은 일정은 하나만. */
+export function mergeCalendar(
+  model: { date: string; event: string }[] | null,
+  code: { date: string; event: string }[],
+): { date: string; event: string }[] {
+  let list = [...(model ?? [])];
+  for (const c of code) if (!list.some((m) => isSameEvent(m, c))) list = [...list, c];
+  return list.sort((a, b) => a.date.localeCompare(b.date));
+}
+
 async function computeFixedCalendarEvents(
   startDate: string,
   endDate: string,
@@ -591,7 +734,7 @@ const MARKET_LABEL: Record<string, string> = {
   eu: "유럽",
 };
 
-function flattenSectors(sectors: WeeklySectors): CommentPayload["sectors"] {
+function flattenSectors(sectors: WeeklySectors, news: Map<string, SectorNews>): CommentPayload["sectors"] {
   const groups: SectorHighlight[] = [
     ...sectors.kospi.up,
     ...sectors.kospi.down,
@@ -612,6 +755,8 @@ function flattenSectors(sectors: WeeklySectors): CommentPayload["sectors"] {
     pct: Math.round(s.pct * 100) / 100,
     startDate: s.startDate,
     endDate: s.endDate,
+    leaders: (s.leaders ?? []).map((l) => ({ name: l.name, pct: Math.round(l.pct * 100) / 100 })),
+    headlines: news.get(s.id)?.headlines ?? [],
   }));
 }
 
@@ -622,6 +767,7 @@ function buildPayload(
   allIssues: WeeklyIssue[],
   sectors: WeeklySectors,
   meetings: CbMeeting[],
+  extras: CommentExtras,
 ): CommentPayload {
   const weekEndMs = Date.parse(`${week.weekEnd}T00:00:00Z`);
   const nextStart = new Date(weekEndMs + 3 * 86_400_000).toISOString().slice(0, 10); // 금→월
@@ -653,6 +799,7 @@ function buildPayload(
     };
   }).filter((p) => p.reports.length > 0 || p.news.length > 0);
   return {
+    webFacts: [],
     reportWeek: { start: week.weekStart, end: week.weekEnd },
     nextWeek: { start: nextStart, end: nextEnd },
     topMovers: computeTopMovers(snapshot),
@@ -661,15 +808,18 @@ function buildPayload(
     // 리포트 주 시작일 기준 — 그 주에 열린 회의도 "이번 주 무슨 일이
     // 있었는지" 서술에 필요하므로 nextWeek 이 아니라 weekStart 부터.
     centralBankMeetings: meetings,
-    sectors: flattenSectors(sectors),
+    sectors: flattenSectors(sectors, extras.sectorNews),
+    economyMetrics: extras.official.map(toPayloadMetric),
     snapshot: snapshot
       .filter((r) => r.value != null)
       .map((r) => ({
         name: r.name,
         group: r.group,
-        value: r.value,
+        value: r.value != null ? Math.round(r.value * 100) / 100 : null,
+        valueText: snapshotValueText(r),
+        changeText: snapshotChangeText(r),
         unit: r.unit,
-        pct: r.pct,
+        pct: r.pct != null ? Math.round(r.pct * 100) / 100 : null,
         diffBp: r.diff != null && r.unit.startsWith("%") ? Math.round(r.diff * 100) : null,
         asOf: r.asOf,
       })),
@@ -693,14 +843,7 @@ function buildPayload(
         epsEstimate: e.epsEstimate,
         surprisePct: e.surprisePct,
       })),
-      metrics: i.metrics?.map((m) => ({
-        label: m.label,
-        date: m.date,
-        current: m.current,
-        previous: m.previous,
-        change: m.change,
-        unit: m.unit,
-      })),
+      metrics: i.metrics?.map(toPayloadMetric),
     })),
   };
 }
@@ -799,7 +942,8 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
       if (e.epsEstimate != null) nums.push(e.epsEstimate);
     }
     for (const m of i.metrics ?? []) {
-      nums.push(m.current, m.previous, m.change);
+      nums.push(m.value, Math.abs(m.value));
+      if (m.previous != null) nums.push(m.previous, Math.abs(m.previous));
     }
     for (const r of i.reports) {
       nums.push(...extractNumbers(r.title));
@@ -809,15 +953,67 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
       if (n.excerpt) nums.push(...extractNumbers(n.excerpt));
     }
   }
-  for (const p of payload.policyEvidence) {
+  // economyEvidence 도 넣는다 — 빠져 있어서 그라운딩이 안 돈 실행에선 경제 요약이
+  // 근거 기사의 수치("실업률 4.2%")를 인용하기만 해도 "근거 없는 수치"로 통째로
+  // 버려졌다(2026-10-05 발견, policyEvidence 와 같은 자기모순).
+  for (const p of [...payload.policyEvidence, ...payload.economyEvidence]) {
     for (const r of p.reports) nums.push(...extractNumbers(r.title));
     for (const n of p.news) {
       nums.push(...extractNumbers(n.title));
       if (n.excerpt) nums.push(...extractNumbers(n.excerpt));
     }
   }
-  for (const s of payload.sectors) nums.push(s.pct);
+  for (const m of payload.economyMetrics) {
+    nums.push(m.value, Math.abs(m.value));
+    if (m.previous != null) nums.push(m.previous, Math.abs(m.previous));
+  }
+  for (const s of payload.sectors) {
+    nums.push(s.pct, Math.abs(s.pct));
+    for (const l of s.leaders) nums.push(l.pct, Math.abs(l.pct));
+    for (const h of s.headlines) nums.push(...extractNumbers(h));
+  }
+  for (const r of payload.snapshot) if (r.pct != null) nums.push(Math.abs(r.pct));
+  // 웹검색 호출이 출처와 함께 확인해 온 사실(researchWebFacts) — 검색 출처가 0건이면 비어 있다
+  for (const w of payload.webFacts) nums.push(...extractNumbers(w.fact));
   return nums;
+}
+
+/**
+ * 본문 수치를 표와 같은 자릿수로 맞춘다(2026-10-05 오너 지적 — 표 "미국채 10년
+ * 5.28%" vs 본문 "5.27%대", 국고채 3년 3.94 vs 3.93). 모델이 원값(5.277)을
+ * 버림·반올림해 다르게 쓴 것이다. payload 에 이미 표 값만 주지만, 모델이 검색
+ * 결과의 값을 섞어 쓸 수 있어 출력도 고친다.
+ *
+ * 대상은 소수 둘째 자리 이상으로 쓴 "% 수치" 중 **허용 목록에 그대로는 없고**
+ * 스냅샷 값(금리 수준·주간 변동률)과 0.01 미만 차이인 것뿐 — 그 표 값으로
+ * 바꾼다. 허용 목록에 정확히 있는 다른 수치(섹터 등락률 등)는 건드리지 않는다.
+ */
+function alignSnapshotNumbers(text: string, snapshot: CommentPayload["snapshot"], allowed: number[]): string {
+  const targets: number[] = [];
+  for (const r of snapshot) {
+    if (r.unit.startsWith("%") && r.value != null) targets.push(r.value);
+    if (r.pct != null) targets.push(Math.abs(r.pct));
+  }
+  return text.replace(/(\d+\.\d{2,})(\s*%)/g, (all, num: string, pct: string) => {
+    const n = Number(num);
+    if (allowed.some((a) => a === n)) return all;
+    const near = targets
+      .filter((t) => Math.abs(t - n) < 0.01)
+      .sort((a, b) => Math.abs(a - n) - Math.abs(b - n))[0];
+    return near == null ? all : `${near.toFixed(2)}${pct}`;
+  });
+}
+
+/** generate.ts 가 수집해 넘기는 코드 확정 자료 */
+export interface CommentExtras {
+  /** 리포트 주에 새로 발표된 미국 공식 지표(evidence.ts) */
+  official: OfficialMetric[];
+  /** 섹터 주도 종목의 그 주 기사(sector-news.ts), key = SectorHighlight.id */
+  sectorNews: Map<string, SectorNews>;
+  /** 신한 「이슈 및 섹터 스케줄」 다음 주 전체(모델 참고용) */
+  schedule: ScheduleItem[];
+  /** 코드로 확정된 다음 주 일정(buildCodeCalendar) — 모델 캘린더와 합친다 */
+  codeCalendar: { date: string; event: string }[];
 }
 
 /**
@@ -1008,9 +1204,11 @@ async function callWithGroundingRetry(
   userJson: string,
   label: string,
   modelOverride?: string,
+  /** 검색 사실(webFacts)을 이미 받았으면 1 — 큰 호출은 재시도해도 검색을 거의 안 해(실측) 비용만 든다 */
+  maxAttempts = 2,
 ): Promise<{ result: GeminiResult; attempts: GeminiResult[] }> {
   const attempts: GeminiResult[] = [];
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const r = await geminiGenerate({
       system,
       model: modelOverride,
@@ -1021,11 +1219,85 @@ async function callWithGroundingRetry(
     });
     attempts.push(r);
     if (r.groundingSources.length > 0) break;
-    if (attempt === 1) {
+    if (attempt < maxAttempts) {
       console.warn(`[weekly] ${label} 호출 그라운딩 실패 — 1회 재시도`);
     }
   }
   return { result: attempts[attempts.length - 1], attempts };
+}
+
+export interface WebFact {
+  topic: string;
+  fact: string;
+  source: string;
+  date?: string;
+}
+
+const RESEARCH_PROMPT = `# 역할
+너는 매크로 리서치 보조다. 사용자 JSON 의 reportWeek(월~금) 동안 실제로 있었던
+사실을 **반드시 Google 검색으로 확인해서** 모은다. 해석·전망은 쓰지 않는다.
+
+# 모을 것
+1. policy — 미국 연준(FOMC·의장 발언·FedWatch 금리 확률), 한국은행, 일본은행의
+   이번 주 발언·결정·시장 반응. 은행별 1~3건.
+2. data — 이번 주에 발표된 주요국(미국·중국·유로존·일본·한국) 경제지표의 실제
+   결과와 예상치(예: 비농업 고용, CPI, PMI, 수출). 5~10건.
+3. asset — assets 목록 중 주간 변동이 큰 자산(movers)의 그 주 등락 원인. 자산별 1건.
+
+# 규칙
+- 검색으로 확인한 것만. 확인 못 하면 그 항목은 빼라(지어내지 마라).
+- 숫자는 기사에 나온 그대로 쓴다. assets 의 종가·변동은 이미 확정값이니 다시 찾지 않는다.
+- 각 fact 는 한 문장, 80자 내외.
+
+# 출력
+코드펜스·머리말 없이 한 줄에 사실 하나, 칸은 " || " 로 나눈다:
+topic || fact || source(매체명) || date(YYYY-MM-DD)
+topic 은 policy, data, asset:<자산명> 중 하나. 예)
+policy || 존 윌리엄스 뉴욕 연은 총재는 추가 인상을 서두를 필요가 없다고 말했다. || 로이터 || 2026-09-29`;
+
+/**
+ * **웹검색 전용 소형 호출**(2026-10-05). 매크로·코멘트 호출은 입력이 6만~7만
+ * 토큰(증권사 리포트·뉴스 근거 전체)이라 모델이 "이미 근거가 있다"고 보고
+ * 검색을 건너뛴다 — 10-04 21:00 UTC 실행은 4번 시도 전부 검색 0건, 같은 주를
+ * 로컬에서 다시 돌려도 0건이었다(요청 형식 문제가 아님: 같은 키·모델·도구
+ * 선언으로 짧은 질문을 보내면 매번 검색하고 groundingMetadata 가 정상으로 온다,
+ * 실측). 그래서 검색이 필요한 사실(정책 발언·FedWatch 확률·그 주 지표 결과·
+ * 자산별 등락 원인)은 입력이 작은 이 호출에서 먼저 모으고, 큰 호출에는
+ * `webFacts` 로 넘긴다. 검색 출처가 0건이면 결과를 버린다(검증 안 된 사실을
+ * 근거처럼 넘기지 않는다).
+ */
+async function researchWebFacts(
+  payload: CommentPayload,
+  modelOverride?: string,
+): Promise<{ facts: WebFact[]; attempts: GeminiResult[]; note: string | null }> {
+  const movers = [...payload.snapshot]
+    .filter((r) => r.pct != null || r.diffBp != null)
+    .sort((a, b) => Math.abs(b.pct ?? (b.diffBp ?? 0) / 10) - Math.abs(a.pct ?? (a.diffBp ?? 0) / 10))
+    .slice(0, 8)
+    .map((r) => r.name);
+  const input = JSON.stringify({
+    reportWeek: payload.reportWeek,
+    assets: payload.snapshot.map((r) => ({ name: r.name, close: r.valueText, change: r.changeText })),
+    movers,
+    officialDataAlreadyKnown: payload.economyMetrics.map((m) => m.text),
+  });
+  try {
+    const { result, attempts } = await callWithGroundingRetry(RESEARCH_PROMPT, input, "웹검색", modelOverride);
+    if (result.groundingSources.length === 0) {
+      return { facts: [], attempts, note: "웹검색 호출이 검색 출처 0건으로 끝나 검색 사실을 쓰지 않음" };
+    }
+    // 줄 단위 형식 — JSON 은 그라운딩 응답이 중간이 빠진 채 오면 통째로 깨졌다
+    // (2026-10-05 실측: '{"facts":.", "source"…'). 줄 단위면 깨진 줄만 버린다.
+    const facts: WebFact[] = result.text
+      .split(/\r?\n/)
+      .map((line) => line.split("||").map((c) => c.trim()))
+      .filter((c) => c.length >= 3 && /^(policy|data|asset:)/.test(c[0]) && c[1].length >= 10)
+      .map((c) => ({ topic: c[0], fact: stripCitations(c[1]), source: c[2], date: c[3] || undefined }))
+      .slice(0, 40);
+    return { facts, attempts, note: facts.length === 0 ? "웹검색 호출 응답에 사실이 없음" : null };
+  } catch (err) {
+    return { facts: [], attempts: [], note: `웹검색 호출 실패: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 /**
@@ -1039,6 +1311,7 @@ export async function generateWeeklyComments(
   week: ReportWeek,
   allIssues: WeeklyIssue[],
   sectors: WeeklySectors,
+  extras: CommentExtras,
   /** 모델 비교용 — 주면 그 모델만 쓴다(폴백 없음). */
   modelOverride?: string,
 ): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
@@ -1050,7 +1323,10 @@ export async function generateWeeklyComments(
   // 프롬프트에는 앞으로 남은 것만 넘기고, 검증은 지난 회의 언급("9월
   // FOMC에서 인상")도 참으로 봐야 해서 전체 목록을 쓴다.
   const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
-  const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings);
+  const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras);
+  // 웹검색 전용 소형 호출을 먼저 돌려 그 주 사실을 모은다(아래 researchWebFacts 주석).
+  const research = await researchWebFacts(payload, modelOverride);
+  payload.webFacts = research.facts;
   const userJson = JSON.stringify(payload);
   const allowed = buildAllowedNumbers(payload);
   /**
@@ -1064,9 +1340,11 @@ export async function generateWeeklyComments(
     if (step1.reason) return step1;
     const step2 = verifyMeetingMonths(step1.text, allMeetings, week.weekStart);
     if (step2.reason) return step2;
-    return { text: annotateNextMeeting(step2.text, allMeetings, week.weekEnd), reason: null };
+    const aligned = alignSnapshotNumbers(step2.text, payload.snapshot, allowed);
+    return { text: annotateNextMeeting(aligned, allMeetings, week.weekEnd), reason: null };
   };
   const dropReasons = new Map<string, string>();
+  if (research.note) dropReasons.set("webFacts", research.note);
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
   const sectorIds = payload.sectors.map((s) => s.id);
@@ -1076,12 +1354,12 @@ export async function generateWeeklyComments(
   // 로직이 있는 이유)의 실패율을 더 키운다(실측 — sectors 추가 이후 "다음 주
   // 일정"이 옛 기사-표 폴백으로 자주 떨어짐). 매크로 콜에는 sectors 를 뺀
   // 별도 payload 를 준다.
-  const nextWeekSchedule = await fetchShinhanSchedule(payload.nextWeek.start, payload.nextWeek.end);
+  const nextWeekSchedule = extras.schedule;
   const macroJson = JSON.stringify({ ...payload, sectors: undefined, nextWeekSchedule });
 
   const [macroCall, commentCall] = await Promise.all([
-    callWithGroundingRetry(MACRO_PROMPT, macroJson, "매크로", modelOverride),
-    callWithGroundingRetry(COMMENT_PROMPT, userJson, "코멘트", modelOverride),
+    callWithGroundingRetry(MACRO_PROMPT, macroJson, "매크로", modelOverride, research.facts.length > 0 ? 1 : 2),
+    callWithGroundingRetry(COMMENT_PROMPT, userJson, "코멘트", modelOverride, research.facts.length > 0 ? 1 : 2),
   ]);
   const macroResult = macroCall.result;
   const commentResult = commentCall.result;
@@ -1118,7 +1396,7 @@ export async function generateWeeklyComments(
   // economySummary — policySummary 와 같은 신뢰 조건(그라운딩 성공 또는
   // 이미 모아둔 economyEvidence 가 있을 때만)(오너 지시 2026-09-21 —
   // "경기와 관련된 내용은 여기서 요약하도록 하자").
-  const hasEconomyEvidence = payload.economyEvidence.length > 0;
+  const hasEconomyEvidence = payload.economyEvidence.length > 0 || payload.economyMetrics.length > 0;
   if ((macroTrustGrounded || hasEconomyEvidence) && macroParsed?.economySummary) {
     const r = verify(macroParsed.economySummary, macroTrustGrounded);
     comments.economySummary = r.text || null;
@@ -1189,19 +1467,9 @@ export async function generateWeeklyComments(
   // 판정한다(실측 버그 — 같은 날 BOJ 회의가 있어서 날짜만 보고 건너뛰는
   // 바람에 네 마녀의 날 자체가 통째로 빠짐. 한 날짜에 이벤트가 여러 개
   // 있는 건 정상이다).
-  const fixedEvents = await computeFixedCalendarEvents(
-    payload.nextWeek.start,
-    payload.nextWeek.end,
-    payload.centralBankMeetings,
-  );
-  if (fixedEvents.length > 0) {
-    let list = comments.calendar ?? [];
-    for (const fx of fixedEvents) {
-      const alreadyListed = list.some((c) => c.date === fx.date && fx.dedupe.test(c.event));
-      if (!alreadyListed) list = [...list, { date: fx.date, event: fx.event }];
-    }
-    comments.calendar = list.sort((a, b) => a.date.localeCompare(b.date));
-  }
+  // 코드 일정(FRED·회의·휴장·신한 주요 일정)은 generate.ts 가 미리 계산해 넘긴다
+  // (buildCodeCalendar — Gemini 실패 시 렌더링 폴백에도 같은 목록을 쓴다).
+  comments.calendar = mergeCalendar(comments.calendar, extras.codeCalendar);
   // 코드로 확정되는 fixedEvents 가 있으므로 그것까지 합친 뒤에도 비어 있을
   // 때만 진짜 "미채움"이다.
   if (!comments.calendar || comments.calendar.length === 0) {
@@ -1272,8 +1540,24 @@ export async function generateWeeklyComments(
       console.warn(`[weekly] 섹터 코멘트 키 불일치 — "${rawId}" 는 알려진 섹터 id 가 아님`);
       continue;
     }
+    // 근거 없는 섹터 사유는 싣지 않는다(2026-10-05 — 솔브레인·동진쎄미켐(반도체
+    // 소재)이 끈 코스닥 소재를 "2차전지 소재"로, 롯데에너지머티리얼즈·팬오션이 끈
+    // 코스피 산업재를 "방산·조선 수주"로 지어냈다). 주도 종목의 그 주 기사가 없으면
+    // 버리고, 한국 섹터는 코멘트가 주도 종목 이름을 하나라도 짚어야 한다(해외는
+    // 한글 표기가 제각각이라 이름 검사는 하지 않는다).
+    const sec = payload.sectors.find((s) => s.id === rawId)!;
+    if (sec.headlines.length === 0) {
+      if (String(text ?? "").trim()) {
+        dropReasons.set(`sector:${rawId}`, "주도 종목의 그 주 기사를 찾지 못해 사유를 싣지 않음(근거 없음)");
+      }
+      continue;
+    }
     const r = verify(String(text ?? ""), commentTrustGrounded);
-    if (r.text) comments.sectors.set(rawId, r.text);
+    const isKr = sec.market === "코스피" || sec.market === "코스닥";
+    const namesLeader = sec.leaders.some((l) => r.text.replace(/\s+/g, "").includes(l.name.replace(/\s+/g, "")));
+    if (r.text && isKr && sec.leaders.length > 0 && !namesLeader) {
+      dropReasons.set(`sector:${rawId}`, "사유가 주도 종목을 짚지 않음(근거 기사와 연결 안 됨)");
+    } else if (r.text) comments.sectors.set(rawId, r.text);
     else if (r.reason) dropReasons.set(`sector:${rawId}`, r.reason);
   }
 
@@ -1293,7 +1577,11 @@ export async function generateWeeklyComments(
   }
   for (const id of sectorIds) {
     if (!comments.sectors.has(id) && !dropReasons.has(`sector:${id}`)) {
-      dropReasons.set(`sector:${id}`, "모델이 이 항목에 대한 코멘트를 생성하지 않음");
+      const noNews = (payload.sectors.find((s) => s.id === id)?.headlines.length ?? 0) === 0;
+      dropReasons.set(
+        `sector:${id}`,
+        noNews ? "주도 종목의 그 주 기사를 찾지 못해 사유를 싣지 않음(근거 없음)" : "모델이 이 항목에 대한 코멘트를 생성하지 않음",
+      );
     }
   }
 
@@ -1307,7 +1595,7 @@ export async function generateWeeklyComments(
   // 재시도분까지 포함해 실제 청구된 비용을 전부 합산한다(재시도로 버린 첫
   // 응답도 돈은 이미 냈으므로 usage 에서 누락하면 안 됨). 이제 코멘트
   // 호출도 재시도를 타므로 두 호출의 attempts 를 함께 센다.
-  const allAttempts = [...macroCall.attempts, ...commentCall.attempts];
+  const allAttempts = [...research.attempts, ...macroCall.attempts, ...commentCall.attempts];
   const totalUsage = allAttempts.reduce(
     (acc, r) => ({
       inputTokens: acc.inputTokens + r.usage.inputTokens,

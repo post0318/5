@@ -27,6 +27,8 @@ export interface SnapshotRow {
   baseAsOf: string | null;
   unit: string; // "pt" | "%" | "$" | "원" ...
   source: string;
+  /** 값을 못 구한 이유 — 있으면 표에 "자료 없음: 사유"로 남는다(조용히 빠지지 않게) */
+  note?: string;
 }
 
 export interface WeeklyReportDoc {

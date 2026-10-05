@@ -9,13 +9,22 @@ import {
   type SnapshotRow,
   type WeeklyReportDoc,
 } from "@/lib/db/weekly-reports";
-import { generateWeeklyComments, type WeeklyComments , type IssueComment } from "./comment";
+import {
+  buildCodeCalendar,
+  generateWeeklyComments,
+  nextWeekRange,
+  type CommentExtras,
+  type IssueComment,
+  type WeeklyComments,
+} from "./comment";
 import { saveWeeklyTopicCounts } from "@/lib/db/weekly-topic-counts";
-import { enrichTopIssues } from "./evidence";
+import { enrichTopIssues, fetchOfficialMetrics } from "./evidence";
 import { isGeminiConfigured } from "./gemini";
 import { buildWeeklyIssues, selectTopIssues, type WeeklyIssue } from "./issues";
 import { renderWeeklyReport } from "./render";
+import { buildSectorNews, type SectorNews } from "./sector-news";
 import { buildWeeklySectors, type WeeklySectors } from "./sectors";
+import { fetchShinhanSchedule } from "./shinhan-schedule";
 import { buildSnapshot, fillFromPrevious } from "./snapshot";
 import { WEEKLY_TOPICS } from "./topics";
 import { resolveReportWeek, type ReportWeek } from "./week";
@@ -93,6 +102,7 @@ async function tryGenerateComments(
   week: ReportWeek,
   allIssues: WeeklyIssue[],
   sectors: WeeklySectors,
+  extras: CommentExtras,
 ): Promise<LlmOutcome | null> {
   if (!isGeminiConfigured()) return null;
   const monthUsage = await getWeeklyMonthUsage();
@@ -103,7 +113,7 @@ async function tryGenerateComments(
     return null;
   }
   try {
-    const out = await generateWeeklyComments(snapshot, issues, week, allIssues, sectors);
+    const out = await generateWeeklyComments(snapshot, issues, week, allIssues, sectors, extras);
     if (!out) return null;
     await incWeeklyUsage(out.result.usage.costUsd);
     return {
@@ -125,12 +135,41 @@ async function tryGenerateComments(
   }
 }
 
-async function collect(week: ReportWeek): Promise<{
+interface Collected {
   snapshot: SnapshotRow[];
   all: WeeklyIssue[];
   top: WeeklyIssue[];
   sectors: WeeklySectors;
-}> {
+  /** 코드 확정 자료(공식 지표·섹터 근거 기사·다음 주 일정) — LLM 과 무관하게 렌더링에 쓰인다 */
+  extras: CommentExtras;
+  /** 코드 단계에서 못 채운 이유(예: FRED 키 없음) — 검수 화면 dropReasons 로 */
+  notes: Record<string, string>;
+}
+
+/** 이슈·섹터가 정해진 뒤 붙이는 코드 확정 자료 — collect·reprocess 공통 */
+async function collectExtras(
+  week: ReportWeek,
+  all: WeeklyIssue[],
+  sectors: WeeklySectors,
+): Promise<{ top: WeeklyIssue[]; extras: CommentExtras; notes: Record<string, string> }> {
+  const next = nextWeekRange(week);
+  const [official, sectorNews, schedule] = await Promise.all([
+    fetchOfficialMetrics(week),
+    buildSectorNews(sectors, week).catch(() => new Map()),
+    fetchShinhanSchedule(next.start, next.end),
+  ]);
+  const codeCalendar = await buildCodeCalendar(week, schedule);
+  // 계열 규칙(통화정책 제외 + 계열당 1개 + 물가·미국증시 병합)을 적용해
+  // 고른다. all 은 그대로 둔다 — 검수용 후보 목록과 금리정책 근거가
+  // 개별 주제를 참조한다.
+  const top = await enrichTopIssues(selectTopIssues(all, 3), week, official.metrics);
+  const notes: Record<string, string> = {};
+  if (official.note) notes.officialMetrics = official.note;
+  if (schedule.length === 0) notes.schedule = "신한 「이슈 및 섹터 스케줄」 다음 주 일정을 받지 못함";
+  return { top, extras: { official: official.metrics, sectorNews, schedule, codeCalendar }, notes };
+}
+
+async function collect(week: ReportWeek): Promise<Collected> {
   const [rawSnapshot, prevSnapshot, all, sectors] = await Promise.all([
     buildSnapshot(week),
     getPreviousSnapshot(week.weekStart),
@@ -138,15 +177,10 @@ async function collect(week: ReportWeek): Promise<{
     buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length }),
     buildWeeklySectors(week),
   ]);
-  return {
-    snapshot: fillFromPrevious(rawSnapshot, prevSnapshot),
-    all,
-    // 계열 규칙(통화정책 제외 + 계열당 1개 + 물가·미국증시 병합)을 적용해
-    // 고른다. all 은 그대로 둔다 — 검수용 후보 목록과 금리정책 근거가
-    // 개별 주제를 참조한다.
-    top: await enrichTopIssues(selectTopIssues(all, 3), week),
-    sectors,
-  };
+  const { top, extras, notes } = await collectExtras(week, all, sectors);
+  const snapshot = fillFromPrevious(rawSnapshot, prevSnapshot);
+  for (const r of snapshot) if (r.value == null && r.note) notes[`snapshot:${r.name}`] = r.note;
+  return { snapshot, all, top, sectors, extras, notes };
 }
 
 /** 저장 없이 입력만 조립해 점검 — 비용 0 (원래도 0 이었지만 이제 전 과정이 0) */
@@ -156,10 +190,14 @@ export async function previewWeeklyInputs(): Promise<{
   issues: WeeklyIssue[];
   candidates: string;
   sectors: WeeklySectors;
+  extras: Omit<CommentExtras, "sectorNews"> & { sectorNews: Record<string, SectorNews> };
+  notes: Record<string, string>;
 }> {
   const week = resolveReportWeek();
-  const { snapshot, all, top, sectors } = await collect(week);
-  return { week, snapshot, issues: top, candidates: candidatesText(all, top), sectors };
+  const { snapshot, all, top, sectors, extras, notes } = await collect(week);
+  // Map 은 JSON 으로 안 나가 점검 응답에서 객체로 바꾼다
+  const shown = { ...extras, sectorNews: Object.fromEntries(extras.sectorNews) };
+  return { week, snapshot, issues: top, candidates: candidatesText(all, top), sectors, extras: shown, notes };
 }
 
 /**
@@ -187,14 +225,16 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
     buildWeeklyIssues(week, { top: WEEKLY_TOPICS.length }),
     buildWeeklySectors(week),
   ]);
-  const top = await enrichTopIssues(selectTopIssues(all, 3), week);
-  const llm = await tryGenerateComments(doc.snapshot, top, week, all, sectors);
+  const { top, extras, notes } = await collectExtras(week, all, sectors);
+  const llm = await tryGenerateComments(doc.snapshot, top, week, all, sectors, extras);
   const rendered = await renderWeeklyReport({
     week,
     snapshot: doc.snapshot,
     issues: top,
     sectors,
     comments: llm?.comments,
+    official: extras.official,
+    codeCalendar: extras.codeCalendar,
   });
 
   const untouched = doc.body === doc.draftBody;
@@ -210,7 +250,7 @@ export async function reprocessWeeklyReport(id: string): Promise<WeeklyReportDoc
       ...doc.sources,
       groundingQueries: llm?.groundingQueries ?? doc.sources.groundingQueries,
       groundingSources: llm?.groundingSources ?? doc.sources.groundingSources,
-      dropReasons: llm?.dropReasons ?? doc.sources.dropReasons ?? {},
+      dropReasons: { ...notes, ...(llm?.dropReasons ?? doc.sources.dropReasons ?? {}) },
     },
     updatedAt: new Date().toISOString(),
   };
@@ -230,15 +270,23 @@ export async function generateWeeklyReport(
     );
   }
 
-  const { snapshot, all, top, sectors } = await collect(week);
+  const { snapshot, all, top, sectors, extras, notes } = await collect(week);
   // 주제별 집계를 남긴다 — 몇 주 쌓이면 "평소 대비 배수" 정규화의 기준선이
   // 된다(과거를 역으로 조회할 수 없어 앞으로 쌓는 방식, 오너 지시 2026-09-21).
   // 실패해도 리포트 생성을 막지 않는다.
   await saveWeeklyTopicCounts(week.weekStart, all).catch((err) =>
     console.warn("[weekly] 주제 집계 저장 실패(리포트는 계속)", err),
   );
-  const llm = await tryGenerateComments(snapshot, top, week, all, sectors);
-  const body = await renderWeeklyReport({ week, snapshot, issues: top, sectors, comments: llm?.comments });
+  const llm = await tryGenerateComments(snapshot, top, week, all, sectors, extras);
+  const body = await renderWeeklyReport({
+    week,
+    snapshot,
+    issues: top,
+    sectors,
+    comments: llm?.comments,
+    official: extras.official,
+    codeCalendar: extras.codeCalendar,
+  });
 
   const now = new Date().toISOString();
   const doc: WeeklyReportDoc = {
@@ -261,7 +309,7 @@ export async function generateWeeklyReport(
       youtubeCount: 0,
       groundingQueries: llm?.groundingQueries ?? [],
       groundingSources: llm?.groundingSources ?? [],
-      dropReasons: llm?.dropReasons ?? {},
+      dropReasons: { ...notes, ...(llm?.dropReasons ?? {}) },
     },
     // Gemini 미설정/예산 초과/실패 시 rule-based 로 폴백(모델·비용 0, 스키마 호환 유지).
     model: llm?.model ?? "rule-based",
@@ -313,13 +361,13 @@ export async function compareWeeklyModels(models: string[]): Promise<{
   }
 
   const week = resolveReportWeek();
-  const { snapshot, all, top, sectors } = await collect(week);
+  const { snapshot, all, top, sectors, extras } = await collect(week);
 
   const results = [];
   for (const model of models) {
     const startedAt = Date.now();
     try {
-      const out = await generateWeeklyComments(snapshot, top, week, all, sectors, model);
+      const out = await generateWeeklyComments(snapshot, top, week, all, sectors, extras, model);
       if (!out) {
         results.push({ model, ok: false, error: "코멘트 생성 결과 없음", elapsedMs: Date.now() - startedAt });
         continue;
@@ -331,6 +379,8 @@ export async function compareWeeklyModels(models: string[]): Promise<{
         issues: top,
         sectors,
         comments: out.comments,
+        official: extras.official,
+        codeCalendar: extras.codeCalendar,
       });
       results.push({
         model: out.result.model,
