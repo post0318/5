@@ -12,7 +12,11 @@ install -m 755 "$SRC/macro-config-receive" /usr/local/bin/macro-config-receive
 install -d -m 700 -o macrobak -g macrobak /var/backups/macro-config
 if [ -n "${1:-}" ]; then
   install -d -m 700 -o macrobak -g macrobak /var/lib/macrobak/.ssh
-  echo "from=\"161.33.9.115\",command=\"/usr/local/bin/macro-config-receive\",restrict $1" > /var/lib/macrobak/.ssh/authorized_keys
+  AK=/var/lib/macrobak/.ssh/authorized_keys
+  touch "$AK"
+  sed -i '/macro-config-backup$/d' "$AK"   # 이 키 줄만 교체 — 같은 계정의 검증 결과 읽기 키(macro-verify-pull)는 남긴다
+  [ -s "$AK" ] && [ -n "$(tail -c1 "$AK")" ] && echo >> "$AK"
+  echo "from=\"161.33.9.115\",command=\"/usr/local/bin/macro-config-receive\",restrict $1" >> "$AK"
   chown macrobak:macrobak /var/lib/macrobak/.ssh/authorized_keys
   chmod 600 /var/lib/macrobak/.ssh/authorized_keys
 fi

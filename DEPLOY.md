@@ -98,6 +98,21 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
 6. IP 가 바뀌었으면 2호기 `authorized_keys`(ubuntu 하트비트 줄·macrobak 줄)의 `from=` 과 2호기 점검의 1호기 IP(`HC_PEER_IP` 기본값)를 고친다.
    `peer_known_hosts`·전송 키는 백업에서 복원되므로 그대로 쓴다. 끝으로 양쪽 `--test`.
 
+### 2호기 검증 결과 → 운영 관리자 화면 (2026-10-06 오너 승인 — pull 방식)
+
+재무 검증은 2호기에서 돌고, 결과를 **1호기가 읽어 온다**(2호기에는 운영 비밀값·DB 쓰기 권한을 주지 않는다).
+
+- 2호기: 검증 작업(verify-db)이 매 검증 뒤 `/var/lib/macro-verify/latest.json`(`{generatedAt, commit, results:[VerifyResultDoc…]}`, 644)을 갱신.
+  전용 계정 `macrobak` 에 1호기 읽기 키를 `from="161.33.9.115",command="cat /var/lib/macro-verify/latest.json",restrict` 로 등록
+  (`ops/oracle/install-verify-share.sh`, 설정 백업 키와 별개 줄 — 각 설치 스크립트는 자기 줄만 교체).
+- 1호기: `ops/oracle/verify-pull.sh` · `macro-verify-pull.timer`(매일 08:30 KST, root) + 수동 `sudo systemctl start macro-verify-pull`.
+  설치 `sudo bash /opt/macro/jobs/ops/oracle/install-verify-pull.sh`(전용 키 `/opt/macro/ops/verifypull_ed25519`). 읽어 온 파일을 크기(20MB)·JSON·
+  필수 필드(generatedAt·commit·종목별 market/symbol/runAt/counts)로 검사한 뒤 **운영 앱의 기존 수신 라우트** `/api/cron/verify-results`
+  (서버 내부 127.0.0.1:8080 + CRON_SECRET, 200건씩)로 넣는다 — DB 를 직접 쓰지 않는다. 거부 0건·반영 건수 일치여야 성공.
+  같은 generatedAt 은 다시 넣지 않는다. 형식만 시험: `sudo VERIFY_PULL_FILE=파일 VERIFY_PULL_DRYRUN=1 /opt/macro/ops/verify-pull.sh`.
+- 화면 `/admin/verify`: 머리에 "검증 서버 결과(대상) · 마지막 검증 시각 · 검증 코드 판본", 결과 없는 유니버스 종목은 "검증 대기".
+- 감시(1호기 healthcheck): `verify-pull`(가져오기 성공 26시간 초과), `verify-stale`(결과 생성 시각 30시간 초과), 실패 회차는 `job-macro-verify-pull`.
+
 ### 과금 통제 (오너 지시 — 크레딧을 넘는 실제 지출 0)
 
 - **오라클**(종량제 계정): 할당량 정책 `free-only`(A1 4코어·24GB·디스크 200GB 외 생성 차단) + 1달러 예산 알림.
