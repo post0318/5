@@ -8,35 +8,46 @@
  *   node scripts/populate-kr-da.mjs [005930 000660 ...]
  * 인자 없으면 universe_items 의 한국 종목 전체.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { unzipSync, strFromU8 } from "fflate";
 import { MongoClient } from "mongodb";
 import { makeDartQuota } from "./lib/dart-quota.mjs";
 
-const env = Object.fromEntries(
-  readFileSync(new URL("../.env.local", import.meta.url), "utf8")
-    .split(/\r?\n/)
-    .filter((l) => l && !l.startsWith("#") && l.includes("="))
-    .map((l) => {
-      const i = l.indexOf("=");
-      return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^"|"$/g, "")];
-    }),
-);
+// 설정 — 개발 폴더(로컬·2호기)는 .env.local, 운영 1호기 배치는 컨테이너 환경변수(ops/oracle/run-kr-da.sh 가 /opt/macro/jobs.env 로 넣는다).
+// .env.local 이 있으면 그 값이 먼저(개발 폴더에서 셸 환경변수가 섞이지 않게)
+const ENV_FILE = new URL("../.env.local", import.meta.url);
+const env = {
+  ...process.env,
+  ...(existsSync(ENV_FILE)
+    ? Object.fromEntries(
+        readFileSync(ENV_FILE, "utf8")
+          .split(/\r?\n/)
+          .filter((l) => l && !l.startsWith("#") && l.includes("="))
+          .map((l) => {
+            const i = l.indexOf("=");
+            return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^"|"$/g, "")];
+          }),
+      )
+    : {}),
+};
 const DART = env.DART_API_KEY;
-// 운영 반영(--prod)은 실행할 때 명시한 운영 주소 MONGODB_URI_PROD(환경변수만 — .env.local 에서 읽지 않는다)로만, 기본은 .env.local 의
-// MONGODB_URI(2호기 검증 DB) — 오너 지시 2026-10-05 "검증 서버가 운영 DB 에 저장하면 안 된다. 병합할 때 반영"
-const PROD = process.argv.includes("--prod");
-if (PROD && !process.env.MONGODB_URI_PROD) throw new Error("--prod 는 MONGODB_URI_PROD(운영 주소) 환경변수가 있어야 한다 — 실행할 때 명시");
-const URI = PROD ? process.env.MONGODB_URI_PROD : env.MONGODB_URI;
+// 쓰는 곳 = MONGODB_URI + KR_DA_COLLECTION(기본 kr_da_staging) 하나뿐(오너 결정 2026-10-05 — "검증 쪽은 운영 DB 에 쓰지 않는다, 운영 반영은 master 병합
+// 후 운영 1호기가 직접"). 예전 --prod·MONGODB_URI_PROD 경로는 없앴다
+const URI = env.MONGODB_URI;
 const DB = env.MONGODB_DB || "market_research";
-if (!DART || !URI) throw new Error("DART_API_KEY / MONGODB_URI 필요 (.env.local)");
+if (!DART || !URI) throw new Error("DART_API_KEY / MONGODB_URI 필요(.env.local 또는 환경변수)");
+if (process.argv.includes("--prod")) throw new Error("--prod 는 없앴다 — 운영 kr_da 는 1호기 배치(fin-kr-da)만 쓴다");
 
 const B = "https://opendart.fss.or.kr/api";
 const CHECK = process.argv.includes("--check");
-// 적재 컬렉션 — 기본 kr_da_staging(KR_DA_COLLECTION 으로 바꿀 수 있으나 운영 컬렉션 kr_da 는 --prod 로만).
-// 운영 반영은 master 배포 확인 뒤 --prod(오너 지시 2026-10-02 "마스터는 다 확인하고 배포다")
-const COLL = PROD ? "kr_da" : process.env.KR_DA_COLLECTION || env.KR_DA_COLLECTION || "kr_da_staging";
-if (!PROD && COLL === "kr_da") throw new Error("운영 컬렉션 kr_da 적재는 --prod(+ MONGODB_URI_PROD)로만");
+// 적재 컬렉션 — 기본 kr_da_staging. 운영 kr_da 는 1호기 배치만: KR_DA_ALLOW_PROD=1 이고 개발 폴더(.env.local 있음)가 아닐 때
+const COLL = env.KR_DA_COLLECTION || "kr_da_staging";
+if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
+  throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
+// 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
+// (post-deploy.sh 가 이 줄을 비교)
+const KR_DA_RULES_VERSION = "2026-10-05.1";
+const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
 );
@@ -47,7 +58,8 @@ const corpOf = (code) => {
 };
 // DART 하루 요청 상한(2026-10-05 사고 — 운영과 같은 키의 한도를 다 써 운영 한국 재무가 멈췄다). DART_DAILY_CAP_POPULATE(기본 2,000), 020 이면 즉시 중단.
 // 중단되면 그 뒤 종목은 처리하지 않고(적재도 안 함) 목록을 남긴다
-const QUOTA = makeDartQuota({ tool: "populate", cap: Number(process.env.DART_DAILY_CAP_POPULATE ?? env.DART_DAILY_CAP_POPULATE ?? 2000), dir: new URL("../reports/.dart-quota/", import.meta.url) });
+// 카운터 폴더 — 개발 폴더는 reports/.dart-quota, 1호기는 DART_QUOTA_DIR(작업 폴더가 읽기 전용이라 바깥 폴더를 붙인다)
+const QUOTA = makeDartQuota({ tool: "populate", cap: Number(env.DART_DAILY_CAP_POPULATE ?? 2000), dir: env.DART_QUOTA_DIR ? new URL(`file://${env.DART_QUOTA_DIR.replace(/\/?$/, "/")}`) : new URL("../reports/.dart-quota/", import.meta.url) });
 async function dfetch(url) {
   QUOTA.take();
   const r = await fetch(url);
@@ -71,6 +83,20 @@ async function annualRcps(corp, year) {
   const rows = (j.list ?? []).filter((r) => /사업보고서/.test(r.report_nm) && r.report_nm.includes(`(${year}.`));
   rows.sort((a, b) => b.rcept_no.localeCompare(a.rcept_no));
   return rows.map((r) => r.rcept_no);
+}
+
+/**
+ * 증분 모드 — 그 회사 정기공시(최근 3년) 중 가장 늦게 접수된 사업보고서·반기/분기보고서 접수번호(정정본 포함). DART 요청 1건(list.json).
+ * 적재본의 sourceRcepts·rulesVersion 과 같으면 그 종목은 다시 처리하지 않는다
+ */
+async function latestPeriodicRcepts(corp) {
+  const now = new Date(Date.now() + 9 * 3600e3);
+  const end = now.toISOString().slice(0, 10).replace(/-/g, "");
+  const j = await jget(`${B}/list.json?crtfc_key=${DART}&corp_code=${corp}&bgn_de=${now.getUTCFullYear() - 3}0101&end_de=${end}&pblntf_ty=A&page_count=100`);
+  if (j.status !== "000" && j.status !== "013") throw new Error(`list.json ${j.status} ${j.message ?? ""}`);
+  const rows = (j.list ?? []).map((r) => ({ r, m: /(사업|반기|분기)보고서\s*\(\d{4}\.\d{2}\)/.exec(r.report_nm ?? "") })).filter((x) => x.m);
+  const max = (f) => rows.filter(f).map((x) => x.r.rcept_no).sort().at(-1) ?? null;
+  return { annual: max((x) => x.m[1] === "사업"), interim: max((x) => x.m[1] !== "사업") };
 }
 
 async function loadXbrl(rcpNo) {
@@ -1166,10 +1192,23 @@ console.log(`대상 ${symbols.length}종목 → ${CHECK ? "(점검 — 쓰기 �
 
 const t = (n) => (n == null ? "-" : (n / 1e12).toFixed(2) + "조");
 let stopAt = null; // 상한·020 으로 멈춘 종목(그 종목부터 미처리)
+const failed = []; // 조회·판독 예외가 난 종목(종료코드 1 — 1호기 배치 실패 감시 job-fin-kr-da 로 잡힌다)
+let skipped = 0;
 for (const sym of symbols) {
   if (QUOTA.stopped) { stopAt = sym; break; }
   const corp = corpOf(sym);
-  if (!corp) { console.log(`  ${sym}: corp_code 없음`); continue; }
+  if (!corp) { console.log(`  ${sym}: corp_code 없음`); failed.push(sym); continue; }
+  // 증분 — 마지막 적재 때와 정기공시 최신 접수번호·적재 규칙 판본이 같으면 건너뛴다(DART 요청 = list.json 1건). --full 이면 전부 다시
+  let sourceRcepts = null;
+  try { sourceRcepts = await latestPeriodicRcepts(corp); } catch (e) { console.log(`  ${sym}: 정기공시 목록 실패 — ${e.message}`); failed.push(sym); continue; }
+  if (!FULL && !LEASE_ONLY) {
+    const prev = await db.collection(COLL).findOne({ _id: sym }, { projection: { sourceRcepts: 1, rulesVersion: 1 } });
+    if (prev?.rulesVersion === KR_DA_RULES_VERSION && prev?.sourceRcepts?.annual === sourceRcepts.annual && prev?.sourceRcepts?.interim === sourceRcepts.interim) {
+      console.log(`  ${sym}: 변화 없음(사업 ${sourceRcepts.annual ?? "-"} · 반기/분기 ${sourceRcepts.interim ?? "-"} · 규칙 ${KR_DA_RULES_VERSION}) — 건너뜀`);
+      skipped += 1;
+      continue;
+    }
+  }
   // 리스부채 주석 — 실패하면 적재하지 않는다(앱은 미적재 = EV 공란 + 사유)
   let lease = null;
   try {
@@ -1178,13 +1217,13 @@ for (const sym of symbols) {
     if (lease) for (const [y, n] of Object.entries(lease.leaseNote)) console.log(`    리스 ${y}: ${n.status}${n.amount != null ? ` ${t(n.amount)}` : ""} — ${n.how}`);
     if (lease?.leasePolicyLatest) console.log(`    리스 분기말: ${lease.leasePolicyLatest.status} — ${lease.leasePolicyLatest.how}`);
     if (lease?.leaseQuarter) console.log(`    리스 ${lease.leaseQuarter.label}: ${lease.leaseQuarter.status}${lease.leaseQuarter.amount != null ? ` ${t(lease.leaseQuarter.amount)}` : ""} — ${lease.leaseQuarter.how}`);
-  } catch (e) { console.log(`    (리스부채 주석 실패: ${e.message})`); }
+  } catch (e) { console.log(`    (리스부채 주석 실패: ${e.message})`); failed.push(sym); }
   if (LEASE_ONLY) {
     if (lease && !CHECK && !QUOTA.stopped) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, leaseAt: new Date().toISOString() } });
     continue;
   }
   let byYear = null;
-  try { byYear = await daByYear(corp); if (byYear) byYear = await alignBasis(corp, byYear); } catch (e) { console.log(`  ${sym}: ${e.message}`); }
+  try { byYear = await daByYear(corp); if (byYear) byYear = await alignBasis(corp, byYear); } catch (e) { console.log(`  ${sym}: ${e.message}`); failed.push(sym); }
   if (QUOTA.stopped) { console.log(`  ${sym}: ${QUOTA.stopped.message} — 적재 안 함`); stopAt = sym; break; }
   if (!byYear) { console.log(`  ${sym}: D&A 없음`); continue; }
   const ttm = await ttmDa(corp, byYear).catch((e) => (console.log(`    (TTM 실패: ${e.message})`), null));
@@ -1193,7 +1232,7 @@ for (const sym of symbols) {
   if (QUOTA.stopped) { console.log(`  ${sym}: ${QUOTA.stopped.message} — 적재 안 함`); stopAt = sym; break; }
   if (!CHECK) await db.collection(COLL).replaceOne(
     { _id: sym },
-    { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter } : {}), updatedAt: new Date().toISOString() },
+    { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter } : {}), sourceRcepts, rulesVersion: KR_DA_RULES_VERSION, updatedAt: new Date().toISOString() },
     { upsert: true },
   );
   const yrs = Object.keys(byYear).map(Number).sort((a, b) => b - a);
@@ -1207,6 +1246,10 @@ ${QUOTA.stopped.message} — 상한 도달, 남은 ${left.length}종목 미처�
   process.exitCode = 1;
 }
 const qs = QUOTA.state();
-console.log(`DART 하루 요청(적재) ${qs.count}/${qs.cap} — ${qs.day} KST`);
+console.log(`DART 하루 요청(적재) ${qs.count}/${qs.cap} — ${qs.day} KST · 건너뜀(변화 없음) ${skipped}종목${FULL ? "(--full)" : ""}`);
+if (failed.length) {
+  console.log(`실패 ${failed.length}종목: ${[...new Set(failed)].join(" ")}`);
+  process.exitCode = 1;
+}
 await cli.close();
 console.log("완료");

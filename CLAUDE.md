@@ -2094,15 +2094,23 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   공시 줄이 없으면 EBITDA 가 전부 빈칸이다. 출처 안내는 `krDaSourceNote` 하나(보이는 연도만). 손익계산서 연간도 같은 함수 — 예전엔 DART
   현금흐름 "감가상각비" 한 줄을 먼저 써서 LS ELECTRIC 2021 617.9억 vs 하이라이트 1,014.6억으로 갈렸다.
 - **한국 작업 운영 규칙(오너 지시 2026-10-02 — "한국은 브랜치로 커밋해놔라", "마스터는 다 확인하고 배포다", 이미 배포한 것은 그대로)**:
-  한국 작업은 `kr/verification` 브랜치에만 커밋하고 master 병합·배포는 전부 확인한 뒤. 로컬·운영이 같은 DB 라 감가상각 적재는
-  `KR_DA_COLLECTION`(로컬 .env.local = `kr_da_staging`, 앱 `kr-da.ts` 와 `populate-kr-da.mjs` 가 같이 따른다)으로 분리 — 운영 반영은
-  master 배포 확인 뒤 `node scripts/populate-kr-da.mjs --prod`.
+  한국 작업은 `kr/verification` 브랜치에만 커밋하고 master 병합·배포는 전부 확인한 뒤. 감가상각 적재는 `KR_DA_COLLECTION`(기본·검증 `kr_da_staging`,
+  앱 `kr-da.ts` 와 `populate-kr-da.mjs` 가 같이 따른다)으로 분리. **운영 반영은 운영 1호기 배치만**(오너 결정 2026-10-05 — "검증 쪽은 운영 DB 에 쓰지
+  않는다, 운영 반영은 master 병합 후 운영 1호기가 직접"): 타이머 `fin-kr-da`(매일 05:50 KST, `ops/oracle/run-kr-da.sh` — /opt/macro/jobs.env +
+  `KR_DA_COLLECTION=kr_da`·`KR_DA_ALLOW_PROD=1`, DART 하루 상한 적재 2,000·020 즉시 중단, 실패는 `job-fin-kr-da` 알림). 검증·로컬에서 `kr_da` 를
+  고르면 적재 스크립트가 거부한다(`--prod`·`MONGODB_URI_PROD` 경로는 없앴다). **증분**: 종목별로 마지막 적재에 쓴 정기공시 최신 접수번호(사업·반기/분기,
+  `sourceRcepts`)와 적재 규칙 판본(`KR_DA_RULES_VERSION`, `rulesVersion`)을 적재본에 남기고, 둘 다 같으면 그 종목은 list.json 1건만 보고 건너뛴다.
+  `--full` 은 강제 전체. 적재 규칙을 바꾸면 `KR_DA_RULES_VERSION` 을 올린다 — 1호기 `post-deploy.sh` 가 판본이 바뀐 배포 직후 1회 실행한다.
+  **master 병합 체크리스트(한국)**: ① 병합 전 `kr/verification` 전체 검증 실패 0 ② 병합·배포 후 1호기에서 `sudo bash /opt/macro/jobs/ops/oracle/
+  install-schedules.sh` 로 `fin-kr-da` 타이머 설치(작업 폴더 적재 코드에 규칙 판본이 있어야 설치된다 — master 의 옛 적재 코드가 운영 kr_da 를 옛 규칙으로
+  덮지 않게 병합 전에는 설치 금지) ③ `fin-kr-da` 첫 실행(`sudo systemctl start fin-kr-da` 또는 배포 직후 자동)이 운영 kr_da 를 새 규칙으로 채움 —
+  `journalctl -u fin-kr-da` 로 실패 0·상한 미도달 확인, 운영 화면 한국 EBITDA·EV 확인.
 - **2호기(검증 서버) = 검증 전용 MongoDB(오너 지시 2026-10-05 — "검증 서버가 운영 DB 에 저장하면 안 된다", "운영은 Atlas, 백업·검증은 2호기 DB")**:
   2호기 로컬 MongoDB 8.0(127.0.0.1, 인증)을 verify-dev 가 쓴다. 매일 05:30 KST `macro-db-sync` 타이머(`ops/verify/db-sync.sh`)가 운영 Atlas 를
   **읽기만** 해 덤프 → 임시 DB 복원 → 컬렉션 교체(실패하면 이전 복사본 유지). 압축본 = 정식 DB 백업(오너 결정 2026-10-05 "DB 백업은 구성하고 앱 백업은 하지 않는다")
   — 매일 7일·주간 4개·월간 3개, 복원 절차는 `ops/verify/README.md`. 보호 컬렉션(`kr_da_staging`·`verify_results`·`*_staging`)은
   덮어쓰지 않고, 2호기에만 있는 컬렉션은 지우지 않는다. 점검 `macro-db-check`(종료코드 0/1). 운영 주소는 2호기에서 복사 전용 파일(root 600)에만.
-  `populate-kr-da.mjs` 는 기본 `kr_da_staging`(MONGODB_URI), `--prod` 는 실행 때 `MONGODB_URI_PROD` 환경변수를 줘야만 운영 `kr_da` 에 쓴다.
+  `populate-kr-da.mjs` 는 `MONGODB_URI` 의 `KR_DA_COLLECTION`(기본 `kr_da_staging`)에만 쓴다 — 운영 `kr_da` 는 1호기 배치 `fin-kr-da` 만.
 - **재무분석 LTM 열 기준 통일(2026-10-02, kr/verification)**: 손익 TTM 이 분기 조합이면 흐름(매출총이익·세전이익·법인세·영업현금흐름·
   자본지출·이자·배당)은 같은 최근 4개 분기 열의 합, 재무상태표(자산·부채·자본·유동·매출채권·재고·매입채무·이익잉여금)는 마지막 분기말,
   평균잔액은 (마지막 분기말 + 1년 전 같은 분기말)/2 — 분기 값이 하나라도 없으면 빈칸(연말값으로 안 채움). 예전엔 부채비율·매출총이익률

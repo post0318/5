@@ -26,6 +26,7 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 세 곳에 같은 커
 | `macro-foreign-fut` | 타이머 | 매일 06:31 | 다음 금융 외국인 선물 순매수 |
 | `fin-fin-build` | 타이머 | 매일 06:10 | 재무 조립(새 공시·엔진판 변경 종목만) |
 | `fin-ttm-build` | 타이머 | 매일 06:50 + 배포 직후 | TTM 스냅샷(무효인 것만) |
+| `fin-kr-da` | 타이머 | 매일 05:50 + 적재 규칙 판본이 바뀐 배포 직후 | 한국 감가상각 적재(운영 kr_da, 증분 — `ops/oracle/run-kr-da.sh`). master 병합 뒤 `install-schedules.sh` 로 설치 |
 | `fin-us-class-facts` | 타이머 | 1·4·7·10월 5일 15:00 | 미국 복수 클래스 주식수 |
 | `news-youtube-subscribe` | 타이머 | 매일 05:00 | 유튜브 새 영상 알림 구독 연장 + 최신 10개 동기화 |
 | `macro-telegram-listener` | 상주 | 상시 | 텔레그램 채널 새 글 즉시 수신 |
