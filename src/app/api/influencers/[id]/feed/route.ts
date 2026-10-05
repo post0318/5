@@ -1,10 +1,10 @@
 import { jsonError, ok } from "@/lib/api";
 import { getInfluencer } from "@/lib/influencers/store";
-import { fetchNaverBlogPosts } from "@/lib/influencers/naver-blog";
+import { getNaverBlogFeed } from "@/lib/influencers/naver-blog";
 import { fetchYoutubeVideos } from "@/lib/influencers/youtube";
 import { getTelegramFeed } from "@/lib/influencers/telegram";
 
-export const revalidate = 60; // 1분(2026-10-03 — 텔레그램·유튜브 즉시 반영. 블로그·유튜브 원본 조회는 각자 15분 캐시라 이 값이 짧아도 외부 호출은 안 늘어난다)
+export const revalidate = 60; // 1분 — 블로그는 오라클 타이머가 5분마다 DB 에 넣은 것을 읽는다(요청 시점 RSS 호출 없음)
 export const maxDuration = 20;
 
 interface FeedItem {
@@ -21,7 +21,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     if (!inf) return Response.json({ error: "존재하지 않는 인플루언서" }, { status: 404 });
 
     const [posts, videos, telegramPosts] = await Promise.all([
-      inf.blogUrl ? fetchNaverBlogPosts(inf.blogUrl) : Promise.resolve([]),
+      inf.blogUrl ? getNaverBlogFeed(inf.blogUrl) : Promise.resolve([]),
       inf.youtubeUrl ? fetchYoutubeVideos(inf.youtubeUrl) : Promise.resolve([]),
       inf.telegramUrl ? getTelegramFeed(inf.telegramUrl) : Promise.resolve([]),
     ]);

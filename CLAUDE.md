@@ -1505,6 +1505,7 @@ npm run lint         # eslint
   새 글을 텔레그램이 밀어줌 + 시작·30분마다 이어받기). 유튜브는 공식 새 영상 알림(WebSub) → `/api/webhooks/youtube` → `youtube_videos`,
   구독 갱신은 오라클 타이머 `news-youtube-subscribe`(매일 05:00). 예전 GitHub 예약 + cron-job.org 재기동 우회책(실행률 21% 때문)은 폐기 —
   **같은 텔레그램 세션을 두 곳에서 동시에 쓰면 끊기므로** GitHub `telegram-posts.yml` 은 수동 비상용(수신기를 멈춘 뒤에만), cron-job.org 작업은 끈다.
+- **인플루언서 네이버 블로그 = 오라클 5분 수집(2026-10-05)**: 오라클 타이머 `news-naver-blog`(`scripts/run/naver-blog-poll.mts`)가 5분마다 `rss.blog.naver.com` RSS 를 블로그당 1요청으로 확인해 새 글만 `naver_blog_posts`(제목·링크·발행시각, 180일 TTL)에 넣고, 피드 라우트는 DB 만 읽는다(요청 시점 RSS 호출 없음 — 반복 접속 차단 방지). 텔레그램 알림 없음. `--dry` 로 DB 쓰기 없이 파싱 확인.
 - `yahoo-finance2` / yfinance / Finnhub·FMP·Polygon 무료 = **개인용 한정.**
   팀/대외 확장 시 인앱 중단 → 딥링크 또는 정식 라이선스 (prd.md §4.3).
 - L1(공식 API)·L3(자체 계산)은 모든 시나리오에서 안전.
