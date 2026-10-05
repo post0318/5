@@ -69,14 +69,27 @@ export interface IssueEvidenceEarnings {
   surprisePct: number | null;
 }
 
-/** FRED 공식 거시지표(전기 대비) — "핵심 이슈 근거로만"(오너 지시 2026-09-18). */
+/**
+ * FRED 공식 거시지표 — **리포트 주에 실제로 새로 발표된 값만** 싣는다
+ * (`evidence.ts` fetchOfficialMetrics). 2026-10-05 오너 지적("미국 CPI 334.131지수
+ * … 2026-08-01 — 너무 과거")으로 형식을 바꿨다: 지수 수준·지수 차 대신 시장이
+ * 읽는 단위(전월비 %, 전년비 %, 고용 증감 만 명, 실업률 %)로 코드가 계산해
+ * `text` 에 확정해 둔다. 화면·LLM 모두 이 값만 쓴다.
+ */
 export interface IssueEvidenceMetric {
+  /** "미국 CPI(전월비)" 같은 표시명 */
   label: string;
+  /** 관측 기간(월·분기 첫날, YYYY-MM-DD) — 예: 2026-08-01 = 8월분 */
   date: string;
-  current: number;
-  previous: number;
-  change: number;
+  /** FRED 가 이 값을 공표한 날(YYYY-MM-DD, 관측치의 realtime_start) */
+  releaseDate: string;
+  /** 표시 값(단위 적용 후 — 예: 0.40(%), 2.9(만 명)) */
+  value: number;
+  /** 직전 기간 표시 값(같은 단위) */
+  previous: number | null;
   unit: string;
+  /** 코드가 만든 한 줄(예: "미국 CPI(전월비) +0.40% (8월분, 9/11 발표, 전월 +0.07%)") */
+  text: string;
   source: string;
 }
 

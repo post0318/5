@@ -2,7 +2,7 @@ import "server-only";
 import type { SnapshotRow } from "@/lib/db/weekly-reports";
 import { snapshotToMarkdownTable } from "./snapshot";
 import type { IssueComment, WeeklyComments } from "./comment";
-import type { WeeklyIssue } from "./issues";
+import type { IssueEvidenceMetric, WeeklyIssue } from "./issues";
 import type { SectorHighlight, WeeklySectors } from "./sectors";
 import type { ReportWeek } from "./week";
 
@@ -87,11 +87,9 @@ function issueBlock(issue: WeeklyIssue, rank: number, comment: IssueComment | un
   }
 
   if (issue.metrics && issue.metrics.length > 0) {
-    lines.push("- 공식 지표(FRED)");
-    for (const m of issue.metrics) {
-      const chg = `${m.change >= 0 ? "+" : ""}${m.change}`;
-      lines.push(`  - ${m.label} ${m.current}${m.unit} (전기 대비 ${chg}${m.unit}, ${m.date})`);
-    }
+    // 그 주에 새로 발표된 값만, 코드가 확정한 표기(evidence.ts fetchOfficialMetrics)
+    lines.push("- 공식 지표(이번 주 발표, FRED)");
+    for (const m of issue.metrics) lines.push(`  - ${m.text}`);
   }
   if (issue.earnings && issue.earnings.length > 0) {
     // 오너 지시(2026-09-18) — 이 블록만 굵게. 다른 근거(뉴스·FRED)와 달리
@@ -177,6 +175,10 @@ export async function renderWeeklyReport(opts: {
   issues: WeeklyIssue[];
   sectors: WeeklySectors;
   comments?: WeeklyComments;
+  /** 리포트 주에 새로 발표된 미국 공식 지표(코드 계산) — "5. 경제"에 그대로 싣는다 */
+  official?: IssueEvidenceMetric[];
+  /** 코드로 확정된 다음 주 일정 — Gemini 가 실패해도 "7. 다음 주 주시 일정"이 비지 않게 */
+  codeCalendar?: { date: string; event: string }[];
 }): Promise<string> {
   const { week, snapshot, issues, sectors, comments } = opts;
   const snapshotComments = comments?.snapshot ?? new Map<string, string>();
@@ -222,7 +224,23 @@ export async function renderWeeklyReport(opts: {
   // 다룬다.
   parts.push("## 5. 경제");
   parts.push("");
-  parts.push(comments?.economySummary || "이번 주 특별한 경기 관련 동향을 확인하지 못했습니다.");
+  // 공식 지표(그 주 발표분)는 코드가 계산한 값 그대로 싣는다 — LLM 요약이
+  // 실패·검증 폐기돼도 섹션이 비지 않는다(2026-10-05 — 비농업 고용 발표 주에
+  // "확인하지 못했습니다"만 남았던 문제). 핵심 이슈에 이미 붙은 지표는 뺀다.
+  // 경제 요약 문단이 이미 그 문구를 그대로 인용했으면 중복이라 뺀다.
+  const shown = new Set(issues.flatMap((i) => (i.metrics ?? []).map((m) => m.text)));
+  const officialLines = (opts.official ?? [])
+    .filter((m) => !shown.has(m.text) && !(comments?.economySummary ?? "").includes(m.text))
+    .map((m) => `  - ${m.text}`);
+  if (comments?.economySummary) parts.push(comments.economySummary);
+  if (officialLines.length > 0) {
+    if (comments?.economySummary) parts.push("");
+    parts.push("- 공식 지표(이번 주 발표, FRED)");
+    parts.push(...officialLines);
+  }
+  if (!comments?.economySummary && officialLines.length === 0) {
+    parts.push("이번 주 특별한 경기 관련 동향을 확인하지 못했습니다.");
+  }
   parts.push("");
   parts.push("## 6. 금리정책");
   parts.push("");
@@ -239,9 +257,10 @@ export async function renderWeeklyReport(opts: {
   // "보고서로 가치가 없다"(오너 지적 2026-09-19)는 게 확인돼 그 폴백을
   // 없앴다 — 확인 안 되면 정직하게 안내만 남긴다(금리정책 섹션과 동일
   // 원칙).
-  if (comments?.calendar && comments.calendar.length > 0) {
+  const calendar = comments?.calendar && comments.calendar.length > 0 ? comments.calendar : (opts.codeCalendar ?? []);
+  if (calendar.length > 0) {
     const lines = ["| 날짜 | 일정 |", "|---|---|"];
-    for (const c of comments.calendar) lines.push(`| ${c.date} | ${c.event} |`);
+    for (const c of calendar) lines.push(`| ${c.date} | ${tableCell(c.event)} |`);
     parts.push(lines.join("\n"));
   } else {
     parts.push("이번 주 통화정책·경제지표 일정을 확인하지 못했습니다.");

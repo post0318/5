@@ -1,5 +1,4 @@
 import "server-only";
-import { fetchText } from "@/lib/markets/http";
 import { fetchYahooEstimates } from "@/lib/markets/quote/yahoo";
 import type { IssueEvidenceEarnings, IssueEvidenceMetric, WeeklyIssue } from "./issues";
 import type { ReportWeek } from "./week";
@@ -11,8 +10,8 @@ import type { ReportWeek } from "./week";
  * (이미 뽑힌 top 3에만 적용 — API 호출도 줄고, "기업분석은 범위 밖"이라는
  * 기존 규칙(`corpus.ts` 참고)도 지킨다) 종목 수를 고정된 소수(M7 안팎)로
  * 좁혔다. 실적은 Yahoo(이미 이 프로젝트가 컨센서스에 쓰는 `fetchYahooEstimates`
- * 재사용), 거시지표는 FRED 공개 CSV(`snapshot.ts`의 UST3Y 와 동일 패턴 —
- * API 키 불필요)를 쓴다. 둘 다 실패해도 그 근거만 빠지고 리포트 생성은
+ * 재사용), 거시지표는 FRED API(키 필요 — 그 주 발표 여부를 빈티지로 확인,
+ * 아래 fetchOfficialMetrics)를 쓴다. 둘 다 실패해도 그 근거만 빠지고 리포트 생성은
  * 막지 않는다(이 프로젝트의 "조용히 생략" 원칙).
  */
 
@@ -22,95 +21,214 @@ const EARNINGS_TICKERS_BY_TOPIC: Record<string, string[]> = {
 };
 
 /**
- * FRED `release/dates` API 의 release_id(`comment.ts`의 FRED_RELEASES 와
- * 같은 값, `/fred/series/release?series_id=...`로 실측 확인) — 이 시리즈가
- * **그 주에 실제로 새로 발표됐는지** 확인하는 용도(오너 지적 2026-10-01 —
- * "지표를 보여주는것은 해당 이슈에 대한 지표를 확인주는 것인데 8월지표를
- * 보여주고 있고.."). 없으면(FEDFUNDS — 월간 평균치라 CPI/PPI 처럼 정해진
- * "발표일"이 있는 시리즈가 아님) release 여부를 못 가려 기존처럼 최신값을
- * 그대로 쓴다.
+ * 미국 공식 거시지표(FRED) — **리포트 주에 실제로 새로 발표된 값만** 싣는다.
+ *
+ * 2026-10-05 오너 지적("미국 CPI(계절조정지수, 전월비) 334.131지수 (전기 대비
+ * +1.318지수, 2026-08-01) — 너무 과거 것을 쓰고 있다"): 원인은 둘이었다.
+ *  ① 발표 여부 확인(`release/dates`)이 FRED_API_KEY 가 없거나 호출이 실패하면
+ *     `true`(통과)를 돌려줘, 9/11 에 나온 8월 CPI 가 9/28 주 리포트에 "그 주
+ *     지표"처럼 붙었다(그림자 채우기). → 확인 못 하면 싣지 않는다.
+ *  ② 지수 수준(334.131)과 지수 차(+1.318)를 "전월비"라는 이름으로 보여줬다.
+ *     → 시장이 읽는 단위(전월비·전년비 %, 고용 증감 만 명, 실업률 %)로 코드가
+ *     계산해 `text` 로 확정한다.
+ *
+ * 발표 여부는 관측치의 `realtime_start`(그 값이 공표된 날)로 판정한다 — 리포트
+ * 주 금요일 시점의 빈티지(realtime_start=realtime_end=weekEnd)로 조회해, 가장
+ * 최근 관측치가 그 주(월~금) 안에 공표됐을 때만 쓴다. 나중에 재생성해도 그
+ * 주 기준으로 같은 결과가 나온다.
  */
-const FRED_METRICS_BY_TOPIC: Record<
-  string,
-  { series: string; label: string; unit: string; releaseId?: number }[]
-> = {
-  // "전월비"를 라벨에 못 박아 둔다 — 뉴스 헤드라인의 "CPI 3.4%↑"는 보통
-  // 전년동월비(YoY)라, 라벨 없이 지수값만 주면 서로 다른 기준의 숫자가
-  // 나란히 놓여 헷갈린다(실측 — 오너 지적으로 발견).
-  "물가·인플레이션": [
-    { series: "CPIAUCSL", label: "미국 CPI(계절조정지수, 전월비)", unit: "지수", releaseId: 10 },
-  ],
-  "고용·경기": [
-    { series: "UNRATE", label: "미국 실업률", unit: "%", releaseId: 50 },
-    { series: "PAYEMS", label: "미국 비농업 고용(전월비)", unit: "천명", releaseId: 50 },
-  ],
-  "미국 금리·연준": [{ series: "FEDFUNDS", label: "실효 연방기금금리", unit: "%" }],
+type MetricKind = "mom" | "yoy" | "diffMan" | "level" | "levelMan";
+
+interface OfficialMetricSpec {
+  series: string;
+  label: string;
+  kind: MetricKind;
+  unit: string;
+  quarterly?: boolean;
+}
+
+const OFFICIAL_METRICS: Record<string, OfficialMetricSpec> = {
+  cpiMom: { series: "CPIAUCSL", label: "미국 CPI(전월비)", kind: "mom", unit: "%" },
+  cpiYoy: { series: "CPIAUCSL", label: "미국 CPI(전년비)", kind: "yoy", unit: "%" },
+  coreCpiYoy: { series: "CPILFESL", label: "미국 근원 CPI(전년비)", kind: "yoy", unit: "%" },
+  pceYoy: { series: "PCEPI", label: "미국 PCE 물가(전년비)", kind: "yoy", unit: "%" },
+  corePceYoy: { series: "PCEPILFE", label: "미국 근원 PCE 물가(전년비)", kind: "yoy", unit: "%" },
+  ppiMom: { series: "PPIFIS", label: "미국 PPI 최종수요(전월비)", kind: "mom", unit: "%" },
+  payrolls: { series: "PAYEMS", label: "미국 비농업 고용(전월 대비 증감)", kind: "diffMan", unit: "만 명" },
+  unrate: { series: "UNRATE", label: "미국 실업률", kind: "level", unit: "%" },
+  jolts: { series: "JTSJOL", label: "미국 JOLTS 구인건수", kind: "levelMan", unit: "만 건" },
+  retailMom: { series: "RSAFS", label: "미국 소매판매(전월비)", kind: "mom", unit: "%" },
+  gdp: { series: "A191RL1Q225SBEA", label: "미국 실질 GDP(전기비 연율)", kind: "level", unit: "%", quarterly: true },
 };
 
-/** 최근 2개 관측치(전기 대비 계산용) — 월별 지표라 400일 정도 여유를 둔다. */
-async function fetchFredLastTwo(seriesId: string): Promise<{ date: string; value: number }[]> {
-  try {
-    const cosd = new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10);
-    const csv = await fetchText(
-      `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${seriesId}&cosd=${cosd}`,
-      { headers: { "user-agent": "Mozilla/5.0", accept: "text/csv" }, revalidate: 60 * 60 * 12 },
-    );
-    const lines = csv.trim().split(/\r?\n/);
-    const rows: { date: string; value: number }[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const [date, raw] = lines[i]?.split(",") ?? [];
-      if (!raw || raw === ".") continue;
-      const value = Number(raw);
-      if (Number.isFinite(value)) rows.push({ date, value });
-    }
-    return rows.slice(-2);
-  } catch {
-    return [];
-  }
+/** 핵심 이슈에 붙일 지표(주제 → 지표 id). FEDFUNDS(월평균 실효금리)는 정해진
+ * 발표일이 없어 "그 주 발표"를 증명할 수 없으므로 뺐다. */
+const METRICS_BY_TOPIC: Record<string, string[]> = {
+  "물가·인플레이션": ["cpiMom", "cpiYoy", "coreCpiYoy", "pceYoy", "corePceYoy", "ppiMom"],
+  "고용·경기": ["payrolls", "unrate", "jolts", "retailMom", "gdp"],
+};
+
+export interface OfficialMetric extends IssueEvidenceMetric {
+  id: string;
 }
 
-/** releaseId 가 있는 시리즈가 그 주(week.weekStart~weekEnd)에 실제로 새
- * 발표됐는지 — `comment.ts`의 `fetchFredReleaseEvents()`와 같은 엔드포인트.
- * 월간 지표는 보통 그 달에 한 번만 발표되므로, 발표가 없었던 주에는 지난
- * 발표분을 "최근 지표"로 재활용하지 않는다(그 주 뉴스가 아니므로). */
-async function fredReleasedThisWeek(releaseId: number, week: ReportWeek): Promise<boolean> {
-  const key = process.env.FRED_API_KEY;
-  if (!key) return true; // 키 없으면 발표 여부를 못 가리므로 기존처럼 통과시킨다
-  try {
-    const res = await fetch(
-      `https://api.stlouisfed.org/fred/release/dates?release_id=${releaseId}&api_key=${key}&realtime_start=${week.weekStart}&realtime_end=${week.weekEnd}&include_release_dates_with_no_data=true&file_type=json`,
-      { signal: AbortSignal.timeout(8_000) },
-    );
-    if (!res.ok) return true;
-    const j = (await res.json()) as { release_dates?: { date: string }[] };
-    return (j.release_dates ?? []).some((d) => d.date >= week.weekStart && d.date <= week.weekEnd);
-  } catch {
-    return true;
-  }
+export interface OfficialMetricsResult {
+  metrics: OfficialMetric[];
+  /** 못 실은 이유(키 없음·조회 실패) — 검수 화면 dropReasons 로 간다 */
+  note: string | null;
 }
 
-async function fetchMetricsForTopic(
-  specs: { series: string; label: string; unit: string; releaseId?: number }[],
+async function fetchFredVintage(
+  series: string,
+  asOf: string,
+  key: string,
+): Promise<{ date: string; value: number; realtimeStart: string }[]> {
+  const url =
+    `https://api.stlouisfed.org/fred/series/observations?series_id=${series}&api_key=${key}` +
+    `&file_type=json&sort_order=desc&limit=14&realtime_start=${asOf}&realtime_end=${asOf}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`FRED ${series} HTTP ${res.status}`);
+  const j = (await res.json()) as { observations?: { date: string; value: string; realtime_start: string }[] };
+  return (j.observations ?? [])
+    .filter((o) => o.value !== "." && Number.isFinite(Number(o.value)))
+    .map((o) => ({ date: o.date, value: Number(o.value), realtimeStart: o.realtime_start }));
+}
+
+function round(n: number, digits: number): number {
+  const f = 10 ** digits;
+  return Math.round(n * f) / f;
+}
+
+function periodLabel(date: string, quarterly: boolean): string {
+  const y = Number(date.slice(0, 4));
+  const m = Number(date.slice(5, 7));
+  return quarterly ? `${y}년 ${Math.floor((m - 1) / 3) + 1}분기분` : `${m}월분`;
+}
+
+function computeMetric(
+  id: string,
+  spec: OfficialMetricSpec,
+  obs: { date: string; value: number }[],
+  releaseDate: string,
+): OfficialMetric | null {
+  // obs 는 최신순
+  const v = (i: number) => obs[i]?.value;
+  let value: number | undefined;
+  let previous: number | undefined;
+  switch (spec.kind) {
+    case "mom":
+      if (v(2) == null) return null;
+      value = round((v(0)! / v(1)! - 1) * 100, 1);
+      previous = round((v(1)! / v(2)! - 1) * 100, 1);
+      break;
+    case "yoy":
+      if (v(13) == null) return null;
+      value = round((v(0)! / v(12)! - 1) * 100, 1);
+      previous = round((v(1)! / v(13)! - 1) * 100, 1);
+      break;
+    case "diffMan":
+      if (v(2) == null) return null;
+      value = round((v(0)! - v(1)!) / 10, 1);
+      previous = round((v(1)! - v(2)!) / 10, 1);
+      break;
+    case "level":
+      if (v(1) == null) return null;
+      value = v(0)!;
+      previous = v(1)!;
+      break;
+    case "levelMan":
+      if (v(1) == null) return null;
+      value = round(v(0)! / 10, 1);
+      previous = round(v(1)! / 10, 1);
+      break;
+  }
+  const signed = spec.kind === "mom" || spec.kind === "yoy" || spec.kind === "diffMan";
+  const digits = spec.kind === "level" ? null : 1;
+  const f = (n: number) => `${signed && n > 0 ? "+" : ""}${digits == null ? n : n.toFixed(digits)}${spec.unit}`;
+  const rel = releaseDate;
+  const text =
+    `${spec.label} ${f(value)} (${periodLabel(obs[0].date, Boolean(spec.quarterly))}, ` +
+    `${Number(rel.slice(5, 7))}/${Number(rel.slice(8, 10))} 발표, 직전 ${f(previous)})`;
+  return {
+    id,
+    label: spec.label,
+    date: obs[0].date,
+    releaseDate: rel,
+    value,
+    previous,
+    unit: spec.unit,
+    text,
+    source: "FRED",
+  };
+}
+
+/** 그 관측치가 처음 공표된 날 — [from, to] 실시간 구간의 빈티지 중 가장 이른 realtime_start. */
+async function fetchFirstPublished(
+  series: string,
+  obsDate: string,
+  from: string,
+  to: string,
+  key: string,
+): Promise<string | null> {
+  const url =
+    `https://api.stlouisfed.org/fred/series/observations?series_id=${series}&api_key=${key}` +
+    `&file_type=json&observation_start=${obsDate}&observation_end=${obsDate}&realtime_start=${from}&realtime_end=${to}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`FRED ${series} HTTP ${res.status}`);
+  const j = (await res.json()) as { observations?: { realtime_start: string; value: string }[] };
+  const starts = (j.observations ?? []).filter((o) => o.value !== ".").map((o) => o.realtime_start).sort();
+  return starts[0] ?? null;
+}
+
+/**
+ * 리포트 주(월~금)에 **새 기간 값이 처음 나왔는지**로 판정한다 — 그 주 월요일
+ * 직전(일요일) 시점에 알려진 최신 관측월과, 금요일 시점의 최신 관측월을 비교해
+ * 새 달(분기)이 생겼을 때만 "이번 주 발표"다. 과거 값 수정(revision)만 있었던
+ * 주는 해당하지 않는다. (realtime_start=realtime_end 로 조회하면 realtime_start 가
+ * 그 날짜로 잘려 와서 발표일 판정에 못 쓴다 — 2026-10-05 실측.)
+ */
+async function fetchSeriesNewInWeek(
+  series: string,
   week: ReportWeek,
-): Promise<IssueEvidenceMetric[]> {
-  const results = await Promise.all(
-    specs.map(async (spec): Promise<IssueEvidenceMetric | null> => {
-      if (spec.releaseId != null && !(await fredReleasedThisWeek(spec.releaseId, week))) return null;
-      const last2 = await fetchFredLastTwo(spec.series);
-      if (last2.length < 2) return null;
-      const [prev, cur] = last2;
-      return {
-        label: spec.label,
-        date: cur.date,
-        current: cur.value,
-        previous: prev.value,
-        change: Math.round((cur.value - prev.value) * 1000) / 1000,
-        unit: spec.unit,
-        source: "FRED",
-      };
-    }),
-  );
-  return results.filter((m): m is IssueEvidenceMetric => m !== null);
+  key: string,
+): Promise<{ obs: { date: string; value: number }[]; releaseDate: string } | null> {
+  const dayBefore = new Date(Date.parse(`${week.weekStart}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  const [before, at] = await Promise.all([
+    fetchFredVintage(series, dayBefore, key),
+    fetchFredVintage(series, week.weekEnd, key),
+  ]);
+  if (at.length === 0) return null;
+  if (before.length > 0 && at[0].date <= before[0].date) return null; // 그 주에 새 기간 값 없음
+  const releaseDate = (await fetchFirstPublished(series, at[0].date, week.weekStart, week.weekEnd, key)) ?? week.weekEnd;
+  return { obs: at, releaseDate };
+}
+
+/** 리포트 주(월~금)에 새로 공표된 미국 공식 지표 전부. */
+export async function fetchOfficialMetrics(week: ReportWeek): Promise<OfficialMetricsResult> {
+  const key = process.env.FRED_API_KEY;
+  if (!key) {
+    return { metrics: [], note: "FRED_API_KEY 미설정 — 그 주 발표 여부를 확인할 수 없어 공식 지표를 싣지 않음" };
+  }
+  const bySeries = new Map<string, Promise<{ obs: { date: string; value: number }[]; releaseDate: string } | null>>();
+  for (const spec of Object.values(OFFICIAL_METRICS)) {
+    if (!bySeries.has(spec.series)) bySeries.set(spec.series, fetchSeriesNewInWeek(spec.series, week, key));
+  }
+  const failures: string[] = [];
+  const out: OfficialMetric[] = [];
+  for (const [id, spec] of Object.entries(OFFICIAL_METRICS)) {
+    try {
+      const hit = await bySeries.get(spec.series)!;
+      if (!hit) continue;
+      const m = computeMetric(id, spec, hit.obs, hit.releaseDate);
+      if (m) out.push(m);
+    } catch {
+      if (!failures.includes(spec.series)) failures.push(spec.series);
+    }
+  }
+  return {
+    metrics: out,
+    note: failures.length > 0 ? `FRED 조회 실패(${failures.join(", ")}) — 해당 지표는 싣지 않음` : null,
+  };
 }
 
 async function fetchEarningsForTickers(tickers: string[]): Promise<Map<string, IssueEvidenceEarnings>> {
@@ -237,6 +355,8 @@ function buildFactsFromEvidence(
 export async function enrichTopIssues(
   issues: WeeklyIssue[],
   week: ReportWeek,
+  /** fetchOfficialMetrics() 결과 — 그 주 발표분만 들어 있다(주제별로 나눠 붙인다) */
+  official: OfficialMetric[] = [],
 ): Promise<WeeklyIssue[]> {
   const labels = new Set(issues.map((i) => i.label));
 
@@ -245,20 +365,7 @@ export async function enrichTopIssues(
     if (labels.has(label)) for (const t of tickers) tickerSet.add(t);
   }
 
-  const [earningsMap, metricsByTopic] = await Promise.all([
-    fetchEarningsForTickers([...tickerSet]),
-    (async () => {
-      const map = new Map<string, IssueEvidenceMetric[]>();
-      await Promise.all(
-        Object.entries(FRED_METRICS_BY_TOPIC)
-          .filter(([label]) => labels.has(label))
-          .map(async ([label, specs]) => {
-            map.set(label, await fetchMetricsForTopic(specs, week));
-          }),
-      );
-      return map;
-    })(),
-  ]);
+  const earningsMap = await fetchEarningsForTickers([...tickerSet]);
 
   const usedFactPrefixes = new Set<string>();
   return issues.map((issue) => {
@@ -273,7 +380,8 @@ export async function enrichTopIssues(
         const ageDays = (weekEndMs - t) / 86_400_000;
         return ageDays >= EARNINGS_REPORT_LAG_MIN_DAYS && ageDays <= EARNINGS_REPORT_LAG_MAX_DAYS;
       });
-    const metrics = metricsByTopic.get(issue.label);
+    const ids = METRICS_BY_TOPIC[issue.label] ?? [];
+    const metrics: IssueEvidenceMetric[] = official.filter((m) => ids.includes(m.id));
     return {
       ...issue,
       facts: buildFactsFromEvidence(issue, usedFactPrefixes),

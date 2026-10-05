@@ -196,12 +196,38 @@ async function ust3yRow(week: ReportWeek): Promise<SnapshotRow> {
 
 const NTNF_JSON_URL =
   "https://raw.githubusercontent.com/post0318/4/main/src/lib/server/ntnf-yield-history.json";
+/** 같은 파일을 GitHub API 로(비공개 저장소용) */
+const NTNF_API_URL = "https://api.github.com/repos/post0318/4/contents/src/lib/server/ntnf-yield-history.json";
 
-/** 브라질 NTN-F ~10년 수익률 — 4번 프로젝트가 주간 커밋하는 JSON */
-async function ntnfRow(week: ReportWeek): Promise<SnapshotRow | null> {
+function ntnfMissing(note: string): SnapshotRow {
+  return { ...emptyRow({ key: "BR_NTNF10Y", group: "채권", name: "브라질 국채 NTN-F 10년", unit: "%", rate: true, source: "Tesouro Nacional (post0318/4 주간 갱신)" }), note };
+}
+
+/**
+ * 브라질 NTN-F ~10년 수익률 — 4번 프로젝트가 주간 커밋하는 JSON.
+ *
+ * **2026-10-05 실측**: post0318/4 저장소가 비공개라 raw 주소가 404 다(9/7 주 이후
+ * 초안 전부에서 이 행이 빠져 있었다 — 실패 시 null 을 돌려 표에서 소리 없이
+ * 사라졌다). 읽기 전용 토큰(NTNF_GITHUB_TOKEN — post0318/4 Contents 읽기만
+ * 가진 세분화 토큰)이 있으면 GitHub API 로 읽고, 없으면 공개 raw 주소를 시도한다.
+ * 둘 다 안 되면 사유를 단 빈 행을 돌려 표에 "자료 없음"으로 남긴다.
+ */
+async function ntnfRow(week: ReportWeek): Promise<SnapshotRow> {
   try {
-    const res = await fetch(NTNF_JSON_URL, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return null;
+    const token = process.env.NTNF_GITHUB_TOKEN;
+    const res = token
+      ? await fetch(NTNF_API_URL, {
+          headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github.raw", "user-agent": "macro-weekly" },
+          signal: AbortSignal.timeout(10_000),
+        })
+      : await fetch(NTNF_JSON_URL, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) {
+      return ntnfMissing(
+        token
+          ? `GitHub API ${res.status} — NTNF_GITHUB_TOKEN 권한 확인 필요`
+          : `post0318/4 저장소가 비공개라 읽을 수 없음(HTTP ${res.status}) — NTNF_GITHUB_TOKEN 필요`,
+      );
+    }
     const j = (await res.json()) as {
       asOfDate?: string;
       points?: { date: string; ytm: number; maturityYear?: number }[];
@@ -211,7 +237,7 @@ async function ntnfRow(week: ReportWeek): Promise<SnapshotRow | null> {
       .map((p) => ({ date: p.date, close: p.ytm }))
       .sort((a, b) => a.date.localeCompare(b.date));
     const last = lastOnOrBefore(bars, week.weekEnd);
-    if (!last) return null;
+    if (!last) return ntnfMissing("리포트 주 이전 값이 없음");
     // 시계열이 지난주 금요일까지 못 미치면(갱신 지연) 그 시점 기준 7일 전과 비교
     const baseYmd =
       last.date === week.weekEnd
@@ -231,8 +257,8 @@ async function ntnfRow(week: ReportWeek): Promise<SnapshotRow | null> {
       unit: "%",
       source: "Tesouro Nacional (post0318/4 주간 갱신)",
     };
-  } catch {
-    return null;
+  } catch (err) {
+    return ntnfMissing(`조회 실패: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -243,7 +269,7 @@ export async function buildSnapshot(week: ReportWeek): Promise<SnapshotRow[]> {
     ecosRows(week),
     ntnfRow(week),
   ]);
-  const rows = [...yahoo, ust3y, ...ecos, ...(ntnf ? [ntnf] : [])];
+  const rows = [...yahoo, ust3y, ...ecos, ntnf];
   const order = ["국내주식", "해외주식", "채권", "원자재", "환율·변동성"];
   return rows.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
 }
@@ -262,7 +288,8 @@ export function fillFromPrevious(rows: SnapshotRow[], prev: SnapshotRow[] | null
 
 function fmt(n: number, unit: string): string {
   if (unit.startsWith("%")) return n.toFixed(2);
-  return n >= 1000 ? n.toLocaleString("en-US", { maximumFractionDigits: 2 }) : n.toFixed(2);
+  // 1,000 이상도 소수 둘째 자리까지 고정(4,162.3 → 4,162.30) — 본문이 "4,162.30달러"로 쓰면 표와 달라 보였다
+  return n >= 1000 ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n.toFixed(2);
 }
 
 /** 프롬프트용 텍스트 표 */
@@ -284,26 +311,39 @@ export function snapshotToText(rows: SnapshotRow[], week: ReportWeek): string {
   return `기준: 지난주 마지막 거래일(${week.weekEnd}) vs 전전주 마지막 거래일(${week.baseFriday})\n${lines.join("\n")}`;
 }
 
+/** 표의 "종가" 칸 문자열 — 본문(LLM 코멘트)도 이 문자열만 인용하게 payload 로 넘긴다(comment.ts). */
+export function snapshotValueText(r: SnapshotRow): string | null {
+  if (r.value == null) return null;
+  return r.unit.startsWith("%") ? `${fmt(r.value, r.unit)}%` : fmt(r.value, r.unit);
+}
+
+/** 표의 "주간 변동" 칸 문자열 — 금리류는 bp, 나머지는 변동률 %. */
+export function snapshotChangeText(r: SnapshotRow): string {
+  if (r.diff != null && r.unit.startsWith("%")) {
+    const bp = r.diff * 100;
+    return `${bp >= 0 ? "+" : ""}${bp.toFixed(0)}bp`;
+  }
+  if (r.pct != null) return `${r.pct >= 0 ? "+" : ""}${r.pct.toFixed(2)}%`;
+  return "-";
+}
+
 /** 마크다운 표 — 값·변동은 스냅샷에서, 코멘트는 모델이 쓴 "- 지표명: 코멘트" 줄에서.
  * 모델이 수치를 옮겨 적게 두면 반올림·오기 위험이 있어(오너가 Gemini 앱 샘플에서
  * 목/금 종가가 뒤섞인 표를 실측) 표는 반드시 코드가 만든다. 첫 초안(2026-09-15)
- * 에선 모델이 값을 정확히 옮겼지만 구조적으로 막아두는 편이 안전. */
+ * 에선 모델이 값을 정확히 옮겼지만 구조적으로 막아두는 편이 안전.
+ *
+ * 값을 못 구한 행은 사유(note)가 있을 때만 "자료 없음"으로 남긴다(그림자 채우기
+ * 금지 — 조용히 빠지면 빠진 줄도 모른다. 2026-10-05 브라질 NTN-F 행이 9월 내내
+ * 소리 없이 빠져 있었다). */
 export function snapshotToMarkdownTable(rows: SnapshotRow[], comments: Map<string, string>): string {
   const lines = ["| 자산 | 종가 | 주간 변동 | 코멘트 |", "|---|---:|---:|---|"];
   for (const r of rows) {
-    if (r.value == null) continue;
-    let change: string;
-    if (r.diff != null && r.unit.startsWith("%")) {
-      const bp = r.diff * 100;
-      change = `${bp >= 0 ? "+" : ""}${bp.toFixed(0)}bp`;
-    } else if (r.pct != null) {
-      change = `${r.pct >= 0 ? "+" : ""}${r.pct.toFixed(2)}%`;
-    } else {
-      change = "-";
+    if (r.value == null) {
+      if (r.note) lines.push(`| ${r.name} | - | - | 자료 없음: ${r.note.replace(/\|/g, "/")} |`);
+      continue;
     }
-    const value = r.unit.startsWith("%") ? `${fmt(r.value, r.unit)}%` : fmt(r.value, r.unit);
     const comment = comments.get(r.name) ?? "";
-    lines.push(`| ${r.name} | ${value} | ${change} | ${comment} |`);
+    lines.push(`| ${r.name} | ${snapshotValueText(r)} | ${snapshotChangeText(r)} | ${comment} |`);
   }
   return lines.join("\n");
 }
