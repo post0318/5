@@ -23,15 +23,20 @@ const env = Object.fromEntries(
     }),
 );
 const DART = env.DART_API_KEY;
-const URI = env.MONGODB_URI;
+// 운영 반영(--prod)은 실행할 때 명시한 운영 주소 MONGODB_URI_PROD(환경변수만 — .env.local 에서 읽지 않는다)로만, 기본은 .env.local 의
+// MONGODB_URI(2호기 검증 DB) — 오너 지시 2026-10-05 "검증 서버가 운영 DB 에 저장하면 안 된다. 병합할 때 반영"
+const PROD = process.argv.includes("--prod");
+if (PROD && !process.env.MONGODB_URI_PROD) throw new Error("--prod 는 MONGODB_URI_PROD(운영 주소) 환경변수가 있어야 한다 — 실행할 때 명시");
+const URI = PROD ? process.env.MONGODB_URI_PROD : env.MONGODB_URI;
 const DB = env.MONGODB_DB || "market_research";
 if (!DART || !URI) throw new Error("DART_API_KEY / MONGODB_URI 필요 (.env.local)");
 
 const B = "https://opendart.fss.or.kr/api";
 const CHECK = process.argv.includes("--check");
-// 적재 컬렉션 — 로컬 .env.local 은 KR_DA_COLLECTION=kr_da_staging(로컬·운영이 같은 DB, 브랜치 작업이 운영에 섞이지 않게). 운영 반영은 --prod
-// (master 배포 확인 뒤 — 오너 지시 2026-10-02 "마스터는 다 확인하고 배포다")
-const COLL = process.argv.includes("--prod") ? "kr_da" : process.env.KR_DA_COLLECTION || env.KR_DA_COLLECTION || "kr_da";
+// 적재 컬렉션 — 기본 kr_da_staging(KR_DA_COLLECTION 으로 바꿀 수 있으나 운영 컬렉션 kr_da 는 --prod 로만).
+// 운영 반영은 master 배포 확인 뒤 --prod(오너 지시 2026-10-02 "마스터는 다 확인하고 배포다")
+const COLL = PROD ? "kr_da" : process.env.KR_DA_COLLECTION || env.KR_DA_COLLECTION || "kr_da_staging";
+if (!PROD && COLL === "kr_da") throw new Error("운영 컬렉션 kr_da 적재는 --prod(+ MONGODB_URI_PROD)로만");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
 );
