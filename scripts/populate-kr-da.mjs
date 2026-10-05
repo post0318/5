@@ -630,7 +630,8 @@ function parseInterimNature(xml) {
     const head = clean(xml.slice(Math.max(0, m.index - 400), m.index)).slice(-160);
     // "비용의 성격별 분류"·"성격별 비용"(HD현대일렉트릭) — "성격별 비용의 기능별 배분" 표는 제외
     if (!/비용의\s*성격별|성격별\s*비용/.test(head) || /기능별/.test(head.slice(-60))) continue;
-    const per = /당(반기|분기|기)/.test(head.slice(-60)) ? "cur" : null;
+    // 당기 표 + 바로 뒤 전기 표(같은 보고서의 전년 동기 — 재작성 판본, XBRL 누적·검증기와 같은 기준). 전기 표는 당기 표 뒤에 이어 실린다
+    const per = /당(반기|분기|기)/.test(head.slice(-60)) ? "cur" : /전(반기|분기|기)/.test(head.slice(-60)) ? "prior" : null;
     if (!per) continue;
     const rows = [...m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
     // 값 열 — 머리 줄에 "누적"이 있으면 그 열, 없으면 첫 숫자 열(누적만 공시)
@@ -664,12 +665,19 @@ function parseInterimNature(xml) {
     const u = clean(m[0]).match(UNIT_RE)?.[1] ?? head.match(UNIT_RE)?.[1];
     if (!u) continue;
     const total = by.comb ?? (by.base ?? 0) + (by.inv ?? 0) + (by.rou ?? 0) + (by.amo ?? 0);
-    found.push({ con: /연결/.test(head), v: total * UNIT[u], unit: UNIT[u] });
+    found.push({ per, con: /연결/.test(head), v: total * UNIT[u], unit: UNIT[u] });
   }
   // 연결 표(주석 제목에 "연결")가 있으면 그것, 없으면 첫 표(별도 재무제표 회사) — 예전엔 "연결 표가 먼저"라고 보고 첫 표를 썼는데, 연결 표를 못 읽으면
   // 별도 표를 집었다(229640)
-  const pick = found.find((f) => f.con) ?? found[0];
-  if (pick) { out.cur = pick.v; out.unit = pick.unit; }
+  const curs = found.filter((f) => f.per === "cur");
+  const pick = curs.find((f) => f.con) ?? curs[0];
+  if (pick) {
+    out.cur = pick.v;
+    out.unit = pick.unit;
+    // 그 당기 표 바로 다음 전기 표(다음 당기 표 전) — 같은 범위(연결·별도)의 전년 동기 누적
+    const i = found.indexOf(pick), nx = found[i + 1];
+    if (nx?.per === "prior") { out.prior = nx.v; out.priorFromNature = true; }
+  }
   return out.cur != null ? out : null;
 }
 /**
@@ -772,9 +780,10 @@ async function ttmDa(corp, byYear) {
   for (const rc of it.rcps) docs.push(await interimDoc(rc).catch(() => null));
   const curN = docs.find((d) => d?.cur != null) ?? null;
   if (curN?.prior != null) {
+    // 같은 보고서의 전년 동기 누적(성격별 표의 전기 표 또는 성격별 손익계산서 본표의 전기 누적 열)
     // 성격별 손익계산서 본표 — 같은 보고서에 전년 동기 누적이 있다
     part = { cur: curN.cur, prior: curN.prior };
-    how = "성격별(손익계산서 본표)";
+    how = curN.priorFromNature ? "성격별" : "성격별(손익계산서 본표)";
   } else if (curN) {
     // 전년 동기 = 작년 같은 기간 보고서의 당기 표
     const prevIt = await latestInterim(corp, fy - 1, it.month);
