@@ -625,12 +625,13 @@ async function latestInterim(corp, fy, month = null) {
 function parseInterimNature(xml) {
   const lbl = (c) => (c ?? "").replace(/^[\s\-–·ㆍ•]+/, "").replace(/\s|\(.*?\)/g, "");
   const out = {};
+  const found = [];
   for (const m of xml.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
     const head = clean(xml.slice(Math.max(0, m.index - 400), m.index)).slice(-160);
     // "비용의 성격별 분류"·"성격별 비용"(HD현대일렉트릭) — "성격별 비용의 기능별 배분" 표는 제외
     if (!/비용의\s*성격별|성격별\s*비용/.test(head) || /기능별/.test(head.slice(-60))) continue;
     const per = /당(반기|분기|기)/.test(head.slice(-60)) ? "cur" : null;
-    if (!per || out[per]) continue;
+    if (!per) continue;
     const rows = [...m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1])));
     // 값 열 — 머리 줄에 "누적"이 있으면 그 열, 없으면 첫 숫자 열(누적만 공시)
     // 값 열(감사 3차 2026-10-05 — 첫 숫자 열을 쓰면 기능별 배분 표(판관비 | 매출원가 | … | 합계)에서 판관비·재고변동 열을 읽었다: 010120·015760·
@@ -649,10 +650,11 @@ function parseInterimNature(xml) {
     };
     const kind = (r) => {
       const t = lbl(r[0]);
-      if (/^감가상각비(및|와)무형자산상각비$/.test(t)) return "comb";
-      if (/^(감가상각비|유형자산(감가)?상각비)$/.test(t)) return "base";
-      if (/^투자부동산(감가)?상각비$/.test(t)) return "inv";
-      if (/^사용권자산(감가)?상각비$/.test(t)) return "rou";
+      // "감가상각비와 상각비"(229640 2026 반기 연결 표 — 이 이름을 몰라 그 표를 건너뛰고 별도 표를 읽었다), XBRL 이름 꼴 "감가상각비, 사용권자산"
+      if (/^감가상각비(및|와)(무형자산)?상각비$/.test(t)) return "comb";
+      if (/^(감가상각비|유형자산(감가)?상각비|감가상각비,유형자산)$/.test(t)) return "base";
+      if (/^(투자부동산(감가)?상각비|감가상각비,투자부동산)$/.test(t)) return "inv";
+      if (/^(사용권자산(감가)?상각비|감가상각비,사용권자산)$/.test(t)) return "rou";
       if (t === "무형자산상각비") return "amo";
       return null;
     };
@@ -662,10 +664,12 @@ function parseInterimNature(xml) {
     const u = clean(m[0]).match(UNIT_RE)?.[1] ?? head.match(UNIT_RE)?.[1];
     if (!u) continue;
     const total = by.comb ?? (by.base ?? 0) + (by.inv ?? 0) + (by.rou ?? 0) + (by.amo ?? 0);
-    out[per] = total * UNIT[u];
-    out.unit = UNIT[u];
-    break;
+    found.push({ con: /연결/.test(head), v: total * UNIT[u], unit: UNIT[u] });
   }
+  // 연결 표(주석 제목에 "연결")가 있으면 그것, 없으면 첫 표(별도 재무제표 회사) — 예전엔 "연결 표가 먼저"라고 보고 첫 표를 썼는데, 연결 표를 못 읽으면
+  // 별도 표를 집었다(229640)
+  const pick = found.find((f) => f.con) ?? found[0];
+  if (pick) { out.cur = pick.v; out.unit = pick.unit; }
   return out.cur != null ? out : null;
 }
 /**
