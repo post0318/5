@@ -6831,6 +6831,9 @@ async function verifyUs(sym) {
 
   // ── C. 개요·유니버스 — 앱이 실제로 계산한 값(verify-row) vs 하이라이트 LTM
   const L = H.LTM;
+  // LTM 열 기대치(감사 2차 ①) — 하이라이트 LTM 열이 없는 경우는 K1 「LTM 열 존재」가 실패로 남긴다. 재무분석·개요·유니버스 LTM 도 있어야 한다
+  if (L && !A.LTM) add("C", "재무분석 LTM 열 존재", "LTM", { status: FAIL, note: "하이라이트 LTM 열이 있는데 재무분석 LTM 열 없음" });
+  if (row && !L) add("C", "개요·유니버스 = 하이라이트 LTM", "LTM", { status: FAIL, note: "하이라이트 LTM 열 없음 — 개요·유니버스 대조 불가" });
   if (row && L) {
     const m = row.overview?.multiples ?? null, uv = row.universe ?? null;
     if (!m) add("C", "개요 멀티플 계산됨", "LTM", { status: FAIL, note: `개요 멀티플 없음 ${JSON.stringify(row.overview?.warnings ?? [])}` });
@@ -10008,7 +10011,9 @@ async function verifyKr(sym) {
     const corp = KR_CORP.get(sym);
     if (corp) await krOriginalLayers({
       sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same,
-      consts: { PASS, FAIL, NA },
+      consts: { PASS, FAIL, NA, COMMON },
+      // 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 와 정확 대조
+      quarter: { isq, bsq, cfq }, items: KR_A_ITEMS,
       yahooBars: async (s) => {
         const y = await yahoo();
         for (const suf of [".KS", ".KQ"]) {
@@ -10118,6 +10123,9 @@ async function verifyKr(sym) {
   }
 
   const L = H.LTM;
+  // LTM 열 기대치(감사 2차 ①) — 하이라이트 LTM 열이 없는 경우는 K1 「LTM 열 존재」가 실패로 남긴다. 재무분석·개요·유니버스 LTM 도 있어야 한다
+  if (L && !A.LTM) add("C", "재무분석 LTM 열 존재", "LTM", { status: FAIL, note: "하이라이트 LTM 열이 있는데 재무분석 LTM 열 없음" });
+  if (row && !L) add("C", "개요·유니버스 = 하이라이트 LTM", "LTM", { status: FAIL, note: "하이라이트 LTM 열 없음 — 개요·유니버스 대조 불가" });
   if (row && L) {
     const m = row.overview?.multiples ?? null, uv = row.universe ?? null;
     if (!m) add("C", "개요 멀티플 계산됨", "LTM", { status: FAIL, note: `개요 멀티플 없음 ${JSON.stringify(row.overview?.warnings ?? [])}` });
@@ -10458,6 +10466,18 @@ DART·KRX 디스크 캐시 — 적중 ${cs.hit} · 미스 ${cs.miss} · 새로 �
   await closeKrLayers();
 }
 const infraBad = errors.length || badSkips.length || empty.length || missing.length;
+// 한국 — 층별 집계와 재실행 필요(감사 2차 ③·④): 게시 전(KRX 자료가 아직 안 나온 거래일)이라 확인 못 한 검사는 검증불가로 남고, 그런 검사가 하나라도
+// 있으면 실패가 없어도 "깨끗한 통과"가 아니다 — 재실행 필요(종료코드 3). 공통모드(적재본과만 맞은 칸 등)는 통과로 세지 않는다
+const rerun = all.filter((c) => c.status === NA && /재실행 필요/.test(c.note ?? ""));
+if (MARKET === "kr") {
+  const grp = (c) => (c.layer === "A" && /^분기 /.test(c.name) ? "A 분기" : c.layer === "A" ? "A 연간" : c.layer);
+  const by = {};
+  for (const c of all) { const b = (by[grp(c)] ??= { pass: 0, fail: 0, unverifiable: 0, common: 0 }); b[c.status] = (b[c.status] ?? 0) + 1; }
+  console.log("\n── 한국 층별 집계 (A 연간·A 분기 = DART 재무제표, K1 시가총액 KRX, K2 EV 구성요소, K3 감가상각, K4 LTM 손익, K5 배당) ──");
+  for (const [k, b] of Object.entries(by).sort()) console.log(`  ${k.padEnd(8)} 통과 ${b.pass} · 실패 ${b.fail} · 검증불가 ${b.unverifiable} · 공통모드 ${b.common}`);
+  console.log(rerun.length ? `\n재실행 필요 ${rerun.length}건(게시 전 등으로 확인 못 함 — 종료코드 3): ${[...new Set(rerun.map((c) => `${c.sym} ${c.name}`))].slice(0, 20).join(" · ")}` : "\n재실행 필요 0건");
+}
+if (!(fails.length || infraBad) && rerun.length && !METRIC) process.exit(3);
 process.exit(METRIC === "revenue" ? (revFails.length || revErrs.length || infraBad ? 1 : 0)
   : METRIC === "cogs" ? (cogsFails.length || cogsErrs.length || infraBad ? 1 : 0)
   : METRIC === "opinc" ? (cogsFails.length || cogsErrs.length || opincFails.length || opincErrs.length || infraBad ? 1 : 0)

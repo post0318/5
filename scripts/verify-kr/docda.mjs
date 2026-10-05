@@ -51,6 +51,8 @@ export function daCandidates(tables) {
           if (ro != null) add(d + ro + a, "감가 + 사용권 + 무형");
           if (iv != null) add(d + iv + a, "감가 + 투자부동산 + 무형");
           if (ro != null && iv != null) add(d + ro + iv + a, "감가 + 사용권 + 투자부동산 + 무형");
+          // 투자부동산 상각을 뺀 값(적재 「−투자부동산」 — 그 보고서에만 따로 있는 투자부동산 줄을 뺀 이듬해 판본 기준, SK하이닉스 2021)
+          if (iv != null) add(d - iv + a, "감가 − 투자부동산 + 무형");
         }
       }
     });
@@ -58,15 +60,15 @@ export function daCandidates(tables) {
   return out;
 }
 
-/** 원문 줄 하나(사용권자산·투자부동산 상각)의 열별 값 [{ v, how }] — XBRL 기본 감가상각에 원문 줄을 더한 적재 값(xbrl+doc) 대조용 */
+/** 원문 줄 하나(사용권자산·투자부동산 상각·무형자산상각)의 열별 값 [{ v, kind, how }] — XBRL 기본 감가상각에 원문 줄을 더한 적재 값(xbrl+doc·+원문무형) 대조용 */
 export function docExtraRows(tables) {
   const out = [];
   tables.forEach((t, ti) => {
     if (!t.unit) return;
     for (const r of t.rows) {
       const k = kindOf(lab(r[0]));
-      if (k !== "rou" && k !== "inv") continue;
-      r.slice(1).map(num).forEach((v, j) => { if (v != null && v !== 0) out.push({ v: v * t.unit, kind: k, how: `표${ti + 1}·열${j + 1} ${k === "rou" ? "사용권" : "투자부동산"}` }); });
+      if (k !== "rou" && k !== "inv" && k !== "amo") continue;
+      r.slice(1).map(num).forEach((v, j) => { if (v != null && v !== 0) out.push({ v: v * t.unit, kind: k, how: `표${ti + 1}·열${j + 1} ${{ rou: "사용권", inv: "투자부동산", amo: "무형" }[k]}` }); });
     }
   });
   return out;

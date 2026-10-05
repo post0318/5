@@ -12,6 +12,7 @@
  */
 import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartDocLeaseCells, dartDocDaTables, dartCompany } from "./dart.mjs";
 import { daCandidates, docExtraRows } from "./docda.mjs";
+import { dataGoDividends } from "./datago.mjs";
 import { krxCapsOn } from "./krx.mjs";
 import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts } from "./b16.mjs";
 
@@ -91,14 +92,16 @@ export async function krOriginalLayers(ctx) {
   const { PASS, FAIL, NA, COMMON } = ctx.consts;
   const fail = (layer, name, col, note) => add(layer, name, col, { status: FAIL, note });
   const err = (what, e) => { const m = `${what}: ${String(e?.message ?? e).slice(0, 120)}`; hardErrors.push(m); add("응답", what, "-", { status: FAIL, note: m }); };
-  /** 정확 일치(정수) — 원자료 있고 앱 빈칸·앱만 있고 원자료 빈칸 모두 실패 */
-  const exact = (layer, name, col, app, src, why = "") => {
-    if (src == null && app == null) return add(layer, name, col, { status: NA, note: `양쪽 빈칸${why ? ` · ${why}` : ""}` });
-    if (src == null) return fail(layer, name, col, `원자료 없음인데 앱 값 ${app}${why ? ` · ${why}` : ""}`);
-    if (app == null) return fail(layer, name, col, `원자료 ${src} 있는데 앱 빈칸${why ? ` · ${why}` : ""}`);
+  /** 정확 일치(정수) — 원자료 있고 앱 빈칸·앱만 있고 원자료 빈칸 모두 실패. common = 기대치가 독립 판독이 아니면(적재본 등) 그 사유 — 통과를 공통모드로 */
+  const cmp = (app, src, why = "", common = null) => {
+    if (src == null && app == null) return { status: NA, note: `양쪽 빈칸${why ? ` · ${why}` : ""}` };
+    if (src == null) return { status: FAIL, note: `원자료 없음인데 앱 값 ${app}${why ? ` · ${why}` : ""}` };
+    if (app == null) return { status: FAIL, note: `원자료 ${src} 있는데 앱 빈칸${why ? ` · ${why}` : ""}` };
     const ok = Number.isInteger(src) && Number.isInteger(app) ? app === src : Math.abs(app - src) <= Math.abs(src) * 1e-9;
-    return add(layer, name, col, ok ? { status: PASS, app, src, ...(why ? { note: why } : {}) } : { status: FAIL, app, src, note: `앱 ${app} vs 원자료 ${src} (차 ${app - src})${why ? ` · ${why}` : ""}` });
+    if (!ok) return { status: FAIL, app, src, note: `앱 ${app} vs 원자료 ${src} (차 ${app - src})${why ? ` · ${why}` : ""}` };
+    return common ? { status: COMMON, app, src, note: `${why ? `${why} · ` : ""}공통모드 — ${common}` } : { status: PASS, app, src, ...(why ? { note: why } : {}) };
   };
+  const exact = (layer, name, col, app, src, why = "", common = null) => add(layer, name, col, cmp(app, src, why, common));
   const notes = (h.notes ?? []).join(" ¶ ");
   const fyCols = h.columns.filter((c) => c.kind === "fy");
   const yearsShown = fyCols.map((c) => Number(String(c.label).slice(0, 4)));
@@ -137,6 +140,7 @@ export async function krOriginalLayers(ctx) {
     exact("K1", "우선주 시가총액 = KRX 연말", col, appPref, k.preferred, `KRX ${k.date}${k.prefIssues.length ? ` ${k.prefIssues.join("·")}` : " 우선주 없음"}`);
   }
   let ltmPrefOk = null; // LTM EV 기대치에 쓸 우선주 시가총액(K1 에서 확인된 값)
+  let ltmPrice = null; // LTM 배당수익률 기대치에 쓸 현재가(K1 보통주 시가총액이 확인된 종가)
   // LTM 열은 DART 정기공시가 있으면 반드시 있어야 한다(감사 2차 ① — 열이 없으면 LTM 검사가 조용히 사라졌다)
   if (!H.LTM && L.latestPeriod()) fail("K1", "LTM 열 존재(하이라이트)", "LTM", `DART 정기공시 ${L.latestPeriod().nm} 이 있는데 하이라이트 LTM 열 없음`);
   if (H.LTM && capCur && capCur.common != null) {
@@ -163,14 +167,14 @@ export async function krOriginalLayers(ctx) {
         if (appPref === exp) ltmPrefOk = appPref;
       } else add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX ${gap} 게시 전 — 우선주 독립 확인 불가(${why}) — 재실행 필요` });
     } else exact("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", appPref, capCur.preferred, `KRX ${capCur.date}`);
-    if (H.LTM.mc === capCur.common) add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: `KRX ${capCur.date}` });
+    if (H.LTM.mc === capCur.common) { add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: `KRX ${capCur.date}` }); ltmPrice = capCur.close; }
     else {
       // 앱 시세 규칙(quote/index.ts): KRX 일별 자료가 아직 안 나온 날은 Yahoo 종가 × KRX 상장주식수 — 검증기가 Yahoo 종가를 따로 받아 확인
       let why = null;
       try {
         const y = await ctx.yahooBars(sym);
         const later = y.filter((b) => b.date.replace(/-/g, "") > capCur.date && b.close != null).at(-1);
-        if (later && capCur.shares != null && H.LTM.mc === later.close * capCur.shares) why = `KRX ${capCur.date} 뒤 Yahoo ${later.date} 종가 ${later.close} × KRX 상장주식수 ${capCur.shares}(앱 시세 규칙)`;
+        if (later && capCur.shares != null && H.LTM.mc === later.close * capCur.shares) { why = `KRX ${capCur.date} 뒤 Yahoo ${later.date} 종가 ${later.close} × KRX 상장주식수 ${capCur.shares}(앱 시세 규칙)`; ltmPrice = later.close; }
       } catch (e) { err("Yahoo 일봉(현재 시가총액 확인)", e); }
       if (why) add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: why });
       else fail("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", `앱 ${H.LTM.mc} vs KRX ${capCur.date} ${capCur.common}`);
@@ -243,13 +247,13 @@ export async function krOriginalLayers(ctx) {
     try {
       await ltmLayer({ ...ctx, L, lp, LT, exact, fail, err, policySrc, capCur, ltmPrefOk, evBlockWhy, rowHidden });
     } catch (e) { err("LTM 원자료(DART 분기·반기 보고서)", e); }
-  } else if (lp && !LT) fail("K4", "LTM 열 존재(하이라이트)", "LTM", `DART 최신 정기보고서 ${lp.nm} 이 있는데 하이라이트 LTM 열 없음 — LTM 손익·재무상태표·EV 대조 불가`);
+  } // LTM 열이 없으면 위 K1 「LTM 열 존재」 실패
 
   // ── 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 분기·반기·3분기·사업보고서와 정확 대조 ──
   try { await quarterLayer({ ...ctx, exact }); } catch (e) { err("분기 재무제표 원자료(DART)", e); }
 
   // ── K3 감가상각비 ──
-  try { await daLayer({ ...ctx, exact, fail, err, yearSrc, yearsShown, caps, L }); } catch (e) { err("감가상각비 원자료(kr_da·XBRL)", e); }
+  try { await daLayer({ ...ctx, exact, cmp, fail, err, yearSrc, yearsShown, caps, L }); } catch (e) { err("감가상각비 원자료(kr_da·XBRL·원문)", e); }
 
   // ── K5 배당 ──
   for (const y of yearsShown) {
@@ -275,16 +279,43 @@ export async function krOriginalLayers(ctx) {
       add("K5", "배당수익률 = DPS ÷ KRX 연말 종가", col, appY != null && Math.abs(appY - exp) <= Math.abs(exp) * 1e-9 ? { status: PASS } : { status: FAIL, note: `앱 ${appY} vs ${exp} (DPS ${dps} ÷ KRX ${k.date} 종가 ${k.close})` });
     }
   }
-  // LTM DPS — 공공데이터 배당정보는 독립 원천이 없다. 앱이 최근 사업연도 값으로 대신했으면 주석에 있어야 하고 그 값이어야 한다
-  {
+  // LTM DPS(감사 2차 ⑦) — 검증기가 공공데이터포털 배당정보(금융위원회 GetStocDiviInfoService_V2, 앱과 같은 원천을 따로 호출 — KRX 와 같은 성격)를
+  // 법인등록번호(DART 기업개황)로 직접 받아 규칙 문장("최근 12개월 — 배당기준일 > 1년 전 오늘(KST), 같은 기준일 한 번, 보통주")대로 합한다.
+  // 그 창에 배당이 없으면 앱은 최근 사업연도 값으로 대신하고 주석을 단다 — 그때는 주석·값을 대조. 배당수익률 = DPS ÷ K1 에서 확인된 현재가
+  if (H.LTM) {
     const i = h.columns.findIndex((c) => c.kind === "ltm");
     const appD = h.rows.find((r) => r.key === "dps")?.values[i] ?? null;
-    const fb = /LTM.*주당배당금.*최근 사업연도|배당.*조회 실패/.test(notes);
-    if (fb) {
-      const ly = Math.max(...yearsShown);
-      const fyD = h.rows.find((r) => r.key === "dps")?.values[h.columns.findIndex((c) => c.label === `${ly}Y`)] ?? null;
-      add("K5", "LTM 주당배당금 = 최근 사업연도(주석 표시된 대체)", "LTM", same(appD, fyD));
-    } else add("K5", "LTM 주당배당금(공공데이터 배당기준일 합)", "LTM", { status: NA, note: "독립 원천 없음 — 공공데이터포털 배당정보(앱 전용)" });
+    const appY = h.rows.find((r) => r.key === "divyield")?.values[i] ?? null;
+    const ly = Math.max(...yearsShown);
+    const fyD = h.rows.find((r) => r.key === "dps")?.values[h.columns.findIndex((c) => c.label === `${ly}Y`)] ?? null;
+    const fb = /LTM.*주당배당금.*최근 사업연도/.test(notes);
+    let exp = null, how = "";
+    try {
+      if (!ctx.env.DATA_GO_KR_KEY) throw new Error("DATA_GO_KR_KEY 미설정");
+      const co = await dartCompany(corp);
+      if (!co.jurir_no) throw new Error("DART 기업개황 법인등록번호 없음");
+      const ev = await dataGoDividends(co.jurir_no, ctx.env.DATA_GO_KR_KEY);
+      const t = new Date(Date.now() + 9 * 3600e3);
+      const lo = `${t.getUTCFullYear() - 1}${String(t.getUTCMonth() + 1).padStart(2, "0")}${String(t.getUTCDate()).padStart(2, "0")}`;
+      const byDate = new Map(ev.filter((e) => e.bd > lo).map((e) => [e.bd, e.amt]));
+      if (byDate.size) { exp = [...byDate.values()].reduce((a, b) => a + b, 0); how = `공공데이터 배당기준일 ${[...byDate].map(([d, a]) => `${d} ${a}`).join(" + ")} (> ${lo})`; }
+      else how = `공공데이터 배당기준일 > ${lo} 없음(전체 ${ev.length}건)`;
+    } catch (e) { err("공공데이터 배당정보(LTM 주당배당금)", e); how = null; }
+    if (how != null) {
+      if (exp == null) {
+        // 창 안 배당 없음 — 앱은 최근 사업연도 값 + 주석(무배당이면 빈칸)
+        if (fyD != null) add("K5", "LTM 주당배당금 = 최근 사업연도(창 안 배당 없음 — 주석 표시된 대체)", "LTM", fb ? same(appD, fyD) : { status: FAIL, note: `${how} · 앱 ${appD} 인데 대체 주석 없음` });
+        else add("K5", "LTM 주당배당금 = 공공데이터 12개월 합", "LTM", appD == null ? { status: PASS, note: `${how} · 사업연도 배당도 없음 — 빈칸` } : { status: FAIL, note: `${how} · 앱 ${appD}` });
+      } else exact("K5", "LTM 주당배당금 = 공공데이터 12개월 합", "LTM", appD, exp, how);
+      const d = exp ?? (fb ? fyD : null);
+      if (d != null && d > 0) {
+        if (ltmPrice == null) add("K5", "LTM 배당수익률 = DPS ÷ 현재가", "LTM", { status: NA, app: appY, note: "현재가 확인 불가(K1 LTM 보통주 시가총액 미확인)" });
+        else {
+          const e2 = (d / ltmPrice) * 100;
+          add("K5", "LTM 배당수익률 = DPS ÷ 현재가", "LTM", appY != null && Math.abs(appY - e2) <= Math.abs(e2) * 1e-9 ? { status: PASS, note: `${d} ÷ ${ltmPrice}` } : { status: FAIL, app: appY, src: e2, note: `앱 ${appY} vs ${e2} (DPS ${d} ÷ 현재가 ${ltmPrice})` });
+        }
+      }
+    }
   }
 }
 
@@ -301,7 +332,7 @@ function alotCommonDps(list) {
 }
 
 async function ltmLayer(c) {
-  const { corp, L, lp, LT, exact, fail, add, consts, tt, policySrc, capCur, ltmPrefOk, evBlockWhy, rowHidden } = c;
+  const { corp, L, lp, LT, exact, fail, add, consts, tt, policySrc, capCur, evBlockWhy, rowHidden } = c;
   const { PASS } = consts;
   const fs = async (y, code) => {
     for (const d of ["CFS", "OFS"]) { const r = await dartFnltt(corp, y, code, d); if (r && r.length) return { rows: r, fsDiv: d }; }
@@ -393,8 +424,9 @@ async function ltmLayer(c) {
       // 앱이 더한 분기말 리스부채(앱 LTM 총차입금 − 본표 차입금)
       const appQ = LT.debt != null ? LT.debt - faceDebt : null;
       if (appQ != null && appQ !== 0) {
-        const r = Math.max(appQ, pol.amount) / Math.min(appQ, pol.amount);
-        if (!(r > 0) || r > 100) fail("K2", "분기말 리스부채 크기 = 사업연도 주석과 100배 안(단위 안전장치)", "LTM", `앱 분기말 ${appQ} vs FY${Y - 1} ${pol.amount}`);
+        // 절댓값으로 크기 비교, 부호는 그대로 보인다(감사 2차 ⑩ — 음수가 "앱 분기말 -130조" 로만 보였다). 리스부채가 음수면 부호 오류
+        const r = Math.max(Math.abs(appQ), Math.abs(pol.amount)) / Math.min(Math.abs(appQ), Math.abs(pol.amount));
+        if (appQ < 0 || pol.amount <= 0 || r > 100) fail("K2", "분기말 리스부채 크기 = 사업연도 주석과 100배 안(단위 안전장치)", "LTM", `앱 분기말 리스부채(앱 LTM 총차입금 − 본표 차입금) ${appQ} vs FY${Y - 1} 주석 ${pol.amount} — ${appQ < 0 || pol.amount <= 0 ? "음수(부호 오류)" : `크기 ${r.toFixed(0)}배(단위 오류 의심)`}`);
         else add("K2", "분기말 리스부채 크기 = 사업연도 주석과 100배 안(단위 안전장치)", "LTM", { status: PASS, note: `${r.toFixed(2)}배` });
       }
     } else lease = { status: "unknown", how: `FY${Y - 1} 주석 리스부채 ${pol?.status ?? "없음"} — 분기 보고서 전기말 열 확인 불가` };
@@ -550,20 +582,66 @@ function xbrlDa(facts, prefix, basis) {
   return { v: null, how: "XBRL 현금흐름 감가상각 태그 없음" };
 }
 
+/** 원문 표(보고서 여러 개 — 같은 기간 판본 전부) → 감가상각 후보(daCandidates)·단독 줄(사용권·투자부동산·무형) */
+async function docReads(rcepts) {
+  const cands = [], rows = [];
+  for (const r of rcepts) {
+    const t = await dartDocDaTables(r);
+    for (const x of daCandidates(t)) cands.push({ v: x.v, how: `${r} ${x.how}` });
+    for (const x of docExtraRows(t)) rows.push({ ...x, how: `${r} ${x.how}` });
+  }
+  return { cands, rows };
+}
+/** 분기·반기 XBRL 현금흐름 조정 누적 — 컨텍스트 접두어(CFY2026dHYA 등, 끝이 A = 누적)마다 xbrlDa */
+function xbrlCum(facts, cp, y, basis) {
+  const re = new RegExp(`^(${cp}${y}d[A-Z0-9]*?A)(?:_|$)`);
+  const pre = [...new Set(facts.map((f) => f[1].match(re)?.[1]).filter(Boolean))];
+  return pre.map((p) => ({ ...xbrlDa(facts, p, basis), p })).filter((x) => x.v != null).map((x) => ({ v: x.v, how: `XBRL ${x.p} ${x.how}` }));
+}
+/**
+ * 시험 스위치(심은 오류 재현 전용) KR_VERIFY_TEST_DA_SHIFT="종목:해:더할값,종목:LTM:더할값" — 검증기가 읽은 적재본 값을 바꿔 적재 스크립트 결함을
+ * 흉내낸다(앱 쪽에도 같은 값을 심어 앱 = 적재본인 채로 독립 판독만 그 차이를 잡는지 본다). 평소엔 쓰지 않는다
+ */
+function testShift(doc, sym) {
+  const spec = process.env.KR_VERIFY_TEST_DA_SHIFT;
+  if (!spec) return doc;
+  const d = structuredClone(doc);
+  for (const part of spec.split(",")) {
+    const [s, y, v] = part.split(":");
+    if (s !== sym) continue;
+    if (y === "LTM") { if (d.ttmDepreciation != null) d.ttmDepreciation += Number(v); }
+    else if (d.byYear?.[y]?.depreciation != null) d.byYear[y].depreciation += Number(v);
+  }
+  return d;
+}
+
+/**
+ * K3 감가상각(감사 2차 ④). 적재본(kr_da)은 앱 적재 스크립트가 만든 값이라 그것과만 맞으면 공통모드 — 검증기가 따로 읽은 값과 같을 때만 통과로 센다.
+ *  · 출처 「xbrl」·「xbrl(별도)」·「…+영업비용확인」: 적재 스크립트가 XBRL 현금흐름 조정 값을 그대로 둔 해(성격별 표와 같음만 확인 — populate-kr-da.mjs
+ *    "+영업비용확인" 은 값을 바꾸지 않는다) — 사업보고서 XBRL 을 검증기가 따로 읽어 재현.
+ *  · 그 밖(원문 현금흐름 조정 주석·영업비용 기준 성격별 표·사용권자산 줄 보완·원문 무형): 사업보고서 원문 표를 검증기가 따로 읽어(docda.mjs) 후보 중
+ *    정확히 같은 값이 있어야 한다. 원문에서 감가상각 표를 하나도 못 읽으면 검증불가(적재 대조는 공통모드), 후보는 있는데 같은 값이 없으면 실패.
+ *  · LTM TTM = 최근 사업연도 + 당기 누적 − 전년 동기 누적: 분기·반기 보고서 원문 표·XBRL 누적을 검증기가 따로 읽어 식이 정확히 성립해야 한다.
+ *    최신 정기보고서가 사업보고서면 LTM 감가상각 = 그 사업연도(감사 2차 ⑤)
+ */
 async function daLayer(c) {
   const { sym, env, IS, H, exact, fail, add, consts, yearSrc, yearsShown, caps, L, h } = c;
   const { PASS, NA } = consts;
   const col = await daCol(env);
-  const doc = await col.findOne({ _id: sym });
-  if (!doc) { fail("K3", "감가상각 적재본(kr_da) 존재", "-", `유니버스 종목인데 ${env.KR_DA_COLLECTION || "kr_da"} 에 문서 없음`); return; }
+  const doc0 = await col.findOne({ _id: sym });
+  if (!doc0) { fail("K3", "감가상각 적재본(kr_da) 존재", "-", `유니버스 종목인데 ${env.KR_DA_COLLECTION || "kr_da"} 에 문서 없음`); return; }
+  const doc = testShift(doc0, sym);
   // 단위 안전장치 — 적재 감가상각(원문 해 포함, 전 해)의 이웃 해 크기 대조 + TTM vs 최근 사업연도
-  const daBy = new Map(Object.entries(doc.byYear ?? {}).map(([y, d]) => [Number(y), (d.depreciation ?? 0) + (d.amortisation ?? 0)]).filter(([, v]) => v > 0));
+  const daBy = new Map(Object.entries(doc.byYear ?? {}).map(([y, d]) => [Number(y), (d.depreciation ?? 0) + (d.amortisation ?? 0)]).filter(([, v]) => v !== 0));
   unitGuard(daBy, "K3", "감가상각 적재본 크기 = 이웃 해와 100배 안(단위 안전장치)", add, fail, PASS);
   if (doc.ttmDepreciation != null && daBy.size) {
-    const fy = Math.max(...daBy.keys()), t = doc.ttmDepreciation + (doc.ttmAmortisation ?? 0), r = Math.max(t, daBy.get(fy)) / Math.min(t, daBy.get(fy));
-    if (!(t > 0) || r > 100) fail("K3", "감가상각 TTM 크기 = 최근 사업연도와 100배 안(단위 안전장치)", "LTM", `TTM ${t} vs FY${fy} ${daBy.get(fy)}`);
+    const fy = Math.max(...daBy.keys()), t = doc.ttmDepreciation + (doc.ttmAmortisation ?? 0), f = daBy.get(fy);
+    const r = Math.max(Math.abs(t), Math.abs(f)) / Math.min(Math.abs(t), Math.abs(f));
+    if (t <= 0 || f <= 0 || !(r <= 100)) fail("K3", "감가상각 TTM 크기 = 최근 사업연도와 100배 안(단위 안전장치)", "LTM", `TTM ${t} vs FY${fy} ${f}${t <= 0 || f <= 0 ? " — 0 이하(부호 오류)" : ` (크기 ${r.toFixed(0)}배)`}`);
     else add("K3", "감가상각 TTM 크기 = 최근 사업연도와 100배 안(단위 안전장치)", "LTM", { status: PASS, note: `${r.toFixed(2)}배` });
   }
+  const annualReps = (yy) => L.reports.filter((x) => x.year === yy && x.code === "11011").sort((a, b) => b.rcept.localeCompare(a.rcept)).map((x) => x.rcept);
+  const indepY = new Map(); // 해 → 검증기 독립 판독과 일치(설명)
   for (const y of yearsShown) {
     const colY = `${y}Y`;
     const d = doc.byYear?.[y];
@@ -578,23 +656,51 @@ async function daLayer(c) {
         if (sep !== (src.fsDiv === "OFS")) fail("K3", "감가상각 출처 기준 = 재무제표 기준(연결·별도)", colY, `재무제표 ${src.fsDiv === "OFS" ? "별도" : "연결"} · 감가상각 출처 "${s}"`);
         else add("K3", "감가상각 출처 기준 = 재무제표 기준(연결·별도)", colY, { status: PASS, note: `${src.fsDiv} · ${s}` });
       }
-      // XBRL 해(출처가 XBRL 현금흐름 조정 태그뿐)는 검증기가 사업보고서 XBRL 을 따로 읽어 재현
-      let note = `적재 출처 ${s}`;
-      if (/^xbrl(\(별도\))?$/.test(s)) {
-        const r0 = L.latest(y, "11011"), r1 = L.latest(y + 1, "11011");
-        let got = null;
-        for (const [rp, pre] of [[r1, `PFY${y}dFY`], [r0, `CFY${y}dFY`]]) {
+      const basis = src?.fsDiv ?? "CFS";
+      let indep = null;
+      const xbrlOf = async () => {
+        const out = [];
+        for (const [rp, pre] of [[L.latest(y + 1, "11011"), `PFY${y}dFY`], [L.latest(y, "11011"), `CFY${y}dFY`]]) {
           if (!rp) continue;
-          const x = xbrlDa(await dartXbrlFacts(rp.rcept, "11011"), pre, src?.fsDiv ?? "CFS");
-          if (x.v != null) { got = { ...x, rcept: rp.rcept }; break; }
+          const x = xbrlDa(await dartXbrlFacts(rp.rcept, "11011"), pre, basis);
+          if (x.v != null) out.push({ ...x, rcept: rp.rcept });
         }
-        if (!got) fail("K3", "감가상각 적재본 = 사업보고서 XBRL(검증기 판독)", colY, `적재 ${v} — 검증기가 XBRL 에서 못 읽음`);
-        else if (got.v !== v) fail("K3", "감가상각 적재본 = 사업보고서 XBRL(검증기 판독)", colY, `적재 ${v} vs XBRL ${got.v}(${got.how}, ${got.rcept})`);
-        else add("K3", "감가상각 적재본 = 사업보고서 XBRL(검증기 판독)", colY, { status: PASS, note: `${got.how} (${got.rcept})` });
-      } else note += " — 검증기 독립 재현 불가(원문 표·영업비용 기준 판독은 적재 스크립트만) · 적재 값 대조만";
-      exact("K3", "감가상각비 = 적재본(kr_da)", colY, app, v, note);
+        return out;
+      };
+      if (/^xbrl(\(별도\))?(\+영업비용확인)?$/.test(s)) {
+        const got = (await xbrlOf())[0];
+        const nm0 = "감가상각 적재본 = 사업보고서 XBRL(검증기 판독)";
+        if (!got) fail("K3", nm0, colY, `적재 ${v}(${s}) — 검증기가 XBRL 에서 못 읽음`);
+        else if (got.v !== v) fail("K3", nm0, colY, `적재 ${v}(${s}) vs XBRL ${got.v}(${got.how}, ${got.rcept})`);
+        else { add("K3", nm0, colY, { status: PASS, note: `${got.how} (${got.rcept})${/영업비용확인/.test(s) ? " · 영업비용 기준 확인 해(값 = XBRL 그대로)" : ""}` }); indep = `XBRL ${got.rcept}`; }
+      } else {
+        // 원문 표(그해·이듬해 사업보고서, 판본 전부) — 영업비용 기준 성격별 표·현금흐름 조정 주석 모두 같은 판독
+        const rd = await docReads([...annualReps(y + 1), ...annualReps(y)]);
+        const pool = [...rd.cands];
+        if (/xbrl/.test(s)) {
+          // XBRL 기본 값 + 원문 단독 줄(사용권·투자부동산 보완 「xbrl+doc」, 원문 무형 「+원문무형」)
+          for (const x of await xbrlOf()) {
+            pool.push({ v: x.v, how: `XBRL ${x.how}` });
+            for (const r of rd.rows) pool.push({ v: x.v + r.v, how: `XBRL ${x.how} + 원문 ${r.how}` });
+            for (const r1 of rd.rows) for (const r2 of rd.rows) if (r1.kind !== r2.kind) pool.push({ v: x.v + r1.v + r2.v, how: `XBRL ${x.how} + 원문 ${r1.how} + ${r2.how}` });
+          }
+        }
+        // 성격별 합계 + 투자부동산 변동표 감가상각(「+투자부동산」 — LS) — 다른 표 두 값의 합
+        if (/\+투자부동산/.test(s)) for (const a of rd.cands) for (const b of rd.cands) if (a !== b) pool.push({ v: a.v + b.v, how: `${a.how} + ${b.how}` });
+        const nm0 = "감가상각 적재본 = 사업보고서 원문(검증기 판독)";
+        const hit = pool.find((p) => p.v === v);
+        if (hit) { add("K3", nm0, colY, { status: PASS, note: `${s} · ${hit.how}` }); indep = `원문 ${hit.how}`; }
+        else if (!rd.cands.length) add("K3", nm0, colY, { status: NA, note: `${s} · 원문에서 감가상각 표를 못 읽음(보고서 ${[...annualReps(y + 1), ...annualReps(y)].join("·") || "없음"}) — 적재 대조는 공통모드` });
+        else {
+          const near = [...pool].sort((a, b) => Math.abs(a.v - v) - Math.abs(b.v - v))[0];
+          fail("K3", nm0, colY, `적재 ${v}(${s}) — 원문 후보 ${pool.length}개 중 같은 값 없음(가장 가까운 ${near.v} ${near.how}, 차 ${v - near.v})`);
+        }
+      }
+      indepY.set(y, indep);
+      const cm = indep ? null : "적재본(앱 적재 스크립트 값)과만 대조 — 검증기 독립 판독 없음";
+      exact("K3", "감가상각비 = 적재본(kr_da)", colY, app, v, `적재 출처 ${s}${indep ? ` · 독립 확인 ${indep}` : ""}`, cm);
       const op = IS[colY]?.op ?? null, eb = IS[colY]?.ebitda ?? null;
-      if (op != null) exact("K3", "EBITDA = 영업이익 + 감가상각(적재본)", colY, eb, op + v);
+      if (op != null) exact("K3", "EBITDA = 영업이익 + 감가상각(적재본)", colY, eb, op + v, "", cm);
     } else {
       // 적재본에 없는 해 — 앱 규칙(오너 결정 2026-10-02 "가"): DART 공시 현금흐름 감가상각 줄, 없으면 빈칸. 검증기가 DART 줄을 따로 읽어 대조.
       // 빈칸 허용: 상장 전(KRX 연말 종목 없음) · 연결 재작성 해(그해·이듬해 사업보고서엔 연결 손익이 없고 다다음 해 보고서 전전기 열에만 —
@@ -611,27 +717,56 @@ async function daLayer(c) {
   }
   // LTM — 손익 TTM 과 같은 구성의 감가상각 TTM 만
   const LT = H.LTM;
-  if (LT) {
-    const hi = h.columns.findIndex((x) => x.kind === "ltm");
-    const op = h.rows.find((x) => x.key === "opinc")?.values[hi] ?? null;
-    const tok = (s) => s?.match(/FY(\d{4})\s*\+\s*(\d{4})\s*(1분기|반기|3분기)/)?.slice(1).join("|") ?? null;
-    const lp = L.latestPeriod();
-    const wantTok = lp && lp.code !== "11011" ? `${lp.year - 1}|${lp.year}|${QNAME[{ "11013": 1, "11012": 2, "11014": 3 }[lp.code]]}` : null;
-    if (wantTok && doc.ttmDepreciation != null && tok(doc.ttmLabel) === wantTok) {
-      const v = doc.ttmDepreciation + (doc.ttmAmortisation ?? 0);
-      if (op != null) exact("K3", "LTM EBITDA = LTM 영업이익 + 감가상각 TTM(적재본)", "LTM", LT.ebitda, op + v, `적재 ${doc.ttmLabel}`);
-    } else if (wantTok) add("K3", "LTM 감가상각 TTM 적재", "LTM", LT.ebitda == null ? { status: NA, note: `적재 TTM ${doc.ttmLabel ?? "없음"} ≠ 최신 ${wantTok} — 앱 LTM EBITDA 빈칸(규칙)` } : { status: "fail", note: `적재 TTM ${doc.ttmLabel ?? "없음"} ≠ 최신 ${wantTok} 인데 앱 LTM EBITDA ${LT.ebitda}` });
+  if (!LT) return;
+  const hi = h.columns.findIndex((x) => x.kind === "ltm");
+  const op = h.rows.find((x) => x.key === "opinc")?.values[hi] ?? null;
+  const lp = L.latestPeriod();
+  if (!lp) return;
+  if (lp.code === "11011") {
+    // 최신 정기보고서 = 사업보고서 → LTM 감가상각 = 그 사업연도(앱 규칙 — 손익 TTM 이 연간이면 최근 사업연도)
+    const d = doc.byYear?.[lp.year];
+    const v = d ? (d.depreciation ?? 0) + (d.amortisation ?? 0) : null;
+    const ind = indepY.get(lp.year);
+    exact("K3", "LTM EBITDA = LTM 영업이익 + 사업연도 감가상각(최신 정기보고서 = 사업보고서)", "LTM", LT.ebitda, op != null && v != null ? op + v : null, `FY${lp.year} 적재${ind ? ` · 독립 확인 ${ind}` : ""}`, ind ? null : `FY${lp.year} 감가상각이 검증기 독립 판독으로 확인되지 않음`);
+    return;
   }
+  const tok = (s) => s?.match(/FY(\d{4})\s*\+\s*(\d{4})\s*(1분기|반기|3분기)/)?.slice(1).join("|") ?? null;
+  const Y = lp.year;
+  const wantTok = `${Y - 1}|${Y}|${QNAME[{ "11013": 1, "11012": 2, "11014": 3 }[lp.code]]}`;
+  if (doc.ttmDepreciation == null || tok(doc.ttmLabel) !== wantTok) {
+    add("K3", "LTM 감가상각 TTM 적재", "LTM", LT.ebitda == null ? { status: NA, note: `적재 TTM ${doc.ttmLabel ?? "없음"} ≠ 최신 ${wantTok} — 앱 LTM EBITDA 빈칸(규칙)` } : { status: "fail", note: `적재 TTM ${doc.ttmLabel ?? "없음"} ≠ 최신 ${wantTok} 인데 앱 LTM EBITDA ${LT.ebitda}` });
+    return;
+  }
+  const v = doc.ttmDepreciation + (doc.ttmAmortisation ?? 0);
+  const fy = doc.byYear?.[Y - 1];
+  const fyTot = fy ? (fy.depreciation ?? 0) + (fy.amortisation ?? 0) : null;
+  const basis = yearSrc.get(Y - 1)?.fsDiv ?? "CFS";
+  const reps = (yy) => L.reports.filter((x) => x.year === yy && x.code === lp.code).sort((a, b) => b.rcept.localeCompare(a.rcept)).map((x) => x.rcept);
+  const curR = reps(Y), prevR = reps(Y - 1);
+  const cur = await docReads(curR), prev = await docReads(prevR);
+  const A = [...cur.cands], B = [...cur.cands, ...prev.cands];
+  for (const r of curR) { const f = await dartXbrlFacts(r, lp.code); A.push(...xbrlCum(f, "CFY", Y, basis)); B.push(...xbrlCum(f, "PFY", Y - 1, basis)); }
+  for (const r of prevR) B.push(...xbrlCum(await dartXbrlFacts(r, lp.code), "CFY", Y - 1, basis));
+  const nm0 = "LTM 감가상각 TTM 적재본 = 사업연도 + 당기 누적 − 전년 누적(검증기 원문·XBRL 판독)";
+  let hit = null;
+  if (fyTot != null) for (const a of A) { for (const b of B) if (fyTot + a.v - b.v === v) { hit = `FY${Y - 1} ${fyTot} + ${a.how} ${a.v} − ${b.how} ${b.v}`; break; } if (hit) break; }
+  const fyInd = indepY.get(Y - 1);
+  if (hit) add("K3", nm0, "LTM", { status: PASS, note: `${doc.ttmLabel} = ${hit}${fyInd ? "" : " · 사업연도 값은 독립 판독 안 됨"}` });
+  else if (fyTot == null || !A.length || !B.length) add("K3", nm0, "LTM", { status: NA, note: `${doc.ttmLabel} — ${fyTot == null ? `적재본 FY${Y - 1} 없음` : "분기 보고서 원문·XBRL 누적 판독 불가"} — 적재 대조는 공통모드` });
+  else fail("K3", nm0, "LTM", `적재 TTM ${v}(${doc.ttmLabel}, ${doc.ttmSrc ?? ""}) — 사업연도 ${fyTot} + 누적 후보 ${A.length}개 − 전년 후보 ${B.length}개 조합 중 같은 값 없음`);
+  const ind = hit && fyInd;
+  if (op != null || LT.ebitda != null) exact("K3", "LTM EBITDA = LTM 영업이익 + 감가상각 TTM(적재본)", "LTM", LT.ebitda, op != null ? op + v : null, `적재 ${doc.ttmLabel}`, ind ? null : "감가상각 TTM 이 검증기 독립 판독으로 확인되지 않음");
 }
 
-/** 단위 안전장치 — 해 → 값 지도에서 이웃 해(바로 앞 해)와 100배 넘게 다르면 실패(1000배 단위 오류를 태그·단위 표기와 무관하게 잡는다) */
+/** 단위 안전장치 — 해 → 값 지도에서 이웃 해(바로 앞 해)와 크기(절댓값)가 100배 넘게 다르거나 부호가 다르면 실패(1000배 단위 오류를 태그·단위 표기와 무관하게 잡는다) */
 function unitGuard(byYear, layer, name, add, fail, PASS) {
   const ys = [...byYear.keys()].sort((a, b) => a - b);
   for (let i = 1; i < ys.length; i++) {
     const a = byYear.get(ys[i - 1]), b = byYear.get(ys[i]);
-    if (!(a > 0) || !(b > 0) || ys[i] - ys[i - 1] !== 1) continue;
-    const r = Math.max(a, b) / Math.min(a, b);
-    if (r > 100) fail(layer, name, `${ys[i]}Y`, `FY${ys[i - 1]} ${a} vs FY${ys[i]} ${b} (${r.toFixed(0)}배) — 단위 오류 의심`);
+    if (a == null || b == null || a === 0 || b === 0 || ys[i] - ys[i - 1] !== 1) continue;
+    const r = Math.max(Math.abs(a), Math.abs(b)) / Math.min(Math.abs(a), Math.abs(b));
+    if (Math.sign(a) !== Math.sign(b)) fail(layer, name, `${ys[i]}Y`, `FY${ys[i - 1]} ${a} vs FY${ys[i]} ${b} — 부호가 다름(부호 오류 의심)`);
+    else if (r > 100) fail(layer, name, `${ys[i]}Y`, `FY${ys[i - 1]} ${a} vs FY${ys[i]} ${b} (크기 ${r.toFixed(0)}배) — 단위 오류 의심`);
     else add(layer, name, `${ys[i]}Y`, { status: PASS, note: `FY${ys[i - 1]} 대비 ${r.toFixed(2)}배` });
   }
 }
