@@ -66,6 +66,7 @@ jobs:
           DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
           ECOS_API_KEY: ${{ secrets.ECOS_API_KEY }}
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
           KRX_API_KEY: ${{ secrets.KRX_API_KEY }}
@@ -83,7 +84,7 @@ jobs:
         run: |
           : > env.yaml
           for k in ADMIN_EMAILS ALLOWED_EMAIL_DOMAINS APP_PASSWORD CLERK_SECRET_KEY NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CRON_SECRET DART_API_KEY DATA_GO_KR_KEY \
-                   ECOS_API_KEY EDINET_API_KEY GEMINI_API_KEY JQUANTS_API_KEY KRX_API_KEY MONGODB_URI NAVER_APIHUB_KEY_ID NAVER_APIHUB_KEY_SECRET \
+                   ECOS_API_KEY EDINET_API_KEY FRED_API_KEY GEMINI_API_KEY JQUANTS_API_KEY KRX_API_KEY MONGODB_URI NAVER_APIHUB_KEY_ID NAVER_APIHUB_KEY_SECRET \
                    NAVER_TREND_KEY_ID NAVER_TREND_KEY_SECRET POLYGON_API_KEY SEC_USER_AGENT YOUTUBE_API_KEY RESEND_API_KEY ALERT_EMAIL_TO PDFSHIFT_API_KEY; do
             v="${!k}"
             if [ -n "$v" ]; then printf '%s: %s\n' "$k" "$(jq -Rn --arg v "$v" '$v')" >> env.yaml; else echo "비어 있음(건너뜀): $k"; fi
