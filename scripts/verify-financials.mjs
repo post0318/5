@@ -10107,7 +10107,9 @@ async function verifyKr(sym) {
     const LH = H.LTM, IQn = rnm(isq), BQi = rid(bsq);
     const ql = (isq.periods ?? []).map((p0) => p0.label), l4 = ql.slice(-4), lq = ql.at(-1);
     const fq = (tt?.ttm?.periodLabel ?? "").match(/\+\s*(\d{4})\s*(1분기|반기|3분기)/);
-    const want = fq ? `${fq[1]} Q${{ "1분기": 1, 반기: 2, "3분기": 3 }[fq[2]]}` : null;
+    // 손익 TTM 이 사업연도("FY2025" — 사업보고서 뒤 1분기 보고서 전, 감사 3차)면 그해 4분기까지의 네 분기
+    const fy0 = (tt?.ttm?.periodLabel ?? "").match(/^FY(\d{4})$/);
+    const want = fq ? `${fq[1]} Q${{ "1분기": 1, 반기: 2, "3분기": 3 }[fq[2]]}` : fy0 ? `${fy0[1]} Q4` : null;
     if (LH && l4.length === 4 && want && lq === want) {
       const s4 = (nm) => { const xs = l4.map((k0) => IQn[nm]?.[k0]); return xs.every((v0) => v0 != null) ? xs.reduce((a0, b1) => a0 + b1, 0) : null; };
       const hRow = (key) => { const i0 = h.columns.findIndex((c) => c.kind === "ltm"); return h.rows.find((r1) => r1.key === key)?.values[i0] ?? null; };
