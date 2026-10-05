@@ -1,6 +1,6 @@
 import "server-only";
-import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fetchJson } from "../http";
 
@@ -15,6 +15,9 @@ import { fetchJson } from "../http";
  *  - 접수번호로 직접 받는 자료(XBRL 원본)는 판본 = 접수번호(바뀌지 않음).
  *  - 새 판본을 쓰면 같은 요청의 옛 판본 파일은 즉시 지운다. 읽을 때 파일 시각을 갱신(오래 안 쓴 것 판정).
  *  - 프로세스당 첫 사용 때 1회 정리: 90일 넘게 안 쓴 파일 삭제, 전체가 DART_CACHE_MAX_GB(기본 2) 넘으면 오래 안 쓴 것부터.
+ *  - 쓰기는 같은 폴더의 임시 이름(.{이름}.{pid}.{난수}.tmp)에 쓰고 rename 으로 교체 — 앱·적재 스크립트(scripts/lib/dart-disk-cache.mjs)가 1호기에서 같은
+ *    폴더를 쓰므로 쓰는 도중의 잘린 파일을 다른 프로세스가 읽지 않게(2026-10-05). 읽은 캐시가 깨졌으면(JSON 파싱 실패, zip 이 PK 로 시작 안 함, 100B 미만)
+ *    미스로 보고 지운 뒤 다시 받는다. 정리는 .tmp 를 건너뛰되 1시간 넘은 .tmp(죽은 프로세스가 남긴 것)는 지운다.
  *  - 조회 실패·빈 응답·깨진 JSON·비정상 상태(000·013 외)는 저장하지 않는다(markets/http.ts usableBody 원칙). 디스크를 놓쳐 새로 받을 때는 Next 데이터
  *    캐시를 건너뛴다(no-store) — 정정 전 판본이 6시간 캐시에 남아 새 판본 이름으로 저장되지 않게.
  * 검증기 캐시(scripts/verify-kr/cache.mjs, reports/.dart-cache)와 코드를 나누지 않는다(검증 독립성) — 같은 규칙을 각자 구현.
@@ -32,6 +35,8 @@ function root(): string | null {
 const safe = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
 const dirOf = (r: string, ns: string, key: string) => path.join(r, safe(ns), safe(key));
 const isEnoent = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "ENOENT";
+const isTmp = (n: string) => n.startsWith(".") && n.endsWith(".tmp");
+const TMP_STALE_MS = 3600e3;
 
 /** DART 네트워크 요청 1건 기록(DART_CACHE_LOG=1 이면 콘솔) — 캐시 전후 요청 수 측정용 */
 export function noteDartRequest(what: string): void {
@@ -53,9 +58,19 @@ async function cleanup(r: string): Promise<void> {
     }
     for (const n of names) {
       const p = path.join(d, n);
-      const s = await stat(p);
+      let s;
+      try {
+        s = await stat(p);
+      } catch (e) {
+        // readdir 과 stat 사이에 다른 프로세스(앱·적재 스크립트)가 지운 파일 — 건너뛴다(예전엔 정리 전체가 중단됐다)
+        if (isEnoent(e)) continue;
+        throw e;
+      }
       if (s.isDirectory()) await walk(p);
-      else files.push({ p, size: s.size, t: s.mtimeMs });
+      else if (isTmp(n)) {
+        // 쓰는 중인 임시 파일은 건너뛰고, 1시간 넘은 것(죽은 프로세스가 남긴 것)만 지운다
+        if (Date.now() - s.mtimeMs > TMP_STALE_MS) await rm(p, { force: true });
+      } else files.push({ p, size: s.size, t: s.mtimeMs });
     }
   };
   await walk(r);
@@ -148,10 +163,17 @@ export async function dartVersionKey(corp: string): Promise<string> {
 }
 
 // ── 읽기·쓰기 ──
-async function readVer(dir: string, file: string): Promise<Buffer | null> {
+/** 캐시 파일 읽기 — 없거나 깨졌으면(valid 실패 → 파일 삭제) null(미스) */
+async function readVer(dir: string, file: string, valid: (b: Buffer) => boolean): Promise<Buffer | null> {
   const f = path.join(dir, file);
   try {
     const b = await readFile(f);
+    if (!valid(b)) {
+      console.warn(`[dart-cache] 깨진 캐시 파일 — 지우고 다시 받음: ${f} (${b.length}B)`);
+      await rm(f, { force: true });
+      dartCacheStats.deleted++;
+      return null;
+    }
     const now = new Date();
     await utimes(f, now, now);
     return b;
@@ -160,13 +182,29 @@ async function readVer(dir: string, file: string): Promise<Buffer | null> {
     throw e;
   }
 }
+const validJson = (b: Buffer) => {
+  try {
+    JSON.parse(b.toString("utf8"));
+    return true;
+  } catch {
+    return false;
+  }
+};
+const validZip = (b: Buffer) => b.length >= 100 && b[0] === 0x50 && b[1] === 0x4b;
 async function writeVer(dir: string, file: string, data: Buffer | string): Promise<void> {
   try {
     await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, file), data);
+    const tmp = path.join(dir, `.${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
+    try {
+      await writeFile(tmp, data);
+      await rename(tmp, path.join(dir, file));
+    } catch (e) {
+      await rm(tmp, { force: true });
+      throw e;
+    }
     dartCacheStats.write++;
     for (const n of await readdir(dir)) {
-      if (n === file) continue;
+      if (n === file || isTmp(n)) continue; // 다른 프로세스가 쓰는 중인 임시 파일은 건드리지 않는다
       await rm(path.join(dir, n), { force: true });
       dartCacheStats.deleted++;
     }
@@ -198,7 +236,7 @@ export async function dartReportJson<T extends { status: string }>(
   await ensureCleaned(r);
   const dir = dirOf(r, ns, `${ref.corp}_${ref.year}_${ref.reprt}${ref.extra ? `_${ref.extra}` : ""}`);
   const file = `${safe(ver)}.json`;
-  const hit = await readVer(dir, file);
+  const hit = await readVer(dir, file, validJson);
   if (hit) {
     dartCacheStats.hit++;
     return JSON.parse(hit.toString("utf8")) as T;
@@ -219,7 +257,7 @@ export async function dartRceptBinary(ns: string, rcept: string, fetcher: () => 
   }
   await ensureCleaned(r);
   const dir = dirOf(r, ns, createHash("sha1").update(rcept).digest("hex").slice(0, 2) + "_" + rcept);
-  const hit = await readVer(dir, `${safe(rcept)}.bin`);
+  const hit = await readVer(dir, `${safe(rcept)}.bin`, validZip);
   if (hit) {
     dartCacheStats.hit++;
     return new Uint8Array(hit);
@@ -227,6 +265,6 @@ export async function dartRceptBinary(ns: string, rcept: string, fetcher: () => 
   dartCacheStats.miss++;
   noteDartRequest(`${ns} ${rcept}`);
   const b = await fetcher();
-  if (b.length >= 100 && b[0] === 0x50 && b[1] === 0x4b) await writeVer(dir, `${safe(rcept)}.bin`, Buffer.from(b));
+  if (validZip(Buffer.from(b))) await writeVer(dir, `${safe(rcept)}.bin`, Buffer.from(b));
   return b;
 }
