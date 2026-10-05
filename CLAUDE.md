@@ -2099,7 +2099,8 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   master 배포 확인 뒤 `node scripts/populate-kr-da.mjs --prod`.
 - **2호기(검증 서버) = 검증 전용 MongoDB(오너 지시 2026-10-05 — "검증 서버가 운영 DB 에 저장하면 안 된다", "운영은 Atlas, 백업·검증은 2호기 DB")**:
   2호기 로컬 MongoDB 8.0(127.0.0.1, 인증)을 verify-dev 가 쓴다. 매일 05:30 KST `macro-db-sync` 타이머(`ops/verify/db-sync.sh`)가 운영 Atlas 를
-  **읽기만** 해 덤프 → 임시 DB 복원 → 컬렉션 교체(실패하면 이전 복사본 유지, 압축본 7일). 보호 컬렉션(`kr_da_staging`·`verify_results`·`*_staging`)은
+  **읽기만** 해 덤프 → 임시 DB 복원 → 컬렉션 교체(실패하면 이전 복사본 유지). 압축본 = 정식 DB 백업(오너 결정 2026-10-05 "DB 백업은 구성하고 앱 백업은 하지 않는다")
+  — 매일 7일·주간 4개·월간 3개, 복원 절차는 `ops/verify/README.md`. 보호 컬렉션(`kr_da_staging`·`verify_results`·`*_staging`)은
   덮어쓰지 않고, 2호기에만 있는 컬렉션은 지우지 않는다. 점검 `macro-db-check`(종료코드 0/1). 운영 주소는 2호기에서 복사 전용 파일(root 600)에만.
   `populate-kr-da.mjs` 는 기본 `kr_da_staging`(MONGODB_URI), `--prod` 는 실행 때 `MONGODB_URI_PROD` 환경변수를 줘야만 운영 `kr_da` 에 쓴다.
 - **재무분석 LTM 열 기준 통일(2026-10-02, kr/verification)**: 손익 TTM 이 분기 조합이면 흐름(매출총이익·세전이익·법인세·영업현금흐름·

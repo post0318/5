@@ -9,7 +9,10 @@
 #  - 운영에 없고 2호기에만 있는 컬렉션은 지우지 않는다(로그만).
 #  - 복원은 임시 DB(market_research_sync)에 먼저 하고, 컬렉션 수가 맞을 때만 본 DB 로 바꿔 넣는다.
 #    덤프·복원·대조가 하나라도 실패하면 본 DB 는 이전 복사본 그대로.
-#  - 덤프 압축본은 /var/backups/macro-db 에 7일 보관.
+#  - 덤프 압축본 = 정식 DB 백업(오너 결정 2026-10-05 "DB 백업은 구성하고 앱 백업은 하지 않는다"). /var/backups/macro-db 에
+#    매일본 market_research-* 7일 · 주간본 weekly-*(일요일 KST 성공분) 4개 · 월간본 monthly-*(매월 1일 KST 성공분) 3개.
+#    주간·월간본은 매일본의 하드링크(같은 파일 — 매일본이 지워져도 남는다). 압축본은 gzip -t·1MB 이상을 확인한 뒤에만 복원한다.
+#    복원 절차: ops/verify/README.md
 # 접속 정보: /etc/macro-db/sync-src.env(SRC_URI, 운영 읽기), /etc/macro-db/sync-dst.env(DST_URI, 2호기 sync 사용자) — root 600.
 # 결과: /var/lib/macro-db/last-sync.json (점검 명령 macro-db-check 가 읽는다).
 set -euo pipefail
@@ -32,9 +35,10 @@ install -d -m 755 "$STATE"
 
 ts=$(date +%Y%m%d-%H%M)
 archive="$BK/$DB-$ts.archive.gz"
+bytes=0
 status() { # $1 ok|fail $2 메시지
-  printf '{"ok":%s,"at":"%s","epoch":%s,"archive":"%s","msg":"%s"}\n' \
-    "$([[ $1 == ok ]] && echo true || echo false)" "$(date -Is)" "$(date +%s)" "$archive" "$2" >"$STATE/last-sync.json.tmp"
+  printf '{"ok":%s,"at":"%s","epoch":%s,"archive":"%s","bytes":%s,"msg":"%s"}\n' \
+    "$([[ $1 == ok ]] && echo true || echo false)" "$(date -Is)" "$(date +%s)" "$archive" "$bytes" "$2" >"$STATE/last-sync.json.tmp"
   mv "$STATE/last-sync.json.tmp" "$STATE/last-sync.json"
   chmod 644 "$STATE/last-sync.json"
 }
@@ -62,6 +66,9 @@ echo "운영 컬렉션 ${#SRC_COLLS[@]}개 중 복사 ${#COPY[@]}개, 보호(제
 # 2) 덤프(운영 읽기)
 mongodump --uri="$SRC_URI" --db="$DB" --gzip --archive="$archive.part" --readPreference=secondaryPreferred --quiet "${EXCL[@]}"
 mv "$archive.part" "$archive"; chmod 600 "$archive"
+bytes=$(stat -c %s "$archive")
+gzip -t "$archive" || { status fail "압축본 손상(gzip -t) — 복원 안 함"; exit 1; }
+(( bytes >= 1048576 )) || { status fail "압축본이 1MB 미만($bytes B) — 복원 안 함"; exit 1; }
 
 # 3) 임시 DB 로 복원(2호기)
 mongosh "$DST_URI" --quiet --eval "db.getSiblingDB('$TMP').dropDatabase()" >/dev/null
@@ -87,8 +94,16 @@ print('교체 '+got.length+'개, 2호기에만 있는 컬렉션(유지): '+(only
 tmp.dropDatabase();
 "
 
-# 5) 7일 넘은 압축본 삭제
-find "$BK" -name "$DB-*.archive.gz" -mtime +6 -delete
-find "$BK" -name "*.part" -mtime +1 -delete
+# 5) 백업 보관 — 주간·월간본 지정(성공분만, KST 기준), 매일본 7일·주간본 4개·월간본 3개
+base=$(basename "$archive")
+[[ $(TZ=Asia/Seoul date +%u) == 7 ]] && ln -f "$archive" "$BK/weekly-$base"
+[[ $(TZ=Asia/Seoul date +%d) == 01 ]] && ln -f "$archive" "$BK/monthly-$base"
+find "$BK" -maxdepth 1 -name "$DB-*.archive.gz" -mtime +6 -delete
+keep() { # $1 접두 $2 개수 — 최신 N개만 남김
+  find "$BK" -maxdepth 1 -name "$1-$DB-*.archive.gz" -printf '%T@ %p\n' | sort -rn | tail -n +$(( $2 + 1 )) | cut -d' ' -f2- | xargs -r rm -f
+}
+keep weekly 4
+keep monthly 3
+find "$BK" -maxdepth 1 -name "*.part" -mtime +1 -delete
 status ok "복사 ${#COPY[@]}개 컬렉션"
 echo "완료: $archive ($(du -h "$archive" | cut -f1))"
