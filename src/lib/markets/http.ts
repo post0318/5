@@ -213,6 +213,8 @@ function secText(url: string, opts: FetchJsonOpts, accept: Record<string, string
       if (cached && cached.ageMs <= SEC_API_TTL_MS) return cached.body;
       try {
         await secSlot();
+        // SEC 요청 1건 기록(SEC_CACHE_LOG=1 이면 콘솔 — DART_CACHE_LOG 와 같은 측정용, 캐시 채움 전후 요청 수 비교)
+        if (process.env.SEC_CACHE_LOG === "1") console.info(`[sec-request] ${url}`);
         let body = await request(url, opts, accept, (res) => res.text());
         // 빈 응답·깨진 JSON — Next 데이터 캐시에 남은 것일 수 있어 캐시 없이 한 번 더, 그래도면 조회 실패(저장하지 않음)
         if (!usableBody(body, json)) {
