@@ -13,6 +13,12 @@
  *
  * 첫 줄들은 규칙을 맞춘 표본이라 낙관적이다. 마지막 줄은 다른 종목 표본인데, 거기서 드러난 일반적인 구멍(영문 약자 회사명·판촉·나열·
  * 관사 용법)도 보강했으므로 완전한 독립 측정은 아니다. 처음 보는 표본의 보강 전 값은 국내 73%·69%, 해외 85%·98% 였다.
+ *
+ * 2026-10-05 미국 종목(AMAT 국내뉴스 3건 지적) — 국내 검색 질의를 한글명·한글 약칭·티커로 늘리고 약칭·티커만 있는 제목은 요약으로 확인,
+ * 영문 첫 낱말은 대문자·다른 상장사 이름(네이버 자동완성) 구분. 미국 8종목(AMAT·MU·LRCX·MRVL·BE·DAL·WDC·ISRG) 같은 시각 수집, 제목 기준 정답:
+ *   국내 정답 106건: 수정 전 남김 4건(정밀도 100%·재현율 4%) → 수정 후 117건(85%·93%)
+ *   해외 정답 255건: 수정 전 341건(74%·98%) → 수정 후 278건(90%·98%)
+ *   한국 7종목은 같은 원본에서 기사 단위로 판정이 전부 같다(회귀 없음).
  * 정규식은 이 파일에만 둔다(셸·템플릿 문자열을 거치며 `\s` 가 `s` 로 깨진 일이 있었다 — 10-03 ROUNDUP_RE).
  */
 
@@ -100,14 +106,83 @@ export interface Verdict {
   reason: string;
 }
 
+/**
+ * 미국 종목 약칭(회사명 첫 낱말 — "어플라이드"·"Applied")과 그 약칭으로 시작하는 다른 상장사 이름(네이버 자동완성 — "어플라이드 디지털"·
+ * "Applied Optoelectronics").  2026-10-05 오너 지적(AMAT 국내뉴스 3건): 기사 제목은 "어플라이드·베시 …"처럼 약칭을 쓰는데 약칭을 인정하지
+ * 않아 놓쳤고, 반대로 해외 쪽은 첫 낱말을 대소문자 구분 없이 인정해 "Applied Digital"·"penalties applied"(F1) 기사가 들어왔다.
+ */
+export interface ShortAlias {
+  /** 약칭 — 회사명 첫 낱말 */
+  alias: string;
+  /** 회사명에서 약칭 다음 낱말("머티어리얼즈"·"Materials") — 붙여 쓰거나 표기가 조금 달라도("머티리얼즈") 자기 이름으로 본다 */
+  next?: string | null;
+  /** 같은 약칭으로 시작하는 다른 종목의 전체 이름 */
+  rivals: string[];
+}
+
+/** 약칭 바로 뒤가 다른 종목 이름의 다음 낱말인지 — 낱말 앞 2글자(한글)·4글자(영문)로 비교해 붙여쓰기·표기 차이를 견딘다 */
+function stemOf(word: string): string {
+  const w = word.trim();
+  return /^[가-힣]/.test(w) ? w.slice(0, 2) : w.slice(0, 4);
+}
+function startsWithStem(rest: string, word: string | null | undefined): boolean {
+  if (!word) return false;
+  const s = stemOf(word);
+  return s.length > 0 && rest.toLowerCase().startsWith(s.toLowerCase());
+}
+function rivalNextWords(a: ShortAlias): string[] {
+  const own = a.next ? stemOf(a.next).toLowerCase() : null;
+  const out: string[] = [];
+  for (const r of a.rivals) {
+    if (!r.toLowerCase().startsWith(a.alias.toLowerCase())) continue;
+    const next = r.slice(a.alias.length).trim().split(/\s+/)[0] ?? "";
+    // 약칭과 이름이 똑같은 종목("어플라이드" 일본 상장사)·같은 회사의 다른 시장 상장(홍콩 "어플라이드 머티어리얼즈")은 구분 근거가 아니다
+    if (!next || (own && stemOf(next).toLowerCase() === own)) continue;
+    out.push(next);
+  }
+  return out;
+}
+
+/**
+ * 제목에서 약칭이 이 회사를 가리키는 자리가 있는지. 한글은 낱말 경계(조사 허용) 또는 바로 뒤가 자기 이름 다음 낱말("어플라이드머티리얼즈"),
+ * 영문은 낱말 경계 + 첫 글자 대문자(일반 낱말 "applied" 제외). 어느 쪽이든 바로 뒤(공백 허용)가 다른 종목 이름의 다음 낱말이면 그 자리는 버린다.
+ */
+export function shortAliasHit(text: string, a: ShortAlias): boolean {
+  const ko = HANGUL.test(a.alias);
+  const rivals = rivalNextWords(a);
+  const lower = text.toLowerCase();
+  const alias = a.alias.toLowerCase();
+  let from = 0;
+  for (;;) {
+    const i = ko ? text.indexOf(a.alias, from) : lower.indexOf(alias, from);
+    if (i < 0) return false;
+    from = i + 1;
+    const before = text[i - 1] ?? "";
+    const after = text.slice(i + a.alias.length);
+    const rest = after.replace(/^\s+/, "");
+    if (ko) {
+      if (HANGUL.test(before)) continue;
+      const bounded = !HANGUL.test(after[0] ?? "") || PARTICLE.test(after) || startsWithStem(after, a.next);
+      if (!bounded) continue;
+    } else {
+      if (/[A-Za-z0-9]/.test(before) || /^[A-Za-z0-9]/.test(after)) continue;
+      if (!/[A-Z]/.test(text[i])) continue;
+    }
+    if (rivals.some((w) => startsWithStem(rest, w))) continue;
+    return true;
+  }
+}
+
 /** 국내(한국어) 기사 판정 — names: 회사명·통칭·제품명, context: 그룹 통칭 조건부 별칭 */
 export function judgeDomesticTitle(
   title: string,
   names: string[],
   context?: { alias: string; context: RegExp } | null,
+  short?: ShortAlias | null,
 ): Verdict {
   let hit = names.find((n) => koTitleHit(title, n));
   if (!hit && context && koTitleHit(title, context.alias) && context.context.test(title)) hit = context.alias;
+  if (!hit && short && shortAliasHit(title, short)) hit = short.alias;
   if (!hit) return { keep: false, reason: "제목에 회사명 없음" };
   if (RIVAL_PAIR.test(title)) return { keep: false, reason: "경쟁 제품 나란히(업계 기사)" };
   if (ROUNDUP_KO.test(title)) return { keep: false, reason: "시황·마감 기사" };
@@ -132,9 +207,15 @@ export function enTitleHit(text: string, word: string, caseSensitive = false): b
 }
 const squash = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "");
 
-/** 해외(영문) 기사 판정 — names: 정리된 회사명·고유한 첫 낱말, ticker: 티커(대소문자 구분) */
-export function judgeOverseasTitle(title: string, names: string[], ticker?: string | null): Verdict {
-  const hit = names.find((n) => enTitleHit(title, n)) ?? (ticker && enTitleHit(title, ticker, true) ? ticker : undefined);
+/**
+ * 해외(영문) 기사 판정 — names: 정리된 회사명, ticker: 티커(대소문자 구분), short: 고유한 첫 낱말(대문자로 시작할 때만, 같은 낱말로 시작하는
+ * 다른 상장사 이름이 이어지면 제외 — 2026-10-05 "Applied Digital"·"penalties applied" 가 AMAT 기사로 들어오던 문제)
+ */
+export function judgeOverseasTitle(title: string, names: string[], ticker?: string | null, short?: ShortAlias | null): Verdict {
+  const hit =
+    names.find((n) => enTitleHit(title, n)) ??
+    (ticker && enTitleHit(title, ticker, true) ? ticker : undefined) ??
+    (short && shortAliasHit(title, short) ? short.alias : undefined);
   if (!hit) return { keep: false, reason: "제목에 회사명 없음" };
   for (const n of names) {
     const ex = HOMONYM_EXCLUDE[n.toLowerCase()];

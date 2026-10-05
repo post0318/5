@@ -5,7 +5,7 @@ import type { MarketId } from "./types";
 import { translateTitles, type TranslateOptions } from "../news/translate";
 import { fetchGoogleNewsRss, googleNewsUrl } from "../news/googleNews";
 import { resolveCorpCode } from "./kr/corpcode";
-import { KO_PRODUCT_ALIASES, KR_COMPANY_ALIASES, KR_CONTEXT_ALIASES, judgeDomesticTitle, judgeOverseasTitle, koAcronymName, koTitleHit } from "./news-rules";
+import { KO_PRODUCT_ALIASES, KR_COMPANY_ALIASES, KR_CONTEXT_ALIASES, judgeDomesticTitle, judgeOverseasTitle, koAcronymName, koTitleHit, enTitleHit, shortAliasHit, type ShortAlias, type Verdict } from "./news-rules";
 
 /**
  * 종목뉴스(선택 번역·요약용) — 한국·미국·일본.
@@ -555,6 +555,47 @@ async function resolveNaverWorldStock(
   return { code: hit.reutersCode, koreanName: hit.name?.trim() || null };
 }
 
+/**
+ * 약칭(회사명 첫 낱말)으로 시작하는 다른 종목 이름 — 같은 자동완성 API 를 약칭으로 부른다("어플라이드" → 어플라이드 디지털·옵토일렉트로닉스·
+ * 인더스트리얼 테크놀로지 …, "Applied" → Applied Digital Corporation …). 판정에서 "어플라이드 디지털" 을 AMAT 기사로 잡지 않게 쓴다.
+ * 목록을 손으로 두지 않아 유니버스에 어떤 종목이 들어와도 같은 규칙이 돈다. 실패하면 빈 목록(약칭 판정은 대소문자·경계만으로).
+ */
+async function resolveNaverNameRivals(prefix: string, symbol: string): Promise<string[]> {
+  let res: { items?: NaverAcItem[] };
+  try {
+    res = await fetchJson<{ items?: NaverAcItem[] }>(
+      `https://ac.stock.naver.com/ac?q=${encodeURIComponent(prefix)}&target=stock`,
+      { headers: { "user-agent": NAVER_UA }, revalidate: 86400 },
+    );
+  } catch {
+    return [];
+  }
+  const p = prefix.toLowerCase();
+  return (res.items ?? [])
+    .filter((i) => i.code?.toUpperCase() !== symbol.toUpperCase())
+    .map((i) => i.name?.trim() ?? "")
+    .filter((n) => n.toLowerCase().startsWith(p));
+}
+
+/**
+ * 미국 종목 한글 약칭 — 네이버 한글명이 두 낱말 이상이고 첫 낱말이 한글 2자 이상이며, 영문명 첫 낱말이 흔한 말(Global·American·Taiwan 등)이
+ * 아니고 4자 이상일 때만 그 첫 낱말("어플라이드 머티어리얼즈" → "어플라이드", "마이크론 테크놀로지" → "마이크론"). "램 리서치"(1자)·
+ * "아메리칸 익스프레스"(흔한 말)는 약칭을 두지 않는다.
+ */
+function koShortAlias(koName: string, enName: string): { alias: string; next: string } | null {
+  const words = koName.trim().split(/\s+/);
+  if (words.length < 2 || !/^[가-힣]{2,}$/.test(words[0])) return null;
+  const en = normalizeForMatch(enName.split(/\s+/)[0] ?? "");
+  if (en.length < 4 || GENERIC_NAME_WORDS.has(en)) return null;
+  return { alias: words[0], next: words[1] };
+}
+
+/** 티커로도 국내 검색할지 — 3자 이상 영문만(1~2자 "V"·"BE"·"MU" 는 검색 결과가 회사와 무관한 기사로 채워진다), 한글명·영문명에 이미 들어 있으면 생략 */
+function tickerQueryOk(symbol: string, names: string[]): boolean {
+  if (!/^[A-Z]{3,}$/.test(symbol)) return false;
+  return !names.some((n) => new RegExp(`(^|[^A-Za-z])${symbol}([^A-Za-z]|$)`, "i").test(n));
+}
+
 interface NaverNewsItem {
   title: string;
   originallink: string;
@@ -586,6 +627,11 @@ async function fetchKrNewsBySearch(
      * 광고 많은 군소 매체도 함께 걸러진다.
      */
     requireNaverLink?: boolean;
+    /**
+     * 한 페이지(display 건)가 꽉 찼고 마지막 기사도 기간 안이면 다음 페이지를 받는다(최대 이 수만큼, 기본 1 = 다음 페이지 없음).
+     * 기사가 많은 종목은 100건이 1~2일치뿐이다(실측 2026-10-05: "마이크론" 100건이 전부 1주일 안).
+     */
+    maxPages?: number;
   },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
   const requireWhitelist = opts?.requireWhitelist ?? true;
@@ -593,21 +639,29 @@ async function fetchKrNewsBySearch(
   const keySecret = process.env.NAVER_APIHUB_KEY_SECRET;
   if (!keyId || !keySecret) return [];
   const display = opts?.display ?? 20;
-  let res: NaverNewsResponse;
-  try {
-    res = await fetchJson<NaverNewsResponse>(
-      `https://naverapihub.apigw.ntruss.com/search/v1/news?query=${encodeURIComponent(query)}&display=${display}&sort=date`,
-      {
-        headers: { "X-NCP-APIGW-API-KEY-ID": keyId, "X-NCP-APIGW-API-KEY": keySecret },
-        revalidate: 600,
-      },
-    );
-  } catch {
-    return [];
-  }
   const cutoff = Date.now() - (opts?.cutoffMs ?? THREE_MONTHS_MS);
+  const all: NaverNewsItem[] = [];
+  for (let page = 0; page < (opts?.maxPages ?? 1); page++) {
+    let res: NaverNewsResponse;
+    try {
+      res = await fetchJson<NaverNewsResponse>(
+        `https://naverapihub.apigw.ntruss.com/search/v1/news?query=${encodeURIComponent(query)}&display=${display}&start=${1 + page * display}&sort=date`,
+        {
+          headers: { "X-NCP-APIGW-API-KEY-ID": keyId, "X-NCP-APIGW-API-KEY": keySecret },
+          revalidate: 600,
+        },
+      );
+    } catch {
+      if (page === 0) return [];
+      break;
+    }
+    const got = res.items ?? [];
+    all.push(...got);
+    const last = got.length ? Date.parse(got[got.length - 1].pubDate) : NaN;
+    if (got.length < display || !(last >= cutoff)) break;
+  }
   const items: Omit<NewsItem, "titleKo">[] = [];
-  for (const n of res.items ?? []) {
+  for (const n of all) {
     // 화이트리스트 판정은 항상 원문(발행사) 링크 기준 — link 는 네이버뉴스
     // 재게재본일 수 있어 도메인이 news.naver.com 이라 판정에 쓰면 안 됨.
     const origLink = n.originallink || n.link;
@@ -928,6 +982,58 @@ function krShortName(symbol: string): string | null {
   }
 }
 
+/**
+ * 미국 종목 국내 기사 중 제목에 약칭("어플라이드"·"블룸"·"델타")이나 티커("AMAT"·"WDC")만 있는 것 — 같은 말을 다른 대상이 쓰는 일이 잦다
+ * (2026-10-05 표본: "피크민 블룸" 게임, "UFC 델타 센터", "세계디자인수도(WDC)", "웨스턴 스타일" 패션, 비상장사 "어플라이드 인튜이션").
+ *  - 제목·요약에 회사 전체 이름(한글명·약칭+다음 낱말·영문명)이나 티커가 같이 있으면 확인된 것으로 남긴다.
+ *  - 확인 안 된 것은, 이번 묶음에서 그 약칭(티커)으로 잡힌 기사의 절반 이상이 확인되고 확인 건수가 3건 이상일 때만 남긴다 — 그 말이 국내 기사에서
+ *    이 회사를 가리키는 게 보통인 경우("마이크론"). 그래도 요약에 "어플라이드 인튜이션(Applied Intuition)"처럼 영문 첫 낱말로 시작하는 다른
+ *    이름이 괄호로 붙어 있으면 뺀다.
+ */
+function confirmWeakDomesticHits(
+  dom: { it: RawNewsItem; v: Verdict }[],
+  n: { koNames: string[]; koAlias: ShortAlias | null; enName: string; enFirst: string | null; ticker: string | null },
+): void {
+  const squashKo = (s: string) => s.replace(/\s+/g, "");
+  const kindOf = (v: Verdict): "alias" | "ticker" | null => {
+    if (!v.keep) return null;
+    const hit = v.reason.replace(/^제목에 /, "");
+    if ((n.koAlias && hit === n.koAlias.alias) || (n.enFirst && hit === n.enFirst)) return "alias";
+    if (n.ticker && hit === n.ticker) return "ticker";
+    return null;
+  };
+  const fullName = (text: string) =>
+    n.koNames.some((k) => squashKo(text).includes(squashKo(k))) ||
+    (!!n.koAlias?.next && new RegExp(`${n.koAlias.alias}\\s?${n.koAlias.next.slice(0, 2)}`).test(text)) ||
+    enTitleHit(text, n.enName);
+  const confirmed = (kind: "alias" | "ticker", text: string) =>
+    fullName(text) ||
+    (kind === "alias"
+      ? !!n.ticker && enTitleHit(text, n.ticker, true)
+      : (!!n.koAlias && shortAliasHit(text, n.koAlias)) || (!!n.enFirst && shortAliasHit(text, { alias: n.enFirst, rivals: [] })));
+  // "어플라이드 인튜이션(Applied Intuition)" — 영문 첫 낱말로 시작하지만 회사명·티커가 아닌 괄호 속 이름
+  const otherEntity = (text: string) =>
+    !!n.enFirst &&
+    [...text.matchAll(/\(([A-Za-z][^()]*)\)/g)].some(
+      (m) => enTitleHit(m[1], n.enFirst!) && !enTitleHit(m[1], n.enName) && !(n.ticker && enTitleHit(m[1], n.ticker, true)),
+    );
+  const weak = dom
+    .map((d) => ({ d, kind: kindOf(d.v) }))
+    .filter((w): w is { d: (typeof dom)[number]; kind: "alias" | "ticker" } => !!w.kind)
+    .map((w) => ({ ...w, ok: confirmed(w.kind, `${w.d.it.title} ${w.d.it.excerpt ?? ""}`) }));
+  for (const kind of ["alias", "ticker"] as const) {
+    const group = weak.filter((w) => w.kind === kind);
+    const ok = group.filter((w) => w.ok).length;
+    const usual = ok >= 3 && ok / group.length >= 0.5;
+    for (const w of group) {
+      const text = `${w.d.it.title} ${w.d.it.excerpt ?? ""}`;
+      if (w.ok) w.d.v = { keep: true, reason: `${w.d.v.reason}(요약에서 회사명 확인)` };
+      else if (usual && !otherEntity(text)) w.d.v = { keep: true, reason: `${w.d.v.reason}(이 약칭 기사 ${ok}/${group.length} 확인)` };
+      else w.d.v = { keep: false, reason: `${kind === "alias" ? "약칭" : "티커"}만 있고 요약에 회사명 없음` };
+    }
+  }
+}
+
 type JudgeLog = { side: "domestic" | "overseas"; item: RawNewsItem; tagged: boolean; keep: boolean; reason: string };
 
 /**
@@ -944,10 +1050,20 @@ export function judgeStockNews(a: {
   domesticRaw: RawNewsItem[];
   overseasRaw: RawNewsItem[];
   taggedUrls: Set<string>;
+  /** 미국 종목 — 영문 첫 낱말로 시작하는 다른 종목 이름(네이버 자동완성) */
+  enRivals?: string[];
+  /** 미국 종목 — 한글 약칭과 그 약칭으로 시작하는 다른 종목 이름 */
+  koAlias?: ShortAlias | null;
+  /** 해외 기사 중 영문 첫 낱말 구글 검색에서만 나온 것(티커·전체 이름 검색에는 없던 것) */
+  firstWordOnlyUrls?: Set<string>;
 }): { domestic: RawNewsItem[]; overseas: RawNewsItem[]; log: JudgeLog[] } {
-  // 영문 이름: 정리된 회사명 + 고유한 첫 낱말(티커는 대소문자 구분으로 따로)
+  // 영문 이름: 정리된 회사명(대소문자 무관) + 고유한 첫 낱말(대문자로 시작할 때만·다른 종목 이름이 이어지면 제외), 티커는 대소문자 구분으로 따로
   const first = distinctiveFirstWord(a.enShortName);
-  const enNames = [a.enShortName, ...(first && first !== a.enShortName ? [first] : [])];
+  const enNames = [a.enShortName];
+  const enShort: ShortAlias | null =
+    first && first !== a.enShortName
+      ? { alias: first, next: a.enShortName.split(/\s+/)[1] ?? null, rivals: a.enRivals ?? [] }
+      : null;
   const enTicker = a.isKr ? null : a.symbol;
   // 한글 이름: 한국 종목은 법인명(㈜ 뗌)·통칭, 미국 종목은 한글명·대표 제품
   // 한국 종목은 DART 기업개황 정식명("에스케이하이닉스(주)")과 상장사 목록 약칭("SK하이닉스")이 다르다 — 기사 제목은 약칭을 쓴다(2026-10-04 실측:
@@ -957,20 +1073,23 @@ export function judgeStockNews(a: {
   const koKeys = a.isKr
     ? [...new Set([a.koShort, formal, koAcronymName(formal), a.koShort ? koAcronymName(a.koShort) : null].filter((x): x is string => !!x))]
     : [a.koBase];
+  // 미국 종목은 붙여 쓴 한글명("어플라이드머티어리얼즈")도 인정
   const koNames = a.isKr
     ? [...new Set(koKeys.flatMap((k) => KR_COMPANY_ALIASES[k] ?? [k]))]
-    : [a.koBase, ...(KO_PRODUCT_ALIASES[a.koBase] ?? [])];
+    : [...new Set([a.koBase, a.koBase.replace(/\s+/g, ""), ...(KO_PRODUCT_ALIASES[a.koBase] ?? [])])];
   const koContext = a.isKr ? (koKeys.map((k) => KR_CONTEXT_ALIASES[k]).find(Boolean) ?? null) : null;
+  const koAlias = a.isKr ? null : (a.koAlias ?? null);
   const judgeDom = (it: RawNewsItem) => {
-    const v = judgeDomesticTitle(it.title, koNames, koContext);
-    // 미국 종목 국내 기사는 영문 회사명·티커로 쓴 제목도 인정
+    const v = judgeDomesticTitle(it.title, koNames, koContext, koAlias);
+    // 미국 종목 국내 기사는 영문 회사명·약칭·티커로 쓴 제목도 인정
     if (!v.keep && v.reason === "제목에 회사명 없음" && !a.isKr) {
-      const en = judgeOverseasTitle(it.title, enNames, enTicker);
+      const en = judgeOverseasTitle(it.title, enNames, enTicker, enShort);
       if (en.keep) return en;
     }
     return v;
   };
   const dom = a.domesticRaw.map((it) => ({ it, v: judgeDom(it) }));
+  if (!a.isKr) confirmWeakDomesticHits(dom, { koNames, koAlias, enName: a.enShortName, enFirst: enShort?.alias ?? null, ticker: enTicker });
   // 기사가 적은 종목(제목에 회사명이 드문 중소형주) — 요약에 회사명이 있는 네이버 태깅 기사로 MIN_DOMESTIC 건까지 보충(최신순)
   let kept = dom.filter((d) => d.v.keep).length;
   for (const d of dom) {
@@ -983,7 +1102,17 @@ export function judgeStockNews(a: {
       kept++;
     }
   }
-  const ovs = a.overseasRaw.map((it) => ({ it, v: judgeOverseasTitle(it.title, enNames, enTicker) }));
+  // 영문 첫 낱말이 흔한 낱말이면("applied"·"bloom"·"western"·"intuitive" — 이번 해외 기사 제목에 소문자로 쓰인 적이 있으면 흔한 낱말로 본다)
+  // 그 낱말로만 검색한 구글 결과(firstWordOnlyUrls)는 회사 전체 이름이나 티커가 있어야 남긴다. 2026-10-05 표본: "Applied Math Professor",
+  // "Western Michigan 20-17 Buffalo", "Orlando Bloom", "Intuitive eating" 이 회사 기사로 들어왔다. 티커 검색(야후)·전체 이름 검색 결과는 그대로.
+  const firstWordCommon =
+    !!enShort && a.overseasRaw.some((it) => new RegExp(`(^|[^A-Za-z])${enShort.alias.toLowerCase()}(?![A-Za-z])`).test(it.title));
+  const ovs = a.overseasRaw.map((it) => {
+    const v = judgeOverseasTitle(it.title, enNames, enTicker, enShort);
+    if (v.keep && firstWordCommon && enShort && v.reason === `제목에 ${enShort.alias}` && a.firstWordOnlyUrls?.has(it.url))
+      return { it, v: { keep: false, reason: "흔한 낱말(첫 낱말 검색 결과) — 회사 전체 이름·티커 없음" } };
+    return { it, v };
+  });
   return {
     domestic: dom.filter((d) => d.v.keep).map((d) => d.it),
     overseas: ovs.filter((d) => d.v.keep).map((d) => d.it),
@@ -1076,8 +1205,23 @@ export async function fetchStockNewsBySide(
   // 얻어 검색 폴백의 질의어로 쓴다("NETFLIX INC" 로는 국내 기사가 안 잡힘).
   const naver = isKr ? null : await resolveNaverWorldStock(symbol);
   const searchQuery = isKr ? query : (naver?.koreanName ?? domesticQuery(market, query));
+  // 미국·일본 종목 국내 검색은 질의 여러 개를 합친다(2026-10-05 오너 지적 — AMAT 국내뉴스 3건): 네이버 한글명 하나("어플라이드 머티어리얼즈")로
+  // 30건만 받으면 표기가 다른 기사("머티리얼즈")·약칭 기사("어플라이드·베시 …")·티커 기사("AMAT 'EPIC 센터'…")를 못 받고, 상위 30건이 ETF·시황
+  // 기사로 채워졌다(실측 1주일: 한글명 81건·다른 표기 48건·티커 17건). 한글명 + 한글 약칭 + 티커(3자 이상), 질의당 100건(검색 API 최대).
+  const enClean = !isKr && companyName?.trim() ? cleanEdgarName(companyName.trim()) : null;
+  const koAliasBase = enClean ? koShortAlias(searchQuery, enClean) : null;
+  const enFirst = enClean ? distinctiveFirstWord(enClean) : null;
+  const domesticQueries = isKr
+    ? []
+    : [
+        ...new Set(
+          [searchQuery, koAliasBase?.alias, tickerQueryOk(symbol, [searchQuery, enClean ?? query]) ? symbol : null].filter(
+            (q): q is string => !!q,
+          ),
+        ),
+      ];
 
-  const [domesticTagged, domesticSearched, yahooOverseas, googleOverseas, googleOverseasAlt] = await Promise.all([
+  const [domesticTagged, domesticSearched, yahooOverseas, googleOverseas, googleOverseasAlt, koRivals, enRivals] = await Promise.all([
     isKr
       ? fetchKrStockTaggedNews(symbol, { cutoffMs: ONE_WEEK_MS, pageSize: 20, maxPages: 2 })
       : naver
@@ -1092,13 +1236,17 @@ export async function fetchStockNewsBySide(
     // JPM·PLTR 은 0건) 한국어 종목명 검색을 함께 돌려 보완한다. 주가 기사뿐
     // 아니라 사업·콘텐츠 관련 기사까지 나오도록 도메인 화이트리스트는 걸지
     // 않고(오너 지시, 2026-09) 뒤의 LLM 관련성 판정에 맡긴다.
-    isKr
-      ? Promise.resolve([])
-      : fetchKrNewsBySearch(symbol, searchQuery, {
+    Promise.all(
+      domesticQueries.map((q) =>
+        fetchKrNewsBySearch(symbol, q, {
           cutoffMs: ONE_WEEK_MS,
-          display: 30,
+          display: 100,
           requireWhitelist: false,
+          // 한글명·약칭은 2페이지(200건)까지, 티커는 1페이지 — 종목당 갱신 1회 검색 API 최대 5건(무료 한도 하루 25,000건)
+          maxPages: q === symbol ? 1 : 2,
         }),
+      ),
+    ).then((lists) => lists.flat()),
     fetchUsJpNews(market, symbol, yahooQuery(market, symbol, oQuery), {
       cutoffMs: ONE_WEEK_MS,
       newsCount: 30,
@@ -1122,6 +1270,8 @@ export async function fetchStockNewsBySide(
           }).catch(() => [])
         : Promise.resolve([] as RawNewsItem[]);
     })(),
+    koAliasBase ? resolveNaverNameRivals(koAliasBase.alias, symbol) : Promise.resolve([] as string[]),
+    enFirst && enClean && enFirst !== enClean ? resolveNaverNameRivals(enFirst, symbol) : Promise.resolve([] as string[]),
   ]);
 
   // 네이버가 직접 태깅한 기사는 관련성이 이미 보장된 소스 — LLM 미사용 폴백에서
@@ -1143,6 +1293,8 @@ export async function fetchStockNewsBySide(
     seenUrls.add(it.url);
     return true;
   });
+  const mainUrls = new Set([...yahooOverseas, ...googleOverseas].map((it) => it.url));
+  const firstWordOnlyUrls = new Set(googleOverseasAlt.map((it) => it.url).filter((u) => !mainUrls.has(u)));
 
   const name = companyName?.trim();
   let domesticSafe: RawNewsItem[];
@@ -1164,6 +1316,9 @@ export async function fetchStockNewsBySide(
       domesticRaw,
       overseasRaw,
       taggedUrls,
+      enRivals,
+      koAlias: koAliasBase ? { ...koAliasBase, rivals: koRivals } : null,
+      firstWordOnlyUrls,
     });
     domesticSafe = j.domestic;
     overseasSafe = j.overseas;
