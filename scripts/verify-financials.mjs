@@ -9678,6 +9678,8 @@ async function verifyUs(sym) {
 const KR_CORP = new Map(JSON.parse(readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8")).map((r) => [r.s, r.c]));
 const dartCache = new Map();
 // DART·KRX 디스크 캐시(오너 제안 2026-10-05) — 열쇠 = 보고서 최신 접수번호(verify-kr/dart.mjs). 상한 KR_CACHE_MAX_GB(기본 5), 90일 안 쓴 파일 삭제
+// 한국 검증은 DART 원자료가 기준 — 키가 없으면 종목마다 조회 실패를 쌓지 않고 처음에 멈춘다(2026-10-05 — 운영 키와 같은 키를 막아 둔 동안)
+if (MARKET === "kr" && !String(env.DART_API_KEY ?? "").trim()) die("DART 키 없음 — 검증 중단(.env.local DART_API_KEY 에 검증 전용 키를 넣을 것, 운영 키 금지)");
 const KR_CACHE = MARKET === "kr" ? makeDiskCache(pathResolve(env.KR_VERIFY_CACHE_DIR || "reports/.dart-cache"), { maxBytes: Number(env.KR_CACHE_MAX_GB ?? 5) * 1024 ** 3, maxIdleDays: 90 }) : null;
 if (KR_CACHE) {
   KR_CACHE.cleanup();
