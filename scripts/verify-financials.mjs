@@ -3752,6 +3752,11 @@ async function verifyUs(sym) {
   const natRev = natCur ? natAnnual([["us-gaap", "Revenues"], ["us-gaap", "RevenueFromContractWithCustomerExcludingAssessedTax"], ["ifrs-full", "Revenue"], ["ifrs-full", "RevenueFromContractsWithCustomers"]], natCur) : new Map();
   const natNi = natCur ? natAnnual([["us-gaap", "NetIncomeLoss"], ["ifrs-full", "ProfitLossAttributableToOwnersOfParent"]], natCur) : new Map();
   const natEps = natCur ? natAnnual([["us-gaap", "EarningsPerShareDiluted"], ["ifrs-full", "DilutedEarningsLossPerShare"]], natCur + "/shares") : new Map();
+  // E층 원통화 정합성용(희석 우선, 없으면 기본) — ASML us-gaap EUR, SPOT·TSM ifrs-full. SPOT 은 희석 분자를 따로 공시(희석 효과 포함 지배주주 순이익)
+  const natEpsB = natCur ? natAnnual([["us-gaap", "EarningsPerShareBasic"], ["ifrs-full", "BasicEarningsLossPerShare"]], natCur + "/shares") : new Map();
+  const natWDil = natCur ? natAnnual([["us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding"], ["ifrs-full", "AdjustedWeightedAverageShares"]], "shares") : new Map();
+  const natWBas = natCur ? natAnnual([["us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic"], ["ifrs-full", "WeightedAverageShares"]], "shares") : new Map();
+  const natNiDil = natCur ? natAnnual([["ifrs-full", "ProfitLossAttributableToOrdinaryEquityHoldersOfParentEntityIncludingDilutiveEffects"]], natCur) : new Map();
   // 손익 줄 연도 열 대조(재감사 N1, 2026-10-02 — 앱 데이터에서 사업연도 항목이 빠져도 화면 연도·LTM 이 빈칸이 되는 것을 잡는다)
   const PT_TAGS = [["us-gaap", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"], ["us-gaap", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"], ["ifrs-full", "ProfitLossBeforeTax"]];
   const natPt = natCur ? natAnnual(PT_TAGS, natCur) : new Map();
@@ -3793,6 +3798,12 @@ async function verifyUs(sym) {
         put(natPt, read("ifrs-full", "ProfitLossBeforeTax", cu) ?? read("us-gaap", PT_TAGS[0][1], cu) ?? read("us-gaap", PT_TAGS[1][1], cu));
         put(natTax, read("ifrs-full", "IncomeTaxExpenseContinuingOperations", cu) ?? read("us-gaap", "IncomeTaxExpenseBenefit", cu));
         put(natRd, read("ifrs-full", "ResearchAndDevelopmentExpense", cu) ?? read("us-gaap", "ResearchAndDevelopmentExpense", cu));
+        // E층 원통화 정합성(희석·기본 EPS × 가중평균 주식수 ≈ 순이익) — 주식수 단위는 통화가 붙지 않은 shares(EPS 단위 "TWD per share" 제외)
+        const sh = new RegExp(`^(?!.*(${natCur}|per)).*shares?$`, "i");
+        put(natEpsB, read("ifrs-full", "BasicEarningsLossPerShare", cu) ?? read("us-gaap", "EarningsPerShareBasic", cu));
+        put(natWDil, read("ifrs-full", "AdjustedWeightedAverageShares", sh) ?? read("us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding", sh));
+        put(natWBas, read("ifrs-full", "WeightedAverageShares", sh) ?? read("us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic", sh));
+        put(natNiDil, read("ifrs-full", "ProfitLossAttributableToOrdinaryEquityHoldersOfParentEntityIncludingDilutiveEffects", cu));
       } catch (e) {
         hardErrors.push(`원통화 인스턴스 판독 실패(${end}): ${String(e).slice(0, 50)}`);
       }
@@ -4992,7 +5003,26 @@ async function verifyUs(sym) {
     }
 
     // ── E. 공시 내부 정합성 (공시 EPS × 가중평균 ≈ 보통주 귀속 순이익)
-    if (isFy && foreign) add("E", "공시 EPS × 가중평균 ≈ 보통주 귀속 순이익", c, { status: NA, note: "외화 공시 — 원통화 공시값끼리의 정합성은 미검사" });
+    if (isFy && foreign) {
+      // 외화 공시(ASML·SPOT·TSM) — 같은 공시의 원통화 EPS·가중평균 주식수·순이익끼리(환산 없음). 오너 2026-10-07: "원자료 데이터가 맞으면
+      // 외화 환산은 공시 기준 환율을 적용하기에 차이가 있을 수 있다" — 환산 USD 차이는 여기서 보지 않는다(USD 는 인포맥스 대조 몫).
+      // 허용 = 아래 미국 경로와 같은 반올림 구간 규칙(순이익·주식수 보고 단위 반 칸, EPS 소수 자릿수 반 칸 — 구간이 겹치면 정합)
+      const n = (m) => atEnd(m, x.date);
+      const niD = n(natNiDil);
+      const tries = [["희석", n(natEps), n(natWDil), niD ?? n(natNi), niD ? "분자 = 희석 효과 포함 지배주주 순이익" : "분자 = 지배주주 순이익"],
+        ["기본", n(natEpsB), n(natWBas), n(natNi), "분자 = 지배주주 순이익"]];
+      const t = tries.find(([, e, w, ni]) => e && e.val !== 0 && w?.val && ni);
+      if (!t) add("E", "공시 EPS × 가중평균 ≈ 보통주 귀속 순이익", c, { status: NA, note: `원통화(${natCur}) 공시 EPS·가중평균 주식수·지배주주 순이익 중 없는 값이 있음` });
+      else {
+        const [kind, e, w, ni, numNote] = t;
+        const eps = e.val, epsUnit = 10 ** -Math.max(2, (String(eps).split(".")[1] ?? "").length);
+        const uN = secUnitAny(ni.val), uW = secUnitAny(w.val);
+        const cs = [(ni.val - uN / 2) / (w.val - uW / 2), (ni.val - uN / 2) / (w.val + uW / 2), (ni.val + uN / 2) / (w.val - uW / 2), (ni.val + uN / 2) / (w.val + uW / 2)];
+        const ok = Math.min(...cs) <= eps + epsUnit / 2 && Math.max(...cs) >= eps - epsUnit / 2;
+        const note = `원통화(${natCur}) ${kind} — 순이익/주식수 ${(ni.val / w.val).toFixed(4)} vs 공시 EPS ${eps} · ${numNote} · 환산 없음`;
+        add("E", "공시 EPS × 가중평균 ≈ 보통주 귀속 순이익", c, { status: ok ? PASS : FAIL, note });
+      }
+    }
     else if (isFy) {
       const e = atEnd(epsP, x.date) ?? null;
       const ie = [...inst].find(([end]) => dayDiff(end, x.date) <= 7)?.[1];
