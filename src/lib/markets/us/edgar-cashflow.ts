@@ -65,6 +65,11 @@ interface Line {
   fallbackCombine?: [string, boolean][];
   /** (구간 총계 − 이 앞의 형제 라인 합)으로 계산되는 잔여 라인 */
   plug?: boolean;
+  /**
+   * 운전자본 하위 잔여 줄 — 회사 공시 운전자본 합계(wcCo) − 이름 있는 하위 줄 합(2026-10-08). 합계를 회사 공시 순변동으로 바꾼 뒤(10-02)
+   * 하위 세 줄 밖 운전자본(선급·미지급·이연수익 등)이 화면 어디에도 없어 하위 줄 합 ≠ 합계(AAPL FY2021 −4,911 vs 세 줄 −441)
+   */
+  wcRest?: boolean;
   /** 감가상각비 — edgar-ev.ts pickDa 규칙(합계 태그 최댓값·무형상각 누락 보정) */
   pickDa?: boolean;
 }
@@ -127,6 +132,7 @@ function getBlocks(isFin: boolean): Block[] {
       { label: "매출채권 증감", concepts: ["IncreaseDecreaseInAccountsReceivable", "IncreaseDecreaseInReceivables", "IncreaseDecreaseInAccountsAndOtherReceivables"], depth: 2, negate: true },
       { label: "재고자산 증감", concepts: ["IncreaseDecreaseInInventories", "IncreaseDecreaseInAirlineRelatedInventory"], depth: 2, negate: true },
       { label: "매입채무 증감", concepts: ["IncreaseDecreaseInAccountsPayable", "IncreaseDecreaseInAccountsPayableTrade", "IncreaseDecreaseInAccountsPayableAndAccruedLiabilities"], depth: 2 },
+      { label: "기타 운전자본 증감", depth: 2, wcRest: true },
       { label: "기타 영업활동", depth: 1, plug: true },
     ],
   },
@@ -443,7 +449,7 @@ export function buildUsCashFlow(
     // 매핑된 형제 라인(플러그 제외, subtotal 제외) 합 — 플러그 계산용
     const resolved: Record<string, Record<string, number | null>> = {};
     for (const line of block.lines) {
-      if (line.kind === "subtotal" || line.plug) continue;
+      if (line.kind === "subtotal" || line.plug || line.wcRest) continue;
       let v: Record<string, number | null>;
       if (line.pickDa) {
         const totals = DA_TOTAL.map((c) => valOf([c]));
@@ -505,12 +511,13 @@ export function buildUsCashFlow(
       resolved[line.label] = v;
     }
 
+    let wcVals: Record<string, number | null> | null = null;
     for (const line of block.lines) {
       let values: Record<string, number | null>;
       if (line.kind === "subtotal") {
         // 다음 depth 라인들 합 (운전자본 변동)
         const kids = block.lines.filter(
-          (l) => l.depth === line.depth + 1 && !l.plug,
+          (l) => l.depth === line.depth + 1 && !l.plug && !l.wcRest,
         );
         values = {};
         for (const lbl of labels) {
@@ -525,6 +532,20 @@ export function buildUsCashFlow(
         if (labels.includes(LTM) && values[LTM] == null) {
           const why = kids.some((k) => ltmGap(resolved[k.label])) ? GAP_NOTE : kids.map((k) => ltmWhy.get(resolved[k.label])).find(Boolean);
           if (why) ltmWhy.set(values, why);
+        }
+        wcVals = values;
+      } else if (line.wcRest) {
+        // 기타 운전자본 증감 = 회사 공시 운전자본 합계 − 이름 있는 하위 줄 합. 합계가 하위 줄 합에서 나온 칸(wcCo 없음)·이름 있는 하위 줄이 모두
+        // 빈 칸(KO 분기 요약형 — 한 줄만 공시)·차가 0 인 칸은 빈칸. LTM 은 이름 있는 하위 줄이 LTM 구성 분기를 못 채우면 빈칸
+        const named = block.lines.filter((l) => l.depth === line.depth && !l.plug && !l.wcRest && l.kind !== "subtotal");
+        values = {};
+        for (const lbl of labels) {
+          const tot = wcVals?.[lbl] ?? null;
+          const xs = named.map((k) => resolved[k.label]?.[lbl] ?? null);
+          const gap = lbl === LTM && named.some((k) => ltmGap(resolved[k.label]));
+          if (wcCo[lbl] == null || tot == null || gap || xs.every((x) => x == null)) { values[lbl] = null; continue; }
+          const r = Math.round(tot - xs.reduce((t: number, x) => t + (x ?? 0), 0));
+          values[lbl] = r === 0 ? null : r;
         }
       } else if (line.plug) {
         values = {};
@@ -553,9 +574,9 @@ export function buildUsCashFlow(
           if (hasWc) mapped += wcCo[lbl]!;
           else
             for (const l of block.lines) {
-              if (l.depth === 2 && !l.plug) mapped += resolved[l.label]?.[lbl] ?? 0;
+              if (l.depth === 2 && !l.plug && !l.wcRest) mapped += resolved[l.label]?.[lbl] ?? 0;
             }
-          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && (l.depth === 1 || (l.depth === 2 && !hasWc)) && ltmGap(resolved[l.label]));
+          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && !l.wcRest && (l.depth === 1 || (l.depth === 2 && !hasWc)) && ltmGap(resolved[l.label]));
           values[lbl] = gap ? null : Math.round(tot - mapped);
           if (gap) ltmWhy.set(values, GAP_NOTE);
         }
