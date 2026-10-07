@@ -2169,6 +2169,9 @@ const EXT_NONOP_RE = /\bnon-?operating\b|^\s*other\s*(\(\s*)?(income|expense|gai
 const GENERAL_COST_ID = /_(SellingGeneralAndAdministrative|CostOf|OperatingExpenses$|CostsAndExpenses|GeneralAndAdministrativeExpense$|ResearchAndDevelopmentExpense)/;
 const OTHER_OP_ID = /_(OtherOperatingIncomeExpenseNet|OtherCostAndExpenseOperating|OtherOperatingCostAndExpense|OtherOperatingIncome|OtherExpenses)$/;
 const OP_CHARGE_RE = /Restructur|Impair|Severance|Litigation|Settlement|AcquisitionRelated|BusinessCombination|Merger|Integration|Separation|Divestiture|GainLossOnDisposition|GainLossOnSale|Terminat|other operating charges/i; // other operating charges: KO 본표 줄(구조조정·손상 등 — 앱 일회성비용 규칙과 같은 판정, 2026-09-29)
+/** 라벨의 부정 문맥("~ excluding impairment", "(Excluding Goodwill)") 이후를 떼고 판정(2026-10-08 — PEP FY2025 10-K 가 손상 줄 라벨을
+ * "Impairment of Intangible Assets (Excluding Goodwill)" 로 바꿔 예전 "라벨에 exclu 있으면 제외" 규칙이 손상 줄 자체를 뺐다). 앱 edgar-oneoff NEGATED 와 같은 원칙 */
+const OP_NEGATED = /\b(excluding|excl\.?|exclusive of|other than|before)\b.*$/i;
 const OP_AMORT_RE = /AmortizationOfIntangible|AmortizationOfAcquired|IntangibleAssets?\w*Amortiz|amortization of (acquired |purchased |acquisition-related )?intangible/i;
 /** 금융 부문 표지 — 본표 매출 줄(금융서비스 수익)·제품·서비스 멤버(금융) */
 const FIN_REV_ID_RE = /FinancialServicesRevenue|FinancingRevenue|FinanceAndInterestIncome|FinancialProductsRevenue/i;
@@ -2274,7 +2277,8 @@ async function faceOpincLine(cik, accn, revConcept) {
           if (seen.has(a.to)) continue;
           seen.add(a.to);
           const lab = await nameOf(a.to);
-          const kind = OP_AMORT_RE.test(`${a.to} ${lab}`) ? "amort" : OP_CHARGE_RE.test(`${a.to} ${lab}`) && !/\bexclu/i.test(lab) && !GENERAL_COST_ID.test(a.to) /* 라벨의 "~제외" 문구만 — 개념명 ImpairmentOfIntangibleAssetsExcludingGoodwill(PEP)은 손상 줄 */ ? "charge" : null;
+          const labP = lab.replace(OP_NEGATED, ""); // 라벨의 "~제외" 문구는 떼고 — 개념명 ImpairmentOfIntangibleAssetsExcludingGoodwill(PEP)은 손상 줄
+          const kind = OP_AMORT_RE.test(`${a.to} ${lab}`) ? "amort" : OP_CHARGE_RE.test(`${a.to} ${labP}`) && !GENERAL_COST_ID.test(a.to) ? "charge" : null;
           if (kind) { charges.push({ id: a.to, w: w * a.w, label: lab, kind }); continue; }
           // "기타 영업손익" 합산 줄(오너 결정 2026-09-28 — 앱 edgar-oneoff 와 같은 원칙, 검증기 독립 판독): 주석 계산 구조(Details 역할)에
           // 하위 내역이 있으면 그중 일회성 줄을 charges 로(MCD "Impairment and other charges (gains), net" · CL · MU). 줄 자체는 넘어간다
@@ -2284,7 +2288,7 @@ async function faceOpincLine(cik, accn, revConcept) {
             for (const x of det) {
               if (seen.has(x.to)) continue;
               const l2 = await nameOf(x.to);
-              if (!OP_AMORT_RE.test(`${x.to} ${l2}`) && OP_CHARGE_RE.test(`${x.to} ${l2}`) && !/\bexclu/i.test(l2)) { seen.add(x.to); charges.push({ id: x.to, w: w * a.w * x.w, label: `${l2}(주석 — ${lab} 내역)`, kind: "charge" }); found = true; }
+              if (!OP_AMORT_RE.test(`${x.to} ${l2}`) && OP_CHARGE_RE.test(`${x.to} ${l2.replace(OP_NEGATED, "")}`)) { seen.add(x.to); charges.push({ id: x.to, w: w * a.w * x.w, label: `${l2}(주석 — ${lab} 내역)`, kind: "charge" }); found = true; }
             }
             if (found) continue;
           }
