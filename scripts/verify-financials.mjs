@@ -3842,6 +3842,7 @@ async function verifyUs(sym) {
   const natTax = natCur ? natAnnual([["us-gaap", "IncomeTaxExpenseBenefit"], ["ifrs-full", "IncomeTaxExpenseContinuingOperations"]], natCur) : new Map();
   const natRd = natCur ? natAnnual([["us-gaap", "ResearchAndDevelopmentExpense"], ["ifrs-full", "ResearchAndDevelopmentExpense"]], natCur) : new Map();
   // companyfacts 가 최신 20-F/10-K 를 빠뜨린 경우(TSM 2025) — 원본 XBRL 인스턴스에서 원통화 값을 직접 읽는다
+  const instFyByEnd = new Map(); // 결산일 → { end, fy, filed } — 같은 원본의 dei:DocumentFiscalYearFocus(B층 연도 라벨 대조용)
   if (natCur) {
     const rc2 = sub.filings?.recent ?? {};
     for (let i = 0; i < (rc2.form ?? []).length; i++) {
@@ -3871,6 +3872,8 @@ async function verifyUs(sym) {
         };
         const cu = new RegExp(natCur, "i");
         const put = (map, e) => { if (e && !atEnd(map, end)) map.set(end, e); };
+        const fyF = /<dei:DocumentFiscalYearFocus\b[^>]*>\s*(\d{4})\s*</.exec(xml)?.[1];
+        if (fyF) instFyByEnd.set(end, { end, fy: Number(fyF), filed: rc2.filingDate[i], how: `${rc2.form[i]} 원본 dei:DocumentFiscalYearFocus` });
         put(natRev, read("ifrs-full", "Revenue", cu) ?? read("ifrs-full", "RevenueFromContractsWithCustomers", cu) ?? read("us-gaap", "Revenues", cu));
         put(natNi, read("ifrs-full", "ProfitLossAttributableToOwnersOfParent", cu) ?? read("us-gaap", "NetIncomeLoss", cu));
         put(natEps, read("ifrs-full", "DilutedEarningsLossPerShare", cu) ?? read("us-gaap", "EarningsPerShareDiluted", cu));
@@ -4114,18 +4117,31 @@ async function verifyUs(sym) {
     // 연도 라벨의 연도 자체 — SEC 가 붙인 사업연도(fy = DocumentFiscalYearFocus)와 대조(감사: 결산일만 보고 연도는 안 봤다).
     // companyfacts 의 fy 는 "그 공시의" 사업연도라, 각 연간 공시(accn)에서 가장 늦은 결산일(=당기)에만 붙여 쓴다.
     // 52/53주 결산(1월 1~7일 결산)은 SEC fy 가 전년도라 CLAUDE.md fiscalYearOf 규칙과 같은 결과가 나와야 한다.
-    const byAccn = new Map();
+    const byAccn = new Map(), endsByAccn = new Map(); // endsByAccn: 공시 → 실린 연간 기간 결산일들(당기 + 비교 기간)
     for (const ns of ["us-gaap", "ifrs-full"]) for (const con of Object.values(f.facts[ns] ?? {})) for (const arr of Object.values(con.units ?? {})) for (const e of arr) {
       if (e.fp !== "FY" || !/^(10-K|20-F)$/.test(e.form) || !e.start || !e.fy || !e.accn) continue;
       const d = (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
       if (d < 300 || d > 400) continue;
+      if (!endsByAccn.has(e.accn)) endsByAccn.set(e.accn, new Set());
+      endsByAccn.get(e.accn).add(e.end);
       const p = byAccn.get(e.accn);
       if (!p || e.end > p.end) byAccn.set(e.accn, { end: e.end, fy: e.fy, filed: e.filed ?? "" });
     }
     const fyByEnd = new Map(); // 당기 결산일 → { fy, filed } (같은 결산일이면 최신 제출분)
     for (const v of byAccn.values()) { const p = fyByEnd.get(v.end); if (!p || v.filed > p.filed) fyByEnd.set(v.end, v); }
     for (const c of fyCols) {
-      const s = [...fyByEnd].filter(([end]) => dayDiff(end, c.date) <= 7).sort((a, b) => dayDiff(a[0], c.date) - dayDiff(b[0], c.date))[0]?.[1];
+      let s = [...fyByEnd].filter(([end]) => dayDiff(end, c.date) <= 7).sort((a, b) => dayDiff(a[0], c.date) - dayDiff(b[0], c.date))[0]?.[1];
+      // 그 결산일이 당기인 연간 공시가 없을 때(2026-10-07): ① companyfacts 가 빠뜨린 최신 공시 — 원본 인스턴스의 fy(TSM 2025)
+      // ② 분사 전 연도 등 비교 기간으로만 실린 해(CEG 2021·GEV 2022~23·SNDK 2023~24) — 그 기간을 실은 가장 이른 공시의 당기 fy − 경과 연수
+      if (!s) s = [...instFyByEnd.values()].find((v) => dayDiff(v.end, c.date) <= 7) ?? null;
+      if (!s) {
+        const cmp = [...endsByAccn].filter(([a, ends]) => [...ends].some((e0) => dayDiff(e0, c.date) <= 7) && byAccn.get(a)?.end > c.date)
+          .map(([a]) => byAccn.get(a)).sort((x, y) => x.filed.localeCompare(y.filed))[0];
+        if (cmp) {
+          const yrs = Math.round((Date.parse(cmp.end) - Date.parse(c.date)) / (365.25 * 864e5));
+          s = { end: c.date, fy: cmp.fy - yrs, filed: cmp.filed, how: `비교 기간 — ${cmp.filed} 공시(당기 ${cmp.end}, fy ${cmp.fy}) − ${yrs}년` };
+        }
+      }
       const y = Number(/^(\d{4})/.exec(c.label)?.[1]);
       // 1~2월 결산을 "시작 연도"로 부르는 회사(HD·TGT — 2025-02-02 결산 = fiscal 2024)는 앱(결산일 연도)과 1년 어긋난다.
       // 어느 기준으로 라벨을 붙일지 오너 결정 보류(2026-09-24) — 그 관행에 정확히 해당할 때만 검증불가로 두고 나머지 불일치는 실패.
@@ -4133,7 +4149,7 @@ async function verifyUs(sym) {
       const endY = Number(s?.end.slice(0, 4)), endM = Number(s?.end.slice(5, 7)), endD = Number(s?.end.slice(8, 10));
       const startYearNaming = s && endM <= 2 && !(endM === 1 && endD <= 7) && y === endY && s.fy === endY - 1;
       add("B", "연도 라벨 = SEC 공시 사업연도(fy)", c.label, !s ? { status: NA, note: `결산일 ${c.date} 의 SEC 연간 공시 fy 없음` }
-        : y === s.fy ? { status: PASS, note: `결산일 ${s.end} · SEC fy ${s.fy}` }
+        : y === s.fy ? { status: PASS, note: `결산일 ${s.end} · SEC fy ${s.fy}${s.how ? ` (${s.how})` : ""}` }
         : startYearNaming ? { status: NA, note: `보류(오너 결정 대기): 회사는 시작 연도로 부름 — 앱 ${c.label}(결산일 연도) vs SEC fy ${s.fy} (결산일 ${s.end})` }
         : { status: FAIL, note: `앱 라벨 ${c.label} vs SEC fy ${s.fy} (결산일 ${s.end})` });
     }
