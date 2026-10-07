@@ -321,6 +321,27 @@ async function readDimShares(cik, accn, end, filed) {
   }
   return out.map((o) => ({ ...o, filed, accns: new Set([accn]) }));
 }
+
+/**
+ * 클래스 A(상장 클래스) 연간 기본 EPS — EPS 를 클래스 차원(StatementClassOfStockAxis)에만 공시한 회사(V, 2026-10-07). 그 해 10-K 원본에서
+ * 결산일이 같은 300~400일 기간·클래스 A 한 차원의 EarningsPerShareBasic. 검증기 독립 판독(앱 edgar-classfacts.ts 와 코드 공유 안 함)
+ */
+async function readClassABasicEps(cik, accn, end, filed) {
+  const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+  const name = (await secJson(base + "/index.json")).directory.item.map((x) => x.name).find((x) => /_htm\.xml$/i.test(x));
+  if (!name) return null;
+  const xml = await secText(`${base}/${name}`);
+  const ok = new Set();
+  for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
+    const st = /<(?:xbrli:)?startDate>\s*([^<\s]+)/.exec(m[2])?.[1], en = /<(?:xbrli:)?endDate>\s*([^<\s]+)/.exec(m[2])?.[1];
+    if (!st || en !== end || (Date.parse(en) - Date.parse(st)) / 864e5 < 300) continue;
+    const dims = [...m[2].matchAll(/dimension="([^"]+)"[^>]*>([^<]+)</g)].map((d) => [d[1].split(":").pop(), d[2].trim().split(":").pop().replace(/Member$/, "")]);
+    if (dims.length === 1 && dims[0][0] === "StatementClassOfStockAxis" && /^Common(Stock)?ClassA$/i.test(dims[0][1])) ok.add(m[1]);
+  }
+  for (const m of xml.matchAll(/<us-gaap:EarningsPerShareBasic\b([^>]*)>\s*([^<]+?)\s*</g))
+    if (ok.has(/contextRef="([^"]+)"/.exec(m[1])?.[1] ?? "")) return { val: Number(m[2]), how: `클래스 A 기본 EPS(${filed} 10-K 원본 ${name})` };
+  return null;
+}
 /** 공시 원본(인스턴스) — 한 종목 안에서 같은 원본을 여러 대조가 다시 받지 않게 최근 12건만 캐시(SEC 요청 절약) */
 const instCache = new Map();
 function secInstance(url) {
@@ -4620,7 +4641,7 @@ async function verifyUs(sym) {
    */
   // 결산일 주식수 — 차원 없는 유통·발행주식수 태그가 없는 결산일은 그 해 10-K 원본에서 차원 값을 미리 읽는다(readDimShares).
   // 그 해 10-K = 결산일이 같은 연간 사실을 처음 실은 10-K(companyfacts 접수번호 — 제출 목록 recent 는 서식 4 가 많은 회사에서 옛 10-K 가 빠진다)
-  const dimShares = new Map();
+  const dimShares = new Map(), classEpsB = new Map();
   {
     const undim = (d) => ["CommonStockSharesOutstanding", "SharesOutstanding", "CommonStockSharesIssued"].some((t) => (G[t]?.units?.shares ?? []).some((e) => !e.start && /^10-[KQ]/.test(e.form ?? "") && dayDiff(e.end, d) <= 7));
     const firstK = (d) => Object.values(G).flatMap((c) => Object.values(c.units ?? {}).flat()).filter((e) => /^10-K$/.test(e.form ?? "") && e.end && dayDiff(e.end, d) <= 7 && e.accn)
@@ -4631,6 +4652,14 @@ async function verifyUs(sym) {
       if (!k) continue;
       try { dimShares.set(x.date, await readDimShares(cik, k.accn, k.end, k.filed)); }
       catch (e) { hardErrors.push(`결산일 주식수 10-K 원본(${x.date}, ${k.accn}) 판독 실패: ${String(e).slice(0, 80)}`); }
+    }
+    // 클래스 A 기본 EPS — 차원 없는 기본 EPS 가 없는 미국 공시 결산일만(V)
+    if (!foreign) for (const [c, x] of Object.entries(H)) {
+      if (c === "LTM" || !x?.date || classEpsB.has(x.date) || atEnd(epsBP, x.date)) continue;
+      const k = firstK(x.date);
+      if (!k) continue;
+      try { classEpsB.set(x.date, await readClassABasicEps(cik, k.accn, k.end, k.filed)); }
+      catch (e) { hardErrors.push(`클래스 A 기본 EPS 10-K 원본(${x.date}, ${k.accn}) 판독 실패: ${String(e).slice(0, 80)}`); }
     }
   }
   const secShareCandidates = (date) => {
@@ -4950,7 +4979,20 @@ async function verifyUs(sym) {
         // 기본 EPS = SEC 공시 기본 EPS ÷ 분할 배수(Yahoo 분할 이력) — 연간만(앱은 LTM 기본 EPS 를 내지 않는다)
         if (isFy) {
           const eb = atEnd(epsBP, x.date);
-          if (!eb) add("A", "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)", c, I.epsB == null ? { status: PASS, note: "공시 기본 EPS 없음 → 앱 빈칸" } : { status: NA, note: `공시 기본 EPS 없음(앱 ${I.epsB} — 클래스별 등)` });
+          const nb = !eb && natCur ? atEnd(natEpsB, x.date) : null, ca = !eb && !foreign ? [...classEpsB].find(([d0]) => dayDiff(d0, x.date) <= 7)?.[1] : null;
+          const NM = "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)";
+          if (nb) {
+            // 외화 공시 — 원통화 공시 기본 EPS × 연준 H.10 기간 평균 × ADR 비율(희석 EPS 환산 점검과 같은 방식, 2026-10-07)
+            const avg = fxRows ? fxAvg(fxRows, nb.start, nb.end) : null, pend = fxRows ? fxPendingWhy(fxRows, nb.end) : null;
+            if (pend) add("A", NM, c, I.epsB == null ? { status: PASS, note: `${pend} — 앱 빈칸(대체 없음)` } : { status: FAIL, note: `${pend}인데 앱 값 ${I.epsB} — 다른 환율로 대체한 것으로 보임` });
+            else if (avg == null) add("A", NM, c, { status: NA, note: fxErr || "환율 없음" });
+            else if (I.epsB == null) add("A", NM, c, { status: FAIL, note: `원통화 기본 EPS ${nb.val} ${natCur} 있는데 앱 빈칸` });
+            else {
+              const exp = nb.val * avg * adrK, how = `원통화 기본 EPS ${nb.val} ${natCur} × 연준 H.10 ${nb.start}~${nb.end} 산술평균 ${avg}${adrK !== 1 ? ` × ADR 비율 ${adrK}` : ""}${fxWin(nb.start, nb.end)}`;
+              add("A", NM, c, extEq(I.epsB, exp) ? { status: PASS, note: `${how} (정확 일치)` } : { status: FAIL, note: `앱 ${I.epsB} ≠ 기대 ${exp} — ${how}` });
+            }
+          } else if (ca) add("A", NM, c, vsSource(I.epsB, ca.val, EXACT, ca.how));
+          else if (!eb) add("A", NM, c, I.epsB == null ? { status: PASS, note: "공시 기본 EPS 없음 → 앱 빈칸" } : { status: NA, note: `공시 기본 EPS 없음(앱 ${I.epsB} — 원통화·클래스 A 차원 값도 없음)` });
           else if (splitErr) add("A", "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)", c, { status: NA, note: splitErr });
           else { const k = splitAdj(eb); add("A", "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)", c, vsSource(I.epsB, eb.val / k, EXACT, k !== 1 ? `공시 ${eb.val} ÷ 분할 ${k}(Yahoo 분할 이력)` : "")); }
         } else if (I.epsB != null) add("D", "LTM 기본 EPS 빈칸(앱 규칙)", c, { status: FAIL, note: `앱 LTM 기본 EPS ${I.epsB}` });
