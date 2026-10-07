@@ -263,6 +263,64 @@ async function secJson(url) {
 async function secText(url) {
   return secFetchRaw(url, 60_000);
 }
+
+/**
+ * 결산일 유통주식수 — 차원이 붙은 값만 공시한 회사(2026-10-07, WMT·BE·META·V). companyfacts 는 차원 없는 값만 주므로 그 해 10-K 원본
+ * 인스턴스(_htm.xml)에서 결산일(instant) 값을 직접 읽는다. 검증기 독립 판독(앱 edgar-equity-shares.ts·edgar-classfacts.ts 와 코드 공유 안 함,
+ * 규칙은 같음 — 공통모드는 audit.mjs "결산일 주식수" 사유). 반환 = 우선순위 순 후보 [{ v, how, accns }]:
+ *  ① 자본변동표 보통주 구성요소(CommonStockSharesOutstanding·SharesOutstanding, StatementEquityComponentsAxis=CommonStockMember 한 차원)
+ *  ② 클래스별 전환 기준(as-converted) 공시값 합(/AsConverted/ 주식 단위, 가중평균 제외) — 없으면 클래스별 유통주식수 × 전환비율(A = 1)
+ *  ③ 전환 구조가 아닌 복수 클래스(전환비율·전환 기준 공시 없음) — 클래스별 유통주식수 단순 합
+ * 클래스는 보통주만(우선주·시리즈·참가증권 제외), 집계 멤버(B1AndB2)는 구성 멤버가 있으면 뺀다.
+ */
+async function readDimShares(cik, accn, end, filed) {
+  const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+  const name = (await secJson(base + "/index.json")).directory.item.map((x) => x.name).find((x) => /_htm\.xml$/i.test(x));
+  if (!name) return [];
+  const xml = await secText(`${base}/${name}`);
+  const ctx = new Map();
+  for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
+    const inst = /<(?:xbrli:)?instant>\s*([^<\s]+)/.exec(m[2])?.[1];
+    if (inst !== end) continue;
+    ctx.set(m[1], [...m[2].matchAll(/dimension="([^"]+)"[^>]*>([^<]+)</g)].map((d) => [d[1].split(":").pop(), d[2].trim().split(":").pop().replace(/Member$/, "")]));
+  }
+  const shareUnits = new Set();
+  for (const m of xml.matchAll(/<(?:[\w-]+:)?unit\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?unit>/g))
+    if (!/divide/i.test(m[2]) && /<(?:[\w-]+:)?measure>\s*(?:[\w-]+:)?shares\s*</i.test(m[2])) shareUnits.add(m[1]);
+  const isCommon = (mb) => /^Common/i.test(mb) && !/Preferred|Series|Participating/i.test(mb);
+  const isA = (mb) => /^Common(Stock)?ClassA$/i.test(mb);
+  let comp = null;
+  const conv = new Map(), raw = new Map(), rate = new Map();
+  for (const m of xml.matchAll(/<([\w-]+):(\w+)\b([^>]*)>\s*([^<]+?)\s*</g)) {
+    const [, , tag, attrs, text] = m;
+    const dims = ctx.get(/contextRef="([^"]+)"/.exec(attrs)?.[1] ?? "");
+    if (!dims || dims.length !== 1) continue;
+    const v = Number(text);
+    if (!Number.isFinite(v)) continue;
+    const [axis, mb] = dims[0];
+    const sh = shareUnits.has(/unitRef="([^"]+)"/.exec(attrs)?.[1] ?? "");
+    if ((tag === "CommonStockSharesOutstanding" || tag === "SharesOutstanding") && sh && axis === "StatementEquityComponentsAxis" && mb === "CommonStock") comp ??= v;
+    if (axis !== "StatementClassOfStockAxis" || !isCommon(mb)) continue;
+    if (/AsConverted/i.test(tag) && !/WeightedAverage/i.test(tag) && sh) conv.has(mb) || conv.set(mb, v);
+    else if (tag === "CommonStockSharesOutstanding" && sh) raw.has(mb) || raw.set(mb, v);
+    else if (/^CommonStockConversionRate$/i.test(tag)) rate.has(mb) || rate.set(mb, v);
+  }
+  const leaves = (mm) => [...mm].filter(([k]) => { const first = k.split(/And/i)[0]; return first === k || !mm.has(first); });
+  const src = `${filed} 10-K 원본 ${name}`;
+  const out = [];
+  if (comp != null) out.push({ v: comp, how: `자본변동표 보통주 구성요소(${src})` });
+  if (conv.size) {
+    const l = leaves(conv);
+    out.push({ v: l.reduce((t, [, x]) => t + x, 0), how: `클래스별 전환 기준 공시값 합 ${l.map(([k, x]) => `${k} ${x}`).join(" + ")}(${src})` });
+  } else if (raw.size && rate.size) {
+    const l = leaves(raw), miss = l.filter(([k]) => !isA(k) && !(rate.get(k) > 0));
+    if (!miss.length) out.push({ v: l.reduce((t, [k, x]) => t + x * (isA(k) ? 1 : rate.get(k)), 0), how: `클래스별 유통주식수 × 전환비율 ${l.map(([k, x]) => `${k} ${x}×${isA(k) ? 1 : rate.get(k)}`).join(" + ")}(${src})` });
+  } else if (raw.size) {
+    const l = leaves(raw);
+    out.push({ v: l.reduce((t, [, x]) => t + x, 0), how: `클래스별 유통주식수 합(전환 구조 없음) ${l.map(([k, x]) => `${k} ${x}`).join(" + ")}(${src})` });
+  }
+  return out.map((o) => ({ ...o, filed, accns: new Set([accn]) }));
+}
 /** 공시 원본(인스턴스) — 한 종목 안에서 같은 원본을 여러 대조가 다시 받지 않게 최근 12건만 캐시(SEC 요청 절약) */
 const instCache = new Map();
 function secInstance(url) {
@@ -4560,6 +4618,21 @@ async function verifyUs(sym) {
    * 그 밖의 후보(판정 근거 표시용): 판본에서 밀린 값, 분할 소급본(÷ 그 사이 Yahoo 분할 배수), 표지(dei), 가중평균.
    * 자본변동표 클래스 차원(WMT·BE·META)은 없다 → 본표 후보가 없으면 검증불가.
    */
+  // 결산일 주식수 — 차원 없는 유통·발행주식수 태그가 없는 결산일은 그 해 10-K 원본에서 차원 값을 미리 읽는다(readDimShares).
+  // 그 해 10-K = 결산일이 같은 연간 사실을 처음 실은 10-K(companyfacts 접수번호 — 제출 목록 recent 는 서식 4 가 많은 회사에서 옛 10-K 가 빠진다)
+  const dimShares = new Map();
+  {
+    const undim = (d) => ["CommonStockSharesOutstanding", "SharesOutstanding", "CommonStockSharesIssued"].some((t) => (G[t]?.units?.shares ?? []).some((e) => !e.start && /^10-[KQ]/.test(e.form ?? "") && dayDiff(e.end, d) <= 7));
+    const firstK = (d) => Object.values(G).flatMap((c) => Object.values(c.units ?? {}).flat()).filter((e) => /^10-K$/.test(e.form ?? "") && e.end && dayDiff(e.end, d) <= 7 && e.accn)
+      .sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))[0] ?? null;
+    for (const [c, x] of Object.entries(H)) {
+      if (c === "LTM" || !x?.date || dimShares.has(x.date) || undim(x.date)) continue;
+      const k = firstK(x.date);
+      if (!k) continue;
+      try { dimShares.set(x.date, await readDimShares(cik, k.accn, k.end, k.filed)); }
+      catch (e) { hardErrors.push(`결산일 주식수 10-K 원본(${x.date}, ${k.accn}) 판독 실패: ${String(e).slice(0, 80)}`); }
+    }
+  }
   const secShareCandidates = (date) => {
     const inst = (t) => (G[t]?.units?.shares ?? []).filter((e) => !e.start && /^10-[KQ]/.test(e.form ?? "") && dayDiff(e.end, date) <= 7)
       .sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""));
@@ -4602,6 +4675,13 @@ async function verifyUs(sym) {
       const ci = choose(li);
       if (ci) ordered.push({ v: ci.pick.v, accns: new Set(li.filter((e) => e.v === ci.pick.v).map((e) => e.accn)), how: `발행주식수(${ci.pick.filed} ${ci.pick.form} · ${ci.why}${trs.length ? "" : ", 자기주식 태그 없음"})` });
       addOthers(li, ci?.pick, "발행주식수");
+    }
+    // 차원 값(그 해 10-K 원본) — 차원 없는 본표 후보가 하나도 없을 때만(readDimShares)
+    // 결산일 뒤·10-K 제출 전 분할은 되돌린다(WMT FY2024 — 2024-01-31 결산, 2024-02-26 3:1 분할, 2024-03-15 10-K 가 분할 후 80.54억 주를 실음.
+    // 결산일 종가는 분할 전이라 주식수도 분할 전 26.85억 주여야 한다 — 차원 없는 후보의 splitK 와 같은 규칙)
+    if (!ordered.length) for (const d of [...dimShares.entries()].find(([d0]) => dayDiff(d0, date) <= 7)?.[1] ?? []) {
+      const k = splitK(d.filed);
+      ordered.push(k !== 1 ? { ...d, v: d.v / k, how: `${d.how} ÷ 결산일 뒤 분할 ${k}` } : d);
     }
     const cover = (f.facts.dei?.EntityCommonStockSharesOutstanding?.units?.shares ?? []).filter((e) => /^10-K/.test(e.form ?? "") && e.end > date && dayDiff(e.end, date) <= 120);
     for (const e of cover) cands.push({ v: e.val, how: `표지(dei ${e.end}, ${e.filed} 10-K)`, otherDate: true });
@@ -4672,8 +4752,8 @@ async function verifyUs(sym) {
         const hit = (v) => as != null && Math.abs(as - v) <= 0.5;
         let r, used = ex; // 시가총액 기대값에 쓸 주식수(정밀 후보로 통과하면 그 값)
         // 본표 후보(유통·자본변동표·발행−자기주식·발행)가 하나도 없으면 판정하지 않는다 — 표지·가중평균만으로는 기준이 안 된다
-        // (WMT: 자본변동표 클래스 차원 경로 미구현)
-        if (!sc.ordered.length) r = { status: NA, note: `SEC 결산일 본표 주식수 태그 없음(자본변동표 클래스 차원 경로 미구현)${sc.all.length ? ` · 참고 후보 ${sc.all.map((o) => `${o.v}(${o.how})`).join(", ")}` : ""}` };
+        // (차원 값만 공시한 회사는 위 readDimShares 가 그 해 10-K 원본에서 채운다 — 2026-10-07)
+        if (!sc.ordered.length) r = { status: NA, note: `SEC 결산일 본표 주식수 없음(차원 없는 태그·그 해 10-K 원본의 자본변동표 보통주·클래스별 값 모두 없음)${sc.all.length ? ` · 참고 후보 ${sc.all.map((o) => `${o.v}(${o.how})`).join(", ")}` : ""}` };
         else if (as == null) r = { status: NA, note: yCloses ? "결산일 종가 없음" : "Yahoo 일별 종가 없음" };
         else if (ex && hit(ex.v)) {
           // 같은 결산일의 본표 후보만(표지·가중평균은 다른 기준일이라 "더 정밀한 값"이 아니다)
