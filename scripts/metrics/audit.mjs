@@ -73,6 +73,9 @@ export function commonModeOf(c) {
   // 합성 차입금(본표 차입금 + 리스) 기대값은 검증기가 SEC 원본으로 계산하지만 규칙 자체는 앱 차입금 규칙의 재구현 — 공통모드
   if (/^20-F 사업연도 연말 합성 Debt/.test(n)) return "본표 차입금 + 리스 규칙 재구현(앱 차입금 규칙 공통)";
   if (/^20-F (사업연도|대응표) /.test(n)) return null;
+  // 원통화 LTM 순이익 블룸버그 = Yahoo 분기 합(2026-10-07) — 블룸버그는 앱이 쓰지 않는 원자료, 환율·앱 규칙 없음(독립). Yahoo 가 앱 원천이어도
+  // 블룸버그가 따로 같은 값을 내면 원자료 확인
+  if (/^20-F LTM 순이익 원통화 블룸버그/.test(n)) return null;
   if (/^20-F LTM /.test(n)) return "20-F LTM 앱 규칙 재구현(Yahoo 분기 원천 공통)";
   if (/^20-F /.test(n)) return "20-F 앱 규칙 재구현(차입금 규칙 공통)";
   if (/^결산일 주식수 /.test(n)) return "결산일 주식수 후보 순서·1.2배 검사 = 앱과 같은 규칙";

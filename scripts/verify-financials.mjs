@@ -4764,7 +4764,7 @@ async function verifyUs(sym) {
       }
     }
     // LTM 순이익 — SEC 분기 공시로 따로 계산한 TTM 과 대조(재감사: LTM 순이익은 원자료 대조가 없었음)
-    if (!isFy && foreign) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: NA, note: "외화 공시 — 분기 XBRL 없음(20-F)·환산은 인포맥스 대조로" });
+    if (!isFy && foreign) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: NA, note: "외화 공시 — 분기 XBRL 없음(20-F)·원자료는 \"20-F LTM 순이익 원통화 블룸버그 = Yahoo 분기 4개 합\", 환산은 인포맥스 대조로" });
     else if (!isFy) {
       const hasNciNow = [...nciTrace].some((e) => dayDiff(e, x.date) <= 400);
       // 감사 m1: 옛날에 끊긴 태그(기준일이 앱 LTM 과 다름)면 다음 태그로 — NetIncomeLoss → ProfitLoss − 비지배(또는 비지배 흔적이
@@ -6688,6 +6688,26 @@ async function verifyUs(sym) {
         const sixKSet = new Set((/회사 6-K 분기 재무제표: (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1]?.split(", ") ?? []).map(nm0));
         // 환율 = 검증기가 FRED 에서 따로 받은 연준 H.10(흐름 분기 창 4개 평균, 잔액 최신 분기말 기말) — 독립. Yahoo 분기 원천은 공통모드로 남는다
         const basis = `Yahoo 분기 ${last.map((r) => r.end).join("·")} × 분기 평균 환율(${natCur}→USD, 연준 H.10 ${fxRows.series})${pendQ ? "" : ` · ${FX_IND_MARK}(분기 창 4개 + 기말 ${last[3].end})`}`;
+        // 원통화 LTM 순이익 원자료 대조(오너 2026-10-07 — "원자료가 맞으면 외화 환산은 공시 기준 환율이라 차이가 있을 수 있다"): 20-F 는 분기 XBRL 이
+        // 없어 SEC TTM 을 못 만든다 → 블룸버그 BBG GAAP 화면의 최근 12개월 열(원통화) = Yahoo 분기 4개 원통화 합. 환율 없음 — 둘 다 앱과 독립인 원자료
+        // (앱 LTM 은 Yahoo 분기 × 환율이라 Yahoo 쪽은 공통모드지만, 블룸버그가 따로 같은 값을 내면 원자료는 맞다). 허용 = 블룸버그 표시 단위 한 칸
+        {
+          const bb = loadBbg(sym), bq = bb?.at(H.LTM.date)?.ni;
+          const yNi = last.every((r) => r.netIncome != null) ? last.reduce((t, r) => t + r.netIncome, 0) : null;
+          const nm = "20-F LTM 순이익 원통화 블룸버그 = Yahoo 분기 4개 합";
+          // 기준 확인 — 블룸버그 최근 사업연도 순이익이 SEC 20-F 원통화 값과 같아야 같은 회계 기준(TSM: 블룸버그는 대만 상장 2330 TT 의 대만 IFRS,
+          // 20-F 는 IASB IFRS 라 해마다 수백억 TWD 차이 — 2026-10-07 확인). 다르면 비교하지 않는다(기준 차이를 실패로 세지 않음)
+          const fyN = [...natNi.values()].filter((e) => e.end <= H.LTM.date).sort((x, y) => x.end.localeCompare(y.end)).at(-1);
+          const bA = fyN ? bb?.at(fyN.end)?.ni : null;
+          if (!bq) add("A", nm, "LTM", { status: NA, note: `블룸버그 BBG GAAP 화면에 ${H.LTM.date} 최근 12개월 순이익 열 없음(스냅샷 없음·화면 판독 안 됨)` });
+          else if (!fyN || !bA) add("A", nm, "LTM", { status: NA, note: `기준 확인 불가 — ${!fyN ? "SEC 20-F 원통화 사업연도 순이익 없음" : `블룸버그 ${fyN.end} 사업연도 순이익 없음`}` });
+          else if (Math.abs(bA.v - fyN.val) > bA.unit) add("A", nm, "LTM", { status: NA, note: `블룸버그와 SEC 20-F 회계 기준 다름 — ${fyN.end} 사업연도 순이익 블룸버그 ${bA.v} vs SEC 20-F ${fyN.val} ${natCur}(차 ${bA.v - fyN.val}) · 블룸버그 LTM ${bq.v} vs Yahoo 분기 합 ${yNi ?? "-"} 는 참고만` });
+          else if (yNi == null) add("A", nm, "LTM", { status: NA, note: `Yahoo 분기 순이익 4개 중 빈 값 — ${last.map((r) => r.end).join("·")}` });
+          else {
+            const ok = Math.abs(bq.v - yNi) <= bq.unit;
+            add("A", nm, "LTM", { status: ok ? PASS : FAIL, note: `${natCur} 블룸버그 ${bq.v} vs Yahoo 분기 ${last.map((r) => r.end).join("·")} 합 ${yNi} (차 ${bq.v - yNi}, 허용 ${bq.unit}) · 환산 없음` });
+          }
+        }
         const items = [
           ["매출", H.LTM.rev, flow("totalRevenue"), "totalRevenue"], ["매출원가", IS.LTM?.cogs ?? null, flow("costOfRevenue"), "costOfRevenue"],
           ["매출총이익", IS.LTM?.gp ?? null, flow("grossProfit"), "grossProfit"], ["영업이익", IS.LTM?.op ?? null, flow("totalOperatingIncomeAsReported"), "totalOperatingIncomeAsReported"],
