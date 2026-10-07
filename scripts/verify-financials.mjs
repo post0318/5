@@ -301,9 +301,9 @@ async function readDimShares(cik, accn, end, filed) {
     const sh = shareUnits.has(/unitRef="([^"]+)"/.exec(attrs)?.[1] ?? "");
     if ((tag === "CommonStockSharesOutstanding" || tag === "SharesOutstanding") && sh && axis === "StatementEquityComponentsAxis" && mb === "CommonStock") comp ??= v;
     if (axis !== "StatementClassOfStockAxis" || !isCommon(mb)) continue;
-    if (/AsConverted/i.test(tag) && !/WeightedAverage/i.test(tag) && sh) conv.has(mb) || conv.set(mb, v);
-    else if (tag === "CommonStockSharesOutstanding" && sh) raw.has(mb) || raw.set(mb, v);
-    else if (/^CommonStockConversionRate$/i.test(tag)) rate.has(mb) || rate.set(mb, v);
+    if (/AsConverted/i.test(tag) && !/WeightedAverage/i.test(tag) && sh) { if (!conv.has(mb)) conv.set(mb, v); }
+    else if (tag === "CommonStockSharesOutstanding" && sh) { if (!raw.has(mb)) raw.set(mb, v); }
+    else if (/^CommonStockConversionRate$/i.test(tag)) { if (!rate.has(mb)) rate.set(mb, v); }
   }
   const leaves = (mm) => [...mm].filter(([k]) => { const first = k.split(/And/i)[0]; return first === k || !mm.has(first); });
   const src = `${filed} 10-K 원본 ${name}`;
@@ -5347,7 +5347,6 @@ async function verifyUs(sym) {
     // 앱이 기준 혼합 빈칸에 단 사유(칸 각주 "… 기준 혼합(…)") — 응답 단위로 찾는다(COGS_WAIT 와 같은 방식)
     const mixA = JSON.stringify(is ?? {}).includes(COGS_MIX), mixQ = JSON.stringify(isq ?? {}).includes(COGS_MIX);
     const finCo = sic >= 6000 && sic <= 6499, finWait = /금융사/.test(JSON.stringify(is ?? {}));
-    const synthMark = (row) => /합성|소계 없음/.test(JSON.stringify(row ?? {}));
     const revAt = (kind, E, isQ4) => {
       if (foreign) { const r = kind === "FY" ? atEnd(natRev, E) : null; return r ? { v: r.val, how: `원통화 공시 매출 ${r.val}` } : null; }
       if (!revFace) return null;
@@ -5439,8 +5438,8 @@ async function verifyUs(sym) {
         gExp = r ? r.v - e.cogs : null;
         gNote = r ? `합성(본표 매출총이익 소계 없음, ${e.type}형) = SEC 매출 ${r.v} − SEC 매출원가 ${e.cogs} · 매출: ${r.how ?? ""} · 원가: ${e.how}` : `합성 대상이나 SEC 매출 기대값 없음(${revFaceWhy || "범위 밖"}) · ${e.how}`;
         cogsSynth.add(`${stmtTag}|${key}`);
-        if (appG != null) add("C", "매출총이익 합성 표기 = 본표 소계 없음", col, synthMark(gRow) ? { status: PASS, note: `앱 행 "${gRow.accountName}"` }
-          : { status: FAIL, note: `본표에 매출총이익 소계가 없어 합성값인데 앱에 합성 표기 없음 — 앱 행 "${gRow?.accountName}"` });
+        // 합성 표기(줄 이름 "본표 소계 없음 · 매출 − 매출원가") 검사는 뺐다 — 오너 지시 2026-10-02(앱 3c543bb, WMT) "불필요한 문구"로 앱이 줄 이름·각주
+        // 어디에도 합성 문구를 싣지 않는다. 합성 값 자체(SEC 매출 − SEC 매출원가)는 위 gExp 로 A층에서 정확 대조한다(2026-10-08)
       }
       add("A", nG, col, vsSource(appG, gExp == null ? null : gExp * k, EXACT, `${gNote}${fxNote}`));
     };
