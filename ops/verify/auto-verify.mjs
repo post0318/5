@@ -11,7 +11,8 @@
  *  (d) 7일 넘게 검증 안 됨 — 오래된 것부터 하루 --stale 개
  *  전체 하루 --max 종목(기본 20). 넘치는 종목은 다음 날로(기록).
  *
- * 실행: 한국 = populate-kr-da.mjs(kr_da_staging, 증분) → verify-financials.mjs --market=kr, 미국 = verify-financials.mjs --market=us.
+ * 실행: 한국 = populate-kr-da.mjs(kr_da_staging, 증분) → verify-financials.mjs --market=kr, 미국 = verify-financials.mjs --market=us
+ *  --metric=bscf --cogs-rules=scripts/metrics/cogs-rules.json(전체 모드 — 10-01 마감과 같은 기준, 2026-10-07).
  *  모두 --concurrency=1 --base=http://localhost:3000(2호기 verify-dev) --post(2호기 verify_results). 종목 하나씩 차례로(SEC·DART 순차).
  *
  * DART 하루 예산(--budget, 기본 5,000) = 카운터 파일(reports/.dart-quota/YYYYMMDD.json — 적재·검증기·이 스크립트) 합 + 앱 요청(verify-dev 저널의
@@ -219,7 +220,11 @@ if (!DRY && targets.length) {
       log(`  ${t.key} 적재 종료코드 ${p.code}`);
       if (p.code !== 0) { runFailed++; done.push({ key: t.key, reason: t.reason, ok: false, step: "populate", code: p.code, tail: p.tail.slice(-300) }); continue; }
     }
-    const v = await run("node", ["scripts/verify-financials.mjs", `--market=${t.market}`, `--symbols=${t.symbol}`, "--concurrency=1", `--base=${BASE}`, "--post"],
+    // 미국 = 전체 모드(오너 지시 2026-10-07 — "같아야 검증이 되는 것 아닌가, 자동은 빠진 채 검증되면 무엇이 검증되나"): 10-01 마감 기준과 같은
+    // --metric=bscf(매출원가·매출총이익·합성 영업이익·감가상각·판관비·연구개발비 본표 대조 + 재무상태표·현금흐름표 A·D층) + cogs-rules.
+    // 한국은 모드 구분이 없다(검증기 --metric 은 미국만)
+    const FULL = t.market === "us" ? ["--metric=bscf", "--cogs-rules=scripts/metrics/cogs-rules.json"] : [];
+    const v = await run("node", ["scripts/verify-financials.mjs", `--market=${t.market}`, `--symbols=${t.symbol}`, ...FULL, "--concurrency=1", `--base=${BASE}`, "--post"],
       { ...capEnv, GITHUB_SHA: commit }, 40 * 60e3);
     const after = await db.collection("verify_results").findOne({ _id: t.key });
     const posted = after?.runAt && after.runAt !== before;
