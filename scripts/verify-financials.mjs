@@ -233,6 +233,9 @@ async function secFetchRaw(url, timeoutMs) {
   const ARCH = "https://www.sec.gov/Archives/edgar/data/";
   const safe = (u) => u.replace(/^https:\/\//, "").replace(/[^A-Za-z0-9._-]/g, "_");
   const disk = url.startsWith(ARCH) ? pathJoin(SEC_DISK, url.slice(ARCH.length).replace(/[^A-Za-z0-9._-]/g, "_")) : null;
+  // 오류 문구는 원인(HTTP 코드·시간 초과)을 앞에, 주소는 짧게 — 호출부가 오류를 60~80자로 잘라 남기므로 긴 주소가 앞에 오면 원인이 잘린다
+  // (2026-10-07 AMAT·TER "본표 조회 실패: Error: SEC https://www.sec.gov/Archives/edgar/data/6951/0000" — 코드가 안 남음)
+  const short = url.startsWith(ARCH) ? url.slice(ARCH.length) : url.replace(/^https:\/\/(www\.)?/, "");
   if (disk && existsSync(disk)) return readFileSync(disk, "utf8");
   const apiDisk = SEC_API_RE.test(url) ? pathJoin(SEC_API_DISK, safe(url)) : null;
   const apiAge = apiDisk && existsSync(apiDisk) ? Date.now() - statSync(apiDisk).mtimeMs : null;
@@ -242,14 +245,14 @@ async function secFetchRaw(url, timeoutMs) {
       await (secChain = secChain.then(async () => { const w = secLast + 334 - Date.now(); if (w > 0) await new Promise((r) => setTimeout(r, w)); secLast = Date.now(); }));
       const r = await fetch(url, { headers: { "user-agent": SEC_UA }, signal: AbortSignal.timeout(timeoutMs) });
       if (r.status === 429 && attempt < 3) { await new Promise((res) => setTimeout(res, 65_000)); continue; }
-      if (!r.ok) throw new Error(`SEC ${url} → HTTP ${r.status}`);
+      if (!r.ok) throw Object.assign(new Error(`SEC HTTP ${r.status} ${short}`), { secHttp: true });
       const t = await r.text();
       if (disk) { mkdirSync(SEC_DISK, { recursive: true }); writeFileSync(disk, t); }
       if (apiDisk) { mkdirSync(SEC_API_DISK, { recursive: true }); writeFileSync(apiDisk, t); }
       return t;
     }
   } catch (e) {
-    if (apiAge == null) throw e;
+    if (apiAge == null) throw e?.secHttp ? e : new Error(`SEC ${e?.name === "TimeoutError" ? "시간 초과" : String(e)} ${short}`, { cause: e });
     console.warn(`  [SEC 사본 사용] ${url} — 새로 받기 실패(${String(e).slice(0, 80)}), 디스크 사본 ${(apiAge / 3_600_000).toFixed(1)}시간 전`);
     return readFileSync(apiDisk, "utf8");
   }
@@ -2097,7 +2100,7 @@ async function fasbText(url) {
   const disk = pathJoin(SEC_DISK, `fasb_${url.replace(/^https?:\/\/xbrl\.fasb\.org\//, "").replace(/[^A-Za-z0-9._-]/g, "_")}`);
   if (existsSync(disk)) return readFileSync(disk, "utf8");
   const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });
-  if (!r.ok) throw new Error(`FASB ${url} → HTTP ${r.status}`);
+  if (!r.ok) throw new Error(`FASB HTTP ${r.status} ${url.replace(/^https:\/\/(www\.)?/, "")}`);
   const t = await r.text();
   mkdirSync(SEC_DISK, { recursive: true });
   writeFileSync(disk, t);
