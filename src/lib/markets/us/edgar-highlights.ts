@@ -292,16 +292,10 @@ export function buildUsHighlights(
       unitEntries(facts, "NetCashProvidedByUsedInOperatingActivities", "USD"),
     ),
     capex: annualSeriesMerged(facts, CAPEX_CONCEPTS),
-    dps: (() => {
-      const a = annualSeries(
-        unitEntries(facts, "CommonStockDividendsPerShareDeclared", "USD/shares"),
-      );
-      return a.length
-        ? a
-        : annualSeries(
-            unitEntries(facts, "CommonStockDividendsPerShareCashPaid", "USD/shares"),
-          );
-    })(),
+    // 선언 기준 우선, 없는 연도는 지급 기준 — 연도별 병합(재무분석 mergedAnnual 과 같은 규칙, 2026-10-08). 예전엔 선언 기준이 한 해라도 있으면
+    // 지급 기준을 통째로 안 봐서 ORCL(선언 기준 연간 값은 2011 까지, 그 뒤 지급 기준 1.28·1.36·1.60…)의 최근 연도가 "공시 없음 — 지급액 ÷ 주식수"
+    // 근사로 떨어져 재무분석 주당배당금 성장률(공시 값)과 어긋났다(전체 모드 검증 AVGO·ORCL·TER 18건)
+    dps: annualSeriesMerged(facts, ["CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"], "USD/shares"),
   };
   const E = {
     opIncome: unitEntries(facts, SYN_OP_INCOME, "USD"),
