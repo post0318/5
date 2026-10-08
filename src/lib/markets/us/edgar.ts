@@ -35,7 +35,8 @@ import { withRevenueDims } from "./edgar-revenue-dims";
 import { withCashFlowWc } from "./edgar-cf-wc";
 import { needsOpIncomeStructure, withIncomeStatementStructure } from "./edgar-is-structure";
 import { withOneOffCharges } from "./edgar-oneoff";
-import { withFacePretax } from "./edgar-pretax";
+import { withCustomFacePretax, withFacePretax } from "./edgar-pretax";
+import { withRenamedCfLines } from "./edgar-renamed-lines";
 import { withBalanceSheetDebt } from "./edgar-bs-structure";
 import { withCashFlowDa } from "./edgar-cf-structure";
 import { withEquityStatementShares } from "./edgar-equity-shares";
@@ -226,7 +227,9 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
         for (const f of ["debt", "da", "oneOff", "yearEndShares", "filings", "cover"] as const) unavailable[f] = { reason };
         if (needsOpIncomeStructure(raw.facts["us-gaap"] ?? {})) unavailable.opIncome = { reason };
       }
-      const filled = await step("filings", raw, () => withFilingGapFill(cik, raw, recent));
+      const filled0 = await step("filings", raw, () => withFilingGapFill(cik, raw, recent));
+      // 20-F 현금흐름표 — 옛 공시가 회사 고유 태그로 단 본표 줄을 최신 공시의 표준 개념으로(같은 라벨, TSM 2022 자기주식 취득 — edgar-renamed-lines.ts)
+      const filled = await step("filings", filled0, () => withRenamedCfLines(cik, filled0, recent));
       // 외화·IFRS 공시(ASML·TSM·SPOT) → us-gaap·USD(edgar-foreign.ts, 연준 H.10). 환율 조회 실패 시 원본을 쓴다 —
       // 앱은 USD 단위만 읽으므로 원통화 숫자가 USD 로 섞이지 않고 빈칸이 된다.
       const normalized = await withForeignNormalization(filled).catch(() => {
@@ -237,7 +240,9 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const withContent = await step("da", normalized, () => withContentAmortization(cik, normalized, recent, sicN));
       // 총수익 안의 지분법·기타수익 분리(XOM — 영업이익 태그 없는 회사, edgar-revenue-dims.ts)
       // 세전이익 = 손익계산서 본표 소계(지분법 이익을 법인세 아래에 두는 AMD 형 — edgar-pretax.ts)
-      const withPt = await step("opIncome", withContent, () => withFacePretax(cik, withContent, recent));
+      const withPt0 = await step("opIncome", withContent, () => withFacePretax(cik, withContent, recent));
+      // 본표 세전이익 소계가 회사 고유 태그(MCD·ORCL·MRVL 10-Q) — 공시 원본 값으로 표준 세전이익 기간을 채움(edgar-pretax.ts)
+      const withPt = await step("opIncome", withPt0, () => withCustomFacePretax(cik, withPt0, recent));
       const withDims = await step("opIncome", withPt, () => withRevenueDims(cik, withPt, recent));
       // 영업이익 소계가 없는 손익계산서 — 계산 구조로 영업외 항목 분리(DIS·FOXA, edgar-is-structure.ts)
       const withIs = await step("opIncome", withDims, () => withIncomeStatementStructure(cik, withDims, recent, sicN));

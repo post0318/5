@@ -369,7 +369,9 @@ export function buildUsAnalysis(
     if (cx != null) fcfFull.set(y, v - Math.abs(cx));
   }
   // 현금흐름표 "배당금 지급" 줄과 같은 태그 목록(ASML 2020~ PaymentsOfOrdinaryDividends — 없으면 배당성향이 "공시 중단"으로 비었다, 2026-10-02)
-  const dividends = flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"]);
+  // 현금흐름표 화면 값(fromCf, 2026-10-09) — 따로 읽으면 화면과 갈렸다: GOOG 2026 2분기~ PaymentsOfOrdinaryDividends(전년·사업연도는 PaymentsOfDividends)라
+  // 개념 하나로 LTM 을 만드는 flow 는 "LTM 구성 분기 없음"(배당성향·총주주환원율 LTM 빈칸), 화면은 공시마다 태그를 이어 LTM 값이 있었다
+  const dividends = fromCf("cf:재무활동 현금흐름:배당금 지급", flow(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"]), true);
   // "PaymentsOfDividends"(포괄) 는 보통주 배당뿐 아니라 비지배지분(NCI)·종속회사
   // 우선주 분배까지 섞여 들어올 수 있다(실측, 2026-09-23 — Bloom Energy: 재무
   // 제표엔 보통주 배당이 전혀 없는데 "주당배당금 성장률"이 -47%로 나옴. 원인:
@@ -563,6 +565,9 @@ export function buildUsAnalysis(
   inheritWhy(dps, flow(DPS_C, "USD/shares"));
   for (const l of labels) if (dps[l] == null && hasCommonDivEvidence) note(dps, l, WHY.get(dps)?.[l] ?? "주당배당금 공시 없음");
   const dpsFull = adjMap(fullAnnual(DPS_C, "USD/shares"));
+  // 표시 열의 주당배당금(지급 기준 산정·무배당 0 포함 — 하이라이트와 같은 값)을 CAGR 시계열에도(2026-10-09). 주당배당 공시가 없는 해(INTC 2021·MDLZ 2021·
+  // VRT 전 기간·ASML 2025 — 지급 기준)는 화면에 값이 있는데 CAGR 만 "값 없음/3년 전 값 없음"으로 비었다(검증기 C층 재계산과 불일치)
+  for (const p of periods) if (p.label !== LTM && dps[p.label] != null && !dpsFull.has(p.fiscalYear)) dpsFull.set(p.fiscalYear, dps[p.label]!);
   // 첫 열 증가율의 전년 값 — 연도 열과 같은 규칙(무배당 0, 공시 없으면 지급 기준)
   {
     const y0 = Math.min(...periods.filter((p) => p.label !== LTM).map((p) => p.fiscalYear)) - 1;
