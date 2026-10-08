@@ -5805,6 +5805,14 @@ async function verifyUs(sym) {
           if (ea) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, ea.val - (mi?.val ?? 0), EXACT, `StockholdersEquity 미태깅 — 비지배지분 포함 자본 ${ea.val}${mi ? ` − 비지배지분 ${mi.val}` : "(비지배지분 태그 없음)"}`)); continue; }
         }
         if (!hit && c !== "LTM") { const r = natCheck(id, cs, app, date, false); if (r) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, r); continue; } }
+        // LTM 분기말 값이 companyfacts 에 아직 없으면(최신 10-Q 미반영 — KO·MDLZ·BE 2026-07) 그 분기 10-Q 원본 인스턴스의 차원 없는 값으로(2026-10-08)
+        if (!hit && c === "LTM" && !foreign) {
+          try {
+            const fl = await filingAtDate(cik, sub, date);
+            const fx = fl?.facts.find((x) => !x.dims?.length && /USD/i.test(x.unit ?? "USD") && cs.some((t) => x.id === `us-gaap_${t}`));
+            if (fx) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, fx.v, EXACT, `companyfacts 미반영 — ${fl.form} ${fl.filed} 원본 인스턴스 ${fx.id} ${date}`)); continue; }
+          } catch (e) { hardErrors.push(`LTM 재무상태표 원본 조회 실패(${nm}): ${String(e).slice(0, 80)}`); }
+        }
         if (!hit) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, app == null ? { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 빈칸${why ? `(${why})` : ""}`, app, src: null } : { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 ${app}(파생값 가능: ${why || "사유 없음"})`, app, src: null }); continue; }
         const r0 = vsSource(app, hit.val, EXACT, `${cs[usedIdx]} ${hit.form} ${hit.filed}${retagNote(hit) ? ` · ${retagNote(hit)}` : ""}${cm}`);
         add("A", `재무상태표 ${nm} 앱 = SEC`, c, usedIdx > 0 && r0.status === PASS ? { ...r0, status: COMMON } : r0);
