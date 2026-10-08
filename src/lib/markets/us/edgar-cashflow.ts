@@ -715,13 +715,19 @@ export function buildUsCashFlow(
     const div = items.find((x) => x.accountId === "cf:재무활동 현금흐름:배당금 지급");
     if (div)
       for (const p of periods) {
-        if (!present.includes(p.label) || div.values[p.label] != null || div.cellNotes?.[p.label]) continue;
+        // 구성 기간 부족 사유("LTM 구성 분기 없음"·"4분기 산정 불가")는 무배당 판정보다 앞서 달린 것 — 그 기간에 배당 공시가 하나도 없으면 0 이 정답이라
+        // 덮어쓴다(2026-10-09, ISRG LTM — 연간 열은 0 인데 LTM 만 빈칸이던 것). 다른 사유가 달린 칸은 그대로
+        const why0 = div.cellNotes?.[p.label];
+        if (!present.includes(p.label) || div.values[p.label] != null || (why0 && !/^LTM 구성 분기 없음|4분기 산정 불가/.test(why0))) continue;
         const free = p.endDate
           ? p.fiscalQuarter == null && p.label !== "현재/LTM"
             ? dividendFreeYear(facts, p.fiscalYear)
             : dividendFreeSince(facts, new Date(Date.parse(p.endDate) - 365 * 864e5).toISOString().slice(0, 10), p.endDate)
           : false;
-        if (free) div.values[p.label] = 0;
+        if (free) {
+          div.values[p.label] = 0;
+          if (why0 && div.cellNotes) { const { [p.label]: _drop, ...rest } = div.cellNotes; void _drop; div.cellNotes = rest; }
+        }
       }
     fillBlankReasons(items, present);
   }

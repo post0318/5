@@ -142,7 +142,9 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     }
     // 10-K 본표에 줄이 있는데 그 기간 칸이 "—"(값 태그 없음)이면 0(2026-10-09 — GLW 2024 10-K 자기주식 취득 줄의 2023 칸 "—", 앱이 "본표에 별도 줄 없음"
     // 빈칸으로 두던 것. 검증기 A층이 같은 판독으로 확인). 어느 공시에든 그 기간 값이 있으면 그 값을 쓰고 채우지 않는다
-    if (/^10-K/.test(f.form)) {
+    // 10-Q 도 같다(2026-10-09 — GLW 2026 2분기 10-Q 자기주식 취득 줄의 당기 누적 칸 "—", 전년 동기 133: 앱이 LTM 을 "LTM 구성 분기 없음"으로 비웠다.
+    // 오너 규칙 "본표 줄의 — = 0" — 검증기 A층이 같은 판독으로 확인)
+    if (/^10-[KQ]/.test(f.form)) {
       const faceK = cashFlowFace(calXml);
       if (faceK) for (const grp of zeroGroups) {
         const c0 = grp.find((c) => faceK.has(`us-gaap_${c}`));
