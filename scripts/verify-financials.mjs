@@ -9965,6 +9965,27 @@ async function verifyUs(sym) {
       if (oth.length >= 3 && oth.every((x) => x.metricClass[n] === "외부단독이탈") && !checks.some((k) => k.col === col && k.status === FAIL)) cls[n] = "외부단독이탈";
     }
   }
+  // 화면 간 "양쪽 빈칸" → 기대 빈칸 확인(2026-10-08): 두 화면이 같이 비었고 그 빈칸이 원자료로 정해진 것이면(D층 부호 규칙 통과 — 분모 ≤ 0,
+  // 또는 결산일이 Yahoo 첫 거래일보다 앞 — 상장 전) 같은 값(빈칸)으로 통과. 사유를 원자료로 못 정하면 검증불가 유지
+  {
+    let firstTrade = null;
+    try { const y0 = await yahoo(); const ch = await y0.chart(sym, { period1: "1980-01-01", interval: "1mo" }, { validateResult: false }); const ft = ch?.meta?.firstTradeDate; firstTrade = ft ? new Date(ft).toISOString().slice(0, 10) : null; } catch (e) { hardErrors.push(`Yahoo 첫 거래일 조회 실패: ${e?.message ?? e}`); }
+    const preList = new Map();
+    for (const [c, x] of Object.entries(H)) {
+      if (c === "LTM" || x?.mc != null || !x?.date || !firstTrade) continue;
+      if (x.date < firstTrade) preList.set(c, `상장 전 — Yahoo 첫 거래일 ${firstTrade} > 결산일 ${x.date}`);
+    }
+    for (const k of checks) if (k.layer === "D" && k.name === "시가총액 존재" && k.status === NA && preList.has(k.col)) { k.status = PASS; k.note = preList.get(k.col); }
+    const metricOf = (n) => { const m = n.match(/^(EV\/EBITDA|PER|PBR|PSR)/); return m ? m[1] : null; };
+    const signOk = new Map();
+    for (const k of checks) if (k.layer === "D" && k.status === PASS && /부호 규칙\(분모 ≤ 0 → 빈칸\)/.test(k.name)) signOk.set(`${metricOf(k.name)}|${k.col}`, "분모 ≤ 0 → 빈칸(D층 부호 규칙 통과)");
+    for (const k of checks) {
+      if (k.layer !== "C" || k.status !== NA || k.note !== "양쪽 빈칸") continue;
+      const m = metricOf(k.name); if (!m) continue;
+      const why = signOk.get(`${m}|${k.col}`) ?? preList.get(k.col);
+      if (why) { k.status = PASS; k.note = `양쪽 빈칸 = 기대 빈칸 — ${why}`; }
+    }
+  }
   return { sym, checks, review, hardErrors, revErrors, cogsErrors, opincErrors, daErrors, sgaErrors, audit };
 }
 
