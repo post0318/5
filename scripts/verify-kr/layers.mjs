@@ -287,11 +287,14 @@ export async function krOriginalLayers(ctx) {
         const r = alotCommonDps(list);
         const v = r ? num(r[f]) : null;
         if (v != null) { dps = v; how = `DART 배당 ${ry} 사업보고서 ${f}`; break; }
+        // 무배당 = 0(오너 규칙) — 현금배당금총액 "-"(또는 0)이고 보통주 주당 현금배당금도 비었으면 0(2026-10-08)
+        const tot = (list ?? []).find((x) => /^현금배당금총액/.test(x.se ?? ""));
+        const t = String(tot?.[f] ?? "").trim();
+        if (tot && (t === "-" || num(t) === 0)) { dps = 0; how = `DART 배당 ${ry} 사업보고서 ${f} 현금배당금총액 "${t}" — 무배당`; break; }
       }
     } catch (e) { err(`DART 배당(alotMatter) ${y}`, e); continue; }
     const appDps = h.rows.find((r) => r.key === "dps")?.values[h.columns.findIndex((c) => c.label === col)] ?? null;
-    if (dps === 0 && appDps == null) add("K5", "주당배당금 = DART", col, { status: PASS, note: "무배당(0) — 앱 빈칸" });
-    else exact("K5", "주당배당금 = DART", col, appDps, dps, how);
+    exact("K5", "주당배당금 = DART", col, appDps, dps, how);
     const k = caps.get(y);
     const appY = h.rows.find((r) => r.key === "divyield")?.values[h.columns.findIndex((c) => c.label === col)] ?? null;
     if (dps != null && dps > 0 && k?.close) {
@@ -324,7 +327,9 @@ export async function krOriginalLayers(ctx) {
     if (how != null) {
       if (exp == null) {
         // 창 안 배당 없음 — 앱은 최근 사업연도 값 + 주석(무배당이면 빈칸)
-        if (fyD != null) add("K5", "LTM 주당배당금 = 최근 사업연도(창 안 배당 없음 — 주석 표시된 대체)", "LTM", fb ? same(appD, fyD) : { status: FAIL, note: `${how} · 앱 ${appD} 인데 대체 주석 없음` });
+        // 최근 사업연도도 무배당(0)이면 창 안 합(0)과 사업연도 값(0)이 같다 — 앱 0 이면 주석 유무와 관계없이 통과(2026-10-08, 무배당 = 0)
+        if (fyD === 0) add("K5", "LTM 주당배당금 = 공공데이터 12개월 합", "LTM", appD === 0 ? { status: PASS, note: `${how} · 최근 사업연도도 무배당 — 0` } : { status: FAIL, note: `${how} · 최근 사업연도 무배당인데 앱 ${appD}` });
+        else if (fyD != null) add("K5", "LTM 주당배당금 = 최근 사업연도(창 안 배당 없음 — 주석 표시된 대체)", "LTM", fb ? same(appD, fyD) : { status: FAIL, note: `${how} · 앱 ${appD} 인데 대체 주석 없음` });
         else add("K5", "LTM 주당배당금 = 공공데이터 12개월 합", "LTM", appD == null ? { status: PASS, note: `${how} · 사업연도 배당도 없음 — 빈칸` } : { status: FAIL, note: `${how} · 앱 ${appD}` });
       } else exact("K5", "LTM 주당배당금 = 공공데이터 12개월 합", "LTM", appD, exp, how);
       const d = exp ?? (fb ? fyD : null);

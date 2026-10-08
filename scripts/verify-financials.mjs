@@ -10398,8 +10398,9 @@ async function verifyKr(sym) {
         const sum = (x.mc ?? 0) + (x.pref ?? 0) + (x.debt ?? 0) + (x.nci ?? 0) + (x.cash ?? 0);
         add("D", "EV = 보통주+우선주 시총+차입금+NCI−현금", c, same(x.ev, sum));
         if (x.ebitda != null && x.ebitda > 0) add("D", "EV/EBITDA = EV÷EBITDA", c, same(x.evx, x.ev / x.ebitda));
-        if (x.ebitda != null && x.ebitda <= 0) add("D", "EV/EBITDA 부호 규칙", c, x.evx == null ? { status: PASS } : { status: FAIL, note: `EBITDA ${x.ebitda} 인데 ${x.evx}` });
       }
+      // EBITDA ≤ 0 이면 EV 유무와 관계없이 EV/EBITDA 빈칸(2026-10-08 — EV 가 빈 해에도 부호 규칙을 남겨 화면 간 양쪽 빈칸을 기대 빈칸으로 확인)
+      if (x.ebitda != null && x.ebitda <= 0) add("D", "EV/EBITDA 부호 규칙(분모 ≤ 0 → 빈칸)", c, x.evx == null ? { status: PASS } : { status: FAIL, note: `EBITDA ${x.ebitda} 인데 ${x.evx}` });
     }
   }
   // ── C층 화면 간 일치(한국, 2026-10-02 — 미국과 같은 검사): 분기 열 · 총괄 = 각 재무제표(연간·분기) · 하이라이트 LTM = 최근 4개 분기 합(손익)·
@@ -10580,6 +10581,23 @@ async function verifyKr(sym) {
         ...(explained.length ? { causes } : {}),
         verdict: matched.length === names.length ? `${names.length}곳 모두 일치` : `${matched.length}/${names.length}곳 일치 — 불일치: ${off.join(", ")}`,
       });
+    }
+  }
+  // 화면 간 "양쪽 빈칸" → 기대 빈칸 확인(2026-10-08, 미국과 같은 원칙): D층 부호 규칙(분모 ≤ 0) 통과 또는 KRX 에 그해 말 종목 없음(상장 전 — K1)이면 통과
+  {
+    const preList = new Map();
+    for (const k of checks) if (k.layer === "K1" && /시가총액\(보통주\) = KRX 연말/.test(k.name) && k.status === NA && /그해 말 종목 없음/.test(k.note ?? "")) {
+      preList.set(k.col, "상장 전 — KRX 에 그해 말 종목 없음"); k.status = PASS; k.note = `양쪽 빈칸 = 기대 빈칸 — ${k.note}`;
+    }
+    for (const k of checks) if (k.layer === "D" && k.name === "시가총액 존재" && k.status === NA && preList.has(k.col)) { k.status = PASS; k.note = preList.get(k.col); }
+    const metricOf = (n) => { const m = n.match(/^(EV\/EBITDA|PER|PBR|PSR)/); return m ? m[1] : null; };
+    const signOk = new Map();
+    for (const k of checks) if (k.layer === "D" && k.status === PASS && /부호 규칙\(분모 ≤ 0 → 빈칸\)/.test(k.name)) signOk.set(`${metricOf(k.name)}|${k.col}`, "분모 ≤ 0 → 빈칸(D층 부호 규칙 통과)");
+    for (const k of checks) {
+      if (k.layer !== "C" || k.status !== NA || k.note !== "양쪽 빈칸") continue;
+      const m = metricOf(k.name); if (!m) continue;
+      const why = signOk.get(`${m}|${k.col}`) ?? preList.get(k.col);
+      if (why) { k.status = PASS; k.note = `양쪽 빈칸 = 기대 빈칸 — ${why}`; }
     }
   }
   return { sym, checks, review, hardErrors };
