@@ -29,6 +29,7 @@ import { getKrDaDocChecked } from "@/lib/db/kr-da";
 import { usSharesHint } from "@/lib/markets/us/shares-hint";
 import { loadKrCapsChecked } from "@/lib/markets/kr/dart-ev";
 import { dartAdrAnalysis, dartAdrDetail, dartAdrOf } from "@/lib/markets/us/dart-adr";
+import { getJpFinModel, jpStatementView } from "@/lib/markets/jp/statements";
 
 export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
@@ -77,6 +78,17 @@ export async function GET(
       detailView === "bs" ||
       detailView === "analysis" ||
       detailView === "summary";
+
+    // 일본 — EDINET XBRL 본표(jp/statements.ts: 회사 표시 구조·계정명 그대로, 연간 5기 + 현재/LTM, 분기 탭 = 반기 열).
+    // 분기 탭 기본 표도 같은 조립 결과(총괄) — 옛 경영지표 요약(adapter.getFinancials 연간)은 멀티플·컨센서스 계산이 아직 쓴다
+    if (market === "jp" && (isDetail || period === "quarter")) {
+      if (detailView === "analysis") {
+        return Response.json({ error: "일본 재무분석은 아직 준비 중입니다(3대 재무제표만 제공)" }, { status: 501 });
+      }
+      const model = await getJpFinModel(sym);
+      const v = detailView === "is" || detailView === "bs" || detailView === "cf" ? detailView : "summary";
+      return ok(jpStatementView(model, sym, v, period), { headers: NO_CACHE });
+    }
 
     // no-silent-catch:begin — 한국 경로(감사 1차 ⑥⑨: 조회 실패는 경고로 남기고 캐시하지 않는다)
     if (market === "kr" && isDetail) {
