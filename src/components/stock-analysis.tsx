@@ -35,6 +35,7 @@ import { ChangePercent, Money, Multiple, NumberText, Percent, stockDirClass } fr
 import { FinancialsTable } from "@/components/financials-table";
 import { ConsensusPanel } from "@/components/consensus-panel";
 import { BrokerRatings } from "@/components/broker-ratings";
+import { MinkabuConsensus } from "@/components/minkabu-consensus";
 import { StockNews } from "@/components/stock-news";
 import { ShinhanResearch } from "@/components/shinhan-research";
 import { CompanyBlog } from "@/components/company-blog";
@@ -972,6 +973,9 @@ export function StockAnalysis({
               {market === "us" && (
                 <BrokerRatings market={market} symbol={ov.symbol} yahoo={yahooOverride} />
               )}
+
+              {/* 일본: 민카부 애널리스트 컨센서스(Yahoo 목표주가와 별개 출처, 2026-10-09) */}
+              {market === "jp" && <MinkabuConsensus symbol={ov.symbol} price={ov.quote?.last ?? null} />}
 
               {ov.warnings.length > 0 && (
                 <div className="text-muted-foreground space-y-1 text-xs">

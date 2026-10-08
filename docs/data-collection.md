@@ -138,6 +138,7 @@ Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정
 | 항목 | 소스 | 실행(이전 전) | 빈도 | 비고 |
 |---|---|---|---|---|
 | 애널리스트 투자의견(미국, 종목당 상위 5건) | StockAnalysis | GitHub `analyst-forecasts`(`collect-analyst-forecasts.mjs`) | 하루 1회 | 저장 `analyst_forecasts`(종목 단위 스냅샷 교체). 승인 조건 하루 1회·종목당 5행. 빈도 확정(2026-10-03 오너) |
+| 애널리스트 컨센서스(일본) | みんかぶ `minkabu.jp/stock/{코드}/analyst_consensus`(서버렌더 HTML, JSON·XHR 없음) | 화면 조회 때(`/api/markets/jp/{코드}/minkabu`, `lib/markets/jp/minkabu.ts`) | 종목당 12시간 캐시(Next 데이터 캐시 + 메모리, 404·실패도 기억) | 크롤링 예외 5건(2026-10-09 오너 승인 — 개인용·적은 요청·캐시, 무료). **일본 IP 에서만 열림**(한국 IP 403). 레이팅·목표주가(머리 상자 = 평균 버림, 야후 7203.T 평균과 같음)·의견 분포·애널리스트 수·기준일·3개월/1개월/1주 전 변화·실적 예상(매출·순이익·EPS, 회사 예상 포함). 404 = 애널리스트 예상 없는 종목(1301 등), DB 저장 없음 |
 | 재무 배치(fin-build) | SEC EDGAR | **오라클 타이머 `fin-fin-build`**(`ops/oracle/run-ts.sh fin-build.mts`, 2026-10-03 이전) | 하루 1회 06:10 | 새 정기공시·엔진판 변경 종목만 조립. SEC 캐시 `/opt/macro/sec-cache` 상시 보관(앱과 공유) |
 | 미국 TTM 스냅샷(ttm-build) | SEC + 앱 계산 | **오라클 타이머 `fin-ttm-build`** + 배포 직후 `post-deploy.sh`(2026-10-03 이전) | 하루 1회 06:50 + 배포 직후(무효 저장본만) | 판번호 = 계산 판번호 `e{ENGINE_VERSION}.t{TTM_RULES_VERSION}`(커밋 아님, 2026-10-03 오너 결정) — 계산 규칙이 바뀔 때만 전 종목 재계산 |
 | 한국 감가상각 적재(kr_da) | DART(사업·반기·분기보고서 XBRL·원문) | **오라클 타이머 `fin-kr-da`**(`ops/oracle/run-kr-da.sh`, 2026-10-05 오너 결정 — master 병합 뒤 설치) | 하루 1회 05:50 + 적재 규칙 판본이 바뀐 배포 직후 | 증분: 정기공시 최신 접수번호·규칙 판본이 같은 종목은 list.json 1건만 보고 건너뜀. DART 하루 상한 2,000·020 즉시 중단. 검증·로컬은 `kr_da_staging` 만 |
