@@ -5163,8 +5163,18 @@ async function verifyUs(sym) {
     if (BS[c]?.assets != null) {
       // 최신 제출분 — 나중 공시의 반올림 재태깅(100만·1억·10억·100억 단위)은 제외(latestPrecise, 검증기 독립 판정)
       const a = assetsAt(x.date), rs = c !== "LTM" ? eqRestate(x.date) : null;
+      // 외화 공시(ASML us-gaap EUR, TSM·SPOT ifrs-full): USD 태그가 없으면 원통화 자산 × 연준 H.10 결산일 이전 마지막 고시(2026-10-08)
+      if (!a && foreign && natCur && fxRows && c !== "LTM") {
+        const es = [["us-gaap", "Assets"], ["ifrs-full", "Assets"]].flatMap(([ns, t]) => (f.facts[ns]?.[t]?.units?.[natCur] ?? []).map((e) => ({ ...e, t })))
+          .filter((e) => !e.start && /^(10-K|20-F|40-F)/.test(e.form ?? "") && dayDiff(e.end, x.date) <= 7).sort((p, q) => (p.filed ?? "").localeCompare(q.filed ?? ""));
+        const e = es.at(-1), rate = e ? fxEndRate(fxRows, x.date) : null;
+        if (e && rate != null) {
+          const exp = e.val * rate, how = `원통화 ${e.t} ${e.val} ${natCur}(${e.form} ${e.filed}) × 연준 H.10 ${x.date} 이전 마지막 고시 ${rate}`;
+          add("A", "자산총계 앱 = SEC 자산총계", c, extEq(BS[c].assets, exp) ? { status: PASS, note: `${how} (정확 일치)`, app: BS[c].assets, src: exp } : { status: FAIL, note: `앱 ${BS[c].assets} ≠ 기대 ${exp} — ${how}`, app: BS[c].assets, src: exp });
+        }
+      }
       // 자본 정정 열 — 자산 = SEC 자산 + 정정 금액(정정된 재무상태표 전체는 공시되지 않아 부채 + 자본으로 산출)
-      add("A", "자산총계 앱 = SEC 자산총계", c, rs && a ? vsSource(BS[c].assets, a.val + rs.delta, EXACT, `SEC 자산 ${a.val} + 자본 정정 ${rs.delta}(${rs.filed}) — 오너 결정 (다)`) : vsSource(BS[c].assets, a?.val ?? null, EXACT, retagNote(a)));
+      if (a || !(foreign && checks.some((k) => k.name === "자산총계 앱 = SEC 자산총계" && k.col === c))) add("A", "자산총계 앱 = SEC 자산총계", c, rs && a ? vsSource(BS[c].assets, a.val + rs.delta, EXACT, `SEC 자산 ${a.val} + 자본 정정 ${rs.delta}(${rs.filed}) — 오너 결정 (다)`) : vsSource(BS[c].assets, a?.val ?? null, EXACT, retagNote(a)));
     }
     if (BS[c]) {
       // 대차대조표 항등식 — 같은 공시의 두 합계라 정확 일치(예전 허용 0.05% 제거). 반올림 재태깅이 갈리는 날짜면 SEC 두 값을 메모에
@@ -9966,6 +9976,18 @@ async function verifyUs(sym) {
       if (cls[n] !== "③") continue;
       const oth = review.filter((x) => x !== o && x.metricClass?.[n] && /^\d{4}Y /.test(x.item ?? "") && x.item.slice(6) === m);
       if (oth.length >= 3 && oth.every((x) => x.metricClass[n] === "외부단독이탈") && !checks.some((k) => k.col === col && k.status === FAIL)) cls[n] = "외부단독이탈";
+    }
+  }
+  // 외화 공시(20-F·외화 10-K): USD 기준 원자료 검사가 "원자료 없음"이어도 같은 칸의 원통화 × 연준 H.10 검사가 통과했으면 그 결과로(2026-10-08 —
+  // ASML 은 us-gaap EUR 로만 공시해 USD 태그가 없다. 같은 값을 두 번 검사하는 셈이라 원통화 쪽 판정을 근거로 남긴다)
+  if (foreign) {
+    const NAT_OF = { "세전이익 앱 = SEC 세전이익": "세전이익 환산 환율 = 기간 평균(외화)", "법인세 앱 = SEC 법인세비용": "법인세 환산 환율 = 기간 평균(외화)",
+      "자산총계 앱 = SEC 자산총계": "재무상태표 자산 총계 앱 = SEC" };
+    for (const k of checks) {
+      const nn = NAT_OF[k.name];
+      if (!nn || k.layer !== "A" || k.status !== NA || !/^원자료 없음/.test(k.note ?? "")) continue;
+      const n = checks.find((x) => x.name === nn && x.col === k.col && x.status === PASS);
+      if (n) { k.status = PASS; k.note = `USD 태그 없음(원통화 공시) — 「${nn}」 통과: ${String(n.note ?? "").slice(0, 160)}`; }
     }
   }
   // 화면 간 "양쪽 빈칸" → 기대 빈칸 확인(2026-10-08): 두 화면이 같이 비었고 그 빈칸이 원자료로 정해진 것이면(D층 부호 규칙 통과 — 분모 ≤ 0,
