@@ -82,6 +82,7 @@ robots 실측(2026-10-03, 수집기가 실제로 접속하는 주소 기준)으�
 |---|---|---|---|---|
 | 외국인 코스피200 선물 순매수 | **다음 금융(카카오)** 투자주체별 동향 JSON — 2026-09-28 네이버(410 폐지)에서 교체 | **오라클 타이머 `macro-foreign-fut`**(2026-10-03 이전, `collect-foreign-fut.mjs` → 서버 안 `/api/cron/kr-fg`) | 하루 1회 06:31(KRX 배치와 1분 어긋남) | `kr_fg_daily` |
 | 한국 공포·탐욕 원자료(전종목 일별매매·VKOSPI·옵션) | KRX OPEN API | ~~Vercel Cron~~ → **오라클 타이머 `macro-kr-fg`**(2026-10-03 이전) | **다음 날 06:30**(전 영업일분 — KRX OPEN API 는 다음 영업일에 공개). 휴장 판정은 공휴일 달력(`market-calendar.ts`). 2026-10-03 09-14~10-01 휴장 오기록 11일 백필 | `kr_fg_daily`·`kr_stock_roll`·`kr_index_daily` |
+| 브라질 국채 NTN-F ~10년 롤링 수익률 — 중간값(주간 리포트 스냅샷, 4번과 같은 정의) | ① ANBIMA 지표금리 일일 파일 `anbima.com.br/informacoes/merc-sec/arqs/msYYMMDD.txt`(인증 없음, 약 4주치만 공개 → DB 누적) ② 브라질 재무부 Tesouro Transparente CKAN `precotaxatesourodireto.csv`(약 14MB, 매일 약 10:20 UTC 에 전 영업일분 갱신) (매수+매도)/2. 실시간 임시값은 안 씀 | **오라클 타이머 `macro-br-ntnf`**(2026-10-06 신설, `scripts/run/ntnf-daily.mts` → DB 직접) — 예전엔 4번 저장소(post0318/4) GitHub Actions 가 만든 JSON 을 읽었다 | 매일 07:10. CSV 는 **새 날짜만**(최근 2주 재확인, 기존 값 불변), ANBIMA 는 최근 35일 중 아직 anbima 가 아닌 날짜만(CSV 값 대체). 각 값에 `src`(anbima·csv-mid). 첫 실행 때 7년 백필. 최신값이 브라질 평일 3일 넘게 안 바뀌면 실패(→ `job-macro-br-ntnf` 알림) | `br_ntnf_daily`(1행/영업일, 7년 ≈ 0.3MB) |
 | Fed 금리 확률 일별 스냅샷 | Kalshi | GitHub `fedwatch-snapshot` → `/api/cron/fedwatch` | 하루 1회 | DB |
 
 한국 공포·탐욕은 화면 조회 때 빠진 영업일을 백그라운드로 보충하는 자가 복구가 있다(`lib/macro/kr/batch.ts`, 10분 쿨다운).
@@ -151,7 +152,7 @@ Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정
 
 | 항목 | 입력 | 실행(이전 전) | 빈도 |
 |---|---|---|---|
-| 초안 생성(`/api/cron/weekly-report`) | 위 DB(리서치·뉴스·텔레그램) + 시세 스냅샷(Yahoo·ECOS·브라질 SGS·4번 저장소 국채 JSON) + 네이버 검색어 트렌드 + Gemini 코멘트 | GitHub `weekly-report` | 월 06:00(2026-10-03 09:00 에서 앞당김) |
+| 초안 생성(`/api/cron/weekly-report`) | 위 DB(리서치·뉴스·텔레그램) + 시세 스냅샷(Yahoo·ECOS·브라질 SGS·브라질 NTN-F `br_ntnf_daily`) + 네이버 검색어 트렌드 + Gemini 코멘트 | GitHub `weekly-report` | 월 06:00(2026-10-03 09:00 에서 앞당김) |
 
 발행은 자동이 아니다 — 오너가 `/weekly` 에서 검수 후 발행. Gemini 비용은 앱 예산 `WEEKLY_MONTHLY_BUDGET_USD`(10달러) +
 구글 지출 상한 `guard-gemini`(13,000원).
