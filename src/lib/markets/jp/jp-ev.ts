@@ -417,7 +417,7 @@ export async function loadJpPx(symbol: string): Promise<JpPx> {
     hasSplits: q.splits !== undefined,
     last: q.last,
     lastDate: q.lastDate,
-    warn: [...(q.warnings ?? []), ...(q.splits === undefined ? [`시세 ${q.source} — 분할 이력 없음(연도 열 시가총액·PER 공란)`] : [])],
+    warn: [...(q.splits === undefined ? [`시세 ${q.source} — 분할 이력 없음(연도 열 시가총액·PER 공란)`] : [])],
   };
 }
 /** 기준일 d 에 그 날 이전 마지막 거래일 봉(10일 안) */

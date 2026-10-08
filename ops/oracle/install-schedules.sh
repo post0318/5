@@ -96,9 +96,11 @@ unit macro-br-ntnf "거시경제: 브라질 국채 NTN-F 10년(ANBIMA·재무부
 sed -i 's/^TimeoutStartSec=.*/TimeoutStartSec=15min/' "$U/macro-br-ntnf.service"
 # ⑤ 주간 리포트 초안 — 월요일 06:00(오너 2026-10-03)
 unit weekly-report "주간 리포트 초안 생성" "/opt/macro/ops/call-cron.sh /api/cron/weekly-report 330 '{\"force\":false}'" "Mon *-*-* 06:00:00\n"
+# ④ 일본 EDINET 공시 목록·재무 보고서 색인(jp_docs) — 최근 10일만 다시 받아 확정(일본 화면은 색인이 빠진 날이 있으면 옛 표 대신 오류, 2026-10-09)
+unit fin-jp-edinet-index "종목분석: 일본 EDINET 공시 색인" "/opt/macro/ops/run-ts.sh jp-edinet-index.mts --days=10 --no-samples" "*-*-* 08:30:00\n*-*-* 20:30:00\n"
 
 systemctl daemon-reload
-for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/macro-kr-fg.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer; do
+for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/macro-kr-fg.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer "$U"/fin-jp-edinet-index.timer; do
   systemctl enable --now "$(basename "$t")" >/dev/null
 done
-systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|br-ntnf|macro-kr-fg|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog" | sed 's/^/타이머 수: /'
+systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|br-ntnf|macro-kr-fg|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog|jp-edinet-index" | sed 's/^/타이머 수: /'
