@@ -1,6 +1,6 @@
 import "server-only";
 import { unzipSync } from "fflate";
-import { AdapterError } from "../types";
+import { edinetDocZip } from "./edinet-store";
 import type {
   FinancialLineItem,
   FinancialPeriod,
@@ -14,7 +14,6 @@ import type {
  * 자산·순자산·EPS 등을 원본 일본어 항목명과 함께 담고 있어 리서치 요약에 적합.
  */
 
-const BASE = "https://api.edinet-fsa.go.jp/api/v2";
 
 interface CsvRow {
   elementId: string;
@@ -101,17 +100,11 @@ function parseNum(v: string): number | null {
 }
 
 export async function fetchEdinetSummary(
-  apiKey: string,
   docID: string,
   periodEndYear: number,
 ): Promise<FinancialStatement | null> {
-  const res = await fetch(
-    `${BASE}/documents/${docID}?type=5&Subscription-Key=${apiKey}`,
-    { signal: AbortSignal.timeout(30_000) },
-  );
-  if (!res.ok) throw new AdapterError(`EDINET 문서 다운로드 실패 (${res.status})`, { status: 502 });
-  const buf = new Uint8Array(await res.arrayBuffer());
-  const files = unzipSync(buf);
+  // CSV 원본 = 디스크 캐시(edinet-store — 문서번호는 바뀌지 않아 영구 보관, 2026-10-08). 조회 실패는 FetchError 로 올라간다
+  const files = unzipSync(await edinetDocZip(docID, 5));
   const csvName = Object.keys(files).find((n) => /jpcrp\d+-asr.*\.csv$/i.test(n));
   if (!csvName) return null;
   const text = new TextDecoder("utf-16le").decode(files[csvName]);
