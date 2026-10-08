@@ -14,6 +14,8 @@ import { FetchError } from "../http";
  *    영구 보관(정리 대상 아님). 최근 이틀은 디스크에 두지 않고 매번 새로 받는다(프로세스 메모 10분). 휴일의 "0건"도 상태 200 이면 정상 목록으로 저장.
  *  - <root>/doc/<docID 앞 4자>/<docID>/type<N>.zip   서류 본문(type=1 XBRL·type=5 CSV). docID 는 바뀌지 않는다(정정은 새 docID) → 영구.
  *    읽을 때 파일 시각을 갱신(오래 안 쓴 것 판정).
+ *  - <root>/taxonomy/<분류>/<판>/label/…_lab.xml   EDINET 공개 분류의 표준 계정 이름표(재무제표 엔진 — xbrl-fin.ts). 판별 정적 파일 → 영구(정리 대상 아님).
+ *  - <root>/jp-fin/v<판독판>/<docID>.json   서류별 본표 판독 결과(xbrl-fin.ts — 수십 KB). docID 불변 → 영구, 판독 규칙이 바뀌면 판독판 폴더가 바뀐다.
  *  - 프로세스당 첫 사용 때 1회 정리(doc 만): 400일 넘게 안 쓴 파일 삭제, 전체가 EDINET_CACHE_MAX_GB(기본 8) 넘으면 오래 안 쓴 것부터.
  *    목록(list)은 지우지 않는다. .tmp 는 건너뛰되 1시간 넘은 것(죽은 프로세스가 남긴 것)은 지운다.
  * 쓰기 = 같은 폴더 임시 이름(.{이름}.{pid}.{난수}.tmp) → rename(앱·배치가 같은 폴더를 쓰므로 잘린 파일을 읽지 않게 — dart-cache.ts 와 같은 규칙).
@@ -382,4 +384,58 @@ export async function edinetDocZip(docID: string, type: 1 | 5): Promise<Uint8Arr
     if (f) await writeAtomic(f, buf);
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
   });
+}
+
+// ── EDINET 공개 분류(taxonomy) 파일 · 판독 결과 JSON ── (일본 재무제표 엔진, 2026-10-08 — xbrl-fin.ts)
+const TAXONOMY_BASE = "http://disclosure.edinet-fsa.go.jp/taxonomy/";
+const TAX_REL_RE = /^(jppfs|jpigp|jpcrp)\/\d{4}-\d{2}-\d{2}\/label\/(jppfs|jpigp|jpcrp)_\d{4}-\d{2}-\d{2}_lab\.xml$/;
+const validLab = (b: Buffer) => b.length > 1000 && b.includes("<link:labelLink");
+
+/**
+ * EDINET 공개 분류 파일(표준 계정의 일본어 이름표 `_lab.xml`) — 판(版)마다 바뀌지 않는 정적 파일이라 <root>/taxonomy/<rel> 에 영구 보관.
+ * API 가 아니라 공개 파일(열쇠 불필요)이지만 요청은 같은 줄(EDINET_MIN_GAP_MS 간격)로 세운다. 이름표 파일이 아니면 FetchError(저장 안 함).
+ */
+export async function edinetTaxonomyText(rel: string): Promise<string> {
+  if (!TAX_REL_RE.test(rel)) throw new FetchError(`허용하지 않는 분류 파일 경로 ${rel}`, { status: 400 });
+  return once(`tax:${rel}`, async () => {
+    const r = edinetCacheRoot();
+    const f = r ? path.join(r, "taxonomy", rel) : null;
+    if (f) {
+      const hit = await readCached(f, (b) => (validLab(b) ? b : null), false);
+      if (hit) {
+        edinetCacheStats.hit++;
+        return hit.toString("utf8");
+      }
+    }
+    edinetCacheStats.miss++;
+    const { buf } = await edinetFetch(TAXONOMY_BASE + rel, 120_000);
+    if (!validLab(buf)) throw new FetchError(`EDINET 분류 파일 형식 아님 — ${rel} (${buf.length}B)`, { status: 502 });
+    if (f) await writeAtomic(f, buf);
+    return buf.toString("utf8");
+  });
+}
+
+const JSON_NS_RE = /^[a-z0-9-]+(\/[a-z0-9-]+)?$/;
+const JSON_NAME_RE = /^[A-Za-z0-9_-]{1,80}$/;
+/** 판독 결과 JSON 디스크 캐시 읽기 — <root>/<ns>/<name>.json. 디스크 미사용·없음·깨짐(지움)이면 null */
+export async function readEdinetJson<T>(ns: string, name: string): Promise<T | null> {
+  const r = edinetCacheRoot();
+  if (!r || !JSON_NS_RE.test(ns) || !JSON_NAME_RE.test(name)) return null;
+  return readCached<T>(
+    path.join(r, ns, `${name}.json`),
+    (b) => {
+      try {
+        return JSON.parse(b.toString("utf8")) as T;
+      } catch { // silent-ok: 깨진 파일 = 미스 — readCached 가 경고를 남기고 지운다
+        return null;
+      }
+    },
+    true,
+  );
+}
+/** 판독 결과 JSON 디스크 캐시 쓰기(원자적). 디스크 미사용이면 아무것도 하지 않는다 */
+export async function writeEdinetJson(ns: string, name: string, v: unknown): Promise<void> {
+  const r = edinetCacheRoot();
+  if (!r || !JSON_NS_RE.test(ns) || !JSON_NAME_RE.test(name)) return;
+  await writeAtomic(path.join(r, ns, `${name}.json`), JSON.stringify(v));
 }

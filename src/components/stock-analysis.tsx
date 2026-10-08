@@ -169,8 +169,8 @@ export function StockAnalysis({
     retry: false,
   });
 
-  // 표준화 상세표 (총괄·BS·IS·CF 하위탭) — 미국·한국
-  const hasDetail = market === "us" || market === "kr";
+  // 상세표 (총괄·BS·IS·CF 하위탭) — 미국·한국(표준화 재분류), 일본(EDINET 본표 원본 줄 — jp/statements.ts)
+  const hasDetail = market === "us" || market === "kr" || market === "jp";
   const cfDetailQ = useQuery({
     queryKey: ["financials-cf", market, symbol, period],
     queryFn: () =>
