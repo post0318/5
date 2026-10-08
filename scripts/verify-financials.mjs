@@ -322,6 +322,25 @@ async function readDimShares(cik, accn, end, filed) {
   return out.map((o) => ({ ...o, filed, accns: new Set([accn]) }));
 }
 
+/** 10-K 현금흐름표 표시 구조(_pre.xml)의 개념 id 집합(ns_이름) — 줄 존재 판정용. 없으면 null */
+const cfFaceCache = new Map();
+async function cfFaceConcepts(cik, accn) {
+  if (cfFaceCache.has(accn)) return cfFaceCache.get(accn);
+  const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+  const name = (await secJson(base + "/index.json")).directory.item.map((x) => x.name).find((x) => /_pre\.xml$/i.test(x));
+  let out = null;
+  if (name) {
+    const x = await secText(`${base}/${name}`);
+    for (const m of x.matchAll(/<link:presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:presentationLink>/g)) {
+      if (!/CASHFLOW/i.test(m[1]) || /Parenth|Detail|Table|Polic|Supplement/i.test(m[1])) continue;
+      out ??= new Set();
+      for (const h of m[2].matchAll(/xlink:href="[^"#]*#([^"]+)"/g)) out.add(h[1]);
+    }
+  }
+  cfFaceCache.set(accn, out);
+  return out;
+}
+
 /**
  * 클래스 A(상장 클래스) 연간 기본 EPS — EPS 를 클래스 차원(StatementClassOfStockAxis)에만 공시한 회사(V, 2026-10-07). 그 해 10-K 원본에서
  * 결산일이 같은 300~400일 기간·클래스 A 한 차원의 EarningsPerShareBasic. 검증기 독립 판독(앱 edgar-classfacts.ts 와 코드 공유 안 함)
@@ -5835,6 +5854,25 @@ async function verifyUs(sym) {
             ["ifrs-full", ["DividendsPaidClassifiedAsFinancingActivities", "DividendsPaid", "DividendsRecognisedAsDistributionsToOwners", "DividendsRecognisedAsDistributionsToOwnersPerShare"]]];
           const ev = DIV_EVID.flatMap(([ns, ts]) => ts.flatMap((t) => Object.values(FACTS[ns]?.[t]?.units ?? {}).flat().filter((e) => e.end > from && e.end <= date && e.val !== 0).map((e) => `${t} ${e.end} ${e.val}`)));
           if (!ev.length) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: PASS, note: `무배당 — SEC 배당 지급·선언 기록 ${from}~${date} 없음(0 포함) → 앱 0(오너 결정 2026-10-02 무배당 = 0)`, app, src: 0 }); continue; }
+        }
+        // 앱 0 인데 SEC 값 없음(2026-10-08): 이 사업연도를 실은 10-K(영업활동 현금흐름 연간 값의 접수번호들)의 현금흐름표 표시 구조(_pre.xml)에 이 줄이
+        // 있으면 그 칸은 "—" → 0 통과, 어느 10-K 에도 줄이 없으면 오너 규칙(2026-10-02 "본표에 없는 줄은 0 으로 채우지 않고 본표에 별도 줄 없음")
+        // 위반 → 실패(AMZN FY2025 자기주식 취득: 2025 10-K 현금흐름표에 줄 없음, 앱 0). 무배당 0 은 위에서 따로 판정
+        if (v == null && app === 0 && c !== "LTM") {
+          const accns = [...new Set((G.NetCashProvidedByUsedInOperatingActivities?.units?.USD ?? []).filter((e) => e.start && /^10-K/.test(e.form ?? "") && dayDiff(e.end, date) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300).map((e) => e.accn))];
+          let found = null, read = 0, err = "";
+          for (const accn of accns) {
+            try {
+              const ids = await cfFaceConcepts(cik, accn);
+              if (!ids) continue;
+              read++;
+              const t = cs.find((x) => ids.has(`us-gaap_${x}`));
+              if (t) { found = { t, accn }; break; }
+            } catch (e) { err = String(e).slice(0, 80); }
+          }
+          if (found) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: PASS, note: `본표 줄 있음·이 기간 값 없음(—) → 0 — ${found.t} 가 ${found.accn} 현금흐름표 표시 구조에 있음`, app, src: 0 }); continue; }
+          if (read) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: FAIL, note: `이 해를 실은 10-K ${read}건 현금흐름표에 ${cs.join("/")} 줄 없음인데 앱 0 — 오너 규칙(본표에 없는 줄 = 본표에 별도 줄 없음, 0 으로 채우지 않음)`, app, src: null }); continue; }
+          if (err) hardErrors.push(`현금흐름표 표시 구조 조회 실패(${nm} ${c}): ${err}`);
         }
         if (v == null) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: NA, note: `SEC ${cs.join("/")} 기간 값 없음 — 앱 ${app ?? `빈칸(${why || "사유 없음"})`}`, app, src: null }); continue; }
         const r0 = vsSource(app, sg * v, EXACT, `${how}${sg < 0 ? " × −1(현금 유출 표기)" : ""}${cm}`);
