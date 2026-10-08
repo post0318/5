@@ -5,13 +5,16 @@
 set -euo pipefail
 cat >/etc/systemd/system/macro-jp-collect.service <<UNIT
 [Unit]
-Description=일본 공시 원자료 수집(TDnet 결산단신·J-Quants 결산 요약 → ~/jp-cache 디스크 + jp_* DB 색인)
+Description=일본 공시 원자료 수집(TDnet 결산단신·J-Quants 결산 요약·EDINET 공시 목록 → 디스크 + jp_* DB 색인)
 After=network-online.target mongod.service
 [Service]
 Type=oneshot
 User=ubuntu
 WorkingDirectory=/home/ubuntu/5
 ExecStart=/usr/bin/node scripts/jp/collect-daily.mjs --tdnet-days=7 --jq-from=auto
+# EDINET 공시 목록·색인(jp_docs) — 최근 10일(확정 안 된 날·새 날만 실제로 받음, 나머지는 디스크로 건너뜀)
+Environment=NODE_OPTIONS=--conditions=react-server
+ExecStart=/usr/bin/npx -y tsx@4.23.15 --tsconfig tsconfig.json scripts/run/jp-edinet-index.mts --days=10
 Nice=10
 TimeoutStartSec=3h
 UNIT
