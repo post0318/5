@@ -10326,7 +10326,8 @@ async function verifyKr(sym) {
             if (fsDiv === "OFS") { r.status = PASS; r.note = "양쪽 빈칸 = 기대 빈칸 — DART 별도 재무제표 해(연결 없음): 지배·비지배 구분 없음"; }
             else if (name === "비지배지분") {
               const own = [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]].find(([L0, f]) => L0 && L0.some((r0) => r0.sj_div === "BS" && dartNum(r0[f]) != null));
-              if (own && !dartRows(own[0], ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]).length) { r.status = PASS; r.note = "양쪽 빈칸 = 기대 빈칸 — DART 연결 재무상태표에 비지배지분 줄 없음"; }
+              // 줄이 없거나, 줄은 있어도 그 열 값이 비었으면(이듬해 보고서에 생긴 줄의 전기·전전기 열 — 042660 2023 보고서) 그해 비지배지분 없음
+              if (own && !dartRows(own[0], ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]).some((r0) => dartNum(r0[own[1]]) != null)) { r.status = PASS; r.note = "양쪽 빈칸 = 기대 빈칸 — DART 연결 재무상태표 그 열에 비지배지분 값 없음(줄 없음 또는 빈칸)"; }
             }
           }
           add("A", `${name} = DART`, col, r);
