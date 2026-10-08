@@ -4,6 +4,22 @@
 검증은 **오라클 2호기 `macro-verify`**(140.83.48.57, `~/5`, 개발 서버 `verify-dev` localhost:3000)에서 돌린다 — 운영과 IP·CPU 분리, PC 메모리 부족(DEPLOY.md §0).
 검증기는 기본으로 DB 저장본(api_snap·ttm_snap·fin_sym·us_class_facts)을 우회한다(인증된 `x-verify-no-snapshot` — 브랜치 코드로 새로 계산). `--use-snapshots` 로만 끈다.
 
+## 현재 상태 (2026-10-09) — 다음에 여기서부터
+- **운영 반영 완료**(10-09, master 82c811f, 1호기 배포 성공): CAPEX 개념 `PaymentsForCapitalImprovements`(GLW)·현금흐름 0 채움은 10-Q 만,
+  10-K 본표 줄이 있고 "—"면 0(GLW 2023 자사주), 한국 무배당 = 0. 1호기에서 GLW CAPEX·2023 자사주 0·373220 배당 0 확인.
+  배포 방식: PC `deploy/*` 브랜치(master 위 cherry-pick) → 오너 지시 시 `git push origin deploy/…:master`. 2호기에서 master push 금지.
+- **미국 47종목 전체 모드**(`--metric=bscf --cogs-rules=scripts/metrics/cogs-rules.json`, verify-us-20261009-001042): 실패 0 · 통과 39,118 ·
+  공통모드 1,283 · 검증불가 179(10-08 821 → 455 → 179). 남은 것: 검증불가 179, 공통모드 1,283, 외부 불일치 원인 미분해 약 1,300,
+  ③ 오류(판관비 33·영업이익 17·매출원가 7·감가상각 4 — 외부 정의 차이). ISRG 감가상각 차이 = 외부 정의(인포맥스가 해마다 구성 다름) — 앱 수정 없음.
+- **한국**: 실패 = 012450 1건뿐(DART XBRL status 800 시스템 점검 — 외부 사유, 점검 끝나면
+  `node scripts/verify-financials.mjs --market=kr --symbols=012450 --concurrency=1 --base=http://localhost:3000 --post`). 검증불가 5 = 062040 2025 2·3분기
+  (그해 연결 전환 — 이전 분기와 이어지지 않음). 재실행 후 `sudo systemctl start macro-auto-verify.service` 로 /var/lib/macro-verify/latest.json 갱신.
+- 10-08~09 검증기 변경(이 브랜치): 기대 빈칸 = 통과(부호 규칙·상장 전 Yahoo firstTradeDate/KRX·EV 공란 기대·OFS·NCI 줄 없음),
+  CF 활동 합 본표 없는 줄 0, CF 앱 빈칸 본표 판독, linkbase 정규식 접두어 허용(IBM), 외화 원통화 세전·법인세·자산(ASML), LTM BS 10-Q 원본.
+- **일본**: 2호기 브랜치에만 있음(dd54500 재무제표 엔진·b7629c1 하이라이트/재무분석, 일일 수집 TDnet·J-Quants·EDINET 색인). **운영 미배포** — 운영 화면은 옛 구성.
+  배포 전 오너 결정: Atlas 용량(jp_docs·jp_fin 약 27MB+), 1호기 EDINET 캐시 폴더, FY 이름, 도요타·소니 금융사업 EV, SBG 하이브리드 자본 등(메모 japan-status).
+  목표주가: Yahoo(7203.T) 컨센서스로 이미 나옴(7203 평균 3,698엔·19명). 미결: JP 검증기 층, 1·3분기(四半期報告書·TDnet).
+
 ## 20-F(외국 회사) LTM 검증기 감사 종료 (2026-10-04, 오너 결정 "14차까지만")
 - 대상: 10-02 저녁(집 PC) 새로 만든 TSM·ASML·SPOT 20-F LTM(야후 분기·6-K 분기 재무제표·변동분 근사·0 규칙·합성 개념)과 그 검증기. 집에서 7~12차 수정까지 했으나 승인 기록이 없어 12차 재감사부터 다시 함.
 - 경과(독립 감사자 Opus, 틀린 값 심기): 12차 8/11 → 13차 20/24 → 14차 14/15. 각 회차 지적을 모아 고침(fb9ebd0·da4fb52·72cf25d·0564193·cce3ef7·e1380f3 등).
