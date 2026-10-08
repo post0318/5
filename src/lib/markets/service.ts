@@ -138,7 +138,14 @@ export async function getStockOverview(
   let multiples: TrailingMultiples | null = null;
   // 미국은 TTM 스냅샷(getTtm)으로만 계산한다 — 재무를 건너뛴 호출(개요 화면 첫 응답)은 TTM 이 없으므로 계산하지 않는다
   // (화면이 TTM 도착 후 같은 함수로 계산 — stock-analysis.tsx). Yahoo 주식수·시가총액으로 미리 채우지 않는다(그림자 채우기 금지)
+<<<<<<< HEAD
   if (quote && !(market === "us" && !wantAnnual)) {
+=======
+  for (const w of quote?.warnings ?? []) warnings.push(`시세: ${w}`);
+  // 일본도 같다(jp-ev.ts TTM 스냅샷 — 2026-10-08)
+  const snapOnly = market === "us" || market === "jp";
+  if (quote && !(snapOnly && !wantAnnual)) {
+>>>>>>> b7629c1 (feat(jp): 일본 하이라이트·재무분석·멀티플 단일 기준(jp-ev.ts) — EV = 시총 + 총차입금(차입금·사채·리스부채, IFRS 리스는 본표 → 차입금 줄 포함 주석 → 리스 주석 합, 확인 불가면 빈칸) + 비지배 − 현금성자산, EBITDA = 영업이익 + 현금흐름표 감가상각 줄, EPS = 경영지표 희석(→기본→본표), 주식수 = 有報 발행 − 자기주식 표, PBR 분모 = 지배자본, 분할 보정 주석. 営業利益 없는 회사: 三菱重工 事業利益, 마루베니 세전+이자−지분법 근사, SBG 빈칸(사유). 금융사업 연결(도요타·소니 옛 연도) EV 빈칸, 日本郵政 금융 틀. 개요·유니버스·컨센서스 같은 모듈(TTM 스냅샷), 옛 CSV 경영지표 경로 삭제. XBRL 판독판 2·엔진판 3. 점검 scripts/run/jp-hl-check.mts — 표본 9종 화면 간 불일치 0, EV 항등식 통과, J-Quants EPS·DPS 일치(분할·재작성 원인 확인). 미국 연간 PER 부호 규칙(적자 → 빈칸) computeUsMultiples 에도 적용)
     // 듀얼클래스(V 등)는 EDGAR·Yahoo 시세에 undimensioned 주식수·시총이 없다 →
     // Yahoo 컨센서스(quoteSummary)의 값으로 폴백 — 미국 외 시장만(미국은 edgar-shares 공통 주식수만)
     const cShares = (consensus as { sharesOutstanding?: number | null } | null)?.sharesOutstanding ?? null;
@@ -170,7 +177,7 @@ export async function getStockOverview(
   }
 
   // 미국 TTM 조회 실패 사유를 경고에도(개요 멀티플은 reasons 로 칸마다)
-  if (market === "us" && wantAnnual && (ttm as TtmFlows | null)?.error) warnings.push((ttm as TtmFlows).error!);
+  if (snapOnly && wantAnnual && (ttm as TtmFlows | null)?.error) warnings.push((ttm as TtmFlows).error!);
 
   return {
     market,

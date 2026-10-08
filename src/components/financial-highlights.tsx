@@ -155,7 +155,7 @@ export function FinancialHighlightsTable({ data }: { data: FinancialHighlights }
   const mobile = useIsMobile();
   const krw = data.currency === "KRW";
   const scale: Scale = krw ? "krwBillion" : mobile ? "billion" : "million";
-  const unitLabel = krw ? "KRW 십억" : mobile ? "USD 10억" : data.unitLabel;
+  const unitLabel = krw ? "KRW 십억" : mobile ? `${data.currency} 10억` : data.unitLabel;
 
   // 모바일: 전년(직전 FY) · 현재(LTM) · 차년(첫 추정) 3개 컬럼만
   let columns = data.columns;

@@ -106,7 +106,7 @@ const EV_BLOCKER_REASON: Record<string, string> = {
 };
 
 /**
- * **미국 — TTM 스냅샷(getTtm)만으로** 계산한다(그림자 채우기 금지, 오너 규칙 2026-09-27). 예전엔 TTM 이 없거나 값이 비면
+ * **미국·일본 — TTM 스냅샷(getTtm)만으로** 계산한다(그림자 채우기 금지, 오너 규칙 2026-09-27). 예전엔 TTM 이 없거나 값이 비면
  * 연간 재무제표 계정명 매칭·Yahoo 주식수·Yahoo 시가총액·부채총계 EV·영업이익 근사로 채웠다. 이제 값이 없으면 null 과
  * reasons 의 사유(화면이 그 칸에 표시).
  */
@@ -146,8 +146,9 @@ function computeUsMultiples(input: MultiplesInput): TrailingMultiples {
   // PER(연간) = 현재가 ÷ 최근 사업연도 희석 EPS(edgar-pershare fyEps — ADR 1주 기준). DART 연결 ADR 은 재무제표 EPS 가 이미
   // DART EPS 의 USD·ADR 환산(us/dart-adr.ts)이라 그 값
   const fyE = ttm.fyEps !== undefined ? (ttm.fyEps?.eps ?? null) : latestValue(annual ?? emptyFs(market, symbol), ["EPS (Diluted)", "희석주당이익", "희석주당순이익", "기본주당이익", "주당이익"], /주당(순)?이익/);
-  const per = price != null && fyE ? price / fyE : null;
-  if (per == null) reasons.per = price == null ? noPrice : (tr.fyEps ?? "최근 사업연도 EPS 없음");
+  // 분모 0 이하면 비운다(전 화면 공통 부호 규칙 — 하이라이트·재무분석 PER 과 같게. 예전엔 적자 EPS 로 음수 PER 이 나왔다, 2026-10-08 일본 점검에서 발견)
+  const per = price != null && fyE != null && fyE > 0 ? price / fyE : null;
+  if (per == null) reasons.per = price == null ? noPrice : fyE == null ? (tr.fyEps ?? "최근 사업연도 EPS 없음") : "적자(EPS ≤ 0) — PER 미표시";
   else if (tr.fyEps) reasons.per = tr.fyEps;
   const pos = (n: number | null, d: number | null) => (n != null && d != null && d > 0 ? n / d : null);
   const epsTtm = ttm.eps;
@@ -215,7 +216,8 @@ function computeUsMultiples(input: MultiplesInput): TrailingMultiples {
 }
 
 export function computeTrailingMultiples(input: MultiplesInput): TrailingMultiples {
-  if (input.market === "us") return computeUsMultiples(input);
+  // 일본도 TTM 스냅샷(jp/jp-ev.ts 단일 기준 — 하이라이트 LTM 열과 같은 값)으로만(2026-10-08). 예전엔 有報 CSV 계정명 매칭 + 부채총계 EV
+  if (input.market === "us" || input.market === "jp") return computeUsMultiples(input);
   const { market, symbol, quote, annual, quarterly, sharesOutstanding, ttm } = input;
   // 미국(EDGAR): 최근분기 재무상태표 스냅샷·D&A 가 있으면 우선 사용.
   // 없으면(국내 등) 종전대로 최근 "연간" 재무제표에서 뽑는다.

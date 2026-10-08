@@ -24,7 +24,7 @@ import { AdapterError, type FinancialLineItem, type FinancialPeriod, type Financ
  * 저장: jp_fin(종목당 1건, 엔진판 JP_FIN_ENGINE + 서류 목록 서명) — 서명이 같으면 판독·조립 없이 저장본을 쓴다.
  */
 
-export const JP_FIN_ENGINE = 1;
+export const JP_FIN_ENGINE = 3; // 2: 연간 열 부가 정보(x — EPS·BPS·DPS·주식수·리스부채 주석, 판독판 2) · 3: 기준이 다른 옛 有報의 주식수·DPS
 
 const N_FY = 5;
 const N_HALF = 6;
@@ -53,7 +53,7 @@ const shortId = (id: string) => {
   for (const [a, b] of PREFIX) if (id.startsWith(a)) return b + id.slice(a.length);
   return id;
 };
-const longId = (id: string) => {
+export const longId = (id: string) => {
   for (const [a, b] of PREFIX) if (id.startsWith(b)) return a + id.slice(b.length);
   return id;
 };
@@ -70,6 +70,35 @@ export interface JpFinView {
   stmts: Partial<Record<JpStmtKind, CStmt>>;
   notes: string[];
   src: string[];
+  /** 연간 열마다 주당 지표·주식수·리스부채 주석(하이라이트·재무분석 — jp-ev.ts). 엔진판 2 부터 */
+  x?: JpColX[];
+}
+/**
+ * 열 부가 정보 — 본표 밖(경영지표·株式の総数等·주석)에서 읽은 값. 계산은 jp-ev.ts 한 곳에서.
+ *  eps: 손익 열과 같은 서류(그 기간을 실은 가장 나중 서류)의 경영지표 희석 EPS(없거나 "－"면 기본 EPS, 그것도 없으면 본표 EPS 줄)
+ *  epsAt: 그 서류 제출일 — 그 뒤 분할만 주가에 되돌려 같은 주식 기준으로 맞춘다
+ *  bps: 재무상태표 열과 같은 서류의 경영지표 BPS(IFRS 1株当たり親会社所有者帰属持分, J-GAAP 1株当たり純資産額)
+ *  dps: 그 사업연도 有報 자신(당기)의 1株当たり配当額(개별 — 회사 단위) · dpsNil: 공시 "－"(무배당)
+ *  sh: 그 기간 서류 자신의 기말 유통주식수(발행 − 회사 명의 자기주식) — 그 날의 실제 주식 기준
+ */
+export interface JpColX {
+  eps?: number | null;
+  epsK?: "diluted" | "basic" | "face";
+  epsAt?: string | null;
+  bps?: number | null;
+  dps?: number | null;
+  dpsNil?: 1;
+  dpsInterim?: number | null;
+  dpsAt?: string | null;
+  sh?: number | null;
+  shAt?: string | null;
+  shIssued?: number | null;
+  shIssuedFiling?: number | null;
+  shWhy?: string | null;
+  /** 리스부채 주석 문단 이름 · 이 열(전기/당기) 금액 */
+  lease?: { tb: string[]; amt: number | null; doc: string } | null;
+  isDoc?: string | null;
+  bsDoc?: string | null;
 }
 export interface JpFinModel {
   ev: number;
@@ -314,7 +343,7 @@ function compactStmt(lines0: MLine[], cells: Cells, docs: Src[], notes: string[]
 const KINDS: JpStmtKind[] = ["is", "ci", "bs", "cf"];
 const latestFirst = (a: Src, b: Src) => b.at.localeCompare(a.at);
 
-function buildAnnual(annual: Src[], halfDocs: Src[], src: string[], dict: Dict): JpFinView {
+function buildAnnual(annual: Src[], halfDocs: Src[], src: string[], dict: Dict, otherStd: Src[] = []): JpFinView {
   // 사업연도 열 후보 — 서류마다 당기·전기
   const fys = new Map<string, { start: string; end: string }>();
   for (const s of annual) {
@@ -407,7 +436,103 @@ function buildAnnual(annual: Src[], halfDocs: Src[], src: string[], dict: Dict):
     const used = cols.filter((c) => c.kind === "FY").map((c) => `${c.p.label} ${fySrc.get(c.end)?.row._id ?? "없음"}`);
     if (kind === "is" || kind === "bs") src.push(`${kind === "is" ? "손익" : "재무상태"} 열 출처: ${used.join(", ")}`);
   }
+  // 주식수·DPS 는 회계기준과 무관(株式の総数等·경영지표 개별) — 기준이 달라 본표에서 뺀 옛 有報(무라타 US GAAP)도 그 해 자신의 서류로 쓴다
+  const own = [...sorted, ...[...otherStd].sort(latestFirst)];
+  view.x = cols.map((c) => colExtra(c, sorted, h ?? null, own));
   return view;
+}
+
+// 경영지표 주당 지표 태그(jpcrp_cor) — xbrl-fin.ts SUM_TAGS
+const EPS_D = ["DilutedEarningsLossPerShareIFRSSummaryOfBusinessResults", "DilutedEarningsPerShareSummaryOfBusinessResults"];
+const EPS_B = ["BasicEarningsLossPerShareIFRSSummaryOfBusinessResults", "BasicEarningsLossPerShareSummaryOfBusinessResults"];
+const BPS = ["EquityToAssetRatioIFRSSummaryOfBusinessResults", "NetAssetsPerShareSummaryOfBusinessResults"];
+const FACE_EPS = [
+  "jpigp_cor:DilutedEarningsLossPerShareIFRS",
+  "jpigp_cor:BasicAndDilutedEarningsLossPerShareIFRS",
+  "jpigp_cor:BasicEarningsLossPerShareIFRS",
+];
+
+/** 경영지표 값 — 연결(차원 없음) 우선, 연결 재무제표가 없는 회사는 개별(|nc). [값, 태그가 있었나(nil 포함)] */
+function sumOf(s: Src | null, tags: string[], pk: string): [number | null, boolean] {
+  if (!s?.fin.sum) return [null, false];
+  const keys = s.fin.cons === false ? [`${pk}|nc`] : [pk];
+  let seen = false;
+  for (const t of tags)
+    for (const k of keys) {
+      const o = s.fin.sum[t];
+      if (!o || !(k in o)) continue;
+      seen = true;
+      if (o[k] != null) return [o[k], true];
+    }
+  return [null, seen];
+}
+
+/** 열 부가 정보(JpColX) — 출처 서류 고르기 규칙은 본표 열과 같다(그 기간을 실은 가장 나중 서류) */
+function colExtra(c: Col, sorted: Src[], h: Src | null, ownDocs: Src[]): JpColX {
+  const x: JpColX = {};
+  const shOf = (s: Src | null) => {
+    const r = s?.fin.shares;
+    if (!s || !r) {
+      x.sh = null;
+      x.shWhy = s ? `${s.row._id} 株式の総数等 판독 없음` : "그 기간 서류 없음";
+      return;
+    }
+    x.shAt = r.at ?? s.fin.perEnd ?? s.fin.fyEnd;
+    x.shIssued = r.issued;
+    x.shIssuedFiling = r.issuedFiling;
+    x.sh = r.issued != null && r.treasury != null ? r.issued - r.treasury : null;
+    x.shWhy = x.sh == null ? (r.issued == null ? "발행주식수 판독 없음" : r.how) : r.how;
+  };
+  const leaseOf = (s: Src | null, end: string) => {
+    const tb = s?.fin.leaseTb;
+    if (!s || !tb) return;
+    const cur = end === (s.fin.perEnd ?? s.fin.fyEnd);
+    const withAmt = tb.find((t) => t.amt);
+    x.lease = { tb: tb.map((t) => t.n), amt: withAmt?.amt ? withAmt.amt[cur ? 1 : 0] : null, doc: s.row._id };
+  };
+  if (c.kind === "LTM" && h) {
+    // 반기 보고서 뒤 LTM — 재무상태표·주식수는 반기말. 주당 지표는 jp-ev.ts 가 LTM 순이익 ÷ 주식수로(흐름식 주당 지표 금지)
+    shOf(h);
+    leaseOf(h, c.end);
+    x.bsDoc = h.row._id;
+    return x;
+  }
+  const pkD = pkDur(c.start, c.end);
+  const isS = sorted.find((d) => hasPeriod(d, "is", pkD)) ?? null;
+  const bsS = sorted.find((d) => hasPeriod(d, "bs", pkInst(c.end))) ?? null;
+  // 그 사업연도 有報 자신(당기 = 이 열) — 訂正 포함 가장 나중 것
+  const own = ownDocs.find((d) => d.fin.fyEnd === c.end && (d.fin.perEnd ?? d.fin.fyEnd) === c.end) ?? null;
+  x.isDoc = isS?.row._id ?? null;
+  x.bsDoc = bsS?.row._id ?? null;
+  // EPS — 희석(“－” 이면 희석 증권 없음 → 기본), 경영지표에 없으면 본표 EPS 줄
+  const [d] = sumOf(isS, EPS_D, pkD);
+  const [b] = sumOf(isS, EPS_B, pkD);
+  x.eps = null;
+  if (d != null) [x.eps, x.epsK] = [d, "diluted"];
+  else if (b != null) [x.eps, x.epsK] = [b, "basic"];
+  else
+    for (const k of FACE_EPS) {
+      const v = isS?.fin.facts[k]?.[pkD];
+      if (v != null) {
+        [x.eps, x.epsK] = [v, "face"];
+        break;
+      }
+    }
+  x.epsAt = isS?.at ?? null;
+  x.bps = sumOf(bsS, BPS, pkInst(c.end))[0];
+  // DPS — 회사 단위(개별) 경영지표. 그 사업연도 有報 자신의 당기 값, 없으면 손익 열 서류의 그 기간 값
+  const dpsDoc = own ?? isS;
+  const o = dpsDoc?.fin.sum?.["DividendPaidPerShareSummaryOfBusinessResults"];
+  const kNc = `${pkD}|nc`;
+  if (o && kNc in o) {
+    x.dps = o[kNc];
+    if (o[kNc] == null) x.dpsNil = 1;
+  } else x.dps = null;
+  x.dpsInterim = dpsDoc?.fin.sum?.["InterimDividendPaidPerShareSummaryOfBusinessResults"]?.[kNc] ?? null;
+  x.dpsAt = dpsDoc?.at ?? null;
+  shOf(own);
+  leaseOf(bsS, c.end);
+  return x;
 }
 
 function buildHalf(annual: Src[], halfDocs: Src[], src: string[], dict: Dict): JpFinView {
@@ -512,6 +637,8 @@ export async function jpPickedRows(symbol: string): Promise<{ annual: JpDocRow[]
 export interface JpSources {
   annual: Src[];
   half: Src[];
+  /** 회계기준이 최신 서류와 달라 본표에서 뺀 有報 — 주식수·DPS(기준 무관)에만 쓴다 */
+  otherStd: Src[];
   std: string | null;
   cons: boolean;
   warn: string[];
@@ -543,10 +670,11 @@ export async function jpLoadSources(picked: { annual: JpDocRow[]; half: JpDocRow
   const std = latest?.fin.std ?? null;
   const dropped = [...annual, ...half].filter((s) => s.fin.std !== std);
   if (dropped.length) warn.push(`회계기준이 다른 옛 서류 제외(${std} 기준): ${dropped.map((s) => `${s.row._id}(${s.fin.std})`).join(", ")}`);
+  const otherStd = annual.filter((s) => s.fin.std !== std);
   annual = annual.filter((s) => s.fin.std === std);
   half = half.filter((s) => s.fin.std === std);
   const cons = latest ? (Object.values(latest.fin.stmts)[0]?.cons ?? false) : false;
-  return { annual, half, std, cons, warn };
+  return { annual, half, otherStd, std, cons, warn };
 }
 
 const inflight = new Map<string, Promise<JpFinModel>>();
@@ -568,7 +696,7 @@ async function buildJpFinModel(symbol: string): Promise<JpFinModel> {
   const id = `jp:${symbol}`;
   const stored = await getJpFinStored(id, JP_FIN_ENGINE, picked.sig);
   if (stored) return stored;
-  const { annual, half, std, cons, warn } = await jpLoadSources(picked);
+  const { annual, half, otherStd, std, cons, warn } = await jpLoadSources(picked);
   const head = `EDINET XBRL 본표(${std ?? "기준 미상"} · ${cons ? "連結" : "個別"}) — 회사 표시 구조·계정명·부호 그대로`;
   const dict: Dict = { L: [], at: new Map() };
   const model: JpFinModel = {
@@ -576,7 +704,7 @@ async function buildJpFinModel(symbol: string): Promise<JpFinModel> {
     std,
     cons,
     L: dict.L,
-    annual: buildAnnual(annual, half, [head], dict),
+    annual: buildAnnual(annual, half, [head], dict, otherStd),
     half: buildHalf(annual, half, [head], dict),
     warn: [...new Set(warn)].slice(0, 40),
   };
