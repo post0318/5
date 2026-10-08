@@ -26,6 +26,7 @@
 
 import { readFileSync } from "node:fs";
 import { appUrl } from "./lib/app-url.mjs";
+import { appSendFailed } from "./lib/collector-status.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -200,7 +201,7 @@ for (const [i, symbol] of targets.entries()) {
     body: JSON.stringify({ symbol, market: "us", items }),
   });
   const text = await up.text();
-  if (!up.ok) {
+  if (appSendFailed(up, text)) {
     console.error(`✗ ${symbol} 전송 실패 HTTP ${up.status}: ${text.slice(0, 200)}`);
     failed++;
     continue;

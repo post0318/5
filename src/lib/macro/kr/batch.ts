@@ -25,6 +25,9 @@ export interface BatchResult {
   rollTracked: number;
   ok: boolean;
   error?: string;
+  /** 빈 응답의 사유 — 휴장일이면 holiday(정상), 거래일인데 아직 미공개·달력 모름이면 retry(나중에 다시 받을 것). ops/oracle/call-cron.sh 가 읽는다. */
+  holiday?: boolean;
+  retry?: boolean;
 }
 
 /** 직전 영업일 (KRX EOD 가 있어야 정상인 최신일) */
@@ -80,7 +83,7 @@ export async function runKrFgBatch(ymd: string): Promise<BatchResult> {
       const old = Date.now() - Date.parse(`${date}T00:00:00+09:00`) > 3 * 864e5;
       if (holiday === true || (holiday === null && old)) await markClosed(date);
       const why = holiday === true ? "휴장일(달력 확인)" : holiday === false ? "거래일인데 KRX 미공개 — 다시 시도" : "달력 확인 실패";
-      return { ...empty(date), ok: false, error: `거래 데이터 없음 (${stocks.length}건) — ${why}` };
+      return { ...empty(date), ok: false, error: `거래 데이터 없음 (${stocks.length}건) — ${why}`, ...(holiday === true ? { holiday: true } : { retry: true }) };
     }
 
     // 등락 종목수 + 등락 거래량

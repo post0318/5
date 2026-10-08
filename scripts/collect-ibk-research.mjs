@@ -54,6 +54,7 @@ import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityCo
 import { promoteKrIndustryToStock } from "./lib/company-match.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 import { appUrl } from "./lib/app-url.mjs";
+import { appSendFailed, exitNoItems } from "./lib/collector-status.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -332,15 +333,7 @@ console.log(
   `  건너뜀: 공통 제외 ${skipped.excluded} · 해외 티커 없음 ${skipped.noTicker} · 상세 실패 ${skipped.detailFail}`,
 );
 
-if (collected.length === 0) {
-  console.error("✗ 파싱 결과 0건. 페이지 구조가 바뀌었을 수 있음.");
-  // 0건은 실패가 아니다 — 주말·휴일이나 새 글이 없는 날에도 워크플로가 "실패"로
-  // 찍혀 진짜 장애를 가리고 로컬 재실행 도구가 헛돌았다(감사 2026-09-28: 일요일
-  // 8개 수집기 전부 거짓 실패). 경고만 남기고 정상 종료한다. 파서가 진짜 깨진
-  // 경우는 DB 최신 날짜가 며칠째 안 움직이는 것으로 드러난다.
-  console.log("::warning::파싱 결과 0건 — 새 글이 없거나 구조가 바뀌었을 수 있음");
-  process.exit(0);
-}
+if (collected.length === 0) exitNoItems({ market: "kr", label: "ibk" });
 // 산업 게시판에 섞인 종목 리포트를 종목분석으로 승격(공통 lib — 목표주가 추출 전에).
 for (let i = 0; i < collected.length; i++) collected[i] = promoteKrIndustryToStock(collected[i]);
 const research = collected;
@@ -413,7 +406,7 @@ for (const [market, items] of groups) {
     body: JSON.stringify({ items, source: SOURCE, market }),
   });
   const upBody = await up.text();
-  if (!up.ok) {
+  if (appSendFailed(up, upBody)) {
     console.error(`✗ [${SOURCE}/${market}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }

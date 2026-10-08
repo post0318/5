@@ -66,6 +66,7 @@ import { enrichResearch } from "./lib/research-extract.mjs";
 import { isEtfOrEtpContent, isEsgContent, isCommonExcludedContent, isCommodityContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { industryLabelAndHeadline } from "./lib/label-extract.mjs";
 import { appUrl } from "./lib/app-url.mjs";
+import { appSendFailed, exitNoItems } from "./lib/collector-status.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -310,8 +311,7 @@ for (const board of BOARDS) {
 if (rawTotal === 0) {
   // 0건은 실패가 아니다 — 오라클 10~18시 회차는 최근 1일만 보므로 주말·휴일엔 정상적으로 0건이다(2026-10-04 일요일 오경보).
   // 세션 키·쿠키 거부는 위 요청 함수가 빈 응답을 오류로 던져 따로 잡는다.
-  console.log("· 전 게시판 0건 — 기간 안에 새 글 없음(주말·휴일이면 정상). 전송 생략.");
-  process.exit(0);
+  exitNoItems({ market: "kr", label: "im" });
 }
 
 // 첨부 조회 → PDF 직링크(1순위), 기업분석은 파일명 끝 6자리로 종목코드.
@@ -407,7 +407,7 @@ for (const [market, items] of groups) {
     body: JSON.stringify({ items, source: SOURCE, market }),
   });
   const upBody = await up.text();
-  if (!up.ok) {
+  if (appSendFailed(up, upBody)) {
     console.error(`✗ [${SOURCE}/${market}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }

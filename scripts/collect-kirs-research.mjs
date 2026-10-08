@@ -47,6 +47,7 @@ import { readFileSync } from "node:fs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import tls from "node:tls";
 import { appUrl } from "./lib/app-url.mjs";
+import { appSendFailed, exitNoItems } from "./lib/collector-status.mjs";
 
 // 서버가 빠뜨리는 중간 인증서(위 주석 참고).
 const KIRS_INTERMEDIATE_PEM = `-----BEGIN CERTIFICATE-----
@@ -265,8 +266,7 @@ for (const board of BOARDS) {
 
 if (collected.length === 0) {
   // 발간이 드물어 기간 안 0건일 수 있다 — 구조 변경과 구분하려고 경고만.
-  console.warn(`⚠ 최근 ${DAYS}일 수집 0건(발간 없음 또는 페이지 구조 변경).`);
-  process.exit(0);
+  exitNoItems({ market: "kr", label: `kirs(최근 ${DAYS}일)` });
 }
 
 console.log(`▶ PDF 요약 발췌 중 — ${collected.length}건...`);
@@ -314,7 +314,7 @@ const up = await fetch(IMPORT_URL, {
   body: JSON.stringify({ items, source: SOURCE, market: "kr" }),
 });
 const upBody = await up.text();
-if (!up.ok) {
+if (appSendFailed(up, upBody)) {
   console.error(`✗ 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
   process.exit(1);
 }

@@ -70,12 +70,49 @@ check memory "$([ "$avail" -ge 10 ] && echo 1 || echo 0)" "사용 가능한 메�
 check reboot-required "$([ -f /var/run/reboot-required ] && echo 0 || echo 1)" "보안 업데이트 적용을 위해 재부팅이 필요합니다"
 
 # 9) 예약 작업 실패(2026-10-04) — 수집·배치 서비스가 마지막 실행에서 실패한 상태면 알림, 다음 실행이 성공하면 자동 해제
-for u in $(systemctl list-units --all --type=service --no-legend --plain 'research-*' 'macro-*' 'fin-*' 'news-*' 'weekly-report*' | awk '{print $1}'); do
+# 이미 알림이 열린 작업(상태 파일 job-*)도 함께 본다 — 재시도 서비스처럼 실패 상태를 지우면(reset-failed) 목록에서 빠지는데,
+# 그때도 Result 가 success 로 읽혀 알림이 닫히게(2026-10-06).
+for u in $({ systemctl list-units --all --type=service --no-legend --plain 'research-*' 'macro-*' 'fin-*' 'news-*' 'weekly-report*' | awk '{print $1}'
+            for f in "$STATE_DIR"/job-*; do [ -e "$f" ] && printf '%s.service\n' "${f##*/job-}"; done; } | sort -u); do
   name=${u%.service}
   [ "$name" = macro-health ] && continue
   st=$(systemctl show -p Result --value "$u")
   check "job-$name" "$([ "$st" = success ] && echo 1 || echo 0)" "예약 작업 $name 실패(결과 $st) — sudo journalctl -u $name -n 50"
 done
+
+# 9-1) 출처별 데이터 신선도(2026-10-06) — 하루 1회 research-freshness.sh(macro-research-freshness 타이머)가 남긴 결과 파일만 읽는다.
+#   오래된 출처는 묶음 알림 한 건(research-stale). 열린 동안 목록이 바뀌면 같은 이슈에 댓글 + 텔레그램 한 번.
+F="$STATE_DIR/research-freshness.json"
+if [ -f "$F" ]; then
+  fr_age=$(( ($(date +%s) - $(stat -c %Y "$F")) / 3600 ))
+  check freshness-run "$([ "$fr_age" -le 26 ] && echo 1 || echo 0)" "신선도 점검 결과가 ${fr_age}시간째 갱신되지 않았습니다 — sudo journalctl -u macro-research-freshness -n 50"
+  fr=$(python3 - "$F" <<'PY' 2>/dev/null
+import json, sys
+r = json.load(open(sys.argv[1], encoding="utf-8"))
+bad = [x for x in r["results"] if x.get("stale") and not x.get("ignored")]
+def one(x):  # 이름(마지막 날 월-일, 경과/기준 영업일)
+    last = (x.get("last") or "?")[5:]
+    return f"{x['source']}({last} 사라짐)" if x.get("gone") else f"{x['source']}({last} {x.get('ageBd')}/{x.get('thresholdBd')})"
+print(len(bad))
+print("|".join(sorted(x["source"] for x in bad)))
+head = " · ".join(one(x) for x in bad[:8]) + (f" 외 {len(bad) - 8}곳" if len(bad) > 8 else "")
+# 이슈 제목에도 들어가므로 짧게 — 전체는 결과 파일에
+print(f"출처 {len(bad)}곳 새 글 오래 없음(경과/기준 영업일): {head} — 전체 {sys.argv[1]}")
+PY
+)
+  fr_n=$(printf '%s\n' "$fr" | sed -n 1p)
+  fr_sig=$(printf '%s\n' "$fr" | sed -n 2p)
+  fr_msg=$(printf '%s\n' "$fr" | sed -n 3p)
+  if [ -n "$fr_n" ]; then
+    if [ "$fr_n" != 0 ] && [ -f "$STATE_DIR/research-stale" ] && [ "$(cat "$STATE_DIR/.research-stale-sig" 2>/dev/null)" != "$fr_sig" ]; then
+      tg "🔄 [${ALERT_TAG} ${HOST}] research-stale 목록 바뀜: ${fr_msg}"
+      num=$(cat "$STATE_DIR/research-stale" 2>/dev/null || echo 0)
+      [ "${num:-0}" != 0 ] && gh_api POST "/issues/${num}/comments" "{\"body\":$(json_str "$(date -Is) 목록 바뀜: ${fr_msg}")}" >/dev/null 2>&1
+    fi
+    check research-stale "$([ "$fr_n" = 0 ] && echo 1 || echo 0)" "$fr_msg"
+    echo "$fr_sig" > "$STATE_DIR/.research-stale-sig"
+  fi
+fi
 
 # 10) 텔레그램 상주 수신기
 check telegram-listener "$(systemctl is-active --quiet macro-telegram-listener && echo 1 || echo 0)" "텔레그램 상주 수신기가 멈췄습니다"

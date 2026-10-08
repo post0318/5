@@ -33,6 +33,7 @@ import { readFileSync } from "node:fs";
 import { enrichResearch, readPdfText, excerptFromPdfText } from "./lib/research-extract.mjs";
 import { isCommonExcludedContent, isFxContent } from "./lib/exclude-filters.mjs";
 import { appUrl } from "./lib/app-url.mjs";
+import { appSendFailed, exitNoItems } from "./lib/collector-status.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -176,11 +177,7 @@ for (const b of BOARDS) {
 }
 console.log(`  공통 제외 ${excluded}건`);
 
-if (collected.length === 0) {
-  // 0건은 실패가 아니다 — 주말·휴일·짧은 수집 범위에선 정상
-  console.log("· 0건 — 기간 안에 새 글 없음(주말·휴일이면 정상). 전송 생략.");
-  process.exit(0);
-}
+if (collected.length === 0) exitNoItems({ market: "kr", label: "daol" });
 
 // 요약 발췌: PDF 텍스트(디스크 캐시) 앞부분. 기업은 같은 텍스트로 의견·목표가 추출.
 console.log(`▶ PDF 발췌·투자의견/목표주가 (${collected.length}건)...`);
@@ -210,7 +207,7 @@ const items = collected.map((it) => ({
 }));
 const up = await fetch(IMPORT_URL, { method: "POST", headers, body: JSON.stringify({ items, source: SOURCE, market: "kr" }) });
 const upBody = await up.text();
-if (!up.ok) {
+if (appSendFailed(up, upBody)) {
   console.error(`✗ [${SOURCE}/kr] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
   process.exit(1);
 }

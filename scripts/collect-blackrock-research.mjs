@@ -38,6 +38,7 @@
 import { readFileSync } from "node:fs";
 import { isCommonExcludedContent } from "./lib/exclude-filters.mjs";
 import { appUrl } from "./lib/app-url.mjs";
+import { appSendFailed } from "./lib/collector-status.mjs";
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -120,7 +121,7 @@ async function sendBatch(items, source) {
     body: JSON.stringify({ items, source, market: "us" }),
   });
   const upBody = await up.text();
-  if (!up.ok) {
+  if (appSendFailed(up, upBody)) {
     console.error(`✗ ${source} 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
     process.exit(1);
   }
