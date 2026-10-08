@@ -331,7 +331,8 @@ async function cfFaceConcepts(cik, accn) {
   let out = null;
   if (name) {
     const x = await secText(`${base}/${name}`);
-    for (const m of x.matchAll(/<link:presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:presentationLink>/g)) {
+    // 접두어 없는 링크베이스(IBM — <presentationLink xmlns=…>)도 읽는다(2026-10-09 — 접두어만 찾다가 IBM 2021·2022 10-K 를 못 읽어 오판)
+    for (const m of x.matchAll(/<(?:[\w-]+:)?presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?presentationLink>/g)) {
       if (!/CASHFLOW/i.test(m[1]) || /Parenth|Detail|Table|Polic|Supplement/i.test(m[1])) continue;
       out ??= new Set();
       for (const h of m[2].matchAll(/xlink:href="[^"#]*#([^"]+)"/g)) out.add(h[1]);
@@ -1133,27 +1134,27 @@ async function filingAtDate(cik, sub, date) {
   }
   const cal = await secText(`${base}/${calName}`);
   const lab = labName === calName ? cal : await secText(`${base}/${labName}`);
-  const locMap = (x) => { const r = new Map(); for (const l of x.matchAll(/<link:loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) r.set(id, h); } return r; };
+  const locMap = (x) => { const r = new Map(); for (const l of x.matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) r.set(id, h); } return r; };
   const labels = new Map(), negLabels = new Map();
   { const loc = locMap(lab), text = new Map(), negText = new Map();
-    for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+    for (const m of lab.matchAll(/<(?:[\w-]+:)?label\b([^>]*)>([^<]*)<\/(?:[\w-]+:)?label>/g)) {
       const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
       if (!id || /documentation/i.test(m[1])) continue;
       text.set(id, [...(text.get(id) ?? []), m[2].trim()]);
       // 부호 반전 역할(negatedLabel 계열) — 보고서 표시값 = −XBRL 값(6-K 대조의 부호 판정, 2026-10-02)
       if (/role="[^"]*\/negated/i.test(m[1])) negText.set(id, [...(negText.get(id) ?? []), m[2].trim()]);
     }
-    for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+    for (const a of lab.matchAll(/<(?:[\w-]+:)?labelArc\b([^>]*)\/?>/g)) {
       const f = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = /xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "", t = text.get(to);
       if (f && t) labels.set(f, [...(labels.get(f) ?? []), ...t]);
       if (f && negText.get(to)) negLabels.set(f, [...(negLabels.get(f) ?? []), ...negText.get(to)]);
     } }
   const kids = new Map(), faceIds = new Set(), hasParent = new Set();
-  for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+  for (const m of cal.matchAll(/<(?:[\w-]+:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
     if (!/BALANCESHEET|FINANCIALPOSITION|FINANCIALCONDITION/i.test(role) || /Parenth|Detail|Table|Polic/i.test(role)) continue;
     const loc = locMap(m[2]);
-    for (const a of m[2].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+    for (const a of m[2].matchAll(/<(?:[\w-]+:)?calculationArc\b([^>]*)\/?>/g)) {
       const fr = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       if (!fr || !to) continue;
       kids.set(fr, [...(kids.get(fr) ?? []), to]); faceIds.add(fr); faceIds.add(to); hasParent.add(to);
@@ -2215,10 +2216,10 @@ function soiClass(y) {
   if (!soiMemo.has(y)) soiMemo.set(y, (async () => {
     const x = await fasbText(soiCalUrl(y));
     const out = new Map();
-    for (const m of x.matchAll(/<link:calculationLink\b[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+    for (const m of x.matchAll(/<(?:[\w-]+:)?calculationLink\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calculationLink>/g)) {
       const loc = new Map(), kids = new Map();
-      for (const l of m[1].matchAll(/<link:loc\b([^>]*)\/?>/g)) { const lb = /xlink:label=['"]([^'"]+)['"]/.exec(l[1])?.[1], h = /xlink:href=['"][^'"#]*#us-gaap_([^'"]+)['"]/.exec(l[1])?.[1]; if (lb && h) loc.set(lb, h); }
-      for (const a of m[1].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+      for (const l of m[1].matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) { const lb = /xlink:label=['"]([^'"]+)['"]/.exec(l[1])?.[1], h = /xlink:href=['"][^'"#]*#us-gaap_([^'"]+)['"]/.exec(l[1])?.[1]; if (lb && h) loc.set(lb, h); }
+      for (const a of m[1].matchAll(/<(?:[\w-]+:)?calculationArc\b([^>]*)\/?>/g)) {
         const fr = loc.get(/xlink:from=['"]([^'"]+)['"]/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to=['"]([^'"]+)['"]/.exec(a[1])?.[1] ?? "");
         if (fr && to) kids.set(fr, [...(kids.get(fr) ?? []), to]);
       }
@@ -3549,7 +3550,7 @@ async function secCashFlowDa(cik, sub, G = null) {
   const lab = labName === calName ? cal : await secText(`${base}/${labName}`);
   const locMap = (x) => {
     const m = new Map();
-    for (const l of x.matchAll(/<link:loc\b([^>]*)\/?>/g)) {
+    for (const l of x.matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) {
       const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
       if (id && href) m.set(id, href);
     }
@@ -3559,11 +3560,11 @@ async function secCashFlowDa(cik, sub, G = null) {
   const labels = new Map();
   {
     const loc = locMap(lab), text = new Map();
-    for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+    for (const m of lab.matchAll(/<(?:[\w-]+:)?label\b([^>]*)>([^<]*)<\/(?:[\w-]+:)?label>/g)) {
       const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
       if (id && !/documentation/i.test(/xlink:role="([^"]*)"/.exec(m[1])?.[1] ?? "")) text.set(id, [...(text.get(id) ?? []), m[2].trim()]);
     }
-    for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+    for (const a of lab.matchAll(/<(?:[\w-]+:)?labelArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       if (from && t) labels.set(from, [...(labels.get(from) ?? []), ...t]);
     }
@@ -3572,12 +3573,12 @@ async function secCashFlowDa(cik, sub, G = null) {
   const EXCL = /debt|discount|premium|issuance|financing\s*costs?|deferred\s*(financing|charges)|stock|share-?based|compensation|operating[\s-]*lease|lease\s*expense|content|contract\s*(cost|acquisition)|capitalized\s*software|investment|securities|bond|inventory|incentive|acquisition\s*costs|defined\s*benefit|pension|postretirement/i;
   let lines = null;
   let cfMeta = { impairLines: [], separateImpair: [], continuing: false };
-  for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+  for (const m of cal.matchAll(/<(?:[\w-]+:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
     if (!/CASHFLOW/i.test(role) || /Detail|Table|Parenth|Supplement/i.test(role)) continue;
     const loc = locMap(m[2]);
     const arcs = [];
-    for (const a of m[2].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+    for (const a of m[2].matchAll(/<(?:[\w-]+:)?calculationArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       if (from && to) arcs.push([from, to]);
     }
@@ -4517,7 +4518,7 @@ async function verifyUs(sym) {
       if (calName) {
         const cal = await secText(base + "/" + calName);
         opOnFace = false;
-        for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+        for (const m of cal.matchAll(/<(?:[\w-]+:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calculationLink>/g)) {
           const role = m[1].split("/").pop() ?? "";
           if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Segment/i.test(role)) continue;
           const hb = /#us-gaap_IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"/.test(m[2]);
