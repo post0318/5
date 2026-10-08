@@ -19,6 +19,7 @@
 - **일본**: 2호기 브랜치에만 있음(dd54500 재무제표 엔진·b7629c1 하이라이트/재무분석, 일일 수집 TDnet·J-Quants·EDINET 색인). **운영 미배포** — 운영 화면은 옛 구성.
   배포 전 오너 결정: Atlas 용량(jp_docs·jp_fin 약 27MB+), 1호기 EDINET 캐시 폴더, FY 이름, 도요타·소니 금융사업 EV, SBG 하이브리드 자본 등(메모 japan-status).
   목표주가: Yahoo(7203.T) 컨센서스로 이미 나옴(7203 평균 3,698엔·19명). 미결: JP 검증기 층, 1·3분기(四半期報告書·TDnet).
+- **일본 운영 배포(10-09, master 16dc3eb)**: dd54500·b7629c1·63ed407 을 master 위로(PC `deploy/jp`, 충돌은 일본 블록만 남김 — 한국 감사용 경고 코드는 master 에 없음) + ops: 1호기 `/opt/macro/edinet-cache`(EDINET_CACHE_DIR, 앱·run-ts 공유), 타이머 `fin-jp-edinet-index`(08:30·20:30, --days=10 --no-samples), 첫 백필 `jp-index-backfill`(--days=1900). CLAUDE.md 크롤링 예외 5건(야후 재팬·민카부, 무료 철칙). **이 브랜치(kr/verification)에는 그 ops·CLAUDE.md 변경이 아직 없다 — master 를 합칠 때 같이 들어옴.** 다음: 민카부 목표주가(일본 IP 에서만 열림), JP 검증기.
 
 ## 20-F(외국 회사) LTM 검증기 감사 종료 (2026-10-04, 오너 결정 "14차까지만")
 - 대상: 10-02 저녁(집 PC) 새로 만든 TSM·ASML·SPOT 20-F LTM(야후 분기·6-K 분기 재무제표·변동분 근사·0 규칙·합성 개념)과 그 검증기. 집에서 7~12차 수정까지 했으나 승인 기록이 없어 12차 재감사부터 다시 함.
