@@ -143,7 +143,8 @@ function getBlocks(isFin: boolean): Block[] {
       concepts: ["NetCashProvidedByUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"],
     },
     lines: [
-      { label: "유형자산 취득", concepts: ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"], depth: 1, negate: true },
+      // PaymentsForCapitalImprovements — GLW 현금흐름표 "Capital expenditures"(2022~ 이 개념, 2026-10-08 — 없어서 앱 CAPEX 가 0 으로 채워졌다)
+      { label: "유형자산 취득", concepts: ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements"], depth: 1, negate: true },
       {
         label: "투자자산 처분·만기",
         depth: 1,
@@ -661,7 +662,7 @@ export function buildUsCashFlow(
     items.push({ accountName: `※ ${unavailable}`, accountId: "cf:note:unavailable", depth: 1, isSubtotal: false, isHighlight: false, italic: true, values: blank() });
   items.push({ accountName: "[ 주석 항목 ]", accountId: "cf:note", depth: 0, isSubtotal: true, isHighlight: false, values: blank() });
 
-  const capex = valOf(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"]);
+  const capex = valOf(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements"]);
   const opCf = sect(0);
   const fcf: Record<string, number | null> = {};
   for (const l of labels)

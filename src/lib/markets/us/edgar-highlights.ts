@@ -92,6 +92,7 @@ const PRETAX_CONCEPTS = [
 const CAPEX_CONCEPTS = [
   "PaymentsToAcquirePropertyPlantAndEquipment",
   "PaymentsToAcquireProductiveAssets",
+  "PaymentsForCapitalImprovements", // GLW 설비투자(2026-10-08)
 ];
 
 function daysBetween(a: string, b: string): number {

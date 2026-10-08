@@ -126,7 +126,10 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     // 본표에서 빠진 투자·재무 줄 = 0 (AMAT 2026 회계연도 10-Q 3건에 "장기차입금 조달" 줄이 없다 — 당기·전년 동기 모두 조달 0 이라 생략, LTM 이 비었다.
     // 야후 분기 0). 이 공시 본표 구조에 그 줄 태그가 하나도 없고, companyfacts 에도 이 공시 값이 없고, 전년 동기 값이 이전 공시에 0(또는 없음)일
     // 때만 — 전년 동기가 0 이 아니었다면 줄이 다른 태그로 옮겨 간 것이라 채우지 않는다
-    const face = cashFlowFace(calXml);
+    // 0 채움은 분기 보고서(10-Q)만 — 10-K 본표에 줄이 없으면 그 해는 "본표에 별도 줄 없음"(오너 규칙 2026-10-02 — 0 으로 채우지 않음). 10-K 에도
+    // 적용하던 동안 줄이 다른 개념으로 옮겨 간 회사(GLW 설비투자 → PaymentsForCapitalImprovements)·줄 자체가 없는 회사(IBM·DAL·AMZN 자기주식 취득)의
+    // 연간 칸이 0 으로 채워졌다(2026-10-08 전체 모드 검증)
+    const face = /^10-Q/.test(f.form) ? cashFlowFace(calXml) : null;
     if (face) {
       for (const grp of zeroGroups) {
         if (grp.some((c) => face.has(`us-gaap_${c}`))) continue;
