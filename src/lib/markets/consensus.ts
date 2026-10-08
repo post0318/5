@@ -32,6 +32,7 @@ import {
   type KrEvResolver,
 } from "./kr/dart-ev";
 import { daAndAmortSeries, fetchKrFacts } from "./kr/dart-facts";
+import { getJpConsensusYears } from "./jp/jp-views";
 import { resolveCorpCode } from "./kr/corpcode";
 import { getKrDaDocChecked } from "@/lib/db/kr-da";
 import { isFinancialCompany } from "./us/edgar-financial";
@@ -371,8 +372,46 @@ export async function getConsensusData(
   }
   // no-silent-catch:end
 
+  // 일본: 하이라이트·재무분석과 같은 단일 기준(jp/jp-ev.ts — EDINET 본표·경영지표 EPS·결산일 실제 종가 × 그 날 유통주식수·차입금 EV).
+  // 예전엔 有報 CSV 경영지표 계정명 매칭 + 현재 주식수 + 부채총계 EV(2026-10-08 폐지)
+  let jp: Awaited<ReturnType<typeof getJpConsensusYears>> | null = null;
+  let jpFailed: string | null = null;
+  if (market === "jp") {
+    try {
+      jp = await getJpConsensusYears(symbol);
+      for (const w of jp.warn) notes.push(w);
+    } catch (e) {
+      jpFailed = `일본 재무(EDINET) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`;
+      notes.push(`⚠ ${jpFailed}`);
+    }
+  }
+
   const actualRows: ConsensusRow[] = [];
   for (const fy of years) {
+    if (market === "jp") {
+      const r = jp?.years.get(fy) ?? null;
+      const why = jpFailed ?? "그 사업연도 열 없음";
+      const cellNotes: NonNullable<ConsensusRow["cellNotes"]> = r ? { ...r.notes } : { eps: why, per: why, pbr: why, evEbitda: why, opIncome: why, netIncome: why };
+      actualRows.push({
+        fy,
+        label: chartLabel(fy, fiscalMonth),
+        isEstimate: false,
+        revenue: r?.revenue ?? null,
+        revenueYoY: null,
+        opIncome: r?.opIncome ?? null,
+        netIncome: r?.netIncome ?? null,
+        eps: r?.eps ?? null,
+        bps: r?.bps ?? null,
+        per: fin(r?.per),
+        pbr: fin(r?.pbr),
+        roe: fin(r?.roe),
+        evEbitda: fin(r?.evEbitda),
+        priceBasis: r?.price ?? null,
+        ...(Object.keys(cellNotes).length ? { cellNotes } : {}),
+      });
+      for (const k of ["eps", "bps"] as const) if (cellNotes[k]) notes.push(`${fy} ${k.toUpperCase()}: ${cellNotes[k]}`);
+      continue;
+    }
     const revenue = valueForYear(annual, fy, ACCT.revenue);
     // 미국: 재무 5층 구조 영업이익 지표(edgar-ev.ts opIncomeAnnualCells — 하이라이트·손익계산서와 같은 값, 금융사만 옛 시계열)
     // 한국: dart-ev.ts 공통 영업이익(하이라이트·재무분석과 같은 값)
@@ -462,8 +501,7 @@ export async function getConsensusData(
     // 못 구하면 현재가로 대체 — 미국은 하지 않는다. 상장 전 연도(분사 GEV·SNDK
     // 2022~2023)에 현재가 × 옛 자본으로 PBR 22배 같은 가짜 값이 생겨 하이라이트
     // (빈칸)와 갈렸다(검증 체계, 2026-09-23 유니버스 전수).
-    // 한국도 같다(산일전기 2024 상장 — 2023 연도에 현재가로 가짜 PER·PBR). 일본만 종전대로.
-    if (market === "jp") yePrice = yePrice ?? price;
+    // 한국도 같다(산일전기 2024 상장 — 2023 연도에 현재가로 가짜 PER·PBR). 일본은 위 jp 경로(jp-ev.ts)가 따로 계산.
 
     // 미국: 분모 0 이하면 비운다(하이라이트·재무분석과 같은 부호 규칙). 한국·일본은
     // B16 결정 전까지 종전 그대로.

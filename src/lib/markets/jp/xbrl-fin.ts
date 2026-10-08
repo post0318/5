@@ -14,9 +14,10 @@ import { edinetDocZip, edinetTaxonomyText, readEdinetJson, writeEdinetJson } fro
  *    부호는 공시 그대로이고, 표시 구조가 negatedLabel 을 지정한 줄만 표시 부호를 뒤집는다(neg).
  *  - 계산 구조(_cal.xml) 는 같은 역할의 부모 → 자식(가중치)을 그대로 남긴다(검증용 — 합계 = Σ 자식).
  * 결과는 디스크(<EDINET_CACHE_DIR>/jp-fin/v<판>/<docID>.json)에 저장 — 서류 번호는 바뀌지 않는다. 판독 규칙이 바뀌면 JP_PARSE_VERSION 을 올린다.
+ * 판 2(2026-10-08): 하이라이트·재무분석용으로 경영지표 주당 지표(EPS·BPS·DPS)·발행주식·자기주식·리스부채 주석(parseExtras)을 함께 읽는다.
  */
 
-export const JP_PARSE_VERSION = 1;
+export const JP_PARSE_VERSION = 2;
 
 export type JpStmtKind = "bs" | "is" | "ci" | "cf";
 /** 값 단위 — m 금액(엔), ps 주당(엔/주), sh 주식수, p 비율 */
@@ -62,7 +63,28 @@ export interface JpDocFin {
   /** 개념 → 기간 열쇠("D시작_끝"·"I날짜") → 공시 값(본표 줄 개념만) */
   facts: Record<string, Record<string, number>>;
   units: Record<string, JpUnit>;
+  /**
+   * 경영지표(主要な経営指標等の推移, jpcrp …SummaryOfBusinessResults) 중 주당 지표 — 개념 local 이름 → 기간 열쇠(개별은 "|nc") → 값.
+   * null = 공시가 "－"(nil — 무배당·희석 증권 없음 등). 하이라이트·재무분석(jp-ev.ts)의 EPS·BPS·DPS 출처(판 2 부터).
+   */
+  sum?: Record<string, Record<string, number | null>>;
+  /** 기말(반기말) 발행주식수·자기주식(株式の総数等·自己株式等) — 유통주식수 = 발행 − 자기 명의·타인 명의 자기주식(회사 행) */
+  shares?: JpDocShares | null;
+  /** 주석 문단(TextBlock) 중 "リース負債" 가 나오는 것 — 이름과 (流動)·(非流動) 표의 전기·당기 합계(엔). 본표에 리스부채 줄이 없을 때 판정용 */
+  leaseTb?: { n: string; amt?: [number, number] | null }[];
   warn: string[];
+}
+export interface JpDocShares {
+  /** 기준일(당기말·반기말) */
+  at: string | null;
+  /** 기말 발행주식수(期末現在発行数) */
+  issued: number | null;
+  /** 제출일 현재 발행주식수(提出日現在発行数) — 기말 뒤 분할·소각 판정 */
+  issuedFiling: number | null;
+  /** 자기주식 — 회사 자신 행(소유자 이름 = 제출회사)의 자기 명의 + 타인 명의 */
+  treasury: number | null;
+  /** 판정 근거·실패 사유 */
+  how: string;
 }
 
 export const pkDur = (start: string, end: string) => `D${start}_${end}`;
@@ -385,9 +407,14 @@ export async function parseJpDocZip(docID: string, zip: Uint8Array): Promise<JpD
     units[k] ??= uk;
   }
 
+  const ex = parseExtras(inst, dei("FilerNameInJapaneseDEI"));
+
   return {
     v: JP_PARSE_VERSION,
     docID,
+    sum: ex.sum,
+    shares: ex.shares,
+    leaseTb: ex.leaseTb,
     std: dei("AccountingStandardsDEI"),
     cons: consDei == null ? null : consDei === "true",
     kind: dei("TypeOfCurrentPeriodDEI"),
@@ -399,6 +426,115 @@ export async function parseJpDocZip(docID: string, zip: Uint8Array): Promise<JpD
     units,
     warn: [...new Set(warn)].slice(0, 30),
   };
+}
+
+/** 경영지표 중 읽는 주당 지표(jpcrp_cor) — IFRS 의 "1株当たり親会社所有者帰属持分"(BPS) 태그 이름이 EquityToAssetRatioIFRS… 인 것은 EDINET 분류 그대로 */
+const SUM_TAGS = new Set([
+  "BasicEarningsLossPerShareIFRSSummaryOfBusinessResults",
+  "DilutedEarningsLossPerShareIFRSSummaryOfBusinessResults",
+  "BasicEarningsLossPerShareSummaryOfBusinessResults",
+  "DilutedEarningsPerShareSummaryOfBusinessResults",
+  "EquityToAssetRatioIFRSSummaryOfBusinessResults",
+  "NetAssetsPerShareSummaryOfBusinessResults",
+  "DividendPaidPerShareSummaryOfBusinessResults",
+  "InterimDividendPaidPerShareSummaryOfBusinessResults",
+]);
+const SHARE_TAGS = new Set([
+  "NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc",
+  "NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc",
+  "NumberOfSharesHeldInOwnNameTreasurySharesEtc",
+  "NumberOfSharesHeldInOthersNamesTreasurySharesEtc",
+  "NameOfShareholderTreasurySharesEtc",
+]);
+/** 회사 이름 비교용 — 株式会社·㈱·(株) 와 공백을 지운다 */
+const normName = (s: string) => s.replace(/株式会社|㈱|[(（]株[)）]|\s|　/g, "");
+
+/** 경영지표 주당 지표·발행주식·자기주식·리스부채 주석(판 2) — 차원 문맥도 본다(개별 NonConsolidatedMember·자기주식 표 행 RowN) */
+function parseExtras(
+  inst: string,
+  filer: string | null,
+): { sum: Record<string, Record<string, number | null>>; shares: JpDocShares | null; leaseTb: { n: string; amt?: [number, number] | null }[] } {
+  const ctx = new Map<string, { pk: string; mem: string[] }>();
+  for (const m of inst.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
+    const body = m[2];
+    if (/typedMember/.test(body)) continue;
+    const mem = [...body.matchAll(/<(?:xbrldi:)?explicitMember\b[^>]*>([^<]+)</g)].map((x) => x[1].trim().split(":").pop()!);
+    const i1 = /<(?:xbrli:)?instant>([^<]+)</.exec(body);
+    const st = /<(?:xbrli:)?startDate>([^<]+)</.exec(body);
+    const en = /<(?:xbrli:)?endDate>([^<]+)</.exec(body);
+    const pk = i1 ? pkInst(i1[1].trim()) : st && en ? pkDur(st[1].trim(), en[1].trim()) : null;
+    if (pk) ctx.set(m[1], { pk, mem });
+  }
+  const sum: Record<string, Record<string, number | null>> = {};
+  const sh = new Map<string, Map<string, string | null>>(); // 개념 → 행(""=표 합계) → 값
+  let shAt: string | null = null;
+  const re = /<jpcrp_cor:([\w.-]+)\b([^>]*?\bcontextRef="([^"]+)"[^>]*?)(?:\/>|>([^<]*)<\/jpcrp_cor:\1>)/g;
+  for (const m of inst.matchAll(re)) {
+    const name = m[1];
+    const isSum = SUM_TAGS.has(name);
+    if (!isSum && !SHARE_TAGS.has(name)) continue;
+    const c = ctx.get(m[3]);
+    if (!c) continue;
+    const nil = /xsi:nil="true"/.test(m[2]) || m[4] == null || m[4].trim() === "";
+    if (isSum) {
+      const nc = c.mem.length === 1 && c.mem[0] === "NonConsolidatedMember";
+      if (c.mem.length && !nc) continue;
+      const v = nil ? null : Number(m[4]!.trim());
+      if (v != null && !Number.isFinite(v)) continue;
+      const o = (sum[name] ??= {});
+      const k = c.pk + (nc ? "|nc" : "");
+      if (!(k in o) || o[k] == null) o[k] = v;
+      continue;
+    }
+    // 주식 표 — 발행주식수는 차원 없는 문맥(보통주 행 OrdinaryShareMember 와 같은 값), 자기주식은 RowN 행 + 합계
+    const row = c.mem.length === 0 ? "" : c.mem.length === 1 && /^Row\d+Member$/.test(c.mem[0]) ? c.mem[0] : null;
+    if (row == null) continue;
+    if (/^NumberOfIssuedShares/.test(name) && row !== "") continue;
+    if (/TreasurySharesEtc$/.test(name) && c.pk.startsWith("I")) shAt ??= c.pk.slice(1);
+    const mm = sh.get(name) ?? new Map<string, string | null>();
+    sh.set(name, mm);
+    if (!mm.has(row)) mm.set(row, nil ? null : decodeXml(m[4]!).trim());
+  }
+  const num = (s: string | null | undefined) => (s == null || s === "" ? null : Number.isFinite(Number(s)) ? Number(s) : null);
+  let shares: JpDocShares | null = null;
+  const issuedM = sh.get("NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc");
+  if (issuedM) {
+    const issued = num(issuedM.get(""));
+    const issuedFiling = num(sh.get("NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc")?.get(""));
+    const names = sh.get("NameOfShareholderTreasurySharesEtc") ?? new Map();
+    const own = sh.get("NumberOfSharesHeldInOwnNameTreasurySharesEtc") ?? new Map();
+    const oth = sh.get("NumberOfSharesHeldInOthersNamesTreasurySharesEtc") ?? new Map();
+    const rows = [...names.keys()].filter((r) => r !== "");
+    const me = filer ? normName(filer) : null;
+    const mine = rows.filter((r) => me && normName(names.get(r) ?? "") === me);
+    let treasury: number | null = null;
+    let how: string;
+    if (mine.length) {
+      treasury = mine.reduce((a, r) => a + (num(own.get(r)) ?? 0) + (num(oth.get(r)) ?? 0), 0);
+      how = `自己株式等 표 ${mine.join("·")}(${names.get(mine[0])})`;
+    } else if (!rows.length && !own.size) {
+      treasury = 0;
+      how = "自己株式等 표 없음(자기주식 없음)";
+    } else {
+      how = `自己株式等 표에서 제출회사 행을 찾지 못함(${rows.map((r) => names.get(r)).slice(0, 3).join("·")})`;
+    }
+    shares = { at: shAt, issued, issuedFiling, treasury, how };
+  }
+  // 리스부채 주석 — 본표에 리스부채 줄이 없는 IFRS 회사(차입금 줄에 포함됐는지·따로 몇인지)
+  const leaseTb: { n: string; amt?: [number, number] | null }[] = [];
+  const tbRe = /<([\w-]+):(Notes[\w]*TextBlock)\b([^>]*?\bcontextRef="([^"]+)"[^>]*)>([\s\S]*?)<\/\1:\2>/g;
+  for (const m of inst.matchAll(tbRe)) {
+    const c = ctx.get(m[4]);
+    if (!c || c.mem.length) continue;
+    const t = decodeXml(decodeXml(m[5]).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ")).replace(/[\s　 ]+/g, " ");
+    if (!t.includes("リース負債")) continue;
+    const n = (s: string) => Number(s.replace(/,/g, ""));
+    // "リース負債（流動） 67,403 73,894 リース負債（非流動） 174,341 172,480" (전기 · 당기, 백만엔 표)
+    const a = /リース負債[（(]流動[)）]\s*([\d,]+)\s+([\d,]+)\s*リース負債[（(]非流動[)）]\s*([\d,]+)\s+([\d,]+)/.exec(t);
+    const unit = /百万円/.test(t) ? 1e6 : null;
+    leaseTb.push({ n: m[2], amt: a && unit ? [(n(a[1]) + n(a[3])) * unit, (n(a[2]) + n(a[4])) * unit] : null });
+  }
+  return { sum, shares, leaseTb };
 }
 
 const memo = new Map<string, Promise<JpDocFin>>();

@@ -28,13 +28,14 @@ import { usSharesHint } from "@/lib/markets/us/shares-hint";
 import { secBasisBars } from "@/lib/markets/us/edgar-shares";
 import { loadKrCapsChecked } from "@/lib/markets/kr/dart-ev";
 import { dartAdrHighlights, dartAdrOf } from "@/lib/markets/us/dart-adr";
+import { getJpHighlights } from "@/lib/markets/jp/jp-views";
 
 export const revalidate = 3600;
 export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
 /**
  * 재무 하이라이트 표 (EV 브릿지 + 5개년 손익·현금흐름 + 현재/LTM + 차기 추정).
- * 미국(SEC EDGAR) · 한국(OpenDART). 그 외 시장은 { highlights: null }.
+ * 미국(SEC EDGAR) · 한국(OpenDART) · 일본(EDINET XBRL — jp/jp-ev.ts 단일 기준).
  */
 export async function GET(
   request: Request,
@@ -45,11 +46,16 @@ export async function GET(
     if (!isMarketId(market)) {
       return Response.json({ error: "알 수 없는 시장" }, { status: 404 });
     }
-    if (market !== "us" && market !== "kr") return ok({ highlights: null });
-
     const adapter = getAdapter(market);
     const sym = adapter.normalizeSymbol(decodeURIComponent(symbol));
     const yahoo = new URL(request.url).searchParams.get("yahoo");
+
+    // 일본 — EDINET 본표 조립 + Yahoo 시세(jp-ev.ts 단일 기준). 시세·서류 판독 경고가 있으면 캐시하지 않는다
+    if (market === "jp") {
+      const highlights = await getJpHighlights(sym, yahoo);
+      const warned = highlights.notes.some((n) => n.startsWith("⚠"));
+      return ok({ highlights }, { headers: { "Cache-Control": warned ? "no-store" : "public, s-maxage=3600, stale-while-revalidate=86400" } });
+    }
 
     // no-silent-catch:begin — 한국 경로(감사 1차 ⑥⑨: 조회 실패는 전부 경고로 남기고 캐시하지 않는다)
     if (market === "kr") {

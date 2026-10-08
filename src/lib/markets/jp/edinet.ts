@@ -8,11 +8,13 @@
  * - 재무제표: 최신 有価証券報告書 = DB 색인 jp_docs(src/lib/db/jp-docs.ts) — EDINET 은 날짜 인덱스라 종목별 조회가 없어
  *   예전엔 400일치 documents.json 을 요청마다 훑었다(25~44초, 날짜별 실패는 조용히 버림). 이제 색인은 배치
  *   (scripts/run/jp-edinet-index.mts)가 채우고, 화면 요청은 확정 안 된 최근 날만 보충한다(ensureIndexed).
+ *   재무 표 = statements.ts(EDINET XBRL 본표 조립), 하이라이트·재무분석·개요 멀티플(getTtm) = jp-ev.ts 단일 기준(2026-10-08).
  */
 
 import "server-only";
-import { ensureIndexed, listJpReports, type JpDocRow } from "@/lib/db/jp-docs";
 import { edinetDayList, recentDates, redactEdinet, type EdinetDoc } from "./edinet-store";
+import { getJpFinModel, jpStatementView } from "./statements";
+import { getJpTtm } from "./jp-views";
 import { consensusDeepLinks, filingsDeepLink, newsDeepLinks } from "../deeplinks";
 import {
   AdapterError,
@@ -22,9 +24,9 @@ import {
   type Filing,
   type FinancialStatement,
   type MarketAdapter,
+  type TtmFlows,
 } from "../types";
 import { resolveEdinetByTicker } from "./edinetcode";
-import { fetchEdinetSummary } from "./financials";
 import { fetchJQuantsMaster } from "./jquants";
 
 const HINT =
@@ -59,29 +61,8 @@ const DOC_TYPE_LABEL: Record<string, string> = {
   "360": "訂正大量保有報告書",
 };
 
-/** 有報를 찾는 범위(일) — 有価証券報告書는 연 1회 */
-const ANNUAL_DAYS = 400;
 /** 공시목록 범위(일) — 3月決算사의 6月 有価証券報告書를 11月까지 포착 */
 const FILINGS_DAYS = 160;
-
-/**
- * 최신 有価証券報告書(120, 取下げ 제외, 최근 400일) — DB 색인(jp_docs). 먼저 최근 400일 중 확정 색인 안 된 날을 보충한다(보통 최근 이틀).
- * 색인 못 한 날(배치 미완료·조회 실패)이 찾은 有報 제출일 이후에 있으면(또는 못 찾았으면) 더 새 有報를 놓쳤을 수 있다 — 옛 有報를
- * 조용히 보여 주지 않고 503 으로 알린다(예전엔 날짜별 실패를 버렸다).
- */
-async function findLatestAnnual(edinetCode: string): Promise<JpDocRow | null> {
-  const ix = await ensureIndexed({ days: ANNUAL_DAYS });
-  const since = recentDates(ANNUAL_DAYS).at(-1)!;
-  const doc = (await listJpReports(edinetCode, ["120"])).find((r) => (r.submitDateTime ?? "").slice(0, 10) >= since) ?? null;
-  const gaps = [...ix.pending, ...ix.failed.map((f) => f.date)].sort();
-  const newestGap = gaps.at(-1);
-  const docDate = doc?.submitDateTime?.slice(0, 10);
-  if (newestGap && (!docDate || newestGap >= docDate)) {
-    const why = ix.failed[0] ? ` — 예: ${ix.failed[0].date} ${redactEdinet(ix.failed[0].error)}` : " — 배치 scripts/run/jp-edinet-index.mts 실행 필요";
-    throw new AdapterError(`EDINET 서류 색인 미완료(${gaps.length}일, 최근 ${newestGap})${why}`.slice(0, 300), { status: 503 });
-  }
-  return doc;
-}
 
 export const jpEdinetAdapter: MarketAdapter = {
   market: "jp",
@@ -131,31 +112,17 @@ export const jpEdinetAdapter: MarketAdapter = {
   },
 
   async getFinancials(symbol, periodType): Promise<FinancialStatement> {
-    // JP 재무 = EDINET 有価証券報告書 (연간 경영지표 5기).
-    // J-Quants /fins/details 는 유료 플랜 전용이라 미사용.
-    if (periodType === "quarter") {
-      throw new AdapterError(
-        "일본 분기 재무는 미지원입니다 (四半期報告書 폐지, J-Quants 재무는 유료). 연간 또는 딥링크를 이용하세요.",
-        { status: 501 },
-      );
-    }
-    const apiKey = key();
-    if (!apiKey) throw new NotConfiguredError(HINT);
-    const e = await resolveEdinetByTicker(symbol);
-    const doc = await findLatestAnnual(e.edinetCode);
-    if (!doc) {
-      throw new AdapterError(
-        `최근 ${ANNUAL_DAYS}일 내 有価証券報告書를 찾지 못했습니다. EDINET 딥링크를 이용하세요.`,
-        { status: 404 },
-      );
-    }
-    const peYear = doc.periodEnd ? Number(doc.periodEnd.slice(0, 4)) : new Date().getFullYear();
-    const statement = await fetchEdinetSummary(doc._id, peYear);
-    if (!statement) {
-      throw new AdapterError("有価証券報告書 CSV를 해석하지 못했습니다.", { status: 502 });
-    }
-    statement.symbol = symbol;
-    return statement;
+    // JP 재무 = EDINET XBRL 본표 조립(statements.ts — 3대 재무제표 화면과 같은 저장본) 총괄 뷰. 연간 5개 사업연도 + 현재/LTM,
+    // 분기 = 반기 열. 예전 有報 CSV 경영지표 요약(financials.ts)은 2026-10-08 폐지 — 멀티플·컨센서스는 jp-ev.ts 단일 기준을 쓴다
+    if (!key()) throw new NotConfiguredError(HINT);
+    const model = await getJpFinModel(symbol);
+    return jpStatementView(model, symbol, "summary", periodType);
+  },
+
+  /** 개요 멀티플·유니버스 — jp-ev.ts 단일 기준(하이라이트 LTM 열과 같은 값) */
+  async getTtm(symbol): Promise<TtmFlows | null> {
+    if (!key()) throw new NotConfiguredError(HINT);
+    return getJpTtm(symbol);
   },
 
   async getFilings(symbol, opts): Promise<Filing[]> {

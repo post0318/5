@@ -60,7 +60,7 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
         // 각각 fetchKrxEod 호출)돼 새로고침이 느려진다.
         skipQuote: isKr,
         // 미국은 TTM 스냅샷만 쓴다(매출·마진·멀티플 전부) — 연간 표는 안 쓰므로 부르지 않는다
-        skipAnnualStatement: item.market === "us",
+        skipAnnualStatement: item.market === "us" || item.market === "jp",
       }),
       isKr ? fetchKrForeignOwnership(item.symbol).catch(() => null) : Promise.resolve(null),
       isKr ? fetchKrNaverConsensus(item.symbol).catch(() => null) : Promise.resolve(null),
@@ -75,7 +75,8 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
     // (영업이익·순이익 TTM). 예전엔 연간 재무제표의 부분 매출 태그(고객계약 매출)를 써서 MET·AXP 등이 총매출과 크게
     // 갈렸다(revenue.md D1).
     const inp = ov.multiples?.inputs;
-    const isUs = item.market === "us";
+    // 일본도 미국과 같이 TTM 스냅샷(jp-ev.ts — 하이라이트 LTM 열과 같은 값)만(2026-10-08)
+    const isUs = item.market === "us" || item.market === "jp";
     const usTtm = isUs ? ov.ttm : null;
     const rev = isKr ? (krMetrics?.revenueAnnual ?? null) : isUs ? (usTtm?.revenue ?? null) : (inp?.revenueAnnual ?? null);
     const margin = (n: number | null | undefined) => (n != null && rev ? n / rev : null);

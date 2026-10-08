@@ -205,7 +205,7 @@ export function StockAnalysis({
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/financials?view=analysis` +
           (yahooOverride ? `&yahoo=${encodeURIComponent(yahooOverride)}` : ""),
       ),
-    enabled: Boolean(symbol) && (market === "us" || market === "kr"),
+    enabled: Boolean(symbol) && (market === "us" || market === "kr" || market === "jp"),
     retry: false,
   });
   const summaryQ = useQuery({
@@ -305,7 +305,7 @@ export function StockAnalysis({
         `/api/markets/${market}/${encodeURIComponent(symbol!)}/highlights` +
           (yahooOverride ? `?yahoo=${encodeURIComponent(yahooOverride)}` : ""),
       ),
-    enabled: Boolean(symbol) && (market === "us" || market === "kr"),
+    enabled: Boolean(symbol) && (market === "us" || market === "kr" || market === "jp"),
     retry: false,
   });
 
@@ -407,7 +407,8 @@ export function StockAnalysis({
     // TTM 조회가 실패하면 computeTrailingMultiples 가 모든 멀티플을 비우고 사유("TTM 조회 실패")를 싣는다.
     // 미국은 연간 재무제표 표를 기다리지 않는다 — 멀티플은 TTM 스냅샷(사업연도 EPS 포함)만 쓰고, 표는 TTM 에 사업연도 EPS 가 없는
     // 경로(DART 연결 ADR)에서만 필요. 표 요청이 느리거나 실패하면 시가총액이 사유 없이 "-"로 남았다(2026-10-02, DELL)
-    if (market === "us") {
+    // 일본도 같다 — TTM 스냅샷(jp-ev.ts 단일 기준, 하이라이트 LTM 열과 같은 값)만(2026-10-08)
+    if (market === "us" || market === "jp") {
       if (ttmQ.isLoading || !ov?.quote) return null;
       if (ttmForMultiples && ttmForMultiples.fyEps === undefined && !ttmQ.isError && annualForMultiples.isLoading) return null;
     } else if (!ov?.quote || !annualForMultiples.data) return ov?.multiples ?? null;
@@ -448,50 +449,25 @@ export function StockAnalysis({
   const ccy = ov?.quote?.currency ?? "USD";
   const price = ov?.quote?.last ?? null;
 
-  const cons = ov?.consensus ?? null;
-
-  // ── 일본: 무료 분기 공시가 없어(四半期報告書 폐지·J-Quants 재무 유료) 자체 TTM 불가.
-  //    지표 정의는 미국과 동일(TTM·최근분기·차기추정)하되 값은 Yahoo 제공치 사용.
-  const jpY =
-    market === "jp" && cons
-      ? {
-          trailingEps: cons.trailingEps,
-          pbr: price != null && cons.bookValue ? price / cons.bookValue : null,
-          bps: cons.bookValue,
-          psr:
-            cons.marketCap != null && cons.revenueTtm
-              ? cons.marketCap / cons.revenueTtm
-              : null,
-          evEbitda:
-            cons.enterpriseValue != null && cons.ebitdaTtm
-              ? cons.enterpriseValue / cons.ebitdaTtm
-              : null,
-          dpsTtm: cons.trailingAnnualDividendRate,
-        }
-      : null;
-
   // ── PER(TTM) · EPS(TTM) ─────────────────────────────────────────
-  // 국내: DART 자체 TTM(직전연간 + 당기누적 − 전년동기). 미국: EDGAR 동일 방식. 일본: Yahoo.
+  // 국내: DART 자체 TTM(직전연간 + 당기누적 − 전년동기). 미국: EDGAR 동일 방식. 일본: EDINET(jp-ev.ts — 최근 사업연도 + 반기 − 전년 반기).
   const ttm = ttmQ.data?.ttm ?? null;
   // 미국은 TTM EPS(공통 함수) 그대로 — 순이익 ÷ 다른 주식수로 대신 계산하지 않는다(그림자 채우기 금지)
   const ttmEps =
-    jpY
-      ? (jpY.trailingEps ?? null)
-      : ttm?.eps != null
-        ? ttm.eps
-        : market !== "us" && ttm?.netIncome != null && multiples?.inputs.shares
-          ? ttm.netIncome / multiples.inputs.shares
-          : null;
+    ttm?.eps != null
+      ? ttm.eps
+      : market === "kr" && ttm?.netIncome != null && multiples?.inputs.shares
+        ? ttm.netIncome / multiples.inputs.shares
+        : null;
   // 부호 규칙(전 화면 공통): EPS 가 0 이하면 PER 은 비운다. 적자라서 비운 것이므로
-  // Yahoo PER 로 대체하지 않는다 — 자체 TTM 이 아예 없을 때만 Yahoo 폴백(일본만 — 미국·한국은 자체 값만)
-  const ownTtmPer = price != null && ttmEps != null && ttmEps > 0 ? price / ttmEps : null;
-  const trailingPer = ttmEps != null || market !== "jp" ? ownTtmPer : (cons?.trailingPer ?? null);
+  // Yahoo PER 로 대체하지 않는다(일본도 2026-10-08 부터 자체 값만 — jp-ev.ts)
+  const trailingPer = price != null && ttmEps != null && ttmEps > 0 ? price / ttmEps : null;
 
-  const pbrVal = jpY?.pbr ?? multiples?.pbr ?? null;
-  const bpsVal = jpY?.bps ?? multiples?.bps ?? null;
-  const psrVal = jpY?.psr ?? multiples?.psr ?? null;
-  const evEbitdaVal = jpY?.evEbitda ?? multiples?.evEbitda ?? null;
-  const evEbitdaApprox = jpY ? false : (multiples?.evEbitdaIsApprox ?? true);
+  const pbrVal = multiples?.pbr ?? null;
+  const bpsVal = multiples?.bps ?? null;
+  const psrVal = multiples?.psr ?? null;
+  const evEbitdaVal = multiples?.evEbitda ?? null;
+  const evEbitdaApprox = multiples?.evEbitdaIsApprox ?? true;
 
   // ── 추정PER ─────────────────────────────────────────────────────
   // 국내: 네이버(FnGuide) 당해년도 컨센서스. 미국: 야후 차기 회계연도(Forward).
@@ -510,20 +486,12 @@ export function StockAnalysis({
           ? price / fwdEstEps
           : null));
 
-  // DPS — 국내: 금융위 배당정보 API. 미국: EDGAR CommonStockDividendsPerShareDeclared.
-  //   둘 다 DPS(전년 회계연도) + DPS(TTM, 최근 12개월).
-  // Yahoo 배당 폴백은 일본만(미국은 EDGAR 주당배당금만 — 없으면 "-")
-  const dps =
-    (ttmQ.data?.dividend?.annual?.dps ?? null) ??
-    (market === "jp" ? (cons?.dividendPerShare ?? null) : null);
-  const dpsTtm = (ttmQ.data?.dividend?.ttm?.dps ?? null) ?? jpY?.dpsTtm ?? null;
+  // DPS — 국내: 금융위 배당정보 API. 미국: EDGAR CommonStockDividendsPerShareDeclared. 일본: EDINET 경영지표 1株当たり配当額(jp-ev.ts).
+  //   모두 DPS(전년 회계연도) + DPS(TTM, 최근 12개월). Yahoo 배당 폴백 없음(2026-10-08 일본도 — 없으면 "-")
+  const dps = ttmQ.data?.dividend?.annual?.dps ?? null;
+  const dpsTtm = ttmQ.data?.dividend?.ttm?.dps ?? null;
   // 배당수익률 = TTM 주당배당금 / 현재가. 소수 비율(0.012 = 1.2%)로 통일 (<Percent>가 ×100)
-  const divYield =
-    price != null && dpsTtm != null && price > 0
-      ? dpsTtm / price
-      : market === "jp"
-        ? ((cons?.dividendYield ?? null) as number | null)
-        : null;
+  const divYield = price != null && dpsTtm != null && price > 0 ? dpsTtm / price : null;
 
   // 투자지표 표 (펀더멘털 + 참고) — 2개씩 묶어 한 행
   const metrics: { label: string; node: React.ReactNode }[] = [
@@ -674,7 +642,7 @@ export function StockAnalysis({
             <TabsList>
               <TabsTrigger value="overview">개요</TabsTrigger>
               <TabsTrigger value="financials">재무제표</TabsTrigger>
-              {(market === "us" || market === "kr") && <TabsTrigger value="analysis">재무분석</TabsTrigger>}
+              {(market === "us" || market === "kr" || market === "jp") && <TabsTrigger value="analysis">재무분석</TabsTrigger>}
               {(market === "kr" || market === "us") && (
                 <TabsTrigger value="rights">권리일정</TabsTrigger>
               )}
@@ -846,13 +814,13 @@ export function StockAnalysis({
                 />
               )}
 
-              {/* 재무 하이라이트 (EV 브릿지 + 5개년 + LTM + 추정) — 현재 미국만 */}
+              {/* 재무 하이라이트 (EV 브릿지 + 5개년 + LTM + 추정) — 미국·한국·일본 */}
               {highlightsQ.data?.highlights && (
                 <FinancialHighlightsTable data={highlightsQ.data.highlights} />
               )}
 
               {/* 요약 칩 (FCF 마진 / PEG) — 재무 하이라이트와 컨센서스 사이 */}
-              {(market === "us" || market === "kr") &&
+              {(market === "us" || market === "kr" || market === "jp") &&
                 analysisQ.data &&
                 (() => {
                   const its = analysisQ.data.sections[0]?.items ?? [];
@@ -1041,8 +1009,8 @@ export function StockAnalysis({
               )}
             </TabsContent>
 
-            {/* 분석 (미국·한국) */}
-            {(market === "us" || market === "kr") && (
+            {/* 분석 (미국·한국·일본) */}
+            {(market === "us" || market === "kr" || market === "jp") && (
               <TabsContent value="analysis" className="space-y-4 pt-4">
                 {analysisQ.isLoading && <Skeleton className="h-64 w-full" />}
                 {analysisQ.isError && (
