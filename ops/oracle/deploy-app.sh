@@ -16,11 +16,13 @@ docker build --progress=plain \
   -t "macro:$SHA" .
 sudo install -d -m 755 /opt/macro/sec-cache  # SEC 원본·갱신형 캐시 — 배포해도 남고 배치(run-ts.sh)와 같이 쓴다
 sudo install -d -m 755 /opt/macro/dart-cache  # DART 디스크 캐시(판본 = 보고서 최신 접수번호, src/lib/markets/kr/dart-cache.ts) — 배치와 같이 쓴다
+sudo install -d -m 755 /opt/macro/edinet-cache  # EDINET 공시 목록·원본 zip·판독 결과(src/lib/markets/jp/edinet-store.ts, 상한 EDINET_CACHE_MAX_GB 기본 8) — 배치와 같이 쓴다
 docker rm -f macro >/dev/null 2>&1 || true
 docker run -d --name macro --restart unless-stopped \
   -p 127.0.0.1:8080:8080 --env-file "$ENVF" \
   -v /opt/macro/sec-cache:/tmp/.cache \
   -v /opt/macro/dart-cache:/dart-cache \
+  -v /opt/macro/edinet-cache:/edinet-cache -e EDINET_CACHE_DIR=/edinet-cache \
   --memory 3g "macro:$SHA" >/dev/null
 # 앱 이미지는 지금 것 + 직전 2개만 남긴다(배치·수집기가 쓰는 node 이미지는 지우지 않게 macro:* 만 정리)
 docker images macro --format '{{.Tag}} {{.CreatedAt}}' | sort -k2 -r | awk 'NR>3 {print $1}' | while read -r t; do docker rmi "macro:$t" >/dev/null 2>&1 || true; done

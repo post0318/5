@@ -6,8 +6,8 @@
 set -uo pipefail
 SHA=$(git -c safe.directory=/opt/macro/jobs -C /opt/macro/jobs rev-parse HEAD)  # 타이머는 root 로 돈다 — 소유자가 달라 git 이 거부하지 않게
 [ -n "$SHA" ] || { echo "작업 폴더 커밋을 못 읽음"; exit 1; }
-install -d -m 755 /opt/macro/sec-cache /opt/macro/dart-cache /opt/macro/npm-cache
+install -d -m 755 /opt/macro/sec-cache /opt/macro/dart-cache /opt/macro/edinet-cache /opt/macro/npm-cache
 exec docker run --rm --network host --env-file /opt/macro/jobs.env \
-  -e APP_COMMIT_SHA="$SHA" -e NODE_OPTIONS=--conditions=react-server -e SEC_CACHE_DIR=/sec-cache -e DART_CACHE_DIR=/dart-cache -e npm_config_cache=/npm-cache \
-  -v /opt/macro/jobs:/app -v /opt/macro/sec-cache:/sec-cache -v /opt/macro/dart-cache:/dart-cache -v /opt/macro/npm-cache:/npm-cache -w /app \
+  -e APP_COMMIT_SHA="$SHA" -e NODE_OPTIONS=--conditions=react-server -e SEC_CACHE_DIR=/sec-cache -e DART_CACHE_DIR=/dart-cache -e EDINET_CACHE_DIR=/edinet-cache -e npm_config_cache=/npm-cache \
+  -v /opt/macro/jobs:/app -v /opt/macro/sec-cache:/sec-cache -v /opt/macro/dart-cache:/dart-cache -v /opt/macro/edinet-cache:/edinet-cache -v /opt/macro/npm-cache:/npm-cache -w /app \
   --memory 3g --cpus 1.5 node:24-slim npx -y tsx@4.23.15 --tsconfig tsconfig.json "scripts/run/$1" "${@:2}"
