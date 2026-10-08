@@ -555,11 +555,12 @@ async function quarterLayer(c) {
     const y = Number(lb.slice(0, 4)), qq = Number(lb.slice(-1));
     for (const [name, loc, sjs, ids, names] of items) {
       const app = loc.is ? isByName(loc.is, lb) : loc.bs ? byId(bsq, loc.bs, lb) : byId(cfq, loc.cf, lb);
-      let exp, how, noNciLine = false;
+      let exp, how, noNciLine = false, noOwnLine = false;
       if (loc.bs) {
         const rows = await Q.R(y, qq === 4 ? "11011" : QCODE[qq]);
         exp = rows ? oneVal(pickRow(rows, ids, names, sjs), (r) => num(r.thstrm_amount)).v : null;
         noNciLine = !!rows?.some((r) => r.sj_div === "BS") && !pickRow(rows, ["ifrs-full_NoncontrollingInterests"], ["비지배지분"], ["BS"]).length;
+        noOwnLine = !!rows?.some((r) => r.sj_div === "BS") && !pickRow(rows, ids, names, sjs).length;
         how = `${y} ${qq === 4 ? "사업" : QNAME[qq]}보고서 당기말 ${basis}`;
       } else {
         const r = await Q.qval(y, qq, [ids, names, sjs]);
@@ -580,6 +581,16 @@ async function quarterLayer(c) {
       // 양쪽 빈칸의 기대 빈칸(2026-10-08, 연간 A층과 같은 원칙): 별도 재무제표 기준이면 지배·비지배 구분 없음, 연결 재무상태표에 비지배지분 줄이 없으면 빈칸
       if (app == null && exp == null && /^(당기순이익\(지배\)|지배주주 지분|비지배지분)$/.test(name) && (basis === "OFS" || (name === "비지배지분" && noNciLine))) {
         add("A", `분기 ${name} = DART`, lb, { status: consts.PASS, note: `양쪽 빈칸 = 기대 빈칸 — ${basis === "OFS" ? "DART 별도 재무제표 기준: 지배·비지배 구분 없음" : "DART 연결 재무상태표에 비지배지분 줄 없음"} (${how})` });
+        continue;
+      }
+      // 연결 재무상태표에 지배기업 소유주지분 줄 자체가 없으면(비지배지분도 없음 — 자본총계 한 줄, 062040 2025 반기·3분기) 본표에 별도 줄 없음 = 빈칸(2026-10-09)
+      if (app == null && exp == null && name === "지배주주 지분" && basis === "CFS" && noOwnLine && noNciLine) {
+        add("A", `분기 ${name} = DART`, lb, { status: consts.PASS, note: `양쪽 빈칸 = 기대 빈칸 — DART 연결 재무상태표에 지배기업 소유주지분·비지배지분 줄 없음(본표에 별도 줄 없음) (${how})` });
+        continue;
+      }
+      // 직전 분기 보고서는 있지만 그 보고서에 이 기준(연결) 재무제표가 없으면(그해 연결 전환 — 062040 2025 1분기는 별도만) 누적 차를 만들 수 없다(2026-10-09)
+      if (app == null && exp == null && !loc.bs && qq > 1 && /누적 차 불가/.test(how) && L.latest(y, QCODE[qq - 1]) && !(await Q.R(y, QCODE[qq - 1]))) {
+        add("A", `분기 ${name} = DART`, lb, { status: consts.PASS, note: `양쪽 빈칸 = 기대 빈칸 — 직전 분기(${y} Q${qq - 1}) 보고서에 ${basis} 재무제표 없음: 3개월 값 산출 불가 (${how})` });
         continue;
       }
       // 3개월 값 = 누적 − 직전 누적인데 직전 분기 보고서가 DART 에 아예 없으면(상장 첫 분기보고서 — 062040 2025 반기) 3개월 값은 만들 수 없다 — 앱 빈칸이 맞다(2026-10-08)
