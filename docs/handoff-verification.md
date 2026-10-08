@@ -4,6 +4,22 @@
 검증은 **오라클 2호기 `macro-verify`**(140.83.48.57, `~/5`, 개발 서버 `verify-dev` localhost:3000)에서 돌린다 — 운영과 IP·CPU 분리, PC 메모리 부족(DEPLOY.md §0).
 검증기는 기본으로 DB 저장본(api_snap·ttm_snap·fin_sym·us_class_facts)을 우회한다(인증된 `x-verify-no-snapshot` — 브랜치 코드로 새로 계산). `--use-snapshots` 로만 끈다.
 
+## 다른 PC(집)에서 이어받기 — 2026-10-09 사무실 PC 세션 종료 시점
+- **PC 는 터미널만.** 작업은 2호기(`ssh -i ~/.ssh/oracle_verify ubuntu@140.83.48.57`, `~/5`, 브랜치 kr/verification, 개발 서버 localhost:3000 = 작업 트리).
+  1호기(운영) `ssh -i ~/.ssh/oracle_macro ubuntu@161.33.9.115` 는 확인용(앱 컨테이너 macro, 포트 8080, 비밀값 /opt/macro/app.env — 출력 금지).
+  키 원본: post0318/ipo_keys/6_.env_261005.zip. 2호기에서 master push 금지(pre-push 훅).
+- **운영 배포 절차**: PC 저장소에서 `git fetch` → `deploy/<이름>` 브랜치를 origin/master 위에 만들고 필요한 커밋만 cherry-pick(kr/verification 에는 master 에 없는
+  한국 감사용 코드 — `getKrDaDocChecked`·`loadKrCapsChecked`·`quote.warnings` 등 — 가 있어 충돌 시 그 부분은 master 쪽을 남긴다) → tsc·lint → 빌드는 2호기 별도 worktree
+  (`git worktree add /home/ubuntu/jpbuild origin/<브랜치>` + `cp -al ~/5/node_modules` — 심볼릭 링크는 Turbopack 이 거부) → 오너 승인 후 `git push origin deploy/<이름>:master`
+  (GitHub Actions "오라클 서버 배포" 자동). master 는 다른 세션도 합치므로 push 전 `git fetch` 로 앞서 있는지 확인(거절되면 rebase).
+- **오너 규칙 요약**: 서버 일은 Claude 가 함(오너는 서버 문맹). 무료가 철칙(유료 API·크레딧 금지). 본표에 없는 줄 = 빈칸("본표에 별도 줄 없음"), 본표 "—" = 0, 무배당 = 0.
+  검증 통과는 양쪽 값 일치 또는 원자료로 확인한 기대 빈칸만. DB(Atlas 512MB) 용량 고려(`run-script.sh db/size.mjs` on 1호기). 대화는 한국어·쉬운 말.
+- **운영 미배포(2호기 kr/verification 에만)**: 민카부 컨센서스 카드 7d17d2c(일본, 9종목 확인), 미국 앱 수정 8f726f3(세전이익 고유 태그·TSM 2022 자사주·10-Q 본표 — = 0·ISRG LTM 배당 0·재무분석 배당 — 배포 후 fin-build·ttm-build 재실행), 검증기 변경 다수(검증기는 배포 대상 아님).
+- **진행 중·대기**: ① 012450 = DART XBRL 내려받기 status 800(시스템 점검, 10-08~) — 2호기 `~/retry-012450.sh` 가 30분마다 확인 후 자동 재검증·latest.json 갱신(로그 /tmp/retry-012450.out, /tmp/kr-012450.log).
+  그 보고서 XBRL 만 캐시에 없음(재무제표·원문 표는 캐시됨). ② 미국 검증불가 32(179→32, 실패 0 — 남은 사유는 아래 줄). ③ 일본 다음 단계: JP 검증기 층(미국 기준), 1·3분기(四半期報告書·TDnet),
+  오너 결정 대기 항목(FY 이름, 도요타·소니 금융사업 EV, SBG 하이브리드 자본, MHI 차입금 범위, 키옥시아 야후 추정치, 9984 vs 9434).
+- 사무실 PC 의 Claude 메모(서버 구성·오너 규칙·일본 현황)는 이 문서와 CLAUDE.md 에 같은 내용이 있다.
+
 ## 현재 상태 (2026-10-09) — 다음에 여기서부터
 - **(10-09 오후) 미국 검증불가 179 → 32**(verify-us-20261009-075243, 47종목 --post: 통과 39,268 · 공통모드 1,336 · 실패 2 → SPOT 배당 검증기 정규식 결함 고친 뒤
   SPOT·TSM·ASML 재실행 --post 실패 0). 앱 수정 **8f726f3 — 운영 배포 필요**(세전이익 회사 고유 태그 MCD·ORCL·MRVL, TSM 2022 자기주식, GLW 10-Q "—"=0,
