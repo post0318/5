@@ -3847,6 +3847,7 @@ async function verifyUs(sym) {
   const natRd = natCur ? natAnnual([["us-gaap", "ResearchAndDevelopmentExpense"], ["ifrs-full", "ResearchAndDevelopmentExpense"]], natCur) : new Map();
   // companyfacts 가 최신 20-F/10-K 를 빠뜨린 경우(TSM 2025) — 원본 XBRL 인스턴스에서 원통화 값을 직접 읽는다
   const instFyByEnd = new Map(); // 결산일 → { end, fy, filed } — 같은 원본의 dei:DocumentFiscalYearFocus(B층 연도 라벨 대조용)
+  const instNat = new Map(); // "ns:개념" → [{ start?, end, val, form, filed }] — 같은 원본의 원통화 차원 없는 값(재무상태표·현금흐름표 A층 natFact 보충, 2026-10-08)
   if (natCur) {
     const rc2 = sub.filings?.recent ?? {};
     for (let i = 0; i < (rc2.form ?? []).length; i++) {
@@ -3862,7 +3863,7 @@ async function verifyUs(sym) {
         const ctx = new Map();
         for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
           const b = m[2];
-          ctx.set(m[1], { start: /<(?:xbrli:)?startDate>([^<]+)</.exec(b)?.[1], end: /<(?:xbrli:)?endDate>([^<]+)</.exec(b)?.[1], dimmed: /dimension="/.test(b) });
+          ctx.set(m[1], { start: /<(?:xbrli:)?startDate>([^<]+)</.exec(b)?.[1], end: /<(?:xbrli:)?endDate>([^<]+)</.exec(b)?.[1] ?? /<(?:xbrli:)?instant>([^<]+)</.exec(b)?.[1], dimmed: /dimension="/.test(b) });
         }
         const read = (ns, tag, unitRe) => {
           for (const m of xml.matchAll(new RegExp(`<${ns}:${tag}(?=[\\s>])([^>]*)>([^<]+)</${ns}:${tag}>`, "g"))) {
@@ -3878,6 +3879,15 @@ async function verifyUs(sym) {
         const put = (map, e) => { if (e && !atEnd(map, end)) map.set(end, e); };
         const fyF = /<dei:DocumentFiscalYearFocus\b[^>]*>\s*(\d{4})\s*</.exec(xml)?.[1];
         if (fyF) instFyByEnd.set(end, { end, fy: Number(fyF), filed: rc2.filingDate[i], how: `${rc2.form[i]} 원본 dei:DocumentFiscalYearFocus` });
+        for (const m of xml.matchAll(/<(us-gaap|ifrs-full):(\w+)\b([^>]*)>([^<]+)</g)) {
+          const cx = ctx.get(/contextRef="([^"]+)"/.exec(m[3])?.[1]);
+          if (!cx || cx.dimmed || cx.end !== end || !cu.test(/unitRef="([^"]+)"/.exec(m[3])?.[1] ?? "")) continue;
+          if (cx.start && (Date.parse(cx.end) - Date.parse(cx.start)) / 864e5 < 300) continue;
+          const k = `${m[1]}:${m[2]}`, v = Number(m[4]);
+          if (!Number.isFinite(v)) continue;
+          if (!instNat.has(k)) instNat.set(k, []);
+          if (!instNat.get(k).some((x) => x.start === cx.start && x.end === cx.end)) instNat.get(k).push({ start: cx.start, end: cx.end, val: v, form: rc2.form[i], filed: rc2.filingDate[i] });
+        }
         put(natRev, read("ifrs-full", "Revenue", cu) ?? read("ifrs-full", "RevenueFromContractsWithCustomers", cu) ?? read("us-gaap", "Revenues", cu));
         put(natNi, read("ifrs-full", "ProfitLossAttributableToOwnersOfParent", cu) ?? read("us-gaap", "NetIncomeLoss", cu));
         put(natEps, read("ifrs-full", "DilutedEarningsLossPerShare", cu) ?? read("us-gaap", "EarningsPerShareDiluted", cu));
@@ -5688,10 +5698,49 @@ async function verifyUs(sym) {
       ["cf:total:투자활동 현금흐름", "투자활동 현금흐름", ["NetCashProvidedByUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"], 1],
       ["cf:total:재무활동 현금흐름", "재무활동 현금흐름", ["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"], 1],
       ["cf:투자활동 현금흐름:유형자산 취득", "유형자산 취득(CAPEX)", ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"], -1],
-      ["cf:재무활동 현금흐름:배당금 지급", "배당금 지급", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], -1],
+      // PaymentsOfOrdinaryDividends — CL·GLW·ASML(EUR) 이 쓰는 개념(2026-10-08 — 없어서 배당금 지급 검증불가 15건)
+      ["cf:재무활동 현금흐름:배당금 지급", "배당금 지급", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], -1],
       ["cf:재무활동 현금흐름:자기주식 취득", "자기주식 취득", ["PaymentsForRepurchaseOfCommonStock"], -1],
       ["cf:영업활동 현금흐름:주식보상비용", "주식보상비용", ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], 1],
     ];
+    // 외화 공시(ASML·SPOT·TSM) 재무상태표·현금흐름표 A층(2026-10-08) — us-gaap USD 태그가 없어 "SEC 값 없음"으로 빠지던 칸을 원통화 공시값 × 연준
+    // H.10 으로(잔액 = 결산일 또는 그 이전 마지막 고시, 흐름 = 그 기간 산술평균 — 앱 edgar-foreign 환산 원칙, 오너 결정 2026-09-24). 원통화 개념은 검증기
+    // 자체 목록(us-gaap 원통화 단위 = ASML, ifrs-full = SPOT·TSM — 앱 IFRS_MAP 를 가져다 쓰지 않음). 사업연도 열만(LTM 은 20-F LTM 6-K 대조가 맡음)
+    const NAT_A = {
+      "bs:자산:현금·현금성자산": ["CashAndCashEquivalents"], "bs:자산:유동자산 총계": ["CurrentAssets"], "bs:부채:유동부채 총계": ["CurrentLiabilities"],
+      "bs:부채:부채 총계": ["Liabilities"], "bs:자본:자본 총계": ["EquityAttributableToOwnersOfParent", "Equity"],
+      "cf:total:영업활동 현금흐름": ["CashFlowsFromUsedInOperatingActivities"], "cf:total:투자활동 현금흐름": ["CashFlowsFromUsedInInvestingActivities"],
+      "cf:total:재무활동 현금흐름": ["CashFlowsFromUsedInFinancingActivities"],
+      "cf:투자활동 현금흐름:유형자산 취득": ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets"],
+      "cf:재무활동 현금흐름:배당금 지급": ["DividendsPaidClassifiedAsFinancingActivities", "DividendsPaid"],
+      "cf:재무활동 현금흐름:자기주식 취득": ["PaymentsToAcquireOrRedeemEntitysShares", "PurchaseOfTreasuryShares"],
+      "cf:영업활동 현금흐름:주식보상비용": ["AdjustmentsForSharebasedPayments"],
+    };
+    const FACTS = f.facts; // 아래 열 루프 안에서는 f 가 D층 지역 함수(f(id))로 가려진다 — 회사 사실은 이 이름으로
+    /** 결산일(잔액) 또는 기간(흐름)의 원통화 연간 공시값 — 개념 순서대로 첫 값, 같은 개념이면 최신 제출분 */
+    const natFact = (usCs, id, date, flow) => {
+      const lists = [...usCs.map((t) => ["us-gaap", t]), ...(NAT_A[id] ?? []).map((t) => ["ifrs-full", t])];
+      for (const [ns, t] of lists) {
+        const es = [...(FACTS[ns]?.[t]?.units?.[natCur] ?? []), ...(instNat.get(`${ns}:${t}`) ?? [])].filter((e) => /^(10-K|20-F|40-F)/.test(e.form ?? "") && dayDiff(e.end, date) <= 7
+          && (flow ? e.start && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300 : !e.start));
+        if (es.length) { const e = es.sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? "")).at(-1); return { ...e, t: `${ns === "ifrs-full" ? "ifrs-full:" : ""}${t}` }; }
+      }
+      return null;
+    };
+    /** 외화 공시 칸 판정 — 판정했으면 결과, 원통화 값이 없으면 null(종전 검증불가로) */
+    const natCheck = (id, usCs, app, date, flow, sg = 1) => {
+      if (!foreign || !natCur || !fxRows) return null;
+      const e = natFact(usCs, id, date, flow);
+      if (!e) return null;
+      const pend = fxPendingWhy(fxRows, flow ? e.end : date);
+      if (pend) return app == null ? { status: PASS, note: `${pend} — 앱 빈칸(대체 없음)`, app, src: null } : { status: FAIL, note: `${pend}인데 앱 값 ${app} — 다른 환율로 대체한 것으로 보임`, app, src: null };
+      const rate = flow ? fxAvg(fxRows, e.start, e.end) : fxEndRate(fxRows, date);
+      if (rate == null) return null;
+      const exp = sg * e.val * rate;
+      const how = `원통화 ${e.t} ${e.val} ${natCur}(${e.form} ${e.filed}) × 연준 H.10 ${flow ? `${e.start}~${e.end} 산술평균` : `${date} 이전 마지막 고시`} ${rate}${sg < 0 ? " × −1(현금 유출 표기)" : ""}${flow ? fxWin(e.start, e.end) : fxAt(date)}`;
+      if (app == null) return { status: FAIL, note: `원통화 ${e.val} ${natCur} 있는데 앱 빈칸 — ${how}`, app, src: exp };
+      return extEq(app, exp) ? { status: PASS, note: `${how} (정확 일치)`, app, src: exp } : { status: FAIL, note: `앱 ${app} ≠ 기대 ${exp} — ${how}`, app, src: exp };
+    };
     const hasCol = (st, c) => (st?.periods ?? []).some((p) => p.label === (c === "LTM" ? "현재/LTM" : c));
     for (const c of cols) {
       const date = H[c].date;
@@ -5726,6 +5775,7 @@ async function verifyUs(sym) {
           const ea = inst("StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", date, c !== "LTM"), mi = inst("MinorityInterest", date, c !== "LTM");
           if (ea) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, ea.val - (mi?.val ?? 0), EXACT, `StockholdersEquity 미태깅 — 비지배지분 포함 자본 ${ea.val}${mi ? ` − 비지배지분 ${mi.val}` : "(비지배지분 태그 없음)"}`)); continue; }
         }
+        if (!hit && c !== "LTM") { const r = natCheck(id, cs, app, date, false); if (r) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, r); continue; } }
         if (!hit) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, app == null ? { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 빈칸${why ? `(${why})` : ""}`, app, src: null } : { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 ${app}(파생값 가능: ${why || "사유 없음"})`, app, src: null }); continue; }
         const r0 = vsSource(app, hit.val, EXACT, `${cs[usedIdx]} ${hit.form} ${hit.filed}${retagNote(hit) ? ` · ${retagNote(hit)}` : ""}${cm}`);
         add("A", `재무상태표 ${nm} 앱 = SEC`, c, usedIdx > 0 && r0.status === PASS ? { ...r0, status: COMMON } : r0);
@@ -5775,6 +5825,16 @@ async function verifyUs(sym) {
             add("A", `현금흐름표 ${nm} 앱 = SEC`, c, r1.status === PASS ? { ...r1, status: COMMON } : r1);
             continue;
           }
+        }
+        if (v == null && c !== "LTM") { const r = natCheck(id, cs, app, date, true, sg); if (r) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, r); continue; } }
+        // 무배당 = 0(오너 결정 2026-10-02 — 앱 blank-reason dividendFree): 그 기간(연간 열 = 사업연도, LTM = 최근 12개월)에 SEC 배당 지급·선언 기록이
+        // 하나도 없거나 전부 0 이면 앱 0 을 통과로(검증기 독립 판정 — 원통화·IFRS 개념 포함). 기록이 있으면 종전대로 검증불가
+        if (v == null && app === 0 && id === "cf:재무활동 현금흐름:배당금 지급") {
+          const from = new Date(Date.parse(date) - 366 * 864e5).toISOString().slice(0, 10);
+          const DIV_EVID = [["us-gaap", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends", "DividendsCommonStockCash", "DividendsCommonStock", "DividendsCash", "CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"]],
+            ["ifrs-full", ["DividendsPaidClassifiedAsFinancingActivities", "DividendsPaid", "DividendsRecognisedAsDistributionsToOwners", "DividendsRecognisedAsDistributionsToOwnersPerShare"]]];
+          const ev = DIV_EVID.flatMap(([ns, ts]) => ts.flatMap((t) => Object.values(FACTS[ns]?.[t]?.units ?? {}).flat().filter((e) => e.end > from && e.end <= date && e.val !== 0).map((e) => `${t} ${e.end} ${e.val}`)));
+          if (!ev.length) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: PASS, note: `무배당 — SEC 배당 지급·선언 기록 ${from}~${date} 없음(0 포함) → 앱 0(오너 결정 2026-10-02 무배당 = 0)`, app, src: 0 }); continue; }
         }
         if (v == null) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: NA, note: `SEC ${cs.join("/")} 기간 값 없음 — 앱 ${app ?? `빈칸(${why || "사유 없음"})`}`, app, src: null }); continue; }
         const r0 = vsSource(app, sg * v, EXACT, `${how}${sg < 0 ? " × −1(현금 유출 표기)" : ""}${cm}`);
