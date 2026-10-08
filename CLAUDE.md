@@ -1539,12 +1539,15 @@ DB는 `weekly_reports`(주당 1건, `_id`=대상 주 월요일) + `weekly_llm_us
   시리즈에 다음 COPOM 까지 미래 일자가 미리 들어있어 실행일 이전 값만 사용).
   **브라질 장기 국채(NTN-F ~10년)는 1호기 타이머 `macro-br-ntnf`가 직접 수집**
   (2026-10-06 오너 지시 — "4번에 종속되어 있네… 1호기에서 분리해서 구축하고 4번에서
-  끊어버리는 것이 낫다"). 재무부 CSV(Tesouro Transparente `precotaxatesourodireto.csv`,
-  매일 약 10:20 UTC 에 전 영업일분 갱신)를 매일 07:10 KST 에 받아 새 날짜만
-  `br_ntnf_daily` 에 넣는다(`scripts/run/ntnf-daily.mts`, 계산 `lib/weekly/ntnf.ts`).
-  규칙은 4번(`scripts/fetch-ntnf-snapshot.mjs`)과 같다 — 날짜마다 만기가 (기준일+10년)에
-  가장 가까운 NTN-F 의 Taxa Venda(같은 거리면 CSV 먼저 나온 종목), CSV 에 있는 날만.
-  4번 JSON 과 2019-10-07~2026-10-02 1,741일 정확 일치 확인. 예전 GitHub raw·
+  끊어버리는 것이 낫다"). 매일 07:10 KST 에 `br_ntnf_daily` 를 채운다(`scripts/run/ntnf-daily.mts`,
+  계산 `lib/weekly/ntnf.ts`). **정의 = 4번과 같은 중간값**(오너 결정 2026-10-09, 4번 9f05448·ce5b298 기준):
+  날짜마다 만기가 (기준일+10년)에 가장 가까운 NTN-F(같은 거리면 자료에서 먼저 나온 종목)의 값, 우선순위
+  ① ANBIMA 2차시장 지표금리(Tx. Indicativas, 종가, `src:"anbima"` — 공개 일일 파일
+  `anbima.com.br/informacoes/merc-sec/arqs/msYYMMDD.txt`, 인증 없음·latin1·"@" 구분, 약 4주치만 남아 받은 날을 DB 에 누적)
+  ② 재무부 CSV(Tesouro Transparente `precotaxatesourodireto.csv`, 매일 약 10:20 UTC 에 전 영업일분) round2((Taxa Compra+Taxa Venda)/2)
+  (`src:"csv-mid"`, 매수 호가가 비면 매도값 `csv-sell`). 4번의 ③ 실시간 임시값(live)은 **쓰지 않는다** — 주간 리포트는 확정
+  자료(금요일 종가)만. CSV 값은 없는 날짜만, ANBIMA 는 아직 anbima 가 아닌 날짜만 쓴다(CSV 값 대체).
+  4번 JSON(10-08 생성)과 2019-10-08~2026-10-07 확정 1,743일(anbima 19일 포함) 정확 일치 확인. 예전 GitHub raw·
   `NTNF_GITHUB_TOKEN` 경로는 삭제. 갱신이 밀리면 asOf 를 표기하고 그 시점 기준 7일 전과 비교. Yahoo
   환율·일부 지수는 봉 타임스탬프가 전일 23:00Z 라 20시 이후 봉을 다음 날로 보정.
 > **LLM 제거 (오너 지시, 2026-09) — "주간 리포트는 LLM 사용 없이 가자.

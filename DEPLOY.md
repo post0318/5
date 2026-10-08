@@ -33,7 +33,7 @@ Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 
 | `research-*`(국내 20) | 타이머 | 08·10·12·14·16·18시(분은 수집기마다 다름) | 국내 증권사 리서치 — 08시만 넓게, 나머지 최근 1일 |
 | `research-*`(해외 IB 10) | 타이머 | 매일 08:05~08:52 | 해외 IB·운용사 인사이트 |
 | `macro-fedwatch-snapshot` | 타이머 | 매일 06:00 | Fed 금리 확률 일별 스냅샷(Kalshi) |
-| `macro-br-ntnf` | 타이머 | 매일 07:10 | 브라질 국채 NTN-F ~10년(재무부 CSV, 새 날짜만 `br_ntnf_daily`, 최신값이 평일 3일 넘게 멈추면 실패 → job 알림) |
+| `macro-br-ntnf` | 타이머 | 매일 07:10 | 브라질 국채 NTN-F ~10년 중간값(ANBIMA 지표 > 재무부 CSV (매수+매도)/2, 새 날짜만 `br_ntnf_daily`, 최신값이 평일 3일 넘게 멈추면 실패 → job 알림) |
 | `fin-analyst-forecasts` | 타이머 | 매일 10:20 | StockAnalysis 애널리스트 투자의견 |
 | `weekly-report` | 타이머 | 월 06:00 | 주간 리포트 초안 |
 | `news-stock-news` | 타이머 | 10분마다 | 유니버스 종목뉴스(신선도 지난 종목만) |

@@ -195,7 +195,12 @@ async function ust3yRow(week: ReportWeek): Promise<SnapshotRow> {
   }
 }
 
-const NTNF_SOURCE = "Tesouro Nacional CSV (1호기 매일 수집)";
+const NTNF_SOURCE = "ANBIMA 지표·재무부 CSV 중간값 (1호기 매일 수집)";
+const NTNF_SRC_LABEL: Record<string, string> = {
+  anbima: "ANBIMA 지표금리(종가, 중간값)",
+  "csv-mid": "재무부 CSV 중간값(오전 호가)",
+  "csv-sell": "재무부 CSV 매도수익률(매수 호가 없음)",
+};
 
 function ntnfMissing(note: string): SnapshotRow {
   return { ...emptyRow({ key: "BR_NTNF10Y", group: "채권", name: "브라질 국채 NTN-F 10년", unit: "%", rate: true, source: NTNF_SOURCE }), note };
@@ -203,7 +208,8 @@ function ntnfMissing(note: string): SnapshotRow {
 
 /**
  * 브라질 NTN-F ~10년 수익률 — 1호기 타이머 `macro-br-ntnf`(scripts/run/ntnf-daily.mts)가 재무부 CSV 에서 매일 수집한
- * `br_ntnf_daily`(계산 규칙은 ./ntnf.ts — 4번 프로젝트와 같은 규칙, 날짜별 정확 일치 확인).
+ * `br_ntnf_daily`(계산 규칙은 ./ntnf.ts — 4번 프로젝트와 같은 중간값 정의: ANBIMA 지표 > 재무부 CSV (매수+매도)/2,
+ * 날짜별 정확 일치 확인). 실시간 임시값은 쓰지 않는다(확정 자료만 — 금요일 종가 기준, 오너 결정 2026-10-09).
  * 값이 없으면 사유를 단 빈 행을 돌려 표에 "자료 없음"으로 남긴다(조용히 빠지지 않게 — 2026-10-05 9월 내내 빠져 있던 사고).
  */
 async function ntnfRow(week: ReportWeek): Promise<SnapshotRow> {
@@ -222,7 +228,8 @@ async function ntnfRow(week: ReportWeek): Promise<SnapshotRow> {
         ? week.baseFriday
         : new Date(Date.parse(last.date) - 7 * 86_400_000).toISOString().slice(0, 10);
     const base = lastOnOrBefore(bars, baseYmd);
-    const maturity = docs.find((d) => d._id === last.date)?.maturityYear;
+    const lastDoc = docs.find((d) => d._id === last.date);
+    const maturity = lastDoc?.maturityYear;
     return {
       key: "BR_NTNF10Y",
       group: "채권",
@@ -233,7 +240,7 @@ async function ntnfRow(week: ReportWeek): Promise<SnapshotRow> {
       diff: base ? last.close - base.close : null,
       baseAsOf: base?.date ?? null,
       unit: "%",
-      source: NTNF_SOURCE,
+      source: `${NTNF_SRC_LABEL[lastDoc?.src ?? ""] ?? lastDoc?.src} — 1호기 매일 수집`,
     };
   } catch (err) {
     return ntnfMissing(`조회 실패: ${err instanceof Error ? err.message : String(err)}`);
