@@ -320,7 +320,12 @@ export function snapshotChangeText(r: SnapshotRow): string {
  * 값을 못 구한 행은 사유(note)가 있을 때만 "자료 없음"으로 남긴다(그림자 채우기
  * 금지 — 조용히 빠지면 빠진 줄도 모른다. 2026-10-05 브라질 NTN-F 행이 9월 내내
  * 소리 없이 빠져 있었다). */
-export function snapshotToMarkdownTable(rows: SnapshotRow[], comments: Map<string, string>): string {
+/**
+ * weekEnd 를 주면 종가 기준일이 그보다 이른 행에 "(M/D)"를 붙인다(2026-10-05) — 금요일 값이 아직
+ * 없어 그 전 거래일 종가를 쓴 행(실측: FRED DGS3 미국채 3년은 다음 영업일 오후에야 올라와
+ * 월요일 실행에선 늘 목요일 값)이나 그 나라 휴장(상해 국경절)을 표에서 알 수 있게.
+ */
+export function snapshotToMarkdownTable(rows: SnapshotRow[], comments: Map<string, string>, weekEnd?: string): string {
   const lines = ["| 자산 | 종가 | 주간 변동 | 코멘트 |", "|---|---:|---:|---|"];
   for (const r of rows) {
     if (r.value == null) {
@@ -328,7 +333,9 @@ export function snapshotToMarkdownTable(rows: SnapshotRow[], comments: Map<strin
       continue;
     }
     const comment = comments.get(r.name) ?? "";
-    lines.push(`| ${r.name} | ${snapshotValueText(r)} | ${snapshotChangeText(r)} | ${comment} |`);
+    const mark =
+      weekEnd && r.asOf && r.asOf < weekEnd ? ` (${Number(r.asOf.slice(5, 7))}/${Number(r.asOf.slice(8, 10))})` : "";
+    lines.push(`| ${r.name} | ${snapshotValueText(r)}${mark} | ${snapshotChangeText(r)} | ${comment} |`);
   }
   return lines.join("\n");
 }

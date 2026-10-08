@@ -117,6 +117,8 @@ export interface WeeklyComments {
    * 항목에는 키가 없다.
    */
   dropReasons: Map<string, string>;
+  /** 웹검색 소형 호출이 모은 사실 — 검수용으로 문서에 남긴다(무엇을 근거로 썼는지 확인) */
+  webFacts: WebFact[];
 }
 
 const INPUT_DATA_DESC = `# 입력 데이터
@@ -1167,6 +1169,27 @@ function stripCitations(text: string): string {
     .trim();
 }
 
+/**
+ * 줄 목록("- 미국 연준: …" 처럼 줄마다 독립된 요약)은 **줄 단위로** 검증한다 —
+ * 한 줄의 근거 없는 수치 때문에 세 은행 요약 전체를 버리던 문제(2026-10-05 운영
+ * 재생성본, 금리정책이 통째로 빔). 걸린 줄만 빼고 사유를 남긴다.
+ */
+function verifyLines(raw: string, verify: (line: string) => VerifyResult): VerifyResult {
+  const lines = raw.split(/\r?\n/);
+  if (lines.filter((l) => l.trim()).length < 2) return verify(raw);
+  const kept: string[] = [];
+  const reasons: string[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const r = verify(line);
+    if (r.text) kept.push(r.text);
+    else if (r.reason) reasons.push(`${line.trim().slice(0, 24)}… — ${r.reason}`);
+  }
+  if (kept.length === 0) return { text: "", reason: reasons.join(" / ") || null };
+  if (reasons.length > 0) console.warn(`[weekly] 일부 줄 폐기 — ${reasons.join(" / ")}`);
+  return { text: kept.join("\n"), reason: reasons.length > 0 ? `일부 줄 폐기: ${reasons.join(" / ")}` : null };
+}
+
 function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): VerifyResult {
   const text = stripCitations(raw);
   if (!text) return { text: "", reason: null };
@@ -1175,7 +1198,13 @@ function verifyComment(raw: string, allowed: number[], trustGrounded: boolean): 
     const n = Number(m[1]);
     const unit = m[2];
     const tol = unit === "bp" ? 1 : unit === "건" ? 0.5 : 0.15;
-    const ok = allowed.some((a) => Math.abs(a - n) <= tol);
+    // "70%대"·"5.2%대" 는 구간 표현이다 — 근거 수치가 그 구간 안에 있으면 인정
+    // (2026-10-05 운영 재생성본: FedWatch "70%대 후반"이 근거 78% 류와 대조 실패로
+    // 금리정책 요약 전체가 버려졌다).
+    const isRange = text.slice((m.index ?? 0) + m[0].length).startsWith("대");
+    const decimals = (m[1].split(".")[1] ?? "").length;
+    const step = decimals > 0 ? 10 ** -decimals : n % 10 === 0 ? 10 : 1;
+    const ok = allowed.some((a) => Math.abs(a - n) <= tol || (isRange && a >= n && a < n + step));
     if (!ok) {
       const reason = `근거 없는 수치 "${m[0]}"가 포함됨(원본 데이터와 대조 실패)`;
       console.warn(`[weekly] 코멘트 검증 실패 — ${reason}, 폐기: ${text}`);
@@ -1373,6 +1402,7 @@ export async function generateWeeklyComments(
     issues: new Map(),
     sectors: new Map(),
     dropReasons,
+    webFacts: research.facts,
   };
 
   // --- 매크로(한 줄 결론·정책요약·캘린더) ---
@@ -1398,7 +1428,7 @@ export async function generateWeeklyComments(
   // "경기와 관련된 내용은 여기서 요약하도록 하자").
   const hasEconomyEvidence = payload.economyEvidence.length > 0 || payload.economyMetrics.length > 0;
   if ((macroTrustGrounded || hasEconomyEvidence) && macroParsed?.economySummary) {
-    const r = verify(macroParsed.economySummary, macroTrustGrounded);
+    const r = verifyLines(macroParsed.economySummary, (l) => verify(l, macroTrustGrounded));
     comments.economySummary = r.text || null;
     if (r.reason) dropReasons.set("economySummary", r.reason);
   }
@@ -1424,7 +1454,7 @@ export async function generateWeeklyComments(
   // 신뢰할 수 있다). 숫자 검증은 그라운딩 여부에 따라 그대로 적용.
   const hasPolicyEvidence = payload.policyEvidence.length > 0;
   if ((macroTrustGrounded || hasPolicyEvidence) && macroParsed?.policySummary) {
-    const r = verify(macroParsed.policySummary, macroTrustGrounded);
+    const r = verifyLines(macroParsed.policySummary, (l) => verify(l, macroTrustGrounded));
     comments.policySummary = r.text || null;
     if (r.reason) dropReasons.set("policySummary", r.reason);
   }

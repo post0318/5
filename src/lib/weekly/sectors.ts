@@ -1,4 +1,5 @@
 import "server-only";
+import { isKrxHoliday } from "@/lib/macro/kr/market-calendar";
 import { getYahooFinance } from "@/lib/macro/yf-client";
 import type { ReportWeek } from "./week";
 
@@ -62,6 +63,8 @@ export interface WeeklySectors {
   us: { up: SectorHighlight[]; down: SectorHighlight[] };
   jp: { up: SectorHighlight[]; down: SectorHighlight[] };
   eu: { up: SectorHighlight[]; down: SectorHighlight[] };
+  /** 시장 섹터를 못 만든 이유(예: "KRX 2026-10-02 시세 미게시(빈 응답)") — 화면에 "자료 없음: 사유" */
+  notes?: { kospi?: string; kosdaq?: string };
 }
 
 interface DatedClose {
@@ -173,80 +176,82 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** fromIso~toIso(포함) 사이의 평일만 YYYYMMDD 로. 공휴일은 걸러지지 않고
- * 응답이 비어(빈 맵) 자연스럽게 제외된다 — krx.ts businessDaysBack() 과
- * 같은 한계(공휴일 달력 없음, 주말만 스킵). */
-function weekdaysYmd(fromIso: string, toIso: string): string[] {
-  const out: string[] = [];
-  const d = new Date(`${fromIso}T00:00:00Z`);
-  const end = new Date(`${toIso}T00:00:00Z`);
-  let guard = 0;
-  while (d <= end && guard++ < 60) {
-    const day = d.getUTCDay();
-    if (day !== 0 && day !== 6) {
-      out.push(
-        `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`,
-      );
-    }
-    d.setUTCDate(d.getUTCDate() + 1);
-  }
-  return out;
-}
+type KrxDayStatus = "ok" | "empty" | "error";
 
+/**
+ * KRX 지수 패밀리 하루치. **캐시하지 않는다**(2026-10-05): 예전엔 "과거 영업일은
+ * 불변 → 30일 캐시"였는데, KRX OPEN API 는 거래일 시세를 **다음 거래일 아침**에
+ * 게시한다(10-05 07:01 KST 에 10-02 금요일분 빈 응답 실측). 게시 전에 받은 빈
+ * 응답이 30일 동안 캐시에 남으면 같은 날 재생성도 계속 빈 값을 본다. 주 1회
+ * 실행에 날짜 20개 남짓이라 매번 받아도 부담이 없다.
+ */
 async function fetchKrxIdxDaySnapshot(
   service: "kospi_dd_trd" | "kosdaq_dd_trd",
   basDd: string,
   authKey: string,
-): Promise<Map<string, number>> {
+): Promise<{ status: KrxDayStatus; map: Map<string, number> }> {
   const map = new Map<string, number>();
-  const today = todayIso().replace(/-/g, "");
-  const isPast = basDd !== today;
   try {
     const res = await fetch(`${KRX_IDX_BASE}/${service}?basDd=${basDd}`, {
       headers: { AUTH_KEY: authKey },
       signal: AbortSignal.timeout(8_000),
-      // 과거 영업일은 불변 → 영구 캐시. 당일치만 짧게(krx.ts 와 동일 정책).
-      next: { revalidate: isPast ? 60 * 60 * 24 * 30 : 60 * 60 },
+      cache: "no-store",
     });
-    if (!res.ok) return map;
+    if (!res.ok) return { status: "error", map };
     const j = (await res.json()) as { OutBlock_1?: Record<string, string>[] };
     for (const row of j.OutBlock_1 ?? []) {
       const close = Number(row.CLSPRC_IDX);
       if (row.IDX_NM && Number.isFinite(close) && close > 0) map.set(row.IDX_NM, close);
     }
+    return { status: map.size > 0 ? "ok" : "empty", map };
   } catch {
-    // 휴장·오류 — 빈 맵(호출부가 다른 날짜로 보충)
+    return { status: "error", map };
   }
-  return map;
 }
 
-/** 지정한 날짜 목록(평일)의 KRX 지수 패밀리 응답을 한 번씩만 받아, 후보
- * 섹터명 전부의 시계열을 한 번에 만든다(섹터마다 같은 날짜를 반복 조회
- * 하지 않음 — 후보가 11~18개라 이렇게 안 묶으면 날짜당 요청이 그만큼
- * 배가된다). */
+/** 지정한 날짜 목록의 KRX 지수 패밀리 응답을 한 번씩만 받아, 후보 섹터명 전부의
+ * 시계열을 한 번에 만든다(섹터마다 같은 날짜를 반복 조회하지 않음). 날짜별
+ * 응답 상태도 함께 돌려준다 — 거래일 빈 응답을 "휴장"으로 넘기지 않기 위해서. */
 async function fetchKrSeriesByDay(
   service: "kospi_dd_trd" | "kosdaq_dd_trd",
   indexNames: string[],
   dates: string[],
   authKey: string,
-): Promise<Map<string, DatedClose[]>> {
+): Promise<{ series: Map<string, DatedClose[]>; status: Map<string, KrxDayStatus> }> {
   const out = new Map<string, DatedClose[]>(indexNames.map((n) => [n, []]));
+  const status = new Map<string, KrxDayStatus>();
   let cursor = 0;
   const workers = Array.from({ length: 6 }, async () => {
     while (cursor < dates.length) {
       const basDd = dates[cursor++];
       const snap = await fetchKrxIdxDaySnapshot(service, basDd, authKey);
-      if (snap.size === 0) continue;
       const iso = `${basDd.slice(0, 4)}-${basDd.slice(4, 6)}-${basDd.slice(6, 8)}`;
+      status.set(iso, snap.status);
+      if (snap.status !== "ok") continue;
       for (const name of indexNames) {
-        const close = snap.get(name);
+        const close = snap.map.get(name);
         if (close != null) out.get(name)!.push({ date: iso, close });
       }
     }
   });
   await Promise.all(workers);
   for (const arr of out.values()) arr.sort((a, b) => a.date.localeCompare(b.date));
-  return out;
+  return { series: out, status };
+}
+
+/**
+ * target 이하의 마지막 한국 거래일(휴장일 달력 `isKrxHoliday`). 달력을 못 받은
+ * 날(null)은 거래일로 본다 — 모르는 날을 휴장으로 단정해 앞당기지 않는다.
+ */
+async function lastKrTradingDayOnOrBefore(target: string): Promise<{ date: string; calendarKnown: boolean }> {
+  let d = target;
+  for (let i = 0; i < 10; i++) {
+    const h = await isKrxHoliday(d);
+    if (h === false) return { date: d, calendarKnown: true };
+    if (h === null) return { date: d, calendarKnown: false };
+    d = addDaysIso(d, -1);
+  }
+  return { date: target, calendarKnown: false };
 }
 
 /** target 이하 중 가장 최근(시작점 — 연휴면 그 전 거래일로). */
@@ -289,29 +294,65 @@ function computeReturn(
   return { market, label, pct, startDate: start.date, endDate: end.date };
 }
 
-async function fetchKrSectorReturns(week: ReportWeek): Promise<SectorReturn[]> {
+/**
+ * 한국 섹터 주간 등락률 — 시작·끝을 **한국 거래일 달력으로 정한 그 날짜의 종가**로만
+ * 계산한다(2026-10-05 수정).
+ *
+ * 예전엔 끝점이 비면 `resolveBackward` 로 그 전 날짜를 조용히 썼다. 월요일 06:00
+ * 실행 땐 KRX 가 금요일(10-02) 시세를 아직 게시하지 않아 목요일 종가로 계산됐고
+ * (코스피 산업재 +1.07%, 주도 한화비전), 같은 주를 16:30 에 다시 만들면 금요일
+ * 종가로 +3.67%(롯데에너지머티리얼즈)가 나왔다 — 실행 시각에 따라 결과가 달라지는
+ * 그림자 채우기. 이제 그 거래일 응답이 비었거나 실패하면 그 시장 섹터 전체를
+ * "자료 없음: 사유"로 비운다(끝 날짜를 앞당기지 않는다).
+ */
+async function fetchKrSectorReturns(
+  week: ReportWeek,
+): Promise<{ returns: SectorReturn[]; notes: { kospi?: string; kosdaq?: string } }> {
+  const notes: { kospi?: string; kosdaq?: string } = {};
   const authKey = process.env.KRX_API_KEY;
-  if (!authKey) return [];
-  const fromIso = addDaysIso(week.baseFriday, -10);
-  const toIso = todayIso();
-  const dates = weekdaysYmd(fromIso, toIso);
-
-  const kospiNames = KR_SECTOR_CANDIDATES.filter((c) => c.service === "kospi_dd_trd").map((c) => c.indexName);
-  const kosdaqNames = KR_SECTOR_CANDIDATES.filter((c) => c.service === "kosdaq_dd_trd").map((c) => c.indexName);
-  const [kospiSeries, kosdaqSeries] = await Promise.all([
-    fetchKrSeriesByDay("kospi_dd_trd", kospiNames, dates, authKey),
-    fetchKrSeriesByDay("kosdaq_dd_trd", kosdaqNames, dates, authKey),
+  if (!authKey) {
+    notes.kospi = notes.kosdaq = "KRX_API_KEY 미설정";
+    return { returns: [], notes };
+  }
+  const [start, end] = await Promise.all([
+    lastKrTradingDayOnOrBefore(week.baseFriday),
+    lastKrTradingDayOnOrBefore(week.weekEnd),
   ]);
-  const seriesByName = new Map([...kospiSeries, ...kosdaqSeries]);
+  const dates = [start.date, end.date].map((d) => d.replace(/-/g, ""));
 
   const out: SectorReturn[] = [];
-  for (const c of KR_SECTOR_CANDIDATES) {
-    const series = seriesByName.get(c.indexName) ?? [];
-    const market: SectorMarket = c.service === "kospi_dd_trd" ? "kr-kospi" : "kr-kosdaq";
-    const r = computeReturn(market, c.label, series, week);
-    if (r) out.push(r);
+  for (const service of ["kospi_dd_trd", "kosdaq_dd_trd"] as const) {
+    const key = service === "kospi_dd_trd" ? "kospi" : "kosdaq";
+    const market: SectorMarket = service === "kospi_dd_trd" ? "kr-kospi" : "kr-kosdaq";
+    const candidates = KR_SECTOR_CANDIDATES.filter((c) => c.service === service);
+    const { series, status } = await fetchKrSeriesByDay(
+      service,
+      candidates.map((c) => c.indexName),
+      dates,
+      authKey,
+    );
+    const problem = [start, end]
+      .map((day) => {
+        const st = status.get(day.date);
+        if (st === "ok") return null;
+        const what = st === "empty" ? "시세 미게시(빈 응답)" : "조회 실패";
+        const cal = day.calendarKnown ? "" : " — 휴장일 달력 확인 불가";
+        return `KRX ${day.date} ${what}${cal}`;
+      })
+      .filter((x): x is string => x != null);
+    if (problem.length > 0) {
+      notes[key] = problem.join(", ");
+      continue;
+    }
+    for (const c of candidates) {
+      const s = series.get(c.indexName) ?? [];
+      const a = s.find((p) => p.date === start.date);
+      const b = s.find((p) => p.date === end.date);
+      if (!a || !b || a.close <= 0) continue;
+      out.push({ market, label: c.label, pct: ((b.close - a.close) / a.close) * 100, startDate: a.date, endDate: b.date });
+    }
   }
-  return out;
+  return { returns: out, notes };
 }
 
 function isoDate(d: Date | string): string {
@@ -407,14 +448,17 @@ export async function buildWeeklySectors(week: ReportWeek): Promise<WeeklySector
   // 붙잡지 않는다 — computeReturn() 의 백워드 폴백이 이미 안전하게 동작
   // 하므로(며칠 묵은 값이라도 endDate 로 투명하게 표기) 그대로 둔다.
   const [kr, us, jp, eu] = await Promise.all([
-    fetchKrSectorReturns(week).catch(() => [] as SectorReturn[]),
+    fetchKrSectorReturns(week).catch((err) => ({
+      returns: [] as SectorReturn[],
+      notes: { kospi: `KRX 조회 오류: ${String(err)}`, kosdaq: `KRX 조회 오류: ${String(err)}` },
+    })),
     fetchYahooSectorReturns("us", US_SECTOR_CANDIDATES, week).catch(() => [] as SectorReturn[]),
     fetchYahooSectorReturns("jp", JP_SECTOR_CANDIDATES, week).catch(() => [] as SectorReturn[]),
     fetchYahooSectorReturns("eu", EU_SECTOR_CANDIDATES, week).catch(() => [] as SectorReturn[]),
   ]);
 
-  const kospi = kr.filter((r) => r.market === "kr-kospi");
-  const kosdaq = kr.filter((r) => r.market === "kr-kosdaq");
+  const kospi = kr.returns.filter((r) => r.market === "kr-kospi");
+  const kosdaq = kr.returns.filter((r) => r.market === "kr-kosdaq");
 
   const sectors: WeeklySectors = {
     kospi: pickTop(kospi, "kr-kospi", "kospi"),
@@ -422,6 +466,7 @@ export async function buildWeeklySectors(week: ReportWeek): Promise<WeeklySector
     us: pickTop(us, "us", "us"),
     jp: pickTop(jp, "jp", "jp"),
     eu: pickTop(eu, "eu", "eu"),
+    notes: kr.notes,
   };
 
   // 섹터 등락률만으로는 그 주에 무슨 일이 있었는지 감이 안 온다(오너 지시

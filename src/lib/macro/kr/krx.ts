@@ -43,7 +43,12 @@ async function krx<T = Record<string, string>>(
   } else {
     j = (await res.json()) as { OutBlock_1?: T[] };
   }
-  return j.OutBlock_1 ?? [];
+  const rows = j.OutBlock_1 ?? [];
+  // 빈 응답은 캐시본을 믿지 않는다(2026-10-05) — KRX 는 거래일 시세를 다음 거래일
+  // 아침에 게시해, 게시 전에 받은 빈 응답이 12시간 캐시에 남으면 그 사이 재실행도
+  // 계속 빈 값을 봤다(주간 리포트 섹터 주도 종목). 한 번 더 캐시 없이 받는다.
+  if (rows.length === 0 && !noStore) return krx<T>(path, params, charset, true);
+  return rows;
 }
 
 const n = (v: string | undefined) => {

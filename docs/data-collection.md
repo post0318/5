@@ -152,7 +152,9 @@ Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정
 
 | 항목 | 입력 | 실행(이전 전) | 빈도 |
 |---|---|---|---|
-| 초안 생성(`/api/cron/weekly-report`) | 위 DB(리서치·뉴스·텔레그램) + 시세 스냅샷(Yahoo·ECOS·브라질 SGS·브라질 NTN-F `br_ntnf_daily`) + 네이버 검색어 트렌드 + Gemini 코멘트 | GitHub `weekly-report` | 월 06:00(2026-10-03 09:00 에서 앞당김) |
+| 초안 생성(`/api/cron/weekly-report`) | 위 DB(리서치·뉴스·텔레그램) + 시세 스냅샷(Yahoo·ECOS·브라질 SGS·브라질 NTN-F `br_ntnf_daily`) + 네이버 검색어 트렌드 + Gemini 코멘트 | 오라클 타이머 `weekly-report`(월~금 08:30 KST 깨움, 그 주 첫 한국 거래일에만 생성) | 주 1회 | DB(`weekly_reports`) |
+
+한국 섹터는 KRX 지수(다음 거래일 07:55~08:00 게시)를 쓴다. 게시 전이면 "자료 없음"으로 비운다(앞 날짜 종가로 대체하지 않음, 2026-10-05). 생성 시각 08:30(2026-10-09).
 
 발행은 자동이 아니다 — 오너가 `/weekly` 에서 검수 후 발행. Gemini 비용은 앱 예산 `WEEKLY_MONTHLY_BUDGET_USD`(10달러) +
 구글 지출 상한 `guard-gemini`(13,000원).
