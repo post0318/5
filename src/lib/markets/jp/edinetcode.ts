@@ -5,11 +5,12 @@ import { AdapterError } from "../types";
 /**
  * EDINET 코드 목록 (Edinetcode.zip → EdinetcodeDlInfo.csv, Shift-JIS)
  * 証券コード(5자리) ↔ EDINETコード ↔ 제출자명. 키 불필요.
+ * 証券コード는 2024년부터 영숫자 코드도 나온다(예: キオクシア 285A0 → 티커 285A) — 앞 4자는 숫자·영대문자, 끝자리는 숫자.
  */
 
 export interface EdinetEntry {
   edinetCode: string;
-  /** 4자리 티커 (証券コード 앞 4자리). 비상장이면 "" */
+  /** 4자리 티커 (証券コード 앞 4자 — 영숫자 코드 포함, 예 285A). 비상장이면 "" */
   ticker: string;
   /** 원본 5자리 証券コード */
   secCode: string;
@@ -85,8 +86,9 @@ async function build(): Promise<CodeIndex> {
     if (!lines[i].trim()) continue;
     const c = parseCsvLine(lines[i]);
     if (c.length < 13) continue;
-    const secCode = c[11].trim();
-    const ticker = /^\d{5}$/.test(secCode) ? secCode.slice(0, 4) : "";
+    const secCode = c[11].trim().toUpperCase();
+    // 예전 /^\d{5}$/ 는 영숫자 코드(285A0 등 2024년 이후 신규 상장)를 버렸다
+    const ticker = /^\d[0-9A-Z]{3}\d$/.test(secCode) ? secCode.slice(0, 4) : "";
     const entry: EdinetEntry = {
       edinetCode: c[0].trim(),
       ticker,
@@ -114,7 +116,7 @@ export async function getEdinetCodeIndex(): Promise<CodeIndex> {
 
 export async function resolveEdinetByTicker(ticker: string): Promise<EdinetEntry> {
   const idx = await getEdinetCodeIndex();
-  const t = ticker.replace(/\.(T|JP)$/i, "").replace(/[^0-9A-Za-z]/g, "");
+  const t = ticker.replace(/\.(T|JP)$/i, "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
   const entry = idx.byTicker.get(t);
   if (!entry) {
     throw new AdapterError(`EDINET에서 종목코드를 찾을 수 없습니다: ${ticker}`, { status: 404 });
@@ -131,7 +133,7 @@ export async function searchEdinet(query: string): Promise<EdinetEntry[]> {
   for (const e of idx.all) {
     if (!e.ticker) continue; // 상장사만
     const hay = `${e.name} ${e.nameEng} ${e.ticker}`.toLowerCase();
-    if (e.ticker === q || e.name.toLowerCase().startsWith(q) || e.nameEng.toLowerCase().startsWith(q)) {
+    if (e.ticker.toLowerCase() === q || e.name.toLowerCase().startsWith(q) || e.nameEng.toLowerCase().startsWith(q)) {
       starts.push(e);
     } else if (hay.includes(q)) {
       contains.push(e);
