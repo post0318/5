@@ -5,6 +5,12 @@
 검증기는 기본으로 DB 저장본(api_snap·ttm_snap·fin_sym·us_class_facts)을 우회한다(인증된 `x-verify-no-snapshot` — 브랜치 코드로 새로 계산). `--use-snapshots` 로만 끈다.
 
 ## 현재 상태 (2026-10-09) — 다음에 여기서부터
+- **(10-09 오후) 미국 검증불가 179 → 32**(verify-us-20261009-075243, 47종목 --post: 통과 39,268 · 공통모드 1,336 · 실패 2 → SPOT 배당 검증기 정규식 결함 고친 뒤
+  SPOT·TSM·ASML 재실행 --post 실패 0). 앱 수정 **8f726f3 — 운영 배포 필요**(세전이익 회사 고유 태그 MCD·ORCL·MRVL, TSM 2022 자기주식, GLW 10-Q "—"=0,
+  ISRG LTM 무배당 0, 재무분석 배당·DPS CAGR = 화면 값). 배포 뒤 fin-build·ttm-build 즉시 재실행 권장. 검증기 42c027a.
+  남은 32: D층 현금흐름 LTM 구성 줄 합 22(구성 줄이 10-Q 본표에 없음 — 구조적), 감가상각 중단사업 미결 2(AVGO 2024·IBM 2021), E층 회사 공시 4(CEG·DELL·GOOG 2021·UBER 2022),
+  TSM 블룸버그 회계기준 차 1, BE LTM 주식보상(본표에 다른 항목과 합친 줄) 1, DAL LTM CAPEX(10-Q 가 항공기·기타 줄로만 — 합계 정의는 오너 결정) 1.
+  재개: `node scripts/verify-financials.mjs --market=us --universe --metric=bscf --cogs-rules=scripts/metrics/cogs-rules.json --concurrency=1 --base=http://localhost:3000 --post`.
 - **운영 반영 완료**(10-09, master 82c811f, 1호기 배포 성공): CAPEX 개념 `PaymentsForCapitalImprovements`(GLW)·현금흐름 0 채움은 10-Q 만,
   10-K 본표 줄이 있고 "—"면 0(GLW 2023 자사주), 한국 무배당 = 0. 1호기에서 GLW CAPEX·2023 자사주 0·373220 배당 0 확인.
   배포 방식: PC `deploy/*` 브랜치(master 위 cherry-pick) → 오너 지시 시 `git push origin deploy/…:master`. 2호기에서 master push 금지.
