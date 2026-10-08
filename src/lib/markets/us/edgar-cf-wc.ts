@@ -140,6 +140,17 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
         for (const e of ocf) zeros.push([c0, { ...e, val: 0 }]);
       }
     }
+    // 10-K 본표에 줄이 있는데 그 기간 칸이 "—"(값 태그 없음)이면 0(2026-10-09 — GLW 2024 10-K 자기주식 취득 줄의 2023 칸 "—", 앱이 "본표에 별도 줄 없음"
+    // 빈칸으로 두던 것. 검증기 A층이 같은 판독으로 확인). 어느 공시에든 그 기간 값이 있으면 그 값을 쓰고 채우지 않는다
+    if (/^10-K/.test(f.form)) {
+      const faceK = cashFlowFace(calXml);
+      if (faceK) for (const grp of zeroGroups) {
+        const c0 = grp.find((c) => faceK.has(`us-gaap_${c}`));
+        if (!c0) continue;
+        const has = grp.flatMap((c) => g[c]?.units?.USD ?? []);
+        for (const e of ocf) if (!has.some((x) => x.start === e.start && x.end === e.end)) zeros.push([c0, { ...e, val: 0 }]);
+      }
+    }
     const lines = cashFlowWcLines(calXml, labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined);
     if (!lines) continue;
     // ① companyfacts — 운전자본 줄이 모두 표준 개념이고 값이 다 있으면
@@ -181,7 +192,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const ng: Record<string, unknown> = { ...g };
   if (synth.length) ng[SYN_WC_CF] = { label: "운전자본 변동(본표 줄 합)", units: { USD: synth } };
   for (const [c, e] of zeros) {
-    const cur = ng[c] as { label?: string; units: Record<string, FactUnitEntry[]> };
+    const cur = (ng[c] ?? { units: {} }) as { label?: string; units: Record<string, FactUnitEntry[]> };
     ng[c] = { ...cur, units: { ...cur.units, USD: [...(cur.units.USD ?? []), e] } };
   }
   return { ...facts, facts: { ...facts.facts, "us-gaap": ng as never } };
