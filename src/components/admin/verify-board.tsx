@@ -14,7 +14,8 @@ import { AUDIT_VERDICT_LABEL, FOCUS_METRICS, isFocusCheck, isFocusExternal, isFo
 
 /**
  * 재무 숫자 검증 결과 — 관리자만(오너 결정 2026-09-24). 검증 스크립트가 GitHub Actions 에서 매일 전 종목,
- * 수시로 새로 담긴 종목을 검증해 올린 결과를 보여준다. 유니버스에 있는데 결과가 없는 종목은 "미검증".
+ * 수시로 새로 담긴 종목을 검증해 올린 결과를 보여준다. 유니버스에 있는데 결과가 없는 종목은 "검증 대기".
+ * 2026-10-06 부터 결과는 2호기 검증 서버가 만들고 1호기가 매일 가져온다(ops/oracle/verify-pull.sh) — 머리에 마지막 검증 시각·판본.
  *
  * 외부 대조는 판정이 아니라 원인 규명 대상 — 소스(Yahoo·StockAnalysis·인포맥스)마다 앱 값과 같은지 나란히 보인다.
  */
@@ -39,7 +40,7 @@ function split(r: AdminVerifyRow) {
 }
 
 function status(r: AdminVerifyRow): { label: string; tone: "bad" | "warn" | "ok" | "pending" } {
-  if (r.pending || !r.result) return { label: "미검증", tone: "pending" };
+  if (r.pending || !r.result) return { label: "검증 대기", tone: "pending" };
   const c = split(r)!;
   if (c.focusFail > 0) return { label: `실패 ${c.focusFail}`, tone: "bad" };
   if (r.result.errors.length) return { label: `오류 ${r.result.errors.length}`, tone: "bad" };
@@ -245,6 +246,11 @@ export function VerifyBoard() {
     const all = q.data?.rows ?? [];
     return { all: all.length, pending: all.filter((r) => r.pending).length, issues: all.filter((r) => status(r).tone !== "ok").length };
   }, [q.data]);
+  /** 가장 최근 검증 결과의 출처·시각·판본 — 검증 서버(2호기)가 매일 갱신 */
+  const latest = useMemo(
+    () => (q.data?.rows ?? []).reduce<AdminVerifyRow["result"]>((m, r) => (r.result && (!m || r.result.runAt > m.runAt) ? r.result : m), null),
+    [q.data],
+  );
 
   return (
     <Card>
@@ -252,9 +258,14 @@ export function VerifyBoard() {
         <div>
           <CardTitle className="text-sm">유니버스 종목 재무 검증</CardTitle>
           <p className="text-muted-foreground mt-0.5 text-xs">상태 판정 = 작업 지표({FOCUS_METRICS.join("·")})만 · 다른 지표 경고는 「미결 지표」 건수</p>
+          {latest && (
+            <p className="text-muted-foreground mt-0.5 text-xs">
+              검증 서버 결과({latest.base}) · 마지막 검증 {fmtWhen(latest.runAt)}{latest.commit ? ` · 검증 코드 판본 ${latest.commit.slice(0, 7)}` : ""}
+            </p>
+          )}
         </div>
         <div className="flex gap-1">
-          {([["issues", `확인 필요 ${counts.issues}`], ["pending", `미검증 ${counts.pending}`], ["all", `전체 ${counts.all}`]] as const).map(([k, label]) => (
+          {([["issues", `확인 필요 ${counts.issues}`], ["pending", `검증 대기 ${counts.pending}`], ["all", `전체 ${counts.all}`]] as const).map(([k, label]) => (
             <button
               key={k}
               type="button"

@@ -11,7 +11,7 @@ export const maxDuration = 60;
  * 재무 검증 결과 수신·미검증 목록 — 검증 스크립트(GitHub Actions) 전용. 다른 수집 라우트와 같이
  * CRON_SECRET(로컬 수동 실행은 x-app-token: APP_PASSWORD)으로 검증한다.
  *
- *  POST { results: VerifyResultDoc[] }  → 종목별 최신 결과로 교체(CRON_SECRET 만, 스키마대로 재구성)
+ *  POST { results: VerifyResultDoc[] }  → 종목별 최신 결과로 교체(CRON_SECRET 만, 스키마대로 재구성). 저장된 쪽 runAt 이 더 새면 건너뜀(older)
  *  GET  ?missing=1&market=us            → 유니버스(전 계정 합집합) 중 검증 결과가 없는 종목
  */
 const eq = (a: string | null, b: string) => {
@@ -90,15 +90,18 @@ export async function POST(req: Request) {
     const body = (await req.json()) as { results?: unknown };
     if (!Array.isArray(body.results) || body.results.length > 1000) return Response.json({ error: "results 배열(1,000건 이하) 필요" }, { status: 400 });
     const col = await verifyResultsCol();
-    let saved = 0, rejected = 0;
+    let saved = 0, rejected = 0, older = 0;
     for (const raw of body.results) {
       const r = raw && typeof raw === "object" ? sanitize(raw as Record<string, unknown>) : null;
       if (!r) { rejected++; continue; }
       const _id = `${r.market}:${r.symbol}`;
+      // 이미 더 새 검증 결과가 있으면 덮지 않는다 — 2호기 결과 묶음(verify-pull)은 종목별 "마지막 결과"라 예전 것이 섞인다(2026-10-06)
+      const cur = await col.findOne({ _id }, { projection: { runAt: 1 } });
+      if (cur && Date.parse(cur.runAt) > Date.parse(r.runAt)) { older++; continue; }
       await col.replaceOne({ _id }, r, { upsert: true }); // 필터의 _id 가 새 문서 _id 가 된다
       saved++;
     }
-    return ok({ saved, rejected });
+    return ok({ saved, rejected, older });
   } catch (err) {
     return jsonError(err);
   }

@@ -93,6 +93,16 @@ else
 fi
 check config-backup "$([ "$bk_age" -le 26 ] && echo 1 || echo 0)" "설정 백업이 ${bk_age}시간째 성공하지 못했습니다 — sudo journalctl -u macro-config-backup -n 50"
 
+# 2호기 검증 결과 가져오기(verify-pull.sh, 매일 08:30 KST) — 가져오기 성공 26시간 초과, 결과 자체가 30시간 넘게 안 바뀌면 알림
+#   (가져오기 실패 회차는 위 예약 작업 항목 job-macro-verify-pull 로도 알림)
+vp_age=999
+[ -f "$STATE_DIR/.verify-pull-ok" ] && vp_age=$(( ($(date +%s) - $(stat -c %Y "$STATE_DIR/.verify-pull-ok")) / 3600 ))
+check verify-pull "$([ "$vp_age" -le 26 ] && echo 1 || echo 0)" "2호기 검증 결과 가져오기가 ${vp_age}시간째 성공하지 못했습니다 — sudo journalctl -u macro-verify-pull -n 50"
+vg=$(cat "$STATE_DIR/.verify-pull-generated" 2>/dev/null)
+vg_age=999
+[ -n "$vg" ] && vg_age=$(( ($(date +%s) - $(date -d "$vg" +%s 2>/dev/null || echo 0)) / 3600 ))
+check verify-stale "$([ "$vg_age" -le 30 ] && echo 1 || echo 0)" "2호기 검증 결과가 ${vg_age}시간째 갱신되지 않았습니다(마지막 생성 ${vg:-없음}) — 2호기 검증 작업 확인"
+
 # 11) 2호기(macro-verify, 검증 + IPO 운영) 감시(2026-10-05 상호 감시) — 연속 2회 실패해야 알림
 #   - SSH 포트 응답
 #   - 2호기 자체 점검(healthcheck-peer.sh)이 10분마다 쓰는 하트비트가 30분 넘게 갱신 안 되면 알림.
