@@ -74,6 +74,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { loadBbg } from "./reference/bbg.mjs";
 import { makeDiskCache } from "./verify-kr/cache.mjs";
 import { configureDart, dartFnltt, dartStats, dartQuota } from "./verify-kr/dart.mjs";
@@ -129,6 +130,15 @@ const CONCURRENCY = Number(args.concurrency ?? 2);
 if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) die(`--concurrency 는 1 이상의 정수 (받은 값: ${args.concurrency})`);
 if (args.limit != null && !(Number.isInteger(Number(args.limit)) && Number(args.limit) > 0)) die(`--limit 은 양의 정수`);
 const BASE = String(args.base ?? "http://localhost:3000").replace(/\/$/, "");
+// 결과(--post)에 남길 검증 코드 판본 — 시작 시점 HEAD(추적 파일에 커밋 안 된 변경이 있으면 "-dirty"). GITHUB_SHA 가 있으면 그 값.
+// 예전엔 GITHUB_SHA 만 봐서 2호기·로컬 수동 실행 결과의 commit 이 비었다(2026-10-08 수동 전체 실행 75건)
+const COMMIT = process.env.GITHUB_SHA ?? (() => {
+  try {
+    const git = (...a) => execFileSync("git", ["-C", decodeURIComponent(new URL("..", import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1"), ...a], { encoding: "utf8" }).trim();
+    const head = git("rev-parse", "HEAD");
+    return git("status", "--porcelain", "--untracked-files=no") ? `${head}-dirty` : head;
+  } catch { return null; } // silent-ok: git 이 없는 곳(배포본)에서는 판본 미상
+})();
 const EXTERNAL = !args["no-external"];
 /** 검증이 닫힌 지표(관리자 화면 감사표의 closed) — 정답 데이터셋(골든셋)의 GOLDEN_CHECKS 와 같은 목록이어야 한다.
  *  지표를 닫을 때 scripts/metrics/golden.mjs 의 GOLDEN_CHECKS 와 함께 갱신할 것(revenue ↔ "매출") */
@@ -10739,7 +10749,7 @@ if (args.post) {
       symbol: r.sym,
       runAt: new Date().toISOString(),
       base: BASE,
-      commit: process.env.GITHUB_SHA ?? null,
+      commit: COMMIT,
       counts: {
         fail: cs.filter((c) => c.status === FAIL).length,
         unverifiable: cs.filter((c) => c.status === NA).length,

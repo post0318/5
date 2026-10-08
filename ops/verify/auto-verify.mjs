@@ -53,7 +53,8 @@ const env = {
 };
 const QUOTA_DIR = env.DART_QUOTA_DIR ? path.resolve(env.DART_QUOTA_DIR) : path.join(ROOT, "reports/.dart-quota");
 const kstDay = (t = Date.now()) => new Date(t + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
-const commit = execFileSync("git", ["-C", ROOT, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const commit = execFileSync("git", ["-C", ROOT, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()
+  + (execFileSync("git", ["-C", ROOT, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim() ? "-dirty" : "");
 const branch = execFileSync("git", ["-C", ROOT, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
 
 mkdirSync(path.join(OUT, "logs"), { recursive: true });
