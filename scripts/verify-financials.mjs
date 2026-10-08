@@ -5716,7 +5716,7 @@ async function verifyUs(sym) {
       ["cf:total:영업활동 현금흐름", "영업활동 현금흐름", ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"], 1],
       ["cf:total:투자활동 현금흐름", "투자활동 현금흐름", ["NetCashProvidedByUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"], 1],
       ["cf:total:재무활동 현금흐름", "재무활동 현금흐름", ["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"], 1],
-      ["cf:투자활동 현금흐름:유형자산 취득", "유형자산 취득(CAPEX)", ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"], -1],
+      ["cf:투자활동 현금흐름:유형자산 취득", "유형자산 취득(CAPEX)", ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements"], -1],
       // PaymentsOfOrdinaryDividends — CL·GLW·ASML(EUR) 이 쓰는 개념(2026-10-08 — 없어서 배당금 지급 검증불가 15건)
       ["cf:재무활동 현금흐름:배당금 지급", "배당금 지급", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], -1],
       ["cf:재무활동 현금흐름:자기주식 취득", "자기주식 취득", ["PaymentsForRepurchaseOfCommonStock"], -1],
