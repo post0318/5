@@ -37,7 +37,7 @@ d = json.load(open(os.path.join(w, "latest.json"), encoding="utf-8"))
 assert isinstance(d, dict), "최상위가 객체가 아님"
 gen = d.get("generatedAt"); commit = d.get("commit"); results = d.get("results")
 assert isinstance(gen, str) and datetime.fromisoformat(gen.replace("Z", "+00:00")).tzinfo, "generatedAt(시간대 있는 ISO 시각) 없음"
-assert isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{7,40}", commit), "commit(검증 코드 커밋) 없음"
+assert isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{7,40}(-dirty)?", commit), "commit(검증 코드 커밋, 커밋 안 된 변경이 있으면 -dirty) 없음"
 assert isinstance(results, list) and 0 < len(results) <= 5000, "results 배열(1~5,000건) 아님"
 for i, r in enumerate(results):
     assert isinstance(r, dict), f"results[{i}] 객체 아님"
