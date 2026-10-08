@@ -92,13 +92,11 @@ unit news-naver-blog "뉴스: 인플루언서 네이버 블로그 새 글 수집
 "
 sed -i 's/^TimeoutStartSec=.*/TimeoutStartSec=4min/' "$U/news-naver-blog.service" # 5분 주기라 멈춘 실행은 다음 회차 전에 정리
 # ② 거시경제 — 브라질 국채 NTN-F ~10년 중간값(ANBIMA 지표 > 재무부 CSV (매수+매도)/2 — 4번과 같은 정의, 07:10 KST 수집, 새 날짜만 DB br_ntnf_daily). 2026-10-06 4번 저장소 의존 제거
-unit macro-br-ntnf "거시경제: 브라질 국채 NTN-F 10년(ANBIMA·재무부 CSV)" "/opt/macro/ops/run-ts.sh ntnf-daily.mts" "*-*-* 07:10:00
-"
+unit macro-br-ntnf "거시경제: 브라질 국채 NTN-F 10년(ANBIMA·재무부 CSV)" "/opt/macro/ops/run-ts.sh ntnf-daily.mts" "*-*-* 07:10:00\n"
 sed -i 's/^TimeoutStartSec=.*/TimeoutStartSec=15min/' "$U/macro-br-ntnf.service"
 # ⑤ 주간 리포트 초안 — 월~금 08:30 에 깨우고 그 주 첫 한국 거래일에만 생성(월요일 휴장이면 화요일, 오너 2026-10-05). 판정은 앱(weeklyAutoRunGate).
 #    08:30: KRX 전 거래일 시세가 07:55~08:00 공개(실측 #16) — 한국 섹터가 비지 않게(오너 2026-10-09)
-unit weekly-report "주간 리포트 초안 생성" "/opt/macro/ops/call-cron.sh /api/cron/weekly-report 330 '{\"force\":false,\"auto\":true}'" "Mon..Fri *-*-* 08:30:00
-"
+unit weekly-report "주간 리포트 초안 생성" "/opt/macro/ops/call-cron.sh /api/cron/weekly-report 330 '{\"force\":false,\"auto\":true}'" "Mon..Fri *-*-* 08:30:00\n"
 
 systemctl daemon-reload
 for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/macro-kr-fg.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer; do
