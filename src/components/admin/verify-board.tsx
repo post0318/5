@@ -140,7 +140,7 @@ function Detail({ r }: { r: AdminVerifyRow }) {
       <p className="text-muted-foreground">
         검증 {fmtWhen(res.runAt)} · 통과 {res.counts.pass}
         {res.counts.common != null && ` · 공통모드 ${res.counts.common}(통과에 세지 않음)`} · 대상 {res.base}
-        {res.commit ? ` · 커밋 ${res.commit.slice(0, 7)}` : ""}
+        {res.commit ? ` · 커밋 ${res.commit.slice(0, 7)}${res.commit.endsWith("-dirty") ? "-dirty" : ""}` : ""}
       </p>
       <section>
         <h4 className="mb-1 font-semibold">감사표 <span className="text-muted-foreground font-normal">(금액 백만 달러 · 주당 값 달러 · 배수 x)</span></h4>
@@ -260,7 +260,7 @@ export function VerifyBoard() {
           <p className="text-muted-foreground mt-0.5 text-xs">상태 판정 = 작업 지표({FOCUS_METRICS.join("·")})만 · 다른 지표 경고는 「미결 지표」 건수</p>
           {latest && (
             <p className="text-muted-foreground mt-0.5 text-xs">
-              검증 서버 결과({latest.base}) · 마지막 검증 {fmtWhen(latest.runAt)}{latest.commit ? ` · 검증 코드 판본 ${latest.commit.slice(0, 7)}` : ""}
+              검증 서버 결과({latest.base}) · 마지막 검증 {fmtWhen(latest.runAt)}{latest.commit ? ` · 검증 코드 판본 ${latest.commit.slice(0, 7)}${latest.commit.endsWith("-dirty") ? "-dirty" : ""}` : ""}
             </p>
           )}
         </div>
