@@ -5858,7 +5858,9 @@ async function verifyUs(sym) {
         // 앱 0 인데 SEC 값 없음(2026-10-08): 이 사업연도를 실은 10-K(영업활동 현금흐름 연간 값의 접수번호들)의 현금흐름표 표시 구조(_pre.xml)에 이 줄이
         // 있으면 그 칸은 "—" → 0 통과, 어느 10-K 에도 줄이 없으면 오너 규칙(2026-10-02 "본표에 없는 줄은 0 으로 채우지 않고 본표에 별도 줄 없음")
         // 위반 → 실패(AMZN FY2025 자기주식 취득: 2025 10-K 현금흐름표에 줄 없음, 앱 0). 무배당 0 은 위에서 따로 판정
-        if (v == null && app === 0 && c !== "LTM") {
+        // 앱 빈칸 + "본표에 별도 줄 없음"도 같은 판독으로 확인(2026-10-08): 어느 10-K 에도 줄 없음 → 통과, 줄이 있는데 이 기간 "—" → 앱은 0 이어야 → 실패
+        const faceBlank = app == null && /본표에 별도 줄 없음/.test(why ?? "");
+        if (v == null && (app === 0 || faceBlank) && c !== "LTM") {
           const accns = [...new Set((G.NetCashProvidedByUsedInOperatingActivities?.units?.USD ?? []).filter((e) => e.start && /^10-K/.test(e.form ?? "") && dayDiff(e.end, date) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300).map((e) => e.accn))];
           let found = null, read = 0, err = "";
           for (const accn of accns) {
@@ -5870,7 +5872,8 @@ async function verifyUs(sym) {
               if (t) { found = { t, accn }; break; }
             } catch (e) { err = String(e).slice(0, 80); }
           }
-          if (found) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: PASS, note: `본표 줄 있음·이 기간 값 없음(—) → 0 — ${found.t} 가 ${found.accn} 현금흐름표 표시 구조에 있음`, app, src: 0 }); continue; }
+          if (found) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, faceBlank ? { status: FAIL, note: `${found.t} 가 ${found.accn} 현금흐름표 표시 구조에 있고 이 기간 값 없음(—)인데 앱 빈칸(본표에 별도 줄 없음) — 0 이어야`, app, src: 0 } : { status: PASS, note: `본표 줄 있음·이 기간 값 없음(—) → 0 — ${found.t} 가 ${found.accn} 현금흐름표 표시 구조에 있음`, app, src: 0 }); continue; }
+          if (read && faceBlank) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: PASS, note: `본표에 줄 없음 확인 — 이 해를 실은 10-K ${read}건 현금흐름표 표시 구조에 ${cs.join("/")} 없음 → 앱 빈칸(본표에 별도 줄 없음)`, app, src: null }); continue; }
           if (read) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: FAIL, note: `이 해를 실은 10-K ${read}건 현금흐름표에 ${cs.join("/")} 줄 없음인데 앱 0 — 오너 규칙(본표에 없는 줄 = 본표에 별도 줄 없음, 0 으로 채우지 않음)`, app, src: null }); continue; }
           if (err) hardErrors.push(`현금흐름표 표시 구조 조회 실패(${nm} ${c}): ${err}`);
         }
