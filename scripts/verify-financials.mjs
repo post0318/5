@@ -10320,6 +10320,15 @@ async function verifyKr(sym) {
           if (r.status === FAIL && app != null && orig != null && app === orig && latest !== orig)
             r.note = `앱 = 처음 공시 ${orig} · 최신 보고서 값 ${latest} — 앱이 재작성 값을 안 씀`;
           else if (r.status === PASS && orig != null && latest !== orig) r.note = `최신 보고서의 재작성 값 — 처음 공시 ${orig}`;
+          // 양쪽 빈칸의 기대 빈칸 확인(2026-10-08): 별도 재무제표 해(DART 에 연결 재무제표 없음 — 검증기 판정)는 지배·비지배 구분 자체가 없고,
+          // 연결 재무제표인데 그 보고서 재무상태표에 비지배지분 줄이 없으면 비지배지분은 빈칸이 맞다
+          if (r.status === NA && app == null && latest == null && /^(당기순이익\(지배\)|지배주주 지분|비지배지분)$/.test(name)) {
+            if (fsDiv === "OFS") { r.status = PASS; r.note = "양쪽 빈칸 = 기대 빈칸 — DART 별도 재무제표 해(연결 없음): 지배·비지배 구분 없음"; }
+            else if (name === "비지배지분") {
+              const own = [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]].find(([L0, f]) => L0 && L0.some((r0) => r0.sj_div === "BS" && dartNum(r0[f]) != null));
+              if (own && !dartRows(own[0], ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]).length) { r.status = PASS; r.note = "양쪽 빈칸 = 기대 빈칸 — DART 연결 재무상태표에 비지배지분 줄 없음"; }
+            }
+          }
           add("A", `${name} = DART`, col, r);
           const vAll = [[cur, y, "thstrm_amount"], [next, y + 1, "frmtrm_amount"], [next2, y + 2, "bfefrmtrm_amount"]]
             .map(([L, by, f]) => { const rs = L ? dartRows(L, sjs, ids, names) : []; return rs.length === 1 ? { by, v: dartNum(rs[0][f]) } : null; })
@@ -10626,10 +10635,13 @@ async function verifyKr(sym) {
     const metricOf = (n) => { const m = n.match(/^(EV\/EBITDA|PER|PBR|PSR)/); return m ? m[1] : null; };
     const signOk = new Map();
     for (const k of checks) if (k.layer === "D" && k.status === PASS && /부호 규칙\(분모 ≤ 0 → 빈칸\)/.test(k.name)) signOk.set(`${metricOf(k.name)}|${k.col}`, "분모 ≤ 0 → 빈칸(D층 부호 규칙 통과)");
+    // EV 가 검증기 자체 판정으로 공란이어야 하는 열(K2 — 금융업·금융 자회사·리스부채 확인 불가)이면 EV/EBITDA 도 공란
+    const evBlank = new Map();
+    for (const k of checks) if (k.layer === "K2" && k.name === "EV = KRX + DART(B16)" && k.status === PASS && /^공란 — /.test(k.note ?? "")) evBlank.set(k.col, `EV ${k.note}(K2 통과)`);
     for (const k of checks) {
       if (k.layer !== "C" || k.status !== NA || k.note !== "양쪽 빈칸") continue;
       const m = metricOf(k.name); if (!m) continue;
-      const why = signOk.get(`${m}|${k.col}`) ?? preList.get(k.col);
+      const why = signOk.get(`${m}|${k.col}`) ?? preList.get(k.col) ?? (m === "EV/EBITDA" ? evBlank.get(k.col) : null);
       if (why) { k.status = PASS; k.note = `양쪽 빈칸 = 기대 빈칸 — ${why}`; }
     }
   }

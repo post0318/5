@@ -555,10 +555,11 @@ async function quarterLayer(c) {
     const y = Number(lb.slice(0, 4)), qq = Number(lb.slice(-1));
     for (const [name, loc, sjs, ids, names] of items) {
       const app = loc.is ? isByName(loc.is, lb) : loc.bs ? byId(bsq, loc.bs, lb) : byId(cfq, loc.cf, lb);
-      let exp, how;
+      let exp, how, noNciLine = false;
       if (loc.bs) {
         const rows = await Q.R(y, qq === 4 ? "11011" : QCODE[qq]);
         exp = rows ? oneVal(pickRow(rows, ids, names, sjs), (r) => num(r.thstrm_amount)).v : null;
+        noNciLine = !!rows?.some((r) => r.sj_div === "BS") && !pickRow(rows, ["ifrs-full_NoncontrollingInterests"], ["비지배지분"], ["BS"]).length;
         how = `${y} ${qq === 4 ? "사업" : QNAME[qq]}보고서 당기말 ${basis}`;
       } else {
         const r = await Q.qval(y, qq, [ids, names, sjs]);
@@ -575,6 +576,11 @@ async function quarterLayer(c) {
             if (ni.v != null) { exp = ni.v; how = `DART 지배주주 귀속 줄 생략 · 비지배지분 순이익·재무상태표 비지배지분 없음(0) → 지배 = 당기순이익 ${ni.how}(승인 규칙) ${basis}`; }
           }
         }
+      }
+      // 양쪽 빈칸의 기대 빈칸(2026-10-08, 연간 A층과 같은 원칙): 별도 재무제표 기준이면 지배·비지배 구분 없음, 연결 재무상태표에 비지배지분 줄이 없으면 빈칸
+      if (app == null && exp == null && /^(당기순이익\(지배\)|지배주주 지분|비지배지분)$/.test(name) && (basis === "OFS" || (name === "비지배지분" && noNciLine))) {
+        add("A", `분기 ${name} = DART`, lb, { status: consts.PASS, note: `양쪽 빈칸 = 기대 빈칸 — ${basis === "OFS" ? "DART 별도 재무제표 기준: 지배·비지배 구분 없음" : "DART 연결 재무상태표에 비지배지분 줄 없음"} (${how})` });
+        continue;
       }
       exact("A", `분기 ${name} = DART`, lb, app, exp, how);
     }
