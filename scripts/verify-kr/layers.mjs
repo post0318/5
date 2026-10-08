@@ -582,6 +582,11 @@ async function quarterLayer(c) {
         add("A", `분기 ${name} = DART`, lb, { status: consts.PASS, note: `양쪽 빈칸 = 기대 빈칸 — ${basis === "OFS" ? "DART 별도 재무제표 기준: 지배·비지배 구분 없음" : "DART 연결 재무상태표에 비지배지분 줄 없음"} (${how})` });
         continue;
       }
+      // 3개월 값 = 누적 − 직전 누적인데 직전 분기 보고서가 DART 에 아예 없으면(상장 첫 분기보고서 — 062040 2025 반기) 3개월 값은 만들 수 없다 — 앱 빈칸이 맞다(2026-10-08)
+      if (app == null && exp == null && !loc.bs && qq > 1 && /누적 차 불가/.test(how) && !L.latest(y, QCODE[qq - 1])) {
+        add("A", `분기 ${name} = DART`, lb, { status: consts.PASS, note: `양쪽 빈칸 = 기대 빈칸 — 직전 분기(${y} Q${qq - 1}) 보고서가 DART 에 없음(상장 전): 3개월 값 산출 불가 (${how})` });
+        continue;
+      }
       exact("A", `분기 ${name} = DART`, lb, app, exp, how);
     }
     // 비지배 순이익(감사 3차 ⑥) — 앱은 비지배주주 귀속 줄을 따로 보이지 않으므로 「당기순이익 − (지배주주 귀속)」이 DART 비지배지분 순이익(3개월)과 같아야
