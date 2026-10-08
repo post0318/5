@@ -5904,7 +5904,14 @@ async function verifyUs(sym) {
         const rows = cfItems.filter((it) => it.accountId.startsWith(`cf:${sec}:`) && it.depth === 1);
         const vs = rows.map((it) => val(it, c));
         const blankWhy = rows.filter((it) => val(it, c) == null && noteOf(it, c)).map((it) => `${it.accountId.split(":").pop()}(${noteOf(it, c).slice(0, 40)})`);
-        if (f(tid) != null && blankWhy.length) add("D", `현금흐름표 ${sec} = 구성 줄 합`, c, { status: NA, note: `구성 줄 일부 빈칸(사유 있음) — ${blankWhy.join(" · ")}` });
+        // 빈칸 사유가 전부 "본표에 줄 없음"(본표에 별도 줄 없음 · 회사가 이 항목 공시를 중단함)이면 그 줄은 본표 합에 없는 것 — 0 으로 보고 합을 대조한다(2026-10-08).
+        // 다른 사유(LTM 구성 분기 미충족 등)가 섞이면 합을 만들 수 없어 검증불가
+        const faceAbsent = (it) => /본표에 별도 줄 없음|공시를 중단/.test(noteOf(it, c) ?? "");
+        const blanks = rows.filter((it) => val(it, c) == null && noteOf(it, c));
+        if (f(tid) != null && blankWhy.length && blanks.every(faceAbsent) && vs.some((x) => x != null)) {
+          const sum = vs.reduce((t, x) => t + (x ?? 0), 0);
+          add("D", `현금흐름표 ${sec} = 구성 줄 합`, c, Math.abs(f(tid) - sum) < 1 ? { status: PASS, note: `본표에 없는 줄 0 — ${blankWhy.join(" · ")}` } : { status: FAIL, note: `${f(tid)} ≠ ${sum}(차 ${f(tid) - sum}) · 본표에 없는 줄 0 — ${blankWhy.join(" · ")}` });
+        } else if (f(tid) != null && blankWhy.length) add("D", `현금흐름표 ${sec} = 구성 줄 합`, c, { status: NA, note: `구성 줄 일부 빈칸(사유 있음) — ${blankWhy.join(" · ")}` });
         else if (f(tid) != null && vs.some((x) => x != null)) eqD(`현금흐름표 ${sec} = 구성 줄 합`, f(tid), vs.reduce((t, x) => t + (x ?? 0), 0));
       }
       const wc = byId(cfItems, "cf:영업활동 현금흐름:운전자본 변동");
