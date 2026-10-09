@@ -194,6 +194,12 @@ export async function koreanizeStatement(st: FinancialStatement): Promise<Financ
   const items = st.sections.flatMap((s) => s.items);
   const hint = new Map<string, string | null>();
   for (const it of items) if (hasJa(it.accountName) && !hint.has(it.accountName)) hint.set(it.accountName, elementOf(it.accountId));
+  // 저장본(jp_fin)에 남은 옛 머리 문구(2026-10-09 이전 조립분) — 계정명은 이제 한국어
+  if (st.source)
+    st.source = st.source
+      .replace("회사 표시 구조·계정명·부호 그대로", "회사 표시 구조·부호 그대로, 계정명은 한국어(원문은 툴팁)")
+      .replace("· 連結)", "· 연결)")
+      .replace("· 個別)", "· 개별)");
   const notes = [st.source, ...items.flatMap((it) => Object.values(it.cellNotes ?? {}))];
   const [names, inline] = await Promise.all([jaToKoMany([...hint.keys()], hint), jaInlineMany(notes)]);
   for (const sec of st.sections) {
