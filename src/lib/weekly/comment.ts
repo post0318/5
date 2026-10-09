@@ -1712,6 +1712,8 @@ ${beforeOutputSection(COMMENT_PROMPT).slice(beforeOutputSection(COMMENT_PROMPT).
   이어 쓰면 된다"). 200~500자. 방안도 단정하지 말고 조건부로("~라면 ~유리").
 - 웹에서 확인한 사실을 쓰면 그 출처를 sources 에 넣는다({title,url}). sources 가 비어 있으면 입력 data 에 없는
   수치(%·bp·배·pt·건)가 든 문장은 저장할 때 통째로 버려진다.
+- calendar 에는 data.codeCalendar(코드가 이미 확정해 싣는 일정)에 **없는 것만** 넣는다 — 같은 행사를 다른 말로
+  다시 쓰면 표에 두 번 나간다.
 - 키는 data 의 값을 그대로: snapshot = snapshot[].name, issues = issues[].label, sectors = sectors[].id.
 - 표·숫자·구조는 서버 코드가 만든다. 문장만 보낸다.`;
 
@@ -1723,10 +1725,15 @@ export async function buildConnectorPayload(
   allIssues: WeeklyIssue[],
   sectors: WeeklySectors,
   extras: CommentExtras,
-): Promise<CommentPayload & { nextWeekSchedule: ScheduleItem[] }> {
+): Promise<CommentPayload & { nextWeekSchedule: ScheduleItem[]; codeCalendar: { date: string; event: string }[] }> {
   const allMeetings = await getCentralBankMeetings();
   const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
-  return { ...buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras, true), nextWeekSchedule: extras.schedule };
+  return {
+    ...buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras, true),
+    nextWeekSchedule: extras.schedule,
+    // 코드가 이미 확정해 "7. 다음 주 주시 일정"에 싣는 일정 — calendar 에는 여기 없는 것만 보내게(중복 방지)
+    codeCalendar: extras.codeCalendar,
+  };
 }
 
 /** save_weekly_draft 입력 — Gemini 두 호출의 응답 스키마를 합친 것 */
