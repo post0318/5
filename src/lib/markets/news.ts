@@ -5,7 +5,7 @@ import type { MarketId } from "./types";
 import { translateTitles, type TranslateOptions } from "../news/translate";
 import { fetchGoogleNewsRss, googleNewsUrl } from "../news/googleNews";
 import { resolveCorpCode } from "./kr/corpcode";
-import { KO_PRODUCT_ALIASES, KR_COMPANY_ALIASES, KR_CONTEXT_ALIASES, judgeDomesticTitle, judgeOverseasTitle, koAcronymName, koTitleHit, enTitleHit, shortAliasHit, type ShortAlias, type Verdict } from "./news-rules";
+import { JP_ALIAS_SPORTS_RE, KO_PRODUCT_ALIASES, KR_COMPANY_ALIASES, KR_CONTEXT_ALIASES, judgeDomesticTitle, judgeOverseasTitle, koAcronymName, koTitleHit, enTitleHit, shortAliasHit, type ShortAlias, type Verdict } from "./news-rules";
 
 /**
  * 종목뉴스(선택 번역·요약용) — 한국·미국·일본.
@@ -590,6 +590,82 @@ function koShortAlias(koName: string, enName: string): { alias: string; next: st
   return { alias: words[0], next: words[1] };
 }
 
+/**
+ * 일본 종목 한글명 — 국내 기사 판정용 전체 이름과 약칭(2026-10-10 오너 지적 "일본 종목 국내뉴스가 없다").
+ * 네이버 한글명("토요타자동차")·화면 표시명(ko-dict "도요타자동차")이 붙여 쓴 한 낱말이라 미국 규칙(koShortAlias, 두 낱말 이상)으로는 약칭이
+ * 안 생기고, 기사 제목은 "도요타·렉서스 리콜"처럼 약칭을 쓴다(7203 국내 원본 153건 전부 "제목에 회사명 없음").
+ *  - 괄호 속 다른 표기도 이름("혼다(혼다기연공업)", "일본전신전화(NTT)"). 네이버의 미국 ADR 표기(" ADR")는 뗀다.
+ *  - 첫 글자 초성 ㄷ↔ㅌ·ㄱ↔ㅋ 이형 표기(도요타/토요타, 가와사키/카와사키) — 일본어 ト·カ 를 매체마다 다르게 적는다. 3자 이상만.
+ *  - 약칭 = 뒤의 회사 형태·업종 접미어를 뗀 이름("도요타자동차" → "도요타", "소니그룹" → "소니", "미쓰비시UFJ파이낸셜그룹" → "미쓰비시UFJ").
+ *    한글 2자 이상일 때만. 다른 종목과 겹치는지는 호출부가 네이버 자동완성으로 따로 본다(jpAliasUsable).
+ */
+const JP_KO_SUFFIXES = ["파이낸셜그룹", "홀딩스", "그룹", "제작소", "자동차", "기연공업", "약품공업", "화학공업", "중공업", "공업"];
+const KO_INITIAL_SWAP: Record<number, number> = { 3: 16, 16: 3, 0: 15, 15: 0 }; // ㄷ↔ㅌ, ㄱ↔ㅋ (초성 번호)
+function koInitialVariant(word: string): string | null {
+  const code = word.charCodeAt(0) - 0xac00;
+  if (code < 0 || code > 11171 || word.length < 3) return null;
+  const swap = KO_INITIAL_SWAP[Math.floor(code / 588)];
+  if (swap == null) return null;
+  return String.fromCharCode(0xac00 + swap * 588 + (code % 588)) + word.slice(1);
+}
+function jpKoNames(raw: (string | null | undefined)[]): { names: string[]; aliases: { alias: string; next: string }[] } {
+  const base = new Set<string>();
+  for (const r of raw) {
+    if (!r) continue;
+    const s = r.replace(/\s*ADR$/i, "").trim();
+    for (const part of [s.replace(/\(.*?\)/g, ""), ...[...s.matchAll(/\(([^()]+)\)/g)].map((m) => m[1])]) {
+      const w = part.replace(/\s+/g, "");
+      if (w) base.add(w);
+    }
+  }
+  const names = new Set<string>();
+  const aliases = new Map<string, string>();
+  for (const w of base) {
+    for (const v of [w, koInitialVariant(w)]) if (v) names.add(v);
+    const suf = JP_KO_SUFFIXES.find((x) => w.endsWith(x) && w.length > x.length);
+    const alias = suf ? w.slice(0, -suf.length) : null;
+    if (!alias || !/^[가-힣]{2,}/.test(alias)) continue;
+    for (const v of [alias, koInitialVariant(alias)]) if (v && !names.has(v)) aliases.set(v, suf!);
+  }
+  return { names: [...names], aliases: [...aliases].map(([alias, next]) => ({ alias, next })) };
+}
+
+/**
+ * 일본 종목 약칭을 쓸 수 있는지 — 같은 말로 시작하는 다른 종목(네이버 자동완성)으로 판단한다.
+ *  - 약칭과 이름이 똑같은 다른 종목이 있으면 그 말은 다른 회사다("소프트뱅크그룹" → "소프트뱅크" = 9434 소프트뱅크).
+ *  - 같은 말로 시작하는 다른 **일본** 상장사가 둘 이상이면 그룹 이름이다("미쓰비시" → 미쓰비시상사·미쓰비시전기·미쓰비시UFJ … — 제목의 "미쓰비시"가
+ *    어느 회사인지 모른다). 하나뿐이면 약칭으로 쓰고 그 종목 자리는 shortAliasHit 이 거른다("도요타" → 도요타쯔우쇼).
+ *  - ADR(같은 회사의 미국 상장)과 다른 나라 종목(미국 "소니다 시니어 리빙")은 세지 않는다 — 앞은 같은 회사, 뒤는 다른 낱말이라 경계 검사로 걸러진다.
+ * 2026-10-10 네이버 자동완성 실측: 도요타 1·토요타 1·소니 1·히타치 1 → 사용, 미쓰비시 9 → 제외, 소프트뱅크 = 동명 종목 → 제외.
+ */
+function jpAliasUsable(alias: { alias: string; next: string }, items: NaverAcItem[], symbol: string): boolean {
+  const others = new Set<string>();
+  for (const it of items) {
+    const name = it.name?.trim() ?? "";
+    if (!name || it.code?.toUpperCase() === symbol.toUpperCase() || /\bADR$/i.test(name)) continue;
+    const squashed = name.replace(/\s+/g, "");
+    if (!squashed.startsWith(alias.alias)) continue;
+    const rest = squashed.slice(alias.alias.length);
+    if (!rest) return false;
+    if (it.nationCode !== "JPN" || rest.startsWith(alias.next)) continue;
+    others.add(it.code ?? name);
+  }
+  return others.size < 2;
+}
+
+/** 네이버 자동완성 원본 항목 — 실패하면 빈 목록 */
+async function naverAcItems(q: string): Promise<NaverAcItem[]> {
+  try {
+    const res = await fetchJson<{ items?: NaverAcItem[] }>(`https://ac.stock.naver.com/ac?q=${encodeURIComponent(q)}&target=stock`, {
+      headers: { "user-agent": NAVER_UA },
+      revalidate: 86400,
+    });
+    return res.items ?? [];
+  } catch {
+    return [];
+  }
+}
+
 /** 티커로도 국내 검색할지 — 3자 이상 영문만(1~2자 "V"·"BE"·"MU" 는 검색 결과가 회사와 무관한 기사로 채워진다), 한글명·영문명에 이미 들어 있으면 생략 */
 function tickerQueryOk(symbol: string, names: string[]): boolean {
   if (!/^[A-Z]{3,}$/.test(symbol)) return false;
@@ -992,25 +1068,25 @@ function krShortName(symbol: string): string | null {
  */
 function confirmWeakDomesticHits(
   dom: { it: RawNewsItem; v: Verdict }[],
-  n: { koNames: string[]; koAlias: ShortAlias | null; enName: string; enFirst: string | null; ticker: string | null },
+  n: { koNames: string[]; koAliases: ShortAlias[]; enName: string; enFirst: string | null; ticker: string | null },
 ): void {
   const squashKo = (s: string) => s.replace(/\s+/g, "");
   const kindOf = (v: Verdict): "alias" | "ticker" | null => {
     if (!v.keep) return null;
     const hit = v.reason.replace(/^제목에 /, "");
-    if ((n.koAlias && hit === n.koAlias.alias) || (n.enFirst && hit === n.enFirst)) return "alias";
+    if (n.koAliases.some((a) => hit === a.alias) || (n.enFirst && hit === n.enFirst)) return "alias";
     if (n.ticker && hit === n.ticker) return "ticker";
     return null;
   };
   const fullName = (text: string) =>
     n.koNames.some((k) => squashKo(text).includes(squashKo(k))) ||
-    (!!n.koAlias?.next && new RegExp(`${n.koAlias.alias}\\s?${n.koAlias.next.slice(0, 2)}`).test(text)) ||
+    n.koAliases.some((a) => !!a.next && new RegExp(`${a.alias}\\s?${a.next.slice(0, 2)}`).test(text)) ||
     enTitleHit(text, n.enName);
   const confirmed = (kind: "alias" | "ticker", text: string) =>
     fullName(text) ||
     (kind === "alias"
       ? !!n.ticker && enTitleHit(text, n.ticker, true)
-      : (!!n.koAlias && shortAliasHit(text, n.koAlias)) || (!!n.enFirst && shortAliasHit(text, { alias: n.enFirst, rivals: [] })));
+      : n.koAliases.some((a) => shortAliasHit(text, a)) ||(!!n.enFirst && shortAliasHit(text, { alias: n.enFirst, rivals: [] })));
   // "어플라이드 인튜이션(Applied Intuition)" — 영문 첫 낱말로 시작하지만 회사명·티커가 아닌 괄호 속 이름
   const otherEntity = (text: string) =>
     !!n.enFirst &&
@@ -1054,6 +1130,8 @@ export function judgeStockNews(a: {
   enRivals?: string[];
   /** 미국 종목 — 한글 약칭과 그 약칭으로 시작하는 다른 종목 이름 */
   koAlias?: ShortAlias | null;
+  /** 일본 종목 — 한글 이름(이형 표기 포함)과 약칭 여러 개(jpKoNames). 주면 koAlias 대신 쓴다 */
+  jpKo?: { names: string[]; aliases: ShortAlias[] } | null;
   /** 해외 기사 중 영문 첫 낱말 구글 검색에서만 나온 것(티커·전체 이름 검색에는 없던 것) */
   firstWordOnlyUrls?: Set<string>;
 }): { domestic: RawNewsItem[]; overseas: RawNewsItem[]; log: JudgeLog[] } {
@@ -1076,11 +1154,19 @@ export function judgeStockNews(a: {
   // 미국 종목은 붙여 쓴 한글명("어플라이드머티어리얼즈")도 인정
   const koNames = a.isKr
     ? [...new Set(koKeys.flatMap((k) => KR_COMPANY_ALIASES[k] ?? [k]))]
-    : [...new Set([a.koBase, a.koBase.replace(/\s+/g, ""), ...(KO_PRODUCT_ALIASES[a.koBase] ?? [])])];
+    : [...new Set([a.koBase, a.koBase.replace(/\s+/g, ""), ...(KO_PRODUCT_ALIASES[a.koBase] ?? []), ...(a.jpKo?.names ?? [])])];
   const koContext = a.isKr ? (koKeys.map((k) => KR_CONTEXT_ALIASES[k]).find(Boolean) ?? null) : null;
-  const koAlias = a.isKr ? null : (a.koAlias ?? null);
+  const koAliases: ShortAlias[] = a.isKr ? [] : a.jpKo ? a.jpKo.aliases : a.koAlias ? [a.koAlias] : [];
   const judgeDom = (it: RawNewsItem) => {
-    const v = judgeDomesticTitle(it.title, koNames, koContext, koAlias);
+    let v = judgeDomesticTitle(it.title, koNames, koContext, koAliases[0] ?? null);
+    // 일본 종목 약칭은 이형 표기까지 여럿("도요타"·"토요타") — 앞 약칭에 안 걸렸을 때만 다음 약칭으로
+    for (const al of koAliases.slice(1)) {
+      if (v.keep || v.reason !== "제목에 회사명 없음") break;
+      v = judgeDomesticTitle(it.title, koNames, koContext, al);
+    }
+    // 일본 종목 약칭이 사람 이름으로 쓰인 스포츠 기사("소니" = 손흥민 별명, "타케다" = SSG 투수) — 2026-10-10 6758·4502 표본
+    if (v.keep && a.jpKo && koAliases.some((al) => v.reason === `제목에 ${al.alias}`) && JP_ALIAS_SPORTS_RE.test(it.title))
+      return { keep: false, reason: "약칭이 사람 이름(스포츠 기사)" };
     // 미국 종목 국내 기사는 영문 회사명·약칭·티커로 쓴 제목도 인정
     if (!v.keep && v.reason === "제목에 회사명 없음" && !a.isKr) {
       const en = judgeOverseasTitle(it.title, enNames, enTicker, enShort);
@@ -1089,7 +1175,16 @@ export function judgeStockNews(a: {
     return v;
   };
   const dom = a.domesticRaw.map((it) => ({ it, v: judgeDom(it) }));
-  if (!a.isKr) confirmWeakDomesticHits(dom, { koNames, koAlias, enName: a.enShortName, enFirst: enShort?.alias ?? null, ticker: enTicker });
+  // 일본 종목 한글 약칭("도요타"·"소니")은 요약 확인을 걸지 않는다 — 미국 약칭("어플라이드"·"블룸")과 달리 일반 낱말이 아니고, 다른 상장사와
+  // 겹치는 약칭은 jpAliasUsable 이 이미 뺐다. 확인을 걸면 요약에 정식명("도요타자동차")이 드물어 진짜 기사 대부분이 빠졌다(7203: 22건 중 4건만 남음).
+  if (!a.isKr)
+    confirmWeakDomesticHits(dom, {
+      koNames,
+      koAliases: a.jpKo ? [] : koAliases,
+      enName: a.enShortName,
+      enFirst: enShort?.alias ?? null,
+      ticker: enTicker,
+    });
   // 기사가 적은 종목(제목에 회사명이 드문 중소형주) — 요약에 회사명이 있는 네이버 태깅 기사로 MIN_DOMESTIC 건까지 보충(최신순)
   let kept = dom.filter((d) => d.v.keep).length;
   for (const d of dom) {
@@ -1186,7 +1281,11 @@ export async function fetchStockNewsBySide(
   symbol: string,
   companyName?: string | null,
   /** 검증 도구용 — 판정 전 원본 목록과 기사별 판정 사유를 함께 돌려준다(화면·저장에는 쓰지 않음) */
-  opts?: { includeRaw?: boolean },
+  opts?: {
+    includeRaw?: boolean;
+    /** 일본 종목 — 화면 표시 한글명(ko-dict·무료 번역). companyName 은 해외 검색·판정용 영문명이라 따로 받는다 */
+    koName?: string | null;
+  },
 ): Promise<{
   domestic: NewsItem[];
   overseas: NewsItem[];
@@ -1204,22 +1303,50 @@ export async function fetchStockNewsBySide(
   // 거래소마다 달라 자동완성 API 로 코드를 먼저 해석한다. 한국어 종목명도 같이
   // 얻어 검색 폴백의 질의어로 쓴다("NETFLIX INC" 로는 국내 기사가 안 잡힘).
   const naver = isKr ? null : await resolveNaverWorldStock(symbol);
-  const searchQuery = isKr ? query : (naver?.koreanName ?? domesticQuery(market, query));
+  const isJp = market === "jp";
+  const searchQuery = isKr ? query : (naver?.koreanName ?? (isJp ? opts?.koName : null) ?? domesticQuery(market, query));
+  // 일본 종목 한글 이름·약칭(jpKoNames) — 약칭은 같은 말로 시작하는 다른 종목을 보고 쓸 것만 남긴다(jpAliasUsable)
+  const jpBase = isJp ? jpKoNames([naver?.koreanName, opts?.koName]) : null;
+  const jpKo = jpBase
+    ? {
+        names: jpBase.names,
+        aliases: (
+          await Promise.all(
+            jpBase.aliases.map(async (al) => {
+              const items = await naverAcItems(al.alias);
+              const rivals = items
+                .filter((i) => i.code?.toUpperCase() !== symbol.toUpperCase())
+                .map((i) => i.name?.trim() ?? "")
+                .filter((n) => n.startsWith(al.alias));
+              return { ...al, rivals, usable: jpAliasUsable(al, items, symbol) };
+            }),
+          )
+        )
+          .filter((al) => al.usable)
+          .map(({ alias, next, rivals }) => ({ alias, next, rivals })),
+      }
+    : null;
   // 미국·일본 종목 국내 검색은 질의 여러 개를 합친다(2026-10-05 오너 지적 — AMAT 국내뉴스 3건): 네이버 한글명 하나("어플라이드 머티어리얼즈")로
   // 30건만 받으면 표기가 다른 기사("머티리얼즈")·약칭 기사("어플라이드·베시 …")·티커 기사("AMAT 'EPIC 센터'…")를 못 받고, 상위 30건이 ETF·시황
   // 기사로 채워졌다(실측 1주일: 한글명 81건·다른 표기 48건·티커 17건). 한글명 + 한글 약칭 + 티커(3자 이상), 질의당 100건(검색 API 최대).
   const enClean = !isKr && companyName?.trim() ? cleanEdgarName(companyName.trim()) : null;
-  const koAliasBase = enClean ? koShortAlias(searchQuery, enClean) : null;
+  const koAliasBase = enClean && !isJp ? koShortAlias(searchQuery, enClean) : null;
   const enFirst = enClean ? distinctiveFirstWord(enClean) : null;
   const domesticQueries = isKr
     ? []
     : [
         ...new Set(
-          [searchQuery, koAliasBase?.alias, tickerQueryOk(symbol, [searchQuery, enClean ?? query]) ? symbol : null].filter(
-            (q): q is string => !!q,
-          ),
+          [
+            searchQuery,
+            koAliasBase?.alias,
+            // 일본 종목은 약칭 검색(이형 표기 포함 최대 2개) — 기사 대부분이 약칭 제목("도요타 …")이다
+            ...(jpKo?.aliases.slice(0, 2).map((al) => al.alias) ?? []),
+            tickerQueryOk(symbol, [searchQuery, enClean ?? query]) ? symbol : null,
+          ].filter((q): q is string => !!q),
         ),
       ];
+  // 검색 API 쪽수 — 한글명·첫 약칭 2쪽(200건), 티커·일본 종목의 둘째 약칭 1쪽. 종목당 갱신 1회 최대 5건(무료 한도 하루 25,000건)
+  const searchPages = (q: string) => (q === symbol || (isJp && q === jpKo?.aliases[1]?.alias) ? 1 : 2);
 
   const [domesticTagged, domesticSearched, yahooOverseas, googleOverseas, googleOverseasAlt, koRivals, enRivals] = await Promise.all([
     isKr
@@ -1242,8 +1369,7 @@ export async function fetchStockNewsBySide(
           cutoffMs: ONE_WEEK_MS,
           display: 100,
           requireWhitelist: false,
-          // 한글명·약칭은 2페이지(200건)까지, 티커는 1페이지 — 종목당 갱신 1회 검색 API 최대 5건(무료 한도 하루 25,000건)
-          maxPages: q === symbol ? 1 : 2,
+          maxPages: searchPages(q),
         }),
       ),
     ).then((lists) => lists.flat()),
@@ -1311,13 +1437,14 @@ export async function fetchStockNewsBySide(
       isKr,
       symbol,
       enShortName: isKr ? oQuery : cleanEdgarName(name),
-      koBase: isKr ? name : (naver?.koreanName ?? domesticQuery(market, name)),
+      koBase: isKr ? name : (naver?.koreanName ?? (isJp ? opts?.koName : null) ?? domesticQuery(market, name)),
       koShort: isKr ? krShortName(symbol) : null,
       domesticRaw,
       overseasRaw,
       taggedUrls,
       enRivals,
       koAlias: koAliasBase ? { ...koAliasBase, rivals: koRivals } : null,
+      jpKo,
       firstWordOnlyUrls,
     });
     domesticSafe = j.domestic;

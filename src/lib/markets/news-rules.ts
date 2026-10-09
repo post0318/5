@@ -92,6 +92,9 @@ const ROUNDUP_KO =
 const ROUNDUP_EN =
   /\b(top|biggest)\s+(gainers|losers|movers)\b|stocks?\s+to\s+watch|stock market today|market wrap|(premarket|midday|after-hours)\s+movers|stocks making the biggest moves|dow jones futures|stock futures (rise|fall|edge)|\broundup\b|market talk|top analyst calls/i;
 
+/** 일본 종목 한글 약칭이 사람 이름인 스포츠 기사("소니" = 손흥민 별명, "타케다" = SSG 투수) — 약칭으로만 걸렸을 때 뺀다(2026-10-10 6758·4502 표본) */
+export const JP_ALIAS_SPORTS_RE = /손흥민|토트넘|LAFC|A매치|\d+호\s?골|대표팀|KBO|NPB|SSG|1군|말소|선발\s?투수|투수|타자|홈런|이적/;
+
 /** 이름 바로 뒤가 "…다음 타자·…보다 더·…만 볼 때" — 그 회사가 아니라 다른 종목 얘기 */
 const NOT_ABOUT_KO = /(다음\s?타자|다음엔|보다\s?더|말고|만\s?볼\s?때|아닌|대신)/;
 
