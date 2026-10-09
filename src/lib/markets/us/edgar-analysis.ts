@@ -320,6 +320,7 @@ export function buildUsAnalysis(
     "PaymentsToAcquirePropertyPlantAndEquipment",
     "PaymentsToAcquireProductiveAssets",
     "PaymentsForCapitalImprovements",
+    "CapexComponentsDerived", // 합계 줄 없는 공시의 항공기 + 기타 유형자산(DAL, edgar-cf-wc.ts)
     "PaymentsToAcquireOtherProductiveAssets",
   ];
   // 영업현금흐름·유형자산 취득 = 현금흐름표 화면 값(edgar-cashflow.ts, 2026-10-01 — 따로 읽으면 화면과 갈렸다: MAR 2025 태그 교체로 LTM 공란,
