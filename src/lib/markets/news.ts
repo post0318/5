@@ -5,7 +5,8 @@ import type { MarketId } from "./types";
 import { translateTitles, type TranslateOptions } from "../news/translate";
 import { fetchGoogleNewsRss, googleNewsUrl } from "../news/googleNews";
 import { resolveCorpCode } from "./kr/corpcode";
-import { JP_ALIAS_SPORTS_RE, JP_SHARED_NAME_CONTEXT, KO_PRODUCT_ALIASES, KR_COMPANY_ALIASES, KR_CONTEXT_ALIASES, judgeDomesticTitle, judgeOverseasTitle, koAcronymName, koTitleHit, enTitleHit, shortAliasHit, type ShortAlias, type Verdict } from "./news-rules";
+import { getEdinetCodeIndex } from "./jp/edinetcode";
+import { JA_COMPANY_ALIASES, JP_ALIAS_SPORTS_RE, JP_SHARED_NAME_CONTEXT, judgeJapaneseTitle, jaNorm, normalizeJaTitleForDedup, type JaNames, KO_PRODUCT_ALIASES, KR_COMPANY_ALIASES, KR_CONTEXT_ALIASES, judgeDomesticTitle, judgeOverseasTitle, koAcronymName, koTitleHit, enTitleHit, shortAliasHit, type ShortAlias, type Verdict } from "./news-rules";
 
 /**
  * 종목뉴스(선택 번역·요약용) — 한국·미국·일본.
@@ -1296,6 +1297,8 @@ export async function fetchStockNewsBySide(
     includeRaw?: boolean;
     /** 일본 종목 — 화면 표시 한글명(ko-dict·무료 번역). companyName 은 해외 검색·판정용 영문명이라 따로 받는다 */
     koName?: string | null;
+    /** 일본 종목 — 일본어 정식명(EDINET·J-Quants nameLocal). 구글 뉴스 일본판 검색·일본어 판정에 쓴다 */
+    jaName?: string | null;
   },
 ): Promise<{
   domestic: NewsItem[];
@@ -1345,6 +1348,17 @@ export async function fetchStockNewsBySide(
           })),
       }
     : null;
+  // 일본어 기사(구글 뉴스 일본판) — 이름 묶음을 먼저 정하고 질의(정식명·약칭·관용 약칭 중 일본 문자 최대 3개)를 국내 검색과 같이 돌린다
+  const jaNamesP: Promise<JaNames | null> = isJp ? jaNamesFor(symbol, opts?.jaName, companyName).catch(() => null) : Promise.resolve(null);
+  const jaRawP: Promise<RawNewsItem[]> = jaNamesP.then((n) =>
+    n
+      ? fetchJaGoogleNews(
+          market,
+          symbol,
+          [...new Set([...n.names.slice(0, 1), ...n.aliases.slice(0, 1), ...n.names.slice(1).filter((w) => !/^[A-Za-z0-9&]+$/.test(w)).slice(0, 1)])].slice(0, 3),
+        )
+      : [],
+  );
   // 미국·일본 종목 국내 검색은 질의 여러 개를 합친다(2026-10-05 오너 지적 — AMAT 국내뉴스 3건): 네이버 한글명 하나("어플라이드 머티어리얼즈")로
   // 30건만 받으면 표기가 다른 기사("머티리얼즈")·약칭 기사("어플라이드·베시 …")·티커 기사("AMAT 'EPIC 센터'…")를 못 받고, 상위 30건이 ETF·시황
   // 기사로 채워졌다(실측 1주일: 한글명 81건·다른 표기 48건·티커 17건). 한글명 + 한글 약칭 + 티커(3자 이상), 질의당 100건(검색 API 최대).
@@ -1476,6 +1490,27 @@ export async function fetchStockNewsBySide(
   domesticSafe = dedupeSimilarTitles(dedupeByMajorPublisher(domesticSafe));
   overseasSafe = dedupeSimilarTitles(dedupeOverseasSyndication(overseasSafe));
 
+  // 일본 종목 해외 칸 = 일본어 기사(구글 뉴스 일본판) 주 + 영문은 화이트리스트 매체만(오너 결정 2026-10-10 — 7일 실측 일본어 채택이 영문의 약 2배,
+  // 정밀도 83% vs 63%. 영문 오답 대부분이 회사명 첫 낱말 "Mitsubishi"·"Tokyo" 오탐과 독일 자동 주가 기사 AD HOC NEWS 였다)
+  if (isJp) {
+    overseasSafe = overseasSafe.filter((it) => JA_EN_PUBLISHERS.has(it.publisher));
+    const jaRaw = await jaRawP;
+    const jaNames = await jaNamesP;
+    const jaJudged = jaRaw.map((it) => ({ it, v: jaNames ? judgeJapaneseTitle(it.title, it.publisher, jaNames) : { keep: false, reason: "일본어 회사명 없음" } }));
+    if (opts?.includeRaw) rawLog.push(...jaJudged.map((d) => ({ side: "overseas" as const, item: d.it, tagged: false, ...d.v })));
+    const jaSafe = dedupeJaTitles(jaJudged.filter((d) => d.v.keep).map((d) => d.it));
+    const [domestic, ja, en] = await Promise.all([
+      withTranslatedTitles("ko", domesticSafe),
+      withTranslatedTitles("ja", jaSafe),
+      withTranslatedTitles("en", overseasSafe),
+    ]);
+    return {
+      domestic,
+      overseas: [...ja, ...en].sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt)),
+      debug: { rawDomestic: domesticRaw.length, rawOverseas: overseasRaw.length + jaRaw.length, relevance, ...(opts?.includeRaw ? { raw: rawLog } : {}) },
+    };
+  }
+
   const [domestic, overseas] = await Promise.all([
     withTranslatedTitles("ko", domesticSafe),
     withTranslatedTitles("en", overseasSafe),
@@ -1485,6 +1520,104 @@ export async function fetchStockNewsBySide(
     overseas,
     debug: { rawDomestic: domesticRaw.length, rawOverseas: overseasRaw.length, relevance, ...(opts?.includeRaw ? { raw: rawLog } : {}) },
   };
+}
+
+/** 일본 종목 영문 기사 중 남길 매체(오너 결정 2026-10-10) — 실제 출처 표기 문자열(야후 publisher·구글 도메인 매핑 OVERSEAS_PUBLISHER_BY_DOMAIN) */
+const JA_EN_PUBLISHERS = new Set(["Reuters", "Bloomberg", "Nikkei Asia", "The Japan Times", "The Wall Street Journal", "WSJ", "Financial Times"]);
+
+/** 일본어 정식명에서 떼는 회사 형태·업종 접미어 — 뗀 것이 약칭 후보("トヨタ自動車" → "トヨタ") */
+const JA_NAME_SUFFIXES = [/フィナンシャル・?グループ$/, /ホールディングス$/, /グループ$/, /技研工業$/, /自動車$/, /製作所$/, /工業$/];
+
+/**
+ * 일본 종목 일본어 이름 묶음 — 정식명(EDINET·J-Quants 일본어명, 株式会社 뗌) + 관용 약칭 표(JA_COMPANY_ALIASES) + 접미어 뗀 약칭.
+ * 접미어 뗀 약칭은 EDINET 상장사 목록에서 같은 말로 시작하는 다른 상장사가 둘 이상이거나 같은 이름의 상장사가 있으면 쓰지 않는다
+ * (한국어 jpAliasUsable 과 같은 원칙 — "三菱" 그룹명, "ソフトバンク" = 9434).
+ */
+/** 일본어 회사명 정리 — 전각→반각(NFKC), 株式会社·(株) 떼기, 공백 제거 */
+function jaCompanyName(name: string): string {
+  return jaNorm(name).replace(/株式会社|\(株\)|㈱/g, "").replace(/\s+/g, "").trim();
+}
+
+async function jaNamesFor(symbol: string, jaName: string | null | undefined, enName: string | null | undefined): Promise<JaNames | null> {
+  const full = jaName ? jaCompanyName(jaName) : "";
+  const manual = JA_COMPANY_ALIASES[symbol] ?? [];
+  if (!full && manual.length === 0) return null;
+  const aliases: string[] = [];
+  const re = JA_NAME_SUFFIXES.find((r) => r.test(full));
+  const stem = re ? full.replace(re, "").replace(/[・･]$/, "") : "";
+  if (stem.length >= 2 && !manual.includes(stem)) {
+    try {
+      const idx = await getEdinetCodeIndex();
+      const rivals = new Set<string>();
+      let same = false;
+      for (const e of idx.all) {
+        if (!e.listed || !e.ticker || e.ticker === symbol) continue;
+        const n = jaCompanyName(e.name);
+        if (n === stem) same = true;
+        else if (n.startsWith(stem)) rivals.add(e.ticker);
+      }
+      if (!same && rivals.size < 2) aliases.push(stem);
+    } catch {
+      // 상장사 목록을 못 받으면 접미어 뗀 약칭은 쓰지 않는다(오탐보다 누락)
+    }
+  }
+  const enFirst = (enName ?? "").split(/[\s,.]+/)[0]?.toLowerCase() ?? "";
+  return {
+    symbol,
+    // 관용 약칭 중 짧은 일본 문자 표기("日立"·"トヨタ"·"三菱重")는 약칭처럼 엄격한 경계 — 뒤에 한자·가타카나가 붙으면 다른 낱말
+    // ("日立市"·"日立建機"·"トヨタ紡織"). 처음 보는 표본(2026-10-10 6501)에서 日立市 날씨·日立建機 기사가 들어온 뒤 바꿨다.
+    names: [...new Set([full, ...manual.filter((w) => w.length >= 4 || /^[A-Za-z0-9&]+$/.test(w))].filter(Boolean))],
+    aliases: [...new Set([...aliases, ...manual.filter((w) => w.length < 4 && !/^[A-Za-z0-9&]+$/.test(w))])],
+    selfMarks: [full, enFirst.length >= 3 ? enFirst : ""].filter(Boolean),
+  };
+}
+
+/** 구글 뉴스 일본판 — 질의마다 최근 7일, 링크 중복 제거 */
+async function fetchJaGoogleNews(market: MarketId, symbol: string, queries: string[]): Promise<RawNewsItem[]> {
+  const cutoff = Date.now() - ONE_WEEK_MS;
+  const seen = new Set<string>();
+  const out: RawNewsItem[] = [];
+  const lists = await Promise.all(
+    queries.map((q) => fetchGoogleNewsRss(googleNewsUrl(`search?q=${encodeURIComponent(q)}+when:7d`, "hl=ja&gl=JP&ceid=JP:ja")).catch(() => [])),
+  );
+  for (const n of lists.flat()) {
+    const t = Date.parse(n.publishedAt);
+    if (!Number.isFinite(t) || t < cutoff || seen.has(n.link)) continue;
+    seen.add(n.link);
+    out.push({ id: n.link, title: n.title, publisher: n.source ?? n.sourceDomain ?? "Google ニュース", url: n.link, publishedAt: n.publishedAt, market, symbol });
+  }
+  return out.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
+}
+
+/**
+ * 일본어 재게재 묶기 — 같은 Fisco·トレーダーズ・ウェブ·통신사 원문이 Yahoo!ニュース·Moomoo·TradingView·ｄメニュー 등으로 다시 실려
+ * 7일 실측 일본어 채택의 36%가 같은 사건이었다. 매체 꼬리표를 뗀 제목 2-gram 유사도 0.45 이상·48시간 안이면 한 묶음,
+ * 묶음에서 원매체(재게재 포털이 아닌 곳) 1건을 남긴다.
+ */
+const JA_PORTALS = new Set(["Yahoo!ニュース", "Yahoo!ファイナンス", "ｄメニューニュース", "ライブドアニュース", "Infoseek", "Moomoo", "TradingView", "ニコニコニュース", "Excite エキサイト", "au Webポータル", "まぐまぐ"]);
+const JA_SIMILAR = 0.45;
+function dedupeJaTitles(items: RawNewsItem[]): RawNewsItem[] {
+  const grams = items.map((it) => {
+    const t = normalizeJaTitleForDedup(it.title);
+    const g = new Set<string>();
+    for (let i = 0; i < t.length - 1; i++) g.add(t.slice(i, i + 2));
+    return g;
+  });
+  const taken = new Array(items.length).fill(false);
+  const out: RawNewsItem[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (taken[i]) continue;
+    const group = [i];
+    for (let j = i + 1; j < items.length; j++) {
+      if (taken[j]) continue;
+      const dt = Math.abs(Date.parse(items[i].publishedAt) - Date.parse(items[j].publishedAt));
+      if (dt <= SIMILAR_WINDOW_MS && jaccard(grams[i], grams[j]) >= JA_SIMILAR) group.push(j);
+    }
+    for (const g of group) taken[g] = true;
+    const rank = (it: RawNewsItem) => (JA_PORTALS.has(jaNorm(it.publisher)) || JA_PORTALS.has(it.publisher) ? 0 : 1);
+    out.push(group.map((g) => items[g]).sort((a, b) => rank(b) - rank(a) || Date.parse(a.publishedAt) - Date.parse(b.publishedAt))[0]);
+  }
+  return out.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
 }
 
 /**

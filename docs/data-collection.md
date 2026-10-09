@@ -135,7 +135,7 @@ Yahoo(짧게), Kalshi(5분), CNN(1시간, 장중 갱신 주기 실측 뒤 결정
 
 | 항목 | 소스 | 실행(이전 전) | 오라클 빈도 | 저장 |
 |---|---|---|---|---|
-| 종목뉴스 | 네이버 종목 태깅·뉴스 API(허브), Google 뉴스 RSS, Yahoo, 빅테크 공식 블로그 RSS | **오라클 타이머 `news-stock-news`** → `/api/cron/stock-news`(2026-10-04 재개) | 10분마다 깨움 — 한국 종목 장중 10분·미국 장중 30분·장외 1시간 지난 것만 | DB(`stock_news`). 판정은 규칙(`news-rules.ts`), 비용 0 |
+| 종목뉴스 | 네이버 종목 태깅·뉴스 API(허브), Google 뉴스 RSS(일본 종목은 일본판 `hl=ja` 주 + 영문 화이트리스트 매체만, 2026-10-10), Yahoo, 빅테크 공식 블로그 RSS | **오라클 타이머 `news-stock-news`** → `/api/cron/stock-news`(2026-10-04 재개) | 10분마다 깨움 — 한국 종목 장중 10분·미국 장중 30분·장외 1시간 지난 것만 | DB(`stock_news`). 판정은 규칙(`news-rules.ts`), 비용 0 |
 | 텔레그램 채널 | Telegram API — **오라클 상주 수신기 `macro-telegram-listener`**(`scripts/listen-telegram.mjs`, 2026-10-03) | 새 글 **즉시**(텔레그램이 밀어줌) + 시작·30분마다 이어받기 | — | DB(`_id` upsert). GitHub `telegram-posts` 는 비활성화, **cron-job.org 재기동 작업은 꺼야 함**(같은 세션 동시 접속 시 끊김) |
 | 네이버 블로그(인플루언서) | `rss.blog.naver.com/{blogId}.xml`(influencers.md 의 blog 항목, 블로그당 1요청, ETag 미제공) — 오라클 타이머 `news-naver-blog`(`scripts/run/naver-blog-poll.mts`) | **5분마다**, 새 글만(링크 기준 insert) | 오라클 | DB `naver_blog_posts`(제목·링크·발행시각만, 180일 TTL). 화면은 DB 만 읽음(비면 빈 목록) |
 | 유튜브(인플루언서) | 유튜브 공식 새 영상 알림(WebSub) → `/api/webhooks/youtube` → DB `youtube_videos`. 구독 갱신·최신 10개 동기화는 오라클 타이머 `news-youtube-subscribe`(매일 05:00, 구독 10일) | 새 영상 **즉시** | — | 화면은 DB 먼저, 비면 공식 API(15분 캐시). 피드 라우트 캐시 1분 |

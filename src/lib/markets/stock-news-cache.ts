@@ -80,17 +80,20 @@ export async function refreshStockNews(
 
   let companyName: string | null = null;
   let koName: string | null = null;
+  let jaName: string | null = null;
   try {
     const p = await adapter.getCompanyProfile(sym);
     // 일본 종목 profile.name 은 화면용 한글명(2026-10-09 한국어화)이다. 뉴스는 이 이름을 해외(영문) 검색어·판정 기준으로 쓰므로 그대로 넘기면
     // 해외 기사가 0건이 된다(2026-10-10 실측 7203: 한글명 0건, 영문명 47건) — 영문명(없으면 일본어 원문)을 넘기고 한글명은 국내 판정용으로 따로.
     companyName = market === "jp" ? (p?.identifiers?.["영문명"] ?? p?.nameLocal ?? p?.name ?? null) : (p?.name ?? null);
     koName = market === "jp" ? (p?.name ?? null) : null;
+    // 일본어 정식명 — 해외 칸의 일본어 기사(구글 뉴스 일본판) 검색·판정용(2026-10-10)
+    jaName = market === "jp" ? (p?.nameLocal ?? null) : null;
   } catch {
     // 이름 못 가져오면 심볼로 검색 — fetchStockNewsBySide 가 폴백
   }
 
-  const { domestic, overseas, debug } = await fetchStockNewsBySide(market, sym, companyName, { koName });
+  const { domestic, overseas, debug } = await fetchStockNewsBySide(market, sym, companyName, { koName, jaName });
   const payload: StockNewsPayload = {
     domestic,
     overseas,

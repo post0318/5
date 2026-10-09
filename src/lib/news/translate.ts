@@ -50,7 +50,18 @@ function cacheSet(key: string, ko: string, ok: boolean) {
   translationCache.set(key, { ko, ok, at: Date.now() });
 }
 
+/**
+ * 무료 번역 엔드포인트가 막히면 쉬는 시각(2026-10-10 — 일본 종목 29개를 연달아 열 때 Google 이 429 를 주는데 계속 두드려 한 묶음이 통째로
+ * 원문으로 남았다). Google 429 는 15분, MyMemory 하루 한도 소진은 1시간 쉰다. 쉬는 동안은 그 경로를 부르지 않고 다음 경로로 간다
+ * (둘 다 쉬면 원문 제목 그대로 — 실패는 캐시하지 않으므로 다음 갱신 때 다시 번역된다). 일본 재무 문구 번역(jp/ko.ts)의 쉬기와는 따로 둔다.
+ */
+let googlePausedUntil = 0;
+let myMemoryPausedUntil = 0;
+const GOOGLE_PAUSE_MS = 15 * 60_000;
+const MYMEMORY_PAUSE_MS = 60 * 60_000;
+
 async function viaGoogle(text: string, sl: string, tl = "ko"): Promise<string | null> {
+  if (Date.now() < googlePausedUntil) return null;
   try {
     const url =
       `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=` +
@@ -59,6 +70,11 @@ async function viaGoogle(text: string, sl: string, tl = "ko"): Promise<string | 
       headers: { "user-agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(REQ_TIMEOUT_MS),
     });
+    if (res.status === 429) {
+      googlePausedUntil = Date.now() + GOOGLE_PAUSE_MS;
+      console.warn("[translate] Google 번역 429 — 15분 쉼");
+      return null;
+    }
     if (!res.ok) return null;
     const data = (await res.json()) as unknown;
     if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
@@ -73,17 +89,28 @@ async function viaGoogle(text: string, sl: string, tl = "ko"): Promise<string | 
 }
 
 async function viaMyMemory(text: string, sl: string): Promise<string | null> {
+  if (Date.now() < myMemoryPausedUntil) return null;
   try {
     const res = await fetch(
       `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sl}|ko`,
       { signal: AbortSignal.timeout(REQ_TIMEOUT_MS) },
     );
+    if (res.status === 429) {
+      myMemoryPausedUntil = Date.now() + MYMEMORY_PAUSE_MS;
+      console.warn("[translate] MyMemory 429 — 1시간 쉼");
+      return null;
+    }
     if (!res.ok) return null;
     const data = (await res.json()) as {
       responseStatus?: number;
       responseData?: { translatedText?: string };
     };
     const out = data.responseData?.translatedText;
+    if (/ALL AVAILABLE FREE TRANSLATIONS/i.test(out ?? "")) {
+      myMemoryPausedUntil = Date.now() + MYMEMORY_PAUSE_MS;
+      console.warn("[translate] MyMemory 한도 — 1시간 쉼");
+      return null;
+    }
     if (!out || data.responseStatus !== 200) return null;
     if (/MYMEMORY WARNING|QUERY LENGTH LIMIT|INVALID/i.test(out)) return null;
     return out;

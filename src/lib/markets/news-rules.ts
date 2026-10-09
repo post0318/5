@@ -267,3 +267,177 @@ export function judgeOverseasTitle(title: string, names: string[], ticker?: stri
   if (list && new RegExp(h, "i").test(list[0])) return { keep: false, reason: "여러 종목 나열" };
   return { keep: true, reason: `제목에 ${hit}` };
 }
+
+// ── 일본 종목 일본어 기사(구글 뉴스 일본판) — 오너 결정 2026-10-10 "일본어 주 + 영문은 화이트리스트 매체만" ──────────────
+
+/**
+ * 일본 언론 관용 약칭 — 종목코드별(한국 KR_COMPANY_ALIASES 와 같은 성격, 브랜드·제품명은 넣지 않는다). 정식명·접미어 뗀 약칭으로 안 잡히는
+ * 표기만 둔다(2026-10-10 일본 대형주 29종목 7일 기사 실측 — 이것 없이 JT 2건·JR東日本 0건·ファストリ 0건이었다).
+ */
+export const JA_COMPANY_ALIASES: Record<string, string[]> = {
+  "2914": ["JT"],
+  "9020": ["JR東日本"],
+  "9022": ["JR東海"],
+  "8035": ["東エレク"],
+  "9983": ["ファストリ"],
+  "3382": ["セブン&アイ", "セブン&アイHD"],
+  "9984": ["ソフトバンクG", "SBG"],
+  "8306": ["三菱UFJ", "MUFG", "三菱UFJFG"],
+  "8316": ["三井住友FG", "SMFG"],
+  "8411": ["みずほFG", "みずほ"],
+  // "武田" 단독은 넣지 않는다 — 흔한 성(배우 武田鉄矢·축구 武田修宏·고교 야구 武田高 …)이라 처음 보는 표본에서 30건 중 27건이 오답이었다
+  "4502": ["武田薬", "タケダ"],
+  "7267": ["ホンダ"],
+  "8766": ["東京海上", "東京海上HD"],
+  "6098": ["リクルート", "リクルートHD"],
+  "6758": ["ソニーG", "ソニーグループ"],
+  "6501": ["日立"],
+  "7011": ["三菱重", "三菱重工"],
+  "1925": ["大和ハウス"],
+  "4661": ["OLC"],
+  "7203": ["トヨタ"],
+  "9432": ["NTT"],
+  "9433": ["KDDI"],
+  "6273": ["SMC"],
+  "4568": ["第一三共"],
+  "6954": ["ファナック"],
+  "6902": ["デンソー"],
+  "6367": ["ダイキン"],
+  "8058": ["三菱商"],
+  "2802": ["味の素"],
+  "6861": ["キーエンス"],
+  "7974": ["任天堂"],
+};
+
+/** 저품질·스팸·개인 영상(구글 뉴스 일본판 실측 2026-10-10 — 제목에 무관한 영문 꼬리가 붙은 자동 생성 글, 데이트레이딩 영상, X 글 모음) */
+export const JA_LOW_VALUE_PUBLISHERS = new Set(["Unisba Media", "BigGo ファイナンス", "BigGo Finance", "Howl.Link", "Howl.link", "YouTube", "note", "pando.life"]);
+
+/** 시황·나열·주가 자동 페이지 — 그 회사 얘기가 아니라 시장 전체 흐름·종목 목록(실측 표본: 日経平均寄与度·先物OP市況·ADR主要銘柄·寄り付き概況 …) */
+const JA_ROUNDUP_RE =
+  /日経平均|TOPIX|東証(?:後場|前場|一時|\d+時)|前場|後場|寄り付き|寄付き|大引け|引け後|寄与度|先物・?OP|ADR主要銘柄|オンライン証券動向|PTS|動いた株|出来た株|特別気配|ストップ高|ストップ安|値上がり率|値下がり率|上昇率|下落率|ランキング|注目(?:個別)?銘柄|\d+銘柄|銘柄一覧|主な銘柄|あす上がる|明日の株|本日の買い売り|買い売り優勢|デイトレ|株価・株式情報|掲示板|AIが解説|今の株価の理由|新興市場|市況|相場概況|株式市場概況|騰落率|公表仲値|変更報告書|大量保有|特例報告|保有割合/;
+
+/** 같은 기사의 사진·갤러리 페이지 — 원기사와 중복 */
+const JA_PHOTO_RE = /^[<＜]?画像\s*\d|【(?:写真・)?画像】|\d+枚目の写真|フォトギャラリー|写真特集|画像\s*\d+\s*\/\s*\d+|写真・画像\s*[(（]\d|^写真[:：]|^ギャラリー[:：]/;
+
+/** 할인·판촉·홍보(세일·쿠폰·캠페인·세미나 안내) — 회사 기사가 아니라 상품 판매·행사 홍보(2026-10-10 6758·8035 표본) */
+const JA_PROMO_RE = /セール|\d+\s*[%％]\s*(?:オフ|OFF)|割引|クーポン|キャンペーン|プレゼント|セミナー|ウェビナー|Amazon|協賛|評判・口コミ|口コミ・評判/;
+
+/** 약칭 바로 뒤에 붙어도 같은 회사로 보는 말("ソニー傘下"·"トヨタ株"·"ホンダ新型") — 그 밖의 한자·가타카나가 붙으면 다른 낱말("ソニー生命"·"日立建機"·"本田響矢") */
+const JA_ALIAS_SUFFIX_OK = /^(?:傘下|系|株|製|社長|会長|副社長|首脳|幹部|本社|子会社|側|決算|新型|新車|首位)/;
+
+/**
+ * 지역 판매회사(딜러) — "栃木トヨタ"·"熊本トヨタ自動車"·"東京ホンダ"는 그 지역 독립 판매회사라 상장사 기사가 아니다(2026-10-10 7203 표본).
+ * 이름 바로 앞에 도도부현명이 붙은 자리는 인정하지 않는다. 바로 뒤에 붙은 자리도("東京エレクトロン宮城" — 지역 자회사) 마찬가지.
+ */
+const JA_PREFECTURES =
+  "北海道|青森|岩手|宮城|秋田|山形|福島|茨城|栃木|群馬|埼玉|千葉|東京|神奈川|新潟|富山|石川|福井|山梨|長野|岐阜|静岡|愛知|三重|滋賀|京都|大阪|兵庫|奈良|和歌山|鳥取|島根|岡山|広島|山口|徳島|香川|愛媛|高知|福岡|佐賀|長崎|熊本|大分|宮崎|鹿児島|沖縄";
+const JA_PREFECTURE_PREFIX_RE = new RegExp(`(?:${JA_PREFECTURES})$`);
+const JA_PREFECTURE_AFTER_RE = new RegExp(`^(?:${JA_PREFECTURES})`);
+
+/**
+ * 같은 이름을 쓰는 일본 상장사 — 일본어 제목용(한국어 JP_SHARED_NAME_CONTEXT 와 같은 원칙). 일본 언론은 그룹을 "ソフトバンクG"·"SBG"로
+ * 쓰고 "ソフトバンク" 단독은 대개 통신(9434)이다 — 그래도 OpenAI·孫正義 기사에 "ソフトバンク" 단독 표기가 섞여(TradingKey 등) 문맥어로 가른다.
+ */
+export const JA_SHARED_NAME_CONTEXT: Record<string, Record<string, RegExp>> = {
+  ソフトバンク: {
+    "9984": /孫|ビジョン・?ファンド|SVF|OpenAI|オープンAI|アーム|\bArm\b|スターゲート|社債|調達|出資|投資|株価|急落|急騰|続落|続伸/,
+    "9434": /携帯|スマホ|料金|通信|回線|基地局|5G|6G|LINEヤフー|PayPay|ワイモバイル|IDC|クラウド|宮川/,
+  },
+};
+const JA_SPORTS_RE = /ホークス|野球|プロ野球|球団|監督|選手|リーグ|優勝|甲子園/;
+
+const KATAKANA = /[ァ-ヺー]/;
+const KANJI = /[㐀-䶿一-鿿々]/;
+const ASCII_WORD = /[A-Za-z0-9]/;
+
+/** 일본어 제목 정규화(NFKC — 전각 영숫자·기호를 반각으로) */
+export function jaNorm(s: string): string {
+  return s.normalize("NFKC");
+}
+
+/**
+ * 일본어 제목에서 이름 찾기 — 낱말 경계. 가타카나 이름은 앞뒤가 가타카나로 이어지면 다른 낱말("トヨタ紡織"은 한자라 strict 에서 거른다).
+ * strict(약칭): 뒤에 한자·가타카나가 바로 붙으면 다른 낱말이다 — "本田響矢"(배우)·"武田鉄矢"(배우)·"日立建機"(다른 회사)·"ソニー生命"(다른 회사).
+ * 영문·숫자 이름("JT"·"SMC"·"NTT")은 영문 낱말 경계.
+ */
+export function jaTitleHit(text: string, word: string, strict: boolean): boolean {
+  if (!word) return false;
+  if (/^[A-Za-z0-9&]+$/.test(word)) return new RegExp(`(^|[^A-Za-z0-9])${esc(word)}(?![A-Za-z0-9])`).test(text);
+  let from = 0;
+  for (;;) {
+    const i = text.indexOf(word, from);
+    if (i < 0) return false;
+    from = i + 1;
+    const before = text[i - 1] ?? "";
+    const after = text[i + word.length] ?? "";
+    if (KATAKANA.test(word[0]) && KATAKANA.test(before)) continue;
+    if (JA_PREFECTURE_PREFIX_RE.test(text.slice(Math.max(0, i - 4), i))) continue;
+    if (KATAKANA.test(word[word.length - 1]) && KATAKANA.test(after)) continue;
+    if (ASCII_WORD.test(word[word.length - 1]) && ASCII_WORD.test(after)) continue;
+    if (strict && (KANJI.test(after) || KATAKANA.test(after)) && !JA_ALIAS_SUFFIX_OK.test(text.slice(i + word.length))) continue;
+    if (JA_PREFECTURE_AFTER_RE.test(text.slice(i + word.length))) continue;
+    return true;
+  }
+}
+
+export interface JaNames {
+  symbol: string;
+  /** 정식명·관용 약칭(JA_COMPANY_ALIASES) — 뒤에 한자가 이어져도 인정("トヨタ自動車"·"日立製作所") */
+  names: string[];
+  /** 접미어를 뗀 약칭("トヨタ"·"ソニー") — strict 경계 */
+  aliases: string[];
+  /** 회사 자체 페이지 판정용(영문명 첫 낱말 소문자, 일본어 정식명) */
+  selfMarks: string[];
+}
+
+/** 일본어 기사 판정(제목 기준 — 국내·해외 규칙과 같은 원칙) */
+export function judgeJapaneseTitle(rawTitle: string, publisher: string, n: JaNames): Verdict {
+  const t = jaNorm(rawTitle);
+  const pub = jaNorm(publisher);
+  if (JA_LOW_VALUE_PUBLISHERS.has(publisher) || JA_LOW_VALUE_PUBLISHERS.has(pub)) return { keep: false, reason: "저품질·스팸 매체" };
+  const pubLower = pub.toLowerCase();
+  if (/公式|ニュースルーム|newsroom|IR情報/i.test(pub) || n.selfMarks.some((m) => m && (pub.includes(m) || pubLower.startsWith(m))))
+    return { keep: false, reason: "회사 자체 페이지" };
+  if (JA_PHOTO_RE.test(t)) return { keep: false, reason: "사진·갤러리 페이지(원기사와 중복)" };
+  if (JA_PROMO_RE.test(t)) return { keep: false, reason: "할인·판촉·홍보" };
+  let hit: string | null = n.names.find((w) => jaTitleHit(t, w, false)) ?? n.aliases.find((w) => jaTitleHit(t, w, true)) ?? null;
+  if (!hit && new RegExp(`[【\\[(（<]${esc(n.symbol)}[】\\])）>]|東証[:：]?${esc(n.symbol)}`).test(t)) hit = n.symbol;
+  // 같은 이름을 쓰는 다른 상장사("ソフトバンク" — 9984·9434): 그 이름으로만 걸렸으면 문맥어로 가른다
+  for (const [word, bySym] of Object.entries(JA_SHARED_NAME_CONTEXT)) {
+    const own = bySym[n.symbol];
+    if (!own) continue;
+    // 공유 이름 자체는 경계만 본다("ソフトバンク株価見通し" — 뒤에 한자가 붙어도 그 이름). "ソフトバンクG"처럼 더 긴 이름은 위에서 먼저 걸린다
+    const onlyShared = hit === word || (!hit && jaTitleHit(t, word, false));
+    if (!onlyShared) continue;
+    if (JA_SPORTS_RE.test(t)) return { keep: false, reason: `${word} — 스포츠 기사(구단)` };
+    const other = Object.entries(bySym).some(([s, re]) => s !== n.symbol && re.test(t));
+    if (own.test(t) && !other) {
+      hit = word;
+      break;
+    }
+    return { keep: false, reason: `${word} — 동명 종목, ${other ? "다른 종목 문맥어 있음" : "이 종목 문맥어 없음"}` };
+  }
+  if (!hit) return { keep: false, reason: "제목에 회사명 없음" };
+  if (JA_ROUNDUP_RE.test(t)) return { keep: false, reason: "시황·나열 기사" };
+  // 회사 야구부·프로야구 구단 기사("社会人野球…日立、本大会逃す")
+  if (/野球|甲子園|ホークス/.test(t)) return { keep: false, reason: "스포츠 기사(구단·야구부)" };
+  // "アドバンテ、ソフトバンクGなどが…"·"トヨタ、ホンダ、日産…" — 구분점 3개 이상 나열이고 회사가 맨 앞이 아님
+  const pos = t.indexOf(hit);
+  if ((t.match(/[、・,]/g) ?? []).length >= 3 && pos > 0) return { keep: false, reason: "여러 회사 나열" };
+  // "ＦＲＯＮＴＥＯ---反発、JTのR&D組織が…" — 피스코식 "종목명---" 머리는 그 종목 주가 기사(이 회사는 재료로만 나옴)
+  const fisco = t.match(/^(.{1,24}?)-{2,3}/);
+  if (fisco && !fisco[1].includes(hit)) return { keep: false, reason: "다른 종목 주가 기사" };
+  if (/など[がは]?(?:上昇|下落|高い|安い|値上がり|値下がり)/.test(t) && pos > 0) return { keep: false, reason: "여러 회사 나열" };
+  return { keep: true, reason: `제목에 ${hit}` };
+}
+
+/** 일본어 재게재 묶기용 제목 정규화 — 매체 꼬리표("(ロイター)"·"| 個別記事 | ニュース | トレーダーズ・ウェブ"·"(2026年10月9日掲載)"·"執筆: Fisco")를 떼고 기호·공백 제거 */
+export function normalizeJaTitleForDedup(title: string): string {
+  return jaNorm(title)
+    .replace(/\s*\|.*$/, "")
+    .replace(/執筆[:：]?.*$/, "")
+    .replace(/[(（][^)）]{1,30}(?:掲載|ロイター|フィスコ|トレーダーズ・ウェブ|Bloomberg|ニュース|新聞|オンライン|日本版)[^)）]{0,10}[)）]\s*$/, "")
+    .replace(/[-―—–=]\s*(?:FT|英紙|報道|ブルームバーグ|ロイター)\s*$/, "")
+    .replace(/[\s"'“”‘’.,·、。・「」『』【】()（）!?！？:：\-ー―—–=~〜]/g, "")
+    .toLowerCase();
+}
