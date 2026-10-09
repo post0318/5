@@ -6011,7 +6011,7 @@ async function verifyUs(sym) {
     const hasCol = (st, c) => (st?.periods ?? []).some((p) => p.label === (c === "LTM" ? "현재/LTM" : c));
     /** LTM 현금흐름 줄 — 구성 공시 본표·원본 판독(위 호출부 설명). 판정 못 하면 null(종전 검증불가) */
     // 자기주식 취득 — 우선주 상환(BE PaymentsForRepurchaseOfConvertiblePreferredStock)은 보통주 자기주식이 아니다
-    const CF_FAMILY = { "cf:재무활동 현금흐름:자기주식 취득": /^(?!.*Preferred).*(Repurchase|TreasuryStock|TreasuryShare|BuyBack|Buyback|AcquireOrRedeemEntitysShares|OwnShares)/i, "cf:영업활동 현금흐름:주식보상비용": /ShareBased|StockBased|StockCompensation|ShareCompensation|EquityCompensation/i,
+    const CF_FAMILY = { "cf:재무활동 현금흐름:자기주식 취득": /^(?!.*(Preferred|Debt|Notes|NoncontrollingInterest|MinorityInterest)).*(Repurchase|TreasuryStock|TreasuryShare|BuyBack|Buyback|AcquireOrRedeemEntitysShares|OwnShares)/i, "cf:영업활동 현금흐름:주식보상비용": /ShareBased|StockBased|StockCompensation|ShareCompensation|EquityCompensation/i,
       // 배당금 지급 — 받은 배당(SPOT 투자활동 DividendsReceivedClassifiedAsInvestingActivities)·비지배지분 분배는 제외
       "cf:재무활동 현금흐름:배당금 지급": /^(?!.*(Receiv|MinorityInterest|NoncontrollingInterest)).*Dividend/i, "cf:투자활동 현금흐름:유형자산 취득": /PropertyPlantAndEquipment|ProductiveAssets|CapitalExpenditure|CapitalImprovements|FlightEquipment/i,
       // 차입 총액 줄(순증감 ProceedsFromRepayments… · 리스는 제외)
@@ -6077,8 +6077,12 @@ async function verifyUs(sym) {
       let cur = await comp(curF, "Q");
       // 앱 0 채움 규칙(CLAUDE.md 2026-10-02 승인 — 투자·재무 줄이 당기 10-Q 본표에 없고 전년 동기가 0 이면 당기 누적 0) 재구현: 같은 조건을 원자료로 확인하면
       // 당기 누적 0 으로 식을 계산한다(규칙 재구현 — 메모 "당기 누적"으로 공통모드)
-      if (/^cf:(투자|재무)활동/.test(id) && cur.absent && !cur.sib.length && prior.v === 0) cur = { v: 0, how: `${cur.how} → 앱 0 채움 규칙(전년 동기 0) 재구현: 0` };
-      const parts = [fy, cur, prior];
+      let prior0 = prior;
+      if (/^cf:(투자|재무)활동/.test(id) && cur.absent && !cur.sib.length && (prior.v === 0 || (prior.absent && !prior.sib.length))) {
+        cur = { v: 0, how: `${cur.how} → 앱 0 채움 규칙(전년 동기 0 또는 없음) 재구현: 0` };
+        if (prior.absent) prior0 = { v: 0, how: `${prior.how} → 전년 동기도 줄 없음 = 0` };
+      }
+      const parts = [fy, cur, prior0];
       if (parts.some((p) => p.err)) return null;
       const how = parts.map((p) => p.how).join(" · ");
       if (parts.every((p) => p.v != null)) {
@@ -6100,7 +6104,7 @@ async function verifyUs(sym) {
           if (q3.val !== cumQ.val - cumP.val) adj.push({ end: q.end, d: q3.val - (cumQ.val - cumP.val), how: `${q.end} 3개월 ${q3.val} vs 누적 차 ${cumQ.val} − ${cumP.val}` });
         }
         const a0 = adj.reduce((t, a) => t + a.d, 0);
-        return vsSource(app, sg * (fy.v + cur.v - prior.v + a0), EXACT, `사업연도 + 당기 누적 − 전년 동기(구성 공시 원본·본표 판독): ${how}${adj.length ? ` · 분기 합 규칙(3개월 공시값 우선) 조정 ${a0}: ${adj.map((a) => a.how).join(" · ")}` : ""}${sg < 0 ? " × −1" : ""}`);
+        return vsSource(app, sg * (fy.v + cur.v - prior0.v + a0), EXACT, `사업연도 + 당기 누적 − 전년 동기(구성 공시 원본·본표 판독): ${how}${adj.length ? ` · 분기 합 규칙(3개월 공시값 우선) 조정 ${a0}: ${adj.map((a) => a.how).join(" · ")}` : ""}${sg < 0 ? " × −1" : ""}`);
       }
       const absent = parts.filter((p) => p.absent);
       if (absent.some((p) => p.sib.length)) return { status: NA, note: `LTM 구성 공시 본표에 줄 없음이지만 같은 성격의 다른 줄 있음 — 줄 없음으로 판정 못 함 · ${how}`, app, src: null };
