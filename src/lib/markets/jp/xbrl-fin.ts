@@ -16,9 +16,11 @@ import { edinetDocZip, edinetTaxonomyText, readEdinetJson, writeEdinetJson } fro
  * 결과는 디스크(<EDINET_CACHE_DIR>/jp-fin/v<판>/<docID>.json)에 저장 — 서류 번호는 바뀌지 않는다. 판독 규칙이 바뀌면 JP_PARSE_VERSION 을 올린다.
  * 판 2(2026-10-08): 하이라이트·재무분석용으로 경영지표 주당 지표(EPS·BPS·DPS)·발행주식·자기주식·리스부채 주석(parseExtras)을 함께 읽는다.
  * 판 3(2026-10-09): 리스부채 주석 — 표시 문장("リース負債は…に含めて表示")·IAS 7 재무활동 부채 변동표 행·전기/당기 두 칸 표(leaseNotes).
+ * 판 4(2026-10-09): 현금흐름표의 시점(instant) 개념에 기초·기말 이름표가 없으면 기말 잔액(第一三共 CashAndCashEquivalentsIfDifferentFromBSBalanceIFRS
+ *   "現金及び現金同等物の期末残高" — 기간 값으로 찾아 줄이 통째로 빠졌다).
  */
 
-export const JP_PARSE_VERSION = 3;
+export const JP_PARSE_VERSION = 4;
 
 export type JpStmtKind = "bs" | "is" | "ci" | "cf";
 /** 값 단위 — m 금액(엔), ps 주당(엔/주), sh 주식수, p 비율 */
@@ -424,6 +426,16 @@ export async function parseJpDocZip(docID: string, zip: Uint8Array): Promise<JpD
     if (o[pk] != null && o[pk] !== v) warn.push(`같은 문맥 다른 값 ${k} ${pk}: ${o[pk]} · ${v}`);
     o[pk] ??= v;
     units[k] ??= uk;
+  }
+
+  // 현금흐름표 시점 개념(기초·기말 이름표 없음) = 기말 잔액 — 사실이 시점 열쇠뿐인 줄
+  {
+    const st = stmts.cf;
+    for (const l of st?.lines ?? []) {
+      if (l.ab || l.ps) continue;
+      const pks = Object.keys(facts[l.k] ?? {});
+      if (pks.length && pks.every((pk) => pk.startsWith("I"))) l.ps = "e";
+    }
   }
 
   const ex = parseExtras(inst, dei("FilerNameInJapaneseDEI"));
