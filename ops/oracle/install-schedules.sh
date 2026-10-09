@@ -60,6 +60,8 @@ LIST
 # ① 일본 현지 리서치 — FISCO 企業調査レポート 하루 1회(2026-10-10 오너 승인, 메타·PDF 링크만). 목록 한 장 1요청.
 #   일본 장 마감 뒤(18:40 KST = 같은 시각 JST) — 그날 공개분까지 받는다. 수집기 기본 범위 3일.
 unit research-fisco-research "리서치(일본): fisco-research" "/opt/macro/ops/run-script.sh collect-fisco-research.mjs" "*-*-* 18:40:00\n"
+#   Shared Research — 약관 위험 예외(오너 결정 2026-10-10, CLAUDE.md 예외 7건). 공개 목록 페이지 1요청, 내부 API 안 씀.
+unit research-sharedresearch-research "리서치(일본): sharedresearch-research" "/opt/macro/ops/run-script.sh collect-sharedresearch-research.mjs" "*-*-* 18:45:00\n"
 
 # ② 거시경제 — Fed 금리 확률 일별 스냅샷(06:00)
 unit macro-fedwatch-snapshot "거시경제: Fed 금리 확률 일별 스냅샷(Kalshi)" "/opt/macro/ops/call-cron.sh /api/cron/fedwatch 120" "*-*-* 06:00:00\n"
