@@ -91,6 +91,20 @@ const FIN_PROVISION_LINE: Line = {
 };
 
 /** 투자·재무활동 줄의 태그 묶음 — 분기 본표에서 빠진 줄(당기·전년 동기 모두 0)을 0 으로 채울 대상(edgar-cf-wc.ts) */
+/**
+ * 투자자산 처분·취득 줄 — 본표에 회사 고유 태그 줄이 섞인 공시는 그 공시의 같은 성격 본표 줄 전부(표준 + 회사 고유) 합을 합성 개념으로 넣는다
+ * (edgar-cf-wc.ts, 2026-10-09 NVDA 2027 회계연도 10-Q: 지분증권 취득·처분이 nvda: 태그라 표준 태그만 더하면 LTM 이 부분값·"기타 투자활동"이 떠안았다).
+ * 합성 개념이 있는 기간은 표준 구성 개념을 대신한다(SUPERSEDES)
+ */
+export const CF_INV_FAMILIES: { derived: string; custom: RegExp; label: string }[] = [
+  { derived: "InvestmentProceedsFaceDerived", label: "투자자산 처분·만기", custom: /^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))\w*(Sale|Maturit|Redemption|Collection)\w*(Securities|Investments?)$/ },
+  { derived: "InvestmentPurchasesFaceDerived", label: "투자자산 취득", custom: /^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)$/ },
+];
+/** 그 줄의 표준 구성 개념(합성 개념 제외) */
+export function cfInvStdConcepts(label: string): string[] {
+  const l = getBlocks(false)[1].lines.find((x) => x.label === label);
+  return (l?.combine ?? []).map(([c]) => c).filter((c) => !CF_INV_FAMILIES.some((f) => f.derived === c));
+}
 export function cfZeroFillGroups(): string[][] {
   return getBlocks(false).slice(1).flatMap((b) => b.lines.filter((l) => l.concepts && !l.plug).map((l) => l.concepts as string[]));
 }
@@ -160,6 +174,7 @@ function getBlocks(isFin: boolean): Block[] {
           ["ProceedsFromSaleAndMaturityOfAvailableForSaleSecurities", false],
           ["ProceedsFromSaleAndMaturityOfOtherInvestments", false],
           ["ProceedsFromSaleOfEquitySecuritiesFvNi", false],
+          ["InvestmentProceedsFaceDerived", false], // 본표 회사 고유 줄 포함 합(edgar-cf-wc.ts — NVDA)
         ],
       },
       {
@@ -173,6 +188,7 @@ function getBlocks(isFin: boolean): Block[] {
           ["PaymentsToAcquireLongtermInvestments", false],
           ["PaymentsToAcquireMarketableSecurities", false],
           ["PaymentsToAcquireEquitySecuritiesFvNi", false],
+          ["InvestmentPurchasesFaceDerived", false], // 본표 회사 고유 줄 포함 합(edgar-cf-wc.ts — NVDA)
         ],
       },
       { label: "사업 인수 (순현금)", concepts: ["PaymentsToAcquireBusinessesNetOfCashAcquired"], depth: 1, negate: true },
@@ -369,6 +385,8 @@ export function buildUsCashFlow(
   // 합계 태그 → 그 구성 태그(같은 기간에 합계가 있으면 구성은 더하지 않는다 — 이중 합산 방지, NVDA 는 셋 다 공시, 2026-10-02)
   const SUPERSEDES: Record<string, string[]> = {
     ProceedsFromSaleAndMaturityOfAvailableForSaleSecurities: ["ProceedsFromSaleOfAvailableForSaleSecuritiesDebt", "ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities"],
+    // 본표 줄 전부 합(회사 고유 줄 포함) — 그 공시·기간의 표준 구성 개념을 모두 대신한다
+    ...Object.fromEntries(CF_INV_FAMILIES.map((f) => [f.derived, cfInvStdConcepts(f.label)])),
   };
   const combineVals = (parts: [string, boolean][]): Record<string, number | null> => {
     const out: Record<string, number | null> = {};
@@ -409,7 +427,7 @@ export function buildUsCashFlow(
           for (const c of comps) {
             const e = has(c);
             const neg = parts.find(([pc]) => pc === c)?.[1];
-            if (e && neg != null) x.sum -= neg ? -e.val : e.val;
+            if (e && neg != null) { x.sum -= neg ? -e.val : e.val; x.cs.delete(c); }
           }
         }
       return [...byPeriod.values()].map((x) => ({ ...x.e, val: x.sum, cs: x.cs }));
