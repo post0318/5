@@ -109,7 +109,7 @@ export function formatPercent(
 
 /**
  * 시가총액 등 큰 금액을 단위를 명시해 표기.
- *  kr: "1,493조 7,240억원"  jp: "1,493兆 7,240億円"  us: "$1.49T"
+ *  kr: "1,493조 7,240억원"  jp: "1,493조 7,240억엔"  us: "$1.49T"
  */
 export function formatMoneyWithUnits(
   value: number | null | undefined,
@@ -127,9 +127,9 @@ export function formatMoneyWithUnits(
     return `${neg}$${formatNumber(abs, 0)}`;
   }
   const [big, small, cur] =
-    market === "jp" ? [1e12, 1e8, "円"] : [1e12, 1e8, "원"];
-  const bigUnit = market === "jp" ? "兆" : "조";
-  const smallUnit = market === "jp" ? "億" : "억";
+    market === "jp" ? [1e12, 1e8, "엔"] : [1e12, 1e8, "원"]; // 일본도 한국어 단위(오너 지시 2026-10-09)
+  const bigUnit = "조";
+  const smallUnit = "억";
   const b = Math.floor(abs / big);
   const s = Math.floor((abs % big) / small);
   if (b > 0) {

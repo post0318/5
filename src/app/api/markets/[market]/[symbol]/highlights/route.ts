@@ -29,6 +29,7 @@ import { secBasisBars } from "@/lib/markets/us/edgar-shares";
 import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
 import { dartAdrHighlights, dartAdrOf } from "@/lib/markets/us/dart-adr";
 import { getJpHighlights } from "@/lib/markets/jp/jp-views";
+import { koreanizeNotesDeep } from "@/lib/markets/jp/ko";
 
 export const revalidate = 3600;
 export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
@@ -52,7 +53,8 @@ export async function GET(
 
     // 일본 — EDINET 본표 조립 + Yahoo 시세(jp-ev.ts 단일 기준). 시세·서류 판독 경고가 있으면 캐시하지 않는다
     if (market === "jp") {
-      const highlights = await getJpHighlights(sym, yahoo);
+      // 주석 속 원문 용어(有利子負債 등)는 「한국어(原文)」로 — 화면은 한국어(오너 지시 2026-10-09)
+      const highlights = await koreanizeNotesDeep(await getJpHighlights(sym, yahoo));
       const warned = highlights.notes.some((n) => n.startsWith("⚠"));
       return ok({ highlights }, { headers: { "Cache-Control": warned ? "no-store" : "public, s-maxage=3600, stale-while-revalidate=86400" } });
     }

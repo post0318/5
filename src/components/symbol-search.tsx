@@ -32,7 +32,7 @@ export function formatSymbolLabel(
 const PLACEHOLDER: Record<MarketId, string> = {
   kr: "종목명 또는 코드 (예: 삼성전자, 005930)",
   us: "Name or ticker (e.g. Apple, AAPL)",
-  jp: "銘柄名 또는 코드 (예: Toyota, 7203)",
+  jp: "종목명 또는 코드 (예: 도요타, Toyota, 7203)",
 };
 
 export function SymbolSearch({

@@ -213,7 +213,7 @@ export function buildJpAnalysis(f: JpFund, v: JpVal, symbol: string, asOfLtm: st
     symbol,
     market: "jp",
     periodType: "annual",
-    unit: "円",
+    unit: "엔",
     currency: "JPY",
     consolidation: f.cons ? "consolidated" : "separate",
     periods: f.cols.map((c, i) => ({ label: labels[i], fiscalYear: c.kind === "ltm" ? c.fy + 1 : c.fy, fiscalQuarter: null, endDate: c.kind === "ltm" ? (asOfLtm ?? c.end) : c.end })),

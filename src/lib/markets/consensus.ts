@@ -625,7 +625,7 @@ export async function getConsensusData(
 
   return {
     currency: quote?.currency ?? "USD",
-    unit: annual.unit || (market === "kr" ? "원" : market === "jp" ? "円" : "USD"),
+    unit: annual.unit || (market === "kr" ? "원" : market === "jp" ? "엔" : "USD"),
     fiscalMonth,
     price,
     targetPrice: estimates?.targetMeanPrice ?? null,

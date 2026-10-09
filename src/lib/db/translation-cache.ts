@@ -73,3 +73,20 @@ export async function setCachedTranslation(
     // 캐시 저장 실패는 무시 — 다음 요청에서 다시 번역 시도될 뿐 기능 자체는 안전.
   }
 }
+
+/** 여러 문구 한 번에(일본 계정명 등 — 문구마다 왕복하지 않게). 원문 → 번역 */
+export async function getCachedTranslations(sl: "en" | "ja", texts: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!texts.length) return out;
+  try {
+    const col = await translationCacheCol();
+    const byId = new Map(texts.map((t) => [cacheKey(sl, t), t]));
+    for (const d of await col.find({ _id: { $in: [...byId.keys()] } }).toArray()) {
+      const t = byId.get(d._id);
+      if (t && d.ok) out.set(t, d.ko);
+    }
+  } catch {
+    // DB 장애 — 번역은 계속 시도
+  }
+  return out;
+}

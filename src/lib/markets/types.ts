@@ -42,8 +42,10 @@ export interface FinancialPeriod {
 
 /** 재무제표 한 행(한 계정). 원본 표현 그대로 유지 (prd.md §6). */
 export interface FinancialLineItem {
-  /** 원본 계정과목명 (재가공 금지) */
+  /** 원본 계정과목명 (재가공 금지 — 일본은 한국어로 옮긴 이름, 원문은 accountNameLocal) */
   accountName: string;
+  /** 원문 계정과목명(일본 — 한국어로 옮기기 전 표기, 화면 툴팁) */
+  accountNameLocal?: string;
   /** 원본 계정 코드/ID (있으면) */
   accountId?: string;
   /** 들여쓰기 depth (0=최상위) */
@@ -115,8 +117,10 @@ export interface Filing {
   /** 공시일 (YYYY-MM-DD) */
   date: string;
   title: string;
-  /** 공시 유형 (10-K, 사업보고서, 有価証券報告書 등) */
+  /** 공시 유형 (10-K, 사업보고서, 유가증권보고서 등) */
   type: string;
+  /** 원문 제목(일본 — 한국어로 옮기기 전, 화면 툴팁) */
+  titleLocal?: string;
   /** 원문 링크 (딥링크) */
   url: string;
   source: string;

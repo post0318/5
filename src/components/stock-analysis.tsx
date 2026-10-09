@@ -598,7 +598,10 @@ export function StockAnalysis({
 
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold">
+              <h1
+                className="flex flex-wrap items-center gap-2 text-xl font-semibold"
+                title={market === "jp" && ov.profile?.nameLocal ? `원문: ${ov.profile.nameLocal}` : undefined}
+              >
                 {ov.profile?.name ?? ov.symbol}
                 {ov.highDividend && (
                   <Badge variant="secondary" className="text-xs font-medium">
@@ -1083,6 +1086,7 @@ export function StockAnalysis({
                         target="_blank"
                         rel="noreferrer"
                         className="hover:text-primary truncate"
+                        title={f.titleLocal ? `원문: ${f.titleLocal}` : undefined}
                       >
                         {f.title}
                       </a>

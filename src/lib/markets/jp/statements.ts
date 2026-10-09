@@ -697,7 +697,7 @@ async function buildJpFinModel(symbol: string): Promise<JpFinModel> {
   const stored = await getJpFinStored(id, JP_FIN_ENGINE, picked.sig);
   if (stored) return stored;
   const { annual, half, otherStd, std, cons, warn } = await jpLoadSources(picked);
-  const head = `EDINET XBRL 본표(${std ?? "기준 미상"} · ${cons ? "連結" : "個別"}) — 회사 표시 구조·계정명·부호 그대로`;
+  const head = `EDINET XBRL 본표(${std ?? "기준 미상"} · ${cons ? "연결" : "개별"}) — 회사 표시 구조·부호 그대로, 계정명은 한국어(원문은 툴팁)`;
   const dict: Dict = { L: [], at: new Map() };
   const model: JpFinModel = {
     ev: JP_FIN_ENGINE,

@@ -340,6 +340,7 @@ export function FinancialsTable({
                                 : "bg-background",
                         )}
                         style={{ paddingLeft: `${0.75 + item.depth * 0.85}rem` }}
+                        title={item.accountNameLocal ? `원문: ${item.accountNameLocal}` : undefined}
                       >
                         {item.accountName}
                       </td>

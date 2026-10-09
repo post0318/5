@@ -1,3 +1,4 @@
+import { koreanizeNotesDeep } from "@/lib/markets/jp/ko";
 import { jsonError, ok } from "@/lib/api";
 import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
@@ -69,7 +70,7 @@ export async function GET(
     }
 
     return ok(
-      { ttm, dividend },
+      { ttm: market === "jp" && ttm ? await koreanizeNotesDeep(ttm) : ttm, dividend },
       {
         headers: {
           "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400",

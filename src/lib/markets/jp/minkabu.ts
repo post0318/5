@@ -21,30 +21,46 @@ const UA =
 const CACHE_SEC = 12 * 60 * 60;
 const FAIL_MEMO_MS = 10 * 60 * 1000;
 
-export type MinkabuRating = "強気買い" | "買い" | "中立" | "売り" | "強気売り";
-const RATINGS: MinkabuRating[] = ["強気買い", "買い", "中立", "売り", "強気売り"];
+/** 레이팅 — 원문(強気買い·買い·中立·売り·強気売り)을 판독 단계에서 한국어로 바꿔 내보낸다(오너 지시 2026-10-09 — 일본 종목 화면은 한국어) */
+export type MinkabuRating = "적극 매수" | "매수" | "중립" | "매도" | "적극 매도";
+const RATINGS: MinkabuRating[] = ["적극 매수", "매수", "중립", "매도", "적극 매도"];
+const RATING_JA: Record<string, MinkabuRating> = {
+  強気買い: "적극 매수",
+  買い: "매수",
+  中立: "중립",
+  売り: "매도",
+  強気売り: "적극 매도",
+};
+/** 業績予想 행 원문 → 한국어 */
+const EST_ROW_KO: Record<string, string> = { 売上高: "매출액", 当期利益: "순이익", "1株当り利益": "EPS" };
+/** 변화표·業績予想 열 원문 → 한국어 */
+const COL_KO: Record<string, string> = { "3ヶ月前": "3개월 전", "1ヶ月前": "1개월 전", "1週間前": "1주 전", 最新: "최신", 会社予想: "회사 예상" };
 
 export interface MinkabuHistoryPoint {
   key: "3m" | "1m" | "1w" | "latest";
-  /** 원문 열 이름(3ヶ月前·1ヶ月前·1週間前·最新) */
+  /** 열 이름(한국어 — 3개월 전·1개월 전·1주 전·최신) */
   label: string;
+  /** 원문 열 이름(3ヶ月前·1ヶ月前·1週間前·最新) */
+  labelLocal: string;
   rating: MinkabuRating | null;
   targetPrice: number | null;
 }
 
 export interface MinkabuEstimateRow {
-  /** 원문 계정명(売上高·当期利益·1株当り利益) */
+  /** 계정명(한국어 — 매출액·순이익·EPS) */
   name: string;
-  /** 百万円 또는 円(1株当り) */
-  unit: "百万円" | "円";
+  /** 원문 계정명(売上高·当期利益·1株当り利益) */
+  nameLocal: string;
+  /** 백만엔 또는 엔(EPS) */
+  unit: "백만엔" | "엔";
   /** columns 와 같은 순서 — "---" 는 null */
   values: (number | null)[];
 }
 
 export interface MinkabuEstimates {
-  /** "2027年の業績予想" 의 연도 표기(本決算이 있는 해) */
+  /** "2027年の業績予想" 의 연도 표기(本決算이 있는 해) — 한국어("2027년") */
   title: string;
-  columns: { label: string; date: string | null; source: "analyst" | "company" }[];
+  columns: { label: string; labelLocal: string; date: string | null; source: "analyst" | "company" }[];
   rows: MinkabuEstimateRow[];
 }
 
@@ -75,7 +91,7 @@ export function minkabuUrl(symbol: string): string {
   return `https://minkabu.jp/stock/${encodeURIComponent(symbol)}/analyst_consensus`;
 }
 
-const SOURCE = "みんかぶ(minkabu.jp)";
+const SOURCE = "민카부(minkabu.jp)";
 
 // ── 파서 ──
 
@@ -98,7 +114,8 @@ function num(s: string): number | null {
   return Number.isFinite(v) ? v : NaN;
 }
 
-const isRating = (s: string): s is MinkabuRating => (RATINGS as string[]).includes(s);
+/** 원문 레이팅 → 한국어(원문이 아니면 null) */
+const rating = (s: string): MinkabuRating | null => RATING_JA[s] ?? null;
 
 const ymd = (s: string | undefined) => (s ? s.replace(/\//g, "-") : null);
 
@@ -135,7 +152,8 @@ export function parseMinkabu(html: string, symbol: string): MinkabuConsensus {
   const head = html.slice(h, h + 3000);
   const asOf = ymd(head.match(/\((\d{4}\/\d{2}\/\d{2})\)/)?.[1]);
   const ratingRaw = text(head.match(/md_picksPlate[^"]*size_l[^"]*"[^>]*>([\s\S]*?)<\/a>/)?.[1] ?? "");
-  if (!isRating(ratingRaw)) throw new Error(`레이팅 판독 실패("${ratingRaw}")`);
+  const ratingKo = rating(ratingRaw);
+  if (!ratingKo) throw new Error(`레이팅 판독 실패("${ratingRaw}")`);
   const target = num(head.match(/<span class="fsxxl">([\s\S]*?)<\/span>/)?.[1] ?? "");
   if (target == null || Number.isNaN(target) || target <= 0) throw new Error("목표주가 판독 실패");
 
@@ -146,10 +164,10 @@ export function parseMinkabu(html: string, symbol: string): MinkabuConsensus {
   const heads = cells(btRows[0] ?? "", "th").map(text);
   const countRow = btRows.find((r) => /<div class="bggl">/.test(r));
   const counts = countRow ? cells(countRow, "td").map(num) : [];
-  if (heads.length !== 5 || counts.length !== 5 || !heads.every(isRating) || counts.some((c) => c == null || Number.isNaN(c)))
+  if (heads.length !== 5 || counts.length !== 5 || !heads.every((h) => rating(h)) || counts.some((c) => c == null || Number.isNaN(c)))
     throw new Error(`예상 내역 판독 실패(머리 ${heads.join("/")} · 값 ${counts.join("/")})`);
   const breakdown = Object.fromEntries(RATINGS.map((r) => [r, 0])) as Record<MinkabuRating, number>;
-  heads.forEach((r, i) => (breakdown[r as MinkabuRating] = counts[i] as number));
+  heads.forEach((r, i) => (breakdown[rating(r) as MinkabuRating] = counts[i] as number));
   const analystCount = RATINGS.reduce((s, r) => s + breakdown[r], 0);
   if (analystCount <= 0) throw new Error("애널리스트 수 0");
 
@@ -169,8 +187,9 @@ export function parseMinkabu(html: string, symbol: string): MinkabuConsensus {
       const p = pv[i];
       history.push({
         key,
-        label,
-        rating: rv[i] && isRating(rv[i]) ? (rv[i] as MinkabuRating) : null,
+        label: COL_KO[label] ?? label,
+        labelLocal: label,
+        rating: rv[i] ? rating(rv[i]) : null,
         targetPrice: p == null || Number.isNaN(p) ? null : p,
       });
     });
@@ -184,23 +203,27 @@ export function parseMinkabu(html: string, symbol: string): MinkabuConsensus {
     const rs = rowsOf(et);
     const dateRow = rs.find((r) => /3ヶ月前/.test(r) && /\(\d{4}\/\d{2}\/\d{2}\)/.test(r));
     const colCells = dateRow ? cells(dateRow, "th") : [];
-    const columns = colCells.map((c, i) => ({
-      label: text(c.replace(/<div[\s\S]*?<\/div>/, "")),
+    const columns = colCells.map((c, i) => {
+      const label = text(c.replace(/<div[\s\S]*?<\/div>/, ""));
+      return {
+      label: COL_KO[label] ?? label,
+      labelLocal: label,
       date: ymd(c.match(/\((\d{4}\/\d{2}\/\d{2})\)/)?.[1]),
       source: (i === colCells.length - 1 ? "company" : "analyst") as "analyst" | "company",
-    }));
+      };
+    });
     const rows: MinkabuEstimateRow[] = [];
     for (const r of rs) {
       const th = cells(r, "th").map(text);
       if (th.length !== 1 || !/^(売上高|当期利益|1株当り利益)$/.test(th[0])) continue;
       const vals = cells(r, "td").map(num);
       if (vals.length !== columns.length || vals.some((v) => Number.isNaN(v))) continue;
-      rows.push({ name: th[0], unit: th[0] === "1株当り利益" ? "円" : "百万円", values: vals as (number | null)[] });
+      rows.push({ name: EST_ROW_KO[th[0]], nameLocal: th[0], unit: th[0] === "1株当り利益" ? "엔" : "백만엔", values: vals as (number | null)[] });
     }
-    if (columns.length === 5 && rows.length) estimates = { title: titleM[1], columns, rows };
+    if (columns.length === 5 && rows.length) estimates = { title: titleM[1].replace("年", "년"), columns, rows };
   }
 
-  return { symbol, url: minkabuUrl(symbol), asOf, rating: ratingRaw, targetPrice: target, breakdown, analystCount, history, estimates };
+  return { symbol, url: minkabuUrl(symbol), asOf, rating: ratingKo, targetPrice: target, breakdown, analystCount, history, estimates };
 }
 
 // ── 조회(캐시) ──

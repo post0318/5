@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { jsonError, ok } from "@/lib/api";
 import { isMarketId } from "@/lib/markets/types";
+import { koreanizeNotesDeep } from "@/lib/markets/jp/ko";
 import {
   freshMs,
   readStockNews,
@@ -53,7 +54,8 @@ export async function GET(
     return ok(
       {
         domestic: payload.domestic,
-        overseas: payload.overseas,
+        // 일본 종목 — 해외 기사 매체명(朝日新聞 등)을 한국어(原文)로(제목은 수집 때 이미 번역)
+        overseas: market === "jp" ? await koreanizeNotesDeep(payload.overseas, new Set(["publisher"])) : payload.overseas,
         // Vercel 대시보드 로그 확인이 번거로워 관련성 판정 방식·원본 후보 수를
         // 응답에 실어 curl로 바로 진단(오너 확인, 2026-09) — UI는 무시함.
         _debug: {

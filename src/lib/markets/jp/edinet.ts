@@ -27,6 +27,7 @@ import {
   type TtmFlows,
 } from "../types";
 import { resolveEdinetByTicker } from "./edinetcode";
+import { jaDict, jaInlineMany, jaToKoMany } from "./ko";
 import { fetchJQuantsMaster } from "./jquants";
 
 const HINT =
@@ -87,25 +88,32 @@ export const jpEdinetAdapter: MarketAdapter = {
       return null;
     });
 
+    // 화면 표시는 한국어(오너 지시 2026-10-09) — 업종·시장구분·17업종은 고정 목록 사전, 회사명·주소는 사전 → 무료 번역(캐시), 원문은 nameLocal
+    const nameJa = master?.name || e.name;
+    const nameEn = master?.nameEn || e.nameEng;
+    const tr = await jaToKoMany([nameJa, e.address]);
     const identifiers: Record<string, string> = {
-      EDINETコード: e.edinetCode,
-      証券コード: e.secCode,
+      "EDINET 코드": e.edinetCode,
+      "증권 코드": e.secCode,
       ticker: e.ticker,
     };
-    if (master?.scaleCategory) identifiers["規模区分"] = master.scaleCategory;
-    if (master?.marketName) identifiers["市場区分"] = master.marketName;
+    if (nameEn) identifiers["영문명"] = nameEn;
+    if (master?.scaleCategory) identifiers["규모 구분"] = jaDict(master.scaleCategory) ?? master.scaleCategory;
+    if (master?.marketName) identifiers["시장 구분"] = jaDict(master.marketName) ?? master.marketName;
+    const industryJa = master?.sector33 || e.industry;
+    const fy = e.fiscalMonthDay.normalize("NFKC").replace(/(\d+)月(\d+)日/, "$1월 $2일").replace(/(\d+)月末日/, "$1월 말일");
 
     return {
       symbol,
       market: "jp",
-      name: master?.nameEn || e.nameEng || e.name,
-      nameLocal: master?.name || e.name,
+      name: tr.get(nameJa) ?? nameEn ?? nameJa,
+      nameLocal: nameJa,
       identifiers,
-      industry: master?.sector33 || e.industry,
-      address: e.address,
+      industry: industryJa ? (jaDict(industryJa) ?? industryJa) : undefined,
+      address: tr.get(e.address) ?? e.address,
       description:
-        `決算期: ${e.fiscalMonthDay}${e.consolidated ? " · 連結" : ""}` +
-        (master?.sector17 ? ` · ${master.sector17}` : ""),
+        `결산기: ${fy}${e.consolidated ? " · 연결" : ""}` +
+        (master?.sector17 ? ` · ${jaDict(master.sector17) ?? master.sector17}` : ""),
       source: master ? "EDINET + J-Quants" : "EDINET (Edinetcode)",
       sourceUrl: filingsDeepLink("jp", symbol)?.url,
     };
@@ -144,17 +152,25 @@ export const jpEdinetAdapter: MarketAdapter = {
       .flatMap((s) => (s.status === "fulfilled" ? s.value : []))
       .filter((r: EdinetDoc) => r.edinetCode === e.edinetCode && r.withdrawalStatus !== "1" && r.submitDateTime)
       .sort((a, b) => b.submitDateTime!.localeCompare(a.submitDateTime!));
-    return docs.slice(0, limit).map((r) => ({
-      id: r.docID,
-      symbol,
-      market: "jp" as const,
-      date: r.submitDateTime!.slice(0, 10),
-      title: r.docDescription?.trim() || DOC_TYPE_LABEL[r.docTypeCode ?? ""] || "書類",
-      type: DOC_TYPE_LABEL[r.docTypeCode ?? ""] ?? r.docTypeCode ?? "書類",
-      // EDINET은 docID 기반 공개 뷰어 URL이 불안정 → 서류검색 페이지로 (docID는 title에 표기)
-      url: "https://disclosure2.edinet-fsa.go.jp/week0010.aspx",
-      source: "EDINET",
-    }));
+    const top = docs.slice(0, limit);
+    // 제목은 한국어(용어 사전 → 무료 번역), 원문은 titleLocal(화면 툴팁)
+    const titlesJa = top.map((r) => r.docDescription?.trim() || DOC_TYPE_LABEL[r.docTypeCode ?? ""] || "書類");
+    const ko = await jaInlineMany(titlesJa, { keepOriginal: false });
+    return top.map((r, i) => {
+      const typeJa = DOC_TYPE_LABEL[r.docTypeCode ?? ""];
+      return {
+        id: r.docID,
+        symbol,
+        market: "jp" as const,
+        date: r.submitDateTime!.slice(0, 10),
+        title: ko(titlesJa[i]),
+        titleLocal: titlesJa[i],
+        type: typeJa ? (jaDict(typeJa) ?? typeJa) : (r.docTypeCode ?? "서류"),
+        // EDINET은 docID 기반 공개 뷰어 URL이 불안정 → 서류검색 페이지로 (docID는 title에 표기)
+        url: "https://disclosure2.edinet-fsa.go.jp/week0010.aspx",
+        source: "EDINET",
+      };
+    });
   },
 
   consensusDeepLinks(symbol): DeepLink[] {

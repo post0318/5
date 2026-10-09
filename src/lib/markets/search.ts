@@ -83,13 +83,19 @@ async function edgarSearch(query: string): Promise<SearchHit[]> {
   }));
 }
 
-/** 일본: EDINET 코드 목록에서 일문/영문/코드로 검색 (키 불필요) */
+/** 일본: EDINET 코드 목록에서 일문/영문/코드로 검색 (키 불필요). 한국어 회사명은 사전으로 일문 검색어로 바꾼다, 결과 이름은 한국어(오너 지시 2026-10-09) */
 async function edinetSearch(query: string): Promise<SearchHit[]> {
   try {
     const { searchEdinet } = await import("./jp/edinetcode");
-    return (await searchEdinet(query)).map((e) => ({
+    const { jaNamesForKo, jaToKoMany } = await import("./jp/ko");
+    const viaKo = jaNamesForKo(query);
+    const lists = viaKo.length ? await Promise.all(viaKo.slice(0, 5).map((q) => searchEdinet(q))) : [await searchEdinet(query)];
+    const seen = new Set<string>();
+    const hits = lists.flat().filter((e) => !seen.has(e.ticker) && seen.add(e.ticker)).slice(0, 8);
+    const ko = await jaToKoMany(hits.map((e) => e.name), undefined, 2500);
+    return hits.map((e) => ({
       symbol: e.ticker,
-      name: e.name,
+      name: ko.get(e.name) ?? (e.nameEng || e.name),
       exchange: "JPX",
       yahooSymbol: `${e.ticker}.T`,
     }));

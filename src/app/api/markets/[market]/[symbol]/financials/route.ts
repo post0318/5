@@ -31,6 +31,7 @@ import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
 import { dartAdrAnalysis, dartAdrDetail, dartAdrOf } from "@/lib/markets/us/dart-adr";
 import { getJpFinModel, jpStatementView } from "@/lib/markets/jp/statements";
 import { getJpAnalysis } from "@/lib/markets/jp/jp-views";
+import { koreanizeStatement } from "@/lib/markets/jp/ko";
 
 export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
@@ -83,10 +84,11 @@ export async function GET(
     // 일본 — EDINET XBRL 본표(jp/statements.ts: 회사 표시 구조·계정명 그대로, 연간 5기 + 현재/LTM, 분기 탭 = 반기 열).
     // 기본 표(view 없음)도 같은 조립 결과의 총괄. 재무분석 = jp-ev.ts 단일 기준(하이라이트·개요 멀티플과 같은 값)
     if (market === "jp") {
-      if (detailView === "analysis") return ok(await getJpAnalysis(sym), { headers: NO_CACHE });
+      // 계정명·주석은 한국어(원문은 accountNameLocal·괄호 병기 — 오너 지시 2026-10-09)
+      if (detailView === "analysis") return ok(await koreanizeStatement(await getJpAnalysis(sym)), { headers: NO_CACHE });
       const model = await getJpFinModel(sym);
       const v = detailView === "is" || detailView === "bs" || detailView === "cf" ? detailView : "summary";
-      return ok(jpStatementView(model, sym, v, period), { headers: NO_CACHE });
+      return ok(await koreanizeStatement(jpStatementView(model, sym, v, period)), { headers: NO_CACHE });
     }
 
     if (market === "kr" && isDetail) {

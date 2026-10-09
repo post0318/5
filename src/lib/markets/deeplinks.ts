@@ -72,7 +72,7 @@ export function newsDeepLinks(market: MarketId, symbol: string): DeepLink[] {
     case "jp": {
       const { code, yahoo } = jpParts(symbol);
       return [
-        { label: "Yahoo!ファイナンス", url: `https://finance.yahoo.co.jp/quote/${enc(`${code}.T`)}` },
+        { label: "Yahoo! 파이낸스(일본)", url: `https://finance.yahoo.co.jp/quote/${enc(`${code}.T`)}` },
         { label: "IR BANK", url: `https://irbank.net/${enc(code)}` },
         { label: "Yahoo Finance — News", url: `https://finance.yahoo.com/quote/${enc(yahoo)}/news/` },
       ];
@@ -98,7 +98,7 @@ export function filingsDeepLink(market: MarketId, symbol: string): DeepLink | nu
     }
     case "jp": {
       return {
-        label: "EDINET — 書類検索",
+        label: "EDINET — 서류 검색",
         url: "https://disclosure2.edinet-fsa.go.jp/week0010.aspx",
       };
     }

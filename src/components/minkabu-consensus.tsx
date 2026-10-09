@@ -10,27 +10,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChangePercent, Money, stockDirClass } from "@/components/num";
 
-const RATINGS: MinkabuRating[] = ["強気買い", "買い", "中立", "売り", "強気売り"];
-const RATING_KO: Record<MinkabuRating, string> = {
-  強気買い: "적극 매수",
-  買い: "매수",
-  中立: "중립",
-  売り: "매도",
-  強気売り: "적극 매도",
-};
+const RATINGS: MinkabuRating[] = ["적극 매수", "매수", "중립", "매도", "적극 매도"];
 /** 분포 막대 색 — 일본은 상승=녹색·하락=적색 관행 */
 const RATING_BAR: Record<MinkabuRating, string> = {
-  強気買い: "bg-up",
-  買い: "bg-up/60",
-  中立: "bg-muted-foreground/40",
-  売り: "bg-down/60",
-  強気売り: "bg-down",
+  "적극 매수": "bg-up",
+  매수: "bg-up/60",
+  중립: "bg-muted-foreground/40",
+  매도: "bg-down/60",
+  "적극 매도": "bg-down",
 };
 const HISTORY_KO: Record<string, string> = { "3m": "3개월 전", "1m": "1개월 전", "1w": "1주 전", latest: "최신" };
 
 function ratingClass(r: MinkabuRating | null): string {
-  if (r === "強気買い" || r === "買い") return stockDirClass(true, "jp");
-  if (r === "売り" || r === "強気売り") return stockDirClass(false, "jp");
+  if (r === "적극 매수" || r === "매수") return stockDirClass(true, "jp");
+  if (r === "매도" || r === "적극 매도") return stockDirClass(false, "jp");
   return "text-muted-foreground";
 }
 
@@ -102,7 +95,7 @@ export function MinkabuConsensus({ symbol, price }: { symbol: string; price: num
           <div>
             <div className="text-muted-foreground text-xs">레이팅</div>
             <div className={cn("text-base font-semibold", ratingClass(d.rating))}>
-              {RATING_KO[d.rating]} <span className="text-xs font-normal">({d.rating})</span>
+              {d.rating}
             </div>
           </div>
           <div>
@@ -131,7 +124,7 @@ export function MinkabuConsensus({ symbol, price }: { symbol: string; price: num
           <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
             {RATINGS.map((k) => (
               <span key={k} className="tnum">
-                {RATING_KO[k]} <span className="text-foreground font-medium">{d.breakdown[k]}</span>
+                {k} <span className="text-foreground font-medium">{d.breakdown[k]}</span>
               </span>
             ))}
           </div>
@@ -156,7 +149,7 @@ export function MinkabuConsensus({ symbol, price }: { symbol: string; price: num
                   <td className="text-muted-foreground py-1.5">레이팅</td>
                   {d.history.map((h) => (
                     <td key={h.key} className={cn("py-1.5 text-right", ratingClass(h.rating))}>
-                      {h.rating ? RATING_KO[h.rating] : "-"}
+                      {h.rating ?? "-"}
                     </td>
                   ))}
                 </tr>
@@ -193,13 +186,13 @@ export function MinkabuConsensus({ symbol, price }: { symbol: string; price: num
               </thead>
               <tbody className="tnum">
                 {d.estimates.rows.map((row) => (
-                  <tr key={row.name} className="border-b">
+                  <tr key={row.name} className="border-b" title={row.nameLocal}>
                     <td className="text-muted-foreground py-1.5">
-                      {row.name === "売上高" ? "매출액" : row.name === "当期利益" ? "순이익" : "EPS"}
+                      {row.name}
                     </td>
                     {row.values.map((v, i) => (
                       <td key={i} className="py-1.5 text-right">
-                        {v == null ? "-" : formatNumber(v, row.unit === "円" ? 2 : 0)}
+                        {v == null ? "-" : formatNumber(v, row.unit === "엔" ? 2 : 0)}
                       </td>
                     ))}
                   </tr>
