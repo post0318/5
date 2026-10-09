@@ -1724,6 +1724,11 @@ ${beforeOutputSection(COMMENT_PROMPT).slice(beforeOutputSection(COMMENT_PROMPT).
     데이터와 함께 쓴다. 증권사 이름은 data 의 reports 나 sources 에 실제로 있는 것만 — 없는 증권사를 인용하면 그 칸은 버려진다.
   - **뉴스가 가장 빠른 원천이다**(오너 2026-10-10). 그 주 화두는 issues[].news·policyEvidence/economyEvidence 의 news 와 웹 뉴스
     검색(그 주 날짜)으로 먼저 잡고, 증권사 리포트는 그 해석·전망 쪽 근거로 쓴다.
+- **국내와 글로벌을 같이 다룬다(오너 지적 2026-10-10 — "한줄결론에서 국내는 … 부족")**: 이 리포트의 독자는 한국 투자자다.
+  headline 은 국내(코스피·코스닥·원화와 그 원인)와 글로벌(미 금리·주식·원자재)을 **모두** 담는다. 국내 사실은 data 에 적게 들어
+  있으니 **한국어로 따로 검색**한다 — 그 주 수출입 동향(산업통상부), 외국인·기관 순매수, 한국은행·정부 정책, 국내 대형주 실적·
+  잠정실적, 국내 섹터 주도 종목(data.sectors 의 코스피·코스닥 leaders) 뉴스. 섹터 사유는 그 검색으로 확인한 기사 출처가 있으면
+  써도 된다(서버는 국내 섹터에 주도 종목 이름이 들어 있는지 확인한다).
 - 키는 data 의 값을 그대로: snapshot = snapshot[].name, issues = issues[].label, sectors = sectors[].id.
 - 표·숫자·구조는 서버 코드가 만든다. 문장만 보낸다.`;
 
