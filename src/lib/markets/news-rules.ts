@@ -311,6 +311,8 @@ export const JA_COMPANY_ALIASES: Record<string, string[]> = {
 
 /** 저품질·스팸·개인 영상(구글 뉴스 일본판 실측 2026-10-10 — 제목에 무관한 영문 꼬리가 붙은 자동 생성 글, 데이트레이딩 영상, X 글 모음) */
 export const JA_LOW_VALUE_PUBLISHERS = new Set(["Unisba Media", "BigGo ファイナンス", "BigGo Finance", "Howl.Link", "Howl.link", "YouTube", "note", "pando.life"]);
+/** 팬 블로그·판매점 블로그("ソニーが基本的に好き。"·"ソニーショップ テックスタッフ") — 매체명 꼴로 가른다 */
+const JA_FAN_SHOP_PUBLISHER_RE = /が(?:基本的に)?好き|ショップ|ストア/;
 
 /** 시황·나열·주가 자동 페이지 — 그 회사 얘기가 아니라 시장 전체 흐름·종목 목록(실측 표본: 日経平均寄与度·先物OP市況·ADR主要銘柄·寄り付き概況 …) */
 const JA_ROUNDUP_RE =
@@ -319,11 +321,21 @@ const JA_ROUNDUP_RE =
 /** 같은 기사의 사진·갤러리 페이지 — 원기사와 중복 */
 const JA_PHOTO_RE = /^[<＜]?画像\s*\d|【(?:写真・)?画像】|\d+枚目の写真|フォトギャラリー|写真特集|画像\s*\d+\s*\/\s*\d+|写真・画像\s*[(（]\d|^写真[:：]|^ギャラリー[:：]/;
 
-/** 할인·판촉·홍보(세일·쿠폰·캠페인·세미나 안내) — 회사 기사가 아니라 상품 판매·행사 홍보(2026-10-10 6758·8035 표본) */
-const JA_PROMO_RE = /セール|\d+\s*[%％]\s*(?:オフ|OFF)|割引|クーポン|キャンペーン|プレゼント|セミナー|ウェビナー|Amazon|協賛|評判・口コミ|口コミ・評判/;
+/**
+ * 할인·판촉·홍보 — 판촉 문맥이 같이 있을 때만(2026-10-10 리뷰 — "トヨタ、Amazonと物流で提携"·"新車販売キャンペーンを拡大" 같은 회사 기사가
+ * 낱말 하나("Amazon"·"キャンペーン")로 빠지던 것). 세일·할인율·쿠폰·추첨 경품·무료 세미나·협찬 행사·평판 비교 글.
+ */
+const JA_PROMO_RE =
+  /タイムセール|セール(?:中|開催|価格|情報|対象)|\d+\s*[%％]\s*(?:オフ|OFF)|クーポン|ポイント還元|抽選で|名様に|プレゼントキャンペーン|無料(?:オンライン)?セミナー|ウェビナー|協賛|評判・口コミ|口コミ・評判/;
+
+/**
+ * 기업·주가와 무관한 소비자 글(2026-10-10 리뷰 — 엄격 기준 "기업·주가 뉴스"): 직원 연봉 정보, 시승기·제품 리뷰·구매 안내.
+ * 신제품 발표·리콜·판매 실적 같은 회사 발표는 그대로 둔다.
+ */
+const JA_CONSUMER_RE = /年収|試乗記|試乗レポート|試乗インプレ|インプレッション|レビュー|購入ガイド|買うならどのグレード|どれを買う|おすすめ(?:編成|モデル|グレード)/;
 
 /** 약칭 바로 뒤에 붙어도 같은 회사로 보는 말("ソニー傘下"·"トヨタ株"·"ホンダ新型") — 그 밖의 한자·가타카나가 붙으면 다른 낱말("ソニー生命"·"日立建機"·"本田響矢") */
-const JA_ALIAS_SUFFIX_OK = /^(?:傘下|系|株|製|社長|会長|副社長|首脳|幹部|本社|子会社|側|決算|新型|新車|首位)/;
+const JA_ALIAS_SUFFIX_OK = /^(?:傘下|系|株|製|社長|会長|副社長|首脳|幹部|本社|子会社|側|決算|新型|新車|首位|次期|式|改革)/;
 
 /**
  * 지역 판매회사(딜러) — "栃木トヨタ"·"熊本トヨタ自動車"·"東京ホンダ"는 그 지역 독립 판매회사라 상장사 기사가 아니다(2026-10-10 7203 표본).
@@ -337,14 +349,20 @@ const JA_PREFECTURE_AFTER_RE = new RegExp(`^(?:${JA_PREFECTURES})`);
 /**
  * 같은 이름을 쓰는 일본 상장사 — 일본어 제목용(한국어 JP_SHARED_NAME_CONTEXT 와 같은 원칙). 일본 언론은 그룹을 "ソフトバンクG"·"SBG"로
  * 쓰고 "ソフトバンク" 단독은 대개 통신(9434)이다 — 그래도 OpenAI·孫正義 기사에 "ソフトバンク" 단독 표기가 섞여(TradingKey 등) 문맥어로 가른다.
+ * 그룹 표기("ソフトバンクG"·"ソフトバンクグループ"·"SBG")는 9984 문맥어이자 9434 에는 다른 종목 문맥어다(2026-10-10 리뷰 — 9434 에서
+ * "ソフトバンクG、…通信網"이 통신 문맥어로 통과하던 것).
  */
 export const JA_SHARED_NAME_CONTEXT: Record<string, Record<string, RegExp>> = {
   ソフトバンク: {
-    "9984": /孫|ビジョン・?ファンド|SVF|OpenAI|オープンAI|アーム|\bArm\b|スターゲート|社債|調達|出資|投資|株価|急落|急騰|続落|続伸/,
+    "9984": /ソフトバンク\s*G(?![A-Za-z])|ソフトバンクグループ|SBG|孫|ビジョン・?ファンド|SVF|OpenAI|オープンAI|アーム|\bArm\b|スターゲート|社債|調達|出資|投資|株価|急落|急騰|続落|続伸/,
     "9434": /携帯|スマホ|料金|通信|回線|基地局|5G|6G|LINEヤフー|PayPay|ワイモバイル|IDC|クラウド|宮川/,
   },
 };
-const JA_SPORTS_RE = /ホークス|野球|プロ野球|球団|監督|選手|リーグ|優勝|甲子園/;
+
+/** 스포츠 — 회사 야구부·실업팀·프로 구단 기사(제목 어디든) */
+const JA_SPORTS_RE = /ホークス|野球|甲子園|選手権|駅伝|実業団|ラグビー|リーグワン|陸上部|大会出場/;
+/** 이름 바로 뒤가 "・林監督"·"の選手" — 회사 팀 감독·선수 얘기(2026-10-10 리뷰 — "日立製作所・林監督") */
+const JA_SPORTS_AFTER_RE = /^[・の]?[^、。\s]{0,4}(?:監督|選手|主将|コーチ)/;
 
 const KATAKANA = /[ァ-ヺー]/;
 const KANJI = /[㐀-䶿一-鿿々]/;
@@ -357,26 +375,34 @@ export function jaNorm(s: string): string {
 
 /**
  * 일본어 제목에서 이름 찾기 — 낱말 경계. 가타카나 이름은 앞뒤가 가타카나로 이어지면 다른 낱말("トヨタ紡織"은 한자라 strict 에서 거른다).
+ * 가타카나로 끝나는 이름 뒤에 반각 영대문자 1~3자가 붙고 다음이 영숫자·"-"가 아니면 다른 이름("ソフトバンクG"·"ソニーFG" — "ホンダN-BOX"는 인정).
  * strict(약칭): 뒤에 한자·가타카나가 바로 붙으면 다른 낱말이다 — "本田響矢"(배우)·"武田鉄矢"(배우)·"日立建機"(다른 회사)·"ソニー生命"(다른 회사).
  * 영문·숫자 이름("JT"·"SMC"·"NTT")은 영문 낱말 경계.
  */
 export function jaTitleHit(text: string, word: string, strict: boolean): boolean {
-  if (!word) return false;
-  if (/^[A-Za-z0-9&]+$/.test(word)) return new RegExp(`(^|[^A-Za-z0-9])${esc(word)}(?![A-Za-z0-9])`).test(text);
+  return jaTitleHitAt(text, word, strict) >= 0;
+}
+
+/** jaTitleHit 과 같고 처음 맞은 자리를 돌려준다(없으면 -1) */
+function jaTitleHitAt(text: string, word: string, strict: boolean): number {
+  if (!word) return -1;
+  if (/^[A-Za-z0-9&]+$/.test(word)) return text.search(new RegExp(`(?<![A-Za-z0-9])${esc(word)}(?![A-Za-z0-9])`));
   let from = 0;
   for (;;) {
     const i = text.indexOf(word, from);
-    if (i < 0) return false;
+    if (i < 0) return -1;
     from = i + 1;
     const before = text[i - 1] ?? "";
-    const after = text[i + word.length] ?? "";
+    const rest = text.slice(i + word.length);
+    const after = rest[0] ?? "";
     if (KATAKANA.test(word[0]) && KATAKANA.test(before)) continue;
     if (JA_PREFECTURE_PREFIX_RE.test(text.slice(Math.max(0, i - 4), i))) continue;
     if (KATAKANA.test(word[word.length - 1]) && KATAKANA.test(after)) continue;
+    if (KATAKANA.test(word[word.length - 1]) && /^[A-Z]{1,3}(?![A-Za-z0-9-])/.test(rest)) continue;
     if (ASCII_WORD.test(word[word.length - 1]) && ASCII_WORD.test(after)) continue;
-    if (strict && (KANJI.test(after) || KATAKANA.test(after)) && !JA_ALIAS_SUFFIX_OK.test(text.slice(i + word.length))) continue;
-    if (JA_PREFECTURE_AFTER_RE.test(text.slice(i + word.length))) continue;
-    return true;
+    if (strict && (KANJI.test(after) || KATAKANA.test(after)) && !JA_ALIAS_SUFFIX_OK.test(rest)) continue;
+    if (JA_PREFECTURE_AFTER_RE.test(rest)) continue;
+    return i;
   }
 }
 
@@ -386,8 +412,34 @@ export interface JaNames {
   names: string[];
   /** 접미어를 뗀 약칭("トヨタ"·"ソニー") — strict 경계 */
   aliases: string[];
-  /** 회사 자체 페이지 판정용(영문명 첫 낱말 소문자, 일본어 정식명) */
-  selfMarks: string[];
+  /** 회사 자체 페이지 판정용 — 일본어 정식명 */
+  selfJa: string;
+  /** 회사 자체 페이지 판정용 — 영문명(소문자, 법인 접미어 뗌, 예 "sony group"·"japan tobacco") */
+  selfEn: string;
+}
+
+/**
+ * 회사 자체 페이지 — 매체명이 회사명이면(일본어 정식명 포함, 영문명 전체로 시작, 영문명 첫 낱말과 정확히 같음).
+ * 첫 낱말만으로 앞부분 비교를 하면 "Japan Today"가 Japan Tobacco 자체 페이지로 빠졌다(2026-10-10 리뷰).
+ */
+function isSelfPublisher(pub: string, n: JaNames): boolean {
+  if (/公式|ニュースルーム|newsroom|IR情報/i.test(pub)) return true;
+  if (n.selfJa && pub.includes(n.selfJa)) return true;
+  const p = pub.toLowerCase().replace(/[,.]/g, " ").replace(/\s+/g, " ").trim();
+  if (!n.selfEn) return false;
+  const first = n.selfEn.split(" ")[0];
+  return p.startsWith(n.selfEn) || (first.length >= 3 && p === first) || (first.length >= 3 && p === `${first} global`);
+}
+
+/** "トヨタ、ホンダ、日産…" 나열 구분점 수 — 가타카나 사이의 "・"(「ホンダ・プレリュード」 같은 이름 안 가운뎃점)는 세지 않는다 */
+function listSeparators(t: string): number {
+  let n = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (c === "、" || c === ",") n++;
+    else if (c === "・" && !(KATAKANA.test(t[i - 1] ?? "") && KATAKANA.test(t[i + 1] ?? ""))) n++;
+  }
+  return n;
 }
 
 /** 일본어 기사 판정(제목 기준 — 국내·해외 규칙과 같은 원칙) */
@@ -395,35 +447,53 @@ export function judgeJapaneseTitle(rawTitle: string, publisher: string, n: JaNam
   const t = jaNorm(rawTitle);
   const pub = jaNorm(publisher);
   if (JA_LOW_VALUE_PUBLISHERS.has(publisher) || JA_LOW_VALUE_PUBLISHERS.has(pub)) return { keep: false, reason: "저품질·스팸 매체" };
-  const pubLower = pub.toLowerCase();
-  if (/公式|ニュースルーム|newsroom|IR情報/i.test(pub) || n.selfMarks.some((m) => m && (pub.includes(m) || pubLower.startsWith(m))))
-    return { keep: false, reason: "회사 자체 페이지" };
+  if (isSelfPublisher(pub, n)) return { keep: false, reason: "회사 자체 페이지" };
+  if (JA_FAN_SHOP_PUBLISHER_RE.test(pub)) return { keep: false, reason: "팬·판매점 블로그" };
   if (JA_PHOTO_RE.test(t)) return { keep: false, reason: "사진·갤러리 페이지(원기사와 중복)" };
   if (JA_PROMO_RE.test(t)) return { keep: false, reason: "할인·판촉·홍보" };
-  let hit: string | null = n.names.find((w) => jaTitleHit(t, w, false)) ?? n.aliases.find((w) => jaTitleHit(t, w, true)) ?? null;
-  if (!hit && new RegExp(`[【\\[(（<]${esc(n.symbol)}[】\\])）>]|東証[:：]?${esc(n.symbol)}`).test(t)) hit = n.symbol;
+  if (JA_CONSUMER_RE.test(t)) return { keep: false, reason: "기업·주가와 무관한 소비자 글(연봉·시승기·리뷰)" };
+  let hit: string | null = null;
+  let pos = -1;
+  for (const [list, strict] of [[n.names, false], [n.aliases, true]] as const) {
+    for (const w of list) {
+      const at = jaTitleHitAt(t, w, strict);
+      if (at >= 0) {
+        hit = w;
+        pos = at;
+        break;
+      }
+    }
+    if (hit) break;
+  }
+  if (!hit && new RegExp(`[【\\[(（<]${esc(n.symbol)}[】\\])）>]|東証[:：]?${esc(n.symbol)}`).test(t)) {
+    hit = n.symbol;
+    pos = t.indexOf(n.symbol);
+  }
   // 같은 이름을 쓰는 다른 상장사("ソフトバンク" — 9984·9434): 그 이름으로만 걸렸으면 문맥어로 가른다
   for (const [word, bySym] of Object.entries(JA_SHARED_NAME_CONTEXT)) {
     const own = bySym[n.symbol];
     if (!own) continue;
     // 공유 이름 자체는 경계만 본다("ソフトバンク株価見通し" — 뒤에 한자가 붙어도 그 이름). "ソフトバンクG"처럼 더 긴 이름은 위에서 먼저 걸린다
-    const onlyShared = hit === word || (!hit && jaTitleHit(t, word, false));
-    if (!onlyShared) continue;
-    if (JA_SPORTS_RE.test(t)) return { keep: false, reason: `${word} — 스포츠 기사(구단)` };
-    const other = Object.entries(bySym).some(([s, re]) => s !== n.symbol && re.test(t));
-    if (own.test(t) && !other) {
+    const at = hit === word ? pos : hit ? -1 : jaTitleHitAt(t, word, false);
+    if (at < 0) continue;
+    // 동명 이름이 구단명으로도 쓰인다("ソフトバンク率い5度の日本一" — 호크스) — 여기서는 감독·우승 같은 말도 스포츠로 본다
+    if (JA_SPORTS_RE.test(t) || /監督|選手|日本一|優勝|球団/.test(t)) return { keep: false, reason: `${word} — 스포츠 기사(구단)` };
+    // 문맥어는 매체 꼬리표를 뗀 제목에서만 본다("（共同通信）"의 "通信"이 통신 문맥어로 잡히던 것)
+    const body = t.replace(/[(（][^)）]{1,30}[)）]\s*$/, "");
+    const other = Object.entries(bySym).some(([s, re]) => s !== n.symbol && re.test(body));
+    if (own.test(body) && !other) {
       hit = word;
+      pos = at;
       break;
     }
     return { keep: false, reason: `${word} — 동명 종목, ${other ? "다른 종목 문맥어 있음" : "이 종목 문맥어 없음"}` };
   }
   if (!hit) return { keep: false, reason: "제목에 회사명 없음" };
   if (JA_ROUNDUP_RE.test(t)) return { keep: false, reason: "시황·나열 기사" };
-  // 회사 야구부·프로야구 구단 기사("社会人野球…日立、本大会逃す")
-  if (/野球|甲子園|ホークス/.test(t)) return { keep: false, reason: "스포츠 기사(구단·야구부)" };
+  // 회사 야구부·실업팀·프로 구단 기사("社会人野球…日立、本大会逃す", "日立製作所・林監督")
+  if (JA_SPORTS_RE.test(t) || JA_SPORTS_AFTER_RE.test(t.slice(pos + hit.length))) return { keep: false, reason: "스포츠 기사(구단·실업팀)" };
   // "アドバンテ、ソフトバンクGなどが…"·"トヨタ、ホンダ、日産…" — 구분점 3개 이상 나열이고 회사가 맨 앞이 아님
-  const pos = t.indexOf(hit);
-  if ((t.match(/[、・,]/g) ?? []).length >= 3 && pos > 0) return { keep: false, reason: "여러 회사 나열" };
+  if (listSeparators(t) >= 3 && pos > 0) return { keep: false, reason: "여러 회사 나열" };
   // "ＦＲＯＮＴＥＯ---反発、JTのR&D組織が…" — 피스코식 "종목명---" 머리는 그 종목 주가 기사(이 회사는 재료로만 나옴)
   const fisco = t.match(/^(.{1,24}?)-{2,3}/);
   if (fisco && !fisco[1].includes(hit)) return { keep: false, reason: "다른 종목 주가 기사" };

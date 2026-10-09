@@ -143,8 +143,16 @@ export async function upsertShinhanResearch(
     // 필드만 무조건 갱신하고, 추출로 얻는 필드는 **값이 있을 때만** 갱신한다.
     // 처음 들어오는 문서는 $setOnInsert 로 빈 기본값을 채워 스키마를 맞춘다
     // ($set 과 $setOnInsert 는 같은 키를 가질 수 없어 둘로 나눈다).
+    // 단, 저장된 문서와 시장이 달라지면(2026-10-10 — NH 해외기업분석이 미국 ADR 대신 도쿄 상장으로, 키움 CC·다올의 일본 종목이 us·kr 에서 jp 로)
+    // 옛 시장 기준으로 뽑은 목표주가(USD 등)·투자의견·종목코드는 새 시장에 맞지 않으므로 이번 값으로 새로 매기고, 못 매겼으면 비운다.
+    const before = await col
+      .find({ _id: { $in: docs.map((d) => d._id) } })
+      .project<{ _id: string; market?: string }>({ market: 1 })
+      .toArray();
+    const storedMarket = new Map(before.map((b) => [b._id, b.market ?? "kr"]));
     const result = await col.bulkWrite(
       docs.map((d) => {
+        const marketChanged = storedMarket.has(d._id) && storedMarket.get(d._id) !== d.market;
         const set: Partial<ShinhanResearchDoc> = {
           source: d.source,
           market: d.market,
@@ -158,15 +166,15 @@ export async function upsertShinhanResearch(
           collectedAt: d.collectedAt,
         };
         const onInsert: Partial<ShinhanResearchDoc> = {};
-        if (d.targetPrice != null) set.targetPrice = d.targetPrice;
+        if (d.targetPrice != null || marketChanged) set.targetPrice = d.targetPrice ?? null;
         else onInsert.targetPrice = null;
-        if (d.opinion) set.opinion = d.opinion;
+        if (d.opinion || marketChanged) set.opinion = d.opinion ?? "";
         else onInsert.opinion = "";
         if (d.summary) set.summary = d.summary;
         else onInsert.summary = "";
         // 종목코드도 같은 취지 — 이번에 못 풀었다고(null) 이미 붙어 있는 값을
         // 지우지 않는다(옛 오매칭은 2026-09-28 일회성 보정으로 정리됨).
-        if (d.symbol != null) set.symbol = d.symbol;
+        if (d.symbol != null || marketChanged) set.symbol = d.symbol ?? null;
         else onInsert.symbol = null;
         if (d.relatedSymbols && d.relatedSymbols.length > 0) set.relatedSymbols = d.relatedSymbols;
         return {

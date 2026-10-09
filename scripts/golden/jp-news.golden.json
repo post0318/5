@@ -1,0 +1,4114 @@
+{
+ "about": "일본 종목 일본어 기사(구글 뉴스 일본판) 관련성 기준 세트 — 2026-10-10 수집 원본에서 종목별 무작위 표본, 제목·매체만 보고 사람이 판정(작업자 Claude, 오너 검수 전).",
+ "labels": {
+  "broad": "그 회사·사업·제품·주가 얘기면 정답(사진 중복 페이지·저품질 매체·판촉·회사 자체 페이지는 오답)",
+  "strict": "기업·주가 뉴스만 정답 — broad 정답 중 소비자 글(시승기·리뷰·구매 안내·연봉·팬 블로그 신제품 소개·콜라보 행사)은 오답"
+ },
+ "sets": {
+  "A": "규칙 맞춘 표본",
+  "B": "처음 본 표본 1(보강에 사용)",
+  "C": "처음 본 표본 2(보강에 사용)"
+ },
+ "items": [
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 1,
+   "title": "トヨタ、「ベビーランクル」を東南アジアの切り札に－中国勢台頭で",
+   "publisher": "TBS NEWS DIG",
+   "at": "2026-10-06T04:30:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 2,
+   "title": "トヨタ 米に初の電池研究拠点 79億円投資 ミシガン州に開設",
+   "publisher": "47NEWS",
+   "at": "2026-10-08T00:35:30.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 3,
+   "title": "トヨタ、新型燃料電池バス",
+   "publisher": "埼玉新聞",
+   "at": "2026-10-05T08:03:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 4,
+   "title": "第6部 自動車からモビリティへ（番外編）「次の道」歩み続ける サイモンCBOに聞く【脱炭素へ駆ける】：ニュース",
+   "publisher": "中日BIZナビ",
+   "at": "2026-10-08T08:17:47.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 5,
+   "title": "現場が引っ張る福岡トヨタの販売改善 昭和スタイルの営業から､チーム制へ",
+   "publisher": "PRESIDENT Online（プレジデントオンライン）",
+   "at": "2026-10-07T23:30:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 6,
+   "title": "トヨタ、「ベビーランクル」を東南アジアの切り札に－中国勢台頭で",
+   "publisher": "Bloomberg.com",
+   "at": "2026-10-06T00:46:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 7,
+   "title": "「小さなランクル」ではなかった…70、250、300と乗り比べてわかったトヨタ『ランドクルーザーFJ』の本質 37枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-05T10:00:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 8,
+   "title": "トヨタのミッドシップスポーツ『MR2』、2028年復活へ…400ps超＋AWDか 1枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-05T22:45:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 9,
+   "title": "走りの良品廉価──トヨタ カローラ カローラ アクティブ スポーツ試乗記",
+   "publisher": "GQ Japan",
+   "at": "2026-10-09T00:51:48.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 10,
+   "title": "「刀剣乱舞ONLINE」とトヨタ自動車がコラボした特別車両を「ゲイジュツノエキ2026」で10月17日から展示",
+   "publisher": "4Gamer.net",
+   "at": "2026-10-06T10:13:55.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 11,
+   "title": "「小さなランクル」ではなかった…70、250、300と乗り比べてわかったトヨタ『ランドクルーザーFJ』の本質 8枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-05T10:00:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 12,
+   "title": "熊本トヨタ自動車が県移植医療推進財団に40万円寄付",
+   "publisher": "熊本日日新聞社",
+   "at": "2026-10-08T06:47:12.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 13,
+   "title": "「小さなランクル」ではなかった…70、250、300と乗り比べてわかったトヨタ『ランドクルーザーFJ』の本質 3枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-05T10:00:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 14,
+   "title": "トヨタ 中国合弁で新たな枠組み 広州汽車 「一汽トヨタ」株取得（中部経済新聞）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-09T00:05:27.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 15,
+   "title": "トヨタのミッドシップスポーツ『MR2』、2028年復活へ…400ps超＋AWDか 2枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-05T22:45:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 16,
+   "title": "「刀剣乱舞ONLINE」とトヨタ自動車がコラボした特別車両を「ゲイジュツノエキ2026」で10月17日から展示",
+   "publisher": "4Gamer.net",
+   "at": "2026-10-06T06:41:23.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 17,
+   "title": "広汽集団、一汽トヨタ株50％を取得へ トヨタなど3社が中国「南北トヨタ」再編で調印 - ビジネス+IT",
+   "publisher": "ビジネス+IT",
+   "at": "2026-10-09T13:30:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 18,
+   "title": "ロボタクシー登場､トヨタ本格参入で注目\"自動運転\"16銘柄",
+   "publisher": "四季報オンライン",
+   "at": "2026-10-03T22:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 19,
+   "title": "トヨタ次期カローラの電子基盤は4ドメイン、テスラと一線 あえて集約せず",
+   "publisher": "日経クロステック（xTECH）",
+   "at": "2026-10-07T20:00:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 20,
+   "title": "年収が高い会社ランキング2026【愛知県・トップ5】トヨタ自動車が初の1000万円超え、さて何位？",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-04T23:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 21,
+   "title": "トヨタ式部品改革",
+   "publisher": "日経クロステック（xTECH）",
+   "at": "2026-10-05T20:15:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 22,
+   "title": "トヨタ「\"新型\"ハリアー」に大注目！ 斬新「黒すぎメッシュ顔」の\"専用パーツ\"多数採用！ 「ガソリン＆PHEV廃止」だけど\"7年目\"で進化した一部改良モデルの「Night Shade」が魅力的",
+   "publisher": "くるまのニュース",
+   "at": "2026-10-06T22:00:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 23,
+   "title": "【速報】トヨタ、中国2社と新たな提携枠組み",
+   "publisher": "47NEWS",
+   "at": "2026-10-08T11:36:33.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 24,
+   "title": "小さくても性能は紛れもなく“ランクル”。「トヨタ・ランドクルーザー“FJ”」を試す。",
+   "publisher": "webCG",
+   "at": "2026-10-06T21:00:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 25,
+   "title": "２６年度上半期に最も売れた新車はホンダ「Ｎ―ＢＯＸ」、５年連続で上半期首位…ＥＶはトヨタ「ｂＺ４Ｘ」",
+   "publisher": "読売新聞",
+   "at": "2026-10-06T11:43:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 26,
+   "title": "トヨタのAIバスケロボ「CUE7」にリョーサン菱洋がエッジAIモジュールを提供 1枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-07T05:00:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 27,
+   "title": "トヨタ「\"新型\"ランドクルーザー」発売！ 国内初の「V6ツインターボハイブリッド」新搭載＆「究極の\"実用モデル\"」登場もガソリン廃止＆価格大幅向上… 新たな「300」は何が変わった？",
+   "publisher": "くるまのニュース",
+   "at": "2026-10-07T05:45:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 28,
+   "title": "トヨタ、中国２社新枠組み 戦略提携で電動化加速",
+   "publisher": "山形新聞",
+   "at": "2026-10-08T12:18:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 29,
+   "title": "トヨタ、中国の国有2社と新たな提携枠組み 車の電動化や知能化への対応強化：ニュース",
+   "publisher": "中日BIZナビ",
+   "at": "2026-10-08T16:46:57.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 30,
+   "title": "まもなく現行モデル登場から10年､コンパクトトールワゴンのベストセラー…トヨタ｢ルーミー｣買うならどのグレード？",
+   "publisher": "東洋経済オンライン",
+   "at": "2026-10-05T22:30:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 31,
+   "title": "次期トヨタ「カローラ」は1.5L直4へ!? 新世代HVで燃費20％向上か？ “小さく低いエンジン”が変えるもの（MotorFan）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-07T11:33:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 32,
+   "title": "「今のトヨタは180点」なぜそこまで高評価!? 電池・後継者・販売力に課題も……王者トヨタの現在地（ベストカーWeb）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T21:00:56.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 33,
+   "title": "トヨタ、中国国有大手と戦略提携（時事通信）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-09T11:00:44.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 34,
+   "title": "7年以上ぶり全面刷新!? トヨタ新型「カローラ」!? \"スポーツカー\"なデザインに激変＆ガソリンエンジンも用意！ 新モデル示すコンセプトとは",
+   "publisher": "くるまのニュース",
+   "at": "2026-10-08T20:30:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 35,
+   "title": "トヨタ『カローラ』次期型に新エンジン搭載か？ 1.5L直4は136psで燃費20％向上 1枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-05T03:00:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 36,
+   "title": "トヨタ『ランドクルーザーFJ』は本格オフローダー！ 250の弟分でもFJクルーザー後継車でもなく、いわば70系の味わい",
+   "publisher": "AUTOCAR JAPAN",
+   "at": "2026-10-05T03:05:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 37,
+   "title": "トヨタ、中国2社新枠組み 戦略提携で電動化加速 (共同通信)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T12:18:19.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 38,
+   "title": "ギャラリー：トヨタ カローラ カローラ アクティブ スポーツ",
+   "publisher": "GQ Japan",
+   "at": "2026-10-09T00:49:48.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 39,
+   "title": "スマホの電池と何が違う？ トヨタ×パナソニック合弁PPESに聞く「電動車の心臓部・車載バッテリー」の凄さとは",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-09T09:50:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "7203",
+   "no": 40,
+   "title": "トヨタのミッドシップスポーツ『MR2』、2028年復活へ…400ps超＋AWDか 4枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-05T22:45:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 1,
+   "title": "【画像】ソフトバンクＧ、マレーシアＡＩインフラ開発に向け現地企業と協業に関し基本合意",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-08T14:09:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 2,
+   "title": "ソフトバンクＧ---大幅続落、オープンAIの売上高下振れ報道を受け 執筆： Fisco| 株式市場 | ファイナンス | 金融ニュース",
+   "publisher": "Investing.com - FX | 株式市場 | ファイナンス | 金融ニュース",
+   "at": "2026-10-09T01:30:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 3,
+   "title": "ソフトバンクＧ---大幅続落、オープンAIの売上高下振れ報道を受け",
+   "publisher": "株探",
+   "at": "2026-10-09T01:19:18.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 4,
+   "title": "だいたいこんな感じの株価の動きでした",
+   "publisher": "Howl.Link",
+   "at": "2026-10-09T07:36:46.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 5,
+   "title": "ソフトバンク株価見通し：OpenAIの売上高データでバリュエーション懸念が浮上、急落後に株価は反発できるか？",
+   "publisher": "TradingKey",
+   "at": "2026-10-08T15:06:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 6,
+   "title": "日経平均は393円安でスタート、ソフトバンクGや古河電工などが下落",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-09T00:39:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 7,
+   "title": "法人向けイベントで講演するソフトバンクグループの孫正義会長兼社長＝7月、東京都千代田区 - SBG、15兆円調達打診か 湾岸諸国投資家に、AI投資拡大 - 写真・画像(1/1)",
+   "publisher": "西日本新聞me",
+   "at": "2026-10-09T07:17:10.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 8,
+   "title": "ソフトバンクＧ、湾岸投資家から最大1000億ドル調達へ協議＝英紙",
+   "publisher": "BigGo ファイナンス",
+   "at": "2026-10-09T05:35:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 9,
+   "title": "東証10時 日経平均、下げ幅一時800円強 ソフトバンクGに売り",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-08T01:14:50.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 10,
+   "title": "ソフトバンクＧが大幅続落し７５日線下抜け、米オープンＡＩの年換算売上高を巡る報道を嫌気",
+   "publisher": "株探",
+   "at": "2026-10-09T00:32:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 11,
+   "title": "2026/10/5（月）ソフトバンクGとフジクラでデイトレ。15分でプラス2.7万円。",
+   "publisher": "YouTube",
+   "at": "2026-10-05T02:03:10.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 12,
+   "title": "ソフトバンクG孫正義、「超知能」の悪用に警鐘。AI制御へ国際協調訴え＝報道（あたらしい経済）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-06T07:26:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 13,
+   "title": "キオクシア株式分割へ。ソフトバンクグループ、フィジカルＡＩでロボット量産。パソナ大幅下方修正。～あす上がる株 2026年６月２６日（金）に上がる銘柄。最新の日本株情報。高配当株の株価やデイトレ情報 Municipal Elections Results (RjkCbLujl7)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-05T13:33:27.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 14,
+   "title": "東証一時7万円回復 3カ月ぶり、米株高波及 アドバンテスト、ソフトバンクGが大幅高",
+   "publisher": "産経ニュース",
+   "at": "2026-10-05T01:53:28.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 15,
+   "title": "ソフトバンクG、マレーシアでAIインフラ開発検討 配車大手グラブと",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-08T11:44:05.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 16,
+   "title": "16兆円調達目指す＝ソフトバンクG、湾岸諸国から―英紙(時事通信)",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T08:00:29.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 17,
+   "title": "【注目トピックス 日本株】ソフトバンクＧ—大幅続落、オープンAIの売上高下振れ報道を受け",
+   "publisher": "マネーポストWEB",
+   "at": "2026-10-09T01:19:18.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 18,
+   "title": "ＳＢＧ、１５兆円調達打診か",
+   "publisher": "カナロコ",
+   "at": "2026-10-09T06:53:32.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 19,
+   "title": "煎二郎 (@nibansenjirou) on X",
+   "publisher": "Howl.Link",
+   "at": "2026-10-09T06:43:24.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 20,
+   "title": "１６兆円調達目指す＝ソフトバンクＧ、湾岸諸国から―英紙",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-09T07:48:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 21,
+   "title": "ＳＢＧ、１５兆円調達打診か",
+   "publisher": "大分合同新聞",
+   "at": "2026-10-08T19:01:07.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 22,
+   "title": "先物・OP市況－225先物は下げ幅縮小 ソフトバンクＧが下げ渋る",
+   "publisher": "Moomoo",
+   "at": "2026-10-09T06:33:45.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 23,
+   "title": "ソフトバンクGの孫氏、AIの悪用リスクに警鐘－「極めて危険」と語る",
+   "publisher": "Bloomberg.com",
+   "at": "2026-10-05T05:07:21.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 24,
+   "title": "ソフトバンクＧ、マレーシアでＡＩ基盤開発へ グラブやペトロスと連携",
+   "publisher": "BigGo ファイナンス",
+   "at": "2026-10-08T15:25:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 25,
+   "title": "日経平均寄与度ランキング（大引け）～日経平均は続落、ソフトバンクGが約218円分押し下げ",
+   "publisher": "株探",
+   "at": "2026-10-08T07:48:39.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 26,
+   "title": "ソフトバンク子会社 IDCフロンティアのクラウドに不正アクセス 495の企業や自治体に影響（TBS NEWS DIG Powered by JNN）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-07T14:30:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 27,
+   "title": "ソフトバンクG株1カ月ぶり安値、OpenAI巡る報道で巨額投資に懸念",
+   "publisher": "Bloomberg.com",
+   "at": "2026-10-09T00:06:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 28,
+   "title": "ソフトバンクグループ、2027年満期前のユーロ建てシニアノートを償還",
+   "publisher": "Moomoo",
+   "at": "2026-10-09T14:27:10.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 29,
+   "title": "湾岸諸国の投資家から１６兆円の調達目指す ソフトバンクＧ、ＡＩ分野への投資拡大へ―英紙",
+   "publisher": "時事ドットコム",
+   "at": "2026-10-09T07:48:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 30,
+   "title": "日経平均寄与度ランキング（大引け）〜日経平均は続落、ソフトバンクGが約218円分押し下げ",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-08T07:48:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 31,
+   "title": "ソフトバンクＧ、湾岸投資家から最大1000億ドル調達目指す＝ＦＴ",
+   "publisher": "Infoseek",
+   "at": "2026-10-09T05:08:05.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 32,
+   "title": "ソフトバンクG孫正義、「超知能」の悪用に警鐘。AI制御へ国際協調訴え＝報道 (あたらしい経済)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-06T07:26:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 33,
+   "title": "ソフトバンクG、最大16兆円の資金調達検討 FT報道",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-09T07:12:22.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 34,
+   "title": "孫正義氏、異例のスーパーインテリジェンス警鐘——AIが悪しき手に渡れば「極めて危険」",
+   "publisher": "BigGo ファイナンス",
+   "at": "2026-10-04T12:25:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 35,
+   "title": "ソフトバンクＧ－売り気配 ＯｐｅｎＡＩの年換算売上高、市場予想下回る可能性が伝わる(トレーダーズ・ウェブ)",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T00:03:02.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 36,
+   "title": "先物・OP市況－225先物は下落 ソフトバンクＧなど安い",
+   "publisher": "TradingView",
+   "at": "2026-10-09T00:07:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 37,
+   "title": "東証10時 日経平均は200円安 ソフトバンクGは支え",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-07T01:16:26.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 38,
+   "title": "ソフトバンクGの孫氏､AIの安全性に異例の懸念表明－超知能は危険伴う",
+   "publisher": "TBS NEWS DIG",
+   "at": "2026-10-04T10:15:47.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 39,
+   "title": "ソフトバンクG オープンAI、年換算売上高が予想下回るとの報道",
+   "publisher": "日経CNBC online",
+   "at": "2026-10-09T00:27:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "9984",
+   "no": 40,
+   "title": "ソフトバンクグループの孫氏、AI進化で「人間同士が戦うぜいたくはない」などと話しました",
+   "publisher": "やさしい朝日新聞",
+   "at": "2026-10-06T01:08:19.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 1,
+   "title": "エンタメは車を再定義できるか",
+   "publisher": "日経クロステック（xTECH）",
+   "at": "2026-10-03T17:52:19.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 2,
+   "title": "【10月開催】My Sonyキャンペーン開始！抽選で5名に10万円分のソニーポイントプレゼント",
+   "publisher": "ソニーショップ テックスタッフ",
+   "at": "2026-10-06T09:13:52.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 3,
+   "title": "ソニーグループ、26年9月の自社株買いは260億0500万円で689万2400株を取得…残りの取得枠は2366億4200万円・1億5552万6300株に",
+   "publisher": "gamebiz【ゲームビズ】",
+   "at": "2026-10-05T02:44:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 4,
+   "title": "ソニー、XR関連特許419件をMetaに譲渡へ―すでに43件は譲渡済み、VR事業縮小の動きか",
+   "publisher": "千葉テレビ放送株式会社",
+   "at": "2026-10-08T14:26:40.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 5,
+   "title": "ソニーの人気イヤホン「WF-1000XM5」がAmazonでセールに。期間限定17%オフで販売中",
+   "publisher": "CoRRiENTE",
+   "at": "2026-10-07T00:59:14.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 6,
+   "title": "ソニーG（A2）を安定的からポジティブに変更（ムーディーズ） – CAPITAL EYE",
+   "publisher": "https://c-eye.co.jp/",
+   "at": "2026-10-09T03:49:37.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 7,
+   "title": "軽量ながら妥協のない操作性と光学性能｜FE 8-14mm F3.5 Fisheye G",
+   "publisher": "とるなら",
+   "at": "2026-10-03T10:00:54.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 8,
+   "title": "【最大25,300円OFF】ソニーストアで「INZONE」全19製品のタイムセール開始！ 「M10S II」が初対象",
+   "publisher": "ソニーショップ テックスタッフ",
+   "at": "2026-10-07T02:33:55.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 9,
+   "title": "ソニーの完全ワイヤレス「WF-C510」が7618円！ DSEEに外音取り込み、マルチポイントまで対応",
+   "publisher": "週刊アスキー",
+   "at": "2026-10-06T10:45:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 10,
+   "title": "ソニー、世界初「Eclipsa Audio」認証のスマートフォン用空間オーディオマイク「ECM-AX10」を海外発表。4つのマイクでアンビソニックス・バイノーラル・ステレオ録音可能。USB Type-C直結で約24g。米国価格は249.99ドル。",
+   "publisher": "ソニーが基本的に好き。",
+   "at": "2026-10-08T16:23:55.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 11,
+   "title": "交換レンズレビュー：ソニー FE 8-14mm F3.5 Fisheye G 円周から対角まで1本で描き分ける180°の世界",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-07T01:07:30.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 12,
+   "title": "「Sony Music × Sony Bank Collaboration Days」第七弾 LiSA全国ホールツアー東京公演ご招待・オリジナルグッズプレゼントキャンペーン実施情報 | LiSA | ソニーミュージックオフィシャルサイト",
+   "publisher": "ソニーミュージックオフィシャルサイト",
+   "at": "2026-10-06T03:00:56.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 13,
+   "title": "写真の「絶対値」って何だ？ 『デジタルカメラマガジン』9月号がMy Sony会員なら無料",
+   "publisher": "ソニーショップ テックスタッフ",
+   "at": "2026-10-07T21:04:10.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 14,
+   "title": "【Amazonタイムセール】ソニーの48.4g軽量8Kマウスが32％オフ、税込15,000円",
+   "publisher": "エルミタージュ秋葉原",
+   "at": "2026-10-07T02:02:36.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 15,
+   "title": "ソニー INZONE E9 新色「Glass Purple」を発表。スケルトン仕様のパープルで、オーディオボックスやケースまで専用カラー。米国価格は149.99ドル、日本は10月7日(水)午前10時に発表予定。",
+   "publisher": "ソニーが基本的に好き。",
+   "at": "2026-10-06T22:36:43.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 16,
+   "title": "ソニー、スマートフォン用空間オーディオマイクロホン「ECM-AX10」を発表。2026年10月23日(金)発売、ソニーストア販売価格29,700円(税込)。世界初「Eclipsa Audio」認証、アンビソニックス・バイノーラル・ステレオ録音可能。",
+   "publisher": "ソニーが基本的に好き。",
+   "at": "2026-10-09T01:26:16.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 17,
+   "title": "ソニー損保、ダイレクト型「長期自動車保険（3年契約）」販売開始 契約時に3年間の保険料確定、無事故ならお祝い金も",
+   "publisher": "J-CAST ニュース",
+   "at": "2026-10-05T11:15:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 18,
+   "title": "日本株ＡＤＲ・円換算終値",
+   "publisher": "みんかぶ FX/為替",
+   "at": "2026-10-04T22:40:29.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 19,
+   "title": "【画像】交換レンズレビュー：ソニー FE 8-14mm F3.5 Fisheye G 円周から対角まで1本で描き分ける180°の世界 1/14",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-05T22:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 20,
+   "title": "ソニー傘下の米アニメ配信大手、日本アニメの海外展開強化…実写化手がける専門組織を新設・収益拡大図る",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-09T11:32:13.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 21,
+   "title": "共通の「好き」で生まれるつながり。ソニーのクラブ活動を取材しました！",
+   "publisher": "Sony",
+   "at": "2026-10-08T01:48:21.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 22,
+   "title": "ゲーミングヘッドホン「INZONE E9」新色グラスパープルの実機をソニーストアで見てきた。中が透けるスケルトンのハウジングに、ケーブルとオーディオボックスまでパープルの専用カラー。",
+   "publisher": "ソニーが基本的に好き。",
+   "at": "2026-10-08T06:05:57.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 23,
+   "title": "売り切れていた『REON POCKET PRO Plus』専用ネックバンドが販売再開！ 旧PROも3,300円でアップグレード",
+   "publisher": "ソニーショップ テックスタッフ",
+   "at": "2026-10-05T21:28:39.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 24,
+   "title": "ムーディーズ、ソニーの格付け見通しを「安定的」から「ポジティブ」に変更(時事通信)",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T00:14:01.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 25,
+   "title": "ソニー、Fnatic共同開発のプロ仕様ゲーミングイヤホン「INZONE E9」など2製品に新色",
+   "publisher": "エルミタージュ秋葉原",
+   "at": "2026-10-07T17:28:48.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 26,
+   "title": "ソニーグループがアニメ事業を強化する理由とは？ 「アニプレックス」×「クランチロール」で「日本でIPを生み、世界へ届ける」体制を構築",
+   "publisher": "gamebiz【ゲームビズ】",
+   "at": "2026-10-07T04:56:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 27,
+   "title": "高橋氏（ソニーＧ）に山崎貞一賞 上越市出身 音声遺産の復元技術で",
+   "publisher": "上越タイムス社",
+   "at": "2026-10-07T23:36:05.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 28,
+   "title": "ソニーG、日本アニメの海外実写化を加速 傘下の米企業に新組織設立",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-07T22:46:40.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 29,
+   "title": "マネーフォワード クラウドERP (@mfcloud_erp) on X",
+   "publisher": "Howl.link",
+   "at": "2026-10-06T22:00:04.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 30,
+   "title": "ソニー 新・神話の真贋",
+   "publisher": "ダイヤモンド・オンライン",
+   "at": "2026-10-05T20:15:11.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 31,
+   "title": "日経平均は小幅続落、売り先行も下げ幅を縮小する展開",
+   "publisher": "まぐまぐ",
+   "at": "2026-10-09T07:12:11.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 32,
+   "title": "トム・ホランド主演「スパイダーマン：ブランド・ニュー・デイ」Sony Pictures Coreでもホームプレミア デジタル配信開始！劇場公開から約2か月、IMAX Enhanced対応。",
+   "publisher": "ソニーが基本的に好き。",
+   "at": "2026-10-06T15:24:08.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 33,
+   "title": "一世代前でもこの価格ならありでしょ。ソニー「WF-1000XM5」が17％オフ",
+   "publisher": "Gizmodo",
+   "at": "2026-10-07T05:55:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 34,
+   "title": "【新色】ゲーミングイヤホン「INZONE E9」にグラスパープル新登場！10月21日まで2,200円OFF！",
+   "publisher": "ソニーショップ テックスタッフ",
+   "at": "2026-10-07T08:34:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 35,
+   "title": "ソニーが小型マイク「ECM-AX10」発表　スマホに挿して立体音響動画を集音可能 - ITmedia Mobile",
+   "publisher": "ITmedia",
+   "at": "2026-10-09T01:02:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 36,
+   "title": "交換レンズレビュー：ソニー FE 8-14mm F3.5 Fisheye G 円周から対角まで1本で描き分ける180°の世界",
+   "publisher": "デジカメ Watch",
+   "at": "2026-10-05T22:00:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 37,
+   "title": "ソニー、アニメの実写化に注力 日本のクリエイターと組む新部門を設立（映画.com）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-09T13:00:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 38,
+   "title": "「SONY'S OFFICIAL GOODS」第2弾をソニーストアで販売開始(2026年10月2日10時10分)",
+   "publisher": "大分合同新聞",
+   "at": "2026-10-05T07:43:38.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 39,
+   "title": "日経平均は続落、ソフトバンクGが約243円分押し下げ",
+   "publisher": "株探",
+   "at": "2026-10-09T03:56:04.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "6758",
+   "no": 40,
+   "title": "日本株ＡＤＲ・円換算終値",
+   "publisher": "みんかぶ FX/為替",
+   "at": "2026-10-07T22:40:29.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 1,
+   "title": "東京エレクトロン(株)【TELWY】：掲示板",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T06:06:18.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 2,
+   "title": "AIエージェントセキュリティ・プラットフォーム「Zenity」の国内販売代理店契約を締結",
+   "publisher": "PR TIMES",
+   "at": "2026-10-07T02:02:57.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 3,
+   "title": "東京株メモ (@dongjunsu) on X",
+   "publisher": "Howl.link",
+   "at": "2026-10-08T11:16:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 4,
+   "title": "Bloomberg News記者が聞く、東京エレクトロンとオリオンビールのIR実務。無料オンラインセミナーを10月19日開催｜次世代型の株式リサーチ「ENVALITH（エンヴァリス）」",
+   "publisher": "PR TIMES",
+   "at": "2026-10-09T07:17:33.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 5,
+   "title": "先物・OP市況－225先物はマイナス転換 東京エレクトロンなど安い",
+   "publisher": "TradingView",
+   "at": "2026-10-07T01:33:57.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 6,
+   "title": "半導体は好指標でも材料出尽くし、セクターに波及【今日の市場はどう動いた？】",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-07T02:56:02.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 7,
+   "title": "15時の日経平均は378円安の7万305円、東エレクが93.55円押し下げ",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-07T06:01:02.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 8,
+   "title": "東京エレクトロンデバイス、AIエージェント保護製品を発売",
+   "publisher": "ニュースメディアVOIX",
+   "at": "2026-10-07T02:32:55.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 9,
+   "title": "AI特需、東京エレクトロン営業益1兆円へ",
+   "publisher": "조선일보",
+   "at": "2026-10-06T01:40:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 10,
+   "title": "11時の日経平均は361円安の7万322円、東エレクが156.75円押し下げ",
+   "publisher": "株探",
+   "at": "2026-10-07T02:01:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 11,
+   "title": "株式投資さとう けんいち (@juu_ro_ta) on X",
+   "publisher": "Howl.Link",
+   "at": "2026-10-09T00:13:29.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 12,
+   "title": "日経平均555円安、韓国株軟調が重荷 半導体関連に売り",
+   "publisher": "BigGo ファイナンス",
+   "at": "2026-10-07T05:05:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 13,
+   "title": "後場の日経平均は1639円高でスタート、東京エレクトロンや太陽誘電などが上昇",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-05T04:03:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 14,
+   "title": "半導体・AI株に売り圧力、指数の重しに【今日の市場はどう動いた？】",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T02:55:15.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 15,
+   "title": "14時の日経平均は1394円高の6万9703円、東エレクが308.45円押し上げ",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-05T05:01:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 16,
+   "title": "10時の日経平均は210円安の7万473円、東エレクが136.53円押し下げ (2026年10月7日掲載)",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-07T01:01:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 17,
+   "title": "東京エレクトロン株続伸 「営業益1兆円の公算」報道（6日の株式市場）",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-06T07:30:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 18,
+   "title": "寄前【成行注文】売り越しランキング キオクシア、東エレク、ＳＢＧ [08:35]",
+   "publisher": "株探",
+   "at": "2026-10-05T23:36:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 19,
+   "title": "東京エレクトロン－ＳＢＩが目標株価引き上げ 事業環境の好転と装置価格適正化効果を反映",
+   "publisher": "Moomoo",
+   "at": "2026-10-08T00:30:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 20,
+   "title": "【10月5日(月)東京市場】日経平均7万円目前／東エレク・ディスコ急伸／ユニクロ既存店10.8%増📈",
+   "publisher": "YouTube",
+   "at": "2026-10-05T08:50:55.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 21,
+   "title": "東エレクやアドテストなどAI･半導体の一角が下押し - 日替わりコメンテーター解説・前場のマーケット",
+   "publisher": "日経CNBC online",
+   "at": "2026-10-07T01:30:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 22,
+   "title": "今日の株価材料－東エレク 営業益1兆円の公算 27.3期、「AI投資の勢い強まる」",
+   "publisher": "TradingView",
+   "at": "2026-10-05T22:53:21.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 23,
+   "title": "導 (@dujE8JdpRUCq37u) on X",
+   "publisher": "Howl.Link",
+   "at": "2026-10-09T12:37:48.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 24,
+   "title": "米CPI・小売など未公表、グロース株の神経質続く【今日の市場はどう動いた？】",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T02:55:15.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 25,
+   "title": "東京エレクトロンデバイスがZenityとAIエージェントセキュリティの国内販売契約を締結",
+   "publisher": "ニュースメディアVOIX",
+   "at": "2026-10-07T08:48:18.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 26,
+   "title": "14時の日経平均は1394円高の6万9703円、東エレクが308.45円押し上げ",
+   "publisher": "株探",
+   "at": "2026-10-05T05:01:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 27,
+   "title": "日経平均641円安、アジア株軟調と原油高が重荷に",
+   "publisher": "BigGo ファイナンス",
+   "at": "2026-10-08T05:05:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 28,
+   "title": "東京エレクトロン株価が一進一退 「営業益1兆円の公算」報道",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-06T01:40:42.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 29,
+   "title": "東エレク－底堅い 27.3期の営業益1兆円の公算 「AI投資の勢い強まる」＝日経",
+   "publisher": "Moomoo",
+   "at": "2026-10-06T00:04:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 30,
+   "title": "本日の注目個別銘柄：インフロニアHD、東エレク、オプトエレクトなど",
+   "publisher": "株探",
+   "at": "2026-10-05T07:05:15.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 31,
+   "title": "日経平均寄与度ランキング（前引け）〜日経平均は大幅続伸、東エレクが約219円分押し上げ",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-09T14:50:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 32,
+   "title": "注目半導体株が分割！キオクシア、東京エレクトロン、イビデンなど！ Mikael Granlund (CYdbWJGfuM)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-08T11:58:35.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 33,
+   "title": "東京エレクトロン宮城presents 小島よしおとチャーリー西村のまちぶらサイエンス ～ 角田でフシギを解明するピーヤ",
+   "publisher": "tbc東北放送",
+   "at": "2026-10-05T00:38:06.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 34,
+   "title": "株式アナリスト (@hiro_uma_sanspo) on X",
+   "publisher": "Howl.Link",
+   "at": "2026-10-09T10:25:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 35,
+   "title": "15時の日経平均は378円安の7万305円、東エレクが93.55円押し下げ",
+   "publisher": "株探",
+   "at": "2026-10-07T06:01:02.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 36,
+   "title": "日経平均寄与度ランキング（大引け）〜日経平均は反落、東エレクが約154円分押し下げ",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-07T07:43:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 37,
+   "title": "日本株 🇯🇵 ディンダン (@michiyos18) on X",
+   "publisher": "Howl.link",
+   "at": "2026-10-08T06:55:45.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 38,
+   "title": "10時の日経平均は210円安の7万473円、東エレクが136.53円押し下げ",
+   "publisher": "株探",
+   "at": "2026-10-07T01:01:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 39,
+   "title": "後場の日経平均は1639円高でスタート、東京エレクトロンや太陽誘電などが上昇／後場の寄り付き概況",
+   "publisher": "株探",
+   "at": "2026-10-05T04:03:43.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "A",
+   "symbol": "8035",
+   "no": 40,
+   "title": "今日の株価材料－東エレク 営業益1兆円の公算 27.3期、「AI投資の勢い強まる」",
+   "publisher": "TradingView",
+   "at": "2026-10-05T22:53:21.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 1,
+   "title": "ホンダ、VR仮想同乗「Honda DIVE」紹介へ…ジャパンモビリティショー ビズウィーク2026 3枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-05T06:00:04.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 2,
+   "title": "ホンダ、軽自動車「N」シリーズが累計販売台数450万台を突破",
+   "publisher": "千葉テレビ放送株式会社",
+   "at": "2026-10-06T07:48:22.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 3,
+   "title": "画像・写真 | 本田響矢、食事シーンで即興トークも不発 芳根京子「広がらないんですよ」 13枚目",
+   "publisher": "オリコンニュース",
+   "at": "2026-10-09T03:51:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 4,
+   "title": "画像・動画ダウンロード",
+   "publisher": "Honda Global",
+   "at": "2026-10-09T09:58:25.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 5,
+   "title": "「アイドル前髪」の本田紗来 ノースリワンピの秋コーデに反響「超絶かわいい」「透明感あって」「高画質」 (スポーツ報知)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T01:32:04.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 6,
+   "title": "機能を理解してから好きになったスタイリング ホンダ・プレリュードと過ごした夏（4） 白眉はS＋シフトの制御【日本版編集長コラム #102】（AUTOCAR JAPAN） | 自動車情報・ニュース",
+   "publisher": "carview!",
+   "at": "2026-10-04T03:05:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 7,
+   "title": "HRC、2027年1月1日付で社長交代を発表。安田啓一が新社長に就任、渡辺康治は3年間の任務を終え退任へ",
+   "publisher": "note",
+   "at": "2026-10-05T10:41:33.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 8,
+   "title": "軽ワゴンの概念を変えた革新作、ホンダ N-VAN（JJ1・2系）中古車購入ガイド",
+   "publisher": "www.goo-net.com",
+   "at": "2026-10-08T09:00:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 9,
+   "title": "本田翼「子供の頃はプーさんと…」 「HAPPIER WITH YOU.」発表会（スポニチアネックス）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T19:58:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 10,
+   "title": "ホンダF1復帰を進めた渡辺体制から次章へ、HRC新社長に安田啓一氏。2027年から「勝利」へ組織強化",
+   "publisher": "Formula1-Data",
+   "at": "2026-10-05T09:13:51.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 11,
+   "title": "新4気筒エンジン搭載で“100万円切り” ホンダ「CB400スーパーフォア」誕生の舞台裏 “4モデル同時開発”でも専用設計にこだわった理由",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-07T11:40:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 12,
+   "title": "＜画像18 / 24＞【全48枚】「第10回大阪モーターショー」で見つけた美人コンパニオン［2/2］",
+   "publisher": "ウォーカープラス",
+   "at": "2026-10-09T02:51:15.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 13,
+   "title": "「レブル1100」「GB250クラブマン」も登場！ ホンダのバイクを1/20スケールで楽しむ、マックスファクトリーのプラモデルシリーズに注目【クルマとホビー】（くるくら） | 自動車情報・ニュース",
+   "publisher": "carview!",
+   "at": "2026-10-09T06:13:13.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 14,
+   "title": "ホンダ株価が続伸…協業第一弾として、三菱自動車がOEM供給へ",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-09T07:05:03.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 15,
+   "title": "本田翼＞秋のパンツスタイルで4変化 ニットコーデでトレンド感 落ち感パンツコーデで都会的に（毎日キレイ）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-09T03:30:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 16,
+   "title": "機能を理解してから好きになったスタイリング ホンダ・プレリュードと過ごした夏（4） 白眉はS＋シフトの制御【日本版編集長コラム #102】",
+   "publisher": "AUTOCAR JAPAN",
+   "at": "2026-10-04T03:05:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 17,
+   "title": "Hondaのオンラインコーチング「Pit in Coaching」が5年目へ。せかいのはじまりが継続支援。",
+   "publisher": "PR TIMES",
+   "at": "2026-10-08T04:00:01.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 18,
+   "title": "ホンダの次世代HEVシステムは「Honda Hybrid」、燃費10％向上しコスト30％削減：電動化",
+   "publisher": "MONOist",
+   "at": "2026-10-09T03:15:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 19,
+   "title": "画像3 / 9＞ホンダとトヨタがタッグを組む！モータースポーツの魅力を伝えるビッグイベントの開催が決定!!",
+   "publisher": "ウォーカープラス",
+   "at": "2026-10-07T10:33:34.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 20,
+   "title": "本田響矢「時計を際立たせる服を選ぶようになった」 スイス老舗時計ブランド「ロンジン」新モデル発売イベントで〝こだわり〟明かす（中日スポーツ）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-05T08:35:54.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 21,
+   "title": "【本田翼】「日々の疲れがぶっ飛びます」大好きなプーさんに癒されて笑顔 グッズも共同企画「ワガママを言いました」",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-08T03:57:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 22,
+   "title": "本田翼さん「くまのプーさん」愛語る",
+   "publisher": "長崎経済新聞",
+   "at": "2026-10-08T04:58:28.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 23,
+   "title": "ギャラリー：新型ホンダCB400 SUPER FOUR E-Clutch",
+   "publisher": "GQ Japan",
+   "at": "2026-10-05T12:23:54.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 24,
+   "title": "ホンダ、日本の高速道路で走行中ワイヤレスEV充電を実証へ",
+   "publisher": "BigGo ファイナンス",
+   "at": "2026-10-05T17:35:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 25,
+   "title": "ホンダの次世代ハイブリッドシステムの名称が『Honda Hybrid』に決定! 2027年からグローバルで順次搭載し2029年度までに15車種展開、軽量新プラットフォームで走りも激変か!?（MotorFan）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-09T09:19:17.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 26,
+   "title": "本田望結、体にピタピタ！「けしからん体形」「素晴らしい」「後ろから」最新姿にファン歓喜「痩せたね〜綺麗」（スポーツ報知）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-05T03:25:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 27,
+   "title": "ホンダ「N」シリーズ累計販売450万台突破 N-BOXは2026年度上半期の新車販売1位（モトメガネ） | 自動車情報・ニュース",
+   "publisher": "carview!",
+   "at": "2026-10-06T11:00:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 28,
+   "title": "「でっか！！」本田望結の”チラ見え”衣装にコメント続々「大人になったなー」「そもそもお顔が可愛すぎるわ」",
+   "publisher": "中日新聞Web",
+   "at": "2026-10-04T14:13:55.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 29,
+   "title": "今どき敢えてのブリスターフェンダー ホンダ・スーパーワンのデザイナーが語るシティターボIIを思わせる理由 インテリアも1990年代の香り",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-03T02:45:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 30,
+   "title": "画像・写真 | 芳根京子＆本田響矢ら、神田明神で大ヒット祈願 “夫婦”で手を引いて登場 6枚目",
+   "publisher": "オリコンニュース",
+   "at": "2026-10-09T02:56:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 31,
+   "title": "王道ネイキッドの進化──新型ホンダCB400 SUPER FOUR E-Clutch試乗記",
+   "publisher": "GQ Japan",
+   "at": "2026-10-05T12:27:23.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 32,
+   "title": "高速道路で走りながらEV充電、ホンダと大成が挑戦 最速120キロに対応",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-05T07:06:02.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 33,
+   "title": "２６年度上半期に最も売れた新車はホンダ「Ｎ―ＢＯＸ」、５年連続で上半期首位…ＥＶはトヨタ「ｂＺ４Ｘ」",
+   "publisher": "読売新聞",
+   "at": "2026-10-06T11:43:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 34,
+   "title": "ホンダの軽自動車「N」シリーズ、累計販売450万台突破…初代『N-BOX』発売から15年で達成 5枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-06T08:00:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 35,
+   "title": "【海外新車】ホンダ「XR300ラリー」「XR300L」インドで正式発表！ 293.5cc空冷単気筒の新生XRは約30万円から",
+   "publisher": "Webikeプラス",
+   "at": "2026-10-05T23:25:28.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 36,
+   "title": "ホンダジェット藤野道格氏に米航空工学賞ハンサカー賞 「本田宗一郎氏に誇り持って報告」",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-04T18:15:51.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 37,
+   "title": "自民文科部会長に本田氏 元文科政務官",
+   "publisher": "日本教育新聞電子版 NIKKYOWEB",
+   "at": "2026-10-08T05:15:09.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 38,
+   "title": "本田翼さん「くまのプーさん」愛語る",
+   "publisher": "弘前経済新聞",
+   "at": "2026-10-08T08:58:42.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 39,
+   "title": "ホンダの軽自動車「N」シリーズ、累計販売450万台突破…初代『N-BOX』発売から15年で達成 6枚目の写真・画像",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-06T08:00:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "7267",
+   "no": 40,
+   "title": "10kg減話題の本田望結が「素晴らしいスタイル」 のぞく背中に「後ろ姿も美しい」とファンくぎ付け（ENCOUNT）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-04T13:48:33.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 1,
+   "title": "「松岡茉優の弟役の子はアイドルなの!?」Lienel武田創世、『ダウンタイム』とのギャップに反響 (オリコン)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T23:37:33.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 2,
+   "title": "三菱重工Eastが2大会ぶり日本選手権出場 武田健吾が決勝ソロ",
+   "publisher": "スポニチ Sponichi Annex",
+   "at": "2026-10-06T08:03:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 3,
+   "title": "新NISAで空前ブームの高配当株 暴落でも崩れにくい「日経高配当株50」の中身",
+   "publisher": "現代ビジネス",
+   "at": "2026-10-03T00:23:55.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 4,
+   "title": "ベガルタ武田英寿「苦しんできた選手たちが結果を出した。劇的展開を引き出したのはサポーターの皆さん」 ＜磐田戦ミックスゾーンから",
+   "publisher": "河北新報オンライン",
+   "at": "2026-10-04T10:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 5,
+   "title": "写真集「Sango」発売の武田久美子 近藤真彦との共演wo熱望「恩返ししたい。共演できたら」",
+   "publisher": "日刊スポーツ",
+   "at": "2026-10-03T16:46:16.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 6,
+   "title": "『水戸黄門』新作、年末に放送決定 “水戸光圀”武田鉄矢「また旅に出ることとなりました」【コメントあり】",
+   "publisher": "オリコンニュース",
+   "at": "2026-10-06T22:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 7,
+   "title": "武田梨奈、“殺し屋役”に向けてマニラで拳銃訓練「毎日撃っていました」＜ピリオド＞（WEBザテレビジョン）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-06T11:52:05.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 8,
+   "title": "「松岡茉優の弟役の子はアイドルなの!?」Lienel武田創世、『ダウンタイム』とのギャップに反響",
+   "publisher": "オリコンニュース",
+   "at": "2026-10-08T22:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 9,
+   "title": "【速報】武田―広陵 秋季広島県高校野球大会準々決勝（中国新聞デジタル）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-04T01:56:31.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 10,
+   "title": "『水戸黄門』新作、年末に放送決定 “水戸光圀”武田鉄矢「また旅に出ることとなりました」【コメントあり】",
+   "publisher": "オリコンニュース",
+   "at": "2026-10-07T01:50:24.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 11,
+   "title": "【日本代表】久保建英 福原遥との〝結婚効果〟…ＯＢ武田修宏氏らが太鼓判「いい流れになってくる」（東スポWEB）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-05T20:15:30.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 12,
+   "title": "武田修宏氏 福井でトークショー 古巣・東京Ｖの相馬新監督にエール「Ｊ１残留へ頑張ってほしい」",
+   "publisher": "東スポWEB",
+   "at": "2026-10-09T08:50:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 13,
+   "title": "オーゼイフルなど11新薬、14日収載…ブリヌスプリ、490億円の販売予測／大塚「VOYXACT」米国正式承認へ段階的申請完了 など｜製薬業界きょうのニュースまとめ読み（2026年10月7日）",
+   "publisher": "Answers（アンサーズ）",
+   "at": "2026-10-07T09:29:14.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 14,
+   "title": "【ごっつあんゴーラー】元日本代表・武田修宏「フォワードって数字なんですよ」点取り屋だから分かるひと蹴りの重み",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-06T02:00:18.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 15,
+   "title": "【信長の野望 出陣】武田信虎(虎視狼貪)のおすすめ編成と評価",
+   "publisher": "ゲームウィズ",
+   "at": "2026-10-08T05:40:40.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 16,
+   "title": "【試合結果】広陵―武田（準々決勝） - 秋季広島県大会",
+   "publisher": "バーチャル高校野球",
+   "at": "2026-10-05T05:12:53.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 17,
+   "title": "武田薬品工業の40代後半・課長代理級の年収は？【1万件の口コミ情報データ】",
+   "publisher": "ダイヤモンド・オンライン",
+   "at": "2026-10-06T20:30:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 18,
+   "title": "武田薬品工業の50代前半、次長級の年収は？【1万件の口コミ情報データ】",
+   "publisher": "ダイヤモンド・オンライン",
+   "at": "2026-10-09T20:20:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 19,
+   "title": "睡眠障害ナルコレプシーの治療薬「オーゼイフル」保険適用、原因に作用は国内初",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-07T21:54:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 20,
+   "title": "【 訃報 】武田薬品社長・同友会代表幹事を務めた長谷川閑史氏が死去",
+   "publisher": "財界オンライン",
+   "at": "2026-10-05T12:09:36.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 21,
+   "title": "第178回 病的な眠気に襲われる「過眠症」に待望の新薬が登場",
+   "publisher": "ナショナルジオグラフィック日本版",
+   "at": "2026-10-03T22:34:37.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 22,
+   "title": "TBSラジオ「佐倉綾音 論理×ロンリー」10/21(水) スペシャルウィークのゲストにライター・武田砂鉄さんが登場！",
+   "publisher": "TBSラジオ",
+   "at": "2026-10-07T14:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 23,
+   "title": "グローバルナルコレプシー治療市場レポート2026-2033：市場規模、シェア、成長トレン",
+   "publisher": "pando.life",
+   "at": "2026-10-09T09:27:53.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 24,
+   "title": "AI企業、臨床試験の成否をシミュレーションで予測",
+   "publisher": "DG Lab Haus",
+   "at": "2026-10-08T08:52:31.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 25,
+   "title": "「水戸黄門」武田鉄矢主演の新作SPが12月放送、岡崎・尾張を舞台に助さん格さんら再集結 (映画ナタリー)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-06T22:00:11.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 26,
+   "title": "『水戸黄門』新作、年末に放送決定 “水戸光圀”武田鉄矢「また旅に出ることとなりました」【コメントあり】",
+   "publisher": "オリコンニュース",
+   "at": "2026-10-07T01:35:10.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 27,
+   "title": "「オーゼイフル」「ブリヌスプリ」「ヒブサーゴ」など11新薬、10月14日収載",
+   "publisher": "Answers（アンサーズ）",
+   "at": "2026-10-07T03:02:39.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 28,
+   "title": "【画像】【 訃報 】武田薬品社長・同友会代表幹事を務めた長谷川閑史氏が死去",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-05T09:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 29,
+   "title": "三石琴乃、『劇場版 40までにしたい10のこと』で実写キャストに 武田真治や橋本淳も出演（リアルサウンド）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-05T23:02:05.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 30,
+   "title": "タケダの日本発次世代ブロックバスター”オーゼイフル“の国内ピークは70億円で中医協に提出｜Taro Watanabe",
+   "publisher": "note",
+   "at": "2026-10-09T21:57:12.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 31,
+   "title": "［書道家 武田双雲さん］（上）ＡＤＨＤとわかって気が楽になった…会社員時代、電話のメモを毛筆で書いて起こったこと",
+   "publisher": "読売新聞",
+   "at": "2026-10-07T07:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 32,
+   "title": "“ちゃかまちゅ”がクライミング＆バードコールでシン剣勝負！ 武田信玄クイズの最終問題を前に、宮近海斗がまさかの戦略！？",
+   "publisher": "ABCマガジン",
+   "at": "2026-10-06T21:04:15.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 33,
+   "title": "『水戸黄門』新作、年末に放送決定 “水戸光圀”武田鉄矢「また旅に出ることとなりました」【コメントあり】",
+   "publisher": "オリコンニュース",
+   "at": "2026-10-09T21:33:58.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 34,
+   "title": "【速報】武田―広陵 秋季広島県高校野球大会準々決勝 (中国新聞デジタル)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-04T01:56:31.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 35,
+   "title": "画像13 / 61＞初期作の武田信玄はアゴ髭がなく、貫禄十分の三重アゴとモミアゲが魅力？「信長の野望」シリーズに見る“武田信玄”グラフィックの変遷",
+   "publisher": "ウォーカープラス",
+   "at": "2026-10-09T13:00:02.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 36,
+   "title": "日本株ADR6日、ほぼ全面高 武田やソニーG上昇",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-06T21:11:26.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 37,
+   "title": "武田久美子写真集「Sango」表紙（C）ND CHOW",
+   "publisher": "スポニチ Sponichi Annex",
+   "at": "2026-10-03T15:07:10.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 38,
+   "title": "Lienel・武田創世、主人公の弟役でギャップ見せる「ダウンタイム」場面写真公開",
+   "publisher": "推し楽",
+   "at": "2026-10-09T04:56:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 39,
+   "title": "FC東京に４失点…武田将平はゴール裏の湘南サポーターの“沈黙”に奮起を誓う「結果はもちろん、応援してくれる方たちの想いも」【天皇杯３回戦】",
+   "publisher": "サッカーダイジェストWeb",
+   "at": "2026-10-07T23:35:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "4502",
+   "no": 40,
+   "title": "武田光史がオール3連対V",
+   "publisher": "競艇マクール",
+   "at": "2026-10-06T08:25:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 1,
+   "title": "ホテルリートについて、三菱ＵＦＪは保有割合が増加したと報告 [変更報告書No.5]",
+   "publisher": "株探",
+   "at": "2026-10-05T02:35:02.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 2,
+   "title": "三井住友銀行の株価はどこまで上がる？暴落のリスクと今後10年の見通しも解説",
+   "publisher": "かぶリッジ",
+   "at": "2026-10-08T03:49:25.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 3,
+   "title": "三菱UFJ銀行、関西の約15社と「空飛ぶクルマ」商用運航へ検討を開始",
+   "publisher": "日刊自動車新聞",
+   "at": "2026-10-08T00:38:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 4,
+   "title": "サポート詐欺の被害防ぐ 名古屋・東署 三菱UFJ銀の2人に感謝状：ニュース",
+   "publisher": "中日BIZナビ",
+   "at": "2026-10-06T03:56:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 5,
+   "title": "三菱ＵＦＪ銀 ドル円 公表仲値 １５７．９６",
+   "publisher": "みんかぶ",
+   "at": "2026-10-06T01:06:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 6,
+   "title": "三菱ＵＦＪ銀 ドル円 公表仲値 １５８．４５",
+   "publisher": "みんかぶ FX/為替",
+   "at": "2026-10-07T00:56:28.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 7,
+   "title": "株式会社三菱UFJ銀行が株式会社FUJI＜6134＞株式の変更報告書を提出（保有増加）",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-05T02:23:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 8,
+   "title": "尾巻 (@polar_stella) on X",
+   "publisher": "Howl.Link",
+   "at": "2026-10-09T10:40:19.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 9,
+   "title": "JCBと三菱UFJ銀行がASEANの富裕層向けに新たなカードサービスを開始",
+   "publisher": "ニュースメディアVOIX",
+   "at": "2026-10-06T07:27:16.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 10,
+   "title": "【三菱ＵＦＪ銀行】「金利上昇＝銀行株が安心」と“500万円分”購入した友人…「配当で年13万円あるから暴落しても大丈夫」と言いますが、ずっと安泰ですか？ 時価総額上位でも“一括投資は危険”な理由",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-05T05:10:26.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 11,
+   "title": "女性管理職比率等は業種で大きな違い 人的資本情報開示は女性・従業員エンゲージメント・育成/獲得・健康・研修が中心",
+   "publisher": "PR TIMES",
+   "at": "2026-10-07T05:31:08.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 12,
+   "title": "三菱UFJ eスマート証券が贈るおためし信用®リリース記念のXフォロー&リポストキャンペーン",
+   "publisher": "ニュースメディアVOIX",
+   "at": "2026-10-05T12:36:07.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 13,
+   "title": "0:15 マーケットの主役キオクシア＆ソフトバンクG決算解説",
+   "publisher": "Unisba Media",
+   "at": "2026-10-06T20:01:40.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 14,
+   "title": "資産3000万円以上が対象 MUFG「エムット」最上位サービスと“年会費無料”アメックス・プラチナの魅力とは（ITmedia Mobile）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T07:35:15.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 15,
+   "title": "27年1月、「フィデア銀行」が誕生 地域銀は5件の経営統合を予定【ニッキンレポート】",
+   "publisher": "ニッキンONLINE",
+   "at": "2026-10-04T19:50:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 16,
+   "title": "三菱UFJ信託銀行が示す2026年における女性管理職比率と人的資本開示の現状",
+   "publisher": "ニュースメディアVOIX",
+   "at": "2026-10-07T07:29:52.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 17,
+   "title": "迫る「AIがAIからモノを買う」時代 MUFGやLINEヤフー、博報堂が布石",
+   "publisher": "日経クロステック Active",
+   "at": "2026-10-07T20:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 18,
+   "title": "年間騰落率、三菱UFJ「eMAXIS 日経半導体株」が152.3%で首位【ニッキン投信情報】",
+   "publisher": "ニッキンONLINE",
+   "at": "2026-10-05T19:50:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 19,
+   "title": "MUFGスタジアム、Canvaがオフィシャルデザインパートナーに！『CanvaゲートD』が誕生…「伝える力」で新たな社会価値を創出",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-07T23:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 20,
+   "title": "株式特例報告積水ハＲ( 5.11%→ 6.04%)三菱ＵＦＪフィナンシャル・など",
+   "publisher": "Moomoo",
+   "at": "2026-10-05T02:05:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 21,
+   "title": "三菱UFJカードの評判・口コミは？メリット・デメリットや他種類との違いを徹底比較",
+   "publisher": "投資情報のフィスコ",
+   "at": "2026-10-03T07:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 22,
+   "title": "資産3,000万円以上で入会金・年会費が永年無料！三菱UFJ銀行が贈る富裕層向け「エムット Excellent Club」誕生",
+   "publisher": "DXマガジン",
+   "at": "2026-10-04T07:00:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 23,
+   "title": "スカイドライブ製の機体で「空飛ぶクルマ」商用運航に向け共同検討、三菱ＵＦＪ銀…ＧＳＥで各行がスタートアップ支援アピール",
+   "publisher": "読売新聞",
+   "at": "2026-10-07T01:55:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 24,
+   "title": "三菱UFJ信託銀、賃貸借仲介手数料が年10億円に インフレで〝購入〟提案も",
+   "publisher": "ニッキンONLINE",
+   "at": "2026-10-05T19:50:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 25,
+   "title": "資産3000万円以上が対象　MUFG「エムット」最上位サービスと“年会費無料”アメックス・プラチナの魅力とは - ITmedia Mobile",
+   "publisher": "ITmedia",
+   "at": "2026-10-08T07:27:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 26,
+   "title": "（お知らせ）米国株式取扱い4,000銘柄超記念！2回買付で最大2,000円が当たる毎週抽選キャンペーン",
+   "publisher": "ニコニコニュース",
+   "at": "2026-10-05T08:51:13.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 27,
+   "title": "空飛ぶクルマ、2028年の商用運航目指す 三菱UFJ銀など異業種15社が関西で連携",
+   "publisher": "産経ニュース",
+   "at": "2026-10-06T12:30:21.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 28,
+   "title": "元三菱UFJ銀行 代表取締役専務 長田忠千代氏、高卒採用バンクの戦略顧問に就任",
+   "publisher": "PR TIMES",
+   "at": "2026-10-07T03:31:32.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 29,
+   "title": "FOMC議事録は未発表、米金利見通しの焦点に【今日の市場はどう動いた？】",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-07T02:56:02.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 30,
+   "title": "SkyDrive、三菱UFJ銀行をはじめ関西を代表する複数の企業と連携して関西圏での「空飛ぶクルマ」社会実装と商用運航実現に向けた共同検討を開始",
+   "publisher": "PR TIMES",
+   "at": "2026-10-06T10:00:42.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 31,
+   "title": "【インドネシア】支店とダナモン銀統合に期待、三菱ＵＦＪ銀専務 (NNA)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-07T06:28:26.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 32,
+   "title": "SkyDrive、関西主要企業と空クル社会実装本格化",
+   "publisher": "航空新聞社",
+   "at": "2026-10-07T05:56:54.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 33,
+   "title": "（お知らせ）米国株式取扱い4,000銘柄超記念！2回買付で最大2,000円が当たる毎週抽選キャンペーン",
+   "publisher": "Infoseek",
+   "at": "2026-10-05T21:10:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 34,
+   "title": "株式会社三菱UFJ銀行が愛知製鋼株式会社＜5482＞株式の変更報告書を提出（保有減少）",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-05T02:16:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 35,
+   "title": "【本日の買い売り優勢状況】10/06三菱UFJフィナンシャル・グループの買い優勢金額は159.56億円",
+   "publisher": "Moomoo",
+   "at": "2026-10-06T13:23:37.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 36,
+   "title": "🇯🇵 10倍株 (@smith_john13645) on X",
+   "publisher": "Howl.Link",
+   "at": "2026-10-09T04:29:58.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 37,
+   "title": "メガ銀、リテール再興",
+   "publisher": "日経クロステック（xTECH）",
+   "at": "2026-10-05T19:30:24.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 38,
+   "title": "「三菱ＵＦＪ銀行海老名支店」と「かしわ台駅前郵便局」に特殊詐欺未然防止で感謝状 海老名警察署〈海老名市・座間市・綾瀬市〉",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-04T08:27:09.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 39,
+   "title": "「三菱ＵＦＪ銀行海老名支店」と「かしわ台駅前郵便局」に特殊詐欺未然防止で感謝状 海老名警察署 海老名市・座間市・綾瀬市",
+   "publisher": "au Webポータル",
+   "at": "2026-10-04T05:08:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "8306",
+   "no": 40,
+   "title": "支店とダナモン銀統合に期待、三菱ＵＦＪ銀専務",
+   "publisher": "NNA ASIA",
+   "at": "2026-10-06T15:00:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 1,
+   "title": "加熱式たばこブランド「Ploom」、大型プログラム「ONE MOMENTs by Ploom」スタート",
+   "publisher": "Excite エキサイト",
+   "at": "2026-10-09T04:00:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 2,
+   "title": "JT海外子会社のウクライナ工場を攻撃 ロシア国防省が発表「ウクライナ軍向けの小火器用の弾薬を製造」と主張",
+   "publisher": "Infoseek",
+   "at": "2026-10-07T11:48:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 3,
+   "title": "ＦＲＯＮＴＥＯ---反発、JTのR&D組織が医学論文探索AIを導入",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-09T04:57:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 4,
+   "title": "【JT株】6年前“配当金目当て”で「1株2000円×200株」購入したら、株価が「約7000円」と3倍にアップ！ でも「たばこは斜陽産業」なら、そろそろ売るべきですか？ 高配当株の注意点とは (ファイナンシャルフィールド)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-03T05:20:01.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 5,
+   "title": "ウクライナのJT工場を攻撃 ロシア国防省",
+   "publisher": "ABEMA TIMES",
+   "at": "2026-10-07T23:53:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 6,
+   "title": "ウクライナの「JT工場」攻撃 ロシア発表",
+   "publisher": "千葉テレビ放送株式会社",
+   "at": "2026-10-07T10:31:23.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 7,
+   "title": "ウクライナのJT工場攻撃 9月にも標的、ロシア国防省",
+   "publisher": "nippon.com",
+   "at": "2026-10-07T09:42:06.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 8,
+   "title": "ウクライナのJT工場攻撃 9月にも標的、ロシア国防省",
+   "publisher": "47NEWS",
+   "at": "2026-10-07T09:41:56.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 9,
+   "title": "【速報】ロシア、ウクライナのJT工場攻撃と発表",
+   "publisher": "47NEWS",
+   "at": "2026-10-07T09:11:36.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 10,
+   "title": "JTのコーポレートR&D組織「D-LAB」がFRONTEOの医学論文探索AI「KIBIT Amanogawa」を導入",
+   "publisher": "ニコニコニュース",
+   "at": "2026-10-08T20:00:24.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 11,
+   "title": "加熱式たばこブランド「Ploom」、大型プログラム「ONE MOMENTs by Ploom」スタート",
+   "publisher": "BCN Retail",
+   "at": "2026-10-09T04:00:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 12,
+   "title": "ウクライナのJT工場を攻撃 ロシア国防省が発表 – Quebee キュエビー",
+   "publisher": "QAB 琉球朝日放送",
+   "at": "2026-10-07T11:32:34.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 13,
+   "title": "ロシア国防省がJTウクライナ工場を攻撃、弾薬製造の拠点と主張",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-07T23:53:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 14,
+   "title": "ＪＴ－4日ぶり反落 ロシア国防省、ウクライナのＪＴ工場を再び攻撃＝日経",
+   "publisher": "Moomoo",
+   "at": "2026-10-08T00:04:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 15,
+   "title": "ウクライナの「JT工場」攻撃 ロシア発表",
+   "publisher": "UQライフ",
+   "at": "2026-10-07T10:28:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 16,
+   "title": "前場コメント No.10 日清粉Ｇ、ＪＴ、池上通、イルグルム、インフォマート、富士通(トレーダーズ・ウェブ)",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T02:31:06.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 17,
+   "title": "画像4 / 15＞JT「Ploom」からEVO新メンソール強・弱2銘柄＆限定色デバイスが発売！渋谷に新製品を購入できる“没入体験型”ポップアップストアも",
+   "publisher": "ウォーカープラス",
+   "at": "2026-10-09T08:45:28.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 18,
+   "title": "「軍事生産に関与なし」とＪＴ",
+   "publisher": "京都新聞デジタル",
+   "at": "2026-10-07T10:38:14.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 19,
+   "title": "ウクライナのJT工場を攻撃 ロシア国防省",
+   "publisher": "Infoseek",
+   "at": "2026-10-07T23:53:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 20,
+   "title": "JT海外子会社のウクライナ工場を攻撃 ロシア国防省が発表「ウクライナ軍向けの小火器用の弾薬を製造」と主張",
+   "publisher": "Excite エキサイト",
+   "at": "2026-10-07T12:00:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 21,
+   "title": "ロシア軍 ウクライナのJT子会社を攻撃と発表 9月にも2回攻撃",
+   "publisher": "Excite エキサイト",
+   "at": "2026-10-07T16:56:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 22,
+   "title": "JT「EVO」投票1位のカカオ×ミントフレーバーが全国販売へ！ 新デザインの「Ploom CUBE」も登場（GetNavi web）",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-07T12:00:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 23,
+   "title": "浅草に桜並木や花魁道中が出現「浅草六区 SAKURA STREET ー桜艶通りー」が開催中！喫煙ブースでJTの「EVO」新フレーバー先行体験も",
+   "publisher": "ウォーカープラス",
+   "at": "2026-10-04T07:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 24,
+   "title": "ロシア軍がウクライナのJT子会社工場を攻撃、9月にも2回被害 (2026年10月8日掲載)",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-07T16:53:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 25,
+   "title": "ウクライナのJT工場を攻撃 ロシア国防省 JT側「軍事物資の生産一切ない」 けが人なし",
+   "publisher": "HOME広島ホームテレビ",
+   "at": "2026-10-07T12:31:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 26,
+   "title": "【速報】ウクライナのJT＝日本たばこ産業の工場を攻撃 ロシア国防省 (テレビ朝日系（ANN）)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-07T09:48:23.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 27,
+   "title": "JT「EVO」投票1位のカカオ×ミントフレーバーが全国販売へ！ 新デザインの「Ploom CUBE」も登場",
+   "publisher": "千葉テレビ放送株式会社",
+   "at": "2026-10-07T12:05:27.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 28,
+   "title": "ウクライナのＪＴ工場に攻撃 ９月にも２回被害、操業停止中―ロシア",
+   "publisher": "時事ドットコム",
+   "at": "2026-10-07T13:14:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 29,
+   "title": "ウクライナのJT工場攻撃 9月にも標的、ロシア国防省 (2026年10月7日掲載)",
+   "publisher": "ライブドアニュース",
+   "at": "2026-10-07T11:15:14.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 30,
+   "title": "JTがFRONTEOのAI導入、4000万報の論文から新技術を探索",
+   "publisher": "ニュースメディアVOIX",
+   "at": "2026-10-08T07:02:43.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 31,
+   "title": "「軍事生産に関与なし」とJT",
+   "publisher": "Infoseek",
+   "at": "2026-10-07T10:38:14.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 32,
+   "title": "【速報】「軍事生産に関与なし」とJT",
+   "publisher": "47NEWS",
+   "at": "2026-10-07T10:38:14.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 33,
+   "title": "JTの森中辺路 保全活動",
+   "publisher": "テレビ和歌山",
+   "at": "2026-10-09T03:41:00.000Z",
+   "broad": true,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 34,
+   "title": "＜画像1 / 8＞迫る原則屋内禁煙、喫煙者はどうなる？ JTに聞いてきました 「日本人の配慮力に期待」",
+   "publisher": "ウォーカープラス",
+   "at": "2026-10-07T02:43:06.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 35,
+   "title": "JT協賛「NORTH STAR」がJOPT 2026 Tokyo #03で開催｜日程・参加費・限定グッズを紹介",
+   "publisher": "LightTHREE",
+   "at": "2026-10-08T08:15:09.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 36,
+   "title": "「軍事生産に関与なし」とＪＴ",
+   "publisher": "大分合同新聞",
+   "at": "2026-10-06T22:39:36.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 37,
+   "title": "ウクライナのＪＴ工場に攻撃＝９月にも２回被害、操業停止中―ロシア",
+   "publisher": "時事通信ニュース",
+   "at": "2026-10-07T12:39:44.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 38,
+   "title": "ロシア軍、ウクライナにあるJTのたばこ工場を攻撃",
+   "publisher": "朝日新聞",
+   "at": "2026-10-07T15:39:09.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 39,
+   "title": "ロシアがウクライナにあるJT子会社の工場を攻撃 | NHKニュース | ロシア、ウクライナ情勢",
+   "publisher": "NHKニュース",
+   "at": "2026-10-07T20:41:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "B",
+   "symbol": "2914",
+   "no": 40,
+   "title": "狙いは？JT工場をロシア攻撃 日本“追加制裁”関連は？【スーパーJチャンネル】(2026年10月8日)",
+   "publisher": "YouTube",
+   "at": "2026-10-08T11:10:14.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 1,
+   "title": "ユニクロ、大中華圏の売上高が欧米に抜かれる 中国本土の店舗は1年で74店純減",
+   "publisher": "BigGo ファイナンス",
+   "at": "2026-10-09T13:05:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 2,
+   "title": "明日の株式相場に向けて＝７万円の攻防が焦点、ファストリの決算など関心集まる",
+   "publisher": "株探",
+   "at": "2026-10-07T08:30:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 3,
+   "title": "ファストリ、今期最終は3％増で7期連続最高益、前期配当を210円増額・今期は50円増配へ",
+   "publisher": "株探",
+   "at": "2026-10-08T06:31:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 4,
+   "title": "ファストリ、売上高３．９兆円",
+   "publisher": "伊那経済新聞",
+   "at": "2026-10-08T14:20:33.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 5,
+   "title": "ファストリ、Ｈ＆Ｍを抜き世界２位へ",
+   "publisher": "沖縄タイムス社",
+   "at": "2026-10-08T08:35:25.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 6,
+   "title": "◎ファストリ、売上高３．９兆円",
+   "publisher": "時事通信ニュース",
+   "at": "2026-10-08T11:32:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 7,
+   "title": "◎ファストリ、売上高３．９兆円＝海外好調で過去最高―２６年８月期",
+   "publisher": "時事通信ニュース",
+   "at": "2026-10-08T07:10:27.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 8,
+   "title": "ファストリ、世界２位へ ユニクロ好調、過去最高益",
+   "publisher": "山陽新聞",
+   "at": "2026-10-08T10:40:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 9,
+   "title": "ファストリ、売上高３．９兆円 海外好調で過去最高―２６年８月期",
+   "publisher": "時事ドットコム",
+   "at": "2026-10-08T10:48:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 10,
+   "title": "ファストリ、世界2位へ　「H＆M」抜くか、売上高過去最高",
+   "publisher": "サンスポ",
+   "at": "2026-10-08T11:43:33.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 11,
+   "title": "国内セブン減益vsユニクロ最高益……大手小売で明暗分かれた稼ぎ方の本質的な違いとは - ビジネス+IT",
+   "publisher": "ビジネス+IT",
+   "at": "2026-10-09T22:10:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 12,
+   "title": "「ユニクロ」がH＆M抜き、アパレル2位へ 売上高10兆円「視野」",
+   "publisher": "朝日新聞",
+   "at": "2026-10-08T07:00:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 13,
+   "title": "ファストリ、世界２位へ",
+   "publisher": "埼玉新聞",
+   "at": "2026-10-08T09:34:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 14,
+   "title": "ファストリ、売上高３．９兆円",
+   "publisher": "長崎経済新聞",
+   "at": "2026-10-08T12:58:27.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 15,
+   "title": "決算:ファストリ、小売り初の純利益5000億円 データで「3無駄」減らす",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-08T09:38:59.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 16,
+   "title": "ファーストリテイリングが売上高でH&Mを逆転 3位転落のH&Mは創業家の株式買い増しで上場廃止シナリオも浮上｜「SVT グローバル」10月8日",
+   "publisher": "SEVENTIE TWO",
+   "at": "2026-10-08T23:20:56.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 17,
+   "title": "売上高･純利益 過去最高 ファーストリテアリングが好決算 世界2位へ スウェーデンH＆M上回る見通し（テレビ朝日系（ANN））",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T10:54:53.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 18,
+   "title": "【ファストリ 柳井社長「ユニクロを世界一のブランドへ」】GUは売上1兆円目指す アジアで成長加速へ（日本ネット経済新聞）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T21:00:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 19,
+   "title": "ファストリが反発、９月国内ユニクロ既存店売上高が２カ月ぶり前年上回る",
+   "publisher": "株探",
+   "at": "2026-10-05T00:12:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 20,
+   "title": "ユニクロ親会社ファーストリテイリング、中国本土の売上高と利益が回復",
+   "publisher": "IndexBox",
+   "at": "2026-10-08T11:20:40.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 21,
+   "title": "ファストリ、世界2位へ ユニクロ好調、過去最高益 (共同通信)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T09:34:09.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 22,
+   "title": "前場コメント No.1 ファーストリテイ、ローツェ、アイビー、７＆Ｉ－ＨＤ、オンワードＨＤ、ソフトバンクＧ(トレーダーズ・ウェブ)",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T02:31:02.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 23,
+   "title": "「ユニクロ」のファストリ売上高3兆9633億円 H&Mを抜いて世界2位 (WWDJAPAN.com)",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T06:57:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 24,
+   "title": "ファーストリテイリング（ユニクロ）：気候変動の影響下でも過去最高益を更新",
+   "publisher": "FashionNetwork France",
+   "at": "2026-10-08T12:12:26.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 25,
+   "title": "ファーストリテイリング26年8月期、売上高4兆円目前 欧米ユニクロ急成長で5期連続過去最高",
+   "publisher": "Fashionsnap.com",
+   "at": "2026-10-08T07:13:09.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 26,
+   "title": "ファーストリテイリング株が本日下落している理由とは 執筆",
+   "publisher": "Investing.com 日本",
+   "at": "2026-10-09T02:05:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 27,
+   "title": "ファストリ、売上高３．９兆円",
+   "publisher": "ｄメニューニュース",
+   "at": "2026-10-08T11:33:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 28,
+   "title": "ファーストリテイリングではユニクロが他ブランドを大きく上回る好調ぶりを見せる一方、GUの売上高の伸びは小幅にとどまり、セオリーの売上は減少している。",
+   "publisher": "FashionNetwork France",
+   "at": "2026-10-09T06:38:36.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 29,
+   "title": "ファストリ6年連続で過去最高の最終利益 ユニクロ事業好調で国内外の全地域で増収増益 H&Mを抜きアパレル業界2位へ",
+   "publisher": "TBS NEWS DIG",
+   "at": "2026-10-08T14:38:23.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "9983",
+   "no": 30,
+   "title": "ファストリ、世界２位へ ユニクロ好調、過去最高益",
+   "publisher": "山形新聞",
+   "at": "2026-10-08T09:34:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 1,
+   "title": "日立製作所がデータセンター用電力設備の供給加速に向け戦略提携！モジュール型電力設備の導入でデータセンター建設の遅延を解消",
+   "publisher": "DXマガジン",
+   "at": "2026-10-05T07:42:28.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 2,
+   "title": "【日立市】10/8 最高23℃、最低12℃、昼間は晴れる予想【朝版】",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-07T20:14:38.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 3,
+   "title": "総務省の令和8年度「ワット・ビット連携関連実証」に着手しました",
+   "publisher": "PR TIMES",
+   "at": "2026-10-08T05:00:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 4,
+   "title": "日立ソリューションズ西日本、業務規程をAI検索 金融機関向け新サービス",
+   "publisher": "ニッキンONLINE",
+   "at": "2026-10-05T20:05:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 5,
+   "title": "日立製作所、Anthropicの重要インフラ防衛計画に参加",
+   "publisher": "Moomoo",
+   "at": "2026-10-09T02:18:16.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 6,
+   "title": "社会人野球日本選手権：関東代表決定戦 日立、本大会逃す 本塁遠く、零封負け ／茨城",
+   "publisher": "毎日新聞",
+   "at": "2026-10-06T20:02:32.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 7,
+   "title": "写真：日立、サイバー対策に参加 米アンソロピック創設",
+   "publisher": "沖縄タイムス社",
+   "at": "2026-10-09T03:41:13.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 8,
+   "title": "日立改革の真相",
+   "publisher": "日経クロステック（xTECH）",
+   "at": "2026-10-06T03:34:03.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 9,
+   "title": "日立と独アジャイルロボッツ、AIロボティクスの頭脳開発で協創パートナーシップに合意",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-05T08:45:03.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 10,
+   "title": "【ダイキン・日立・パナ・三菱電機】空調大手4社の「北米・欧州事業戦略」を徹底比較、勝ち組はどこ？データセンターバブルでM＆Aが超活発",
+   "publisher": "ダイヤモンド・オンライン",
+   "at": "2026-10-04T19:50:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 11,
+   "title": "日立ソリューションズのサブスクビジネス管理基盤「BSSsymphony」がMCPに対応（クラウド Watch）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-08T08:56:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 12,
+   "title": "日立製作所とファナックがフィジカルAI実装の戦略的パートナーシップ締結（ビジネス＋IT）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-05T04:15:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 13,
+   "title": "日立ソリューションズのエンジニア3名が「2026 OCI Top Partner Engineers」を受賞【お知らせ】",
+   "publisher": "PR TIMES",
+   "at": "2026-10-05T05:00:01.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 14,
+   "title": "日立、暗号資産AML監視サービスを商用開始 取引前後と流通を一括監視",
+   "publisher": "BigGo ファイナンス",
+   "at": "2026-10-05T06:05:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 15,
+   "title": "茨城県日立市諏訪町に、まちと人の\"これから\"をつくる、福祉×まちづくりの拠点「ココスワ」がオープン。10月31日(土)にまちびらきイベントを開催",
+   "publisher": "PR TIMES",
+   "at": "2026-10-09T03:00:02.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 16,
+   "title": "日立、暗号資産・ステーブルコインなどのデジタルアセット取引向けAMLモニタリングサービスDigital Asset AML Platformを提供開始 | 株式会社 日立製作所のプレスリリース",
+   "publisher": "PR TIMES",
+   "at": "2026-10-05T02:00:02.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 17,
+   "title": "JPX、AIエージェント活用した日立の「脆弱性・パッチ探索分析レポートサービス」を先行導入",
+   "publisher": "EnterpriseZine",
+   "at": "2026-10-07T02:48:19.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 18,
+   "title": "アンソロピック創設のサイバー防御計画、日立製作所が創設メンバーとして参加へ…高性能ＡＩで弱点を発見・修復",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-09T11:05:53.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 19,
+   "title": "後場コメント No.3 タカラスタン、ＧＭＯ、技研製、日立、アイシン、京セラ(トレーダーズ・ウェブ)",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T06:31:04.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 20,
+   "title": "日立・ヤマトも大注目…日本人のシリコンバレー連続起業家が挑む「物流AI革命」の正体 - ビジネス+IT",
+   "publisher": "ビジネス+IT",
+   "at": "2026-10-07T21:50:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 21,
+   "title": "デジタル日立への脱皮",
+   "publisher": "日経クロステック（xTECH）",
+   "at": "2026-10-09T09:30:39.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 22,
+   "title": "日立建機、マルチブーム仕様解体機を受注開始…最大作業高さ28m",
+   "publisher": "レスポンス（Response.jp）",
+   "at": "2026-10-04T06:30:03.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 23,
+   "title": "日立、米アンソロピックと重要インフラ防衛＝先端AI活用の取り組み参画(時事通信)",
+   "publisher": "Yahoo!ファイナンス",
+   "at": "2026-10-09T09:03:50.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 24,
+   "title": "複数の取引ルートをまとめて監視！日立製作所がデジタル資産向けのリスク検出システムを提供",
+   "publisher": "DXマガジン",
+   "at": "2026-10-05T07:22:31.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 25,
+   "title": "2大大会出場を逃した日立製作所・林監督 「考え直さないと」",
+   "publisher": "毎日新聞",
+   "at": "2026-10-06T07:35:25.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 26,
+   "title": "当社のストーリー | 日立エナジー",
+   "publisher": "Hitachi Energy",
+   "at": "2026-10-06T07:00:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 27,
+   "title": "アンソロピック、重要インフラ防衛で11社連合 日立や三菱電機系が参画",
+   "publisher": "BigGo ファイナンス",
+   "at": "2026-10-09T06:35:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 28,
+   "title": "日立ソリューションズ西日本、生成AIで金融機関の業務規程確認を効率化する新サービス",
+   "publisher": "クラウド Watch",
+   "at": "2026-10-05T06:23:00.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 29,
+   "title": "日立、アンソロピックの重要インフラ向けサイバー防衛プログラムに参画（あたらしい経済）",
+   "publisher": "Yahoo!ニュース",
+   "at": "2026-10-09T04:21:29.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "6501",
+   "no": 30,
+   "title": "アンソロピック、重要インフラのサイバー防衛 日立や三菱電機系と",
+   "publisher": "日本経済新聞",
+   "at": "2026-10-09T06:12:47.000Z",
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 1,
+   "title": "angels vs guardians condannato boston river - millonarios 株塾・株道場のサイトです。",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T11:01:21.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 2,
+   "title": "オリエンタルランド、過去最高売上でも止まらぬ株価下落 「夢の国」をむしばむのは“金利”？ Sport Surge (IgW0roqvtB)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-09T00:31:27.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 3,
+   "title": "オリエンタルランド 銘柄分析 耳だけ企業分析 | 音速でわかる日本株 Ss United States (TYLtUZ37jR)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T14:57:39.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 4,
+   "title": "(株)オリエンタルランド【4661】神か罠か！上場30周年特別株主優待発表！100株でチケット最大3枚！ Fort Lauderdale Air Show 2026 (fMLo13y21b)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T00:56:28.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 5,
+   "title": "【注目】オリエンタルランド株、今後の展開に期待大！？ Nba Free Agents 2026 (Lxgr7Hy6sO)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T15:45:29.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 6,
+   "title": "【話題の銘柄 ３分解説】 オリエンタルランド：4661【ずんだもん/株式投資/解説】 Kick (ObOg7HU0mm)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-05T02:38:55.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 7,
+   "title": "株式会社オリエンタルランドとの連携事業「子どものワークショップ」について（令和8年10月19日実施）",
+   "publisher": "千葉県公式ホームページ",
+   "at": "2026-10-06T05:09:54.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 8,
+   "title": "日経6万円タッチから一転、暴落の罠？キオクシア史上最高値 Vs オリエンタルランド10%暴落。5月相場の明暗を徹底解説！ Meek (L8oglHo2uo)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T08:04:25.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 9,
+   "title": "どうなる株価！？数字で分析、解説するサンリオとオリエンタルランド 決算発表 Brock Stewart (sMgQKWom4d)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T01:40:56.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 10,
+   "title": "オリエンタルランドどこまで上がる？AIが最新の株価見通しを徹底分析！ Hailstorm (KM9OF1AiZ1)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-05T12:05:39.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 11,
+   "title": "【なぜ】業績最高もオリエンタルランド株価1/2に。買いチャンスなのか？ Kyle Mowitz (GlpCWHGjih)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-06T10:30:17.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 12,
+   "title": "【プロ厳選！新NISA成長期待株3選】米ディズニー株よりオリエンタルランドを推す理由／アインシュタインが“人類最大の発明” と読んだ複利効果の仕組み【MONEY SKILL SET EXTRA】 Emegha (qz5FrrFh5o)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T14:53:16.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 13,
+   "title": "【株価復活へ】オリエンタルランド（4661）株価見通し解説!!2025年度個人株主増加数ランキング第７位 Virus Hantavirus (ZtJ6ZRvWDu)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T10:14:48.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 14,
+   "title": "【収益最大化へ】短期的には上昇も、中長期の成長は危険信号点滅?!オリエンタルランド Guardians Game Today (o1eWrpNt9G)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-05T12:47:22.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 15,
+   "title": "2024-06-14 ：オリエンタルランド(4661.T) 5分ろうそく足株価チャート Dividendo (tkosAbnigo)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-04T23:05:18.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 16,
+   "title": "2024-06-18 ：オリエンタルランド(4661.T) 5分ろうそく足株価チャート Disney Cruise Ships (hy629amVt4)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T14:52:55.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 17,
+   "title": "【ライブ】日経平均株価続伸/《決算速報》富士通 上方修正 オリエンタルランド キーエンス 武田薬品 など /株式投資/最新情報｜1月29日(木)〈Every Stock NEWS 石渡さくら〉 Catanzaro Informa (oOVBnlxcHw)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-04T03:59:11.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 18,
+   "title": "2024-06-10 ：オリエンタルランド(4661.T) 5分ろうそく足株価チャート Revisione (5ymdhZ7SOL)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-05T16:54:20.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 19,
+   "title": "サンリオ・オリエンタルランド株もゾンビ沼 | 任天堂だけではない崩壊リスク (8136) (4661) Paul Daraîche (zlKt0kLJ3M)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-04T20:17:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 20,
+   "title": "【オリエンタルランド決算】株主優待としても大人気OLC！3Q決算および株の買い時を解説 Aek Athens Vs Panathinaikos (6GDPwXkqHK)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-09T01:17:07.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 21,
+   "title": "東京ディズニーシー(R)25周年を記念してスワロフスキー(R)・クリスタルを使用したグッズが登場",
+   "publisher": "PR TIMES",
+   "at": "2026-10-08T07:16:00.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 22,
+   "title": "【株主優待】オリエンタルランド株の決算を解説。株価は買い時か。 Kerala Blasters Vs Mohammedan (lNnXYQEl2P)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T05:00:32.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 23,
+   "title": "画像7 / 8＞ディズニー・ハロウィーンの20余年の歴史、ハロウィン熱狂には惑わされず「誰もが安心できる場所」貫く",
+   "publisher": "ウォーカープラス",
+   "at": "2026-10-08T20:40:53.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 24,
+   "title": "オリエンタルランド株の一部売却 京成電鉄が発表【WBS】（2024年3月7日） álvaro Cortés (C356R03SGV)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-05T12:43:50.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 25,
+   "title": "＜画像1 / 20＞35周年ならではの演出も！ディズニー「サンクスデー 2019」をレポート",
+   "publisher": "ウォーカープラス",
+   "at": "2026-10-06T19:22:10.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 26,
+   "title": "株価暴落中のオリエンタルランドはいま買うべき？私の結論はコレ Alexander Zverev (ciRA8oVnjk)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-02T23:11:43.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 27,
+   "title": "【4661オリエンタルランド】反発で2755円を超えられるか？プロが教える「決算後に動く」具体的な売買シナリオ。 #オリエンタルランド #株価予想 #金こむチャンネル Tmz (iDEk9yZcqu)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-04T14:53:04.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 28,
+   "title": "減益予想のはずが営業利益23%増｜オリエンタルランド1Qの答え合わせ Daniil Medvedev (w3nj3tR3eP)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-07T16:26:24.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 29,
+   "title": "株価下落のオリエンタルランド、今買うべきか？買いは〇〇円 Randolph County (WXS8AfSbRF)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-04T20:56:52.000Z",
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "C",
+   "symbol": "4661",
+   "no": 30,
+   "title": "798【OLC株価大暴落 オリエンタルランド チャート分析】20241128 気づきにくい株の本質を探る Bb (Icv93njPI9)",
+   "publisher": "Unisba Media",
+   "at": "2026-10-03T08:37:00.000Z",
+   "broad": false,
+   "strict": false
+  }
+ ]
+}

@@ -654,16 +654,18 @@ function jpAliasUsable(alias: { alias: string; next: string }, items: NaverAcIte
   return others.size < 2;
 }
 
-/** 네이버 자동완성 원본 항목 — 실패하면 빈 목록 */
-async function naverAcItems(q: string): Promise<NaverAcItem[]> {
+/** 네이버 자동완성 원본 항목 — 실패하면 null(겹침을 모름) */
+async function naverAcItems(q: string): Promise<NaverAcItem[] | null> {
   try {
     const res = await fetchJson<{ items?: NaverAcItem[] }>(`https://ac.stock.naver.com/ac?q=${encodeURIComponent(q)}&target=stock`, {
       headers: { "user-agent": NAVER_UA },
       revalidate: 86400,
     });
     return res.items ?? [];
-  } catch {
-    return [];
+  } catch (err) {
+    // 실패하면 겹치는 종목을 모르는 것이라 그 약칭은 쓰지 않는다(호출부 — 오탐보다 누락)
+    console.warn(`[news] 네이버 자동완성 실패 "${q}" — 이 약칭은 쓰지 않음:`, err instanceof Error ? err.message : err);
+    return null;
   }
 }
 
@@ -1328,11 +1330,11 @@ export async function fetchStockNewsBySide(
           await Promise.all(
             jpBase.aliases.map(async (al) => {
               const items = await naverAcItems(al.alias);
-              const rivals = items
+              const rivals = (items ?? [])
                 .filter((i) => i.code?.toUpperCase() !== symbol.toUpperCase())
                 .map((i) => i.name?.trim() ?? "")
                 .filter((n) => n.startsWith(al.alias));
-              return { ...al, rivals, usable: jpAliasUsable(al, items, symbol) };
+              return { ...al, rivals, usable: items !== null && jpAliasUsable(al, items, symbol) };
             }),
           )
         )
@@ -1349,7 +1351,12 @@ export async function fetchStockNewsBySide(
       }
     : null;
   // 일본어 기사(구글 뉴스 일본판) — 이름 묶음을 먼저 정하고 질의(정식명·약칭·관용 약칭 중 일본 문자 최대 3개)를 국내 검색과 같이 돌린다
-  const jaNamesP: Promise<JaNames | null> = isJp ? jaNamesFor(symbol, opts?.jaName, companyName).catch(() => null) : Promise.resolve(null);
+  const jaNamesP: Promise<JaNames | null> = isJp
+    ? jaNamesFor(symbol, opts?.jaName, companyName).catch((err) => {
+        console.warn(`[news] 일본어 이름 묶음 실패 ${symbol} — 일본어 기사 없이 진행:`, err instanceof Error ? err.message : err);
+        return null;
+      })
+    : Promise.resolve(null);
   const jaRawP: Promise<RawNewsItem[]> = jaNamesP.then((n) =>
     n
       ? fetchJaGoogleNews(
@@ -1528,24 +1535,28 @@ const JA_EN_PUBLISHERS = new Set(["Reuters", "Bloomberg", "Nikkei Asia", "The Ja
 /** 일본어 정식명에서 떼는 회사 형태·업종 접미어 — 뗀 것이 약칭 후보("トヨタ自動車" → "トヨタ") */
 const JA_NAME_SUFFIXES = [/フィナンシャル・?グループ$/, /ホールディングス$/, /グループ$/, /技研工業$/, /自動車$/, /製作所$/, /工業$/];
 
-/**
- * 일본 종목 일본어 이름 묶음 — 정식명(EDINET·J-Quants 일본어명, 株式会社 뗌) + 관용 약칭 표(JA_COMPANY_ALIASES) + 접미어 뗀 약칭.
- * 접미어 뗀 약칭은 EDINET 상장사 목록에서 같은 말로 시작하는 다른 상장사가 둘 이상이거나 같은 이름의 상장사가 있으면 쓰지 않는다
- * (한국어 jpAliasUsable 과 같은 원칙 — "三菱" 그룹명, "ソフトバンク" = 9434).
- */
 /** 일본어 회사명 정리 — 전각→반각(NFKC), 株式会社·(株) 떼기, 공백 제거 */
 function jaCompanyName(name: string): string {
   return jaNorm(name).replace(/株式会社|\(株\)|㈱/g, "").replace(/\s+/g, "").trim();
 }
 
-async function jaNamesFor(symbol: string, jaName: string | null | undefined, enName: string | null | undefined): Promise<JaNames | null> {
+/** EDINET 상장사 목록을 못 받았을 때 그 시각 — 10분 안에는 다시 받지 않는다(받기 실패가 요청마다 압축 파일 다운로드를 되풀이하지 않게) */
+let edinetFailedAt = 0;
+const EDINET_RETRY_MS = 10 * 60_000;
+
+/**
+ * 일본 종목 일본어 이름 묶음 — 정식명(EDINET·J-Quants 일본어명, 株式会社 뗌) + 관용 약칭 표(JA_COMPANY_ALIASES) + 접미어 뗀 약칭.
+ * 접미어 뗀 약칭은 EDINET 상장사 목록에서 같은 말로 시작하는 다른 상장사가 둘 이상이거나 같은 이름의 상장사가 있으면 쓰지 않는다
+ * (한국어 jpAliasUsable 과 같은 원칙 — "三菱" 그룹명, "ソフトバンク" = 9434).
+ */
+export async function jaNamesFor(symbol: string, jaName: string | null | undefined, enName: string | null | undefined): Promise<JaNames | null> {
   const full = jaName ? jaCompanyName(jaName) : "";
   const manual = JA_COMPANY_ALIASES[symbol] ?? [];
   if (!full && manual.length === 0) return null;
   const aliases: string[] = [];
   const re = JA_NAME_SUFFIXES.find((r) => r.test(full));
   const stem = re ? full.replace(re, "").replace(/[・･]$/, "") : "";
-  if (stem.length >= 2 && !manual.includes(stem)) {
+  if (stem.length >= 2 && !manual.includes(stem) && Date.now() - edinetFailedAt >= EDINET_RETRY_MS) {
     try {
       const idx = await getEdinetCodeIndex();
       const rivals = new Set<string>();
@@ -1557,18 +1568,20 @@ async function jaNamesFor(symbol: string, jaName: string | null | undefined, enN
         else if (n.startsWith(stem)) rivals.add(e.ticker);
       }
       if (!same && rivals.size < 2) aliases.push(stem);
-    } catch {
+    } catch (err) {
       // 상장사 목록을 못 받으면 접미어 뗀 약칭은 쓰지 않는다(오탐보다 누락)
+      edinetFailedAt = Date.now();
+      console.warn(`[news] EDINET 상장사 목록 실패 — 10분간 접미어 약칭 생략(${symbol}):`, err instanceof Error ? err.message : err);
     }
   }
-  const enFirst = (enName ?? "").split(/[\s,.]+/)[0]?.toLowerCase() ?? "";
   return {
     symbol,
     // 관용 약칭 중 짧은 일본 문자 표기("日立"·"トヨタ"·"三菱重")는 약칭처럼 엄격한 경계 — 뒤에 한자·가타카나가 붙으면 다른 낱말
     // ("日立市"·"日立建機"·"トヨタ紡織"). 처음 보는 표본(2026-10-10 6501)에서 日立市 날씨·日立建機 기사가 들어온 뒤 바꿨다.
     names: [...new Set([full, ...manual.filter((w) => w.length >= 4 || /^[A-Za-z0-9&]+$/.test(w))].filter(Boolean))],
     aliases: [...new Set([...aliases, ...manual.filter((w) => w.length < 4 && !/^[A-Za-z0-9&]+$/.test(w))])],
-    selfMarks: [full, enFirst.length >= 3 ? enFirst : ""].filter(Boolean),
+    selfJa: full,
+    selfEn: (enName ?? "").toLowerCase().replace(/[,.]/g, " ").replace(/\s+(co|ltd|inc|corp|corporation|limited|company|holdings?)\b.*$/, "").trim(),
   };
 }
 
@@ -1578,7 +1591,12 @@ async function fetchJaGoogleNews(market: MarketId, symbol: string, queries: stri
   const seen = new Set<string>();
   const out: RawNewsItem[] = [];
   const lists = await Promise.all(
-    queries.map((q) => fetchGoogleNewsRss(googleNewsUrl(`search?q=${encodeURIComponent(q)}+when:7d`, "hl=ja&gl=JP&ceid=JP:ja")).catch(() => [])),
+    queries.map((q) =>
+      fetchGoogleNewsRss(googleNewsUrl(`search?q=${encodeURIComponent(q)}+when:7d`, "hl=ja&gl=JP&ceid=JP:ja")).catch((err) => {
+        console.warn(`[news] 구글 뉴스 일본판 실패 "${q}":`, err instanceof Error ? err.message : err);
+        return [];
+      }),
+    ),
   );
   for (const n of lists.flat()) {
     const t = Date.parse(n.publishedAt);
