@@ -541,13 +541,17 @@ export interface ConnectorSaveResult {
   weekStart: string;
   /** 비어 남은 칸과 이유 — 고쳐서 다시 저장하면 된다 */
   dropped: Record<string, string>;
+  /** 버리지는 않았지만 고칠 것(핵심 수치 없음 등) */
+  warnings: string[];
+  /** 날짜 검사로 버린 출처 */
+  rejectedSources: { url: string; reason: string }[];
   body: string;
 }
 
 export async function saveConnectorDraft(opts: {
   weekStart?: string;
   comments: ConnectorComments;
-  sources: { title: string; url: string }[];
+  sources: { title: string; url: string; date?: string }[];
   preview?: boolean;
 }): Promise<ConnectorSaveResult> {
   const week = connectorWeek(opts.weekStart);
@@ -563,8 +567,21 @@ export async function saveConnectorDraft(opts: {
   const inputs = await getWeeklyInputs(week.weekStart);
   if (!inputs) throw new WeeklyGenerateError("이 주 입력 보관본이 없음 — get_weekly_data 를 먼저 호출", 409);
   const extras = extrasOf(inputs);
-  const sources = opts.sources.filter((x) => /^https?:\/\//.test(x.url)).slice(0, 100);
-  const comments = await assembleConnectorComments(
+  // 출처 날짜 검사(오너 지시 2026-10-10 — "일년전에 발표하고 우연히 지금 맞을수도 있기에"): 리포트 주 앞 주말(토)부터
+  // 다음 주 월요일까지 발행된 글만 근거로 인정한다. 날짜 없는 출처도 버린다.
+  const lo = new Date(Date.parse(`${week.weekStart}T00:00:00Z`) - 2 * 86_400_000).toISOString().slice(0, 10);
+  const hi = new Date(Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000).toISOString().slice(0, 10);
+  const rejectedSources: { url: string; reason: string }[] = [];
+  const sources = opts.sources
+    .filter((x) => {
+      if (!/^https?:\/\//.test(x.url)) return false;
+      const d = /^\d{4}-\d{2}-\d{2}$/.test(x.date ?? "") ? (x.date as string) : null;
+      if (!d) rejectedSources.push({ url: x.url, reason: "발행일(date) 없음" });
+      else if (d < lo || d > hi) rejectedSources.push({ url: x.url, reason: `발행일 ${d} 이 리포트 주(${lo}~${hi}) 밖` });
+      return d != null && d >= lo && d <= hi;
+    })
+    .slice(0, 100);
+  const { comments, warnings } = await assembleConnectorComments(
     inputs.snapshot,
     inputs.top,
     inputs.week,
@@ -572,7 +589,7 @@ export async function saveConnectorDraft(opts: {
     inputs.sectors,
     extras,
     opts.comments,
-    sources.length,
+    sources.map((x) => x.title),
   );
   const body = await renderWeeklyReport({
     week: inputs.week,
@@ -584,7 +601,7 @@ export async function saveConnectorDraft(opts: {
     codeCalendar: extras.codeCalendar,
   });
   const dropped = Object.fromEntries(comments.dropReasons);
-  if (opts.preview) return { saved: false, weekStart: week.weekStart, dropped, body };
+  if (opts.preview) return { saved: false, weekStart: week.weekStart, dropped, warnings, rejectedSources, body };
 
   const now = new Date().toISOString();
   const all = inputs.all;
@@ -605,7 +622,7 @@ export async function saveConnectorDraft(opts: {
       telegramCount: 0,
       youtubeCount: 0,
       groundingQueries: [],
-      groundingSources: sources.map((x) => ({ title: x.title.slice(0, 200), uri: x.url })),
+      groundingSources: sources.map((x) => ({ title: `${x.title.slice(0, 200)} (${x.date})`, uri: x.url })),
       webFacts: [],
       dropReasons: { ...inputs.notes, ...dropped },
     },
@@ -616,5 +633,5 @@ export async function saveConnectorDraft(opts: {
     publishedAt: null,
     updatedAt: now,
   });
-  return { saved: true, weekStart: week.weekStart, dropped, body };
+  return { saved: true, weekStart: week.weekStart, dropped, warnings, rejectedSources, body };
 }

@@ -796,7 +796,7 @@ function buildPayload(
     return {
       label,
       reports: (found?.reports ?? []).slice(0, rich ? 6 : undefined).map((r) => rep(r, 250)),
-      news: (found?.news ?? []).map(nws),
+      news: (found?.news ?? []).slice(0, rich ? 15 : 5).map(nws),
     };
   }).filter((p) => p.reports.length > 0 || p.news.length > 0);
   const economyEvidence = ECONOMY_TOPIC_LABELS.map((label) => {
@@ -804,7 +804,7 @@ function buildPayload(
     return {
       label,
       reports: (found?.reports ?? []).slice(0, rich ? 6 : undefined).map((r) => rep(r, 250)),
-      news: (found?.news ?? []).map(nws),
+      news: (found?.news ?? []).slice(0, rich ? 15 : 5).map(nws),
     };
   }).filter((p) => p.reports.length > 0 || p.news.length > 0);
   return {
@@ -839,7 +839,7 @@ function buildPayload(
       searchInterest: i.searchInterest,
       facts: i.facts,
       reports: i.reports.map((r) => rep(r, 500)),
-      news: i.news.map(nws),
+      news: i.news.slice(0, rich ? 15 : 5).map(nws),
       earnings: i.earnings?.map((e) => ({
         ticker: e.ticker,
         period: e.period,
@@ -1714,6 +1714,16 @@ ${beforeOutputSection(COMMENT_PROMPT).slice(beforeOutputSection(COMMENT_PROMPT).
   수치(%·bp·배·pt·건)가 든 문장은 저장할 때 통째로 버려진다.
 - calendar 에는 data.codeCalendar(코드가 이미 확정해 싣는 일정)에 **없는 것만** 넣는다 — 같은 행사를 다른 말로
   다시 쓰면 표에 두 번 나간다.
+- **검증(오너 지시 2026-10-10 — "정보에 대한 검증은 철저해야", "일년전에 발표하고 우연히 지금 맞을수도 있기에")**:
+  - 쓰는 사실은 모두 reportWeek(앞뒤 주말 포함)에 나온 것이어야 한다. 웹에서 찾은 글은 **발행일을 확인**하고 sources 에
+    date(YYYY-MM-DD)로 넣는다 — 날짜가 없거나 기간 밖인 출처는 서버가 버리고, 남은 출처가 없으면 입력에 없는 수치가 든 문장은
+    저장되지 않는다. 오래된 전망·리포트가 지금 상황과 맞아 보여도 이번 주 근거로 쓰지 않는다.
+  - 핵심 주장에는 **수치를 명시**한다(지표 값·예상치·변동폭·금리 수준 등). issues.reading 과 headline 에 수치가 하나도 없으면
+    저장 결과에 경고가 돌아온다.
+  - 증권사 의견은 **여러 시각 중 하나**로 쓴다("○○증권은 ~로 봄"). 단정적 사실처럼 옮기지 말고, 가능하면 지표·가격 같은 시장
+    데이터와 함께 쓴다. 증권사 이름은 data 의 reports 나 sources 에 실제로 있는 것만 — 없는 증권사를 인용하면 그 칸은 버려진다.
+  - **뉴스가 가장 빠른 원천이다**(오너 2026-10-10). 그 주 화두는 issues[].news·policyEvidence/economyEvidence 의 news 와 웹 뉴스
+    검색(그 주 날짜)으로 먼저 잡고, 증권사 리포트는 그 해석·전망 쪽 근거로 쓴다.
 - 키는 data 의 값을 그대로: snapshot = snapshot[].name, issues = issues[].label, sectors = sectors[].id.
 - 표·숫자·구조는 서버 코드가 만든다. 문장만 보낸다.`;
 
@@ -1755,27 +1765,117 @@ export async function assembleConnectorComments(
   sectors: WeeklySectors,
   extras: CommentExtras,
   input: ConnectorComments,
-  sourceCount: number,
-): Promise<WeeklyComments> {
+  /** 날짜 검사를 통과한 웹 출처(제목) — 0건이면 숫자 대조를 그대로 건다 */
+  sourceTitles: string[],
+): Promise<{ comments: WeeklyComments; warnings: string[] }> {
   const allMeetings = await getCentralBankMeetings();
   const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
   const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras, true);
-  const trusted = sourceCount > 0;
-  return assembleComments({
+  const trusted = sourceTitles.length > 0;
+  const { cleaned, reasons } = checkBrokerCitations(input, payload, sourceTitles);
+  const comments = assembleComments({
     payload,
     allMeetings,
     week,
     extras,
     macroParsed: {
-      headline: input.headline,
-      economySummary: input.economySummary,
-      policySummary: input.policySummary,
-      calendar: input.calendar,
+      headline: cleaned.headline,
+      economySummary: cleaned.economySummary,
+      policySummary: cleaned.policySummary,
+      calendar: cleaned.calendar,
     },
     macroTrustGrounded: trusted,
-    commentParsed: { snapshot: input.snapshot, issues: input.issues, sectors: input.sectors },
+    commentParsed: { snapshot: cleaned.snapshot, issues: cleaned.issues, sectors: cleaned.sectors },
     commentTrustGrounded: trusted,
     dropReasons: new Map(),
     webFacts: [],
   });
+  // 증권사 인용 폐기 사유가 "모델이 생성하지 않음" 같은 일반 사유에 덮이지 않게 마지막에 덮어쓴다
+  for (const [k, v] of reasons) comments.dropReasons.set(k, v);
+
+  // 핵심 수치 명시(오너 지시 2026-10-10) — 버리지는 않고 경고로 돌려줘 고쳐 쓰게 한다
+  const warnings: string[] = [];
+  const hasNum = (t: string | null | undefined) => /\d/.test(t ?? "");
+  if (comments.headline && !hasNum(comments.headline)) warnings.push("headline: 핵심 수치가 없음");
+  for (const [label, c] of comments.issues) if (!hasNum(c.reading)) warnings.push(`issue:${label}: 해석에 핵심 수치가 없음`);
+  if (!trusted) warnings.push("날짜가 확인된 웹 출처가 없음 — 입력 data 에 없는 수치는 문장째 버려짐");
+  return { comments, warnings };
+}
+
+/**
+ * 증권사 인용 검사(오너 지시 2026-10-10 — "증권사명을 넣는것도 좋지만 그건 여러개의 의견 중 하나일뿐이라 주간에 나온 이슈에
+ * 대한것이 맞는지도 검증"). 문장에 "○○증권"이 나오면 그 주 data(reports 의 source — 수집 단계에서 이미 리포트 주로 걸러짐)나
+ * 날짜 검사를 통과한 웹 출처 제목에 그 증권사가 있어야 한다. 없으면 그 칸(줄 목록은 그 줄)만 버린다.
+ */
+const BROKER_RE = /([가-힣A-Za-z]{1,10}(?:투자증권|금융투자|증권))(?!사)/g;
+
+function checkBrokerCitations(
+  input: ConnectorComments,
+  payload: CommentPayload,
+  sourceTitles: string[],
+): { cleaned: ConnectorComments; reasons: Map<string, string> } {
+  const known = new Set<string>();
+  const add = (s: string) => known.add(s.replace(/\s+/g, ""));
+  for (const i of payload.issues) for (const r of i.reports) add(r.source);
+  for (const p of [...payload.policyEvidence, ...payload.economyEvidence]) for (const r of p.reports) add(r.source);
+  const titles = sourceTitles.join(" ").replace(/\s+/g, "");
+  const unknown = (text: string): string | null => {
+    for (const m of text.matchAll(BROKER_RE)) {
+      const name = m[1].replace(/\s+/g, "");
+      if (known.has(name) || titles.includes(name)) continue;
+      // data 에 "신한투자증권"이 있으면 본문의 "신한증권" 같은 줄임도 같은 회사로 본다
+      const stem = name.replace(/(투자증권|금융투자|증권)$/, "");
+      if (stem && [...known].some((k) => k.startsWith(stem))) continue;
+      return `그 주 근거(data·출처)에 없는 증권사 인용 "${m[1]}"`;
+    }
+    return null;
+  };
+  const reasons = new Map<string, string>();
+  const one = (key: string, text: string | undefined): string | undefined => {
+    if (!text) return text;
+    const r = unknown(text);
+    if (!r) return text;
+    reasons.set(key, r);
+    return undefined;
+  };
+  const lines = (key: string, text: string | undefined): string | undefined => {
+    if (!text) return text;
+    const kept: string[] = [];
+    const bad: string[] = [];
+    for (const l of text.split(/\r?\n/)) {
+      const r = l.trim() ? unknown(l) : null;
+      if (r) bad.push(`${l.trim().slice(0, 24)}… — ${r}`);
+      else kept.push(l);
+    }
+    if (bad.length) reasons.set(key, `일부 줄 폐기: ${bad.join(" / ")}`);
+    return kept.join("\n").trim() || undefined;
+  };
+  const rec = (prefix: string, obj: Record<string, string> | undefined) => {
+    if (!obj) return obj;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      const t = one(`${prefix}:${k}`, v);
+      if (t) out[k] = t;
+    }
+    return out;
+  };
+  const issues: ConnectorComments["issues"] = {};
+  for (const [k, v] of Object.entries(input.issues ?? {})) {
+    const text = typeof v === "string" ? v : `${String(v?.headline ?? "")} ${String(v?.reading ?? "")}`;
+    const r = unknown(text);
+    if (r) reasons.set(`issue:${k}`, r);
+    else issues[k] = v;
+  }
+  return {
+    cleaned: {
+      headline: one("headline", input.headline),
+      economySummary: lines("economySummary", input.economySummary),
+      policySummary: lines("policySummary", input.policySummary),
+      calendar: input.calendar,
+      snapshot: rec("snapshot", input.snapshot),
+      issues,
+      sectors: rec("sector", input.sectors),
+    },
+    reasons,
+  };
 }

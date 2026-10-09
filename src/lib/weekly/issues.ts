@@ -317,7 +317,7 @@ async function countFromNews(
       .filter((g) => topic.match.test(`${g.title} ${g.excerpt ?? ""}`))
       .slice(0, 2)
       .map((g) => ({ ...g, source: `${g.source} (${corroborated ? "교차확인" : "검증 필요"})` }));
-    out.set(topic.label, { count: fresh.length, news: [...refs, ...fresh].slice(0, 5), rejected });
+    out.set(topic.label, { count: fresh.length, news: [...refs, ...fresh].slice(0, 15), rejected });
   }
   return out;
 }

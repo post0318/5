@@ -105,11 +105,13 @@ const TOOLS = [
         },
         sources: {
           type: "array",
-          description: "웹검색으로 확인한 출처. 있으면 입력에 없는 수치도 인용 가능(없으면 그런 문장은 버려짐)",
+          description:
+            "웹검색으로 확인한 출처 — date(발행일 YYYY-MM-DD) 필수. 리포트 주(앞뒤 주말 포함) 밖이거나 날짜 없는 출처는 버려진다. " +
+            "남은 출처가 있으면 입력에 없는 수치도 인용 가능(없으면 그런 문장은 버려짐). 증권사를 인용하면 그 증권사가 data 나 출처 제목에 있어야 한다",
           items: {
             type: "object",
-            properties: { title: { type: "string" }, url: { type: "string" } },
-            required: ["url"],
+            properties: { title: { type: "string" }, url: { type: "string" }, date: { type: "string" } },
+            required: ["title", "url", "date"],
           },
         },
       },
@@ -167,10 +169,10 @@ function toComments(a: Json): ConnectorComments {
   };
 }
 
-function toSources(v: unknown): { title: string; url: string }[] {
+function toSources(v: unknown): { title: string; url: string; date?: string }[] {
   if (!Array.isArray(v)) return [];
   return v
-    .map((x) => ({ title: str((x as Json)?.title) ?? "", url: str((x as Json)?.url) ?? "" }))
+    .map((x) => ({ title: str((x as Json)?.title) ?? "", url: str((x as Json)?.url) ?? "", date: str((x as Json)?.date) }))
     .filter((x) => x.url);
 }
 
@@ -191,7 +193,15 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
       const head = out.saved
         ? `저장됨 — ${out.weekStart} 주 초안(검토 대기). 오너가 /weekly 화면에서 검토·발행한다.`
         : `미리보기(저장 안 함) — ${out.weekStart} 주`;
-      return { text: JSON.stringify({ result: head, dropped: out.dropped, body: out.body }) };
+      return {
+        text: JSON.stringify({
+          result: head,
+          dropped: out.dropped,
+          warnings: out.warnings,
+          rejectedSources: out.rejectedSources,
+          body: out.body,
+        }),
+      };
     }
     return { text: `알 수 없는 도구: ${name}`, isError: true };
   } catch (err) {
