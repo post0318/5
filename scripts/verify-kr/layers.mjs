@@ -422,6 +422,58 @@ export async function krOriginalLayers(ctx) {
   // ── 개요 화면(감사 6차 ① — 개요는 화면이 /ttm·verify-row 값으로 직접 계산한다: PER(TTM) = 현재가 ÷ /ttm EPS, 배당수익률 = /ttm DPS(TTM) ÷ 현재가).
   // 화면 식을 앱 응답 값으로 그대로 재현한 결과를 검증기 기대치(K1 확인 현재가 · DART 분모 · K5 배당)와 대조
   overviewLayer({ ...ctx, H, fail, ltmPrice, capCur, k5Exp, multDen, yearsShown, added });
+  // 사용자가 실제로 보는 유니버스 통합 뷰 DB 캐시(universe_overview — 2호기 DB 는 매일 05:30 운영 사본)(감사 9차 ②, 리드 지시)
+  try { await universeCacheLayer({ ...ctx, H, L, multDen, added }); } catch (e) { err("유니버스 DB 캐시(universe_overview) 판독", e); }
+}
+
+/**
+ * 유니버스 DB 캐시 대조(K6). 캐시 한 건 = 그 계산 시각의 시세 + 그때의 TTM. 검증기 기대치:
+ *  - 현재가·시가총액 = 캐시 시각(KST) 이전 최근 거래일 KRX 종가·시가총액, 또는 KRX 게시 전이면 그 뒤 Yahoo 종가 × KRX 상장주식수(앱 시세 규칙)
+ *  - 매출·영업이익률·순이익률·PER(TTM)·PBR = 캐시가 최신 정기보고서 접수 뒤 계산됐을 때만 지금의 DART LTM 기대치로(그 전이면 TTM 기준이 달라 검증불가)
+ *  - 4일 넘게 갱신 안 됐으면 실패(매일 갱신)
+ */
+async function universeCacheLayer(c) {
+  const { add, sym, H, L, multDen } = c;
+  const { PASS, FAIL, NA } = c.consts;
+  const uri = c.env?.MONGODB_URI;
+  if (!uri) { add("K6", "유니버스 DB 캐시 조회", "LTM", { status: NA, note: "MONGODB_URI 없음" }); return; }
+  const { MongoClient } = await import("mongodb");
+  const cli = await new MongoClient(uri).connect();
+  let d;
+  try { d = await cli.db("market_research").collection("universe_overview").findOne({ market: "kr", symbol: sym }); } finally { await cli.close(); }
+  if (!d) { add("K6", "유니버스 DB 캐시 있음", "LTM", { status: NA, note: "universe_overview 에 이 종목 없음(유니버스 밖이거나 아직 계산 전)" }); return; }
+  const at = Date.parse(d.updatedAt);
+  const kst = new Date(at + 9 * 3600e3), day = kst.toISOString().slice(0, 10).replace(/-/g, "");
+  const ageD = (Date.now() - at) / 864e5;
+  add("K6", "유니버스 캐시 갱신(4일 안)", "LTM", ageD <= 4 ? { status: PASS, note: `${d.updatedAt}` } : { status: FAIL, note: `마지막 갱신 ${d.updatedAt}(${ageD.toFixed(1)}일 전)` });
+  if (d.error) add("K6", "유니버스 캐시 오류 없음", "LTM", { status: FAIL, note: String(d.error).slice(0, 120) });
+  const fl = (a, b) => a === b || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-14);
+  const ck = (name, app, exp, note) => add("K6", `유니버스 캐시 ${name}`, "LTM", exp === undefined ? { status: NA, app, note } : fl(app, exp) ? { status: PASS, app, src: exp, note } : { status: FAIL, app, src: exp, note: `캐시 ${app ?? "빈칸"} vs 기대 ${exp ?? "빈칸"} · ${note}` });
+  // 현재가·시가총액 — 캐시 시각 이전 최근 거래일 KRX
+  const k = await krxCapsOn(sym, day);
+  let px = undefined, mcE = undefined, how = "";
+  if (k?.common != null && d.last === k.close) { px = k.close; mcE = k.common; how = `KRX ${k.date}`; }
+  else if (k?.common != null && k.pendingDays?.length && c.yahooBars) {
+    const bars = (await c.yahooBars(sym)).filter((b) => b.date.replace(/-/g, "") > k.date && b.date.replace(/-/g, "") <= day && b.close === d.last);
+    if (bars.length) { px = d.last; mcE = d.last * k.shares; how = `KRX ${k.pendingDays.join("·")} 게시 전 — Yahoo ${bars[0].date} 종가 × KRX 상장주식수 ${k.shares}`; }
+  }
+  if (px === undefined && k?.common != null) { px = k.close; mcE = k.common; how = `KRX ${k.date}(캐시 시각 ${d.updatedAt})`; }
+  ck("현재가 = KRX(캐시 시각 기준)", d.last ?? null, px, how);
+  ck("시가총액 = KRX(캐시 시각 기준)", d.marketCap ?? null, mcE, how);
+  // 재무 칸 — 최신 정기보고서 접수 뒤 계산된 캐시만
+  const lp = L.latestPeriod();
+  const filed = String(lp?.rcept ?? "").slice(0, 8);
+  const fresh = filed && day >= filed;
+  const rv = multDen.LTM?.rev?.v ?? undefined, eq = multDen.LTM?.eq?.v ?? undefined, eps = multDen.LTM?.eps?.v ?? undefined;
+  const hop = c.h.rows.find((x) => x.key === "opinc")?.values[c.h.columns.findIndex((x) => x.kind === "ltm")] ?? undefined;
+  const ni = H.LTM?.ni ?? undefined;
+  const why = fresh ? `최신 정기보고서 ${lp.nm}(${filed}) 뒤 계산` : `캐시(${day})가 최신 정기보고서 ${lp?.nm ?? "?"}(${filed}) 전 계산 — TTM 기준이 달라 기대치 없음`;
+  const F = (v) => (fresh ? v : undefined);
+  ck("매출(LTM) = DART LTM 매출", d.revenueAnnual ?? null, F(rv), why);
+  ck("영업이익률 = LTM 영업이익 ÷ 매출", d.opMargin ?? null, F(rv === undefined || hop === undefined ? undefined : rv && hop != null ? hop / rv : null), why);
+  ck("순이익률 = LTM 순이익 ÷ 매출", d.netMargin ?? null, F(rv === undefined || ni === undefined ? undefined : rv && ni != null ? ni / rv : null), why);
+  ck("PER(TTM) = 캐시 현재가 ÷ DART LTM EPS", d.perTtm ?? null, F(eps === undefined || d.last == null ? undefined : eps > 0 ? d.last / eps : null), why);
+  ck("PBR = 캐시 시가총액 ÷ DART 지배주주 자본", d.pbr ?? null, F(eq === undefined || d.marketCap == null ? undefined : eq > 0 ? d.marketCap / eq : null), why);
 }
 
 /** 개요 화면 표시값 대조 — 화면 식(stock-analysis.tsx)을 앱 응답으로 재현한 값 vs 검증기 기대치 */
@@ -946,6 +998,23 @@ async function daLayer(c) {
     const d = doc.byYear?.[y];
     const app = IS[colY]?.da ?? null;
     const src = yearSrc.get(y);
+    // 손익계산서 본표에 감가상각 줄이 있는 회사(성격별 손익계산서 — 402340): 앱은 영업이익과 같은 보고서(그해를 담은 가장 최근 보고서)의 본표 줄을 쓴다
+    // (감사 9차 후속 — 적재본은 그해 자기 보고서 값이라 재작성 해(2021·2023)에 영업이익과 기준이 갈렸다). 검증기가 DART 본표 줄을 직접 읽어 대조
+    {
+      const io = src ? [[src.next2, 2], [src.next, 1], [src.cur, 0]].find(([R, i]) => hasIs(R, i)) : null;
+      const FACE = /^(ifrs-full|dart)_(DepreciationExpense|DepreciationAndAmortisationExpense|AmortisationExpense)$/;
+      const face = io ? io[0].filter((r) => (r.sj_div === "IS" || r.sj_div === "CIS") && FACE.test(r.account_id ?? "") && num(r[COL[io[1]]]) != null) : [];
+      if (face.length) {
+        const tot = face.find((r) => /DepreciationAndAmortisationExpense$/.test(r.account_id));
+        const v = tot ? num(tot[COL[io[1]]]) : face.reduce((a, r) => a + num(r[COL[io[1]]]), 0);
+        const how = `DART ${y + io[1]} 사업보고서 손익계산서 본표 ${(tot ? [tot] : face).map((r) => `${r.account_nm}(${r.account_id}) ${num(r[COL[io[1]]])}`).join(" + ")}`;
+        exact("K3", "감가상각비 = DART 손익계산서 본표 감가상각 줄(영업이익과 같은 보고서)", colY, app, v, how);
+        const op = IS[colY]?.op ?? null, eb = IS[colY]?.ebitda ?? null;
+        if (op != null) exact("K3", "EBITDA = 영업이익 + 본표 감가상각", colY, eb, op + v, how);
+        indepY.set(y, how);
+        continue;
+      }
+    }
     const xbrlOf = async (basis) => {
       const out = [];
       // 그 보고서의 판본마다(최신부터) — XBRL 파일이 없는 판본(DART 014 — [첨부정정] 등, 012450 2025·402340 2022)은 다음 판본. 보고서마다 첫 값

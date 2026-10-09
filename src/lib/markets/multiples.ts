@@ -415,7 +415,20 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     if (bps == null) krReasons.bps = equity == null ? (tr.equity ?? "지배주주 자본 없음") : "상장주식수 없음";
     if (pbr == null) krReasons.pbr = bps == null ? krReasons.bps! : bps <= 0 ? "자본잠식(자본 ≤ 0) — PBR 미표시" : "현재가 없음";
     if (psr == null) krReasons.psr = marketCap == null ? krReasons.marketCap! : (tr.revenue ?? "LTM 매출 없음");
-    if (evEbitda == null) krReasons.evEbitda = snap?.evBlocker ? `EV 미표시(${snap.evBlocker})` : ev == null ? (marketCap == null ? krReasons.marketCap! : "EV 구성요소 없음") : ebitda == null ? (tr.daTtm ?? "LTM 감가상각비 없음 — EBITDA 미표시") : "EBITDA ≤ 0 — 미표시";
+    if (evEbitda == null)
+      krReasons.evEbitda = snap?.evBlocker
+        ? `EV 미표시(${snap.evBlocker})`
+        : ev == null
+          ? price == null
+            ? "현재가 없음 — EV 미표시"
+            : shares == null
+              ? "상장주식수(시세) 없음 — EV 미표시"
+              : snap?.evNetDebt == null
+                ? (tr.evNetDebt ?? "순차입금(LTM 재무상태표) 없음 — EV 미표시")
+                : "EV 구성요소 없음"
+          : ebitda == null
+            ? (tr.daTtm ?? "LTM 감가상각비 없음 — EBITDA 미표시")
+            : "EBITDA ≤ 0 — 미표시";
   }
 
   return {
