@@ -36,7 +36,9 @@ const WEEKLY_RE = /weekly|위클리|주간(?!사)|week\s*ahead|\d+\s*월\s*(?:\d
 // 주간물 제외의 예외 — 비상장 리서치는 수집해 비상장으로 분류(오너 지시 2026-09-26).
 const UNLISTED_RE = /비상장/;
 // 주간물이지만 수집하는 거시 시리즈(오너 지시 2026-09-27 — 삼성 "Macro Week Ahead"(채권)·"Weekly Economic Issue"(경제)).
-const WEEKLY_KEEP_RE = /Macro\s*Week\s*Ahead|Weekly\s*Economic\s*Issue/i;
+// BlackRock 인사이트 "글로벌 위클리 시황"(수집기가 붙이는 고정 라벨)도 예외(2026-10-09 — 주간물 공통 제외는 국내 증권사 위클리 시황 범람
+// 때문이었고, 이건 해외 IB 인사이트 탭의 주 1회 대표 콘텐츠라 범람이 없다. 이 라벨 때문에 09-25 이후 매주 저장 단계에서 버려졌다).
+const WEEKLY_KEEP_RE = /Macro\s*Week\s*Ahead|Weekly\s*Economic\s*Issue|글로벌\s*위클리\s*시황/i;
 const CALENDAR_RE = /캘린더|캘박|calendar|일정표/i;
 const RECOMMEND_RE = /추천\s*종목/;
 const ALT_INVEST_RE = /대체투자/;

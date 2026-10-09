@@ -17,7 +17,7 @@
  *     세그먼트로 감(골드만삭스 리서치 노트와 같은 메커니즘). **발행일 메타가
  *     없음**(실측 확인 — articleTitle·pageSummary는 있지만 publicationDate
  *     없음) — 제목의 "2026 Midyear"/"Midyear" 표기로 반기를 추정(Midyear면
- *     7월 1일, 아니면 1월 1일)해 근사 날짜를 쓴다. 정확한 발행일이 아니라
+ *     7월 1일, 아니면 1월 1일 — 분기 표기 "Q4" 가 있으면 그 분기 첫날, 아래 guessOutlookDate)해 근사 날짜를 쓴다. 정확한 발행일이 아니라
  *     화면엔 대략적인 시점으로만 표시됨(한계, 우선순위 낮아 보류).
  *   - 그 외 블랙록 인사이트 하위 페이지(equity-market-outlook 등, 발행일
  *     메타 자체가 없는 게 더 많음)는 아직 미착수 — 추가 여부는 개별 확인
@@ -89,12 +89,16 @@ function parsePublicationDate(s) {
   return `${m[3]}-${mm}-${String(m[2]).padStart(2, "0")}`;
 }
 
-// 발행일 메타가 없는 반기 아웃룩 전용 — 제목+요약의 연도 + Midyear 표기로
+// 발행일 메타가 없는 아웃룩 전용 — 제목+요약의 연도 + 분기("Q4")·Midyear 표기로
 // 근사(실측 — articleTitle엔 "Midyear"가 안 남고 pageSummary에만 있었음).
-function guessSemiAnnualDate(title, summary) {
+// 분기 표기(2026-10 실측 "Q4 Global Investment Outlook")는 그 분기 첫날 — 예전엔 Midyear 가 아니면 1월 1일로 두어
+// 글로벌IB 보존기간(90일)을 이미 넘긴 날짜로 저장돼 매 회차 저장 직후 정리됐다.
+function guessOutlookDate(title, summary) {
   const hay = `${title ?? ""} ${summary ?? ""}`;
   const year = hay.match(/\b(20\d\d)\b/)?.[1];
   if (!year) return null;
+  const q = hay.match(/\bQ([1-4])\b/)?.[1];
+  if (q) return `${year}-${String((Number(q) - 1) * 3 + 1).padStart(2, "0")}-01`;
   const isMidyear = /mid[\s-]?year/i.test(hay);
   return `${year}-${isMidyear ? "07" : "01"}-01`;
 }
@@ -165,7 +169,7 @@ const outlookItems = [];
   const html = await fetchPage(url);
   const title = metaContent(html, "articleTitle");
   const summary = metaContent(html, "pageSummary");
-  const date = guessSemiAnnualDate(title, summary);
+  const date = guessOutlookDate(title, summary);
   if (title && date && !isCommonExcludedContent(title, "산업")) {
     outlookItems.push({
       board: "BlackRock > insights/global-investment-outlook",
