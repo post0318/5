@@ -83,7 +83,8 @@ export interface CashFlowDaStructure {
 export function cashFlowDaLines(cal: string, lab: Map<string, string[]>): CashFlowDaStructure | null {
   for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
-    if (!/CASHFLOW/i.test(role) || /Detail|Table|Parenth|Supplement/i.test(role)) continue;
+    // 역할 이름의 하이픈·밑줄 무시(GLW 2024 10-K "statement-consolidated-statements-of-cash-flows" — 못 읽어 그 공시가 빠졌다, 2026-10-10)
+    if (!/CASHFLOW/i.test(role.replace(/[^A-Za-z]/g, "")) || /Detail|Table|Parenth|Supplement/i.test(role)) continue;
     const loc = locs(m[2]);
     const arcs: { from: string; to: string }[] = [];
     for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {

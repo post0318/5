@@ -396,12 +396,15 @@ async function debtFaceRead(cik, accn) {
     }
     if (ids.size) {
       const xml = await secText(`${base}/${instName}`), ctx = parseContexts(xml);
-      const vals = new Map(), periods = new Map();
-      for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_-]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+)\s*</g)) {
+      const vals = new Map(), prec = new Map(), periods = new Map();
+      for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_.-]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+)\s*</g)) {
         const id = `${m[1]}_${m[2]}`, c0 = ctx.get(m[4]);
         if (!c0?.start || c0.dims.length) continue;
         if (/_NetCashProvidedByUsedInFinancingActivities(ContinuingOperations)?$/.test(id)) periods.set(`${c0.start}|${c0.end}`, { start: c0.start, end: c0.end });
-        if (ids.has(id)) vals.set(`${id}|${c0.start}|${c0.end}`, Number(m[6]));
+        if (!ids.has(id)) continue;
+        // 같은 개념·기간이 둘 이상이면 정밀한 값(decimals 큰 쪽 — INF 최대). INTC 10-K: 본표 7,349(−6) + 주석 문장 "7.3 billion"(−8)
+        const dRaw = /decimals="([^"]+)"/.exec(`${m[3]} ${m[5]}`)?.[1] ?? "INF", dec = dRaw === "INF" ? 99 : Number(dRaw), k = `${id}|${c0.start}|${c0.end}`;
+        if (!vals.has(k) || dec > prec.get(k)) { vals.set(k, Number(m[6])); prec.set(k, dec); }
       }
       const cats = new Map();
       for (const id of ids) { const c = vDebtCat(id); if (c) cats.set(c, [...(cats.get(c) ?? []), id]); }
@@ -6388,8 +6391,9 @@ async function verifyUs(sym) {
             const fyK = q ? flist.filter((x) => x.form === "10-K" && x.d < q.d).sort((a, b) => b.d.localeCompare(a.d))[0] : null;
             const rq = q ? await debtFaceRead(cik, q.accn) : null, rk = fyK ? await debtFaceRead(cik, fyK.accn) : null;
             const pk = rk?.periods.find((x) => dayDiff(x.end, fyK.d) <= 7 && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 >= 300);
-            const pc = rq ? rq.periods.filter((x) => dayDiff(x.end, q.d) <= 7).sort((a, b) => a.start.localeCompare(b.start))[0] : null; // 가장 긴 누적
-            const pp = rq && pc ? rq.periods.find((x) => dayDiff(x.end, new Date(Date.parse(q.d) - 365 * 864e5).toISOString().slice(0, 10)) <= 10 && Math.abs((Date.parse(x.end) - Date.parse(x.start)) - (Date.parse(pc.end) - Date.parse(pc.start))) <= 10 * 864e5) : null;
+            const nextDay = (d) => new Date(Date.parse(d) + 864e5).toISOString().slice(0, 10);
+            const pc = rq && pk ? rq.periods.find((x) => dayDiff(x.end, q.d) <= 7 && dayDiff(x.start, nextDay(pk.end)) <= 7) : null;
+            const pp = rq && pk ? rq.periods.find((x) => dayDiff(x.end, new Date(Date.parse(q.d) - 365 * 864e5).toISOString().slice(0, 10)) <= 10 && dayDiff(x.start, pk.start) <= 7) : null;
             if (rq && rk && pk && pc && pp) {
               exp = {};
               // 1년 전 같은 분기 10-Q 원본(전년 동기 값이 그 공시에 0 아닌 값으로 있었는가 — 앱 0 채움 규칙의 조건)
