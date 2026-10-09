@@ -15,9 +15,10 @@ import { edinetDocZip, edinetTaxonomyText, readEdinetJson, writeEdinetJson } fro
  *  - 계산 구조(_cal.xml) 는 같은 역할의 부모 → 자식(가중치)을 그대로 남긴다(검증용 — 합계 = Σ 자식).
  * 결과는 디스크(<EDINET_CACHE_DIR>/jp-fin/v<판>/<docID>.json)에 저장 — 서류 번호는 바뀌지 않는다. 판독 규칙이 바뀌면 JP_PARSE_VERSION 을 올린다.
  * 판 2(2026-10-08): 하이라이트·재무분석용으로 경영지표 주당 지표(EPS·BPS·DPS)·발행주식·자기주식·리스부채 주석(parseExtras)을 함께 읽는다.
+ * 판 3(2026-10-09): 리스부채 주석 — 표시 문장("リース負債は…に含めて表示")·IAS 7 재무활동 부채 변동표 행·전기/당기 두 칸 표(leaseNotes).
  */
 
-export const JP_PARSE_VERSION = 2;
+export const JP_PARSE_VERSION = 3;
 
 export type JpStmtKind = "bs" | "is" | "ci" | "cf";
 /** 값 단위 — m 금액(엔), ps 주당(엔/주), sh 주식수, p 비율 */
@@ -70,8 +71,8 @@ export interface JpDocFin {
   sum?: Record<string, Record<string, number | null>>;
   /** 기말(반기말) 발행주식수·자기주식(株式の総数等·自己株式等) — 유통주식수 = 발행 − 자기 명의·타인 명의 자기주식(회사 행) */
   shares?: JpDocShares | null;
-  /** 주석 문단(TextBlock) 중 "リース負債" 가 나오는 것 — 이름과 (流動)·(非流動) 표의 전기·당기 합계(엔). 본표에 리스부채 줄이 없을 때 판정용 */
-  leaseTb?: { n: string; amt?: [number, number] | null }[];
+  /** 리스부채 주석(판 3) — 본표에 리스부채 줄이 없을 때 판정용(leaseNotes) */
+  lease?: JpLeaseNote;
   warn: string[];
 }
 export interface JpDocShares {
@@ -85,6 +86,24 @@ export interface JpDocShares {
   treasury: number | null;
   /** 판정 근거·실패 사유 */
   how: string;
+}
+/**
+ * 리스부채 주석(IFRS — 본표에 リース負債 줄이 없는 회사). 금액은 백만엔 표를 엔으로.
+ *  - rows: リース負債 뒤에 숫자가 오는 표가 있는 문단 이름, sums: 리스부채 행이 든 표의 合計(행 뒤 첫 合計, 백만엔) — 그 合計가 본표 차입금 줄(들)의
+ *    합과 정확히 같으면 리스부채는 그 차입금 줄에 포함(jp-ev.ts — 소니 2024 長期借入債務 내역 表, 소프트뱅크 有利子負債 내역). 문단 이름은 안 본다
+ *    (キリン·JT NotesBondsAndBorrowings 는 기타 금융부채까지 합친 표, 第一三共는 한 문단에 차입금 표·기타 금융부채 표가 따로)
+ *  - incl: "リース負債は…「X」に含めて表示" 류 문장(주어 リース負債 → 동사 含め·含まれ 사이 200자 안) — X 가 차입금 줄인지는 jp-ev.ts 가 본표 이름표로 판정
+ *  - amt: 당기말·전기말 장부금액 — 판독 규칙은 leaseNotes() 주석. 확인 안 되면 null + why
+ */
+export interface JpLeaseNote {
+  tb: string[];
+  rows: string[];
+  sums: Record<string, number[]>;
+  incl: string[];
+  /** 당기말·전기말 장부금액(엔) — 날짜는 표 머리에서(변동표 사슬만이면 null = 서류의 당기말·전기말) */
+  amt: { cur: number; curDate: string | null; prior: number | null; priorDate: string | null } | null;
+  how: string | null;
+  why: string | null;
 }
 
 export const pkDur = (start: string, end: string) => `D${start}_${end}`;
@@ -414,7 +433,7 @@ export async function parseJpDocZip(docID: string, zip: Uint8Array): Promise<JpD
     docID,
     sum: ex.sum,
     shares: ex.shares,
-    leaseTb: ex.leaseTb,
+    lease: ex.lease,
     std: dei("AccountingStandardsDEI"),
     cons: consDei == null ? null : consDei === "true",
     kind: dei("TypeOfCurrentPeriodDEI"),
@@ -449,11 +468,11 @@ const SHARE_TAGS = new Set([
 /** 회사 이름 비교용 — 株式会社·㈱·(株) 와 공백을 지운다 */
 const normName = (s: string) => s.replace(/株式会社|㈱|[(（]株[)）]|\s|　/g, "");
 
-/** 경영지표 주당 지표·발행주식·자기주식·리스부채 주석(판 2) — 차원 문맥도 본다(개별 NonConsolidatedMember·자기주식 표 행 RowN) */
+/** 경영지표 주당 지표·발행주식·자기주식(판 2)·리스부채 주석(판 3) — 차원 문맥도 본다(개별 NonConsolidatedMember·자기주식 표 행 RowN) */
 function parseExtras(
   inst: string,
   filer: string | null,
-): { sum: Record<string, Record<string, number | null>>; shares: JpDocShares | null; leaseTb: { n: string; amt?: [number, number] | null }[] } {
+): { sum: Record<string, Record<string, number | null>>; shares: JpDocShares | null; lease: JpLeaseNote } {
   const ctx = new Map<string, { pk: string; mem: string[] }>();
   for (const m of inst.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
     const body = m[2];
@@ -520,21 +539,131 @@ function parseExtras(
     }
     shares = { at: shAt, issued, issuedFiling, treasury, how };
   }
-  // 리스부채 주석 — 본표에 리스부채 줄이 없는 IFRS 회사(차입금 줄에 포함됐는지·따로 몇인지)
-  const leaseTb: { n: string; amt?: [number, number] | null }[] = [];
+  const tbs: { n: string; t: string }[] = [];
   const tbRe = /<([\w-]+):(Notes[\w]*TextBlock)\b([^>]*?\bcontextRef="([^"]+)"[^>]*)>([\s\S]*?)<\/\1:\2>/g;
   for (const m of inst.matchAll(tbRe)) {
     const c = ctx.get(m[4]);
     if (!c || c.mem.length) continue;
-    const t = decodeXml(decodeXml(m[5]).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ")).replace(/[\s　 ]+/g, " ");
-    if (!t.includes("リース負債")) continue;
-    const n = (s: string) => Number(s.replace(/,/g, ""));
-    // "リース負債（流動） 67,403 73,894 リース負債（非流動） 174,341 172,480" (전기 · 당기, 백만엔 표)
-    const a = /リース負債[（(]流動[)）]\s*([\d,]+)\s+([\d,]+)\s*リース負債[（(]非流動[)）]\s*([\d,]+)\s+([\d,]+)/.exec(t);
-    const unit = /百万円/.test(t) ? 1e6 : null;
-    leaseTb.push({ n: m[2], amt: a && unit ? [(n(a[1]) + n(a[3])) * unit, (n(a[2]) + n(a[4])) * unit] : null });
+    const t = decodeXml(decodeXml(m[5]).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ")).normalize("NFKC").replace(/\s+/g, " ");
+    if (t.includes("リース負債")) tbs.push({ n: m[2], t });
   }
-  return { sum, shares, leaseTb };
+  return { sum, shares, lease: leaseNotes(tbs) };
+}
+
+/** 표 구역 머리(① 流動負債 · ② 非流動負債 — NFKC 뒤 "1 流動負債")로 부분 값 판정 */
+const secPart = (sec: string): "c" | "nc" | undefined => {
+  const h = [...sec.matchAll(/(?:^|\s)(?:\d|\(\d\)|\d\.)\s*(非流動|流動)負債/g)].at(-1);
+  return h ? (h[1] === "非流動" ? "nc" : "c") : undefined;
+};
+const tbShort = (n: string) => n.replace(/^Notes|ConsolidatedFinancialStatements|IFRSTextBlock|TextBlock/g, "");
+
+/**
+ * 리스부채 주석 판독(JpLeaseNote) — tbs = "リース負債" 가 나오는 연결 주석 문단(NFKC 정규화 — 전각 숫자·괄호·"－" → 반각).
+ * 금액 후보(백만엔 표만, 세금·금융비용·담보·회계정책·새 기준·부문 문단 제외):
+ *  - 변동표 행: 숫자 4개 이상이고 기초 + 변동 = 기말(백만엔 반올림 — 0 아닌 칸 수의 절반 안). 두 행이 이어지면(한 행의 기말 = 다른 행의 기초) [전기말, 당기말] — 표 순서 무관
+ *  - 만기 분석 행: 그 앞 날짜 뒤 머리의 첫 칸이 帳簿価額 → 첫 숫자 = 그 날짜 장부금액
+ *  - 두 칸 표 행: 숫자 정확히 둘, 머리의 마지막 날짜 둘에 차례로(당기·전기 순서 표도 날짜로 맞춘다). (流動)·(非流動) 이름표나 流動·非流動 구역·
+ *    OtherCurrent/NonCurrent 문단이면 부분 값
+ * 날짜마다: 합계 후보(두 칸 합계·만기 분석·변동표)가 모두 같아야 하고, 다른 문단에서 한 번 더 나오거나(합계 후보 둘 이상·리스부채 뒤 숫자)
+ * 변동표 사슬이거나 流動 + 非流動 합이 그 값과 반올림(±1) 안일 때만 확인. 합계 후보가 없으면 流動 + 非流動 한 쌍의 합.
+ */
+export function leaseNotes(tbs: { n: string; t: string }[]): JpLeaseNote {
+  const out: JpLeaseNote = { tb: tbs.map((x) => x.n), rows: [], sums: {}, incl: [], amt: null, how: null, why: null };
+  // 표시 문장 — 주어 "リース負債は/を/については" 뒤 200자 안의 "に含め·に含まれ"
+  for (const { t } of tbs) {
+    for (const m of t.matchAll(/リース負債(?:は|を|については)([^。]{0,200}?)に(?:含め|含まれ)/g)) out.incl.push(m[1].trim().slice(-160));
+  }
+  const NOT_AMT = /IncomeTax|DeferredTax|FinanceIncome|FinanceCost|FinancialIncome|FinancialCost|Pledged|SignificantAccountingPolicies|NewAccountingStandards|Segment|SubsequentEvent/;
+  const DASH = /^[-‐―—]$/;
+  const num = (s: string) => (DASH.test(s) ? 0 : (/^[△(]/.test(s) ? -1 : 1) * Number(s.replace(/[△,()\s]/g, "")));
+  const DATE = /(\d{4})年(\d{1,2})月(\d{1,2})日/g;
+  const iso = (m: RegExpMatchArray) => `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  type Cand = { kind: "T" | "P" | "M"; tb: string; date: string; v: number; part?: "c" | "nc" };
+  const cands: Cand[] = [];
+  const pool = new Map<string, Set<number>>(); // 문단 → リース負債 뒤 숫자(절댓값, 백만엔)
+  const chains: { tb: string; open: number; close: number }[] = [];
+  for (const { n, t } of tbs) {
+    if (NOT_AMT.test(n)) continue;
+    const unitM = /単位\s*[:]?\s*(百万円|千円|円)/.exec(t);
+    if (!(unitM ? unitM[1] === "百万円" : /百万円/.test(t))) continue;
+    const ps = pool.get(n) ?? new Set<number>();
+    pool.set(n, ps);
+    // 숫자 칸: 1,234 · △1,234 · (1,234)(음수) · "－"(0). 이름표 괄호((流動)·(注記26))는 숫자만 든 괄호가 아닌 것
+    const rowRe = /リース負債((?:\s?\((?![\d,]+\))[^()]{0,16}\))*)((?:\s(?:△\s?\d[\d,]*|\(\d[\d,]*\)|\d[\d,]*|[-‐―—])(?=\s|$))+)/g;
+    for (const m of t.matchAll(rowRe)) {
+      const label = m[1];
+      if (/利息|金利|費用/.test(label)) continue;
+      const toks = m[2].trim().split(/\s(?=△|\(|\d|[-‐―—])/).map((s) => s.trim());
+      const vals = toks.map(num);
+      if (vals.some((v) => !Number.isFinite(v))) continue;
+      vals.slice(0, 6).forEach((v) => v && ps.add(Math.abs(v)));
+      if (!out.rows.includes(n)) out.rows.push(n);
+      // 이 행이 든 표의 合計(행 뒤 첫 合計, 500자 안) — 리스부채 행을 포함한 내역 표의 합계
+      const tot = /合計((?:\s(?:△\s?\d[\d,]*|\d[\d,]*)(?=\s|$)){1,2})/.exec(t.slice(m.index! + m[0].length, m.index! + m[0].length + 500));
+      if (tot) (out.sums[n] ??= []).push(...tot[1].trim().split(/\s(?=△|\d)/).map(num).filter((v) => !(out.sums[n] ?? []).includes(v)));
+      const before = t.slice(Math.max(0, m.index! - 600), m.index!);
+      if (vals.length >= 4 && !DASH.test(toks[0]) && !DASH.test(toks.at(-1)!) && Math.abs(vals.slice(0, -1).reduce((a, b) => a + b, 0) - vals.at(-1)!) <= Math.floor(vals.filter((v) => v !== 0).length / 2)) {
+        chains.push({ tb: n, open: vals[0], close: vals.at(-1)! });
+        continue;
+      }
+      if (vals.length >= 3) {
+        const w = before.slice(-300);
+        const d = [...w.matchAll(DATE)].at(-1);
+        if (!d || vals[0] <= 0 || /自\s?$/.test(w.slice(0, d.index!))) continue;
+        // 표 머리 = 마지막 "単位" 뒤(날짜가 머리 앞 "前連結会計年度末(…) (単位…) 帳簿価額 …" 이든 행 앞 "帳簿価額 … 当連結会計年度末(…)" 이든)
+        const iu = w.lastIndexOf("単位");
+        const head = iu >= 0 ? w.slice(iu) : w.slice(d.index! + d[0].length);
+        const ib = head.indexOf("帳簿価額");
+        const ic = head.search(/契約上|1年以内|1年未満/);
+        if (ib >= 0 && (ic < 0 || ib < ic)) cands.push({ kind: "M", tb: n, date: iso(d), v: vals[0] });
+        continue;
+      }
+      if (vals.length === 2 && vals[0] >= 0 && vals[1] >= 0) {
+        const ds = [...before.matchAll(DATE)];
+        if (ds.length < 2 || /自/.test(before.slice(Math.max(0, ds.at(-2)!.index! - 4)))) continue;
+        const d1 = iso(ds.at(-2)!), d2 = iso(ds.at(-1)!);
+        if (d1 === d2) continue;
+        const sec = before.slice(-400);
+        const part: "c" | "nc" | undefined =
+          /非流動/.test(label) || /NonCurrent/.test(n) ? "nc"
+          : /1年(以)?内(返済|償還)?(予定)?の?\s?$/.test(t.slice(Math.max(0, m.index! - 14), m.index!)) ? "c"
+          : /流動/.test(label) || /Current/.test(n.replace(/NonCurrent/g, "")) ? "c"
+          : secPart(sec);
+        cands.push({ kind: part ? "P" : "T", tb: n, date: d1, v: vals[0], part });
+        cands.push({ kind: part ? "P" : "T", tb: n, date: d2, v: vals[1], part });
+      }
+    }
+  }
+  let chain: [number, number] | null = null;
+  for (const a of chains) for (const b of chains) if (a !== b && a.close === b.open && a.close !== b.close) chain ??= [a.close, b.close];
+  const dates = [...new Set(cands.map((c) => c.date))].sort();
+  const decide = (d: string | null, chainV: number | null): { v: number | null; how: string; why: string | null } => {
+    const tot = cands.filter((c) => c.date === d && c.kind !== "P");
+    const pc = cands.filter((c) => c.date === d && c.part === "c"), pn = cands.filter((c) => c.date === d && c.part === "nc");
+    const psum = pc.length === 1 && pn.length === 1 ? pc[0].v + pn[0].v : null;
+    const tv = [...new Set([...tot.map((c) => c.v), ...(chainV != null ? [chainV] : [])])];
+    if (tv.length > 1) return { v: null, how: "", why: `리스부채 주석 후보 불일치(${d}: ${tv.join("·")}백만엔)` };
+    if (tv.length === 1) {
+      const v = tv[0];
+      const srcs = new Set(tot.map((c) => c.tb));
+      const elsewhere = [...pool].some(([tb, s]) => !srcs.has(tb) && s.has(v));
+      const ok = chainV != null || srcs.size >= 2 || (psum != null && Math.abs(psum - v) <= 1) || elsewhere;
+      if (!ok) return { v: null, how: "", why: `리스부채 ${v}백만엔(${[...srcs].map(tbShort).join("·")})이 다른 주석에서 확인 안 됨` };
+      const by = [...(chainV != null ? ["재무활동 부채 변동표"] : []), ...[...srcs].map(tbShort)];
+      return { v, how: `${by.join("·")}${psum != null ? ` · 流動+非流動 ${psum}` : ""}${!(chainV != null || srcs.size >= 2) && elsewhere ? " · 다른 주석 같은 값" : ""}`, why: null };
+    }
+    if (psum != null) return { v: psum, how: `流動 ${pc[0].v} + 非流動 ${pn[0].v}(${[...new Set([pc[0].tb, pn[0].tb])].map(tbShort).join("·")})`, why: null };
+    return { v: null, how: "", why: cands.length || chains.length ? `${d ?? "기준일"} 리스부채 장부금액 판독 없음` : "리스부채 장부금액 표 없음" };
+  };
+  const curD = dates.at(-1) ?? null;
+  const priD = dates.length >= 2 ? dates.at(-2)! : null;
+  const c1 = decide(curD, chain ? chain[1] : null);
+  const c0 = decide(priD, chain ? chain[0] : null);
+  if (c1.v != null) {
+    out.amt = { cur: c1.v * 1e6, curDate: curD, prior: c0.v != null ? c0.v * 1e6 : null, priorDate: priD };
+    out.how = c1.how;
+  } else out.why = c1.why;
+  return out;
 }
 
 const memo = new Map<string, Promise<JpDocFin>>();

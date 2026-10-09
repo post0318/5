@@ -17,8 +17,10 @@ import type { JpStmtKind } from "./xbrl-fin";
  *  - EV = 시가총액 + 이자부 차입금(사채·차입금·CP·리스부채) + 비지배지분 − 현금성자산. 우선주: 일본 상장사는 보통주만(0).
  *    · 차입금 = 재무상태표 부채 구역의 차입금 줄(이름표 借入·社債·有利子負債·リース負債·リース債務·コマーシャル・ペーパー) 합 — 다른 맞는 줄의
  *      하위 줄은 빼서 이중 합산하지 않는다. 預金·貯金(은행업 예금)은 차입금 아님(미국 은행 규칙과 같음).
- *    · 리스부채(IFRS 16 — 한국과 같이 포함): 본표 줄 → 차입금 줄의 주석에 リース負債 가 있으면 "그 줄에 포함" → 리스 주석의 (流動)·(非流動)
- *      합계 가산 → 셋 다 아니면 확인 불가 = EV 공란(한국 krLeaseFor 와 같은 원칙, 그림자 채우기 금지). J-GAAP 은 금융리스(リース債務 줄)만.
+ *    · 리스부채(IFRS 16 — 한국과 같이 포함): 본표 줄 → 주석 문장이 차입금 줄에 포함한다고 밝히거나 차입금 줄 내역 문단에 리스부채 행이 있으면
+ *      "그 줄에 포함" → 주석 리스부채 장부금액(xbrl-fin leaseNotes — 확인된 값) 가산 → 셋 다 아니면 확인 불가 = EV 공란(한국 krLeaseFor 와 같은
+ *      원칙, 그림자 채우기 금지). 반기말(LTM)은 반기 보고서에 금액이 없으면 공란(표시 방법만 최근 有報 것을 따른다). J-GAAP 은 금융리스(リース債務 줄)만.
+ *    · 차입금과 기타 금융부채가 한 줄(三菱重工)이면 차입금·EV 공란 + 사유(오너 결정 D4).
  *    · 현금성자산 = 유동자산의 現金及び現金同等物(IFRS)·現金及び預金(J-GAAP) + 定期預金·短期投資·有価証券(유동). その他の金融資産 은 제외
  *      (한국 "기타유동금융자산 제외"와 같음).
  *    · EV 미산정: 금융업(은행·보험 서식 — 예금·보험부채가 영업 부채), 금융사업 연결(재무상태표에 金融事業に係る債権 등 금융사업 자산 줄 —
@@ -91,7 +93,8 @@ const inCurLiab = (l: Ln) => ancRe(l, /^CurrentLiabilit/) || /CL(IFRS)?$/.test(l
 const inOpCf = (l: Ln) => ancRe(l, /OperatingActivities/) || /OpeCF(IFRS)?$/.test(local(l.k));
 const inInvCf = (l: Ln) => ancRe(l, /Invest(ing|ment)Activities/) || /InvCF(IFRS)?$/.test(local(l.k));
 
-const DEBT_RE = /借入|社債|有利子負債|リース負債|リース債務|コマーシャル・?ペーパー|借用金/;
+// 長期債務 은 줄 이름 전체(日立 "償還期長期債務"·"長期債務") — "買掛金及びその他の短期債務"(ユニクロ)·"営業債務以外の短期債務"(伊藤忠) 같은 영업 채무 제외
+const DEBT_RE = /借入|社債|有利子負債|リース負債|リース債務|コマーシャル・?ペーパー|借用金|^(償還期)?長期債務$|資金調達に係る債務/;
 const DEBT_NOT = /預金|貯金|貸付|債権|資産|デリバティブ|未払|引当|利息|保証|担保/;
 const isDebt: Pred = (l) => inLiab(l) && DEBT_RE.test(l.label) && !DEBT_NOT.test(l.label) && !/^(負債|流動負債|非流動負債|固定負債)/.test(l.label);
 const isLease: Pred = (l) => isDebt(l) && /リース負債|リース債務/.test(l.label);
@@ -99,8 +102,8 @@ const isCash: Pred = (l) =>
   inCurAssets(l) &&
   (byK("jpigp_cor:CashAndCashEquivalentsIFRS", "jppfs_cor:CashAndDeposits", "jppfs_cor:CashAndCashEquivalents")(l) ||
     /^(現金及び現金同等物|現金及び預金|定期預金|短期投資|有価証券|短期運用有価証券)$/.test(l.label));
-// 금융사업 연결 — 금융사업 자산 줄(도요타 金融事業に係る債権, 소니 2025년 3월기까지 金融分野における投資及び貸付)
-const CAPTIVE_RE = /金融事業に係る債権|金融分野における投資及び貸付|金融事業に係る/;
+// 금융사업 연결 — 금융사업 자산 줄(도요타 金融事業に係る債権, 소니 2025년 3월기까지 金融分野における投資及び貸付, 혼다 金融サービスに係る債権)
+const CAPTIVE_RE = /金融事業に係る債権|金融分野における投資及び貸付|金融事業に係る|金融サービスに係る債権/;
 
 const REV_PREDS: Pred[] = [
   byLabel(/^(営業収益合計|売上収益合計|収益合計|売上高合計|売上高及び.*合計|営業収益及び.*合計)$/),
@@ -230,6 +233,43 @@ export function jpFundamentals(model: JpFinModel): JpFund {
   };
   const NOLINE = "본표에 해당 줄 없음";
 
+  // 리스부채 "차입금 줄에 포함" 판정(본표에 リース負債 줄 없는 IFRS) — ① 주석 문장이 차입금 줄 이름을 대며 리스부채를 거기에 포함한다고 밝힘
+  // ② 리스부채 행이 든 주석 표의 合計 = 차입금 줄(들)의 합(백만엔, 정확히). 표시 방법은 서류 단위라 같은 서류의 다른 열에서 확인되면 그 열도 포함
+  // (소니 2024 有報의 2022-03-31 열 — 그 날짜 合計가 서류에 없음). 차입금 줄 개념이 같을 때만.
+  const leaseIncl: ({ names: Ln[]; how: string } | null)[] = Array(n).fill(null);
+  if (ifrs) {
+    for (let c = 0; c < n; c++) {
+      const xl = x[c].lease;
+      const parts = sumTop(bs, isDebt, c)?.parts ?? [];
+      if (!xl || !parts.length || sumTop(bs, isLease, c)) continue;
+      const src = `${xl.policyDoc ? `${xl.policyDoc}(최근 有報 표시 방법) · ` : ""}${xl.doc}`;
+      const inclS = xl.incl.find((t) => parts.some((l) => t.includes(l.label)));
+      if (inclS) {
+        leaseIncl[c] = { names: parts.filter((l) => inclS.includes(l.label)), how: `주석 "…${inclS.slice(-60)}に含め…"(${src})` };
+        continue;
+      }
+      const ps = parts.slice(0, 8);
+      outer: for (const t of xl.rows) {
+        for (let b = 1; b < 1 << ps.length; b++) {
+          const ls = ps.filter((_, i) => b & (1 << i));
+          const m = ls.reduce((a, l) => a + l.v[c]!, 0) / 1e6;
+          if ((xl.sums[t] ?? []).includes(m)) {
+            leaseIncl[c] = { names: ls, how: `리스부채 행이 든 주석 표(${t.replace(/^Notes|ConsolidatedFinancialStatements.*$/g, "")})의 合計 ${m.toLocaleString("en-US")}백만엔 = 이 줄 합(${src})` };
+            break outer;
+          }
+        }
+      }
+    }
+    for (let c = 0; c < n; c++) {
+      const xl = x[c].lease;
+      if (leaseIncl[c] || !xl || xl.amt != null) continue;
+      const parts = sumTop(bs, isDebt, c)?.parts ?? [];
+      const ks = parts.map((l) => l.k).sort().join(",");
+      const o = leaseIncl.findIndex((r, j) => r && x[j].lease?.doc === xl.doc && (sumTop(bs, isDebt, j)?.parts ?? []).map((l) => l.k).sort().join(",") === ks);
+      if (o >= 0) leaseIncl[c] = { names: leaseIncl[o]!.names.filter((l) => parts.some((p) => p.k === l.k)), how: `같은 서류 ${cols[o].label} 열에서 확인 — ${leaseIncl[o]!.how}` };
+    }
+  }
+
   for (let c = 0; c < n; c++) {
     // ── 손익 ──
     set(f.rev, c, first(is, REV_PREDS, c), NOLINE);
@@ -299,25 +339,31 @@ export function jpFundamentals(model: JpFinModel): JpFund {
     let leaseNote: string | null = null;
     let leaseUnknown: string | null = null;
     if (ifrs && !financial && !leaseFace && eqAll) {
-      // 본표에 리스부채 줄 없음 — 차입금 줄의 주석에 リース負債 가 있으면 포함, 리스 주석 합계가 있으면 가산, 아니면 확인 불가
+      // 본표에 리스부채 줄 없음(한국 krLeaseFor 와 같은 원칙): ① 차입금 줄에 포함(leaseIncl — 위 판정)이면 그대로 ② 아니면 주석 리스부채
+      // 장부금액(xbrl-fin leaseNotes — 표 둘 이상·변동표 사슬로 확인된 값)을 가산 ③ 못 정하면 EV 공란 + 사유
       const xl = x[c].lease;
-      const roots = (debt?.parts ?? []).map((l) => local(l.k).replace(/(CL|NCL)?IFRS$/, "").replace(/^(Current|NonCurrent)/, ""));
-      const incl = xl?.tb.find((t) => roots.some((r) => r && t.startsWith(`Notes${r}`)));
-      if (incl) leaseNote = `리스부채는 차입금 줄(${[...new Set(debt!.parts.map((l) => l.label))].join("·")})에 포함 — 주석 ${incl.replace(/ConsolidatedFinancialStatements.*$/, "")}`;
+      const inc = leaseIncl[c];
+      if (inc) leaseNote = `리스부채는 차입금 줄(${[...new Set(inc.names.map((l) => l.label))].join("·")})에 포함 — ${inc.how}`;
       else if (xl?.amt != null) {
         debtV = (debtV ?? 0) + xl.amt;
-        leaseNote = `리스부채 ${Math.round(xl.amt / 1e6).toLocaleString("en-US")}백만엔 주석 가산(리스 주석 流動·非流動 합계, ${xl.doc})`;
-      } else leaseUnknown = `리스부채 확인 불가(본표에 リース負債 줄 없음 · 주석 판독 없음${xl ? `, ${xl.doc}` : ""})`;
+        leaseNote = `리스부채 ${Math.round(xl.amt / 1e6).toLocaleString("en-US")}백만엔 주석 가산(${xl.how}, ${xl.doc})`;
+      } else leaseUnknown = `리스부채 확인 불가(본표에 リース負債 줄 없음 · ${xl?.why ?? "주석 판독 없음"}${xl ? `, ${xl.doc}` : ""})`;
     }
-    f.debt.v[c] = debtV;
+    // 차입금과 기타 금융부채가 한 줄(三菱重工 "社債、借入金及びその他の金融負債") — 차입금만 나눌 숫자 요소가 주석에 없으면 공란 + 사유
+    // (오너 결정 2026-10-09 D4 — 그림자 채우기 금지. 기타 금융부채(미지급금 등)를 넣으면 EV 과대)
+    const mixed = debt?.parts.find((l) => /その他の金融負債/.test(l.label));
+    const mixedWhy = mixed ? `차입금 줄 "${mixed.label}"이 기타 금융부채를 포함한 한 줄 — 차입금만 나눌 숫자 요소 없음(오너 결정 D4)` : null;
+    f.debt.v[c] = mixed ? null : debtV;
     if (leaseUnknown) f.debt.n[c] = `${leaseUnknown} — 본표 차입금 줄만`;
-    if (debt?.parts.some((l) => /その他の金融負債/.test(l.label))) notes.push(`총차입금: "${debt.parts.find((l) => /その他の金融負債/.test(l.label))!.label}" 줄 그대로(본표가 차입금과 기타 금융부채를 한 줄로 공시 — 기타 금융부채 포함)`);
     if (leaseNote) f.debt.n[c] = leaseNote;
+    if (mixedWhy) f.debt.n[c] = mixedWhy;
     const cd = sumTop(bs, (l) => isDebt(l) && inCurLiab(l), c);
-    f.curDebt.v[c] = cd?.v ?? (eqAll ? 0 : null);
+    f.curDebt.v[c] = mixed ? null : (cd?.v ?? (eqAll ? 0 : null));
+    if (mixedWhy) f.curDebt.n[c] = mixedWhy;
     const captive = bs.find((l) => !l.ab && CAPTIVE_RE.test(l.label) && l.v[c] != null);
     if (financial) f.netDebtEv.n[c] = "금융업(은행·보험 서식) — EV 미산정";
     else if (captive) f.netDebtEv.n[c] = `금융사업 연결(${captive.label} — 금융사업 차입금이 연결 차입금에 섞여 분리 불가) — EV 미산정`;
+    else if (mixedWhy) f.netDebtEv.n[c] = `${mixedWhy} — EV 공란`;
     else if (leaseUnknown) f.netDebtEv.n[c] = `${leaseUnknown} — EV 공란`;
     else if (f.cash.v[c] == null || debtV == null) f.netDebtEv.n[c] = f.cash.v[c] == null ? "현금성자산 없음" : "차입금 없음";
     else f.netDebtEv.v[c] = debtV + (f.nci.v[c] ?? 0) - f.cash.v[c]!;
