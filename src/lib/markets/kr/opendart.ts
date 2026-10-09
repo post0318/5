@@ -408,6 +408,9 @@ function krLtmOf(val: (d: { ids: readonly string[]; names: readonly string[] }, 
   };
 }
 
+/** 당기 분기·반기 보고서에 전기 누적 열이 없어 LTM 을 비운 사유(fyLast 가 연간값으로 채우지 않게 표시로도 쓴다) */
+const KR_PRIOR_MISSING = "당기 보고서에 전기 누적 열 없음 — 정정본 전기 누적 확인 불가, LTM 빈칸";
+
 const INTERIM_RANK: Record<string, number> = { "11014": 3, "11012": 2, "11013": 1 };
 
 /**
@@ -492,19 +495,7 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   }
   if (!annualRows) return null;
 
-  // 3) 전년 동기 누적이 보고서에 없으면, 전년 동일 보고서를 따로 조회
-  let priorInterimRows: FnlttRow[] | null = null;
-  // 현금흐름표는 DART 재무제표 API 가 분기·반기 보고서의 전기 열을 주지 않는다(실측 005930 2026 반기 — frmtrm 칸 없음) — 전년 같은 보고서도 늘 받아 둔다
-  const needPriorFetch = true;
-  if (needPriorFetch) {
-    for (const fsDiv of fsOrder) {
-      const rows = await fetchFnlttYear(corpCode, interim.year - 1, interim.code, fsDiv);
-      if (rows && rows.length) {
-        priorInterimRows = rows;
-        break;
-      }
-    }
-  }
+  // 3) 전년 동기 누적 = 당기 보고서의 전기 열(정정본)만(오너 결정 2026-10-10). 전년 같은 보고서(정정 전)는 쓰지 않는다 — 없으면 빈칸 + 사유
 
   // 구성 기간(외화 환산용) — 연간·당기 누적·전년 동기 누적
   const qMd = { "11013": "03-31", "11012": "06-30", "11014": "09-30" }[interim.code] ?? "12-31";
@@ -520,13 +511,13 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
       key === "eps" ? epsValue(rows, col) : isValue(rows, names, col, undefined, ids);
     const annual = get(annualRows!, "annual");
     const cur = get(interim!.rows, "cumCur");
-    let prior = get(interim!.rows, "cumPrior");
-    // 당기 보고서에 전기 누적 열이 없을 때만 전년 같은 보고서(정정 전 값) — 사유를 남긴다(오너 결정 2026-10-10: 전기 누적은 당기 보고서 전기 열)
-    if (prior == null && priorInterimRows) {
-      prior = get(priorInterimRows, "cumCur");
-      if (prior != null) reasons[key] ??= `당기 보고서에 전기 누적 열 없음 — 전년 같은 보고서 값(정정 전일 수 있음)`;
-    }
+    const prior = get(interim!.rows, "cumPrior");
     if (annual == null) return { v: null, ttm: false, parts: [] };
+    // 당기 보고서에 전기 누적 열이 없으면 빈칸 + 사유(전년 같은 보고서 값·연간값으로 대신하지 않는다 — 오너 결정 2026-10-10)
+    if (cur != null && prior == null) {
+      reasons[key] = KR_PRIOR_MISSING;
+      return { v: null, ttm: false, parts: [] };
+    }
     // 분기 데이터 부족 → 연간값. 라벨("FY + 분기 − 분기")과 다른 기간이므로 사유를 남긴다(감사 1차 ⑨ — 조용한 대체 금지)
     if (cur == null || prior == null) {
       reasons[key] = `분기 누적 값 없음(${cur == null ? "당기" : "전년 동기"}) — FY${annualYear} 연간값`;
@@ -686,6 +677,8 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
     // 하이라이트·재무분석·개요가 같은 값을 쓴다(예전엔 재무분석만 연간값으로 대체해
     // LTM 열이 화면마다 갈렸다, 2026-09-23 가온전선).
     const fyLast = (m: Map<number, number>, k: keyof KrTtmParts) => {
+      // 당기 보고서에 전기 누적이 없어 비운 항목은 연간값으로 채우지 않는다(오너 결정 2026-10-10)
+      if (k !== "daTtm" && reasons[k as keyof typeof reasons] === KR_PRIOR_MISSING) return null;
       const ys = [...m.keys()].sort((a, b) => a - b);
       const y = ys.at(-1);
       if (y == null) return null;

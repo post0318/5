@@ -660,8 +660,10 @@ async function ltmLayer(c) {
     const a = oneVal(pick(annualR ?? [], it), (r) => num(r.thstrm_amount)).v;
     const cc = oneVal(pick(cur.rows, it), (r) => num(r.thstrm_add_amount) ?? num(r.thstrm_amount)).v;
     let pc = oneVal(pick(cur.rows, it), (r) => num(r.frmtrm_add_amount) ?? num(r.frmtrm_amount)).v, from = "당기 보고서 전기 누적";
-    if (pc == null) { pc = oneVal(pick(priorOwn ?? [], it), (r) => num(r.thstrm_add_amount) ?? num(r.thstrm_amount)).v; from = `${Y - 1} ${QNAME[q]} 보고서 당기 누적(당기 보고서에 전기 열 없음)`; }
-    return { v: a != null && cc != null && pc != null ? a + cc - pc : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − ${from} ${pc}`, old: from !== "당기 보고서 전기 누적" };
+    // 당기 보고서에 전기 누적 칸이 없으면 빈칸 기대(전년 같은 보고서 값으로 대신하지 않음 — 오너 결정 2026-10-10)
+    if (pc == null) from = "당기 보고서 전기 누적 칸 없음 — 빈칸 기대";
+    void priorOwn;
+    return { v: a != null && cc != null && pc != null ? a + cc - pc : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − ${from} ${pc}` };
   };
   let revLtm = null;
   for (const [key, it, label2] of [["revenue", IT.rev, "매출"], ["opinc", IT.op, "영업이익"], ["ni", IT.ni, "순이익(연결)"]]) {
