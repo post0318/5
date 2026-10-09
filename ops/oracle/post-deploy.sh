@@ -20,7 +20,7 @@ if [ ! -d "$J/node_modules" ] || [ "$OLD_LOCK" != "$NEW_LOCK" ]; then
 fi
 sudo chown -R ubuntu:ubuntu "$J"
 # 배치 실행기도 저장소 것으로 맞춘다
-for f in run-ts.sh run-script.sh run-research.sh call-cron.sh alert-lib.sh healthcheck.sh config-backup.sh build-jobs-env.sh research-freshness.sh usage-report.sh; do sudo install -m 755 "$J/ops/oracle/$f" "/opt/macro/ops/$f"; done
+for f in run-ts.sh run-precompute.sh run-script.sh run-research.sh call-cron.sh alert-lib.sh healthcheck.sh config-backup.sh build-jobs-env.sh research-freshness.sh usage-report.sh; do sudo install -m 755 "$J/ops/oracle/$f" "/opt/macro/ops/$f"; done
 bash "$J/ops/oracle/build-jobs-env.sh"
 sudo systemctl restart macro-telegram-listener 2>/dev/null || true
 # 무효 저장본만 채우기 — 배포를 붙잡지 않게 뒤에서

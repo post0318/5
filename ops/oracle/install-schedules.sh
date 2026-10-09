@@ -99,8 +99,14 @@ unit weekly-report "주간 리포트 초안 생성" "/opt/macro/ops/call-cron.sh
 # ④ 일본 EDINET 공시 목록·재무 보고서 색인(jp_docs) — 최근 10일만 다시 받아 확정(일본 화면은 색인이 빠진 날이 있으면 옛 표 대신 오류, 2026-10-09)
 unit fin-jp-edinet-index "종목분석: 일본 EDINET 공시 색인" "/opt/macro/ops/run-ts.sh jp-edinet-index.mts --days=10 --no-samples" "*-*-* 08:30:00\n*-*-* 20:30:00\n"
 
+# ④ 종목분석 — 새 유니버스 종목 미리 계산(오너 승인 2026-10-06): 5분마다 대기열(precompute_queue)을 보고 전 계정 처음 담긴 종목만
+#    미국 재무 조립·TTM(회차당 10), 한국 감가상각 적재(fin-kr-da 설치 뒤, 회차당 5·24시간 30). 정기 배치가 돌고 있으면 쉰다. 실행기 설치는 post-deploy.sh
+install -m 755 "$(dirname "$(readlink -f "$0")")/run-precompute.sh" /opt/macro/ops/run-precompute.sh
+unit fin-precompute "종목분석: 새 유니버스 종목 미리 계산" "/opt/macro/ops/run-precompute.sh" "*-*-* *:02/5:00
+"
+
 systemctl daemon-reload
-for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/macro-kr-fg.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer "$U"/fin-jp-edinet-index.timer; do
+for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/macro-kr-fg.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer "$U"/fin-jp-edinet-index.timer "$U"/fin-precompute.timer; do
   systemctl enable --now "$(basename "$t")" >/dev/null
 done
-systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|br-ntnf|macro-kr-fg|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog|jp-edinet-index" | sed 's/^/타이머 수: /'
+systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|br-ntnf|macro-kr-fg|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog|jp-edinet-index|fin-precompute" | sed 's/^/타이머 수: /'

@@ -2118,6 +2118,12 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   `scripts/run/fin-build.mts`·`ttm-build.mts` 를 실행해 DB 에만 쓴다(라우트와 같은 함수). 작업 폴더 `/opt/macro/jobs` 는 배포 때 운영 앱과 같은
   커밋으로 맞춰지고, SEC 캐시 `/opt/macro/sec-cache` 를 앱과 같이 쓴다. GitHub `fin-build.yml`·`ttm-build.yml` 은 수동 비상용.
   라우트 `/api/cron/fin-build`·`ttm-build`(POST)도 수동 비상용으로 남김.
+- **새 유니버스 종목 미리 계산(오너 승인 2026-10-06)**: 유니버스 저장(`upsertUniverseItem`·`bulkUpsertResolved`)이 **전 계정 합집합에서 처음인**
+  종목만 대기열 `precompute_queue`(`src/lib/db/precompute-queue.ts`, TTL 7일)에 작은 문서로 남긴다 — 요청 안에서는 계산하지 않는다(대기열 기록
+  실패도 저장은 성공). 1호기 타이머 `fin-precompute`(5분, `ops/oracle/run-precompute.sh` → `scripts/run/precompute.mts`)가 미국은 재무 조립·TTM
+  저장(fin-build·ttm-build 와 같은 함수, 회차당 10종목·순차), 한국은 `run-kr-da.sh <종목>`(감가상각 적재, 회차당 5·24시간 30종목 — fin-kr-da 가
+  설치되기 전엔 대기열에 남김). 정기 배치 실행 중엔 쉬고, DART 하루 상한은 시도 횟수 없이 6시간 미룸, 실패는 재시도 2회 뒤 failed → 24시간 동안
+  종료코드 1(healthcheck `job-fin-precompute`). 사용량 분류 = 배치.
 - **유니버스 밖 미국 종목도 조회 때 저장(오너 결정 2026-10-01 ①)**: 재무 조립(`loadFinSym`)이 완전하면(환율·Yahoo·SEC 조회
   결손 없음) `fin_sym` 에 저장하고, TTM 라우트는 화면 조회 시각(`ttm_snap.seen`)을 남긴다. 재무 배치(fin-build)·TTM 채우기(ttm-build)는
   유니버스 + **최근 30일 안에 조회된 종목**(`listRecentlyViewed`)을 갱신한다 — 안 보는 종목은 자연히 빠진다. 실측(LLY): 첫 조회 45초,
