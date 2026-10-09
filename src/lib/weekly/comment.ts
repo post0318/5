@@ -1352,6 +1352,8 @@ interface AssembleInput {
   commentTrustGrounded: boolean;
   dropReasons: Map<string, string>;
   webFacts: WebFact[];
+  /** 커넥터 전용 — 날짜 확인된 웹 출처가 있으면 주도 종목 기사(headlines)가 없는 섹터도 사유를 받는다(주도 종목 이름 검사는 그대로) */
+  sectorWebOk?: boolean;
 }
 
 function assembleComments(a: AssembleInput): WeeklyComments {
@@ -1540,7 +1542,7 @@ function assembleComments(a: AssembleInput): WeeklyComments {
     // 버리고, 한국 섹터는 코멘트가 주도 종목 이름을 하나라도 짚어야 한다(해외는
     // 한글 표기가 제각각이라 이름 검사는 하지 않는다).
     const sec = payload.sectors.find((s) => s.id === rawId)!;
-    if (sec.headlines.length === 0) {
+    if (sec.headlines.length === 0 && !(a.sectorWebOk && commentTrustGrounded)) {
       if (String(text ?? "").trim()) {
         dropReasons.set(`sector:${rawId}`, "주도 종목의 그 주 기사를 찾지 못해 사유를 싣지 않음(근거 없음)");
       }
@@ -1794,6 +1796,7 @@ export async function assembleConnectorComments(
     commentTrustGrounded: trusted,
     dropReasons: new Map(),
     webFacts: [],
+    sectorWebOk: true,
   });
   // 증권사 인용 폐기 사유가 "모델이 생성하지 않음" 같은 일반 사유에 덮이지 않게 마지막에 덮어쓴다
   for (const [k, v] of reasons) comments.dropReasons.set(k, v);
