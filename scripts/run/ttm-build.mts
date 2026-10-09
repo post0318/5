@@ -10,6 +10,7 @@
  */
 import { isDbConfigured } from "@/lib/db";
 import { isStorableTtm, listRecentlyViewed, readTtmSnap, ttmSnapVersion, writeTtmSnap } from "@/lib/db/ttm-snap";
+import { recordUsViewChanges } from "@/lib/markets/us/view-snap";
 import { getAdapter } from "@/lib/markets/registry";
 import type { TtmFlows } from "@/lib/markets/types";
 import { listUniverseDistinct } from "@/lib/universe/repo";
@@ -48,8 +49,10 @@ async function main() {
     if (ttm && isStorableTtm(ttm)) {
       const w = dry ? null : await writeTtmSnap("us", sym, ttm);
       built.push(sym);
-      // 저장본 교체 기록(ttm_chg) — 바뀐 칸 수·옛 판번호
-      const chg = w ? (w.changed == null ? " · 새 저장본" : ` · 교체(옛 판 ${w.from}) 바뀐 칸 ${w.changed}`) : "";
+      // 저장본 교체 기록(ttm_chg) — 바뀐 칸 수·옛 판번호. 재무제표 화면(현금흐름표·재무상태표) 칸 변경은 fin_chg(view-snap.ts)
+      const vc = dry ? null : await recordUsViewChanges(sym).catch((e) => { console.log(`::warning::${sym} 재무제표 칸 비교 실패 — ${String(e).slice(0, 120)}`); return null; });
+      const chg = (w ? (w.changed == null ? " · TTM 새 저장본" : ` · TTM 교체(옛 판 ${w.from}) 바뀐 칸 ${w.changed}`) : "")
+        + (vc ? (vc.baseline ? " · 재무제표 기준값 첫 저장" : ` · 재무제표 바뀐 칸 ${vc.changed}${vc.newCols ? `(새 열 ${vc.newCols})` : ""}`) : "");
       console.log(`계산 ${sym} ${ms}ms${dry ? " (저장 안 함)" : chg}`);
     } else {
       const reason = ttm?.error ?? ttm?.degraded?.join("; ") ?? "TTM 없음";

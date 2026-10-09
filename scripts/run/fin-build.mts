@@ -31,7 +31,8 @@ async function main() {
   }
   const started = Date.now();
   const r = await refreshStored("us", symbols, { max: 10_000, deadline: started + minutes * 60_000 });
-  for (const b of r.built) console.log(`조립 ${b.symbol} (${b.why})${b.error ? ` 오류: ${b.error}` : ` 변경 ${b.changed ?? 0}${b.gaps.length ? ` 결손 ${b.gaps.join("·")}` : ""}`}`);
+  // 변경 = 손익계산서·핵심 지표 저장본(fin_stmt·fin_sym)의 바뀐 칸(fin_chg). 현금흐름표·재무상태표 칸 변경은 ttm-build 가 기록(view-snap.ts)
+  for (const b of r.built) console.log(`조립 ${b.symbol} (${b.why})${b.error ? ` 오류: ${b.error}` : ` 손익·지표 바뀐 칸 ${b.changed ?? 0}${b.gaps.length ? ` 결손 ${b.gaps.join("·")}` : ""}${b.cols?.length ? ` · 열 표시 ${b.cols.join("·")}` : ""}`}`);
   const errs = r.built.filter((b) => b.error);
   console.log(`완료 ${Math.round((Date.now() - started) / 1000)}초 · 조립 ${r.built.length} (오류 ${errs.length}) · 최신 ${r.upToDate.length} · 건너뜀 ${r.skipped.length} · 남음 ${r.pending}`);
   if (r.skipped.length) console.log(`::warning::제출 목록 조회 실패로 건너뛴 종목: ${r.skipped.join(",")}`);

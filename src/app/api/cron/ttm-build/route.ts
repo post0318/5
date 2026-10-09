@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { jsonError, ok } from "@/lib/api";
 import { isDbConfigured } from "@/lib/db";
 import { isStorableTtm, listRecentlyViewed, readTtmSnap, ttmSnapVersion, writeTtmSnap } from "@/lib/db/ttm-snap";
+import { recordUsViewChanges } from "@/lib/markets/us/view-snap";
 import { getAdapter } from "@/lib/markets/registry";
 import type { TtmFlows } from "@/lib/markets/types";
 import { listUniverseDistinct } from "@/lib/universe/repo";
@@ -52,7 +53,7 @@ export async function POST(req: Request) {
         [...new Set([...(await listUniverseDistinct({ market: "us" })).map((u) => u.symbol.toUpperCase()), ...(await listRecentlyViewed("us"))])];
     const exclude = new Set((sp.get("exclude") ?? "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean));
     const adapter = getAdapter("us");
-    const built: { symbol: string; ms: number }[] = [];
+    const built: { symbol: string; ms: number; ttmChanged: number | null; viewChanged: number | null }[] = [];
     const failed: { symbol: string; reason: string }[] = [];
     let fresh = 0;
     let pending = 0;
@@ -78,8 +79,10 @@ export async function POST(req: Request) {
         : null;
       clearTimeout(timer);
       if (ttm && isStorableTtm(ttm)) {
-        await writeTtmSnap("us", sym, ttm);
-        built.push({ symbol: sym, ms: Date.now() - t0 });
+        const w = await writeTtmSnap("us", sym, ttm);
+        // 재무제표 화면 칸 변경 기록(view-snap.ts) — 실패는 TTM 저장 결과에 영향 없음
+        const vc = await recordUsViewChanges(sym).catch(() => null);
+        built.push({ symbol: sym, ms: Date.now() - t0, ttmChanged: w?.changed ?? null, viewChanged: vc?.changed ?? null });
       } else {
         failed.push({ symbol: sym, reason: ttm?.error ?? ttm?.degraded?.join("; ") ?? "TTM 없음" });
       }
