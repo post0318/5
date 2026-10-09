@@ -4,7 +4,7 @@ import { getAdapter } from "@/lib/markets/registry";
 import { isMarketId } from "@/lib/markets/types";
 import { getKrJurirNo } from "@/lib/markets/kr/opendart";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
-import { readTtmSnapAny, touchTtmSeen, writeTtmSnap } from "@/lib/db/ttm-snap";
+import { isStorableTtm, readTtmSnapAny, touchTtmSeen, writeTtmSnap } from "@/lib/db/ttm-snap";
 
 export const maxDuration = 180; // 재무(fin) 저장본이 없는 종목은 요청 시점 조립 40초 + SEC 원본 판독 — 45~60초 한도에 걸려 504(2026-10-01)
 
@@ -36,7 +36,17 @@ export async function GET(
                 return hit.current ? hit.ttm : { ...hit.ttm, snapStale: true };
               }
               const t = adapter.getTtm ? await adapter.getTtm(sym) : null;
-              if (t) await writeTtmSnap(market, sym, t, { viewed: true }).catch(() => {});
+              if (t && isStorableTtm(t)) {
+                await writeTtmSnap(market, sym, t, { viewed: true }).catch(() => {});
+                return t;
+              }
+              // 저장할 수 없는 계산(재무 저장본 옛 판 staleInputs 등) — 조회 기록은 남기고(배치 대상), 옛 판 fin 인 동안은 24시간 넘은 저장본도
+              // 새 값이 나올 때까지 그대로(오너 결정 2026-10-09)
+              await touchTtmSeen(market, sym, { upsert: true }).catch(() => {});
+              if (t?.staleInputs?.length) {
+                const old = await readTtmSnapAny(market, sym, { anyAge: true }).catch(() => null);
+                if (old) return { ...old.ttm, snapStale: true };
+              }
               return t;
             })
         : adapter.getTtm
@@ -68,7 +78,8 @@ export async function GET(
       { ttm: market === "jp" && ttm ? await koreanizeNotesDeep(ttm) : ttm, dividend },
       {
         headers: {
-          "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400",
+          // 옛 판 입력·옛 판 저장본 응답(staleInputs·snapStale)은 배치가 새로 채우면 바로 바뀌도록 짧게
+          "Cache-Control": ttm?.staleInputs?.length || ttm?.snapStale ? "public, s-maxage=60" : "public, s-maxage=1800, stale-while-revalidate=86400",
         },
       },
     );

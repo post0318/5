@@ -54,10 +54,12 @@ export async function readTtmSnap(market: string, symbol: string): Promise<TtmFl
  * 24시간 안 저장본(배포판 무관) — current = 같은 배포판. 배포판만 다른 저장본은 화면이 먼저 바로 쓰고 뒤에서 다시 계산해 덮어쓴다(오너 지적
  * 2026-10-02 — 배포 직후 다시 채우기가 끝날 때까지 첫 조회가 수십 초, AXP). 계산 규칙이 바뀐 배포면 처음 한 번만 옛 규칙 값이 보일 수 있다
  */
-export async function readTtmSnapAny(market: string, symbol: string): Promise<{ ttm: TtmFlows; current: boolean } | null> {
+export async function readTtmSnapAny(market: string, symbol: string, opts: { anyAge?: boolean } = {}): Promise<{ ttm: TtmFlows; current: boolean } | null> {
   if (!isDbConfigured()) return null;
   const d = await (await col()).findOne({ _id: key(market, symbol) });
-  if (!d || Date.now() - d.at.getTime() > MAX_AGE_MS) return null;
+  // anyAge — 24시간 넘은 저장본도(재무 저장본이 옛 판이라 새로 계산한 값을 저장할 수 없을 때, 새 값이 나올 때까지 옛 값 — 오너 결정 2026-10-09).
+  // seen 만 있는 문서(touchTtmSeen upsert)는 저장본 없음
+  if (!d || !d.ttm || !d.at || (!opts.anyAge && Date.now() - d.at.getTime() > MAX_AGE_MS)) return null;
   // 다른 환경(로컬 ↔ 운영)이 쓴 저장본은 읽지 않는다(같은 DB — api-snap.ts 와 같은 이유)
   if ((d.v === "local") !== (ttmSnapVersion() === "local")) return null;
   return { ttm: d.ttm, current: d.v === ttmSnapVersion() };
@@ -106,9 +108,15 @@ export function ttmDiff(a: TtmFlows | null | undefined, b: TtmFlows): [string, u
 async function chgCol(): Promise<Collection<TtmChgDoc>> {
   const c = (await getDb()).collection<TtmChgDoc>("ttm_chg");
   if (!chgIndexed) {
-    chgIndexed = true;
-    await c.createIndex({ at: 1 }, { expireAfterSeconds: CHG_TTL_S }).catch(() => {});
-    await c.createIndex({ k: 1, at: -1 }).catch(() => {});
+    // TTL 인덱스가 없으면 기록이 쌓인다 — 실패를 알리고(던짐) 다음 호출에서 다시 시도. 조용히 삼키지 않는다
+    try {
+      await c.createIndex({ at: 1 }, { expireAfterSeconds: CHG_TTL_S });
+      await c.createIndex({ k: 1, at: -1 });
+      chgIndexed = true;
+    } catch (e) {
+      console.error(`[ttm_chg] 인덱스 생성 실패 — 이번 기록 건너뜀: ${e instanceof Error ? e.message : String(e)}`);
+      throw e;
+    }
   }
   return c;
 }
@@ -130,19 +138,29 @@ export async function writeTtmSnap(market: string, symbol: string, ttm: TtmFlows
   );
   if (!prev) return { changed: null, from: null };
   const d = ttmDiff(prev.ttm, store);
-  // silent-ok: 교체 기록 실패는 저장본 교체 결과에 영향 없음(감사 추적용 부가 기록)
-  if (d.length) await (await chgCol()).insertOne({ k: key(market, symbol), at: now, ov: prev.v, nv: v, n: d.length, f: d.slice(0, CHG_MAX_FIELDS) }).catch(() => {});
+  // 교체 기록 실패는 저장본 교체 결과에 영향 없음(감사 추적용 부가 기록) — 실패는 로그로 남긴다
+  if (d.length)
+    await chgCol()
+      .then((c) => c.insertOne({ k: key(market, symbol), at: now, ov: prev.v, nv: v, n: d.length, f: d.slice(0, CHG_MAX_FIELDS) }))
+      .catch((e) => console.error(`[ttm_chg] ${key(market, symbol)} 기록 실패: ${e instanceof Error ? e.message : String(e)}`));
   return { changed: d.length, from: prev.v };
 }
 
-/** 화면 조회 기록 — 저장본을 읽어 바로 돌려줄 때(1시간에 한 번만 쓴다) */
-export async function touchTtmSeen(market: string, symbol: string): Promise<void> {
+/**
+ * 화면 조회 기록 — 저장본을 읽어 바로 돌려줄 때(1시간에 한 번만 쓴다). upsert — 저장본을 만들 수 없었던 조회(재무 저장본 옛 판 등)도 seen 만
+ * 남겨 배치 대상(listRecentlyViewed)에 들어가게 한다(seen 만 있는 문서는 readTtmSnapAny 가 저장본 없음으로 본다)
+ */
+export async function touchTtmSeen(market: string, symbol: string, opts: { upsert?: boolean } = {}): Promise<void> {
   if (!isDbConfigured()) return;
   const now = new Date();
-  await (await col()).updateOne(
-    { _id: key(market, symbol), $or: [{ seen: { $exists: false } }, { seen: { $lt: new Date(now.getTime() - 3_600_000) } }] },
-    { $set: { seen: now } },
-  );
+  const c = await col();
+  const due = { $or: [{ seen: { $exists: false } }, { seen: { $lt: new Date(now.getTime() - 3_600_000) } }] };
+  if (opts.upsert) {
+    if (await c.findOne({ _id: key(market, symbol), seen: { $gte: new Date(now.getTime() - 3_600_000) } }, { projection: { _id: 1 } })) return;
+    await c.updateOne({ _id: key(market, symbol) }, { $set: { seen: now } }, { upsert: true });
+    return;
+  }
+  await c.updateOne({ _id: key(market, symbol), ...due }, { $set: { seen: now } });
 }
 
 /**

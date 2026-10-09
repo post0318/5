@@ -8,7 +8,7 @@ import { cogsRuleFor } from "./metrics/cogs-rules";
 import { sgaRnd } from "./metrics/sga";
 import { sgaRuleFor } from "./metrics/sga-rules";
 import { finalizeDerived } from "./derived";
-import { ENGINE_VERSION, markFailed, persist, readStmt, readSym, readSymMeta, toStmtDoc, toSymDoc, touchChecked } from "./store";
+import { ENGINE_VERSION, SCHEMA_VERSION, markFailed, persist, readStmt, readSym, readSymMeta, toStmtDoc, toSymDoc, touchChecked } from "./store";
 import { Gap, gapNames, type FinAssembly, type Market } from "./types";
 import { isDbConfigured } from "../db";
 import type { FinStmtDoc, FinSymDoc } from "../db/fin";
@@ -153,8 +153,11 @@ export function loadFinSym(market: Market, symbol: string): Promise<FinSymDoc | 
     if (stored && stored.ev === ENGINE_VERSION) return stored;
     // 엔진판이 다른 저장본(판독·조립 규칙이 바뀌기 전 배치)도 새 저장본이 생길 때까지 그대로 쓴다(오너 승인 2026-10-09 — 판번호가 바뀌면 배치가
     // 다시 채우기 전까지 종목마다 30~40초 기다렸다). 응답에는 staleEv(옛 엔진판)를 남긴다. 배치(fin-build)는 엔진판이 다른 것을 다시 채운다.
-    // 단 배치가 7일 넘게 손대지 않은 저장본(유니버스 밖·30일 넘게 안 연 종목 — 배치 대상이 아님)은 요청 시점 조립(아래)으로 새로 만든다
-    if (stored && Date.now() - Math.max(stored.at?.valueOf() ?? 0, stored.ck?.valueOf() ?? 0) <= STALE_ENGINE_MAX_MS) return { ...stored, staleEv: stored.ev };
+    // 단 배치가 7일 넘게 손대지 않은 저장본(유니버스 밖·30일 넘게 안 연 종목 — 배치 대상이 아님)은 요청 시점 조립(아래)으로 새로 만든다.
+    // 기준 시각 = 마지막 정상 적재(at)·현재 판일 때 새 공시 없음 확인(ck) 중 늦은 쪽 — 조회 실패로 기존 문서를 유지한 경로(persist kept·markFailed)는
+    // at 을 건드리지 않으므로(ft 에 기록) 실패가 이어져도 기한이 늘지 않는다. 문서 스키마판이 다르면 쓰지 않는다
+    if (stored && stored.sv === SCHEMA_VERSION && Date.now() - Math.max(stored.at?.valueOf() ?? 0, stored.ck?.valueOf() ?? 0) <= STALE_ENGINE_MAX_MS)
+      return { ...stored, staleEv: stored.ev };
     try {
       const a = await assemble(market, symbol, { persist: false });
       // 환율·Yahoo 조회 실패로 결손이 생긴 조립은 일시적 — 6시간 캐시하지 않고 실패와 같이 5분 뒤 다시 조립(2026-09-26)
@@ -230,7 +233,7 @@ export async function refreshStored(market: Market, symbols: string[], opts: { m
       if (!la) { out.skipped.push(s); continue; }
       // 저장본 la 가 비어 있으면(조립 때 정기공시 accn 을 못 읽음) la 비교가 매번 "새 공시"가 되어 배치마다 다시 조립됐다 —
       // 마지막 적재가 LA_NULL_REBUILD_MS 보다 오래됐을 때만 다시 조립
-      const stale = m(s)!.la == null ? Date.now() - (m(s)!.at?.valueOf() ?? 0) > LA_NULL_REBUILD_MS : la !== m(s)!.la;
+      const stale = m(s)!.la == null ? Date.now() - Math.max(m(s)!.at?.valueOf() ?? 0, m(s)!.ft?.valueOf() ?? 0) > LA_NULL_REBUILD_MS : la !== m(s)!.la;
       if (stale) why = "filing";
       else {
         await touchChecked(`${market}:${s}`).catch(() => {});

@@ -2,7 +2,6 @@ import "server-only";
 import type { Collection } from "mongodb";
 import { getDb, isDbConfigured } from "@/lib/db";
 import { finChgCol, type FinChgDoc } from "@/lib/db/fin";
-import { snapshotBypassed } from "@/lib/db/snap-bypass";
 import { ENGINE_VERSION } from "@/lib/fin";
 import type { FinancialStatement } from "../types";
 import { fetchUsCompanyFacts, fetchUsSic } from "./edgar";
@@ -41,8 +40,8 @@ export interface ViewChange { changed: number; newCols: number; baseline: boolea
 
 /** 종목 재무제표 화면(현금흐름표·재무상태표) 칸 비교·기록. 기록할 수 없으면(DB 없음·검증 우회·원본 조회 경고) null */
 export async function recordUsViewChanges(symbol: string): Promise<ViewChange | null> {
-  // 비저장 모드(FIN_NO_PERSIST — fin/store.ts 와 같은 차단)·검증 우회 요청은 기록하지 않는다
-  if (!isDbConfigured() || process.env.FIN_NO_PERSIST || (await snapshotBypassed())) return null;
+  // 비저장 모드(FIN_NO_PERSIST — fin/store.ts 와 같은 차단)는 기록하지 않는다
+  if (!isDbConfigured() || process.env.FIN_NO_PERSIST) return null;
   const sym = symbol.toUpperCase();
   const [{ facts }, sic] = await Promise.all([fetchUsCompanyFacts(sym), fetchUsSic(sym).catch(() => null)]);
   if (facts.fetchWarnings?.length) return null;

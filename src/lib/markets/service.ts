@@ -123,6 +123,11 @@ export async function getStockOverview(
           }
           const t = await safe(withTimeout(adapter.getTtm!(symbol), 15_000, "TTM 재무"), warnings, "TTM 재무");
           if (market === "us" && t && isStorableTtm(t as TtmFlows)) await writeTtmSnap(market, symbol, t as TtmFlows).catch(() => {});
+          // 재무 저장본이 옛 판이라 저장할 수 없으면 24시간 넘은 TTM 저장본이라도 새 값이 나올 때까지 그대로(TTM 라우트와 같은 규칙)
+          else if (market === "us" && (t as TtmFlows | null)?.staleInputs?.length) {
+            const old = await readTtmSnapAny(market, symbol, { anyAge: true }).catch(() => null);
+            if (old) return { ...old.ttm, snapStale: true };
+          }
           return t;
         })()
       : Promise.resolve(null),

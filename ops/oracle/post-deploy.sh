@@ -11,6 +11,9 @@ flock 9
 J=/opt/macro/jobs
 [ -d "$J/.git" ] || git clone -q https://github.com/post0318/5.git "$J"
 OLD_LOCK=$(sha1sum "$J/package-lock.json" 2>/dev/null | cut -c1-40 || true)
+# 재무 엔진판(src/lib/fin/store.ts ENGINE_VERSION) — 바뀐 배포면 fin-build 가 끝난 뒤 ttm-build(재무 저장본이 옛 판인 동안 TTM 은 저장되지 않는다)
+engine_ver() { grep -o 'export const ENGINE_VERSION = [0-9]*' "$J/src/lib/fin/store.ts" 2>/dev/null || true; }
+OLD_ENGINE=$(engine_ver)
 git -C "$J" fetch -q origin "$SHA"
 git -C "$J" checkout -q --force "$SHA"
 NEW_LOCK=$(sha1sum "$J/package-lock.json" | cut -c1-40)
@@ -23,6 +26,12 @@ sudo chown -R ubuntu:ubuntu "$J"
 for f in run-ts.sh run-precompute.sh run-script.sh run-research.sh call-cron.sh alert-lib.sh healthcheck.sh config-backup.sh build-jobs-env.sh research-freshness.sh usage-report.sh; do sudo install -m 755 "$J/ops/oracle/$f" "/opt/macro/ops/$f"; done
 bash "$J/ops/oracle/build-jobs-env.sh"
 sudo systemctl restart macro-telegram-listener 2>/dev/null || true
-# 무효 저장본만 채우기 — 배포를 붙잡지 않게 뒤에서
-sudo systemctl start --no-block fin-ttm-build.service 2>/dev/null || true
+# 무효 저장본만 채우기 — 배포를 붙잡지 않게 뒤에서. 엔진판이 바뀐 배포면 순서를 묶는다(fin-build → ttm-build, 둘 다 oneshot 이라 start 가 끝날 때까지 기다림)
+NEW_ENGINE=$(engine_ver)
+if [ -n "$NEW_ENGINE" ] && [ "$NEW_ENGINE" != "$OLD_ENGINE" ]; then
+  echo "재무 엔진판 변경(${OLD_ENGINE:-없음} → $NEW_ENGINE) — fin-build 뒤 ttm-build"
+  sudo systemd-run --no-block --unit="post-deploy-fin-$(date +%s)" bash -c 'systemctl start fin-fin-build.service; systemctl start fin-ttm-build.service' 2>/dev/null || true
+else
+  sudo systemctl start --no-block fin-ttm-build.service 2>/dev/null || true
+fi
 echo "작업 폴더 $(git -C "$J" log --oneline -1)"

@@ -65,6 +65,8 @@ export interface FinSymDoc {
   sp?: Partial<Record<"sga" | "rnd", [string, string, (number | null)[]][]>>;
   /** 배치가 "새 정기공시 없음"을 마지막으로 확인한 시각(/api/cron/fin-build) */
   ck?: Date;
+  /** 조회 실패로 기존 문서를 유지한 마지막 시각(persist kept·markFailed — at 은 정상 적재만) */
+  ft?: Date;
   /** 응답 전용(저장 안 함) — 엔진판이 다른 저장본을 그대로 돌려줄 때 그 옛 엔진판(fin/index.ts loadFinSym) */
   staleEv?: number;
   /**
