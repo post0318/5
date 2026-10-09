@@ -51,64 +51,97 @@ function cacheSet(key: string, ko: string, ok: boolean) {
 }
 
 /**
- * 무료 번역 엔드포인트가 막히면 쉬는 시각(2026-10-10 — 일본 종목 29개를 연달아 열 때 Google 이 429 를 주는데 계속 두드려 한 묶음이 통째로
- * 원문으로 남았다). Google 429 는 15분, MyMemory 하루 한도 소진은 1시간 쉰다. 쉬는 동안은 그 경로를 부르지 않고 다음 경로로 간다
- * (둘 다 쉬면 원문 제목 그대로 — 실패는 캐시하지 않으므로 다음 갱신 때 다시 번역된다). 일본 재무 문구 번역(jp/ko.ts)의 쉬기와는 따로 둔다.
+ * 무료 번역 엔드포인트가 막히면 쉬는 시각 — **원문 언어(경로)별**로 따로 둔다(2026-10-10 운영 — 일본 종목 한 번 갱신에 일본어 제목 90건 안팎을
+ * 한 건씩 번역하다 Google 429 를 받았고, 그 쉬기가 프로세스 전체에 걸려 미국·한국 종목의 영문 기사 번역까지 멈췄다). Google 429 는 15분,
+ * MyMemory 429·하루 한도 소진은 1시간. 쉬는 동안 그 언어는 그 경로를 부르지 않고 다음 경로로 간다(둘 다 쉬면 원문 제목 그대로 — 실패는
+ * 캐시하지 않으므로 다음 갱신 때 다시 번역된다). 일본 재무 문구 번역(jp/ko.ts)의 쉬기와도 따로다.
  */
-let googlePausedUntil = 0;
-let myMemoryPausedUntil = 0;
+type Lane = "en" | "ja";
+const googlePausedUntil: Record<Lane, number> = { en: 0, ja: 0 };
+const myMemoryPausedUntil: Record<Lane, number> = { en: 0, ja: 0 };
 const GOOGLE_PAUSE_MS = 15 * 60_000;
 const MYMEMORY_PAUSE_MS = 60 * 60_000;
 
-async function viaGoogle(text: string, sl: string, tl = "ko"): Promise<string | null> {
-  if (Date.now() < googlePausedUntil) return null;
+function googlePaused(lane: Lane): boolean {
+  return Date.now() < googlePausedUntil[lane];
+}
+
+function pauseGoogle(lane: Lane) {
+  if (!googlePaused(lane)) console.warn(`[translate] Google 번역 429 — ${lane} 제목 15분 쉼(다른 언어는 계속)`);
+  googlePausedUntil[lane] = Date.now() + GOOGLE_PAUSE_MS;
+}
+
+/** gtx 응답(문장 조각 배열)을 한 문자열로 */
+function joinGtx(data: unknown): string | null {
+  if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
+  return (data[0] as unknown[]).map((seg) => (Array.isArray(seg) ? String(seg[0] ?? "") : "")).join("");
+}
+
+async function viaGoogle(text: string, sl: string, tl: string, lane: Lane): Promise<string | null> {
+  if (googlePaused(lane)) return null;
   try {
-    const url =
-      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=` +
-      encodeURIComponent(text);
-    const res = await fetch(url, {
-      headers: { "user-agent": "Mozilla/5.0" },
-      signal: AbortSignal.timeout(REQ_TIMEOUT_MS),
-    });
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=` + encodeURIComponent(text);
+    const res = await fetch(url, { headers: { "user-agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(REQ_TIMEOUT_MS) });
     if (res.status === 429) {
-      googlePausedUntil = Date.now() + GOOGLE_PAUSE_MS;
-      console.warn("[translate] Google 번역 429 — 15분 쉼");
+      pauseGoogle(lane);
       return null;
     }
     if (!res.ok) return null;
-    const data = (await res.json()) as unknown;
-    if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
-    const out = (data[0] as unknown[])
-      .map((seg) => (Array.isArray(seg) ? String(seg[0] ?? "") : ""))
-      .join("")
-      .trim();
-    return out || null;
+    return joinGtx(await res.json())?.trim() || null;
   } catch {
     return null;
   }
 }
 
-async function viaMyMemory(text: string, sl: string): Promise<string | null> {
-  if (Date.now() < myMemoryPausedUntil) return null;
+/** 묶음 번역 한 번에 넣는 제목 수·글자 수 상한(POST 본문, 응답 지연·잘림 방지) */
+const BATCH_MAX_ITEMS = 25;
+const BATCH_MAX_CHARS = 1800;
+
+/**
+ * 여러 제목을 한 요청으로 번역 — 줄바꿈으로 이어 POST 로 보내고 결과를 줄바꿈으로 다시 나눈다(2026-10-10 실측: gtx 가 줄을 그대로 지킨다).
+ * 결과 줄 수가 입력과 다르면 null(호출부가 그 묶음만 한 건씩 번역). 요청 수가 제목 수의 1/20 안팎이 된다.
+ */
+async function viaGoogleBatch(texts: string[], sl: string, tl: string, lane: Lane): Promise<(string | null)[] | null> {
+  if (googlePaused(lane)) return null;
   try {
-    const res = await fetch(
-      `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sl}|ko`,
-      { signal: AbortSignal.timeout(REQ_TIMEOUT_MS) },
-    );
+    const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t`, {
+      method: "POST",
+      headers: { "user-agent": "Mozilla/5.0", "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: "q=" + encodeURIComponent(texts.join("\n")),
+      signal: AbortSignal.timeout(REQ_TIMEOUT_MS * 2),
+    });
     if (res.status === 429) {
-      myMemoryPausedUntil = Date.now() + MYMEMORY_PAUSE_MS;
-      console.warn("[translate] MyMemory 429 — 1시간 쉼");
+      pauseGoogle(lane);
       return null;
     }
     if (!res.ok) return null;
-    const data = (await res.json()) as {
-      responseStatus?: number;
-      responseData?: { translatedText?: string };
-    };
+    const joined = joinGtx(await res.json());
+    if (joined == null) return null;
+    const lines = joined.split("\n");
+    if (lines.length !== texts.length) return null;
+    return lines.map((l) => l.trim() || null);
+  } catch {
+    return null;
+  }
+}
+
+async function viaMyMemory(text: string, sl: string, lane: Lane): Promise<string | null> {
+  if (Date.now() < myMemoryPausedUntil[lane]) return null;
+  try {
+    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sl}|ko`, {
+      signal: AbortSignal.timeout(REQ_TIMEOUT_MS),
+    });
+    if (res.status === 429) {
+      myMemoryPausedUntil[lane] = Date.now() + MYMEMORY_PAUSE_MS;
+      console.warn(`[translate] MyMemory 429 — ${lane} 제목 1시간 쉼`);
+      return null;
+    }
+    if (!res.ok) return null;
+    const data = (await res.json()) as { responseStatus?: number; responseData?: { translatedText?: string } };
     const out = data.responseData?.translatedText;
     if (/ALL AVAILABLE FREE TRANSLATIONS/i.test(out ?? "")) {
-      myMemoryPausedUntil = Date.now() + MYMEMORY_PAUSE_MS;
-      console.warn("[translate] MyMemory 한도 — 1시간 쉼");
+      myMemoryPausedUntil[lane] = Date.now() + MYMEMORY_PAUSE_MS;
+      console.warn(`[translate] MyMemory 하루 한도 — ${lane} 제목 1시간 쉼`);
       return null;
     }
     if (!out || data.responseStatus !== 200) return null;
@@ -149,6 +182,22 @@ export interface TranslateOptions {
   llmFallback?: boolean;
 }
 
+/** 메모리 → DB 캐시 조회(있으면 메모리에도 채움) */
+async function cachedTranslation(sl: Lane, src: string): Promise<{ ko: string; ok: boolean } | null> {
+  const key = `${sl}:${src}`;
+  const mem = cacheGet(key);
+  if (mem) return mem;
+  // DB 캐시(인스턴스 재시작에도 살아남음) — 오너 지적 2026-09 "새로고침할 때마다 번역이 달라진다"
+  const db = await getCachedTranslation(sl, src);
+  if (db) cacheSet(key, db.ko, db.ok);
+  return db;
+}
+
+function remember(sl: Lane, src: string, ko: string, ok: boolean) {
+  cacheSet(`${sl}:${src}`, ko, ok);
+  void setCachedTranslation(sl, src, ko, ok);
+}
+
 export async function translateChecked(
   src: string,
   sl: "en" | "ja" | "ko",
@@ -156,80 +205,115 @@ export async function translateChecked(
   _opts: TranslateOptions = {},
 ): Promise<{ ko: string | null; ok: boolean }> {
   if (sl === "ko") return { ko: src, ok: true };
-  const cacheKey = `${sl}:${src}`;
-  const cached = cacheGet(cacheKey);
+  const cached = await cachedTranslation(sl, src);
   if (cached) return cached;
-  // DB 캐시(인스턴스 재시작·다른 서버리스 인스턴스에도 살아남음) — 오너 지적,
-  // 2026-09: "새로고침할 때마다 번역이 달라지는데 LLM 비용이 계속 쓰는거
-  // 아닌가?" — 인메모리 캐시만으로는 HTTP 엣지 캐시가 실제로 안 먹히는
-  // 요청에서 같은 헤드라인이 매번 재번역되고(LLM 폴백은 매번 문구도 살짝
-  // 달라짐) 있었다. DB에서 찾으면 인메모리에도 채워 같은 인스턴스 안에서는
-  // DB 왕복도 생략.
-  const dbCached = await getCachedTranslation(sl, src);
-  if (dbCached) {
-    cacheSet(cacheKey, dbCached.ko, dbCached.ok);
-    return dbCached;
-  }
-  // 1) Google 시도 + 성공 시에만 왕복검증(영어권 위주. dice 계수는 알파벳 기준이라
-  //    일본어 역번역 검증엔 약함 — 실패해도 원문 노출이라 안전)
-  const gk = await viaGoogle(src, sl, "ko");
+  // 1) Google + 영문만 왕복검증(dice 계수는 알파벳 기준이라 일본어엔 약함 — 실패해도 원문 노출이라 안전)
+  const gk = await viaGoogle(src, sl, "ko", sl);
   if (gk && gk.trim() !== src.trim()) {
-    if (sl !== "en") {
-      cacheSet(cacheKey, gk, true);
-      void setCachedTranslation(sl, src, gk, true);
-      return { ko: gk, ok: true };
-    }
-    const back = await viaGoogle(gk, "ko", sl);
-    if (!back) {
-      cacheSet(cacheKey, gk, true);
-      void setCachedTranslation(sl, src, gk, true);
-      return { ko: gk, ok: true };
-    }
-    const ok = dice(contentWords(back), contentWords(src)) >= 0.3;
-    cacheSet(cacheKey, gk, ok);
-    void setCachedTranslation(sl, src, gk, ok);
+    const back = sl === "en" ? await viaGoogle(gk, "ko", sl, sl) : null;
+    const ok = back ? dice(contentWords(back), contentWords(src)) >= 0.3 : true;
+    remember(sl, src, gk, ok);
     return { ko: gk, ok };
   }
   // 2) Google 실패/미번역 → MyMemory 폴백 (왕복검증 생략)
-  const mk = await viaMyMemory(src, sl);
+  const mk = await viaMyMemory(src, sl, sl);
   if (mk && mk.trim() !== src.trim()) {
-    cacheSet(cacheKey, mk, true);
-    void setCachedTranslation(sl, src, mk, true);
+    remember(sl, src, mk, true);
     return { ko: mk, ok: true };
   }
-  // 3) 무료 경로 둘 다 실패하면 원문 제목 그대로(2026-10-03 — 종목뉴스 Claude 사용 금지, 유료 폴백 제거)
-  // 실패는 캐시하지 않음 — 다음 요청에서 재시도(대부분 일시적 오류).
+  // 3) 무료 경로 둘 다 실패하면 원문 제목 그대로(2026-10-03 — 종목뉴스 Claude 사용 금지, 유료 폴백 제거). 실패는 캐시하지 않음.
   return { ko: null, ok: false };
 }
 
+/** 갱신 1회에 새로 번역하는 제목 상한(앞쪽 = 최신순 N건) — 나머지는 원문으로 두고 다음 갱신 때(캐시에 없는 것만) 이어서 번역한다 */
+const MAX_NEW_TRANSLATIONS = 40;
+/** MyMemory 폴백은 한 건씩이라 회당 이만큼만 */
+const MAX_MYMEMORY_FALLBACK = 5;
+
 /**
- * 여러 항목을 소수 동시성(POOL)·시간예산(DEADLINE_MS) 안에서 번역한다.
- * 예산을 넘긴 항목은 원문 그대로 둔다(라우트가 통째로 느려지는 것을 방지).
+ * 여러 제목을 시간예산(DEADLINE_MS) 안에서 번역한다(2026-10-10 운영 429 대응으로 다시 짰다):
+ *  - 캐시(메모리·DB)에 있는 제목은 그대로 쓰고, 없는 제목 중 앞쪽 MAX_NEW_TRANSLATIONS 건만 새로 번역한다(호출부는 최신순으로 넘긴다).
+ *  - 새 제목은 BATCH_MAX_ITEMS·BATCH_MAX_CHARS 단위로 묶어 한 요청에(영문은 왕복검증도 묶음으로). 묶음 결과 줄 수가 안 맞으면 그 묶음만 한 건씩.
+ *  - Google 이 막히면(그 언어만 쉼) 몇 건만 MyMemory, 나머지·예산 초과는 원문 그대로.
  */
 export async function translateTitles<T>(
   items: T[],
   sl: "en" | "ja" | "ko",
   getTitle: (item: T) => string,
-  opts: TranslateOptions = {},
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 호출부 호환용
+  _opts: TranslateOptions = {},
 ): Promise<{ titleKo: string; translationOk: boolean }[]> {
-  const POOL = 5;
+  const srcs = items.map((it) => getTitle(it));
+  if (sl === "ko") return srcs.map((s) => ({ titleKo: s, translationOk: true }));
+  const lane: Lane = sl;
   const DEADLINE_MS = 7000;
-  const out = new Array<{ titleKo: string; translationOk: boolean }>(items.length);
   const deadline = Date.now() + DEADLINE_MS;
-  let next = 0;
+  const result = new Map<string, { ko: string; ok: boolean }>();
 
-  async function worker() {
-    while (next < items.length && Date.now() < deadline) {
-      const i = next++;
-      const src = getTitle(items[i]);
-      const r = await translateChecked(src, sl, opts);
-      out[i] = { titleKo: r.ko ?? src, translationOk: r.ko ? r.ok : true };
+  const unique = [...new Set(srcs)];
+  const cached = await Promise.all(unique.map((s) => cachedTranslation(lane, s).catch(() => null)));
+  unique.forEach((s, i) => {
+    const c = cached[i];
+    if (c) result.set(s, c);
+  });
+  // 줄바꿈이 섞인 제목은 묶음 구분자와 겹치므로 공백으로
+  const todo = unique.filter((s) => !result.has(s)).slice(0, MAX_NEW_TRANSLATIONS);
+  const clean = (s: string) => s.replace(/\s*\n\s*/g, " ");
+
+  const chunks: string[][] = [];
+  let cur: string[] = [];
+  let len = 0;
+  for (const s of todo) {
+    const l = clean(s).length + 1;
+    if (cur.length && (cur.length >= BATCH_MAX_ITEMS || len + l > BATCH_MAX_CHARS)) {
+      chunks.push(cur);
+      cur = [];
+      len = 0;
+    }
+    cur.push(s);
+    len += l;
+  }
+  if (cur.length) chunks.push(cur);
+
+  for (const chunk of chunks) {
+    if (Date.now() >= deadline || googlePaused(lane)) break;
+    let kos = await viaGoogleBatch(chunk.map(clean), sl, "ko", lane);
+    if (!kos && !googlePaused(lane)) {
+      // 줄 수가 안 맞는 묶음 — 그 묶음만 한 건씩
+      kos = [];
+      for (const s of chunk) {
+        if (Date.now() >= deadline || googlePaused(lane)) break;
+        kos.push(await viaGoogle(clean(s), sl, "ko", lane));
+      }
+    }
+    if (!kos) continue;
+    const got = chunk.map((s, i) => ({ s, ko: kos![i] ?? null })).filter((x) => x.ko && x.ko.trim() !== x.s.trim());
+    // 영문은 왕복검증(오역 의심이면 ok:false — 화면이 원문 우선). 일본어는 검증 없이 ok.
+    let backs: (string | null)[] | null = null;
+    if (sl === "en" && got.length && Date.now() < deadline) backs = await viaGoogleBatch(got.map((x) => x.ko!), "ko", "en", lane);
+    got.forEach((x, i) => {
+      const back = backs?.[i] ?? null;
+      const ok = back ? dice(contentWords(back), contentWords(x.s)) >= 0.3 : true;
+      result.set(x.s, { ko: x.ko!, ok });
+      remember(lane, x.s, x.ko!, ok);
+    });
+  }
+
+  // Google 이 막혔거나 못 한 제목 — 몇 건만 MyMemory(한 건씩)
+  let fallback = 0;
+  for (const s of todo) {
+    if (result.has(s)) continue;
+    if (fallback >= MAX_MYMEMORY_FALLBACK || Date.now() >= deadline || Date.now() < myMemoryPausedUntil[lane]) break;
+    fallback++;
+    const mk = await viaMyMemory(clean(s), sl, lane);
+    if (mk && mk.trim() !== s.trim()) {
+      result.set(s, { ko: mk, ok: true });
+      remember(lane, s, mk, true);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(POOL, items.length || 1) }, worker));
-  // 예산 초과로 처리 못한 항목은 원문
-  for (let i = 0; i < items.length; i++) {
-    if (!out[i]) out[i] = { titleKo: getTitle(items[i]), translationOk: true };
-  }
-  return out;
+
+  return srcs.map((s) => {
+    const r = result.get(s);
+    return r ? { titleKo: r.ko, translationOk: r.ok } : { titleKo: s, translationOk: true };
+  });
 }
