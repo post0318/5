@@ -112,7 +112,8 @@ function getBlocks(isFin: boolean): Block[] {
         pickDa: true,
         depth: 1,
       },
-      { label: "주식보상비용", concepts: ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], depth: 1 },
+      // 본표 줄이 회사 고유 태그인 회사는 공시 원본 값(edgar-cf-wc.ts SYN_SBC_CF — BE)
+      { label: "주식보상비용", concepts: ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense", "ShareBasedCompensationFaceDerived"], depth: 1 },
       ...(isFin ? [FIN_PROVISION_LINE] : []),
       {
         label: "기타 비현금 조정",
@@ -144,7 +145,7 @@ function getBlocks(isFin: boolean): Block[] {
     },
     lines: [
       // PaymentsForCapitalImprovements — GLW 현금흐름표 "Capital expenditures"(2022~ 이 개념, 2026-10-08 — 없어서 앱 CAPEX 가 0 으로 채워졌다)
-      { label: "유형자산 취득", concepts: ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements"], depth: 1, negate: true },
+      { label: "유형자산 취득", concepts: ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements", "CapexComponentsDerived"], depth: 1, negate: true },
       {
         label: "투자자산 처분·만기",
         depth: 1,
@@ -218,6 +219,11 @@ const TAX_PAID = ["IncomeTaxesPaidNet", "IncomeTaxesPaid"];
 const INT_PAID = ["InterestPaidNet", "InterestPaid"];
 
 const LTM = "현재/LTM";
+const Q4_NO_NINE = "9개월 누적 공시 없음 — 4분기 산정 불가";
+/** 공시별 병합 항목의 구성 개념 — 두 기간이 같은 개념을 함께 쓰면서 한쪽에만 있는 개념이 있으면 줄 구성이 다른 것(태그 교체가 아니라 줄이
+ *  빠지거나 합쳐짐) → 두 기간을 더하고 빼면 기준이 섞인다(WMT 이연법인세: 10-K 별도 줄, 10-Q 엔 다른 줄에 합산, 2026-10-09) */
+type MergedEntry = FactUnitEntry & { cs: Set<string> };
+const mixedSets = (a: Set<string>, b: Set<string>) => [...a].some((c) => b.has(c)) && ([...a].some((c) => !b.has(c)) || [...b].some((c) => !a.has(c)));
 const fyKey = (y: number) => `${y}Y`;
 
 /**
@@ -257,6 +263,8 @@ export function buildUsCashFlow(
   const anchor = ltmAnchor(facts);
   /** 분기 모드 — 열별 값과 구성 항목(감가상각비 기준 혼합 판정용) */
   let quarterPartsOf: ((concepts: string[]) => Record<string, QuarterParts>) | null = null;
+  /** 같은 분기 규칙을 개념 목록이 아니라 항목 목록에 — 태그를 기간 중간에 바꾼 합산 줄(아래 combineVals)이 공시별 병합 항목으로 쓴다 */
+  let quarterPartsOfEntries: ((e: FactUnitEntry[]) => Record<string, QuarterParts>) | null = null;
 
   if (mode === "quarter") {
     // 분기 열 = 손익계산서와 같은 달력(재무 5층 구조 매출 지표의 분기 열, fin-revenue.ts)에서 Q4 를 뺀 열(현금흐름표는 누적 공시라
@@ -275,8 +283,7 @@ export function buildUsCashFlow(
       endDate: q.end,
     }));
     const firstIsPrevOnly = chron.length > 5;
-    quarterPartsOf = (concepts) => {
-      const e = firstConcept(facts, concepts);
+    quarterPartsOfEntries = (e) => {
       const out: Record<string, QuarterParts> = {};
       const dd = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
       const latestOf = (xs: FactUnitEntry[]) => xs.reduce<FactUnitEntry | null>((m, x) => (!m || (x.filed ?? "") > (m.filed ?? "") ? x : m), null);
@@ -287,13 +294,14 @@ export function buildUsCashFlow(
           const nine = fy ? latestOf(e.filter((x) => x.start && !ANNUAL_FORMS.includes(x.form) && dd(x.start, fy.start!) <= 6 && dd(x.start, x.end) >= 250 && dd(x.start, x.end) <= 290)) : null;
           out[q.label] = fy && nine
             ? { value: fy.val - nine.val, parts: [fy, nine], reason: null }
-            : { value: null, parts: [], reason: fy ? "9개월 누적 공시 없음 — 4분기 산정 불가" : "사업연도 공시 없음 — 4분기 산정 불가" };
+            : { value: null, parts: [], reason: fy ? Q4_NO_NINE : "사업연도 공시 없음 — 4분기 산정 불가" };
           return;
         }
         out[q.label] = singleQuarterParts(e, q, chron[i - 1]);
       });
       return out;
     };
+    quarterPartsOf = (concepts) => quarterPartsOfEntries!(firstConcept(facts, concepts));
     valOf = (concepts) => {
       const parts = quarterPartsOf!(concepts);
       const out: Record<string, number | null> = {};
@@ -381,17 +389,17 @@ export function buildUsCashFlow(
     // 태그를 기간 중간에 바꾼 줄(TSLA 2026 분기 "투자자산 취득" — PaymentsToAcquireInvestments → PaymentsToAcquireShortTermInvestments)은
     // 태그별 LTM 이 모두 빈다 — 기간마다 가장 최근 공시 한 건에 실린 구성 태그 합으로 기간 값을 만든 뒤 같은 LTM 함수로(2026-10-02, 야후 분기 합과 일치).
     // 같은 기간을 옛 태그(옛 공시)와 새 태그(새 공시 비교 열)가 함께 담아도 한 공시만 쓰므로 이중 합산되지 않는다
-    if (gap && mode !== "quarter" && labels.includes(LTM)) {
+    const merged = (): MergedEntry[] => {
       // 공시 구분 = 제출일(filed) + 양식(form) — companyfacts 항목에는 접수번호가 없다
-      const byPeriod = new Map<string, { filed: string; form: string; e: FactUnitEntry; sum: number }>();
+      const byPeriod = new Map<string, { filed: string; form: string; e: FactUnitEntry; sum: number; cs: Set<string> }>();
       for (const [concept, neg] of parts)
         for (const e of entriesOf(facts, concept)) {
           if (!e.start) continue;
           const k = `${e.start}|${e.end}`;
           const cur = byPeriod.get(k);
           const filed = e.filed ?? "";
-          if (!cur || filed > cur.filed) byPeriod.set(k, { filed, form: e.form, e, sum: neg ? -e.val : e.val });
-          else if (filed === cur.filed && e.form === cur.form) cur.sum += neg ? -e.val : e.val;
+          if (!cur || filed > cur.filed) byPeriod.set(k, { filed, form: e.form, e, sum: neg ? -e.val : e.val, cs: new Set([concept]) });
+          else if (filed === cur.filed && e.form === cur.form) { cur.sum += neg ? -e.val : e.val; cur.cs.add(concept); }
         }
       // 합계 태그와 구성 태그가 같은 공시·기간에 함께 있으면 구성 분을 뺀다
       for (const [k, x] of byPeriod)
@@ -404,9 +412,34 @@ export function buildUsCashFlow(
             if (e && neg != null) x.sum -= neg ? -e.val : e.val;
           }
         }
-      const merged = [...byPeriod.values()].map((x) => ({ ...x.e, val: x.sum }));
-      const r = ltmFlowOf(merged, anchor);
-      if (r.value != null) {
+      return [...byPeriod.values()].map((x) => ({ ...x.e, val: x.sum, cs: x.cs }));
+    };
+    // 분기 열(2026-10-09): 개념별로 못 낸 칸을 공시별 병합 항목으로 다시 낸다(META 2025 Q4 투자자산 — 10-K 는 MarketableSecurities, 10-Q 는
+    // AvailableForSale 태그라 개념별 4분기 = 사업연도 − 9개월이 모두 비어 "본표에 별도 줄 없음"이 붙었다). 한 개념만 사업연도 값이 있고 9개월 누적이
+    // 없으면(그 줄이 10-Q 에선 다른 줄에 합쳐짐) 나머지 개념 합은 부분값이라 빈칸 + 사유(WMT 2026 Q4 기타 비현금 조정 — 이연법인세)
+    if (mode === "quarter" && quarterPartsOfEntries) {
+      const why: Record<string, string> = {};
+      let mq: Record<string, QuarterParts> | null = null;
+      for (const lbl of labels) {
+        const per = parts.map(([c]) => ({ v: vals.get(c)![lbl], r: qWhy.get(vals.get(c)!)?.[lbl] }));
+        const partial = out[lbl] != null && per.some((x) => x.v == null && x.r === Q4_NO_NINE);
+        if (out[lbl] != null && !partial) continue;
+        mq ??= quarterPartsOfEntries(merged());
+        const m = mq[lbl];
+        const ok = m?.value != null && !(m.parts.length === 2 && mixedSets((m.parts[0] as MergedEntry).cs, (m.parts[1] as MergedEntry).cs));
+        if (ok) { out[lbl] = m!.value; continue; }
+        if (partial) { out[lbl] = null; why[lbl] = Q4_NO_NINE; continue; }
+        const r0 = per.map((x) => x.r).find(Boolean);
+        if (r0) why[lbl] = r0;
+      }
+      if (Object.keys(why).length) qWhy.set(out, why);
+    }
+    if (gap && mode !== "quarter" && labels.includes(LTM)) {
+      const r = ltmFlowOf(merged(), anchor);
+      // 사업연도·당기 누적·전년 동기의 구성 개념이 서로 다르면(한 줄이 빠지거나 합쳐짐) 기준이 섞인 값이라 쓰지 않는다(WMT 기타 비현금 조정 LTM)
+      const ps = [r.fy, r.cur, r.prior].filter(Boolean) as MergedEntry[];
+      const mix = ps.some((a, i) => ps.some((b, j) => j > i && mixedSets(a.cs, b.cs)));
+      if (r.value != null && !mix) {
         out[LTM] = r.value;
         gap = false;
       }
@@ -445,6 +478,15 @@ export function buildUsCashFlow(
   // LTM 운전자본·기타 영업활동이 통째로 비었고(오너 지적), 연간도 하위 세 줄 밖 운전자본(선급·미지급 등)이 "기타 영업활동"으로 샜다
   // 회사 공시 순변동 → 본표 운전자본 줄 합(edgar-cf-wc.ts, 10-K 는 항목별·10-Q 는 한 줄인 회사도 같은 정의)
   const wcCo = applyNegate(valOf(["IncreaseDecreaseInOperatingCapital", "OperatingCapitalCashFlowDerived"]));
+  // 형제 줄 LTM 이 빈칸인데 최근 1년 안 분기 공시에 그 줄 값(0 아님)이 있으면 금액은 있는데 LTM 을 못 만든 것 — 잔여("기타") 줄이 그 금액을 떠안지
+  // 않게 함께 빈칸(2026-10-09 — GEV 사업 인수: 10-K 본표엔 줄이 없고 2026 1분기 10-Q 에 −4,886 → "기타 투자활동" LTM 이 −2,902 로 떠안았다.
+  // 영업활동은 이미 ltmGap(최근 사업연도엔 값 있음)으로 비우던 것과 같은 규칙)
+  const ltmOpenRecent = (l: Line, v: Record<string, number | null> | undefined): boolean => {
+    if (!ylCf || !v || v[LTM] != null || !anchor) return false;
+    const from = shiftYear(anchor, -1);
+    const cs = [...(l.concepts ?? []), ...(l.combine ?? []).map(([c]) => c), ...(l.fallbackCombine ?? []).map(([c]) => c)];
+    return cs.some((c) => entriesOf(facts, c).some((e) => e.start && !ANNUAL_FORMS.includes(e.form) && e.end > from && e.val !== 0));
+  };
   for (const block of BLOCKS) {
     const totalVals = valOf(block.total.concepts);
     // 매핑된 형제 라인(플러그 제외, subtotal 제외) 합 — 플러그 계산용
@@ -577,7 +619,7 @@ export function buildUsCashFlow(
             for (const l of block.lines) {
               if (l.depth === 2 && !l.plug && !l.wcRest) mapped += resolved[l.label]?.[lbl] ?? 0;
             }
-          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && !l.wcRest && (l.depth === 1 || (l.depth === 2 && !hasWc)) && ltmGap(resolved[l.label]));
+          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && !l.wcRest && (l.depth === 1 || (l.depth === 2 && !hasWc)) && (ltmGap(resolved[l.label]) || ltmOpenRecent(l, resolved[l.label])));
           values[lbl] = gap ? null : Math.round(tot - mapped);
           if (gap) ltmWhy.set(values, GAP_NOTE);
         }
@@ -662,7 +704,7 @@ export function buildUsCashFlow(
     items.push({ accountName: `※ ${unavailable}`, accountId: "cf:note:unavailable", depth: 1, isSubtotal: false, isHighlight: false, italic: true, values: blank() });
   items.push({ accountName: "[ 주석 항목 ]", accountId: "cf:note", depth: 0, isSubtotal: true, isHighlight: false, values: blank() });
 
-  const capex = valOf(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements"]);
+  const capex = valOf(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements", "CapexComponentsDerived"]);
   const opCf = sect(0);
   const fcf: Record<string, number | null> = {};
   for (const l of labels)

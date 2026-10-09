@@ -208,6 +208,30 @@ function discontinuedDaOf(facts: InstFact[], period: string): number | null {
 }
 
 const DISC_NI = /^(IncomeLossFromDiscontinuedOperations\w*|DiscontinuedOperation(IncomeLoss|GainLoss)\w*)$/;
+const DG_ASSETS = /^(AssetsOfDisposalGroupIncludingDiscontinuedOperation\w*|DisposalGroupIncludingDiscontinuedOperationAssets\w*)$/;
+type GMap = Record<string, { units?: Record<string, FactUnitEntry[]> }>;
+/** 처분 그룹 자산(차원 없음, 0 초과)이 date ±days 안 시점에 있는가 */
+function dgAssetsNear(g: GMap, date: string, days: number): boolean {
+  const a = Date.parse(date) - days * 864e5, b = Date.parse(date) + days * 864e5;
+  return Object.entries(g).some(([k, c]) => DG_ASSETS.test(k) && (c.units?.USD ?? []).some((e) => !e.start && e.val > 0 && Date.parse(e.end) >= a && Date.parse(e.end) <= b));
+}
+/** 그 기간에 중단사업 영업이 있었는가 — 기간 시작 직전부터 끝까지 어느 시점이든 처분 그룹 자산이 있으면 */
+function discOpsDuring(g: GMap, start: string, end: string): boolean {
+  const a = Date.parse(start) - 7 * 864e5, b = Date.parse(end) + 7 * 864e5;
+  return Object.entries(g).some(([k, c]) => DG_ASSETS.test(k) && (c.units?.USD ?? []).some((e) => !e.start && e.val > 0 && Date.parse(e.end) >= a && Date.parse(e.end) <= b));
+}
+/** 공시 원본에서 사업 인수일 시점(BusinessAcquisitionAxis 차원)으로 잡힌 처분 그룹 자산의 시점들 — 매각예정으로 취득한 처분 그룹 */
+function acquiredHeldForSale(xml: string): string[] {
+  const ctx = new Map<string, string>();
+  for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
+    const i = /<(?:xbrli:)?instant>\s*([^<\s]+)/.exec(m[2])?.[1];
+    if (i && /dimension="[^"]*:BusinessAcquisitionAxis"/.test(m[2])) ctx.set(m[1], i);
+  }
+  const out: string[] = [];
+  for (const m of xml.matchAll(/<us-gaap:([A-Za-z0-9_]+)\b[^>]*?contextRef="([^"]+)"[^>]*>\s*(-?[\d.]+)\s*</g))
+    if (DG_ASSETS.test(m[1]) && ctx.has(m[2]) && Number(m[3]) > 0) out.push(ctx.get(m[2])!);
+  return out;
+}
 
 /** 인스턴스의 차원 없는 기간 값: id → "start|end" → 값 */
 function durationValues(xml: string, ids: Set<string>): Map<string, Map<string, number>> {
@@ -303,6 +327,8 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
   const unresolvedOf = new Map<FactUnitEntry, "disc" | null>();
   /** 중단사업 감가상각을 차감한 기간이 있었는가 */
   let discAdjusted = false;
+  /** 사업연도 중 중단사업 감가상각 미확인 기간(시작|종료) */
+  const discMixFy = new Set<string>();
   /** 판독한 구조(공시별 감가상각 줄·현금흐름표 기간·그 공시 현금흐름표의 줄 값) — 기준 혼합 판정용 */
   const structs: { accn: string; filed: string; lines: string[]; periods: Set<string>; vals: Map<string, number> }[] = [];
   /** 같은 기준으로 증명된 줄 묶음 — 옛 공시 줄 구성(정렬 키) → 더할 제외 줄(아래 기준 증명) */
@@ -331,6 +357,8 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
     const needAdj = discInFiling;
     let inst: Map<string, Map<string, number>> | null = null;
     let adj: InstFact[] | null = null;
+    /** 이 공시에서 사업 인수일 시점(BusinessAcquisitionAxis)으로 잡힌 처분 그룹 자산(매각예정 취득) 시점들 */
+    let hfsAcq: string[] = [];
     if ((!cfComplete || needAdj) && f.instName) {
       const xml = await fetchText(`${f.base}/${f.instName}`, { headers: H, revalidate: false, timeoutMs: 30_000 });
       if (!cfComplete) {
@@ -341,7 +369,7 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
         const cfPeriods = new Set(roots.flatMap((r) => [...(inst!.get(r)?.keys() ?? [])]));
         for (const l of lines) for (const p of inst.get(l)?.keys() ?? []) if (cfPeriods.has(p)) periods.add(p);
       }
-      if (needAdj) adj = instanceFacts(xml, (id) => isDiscDa(id) || (DISC_NI.test(local(id)) && !/Share/.test(id)));
+      if (needAdj) { adj = instanceFacts(xml, (id) => isDiscDa(id) || (DISC_NI.test(local(id)) && !/Share/.test(id))); hfsAcq = acquiredHeldForSale(xml); }
     } else if (needAdj) return facts; // 원본이 없으면 전체 미적용 — 기간마다 방식이 섞이지 않게
     // 이 공시 현금흐름표에 실린 줄 값(원본 또는 같은 공시의 companyfacts 값) — 주석 값·다른 공시 값은 쓰지 않는다
     const own = new Map<string, number>();
@@ -433,9 +461,17 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
           if (disc != null && disc > 0 && disc < sum) {
             sum -= disc;
             discAdjusted = true;
-          } else if (adj.some((x) => x.period === p && x.dims.length === 0 && x.val !== 0 && DISC_NI.test(local(x.id)))) unresolvedDisc = true;
+          } else if (adj.some((x) => x.period === p && x.dims.length === 0 && x.val !== 0 && DISC_NI.test(local(x.id)))) {
+            // 중단사업 감가상각 0 이 확정되는 두 경우 — ① 그 기간에 중단사업 영업이 없음(기초·기중 재무상태표에 처분 그룹 자산 없음 — 분리 뒤 정산 잔여 손익만,
+            // IBM 2022~) ② 처분 그룹을 이 기간 안 사업 인수일에 매각예정으로 취득(매각예정 자산은 감가상각하지 않음 — ASC 360-10-35-43, AVGO FY2024
+            // VMware EUC). 그 밖은 확인 불가
+            const acq = hfsAcq.some((d) => d > start && d <= end) && !dgAssetsNear(g, start, 7);
+            if (!acq && discOpsDuring(g, start, end)) unresolvedDisc = true;
+          }
         }
       }
+      // 사업연도 값인데 중단사업 감가상각이 섞였고 금액을 모르면 감가상각비·EBITDA 공란(오너 결정 2026-10-09 — IBM 2021 Kyndryl 10개월분, 영업이익은 계속사업 기준)
+      if (unresolvedDisc && fullYear) discMixFy.add(p);
       out.push({ start, end, val: sum, fy: 0, fp: fullYear ? "FY" : "Q", form: f.form, filed: f.filed, basis: f.accn });
       produced.set(`${f.accn}|${p}`, out[out.length - 1]);
       unresolvedOf.set(out[out.length - 1], unresolvedDisc ? "disc" : null);
@@ -503,6 +539,7 @@ export async function withCashFlowDa(cik: string, facts: CompanyFacts, recent: R
   return {
     ...facts,
     ...(mix.length ? { daBasisMix: mix } : {}),
+    ...(discMixFy.size ? { daDiscMix: [...discMixFy] } : {}),
     facts: { ...facts.facts, "us-gaap": { ...g, [SYN_DA_CF]: { units: { USD: kept } } } },
   } as CompanyFacts;
 }

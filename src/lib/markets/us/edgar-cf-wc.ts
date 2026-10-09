@@ -14,6 +14,21 @@ import { cfZeroFillGroups } from "./edgar-cashflow";
  * 가중치(±1)대로 합해 같은 정의의 합계를 만들고, 부호는 IncreaseDecreaseInOperatingCapital 과 같이(양수 = 운전자본 증가 = 현금 유출) 둔다.
  */
 export const SYN_WC_CF = "OperatingCapitalCashFlowDerived";
+/**
+ * 주식보상비용 본표 줄이 회사 고유 태그인 회사(BE — be_SharebasedCompensationAndIssuanceOfStockAndWarrantsForServicesOrClaims, 본표 표시 라벨
+ * "Stock-based compensation expense", 2026-10-09). 본표에 표준 주식보상 개념이 없고 표시 라벨이 주식보상비용인 회사 고유 줄이 있으면 그 값을 공시 원본에서
+ * 읽어 이 합성 개념으로 넣는다(본표 기준 원칙 — 예전엔 "본표에 별도 줄 없음" 빈칸이었다)
+ */
+export const SYN_SBC_CF = "ShareBasedCompensationFaceDerived";
+const SBC_STD = ["us-gaap_ShareBasedCompensation", "us-gaap_AllocatedShareBasedCompensationExpense"];
+const SBC_LABEL = /^(stock|share)[- ]based compensation( expense)?$/i;
+/**
+ * 설비투자(CAPEX) 합계 줄이 없는 공시 — 항공기 + 기타 유형자산 두 줄 합(오너 결정 2026-10-09, DAL 2026 2분기 10-Q: PaymentsForFlightEquipment 2,244 +
+ * PaymentsToAcquireOtherProductiveAssets 414). 근거: 합계 줄이 있는 다른 모든 기간에 합계 = 두 줄 합이 정확히 성립(하나라도 어긋나면 만들지 않음)
+ */
+export const SYN_CAPEX_PARTS = "CapexComponentsDerived";
+const CAPEX_TOTAL = ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements"];
+const CAPEX_PARTS = ["PaymentsForFlightEquipment", "PaymentsToAcquireOtherProductiveAssets"];
 const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) contact@example.com";
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 const OP_CF_ROOT = /^us-gaap_NetCashProvidedByUsedInOperatingActivities(ContinuingOperations)?$/;
@@ -112,6 +127,8 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const opt = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 };
   const synth: FactUnitEntry[] = [];
   const zeros: [string, FactUnitEntry][] = [];
+  const sbc: FactUnitEntry[] = [];
+  const capexParts: FactUnitEntry[] = [];
   const zeroGroups = cfZeroFillGroups();
   for (const f of filingsForDa(recent)) {
     const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
@@ -153,7 +170,30 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
         for (const e of ocf) if (!has.some((x) => x.start === e.start && x.end === e.end)) zeros.push([c0, { ...e, val: 0 }]);
       }
     }
-    const lines = cashFlowWcLines(calXml, labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined);
+    const labs = labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined;
+    // 주식보상비용 — 본표에 표준 개념이 없고 표시 라벨이 주식보상비용인 회사 고유 줄(영업활동 계산 구조 안)
+    const faceS = /^10-[KQ]/.test(f.form) ? cashFlowFace(calXml) : null;
+    if (faceS && labs && !SBC_STD.some((c) => faceS.has(c))) {
+      const ids = [...faceS].filter((id) => !id.startsWith("us-gaap_") && (labs.get(id) ?? []).some((t) => SBC_LABEL.test(t.trim())));
+      if (ids.length === 1) {
+        const inst = names.find((n) => /_htm\.xml$/i.test(n));
+        if (inst) {
+          const xml = await fetchText(`${base}/${inst}`, { headers: H, revalidate: false, timeoutMs: 30_000 });
+          const fsx = instanceFacts(xml, (id) => id === ids[0]);
+          for (const e of ocf) {
+            const v = fsx.find((x) => x.id === ids[0] && x.period === `${e.start}|${e.end}` && x.dims.length === 0);
+            if (v) sbc.push({ ...e, val: v.val });
+          }
+        }
+      }
+    }
+    // CAPEX 합계 줄 없음 + 두 구성 줄 있음 → 두 줄 합
+    if (faceS && !CAPEX_TOTAL.some((c) => faceS.has(`us-gaap_${c}`)) && CAPEX_PARTS.every((c) => faceS.has(`us-gaap_${c}`)))
+      for (const e of ocf) {
+        const vs = CAPEX_PARTS.map((c) => (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === e.filed));
+        if (vs.every(Boolean)) capexParts.push({ ...e, val: vs.reduce((t, x) => t + x!.val, 0) });
+      }
+    const lines = cashFlowWcLines(calXml, labs);
     if (!lines) continue;
     // ① companyfacts — 운전자본 줄이 모두 표준 개념이고 값이 다 있으면
     const fromCf = (e: FactUnitEntry): number | null => {
@@ -190,9 +230,18 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     // 부호는 IncreaseDecreaseInOperatingCapital 과 같이 증가 = 유출
     ocf.forEach((e, i) => { if (sums[i] != null) synth.push({ ...e, val: -(sums[i] as number) }); });
   }
-  if (!synth.length && !zeros.length) return facts;
+  // 근거 확인 — 합계·두 줄이 같은 공시·기간에 모두 있는 기간마다 합계 = 두 줄 합(하나라도 어긋나거나 확인 기간이 없으면 만들지 않음)
+  if (capexParts.length) {
+    const tot = CAPEX_TOTAL.flatMap((c) => g[c]?.units?.USD ?? []).filter((x) => x.start);
+    const pair = tot.map((t) => CAPEX_PARTS.map((c) => (g[c]?.units?.USD ?? []).find((x) => x.start === t.start && x.end === t.end && x.filed === t.filed)))
+      .map((ps, i) => (ps.every(Boolean) ? [tot[i].val, ps.reduce((s0, x) => s0 + x!.val, 0)] : null)).filter((x): x is number[] => !!x);
+    if (!pair.length || pair.some(([a, b]) => a !== b)) capexParts.length = 0;
+  }
+  if (!synth.length && !zeros.length && !sbc.length && !capexParts.length) return facts;
   const ng: Record<string, unknown> = { ...g };
   if (synth.length) ng[SYN_WC_CF] = { label: "운전자본 변동(본표 줄 합)", units: { USD: synth } };
+  if (sbc.length) ng[SYN_SBC_CF] = { label: "주식보상비용(본표 회사 고유 줄)", units: { USD: sbc } };
+  if (capexParts.length) ng[SYN_CAPEX_PARTS] = { label: "설비투자(항공기 + 기타 유형자산 줄 합)", units: { USD: capexParts } };
   for (const [c, e] of zeros) {
     const cur = (ng[c] ?? { units: {} }) as { label?: string; units: Record<string, FactUnitEntry[]> };
     ng[c] = { ...cur, units: { ...cur.units, USD: [...(cur.units.USD ?? []), e] } };

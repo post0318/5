@@ -1,6 +1,6 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
-import { annualByYear, entriesOf, ltmAnchor, ltmFlowOf, ltmGapConcept, provenAbsentAt, ttmCombine, ttmOf } from "./edgar-series";
+import { annualByYear, entriesOf, fiscalYearOf, ltmAnchor, ltmFlowOf, ltmGapConcept, provenAbsentAt, ttmCombine, ttmOf } from "./edgar-series";
 import { revQuarterAt, type RevCol } from "./fin-revenue";
 import { OPINC_NOTE } from "@/lib/fin";
 import { opUnitsFrom } from "../op-units";
@@ -508,10 +508,17 @@ export function pickDaPeriod(
   return pickDa(totals, depreciation, intangible, cashFlow);
 }
 
+/** 사업연도 감가상각 줄에 중단사업분이 섞였는데 금액 미공시 — 칸 주석(오너 결정 2026-10-09) */
+export const DA_DISC_MIX = "감가상각비 공란 — 현금흐름표 감가상각 줄에 중단사업분이 포함됐는데 그 금액이 공시되지 않아 계속사업 영업이익과 기준을 맞출 수 없음";
+/** 중단사업 혼합으로 비운 사업연도(연도 → 사유) — edgar-cf-structure.ts daDiscMix */
+export function daDiscMixYears(facts: CompanyFacts): Map<number, string> {
+  return new Map((facts.daDiscMix ?? []).map((p) => [fiscalYearOf(p.split("|")[1]), DA_DISC_MIX] as const));
+}
 /** 연도별 감가상각비 (pickDa 규칙). 본표 판독이 원본 조회 실패로 빠졌으면 비운다(sec-unavailable.ts) */
 export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
   const out = new Map<number, number>();
   if (unavailableOn(facts, "da")) return out;
+  const discMix = daDiscMixYears(facts);
   const totals = DA_TOTAL.map((c) => annualByYear(entriesOf(facts, c)));
   const dep = (() => {
     for (const c of DA_DEPRECIATION) {
@@ -525,6 +532,7 @@ export function daAnnualByYear(facts: CompanyFacts): Map<number, number> {
   const cf = sc ? annualByYear(entriesOf(facts, sc)) : new Map<number, number>();
   const years = new Set<number>([...totals.flatMap((m) => [...m.keys()]), ...dep.keys(), ...am.keys(), ...cf.keys()]);
   for (const y of years) {
+    if (discMix.has(y)) continue;
     const v = pickDa(totals.map((m) => m.get(y)), dep.get(y), am.get(y), cf.get(y));
     if (v != null) out.set(y, v);
   }
