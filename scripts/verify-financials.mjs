@@ -82,7 +82,7 @@ import { configureKrx, krxStats } from "./verify-kr/krx.mjs";
 import { configureCalendar } from "./verify-kr/calendar.mjs";
 import { krOriginalLayers, closeKrLayers } from "./verify-kr/layers.mjs";
 import { configureEdinet, edinetStats } from "./verify-jp/edinet.mjs";
-import { configureJpLayers, jpAnnualLayers, jpHalfLayers } from "./verify-jp/layers.mjs";
+import { configureJpLayers, jpAnnualLayers, jpHalfLayers, jpValueLayers } from "./verify-jp/layers.mjs";
 import { buildAudit, COGS_RULE_COMMON, commonModeOf, decimalsVintage, extItemOf, isDecimalsRounding } from "./metrics/audit.mjs";
 
 // ── 인자 ─────────────────────────────────────────────────────────────
@@ -11046,7 +11046,7 @@ async function verifyJp(sym) {
   const hardErrors = [];
   const add = (layer, name, col, r) => checks.push({ layer, name, col, ...r });
   const app = {};
-  for (const [k, p] of Object.entries({ is: `${u}/financials?view=is&period=annual`, bs: `${u}/financials?view=bs&period=annual`, cf: `${u}/financials?view=cf&period=annual`, hl: `${u}/highlights`, isq: `${u}/financials?view=is&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter`, cfq: `${u}/financials?view=cf&period=quarter` })) {
+  for (const [k, p] of Object.entries({ is: `${u}/financials?view=is&period=annual`, bs: `${u}/financials?view=bs&period=annual`, cf: `${u}/financials?view=cf&period=annual`, hl: `${u}/highlights`, isq: `${u}/financials?view=is&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter`, cfq: `${u}/financials?view=cf&period=quarter`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm` })) {
     try { app[k] = await getJson(p); } catch (e) { app[k] = null; add("응답", `API 응답 ${k}`, "-", { status: FAIL, note: String(e).slice(0, 120) }); }
   }
   if (!app.is) return { sym, checks, review: [], hardErrors };
@@ -11064,8 +11064,9 @@ async function verifyJp(sym) {
     }
     console.warn(`⚠ 시험 스위치 적용 ${JSON.stringify(t)}`);
   }
-  await jpAnnualLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
+  const ctx = await jpAnnualLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
   if (app.isq) await jpHalfLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
+  await jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardErrors });
   return { sym, checks, review: [], hardErrors };
 }
 
@@ -11293,7 +11294,7 @@ if (MARKET === "kr") {
 if (MARKET === "jp") {
   const by = {};
   for (const c of all) { const k = `${c.layer} ${c.name.replace(/ — (본표|하이라이트)$/, "")}`; const b = (by[k] ??= { pass: 0, fail: 0, unverifiable: 0, common: 0 }); b[c.status] = (b[c.status] ?? 0) + 1; }
-  console.log("\n── 일본 층별 집계 (A = EDINET 원본 XBRL 연간, A반기 = 半期·옛 四半期 第2四半期, B = 결산기) ──");
+  console.log("\n── 일본 층별 집계 (A = EDINET 원본 XBRL 연간, A반기 = 半期·옛 四半期 第2四半期, B = 결산기, J1 시가총액, J4 LTM, J5 배당, J-OP 영업이익 근사, C 화면 간, D 항등식) ──");
   for (const [k, b] of Object.entries(by).sort()) console.log(`  ${k.padEnd(40)} 통과 ${b.pass} · 실패 ${b.fail} · 검증불가 ${b.unverifiable} · 공통모드 ${b.common}`);
   console.log(`EDINET 요청 ${edinetStats.requests} · 디스크 적중 ${edinetStats.hit} · 받은 바이트 ${(edinetStats.bytes / 1024 ** 2).toFixed(1)}MB`);
 }
