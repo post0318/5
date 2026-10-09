@@ -23,6 +23,12 @@ export interface FetchJsonOpts {
  * 재요청으로 차단을 늘리지 않게). 403 은 SEC 가 User-Agent·차단 판정에 쓰므로 재시도하지 않는다(fetch-health 에는 일시
  * 오류로 기록). 실패 응답은 Next 데이터 캐시에 남지 않는다(Next 는 200 만 캐시 — patch-fetch).
  */
+/**
+ * 오류 문구에 넣는 URL — 쿼리의 인증 값(DART crtfc_key·공공데이터 serviceKey 등)을 가린다(2026-10-09 — 앱 화면 ⚠ 경고에 DART 키가 그대로 실렸다)
+ */
+export const redactUrl = (url: string): string =>
+  url.replace(/([?&](?:crtfc_key|servicekey|apikey|api_key|key|token|access_token|auth|cert_key)=)[^&#]*/gi, "$1***");
+
 /** fetchJson·fetchText 의 조회 실패(상태 코드·시간 초과·네트워크). 기존 호출부 호환을 위해 AdapterError 하위 */
 export class FetchError extends AdapterError {
   constructor(message: string, opts: { status?: number; cause?: unknown } = {}) {
@@ -55,7 +61,7 @@ async function request<T>(
 ): Promise<T> {
   const { headers = {}, revalidate = 60 * 30, timeoutMs = 15_000, noStore = false } = opts;
   // 같은 URL 이 연속으로 일시 오류였으면 백오프 동안 조회하지 않는다(fetch-health.ts)
-  if (checkBackoff(url) > 0) throw new FetchError(`재시도 대기(연속 실패) — ${url}`, { status: 503 });
+  if (checkBackoff(url) > 0) throw new FetchError(`재시도 대기(연속 실패) — ${redactUrl(url)}`, { status: 503 });
   const retries = isSecUrl(url) ? SEC_RETRIES : 0;
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
@@ -78,7 +84,7 @@ async function request<T>(
         noteFetchSuccess(url);
         return body;
       }
-      failure = new FetchError(`요청 실패 ${res.status} — ${url}`, { status: res.status });
+      failure = new FetchError(`요청 실패 ${res.status} — ${redactUrl(url)}`, { status: res.status });
       if (retryableStatus(res.status)) {
         const ra = retryAfterMs(res);
         wait = ra == null ? RETRY_BACKOFF_MS[attempt] ?? 3_000 : ra <= RETRY_AFTER_CAP_MS ? ra : null;
@@ -89,9 +95,9 @@ async function request<T>(
         throw new FetchError((err as Error).message, { status: 429, cause: err });
       }
       if (err instanceof DOMException && err.name === "AbortError") {
-        failure = new FetchError(`요청 시간 초과 — ${url}`, { status: 504, cause: err });
+        failure = new FetchError(`요청 시간 초과 — ${redactUrl(url)}`, { status: 504, cause: err });
       } else {
-        failure = new FetchError(`요청 오류 — ${url}`, { cause: err });
+        failure = new FetchError(`요청 오류 — ${redactUrl(url)}`, { cause: err });
       }
       wait = RETRY_BACKOFF_MS[attempt] ?? 3_000;
     } finally {
@@ -234,7 +240,7 @@ function secText(url: string, opts: FetchJsonOpts, accept: Record<string, string
         if (!usableBody(body, json)) {
           await secSlot();
           body = await request(url, { ...opts, noStore: true }, accept, (res) => res.text());
-          if (!usableBody(body, json)) throw new FetchError(`빈 응답·JSON 아님 — ${url}`, { status: 502 });
+          if (!usableBody(body, json)) throw new FetchError(`빈 응답·JSON 아님 — ${redactUrl(url)}`, { status: 502 });
         }
         if (archive) await archiveWrite(key, body);
         if (api) {
@@ -278,7 +284,7 @@ export async function fetchJson<T>(url: string, opts: FetchJsonOpts = {}): Promi
   let body = await request(url, opts, { accept: "application/json" }, (res) => res.text());
   if (!usableBody(body, true) || dartErrorBody(url, body)) {
     body = await request(url, { ...opts, noStore: true }, { accept: "application/json" }, (res) => res.text());
-    if (!usableBody(body, true)) throw new FetchError(`빈 응답·JSON 아님 — ${url}`, { status: 502 });
+    if (!usableBody(body, true)) throw new FetchError(`빈 응답·JSON 아님 — ${redactUrl(url)}`, { status: 502 });
   }
   return JSON.parse(body) as T;
 }
