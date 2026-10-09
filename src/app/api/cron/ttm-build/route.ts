@@ -54,6 +54,7 @@ export async function POST(req: Request) {
     const exclude = new Set((sp.get("exclude") ?? "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean));
     const adapter = getAdapter("us");
     const built: { symbol: string; ms: number; ttmChanged: number | null; viewChanged: number | null }[] = [];
+    const waiting: string[] = [];
     const failed: { symbol: string; reason: string }[] = [];
     let fresh = 0;
     let pending = 0;
@@ -83,12 +84,15 @@ export async function POST(req: Request) {
         // 재무제표 화면 칸 변경 기록(view-snap.ts) — 실패는 TTM 저장 결과에 영향 없음
         const vc = await recordUsViewChanges(sym).catch(() => null);
         built.push({ symbol: sym, ms: Date.now() - t0, ttmChanged: w?.changed ?? null, viewChanged: vc?.changed ?? null });
+      } else if (ttm && !ttm.error && !ttm.degraded?.length && ttm.staleInputs?.length) {
+        // 실패가 아니라 fin 갱신 대기(재무 저장본 옛 엔진판)
+        waiting.push(sym);
       } else {
         failed.push({ symbol: sym, reason: ttm?.error ?? ttm?.degraded?.join("; ") ?? "TTM 없음" });
       }
     }
     return ok(
-      { version: ttmSnapVersion(), total: symbols.length, fresh, built, failed, pending, ms: Date.now() - started },
+      { version: ttmSnapVersion(), total: symbols.length, fresh, built, waiting, failed, pending, ms: Date.now() - started },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err) {

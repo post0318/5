@@ -35,6 +35,8 @@ async function main() {
   let fresh = 0, pending = 0;
   const built: string[] = [];
   const failed: { symbol: string; reason: string }[] = [];
+  /** 재무 저장본이 옛 엔진판이라 저장하지 않은 종목 — 실패가 아니라 fin-build 갱신 대기(중단 판정·오류에서 제외) */
+  const waiting: string[] = [];
   for (const sym of symbols) {
     if (!dry && (await readTtmSnap("us", sym).catch(() => null))) { fresh++; continue; }
     if (Date.now() > deadline) { pending++; continue; }
@@ -54,6 +56,9 @@ async function main() {
       const chg = (w ? (w.changed == null ? " · TTM 새 저장본" : ` · TTM 교체(옛 판 ${w.from}) 바뀐 칸 ${w.changed}`) : "")
         + (vc ? (vc.baseline ? " · 재무제표 기준값 첫 저장" : ` · 재무제표 바뀐 칸 ${vc.changed}${vc.newCols ? `(새 열 ${vc.newCols})` : ""}`) : "");
       console.log(`계산 ${sym} ${ms}ms${dry ? " (저장 안 함)" : chg}`);
+    } else if (ttm && !ttm.error && !ttm.degraded?.length && ttm.staleInputs?.length) {
+      waiting.push(sym);
+      console.log(`대기 ${sym} ${ms}ms — fin 갱신 대기(${ttm.staleInputs.join("; ")})`);
     } else {
       const reason = ttm?.error ?? ttm?.degraded?.join("; ") ?? "TTM 없음";
       failed.push({ symbol: sym, reason });
@@ -62,7 +67,8 @@ async function main() {
       if (!built.length && failed.length >= 3) { console.log("::error::처음 3종목 연속 실패 — 공통 원인 확인 후 다시 실행"); return 1; }
     }
   }
-  console.log(`완료 · 계산 ${built.length} · 이미 유효 ${fresh} · 실패 ${failed.length} · 남음 ${pending}`);
+  console.log(`완료 · 계산 ${built.length} · 이미 유효 ${fresh} · fin 갱신 대기 ${waiting.length} · 실패 ${failed.length} · 남음 ${pending}`);
+  if (waiting.length) console.log(`::notice::fin 갱신 대기(재무 저장본 옛 엔진판 — fin-build 뒤 다시 실행하면 채워짐): ${waiting.join(",")}`);
   if (failed.length) console.log(`::warning::저장 못 한 종목: ${failed.map((f) => `${f.symbol}(${f.reason.slice(0, 60)})`).join(", ")}`);
   if (pending) console.log(`::warning::시간 한도(${minutes}분)로 남은 종목 ${pending}`);
   return 0;

@@ -243,7 +243,8 @@ export async function persist(a: FinAssembly, stmts: { annual: FinStmtDoc; quart
   const sym = toSymDoc(a);
   const old = await symCol.findOne({ _id: sym._id });
   if (old && a.gaps & (Gap.CF_FETCH | Gap.STALE)) {
-    await symCol.updateOne({ _id: sym._id }, { $set: { g: old.g | a.gaps, at: new Date() } });
+    // 기존 문서 유지 — 정상 적재 시각(at)은 그대로 두고 실패 시각만(ft). at 을 올리면 엔진판이 다른 저장본의 사용 기한(fin/index.ts 7일)이 실패마다 늘어났다
+    await symCol.updateOne({ _id: sym._id }, { $set: { g: old.g | a.gaps, ft: new Date() } });
     return { changed: 0, kept: true };
   }
   const now = new Date();
@@ -279,12 +280,12 @@ export async function persist(a: FinAssembly, stmts: { annual: FinStmtDoc; quart
 export async function markFailed(id: string, gaps: number): Promise<void> {
   assertPersistAllowed();
   const symCol = await finSymCol();
-  await symCol.updateOne({ _id: id }, { $bit: { g: { or: gaps } }, $set: { at: new Date() } });
+  await symCol.updateOne({ _id: id }, { $bit: { g: { or: gaps } }, $set: { ft: new Date() } });
 }
 
 /** 배치 갱신 판정용 메타 — 엔진판·최신 공시 accn·적재 시각·마지막 확인 시각 */
-export async function readSymMeta(ids: string[]): Promise<Map<string, Pick<FinSymDoc, "_id" | "ev" | "la" | "at" | "ck">>> {
-  const docs = await (await finSymCol()).find({ _id: { $in: ids } }, { projection: { ev: 1, la: 1, at: 1, ck: 1 } }).toArray();
+export async function readSymMeta(ids: string[]): Promise<Map<string, Pick<FinSymDoc, "_id" | "ev" | "la" | "at" | "ck" | "ft">>> {
+  const docs = await (await finSymCol()).find({ _id: { $in: ids } }, { projection: { ev: 1, la: 1, at: 1, ck: 1, ft: 1 } }).toArray();
   return new Map(docs.map((d) => [d._id, d]));
 }
 

@@ -157,17 +157,18 @@ export async function GET(
       if (snap.stale)
         after(async () => {
           const r = await computeUsHighlights(market, sym, yahoo).catch(() => null);
-          if (r && !r.degraded) await writeApiSnap(snapKey, { highlights: r.highlights, price: r.price }).catch(() => {});
+          if (r && !r.degraded && !r.staleFin) await writeApiSnap(snapKey, { highlights: r.highlights, price: r.price }).catch(() => {});
         });
       return ok({ highlights: snap.data }, { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600" } });
     }
-    const { highlights, degraded, price } = await computeUsHighlights(market, sym, yahoo);
-    if (!degraded) await writeApiSnap(snapKey, { highlights, price }).catch(() => {});
+    const { highlights, degraded, staleFin, price } = await computeUsHighlights(market, sym, yahoo);
+    // 옛 판 재무 저장본(staleEv)으로 계산한 값은 저장본(api_snap)에 새 판번호로 남기지 않는다(TTM staleInputs 와 같은 원칙) — CDN 도 짧게
+    if (!degraded && !staleFin) await writeApiSnap(snapKey, { highlights, price }).catch(() => {});
     return ok(
       { highlights },
       {
         headers: {
-          "Cache-Control": degraded ? "no-store" : "public, s-maxage=3600, stale-while-revalidate=86400",
+          "Cache-Control": degraded ? "no-store" : staleFin ? "public, s-maxage=60" : "public, s-maxage=3600, stale-while-revalidate=86400",
         },
       },
     );
@@ -228,5 +229,7 @@ async function computeUsHighlights(market: "us", sym: string, yahoo: string | nu
 
   // 조회 실패로 불완전한 결과는 CDN 에 1시간 붙잡히지 않게 캐시하지 않는다(다음 요청이 다시 계산)
   const degraded = !!factsRes.facts.fetchWarnings?.length || !!factsRes.facts.sourceUnavailable;
-  return { highlights, degraded, price: quote?.last ?? null };
+  // 재무 저장본이 옛 엔진판(fin loadFinSym staleEv) — 배치 갱신 대기
+  const staleFin = factsRes.facts.revenue?.staleEv != null;
+  return { highlights, degraded, staleFin, price: quote?.last ?? null };
 }
