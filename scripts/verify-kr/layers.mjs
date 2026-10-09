@@ -607,7 +607,7 @@ function alotCommonDps(list) {
 
 async function ltmLayer(c) {
   const { corp, L, lp, LT, exact, fail, add, consts, tt, policySrc, capCur, evBlockWhy, rowHidden } = c;
-  const { PASS } = consts;
+  const { PASS, NA } = consts;
   const fs = async (y, code) => {
     for (const d of ["CFS", "OFS"]) { const r = await dartFnltt(corp, y, code, d); if (r && r.length) return { rows: r, fsDiv: d }; }
     return null;
