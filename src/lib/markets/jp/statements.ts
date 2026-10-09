@@ -24,7 +24,7 @@ import { AdapterError, type FinancialLineItem, type FinancialPeriod, type Financ
  * 저장: jp_fin(종목당 1건, 엔진판 JP_FIN_ENGINE + 서류 목록 서명) — 서명이 같으면 판독·조립 없이 저장본을 쓴다.
  */
 
-export const JP_FIN_ENGINE = 3; // 2: 연간 열 부가 정보(x — EPS·BPS·DPS·주식수·리스부채 주석, 판독판 2) · 3: 기준이 다른 옛 有報의 주식수·DPS
+export const JP_FIN_ENGINE = 4; // 2: 연간 열 부가 정보(x — EPS·BPS·DPS·주식수·리스부채 주석, 판독판 2) · 3: 기준이 다른 옛 有報의 주식수·DPS · 4: 리스부채 주석 판독판 3(표시 문장·변동표·두 칸 표, 날짜별)
 
 const N_FY = 5;
 const N_HALF = 6;
@@ -95,8 +95,11 @@ export interface JpColX {
   shIssued?: number | null;
   shIssuedFiling?: number | null;
   shWhy?: string | null;
-  /** 리스부채 주석 문단 이름 · 이 열(전기/당기) 금액 */
-  lease?: { tb: string[]; amt: number | null; doc: string } | null;
+  /**
+   * 리스부채 주석(xbrl-fin.ts leaseNotes) — 이 열 기준일의 장부금액(없으면 null + why), 표시 문장·내역 문단(LTM 반기 열은 최근 有報 것도 — 표시
+   * 방법은 회사 정책이라 반기에도 같다, 금액은 반기말 것만)
+   */
+  lease?: { rows: string[]; sums: Record<string, number[]>; incl: string[]; amt: number | null; how: string | null; why: string | null; doc: string; policyDoc: string | null } | null;
   isDoc?: string | null;
   bsDoc?: string | null;
 }
@@ -483,17 +486,29 @@ function colExtra(c: Col, sorted: Src[], h: Src | null, ownDocs: Src[]): JpColX 
     x.sh = r.issued != null && r.treasury != null ? r.issued - r.treasury : null;
     x.shWhy = x.sh == null ? (r.issued == null ? "발행주식수 판독 없음" : r.how) : r.how;
   };
-  const leaseOf = (s: Src | null, end: string) => {
-    const tb = s?.fin.leaseTb;
-    if (!s || !tb) return;
-    const cur = end === (s.fin.perEnd ?? s.fin.fyEnd);
-    const withAmt = tb.find((t) => t.amt);
-    x.lease = { tb: tb.map((t) => t.n), amt: withAmt?.amt ? withAmt.amt[cur ? 1 : 0] : null, doc: s.row._id };
+  const leaseOf = (s: Src | null, end: string, policy: Src | null = null) => {
+    const ln = s?.fin.lease;
+    if (!s || !ln) return;
+    const docEnd = s.fin.perEnd ?? s.fin.fyEnd;
+    const a = ln.amt;
+    // 장부금액 날짜 = 표 머리 날짜(변동표 사슬만이면 서류의 당기말·전기말)
+    const amt = !a ? null : (a.curDate ?? docEnd) === end ? a.cur : (a.priorDate ? a.priorDate === end : end !== docEnd) ? a.prior : null;
+    const pol = policy && policy !== s ? policy.fin.lease : null;
+    x.lease = {
+      rows: [...ln.rows, ...(pol?.rows ?? [])],
+      sums: { ...(pol?.sums ?? {}), ...ln.sums },
+      incl: [...ln.incl, ...(pol?.incl ?? [])],
+      amt,
+      how: amt != null ? ln.how : null,
+      why: amt != null ? null : (ln.why ?? `${end} 리스부채 장부금액 없음`),
+      doc: s.row._id,
+      policyDoc: pol ? policy!.row._id : null,
+    };
   };
   if (c.kind === "LTM" && h) {
     // 반기 보고서 뒤 LTM — 재무상태표·주식수는 반기말. 주당 지표는 jp-ev.ts 가 LTM 순이익 ÷ 주식수로(흐름식 주당 지표 금지)
     shOf(h);
-    leaseOf(h, c.end);
+    leaseOf(h, c.end, sorted[0] ?? null);
     x.bsDoc = h.row._id;
     return x;
   }
