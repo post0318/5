@@ -260,8 +260,11 @@ if (!DRY && targets.length) {
     log(`  ${t.key} 검증 종료코드 ${v.code} · 결과 저장 ${posted ? "됨" : "안 됨"} · ${Math.round((Date.now() - t0) / 1000)}초${after?.counts ? ` · 통과 ${after.counts.pass} 실패 ${after.counts.fail} 검증불가 ${after.counts.unverifiable}` : ""}`);
     // 기준선 = 새 항목이 없던 마지막 자동 실행의 검증불가·공통모드 항목. 기준선이 없으면(처음·옛 판본) 이번 자동 실행 결과가 기준선(기록에 남김) —
     // 수동 결과로 기준선을 만들지 않는다(감사 6차 ③)
+    // 기준선 = 후보 선정과 같은 판정(baselineOf — 실행 전 결과가 깨끗하면 빈 기준선). 그래도 없으면 실행 전 결과를 임시 기준선으로 비교만 한다(감사 7차 ③ —
+    // 기준선 없는 종목이 새 공시·오래됨으로 돌면 새 항목이 경보 없이 기준선이 됐다). 새 항목이 있으면 기준선을 바꾸지 않고 재실행 대상으로 남긴다
     const st0 = states.get(t.key);
-    const base = st0?.naBaselineV === NA_BASE_V && Array.isArray(st0.naBaseline) ? st0.naBaseline : null;
+    const prevR = results.get(t.key) ?? null;
+    const base = baselineOf(st0, prevR) ?? (prevR ? naItems(prevR) : null);
     const nowItems = posted ? naItems(after) : null;
     const up = posted && base ? nowItems.filter((k) => !base.includes(k)) : [];
     if (posted && !base) log(`  ${t.key} 검증불가·공통모드 기준선 처음 설정 — ${nowItems.length}건(자동 실행 결과)`);

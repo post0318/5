@@ -373,7 +373,8 @@ export async function krOriginalLayers(ctx) {
     exact("K5", "주당배당금 = DART", col, appDps, dps, how);
     const k = caps.get(y);
     const appY = h.rows.find((r) => r.key === "divyield")?.values[h.columns.findIndex((c) => c.label === col)] ?? null;
-    yieldCheck(col, "배당수익률 = DPS ÷ KRX 연말 종가", appY, dps, !k || k.common == null ? { pre: true } : k.close != null ? { v: k.close, how: `KRX ${k.date} 종가` } : null, how);
+    // 상장 전 = KRX 조회는 됐는데 그해 말 종목 없음. 조회 자체가 실패한 해(caps 에 없음 — err 기록)는 주가 미확인(검증불가)(감사 7차 ⑤)
+    yieldCheck(col, "배당수익률 = DPS ÷ KRX 연말 종가", appY, dps, !caps.has(y) ? null : !k || k.common == null ? { pre: true } : k.close != null ? { v: k.close, how: `KRX ${k.date} 종가` } : null, how);
     if (y === Math.max(...yearsShown)) k5Exp.fyDps = { v: dps, how };
   }
   // LTM DPS(감사 2차 ⑦) — 검증기가 공공데이터포털 배당정보(금융위원회 GetStocDiviInfoService_V2, 앱과 같은 원천을 따로 호출 — KRX 와 같은 성격)를
@@ -456,6 +457,28 @@ function overviewLayer(c) {
   const scrY = price != null && dv?.ttm?.dps != null && price > 0 ? dv.ttm.dps / price : null;
   const dE = k5Exp.ltmDps?.v;
   chk("배당수익률 화면 = /ttm DPS(TTM) ÷ 현재가", scrY, !ok || dE === undefined ? undefined : dE != null ? dE / ltmPrice : null, `기대 = DPS ${dE} ÷ K1 현재가`);
+
+  // ── 화면 입력값(감사 7차 ① — 위 배수는 verify-row(서버가 같은 computeTrailingMultiples 로 계산)인데, 화면은 /overview 시세와 /ttm 응답으로 브라우저에서
+  // 다시 계산한다. 한국 경로는 /ttm 스냅샷·시세만 쓴다(multiples.ts — 연간 재무제표 표는 안 씀). 같은 함수에 같은 입력이면 같은 값이므로, 화면이 받는
+  // 입력값마다 검증기 기대치와 대조한다)
+  if (!c.ov) { add("K1", "개요 화면 입력 /overview 응답", "LTM", { status: FAIL, note: "/overview 응답 없음" }); return; }
+  const q = c.ov.quote ?? null;
+  chk("화면 입력 현재가(/overview 시세) = K1 확인 현재가", q?.last ?? null, ltmPrice ?? undefined, "브라우저 멀티플 분자");
+  const scrSh = q?.sharesOutstanding ?? c.ov.consensus?.sharesOutstanding ?? null;
+  chk("화면 입력 주식수(/overview 시세) = KRX 상장주식수", scrSh, sh ?? undefined, `KRX 상장주식수 ${sh}`);
+  const scrMc = q?.marketCap ?? c.ov.consensus?.marketCap ?? null;
+  chk("화면 입력 시가총액(/overview 시세) = K1 확인 시가총액", scrMc, mc ?? undefined, "하이라이트 LTM 시가총액(K1 KRX 확인)");
+  chk("화면 입력 /ttm 최근 사업연도 EPS = DART", ttm?.fyEps?.eps ?? null, eF, `FY${fy} DART EPS`);
+  chk("화면 입력 /ttm 매출 = DART LTM 매출", ttm?.revenue ?? null, rv, multDen.LTM?.rev?.how ?? "");
+  chk("화면 입력 /ttm 지배주주 자본 = DART", ttm?.snapshot?.equity ?? null, eq, multDen.LTM?.eq?.how ?? "");
+  // EV 입력 — 하이라이트 LTM 의 EV 구성요소(K2 에서 DART 와 대조됨)와 같아야
+  const L = c.H.LTM ?? {};
+  const nd = L.debt != null && L.cash != null ? L.debt + (L.nci ?? 0) - L.cash : undefined;
+  chk("화면 입력 /ttm 순차입금(차입금 + 비지배지분 − 현금) = 하이라이트 LTM(K2 확인)", ttm?.snapshot?.evNetDebt ?? null, nd, `차입금 ${L.debt} + 비지배 ${L.nci ?? 0} − 현금 ${L.cash}`);
+  chk("화면 입력 /ttm 우선주 시가총액 = 하이라이트 LTM(K1 확인)", ttm?.snapshot?.evPreferredMcap ?? 0, L.pref ?? 0, "");
+  const hOp = c.h.rows.find((x) => x.key === "opinc")?.values[c.h.columns.findIndex((x) => x.kind === "ltm")] ?? null;
+  chk("화면 입력 /ttm 영업이익 = 하이라이트 LTM(K4 확인)", ttm?.opIncome ?? null, hOp ?? undefined, "");
+  chk("화면 입력 /ttm 감가상각 = 하이라이트 LTM EBITDA − 영업이익(K3 확인)", ttm?.daTtm ?? null, L.ebitda != null && hOp != null ? L.ebitda - hOp : undefined, "");
 }
 
 /**
@@ -980,7 +1003,8 @@ async function daLayer(c) {
         const docHit = rd.cands.find((c0) => c0.cum !== false && c0.period === (ryOf(c0.rcept) === y ? "cur" : ryOf(c0.rcept) === y + 1 ? "prior" : "none") && c0.v != null);
         if (docHit) add("K3", "감가상각 적재본 해 존재(검증기 XBRL 판독 가능)", colY, { status: NA, note: `적재본에 ${y} 없음 · XBRL 없음 · 원문 후보 ${docHit.v}(${docHit.how}) — 적재 스크립트가 원문 확인 사슬 실패로 비웠을 수 있음(검증불가)` });
       }
-      if (cfLine != null) exact("K3", "감가상각비 = DART 공시 현금흐름 줄(적재본 없는 해)", colY, app, cfLine.v, `${cfLine.how} · 기준 보고서 ${own.by}`);
+      // 줄 판독 규칙(daCfLine)은 앱 krCfDaByYear 와 같은 규칙 문장을 따로 구현한 것이라 독립 판독이 아니다 — 공통모드(감사 7차 ④)
+      if (cfLine != null) exact("K3", "감가상각비 = DART 공시 현금흐름 줄(적재본 없는 해)", colY, app, cfLine.v, `${cfLine.how} · 기준 보고서 ${own.by}`, "현금흐름 감가상각 줄 고르기 규칙을 앱과 같은 규칙으로 재구현");
       else if (app == null) add("K3", "감가상각비 = 적재본(kr_da)", colY, pre ? { status: PASS, note: "적재본·공시 줄 없음 · 상장 전 해(KRX 연말 종목 없음) — 빈칸" } : restated ? { status: PASS, note: "적재본·공시 줄 없음 · 연결 재작성 해(연결 손익은 다다음 해 보고서 전전기 열뿐) — 빈칸" } : { status: "fail", note: `적재본에 ${y} 없음 · 공시 줄 없음 · 상장 후 해인데 빈칸(적재 누락)` });
       else fail("K3", "감가상각비 = 적재본(kr_da)", colY, `적재본·DART 공시 현금흐름 줄 모두 없는데 앱 ${app}`);
     }

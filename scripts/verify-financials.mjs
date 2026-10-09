@@ -10723,7 +10723,7 @@ async function verifyKr(sym) {
   const add = (layer, name, col, r) => checks.push({ layer, name, col, ...r });
   const fetched = {};
   for (const [k, p] of Object.entries({
-    hl: `${u}/highlights`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm`,
+    hl: `${u}/highlights`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm`, ov: `${u}/overview`,
     cs: `${u}/consensus`, bs: `${u}/financials?view=bs&period=annual`, is: `${u}/financials?view=is&period=annual`,
     cf: `${u}/financials?view=cf&period=annual`,
     isq: `${u}/financials?view=is&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter`, cfq: `${u}/financials?view=cf&period=quarter`,
@@ -10929,7 +10929,7 @@ async function verifyKr(sym) {
   {
     const corp = KR_CORP.get(sym);
     if (corp) await krOriginalLayers({
-      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same, dartVint, row,
+      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same, dartVint, row, ov: fetched.ov ?? null,
       consts: { PASS, FAIL, NA, COMMON },
       // 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 와 정확 대조
       quarter: { isq, bsq, cfq }, items: KR_A_ITEMS,
