@@ -354,6 +354,64 @@ async function cfFaceConcepts(cik, accn) {
   return out;
 }
 
+/**
+ * 차입금 줄 성격(오너 결정 2026-10-10 — StockAnalysis·야후 구조: 단기·장기 조달 / 단기·장기 상환 / 단기 순증감). 이름 규칙은 오너 결정의 정의
+ * (회사 고유 포함, 기업어음·신용한도·리볼빙 = 단기, 리스 제외 — 부채와 한 줄로 묶인 "Debt…Lease" 만 차입, 장기 순액 줄은 어느 줄에도 넣지 않음)
+ */
+function vDebtCat(id) {
+  const n = id.replace(/^[^_]+_/, "");
+  if (!/(Debt|Borrowing|Notes(?!Receivable)|CommercialPaper|LineOfCredit|LinesOfCredit|Loans?(?!Receivable)|CreditFacilit|Revolv|Bonds|Debentures|Financing(?!Activit|Cost|Receivable|Fee))/.test(n)) return null;
+  if (/(Receivable|Stock|Equity|Warrant|Preferred|Investment|IssuanceCost|ExtinguishmentCost|Costs?$|Fees?$|Premium|Derivative|Swap|Hedge|Collateral|Dividend|Interest|Guarantee|Escrow|Restricted|Contingent)/.test(n)) return null;
+  if (/Lease/.test(n) && !/Debt\w*Lease/.test(n)) return null;
+  const st = /(Short-?Term|CommercialPaper|LineOfCredit|LinesOfCredit|Revolv|ThreeMonthsOrLess|Overdraft|Overnight)/.test(n);
+  if (/^(ProceedsFromRepayments|ProceedsFromPaymentsFor|RepaymentsOfProceeds|ProceedsFrom\w*AndRepayments|NetIncreaseDecrease|IncreaseDecreaseIn|NetProceeds\w*Repayments)/.test(n)) return /LongTerm/.test(n) ? null : "netS";
+  if (/^(Proceeds|Issuance|Borrowings?)/.test(n) && !/Repay/.test(n)) return st ? "issS" : "issL";
+  if (/^(Repayments?|PaymentsFor(RepurchaseOf|Repayment|Extinguishment|Retirement|Redemption)|PaymentsOf(?!.*Cost)|Retirement|Redemption)/.test(n)) return st ? "repS" : "repL";
+  return null;
+}
+/** 공시 한 건의 현금흐름표 재무활동 차입 줄(표시 구조) + 원본 값(차원 없음) → { cats: Map(성격 → id[]), val(id, start, end), periods: [{start,end}] } | null */
+const debtFaceCache = new Map();
+async function debtFaceRead(cik, accn) {
+  if (debtFaceCache.has(accn)) return debtFaceCache.get(accn);
+  const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+  const names = (await secJson(base + "/index.json")).directory.item.map((x) => x.name);
+  const preName = names.find((x) => /_pre\.xml$/i.test(x)) ?? names.find((x) => /\.xsd$/i.test(x)), instName = names.find((x) => /_htm\.xml$/i.test(x));
+  let out = null;
+  if (preName && instName) {
+    const x = await secText(`${base}/${preName}`);
+    const ids = new Set();
+    for (const m of x.matchAll(/<(?:[\w-]+:)?presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?presentationLink>/g)) {
+      if (!/CASHFLOW/i.test(String(m[1]).replace(/[^A-Za-z]/g, "")) || /Parenth|Detail|Table|Polic|Supplement/i.test(m[1])) continue;
+      const loc = new Map();
+      for (const l of m[2].matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) loc.set(id, h); }
+      const kids = new Map();
+      for (const a of m[2].matchAll(/<(?:[\w-]+:)?presentationArc\b([^>]*)\/?>/g)) {
+        const fr = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
+        if (fr && to) kids.set(fr, [...(kids.get(fr) ?? []), to]);
+      }
+      const root = [...kids.keys()].find((k) => /FinancingActivitiesAbstract$/.test(k));
+      if (!root) continue;
+      const walk = (k, d) => { if (d > 5) return; for (const c of kids.get(k) ?? []) { if (!/Abstract$/.test(c)) ids.add(c); walk(c, d + 1); } };
+      walk(root, 0);
+    }
+    if (ids.size) {
+      const xml = await secText(`${base}/${instName}`), ctx = parseContexts(xml);
+      const vals = new Map(), periods = new Map();
+      for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_-]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+)\s*</g)) {
+        const id = `${m[1]}_${m[2]}`, c0 = ctx.get(m[4]);
+        if (!c0?.start || c0.dims.length) continue;
+        if (/_NetCashProvidedByUsedInFinancingActivities(ContinuingOperations)?$/.test(id)) periods.set(`${c0.start}|${c0.end}`, { start: c0.start, end: c0.end });
+        if (ids.has(id)) vals.set(`${id}|${c0.start}|${c0.end}`, Number(m[6]));
+      }
+      const cats = new Map();
+      for (const id of ids) { const c = vDebtCat(id); if (c) cats.set(c, [...(cats.get(c) ?? []), id]); }
+      out = { cats, periods: [...periods.values()], val: (id, s, e) => vals.get(`${id}|${s}|${e}`) ?? null };
+    }
+  }
+  debtFaceCache.set(accn, out);
+  return out;
+}
+
 /** 정기공시 손익계산서 본표 표시 구조(_pre.xml, 없으면 .xsd 내장)의 개념 id 집합 — 줄 존재 판정용(2026-10-09, 금융사 원가·판관비 빈칸 확인).
  *  역할 = 이름에 INCOME·OPERATIONS·EARNINGS(포괄손익·세부·표·주석 제외). 읽은 역할이 없으면 null */
 const isFaceCache = new Map();
@@ -4386,8 +4444,12 @@ async function verifyUs(sym) {
       "cf:투자활동 현금흐름:투자자산 취득": ["purchaseOfInvestment"],
       "cf:투자활동 현금흐름:투자자산 처분·만기": ["saleOfInvestment"],
       "cf:투자활동 현금흐름:사업 인수 (순현금)": ["purchaseOfBusiness"],
-      "cf:재무활동 현금흐름:장기차입금 조달": ["longTermDebtIssuance", "issuanceOfDebt"],
-      "cf:재무활동 현금흐름:장기차입금 상환": ["longTermDebtPayments", "repaymentOfDebt"],
+      "cf:재무활동 현금흐름:단기차입금 조달": ["shortTermDebtIssuance"],
+      "cf:재무활동 현금흐름:장기차입금 조달": ["longTermDebtIssuance"],
+      "cf:재무활동 현금흐름:차입금 조달 합계": ["issuanceOfDebt"],
+      "cf:재무활동 현금흐름:단기차입금 상환": ["shortTermDebtPayments"],
+      "cf:재무활동 현금흐름:장기차입금 상환": ["longTermDebtPayments"],
+      "cf:재무활동 현금흐름:차입금 상환 합계": ["repaymentOfDebt"],
       "cf:재무활동 현금흐름:배당금 지급": ["cashDividendsPaid", "commonStockDividendPaid"],
       "cf:재무활동 현금흐름:자기주식 취득": ["repurchaseOfCapitalStock", "commonStockPayments"],
       "cf:taxpaid": ["incomeTaxPaidSupplementalData"],
@@ -5965,9 +6027,6 @@ async function verifyUs(sym) {
       // PaymentsOfOrdinaryDividends — CL·GLW·ASML(EUR) 이 쓰는 개념(2026-10-08 — 없어서 배당금 지급 검증불가 15건)
       ["cf:재무활동 현금흐름:배당금 지급", "배당금 지급", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], -1],
       ["cf:재무활동 현금흐름:자기주식 취득", "자기주식 취득", ["PaymentsForRepurchaseOfCommonStock"], -1],
-      // 차입 줄(2026-10-10 — 검사가 없어 MSFT 연간 조달·상환 빈칸, AMD LTM 상환 950(실제 0)을 놓쳤다). 본표에 같은 성격 줄이 있는데 앱 빈칸이면 실패(CF_FAMILY)
-      ["cf:재무활동 현금흐름:장기차입금 조달", "장기차입금 조달", ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts", "ProceedsFromDebtMaturingInMoreThanThreeMonths", "ProceedsFromShortTermDebt"], 1],
-      ["cf:재무활동 현금흐름:장기차입금 상환", "장기차입금 상환", ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt", "RepaymentsOfConvertibleDebt", "RepaymentsOfDebtAndCapitalLeaseObligations", "RepaymentsOfDebtMaturingInMoreThanThreeMonths", "RepaymentsOfCommercialPaper"], -1],
       ["cf:영업활동 현금흐름:주식보상비용", "주식보상비용", ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], 1],
     ];
     // 외화 공시(ASML·SPOT·TSM) 재무상태표·현금흐름표 A층(2026-10-08) — us-gaap USD 태그가 없어 "SEC 값 없음"으로 빠지던 칸을 원통화 공시값 × 연준
@@ -6014,9 +6073,7 @@ async function verifyUs(sym) {
     const CF_FAMILY = { "cf:재무활동 현금흐름:자기주식 취득": /^(?!.*(Preferred|Debt|Notes|NoncontrollingInterest|MinorityInterest)).*(Repurchase|TreasuryStock|TreasuryShare|BuyBack|Buyback|AcquireOrRedeemEntitysShares|OwnShares)/i, "cf:영업활동 현금흐름:주식보상비용": /ShareBased|StockBased|StockCompensation|ShareCompensation|EquityCompensation/i,
       // 배당금 지급 — 받은 배당(SPOT 투자활동 DividendsReceivedClassifiedAsInvestingActivities)·비지배지분 분배는 제외
       "cf:재무활동 현금흐름:배당금 지급": /^(?!.*(Receiv|MinorityInterest|NoncontrollingInterest)).*Dividend/i, "cf:투자활동 현금흐름:유형자산 취득": /PropertyPlantAndEquipment|ProductiveAssets|CapitalExpenditure|CapitalImprovements|FlightEquipment/i,
-      // 차입 총액 줄(순증감 ProceedsFromRepayments… · 리스는 제외)
-      "cf:재무활동 현금흐름:장기차입금 조달": /^(?!.*(Repayment|Lease|Securities|Stock|Equity|Warrant))[^_]*_Proceeds(From)?\w*(Debt|Borrowing|Notes|CommercialPaper|LinesOfCredit)/i,
-      "cf:재무활동 현금흐름:장기차입금 상환": /^(?!.*(Lease(?!Obligations)|ShortTermDebtMaturingInThreeMonthsOrLess))[^_]*_Repayments?Of\w*(Debt|Borrowing|Notes|CommercialPaper|LinesOfCredit)/i };
+};
     const SBC_ID = "cf:영업활동 현금흐름:주식보상비용";
     const CAPEX_ID = "cf:투자활동 현금흐름:유형자산 취득", CAPEX_PARTS_V = ["PaymentsForFlightEquipment", "PaymentsToAcquireOtherProductiveAssets"];
     // 본표 줄 중 회사 고유 개념이면서 표시 라벨이 정확히 주식보상비용인 줄(표준 주식보상 개념이 본표에 없을 때만, 하나일 때만)
@@ -6293,7 +6350,6 @@ async function verifyUs(sym) {
         //   · 셋 다 정해지면: 앱 = 사업연도 + 당기 누적 − 전년 동기(앱과 같은 식 — 공통모드)
         //   · 하나라도 본표에 줄이 없으면 LTM 은 만들 수 없다 → 앱 빈칸이 정답(통과). 단 같은 성격의 다른 줄(회사 고유·다른 표준 개념)이 그 본표에 있으면
         //     줄 없음으로 볼 수 없어 검증불가 유지, 투자·재무 줄이 당기 본표에 없고 전년 동기가 0 이면(앱 0 채움 규칙) 검증불가 유지
-        if (foreign && c === "LTM" && /차입금/.test(id)) continue; // 20-F LTM(6-K 요약) 차입 줄은 아래 20-F LTM 검사 범위 밖 — 2026-10-10 차입 줄 검사 추가 전과 같은 범위
         if (v == null && c === "LTM" && !foreign) {
           const r = await ltmCfFaceJudge(cs, app, sg, id, date).catch((e) => { hardErrors.push(`LTM 현금흐름 본표 판독 실패(${nm}): ${String(e).slice(0, 80)}`); return null; });
           if (r) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, r); continue; }
@@ -6301,6 +6357,76 @@ async function verifyUs(sym) {
         if (v == null) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: NA, note: `SEC ${cs.join("/")} 기간 값 없음 — 앱 ${app ?? `빈칸(${why || "사유 없음"})`}`, app, src: null }); continue; }
         const r0 = vsSource(app, sg * v, EXACT, `${how}${sg < 0 ? " × −1(현금 유출 표기)" : ""}${cm}`);
         add("A", `현금흐름표 ${nm} 앱 = SEC`, c, usedIdx > 0 && r0.status === PASS ? { ...r0, status: COMMON } : r0);
+      }
+      // 차입금 줄 A층(오너 결정 2026-10-10) — 검증기가 표시 구조(_pre.xml)의 재무활동 줄과 공시 원본 값을 따로 읽어 성격대로 합한다(앱은 계산 구조·
+      // companyfacts). 한 기간은 그 기간을 실은 가장 최근 공시 하나로(앱과 같은 표 단위 나중 공시 우선). 20-F 발행사는 범위 밖(본표 판독 대상 아님)
+      if (!foreign && cfItems.some((it) => it.accountId === "cf:재무활동 현금흐름:차입금 조달 합계")) {
+        const DL = [["issS", "단기차입금 조달", 1], ["issL", "장기차입금 조달", 1], ["iss", "차입금 조달 합계", 1], ["repS", "단기차입금 상환", -1], ["repL", "장기차입금 상환", -1], ["rep", "차입금 상환 합계", -1], ["netS", "단기차입금 순증감", 1]];
+        const rcD = sub.filings?.recent ?? {};
+        const flist = (rcD.form ?? []).map((fm, i) => ({ form: fm, accn: rcD.accessionNumber[i], d: rcD.reportDate?.[i] ?? "", filed: rcD.filingDate[i] })).filter((x) => /^10-[KQ]$/.test(x.form) && x.d);
+        const sumCat = (r, cat, s, e) => {
+          const ks = cat === "iss" ? ["issS", "issL"] : cat === "rep" ? ["repS", "repL"] : [cat];
+          const ids = ks.flatMap((k) => r.cats.get(k) ?? []);
+          return ids.length ? ids.reduce((t, id) => t + (r.val(id, s, e) ?? 0), 0) : null;
+        };
+        // 그 기간을 실은 가장 최근 공시(10-K 사업연도 — 그해·다음 해·다다음 해 10-K 중)
+        const latestWith = async (pred, s0, e0) => {
+          for (const x of flist.filter(pred).sort((a, b) => b.filed.localeCompare(a.filed))) {
+            const r = await debtFaceRead(cik, x.accn);
+            const p = r?.periods.find((q) => (s0 == null || dayDiff(q.start, s0) <= 7) && dayDiff(q.end, e0) <= 7 && (s0 != null || (Date.parse(q.end) - Date.parse(q.start)) / 864e5 >= 300));
+            if (r && p) return { r, p, x };
+          }
+          return null;
+        };
+        try {
+          let exp = null, how = "";
+          if (c !== "LTM") {
+            const k = await latestWith((x) => x.form === "10-K" && Date.parse(x.d) >= Date.parse(date) - 7 * 864e5 && Date.parse(x.d) <= Date.parse(date) + 800 * 864e5, null, date);
+            if (k) { exp = Object.fromEntries(DL.map(([cat]) => [cat, sumCat(k.r, cat, k.p.start, k.p.end)])); how = `${k.x.form} ${k.x.d}(${k.x.accn}) ${k.p.start}~${k.p.end}`; }
+          } else {
+            const q = flist.find((x) => x.form === "10-Q" && dayDiff(x.d, date) <= 7);
+            const fyK = q ? flist.filter((x) => x.form === "10-K" && x.d < q.d).sort((a, b) => b.d.localeCompare(a.d))[0] : null;
+            const rq = q ? await debtFaceRead(cik, q.accn) : null, rk = fyK ? await debtFaceRead(cik, fyK.accn) : null;
+            const pk = rk?.periods.find((x) => dayDiff(x.end, fyK.d) <= 7 && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 >= 300);
+            const pc = rq ? rq.periods.filter((x) => dayDiff(x.end, q.d) <= 7).sort((a, b) => a.start.localeCompare(b.start))[0] : null; // 가장 긴 누적
+            const pp = rq && pc ? rq.periods.find((x) => dayDiff(x.end, new Date(Date.parse(q.d) - 365 * 864e5).toISOString().slice(0, 10)) <= 10 && Math.abs((Date.parse(x.end) - Date.parse(x.start)) - (Date.parse(pc.end) - Date.parse(pc.start))) <= 10 * 864e5) : null;
+            if (rq && rk && pk && pc && pp) {
+              exp = {};
+              // 1년 전 같은 분기 10-Q 원본(전년 동기 값이 그 공시에 0 아닌 값으로 있었는가 — 앱 0 채움 규칙의 조건)
+              const qPrev = flist.find((x) => x.form === "10-Q" && dayDiff(x.d, pp.end) <= 10);
+              const rPrev = qPrev ? await debtFaceRead(cik, qPrev.accn) : null;
+              const ppPrev = rPrev?.periods.find((x) => dayDiff(x.end, pp.end) <= 10 && dayDiff(x.start, pp.start) <= 10);
+              for (const [cat] of DL) {
+                const ks = cat === "iss" ? ["issS", "issL"] : cat === "rep" ? ["repS", "repL"] : [cat];
+                const fy = sumCat(rk, cat, pk.start, pk.end);
+                let cu = sumCat(rq, cat, pc.start, pc.end), pr = sumCat(rq, cat, pp.start, pp.end);
+                // 단기·장기 분류가 바뀐 10-Q(직전 10-K 에 없던 성격이 생기고 같은 방향의 다른 성격이 빠짐) — 단기·장기는 빈칸이 정답, 합계는 그대로
+                if (ks.length === 1 && cat !== "netS") {
+                  const other = { issS: "issL", issL: "issS", repS: "repL", repL: "repS" }[cat];
+                  const sw = (rq.cats.has(cat) && !rk.cats.has(cat) && rk.cats.has(other) && !rq.cats.has(other)) || (rq.cats.has(other) && !rk.cats.has(other) && rk.cats.has(cat) && !rq.cats.has(cat));
+                  if (sw) { exp[cat] = { blank: "단기·장기 분류가 10-K·10-Q 사이에 바뀜" }; continue; }
+                }
+                // 10-Q 본표에 그 성격 줄이 없음 — 앱 0 채움 규칙(전년 동기 원 공시에 0 아닌 값이 없을 때만 0)
+                if (cu == null) {
+                  const prevV = rPrev && ppPrev ? sumCat(rPrev, cat, ppPrev.start, ppPrev.end) : null;
+                  if (prevV != null && prevV !== 0) { exp[cat] = { blank: `10-Q 본표에 줄 없음, 전년 동기 원 공시 ${prevV}` }; continue; }
+                  cu = 0; pr = 0;
+                }
+                exp[cat] = fy == null ? { blank: "최근 10-K 본표에 줄 없음" } : fy + cu - (pr ?? 0);
+              }
+              how = `LTM = 10-K ${fyK.d} ${pk.start}~${pk.end} + 10-Q ${q.d} ${pc.start}~${pc.end} − 같은 10-Q 전년 동기 ${pp.start}~${pp.end}`;
+            }
+          }
+          if (exp) for (const [cat, nm, sg] of DL) {
+            const it = byId(cfItems, `cf:재무활동 현금흐름:${nm}`), app = val(it, c);
+            const e0 = exp[cat];
+            const name = `현금흐름표 ${nm} 앱 = SEC(본표 차입 줄 성격별 합)`;
+            if (e0 == null || (typeof e0 === "object" && e0.blank)) {
+              const why = e0?.blank ?? "본표에 그 성격 줄 없음";
+              add("A", name, c, app == null ? { status: PASS, note: `기대 빈칸 — ${why} · ${how}`, app, src: null } : { status: FAIL, note: `${why}인데 앱 ${app} · ${how}`, app, src: null });
+            } else add("A", name, c, vsSource(app, sg * e0, EXACT, `${how}${sg < 0 ? " × −1" : ""}`));
+          }
+        } catch (e) { hardErrors.push(`차입 줄 본표 판독 실패(${c}): ${String(e).slice(0, 100)}`); }
       }
       // D층 — 재무상태표
       const g = (id) => val(byId(bsItems, id), c);
@@ -7908,7 +8034,12 @@ async function verifyUs(sym) {
       const CFX = [["현금흐름표 영업활동 현금흐름", "cf:total:영업활동 현금흐름", "operatingCashFlow", "ncfo"], ["현금흐름표 투자활동 현금흐름", "cf:total:투자활동 현금흐름", "investingCashFlow", "ncfi"],
         ["현금흐름표 재무활동 현금흐름", "cf:total:재무활동 현금흐름", "financingCashFlow", "ncff"], ["현금흐름표 유형자산 취득(CAPEX)", "cf:투자활동 현금흐름:유형자산 취득", "capitalExpenditure", "capex"],
         ["현금흐름표 배당금 지급", "cf:재무활동 현금흐름:배당금 지급", "cashDividendsPaid", "commonDividendCF"], ["현금흐름표 자기주식 취득", "cf:재무활동 현금흐름:자기주식 취득", "repurchaseOfCapitalStock", "commonRepurchased"],
-        ["현금흐름표 주식보상비용", "cf:영업활동 현금흐름:주식보상비용", "stockBasedCompensation", "sbcomp"]];
+        ["현금흐름표 주식보상비용", "cf:영업활동 현금흐름:주식보상비용", "stockBasedCompensation", "sbcomp"],
+        // 차입금(오너 결정 2026-10-10 — 같은 구조의 외부 줄)
+        ["현금흐름표 단기차입금 조달", "cf:재무활동 현금흐름:단기차입금 조달", "shortTermDebtIssuance", "debtIssuedShortTerm"], ["현금흐름표 장기차입금 조달", "cf:재무활동 현금흐름:장기차입금 조달", "longTermDebtIssuance", "debtIssuedLongTerm"],
+        ["현금흐름표 차입금 조달 합계", "cf:재무활동 현금흐름:차입금 조달 합계", "issuanceOfDebt", "debtIssuedTotal"], ["현금흐름표 단기차입금 상환", "cf:재무활동 현금흐름:단기차입금 상환", "shortTermDebtPayments", "debtRepaidShortTerm"],
+        ["현금흐름표 장기차입금 상환", "cf:재무활동 현금흐름:장기차입금 상환", "longTermDebtPayments", "debtRepaidLongTerm"], ["현금흐름표 차입금 상환 합계", "cf:재무활동 현금흐름:차입금 상환 합계", "repaymentOfDebt", "debtRepaidTotal"],
+        ["현금흐름표 단기차입금 순증감", "cf:재무활동 현금흐름:단기차입금 순증감", "netShortTermDebtIssuance", null]];
       try {
         const y0 = await yahoo();
         const yb = await y0.fundamentalsTimeSeries(sym, { period1: "2019-01-01", type: "annual", module: "balance-sheet" }, { validateResult: false });

@@ -168,7 +168,8 @@ export function instanceFacts(xml: string, want: (id: string) => boolean): InstF
   }
   const out: InstFact[] = [];
   const seen = new Set<string>();
-  for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/\1:\2>/g)) {
+  // 요소 이름에 하이픈·점 허용(ORCL orcl_ProceedsFromRepaymentsOfShort-TermFinancingRelatedToCapitalExpendituresNet — 못 읽어 차입 줄이 0 이었다, 2026-10-10)
+  for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_.-]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/\1:\2>/g)) {
     const id = `${m[1]}_${m[2]}`;
     if (!want(id) || !/unitRef="[^"]*usd/i.test(m[3])) continue;
     const c = ctx.get(/contextRef="([^"]+)"/.exec(m[3])?.[1] ?? "");
@@ -243,7 +244,8 @@ function durationValues(xml: string, ids: Set<string>): Map<string, Map<string, 
     if (s && e) ctx.set(m[1], `${s}|${e}`);
   }
   const out = new Map<string, Map<string, number>>();
-  for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/\1:\2>/g)) {
+  // 요소 이름에 하이픈·점 허용(ORCL orcl_ProceedsFromRepaymentsOfShort-TermFinancingRelatedToCapitalExpendituresNet — 못 읽어 차입 줄이 0 이었다, 2026-10-10)
+  for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_.-]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/\1:\2>/g)) {
     const id = `${m[1]}_${m[2]}`;
     if (!ids.has(id)) continue;
     const k = ctx.get(/contextRef="([^"]+)"/.exec(m[3])?.[1] ?? "");

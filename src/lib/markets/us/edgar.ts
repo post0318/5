@@ -414,6 +414,8 @@ export interface CompanyFacts {
   daBasisMix?: string[];
   /** 사업연도 감가상각 줄에 중단사업분이 섞였는데 그 금액이 공시되지 않은 기간("시작|종료") — 감가상각비·EBITDA 공란(edgar-cf-structure.ts, 오너 결정 2026-10-09 IBM 2021) */
   daDiscMix?: string[];
+  /** 차입금 줄을 10-K·10-Q 본표 판독으로 만들었는가(edgar-cf-wc.ts DEBT_SYN) — 아니면(20-F 등) 표준 개념 목록으로 */
+  debtFace?: boolean;
   /** 총수익에서 지분법·기타수익을 분리했는지(edgar-revenue-dims.ts) */
   nonopInRevenues?: boolean;
   /** 은행·증권·보험(SIC 6000~6499) — 이자가 본업이라 영업이익 근사에 이자를 더하지 않는다. 리츠·부동산(65xx·67xx)은
