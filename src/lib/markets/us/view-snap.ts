@@ -38,13 +38,18 @@ function table(st: FinancialStatement): ViewTable {
 
 export interface ViewChange { changed: number; newCols: number; baseline: boolean }
 
-/** 종목 재무제표 화면(현금흐름표·재무상태표) 칸 비교·기록. 기록할 수 없으면(DB 없음·검증 우회·원본 조회 경고) null */
+/**
+ * 종목 재무제표 화면(현금흐름표·재무상태표) 칸 비교·기록. 기록할 수 없으면 null — DB 없음·검증 우회·비저장 모드, 그리고 기준값이 될 수 없는
+ * 계산(하이라이트 저장본 degraded 와 같은 조건: 원본 조회 경고·판독 불가 sourceUnavailable · 외화 환산 대기 fxPending · SIC 조회 실패 ·
+ * 재무 저장본 옛 엔진판 staleEv)
+ */
 export async function recordUsViewChanges(symbol: string): Promise<ViewChange | null> {
   // 비저장 모드(FIN_NO_PERSIST — fin/store.ts 와 같은 차단)는 기록하지 않는다
   if (!isDbConfigured() || process.env.FIN_NO_PERSIST) return null;
   const sym = symbol.toUpperCase();
-  const [{ facts }, sic] = await Promise.all([fetchUsCompanyFacts(sym), fetchUsSic(sym).catch(() => null)]);
-  if (facts.fetchWarnings?.length) return null;
+  let sicFailed = false;
+  const [{ facts }, sic] = await Promise.all([fetchUsCompanyFacts(sym), fetchUsSic(sym).catch(() => { sicFailed = true; return null; })]);
+  if (facts.fetchWarnings?.length || facts.sourceUnavailable || facts.fxPending || sicFailed || facts.revenue?.staleEv != null) return null;
   const s: Record<string, ViewTable> = {};
   for (const [k, build] of KINDS) s[k] = table(build(facts, sic));
   const id = `us:${sym}`;
@@ -71,7 +76,10 @@ export async function recordUsViewChanges(symbol: string): Promise<ViewChange | 
       });
     }
   }
-  // silent-ok: 변경 기록 실패는 기준값 교체에 영향 없음(감사 추적용)
-  if (chg.length) await (await finChgCol()).insertMany(chg).catch(() => {});
+  // 변경 기록 실패는 기준값 교체에 영향 없음(감사 추적용) — 실패는 로그로 남긴다
+  if (chg.length)
+    await finChgCol()
+      .then((c) => c.insertMany(chg))
+      .catch((e) => console.error(`[fin_chg] ${id} 재무제표 칸 변경 기록 실패: ${e instanceof Error ? e.message : String(e)}`));
   return { changed: chg.length, newCols, baseline: false };
 }

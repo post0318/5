@@ -17,6 +17,12 @@ import { listUniverseDistinct } from "@/lib/universe/repo";
 
 const SYMBOL_RE = /^[A-Z0-9.-]{1,12}$/;
 const PER_SYMBOL_MS = 180_000;
+/** 남은 시간 안에 끝나지 않으면 거부 */
+function withinMs<T>(p: Promise<T>, ms: number): Promise<T> {
+  if (ms <= 0) return Promise.reject(new Error("종목당 시간 제한 소진"));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([p, new Promise<T>((_, rej) => { timer = setTimeout(() => rej(new Error(`시간 초과(${Math.round(ms / 1000)}초)`)), ms); })]).finally(() => clearTimeout(timer));
+}
 const arg = (k: string) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? null;
 
 async function main() {
@@ -52,7 +58,8 @@ async function main() {
       const w = dry ? null : await writeTtmSnap("us", sym, ttm);
       built.push(sym);
       // 저장본 교체 기록(ttm_chg) — 바뀐 칸 수·옛 판번호. 재무제표 화면(현금흐름표·재무상태표) 칸 변경은 fin_chg(view-snap.ts)
-      const vc = dry ? null : await recordUsViewChanges(sym).catch((e) => { console.log(`::warning::${sym} 재무제표 칸 비교 실패 — ${String(e).slice(0, 120)}`); return null; });
+      // 종목당 시간 제한의 남은 시간 안에서만(넘기면 경고 후 다음 종목 — 계산은 프로세스 안에서 끝까지 돈다)
+      const vc = dry ? null : await withinMs(recordUsViewChanges(sym), PER_SYMBOL_MS - (Date.now() - t0)).catch((e) => { console.log(`::warning::${sym} 재무제표 칸 비교 실패 — ${String(e).slice(0, 120)}`); return null; });
       const chg = (w ? (w.changed == null ? " · TTM 새 저장본" : ` · TTM 교체(옛 판 ${w.from}) 바뀐 칸 ${w.changed}`) : "")
         + (vc ? (vc.baseline ? " · 재무제표 기준값 첫 저장" : ` · 재무제표 바뀐 칸 ${vc.changed}${vc.newCols ? `(새 열 ${vc.newCols})` : ""}`) : "");
       console.log(`계산 ${sym} ${ms}ms${dry ? " (저장 안 함)" : chg}`);
