@@ -3,7 +3,7 @@ import { fetchJson, fetchText } from "../http";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { RecentFilings } from "./edgar-gapfill";
 import { filingsForDa, instanceFacts } from "./edgar-cf-structure";
-import { cfZeroFillGroups } from "./edgar-cashflow";
+import { CF_INV_FAMILIES, cfInvStdConcepts, cfZeroFillGroups } from "./edgar-cashflow";
 
 /**
  * **운전자본 변동 합계 = 현금흐름표 본표의 운전자본 줄 합**(10-K·10-Q 계산 구조, 2026-10-02).
@@ -129,6 +129,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const zeros: [string, FactUnitEntry][] = [];
   const sbc: FactUnitEntry[] = [];
   const capexParts: FactUnitEntry[] = [];
+  const invFace = new Map<string, FactUnitEntry[]>(CF_INV_FAMILIES.map((f) => [f.derived, []]));
   const zeroGroups = cfZeroFillGroups();
   for (const f of filingsForDa(recent)) {
     const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
@@ -187,6 +188,26 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
         }
       }
     }
+    // 투자자산 처분·취득 — 본표에 회사 고유 줄이 섞이면 같은 성격 본표 줄 전부(표준 + 회사 고유) 합. 본표 줄인데 그 기간 값이 없으면 0("—")
+    if (faceS) {
+      const local = (id: string) => id.replace(/^[^_]+_/, "");
+      const fams = CF_INV_FAMILIES.map((fm) => {
+        const std = new Set(cfInvStdConcepts(fm.label));
+        const ids = [...faceS].filter((id) => (id.startsWith("us-gaap_") ? std.has(local(id)) : fm.custom.test(local(id))));
+        return { fm, ids, custom: ids.filter((id) => !id.startsWith("us-gaap_")) };
+      }).filter((x) => x.custom.length);
+      const inst = fams.length ? names.find((n) => /_htm\.xml$/i.test(n)) : null;
+      if (inst) {
+        const want = new Set(fams.flatMap((x) => x.ids));
+        const fsx = instanceFacts(await fetchText(`${base}/${inst}`, { headers: H, revalidate: false, timeoutMs: 30_000 }), (id) => want.has(id));
+        for (const { fm, ids, custom } of fams)
+          for (const e of ocf) {
+            const at = (id: string) => fsx.find((x) => x.id === id && x.period === `${e.start}|${e.end}` && x.dims.length === 0);
+            if (!custom.some(at)) continue;
+            invFace.get(fm.derived)!.push({ ...e, val: ids.reduce((t, id) => t + (at(id)?.val ?? 0), 0) });
+          }
+      }
+    }
     // CAPEX 합계 줄 없음 + 두 구성 줄 있음 → 두 줄 합
     if (faceS && !CAPEX_TOTAL.some((c) => faceS.has(`us-gaap_${c}`)) && CAPEX_PARTS.every((c) => faceS.has(`us-gaap_${c}`)))
       for (const e of ocf) {
@@ -241,10 +262,12 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
       .map((ps, i) => (ps.every(Boolean) ? [tot[i].val, ps.reduce((s0, x) => s0 + x!.val, 0)] : null)).filter((x): x is number[] => !!x);
     if (!pair.length || pair.some(([a, b]) => a !== b)) capexParts.length = 0;
   }
-  if (!synth.length && !zeros.length && !sbc.length && !capexParts.length) return facts;
+  const invAny = [...invFace.values()].some((x) => x.length);
+  if (!synth.length && !zeros.length && !sbc.length && !capexParts.length && !invAny) return facts;
   const ng: Record<string, unknown> = { ...g };
   if (synth.length) ng[SYN_WC_CF] = { label: "운전자본 변동(본표 줄 합)", units: { USD: synth } };
   if (sbc.length) ng[SYN_SBC_CF] = { label: "주식보상비용(본표 회사 고유 줄)", units: { USD: sbc } };
+  for (const [k, v] of invFace) if (v.length) ng[k] = { label: "투자자산 본표 줄 합(회사 고유 줄 포함)", units: { USD: v } };
   if (capexParts.length) ng[SYN_CAPEX_PARTS] = { label: "설비투자(항공기 + 기타 유형자산 줄 합)", units: { USD: capexParts } };
   for (const [c, e] of zeros) {
     const cur = (ng[c] ?? { units: {} }) as { label?: string; units: Record<string, FactUnitEntry[]> };
