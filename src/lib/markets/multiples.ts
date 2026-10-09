@@ -375,7 +375,15 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   // 예전엔 부채총계를 차입금 대신 더해 EV 가 과대했다(감사 2026-09-23).
   // 그 외 시장은 종전 방식(부채총계) — 한국·일본 정정은 별도 결정 대기.
   const usEv = snap && snap.evNetDebt !== undefined;
-  const ev = usEv
+  // 한국: EV = 현재가 × 상장주식수 + 우선주 + 순차입금(getKrTtm 스냅샷) 만. 순차입금 칸이 없거나 상장주식수가 없으면 EV 빈칸(감사 9차 ①③ — 순차입금 칸이
+  // 빠지면 부채총계 − 현금 식으로, 주식수가 없으면 시가총액 0 으로 계산돼 엉터리 EV/EBITDA 가 표시됐다)
+  const krEv =
+    kr && snap && !snap.evBlocker && snap.evNetDebt != null && price != null && shares != null
+      ? price * shares + (snap.evPreferredMcap ?? 0) + snap.evNetDebt
+      : null;
+  const ev = kr
+    ? krEv
+    : usEv
     ? snap!.evBlocker || snap!.evNetDebt == null || price == null
       ? null
       : price * (usShares ?? shares ?? 0) +
