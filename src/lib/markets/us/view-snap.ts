@@ -39,7 +39,7 @@ function table(st: FinancialStatement): ViewTable {
 export interface ViewChange { changed: number; newCols: number; baseline: boolean }
 
 /**
- * 종목 재무제표 화면(현금흐름표·재무상태표) 칸 비교·기록. 기록할 수 없으면 null — DB 없음·검증 우회·비저장 모드, 그리고 기준값이 될 수 없는
+ * 종목 재무제표 화면(현금흐름표·재무상태표) 칸 비교·기록. 기록할 수 없으면 null — DB 없음·비저장 모드, 그리고 기준값이 될 수 없는
  * 계산(하이라이트 저장본 degraded 와 같은 조건: 원본 조회 경고·판독 불가 sourceUnavailable · 외화 환산 대기 fxPending · SIC 조회 실패 ·
  * 재무 저장본 옛 엔진판 staleEv)
  */
