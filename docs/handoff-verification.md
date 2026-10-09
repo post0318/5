@@ -21,8 +21,22 @@
 - 사무실 PC 의 Claude 메모(서버 구성·오너 규칙·일본 현황)는 이 문서와 CLAUDE.md 에 같은 내용이 있다.
 
 ## 현재 상태 (2026-10-09) — 다음에 여기서부터
+- **(10-09 밤) 운영 배포 — 미국 앱 수정 + 저장본 옛 판 유지**: master 47ba7f6(898c0cd·20da1b1 반영 — ENGINE 46) 뒤 deploy/snap-stale 21ea0ba(오너 승인, 1호기 AAPL
+  하이라이트·TTM·현금흐름표 200 확인). kr/verification 원본 커밋 37a8fb5·a69dfac·6536059·6b8a73b — master 에 없는 검증 우회(snapshotBypassed)·한국 감사용
+  코드(한국 배당 import·post-deploy kr_da 적재)는 빼고 옮김. 운영에 들어간 것:
+  - **옛 판 유지**(오너 승인 2026-10-09): 엔진판이 바뀌어도 재무 저장본(fin_sym)을 새 저장본이 생길 때까지 그대로 응답(staleEv). 단 마지막 정상 적재(at)·현재 판
+    확인(ck) 중 늦은 쪽이 7일 넘으면 요청 시점 조립. 조회 실패로 문서를 유지한 경로는 at 대신 ft. 스키마판이 다르면 재사용 안 함. TTM 저장본은 판번호만 다르면
+    snapStale 로 그대로, 재무 저장본이 옛 판인 동안은 24시간 넘은 것도 그대로. 요청마다 뒤에서 다시 계산하던 것은 없앰 — 다시 채우기는 배치만.
+    옛 판 재무로 계산한 TTM(staleInputs)·하이라이트(staleFin)는 저장본에 남기지 않고 CDN 60초.
+  - **교체 기록**: 손익·핵심 지표 = fin_chg(기존, 180일). 현금흐름표·재무상태표 칸 = ttm-build 가 fin_view(종목당 1건 약 11KB)와 비교해 fin_chg 에
+    t = "cf.a:줄 id" 로 기록. TTM = ttm_chg(교체 1건 = 문서 1건, 바뀐 칸 최대 40, 30일 TTL). 첫 배치는 기준값만 쌓는다.
+  - **배치**: ttm-build 는 staleInputs 를 "fin 갱신 대기"로 따로 세고(연속 실패 중단 제외), post-deploy.sh 는 엔진판이 바뀐 배포면 systemd-run 으로
+    fin-build → ttm-build 순서(둘 다 oneshot, 2시간 한도). fin-build 로그는 "결손(저장본)"과 "열 표시(IDENTITY·BASIS_SHIFT — 열 단위 메모, 원래 있던 것)"로 나눔.
+  - 10-09 08:11 배포 때 "변경 0"의 원인: ttm-build·fin-build 가 동시에 돌았고, 옛 loadFinSym 이 ttm-build 안에서 저장본을 먼저 새 판으로 바꿨다. 또 NVDA
+    변경은 현금흐름표라 그때는 기록 대상이 아니었다.
+  - **엔진판(ENGINE_VERSION)을 올릴 때**: 배포 직후 화면은 옛 판 값(1일 안팎), 배치가 끝나면 새 값. 바로 보려면 1호기 `sudo systemctl start fin-fin-build` 뒤 `fin-ttm-build`.
 - **(10-09 저녁) 미국 검증불가 32 → 8, 실패 0**(verify-us-20261009-153155, 47종목 --post 관리자 화면 게시: 통과 39,296 · 공통모드 1,337 · 검증불가 8).
-  **운영 배포 필요 앱 커밋: 8f726f3(이전 항목) · 898c0cd · 20da1b1** — ENGINE_VERSION 46 이라 배포 직후 fin-build·ttm-build 즉시 재실행.
+  앱 커밋 898c0cd·20da1b1 은 운영 배포 완료(master 47ba7f6, 위 항목).
   898c0cd: WMT 이연법인세 구성 혼합 분기·LTM 빈칸, META 분기 태그 교체 공시별 병합, GEV·VRT 잔여(기타) 줄 LTM 빈칸, BE 주식보상 본표 회사 고유 줄,
   DAL CAPEX 합계 줄 없는 10-Q = 항공기 + 기타 두 줄 합(오너 결정, 합계 = 두 줄 합 확인은 읽는 공시 창 안 — 2013 은 줄 구성이 달랐다),
   IBM 2021 감가상각·EBITDA 빈칸 + 사유(오너 결정 — 중단사업분 미공시), AVGO FY2024 매각예정 취득 처분 그룹 = 중단사업 감가상각 0.
