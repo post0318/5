@@ -473,8 +473,9 @@ function overviewLayer(c) {
   chk("화면 입력 /ttm 지배주주 자본 = DART", ttm?.snapshot?.equity ?? null, eq, multDen.LTM?.eq?.how ?? "");
   // EV 입력 — 하이라이트 LTM 의 EV 구성요소(K2 에서 DART 와 대조됨)와 같아야
   const L = c.H.LTM ?? {};
-  const nd = L.debt != null && L.cash != null ? L.debt + (L.nci ?? 0) - L.cash : undefined;
-  chk("화면 입력 /ttm 순차입금(차입금 + 비지배지분 − 현금) = 하이라이트 LTM(K2 확인)", ttm?.snapshot?.evNetDebt ?? null, nd, `차입금 ${L.debt} + 비지배 ${L.nci ?? 0} − 현금 ${L.cash}`);
+  // 하이라이트 EV 다리의 현금 줄은 음수로 싣는다(− 현금) — 순차입금 = EV − 보통주 시가총액 − 우선주(K2 가 EV 를 DART 와 대조)
+  const nd = L.ev != null && L.mc != null ? L.ev - L.mc - (L.pref ?? 0) : undefined;
+  chk("화면 입력 /ttm 순차입금 = 하이라이트 LTM EV − 시가총액 − 우선주(K2 확인)", ttm?.snapshot?.evNetDebt ?? null, nd, `EV ${L.ev} − 시가총액 ${L.mc} − 우선주 ${L.pref ?? 0} (다리: 차입금 ${L.debt} · 비지배 ${L.nci ?? 0} · 현금 줄 ${L.cash})`);
   chk("화면 입력 /ttm 우선주 시가총액 = 하이라이트 LTM(K1 확인)", ttm?.snapshot?.evPreferredMcap ?? 0, L.pref ?? 0, "");
   const hOp = c.h.rows.find((x) => x.key === "opinc")?.values[c.h.columns.findIndex((x) => x.kind === "ltm")] ?? null;
   chk("화면 입력 /ttm 영업이익 = 하이라이트 LTM(K4 확인)", ttm?.opIncome ?? null, hOp ?? undefined, "");

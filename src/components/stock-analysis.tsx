@@ -409,7 +409,8 @@ export function StockAnalysis({
     // 미국은 연간 재무제표 표를 기다리지 않는다 — 멀티플은 TTM 스냅샷(사업연도 EPS 포함)만 쓰고, 표는 TTM 에 사업연도 EPS 가 없는
     // 경로(DART 연결 ADR)에서만 필요. 표 요청이 느리거나 실패하면 시가총액이 사유 없이 "-"로 남았다(2026-10-02, DELL)
     // 일본도 같다 — TTM 스냅샷(jp-ev.ts 단일 기준, 하이라이트 LTM 열과 같은 값)만(2026-10-08)
-    if (market === "us" || market === "jp") {
+    // 한국도 TTM 스냅샷(getKrTtm)만 쓴다(감사 7차 ② — 연간표를 기다릴 필요 없음, TTM 이 없으면 빈칸 + 사유)
+    if (market === "us" || market === "jp" || market === "kr") {
       if (ttmQ.isLoading || !ov?.quote) return null;
       if (ttmForMultiples && ttmForMultiples.fyEps === undefined && !ttmQ.isError && annualForMultiples.isLoading) return null;
     } else if (!ov?.quote || !annualForMultiples.data) return ov?.multiples ?? null;
