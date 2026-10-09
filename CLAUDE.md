@@ -1717,6 +1717,15 @@ Gemini가 `headline` 필드로 "이번 주 시장 전체가 무엇 때문에 이
   근거 수치가 그 구간 안이면 인정. webFacts 는 문서 `sources.webFacts` 에 남긴다(무엇을 근거로 썼는지 검수).
 - 경제 섹션 공식 지표 중복 제거는 지표명 뒤 "값 (기간, 발표일, 직전)" 부분으로 비교(모델이 지표명을 "미국 9월 비농업 고용…"처럼 고쳐 써서 빗나갔다).
 
+**claude.ai 커넥터(MCP) 초안(오너 지시 2026-10-10 — "비용발생 안하면서 api로 연결이 가능하면 난 쓸거다")**: Anthropic API 는 별도 과금이라
+안 쓰고, 오너 구독의 claude.ai 사용자 정의 커넥터가 `/api/mcp/<WEEKLY_MCP_TOKEN>`(또는 `/api/mcp` + `Authorization: Bearer`)에 붙는다
+(`lib/server/mcp-weekly.ts`, 상태 없는 JSON-RPC, 라이브러리 없음). 도구 둘뿐 — `get_weekly_data`(코드 집계 입력 + 리포트 요약 발췌·링크 +
+작성 규칙 `CONNECTOR_GUIDE`) / `save_weekly_draft`(문장만 받아 Gemini 와 같은 검증 `assembleComments` → 코드가 본문 조립 → `origin:
+"claude-connector"` 초안 = 화면 「검토 대기」, `preview` 지원). 발행·삭제 도구 없음, 발행된 주·오너가 고친 초안은 안 덮어씀, 자동 생성·화면
+초안 생성도 Claude 초안을 force 없이 안 덮어씀. 출처(sources)를 같이 보내면 숫자 대조를 건너뜀(그라운딩 성공과 같은 취급), 회의 월 검사는 항상.
+이슈 해석은 "다음에 볼 것" 뒤에 대응 방안을 이어 쓴다(커넥터 규칙만). 조회·저장이 같은 입력을 쓰도록 `weekly_inputs`(주당 1건, 60일 TTL)에
+보관 — 월요일 자동 생성이 채운다. 토큰 미설정이면 503. Gemini 자동 초안은 대비용으로 유지.
+
 - **LLM = Gemini API**(`gemini.ts`, REST, SDK 없음). 모델 비교(Sonnet 5/
   Opus 5/Fable 5.1 샘플) 후 오너가 비용 문제로 Claude API 대신 선택 —
   **Google AI Pro 구독에 포함된 월 $10 Cloud 크레딧**으로 결제(유료 등급이라
