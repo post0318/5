@@ -24,7 +24,7 @@ import { AdapterError, type FinancialLineItem, type FinancialPeriod, type Financ
  * 저장: jp_fin(종목당 1건, 엔진판 JP_FIN_ENGINE + 서류 목록 서명) — 서명이 같으면 판독·조립 없이 저장본을 쓴다.
  */
 
-export const JP_FIN_ENGINE = 4; // 2: 연간 열 부가 정보(x — EPS·BPS·DPS·주식수·리스부채 주석, 판독판 2) · 3: 기준이 다른 옛 有報의 주식수·DPS · 4: 리스부채 주석 판독판 3(표시 문장·변동표·두 칸 표, 날짜별)
+export const JP_FIN_ENGINE = 6; // 2: 연간 열 부가 정보(x — EPS·BPS·DPS·주식수·리스부채 주석, 판독판 2) · 3: 기준이 다른 옛 有報의 주식수·DPS · 4: 리스부채 주석 판독판 3(표시 문장·변동표·두 칸 표, 날짜별) · 5: 訂正 서류 EPS 분할 기준일 = 원 서류 제출일 · 6: 줄 열쇠에 기초·기말 표시 포함, 판독판 4(현금흐름표 시점 개념 = 기말)
 
 const N_FY = 5;
 const N_HALF = 6;
@@ -76,7 +76,7 @@ export interface JpFinView {
 /**
  * 열 부가 정보 — 본표 밖(경영지표·株式の総数等·주석)에서 읽은 값. 계산은 jp-ev.ts 한 곳에서.
  *  eps: 손익 열과 같은 서류(그 기간을 실은 가장 나중 서류)의 경영지표 희석 EPS(없거나 "－"면 기본 EPS, 그것도 없으면 본표 EPS 줄)
- *  epsAt: 그 서류 제출일 — 그 뒤 분할만 주가에 되돌려 같은 주식 기준으로 맞춘다
+ *  epsAt: 그 서류(訂正이면 원 서류) 제출일 — 그 뒤 분할만 주가에 되돌려 같은 주식 기준으로 맞춘다
  *  bps: 재무상태표 열과 같은 서류의 경영지표 BPS(IFRS 1株当たり親会社所有者帰属持分, J-GAAP 1株当たり純資産額)
  *  dps: 그 사업연도 有報 자신(당기)의 1株当たり配当額(개별 — 회사 단위) · dpsNil: 공시 "－"(무배당)
  *  sh: 그 기간 서류 자신의 기말 유통주식수(발행 − 회사 명의 자기주식) — 그 날의 실제 주식 기준
@@ -127,10 +127,18 @@ export interface Src {
   row: JpDocRow;
   fin: JpDocFin;
   at: string;
+  /**
+   * 주당 값의 주식 기준일 — 원 서류 제출일. 訂正(130·150·170)은 원 서류 숫자를 그대로 다시 싣기 때문에 그 사이 분할을 반영하지 않는다
+   * (日立 2024-07 1:5 분할 뒤 2025-07 제출 訂正의 2022·2023 EPS 602.96·683.89 = 분할 전 기준) → 원 서류(parentDocID) 제출일
+   */
+  basisAt: string;
 }
+/** 서류 본표의 줄 열쇠 — 개념 + 기초·기말 표시(ps). 같은 개념이라도 그 서류가 기말 잔액 줄로 싣지 않으면(혼다 2025 有報 — 기말 = …IfDifferentFromBSBalance,
+ * 現金及び現金同等物 은 기초 잔액 줄뿐) 옛 서류의 기말 줄 값을 이 서류에서 꺼내지 않는다 */
+const lineKey = (l: { k: string; ps?: "s" | "e" }) => `${l.k}|${l.ps ?? ""}`;
 const keysOf = (s: Src, kind: JpStmtKind) => {
   const st = s.fin.stmts[kind];
-  return st ? new Set(st.lines.filter((l) => !l.ab).map((l) => l.k)) : null;
+  return st ? new Set(st.lines.filter((l) => !l.ab).map(lineKey)) : null;
 };
 /**
  * 그 서류 본표(kind)가 기간 열쇠 pk 의 열을 싣고 있나 — 그 기간 값이 있는 줄 수가 가장 많은 기간의 절반 이상일 때만.
@@ -285,7 +293,7 @@ function cell(s: Src | null, kind: JpStmtKind, l: MLine, start: string, end: str
   if (!s) return [null, NOTE.noStmt];
   const ks = keysOf(s, kind);
   if (!ks) return [null, NOTE.noStmt];
-  if (!ks.has(l.k)) return [null, NOTE.noLine];
+  if (!ks.has(lineKey(l))) return [null, NOTE.noLine];
   const pk = kind === "bs" || l.ps === "e" ? pkInst(end) : l.ps === "s" ? pkInst(addDays(start, -1)) : pkDur(start, end);
   const raw = s.fin.facts[l.k]?.[pk];
   if (raw == null) return [null, NOTE.noVal];
@@ -533,7 +541,7 @@ function colExtra(c: Col, sorted: Src[], h: Src | null, ownDocs: Src[]): JpColX 
         break;
       }
     }
-  x.epsAt = isS?.at ?? null;
+  x.epsAt = isS?.basisAt ?? null;
   x.bps = sumOf(bsS, BPS, pkInst(c.end))[0];
   // DPS — 회사 단위(개별) 경영지표. 그 사업연도 有報 자신의 당기 값, 없으면 손익 열 서류의 그 기간 값
   const dpsDoc = own ?? isS;
@@ -663,6 +671,7 @@ export async function jpLoadSources(picked: { annual: JpDocRow[]; half: JpDocRow
   const warn: string[] = [];
   const load = async (rs: JpDocRow[]): Promise<Src[]> => {
     const out: Src[] = [];
+    const subAt = new Map(rs.map((r) => [r._id, r.submitDateTime ?? ""]));
     for (const row of rs) {
       try {
         const fin = await loadJpDocFin(row._id);
@@ -672,7 +681,9 @@ export async function jpLoadSources(picked: { annual: JpDocRow[]; half: JpDocRow
           continue;
         }
         for (const w of fin.warn) warn.push(`${row._id}: ${w}`);
-        out.push({ row, fin, at: row.submitDateTime ?? "" });
+        const parentAt = row.parentDocID ? subAt.get(row.parentDocID) : undefined;
+        if (row.parentDocID && parentAt == null) warn.push(`${row._id} 訂正의 원 서류 ${row.parentDocID} 가 목록에 없음 — 주당 값 기준일 = 訂正 제출일`);
+        out.push({ row, fin, at: row.submitDateTime ?? "", basisAt: parentAt ?? row.submitDateTime ?? "" });
       } catch (err) {
         warn.push(`${row._id} 판독 실패 — ${redactEdinet(err instanceof Error ? err.message : String(err))}`);
       }
