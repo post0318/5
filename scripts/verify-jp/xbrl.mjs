@@ -13,6 +13,9 @@
  */
 
 const STD_PREFIX = /^(jppfs_cor|jpigp_cor|jpcrp_cor|jpdei_cor)$/;
+/** 문자열로 남기는 jpcrp 요소 — 自己株式等 표의 소유자 이름(J1 주식수) */
+const TEXT_FACTS = new Set(["NameOfShareholderTreasurySharesEtc"]);
+const decodeXml = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&amp;/g, "&");
 const attr = (s, n) => {
   const m = new RegExp(`(?:^|\\s)${n.replace(/[:.]/g, "\\$&")}="([^"]*)"`).exec(s);
   return m ? m[1] : null;
@@ -94,6 +97,7 @@ export function parseDoc(files) {
   }
 
   const facts = new Map();
+  const texts = new Map();
   const dei = {};
   const re = /<([\w.-]+):([\w.-]+)\b([^>]*?\bcontextRef="[^"]+"[^>]*?)(\/>|>([\s\S]*?)<\/\1:\2>)/g;
   for (const m of inst.matchAll(re)) {
@@ -103,6 +107,12 @@ export function parseDoc(files) {
     const raw = m[5];
     if (p === "jpdei_cor") { if (raw != null && !/</.test(raw)) dei[m[2]] = raw.trim(); continue; }
     if (raw != null && raw.includes("<")) continue; // 문단(TextBlock) — 숫자 아님
+    if (TEXT_FACTS.has(m[2]) && p === "jpcrp_cor") {
+      const arr = texts.get(m[2]) ?? [];
+      arr.push({ ctx: attr(a, "contextRef"), s: decodeXml(raw ?? "").trim() });
+      texts.set(m[2], arr);
+      continue;
+    }
     const nil = /xsi:nil="true"/.test(a) || raw == null || raw.trim() === "";
     const unit = attr(a, "unitRef");
     if (!unit) continue;
@@ -132,7 +142,7 @@ export function parseDoc(files) {
   }
   const calc = new Map();
   for (const [uri, arcs] of parseLinkbase(cal, "calculation")) calc.set(uri.split("/").pop(), arcs.filter((a) => a.use !== "prohibited").map((a) => [a.from, a.to, a.w]));
-  return { dei, ctx, facts, roles, calc };
+  return { dei, ctx, facts, texts, roles, calc };
 }
 
 /** 차원 없는 문맥의 값 — 기간(start~end) 또는 시점(instant). 같은 기간 문맥이 여럿이고 값이 다르면 { conflict } */
