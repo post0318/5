@@ -7,7 +7,9 @@
  *  (a) 새 종목 — 유니버스(universe_items 전 계정 합집합, active≠false, 한국·미국)에 있는데 검증 결과(verify_results)가 없음
  *  (b) 새 정기보고서 — 한국: DART 정기공시 목록(corp_code 별 list.json) 최신 접수번호 / 미국: SEC submissions 최신 10-K·10-Q·20-F·40-F(정정 포함)
  *      접수번호가 마지막 검증 때 기록과 다름(기록이 없으면 그 공시일이 마지막 검증일 이후일 때). 6-K 는 넣지 않는다(보도자료가 섞여 매일 대상이 됨)
- *  (c) 마지막 검증 실패 — 실패 항목·오류가 있음(마지막 실행이 오래된 것부터)
+ *  (c) 마지막 검증 실패 — 실패 항목·오류가 있음, 또는 검증불가·공통모드가 기준선보다 늘어남(마지막 실행이 오래된 것부터). 검증불가·공통모드만 있으면
+ *      검증기 종료코드가 0 이라 조용히 지나갔다(감사 4차) — 종목별 기준선(verify_state.naBaseline = 늘어나지 않은 마지막 실행의 건수)과 비교해
+ *      늘어나면 naIncrease 를 남기고 실패와 같이 재실행한다(검증불가 자체를 실패로 세지는 않는다 — 외부 사유도 있다). 기준선 이하로 돌아오면 해제
  *  (d) 7일 넘게 검증 안 됨 — 오래된 것부터 하루 --stale 개
  *  전체 하루 --max 종목(기본 20). 넘치는 종목은 다음 날로(기록).
  *
@@ -95,6 +97,14 @@ const universe = (await db.collection("universe_items").find({ active: { $ne: fa
 const results = new Map((await db.collection("verify_results").find({}, { projection: { market: 1, symbol: 1, runAt: 1, counts: 1, errors: 1 } }).toArray()).map((d) => [`${d.market}:${d.symbol}`, d]));
 const states = new Map((await stateCol.find({}).toArray()).map((d) => [d._id, d]));
 const isFailed = (r) => !!r && ((r.counts?.fail ?? 0) > 0 || (r.errors?.length ?? 0) > 0);
+const naOf = (c) => ({ unverifiable: c?.unverifiable ?? 0, common: c?.common ?? 0 });
+/** 검증불가·공통모드 증가 — 기준선보다 늘어난 항목만 { 항목: { before, after } }, 없으면 null */
+const naUp = (base, c) => {
+  if (!base) return null;
+  const now0 = naOf(c), up = {};
+  for (const k of ["unverifiable", "common"]) if (now0[k] > (base[k] ?? 0)) up[k] = { before: base[k] ?? 0, after: now0[k] };
+  return Object.keys(up).length ? up : null;
+};
 
 const corpMap = JSON.parse(readFileSync(path.join(ROOT, "src/lib/markets/kr/data/corpcodes.json"), "utf8"));
 const corpOf = (s) => { const row = corpMap.find((r) => (r.s ?? r.stock_code) === s); return row ? (row.c ?? row.corp_code) : null; };
@@ -159,6 +169,7 @@ for (const [key, u] of universe) {
     }
   }
   if (ONLY.has("failed") && isFailed(r)) { cand.push({ key, ...u, reason: "failed", sortKey: 2 + (lastRun ?? 0) / 1e14 }); continue; }
+  if (ONLY.has("failed") && st?.naIncrease && st.lastRunAt === r.runAt) { cand.push({ key, ...u, reason: "na-up", sortKey: 2 + (lastRun ?? 0) / 1e14 }); continue; }
   if (ONLY.has("stale") && lastRun != null && now - lastRun > STALE_MS) cand.push({ key, ...u, reason: "stale", sortKey: 3 + lastRun / 1e14 });
 }
 cand.sort((a, b) => a.sortKey - b.sortKey);
@@ -233,10 +244,16 @@ if (!DRY && targets.length) {
     const ok = posted && (v.code === 0 || v.code === 1 || v.code === 3);
     if (!ok) runFailed++;
     log(`  ${t.key} 검증 종료코드 ${v.code} · 결과 저장 ${posted ? "됨" : "안 됨"} · ${Math.round((Date.now() - t0) / 1000)}초${after?.counts ? ` · 통과 ${after.counts.pass} 실패 ${after.counts.fail} 검증불가 ${after.counts.unverifiable}` : ""}`);
-    done.push({ key: t.key, reason: t.reason, ok, code: v.code, ...(ok ? {} : { tail: v.tail.slice(-300) }) });
+    // 기준선 = 늘어나지 않은 마지막 실행의 검증불가·공통모드(처음이면 직전 결과, 직전 결과도 없으면 이번 결과)
+    const st0 = states.get(t.key);
+    const base = st0?.naBaseline ?? (results.get(t.key) ? naOf(results.get(t.key).counts) : null);
+    const up = posted ? naUp(base, after.counts) : null;
+    if (up) log(`  ${t.key} 검증불가·공통모드 증가 — ${Object.entries(up).map(([k, x]) => `${k} ${x.before} → ${x.after}`).join(" · ")}(재실행 대상)`);
+    done.push({ key: t.key, reason: t.reason, ok, code: v.code, ...(up ? { naIncrease: up } : {}), ...(ok ? {} : { tail: v.tail.slice(-300) }) });
     if (posted) {
       const f = filingNow.get(t.key) ?? t.filing;
-      await stateCol.updateOne({ _id: t.key }, { $set: { market: t.market, symbol: t.symbol, lastRunAt: after.runAt, lastReason: t.reason, lastCode: v.code, commit, ...(f?.id ? { filingId: f.id, filingDate: f.date, filingName: f.name } : {}) } }, { upsert: true });
+      await stateCol.updateOne({ _id: t.key }, { $set: { market: t.market, symbol: t.symbol, lastRunAt: after.runAt, lastReason: t.reason, lastCode: v.code, commit,
+        naIncrease: up, naBaseline: up ? base : naOf(after.counts), ...(f?.id ? { filingId: f.id, filingDate: f.date, filingName: f.name } : {}) } }, { upsert: true });
     }
   }
 }
@@ -265,6 +282,7 @@ if (!DRY) {
     code: { branch, commit },
     commit,
     run: { startedAt, finishedAt, ok: runSummary.ok, targets: targets.length, done: done.length, failedRuns: runFailed, deferred: deferred.length, dartUsedToday: usage1.total, dartBudget: BUDGET },
+    naIncrease: [...stAll.values()].filter((x) => x.naIncrease).map((x) => ({ key: x._id, ...x.naIncrease })),
     // 1호기가 운영 /api/cron/verify-results 로 그대로 넣는 원본(--post 가 보내는 VerifyResultDoc 그대로, _id 만 뺌, base = 2호기 표시)
     results: all.map((d) => ({ ...Object.fromEntries(Object.entries(d).filter(([k]) => k !== "_id")), base: "2호기 verify-dev(http://localhost:3000)" })),
     symbols: all.sort((a, b) => a._id.localeCompare(b._id)).map((d) => ({
@@ -274,6 +292,8 @@ if (!DRY) {
       verifiedAt: d.runAt,
       commit: d.commit ?? null,
       result: (d.errors?.length ?? 0) > 0 ? "error" : (d.counts?.fail ?? 0) > 0 ? "fail" : "pass",
+      // 검증불가·공통모드가 기준선보다 늘어난 종목(결과는 pass 일 수 있음 — 재실행 대상). 기준선 = 늘어나지 않은 마지막 실행
+      naIncrease: stAll.get(d._id)?.naIncrease ?? null,
       counts: { pass: d.counts?.pass ?? 0, fail: d.counts?.fail ?? 0, unverifiable: d.counts?.unverifiable ?? 0, common: d.counts?.common ?? 0, extMismatch: d.counts?.extMismatch ?? 0 },
       errors: (d.errors ?? []).slice(0, 3).map((e) => String(e).slice(0, 200)),
       topFails: (d.fails ?? []).slice(0, 5).map((f) => ({ layer: f.layer, name: f.name, col: f.col, note: String(f.note ?? "").slice(0, 160) })),
