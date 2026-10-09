@@ -93,7 +93,25 @@ const ROUNDUP_EN =
   /\b(top|biggest)\s+(gainers|losers|movers)\b|stocks?\s+to\s+watch|stock market today|market wrap|(premarket|midday|after-hours)\s+movers|stocks making the biggest moves|dow jones futures|stock futures (rise|fall|edge)|\broundup\b|market talk|top analyst calls/i;
 
 /** 일본 종목 한글 약칭이 사람 이름인 스포츠 기사("소니" = 손흥민 별명, "타케다" = SSG 투수) — 약칭으로만 걸렸을 때 뺀다(2026-10-10 6758·4502 표본) */
-export const JP_ALIAS_SPORTS_RE = /손흥민|토트넘|LAFC|A매치|\d+호\s?골|대표팀|KBO|NPB|SSG|1군|말소|선발\s?투수|투수|타자|홈런|이적/;
+export const JP_ALIAS_SPORTS_RE =
+  /손흥민|토트넘|LAFC|A매치|\d+호\s?골|대표팀|KBO|NPB|SSG|[123]군|말소|선발\s?투수|투수|타자|홈런|이적|야구|퓨처스|유망주|교류전|매직\s?넘버|호크스|승패/;
+
+/**
+ * 같은 한글 이름을 쓰는 일본 상장사 — 제목의 그 이름이 어느 회사인지 종목별 문맥어로 가른다(오너 지시 2026-10-10 — 9984 소프트뱅크그룹·
+ * 9434 소프트뱅크). 제목이 이름만 쓰고(그 이름이 약칭이든 정식명이든) 이 종목 문맥어가 있고 다른 종목 문맥어가 없을 때만 이 종목 기사로 본다.
+ * 둘 다 있거나 둘 다 없으면 어느 회사인지 모르는 것이라 뺀다. 프로야구 구단(후쿠오카 소프트뱅크 호크스) 기사는 JP_ALIAS_SPORTS_RE 가 먼저 뺀다.
+ * 문맥어는 2026-09-10~10-10 네이버 뉴스 제목("소프트뱅크" 93건)에서 골랐다 — 그룹: 오픈AI 투자·정크본드/채권·CDS·Arm 담보대출·RAI 인수·
+ * 손정의·주가 급등락(닛케이 대형주라 국내 기사의 "소프트뱅크 주가"는 그룹)·대출·신용등급, 통신: 공중 통신망(HAPS)·요금·휴대폰·LINE야후·PayPay.
+ * 그 93건 판정: 그룹 59·통신 1·야구 20·모름 11(랜섬웨어 피해 자회사·베어로보틱스 판매·합작법인 등 — 어느 회사인지 제목만으로 모름)·
+ * "소프트뱅크그룹" 표기 2(정식명으로 9984).
+ */
+export const JP_SHARED_NAME_CONTEXT: Record<string, Record<string, RegExp>> = {
+  소프트뱅크: {
+    "9984":
+      /손정의|마사요시|비전\s?펀드|SVF|SBG|소프트뱅크\s?그룹|오픈\s?AI|OpenAI|챗GPT|스타게이트|Stargate|\bArm\b|ARM|암\s?(홀딩스|지분|인수)|정크\s?본드|채권|사채|CDS|담보\s?대출|출자|지분|인수|투자|RAI|SBVA|주가|급락|급등|↓|↑|시총|자회사\s?IPO|계열사|대출|무디스|신용\s?등급|강등/,
+    "9434": /통신|휴대폰|스마트폰|아이폰|요금|5G|6G|기지국|LINE|라인\s?야후|야후|PayPay|페이페이|와이\s?모바일|Y!mobile|HAPS|성층권|무인기/,
+  },
+};
 
 /** 이름 바로 뒤가 "…다음 타자·…보다 더·…만 볼 때" — 그 회사가 아니라 다른 종목 얘기 */
 const NOT_ABOUT_KO = /(다음\s?타자|다음엔|보다\s?더|말고|만\s?볼\s?때|아닌|대신)/;
