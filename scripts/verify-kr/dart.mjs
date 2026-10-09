@@ -166,6 +166,30 @@ export async function dartXbrlFacts(rcept, reprt) {
   });
 }
 
+/**
+ * 분기·반기 보고서 XBRL 의 누적 기간 숫자 사실 [개념, 컨텍스트, 값] — 컨텍스트가 당기·전기 누적(CFY/PFY 연도 d FQ|HY|TQ A)이고 축이 없거나 연결/별도 축
+ * 하나뿐인 것만(현금흐름 LTM 전기 누적 = 정정본, 오너 결정 2026-10-10). 앱 xbrl.ts 와 코드를 나누지 않는 검증기 자체 판독. 판본 = 접수번호
+ */
+export async function dartXbrlCum(rcept, reprt) {
+  return versioned("xbrl-cum", `${rcept}_${reprt}`, `${rcept}-c1`, async () => {
+    const r = await getRaw(`${B}/fnlttXbrl.xml?crtfc_key=${KEY}&rcept_no=${rcept}&reprt_code=${reprt}`, `XBRL ${rcept}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (buf.length < 100) throw new Error(`DART XBRL ${rcept} 빈 응답(${buf.length}B)`);
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART XBRL ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const n = Object.keys(files).find((x) => x.endsWith(".xbrl"));
+    if (!n) throw new Error(`DART XBRL ${rcept} — zip 안에 .xbrl 없음`);
+    const xml = strFromU8(files[n]);
+    const CTX = /^([CP])FY(\d{4})d(FQ|HY|TQ)A(?:_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_(Consolidated|Separate)Member)?$/;
+    const out = [];
+    for (const m of xml.matchAll(/<([\w-]+):(\w+)\b[^>]*?contextRef="([^"]+)"[^>]*>(-?\d+(?:\.\d+)?)</g)) {
+      const c = CTX.exec(m[3]);
+      if (c) out.push([`${m[1]}:${m[2]}`, m[3], Number(m[4])]);
+    }
+    return out;
+  });
+}
+
 const DOC_FILTER_VER = "d1";
 /** 보고서 원문 중 "리스부채" 가 들어간 문장만(회계정책 — 리스부채를 어느 재무상태표 줄에 표시하는가). 판본 = 접수번호 */
 export async function dartDocLeaseSentences(rcept) {

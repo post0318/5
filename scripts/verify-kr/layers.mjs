@@ -10,7 +10,7 @@
  *     최신 정기보고서는 정기공시 목록(list.json)으로 정한다(앱 ttm.periodLabel 아님).
  *  K5 주당배당금(사업연도) = DART alotMatter, 배당수익률 = DPS ÷ KRX 연말 종가.
  */
-import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartDocLeaseCells, dartDocDaTables, dartCompany } from "./dart.mjs";
+import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartXbrlCum, dartDocLeaseCells, dartDocDaTables, dartCompany } from "./dart.mjs";
 import { daCandidates, invTableDep } from "./docda.mjs";
 import { dataGoDividends } from "./datago.mjs";
 import { krxCapsOn } from "./krx.mjs";
@@ -682,18 +682,49 @@ async function ltmLayer(c) {
     divPaid: [["ifrs-full_DividendsPaidClassifiedAsFinancingActivities"], ["배당금의지급", "배당금지급"], ["CF"]],
   };
   const kl = tt?.ttm?.krLtm ?? null;
-  const oldList = tt?.ttm?.krLtmPriorFromOldReport ?? [];
+  const why = tt?.ttm?.krLtmReasons ?? {};
   const xExp = {};
+  // 현금흐름 전기 누적 = 당기 분기·반기 보고서 XBRL 전기 칸(정정본, 오너 결정 2026-10-10 — 재무제표 API 는 분기 현금흐름 전기 열이 없다). XBRL 로 확인 못 하면
+  // 앱은 빈칸 + 사유여야 한다. XBRL 당기 누적 = 재무제표 API 당기 누적일 때만 같은 줄로 본다
+  let cum = null, cumErr = null;
+  try { cum = await dartXbrlCum(lp.rcept, lp.code); } catch (e) { cumErr = String(e?.message ?? e).slice(0, 120); }
+  const QC = { "11013": "FQ", "11012": "HY", "11014": "TQ" }[lp.code];
+  const member = cur.fsDiv === "CFS" ? "Consolidated" : "Separate";
+  const xCum = (ids, pre) => {
+    for (const id of ids) {
+      const nm = id.replace(/_/, ":");
+      const vs = new Set((cum ?? []).filter(([c0, ctx]) => c0 === nm && (ctx === pre || ctx === `${pre}_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_${member}Member`)).map((x) => x[2]));
+      if (vs.size === 1) return [...vs][0];
+      if (vs.size > 1) return undefined; // 못 정함
+    }
+    return null;
+  };
   for (const [k, it] of Object.entries(XT)) {
-    const r0 = ltmOf(it);
-    xExp[k] = r0.v;
-    exact("K4", `LTM ${k} (/ttm 부가 흐름) = DART 사업연도 + 당기 누적 − 전기 누적`, "LTM", kl ? (kl[k] ?? null) : null, r0.v, r0.how);
-    // 전년 같은 보고서 값을 쓴 항목은 앱도 그 사실을 기록해야(화면 주석) — 기록이 다르면 실패
-    if (r0.v != null) add("K4", `LTM ${k} 전기 누적 출처 표시`, "LTM", r0.old === oldList.includes(k) ? { status: PASS, note: r0.old ? "전년 같은 보고서(기록 있음)" : "당기 보고서 전기 열" } : { status: FAIL, note: `검증기 ${r0.old ? "전년 같은 보고서" : "당기 보고서 전기 열"} vs 앱 기록 ${oldList.includes(k) ? "전년 같은 보고서" : "당기 보고서"}` });
+    const isCf = it[2].includes("CF");
+    let r0 = ltmOf(it), expU = false;
+    if (isCf) {
+      const a = oneVal(pick(annualR ?? [], it), (r) => num(r.thstrm_amount)).v;
+      const cc = oneVal(pick(cur.rows, it), (r) => num(r.thstrm_add_amount) ?? num(r.thstrm_amount)).v;
+      if (cumErr) { r0 = { v: null, how: `XBRL 판독 실패 — ${cumErr}` }; expU = true; }
+      else {
+        const xc = xCum(it[0], `CFY${Y}d${QC}A`), xp = xCum(it[0], `PFY${Y - 1}d${QC}A`);
+        if (xc === undefined || xp === undefined) r0 = { v: null, how: "XBRL 같은 칸 값이 여럿 — 못 정함(빈칸 기대)" };
+        else if (cc != null && xc != null && xc !== cc) r0 = { v: null, how: `XBRL 당기 누적 ${xc} ≠ 재무제표 ${cc} — 같은 줄 아님(빈칸 기대)` };
+        else r0 = { v: a != null && cc != null && xc != null && xp != null ? a + cc - xp : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − XBRL 전기 누적(PFY${Y - 1}d${QC}A) ${xp}` };
+      }
+    }
+    xExp[k] = expU ? undefined : r0.v;
+    const appV = kl ? (kl[k] ?? null) : null;
+    const nm0 = `LTM ${k} (/ttm 부가 흐름) = DART 사업연도 + 당기 누적 − 전기 누적`;
+    if (expU) add("K4", nm0, "LTM", { status: NA, app: appV, note: `${r0.how} · 앱 ${appV ?? "빈칸"}${why[k] ? `(사유: ${why[k]})` : ""}` });
+    else if (r0.v == null && appV == null) add("K4", nm0, "LTM", why[k] || !isCf ? { status: PASS, note: `기대 빈칸 — ${r0.how}${why[k] ? ` · 앱 사유 ${why[k]}` : ""}` } : { status: FAIL, note: `기대 빈칸(${r0.how})인데 앱 사유 없음` });
+    else exact("K4", nm0, "LTM", appV, r0.v, r0.how);
   }
   // 하이라이트 LTM 영업현금흐름·자본지출(자본지출은 음수 표시)
-  exact("K4", "하이라이트 LTM 영업활동 현금흐름 = DART 사업연도 + 누적 − 전기 누적", "LTM", hrow("ocf"), xExp.ocf, "");
-  exact("K4", "하이라이트 LTM 자본지출 = −(DART 유형자산 취득 사업연도 + 누적 − 전기 누적)", "LTM", hrow("capex"), xExp.capex == null ? null : -Math.abs(xExp.capex), "");
+  if (xExp.ocf === undefined) add("K4", "하이라이트 LTM 영업활동 현금흐름 = DART 사업연도 + 누적 − 전기 누적", "LTM", { status: NA, app: hrow("ocf"), note: "XBRL 판독 실패 — 기대치 없음" });
+  else exact("K4", "하이라이트 LTM 영업활동 현금흐름 = DART 사업연도 + 누적 − 전기 누적", "LTM", hrow("ocf"), xExp.ocf, "");
+  if (xExp.capex === undefined) add("K4", "하이라이트 LTM 자본지출 = −(DART 유형자산 취득 사업연도 + 누적 − 전기 누적)", "LTM", { status: NA, app: hrow("capex"), note: "XBRL 판독 실패 — 기대치 없음" });
+  else exact("K4", "하이라이트 LTM 자본지출 = −(DART 유형자산 취득 사업연도 + 누적 − 전기 누적)", "LTM", hrow("capex"), xExp.capex == null ? null : -Math.abs(xExp.capex), "");
   // 재무분석 LTM 비율 — 매출총이익률·유효세율(분자·분모 모두 검증기 기대치)
   {
     const aRow = (nm) => (c.an?.sections ?? []).flatMap((x) => x.items ?? []).find((x) => String(x.accountName ?? "").trim() === nm)?.values ?? null;

@@ -90,6 +90,50 @@ function pickEntity(xml: string, nameRe: RegExp, prefix: string): number | null 
   return null;
 }
 
+/**
+ * 분기·반기 보고서 XBRL(rcpNo, reprtCode 11013·11012·11014)에서 개념별 누적 금액 — 당기(CFY{Y}d{FQ|HY|TQ}A)·전기(PFY{Y−1}d…A, 정정본).
+ * 오너 결정 2026-10-10: 현금흐름 LTM 전기 누적은 이 전기 칸(DART 재무제표 API 는 분기·반기 현금흐름표 전기 열을 주지 않는다). 컨텍스트 = 그 접두어만,
+ * 또는 연결/별도 축 하나만(다른 축이 붙은 칸은 제외). 같은 개념·컨텍스트 종류에 값이 둘 이상 다르면 null(못 정함). 조회 실패는 던진다(호출부가 사유)
+ */
+export async function krInterimXbrlCum(
+  rcpNo: string,
+  reprtCode: string,
+  year: number,
+  concepts: readonly string[],
+  fsDiv: "CFS" | "OFS",
+): Promise<{ cur: number | null; prior: number | null }> {
+  const buf = await dartRceptBinary("xbrl", rcpNo, async () => {
+    const res = await fetch(`${BASE}/fnlttXbrl.xml?crtfc_key=${key()}&rcept_no=${rcpNo}&reprt_code=${reprtCode}`, { signal: AbortSignal.timeout(45_000) });
+    if (!res.ok) throw new Error(`fnlttXbrl ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
+  });
+  let files;
+  try {
+    files = unzipSync(buf);
+  } catch {
+    throw new Error(`분기 보고서 XBRL ${rcpNo} 압축 해제 실패 — ${strFromU8(buf.slice(0, 160)).replace(/\s+/g, " ")}`);
+  }
+  const name = Object.keys(files).find((n) => n.endsWith(".xbrl"));
+  if (!name) throw new Error(`분기 보고서 XBRL ${rcpNo} — zip 안에 .xbrl 없음`);
+  const xml = strFromU8(files[name]);
+  const q = ({ "11013": "FQ", "11012": "HY", "11014": "TQ" } as Record<string, string>)[reprtCode];
+  if (!q) throw new Error(`분기 보고서 코드 아님 ${reprtCode}`);
+  const member = fsDiv === "CFS" ? "ConsolidatedMember" : "SeparateMember";
+  const okCtx = (ctx: string, pre: string) => ctx === pre || ctx === `${pre}_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_${member}`;
+  const read = (pre: string): number | null => {
+    for (const c of concepts) {
+      const local = c.replace(/^(ifrs-full|dart)_/, "");
+      const vals = new Set<number>();
+      for (const m of xml.matchAll(new RegExp(`<(?:ifrs-full|dart):${local}\\b[^>]*contextRef="([^"]+)"[^>]*>(-?\\d+(?:\\.\\d+)?)</`, "g")))
+        if (okCtx(m[1], pre)) vals.add(Number(m[2]));
+      if (vals.size === 1) return [...vals][0];
+      if (vals.size > 1) return null;
+    }
+    return null;
+  };
+  return { cur: read(`CFY${year}d${q}A`), prior: read(`PFY${year - 1}d${q}A`) };
+}
+
 /** 한 사업보고서(rcpNo)에서 당기·전기 2개년 D&A 추출. */
 async function fromReport(
   rcpNo: string,

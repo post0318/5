@@ -24,6 +24,7 @@ import { dartReportJson } from "./dart-cache";
 import { annualSeries, daAndAmortSeries, fetchKrFacts, seriesOf } from "./dart-facts";
 import { buildKrEvResolver, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCapsChecked } from "./dart-ev";
 import { KR_ANALYSIS_ACCOUNTS } from "./dart-analysis";
+import { krInterimXbrlCum } from "./xbrl";
 import { getKrDaDocChecked } from "@/lib/db/kr-da";
 
 const HINT =
@@ -129,6 +130,7 @@ interface FnlttRow {
   bfefrmtrm_nm?: string;
   bfefrmtrm_amount?: string;
   ord: string;
+  rcept_no?: string;
 }
 interface FnlttResponse extends DartEnvelope {
   list?: FnlttRow[];
@@ -563,18 +565,44 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
 
   const q = QUARTER_LABEL[interim.code] ?? "분기";
   // 부가 흐름(매출총이익·세전이익·법인세·현금흐름) — 같은 식, 셋 중 하나라도 없으면 null
-  const priorOld: string[] = [];
+  // 현금흐름표 전기 누적 = 당기 분기·반기 보고서 XBRL 의 전기 칸(정정본, 오너 결정 2026-10-10). XBRL 로 확인 못 한 칸은 빈칸 + 사유(전년 보고서 값으로
+  // 대신하지 않는다 — 정의가 다를 수 있다). XBRL 당기 누적이 재무제표 API 당기 누적과 같아야 같은 줄로 본다
+  const krLtmReasons: Record<string, string> = {};
+  const rcpt = interim.rows.find((r) => r.rcept_no)?.rcept_no ?? null;
+  let xbrlErr: string | null = null;
+  const xbrlCache = new Map<string, { cur: number | null; prior: number | null }>();
+  const xbrlCum = async (ids: readonly string[]) => {
+    const k = ids.join("|");
+    if (!xbrlCache.has(k)) xbrlCache.set(k, await krInterimXbrlCum(rcpt!, interim!.code, interim!.year, ids, interim!.fsDiv));
+    return xbrlCache.get(k)!;
+  };
+  const cfPrior: Record<string, number | null> = {};
+  for (const [k, d] of Object.entries(KR_ANALYSIS_ACCOUNTS).filter(([k]) => ["ocf", "capex", "intangAcq", "intPaid", "divPaid"].includes(k))) {
+    const c = isValue(interim.rows, d.names, "cumCur", undefined, d.ids, ["CF"]);
+    if (c == null) { cfPrior[k] = null; continue; }
+    if (!rcpt) { cfPrior[k] = null; krLtmReasons[k] = "분기 보고서 접수번호 없음 — 정정본 전기 누적(XBRL) 확인 불가"; continue; }
+    if (xbrlErr) { cfPrior[k] = null; krLtmReasons[k] = xbrlErr; continue; }
+    try {
+      const x = await xbrlCum(d.ids);
+      if (x.cur == null || x.prior == null) { cfPrior[k] = null; krLtmReasons[k] = `분기 보고서 XBRL 에 ${x.cur == null ? "당기" : "전기"} 누적 칸 없음 — LTM 빈칸`; }
+      else if (x.cur !== c) { cfPrior[k] = null; krLtmReasons[k] = `분기 보고서 XBRL 당기 누적 ${x.cur} ≠ 재무제표 ${c} — 같은 줄 확인 불가, LTM 빈칸`; }
+      else cfPrior[k] = x.prior;
+    } catch (e) {
+      xbrlErr = `분기 보고서 XBRL 조회 실패(${e instanceof Error ? e.message : String(e)}) — 정정본 전기 누적 확인 불가, LTM 빈칸`;
+      cfPrior[k] = null; krLtmReasons[k] = xbrlErr;
+    }
+  }
   const krLtm = krLtmOf((d, sjs, key) => {
     const a = isValue(annualRows!, d.names, "annual", undefined, d.ids, sjs);
     const c = isValue(interim!.rows, d.names, "cumCur", undefined, d.ids, sjs);
-    let p = isValue(interim!.rows, d.names, "cumPrior", undefined, d.ids, sjs);
-    // 당기 보고서에 전기 누적이 없을 때만(현금흐름표 — DART API 에 전기 열 없음) 전년 같은 보고서 값, 항목을 기록(화면 주석)
-    if (p == null && priorInterimRows) { p = isValue(priorInterimRows, d.names, "cumCur", undefined, d.ids, sjs); if (p != null) priorOld.push(key); }
+    const cf = sjs.includes("CF");
+    const p = cf ? (cfPrior[key] ?? null) : isValue(interim!.rows, d.names, "cumPrior", undefined, d.ids, sjs);
+    if (!cf && p == null && c != null) krLtmReasons[key] ??= "당기 보고서에 전기 누적 열 없음 — LTM 빈칸";
     return a != null && c != null && p != null ? a + c - p : null;
   });
   return {
     krLtm,
-    ...(priorOld.length ? { krLtmPriorFromOldReport: priorOld } : {}),
+    ...(Object.keys(krLtmReasons).length ? { krLtmReasons } : {}),
     periodLabel: `FY${annualYear} + ${interim.year} ${q} − ${interim.year - 1} ${q}`,
     lastQuarter: { year: interim.year, quarter: INTERIM_RANK[interim.code] },
     netIncome: ni.v,
@@ -620,7 +648,7 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
     const reasons: NonNullable<TtmFlows["reasons"]> = { ...(ttmRes?.reasons ?? {}) };
     const lastQuarter = ttmRes?.lastQuarter ?? null;
     const flows: TtmFlows | null = ttmRes
-      ? { periodLabel: ttmRes.periodLabel, netIncome: ttmRes.netIncome, revenue: ttmRes.revenue, opIncome: ttmRes.opIncome, eps: ttmRes.eps, ...(ttmRes.krLtm ? { krLtm: ttmRes.krLtm } : {}), ...(ttmRes.krLtmPriorFromOldReport ? { krLtmPriorFromOldReport: ttmRes.krLtmPriorFromOldReport } : {}) }
+      ? { periodLabel: ttmRes.periodLabel, netIncome: ttmRes.netIncome, revenue: ttmRes.revenue, opIncome: ttmRes.opIncome, eps: ttmRes.eps, ...(ttmRes.krLtm ? { krLtm: ttmRes.krLtm } : {}), ...(ttmRes.krLtmReasons ? { krLtmReasons: ttmRes.krLtmReasons } : {}) }
       : null;
     const parts: KrTtmParts = { ...(ttmRes?.parts ?? {}) };
     // **LTM = 최근 4개 분기 열 합(매출·영업이익·순이익, 2026-10-02 — 미국과 같은 원칙, 오너 결정 2026-09-28)**: 분기 손익계산서 화면의
