@@ -44,6 +44,9 @@ export interface IssueEvidenceReport {
   source: string;
   stockName: string;
   title: string;
+  /** 리포트 요약 발췌 앞부분(최대 500자) — claude.ai 커넥터에만 넘긴다(Gemini 입력엔 안 실림) */
+  summary?: string;
+  pdfUrl?: string | null;
 }
 
 export interface IssueEvidenceNews {
@@ -170,6 +173,8 @@ async function countFromResearch(
           source: d.source,
           stockName: d.stockName ?? "",
           title: d.title ?? "",
+          summary: (d.summary ?? "").replace(/\s+/g, " ").trim().slice(0, 500) || undefined,
+          pdfUrl: d.pdfUrl ?? null,
         };
         if (strong) slot.reports.unshift(ev);
         else slot.reports.push(ev);

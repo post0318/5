@@ -68,6 +68,9 @@ export interface WeeklyReportDoc {
     dropReasons: Record<string, string>;
   };
   model: string;
+  /** 누가 썼나 — 없으면 앱 자동 생성(Gemini/규칙). "claude-connector" = claude.ai 커넥터(`/api/mcp`)가
+   * 저장한 초안(검토 대기). 자동 생성·화면 초안 생성은 이 초안을 force 없이 덮어쓰지 않는다. */
+  origin?: "claude-connector";
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -101,7 +104,7 @@ export async function getWeeklyReport(id: string): Promise<WeeklyReportDoc | nul
 /** 목록용 — 본문 제외한 메타만 */
 export type WeeklyReportSummary = Pick<
   WeeklyReportDoc,
-  "_id" | "weekStart" | "weekEnd" | "status" | "title" | "generatedAt" | "publishedAt" | "updatedAt"
+  "_id" | "weekStart" | "weekEnd" | "status" | "title" | "generatedAt" | "publishedAt" | "updatedAt" | "origin"
 > & { costUsd: number };
 
 export async function listWeeklyReports(limit = 52): Promise<WeeklyReportSummary[]> {
@@ -120,6 +123,7 @@ export async function listWeeklyReports(limit = 52): Promise<WeeklyReportSummary
     generatedAt: d.generatedAt,
     publishedAt: d.publishedAt,
     updatedAt: d.updatedAt,
+    ...(d.origin ? { origin: d.origin } : {}),
     costUsd: d.usage?.costUsd ?? 0,
   }));
 }

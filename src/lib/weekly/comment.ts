@@ -347,7 +347,7 @@ function toPayloadMetric(m: { label: string; text: string; value: number; previo
   return { label: m.label, text: m.text, value: m.value, previous: m.previous, unit: m.unit };
 }
 
-interface CommentPayload {
+export interface CommentPayload {
   /** 웹검색 전용 호출(researchWebFacts)이 그 주에 확인한 사실 — 출처 도메인 포함 */
   webFacts: WebFact[];
   reportWeek: { start: string; end: string };
@@ -376,8 +376,8 @@ interface CommentPayload {
     /** 코드가 reports/news 에서 이미 뽑아 포맷한 사실 줄(evidence.ts
      * `buildFactsFromEvidence`) — headline·reading 작성의 1차 근거. */
     facts: string[];
-    reports: { date: string; source: string; stockName: string; title: string }[];
-    news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+    reports: { date: string; source: string; stockName: string; title: string; summary?: string; pdfUrl?: string }[];
+    news: { title: string; excerpt?: string; source: string; publishedAt: string; url?: string }[];
     earnings?: { ticker: string; period: string; epsActual: number | null; epsEstimate: number | null; surprisePct: number | null }[];
     /** 그 주에 새로 발표된 공식 지표만(evidence.ts fetchOfficialMetrics) — text 가 확정 표기 */
     metrics?: PayloadMetric[];
@@ -392,16 +392,16 @@ interface CommentPayload {
    * 근거로 신뢰도를 높인다). 근거가 없는 주제는 빠진다. */
   policyEvidence: {
     label: string;
-    reports: { date: string; source: string; stockName: string; title: string }[];
-    news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+    reports: { date: string; source: string; stockName: string; title: string; summary?: string; pdfUrl?: string }[];
+    news: { title: string; excerpt?: string; source: string; publishedAt: string; url?: string }[];
   }[];
   /** "경기" 계열(관세·중국 경기·고용·브라질 국채·금·원달러·구리·BDI) 근거 —
    * policyEvidence 와 같은 구조·같은 이유(오너 지시 2026-09-21, "5. 경제"
    * 섹션 신설). 근거가 없는 주제는 빠진다. */
   economyEvidence: {
     label: string;
-    reports: { date: string; source: string; stockName: string; title: string }[];
-    news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+    reports: { date: string; source: string; stockName: string; title: string; summary?: string; pdfUrl?: string }[];
+    news: { title: string; excerpt?: string; source: string; publishedAt: string; url?: string }[];
   }[];
   sectors: {
     id: string;
@@ -770,7 +770,24 @@ function buildPayload(
   sectors: WeeklySectors,
   meetings: CbMeeting[],
   extras: CommentExtras,
+  /** claude.ai 커넥터용 — 리포트 요약 발췌·PDF·기사 링크까지 싣는다(Gemini 입력은 그대로) */
+  rich = false,
 ): CommentPayload {
+  const rep = (r: WeeklyIssue["reports"][number], max: number) => ({
+    date: r.date,
+    source: r.source,
+    stockName: r.stockName,
+    title: r.title,
+    ...(rich && r.summary ? { summary: r.summary.slice(0, max) } : {}),
+    ...(rich && r.pdfUrl ? { pdfUrl: r.pdfUrl } : {}),
+  });
+  const nws = (n: WeeklyIssue["news"][number]) => ({
+    title: n.title,
+    excerpt: n.excerpt,
+    source: n.source,
+    publishedAt: n.publishedAt,
+    ...(rich && n.url ? { url: n.url } : {}),
+  });
   const weekEndMs = Date.parse(`${week.weekEnd}T00:00:00Z`);
   const nextStart = new Date(weekEndMs + 3 * 86_400_000).toISOString().slice(0, 10); // 금→월
   const nextEnd = new Date(weekEndMs + 7 * 86_400_000).toISOString().slice(0, 10); // 금→그다음 금
@@ -778,26 +795,16 @@ function buildPayload(
     const found = allIssues.find((i) => i.label === label);
     return {
       label,
-      reports: (found?.reports ?? []).map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
-      news: (found?.news ?? []).map((n) => ({
-        title: n.title,
-        excerpt: n.excerpt,
-        source: n.source,
-        publishedAt: n.publishedAt,
-      })),
+      reports: (found?.reports ?? []).slice(0, rich ? 6 : undefined).map((r) => rep(r, 250)),
+      news: (found?.news ?? []).map(nws),
     };
   }).filter((p) => p.reports.length > 0 || p.news.length > 0);
   const economyEvidence = ECONOMY_TOPIC_LABELS.map((label) => {
     const found = allIssues.find((i) => i.label === label);
     return {
       label,
-      reports: (found?.reports ?? []).map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
-      news: (found?.news ?? []).map((n) => ({
-        title: n.title,
-        excerpt: n.excerpt,
-        source: n.source,
-        publishedAt: n.publishedAt,
-      })),
+      reports: (found?.reports ?? []).slice(0, rich ? 6 : undefined).map((r) => rep(r, 250)),
+      news: (found?.news ?? []).map(nws),
     };
   }).filter((p) => p.reports.length > 0 || p.news.length > 0);
   return {
@@ -831,13 +838,8 @@ function buildPayload(
       newsCount: i.newsCount,
       searchInterest: i.searchInterest,
       facts: i.facts,
-      reports: i.reports.map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
-      news: i.news.map((n) => ({
-        title: n.title,
-        excerpt: n.excerpt,
-        source: n.source,
-        publishedAt: n.publishedAt,
-      })),
+      reports: i.reports.map((r) => rep(r, 500)),
+      news: i.news.map(nws),
       earnings: i.earnings?.map((e) => ({
         ticker: e.ticker,
         period: e.period,
@@ -949,6 +951,7 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
     }
     for (const r of i.reports) {
       nums.push(...extractNumbers(r.title));
+      if (r.summary) nums.push(...extractNumbers(r.summary));
     }
     for (const n of i.news) {
       nums.push(...extractNumbers(n.title));
@@ -959,7 +962,10 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
   // 근거 기사의 수치("실업률 4.2%")를 인용하기만 해도 "근거 없는 수치"로 통째로
   // 버려졌다(2026-10-05 발견, policyEvidence 와 같은 자기모순).
   for (const p of [...payload.policyEvidence, ...payload.economyEvidence]) {
-    for (const r of p.reports) nums.push(...extractNumbers(r.title));
+    for (const r of p.reports) {
+      nums.push(...extractNumbers(r.title));
+      if (r.summary) nums.push(...extractNumbers(r.summary));
+    }
     for (const n of p.news) {
       nums.push(...extractNumbers(n.title));
       if (n.excerpt) nums.push(...extractNumbers(n.excerpt));
@@ -1334,29 +1340,22 @@ async function researchWebFacts(
  * 호출부는 rule-based(빈 코멘트)로 조용히 폴백한다(이 프로젝트의 기존
  * "실패 시 해당 부분만 생략" 패턴과 동일).
  */
-export async function generateWeeklyComments(
-  snapshot: SnapshotRow[],
-  issues: WeeklyIssue[],
-  week: ReportWeek,
-  allIssues: WeeklyIssue[],
-  sectors: WeeklySectors,
-  extras: CommentExtras,
-  /** 모델 비교용 — 주면 그 모델만 쓴다(폴백 없음). */
-  modelOverride?: string,
-): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
-  if (!isGeminiConfigured() || issues.length === 0) return null;
+/** 모델(Gemini·claude.ai 커넥터) 응답을 검증해 코멘트로 확정한다 — 두 경로가 같은 검사를 거친다. */
+interface AssembleInput {
+  payload: CommentPayload;
+  allMeetings: CbMeeting[];
+  week: ReportWeek;
+  extras: CommentExtras;
+  macroParsed: MacroResponse | null;
+  macroTrustGrounded: boolean;
+  commentParsed: CommentsOnlyResponse | null;
+  commentTrustGrounded: boolean;
+  dropReasons: Map<string, string>;
+  webFacts: WebFact[];
+}
 
-  // 중앙은행 회의 일정은 공식 소스에서 가져온다(cb-calendar.ts). 프롬프트
-  // 입력과 "다음 주 일정" 캘린더가 같은 목록을 쓰도록 여기서 한 번만 조회.
-  const allMeetings = await getCentralBankMeetings();
-  // 프롬프트에는 앞으로 남은 것만 넘기고, 검증은 지난 회의 언급("9월
-  // FOMC에서 인상")도 참으로 봐야 해서 전체 목록을 쓴다.
-  const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
-  const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras);
-  // 웹검색 전용 소형 호출을 먼저 돌려 그 주 사실을 모은다(아래 researchWebFacts 주석).
-  const research = await researchWebFacts(payload, modelOverride);
-  payload.webFacts = research.facts;
-  const userJson = JSON.stringify(payload);
+function assembleComments(a: AssembleInput): WeeklyComments {
+  const { payload, allMeetings, week, extras, macroParsed, macroTrustGrounded, commentParsed, commentTrustGrounded, dropReasons } = a;
   const allowed = buildAllowedNumbers(payload);
   /**
    * 검증 두 단계를 한 번에 — 수치 대조(그라운딩 성공 시 건너뜀)와 중앙은행
@@ -1372,27 +1371,9 @@ export async function generateWeeklyComments(
     const aligned = alignSnapshotNumbers(step2.text, payload.snapshot, allowed);
     return { text: annotateNextMeeting(aligned, allMeetings, week.weekEnd), reason: null };
   };
-  const dropReasons = new Map<string, string>();
-  if (research.note) dropReasons.set("webFacts", research.note);
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
   const sectorIds = payload.sectors.map((s) => s.id);
-  // 매크로 콜(한 줄 결론·정책요약·캘린더)은 sectors 를 전혀 안 쓴다 — 그런데도
-  // 코멘트 콜과 같은 payload(userJson)를 그대로 넘기면 섹터 16개만큼 입력이
-  // 불필요하게 커져서, 이미 그라운딩 미스가 잦다고 알려진 매크로 콜(재시도
-  // 로직이 있는 이유)의 실패율을 더 키운다(실측 — sectors 추가 이후 "다음 주
-  // 일정"이 옛 기사-표 폴백으로 자주 떨어짐). 매크로 콜에는 sectors 를 뺀
-  // 별도 payload 를 준다.
-  const nextWeekSchedule = extras.schedule;
-  const macroJson = JSON.stringify({ ...payload, sectors: undefined, nextWeekSchedule });
-
-  const [macroCall, commentCall] = await Promise.all([
-    callWithGroundingRetry(MACRO_PROMPT, macroJson, "매크로", modelOverride, research.facts.length > 0 ? 1 : 2),
-    callWithGroundingRetry(COMMENT_PROMPT, userJson, "코멘트", modelOverride, research.facts.length > 0 ? 1 : 2),
-  ]);
-  const macroResult = macroCall.result;
-  const commentResult = commentCall.result;
-
   const comments: WeeklyComments = {
     headline: null,
     economySummary: null,
@@ -1402,17 +1383,9 @@ export async function generateWeeklyComments(
     issues: new Map(),
     sectors: new Map(),
     dropReasons,
-    webFacts: research.facts,
+    webFacts: a.webFacts,
   };
 
-  // --- 매크로(한 줄 결론·정책요약·캘린더) ---
-  const macroParsed = parseJson<MacroResponse>(macroResult.text, "매크로");
-  const macroTrustGrounded = macroResult.groundingSources.length > 0;
-  console.warn(
-    `[weekly] Gemini(매크로) 응답 요약 — model=${macroResult.model}, 응답길이=${macroResult.text.length}자, ` +
-      `groundingSources=${macroResult.groundingSources.length}건, trustGrounded=${macroTrustGrounded}, ` +
-      `parseJson성공=${macroParsed != null}`,
-  );
   if (macroParsed?.headline) {
     const r = verify(macroParsed.headline, macroTrustGrounded);
     comments.headline = r.text || null;
@@ -1512,15 +1485,6 @@ export async function generateWeeklyComments(
           : "모델이 캘린더를 생성하지 않음 + 코드로 확정되는 고정 일정도 이 기간엔 없음",
     );
   }
-
-  // --- 코멘트(스냅샷·이슈) ---
-  const commentParsed = parseJson<CommentsOnlyResponse>(commentResult.text, "코멘트");
-  const commentTrustGrounded = commentResult.groundingSources.length > 0;
-  console.warn(
-    `[weekly] Gemini(코멘트) 응답 요약 — model=${commentResult.model}, 응답길이=${commentResult.text.length}자, ` +
-      `groundingSources=${commentResult.groundingSources.length}건, trustGrounded=${commentTrustGrounded}, ` +
-      `parseJson성공=${commentParsed != null}`,
-  );
 
   for (const [rawName, text] of Object.entries(commentParsed?.snapshot ?? {})) {
     const canonical = matchCanonical(rawName, snapshotNames);
@@ -1622,6 +1586,80 @@ export async function generateWeeklyComments(
     );
   }
 
+  return comments;
+}
+
+export async function generateWeeklyComments(
+  snapshot: SnapshotRow[],
+  issues: WeeklyIssue[],
+  week: ReportWeek,
+  allIssues: WeeklyIssue[],
+  sectors: WeeklySectors,
+  extras: CommentExtras,
+  /** 모델 비교용 — 주면 그 모델만 쓴다(폴백 없음). */
+  modelOverride?: string,
+): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
+  if (!isGeminiConfigured() || issues.length === 0) return null;
+
+  // 중앙은행 회의 일정은 공식 소스에서 가져온다(cb-calendar.ts). 프롬프트
+  // 입력과 "다음 주 일정" 캘린더가 같은 목록을 쓰도록 여기서 한 번만 조회.
+  const allMeetings = await getCentralBankMeetings();
+  // 프롬프트에는 앞으로 남은 것만 넘기고, 검증은 지난 회의 언급("9월
+  // FOMC에서 인상")도 참으로 봐야 해서 전체 목록을 쓴다.
+  const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
+  const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras);
+  // 웹검색 전용 소형 호출을 먼저 돌려 그 주 사실을 모은다(아래 researchWebFacts 주석).
+  const research = await researchWebFacts(payload, modelOverride);
+  payload.webFacts = research.facts;
+  const userJson = JSON.stringify(payload);
+  const dropReasons = new Map<string, string>();
+  if (research.note) dropReasons.set("webFacts", research.note);
+  // 매크로 콜(한 줄 결론·정책요약·캘린더)은 sectors 를 전혀 안 쓴다 — 그런데도
+  // 코멘트 콜과 같은 payload(userJson)를 그대로 넘기면 섹터 16개만큼 입력이
+  // 불필요하게 커져서, 이미 그라운딩 미스가 잦다고 알려진 매크로 콜(재시도
+  // 로직이 있는 이유)의 실패율을 더 키운다(실측 — sectors 추가 이후 "다음 주
+  // 일정"이 옛 기사-표 폴백으로 자주 떨어짐). 매크로 콜에는 sectors 를 뺀
+  // 별도 payload 를 준다.
+  const nextWeekSchedule = extras.schedule;
+  const macroJson = JSON.stringify({ ...payload, sectors: undefined, nextWeekSchedule });
+
+  const [macroCall, commentCall] = await Promise.all([
+    callWithGroundingRetry(MACRO_PROMPT, macroJson, "매크로", modelOverride, research.facts.length > 0 ? 1 : 2),
+    callWithGroundingRetry(COMMENT_PROMPT, userJson, "코멘트", modelOverride, research.facts.length > 0 ? 1 : 2),
+  ]);
+  const macroResult = macroCall.result;
+  const commentResult = commentCall.result;
+
+  // --- 매크로(한 줄 결론·정책요약·캘린더) ---
+  const macroParsed = parseJson<MacroResponse>(macroResult.text, "매크로");
+  const macroTrustGrounded = macroResult.groundingSources.length > 0;
+  console.warn(
+    `[weekly] Gemini(매크로) 응답 요약 — model=${macroResult.model}, 응답길이=${macroResult.text.length}자, ` +
+      `groundingSources=${macroResult.groundingSources.length}건, trustGrounded=${macroTrustGrounded}, ` +
+      `parseJson성공=${macroParsed != null}`,
+  );
+  // --- 코멘트(스냅샷·이슈) ---
+  const commentParsed = parseJson<CommentsOnlyResponse>(commentResult.text, "코멘트");
+  const commentTrustGrounded = commentResult.groundingSources.length > 0;
+  console.warn(
+    `[weekly] Gemini(코멘트) 응답 요약 — model=${commentResult.model}, 응답길이=${commentResult.text.length}자, ` +
+      `groundingSources=${commentResult.groundingSources.length}건, trustGrounded=${commentTrustGrounded}, ` +
+      `parseJson성공=${commentParsed != null}`,
+  );
+
+  const comments = assembleComments({
+    payload,
+    allMeetings,
+    week,
+    extras,
+    macroParsed,
+    macroTrustGrounded,
+    commentParsed,
+    commentTrustGrounded,
+    dropReasons,
+    webFacts: research.facts,
+  });
+
   // 재시도분까지 포함해 실제 청구된 비용을 전부 합산한다(재시도로 버린 첫
   // 응답도 돈은 이미 냈으므로 usage 에서 누락하면 안 됨). 이제 코멘트
   // 호출도 재시도를 타므로 두 호출의 attempts 를 함께 센다.
@@ -1647,4 +1685,90 @@ export async function generateWeeklyComments(
   };
 
   return { comments, result: mergedResult };
+}
+
+// ---- claude.ai 커넥터(`/api/mcp`, 오너 지시 2026-10-10) -------------------------
+// Anthropic API 대신 오너 구독의 claude.ai 가 이 앱 데이터를 받아 해석을 쓴다(추가 비용 0).
+// 입력은 Gemini 와 같은 payload 에 리포트 요약 발췌·링크를 더한 것(rich), 출력은 같은
+// 검증(assembleComments)을 거친다. 차이는 하나 — Claude 가 웹에서 확인한 출처(sources)를
+// 같이 보내면 Gemini 그라운딩 성공과 같게 보고 숫자 대조를 건너뛴다. 회의 월 검사는 항상.
+
+function beforeOutputSection(prompt: string): string {
+  const i = prompt.indexOf("\n# 출력 형식");
+  return (i >= 0 ? prompt.slice(0, i) : prompt).trim();
+}
+
+export const CONNECTOR_GUIDE = `${beforeOutputSection(MACRO_PROMPT)}
+
+${beforeOutputSection(COMMENT_PROMPT).slice(beforeOutputSection(COMMENT_PROMPT).indexOf("# 작성 원칙")).replace("# 작성 원칙", "# 작성 원칙 (자산·이슈·섹터 코멘트)")}
+
+# claude.ai 커넥터로 쓸 때 (위 규칙에 더해)
+- 순서: get_weekly_data 로 받은 data 를 읽고 → 웹검색으로 그 주 사실을 확인하며 쓴 뒤 →
+  save_weekly_draft 로 저장한다. preview:true 로 먼저 보내면 저장 없이 완성 본문과 폐기 사유를 돌려준다.
+- data.webFacts 는 비어 있다(Gemini 전용 단계) — 필요한 사실은 직접 웹검색으로 확인한다.
+- 리포트 근거(reports)에는 증권사 리포트 요약 발췌(summary)와 PDF 링크가 있다. 제목만 보지 말고 발췌를 읽고 쓴다.
+- **issues.reading** 은 (a) 무엇이 일어났고 왜 중요한지(메커니즘) → (b) 다음에 무엇을 볼 것인가 →
+  (c) 그에 따른 대응 방안(투자 시사점)을 이어서 한 문단으로 쓴다(오너 지시 2026-10-10 — "무엇을 볼 것인가 다음에
+  이어 쓰면 된다"). 200~500자. 방안도 단정하지 말고 조건부로("~라면 ~유리").
+- 웹에서 확인한 사실을 쓰면 그 출처를 sources 에 넣는다({title,url}). sources 가 비어 있으면 입력 data 에 없는
+  수치(%·bp·배·pt·건)가 든 문장은 저장할 때 통째로 버려진다.
+- 키는 data 의 값을 그대로: snapshot = snapshot[].name, issues = issues[].label, sectors = sectors[].id.
+- 표·숫자·구조는 서버 코드가 만든다. 문장만 보낸다.`;
+
+/** get_weekly_data 응답용 — 리포트 요약 발췌를 담은 payload(webFacts 는 비움) */
+export async function buildConnectorPayload(
+  snapshot: SnapshotRow[],
+  issues: WeeklyIssue[],
+  week: ReportWeek,
+  allIssues: WeeklyIssue[],
+  sectors: WeeklySectors,
+  extras: CommentExtras,
+): Promise<CommentPayload & { nextWeekSchedule: ScheduleItem[] }> {
+  const allMeetings = await getCentralBankMeetings();
+  const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
+  return { ...buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras, true), nextWeekSchedule: extras.schedule };
+}
+
+/** save_weekly_draft 입력 — Gemini 두 호출의 응답 스키마를 합친 것 */
+export interface ConnectorComments {
+  headline?: string;
+  economySummary?: string;
+  policySummary?: string;
+  calendar?: { date?: string; event?: string }[];
+  snapshot?: Record<string, string>;
+  issues?: Record<string, string | { headline?: unknown; reading?: unknown }>;
+  sectors?: Record<string, string>;
+}
+
+export async function assembleConnectorComments(
+  snapshot: SnapshotRow[],
+  issues: WeeklyIssue[],
+  week: ReportWeek,
+  allIssues: WeeklyIssue[],
+  sectors: WeeklySectors,
+  extras: CommentExtras,
+  input: ConnectorComments,
+  sourceCount: number,
+): Promise<WeeklyComments> {
+  const allMeetings = await getCentralBankMeetings();
+  const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
+  const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras, true);
+  const trusted = sourceCount > 0;
+  return assembleComments({
+    payload,
+    allMeetings,
+    week,
+    extras,
+    macroParsed: {
+      headline: input.headline,
+      economySummary: input.economySummary,
+      policySummary: input.policySummary,
+      calendar: input.calendar,
+    },
+    macroTrustGrounded: trusted,
+    commentParsed: { snapshot: input.snapshot, issues: input.issues, sectors: input.sectors },
+    commentTrustGrounded: trusted,
+    dropReasons: new Map(),
+    webFacts: [],
+  });
 }

@@ -33,3 +33,20 @@ export function resolveReportWeek(now = new Date()): ReportWeek {
   const baseFriday = kstDateString(fridayMs - 7 * DAY);
   return { weekStart, weekEnd, baseFriday, today: kstDateString(now.getTime()) };
 }
+
+/**
+ * 월요일(YYYY-MM-DD)로 대상 주를 정한다 — claude.ai 커넥터(`/api/mcp`)가 지난 주를
+ * 지정할 때. 월요일이 아니거나, 그 주 금요일이 아직 안 지났거나(오늘 KST 이후),
+ * 8주보다 오래된 주(뉴스 검색이 그 기간을 못 받는다)는 null.
+ */
+export function reportWeekFromStart(weekStart: string, now = new Date()): ReportWeek | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return null;
+  const startMs = Date.parse(`${weekStart}T00:00:00Z`);
+  if (!Number.isFinite(startMs) || new Date(startMs).getUTCDay() !== 1) return null;
+  const today = kstDateString(now.getTime());
+  const weekEnd = new Date(startMs + 4 * DAY).toISOString().slice(0, 10);
+  if (weekEnd >= today) return null;
+  if (Date.parse(`${today}T00:00:00Z`) - startMs > 8 * 7 * DAY) return null;
+  const baseFriday = new Date(startMs - 3 * DAY).toISOString().slice(0, 10);
+  return { weekStart, weekEnd, baseFriday, today };
+}

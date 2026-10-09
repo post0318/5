@@ -10,10 +10,14 @@ import {
   type WeeklyReportDoc,
 } from "@/lib/db/weekly-reports";
 import {
+  assembleConnectorComments,
   buildCodeCalendar,
+  buildConnectorPayload,
+  CONNECTOR_GUIDE,
   generateWeeklyComments,
   nextWeekRange,
   type CommentExtras,
+  type ConnectorComments,
   type WebFact,
   type IssueComment,
   type WeeklyComments,
@@ -29,7 +33,8 @@ import { buildWeeklySectors, type WeeklySectors } from "./sectors";
 import { fetchShinhanSchedule } from "./shinhan-schedule";
 import { buildSnapshot, fillFromPrevious } from "./snapshot";
 import { WEEKLY_TOPICS } from "./topics";
-import { resolveReportWeek, type ReportWeek } from "./week";
+import { reportWeekFromStart, resolveReportWeek, type ReportWeek } from "./week";
+import { getWeeklyInputs, saveWeeklyInputs, type WeeklyInputsDoc } from "@/lib/db/weekly-inputs";
 
 /**
  * 주간 리포트 초안 생성.
@@ -305,8 +310,19 @@ export async function generateWeeklyReport(
       409,
     );
   }
+  if (existing?.origin === "claude-connector" && !opts.force) {
+    throw new WeeklyGenerateError(
+      `${week.weekStart} 주는 Claude 커넥터 초안이 있음 — 덮어쓰려면 "재생성"(force)`,
+      409,
+    );
+  }
 
-  const { snapshot, all, top, sectors, extras, notes } = await collect(week);
+  const collected = await collect(week);
+  const { snapshot, all, top, sectors, extras, notes } = collected;
+  // claude.ai 커넥터가 같은 입력을 쓰도록 보관(실패해도 생성은 계속)
+  await saveWeeklyInputs(toInputsDoc(week, collected)).catch((err) =>
+    console.warn("[weekly] 입력 보관 실패(리포트는 계속)", err),
+  );
   // 주제별 집계를 남긴다 — 몇 주 쌓이면 "평소 대비 배수" 정규화의 기준선이
   // 된다(과거를 역으로 조회할 수 없어 앞으로 쌓는 방식, 오너 지시 2026-09-21).
   // 실패해도 리포트 생성을 막지 않는다.
@@ -442,4 +458,163 @@ export async function compareWeeklyModels(models: string[]): Promise<{
     }
   }
   return { weekStart: week.weekStart, weekEnd: week.weekEnd, results };
+}
+
+// ---- claude.ai 커넥터(`/api/mcp`) ---------------------------------------------
+// 오너 지시 2026-10-10 — Anthropic API(별도 과금) 대신 오너 구독의 claude.ai 가 해석을 쓴다.
+// 조회(getConnectorData)와 저장(saveConnectorDraft)만 있고 발행·삭제는 없다.
+
+function toInputsDoc(week: ReportWeek, c: Collected): WeeklyInputsDoc {
+  return {
+    _id: week.weekStart,
+    week,
+    collectedAt: new Date(),
+    snapshot: c.snapshot,
+    all: c.all,
+    top: c.top,
+    sectors: c.sectors,
+    official: c.extras.official,
+    sectorNews: Object.fromEntries(c.extras.sectorNews),
+    schedule: c.extras.schedule,
+    codeCalendar: c.extras.codeCalendar,
+    notes: c.notes,
+  };
+}
+
+function extrasOf(d: WeeklyInputsDoc): CommentExtras {
+  return {
+    official: d.official,
+    sectorNews: new Map(Object.entries(d.sectorNews ?? {})),
+    schedule: d.schedule,
+    codeCalendar: d.codeCalendar,
+  };
+}
+
+function connectorWeek(weekStart?: string): ReportWeek {
+  if (!weekStart) return resolveReportWeek();
+  const w = reportWeekFromStart(weekStart);
+  if (!w) {
+    throw new WeeklyGenerateError(
+      `weekStart(${weekStart})는 지난 8주 안의 월요일이어야 하고 그 주 금요일이 지나 있어야 함`,
+      400,
+    );
+  }
+  return w;
+}
+
+/** 보관본이 있으면 그것, 없거나 refresh 면 새로 수집해 보관 */
+async function loadInputs(week: ReportWeek, refresh: boolean): Promise<WeeklyInputsDoc> {
+  if (!refresh) {
+    const cached = await getWeeklyInputs(week.weekStart);
+    if (cached) return cached;
+  }
+  const doc = toInputsDoc(week, await collect(week));
+  await saveWeeklyInputs(doc);
+  return doc;
+}
+
+export async function getConnectorData(opts: { weekStart?: string; refresh?: boolean }) {
+  const week = connectorWeek(opts.weekStart);
+  const inputs = await loadInputs(week, Boolean(opts.refresh));
+  const existing = await getWeeklyReport(week.weekStart);
+  const data = await buildConnectorPayload(inputs.snapshot, inputs.top, inputs.week, inputs.all, inputs.sectors, extrasOf(inputs));
+  return {
+    week: { start: week.weekStart, end: week.weekEnd },
+    collectedAt: inputs.collectedAt,
+    existingDraft: existing
+      ? {
+          status: existing.status,
+          by: existing.origin === "claude-connector" ? "claude-connector" : existing.model,
+          editedByOwner: existing.body !== existing.draftBody,
+          canSave: existing.status !== "published" && existing.body === existing.draftBody,
+        }
+      : null,
+    guide: CONNECTOR_GUIDE,
+    /** 코드 단계에서 못 채운 자료와 이유(예: FRED 키 없음) */
+    notes: inputs.notes,
+    data,
+  };
+}
+
+export interface ConnectorSaveResult {
+  saved: boolean;
+  weekStart: string;
+  /** 비어 남은 칸과 이유 — 고쳐서 다시 저장하면 된다 */
+  dropped: Record<string, string>;
+  body: string;
+}
+
+export async function saveConnectorDraft(opts: {
+  weekStart?: string;
+  comments: ConnectorComments;
+  sources: { title: string; url: string }[];
+  preview?: boolean;
+}): Promise<ConnectorSaveResult> {
+  const week = connectorWeek(opts.weekStart);
+  const existing = await getWeeklyReport(week.weekStart);
+  if (!opts.preview) {
+    if (existing?.status === "published") {
+      throw new WeeklyGenerateError(`${week.weekStart} 주 리포트는 이미 발행됨 — 커넥터는 발행본을 바꿀 수 없음`, 409);
+    }
+    if (existing && existing.body !== existing.draftBody) {
+      throw new WeeklyGenerateError(`${week.weekStart} 주 초안을 오너가 고쳐 둠 — 커넥터는 덮어쓰지 않음(/weekly 화면에서 처리)`, 409);
+    }
+  }
+  const inputs = await getWeeklyInputs(week.weekStart);
+  if (!inputs) throw new WeeklyGenerateError("이 주 입력 보관본이 없음 — get_weekly_data 를 먼저 호출", 409);
+  const extras = extrasOf(inputs);
+  const sources = opts.sources.filter((x) => /^https?:\/\//.test(x.url)).slice(0, 100);
+  const comments = await assembleConnectorComments(
+    inputs.snapshot,
+    inputs.top,
+    inputs.week,
+    inputs.all,
+    inputs.sectors,
+    extras,
+    opts.comments,
+    sources.length,
+  );
+  const body = await renderWeeklyReport({
+    week: inputs.week,
+    snapshot: inputs.snapshot,
+    issues: inputs.top,
+    sectors: inputs.sectors,
+    comments,
+    official: extras.official,
+    codeCalendar: extras.codeCalendar,
+  });
+  const dropped = Object.fromEntries(comments.dropReasons);
+  if (opts.preview) return { saved: false, weekStart: week.weekStart, dropped, body };
+
+  const now = new Date().toISOString();
+  const all = inputs.all;
+  await saveWeeklyReport({
+    _id: week.weekStart,
+    weekStart: week.weekStart,
+    weekEnd: week.weekEnd,
+    status: "draft",
+    title: `주간 거시·시황 요약 (${week.weekStart} ~ ${week.weekEnd})`,
+    body,
+    draftBody: body,
+    rawBody: body,
+    candidates: candidatesText(all, inputs.top),
+    snapshot: inputs.snapshot,
+    sources: {
+      researchCount: all.reduce((s, a) => s + a.researchCount, 0),
+      newsCount: all.reduce((s, a) => s + a.newsCount, 0),
+      telegramCount: 0,
+      youtubeCount: 0,
+      groundingQueries: [],
+      groundingSources: sources.map((x) => ({ title: x.title.slice(0, 200), uri: x.url })),
+      webFacts: [],
+      dropReasons: { ...inputs.notes, ...dropped },
+    },
+    model: "Claude (claude.ai 커넥터)",
+    origin: "claude-connector",
+    usage: { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, costUsd: 0, calls: 0 },
+    generatedAt: now,
+    publishedAt: null,
+    updatedAt: now,
+  });
+  return { saved: true, weekStart: week.weekStart, dropped, body };
 }

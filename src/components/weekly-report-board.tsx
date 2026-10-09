@@ -161,7 +161,7 @@ export function WeeklyReportBoard() {
                     it.status === "published" ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600",
                   )}
                 >
-                  {it.status === "published" ? "발행" : "초안"}
+                  {it.status === "published" ? "발행" : it.origin === "claude-connector" ? "검토 대기" : "초안"}
                 </span>
                 <span className="tnum">${it.costUsd.toFixed(2)}</span>
               </span>
@@ -222,7 +222,7 @@ function ReportView({ doc, busy, onSave, onPublish, onUnpublish, onRegenerate, o
                     doc.status === "published" ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600",
                   )}
                 >
-                  {doc.status === "published" ? "발행됨" : "초안"}
+                  {doc.status === "published" ? "발행됨" : doc.origin === "claude-connector" ? "검토 대기 · Claude 작성" : "초안"}
                 </span>
                 <span className="text-muted-foreground tnum text-xs">
                   본문 {chars.toLocaleString()}자 · {doc.model} · ${doc.usage.costUsd.toFixed(3)} · 생성 {fmtDate(doc.generatedAt)}
@@ -302,6 +302,8 @@ function ReportView({ doc, busy, onSave, onPublish, onUnpublish, onRegenerate, o
                   disabled={busy}
                   onClick={() => {
                     if (doc.status === "published" && !window.confirm("발행된 리포트를 새 초안으로 덮어씁니다. 계속할까요?")) return;
+                    // Claude 커넥터 초안은 앱 재생성(Gemini)으로 덮이면 되돌릴 수 없다
+                    if (doc.origin === "claude-connector" && !window.confirm("Claude 가 쓴 초안을 앱 자동 초안으로 덮어씁니다. 계속할까요?")) return;
                     onRegenerate();
                   }}
                 >
