@@ -5965,6 +5965,9 @@ async function verifyUs(sym) {
       // PaymentsOfOrdinaryDividends — CL·GLW·ASML(EUR) 이 쓰는 개념(2026-10-08 — 없어서 배당금 지급 검증불가 15건)
       ["cf:재무활동 현금흐름:배당금 지급", "배당금 지급", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], -1],
       ["cf:재무활동 현금흐름:자기주식 취득", "자기주식 취득", ["PaymentsForRepurchaseOfCommonStock"], -1],
+      // 차입 줄(2026-10-10 — 검사가 없어 MSFT 연간 조달·상환 빈칸, AMD LTM 상환 950(실제 0)을 놓쳤다). 본표에 같은 성격 줄이 있는데 앱 빈칸이면 실패(CF_FAMILY)
+      ["cf:재무활동 현금흐름:장기차입금 조달", "장기차입금 조달", ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts", "ProceedsFromDebtMaturingInMoreThanThreeMonths", "ProceedsFromShortTermDebt"], 1],
+      ["cf:재무활동 현금흐름:장기차입금 상환", "장기차입금 상환", ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt", "RepaymentsOfConvertibleDebt", "RepaymentsOfDebtAndCapitalLeaseObligations", "RepaymentsOfDebtMaturingInMoreThanThreeMonths", "RepaymentsOfCommercialPaper"], -1],
       ["cf:영업활동 현금흐름:주식보상비용", "주식보상비용", ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], 1],
     ];
     // 외화 공시(ASML·SPOT·TSM) 재무상태표·현금흐름표 A층(2026-10-08) — us-gaap USD 태그가 없어 "SEC 값 없음"으로 빠지던 칸을 원통화 공시값 × 연준
@@ -6010,7 +6013,10 @@ async function verifyUs(sym) {
     // 자기주식 취득 — 우선주 상환(BE PaymentsForRepurchaseOfConvertiblePreferredStock)은 보통주 자기주식이 아니다
     const CF_FAMILY = { "cf:재무활동 현금흐름:자기주식 취득": /^(?!.*Preferred).*(Repurchase|TreasuryStock|TreasuryShare|BuyBack|Buyback|AcquireOrRedeemEntitysShares|OwnShares)/i, "cf:영업활동 현금흐름:주식보상비용": /ShareBased|StockBased|StockCompensation|ShareCompensation|EquityCompensation/i,
       // 배당금 지급 — 받은 배당(SPOT 투자활동 DividendsReceivedClassifiedAsInvestingActivities)·비지배지분 분배는 제외
-      "cf:재무활동 현금흐름:배당금 지급": /^(?!.*(Receiv|MinorityInterest|NoncontrollingInterest)).*Dividend/i, "cf:투자활동 현금흐름:유형자산 취득": /PropertyPlantAndEquipment|ProductiveAssets|CapitalExpenditure|CapitalImprovements|FlightEquipment/i };
+      "cf:재무활동 현금흐름:배당금 지급": /^(?!.*(Receiv|MinorityInterest|NoncontrollingInterest)).*Dividend/i, "cf:투자활동 현금흐름:유형자산 취득": /PropertyPlantAndEquipment|ProductiveAssets|CapitalExpenditure|CapitalImprovements|FlightEquipment/i,
+      // 차입 총액 줄(순증감 ProceedsFromRepayments… · 리스는 제외)
+      "cf:재무활동 현금흐름:장기차입금 조달": /^(?!.*(Repayment|Lease|Securities|Stock|Equity|Warrant))[^_]*_Proceeds(From)?\w*(Debt|Borrowing|Notes|CommercialPaper|LinesOfCredit)/i,
+      "cf:재무활동 현금흐름:장기차입금 상환": /^(?!.*(Lease(?!Obligations)|ShortTermDebtMaturingInThreeMonthsOrLess))[^_]*_Repayments?Of\w*(Debt|Borrowing|Notes|CommercialPaper|LinesOfCredit)/i };
     const SBC_ID = "cf:영업활동 현금흐름:주식보상비용";
     const CAPEX_ID = "cf:투자활동 현금흐름:유형자산 취득", CAPEX_PARTS_V = ["PaymentsForFlightEquipment", "PaymentsToAcquireOtherProductiveAssets"];
     // 본표 줄 중 회사 고유 개념이면서 표시 라벨이 정확히 주식보상비용인 줄(표준 주식보상 개념이 본표에 없을 때만, 하나일 때만)
@@ -6024,10 +6030,12 @@ async function verifyUs(sym) {
       const find = (pred) => { for (let i = 0; i < (rcL.form ?? []).length; i++) if (pred(rcL.form[i], rcL.reportDate?.[i] ?? "")) return { accn: rcL.accessionNumber[i], form: rcL.form[i], d: rcL.reportDate[i] }; return null; };
       const curF = find((fm, d) => fm === "10-Q" && d && dayDiff(d, ltmDate) <= 7);
       const fyF = find((fm, d) => fm === "10-K" && d && d < ltmDate);
-      if (!curF || !fyF) return null;
+      // 최신 정기공시가 10-K(LTM = 그 사업연도 — LRCX 2026-06) — 아래 사업연도 판독 하나로 판정(2026-10-10)
+      const kAt = !curF ? find((fm, d) => fm === "10-K" && d && dayDiff(d, ltmDate) <= 7) : null;
+      if (!kAt && (!curF || !fyF)) return null;
       const priorD = new Date(Date.parse(ltmDate) - 365 * 864e5).toISOString().slice(0, 10);
-      const priorF = find((fm, d) => fm === "10-Q" && d && dayDiff(d, priorD) <= 10);
-      if (!priorF) return null;
+      const priorF = kAt ? null : find((fm, d) => fm === "10-Q" && d && dayDiff(d, priorD) <= 10);
+      if (!kAt && !priorF) return null;
       // 구성 기간: 사업연도(10-K, 300일 이상) · 당기 누적(사업연도 다음날부터 기준일) · 전년 동기 누적(그 전 사업연도 다음날부터 1년 전 기준일)
       const comp = async (fl, kind) => {
         const inst = await filingAtDate(cik, sub, fl.d);
@@ -6058,6 +6066,13 @@ async function verifyUs(sym) {
         const fam = CF_FAMILY[id], sib = fam ? [...face].filter((x) => fam.test(x)) : [];
         return { absent: true, sib, how: `${fl.form} ${fl.d} 본표에 ${cs.join("/")} 줄 없음${sib.length ? `(같은 성격 줄 ${sib.join(", ")} 있음)` : ""}` };
       };
+      if (kAt) {
+        const k0 = await comp(kAt, "FY");
+        if (k0.err) return null;
+        if (k0.v != null) return vsSource(app, sg * k0.v, EXACT, `LTM = 최신 10-K 사업연도: ${k0.how}${sg < 0 ? " × −1" : ""}`);
+        if (k0.sib?.length) return { status: NA, note: `LTM = 최신 10-K 사업연도 — 본표에 줄 없음이지만 같은 성격의 다른 줄 있음 · ${k0.how}`, app, src: null };
+        return app == null ? { status: PASS, note: `LTM = 최신 10-K 사업연도 — 본표에 줄 없음 → 앱 빈칸이 정답 · ${k0.how}`, app, src: null } : { status: FAIL, note: `LTM = 최신 10-K 사업연도 — 본표에 줄 없음인데 앱 ${app} · ${k0.how}`, app, src: null };
+      }
       const fy = await comp(fyF, "FY"), prior = await comp(priorF, "Q");
       let cur = await comp(curF, "Q");
       // 앱 0 채움 규칙(CLAUDE.md 2026-10-02 승인 — 투자·재무 줄이 당기 10-Q 본표에 없고 전년 동기가 0 이면 당기 누적 0) 재구현: 같은 조건을 원자료로 확인하면
@@ -6251,16 +6266,20 @@ async function verifyUs(sym) {
         if (v == null && (app === 0 || faceBlank) && c !== "LTM") {
           const accns = [...new Set((G.NetCashProvidedByUsedInOperatingActivities?.units?.USD ?? []).filter((e) => e.start && /^10-K/.test(e.form ?? "") && dayDiff(e.end, date) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300).map((e) => e.accn))];
           let found = null, read = 0, err = "";
+          const sibs = new Set();
           for (const accn of accns) {
             try {
               const ids = await cfFaceConcepts(cik, accn);
               if (!ids) continue;
               read++;
+              // 같은 성격의 다른 줄(앱 개념 목록 밖) — 있으면 "본표에 줄 없음"이 아니다(2026-10-10 MSFT 차입 줄)
+              if (CF_FAMILY[id]) for (const x of ids) if (CF_FAMILY[id].test(x) && !cs.some((t) => x === `us-gaap_${t}`)) sibs.add(`${x}(${accn})`);
               const t = cs.find((x) => ids.has(`us-gaap_${x}`));
               if (t) { found = { t, accn }; break; }
             } catch (e) { err = String(e).slice(0, 80); }
           }
           if (found) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, faceBlank ? { status: FAIL, note: `${found.t} 가 ${found.accn} 현금흐름표 표시 구조에 있고 이 기간 값 없음(—)인데 앱 빈칸(본표에 별도 줄 없음) — 0 이어야`, app, src: 0 } : { status: PASS, note: `본표 줄 있음·이 기간 값 없음(—) → 0 — ${found.t} 가 ${found.accn} 현금흐름표 표시 구조에 있음`, app, src: 0 }); continue; }
+          if (read && faceBlank && sibs.size) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: FAIL, note: `앱 빈칸(본표에 별도 줄 없음)인데 이 해 10-K 현금흐름표에 같은 성격 줄 ${[...sibs].join(", ")} 있음 — 앱 개념 목록 밖`, app, src: null }); continue; }
           if (read && faceBlank) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: PASS, note: `본표에 줄 없음 확인 — 이 해를 실은 10-K ${read}건 현금흐름표 표시 구조에 ${cs.join("/")} 없음 → 앱 빈칸(본표에 별도 줄 없음)`, app, src: null }); continue; }
           if (read) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: FAIL, note: `이 해를 실은 10-K ${read}건 현금흐름표에 ${cs.join("/")} 줄 없음인데 앱 0 — 오너 규칙(본표에 없는 줄 = 본표에 별도 줄 없음, 0 으로 채우지 않음)`, app, src: null }); continue; }
           if (err) hardErrors.push(`현금흐름표 표시 구조 조회 실패(${nm} ${c}): ${err}`);
@@ -6270,6 +6289,7 @@ async function verifyUs(sym) {
         //   · 셋 다 정해지면: 앱 = 사업연도 + 당기 누적 − 전년 동기(앱과 같은 식 — 공통모드)
         //   · 하나라도 본표에 줄이 없으면 LTM 은 만들 수 없다 → 앱 빈칸이 정답(통과). 단 같은 성격의 다른 줄(회사 고유·다른 표준 개념)이 그 본표에 있으면
         //     줄 없음으로 볼 수 없어 검증불가 유지, 투자·재무 줄이 당기 본표에 없고 전년 동기가 0 이면(앱 0 채움 규칙) 검증불가 유지
+        if (foreign && c === "LTM" && /차입금/.test(id)) continue; // 20-F LTM(6-K 요약) 차입 줄은 아래 20-F LTM 검사 범위 밖 — 2026-10-10 차입 줄 검사 추가 전과 같은 범위
         if (v == null && c === "LTM" && !foreign) {
           const r = await ltmCfFaceJudge(cs, app, sg, id, date).catch((e) => { hardErrors.push(`LTM 현금흐름 본표 판독 실패(${nm}): ${String(e).slice(0, 80)}`); return null; });
           if (r) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, r); continue; }
