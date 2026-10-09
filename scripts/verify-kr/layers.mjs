@@ -68,8 +68,8 @@ const IT = {
   op: [["dart_OperatingIncomeLoss", "ifrs-full_ProfitLossFromOperatingActivities"], ["영업이익", "영업이익손실", "영업손익"]],
   ni: [["ifrs-full_ProfitLoss"], ["당기순이익", "당기순이익손실", "분기순이익", "반기순이익", "연결당기순이익"]],
 };
-const EPS_D = [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "희석주당이익손실"]];
-const EPS_B = [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익"]];
+const EPS_D = [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "희석주당이익손실", "보통주기본및희석주당이익", "보통주기본및희석주당순이익", "기본및희석주당이익"]];
+const EPS_B = [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익", "보통주기본및희석주당이익", "보통주기본및희석주당순이익"]];
 const QCODE = { 1: "11013", 2: "11012", 3: "11014" };
 const QNAME = { 1: "1분기", 2: "반기", 3: "3분기" };
 
@@ -187,7 +187,8 @@ export async function krOriginalLayers(ctx) {
         mc: k.common, price: k.close ?? null,
         eq: bo ? parentEquity(bo.rows, bo.col) : null,
         rev: io ? { ...oneVal(pickRow(io[0], IT.rev[0], IT.rev[1]), f), how: `DART 매출(${y + io[1]} 보고서)` } : null,
-        eps: io ? { v: epsOfRows(io[0], f), how: `DART EPS(${y + io[1]} 보고서)` } : null,
+        // EPS = A층이 DART 에서 직접 읽은 희석 EPS(미공시면 기본 — 앱 값 아님). layers 의 간이 판독은 "기본 및 희석주당이익" 같은 이름을 놓쳤다(009150 2021)
+        eps: ctx.dartVint?.[`${col}|희석 EPS`] ? { v: ctx.dartVint[`${col}|희석 EPS`].latest ?? null, how: "DART EPS(A층 판독 — 그해를 담은 가장 최근 보고서)" } : { v: null, how: "A층 DART EPS 판독 없음" },
       });
     }
   }

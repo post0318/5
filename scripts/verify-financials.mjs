@@ -10925,7 +10925,7 @@ async function verifyKr(sym) {
   {
     const corp = KR_CORP.get(sym);
     if (corp) await krOriginalLayers({
-      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same,
+      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same, dartVint,
       consts: { PASS, FAIL, NA, COMMON },
       // 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 와 정확 대조
       quarter: { isq, bsq, cfq }, items: KR_A_ITEMS,
