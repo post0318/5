@@ -38,6 +38,7 @@ import {
   SYN_OP_INCOME,
   type EvBlocker,
   type EvContext,
+  daDiscMixYears,
 } from "./edgar-ev";
 import type { ClassAFacts } from "./edgar-classfacts";
 
@@ -93,6 +94,7 @@ const CAPEX_CONCEPTS = [
   "PaymentsToAcquirePropertyPlantAndEquipment",
   "PaymentsToAcquireProductiveAssets",
   "PaymentsForCapitalImprovements", // GLW 설비투자(2026-10-08)
+  "CapexComponentsDerived", // 합계 줄 없는 공시의 항공기 + 기타 유형자산(DAL 2026, edgar-cf-wc.ts)
 ];
 
 function daysBetween(a: string, b: string): number {
@@ -567,6 +569,9 @@ export function buildUsHighlights(
         const oc = opCells.get(Number(c.key.slice(2)));
         if (oc?.v == null) o[i] = oc?.note ?? "영업이익 없음(fin)";
       });
+    // 감가상각 줄에 중단사업분이 섞여 비운 사업연도(edgar-ev.ts daDiscMixYears — IBM 2021)
+    const dm = daDiscMixYears(facts);
+    columns.forEach((c, i) => { if (c.kind === "fy" && ebitda[i] == null && !o[i] && dm.has(Number(c.key.slice(2)))) o[i] = dm.get(Number(c.key.slice(2)))!; });
     return o;
   })();
   const nOcf = ltmNote(E.ocf);

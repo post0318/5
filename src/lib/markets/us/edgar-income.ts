@@ -23,7 +23,7 @@ import {
   splitFactorsByYear,
   type QuarterCol,
 } from "./edgar-series";
-import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, OPINC_FIN_FAIL, opIncomeIsDerived, opIncomeViaFin, pickDa, pickDaPeriod, SYN_OP_INCOME } from "./edgar-ev";
+import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daDiscMixYears, daStructConcept, daTtmCell, OPINC_FIN_FAIL, opIncomeIsDerived, opIncomeViaFin, pickDa, pickDaPeriod, SYN_OP_INCOME } from "./edgar-ev";
 import { FY_EPS_NOTE, fyEps, ltmEpsOf, ltmNetIncomeOf, netIncomeAnnualByYear, netIncomeToParentEntries } from "./edgar-pershare";
 import { buildShareResolver } from "./edgar-shares";
 import { classAEps, type ClassAFacts } from "./edgar-classfacts";
@@ -558,6 +558,11 @@ export function buildUsIncome(
       if (totals.some(g) || (!totals.some((t) => t[LTM] != null) && (g(dep) || g(am)))) o[LTM] = null;
     }
     if (!quarterly && o[LTM] == null && o[labels[labels.length - 2]] != null) note(o, LTM, "LTM 감가상각비 구성 분기 없음");
+    // 사업연도 감가상각 줄에 중단사업분이 섞였고 금액 미공시 — 공란 + 사유(edgar-ev.ts daDiscMixYears, 오너 결정 2026-10-09 IBM 2021)
+    if (!quarterly) {
+      const dm = daDiscMixYears(facts);
+      for (const p of periods) if (p.label !== LTM && dm.has(p.fiscalYear)) { o[p.label] = null; note(o, p.label, dm.get(p.fiscalYear)!); }
+    }
     return o;
   })();
   const oneOff = unavailableOn(facts, "oneOff") ? blank() : val(["OneOffChargesDerived"]);
