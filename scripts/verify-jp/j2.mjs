@@ -106,7 +106,8 @@ export function evComponents(d, D, which) {
   const val = (k) => plainValue(d, k, { instant: D });
   const isLiab = (k) => ancestors(par, k).some((a) => /^(Total)?(Current|NonCurrent|Noncurrent)?L[a-z]*bilit/.test(local(a)) && !/AndEquity|AndNetAssets/.test(local(a)));
   const isCurAsset = (k) => ancestors(par, k).some((a) => /^CurrentAssets/.test(local(a)));
-  const financial = [...d.facts.keys()].some((k) => /(BNK|INS)$/.test(k));
+  // 금융업 서식 = 손익계산서 본표에 은행·보험·증권 요소(…BNK·INS·SEC) — 주석 사실(JR東海)·재무상태표 한 줄(セブン&アイ コールマネー)로 판정하지 않는다
+  const financial = [...d.roles.values()].filter((r) => r.kind === "is" && r.cons === d.consUsed).some((r) => [...r.concepts].some((k) => /(BNK|INS|SEC)$/.test(k)));
   const debtKs = [...concepts].filter((k) => DEBT_ID.test(local(k)) && !NOT_DEBT_ID.test(local(k)) && isLiab(k));
   const top = debtKs.filter((k) => !ancestors(par, k).some((a) => debtKs.includes(a)));
   const parts = top.map((k) => ({ k, f: val(k) })).filter((x) => x.f && !x.f.conflict && x.f.v != null);
@@ -120,13 +121,18 @@ export function evComponents(d, D, which) {
   const r = {
     debt: { v: debtBs, how: parts.map((x) => `${local(x.k)} ${x.f.v / 1e6}`).join(" + ") || "차입금 꼴 요소 없음(0)" },
     cash: cashP.length ? { v: cashP.reduce((a, x) => a + x.f.v, 0), how: cashP.map((x) => local(x.k)).join(" + ") } : { why: "현금 꼴 요소 없음" },
-    // 비지배지분 줄이 본표에 없으면 빈칸(줄 없음 = 빈칸 — 미국·한국과 같은 표시 규칙, EV 계산은 0)
-    nci: nciK ? { v: nciF?.v ?? 0, how: local(nciK) } : { blank: "본표에 비지배지분 줄 없음" },
+    // 비지배지분 줄이 본표에 없으면 — 자본총계 줄이 있으면 0(자본총계 = 지배주주 자본), 자본총계 줄도 없으면 빈칸
+    nci: nciK ? { v: nciF?.v ?? 0, how: local(nciK) } : ["jpigp_cor:EquityIFRS", "jppfs_cor:NetAssets"].some((k) => concepts.has(k) && val(k)?.v != null) ? { v: 0, how: "비지배지분 줄 없음 · 자본총계 있음(0)" } : { blank: "본표에 비지배지분·자본총계 줄 없음" },
     evBlank: null,
     evWhy: null,
   };
-  if (financial) r.evBlank = "금융업 서식(BNK·INS 요소)";
-  const captive = [...concepts].find((k) => /FinancialServices/.test(local(k)) && /(CA|NCA)IFRS$|Assets?$/.test(local(k)) && val(k)?.v != null);
+  if (financial) {
+    r.evBlank = "금융업 서식(BNK·INS 요소)";
+    r.debt = { blank: "금융업 서식 — 총차입금 미산정" };
+    return r;
+  }
+  // 금융사업 연결 = 금융서비스 자산(…FinancialServices…) 또는 은행업 예금(…BankingBusiness — セブン銀行) 요소에 값
+  const captive = [...concepts].find((k) => ((/FinancialServices/.test(local(k)) && /(CA|NCA)IFRS$|Assets?$/.test(local(k))) || /BankingBusiness/.test(local(k))) && val(k)?.v != null);
   if (!r.evBlank && captive) r.evBlank = `금융사업 연결(${local(captive)})`;
   const mixed = top.find((k) => /AndOtherFinancialLiabilit/.test(local(k)));
   if (mixed) {

@@ -101,9 +101,10 @@ const isLease: Pred = (l) => isDebt(l) && /リース負債|リース債務/.test
 const isCash: Pred = (l) =>
   inCurAssets(l) &&
   (byK("jpigp_cor:CashAndCashEquivalentsIFRS", "jppfs_cor:CashAndDeposits", "jppfs_cor:CashAndCashEquivalents")(l) ||
-    /^(現金及び現金同等物|現金及び預金|定期預金|短期投資|有価証券|短期運用有価証券)$/.test(l.label));
+    /^(現金及び現金同等物|現金及び預金|定期預金|短期投資|有価証券|短期運用有価証券|短期運用資産)$/.test(l.label));
 // 금융사업 연결 — 금융사업 자산 줄(도요타 金融事業に係る債権, 소니 2025년 3월기까지 金融分野における投資及び貸付, 혼다 金融サービスに係る債権)
-const CAPTIVE_RE = /金融事業に係る債権|金融分野における投資及び貸付|金融事業に係る|金融サービスに係る債権/;
+// セブン&アイ 銀行業における預金(セブン銀行) — 은행업 예금이 연결 부채에 있으면 금융사업 연결
+const CAPTIVE_RE = /金融事業に係る債権|金融分野における投資及び貸付|金融事業に係る|金融サービスに係る債権|銀行業における/;
 
 const REV_PREDS: Pred[] = [
   byLabel(/^(営業収益合計|売上収益合計|収益合計|売上高合計|売上高及び.*合計|営業収益及び.*合計)$/),
@@ -198,8 +199,9 @@ export function jpFundamentals(model: JpFinModel): JpFund {
   const is = [...linesOf(model, view, "is")];
   const bs = linesOf(model, view, "bs");
   const cf = linesOf(model, view, "cf");
-  const allK = [...is, ...bs].map((l) => local(l.k));
-  const financial = allK.some((k) => /(BNK|INS|SEC)$/.test(k));
+  // 금융업 서식 = 손익계산서가 은행·보험·증권 요소(…BNK·INS·SEC) — 재무상태표 줄 하나로 판정하지 않는다(セブン&アイ 의 コールマネー
+  // CallMoneyLiabilitiesBNK 한 줄 때문에 소매업 전체가 금융 서식으로 잡혔다)
+  const financial = is.some((l) => /(BNK|INS|SEC)$/.test(local(l.k)));
   const lastFyIdx = view.cols.map((c, i) => (c.label === JP_LTM ? -1 : i)).filter((i) => i >= 0).pop() ?? -1;
   const ltmIdx = view.cols.findIndex((c) => c.label === JP_LTM);
   const ltmIsFy = ltmIdx >= 0 && lastFyIdx >= 0 && view.cols[ltmIdx].endDate === view.cols[lastFyIdx].endDate;

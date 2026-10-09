@@ -145,7 +145,16 @@ export function parseDoc(files) {
       if (a.pl && /negated/i.test(a.pl)) neg.add(a.to);
       // 기초·기말 잔액 줄(현금흐름표 現金及び現金同等物の期首·期末残高 — 같은 개념이 두 번)
       const pl = a.pl && /periodStart/i.test(a.pl) ? "s" : a.pl && /periodEnd/i.test(a.pl) ? "e" : "";
-      pls.set(a.to, (pls.get(a.to) ?? "") + pl);
+      // 출현마다 한 글자(이름표 없음 = "-") — 같은 개념이 그 서류 본표에 몇 번 나오는지 셀 수 있게
+      pls.set(a.to, (pls.get(a.to) ?? "") + (pl || "-"));
+    }
+    // 현금흐름표의 시점(instant) 개념에 기초·기말 이름표가 없으면 기말(XBRL 시점 값의 기본 표시 — 第一三共 期末残高(連結財政状態計算書計上額)·
+    // …IfDifferentFromBSBalance). 사실이 시점 문맥뿐인 개념만
+    if (c.kind === "cf") {
+      for (const [k, s] of pls) {
+        const fs = facts.get(k) ?? [];
+        if (s.includes("-") && fs.length && fs.every((f) => ctx.get(f.ctx)?.instant)) pls.set(k, s.replace(/-/g, "e"));
+      }
     }
     roles.set(c.role, { ...c, concepts, neg, pls });
   }

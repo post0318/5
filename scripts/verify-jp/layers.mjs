@@ -172,7 +172,8 @@ function revenueByCalc(d, per) {
   let node = OPINC_ROOTS.find((r) => kids(r).length);
   for (let guard = 0; node && guard < 6; guard++) {
     const ks = kids(node);
-    if (!ks.length || ks.every((a) => a[2] === 1)) return node === OPINC_ROOTS.find((r) => r === node) ? null : node;
+    // 이익 개념(営業総利益 — セブン&アイ: 売上総利益 + その他の営業収入)은 자식이 모두 +1 이어도 매출이 아니다 → 표준 매출 요소로
+    if (!ks.length || ks.every((a) => a[2] === 1)) return node === OPINC_ROOTS.find((r) => r === node) || /Profit|Income(?!.*Revenue)/.test(node.slice(node.indexOf(":") + 1)) ? null : node;
     // 절댓값 기준(키옥시아 FY2024 — 売上総利益이 음수라 값 기준이면 その他の収益으로 샜다)
     const pos = ks.filter((a) => a[2] === 1 && val(a[1]) != null).sort((a, b) => Math.abs(val(b[1])) - Math.abs(val(a[1])));
     if (!pos.length) return null;
@@ -276,6 +277,9 @@ const negPls = (roles) => {
 /** 서류 d 의 줄 l 기대값(부호·기초/기말 반영) — 역할에 개념이 없으면 undefined */
 function expIn(d, roles, kind, per, l, np) {
   if (!roles.some((r) => r.concepts.has(l.concept))) return undefined;
+  // 그 서류 본표에 이 개념이 l.occ 번째로는 나오지 않음(혼다 2026 有報 — 現金及び現金同等物 은 기초 줄 하나, 기말은 …IfDifferentFromBSBalance) → 줄 없음
+  const occN = np.pls.get(l.concept)?.length;
+  if (occN != null && l.occ >= occN) return undefined;
   const pos = (np.pls.get(l.concept) ?? "")[l.occ] ?? "";
   const f = valueIn(d, l.concept, kind, per, pos);
   if (!f || f.conflict || f.v == null) return f;
@@ -359,7 +363,13 @@ export async function jpAnnualLayers(sym, app, { add, PASS, FAIL, NA, hardErrors
       // 매출은 계산 구조 규칙 먼저(소니 — 売上高(NetSalesIFRS)은 구성 요소, 매출 합계는 그 위 노드), 못 정하면 표준 요소
       let concept = name === "매출" ? revenueByCalc(d, per) : null;
       let how = concept ? "계산 구조 규칙 J-A3" : "표준 요소";
-      concept ??= ids.find((c) => inRole(c) && valueIn(d, c, kind, per, "e")?.v != null) ?? null;
+      if (!concept) {
+        // 표준 요소 후보가 여럿이면 다른 후보의 계산 구조 조상인 것(합계) — セブン&アイ 営業収益 = 売上高 + 営業収入
+        const cands = ids.filter((c) => inRole(c) && valueIn(d, c, kind, per, "e")?.v != null);
+        const arcs = [...d.calc.values()].flat();
+        const isAnc = (a, b) => { for (let p = b, i = 0; i < 10; i++) { const e = arcs.find((x) => x[1] === p); if (!e) return false; if (e[0] === a) return true; p = e[0]; } return false; };
+        concept = cands.find((c) => cands.some((o) => o !== c && isAnc(c, o))) ?? cands[0] ?? null;
+      }
       if (!concept) {
         if (name === "경상이익" && std !== "Japan GAAP") continue;
         if (name === "지배주주 자본" && std === "Japan GAAP") continue;
@@ -417,9 +427,14 @@ export async function jpAnnualLayers(sym, app, { add, PASS, FAIL, NA, hardErrors
         // 앱과 정확히 같고, 그 값을 2자리 반올림하면 재작성 값과 같을 때만 통과(두 공시가 식으로 이어짐)
         const alt = epsIn(colOf.is);
         const r2 = (x) => Math.sign(x) * Math.round(Math.abs(x) * 100 + 1e-9) / 100;
-        if (alt && alt.d !== got.d && eq(hv, alt.exp) && got.factor === 1 && r2(alt.exp) === got.v) {
+        // 회사마다 재작성 끝자리 처리가 다르다 — 반올림(소니 141.032 → 141.03)·버림(KDDI 299.73 ÷ 2 = 149.865 → 149.86, ブリヂストン 483.41 ÷ 2 = 241.705 → 241.70)
+        const t2 = (x) => Math.sign(x) * Math.floor(Math.abs(x) * 100 + 1e-9) / 100;
+        // 나중 有報가 분할 전 숫자를 소급하지 않고 그대로 다시 실은 경우(ユニクロ FY2021 1660.44 — 2023-02 1:3 분할 뒤 2025 有報에도 1660.44): 두 서류 값이
+        // 정확히 같으면 나중 서류의 숫자도 원 서류 주식 기준 → 원 서류 경로(÷ 그 뒤 분할)가 기대값
+        const sameRaw = alt && alt.d !== got.d && got.v === alt.v && alt.factor !== 1;
+        if (alt && alt.d !== got.d && eq(hv, alt.exp) && ((got.factor === 1 && (r2(alt.exp) === got.v || t2(alt.exp) === got.v)) || sameRaw)) {
           kv.eps = alt.exp;
-          add("A", NAME, label, { status: PASS, app: hv, src: alt.exp, note: `${desc(alt)} — 재작성 경영지표 ${got.v}(${got.d.row.docID}) = 2자리 반올림` });
+          add("A", NAME, label, { status: PASS, app: hv, src: alt.exp, note: sameRaw ? `${desc(alt)} — 나중 경영지표 ${got.v}(${got.d.row.docID})가 같은 숫자(소급 안 함)` : `${desc(alt)} — 재작성 경영지표 ${got.v}(${got.d.row.docID}) = 2자리 반올림·버림` });
         } else add("A", NAME, label, { status: FAIL, app: hv, src: got.exp, note: `하이라이트 ${hv} vs 경영지표 ${desc(got)}${alt && alt.d !== got.d ? ` · 손익 열 서류 경로 ${desc(alt)} = ${alt.exp}` : ""}` });
       }
     }
@@ -446,7 +461,10 @@ export async function jpHalfLayers(sym, app, { add, PASS, FAIL, NA, hardErrors }
   const ann = await companyDocs(sym, hardErrors, ANNUAL_OK, "有報");
   if (!ann) return;
   const h1m = h1EndMonth(ann.code.fyEnd);
-  const half = await companyDocs(sym, hardErrors, (r) => r.docTypeCode === "160" || r.docTypeCode === "170" || ((r.docTypeCode === "140" || r.docTypeCode === "150") && Number(r.periodEnd?.slice(5, 7)) === h1m), "반기 서류");
+  // 옛 四半期報告書 第2四半期와 그 訂正(150 — 목록에 기간이 없어 원 서류 번호로. KDDI 2026-03 제출 訂正 = 2023 Q2 소급 재작성)
+  const ix = await docIndex();
+  const q2 = new Set(ix.docs.filter((r) => r.docTypeCode === "140" && Number(r.periodEnd?.slice(5, 7)) === h1m).map((r) => r.docID));
+  const half = await companyDocs(sym, hardErrors, (r) => r.docTypeCode === "160" || r.docTypeCode === "170" || (r.docTypeCode === "140" && q2.has(r.docID)) || (r.docTypeCode === "150" && q2.has(r.parentDocID)), "반기 서류");
   if (!half) return;
   if (!half.docs.length) { add("A반기", "반기 서류", "-", { status: NA, note: half.none }); return; }
   const halfDocs = half.docs.filter((d) => /^(HY|Q2)$/.test(d.dei.TypeOfCurrentPeriodDEI ?? ""));
@@ -537,12 +555,21 @@ function appHalfSources(source) {
 }
 
 // ── 2단계: J1 시가총액 · J5 DPS · J4 LTM · 영업이익 근사(J-OP) · C 화면 간 · D 항등식 (docs/verify-jp-design.md §4) ──
-const normName = (x) => String(x ?? "").replace(/株式会社|㈱|[(（]株[)）]|\s|　/g, "");
+// NFKC — DEI 제출자명이 전각(ＫＤＤＩ株式会社)이고 自己株式等 표는 반각(KDDI株式会社)인 회사
+const normName = (x) => String(x ?? "").normalize("NFKC").replace(/株式会社|㈱|\(株\)|\s/g, "");
 const relEq = (a, b, tol = 1e-12) => a != null && b != null && Math.abs(a - b) <= tol * Math.max(1, Math.abs(b));
 const addYears = (d, n) => `${Number(d.slice(0, 4)) + n}${d.slice(4) === "-02-29" ? "-02-28" : d.slice(4)}`;
 const noDim = (d, c) => {
   for (const f of d.facts.get(c) ?? []) { const x = d.ctx.get(f.ctx); if (x && !x.dims.length) return f; }
   return undefined;
+};
+/** 발행주식수 — 차원 없는 합계, 없으면 주식 종류 축의 행이 보통주(OrdinaryShareMember) 하나뿐일 때 그 값(オリエンタルランド) */
+const issuedOf = (d, c) => {
+  const nd = noDim(d, c);
+  if (nd) return nd;
+  const cls = (d.facts.get(c) ?? []).filter((f) => { const x = d.ctx.get(f.ctx); return x && x.dims.length === 1 && /ShareMember$/.test(x.dims[0]); });
+  const kinds = new Set(cls.map((f) => d.ctx.get(f.ctx).dims[0]));
+  return kinds.size === 1 && /=OrdinaryShareMember$/.test([...kinds][0]) ? cls[0] : undefined;
 };
 const rowOfCtx = (d, id) => { const x = d.ctx.get(id); const m = x && x.dims.length === 1 ? /^SequentialNumbersAxis=(Row\d+Member)$/.exec(x.dims[0]) : null; return m ? m[1] : null; };
 
@@ -551,8 +578,8 @@ const rowOfCtx = (d, id) => { const x = d.ctx.get(id); const m = x && x.dims.len
  * 제출회사 행 = 소유자 이름이 DEI 제출자명과 같은 행 **이고 1행**(記載要領 — 자기 보유분을 먼저 적는다) — 두 조건이 다르면 판정 안 함(검증불가).
  */
 function ownShares(d) {
-  const issued = noDim(d, "jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc")?.v ?? null;
-  const issuedFiling = noDim(d, "jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc")?.v ?? null;
+  const issued = issuedOf(d, "jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc")?.v ?? null;
+  const issuedFiling = issuedOf(d, "jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc")?.v ?? null;
   if (issued == null) return { why: `${d.row.docID} 発行済株式(株式の総数等) 없음` };
   const names = new Map();
   for (const t of d.texts.get("NameOfShareholderTreasurySharesEtc") ?? []) { const r = rowOfCtx(d, t.ctx); if (r) names.set(r, t.s); }
@@ -610,7 +637,7 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
     if (exp == null || exp.v == null) return add(layer, name, col, { status: NA, note: exp?.why ?? "원자료 기대값 없음" });
     add(layer, name, col, relEq(app0, exp.v, tol) ? { status: PASS, app: app0, src: exp.v, note: how ?? exp.how } : { status: FAIL, app: app0, src: exp.v, note: `앱 ${app0} vs 기대 ${exp.v}${how ?? exp.how ? ` — ${how ?? exp.how}` : ""}` });
   };
-  const ownDoc = (end) => src.docs.find((d) => d.dei.CurrentFiscalYearEndDateDEI === end && d.dei.TypeOfCurrentPeriodDEI === "FY" && noDim(d, "jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc"));
+  const ownDoc = (end) => src.docs.find((d) => d.dei.CurrentFiscalYearEndDateDEI === end && d.dei.TypeOfCurrentPeriodDEI === "FY" && issuedOf(d, "jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc"));
   const eqParentOf = (d, end) => {
     if (!d) return null;
     const v = (c) => plainValue(d, c, { instant: end })?.v ?? null;
@@ -636,7 +663,9 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
       const ca = val("cash", i);
       if (e.cash.v == null) add("J2", "현금성자산 = 현금 요소", label, { status: NA, note: e.cash.why });
       else cmp("J2", "현금성자산 = 현금 요소", label, ca == null ? null : -ca, { v: e.cash.v, how: e.cash.how });
-      cmp("J2", "비지배지분 = 원자료", label, val("nci", i), e.nci);
+      // 하이라이트는 비지배지분이 모든 열 0 이면 행을 숨긴다(앱 표시 규칙) — 행 없음 = 0
+      if (!row("nci") && e.nci.v === 0) add("J2", "비지배지분 = 원자료", label, { status: PASS, note: `${e.nci.how} · 하이라이트 행 없음(모든 열 0)` });
+      else cmp("J2", "비지배지분 = 원자료", label, val("nci", i), e.nci);
     }
     const evA = val("ev", i);
     if (e.evBlank) cmp("J2", "EV 공란 판정", label, evA, { blank: e.evBlank });
@@ -756,6 +785,7 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
     if (!h) return expIn(fd, fR, kind, lastFy, l, fnp);
     const hR = roleOf(h, kind), hnp = negPls(hR);
     if (!hR.some((r) => r.concepts.has(l.concept))) return undefined;
+    if (hnp.pls.get(l.concept) != null && l.occ >= hnp.pls.get(l.concept).length) return undefined;
     const pos = (hnp.pls.get(l.concept) ?? "")[l.occ] ?? "";
     const neg = (f) => (f && !f.conflict && f.v != null && hnp.neg.has(l.concept) ? { ...f, v: -f.v } : f);
     if (kind === "bs" || pos === "e") return neg(plainValue(h, l.concept, { instant: hCur.end }));

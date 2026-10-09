@@ -18,9 +18,10 @@ import { edinetDocZip, edinetTaxonomyText, readEdinetJson, writeEdinetJson } fro
  * 판 3(2026-10-09): 리스부채 주석 — 표시 문장("リース負債は…に含めて表示")·IAS 7 재무활동 부채 변동표 행·전기/당기 두 칸 표(leaseNotes).
  * 판 4(2026-10-09): 현금흐름표의 시점(instant) 개념에 기초·기말 이름표가 없으면 기말 잔액(第一三共 CashAndCashEquivalentsIfDifferentFromBSBalanceIFRS
  *   "現金及び現金同等物の期末残高" — 기간 값으로 찾아 줄이 통째로 빠졌다).
+ * 판 5(2026-10-10): 자기주식 표 회사 이름 NFKC 비교(KDDI 전각), 발행주식수가 보통주 종류 행뿐이면 그 값(オリエンタルランド).
  */
 
-export const JP_PARSE_VERSION = 4;
+export const JP_PARSE_VERSION = 5;
 
 export type JpStmtKind = "bs" | "is" | "ci" | "cf";
 /** 값 단위 — m 금액(엔), ps 주당(엔/주), sh 주식수, p 비율 */
@@ -478,7 +479,8 @@ const SHARE_TAGS = new Set([
   "NameOfShareholderTreasurySharesEtc",
 ]);
 /** 회사 이름 비교용 — 株式会社·㈱·(株) 와 공백을 지운다 */
-const normName = (s: string) => s.replace(/株式会社|㈱|[(（]株[)）]|\s|　/g, "");
+// NFKC — DEI "ＫＤＤＩ株式会社" vs 自己株式等 표 "KDDI株式会社"
+const normName = (s: string) => s.normalize("NFKC").replace(/株式会社|㈱|\(株\)|\s/g, "");
 
 /** 경영지표 주당 지표·발행주식·자기주식(판 2)·리스부채 주석(판 3) — 차원 문맥도 본다(개별 NonConsolidatedMember·자기주식 표 행 RowN) */
 function parseExtras(
@@ -517,10 +519,12 @@ function parseExtras(
       if (!(k in o) || o[k] == null) o[k] = v;
       continue;
     }
-    // 주식 표 — 발행주식수는 차원 없는 문맥(보통주 행 OrdinaryShareMember 와 같은 값), 자기주식은 RowN 행 + 합계
-    const row = c.mem.length === 0 ? "" : c.mem.length === 1 && /^Row\d+Member$/.test(c.mem[0]) ? c.mem[0] : null;
+    // 주식 표 — 발행주식수는 차원 없는 문맥(보통주 행 OrdinaryShareMember 와 같은 값), 자기주식은 RowN 행 + 합계.
+    // 차원 없는 합계 없이 주식 종류 행만 태깅한 회사(オリエンタルランド — OrdinaryShareMember 하나)는 종류 행을 "종류:이름"으로 남겨 아래에서 판정
+    const cls = c.mem.length === 1 && /ShareMember$/.test(c.mem[0]) && /^NumberOfIssuedShares/.test(name) ? `종류:${c.mem[0]}` : null;
+    const row = cls ?? (c.mem.length === 0 ? "" : c.mem.length === 1 && /^Row\d+Member$/.test(c.mem[0]) ? c.mem[0] : null);
     if (row == null) continue;
-    if (/^NumberOfIssuedShares/.test(name) && row !== "") continue;
+    if (/^NumberOfIssuedShares/.test(name) && row !== "" && !cls) continue;
     if (/TreasurySharesEtc$/.test(name) && c.pk.startsWith("I")) shAt ??= c.pk.slice(1);
     const mm = sh.get(name) ?? new Map<string, string | null>();
     sh.set(name, mm);
@@ -530,8 +534,14 @@ function parseExtras(
   let shares: JpDocShares | null = null;
   const issuedM = sh.get("NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc");
   if (issuedM) {
-    const issued = num(issuedM.get(""));
-    const issuedFiling = num(sh.get("NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc")?.get(""));
+    // 합계(차원 없음) → 없으면 주식 종류가 보통주 하나뿐일 때 그 행
+    const onlyOrd = (mm?: Map<string, string | null>) => {
+      const ks = [...(mm?.keys() ?? [])].filter((k) => k.startsWith("종류:"));
+      return ks.length === 1 && ks[0] === "종류:OrdinaryShareMember" ? mm!.get(ks[0]) : undefined;
+    };
+    const fdM = sh.get("NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc");
+    const issued = num(issuedM.has("") ? issuedM.get("") : onlyOrd(issuedM));
+    const issuedFiling = num(fdM?.has("") ? fdM.get("") : onlyOrd(fdM));
     const names = sh.get("NameOfShareholderTreasurySharesEtc") ?? new Map();
     const own = sh.get("NumberOfSharesHeldInOwnNameTreasurySharesEtc") ?? new Map();
     const oth = sh.get("NumberOfSharesHeldInOthersNamesTreasurySharesEtc") ?? new Map();
