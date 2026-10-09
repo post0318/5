@@ -204,10 +204,15 @@ function getBlocks(isFin: boolean): Block[] {
     lines: [
       { label: "배당금 지급", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], depth: 1, negate: true },
       { label: "자기주식 취득", concepts: ["PaymentsForRepurchaseOfCommonStock"], depth: 1, negate: true },
-      { label: "장기차입금 조달", concepts: ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts"], depth: 1 },
+      // ProceedsFromDebtMaturingInMoreThanThreeMonths — MSFT 본표 "Proceeds from issuance of debt"(2026-10-10, 없어서 연간 전 기간 "본표에 별도 줄 없음"·기타 재무활동이
+      // 떠안았다). ProceedsFromShortTermDebt — AMD 10-K 본표 "Proceeds from debt and commercial paper issuance"(같은 줄을 10-Q 는 ProceedsFromIssuanceOfLongTermDebt 로 태깅 —
+      // 없어서 FY2025 2,441 이 기타로 갔다). 순증감 개념(ProceedsFromRepayments…)은 아래 단기차입금 순증감
+      { label: "장기차입금 조달", concepts: ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts", "ProceedsFromDebtMaturingInMoreThanThreeMonths", "ProceedsFromShortTermDebt"], depth: 1 },
       // 전환사채 상환도 장기차입금 상환(TSLA 2024~ "Repayments of debt" = RepaymentsOfConvertibleDebt — 옛 태그 중단으로 2025 연간·LTM 이 비었다, 2026-10-02).
       // firstConcept 는 앞 태그에 값이 없는 결산일만 뒤 태그로 채우므로 다른 태그를 쓰는 회사는 그대로
-      { label: "장기차입금 상환", concepts: ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt", "RepaymentsOfConvertibleDebt", "RepaymentsOfDebtAndCapitalLeaseObligations"], depth: 1, negate: true },
+      // RepaymentsOfDebtMaturingInMoreThanThreeMonths — MSFT 본표 "Repayments of debt"(2026-10-10, 없어서 연간 전 기간 빈칸). RepaymentsOfCommercialPaper — AMD 10-Q 본표
+      // (10-K 는 같은 상환을 RepaymentsOfDebt 로 — 없어서 LTM 이 사업연도 950 + 당기 0 − 전년 동기 0 = 950, 실제 0)
+      { label: "장기차입금 상환", concepts: ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt", "RepaymentsOfConvertibleDebt", "RepaymentsOfDebtAndCapitalLeaseObligations", "RepaymentsOfDebtMaturingInMoreThanThreeMonths", "RepaymentsOfCommercialPaper"], depth: 1, negate: true },
       {
         label: "단기차입금 순증감",
         depth: 1,
@@ -216,6 +221,8 @@ function getBlocks(isFin: boolean): Block[] {
           ["ProceedsFromRepaymentsOfShortTermDebtMaturingInMoreThanThreeMonths", false],
           ["ProceedsFromRepaymentsOfCommercialPaper", false],
           ["ProceedsFromRepaymentsOfShortTermDebt", false],
+          // MSFT 10-Q 가 같은 줄("Repayments of debt, maturities of 90 days or less")을 상환 개념으로(양수 = 유출) 태깅(2026-10-10)
+          ["RepaymentsOfShortTermDebtMaturingInThreeMonthsOrLess", true],
         ],
       },
       { label: "기타 재무활동", depth: 1, plug: true },
