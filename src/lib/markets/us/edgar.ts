@@ -861,7 +861,8 @@ export const usEdgarAdapter: MarketAdapter = {
         ...(facts.revenue == null ? ["매출(fin) 조립 실패"] : []),
         ...(captive === "unknown" ? ["금융 자회사 판별 조회 실패"] : []),
       ];
-      return degraded.length ? { ...ttm, degraded } : ttm;
+      const staleInputs = facts.revenue?.staleEv != null ? [`재무 저장본 엔진판 ${facts.revenue.staleEv}(현재 판과 다름 — 배치 갱신 대기)`] : [];
+      return { ...ttm, ...(degraded.length ? { degraded } : {}), ...(staleInputs.length ? { staleInputs } : {}) };
     } catch (e) {
       return failedTtm(`TTM 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
     }

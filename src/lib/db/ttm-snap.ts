@@ -11,7 +11,8 @@ import { ENGINE_VERSION } from "../fin";
  *    무효가 돼 매번 다시 계산했다: 이틀 푸시 35번 = Vercel CPU 351분, 한도 초과로 서비스 정지). 계산 판번호 = 재무 엔진판(ENGINE_VERSION,
  *    재무 조립 규칙) + TTM 규칙 판(TTM_RULES_VERSION, 현재 주식수·LTM·EV 구성 규칙). 둘 중 하나라도 바뀌면 전 종목이 다시 계산된다.
  *    ⚠️ TTM 계산 규칙(markets/us 의 getTtm·EV·주식수 등)을 고치면 TTM_RULES_VERSION 을 올린다 — 안 올리면 최대 24시간 옛 규칙 값이 남는다.
- *  - 판이 다르거나 오래됐으면 요청 시점에 다시 계산하고 저장한다.
+ *  - 24시간 넘은 저장본은 요청 시점에 다시 계산하고 저장한다. 판번호만 다른 24시간 안 저장본은 새 저장본(배치)이 생길 때까지 그대로 쓴다
+ *    (오너 승인 2026-10-09 — 응답에 snapStale 표시, 요청마다 다시 계산하지 않음). 교체 때 바뀐 칸은 ttm_chg(30일 TTL)에 남긴다.
  *  - 불완전한 결과(조회 실패·SEC 원본 판독 경고·매출 조립 실패)는 저장하지 않는다 — 다음 조회에서 다시 계산.
  *  - 배치(오라클 타이머 fin-ttm-build, scripts/run/ttm-build.mts)가 매일 06:50·배포 직후 유니버스 미국 종목 중 무효인 것만 채운다.
  */
@@ -64,18 +65,74 @@ export async function readTtmSnapAny(market: string, symbol: string): Promise<{ 
 
 /** 저장해도 되는 완전한 결과인지 — 조회 실패·원본 판독 경고가 있으면 저장하지 않는다 */
 export function isStorableTtm(t: TtmFlows | null): boolean {
-  return !!t && !t.error && !t.degraded?.length;
+  return !!t && !t.error && !t.degraded?.length && !t.staleInputs?.length;
 }
 
-/** 저장 — viewed: 화면 조회로 계산한 것(seen 도 갱신). 배치가 쓴 것은 seen 을 건드리지 않는다 */
-export async function writeTtmSnap(market: string, symbol: string, ttm: TtmFlows, opts: { viewed?: boolean } = {}): Promise<void> {
-  if (!isDbConfigured() || !isStorableTtm(ttm)) return;
+/**
+ * 저장본 교체 기록(오너 승인 2026-10-09) — 옛 저장본과 새 값을 비교해 바뀐 칸만 종목당 문서 1건(ttm_chg). 칸은 최대 CHG_MAX_FIELDS 개,
+ * 30일 뒤 자동 삭제(TTL) — 쌓이지 않게. 재무 저장본(fin_sym·fin_stmt)의 같은 기록은 fin_chg(fin/store.ts persist, 180일)
+ */
+export interface TtmChgDoc {
+  k: string;
+  at: Date;
+  /** 옛·새 판번호 */
+  ov: string;
+  nv: string;
+  /** 바뀐 칸 수(전체) */
+  n: number;
+  /** [경로, 옛 값, 새 값] — 앞 CHG_MAX_FIELDS 개 */
+  f: [string, unknown, unknown][];
+}
+const CHG_MAX_FIELDS = 40;
+const CHG_TTL_S = 30 * 86_400;
+let chgIndexed = false;
+type Leaf = string | number | boolean | null;
+function leaves(x: unknown, path: string, out: Map<string, Leaf>): void {
+  if (x == null || typeof x !== "object") { out.set(path, (x ?? null) as Leaf); return; }
+  for (const [k, v] of Object.entries(x as Record<string, unknown>)) leaves(v, path ? `${path}.${k}` : k, out);
+}
+/** 옛 TTM 과 새 TTM 의 바뀐 칸(응답 전용 필드 snapStale 제외) */
+export function ttmDiff(a: TtmFlows | null | undefined, b: TtmFlows): [string, unknown, unknown][] {
+  const A = new Map<string, Leaf>(), B = new Map<string, Leaf>();
+  leaves({ ...(a ?? {}), snapStale: undefined }, "", A);
+  leaves({ ...b, snapStale: undefined }, "", B);
+  const out: [string, unknown, unknown][] = [];
+  for (const k of new Set([...A.keys(), ...B.keys()])) {
+    const o = A.has(k) ? A.get(k)! : null, n = B.has(k) ? B.get(k)! : null;
+    if (o !== n) out.push([k, o, n]);
+  }
+  return out.sort((x, y) => x[0].localeCompare(y[0]));
+}
+async function chgCol(): Promise<Collection<TtmChgDoc>> {
+  const c = (await getDb()).collection<TtmChgDoc>("ttm_chg");
+  if (!chgIndexed) {
+    chgIndexed = true;
+    await c.createIndex({ at: 1 }, { expireAfterSeconds: CHG_TTL_S }).catch(() => {});
+    await c.createIndex({ k: 1, at: -1 }).catch(() => {});
+  }
+  return c;
+}
+
+/**
+ * 저장 — viewed: 화면 조회로 계산한 것(seen 도 갱신). 배치가 쓴 것은 seen 을 건드리지 않는다.
+ * 옛 저장본이 있고 값이 바뀌었으면 ttm_chg 에 바뀐 칸을 남긴다(기록 실패는 저장에 영향 없음). 반환 = 바뀐 칸 수(옛 저장본 없으면 null)
+ */
+export async function writeTtmSnap(market: string, symbol: string, ttm: TtmFlows, opts: { viewed?: boolean } = {}): Promise<{ changed: number | null; from: string | null } | null> {
+  if (!isDbConfigured() || !isStorableTtm(ttm)) return null;
   const now = new Date();
-  await (await col()).updateOne(
+  const v = ttmSnapVersion();
+  const store = { ...ttm };
+  delete store.snapStale;
+  const prev = await (await col()).findOneAndUpdate(
     { _id: key(market, symbol) },
-    { $set: { v: ttmSnapVersion(), at: now, ttm, ...(opts.viewed ? { seen: now } : {}) } },
-    { upsert: true },
+    { $set: { v, at: now, ttm: store, ...(opts.viewed ? { seen: now } : {}) } },
+    { upsert: true, returnDocument: "before", projection: { v: 1, ttm: 1 } },
   );
+  if (!prev) return { changed: null, from: null };
+  const d = ttmDiff(prev.ttm, store);
+  // silent-ok: 교체 기록 실패는 저장본 교체 결과에 영향 없음(감사 추적용 부가 기록)
+  if (d.length) await (await chgCol()).insertOne({ k: key(market, symbol), at: now, ov: prev.v, nv: v, n: d.length, f: d.slice(0, CHG_MAX_FIELDS) }).catch(() => {});
+  return { changed: d.length, from: prev.v };
 }
 
 /** 화면 조회 기록 — 저장본을 읽어 바로 돌려줄 때(1시간에 한 번만 쓴다) */

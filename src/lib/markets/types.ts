@@ -205,6 +205,10 @@ export interface TtmFlows {
   error?: string | null;
   /** 불완전한 계산의 사유(SEC 원본 판독 경고·매출 조립 실패 등) — 있으면 TTM 스냅샷을 저장하지 않는다(db/ttm-snap.ts) */
   degraded?: string[];
+  /** 옛 판 입력으로 계산(재무 저장본 엔진판이 현재와 다름 — fin loadFinSym staleEv). 값은 그대로 쓰되 TTM 스냅샷으로 저장하지 않는다 */
+  staleInputs?: string[];
+  /** 응답 전용 — 판번호가 다른 TTM 저장본을 그대로 돌려준 것(db/ttm-snap.ts readTtmSnapAny current=false) */
+  snapStale?: boolean;
   /** 값이 null 이거나 근사인 항목의 사유·라벨(미국) — 화면 칸 주석 */
   reasons?: Partial<Record<"netIncome" | "revenue" | "opIncome" | "eps" | "daTtm" | "equity" | "evNetDebt" | "evShares" | "dpsTtm" | "fyEps", string>>;
   /**
