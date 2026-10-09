@@ -34,7 +34,8 @@
     fin-build → ttm-build 순서(둘 다 oneshot, 2시간 한도). fin-build 로그는 "결손(저장본)"과 "열 표시(IDENTITY·BASIS_SHIFT — 열 단위 메모, 원래 있던 것)"로 나눔.
   - 10-09 08:11 배포 때 "변경 0"의 원인: ttm-build·fin-build 가 동시에 돌았고, 옛 loadFinSym 이 ttm-build 안에서 저장본을 먼저 새 판으로 바꿨다. 또 NVDA
     변경은 현금흐름표라 그때는 기록 대상이 아니었다.
-  - **엔진판(ENGINE_VERSION)을 올릴 때**: 배포 직후 화면은 옛 판 값(1일 안팎), 배치가 끝나면 새 값. 바로 보려면 1호기 `sudo systemctl start fin-fin-build` 뒤 `fin-ttm-build`.
+  - **엔진판(ENGINE_VERSION)을 올릴 때**: post-deploy 가 배포 직후 fin-build → ttm-build 를 바로 돌리므로 옛 판 값이 보이는 시간은 배치 시간뿐
+    (10-09 실측 fin-build 약 25분 + ttm-build 약 22분, 합계 50분 안팎). 수동 실행(1호기 `sudo systemctl start fin-fin-build` 뒤 `fin-ttm-build`)은 post-deploy 가 실패했을 때만.
 - **(10-09 저녁) 미국 검증불가 32 → 8, 실패 0**(verify-us-20261009-153155, 47종목 --post 관리자 화면 게시: 통과 39,296 · 공통모드 1,337 · 검증불가 8).
   앱 커밋 898c0cd·20da1b1 은 운영 배포 완료(master 47ba7f6, 위 항목).
   898c0cd: WMT 이연법인세 구성 혼합 분기·LTM 빈칸, META 분기 태그 교체 공시별 병합, GEV·VRT 잔여(기타) 줄 LTM 빈칸, BE 주식보상 본표 회사 고유 줄,
