@@ -139,11 +139,12 @@ function classify(row, b) {
     if (m && !/[:：]/.test(m[1])) return { category: "산업", stockName: m[1].trim(), symbol: null, title: m[3].trim() };
     const colon = t.match(/^([^:：]{2,12})[:：]\s*/);
     // "다올 선박: …" 같은 시리즈명은 회사명 접두어를 떼고 업종명으로(선박 → 조선)
-    const label = (colon?.[1] ?? b.sector).replace(/^다올s*/, "").trim().replace(/^선박$/, "조선");
+    const label = (colon?.[1] ?? b.sector).replace(/^다올\s*/, "").trim().replace(/^선박$/, "조선");
     return { category: "산업", stockName: label || b.sector, symbol: null, title: t };
   }
   // 주식전략 게시판에 섞인 "Morning Brief_8/28" 은 매일 나오는 시황 — 시황 Daily
-  if (/mornings*brief/i.test(t)) return { category: "산업", stockName: "다올 시황", symbol: null, title: t };
+  // (2026-10-10 — 예전 /mornings*brief/ 는 `\s` 가 빠진 오타라 "Morning Brief_8/28" 이 안 걸려 "다올 투자전략"으로 새고 있었다)
+  if (/morning\s*brief/i.test(t)) return { category: "산업", stockName: "다올 시황", symbol: null, title: t };
   const stockName = b.fx && isFxContent(t) ? `${b.stockName} FX` : b.stockName;
   return { category: "산업", stockName, symbol: null, title: t };
 }

@@ -57,6 +57,10 @@ hsbc-research 08:45
 dbresearch 08:52
 LIST
 
+# ① 일본 현지 리서치 — FISCO 企業調査レポート 하루 1회(2026-10-10 오너 승인, 메타·PDF 링크만). 목록 한 장 1요청.
+#   일본 장 마감 뒤(18:40 KST = 같은 시각 JST) — 그날 공개분까지 받는다. 수집기 기본 범위 3일.
+unit research-fisco-research "리서치(일본): fisco-research" "/opt/macro/ops/run-script.sh collect-fisco-research.mjs" "*-*-* 18:40:00\n"
+
 # ② 거시경제 — Fed 금리 확률 일별 스냅샷(06:00)
 unit macro-fedwatch-snapshot "거시경제: Fed 금리 확률 일별 스냅샷(Kalshi)" "/opt/macro/ops/call-cron.sh /api/cron/fedwatch 120" "*-*-* 06:00:00\n"
 # ② 거시경제 — 한국 공포·탐욕 원자료 + 코스피·코스닥 일봉(06:30, 전 영업일분). 예전엔 서버에서 손으로 만든 유닛이라 저장소에 없었다(2026-10-06 편입).

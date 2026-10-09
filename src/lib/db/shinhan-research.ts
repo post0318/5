@@ -1369,10 +1369,13 @@ export async function getShinhanResearchBySymbol(
     market === "jp"
       ? { $or: [{ symbol: { $in: [symbol, `${symbol}.JP`, `${symbol}.JT`, `${symbol}.T`] } }, { relatedSymbols: symbol }] }
       : { $or: [{ symbol }, { relatedSymbols: symbol }] };
+  // 두 조건 모두 $or 라 객체 펼침으로 합치면 뒤의 $or 가 앞을 덮어 시장 조건이 사라졌다(kr 조회가 다른 시장 문서까지 집음 — 2026-10-10 발견).
+  // $and 로 묶는다.
+  const baseFilter = { $and: [marketFilter, symbolFilter] };
   // 중복 제거로 개수가 줄어들 수 있어 limit보다 넉넉히 가져온 뒤 잘라낸다.
   const fetchLimit = limit + 10;
   const recent = await col
-    .find({ ...marketFilter, ...symbolFilter, date: { $gte: recentCutoff } })
+    .find({ ...baseFilter, date: { $gte: recentCutoff } })
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
@@ -1381,7 +1384,7 @@ export async function getShinhanResearchBySymbol(
   const recentKept = recent.filter(keep);
   if (recentKept.length > 0) return dedupeBySourceTitle(recentKept).slice(0, limit);
   const fallback = await col
-    .find({ ...marketFilter, ...symbolFilter })
+    .find(baseFilter)
     .sort({ date: -1 })
     .limit(fetchLimit)
     .toArray();
