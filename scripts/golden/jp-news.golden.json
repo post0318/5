@@ -2,12 +2,13 @@
  "about": "일본 종목 일본어 기사(구글 뉴스 일본판) 관련성 기준 세트 — 2026-10-10 수집 원본에서 종목별 무작위 표본, 제목·매체만 보고 사람이 판정(작업자 Claude, 오너 검수 전).",
  "labels": {
   "broad": "그 회사·사업·제품·주가 얘기면 정답(사진 중복 페이지·저품질 매체·판촉·회사 자체 페이지는 오답)",
-  "strict": "기업·주가 뉴스만 정답 — broad 정답 중 소비자 글(시승기·리뷰·구매 안내·연봉·팬 블로그 신제품 소개·콜라보 행사)은 오답"
+  "strict": "기업·주가 뉴스만 정답 — broad 정답 중 소비자 글(시승기·리뷰·구매 안내·연봉·팬 블로그 신제품 소개·콜라보 행사)은 오답 · 자회사 단독 소식(日立ソリューションズ 등)과 개인 재테크 Q&A 도 오답(2026-10-10 리뷰 — 규칙과 일치)"
  },
  "sets": {
   "A": "규칙 맞춘 표본",
   "B": "처음 본 표본 1(보강에 사용)",
-  "C": "처음 본 표본 2(보강에 사용)"
+  "C": "처음 본 표본 2(보강에 사용)",
+  "D": "리뷰 지적 사례(2026-10-10 — 규칙 회귀 확인용, 작업자가 만든 제목)"
  },
  "items": [
   {
@@ -2508,7 +2509,7 @@
    "publisher": "ライブドアニュース",
    "at": "2026-10-05T05:10:26.000Z",
    "broad": true,
-   "strict": true
+   "strict": false
   },
   {
    "set": "B",
@@ -3548,7 +3549,7 @@
    "publisher": "ニッキンONLINE",
    "at": "2026-10-05T20:05:00.000Z",
    "broad": true,
-   "strict": true
+   "strict": false
   },
   {
    "set": "C",
@@ -3618,7 +3619,7 @@
    "publisher": "Yahoo!ニュース",
    "at": "2026-10-08T08:56:00.000Z",
    "broad": true,
-   "strict": true
+   "strict": false
   },
   {
    "set": "C",
@@ -3788,7 +3789,7 @@
    "publisher": "クラウド Watch",
    "at": "2026-10-05T06:23:00.000Z",
    "broad": true,
-   "strict": true
+   "strict": false
   },
   {
    "set": "C",
@@ -4109,6 +4110,206 @@
    "at": "2026-10-03T08:37:00.000Z",
    "broad": false,
    "strict": false
+  },
+  {
+   "set": "D",
+   "symbol": "7203",
+   "no": 1,
+   "title": "トヨタEV戦略を転換",
+   "publisher": "日本経済新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "7267",
+   "no": 2,
+   "title": "ホンダEV、北米で生産開始",
+   "publisher": "日本経済新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "6758",
+   "no": 3,
+   "title": "ソニーAI、新モデル発表",
+   "publisher": "日経クロステック",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "7203",
+   "no": 4,
+   "title": "トヨタHV販売が過去最高",
+   "publisher": "時事ドットコム",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "7203",
+   "no": 5,
+   "title": "トヨタSUV、北米で増産へ",
+   "publisher": "Reuters",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "7203",
+   "no": 6,
+   "title": "トヨタ、決算レビュー：4-6月期は営業減益",
+   "publisher": "株探",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "6758",
+   "no": 7,
+   "title": "ソニーG業績レビュー、ゲーム好調",
+   "publisher": "日本経済新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "6501",
+   "no": 8,
+   "title": "日立製作所、監督委員会を設置",
+   "publisher": "日本経済新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "7203",
+   "no": 9,
+   "title": "トヨタ、監督官庁に不正を報告",
+   "publisher": "NHKニュース",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "7267",
+   "no": 10,
+   "title": "ホンダ、セール価格で在庫車を販売へ",
+   "publisher": "日刊自動車新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "7203",
+   "no": 11,
+   "title": "トヨタ系販売店向けクーポン不正が発覚",
+   "publisher": "読売新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "3382",
+   "no": 12,
+   "title": "セブン&アイ、国内コンビニ減益",
+   "publisher": "ストアーズ・レポート",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "7203",
+   "no": 13,
+   "title": "トヨタ、Amazonと物流で提携",
+   "publisher": "日本経済新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "7203",
+   "no": 14,
+   "title": "トヨタ、新車販売キャンペーンを拡大",
+   "publisher": "日本経済新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "9434",
+   "no": 15,
+   "title": "ソフトバンクG、AI向け通信網を整備",
+   "publisher": "日本経済新聞",
+   "at": null,
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "D",
+   "symbol": "9984",
+   "no": 16,
+   "title": "ソフトバンクG、AI向け通信網を整備",
+   "publisher": "日本経済新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "9434",
+   "no": 17,
+   "title": "ソフトバンク、5G料金を値下げ",
+   "publisher": "日本経済新聞",
+   "at": null,
+   "broad": true,
+   "strict": true
+  },
+  {
+   "set": "D",
+   "symbol": "6501",
+   "no": 18,
+   "title": "2大大会出場を逃した日立製作所・林監督「考え直さないと」",
+   "publisher": "毎日新聞",
+   "at": null,
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "D",
+   "symbol": "7203",
+   "no": 19,
+   "title": "トヨタのSUVがAmazonタイムセールで20%オフ",
+   "publisher": "Gizmodo",
+   "at": null,
+   "broad": false,
+   "strict": false
+  },
+  {
+   "set": "D",
+   "symbol": "2914",
+   "no": 20,
+   "title": "JT、加熱式たばこ新製品を発売",
+   "publisher": "Japan Today",
+   "at": null,
+   "broad": true,
+   "strict": true
   }
  ]
 }

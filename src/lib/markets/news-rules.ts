@@ -312,7 +312,7 @@ export const JA_COMPANY_ALIASES: Record<string, string[]> = {
 /** 저품질·스팸·개인 영상(구글 뉴스 일본판 실측 2026-10-10 — 제목에 무관한 영문 꼬리가 붙은 자동 생성 글, 데이트레이딩 영상, X 글 모음) */
 export const JA_LOW_VALUE_PUBLISHERS = new Set(["Unisba Media", "BigGo ファイナンス", "BigGo Finance", "Howl.Link", "Howl.link", "YouTube", "note", "pando.life"]);
 /** 팬 블로그·판매점 블로그("ソニーが基本的に好き。"·"ソニーショップ テックスタッフ") — 매체명 꼴로 가른다 */
-const JA_FAN_SHOP_PUBLISHER_RE = /が(?:基本的に)?好き|ショップ|ストア/;
+const JA_FAN_SHOP_PUBLISHER_RE = /が(?:基本的に)?好き|ショップ|ストア(?!ーズ)/;
 
 /** 시황·나열·주가 자동 페이지 — 그 회사 얘기가 아니라 시장 전체 흐름·종목 목록(실측 표본: 日経平均寄与度·先物OP市況·ADR主要銘柄·寄り付き概況 …) */
 const JA_ROUNDUP_RE =
@@ -326,13 +326,13 @@ const JA_PHOTO_RE = /^[<＜]?画像\s*\d|【(?:写真・)?画像】|\d+枚目の
  * 낱말 하나("Amazon"·"キャンペーン")로 빠지던 것). 세일·할인율·쿠폰·추첨 경품·무료 세미나·협찬 행사·평판 비교 글.
  */
 const JA_PROMO_RE =
-  /タイムセール|セール(?:中|開催|価格|情報|対象)|\d+\s*[%％]\s*(?:オフ|OFF)|クーポン|ポイント還元|抽選で|名様に|プレゼントキャンペーン|無料(?:オンライン)?セミナー|ウェビナー|協賛|評判・口コミ|口コミ・評判/;
+  /タイムセール|セール(?:中|開催|情報|対象)|\d+\s*[%％]\s*(?:オフ|OFF)|クーポン(?:配布|配信|コード|付|で|を?プレゼント)|ポイント還元|抽選で|名様に|プレゼントキャンペーン|無料(?:オンライン)?セミナー|ウェビナー|協賛|評判・口コミ|口コミ・評判/;
 
 /**
  * 기업·주가와 무관한 소비자 글(2026-10-10 리뷰 — 엄격 기준 "기업·주가 뉴스"): 직원 연봉 정보, 시승기·제품 리뷰·구매 안내.
  * 신제품 발표·리콜·판매 실적 같은 회사 발표는 그대로 둔다.
  */
-const JA_CONSUMER_RE = /年収|試乗記|試乗レポート|試乗インプレ|インプレッション|レビュー|購入ガイド|買うならどのグレード|どれを買う|おすすめ(?:編成|モデル|グレード)/;
+const JA_CONSUMER_RE = /年収|試乗記|試乗レポート|試乗インプレ|インプレッション|(?<!決算|業績|四半期|中間|期末)レビュー|購入ガイド|買うならどのグレード|どれを買う|おすすめ(?:編成|モデル|グレード)/;
 
 /** 약칭 바로 뒤에 붙어도 같은 회사로 보는 말("ソニー傘下"·"トヨタ株"·"ホンダ新型") — 그 밖의 한자·가타카나가 붙으면 다른 낱말("ソニー生命"·"日立建機"·"本田響矢") */
 const JA_ALIAS_SUFFIX_OK = /^(?:傘下|系|株|製|社長|会長|副社長|首脳|幹部|本社|子会社|側|決算|新型|新車|首位|次期|式|改革)/;
@@ -361,8 +361,8 @@ export const JA_SHARED_NAME_CONTEXT: Record<string, Record<string, RegExp>> = {
 
 /** 스포츠 — 회사 야구부·실업팀·프로 구단 기사(제목 어디든) */
 const JA_SPORTS_RE = /ホークス|野球|甲子園|選手権|駅伝|実業団|ラグビー|リーグワン|陸上部|大会出場/;
-/** 이름 바로 뒤가 "・林監督"·"の選手" — 회사 팀 감독·선수 얘기(2026-10-10 리뷰 — "日立製作所・林監督") */
-const JA_SPORTS_AFTER_RE = /^[・の]?[^、。\s]{0,4}(?:監督|選手|主将|コーチ)/;
+/** 이름 바로 뒤가 "・林監督" — 회사 팀 감독·선수 얘기(2026-10-10 리뷰 — "日立製作所・林監督"). 사람 이름이 붙은 꼴만("監督委員会·監督官庁"는 아님) */
+const JA_SPORTS_AFTER_RE = /^・[^、。\s・]{1,4}(?:監督|選手|主将|コーチ)(?!委員|官庁|強化|当局|責任|下)/;
 
 const KATAKANA = /[ァ-ヺー]/;
 const KANJI = /[㐀-䶿一-鿿々]/;
@@ -375,7 +375,7 @@ export function jaNorm(s: string): string {
 
 /**
  * 일본어 제목에서 이름 찾기 — 낱말 경계. 가타카나 이름은 앞뒤가 가타카나로 이어지면 다른 낱말("トヨタ紡織"은 한자라 strict 에서 거른다).
- * 가타카나로 끝나는 이름 뒤에 반각 영대문자 1~3자가 붙고 다음이 영숫자·"-"가 아니면 다른 이름("ソフトバンクG"·"ソニーFG" — "ホンダN-BOX"는 인정).
+ * 가타카나로 끝나는 이름 뒤에 회사 형태 접미어(G·HD·FG·FH·GHD)가 붙으면 다른 이름("ソフトバンクG"·"ソニーFG"). "トヨタEV"·"ソニーAI"·"ホンダN-BOX"는 인정.
  * strict(약칭): 뒤에 한자·가타카나가 바로 붙으면 다른 낱말이다 — "本田響矢"(배우)·"武田鉄矢"(배우)·"日立建機"(다른 회사)·"ソニー生命"(다른 회사).
  * 영문·숫자 이름("JT"·"SMC"·"NTT")은 영문 낱말 경계.
  */
@@ -398,7 +398,7 @@ function jaTitleHitAt(text: string, word: string, strict: boolean): number {
     if (KATAKANA.test(word[0]) && KATAKANA.test(before)) continue;
     if (JA_PREFECTURE_PREFIX_RE.test(text.slice(Math.max(0, i - 4), i))) continue;
     if (KATAKANA.test(word[word.length - 1]) && KATAKANA.test(after)) continue;
-    if (KATAKANA.test(word[word.length - 1]) && /^[A-Z]{1,3}(?![A-Za-z0-9-])/.test(rest)) continue;
+    if (KATAKANA.test(word[word.length - 1]) && /^(?:G|HD|FG|FH|GHD|HLDGS?)(?![A-Za-z0-9-])/.test(rest)) continue;
     if (ASCII_WORD.test(word[word.length - 1]) && ASCII_WORD.test(after)) continue;
     if (strict && (KANJI.test(after) || KATAKANA.test(after)) && !JA_ALIAS_SUFFIX_OK.test(rest)) continue;
     if (JA_PREFECTURE_AFTER_RE.test(rest)) continue;
