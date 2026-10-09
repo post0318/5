@@ -5,6 +5,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AdapterError } from "./types";
 import { checkBackoff, isSecUrl, noteFetchFailure, noteFetchSuccess } from "./fetch-health";
+import { recordUsage, usageServiceOf, withNetProbe } from "../usage/ledger.mjs";
 
 export interface FetchJsonOpts {
   headers?: Record<string, string>;
@@ -62,11 +63,16 @@ async function request<T>(
     let wait: number | null = null;
     let failure: FetchError;
     try {
-      const res = await fetch(url, {
-        headers: { ...defaultHeaders, ...headers },
-        signal: controller.signal,
-        ...(noStore ? { cache: "no-store" as const } : { next: revalidate === false ? undefined : { revalidate } }),
-      });
+      // 사용량 장부(src/lib/usage/ledger.mjs): 장부 fetch 는 Next 데이터 캐시 아래에 있어 캐시에서 나온 응답이면 net=false → 캐시 적중으로 따로 센다
+      const svc = usageServiceOf(url);
+      const { value: res, net } = await withNetProbe(() =>
+        fetch(url, {
+          headers: { ...defaultHeaders, ...headers },
+          signal: controller.signal,
+          ...(noStore ? { cache: "no-store" as const } : { next: revalidate === false ? undefined : { revalidate } }),
+        }),
+      );
+      if (svc && !net) recordUsage(svc, "hit");
       if (res.ok) {
         const body = await read(res);
         noteFetchSuccess(url);
@@ -78,6 +84,10 @@ async function request<T>(
         wait = ra == null ? RETRY_BACKOFF_MS[attempt] ?? 3_000 : ra <= RETRY_AFTER_CAP_MS ? ra : null;
       }
     } catch (err) {
+      // 사용량 상한(배치만 막힘) — 네트워크로 나가지 않았으므로 연속 실패 백오프(fetch-health)에 넣지 않는다(같은 URL 의 화면 요청까지 막히지 않게)
+      if ((err as Error | null)?.name === "UsageLimitError") {
+        throw new FetchError((err as Error).message, { status: 429, cause: err });
+      }
       if (err instanceof DOMException && err.name === "AbortError") {
         failure = new FetchError(`요청 시간 초과 — ${url}`, { status: 504, cause: err });
       } else {
@@ -206,11 +216,17 @@ function secText(url: string, opts: FetchJsonOpts, accept: Record<string, string
     p = (async () => {
       if (archive) {
         const hit = await archiveRead(key);
-        if (usableBody(hit, json)) return hit;
+        if (usableBody(hit, json)) {
+          recordUsage("sec", "hit");
+          return hit;
+        }
       }
       const c0 = api ? await apiRead(key) : null;
       const cached = c0 && usableBody(c0.body, json) ? c0 : null;
-      if (cached && cached.ageMs <= SEC_API_TTL_MS) return cached.body;
+      if (cached && cached.ageMs <= SEC_API_TTL_MS) {
+        recordUsage("sec", "hit");
+        return cached.body;
+      }
       try {
         await secSlot();
         let body = await request(url, opts, accept, (res) => res.text());

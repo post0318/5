@@ -122,6 +122,34 @@ check telegram-listener "$(systemctl is-active --quiet macro-telegram-listener &
 code=$(curl -s -o /tmp/hc-dart.json -m 60 -w '%{http_code}' "http://127.0.0.1:8080/api/markets/kr/005930/financials?period=annual" || echo 000)
 check dart-kr "$([ "$code" = 200 ] && echo 1 || echo 0)" "한국 재무(OpenDART) 조회 실패(HTTP ${code}) $(head -c 120 /tmp/hc-dart.json 2>/dev/null) — 한도 초과(429)면 검증·적재 작업이 같은 키를 쓰는지 확인"
 
+# 외부 서비스 사용량(2026-10-06 사용량 장부) — 그날(KST) 상한의 80% 이상이면 알림(서비스마다 하루 한 번 열리고, 날이 바뀌어 내려가면 닫힌다).
+# 100% 에 닿으면 배치·미리 수집 요청은 장부가 스스로 막는다(화면 요청은 계속). Gemini 는 월 예산(weekly_llm_usage) 80%.
+SECRET=$(grep -E "^CRON_SECRET=" /opt/macro/app.env | cut -d= -f2-)
+code=$(curl -s -o /tmp/hc-usage.json -m 20 -w '%{http_code}' -H "Authorization: Bearer ${SECRET}" "http://127.0.0.1:8080/api/cron/usage?day=today" || echo 000)
+check usage-ledger "$([ "$code" = 200 ] && echo 1 || echo 0)" "사용량 장부 조회 실패(HTTP ${code}) $(head -c 120 /tmp/hc-usage.json 2>/dev/null) — USAGE_DIR·/opt/macro/usage 마운트 확인"
+if [ "$code" = 200 ]; then
+  while IFS=$'\t' read -r key ok msg; do
+    [ -n "$key" ] && check "usage-$key" "$ok" "$msg"
+  done < <(python3 - /tmp/hc-usage.json <<'PY'
+import json, sys
+sys.stdout.reconfigure(encoding="utf-8")
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+warn = {w["id"]: w for w in d.get("warnings", [])}
+ids = [s["id"] for s in d.get("services", []) if s.get("cap") is not None] + ["gemini-budget"]
+for i in ids:
+    w = warn.get(i)
+    if w:
+        if i == "gemini-budget":
+            msg = f"{w['label']} ${w['net']:.2f} / ${w['cap']} ({w['pct']}%)"
+        else:
+            msg = f"{w['label']} 오늘 {w['net']:,}건 / 상한 {w['cap']:,} ({w['pct']}%)" + (" — 배치 요청 막힘" if w["net"] >= w["cap"] else "")
+        print(f"{i}\t0\t{msg}")
+    else:
+        print(f"{i}\t1\t정상")
+PY
+)
+fi
+
 # 설정 백업(config-backup.sh, 매일 05:40 KST → 2호기) — 마지막 성공이 26시간 넘으면 알림
 if [ -f "$STATE_DIR/.config-backup-ok" ]; then
   bk_age=$(( ($(date +%s) - $(stat -c %Y "$STATE_DIR/.config-backup-ok")) / 3600 ))

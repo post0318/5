@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fetchJson } from "../http";
+import { recordUsage } from "../../usage/ledger.mjs";
 
 /**
  * **앱 DART 디스크 캐시**(오너 결정 2026-10-05 — SEC_CACHE_DIR 와 같은 방식). `DART_CACHE_DIR` 가 있을 때만 켜진다(없으면 기존 동작 —
@@ -239,6 +240,7 @@ export async function dartReportJson<T extends { status: string }>(
   const hit = await readVer(dir, file, validJson);
   if (hit) {
     dartCacheStats.hit++;
+    recordUsage("dart", "hit");
     return JSON.parse(hit.toString("utf8")) as T;
   }
   dartCacheStats.miss++;
@@ -260,6 +262,7 @@ export async function dartRceptBinary(ns: string, rcept: string, fetcher: () => 
   const hit = await readVer(dir, `${safe(rcept)}.bin`, validZip);
   if (hit) {
     dartCacheStats.hit++;
+    recordUsage("dart", "hit");
     return new Uint8Array(hit);
   }
   dartCacheStats.miss++;

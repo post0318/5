@@ -152,6 +152,16 @@ GitHub 계정·저장소·Actions 가 뚫려도 운영 비밀값과 1호기 관�
 - 화면 `/admin/verify`: 머리에 "검증 서버 결과(대상) · 마지막 검증 시각 · 검증 코드 판본", 결과 없는 유니버스 종목은 "검증 대기".
 - 감시(1호기 healthcheck): `verify-pull`(가져오기 성공 26시간 초과), `verify-stale`(결과 생성 시각 30시간 초과), 실패 회차는 `job-macro-verify-pull`.
 
+### 외부 서비스 사용량 장부 (2026-10-06 — DART 한도 사고 뒤 오너 지시)
+
+- 집계: 앱(`src/instrumentation.ts`)·배치(`run-ts.sh`·`run-script.sh` 의 `NODE_OPTIONS=--import scripts/lib/usage-preload.mjs`)가 전역 fetch 를
+  감싸 서비스별·하루(KST)별 실제 네트워크 요청 수를 `/opt/macro/usage/YYYYMMDD/*.json`(프로세스마다 파일 하나)에 쓴다. 캐시 적중은 따로.
+  `USAGE_DIR` 이 없으면(Vercel·Cloud Run·로컬) 꺼짐. 서비스 구분·하루 상한은 `src/lib/usage/config.mjs` 하나.
+- 상한: 100% 에서 **배치 역할만** 막는다(`USAGE_ROLE=batch` 프로세스 + 앱의 `/api/cron/*`). 화면 요청은 계속. 배포 없이 바꾸려면
+  `/opt/macro/usage/limits.json`(`{"dart": 12000}`, 1분 안에 반영). 비상시 `USAGE_ENFORCE=0` 이면 세기만.
+- 알림: `healthcheck.sh` 가 `/api/cron/usage` 로 80% 이상(`usage-<서비스>`, Gemini 는 월 예산 `usage-gemini-budget`)을 알리고,
+  `macro-usage-report.timer`(08:00 KST, `usage-report.sh`)가 전날분을 텔레그램 한 메시지로. 확인만: `sudo /opt/macro/ops/usage-report.sh today --print`.
+
 ### 과금 통제 (오너 지시 — 크레딧을 넘는 실제 지출 0)
 
 - **오라클**(종량제 계정): 할당량 정책 `free-only`(A1 4코어·24GB·디스크 200GB 외 생성 차단) + 1달러 예산 알림.
