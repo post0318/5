@@ -225,7 +225,8 @@ export async function refreshStored(market: Market, symbols: string[], opts: { m
   const meta = await readSymMeta(syms.map((s) => `${market}:${s}`));
   const m = (s: string) => meta.get(`${market}:${s}`);
   const rank = (s: string) => (!m(s) ? 0 : m(s)!.ev !== ENGINE_VERSION ? 1 : 2);
-  const last = (s: string) => (m(s)?.ck ?? m(s)?.at)?.valueOf() ?? 0;
+  // 마지막으로 손댄 시각(확인 ck·정상 적재 at·실패 ft 중 늦은 쪽) — 실패 시각을 빼면 실패한 종목이 매번 큐 앞에 섰다(markFailed 는 at 을 안 올림)
+  const last = (s: string) => Math.max(m(s)?.ck?.valueOf() ?? 0, m(s)?.at?.valueOf() ?? 0, m(s)?.ft?.valueOf() ?? 0);
   const queue = syms.sort((a, b) => rank(a) - rank(b) || last(a) - last(b));
   const out: RefreshResult = { built: [], upToDate: [], skipped: [], pending: 0 };
   const minBuild = opts.minBuildMs ?? 60_000;

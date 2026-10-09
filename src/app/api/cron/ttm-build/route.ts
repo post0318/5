@@ -33,6 +33,12 @@ function authorized(req: Request): boolean {
 
 const SYMBOL_RE = /^[A-Z0-9.-]{1,12}$/;
 const PER_SYMBOL_MS = 100_000;
+/** 남은 시간 안에 끝나지 않으면 거부(계산 자체는 서버에서 끝까지 돈다) */
+function withinMs<T>(p: Promise<T>, ms: number): Promise<T> {
+  if (ms <= 0) return Promise.reject(new Error("종목당 시간 제한 소진"));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([p, new Promise<T>((_, rej) => { timer = setTimeout(() => rej(new Error(`시간 초과(${Math.round(ms / 1000)}초)`)), ms); })]).finally(() => clearTimeout(timer));
+}
 
 export async function GET() {
   return ok({ version: ttmSnapVersion() }, { headers: { "Cache-Control": "no-store" } });
@@ -81,8 +87,11 @@ export async function POST(req: Request) {
       clearTimeout(timer);
       if (ttm && isStorableTtm(ttm)) {
         const w = await writeTtmSnap("us", sym, ttm);
-        // 재무제표 화면 칸 변경 기록(view-snap.ts) — 실패는 TTM 저장 결과에 영향 없음
-        const vc = await recordUsViewChanges(sym).catch(() => null);
+        // 재무제표 화면 칸 변경 기록(view-snap.ts) — 종목당 시간 제한의 남은 시간 안에서만. 실패·시간 초과는 TTM 저장 결과에 영향 없음(로그)
+        const vc = await withinMs(recordUsViewChanges(sym), PER_SYMBOL_MS - (Date.now() - t0)).catch((e) => {
+          console.error(`[ttm-build] ${sym} 재무제표 칸 비교 실패: ${e instanceof Error ? e.message : String(e)}`);
+          return null;
+        });
         built.push({ symbol: sym, ms: Date.now() - t0, ttmChanged: w?.changed ?? null, viewChanged: vc?.changed ?? null });
       } else if (ttm && !ttm.error && !ttm.degraded?.length && ttm.staleInputs?.length) {
         // 실패가 아니라 fin 갱신 대기(재무 저장본 옛 엔진판)

@@ -42,10 +42,10 @@ export async function GET(
                 await writeTtmSnap(market, sym, t, { viewed: true }).catch(() => {});
                 return t;
               }
-              // 저장할 수 없는 계산(재무 저장본 옛 판 staleInputs 등) — 조회 기록은 남기고(배치 대상), 옛 판 fin 인 동안은 24시간 넘은 저장본도
-              // 새 값이 나올 때까지 그대로(오너 결정 2026-10-09)
-              await touchTtmSeen(market, sym, { upsert: true }).catch(() => {});
+              // 재무 저장본이 옛 판이라 저장할 수 없는 계산 — 조회 기록은 남기고(배치 대상), 24시간 넘은 저장본도 새 값이 나올 때까지 그대로
+              // (오너 결정 2026-10-09). upsert 는 이 경우만: 재무 저장본이 실제로 있는 종목이라 임의 문자열 요청(조회 실패)으로는 문서가 생기지 않는다
               if (t?.staleInputs?.length) {
+                await touchTtmSeen(market, sym, { upsert: true }).catch(() => {});
                 const old = await readTtmSnapAny(market, sym, { anyAge: true }).catch(() => null);
                 if (old) return { ...old.ttm, snapStale: true };
               }
