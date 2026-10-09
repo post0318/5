@@ -124,7 +124,8 @@ export async function docFiles(docID) {
   const dec = new TextDecoder("utf-8");
   const out = Object.fromEntries(Object.entries(files).map(([n, b]) => [n.split("/").pop(), dec.decode(b)]));
   memoZip.set(docID, out);
-  if (memoZip.size > 40) memoZip.delete(memoZip.keys().next().value);
+  // 메모리(2호기 사용자 상한 6GB) — 압축 푼 원본 문자열은 서류당 수십 MB. 판독 결과는 layers.mjs 가 종목 단위로 들고 있으니 원본은 2건만
+  while (memoZip.size > 2) memoZip.delete(memoZip.keys().next().value);
   return out;
 }
 

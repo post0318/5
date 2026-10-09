@@ -82,7 +82,7 @@ import { configureKrx, krxStats } from "./verify-kr/krx.mjs";
 import { configureCalendar } from "./verify-kr/calendar.mjs";
 import { krOriginalLayers, closeKrLayers } from "./verify-kr/layers.mjs";
 import { configureEdinet, edinetStats } from "./verify-jp/edinet.mjs";
-import { configureJpLayers, jpAnnualLayers, jpHalfLayers, jpValueLayers } from "./verify-jp/layers.mjs";
+import { configureJpLayers, jpAnnualLayers, jpHalfLayers, jpValueLayers, releaseJpSymbol } from "./verify-jp/layers.mjs";
 import { buildAudit, COGS_RULE_COMMON, commonModeOf, decimalsVintage, extItemOf, isDecimalsRounding } from "./metrics/audit.mjs";
 
 // ── 인자 ─────────────────────────────────────────────────────────────
@@ -11066,7 +11066,11 @@ async function verifyJp(sym) {
   }
   const ctx = await jpAnnualLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
   if (app.isq) await jpHalfLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
-  await jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardErrors });
+  try {
+    await jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardErrors });
+  } finally {
+    releaseJpSymbol(); // 종목 단위로 판독 결과 해제(메모리)
+  }
   return { sym, checks, review: [], hardErrors };
 }
 

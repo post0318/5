@@ -47,6 +47,12 @@ async function docIndex() {
 }
 
 const parsed = new Map();
+/** 종목 하나 검증이 끝나면 판독 결과·서류 목록·주가 메모를 비운다(메모리 — 42종목을 다 들고 있으면 2.85GB, 2026-10-09 실측). 날짜별 서류 목록(allDocs)은 공통이라 남긴다 */
+export function releaseJpSymbol() {
+  parsed.clear();
+  docsMemo.clear();
+  yMemo.clear();
+}
 async function loadDoc(row) {
   if (!parsed.has(row.docID)) parsed.set(row.docID, docFiles(row.docID).then((f) => ({ row, ...parseDoc(f) })));
   return parsed.get(row.docID);
