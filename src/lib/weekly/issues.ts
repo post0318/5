@@ -516,8 +516,10 @@ export function selectTopIssues(all: WeeklyIssue[], n = 3): WeeklyIssue[] {
         (acc, m) => (m.searchInterest == null ? acc : Math.max(acc ?? 0, m.searchInterest)),
         null,
       ),
-      reports: dedupeByTitle(interleave(members.map((m) => m.reports), 6)).slice(0, 3),
-      news: dedupeByTitle(interleave(members.map((m) => m.news), 10)).slice(0, 5),
+      // 병합 계열도 단일 주제와 같은 근거 수(리포트 12·뉴스 15) — 뉴스가 그 주 화두의 가장 빠른 원천(오너 2026-10-10).
+      // Gemini 입력(buildPayload)은 뉴스를 앞 5건만 싣는다.
+      reports: dedupeByTitle(interleave(members.map((m) => m.reports), 24)).slice(0, 12),
+      news: dedupeByTitle(interleave(members.map((m) => m.news), 30)).slice(0, 15),
     });
   }
 
