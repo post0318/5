@@ -87,6 +87,8 @@ const TITLE_RE = /^(.+?)\s*\((\d{6})\/([^)]+)\)$/;
 // 해외는 "종목명 (TICKER US/의견)" 형식. US 만 받는다(IN·HK 등 다른 시장 제외).
 // 제목에 투자의견이 같이 있어 다른 미국 소스와 달리 등급을 공짜로 얻는다.
 const TITLE_US_RE = /^(.+?)\s*\(([A-Z][A-Z.]{0,5})\s+US\/([^)]+)\)$/;
+// 일본 "종목명 (7203 JP/의견)" — 오너 지시 2026-10-10 "일본 현지 리서치까지"(종목코드는 접미사 없이 앱 일본 종목 코드와 같게)
+const TITLE_JP_RE = /^(.+?)\s*\((\d{3}[0-9A-Z])\s+(?:JP|JT)\/([^)]+)\)$/;
 
 async function fetchPage(page, categoryId = CATEGORY_ID) {
   const url = new URL(LIST_URL);
@@ -108,8 +110,9 @@ function parseItems(html) {
     const [, id, messageNumber, rawTitle, rawSummary] = subjectM;
     const title = rawTitle.trim();
     const tm = title.match(TITLE_RE);
-    const um = tm ? null : title.match(TITLE_US_RE);
-    if (!tm && !um) continue; // 종목 없는 리포트 또는 US 외 해외시장
+    const jm = tm ? null : title.match(TITLE_JP_RE);
+    const um = tm || jm ? jm : title.match(TITLE_US_RE);
+    if (!tm && !um) continue; // 종목 없는 리포트 또는 미국·일본 외 해외시장
     if (isCommonExcludedContent(rawSummary.trim() || rawTitle.trim(), "기업")) continue;
     const pdfM = rowHtml.match(/downConfirm\('(https:\/\/[^']+\.pdf\?attachmentId=\d+)'/);
     const analystM = rowHtml.match(/<\/p>\s*<\/td>\s*<td\s*>\s*([^<]+?)\s*<\/td>/);
@@ -118,7 +121,7 @@ function parseItems(html) {
       messageNumber,
       date: dateM[1],
       title: rawSummary.trim() || rawTitle.trim(),
-      market: tm ? "kr" : "us",
+      market: tm ? "kr" : jm ? "jp" : "us",
       stockName: (tm ?? um)[1].trim(),
       symbolHint: tm ? tm[2] : um[2].toUpperCase(),
       opinion: (tm ?? um)[3].trim(),
@@ -137,8 +140,11 @@ function parseItems(html) {
 // 전혀 없다(KB의 foldertemplate 같은 게 없음 — 실측 확인). GM(GlobalMonitor)
 // 에도 미래에셋 데이터가 아예 없어(실측 확인, auth 목록에 없음) 대체도 안
 // 되므로, 오너 지시(2026-09)에 따라 제목·헤드라인 키워드로 추측 분류한다:
-//  - 중국/인도/일본 등 미국·한국이 아닌 특정 국가가 명시되면 이 프로젝트가
+//  - 중국/인도 등 미국·한국·일본이 아닌 특정 국가가 명시되면 이 프로젝트가
 //    다루는 시장이 아니므로 건너뜀.
+//  - 일본이 명시되면 market:"jp"(오너 지시 2026-10-10 "일본 현지 리서치까지" —
+//    예전엔 건너뛰었다). 한국·미국이 같이 나오는 비교 글("일본과 한국의 …")은
+//    어느 한 시장 글이 아니라 예전처럼 건너뛴다.
 //  - "글로벌"/"Global"/"해외"/"미국"/"US"/"나스닥"/"Nasdaq" 등 신호가 있으면
 //    market:"us".
 //  - 그 외(업종명+비중확대/축소 등 국내 브로커 관행, 국가 신호 없음)는
@@ -147,7 +153,9 @@ function parseItems(html) {
 // 키워드가 없으면 kr로 남음, 오너 지적 2026-09로 확인·수정) — 전수
 // 정확도보다 "타국 콘텐츠가 국내로 잘못 들어가지 않는 것"과 "명백한 해외
 // 콘텐츠는 us로 건너가는 것" 두 가지를 우선한다.
-const EXCLUDE_COUNTRY_RE = /중국|인도|인디아|일본|홍콩|대만|베트남|동남아/;
+const EXCLUDE_COUNTRY_RE = /중국|인도|인디아|홍콩|대만|베트남|동남아/;
+const JAPAN_RE = /일본|Japan|닛케이|니케이|TOPIX/i;
+const KR_OR_US_RE = /한국|국내|코스피|코스닥|미국|\bUS\b/;
 const US_HINT_RE = /글로벌|Global|해외|미국|\bUS\b|나스닥|Nasdaq|S&P|다우존스|연준|\bFed\b/i;
 // 시리즈명만으로 해외(미국)로 강제 분류 — 신호 키워드 없이도 매회 미국 AI
 // 인프라/전력/자본시장 주제인 것을 실측 확인(2026-09, 오너 지적).
@@ -156,6 +164,7 @@ function classifyMarket(label, headline) {
   const hay = `${label} ${headline}`;
   if (US_SERIES_PREFIXES.some((p) => label.trim().startsWith(p))) return "us";
   if (EXCLUDE_COUNTRY_RE.test(hay)) return null; // 이 프로젝트 대상 시장 아님
+  if (JAPAN_RE.test(hay)) return KR_OR_US_RE.test(hay) ? null : "jp";
   if (US_HINT_RE.test(hay)) return "us";
   return "kr";
 }
@@ -317,7 +326,7 @@ if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
   if (VERCEL_BYPASS) headers["x-vercel-protection-bypass"] = VERCEL_BYPASS;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
 // 국내·해외를 시장별로 나눠 보낸다 — 라우트가 호출당 market 하나만 받는다.
-for (const market of ["kr", "us"]) {
+for (const market of ["kr", "us", "jp"]) {
   const bucket = items.filter((it) => (it.market ?? "kr") === market);
   if (bucket.length === 0) continue;
   const up = await fetch(IMPORT_URL, {

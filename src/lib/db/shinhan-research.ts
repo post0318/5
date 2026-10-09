@@ -22,6 +22,15 @@ export function isResearchMarketId(v: string): v is ResearchMarketId {
 }
 
 /**
+ * 일본 리서치 종목코드 → 앱 일본 종목 코드("7203"). 수집기는 증권사 표기 그대로 "7203.JP"·"8766.JT"·"7203.T"·"2897 JT Equity" 를
+ * 보낸다(오너 지시 2026-10-10 "일본 현지 리서치까지" — 접미사가 붙은 채 저장되면 종목 화면 조회에 안 걸린다). 4자리 코드가 아니면 null.
+ */
+export function normalizeJpSymbol(raw: string | null | undefined): string | null {
+  const m = String(raw ?? "").trim().toUpperCase().match(/^(\d{3}[0-9A-Z])(?:[.\s]+(?:JP|JT|T)(?:\s+EQUITY)?)?$/);
+  return m ? m[1] : null;
+}
+
+/**
  * 증권사 리서치(기업분석) 리포트 — 개인용 로컬 수집 (CLAUDE.md 예외 참고).
  * 여러 증권사를 붙일 걸 감안해 스키마에 `source`를 두고 `_id`도
  * `${source}:${게시글번호}`로 네임스페이스했다(증권사별 ID 체계가 달라 충돌
@@ -1355,7 +1364,11 @@ export async function getShinhanResearchBySymbol(
   // 산업분석이 이 종목을 실질적으로 다루면(relatedSymbols) 기업분석과
   // 함께 보여준다(2026-09-19 추가 — BNK "반도체" 산업분석이 삼성전자를
   // 26번 언급하는데도 symbol이 null이라 안 보이던 문제).
-  const symbolFilter = { $or: [{ symbol }, { relatedSymbols: symbol }] };
+  // 일본은 수신 라우트가 접미사를 떼고 저장하지만, 그 전에 들어온 문서는 "7203.JP"·"7203.JT"·"7203.T" 일 수 있어 함께 찾는다.
+  const symbolFilter =
+    market === "jp"
+      ? { $or: [{ symbol: { $in: [symbol, `${symbol}.JP`, `${symbol}.JT`, `${symbol}.T`] } }, { relatedSymbols: symbol }] }
+      : { $or: [{ symbol }, { relatedSymbols: symbol }] };
   // 중복 제거로 개수가 줄어들 수 있어 limit보다 넉넉히 가져온 뒤 잘라낸다.
   const fetchLimit = limit + 10;
   const recent = await col

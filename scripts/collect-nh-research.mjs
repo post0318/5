@@ -203,9 +203,16 @@ async function resolveUsTicker(name) {
       const items = (await res.json()).items ?? [];
       hit =
         items.find((i) => i.nationCode === "USA" && i.name?.trim() === key) ??
+        items.find((i) => i.nationCode === "JPN" && i.name?.trim() === key) ??
         items.find((i) => i.nationCode === "USA") ??
+        items.find((i) => i.nationCode === "JPN") ??
         null;
-      if (hit) hit = { symbol: String(hit.code).toUpperCase(), stockName: hit.name ?? key };
+      // 일본 회사의 미국 ADR("소니 그룹 ADR")이 먼저 걸리면 본국 상장(도쿄)으로 — 오너 지시 2026-10-10 "일본 현지 리서치까지"
+      if (hit?.nationCode === "USA" && /\s*ADR$/.test(hit.name ?? "")) {
+        const base = hit.name.replace(/\s*ADR$/, "").trim();
+        hit = items.find((i) => i.nationCode === "JPN" && i.name?.trim() === base) ?? hit;
+      }
+      if (hit) hit = { symbol: String(hit.code).toUpperCase(), stockName: hit.name ?? key, market: hit.nationCode === "JPN" ? "jp" : "us" };
     }
   } catch {
     /* 무시 */
@@ -239,7 +246,12 @@ function decodeEntities(s) {
 const NON_US_RE =
   /중국|차이나|China|일본|엔화|엔캐리|Japan|유럽|Europe|베트남|Vietnam|인도(?!네시아)|India\b|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan/i;
 const US_HINT_RE = /미국|\bUS\b|나스닥|Nasdaq|S&P|다우|연준|\bFed\b|FOMC|월가|Wall Street|Global\s?Markets/i;
+// 일본 시장 글(일본만 명시, 한국·미국 비교 글 아님)은 jp 로(오너 지시 2026-10-10 "일본 현지 리서치까지" — 예전엔 건너뛰었다).
+// 엔화·엔캐리만 있는 글은 환율 얘기라 예전처럼 건너뛴다.
+const JAPAN_RE = /일본|Japan|닛케이|니케이|TOPIX/i;
+const OTHER_COUNTRY_RE = /중국|차이나|China|유럽|Europe|베트남|Vietnam|인도(?!네시아)|India\b|신흥국|이머징|Emerging|브라질|Brazil|대만|Taiwan|한국|국내|코스피|미국|\bUS\b/i;
 function classifyMarket(text) {
+  if (JAPAN_RE.test(text) && !OTHER_COUNTRY_RE.test(text)) return "jp";
   if (NON_US_RE.test(text)) return null;
   if (US_HINT_RE.test(text)) return "us";
   return "kr";
@@ -381,7 +393,7 @@ for (const r of overseasRawRows) {
       views: null,
       category: "기업",
       board: nhBoard(r.__ditCd),
-      market: "us",
+      market: hit.market,
     });
     continue;
   }
@@ -390,7 +402,9 @@ for (const r of overseasRawRows) {
   if (r.__ditCd !== "03") continue;
   const sm = rawTitle.match(STRATEGY_INSIDE_RE);
   if (sm) {
-    if (NON_US_COUNTRY_RE.test(sm[1])) continue;
+    // "[전략 인사이드/일본]" 은 일본 시장 전략(오너 지시 2026-10-10 "일본 현지 리서치까지" — 예전엔 미국 회차만 받고 버렸다)
+    const smMarket = /일본/.test(sm[1]) ? "jp" : NON_US_COUNTRY_RE.test(sm[1]) ? null : "us";
+    if (!smMarket) continue;
     if (!r.hpge_fle_url_cts) continue;
     if (isCommonExcludedContent(sm[2].trim(), "산업")) continue;
     collected.push({
@@ -407,12 +421,14 @@ for (const r of overseasRawRows) {
       views: null,
       category: "산업",
       board: nhBoard(r.__ditCd),
-      market: "us",
+      market: smMarket,
     });
     continue;
   }
   const gm = rawTitle.match(BRACKET_RE);
-  if (gm && !NON_US_COUNTRY_RE.test(gm[1]) && r.hpge_fle_url_cts && !isCommonExcludedContent(`${gm[1].trim()} ${gm[2].trim()}`, "산업")) {
+  // "[일본 …]" 라벨(일본만 명시)은 일본 산업분석으로(같은 지시) — 다른 나라가 같이 있으면 예전처럼 건너뜀
+  const gmMarket = gm ? (/일본/.test(gm[1]) && !/중국|유럽|홍콩|대만|동남아|한국|인도/.test(gm[1]) ? "jp" : NON_US_COUNTRY_RE.test(gm[1]) ? null : "us") : null;
+  if (gm && gmMarket && r.hpge_fle_url_cts && !isCommonExcludedContent(`${gm[1].trim()} ${gm[2].trim()}`, "산업")) {
     collected.push({
       id: r.rsh_ppr_no,
       date: isoDate(r.rsh_ppr_dru_dt),
@@ -427,7 +443,7 @@ for (const r of overseasRawRows) {
       views: null,
       category: "산업",
       board: nhBoard(r.__ditCd),
-      market: "us",
+      market: gmMarket,
     });
   }
 }

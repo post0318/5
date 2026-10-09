@@ -126,7 +126,15 @@ function isoDate(dotted) {
 // CC: "종목명 (TICKER.US): 헤드라인" — 기업. 안 걸리면 산업분석/투자전략
 // 성격이라 대괄호/콜론 라벨로 수집(예: "[미국은 지금] ...").
 const US_TICKER_RE = /^(.+?)\s*\(([A-Za-z0-9.-]{1,10})\.US\)\s*:\s*(.+)$/;
+// 미국 게시판(CC)에 섞인 일본 종목 "이비덴(4062.JP): …"·"무라타제작소(6981.JP): …" — 예전엔 미국 산업분석으로 새던 것(키움증권:CC:1688).
+// 오너 지시 2026-10-10 "일본 현지 리서치까지" — 일본 종목 리포트로(market jp, 종목코드는 접미사 없이 앱 일본 종목 코드와 같게).
+const JP_TICKER_RE = /^(.+?)\s*\((\d{3}[0-9A-Z])\.(?:JP|JT|T)\)\s*[:：]\s*(.+)$/;
 function parseUsTickerBoard(title) {
+  const jm = title.match(JP_TICKER_RE);
+  if (jm) {
+    const [, stockName, code, headline] = jm;
+    return { title: headline.trim(), stockName: stockName.trim(), symbol: code, category: "기업", market: "jp" };
+  }
   const tm = title.match(US_TICKER_RE);
   if (tm) {
     const [, stockName, ticker, headline] = tm;
@@ -297,7 +305,7 @@ async function collectBoard(board, cutoff) {
         stockName: parsed.stockName,
         symbol: parsed.symbol,
         unlisted: parsed.unlisted === true,
-        market: board.market,
+        market: parsed.market ?? board.market,
         category: parsed.category,
         analyst: r.workId ?? "",
         opinion: "",

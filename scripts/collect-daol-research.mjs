@@ -124,6 +124,10 @@ function classify(row, b) {
   if (b.kind === "company") {
     const m = t.match(/^(.+?)\s*\((\d{6})\)\s*[-–]\s*(.+)$/);
     if (m) return { category: "기업", stockName: m[1].trim(), symbol: m[2], title: m[3].trim() };
+    // 일본 종목 "닛신홀딩스(2897 JT Equity) - CY2Q26 Review…"(블룸버그 표기) — 오너 지시 2026-10-10 "일본 현지 리서치까지".
+    // 예전엔 국내 종목·코드 없음으로 저장됐다(다올투자증권:143232). 종목코드는 접미사 없이(앱 일본 종목 코드와 같게).
+    const jp = t.match(/^(.+?)\s*\((\d{3}[0-9A-Z])\s+(?:JT|JP)(?:\s+Equity)?\)\s*[-–]\s*(.+)$/i);
+    if (jp) return { category: "기업", stockName: jp[1].trim(), symbol: jp[2], title: jp[3].trim(), market: "jp" };
     // 코드 없는 글(해외기업 등) — 회사명만 뽑고 서버 이름 검색에 맡긴다
     const n = t.match(/^(.+?)\s*[-–]\s*(.+)$/);
     return { category: "기업", stockName: (n?.[1] ?? t).trim(), symbol: null, title: (n?.[2] ?? t).trim() };
@@ -164,11 +168,11 @@ for (const b of BOARDS) {
       if (!row.date || row.date < cutoff) continue;
       const c = classify(row, b);
       if (!c) continue;
-      if (isCommonExcludedContent(`${c.stockName} ${row.title}`, c.category, "kr")) {
+      if (isCommonExcludedContent(`${c.stockName} ${row.title}`, c.category, c.market ?? "kr")) {
         excluded++;
         continue;
       }
-      collected.push({ id: row.seq, date: row.date, market: "kr", analyst: row.analyst, views: row.views, pdfUrl: row.pdfUrl, opinion: "", targetPrice: null, summary: "", board: `${b.label}(${b.r}/${b.s})`, ...c });
+      collected.push({ id: row.seq, date: row.date, market: c.market ?? "kr", analyst: row.analyst, views: row.views, pdfUrl: row.pdfUrl, opinion: "", targetPrice: null, summary: "", board: `${b.label}(${b.r}/${b.s})`, ...c });
       got++;
     }
     if (r.rows.length < 10 || page * 10 >= r.total) break;
@@ -200,15 +204,18 @@ if (DRY_RUN) {
 const headers = { "Content-Type": "application/json" };
 if (CRON_SECRET) headers.Authorization = "Bearer " + CRON_SECRET;
 else if (APP_PASSWORD) headers["x-app-token"] = APP_PASSWORD;
-const items = collected.map((it) => ({
-  id: it.id, date: it.date, title: it.title, stockName: it.stockName, symbol: it.symbol, analyst: it.analyst,
-  opinion: it.opinion, targetPrice: it.targetPrice, summary: it.summary, pdfUrl: it.pdfUrl, views: it.views,
-  category: it.category, board: `다올투자증권 > ${it.board}`,
-}));
-const up = await fetch(IMPORT_URL, { method: "POST", headers, body: JSON.stringify({ items, source: SOURCE, market: "kr" }) });
-const upBody = await up.text();
-if (appSendFailed(up, upBody)) {
-  console.error(`✗ [${SOURCE}/kr] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
-  process.exit(1);
+// 라우트가 POST 1회당 market 하나만 받는다 — 일본 종목(jp)이 섞이면 나눠 보낸다
+for (const market of [...new Set(collected.map((it) => it.market))]) {
+  const items = collected.filter((it) => it.market === market).map((it) => ({
+    id: it.id, date: it.date, title: it.title, stockName: it.stockName, symbol: it.symbol, analyst: it.analyst,
+    opinion: it.opinion, targetPrice: it.targetPrice, summary: it.summary, pdfUrl: it.pdfUrl, views: it.views,
+    category: it.category, board: `다올투자증권 > ${it.board}`,
+  }));
+  const up = await fetch(IMPORT_URL, { method: "POST", headers, body: JSON.stringify({ items, source: SOURCE, market }) });
+  const upBody = await up.text();
+  if (appSendFailed(up, upBody)) {
+    console.error(`✗ [${SOURCE}/${market}] 앱 전송 실패 HTTP ${up.status}: ${upBody.slice(0, 300)}`);
+    process.exit(1);
+  }
+  console.log(`✔ [${SOURCE}/${market}] 앱 전송 완료 (${items.length}건): ${upBody}`);
 }
-console.log(`✔ [${SOURCE}/kr] 앱 전송 완료 (${items.length}건): ${upBody}`);

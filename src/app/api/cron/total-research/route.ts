@@ -4,6 +4,7 @@ import {
   shinhanResearchCol,
   upsertShinhanResearch,
   isResearchMarketId,
+  normalizeJpSymbol,
   type ShinhanResearchDoc,
 } from "@/lib/db/shinhan-research";
 import { findCorpsByExactName } from "@/lib/markets/kr/corpcode";
@@ -142,10 +143,14 @@ export async function POST(req: Request) {
       // 산업분석 리포트는 stockName 이 업종명("반도체" 등)이라 이름 검색으로
       // 종목코드를 추측하면 안 됨(예: "반도체"가 우연히 어떤 회사명과 부분
       // 일치해 잘못된 종목에 달라붙을 위험) — 카테고리로 아예 이름 검색을 건너뜀.
+      // 일본 종목코드는 접미사 없이 저장 — 수집기·공통 lib 가 "7203.JP"·"8766.JT"·"7203.T" 로 보내는데 앱 일본 종목 코드는 "7203" 이라
+      // 종목 화면 조회(getShinhanResearchBySymbol)에 안 걸렸다(오너 지시 2026-10-10 "일본 현지 리서치까지").
       symbol:
         it.category === "산업"
           ? null
-          : (it.symbol ?? (market === "kr" ? resolveSymbol(it.stockName) : null)),
+          : market === "jp"
+            ? (normalizeJpSymbol(it.symbol) ?? null)
+            : (it.symbol ?? (market === "kr" ? resolveSymbol(it.stockName) : null)),
       analyst: it.analyst,
       opinion: it.opinion,
       targetPrice: it.targetPrice ?? null,

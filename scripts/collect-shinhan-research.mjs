@@ -214,10 +214,13 @@ console.log(`▶ 신한투자증권 산업분석 리포트 수집: 최근 ${DAYS
   }
 }
 
-// 해외 산업/기업분석(boardName=foreignstock, 미국만) — 구
+// 해외 산업/기업분석(boardName=foreignstock, 미국·일본) — 구
 // collect-shinhan-overseas-research.mjs.
 console.log(`▶ 신한투자증권 해외 기업분석 수집: 최근 ${DAYS}일, 최대 30페이지`);
 const TITLE_US_RE = /\(([A-Z][A-Z.]{0,5})\.US\)\s*$/;
+// 일본 종목 "닌텐도(7974.JP)"·"동경해상홀딩스(8766.JP)" — 오너 지시 2026-10-10 "일본 현지 리서치까지"(예전엔 미국만 받고 버렸다:
+// 06-30~10-08 300건 중 .JP 23건, 종목 리포트 약 8건 + Japan Weekly). 종목코드는 접미사 없이(앱 일본 종목 코드와 같게).
+const TITLE_JP_RE = /\((\d{3}[0-9A-Z])\.(?:JP|JT|T)\)\s*$/;
 {
   let oStartId;
   let oStop = false;
@@ -255,6 +258,28 @@ const TITLE_US_RE = /\(([A-Z][A-Z.]{0,5})\.US\)\s*$/;
             market: "us",
           });
         }
+        continue;
+      }
+      const jm = tm ? null : stockField.match(TITLE_JP_RE);
+      if (jm) {
+        // 주간물("Japan Weekly(10월 2주차)" — 대표 종목이 붙어 있어도 주간 시황)은 공통 제외가 거른다
+        if (isCommonExcludedContent(`${stockField} ${it.f1}`, "기업")) continue;
+        items.push({
+          id: String(it.fn),
+          date,
+          title: it.f1,
+          stockName: stockField.replace(TITLE_JP_RE, "").trim(),
+          symbol: jm[1],
+          analyst: it.f4 ?? "",
+          opinion: "",
+          targetPrice: null,
+          summary: excerpt(it.f7),
+          pdfUrl: it.f3 || null,
+          views: Number(it.f5) || null,
+          category: "기업",
+          board: "신한투자증권 > 해외 산업 및 기업분석(foreignstock)",
+          market: "jp",
+        });
         continue;
       }
       if (!tm) {
