@@ -11084,7 +11084,7 @@ async function verifyKr(sym) {
   {
     const corp = KR_CORP.get(sym);
     if (corp) await krOriginalLayers({
-      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same, dartVint, row, ov: fetched.ov ?? null,
+      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same, dartVint, row, ov: fetched.ov ?? null, an: fetched.an ?? null,
       consts: { PASS, FAIL, NA, COMMON },
       // 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 와 정확 대조
       quarter: { isq, bsq, cfq }, items: KR_A_ITEMS,
@@ -11188,9 +11188,9 @@ async function verifyKr(sym) {
     if (LH && l4.length === 4 && want && lq === want) {
       const s4 = (nm) => { const xs = l4.map((k0) => IQn[nm]?.[k0]); return xs.every((v0) => v0 != null) ? xs.reduce((a0, b1) => a0 + b1, 0) : null; };
       const hRow = (key) => { const i0 = h.columns.findIndex((c) => c.kind === "ltm"); return h.rows.find((r1) => r1.key === key)?.values[i0] ?? null; };
-      eqv("하이라이트 LTM 매출 = 분기 최근 4개 합", "LTM", hRow("revenue"), s4("매출액"));
-      eqv("하이라이트 LTM 영업이익 = 분기 최근 4개 합", "LTM", hRow("opinc"), s4("영업이익"));
-      eqv("하이라이트 LTM 순이익 = 분기 최근 4개 합", "LTM", LH.ni, s4("당기순이익"));
+      // 손익 LTM 은 "최근 사업연도 + 당기 누적 − 당기 보고서 전기 누적(정정본)"(오너 결정 2026-10-10)이라 분기 화면 4개 열 합과 다를 수 있다 — 대조하지 않고
+      // K4 가 DART 원자료로 직접 대조한다
+      void s4;
       eqv("하이라이트 LTM 총차입금 = 최근 분기 재무상태표", "LTM", LH.debt, BQi["bs:note:총차입금"]?.[lq]);
       // 하이라이트는 비지배지분이 전 열 0(또는 없음)이면 줄을 숨긴다 — 숨긴 줄은 0 으로 읽는다. 재무상태표 값이 0 이 아니면 그대로 실패(2026-10-02)
       const nciHidden = !h.rows.some((x) => x.key === "nci");

@@ -199,6 +199,13 @@ export interface TrailingMultiples {
 
 /** TTM(최근 4분기 누적) 플로우 지표. */
 export interface TtmFlows {
+  /**
+   * 한국 LTM 부가 흐름(오너 결정 2026-10-10 — 정정 후 값으로 통일): 최근 사업연도 + 당기 누적 − 당기 보고서 전기 누적(정정본). 매출총이익·세전이익·
+   * 법인세·영업활동 현금흐름·유형/무형자산 취득·이자·배당 지급. LTM 이 사업연도면 그 사업연도 값. 못 구하면 null(대체 없음)
+   */
+  krLtm?: Partial<Record<"gross" | "pretax" | "tax" | "ocf" | "capex" | "intangAcq" | "intPaid" | "divPaid", number | null>>;
+  /** krLtm 항목 중 전기 누적을 당기 보고서 전기 열이 아니라 전년 같은 보고서(정정 전일 수 있음)에서 가져온 항목 — 화면 주석용 */
+  krLtmPriorFromOldReport?: string[];
   /** 계산 기준 라벨 (예: "FY2025 + 2026 반기 − 2025 반기") */
   periodLabel: string;
   /** 조회 자체가 실패했으면 그 사유 — 모든 값이 null(대체 계산 금지, 화면은 이 사유를 보여준다) */

@@ -198,10 +198,14 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   // LTM 주당배당금이 최근 사업연도 값으로 대신된 경우 — 주석에 남긴다(감사 1차 ⑨)
   const dpsLtmFallback = dpsTtm == null && dpsByYear.get(lastFy) != null;
   const divYield = dps.map((d, i) => (d != null && priceByCol[i] ? (d / priceByCol[i]!) * 100 : null));
-  // OCF/CapEx 는 TTM 미보유 → LTM 컬럼은 최근 사업연도값
-  const ocf = columns.map((c) => (c.kind === "ltm" ? at(aOcf, lastFy) : c.kind === "estimate" ? null : at(aOcf, cy(c))));
+  // LTM 영업현금흐름·자본지출 = 손익 TTM 과 같은 식(ttm.krLtm — 오너 결정 2026-10-10, 최근 사업연도 + 당기 누적 − 당기 보고서 전기 누적). 손익 TTM 이
+  // 사업연도면 그 사업연도 값. 예전엔 LTM 열에 최근 사업연도 값을 그대로 넣었다(그림자 채우기)
+  // TTM 이 없으면(조회 실패) LTM 열 현금흐름도 빈칸 — 사업연도 값으로 채우지 않는다
+  const ltmIsFy = !!ttm?.periodLabel && !/\+/.test(ttm.periodLabel);
+  const ltmCf = (k: "ocf" | "capex", a: Map<number, number>) => (ltmIsFy ? at(a, lastFy) : (ttm?.krLtm?.[k] ?? null));
+  const ocf = columns.map((c) => (c.kind === "ltm" ? ltmCf("ocf", aOcf) : c.kind === "estimate" ? null : at(aOcf, cy(c))));
   const capex = columns.map((c) => {
-    const v = c.kind === "fy" ? at(aCapex, cy(c)) : c.kind === "ltm" ? at(aCapex, lastFy) : null;
+    const v = c.kind === "fy" ? at(aCapex, cy(c)) : c.kind === "ltm" ? ltmCf("capex", aCapex) : null;
     return v == null ? null : -Math.abs(v);
   });
   const fcf = columns.map((_, i) => (ocf[i] != null && capex[i] != null ? ocf[i]! + capex[i]! : null));
@@ -304,6 +308,8 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   // LTM 손익 항목별 대체·근사(분기 자료 부족 → 연간값, EPS 주식수 환산) — 조용한 대체 금지(감사 1차 ⑨)
   const RK: Record<string, string> = { revenue: "매출액", opIncome: "영업이익", netIncome: "순이익", eps: "EPS" };
   for (const [k, why] of Object.entries(ttm?.reasons ?? {})) if (why && RK[k]) notes.push(`현재/LTM ${RK[k]}: ${why}`);
+  if (ttm?.krLtmPriorFromOldReport?.some((k) => k === "ocf" || k === "capex"))
+    notes.push(`현재/LTM 영업현금흐름·자본지출: 전기 누적은 ${ttm.periodLabel.match(/− (\d{4} \S+)$/)?.[1] ?? "전년 같은"} 보고서 값(DART 재무제표 API 가 분기·반기 현금흐름표 전기 열을 주지 않음 — 정정 전일 수 있음)`);
   if (dpsLtmFallback) notes.push(`현재/LTM 주당배당금: 최근 12개월 배당기준일 자료 없음 — FY${lastFy} 사업연도 값`);
   if (facts.ofsYears?.length) notes.push(`${facts.ofsYears.map((y) => `FY${y}`).join("·")}: 연결 재무제표 없음 → 별도 재무제표`);
   if (approxMcap) notes.push("일부 연도 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사");

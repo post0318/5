@@ -14,6 +14,7 @@ import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartDocLeaseCells, dartDo
 import { daCandidates, invTableDep } from "./docda.mjs";
 import { dataGoDividends } from "./datago.mjs";
 import { krxCapsOn } from "./krx.mjs";
+import { emptyKind } from "./calendar.mjs";
 import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts } from "./b16.mjs";
 
 const COL = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
@@ -220,10 +221,18 @@ export async function krOriginalLayers(ctx) {
   // LTM 열은 DART 정기공시가 있으면 반드시 있어야 한다(감사 2차 ① — 열이 없으면 LTM 검사가 조용히 사라졌다)
   if (!H.LTM && L.latestPeriod()) fail("K1", "LTM 열 존재(하이라이트)", "LTM", `DART 정기공시 ${L.latestPeriod().nm} 이 있는데 하이라이트 LTM 열 없음`);
   if (H.LTM && capCur && capCur.common != null) {
+    // KRX 가 거래일 D 자료를 공식 게시일(다음 거래일) 전에 내보낸 경우(2026-10-10 실측 — 10-08 자료가 연휴 중 검증기에는 왔고 앱 요청에는 빈 응답) —
+    // 앱은 D 를 게시 전으로 보고 직전 거래일 값을 쓴다. 그 직전 거래일 KRX 값도 기대치로 둔다(D 가 게시 대기 기간일 때만)
+    let early = null;
+    if ((await emptyKind(capCur.date)) === "pending") {
+      const d0 = new Date(Date.UTC(+capCur.date.slice(0, 4), +capCur.date.slice(4, 6) - 1, +capCur.date.slice(6, 8) - 1));
+      try { const kp = await krxCapsOn(sym, d0.toISOString().slice(0, 10).replace(/-/g, "")); if (kp?.common != null) early = kp; } catch (e) { err("KRX 직전 거래일(게시 대기 기간)", e); }
+    }
     const appPref = H.LTM.pref ?? (rowHidden("pref_mcap") ? 0 : null);
     // 검증기가 건너뛴 게시 전 거래일(그 거래일~다음 거래일 KST) — 앱은 그 날 자료를 이미 받았을 수 있다. 다음 거래일도 지난 거래일의 빈 응답은 krx.mjs 가 조회 실패로 던진다
     const gap = capCur.pendingDays?.length ? capCur.pendingDays.join("·") : null;
     if (appPref === capCur.preferred) { add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: PASS, app: appPref, src: capCur.preferred, note: `KRX ${capCur.date}` }); ltmPrefOk = appPref; }
+    else if (early && appPref === early.preferred && H.LTM.mc === early.common) { add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: PASS, app: appPref, src: early.preferred, note: `KRX ${capCur.date} 는 게시 대기 기간(다음 거래일 전) — 앱 = 직전 거래일 KRX ${early.date}` }); ltmPrefOk = appPref; }
     else if (gap && appPref != null && !(appPref === 0 && capCur.preferred > 0)) {
       // 게시 전 거래일을 건너뛴 경우 — 앱 기준일이 그 날일 수 있다. 앱 값을 믿지 않고 우선주마다 Yahoo 종가(게시 전 날) × KRX 상장주식수(최근
       // 게시일)로 따로 확인(보통주와 같은 방식, 감사 2차 ③). 확인 못 하면 검증불가 — LTM EV 도 검증불가(통과로 세지 않음)
@@ -259,6 +268,7 @@ export async function krOriginalLayers(ctx) {
       } else { add("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", { status: NA, app: appPref, src: capCur.preferred, note: `KRX ${gap} 게시 전 — 우선주 독립 확인 불가(${why}) — 재실행 필요` }); ltmPrefPending = true; }
     } else exact("K1", "우선주 시가총액 = KRX 최근 거래일", "LTM", appPref, capCur.preferred, `KRX ${capCur.date}`);
     if (H.LTM.mc === capCur.common) { add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: `KRX ${capCur.date}` }); ltmPrice = capCur.close; }
+    else if (early && H.LTM.mc === early.common) { add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: `KRX ${capCur.date} 는 게시 대기 기간 — 앱 = 직전 거래일 KRX ${early.date}` }); ltmPrice = early.close; }
     else {
       // 앱 시세 규칙(quote/index.ts): KRX 일별 자료가 아직 안 나온 날은 Yahoo 종가 × KRX 상장주식수 — 검증기가 Yahoo 종가를 따로 받아 확인
       let why = null;
@@ -641,13 +651,59 @@ async function ltmLayer(c) {
   for (let i = 3; i >= 0; i--) { const idx = Y * 4 + (q - 1) - i; seq.push([Math.floor(idx / 4), (idx % 4) + 1]); }
   const hi = c.h.columns.findIndex((x) => x.kind === "ltm");
   const hrow = (key) => c.h.rows.find((x) => x.key === key)?.values[hi] ?? null;
+  // LTM = 최근 사업연도 + 당기 누적 − 당기 보고서의 전기 누적(정정본)(오너 결정 2026-10-10 — 예전 "최근 4개 분기 합"은 전년 분기를 정정 전 값으로 더했다).
+  // 당기 보고서에 전기 누적 칸이 없으면(현금흐름표 — DART 재무제표 API 가 분기·반기 전기 열을 주지 않음) 전년 같은 보고서의 당기 누적(정정 전일 수 있음)
+  void seq; void qval;
+  const annualR = await R(Y - 1, "11011");
+  const priorOwn = await R(Y - 1, lp.code);
+  const ltmOf = (it) => {
+    const a = oneVal(pick(annualR ?? [], it), (r) => num(r.thstrm_amount)).v;
+    const cc = oneVal(pick(cur.rows, it), (r) => num(r.thstrm_add_amount) ?? num(r.thstrm_amount)).v;
+    let pc = oneVal(pick(cur.rows, it), (r) => num(r.frmtrm_add_amount) ?? num(r.frmtrm_amount)).v, from = "당기 보고서 전기 누적";
+    if (pc == null) { pc = oneVal(pick(priorOwn ?? [], it), (r) => num(r.thstrm_add_amount) ?? num(r.thstrm_amount)).v; from = `${Y - 1} ${QNAME[q]} 보고서 당기 누적(당기 보고서에 전기 열 없음)`; }
+    return { v: a != null && cc != null && pc != null ? a + cc - pc : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − ${from} ${pc}`, old: from !== "당기 보고서 전기 누적" };
+  };
   let revLtm = null;
   for (const [key, it, label2] of [["revenue", IT.rev, "매출"], ["opinc", IT.op, "영업이익"], ["ni", IT.ni, "순이익(연결)"]]) {
-    const parts = [];
-    for (const [y, qq] of seq) parts.push(await qval(y, qq, it));
-    const exp = parts.every((p) => p.v != null) ? parts.reduce((a, p) => a + p.v, 0) : null;
-    if (key === "revenue") revLtm = exp;
-    exact("K4", `LTM ${label2} = DART 최근 4개 분기 합`, "LTM", key === "ni" ? LT.ni : hrow(key), exp, parts.map((p, i) => `${seq[i][0]}Q${seq[i][1]} ${p.v ?? "?"}(${p.how})`).join(" + "));
+    const r0 = ltmOf(it);
+    if (key === "revenue") revLtm = r0.v;
+    exact("K4", `LTM ${label2} = DART 사업연도 + 당기 누적 − 당기 보고서 전기 누적`, "LTM", key === "ni" ? LT.ni : hrow(key), r0.v, r0.how);
+  }
+  // 부가 흐름(/ttm krLtm — 재무분석·하이라이트 LTM 이 쓰는 값): 매출총이익·세전이익·법인세·영업현금흐름·유형/무형자산 취득·이자·배당 지급. 계정 = 재무분석 정의(규칙
+  // 문장을 검증기가 따로 적음 — ID 우선, 없으면 이름)
+  const XT = {
+    gross: [["ifrs-full_GrossProfit"], ["매출총이익"], ["IS", "CIS"]],
+    pretax: [["ifrs-full_ProfitLossBeforeTax"], ["법인세비용차감전순이익"], ["IS", "CIS"]],
+    tax: [["ifrs-full_IncomeTaxExpenseContinuingOperations", "ifrs-full_IncomeTaxExpenseBenefit"], ["법인세비용"], ["IS", "CIS"]],
+    ocf: [["ifrs-full_CashFlowsFromUsedInOperatingActivities"], ["영업활동현금흐름"], ["CF"]],
+    capex: [["ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"], ["유형자산의취득"], ["CF"]],
+    intangAcq: [["ifrs-full_PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities"], ["무형자산의취득"], ["CF"]],
+    intPaid: [["ifrs-full_InterestPaidClassifiedAsOperatingActivities"], ["이자의지급"], ["CF"]],
+    divPaid: [["ifrs-full_DividendsPaidClassifiedAsFinancingActivities"], ["배당금의지급", "배당금지급"], ["CF"]],
+  };
+  const kl = tt?.ttm?.krLtm ?? null;
+  const oldList = tt?.ttm?.krLtmPriorFromOldReport ?? [];
+  const xExp = {};
+  for (const [k, it] of Object.entries(XT)) {
+    const r0 = ltmOf(it);
+    xExp[k] = r0.v;
+    exact("K4", `LTM ${k} (/ttm 부가 흐름) = DART 사업연도 + 당기 누적 − 전기 누적`, "LTM", kl ? (kl[k] ?? null) : null, r0.v, r0.how);
+    // 전년 같은 보고서 값을 쓴 항목은 앱도 그 사실을 기록해야(화면 주석) — 기록이 다르면 실패
+    if (r0.v != null) add("K4", `LTM ${k} 전기 누적 출처 표시`, "LTM", r0.old === oldList.includes(k) ? { status: PASS, note: r0.old ? "전년 같은 보고서(기록 있음)" : "당기 보고서 전기 열" } : { status: FAIL, note: `검증기 ${r0.old ? "전년 같은 보고서" : "당기 보고서 전기 열"} vs 앱 기록 ${oldList.includes(k) ? "전년 같은 보고서" : "당기 보고서"}` });
+  }
+  // 하이라이트 LTM 영업현금흐름·자본지출(자본지출은 음수 표시)
+  exact("K4", "하이라이트 LTM 영업활동 현금흐름 = DART 사업연도 + 누적 − 전기 누적", "LTM", hrow("ocf"), xExp.ocf, "");
+  exact("K4", "하이라이트 LTM 자본지출 = −(DART 유형자산 취득 사업연도 + 누적 − 전기 누적)", "LTM", hrow("capex"), xExp.capex == null ? null : -Math.abs(xExp.capex), "");
+  // 재무분석 LTM 비율 — 매출총이익률·유효세율(분자·분모 모두 검증기 기대치)
+  {
+    const aRow = (nm) => (c.an?.sections ?? []).flatMap((x) => x.items ?? []).find((x) => String(x.accountName ?? "").trim() === nm)?.values ?? null;
+    const lv = (o) => (o ? (o["현재/LTM"] ?? o.LTM ?? null) : null);
+    const g = aRow("매출총이익률 (%)"), t0 = aRow("유효세율 (%)");
+    const fl = (a, b) => a === b || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-12);
+    const eg = xExp.gross != null && revLtm ? (xExp.gross / revLtm) * 100 : null;
+    const et = xExp.tax != null && xExp.pretax ? (xExp.tax / xExp.pretax) * 100 : null;
+    if (g) add("K4", "재무분석 LTM 매출총이익률 = 매출총이익 ÷ 매출(검증기 기대치)", "LTM", fl(lv(g), eg) ? { status: PASS, app: lv(g), src: eg } : { status: FAIL, app: lv(g), src: eg, note: `앱 ${lv(g) ?? "빈칸"} vs ${eg ?? "빈칸"}` });
+    if (t0) add("K4", "재무분석 LTM 유효세율 = 법인세 ÷ 세전이익(검증기 기대치)", "LTM", fl(lv(t0), et) ? { status: PASS, app: lv(t0), src: et } : { status: FAIL, app: lv(t0), src: et, note: `앱 ${lv(t0) ?? "빈칸"} vs ${et ?? "빈칸"}` });
   }
   // EPS = 사업연도 + 당기 누적 − 전년 동기 누적(희석, 없으면 기본)
   let epsLtm = null;

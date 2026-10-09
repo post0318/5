@@ -13,7 +13,8 @@ import { buildKrEvResolver, krCurrentDebtByPeriod, krCurrentDebtByYear, krEpsByY
 const LTM = "현재/LTM";
 const IS = ["IS", "CIS"];
 
-const C = {
+/** 재무분석 계정 정의 — 한국 LTM 부가 흐름(opendart.ts getKrTtm)도 같은 정의를 쓴다 */
+export const KR_ANALYSIS_ACCOUNTS = {
   rev: { ids: ["ifrs-full_Revenue", "dart_Revenue"], names: ["매출액", "수익(매출액)", "영업수익"] },
   gross: { ids: ["ifrs-full_GrossProfit"], names: ["매출총이익"] },
   pretax: { ids: ["ifrs-full_ProfitLossBeforeTax"], names: ["법인세비용차감전순이익"] },
@@ -38,6 +39,7 @@ const C = {
   intPaid: { ids: ["ifrs-full_InterestPaidClassifiedAsOperatingActivities"], names: ["이자의 지급"] },
   divPaid: { ids: ["ifrs-full_DividendsPaidClassifiedAsFinancingActivities"], names: ["배당금의지급", "배당금지급"] },
 };
+const C = KR_ANALYSIS_ACCOUNTS;
 
 function closeOnOrBefore(bars: QuoteBar[], iso: string): number | null {
   let best: number | null = null;
@@ -134,12 +136,11 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     const prev = lab(4);
     return { mode: "q" as const, qf, last4, last: last4[3], prev: qf.periods.some((p) => p.label === prev) ? prev : null };
   })();
-  const ltmFlow = (c: { ids: string[]; names: string[] }, sj: string | string[]): number | null | undefined => {
+  // LTM 흐름 = 손익 TTM 과 같은 식(오너 결정 2026-10-10 — 최근 사업연도 + 당기 누적 − 당기 보고서 전기 누적, 정정본). getKrTtm 이 같은 계정 정의로
+  // 계산해 ttm.krLtm 에 싣는다. 예전 "최근 4개 분기 열 합"은 전년 분기를 정정 전 값으로 더해 손익 TTM 과 기준이 갈렸다
+  const ltmFlow = (k: keyof NonNullable<TtmFlows["krLtm"]>): number | null | undefined => {
     if (qInfo.mode === "fy") return undefined;
-    if (qInfo.mode === "none") return null;
-    const s = seriesOf(qInfo.qf, c.ids, c.names, sj as never);
-    const v = qInfo.last4.map((l) => s[l]);
-    return v.every((x) => x != null) ? v.reduce((a, b) => a! + b!, 0)! : null;
+    return ttm?.krLtm?.[k] ?? null;
   };
   const bsAt = (c: { ids: string[]; names: string[] }, at: "last" | "prev"): number | null | undefined => {
     if (qInfo.mode === "fy") return undefined;
@@ -157,10 +158,10 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
     return o;
   };
   const rev = mapTtm(rev0, ttm?.revenue);
-  const gross = mapL(gross0, ltmFlow(C.gross, IS));
+  const gross = mapL(gross0, ltmFlow("gross"));
   const opInc = mapTtm(opInc0, ttm?.opIncome);
-  const pretax = mapL(pretax0, ltmFlow(C.pretax, IS));
-  const tax = mapL(tax0, ltmFlow(C.tax, IS));
+  const pretax = mapL(pretax0, ltmFlow("pretax"));
+  const tax = mapL(tax0, ltmFlow("tax"));
   const ni = mapTtm(ni0, ttm?.netIncome);
   const eps = mapTtm(eps0, ttm?.eps);
   const assets = mapL(assets0, bsAt(C.assets, "last"));
@@ -172,10 +173,10 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
   const cash = mapL(cash0, bsAt(C.cash, "last"));
   const stInv = mapL(stInv0, bsAt(C.stInv, "last"));
   const ar = mapL(ar0, bsAt(C.ar, "last"));
-  const ocf = mapL(ocf0, ltmFlow(C.ocf, "CF"));
-  const capexAbs = absL(mapL(capex0, ltmFlow(C.capex, "CF")));
-  const intPaid = absL(mapL(intPaid0, ltmFlow(C.intPaid, "CF")));
-  const divPaid = absL(mapL(divPaid0, ltmFlow(C.divPaid, "CF")));
+  const ocf = mapL(ocf0, ltmFlow("ocf"));
+  const capexAbs = absL(mapL(capex0, ltmFlow("capex")));
+  const intPaid = absL(mapL(intPaid0, ltmFlow("intPaid")));
+  const divPaid = absL(mapL(divPaid0, ltmFlow("divPaid")));
   // 차입금(리스부채 포함)·현금성자산 — LTM 열은 getTtm 스냅샷(dart-ev.ts krLtmBalance,
   // 손익 TTM 의 마지막 분기말 — 하이라이트·개요와 같은 값, 오너 결정 2026-09-24).
   // 스냅샷이 없을 때만 최근 사업연도말.
