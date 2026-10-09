@@ -543,6 +543,7 @@ const CF_CONCEPT_FIXED = /^(PaymentsTo|PaymentsFor|PaymentsOf|Proceeds|Repayment
 /** 현금흐름 개념인가 — 검증기 규칙(앱 isCfConcept 의 사본) */
 const isCfFixed = (c) => !IS_FLOW_FIXED.has(c) && (CF_CONCEPT_FIXED.test(c) || YAHOO_LTM_FLOW.has(c));
 const EXACT = 1e-9; // 화면 간 동일성 — 같은 모듈을 거치므로 부동소수 오차만
+const sameBase = (a, b, tol) => same(a, b, tol);
 function same(a, b, tol = EXACT) {
   if (a == null && b == null) return { status: NA, note: "양쪽 빈칸" };
   if (a == null || b == null) return { status: FAIL, note: `한쪽만 빈칸 (${a} vs ${b})` };
@@ -10714,6 +10715,9 @@ function vsDart(app, src, srcNote = "") {
 }
 
 async function verifyKr(sym) {
+  // 한국 화면 간 대조는 정확 일치(감사 6차 ⑤ — 상대 1e-9 가 남아 재무분석만 ×(1+5e-10) 바꾼 PER 을 통과시켰다): 둘 다 정수면 같아야, 소수면
+  // 같은 값을 다른 순서로 나눈 부동소수 끝자리(상대 1e-14)만. 미국 쪽 same() 은 그대로
+  const same = (a, b) => (Number.isInteger(a) && Number.isInteger(b) ? (a === b ? { status: PASS } : { status: FAIL, note: `${a} vs ${b} (차 ${a - b})` }) : sameBase(a, b, 1e-14));
   const u = `/api/markets/kr/${encodeURIComponent(sym)}`;
   const checks = [];
   const add = (layer, name, col, r) => checks.push({ layer, name, col, ...r });
@@ -10925,7 +10929,7 @@ async function verifyKr(sym) {
   {
     const corp = KR_CORP.get(sym);
     if (corp) await krOriginalLayers({
-      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same, dartVint,
+      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same, dartVint, row,
       consts: { PASS, FAIL, NA, COMMON },
       // 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 와 정확 대조
       quarter: { isq, bsq, cfq }, items: KR_A_ITEMS,

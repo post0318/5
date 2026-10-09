@@ -226,7 +226,8 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   const price = quote.last;
   const quotedMarketCap = quote.marketCap ?? null;
 
-  const epsDiluted = flowValue(
+  // 한국은 TTM 응답의 최근 사업연도 EPS(하이라이트와 같은 값)가 있으면 그것만(이름 목록으로 재무제표 표에서 고르지 않는다 — 감사 6차 ①)
+  const epsDiluted = market === "kr" && ttm?.fyEps !== undefined ? (ttm.fyEps?.eps ?? null) : flowValue(
     annual,
     quarterly,
     [
@@ -333,18 +334,14 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
       ? price * usShares
       : (quotedMarketCap ?? (price != null && shares != null ? price * shares : null));
 
-  const per = price != null && epsDiluted ? price / epsDiluted : null;
-  // TTM EPS 우선 자체 산출값 → 없으면 순이익/주식수, 그것도 없으면 null
-  // 적자 EPS 도 그대로 두고(음수), PER 만 부호 규칙으로 비운다
-  const epsTtm =
-    ttm?.eps != null
-      ? ttm.eps
-      : ttm?.netIncome != null && shares
-        ? ttm.netIncome / shares
-        : null;
   // 분모 0 이하면 비운다(하이라이트·재무분석과 같은 부호 규칙 — 미국만 적용하던 것을
-  // PER(TTM)은 전 시장으로: 한국 적자 EPS 를 음수로 내면서 음수 PER 이 나오지 않게, 2026-09-24)
+  // PER(TTM)은 전 시장으로: 한국 적자 EPS 를 음수로 내면서 음수 PER 이 나오지 않게, 2026-09-24).
+  // 연간 PER 도 같은 규칙(2026-10-09 감사 6차 — 한국 개요 「PER」 은 적자 EPS 로 음수 PER 을 냈다)
   const pos = (n: number | null, d: number | null) => (n != null && d != null && d > 0 ? n / d : null);
+  const per = pos(price, epsDiluted);
+  // TTM EPS = 자체 산출값(TTM 의 EPS)만 — 순이익 ÷ 주식수로 대신 채우지 않는다(그림자 채우기 금지, 2026-10-09 감사 6차)
+  // 적자 EPS 도 그대로 두고(음수), PER 만 부호 규칙으로 비운다
+  const epsTtm = ttm?.eps ?? null;
   const perTtm = pos(price, epsTtm);
   // 장부 주식수를 따로 받은 경우(DART 연결 ADR — 자사주 제외 유통주식수)만 BPS 분모를 바꾸고, PBR 은
   // 시가총액 ÷ 자본(하이라이트와 같은 식 — 두 주식수가 달라도 PBR 은 주식수와 무관)

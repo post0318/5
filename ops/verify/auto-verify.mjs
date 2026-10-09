@@ -11,7 +11,8 @@
  *      검증기 종료코드가 0 이라 조용히 지나갔다(감사 4차) — 종목별 기준선(verify_state.naBaseline = 새 항목이 없던 마지막 자동 실행의 항목 목록,
  *      「상태|층|이름|열」)과 비교해 기준선에 없는 항목이 생기면 naIncrease 를 남기고 실패와 같이 재실행한다(검증불가 자체를 실패로 세지는 않는다 —
  *      외부 사유도 있다). 건수가 아니라 항목 단위라 하나 풀리고 다른 하나가 생겨도 잡힌다(감사 5차). 해제는 자동 실행이 새 항목 없음을 확인했을
- *      때만 — 수동 --post 로 결과(runAt)가 바뀌어도 재실행 조건은 남는다
+ *      때만 — 수동 --post 로 결과(runAt)가 바뀌어도 재실행 조건은 남는다. 후보 선정 때 지금 결과(수동 포함)를 기준선과 직접 비교하고, 열쇠에 사유(숫자 뺀
+ *      앞 80자)를 넣는다(감사 6차). 기준선이 없는 종목은 "na-baseline" 으로 한 번 자동 실행해 그 결과를 기준선으로 삼는다(수동 결과는 기준선이 되지 않음)
  *  (d) 7일 넘게 검증 안 됨 — 오래된 것부터 하루 --stale 개
  *  전체 하루 --max 종목(기본 20). 넘치는 종목은 다음 날로(기록).
  *
@@ -99,10 +100,18 @@ const universe = (await db.collection("universe_items").find({ active: { $ne: fa
 const results = new Map((await db.collection("verify_results").find({}, { projection: { market: 1, symbol: 1, runAt: 1, counts: 1, errors: 1, unverifiable: 1, common: 1 } }).toArray()).map((d) => [`${d.market}:${d.symbol}`, d]));
 const states = new Map((await stateCol.find({}).toArray()).map((d) => [d._id, d]));
 const isFailed = (r) => !!r && ((r.counts?.fail ?? 0) > 0 || (r.errors?.length ?? 0) > 0);
-/** 검증불가·공통모드 항목 열쇠(상태|층|이름|열) */
 /** 재실행 조건 — 항목 배열(새 형식) 또는 옛 건수 형식 객체({ unverifiable: { before, after } }) 둘 다(옛 기록이 조용히 풀리지 않게) */
 const hasNaUp = (st) => (Array.isArray(st?.naIncrease) ? st.naIncrease.length > 0 : !!st?.naIncrease);
-const naItems = (r) => [...(r?.unverifiable ?? []).map((x) => `unverifiable|${x.layer}|${x.name}|${x.col}`), ...(r?.common ?? []).map((x) => `common|${x.layer}|${x.name}|${x.col}`)].sort();
+/**
+ * 검증불가·공통모드 항목 열쇠(상태|층|이름|열|사유) — 사유는 숫자를 지운 앞 80자(감사 6차 ③ — 같은 항목이 다른 사유로 바뀌어도 새 항목으로 잡는다.
+ * 금액만 바뀐 것은 같은 항목)
+ */
+const naNote = (n) => String(n ?? "").replace(/[-−+]?\d[\d,.]*/g, "#").slice(0, 80);
+const naItems = (r) => [...(r?.unverifiable ?? []).map((x) => `unverifiable|${x.layer}|${x.name}|${x.col}|${naNote(x.note)}`), ...(r?.common ?? []).map((x) => `common|${x.layer}|${x.name}|${x.col}|${naNote(x.note)}`)].sort();
+/** 기준선 판본 — 열쇠 형식이 바뀌면 올린다(옛 판본 기준선은 없는 것으로 본다) */
+const NA_BASE_V = 2;
+/** 유효한 기준선(항목 배열). 기준선이 없는데 결과에 검증불가·공통모드가 하나도 없으면 빈 기준선. 그 밖엔 null(자동 실행으로 기준선을 만들어야 함) */
+const baselineOf = (st, r) => (st?.naBaselineV === NA_BASE_V && Array.isArray(st.naBaseline) ? st.naBaseline : r && !naItems(r).length ? [] : null);
 
 const corpMap = JSON.parse(readFileSync(path.join(ROOT, "src/lib/markets/kr/data/corpcodes.json"), "utf8"));
 const corpOf = (s) => { const row = corpMap.find((r) => (r.s ?? r.stock_code) === s); return row ? (row.c ?? row.corp_code) : null; };
@@ -168,6 +177,13 @@ for (const [key, u] of universe) {
   }
   if (ONLY.has("failed") && isFailed(r)) { cand.push({ key, ...u, reason: "failed", sortKey: 2 + (lastRun ?? 0) / 1e14 }); continue; }
   if (ONLY.has("failed") && hasNaUp(st)) { cand.push({ key, ...u, reason: "na-up", sortKey: 2 + (lastRun ?? 0) / 1e14 }); continue; }
+  // 지금 결과(수동 --post 포함)를 기준선과 직접 비교(감사 6차 ③ — 예전엔 자동 실행 직후에만 비교해 수동 결과의 새 항목이 후보가 안 됐다)
+  if (ONLY.has("failed") && r) {
+    const b0 = baselineOf(st, r);
+    if (b0 && naItems(r).some((k) => !b0.includes(k))) { cand.push({ key, ...u, reason: "na-up", sortKey: 2 + (lastRun ?? 0) / 1e14 }); continue; }
+    // 기준선 없음 — 자동 실행 결과로 기준선을 만든다(수동 결과를 그대로 기준선으로 흡수하지 않게)
+    if (!b0) { cand.push({ key, ...u, reason: "na-baseline", sortKey: 2.5 + (lastRun ?? 0) / 1e14 }); continue; }
+  }
   if (ONLY.has("stale") && lastRun != null && now - lastRun > STALE_MS) cand.push({ key, ...u, reason: "stale", sortKey: 3 + lastRun / 1e14 });
 }
 cand.sort((a, b) => a.sortKey - b.sortKey);
@@ -242,17 +258,19 @@ if (!DRY && targets.length) {
     const ok = posted && (v.code === 0 || v.code === 1 || v.code === 3);
     if (!ok) runFailed++;
     log(`  ${t.key} 검증 종료코드 ${v.code} · 결과 저장 ${posted ? "됨" : "안 됨"} · ${Math.round((Date.now() - t0) / 1000)}초${after?.counts ? ` · 통과 ${after.counts.pass} 실패 ${after.counts.fail} 검증불가 ${after.counts.unverifiable}` : ""}`);
-    // 기준선 = 새 항목이 없던 마지막 자동 실행의 검증불가·공통모드 항목(처음이면 직전 결과, 직전 결과도 없으면 이번 결과). 옛 건수 기준선은 버린다
+    // 기준선 = 새 항목이 없던 마지막 자동 실행의 검증불가·공통모드 항목. 기준선이 없으면(처음·옛 판본) 이번 자동 실행 결과가 기준선(기록에 남김) —
+    // 수동 결과로 기준선을 만들지 않는다(감사 6차 ③)
     const st0 = states.get(t.key);
-    const base = Array.isArray(st0?.naBaseline) ? st0.naBaseline : results.get(t.key) ? naItems(results.get(t.key)) : null;
+    const base = st0?.naBaselineV === NA_BASE_V && Array.isArray(st0.naBaseline) ? st0.naBaseline : null;
     const nowItems = posted ? naItems(after) : null;
     const up = posted && base ? nowItems.filter((k) => !base.includes(k)) : [];
+    if (posted && !base) log(`  ${t.key} 검증불가·공통모드 기준선 처음 설정 — ${nowItems.length}건(자동 실행 결과)`);
     if (up.length) log(`  ${t.key} 새 검증불가·공통모드 ${up.length}건 — ${up.slice(0, 5).join(" ; ")}(재실행 대상)`);
     done.push({ key: t.key, reason: t.reason, ok, code: v.code, ...(up.length ? { naIncrease: up } : {}), ...(ok ? {} : { tail: v.tail.slice(-300) }) });
     if (posted) {
       const f = filingNow.get(t.key) ?? t.filing;
       await stateCol.updateOne({ _id: t.key }, { $set: { market: t.market, symbol: t.symbol, lastRunAt: after.runAt, lastReason: t.reason, lastCode: v.code, commit,
-        naIncrease: up.length ? up : null, naBaseline: up.length ? base : nowItems, ...(f?.id ? { filingId: f.id, filingDate: f.date, filingName: f.name } : {}) } }, { upsert: true });
+        naIncrease: up.length ? up : null, naBaseline: up.length ? base : nowItems, naBaselineV: NA_BASE_V, ...(base ? {} : { naBaselineSetAt: after.runAt }), ...(f?.id ? { filingId: f.id, filingDate: f.date, filingName: f.name } : {}) } }, { upsert: true });
     }
   }
 }

@@ -705,6 +705,12 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
         ...(Object.keys(reasons).length ? { reasons } : {}),
         ...(degraded.length ? { degraded } : {}),
         daTtm: da.ltm,
+        // 개요 PER(연간)의 분모 — 하이라이트 최근 사업연도 열과 같은 EPS(krEpsByYear: 희석 → 기본, 전체 EPS 미공시면 계속 + 중단영업 합).
+        // 예전엔 재무제표 표에서 이름 목록으로 골라 다른 값이 잡혔다(009150 9,395 vs 하이라이트 9,345 — 감사 6차 ①)
+        fyEps: (() => {
+          const y = [...facts.annualEndByYear.keys()].sort((a, b) => a - b).at(-1) ?? null;
+          return { eps: y != null ? (krEpsByYear(facts).get(y) ?? null) : null, year: y, note: null };
+        })(),
         snapshot: {
           label: bal.label,
           equity: bal.parentEquity,

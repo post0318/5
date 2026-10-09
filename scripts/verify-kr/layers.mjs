@@ -119,7 +119,10 @@ export async function krOriginalLayers(ctx) {
    * 분자·분모를 못 정하면 검증불가(이유 기록 — 조용히 건너뛰지 않음)
    */
   const trunc2 = (v) => (v == null ? null : Math.trunc(Math.round(v * 1e6) / 1e4) / 100);
+  /** 배수 분자·분모(검증기 기대치) — 개요 화면 대조(overviewLayer)가 다시 쓴다 */
+  const multDen = {};
   const multExpect = (col, x, d) => {
+    multDen[col] = d;
     for (const [key, label, n, den, nn, dn] of [["per", "PER", d.price, d.eps, "주가", "EPS"], ["pbr", "PBR", d.mc, d.eq, "보통주 시가총액", "지배주주 자본"], ["psr", "PSR", d.mc, d.rev, "보통주 시가총액", "매출"]]) {
       const v = x[key] ?? null;
       if (den?.v == null || n == null) {
@@ -133,6 +136,21 @@ export async function krOriginalLayers(ctx) {
         else if (v !== e) fail("D", nm1, col, `앱 ${v}(화면 ${trunc2(v)}) vs ${e}(화면 ${trunc2(e)}) — 차 ${v - e} (${nn} ${n} ÷ ${den.how} ${den.v})`);
         else add("D", nm1, col, { status: PASS, app: v, src: e, note: `${n} ÷ ${den.how} ${den.v} · 화면 ${trunc2(v)}` });
       } else add("D", `${label} 부호 규칙(DART ${dn} ≤ 0 → 빈칸)`, col, v == null ? { status: PASS, note: `${den.how} ${den.v}` } : { status: FAIL, note: `${den.how} ${den.v} ≤ 0 인데 ${label} ${v}` });
+    }
+  };
+  /** K5 기대치(개요 DPS·DPS(TTM) 대조용) */
+  const k5Exp = {};
+  /**
+   * 배당수익률 기대치(감사 6차 ② — DPS 0·DPS 없음·상장 전이면 검사가 통째로 빠졌다). d = 기대 DPS(0 = 무배당, null = 배당 공시 없음),
+   * px = { v, how } 기준 주가 · { pre: true } 상장 전(주가 없음) · null 주가 확인 불가. 앱 식 = DPS ÷ 주가 × 100(dart-highlights.ts)
+   */
+  const yieldCheck = (col, name, appY, d, px, how) => {
+    if (px?.pre) add("K5", `${name}(상장 전 — 빈칸 기대)`, col, appY == null ? { status: PASS, note: "KRX 연말 종목 없음 — 빈칸" } : { status: FAIL, app: appY, note: `상장 전인데 배당수익률 ${appY}` });
+    else if (d == null) add("K5", `${name}(DPS 없음 — 빈칸 기대)`, col, appY == null ? { status: PASS, note: `DPS 원자료 없음(${how || "배당 공시 없음"}) — 빈칸` } : { status: FAIL, app: appY, note: `DPS 원자료 없음(${how || "배당 공시 없음"})인데 배당수익률 ${appY}` });
+    else if (!px) add("K5", name, col, { status: NA, app: appY, note: "주가 확인 불가(K1 시가총액 미확인)" });
+    else {
+      const e = (d / px.v) * 100;
+      add("K5", name, col, appY === e ? { status: PASS, app: appY, src: e, note: `${d} ÷ ${px.how} ${px.v}` } : { status: FAIL, app: appY, src: e, note: `앱 ${appY ?? "빈칸"} vs ${e} (DPS ${d} ÷ ${px.how} ${px.v})` });
     }
   };
   const notes = (h.notes ?? []).join(" ¶ ");
@@ -249,6 +267,9 @@ export async function krOriginalLayers(ctx) {
       if (why) add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: PASS, note: why });
       else fail("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", `앱 ${H.LTM.mc} vs KRX ${capCur.date} ${capCur.common}`);
     }
+  } else if (H.LTM && capCur) {
+    // KRX 최근 거래일 자료에 이 종목이 없음(감사 6차 ⑥ — 예전엔 LTM 시가총액·배수 검사가 기록 없이 빠졌다). 상장폐지·거래정지 등 — 검증기가 정할 수 없어 검증불가
+    add("K1", "시가총액(보통주) = KRX 최근 거래일", "LTM", { status: NA, app: H.LTM.mc, note: `KRX ${capCur.date} 전종목 자료에 ${sym} 없음 — 현재 시가총액·LTM 배수·배당수익률 기대치 없음` });
   }
 
   // ── K2 EV 구성요소(사업연도) ──
@@ -320,6 +341,8 @@ export async function krOriginalLayers(ctx) {
     try {
       await ltmLayer({ ...ctx, L, lp, LT, exact, fail, err, policySrc, capCur, ltmPrefOk, ltmPrefPending, evBlockWhy, rowHidden, multExpect, ltmMcOk: ltmPrice != null, ltmPrice });
     } catch (e) { err("LTM 원자료(DART 분기·반기 보고서)", e); }
+    // LTM 배수 검사가 안 돌았으면(K1 현재 시가총액 미확인 등) 그 사실을 남긴다(조용히 빠지지 않게)
+    if (!multDen.LTM) for (const l of ["PER", "PBR", "PSR"]) add("D", `${l} LTM 값 대조`, "LTM", { status: NA, app: H.LTM?.[l.toLowerCase()] ?? null, note: ltmPrice == null ? "K1 현재 시가총액 미확인 — 분자 없음" : "LTM 원자료 판독 실패 — 분모 없음" });
   } // LTM 열이 없으면 위 K1 「LTM 열 존재」 실패
 
   // ── 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 분기·반기·3분기·사업보고서와 정확 대조 ──
@@ -350,10 +373,8 @@ export async function krOriginalLayers(ctx) {
     exact("K5", "주당배당금 = DART", col, appDps, dps, how);
     const k = caps.get(y);
     const appY = h.rows.find((r) => r.key === "divyield")?.values[h.columns.findIndex((c) => c.label === col)] ?? null;
-    if (dps != null && dps > 0 && k?.close) {
-      const exp = (dps / k.close) * 100;
-      add("K5", "배당수익률 = DPS ÷ KRX 연말 종가", col, appY === exp ? { status: PASS, note: `${dps} ÷ ${k.close}` } : { status: FAIL, note: `앱 ${appY} vs ${exp} (DPS ${dps} ÷ KRX ${k.date} 종가 ${k.close})` });
-    }
+    yieldCheck(col, "배당수익률 = DPS ÷ KRX 연말 종가", appY, dps, !k || k.common == null ? { pre: true } : k.close != null ? { v: k.close, how: `KRX ${k.date} 종가` } : null, how);
+    if (y === Math.max(...yearsShown)) k5Exp.fyDps = { v: dps, how };
   }
   // LTM DPS(감사 2차 ⑦) — 검증기가 공공데이터포털 배당정보(금융위원회 GetStocDiviInfoService_V2, 앱과 같은 원천을 따로 호출 — KRX 와 같은 성격)를
   // 법인등록번호(DART 기업개황)로 직접 받아 규칙 문장("최근 12개월 — 배당기준일 > 1년 전 오늘(KST), 같은 기준일 한 번, 보통주")대로 합한다.
@@ -385,16 +406,56 @@ export async function krOriginalLayers(ctx) {
         else if (fyD != null) add("K5", "LTM 주당배당금 = 최근 사업연도(창 안 배당 없음 — 주석 표시된 대체)", "LTM", fb ? same(appD, fyD) : { status: FAIL, note: `${how} · 앱 ${appD} 인데 대체 주석 없음` });
         else add("K5", "LTM 주당배당금 = 공공데이터 12개월 합", "LTM", appD == null ? { status: PASS, note: `${how} · 사업연도 배당도 없음 — 빈칸` } : { status: FAIL, note: `${how} · 앱 ${appD}` });
       } else exact("K5", "LTM 주당배당금 = 공공데이터 12개월 합", "LTM", appD, exp, how);
-      const d = exp ?? (fb ? fyD : null);
-      if (d != null && d > 0) {
-        if (ltmPrice == null) add("K5", "LTM 배당수익률 = DPS ÷ 현재가", "LTM", { status: NA, app: appY, note: "현재가 확인 불가(K1 LTM 보통주 시가총액 미확인)" });
-        else {
-          const e2 = (d / ltmPrice) * 100;
-          add("K5", "LTM 배당수익률 = DPS ÷ 현재가", "LTM", appY === e2 ? { status: PASS, note: `${d} ÷ ${ltmPrice}` } : { status: FAIL, app: appY, src: e2, note: `앱 ${appY} vs ${e2} (DPS ${d} ÷ 현재가 ${ltmPrice})` });
-        }
-      }
-    }
+      // 기대 DPS: 창 안 합, 없으면 최근 사업연도(DART — 앱 값 아님)가 무배당(0)이면 0, 대체 주석이면 그 사업연도 값, 둘 다 아니면 빈칸
+      const fyE = k5Exp.fyDps?.v ?? null;
+      const d = exp ?? (fyE === 0 ? 0 : fb ? fyE : null);
+      k5Exp.ltmDps = { v: d, how };
+      yieldCheck("LTM", "LTM 배당수익률 = DPS ÷ 현재가", appY, d, ltmPrice != null ? { v: ltmPrice, how: "K1 확인 현재가" } : null, how);
+    } else add("K5", "LTM 배당수익률 = DPS ÷ 현재가", "LTM", { status: NA, app: appY, note: "LTM 주당배당금 원자료 조회 실패 — 배당수익률 기대치 없음" });
   }
+
+  // ── 개요 화면(감사 6차 ① — 개요는 화면이 /ttm·verify-row 값으로 직접 계산한다: PER(TTM) = 현재가 ÷ /ttm EPS, 배당수익률 = /ttm DPS(TTM) ÷ 현재가).
+  // 화면 식을 앱 응답 값으로 그대로 재현한 결과를 검증기 기대치(K1 확인 현재가 · DART 분모 · K5 배당)와 대조
+  overviewLayer({ ...ctx, H, fail, ltmPrice, capCur, k5Exp, multDen, yearsShown });
+}
+
+/** 개요 화면 표시값 대조 — 화면 식(stock-analysis.tsx)을 앱 응답으로 재현한 값 vs 검증기 기대치 */
+function overviewLayer(c) {
+  const { add, row, tt, ltmPrice, k5Exp, multDen, capCur } = c;
+  const { PASS, FAIL, NA } = c.consts;
+  const m = row?.overview?.multiples ?? null;
+  const price = m?.inputs?.price ?? null;
+  const fl = (a, b) => a === b || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-14); // 같은 값을 다른 순서로 나눈 부동소수 끝자리만
+  const chk = (name, app, exp, note) => add("K1", `개요 ${name}`, "LTM", exp === undefined ? { status: NA, app, note } : fl(app, exp) ? { status: PASS, app, src: exp, note } : { status: FAIL, app, src: exp, note: `앱 ${app ?? "빈칸"} vs 기대 ${exp ?? "빈칸"} · ${note}` });
+  if (!m) { add("K1", "개요 멀티플 응답", "LTM", { status: FAIL, note: "verify-row 개요 멀티플 없음" }); return; }
+  // 현재가 — 화면 모든 식의 분자
+  chk("현재가 = K1 확인 현재가", price, ltmPrice ?? undefined, ltmPrice == null ? "K1 현재가 미확인" : "KRX(·게시 전 Yahoo) 종가");
+  const ok = ltmPrice != null && price === ltmPrice;
+  const ttm = tt?.ttm ?? null;
+  // EPS(TTM)·PER(TTM): 화면 = 현재가 ÷ /ttm EPS(> 0), 빈칸이면 빈칸(대체 계산 없음)
+  // 분모 판독 불가(null)는 기대치 없음(검증불가) — 빈칸 기대가 아니다
+  const eL = multDen.LTM?.eps?.v ?? undefined;
+  chk("EPS(TTM) /ttm = DART LTM EPS", ttm?.eps ?? null, eL === undefined ? undefined : eL, multDen.LTM?.eps?.how ?? "LTM 분모 없음");
+  const scrPer = price != null && ttm?.eps != null && ttm.eps > 0 ? price / ttm.eps : null;
+  chk("PER(TTM) 화면 = 현재가 ÷ /ttm EPS", scrPer, !ok || eL === undefined ? undefined : eL != null && eL > 0 ? ltmPrice / eL : null, `기대 = K1 현재가 ÷ DART LTM EPS ${eL}`);
+  // PER(연간) = 현재가 ÷ 최근 사업연도 희석 EPS(A층 DART 판독)
+  const fy = Math.max(...c.yearsShown), eF = multDen[`${fy}Y`]?.eps?.v ?? undefined;
+  chk("PER = 현재가 ÷ 최근 사업연도 EPS", m.per ?? null, !ok || eF === undefined ? undefined : eF != null && eF > 0 ? ltmPrice / eF : null, `FY${fy} DART EPS ${eF}`);
+  // PBR·PSR — 하이라이트 LTM 과 같은 정의, 검증기 기대치(LTM 분모)
+  const mc = capCur?.common != null && ok ? c.H.LTM?.mc : null;
+  const eq = multDen.LTM?.eq?.v ?? undefined, rv = multDen.LTM?.rev?.v ?? undefined;
+  chk("PBR = 시가총액 ÷ DART 지배주주 자본", m.pbr ?? null, mc == null || eq === undefined ? undefined : eq != null && eq > 0 ? mc / eq : null, multDen.LTM?.eq?.how ?? "");
+  chk("PSR = 시가총액 ÷ DART LTM 매출", m.psr ?? null, mc == null || rv === undefined ? undefined : rv != null && rv > 0 ? mc / rv : null, multDen.LTM?.rev?.how ?? "");
+  // BPS = DART 지배주주 자본 ÷ KRX 상장주식수(시가총액 = 종가 × 상장주식수와 같은 주식수)
+  const sh = capCur?.shares ?? null;
+  chk("BPS = DART 지배주주 자본 ÷ KRX 상장주식수", m.bps ?? null, eq === undefined || sh == null ? undefined : eq != null ? eq / sh : null, `${multDen.LTM?.eq?.how ?? ""} · KRX 상장주식수 ${sh}`);
+  // DPS·DPS(TTM)·배당수익률(화면 = /ttm DPS(TTM) ÷ 현재가, 소수 비율)
+  const dv = tt?.dividend ?? null;
+  chk("DPS = DART 최근 사업연도", dv?.annual?.dps ?? null, k5Exp.fyDps ? k5Exp.fyDps.v : undefined, k5Exp.fyDps?.how ?? "K5 사업연도 DPS 없음");
+  chk("DPS(TTM) = 공공데이터 12개월", dv?.ttm?.dps ?? null, k5Exp.ltmDps ? k5Exp.ltmDps.v : undefined, k5Exp.ltmDps?.how ?? "K5 LTM DPS 없음");
+  const scrY = price != null && dv?.ttm?.dps != null && price > 0 ? dv.ttm.dps / price : null;
+  const dE = k5Exp.ltmDps?.v;
+  chk("배당수익률 화면 = /ttm DPS(TTM) ÷ 현재가", scrY, !ok || dE === undefined ? undefined : dE != null ? dE / ltmPrice : null, `기대 = DPS ${dE} ÷ K1 현재가`);
 }
 
 /**
@@ -693,10 +754,11 @@ const hasIs = (L, i) => !!L && L.some((r) => (r.sj_div === "IS" || r.sj_div === 
  * 무형상각 줄이 따로 있으면 유형자산 감가상각으로 본다
  */
 const DA_CF_PARTS = [
-  ["dep", /^(ifrs-full|dart)_(AdjustmentsForDepreciationExpense|DepreciationExpense|DepreciationAndAmortizationExpensePropertyPlantAndEquipment)$/, ["유형자산감가상각비", "유형자산의감가상각비", "감가상각비", "감가상각비에대한조정", "유형자산감가상각비에대한조정"]],
-  ["amo", /^(ifrs-full|dart)_(AdjustmentsForAmortisationExpense|AmortisationExpense)$/, ["무형자산상각비", "무형자산의상각비", "무형자산상각비에대한조정", "상각비에대한조정"]],
-  ["rou", /^(ifrs-full|dart)_AdjustmentsForDepreciationRightofuseAssets$/, ["사용권자산감가상각비", "사용권자산상각비", "사용권자산감가상각비에대한조정", "사용권자산상각비에대한조정"]],
-  ["inv", /^(ifrs-full|dart)_AdjustmentsForDepreciationInvestmentProperty$/, ["투자부동산감가상각비", "투자부동산상각비", "투자부동산감가상각비에대한조정"]],
+  ["dep", /^(ifrs-full|dart)_(AdjustmentsForDepreciationExpense|DepreciationExpense|DepreciationAndAmortizationExpensePropertyPlantAndEquipment)$/, ["유형자산감가상각비", "유형자산의감가상각비", "감가상각비", "감가상각비에대한조정", "유형자산감가상각비에대한조정", "감가상각비(유형자산)", "유형자산감가상각"]],
+  ["amo", /^(ifrs-full|dart)_(AdjustmentsForAmortisationExpense|AmortisationExpense)$/, ["무형자산상각비", "무형자산의상각비", "무형자산상각비에대한조정", "상각비에대한조정", "무형자산상각", "상각비(무형자산)"]],
+  // 회사 고유 태그(…_AdjustmentForAmortisationOfRightOfUseAssets 등 — 감사 6차 ④)도 접미사로
+  ["rou", /(^(ifrs-full|dart)_AdjustmentsForDepreciationRightofuseAssets$)|(^(?!ifrs-full_|dart_)\w+_Adjustments?For(Depreciation|Amorti[sz]ation)\w*Right[Oo]f[Uu]se)/, ["사용권자산감가상각비", "사용권자산상각비", "사용권자산감가상각비에대한조정", "사용권자산상각비에대한조정", "감가상각비(사용권자산)", "사용권자산상각", "사용권자산감가상각", "상각비(사용권자산)"]],
+  ["inv", /(^(ifrs-full|dart)_AdjustmentsForDepreciationInvestmentProperty$)|(^(?!ifrs-full_|dart_)\w+_Adjustments?For(Depreciation|Amorti[sz]ation)\w*InvestmentPropert)/, ["투자부동산감가상각비", "투자부동산상각비", "투자부동산감가상각비에대한조정", "감가상각비(투자부동산)", "투자부동산상각", "투자부동산감가상각"]],
 ];
 function daCfLine(rows, col) {
   const cf = (rows ?? []).filter((r) => r.sj_div === "CF" && num(r[col]) != null);

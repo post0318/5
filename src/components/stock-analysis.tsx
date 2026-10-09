@@ -453,13 +453,8 @@ export function StockAnalysis({
   // ── PER(TTM) · EPS(TTM) ─────────────────────────────────────────
   // 국내: DART 자체 TTM(직전연간 + 당기누적 − 전년동기). 미국: EDGAR 동일 방식. 일본: EDINET(jp-ev.ts — 최근 사업연도 + 반기 − 전년 반기).
   const ttm = ttmQ.data?.ttm ?? null;
-  // 미국은 TTM EPS(공통 함수) 그대로 — 순이익 ÷ 다른 주식수로 대신 계산하지 않는다(그림자 채우기 금지)
-  const ttmEps =
-    ttm?.eps != null
-      ? ttm.eps
-      : market === "kr" && ttm?.netIncome != null && multiples?.inputs.shares
-        ? ttm.netIncome / multiples.inputs.shares
-        : null;
+  // TTM EPS(공통 함수) 그대로 — 순이익 ÷ 주식수로 대신 계산하지 않는다(그림자 채우기 금지, 한국도 2026-10-09 감사 6차부터)
+  const ttmEps = ttm?.eps ?? null;
   // 부호 규칙(전 화면 공통): EPS 가 0 이하면 PER 은 비운다. 적자라서 비운 것이므로
   // Yahoo PER 로 대체하지 않는다(일본도 2026-10-08 부터 자체 값만 — jp-ev.ts)
   const trailingPer = price != null && ttmEps != null && ttmEps > 0 ? price / ttmEps : null;
