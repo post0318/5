@@ -110,13 +110,29 @@ export async function krOriginalLayers(ctx) {
     return common ? { status: COMMON, app, src, note: `${why ? `${why} · ` : ""}공통모드 — ${common}` } : { status: PASS, app, src, ...(why ? { note: why } : {}) };
   };
   const exact = (layer, name, col, app, src, why = "", common = null) => add(layer, name, col, cmp(app, src, why, common));
-  /** PBR·PSR 값 유무 기대치 — 분모(DART 원자료, 앱 값 아님) > 0 이면 값 있어야, ≤ 0 이면 빈칸(부호 규칙). 분모를 못 읽으면 검사 안 함 */
-  const multExpect = (col, x, eq, rev) => {
-    for (const [key, label, den, dn] of [["pbr", "PBR", eq, "지배주주 자본"], ["psr", "PSR", rev, "매출"]]) {
-      if (den?.v == null) continue;
+  /**
+   * PER·PBR·PSR 값 대조(감사 4·5차 — 유무만 보면 모든 화면이 같은 틀린 배수일 때 통과: 005930 PBR 2024 분모 자본총계, PSR LTM 매출 1분기 누락,
+   * 373220 PER 2023 ×1.01). 정의(앱 dart-highlights.ts 와 같은 정의, 값은 검증기가 따로): PER = 주가 ÷ EPS(희석), PBR = 보통주 시가총액 ÷ 지배주주 자본,
+   * PSR = 보통주 시가총액 ÷ 매출. 분자는 K1 에서 KRX(·Yahoo 게시 전 규칙)로 확인된 값, 분모는 DART 원자료(앱 값 아님). 분모 > 0 이면 값이 있고
+   * 같아야, ≤ 0 이면 빈칸(부호 규칙). 정확 일치(감사 5차 — 허용치 없음): 서버는 원값을 보내고 화면이 소수 2자리 버림을 하므로 원값을 비교한다.
+   * 분자(정수 시가총액·종가)와 분모(정수 원·원/주)가 같으면 나눗셈 한 번이라 비트 단위로 같다. 화면 표시값(버림)도 메모에 남긴다.
+   * 분자·분모를 못 정하면 검증불가(이유 기록 — 조용히 건너뛰지 않음)
+   */
+  const trunc2 = (v) => (v == null ? null : Math.trunc(Math.round(v * 1e6) / 1e4) / 100);
+  const multExpect = (col, x, d) => {
+    for (const [key, label, n, den, nn, dn] of [["per", "PER", d.price, d.eps, "주가", "EPS"], ["pbr", "PBR", d.mc, d.eq, "보통주 시가총액", "지배주주 자본"], ["psr", "PSR", d.mc, d.rev, "보통주 시가총액", "매출"]]) {
       const v = x[key] ?? null;
-      if (den.v > 0) add("D", `${label} 기대치(K1 시가총액 확인 · DART ${dn} > 0 → 값 있음)`, col, v != null ? { status: PASS, note: `${den.how} ${den.v}` } : { status: FAIL, note: `시가총액 KRX 확인 · ${den.how} ${den.v} > 0 인데 ${label} 빈칸` });
-      else add("D", `${label} 부호 규칙(DART ${dn} ≤ 0 → 빈칸)`, col, v == null ? { status: PASS, note: `${den.how} ${den.v}` } : { status: FAIL, note: `${den.how} ${den.v} ≤ 0 인데 ${label} ${v}` });
+      if (den?.v == null || n == null) {
+        add("D", `${label} = ${nn}(K1 확인) ÷ DART ${dn}`, col, { status: NA, app: v, note: `${n == null ? `${nn} 확인 불가` : ""}${n == null && den?.v == null ? " · " : ""}${den?.v == null ? `DART ${dn} 판독 불가(${den?.how ?? "보고서 없음"})` : ""} — 앱 ${v ?? "빈칸"}` });
+        continue;
+      }
+      if (den.v > 0) {
+        const e = n / den.v;
+        const nm1 = `${label} = ${nn}(K1 확인) ÷ DART ${dn}`;
+        if (v == null) fail("D", nm1, col, `${nn} ${n} ÷ ${den.how} ${den.v} = ${e} 인데 ${label} 빈칸`);
+        else if (v !== e) fail("D", nm1, col, `앱 ${v}(화면 ${trunc2(v)}) vs ${e}(화면 ${trunc2(e)}) — 차 ${v - e} (${nn} ${n} ÷ ${den.how} ${den.v})`);
+        else add("D", nm1, col, { status: PASS, app: v, src: e, note: `${n} ÷ ${den.how} ${den.v} · 화면 ${trunc2(v)}` });
+      } else add("D", `${label} 부호 규칙(DART ${dn} ≤ 0 → 빈칸)`, col, v == null ? { status: PASS, note: `${den.how} ${den.v}` } : { status: FAIL, note: `${den.how} ${den.v} ≤ 0 인데 ${label} ${v}` });
     }
   };
   const notes = (h.notes ?? []).join(" ¶ ");
@@ -151,16 +167,28 @@ export async function krOriginalLayers(ctx) {
     const y = Number(String(c.label).slice(0, 4)), col = `${y}Y`, x = H[col];
     if (!caps.has(y)) continue;
     const k = caps.get(y);
-    if (!k || k.common == null) { exact("K1", "시가총액(보통주) = KRX 연말", col, x.mc, null, "KRX 에 그해 말 종목 없음(상장 전)"); continue; }
+    if (!k || k.common == null) {
+      exact("K1", "시가총액(보통주) = KRX 연말", col, x.mc, null, "KRX 에 그해 말 종목 없음(상장 전)");
+      // 상장 전 해 — 주가·시가총액이 없으니 배수도 빈칸이어야(감사 5차 — 이 열 배수가 검사 없이 빠지지 않게)
+      for (const [key, label] of [["per", "PER"], ["pbr", "PBR"], ["psr", "PSR"]])
+        add("D", `${label} 기대 빈칸(상장 전 — KRX 연말 종목 없음)`, col, x[key] == null ? { status: PASS, note: "KRX 연말 종목 없음 — 빈칸" } : { status: FAIL, note: `KRX 연말 종목 없음(상장 전)인데 ${label} ${x[key]}` });
+      continue;
+    }
     exact("K1", "시가총액(보통주) = KRX 연말", col, x.mc, k.common, `KRX ${k.date}`);
     const appPref = x.pref ?? (rowHidden("pref_mcap") ? 0 : null);
     exact("K1", "우선주 시가총액 = KRX 연말", col, appPref, k.preferred, `KRX ${k.date}${k.prefIssues.length ? ` ${k.prefIssues.join("·")}` : " 우선주 없음"}`);
-    // PBR·PSR 기대치(감사 4차 ③ — 모든 화면에서 같이 지우면 "양쪽 빈칸" 검증불가뿐이었다): K1 시가총액이 KRX 와 같고 DART 분모가 있으면 값 유무를 정한다
+    // PER·PBR·PSR 값(감사 4차 ③·5차): K1 시가총액이 KRX 와 같으면 KRX 연말 시가총액·종가 ÷ DART 분모(그해를 담은 가장 최근 보고서 — 앱 연간 로더와 같은 기준)
     const src = yearSrc.get(y);
     if (x.mc === k.common && src) {
       const bo = bsOwner(src, y);
       const io = [[src.next2, 2], [src.next, 1], [src.cur, 0]].find(([R, i]) => hasIs(R, i));
-      multExpect(col, x, bo ? parentEquity(bo.rows, bo.col) : null, io ? { ...oneVal(pickRow(io[0], IT.rev[0], IT.rev[1]), (r) => num(r[COL[io[1]]])), how: `DART 매출(${y + io[1]} 보고서)` } : null);
+      const f = io ? (r) => num(r[COL[io[1]]]) : null;
+      multExpect(col, x, {
+        mc: k.common, price: k.close ?? null,
+        eq: bo ? parentEquity(bo.rows, bo.col) : null,
+        rev: io ? { ...oneVal(pickRow(io[0], IT.rev[0], IT.rev[1]), f), how: `DART 매출(${y + io[1]} 보고서)` } : null,
+        eps: io ? { v: epsOfRows(io[0], f), how: `DART EPS(${y + io[1]} 보고서)` } : null,
+      });
     }
   }
   let ltmPrefOk = null; // LTM EV 기대치에 쓸 우선주 시가총액(K1 에서 확인된 값)
@@ -289,7 +317,7 @@ export async function krOriginalLayers(ctx) {
   const LT = H.LTM;
   if (lp && LT) {
     try {
-      await ltmLayer({ ...ctx, L, lp, LT, exact, fail, err, policySrc, capCur, ltmPrefOk, ltmPrefPending, evBlockWhy, rowHidden, multExpect, ltmMcOk: ltmPrice != null });
+      await ltmLayer({ ...ctx, L, lp, LT, exact, fail, err, policySrc, capCur, ltmPrefOk, ltmPrefPending, evBlockWhy, rowHidden, multExpect, ltmMcOk: ltmPrice != null, ltmPrice });
     } catch (e) { err("LTM 원자료(DART 분기·반기 보고서)", e); }
   } // LTM 열이 없으면 위 K1 「LTM 열 존재」 실패
 
@@ -323,7 +351,7 @@ export async function krOriginalLayers(ctx) {
     const appY = h.rows.find((r) => r.key === "divyield")?.values[h.columns.findIndex((c) => c.label === col)] ?? null;
     if (dps != null && dps > 0 && k?.close) {
       const exp = (dps / k.close) * 100;
-      add("K5", "배당수익률 = DPS ÷ KRX 연말 종가", col, appY != null && Math.abs(appY - exp) <= Math.abs(exp) * 1e-9 ? { status: PASS } : { status: FAIL, note: `앱 ${appY} vs ${exp} (DPS ${dps} ÷ KRX ${k.date} 종가 ${k.close})` });
+      add("K5", "배당수익률 = DPS ÷ KRX 연말 종가", col, appY === exp ? { status: PASS, note: `${dps} ÷ ${k.close}` } : { status: FAIL, note: `앱 ${appY} vs ${exp} (DPS ${dps} ÷ KRX ${k.date} 종가 ${k.close})` });
     }
   }
   // LTM DPS(감사 2차 ⑦) — 검증기가 공공데이터포털 배당정보(금융위원회 GetStocDiviInfoService_V2, 앱과 같은 원천을 따로 호출 — KRX 와 같은 성격)를
@@ -361,7 +389,7 @@ export async function krOriginalLayers(ctx) {
         if (ltmPrice == null) add("K5", "LTM 배당수익률 = DPS ÷ 현재가", "LTM", { status: NA, app: appY, note: "현재가 확인 불가(K1 LTM 보통주 시가총액 미확인)" });
         else {
           const e2 = (d / ltmPrice) * 100;
-          add("K5", "LTM 배당수익률 = DPS ÷ 현재가", "LTM", appY != null && Math.abs(appY - e2) <= Math.abs(e2) * 1e-9 ? { status: PASS, note: `${d} ÷ ${ltmPrice}` } : { status: FAIL, app: appY, src: e2, note: `앱 ${appY} vs ${e2} (DPS ${d} ÷ 현재가 ${ltmPrice})` });
+          add("K5", "LTM 배당수익률 = DPS ÷ 현재가", "LTM", appY === e2 ? { status: PASS, note: `${d} ÷ ${ltmPrice}` } : { status: FAIL, app: appY, src: e2, note: `앱 ${appY} vs ${e2} (DPS ${d} ÷ 현재가 ${ltmPrice})` });
         }
       }
     }
@@ -397,7 +425,7 @@ async function ltmLayer(c) {
     const hrow = (key) => c.h.rows.find((x) => x.key === key)?.values[hi] ?? null;
     const val = (it) => oneVal(pickRow(cur.rows, it[0], it[1]), (r) => num(r.thstrm_amount)).v;
     exact("K4", "LTM 매출 = DART 사업보고서(최신 정기보고서)", "LTM", hrow("revenue"), val(IT.rev), `${lp.nm} ${cur.fsDiv}`);
-    if (c.ltmMcOk) c.multExpect("LTM", LT, parentEquity(cur.rows, "thstrm_amount"), { v: val(IT.rev), how: `${lp.nm} 매출` });
+    if (c.ltmMcOk) c.multExpect("LTM", LT, { mc: LT.mc, price: c.ltmPrice, eq: parentEquity(cur.rows, "thstrm_amount"), rev: { v: val(IT.rev), how: `${lp.nm} 매출` }, eps: { v: epsOfRows(cur.rows, (r) => num(r.thstrm_amount)), how: `${lp.nm} EPS` } });
     exact("K4", "LTM 영업이익 = DART 사업보고서(최신 정기보고서)", "LTM", hrow("opinc"), val(IT.op), `${lp.nm} ${cur.fsDiv}`);
     exact("K4", "LTM 순이익(연결) = DART 사업보고서(최신 정기보고서)", "LTM", LT.ni, val(IT.ni), `${lp.nm} ${cur.fsDiv}`);
     exact("K4", "LTM EPS = DART 사업보고서(최신 정기보고서)", "LTM", LT.eps, epsOfRows(cur.rows, (r) => num(r.thstrm_amount)), lp.nm);
@@ -435,6 +463,7 @@ async function ltmLayer(c) {
     exact("K4", `LTM ${label2} = DART 최근 4개 분기 합`, "LTM", key === "ni" ? LT.ni : hrow(key), exp, parts.map((p, i) => `${seq[i][0]}Q${seq[i][1]} ${p.v ?? "?"}(${p.how})`).join(" + "));
   }
   // EPS = 사업연도 + 당기 누적 − 전년 동기 누적(희석, 없으면 기본)
+  let epsLtm = null;
   {
     const annual = await R(Y - 1, "11011");
     // 전체 EPS(희석 → 기본), 전체 EPS 미공시면 계속영업 + 중단영업 주당이익(공시 두 값 — CLAUDE.md EPS 단일 기준)
@@ -452,6 +481,7 @@ async function ltmLayer(c) {
     let pc = epsOf(cur.rows, (r) => num(r.frmtrm_add_amount) ?? num(r.frmtrm_amount));
     if (pc == null) pc = epsOf(await R(Y - 1, lp.code), (r) => num(r.thstrm_add_amount) ?? num(r.thstrm_amount));
     const exp = a != null && cc != null && pc != null ? a + cc - pc : null;
+    epsLtm = exp;
     const approxDisclosed = /EPS.*(환산|근사)/.test((c.h.notes ?? []).join(" ")) || /환산|근사/.test(JSON.stringify(tt?.ttm?.reasons?.eps ?? ""));
     if (exp == null && LT.eps != null && approxDisclosed) add("K4", "LTM EPS = DART 사업연도 + 누적 − 전년 누적", "LTM", { status: "unverifiable", note: `분기 EPS 공시 없음 — 앱 근사(주석 표시) ${LT.eps}` });
     else exact("K4", "LTM EPS = DART 사업연도 + 누적 − 전년 누적", "LTM", LT.eps, exp, `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − 전년 ${pc}`);
@@ -460,7 +490,7 @@ async function ltmLayer(c) {
   const cl = classifyBsRows(cur.rows, cur.rows, { rows: await R(Y - 1, "11011"), col: "frmtrm_amount" });
   const faceDebt = sumCol(cl.debt, "thstrm_amount") ?? 0;
   // PBR·PSR 기대치(감사 4차 ③) — 지배주주 자본 = 최신 분기말, 매출 = DART 최근 4개 분기 합
-  if (c.ltmMcOk) c.multExpect("LTM", LT, parentEquity(cur.rows, "thstrm_amount"), { v: revLtm, how: "DART 최근 4개 분기 매출 합" });
+  if (c.ltmMcOk) c.multExpect("LTM", LT, { mc: LT.mc, price: c.ltmPrice, eq: parentEquity(cur.rows, "thstrm_amount"), rev: { v: revLtm, how: "DART 최근 4개 분기 매출 합" }, eps: { v: epsLtm, how: "DART 사업연도 + 누적 − 전년 누적 EPS" } });
   let lease = { status: "face" };
   if (!cl.leaseFace.length) {
     // 최근 사업보고서 회계정책이 차입금 줄 포함이면 포함. 아니면 분기 보고서 원문 주석 표의 태그 칸(오너 결정 2026-10-05 — 분기 XBRL 엔 주석이 없지만 원문
@@ -655,21 +685,32 @@ function bsOwnerAny(src, y) {
   return null;
 }
 const hasIs = (L, i) => !!L && L.some((r) => (r.sj_div === "IS" || r.sj_div === "CIS") && num(r[COL[i]]) != null);
-/** DART 재무제표 현금흐름 감가상각 줄(검증기 판독 — 합계 줄, 없으면 유형·무형·사용권 세부 줄 합) */
+/**
+ * DART 재무제표 현금흐름 감가상각 줄(검증기 판독). 합계 줄(감가상각 및 상각)이 있고 따로 무형상각 줄이 없으면 그 값 + 따로 적은 사용권·투자부동산 줄. 아니면 유형자산 감가상각
+ * + 무형자산상각 + 사용권자산·투자부동산 감가상각 줄의 합 — 유형자산 감가상각 줄이 없으면 부분합이라 null(감사 5차 ① — 010120 2023 보고서는
+ * "감가상각비에 대한 조정"(ifrs-full_AdjustmentsForDepreciationExpense) 이라 이름 목록에 안 걸려 무형·사용권만 합했다). 이름 "감가상각비"는
+ * 무형상각 줄이 따로 있으면 유형자산 감가상각으로 본다
+ */
+const DA_CF_PARTS = [
+  ["dep", /^(ifrs-full|dart)_(AdjustmentsForDepreciationExpense|DepreciationExpense|DepreciationAndAmortizationExpensePropertyPlantAndEquipment)$/, ["유형자산감가상각비", "유형자산의감가상각비", "감가상각비", "감가상각비에대한조정", "유형자산감가상각비에대한조정"]],
+  ["amo", /^(ifrs-full|dart)_(AdjustmentsForAmortisationExpense|AmortisationExpense)$/, ["무형자산상각비", "무형자산의상각비", "무형자산상각비에대한조정", "상각비에대한조정"]],
+  ["rou", /^(ifrs-full|dart)_AdjustmentsForDepreciationRightofuseAssets$/, ["사용권자산감가상각비", "사용권자산상각비", "사용권자산감가상각비에대한조정", "사용권자산상각비에대한조정"]],
+  ["inv", /^(ifrs-full|dart)_AdjustmentsForDepreciationInvestmentProperty$/, ["투자부동산감가상각비", "투자부동산상각비", "투자부동산감가상각비에대한조정"]],
+];
 function daCfLine(rows, col) {
-  const cf = (rows ?? []).filter((r) => r.sj_div === "CF");
+  const cf = (rows ?? []).filter((r) => r.sj_div === "CF" && num(r[col]) != null);
   const n0 = (r) => String(r.account_nm ?? "").replace(/\s/g, "");
-  for (const id of ["ifrs-full_DepreciationAndAmortisationExpense", "ifrs-full_AdjustmentsForDepreciationAndAmortisationExpense", "dart_DepreciationAndAmortizationExpensePropertyPlantAndEquipment"]) {
-    const r = cf.find((x) => x.account_id === id && num(x[col]) != null);
-    if (r) return { v: num(r[col]), how: `DART 현금흐름 ${r.account_nm}(${id})` };
-  }
-  for (const nmx of ["감가상각비와무형자산상각비", "감가상각비", "유형자산감가상각비"]) {
-    const r = cf.find((x) => n0(x) === nmx && num(x[col]) != null);
-    if (r) return { v: num(r[col]), how: `DART 현금흐름 ${r.account_nm}` };
-  }
-  const parts = [["유형자산감가상각비", "유형자산의감가상각비", "감가상각비"], ["무형자산상각비", "무형자산의상각비"], ["사용권자산감가상각비"]]
-    .map((g) => cf.find((x) => g.includes(n0(x)) && num(x[col]) != null)).filter(Boolean);
-  return parts.length ? { v: parts.reduce((a, r) => a + num(r[col]), 0), how: `DART 현금흐름 ${parts.map((r) => r.account_nm).join("+")}` } : null;
+  const part = (k) => { const [, re, names] = DA_CF_PARTS.find((x) => x[0] === k); return cf.find((x) => re.test(x.account_id)) ?? cf.find((x) => names.includes(n0(x))); };
+  const amo = part("amo");
+  // 합계 줄에 따로 적은 사용권자산·투자부동산 감가상각 줄은 더한다(CLAUDE.md 감가상각비 = 유형 + 사용권 + 투자부동산 — 따로 적은 줄도 합산)
+  const extra = ["rou", "inv"].map(part).filter(Boolean);
+  const withExtra = (r, how) => ({ v: num(r[col]) + extra.reduce((a, e) => a + num(e[col]), 0), how: `${how}${extra.map((e) => ` + ${e.account_nm}`).join("")}` });
+  const tot = !amo && (["ifrs-full_DepreciationAndAmortisationExpense", "ifrs-full_AdjustmentsForDepreciationAndAmortisationExpense", "dart_AdjustmentsForDepreciationAndAmortisationExpense"].map((id) => cf.find((x) => x.account_id === id)).find(Boolean)
+    ?? cf.find((x) => ["감가상각비와무형자산상각비", "감가상각비및무형자산상각비", "감가상각비와상각비", "감가상각비및상각비"].includes(n0(x))));
+  if (tot) return withExtra(tot, `DART 현금흐름 ${tot.account_nm}(${tot.account_id})`);
+  const ps = DA_CF_PARTS.map(([k]) => part(k)).filter(Boolean);
+  if (!part("dep")) return null; // 유형자산 감가상각 줄 없음 — 부분합은 감가상각비가 아니다
+  return { v: ps.reduce((a, r) => a + num(r[col]), 0), how: `DART 현금흐름 ${ps.map((r) => r.account_nm).join("+")}` };
 }
 
 // 감가상각 현금흐름 조정 태그(사업보고서 XBRL) — 검증기 판독
