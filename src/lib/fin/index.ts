@@ -205,7 +205,7 @@ export function metricPartsAt(sym: FinSymDoc, metric: "sga" | "rnd"): { id: stri
  * 판정 순서: 저장본 없음 → 엔진판 다름 → 새 공시 확인(제출 목록만 — 마지막 확인이 오래된 종목부터). 새 공시가 없으면 확인 시각만 남긴다.
  */
 export interface RefreshResult {
-  built: { symbol: string; why: "missing" | "engine" | "filing"; changed?: number; kept?: boolean; gaps: string[]; error?: string }[];
+  built: { symbol: string; why: "missing" | "engine" | "filing"; changed?: number; kept?: boolean; gaps: string[]; cols?: string[]; error?: string }[];
   upToDate: string[];
   /** 제출 목록 조회 실패(latestPeriodicAccn null) — 새 공시 여부를 판정 못해 건너뛴 종목(확인 시각을 남기지 않음, 다음 호출에서 다시) */
   skipped: string[];
@@ -249,7 +249,10 @@ export async function refreshStored(market: Market, symbols: string[], opts: { m
     }
     try {
       const r = await assemble(market, s, { persist: true });
-      out.built.push({ symbol: s, why, changed: r.persisted?.changed, kept: r.persisted?.kept, gaps: gapNames(r.gaps) });
+      // gaps = 저장본 결손(fin_sym.g — 판독 단계), cols = 열 표시(조립 항등식 불성립 IDENTITY·기준 변경 BASIS_SHIFT 등 — 열 단위 메모, 화면 값은 정상).
+      // 예전엔 둘을 합쳐 "결손"으로 찍어 거의 전 종목이 결손처럼 보였다(2026-10-09 — 배포 전후 저장본 비트 동일 확인)
+      const rg = r.readerGaps ?? r.gaps;
+      out.built.push({ symbol: s, why, changed: r.persisted?.changed, kept: r.persisted?.kept, gaps: gapNames(rg), cols: gapNames(r.gaps & ~rg) });
     } catch (e) {
       out.built.push({ symbol: s, why, gaps: [], error: String((e as Error).message ?? e).slice(0, 200) });
     }
