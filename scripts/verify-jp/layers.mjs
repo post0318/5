@@ -20,6 +20,7 @@
  */
 import { dayList, docFiles, resolveTicker, redact, addDays } from "./edinet.mjs";
 import { parseDoc, plainValue, ncValue } from "./xbrl.mjs";
+import { evComponents } from "./j2.mjs";
 
 const N_FY = 5;
 const STD_CTX = /^(CurrentYear|Prior1Year)(Duration|Instant)$/;
@@ -98,13 +99,19 @@ function appColSources(source, word) {
 // ── 원자료 판정 ──
 /** 서류 d 가 본표 kind 로 기간 per 를 싣는가 — 그 역할 개념 중 EDINET 표준 문맥(CurrentYear·Prior1Year)으로 그 기간 값이 있는 것 */
 const TOTAL_ASSETS = ["jpigp_cor:AssetsIFRS", "jppfs_cor:Assets"];
+const TOTAL_LE = ["jpigp_cor:LiabilitiesAndEquityIFRS", "jppfs_cor:LiabilitiesAndNetAssets"];
 function carries(d, kind, per, re = STD_CTX) {
   const roles = [...d.roles.values()].filter((r) => r.kind === kind && r.cons === d.consUsed);
   // 재무상태표 = 그 시점 자산총계가 본표에 실렸을 때(문맥 이름 무관) — IFRS 소급 재작성 3열 재무상태표(소니 IFRS 17 전환일 Prior2YearInstant)는 잡고,
   // 현금흐름표 기초·전년 반기말 현금(Prior1InterimInstant 등 — 재무상태표 열 아님)은 잡지 않는다
+  // 자산총계만으로는 부족 — 부문 주석이 전년 반기말 자산(AssetsIFRS Prior1InterimInstant, 차원 없음)을 태깅한다(혼다 半期報告書). 부채와 자본 총계도 그 시점에 있어야
   if (kind === "bs") {
-    const ta = TOTAL_ASSETS.find((c) => roles.some((r) => r.concepts.has(c)));
-    if (ta) return (d.facts.get(ta) ?? []).some((f) => { const x = d.ctx.get(f.ctx); return x && !x.dims.length && x.instant === per.end && f.v != null; });
+    const at = (cs) => {
+      const c = cs.find((k) => roles.some((r) => r.concepts.has(k)));
+      return c ? (d.facts.get(c) ?? []).some((f) => { const x = d.ctx.get(f.ctx); return x && !x.dims.length && x.instant === per.end && f.v != null; }) : null;
+    };
+    const ta = at(TOTAL_ASSETS);
+    if (ta != null) return ta && at(TOTAL_LE) !== false;
   }
   for (const r of roles)
     for (const c of r.concepts) {
@@ -197,6 +204,9 @@ async function companyDocs0(sym, hardErrors, rowOk, what) {
       const d = await loadDoc(r);
       if (!d.roles.size) { parsedNoStmt ??= d; continue; } // 訂正 중 재무제표를 다시 싣지 않은 것 · US GAAP 본표는 문단뿐
       d.consUsed = [...d.roles.values()].some((x) => x.cons);
+      // 주당 값 주식 기준일 — 訂正은 원 서류 숫자를 다시 싣는다(그 사이 분할 미반영, 日立 2025-07 訂正의 2022·2023 EPS) → 원 서류 제출일
+      const parent = r.parentDocID ? ix.docs.find((x) => x.docID === r.parentDocID) : null;
+      d.basisAt = (parent ?? r).submitDateTime.slice(0, 10);
       docs.push(d);
     } catch (e) {
       hardErrors.push(`${r.docID} XBRL 판독 실패 — ${redact(e.message).slice(0, 100)}`);
@@ -383,7 +393,7 @@ export async function jpAnnualLayers(sym, app, { add, PASS, FAIL, NA, hardErrors
         const bas = dil ? null : pick(["BasicEarningsLossPerShareIFRSSummaryOfBusinessResults", "BasicEarningsLossPerShareSummaryOfBusinessResults"]);
         const hit = dil ?? bas;
         if (!hit) return null;
-        const at = d.row.submitDateTime.slice(0, 10);
+        const at = d.basisAt ?? d.row.submitDateTime.slice(0, 10);
         const after = (splits ?? []).filter((x) => x.date > at);
         const factor = after.reduce((x, y) => x * y.ratio, 1);
         return { ...hit, kind: dil ? "희석" : "기본", d, at, after, factor, exp: hit.v / factor };
@@ -604,6 +614,31 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
     return na == null ? null : na - (v("jppfs_cor:NonControllingInterests") ?? 0) - (v("jppfs_cor:SubscriptionRightsToShares") ?? 0);
   };
 
+  /**
+   * J2 EV 구성요소 — 검증기 독립 판정(j2.mjs: 요소 ID 차입금·현금, 변동표 산술 리스부채)과 하이라이트 총차입금·현금성자산·비지배지분·EV 공란.
+   * d = 그 열 재무상태표 출처 서류, D = 기준일. 서류의 당기말·전기말 열만(소니 IFRS 17 전환일 같은 세 번째 열은 변동표 기말이 없다 → 검증불가)
+   */
+  const j2 = (label, i, d, D, mcapBlank) => {
+    const which = D === d.ctx.get("CurrentYearInstant")?.instant || D === d.dei.CurrentPeriodEndDateDEI ? "cur" : D === d.ctx.get("Prior1YearInstant")?.instant ? "prior" : null;
+    if (!which) return add("J2", "총차입금 = 차입금 요소 + 리스부채", label, { status: NA, note: `${d.row.docID} 의 당기말·전기말 열이 아님(${D})` });
+    const e = evComponents(d, D, which);
+    const NAME = "총차입금 = 차입금 요소 + 리스부채";
+    if (e.debt.blank) cmp("J2", NAME, label, val("debt", i), { blank: e.debt.blank });
+    else if (e.debt.v == null) add("J2", NAME, label, { status: NA, note: e.debt.why });
+    else cmp("J2", NAME, label, val("debt", i), { v: e.debt.v, how: e.debt.how });
+    if (!e.evBlank) {
+      const ca = val("cash", i);
+      if (e.cash.v == null) add("J2", "현금성자산 = 현금 요소", label, { status: NA, note: e.cash.why });
+      else cmp("J2", "현금성자산 = 현금 요소", label, ca == null ? null : -ca, { v: e.cash.v, how: e.cash.how });
+      cmp("J2", "비지배지분 = 원자료", label, val("nci", i), e.nci);
+    }
+    const evA = val("ev", i);
+    if (e.evBlank) cmp("J2", "EV 공란 판정", label, evA, { blank: e.evBlank });
+    else if (mcapBlank) add("J2", "EV 공란 판정", label, evA == null ? { status: PASS, note: `기대 빈칸 — 시가총액 ${mcapBlank}` } : { status: FAIL, app: evA, note: `시가총액 기대 빈칸(${mcapBlank})인데 EV 값` });
+    else if (e.evWhy) add("J2", "EV 공란 판정", label, { status: NA, note: e.evWhy });
+    else add("J2", "EV 공란 판정", label, evA != null ? { status: PASS, app: evA, note: "공란 사유 없음 — 값 있음" } : { status: FAIL, note: "EV 공란 사유가 원자료에 없는데 앱 EV 빈칸" });
+  };
+
   // ── 사업연도 열 ──
   const fyShares = new Map();
   for (const per of fys) {
@@ -653,6 +688,7 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
       if (e.v != null) kv.opAlt = e.v;
       kv.opAltExp = e;
     }
+    if (kv.colOf.bs) j2(label, i, kv.colOf.bs, per.end, mcapExp?.blank ?? null);
     // C·D — 배수·마진·EV 항등식(원자료 분모)
     const rev = kv["매출"]?.v ?? null, ni = kv["순이익(지배)"]?.v ?? null, op = kv["영업이익"]?.v ?? kv.opAlt ?? null;
     const eqP = eqParentOf(kv.colOf.bs, per.end);
@@ -703,6 +739,7 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
   const ltmP = (isv?.periods ?? []).find((p) => p.label === "현재/LTM");
   add("B", "LTM 기준일 = 원자료", "LTM", !ltmP ? { status: FAIL, note: "앱 손익 화면에 현재/LTM 열 없음" } : ltmP.endDate === ltmEnd ? { status: PASS, note: h ? `반기 ${h.row.docID} ${ltmEnd}` : `최근 사업연도 ${ltmEnd}(그 뒤 반기 보고서 없음)` } : { status: FAIL, note: `앱 ${ltmP.endDate} vs 원자료 ${ltmEnd}${h ? `(반기 ${h.row.docID})` : ""}` });
   const kvL = keyVals.get(lastFy.end);
+  if (h ?? kvL?.colOf?.bs) j2("LTM", ltmI, h ?? kvL.colOf.bs, ltmEnd, null);
   const hCur = h ? { start: h.dei.CurrentFiscalYearStartDateDEI, end: h.dei.CurrentPeriodEndDateDEI } : null;
   const hPri = h ? { start: lastFy.start, end: addYears(hCur.end, -1) } : null;
   /** LTM 기대값 — 줄 l(kind): 반기 없음 = 최근 사업연도 열, 반기 있음 = 사업연도 + 당기 반기 − 전년 반기(재무상태표·기말 = 반기말, 기초 = 전년 반기말, 주당 = 빈칸) */

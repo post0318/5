@@ -98,6 +98,8 @@ export function parseDoc(files) {
 
   const facts = new Map();
   const texts = new Map();
+  /** 주석 문단 [{ name, t }] */
+  const tbs = [];
   const dei = {};
   const re = /<([\w.-]+):([\w.-]+)\b([^>]*?\bcontextRef="[^"]+"[^>]*?)(\/>|>([\s\S]*?)<\/\1:\2>)/g;
   for (const m of inst.matchAll(re)) {
@@ -106,7 +108,14 @@ export function parseDoc(files) {
     const a = m[3];
     const raw = m[5];
     if (p === "jpdei_cor") { if (raw != null && !/</.test(raw)) dei[m[2]] = raw.trim(); continue; }
-    if (raw != null && raw.includes("<")) continue; // 문단(TextBlock) — 숫자 아님
+    if (raw != null && (raw.includes("<") || /^Notes\w*TextBlock$/.test(m[2]))) {
+      // 연결 주석 문단(J2 재무활동 부채 변동표 판독) — 차원 없는 문맥만, 태그 걷고 NFKC(전각 숫자·괄호 → 반각)
+      // (메모리 — 리스부채·재무활동 문단만 남긴다)
+      if (/^Notes\w*TextBlock$/.test(m[2]) && ctx.get(attr(a, "contextRef"))?.dims.length === 0 && /リース負債|財務活動/.test(raw)) {
+        tbs.push({ name: m[2], t: decodeXml(decodeXml(raw).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ")).normalize("NFKC").replace(/\s+/g, " ").trim() });
+      }
+      continue;
+    }
     if (TEXT_FACTS.has(m[2]) && p === "jpcrp_cor") {
       const arr = texts.get(m[2]) ?? [];
       arr.push({ ctx: attr(a, "contextRef"), s: decodeXml(raw ?? "").trim() });
@@ -142,7 +151,7 @@ export function parseDoc(files) {
   }
   const calc = new Map();
   for (const [uri, arcs] of parseLinkbase(cal, "calculation")) calc.set(uri.split("/").pop(), arcs.filter((a) => a.use !== "prohibited").map((a) => [a.from, a.to, a.w]));
-  return { dei, ctx, facts, texts, roles, calc };
+  return { dei, ctx, facts, texts, tbs, roles, calc };
 }
 
 /** 차원 없는 문맥의 값 — 기간(start~end) 또는 시점(instant). 같은 기간 문맥이 여럿이고 값이 다르면 { conflict } */
