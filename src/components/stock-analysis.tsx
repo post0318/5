@@ -419,7 +419,8 @@ export function StockAnalysis({
     const cShares = ov.consensus?.sharesOutstanding ?? null;
     const cMktCap = ov.consensus?.marketCap ?? null;
     const quote =
-      market !== "us" &&
+      // 한국도 Yahoo 로 채우지 않는다(감사 8차 ② — KRX 상장주식수·시가총액만)
+      market !== "us" && market !== "kr" &&
       ((ov.quote.sharesOutstanding == null && cShares != null) ||
         (ov.quote.marketCap == null && cMktCap != null))
         ? {
@@ -455,7 +456,8 @@ export function StockAnalysis({
   // 국내: DART 자체 TTM(직전연간 + 당기누적 − 전년동기). 미국: EDGAR 동일 방식. 일본: EDINET(jp-ev.ts — 최근 사업연도 + 반기 − 전년 반기).
   const ttm = ttmQ.data?.ttm ?? null;
   // TTM EPS(공통 함수) 그대로 — 순이익 ÷ 주식수로 대신 계산하지 않는다(그림자 채우기 금지, 한국도 2026-10-09 감사 6차부터)
-  const ttmEps = ttm?.eps ?? null;
+  // TTM 응답에 오류가 실렸으면 EPS 를 쓰지 않는다(감사 8차 ③ — 멀티플은 비었는데 PER(TTM)만 표시됐다)
+  const ttmEps = ttm?.error ? null : (ttm?.eps ?? null);
   // 부호 규칙(전 화면 공통): EPS 가 0 이하면 PER 은 비운다. 적자라서 비운 것이므로
   // Yahoo PER 로 대체하지 않는다(일본도 2026-10-08 부터 자체 값만 — jp-ev.ts)
   const trailingPer = price != null && ttmEps != null && ttmEps > 0 ? price / ttmEps : null;
@@ -687,7 +689,7 @@ export function StockAnalysis({
                 <Stat label="시가총액" className="order-3 lg:order-none">
                   <span className="text-base">
                     {/* 미국은 공통 주식수(edgar-shares) 기준만 — Yahoo 시가총액으로 대신하지 않고 사유 표시 */}
-                    {market === "us"
+                    {market === "us" || market === "kr"
                       ? multiples?.marketCap != null
                         ? formatMoneyWithUnits(multiples.marketCap, market)
                         : ttmQ.isLoading
@@ -695,10 +697,10 @@ export function StockAnalysis({
                           : "-"
                       : formatMoneyWithUnits(multiples?.marketCap ?? ov.quote?.marketCap, market)}
                   </span>
-                  {market === "us" && multiples?.reasons?.marketCap && (
+                  {(market === "us" || market === "kr") && multiples?.reasons?.marketCap && (
                     <div className="text-muted-foreground mt-1 text-[11px]">※ {multiples.reasons.marketCap}</div>
                   )}
-                  {market === "us" && !multiples && ttmQ.isError && (
+                  {(market === "us" || market === "kr") && !multiples && ttmQ.isError && (
                     <div className="text-muted-foreground mt-1 text-[11px]">※ TTM 조회 실패</div>
                   )}
                   {market === "kr" && naverQ.data?.foreign && (

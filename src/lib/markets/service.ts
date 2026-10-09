@@ -148,7 +148,8 @@ export async function getStockOverview(
     const cShares = (consensus as { sharesOutstanding?: number | null } | null)?.sharesOutstanding ?? null;
     const cMktCap = (consensus as { marketCap?: number | null } | null)?.marketCap ?? null;
     const quoteForMultiples =
-      market !== "us" &&
+      // 한국도 Yahoo 컨센서스 주식수·시가총액으로 채우지 않는다(감사 8차 ② — 시세의 KRX 상장주식수만)
+      market !== "us" && market !== "kr" &&
       ((quote.sharesOutstanding == null && cShares != null) ||
         (quote.marketCap == null && cMktCap != null))
         ? {

@@ -329,7 +329,8 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   // 미국: 주식수·시가총액을 하이라이트와 같은 공통 기준(edgar-shares, 스냅샷 evShares)
   // 으로 — Yahoo 주식수·시가총액을 쓰면 PBR·PSR 이 하이라이트와 달랐다.
   // 20-F ADR(TSM 1:5)은 EDGAR 주식수가 본국 보통주 기준 → Yahoo ADR 환산 주식수로
-  const usShares =
+  // 한국 스냅샷은 EV 주식수·장부 주식수·리츠 구분을 쓰지 않는다(감사 8차 — 그 키가 끼면 시가총액·BPS·EV 가 바뀌었다). 주식수는 시세의 상장주식수만
+  const usShares = kr ? null :
     snap?.evShares != null && adrRatio(Boolean(snap.is20F), snap.evShares, sharesOutstanding) !== 1
       ? sharesOutstanding!
       : (snap?.evShares ?? null);
@@ -356,7 +357,7 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   // 장부 주식수를 따로 받은 경우(DART 연결 ADR — 자사주 제외 유통주식수)만 BPS 분모를 바꾸고, PBR 은
   // 시가총액 ÷ 자본(하이라이트와 같은 식 — 두 주식수가 달라도 PBR 은 주식수와 무관)
   // (키가 있는데 값이 null 이면 장부 주식수를 못 구한 것 — 다른 주식수로 대체하지 않고 BPS 를 비운다)
-  const hasBookShares = snap?.bookShares !== undefined;
+  const hasBookShares = !kr && snap?.bookShares !== undefined;
   const bookShares = snap?.bookShares ?? null;
   const bps = hasBookShares
     ? equity != null && bookShares ? equity / bookShares : null
@@ -378,7 +379,7 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
     ? snap!.evBlocker || snap!.evNetDebt == null || price == null
       ? null
       : price * (usShares ?? shares ?? 0) +
-        (input.opUnits ? input.opUnits * price - (snap!.evOpNciBook ?? 0) : 0) +
+        (!kr && input.opUnits ? input.opUnits * price - (snap!.evOpNciBook ?? 0) : 0) +
         (snap!.evPreferredMcap ?? 0) +
         snap!.evNetDebt
     : marketCap != null
@@ -396,8 +397,21 @@ export function computeTrailingMultiples(input: MultiplesInput): TrailingMultipl
   // 분모 0 이하면 비운다(전 화면 공통 부호 규칙)
   const evEbitda = ev != null && ebitda != null && ebitda > 0 ? ev / ebitda : null;
   const evEbitdaIsApprox = (snap ? ttm?.daTtm : da) == null;
+  // 한국: 빈칸이면 칸마다 사유(감사 8차 ③ — 미국·일본처럼)
+  const krReasons: NonNullable<TrailingMultiples["reasons"]> = {};
+  if (kr) {
+    const tr = ttm?.reasons ?? {};
+    if (marketCap == null) krReasons.marketCap = price == null ? "현재가 없음" : "상장주식수(시세) 없음";
+    if (per == null) krReasons.per = price == null ? "현재가 없음" : epsDiluted == null ? (tr.fyEps ?? "최근 사업연도 EPS 없음") : "적자(EPS ≤ 0) — PER 미표시";
+    if (perTtm == null) krReasons.perTtm = price == null ? "현재가 없음" : epsTtm == null ? (tr.eps ?? "LTM EPS 없음") : "적자(EPS ≤ 0) — PER 미표시";
+    if (bps == null) krReasons.bps = equity == null ? (tr.equity ?? "지배주주 자본 없음") : "상장주식수 없음";
+    if (pbr == null) krReasons.pbr = bps == null ? krReasons.bps! : bps <= 0 ? "자본잠식(자본 ≤ 0) — PBR 미표시" : "현재가 없음";
+    if (psr == null) krReasons.psr = marketCap == null ? krReasons.marketCap! : (tr.revenue ?? "LTM 매출 없음");
+    if (evEbitda == null) krReasons.evEbitda = snap?.evBlocker ? `EV 미표시(${snap.evBlocker})` : ev == null ? (marketCap == null ? krReasons.marketCap! : "EV 구성요소 없음") : ebitda == null ? (tr.daTtm ?? "LTM 감가상각비 없음 — EBITDA 미표시") : "EBITDA ≤ 0 — 미표시";
+  }
 
   return {
+    ...(kr && Object.keys(krReasons).length ? { reasons: krReasons } : {}),
     symbol,
     market,
     asOf: quote.lastDate ?? new Date().toISOString().slice(0, 10),

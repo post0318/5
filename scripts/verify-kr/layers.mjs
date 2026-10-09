@@ -464,9 +464,10 @@ function overviewLayer(c) {
   if (!c.ov) { add("K1", "개요 화면 입력 /overview 응답", "LTM", { status: FAIL, note: "/overview 응답 없음" }); return; }
   const q = c.ov.quote ?? null;
   chk("화면 입력 현재가(/overview 시세) = K1 확인 현재가", q?.last ?? null, ltmPrice ?? undefined, "브라우저 멀티플 분자");
-  const scrSh = q?.sharesOutstanding ?? c.ov.consensus?.sharesOutstanding ?? null;
+  // 한국 화면은 Yahoo 컨센서스 주식수·시가총액으로 채우지 않는다(감사 8차 ② — stock-analysis.tsx·service.ts) — 시세 값만
+  const scrSh = q?.sharesOutstanding ?? null;
   chk("화면 입력 주식수(/overview 시세) = KRX 상장주식수", scrSh, sh ?? undefined, `KRX 상장주식수 ${sh}`);
-  const scrMc = q?.marketCap ?? c.ov.consensus?.marketCap ?? null;
+  const scrMc = q?.marketCap ?? null;
   chk("화면 입력 시가총액(/overview 시세) = K1 확인 시가총액", scrMc, mc ?? undefined, "하이라이트 LTM 시가총액(K1 KRX 확인)");
   chk("화면 입력 /ttm 최근 사업연도 EPS = DART", ttm?.fyEps?.eps ?? null, eF, `FY${fy} DART EPS`);
   chk("화면 입력 /ttm 매출 = DART LTM 매출", ttm?.revenue ?? null, rv, multDen.LTM?.rev?.how ?? "");
@@ -480,6 +481,21 @@ function overviewLayer(c) {
   const hOp = c.h.rows.find((x) => x.key === "opinc")?.values[c.h.columns.findIndex((x) => x.kind === "ltm")] ?? null;
   chk("화면 입력 /ttm 영업이익 = 하이라이트 LTM(K4 확인)", ttm?.opIncome ?? null, hOp ?? undefined, "");
   chk("화면 입력 /ttm 감가상각 = 하이라이트 LTM EBITDA − 영업이익(K3 확인)", ttm?.daTtm ?? null, L.ebitda != null && hOp != null ? L.ebitda - hOp : undefined, "");
+  // 화면 계산이 읽는 그 밖의 칸(감사 8차 ① — evBlocker·evShares·bookShares·isReit·error 를 바꿔도 통과였다): 한국 스냅샷에 허용된 칸만 있어야 하고, TTM 오류가
+  // 없어야 하며, EV 차단 여부는 하이라이트 LTM EV(K2 확인) 유무와 같아야 한다
+  if (ttm?.error) add("K1", "개요 화면 입력 /ttm 오류 없음", "LTM", { status: FAIL, note: `/ttm 응답 오류 ${String(ttm.error).slice(0, 80)} — 화면 멀티플 전부 빈칸` });
+  const SNAP_KEYS = new Set(["label", "equity", "liabilities", "cash", "shares", "evNetDebt", "evBlocker", "evPreferredMcap", "evBridge"]);
+  const extra = Object.keys(ttm?.snapshot ?? {}).filter((k) => !SNAP_KEYS.has(k));
+  add("K1", "개요 화면 입력 /ttm 스냅샷 칸(한국 허용 목록)", "LTM", ttm?.snapshot ? (extra.length ? { status: FAIL, note: `허용 목록 밖 칸 ${extra.join(", ")} — 한국 스냅샷에 없어야` } : { status: PASS }) : { status: FAIL, note: "/ttm 스냅샷 없음" });
+  const blk = ttm?.snapshot?.evBlocker ?? null;
+  if (L.ev != null) add("K1", "개요 화면 입력 EV 차단 없음(하이라이트 LTM EV 있음)", "LTM", blk == null ? { status: PASS } : { status: FAIL, note: `하이라이트 LTM EV ${L.ev} 인데 /ttm evBlocker "${blk}"` });
+  // 화면 최종 EV/EBITDA = (현재가 × 상장주식수 + 우선주 + 순차입금) ÷ (영업이익 + 감가상각) — 화면 입력으로 다시 계산해 하이라이트 LTM(K2·K3 확인)과 대조
+  const sp = q?.last ?? null;
+  const evS = blk == null && sp != null && scrSh != null && ttm?.snapshot?.evNetDebt != null ? sp * scrSh + (ttm.snapshot.evPreferredMcap ?? 0) + ttm.snapshot.evNetDebt : null;
+  const ebS = ttm?.opIncome != null && ttm?.daTtm != null ? ttm.opIncome + ttm.daTtm : null;
+  const evx = evS != null && ebS != null && ebS > 0 ? evS / ebS : null;
+  const fl2 = (a, b) => a === b || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-12);
+  add("K1", "개요 화면 EV/EBITDA(화면 입력으로 계산) = 하이라이트 LTM", "LTM", L.evx === undefined ? { status: NA, note: "하이라이트 LTM 없음" } : fl2(evx, L.evx ?? null) ? { status: PASS, app: evx, src: L.evx ?? null } : { status: FAIL, app: evx, src: L.evx ?? null, note: `화면 ${evx ?? "빈칸"} vs 하이라이트 ${L.evx ?? "빈칸"} (EV ${evS} ÷ EBITDA ${ebS})` });
 }
 
 /**

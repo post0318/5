@@ -264,16 +264,21 @@ if (!DRY && targets.length) {
     // 기준선 없는 종목이 새 공시·오래됨으로 돌면 새 항목이 경보 없이 기준선이 됐다). 새 항목이 있으면 기준선을 바꾸지 않고 재실행 대상으로 남긴다
     const st0 = states.get(t.key);
     const prevR = results.get(t.key) ?? null;
-    const base = baselineOf(st0, prevR) ?? (prevR ? naItems(prevR) : null);
+    // 기준선이 없으면(처음) 실행 전 결과는 비교에만 쓰고 기준선으로 삼지 않는다(감사 8차 ④ — 수동 결과가 그대로 기준선이 됐다). 처음 기준선 = 이번 자동 실행
+    // 결과 중 실행 전 결과에도 있던 항목만(둘 다 본 것), 새로 생긴 항목은 경보(naIncrease) — 처음 설정은 로그·naBaselineSetAt 으로 남긴다
+    const valid = baselineOf(st0, prevR);
+    const first = valid == null;
+    const base = valid ?? (prevR ? naItems(prevR) : null);
     const nowItems = posted ? naItems(after) : null;
     const up = posted && base ? nowItems.filter((k) => !base.includes(k)) : [];
-    if (posted && !base) log(`  ${t.key} 검증불가·공통모드 기준선 처음 설정 — ${nowItems.length}건(자동 실행 결과)`);
+    const newBase = posted ? (first ? nowItems.filter((k) => !up.includes(k)) : up.length ? base : nowItems) : null;
+    if (posted && first) log(`  ${t.key} 검증불가·공통모드 기준선 처음 설정 — ${newBase.length}건(이번 자동 실행 결과 중 직전 결과에도 있던 항목${up.length ? `, 새 항목 ${up.length}건은 경보` : ""})`);
     if (up.length) log(`  ${t.key} 새 검증불가·공통모드 ${up.length}건 — ${up.slice(0, 5).join(" ; ")}(재실행 대상)`);
     done.push({ key: t.key, reason: t.reason, ok, code: v.code, ...(up.length ? { naIncrease: up } : {}), ...(ok ? {} : { tail: v.tail.slice(-300) }) });
     if (posted) {
       const f = filingNow.get(t.key) ?? t.filing;
       await stateCol.updateOne({ _id: t.key }, { $set: { market: t.market, symbol: t.symbol, lastRunAt: after.runAt, lastReason: t.reason, lastCode: v.code, commit,
-        naIncrease: up.length ? up : null, naBaseline: up.length ? base : nowItems, naBaselineV: NA_BASE_V, ...(base ? {} : { naBaselineSetAt: after.runAt }), ...(f?.id ? { filingId: f.id, filingDate: f.date, filingName: f.name } : {}) } }, { upsert: true });
+        naIncrease: up.length ? up : null, naBaseline: newBase, naBaselineV: NA_BASE_V, ...(first ? { naBaselineSetAt: after.runAt } : {}), ...(f?.id ? { filingId: f.id, filingDate: f.date, filingName: f.name } : {}) } }, { upsert: true });
     }
   }
 }
@@ -314,6 +319,8 @@ if (!DRY) {
       result: (d.errors?.length ?? 0) > 0 ? "error" : (d.counts?.fail ?? 0) > 0 ? "fail" : "pass",
       // 기준선에 없던 검증불가·공통모드 항목(결과는 pass 일 수 있음 — 재실행 대상). 기준선 = 새 항목이 없던 마지막 자동 실행
       naIncrease: stAll.get(d._id)?.naIncrease ?? null,
+      // 검증불가·공통모드 기준선을 처음 정한 시각과 그 항목 수(기준선 없이 시작한 종목 — 그때 있던 항목이 기준선이 됨, 사람이 볼 수 있게)
+      naBaselineSetAt: stAll.get(d._id)?.naBaselineSetAt ?? null, naBaselineCount: Array.isArray(stAll.get(d._id)?.naBaseline) ? stAll.get(d._id).naBaseline.length : null,
       counts: { pass: d.counts?.pass ?? 0, fail: d.counts?.fail ?? 0, unverifiable: d.counts?.unverifiable ?? 0, common: d.counts?.common ?? 0, extMismatch: d.counts?.extMismatch ?? 0 },
       errors: (d.errors ?? []).slice(0, 3).map((e) => String(e).slice(0, 200)),
       topFails: (d.fails ?? []).slice(0, 5).map((f) => ({ layer: f.layer, name: f.name, col: f.col, note: String(f.note ?? "").slice(0, 160) })),
