@@ -449,15 +449,23 @@ async function universeCacheLayer(c) {
   if (d.error) add("K6", "유니버스 캐시 오류 없음", "LTM", { status: FAIL, note: String(d.error).slice(0, 120) });
   const fl = (a, b) => a === b || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-14);
   const ck = (name, app, exp, note) => add("K6", `유니버스 캐시 ${name}`, "LTM", exp === undefined ? { status: NA, app, note } : fl(app, exp) ? { status: PASS, app, src: exp, note } : { status: FAIL, app, src: exp, note: `캐시 ${app ?? "빈칸"} vs 기대 ${exp ?? "빈칸"} · ${note}` });
-  // 현재가·시가총액 — 캐시 시각 이전 최근 거래일 KRX
-  const k = await krxCapsOn(sym, day);
+  // 현재가·시가총액 — 캐시 시각에 이미 마감한 최근 거래일 D(KST 16시 전이면 전날까지). 앱 시세 규칙: KRX 일별 자료가 있으면 KRX 종가·시가총액, 아직 게시
+  // 전이면 Yahoo 종가 × KRX 상장주식수(최근 게시일) — 캐시 시각엔 D 의 KRX 자료가 게시 전이었을 수 있어 두 경우를 모두 기대치로 둔다
+  const cut = new Date(kst);
+  if (kst.getUTCHours() < 16) cut.setUTCDate(cut.getUTCDate() - 1);
+  const cutDay = cut.toISOString().slice(0, 10).replace(/-/g, "");
+  const k = await krxCapsOn(sym, cutDay);
   let px = undefined, mcE = undefined, how = "";
-  if (k?.common != null && d.last === k.close) { px = k.close; mcE = k.common; how = `KRX ${k.date}`; }
-  else if (k?.common != null && k.pendingDays?.length && c.yahooBars) {
-    const bars = (await c.yahooBars(sym)).filter((b) => b.date.replace(/-/g, "") > k.date && b.date.replace(/-/g, "") <= day && b.close === d.last);
-    if (bars.length) { px = d.last; mcE = d.last * k.shares; how = `KRX ${k.pendingDays.join("·")} 게시 전 — Yahoo ${bars[0].date} 종가 × KRX 상장주식수 ${k.shares}`; }
+  if (k?.common != null) {
+    const prevDay = new Date(Date.UTC(+k.date.slice(0, 4), +k.date.slice(4, 6) - 1, +k.date.slice(6, 8) - 1)).toISOString().slice(0, 10).replace(/-/g, "");
+    const kp = await krxCapsOn(sym, prevDay);
+    const yb = c.yahooBars ? (await c.yahooBars(sym)).find((b) => b.date.replace(/-/g, "") === k.date) : null;
+    const cands = [{ px: k.close, mc: k.common, how: `KRX ${k.date} 종가·시가총액` }];
+    if (yb?.close != null && kp?.shares != null) cands.push({ px: yb.close, mc: yb.close * kp.shares, how: `KRX ${k.date} 게시 전 — Yahoo ${k.date} 종가 ${yb.close} × KRX ${kp.date} 상장주식수 ${kp.shares}` });
+    if (yb?.close != null && k.shares != null) cands.push({ px: yb.close, mc: yb.close * k.shares, how: `Yahoo ${k.date} 종가 ${yb.close} × KRX ${k.date} 상장주식수 ${k.shares}` });
+    const hit = cands.find((x) => x.px === d.last && x.mc === d.marketCap) ?? cands[0];
+    px = hit.px; mcE = hit.mc; how = `${hit.how}(캐시 시각 ${d.updatedAt} — 마감 거래일 ${k.date}, 후보 ${cands.length}개)`;
   }
-  if (px === undefined && k?.common != null) { px = k.close; mcE = k.common; how = `KRX ${k.date}(캐시 시각 ${d.updatedAt})`; }
   ck("현재가 = KRX(캐시 시각 기준)", d.last ?? null, px, how);
   ck("시가총액 = KRX(캐시 시각 기준)", d.marketCap ?? null, mcE, how);
   // 재무 칸 — 최신 정기보고서 접수 뒤 계산된 캐시만
