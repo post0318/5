@@ -119,7 +119,7 @@ export async function getStockOverview(
           // 15초 제한에 걸려 시가총액·매출이 비었다(2026-10-02). 저장본이 없을 때만 계산하고, 완전한 결과면 저장
           if (market === "us") {
             const hit = await readTtmSnapAny(market, symbol).catch(() => null);
-            if (hit) return hit.ttm;
+            if (hit) return hit.current ? hit.ttm : { ...hit.ttm, snapStale: true };
           }
           const t = await safe(withTimeout(adapter.getTtm!(symbol), 15_000, "TTM 재무"), warnings, "TTM 재무");
           if (market === "us" && t && isStorableTtm(t as TtmFlows)) await writeTtmSnap(market, symbol, t as TtmFlows).catch(() => {});

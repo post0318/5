@@ -46,9 +46,11 @@ async function main() {
     clearTimeout(timer);
     const ms = Date.now() - t0;
     if (ttm && isStorableTtm(ttm)) {
-      if (!dry) await writeTtmSnap("us", sym, ttm);
+      const w = dry ? null : await writeTtmSnap("us", sym, ttm);
       built.push(sym);
-      console.log(`계산 ${sym} ${ms}ms${dry ? " (저장 안 함)" : ""}`);
+      // 저장본 교체 기록(ttm_chg) — 바뀐 칸 수·옛 판번호
+      const chg = w ? (w.changed == null ? " · 새 저장본" : ` · 교체(옛 판 ${w.from}) 바뀐 칸 ${w.changed}`) : "";
+      console.log(`계산 ${sym} ${ms}ms${dry ? " (저장 안 함)" : chg}`);
     } else {
       const reason = ttm?.error ?? ttm?.degraded?.join("; ") ?? "TTM 없음";
       failed.push({ symbol: sym, reason });

@@ -138,6 +138,8 @@ export async function getFinStmt(market: Market, symbol: string, stmt: "is", per
  * 조립 실패는 null — 다른 원천으로 대체하지 않는다(소비처는 빈칸).
  */
 const LOOKUP_TTL_MS = { stored: 10 * 60_000, assembled: 6 * 3_600_000, failed: 5 * 60_000 };
+/** 엔진판이 다른 저장본을 계속 쓰는 기한 — 마지막 배치 손길(적재 at·확인 ck 중 늦은 쪽) 기준 */
+const STALE_ENGINE_MAX_MS = 7 * 86_400_000;
 type LookupEntry = { at: number; ttl: number; p: Promise<FinSymDoc | null> };
 const lookupCache: Map<string, LookupEntry> = ((globalThis as { __finSymLookup?: Map<string, LookupEntry> }).__finSymLookup ??= new Map());
 
@@ -154,8 +156,11 @@ export async function loadFinSym(market: Market, symbol: string): Promise<FinSym
   entry.p = (async () => {
     // silent-ok: 저장본 읽기 실패 = 저장본 없음과 같이 이 코드로 조립(다른 원천으로 대체가 아니라 같은 계산을 새로 함)
     const stored = noSnap ? null : await getFinSym(market, symbol).catch(() => null);
-    // 엔진판이 다른 저장본(판독·조립 규칙이 바뀌기 전 배치)은 쓰지 않는다 — 배치(/api/cron/fin-build)가 다시 적재할 때까지 비저장 조립
     if (stored && stored.ev === ENGINE_VERSION) return stored;
+    // 엔진판이 다른 저장본(판독·조립 규칙이 바뀌기 전 배치)도 새 저장본이 생길 때까지 그대로 쓴다(오너 승인 2026-10-09 — 판번호가 바뀌면 배치가
+    // 다시 채우기 전까지 종목마다 30~40초 기다렸다). 응답에는 staleEv(옛 엔진판)를 남긴다. 배치(fin-build)는 엔진판이 다른 것을 다시 채운다.
+    // 단 배치가 7일 넘게 손대지 않은 저장본(유니버스 밖·30일 넘게 안 연 종목 — 배치 대상이 아님)은 요청 시점 조립(아래)으로 새로 만든다
+    if (stored && Date.now() - Math.max(stored.at?.valueOf() ?? 0, stored.ck?.valueOf() ?? 0) <= STALE_ENGINE_MAX_MS) return { ...stored, staleEv: stored.ev };
     try {
       const a = await assemble(market, symbol, { persist: false });
       // 환율·Yahoo 조회 실패로 결손이 생긴 조립은 일시적 — 6시간 캐시하지 않고 실패와 같이 5분 뒤 다시 조립(2026-09-26)

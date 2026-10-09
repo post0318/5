@@ -70,6 +70,8 @@ export interface UsRevenue {
   /** 판관비·연구개발비 하위 줄(docs/metrics/sga.md §4) — 없으면 빈 목록 */
   sgaParts: FinSubLine[];
   rndParts: FinSubLine[];
+  /** 엔진판이 다른 저장본에서 읽은 값이면 그 옛 엔진판(fin loadFinSym staleEv) — TTM 저장본은 이 값이 있으면 저장하지 않는다 */
+  staleEv?: number;
 }
 
 export interface FinColIssue {
@@ -118,7 +120,7 @@ export function revenueFromFinSym(sym: FinSymDoc): UsRevenue {
       col: c[0], start: c[1], end: c[2], v: metricAt(sym, "revenue", c[0]), gaps: gapNames(c[6]),
       rev: idf.get(c[0])?.rev ?? [], other: idf.get(c[0])?.other ?? [], unv: idf.get(c[0])?.unv ?? [],
     }));
-  return { annual, quarters, ltm, gaps: sym.g, financial: FIN_TYPES.has(sym.p.t), issues, sgaParts: metricPartsAt(sym, "sga"), rndParts: metricPartsAt(sym, "rnd") };
+  return { annual, quarters, ltm, gaps: sym.g, financial: FIN_TYPES.has(sym.p.t), issues, sgaParts: metricPartsAt(sym, "sga"), rndParts: metricPartsAt(sym, "rnd"), ...(sym.staleEv != null ? { staleEv: sym.staleEv } : {}) };
 }
 
 /** 종목의 매출 — 저장본(유니버스) 또는 비저장 조립(fin loadFinSym). 실패하면 null(소비처는 빈칸) */
