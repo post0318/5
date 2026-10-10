@@ -1731,6 +1731,9 @@ ${beforeOutputSection(COMMENT_PROMPT).slice(beforeOutputSection(COMMENT_PROMPT).
   있으니 **한국어로 따로 검색**한다 — 그 주 수출입 동향(산업통상부), 외국인·기관 순매수, 한국은행·정부 정책, 국내 대형주 실적·
   잠정실적, 국내 섹터 주도 종목(data.sectors 의 코스피·코스닥 leaders) 뉴스. 섹터 사유는 그 검색으로 확인한 기사 출처가 있으면
   써도 된다(서버는 국내 섹터에 주도 종목 이름이 들어 있는지 확인한다).
+- **economySummary 에는 주식 얘기를 쓰지 않는다**(오너 지적 2026-10-10): 실물 지표(PMI·고용·물가·수출입·소매판매 등)·
+  정책(재정·부양책·관세)·원자재·환율만. 주가지수·증시 등락·업종·증권사 투자의견은 넣지 않는다(그런 줄은 서버가 버린다).
+  economyEvidence 에 주식 전략 리포트가 섞여 있어도 그걸로 줄을 채우지 말고, 그 주제의 실물 지표를 웹에서 찾거나 줄을 뺀다.
 - 키는 data 의 값을 그대로: snapshot = snapshot[].name, issues = issues[].label, sectors = sectors[].id.
 - 표·숫자·구조는 서버 코드가 만든다. 문장만 보낸다.`;
 
@@ -1817,6 +1820,19 @@ export async function assembleConnectorComments(
  */
 const BROKER_RE = /([가-힣A-Za-z]{1,10}(?:투자증권|금융투자|증권))(?!사)/g;
 
+/**
+ * "5. 경제"에 주식 얘기 금지(오너 지적 2026-10-10 — "경제를 보면 왜 중국에 주식관련 내용을 넣었지?"). 수집 단계가 "중국"
+ * 낱말로 삼성증권 「4분기 중국 투자 전략」을 경기 근거에 넣었고 모델이 그걸로 중국 줄을 채웠다. 지수명·증시·투자의견·목표주가가
+ * 나오는 줄은 버린다. 증시는 스냅샷·핵심 이슈·섹터에서 다룬다.
+ */
+const EQUITY_IN_ECONOMY_RE =
+  /(상해종합|상하이종합|항셍|코스피|코스닥|나스닥|S&P\s?500|다우|니케이|닛케이|유로스톡스|투자의견|목표주가|증시|주가|화학주|소부장|업종)/;
+
+function equityInEconomy(line: string): string | null {
+  const m = EQUITY_IN_ECONOMY_RE.exec(line);
+  return m ? `경제 요약에 주식시장 내용("${m[1]}") — 실물 지표·정책만 쓴다` : null;
+}
+
 function checkBrokerCitations(
   input: ConnectorComments,
   payload: CommentPayload,
@@ -1846,12 +1862,12 @@ function checkBrokerCitations(
     reasons.set(key, r);
     return undefined;
   };
-  const lines = (key: string, text: string | undefined): string | undefined => {
+  const lines = (key: string, text: string | undefined, extra?: (l: string) => string | null): string | undefined => {
     if (!text) return text;
     const kept: string[] = [];
     const bad: string[] = [];
     for (const l of text.split(/\r?\n/)) {
-      const r = l.trim() ? unknown(l) : null;
+      const r = l.trim() ? (unknown(l) ?? extra?.(l) ?? null) : null;
       if (r) bad.push(`${l.trim().slice(0, 24)}… — ${r}`);
       else kept.push(l);
     }
@@ -1877,7 +1893,7 @@ function checkBrokerCitations(
   return {
     cleaned: {
       headline: one("headline", input.headline),
-      economySummary: lines("economySummary", input.economySummary),
+      economySummary: lines("economySummary", input.economySummary, equityInEconomy),
       policySummary: lines("policySummary", input.policySummary),
       calendar: input.calendar,
       snapshot: rec("snapshot", input.snapshot),
