@@ -1838,24 +1838,55 @@ const CLAIM_RE = /(-?\d[\d,]*(?:\.\d+)?)\s*(%p|%|bp|배럴|배|pt|건|달러|원
 const CITE_RE = /\[(\d+(?:\s*[,，]\s*\d+)*)\]/g;
 const SKIP_KEYS = new Set(["researchCount", "newsCount", "searchInterest", "date", "publishedAt", "startDate", "endDate", "asOf", "url", "pdfUrl", "id"]);
 
-function dataNumbers(payload: CommentPayload): number[] {
-  const out = new Set<number>();
+/** 단위 묶음 — "14%"는 data 에 %로 나온 14 가 있어야 하고, 숫자 14 가 다른 단위(건수·날짜)로 있는 것으론 안 된다 */
+function unitFamily(unit: string): string {
+  const u = unit.replace(/\s+/g, "");
+  if (u === "%" || u === "%p") return "%";
+  if (u === "$" || u.startsWith("$/") || u === "달러") return "달러";
+  if (u === "만명") return "만";
+  return u;
+}
+
+/** data 에 나온 수치를 단위 묶음별로 — 텍스트는 CLAIM_RE 로, 숫자 필드는 그 필드의 단위로 */
+function dataNumbers(payload: CommentPayload): Map<string, number[]> {
+  const out = new Map<string, Set<number>>();
+  const add = (fam: string, n: number) => {
+    if (!Number.isFinite(n)) return;
+    const set = out.get(fam) ?? new Set<number>();
+    set.add(Math.abs(n));
+    out.set(fam, set);
+  };
   const take = (s: string) => {
-    const clean = s.replace(/https?:\/\/\S+/g, "").replace(/\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?/g, "");
-    for (const m of clean.matchAll(/-?\d[\d,]*(?:\.\d+)?/g)) {
-      const n = Number(m[0].replace(/,/g, ""));
-      if (Number.isFinite(n)) out.add(Math.abs(n));
-    }
+    for (const m of s.replace(/https?:\/\/\S+/g, "").matchAll(CLAIM_RE)) add(unitFamily(m[2]), Number(m[1].replace(/,/g, "")));
   };
   const walk = (v: unknown, key = ""): void => {
     if (SKIP_KEYS.has(key)) return;
-    if (typeof v === "number") out.add(Math.abs(v));
-    else if (typeof v === "string") take(v);
+    if (typeof v === "string") take(v);
     else if (Array.isArray(v)) v.forEach((x) => walk(x));
     else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, k);
   };
   walk({ ...payload, centralBankMeetings: [] });
-  return [...out];
+  for (const r of payload.snapshot) {
+    if (r.value != null) add(unitFamily(r.unit), r.value);
+    if (r.pct != null) add("%", r.pct);
+    if (r.diffBp != null) add("bp", r.diffBp);
+  }
+  for (const s of payload.sectors) {
+    add("%", s.pct);
+    for (const l of s.leaders) add("%", l.pct);
+  }
+  for (const i of payload.issues) {
+    for (const e of i.earnings ?? []) if (e.surprisePct != null) add("%", e.surprisePct);
+    for (const m of i.metrics ?? []) {
+      add(unitFamily(m.unit), m.value);
+      if (m.previous != null) add(unitFamily(m.unit), m.previous);
+    }
+  }
+  for (const m of payload.economyMetrics) {
+    add(unitFamily(m.unit), m.value);
+    if (m.previous != null) add(unitFamily(m.unit), m.previous);
+  }
+  return new Map([...out].map(([k, v]) => [k, [...v]]));
 }
 
 function applyCitationRules(
@@ -1867,8 +1898,9 @@ function applyCitationRules(
   const allowed = dataNumbers(payload);
   const inData = (n: number, unit: string) => {
     const a = Math.abs(n);
-    const tol = unit === "bp" ? 1 : a < 20 ? 0.051 : Math.max(0.5, a * 0.002);
-    return allowed.some((x) => Math.abs(x - a) <= tol);
+    const fam = unitFamily(unit);
+    const tol = fam === "bp" ? 1 : a < 20 ? 0.051 : Math.max(0.5, a * 0.002);
+    return (allowed.get(fam) ?? []).some((x) => Math.abs(x - a) <= tol);
   };
   const sentenceProblem = (s: string): string | null => {
     const ids = [...s.matchAll(CITE_RE)].flatMap((m) => m[1].split(/[,，]/).map((x) => Number(x.trim())));
@@ -1883,7 +1915,7 @@ function applyCitationRules(
     return null;
   };
   const reasons = new Map<string, string>();
-  const clean = (key: string, text: string | undefined): string | undefined => {
+  const clean = (key: string, text: string | undefined, extra?: (s: string) => string | null): string | undefined => {
     if (!text) return text;
     const bad: string[] = [];
     const lines = text.split(/\r?\n/).map((line) => {
@@ -1893,7 +1925,7 @@ function applyCitationRules(
         .slice(head.length)
         .split(/(?<=[.。])\s+/)
         .filter((s) => {
-          const r = s.trim() ? sentenceProblem(s) : null;
+          const r = s.trim() ? (sentenceProblem(s) ?? extra?.(s) ?? null) : null;
           if (r) bad.push(`${s.trim().slice(0, 24)}… — ${r}`);
           return !r;
         })
@@ -1926,7 +1958,7 @@ function applyCitationRules(
   return {
     cleaned: {
       headline: clean("headline", input.headline),
-      economySummary: clean("economySummary", input.economySummary),
+      economySummary: clean("economySummary", input.economySummary, equityInEconomy),
       policySummary: clean("policySummary", input.policySummary),
       calendar: input.calendar,
       snapshot: rec("snapshot", input.snapshot),
@@ -2010,7 +2042,7 @@ function checkBrokerCitations(
   return {
     cleaned: {
       headline: one("headline", input.headline),
-      economySummary: lines("economySummary", input.economySummary, equityInEconomy),
+      economySummary: lines("economySummary", input.economySummary),
       policySummary: lines("policySummary", input.policySummary),
       calendar: input.calendar,
       snapshot: rec("snapshot", input.snapshot),

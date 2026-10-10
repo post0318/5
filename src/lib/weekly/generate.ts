@@ -659,15 +659,14 @@ export async function saveConnectorDraft(opts: {
 /** 근거로 인정하지 않는 출처 — 개인 블로그·커뮤니티·SNS·동영상(오너 2026-10-10, Opus 가 주식 블로그를 출처로 씀) */
 const LOW_GRADE_HOST_RE =
   /(^|\.)(tistory\.com|blogspot\.com|wordpress\.com|brunch\.co\.kr|medium\.com|substack\.com|velog\.io|reddit\.com|youtube\.com|youtu\.be|x\.com|twitter\.com|facebook\.com|instagram\.com|threads\.net|dcinside\.com|ppomppu\.co\.kr|clien\.net|fmkorea\.com|theqoo\.net|naver\.me|firebat\.co\.kr)$/i;
-/** 경로에 blog 가 들어가도 기업·주요 매체 공식 블로그는 인정(NVIDIA·Google 블로그 등 1차 발표) */
-const OFFICIAL_BLOG_HOST_RE = /(reuters|bloomberg|cnbc|wsj|ft\.com|nvidia|google|meta|apple|microsoft|federalreserve|imf|worldbank)/i;
 
 function isLowGradeSource(url: string): boolean {
   try {
     const u = new URL(url);
     if (LOW_GRADE_HOST_RE.test(u.hostname)) return true;
     if (/^(blog|m\.blog|cafe|m\.cafe|post)\./i.test(u.hostname)) return true; // blog.naver.com·cafe.daum.net 등
-    return /(^|\/)(stock-)?blogs?(\/|$)/i.test(u.pathname) && !OFFICIAL_BLOG_HOST_RE.test(u.hostname);
+    // 주소 경로의 "blog" 로는 판정하지 않는다 — 운용사·기관 공식 시황 글도 /blogs/ 아래 있다(Penn Mutual, 2026-10-11 시험)
+    return false;
   } catch {
     return true;
   }
