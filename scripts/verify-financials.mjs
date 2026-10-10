@@ -364,7 +364,9 @@ function vDebtLabel(label, id = "") {
   const t = String(label ?? "").toLowerCase().replace(/\s+/g, " ").trim();
   const debt = /\b(debt|borrowings?|notes?(?! receivable)|commercial paper|credit (facility|facilities|agreement)|revolv\w*|lines? of credit|loans?(?! receivable)|bonds?|debentures?|overdrafts?|short-term financing|financing obligations?)\b/.test(t);
   if (!debt) return { cat: null, cand: false };
-  if (/\b(receivable|stock|shares?|equity|warrants?|preferred|dividends?|interest|derivative|swap|hedg\w*|guarantee|escrow|restricted|contingent|investments?)\b/.test(t)) return { cat: null, cand: false };
+  if (/\b(receivables?|stock|shares?|equity|warrants?|preferred|dividends?|interest|derivative|swap|hedg\w*|guarantee|escrow|restricted|contingent|investments?)\b/.test(t)) return { cat: null, cand: false };
+  // 받을 채권(“notes due from parent” — SNDK)·비용·할증(“premiums paid to extinguish debt”, “debt-related costs”)은 차입 흐름 아님(조달 줄의 “net of … costs” 는 제외하고 판정)
+  if (/\bdue from\b/.test(t) || /\b(costs?|premiums?|fees?)\b/.test(t.replace(/net of [a-z ,-]*(costs?|discounts?|fees?|premiums?)/g, ""))) return { cat: null, cand: false };
   if (/\blease/.test(t) && !/debt|borrow/.test(t)) return { cat: null, cand: false };
   // 비용 지급 줄("Payments of debt issuance costs") — 조달 줄의 "net of issuance costs" 는 조달
   if (/^(payments?|paid)\b[^,]*\b(costs?|fees?)\b/.test(t) && !/principal/.test(t)) return { cat: null, cand: false };
@@ -375,10 +377,11 @@ function vDebtLabel(label, id = "") {
   const idShort = /(Short-?Term|CommercialPaper|LinesOfCredit|LineOfCredit|Revolv|ThreeMonthsOrLess|Overdraft|Overnight)/.test(id);
   const short = shortW && !longW ? true : longW && !shortW ? false : idShort;
   const t2 = t.replace(/net of [a-z ,-]*(costs?|discounts?|fees?|premiums?)/g, "");
-  const net = /\(repayments?\)|\(payments?\)|\(repayments? of\)|proceeds from \(|\bnet\b|net (increase|decrease|change|borrowings|repayments|proceeds)|increase \(decrease\)|decrease \(increase\)/.test(t2);
+  // 순액 — 양방향 표시만("(repayments)"·"additions/(reductions)"·"change in"·"increase (decrease)"). 끝의 ", net" 하나는 순액 아님(“…long-term debt, net” = 비용 차감)
+  const net = /\(repayments?( of)?\)|\(payments?\)|\(reductions?\)|\(decreases?\)|\/\s*\(|\bchanges? in\b|\bnet (increase|decrease|change|borrowings?|repayments?)\b|increase \(decrease\)|decrease \(increase\)|proceeds from repayments|proceeds from \(?payments for|repayments of proceeds/.test(t2);
   if (net) return short ? { cat: "netS", cand: false } : { cat: null, cand: true };
-  if (/^(proceeds|issuance|borrowings?|new borrowings|draws?)/.test(t) || /\bproceeds from\b/.test(t) || (/\bborrowings?\b/.test(t) && !/repay|payment|retire|redemp/.test(t))) return { cat: short ? "issS" : "issL", cand: false };
-  if (/^(repayments?|payments?( on| of| for| to)?|principal (payments|repayments)|retirements?|redemptions?|repurchases? of (debt|notes|bonds|senior)|extinguishment|settlement)/.test(t)) return { cat: short ? "repS" : "repL", cand: false };
+  if (/^(proceeds|issuance|borrowings?|new borrowings|draws?|additions? (to|of))/.test(t) || /\bproceeds from\b/.test(t) || (/\bborrowings?\b/.test(t) && !/repay|payment|retire|redemp|reduction/.test(t))) return { cat: short ? "issS" : "issL", cand: false };
+  if (/^(repayments?|payments?( on| of| for| to)?|principal (payments|repayments)|retirements?|redemptions?|reductions? (in|of|to)|repurchases? of (debt|notes|bonds|senior)|extinguishment|settlement)/.test(t) || /\b(redemptions?|repayments?|retirements?)\b/.test(t)) return { cat: short ? "repS" : "repL", cand: false };
   return { cat: null, cand: true };
 }
 /** 공시 한 건의 현금흐름표 재무활동 차입 줄 — 줄 목록 = 표시 구조(_pre.xml)의 재무활동 아래 줄(계산 구조의 소계 줄은 제외), 성격 = 표시 라벨, 부호 = 계산 구조

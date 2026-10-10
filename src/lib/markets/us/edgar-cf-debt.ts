@@ -56,7 +56,17 @@ const DEBT_NET = /^(ProceedsFromRepayments|ProceedsFromPaymentsFor|RepaymentsOfP
 const DEBT_ISS = /^(Proceeds|Issuance|Borrowings?)/;
 const DEBT_REP = /^(Repayments?|PaymentsFor(RepurchaseOf|Repayment|Extinguishment|Retirement|Redemption)|PaymentsOn|PaymentsOf|PrincipalPayments|Retirement|Redemption)/;
 /** 표시 라벨이 순액 줄인가(조달 줄의 "net of … costs" 는 제외) */
-const NET_LABEL = /,\s*net\s*$|\(repayments?( of)?\)|\(payments?\)|\bnet (increase|decrease|change|borrowings?|repayments?|proceeds|issuances?)\b|increase \(decrease\)|decrease \(increase\)/i;
+// 순액 표시 — 양방향 표시("(repayments)"·"additions/(reductions)"·"change in"·"increase (decrease)")만. 끝의 ", net" 하나는 순액이 아니다(조달 줄의
+// "Proceeds from issuance of long-term debt, net" = 비용 차감 — META. 예전엔 순액으로 봐 장기 순액 = 기타로 빠졌다)
+const NET_LABEL = /\(repayments?( of)?\)|\(payments?\)|\(reductions?\)|\(decreases?\)|\/\s*\(|\bchanges? in\b|\bnet (increase|decrease|change|borrowings?|repayments?)\b|increase \(decrease\)|decrease \(increase\)|proceeds from repayments|repayments of proceeds/i;
+/** 라벨이 한 방향(조달·상환)을 밝힌 총액 줄인가 — 개념 이름이 순액 개념이어도 라벨이 정한다(PEP ProceedsFromRepaymentsOfOtherLongTermDebt 「Debt redemptions」) */
+const ISS_LABEL = /^(proceeds|issuances?|borrowings?|additions? (to|of))\b|\bproceeds from\b/i;
+const REP_LABEL = /^(repayments?|payments?( on| of| for| to)?|principal (payments|repayments)|retirements?|redemptions?|reductions? (in|of|to))\b|\b(redemptions?|repayments?|retirements?)\b/i;
+function grossDirByLabel(label: string | null | undefined): "iss" | "rep" | null {
+  if (!label || isNetLabel(label)) return null;
+  const i = ISS_LABEL.test(label) && !/repay|redemp|retire|reduction/i.test(label), r = REP_LABEL.test(label);
+  return i && !r ? "iss" : r && !i ? "rep" : null;
+}
 export function isNetLabel(label: string | null | undefined): boolean {
   return !!label && NET_LABEL.test(label.replace(/net of [a-z ,-]*(costs?|discounts?|fees?|premiums?)/gi, ""));
 }
@@ -75,7 +85,11 @@ export function debtCat(id: string, label?: string | null): DebtCat | null {
   const n = id.replace(/^[^_]+_/, "");
   if (!DEBT_WORD.test(n) || DEBT_EXCL.test(n) || COST_PAY.test(n)) return null;
   if (/Lease/.test(n) && !/Debt\w*Lease/.test(n)) return null;
+  // 라벨이 리스 줄이면(차입 단어 없이) 제외 — TSLA ProceedsFromRepaymentsOfSecuredDebt 「Collateralized lease repayments」
+  if (label && /\blease/i.test(label) && !/\b(debt|borrow)/i.test(label)) return null;
   const short = shortByLabel(label) ?? DEBT_SHORT.test(n);
+  const gross = grossDirByLabel(label);
+  if (gross) return gross === "iss" ? (short ? "issS" : "issL") : short ? "repS" : "repL";
   if (DEBT_NET.test(n) || isNetLabel(label)) return short ? "netS" : null;
   if (DEBT_ISS.test(n) && !/Repay/.test(n)) return short ? "issS" : "issL";
   if (DEBT_REP.test(n)) return short ? "repS" : "repL";
