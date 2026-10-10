@@ -22,7 +22,7 @@ import {
 import { resolveCorpCode } from "./corpcode";
 import { dartReportJson } from "./dart-cache";
 import { annualSeries, daAndAmortSeries, fetchKrFacts, seriesOf } from "./dart-facts";
-import { buildKrEvResolver, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCapsChecked } from "./dart-ev";
+import { buildKrEvResolver, isPartialOpsEpsName, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCapsChecked } from "./dart-ev";
 import { KR_ANALYSIS_ACCOUNTS } from "./dart-analysis";
 import { krInterimXbrlCum } from "./xbrl";
 import { getKrDaDocChecked } from "@/lib/db/kr-da";
@@ -385,8 +385,9 @@ function isValue(
 function epsValue(rows: FnlttRow[], col: "cumCur" | "cumPrior" | "annual"): number | null {
   // 전체 EPS 표준 ID 는 계정명과 관계없이 먼저(감사 1차 2026-10-05 — 006260·010120 반기보고서의 전체 EPS 줄 이름이 "계속영업과 중단영업 희석주당이익"
   // 이라 아래 이름 걸러내기에 같이 빠져 계속영업 EPS 로 계산됐다: 006260 LTM EPS 15,426 → 15,574)
-  // 우선주 줄에 보통주 EPS 코드를 단 경우는 제외(삼성SDI 2021 원자료 태그 오류)
-  const byId = isValue(rows.filter((r) => !/우선주/.test(norm(r.account_nm ?? ""))), [], col, undefined, TTM_IDS.eps);
+  // 우선주 줄에 보통주 EPS 코드를 단 경우는 제외(삼성SDI 2021 원자료 태그 오류). 계속·중단 한쪽 이름 줄에 단 전체 EPS 코드도 제외(373220 2023
+  // 사업보고서 태그 오류 — dart-ev.ts isPartialOpsEpsName, 사업연도·분기 EPS 와 같은 규칙)
+  const byId = isValue(rows.filter((r) => !/우선주/.test(norm(r.account_nm ?? "")) && !isPartialOpsEpsName(r.account_nm ?? "")), [], col, undefined, TTM_IDS.eps);
   if (byId != null) return byId;
   const plain = rows.filter((r) => !/계속영업|중단영업/.test(norm(r.account_nm ?? "")));
   const total = isValue(plain, TTM_ACCOUNTS.eps, col, EPS_LOOSE, TTM_IDS.eps);

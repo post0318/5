@@ -11139,7 +11139,9 @@ async function verifyKr(sym) {
           const T = kind === "d" ? [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "희석주당이익손실", "보통주기본및희석주당이익", "보통주기본및희석주당순이익", "기본및희석주당이익"]]
             : [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익", "보통주기본및희석주당이익", "보통주기본및희석주당순이익"]];
           // 전체 EPS ID 를 달았지만 계정명이 계속·중단영업 주당이익인 줄은 태그 오류 — 전체 EPS 후보에서 뺀다(373220 2023 사업보고서, 감사 11차 K7)
-          const tot = dartPick(L.filter((r) => !(/^ifrs-full_(Basic|Diluted)EarningsLossPerShare$/.test(r.account_id ?? "") && /^(?=.*(계속영업|중단영업))(?!.*계속영업.*중단영업)/.test(String(r.account_nm ?? "").replace(/\s/g, "")))), ["IS", "CIS"], ...T, f);
+          // 판정은 검증기 자체(감사 12차 D3): 계정명에 "계속"·"중단" 중 한쪽만 있으면 부분 EPS(순서·영업/사업 표기 무관)
+          const partialEps = (r) => (r.account_id === "ifrs-full_BasicEarningsLossPerShare" || r.account_id === "ifrs-full_DilutedEarningsLossPerShare") && String(r.account_nm ?? "").includes("계속") !== String(r.account_nm ?? "").includes("중단");
+          const tot = dartPick(L.filter((r) => !partialEps(r)), ["IS", "CIS"], ...T, f);
           if (tot != null) return { v: tot, how: "" };
           // 기본·희석 합친 줄(LG "보통주 기본/희석주당순이익") — 하나거나 값이 같으면 그 값, 둘이 다르면 차이가 그 해 중단영업손익과 부호가 같은 쪽
           { const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
@@ -11473,6 +11475,9 @@ async function krListVersionCheck(s, r) {
   if (!changed.length) return r;
   const what = changed.map((x) => `${x.nm}(${x.rcept})`).join(" · ");
   console.log(`${s.padEnd(7)} 정정 공시 판본 변경 ${what} — 새 판본으로 재검증`);
+  // 실행 안 메모리 보관분(사업보고서 재무제표 Promise — dartFy)이 옛 판본이면 재검증도 옛 판본을 쓴다(감사 12차 D1) — 그 회사 것을 비운다.
+  // 그 밖의 원자료(분기 보고서·연도별 원천 yearSrc·qSource)는 verifyKr 호출마다 새로 만들고 디스크 캐시 열쇠가 최신 접수번호라 새 판본을 읽는다
+  for (const k of [...dartCache.keys()]) if (k.startsWith(`${corp}|`)) dartCache.delete(k);
   const r2 = await verifyKr(s);
   const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
   const todays = changed.filter((x) => x.dt === today);

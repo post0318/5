@@ -9,7 +9,7 @@
  * 조회 실패는 캐시하지 않고 던진다(호출부가 실패·종료코드 1).
  */
 import { unzipSync, strFromU8 } from "fflate";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { makeDartQuota, DartStopError } from "../lib/dart-quota.mjs";
 
 const B = "https://opendart.fss.or.kr/api";
@@ -188,21 +188,37 @@ export async function dartAlot(corp, year, reprt = "11011") {
   });
 }
 
-// ── XBRL 점검(status 800) 기록 — 점검 중엔 같은 응답만 오므로 30분 동안 요청하지 않는다. 점검 해제 확인 스크립트(~/kr-dart-wait.sh, 1시간마다 1건)가
-//    점검을 확인할 때마다 until(다음 확인 + 5분)을 적어 그 사이 검증기 XBRL 요청 0, 해제되면 파일을 지운다
+// ── XBRL 점검(status 800) 기록 — 점검 중엔 같은 응답만 오므로 30분 동안 요청하지 않는다. 점검 해제 확인 스크립트(~/kr-dart-wait.sh, 1시간마다 1건)도
+//    점검을 확인할 때마다 기록(until = 그때 + 30분)을 새로 쓰고, 해제되면 파일을 지운다.
+//    기록 상한(감사 12차 ⑦): at 이 미래(1분 넘게)이거나 until 이 지금 + 30분을 넘거나 until < at 이면 잘못된 기록 — 지우고 무시(요청을 보내 다시 확인)
 const MAINT_FILE = new URL("../../reports/.dart-xbrl-maint.json", import.meta.url);
 const MAINT_TTL_MS = 30 * 60e3;
-function maintSince() {
-  try { const j = JSON.parse(readFileSync(MAINT_FILE, "utf8")); return Date.now() < (j.until ?? j.at + MAINT_TTL_MS) ? j : null; } catch { return null; }
+function maintUntil() {
+  let j;
+  try { j = JSON.parse(readFileSync(MAINT_FILE, "utf8")); } catch (e) {
+    if (e?.code !== "ENOENT") console.warn(`[dart] XBRL 점검 기록 판독 실패 — 무시: ${e?.message ?? e}`);
+    return null;
+  }
+  const now = Date.now();
+  const at = Number(j?.at), until = j?.until == null ? at + MAINT_TTL_MS : Number(j.until);
+  if (!Number.isFinite(at) || !Number.isFinite(until) || at > now + 60e3 || until > now + MAINT_TTL_MS || until < at) {
+    console.warn(`[dart] XBRL 점검 기록이 상한 밖(at ${j?.at} · until ${j?.until}) — 지우고 무시`);
+    try { unlinkSync(MAINT_FILE); } catch (e) { console.warn(`[dart] XBRL 점검 기록 삭제 실패: ${e?.message ?? e}`); }
+    return null;
+  }
+  return now < until ? until : null;
 }
+const kst = (ms) => new Date(ms + 9 * 3600e3).toISOString().slice(11, 16);
 export const xbrlMaint = { skipped: 0 };
 async function xbrlZip(rcept, reprt) {
-  const m = maintSince();
-  if (m) { xbrlMaint.skipped++; throw new Error(`DART XBRL 점검(status 800, ${new Date(m.at + 9 * 3600e3).toISOString().slice(11, 16)} KST 기록 — 30분간 요청 생략) ${rcept}`); }
+  const until = maintUntil();
+  if (until) { xbrlMaint.skipped++; throw new Error(`DART XBRL 점검(status 800 기록 — ${kst(until)} KST 까지 요청 생략) ${rcept}`); }
   const r = await getRaw(`${B}/fnlttXbrl.xml?crtfc_key=${KEY}&rcept_no=${rcept}&reprt_code=${reprt}`, `XBRL ${rcept}`);
   const buf = new Uint8Array(await r.arrayBuffer());
   if (/<status>800<\/status>/.test(strFromU8(buf.slice(0, 300)))) {
-    try { mkdirSync(new URL(".", MAINT_FILE), { recursive: true }); writeFileSync(MAINT_FILE, JSON.stringify({ at: Date.now(), rcept })); } catch { /* 기록 실패는 무시 — 다음 요청이 다시 확인 */ }
+    const now = Date.now();
+    try { mkdirSync(new URL(".", MAINT_FILE), { recursive: true }); writeFileSync(MAINT_FILE, JSON.stringify({ at: now, until: now + MAINT_TTL_MS, rcept })); }
+    catch (e) { console.warn(`[dart] XBRL 점검 기록 쓰기 실패 — 다음 요청이 다시 확인: ${e?.message ?? e}`); }
     throw new Error(`DART XBRL 점검(status 800) ${rcept}`);
   }
   return buf;

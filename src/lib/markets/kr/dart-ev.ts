@@ -525,7 +525,12 @@ const EPS_TOTAL: Record<KrEpsKind, { ids: string[]; names: string[] }> = {
  * 전체 EPS ID 를 달았지만 계정명이 계속·중단영업 주당이익인 줄 — 태그 오류(373220 2023 사업보고서: "보통주 기본 및 희석주당계속영업이익" 에
  * DilutedEarningsLossPerShare). 전체 EPS 로 쓰지 않는다(2021 계속영업 3,036 이 전체 3,963 대신 나왔다, 감사 11차 K7). 계속영업 줄은 EPS_CONT 이름으로 잡힌다
  */
-const notTotalEps = (l: KrFactLine) => /^(?=.*(계속영업|중단영업))(?!.*계속영업.*중단영업)/.test(l.accountName.replace(/\s/g, ""));
+export function isPartialOpsEpsName(name: string): boolean {
+  // 계속·중단 한쪽만 — "계속영업과 중단영업 …"·"중단사업 및 계속사업 …"(순서 무관) 합계 줄은 전체 EPS
+  const n = name.replace(/\s/g, "");
+  return /계속(영업|사업)/.test(n) !== /중단(영업|사업)/.test(n);
+}
+const notTotalEps = (l: KrFactLine) => isPartialOpsEpsName(l.accountName);
 // 계정명은 "주당" 이 들어간 것만(순이익 줄 "계속영업순이익" 과 겹치지 않게)
 const EPS_CONT: Record<KrEpsKind, { ids: string[]; names: string[] }> = {
   diluted: { ids: ["ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations"], names: ["계속영업희석주당이익", "계속영업희석주당순이익", "보통주기본및희석주당계속영업이익"] },
@@ -536,6 +541,8 @@ const EPS_DISC: Record<KrEpsKind, { ids: string[]; names: string[] }> = {
   basic: { ids: ["ifrs-full_BasicEarningsLossPerShareFromDiscontinuedOperations"], names: ["중단영업기본주당이익", "중단영업기본주당순이익"] },
 };
 export const KR_EPS_SUM_NOTE = "전체 EPS 미공시 — 계속영업 + 중단영업 주당이익(회사 공시 두 값)의 합";
+/** 사업연도 EPS 빈칸 사유 — 그해 DART 사업보고서에 전체 EPS·계속영업 EPS 줄이 모두 없음(감사 12차 ①) */
+export const KR_EPS_BLANK_NOTE = "DART 사업보고서에 EPS 줄 없음(전체·계속영업 모두) — 빈칸";
 
 /** 기간 라벨별(연간·분기 화면) 전체 EPS. summed = 계속 + 중단영업 합으로 채운 라벨 */
 export function krEpsSeries(facts: KrFacts, kind: KrEpsKind): { values: Record<string, number | null>; summed: Set<string> } {

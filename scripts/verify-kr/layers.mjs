@@ -75,15 +75,20 @@ const QCODE = { 1: "11013", 2: "11012", 3: "11014" };
 const QNAME = { 1: "1분기", 2: "반기", 3: "3분기" };
 /**
  * LTM 빈칸 원인별 앱 사유 고정 문구(감사 11차 ④ — 기대 빈칸이면 사유가 아무 문자열이어도 통과였다). 검증기가 정한 원인과 앱 사유의 종류가 같아야 통과.
- * 문구는 앱(opendart.ts getKrTtm)이 원인마다 내는 고정 문구 — 원인 판정은 검증기가 DART 원자료로 따로 한다
+ * 문구는 앱(opendart.ts getKrTtm)이 원인마다 내는 고정 문구 — 원인 판정은 검증기가 DART 원자료로 따로 한다.
+ * 감사 12차 ④: 부분일치가 아니라 원인별 문구 전체 일치(예전엔 prior 정규식이 XBRL 사유에도 맞고, XBRL 칸 여럿은 /XBRL/ 하나로 조회 실패 사유도 인정했다).
+ * XBRL 같은 칸 값이 여럿이면 앱은 그 칸을 못 읽은 것으로 본다(xbrl.ts read — 값이 여럿이면 null) → 그 칸 없음 문구
  */
+/** 앱 하이라이트 사업연도 EPS 빈칸 칸 주석(dart-ev.ts KR_EPS_BLANK_NOTE) — 기대 빈칸이면 이 문구 전체 일치(감사 12차 ①) */
+const KR_EPS_BLANK = "DART 사업보고서에 EPS 줄 없음(전체·계속영업 모두) — 빈칸";
 const KR_WHY = {
-  prior: /전기 누적 (열|칸) 없음/, // 당기 보고서에 전기 누적 칸 없음
-  cur: /당기 보고서(?: 현금흐름표)?에 그 줄 없음/, // 당기 보고서에 그 줄 없음
-  annual: /최근 사업보고서에 그 줄 없음/,
-  xbrlCell: /XBRL 에 (당기|전기) 누적 칸 없음/, // XBRL 전기·당기 누적 칸 없음
-  xbrlMismatch: /XBRL 당기 누적 .* ≠ 재무제표/, // XBRL 당기 누적 ≠ 재무제표
-  xbrlAmbig: /XBRL/, // XBRL 같은 칸 값이 여럿(앱 문구 미정 — XBRL 원인이면 인정)
+  prior: () => "당기 보고서에 전기 누적 열 없음 — LTM 빈칸",
+  epsPrior: () => "당기 보고서에 전기 누적 열 없음 — 정정본 전기 누적 확인 불가, LTM 빈칸",
+  cur: (x) => (x.cf ? "당기 보고서 현금흐름표에 그 줄 없음 — LTM 빈칸" : "당기 보고서에 그 줄 없음 — LTM 빈칸"),
+  annual: () => "최근 사업보고서에 그 줄 없음 — LTM 빈칸",
+  xbrlCur: () => "분기 보고서 XBRL 에 당기 누적 칸 없음 — LTM 빈칸",
+  xbrlPrior: () => "분기 보고서 XBRL 에 전기 누적 칸 없음 — LTM 빈칸",
+  xbrlMismatch: (x) => `분기 보고서 XBRL 당기 누적 ${x.xc} ≠ 재무제표 ${x.cc} — 같은 줄 확인 불가, LTM 빈칸`,
 };
 
 /** 몽고 감가상각 적재본(kr_da) 직접 읽기 — 앱 API 를 거치지 않는다 */
@@ -377,11 +382,13 @@ export async function krOriginalLayers(ctx) {
   try { await quarterLayer({ ...ctx, exact, L }); } catch (e) { err("분기 재무제표 원자료(DART)", e); }
 
   // ── K3 감가상각비 ──
-  try { await daLayer({ ...ctx, exact, cmp, fail, err, yearSrc, yearsShown, caps, L }); } catch (e) { err("감가상각비 원자료(kr_da·XBRL·원문)", e); }
+  // K3 가 정한 감가상각(열 → { v, common, how }) — K7 EBITDA 기대치(감사 12차 D2)
+  const daExp = new Map();
+  try { await daLayer({ ...ctx, exact, cmp, fail, err, yearSrc, yearsShown, caps, L, daExp }); } catch (e) { err("감가상각비 원자료(kr_da·XBRL·원문)", e); }
 
   // ── 하이라이트 행(감사 10차 ② — 매출·영업이익·마진·성장률·현금흐름·잉여현금흐름이 무검사였다): 연도 열 = DART(그해를 담은 가장 최근 보고서), LTM = K4 기대치.
   //    K3 뒤에 둔다 — EBITDA 마진이 K3 공통모드를 물려받는다(감사 11차 ⑤)
-  try { highlightRowsLayer({ ...ctx, H, yearSrc, yearsShown, ltmExp, exact, added }); } catch (e) { err("하이라이트 행 대조", e); }
+  try { highlightRowsLayer({ ...ctx, H, yearSrc, yearsShown, ltmExp, exact, added, daExp }); } catch (e) { err("하이라이트 행 대조", e); }
 
   // ── K5 배당 ──
   for (const y of yearsShown) {
@@ -562,7 +569,10 @@ function highlightRowsLayer(c) {
       ? { rev: fromOwner(y, [...IT.rev, ["IS", "CIS"]]), op: fromOwner(y, [...IT.op, ["IS", "CIS"]]), ocf: fromOwner(y, OCF), capex: fromOwner(y, CAPEX) }
       : { rev: ltmExp.revenue, op: ltmExp.opinc, ocf: ltmExp.ocf, capex: ltmExp.capex };
     e.eps = y != null ? (c.dartVint?.[`${col}|희석 EPS`] ? (c.dartVint[`${col}|희석 EPS`].latest ?? null) : epsOwner(y)) : ltmExp.eps;
-    const ni = H[col]?.ni ?? null, eb = H[col]?.ebitda ?? null; // K4·K3·A층이 확인한 값
+    // 순이익·EBITDA 도 검증기 기대치(감사 12차 D2 — 앱 하이라이트 값을 기대치로 쓰지 않는다): 순이익 = DART, EBITDA = DART 영업이익 + K3 가 정한 감가상각
+    const ni = y != null ? fromOwner(y, [...IT.ni, ["IS", "CIS"]]) : ltmExp.ni;
+    const dx = c.daExp?.get(col);
+    const eb = e.op === undefined || !dx ? undefined : e.op != null && dx.v != null ? e.op + dx.v : null;
     const capexE = e.capex === undefined ? undefined : e.capex == null ? null : -Math.abs(e.capex);
     chk("revenue", "매출액", col, e.rev, "DART");
     chk("opinc", "영업이익", col, e.op, "DART");
@@ -570,10 +580,20 @@ function highlightRowsLayer(c) {
     chk("capex", "자본지출", col, capexE, "−|DART 유형자산의 취득|");
     chk("fcf", "잉여현금흐름", col, e.ocf === undefined || capexE === undefined ? undefined : e.ocf != null && capexE != null ? e.ocf + capexE : null, "영업현금흐름 + 자본지출");
     chk("opinc_m", "영업이익률", col, e.rev === undefined || e.op === undefined ? undefined : margin(e.op, e.rev), "영업이익 ÷ 매출 × 100");
-    chk("ni_m", "순이익률", col, e.rev === undefined ? undefined : margin(ni, e.rev), "순이익 ÷ 매출 × 100");
-    // EBITDA 는 K3 감가상각을 거친 값 — 그 열 K3 가 공통모드(적재본과만 일치)면 이 대조도 독립 확인이 아니다(감사 11차 ⑤, K1 EV/EBITDA 와 같은 전파)
-    const daCommon = added.some((x) => x.layer === "K3" && x.col === col && x.status === COMMON);
-    chk("ebitda_m", "EBITDA 마진", col, e.rev === undefined ? undefined : margin(eb, e.rev), "EBITDA ÷ 매출 × 100", daCommon);
+    chk("ni_m", "순이익률", col, e.rev === undefined || ni === undefined ? undefined : margin(ni, e.rev), "DART 순이익 ÷ 매출 × 100");
+    // EBITDA — K3 가 감가상각을 정하지 못한 열은 검증불가, K3 감가상각이 독립 판독이 아니면(적재본·앱과 같은 규칙) 공통모드(감사 11차 ⑤ · 12차 D2)
+    const daCommon = !!dx?.common;
+    const ebHow = `DART 영업이익 ${e.op ?? "빈칸"} + K3 감가상각 ${dx ? `${dx.v ?? "빈칸"}(${dx.how})` : "없음(K3 미확정)"}`;
+    chk("ebitda", "EBITDA", col, eb, ebHow, daCommon);
+    chk("ebitda_m", "EBITDA 마진", col, e.rev === undefined || eb === undefined ? undefined : margin(eb, e.rev), `EBITDA ÷ 매출 × 100 · ${ebHow}`, daCommon);
+    // 사업연도 EPS 행(감사 12차 ①) — 값 대조, 기대 빈칸이면 앱 칸 주석이 빈칸 사유 고정 문구여야
+    if (y != null) {
+      const er = row("eps"), ei = colI(col);
+      if (er && ei >= 0 && e.eps === null && (er.values[ei] ?? null) == null) {
+        const nt = er.cellNotes?.[ei] ?? null;
+        add("K7", "하이라이트 EPS(사업연도) 빈칸 사유", col, nt === KR_EPS_BLANK ? { status: PASS, note: `기대 빈칸(DART 그해 보고서에 EPS 줄 없음) · 앱 사유 ${nt}` } : { status: FAIL, note: `기대 빈칸(DART 그해 보고서에 EPS 줄 없음)인데 앱 사유 "${nt ?? "없음"}"` });
+      } else chk("eps", "EPS(사업연도)", col, e.eps, "DART EPS(A층 판독)");
+    }
     // 성장률 — 왼쪽 열(첫 열은 DART 전년)
     // 첫 열의 전년 = 표시 구간 밖 — 앱은 표시 구간 밖 해를 연결 재무제표로만 읽는다(별도 채움은 표시 구간 안만, CLAUDE.md 2026-10-04). 그해가 별도 기준이면
     // 전년 값이 없어 성장률 빈칸이 기대치(060370 2021)
@@ -823,13 +843,15 @@ async function ltmLayer(c) {
       const a = oneVal(pick(annualR ?? [], it), (r) => num(r.thstrm_amount)).v;
       const cc = oneVal(pick(cur.rows, it), (r) => num(r.thstrm_add_amount) ?? num(r.thstrm_amount)).v;
       // 당기 줄이 재무제표 API 에 없으면 앱은 XBRL 을 보지 않는다(사유 = 당기 줄 없음) — XBRL 실패와 무관하게 빈칸 기대
-      if (cc == null) r0 = { v: null, how: "당기 보고서 현금흐름표에 그 줄 없음(빈칸 기대)", cause: "cur" };
+      if (cc == null) r0 = { v: null, how: "당기 보고서 현금흐름표에 그 줄 없음(빈칸 기대)", cause: "cur", cx: { cf: true } };
       else if (cumErr) { r0 = { v: null, how: `XBRL 판독 실패 — ${cumErr}` }; expU = true; }
       else {
+        // 칸 값이 여럿(undefined)이면 못 읽은 칸 — 당기 칸 → 전기 칸 → 같은 줄 확인(XBRL 당기 = 재무제표 당기) → 사업연도 줄 순서로 원인
         const xc = xCum(it[0], `CFY${Y}d${QC}A`), xp = xCum(it[0], `PFY${Y - 1}d${QC}A`);
-        if (xc === undefined || xp === undefined) r0 = { v: null, how: "XBRL 같은 칸 값이 여럿 — 못 정함(빈칸 기대)", cause: "xbrlAmbig" };
-        else if (xc != null && xc !== cc) r0 = { v: null, how: `XBRL 당기 누적 ${xc} ≠ 재무제표 ${cc} — 같은 줄 아님(빈칸 기대)`, cause: "xbrlMismatch" };
-        else r0 = { v: a != null && xc != null && xp != null ? a + cc - xp : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − XBRL 전기 누적(PFY${Y - 1}d${QC}A) ${xp}`, cause: xc == null || xp == null ? "xbrlCell" : a == null ? "annual" : null };
+        if (xc == null) r0 = { v: null, how: `XBRL 당기 누적 칸 ${xc === undefined ? "값 여럿 — 못 정함" : "없음"}(빈칸 기대)`, cause: "xbrlCur" };
+        else if (xp == null) r0 = { v: null, how: `XBRL 전기 누적 칸 ${xp === undefined ? "값 여럿 — 못 정함" : "없음"}(빈칸 기대)`, cause: "xbrlPrior" };
+        else if (xc !== cc) r0 = { v: null, how: `XBRL 당기 누적 ${xc} ≠ 재무제표 ${cc} — 같은 줄 아님(빈칸 기대)`, cause: "xbrlMismatch", cx: { xc, cc } };
+        else r0 = { v: a != null ? a + cc - xp : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − XBRL 전기 누적(PFY${Y - 1}d${QC}A) ${xp}`, cause: a == null ? "annual" : null };
       }
     }
     xExp[k] = expU ? undefined : r0.v;
@@ -838,12 +860,12 @@ async function ltmLayer(c) {
     const nm0 = `LTM ${k} (/ttm 부가 흐름) = DART 사업연도 + 당기 누적 − 전기 누적`;
     if (expU) add("K4", nm0, "LTM", { status: NA, app: appV, note: `${r0.how} · 앱 ${appV ?? "빈칸"}${why[k] ? `(사유: ${why[k]})` : ""}` });
     else if (r0.v == null && appV == null) {
-      // 기대 빈칸 — 앱 사유가 검증기가 정한 원인과 같은 종류여야(감사 11차 ④)
-      const re = r0.cause ? KR_WHY[r0.cause] : null;
+      // 기대 빈칸 — 앱 사유가 검증기가 정한 원인의 고정 문구와 전체 일치해야(감사 11차 ④ · 12차 ④)
+      const want = r0.cause ? KR_WHY[r0.cause]({ cf: isCf, ...(r0.cx ?? {}) }) : null;
       add("K4", nm0, "LTM", !why[k] ? { status: FAIL, note: `기대 빈칸(${r0.how})인데 앱 사유 없음` }
-        : !re ? { status: FAIL, note: `기대 빈칸 원인 미정(${r0.how}) · 앱 사유 ${why[k]}` }
-        : re.test(why[k]) ? { status: PASS, note: `기대 빈칸(원인 ${r0.cause}) — ${r0.how} · 앱 사유 ${why[k]}` }
-        : { status: FAIL, note: `기대 빈칸 원인 ${r0.cause}(${r0.how})인데 앱 사유 종류 다름: "${why[k]}"` });
+        : !want ? { status: FAIL, note: `기대 빈칸 원인 미정(${r0.how}) · 앱 사유 ${why[k]}` }
+        : why[k] === want ? { status: PASS, note: `기대 빈칸(원인 ${r0.cause}) — ${r0.how} · 앱 사유 ${why[k]}` }
+        : { status: FAIL, note: `기대 빈칸 원인 ${r0.cause}(${r0.how}) — 기대 사유 "${want}" 인데 앱 사유 "${why[k]}"` });
     }
     else exact("K4", nm0, "LTM", appV, r0.v, r0.how);
   }
@@ -880,7 +902,7 @@ async function ltmLayer(c) {
     // 근사 허용은 DART 당기 보고서에 EPS 당기 누적 자체가 없을 때만(감사 11차 ①). 당기 누적은 있고 전기 누적만 없으면 빈칸 + 그 원인 사유여야(근사·연간값 대체는 실패)
     if (a != null && cc == null && LT.eps != null && approxDisclosed) { add("K4", nmE, "LTM", { status: "unverifiable", note: `DART 당기 보고서 EPS 당기 누적 없음 — 앱 근사(주석 표시) ${LT.eps}` }); c.ltmExp.eps = undefined; }
     else if (a != null && cc != null && pc == null) {
-      const okWhy = LT.eps == null && KR_WHY.prior.test(eWhy ?? "");
+      const okWhy = LT.eps == null && eWhy === KR_WHY.epsPrior();
       add("K4", nmE, "LTM", okWhy ? { status: PASS, note: `기대 빈칸(당기 보고서 EPS 전기 누적 칸 없음) · 앱 사유 ${eWhy}` } : { status: FAIL, app: LT.eps, note: LT.eps != null ? `기대 빈칸(당기 보고서 EPS 전기 누적 칸 없음)인데 앱 값 ${LT.eps}${eWhy ? `(사유: ${eWhy})` : ""}` : `기대 빈칸 원인 = 전기 누적 칸 없음인데 앱 사유 "${eWhy ?? "없음"}"` });
     } else exact("K4", "LTM EPS = DART 사업연도 + 누적 − 당기 보고서 전기 누적", "LTM", LT.eps, exp, `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − 당기 보고서 전기 누적 ${pc ?? "없음(빈칸 기대)"}`);
   }
@@ -928,7 +950,8 @@ function analysisLtmRatios(c, xExp, revLtm) {
   const aRow = (nm) => (c.an?.sections ?? []).flatMap((x) => x.items ?? []).find((x) => String(x.accountName ?? "").trim() === nm)?.values ?? null;
   const lv = (o) => (o ? (o["현재/LTM"] ?? o.LTM ?? null) : null);
   const g = aRow("매출총이익률 (%)"), t0 = aRow("유효세율 (%)");
-  const fl = (a, b) => a === b || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-12);
+  // 정확 일치(감사 12차 ③) — 앱(dart-analysis.ts ratio)과 같은 식·같은 순서((분자 ÷ 분모) × 100), 정수 입력이 같으면 비트 단위로 같다
+  const fl = (a, b) => a === b;
   const eg = xExp.gross != null && revLtm ? (xExp.gross / revLtm) * 100 : null;
   const et = xExp.tax != null && xExp.pretax ? (xExp.tax / xExp.pretax) * 100 : null;
   if (!g && eg != null) add("K4", "재무분석 매출총이익률 행 존재", "LTM", { status: FAIL, note: `행 없음 — 기대 ${eg}` });
@@ -987,7 +1010,9 @@ function qSource(corp, basis) {
  * (373220 2023 사업보고서 "보통주 기본 및 희석주당계속영업이익" 에 DilutedEarningsLossPerShare — 감사 11차 K7)
  */
 function epsTotalRows(rows) {
-  return (rows ?? []).filter((r) => !(/^ifrs-full_(Basic|Diluted)EarningsLossPerShare$/.test(r.account_id ?? "") && /^(?=.*(계속영업|중단영업))(?!.*계속영업.*중단영업)/.test(String(r.account_nm ?? "").replace(/\s/g, ""))));
+  // 검증기 자체 판정(감사 12차 D3 — 앱 정규식을 복사하지 않음): 계정명에 "계속" 이 있는지, "중단" 이 있는지 각각 보고 한쪽만 있으면 부분 EPS(순서·영업/사업 표기 무관)
+  const partial = (nm) => { const s = String(nm ?? ""); return s.includes("계속") !== s.includes("중단"); };
+  return (rows ?? []).filter((r) => !(["ifrs-full_BasicEarningsLossPerShare", "ifrs-full_DilutedEarningsLossPerShare"].includes(r.account_id) && partial(r.account_nm)));
 }
 function epsOfRows(rows, f) {
   const pick = (it) => pickRow(rows ?? [], it[0], it[1]);
@@ -1253,6 +1278,7 @@ async function daLayer(c) {
         exact("K3", "감가상각비 = DART 손익계산서 본표 감가상각 줄(영업이익과 같은 보고서)", colY, app, v, how);
         const op = IS[colY]?.op ?? null, eb = IS[colY]?.ebitda ?? null;
         if (op != null) exact("K3", "EBITDA = 영업이익 + 본표 감가상각", colY, eb, op + v, how);
+        c.daExp?.set(colY, { v, common: false, how });
         indepY.set(y, how);
         continue;
       }
@@ -1335,6 +1361,7 @@ async function daLayer(c) {
       exact("K3", "감가상각비 = 적재본(kr_da)", colY, app, v, `적재 출처 ${s}${indep ? ` · 독립 확인 ${indep}` : ""}`, cm);
       const op = IS[colY]?.op ?? null, eb = IS[colY]?.ebitda ?? null;
       if (op != null) exact("K3", "EBITDA = 영업이익 + 감가상각(적재본)", colY, eb, op + v, "", cm);
+      c.daExp?.set(colY, { v, common: !indep, how: `적재 ${s}` });
     } else {
       // 적재본에 없는 해 — 앱 규칙(오너 결정 2026-10-02 "가"): DART 공시 현금흐름 감가상각 줄, 없으면 빈칸. 검증기가 DART 줄을 따로 읽어 대조.
       // 빈칸 허용: 상장 전(KRX 연말 종목 없음) · 연결 재작성 해(그해·이듬해 사업보고서엔 연결 손익이 없고 다다음 해 보고서 전전기 열에만 —
@@ -1357,9 +1384,11 @@ async function daLayer(c) {
         if (docHit) add("K3", "감가상각 적재본 해 존재(검증기 XBRL 판독 가능)", colY, { status: NA, note: `적재본에 ${y} 없음 · XBRL 없음 · 원문 후보 ${docHit.v}(${docHit.how}) — 적재 스크립트가 원문 확인 사슬 실패로 비웠을 수 있음(검증불가)` });
       }
       // 줄 판독 규칙(daCfLine)은 앱 krCfDaByYear 와 같은 규칙 문장을 따로 구현한 것이라 독립 판독이 아니다 — 공통모드(감사 7차 ④)
-      if (cfLine != null) exact("K3", "감가상각비 = DART 공시 현금흐름 줄(적재본 없는 해)", colY, app, cfLine.v, `${cfLine.how} · 기준 보고서 ${own.by}`, "현금흐름 감가상각 줄 고르기 규칙을 앱과 같은 규칙으로 재구현");
-      else if (app == null) add("K3", "감가상각비 = 적재본(kr_da)", colY, pre ? { status: PASS, note: "적재본·공시 줄 없음 · 상장 전 해(KRX 연말 종목 없음) — 빈칸" } : restated ? { status: PASS, note: "적재본·공시 줄 없음 · 연결 재작성 해(연결 손익은 다다음 해 보고서 전전기 열뿐) — 빈칸" } : { status: "fail", note: `적재본에 ${y} 없음 · 공시 줄 없음 · 상장 후 해인데 빈칸(적재 누락)` });
-      else fail("K3", "감가상각비 = 적재본(kr_da)", colY, `적재본·DART 공시 현금흐름 줄 모두 없는데 앱 ${app}`);
+      if (cfLine != null) { exact("K3", "감가상각비 = DART 공시 현금흐름 줄(적재본 없는 해)", colY, app, cfLine.v, `${cfLine.how} · 기준 보고서 ${own.by}`, "현금흐름 감가상각 줄 고르기 규칙을 앱과 같은 규칙으로 재구현"); c.daExp?.set(colY, { v: cfLine.v, common: true, how: "DART 현금흐름 줄(앱과 같은 규칙 재구현)" }); }
+      else if (app == null) {
+        if (pre || restated) c.daExp?.set(colY, { v: null, common: false, how: pre ? "상장 전 해" : "연결 재작성 해" });
+        add("K3", "감가상각비 = 적재본(kr_da)", colY, pre ? { status: PASS, note: "적재본·공시 줄 없음 · 상장 전 해(KRX 연말 종목 없음) — 빈칸" } : restated ? { status: PASS, note: "적재본·공시 줄 없음 · 연결 재작성 해(연결 손익은 다다음 해 보고서 전전기 열뿐) — 빈칸" } : { status: "fail", note: `적재본에 ${y} 없음 · 공시 줄 없음 · 상장 후 해인데 빈칸(적재 누락)` });
+      } else fail("K3", "감가상각비 = 적재본(kr_da)", colY, `적재본·DART 공시 현금흐름 줄 모두 없는데 앱 ${app}`);
     }
   }
   // LTM — 손익 TTM 과 같은 구성의 감가상각 TTM 만
@@ -1374,6 +1403,7 @@ async function daLayer(c) {
     const d = doc.byYear?.[lp.year];
     const v = d ? (d.depreciation ?? 0) + (d.amortisation ?? 0) : null;
     const ind = indepY.get(lp.year);
+    c.daExp?.set("LTM", { v, common: !ind, how: `FY${lp.year} 적재` });
     exact("K3", "LTM EBITDA = LTM 영업이익 + 사업연도 감가상각(최신 정기보고서 = 사업보고서)", "LTM", LT.ebitda, op != null && v != null ? op + v : null, `FY${lp.year} 적재${ind ? ` · 독립 확인 ${ind}` : ""}`, ind ? null : `FY${lp.year} 감가상각이 검증기 독립 판독으로 확인되지 않음`);
     return;
   }
@@ -1394,6 +1424,7 @@ async function daLayer(c) {
       const fyF = io ? pickF(io[0].filter((r) => (r.sj_div === "IS" || r.sj_div === "CIS") && FACE.test(r.account_id ?? "") && num(r[COL[io[1]]]) != null), (r) => num(r[COL[io[1]]])) : null;
       const exp = fyF != null && cc != null && pc != null ? fyF + cc - pc : null;
       const appDa = LT.ebitda != null && op != null ? LT.ebitda - op : null;
+      c.daExp?.set("LTM", { v: exp, common: false, how: "DART 본표 사업연도 + 당기 누적 − 전기 누적" });
       exact("K3", "LTM 감가상각 = DART 본표 사업연도 + 당기 누적 − 당기 보고서 전기 누적(성격별 손익계산서)", "LTM", appDa, exp, `FY${Y - 1} 본표 ${fyF} + ${lp.nm} 누적 ${cc} − 전기 누적 ${pc}`);
       return;
     }
@@ -1440,6 +1471,8 @@ async function daLayer(c) {
   let hit = null;
   if (fyTot != null) for (const a of A) { for (const b of B) if (a !== b && a.grp === b.grp && fyTot + a.v - b.v === v) { hit = `FY${Y - 1} ${fyTot} + ${a.how} ${a.v} − ${b.how} ${b.v}`; break; } if (hit) break; }
   const fyInd = indepY.get(Y - 1);
+  if (hit) c.daExp?.set("LTM", { v, common: !fyInd, how: `적재 ${doc.ttmLabel}` });
+  else if (!(fyTot != null && A.length && B.length && A.some((a) => B.some((b) => a.grp === b.grp)))) c.daExp?.set("LTM", { v, common: true, how: `적재 ${doc.ttmLabel}(확정 판독 불가)` });
   if (hit) add("K3", nm0, "LTM", { status: PASS, note: `${doc.ttmLabel} = ${hit}${fyInd ? "" : " · 사업연도 값은 독립 판독 안 됨"}` });
   else if (fyTot == null || !A.length || !B.length || !A.some((a) => B.some((b) => a.grp === b.grp))) add("K3", nm0, "LTM", { status: COMMON, note: `${doc.ttmLabel}(${ts}) — ${fyTot == null ? `적재본 FY${Y - 1} 없음` : "확정 판독 불가(같은 종류·구성의 당기·전년 누적 후보 쌍 없음)"} — 공통모드` });
   else fail("K3", nm0, "LTM", `적재 TTM ${v}(${doc.ttmLabel}, ${doc.ttmSrc ?? ""}) — 사업연도 ${fyTot} + 누적 후보 ${A.length}개 − 전년 후보 ${B.length}개 조합 중 같은 값 없음`);
