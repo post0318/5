@@ -24,7 +24,7 @@ import { AdapterError, type FinancialLineItem, type FinancialPeriod, type Financ
  * 저장: jp_fin(종목당 1건, 엔진판 JP_FIN_ENGINE + 서류 목록 서명) — 서명이 같으면 판독·조립 없이 저장본을 쓴다.
  */
 
-export const JP_FIN_ENGINE = 6; // 2: 연간 열 부가 정보(x — EPS·BPS·DPS·주식수·리스부채 주석, 판독판 2) · 3: 기준이 다른 옛 有報의 주식수·DPS · 4: 리스부채 주석 판독판 3(표시 문장·변동표·두 칸 표, 날짜별) · 5: 訂正 서류 EPS 분할 기준일 = 원 서류 제출일 · 6: 줄 열쇠에 기초·기말 표시 포함, 판독판 4(현금흐름표 시점 개념 = 기말)
+export const JP_FIN_ENGINE = 8; // 2: 연간 열 부가 정보(x — EPS·BPS·DPS·주식수·리스부채 주석, 판독판 2) · 3: 기준이 다른 옛 有報의 주식수·DPS · 4: 리스부채 주석 판독판 3(표시 문장·변동표·두 칸 표, 날짜별) · 5: 訂正 서류 EPS 분할 기준일 = 원 서류 제출일 · 6: 줄 열쇠에 기초·기말 표시 포함, 판독판 4(현금흐름표 시점 개념 = 기말) · 7: 하반기 기초 = 반기 서류 그 개념 시점 값, 판독판 5 · 8: 서류 본표 개념 출현 횟수 밖의 줄(#n) 값 안 꺼냄
 
 const N_FY = 5;
 const N_HALF = 6;
@@ -139,6 +139,19 @@ const lineKey = (l: { k: string; ps?: "s" | "e" }) => `${l.k}|${l.ps ?? ""}`;
 const keysOf = (s: Src, kind: JpStmtKind) => {
   const st = s.fin.stmts[kind];
   return st ? new Set(st.lines.filter((l) => !l.ab).map(lineKey)) : null;
+};
+/** 서류 본표에 개념이 몇 번 나오나 — 옛 서류에 두 번(当期利益 #0·#1) 나오던 줄을 한 번만 싣는 서류에서 #1 값을 꺼내지 않는다(第一三共) */
+const countMemo = new WeakMap<Src, Map<JpStmtKind, Map<string, number>>>();
+const occCount = (s: Src, kind: JpStmtKind, k: string) => {
+  let m = countMemo.get(s);
+  if (!m) countMemo.set(s, (m = new Map()));
+  let c = m.get(kind);
+  if (!c) {
+    c = new Map();
+    for (const l of s.fin.stmts[kind]?.lines ?? []) if (!l.ab) c.set(l.k, (c.get(l.k) ?? 0) + 1);
+    m.set(kind, c);
+  }
+  return c.get(k) ?? 0;
 };
 /**
  * 그 서류 본표(kind)가 기간 열쇠 pk 의 열을 싣고 있나 — 그 기간 값이 있는 줄 수가 가장 많은 기간의 절반 이상일 때만.
@@ -289,11 +302,14 @@ class Cells {
  * 한 칸 값 — 출처 서류 s 의 본표 kind 에서 줄 l 의 기간 값. 반환 [값, 사유]
  *  bs: 기말 시점, 그 밖: 기간 값(기초·기말 잔액 줄은 시점)
  */
-function cell(s: Src | null, kind: JpStmtKind, l: MLine, start: string, end: string): [number | null, string | null] {
+function cell(s: Src | null, kind: JpStmtKind, l: MLine, start: string, end: string, anyPs = false): [number | null, string | null] {
   if (!s) return [null, NOTE.noStmt];
   const ks = keysOf(s, kind);
   if (!ks) return [null, NOTE.noStmt];
-  if (!ks.has(lineKey(l))) return [null, NOTE.noLine];
+  // anyPs: 개념만 본다(하반기 기초 = 상반기 말 잔액 — 반기 서류의 기말 줄이 다른 개념(…IfDifferentFromBSBalance)이어도 그 개념의 상반기 말 시점 값)
+  const has = anyPs ? [undefined, "s", "e"].some((ps) => ks.has(lineKey({ k: l.k, ps: ps as "s" | "e" | undefined }))) : ks.has(lineKey(l));
+  if (!has) return [null, NOTE.noLine];
+  if (!anyPs && Number(l.id.slice(l.id.lastIndexOf("#") + 1)) >= occCount(s, kind, l.k)) return [null, NOTE.noLine];
   const pk = kind === "bs" || l.ps === "e" ? pkInst(end) : l.ps === "s" ? pkInst(addDays(start, -1)) : pkDur(start, end);
   const raw = s.fin.facts[l.k]?.[pk];
   if (raw == null) return [null, NOTE.noVal];
@@ -621,7 +637,7 @@ function buildHalf(annual: Src[], halfDocs: Src[], src: string[], dict: Dict): J
         }
         if (l.ps === "s") {
           // 하반기 기초 = 상반기 말 잔액
-          const [v, why] = cell(hs, kind, { ...l, ps: "e" }, fyStart, h1End);
+          const [v, why] = cell(hs, kind, { ...l, ps: "e" }, fyStart, h1End, true);
           cells.v[r][ci] = v;
           if (why) cells.note(r, ci, why);
           return;

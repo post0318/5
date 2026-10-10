@@ -75,6 +75,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
 import { loadBbg } from "./reference/bbg.mjs";
+import { configureEdinet, edinetStats } from "./verify-jp/edinet.mjs";
+import { configureJpLayers, jpAnnualLayers, jpHalfLayers, jpValueLayers, releaseJpSymbol } from "./verify-jp/layers.mjs";
 import { buildAudit, COGS_RULE_COMMON, commonModeOf, decimalsVintage, extItemOf, isDecimalsRounding } from "./metrics/audit.mjs";
 
 // ── 인자 ─────────────────────────────────────────────────────────────
@@ -88,7 +90,7 @@ function die(msg) {
   console.error(`오류: ${msg}`);
   process.exit(2);
 }
-const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing", "metric", "cogs-rules"]);
+const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing", "metric", "cogs-rules", "jp-from"]);
 // 매출 닫기 모드(revenue.md §8) — 종료코드를 매출 검사 실패·매출 ③ 오류·조회 실패 기준으로. 기본 실행은 종전 그대로
 const METRIC = args.metric == null ? null : String(args.metric).toLowerCase();
 if (METRIC != null && !["revenue", "cogs", "opinc", "da", "sga", "bscf"].includes(METRIC)) die(`--metric 은 revenue·cogs·opinc·da·sga·bscf 중 하나 (받은 값: ${args.metric})`);
@@ -119,7 +121,8 @@ if (args["cogs-rules"] != null) {
 for (const k of Object.keys(args)) if (!KNOWN.has(k)) die(`알 수 없는 옵션 --${k}`);
 if (args.symbols === true) die("--symbols 에 종목을 지정하세요 (예: --symbols=AAPL,WMT)");
 const MARKET = String(args.market ?? "us").toLowerCase();
-if (MARKET !== "us" && MARKET !== "kr") die(`--market 은 us 또는 kr (받은 값: ${args.market})`);
+if (MARKET !== "us" && MARKET !== "kr" && MARKET !== "jp") die(`--market 은 us·kr·jp (받은 값: ${args.market})`);
+if (MARKET === "jp" && METRIC) die("--metric 은 미국 전용(일본은 1차 — A층 연간·B층)");
 const CONCURRENCY = Number(args.concurrency ?? 2);
 if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) die(`--concurrency 는 1 이상의 정수 (받은 값: ${args.concurrency})`);
 if (args.limit != null && !(Number.isInteger(Number(args.limit)) && Number(args.limit) > 0)) die(`--limit 은 양의 정수`);
@@ -9676,6 +9679,48 @@ async function verifyKr(sym) {
   return { sym, checks, review, hardErrors };
 }
 
+// ── 일본 종목 1개(1차 — A층 연간·B층, docs/verify-jp-design.md) ──────────────────────
+// 원자료 = EDINET 원본 XBRL 을 검증기가 직접(scripts/verify-jp/ — 앱 src/lib/markets/jp 와 코드 공유 없음). 디스크 캐시 JP_VERIFY_CACHE_DIR
+// (기본 reports/.edinet-cache — 앱 EDINET_CACHE_DIR 와 따로). 서류 목록은 --jp-from(기본 2021-04-01)부터 오늘까지 날짜별 목록을 훑는다.
+if (MARKET === "jp") {
+  if (!String(env.EDINET_API_KEY ?? "").trim()) die("EDINET_API_KEY 없음 — 일본 검증 중단");
+  configureEdinet({ key: env.EDINET_API_KEY, root: pathResolve(env.JP_VERIFY_CACHE_DIR || "reports/.edinet-cache") });
+  configureJpLayers({ from: args["jp-from"] ? String(args["jp-from"]) : null });
+}
+async function verifyJp(sym) {
+  const u = `/api/markets/jp/${encodeURIComponent(sym)}`;
+  const checks = [];
+  const hardErrors = [];
+  const add = (layer, name, col, r) => checks.push({ layer, name, col, ...r });
+  const app = {};
+  for (const [k, p] of Object.entries({ is: `${u}/financials?view=is&period=annual`, bs: `${u}/financials?view=bs&period=annual`, cf: `${u}/financials?view=cf&period=annual`, hl: `${u}/highlights`, isq: `${u}/financials?view=is&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter`, cfq: `${u}/financials?view=cf&period=quarter`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm` })) {
+    try { app[k] = await getJson(p); } catch (e) { app[k] = null; add("응답", `API 응답 ${k}`, "-", { status: FAIL, note: String(e).slice(0, 120) }); }
+  }
+  if (!app.is) return { sym, checks, review: [], hardErrors };
+  // 시험 스위치(심은 오류 재현 전용) JP_VERIFY_TEST_APP='[{"sym":"7203","view":"is","id":"is:…#0","label":"FY2025","add":1}|{…,"drop":true}|{"sym","hl":"eps","date":"2025-03-31","mul":1.01}]'
+  for (const t of process.env.JP_VERIFY_TEST_APP ? JSON.parse(process.env.JP_VERIFY_TEST_APP) : []) {
+    if (t.sym !== sym) continue;
+    if (t.hl) {
+      const h = app.hl?.highlights; const ci = h?.columns?.findIndex((c) => c.date === t.date && c.kind === "fy"); const r = h?.rows?.find((x) => x.key === t.hl);
+      if (r && ci >= 0 && r.values[ci] != null) r.values[ci] = t.mul != null ? r.values[ci] * t.mul : r.values[ci] + (t.add ?? 0);
+      continue;
+    }
+    for (const s of app[t.view]?.sections ?? []) {
+      if (t.drop) s.items = s.items.filter((it) => it.accountId !== t.id);
+      else for (const it of s.items) if (it.accountId === t.id) it.values[t.label] = t.set !== undefined ? t.set : (it.values[t.label] ?? 0) + (t.add ?? 0);
+    }
+    console.warn(`⚠ 시험 스위치 적용 ${JSON.stringify(t)}`);
+  }
+  const ctx = await jpAnnualLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
+  if (app.isq) await jpHalfLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
+  try {
+    await jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardErrors });
+  } finally {
+    releaseJpSymbol(); // 종목 단위로 판독 결과 해제(메모리)
+  }
+  return { sym, checks, review: [], hardErrors };
+}
+
 // ── 실행 ─────────────────────────────────────────────────────────────
 const syms = await symbolList();
 if (!syms.length) die("검증 대상 0종목");
@@ -9696,7 +9741,7 @@ async function worker() {
   while (idx < syms.length) {
     const s = syms[idx++];
     try {
-      const r = MARKET === "kr" ? await verifyKr(s) : await verifyUs(s);
+      const r = MARKET === "kr" ? await verifyKr(s) : MARKET === "jp" ? await verifyJp(s) : await verifyUs(s);
       results.push(r);
       const f = r.checks.filter((c) => c.status === FAIL).length;
       const n = r.checks.filter((c) => c.status === NA).length;
@@ -9875,6 +9920,13 @@ if (MARKET === "us" && SGA_MODE) {
   for (const c of sgaFails) console.log(`  [실패] ${c.sym} [${c.col}] ${c.name} — ${String(c.note ?? "").slice(0, 300)}`);
 }
 const infraBad = errors.length || badSkips.length || empty.length || missing.length;
+if (MARKET === "jp") {
+  const by = {};
+  for (const c of all) { const k = `${c.layer} ${c.name.replace(/ — (본표|하이라이트)$/, "")}`; const b = (by[k] ??= { pass: 0, fail: 0, unverifiable: 0, common: 0 }); b[c.status] = (b[c.status] ?? 0) + 1; }
+  console.log("\n── 일본 층별 집계 (A = EDINET 원본 XBRL 연간, A반기 = 半期·옛 四半期 第2四半期, B = 결산기, J1 시가총액, J4 LTM, J5 배당, J-OP 영업이익 근사, C 화면 간, D 항등식) ──");
+  for (const [k, b] of Object.entries(by).sort()) console.log(`  ${k.padEnd(40)} 통과 ${b.pass} · 실패 ${b.fail} · 검증불가 ${b.unverifiable} · 공통모드 ${b.common}`);
+  console.log(`EDINET 요청 ${edinetStats.requests} · 디스크 적중 ${edinetStats.hit} · 받은 바이트 ${(edinetStats.bytes / 1024 ** 2).toFixed(1)}MB`);
+}
 process.exit(METRIC === "revenue" ? (revFails.length || revErrs.length || infraBad ? 1 : 0)
   : METRIC === "cogs" ? (cogsFails.length || cogsErrs.length || infraBad ? 1 : 0)
   : METRIC === "opinc" ? (cogsFails.length || cogsErrs.length || opincFails.length || opincErrs.length || infraBad ? 1 : 0)
