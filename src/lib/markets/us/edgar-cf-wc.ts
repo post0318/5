@@ -29,76 +29,6 @@ const SBC_LABEL = /^(stock|share)[- ]based compensation( expense)?$/i;
 export const SYN_CAPEX_PARTS = "CapexComponentsDerived";
 const CAPEX_TOTAL = ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements"];
 const CAPEX_PARTS = ["PaymentsForFlightEquipment", "PaymentsToAcquireOtherProductiveAssets"];
-/**
- * **차입금 줄 = 본표 차입 줄을 성격대로 모두 합한 값**(오너 결정 2026-10-10 — StockAnalysis·야후와 같은 구조: 단기·장기 조달 / 단기·장기 상환 / 단기 순증감).
- * 공시마다 현금흐름표 계산 구조의 재무활동 아래 말단 줄을 개념 이름으로 나눈다 — 조달(Proceeds…)·상환(Repayments…·PaymentsFor Repurchase/
- * Extinguishment of debt)·순증감(ProceedsFromRepayments… 등 순액 줄), 단기(ShortTerm·기업어음·신용한도·리볼빙·만기 3개월 이하) / 장기(그 밖).
- * 회사 고유 줄도 이름으로 같은 규칙. 리스는 제외(부채와 리스를 한 줄로 공시한 "DebtAndCapitalLeaseObligations" 류만 차입으로 — 나눌 수 없음).
- * 값 = us-gaap 개념은 companyfacts 의 그 공시 값, 회사 고유 개념은 공시 원본. 본표 줄인데 그 기간 값이 없으면 0("—"). 말단 줄만 더해 순액·총액 이중 합산
- * 없음. 장기 순액 줄은 어느 줄에도 넣지 않는다(기타 재무활동). 그 성격 줄이 본표에 없으면 그 공시엔 값이 없다(빈칸 원칙) — 10-Q 는 기존 0 채움 규칙과 같이
- * 본표에 없고 다른 공시에도 그 기간 0 아닌 값이 없을 때만 0
- */
-export const DEBT_SYN = {
-  issS: "DebtIssuedShortFaceDerived",
-  issL: "DebtIssuedLongFaceDerived",
-  repS: "DebtRepaidShortFaceDerived",
-  repL: "DebtRepaidLongFaceDerived",
-  netS: "DebtNetShortFaceDerived",
-} as const;
-type DebtCat = keyof typeof DEBT_SYN;
-/** 조달·상환 합계(단기 + 장기) — 공시마다 그 방향 줄이 하나라도 있으면. 단기·장기 분류가 공시마다 달라도(AMD 같은 줄을 10-K 는 단기, 10-Q 는 장기 개념)
- *  합계는 같은 정의라 LTM·분기 합계는 이것으로 낸다 */
-export const DEBT_TOTAL_SYN = { iss: "DebtIssuedTotalFaceDerived", rep: "DebtRepaidTotalFaceDerived" } as const;
-const DIR: Record<"iss" | "rep", [DebtCat, DebtCat]> = { iss: ["issS", "issL"], rep: ["repS", "repL"] };
-// Financing — 회사 고유 "단기 금융"(ORCL orcl_ProceedsFromRepaymentsOfShort-TermFinancingRelatedToCapitalExpendituresNet). 재무활동 기타·비용은 제외
-const DEBT_WORD = /(Debt|Borrowing|Notes(?!Receivable)|CommercialPaper|LinesOfCredit|LineOfCredit|Loans?(?!Receivable)|CreditFacilit|Revolv|Bonds|Debentures|Financing(?!Activit|Cost|Receivable|Fee))/;
-const DEBT_EXCL = /(Receivable|Stock|Equity|Warrant|Preferred|Investment|IssuanceCost|ExtinguishmentCost|Costs?$|Fees?$|Premium|Derivative|Swap|Hedge|Collateral|Dividend|Interest|Guarantee|Escrow|Restricted|Contingent)/;
-const DEBT_SHORT = /(Short-?Term|CommercialPaper|LinesOfCredit|LineOfCredit|Revolv|ThreeMonthsOrLess|Overdraft|Overnight)/;
-const DEBT_NET = /^(ProceedsFromRepayments|ProceedsFromPaymentsFor|RepaymentsOfProceeds|ProceedsFrom\w*AndRepayments|NetIncreaseDecrease|IncreaseDecreaseIn|NetProceeds\w*Repayments)/;
-const DEBT_ISS = /^(Proceeds|Issuance|Borrowings?)/;
-const DEBT_REP = /^(Repayments?|PaymentsFor(RepurchaseOf|Repayment|Extinguishment|Retirement|Redemption)|PaymentsOf(?!.*Cost)|Retirement|Redemption)/;
-/** 개념(접두어_이름) → 차입 줄 성격(아니면 null) */
-export function debtCat(id: string): DebtCat | null {
-  const n = id.replace(/^[^_]+_/, "");
-  if (!DEBT_WORD.test(n) || DEBT_EXCL.test(n)) return null;
-  // 리스 — 부채와 한 줄로 묶인 경우만 차입(나눌 수 없음)
-  if (/Lease/.test(n) && !/Debt\w*Lease/.test(n)) return null;
-  const short = DEBT_SHORT.test(n);
-  if (DEBT_NET.test(n)) return /LongTerm/.test(n) ? null : "netS";
-  if (DEBT_ISS.test(n) && !/Repay/.test(n)) return short ? "issS" : "issL";
-  if (DEBT_REP.test(n)) return short ? "repS" : "repL";
-  return null;
-}
-/** 현금흐름표 계산 구조에서 재무활동 합계 아래 말단 줄(없으면 null) */
-function financingLeaves(cal: string): Set<string> | null {
-  for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
-    const role = m[1].split("/").pop() ?? "";
-    // 역할 이름의 하이픈·밑줄 무시(GLW 2024 10-K "statement-consolidated-statements-of-cash-flows" — 못 읽어 그 공시가 빠졌다, 2026-10-10)
-    if (!/CASHFLOW/i.test(role.replace(/[^A-Za-z]/g, "")) || /Detail|Table|Parenth|Supplement/i.test(role)) continue;
-    const loc = new Map<string, string>();
-    for (const l of m[2].matchAll(/<(?:link:)?loc\b([^>]*)\/?>/g)) {
-      const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1];
-      const href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
-      if (id && href) loc.set(id, href);
-    }
-    const kids = new Map<string, string[]>();
-    for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {
-      const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
-      const to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
-      if (from && to) kids.set(from, [...(kids.get(from) ?? []), to]);
-    }
-    const root = [...kids.keys()].find((k) => /^us-gaap_NetCashProvidedByUsedInFinancingActivities(ContinuingOperations)?$/.test(k));
-    if (!root) continue;
-    const out = new Set<string>();
-    const walk = (k: string, d: number) => {
-      if (d > 4) return;
-      for (const c of kids.get(k) ?? []) { if (kids.has(c)) walk(c, d + 1); else out.add(c); }
-    };
-    walk(root, 0);
-    return out;
-  }
-  return null;
-}
 const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) contact@example.com";
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 const OP_CF_ROOT = /^us-gaap_NetCashProvidedByUsedInOperatingActivities(ContinuingOperations)?$/;
@@ -202,13 +132,6 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const sbc: FactUnitEntry[] = [];
   const capexParts: FactUnitEntry[] = [];
   const invFace = new Map<string, FactUnitEntry[]>(CF_INV_FAMILIES.map((f) => [f.derived, []]));
-  const debtVals = new Map<DebtCat, FactUnitEntry[]>((Object.keys(DEBT_SYN) as DebtCat[]).map((k) => [k, []]));
-  /** 10-Q 본표에 그 성격 줄이 없는 공시 — 다른 공시에 그 기간 0 아닌 값이 없으면 0(아래) */
-  const debtAbsentQ: { cat: DebtCat; ocf: FactUnitEntry[]; accn: string }[] = [];
-  const debtTot = new Map<"iss" | "rep", FactUnitEntry[]>([["iss", []], ["rep", []]]);
-  /** 공시별 차입 성격 집합(단기·장기 분류가 공시마다 바뀌었는지 판정 — 아래) */
-  const debtCats: { accn: string; form: string; filed: string; cats: Set<DebtCat>; periods: Set<string> }[] = [];
-  let debtFace = false;
   const zeroGroups = cfZeroFillGroups();
   for (const f of filingsForDa(recent)) {
     const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
@@ -287,35 +210,6 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           }
       }
     }
-    // 차입금 줄 — 재무활동 말단 줄을 성격대로 합(위 DEBT_SYN)
-    const finLeaves = /^10-[KQ]/.test(f.form) ? financingLeaves(calXml) : null;
-    if (finLeaves) {
-      debtFace = true;
-      const byCat = new Map<DebtCat, string[]>();
-      for (const id of finLeaves) { const c = debtCat(id); if (c) byCat.set(c, [...(byCat.get(c) ?? []), id]); }
-      const custom = [...byCat.values()].flat().filter((id) => !id.startsWith("us-gaap_"));
-      let fsx: ReturnType<typeof instanceFacts> | null = null;
-      if (custom.length) {
-        const inst = names.find((n) => /_htm\.xml$/i.test(n));
-        if (!inst) throw new Error(`차입 줄 회사 고유 개념 원본 없음 ${f.accn}`);
-        fsx = instanceFacts(await fetchText(`${base}/${inst}`, { headers: H, revalidate: false, timeoutMs: 30_000 }), (id) => custom.includes(id));
-      }
-      const valOfId = (id: string, e: FactUnitEntry): number | null => {
-        if (id.startsWith("us-gaap_")) return (g[id.slice(8)]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === f.filed && x.form === f.form)?.val ?? null;
-        return fsx!.find((x) => x.id === id && x.period === `${e.start}|${e.end}` && x.dims.length === 0)?.val ?? null;
-      };
-      debtCats.push({ accn: f.accn, form: f.form, filed: f.filed, cats: new Set(byCat.keys()), periods: new Set(ocf.map((e) => `${e.start}|${e.end}`)) });
-      for (const cat of Object.keys(DEBT_SYN) as DebtCat[]) {
-        const ids = byCat.get(cat);
-        if (!ids) { if (/^10-Q/.test(f.form)) debtAbsentQ.push({ cat, ocf, accn: f.accn }); continue; }
-        for (const e of ocf) debtVals.get(cat)!.push({ ...e, val: ids.reduce((t, id) => t + (valOfId(id, e) ?? 0), 0) });
-      }
-      for (const d of ["iss", "rep"] as const) {
-        const ids = DIR[d].flatMap((c) => byCat.get(c) ?? []);
-        if (ids.length) for (const e of ocf) debtTot.get(d)!.push({ ...e, val: ids.reduce((t, id) => t + (valOfId(id, e) ?? 0), 0) });
-        else if (/^10-Q/.test(f.form)) debtAbsentQ.push({ cat: d === "iss" ? "issS" : "repS", ocf: [], accn: f.accn }); // 자리 표시 — 합계 0 채움은 아래
-      }
-    }
     // CAPEX 합계 줄 없음 + 두 구성 줄 있음 → 두 줄 합
     if (faceS && !CAPEX_TOTAL.some((c) => faceS.has(`us-gaap_${c}`)) && CAPEX_PARTS.every((c) => faceS.has(`us-gaap_${c}`)))
       for (const e of ocf) {
@@ -371,60 +265,15 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     if (!pair.length || pair.some(([a, b]) => a !== b)) capexParts.length = 0;
   }
   const invAny = [...invFace.values()].some((x) => x.length);
-  // 단기·장기 분류가 바뀐 10-Q(직전 10-K 에 없던 성격이 생기고, 10-K 에 있던 같은 방향 성격이 빠짐 — AMD 같은 줄을 10-K 는 ProceedsFromShortTermDebt,
-  // 10-Q 는 ProceedsFromIssuanceOfLongTermDebt) — 그 10-Q 의 단기·장기 값은 버린다(사업연도와 섞으면 LTM·분기 값이 틀린다). 합계는 위 debtTot 로 그대로
-  const swapped = new Set<string>();
-  for (const q of debtCats.filter((x) => /^10-Q/.test(x.form))) {
-    const k = debtCats.filter((x) => /^10-K/.test(x.form) && x.filed < q.filed).sort((a, b) => b.filed.localeCompare(a.filed))[0];
-    if (!k) continue;
-    for (const d of ["iss", "rep"] as const) {
-      const [a, b] = DIR[d];
-      const sw = (q.cats.has(a) && !k.cats.has(a) && k.cats.has(b) && !q.cats.has(b)) || (q.cats.has(b) && !k.cats.has(b) && k.cats.has(a) && !q.cats.has(a));
-      if (sw) for (const c of DIR[d]) swapped.add(`${q.accn}|${c}`);
-    }
-  }
-  for (const [cat, vs] of debtVals) {
-    const keep = vs.filter((x) => ![...debtCats].some((d) => d.filed === x.filed && swapped.has(`${d.accn}|${cat}`)));
-    debtVals.set(cat, keep);
-  }
-  // 10-Q 에서 빠진 차입 성격 = 0 — 그 공시의 어느 기간이든 다른 공시에 0 아닌 값이 있으면 채우지 않는다(줄이 다른 성격으로 옮겨 간 것일 수 있음). 분류가 바뀐 공시는 채우지 않는다
-  for (const { cat, ocf, accn } of debtAbsentQ) {
-    if (!ocf.length || swapped.has(`${accn}|${cat}`)) continue;
-    const vs = debtVals.get(cat)!;
-    if (ocf.some((e) => vs.some((x) => x.start === e.start && x.end === e.end && x.val !== 0))) continue;
-    for (const e of ocf) if (!vs.some((x) => x.start === e.start && x.end === e.end && x.filed === e.filed)) vs.push({ ...e, val: 0 });
-  }
-  // 한 기간의 차입 값은 그 기간을 실은 가장 최근 공시 하나에서만(나중 공시 우선을 표 단위로 — CL 2022: 2023 10-K 의 단기 조달 540 이 2024 10-K 에서
-  // 순증감 줄로 바뀌었는데, 성격마다 따로 최신 공시를 고르면 단기 조달 540 과 순증감 540 이 둘 다 남았다). 최근 공시에 없는 성격은 그 기간 빈칸
-  const latestOf = new Map<string, string>();
-  for (const d of debtCats) for (const p of d.periods) if (!latestOf.has(p) || d.filed > latestOf.get(p)!) latestOf.set(p, d.filed);
-  const fromLatest = (x: FactUnitEntry) => latestOf.get(`${x.start}|${x.end}`) === x.filed;
-  for (const [k, vs] of debtVals) debtVals.set(k, vs.filter(fromLatest));
-  // 합계 — 10-Q 에 그 방향 줄이 하나도 없으면 같은 규칙으로 0
-  for (const d of ["iss", "rep"] as const) {
-    const vs = debtTot.get(d)!;
-    for (const { cat, accn } of debtAbsentQ) {
-      if (cat !== (d === "iss" ? "issS" : "repS")) continue;
-      const q = debtAbsentQ.find((x) => x.accn === accn && x.ocf.length);
-      const ocf = q?.ocf ?? [];
-      if (!ocf.length || vs.some((x) => ocf.some((e) => x.filed === e.filed))) continue;
-      if (ocf.some((e) => vs.some((x) => x.start === e.start && x.end === e.end && x.val !== 0))) continue;
-      for (const e of ocf) vs.push({ ...e, val: 0 });
-    }
-  }
-  const debtAny = [...debtVals.values(), ...debtTot.values()].some((x) => x.length);
-  if (!synth.length && !zeros.length && !sbc.length && !capexParts.length && !invAny && !debtAny && !debtFace) return facts;
+  if (!synth.length && !zeros.length && !sbc.length && !capexParts.length && !invAny) return facts;
   const ng: Record<string, unknown> = { ...g };
   if (synth.length) ng[SYN_WC_CF] = { label: "운전자본 변동(본표 줄 합)", units: { USD: synth } };
   if (sbc.length) ng[SYN_SBC_CF] = { label: "주식보상비용(본표 회사 고유 줄)", units: { USD: sbc } };
   for (const [k, v] of invFace) if (v.length) ng[k] = { label: "투자자산 본표 줄 합(회사 고유 줄 포함)", units: { USD: v } };
-  for (const [k, vs] of debtTot) debtTot.set(k, vs.filter(fromLatest));
-  for (const [k, v] of debtVals) if (v.length) ng[DEBT_SYN[k]] = { label: `차입금 본표 줄 합(${k})`, units: { USD: v } };
-  for (const [k, v] of debtTot) if (v.length) ng[DEBT_TOTAL_SYN[k]] = { label: `차입금 본표 줄 합(${k} 합계)`, units: { USD: v } };
   if (capexParts.length) ng[SYN_CAPEX_PARTS] = { label: "설비투자(항공기 + 기타 유형자산 줄 합)", units: { USD: capexParts } };
   for (const [c, e] of zeros) {
     const cur = (ng[c] ?? { units: {} }) as { label?: string; units: Record<string, FactUnitEntry[]> };
     ng[c] = { ...cur, units: { ...cur.units, USD: [...(cur.units.USD ?? []), e] } };
   }
-  return { ...facts, ...(debtFace ? { debtFace: true } : {}), facts: { ...facts.facts, "us-gaap": ng as never } };
+  return { ...facts, facts: { ...facts.facts, "us-gaap": ng as never } };
 }

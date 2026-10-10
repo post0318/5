@@ -6,6 +6,7 @@ import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../
 import { entriesOf, firstConcept, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
 import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, pickDa, pickDaPeriod } from "./edgar-ev";
 import { revQuarterLabel } from "./fin-revenue";
+import { DEBT_UNREAD as DEBT_UNREAD_NOTE } from "./edgar-cf-debt";
 import { isFinancialCompany } from "./edgar-financial";
 
 /**
@@ -279,7 +280,8 @@ export function buildUsCashFlow(
   sic?: string | null,
 ): FinancialStatement {
   const isFin = isFinancialCompany(facts, sic ?? null);
-  const BLOCKS = getBlocks(isFin, !!facts.debtFace);
+  // 차입 줄 판독 자체가 실패(cfDebt)면 표준 개념 목록으로 바꿔 채우지 않는다 — 합성 개념 줄(빈칸) + 사유
+  const BLOCKS = getBlocks(isFin, !!facts.debtFace || unavailableOn(facts, "cfDebt"));
   const opEntries = firstConcept(facts, BLOCKS[0].total.concepts);
 
   let periods: FinancialPeriod[];
@@ -806,6 +808,42 @@ export function buildUsCashFlow(
       const cn: Record<string, string> = { ...(it.cellNotes ?? {}) };
       for (const [k, v] of Object.entries(it.values ?? {})) if (v != null && v !== 0 && !cn[k]) cn[k] = why;
       it.cellNotes = cn;
+    }
+  }
+  // 차입금 줄 칸 사유(edgar-cf-debt.ts) — 판독 실패·분류 교체로 비운 칸에 그 사유. 판독 실패 기간·차입 판독 전체 실패(cfDebt)는 잔여 줄(기타 재무활동)도
+  // 빈칸 — 차입 금액을 떠안지 않게(예전엔 그 해 차입이 기타로 들어갔다, 4a9b30d 전 GLW 2021)
+  {
+    const LINE_C: Record<string, string> = {
+      "단기차입금 조달": "DebtIssuedShortFaceDerived", "장기차입금 조달": "DebtIssuedLongFaceDerived", "차입금 조달 합계": "DebtIssuedTotalFaceDerived",
+      "단기차입금 상환": "DebtRepaidShortFaceDerived", "장기차입금 상환": "DebtRepaidLongFaceDerived", "차입금 상환 합계": "DebtRepaidTotalFaceDerived",
+      "단기차입금 순증감": "DebtNetShortFaceDerived",
+    };
+    const cfOut = unavailableOn(facts, "cfDebt");
+    const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 7 * 864e5;
+    const fyEnd = mode === "quarter" ? null : periods[periods.length - 2]?.endDate ?? null;
+    // LTM 구성 기간의 결산일(사업연도 + 당기 누적 − 전년 동기)
+    const ltmEnds = anchor ? [anchor, shiftYear(anchor, -1), ...(fyEnd ? [fyEnd] : [])] : [];
+    const endsOf = (p: FinancialPeriod) => (p.label === LTM ? ltmEnds : p.endDate ? [p.endDate] : []);
+    const outNote = cfOut ? unavailableNote(facts) ?? "원본 조회 실패" : null;
+    for (const it of items) {
+      const line = it.accountId?.startsWith("cf:재무활동 현금흐름:") ? it.accountId!.slice("cf:재무활동 현금흐름:".length) : null;
+      if (!line) continue;
+      const concept = LINE_C[line];
+      if (concept) {
+        for (const p of periods) {
+          if (cfOut) { it.values[p.label] = null; it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: outNote! }; continue; }
+          if (it.values[p.label] != null) continue;
+          const b = (facts.debtBlanks ?? []).find((x) => x.concept === concept && endsOf(p).some((e) => near(x.end, e)));
+          if (b) it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: b.reason };
+        }
+      } else if (line === "기타 재무활동") {
+        for (const p of periods) {
+          const unread = cfOut || (facts.debtUnreadEnds ?? []).some((e) => endsOf(p).some((x) => near(x, e)));
+          if (!unread) continue;
+          it.values[p.label] = null;
+          it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: cfOut ? outNote! : `${DEBT_UNREAD_NOTE} — 차입 금액을 떠안지 않게 함께 공란` };
+        }
+      }
     }
   }
   // 무배당 = 0(오너 결정 2026-10-02): 그 기간에 배당 공시가 하나도 없으면 배당금 지급 0. 그 밖의 사유 없는 빈 칸은 "본표에 별도 줄 없음"

@@ -33,6 +33,7 @@ import { toAdrBasis, withForeignNormalization } from "./edgar-foreign";
 import { withContentAmortization } from "./edgar-content";
 import { withRevenueDims } from "./edgar-revenue-dims";
 import { withCashFlowWc } from "./edgar-cf-wc";
+import { withCashFlowDebt } from "./edgar-cf-debt";
 import { needsOpIncomeStructure, withIncomeStatementStructure } from "./edgar-is-structure";
 import { withOneOffCharges } from "./edgar-oneoff";
 import { withCustomFacePretax, withFacePretax } from "./edgar-pretax";
@@ -248,8 +249,10 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const withDa = unavailable.da ? withDebt : await step("da", withDebt, () => withCashFlowDa(cik, withDebt, recent));
       // 운전자본 변동 합계 = 현금흐름표 본표 운전자본 줄 합(edgar-cf-wc.ts — 분기 요약형 공시 회사의 LTM 운전자본)
       const withWc = await step("da", withDa, () => withCashFlowWc(cik, withDa, recent));
+      // 현금흐름표 차입금 줄 = 본표 차입 줄 성격별 합(edgar-cf-debt.ts, 오너 결정 2026-10-10). 판독 실패는 차입 줄만 공란(감가상각·운전자본과 분리)
+      const withDebtCf = await step("cfDebt", withWc, () => withCashFlowDebt(cik, withWc, recent));
       // 연말 유통주식수가 자본변동표 차원으로만 있는 회사(WMT·BE·META, edgar-equity-shares.ts)
-      const withShares = await step("yearEndShares", withWc, () => withEquityStatementShares(cik, withWc, recent));
+      const withShares = await step("yearEndShares", withDebtCf, () => withEquityStatementShares(cik, withDebtCf, recent));
       // 20-F 발행사(분기 XBRL 없음) — LTM 열을 Yahoo 분기(원통화) 최근 4개 분기로(edgar-yahoo-quarters.ts, 오너 결정
       // 2026-09-25). 조회 실패 시 SEC 사업연도 유지 + 경고(짧은 캐시), 다른 원천으로 대체하지 않는다.
       let withLtm = withShares;
@@ -414,8 +417,12 @@ export interface CompanyFacts {
   daBasisMix?: string[];
   /** 사업연도 감가상각 줄에 중단사업분이 섞였는데 그 금액이 공시되지 않은 기간("시작|종료") — 감가상각비·EBITDA 공란(edgar-cf-structure.ts, 오너 결정 2026-10-09 IBM 2021) */
   daDiscMix?: string[];
-  /** 차입금 줄을 10-K·10-Q 본표 판독으로 만들었는가(edgar-cf-wc.ts DEBT_SYN) — 아니면(20-F 등) 표준 개념 목록으로 */
+  /** 차입금 줄을 10-K·10-Q 본표 판독으로 만들었는가(edgar-cf-debt.ts) — 아니면(20-F 등) 표준 개념 목록으로 */
   debtFace?: boolean;
+  /** 차입금 줄 칸이 빈 사유(판독 실패·분류 교체) — edgar-cf-debt.ts */
+  debtBlanks?: { concept: string; end: string; reason: string }[];
+  /** 차입 줄 판독 실패로 비운 기간의 결산일 — 잔여 줄(기타 재무활동)도 그 칸 빈칸 */
+  debtUnreadEnds?: string[];
   /** 총수익에서 지분법·기타수익을 분리했는지(edgar-revenue-dims.ts) */
   nonopInRevenues?: boolean;
   /** 은행·증권·보험(SIC 6000~6499) — 이자가 본업이라 영업이익 근사에 이자를 더하지 않는다. 리츠·부동산(65xx·67xx)은
