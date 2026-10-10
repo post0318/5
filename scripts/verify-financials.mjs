@@ -666,9 +666,14 @@ const CF_CONCEPT_FIXED = /^(PaymentsTo|PaymentsFor|PaymentsOf|Proceeds|Repayment
 const isCfFixed = (c) => !IS_FLOW_FIXED.has(c) && (CF_CONCEPT_FIXED.test(c) || YAHOO_LTM_FLOW.has(c));
 const EXACT = 1e-9; // 화면 간 동일성 — 같은 모듈을 거치므로 부동소수 오차만
 const sameBase = (a, b, tol) => same(a, b, tol);
+/** 화면 간·재계산 대조의 정확 일치(한국 감사 6·12차 ③ 를 미국에도, 2026-10-11 — 상대 1e-9 가 재무분석 비율 ×(1+5e-10) 을 통과시켰다(AAPL 심은 오류
+ *  유동비율·LTM 매출총이익률·EBITDA 마진)). 둘 다 정수면 완전히 같아야, 소수면 같은 값을 다른 순서로 계산한 부동소수 끝자리(상대 1e-14)만 */
+const SAME_FLOAT = 1e-14;
+const sameNum = (a, b) => (Number.isInteger(a) && Number.isInteger(b) ? a === b : Math.abs(a - b) <= SAME_FLOAT * Math.max(Math.abs(a), Math.abs(b)));
 function same(a, b, tol = EXACT) {
   if (a == null && b == null) return { status: NA, note: "양쪽 빈칸" };
   if (a == null || b == null) return { status: FAIL, note: `한쪽만 빈칸 (${a} vs ${b})` };
+  if (tol <= EXACT) return sameNum(a, b) ? { status: PASS } : { status: FAIL, note: `${a} vs ${b} (차 ${a - b})` };
   const d = Math.abs(a - b) / Math.max(Math.abs(b), 1e-12);
   return d <= tol ? { status: PASS } : { status: FAIL, note: `${a} vs ${b} (차 ${(d * 100).toFixed(4)}%)` };
 }
@@ -679,9 +684,10 @@ function vsSource(app, src, tol, srcNote = "") {
   if (src == null) return { status: NA, note: `원자료 없음${srcNote ? ` (${srcNote})` : ""}`, ...vals };
   if (app == null) return { status: FAIL, note: `원자료 ${src} 있는데 앱 빈칸${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
   // 정확 일치(오너 원칙) — 둘 다 정수(달러·주 단위 원자료와 그 합·차)면 상대 오차 없이 완전히 같아야 한다. 상대 1e-9 는
-  // 4천억 달러에서 약 400달러를 통과시켰다(골든셋 주입 시험 2026-09-26). 환율 곱·주당값 등 소수 계산값만 tol(부동소수 오차) 적용
-  if (tol <= EXACT && Number.isInteger(app) && Number.isInteger(src)) {
-    return app === src
+  // 4천억 달러에서 약 400달러를 통과시켰다(골든셋 주입 시험 2026-09-26).
+  // 소수(주당값·환율 곱)도 정확 일치 — 같은 값을 다른 순서로 계산한 끝자리(상대 1e-14)만(2026-10-11, 예전 상대 1e-9 는 EPS ×(1+5e-10) 를 통과시켰다)
+  if (tol <= EXACT) {
+    return sameNum(app, src)
       ? { status: PASS, ...(srcNote ? { note: srcNote } : {}), ...vals }
       : { status: FAIL, note: `앱 ${app} vs 원자료 ${src} (차 ${app - src})${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
   }
@@ -3950,6 +3956,31 @@ function appFetchWarnings(obj) {
 }
 
 // ── 미국 종목 1개 ─────────────────────────────────────────────────────
+/**
+ * 심은 오류 시험 전용(미국) — US_VERIFY_TEST_MUTATE="종목~응답키~줄 정규식~열 라벨~*배수 또는 =값;…". 앱 응답의 그 칸만 바꿔 검증기가 잡는지 본다
+ * (응답키: hl·an·is·cf·bs·isq… — 재무제표 화면은 줄 이름·accountId, 하이라이트는 행 key·label). 운영 검증에서는 쓰지 않는다
+ */
+function usTestMutate(sym, fetched) {
+  const spec = process.env.US_VERIFY_TEST_MUTATE;
+  if (!spec) return;
+  for (const one of spec.split(";").filter(Boolean)) {
+    const [s0, k, rowRe, col, op] = one.split("~");
+    if (s0 !== sym) continue;
+    const re = new RegExp(rowRe), f = (v) => (v == null ? v : op.startsWith("*") ? v * Number(op.slice(1)) : Number(op.slice(1)));
+    const d = fetched[k];
+    let hit = 0;
+    for (const it of (d?.sections ?? []).flatMap((x) => x.items ?? [])) {
+      if ((re.test(String(it.accountName ?? "")) || re.test(String(it.accountId ?? ""))) && it.values && col in it.values) { it.values[col] = f(it.values[col]); hit++; }
+    }
+    const h0 = d?.highlights;
+    if (h0) {
+      const ix = h0.columns.findIndex((x) => x.label === col);
+      for (const r0 of h0.rows ?? []) if (ix >= 0 && (re.test(String(r0.key)) || re.test(String(r0.label ?? "")))) { r0.values[ix] = f(r0.values[ix]); hit++; }
+    }
+    console.error(`[심은 오류] ${sym} ${k} /${rowRe}/ ${col} ${op} — ${hit}칸`);
+  }
+}
+
 async function verifyUs(sym) {
   const u = `/api/markets/us/${encodeURIComponent(sym)}`;
   const checks = [];
@@ -3981,6 +4012,7 @@ async function verifyUs(sym) {
   })) {
     try { fetched[k] = await getJson(p); } catch (e) { fetched[k] = null; add("응답", `API 응답 ${k}`, "-", { status: FAIL, note: String(e).slice(0, 120) }); }
   }
+  usTestMutate(sym, fetched);
   let row = null;
   try { row = await getJson(`/api/cron/verify-row?market=us&symbol=${encodeURIComponent(sym)}`, 240_000, AUTH); }
   catch (e) { add("응답", "API 응답 verify-row", "-", { status: FAIL, note: String(e).slice(0, 120) }); }
@@ -4602,7 +4634,7 @@ async function verifyUs(sym) {
     { const h0 = hl?.highlights; if (h0) { const cl = h0.columns.map((x) => x.label); for (const r0 of h0.rows ?? []) HLm[r0.key] = Object.fromEntries(cl.map((l, i) => [l, r0.values?.[i] ?? null])); } }
     const iv = (re, k) => { const n0 = Object.keys(IN).find((n) => re.test(n)); return n0 ? IN[n0][k] ?? null : null; };
     const keys = (an.periods ?? []).map((p0) => p0.label);
-    const near = (a, e) => Math.abs(a - e) <= Math.max(1e-9, Math.abs(e) * 1e-9);
+    const near = (a, e) => sameNum(a, e); // 정확 일치(③ — 예전 상대 1e-9)
     for (const k of keys) {
       // 3년 CAGR(연간 열, 3년 전 열이 화면에 있을 때) — 매출액·EPS·주당배당금
       { const i0 = keys.indexOf(k), b3 = i0 >= 3 && k !== "현재/LTM" ? keys[i0 - 3] : null;
@@ -4613,7 +4645,7 @@ async function verifyUs(sym) {
           for (const [nm, f0] of [["매출액", (kk) => ivx(/^매출액/, kk)], ["EPS", (kk) => ivx(/^희석 EPS/, kk)], ["주당배당금", (kk) => hl3("dps", kk)]]) {
             const exp = cg(f0(k), f0(b3)), a = AS[`성장률 (3년 CAGR)|${nm}`]?.[k];
             if (exp == null) continue;
-            add("C", `재무분석 3년 CAGR ${nm} = 재무제표 화면 재계산`, lab(k), a == null ? { status: NA, note: `재무분석 빈칸(화면 재계산 ${exp})` } : Math.abs(a - exp) <= Math.max(1e-9, Math.abs(exp) * 1e-9) ? { status: PASS, note: `${nm} ${b3}→${k} 3년 CAGR` } : { status: FAIL, note: `재무분석 ${a} ≠ 화면 재계산 ${exp}` });
+            add("C", `재무분석 3년 CAGR ${nm} = 재무제표 화면 재계산`, lab(k), a == null ? { status: NA, note: `재무분석 빈칸(화면 재계산 ${exp})` } : sameNum(a, exp) ? { status: PASS, note: `${nm} ${b3}→${k} 3년 CAGR` } : { status: FAIL, note: `재무분석 ${a} ≠ 화면 재계산 ${exp}` });
           }
         }
       }
@@ -5130,7 +5162,7 @@ async function verifyUs(sym) {
         // 않는다(edgar-pershare.ts) → 기준 = 공시값 ÷ Yahoo 분할 배수, 부동소수 오차(상대 1e-9)만. 예전 허용치(0.006 + 0.3%)는
         // 작은 EPS 의 1% 오류·+0.004 오류를 통과시켰다(자체 주입).
         const r = vsSource(x.eps, expected, EXACT, "");
-        const ok = x.eps != null && Math.abs(x.eps - expected) <= EXACT * Math.max(1, Math.abs(expected));
+        const ok = x.eps != null && sameNum(x.eps, expected);
         add("A", "EPS 앱 = SEC 공시 EPS(분할 보정)", c, x.eps == null ? r : ok
           ? { status: PASS, ...(k !== 1 || retagNote(e) || splitNote ? { note: [splitNote, k !== 1 && !splitNote && `분할 보정 ÷${k}(Yahoo 분할 이력)`, retagNote(e)].filter(Boolean).join(" · ") } : {}), app: x.eps, src: expected }
           : { status: FAIL, note: `앱 ${x.eps} vs 공시 ${e.val}${k !== 1 ? ` ÷ 분할 ${k}` : ""} = ${expected}${splitErr ? ` · ${splitErr}` : ""}${retagNote(e) ? ` · ${retagNote(e)}` : ""}`, app: x.eps, src: expected });
@@ -5144,7 +5176,7 @@ async function verifyUs(sym) {
           const expected = (cd.cont + cd.disc) / k;
           const basis = `계속영업 ${cd.cont} + 중단영업 ${cd.disc} 희석 EPS(${cd.filed} 10-K, 총 EPS 태그 없음)${k !== 1 ? ` ÷ 분할 ${k}` : ""}`;
           add("A", "EPS 앱 = SEC 공시 EPS(분할 보정)", c, x.eps == null ? vsSource(null, expected, 0, basis)
-            : Math.abs(x.eps - expected) <= 1e-9 * Math.max(1, Math.abs(expected)) ? { status: PASS, note: basis, app: x.eps, src: expected }
+            : sameNum(x.eps, expected) ? { status: PASS, note: basis, app: x.eps, src: expected }
             : { status: FAIL, note: `앱 ${x.eps} vs ${basis} = ${expected}`, app: x.eps, src: expected });
         }
       } else {
@@ -9570,7 +9602,7 @@ async function verifyUs(sym) {
         if (!H[col]?.date || r.ours == null) return false;
         const e = atEnd(epsP, H[col].date), cd = e ? null : contDiscEps(H[col].date);
         const exp = e ? e.val / splitAdj(e) : cd ? (cd.cont + cd.disc) / splitAdj({ end: H[col].date, filed: cd.filed }) : null;
-        return exp != null && Math.abs(r.ours - exp) <= 1e-9 * Math.max(1, Math.abs(exp));
+        return exp != null && sameNum(r.ours, exp);
       })();
       if (metric === "희석 EPS" && n === "인포맥스" && col !== "LTM" && epsExact && !splitErr
         && checks.some((k) => k.col === col && k.status === PASS && k.name === "EPS 앱 = SEC 공시 EPS(분할 보정)")) {
