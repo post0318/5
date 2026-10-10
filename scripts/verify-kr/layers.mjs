@@ -73,6 +73,18 @@ const EPS_D = [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익",
 const EPS_B = [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익", "보통주기본및희석주당이익", "보통주기본및희석주당순이익"]];
 const QCODE = { 1: "11013", 2: "11012", 3: "11014" };
 const QNAME = { 1: "1분기", 2: "반기", 3: "3분기" };
+/**
+ * LTM 빈칸 원인별 앱 사유 고정 문구(감사 11차 ④ — 기대 빈칸이면 사유가 아무 문자열이어도 통과였다). 검증기가 정한 원인과 앱 사유의 종류가 같아야 통과.
+ * 문구는 앱(opendart.ts getKrTtm)이 원인마다 내는 고정 문구 — 원인 판정은 검증기가 DART 원자료로 따로 한다
+ */
+const KR_WHY = {
+  prior: /전기 누적 (열|칸) 없음/, // 당기 보고서에 전기 누적 칸 없음
+  cur: /당기 보고서(?: 현금흐름표)?에 그 줄 없음/, // 당기 보고서에 그 줄 없음
+  annual: /최근 사업보고서에 그 줄 없음/,
+  xbrlCell: /XBRL 에 (당기|전기) 누적 칸 없음/, // XBRL 전기·당기 누적 칸 없음
+  xbrlMismatch: /XBRL 당기 누적 .* ≠ 재무제표/, // XBRL 당기 누적 ≠ 재무제표
+  xbrlAmbig: /XBRL/, // XBRL 같은 칸 값이 여럿(앱 문구 미정 — XBRL 원인이면 인정)
+};
 
 /** 몽고 감가상각 적재본(kr_da) 직접 읽기 — 앱 API 를 거치지 않는다 */
 let daColP = null;
@@ -361,14 +373,15 @@ export async function krOriginalLayers(ctx) {
     if (!multDen.LTM) for (const l of ["PER", "PBR", "PSR"]) add("D", `${l} LTM 값 대조`, "LTM", { status: NA, app: H.LTM?.[l.toLowerCase()] ?? null, note: ltmPrice == null ? "K1 현재 시가총액 미확인 — 분자 없음" : "LTM 원자료 판독 실패 — 분모 없음" });
   } // LTM 열이 없으면 위 K1 「LTM 열 존재」 실패
 
-  // ── 하이라이트 행(감사 10차 ② — 매출·영업이익·마진·성장률·현금흐름·잉여현금흐름이 무검사였다): 연도 열 = DART(그해를 담은 가장 최근 보고서), LTM = K4 기대치
-  try { highlightRowsLayer({ ...ctx, H, yearSrc, yearsShown, ltmExp, exact }); } catch (e) { err("하이라이트 행 대조", e); }
-
   // ── 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 분기·반기·3분기·사업보고서와 정확 대조 ──
   try { await quarterLayer({ ...ctx, exact, L }); } catch (e) { err("분기 재무제표 원자료(DART)", e); }
 
   // ── K3 감가상각비 ──
   try { await daLayer({ ...ctx, exact, cmp, fail, err, yearSrc, yearsShown, caps, L }); } catch (e) { err("감가상각비 원자료(kr_da·XBRL·원문)", e); }
+
+  // ── 하이라이트 행(감사 10차 ② — 매출·영업이익·마진·성장률·현금흐름·잉여현금흐름이 무검사였다): 연도 열 = DART(그해를 담은 가장 최근 보고서), LTM = K4 기대치.
+  //    K3 뒤에 둔다 — EBITDA 마진이 K3 공통모드를 물려받는다(감사 11차 ⑤)
+  try { highlightRowsLayer({ ...ctx, H, yearSrc, yearsShown, ltmExp, exact, added }); } catch (e) { err("하이라이트 행 대조", e); }
 
   // ── K5 배당 ──
   for (const y of yearsShown) {
@@ -506,7 +519,8 @@ async function universeCacheLayer(c) {
  */
 function highlightRowsLayer(c) {
   const { add, h, H, yearSrc, yearsShown, ltmExp } = c;
-  const { PASS, FAIL, NA } = c.consts;
+  const added = c.added ?? [];
+  const { PASS, FAIL, NA, COMMON } = c.consts;
   const row = (key) => h.rows.find((r) => r.key === key) ?? null;
   const colI = (lab) => h.columns.findIndex((x) => x.label === lab);
   const li = h.columns.findIndex((x) => x.kind === "ltm");
@@ -520,16 +534,24 @@ function highlightRowsLayer(c) {
     for (const [R, i] of refs) { if (!R) continue; const v = oneVal(pickRow(R, it[0], it[1], it[2] ?? ["IS", "CIS"]), (r) => num(r[COL[i]])).v; if (v != null) return v; }
     return null;
   };
+  // 그해 EPS — 그해를 담은 가장 최근 보고서(fromOwner 와 같은 순서) 중 값이 있는 것(희석 → 기본 → 계속 + 중단)
+  const epsOwner = (y) => {
+    const s0 = yearSrc.get(y) ?? yearSrc.get(y + 1);
+    if (!s0) return undefined;
+    const refs = yearSrc.get(y) ? [[s0.next2, 2], [s0.next, 1], [s0.cur, 0]] : [[s0.next, 2], [s0.cur, 1]];
+    for (const [R, i] of refs) { if (!R) continue; const v = epsOfRows(R, (r) => num(r[COL[i]])); if (v != null) return v; }
+    return null;
+  };
   const yoy = (a, b) => (a == null || b == null || b === 0 ? null : ((a - b) / Math.abs(b)) * 100);
   const margin = (p0, w) => (p0 == null || w == null || w === 0 ? null : (p0 / w) * 100);
-  const chk = (key, label, col, exp, how) => {
+  const chk = (key, label, col, exp, how, common = false) => {
     const r = row(key);
     if (!r) { if (exp != null) add("K7", `하이라이트 ${label} 행 존재`, col, { status: FAIL, note: `행 없음 — 기대 ${exp}` }); return; }
     const i = col === "LTM" ? li : colI(col);
     if (i < 0) return;
     const app = r.values[i] ?? null;
     if (exp === undefined) { add("K7", `하이라이트 ${label}`, col, { status: NA, app, note: `기대치 확인 불가 ${how ?? ""}` }); return; }
-    add("K7", `하이라이트 ${label}`, col, app === exp ? { status: PASS, app, src: exp, note: how } : { status: FAIL, app, src: exp, note: `앱 ${app ?? "빈칸"} vs 기대 ${exp ?? "빈칸"} · ${how ?? ""}` });
+    add("K7", `하이라이트 ${label}`, col, app === exp ? (common ? { status: COMMON, app, src: exp, note: `${how ?? ""} · 공통모드 — 이 열 감가상각이 K3 에서 공통모드(적재본과만 일치)` } : { status: PASS, app, src: exp, note: how }) : { status: FAIL, app, src: exp, note: `앱 ${app ?? "빈칸"} vs 기대 ${exp ?? "빈칸"} · ${how ?? ""}` });
   };
   const cols = [...yearsShown.map((y) => ({ col: `${y}Y`, y })), ...(li >= 0 ? [{ col: "LTM", y: null }] : [])];
   let prev = null;
@@ -537,6 +559,7 @@ function highlightRowsLayer(c) {
     const e = y != null
       ? { rev: fromOwner(y, [...IT.rev, ["IS", "CIS"]]), op: fromOwner(y, [...IT.op, ["IS", "CIS"]]), ocf: fromOwner(y, OCF), capex: fromOwner(y, CAPEX) }
       : { rev: ltmExp.revenue, op: ltmExp.opinc, ocf: ltmExp.ocf, capex: ltmExp.capex };
+    e.eps = y != null ? (c.dartVint?.[`${col}|희석 EPS`] ? (c.dartVint[`${col}|희석 EPS`].latest ?? null) : epsOwner(y)) : ltmExp.eps;
     const ni = H[col]?.ni ?? null, eb = H[col]?.ebitda ?? null; // K4·K3·A층이 확인한 값
     const capexE = e.capex === undefined ? undefined : e.capex == null ? null : -Math.abs(e.capex);
     chk("revenue", "매출액", col, e.rev, "DART");
@@ -546,12 +569,17 @@ function highlightRowsLayer(c) {
     chk("fcf", "잉여현금흐름", col, e.ocf === undefined || capexE === undefined ? undefined : e.ocf != null && capexE != null ? e.ocf + capexE : null, "영업현금흐름 + 자본지출");
     chk("opinc_m", "영업이익률", col, e.rev === undefined || e.op === undefined ? undefined : margin(e.op, e.rev), "영업이익 ÷ 매출 × 100");
     chk("ni_m", "순이익률", col, e.rev === undefined ? undefined : margin(ni, e.rev), "순이익 ÷ 매출 × 100");
-    chk("ebitda_m", "EBITDA 마진", col, e.rev === undefined ? undefined : margin(eb, e.rev), "EBITDA ÷ 매출 × 100");
+    // EBITDA 는 K3 감가상각을 거친 값 — 그 열 K3 가 공통모드(적재본과만 일치)면 이 대조도 독립 확인이 아니다(감사 11차 ⑤, K1 EV/EBITDA 와 같은 전파)
+    const daCommon = added.some((x) => x.layer === "K3" && x.col === col && x.status === COMMON);
+    chk("ebitda_m", "EBITDA 마진", col, e.rev === undefined ? undefined : margin(eb, e.rev), "EBITDA ÷ 매출 × 100", daCommon);
     // 성장률 — 왼쪽 열(첫 열은 DART 전년)
     // 첫 열의 전년 = 표시 구간 밖 — 앱은 표시 구간 밖 해를 연결 재무제표로만 읽는다(별도 채움은 표시 구간 안만, CLAUDE.md 2026-10-04). 그해가 별도 기준이면
     // 전년 값이 없어 성장률 빈칸이 기대치(060370 2021)
     const pRev = prev ? prev.rev : y != null ? (yearSrc.get(y)?.fsDiv === "CFS" ? fromOwner(y - 1, [...IT.rev, ["IS", "CIS"]]) : null) : undefined;
     chk("revenue_yoy", "매출 성장률", col, e.rev === undefined || pRev === undefined ? undefined : yoy(e.rev, pRev), "(당기 − 전기) ÷ |전기| × 100");
+    // EPS 성장률(감사 11차 ② — 무검사였다): EPS = A층 DART 판독(그해를 담은 가장 최근 보고서 희석 → 기본, 계속 + 중단 합), 첫 열 전년은 DART 직접. LTM = K4 기대치
+    const pEps = prev ? prev.eps : y != null ? (yearSrc.get(y)?.fsDiv === "CFS" ? epsOwner(y - 1) : null) : undefined;
+    chk("eps_yoy", "EPS 성장률", col, e.eps === undefined || pEps === undefined ? undefined : yoy(e.eps, pEps), "(당기 EPS − 전기 EPS) ÷ |전기 EPS| × 100");
     prev = e;
   }
   // 화면 간(C): 하이라이트 LTM 현금흐름 = /ttm krLtm(재무분석이 쓰는 값) — 점검 등으로 기대치가 없어도 두 화면은 같아야(감사 10차 ③)
@@ -707,6 +735,9 @@ async function ltmLayer(c) {
       exact("K4", `LTM ${k} (/ttm 부가 흐름) = DART 사업보고서(최신 정기보고서)`, "LTM", tt?.ttm?.krLtm ? (tt.ttm.krLtm[k] ?? null) : null, v, lp.nm);
     }
     c.ltmExp.revenue = val(IT.rev); c.ltmExp.opinc = val(IT.op); c.ltmExp.ni = val(IT.ni);
+    c.ltmExp.eps = epsOfRows(cur.rows, (r) => num(r.thstrm_amount));
+    // 재무분석 LTM 매출총이익률·유효세율 — 이 경로에서도(감사 11차 ③ — 일찍 return 해 빠졌다)
+    analysisLtmRatios(c, c.ltmExp, val(IT.rev));
     const cl = classifyBsRows(cur.rows);
     const faceDebt = sumCol(cl.debt, "thstrm_amount") ?? 0;
     const pol = policySrc.at(-1);
@@ -742,7 +773,9 @@ async function ltmLayer(c) {
     let pc = oneVal(pick(cur.rows, it), (r) => num(r.frmtrm_add_amount) ?? num(r.frmtrm_amount)).v, from = "당기 보고서 전기 누적";
     // 당기 보고서에 전기 누적 칸이 없으면 빈칸 기대(전년 같은 보고서 값으로 대신하지 않음 — 오너 결정 2026-10-10)
     if (pc == null) from = "당기 보고서 전기 누적 칸 없음 — 빈칸 기대";
-    return { v: a != null && cc != null && pc != null ? a + cc - pc : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − ${from} ${pc}` };
+    // 빈칸 원인(앱 사유 우선순위와 같은 순서 — 당기 있고 전기 없음 → 사업연도 줄 없음 → 당기 줄 없음)
+    const cause = cc != null && pc == null ? "prior" : a == null ? "annual" : cc == null ? "cur" : null;
+    return { v: a != null && cc != null && pc != null ? a + cc - pc : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − ${from} ${pc}`, cause, a, cc };
   };
   let revLtm = null;
   for (const [key, it, label2] of [["revenue", IT.rev, "매출"], ["opinc", IT.op, "영업이익"], ["ni", IT.ni, "순이익(연결)"]]) {
@@ -787,12 +820,14 @@ async function ltmLayer(c) {
     if (isCf) {
       const a = oneVal(pick(annualR ?? [], it), (r) => num(r.thstrm_amount)).v;
       const cc = oneVal(pick(cur.rows, it), (r) => num(r.thstrm_add_amount) ?? num(r.thstrm_amount)).v;
-      if (cumErr) { r0 = { v: null, how: `XBRL 판독 실패 — ${cumErr}` }; expU = true; }
+      // 당기 줄이 재무제표 API 에 없으면 앱은 XBRL 을 보지 않는다(사유 = 당기 줄 없음) — XBRL 실패와 무관하게 빈칸 기대
+      if (cc == null) r0 = { v: null, how: "당기 보고서 현금흐름표에 그 줄 없음(빈칸 기대)", cause: "cur" };
+      else if (cumErr) { r0 = { v: null, how: `XBRL 판독 실패 — ${cumErr}` }; expU = true; }
       else {
         const xc = xCum(it[0], `CFY${Y}d${QC}A`), xp = xCum(it[0], `PFY${Y - 1}d${QC}A`);
-        if (xc === undefined || xp === undefined) r0 = { v: null, how: "XBRL 같은 칸 값이 여럿 — 못 정함(빈칸 기대)" };
-        else if (cc != null && xc != null && xc !== cc) r0 = { v: null, how: `XBRL 당기 누적 ${xc} ≠ 재무제표 ${cc} — 같은 줄 아님(빈칸 기대)` };
-        else r0 = { v: a != null && cc != null && xc != null && xp != null ? a + cc - xp : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − XBRL 전기 누적(PFY${Y - 1}d${QC}A) ${xp}` };
+        if (xc === undefined || xp === undefined) r0 = { v: null, how: "XBRL 같은 칸 값이 여럿 — 못 정함(빈칸 기대)", cause: "xbrlAmbig" };
+        else if (xc != null && xc !== cc) r0 = { v: null, how: `XBRL 당기 누적 ${xc} ≠ 재무제표 ${cc} — 같은 줄 아님(빈칸 기대)`, cause: "xbrlMismatch" };
+        else r0 = { v: a != null && xc != null && xp != null ? a + cc - xp : null, how: `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − XBRL 전기 누적(PFY${Y - 1}d${QC}A) ${xp}`, cause: xc == null || xp == null ? "xbrlCell" : a == null ? "annual" : null };
       }
     }
     xExp[k] = expU ? undefined : r0.v;
@@ -800,7 +835,14 @@ async function ltmLayer(c) {
     const appV = kl ? (kl[k] ?? null) : null;
     const nm0 = `LTM ${k} (/ttm 부가 흐름) = DART 사업연도 + 당기 누적 − 전기 누적`;
     if (expU) add("K4", nm0, "LTM", { status: NA, app: appV, note: `${r0.how} · 앱 ${appV ?? "빈칸"}${why[k] ? `(사유: ${why[k]})` : ""}` });
-    else if (r0.v == null && appV == null) add("K4", nm0, "LTM", why[k] ? { status: PASS, note: `기대 빈칸 — ${r0.how}${why[k] ? ` · 앱 사유 ${why[k]}` : ""}` } : { status: FAIL, note: `기대 빈칸(${r0.how})인데 앱 사유 없음` });
+    else if (r0.v == null && appV == null) {
+      // 기대 빈칸 — 앱 사유가 검증기가 정한 원인과 같은 종류여야(감사 11차 ④)
+      const re = r0.cause ? KR_WHY[r0.cause] : null;
+      add("K4", nm0, "LTM", !why[k] ? { status: FAIL, note: `기대 빈칸(${r0.how})인데 앱 사유 없음` }
+        : !re ? { status: FAIL, note: `기대 빈칸 원인 미정(${r0.how}) · 앱 사유 ${why[k]}` }
+        : re.test(why[k]) ? { status: PASS, note: `기대 빈칸(원인 ${r0.cause}) — ${r0.how} · 앱 사유 ${why[k]}` }
+        : { status: FAIL, note: `기대 빈칸 원인 ${r0.cause}(${r0.how})인데 앱 사유 종류 다름: "${why[k]}"` });
+    }
     else exact("K4", nm0, "LTM", appV, r0.v, r0.how);
   }
   // 하이라이트 LTM 영업현금흐름·자본지출(자본지출은 음수 표시)
@@ -808,19 +850,7 @@ async function ltmLayer(c) {
   else exact("K4", "하이라이트 LTM 영업활동 현금흐름 = DART 사업연도 + 누적 − 전기 누적", "LTM", hrow("ocf"), xExp.ocf, "");
   if (xExp.capex === undefined) add("K4", "하이라이트 LTM 자본지출 = −(DART 유형자산 취득 사업연도 + 누적 − 전기 누적)", "LTM", { status: NA, app: hrow("capex"), note: "XBRL 판독 실패 — 기대치 없음" });
   else exact("K4", "하이라이트 LTM 자본지출 = −(DART 유형자산 취득 사업연도 + 누적 − 전기 누적)", "LTM", hrow("capex"), xExp.capex == null ? null : -Math.abs(xExp.capex), "");
-  // 재무분석 LTM 비율 — 매출총이익률·유효세율(분자·분모 모두 검증기 기대치)
-  {
-    const aRow = (nm) => (c.an?.sections ?? []).flatMap((x) => x.items ?? []).find((x) => String(x.accountName ?? "").trim() === nm)?.values ?? null;
-    const lv = (o) => (o ? (o["현재/LTM"] ?? o.LTM ?? null) : null);
-    const g = aRow("매출총이익률 (%)"), t0 = aRow("유효세율 (%)");
-    const fl = (a, b) => a === b || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-12);
-    const eg = xExp.gross != null && revLtm ? (xExp.gross / revLtm) * 100 : null;
-    const et = xExp.tax != null && xExp.pretax ? (xExp.tax / xExp.pretax) * 100 : null;
-    if (!g && eg != null) add("K4", "재무분석 매출총이익률 행 존재", "LTM", { status: FAIL, note: `행 없음 — 기대 ${eg}` });
-    if (!t0 && et != null) add("K4", "재무분석 유효세율 행 존재", "LTM", { status: FAIL, note: `행 없음 — 기대 ${et}` });
-    if (g) add("K4", "재무분석 LTM 매출총이익률 = 매출총이익 ÷ 매출(검증기 기대치)", "LTM", fl(lv(g), eg) ? { status: PASS, app: lv(g), src: eg } : { status: FAIL, app: lv(g), src: eg, note: `앱 ${lv(g) ?? "빈칸"} vs ${eg ?? "빈칸"}` });
-    if (t0) add("K4", "재무분석 LTM 유효세율 = 법인세 ÷ 세전이익(검증기 기대치)", "LTM", fl(lv(t0), et) ? { status: PASS, app: lv(t0), src: et } : { status: FAIL, app: lv(t0), src: et, note: `앱 ${lv(t0) ?? "빈칸"} vs ${et ?? "빈칸"}` });
-  }
+  analysisLtmRatios(c, xExp, revLtm);
   // EPS = 사업연도 + 당기 누적 − 당기 보고서 전기 누적(희석, 없으면 기본)
   let epsLtm = null;
   {
@@ -843,8 +873,14 @@ async function ltmLayer(c) {
     c.ltmExp.eps = exp;
     epsLtm = exp;
     const approxDisclosed = /EPS.*(환산|근사)/.test((c.h.notes ?? []).join(" ")) || /환산|근사/.test(JSON.stringify(tt?.ttm?.reasons?.eps ?? ""));
-    if (exp == null && LT.eps != null && approxDisclosed) add("K4", "LTM EPS = DART 사업연도 + 누적 − 전년 누적", "LTM", { status: "unverifiable", note: `분기 EPS 공시 없음 — 앱 근사(주석 표시) ${LT.eps}` });
-    else exact("K4", "LTM EPS = DART 사업연도 + 누적 − 당기 보고서 전기 누적", "LTM", LT.eps, exp, `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − 당기 보고서 전기 누적 ${pc ?? "없음(빈칸 기대)"}`);
+    const nmE = "LTM EPS = DART 사업연도 + 누적 − 당기 보고서 전기 누적";
+    const eWhy = tt?.ttm?.reasons?.eps ?? null;
+    // 근사 허용은 DART 당기 보고서에 EPS 당기 누적 자체가 없을 때만(감사 11차 ①). 당기 누적은 있고 전기 누적만 없으면 빈칸 + 그 원인 사유여야(근사·연간값 대체는 실패)
+    if (a != null && cc == null && LT.eps != null && approxDisclosed) { add("K4", nmE, "LTM", { status: "unverifiable", note: `DART 당기 보고서 EPS 당기 누적 없음 — 앱 근사(주석 표시) ${LT.eps}` }); c.ltmExp.eps = undefined; }
+    else if (a != null && cc != null && pc == null) {
+      const okWhy = LT.eps == null && KR_WHY.prior.test(eWhy ?? "");
+      add("K4", nmE, "LTM", okWhy ? { status: PASS, note: `기대 빈칸(당기 보고서 EPS 전기 누적 칸 없음) · 앱 사유 ${eWhy}` } : { status: FAIL, app: LT.eps, note: LT.eps != null ? `기대 빈칸(당기 보고서 EPS 전기 누적 칸 없음)인데 앱 값 ${LT.eps}${eWhy ? `(사유: ${eWhy})` : ""}` : `기대 빈칸 원인 = 전기 누적 칸 없음인데 앱 사유 "${eWhy ?? "없음"}"` });
+    } else exact("K4", "LTM EPS = DART 사업연도 + 누적 − 당기 보고서 전기 누적", "LTM", LT.eps, exp, `FY${Y - 1} ${a} + ${wantTok} 누적 ${cc} − 당기 보고서 전기 누적 ${pc ?? "없음(빈칸 기대)"}`);
   }
   // LTM 재무상태표(최신 분기말) — 총차입금·현금·비지배지분, EV
   const cl = classifyBsRows(cur.rows, cur.rows, { rows: await R(Y - 1, "11011"), col: "frmtrm_amount" });
@@ -881,6 +917,22 @@ async function ltmLayer(c) {
   exact("K2", "LTM 비지배지분 = DART 최신 분기", "LTM", LT.nci ?? (rowHidden("nci") ? 0 : null), sumCol(cl.nci, "thstrm_amount") ?? 0);
   const block = evBlockWhy ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!capCur || capCur.common == null ? "KRX 현재 시가총액 없음" : null);
   ltmEvCheck(c, block, expDebt, sumCol(cl.nci, "thstrm_amount") ?? 0, sumCol(cl.cash, "thstrm_amount") ?? 0);
+}
+
+/** 재무분석 LTM 비율 — 매출총이익률·유효세율(분자·분모 모두 검증기 기대치). 분기 경로·사업보고서 시기 경로 공통(감사 11차 ③) */
+function analysisLtmRatios(c, xExp, revLtm) {
+  const { add } = c;
+  const { PASS, FAIL } = c.consts;
+  const aRow = (nm) => (c.an?.sections ?? []).flatMap((x) => x.items ?? []).find((x) => String(x.accountName ?? "").trim() === nm)?.values ?? null;
+  const lv = (o) => (o ? (o["현재/LTM"] ?? o.LTM ?? null) : null);
+  const g = aRow("매출총이익률 (%)"), t0 = aRow("유효세율 (%)");
+  const fl = (a, b) => a === b || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-12);
+  const eg = xExp.gross != null && revLtm ? (xExp.gross / revLtm) * 100 : null;
+  const et = xExp.tax != null && xExp.pretax ? (xExp.tax / xExp.pretax) * 100 : null;
+  if (!g && eg != null) add("K4", "재무분석 매출총이익률 행 존재", "LTM", { status: FAIL, note: `행 없음 — 기대 ${eg}` });
+  if (!t0 && et != null) add("K4", "재무분석 유효세율 행 존재", "LTM", { status: FAIL, note: `행 없음 — 기대 ${et}` });
+  if (g) add("K4", "재무분석 LTM 매출총이익률 = 매출총이익 ÷ 매출(검증기 기대치)", "LTM", fl(lv(g), eg) ? { status: PASS, app: lv(g), src: eg } : { status: FAIL, app: lv(g), src: eg, note: `앱 ${lv(g) ?? "빈칸"} vs ${eg ?? "빈칸"}` });
+  if (t0) add("K4", "재무분석 LTM 유효세율 = 법인세 ÷ 세전이익(검증기 기대치)", "LTM", fl(lv(t0), et) ? { status: PASS, app: lv(t0), src: et } : { status: FAIL, app: lv(t0), src: et, note: `앱 ${lv(t0) ?? "빈칸"} vs ${et ?? "빈칸"}` });
 }
 
 /** LTM EV 대조 — 공란 기대(block)·우선주 미확인(게시 전 — 검증불가, 통과로 세지 않음)·정확 대조 */

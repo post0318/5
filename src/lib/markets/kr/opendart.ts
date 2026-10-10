@@ -539,12 +539,13 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   const op = ttm("opIncome");
   const epsR = ttm("eps");
 
-  // EPS 분기데이터가 없으면 TTM 순이익 / (연간 순이익 ÷ 연간 EPS) 로 환산
+  // 당기 보고서에 EPS 당기 누적 자체가 없을 때만 TTM 순이익 / (연간 순이익 ÷ 연간 EPS) 로 환산. 당기 누적은 있고 전기 누적만 없으면
+  // 빈칸 + 사유 그대로(KR_PRIOR_MISSING) — 근사로 채우지 않는다(감사 11차 ①, 오너 결정 2026-10-10 정정본 전기 누적만)
   // 적자여도 EPS 는 음수 그대로 낸다(오너 지시 2026-09-24 — "적자여도 eps 는 나오는 것
   // 아닌가"). PER 등 배수는 소비하는 쪽이 분모 0 이하면 비운다(미국과 같은 부호 규칙).
   let eps = epsR.ttm && epsR.v != null ? epsR.v : null;
   let epsParts: KrTtmPart[] = eps != null ? epsR.parts : [];
-  if (eps == null && ni.ttm && ni.v != null) {
+  if (eps == null && reasons.eps !== KR_PRIOR_MISSING && ni.ttm && ni.v != null) {
     const annualNi = isValue(annualRows!, TTM_ACCOUNTS.netIncome, "annual", undefined, TTM_IDS.netIncome);
     const annualEps = epsValue(annualRows!, "annual");
     // 주식수 환산은 연간 순이익·EPS 부호가 같으면(적자 해 포함) 성립
