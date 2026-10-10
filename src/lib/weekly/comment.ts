@@ -347,7 +347,7 @@ function toPayloadMetric(m: { label: string; text: string; value: number; previo
   return { label: m.label, text: m.text, value: m.value, previous: m.previous, unit: m.unit };
 }
 
-interface CommentPayload {
+export interface CommentPayload {
   /** 웹검색 전용 호출(researchWebFacts)이 그 주에 확인한 사실 — 출처 도메인 포함 */
   webFacts: WebFact[];
   reportWeek: { start: string; end: string };
@@ -376,8 +376,8 @@ interface CommentPayload {
     /** 코드가 reports/news 에서 이미 뽑아 포맷한 사실 줄(evidence.ts
      * `buildFactsFromEvidence`) — headline·reading 작성의 1차 근거. */
     facts: string[];
-    reports: { date: string; source: string; stockName: string; title: string }[];
-    news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+    reports: { date: string; source: string; stockName: string; title: string; summary?: string; pdfUrl?: string }[];
+    news: { title: string; excerpt?: string; source: string; publishedAt: string; url?: string }[];
     earnings?: { ticker: string; period: string; epsActual: number | null; epsEstimate: number | null; surprisePct: number | null }[];
     /** 그 주에 새로 발표된 공식 지표만(evidence.ts fetchOfficialMetrics) — text 가 확정 표기 */
     metrics?: PayloadMetric[];
@@ -392,16 +392,16 @@ interface CommentPayload {
    * 근거로 신뢰도를 높인다). 근거가 없는 주제는 빠진다. */
   policyEvidence: {
     label: string;
-    reports: { date: string; source: string; stockName: string; title: string }[];
-    news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+    reports: { date: string; source: string; stockName: string; title: string; summary?: string; pdfUrl?: string }[];
+    news: { title: string; excerpt?: string; source: string; publishedAt: string; url?: string }[];
   }[];
   /** "경기" 계열(관세·중국 경기·고용·브라질 국채·금·원달러·구리·BDI) 근거 —
    * policyEvidence 와 같은 구조·같은 이유(오너 지시 2026-09-21, "5. 경제"
    * 섹션 신설). 근거가 없는 주제는 빠진다. */
   economyEvidence: {
     label: string;
-    reports: { date: string; source: string; stockName: string; title: string }[];
-    news: { title: string; excerpt?: string; source: string; publishedAt: string }[];
+    reports: { date: string; source: string; stockName: string; title: string; summary?: string; pdfUrl?: string }[];
+    news: { title: string; excerpt?: string; source: string; publishedAt: string; url?: string }[];
   }[];
   sectors: {
     id: string;
@@ -770,7 +770,24 @@ function buildPayload(
   sectors: WeeklySectors,
   meetings: CbMeeting[],
   extras: CommentExtras,
+  /** claude.ai 커넥터용 — 리포트 요약 발췌·PDF·기사 링크까지 싣는다(Gemini 입력은 그대로) */
+  rich = false,
 ): CommentPayload {
+  const rep = (r: WeeklyIssue["reports"][number], max: number) => ({
+    date: r.date,
+    source: r.source,
+    stockName: r.stockName,
+    title: r.title,
+    ...(rich && r.summary ? { summary: r.summary.slice(0, max) } : {}),
+    ...(rich && r.pdfUrl ? { pdfUrl: r.pdfUrl } : {}),
+  });
+  const nws = (n: WeeklyIssue["news"][number]) => ({
+    title: n.title,
+    excerpt: n.excerpt,
+    source: n.source,
+    publishedAt: n.publishedAt,
+    ...(rich && n.url ? { url: n.url } : {}),
+  });
   const weekEndMs = Date.parse(`${week.weekEnd}T00:00:00Z`);
   const nextStart = new Date(weekEndMs + 3 * 86_400_000).toISOString().slice(0, 10); // 금→월
   const nextEnd = new Date(weekEndMs + 7 * 86_400_000).toISOString().slice(0, 10); // 금→그다음 금
@@ -778,26 +795,16 @@ function buildPayload(
     const found = allIssues.find((i) => i.label === label);
     return {
       label,
-      reports: (found?.reports ?? []).map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
-      news: (found?.news ?? []).map((n) => ({
-        title: n.title,
-        excerpt: n.excerpt,
-        source: n.source,
-        publishedAt: n.publishedAt,
-      })),
+      reports: (found?.reports ?? []).slice(0, rich ? 6 : undefined).map((r) => rep(r, 250)),
+      news: (found?.news ?? []).slice(0, rich ? 15 : 5).map(nws),
     };
   }).filter((p) => p.reports.length > 0 || p.news.length > 0);
   const economyEvidence = ECONOMY_TOPIC_LABELS.map((label) => {
     const found = allIssues.find((i) => i.label === label);
     return {
       label,
-      reports: (found?.reports ?? []).map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
-      news: (found?.news ?? []).map((n) => ({
-        title: n.title,
-        excerpt: n.excerpt,
-        source: n.source,
-        publishedAt: n.publishedAt,
-      })),
+      reports: (found?.reports ?? []).slice(0, rich ? 6 : undefined).map((r) => rep(r, 250)),
+      news: (found?.news ?? []).slice(0, rich ? 15 : 5).map(nws),
     };
   }).filter((p) => p.reports.length > 0 || p.news.length > 0);
   return {
@@ -831,13 +838,8 @@ function buildPayload(
       newsCount: i.newsCount,
       searchInterest: i.searchInterest,
       facts: i.facts,
-      reports: i.reports.map((r) => ({ date: r.date, source: r.source, stockName: r.stockName, title: r.title })),
-      news: i.news.map((n) => ({
-        title: n.title,
-        excerpt: n.excerpt,
-        source: n.source,
-        publishedAt: n.publishedAt,
-      })),
+      reports: i.reports.map((r) => rep(r, 500)),
+      news: i.news.slice(0, rich ? 15 : 5).map(nws),
       earnings: i.earnings?.map((e) => ({
         ticker: e.ticker,
         period: e.period,
@@ -949,6 +951,7 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
     }
     for (const r of i.reports) {
       nums.push(...extractNumbers(r.title));
+      if (r.summary) nums.push(...extractNumbers(r.summary));
     }
     for (const n of i.news) {
       nums.push(...extractNumbers(n.title));
@@ -959,7 +962,10 @@ function buildAllowedNumbers(payload: CommentPayload): number[] {
   // 근거 기사의 수치("실업률 4.2%")를 인용하기만 해도 "근거 없는 수치"로 통째로
   // 버려졌다(2026-10-05 발견, policyEvidence 와 같은 자기모순).
   for (const p of [...payload.policyEvidence, ...payload.economyEvidence]) {
-    for (const r of p.reports) nums.push(...extractNumbers(r.title));
+    for (const r of p.reports) {
+      nums.push(...extractNumbers(r.title));
+      if (r.summary) nums.push(...extractNumbers(r.summary));
+    }
     for (const n of p.news) {
       nums.push(...extractNumbers(n.title));
       if (n.excerpt) nums.push(...extractNumbers(n.excerpt));
@@ -1334,29 +1340,24 @@ async function researchWebFacts(
  * 호출부는 rule-based(빈 코멘트)로 조용히 폴백한다(이 프로젝트의 기존
  * "실패 시 해당 부분만 생략" 패턴과 동일).
  */
-export async function generateWeeklyComments(
-  snapshot: SnapshotRow[],
-  issues: WeeklyIssue[],
-  week: ReportWeek,
-  allIssues: WeeklyIssue[],
-  sectors: WeeklySectors,
-  extras: CommentExtras,
-  /** 모델 비교용 — 주면 그 모델만 쓴다(폴백 없음). */
-  modelOverride?: string,
-): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
-  if (!isGeminiConfigured() || issues.length === 0) return null;
+/** 모델(Gemini·claude.ai 커넥터) 응답을 검증해 코멘트로 확정한다 — 두 경로가 같은 검사를 거친다. */
+interface AssembleInput {
+  payload: CommentPayload;
+  allMeetings: CbMeeting[];
+  week: ReportWeek;
+  extras: CommentExtras;
+  macroParsed: MacroResponse | null;
+  macroTrustGrounded: boolean;
+  commentParsed: CommentsOnlyResponse | null;
+  commentTrustGrounded: boolean;
+  dropReasons: Map<string, string>;
+  webFacts: WebFact[];
+  /** 커넥터 전용 — 날짜 확인된 웹 출처가 있으면 주도 종목 기사(headlines)가 없는 섹터도 사유를 받는다(주도 종목 이름 검사는 그대로) */
+  sectorWebOk?: boolean;
+}
 
-  // 중앙은행 회의 일정은 공식 소스에서 가져온다(cb-calendar.ts). 프롬프트
-  // 입력과 "다음 주 일정" 캘린더가 같은 목록을 쓰도록 여기서 한 번만 조회.
-  const allMeetings = await getCentralBankMeetings();
-  // 프롬프트에는 앞으로 남은 것만 넘기고, 검증은 지난 회의 언급("9월
-  // FOMC에서 인상")도 참으로 봐야 해서 전체 목록을 쓴다.
-  const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
-  const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras);
-  // 웹검색 전용 소형 호출을 먼저 돌려 그 주 사실을 모은다(아래 researchWebFacts 주석).
-  const research = await researchWebFacts(payload, modelOverride);
-  payload.webFacts = research.facts;
-  const userJson = JSON.stringify(payload);
+function assembleComments(a: AssembleInput): WeeklyComments {
+  const { payload, allMeetings, week, extras, macroParsed, macroTrustGrounded, commentParsed, commentTrustGrounded, dropReasons } = a;
   const allowed = buildAllowedNumbers(payload);
   /**
    * 검증 두 단계를 한 번에 — 수치 대조(그라운딩 성공 시 건너뜀)와 중앙은행
@@ -1372,27 +1373,9 @@ export async function generateWeeklyComments(
     const aligned = alignSnapshotNumbers(step2.text, payload.snapshot, allowed);
     return { text: annotateNextMeeting(aligned, allMeetings, week.weekEnd), reason: null };
   };
-  const dropReasons = new Map<string, string>();
-  if (research.note) dropReasons.set("webFacts", research.note);
   const snapshotNames = payload.snapshot.map((r) => r.name);
   const issueLabels = payload.issues.map((i) => i.label);
   const sectorIds = payload.sectors.map((s) => s.id);
-  // 매크로 콜(한 줄 결론·정책요약·캘린더)은 sectors 를 전혀 안 쓴다 — 그런데도
-  // 코멘트 콜과 같은 payload(userJson)를 그대로 넘기면 섹터 16개만큼 입력이
-  // 불필요하게 커져서, 이미 그라운딩 미스가 잦다고 알려진 매크로 콜(재시도
-  // 로직이 있는 이유)의 실패율을 더 키운다(실측 — sectors 추가 이후 "다음 주
-  // 일정"이 옛 기사-표 폴백으로 자주 떨어짐). 매크로 콜에는 sectors 를 뺀
-  // 별도 payload 를 준다.
-  const nextWeekSchedule = extras.schedule;
-  const macroJson = JSON.stringify({ ...payload, sectors: undefined, nextWeekSchedule });
-
-  const [macroCall, commentCall] = await Promise.all([
-    callWithGroundingRetry(MACRO_PROMPT, macroJson, "매크로", modelOverride, research.facts.length > 0 ? 1 : 2),
-    callWithGroundingRetry(COMMENT_PROMPT, userJson, "코멘트", modelOverride, research.facts.length > 0 ? 1 : 2),
-  ]);
-  const macroResult = macroCall.result;
-  const commentResult = commentCall.result;
-
   const comments: WeeklyComments = {
     headline: null,
     economySummary: null,
@@ -1402,17 +1385,9 @@ export async function generateWeeklyComments(
     issues: new Map(),
     sectors: new Map(),
     dropReasons,
-    webFacts: research.facts,
+    webFacts: a.webFacts,
   };
 
-  // --- 매크로(한 줄 결론·정책요약·캘린더) ---
-  const macroParsed = parseJson<MacroResponse>(macroResult.text, "매크로");
-  const macroTrustGrounded = macroResult.groundingSources.length > 0;
-  console.warn(
-    `[weekly] Gemini(매크로) 응답 요약 — model=${macroResult.model}, 응답길이=${macroResult.text.length}자, ` +
-      `groundingSources=${macroResult.groundingSources.length}건, trustGrounded=${macroTrustGrounded}, ` +
-      `parseJson성공=${macroParsed != null}`,
-  );
   if (macroParsed?.headline) {
     const r = verify(macroParsed.headline, macroTrustGrounded);
     comments.headline = r.text || null;
@@ -1513,15 +1488,6 @@ export async function generateWeeklyComments(
     );
   }
 
-  // --- 코멘트(스냅샷·이슈) ---
-  const commentParsed = parseJson<CommentsOnlyResponse>(commentResult.text, "코멘트");
-  const commentTrustGrounded = commentResult.groundingSources.length > 0;
-  console.warn(
-    `[weekly] Gemini(코멘트) 응답 요약 — model=${commentResult.model}, 응답길이=${commentResult.text.length}자, ` +
-      `groundingSources=${commentResult.groundingSources.length}건, trustGrounded=${commentTrustGrounded}, ` +
-      `parseJson성공=${commentParsed != null}`,
-  );
-
   for (const [rawName, text] of Object.entries(commentParsed?.snapshot ?? {})) {
     const canonical = matchCanonical(rawName, snapshotNames);
     if (!canonical) {
@@ -1576,7 +1542,7 @@ export async function generateWeeklyComments(
     // 버리고, 한국 섹터는 코멘트가 주도 종목 이름을 하나라도 짚어야 한다(해외는
     // 한글 표기가 제각각이라 이름 검사는 하지 않는다).
     const sec = payload.sectors.find((s) => s.id === rawId)!;
-    if (sec.headlines.length === 0) {
+    if (sec.headlines.length === 0 && !(a.sectorWebOk && commentTrustGrounded)) {
       if (String(text ?? "").trim()) {
         dropReasons.set(`sector:${rawId}`, "주도 종목의 그 주 기사를 찾지 못해 사유를 싣지 않음(근거 없음)");
       }
@@ -1622,6 +1588,80 @@ export async function generateWeeklyComments(
     );
   }
 
+  return comments;
+}
+
+export async function generateWeeklyComments(
+  snapshot: SnapshotRow[],
+  issues: WeeklyIssue[],
+  week: ReportWeek,
+  allIssues: WeeklyIssue[],
+  sectors: WeeklySectors,
+  extras: CommentExtras,
+  /** 모델 비교용 — 주면 그 모델만 쓴다(폴백 없음). */
+  modelOverride?: string,
+): Promise<{ comments: WeeklyComments; result: GeminiResult } | null> {
+  if (!isGeminiConfigured() || issues.length === 0) return null;
+
+  // 중앙은행 회의 일정은 공식 소스에서 가져온다(cb-calendar.ts). 프롬프트
+  // 입력과 "다음 주 일정" 캘린더가 같은 목록을 쓰도록 여기서 한 번만 조회.
+  const allMeetings = await getCentralBankMeetings();
+  // 프롬프트에는 앞으로 남은 것만 넘기고, 검증은 지난 회의 언급("9월
+  // FOMC에서 인상")도 참으로 봐야 해서 전체 목록을 쓴다.
+  const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
+  const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras);
+  // 웹검색 전용 소형 호출을 먼저 돌려 그 주 사실을 모은다(아래 researchWebFacts 주석).
+  const research = await researchWebFacts(payload, modelOverride);
+  payload.webFacts = research.facts;
+  const userJson = JSON.stringify(payload);
+  const dropReasons = new Map<string, string>();
+  if (research.note) dropReasons.set("webFacts", research.note);
+  // 매크로 콜(한 줄 결론·정책요약·캘린더)은 sectors 를 전혀 안 쓴다 — 그런데도
+  // 코멘트 콜과 같은 payload(userJson)를 그대로 넘기면 섹터 16개만큼 입력이
+  // 불필요하게 커져서, 이미 그라운딩 미스가 잦다고 알려진 매크로 콜(재시도
+  // 로직이 있는 이유)의 실패율을 더 키운다(실측 — sectors 추가 이후 "다음 주
+  // 일정"이 옛 기사-표 폴백으로 자주 떨어짐). 매크로 콜에는 sectors 를 뺀
+  // 별도 payload 를 준다.
+  const nextWeekSchedule = extras.schedule;
+  const macroJson = JSON.stringify({ ...payload, sectors: undefined, nextWeekSchedule });
+
+  const [macroCall, commentCall] = await Promise.all([
+    callWithGroundingRetry(MACRO_PROMPT, macroJson, "매크로", modelOverride, research.facts.length > 0 ? 1 : 2),
+    callWithGroundingRetry(COMMENT_PROMPT, userJson, "코멘트", modelOverride, research.facts.length > 0 ? 1 : 2),
+  ]);
+  const macroResult = macroCall.result;
+  const commentResult = commentCall.result;
+
+  // --- 매크로(한 줄 결론·정책요약·캘린더) ---
+  const macroParsed = parseJson<MacroResponse>(macroResult.text, "매크로");
+  const macroTrustGrounded = macroResult.groundingSources.length > 0;
+  console.warn(
+    `[weekly] Gemini(매크로) 응답 요약 — model=${macroResult.model}, 응답길이=${macroResult.text.length}자, ` +
+      `groundingSources=${macroResult.groundingSources.length}건, trustGrounded=${macroTrustGrounded}, ` +
+      `parseJson성공=${macroParsed != null}`,
+  );
+  // --- 코멘트(스냅샷·이슈) ---
+  const commentParsed = parseJson<CommentsOnlyResponse>(commentResult.text, "코멘트");
+  const commentTrustGrounded = commentResult.groundingSources.length > 0;
+  console.warn(
+    `[weekly] Gemini(코멘트) 응답 요약 — model=${commentResult.model}, 응답길이=${commentResult.text.length}자, ` +
+      `groundingSources=${commentResult.groundingSources.length}건, trustGrounded=${commentTrustGrounded}, ` +
+      `parseJson성공=${commentParsed != null}`,
+  );
+
+  const comments = assembleComments({
+    payload,
+    allMeetings,
+    week,
+    extras,
+    macroParsed,
+    macroTrustGrounded,
+    commentParsed,
+    commentTrustGrounded,
+    dropReasons,
+    webFacts: research.facts,
+  });
+
   // 재시도분까지 포함해 실제 청구된 비용을 전부 합산한다(재시도로 버린 첫
   // 응답도 돈은 이미 냈으므로 usage 에서 누락하면 안 됨). 이제 코멘트
   // 호출도 재시도를 타므로 두 호출의 attempts 를 함께 센다.
@@ -1647,4 +1687,409 @@ export async function generateWeeklyComments(
   };
 
   return { comments, result: mergedResult };
+}
+
+// ---- claude.ai 커넥터(`/api/mcp`, 오너 지시 2026-10-10) -------------------------
+// Anthropic API 대신 오너 구독의 claude.ai 가 이 앱 데이터를 받아 해석을 쓴다(추가 비용 0).
+// 입력은 Gemini 와 같은 payload 에 리포트 요약 발췌·링크를 더한 것(rich), 출력은 같은
+// 검증(assembleComments)을 거친다. 차이는 하나 — Claude 가 웹에서 확인한 출처(sources)를
+// 같이 보내면 Gemini 그라운딩 성공과 같게 보고 숫자 대조를 건너뛴다. 회의 월 검사는 항상.
+
+function beforeOutputSection(prompt: string): string {
+  const i = prompt.indexOf("\n# 출력 형식");
+  return (i >= 0 ? prompt.slice(0, i) : prompt).trim();
+}
+
+export const CONNECTOR_GUIDE = `${beforeOutputSection(MACRO_PROMPT)}
+
+${beforeOutputSection(COMMENT_PROMPT).slice(beforeOutputSection(COMMENT_PROMPT).indexOf("# 작성 원칙")).replace("# 작성 원칙", "# 작성 원칙 (자산·이슈·섹터 코멘트)")}
+
+# claude.ai 커넥터로 쓸 때 (위 규칙에 더해)
+- 순서: get_weekly_data 로 받은 data 를 읽고 → 웹검색으로 그 주 사실을 확인하며 쓴 뒤 →
+  save_weekly_draft 로 저장한다. preview:true 로 먼저 보내면 저장 없이 완성 본문과 폐기 사유를 돌려준다.
+- data.webFacts 는 비어 있다(Gemini 전용 단계) — 필요한 사실은 직접 웹검색으로 확인한다.
+- 리포트 근거(reports)에는 증권사 리포트 요약 발췌(summary)와 PDF 링크가 있다. 제목만 보지 말고 발췌를 읽고 쓴다.
+- **issues.reading** 은 (a) 무엇이 일어났고 왜 중요한지(메커니즘) → (b) 다음에 무엇을 볼 것인가 →
+  (c) 그에 따른 대응 방안(투자 시사점)을 이어서 한 문단으로 쓴다(오너 지시 2026-10-10 — "무엇을 볼 것인가 다음에
+  이어 쓰면 된다"). 200~500자. 방안도 단정하지 말고 조건부로("~라면 ~유리").
+- **출처 번호**: 웹에서 확인한 사실은 sources 에 {title,url,date} 로 넣고, 그 사실을 쓴 **문장 끝에 [번호]**(sources 순번,
+  1부터. 여러 개면 [1,3])를 단다. 서버는 문장 단위로 검사한다 — data 에 없는 수치(%·bp·달러·원·명·억 등)가 든 문장에 유효한
+  번호가 없으면 그 문장을 지우고, 기간 밖·블로그·커뮤니티 출처를 단 문장도 지운다. 번호는 화면에서 지워진다(출처 목록은 검수용 보관).
+  출처는 언론사·정부·중앙은행·통계기관·증권사·기업 공식 발표만 — 개인 블로그·카페·커뮤니티·SNS·유튜브는 쓰지 않는다.
+- calendar 에는 data.codeCalendar(코드가 이미 확정해 싣는 일정)에 **없는 것만** 넣는다 — 같은 행사를 다른 말로
+  다시 쓰면 표에 두 번 나간다.
+- **검증(오너 지시 2026-10-10 — "정보에 대한 검증은 철저해야", "일년전에 발표하고 우연히 지금 맞을수도 있기에")**:
+  - 쓰는 사실은 모두 reportWeek(앞뒤 주말 포함)에 나온 것이어야 한다. 웹에서 찾은 글은 **발행일을 확인**하고 sources 에
+    date(YYYY-MM-DD)로 넣는다 — 날짜가 없거나 기간 밖인 출처는 서버가 버리고, 남은 출처가 없으면 입력에 없는 수치가 든 문장은
+    저장되지 않는다. 오래된 전망·리포트가 지금 상황과 맞아 보여도 이번 주 근거로 쓰지 않는다.
+  - 핵심 주장에는 **수치를 명시**한다(지표 값·예상치·변동폭·금리 수준 등). issues.reading 과 headline 에 수치가 하나도 없으면
+    저장 결과에 경고가 돌아온다.
+  - 증권사 의견은 **여러 시각 중 하나**로 쓴다("○○증권은 ~로 봄"). 단정적 사실처럼 옮기지 말고, 가능하면 지표·가격 같은 시장
+    데이터와 함께 쓴다. 증권사 이름은 data 의 reports 나 sources 에 실제로 있는 것만 — 없는 증권사를 인용하면 그 칸은 버려진다.
+  - **뉴스가 가장 빠른 원천이다**(오너 2026-10-10). 그 주 화두는 issues[].news·policyEvidence/economyEvidence 의 news 와 웹 뉴스
+    검색(그 주 날짜)으로 먼저 잡고, 증권사 리포트는 그 해석·전망 쪽 근거로 쓴다.
+- **국내와 글로벌을 같이 다룬다(오너 지적 2026-10-10 — "한줄결론에서 국내는 … 부족")**: 이 리포트의 독자는 한국 투자자다.
+  headline 은 국내(코스피·코스닥·원화와 그 원인)와 글로벌(미 금리·주식·원자재)을 **모두** 담는다. 국내 사실은 data 에 적게 들어
+  있으니 **한국어로 따로 검색**한다 — 그 주 수출입 동향(산업통상부), 외국인·기관 순매수, 한국은행·정부 정책, 국내 대형주 실적·
+  잠정실적, 국내 섹터 주도 종목(data.sectors 의 코스피·코스닥 leaders) 뉴스. 섹터 사유는 그 검색으로 확인한 기사 출처가 있으면
+  써도 된다(서버는 국내 섹터에 주도 종목 이름이 들어 있는지 확인한다).
+- **economySummary 에는 주식 얘기를 쓰지 않는다**(오너 지적 2026-10-10): 실물 지표(PMI·고용·물가·수출입·소매판매 등)·
+  정책(재정·부양책·관세)·원자재·환율만. 주가지수·증시 등락·업종·증권사 투자의견은 넣지 않는다(그런 줄은 서버가 버린다).
+  economyEvidence 에 주식 전략 리포트가 섞여 있어도 그걸로 줄을 채우지 말고, 그 주제의 실물 지표를 웹에서 찾거나 줄을 뺀다.
+- 키는 data 의 값을 그대로: snapshot = snapshot[].name, issues = issues[].label, sectors = sectors[].id.
+- 표·숫자·구조는 서버 코드가 만든다. 문장만 보낸다.`;
+
+/** get_weekly_data 응답용 — 리포트 요약 발췌를 담은 payload(webFacts 는 비움) */
+export async function buildConnectorPayload(
+  snapshot: SnapshotRow[],
+  issues: WeeklyIssue[],
+  week: ReportWeek,
+  allIssues: WeeklyIssue[],
+  sectors: WeeklySectors,
+  extras: CommentExtras,
+): Promise<CommentPayload & { nextWeekSchedule: ScheduleItem[]; codeCalendar: { date: string; event: string }[] }> {
+  const allMeetings = await getCentralBankMeetings();
+  const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
+  return {
+    ...buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras, true),
+    nextWeekSchedule: extras.schedule,
+    // 코드가 이미 확정해 "7. 다음 주 주시 일정"에 싣는 일정 — calendar 에는 여기 없는 것만 보내게(중복 방지)
+    codeCalendar: extras.codeCalendar,
+  };
+}
+
+/** save_weekly_draft 입력 — Gemini 두 호출의 응답 스키마를 합친 것 */
+export interface ConnectorComments {
+  headline?: string;
+  economySummary?: string;
+  policySummary?: string;
+  calendar?: { date?: string; event?: string }[];
+  snapshot?: Record<string, string>;
+  issues?: Record<string, string | { headline?: unknown; reading?: unknown }>;
+  sectors?: Record<string, string>;
+}
+
+export async function assembleConnectorComments(
+  snapshot: SnapshotRow[],
+  issues: WeeklyIssue[],
+  week: ReportWeek,
+  allIssues: WeeklyIssue[],
+  sectors: WeeklySectors,
+  extras: CommentExtras,
+  input: ConnectorComments,
+  /** 날짜·등급 검사를 통과한 웹 출처(본문의 [번호] = sources 순번) / 버린 출처의 번호 */
+  srcs: { valid: { id: number; title: string }[]; invalidIds: number[] },
+): Promise<{ comments: WeeklyComments; warnings: string[] }> {
+  const allMeetings = await getCentralBankMeetings();
+  const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
+  const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras, true);
+  const sourceTitles = srcs.valid.map((x) => x.title);
+  const trusted = sourceTitles.length > 0;
+  // 1) 문장별 출처(오너 2026-10-10): data 에 없는 수치는 그 문장에 유효 출처 번호가 있어야 남는다, 버린 출처를 단 문장은 지운다
+  const cited = applyCitationRules(input, payload, new Set(srcs.valid.map((x) => x.id)), new Set(srcs.invalidIds));
+  if (!trusted) cited.cleaned.calendar = undefined; // 날짜 확인된 출처 없이 지은 일정은 받지 않는다(코드 일정은 그대로)
+  // 2) 증권사 인용·경제 요약의 주식 내용
+  const { cleaned, reasons } = checkBrokerCitations(cited.cleaned, payload, sourceTitles);
+  for (const [k, v] of cited.reasons) reasons.set(k, reasons.has(k) ? `${v} / ${reasons.get(k)}` : v);
+  // 수치 검사는 위 1)이 문장 단위로 끝냈으므로 assembleComments 의 통째 폐기 검사는 건너뛴다(trustGrounded=true)
+  const comments = assembleComments({
+    payload,
+    allMeetings,
+    week,
+    extras,
+    macroParsed: {
+      headline: cleaned.headline,
+      economySummary: cleaned.economySummary,
+      policySummary: cleaned.policySummary,
+      calendar: cleaned.calendar,
+    },
+    macroTrustGrounded: true,
+    commentParsed: { snapshot: cleaned.snapshot, issues: cleaned.issues, sectors: cleaned.sectors },
+    commentTrustGrounded: true,
+    dropReasons: new Map(),
+    webFacts: [],
+    sectorWebOk: trusted,
+  });
+  // 증권사 인용 폐기 사유가 "모델이 생성하지 않음" 같은 일반 사유에 덮이지 않게 마지막에 덮어쓴다
+  for (const [k, v] of reasons) comments.dropReasons.set(k, v);
+
+  // 핵심 수치 명시(오너 지시 2026-10-10) — 버리지는 않고 경고로 돌려줘 고쳐 쓰게 한다
+  const warnings: string[] = [];
+  const hasNum = (t: string | null | undefined) => /\d/.test(t ?? "");
+  if (comments.headline && !hasNum(comments.headline)) warnings.push("headline: 핵심 수치가 없음");
+  for (const [label, c] of comments.issues) if (!hasNum(c.reading)) warnings.push(`issue:${label}: 해석에 핵심 수치가 없음`);
+  if (!trusted) warnings.push("날짜가 확인된 웹 출처가 없음 — 입력 data 에 없는 수치는 문장째 버려짐");
+  return { comments, warnings };
+}
+
+/**
+ * 증권사 인용 검사(오너 지시 2026-10-10 — "증권사명을 넣는것도 좋지만 그건 여러개의 의견 중 하나일뿐이라 주간에 나온 이슈에
+ * 대한것이 맞는지도 검증"). 문장에 "○○증권"이 나오면 그 주 data(reports 의 source — 수집 단계에서 이미 리포트 주로 걸러짐)나
+ * 날짜 검사를 통과한 웹 출처 제목에 그 증권사가 있어야 한다. 없으면 그 칸(줄 목록은 그 줄)만 버린다.
+ */
+const BROKER_RE = /([가-힣A-Za-z]{1,10}(?:투자증권|금융투자|증권))(?!사)/g;
+
+/**
+ * 문장별 출처 검사(오너 2026-10-10 — "정보에 대한 검증은 철저해야"; Opus 시험본에서 출처 목록에 없는 "브렌트유 9월 14%"·"한국 CPI
+ * 2.9%"가 출처 1건만 있어도 통째로 믿는 방식 때문에 통과했다). 단위가 붙은 수치(%·bp·달러·명 등)가 그 주 data 에 없으면 그 문장에
+ * 유효한 출처 번호([n])가 있어야 한다. 버린 출처(기간 밖·블로그)를 단 문장은 수치와 무관하게 지운다. 지우는 단위는 문장.
+ */
+const CLAIM_RE = /(-?\d[\d,]*(?:\.\d+)?)\s*(%p|%|bp|배럴|배|pt|건|달러|원|엔|위안|유로|헤알|만\s?명|명|만|억|조)/g;
+const CITE_RE = /\[(\d+(?:\s*[,，]\s*\d+)*)\]/g;
+const SKIP_KEYS = new Set(["researchCount", "newsCount", "searchInterest", "date", "publishedAt", "startDate", "endDate", "asOf", "url", "pdfUrl", "id"]);
+
+/** 단위 묶음 — "14%"는 data 에 %로 나온 14 가 있어야 하고, 숫자 14 가 다른 단위(건수·날짜)로 있는 것으론 안 된다 */
+function unitFamily(unit: string): string {
+  const u = unit.replace(/\s+/g, "");
+  if (u === "%" || u === "%p") return "%";
+  if (u === "$" || u.startsWith("$/") || u === "달러") return "달러";
+  if (u === "만명") return "만";
+  return u;
+}
+
+/**
+ * 같은 대상인지 보는 낱말 — 오너 지적(2026-10-11 — "전혀 다른게 나온걸 어떻게 같다고 보지?"): 숫자·단위만 맞으면 통과시켜
+ * "브렌트유 … 14%"가 같은 주 인피니온 +13.98% 와 맞아 버렸다. 이제 data 의 수치마다 그 수치가 무엇에 관한 것인지(표 행 이름·
+ * 섹터·종목, 글이면 수치 앞뒤 낱말)를 같이 들고, 문장에 그 낱말이 하나라도 있어야 같은 수치로 인정한다.
+ */
+const PARTICLE_RE = /(으로|에서|에게|까지|부터|이며|이고|이다|은|는|이|가|을|를|의|에|로|와|과|도|만|엔|서)$/;
+const STOP_WORDS = new Set([
+  "주간", "이번", "지난", "전주", "전월", "전년", "전년비", "전월비", "대비", "상승", "하락", "증가", "감소", "기록", "예상", "예상치",
+  "수준", "올해", "최근", "기준", "발표", "확대", "축소", "급등", "급락", "강세", "약세", "반등", "마감", "시장", "증시", "지수",
+  "미국", "한국", "국내", "중국", "일본", "유럽", "글로벌", "해외", "투자", "전망", "가격", "관련", "영향", "부담", "우려", "기대",
+  "the", "and", "for", "with", "inc", "corp", "ltd", "co", "group", "plc", "ag", "nv", "sa",
+]);
+
+function subjectTokens(text: string): string[] {
+  const out: string[] = [];
+  for (const w of text.match(/[가-힣]{2,}|[A-Za-z][A-Za-z0-9&]{1,}/g) ?? []) {
+    let t = /[가-힣]/.test(w) ? w.replace(PARTICLE_RE, "") : w.toLowerCase();
+    if (t.length < 2 || STOP_WORDS.has(t)) continue;
+    if (/[가-힣]/.test(t) && t.length > 6) t = t.slice(0, 6); // 긴 복합어는 앞부분으로 비교
+    out.push(t);
+  }
+  return out;
+}
+
+/** 두 낱말 묶음이 같은 대상을 가리키는지 — 한쪽이 다른 쪽으로 시작하면(조사·어미 차이) 같은 낱말로 본다 */
+function sharesSubject(a: string[], b: string[]): boolean {
+  return a.some((x) => b.some((y) => x === y || (x.length >= 2 && y.length >= 2 && (x.startsWith(y) || y.startsWith(x)))));
+}
+
+interface DataNumber {
+  fam: string;
+  value: number;
+  /** 이 수치가 무엇에 관한 것인지 — 표 행 이름·섹터·종목·지표명, 글이면 수치 앞뒤 40자 낱말 */
+  subject: string[];
+}
+
+/** data 에 나온 수치와 그 대상 — 텍스트는 CLAIM_RE 로, 숫자 필드는 그 필드의 단위·이름으로 */
+function dataNumbers(payload: CommentPayload): DataNumber[] {
+  const out: DataNumber[] = [];
+  const add = (fam: string, n: number, subjectText: string) => {
+    if (Number.isFinite(n)) out.push({ fam, value: Math.abs(n), subject: subjectTokens(subjectText) });
+  };
+  const take = (s: string) => {
+    const t = s.replace(/https?:\/\/\S+/g, "");
+    for (const m of t.matchAll(CLAIM_RE)) {
+      const at = m.index ?? 0;
+      add(unitFamily(m[2]), Number(m[1].replace(/,/g, "")), t.slice(Math.max(0, at - 40), at + m[0].length + 20));
+    }
+  };
+  const walk = (v: unknown, key = ""): void => {
+    if (SKIP_KEYS.has(key)) return;
+    if (typeof v === "string") take(v);
+    else if (Array.isArray(v)) v.forEach((x) => walk(x));
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, k);
+  };
+  walk({ ...payload, centralBankMeetings: [], snapshot: [], sectors: [] });
+  for (const r of payload.snapshot) {
+    if (r.value != null) add(unitFamily(r.unit), r.value, r.name);
+    if (r.pct != null) add("%", r.pct, r.name);
+    if (r.diffBp != null) add("bp", r.diffBp, r.name);
+  }
+  for (const s of payload.sectors) {
+    add("%", s.pct, `${s.market} ${s.label}`);
+    for (const l of s.leaders) add("%", l.pct, l.name);
+    for (const h of s.headlines) take(h);
+  }
+  for (const i of payload.issues) {
+    for (const e of i.earnings ?? []) if (e.surprisePct != null) add("%", e.surprisePct, `${e.ticker} 실적 서프라이즈`);
+    for (const m of i.metrics ?? []) {
+      add(unitFamily(m.unit), m.value, m.label);
+      if (m.previous != null) add(unitFamily(m.unit), m.previous, m.label);
+    }
+  }
+  for (const m of payload.economyMetrics) {
+    add(unitFamily(m.unit), m.value, m.label);
+    if (m.previous != null) add(unitFamily(m.unit), m.previous, m.label);
+  }
+  return out;
+}
+
+function applyCitationRules(
+  input: ConnectorComments,
+  payload: CommentPayload,
+  valid: Set<number>,
+  invalid: Set<number>,
+): { cleaned: ConnectorComments; reasons: Map<string, string> } {
+  const known = dataNumbers(payload);
+  /** 같은 단위·같은 값(반올림 범위)이면서 **같은 대상**(문장에 그 수치의 대상 낱말이 있음)인 data 수치가 있는가 */
+  const inData = (n: number, unit: string, sentenceSubject: string[]) => {
+    const a = Math.abs(n);
+    const fam = unitFamily(unit);
+    const tol = fam === "bp" ? 1 : a < 20 ? 0.051 : Math.max(0.5, a * 0.002);
+    return known.some((k) => k.fam === fam && Math.abs(k.value - a) <= tol && sharesSubject(k.subject, sentenceSubject));
+  };
+  const sentenceProblem = (s: string): string | null => {
+    const ids = [...s.matchAll(CITE_RE)].flatMap((m) => m[1].split(/[,，]/).map((x) => Number(x.trim())));
+    const bad = ids.filter((id) => invalid.has(id) || !valid.has(id));
+    if (bad.length) return `무효 출처 [${bad.join(",")}] 인용(기간 밖·블로그·없는 번호)`;
+    const cited = ids.length > 0;
+    const body = s.replace(CITE_RE, "");
+    const subj = subjectTokens(body);
+    for (const m of body.matchAll(CLAIM_RE)) {
+      const n = Number(m[1].replace(/,/g, ""));
+      if (!Number.isFinite(n) || inData(n, m[2], subj)) continue;
+      if (!cited) return `출처 번호 없는 수치 "${m[0].trim()}"(그 주 data 에 같은 대상의 값 없음)`;
+    }
+    return null;
+  };
+  const reasons = new Map<string, string>();
+  const clean = (key: string, text: string | undefined, extra?: (s: string) => string | null): string | undefined => {
+    if (!text) return text;
+    const bad: string[] = [];
+    const lines = text.split(/\r?\n/).map((line) => {
+      // "- 미국 연준(Fed): …" 줄머리는 첫 문장이 지워져도 남긴다
+      const head = /^(\s*-\s*[^:：]{1,20}[:：]\s*)/.exec(line)?.[1] ?? "";
+      const kept = line
+        .slice(head.length)
+        .split(/(?<=[.。])\s+/)
+        .filter((s) => {
+          const r = s.trim() ? (sentenceProblem(s) ?? extra?.(s) ?? null) : null;
+          if (r) bad.push(`${s.trim().slice(0, 24)}… — ${r}`);
+          return !r;
+        })
+        .join(" ");
+      return kept.trim() ? head + kept : "";
+    });
+    if (bad.length) reasons.set(key, `문장 폐기: ${bad.join(" / ")}`);
+    return lines.filter((l) => l.trim() && !/^\s*-\s*[^:]{1,20}:\s*$/.test(l)).join("\n").trim() || undefined;
+  };
+  const rec = (prefix: string, obj: Record<string, string> | undefined) => {
+    if (!obj) return obj;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      const t = clean(`${prefix}:${k}`, v);
+      if (t) out[k] = t;
+    }
+    return out;
+  };
+  const issues: ConnectorComments["issues"] = {};
+  for (const [k, v] of Object.entries(input.issues ?? {})) {
+    if (typeof v === "string") {
+      const t = clean(`issue:${k}`, v);
+      if (t) issues[k] = t;
+      continue;
+    }
+    const reading = clean(`issue:${k}`, typeof v?.reading === "string" ? v.reading : undefined);
+    const headline = typeof v?.headline === "string" && !sentenceProblem(v.headline) ? v.headline : undefined;
+    if (reading) issues[k] = { headline, reading };
+  }
+  return {
+    cleaned: {
+      headline: clean("headline", input.headline),
+      economySummary: clean("economySummary", input.economySummary, equityInEconomy),
+      policySummary: clean("policySummary", input.policySummary),
+      calendar: input.calendar,
+      snapshot: rec("snapshot", input.snapshot),
+      issues,
+      sectors: rec("sector", input.sectors),
+    },
+    reasons,
+  };
+}
+
+/**
+ * "5. 경제"에 주식 얘기 금지(오너 지적 2026-10-10 — "경제를 보면 왜 중국에 주식관련 내용을 넣었지?"). 수집 단계가 "중국"
+ * 낱말로 삼성증권 「4분기 중국 투자 전략」을 경기 근거에 넣었고 모델이 그걸로 중국 줄을 채웠다. 지수명·증시·투자의견·목표주가가
+ * 나오는 줄은 버린다. 증시는 스냅샷·핵심 이슈·섹터에서 다룬다.
+ */
+const EQUITY_IN_ECONOMY_RE =
+  /(상해종합|상하이종합|항셍|코스피|코스닥|나스닥|S&P\s?500|다우|니케이|닛케이|유로스톡스|투자의견|목표주가|증시|주가|화학주|소부장|업종)/;
+
+function equityInEconomy(line: string): string | null {
+  const m = EQUITY_IN_ECONOMY_RE.exec(line);
+  return m ? `경제 요약에 주식시장 내용("${m[1]}") — 실물 지표·정책만 쓴다` : null;
+}
+
+function checkBrokerCitations(
+  input: ConnectorComments,
+  payload: CommentPayload,
+  sourceTitles: string[],
+): { cleaned: ConnectorComments; reasons: Map<string, string> } {
+  const known = new Set<string>();
+  const add = (s: string) => known.add(s.replace(/\s+/g, ""));
+  for (const i of payload.issues) for (const r of i.reports) add(r.source);
+  for (const p of [...payload.policyEvidence, ...payload.economyEvidence]) for (const r of p.reports) add(r.source);
+  const titles = sourceTitles.join(" ").replace(/\s+/g, "");
+  const unknown = (text: string): string | null => {
+    for (const m of text.matchAll(BROKER_RE)) {
+      const name = m[1].replace(/\s+/g, "");
+      if (known.has(name) || titles.includes(name)) continue;
+      // data 에 "신한투자증권"이 있으면 본문의 "신한증권" 같은 줄임도 같은 회사로 본다
+      const stem = name.replace(/(투자증권|금융투자|증권)$/, "");
+      if (stem && [...known].some((k) => k.startsWith(stem))) continue;
+      return `그 주 근거(data·출처)에 없는 증권사 인용 "${m[1]}"`;
+    }
+    return null;
+  };
+  const reasons = new Map<string, string>();
+  const one = (key: string, text: string | undefined): string | undefined => {
+    if (!text) return text;
+    const r = unknown(text);
+    if (!r) return text;
+    reasons.set(key, r);
+    return undefined;
+  };
+  const lines = (key: string, text: string | undefined, extra?: (l: string) => string | null): string | undefined => {
+    if (!text) return text;
+    const kept: string[] = [];
+    const bad: string[] = [];
+    for (const l of text.split(/\r?\n/)) {
+      const r = l.trim() ? (unknown(l) ?? extra?.(l) ?? null) : null;
+      if (r) bad.push(`${l.trim().slice(0, 24)}… — ${r}`);
+      else kept.push(l);
+    }
+    if (bad.length) reasons.set(key, `일부 줄 폐기: ${bad.join(" / ")}`);
+    return kept.join("\n").trim() || undefined;
+  };
+  const rec = (prefix: string, obj: Record<string, string> | undefined) => {
+    if (!obj) return obj;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      const t = one(`${prefix}:${k}`, v);
+      if (t) out[k] = t;
+    }
+    return out;
+  };
+  const issues: ConnectorComments["issues"] = {};
+  for (const [k, v] of Object.entries(input.issues ?? {})) {
+    const text = typeof v === "string" ? v : `${String(v?.headline ?? "")} ${String(v?.reading ?? "")}`;
+    const r = unknown(text);
+    if (r) reasons.set(`issue:${k}`, r);
+    else issues[k] = v;
+  }
+  return {
+    cleaned: {
+      headline: one("headline", input.headline),
+      economySummary: lines("economySummary", input.economySummary),
+      policySummary: lines("policySummary", input.policySummary),
+      calendar: input.calendar,
+      snapshot: rec("snapshot", input.snapshot),
+      issues,
+      sectors: rec("sector", input.sectors),
+    },
+    reasons,
+  };
 }

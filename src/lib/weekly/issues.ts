@@ -44,6 +44,9 @@ export interface IssueEvidenceReport {
   source: string;
   stockName: string;
   title: string;
+  /** 리포트 요약 발췌 앞부분(최대 500자) — claude.ai 커넥터에만 넘긴다(Gemini 입력엔 안 실림) */
+  summary?: string;
+  pdfUrl?: string | null;
 }
 
 export interface IssueEvidenceNews {
@@ -170,6 +173,8 @@ async function countFromResearch(
           source: d.source,
           stockName: d.stockName ?? "",
           title: d.title ?? "",
+          summary: (d.summary ?? "").replace(/\s+/g, " ").trim().slice(0, 500) || undefined,
+          pdfUrl: d.pdfUrl ?? null,
         };
         if (strong) slot.reports.unshift(ev);
         else slot.reports.push(ev);
@@ -312,7 +317,7 @@ async function countFromNews(
       .filter((g) => topic.match.test(`${g.title} ${g.excerpt ?? ""}`))
       .slice(0, 2)
       .map((g) => ({ ...g, source: `${g.source} (${corroborated ? "교차확인" : "검증 필요"})` }));
-    out.set(topic.label, { count: fresh.length, news: [...refs, ...fresh].slice(0, 5), rejected });
+    out.set(topic.label, { count: fresh.length, news: [...refs, ...fresh].slice(0, 15), rejected });
   }
   return out;
 }
@@ -511,8 +516,10 @@ export function selectTopIssues(all: WeeklyIssue[], n = 3): WeeklyIssue[] {
         (acc, m) => (m.searchInterest == null ? acc : Math.max(acc ?? 0, m.searchInterest)),
         null,
       ),
-      reports: dedupeByTitle(interleave(members.map((m) => m.reports), 6)).slice(0, 3),
-      news: dedupeByTitle(interleave(members.map((m) => m.news), 10)).slice(0, 5),
+      // 병합 계열도 단일 주제와 같은 근거 수(리포트 12·뉴스 15) — 뉴스가 그 주 화두의 가장 빠른 원천(오너 2026-10-10).
+      // Gemini 입력(buildPayload)은 뉴스를 앞 5건만 싣는다.
+      reports: dedupeByTitle(interleave(members.map((m) => m.reports), 24)).slice(0, 12),
+      news: dedupeByTitle(interleave(members.map((m) => m.news), 30)).slice(0, 15),
     });
   }
 

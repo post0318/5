@@ -10,10 +10,14 @@ import {
   type WeeklyReportDoc,
 } from "@/lib/db/weekly-reports";
 import {
+  assembleConnectorComments,
   buildCodeCalendar,
+  buildConnectorPayload,
+  CONNECTOR_GUIDE,
   generateWeeklyComments,
   nextWeekRange,
   type CommentExtras,
+  type ConnectorComments,
   type WebFact,
   type IssueComment,
   type WeeklyComments,
@@ -29,7 +33,8 @@ import { buildWeeklySectors, type WeeklySectors } from "./sectors";
 import { fetchShinhanSchedule } from "./shinhan-schedule";
 import { buildSnapshot, fillFromPrevious } from "./snapshot";
 import { WEEKLY_TOPICS } from "./topics";
-import { resolveReportWeek, type ReportWeek } from "./week";
+import { reportWeekFromStart, resolveReportWeek, type ReportWeek } from "./week";
+import { getWeeklyInputs, saveWeeklyInputs, type WeeklyInputsDoc } from "@/lib/db/weekly-inputs";
 
 /**
  * 주간 리포트 초안 생성.
@@ -305,8 +310,19 @@ export async function generateWeeklyReport(
       409,
     );
   }
+  if (existing?.origin === "claude-connector" && !opts.force) {
+    throw new WeeklyGenerateError(
+      `${week.weekStart} 주는 Claude 커넥터 초안이 있음 — 덮어쓰려면 "재생성"(force)`,
+      409,
+    );
+  }
 
-  const { snapshot, all, top, sectors, extras, notes } = await collect(week);
+  const collected = await collect(week);
+  const { snapshot, all, top, sectors, extras, notes } = collected;
+  // claude.ai 커넥터가 같은 입력을 쓰도록 보관(실패해도 생성은 계속)
+  await saveWeeklyInputs(toInputsDoc(week, collected)).catch((err) =>
+    console.warn("[weekly] 입력 보관 실패(리포트는 계속)", err),
+  );
   // 주제별 집계를 남긴다 — 몇 주 쌓이면 "평소 대비 배수" 정규화의 기준선이
   // 된다(과거를 역으로 조회할 수 없어 앞으로 쌓는 방식, 오너 지시 2026-09-21).
   // 실패해도 리포트 생성을 막지 않는다.
@@ -442,4 +458,216 @@ export async function compareWeeklyModels(models: string[]): Promise<{
     }
   }
   return { weekStart: week.weekStart, weekEnd: week.weekEnd, results };
+}
+
+// ---- claude.ai 커넥터(`/api/mcp`) ---------------------------------------------
+// 오너 지시 2026-10-10 — Anthropic API(별도 과금) 대신 오너 구독의 claude.ai 가 해석을 쓴다.
+// 조회(getConnectorData)와 저장(saveConnectorDraft)만 있고 발행·삭제는 없다.
+
+function toInputsDoc(week: ReportWeek, c: Collected): WeeklyInputsDoc {
+  return {
+    _id: week.weekStart,
+    week,
+    collectedAt: new Date(),
+    snapshot: c.snapshot,
+    all: c.all,
+    top: c.top,
+    sectors: c.sectors,
+    official: c.extras.official,
+    sectorNews: Object.fromEntries(c.extras.sectorNews),
+    schedule: c.extras.schedule,
+    codeCalendar: c.extras.codeCalendar,
+    notes: c.notes,
+  };
+}
+
+function extrasOf(d: WeeklyInputsDoc): CommentExtras {
+  return {
+    official: d.official,
+    sectorNews: new Map(Object.entries(d.sectorNews ?? {})),
+    schedule: d.schedule,
+    codeCalendar: d.codeCalendar,
+  };
+}
+
+function connectorWeek(weekStart?: string): ReportWeek {
+  if (!weekStart) return resolveReportWeek();
+  const w = reportWeekFromStart(weekStart);
+  if (!w) {
+    throw new WeeklyGenerateError(
+      `weekStart(${weekStart})는 지난 8주 안의 월요일이어야 하고 그 주 금요일이 지나 있어야 함`,
+      400,
+    );
+  }
+  return w;
+}
+
+/** 보관본이 있으면 그것, 없거나 refresh 면 새로 수집해 보관 */
+async function loadInputs(week: ReportWeek, refresh: boolean): Promise<WeeklyInputsDoc> {
+  if (!refresh) {
+    const cached = await getWeeklyInputs(week.weekStart);
+    if (cached) return cached;
+  }
+  const doc = toInputsDoc(week, await collect(week));
+  await saveWeeklyInputs(doc);
+  return doc;
+}
+
+export async function getConnectorData(opts: { weekStart?: string; refresh?: boolean }) {
+  const week = connectorWeek(opts.weekStart);
+  const inputs = await loadInputs(week, Boolean(opts.refresh));
+  const existing = await getWeeklyReport(week.weekStart);
+  const data = await buildConnectorPayload(inputs.snapshot, inputs.top, inputs.week, inputs.all, inputs.sectors, extrasOf(inputs));
+  return {
+    week: { start: week.weekStart, end: week.weekEnd },
+    collectedAt: inputs.collectedAt,
+    existingDraft: existing
+      ? {
+          status: existing.status,
+          by: existing.origin === "claude-connector" ? "claude-connector" : existing.model,
+          editedByOwner: existing.body !== existing.draftBody,
+          canSave: existing.status !== "published" && existing.body === existing.draftBody,
+        }
+      : null,
+    guide: CONNECTOR_GUIDE,
+    /** 코드 단계에서 못 채운 자료와 이유(예: FRED 키 없음) */
+    notes: inputs.notes,
+    data,
+  };
+}
+
+export interface ConnectorSaveResult {
+  saved: boolean;
+  weekStart: string;
+  /** 비어 남은 칸과 이유 — 고쳐서 다시 저장하면 된다 */
+  dropped: Record<string, string>;
+  /** 버리지는 않았지만 고칠 것(핵심 수치 없음 등) */
+  warnings: string[];
+  /** 날짜 검사로 버린 출처 */
+  rejectedSources: { url: string; reason: string }[];
+  body: string;
+}
+
+export async function saveConnectorDraft(opts: {
+  weekStart?: string;
+  comments: ConnectorComments;
+  sources: { title: string; url: string; date?: string }[];
+  preview?: boolean;
+}): Promise<ConnectorSaveResult> {
+  const week = connectorWeek(opts.weekStart);
+  const existing = await getWeeklyReport(week.weekStart);
+  if (!opts.preview) {
+    if (existing?.status === "published") {
+      throw new WeeklyGenerateError(`${week.weekStart} 주 리포트는 이미 발행됨 — 커넥터는 발행본을 바꿀 수 없음`, 409);
+    }
+    if (existing && existing.body !== existing.draftBody) {
+      throw new WeeklyGenerateError(`${week.weekStart} 주 초안을 오너가 고쳐 둠 — 커넥터는 덮어쓰지 않음(/weekly 화면에서 처리)`, 409);
+    }
+  }
+  const inputs = await getWeeklyInputs(week.weekStart);
+  if (!inputs) throw new WeeklyGenerateError("이 주 입력 보관본이 없음 — get_weekly_data 를 먼저 호출", 409);
+  const extras = extrasOf(inputs);
+  // 출처 날짜 검사(오너 지시 2026-10-10 — "일년전에 발표하고 우연히 지금 맞을수도 있기에"): 리포트 주 앞 주말(토)부터
+  // 다음 주 월요일까지 발행된 글만 근거로 인정한다. 날짜 없는 출처도 버린다.
+  const lo = new Date(Date.parse(`${week.weekStart}T00:00:00Z`) - 2 * 86_400_000).toISOString().slice(0, 10);
+  const hi = new Date(Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000).toISOString().slice(0, 10);
+  // 출처 등급(오너 2026-10-10 — 개인 블로그를 근거로 쓴 사례): 블로그·커뮤니티·SNS 는 근거로 인정하지 않는다.
+  // 본문의 [번호] 는 sources 배열 순번(1부터)이라 버린 출처도 번호는 그대로 두고 "무효"로만 표시한다.
+  const rejectedSources: { url: string; reason: string }[] = [];
+  const sources: { id: number; title: string; url: string; date: string }[] = [];
+  const invalidIds: number[] = [];
+  opts.sources.slice(0, 100).forEach((x, i) => {
+    const id = i + 1;
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(x.date ?? "") ? (x.date as string) : null;
+    const reason = !/^https?:\/\//.test(x.url)
+      ? "주소 형식 아님"
+      : isLowGradeSource(x.url)
+        ? "개인 블로그·커뮤니티·SNS 는 근거로 인정하지 않음"
+        : !d
+          ? "발행일(date) 없음"
+          : d < lo || d > hi
+            ? `발행일 ${d} 이 리포트 주(${lo}~${hi}) 밖`
+            : null;
+    if (reason || !d) {
+      rejectedSources.push({ url: x.url, reason: `[${id}] ${reason}` });
+      invalidIds.push(id);
+    } else sources.push({ id, title: x.title, url: x.url, date: d });
+  });
+  const { comments, warnings } = await assembleConnectorComments(
+    inputs.snapshot,
+    inputs.top,
+    inputs.week,
+    inputs.all,
+    inputs.sectors,
+    extras,
+    opts.comments,
+    { valid: sources.map((x) => ({ id: x.id, title: x.title })), invalidIds },
+  );
+  const body = await renderWeeklyReport({
+    week: inputs.week,
+    snapshot: inputs.snapshot,
+    issues: inputs.top,
+    sectors: inputs.sectors,
+    comments,
+    official: extras.official,
+    codeCalendar: extras.codeCalendar,
+  });
+  const dropped = Object.fromEntries(comments.dropReasons);
+  if (opts.preview) return { saved: false, weekStart: week.weekStart, dropped, warnings, rejectedSources, body };
+
+  const now = new Date().toISOString();
+  const all = inputs.all;
+  await saveWeeklyReport({
+    _id: week.weekStart,
+    weekStart: week.weekStart,
+    weekEnd: week.weekEnd,
+    status: "draft",
+    title: `주간 거시·시황 요약 (${week.weekStart} ~ ${week.weekEnd})`,
+    body,
+    draftBody: body,
+    rawBody: body,
+    candidates: candidatesText(all, inputs.top),
+    snapshot: inputs.snapshot,
+    sources: {
+      researchCount: all.reduce((s, a) => s + a.researchCount, 0),
+      newsCount: all.reduce((s, a) => s + a.newsCount, 0),
+      telegramCount: 0,
+      youtubeCount: 0,
+      groundingQueries: [],
+      groundingSources: sources.map((x) => ({ title: `[${x.id}] ${x.title.slice(0, 200)} (${x.date})`, uri: x.url })),
+      webFacts: [],
+      dropReasons: { ...inputs.notes, ...dropped },
+    },
+    model: "Claude (claude.ai 커넥터)",
+    origin: "claude-connector",
+    // 앱 자동 초안(Gemini/규칙)은 지우지 않고 보관 — Claude 초안을 다시 저장할 때도 처음 보관본을 유지
+    ...(existing?.origin === "claude-connector"
+      ? existing.autoDraft
+        ? { autoDraft: existing.autoDraft }
+        : {}
+      : existing
+        ? { autoDraft: { body: existing.draftBody, model: existing.model, generatedAt: existing.generatedAt } }
+        : {}),
+    usage: { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, costUsd: 0, calls: 0 },
+    generatedAt: now,
+    publishedAt: null,
+    updatedAt: now,
+  });
+  return { saved: true, weekStart: week.weekStart, dropped, warnings, rejectedSources, body };
+}
+
+/** 근거로 인정하지 않는 출처 — 개인 블로그·커뮤니티·SNS·동영상(오너 2026-10-10, Opus 가 주식 블로그를 출처로 씀) */
+const LOW_GRADE_HOST_RE =
+  /(^|\.)(tistory\.com|blogspot\.com|wordpress\.com|brunch\.co\.kr|medium\.com|substack\.com|velog\.io|reddit\.com|youtube\.com|youtu\.be|x\.com|twitter\.com|facebook\.com|instagram\.com|threads\.net|dcinside\.com|ppomppu\.co\.kr|clien\.net|fmkorea\.com|theqoo\.net|naver\.me|firebat\.co\.kr)$/i;
+
+function isLowGradeSource(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (LOW_GRADE_HOST_RE.test(u.hostname)) return true;
+    if (/^(blog|m\.blog|cafe|m\.cafe|post)\./i.test(u.hostname)) return true; // blog.naver.com·cafe.daum.net 등
+    // 주소 경로의 "blog" 로는 판정하지 않는다 — 운용사·기관 공식 시황 글도 /blogs/ 아래 있다(Penn Mutual, 2026-10-11 시험)
+    return false;
+  } catch {
+    return true;
+  }
 }
