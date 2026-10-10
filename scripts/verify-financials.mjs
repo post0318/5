@@ -74,7 +74,13 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { loadBbg } from "./reference/bbg.mjs";
+import { makeDiskCache } from "./verify-kr/cache.mjs";
+import { configureDart, dartFnltt, dartStats, dartQuota, dartListRefresh, xbrlMaint } from "./verify-kr/dart.mjs";
+import { configureKrx, krxStats } from "./verify-kr/krx.mjs";
+import { configureCalendar } from "./verify-kr/calendar.mjs";
+import { krOriginalLayers, closeKrLayers } from "./verify-kr/layers.mjs";
 import { buildAudit, COGS_RULE_COMMON, commonModeOf, decimalsVintage, extItemOf, isDecimalsRounding } from "./metrics/audit.mjs";
 
 // ── 인자 ─────────────────────────────────────────────────────────────
@@ -88,7 +94,7 @@ function die(msg) {
   console.error(`오류: ${msg}`);
   process.exit(2);
 }
-const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing", "metric", "cogs-rules"]);
+const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing", "metric", "cogs-rules", "use-snapshots"]);
 // 매출 닫기 모드(revenue.md §8) — 종료코드를 매출 검사 실패·매출 ③ 오류·조회 실패 기준으로. 기본 실행은 종전 그대로
 const METRIC = args.metric == null ? null : String(args.metric).toLowerCase();
 if (METRIC != null && !["revenue", "cogs", "opinc", "da", "sga", "bscf"].includes(METRIC)) die(`--metric 은 revenue·cogs·opinc·da·sga·bscf 중 하나 (받은 값: ${args.metric})`);
@@ -124,6 +130,15 @@ const CONCURRENCY = Number(args.concurrency ?? 2);
 if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) die(`--concurrency 는 1 이상의 정수 (받은 값: ${args.concurrency})`);
 if (args.limit != null && !(Number.isInteger(Number(args.limit)) && Number(args.limit) > 0)) die(`--limit 은 양의 정수`);
 const BASE = String(args.base ?? "http://localhost:3000").replace(/\/$/, "");
+// 결과(--post)에 남길 검증 코드 판본 — 시작 시점 HEAD(추적 파일에 커밋 안 된 변경이 있으면 "-dirty"). GITHUB_SHA 가 있으면 그 값.
+// 예전엔 GITHUB_SHA 만 봐서 2호기·로컬 수동 실행 결과의 commit 이 비었다(2026-10-08 수동 전체 실행 75건)
+const COMMIT = process.env.GITHUB_SHA ?? (() => {
+  try {
+    const git = (...a) => execFileSync("git", ["-C", decodeURIComponent(new URL("..", import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1"), ...a], { encoding: "utf8" }).trim();
+    const head = git("rev-parse", "HEAD");
+    return git("status", "--porcelain", "--untracked-files=no") ? `${head}-dirty` : head;
+  } catch { return null; } // silent-ok: git 이 없는 곳(배포본)에서는 판본 미상
+})();
 const EXTERNAL = !args["no-external"];
 /** 검증이 닫힌 지표(관리자 화면 감사표의 closed) — 정답 데이터셋(골든셋)의 GOLDEN_CHECKS 와 같은 목록이어야 한다.
  *  지표를 닫을 때 scripts/metrics/golden.mjs 의 GOLDEN_CHECKS 와 함께 갱신할 것(revenue ↔ "매출") */
@@ -137,7 +152,7 @@ function loadEnvLocal() {
       const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"\n]*?)"?\s*$/);
       if (m && (env[m[1]] === undefined || env[m[1]] === "")) env[m[1]] = m[2];
     }
-  } catch {
+  } catch { // silent-ok: .env.local 은 선택 파일(없으면 환경변수만)
     /* .env.local 없어도 됨 */
   }
   return env;
@@ -145,8 +160,12 @@ function loadEnvLocal() {
 const env = loadEnvLocal();
 const AUTH = env.CRON_SECRET ? { authorization: `Bearer ${env.CRON_SECRET}` } : { "x-app-token": env.APP_PASSWORD ?? "" };
 
+// 앱 저장본(api_snap·ttm_snap) 우회(재감사 12차 ⑤) — 검증 기준값이 24시간 묵은 저장본이나 다른 PC·브랜치가 쓴 "local" 저장본이 되지 않게
+// 모든 요청에 인증 + x-verify-no-snapshot 을 붙인다(앱 db/snap-bypass.ts — 인증된 요청만 읽기·쓰기 모두 건너뜀). --use-snapshots 로 끔
+const NO_SNAP = args["use-snapshots"] ? {} : { ...AUTH, "x-verify-no-snapshot": "1" };
+if (args["use-snapshots"]) console.warn("⚠ --use-snapshots: 앱 저장본(api_snap·ttm_snap·fin_sym·us_class_facts)을 우회하지 않음 — 결과가 브랜치 코드 기준이 아닐 수 있음(저장본 영향 확인용)");
 async function getJson(path, timeoutMs = 240_000, headers = {}) {
-  const r = await fetch(BASE + path, { signal: AbortSignal.timeout(timeoutMs), cache: "no-store", headers });
+  const r = await fetch(BASE + path, { signal: AbortSignal.timeout(timeoutMs), cache: "no-store", headers: { ...NO_SNAP, ...headers } });
   if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
   return r.json();
 }
@@ -204,7 +223,7 @@ const RECON = (() => {
       const ltmHow = r.ltm?.partition?.join(" · ") ?? how;
       for (const y of r.years) m.set(`${r.sym}|${r.src}|${r.metric}|${y}`, { ok: r.yearOk ? !!r.yearOk[y] : r.verdict !== "미결", how: y === "LTM" ? ltmHow : how, ext: r.vals?.[y]?.ext ?? null, app: r.vals?.[y]?.app ?? null });
     }
-  } catch { /* 결과 없음 — 분류 그대로 */ }
+  } catch (e) { die(`recon 결과 파일 판독 실패 — ${String(e).slice(0, 120)}(파일이 있는데 못 읽으면 분류가 조용히 바뀐다)`); }
   return m;
 })();
 const SEC_UA = env.SEC_USER_AGENT || "global-market-research (personal use) contact@example.com";
@@ -224,6 +243,9 @@ async function secFetchRaw(url, timeoutMs) {
   const ARCH = "https://www.sec.gov/Archives/edgar/data/";
   const safe = (u) => u.replace(/^https:\/\//, "").replace(/[^A-Za-z0-9._-]/g, "_");
   const disk = url.startsWith(ARCH) ? pathJoin(SEC_DISK, url.slice(ARCH.length).replace(/[^A-Za-z0-9._-]/g, "_")) : null;
+  // 오류 문구는 원인(HTTP 코드·시간 초과)을 앞에, 주소는 짧게 — 호출부가 오류를 60~80자로 잘라 남기므로 긴 주소가 앞에 오면 원인이 잘린다
+  // (2026-10-07 AMAT·TER "본표 조회 실패: Error: SEC https://www.sec.gov/Archives/edgar/data/6951/0000" — 코드가 안 남음)
+  const short = url.startsWith(ARCH) ? url.slice(ARCH.length) : url.replace(/^https:\/\/(www\.)?/, "");
   if (disk && existsSync(disk)) return readFileSync(disk, "utf8");
   const apiDisk = SEC_API_RE.test(url) ? pathJoin(SEC_API_DISK, safe(url)) : null;
   const apiAge = apiDisk && existsSync(apiDisk) ? Date.now() - statSync(apiDisk).mtimeMs : null;
@@ -233,14 +255,14 @@ async function secFetchRaw(url, timeoutMs) {
       await (secChain = secChain.then(async () => { const w = secLast + 334 - Date.now(); if (w > 0) await new Promise((r) => setTimeout(r, w)); secLast = Date.now(); }));
       const r = await fetch(url, { headers: { "user-agent": SEC_UA }, signal: AbortSignal.timeout(timeoutMs) });
       if (r.status === 429 && attempt < 3) { await new Promise((res) => setTimeout(res, 65_000)); continue; }
-      if (!r.ok) throw new Error(`SEC ${url} → HTTP ${r.status}`);
+      if (!r.ok) throw Object.assign(new Error(`SEC HTTP ${r.status} ${short}`), { secHttp: true });
       const t = await r.text();
       if (disk) { mkdirSync(SEC_DISK, { recursive: true }); writeFileSync(disk, t); }
       if (apiDisk) { mkdirSync(SEC_API_DISK, { recursive: true }); writeFileSync(apiDisk, t); }
       return t;
     }
   } catch (e) {
-    if (apiAge == null) throw e;
+    if (apiAge == null) throw e?.secHttp ? e : new Error(`SEC ${e?.name === "TimeoutError" ? "시간 초과" : String(e)} ${short}`, { cause: e });
     console.warn(`  [SEC 사본 사용] ${url} — 새로 받기 실패(${String(e).slice(0, 80)}), 디스크 사본 ${(apiAge / 3_600_000).toFixed(1)}시간 전`);
     return readFileSync(apiDisk, "utf8");
   }
@@ -250,6 +272,130 @@ async function secJson(url) {
 }
 async function secText(url) {
   return secFetchRaw(url, 60_000);
+}
+
+/**
+ * 결산일 유통주식수 — 차원이 붙은 값만 공시한 회사(2026-10-07, WMT·BE·META·V). companyfacts 는 차원 없는 값만 주므로 그 해 10-K 원본
+ * 인스턴스(_htm.xml)에서 결산일(instant) 값을 직접 읽는다. 검증기 독립 판독(앱 edgar-equity-shares.ts·edgar-classfacts.ts 와 코드 공유 안 함,
+ * 규칙은 같음 — 공통모드는 audit.mjs "결산일 주식수" 사유). 반환 = 우선순위 순 후보 [{ v, how, accns }]:
+ *  ① 자본변동표 보통주 구성요소(CommonStockSharesOutstanding·SharesOutstanding, StatementEquityComponentsAxis=CommonStockMember 한 차원)
+ *  ② 클래스별 전환 기준(as-converted) 공시값 합(/AsConverted/ 주식 단위, 가중평균 제외) — 없으면 클래스별 유통주식수 × 전환비율(A = 1)
+ *  ③ 전환 구조가 아닌 복수 클래스(전환비율·전환 기준 공시 없음) — 클래스별 유통주식수 단순 합
+ * 클래스는 보통주만(우선주·시리즈·참가증권 제외), 집계 멤버(B1AndB2)는 구성 멤버가 있으면 뺀다.
+ */
+async function readDimShares(cik, accn, end, filed) {
+  const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+  const name = (await secJson(base + "/index.json")).directory.item.map((x) => x.name).find((x) => /_htm\.xml$/i.test(x));
+  if (!name) return [];
+  const xml = await secText(`${base}/${name}`);
+  const ctx = new Map();
+  for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
+    const inst = /<(?:xbrli:)?instant>\s*([^<\s]+)/.exec(m[2])?.[1];
+    if (inst !== end) continue;
+    ctx.set(m[1], [...m[2].matchAll(/dimension="([^"]+)"[^>]*>([^<]+)</g)].map((d) => [d[1].split(":").pop(), d[2].trim().split(":").pop().replace(/Member$/, "")]));
+  }
+  const shareUnits = new Set();
+  for (const m of xml.matchAll(/<(?:[\w-]+:)?unit\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?unit>/g))
+    if (!/divide/i.test(m[2]) && /<(?:[\w-]+:)?measure>\s*(?:[\w-]+:)?shares\s*</i.test(m[2])) shareUnits.add(m[1]);
+  const isCommon = (mb) => /^Common/i.test(mb) && !/Preferred|Series|Participating/i.test(mb);
+  const isA = (mb) => /^Common(Stock)?ClassA$/i.test(mb);
+  let comp = null;
+  const conv = new Map(), raw = new Map(), rate = new Map();
+  for (const m of xml.matchAll(/<([\w-]+):(\w+)\b([^>]*)>\s*([^<]+?)\s*</g)) {
+    const [, , tag, attrs, text] = m;
+    const dims = ctx.get(/contextRef="([^"]+)"/.exec(attrs)?.[1] ?? "");
+    if (!dims || dims.length !== 1) continue;
+    const v = Number(text);
+    if (!Number.isFinite(v)) continue;
+    const [axis, mb] = dims[0];
+    const sh = shareUnits.has(/unitRef="([^"]+)"/.exec(attrs)?.[1] ?? "");
+    if ((tag === "CommonStockSharesOutstanding" || tag === "SharesOutstanding") && sh && axis === "StatementEquityComponentsAxis" && mb === "CommonStock") comp ??= v;
+    if (axis !== "StatementClassOfStockAxis" || !isCommon(mb)) continue;
+    if (/AsConverted/i.test(tag) && !/WeightedAverage/i.test(tag) && sh) { if (!conv.has(mb)) conv.set(mb, v); }
+    else if (tag === "CommonStockSharesOutstanding" && sh) { if (!raw.has(mb)) raw.set(mb, v); }
+    else if (/^CommonStockConversionRate$/i.test(tag)) { if (!rate.has(mb)) rate.set(mb, v); }
+  }
+  const leaves = (mm) => [...mm].filter(([k]) => { const first = k.split(/And/i)[0]; return first === k || !mm.has(first); });
+  const src = `${filed} 10-K 원본 ${name}`;
+  const out = [];
+  if (comp != null) out.push({ v: comp, how: `자본변동표 보통주 구성요소(${src})` });
+  if (conv.size) {
+    const l = leaves(conv);
+    out.push({ v: l.reduce((t, [, x]) => t + x, 0), how: `클래스별 전환 기준 공시값 합 ${l.map(([k, x]) => `${k} ${x}`).join(" + ")}(${src})` });
+  } else if (raw.size && rate.size) {
+    const l = leaves(raw), miss = l.filter(([k]) => !isA(k) && !(rate.get(k) > 0));
+    if (!miss.length) out.push({ v: l.reduce((t, [k, x]) => t + x * (isA(k) ? 1 : rate.get(k)), 0), how: `클래스별 유통주식수 × 전환비율 ${l.map(([k, x]) => `${k} ${x}×${isA(k) ? 1 : rate.get(k)}`).join(" + ")}(${src})` });
+  } else if (raw.size) {
+    const l = leaves(raw);
+    out.push({ v: l.reduce((t, [, x]) => t + x, 0), how: `클래스별 유통주식수 합(전환 구조 없음) ${l.map(([k, x]) => `${k} ${x}`).join(" + ")}(${src})` });
+  }
+  return out.map((o) => ({ ...o, filed, accns: new Set([accn]) }));
+}
+
+/** 10-K 현금흐름표 표시 구조(_pre.xml)의 개념 id 집합(ns_이름) — 줄 존재 판정용. 없으면 null */
+const cfFaceCache = new Map();
+async function cfFaceConcepts(cik, accn) {
+  if (cfFaceCache.has(accn)) return cfFaceCache.get(accn);
+  const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+  // 표시 구조가 별도 파일(_pre.xml)이 아니라 스키마(.xsd)에 들어 있는 공시(MSFT·ORCL·IBM 2026~)도 읽는다(2026-10-09)
+  const names0 = (await secJson(base + "/index.json")).directory.item.map((x) => x.name);
+  const name = names0.find((x) => /_pre\.xml$/i.test(x)) ?? names0.find((x) => /\.xsd$/i.test(x));
+  let out = null;
+  if (name) {
+    const x = await secText(`${base}/${name}`);
+    // 접두어 없는 링크베이스(IBM — <presentationLink xmlns=…>)도 읽는다(2026-10-09 — 접두어만 찾다가 IBM 2021·2022 10-K 를 못 읽어 오판)
+    for (const m of x.matchAll(/<(?:[\w-]+:)?presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?presentationLink>/g)) {
+      if (!/CASHFLOW/i.test(String(m[1]).replace(/[^A-Za-z]/g, "")) || /Parenth|Detail|Table|Polic|Supplement/i.test(m[1])) continue;
+      out ??= new Set();
+      for (const h of m[2].matchAll(/xlink:href="[^"#]*#([^"]+)"/g)) out.add(h[1]);
+    }
+  }
+  cfFaceCache.set(accn, out);
+  return out;
+}
+
+/** 정기공시 손익계산서 본표 표시 구조(_pre.xml, 없으면 .xsd 내장)의 개념 id 집합 — 줄 존재 판정용(2026-10-09, 금융사 원가·판관비 빈칸 확인).
+ *  역할 = 이름에 INCOME·OPERATIONS·EARNINGS(포괄손익·세부·표·주석 제외). 읽은 역할이 없으면 null */
+const isFaceCache = new Map();
+async function isFaceConcepts(cik, accn) {
+  if (isFaceCache.has(accn)) return isFaceCache.get(accn);
+  const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+  const names = (await secJson(base + "/index.json")).directory.item.map((x) => x.name);
+  const name = names.find((x) => /_pre\.xml$/i.test(x)) ?? names.find((x) => /\.xsd$/i.test(x));
+  let out = null;
+  if (name) {
+    const x = await secText(`${base}/${name}`);
+    for (const m of x.matchAll(/<(?:[\w-]+:)?presentationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?presentationLink>/g)) {
+      const role = m[1].split("/").pop() ?? "";
+      if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Parenth|Detail|Table|Polic|Tax|Segment|PerShare|Narrative|Schedule|Comprehensive|Equity|CashFlow|BalanceSheet|FinancialPosition/i.test(role)) continue;
+      out ??= { ids: new Set(), roles: [] };
+      out.roles.push(role);
+      for (const h of m[2].matchAll(/xlink:href="[^"#]*#([^"]+)"/g)) out.ids.add(h[1]);
+    }
+  }
+  isFaceCache.set(accn, out);
+  return out;
+}
+
+/**
+ * 클래스 A(상장 클래스) 연간 기본 EPS — EPS 를 클래스 차원(StatementClassOfStockAxis)에만 공시한 회사(V, 2026-10-07). 그 해 10-K 원본에서
+ * 결산일이 같은 300~400일 기간·클래스 A 한 차원의 EarningsPerShareBasic. 검증기 독립 판독(앱 edgar-classfacts.ts 와 코드 공유 안 함)
+ */
+async function readClassABasicEps(cik, accn, end, filed) {
+  const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+  const name = (await secJson(base + "/index.json")).directory.item.map((x) => x.name).find((x) => /_htm\.xml$/i.test(x));
+  if (!name) return null;
+  const xml = await secText(`${base}/${name}`);
+  const ok = new Set();
+  for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
+    const st = /<(?:xbrli:)?startDate>\s*([^<\s]+)/.exec(m[2])?.[1], en = /<(?:xbrli:)?endDate>\s*([^<\s]+)/.exec(m[2])?.[1];
+    if (!st || en !== end || (Date.parse(en) - Date.parse(st)) / 864e5 < 300) continue;
+    const dims = [...m[2].matchAll(/dimension="([^"]+)"[^>]*>([^<]+)</g)].map((d) => [d[1].split(":").pop(), d[2].trim().split(":").pop().replace(/Member$/, "")]);
+    if (dims.length === 1 && dims[0][0] === "StatementClassOfStockAxis" && /^Common(Stock)?ClassA$/i.test(dims[0][1])) ok.add(m[1]);
+  }
+  for (const m of xml.matchAll(/<us-gaap:EarningsPerShareBasic\b([^>]*)>\s*([^<]+?)\s*</g))
+    if (ok.has(/contextRef="([^"]+)"/.exec(m[1])?.[1] ?? "")) return { val: Number(m[2]), how: `클래스 A 기본 EPS(${filed} 10-K 원본 ${name})` };
+  return null;
 }
 /** 공시 원본(인스턴스) — 한 종목 안에서 같은 원본을 여러 대조가 다시 받지 않게 최근 12건만 캐시(SEC 요청 절약) */
 const instCache = new Map();
@@ -292,7 +438,112 @@ function independentOr(res, extExact, reason) {
 const IFRS_GROUPS_SNAPSHOT = JSON.parse(readFileSync(new URL("./lib/ifrs-groups-snapshot.json", import.meta.url), "utf8"));
 // 사본 묶음 중 IFRS_MAP(단순 대응) 출신 — 사본 앞부분에 같은 순서로 놓인다(ifrsDstGroups: MAP → SUM → NEG). SUM 의 원소 1개 묶음(배열 원소 하나 — LongTermDebtCurrent)은 원소가 배열이라 구분된다
 const IFRS_MAP_LIKE = (g) => g.sign > 0 && g.sum.length === 1 && typeof g.sum[0] === "string";
+/**
+ * 20-F LTM 야후 대응 검증기 고정 사본(재감사 12차 ② — 야후 필드·부호를 앱이 보낸 출처 기록(s0.y·s0.sign)에서 가져와, 앱이 필드를 바꿔도
+ * (이익잉여금 → 유형순자산) 같은 필드로 다시 계산해 통과했다). 앱 edgar-yahoo-quarters.ts FLOWS·INSTANTS·총차입금 규칙을 2026-10-04 에 떠 둔 것 —
+ * 개념 → [야후 필드(문자열 "a|b" = a 없으면 b, 배열 = 합), SEC 부호(SEC = 부호 × 야후)]. 앱 기록이 이 사본과 다르면 실패.
+ * 앱 대응을 고치면 이 사본도 같이 고친다
+ */
+/** YAHOO_LTM_FIXED 중 흐름 개념(FLOWS) */
+const YAHOO_LTM_FLOW = new Set();
+const YAHOO_LTM_FIXED = (() => {
+  const m = new Map();
+  const put = (cs, y, sign = 1) => { for (const c of cs) m.set(c, { y, sign }); };
+  // 흐름
+  put(["OperatingIncomeLoss", "OperatingIncomeLossUnified"], "totalOperatingIncomeAsReported");
+  put(["InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt", "InterestAndDebtExpense"], "interestExpense");
+  put([
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesAndExtraordinaryItemsNoncontrollingInterest",
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndEquityMethodInvestments",
+  ], "pretaxIncome");
+  put(["IncomeTaxExpenseBenefit"], "taxProvision");
+  put(["NetIncomeLoss"], "netIncome");
+  put(["NetIncomeLossAvailableToCommonStockholdersBasic"], "netIncomeCommonStockholders");
+  put(["ProfitLoss"], "netIncomeIncludingNoncontrollingInterests");
+  put(["DepreciationAmortizationCashFlowDerived", "DAIncludingContentAmortizationDerived", "DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
+    "DepreciationAndAmortization", "DepreciationAmortizationAndOther", "CostDepreciationAmortizationAndDepletion"], "reconciledDepreciation|depreciationAndAmortization");
+  put(["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"], "operatingCashFlow");
+  put(["NetCashProvidedByUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"], "investingCashFlow");
+  put(["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"], "financingCashFlow");
+  put(["PaymentsToAcquirePropertyPlantAndEquipment"], "purchaseOfPPE", -1);
+  put(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], "cashDividendsPaid", -1);
+  put(["PaymentsForRepurchaseOfCommonStock"], "repurchaseOfCapitalStock", -1);
+  put(["ShareBasedCompensation"], "stockBasedCompensation");
+  put(["IncreaseDecreaseInAccountsReceivable"], "changeInReceivables", -1);
+  put(["IncreaseDecreaseInInventories"], "changeInInventory", -1);
+  put(["IncreaseDecreaseInAccountsPayable"], "changeInAccountPayable");
+  put(["PaymentsToAcquireIntangibleAssets"], "purchaseOfIntangibles", -1);
+  put(["PaymentsToAcquireMarketableSecurities", "PaymentsToAcquireInvestments"], "purchaseOfInvestment", -1);
+  put(["ProceedsFromSaleAndMaturityOfMarketableSecurities"], "saleOfInvestment");
+  put(["ProceedsFromIssuanceOfLongTermDebt"], "longTermDebtIssuance");
+  put(["RepaymentsOfLongTermDebt"], "longTermDebtPayments", -1);
+  put(["EffectOfExchangeRateOnCashAndCashEquivalents"], "effectOfExchangeRateChanges");
+  put(["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect"], ["changesInCash", "effectOfExchangeRateChanges"]);
+  put(["InterestPaidNet"], "interestPaidCFF", -1);
+  put(["IncomeTaxesPaidNet", "IncomeTaxesPaid"], "taxesRefundPaid", -1);
+  for (const c of m.keys()) YAHOO_LTM_FLOW.add(c);
+  // 잔액(부호 없음)
+  put(["Assets", "LiabilitiesAndStockholdersEquity"], "totalAssets");
+  put(["Liabilities"], "totalLiabilitiesNetMinorityInterest");
+  put(["StockholdersEquity"], "stockholdersEquity");
+  put(["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"], "totalEquityGrossMinorityInterest");
+  put(["MinorityInterest"], "minorityInterest");
+  put(["AssetsCurrent"], "currentAssets");
+  put(["LiabilitiesCurrent"], "currentLiabilities");
+  put(["CashAndCashEquivalentsAtCarryingValue"], "cashAndCashEquivalents");
+  put(["MarketableSecuritiesCurrent", "ShortTermInvestments", "AvailableForSaleSecuritiesDebtSecuritiesCurrent", "DebtSecuritiesCurrent"], "otherShortTermInvestments");
+  put(["AccountsReceivableNetCurrent"], "accountsReceivable");
+  put(["InventoryNet"], "inventory");
+  put(["AccountsPayableCurrent"], "accountsPayable");
+  put(["PropertyPlantAndEquipmentNet"], "netPPE");
+  put(["LongTermInvestments"], "investmentsAndAdvances");
+  put(["CommonStocksIncludingAdditionalPaidInCapital"], ["capitalStock", "additionalPaidInCapital"]);
+  put(["RetainedEarningsAccumulatedDeficit"], "retainedEarnings");
+  put(["AccumulatedOtherComprehensiveIncomeLossNetOfTax"], "gainsLossesNotAffectingRetainedEarnings");
+  put(["LongTermDebtCurrent"], "currentDebt");
+  put(["LongTermDebtNoncurrent"], "longTermDebt");
+  // 총차입금(본표 합성) — 야후 정확 일치 경로
+  put(["DebtFaceDerived"], "totalDebt");
+  put(["DebtFaceNoncurrentDerived"], "longTermDebtAndCapitalLeaseObligation");
+  return m;
+})();
+/**
+ * SEC 20-F 연말 값(원통화) — 앱 개념 dst 를 만드는 원천(같은 이름 us-gaap → 대응표 사본 순서의 첫 묶음). 보고 통화 = 인스턴스에서 가장 많이 쓴
+ * 비 USD 통화(USD 편의 환산 값 제외). fl = filingAtDate 결과. → { v, how } | null
+ */
+function secBalanceOf(fl, dst) {
+  const curCode = (u) => /^(?:u_)?(?:iso4217[_:]?)?([a-z]{3})$/i.exec(u ?? "")?.[1]?.toUpperCase() ?? null;
+  const cnt = new Map();
+  for (const x of fl.facts) { const c0 = curCode(x.unit); if (c0) cnt.set(c0, (cnt.get(c0) ?? 0) + 1); }
+  const rep = [...cnt].filter(([c0]) => c0 !== "USD").sort((a, b) => b[1] - a[1])[0]?.[0] ?? (cnt.has("USD") ? "USD" : null);
+  const val = (id) => fl.facts.find((x) => x.id === id && !x.dims.length && curCode(x.unit) === rep)?.v ?? null;
+  const us = val(`us-gaap_${dst}`);
+  if (us != null) return { v: us, how: `us-gaap_${dst}` };
+  for (const [d0, sum, sign] of IFRS_GROUPS_SNAPSHOT) {
+    if (d0 !== dst) continue;
+    let t = 0;
+    const ps = [];
+    for (const e of sum) { const nm = (Array.isArray(e) ? e : [e]).find((x) => val(`ifrs-full_${x}`) != null); if (nm) { t += val(`ifrs-full_${nm}`); ps.push(nm); } }
+    if (ps.length) return { v: sign * t, how: `${sign < 0 ? "−" : ""}ifrs-full ${ps.join(" + ")}` };
+  }
+  return null;
+}
+/** 감가상각 합계 개념(앱 edgar-ev DA_TOTAL + 현금흐름 본표 합성) — 6-K 원 개념 대조에서 형제 개념의 원 개념을 같이 인정 */
+const DA_SIBLINGS = ["DepreciationAmortizationCashFlowDerived", "DAIncludingContentAmortizationDerived", "DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
+  "DepreciationAndAmortization", "DepreciationAmortizationAndOther", "CostDepreciationAmortizationAndDepletion"];
+/** 손익 흐름 개념(현금흐름 개념 아님) — 앱 edgar-yahoo-quarters FLOWS 앞 7개 항목의 개념(검증기 고정 사본) */
+const IS_FLOW_FIXED = new Set(["OperatingIncomeLoss", "OperatingIncomeLossUnified", "InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt", "InterestAndDebtExpense",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesAndExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndEquityMethodInvestments",
+  "IncomeTaxExpenseBenefit", "NetIncomeLoss", "NetIncomeLossAvailableToCommonStockholdersBasic", "ProfitLoss"]);
+/** 현금흐름표 개념 이름 규칙(앱 edgar-yahoo-quarters CF_CONCEPT 의 검증기 사본) */
+const CF_CONCEPT_FIXED = /^(PaymentsTo|PaymentsFor|PaymentsOf|Proceeds|Repayments|IncreaseDecrease|NetCash|EffectOfExchangeRate|CashCashEquivalents.*PeriodIncreaseDecrease|InterestPaid|IncomeTaxesPaid|DividendsReceived|InterestReceived|ShareBasedCompensation|OtherNoncashIncomeExpense|PaymentsForProceedsFrom)/;
+/** 현금흐름 개념인가 — 검증기 규칙(앱 isCfConcept 의 사본) */
+const isCfFixed = (c) => !IS_FLOW_FIXED.has(c) && (CF_CONCEPT_FIXED.test(c) || YAHOO_LTM_FLOW.has(c));
 const EXACT = 1e-9; // 화면 간 동일성 — 같은 모듈을 거치므로 부동소수 오차만
+const sameBase = (a, b, tol) => same(a, b, tol);
 function same(a, b, tol = EXACT) {
   if (a == null && b == null) return { status: NA, note: "양쪽 빈칸" };
   if (a == null || b == null) return { status: FAIL, note: `한쪽만 빈칸 (${a} vs ${b})` };
@@ -779,12 +1030,14 @@ async function sixKCfYtd(cik, sub, periodEnd, priorEnd, labels, pick) {
   const yC = periodEnd.slice(0, 4), yP = priorEnd.slice(0, 4);
   const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const labRe = labels.filter((l) => l.length > 3).sort((a, b) => b.length - a.length).map((l) => new RegExp(`(?:^|[^a-z])${l.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(esc).join("[^a-z0-9(]*(?:\\([^)]{0,30}\\)[^a-z0-9(]*)?")}[^a-z0-9(—\\-]*((?:[\\s‖]*(?:\\(?[\\d,]+(?:\\.\\d+)?\\)?|—|-)(?![\\d,]))+)`, "g"));
+  // 조회 실패는 기록해 두고, 값을 못 찾고 끝나면 던진다(재감사 12차 ⑦ — 실패를 빈 문서로 삼키면 "양쪽 빈칸 — 검증불가"가 됐다)
+  const errs = [];
   for (let i = 0; i < (rc.form ?? []).length; i++) {
     if (rc.form[i] !== "6-K" || !(rc.filingDate[i] > periodEnd && rc.filingDate[i] <= hi)) continue;
     const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rc.accessionNumber[i].replace(/-/g, "")}`;
-    const items = (await secJson(base + "/index.json").catch(() => null))?.directory.item ?? [];
+    const items = (await secJson(base + "/index.json").catch((e) => { errs.push(`${rc.accessionNumber[i]} index: ${String(e).slice(0, 60)}`); return null; }))?.directory.item ?? [];
     for (const d of items.filter((x) => /\.htm$/i.test(x.name) && !/-index/i.test(x.name) && Number(x.size) > 15_000)) {
-      const html = await secText(`${base}/${d.name}`).catch(() => "");
+      const html = await secText(`${base}/${d.name}`).catch((e) => { errs.push(`${rc.accessionNumber[i]} ${d.name}: ${String(e).slice(0, 60)}`); return ""; });
       const text = html.replace(/<\/t[dh]>/gi, " ‖ ").replace(/<\/tr>/gi, "\n").replace(/<[^>]+>/g, " ")
         .replace(/&#8212;|&mdash;/g, "—").replace(/&#160;|&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;/g, "'").replace(/&#?[a-z0-9]+;/gi, " ").toLowerCase();
       if (!/operating activities/.test(text) || !/cash flows?/.test(text)) continue;
@@ -817,6 +1070,7 @@ async function sixKCfYtd(cik, sub, periodEnd, priorEnd, labels, pick) {
       }
     }
   }
+  if (errs.length) throw new Error(`6-K 조회 실패 — ${errs.join(" · ")}`);
   return null;
 }
 
@@ -827,7 +1081,8 @@ async function sixKDocText(cik, report) {
   if (!m) return null;
   const url = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${m[1].replace(/-/g, "")}/${m[2]}`;
   if (!sixKDocCache.has(url)) {
-    const html = await secText(url).catch(() => "");
+    // 조회 실패는 던진다(캐시하지 않음 — 재감사 12차 ④: 빈 문서로 삼키면 "줄 없음"과 구분되지 않았다)
+    const html = await secText(url);
     // 슬라이드 그림(<img>)마다 구분표(§§) — 슬라이드 형식 문서는 슬라이드 단위로 재무제표 종류를 가른다
     sixKDocCache.set(url, html.replace(/<img\b/gi, " §§ <img").replace(/<\/t[dh]>/gi, " ‖ ").replace(/<\/tr>/gi, "\n").replace(/<[^>]+>/g, " ")
       .replace(/&#8212;|&mdash;/g, "—").replace(/&#160;|&nbsp;|\u00a0/g, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;/g, "'").replace(/&#?[a-z0-9]+;/gi, " ").toLowerCase());
@@ -915,33 +1170,77 @@ async function filingAtDate(cik, sub, date) {
   }
   const cal = await secText(`${base}/${calName}`);
   const lab = labName === calName ? cal : await secText(`${base}/${labName}`);
-  const locMap = (x) => { const r = new Map(); for (const l of x.matchAll(/<link:loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) r.set(id, h); } return r; };
+  const locMap = (x) => { const r = new Map(); for (const l of x.matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) r.set(id, h); } return r; };
   const labels = new Map(), negLabels = new Map();
   { const loc = locMap(lab), text = new Map(), negText = new Map();
-    for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+    for (const m of lab.matchAll(/<(?:[\w-]+:)?label\b([^>]*)>([^<]*)<\/(?:[\w-]+:)?label>/g)) {
       const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
       if (!id || /documentation/i.test(m[1])) continue;
       text.set(id, [...(text.get(id) ?? []), m[2].trim()]);
       // 부호 반전 역할(negatedLabel 계열) — 보고서 표시값 = −XBRL 값(6-K 대조의 부호 판정, 2026-10-02)
       if (/role="[^"]*\/negated/i.test(m[1])) negText.set(id, [...(negText.get(id) ?? []), m[2].trim()]);
     }
-    for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+    for (const a of lab.matchAll(/<(?:[\w-]+:)?labelArc\b([^>]*)\/?>/g)) {
       const f = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = /xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "", t = text.get(to);
       if (f && t) labels.set(f, [...(labels.get(f) ?? []), ...t]);
       if (f && negText.get(to)) negLabels.set(f, [...(negLabels.get(f) ?? []), ...negText.get(to)]);
     } }
   const kids = new Map(), faceIds = new Set(), hasParent = new Set();
-  for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+  for (const m of cal.matchAll(/<(?:[\w-]+:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
-    if (!/BALANCESHEET|FINANCIALPOSITION|FINANCIALCONDITION/i.test(role) || /Parenth|Detail|Table|Polic/i.test(role)) continue;
+    if (!/BALANCESHEET|FINANCIALPOSITION|FINANCIALCONDITION/i.test(String(role).replace(/[^A-Za-z]/g, "")) || /Parenth|Detail|Table|Polic/i.test(role)) continue;
     const loc = locMap(m[2]);
-    for (const a of m[2].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+    for (const a of m[2].matchAll(/<(?:[\w-]+:)?calculationArc\b([^>]*)\/?>/g)) {
       const fr = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       if (!fr || !to) continue;
       kids.set(fr, [...(kids.get(fr) ?? []), to]); faceIds.add(fr); faceIds.add(to); hasParent.add(to);
     }
   }
-  return { form: rc.form[k], filed: rc.filingDate[k], date: rc.reportDate[k], facts, durFacts, labels, negLabels, kids, faceIds, roots: [...faceIds].filter((x) => !hasParent.has(x)) };
+  return { form: rc.form[k], filed: rc.filingDate[k], date: rc.reportDate[k], accn: rc.accessionNumber[k], facts, durFacts, labels, negLabels, kids, faceIds, roots: [...faceIds].filter((x) => !hasParent.has(x)) };
+}
+/**
+ * 기준일(±7일) 정기공시의 손익계산서 본표 세전이익 줄(2026-10-09 — 본표 세전이익 소계를 회사 고유 태그로 단 회사 MCD·ORCL, 10-Q 에서
+ * IncomeLossAttributableToParent 로 단 MRVL). 검증기 독립 판독: 손익계산서 계산 구조에서 법인세(IncomeTaxExpenseBenefit)와 형제인 줄 중
+ * 그 공시 라벨이 "… before … tax …" 인 개념(표준·회사 고유 불문, 국내·해외 주석 개념 제외) → 그 공시 원본의 차원 없는 기간 값(기준일에 끝나는 것).
+ * → { id, label, vals: [{ start, end, v }], form, filed, accn } | null
+ */
+const facePtCache = new Map();
+async function facePretaxAt(cik, sub, date) {
+  const k0 = `${cik}|${date}`;
+  if (facePtCache.has(k0)) return facePtCache.get(k0);
+  const p = (async () => {
+    const fl = await filingAtDate(cik, sub, date);
+    if (!fl?.accn) return null;
+    const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${fl.accn.replace(/-/g, "")}`;
+    const names = (await secJson(base + "/index.json")).directory.item.map((x) => x.name);
+    const calN = names.find((x) => /_cal\.xml$/i.test(x)) ?? names.find((x) => /\.xsd$/i.test(x));
+    if (!calN) return null;
+    const cal = await secText(`${base}/${calN}`);
+    for (const m of cal.matchAll(/<(?:[\w-]+:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calculationLink>/g)) {
+      const role = m[1].split("/").pop() ?? "";
+      if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Segment|Comprehensive|Polic/i.test(role)) continue;
+      const loc = new Map();
+      for (const l of m[2].matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) loc.set(id, h); }
+      const kids = new Map();
+      for (const a of m[2].matchAll(/<(?:[\w-]+:)?calculationArc\b([^>]*)\/?>/g)) {
+        const fr = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
+        if (fr && to) kids.set(fr, [...(kids.get(fr) ?? []), to]);
+      }
+      for (const ks of kids.values()) {
+        if (!ks.includes("us-gaap_IncomeTaxExpenseBenefit")) continue;
+        for (const id of ks) {
+          if (id === "us-gaap_IncomeTaxExpenseBenefit" || /Domestic|Foreign/.test(id)) continue;
+          const label = (fl.labels.get(id) ?? []).find((t) => /\bbefore\b.*\btax/i.test(t));
+          if (!label) continue;
+          const vals = fl.durFacts.filter((x) => x.id === id && !x.dims?.length && /usd/i.test(x.unit ?? "")).map((x) => ({ start: x.start, end: x.end, v: x.v }));
+          return { id, label, vals, form: fl.form, filed: fl.filed, accn: fl.accn };
+        }
+      }
+    }
+    return null;
+  })();
+  facePtCache.set(k0, p);
+  return p;
 }
 /**
  * 재무상태표 본표 차입금·리스 줄 — 검증기 독립 판정(개념명·라벨 규칙, 앱과 같은 성격의 규칙이라 공통모드). 차입금 성격 노드를 만나면
@@ -1351,6 +1650,7 @@ async function secFaceRevenue(cik, sub, G, bank) {
     for (const f of oldest > E ? sub.filings?.files ?? [] : []) {
       if (olderLoaded.has(f.name) || (f.filingTo ?? "") < E) continue;
       olderLoaded.add(f.name);
+      // silent-ok: 과거 목록 조회 실패 — 그 10-K 를 못 찾아 대응값 없음(FAIL)으로 드러난다
       try { pages.push(await secJson(`https://data.sec.gov/submissions/${f.name}`)); } catch { /* 과거 목록 조회 실패 — 대응값 없음(FAIL)으로 드러난다 */ }
     }
     const more = [];
@@ -1496,7 +1796,7 @@ async function faceCogsLine(cik, accn) {
   const desc = async (list) => Promise.all((list ?? []).map(async (t) => ({ ...t, label: await nameOf(t.id) })));
   // 현금흐름표·재무상태표·자본변동표에도 실린 개념(NetIncomeLoss 등) — "이 공시 본표가 그 기간을 싣는가"(D형 covers) 판정에서 뺀다.
   // AMZN 10-Q 현금흐름표는 최근 12개월 열을, 자본변동표는 분기별 순이익을 실어 손익계산서에 없는 기간이 잡혔다(2026-09-26)
-  const otherStmt = (r) => /CASHFLOW|BALANCESHEET|FINANCIALPOSITION|FINANCIALCONDITION|EQUITY|STOCKHOLDERS|SHAREHOLDERS/i.test(r) && !/Parenth|Detail|Table|Polic/i.test(r);
+  const otherStmt = (r) => /CASHFLOW|BALANCESHEET|FINANCIALPOSITION|FINANCIALCONDITION|EQUITY|STOCKHOLDERS|SHAREHOLDERS/i.test(String(r).replace(/[^A-Za-z]/g, "")) && !/Parenth|Detail|Table|Polic/i.test(r);
   const faceIdsOf = (role, ids) => {
     const other = new Set(pres.filter((p) => p.role !== role && otherStmt(p.role)).flatMap((p) => p.arcs.flatMap((a) => [a.fr, a.to])));
     const own = ids.filter((id) => !other.has(id));
@@ -1889,7 +2189,26 @@ async function secFaceCogs({ cik, sub, facts, unit, foreign, rule }) {
   };
   /** 읽은 공시 전체의 기간 목록 [start, end] */
   const periodsAll = () => [...new Set(faces.flatMap((g) => [...(g.periods ?? [])]))].map((k) => k.split("|"));
-  return { annualAt, quarterAt, ltmAt, faces, addOriginals, origAt, periodsAll };
+  /**
+   * 읽은 범위(최근 연차 3건) 밖 사업연도(2026-10-09 — META 2021: 제출 목록 recent 1,000건에 FY2021~2023 10-K 가 없어 "범위 밖" 검증불가) — 결산일 E 를
+   * 싣는 연차 공시(그 해와 이후 2년, 매출 판독 extend 와 같은 범위)를 제출 목록·과거 목록 파일에서 찾아 더 읽는다. 값은 annualAt 이 최신 공시부터 고른다
+   */
+  const extendFY = async (E) => {
+    const oldest = () => subPages.map((pg) => (pg.filingDate ?? []).at(-1) ?? "").sort()[0] ?? "";
+    for (const f of oldest() > E ? sub.filings?.files ?? [] : []) {
+      if (oldPages.has(f.name) || (f.filingTo ?? "") < E) continue;
+      oldPages.add(f.name);
+      subPages.push(await secJson(`https://data.sec.gov/submissions/${f.name}`));
+    }
+    const t = Date.parse(E);
+    for (const pg of subPages)
+      for (let i = 0; i < (pg.form ?? []).length; i++) {
+        const d = pg.reportDate?.[i] ? (Date.parse(pg.reportDate[i]) - t) / 864e5 : NaN;
+        if (annForm.test(pg.form[i]) && d >= -7 && d <= 800 && !read.has(pg.accessionNumber[i]))
+          await addFiling({ accn: pg.accessionNumber[i], form: pg.form[i], filed: pg.filingDate[i], report: pg.reportDate[i] });
+      }
+  };
+  return { annualAt, quarterAt, ltmAt, faces, addOriginals, origAt, periodsAll, extendFY };
 }
 
 /** 외부 값(백만 단위 부동소수 환산 포함)을 달러 정수로 — 표현 오차만 없앤다(허용치 아님) */
@@ -1969,6 +2288,9 @@ const EXT_NONOP_RE = /\bnon-?operating\b|^\s*other\s*(\(\s*)?(income|expense|gai
 const GENERAL_COST_ID = /_(SellingGeneralAndAdministrative|CostOf|OperatingExpenses$|CostsAndExpenses|GeneralAndAdministrativeExpense$|ResearchAndDevelopmentExpense)/;
 const OTHER_OP_ID = /_(OtherOperatingIncomeExpenseNet|OtherCostAndExpenseOperating|OtherOperatingCostAndExpense|OtherOperatingIncome|OtherExpenses)$/;
 const OP_CHARGE_RE = /Restructur|Impair|Severance|Litigation|Settlement|AcquisitionRelated|BusinessCombination|Merger|Integration|Separation|Divestiture|GainLossOnDisposition|GainLossOnSale|Terminat|other operating charges/i; // other operating charges: KO 본표 줄(구조조정·손상 등 — 앱 일회성비용 규칙과 같은 판정, 2026-09-29)
+/** 라벨의 부정 문맥("~ excluding impairment", "(Excluding Goodwill)") 이후를 떼고 판정(2026-10-08 — PEP FY2025 10-K 가 손상 줄 라벨을
+ * "Impairment of Intangible Assets (Excluding Goodwill)" 로 바꿔 예전 "라벨에 exclu 있으면 제외" 규칙이 손상 줄 자체를 뺐다). 앱 edgar-oneoff NEGATED 와 같은 원칙 */
+const OP_NEGATED = /\b(excluding|excl\.?|exclusive of|other than|before)\b.*$/i;
 const OP_AMORT_RE = /AmortizationOfIntangible|AmortizationOfAcquired|IntangibleAssets?\w*Amortiz|amortization of (acquired |purchased |acquisition-related )?intangible/i;
 /** 금융 부문 표지 — 본표 매출 줄(금융서비스 수익)·제품·서비스 멤버(금융) */
 const FIN_REV_ID_RE = /FinancialServicesRevenue|FinancingRevenue|FinanceAndInterestIncome|FinancialProductsRevenue/i;
@@ -1979,7 +2301,7 @@ async function fasbText(url) {
   const disk = pathJoin(SEC_DISK, `fasb_${url.replace(/^https?:\/\/xbrl\.fasb\.org\//, "").replace(/[^A-Za-z0-9._-]/g, "_")}`);
   if (existsSync(disk)) return readFileSync(disk, "utf8");
   const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });
-  if (!r.ok) throw new Error(`FASB ${url} → HTTP ${r.status}`);
+  if (!r.ok) throw new Error(`FASB HTTP ${r.status} ${url.replace(/^https:\/\/(www\.)?/, "")}`);
   const t = await r.text();
   mkdirSync(SEC_DISK, { recursive: true });
   writeFileSync(disk, t);
@@ -1993,10 +2315,10 @@ function soiClass(y) {
   if (!soiMemo.has(y)) soiMemo.set(y, (async () => {
     const x = await fasbText(soiCalUrl(y));
     const out = new Map();
-    for (const m of x.matchAll(/<link:calculationLink\b[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+    for (const m of x.matchAll(/<(?:[\w-]+:)?calculationLink\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calculationLink>/g)) {
       const loc = new Map(), kids = new Map();
-      for (const l of m[1].matchAll(/<link:loc\b([^>]*)\/?>/g)) { const lb = /xlink:label=['"]([^'"]+)['"]/.exec(l[1])?.[1], h = /xlink:href=['"][^'"#]*#us-gaap_([^'"]+)['"]/.exec(l[1])?.[1]; if (lb && h) loc.set(lb, h); }
-      for (const a of m[1].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+      for (const l of m[1].matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) { const lb = /xlink:label=['"]([^'"]+)['"]/.exec(l[1])?.[1], h = /xlink:href=['"][^'"#]*#us-gaap_([^'"]+)['"]/.exec(l[1])?.[1]; if (lb && h) loc.set(lb, h); }
+      for (const a of m[1].matchAll(/<(?:[\w-]+:)?calculationArc\b([^>]*)\/?>/g)) {
         const fr = loc.get(/xlink:from=['"]([^'"]+)['"]/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to=['"]([^'"]+)['"]/.exec(a[1])?.[1] ?? "");
         if (fr && to) kids.set(fr, [...(kids.get(fr) ?? []), to]);
       }
@@ -2074,7 +2396,8 @@ async function faceOpincLine(cik, accn, revConcept) {
           if (seen.has(a.to)) continue;
           seen.add(a.to);
           const lab = await nameOf(a.to);
-          const kind = OP_AMORT_RE.test(`${a.to} ${lab}`) ? "amort" : OP_CHARGE_RE.test(`${a.to} ${lab}`) && !/\bexclu/i.test(lab) && !GENERAL_COST_ID.test(a.to) /* 라벨의 "~제외" 문구만 — 개념명 ImpairmentOfIntangibleAssetsExcludingGoodwill(PEP)은 손상 줄 */ ? "charge" : null;
+          const labP = lab.replace(OP_NEGATED, ""); // 라벨의 "~제외" 문구는 떼고 — 개념명 ImpairmentOfIntangibleAssetsExcludingGoodwill(PEP)은 손상 줄
+          const kind = OP_AMORT_RE.test(`${a.to} ${lab}`) ? "amort" : OP_CHARGE_RE.test(`${a.to} ${labP}`) && !GENERAL_COST_ID.test(a.to) ? "charge" : null;
           if (kind) { charges.push({ id: a.to, w: w * a.w, label: lab, kind }); continue; }
           // "기타 영업손익" 합산 줄(오너 결정 2026-09-28 — 앱 edgar-oneoff 와 같은 원칙, 검증기 독립 판독): 주석 계산 구조(Details 역할)에
           // 하위 내역이 있으면 그중 일회성 줄을 charges 로(MCD "Impairment and other charges (gains), net" · CL · MU). 줄 자체는 넘어간다
@@ -2084,7 +2407,7 @@ async function faceOpincLine(cik, accn, revConcept) {
             for (const x of det) {
               if (seen.has(x.to)) continue;
               const l2 = await nameOf(x.to);
-              if (!OP_AMORT_RE.test(`${x.to} ${l2}`) && OP_CHARGE_RE.test(`${x.to} ${l2}`) && !/\bexclu/i.test(l2)) { seen.add(x.to); charges.push({ id: x.to, w: w * a.w * x.w, label: `${l2}(주석 — ${lab} 내역)`, kind: "charge" }); found = true; }
+              if (!OP_AMORT_RE.test(`${x.to} ${l2}`) && OP_CHARGE_RE.test(`${x.to} ${l2.replace(OP_NEGATED, "")}`)) { seen.add(x.to); charges.push({ id: x.to, w: w * a.w * x.w, label: `${l2}(주석 — ${lab} 내역)`, kind: "charge" }); found = true; }
             }
             if (found) continue;
           }
@@ -2296,7 +2619,7 @@ const DA_NM = (id) => id.replace(/^[a-z0-9-]+_/i, "");
  */
 function cfDaStruct(cal, labels, content) {
   for (const c of xbrlLinks(cal, "calculation")) {
-    if (!/CASHFLOW/i.test(c.role) || /Detail|Table|Parenth|Supplement/i.test(c.role)) continue;
+    if (!/CASHFLOW/i.test(String(c.role).replace(/[^A-Za-z]/g, "")) || /Detail|Table|Parenth|Supplement/i.test(c.role)) continue;
     const root = c.arcs.find((a) => CF_OP_ROOT.test(a.fr))?.fr;
     if (!root) continue;
     const lines = [], excl = [], impairLines = [], separateImpair = [], parentOf = new Map(), seen = new Set();
@@ -2726,7 +3049,8 @@ async function faceSgaLine(cik, accn, sym) {
   let labs = null;
   const L = async () => (labs ??= labN ? xbrlLabelsRole(await secTextC(`${base}/${labN}`)) : new Map());
   // 원가 줄 — 검증기 매출원가 판독(faceCogsLine)의 매출총이익 식 차감 항·원가 소계 하위 줄 + D형 구성 규칙 줄(--cogs-rules)
-  const fc = await faceCogsLine(cik, accn).catch(() => null);
+  // 조회 실패는 던진다(호출자가 기록) — null 로 삼키면 원가 줄이 빠진 채 판관비 구성을 판정했다
+  const fc = await faceCogsLine(cik, accn);
   const cogsIds = new Set([...(fc?.terms ?? []), ...(fc?.parts ?? [])].map((t) => t.id.split("[")[0]));
   const rule = COGS_RULES[sym];
   for (const l of [...(rule?.lines ?? []), ...Object.values(rule?.linesByForm ?? {}).flat()]) for (const c of [].concat(l.concept)) cogsIds.add(c);
@@ -3325,7 +3649,7 @@ async function secCashFlowDa(cik, sub, G = null) {
   const lab = labName === calName ? cal : await secText(`${base}/${labName}`);
   const locMap = (x) => {
     const m = new Map();
-    for (const l of x.matchAll(/<link:loc\b([^>]*)\/?>/g)) {
+    for (const l of x.matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) {
       const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], href = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1];
       if (id && href) m.set(id, href);
     }
@@ -3335,11 +3659,11 @@ async function secCashFlowDa(cik, sub, G = null) {
   const labels = new Map();
   {
     const loc = locMap(lab), text = new Map();
-    for (const m of lab.matchAll(/<link:label\b([^>]*)>([^<]*)<\/link:label>/g)) {
+    for (const m of lab.matchAll(/<(?:[\w-]+:)?label\b([^>]*)>([^<]*)<\/(?:[\w-]+:)?label>/g)) {
       const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1];
       if (id && !/documentation/i.test(/xlink:role="([^"]*)"/.exec(m[1])?.[1] ?? "")) text.set(id, [...(text.get(id) ?? []), m[2].trim()]);
     }
-    for (const a of lab.matchAll(/<link:labelArc\b([^>]*)\/?>/g)) {
+    for (const a of lab.matchAll(/<(?:[\w-]+:)?labelArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), t = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       if (from && t) labels.set(from, [...(labels.get(from) ?? []), ...t]);
     }
@@ -3348,12 +3672,12 @@ async function secCashFlowDa(cik, sub, G = null) {
   const EXCL = /debt|discount|premium|issuance|financing\s*costs?|deferred\s*(financing|charges)|stock|share-?based|compensation|operating[\s-]*lease|lease\s*expense|content|contract\s*(cost|acquisition)|capitalized\s*software|investment|securities|bond|inventory|incentive|acquisition\s*costs|defined\s*benefit|pension|postretirement/i;
   let lines = null;
   let cfMeta = { impairLines: [], separateImpair: [], continuing: false };
-  for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+  for (const m of cal.matchAll(/<(?:[\w-]+:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
-    if (!/CASHFLOW/i.test(role) || /Detail|Table|Parenth|Supplement/i.test(role)) continue;
+    if (!/CASHFLOW/i.test(String(role).replace(/[^A-Za-z]/g, "")) || /Detail|Table|Parenth|Supplement/i.test(role)) continue;
     const loc = locMap(m[2]);
     const arcs = [];
-    for (const a of m[2].matchAll(/<link:calculationArc\b([^>]*)\/?>/g)) {
+    for (const a of m[2].matchAll(/<(?:[\w-]+:)?calculationArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
       if (from && to) arcs.push([from, to]);
     }
@@ -3630,12 +3954,19 @@ async function verifyUs(sym) {
   const natRev = natCur ? natAnnual([["us-gaap", "Revenues"], ["us-gaap", "RevenueFromContractWithCustomerExcludingAssessedTax"], ["ifrs-full", "Revenue"], ["ifrs-full", "RevenueFromContractsWithCustomers"]], natCur) : new Map();
   const natNi = natCur ? natAnnual([["us-gaap", "NetIncomeLoss"], ["ifrs-full", "ProfitLossAttributableToOwnersOfParent"]], natCur) : new Map();
   const natEps = natCur ? natAnnual([["us-gaap", "EarningsPerShareDiluted"], ["ifrs-full", "DilutedEarningsLossPerShare"]], natCur + "/shares") : new Map();
+  // E층 원통화 정합성용(희석 우선, 없으면 기본) — ASML us-gaap EUR, SPOT·TSM ifrs-full. SPOT 은 희석 분자를 따로 공시(희석 효과 포함 지배주주 순이익)
+  const natEpsB = natCur ? natAnnual([["us-gaap", "EarningsPerShareBasic"], ["ifrs-full", "BasicEarningsLossPerShare"]], natCur + "/shares") : new Map();
+  const natWDil = natCur ? natAnnual([["us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding"], ["ifrs-full", "AdjustedWeightedAverageShares"]], "shares") : new Map();
+  const natWBas = natCur ? natAnnual([["us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic"], ["ifrs-full", "WeightedAverageShares"]], "shares") : new Map();
+  const natNiDil = natCur ? natAnnual([["ifrs-full", "ProfitLossAttributableToOrdinaryEquityHoldersOfParentEntityIncludingDilutiveEffects"]], natCur) : new Map();
   // 손익 줄 연도 열 대조(재감사 N1, 2026-10-02 — 앱 데이터에서 사업연도 항목이 빠져도 화면 연도·LTM 이 빈칸이 되는 것을 잡는다)
   const PT_TAGS = [["us-gaap", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"], ["us-gaap", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"], ["ifrs-full", "ProfitLossBeforeTax"]];
   const natPt = natCur ? natAnnual(PT_TAGS, natCur) : new Map();
   const natTax = natCur ? natAnnual([["us-gaap", "IncomeTaxExpenseBenefit"], ["ifrs-full", "IncomeTaxExpenseContinuingOperations"]], natCur) : new Map();
   const natRd = natCur ? natAnnual([["us-gaap", "ResearchAndDevelopmentExpense"], ["ifrs-full", "ResearchAndDevelopmentExpense"]], natCur) : new Map();
   // companyfacts 가 최신 20-F/10-K 를 빠뜨린 경우(TSM 2025) — 원본 XBRL 인스턴스에서 원통화 값을 직접 읽는다
+  const instFyByEnd = new Map(); // 결산일 → { end, fy, filed } — 같은 원본의 dei:DocumentFiscalYearFocus(B층 연도 라벨 대조용)
+  const instNat = new Map(); // "ns:개념" → [{ start?, end, val, form, filed }] — 같은 원본의 원통화 차원 없는 값(재무상태표·현금흐름표 A층 natFact 보충, 2026-10-08)
   if (natCur) {
     const rc2 = sub.filings?.recent ?? {};
     for (let i = 0; i < (rc2.form ?? []).length; i++) {
@@ -3651,7 +3982,7 @@ async function verifyUs(sym) {
         const ctx = new Map();
         for (const m of xml.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
           const b = m[2];
-          ctx.set(m[1], { start: /<(?:xbrli:)?startDate>([^<]+)</.exec(b)?.[1], end: /<(?:xbrli:)?endDate>([^<]+)</.exec(b)?.[1], dimmed: /dimension="/.test(b) });
+          ctx.set(m[1], { start: /<(?:xbrli:)?startDate>([^<]+)</.exec(b)?.[1], end: /<(?:xbrli:)?endDate>([^<]+)</.exec(b)?.[1] ?? /<(?:xbrli:)?instant>([^<]+)</.exec(b)?.[1], dimmed: /dimension="/.test(b) });
         }
         const read = (ns, tag, unitRe) => {
           for (const m of xml.matchAll(new RegExp(`<${ns}:${tag}(?=[\\s>])([^>]*)>([^<]+)</${ns}:${tag}>`, "g"))) {
@@ -3665,12 +3996,29 @@ async function verifyUs(sym) {
         };
         const cu = new RegExp(natCur, "i");
         const put = (map, e) => { if (e && !atEnd(map, end)) map.set(end, e); };
+        const fyF = /<dei:DocumentFiscalYearFocus\b[^>]*>\s*(\d{4})\s*</.exec(xml)?.[1];
+        if (fyF) instFyByEnd.set(end, { end, fy: Number(fyF), filed: rc2.filingDate[i], how: `${rc2.form[i]} 원본 dei:DocumentFiscalYearFocus` });
+        for (const m of xml.matchAll(/<(us-gaap|ifrs-full):(\w+)\b([^>]*)>([^<]+)</g)) {
+          const cx = ctx.get(/contextRef="([^"]+)"/.exec(m[3])?.[1]);
+          if (!cx || cx.dimmed || cx.end !== end || !cu.test(/unitRef="([^"]+)"/.exec(m[3])?.[1] ?? "")) continue;
+          if (cx.start && (Date.parse(cx.end) - Date.parse(cx.start)) / 864e5 < 300) continue;
+          const k = `${m[1]}:${m[2]}`, v = Number(m[4]);
+          if (!Number.isFinite(v)) continue;
+          if (!instNat.has(k)) instNat.set(k, []);
+          if (!instNat.get(k).some((x) => x.start === cx.start && x.end === cx.end)) instNat.get(k).push({ start: cx.start, end: cx.end, val: v, form: rc2.form[i], filed: rc2.filingDate[i] });
+        }
         put(natRev, read("ifrs-full", "Revenue", cu) ?? read("ifrs-full", "RevenueFromContractsWithCustomers", cu) ?? read("us-gaap", "Revenues", cu));
         put(natNi, read("ifrs-full", "ProfitLossAttributableToOwnersOfParent", cu) ?? read("us-gaap", "NetIncomeLoss", cu));
         put(natEps, read("ifrs-full", "DilutedEarningsLossPerShare", cu) ?? read("us-gaap", "EarningsPerShareDiluted", cu));
         put(natPt, read("ifrs-full", "ProfitLossBeforeTax", cu) ?? read("us-gaap", PT_TAGS[0][1], cu) ?? read("us-gaap", PT_TAGS[1][1], cu));
         put(natTax, read("ifrs-full", "IncomeTaxExpenseContinuingOperations", cu) ?? read("us-gaap", "IncomeTaxExpenseBenefit", cu));
         put(natRd, read("ifrs-full", "ResearchAndDevelopmentExpense", cu) ?? read("us-gaap", "ResearchAndDevelopmentExpense", cu));
+        // E층 원통화 정합성(희석·기본 EPS × 가중평균 주식수 ≈ 순이익) — 주식수 단위는 통화가 붙지 않은 shares(EPS 단위 "TWD per share" 제외)
+        const sh = new RegExp(`^(?!.*(${natCur}|per)).*shares?$`, "i");
+        put(natEpsB, read("ifrs-full", "BasicEarningsLossPerShare", cu) ?? read("us-gaap", "EarningsPerShareBasic", cu));
+        put(natWDil, read("ifrs-full", "AdjustedWeightedAverageShares", sh) ?? read("us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding", sh));
+        put(natWBas, read("ifrs-full", "WeightedAverageShares", sh) ?? read("us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic", sh));
+        put(natNiDil, read("ifrs-full", "ProfitLossAttributableToOrdinaryEquityHoldersOfParentEntityIncludingDilutiveEffects", cu));
       } catch (e) {
         hardErrors.push(`원통화 인스턴스 판독 실패(${end}): ${String(e).slice(0, 50)}`);
       }
@@ -3859,6 +4207,8 @@ async function verifyUs(sym) {
   };
 
   let inst = new Map(), instErr = "";
+  /** 중단사업 감가상각 미공시로 감가상각비 빈칸이 정답인 연도 열(judgeD) — EBITDA 기대치를 빈칸 정답으로 바꾼다 */
+  const discDaBlank = new Set();
   // 은행 레이아웃 = 은행 전용 줄(총예금·순수익) — 2026-10-01 부터 은행 하이라이트에도 EV 줄이 있다(오너 지시 "EV를 비워두면 안된다")
   const bank = h.rows.some((r) => r.key === "deposits" || r.key === "net_revenue");
   if (bank) {
@@ -3902,18 +4252,31 @@ async function verifyUs(sym) {
     // 연도 라벨의 연도 자체 — SEC 가 붙인 사업연도(fy = DocumentFiscalYearFocus)와 대조(감사: 결산일만 보고 연도는 안 봤다).
     // companyfacts 의 fy 는 "그 공시의" 사업연도라, 각 연간 공시(accn)에서 가장 늦은 결산일(=당기)에만 붙여 쓴다.
     // 52/53주 결산(1월 1~7일 결산)은 SEC fy 가 전년도라 CLAUDE.md fiscalYearOf 규칙과 같은 결과가 나와야 한다.
-    const byAccn = new Map();
+    const byAccn = new Map(), endsByAccn = new Map(); // endsByAccn: 공시 → 실린 연간 기간 결산일들(당기 + 비교 기간)
     for (const ns of ["us-gaap", "ifrs-full"]) for (const con of Object.values(f.facts[ns] ?? {})) for (const arr of Object.values(con.units ?? {})) for (const e of arr) {
       if (e.fp !== "FY" || !/^(10-K|20-F)$/.test(e.form) || !e.start || !e.fy || !e.accn) continue;
       const d = (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
       if (d < 300 || d > 400) continue;
+      if (!endsByAccn.has(e.accn)) endsByAccn.set(e.accn, new Set());
+      endsByAccn.get(e.accn).add(e.end);
       const p = byAccn.get(e.accn);
       if (!p || e.end > p.end) byAccn.set(e.accn, { end: e.end, fy: e.fy, filed: e.filed ?? "" });
     }
     const fyByEnd = new Map(); // 당기 결산일 → { fy, filed } (같은 결산일이면 최신 제출분)
     for (const v of byAccn.values()) { const p = fyByEnd.get(v.end); if (!p || v.filed > p.filed) fyByEnd.set(v.end, v); }
     for (const c of fyCols) {
-      const s = [...fyByEnd].filter(([end]) => dayDiff(end, c.date) <= 7).sort((a, b) => dayDiff(a[0], c.date) - dayDiff(b[0], c.date))[0]?.[1];
+      let s = [...fyByEnd].filter(([end]) => dayDiff(end, c.date) <= 7).sort((a, b) => dayDiff(a[0], c.date) - dayDiff(b[0], c.date))[0]?.[1];
+      // 그 결산일이 당기인 연간 공시가 없을 때(2026-10-07): ① companyfacts 가 빠뜨린 최신 공시 — 원본 인스턴스의 fy(TSM 2025)
+      // ② 분사 전 연도 등 비교 기간으로만 실린 해(CEG 2021·GEV 2022~23·SNDK 2023~24) — 그 기간을 실은 가장 이른 공시의 당기 fy − 경과 연수
+      if (!s) s = [...instFyByEnd.values()].find((v) => dayDiff(v.end, c.date) <= 7) ?? null;
+      if (!s) {
+        const cmp = [...endsByAccn].filter(([a, ends]) => [...ends].some((e0) => dayDiff(e0, c.date) <= 7) && byAccn.get(a)?.end > c.date)
+          .map(([a]) => byAccn.get(a)).sort((x, y) => x.filed.localeCompare(y.filed))[0];
+        if (cmp) {
+          const yrs = Math.round((Date.parse(cmp.end) - Date.parse(c.date)) / (365.25 * 864e5));
+          s = { end: c.date, fy: cmp.fy - yrs, filed: cmp.filed, how: `비교 기간 — ${cmp.filed} 공시(당기 ${cmp.end}, fy ${cmp.fy}) − ${yrs}년` };
+        }
+      }
       const y = Number(/^(\d{4})/.exec(c.label)?.[1]);
       // 1~2월 결산을 "시작 연도"로 부르는 회사(HD·TGT — 2025-02-02 결산 = fiscal 2024)는 앱(결산일 연도)과 1년 어긋난다.
       // 어느 기준으로 라벨을 붙일지 오너 결정 보류(2026-09-24) — 그 관행에 정확히 해당할 때만 검증불가로 두고 나머지 불일치는 실패.
@@ -3921,7 +4284,7 @@ async function verifyUs(sym) {
       const endY = Number(s?.end.slice(0, 4)), endM = Number(s?.end.slice(5, 7)), endD = Number(s?.end.slice(8, 10));
       const startYearNaming = s && endM <= 2 && !(endM === 1 && endD <= 7) && y === endY && s.fy === endY - 1;
       add("B", "연도 라벨 = SEC 공시 사업연도(fy)", c.label, !s ? { status: NA, note: `결산일 ${c.date} 의 SEC 연간 공시 fy 없음` }
-        : y === s.fy ? { status: PASS, note: `결산일 ${s.end} · SEC fy ${s.fy}` }
+        : y === s.fy ? { status: PASS, note: `결산일 ${s.end} · SEC fy ${s.fy}${s.how ? ` (${s.how})` : ""}` }
         : startYearNaming ? { status: NA, note: `보류(오너 결정 대기): 회사는 시작 연도로 부름 — 앱 ${c.label}(결산일 연도) vs SEC fy ${s.fy} (결산일 ${s.end})` }
         : { status: FAIL, note: `앱 라벨 ${c.label} vs SEC fy ${s.fy} (결산일 ${s.end})` });
     }
@@ -4256,7 +4619,7 @@ async function verifyUs(sym) {
       if (calName) {
         const cal = await secText(base + "/" + calName);
         opOnFace = false;
-        for (const m of cal.matchAll(/<link:calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/link:calculationLink>/g)) {
+        for (const m of cal.matchAll(/<(?:[\w-]+:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calculationLink>/g)) {
           const role = m[1].split("/").pop() ?? "";
           if (!/INCOME|OPERATIONS|EARNINGS/i.test(role) || /Detail|Table|Parenth|Tax|Segment/i.test(role)) continue;
           const hb = /#us-gaap_IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"/.test(m[2]);
@@ -4427,6 +4790,29 @@ async function verifyUs(sym) {
    * 그 밖의 후보(판정 근거 표시용): 판본에서 밀린 값, 분할 소급본(÷ 그 사이 Yahoo 분할 배수), 표지(dei), 가중평균.
    * 자본변동표 클래스 차원(WMT·BE·META)은 없다 → 본표 후보가 없으면 검증불가.
    */
+  // 결산일 주식수 — 차원 없는 유통·발행주식수 태그가 없는 결산일은 그 해 10-K 원본에서 차원 값을 미리 읽는다(readDimShares).
+  // 그 해 10-K = 결산일이 같은 연간 사실을 처음 실은 10-K(companyfacts 접수번호 — 제출 목록 recent 는 서식 4 가 많은 회사에서 옛 10-K 가 빠진다)
+  const dimShares = new Map(), classEpsB = new Map();
+  {
+    const undim = (d) => ["CommonStockSharesOutstanding", "SharesOutstanding", "CommonStockSharesIssued"].some((t) => (G[t]?.units?.shares ?? []).some((e) => !e.start && /^10-[KQ]/.test(e.form ?? "") && dayDiff(e.end, d) <= 7));
+    const firstK = (d) => Object.values(G).flatMap((c) => Object.values(c.units ?? {}).flat()).filter((e) => /^10-K$/.test(e.form ?? "") && e.end && dayDiff(e.end, d) <= 7 && e.accn)
+      .sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""))[0] ?? null;
+    for (const [c, x] of Object.entries(H)) {
+      if (c === "LTM" || !x?.date || dimShares.has(x.date) || undim(x.date)) continue;
+      const k = firstK(x.date);
+      if (!k) continue;
+      try { dimShares.set(x.date, await readDimShares(cik, k.accn, k.end, k.filed)); }
+      catch (e) { hardErrors.push(`결산일 주식수 10-K 원본(${x.date}, ${k.accn}) 판독 실패: ${String(e).slice(0, 80)}`); }
+    }
+    // 클래스 A 기본 EPS — 차원 없는 기본 EPS 가 없는 미국 공시 결산일만(V)
+    if (!foreign) for (const [c, x] of Object.entries(H)) {
+      if (c === "LTM" || !x?.date || classEpsB.has(x.date) || atEnd(epsBP, x.date)) continue;
+      const k = firstK(x.date);
+      if (!k) continue;
+      try { classEpsB.set(x.date, await readClassABasicEps(cik, k.accn, k.end, k.filed)); }
+      catch (e) { hardErrors.push(`클래스 A 기본 EPS 10-K 원본(${x.date}, ${k.accn}) 판독 실패: ${String(e).slice(0, 80)}`); }
+    }
+  }
   const secShareCandidates = (date) => {
     const inst = (t) => (G[t]?.units?.shares ?? []).filter((e) => !e.start && /^10-[KQ]/.test(e.form ?? "") && dayDiff(e.end, date) <= 7)
       .sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? ""));
@@ -4469,6 +4855,13 @@ async function verifyUs(sym) {
       const ci = choose(li);
       if (ci) ordered.push({ v: ci.pick.v, accns: new Set(li.filter((e) => e.v === ci.pick.v).map((e) => e.accn)), how: `발행주식수(${ci.pick.filed} ${ci.pick.form} · ${ci.why}${trs.length ? "" : ", 자기주식 태그 없음"})` });
       addOthers(li, ci?.pick, "발행주식수");
+    }
+    // 차원 값(그 해 10-K 원본) — 차원 없는 본표 후보가 하나도 없을 때만(readDimShares)
+    // 결산일 뒤·10-K 제출 전 분할은 되돌린다(WMT FY2024 — 2024-01-31 결산, 2024-02-26 3:1 분할, 2024-03-15 10-K 가 분할 후 80.54억 주를 실음.
+    // 결산일 종가는 분할 전이라 주식수도 분할 전 26.85억 주여야 한다 — 차원 없는 후보의 splitK 와 같은 규칙)
+    if (!ordered.length) for (const d of [...dimShares.entries()].find(([d0]) => dayDiff(d0, date) <= 7)?.[1] ?? []) {
+      const k = splitK(d.filed);
+      ordered.push(k !== 1 ? { ...d, v: d.v / k, how: `${d.how} ÷ 결산일 뒤 분할 ${k}` } : d);
     }
     const cover = (f.facts.dei?.EntityCommonStockSharesOutstanding?.units?.shares ?? []).filter((e) => /^10-K/.test(e.form ?? "") && e.end > date && dayDiff(e.end, date) <= 120);
     for (const e of cover) cands.push({ v: e.val, how: `표지(dei ${e.end}, ${e.filed} 10-K)`, otherDate: true });
@@ -4539,8 +4932,8 @@ async function verifyUs(sym) {
         const hit = (v) => as != null && Math.abs(as - v) <= 0.5;
         let r, used = ex; // 시가총액 기대값에 쓸 주식수(정밀 후보로 통과하면 그 값)
         // 본표 후보(유통·자본변동표·발행−자기주식·발행)가 하나도 없으면 판정하지 않는다 — 표지·가중평균만으로는 기준이 안 된다
-        // (WMT: 자본변동표 클래스 차원 경로 미구현)
-        if (!sc.ordered.length) r = { status: NA, note: `SEC 결산일 본표 주식수 태그 없음(자본변동표 클래스 차원 경로 미구현)${sc.all.length ? ` · 참고 후보 ${sc.all.map((o) => `${o.v}(${o.how})`).join(", ")}` : ""}` };
+        // (차원 값만 공시한 회사는 위 readDimShares 가 그 해 10-K 원본에서 채운다 — 2026-10-07)
+        if (!sc.ordered.length) r = { status: NA, note: `SEC 결산일 본표 주식수 없음(차원 없는 태그·그 해 10-K 원본의 자본변동표 보통주·클래스별 값 모두 없음)${sc.all.length ? ` · 참고 후보 ${sc.all.map((o) => `${o.v}(${o.how})`).join(", ")}` : ""}` };
         else if (as == null) r = { status: NA, note: yCloses ? "결산일 종가 없음" : "Yahoo 일별 종가 없음" };
         else if (ex && hit(ex.v)) {
           // 같은 결산일의 본표 후보만(표지·가중평균은 다른 기준일이라 "더 정밀한 값"이 아니다)
@@ -4552,6 +4945,11 @@ async function verifyUs(sym) {
           // → 오너 결정 "정확한 값 우선"(2026-09-25): 그 해 10-K 값의 반올림 범위 안이면 통과
           if (m && ex && !m.otherDate && roundingOf(ex.v, m.v)) { r = { status: PASS, note: `정확한 값 우선 — 앱 ${as.toFixed(1)} = ${m.how}: 그 해 10-K 값 ${ex.v}(${ex.how})보다 정밀하고 그 반올림 범위 안 · 규칙 재구현(공통모드)` }; used = { v: m.v, how: m.how }; }
           else if (m && ex && !m.otherDate && roundingOf(m.v, ex.v)) r = { status: FAIL, note: `앱 ${as.toFixed(1)} = ${m.how} — 그 해 10-K 정밀값 ${ex.v}(${ex.how})의 반올림본(덜 정밀한 값 선택)` };
+          // 그 해 10-K 값이 단위 오류(천 주를 주로 — TER FY2021 10-K CommonStockSharesOutstanding 162,251 = 나중 공시 162,251,000)라 1.2배 검사를 못 넘어
+          // 기대가 없는데, 같은 결산일의 다른 공시 값(앱 값)이 그 값의 정확히 1,000배·1,000,000배면 단위만 고친 같은 값(2026-10-09). 앱 edgar-shares fixScale 과
+          // 같은 성격의 판정이라 메모에 남긴다
+          else if (m && !ex && !m.otherDate && sc.all.some((o) => !o.otherDate && o !== m && (o.v * 1000 === m.v || o.v * 1e6 === m.v)))
+            { used = { v: m.v, how: m.how }; r = { status: PASS, note: `단위 오류 보정 — 앱 ${as.toFixed(1)} = ${m.how} · 같은 결산일 후보 ${sc.all.filter((o) => !o.otherDate && (o.v * 1000 === m.v || o.v * 1e6 === m.v)).map((o) => `${o.v}(${o.how})`).join(", ")} 의 정확히 1,000배(천 주 단위로 태깅) · 규칙 재구현(공통모드)` }; }
           else if (m) r = { status: NA, note: `판정 보류 — 앱 ${as.toFixed(1)} = ${m.how}, 기대 ${ex ? `${ex.v}(${ex.how})` : "없음(1.2배 검사 통과 후보 없음)"}` };
           else {
             const base = ex?.v ?? sc.all[0].v, k = as / base;
@@ -4569,7 +4967,9 @@ async function verifyUs(sym) {
       }
       // 매출 = SEC 본표 매출 줄(검증기 판독, 최신 판본) — 정확 일치. 은행도 본표 매출 줄(없으면 순수익 합성)
       {
-        const sr = revFace?.annualAt(x.date) ?? null;
+        let sr = revFace?.annualAt(x.date) ?? null;
+        // 읽은 범위(최근 10-K 3건) 밖 사업연도 — 그 해를 싣는 10-K 를 더 읽는다(2026-10-09, META 2021: 제출 목록 recent 밖)
+        if (!sr && revFace?.extend) { try { await revFace.extend(x.date, "FY"); sr = revFace.annualAt(x.date); } catch (e) { hardErrors.push(`매출 범위 밖 사업연도 공시 추가 판독 실패(${c}): ${String(e).slice(0, 80)}`); } }
         let res = !revFace ? { status: NA, note: revFaceWhy } : vsSource(x.rev, sr?.v ?? null, EXACT, sr?.how ?? "읽은 공시(10-K 3건) 범위 밖");
         // 비영업 분리 기준은 앱과 같은 판정 규칙이라 독립 검증이 아니다(감사) — Yahoo 연간 매출도 같아야 통과
         if (sr?.split && res.status === PASS) {
@@ -4631,7 +5031,7 @@ async function verifyUs(sym) {
       }
     }
     // LTM 순이익 — SEC 분기 공시로 따로 계산한 TTM 과 대조(재감사: LTM 순이익은 원자료 대조가 없었음)
-    if (!isFy && foreign) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: NA, note: "외화 공시 — 분기 XBRL 없음(20-F)·환산은 인포맥스 대조로" });
+    if (!isFy && foreign) add("A", "LTM 순이익 앱 = SEC TTM", c, { status: NA, note: "외화 공시 — 분기 XBRL 없음(20-F)·원자료는 \"20-F LTM 순이익 원통화 블룸버그 = Yahoo 분기 4개 합\", 환산은 인포맥스 대조로", app: x.ni ?? null, src: null });
     else if (!isFy) {
       const hasNciNow = [...nciTrace].some((e) => dayDiff(e, x.date) <= 400);
       // 감사 m1: 옛날에 끊긴 태그(기준일이 앱 LTM 과 다름)면 다음 태그로 — NetIncomeLoss → ProfitLoss − 비지배(또는 비지배 흔적이
@@ -4703,7 +5103,41 @@ async function verifyUs(sym) {
       // 본표 세전이익 소계가 지분법 차감 전 태그인 회사(AMD)는 그 태그가 기준(다른 태그는 법인세 주석 합계 — 오너 원칙 "본표 기준")
       const ptTags = pretaxBeforeEq ? ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments", ...PRETAX_TAGS] : PRETAX_TAGS;
       const secPt = ptTags.map(secAt).find((v) => v != null) ?? null;
-      add("A", "세전이익 앱 = SEC 세전이익", c, vsSource(pt, secPt, EXACT, [pretaxBeforeEq ? "본표 세전이익 = 지분법 차감 전 소계" : "", ...secNotes].filter(Boolean).join(" · ")));
+      // 표준 세전이익 태그 값이 없으면(본표 세전이익을 회사 고유 태그로 단 MCD·ORCL, 10-Q 에서 IncomeLossAttributableToParent 로 단 MRVL — 2026-10-09)
+      // 그 기간 공시의 본표 세전이익 줄을 원본에서 따로 읽는다(facePretaxAt). 연간 = 그 10-K, LTM = 사업연도 10-K + 기준일 10-Q 누적 − 1년 전 10-Q 누적
+      let ptFace = null;
+      if (secPt == null && !foreign) {
+        try {
+          const d300 = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
+          if (isFy) {
+            const fp = await facePretaxAt(cik, sub, x.date);
+            const e = fp?.vals.filter((y) => d300(y) >= 300 && dayDiff(y.end, x.date) <= 7)[0];
+            if (e) ptFace = { v: e.v, how: `본표 세전이익 줄 ${fp.id}("${fp.label}") ${fp.form} ${fp.filed} 원본 ${e.start}~${e.end}` };
+          } else {
+            const rcP = sub.filings?.recent ?? {};
+            const fyI = (rcP.form ?? []).findIndex((fm, j) => fm === "10-K" && rcP.reportDate?.[j] && rcP.reportDate[j] < x.date);
+            const priorD = new Date(Date.parse(x.date) - 365 * 864e5).toISOString().slice(0, 10);
+            const [fyP, curP, priP] = fyI < 0 ? [] : await Promise.all([facePretaxAt(cik, sub, rcP.reportDate[fyI]), facePretaxAt(cik, sub, x.date), facePretaxAt(cik, sub, priorD)]);
+            const fyE0 = (fp0) => fp0?.vals.find((y) => d300(y) >= 300) ?? null;
+            // 앱 LTM 정의 = 최근 4개 분기 합(오너 결정 2026-09-28) — 분기 = 그 10-Q 의 3개월 값, 4분기 = 사업연도 − 9개월 누적(3분기 10-Q). 못 채우면 종전 식
+            const q3m = (fp0) => fp0?.vals.find((y) => d300(y) >= 80 && d300(y) <= 100);
+            const qDates = (rcP.form ?? []).map((fm, j) => (fm === "10-Q" && rcP.reportDate?.[j] && rcP.reportDate[j] <= x.date && (Date.parse(x.date) - Date.parse(rcP.reportDate[j])) / 864e5 < 320 ? rcP.reportDate[j] : null)).filter(Boolean);
+            const qFps = await Promise.all([...new Set(qDates)].map((d) => facePretaxAt(cik, sub, d)));
+            const qs = qFps.map((fp0) => ({ fp0, e: q3m(fp0) })).filter((q) => q.e);
+            const fyIn = fyP && fyE0(fyP) && (Date.parse(x.date) - Date.parse(fyE0(fyP).end)) / 864e5 < 365 ? fyE0(fyP) : null;
+            const nineP = fyIn ? await facePretaxAt(cik, sub, new Date(Date.parse(fyIn.end) - 91 * 864e5).toISOString().slice(0, 10)) : null;
+            const nine = nineP?.vals.find((y) => d300(y) >= 250 && d300(y) < 300 && dayDiff(y.start, fyIn.start) <= 7);
+            if (qs.length === 3 && fyIn && nine)
+              ptFace = { v: qs.reduce((t, q) => t + q.e.v, 0) + fyIn.v - nine.v, how: `본표 세전이익 줄 원본 — 분기 4개 합: ${qs.map((q) => `${q.fp0.id} ${q.e.start}~${q.e.end} ${q.e.v}`).join(" + ")} + Q4 = 사업연도 − 9개월 ${fyIn.v} − ${nine.v}` };
+            const fyE = fyP?.vals.find((y) => d300(y) >= 300);
+            const ytd = (fp0) => fp0?.vals.filter((y) => d300(y) >= 80 && d300(y) < 300).sort((a, b) => d300(b) - d300(a))[0];
+            const cE = ytd(curP), pE = ytd(priP);
+            if (!ptFace && fyE && cE && pE && /^10-Q/.test(curP.form) && /^10-Q/.test(priP.form))
+              ptFace = { v: fyE.v + cE.v - pE.v, how: `본표 세전이익 줄 원본 — 분기 4개 구성 불가 — 종전 식: 사업연도 ${fyP.id} ${fyE.v} + 당기 누적 ${curP.id} ${cE.v}(${cE.start}~${cE.end}) − 전년 동기 누적 ${priP.id} ${pE.v}(${pE.start}~${pE.end})` };
+          }
+        } catch (e) { hardErrors.push(`본표 세전이익 원본 판독 실패(${c}): ${String(e).slice(0, 80)}`); }
+      }
+      add("A", "세전이익 앱 = SEC 세전이익", c, ptFace ? vsSource(pt, ptFace.v, EXACT, ptFace.how) : vsSource(pt, secPt, EXACT, [pretaxBeforeEq ? "본표 세전이익 = 지분법 차감 전 소계" : "", ...secNotes].filter(Boolean).join(" · ")));
       // ── 손익계산서 나머지 줄(2026-09-29) ──
       if (!bank) {
         const I = IS[c] ?? {};
@@ -4737,7 +5171,20 @@ async function verifyUs(sym) {
         // 기본 EPS = SEC 공시 기본 EPS ÷ 분할 배수(Yahoo 분할 이력) — 연간만(앱은 LTM 기본 EPS 를 내지 않는다)
         if (isFy) {
           const eb = atEnd(epsBP, x.date);
-          if (!eb) add("A", "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)", c, I.epsB == null ? { status: PASS, note: "공시 기본 EPS 없음 → 앱 빈칸" } : { status: NA, note: `공시 기본 EPS 없음(앱 ${I.epsB} — 클래스별 등)` });
+          const nb = !eb && natCur ? atEnd(natEpsB, x.date) : null, ca = !eb && !foreign ? [...classEpsB].find(([d0]) => dayDiff(d0, x.date) <= 7)?.[1] : null;
+          const NM = "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)";
+          if (nb) {
+            // 외화 공시 — 원통화 공시 기본 EPS × 연준 H.10 기간 평균 × ADR 비율(희석 EPS 환산 점검과 같은 방식, 2026-10-07)
+            const avg = fxRows ? fxAvg(fxRows, nb.start, nb.end) : null, pend = fxRows ? fxPendingWhy(fxRows, nb.end) : null;
+            if (pend) add("A", NM, c, I.epsB == null ? { status: PASS, note: `${pend} — 앱 빈칸(대체 없음)` } : { status: FAIL, note: `${pend}인데 앱 값 ${I.epsB} — 다른 환율로 대체한 것으로 보임` });
+            else if (avg == null) add("A", NM, c, { status: NA, note: fxErr || "환율 없음" });
+            else if (I.epsB == null) add("A", NM, c, { status: FAIL, note: `원통화 기본 EPS ${nb.val} ${natCur} 있는데 앱 빈칸` });
+            else {
+              const exp = nb.val * avg * adrK, how = `원통화 기본 EPS ${nb.val} ${natCur} × 연준 H.10 ${nb.start}~${nb.end} 산술평균 ${avg}${adrK !== 1 ? ` × ADR 비율 ${adrK}` : ""}${fxWin(nb.start, nb.end)}`;
+              add("A", NM, c, extEq(I.epsB, exp) ? { status: PASS, note: `${how} (정확 일치)` } : { status: FAIL, note: `앱 ${I.epsB} ≠ 기대 ${exp} — ${how}` });
+            }
+          } else if (ca) add("A", NM, c, vsSource(I.epsB, ca.val, EXACT, ca.how));
+          else if (!eb) add("A", NM, c, I.epsB == null ? { status: PASS, note: "공시 기본 EPS 없음 → 앱 빈칸" } : { status: NA, note: `공시 기본 EPS 없음(앱 ${I.epsB} — 원통화·클래스 A 차원 값도 없음)` });
           else if (splitErr) add("A", "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)", c, { status: NA, note: splitErr });
           else { const k = splitAdj(eb); add("A", "기본 EPS 앱 = SEC 공시 기본 EPS(분할 보정)", c, vsSource(I.epsB, eb.val / k, EXACT, k !== 1 ? `공시 ${eb.val} ÷ 분할 ${k}(Yahoo 분할 이력)` : "")); }
         } else if (I.epsB != null) add("D", "LTM 기본 EPS 빈칸(앱 규칙)", c, { status: FAIL, note: `앱 LTM 기본 EPS ${I.epsB}` });
@@ -4859,8 +5306,30 @@ async function verifyUs(sym) {
     if (BS[c]?.assets != null) {
       // 최신 제출분 — 나중 공시의 반올림 재태깅(100만·1억·10억·100억 단위)은 제외(latestPrecise, 검증기 독립 판정)
       const a = assetsAt(x.date), rs = c !== "LTM" ? eqRestate(x.date) : null;
+      // 외화 공시(ASML us-gaap EUR, TSM·SPOT ifrs-full): USD 태그가 없으면 원통화 자산 × 연준 H.10 결산일 이전 마지막 고시(2026-10-08)
+      if (!a && foreign && natCur && fxRows && c !== "LTM") {
+        // companyfacts 에 최신 20-F 가 빠진 해(TSM 2025)는 검증기가 읽은 같은 해 원본 인스턴스 값(instNat)으로(2026-10-09)
+        const es = [["us-gaap", "Assets"], ["ifrs-full", "Assets"]].flatMap(([ns, t]) => [...(f.facts[ns]?.[t]?.units?.[natCur] ?? []), ...(instNat.get(`${ns}:${t}`) ?? [])].map((e) => ({ ...e, t })))
+          .filter((e) => !e.start && /^(10-K|20-F|40-F)/.test(e.form ?? "") && dayDiff(e.end, x.date) <= 7).sort((p, q) => (p.filed ?? "").localeCompare(q.filed ?? ""));
+        const e = es.at(-1), rate = e ? fxEndRate(fxRows, x.date) : null;
+        if (e && rate != null) {
+          const exp = e.val * rate, how = `원통화 ${e.t} ${e.val} ${natCur}(${e.form} ${e.filed}) × 연준 H.10 ${x.date} 이전 마지막 고시 ${rate}`;
+          add("A", "자산총계 앱 = SEC 자산총계", c, extEq(BS[c].assets, exp) ? { status: PASS, note: `${how} (정확 일치)`, app: BS[c].assets, src: exp } : { status: FAIL, note: `앱 ${BS[c].assets} ≠ 기대 ${exp} — ${how}`, app: BS[c].assets, src: exp });
+        }
+      }
+      // LTM 분기말 자산이 companyfacts 에 아직 없으면(최신 10-Q 미반영 — BE·KO·MDLZ·V·XOM 2026-07) 그 분기 10-Q 원본 인스턴스의 차원 없는 USD 값으로(2026-10-09,
+      // 재무상태표 다른 합계 줄과 같은 판독 — filingAtDate)
+      let ltmInst = null;
+      if (!a && c === "LTM" && !foreign) {
+        try {
+          const fl = await filingAtDate(cik, sub, x.date);
+          const fx = fl?.facts.find((y) => !y.dims?.length && /USD/i.test(y.unit ?? "USD") && y.id === "us-gaap_Assets");
+          if (fx) ltmInst = { v: fx.v, how: `companyfacts 미반영 — ${fl.form} ${fl.filed} 원본 인스턴스 us-gaap_Assets ${fl.date}` };
+        } catch (e) { hardErrors.push(`LTM 자산총계 원본 조회 실패: ${String(e).slice(0, 80)}`); }
+      }
+      if (ltmInst) add("A", "자산총계 앱 = SEC 자산총계", c, vsSource(BS[c].assets, ltmInst.v, EXACT, ltmInst.how));
       // 자본 정정 열 — 자산 = SEC 자산 + 정정 금액(정정된 재무상태표 전체는 공시되지 않아 부채 + 자본으로 산출)
-      add("A", "자산총계 앱 = SEC 자산총계", c, rs && a ? vsSource(BS[c].assets, a.val + rs.delta, EXACT, `SEC 자산 ${a.val} + 자본 정정 ${rs.delta}(${rs.filed}) — 오너 결정 (다)`) : vsSource(BS[c].assets, a?.val ?? null, EXACT, retagNote(a)));
+      else if (a || !(foreign && checks.some((k) => k.name === "자산총계 앱 = SEC 자산총계" && k.col === c))) add("A", "자산총계 앱 = SEC 자산총계", c, rs && a ? vsSource(BS[c].assets, a.val + rs.delta, EXACT, `SEC 자산 ${a.val} + 자본 정정 ${rs.delta}(${rs.filed}) — 오너 결정 (다)`) : vsSource(BS[c].assets, a?.val ?? null, EXACT, retagNote(a)));
     }
     if (BS[c]) {
       // 대차대조표 항등식 — 같은 공시의 두 합계라 정확 일치(예전 허용 0.05% 제거). 반올림 재태깅이 갈리는 날짜면 SEC 두 값을 메모에
@@ -4870,15 +5339,42 @@ async function verifyUs(sym) {
     }
 
     // ── E. 공시 내부 정합성 (공시 EPS × 가중평균 ≈ 보통주 귀속 순이익)
-    if (isFy && foreign) add("E", "공시 EPS × 가중평균 ≈ 보통주 귀속 순이익", c, { status: NA, note: "외화 공시 — 원통화 공시값끼리의 정합성은 미검사" });
+    if (isFy && foreign) {
+      // 외화 공시(ASML·SPOT·TSM) — 같은 공시의 원통화 EPS·가중평균 주식수·순이익끼리(환산 없음). 오너 2026-10-07: "원자료 데이터가 맞으면
+      // 외화 환산은 공시 기준 환율을 적용하기에 차이가 있을 수 있다" — 환산 USD 차이는 여기서 보지 않는다(USD 는 인포맥스 대조 몫).
+      // 허용 = 아래 미국 경로와 같은 반올림 구간 규칙(순이익·주식수 보고 단위 반 칸, EPS 소수 자릿수 반 칸 — 구간이 겹치면 정합)
+      const n = (m) => atEnd(m, x.date);
+      const niD = n(natNiDil);
+      const tries = [["희석", n(natEps), n(natWDil), niD ?? n(natNi), niD ? "분자 = 희석 효과 포함 지배주주 순이익" : "분자 = 지배주주 순이익"],
+        ["기본", n(natEpsB), n(natWBas), n(natNi), "분자 = 지배주주 순이익"]];
+      const t = tries.find(([, e, w, ni]) => e && e.val !== 0 && w?.val && ni);
+      if (!t) add("E", "공시 EPS × 가중평균 ≈ 보통주 귀속 순이익", c, { status: NA, note: `원통화(${natCur}) 공시 EPS·가중평균 주식수·지배주주 순이익 중 없는 값이 있음` });
+      else {
+        const [kind, e, w, ni, numNote] = t;
+        const eps = e.val, epsUnit = 10 ** -Math.max(2, (String(eps).split(".")[1] ?? "").length);
+        const uN = secUnitAny(ni.val), uW = secUnitAny(w.val);
+        const cs = [(ni.val - uN / 2) / (w.val - uW / 2), (ni.val - uN / 2) / (w.val + uW / 2), (ni.val + uN / 2) / (w.val - uW / 2), (ni.val + uN / 2) / (w.val + uW / 2)];
+        const ok = Math.min(...cs) <= eps + epsUnit / 2 && Math.max(...cs) >= eps - epsUnit / 2;
+        const note = `원통화(${natCur}) ${kind} — 순이익/주식수 ${(ni.val / w.val).toFixed(4)} vs 공시 EPS ${eps} · ${numNote} · 환산 없음`;
+        add("E", "공시 EPS × 가중평균 ≈ 보통주 귀속 순이익", c, { status: ok ? PASS : FAIL, note });
+      }
+    }
     else if (isFy) {
       const e = atEnd(epsP, x.date) ?? null;
+      // 클래스별 공시(GOOG 2021 — 회사 전체 EPS 는 있는데 가중평균 주식수는 클래스 차원으로만)는 인스턴스에서 클래스 합을 읽는다(2026-10-09)
+      if (!inst.size && !instErr && (!e || (!atEnd(wDilP, x.date) && !atEnd(wBasP, x.date))))
+        inst = await classFactsFromInstances(cik).catch((err) => { instErr = String(err).slice(0, 80); hardErrors.push(`SEC 인스턴스(클래스별 EPS) 판독 실패: ${instErr}`); return new Map(); });
       const ie = [...inst].find(([end]) => dayDiff(end, x.date) <= 7)?.[1];
       let eps = e?.val ?? null, w = null, ni = null, notes = [];
       if (e && eps !== 0) {
-        if (eps < 0) { w = atEnd(wBasP, x.date)?.val ?? null; notes.push("적자 연도 — 기본 주식수(반희석 제외)"); }
+        // 적자 연도는 보통 희석 증권이 반희석이라 기본 주식수 — 단 회사가 희석 분자를 따로 공시했고 기본 분자와 다르면(자회사 희석 증권 등 분자 조정,
+        // UBER 2022 −9,182 vs −9,141) 희석 EPS = 희석 분자 ÷ 희석 주식수(2026-10-09)
+        const nd0 = atEnd(niDilP, x.date), nb0 = atEnd(niBasP, x.date), wd0 = atEnd(wDilP, x.date);
+        if (eps < 0 && nd0 && nb0 && nd0.val !== nb0.val && wd0) { w = wd0.val; notes.push(`적자 연도 — 희석 분자 ${nd0.val} ≠ 기본 분자 ${nb0.val}(회사 희석 조정)이라 희석 주식수`); }
+        else if (eps < 0) { w = atEnd(wBasP, x.date)?.val ?? null; notes.push("적자 연도 — 기본 주식수(반희석 제외)"); }
         else if (atEnd(wDilP, x.date)) w = atEnd(wDilP, x.date).val;
         else if (atEnd(wBasP, x.date) && atEnd(epsBP, x.date)?.val === eps) { w = atEnd(wBasP, x.date).val; notes.push("희석 EPS = 기본 EPS 라 기본 주식수"); }
+        if (!w && ie?.basic) { eps = ie.eps; w = ie.shares; notes.push(`회사 전체 가중평균 주식수 없음 — ${ie.basis}`); }
         const cn = commonNi(x.date); ni = cn.v; if (cn.note) notes.push(cn.note); if (cn.why) notes.push(cn.why);
       } else if (ie) {
         eps = ie.eps; w = ie.shares; notes.push(ie.basis);
@@ -4886,7 +5382,38 @@ async function verifyUs(sym) {
         ni = cn.v; if (ie.asConverted) notes.push("분자 = 지배주주 순이익(as-converted 분모와 같은 범위)");
         if (cn.why) notes.push(cn.why);
       }
-      if (eps != null && eps !== 0 && w && ni != null) {
+      // 보통주 없음(CEG 2021 — 분사 전): 회사가 EPS 0 과 가중평균 주식수 0(기본·희석)을 함께 공시 → 주당 항등식 적용 대상 아님(2026-10-09)
+      const wb0 = atEnd(wBasP, x.date), wd1 = atEnd(wDilP, x.date);
+      // 총 EPS 없이 계속·중단영업 EPS 만 공시(DELL FY2022) — 같은 10-K 의 희석 주식수 × 각 EPS ≈ 각 희석 분자(계속·중단 따로)
+      const cdE = e == null && !ie ? contDiscEps(x.date) : null;
+      if (e?.val === 0 && wb0?.val === 0 && (!wd1 || wd1.val === 0)) add("E", "공시 EPS × 가중평균 ≈ 보통주 귀속 순이익", c, { status: PASS, note: `보통주 없음 — 회사가 EPS 0·가중평균 주식수 0(${wb0.form} ${wb0.filed}) 공시, 주당 항등식 적용 대상 아님` });
+      else if (cdE) {
+        // 같은 10-K 한 건에서 EPS·희석 분자·희석 주식수를 모두 읽는다 — 최근 10-K 부터, 셋 중 빠진 값이 있으면 그 전 10-K(DELL FY2022: 2024-03-25 10-K 엔
+        // 계속영업 희석 분자가 없고 2022-03-24 10-K 엔 모두 있다, 2026-10-09)
+        const buildAt = (fd) => {
+          const one = (tE, tN) => { const es = annualAllAt(tE, "USD/shares", x.date).filter((y) => y.filed === fd).at(-1), ns = annualAllAt(tN, "USD", x.date).filter((y) => y.filed === fd).at(-1); return es && ns ? { eps: es.val, ni: ns.val } : null; };
+          const wD0 = annualAllAt("WeightedAverageNumberOfDilutedSharesOutstanding", "shares", x.date).filter((y) => y.filed === fd).at(-1);
+          const pr0 = [["계속영업", one("IncomeLossFromContinuingOperationsPerDilutedShare", "NetIncomeLossFromContinuingOperationsAvailableToCommonShareholdersDiluted")],
+            ["중단영업", one("IncomeLossFromDiscontinuedOperationsNetOfTaxPerDilutedShare", "NetIncomeLossFromDiscontinuedOperationsAvailableToCommonShareholdersDiluted") ?? one("DiscontinuedOperationIncomeLossFromDiscontinuedOperationNetOfTaxPerDilutedShare", "NetIncomeLossFromDiscontinuedOperationsAvailableToCommonShareholdersDiluted")]];
+          return { fd, wD: wD0, pr: pr0 };
+        };
+        const fds = [...new Set(annualAllAt("IncomeLossFromContinuingOperationsPerDilutedShare", "USD/shares", x.date).map((y) => y.filed))].sort().reverse();
+        const pick0 = fds.map(buildAt).find((b) => b.wD && b.pr.every(([, v]) => v)) ?? buildAt(cdE.filed);
+        cdE.filed = pick0.fd;
+        const { wD, pr } = pick0;
+        if (!wD || pr.some(([, v]) => !v)) add("E", "공시 EPS × 가중평균 ≈ 보통주 귀속 순이익", c, { status: NA, note: `총 EPS 없음(계속·중단영업 EPS 만) — 같은 10-K(${cdE.filed}) 희석 주식수·계속/중단 희석 분자 중 없는 값이 있음` });
+        else {
+          const ok1 = ({ eps: ep, ni: nv }) => { const eu = 10 ** -Math.max(2, (String(ep).split(".")[1] ?? "").length), uN = secUnit(Math.abs(nv)), uW = secUnit(wD.val);
+            const cs = [(nv - uN / 2) / (wD.val - uW / 2), (nv - uN / 2) / (wD.val + uW / 2), (nv + uN / 2) / (wD.val - uW / 2), (nv + uN / 2) / (wD.val + uW / 2)];
+            return Math.min(...cs) <= ep + eu / 2 && Math.max(...cs) >= ep - eu / 2; };
+          // 항등식은 총계 기준(이 검사의 정의) — 계속 + 중단 EPS 합 × 주식수 ≈ 계속 + 중단 분자 합. 회사가 표에서 구성 EPS 를 총계에 맞춰 반올림한 경우
+          // (DELL FY2022 중단 0.76 = 608/791 = 0.7686) 구성별 결과는 메모로만 남긴다
+          const tot = { eps: Math.round((pr[0][1].eps + pr[1][1].eps) * 1e6) / 1e6, ni: pr[0][1].ni + pr[1][1].ni };
+          const note = `총 EPS 없음 — 계속 + 중단영업 EPS 합 ${tot.eps} vs (계속 + 중단 희석 분자) ${tot.ni}/${wD.val} = ${(tot.ni / wD.val).toFixed(4)}(${cdE.filed} 10-K) · 구성별 ${pr.map(([k, v]) => `${k} ${(v.ni / wD.val).toFixed(4)} vs ${v.eps}${ok1(v) ? "" : "(구성 반올림 불일치)"}`).join(" · ")}`;
+          add("E", "공시 EPS × 가중평균 ≈ 보통주 귀속 순이익", c, { status: ok1(tot) ? PASS : FAIL, note });
+        }
+      }
+      else if (eps != null && eps !== 0 && w && ni != null) {
         // 공시 보고 단위만큼만 허용(예전 "0.005 + 0.3%" 허용치 대신, 2026-09-25): 순이익·가중평균 주식수는 각자 보고 단위
         // (값을 나누는 10의 거듭제곱, 최대 100만 — 예: 919,000,000 주 → ±50만 주) 반올림 구간, EPS 는 소수 자릿수(최소 센트)
         // 반올림 구간. 순이익 ÷ 주식수가 만들 수 있는 구간과 공시 EPS 반올림 구간이 겹치면 정합.
@@ -4975,7 +5502,10 @@ async function verifyUs(sym) {
         const e = revFace.annualAt(E0);
         // 전년 정기공시 자체가 없으면(분사 첫해 등) 앱 성장률도 빈칸이어야 한다 — 양쪽 빈칸은 검증불가, 앱만 값이 있으면 실패
         const appYoy = [H[c0].revYoy, A[c0]?.revYoy, C[c0]?.revenueYoY].filter((v) => v != null);
-        if (!e && appYoy.length === 0) naOrReadFail(`전년(${E0} 전후) SEC 본표 매출 없음 · 앱 첫 열 성장률도 빈칸`);
+        // 전년 매출이 본표(그 해를 싣는 10-K 까지 더 읽음)에도 companyfacts 연간 태그에도 없으면 공시 자체가 없다(분사 첫해 — GEV 2022·SNDK 2023) → 앱 첫 열
+        // 성장률 빈칸이 정답(기대 빈칸, 2026-10-09). companyfacts 에는 있으면 본표 판독 실패로 기록(종전)
+        if (!e && appYoy.length === 0 && !cfPrior) add("A", name, c0, { status: PASS, note: `기대 빈칸 — 전년(${E0} 전후) 매출 공시 없음(SEC 본표·companyfacts 연간 매출 모두 없음) → 앱 첫 열 성장률 빈칸` });
+        else if (!e && appYoy.length === 0) naOrReadFail(`전년(${E0} 전후) SEC 본표 매출 없음 · 앱 첫 열 성장률도 빈칸`);
         else if (!e) add("A", name, c0, { status: FAIL, note: `전년(${E0} 전후) SEC 본표 매출 대응값 없음인데 앱 첫 열 성장률 ${appYoy.join("/")} 표시 — 근거 대조 불가` });
         else { prior = e.v; how = e.how; }
       }
@@ -5057,7 +5587,6 @@ async function verifyUs(sym) {
     // 앱이 기준 혼합 빈칸에 단 사유(칸 각주 "… 기준 혼합(…)") — 응답 단위로 찾는다(COGS_WAIT 와 같은 방식)
     const mixA = JSON.stringify(is ?? {}).includes(COGS_MIX), mixQ = JSON.stringify(isq ?? {}).includes(COGS_MIX);
     const finCo = sic >= 6000 && sic <= 6499, finWait = /금융사/.test(JSON.stringify(is ?? {}));
-    const synthMark = (row) => /합성|소계 없음/.test(JSON.stringify(row ?? {}));
     const revAt = (kind, E, isQ4) => {
       if (foreign) { const r = kind === "FY" ? atEnd(natRev, E) : null; return r ? { v: r.val, how: `원통화 공시 매출 ${r.val}` } : null; }
       if (!revFace) return null;
@@ -5149,8 +5678,8 @@ async function verifyUs(sym) {
         gExp = r ? r.v - e.cogs : null;
         gNote = r ? `합성(본표 매출총이익 소계 없음, ${e.type}형) = SEC 매출 ${r.v} − SEC 매출원가 ${e.cogs} · 매출: ${r.how ?? ""} · 원가: ${e.how}` : `합성 대상이나 SEC 매출 기대값 없음(${revFaceWhy || "범위 밖"}) · ${e.how}`;
         cogsSynth.add(`${stmtTag}|${key}`);
-        if (appG != null) add("C", "매출총이익 합성 표기 = 본표 소계 없음", col, synthMark(gRow) ? { status: PASS, note: `앱 행 "${gRow.accountName}"` }
-          : { status: FAIL, note: `본표에 매출총이익 소계가 없어 합성값인데 앱에 합성 표기 없음 — 앱 행 "${gRow?.accountName}"` });
+        // 합성 표기(줄 이름 "본표 소계 없음 · 매출 − 매출원가") 검사는 뺐다 — 오너 지시 2026-10-02(앱 3c543bb, WMT) "불필요한 문구"로 앱이 줄 이름·각주
+        // 어디에도 합성 문구를 싣지 않는다. 합성 값 자체(SEC 매출 − SEC 매출원가)는 위 gExp 로 A층에서 정확 대조한다(2026-10-08)
       }
       add("A", nG, col, vsSource(appG, gExp == null ? null : gExp * k, EXACT, `${gNote}${fxNote}`));
     };
@@ -5159,6 +5688,11 @@ async function verifyUs(sym) {
       ...(H.LTM && (is?.periods ?? []).some((p) => p.label === "현재/LTM") ? [{ kind: "LTM", E: H.LTM.date }] : []),
       ...(isq?.periods ?? []).filter((p) => p.fiscalQuarter === 4 && p.endDate).map((p) => ({ kind: "Q4", E: p.endDate })),
     ]).catch((e) => hardErrors.push(`매출원가 원 공시 판독(기준 혼합 판정) 실패: ${String(e).slice(0, 160)}`));
+    // 읽은 범위 밖 사업연도는 그 해를 싣는 연차 공시를 더 읽어 둔다(extendFY — META 2021)
+    if (cogsFace?.extendFY) for (const per of is?.periods ?? []) {
+      if (per.label === "현재/LTM" || !per.endDate || cogsFace.annualAt(per.endDate)) continue;
+      await cogsFace.extendFY(per.endDate).catch((e) => hardErrors.push(`매출원가 범위 밖 사업연도 공시 추가 판독 실패(${per.label}): ${String(e).slice(0, 120)}`));
+    }
     for (const per of is?.periods ?? []) {
       const key = per.label;
       if (key === "현재/LTM") { if (H.LTM && !foreign) judge("LTM", "LTM", key, H.LTM.date, false, cRowA, gRowA, waitA, "연간"); continue; }
@@ -5288,6 +5822,7 @@ async function verifyUs(sym) {
   const DA_NAME = "감가상각비 앱 = SEC 현금흐름표 감가상각·상각 줄 합";
   if (DA_MODE && !bank && (!foreign || natCur)) {
     const dRowA = isItem(is, /^감가상각비$/), dRowQ = isItem(isq, /^감가상각비$/);
+    const acqHfs = new Map();
     const judgeD = (kind, col, key, E, isQ4, row) => {
       const q = kind === "Q";
       const e0 = !daFace ? null : kind === "FY" ? daFace.annualAt(E) : kind === "LTM" ? daFace.ltmAt(E) : daFace.quarterAt(E, isQ4);
@@ -5308,6 +5843,14 @@ async function verifyUs(sym) {
           : why.includes(COGS_MIX) ? { status: PASS, note: `감가상각 줄 ${COGS_MIX} 확인 — 앱 빈칸 + 사유 · ${e0.mix}`, app: null, src: null }
           : { status: FAIL, note: `감가상각 줄 ${COGS_MIX}인데 앱 빈칸 사유에 "${COGS_MIX}" 없음(${why || "사유 없음"}) · ${e0.mix}`, app: null, src: null });
         return;
+      }
+      if (e0.unres && kind === "FY" && acqHfs.has(E) && /중단사업 손익이 있는데/.test(e0.unres)) { add("A", name, col, vsSource(app, e0.v, EXACT, `${acqHfs.get(E)} · ${e0.how}`)); return; }
+      // 사업연도 — 중단사업 감가상각 미공시(검증기 판정: 중단사업 손익 있음·그 기간 처분 그룹 영업 있음·중단사업 감가상각 태그 없음)면 감가상각비 빈칸이 정답
+      // (오너 결정 2026-10-09 IBM 2021 — 영업이익은 계속사업 기준이라 기준 불일치). 앱 값이 있으면 실패
+      if (e0.unres && kind === "FY" && /중단사업 손익이 있는데/.test(e0.unres)) {
+        const n0 = String(row?.cellNotes?.[key] ?? "");
+        if (app == null && /중단사업/.test(n0)) { discDaBlank.add(col); add("A", name, col, { status: PASS, note: `기대 빈칸 — ${e0.unres}(SEC 줄 합 ${e0.lineSum}) → 감가상각비·EBITDA 빈칸이 정답 · 앱 사유 "${n0.slice(0, 60)}" · ${e0.how}`, app, src: null }); return; }
+        add("A", name, col, { status: FAIL, note: `${e0.unres} — 감가상각비 빈칸이어야(오너 결정 2026-10-09)인데 앱 ${app ?? "빈칸(사유 없음)"} · ${e0.how}`, app, src: null }); return;
       }
       if (e0.unres) { add("A", name, col, { status: NA, note: `미결 — ${e0.unres}(앱 ${app ?? "빈칸"}, SEC 줄 합 ${e0.lineSum}) · ${e0.how}`, app, src: null }); return; }
       // LTM 종전 식 폴백 — 값 대조와 함께 칸 주석(DA_LTM_FALLBACK)이 있어야 한다
@@ -5331,6 +5874,30 @@ async function verifyUs(sym) {
       // 최초 공시 규칙(orig-first)용 — 연간 열마다 그 해 1~3분기 10-Q 를 읽어 둔다(원공시 판본)
       for (const per of is?.periods ?? []) { const fy = per.label !== "현재/LTM" && per.endDate && daFace ? daFace.annualAt(per.endDate) : null; if (fy?.start) { await daFace.extend(per.endDate, "FY"); } if (fy?.start) await daFace.extend(new Date(Date.parse(fy.start) + 80 * 864e5).toISOString().slice(0, 10), "Q"); }
       if (!foreign) for (const p of isq?.periods ?? []) if (p.endDate && daFace && !daFace.quarterAt(p.endDate, p.fiscalQuarter === 4)) await daFace.extend(p.endDate, "Q");
+      // 중단사업 감가상각 미결 해 — 그 중단사업(처분 그룹)이 이 사업연도 안 사업 인수일에 매각예정으로 취득됐으면(10-K 원본: 처분 그룹 자산 사실이
+      // BusinessAcquisitionAxis 차원·인수일 시점으로 있고, 사업연도 시작 시점엔 처분 그룹 자산 없음) 매각예정 자산은 감가상각하지 않으므로
+      // (ASC 360-10-35-43) 중단사업 감가상각 = 0 → 현금흐름표 줄 합 = 계속사업 감가상각(2026-10-09 AVGO FY2024 VMware EUC — 2023-11-22 인수일 처분 그룹 자산 5,206)
+      for (const per of is?.periods ?? []) {
+        const fy = per.label !== "현재/LTM" && per.endDate && daFace ? daFace.annualAt(per.endDate) : null;
+        if (!fy?.start || !/중단사업 손익이 있는데/.test(fy.unres ?? "")) continue;
+        const rc = sub.filings?.recent ?? {};
+        const k = (rc.form ?? []).findIndex((fm, i) => fm === "10-K" && rc.reportDate?.[i] && dayDiff(rc.reportDate[i], per.endDate) <= 7);
+        if (k < 0) continue;
+        const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${rc.accessionNumber[k].replace(/-/g, "")}`;
+        const instName = (await secJson(base + "/index.json")).directory.item.map((x) => x.name).find((x) => /_htm\.xml$/i.test(x));
+        if (!instName) continue;
+        const xml = await secText(`${base}/${instName}`), ctx = parseContexts(xml);
+        const DG = /^(AssetsOfDisposalGroupIncludingDiscontinuedOperation\w*|DisposalGroupIncludingDiscontinuedOperationAssets\w*)$/;
+        const hits = [];
+        for (const m of xml.matchAll(/<us-gaap:([A-Za-z0-9_]+)\b[^>]*?contextRef="([^"]+)"[^>]*>\s*(-?[\d.]+)\s*</g)) {
+          const c0 = ctx.get(m[2]);
+          if (!DG.test(m[1]) || !c0?.instant || !(Number(m[3]) > 0)) continue;
+          if (c0.instant > fy.start && c0.instant <= fy.end && c0.dims.some((d) => d[0] === "BusinessAcquisitionAxis")) hits.push(`${m[1]} ${c0.instant} ${c0.dims.map((d) => d[1]).join("/")} ${m[3]}`);
+        }
+        const s0 = Date.parse(fy.start) - 7 * 864e5, s1 = Date.parse(fy.start) + 7 * 864e5;
+        const atStart = Object.entries(CUR_G ?? {}).some(([cn, o]) => DG.test(cn) && (o.units?.USD ?? []).some((x) => !x.start && x.val > 0 && Date.parse(x.end) >= s0 && Date.parse(x.end) <= s1));
+        if (hits.length && !atStart) acqHfs.set(per.endDate, `중단사업 = 이 사업연도 안 인수일에 매각예정으로 취득한 처분 그룹(${rc.form[k]} ${rc.accessionNumber[k]} ${hits.join(", ")} · 사업연도 시작 시점 처분 그룹 자산 없음) — 매각예정 자산은 감가상각하지 않음(ASC 360-10-35-43) → 중단사업 감가상각 0`);
+      }
     } catch (e) { hardErrors.push(`감가상각비 과거 공시 판독 실패: ${String(e).slice(0, 120)}`); }
     for (const per of is?.periods ?? []) {
       const key = per.label;
@@ -5394,12 +5961,137 @@ async function verifyUs(sym) {
       ["cf:total:영업활동 현금흐름", "영업활동 현금흐름", ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"], 1],
       ["cf:total:투자활동 현금흐름", "투자활동 현금흐름", ["NetCashProvidedByUsedInInvestingActivities", "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"], 1],
       ["cf:total:재무활동 현금흐름", "재무활동 현금흐름", ["NetCashProvidedByUsedInFinancingActivities", "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"], 1],
-      ["cf:투자활동 현금흐름:유형자산 취득", "유형자산 취득(CAPEX)", ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"], -1],
-      ["cf:재무활동 현금흐름:배당금 지급", "배당금 지급", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], -1],
+      ["cf:투자활동 현금흐름:유형자산 취득", "유형자산 취득(CAPEX)", ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements"], -1],
+      // PaymentsOfOrdinaryDividends — CL·GLW·ASML(EUR) 이 쓰는 개념(2026-10-08 — 없어서 배당금 지급 검증불가 15건)
+      ["cf:재무활동 현금흐름:배당금 지급", "배당금 지급", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], -1],
       ["cf:재무활동 현금흐름:자기주식 취득", "자기주식 취득", ["PaymentsForRepurchaseOfCommonStock"], -1],
       ["cf:영업활동 현금흐름:주식보상비용", "주식보상비용", ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], 1],
     ];
+    // 외화 공시(ASML·SPOT·TSM) 재무상태표·현금흐름표 A층(2026-10-08) — us-gaap USD 태그가 없어 "SEC 값 없음"으로 빠지던 칸을 원통화 공시값 × 연준
+    // H.10 으로(잔액 = 결산일 또는 그 이전 마지막 고시, 흐름 = 그 기간 산술평균 — 앱 edgar-foreign 환산 원칙, 오너 결정 2026-09-24). 원통화 개념은 검증기
+    // 자체 목록(us-gaap 원통화 단위 = ASML, ifrs-full = SPOT·TSM — 앱 IFRS_MAP 를 가져다 쓰지 않음). 사업연도 열만(LTM 은 20-F LTM 6-K 대조가 맡음)
+    const NAT_A = {
+      "bs:자산:현금·현금성자산": ["CashAndCashEquivalents"], "bs:자산:유동자산 총계": ["CurrentAssets"], "bs:부채:유동부채 총계": ["CurrentLiabilities"],
+      "bs:부채:부채 총계": ["Liabilities"], "bs:자본:자본 총계": ["EquityAttributableToOwnersOfParent", "Equity"],
+      "cf:total:영업활동 현금흐름": ["CashFlowsFromUsedInOperatingActivities"], "cf:total:투자활동 현금흐름": ["CashFlowsFromUsedInInvestingActivities"],
+      "cf:total:재무활동 현금흐름": ["CashFlowsFromUsedInFinancingActivities"],
+      "cf:투자활동 현금흐름:유형자산 취득": ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets"],
+      "cf:재무활동 현금흐름:배당금 지급": ["DividendsPaidClassifiedAsFinancingActivities", "DividendsPaid"],
+      "cf:재무활동 현금흐름:자기주식 취득": ["PaymentsToAcquireOrRedeemEntitysShares", "PurchaseOfTreasuryShares"],
+      "cf:영업활동 현금흐름:주식보상비용": ["AdjustmentsForSharebasedPayments"],
+    };
+    const FACTS = f.facts; // 아래 열 루프 안에서는 f 가 D층 지역 함수(f(id))로 가려진다 — 회사 사실은 이 이름으로
+    /** 결산일(잔액) 또는 기간(흐름)의 원통화 연간 공시값 — 개념 순서대로 첫 값, 같은 개념이면 최신 제출분 */
+    const natFact = (usCs, id, date, flow) => {
+      const lists = [...usCs.map((t) => ["us-gaap", t]), ...(NAT_A[id] ?? []).map((t) => ["ifrs-full", t])];
+      for (const [ns, t] of lists) {
+        const es = [...(FACTS[ns]?.[t]?.units?.[natCur] ?? []), ...(instNat.get(`${ns}:${t}`) ?? [])].filter((e) => /^(10-K|20-F|40-F)/.test(e.form ?? "") && dayDiff(e.end, date) <= 7
+          && (flow ? e.start && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300 : !e.start));
+        if (es.length) { const e = es.sort((a, b) => (a.filed ?? "").localeCompare(b.filed ?? "")).at(-1); return { ...e, t: `${ns === "ifrs-full" ? "ifrs-full:" : ""}${t}` }; }
+      }
+      return null;
+    };
+    /** 외화 공시 칸 판정 — 판정했으면 결과, 원통화 값이 없으면 null(종전 검증불가로) */
+    const natCheck = (id, usCs, app, date, flow, sg = 1) => {
+      if (!foreign || !natCur || !fxRows) return null;
+      const e = natFact(usCs, id, date, flow);
+      if (!e) return null;
+      const pend = fxPendingWhy(fxRows, flow ? e.end : date);
+      if (pend) return app == null ? { status: PASS, note: `${pend} — 앱 빈칸(대체 없음)`, app, src: null } : { status: FAIL, note: `${pend}인데 앱 값 ${app} — 다른 환율로 대체한 것으로 보임`, app, src: null };
+      const rate = flow ? fxAvg(fxRows, e.start, e.end) : fxEndRate(fxRows, date);
+      if (rate == null) return null;
+      const exp = sg * e.val * rate;
+      const how = `원통화 ${e.t} ${e.val} ${natCur}(${e.form} ${e.filed}) × 연준 H.10 ${flow ? `${e.start}~${e.end} 산술평균` : `${date} 이전 마지막 고시`} ${rate}${sg < 0 ? " × −1(현금 유출 표기)" : ""}${flow ? fxWin(e.start, e.end) : fxAt(date)}`;
+      if (app == null) return { status: FAIL, note: `원통화 ${e.val} ${natCur} 있는데 앱 빈칸 — ${how}`, app, src: exp };
+      return extEq(app, exp) ? { status: PASS, note: `${how} (정확 일치)`, app, src: exp } : { status: FAIL, note: `앱 ${app} ≠ 기대 ${exp} — ${how}`, app, src: exp };
+    };
     const hasCol = (st, c) => (st?.periods ?? []).some((p) => p.label === (c === "LTM" ? "현재/LTM" : c));
+    /** LTM 현금흐름 줄 — 구성 공시 본표·원본 판독(위 호출부 설명). 판정 못 하면 null(종전 검증불가) */
+    // 자기주식 취득 — 우선주 상환(BE PaymentsForRepurchaseOfConvertiblePreferredStock)은 보통주 자기주식이 아니다
+    const CF_FAMILY = { "cf:재무활동 현금흐름:자기주식 취득": /^(?!.*Preferred).*(Repurchase|TreasuryStock|TreasuryShare|BuyBack|Buyback|AcquireOrRedeemEntitysShares|OwnShares)/i, "cf:영업활동 현금흐름:주식보상비용": /ShareBased|StockBased|StockCompensation|ShareCompensation|EquityCompensation/i,
+      // 배당금 지급 — 받은 배당(SPOT 투자활동 DividendsReceivedClassifiedAsInvestingActivities)·비지배지분 분배는 제외
+      "cf:재무활동 현금흐름:배당금 지급": /^(?!.*(Receiv|MinorityInterest|NoncontrollingInterest)).*Dividend/i, "cf:투자활동 현금흐름:유형자산 취득": /PropertyPlantAndEquipment|ProductiveAssets|CapitalExpenditure|CapitalImprovements|FlightEquipment/i };
+    const SBC_ID = "cf:영업활동 현금흐름:주식보상비용";
+    const CAPEX_ID = "cf:투자활동 현금흐름:유형자산 취득", CAPEX_PARTS_V = ["PaymentsForFlightEquipment", "PaymentsToAcquireOtherProductiveAssets"];
+    // 본표 줄 중 회사 고유 개념이면서 표시 라벨이 정확히 주식보상비용인 줄(표준 주식보상 개념이 본표에 없을 때만, 하나일 때만)
+    const sbcCustomOf = (inst, face) => {
+      if (!inst || !face || ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"].some((t) => face.has(`us-gaap_${t}`))) return null;
+      const ids = [...face].filter((x) => !/^us-gaap_/.test(x) && (inst.labels?.get(x) ?? []).some((t) => /^(stock|share)[- ]based compensation( expense)?$/i.test(String(t).trim())));
+      return ids.length === 1 ? ids[0] : null;
+    };
+    const ltmCfFaceJudge = async (cs, app, sg, id, ltmDate) => {
+      const rcL = sub.filings?.recent ?? {};
+      const find = (pred) => { for (let i = 0; i < (rcL.form ?? []).length; i++) if (pred(rcL.form[i], rcL.reportDate?.[i] ?? "")) return { accn: rcL.accessionNumber[i], form: rcL.form[i], d: rcL.reportDate[i] }; return null; };
+      const curF = find((fm, d) => fm === "10-Q" && d && dayDiff(d, ltmDate) <= 7);
+      const fyF = find((fm, d) => fm === "10-K" && d && d < ltmDate);
+      if (!curF || !fyF) return null;
+      const priorD = new Date(Date.parse(ltmDate) - 365 * 864e5).toISOString().slice(0, 10);
+      const priorF = find((fm, d) => fm === "10-Q" && d && dayDiff(d, priorD) <= 10);
+      if (!priorF) return null;
+      // 구성 기간: 사업연도(10-K, 300일 이상) · 당기 누적(사업연도 다음날부터 기준일) · 전년 동기 누적(그 전 사업연도 다음날부터 1년 전 기준일)
+      const comp = async (fl, kind) => {
+        const inst = await filingAtDate(cik, sub, fl.d);
+        const face = await cfFaceConcepts(cik, fl.accn);
+        if (!face) return { err: `${fl.form} ${fl.d} 현금흐름표 표시 구조 없음` };
+        const dd = (x) => (Date.parse(x.end) - Date.parse(x.start)) / 864e5;
+        const facts = (inst?.durFacts ?? []).filter((x) => !x.dims?.length && /USD/i.test(x.unit ?? "USD") && cs.some((t) => x.id === `us-gaap_${t}`) && dayDiff(x.end, fl.d) <= 1);
+        const pick = kind === "FY" ? facts.filter((x) => dd(x) >= 300) : facts.filter((x) => dd(x) >= 80 && dd(x) <= 300);
+        const longest = pick.sort((a, b) => dd(b) - dd(a))[0];
+        if (longest) return { v: longest.v, how: `${fl.form} ${fl.d} ${longest.id.replace(/^us-gaap_/, "")} ${longest.start}~${longest.end} ${longest.v}` };
+        const onFace = cs.find((t) => face.has(`us-gaap_${t}`));
+        // 주식보상비용 본표 줄이 회사 고유 태그(BE) — 그 줄 값(검증기 독립 판독, 2026-10-09)
+        const cu = id === SBC_ID && !onFace ? sbcCustomOf(inst, face) : null;
+        if (cu) {
+          const cf = (inst?.durFacts ?? []).filter((x) => x.id === cu && !x.dims?.length && dayDiff(x.end, fl.d) <= 1);
+          const pk = (kind === "FY" ? cf.filter((x) => dd(x) >= 300) : cf.filter((x) => dd(x) >= 80 && dd(x) <= 300)).sort((a, b) => dd(b) - dd(a))[0];
+          return pk ? { v: pk.v, how: `${fl.form} ${fl.d} 본표 회사 고유 줄 ${cu}(라벨 주식보상비용) ${pk.start}~${pk.end} ${pk.v}` } : { v: 0, how: `${fl.form} ${fl.d} 본표 회사 고유 줄 ${cu} 있음·값 없음(—) → 0` };
+        }
+        if (onFace) return { v: 0, how: `${fl.form} ${fl.d} 본표 줄 ${onFace} 있음·값 없음(—) → 0` };
+        // CAPEX 합계 줄이 없고 항공기 + 기타 유형자산 두 줄이 본표에 있으면 두 줄 합(오너 결정 2026-10-09 DAL — 검증기 독립 판독, 줄은 있는데 값 없음 = 0)
+        if (id === CAPEX_ID && CAPEX_PARTS_V.every((t) => face.has(`us-gaap_${t}`))) {
+          const ps = CAPEX_PARTS_V.map((t) => {
+            const xs = (inst?.durFacts ?? []).filter((x) => x.id === `us-gaap_${t}` && !x.dims?.length && dayDiff(x.end, fl.d) <= 1);
+            return (kind === "FY" ? xs.filter((x) => dd(x) >= 300) : xs.filter((x) => dd(x) >= 80 && dd(x) <= 300)).sort((a, b) => dd(b) - dd(a))[0] ?? null;
+          });
+          return { v: ps.reduce((t, x) => t + (x?.v ?? 0), 0), how: `${fl.form} ${fl.d} 본표 CAPEX 합계 줄 없음 → 항공기 + 기타 유형자산 줄 합(오너 결정 2026-10-09) ${CAPEX_PARTS_V.map((t, i) => `${t} ${ps[i] ? `${ps[i].start}~${ps[i].end} ${ps[i].v}` : "값 없음(—) 0"}`).join(" + ")}` };
+        }
+        const fam = CF_FAMILY[id], sib = fam ? [...face].filter((x) => fam.test(x)) : [];
+        return { absent: true, sib, how: `${fl.form} ${fl.d} 본표에 ${cs.join("/")} 줄 없음${sib.length ? `(같은 성격 줄 ${sib.join(", ")} 있음)` : ""}` };
+      };
+      const fy = await comp(fyF, "FY"), prior = await comp(priorF, "Q");
+      let cur = await comp(curF, "Q");
+      // 앱 0 채움 규칙(CLAUDE.md 2026-10-02 승인 — 투자·재무 줄이 당기 10-Q 본표에 없고 전년 동기가 0 이면 당기 누적 0) 재구현: 같은 조건을 원자료로 확인하면
+      // 당기 누적 0 으로 식을 계산한다(규칙 재구현 — 메모 "당기 누적"으로 공통모드)
+      if (/^cf:(투자|재무)활동/.test(id) && cur.absent && !cur.sib.length && prior.v === 0) cur = { v: 0, how: `${cur.how} → 앱 0 채움 규칙(전년 동기 0) 재구현: 0` };
+      const parts = [fy, cur, prior];
+      if (parts.some((p) => p.err)) return null;
+      const how = parts.map((p) => p.how).join(" · ");
+      if (parts.every((p) => p.v != null)) {
+        // 셋 다 정해짐 — 사업연도 + 당기 누적 − 전년 동기(앱과 같은 식이라 공통모드 사유 "당기 누적"이 메모에 남는다)
+        // LTM = 최근 4개 분기 합(오너 결정 2026-09-28 — 분기 = 3개월 공시값, 없으면 누적 차). 누적 차의 합은 위 식과 같으므로, 3개월 공시값이 있는
+        // 분기만 (3개월 공시값 − 누적 차)를 더한다(DAL 2025 3분기 CAPEX 3개월 1,160 vs 9개월 3,592 − 6개월 2,433 = 1,159, 2026-10-09)
+        const all = cs.flatMap((t) => (G[t]?.units?.USD ?? []).filter((e) => e.start && /^10-[KQ]/.test(e.form ?? "")));
+        const ddE = (e) => (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
+        const latest = (xs) => (xs.length ? latestPrecise(xs.filter((e) => e.filed === xs.reduce((m, x) => ((x.filed ?? "") > m ? x.filed : m), ""))) : null);
+        const lo = Date.parse(ltmDate) - 340 * 864e5;
+        const adj = [];
+        for (const q of all.filter((e) => ddE(e) >= 80 && ddE(e) <= 100 && Date.parse(e.end) >= lo && dayDiff(e.end, ltmDate) <= 400 && Date.parse(e.end) <= Date.parse(ltmDate) + 7 * 864e5)) {
+          if (adj.some((a) => dayDiff(a.end, q.end) <= 3)) continue;
+          const q3 = latest(all.filter((e) => dayDiff(e.end, q.end) <= 3 && ddE(e) >= 80 && ddE(e) <= 100));
+          const cumQ = latest(all.filter((e) => dayDiff(e.end, q.end) <= 3 && ddE(e) > 100 && ddE(e) < 300));
+          if (!q3 || !cumQ) continue; // 1분기(3개월 = 누적)이거나 누적이 없으면 조정 없음
+          const cumP = latest(all.filter((e) => e.start === cumQ.start && Math.abs(ddE(e) - (ddE(cumQ) - ddE(q3))) <= 7));
+          if (!cumP) continue;
+          if (q3.val !== cumQ.val - cumP.val) adj.push({ end: q.end, d: q3.val - (cumQ.val - cumP.val), how: `${q.end} 3개월 ${q3.val} vs 누적 차 ${cumQ.val} − ${cumP.val}` });
+        }
+        const a0 = adj.reduce((t, a) => t + a.d, 0);
+        return vsSource(app, sg * (fy.v + cur.v - prior.v + a0), EXACT, `사업연도 + 당기 누적 − 전년 동기(구성 공시 원본·본표 판독): ${how}${adj.length ? ` · 분기 합 규칙(3개월 공시값 우선) 조정 ${a0}: ${adj.map((a) => a.how).join(" · ")}` : ""}${sg < 0 ? " × −1" : ""}`);
+      }
+      const absent = parts.filter((p) => p.absent);
+      if (absent.some((p) => p.sib.length)) return { status: NA, note: `LTM 구성 공시 본표에 줄 없음이지만 같은 성격의 다른 줄 있음 — 줄 없음으로 판정 못 함 · ${how}`, app, src: null };
+      if (app == null) return { status: PASS, note: `LTM 계산 불가 확인 — 구성 공시 본표에 줄 없음(${absent.map((p) => p.how).join(" · ")}) → 앱 빈칸이 정답 · ${how}`, app, src: null };
+      return { status: FAIL, note: `LTM 구성 공시 본표에 줄 없음(${absent.map((p) => p.how).join(" · ")})인데 앱 ${app} · ${how}`, app, src: null };
+    };
     for (const c of cols) {
       const date = H[c].date;
       // 재무상태표 — 연간 열 + LTM(최근 분기말). 앱 표에 그 열이 없으면(상장 전 연도 — GEV 2022·SNDK 2023) 검사하지 않는다
@@ -5422,6 +6114,17 @@ async function verifyUs(sym) {
           const se = inst("StockholdersEquity", date, c !== "LTM"), mi = inst("MinorityInterest", date, c !== "LTM");
           const eAll = ea?.val ?? (se ? se.val + (mi?.val ?? 0) : null), tq = tempSec(date, c !== "LTM");
           if (le && eAll != null) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, le.val - eAll - (tq?.v ?? 0), EXACT, `Liabilities 미태깅 — 부채와 자본 ${le.val} − 비지배지분 포함 자본 ${eAll}(${ea ? "포함 자본 태그" : "지배주주 자본 + 비지배지분"})${tq ? ` − 임시자본 ${tq.v}` : ""}`)); continue; }
+          // LTM 분기말이 companyfacts 에 아직 없으면(KO 2026-07) 그 분기 10-Q 원본 인스턴스로 같은 식(2026-10-09). 임시자본 태그가 원본에 있으면 함께 뺀다
+          if (c === "LTM" && !foreign && !le) {
+            try {
+              const fl = await filingAtDate(cik, sub, date);
+              const v0 = (id0) => fl?.facts.find((y) => !y.dims?.length && /USD/i.test(y.unit ?? "USD") && y.id === `us-gaap_${id0}`)?.v ?? null;
+              const leI = v0("LiabilitiesAndStockholdersEquity"), eaI = v0("StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"), seI = v0("StockholdersEquity"), miI = v0("MinorityInterest");
+              const tqI = ["TemporaryEquityCarryingAmountAttributableToParent", "TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests", "RedeemableNoncontrollingInterestEquityCarryingAmount"].map(v0).find((v) => v != null) ?? null;
+              const eAllI = eaI ?? (seI != null ? seI + (miI ?? 0) : null);
+              if (leI != null && eAllI != null) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, leI - eAllI - (tqI ?? 0), EXACT, `Liabilities 미태깅·companyfacts 미반영 — ${fl.form} ${fl.filed} 원본 인스턴스 부채와 자본 ${leI} − 비지배지분 포함 자본 ${eAllI}${tqI != null ? ` − 임시자본 ${tqI}` : ""}`)); continue; }
+            } catch (e) { hardErrors.push(`LTM 부채 총계 원본 조회 실패: ${String(e).slice(0, 80)}`); }
+          }
         }
         // 자본 정정 열(오너 결정 (다)) — 그 열 재무상태표 자본 + 나중 정기공시의 정정 금액
         if (c !== "LTM" && (id === "bs:자본:자본 총계" || id === "bs:부채:부채 총계")) {
@@ -5432,6 +6135,15 @@ async function verifyUs(sym) {
         if (id === "bs:자본:자본 총계" && !inst("StockholdersEquity", date, c !== "LTM")) {
           const ea = inst("StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", date, c !== "LTM"), mi = inst("MinorityInterest", date, c !== "LTM");
           if (ea) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, ea.val - (mi?.val ?? 0), EXACT, `StockholdersEquity 미태깅 — 비지배지분 포함 자본 ${ea.val}${mi ? ` − 비지배지분 ${mi.val}` : "(비지배지분 태그 없음)"}`)); continue; }
+        }
+        if (!hit && c !== "LTM") { const r = natCheck(id, cs, app, date, false); if (r) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, r); continue; } }
+        // LTM 분기말 값이 companyfacts 에 아직 없으면(최신 10-Q 미반영 — KO·MDLZ·BE 2026-07) 그 분기 10-Q 원본 인스턴스의 차원 없는 값으로(2026-10-08)
+        if (!hit && c === "LTM" && !foreign) {
+          try {
+            const fl = await filingAtDate(cik, sub, date);
+            const fx = fl?.facts.find((x) => !x.dims?.length && /USD/i.test(x.unit ?? "USD") && cs.some((t) => x.id === `us-gaap_${t}`));
+            if (fx) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, vsSource(app, fx.v, EXACT, `companyfacts 미반영 — ${fl.form} ${fl.filed} 원본 인스턴스 ${fx.id} ${date}`)); continue; }
+          } catch (e) { hardErrors.push(`LTM 재무상태표 원본 조회 실패(${nm}): ${String(e).slice(0, 80)}`); }
         }
         if (!hit) { add("A", `재무상태표 ${nm} 앱 = SEC`, c, app == null ? { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 빈칸${why ? `(${why})` : ""}`, app, src: null } : { status: NA, note: `SEC ${cs.join("/")} 결산일 값 없음 — 앱 ${app}(파생값 가능: ${why || "사유 없음"})`, app, src: null }); continue; }
         const r0 = vsSource(app, hit.val, EXACT, `${cs[usedIdx]} ${hit.form} ${hit.filed}${retagNote(hit) ? ` · ${retagNote(hit)}` : ""}${cm}`);
@@ -5483,6 +6195,85 @@ async function verifyUs(sym) {
             continue;
           }
         }
+        if (v == null && c !== "LTM") { const r = natCheck(id, cs, app, date, true, sg); if (r) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, r); continue; } }
+        // 외화 공시 사업연도 — 표준 개념 값이 없으면 그 해 20-F 현금흐름표 표시 구조에서 같은 성격의 줄(회사 고유 태그 포함 — TSM 2022~2024
+        // tsm:PaymentForAcquireOfTreasuryShares)을 따로 읽는다(2026-10-09). 줄 있음·값 있음 → 원통화 × H.10 기간 평균, 줄 있음·값 없음 → 0("—"),
+        // 줄 없음 → 앱 빈칸이 정답. 줄이 여럿이거나 값이 갈리면 판정하지 않는다
+        if (v == null && c !== "LTM" && foreign && natCur && fxRows && CF_FAMILY[id]) {
+          const r = await (async () => {
+            const fl = await filingAtDate(cik, sub, date);
+            if (!fl?.accn || !/^(20-F|40-F)/.test(fl.form)) return null;
+            const face = await cfFaceConcepts(cik, fl.accn);
+            if (!face) return null;
+            const hits = [...face].filter((x) => CF_FAMILY[id].test(x) && !/^(dei|srt)_/.test(x));
+            const d300 = (x) => (Date.parse(x.end) - Date.parse(x.start)) / 864e5;
+            if (!hits.length) return app == null ? { status: PASS, note: `본표에 줄 없음 확인 — ${fl.form} ${fl.date}(${fl.accn}) 현금흐름표 표시 구조에 같은 성격의 줄 없음 → 앱 빈칸`, app, src: null } : null;
+            const vals = fl.durFacts.filter((x) => hits.includes(x.id) && !x.dims?.length && new RegExp(natCur, "i").test(x.unit ?? "") && d300(x) >= 300 && dayDiff(x.end, date) <= 7);
+            const uniq = [...new Set(vals.map((x) => x.v))];
+            if (uniq.length > 1) return null;
+            if (!uniq.length) return app === 0 ? { status: PASS, note: `본표 줄 있음·이 기간 값 없음(—) → 0 — ${hits.join(", ")} (${fl.form} ${fl.date})`, app, src: 0 } : { status: FAIL, note: `${fl.form} ${fl.date} 현금흐름표에 ${hits.join(", ")} 줄 있고 이 기간 값 없음(—)인데 앱 ${app ?? "빈칸"} — 0 이어야`, app, src: 0 };
+            const e = vals[0], rate = fxAvg(fxRows, e.start, e.end);
+            if (rate == null) return null;
+            const exp = sg * Math.abs(e.v) * rate * Math.sign(e.v || 1);
+            const how = `${fl.form} ${fl.date} 본표 줄 ${e.id}(${(fl.labels.get(e.id) ?? [])[0] ?? ""}) 원통화 ${e.v} ${natCur} × 연준 H.10 ${e.start}~${e.end} 산술평균 ${rate}${sg < 0 ? " × −1(현금 유출 표기)" : ""}${fxWin(e.start, e.end)}`;
+            if (app == null) return { status: FAIL, note: `원통화 ${e.v} ${natCur} 있는데 앱 빈칸 — ${how}`, app, src: exp };
+            return extEq(app, exp) ? { status: PASS, note: `${how} (정확 일치)`, app, src: exp } : { status: FAIL, note: `앱 ${app} ≠ 기대 ${exp} — ${how}`, app, src: exp };
+          })().catch((e) => { hardErrors.push(`외화 공시 현금흐름표 본표 판독 실패(${nm} ${c}): ${String(e).slice(0, 80)}`); return null; });
+          if (r) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, r); continue; }
+        }
+        // 무배당 = 0(오너 결정 2026-10-02 — 앱 blank-reason dividendFree): 그 기간(연간 열 = 사업연도, LTM = 최근 12개월)에 SEC 배당 지급·선언 기록이
+        // 하나도 없거나 전부 0 이면 앱 0 을 통과로(검증기 독립 판정 — 원통화·IFRS 개념 포함). 기록이 있으면 종전대로 검증불가
+        if (v == null && app === 0 && id === "cf:재무활동 현금흐름:배당금 지급") {
+          const from = new Date(Date.parse(date) - 366 * 864e5).toISOString().slice(0, 10);
+          const DIV_EVID = [["us-gaap", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends", "DividendsCommonStockCash", "DividendsCommonStock", "DividendsCash", "CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"]],
+            ["ifrs-full", ["DividendsPaidClassifiedAsFinancingActivities", "DividendsPaid", "DividendsRecognisedAsDistributionsToOwners", "DividendsRecognisedAsDistributionsToOwnersPerShare"]]];
+          const ev = DIV_EVID.flatMap(([ns, ts]) => ts.flatMap((t) => Object.values(FACTS[ns]?.[t]?.units ?? {}).flat().filter((e) => e.end > from && e.end <= date && e.val !== 0).map((e) => `${t} ${e.end} ${e.val}`)));
+          if (!ev.length) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: PASS, note: `무배당 — SEC 배당 지급·선언 기록 ${from}~${date} 없음(0 포함) → 앱 0(오너 결정 2026-10-02 무배당 = 0)`, app, src: 0 }); continue; }
+        }
+        // 앱 0 인데 SEC 값 없음(2026-10-08): 이 사업연도를 실은 10-K(영업활동 현금흐름 연간 값의 접수번호들)의 현금흐름표 표시 구조(_pre.xml)에 이 줄이
+        // 있으면 그 칸은 "—" → 0 통과, 어느 10-K 에도 줄이 없으면 오너 규칙(2026-10-02 "본표에 없는 줄은 0 으로 채우지 않고 본표에 별도 줄 없음")
+        // 위반 → 실패(AMZN FY2025 자기주식 취득: 2025 10-K 현금흐름표에 줄 없음, 앱 0). 무배당 0 은 위에서 따로 판정
+        // 앱 빈칸 + "본표에 별도 줄 없음"도 같은 판독으로 확인(2026-10-08): 어느 10-K 에도 줄 없음 → 통과, 줄이 있는데 이 기간 "—" → 앱은 0 이어야 → 실패
+        // 주식보상비용 — 그 해 10-K 본표 줄이 회사 고유 태그면 그 줄 값과 대조(BE, 2026-10-09 — 예전엔 표준 태그만 보고 앱 빈칸을 "본표에 줄 없음"으로 통과시켰다)
+        if (v == null && id === SBC_ID && c !== "LTM" && !foreign) {
+          try {
+            const fk = await filingAtDate(cik, sub, date);
+            const face = fk ? await cfFaceConcepts(cik, fk.accn) : null;
+            const cu = sbcCustomOf(fk, face);
+            if (cu) {
+              const pk = (fk.durFacts ?? []).filter((x) => x.id === cu && !x.dims?.length && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 >= 300).sort((a, b) => Date.parse(a.start) - Date.parse(b.start))[0];
+              add("A", `현금흐름표 ${nm} 앱 = SEC`, c, vsSource(app, pk ? pk.v : 0, EXACT, `${fk.form} ${fk.filed} 본표 회사 고유 줄 ${cu}(라벨 주식보상비용) ${pk ? `${pk.start}~${pk.end} ${pk.v}` : "값 없음(—) → 0"}`));
+              continue;
+            }
+          } catch (e) { hardErrors.push(`주식보상 본표 회사 고유 줄 판독 실패(${c}): ${String(e).slice(0, 80)}`); }
+        }
+        const faceBlank = app == null && /본표에 별도 줄 없음/.test(why ?? "");
+        if (v == null && (app === 0 || faceBlank) && c !== "LTM") {
+          const accns = [...new Set((G.NetCashProvidedByUsedInOperatingActivities?.units?.USD ?? []).filter((e) => e.start && /^10-K/.test(e.form ?? "") && dayDiff(e.end, date) <= 7 && (Date.parse(e.end) - Date.parse(e.start)) / 864e5 >= 300).map((e) => e.accn))];
+          let found = null, read = 0, err = "";
+          for (const accn of accns) {
+            try {
+              const ids = await cfFaceConcepts(cik, accn);
+              if (!ids) continue;
+              read++;
+              const t = cs.find((x) => ids.has(`us-gaap_${x}`));
+              if (t) { found = { t, accn }; break; }
+            } catch (e) { err = String(e).slice(0, 80); }
+          }
+          if (found) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, faceBlank ? { status: FAIL, note: `${found.t} 가 ${found.accn} 현금흐름표 표시 구조에 있고 이 기간 값 없음(—)인데 앱 빈칸(본표에 별도 줄 없음) — 0 이어야`, app, src: 0 } : { status: PASS, note: `본표 줄 있음·이 기간 값 없음(—) → 0 — ${found.t} 가 ${found.accn} 현금흐름표 표시 구조에 있음`, app, src: 0 }); continue; }
+          if (read && faceBlank) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: PASS, note: `본표에 줄 없음 확인 — 이 해를 실은 10-K ${read}건 현금흐름표 표시 구조에 ${cs.join("/")} 없음 → 앱 빈칸(본표에 별도 줄 없음)`, app, src: null }); continue; }
+          if (read) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: FAIL, note: `이 해를 실은 10-K ${read}건 현금흐름표에 ${cs.join("/")} 줄 없음인데 앱 0 — 오너 규칙(본표에 없는 줄 = 본표에 별도 줄 없음, 0 으로 채우지 않음)`, app, src: null }); continue; }
+          if (err) hardErrors.push(`현금흐름표 표시 구조 조회 실패(${nm} ${c}): ${err}`);
+        }
+        // LTM — SEC TTM 이 없을 때(2026-10-09): 구성 공시 3건(최근 사업연도 10-K · 기준일 10-Q · 1년 전 같은 분기 10-Q)의 현금흐름표 표시 구조와 원본
+        // 인스턴스를 검증기가 따로 읽는다. 구성마다 값 = 그 기간 사실 → 없으면 본표에 줄이 있으면 0("—") → 줄이 없으면 미정.
+        //   · 셋 다 정해지면: 앱 = 사업연도 + 당기 누적 − 전년 동기(앱과 같은 식 — 공통모드)
+        //   · 하나라도 본표에 줄이 없으면 LTM 은 만들 수 없다 → 앱 빈칸이 정답(통과). 단 같은 성격의 다른 줄(회사 고유·다른 표준 개념)이 그 본표에 있으면
+        //     줄 없음으로 볼 수 없어 검증불가 유지, 투자·재무 줄이 당기 본표에 없고 전년 동기가 0 이면(앱 0 채움 규칙) 검증불가 유지
+        if (v == null && c === "LTM" && !foreign) {
+          const r = await ltmCfFaceJudge(cs, app, sg, id, date).catch((e) => { hardErrors.push(`LTM 현금흐름 본표 판독 실패(${nm}): ${String(e).slice(0, 80)}`); return null; });
+          if (r) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, r); continue; }
+        }
         if (v == null) { add("A", `현금흐름표 ${nm} 앱 = SEC`, c, { status: NA, note: `SEC ${cs.join("/")} 기간 값 없음 — 앱 ${app ?? `빈칸(${why || "사유 없음"})`}`, app, src: null }); continue; }
         const r0 = vsSource(app, sg * v, EXACT, `${how}${sg < 0 ? " × −1(현금 유출 표기)" : ""}${cm}`);
         add("A", `현금흐름표 ${nm} 앱 = SEC`, c, usedIdx > 0 && r0.status === PASS ? { ...r0, status: COMMON } : r0);
@@ -5509,11 +6300,60 @@ async function verifyUs(sym) {
       }
       // D층 — 현금흐름표
       const f = (id) => val(byId(cfItems, id), c);
+      // LTM 열 구성 줄 일부가 구조적으로 빈칸(분기 본표에 줄 없음 등)이면 LTM 열만으로는 합을 못 맞춘다(2026-10-09). 대신 앱의 최근 4개 분기 열로
+      // 같은 항등식을 세운다: ① 분기마다 소계 = 구성 줄 합(분기 빈칸은 사유가 있을 때만 0) ② LTM 소계 = 분기 소계 4개 합 ③ LTM 값이 있는 구성 줄 = 그 줄
+      // 분기 4개 합 → LTM 소계 = 값 있는 줄 LTM 합 + 빈칸 줄 분기 4개 합. 하나라도 어긋나면 실패, 분기 열이 연속 4개가 아니거나 사유 없는 빈칸이면 null(검증불가 유지)
+      const ltmQuarterSum = (tid, rows) => {
+        if (!fetched.cfq || !date) return null;
+        const qp = (fetched.cfq.periods ?? []).filter((p0) => p0.endDate);
+        const iEnd = qp.findIndex((p0) => dayDiff(p0.endDate, date) <= 7);
+        if (iEnd < 3) return null;
+        const q4 = qp.slice(iEnd - 3, iEnd + 1);
+        for (let i = 1; i < 4; i++) { const g0 = (Date.parse(q4[i].endDate) - Date.parse(q4[i - 1].endDate)) / 864e5; if (g0 < 77 || g0 > 106) return null; }
+        const qItems = stItems(fetched.cfq), qById = (id) => qItems.find((it) => it.accountId === id);
+        const qv = (it, lb) => it?.values?.[lb] ?? null, qn = (it, lb) => String(it?.cellNotes?.[lb] ?? "");
+        // 분기 빈칸은 "본표에 줄 없음"(본표에 별도 줄 없음 · 공시를 중단) 사유일 때만 0 — 다른 사유(산정 불가 등)는 값이 정해지지 않은 칸
+        const qAbsent = (qi, lb) => /본표에 별도 줄 없음|공시를 중단/.test(qn(qi, lb));
+        const fails = [], parts = [];
+        const qTot = q4.map((p0) => qv(qById(tid), p0.label));
+        if (qTot.some((x) => x == null)) return null;
+        for (const p0 of q4) {
+          let sq = 0, open = false;
+          for (const it of rows) { const qi = qById(it.accountId), v0 = qv(qi, p0.label); if (v0 == null && !qAbsent(qi, p0.label)) open = true; sq += v0 ?? 0; }
+          const t0 = qv(qById(tid), p0.label);
+          // 정해지지 않은 칸이 있는데 합이 안 맞으면 그 칸 몫일 수 있어 판정 보류(검증불가). 맞으면(잔여 줄이 떠안음) 그대로 진행
+          if (Math.abs(t0 - sq) >= 1) { if (open) return null; fails.push(`${p0.label} 소계 ${t0} ≠ 구성 줄 합 ${sq}`); }
+        }
+        const tq = qTot.reduce((a0, b0) => a0 + b0, 0);
+        if (Math.abs(f(tid) - tq) >= 1) fails.push(`LTM 소계 ${f(tid)} ≠ 분기 소계 4개 합 ${tq}`);
+        let rest = 0;
+        for (const it of rows) {
+          const qi = qById(it.accountId), lv = val(it, c), nm0 = it.accountId.split(":").pop();
+          const vs4 = q4.map((p0) => qv(qi, p0.label)), s4 = vs4.reduce((a0, b0) => a0 + (b0 ?? 0), 0);
+          const open = q4.some((p0) => qv(qi, p0.label) == null && !qAbsent(qi, p0.label));
+          if (lv != null) { if (open) return null; if (Math.abs(lv - s4) >= 1) fails.push(`${nm0} LTM ${lv} ≠ 분기 4개 합 ${s4}(${vs4.join(" + ")})`); }
+          else { rest += s4; parts.push(`${nm0} 분기 합 ${s4}(LTM 빈칸: ${noteOf(it, c).slice(0, 30)})`); }
+        }
+        const lsum = rows.reduce((a0, it) => a0 + (val(it, c) ?? 0), 0);
+        const qs = q4.map((p0) => p0.label).join("·");
+        return fails.length
+          ? { status: FAIL, note: `LTM 구성 줄 빈칸 — 최근 4개 분기(${qs}) 대조 실패: ${fails.join(" · ")}` }
+          : { status: PASS, note: `LTM 구성 줄 일부 구조적 빈칸 — 최근 4개 분기(${qs}) 열로 대조: 분기마다 소계 = 구성 줄 합, LTM 소계 ${f(tid)} = 분기 소계 합, 값 있는 줄 LTM 합 ${lsum} + 빈칸 줄 분기 합 ${rest}(${parts.join(" · ")})` };
+      };
       for (const [sec, tid] of [["영업활동 현금흐름", "cf:total:영업활동 현금흐름"], ["투자활동 현금흐름", "cf:total:투자활동 현금흐름"], ["재무활동 현금흐름", "cf:total:재무활동 현금흐름"]]) {
         const rows = cfItems.filter((it) => it.accountId.startsWith(`cf:${sec}:`) && it.depth === 1);
         const vs = rows.map((it) => val(it, c));
         const blankWhy = rows.filter((it) => val(it, c) == null && noteOf(it, c)).map((it) => `${it.accountId.split(":").pop()}(${noteOf(it, c).slice(0, 40)})`);
-        if (f(tid) != null && blankWhy.length) add("D", `현금흐름표 ${sec} = 구성 줄 합`, c, { status: NA, note: `구성 줄 일부 빈칸(사유 있음) — ${blankWhy.join(" · ")}` });
+        // 빈칸 사유가 전부 "본표에 줄 없음"(본표에 별도 줄 없음 · 회사가 이 항목 공시를 중단함)이면 그 줄은 본표 합에 없는 것 — 0 으로 보고 합을 대조한다(2026-10-08).
+        // 다른 사유(LTM 구성 분기 미충족 등)가 섞이면 합을 만들 수 없어 검증불가
+        const faceAbsent = (it) => /본표에 별도 줄 없음|공시를 중단/.test(noteOf(it, c) ?? "");
+        const blanks = rows.filter((it) => val(it, c) == null && noteOf(it, c));
+        let lq = null;
+        if (f(tid) != null && blankWhy.length && blanks.every(faceAbsent) && vs.some((x) => x != null)) {
+          const sum = vs.reduce((t, x) => t + (x ?? 0), 0);
+          add("D", `현금흐름표 ${sec} = 구성 줄 합`, c, Math.abs(f(tid) - sum) < 1 ? { status: PASS, note: `본표에 없는 줄 0 — ${blankWhy.join(" · ")}` } : { status: FAIL, note: `${f(tid)} ≠ ${sum}(차 ${f(tid) - sum}) · 본표에 없는 줄 0 — ${blankWhy.join(" · ")}` });
+        } else if (f(tid) != null && blankWhy.length && c === "LTM" && (lq = ltmQuarterSum(tid, rows))) add("D", `현금흐름표 ${sec} = 구성 줄 합`, c, lq);
+        else if (f(tid) != null && blankWhy.length) add("D", `현금흐름표 ${sec} = 구성 줄 합`, c, { status: NA, note: `구성 줄 일부 빈칸(사유 있음) — ${blankWhy.join(" · ")}` });
         else if (f(tid) != null && vs.some((x) => x != null)) eqD(`현금흐름표 ${sec} = 구성 줄 합`, f(tid), vs.reduce((t, x) => t + (x ?? 0), 0));
       }
       const wc = byId(cfItems, "cf:영업활동 현금흐름:운전자본 변동");
@@ -5797,15 +6637,72 @@ async function verifyUs(sym) {
    * 다시 계산할 수 없는 기록은 실패(면제 없음)
    */
   const cfacts = f;
+  // ── 검증기 SEC 원 개념 대응(재감사 13차 — 공란·0·근사·6-K·수준 보정의 SEC 개념을 앱 기록(ids)에서 가져오지 않는다).
+  //   앱 us-gaap 개념 → SEC 원 개념 = 검증기가 받은 SEC companyfacts 에서 대응표 사본(IFRS_GROUPS_SNAPSHOT) 순서로 그 날짜 값이 있는 첫 묶음
+  //   (앱 sourceIdsAt·srcIdsOf 와 같은 규칙의 재구현 — 공통모드). us-gaap 공시사(ASML)는 같은 이름. 앱 기록은 이 값과 대조만 한다
+  //   companyfacts 에 최신 20-F 가 빠진 회사(TSM 2025 — 앱은 edgar-gapfill 로 인스턴스를 직접 읽는다)가 있어 그 날짜의 20-F 인스턴스(검증기 판독)도 함께 본다
+  const ifrsNsC = cfacts?.facts?.["ifrs-full"] ?? {};
+  const instCache = new Map();
+  /** 그 날짜(±7일)의 정기공시 인스턴스(검증기 판독, filingAtDate). 조회 실패는 오류로 남기고 null */
+  const instAt = async (d) => {
+    if (!instCache.has(d)) instCache.set(d, filingAtDate(cik, sub, d).catch((e) => { hardErrors.push(`SEC 20-F 원본(${d}) 조회 실패: ${String(e).slice(0, 80)}`); return null; }));
+    return await instCache.get(d);
+  };
+  const instHas = (inst, nm, kind) => !!inst && (kind === "bs" ? inst.facts : inst.durFacts).some((x) => x.id === `ifrs-full_${nm}` && !x.dims.length && (kind === "bs" || (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300));
+  const instNs = (inst, nm) => !!inst && [...inst.facts, ...inst.durFacts].some((x) => x.id === `ifrs-full_${nm}`);
+  const hasAtC = (nm, kind, at) => Object.values(ifrsNsC[nm]?.units ?? {}).some((arr) => arr.some((e) => e.end === at && (kind === "bs" ? !e.start : !!e.start && (Date.parse(at) - Date.parse(e.start)) / 864e5 > 300)));
+  /** 검증기가 정한 SEC 원 개념 [{ id, sign }] — kind bs(연말)·cf(1년 흐름), at = 그 날짜. single = 원소 하나짜리 묶음만(앱 bsDelta 규칙) */
+  const secIdsOf = async (dst, kind, at, single = false) => {
+    const inst = await instAt(at);
+    const ifrsFiler = Object.keys(ifrsNsC).length > 0 || (!!inst && [...inst.facts, ...inst.durFacts].some((x) => x.id.startsWith("ifrs-full_")));
+    if (!ifrsFiler) return [{ id: `us-gaap_${dst}`, sign: 1 }];
+    const exists = (x) => !!ifrsNsC[x] || instNs(inst, x);
+    const altPick = (el) => (typeof el === "string" ? (exists(el) ? el : null) : (el.find(exists) ?? null));
+    for (const [d0, sum, sign] of IFRS_GROUPS_SNAPSHOT) {
+      if (d0 !== dst || (single && !(sum.length === 1 && typeof sum[0] === "string"))) continue;
+      const els = sum.map(altPick).filter((x) => x && (hasAtC(x, kind, at) || instHas(inst, x, kind)));
+      if (els.length) return els.map((x) => ({ id: `ifrs-full_${x}`, sign }));
+    }
+    return [];
+  };
+  const idsKey = (ids) => (ids ?? []).map((x) => `${x.id}|${x.sign}`).sort().join(",");
+  const idsTxt = (ids) => (ids ?? []).map((x) => `${x.sign < 0 ? "−" : ""}${x.id.replace(/^[a-z-]+_/, "")}`).join("+") || "없음";
+  /** SEC 사업연도 흐름 값(원통화) — 검증기 대응 개념들의 20-F 인스턴스 값(보고 통화 — USD 편의 환산 제외), 없으면 companyfacts 20-F 최신 제출. 없으면 null */
+  const secFlowFy = async (dst, E0) => {
+    const ids = await secIdsOf(dst, "cf", E0);
+    if (!ids.length) return null;
+    const inst = await instAt(E0);
+    const curCode = (u) => /^(?:u_)?(?:iso4217[_:]?)?([a-z]{3})$/i.exec(u ?? "")?.[1]?.toUpperCase() ?? null;
+    const cnt = new Map();
+    for (const x of inst?.durFacts ?? []) { const c0 = curCode(x.unit); if (c0) cnt.set(c0, (cnt.get(c0) ?? 0) + 1); }
+    const rep = [...cnt].filter(([c0]) => c0 !== "USD").sort((a, b) => b[1] - a[1])[0]?.[0] ?? (cnt.has("USD") ? "USD" : null);
+    let t = 0;
+    for (const { id, sign } of ids) {
+      const xi = inst?.durFacts.find((x) => x.id === id && !x.dims.length && curCode(x.unit) === rep && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300);
+      let v = xi?.v ?? null;
+      if (v == null) {
+        const units = cfacts?.facts?.[id.slice(0, id.indexOf("_"))]?.[id.slice(id.indexOf("_") + 1)]?.units ?? {};
+        const us = Object.keys(units).filter((u) => /^[A-Z]{3}$/.test(u));
+        const pick = us.filter((u) => u !== "USD").length ? us.filter((u) => u !== "USD") : us;
+        v = pick.flatMap((u) => units[u]).filter((x) => x.start && dayDiff(x.end, E0) <= 7 && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300 && /^20-F/.test(x.form ?? ""))
+          .sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0]?.val ?? null;
+      }
+      if (v == null) return null;
+      t += sign * v;
+    }
+    return { v: t, ids };
+  };
   /**
    * 재감사(2026-10-02): verify-row 의 LTM 항목 전부(최종 재무 데이터의 YAHOO-Q 항목 + 출처) — 앱이 따로 남긴 기록이 아니라 값 자체에 붙은 출처라
    * 값만 넣고 기록을 빠뜨릴 수 없다. 출처 없는 항목·다시 계산할 수 없는 항목은 실패. yRows = 검증기가 따로 받은 야후 분기
    */
-  const checkLtmItems = async (yRows, qStartOf) => {
+  const checkLtmItems = async (yRows, qStartOf, last4) => {
     // verify-row ltm = { items(화면과 같은 선택 규칙으로 고른 LTM 값 + 고른 항목의 출처), gaps(사업연도 값은 있는데 LTM 이 빈 개념), sixKSource }
     const items = row?.ltm?.items ?? null, gaps = row?.ltm?.gaps ?? [], sixKSource = row?.ltm?.sixKSource ?? null;
     if (!items?.length) { add("A", "20-F LTM 항목 목록(verify-row)", "LTM", { status: FAIL, note: "verify-row 에 LTM 항목 목록 없음 — 독립 재계산 불가" }); return; }
-    const ya = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "all" }, { validateResult: false }).catch(() => []);
+    // 야후 연간 조회 실패는 오류(재감사 12차 ⑦ — 빈 목록으로 삼키면 공란 검사 ①이 조용히 꺼졌다)
+    const ya = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "all" }, { validateResult: false })
+      .catch((e) => { hardErrors.push(`20-F LTM 야후 연간 조회 실패: ${String(e).slice(0, 80)}`); return []; });
     const yaRows = ya.map((r) => ({ ...r, end: new Date(r.date).toISOString().slice(0, 10) }));
     const yv = (rec, k) => {
       if (!rec) return null;
@@ -5818,8 +6715,8 @@ async function verifyUs(sym) {
     const yAn = (d) => yaRows.find((r) => dayDiff(r.end, d) <= 7);
     // 앱 6-K 기록 형식으로(값은 기록이 아니라 실제 항목 값)
     const det = items.filter((x) => x.src?.via === "sixK").map((x) => ({ ...x.src.detail, usd: x.usd }));
-    const fas = new Map();
-    const fa = async (d) => { if (!fas.has(d)) fas.set(d, await filingAtDate(cik, sub, d).catch(() => null)); return fas.get(d); };
+    // 원본 조회 실패는 오류로도 남긴다(재감사 12차 ④ — null 로 삼키면 공란 판정에서 "줄 없음"과 구분되지 않았다)
+    const fa = instAt;
     const shortId = (id) => id.replace(/^[a-z-]+_/, "");
     const latestFyEnd = [...det.map((x) => x.fyEnd), row?.ltm?.E].filter(Boolean).sort().at(-1);
     const labsOf = async (f0, id) => { const lf = latestFyEnd ? await fa(latestFyEnd) : null; return [...new Set([...(f0.labels.get(id) ?? []), ...(lf?.labels.get(id) ?? [])])]; };
@@ -5845,38 +6742,66 @@ async function verifyUs(sym) {
         if (!it.src) return { status: FAIL, note: "LTM 항목에 출처 없음 — 값만 넣고 출처를 빠뜨림" };
         if (it.usd == null) return { status: FAIL, note: "흐름 LTM 조합 항목(사업연도·전기) 없음" };
         const s0 = it.src;
+        // 야후 필드·부호·분기는 검증기가 정한다(재감사 12차 ② — 앱 기록 s0.y·s0.sign·s0.quarters 를 그대로 쓰면 앱이 필드를 바꿔도 통과했다).
+        //   필드·부호 = 검증기 고정 사본(YAHOO_LTM_FIXED), 분기 = 검증기가 받은 야후 분기 최근 4개. 앱 기록이 다르면 실패
+        let ym = null;
+        if (s0.via === "yahoo" || s0.via === "yahooFlow" || s0.via === "yahooApprox") {
+          ym = YAHOO_LTM_FIXED.get(it.concept);
+          if (!ym) return { status: FAIL, note: `야후 대응 검증기 고정 사본에 없는 개념(앱 필드 ${JSON.stringify(s0.y)}) — 앱이 대응을 새로 만들었으면 사본 갱신` };
+          if (JSON.stringify(s0.y) !== JSON.stringify(ym.y)) return { status: FAIL, note: `앱 야후 필드 ${JSON.stringify(s0.y)} ≠ 검증기 고정 사본 ${JSON.stringify(ym.y)} — 다른 야후 항목으로 채움` };
+          if (s0.via === "yahooFlow" && s0.sign !== ym.sign) return { status: FAIL, note: `앱 부호 ${s0.sign} ≠ 검증기 고정 사본 ${ym.sign}` };
+        }
+        if ((s0.via === "yahooApprox" || s0.via === "zero" || s0.via === "debtApprox") && (!fyE || !s0.E || dayDiff(s0.E, H[fyE].date) > 7))
+          return { status: FAIL, note: `앱 기록 연말 ${s0.E ?? "없음"} ≠ 최근 사업연도말 ${fyE ? H[fyE].date : "없음"}` };
         if (s0.via === "yahoo") {
-          const v = yv(yQ(it.at), s0.y), r0 = fxEndRate(fxRows, it.at);
-          if (v == null || r0 == null) return { status: FAIL, note: `야후 분기 ${JSON.stringify(s0.y)} ${it.at} 값${v == null ? "" : "(환율)"} 없음` };
+          const v = yv(yQ(it.at), ym.y), r0 = fxEndRate(fxRows, it.at);
+          if (v == null || r0 == null) return { status: FAIL, note: `야후 분기 ${JSON.stringify(ym.y)} ${it.at} 값${v == null ? "" : "(환율)"} 없음` };
           expOf.set(`${it.concept}|${it.at}`, v * r0);
-          return vsSource(it.usd, v * r0, EXACT, `야후 분기 ${JSON.stringify(s0.y)} ${it.at} ${v} × 기말 H.10`);
+          return vsSource(it.usd, v * r0, EXACT, `야후 분기 ${JSON.stringify(ym.y)} ${it.at} ${v} × 기말 H.10`);
         }
         if (s0.via === "yahooFlow") {
+          const aq = s0.quarters ?? [];
+          if (aq.length !== last4.length || aq.some((q, i) => dayDiff(q, last4[i]) > 7))
+            return { status: FAIL, note: `앱 분기 ${aq.join("·") || "없음"} ≠ 검증기 야후 최근 4개 분기 ${last4.join("·")}` };
           let t = 0;
-          for (const q of s0.quarters ?? []) {
-            const v = yv(yQ(q), s0.y), r0 = fxAvg(fxRows, qStartOf(q), q);
-            if (v == null || r0 == null) return { status: FAIL, note: `야후 분기 ${JSON.stringify(s0.y)} ${q} 값 또는 환율 없음` };
-            t += s0.sign * v * r0;
+          for (const q of last4) {
+            const v = yv(yQ(q), ym.y), r0 = fxAvg(fxRows, qStartOf(q), q);
+            if (v == null || r0 == null) return { status: FAIL, note: `야후 분기 ${JSON.stringify(ym.y)} ${q} 값 또는 환율 없음` };
+            t += ym.sign * v * r0;
           }
-          let how = `야후 분기 ${(s0.quarters ?? []).join("·")} ${JSON.stringify(s0.y)} × 분기 평균 H.10`;
+          let how = `야후 분기 ${last4.join("·")} ${JSON.stringify(ym.y)} × 분기 평균 H.10(필드·부호·분기 = 검증기 고정)`;
           if (s0.adj) {
             // 수준 보정 = (SEC 사업연도 − 야후 연간) × 사업연도 평균 환율 — 둘 다 검증기가 따로 읽는다
-            if (s0.adj.da || !s0.adj.ids?.length) return { status: FAIL, note: "흐름 수준 보정(감가상각 합산) — 검증기 재계산 미구현" };
-            const fy0 = secE?.durFacts.filter((x) => x.id === s0.adj.ids[0].id && !x.dims.length && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300)[0];
+            // 감가상각 합산 보정은 재계산하지 않는다 — 명시적 실패(재감사 13차 ④)
+            if (s0.adj.da) return { status: FAIL, note: "흐름 수준 보정(감가상각 합산) — 검증기 재계산 미구현(실패 유지)" };
+            // SEC 원 개념 = 검증기 대응(앱 adj.ids 는 대조만 — 이중 기록으로 부풀려도 통과하던 문제, D7)
+            const want = fyE ? await secIdsOf(it.concept, "cf", H[fyE].date) : [];
+            if (!want.length) return { status: FAIL, note: `수준 보정 — 검증기 대응으로 SEC 사업연도 원 개념을 못 정함(앱 기록 ${idsTxt(s0.adj.ids)})` };
+            if (idsKey(want) !== idsKey(s0.adj.ids)) return { status: FAIL, note: `앱 수준 보정 원 개념 ${idsTxt(s0.adj.ids)} ≠ 검증기 대응 ${idsTxt(want)}` };
+            const fy0 = secE?.durFacts.filter((x) => x.id === want[0].id && !x.dims.length && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300)[0];
             let secV = 0;
-            for (const { id, sign } of s0.adj.ids) { const x = secE?.durFacts.find((z) => z.id === id && !z.dims.length && (Date.parse(z.end) - Date.parse(z.start)) / 864e5 > 300); if (!x) return { status: FAIL, note: `수준 보정 SEC 사업연도 ${id} 없음` }; secV += sign * x.v; }
-            const yA = yv(yAn(fy0?.end ?? ""), s0.y), rF = fy0 ? fxAvg(fxRows, fy0.start, fy0.end) : null;
+            for (const { id, sign } of want) { const x = secE?.durFacts.find((z) => z.id === id && !z.dims.length && (Date.parse(z.end) - Date.parse(z.start)) / 864e5 > 300); if (!x) return { status: FAIL, note: `수준 보정 SEC 사업연도 ${id} 없음` }; secV += sign * x.v; }
+            const yA = yv(yAn(fy0?.end ?? ""), ym.y), rF = fy0 ? fxAvg(fxRows, fy0.start, fy0.end) : null;
             if (yA == null || rF == null) return { status: FAIL, note: "수준 보정 야후 연간 또는 환율 없음" };
-            t += (secV - s0.sign * yA) * rF;
-            how += ` + (SEC 사업연도 ${secV} − 야후 연간 ${s0.sign * yA}) × 사업연도 평균`;
+            // 앱 사업연도 값(verify-row fy)과도 대조 — 보정에 쓴 SEC 값이 앱 사업연도 열과 같은 값이어야 한다
+            const appFy = row?.ltm?.fy?.[it.concept]?.v ?? null;
+            if (appFy == null || Math.abs(appFy - secV * rF) > 1e-9 * Math.max(Math.abs(appFy), Math.abs(secV * rF), 1))
+              return { status: FAIL, note: `수준 보정 SEC 사업연도 ${secV} × ${rF} = ${secV * rF} ≠ 앱 사업연도 값 ${appFy ?? "없음"}` };
+            t += (secV - ym.sign * yA) * rF;
+            how += ` + (SEC 사업연도 ${secV} − 야후 연간 ${ym.sign * yA}) × 사업연도 평균`;
           }
           expOf.set(`${it.concept}|${it.at}`, t);
           return vsSource(it.usd, t, EXACT, how);
         }
         if (s0.via === "yahooApprox" || s0.via === "debtApprox") {
-          const yk = s0.via === "debtApprox" ? "totalDebt" : s0.y;
+          const yk = s0.via === "debtApprox" ? "totalDebt" : ym.y;
           let secN = null;
-          if (s0.via === "yahooApprox") secN = s0.ids?.length ? await secAt(s0.ids, s0.E) : null;
+          if (s0.via === "yahooApprox") {
+            // SEC 연말 원 개념 = 검증기 대응(앱 s0.ids 는 대조만, 재감사 13차 ②)
+            const want = await secIdsOf(it.concept, "bs", s0.E);
+            if (idsKey(want) !== idsKey(s0.ids)) return { status: FAIL, note: `앱 변동분 근사 원 개념 ${idsTxt(s0.ids)} ≠ 검증기 대응 ${idsTxt(want)}` };
+            secN = want.length ? await secAt(want, s0.E) : null;
+          }
           else { const fyDebt = rowOf(bs, "총차입금")?.[fyE] ?? null, rE0 = fxEndRate(fxRows, s0.E); secN = fyDebt != null && rE0 ? fyDebt / rE0 : null; }
           const yE0 = yv(yQ(s0.E), yk) ?? yv(yAn(s0.E), yk), yA0 = yv(yQ(it.at), yk), r0 = fxEndRate(fxRows, it.at);
           if (secN == null || yE0 == null || yA0 == null || r0 == null) return { status: FAIL, note: `변동분 근사 재계산 불가 — SEC 연말 ${secN ?? "없음"}·야후 ${yE0 ?? "없음"}→${yA0 ?? "없음"}` };
@@ -5885,7 +6810,10 @@ async function verifyUs(sym) {
           return vsSource(it.usd, e0, EXACT, `${s0.via === "debtApprox" ? "앱 연말 총차입금(A층 별도 대조)" : "SEC 연말"} ${secN} + 야후 변동 ${yE0} → ${yA0} × 기말 H.10`);
         }
         if (s0.via === "zero") {
-          const v = s0.ids?.length ? await secAt(s0.ids, s0.E) : 0;
+          // SEC 연말 원 개념 = 검증기 대응(앱 s0.ids 를 비워 SEC 값이 있는 비지배지분을 0 으로 만들면 통과하던 문제, D5b)
+          const want = await secIdsOf(it.concept, "bs", s0.E);
+          if (idsKey(want) !== idsKey(s0.ids)) return { status: FAIL, note: `앱 0 규칙 원 개념 ${idsTxt(s0.ids)} ≠ 검증기 대응 ${idsTxt(want)}` };
+          const v = want.length ? await secAt(want, s0.E) : 0;
           if (v !== 0 && v != null) return { status: FAIL, note: `0 규칙인데 SEC 연말 ${v}` };
           expOf.set(`${it.concept}|${it.at}`, 0);
           return vsSource(it.usd, 0, EXACT, `SEC 연말 ${v == null ? "줄 없음" : 0} → 분기말 0(EV 구성요소)`);
@@ -5894,21 +6822,30 @@ async function verifyUs(sym) {
       })().catch((e) => ({ status: FAIL, note: `재계산 오류 ${String(e).slice(0, 80)}` }));
       add("A", nm, "LTM", res);
     }
-    det.sort((a, b) => (a.kind === "derived") - (b.kind === "derived"));
+    // 기준 줄 확인형(bsNote1)은 기준 줄(다른 6-K 항목)의 기대값이 먼저 있어야 한다 — 합성 개념과 함께 뒤로
+    const detRank = (k) => (k === "derived" ? 2 : k === "bsNote1" ? 1 : 0);
+    det.sort((a, b) => detRank(a.kind) - detRank(b.kind));
     /** 6-K 기록 하나의 기대값 — { exp, how } 또는 판정 행(실패·검증불가) */
     const sixKExp = async (d) => {
       try {
-        if (d.kind === "derived") {
-          const parts = (d.parts ?? []).map((p) => expOf.get(`${p}|${d.at}`));
-          if (!d.parts?.length) return { status: FAIL, note: "합성 개념 구성 줄 없음" };
-          if (parts.some((x) => x == null)) return { status: FAIL, note: `합성 본표 개념 = ${d.parts.join(" + ")} — 구성 줄 기대값 없음(${d.parts.filter((p, i) => parts[i] == null).join(", ")})` };
-          return { exp: parts.reduce((t, x) => t + x, 0), how: `구성 줄 기대값 합 ${d.parts.join(" + ")}` };
-        }
+        // 합성 개념(derived)은 여기서 계산하지 않는다 — 구성 줄을 검증기 고정 규칙으로 정해야 해서 사업연도 완결성 블록(synthExp) 뒤에서 따로(재감사 12차 ①)
+        if (d.kind === "derived") return { status: FAIL, note: "합성 개념 — 고정 구성 규칙 판정 전(내부 순서 오류)" };
         const f = await fa(d.fyEnd);
         if (!f) return { status: FAIL, note: `SEC 20-F(${d.fyEnd}) 원본 판독 실패` };
         const text = await sixKDocText(cik, d.report);
         if (!text) return { status: FAIL, note: `6-K 문서 판독 실패(${d.report})` };
         if (!d.ids?.length) return { status: FAIL, note: "원 개념 기록 없음" };
+        // 원 개념 = 검증기 대응(재감사 13차 ③ — 매입채무에 비유동부채 원 개념을 기록해도 그 줄로 다시 계산해 통과했다, D6).
+        //   감가상각 합계 개념은 앱이 보고서 줄이 있는 형제 개념의 원 개념을 같이 쓴다(같은 금액의 다른 이름 — flowSixK) — 형제 중 하나와 같으면 인정
+        {
+          const kd = d.kind === "cf" || d.kind === "cfZero" ? "cf" : "bs";
+          const cands = DA_SIBLINGS.includes(d.concept) ? DA_SIBLINGS : [d.concept];
+          const wants = [];
+          // bsNote1 은 앱이 최근 사업연도말(E) 기준 원 개념을 쓴다(srcIdsOf) — 그 날짜로 대응
+          for (const c of cands) { const w = await secIdsOf(c, kd, d.kind === "bsNote1" ? row.ltm.E : d.fyEnd, d.kind === "bsDelta"); if (w.length) wants.push(w); }
+          if (!wants.some((w) => idsKey(w) === idsKey(d.ids)))
+            return { status: FAIL, note: `앱 6-K 원 개념 ${idsTxt(d.ids)} ≠ 검증기 대응 ${wants.map(idsTxt).join(" / ") || "없음"}(${shortId(d.concept)})` };
+        }
         if (d.kind === "cf" || d.kind === "cfZero") {
           let tot = 0;
           const notes = [];
@@ -5963,7 +6900,8 @@ async function verifyUs(sym) {
             // 같은 라벨이 여러 번(취득·처분) — 지급 개념은 유출(음수) 묶음, 수취 개념은 유입(양수) 묶음만
             if (u.length > 1 && /Payment|Purchase|Acquir|Repayment/.test(id)) u = u.filter((c) => c.cur <= 0 && c.prior <= 0);
             else if (u.length > 1 && /Proceeds|Sale|Disposal|Receipt/.test(id)) u = u.filter((c) => c.cur >= 0 && c.prior >= 0);
-            if (u.length !== 1) return { status: FAIL, note: `6-K 현금흐름 "${labs[0] ?? shortId(id)}" 줄 ${u.length ? `${u.length}개 후보로 모호` : "못 찾음"}(${d.report})` };
+            // absent = 문서는 읽었고 그 줄이 없음(공란 정당 사유는 이것뿐 — 재감사 12차 ④)
+            if (u.length !== 1) return { status: FAIL, note: `6-K 현금흐름 "${labs[0] ?? shortId(id)}" 줄 ${u.length ? `${u.length}개 후보로 모호` : "못 찾음"}(${d.report})`, absent: !u.length };
             const c0 = u[0], xs = c0.neg ? -1 : 1;
             tot += sign * (fy0.v * rF + xs * c0.cur * rC - xs * c0.prior * rP);
             notes.push(`${shortId(id)}: SEC 사업연도 ${fy0.v} + 6-K "${c0.label}" 당기 ${xs * c0.cur} − 전기 ${xs * c0.prior}${c0.neg ? "(부호 반전 라벨)" : ""}`);
@@ -5973,6 +6911,29 @@ async function verifyUs(sym) {
         // 재무상태표
         const rAt = fxEndRate(fxRows, d.at);
         if (rAt == null) return { status: FAIL, note: "기말 환율 없음" };
+        // 기준일 열 하나뿐인 주석 표(bsNote1, 재감사 14차 ②) — 연말 확인 대신 같은 표의 기준 줄이 검증기 기대값(기준 개념의 그 날짜 값)과 같아야 한다.
+        //   표 = 대상 줄과 기준 줄이 2천 자 안에 함께 있는 곳, 두 줄 모두 숫자 하나. 줄 머리가 아닌 곳의 같은 단어("non-current"·"total lease liabilities")는 같은 라벨로 보지 않는다
+        if (d.kind === "bsNote1") {
+          if (d.ids.length !== 1 || !d.anchor?.concept || d.anchor.ids?.length !== 1) return { status: FAIL, note: "기준 줄 확인형 기록 형식 오류(원 개념·기준 줄 하나씩)" };
+          const aw = await secIdsOf(d.anchor.concept, "bs", d.fyEnd);
+          if (idsKey(aw) !== idsKey(d.anchor.ids)) return { status: FAIL, note: `기준 줄 원 개념 앱 ${idsTxt(d.anchor.ids)} ≠ 검증기 ${idsTxt(aw)}` };
+          const aExp = expOf.get(`${d.anchor.concept}|${d.at}`);
+          if (aExp == null) return { status: FAIL, note: `기준 줄 ${shortId(d.anchor.concept)} @${d.at} 검증기 기대값 없음` };
+          const aOrig = aExp / rAt;
+          // 줄(칸) 머리에서 시작하는 라벨만 — 앞에 다른 단어가 붙은 줄("Total lease liabilities", "Non-current")은 같은 라벨로 보지 않는다
+          const solo = (r) => r.nums.length === 1 && /^[\s‖]*$/.test(text.slice(text.lastIndexOf("\n", r.i) + 1, r.i + 1));
+          const rowsT = sixKRows(text, await labsOf(f, d.ids[0].id)).filter(solo);
+          const rowsA = sixKRows(text, await labsOf(f, d.anchor.ids[0].id)).filter(solo);
+          const vals = new Set();
+          for (const rt of rowsT) {
+            const u0 = sixKUnitAt(text, rt.i);
+            if (!u0) continue;
+            if (rowsA.some((ra) => ra.i !== rt.i && Math.abs(ra.i - rt.i) < 2_000 && Math.abs(ra.nums[0] * u0 * d.anchor.ids[0].sign - aOrig) < 0.5 * u0)) vals.add(rt.nums[0] * u0);
+          }
+          if (vals.size !== 1) return { status: FAIL, note: `주석 표(기준 줄 ${shortId(d.anchor.concept)} ${aOrig}) 안 "${shortId(d.ids[0].id)}" 줄 ${vals.size ? `${vals.size}개 후보로 모호` : "못 찾음"}(${d.report})`, absent: !vals.size };
+          const v0 = [...vals][0] * d.ids[0].sign;
+          return { exp: v0 * rAt, how: `6-K 주석 표 "${shortId(d.ids[0].id)}" ${d.at} ${v0}(같은 표 기준 줄 ${shortId(d.anchor.concept)} = 검증기 기대값 ${aOrig}) · ${natCur} × 기말 H.10 ${d.at}` };
+        }
         const hds = sixKBsHeaders(text);
         const cfHeads = [...text.matchAll(/months ended/g)].map((m) => m.index);
         let tot = 0;
@@ -6006,7 +6967,7 @@ async function verifyUs(sym) {
           if (d.kind === "bsDelta") {
             const u = rows0.filter((x) => x.hd.dates.includes(d.at));
             const uq = [...new Map(u.map((x) => [`${x.cols[x.hd.dates.indexOf(d.at)]}|${x.cols[x.hd.dates.indexOf(d.fyEnd)]}`, x])).values()];
-            if (uq.length !== 1) return { status: FAIL, note: `변동분 근사 "${labs[0] ?? shortId(id)}" 줄 ${uq.length}개(${d.report})` };
+            if (uq.length !== 1) return { status: FAIL, note: `변동분 근사 "${labs[0] ?? shortId(id)}" 줄 ${uq.length}개(${d.report})`, absent: !uq.length };
             const x = uq[0], vE = x.cols[x.hd.dates.indexOf(d.fyEnd)], vA = x.cols[x.hd.dates.indexOf(d.at)];
             tot += sign * (fyF.v + (vA - vE));
             notes.push(`${shortId(id)}: SEC 연말 ${fyF.v} + 6-K 변동(${vE} → ${vA})`);
@@ -6014,7 +6975,7 @@ async function verifyUs(sym) {
           }
           const ok = rows0.filter((x) => x.hd.dates.includes(d.at) && eqFy(x));
           const uq = [...new Map(ok.map((x) => [`${x.cols[x.hd.dates.indexOf(d.at)]}|${x.cols[x.hd.dates.indexOf(d.fyEnd)]}`, x])).values()];
-          if (uq.length !== 1) return { status: FAIL, note: `6-K 재무상태표 "${labs[0] ?? shortId(id)}" 연말 열 = SEC ${fyF.v} 인 줄 ${uq.length}개(${d.report})` };
+          if (uq.length !== 1) return { status: FAIL, note: `6-K 재무상태표 "${labs[0] ?? shortId(id)}" 연말 열 = SEC ${fyF.v} 인 줄 ${uq.length}개(${d.report})`, absent: !uq.length };
           const x = uq[0], sg = Math.abs(x.cols[x.hd.dates.indexOf(d.fyEnd)] - fyF.v) < unitOf(fyF.v) + Math.abs(fyF.v) * 1e-9 ? 1 : -1;
           tot += sign * sg * x.cols[x.hd.dates.indexOf(d.at)];
           notes.push(`${shortId(id)}: 6-K "${x.r.label}" ${d.at} ${sg * x.cols[x.hd.dates.indexOf(d.at)]}(연말 열 = SEC ${fyF.v})`);
@@ -6022,38 +6983,151 @@ async function verifyUs(sym) {
         return { exp: tot * rAt, how: `${notes.join(" · ")} · ${natCur} × 기말 H.10 ${d.at}` };
       } catch (e) { return { status: FAIL, note: `재계산 오류 ${String(e).slice(0, 80)}` }; }
     };
-    for (const d of det) {
+    // 야후로 채운 재무상태표 LTM 값(자산·부채·자본 합계·현금 등 — 앱 via "yahoo")도 같은 날짜 6-K 재무상태표 원문으로 따로 판독(검증기 추가, 2026-10-09).
+    //   줄 선택·부호는 6-K bs 기록 대조와 같은 판독(SEC 20-F 라벨, 연말 열 = SEC 20-F 연말 값) — 앱 출처(야후)와 무관한 원자료라 독립.
+    //   6-K 에서 줄을 못 찾거나 모호하면 행을 만들지 않는다(추가 확인 — A층 "앱 = SEC" 행이 사유와 함께 남는다), 값이 다르면 실패
+    {
+      const sixKExtraMiss = new Map(); // 판독 못 한 항목(행을 만들지 않음) — 디버그용
+      const repAt = new Map(det.map((d) => [d.at, d.report]));
+      const fyEndL = row?.ltm?.E ?? null;
+      for (const it of items.filter((x) => x.src?.via === "yahoo" && x.usd != null && x.at)) {
+        const report = repAt.get(it.at) ?? sixKSource;
+        if (!report || !fyEndL) continue;
+        const ids = await secIdsOf(it.concept, "bs", fyEndL);
+        if (!ids.length) continue;
+        const r = await sixKExp({ kind: "bs", concept: it.concept, ids, at: it.at, fyEnd: fyEndL, report, usd: it.usd });
+        if (r.exp == null) { sixKExtraMiss.set(`${it.concept}|${it.at}`, String(r.note ?? "").slice(0, 120)); continue; }
+        add("A", `20-F LTM 6-K bs ${shortId(it.concept)} @${it.at} (앱 출처 야후 — 검증기 6-K 판독)`, "LTM", vsSource(it.usd, r.exp, EXACT, r.how));
+      }
+      if (sixKExtraMiss.size && args.debug) console.log(`[${sym}] 6-K 추가 판독 못 함:`, [...sixKExtraMiss].map(([k, v]) => `${k} ${v}`).join(" | "));
+    }
+    const derivedDets = det.filter((d) => d.kind === "derived");
+    for (const d of det.filter((x) => x.kind !== "derived")) {
       const r = await sixKExp(d);
       if (r.exp != null) expOf.set(`${d.concept}|${d.at}`, r.exp);
       add("A", `20-F LTM 6-K ${d.kind} ${shortId(d.concept)} @${d.at}`, "LTM", r.exp != null ? vsSource(d.usd, r.exp, EXACT, r.how) : r);
     }
     // 완결성(재감사 P5) — 앱이 비운 LTM(사업연도 값 있음)을 검증기가 6-K 에서 찾으면 실패(채울 수 있었음). 6-K 에도 없거나 판정 불가면 공란 정당
+    /** 1년 전 분기 6-K 보고서("6-K 접수번호 문서") — 분기말 at 뒤 120일 안 6-K(최대 8건) 중 큰 문서부터, 재무상태표 머리에 at·prevE 가 함께 있는 첫 문서 */
+    const prevRep = new Map();
+    const prevSixKReport = async (at, prevE) => {
+      const k = `${at}|${prevE}`;
+      if (prevRep.has(k)) return prevRep.get(k);
+      const rc = sub.filings?.recent ?? {};
+      const hi = new Date(Date.parse(at) + 120 * 864e5).toISOString().slice(0, 10);
+      let out = { report: null, why: `${at} 뒤 120일 안 6-K 없음` };
+      const cands = [];
+      for (let i = 0; i < (rc.form ?? []).length && cands.length < 8; i++) if (rc.form[i] === "6-K" && rc.filingDate[i] > at && rc.filingDate[i] <= hi) cands.push(rc.accessionNumber[i]);
+      outer: for (const accn of cands) {
+        out = { report: null, why: `6-K ${cands.length}건에 ${at}·${prevE} 재무상태표 없음` };
+        const items0 = (await secJson(`https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}/index.json`)).directory.item;
+        for (const d0 of items0.filter((x) => /\.htm$/i.test(x.name) && !/-index/i.test(x.name) && Number(x.size) > 15_000).sort((a, b) => Number(b.size) - Number(a.size)).slice(0, 6)) {
+          const rep = `6-K ${accn} ${d0.name}`;
+          const t0 = await sixKDocText(cik, rep);
+          if (t0 && sixKBsHeaders(t0).some((h) => h.dates.includes(at) && h.dates.includes(prevE))) { out = { report: rep, why: null }; break outer; }
+        }
+      }
+      prevRep.set(k, out);
+      return out;
+    };
     let gapOk = 0;
     const gapNa = [];
+    // 앱 6-K 조회 실패 경고(verify-row fetchWarnings) — 공란 판정에서 "줄 없음"으로 보지 않는다
+    const sixKFetchFail = (row?.ltm?.fetchWarnings ?? []).find((w) => /6-K[^"]*조회 실패/.test(w)) ?? null;
+    const derivedGaps = [];
     for (const g of gaps) {
       const gname = `20-F LTM 공란 ${g.kind} ${shortId(g.concept)} @${g.at}`;
-      // ① 야후로 채울 수 있었는가(흐름 항목 규칙이 있는 개념 — 앱이 적은 사유를 믿지 않고 검증기가 따로 판정, 재감사 T6):
-      //    야후 최근 4개 분기가 다 있고 야후 연간이 SEC 사업연도와 5% 안이면 앱 규칙상 채워야 한다
-      if (g.flow && !g.flow.da && g.ids?.length) {
-        const q4 = yRows.slice(-4), fy0 = secE?.durFacts.find((x) => x.id === g.ids[0].id && !x.dims.length && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300);
+      // 공란 기록의 규칙(야후 필드·부호·현금흐름 여부·SEC 원 개념)은 검증기가 정한다 — 앱 기록(g.flow·g.cf·g.ids)은 대조만(재감사 13차 ①, P11:
+      //   이자비용 부호를 뒤집어 "정의 차이" 공란을 만들어도 앱 부호로 판정해 통과했다)
+      const E0 = row.ltm.E;
+      const ymG = g.kind === "cf" && YAHOO_LTM_FLOW.has(g.concept) ? YAHOO_LTM_FIXED.get(g.concept) : null;
+      const flowW = ymG ? { y: ymG.y, sign: ymG.sign, da: DA_SIBLINGS.includes(g.concept) } : null;
+      const idsW = await secIdsOf(g.concept, "bs" === g.kind ? "bs" : "cf", E0);
+      const cfW = g.kind === "cf" ? isCfFixed(g.concept) : null;
+      const flowApp = g.flow ? { y: g.flow.y, sign: g.flow.sign, da: !!g.flow.da } : null;
+      const bad = [
+        JSON.stringify(flowApp) !== JSON.stringify(flowW) ? `흐름 규칙 앱 ${JSON.stringify(flowApp)} ≠ 검증기 ${JSON.stringify(flowW)}` : null,
+        idsKey(g.ids) !== idsKey(idsW) ? `SEC 원 개념 앱 ${idsTxt(g.ids)} ≠ 검증기 ${idsTxt(idsW)}` : null,
+        g.kind === "cf" && !!g.cf !== cfW ? `현금흐름 개념 여부 앱 ${!!g.cf} ≠ 검증기 ${cfW}` : null,
+      ].filter(Boolean);
+      if (bad.length) { add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란 기록이 검증기 규칙과 다름 — ${bad.join(" · ")}` }); continue; }
+      // 본표 합성 개념(…Derived)은 SEC 원 개념이 없다 — 검증기 고정 구성 규칙(synthExp)이 생긴 뒤 구성 줄 기준일 값으로 따로 판정(기준일·1년 전 모두)
+      if (/Derived$/.test(g.concept)) {
+        if (g.at !== row.ltm.through && sixKFetchFail) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 6-K 조회 실패 경고(${sixKFetchFail})` }); continue; }
+        derivedGaps.push(g); continue;
+      }
+      // 1년 전 분기말 공란(평균 잔액 기초 값 — 재감사 13차 ⑦) — 기준일 값의 출처 규칙으로 판정
+      if (g.at !== row.ltm.through) {
+        if (sixKFetchFail) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 6-K 조회 실패 경고(${sixKFetchFail})로 값이 빠졌을 수 있음` }); continue; }
+        const cur = items.find((x) => x.concept === g.concept && x.at === row.ltm.through)?.src ?? null;
+        const ymB = YAHOO_LTM_FIXED.get(g.concept);
+        const yP = ymB ? yv(yQ(g.at), ymB.y) : null;
+        if (cur?.via === "zero") { add("A", gname, "LTM", { status: FAIL, note: "기준일 0 규칙 개념인데 1년 전 분기말 공란(앱 규칙상 0)" }); continue; }
+        if ((cur?.via === "yahoo" || cur?.via === "yahooApprox" || cur?.via === "debtApprox") && (cur.via === "debtApprox" ? yv(yQ(g.at), "totalDebt") : yP) != null) {
+          add("A", gname, "LTM", { status: FAIL, note: `기준일 야후 출처(${cur.via})인데 야후 ${g.at} 값 있음 — 1년 전 분기말 채울 수 있음` }); continue;
+        }
+        if (cur?.via === "sixK" && cur.detail?.report) {
+          const r1 = await sixKExp({ concept: g.concept, kind: "bs", at: g.at, ids: idsW, report: cur.detail.report, fyEnd: cur.detail.fyEnd ?? E0, usd: null });
+          if (r1.exp != null) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란인데 6-K(${cur.detail.report})에 값 ${r1.exp} — 채울 수 있음` }); continue; }
+          if (!r1.absent) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 6-K 판정 불가: ${r1.note}` }); continue; }
+          // 이번 보고서에 없으면 1년 전 분기 6-K(검증기가 앱과 같은 규칙 — 분기말 뒤 120일 안 6-K 중 재무상태표 머리에 그 분기말·전년 사업연도말이
+          // 있는 문서 — 로 직접 찾음, 재감사 14차 ①). 못 찾으면 실패, 찾으면 본표(연말 확인)·주석 표(기준 줄 확인) 두 규칙으로 판정
+          const prevE0 = new Date(Date.UTC(Number(E0.slice(0, 4)) - 1, Number(E0.slice(5, 7)), 0)).toISOString().slice(0, 10);
+          let pr;
+          try { pr = await prevSixKReport(g.at, prevE0); }
+          catch (e) { hardErrors.push(`1년 전 분기 6-K 조회 실패: ${String(e).slice(0, 80)}`); add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 1년 전 분기 6-K 조회 실패로 판정 불가` }); continue; }
+          if (!pr.report) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 검증기도 1년 전 분기 6-K 를 못 찾음(${pr.why})${row?.ltm?.sixKPrevMiss ? ` · 앱 사유: ${row.ltm.sixKPrevMiss}` : ""} — 판정 불가` }); continue; }
+          const idsP = await secIdsOf(g.concept, "bs", prevE0);
+          const r2 = await sixKExp({ concept: g.concept, kind: "bs", at: g.at, ids: idsP, report: pr.report, fyEnd: prevE0, usd: null });
+          if (r2.exp != null) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란인데 1년 전 6-K(${pr.report})에 값 ${r2.exp} — 채울 수 있음${row?.ltm?.sixKPrevMiss ? ` · 앱 사유: ${row.ltm.sixKPrevMiss}` : ""}` }); continue; }
+          if (!r2.absent) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란 — 1년 전 6-K 판정 불가: ${r2.note}` }); continue; }
+          // 주석 표(기준일 열 하나) — 그 날짜 6-K 로 채운 다른 개념을 기준 줄로
+          let noteHit = null;
+          for (const a0 of items.filter((x) => x.at === g.at && x.src?.via === "sixK" && x.concept !== g.concept && expOf.has(`${x.concept}|${g.at}`))) {
+            const r3 = await sixKExp({ concept: g.concept, kind: "bsNote1", at: g.at, ids: idsW, report: pr.report, fyEnd: prevE0, usd: null, anchor: { concept: a0.concept, ids: await secIdsOf(a0.concept, "bs", prevE0) } });
+            if (r3.exp != null) { noteHit = { r3, a0 }; break; }
+          }
+          if (noteHit) { add("A", gname, "LTM", { status: FAIL, note: `앱 1년 전 분기말 공란인데 1년 전 6-K 주석 표에 값 ${noteHit.r3.exp} — 채울 수 있음 · ${noteHit.r3.how}` }); continue; }
+          gapOk++;
+          continue;
+        }
+        add("A", gname, "LTM", { status: NA, note: `앱 1년 전 분기말 공란 — 기준일 출처 ${cur?.via ?? "없음"}, 야후에 1년 전 값 없음` });
+        continue;
+      }
+      // ① 야후로 채울 수 있었는가(앱 규칙: 야후 최근 4개 분기가 다 있고 야후 연간이 SEC 사업연도와 5% 안이면 채운다 — 검증기 고정 필드·부호·원 개념으로)
+      //    세전이익·이자비용은 SEC 영업이익 개념이 없으면(세전이익 기반 합성) 앱 규칙상 공란
+      const opAbsent = /^IncomeLossFromContinuingOperationsBeforeIncomeTaxes|^Interest(Expense|AndDebtExpense)/.test(g.concept) && !(await secIdsOf("OperatingIncomeLoss", "cf", E0)).length;
+      if (flowW && !flowW.da && idsW.length && !opAbsent) {
+        const fy0 = secE?.durFacts.find((x) => x.id === idsW[0].id && !x.dims.length && (Date.parse(x.end) - Date.parse(x.start)) / 864e5 > 300);
         let secV = fy0 ? 0 : null;
-        for (const { id, sign } of g.ids) { const x = secE?.durFacts.find((z) => z.id === id && !z.dims.length && (Date.parse(z.end) - Date.parse(z.start)) / 864e5 > 300); if (!x) { secV = null; break; } secV += sign * x.v; }
-        const yA = fy0 ? yv(yAn(fy0.end), g.flow.y) : null;
-        const qOk = q4.length === 4 && q4.every((r0) => yv(r0, g.flow.y) != null);
-        if (secV != null && yA != null && qOk && Math.abs(secV - g.flow.sign * yA) <= Math.abs(secV) * 0.05) {
-          add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란${g.reason ? `(${g.reason})` : ""}인데 야후 최근 4개 분기가 다 있고 야후 연간 ${g.flow.sign * yA} ≈ SEC 사업연도 ${secV}(5% 안) — 채울 수 있음` });
+        for (const { id, sign } of idsW) { const x = secE?.durFacts.find((z) => z.id === id && !z.dims.length && (Date.parse(z.end) - Date.parse(z.start)) / 864e5 > 300); if (!x) { secV = null; break; } secV += sign * x.v; }
+        const yA = fy0 ? yv(yAn(fy0.end), flowW.y) : null;
+        const qOk = last4.length === 4 && last4.every((q) => yv(yQ(q), flowW.y) != null);
+        if (secV != null && yA != null && qOk && Math.abs(secV - flowW.sign * yA) <= Math.abs(secV) * 0.05) {
+          add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란${g.reason ? `(${g.reason})` : ""}인데 야후 최근 4개 분기가 다 있고 야후 연간 ${flowW.sign * yA} ≈ SEC 사업연도 ${secV}(5% 안, 검증기 고정 필드·부호) — 채울 수 있음` });
           continue;
         }
       }
       // ② 6-K 에서 찾을 수 있는가 — 재무상태표와 현금흐름표 개념만(손익 개념을 현금흐름 조정 줄로 찾지 않는다 — SPOT "Finance costs")
-      if (g.kind === "cf" && !g.cf) { gapOk++; continue; }
-      if (!sixKSource || !g.ids?.length) { gapNa.push(`${shortId(g.concept)}(${!sixKSource ? "6-K 없음" : "원 개념 없음"})`); continue; }
-      const r = await sixKExp({ concept: g.concept, kind: g.kind, at: g.at, ids: g.ids, report: sixKSource, fyEnd: row.ltm.E, usd: null });
+      if (g.kind === "cf" && !cfW) { gapOk++; continue; }
+      // 6-K 가 없거나 원 개념이 없으면 판정 불가 — 실패(재감사 12차 ③: "대조 불가"를 통과 요약에 숨기면 6-K 조회 실패로 값이 사라져도 0 실패였다)
+      if (!sixKSource || !idsW.length) {
+        gapNa.push(`${shortId(g.concept)}(${!sixKSource ? "6-K 없음" : "원 개념 없음"})`);
+        add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란 — ${!sixKSource ? `앱이 쓴 6-K 보고서 없음${row?.ltm?.sixKMiss ? `(앱 사유: ${row.ltm.sixKMiss})` : ""}` : "SEC 원 개념 기록 없음"} — 6-K 로 채울 수 있었는지 판정 불가` });
+        continue;
+      }
+      const r = await sixKExp({ concept: g.concept, kind: g.kind, at: g.at, ids: idsW, report: sixKSource, fyEnd: row.ltm.E, usd: null });
       if (r.exp != null) add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란${g.reason ? `(${g.reason})` : ""}인데 6-K 에서 기대값 ${r.exp} — 채울 수 있음 · ${r.how}` });
-      // 검증기가 판정하지 못한 경우(후보 여럿 — 모호)는 정당한 공란으로 세지 않는다
-      else if (/모호/.test(r.note ?? "")) add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란 — 6-K 판독 모호로 채울 수 있는지 판정 불가: ${r.note}` });
-      else gapOk++;
+      // 정당한 공란 = 문서를 읽었고 그 줄이 없음(absent)뿐(재감사 12차 ④). 모호·조회/판독 실패·환율 없음·재계산 오류는 판정 불가 — 실패,
+      //   조회·판독·환율 실패는 오류(종료코드 1)로도 남긴다
+      else if (r.absent) gapOk++;
+      else {
+        if (!/모호/.test(r.note ?? "")) hardErrors.push(`20-F LTM 공란 판정 불가(${shortId(g.concept)}): ${r.note ?? "사유 없음"}`);
+        add("A", gname, "LTM", { status: FAIL, note: `앱 LTM 공란 — 6-K ${/모호/.test(r.note ?? "") ? "판독 모호" : "판정 불가"}로 채울 수 있는지 알 수 없음: ${r.note}` });
+      }
     }
+    /** 6-K 합성 개념(derived) 기대값 — 아래 사업연도 블록에서 검증기 고정 구성 규칙(synthExp)을 만든 뒤 정해진다. 못 만들면 null(전부 실패) */
+    let derivedEval = null, derivedGapEval = null;
     // 사업연도 완결성(재감사 7차 E1·E3) — "있어야 할 값"을 앱 데이터가 아니라 검증기가 읽은 SEC 20-F 원본으로 정한다.
     //   20-F 인스턴스의 차원 없는 통화 값(연말 잔액·1년 흐름, 0 아님) 각각에 대해 그 값을 받는 앱 개념(IFRS 대응표, us-gaap 공시사는 같은 이름)이
     //   앱 사업연도 값에 하나도 없으면 실패. 원천이 하나뿐인 단순 대응은 값도 정확 대조(원통화 × H.10 — 잔액 기말, 흐름 기간 평균)
@@ -6170,7 +7244,7 @@ async function verifyUs(sym) {
           if (rBs == null) return { v: null, why: "H.10 기말 환율 없음" };
           if (d === "DebtFaceDerived") {
             if (!exDebt) return { v: null, why: "SEC 본표 차입금 판독 불가" };
-            return { v: exDebt.sum * rBs, how: `SEC 20-F 본표 차입금 + 리스(${exDebt.parts.map((x) => `${x.what} ${shortId(x.id)} ${x.v}`).join(" + ")}) × H.10 기말 ${rBs}` };
+            return { v: exDebt.sum * rBs, ids: exDebt.parts.filter((x) => x.kind !== "note").map((x) => ({ id: x.id, v: x.v })), how: `SEC 20-F 본표 차입금 + 리스(${exDebt.parts.map((x) => `${x.what} ${shortId(x.id)} ${x.v}`).join(" + ")}) × H.10 기말 ${rBs}` };
           }
           if (d === "DebtFaceNoncurrentDerived") {
             if (!exDebt) return { v: null, why: "SEC 본표 차입금 판독 불가" };
@@ -6184,12 +7258,12 @@ async function verifyUs(sym) {
               if (x.kind === "finLease" && x.id === "us-gaap_FinanceLeaseLiability") { nc.push({ ...x, v: x.v - (exDebt.v0("us-gaap_FinanceLeaseLiabilityCurrent") ?? 0) }); continue; }
               return { v: null, why: `리스 구성(${x.kind}) 유동·비유동 판정 불가` };
             }
-            return { v: nc.reduce((t, x) => t + x.v, 0) * rBs, how: `SEC 20-F 비유동 차입금·리스 줄(${nc.map((x) => `${shortId(x.id)} ${x.v}`).join(" + ") || "없음 — 0"}) × H.10 기말 ${rBs}` };
+            return { v: nc.reduce((t, x) => t + x.v, 0) * rBs, ids: nc.map((x) => ({ id: x.id, v: x.v })), how: `SEC 20-F 비유동 차입금·리스 줄(${nc.map((x) => `${shortId(x.id)} ${x.v}`).join(" + ") || "없음 — 0"}) × H.10 기말 ${rBs}` };
           }
           if (d === "ShortTermInvestmentsFaceDerived") {
             const re = /ShortTermInvestments|CurrentInvestments|MarketableSecuritiesCurrent|AvailableForSaleSecuritiesDebtSecuritiesCurrent|ShorttermDeposits|CurrentFinancialAssets(AtAmortisedCost|AtFairValue)/;
             const ls = bsSec.filter((y) => re.test(y.id) && secE.faceIds.has(y.id) && sideOf(y.id) === "curA");
-            return { v: ls.reduce((t, y) => t + y.v, 0) * rBs, how: `SEC 20-F 유동자산 본표 단기투자 줄(${ls.map((y) => `${shortId(y.id)} ${y.v}`).join(" + ") || "없음 — 0"}) × H.10 기말 ${rBs}` };
+            return { v: ls.reduce((t, y) => t + y.v, 0) * rBs, ids: ls.map((y) => ({ id: y.id, v: y.v })), how: `SEC 20-F 유동자산 본표 단기투자 줄(${ls.map((y) => `${shortId(y.id)} ${y.v}`).join(" + ") || "없음 — 0"}) × H.10 기말 ${rBs}` };
           }
           return null;
         };
@@ -6233,10 +7307,64 @@ async function verifyUs(sym) {
               ? { status: PASS, note: `앱 합성 값 없음 · SEC 원본 기대값 0(${exp.how}) — 없음과 같음` }
               : { status: FAIL, note: `앱 합성 값 없음인데 ${exp.how} = ${exp.v} — 있어야 할 값이 빠짐`, app: null, src: exp.v });
         }
+        // 6-K LTM 합성 개념(재감사 12차 ① — 앱이 보낸 구성 줄 목록 d.parts 의 기대값 합만 보면 구성 줄을 빼고 목록에서도 빼면 통과했다):
+        //   구성 줄 = 검증기 고정 규칙(synthExp — 20-F 본표 계산 구조) → 각 SEC 줄을 받는 앱 개념(대응표 사본·같은 이름). 앱 d.parts 가 이 구성과
+        //   다르면(빠진 줄·규칙 밖 줄) 실패, 같으면 그 개념들의 기준일 기대값(검증기가 따로 계산한 값) 합과 대조
+        derivedEval = (d) => {
+          const exp = synthExp(d.concept);
+          if (!exp || exp.v == null || !exp.ids) return { status: FAIL, note: `합성 개념 ${d.concept} — 검증기 고정 구성 규칙 없음 또는 SEC 원본으로 계산 불가${exp?.why ? `(${exp.why})` : ""}` };
+          const parts = d.parts ?? [];
+          // 연말 0 인 SEC 줄은 앱 판독이 구성 후보에서 빼므로(0 은 같은 줄 판정에 쓰지 않음) 대응 확인 대상에서 뺀다
+          const comps = exp.ids.filter((x) => x.v !== 0);
+          const unmapped = comps.filter((x) => !dstsOf(x.id).length);
+          if (unmapped.length) return { status: FAIL, note: `검증기 구성 줄 ${unmapped.map((x) => shortId(x.id)).join(", ")} 을 받는 앱 개념이 대응표 사본에 없음 — 구성 대조 불가` };
+          const want = new Set(comps.flatMap((x) => dstsOf(x.id)));
+          const missing = comps.filter((x) => !dstsOf(x.id).some((dd) => parts.includes(dd)));
+          const extra = parts.filter((p) => !want.has(p));
+          const compTxt = comps.map((x) => `${shortId(x.id)}→${dstsOf(x.id).join("|")}`).join(", ");
+          if (!parts.length || missing.length || extra.length)
+            return { status: FAIL, note: `앱 구성 줄 ${parts.join(" + ") || "없음"} ≠ 검증기 고정 구성(${compTxt})${missing.length ? ` · 빠진 SEC 줄 ${missing.map((x) => shortId(x.id)).join(", ")}` : ""}${extra.length ? ` · 규칙 밖 줄 ${extra.join(", ")}` : ""}` };
+          // 사업연도 확인 — 앱 구성 개념의 사업연도 값 합 = 검증기 기대값(같은 개념을 다른 정의로 바꿔 끼우는 경우)
+          const fySum = parts.reduce((t, p) => (t == null || fyApp[p] == null ? null : t + fyApp[p]), 0);
+          if (fySum == null || !near(fySum, exp.v)) return { status: FAIL, note: `앱 구성 줄 사업연도 값 합 ${fySum ?? "없음"} ≠ ${exp.how} = ${exp.v}` };
+          const ex = parts.map((p) => expOf.get(`${p}|${d.at}`));
+          if (ex.some((x) => x == null)) return { status: FAIL, note: `구성 줄 기대값 없음(${parts.filter((p, i) => ex[i] == null).join(", ")}) @${d.at}` };
+          return { exp: ex.reduce((t, x) => t + x, 0), how: `검증기 고정 구성(${compTxt}) — 구성 개념 ${d.at} 기대값 합 ${parts.join(" + ")}` };
+        };
+        // 앱이 비운 합성 개념 LTM — 검증기 구성 줄이 모두 기준일 기대값(검증기가 따로 계산한 값)을 가지면 채울 수 있었음(실패),
+        //   하나라도 기준일 값이 없으면 정당한 공란(그 구성 줄의 공란은 제 공란 행에서 따로 판정)
+        derivedGapEval = (g) => {
+          const exp = synthExp(g.concept);
+          if (!exp || exp.v == null || !exp.ids) return { status: FAIL, note: `합성 개념 ${g.concept} — 검증기 고정 구성 규칙 없음 또는 SEC 원본으로 계산 불가${exp?.why ? `(${exp.why})` : ""}` };
+          const comps = exp.ids.filter((x) => x.v !== 0);
+          if (!comps.length) return { absent: true, note: "구성 줄 연말 값 모두 0" };
+          const got = comps.map((x) => ({ x, d0: dstsOf(x.id).find((dd) => expOf.has(`${dd}|${g.at}`)) }));
+          const miss = got.filter((y) => !y.d0);
+          if (miss.length) return { absent: true, note: `구성 줄 ${miss.map((y) => `${shortId(y.x.id)}(${dstsOf(y.x.id).join("|") || "앱 개념 없음"})`).join(", ")} 의 기준일 값 없음` };
+          // 여러 SEC 줄이 같은 앱 개념으로 들어가면(사채·장기차입금 → LongTermDebtNoncurrent) 그 개념은 한 번만 더한다(재감사 13차 ⑥)
+          const uniq0 = [...new Set(got.map((y) => y.d0))];
+          const sum0 = uniq0.reduce((t, d0) => t + expOf.get(`${d0}|${g.at}`), 0);
+          return { status: FAIL, note: `앱 LTM 공란인데 검증기 고정 구성 줄이 모두 기준일 기대값을 가짐 — ${uniq0.map((d0) => `${d0} ${expOf.get(`${d0}|${g.at}`)}`).join(" + ")} = ${sum0}(SEC 줄 ${got.map((y) => `${shortId(y.x.id)}→${y.d0}`).join(", ")}) — 채울 수 있음` };
+        };
         add("A", "20-F 사업연도 완결성(SEC 20-F 원본)", "LTM", { status: uniq.length ? PASS : FAIL, note: `${uniq.length ? "" : "SEC 20-F 통화 값을 하나도 못 읽음 — 대조 불가 · "}SEC 20-F ${repCur ?? "?"} 값 ${uniq.length}개 중 앱 개념 대응 ${okN}개 존재(앱 개념 값 대조 ${valN}개), 대응 개념 없음 ${noMap}개(회사 고유·대응표 밖), 합성 개념 대조 ${synthN}개, 원천 없는 앱 값 ${orphanN}개` });
       }
     }
-    add("A", "20-F LTM 공란 완결성(6-K 대조)", "LTM", { status: PASS, note: `앱 LTM 공란 ${gaps.length}개 개념 중 6-K 에서 값을 찾은 것 없음(${gapOk}개 대조${gapNa.length ? `, 대조 불가 ${gapNa.length}개` : ""})` });
+    for (const g of derivedGaps) {
+      const gname = `20-F LTM 공란 ${g.kind} ${shortId(g.concept)} @${g.at}`;
+      const r = derivedGapEval ? derivedGapEval(g) : { status: FAIL, note: "SEC 20-F 원본·verify-row 사업연도 값이 없어 합성 개념 구성 규칙을 만들 수 없음" };
+      if (r.absent) gapOk++;
+      else add("A", gname, "LTM", r);
+    }
+    for (const d of derivedDets) {
+      const r = derivedEval ? derivedEval(d) : { status: FAIL, note: "SEC 20-F 원본·verify-row 사업연도 값이 없어 합성 개념 구성 규칙을 만들 수 없음" };
+      if (r.exp != null) expOf.set(`${d.concept}|${d.at}`, r.exp);
+      add("A", `20-F LTM 6-K ${d.kind} ${shortId(d.concept)} @${d.at}`, "LTM", r.exp != null ? vsSource(d.usd, r.exp, EXACT, r.how) : r);
+    }
+    add("A", "20-F LTM 공란 완결성(6-K 대조)", "LTM", gapNa.length
+      ? { status: FAIL, note: `앱 LTM 공란 ${gaps.length}개 중 6-K 대조 불가 ${gapNa.length}개(${gapNa.join(", ")}) — 정당한 공란인지 판정 못 함(${gapOk}개는 6-K 에 줄 없음 확인)` }
+      : { status: PASS, note: `앱 LTM 공란 ${gaps.length}개 개념 중 6-K 에서 값을 찾은 것 없음(${gapOk}개 줄 없음 확인 — 판정 불가 공란은 개별 행에서 실패)` });
+    // 20-F 인데 앱이 6-K 보고서를 쓰지 않음 — 공란이 없어도 기록(6-K 조회 실패면 verify-row 경고 "조회 실패"가 오류로 따로 잡힌다)
+    if (!sixKSource) add("A", "20-F LTM 6-K 보고서", "LTM", gaps.length ? { status: FAIL, note: `앱이 쓴 6-K 보고서 없음${row?.ltm?.sixKMiss ? `(앱 사유: ${row.ltm.sixKMiss})` : ""} — 공란 ${gaps.length}개 판정 불가` } : { status: NA, note: `앱이 쓴 6-K 보고서 없음${row?.ltm?.sixKMiss ? `(앱 사유: ${row.ltm.sixKMiss})` : ""} · LTM 공란 없음` });
   };
   if (foreign && H.LTM && ltmYahooNote) {
     try {
@@ -6266,6 +7394,26 @@ async function verifyUs(sym) {
         const sixKSet = new Set((/회사 6-K 분기 재무제표: (.+?)(?: · |$)/.exec(ltmYahooNote)?.[1]?.split(", ") ?? []).map(nm0));
         // 환율 = 검증기가 FRED 에서 따로 받은 연준 H.10(흐름 분기 창 4개 평균, 잔액 최신 분기말 기말) — 독립. Yahoo 분기 원천은 공통모드로 남는다
         const basis = `Yahoo 분기 ${last.map((r) => r.end).join("·")} × 분기 평균 환율(${natCur}→USD, 연준 H.10 ${fxRows.series})${pendQ ? "" : ` · ${FX_IND_MARK}(분기 창 4개 + 기말 ${last[3].end})`}`;
+        // 원통화 LTM 순이익 원자료 대조(오너 2026-10-07 — "원자료가 맞으면 외화 환산은 공시 기준 환율이라 차이가 있을 수 있다"): 20-F 는 분기 XBRL 이
+        // 없어 SEC TTM 을 못 만든다 → 블룸버그 BBG GAAP 화면의 최근 12개월 열(원통화) = Yahoo 분기 4개 원통화 합. 환율 없음 — 둘 다 앱과 독립인 원자료
+        // (앱 LTM 은 Yahoo 분기 × 환율이라 Yahoo 쪽은 공통모드지만, 블룸버그가 따로 같은 값을 내면 원자료는 맞다). 허용 = 블룸버그 표시 단위 한 칸
+        {
+          const bb = loadBbg(sym), bq = bb?.at(H.LTM.date)?.ni;
+          const yNi = last.every((r) => r.netIncome != null) ? last.reduce((t, r) => t + r.netIncome, 0) : null;
+          const nm = "20-F LTM 순이익 원통화 블룸버그 = Yahoo 분기 4개 합";
+          // 기준 확인 — 블룸버그 최근 사업연도 순이익이 SEC 20-F 원통화 값과 같아야 같은 회계 기준(TSM: 블룸버그는 대만 상장 2330 TT 의 대만 IFRS,
+          // 20-F 는 IASB IFRS 라 해마다 수백억 TWD 차이 — 2026-10-07 확인). 다르면 비교하지 않는다(기준 차이를 실패로 세지 않음)
+          const fyN = [...natNi.values()].filter((e) => e.end <= H.LTM.date).sort((x, y) => x.end.localeCompare(y.end)).at(-1);
+          const bA = fyN ? bb?.at(fyN.end)?.ni : null;
+          if (!bq) add("A", nm, "LTM", { status: NA, note: `블룸버그 BBG GAAP 화면에 ${H.LTM.date} 최근 12개월 순이익 열 없음(스냅샷 없음·화면 판독 안 됨)` });
+          else if (!fyN || !bA) add("A", nm, "LTM", { status: NA, note: `기준 확인 불가 — ${!fyN ? "SEC 20-F 원통화 사업연도 순이익 없음" : `블룸버그 ${fyN.end} 사업연도 순이익 없음`}` });
+          else if (Math.abs(bA.v - fyN.val) > bA.unit) add("A", nm, "LTM", { status: NA, note: `블룸버그와 SEC 20-F 회계 기준 다름 — ${fyN.end} 사업연도 순이익 블룸버그 ${bA.v} vs SEC 20-F ${fyN.val} ${natCur}(차 ${bA.v - fyN.val}) · 블룸버그 LTM ${bq.v} vs Yahoo 분기 합 ${yNi ?? "-"} 는 참고만` });
+          else if (yNi == null) add("A", nm, "LTM", { status: NA, note: `Yahoo 분기 순이익 4개 중 빈 값 — ${last.map((r) => r.end).join("·")}` });
+          else {
+            const ok = Math.abs(bq.v - yNi) <= bq.unit;
+            add("A", nm, "LTM", { status: ok ? PASS : FAIL, note: `${natCur} 블룸버그 ${bq.v} vs Yahoo 분기 ${last.map((r) => r.end).join("·")} 합 ${yNi} (차 ${bq.v - yNi}, 허용 ${bq.unit}) · 환산 없음` });
+          }
+        }
         const items = [
           ["매출", H.LTM.rev, flow("totalRevenue"), "totalRevenue"], ["매출원가", IS.LTM?.cogs ?? null, flow("costOfRevenue"), "costOfRevenue"],
           ["매출총이익", IS.LTM?.gp ?? null, flow("grossProfit"), "grossProfit"], ["영업이익", IS.LTM?.op ?? null, flow("totalOperatingIncomeAsReported"), "totalOperatingIncomeAsReported"],
@@ -6282,6 +7430,14 @@ async function verifyUs(sym) {
           ["유동자산 총계", bsL("유동자산 총계"), "currentAssets"], ["유동부채 총계", bsL("유동부채 총계"), "currentLiabilities"],
         ].map(([n0, app, k]) => [n0, app, last[3][k] != null && endR != null ? last[3][k] * endR : null, k]);
         let secFy = null; // 공란 사유 확인용 SEC FY(원통화) — 필요할 때만 판독
+        let yAnnBs = null; // 공란 사유 확인용 야후 연간 재무상태표 — 필요할 때만
+        // 공란 사유 확인용 야후 연간 전체(흐름) — 조회 실패는 오류
+        let yaOuter = null, yaOuterErr = null;
+        const yaOuterP = (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "all" }, { validateResult: false })
+          .then((x) => { yaOuter = x.map((r) => ({ ...r, end: new Date(r.date).toISOString().slice(0, 10) })); })
+          .catch((e) => { yaOuterErr = String(e).slice(0, 80); hardErrors.push(`20-F LTM 공란 사유 확인 — 야후 연간 조회 실패: ${yaOuterErr}`); });
+        await yaOuterP;
+        const yaRowsOuter = () => yaOuter ?? [];
         const fyCol = Object.keys(H).filter((cc) => cc !== "LTM").sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1);
         for (const [n0, app, exp, k] of [...items, ...bals]) {
           const name = `20-F LTM ${n0} = Yahoo 분기${bals.some((b) => b[0] === n0) ? " 최신 분기말 × 기말 환율" : " 4개 × 분기 평균 환율"}`;
@@ -6299,7 +7455,9 @@ async function verifyUs(sym) {
             const f0 = fyF.sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0];
             const labs = secFy.labels.get(f0.id) ?? [];
             const priorEnd = new Date(Date.UTC(Number(H.LTM.date.slice(0, 4)) - 1, Number(H.LTM.date.slice(5, 7)), 0)).toISOString().slice(0, 10);
-            const yt = await sixKCfYtd(cik, sub, H.LTM.date, priorEnd, labs, n0 === "CapEx" ? (f) => f.cur <= 0 && f.prior <= 0 : null);
+            let yt;
+            try { yt = await sixKCfYtd(cik, sub, H.LTM.date, priorEnd, labs, n0 === "CapEx" ? (f) => f.cur <= 0 && f.prior <= 0 : null); }
+            catch (e) { hardErrors.push(`20-F LTM ${n0} 6-K 현금흐름표 ${String(e).slice(0, 100)}`); add("A", name, "LTM", { status: FAIL, note: `6-K 판독 불가: ${String(e).slice(0, 100)}` }); continue; }
             if (!yt || yt.ambiguous) { add("A", name, "LTM", { status: FAIL, note: `6-K 현금흐름표 "${labs[0] ?? f0.id}" 줄 ${yt ? `${yt.ambiguous}개 후보로 모호(${yt.src})` : "못 찾음"}` }); continue; }
             const fyEnd = f0.end, fyStart = f0.start;
             const sgn = n0 === "CapEx" ? -1 : 1, fyV = n0 === "CapEx" ? -Math.abs(f0.v) : f0.v;
@@ -6336,7 +7494,12 @@ async function verifyUs(sym) {
               secFy ??= fyCol ? await filingAtDate(cik, sub, H[fyCol].date) : null;
               const f0 = secFy?.durFacts.filter((x0) => !x0.dims.length && reId0.test(x0.id) && (Date.parse(x0.end) - Date.parse(x0.start)) / 864e5 > 300).sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0];
               const priorEnd0 = new Date(Date.UTC(Number(H.LTM.date.slice(0, 4)) - 1, Number(H.LTM.date.slice(5, 7)), 0)).toISOString().slice(0, 10);
-              const yt0 = f0 ? await sixKCfYtd(cik, sub, H.LTM.date, priorEnd0, secFy.labels.get(f0.id) ?? [], n0 === "CapEx" ? (f) => f.cur <= 0 && f.prior <= 0 : null) : null;
+              let yt0 = null;
+              try { yt0 = f0 ? await sixKCfYtd(cik, sub, H.LTM.date, priorEnd0, secFy.labels.get(f0.id) ?? [], n0 === "CapEx" ? (f) => f.cur <= 0 && f.prior <= 0 : null) : null; }
+              catch (e) { hardErrors.push(`20-F LTM ${n0} 공란 6-K 현금흐름표 ${String(e).slice(0, 100)}`); add("A", name, "LTM", { status: FAIL, note: `앱 공란 — 6-K 판독 불가로 채울 수 있는지 판정 못 함: ${String(e).slice(0, 100)}` }); continue; }
+              // SEC 사업연도 값을 못 읽으면 판정 불가(재감사 12차 ⑦ — "양쪽 빈칸 검증불가"로 넘기지 않는다)
+              if (!secFy) { add("A", name, "LTM", { status: FAIL, note: `앱 공란(Yahoo ${k} 없음) — SEC 20-F 원본 판독 실패로 6-K 대조 불가` }); continue; }
+              if (!f0) { add("A", name, "LTM", { status: NA, note: `양쪽 빈칸(Yahoo ${k} 없음, SEC 20-F 사업연도에도 해당 줄 없음)` }); continue; }
               if (yt0 && !yt0.ambiguous) { add("A", name, "LTM", { status: FAIL, note: `앱 공란(Yahoo ${k} 없음)인데 6-K(${yt0.src})에 당기 누적 ${yt0.cur}·전기 ${yt0.prior} — 채울 수 있음` }); continue; }
             }
             add("A", name, "LTM", { status: NA, note: `양쪽 빈칸(Yahoo ${k} 없음, 6-K 값도 없음)` }); continue;
@@ -6345,7 +7508,69 @@ async function verifyUs(sym) {
           // 공란 목록 파싱: "사유: 항목, 항목 / 사유: 항목" — 조각마다 "사유: " 를 떼고 항목 단위로
           const blankItems = new Set(blanksTxt.split(" / ").flatMap((g0) => (g0.includes(": ") ? g0.slice(g0.indexOf(": ") + 2) : g0).split(", ")).map(nm0));
           if (!blankItems.has(nm0(n0))) { add("A", name, "LTM", { status: FAIL, note: `Yahoo ${k} ${exp} 있는데 앱 공란(사유 없음)` }); continue; }
-          if (n0 !== "CapEx") { add("A", name, "LTM", { status: NA, note: `앱 공란(사유 "${n0}") — SEC 대응 태그 독립 판독 미구현` }); continue; }
+          // 잔액 항목(재감사 12차 ⑥) — 앱 규칙(edgar-yahoo-quarters 잔액): 야후 FY말 = SEC(공시 단위 안)이면 야후 값, 15% 안이면 SEC 연말 + 야후 변동분.
+          //   검증기가 SEC 20-F 원본(대응표 사본)과 야후 FY말(분기 → 없으면 연간)을 따로 읽어 판정 — 두 조건에 걸리면 공란 사유 불성립(실패)
+          const balSpec = { "자산총계": ["Assets", "totalAssets"], "부채총계": ["Liabilities", "totalLiabilitiesNetMinorityInterest"],
+            "자본총계": ["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", "totalEquityGrossMinorityInterest"],
+            "현금·현금성자산": ["CashAndCashEquivalentsAtCarryingValue", "cashAndCashEquivalents"], "유동자산총계": ["AssetsCurrent", "currentAssets"], "유동부채총계": ["LiabilitiesCurrent", "currentLiabilities"] }[nm0(n0)];
+          if (balSpec) {
+            const [dstC, yk] = balSpec;
+            secFy ??= fyCol ? await filingAtDate(cik, sub, H[fyCol].date) : null;
+            const fyEnd0 = H[fyCol].date;
+            const qE = rows.find((r) => dayDiff(r.end, fyEnd0) <= 7);
+            let yFy = qE ? fld(qE, yk) : null;
+            if (yFy == null) {
+              yAnnBs ??= await (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "balance-sheet" }, { validateResult: false })
+                .catch((e) => { hardErrors.push(`20-F LTM 공란 사유 확인 — 야후 연간 재무상태표 조회 실패: ${String(e).slice(0, 80)}`); return null; });
+              const aE = (yAnnBs ?? []).find((r) => dayDiff(new Date(r.date).toISOString().slice(0, 10), fyEnd0) <= 7);
+              yFy = aE ? fld(aE, yk) : null;
+              if (yAnnBs == null) { add("A", name, "LTM", { status: FAIL, note: "앱 공란 — 야후 연간 조회 실패로 사유 확인 불가" }); continue; }
+            }
+            if (yFy == null) { add("A", name, "LTM", { status: NA, note: `앱 공란 — 사유 확인: 야후 ${yk} FY말(${fyEnd0}) 값 없음` }); continue; }
+            const sec0 = secFy ? secBalanceOf(secFy, dstC) : null;
+            if (!sec0) { add("A", name, "LTM", { status: FAIL, note: `앱 공란 — SEC 20-F ${dstC} 연말 값 ${secFy ? "없음(대응표 사본 기준)" : "판독 실패"}로 사유 확인 불가` }); continue; }
+            let unit = 1;
+            for (const r0 = Math.round(Math.abs(sec0.v)); unit < 1e6 && r0 !== 0 && r0 % (unit * 10) === 0;) unit *= 10;
+            const rel0 = Math.abs(sec0.v - yFy) / Math.max(1, Math.abs(sec0.v));
+            add("A", name, "LTM", Math.abs(sec0.v - yFy) < unit + Math.abs(sec0.v) * 1e-9
+              ? { status: FAIL, note: `앱 공란인데 야후 ${yk} FY말 ${yFy} = SEC ${sec0.how} ${sec0.v} ${natCur}(공시 단위 ${unit} 안) — 야후 값으로 채워야 함(사유 불성립)` }
+              : rel0 <= 0.15
+                ? { status: FAIL, note: `앱 공란인데 야후 FY말 ${yFy} vs SEC ${sec0.how} ${sec0.v} ${natCur} 차이 ${(rel0 * 100).toFixed(3)}% ≤ 15% — SEC 연말 + 야후 변동분으로 채워야 함(사유 불성립)` }
+                : { status: NA, note: `앱 공란 — 사유 확인: 야후 ${yk} FY말 ${yFy} vs SEC ${sec0.how} ${sec0.v} ${natCur} — 차이 ${(rel0 * 100).toFixed(2)}% > 15%(정의 차이)` });
+            continue;
+          }
+          // 흐름 항목(재감사 13차 ① — NA 로 면제하지 않는다): SEC 사업연도(검증기 대응 개념, companyfacts 20-F 원통화) vs 야후 연간(검증기 필드).
+          //   재무 5층 항목(매출·매출원가·매출총이익·영업이익·판관비·연구개발비 — fin read/ltm-yahoo.ts)은 공시 단위 안 같을 때만 채운다,
+          //   그 밖(세전이익·법인세·순이익·감가상각비·영업활동 현금흐름 — edgar-yahoo-quarters FLOWS)은 5% 안이면 채운다. 야후 최근 4개 분기도 다 있어야
+          if (n0 !== "CapEx") {
+            const PRETAX0 = ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+              "IncomeLossFromContinuingOperationsBeforeIncomeTaxesAndExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndEquityMethodInvestments"];
+            const spec = { "매출": [["Revenues"], "exact"], "매출원가": [["CostOfRevenue"], "exact"], "매출총이익": [["GrossProfit"], "exact"], "영업이익": [["OperatingIncomeLoss"], "exact"],
+              "판관비": [["SellingGeneralAndAdministrativeExpense"], "exact"], "연구개발비": [["ResearchAndDevelopmentExpense"], "exact"], "세전이익": [PRETAX0, "5%"], "법인세": [["IncomeTaxExpenseBenefit"], "5%"],
+              "순이익": [["NetIncomeLoss"], "5%"], "감가상각비": [DA_SIBLINGS, "5%"], "영업활동현금흐름": [["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"], "5%"] }[nm0(n0)];
+            if (!spec) { add("A", name, "LTM", { status: FAIL, note: `앱 공란(사유 "${n0}") — 검증기 흐름 규칙 없음` }); continue; }
+            const fyEnd0 = H[fyCol].date;
+            // 감가상각은 합계 태그 중 최댓값(앱 DA_TOTAL 규칙), 나머지는 SEC 사업연도 값이 있는 첫 개념
+            const secs = [];
+            for (const c of spec[0]) { const x = await secFlowFy(c, fyEnd0); if (x) secs.push(x); }
+            const sec0 = nm0(n0) === "감가상각비" ? secs.sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0] : secs[0];
+            if (nm0(n0) === "세전이익" && !(await secIdsOf("OperatingIncomeLoss", "cf", fyEnd0)).length) { add("A", name, "LTM", { status: NA, note: "앱 공란 — 사유 확인: SEC 영업이익 개념 없음(세전이익 기반 합성 — 앱 규칙상 공란)" }); continue; }
+            if (!sec0) { add("A", name, "LTM", { status: FAIL, note: `앱 공란 — SEC 20-F 사업연도 ${spec[0][0]} 값을 검증기 대응으로 못 읽음(사유 확인 불가)` }); continue; }
+            const aE = yaRowsOuter().find((r) => dayDiff(r.end, fyEnd0) <= 7);
+            if (aE === undefined && yaOuterErr) { add("A", name, "LTM", { status: FAIL, note: "앱 공란 — 야후 연간 조회 실패로 사유 확인 불가" }); continue; }
+            const yA0 = aE ? fld(aE, k) : null;
+            const q4ok = last.every((r) => fld(r, k) != null);
+            if (yA0 == null || !q4ok) { add("A", name, "LTM", { status: NA, note: `앱 공란 — 사유 확인: 야후 ${k} ${yA0 == null ? "연간 없음" : "최근 4개 분기 중 결측"}` }); continue; }
+            let unit = 1;
+            for (const r0 = Math.round(Math.abs(sec0.v)); unit < 1e6 && r0 !== 0 && r0 % (unit * 10) === 0;) unit *= 10;
+            const same0 = Math.abs(sec0.v - yA0) < unit + Math.abs(sec0.v) * 1e-9, rel0 = Math.abs(sec0.v - yA0) / Math.max(1, Math.abs(sec0.v));
+            add("A", name, "LTM", same0
+              ? { status: FAIL, note: `앱 공란인데 야후 ${k} 연간 ${yA0} = SEC ${idsTxt(sec0.ids)} ${sec0.v} ${natCur}(공시 단위 안)·최근 4개 분기 있음 — 채워야 함(사유 불성립)` }
+              : spec[1] === "5%" && rel0 <= 0.05
+                ? { status: FAIL, note: `앱 공란인데 야후 ${k} 연간 ${yA0} vs SEC ${sec0.v} 차이 ${(rel0 * 100).toFixed(3)}% ≤ 5% — 수준 보정으로 채워야 함(사유 불성립)` }
+                : { status: NA, note: `앱 공란 — 사유 확인: 야후 ${k} 연간 ${yA0} vs SEC ${idsTxt(sec0.ids)} ${sec0.v} ${natCur} 차이 ${(rel0 * 100).toFixed(3)}%(${spec[1] === "5%" ? "5% 초과" : "공시 단위 밖"} — 정의 차이)` });
+            continue;
+          }
           secFy ??= fyCol ? await filingAtDate(cik, sub, H[fyCol].date) : null;
           const cap = secFy?.durFacts.filter((x0) => !x0.dims.length && /PurchaseOfPropertyPlantAndEquipment|PaymentsToAcquirePropertyPlantAndEquipment/.test(x0.id) && (Date.parse(x0.end) - Date.parse(x0.start)) / 864e5 > 300).sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0];
           const ya = await (await yahoo()).fundamentalsTimeSeries(sym, { period1: "2018-01-01", type: "annual", module: "cash-flow" }, { validateResult: false });
@@ -6356,7 +7581,7 @@ async function verifyUs(sym) {
           add("A", name, "LTM", rel0 > 0.05 ? { status: NA, note: `앱 공란 — 사유 확인: Yahoo ${fyCol} 유형자산 취득 ${Math.abs(yr.purchaseOfPPE)} vs SEC ${secFy.form} ${Math.abs(cap.v)} ${natCur} — 차이 ${(rel0 * 100).toFixed(2)}% > 5%(정의 차이)` }
             : { status: FAIL, note: `앱 공란인데 Yahoo ${fyCol} 유형자산 취득 ${Math.abs(yr.purchaseOfPPE)} 와 SEC ${Math.abs(cap.v)} 차이 ${(rel0 * 100).toFixed(3)}% ≤ 5% — 변동분 보정으로 채울 수 있음(사유 불성립)` });
         }
-        await checkLtmItems(rows, qStart);
+        await checkLtmItems(rows, qStart, last.map((r) => r.end));
       }
     } catch (e) {
       hardErrors.push(`20-F LTM 독립 재계산(Yahoo 분기·환율) 조회 실패: ${String(e).slice(0, 60)}`);
@@ -6365,6 +7590,9 @@ async function verifyUs(sym) {
 
   // ── C. 개요·유니버스 — 앱이 실제로 계산한 값(verify-row) vs 하이라이트 LTM
   const L = H.LTM;
+  // LTM 열 기대치(감사 2차 ①) — 하이라이트 LTM 열이 없는 경우는 K1 「LTM 열 존재」가 실패로 남긴다. 재무분석·개요·유니버스 LTM 도 있어야 한다
+  if (L && !A.LTM) add("C", "재무분석 LTM 열 존재", "LTM", { status: FAIL, note: "하이라이트 LTM 열이 있는데 재무분석 LTM 열 없음" });
+  if (row && !L) add("C", "개요·유니버스 = 하이라이트 LTM", "LTM", { status: FAIL, note: "하이라이트 LTM 열 없음 — 개요·유니버스 대조 불가" });
   if (row && L) {
     const m = row.overview?.multiples ?? null, uv = row.universe ?? null;
     if (!m) add("C", "개요 멀티플 계산됨", "LTM", { status: FAIL, note: `개요 멀티플 없음 ${JSON.stringify(row.overview?.warnings ?? [])}` });
@@ -6439,7 +7667,7 @@ async function verifyUs(sym) {
           const m = /Research and development costs\s+\$?\s*([\d,]+)/i.exec(txt);
           const v = m ? Number(m[1].replace(/,/g, "")) * 1e6 : null;
           if (v != null && Math.abs(v - e.val) <= 0.05 * e.val) rndText.set(e.end, { v, accn: e.accn });
-        } catch { /* 본문 판독 실패 — XBRL 값 그대로 */ }
+        } catch (e) { hardErrors.push(`연구개발비 10-K 본문 조회 실패: ${String(e).slice(0, 80)}`); }
       }
     }
     // StockAnalysis 현금흐름표 "기타 상각"(otherAmortization, 기간별) — 원인 판정 ⑦ 용
@@ -6677,7 +7905,7 @@ async function verifyUs(sym) {
         // TTM 열은 그 끝(분기 화면 첫 열)이 앱 LTM 기준일과 같을 때만(2026-10-01 MU — SA 는 FY2026 10-K(2026-09-03)까지 반영, 앱 LTM 은 직전 분기 → 기간이 달라
         // 투자활동 −61,641 vs −24,886 등이 ③ 으로 잡혔다)
         let saQEnd = null;
-        try { saQEnd = (await saStatement(sym, "cash-flow-statement", true)).datekey.find((d) => d !== "TTM") ?? null; } catch { /* 분기 화면 실패 — TTM 대조 안 함 */ }
+        try { saQEnd = (await saStatement(sym, "cash-flow-statement", true)).datekey.find((d) => d !== "TTM") ?? null; } catch (e) { hardErrors.push(`StockAnalysis 분기 현금흐름 조회 실패(TTM 대조 안 함): ${String(e).slice(0, 80)}`); }
         const ttmOk = !!(saQEnd && H.LTM?.date && dayDiff(saQEnd, H.LTM.date) <= 7);
         for (const [c, x] of Object.entries(H)) {
           if (!x?.date) continue;
@@ -7538,7 +8766,7 @@ async function verifyUs(sym) {
               if (s0 && dayDiff(st, yb(s0)) <= 7 && dayDiff(en, yb(L0)) <= 7) pri = fs0[fs0.length - 1].v;
             }
             if (cur != null && pri != null) finIntFacts.set("LTM", finIntFacts.get(fyc) + cur - pri);
-          } catch { /* 10-Q 원본 조회 실패 — LTM 규칙 없음 */ }
+          } catch (e) { hardErrors.push(`금융 부문 이자비용 10-Q 원본 조회 실패(LTM 규칙 없음): ${String(e).slice(0, 80)}`); }
         }
       }
     }
@@ -9197,6 +10425,151 @@ async function verifyUs(sym) {
       if (oth.length >= 3 && oth.every((x) => x.metricClass[n] === "외부단독이탈") && !checks.some((k) => k.col === col && k.status === FAIL)) cls[n] = "외부단독이탈";
     }
   }
+  // 외화 공시(20-F·외화 10-K): USD 기준 원자료 검사가 "원자료 없음"이어도 같은 칸의 원통화 × 연준 H.10 검사가 통과했으면 그 결과로(2026-10-08 —
+  // ASML 은 us-gaap EUR 로만 공시해 USD 태그가 없다. 같은 값을 두 번 검사하는 셈이라 원통화 쪽 판정을 근거로 남긴다)
+  if (foreign) {
+    const NAT_OF = { "세전이익 앱 = SEC 세전이익": "세전이익 환산 환율 = 기간 평균(외화)", "법인세 앱 = SEC 법인세비용": "법인세 환산 환율 = 기간 평균(외화)",
+      "자산총계 앱 = SEC 자산총계": "재무상태표 자산 총계 앱 = SEC" };
+    for (const k of checks) {
+      const nn = NAT_OF[k.name];
+      if (!nn || k.layer !== "A" || k.status !== NA || !/^원자료 없음/.test(k.note ?? "")) continue;
+      const n = checks.find((x) => x.name === nn && x.col === k.col && x.status === PASS);
+      if (n) { k.status = PASS; k.note = `USD 태그 없음(원통화 공시) — 「${nn}」 통과: ${String(n.note ?? "").slice(0, 160)}`; }
+    }
+    // LTM 열(2026-10-09): 20-F 는 분기 XBRL 이 없어 "앱 = SEC" A층 행이 원자료 없음으로 남는다. 같은 칸을 이미 판정한 20-F LTM 검사(6-K 원문 판독·
+    // 야후 분기 × H.10 재계산 — 개념 이름과 앱 값이 같은 행)의 결과를 그대로 옮긴다: 통과면 통과, 공통모드면 공통모드(독립 아님). 실패·검증불가는 옮기지 않는다.
+    // 앱 값이 같은지(부호 무관 — 현금흐름 지급 줄은 20-F LTM 항목이 양수) 확인해 다른 항목과 섞이지 않게 한다
+    if (H.LTM) {
+      const LTM_OF = [
+        [/^세전이익 앱 = SEC 세전이익$/, /( IncomeLossFromContinuingOperationsBeforeIncomeTaxes\w* @| 세전이익 = )/],
+        [/^법인세 앱 = SEC 법인세비용$/, /( IncomeTaxExpenseBenefit @| 법인세 = )/],
+        [/^LTM 순이익 앱 = SEC TTM$/, /( NetIncomeLoss @| 순이익 = Yahoo)/],
+        [/^자산총계 앱 = SEC 자산총계$/, /( Assets @| 자산 총계 = )/],
+        [/^재무상태표 현금·현금성자산 앱 = SEC$/, /( CashAndCashEquivalentsAtCarryingValue @| CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents @| 현금·현금성자산 = )/],
+        [/^재무상태표 유동자산 총계 앱 = SEC$/, /( AssetsCurrent @| 유동자산 총계 = )/],
+        [/^재무상태표 유동부채 총계 앱 = SEC$/, /( LiabilitiesCurrent @| 유동부채 총계 = )/],
+        [/^재무상태표 부채 총계 앱 = SEC$/, /( Liabilities @| 부채 총계 = )/],
+        [/^재무상태표 자본 총계 앱 = SEC$/, /( StockholdersEquity @| StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest @| 자본 총계 = )/],
+        [/^현금흐름표 영업활동 현금흐름 앱 = SEC$/, /( NetCashProvidedByUsedInOperatingActivities @| 영업활동 현금흐름 = )/],
+        [/^현금흐름표 투자활동 현금흐름 앱 = SEC$/, / NetCashProvidedByUsedInInvestingActivities @/],
+        [/^현금흐름표 재무활동 현금흐름 앱 = SEC$/, / NetCashProvidedByUsedInFinancingActivities @/],
+        [/^현금흐름표 유형자산 취득\(CAPEX\) 앱 = SEC$/, /( PaymentsToAcquirePropertyPlantAndEquipment @| CapEx = )/],
+        [/^현금흐름표 배당금 지급 앱 = SEC$/, / (PaymentsOfDividends|PaymentsOfDividendsCommonStock|PaymentsOfOrdinaryDividends) @/],
+        [/^현금흐름표 자기주식 취득 앱 = SEC$/, / PaymentsForRepurchaseOfCommonStock @/],
+        [/^현금흐름표 주식보상비용 앱 = SEC$/, / ShareBasedCompensation @/],
+      ];
+      const sameAbs = (a, b) => a != null && b != null && Math.abs(Math.abs(a) - Math.abs(b)) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b), 1);
+      for (const k of checks) {
+        if (k.layer !== "A" || k.col !== "LTM" || k.status !== NA || k.app == null) continue;
+        const re = LTM_OF.find(([a]) => a.test(k.name))?.[1];
+        if (!re) continue;
+        const cands = checks.filter((x) => x !== k && x.col === "LTM" && /^20-F LTM /.test(x.name) && re.test(x.name) && (!/@/.test(x.name) || x.name.includes(`@${H.LTM.date}`)) && sameAbs(x.app, k.app));
+        const n = cands.find((x) => x.status === PASS) ?? cands.find((x) => x.status === COMMON);
+        if (!n) continue;
+        k.status = n.status;
+        k.note = `20-F 분기 XBRL 없음 — 같은 칸 「${n.name}」 ${n.status === PASS ? "통과" : COMMON_LABEL}: ${String(n.note ?? "").slice(0, 200)}`;
+      }
+    }
+  }
+  // 금융사(카드·은행 레이아웃 — AXP) 매출원가·매출총이익·판관비·연구개발비 빈칸(2026-10-09): 앱 사유("금융사")만으로는 검증불가였다. 검증기가 그 열 기간의
+  // 정기공시(10-K·10-Q) 손익계산서 표시 구조를 따로 읽어 그 성격의 줄(매출원가·매출총이익 / 판관비 / 연구개발비 개념)이 본표에 없음을 확인하면 통과
+  // (오너 원칙 "본표에 없는 줄 = 빈칸"). 줄이 있으면 실패(앱이 금융사라며 비웠는데 본표에 있음), 공시·표시 구조를 못 찾으면 검증불가 유지
+  {
+    const finRows = checks.filter((k) => k.layer === "A" && k.status === NA && /^금융사( 기준)?\(SIC|^금융사 — 해당 없음/.test(k.note ?? ""));
+    if (finRows.length) {
+      const qEnd = new Map((isq?.periods ?? []).map((p) => [p.label, p.endDate]));
+      const yCols = Object.keys(H).filter((c0) => c0 !== "LTM");
+      const datesOf = (col) => col === "-" ? [...yCols.map((c0) => H[c0].date), H.LTM?.date, ...qEnd.values()].filter(Boolean)
+        : col === "LTM" ? [H.LTM?.date, yCols.length ? H[yCols.sort((a, b) => H[a].date.localeCompare(H[b].date)).at(-1)].date : null].filter(Boolean)
+        : /^\d{4}Y$/.test(col) ? [H[col]?.date].filter(Boolean) : [qEnd.get(col)].filter(Boolean);
+      const RE = { cogs: /^[a-z0-9-]+_(CostOf\w+|GrossProfit)$/i, sga: /SellingGeneral|GeneralAndAdministrative|SellingAndMarketing|_SellingExpense$/i, rnd: /ResearchAndDevelopment/i };
+      const rcF = sub.filings?.recent ?? {};
+      const accAt = (d) => { const i = (rcF.form ?? []).findIndex((fm, j) => /^10-[QK]$/.test(fm) && rcF.reportDate?.[j] && dayDiff(rcF.reportDate[j], d) <= 7); return i < 0 ? null : { accn: rcF.accessionNumber[i], form: rcF.form[i], d: rcF.reportDate[i] }; };
+      for (const k of finRows) {
+        const kind = /매출원가|매출총이익/.test(k.name) ? "cogs" : /판관비/.test(k.name) ? "sga" : /연구개발비/.test(k.name) ? "rnd" : null;
+        const ds = kind ? [...new Set(datesOf(k.col))] : [];
+        if (!ds.length) continue;
+        const seen = [], hits = [];
+        let miss = "";
+        for (const d of ds) {
+          const fl = accAt(d);
+          if (!fl) { miss = `${d} 정기공시 없음`; break; }
+          let face = null;
+          try { face = await isFaceConcepts(cik, fl.accn); } catch (e) { miss = `${fl.form} ${fl.accn} 표시 구조 조회 실패 ${String(e).slice(0, 60)}`; break; }
+          if (!face) { miss = `${fl.form} ${fl.accn} 손익계산서 표시 구조 없음`; break; }
+          seen.push(`${fl.form} ${fl.d}`);
+          hits.push(...[...face.ids].filter((id) => RE[kind].test(id)).map((id) => `${id}(${fl.form} ${fl.d})`));
+        }
+        if (miss) { k.note = `${k.note} · 본표 확인 불가: ${miss}`; continue; }
+        if (hits.length) { k.status = FAIL; k.note = `${k.note} — 그런데 본표에 줄 있음: ${[...new Set(hits)].join(", ").slice(0, 200)}`; continue; }
+        k.status = PASS;
+        k.note = `${k.note} — 본표에 줄 없음 확인(손익계산서 표시 구조 ${seen.join("·")}에 ${kind === "cogs" ? "매출원가·매출총이익" : kind === "sga" ? "판관비" : "연구개발비"} 개념 없음)`;
+      }
+    }
+  }
+  // 감가상각비 빈칸 — 분기 보고서 현금흐름표가 요약형(영업활동은 합계 한 줄)이라 감가상각 줄이 없는 기간(DAL 10-Q, 2026-10-09): 앱 정의(현금흐름표 영업활동
+  // 조정 항목의 감가상각·상각 줄 합)로는 값을 만들 수 없다. 검증기가 그 기간 10-Q 의 현금흐름표 표시 구조를 따로 읽어 감가상각·상각 개념이 하나도 없음을
+  // 확인하면 앱 빈칸이 정답(통과). LTM 은 기준일 10-Q(당기 누적)가 그 경우
+  {
+    const daRows = checks.filter((k) => k.layer === "A" && k.status === NA && k.app == null && /^(분기 )?감가상각비 앱 = SEC 현금흐름표/.test(k.name) && /현금흐름표 계산 구조\(영업활동 루트\) 없음/.test(k.note ?? ""));
+    if (daRows.length) {
+      const qEnd = new Map((isq?.periods ?? []).map((p0) => [p0.label, p0.endDate]));
+      const rcD = sub.filings?.recent ?? {};
+      for (const k of daRows) {
+        const d = k.col === "LTM" ? H.LTM?.date : qEnd.get(k.col);
+        if (!d) continue;
+        const i = (rcD.form ?? []).findIndex((fm, j) => fm === "10-Q" && rcD.reportDate?.[j] && dayDiff(rcD.reportDate[j], d) <= 7);
+        if (i < 0) continue;
+        try {
+          const face = await cfFaceConcepts(cik, rcD.accessionNumber[i]);
+          if (!face) continue;
+          const da = [...face].filter((x) => /Depreciation|Amortization|Depletion/i.test(x));
+          if (da.length) { k.note = `${k.note} · 10-Q ${rcD.reportDate[i]} 현금흐름표 표시 구조에 감가상각 개념 있음(${da.join(", ").slice(0, 120)}) — 판정 보류`; continue; }
+          k.status = PASS;
+          k.note = `본표에 줄 없음 확인 — 10-Q ${rcD.reportDate[i]}(${rcD.accessionNumber[i]}) 현금흐름표 표시 구조에 감가상각·상각 줄 없음(요약형) → 앱 빈칸이 정답 · ${k.note}`;
+        } catch (e) { hardErrors.push(`감가상각 빈칸 확인 — 10-Q 표시 구조 조회 실패: ${String(e).slice(0, 80)}`); }
+      }
+    }
+  }
+  // 화면 간 "양쪽 빈칸" → 기대 빈칸 확인(2026-10-08): 두 화면이 같이 비었고 그 빈칸이 원자료로 정해진 것이면(D층 부호 규칙 통과 — 분모 ≤ 0,
+  // 또는 결산일이 Yahoo 첫 거래일보다 앞 — 상장 전) 같은 값(빈칸)으로 통과. 사유를 원자료로 못 정하면 검증불가 유지
+  {
+    let firstTrade = null;
+    try { const y0 = await yahoo(); const ch = await y0.chart(sym, { period1: "1980-01-01", interval: "1mo" }, { validateResult: false }); const ft = ch?.meta?.firstTradeDate; firstTrade = ft ? new Date(ft).toISOString().slice(0, 10) : null; } catch (e) { hardErrors.push(`Yahoo 첫 거래일 조회 실패: ${e?.message ?? e}`); }
+    const preList = new Map();
+    for (const [c, x] of Object.entries(H)) {
+      if (c === "LTM" || x?.mc != null || !x?.date || !firstTrade) continue;
+      if (x.date < firstTrade) preList.set(c, `상장 전 — Yahoo 첫 거래일 ${firstTrade} > 결산일 ${x.date}`);
+    }
+    for (const k of checks) if (k.layer === "D" && k.name === "시가총액 존재" && k.status === NA && preList.has(k.col)) { k.status = PASS; k.note = preList.get(k.col); }
+    const metricOf = (n) => { const m = n.match(/^(EV\/EBITDA|PER|PBR|PSR)/); return m ? m[1] : null; };
+    const signOk = new Map();
+    for (const k of checks) if (k.layer === "D" && k.status === PASS && /부호 규칙\(분모 ≤ 0 → 빈칸\)/.test(k.name)) signOk.set(`${metricOf(k.name)}|${k.col}`, "분모 ≤ 0 → 빈칸(D층 부호 규칙 통과)");
+    for (const k of checks) {
+      if (k.layer !== "C" || k.status !== NA || k.note !== "양쪽 빈칸") continue;
+      const m = metricOf(k.name); if (!m) continue;
+      const why = signOk.get(`${m}|${k.col}`) ?? preList.get(k.col);
+      if (why) { k.status = PASS; k.note = `양쪽 빈칸 = 기대 빈칸 — ${why}`; }
+    }
+    // 그 밖의 기대 빈칸(2026-10-09) — 빈칸 사유를 원자료로 이미 확인한 같은 칸의 다른 검사가 있을 때만:
+    //  · EPS: A층 "EPS 앱 = SEC 공시 EPS" 가 앱 빈칸으로 통과(공시 EPS 자리표시자 0 등 — CEG 2021)
+    //  · EBITDA·EV/EBITDA: D층 "EBITDA 기대치" 가 "EBITDA 빈칸이 정답"으로 통과(감가상각비 계산 불가 확인 — DAL LTM)
+    //  · 차입금·순차입금: SEC 에 그 결산일 재무상태표가 없음(자산총계 시점값 없음 — 분사 전 연도 GEV 2022·SNDK 2023) + 앱 재무상태표에 그 열 없음
+    for (const k of checks) if (k.layer === "D" && k.status === FAIL && /^EBITDA 기대치\(SEC 영업이익/.test(k.name) && discDaBlank.has(k.col)) { k.status = PASS; k.note = "중단사업 감가상각 미공시 — 감가상각비 빈칸이 정답(A층 확인), EBITDA 빈칸이 정답"; }
+    const epsBlankOk = new Set(checks.filter((k) => k.layer === "A" && k.status === PASS && /^EPS 앱 = SEC 공시 EPS/.test(k.name) && /앱 빈칸/.test(k.note ?? "")).map((k) => k.col));
+    const ebitdaBlankOk = new Set(checks.filter((k) => k.layer === "D" && k.status === PASS && /EBITDA 기대치/.test(k.name) && /EBITDA 빈칸이 정답/.test(k.note ?? "")).map((k) => k.col));
+    const bsCols = new Set((bs?.periods ?? []).map((p0) => (p0.label === "현재/LTM" ? "LTM" : p0.label)));
+    const noBsAt = (col) => col !== "LTM" && H[col]?.date && !bsCols.has(col)
+      && !Object.values(G.Assets?.units ?? {}).flat().some((e) => !e.start && dayDiff(e.end, H[col].date) <= 7);
+    for (const k of checks) {
+      if (k.layer !== "C" || k.status !== NA || k.note !== "양쪽 빈칸") continue;
+      let why = null;
+      if (/^EPS /.test(k.name) && epsBlankOk.has(k.col)) why = "A층 SEC 공시 EPS 대조가 앱 빈칸으로 통과(공시 EPS 없음·자리표시자)";
+      else if (/^(EBITDA|EV\/EBITDA) /.test(k.name) && ebitdaBlankOk.has(k.col)) why = "D층 EBITDA 기대치 — 감가상각비 계산 불가 확인, EBITDA(와 EV/EBITDA) 빈칸이 정답";
+      else if (/^(순)?차입금 하이라이트=대차대조표 주석$/.test(k.name) && noBsAt(k.col)) why = `SEC 에 ${H[k.col].date} 재무상태표 없음(자산총계 시점값 없음) · 앱 재무상태표에도 그 열 없음`;
+      if (why) { k.status = PASS; k.note = `양쪽 빈칸 = 기대 빈칸 — ${why}`; }
+    }
+  }
   return { sym, checks, review, hardErrors, revErrors, cogsErrors, opincErrors, daErrors, sgaErrors, audit };
 }
 
@@ -9208,32 +10581,47 @@ async function verifyUs(sym) {
 // 앱 연간 로더 규칙(연도별 최신 보고서)과 같다. 처음 공시값(Y 보고서의 당기)도 함께 남겨 정정 공시 여부를 구분한다.
 const KR_CORP = new Map(JSON.parse(readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8")).map((r) => [r.s, r.c]));
 const dartCache = new Map();
-// DART 요청 간격 — 몰아 보내면 이 PC 연결이 약 1시간 막힌다(실측 2026-10-01 "fetch failed" → 58분 차단, 30종목 동시 3)
-let dartChain = Promise.resolve();
-const dartSlot = () => (dartChain = dartChain.then(() => new Promise((r) => setTimeout(r, 300))));
+// DART·KRX 디스크 캐시(오너 제안 2026-10-05) — 열쇠 = 보고서 최신 접수번호(verify-kr/dart.mjs). 상한 KR_CACHE_MAX_GB(기본 5), 90일 안 쓴 파일 삭제
+// 한국 검증은 DART 원자료가 기준 — 키가 없으면 종목마다 조회 실패를 쌓지 않고 처음에 멈춘다(2026-10-05 — 운영 키와 같은 키를 막아 둔 동안)
+if (MARKET === "kr" && !String(env.DART_API_KEY ?? "").trim()) die("DART 키 없음 — 검증 중단(.env.local DART_API_KEY 에 검증 전용 키를 넣을 것, 운영 키 금지)");
+const KR_CACHE = MARKET === "kr" ? makeDiskCache(pathResolve(env.KR_VERIFY_CACHE_DIR || "reports/.dart-cache"), { maxBytes: Number(env.KR_CACHE_MAX_GB ?? 5) * 1024 ** 3, maxIdleDays: 90 }) : null;
+if (KR_CACHE) {
+  KR_CACHE.cleanup();
+  configureDart({ key: env.DART_API_KEY, cache: KR_CACHE, cap: Number(env.DART_DAILY_CAP_VERIFY ?? 3000) });
+  configureKrx({ key: env.KRX_API_KEY, cache: KR_CACHE });
+  configureCalendar({ cache: KR_CACHE });
+}
+/** 사업보고서 재무제표(연결·별도) — 목록 또는 null(013). 조회 실패는 던진다(verify-kr/dart.mjs — 요청 간격 300ms 한 줄) */
 async function dartFy(corp, year, fsDiv) {
   const k = `${corp}|${year}|${fsDiv}`;
-  if (!dartCache.has(k)) dartCache.set(k, (async () => {
-    if (!env.DART_API_KEY) throw new Error("DART_API_KEY 미설정");
-    const u = `https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?crtfc_key=${env.DART_API_KEY}&corp_code=${corp}&bsns_year=${year}&reprt_code=11011&fs_div=${fsDiv}`;
-    for (let i = 0; ; i++) {
-      try {
-        await dartSlot();
-        const r = await fetch(u, { signal: AbortSignal.timeout(30_000) });
-        if (!r.ok) throw new Error(`DART HTTP ${r.status}`);
-        const j = await r.json();
-        if (j.status === "013") return null; // 조회된 데이터 없음(그해 보고서 미제출·연결 없음)
-        if (j.status !== "000") throw new Error(`DART ${j.status} ${j.message}`);
-        return j.list ?? [];
-      } catch (e) {
-        if (i >= 2) throw e;
-        await new Promise((res) => setTimeout(res, 2000 * (i + 1)));
-      }
-    }
-  })());
+  if (!dartCache.has(k)) dartCache.set(k, dartFnltt(corp, year, "11011", fsDiv));
   return dartCache.get(k);
 }
 const dartNum = (v) => (v == null || v === "" || v === "-" ? null : Number(String(v).replace(/,/g, "")));
+/** 보고서 L(사업연도 by)의 사업연도 y 열에 손익계산서 값이 하나라도 있는가 — 당기·전기·전전기 열 */
+const KR_FY_COLS = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
+const dartHasIs = (L, by, y) => {
+  const f = KR_FY_COLS[by - y];
+  const val = (v) => { const t = String(v ?? "").trim(); return t === "" || t === "-" ? null : Number(t.replace(/,/g, "")); };
+  return !!(L && f && L.some((r) => (r.sj_div === "IS" || r.sj_div === "CIS") && Number.isFinite(val(r[f]))));
+};
+/**
+ * 사업연도 y 의 원자료 — 연결(CFS) 보고서 Y·Y+1·Y+2 어디든 y 손익 값이 있으면 연결, 없으면 별도(OFS) 같은 규칙, 둘 다 없으면 null.
+ * 해마다 따로 정한다(2026-10-04 — 연결을 2024 부터 낸 LS마린솔루션 2021 은 별도). 조회 실패는 던진다
+ */
+async function dartYearSource(corp, y) {
+  for (const fsDiv of ["CFS", "OFS"]) {
+    const [cur, next, next2] = await Promise.all([dartFy(corp, y, fsDiv), dartFy(corp, y + 1, fsDiv), dartFy(corp, y + 2, fsDiv)]);
+    if ([[cur, y], [next, y + 1], [next2, y + 2]].some(([L, by]) => dartHasIs(L, by, y))) return { fsDiv, cur, next, next2 };
+  }
+  return null;
+}
+/** 최근 사업연도 — 연결 사업보고서(작년·재작년) 먼저, 없으면 별도(앱 연간 로더와 같은 순서). 없으면 null */
+async function dartLatestFy(corp) {
+  const cy = new Date().getFullYear();
+  for (const fsDiv of ["CFS", "OFS"]) for (const y of [cy - 1, cy - 2]) if (await dartFy(corp, y, fsDiv)) return y;
+  return null;
+}
 /** 계정 하나 — account_id 우선(보고서 구분 sj 집합 안), 없으면 계정명(공백·괄호 제거) */
 function dartPick(list, sjs, ids, names, field) {
   // 우선주 줄에 단 보통주 EPS 코드는 무시(삼성SDI 2021 원자료 태그 오류)
@@ -9285,9 +10673,12 @@ function dartYearValue(cur, next, next2, y, sjs, ids, names) {
   // 기준 보고서 = 그 해 값이 하나라도 실린 가장 최근 보고서(앱 연간 로더의 "연도별 주인 보고서" 규칙 — 옛 보고서와 섞으면 같은 계정이 다른 키로
   // 두 번 잡혔다). 기준 보고서에 이 계정이 없으면 빈칸(옛 보고서로 내려가지 않음)
   let latest = null;
+  // 주인 보고서는 재무제표별(앱 dart-facts.ts loadAnnual 과 같은 규칙 — 재무상태표에만 전전기 열을 실은 보고서가 손익의 주인이 되지 않게, 052690
+  // 2021: 2023 보고서 전전기 열엔 재무상태표만 있다)
+  const stmtOk = (r) => sjs.includes(r.sj_div) || (sjs.includes("IS") && r.sj_div === "CIS") || (sjs.includes("CIS") && r.sj_div === "IS");
   for (const [L, by] of reps) {
     const col = COL[by - y];
-    if (!L || !L.some((r) => dartNum(r[col]) != null)) continue;
+    if (!L || !L.some((r) => stmtOk(r) && dartNum(r[col]) != null)) continue;
     latest = pickAt(L, by) ?? null;
     break;
   }
@@ -9314,13 +10705,25 @@ const KR_A_ITEMS = [
   ["재무활동 현금흐름", { cf: "cf:total:재무활동 현금흐름" }, ["CF"], ["ifrs-full_CashFlowsFromUsedInFinancingActivities"], ["재무활동현금흐름", "재무활동으로인한현금흐름"]],
 ];
 
+/**
+ * 한국 A층 대조 — vsSource 와 같되 **앱에만 값이 있으면 실패**(감사 1차 ⑧ — 060370 2021 별도 재무제표 해의 "(지배주주 귀속)" 행이 연결 순이익을
+ * 복사한 값이었는데 원자료 없음 = 검증불가로 지나갔다). 승인·표시된 규칙으로 앱만 값을 내는 경우는 없다(있으면 여기 사유와 함께 추가)
+ */
+function vsDart(app, src, srcNote = "") {
+  if (src == null && app != null) return { status: FAIL, app, src: null, note: `원자료(DART) 없음인데 앱 값 ${app}${srcNote ? ` · ${srcNote}` : ""}` };
+  return vsSource(app, src, 0, srcNote);
+}
+
 async function verifyKr(sym) {
+  // 한국 화면 간 대조는 정확 일치(감사 6차 ⑤ — 상대 1e-9 가 남아 재무분석만 ×(1+5e-10) 바꾼 PER 을 통과시켰다): 둘 다 정수면 같아야, 소수면
+  // 같은 값을 다른 순서로 나눈 부동소수 끝자리(상대 1e-14)만. 미국 쪽 same() 은 그대로
+  const same = (a, b) => (Number.isInteger(a) && Number.isInteger(b) ? (a === b ? { status: PASS } : { status: FAIL, note: `${a} vs ${b} (차 ${a - b})` }) : sameBase(a, b, 1e-14));
   const u = `/api/markets/kr/${encodeURIComponent(sym)}`;
   const checks = [];
   const add = (layer, name, col, r) => checks.push({ layer, name, col, ...r });
   const fetched = {};
   for (const [k, p] of Object.entries({
-    hl: `${u}/highlights`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm`,
+    hl: `${u}/highlights`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm`, ov: `${u}/overview`,
     cs: `${u}/consensus`, bs: `${u}/financials?view=bs&period=annual`, is: `${u}/financials?view=is&period=annual`,
     cf: `${u}/financials?view=cf&period=annual`,
     isq: `${u}/financials?view=is&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter`, cfq: `${u}/financials?view=cf&period=quarter`,
@@ -9335,7 +10738,48 @@ async function verifyKr(sym) {
   const h = hl?.highlights;
   if (!h) return { sym, error: "하이라이트 없음", checks, review: [] };
   const fyCols = h.columns.filter((c) => c.kind === "fy");
-  if (fyCols.length < 3) add("B", "연도 열 존재", "-", { status: FAIL, note: `연도 열 ${fyCols.length}개` });
+  const hardErrors0 = [];
+  // 기대 연도 열 = 앱 표시 범위(최근 사업연도 포함 5개 해) 중 DART 에 그 해 손익계산서 값이 있는 해 — 그해 보고서 당기, 다음 해 보고서 전기,
+  // 다다음 해 보고서 전전기 어디든(연결 먼저, 없으면 별도 — 해마다). 사업보고서 목록 기준(2026-10-04 앞 판)은 2024 상장 산일전기(062040)의
+  // 2024 보고서 전기 열 FY2023 을 "보고서 없는 열"로 오판했다. 검사기 자체 DART 조회로 정하고(앱 출력 아님), 조회 실패는 실패 + 오류
+  {
+    const corp = KR_CORP.get(sym);
+    const shown = fyCols.map((c) => Number(String(c.label).slice(0, 4))).filter(Number.isFinite);
+    if (!fyCols.length) add("B", "연도 열 존재", "-", { status: FAIL, note: "하이라이트 연도 열 0개" });
+    if (!corp) add("B", "연도 열 = DART 손익 자료 연도", "-", { status: FAIL, note: "corpcodes.json 에 종목코드 없음" });
+    else {
+      try {
+        const last = await dartLatestFy(corp);
+        if (last == null) add("B", "연도 열 = DART 손익 자료 연도", "-", { status: FAIL, note: "DART 사업보고서 없음(최근 2개 연도, 연결·별도)" });
+        else {
+          const exp = [], ofs = [];
+          for (let y = last - 4; y <= last; y++) {
+            const src = await dartYearSource(corp, y);
+            if (src) { exp.push(y); if (src.fsDiv === "OFS") ofs.push(y); }
+          }
+          const missing = exp.filter((y) => !shown.includes(y)), extra = shown.filter((y) => !exp.includes(y));
+          const sep = ofs.length ? ` · 별도 재무제표 ${ofs.join("·")}` : "";
+          add("B", "연도 열 = DART 손익 자료 연도", "-", missing.length || extra.length
+            ? { status: FAIL, note: `기대 ${exp.join("·")}${sep} / 앱 ${shown.join("·")}${missing.length ? ` — 빠짐 ${missing.join("·")}` : ""}${extra.length ? ` — DART 손익 자료 없는 열 ${extra.join("·")}` : ""}` }
+            : { status: PASS, note: `${exp.length}개 연도(${exp.join("·")})${sep}` });
+          // 별도로 채운 해는 화면 주석이 있어야 한다(조용한 대체 금지)
+          if (ofs.length && fyCols.length) {
+            const fsSrc = await dartFy(corp, last, "CFS");
+            const allOfs = !fsSrc;
+            if (!allOfs) {
+              const note = (h.notes ?? []).find((n) => /연결 재무제표 없음 → 별도/.test(n)) ?? "";
+              const noted = ofs.filter((y) => shown.includes(y) && note.includes(`FY${y}`));
+              const lack = ofs.filter((y) => shown.includes(y) && !noted.includes(y));
+              add("B", "별도 재무제표 해 주석", "-", lack.length ? { status: FAIL, note: `별도로 채운 ${lack.join("·")} 주석 없음` } : { status: PASS, note: note || "해당 없음" });
+            }
+          }
+        }
+      } catch (e) {
+        add("응답", "DART 원자료(연도 열 기대치)", "-", { status: FAIL, note: String(e).slice(0, 120) });
+        hardErrors0.push(`DART 조회 실패(연도 열 기대치): ${String(e).slice(0, 80)}`);
+      }
+    }
+  }
 
   const H = {};
   h.columns.forEach((c, i) => {
@@ -9345,7 +10789,6 @@ async function verifyKr(sym) {
     const v = (k) => h.valuationRows.find((x) => x.key === k)?.values[i] ?? null;
     H[lab] = { date: c.date, mc: r("mktcap"), pref: r("pref_mcap"), cash: r("cash"), debt: r("debt"), nci: r("nci"), ev: r("ev"), ebitda: r("ebitda"), ni: r("ni"), eps: r("eps"), per: v("per"), pbr: v("pbr"), psr: v("psr"), evx: v("ev_ebitda") };
   });
-  const evBlocked = (h.notes ?? []).find((n) => /EV.*(미표시|표시하지 않|계산하지 않)/.test(n));
   const rowOf = (stmt, name) => stmt?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName === name)?.values ?? {};
   const lab = (k) => (k === "현재/LTM" ? "LTM" : k);
   const A = {};
@@ -9365,7 +10808,7 @@ async function verifyKr(sym) {
   // 정확 일치 — 부분일치는 "(비지배주주 귀속)" 에도 걸린다(감사 3차)
   const parentRow = is?.sections?.flatMap((s) => s.items ?? []).find((x) => x.accountName?.trim() === "(지배주주 귀속)");
   for (const [k, v] of Object.entries(parentRow?.values ?? {})) (IS[k.replace(/^FY(\d{4})$/, "$1Y")] ??= {}).niParent = v;
-  const hardErrors = [];
+  const hardErrors = [...hardErrors0];
   for (const [k, v] of Object.entries({ ...fetched, "verify-row": row })) for (const w of appFetchWarnings(v)) hardErrors.push(`앱 조회 실패 경고(${k}): ${w}`);
   const BS = {};
   for (const [name, key] of [["총차입금", "debt"], ["순차입금", "nd"]])
@@ -9386,29 +10829,61 @@ async function verifyKr(sym) {
         const k = `FY${y}`, col = `${y}Y`;
         let cur, next, next2, fsDiv = "CFS";
         try {
-          // 연결이 그해·다음 해·다다음 해 보고서 어디에든 있으면 연결(금융지주는 2021·2022 보고서에 연결 XBRL 이 없고 2023 보고서 전기·전전기에
-          // 있다 — 앱도 그 값을 쓴다). 조회 실패는 "없음"으로 넘기지 않고 오류(예전엔 SK 2025 보고서 조회 실패가 판본 차이로 보였다)
-          [cur, next, next2] = await Promise.all([dartFy(corp, y, "CFS"), dartFy(corp, y + 1, "CFS"), dartFy(corp, y + 2, "CFS")]);
-          if (!cur && !next && !next2) {
-            fsDiv = "OFS";
-            [cur, next, next2] = await Promise.all([dartFy(corp, y, "OFS"), dartFy(corp, y + 1, "OFS"), dartFy(corp, y + 2, "OFS")]);
-          }
+          // 연결 보고서(그해·다음 해·다다음 해) 어디에든 그해 손익 값이 있으면 연결(금융지주는 2021·2022 보고서에 연결 XBRL 이 없고 2023
+          // 보고서 전기·전전기에 있다 — 앱도 그 값을 쓴다), 없으면 별도 — 해마다(dartYearSource). 조회 실패는 "없음"으로 넘기지 않고
+          // 오류(예전엔 SK 2025 보고서 조회 실패가 판본 차이로 보였다)
+          const src = await dartYearSource(corp, y);
+          if (src) ({ cur, next, next2, fsDiv } = src);
         } catch (e) {
           add("A", "DART 원자료 조회", col, { status: FAIL, note: String(e).slice(0, 120) });
           hardErrors.push(`DART 조회 실패 ${col}: ${String(e).slice(0, 80)}`);
           continue;
         }
-        if (!cur && !next && !next2) { add("A", "DART 사업보고서 존재", col, { status: FAIL, note: "앱에 연도 열이 있는데 DART 사업보고서 없음(CFS·OFS)" }); continue; }
+        if (!cur && !next && !next2) { add("A", "DART 손익 자료 존재", col, { status: FAIL, note: "앱에 연도 열이 있는데 DART 보고서(Y·Y+1·Y+2, 연결·별도)에 그해 손익 값 없음" }); continue; }
         for (const [name, loc, sjs, ids, names] of KR_A_ITEMS) {
           const app = loc.is ? isByName(loc.is, k) : loc.bs ? byId(bs, loc.bs, k) : byId(cf, loc.cf, k);
           // 최신 판본 = Y+2 보고서 전전기 → Y+1 보고서 전기 → Y 보고서 당기(앱 규칙 "연도별 가장 최신 보고서" — 현대차 2021 매출은
           // 2023 보고서 전전기에서 재작성 116.45조, 2022 보고서 전기는 117.61조)
           const yv = dartYearValue(cur, next, next2, y, sjs, ids, names);
-          const orig = yv.orig, latest = yv.latest;
-          const r = vsSource(app, latest, 0, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : ""].filter(Boolean).join(" · "));
+          const orig = yv.orig;
+          let latest = yv.latest, rule = "";
+          // 승인된 규칙(2026-09-28, 앱 dart-income.ts — 칸 주석 표시): 연결 재무제표인데 DART 가 지배주주 귀속 줄을 생략했고, 같은 보고서에 비지배지분
+          // 순이익 줄 값도 없고 재무상태표 비지배지분도 없거나 0 이면 지배 = 당기순이익. 검증기가 DART 원자료로 조건을 따로 확인한다(앱 주석을 믿지 않음)
+          if (name === "당기순이익(지배)" && latest == null && fsDiv === "CFS") {
+            const own = [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]].find(([L0, f]) => L0 && L0.some((r0) => dartNum(r0[f]) != null));
+            if (own) {
+              const [L0, f] = own;
+              const isNci = dartRows(L0, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToNonControllingInterests", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"], ["비지배지분"]).map((r0) => dartNum(r0[f])).filter((v0) => v0 != null);
+              const bsNci = dartRows(L0, ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]).map((r0) => dartNum(r0[f])).filter((v0) => v0 != null && v0 !== 0);
+              if (!isNci.length && !bsNci.length) {
+                latest = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLoss"], ["당기순이익", "당기순이익손실"]).latest;
+                rule = "DART 지배주주 귀속 줄 생략 · 비지배지분 순이익·재무상태표 비지배지분 없음(검증기 확인) → 지배 = 당기순이익(승인 규칙)";
+              }
+            }
+          }
+          // 승인된 규칙(앱 dart-income.ts — 칸 주석 "손익계산서에 당기순이익 줄 없음 — 지배주주 귀속 + 비지배지분 귀속"): DART 에 당기순이익 줄이 없고
+          // 지배·비지배 귀속 줄이 둘 다 있으면 합(103590 2021·2022). 검증기가 DART 줄로 따로 계산
+          if (name === "당기순이익(연결)" && latest == null) {
+            const p0 = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], []).latest;
+            const n0 = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToNonControllingInterests", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"], []).latest;
+            const b0 = dartYearValue(cur, next, next2, y, ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]).latest;
+            if (p0 != null && n0 != null) { latest = p0 + n0; rule = `DART 당기순이익 줄 없음 → 지배 ${p0} + 비지배 ${n0}(승인 규칙)`; }
+            else if (p0 != null && n0 == null && (b0 == null || b0 === 0)) { latest = p0; rule = `DART 당기순이익 줄 없음 · 비지배지분 없음 → 지배 ${p0}(승인 규칙)`; }
+          }
+          const r = vsDart(app, latest, [fsDiv === "OFS" ? "별도 재무제표" : "", yv.ambiguous ? "같은 이름 줄이 여럿 — 값 연속성으로 못 고름" : "", rule].filter(Boolean).join(" · "));
           if (r.status === FAIL && app != null && orig != null && app === orig && latest !== orig)
             r.note = `앱 = 처음 공시 ${orig} · 최신 보고서 값 ${latest} — 앱이 재작성 값을 안 씀`;
           else if (r.status === PASS && orig != null && latest !== orig) r.note = `최신 보고서의 재작성 값 — 처음 공시 ${orig}`;
+          // 양쪽 빈칸의 기대 빈칸 확인(2026-10-08): 별도 재무제표 해(DART 에 연결 재무제표 없음 — 검증기 판정)는 지배·비지배 구분 자체가 없고,
+          // 연결 재무제표인데 그 보고서 재무상태표에 비지배지분 줄이 없으면 비지배지분은 빈칸이 맞다
+          if (r.status === NA && app == null && latest == null && /^(당기순이익\(지배\)|지배주주 지분|비지배지분)$/.test(name)) {
+            if (fsDiv === "OFS") { r.status = PASS; r.note = "양쪽 빈칸 = 기대 빈칸 — DART 별도 재무제표 해(연결 없음): 지배·비지배 구분 없음"; }
+            else if (name === "비지배지분") {
+              const own = [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]].find(([L0, f]) => L0 && L0.some((r0) => r0.sj_div === "BS" && dartNum(r0[f]) != null));
+              // 줄이 없거나, 줄은 있어도 그 열 값이 비었으면(이듬해 보고서에 생긴 줄의 전기·전전기 열 — 042660 2023 보고서) 그해 비지배지분 없음
+              if (own && !dartRows(own[0], ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]).some((r0) => dartNum(r0[own[1]]) != null)) { r.status = PASS; r.note = "양쪽 빈칸 = 기대 빈칸 — DART 연결 재무상태표 그 열에 비지배지분 값 없음(줄 없음 또는 빈칸)"; }
+            }
+          }
           add("A", `${name} = DART`, col, r);
           const vAll = [[cur, y, "thstrm_amount"], [next, y + 1, "frmtrm_amount"], [next2, y + 2, "bfefrmtrm_amount"]]
             .map(([L, by, f]) => { const rs = L ? dartRows(L, sjs, ids, names) : []; return rs.length === 1 ? { by, v: dartNum(rs[0][f]) } : null; })
@@ -9420,9 +10895,12 @@ async function verifyKr(sym) {
         // 희석 EPS 미공시(희석 증권 없음)면 앱 희석 EPS 는 기본 EPS 와 같아야 한다
         const epsOf = (L, f, kind) => {
           if (!L) return null;
-          const T = kind === "d" ? [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "희석주당이익손실"]]
-            : [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익"]];
-          const tot = dartPick(L, ["IS", "CIS"], ...T, f);
+          const T = kind === "d" ? [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "희석주당이익손실", "보통주기본및희석주당이익", "보통주기본및희석주당순이익", "기본및희석주당이익"]]
+            : [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익", "보통주기본및희석주당이익", "보통주기본및희석주당순이익"]];
+          // 전체 EPS ID 를 달았지만 계정명이 계속·중단영업 주당이익인 줄은 태그 오류 — 전체 EPS 후보에서 뺀다(373220 2023 사업보고서, 감사 11차 K7)
+          // 판정은 검증기 자체(감사 12차 D3): 계정명에 "계속"·"중단" 중 한쪽만 있으면 부분 EPS(순서·영업/사업 표기 무관)
+          const partialEps = (r) => (r.account_id === "ifrs-full_BasicEarningsLossPerShare" || r.account_id === "ifrs-full_DilutedEarningsLossPerShare") && String(r.account_nm ?? "").includes("계속") !== String(r.account_nm ?? "").includes("중단");
+          const tot = dartPick(L.filter((r) => !partialEps(r)), ["IS", "CIS"], ...T, f);
           if (tot != null) return { v: tot, how: "" };
           // 기본·희석 합친 줄(LG "보통주 기본/희석주당순이익") — 하나거나 값이 같으면 그 값, 둘이 다르면 차이가 그 해 중단영업손익과 부호가 같은 쪽
           { const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
@@ -9440,14 +10918,37 @@ async function verifyKr(sym) {
           return { v: c + d, how: `전체 EPS 미공시 — 계속영업 ${c} + 중단영업 ${d}` };
         };
         // 기준 보고서 = 그 해 값이 실린 가장 최근 보고서(dartYearValue 와 같은 규칙)
-        const ownerOf = () => { for (const [L, f] of [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]]) if (L && L.some((r) => dartNum(r[f]) != null)) return [L, f]; return [null, null]; };
+        const ownerOf = () => { for (const [L, f] of [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]]) if (L && L.some((r) => (r.sj_div === "IS" || r.sj_div === "CIS") && dartNum(r[f]) != null)) return [L, f]; return [null, null]; };
         const latestEps = (kind) => { const [L, f] = ownerOf(); return L ? epsOf(L, f, kind) : null; };
         const bE = latestEps("b"), dE = latestEps("d");
-        add("A", "기본 EPS = DART", col, vsSource(isByName("기본 EPS", k), bE?.v ?? null, 0, bE?.how ?? ""));
+        add("A", "기본 EPS = DART", col, vsDart(isByName("기본 EPS", k), bE?.v ?? null, bE?.how ?? ""));
         { const rr = vsSource(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, 0); dartVint[`${col}|희석 EPS`] = { app: rr.app, latest: rr.src, pass: rr.status === PASS, vAll: [] }; }
-        add("A", "희석 EPS = DART", col, vsSource(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, 0, dE ? dE.how : bE ? `DART 희석 EPS 미공시 — 기본 EPS 와 대조${bE.how ? " · " + bE.how : ""}` : ""));
+        add("A", "희석 EPS = DART", col, vsDart(isByName("희석 EPS", k), (dE ?? bE)?.v ?? null, dE ? dE.how : bE ? `DART 희석 EPS 미공시 — 기본 EPS 와 대조${bE.how ? " · " + bE.how : ""}` : ""));
       }
     }
+  }
+
+  // ── 원자료 층 K1~K5(감사 1차 2026-10-05) — KRX·DART 를 검증기가 직접(verify-kr/layers.mjs)
+  {
+    const corp = KR_CORP.get(sym);
+    if (corp) await krOriginalLayers({
+      sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, same, dartVint, row, ov: fetched.ov ?? null, an: fetched.an ?? null,
+      consts: { PASS, FAIL, NA, COMMON },
+      // 분기 재무제표 화면 A층(감사 2차 ②) — 분기 열마다 DART 와 정확 대조
+      quarter: { isq, bsq, cfq }, items: KR_A_ITEMS,
+      yahooBars: async (s) => {
+        const y = await yahoo();
+        for (const suf of [".KS", ".KQ"]) {
+          let r;
+          // 코스닥 종목은 .KS 가 "No data found" 로 던진다 — 그때만 다음 접미사(다른 오류는 그대로 던짐)
+          try { r = await y.chart(s + suf, { period1: new Date(Date.now() - 20 * 864e5), interval: "1d" }, { validateResult: false }); }
+          catch (e) { if (/No data found/i.test(String(e?.message ?? e))) continue; throw e; }
+          const q = (r?.quotes ?? []).filter((b) => b.close != null).map((b) => ({ date: new Date(new Date(b.date).getTime() + 9 * 3600e3).toISOString().slice(0, 10), close: b.close }));
+          if (q.length) return q;
+        }
+        throw new Error("Yahoo 일봉 없음(.KS·.KQ)");
+      },
+    });
   }
 
   // LTM 기준일 — 손익 TTM 이 분기까지 왔는데 재무상태표 스냅샷이 연말값이면 현금·차입금·자본이 낡았다
@@ -9491,14 +10992,15 @@ async function verifyKr(sym) {
       if (x.eps <= 0) add("D", "PER 부호 규칙(분모 ≤ 0 → 빈칸)", c, x.per == null ? { status: PASS } : { status: FAIL, note: `EPS ${x.eps} 인데 PER ${x.per}` });
       else add("D", "PER 기대치(분모 > 0 → 값 있음)", c, x.per != null ? { status: PASS } : { status: FAIL, note: `EPS ${x.eps} 인데 PER 빈칸` });
     }
-    if (!evBlocked && x.mc != null) {
-      if (x.ev == null) add("D", "EV 기대치", c, { status: FAIL, note: "EV 미표시 사유 없이 빈칸" });
-      else {
+    // EV 기대치(공란 여부)는 K2 층이 검증기 자체 판정(금융업·금융 자회사·리스 확인 불가·KRX)으로 정한다 — 앱 주석 문구를 근거로 쓰지 않는다(감사 1차 ⑤)
+    if (x.mc != null) {
+      if (x.ev != null) {
         const sum = (x.mc ?? 0) + (x.pref ?? 0) + (x.debt ?? 0) + (x.nci ?? 0) + (x.cash ?? 0);
         add("D", "EV = 보통주+우선주 시총+차입금+NCI−현금", c, same(x.ev, sum));
         if (x.ebitda != null && x.ebitda > 0) add("D", "EV/EBITDA = EV÷EBITDA", c, same(x.evx, x.ev / x.ebitda));
-        if (x.ebitda != null && x.ebitda <= 0) add("D", "EV/EBITDA 부호 규칙", c, x.evx == null ? { status: PASS } : { status: FAIL, note: `EBITDA ${x.ebitda} 인데 ${x.evx}` });
       }
+      // EBITDA ≤ 0 이면 EV 유무와 관계없이 EV/EBITDA 빈칸(2026-10-08 — EV 가 빈 해에도 부호 규칙을 남겨 화면 간 양쪽 빈칸을 기대 빈칸으로 확인)
+      if (x.ebitda != null && x.ebitda <= 0) add("D", "EV/EBITDA 부호 규칙(분모 ≤ 0 → 빈칸)", c, x.evx == null ? { status: PASS } : { status: FAIL, note: `EBITDA ${x.ebitda} 인데 ${x.evx}` });
     }
   }
   // ── C층 화면 간 일치(한국, 2026-10-02 — 미국과 같은 검사): 분기 열 · 총괄 = 각 재무제표(연간·분기) · 하이라이트 LTM = 최근 4개 분기 합(손익)·
@@ -9528,19 +11030,27 @@ async function verifyKr(sym) {
     const LH = H.LTM, IQn = rnm(isq), BQi = rid(bsq);
     const ql = (isq.periods ?? []).map((p0) => p0.label), l4 = ql.slice(-4), lq = ql.at(-1);
     const fq = (tt?.ttm?.periodLabel ?? "").match(/\+\s*(\d{4})\s*(1분기|반기|3분기)/);
-    const want = fq ? `${fq[1]} Q${{ "1분기": 1, 반기: 2, "3분기": 3 }[fq[2]]}` : null;
+    // 손익 TTM 이 사업연도("FY2025" — 사업보고서 뒤 1분기 보고서 전, 감사 3차)면 그해 4분기까지의 네 분기
+    const fy0 = (tt?.ttm?.periodLabel ?? "").match(/^FY(\d{4})$/);
+    const want = fq ? `${fq[1]} Q${{ "1분기": 1, 반기: 2, "3분기": 3 }[fq[2]]}` : fy0 ? `${fy0[1]} Q4` : null;
     if (LH && l4.length === 4 && want && lq === want) {
       const s4 = (nm) => { const xs = l4.map((k0) => IQn[nm]?.[k0]); return xs.every((v0) => v0 != null) ? xs.reduce((a0, b1) => a0 + b1, 0) : null; };
       const hRow = (key) => { const i0 = h.columns.findIndex((c) => c.kind === "ltm"); return h.rows.find((r1) => r1.key === key)?.values[i0] ?? null; };
-      eqv("하이라이트 LTM 매출 = 분기 최근 4개 합", "LTM", hRow("revenue"), s4("매출액"));
-      eqv("하이라이트 LTM 영업이익 = 분기 최근 4개 합", "LTM", hRow("opinc"), s4("영업이익"));
-      eqv("하이라이트 LTM 순이익 = 분기 최근 4개 합", "LTM", LH.ni, s4("당기순이익"));
+      // 손익 LTM 은 "최근 사업연도 + 당기 누적 − 당기 보고서 전기 누적(정정본)"(오너 결정 2026-10-10)이라 분기 화면 4개 열 합과 다를 수 있다 — 대조하지 않고
+      // K4 가 DART 원자료로 직접 대조한다
+      void s4;
       eqv("하이라이트 LTM 총차입금 = 최근 분기 재무상태표", "LTM", LH.debt, BQi["bs:note:총차입금"]?.[lq]);
-      eqv("하이라이트 LTM 비지배지분 = 최근 분기 재무상태표", "LTM", LH.nci, BQi["bs:note:비지배지분"]?.[lq]);
+      // 하이라이트는 비지배지분이 전 열 0(또는 없음)이면 줄을 숨긴다 — 숨긴 줄은 0 으로 읽는다. 재무상태표 값이 0 이 아니면 그대로 실패(2026-10-02)
+      const nciHidden = !h.rows.some((x) => x.key === "nci");
+      const bNci = BQi["bs:note:비지배지분"]?.[lq];
+      eqv("하이라이트 LTM 비지배지분 = 최근 분기 재무상태표", "LTM", LH.nci ?? (nciHidden && bNci != null ? 0 : null), bNci);
     } else if (LH) add("C", "하이라이트 LTM = 분기 화면", "LTM", { status: NA, note: `손익 TTM 기준 분기 ${want ?? "없음"} · 분기 화면 마지막 열 ${lq ?? "없음"}` });
   }
 
   const L = H.LTM;
+  // LTM 열 기대치(감사 2차 ①) — 하이라이트 LTM 열이 없는 경우는 K1 「LTM 열 존재」가 실패로 남긴다. 재무분석·개요·유니버스 LTM 도 있어야 한다
+  if (L && !A.LTM) add("C", "재무분석 LTM 열 존재", "LTM", { status: FAIL, note: "하이라이트 LTM 열이 있는데 재무분석 LTM 열 없음" });
+  if (row && !L) add("C", "개요·유니버스 = 하이라이트 LTM", "LTM", { status: FAIL, note: "하이라이트 LTM 열 없음 — 개요·유니버스 대조 불가" });
   if (row && L) {
     const m = row.overview?.multiples ?? null, uv = row.universe ?? null;
     if (!m) add("C", "개요 멀티플 계산됨", "LTM", { status: FAIL, note: `개요 멀티플 없음 ${JSON.stringify(row.overview?.warnings ?? [])}` });
@@ -9673,6 +11183,26 @@ async function verifyKr(sym) {
       });
     }
   }
+  // 화면 간 "양쪽 빈칸" → 기대 빈칸 확인(2026-10-08, 미국과 같은 원칙): D층 부호 규칙(분모 ≤ 0) 통과 또는 KRX 에 그해 말 종목 없음(상장 전 — K1)이면 통과
+  {
+    const preList = new Map();
+    for (const k of checks) if (k.layer === "K1" && /시가총액\(보통주\) = KRX 연말/.test(k.name) && k.status === NA && /그해 말 종목 없음/.test(k.note ?? "")) {
+      preList.set(k.col, "상장 전 — KRX 에 그해 말 종목 없음"); k.status = PASS; k.note = `양쪽 빈칸 = 기대 빈칸 — ${k.note}`;
+    }
+    for (const k of checks) if (k.layer === "D" && k.name === "시가총액 존재" && k.status === NA && preList.has(k.col)) { k.status = PASS; k.note = preList.get(k.col); }
+    const metricOf = (n) => { const m = n.match(/^(EV\/EBITDA|PER|PBR|PSR)/); return m ? m[1] : null; };
+    const signOk = new Map();
+    for (const k of checks) if (k.layer === "D" && k.status === PASS && /부호 규칙\(분모 ≤ 0 → 빈칸\)/.test(k.name)) signOk.set(`${metricOf(k.name)}|${k.col}`, "분모 ≤ 0 → 빈칸(D층 부호 규칙 통과)");
+    // EV 가 검증기 자체 판정으로 공란이어야 하는 열(K2 — 금융업·금융 자회사·리스부채 확인 불가)이면 EV/EBITDA 도 공란
+    const evBlank = new Map();
+    for (const k of checks) if (k.layer === "K2" && k.name === "EV = KRX + DART(B16)" && k.status === PASS && /^공란 — /.test(k.note ?? "")) evBlank.set(k.col, `EV ${k.note}(K2 통과)`);
+    for (const k of checks) {
+      if (k.layer !== "C" || k.status !== NA || k.note !== "양쪽 빈칸") continue;
+      const m = metricOf(k.name); if (!m) continue;
+      const why = signOk.get(`${m}|${k.col}`) ?? preList.get(k.col) ?? (m === "EV/EBITDA" ? evBlank.get(k.col) : null);
+      if (why) { k.status = PASS; k.note = `양쪽 빈칸 = 기대 빈칸 — ${why}`; }
+    }
+  }
   return { sym, checks, review, hardErrors };
 }
 
@@ -9692,11 +11222,38 @@ let idx = 0;
 // 외부 대조 행 분류 — 공통모드 소스만 일치한 행(verdict 가 공통모드로 시작)은 "외부 전부일치"가 아니다
 const extCommonOnly = (x) => !!x.verdict && x.verdict.startsWith(COMMON_LABEL);
 const extAllMatch = (x) => !!x.matched && !!x.verdict && !/불일치/.test(x.verdict) && !extCommonOnly(x);
+/**
+ * 한국 — 공시 목록은 디스크에 6시간 보관한다(dart.mjs). 실패가 난 종목만 목록을 새로 받아(1건) 그 사이 정정 공시가 나왔는지 본다. 나왔으면 새 판본으로
+ * 그 종목을 다시 검증하고, 정정 공시가 오늘 나온 것이면 남은 실패는 앱 공시 목록(30분 보관)과의 판본 불일치일 수 있어 실패가 아니라 재실행 필요로
+ */
+async function krListVersionCheck(s, r) {
+  const corp = KR_CORP.get(s);
+  if (!corp || r.error || !r.checks?.some((c) => c.status === FAIL)) return r;
+  let changed;
+  try { changed = await dartListRefresh(corp); } catch (e) { r.hardErrors?.push(`공시 목록 판본 확인(재조회) 실패: ${String(e?.message ?? e).slice(0, 100)}`); return r; }
+  if (!changed.length) return r;
+  const what = changed.map((x) => `${x.nm}(${x.rcept})`).join(" · ");
+  console.log(`${s.padEnd(7)} 정정 공시 판본 변경 ${what} — 새 판본으로 재검증`);
+  // 실행 안 메모리 보관분(사업보고서 재무제표 Promise — dartFy)이 옛 판본이면 재검증도 옛 판본을 쓴다(감사 12차 D1) — 그 회사 것을 비운다.
+  // 그 밖의 원자료(분기 보고서·연도별 원천 yearSrc·qSource)는 verifyKr 호출마다 새로 만들고 디스크 캐시 열쇠가 최신 접수번호라 새 판본을 읽는다
+  for (const k of [...dartCache.keys()]) if (k.startsWith(`${corp}|`)) dartCache.delete(k);
+  const r2 = await verifyKr(s);
+  const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
+  const todays = changed.filter((x) => x.dt === today);
+  for (const c of r2.checks)
+    if (c.status === FAIL && todays.length) Object.assign(c, { status: NA, note: `판본 불일치 — 오늘 정정 공시 ${todays.map((x) => x.rcept).join("·")}(앱 공시 목록은 30분 보관 — 앱이 아직 옛 판본일 수 있음) · 재실행 필요 · ${c.note ?? ""}` });
+  r2.checks.push({ layer: "판본", name: "공시 목록 판본(디스크 보관본 → 새 목록)", col: "-", status: PASS, note: `보관본 뒤 정정 공시 ${what} — 새 판본으로 재검증함` });
+  return r2;
+}
 async function worker() {
   while (idx < syms.length) {
     const s = syms[idx++];
+    // DART 하루 요청 상한·020 으로 멈췄으면 남은 종목은 검증하지 않고 오류로 남긴다(조용히 건너뛰지 않음 — 종료코드 1)
+    const dq = MARKET === "kr" ? dartQuota()?.stopped : null;
+    if (dq) { results.push({ sym: s, error: `${dq.message} — 상한 도달, 남은 종목 검증불가`, checks: [], review: [] }); console.log(`${s.padEnd(7)} 오류: 상한 도달 — 검증불가(${dq.kind})`); continue; }
     try {
-      const r = MARKET === "kr" ? await verifyKr(s) : await verifyUs(s);
+      let r = MARKET === "kr" ? await verifyKr(s) : await verifyUs(s);
+      if (MARKET === "kr") r = await krListVersionCheck(s, r);
       results.push(r);
       const f = r.checks.filter((c) => c.status === FAIL).length;
       const n = r.checks.filter((c) => c.status === NA).length;
@@ -9762,7 +11319,7 @@ if (args.post) {
       symbol: r.sym,
       runAt: new Date().toISOString(),
       base: BASE,
-      commit: process.env.GITHUB_SHA ?? null,
+      commit: COMMIT,
       counts: {
         fail: cs.filter((c) => c.status === FAIL).length,
         unverifiable: cs.filter((c) => c.status === NA).length,
@@ -9874,7 +11431,27 @@ if (MARKET === "us" && SGA_MODE) {
   console.log(`판관비·연구개발비 검사 통과 ${sAll.filter((c) => c.status === PASS).length} · 실패 ${sgaFails.length} · 공통모드 ${sAll.filter((c) => c.status === COMMON).length} · 검증불가 ${sAll.filter((c) => c.status === NA).length} · ③ 오류 ${sgaErrs.length}건 (판관비·연구개발비 모드 — 종료코드 기준, 지표 미종결)`);
   for (const c of sgaFails) console.log(`  [실패] ${c.sym} [${c.col}] ${c.name} — ${String(c.note ?? "").slice(0, 300)}`);
 }
+if (KR_CACHE) {
+  const cs = KR_CACHE.summary();
+  console.log(`
+DART·KRX 디스크 캐시 — 적중 ${cs.hit} · 미스 ${cs.miss} · 새로 씀 ${cs.write} · 정리(옛 판본 ${cs.deletedOld} · 90일 미사용 ${cs.deletedIdle} · 상한 초과 ${cs.deletedCap}) · 총 ${cs.files}파일 ${(cs.bytes / 1024 ** 2).toFixed(1)}MB · DART 요청 ${dartStats.requests}(XBRL 점검 기록으로 생략 ${xbrlMaint.skipped}) · KRX 요청 ${krxStats.requests}`);
+  const qs = dartQuota()?.state();
+  if (qs) console.log(`DART 하루 요청(검증기) ${qs.count}/${qs.cap} — ${qs.day} KST${qs.stopped ? ` · 중단: ${qs.stopped.message}` : ""}`);
+  await closeKrLayers();
+}
 const infraBad = errors.length || badSkips.length || empty.length || missing.length;
+// 한국 — 층별 집계와 재실행 필요(감사 2차 ③·④): 게시 전(KRX 자료가 아직 안 나온 거래일)이라 확인 못 한 검사는 검증불가로 남고, 그런 검사가 하나라도
+// 있으면 실패가 없어도 "깨끗한 통과"가 아니다 — 재실행 필요(종료코드 3). 공통모드(적재본과만 맞은 칸 등)는 통과로 세지 않는다
+const rerun = all.filter((c) => c.status === NA && /재실행 필요/.test(c.note ?? ""));
+if (MARKET === "kr") {
+  const grp = (c) => (c.layer === "A" && /^분기 /.test(c.name) ? "A 분기" : c.layer === "A" ? "A 연간" : c.layer);
+  const by = {};
+  for (const c of all) { const b = (by[grp(c)] ??= { pass: 0, fail: 0, unverifiable: 0, common: 0 }); b[c.status] = (b[c.status] ?? 0) + 1; }
+  console.log("\n── 한국 층별 집계 (A 연간·A 분기 = DART 재무제표, K1 시가총액 KRX, K2 EV 구성요소, K3 감가상각, K4 LTM 손익, K5 배당) ──");
+  for (const [k, b] of Object.entries(by).sort()) console.log(`  ${k.padEnd(8)} 통과 ${b.pass} · 실패 ${b.fail} · 검증불가 ${b.unverifiable} · 공통모드 ${b.common}`);
+  console.log(rerun.length ? `\n재실행 필요 ${rerun.length}건(게시 전 등으로 확인 못 함 — 종료코드 3): ${[...new Set(rerun.map((c) => `${c.sym} ${c.name}`))].slice(0, 20).join(" · ")}` : "\n재실행 필요 0건");
+}
+if (!(fails.length || infraBad) && rerun.length && !METRIC) process.exit(3);
 process.exit(METRIC === "revenue" ? (revFails.length || revErrs.length || infraBad ? 1 : 0)
   : METRIC === "cogs" ? (cogsFails.length || cogsErrs.length || infraBad ? 1 : 0)
   : METRIC === "opinc" ? (cogsFails.length || cogsErrs.length || opincFails.length || opincErrs.length || infraBad ? 1 : 0)

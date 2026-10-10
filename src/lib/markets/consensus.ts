@@ -27,14 +27,14 @@ import {
   krEv,
   krOpIncomeByYear,
   krParentEquityByYear,
-  loadKrCaps,
+  loadKrCapsChecked,
   type KrCaps,
   type KrEvResolver,
 } from "./kr/dart-ev";
 import { daAndAmortSeries, fetchKrFacts } from "./kr/dart-facts";
 import { getJpConsensusYears } from "./jp/jp-views";
 import { resolveCorpCode } from "./kr/corpcode";
-import { getKrDaDoc } from "@/lib/db/kr-da";
+import { getKrDaDocChecked } from "@/lib/db/kr-da";
 import { isFinancialCompany } from "./us/edgar-financial";
 import { fyEps, netIncomeAnnualByYear, parentEquityAt, positiveRatio } from "./us/edgar-pershare";
 import type { ClassAFacts } from "./us/edgar-classfacts";
@@ -306,6 +306,8 @@ export async function getConsensusData(
   let kr: {
     ev: KrEvResolver;
     caps: KrCaps | null;
+    /** KRX 시가총액 조회 실패 사유 — 있으면 연도 시가총액을 현재 주식수 근사로 대신하지 않는다 */
+    capsError?: string | null;
     da: Map<number, number>;
     eps: Map<number, number>;
     equity: Map<number, number>;
@@ -320,6 +322,7 @@ export async function getConsensusData(
         kr = {
           ev: buildKrEvResolver(x.facts, x.code),
           caps: x.caps,
+          capsError: x.capsError,
           da: daAndAmortSeries(x.facts, x.daDoc).byYear,
           eps: krEpsByYear(x.facts),
           equity: krParentEquityByYear(x.facts),
@@ -327,33 +330,47 @@ export async function getConsensusData(
         };
         // 과거 연도 주식수 = 각 결산일 유통주식수만(최근 값으로 대신하지 않음 — 그림자 채우기 금지)
         dartBookShares = x.bookShares;
+        if (x.daWarning) notes.push(`⚠ ${x.daWarning} — 감가상각비·EBITDA 는 DART 공시 현금흐름 줄 또는 빈칸`);
+        for (const w of x.warnings) notes.push(`⚠ ${w}`);
         notes.push(`실적: ${x.code} OpenDART 재무 USD 환산(손익 = 기간 평균 환율, 재무상태표·연말 시가총액 = 결산일 환율), 주당 값은 ADR 1주 기준`);
       }
-    } catch {
+    } catch (e) {
+      // DART 연결 ADR 입력 조회 실패 — 실적 열을 비우고 사유를 주석에(감사 2차 ⑨)
       kr = null;
+      notes.push(`⚠ DART 연결 ADR 실적 입력 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+  // no-silent-catch:begin — 한국 경로(감사 1차 ⑥: 조회 실패는 주석 경고로)
   if (market === "kr") {
     try {
       const { corpCode } = resolveCorpCode("", symbol);
-      const [facts, daDoc, caps] = await Promise.all([
+      const [facts, daR, capsR] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
-        getKrDaDoc(symbol).catch(() => null),
-        loadKrCaps(symbol, years).catch(() => null),
+        getKrDaDocChecked(symbol),
+        loadKrCapsChecked(symbol, years),
       ]);
+      const daDoc = daR.doc;
+      if (daR.warning) notes.push(`⚠ ${daR.warning} — 감가상각비·EBITDA 는 DART 공시 현금흐름 줄 또는 빈칸`);
+      // KRX 시가총액 조회 실패 — 연도 시가총액·EV 를 근사로 대신하지 않고(아래 capsError) 주석에 남긴다
+      // 재시도(1·3·9초) 뒤에도 실패 — EV 는 우선주 시가총액을 몰라 비운다(하이라이트·재무분석과 같은 규칙)
+      if (capsR.error) notes.push(`⚠ ${capsR.error}(3번 재시도 후) — 연도 EV/EBITDA 공란, 다음 조회 때 다시 계산`);
       if (facts)
         kr = {
-          ev: buildKrEvResolver(facts, symbol),
-          caps,
+          ev: buildKrEvResolver(facts, symbol, daDoc),
+          caps: capsR.caps,
+          capsError: capsR.error,
           da: daAndAmortSeries(facts, daDoc).byYear,
           eps: krEpsByYear(facts),
           equity: krParentEquityByYear(facts),
           op: krOpIncomeByYear(facts),
         };
-    } catch {
+    } catch (e) {
+      // 한국 재무 조회 실패 — 실적 열 EV·EPS·PBR 이 빠진다. 사유를 남긴다(예전엔 조용히 null)
+      notes.push(`⚠ 한국 재무(DART) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
       kr = null;
     }
   }
+  // no-silent-catch:end
 
   // 일본: 하이라이트·재무분석과 같은 단일 기준(jp/jp-ev.ts — EDINET 본표·경영지표 EPS·결산일 실제 종가 × 그 날 유통주식수·차입금 EV).
   // 예전엔 有報 CSV 경영지표 계정명 매칭 + 현재 주식수 + 부채총계 EV(2026-10-08 폐지)
@@ -474,7 +491,7 @@ export async function getConsensusData(
     } else if (market === "kr") {
       yePrice =
         kr?.caps?.byYear.get(fy)?.close ??
-        (await fetchKrxCloseOn(symbol, periodEnd.replace(/-/g, "")).catch(() => null));
+        (await fetchKrxCloseOn(symbol, periodEnd.replace(/-/g, "")).catch((e) => { notes.push(`⚠ ${fy} 연말 종가(KRX) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; }));
     } else if (us) {
       // 주식수와 같은 기준의 가격 — Yahoo 가 분할로 기록한 분사 되돌림(edgar-shares.ts secBasisBars)
       yePrice = closeFromBars(secBasisBars(us.facts, quote), periodEnd);
@@ -516,7 +533,7 @@ export async function getConsensusData(
       evEbitda = null;
     } else if (kr) {
       // DART 연결 ADR 은 결산일 유통주식수 기준 시가총액(convertCaps)만 — 없으면 공란(최근 주식수로 대신하지 않음)
-      const common = kr.caps?.byYear.get(fy)?.common ?? (dartAdr ? null : mcap);
+      const common = kr.caps?.byYear.get(fy)?.common ?? (dartAdr || kr.capsError ? null : mcap);
       const ev = krEv(kr.ev, fy, common, kr.caps?.byYear.get(fy)?.preferred ?? null);
       const d = kr.da.get(fy);
       const ebitda = opIncome != null && d != null ? opIncome + d : null;

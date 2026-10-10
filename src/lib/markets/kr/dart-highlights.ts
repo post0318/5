@@ -5,8 +5,8 @@ import type {
   HighlightColumn,
   HighlightRow,
 } from "../us/edgar-highlights";
-import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries } from "./dart-facts";
-import { buildKrEvResolver, KR_EPS_SUM_NOTE, krEpsAnnual, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
+import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries, krDaSourceNote } from "./dart-facts";
+import { buildKrEvResolver, KR_EPS_BLANK_NOTE, KR_EPS_SUM_NOTE, krEpsAnnual, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
  * 한국 재무 하이라이트 (개요) — `edgar-highlights.ts` 미러.
@@ -27,6 +27,10 @@ export interface KrHighlightInput {
   facts: KrFacts; // annual
   /** KRX 연말·현재 보통주·우선주 시가총액(dart-ev.ts loadKrCaps) */
   caps?: KrCaps | null;
+  /** KRX 시가총액 조회 실패 사유 — 있으면 연도 열 시가총액을 근사(종가 × 현재 주식수)로 채우지 않고 공란 + 주석(재감사 14차 ③) */
+  capsError?: string | null;
+  /** 호출부가 모은 조회 실패 경고(KRX 시세·연말 종가 등) — 주석에 그대로 싣는다 */
+  warnings?: string[];
   bars: QuoteBar[]; // Stooq (다년) — 회계연도말 종가
   fyCloseByYear?: Map<number, number>; // KRX 회계연도말 종가 폴백
   sharesOutstanding: number | null; // KRX 현재 상장주식수
@@ -41,7 +45,7 @@ export interface KrHighlightInput {
   /** 연도별 주당배당금 (원). alotMatter. */
   dpsByYear: Map<number, number>;
   payoutByYear: Map<number, number>; // 배당성향 %
-  /** 최근 12개월(366일) 배당기준일 합산 주당배당금 — 있으면 LTM 열에 우선 사용. */
+  /** 최근 12개월(기준일 > 1년 전 오늘) 배당기준일 합산 주당배당금 — 있으면 LTM 열에 우선 사용. */
   dpsTtm?: number | null;
   /** 감가상각비 실측(사업보고서 XBRL 주석) — 있으면 EBITDA = 영업이익 + 감가상각비. */
   daDoc?: KrDaInput | null;
@@ -103,7 +107,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   // 자기자본 — 지배주주 기준(PBR 분모, dart-ev.ts — 재무분석·컨센서스·개요와 같은 값)
   const aEquity = krParentEquityByYear(facts);
   // EV 브릿지 — dart-ev.ts 단일 기준(재무분석·개요 멀티플·컨센서스와 같은 값)
-  const evRes = buildKrEvResolver(facts, code);
+  const evRes = buildKrEvResolver(facts, code, daDoc ?? null);
   const evBlocker = evRes.blocker();
 
   const at = (m: Map<number, number>, y: number): number | null => m.get(y) ?? null;
@@ -127,6 +131,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     if (c.kind === "ltm" && currentMarketCap != null) return currentMarketCap;
     if (kx != null) return kx;
     if (input.strictPastShares && c.kind === "fy") return null;
+    // KRX 조회 실패(3번 재시도 후)·자료 없음 — 연말 종가 × 현재 주식수 근사, 주석에 표시(오너 결정 2026-10-04 "근사 + ⚠ 표시")
     if (priceByCol[i] == null || shares == null) return null;
     if (c.kind === "fy") approxMcap = true;
     return priceByCol[i]! * shares;
@@ -151,8 +156,12 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   const ev = columns.map((c, i) =>
     c.kind === "estimate"
       ? null
-      : c.kind === "ltm" && ltmFromSnap
-        ? krEvFromBridge(evBlocker, bridge[i], marketCap[i], prefMcap[i])
+      : // KRX 조회 실패(재시도 후)면 우선주 시가총액을 몰라 EV 는 비운다(우선주 있는 회사 EV 과소 방지) — 연도 열·LTM 열 모두(감사 1차 ⑦: LTM 이
+        // 우선주 0 으로 계산돼 삼성전자 LTM EV 가 161조 과소였다)
+        input.capsError
+        ? null
+        : c.kind === "ltm" && ltmFromSnap
+        ? krEvFromBridge(evBlocker ?? snap!.evBlocker ?? null, bridge[i], marketCap[i], prefMcap[i])
         : krEv(evRes, c.kind === "fy" ? cy(c) : lastFy, marketCap[i], prefMcap[i]),
   );
 
@@ -181,16 +190,22 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     if (c.kind === "estimate") return consensus?.estEps ?? null;
     return at(aEps, cy(c));
   });
-  // LTM 배당금 = 최근 12개월(366일) 배당기준일 합산(공공데이터포털 배당정보,
+  // LTM 배당금 = 최근 12개월(기준일 > 1년 전 오늘) 배당기준일 합산(공공데이터포털 배당정보,
   // rights-schedule.ts fetchKrAnnualDps) — 없으면 최근 완결 사업연도값으로 폴백.
   const dps = columns.map((c) =>
     c.kind === "fy" ? (dpsByYear.get(cy(c)) ?? null) : c.kind === "ltm" ? (dpsTtm ?? dpsByYear.get(lastFy) ?? null) : null,
   );
+  // LTM 주당배당금이 최근 사업연도 값으로 대신된 경우 — 주석에 남긴다(감사 1차 ⑨)
+  const dpsLtmFallback = dpsTtm == null && dpsByYear.get(lastFy) != null;
   const divYield = dps.map((d, i) => (d != null && priceByCol[i] ? (d / priceByCol[i]!) * 100 : null));
-  // OCF/CapEx 는 TTM 미보유 → LTM 컬럼은 최근 사업연도값
-  const ocf = columns.map((c) => (c.kind === "ltm" ? at(aOcf, lastFy) : c.kind === "estimate" ? null : at(aOcf, cy(c))));
+  // LTM 영업현금흐름·자본지출 = 손익 TTM 과 같은 식(ttm.krLtm — 오너 결정 2026-10-10, 최근 사업연도 + 당기 누적 − 당기 보고서 전기 누적). 손익 TTM 이
+  // 사업연도면 그 사업연도 값. 예전엔 LTM 열에 최근 사업연도 값을 그대로 넣었다(그림자 채우기)
+  // TTM 이 없으면(조회 실패) LTM 열 현금흐름도 빈칸 — 사업연도 값으로 채우지 않는다
+  const ltmIsFy = !!ttm?.periodLabel && !/\+/.test(ttm.periodLabel);
+  const ltmCf = (k: "ocf" | "capex", a: Map<number, number>) => (ltmIsFy ? at(a, lastFy) : (ttm?.krLtm?.[k] ?? null));
+  const ocf = columns.map((c) => (c.kind === "ltm" ? ltmCf("ocf", aOcf) : c.kind === "estimate" ? null : at(aOcf, cy(c))));
   const capex = columns.map((c) => {
-    const v = c.kind === "fy" ? at(aCapex, cy(c)) : c.kind === "ltm" ? at(aCapex, lastFy) : null;
+    const v = c.kind === "fy" ? at(aCapex, cy(c)) : c.kind === "ltm" ? ltmCf("capex", aCapex) : null;
     return v == null ? null : -Math.abs(v);
   });
   const fcf = columns.map((_, i) => (ocf[i] != null && capex[i] != null ? ocf[i]! + capex[i]! : null));
@@ -203,8 +218,8 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
       return null;
     });
 
-  // 감가상각비 실측(사업보고서 XBRL 주석) — EBITDA = 영업이익 + 감가상각비
-  const daS = daAndAmortSeries(facts, daDoc ?? null);
+  // 감가상각비(사업보고서 주석 영업비용 기준 → 공시 현금흐름 줄 → 근사, 출처는 표 아래 주석) — EBITDA = 영업이익 + 감가상각비
+  const daS = daAndAmortSeries(facts, daDoc ?? null, ttm?.periodLabel ?? null);
   const ebitda = columns.map((c, i) => {
     if (opInc[i] == null) return null;
     const da = c.kind === "fy" ? (daS.byYear.get(cy(c)) ?? null) : c.kind === "ltm" ? daS.ltm : null;
@@ -237,10 +252,12 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
       format: "eps",
       values: eps,
       // 전체 EPS 미공시 해 — 계속 + 중단영업 주당이익 합(dart-ev.ts krEpsAnnual, 손익계산서와 같은 주석)
+      // 사업연도 EPS 가 빈칸이면 사유(감사 12차 ① — 빈칸에 사유 필수)
       ...(() => {
         const d = krEpsAnnual(facts, "diluted"), b = krEpsAnnual(facts, "basic");
         const yrs = new Set([...d.summed, ...[...b.summed].filter((y) => !d.values.has(y) || d.summed.has(y))]);
-        return yrs.size ? { cellNotes: columns.map((c) => (c.kind === "fy" && yrs.has(Number(c.key.slice(2))) ? KR_EPS_SUM_NOTE : null)) } : {};
+        const notes = columns.map((c, i) => (c.kind !== "fy" ? null : eps[i] == null ? KR_EPS_BLANK_NOTE : yrs.has(Number(c.key.slice(2))) ? KR_EPS_SUM_NOTE : null));
+        return notes.some((x) => x != null) ? { cellNotes: notes } : {};
       })(),
     },
     { key: "eps_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(eps, aEps) },
@@ -279,14 +296,27 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     "실적·재무상태표·현금흐름: OpenDART 전체 재무제표 (연결)",
     "시가총액: KRX 각 회계연도 마지막 거래일 시가총액(그날의 상장주식수 × 종가)",
     "EV = 보통주 + 우선주 시가총액(우선주 자체 시세) + 총차입금(차입금·사채·리스부채) + 비지배지분 − 현금성자산(현금 + 단기금융상품 + 단기 상각후원가·당기손익 금융자산)",
-    "EBITDA = 영업이익 + 감가상각비 (사업보고서 XBRL 주석 실측)",
+    "EBITDA = 영업이익 + 감가상각비",
+    krDaSourceNote(daS, columns.filter((c) => c.kind === "fy").map(cy)),
   ];
   notes.push(
     ltmFromSnap
       ? `현재/LTM 열 재무상태표(현금·차입금·비지배지분·자본): ${snap!.label} 기준`
       : `현재/LTM 열 재무상태표: 최신 분기 스냅샷 없음 — FY${lastFy} 연말값`,
   );
-  if (approxMcap) notes.push("일부 연도 시가총액: KRX 조회 실패 → 연말 종가 × 현재 상장주식수 근사");
+  // 본표에 리스부채 줄이 없는 해 — 주석 리스부채 가산·차입금 포함·확인 불가(오너 결정 2026-10-05, dart-ev.ts krLeaseFor)
+  for (const t of new Set(bridge.flatMap((b) => [b?.leaseHow ? `총차입금 리스부채: ${b.leaseHow}` : null, b?.leaseUnknown ? `⚠ ${b.leaseUnknown} — 총차입금은 본표 차입금 줄만, EV·EV/EBITDA 공란` : null])))
+    if (t) notes.push(t);
+  // LTM 손익 항목별 대체·근사(분기 자료 부족 → 연간값, EPS 주식수 환산) — 조용한 대체 금지(감사 1차 ⑨)
+  const RK: Record<string, string> = { revenue: "매출액", opIncome: "영업이익", netIncome: "순이익", eps: "EPS" };
+  for (const [k, why] of Object.entries(ttm?.reasons ?? {})) if (why && RK[k]) notes.push(`현재/LTM ${RK[k]}: ${why}`);
+  for (const [k, nm] of [["ocf", "영업활동 현금흐름"], ["capex", "자본지출"]] as const)
+    if (ttm?.krLtmReasons?.[k]) notes.push(`현재/LTM ${nm} 빈칸: ${ttm.krLtmReasons[k]}`);
+  if (dpsLtmFallback) notes.push(`현재/LTM 주당배당금: 최근 12개월 배당기준일 자료 없음 — FY${lastFy} 사업연도 값`);
+  if (facts.ofsYears?.length) notes.push(`${facts.ofsYears.map((y) => `FY${y}`).join("·")}: 연결 재무제표 없음 → 별도 재무제표`);
+  if (approxMcap) notes.push("일부 연도 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사");
+  for (const w of input.warnings ?? []) notes.push(`⚠ ${w}`);
+  if (input.capsError) notes.push(`⚠ KRX 시가총액 조회 실패(3번 재시도 후, ${input.capsError}) — 연도 열 시가총액은 근사(연말 종가 × 현재 상장주식수), 우선주 시가총액·EV 는 공란. 저장하지 않으므로 다음 조회 때 다시 계산`);
   if (evBlocker === "financial") notes.push("금융업 — EV·EV/EBITDA 는 계산하지 않음(예금·보험부채가 영업용 부채)");
   if (evBlocker === "captive-unsplit")
     notes.push("금융 자회사 연결(할부금융 차입금 미분리) — EV·EV/EBITDA 는 표시하지 않음(최종 기준 결정 전)");

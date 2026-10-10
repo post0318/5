@@ -48,6 +48,7 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
   };
   try {
     const isKr = item.market === "kr";
+    let krFail: string | null = null;
     const [ov, foreign, krCons, krMetrics] = await Promise.all([
       getStockOverview(item.market as MarketId, item.symbol, item.yahooSymbol, {
         skipQuarterly: true,
@@ -64,7 +65,10 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
       isKr ? fetchKrForeignOwnership(item.symbol).catch(() => null) : Promise.resolve(null),
       isKr ? fetchKrNaverConsensus(item.symbol).catch(() => null) : Promise.resolve(null),
       isKr
-        ? computeKrOverviewMetrics(item.symbol, item.yahooSymbol).catch(() => null)
+        ? computeKrOverviewMetrics(item.symbol, item.yahooSymbol).catch((e) => {
+            krFail = `한국 지표 조회 실패 — ${e instanceof Error ? e.message : String(e)}`;
+            return null;
+          })
         : Promise.resolve(null),
     ]);
     // 미국 매출·마진 = LTM(오너 결정 2026-09-25) — 매출은 재무 5층 구조 매출 지표 LTM(getTtm), 마진 분자도 같은 LTM
@@ -76,7 +80,7 @@ async function computeDoc(item: UniverseItem): Promise<UniverseOverviewDoc> {
     const usTtm = isUs ? ov.ttm : null;
     const rev = isKr ? (krMetrics?.revenueAnnual ?? null) : isUs ? (usTtm?.revenue ?? null) : (inp?.revenueAnnual ?? null);
     const margin = (n: number | null | undefined) => (n != null && rev ? n / rev : null);
-    const warnings = [...ov.warnings];
+    const warnings = [...ov.warnings, ...(krMetrics?.warnings ?? []), ...(krFail ? [krFail] : [])];
     if (isKr && krMetrics?.last == null) warnings.push("시세 조회 실패");
     // 미국 — 빈 칸·근사 칸의 사유(그림자 채우기 금지, 2026-09-27): 멀티플은 multiples.reasons, 매출·마진은 TTM reasons
     if (isUs) {

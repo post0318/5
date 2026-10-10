@@ -1,6 +1,6 @@
 import "server-only";
 import type { FinancialStatement, FinancialLineItem } from "../types";
-import { type KrFacts, type KrDaInput, daAndAmortSeries, seriesOf, sumOf } from "./dart-facts";
+import { type KrFacts, type KrDaInput, daAndAmortSeries, krDaSourceNote, seriesOf, sumOf } from "./dart-facts";
 import { KR_EPS_SUM_NOTE, krEpsSeries } from "./dart-ev";
 
 /** 손익계산서 화면과 같은 계정 선택의 매출·영업이익·당기순이익(기간 라벨별) — LTM = 최근 4개 분기 열 합(opendart.ts)이 쓴다 */
@@ -91,11 +91,21 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   // 비지배지분이 없는 회사는 DART 손익계산서에 "지배기업 소유주지분" 줄 자체를 생략한다(LS마린솔루션 전 기간·한전기술 2022 —
   // FnGuide 순이익(지배) = 당기순이익, 검증 2026-09-28). 그 기간에 비지배지분 순이익 줄도, 재무상태표 비지배지분 줄도 없을 때만
   // (없음 증명) 지배주주 귀속 = 당기순이익으로 채우고 칸 주석을 단다. 한쪽이라도 있으면 비운 그대로.
-  const niNci = S({ ids: ["ifrs-full_ProfitLossAttributableToNonControllingInterests"], names: ["비지배지분"] });
+  // DART 표준 ID 는 "Noncontrolling"(소문자 c) — 대문자 표기도 함께(감사 1차 2026-10-05: 대문자만 찾아 비지배 순이익 줄을 못 봤다)
+  const niNci = S({ ids: ["ifrs-full_ProfitLossAttributableToNoncontrollingInterests", "ifrs-full_ProfitLossAttributableToNonControllingInterests"], names: ["비지배지분"] });
   const bsNci = seriesOf(facts, ["ifrs-full_NoncontrollingInterests"], ["비지배지분"], "BS");
   const niParentNotes: Record<string, string> = {};
+  // 별도 재무제표 해(연결 재무제표 없음)는 지배·비지배 구분 자체가 없다 — 지배주주 귀속 행은 빈칸 + 칸 주석(감사 1차 ⑧: 예전엔 별도 당기순이익을
+  // 그대로 복사해 060370 2021 "(지배주주 귀속)" = 별도 순이익이었다)
+  const ofsLabel = (l: string) => {
+    const p = facts.periods.find((x) => x.label === l);
+    return facts.fsDiv === "OFS" || (p != null && (facts.ofsYears ?? []).includes(p.year));
+  };
   for (const l of labels)
-    if (niParent[l] == null && netIncome[l] != null && niNci[l] == null && !bsNci[l]) {
+    if (ofsLabel(l) && netIncome[l] != null) {
+      niParent[l] = null;
+      niParentNotes[l] = "별도 재무제표(연결 재무제표 없음) — 지배·비지배 구분 없음, 빈칸";
+    } else if (niParent[l] == null && netIncome[l] != null && niNci[l] == null && !bsNci[l]) {
       niParent[l] = netIncome[l];
       niParentNotes[l] = "비지배지분 없음(손익·재무상태표에 비지배지분 줄 없음) — 당기순이익 = 지배주주 귀속";
     }
@@ -113,8 +123,17 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   // 예전엔 여기만 비워 LG에너지솔루션 2023~2025 가 화면마다 갈렸다(검증 2026-09-24).
   for (const l of labels) if (epsDil[l] == null && epsBasic[l] != null) epsDil[l] = epsBasic[l];
 
-  let daApprox = false;
+  let daNote: string | null = null;
   const da = (() => {
+    // 연간: 하이라이트·재무분석과 같은 함수(daAndAmortSeries — 사업보고서 주석 영업비용 기준 → 공시 현금흐름 줄, 없으면 빈칸). 예전엔 여기만
+    // DART 현금흐름 "감가상각비" 한 줄을 먼저 써서 LS ELECTRIC 2021 이 617.9억(하이라이트 1,014.6억)으로 갈렸다(2026-10-02)
+    if (facts.mode !== "quarter") {
+      const s = daAndAmortSeries(facts, daDoc);
+      const d = blank();
+      for (const p of facts.periods) if (p.kind === "fy") d[p.label] = s.byYear.get(p.year) ?? null;
+      daNote = krDaSourceNote(s, facts.periods.filter((p) => p.kind === "fy").map((p) => p.year));
+      return d;
+    }
     const d = seriesOf(facts, C.da.ids, C.da.names);
     // 폴백 1: CF 조정 세부 라인 합
     if (labels.every((l) => d[l] == null)) {
@@ -125,16 +144,7 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
       ]);
       for (const l of labels) if (alt[l] != null) d[l] = alt[l];
     }
-    // 폴백 2: 사업보고서 XBRL 주석(daDoc) 실측 + 나머지 연도 롤포워드 보정
-    if (labels.every((l) => d[l] == null)) {
-      const { byYear, ltm, exactYear } = daAndAmortSeries(facts, daDoc);
-      for (const p of facts.periods) {
-        const v = p.kind === "ltm" ? ltm : byYear.get(p.year) ?? null;
-        if (v == null) continue;
-        d[p.label] = v;
-        if (p.kind !== "ltm" && p.year !== exactYear) daApprox = true;
-      }
-    }
+    // 분기: 공시 줄이 없으면 빈칸(연간 주석값을 분기 열에 넣지 않는다 — 예전 폴백은 사업연도 값을 그해 분기마다 넣었다, 2026-10-02)
     return d;
   })();
   const ebitda = blank();
@@ -155,11 +165,23 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   });
 
   const hasGross = labels.some((l) => gross[l] != null);
+  // 영업 안에 지분법손익이 있는 투자회사(SK스퀘어 — 영업수익 + 지분법손익 − 영업비용 = 영업이익): 회사 영업비용 줄과 지분법손익 줄을 그대로.
+  // 예전엔 영업비용 = 매출 − 영업이익으로만 구해 −7.39조 같은 음수 영업비용이 나왔다(2026-10-02, FnGuide 대조). 그 식이 정확히 맞는 열만
+  const compOpex = S({ ids: ["ifrs-full_OperatingExpense"], names: ["영업비용"] });
+  const eqInOp = S({ ids: ["ifrs-full_AdjustmentsForUndistributedProfitsOfInvestmentsAccountedForUsingEquityMethod", "ifrs-full_ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod"], names: ["지분법손익"] });
+  const eqOp = blank();
   const totalOpex = (() => {
     const o = blank();
-    for (const l of labels) if (revenue[l] != null && opIncome[l] != null) o[l] = revenue[l]! - opIncome[l]!;
+    for (const l of labels) {
+      if (revenue[l] == null || opIncome[l] == null) continue;
+      if (compOpex[l] != null && eqInOp[l] != null && Math.round(revenue[l]! - compOpex[l]! + eqInOp[l]!) === Math.round(opIncome[l]!)) {
+        o[l] = compOpex[l];
+        eqOp[l] = eqInOp[l];
+      } else o[l] = revenue[l]! - opIncome[l]!;
+    }
     return o;
   })();
+  const hasEqOp = labels.some((l) => eqOp[l] != null);
 
   const items: FinancialLineItem[] = [
     row("매출액", revenue, { depth: 0, isSubtotal: true, isHighlight: true }),
@@ -170,15 +192,28 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
           row("(−) 판매관리비", sga),
           row("(−) 기타 영업비용", otherOpex),
         ]
-      : [row("(−) 영업비용", totalOpex)]),
+      : [row("(−) 영업비용", totalOpex), ...(hasEqOp ? [row("(+) 지분법손익(영업)", eqOp)] : [])]),
     row("영업이익", opIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("(−) 영업외손익", nonOpLoss),
     ...(hasInterest ? [row("(순이자비용)", netIntCost, { depth: 2, italic: true, paren: true })] : []),
     row("세전이익", pretax, { depth: 0, isSubtotal: true, isHighlight: true }),
     row("(−) 법인세비용", tax),
     row("(−) 기타", otherToNi),
-    row("당기순이익", netIncome, { depth: 0, isSubtotal: true, isHighlight: true }),
-    ...(labels.some((l) => niParent[l] != null)
+    row("당기순이익", netIncome, {
+      depth: 0,
+      isSubtotal: true,
+      isHighlight: true,
+      // 손익계산서에 순이익 줄이 없어 지배 + 비지배 귀속으로 채운 해(dart-facts.ts niFromParts)
+      ...(() => {
+        const cn: Record<string, string> = {};
+        for (const p of facts.periods) {
+          const t = p.kind === "fy" ? facts.niFromParts?.get(p.year) : undefined;
+          if (t && netIncome[p.label] != null) cn[p.label] = t;
+        }
+        return Object.keys(cn).length ? { cellNotes: cn } : {};
+      })(),
+    }),
+    ...(labels.some((l) => niParent[l] != null) || Object.keys(niParentNotes).length
       ? [row("(지배주주 귀속)", niParent, { depth: 2, italic: true, paren: true, ...(Object.keys(niParentNotes).length ? { cellNotes: niParentNotes } : {}) })]
       : []),
     row("기본 EPS", epsBasic, { numberFormat: "eps", ...(eB.summed.size ? { cellNotes: epsNote(eB.summed) } : {}) }),
@@ -206,8 +241,6 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     source:
       facts.source +
       " · 표준화 재분류" +
-      (daApprox
-        ? " · 감가상각비: 최근연도는 사업보고서 주석 실측, 이전 연도는 유·무형자산 증감 기반 근사"
-        : ""),
+      (daNote ? ` · ${daNote}` : ""),
   };
 }
