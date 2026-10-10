@@ -16,8 +16,8 @@ import { filingsForDa, instanceFacts } from "./edgar-cf-structure";
  *   GOOG ProceedsFromDebtNetOfIssuanceCosts).
  * - 금액 = 줄 값 × 계산 구조 가중치(재무활동 합계까지의 곱) — 조달·순증감은 그대로, 상환은 부호를 뒤집어 양수(유출액). 회사 고유 줄의 부호 관례가 거꾸로여도 맞는다.
  * - 단기·장기는 라벨이 한쪽만 밝히면 라벨(「long-term debt」·「commercial paper」 등), 섞이거나 없으면 개념 이름.
- * - 순액 판정은 표시 라벨도 본다 — 개념 이름이 조달·상환이어도 라벨이 ", net"·"(repayments)"·"net increase (decrease)" 면 순액(ORCL
- *   orcl_ProceedsFromShort-TermFinancingRelatedToCapitalExpendituresNet 「…, net」). 조달 줄의 "net of issuance costs" 는 순액 아님.
+ * - 순액 판정은 표시 라벨도 본다 — 양방향 표시("(repayments)"·"additions/(reductions)"·"change in"·"net short-term borrowings")나 상환 줄 끝의
+ *   ", net"(AAPL 「Repayments of commercial paper, net」)이면 순액. 조달 줄 끝의 ", net"·"net of issuance costs" 는 비용 차감이라 순액 아님(META).
  * - 값: us-gaap 개념은 companyfacts 의 그 공시 값, 없거나 회사 고유 개념이면 공시 원본(정밀한 값). 원본을 읽었는데 그 줄 사실이 없으면 본표 "—" = 0(오너 규칙 —
  *   모든 기간이 "—" 인 줄 포함). 원본 파일이 없거나 못 읽으면 판독 실패로 그 성격을 그 공시에서 비운다(사유, 0 으로 바꾸지 않음).
  * - 한 기간 = 그 기간을 실은 가장 최근 공시 하나(나중 공시 우선을 표 단위로 — CL 2022 중복 방지). 가장 최근 공시가 판독 실패면 그 기간 빈칸 + 사유
@@ -47,7 +47,9 @@ export type DebtBlank = { concept: string; end: string; reason: string };
 export const DEBT_UNREAD = "본표 차입 줄 판독 불가(공시 원본 값 없음)";
 export const DEBT_MIXED = "본표 차입 줄 분류가 직전 10-K 와 달라 사업연도와 섞을 수 없음";
 
-const DEBT_WORD = /(Debt|Borrowing|Notes(?!Receivable)|CommercialPaper|LinesOfCredit|LineOfCredit|Loans?(?!Receivable)|CreditFacilit|Revolv|Bonds|Debentures|Overdraft|Financing(?!Activit|Cost|Receivable|Fee))/;
+// 금융(Financing)은 차입 뜻이 분명한 꼴만 — 단기 금융(ORCL)·금융 부채(BE FinancingObligations)·금융 약정. NVDA nvda_PaymentForDeferredConsiderationFinancing…
+// (인수 대금 이연 지급)은 차입 아님
+const DEBT_WORD = /(Debt|Borrowing|Notes(?!Receivable)|CommercialPaper|LinesOfCredit|LineOfCredit|Loans?(?!Receivable)|CreditFacilit|Revolv|Bonds|Debentures|Overdraft|Short-?TermFinancing|FinancingObligation|FinancingArrangement)/;
 const DEBT_EXCL = /(Receivable|Stock|Equity|Warrant|Preferred|Investment|Premium|Derivative|Swap|Hedge|Dividend|Interest|Guarantee|Escrow|Restricted|Contingent)/;
 /** 비용 지급 줄(차입 조달·상환 비용) — 조달 줄 이름 끝의 "NetOf…Costs" 는 해당 없음 */
 const COST_PAY = /^Payments?(Of|For)?\w*(Cost|Fee)s?$/;
@@ -56,7 +58,17 @@ const DEBT_NET = /^(ProceedsFromRepayments|ProceedsFromPaymentsFor|RepaymentsOfP
 const DEBT_ISS = /^(Proceeds|Issuance|Borrowings?)/;
 const DEBT_REP = /^(Repayments?|PaymentsFor(RepurchaseOf|Repayment|Extinguishment|Retirement|Redemption)|PaymentsOn|PaymentsOf|PrincipalPayments|Retirement|Redemption)/;
 /** 표시 라벨이 순액 줄인가(조달 줄의 "net of … costs" 는 제외) */
-const NET_LABEL = /,\s*net\s*$|\(repayments?( of)?\)|\(payments?\)|\bnet (increase|decrease|change|borrowings?|repayments?|proceeds|issuances?)\b|increase \(decrease\)|decrease \(increase\)/i;
+// 순액 표시 — 양방향 표시("(repayments)"·"additions/(reductions)"·"change in"·"increase (decrease)")만. 끝의 ", net" 하나는 순액이 아니다(조달 줄의
+// "Proceeds from issuance of long-term debt, net" = 비용 차감 — META. 예전엔 순액으로 봐 장기 순액 = 기타로 빠졌다)
+const NET_LABEL = /\(repayments?( of)?\)|\(payments?\)|\(reductions?\)|\(decreases?\)|\/\s*\(|\bchanges? in\b|\bnet (short-term |long-term )?(increase|decrease|change|borrowings?|repayments?|debt)\b|increase \(decrease\)|decrease \(increase\)|proceeds from repayments|repayments of proceeds|^(repayments?|payments?)\b.*,\s*net\s*$/i;
+/** 라벨이 한 방향(조달·상환)을 밝힌 총액 줄인가 — 개념 이름이 순액 개념이어도 라벨이 정한다(PEP ProceedsFromRepaymentsOfOtherLongTermDebt 「Debt redemptions」) */
+const ISS_LABEL = /^(proceeds|issuances?|borrowings?|additions? (to|of))\b|\bproceeds from\b/i;
+const REP_LABEL = /^(repayments?|payments?( on| of| for| to)?|principal (payments|repayments)|retirements?|redemptions?|reductions? (in|of|to))\b|\b(redemptions?|repayments?|retirements?)\b/i;
+function grossDirByLabel(label: string | null | undefined): "iss" | "rep" | null {
+  if (!label || isNetLabel(label)) return null;
+  const i = ISS_LABEL.test(label) && !/repay|redemp|retire|reduction/i.test(label), r = REP_LABEL.test(label);
+  return i && !r ? "iss" : r && !i ? "rep" : null;
+}
 export function isNetLabel(label: string | null | undefined): boolean {
   return !!label && NET_LABEL.test(label.replace(/net of [a-z ,-]*(costs?|discounts?|fees?|premiums?)/gi, ""));
 }
@@ -75,7 +87,11 @@ export function debtCat(id: string, label?: string | null): DebtCat | null {
   const n = id.replace(/^[^_]+_/, "");
   if (!DEBT_WORD.test(n) || DEBT_EXCL.test(n) || COST_PAY.test(n)) return null;
   if (/Lease/.test(n) && !/Debt\w*Lease/.test(n)) return null;
+  // 라벨이 리스 줄이면(차입 단어 없이) 제외 — TSLA ProceedsFromRepaymentsOfSecuredDebt 「Collateralized lease repayments」
+  if (label && /\blease/i.test(label) && !/\b(debt|borrow)/i.test(label)) return null;
   const short = shortByLabel(label) ?? DEBT_SHORT.test(n);
+  const gross = grossDirByLabel(label);
+  if (gross) return gross === "iss" ? (short ? "issS" : "issL") : short ? "repS" : "repL";
   if (DEBT_NET.test(n) || isNetLabel(label)) return short ? "netS" : null;
   if (DEBT_ISS.test(n) && !/Repay/.test(n)) return short ? "issS" : "issL";
   if (DEBT_REP.test(n)) return short ? "repS" : "repL";
