@@ -1847,17 +1847,54 @@ function unitFamily(unit: string): string {
   return u;
 }
 
-/** data 에 나온 수치를 단위 묶음별로 — 텍스트는 CLAIM_RE 로, 숫자 필드는 그 필드의 단위로 */
-function dataNumbers(payload: CommentPayload): Map<string, number[]> {
-  const out = new Map<string, Set<number>>();
-  const add = (fam: string, n: number) => {
-    if (!Number.isFinite(n)) return;
-    const set = out.get(fam) ?? new Set<number>();
-    set.add(Math.abs(n));
-    out.set(fam, set);
+/**
+ * 같은 대상인지 보는 낱말 — 오너 지적(2026-10-11 — "전혀 다른게 나온걸 어떻게 같다고 보지?"): 숫자·단위만 맞으면 통과시켜
+ * "브렌트유 … 14%"가 같은 주 인피니온 +13.98% 와 맞아 버렸다. 이제 data 의 수치마다 그 수치가 무엇에 관한 것인지(표 행 이름·
+ * 섹터·종목, 글이면 수치 앞뒤 낱말)를 같이 들고, 문장에 그 낱말이 하나라도 있어야 같은 수치로 인정한다.
+ */
+const PARTICLE_RE = /(으로|에서|에게|까지|부터|이며|이고|이다|은|는|이|가|을|를|의|에|로|와|과|도|만|엔|서)$/;
+const STOP_WORDS = new Set([
+  "주간", "이번", "지난", "전주", "전월", "전년", "전년비", "전월비", "대비", "상승", "하락", "증가", "감소", "기록", "예상", "예상치",
+  "수준", "올해", "최근", "기준", "발표", "확대", "축소", "급등", "급락", "강세", "약세", "반등", "마감", "시장", "증시", "지수",
+  "미국", "한국", "국내", "중국", "일본", "유럽", "글로벌", "해외", "투자", "전망", "가격", "관련", "영향", "부담", "우려", "기대",
+  "the", "and", "for", "with", "inc", "corp", "ltd", "co", "group", "plc", "ag", "nv", "sa",
+]);
+
+function subjectTokens(text: string): string[] {
+  const out: string[] = [];
+  for (const w of text.match(/[가-힣]{2,}|[A-Za-z][A-Za-z0-9&]{1,}/g) ?? []) {
+    let t = /[가-힣]/.test(w) ? w.replace(PARTICLE_RE, "") : w.toLowerCase();
+    if (t.length < 2 || STOP_WORDS.has(t)) continue;
+    if (/[가-힣]/.test(t) && t.length > 6) t = t.slice(0, 6); // 긴 복합어는 앞부분으로 비교
+    out.push(t);
+  }
+  return out;
+}
+
+/** 두 낱말 묶음이 같은 대상을 가리키는지 — 한쪽이 다른 쪽으로 시작하면(조사·어미 차이) 같은 낱말로 본다 */
+function sharesSubject(a: string[], b: string[]): boolean {
+  return a.some((x) => b.some((y) => x === y || (x.length >= 2 && y.length >= 2 && (x.startsWith(y) || y.startsWith(x)))));
+}
+
+interface DataNumber {
+  fam: string;
+  value: number;
+  /** 이 수치가 무엇에 관한 것인지 — 표 행 이름·섹터·종목·지표명, 글이면 수치 앞뒤 40자 낱말 */
+  subject: string[];
+}
+
+/** data 에 나온 수치와 그 대상 — 텍스트는 CLAIM_RE 로, 숫자 필드는 그 필드의 단위·이름으로 */
+function dataNumbers(payload: CommentPayload): DataNumber[] {
+  const out: DataNumber[] = [];
+  const add = (fam: string, n: number, subjectText: string) => {
+    if (Number.isFinite(n)) out.push({ fam, value: Math.abs(n), subject: subjectTokens(subjectText) });
   };
   const take = (s: string) => {
-    for (const m of s.replace(/https?:\/\/\S+/g, "").matchAll(CLAIM_RE)) add(unitFamily(m[2]), Number(m[1].replace(/,/g, "")));
+    const t = s.replace(/https?:\/\/\S+/g, "");
+    for (const m of t.matchAll(CLAIM_RE)) {
+      const at = m.index ?? 0;
+      add(unitFamily(m[2]), Number(m[1].replace(/,/g, "")), t.slice(Math.max(0, at - 40), at + m[0].length + 20));
+    }
   };
   const walk = (v: unknown, key = ""): void => {
     if (SKIP_KEYS.has(key)) return;
@@ -1865,28 +1902,29 @@ function dataNumbers(payload: CommentPayload): Map<string, number[]> {
     else if (Array.isArray(v)) v.forEach((x) => walk(x));
     else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, k);
   };
-  walk({ ...payload, centralBankMeetings: [] });
+  walk({ ...payload, centralBankMeetings: [], snapshot: [], sectors: [] });
   for (const r of payload.snapshot) {
-    if (r.value != null) add(unitFamily(r.unit), r.value);
-    if (r.pct != null) add("%", r.pct);
-    if (r.diffBp != null) add("bp", r.diffBp);
+    if (r.value != null) add(unitFamily(r.unit), r.value, r.name);
+    if (r.pct != null) add("%", r.pct, r.name);
+    if (r.diffBp != null) add("bp", r.diffBp, r.name);
   }
   for (const s of payload.sectors) {
-    add("%", s.pct);
-    for (const l of s.leaders) add("%", l.pct);
+    add("%", s.pct, `${s.market} ${s.label}`);
+    for (const l of s.leaders) add("%", l.pct, l.name);
+    for (const h of s.headlines) take(h);
   }
   for (const i of payload.issues) {
-    for (const e of i.earnings ?? []) if (e.surprisePct != null) add("%", e.surprisePct);
+    for (const e of i.earnings ?? []) if (e.surprisePct != null) add("%", e.surprisePct, `${e.ticker} 실적 서프라이즈`);
     for (const m of i.metrics ?? []) {
-      add(unitFamily(m.unit), m.value);
-      if (m.previous != null) add(unitFamily(m.unit), m.previous);
+      add(unitFamily(m.unit), m.value, m.label);
+      if (m.previous != null) add(unitFamily(m.unit), m.previous, m.label);
     }
   }
   for (const m of payload.economyMetrics) {
-    add(unitFamily(m.unit), m.value);
-    if (m.previous != null) add(unitFamily(m.unit), m.previous);
+    add(unitFamily(m.unit), m.value, m.label);
+    if (m.previous != null) add(unitFamily(m.unit), m.previous, m.label);
   }
-  return new Map([...out].map(([k, v]) => [k, [...v]]));
+  return out;
 }
 
 function applyCitationRules(
@@ -1895,22 +1933,25 @@ function applyCitationRules(
   valid: Set<number>,
   invalid: Set<number>,
 ): { cleaned: ConnectorComments; reasons: Map<string, string> } {
-  const allowed = dataNumbers(payload);
-  const inData = (n: number, unit: string) => {
+  const known = dataNumbers(payload);
+  /** 같은 단위·같은 값(반올림 범위)이면서 **같은 대상**(문장에 그 수치의 대상 낱말이 있음)인 data 수치가 있는가 */
+  const inData = (n: number, unit: string, sentenceSubject: string[]) => {
     const a = Math.abs(n);
     const fam = unitFamily(unit);
     const tol = fam === "bp" ? 1 : a < 20 ? 0.051 : Math.max(0.5, a * 0.002);
-    return (allowed.get(fam) ?? []).some((x) => Math.abs(x - a) <= tol);
+    return known.some((k) => k.fam === fam && Math.abs(k.value - a) <= tol && sharesSubject(k.subject, sentenceSubject));
   };
   const sentenceProblem = (s: string): string | null => {
     const ids = [...s.matchAll(CITE_RE)].flatMap((m) => m[1].split(/[,，]/).map((x) => Number(x.trim())));
     const bad = ids.filter((id) => invalid.has(id) || !valid.has(id));
     if (bad.length) return `무효 출처 [${bad.join(",")}] 인용(기간 밖·블로그·없는 번호)`;
     const cited = ids.length > 0;
-    for (const m of s.replace(CITE_RE, "").matchAll(CLAIM_RE)) {
+    const body = s.replace(CITE_RE, "");
+    const subj = subjectTokens(body);
+    for (const m of body.matchAll(CLAIM_RE)) {
       const n = Number(m[1].replace(/,/g, ""));
-      if (!Number.isFinite(n) || inData(n, m[2])) continue;
-      if (!cited) return `출처 번호 없는 수치 "${m[0].trim()}"(그 주 data 에 없음)`;
+      if (!Number.isFinite(n) || inData(n, m[2], subj)) continue;
+      if (!cited) return `출처 번호 없는 수치 "${m[0].trim()}"(그 주 data 에 같은 대상의 값 없음)`;
     }
     return null;
   };
