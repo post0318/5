@@ -2,12 +2,14 @@
  * 검증기 DART 원자료 조회(한국) — 앱 코드와 무관하게 OpenDART 를 직접 부른다.
  *
  * 디스크 캐시(cache.mjs) 열쇠 = 그 보고서의 **최신 접수번호**. 회사마다 실행당 1회 정기공시 목록(list.json)을 받아
- * (사업연도·보고서 코드) → 최신 접수번호를 정하고, 같으면 디스크, 바뀌었으면(정정 공시) 새로 받는다. 목록 자체는 캐시하지 않는다.
+ * (사업연도·보고서 코드) → 최신 접수번호를 정하고, 같으면 디스크, 바뀌었으면(정정 공시) 새로 받는다. 목록은 디스크에 6시간 보관(2026-10-10 — 아래 dartList).
+ * XBRL 점검(status 800) 응답은 30분 기록해 두고 그 사이 XBRL 요청을 보내지 않는다(점검 응답 자체는 캐시하지 않음 — 호출부엔 전과 같은 조회 실패).
  * "013 자료 없음"도 그때의 판본("none" 또는 접수번호)과 함께 캐시 — 다음 실행 때 목록에 보고서가 생기면 판본이 달라져 무효.
  * 요청은 전부 한 줄로(간격 300ms) — 몰아 보내면 이 PC·서버 연결이 약 1시간 막힌다(실측 2026-10-01).
  * 조회 실패는 캐시하지 않고 던진다(호출부가 실패·종료코드 1).
  */
 import { unzipSync, strFromU8 } from "fflate";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { makeDartQuota, DartStopError } from "../lib/dart-quota.mjs";
 
 const B = "https://opendart.fss.or.kr/api";
@@ -56,24 +58,66 @@ async function getJson(path, params, kind) {
   return j;
 }
 
-// ── 정기공시 목록(실행당 회사별 1회, 캐시 안 함) ──
+// ── 정기공시 목록(회사별 — 디스크에 6시간 보관, 오너 지시 2026-10-10 "왜 조회를 계속 요청하나") ──
+// 열쇠 = 회사·조회 시작 연도(조회 범위). 6시간 안이면 디스크 목록을 쓴다 — 그 사이 나온 정정 공시는 실패가 난 종목만 목록을 새로 받아 확인한다
+// (dartListRefresh — 판본이 바뀌었으면 호출부가 그 종목을 새 판본으로 다시 검증, 앱과 판본이 어긋난 것은 실패가 아니라 판본 불일치로 표시)
+const LIST_TTL_MS = 6 * 3600e3;
 const listMemo = new Map();
+const listInfo = new Map(); // corp → { fromDisk, at }
 const RE_NM = /(사업|반기|분기)보고서\s*\((\d{4})\.(\d{2})\)/;
+async function fetchListRows(corp, bgn) {
+  const end = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
+  const rows = [];
+  for (let page = 1; page <= 10; page++) {
+    const j = await getJson("list.json", { corp_code: corp, bgn_de: `${bgn}0101`, end_de: end, pblntf_ty: "A", page_count: "100", page_no: String(page) }, "list.json");
+    if (j.status === "013") break;
+    rows.push(...(j.list ?? []));
+    if (page >= Number(j.total_page ?? 1)) break;
+  }
+  // 필요한 칸만 보관
+  return rows.map((r) => ({ report_nm: r.report_nm, rcept_no: r.rcept_no, rcept_dt: r.rcept_dt }));
+}
+/** 목록을 어디서 받았는지(디스크 보관본이면 그 시각) */
+export function dartListInfo(corp) { return listInfo.get(corp) ?? null; }
+/**
+ * 목록을 새로 받아 보관본과 비교 — 바뀐 보고서(최신 접수번호가 달라진 사업연도·보고서) 목록. 바뀌었으면 이번 실행의 목록도 새 것으로 바꾼다
+ * (그 회사 재무제표 캐시는 판본 = 최신 접수번호라 자연히 새로 받는다). 디스크 보관본이 아니었으면(방금 받음) 요청하지 않고 []
+ */
+export async function dartListRefresh(corp) {
+  const inf = listInfo.get(corp);
+  // 보관본이 30분 안이면 앱 공시 목록(30분 보관)보다 오래되지 않았다 — 다시 받지 않는다(실패가 계속되는 종목이 실행마다 1건씩 쓰지 않게)
+  if (!inf?.fromDisk || !listMemo.has(corp) || Date.now() - inf.at < 30 * 60e3) return [];
+  const old = await listMemo.get(corp);
+  const bgn = new Date().getFullYear() - 8;
+  const rows = await fetchListRows(corp, bgn);
+  if (CACHE) CACHE.put("list", `${corp}_${bgn}`, "v1", { at: Date.now(), rows });
+  const fresh = buildList(rows);
+  listInfo.set(corp, { fromDisk: false, at: Date.now() });
+  const changed = fresh.reports.filter((x) => old.latest(x.year, x.code)?.rcept !== fresh.latest(x.year, x.code)?.rcept && fresh.latest(x.year, x.code)?.rcept === x.rcept);
+  if (changed.length) listMemo.set(corp, Promise.resolve(fresh));
+  return changed;
+}
 /**
  * 회사의 정기공시 — reports: [{ year, code, month, rcept, nm }] (정정본 포함), latest(year, code) = 최신 접수번호.
  * code: 11011 사업 · 11012 반기 · 11013 1분기 · 11014 3분기(결산월 기준 3·6·9개월째)
  */
 export function dartList(corp) {
   if (!listMemo.has(corp)) listMemo.set(corp, (async () => {
-    const cy = new Date().getFullYear();
-    const end = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
-    const rows = [];
-    for (let page = 1; page <= 10; page++) {
-      const j = await getJson("list.json", { corp_code: corp, bgn_de: `${cy - 8}0101`, end_de: end, pblntf_ty: "A", page_count: "100", page_no: String(page) }, "list.json");
-      if (j.status === "013") break;
-      rows.push(...(j.list ?? []));
-      if (page >= Number(j.total_page ?? 1)) break;
+    const bgn = new Date().getFullYear() - 8;
+    const hit = CACHE ? CACHE.get("list", `${corp}_${bgn}`, "v1") : undefined;
+    let rows;
+    if (hit && Date.now() - hit.at < LIST_TTL_MS) { rows = hit.rows; listInfo.set(corp, { fromDisk: true, at: hit.at }); }
+    else {
+      rows = await fetchListRows(corp, bgn);
+      if (CACHE) CACHE.put("list", `${corp}_${bgn}`, "v1", { at: Date.now(), rows });
+      listInfo.set(corp, { fromDisk: false, at: Date.now() });
     }
+    return buildList(rows);
+  })());
+  return listMemo.get(corp);
+}
+function buildList(rows) {
+  {
     const raw = rows.map((r) => ({ m: RE_NM.exec(r.report_nm ?? ""), r })).filter((x) => x.m);
     // 결산월 = 사업보고서의 월(가장 흔한 값)
     const am = raw.filter((x) => x.m[1] === "사업").map((x) => Number(x.m[3]));
@@ -111,8 +155,7 @@ export function dartList(corp) {
         return vs.sort((a, b) => b.year - a.year || ord[b.code] - ord[a.code])[0] ?? null;
       },
     };
-  })());
-  return listMemo.get(corp);
+  }
 }
 
 async function versioned(ns, key, ver, fetcher) {
@@ -145,14 +188,33 @@ export async function dartAlot(corp, year, reprt = "11011") {
   });
 }
 
+// ── XBRL 점검(status 800) 기록 — 점검 중엔 같은 응답만 오므로 30분 동안 요청하지 않는다. 점검 해제 확인 스크립트(~/kr-dart-wait.sh, 1시간마다 1건)가
+//    점검을 확인할 때마다 until(다음 확인 + 5분)을 적어 그 사이 검증기 XBRL 요청 0, 해제되면 파일을 지운다
+const MAINT_FILE = new URL("../../reports/.dart-xbrl-maint.json", import.meta.url);
+const MAINT_TTL_MS = 30 * 60e3;
+function maintSince() {
+  try { const j = JSON.parse(readFileSync(MAINT_FILE, "utf8")); return Date.now() < (j.until ?? j.at + MAINT_TTL_MS) ? j : null; } catch { return null; }
+}
+export const xbrlMaint = { skipped: 0 };
+async function xbrlZip(rcept, reprt) {
+  const m = maintSince();
+  if (m) { xbrlMaint.skipped++; throw new Error(`DART XBRL 점검(status 800, ${new Date(m.at + 9 * 3600e3).toISOString().slice(11, 16)} KST 기록 — 30분간 요청 생략) ${rcept}`); }
+  const r = await getRaw(`${B}/fnlttXbrl.xml?crtfc_key=${KEY}&rcept_no=${rcept}&reprt_code=${reprt}`, `XBRL ${rcept}`);
+  const buf = new Uint8Array(await r.arrayBuffer());
+  if (/<status>800<\/status>/.test(strFromU8(buf.slice(0, 300)))) {
+    try { mkdirSync(new URL(".", MAINT_FILE), { recursive: true }); writeFileSync(MAINT_FILE, JSON.stringify({ at: Date.now(), rcept })); } catch { /* 기록 실패는 무시 — 다음 요청이 다시 확인 */ }
+    throw new Error(`DART XBRL 점검(status 800) ${rcept}`);
+  }
+  return buf;
+}
+
 // XBRL 원본은 크다(수 MB) — 필요한 사실만 텍스트(JSON)로 남긴다. 거르는 규칙이 바뀌면 FILTER 판을 올려 옛 캐시를 무효로
 const XBRL_FILTER_VER = "f2";
 const XBRL_KEEP = /Lease|Depreciat|Amorti[sz]|RightofuseAssets|RightOfUseAssets|InvestmentPropert|Impairment/i;
 /** 보고서 XBRL 의 숫자 사실 중 감가상각·리스 관련만 [개념, 컨텍스트, 값]. 판본 = 접수번호(바뀌지 않음) */
 export async function dartXbrlFacts(rcept, reprt) {
   return versioned("xbrl", `${rcept}_${reprt}`, `${rcept}-${XBRL_FILTER_VER}`, async () => {
-    const r = await getRaw(`${B}/fnlttXbrl.xml?crtfc_key=${KEY}&rcept_no=${rcept}&reprt_code=${reprt}`, `XBRL ${rcept}`);
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const buf = await xbrlZip(rcept, reprt);
     if (buf.length < 100) throw new Error(`DART XBRL ${rcept} 빈 응답(${buf.length}B)`);
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART XBRL ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
@@ -172,8 +234,7 @@ export async function dartXbrlFacts(rcept, reprt) {
  */
 export async function dartXbrlCum(rcept, reprt) {
   return versioned("xbrl-cum", `${rcept}_${reprt}`, `${rcept}-c1`, async () => {
-    const r = await getRaw(`${B}/fnlttXbrl.xml?crtfc_key=${KEY}&rcept_no=${rcept}&reprt_code=${reprt}`, `XBRL ${rcept}`);
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const buf = await xbrlZip(rcept, reprt);
     if (buf.length < 100) throw new Error(`DART XBRL ${rcept} 빈 응답(${buf.length}B)`);
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART XBRL ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }

@@ -516,14 +516,20 @@ export function krEpsByYear(facts: KrFacts): Map<number, number> {
  * 계속·중단영업 EPS 는 표준 계정 ID 로만 찾는다 — 계정명 "계속영업순이익" 은 NAVER 가 순이익 줄에도 쓴다.
  */
 export type KrEpsKind = "basic" | "diluted";
+// 기본·희석 합친 줄("보통주 기본 및 희석주당이익" — 373220)은 기본·희석 모두의 전체 EPS
 const EPS_TOTAL: Record<KrEpsKind, { ids: string[]; names: string[] }> = {
-  diluted: { ids: ["ifrs-full_DilutedEarningsLossPerShare"], names: ["희석주당이익", "희석주당순이익", "보통주희석주당이익"] },
-  basic: { ids: ["ifrs-full_BasicEarningsLossPerShare"], names: ["기본주당이익", "기본주당순이익", "기본및희석주당이익", "보통주기본주당이익"] },
+  diluted: { ids: ["ifrs-full_DilutedEarningsLossPerShare"], names: ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "기본및희석주당이익", "보통주기본및희석주당이익", "보통주기본및희석주당순이익"] },
+  basic: { ids: ["ifrs-full_BasicEarningsLossPerShare"], names: ["기본주당이익", "기본주당순이익", "기본및희석주당이익", "보통주기본주당이익", "보통주기본및희석주당이익", "보통주기본및희석주당순이익"] },
 };
+/**
+ * 전체 EPS ID 를 달았지만 계정명이 계속·중단영업 주당이익인 줄 — 태그 오류(373220 2023 사업보고서: "보통주 기본 및 희석주당계속영업이익" 에
+ * DilutedEarningsLossPerShare). 전체 EPS 로 쓰지 않는다(2021 계속영업 3,036 이 전체 3,963 대신 나왔다, 감사 11차 K7). 계속영업 줄은 EPS_CONT 이름으로 잡힌다
+ */
+const notTotalEps = (l: KrFactLine) => /^(?=.*(계속영업|중단영업))(?!.*계속영업.*중단영업)/.test(l.accountName.replace(/\s/g, ""));
 // 계정명은 "주당" 이 들어간 것만(순이익 줄 "계속영업순이익" 과 겹치지 않게)
 const EPS_CONT: Record<KrEpsKind, { ids: string[]; names: string[] }> = {
-  diluted: { ids: ["ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations"], names: ["계속영업희석주당이익", "계속영업희석주당순이익"] },
-  basic: { ids: ["ifrs-full_BasicEarningsLossPerShareFromContinuingOperations"], names: ["계속영업기본주당이익", "계속영업기본주당순이익"] },
+  diluted: { ids: ["ifrs-full_DilutedEarningsLossPerShareFromContinuingOperations"], names: ["계속영업희석주당이익", "계속영업희석주당순이익", "보통주기본및희석주당계속영업이익"] },
+  basic: { ids: ["ifrs-full_BasicEarningsLossPerShareFromContinuingOperations"], names: ["계속영업기본주당이익", "계속영업기본주당순이익", "보통주기본및희석주당계속영업이익"] },
 };
 const EPS_DISC: Record<KrEpsKind, { ids: string[]; names: string[] }> = {
   diluted: { ids: ["ifrs-full_DilutedEarningsLossPerShareFromDiscontinuedOperations"], names: ["중단영업희석주당이익", "중단영업희석주당순이익"] },
@@ -534,7 +540,7 @@ export const KR_EPS_SUM_NOTE = "전체 EPS 미공시 — 계속영업 + 중단�
 /** 기간 라벨별(연간·분기 화면) 전체 EPS. summed = 계속 + 중단영업 합으로 채운 라벨 */
 export function krEpsSeries(facts: KrFacts, kind: KrEpsKind): { values: Record<string, number | null>; summed: Set<string> } {
   const SJ = ["IS", "CIS"];
-  const values = seriesOf(facts, EPS_TOTAL[kind].ids, EPS_TOTAL[kind].names, SJ);
+  const values = seriesOf(facts, EPS_TOTAL[kind].ids, EPS_TOTAL[kind].names, SJ, notTotalEps);
   const cont = seriesOf(facts, EPS_CONT[kind].ids, EPS_CONT[kind].names, SJ);
   const disc = seriesOf(facts, EPS_DISC[kind].ids, EPS_DISC[kind].names, SJ);
   const summed = new Set<string>();
@@ -549,7 +555,7 @@ export function krEpsSeries(facts: KrFacts, kind: KrEpsKind): { values: Record<s
 /** 사업연도별 전체 EPS(6개년 연간 시계열). summed = 계속 + 중단영업 합으로 채운 해 */
 export function krEpsAnnual(facts: KrFacts, kind: KrEpsKind): { values: Map<number, number>; summed: Set<number> } {
   const SJ = ["IS", "CIS"];
-  const values = annualSeries(facts, EPS_TOTAL[kind].ids, EPS_TOTAL[kind].names, SJ);
+  const values = annualSeries(facts, EPS_TOTAL[kind].ids, EPS_TOTAL[kind].names, SJ, notTotalEps);
   const cont = annualSeries(facts, EPS_CONT[kind].ids, EPS_CONT[kind].names, SJ);
   const disc = annualSeries(facts, EPS_DISC[kind].ids, EPS_DISC[kind].names, SJ);
   const summed = new Set<number>();

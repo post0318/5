@@ -77,7 +77,7 @@ import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { loadBbg } from "./reference/bbg.mjs";
 import { makeDiskCache } from "./verify-kr/cache.mjs";
-import { configureDart, dartFnltt, dartStats, dartQuota } from "./verify-kr/dart.mjs";
+import { configureDart, dartFnltt, dartStats, dartQuota, dartListRefresh, xbrlMaint } from "./verify-kr/dart.mjs";
 import { configureKrx, krxStats } from "./verify-kr/krx.mjs";
 import { configureCalendar } from "./verify-kr/calendar.mjs";
 import { krOriginalLayers, closeKrLayers } from "./verify-kr/layers.mjs";
@@ -11138,7 +11138,8 @@ async function verifyKr(sym) {
           if (!L) return null;
           const T = kind === "d" ? [["ifrs-full_DilutedEarningsLossPerShare"], ["희석주당이익", "희석주당순이익", "보통주희석주당이익", "희석주당이익손실", "보통주기본및희석주당이익", "보통주기본및희석주당순이익", "기본및희석주당이익"]]
             : [["ifrs-full_BasicEarningsLossPerShare"], ["기본주당이익", "기본주당순이익", "보통주기본주당이익", "기본주당이익손실", "기본및희석주당이익", "보통주기본및희석주당이익", "보통주기본및희석주당순이익"]];
-          const tot = dartPick(L, ["IS", "CIS"], ...T, f);
+          // 전체 EPS ID 를 달았지만 계정명이 계속·중단영업 주당이익인 줄은 태그 오류 — 전체 EPS 후보에서 뺀다(373220 2023 사업보고서, 감사 11차 K7)
+          const tot = dartPick(L.filter((r) => !(/^ifrs-full_(Basic|Diluted)EarningsLossPerShare$/.test(r.account_id ?? "") && /^(?=.*(계속영업|중단영업))(?!.*계속영업.*중단영업)/.test(String(r.account_nm ?? "").replace(/\s/g, "")))), ["IS", "CIS"], ...T, f);
           if (tot != null) return { v: tot, how: "" };
           // 기본·희석 합친 줄(LG "보통주 기본/희석주당순이익") — 하나거나 값이 같으면 그 값, 둘이 다르면 차이가 그 해 중단영업손익과 부호가 같은 쪽
           { const nm = (x) => String(x ?? "").replace(/\s|\(.*?\)/g, "");
@@ -11460,6 +11461,26 @@ let idx = 0;
 // 외부 대조 행 분류 — 공통모드 소스만 일치한 행(verdict 가 공통모드로 시작)은 "외부 전부일치"가 아니다
 const extCommonOnly = (x) => !!x.verdict && x.verdict.startsWith(COMMON_LABEL);
 const extAllMatch = (x) => !!x.matched && !!x.verdict && !/불일치/.test(x.verdict) && !extCommonOnly(x);
+/**
+ * 한국 — 공시 목록은 디스크에 6시간 보관한다(dart.mjs). 실패가 난 종목만 목록을 새로 받아(1건) 그 사이 정정 공시가 나왔는지 본다. 나왔으면 새 판본으로
+ * 그 종목을 다시 검증하고, 정정 공시가 오늘 나온 것이면 남은 실패는 앱 공시 목록(30분 보관)과의 판본 불일치일 수 있어 실패가 아니라 재실행 필요로
+ */
+async function krListVersionCheck(s, r) {
+  const corp = KR_CORP.get(s);
+  if (!corp || r.error || !r.checks?.some((c) => c.status === FAIL)) return r;
+  let changed;
+  try { changed = await dartListRefresh(corp); } catch (e) { r.hardErrors?.push(`공시 목록 판본 확인(재조회) 실패: ${String(e?.message ?? e).slice(0, 100)}`); return r; }
+  if (!changed.length) return r;
+  const what = changed.map((x) => `${x.nm}(${x.rcept})`).join(" · ");
+  console.log(`${s.padEnd(7)} 정정 공시 판본 변경 ${what} — 새 판본으로 재검증`);
+  const r2 = await verifyKr(s);
+  const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
+  const todays = changed.filter((x) => x.dt === today);
+  for (const c of r2.checks)
+    if (c.status === FAIL && todays.length) Object.assign(c, { status: NA, note: `판본 불일치 — 오늘 정정 공시 ${todays.map((x) => x.rcept).join("·")}(앱 공시 목록은 30분 보관 — 앱이 아직 옛 판본일 수 있음) · 재실행 필요 · ${c.note ?? ""}` });
+  r2.checks.push({ layer: "판본", name: "공시 목록 판본(디스크 보관본 → 새 목록)", col: "-", status: PASS, note: `보관본 뒤 정정 공시 ${what} — 새 판본으로 재검증함` });
+  return r2;
+}
 async function worker() {
   while (idx < syms.length) {
     const s = syms[idx++];
@@ -11467,7 +11488,8 @@ async function worker() {
     const dq = MARKET === "kr" ? dartQuota()?.stopped : null;
     if (dq) { results.push({ sym: s, error: `${dq.message} — 상한 도달, 남은 종목 검증불가`, checks: [], review: [] }); console.log(`${s.padEnd(7)} 오류: 상한 도달 — 검증불가(${dq.kind})`); continue; }
     try {
-      const r = MARKET === "kr" ? await verifyKr(s) : await verifyUs(s);
+      let r = MARKET === "kr" ? await verifyKr(s) : await verifyUs(s);
+      if (MARKET === "kr") r = await krListVersionCheck(s, r);
       results.push(r);
       const f = r.checks.filter((c) => c.status === FAIL).length;
       const n = r.checks.filter((c) => c.status === NA).length;
@@ -11648,7 +11670,7 @@ if (MARKET === "us" && SGA_MODE) {
 if (KR_CACHE) {
   const cs = KR_CACHE.summary();
   console.log(`
-DART·KRX 디스크 캐시 — 적중 ${cs.hit} · 미스 ${cs.miss} · 새로 씀 ${cs.write} · 정리(옛 판본 ${cs.deletedOld} · 90일 미사용 ${cs.deletedIdle} · 상한 초과 ${cs.deletedCap}) · 총 ${cs.files}파일 ${(cs.bytes / 1024 ** 2).toFixed(1)}MB · DART 요청 ${dartStats.requests} · KRX 요청 ${krxStats.requests}`);
+DART·KRX 디스크 캐시 — 적중 ${cs.hit} · 미스 ${cs.miss} · 새로 씀 ${cs.write} · 정리(옛 판본 ${cs.deletedOld} · 90일 미사용 ${cs.deletedIdle} · 상한 초과 ${cs.deletedCap}) · 총 ${cs.files}파일 ${(cs.bytes / 1024 ** 2).toFixed(1)}MB · DART 요청 ${dartStats.requests}(XBRL 점검 기록으로 생략 ${xbrlMaint.skipped}) · KRX 요청 ${krxStats.requests}`);
   const qs = dartQuota()?.state();
   if (qs) console.log(`DART 하루 요청(검증기) ${qs.count}/${qs.cap} — ${qs.day} KST${qs.stopped ? ` · 중단: ${qs.stopped.message}` : ""}`);
   await closeKrLayers();

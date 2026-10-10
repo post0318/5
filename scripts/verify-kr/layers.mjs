@@ -554,6 +554,8 @@ function highlightRowsLayer(c) {
     add("K7", `하이라이트 ${label}`, col, app === exp ? (common ? { status: COMMON, app, src: exp, note: `${how ?? ""} · 공통모드 — 이 열 감가상각이 K3 에서 공통모드(적재본과만 일치)` } : { status: PASS, app, src: exp, note: how }) : { status: FAIL, app, src: exp, note: `앱 ${app ?? "빈칸"} vs 기대 ${exp ?? "빈칸"} · ${how ?? ""}` });
   };
   const cols = [...yearsShown.map((y) => ({ col: `${y}Y`, y })), ...(li >= 0 ? [{ col: "LTM", y: null }] : [])];
+  // 회사 기준이 별도(연결 재무제표를 낸 해가 하나도 없음 — 033100)면 앱이 표시 구간 밖 해도 별도로 읽는다 — 첫 열 전년 값이 있다
+  const cfsCo = [...yearSrc.values()].some((s0) => s0?.fsDiv === "CFS");
   let prev = null;
   for (const { col, y } of cols) {
     const e = y != null
@@ -575,10 +577,10 @@ function highlightRowsLayer(c) {
     // 성장률 — 왼쪽 열(첫 열은 DART 전년)
     // 첫 열의 전년 = 표시 구간 밖 — 앱은 표시 구간 밖 해를 연결 재무제표로만 읽는다(별도 채움은 표시 구간 안만, CLAUDE.md 2026-10-04). 그해가 별도 기준이면
     // 전년 값이 없어 성장률 빈칸이 기대치(060370 2021)
-    const pRev = prev ? prev.rev : y != null ? (yearSrc.get(y)?.fsDiv === "CFS" ? fromOwner(y - 1, [...IT.rev, ["IS", "CIS"]]) : null) : undefined;
+    const pRev = prev ? prev.rev : y != null ? (yearSrc.get(y)?.fsDiv === "CFS" || !cfsCo ? fromOwner(y - 1, [...IT.rev, ["IS", "CIS"]]) : null) : undefined;
     chk("revenue_yoy", "매출 성장률", col, e.rev === undefined || pRev === undefined ? undefined : yoy(e.rev, pRev), "(당기 − 전기) ÷ |전기| × 100");
     // EPS 성장률(감사 11차 ② — 무검사였다): EPS = A층 DART 판독(그해를 담은 가장 최근 보고서 희석 → 기본, 계속 + 중단 합), 첫 열 전년은 DART 직접. LTM = K4 기대치
-    const pEps = prev ? prev.eps : y != null ? (yearSrc.get(y)?.fsDiv === "CFS" ? epsOwner(y - 1) : null) : undefined;
+    const pEps = prev ? prev.eps : y != null ? (yearSrc.get(y)?.fsDiv === "CFS" || !cfsCo ? epsOwner(y - 1) : null) : undefined;
     chk("eps_yoy", "EPS 성장률", col, e.eps === undefined || pEps === undefined ? undefined : yoy(e.eps, pEps), "(당기 EPS − 전기 EPS) ÷ |전기 EPS| × 100");
     prev = e;
   }
@@ -857,7 +859,7 @@ async function ltmLayer(c) {
     const annual = await R(Y - 1, "11011");
     // 전체 EPS(희석 → 기본), 전체 EPS 미공시면 계속영업 + 중단영업 주당이익(공시 두 값 — CLAUDE.md EPS 단일 기준)
     const epsOf = (rows, f) => {
-      for (const it of [EPS_D, EPS_B]) { const o = oneVal(pick(rows ?? [], it), f); if (o.v != null) return o.v; }
+      for (const it of [EPS_D, EPS_B]) { const o = oneVal(pick(epsTotalRows(rows), it), f); if (o.v != null) return o.v; }
       for (const k of ["Diluted", "Basic"]) {
         const c0 = oneVal(pick(rows ?? [], [[`ifrs-full_${k}EarningsLossPerShareFromContinuingOperations`], []]), f).v;
         if (c0 == null) continue;
@@ -980,9 +982,16 @@ function qSource(corp, basis) {
 }
 
 /** 전체 EPS(희석 → 기본), 전체 EPS 미공시면 계속영업 + 중단영업 주당이익 */
+/**
+ * 전체 EPS 후보 줄 — 전체 EPS ID(Basic/DilutedEarningsLossPerShare)를 달았지만 계정명이 계속·중단영업 주당이익인 줄은 태그 오류라 뺀다
+ * (373220 2023 사업보고서 "보통주 기본 및 희석주당계속영업이익" 에 DilutedEarningsLossPerShare — 감사 11차 K7)
+ */
+function epsTotalRows(rows) {
+  return (rows ?? []).filter((r) => !(/^ifrs-full_(Basic|Diluted)EarningsLossPerShare$/.test(r.account_id ?? "") && /^(?=.*(계속영업|중단영업))(?!.*계속영업.*중단영업)/.test(String(r.account_nm ?? "").replace(/\s/g, ""))));
+}
 function epsOfRows(rows, f) {
   const pick = (it) => pickRow(rows ?? [], it[0], it[1]);
-  for (const it of [EPS_D, EPS_B]) { const o = oneVal(pick(it), f); if (o.v != null) return o.v; }
+  for (const it of [EPS_D, EPS_B]) { const o = oneVal(pickRow(epsTotalRows(rows), it[0], it[1]), f); if (o.v != null) return o.v; }
   for (const k of ["Diluted", "Basic"]) {
     const c0 = oneVal(pick([[`ifrs-full_${k}EarningsLossPerShareFromContinuingOperations`], []]), f).v;
     if (c0 == null) continue;
