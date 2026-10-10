@@ -106,8 +106,9 @@ const TOOLS = [
         sources: {
           type: "array",
           description:
-            "웹검색으로 확인한 출처 — date(발행일 YYYY-MM-DD) 필수. 리포트 주(앞뒤 주말 포함) 밖이거나 날짜 없는 출처는 버려진다. " +
-            "남은 출처가 있으면 입력에 없는 수치도 인용 가능(없으면 그런 문장은 버려짐). 증권사를 인용하면 그 증권사가 data 나 출처 제목에 있어야 한다",
+            "웹검색으로 확인한 출처 — date(발행일 YYYY-MM-DD) 필수. 본문 문장 끝의 [번호]가 이 배열의 순번(1부터)이다. " +
+            "리포트 주(앞뒤 주말 포함) 밖·날짜 없음·블로그/커뮤니티/SNS 출처는 무효이고, 무효 번호를 단 문장과 data 에 없는 수치를 " +
+            "번호 없이 쓴 문장은 지워진다. 증권사를 인용하면 그 증권사가 data 나 유효 출처 제목에 있어야 한다",
           items: {
             type: "object",
             properties: { title: { type: "string" }, url: { type: "string" }, date: { type: "string" } },

@@ -571,16 +571,28 @@ export async function saveConnectorDraft(opts: {
   // 다음 주 월요일까지 발행된 글만 근거로 인정한다. 날짜 없는 출처도 버린다.
   const lo = new Date(Date.parse(`${week.weekStart}T00:00:00Z`) - 2 * 86_400_000).toISOString().slice(0, 10);
   const hi = new Date(Date.parse(`${week.weekEnd}T00:00:00Z`) + 3 * 86_400_000).toISOString().slice(0, 10);
+  // 출처 등급(오너 2026-10-10 — 개인 블로그를 근거로 쓴 사례): 블로그·커뮤니티·SNS 는 근거로 인정하지 않는다.
+  // 본문의 [번호] 는 sources 배열 순번(1부터)이라 버린 출처도 번호는 그대로 두고 "무효"로만 표시한다.
   const rejectedSources: { url: string; reason: string }[] = [];
-  const sources = opts.sources
-    .filter((x) => {
-      if (!/^https?:\/\//.test(x.url)) return false;
-      const d = /^\d{4}-\d{2}-\d{2}$/.test(x.date ?? "") ? (x.date as string) : null;
-      if (!d) rejectedSources.push({ url: x.url, reason: "발행일(date) 없음" });
-      else if (d < lo || d > hi) rejectedSources.push({ url: x.url, reason: `발행일 ${d} 이 리포트 주(${lo}~${hi}) 밖` });
-      return d != null && d >= lo && d <= hi;
-    })
-    .slice(0, 100);
+  const sources: { id: number; title: string; url: string; date: string }[] = [];
+  const invalidIds: number[] = [];
+  opts.sources.slice(0, 100).forEach((x, i) => {
+    const id = i + 1;
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(x.date ?? "") ? (x.date as string) : null;
+    const reason = !/^https?:\/\//.test(x.url)
+      ? "주소 형식 아님"
+      : isLowGradeSource(x.url)
+        ? "개인 블로그·커뮤니티·SNS 는 근거로 인정하지 않음"
+        : !d
+          ? "발행일(date) 없음"
+          : d < lo || d > hi
+            ? `발행일 ${d} 이 리포트 주(${lo}~${hi}) 밖`
+            : null;
+    if (reason || !d) {
+      rejectedSources.push({ url: x.url, reason: `[${id}] ${reason}` });
+      invalidIds.push(id);
+    } else sources.push({ id, title: x.title, url: x.url, date: d });
+  });
   const { comments, warnings } = await assembleConnectorComments(
     inputs.snapshot,
     inputs.top,
@@ -589,7 +601,7 @@ export async function saveConnectorDraft(opts: {
     inputs.sectors,
     extras,
     opts.comments,
-    sources.map((x) => x.title),
+    { valid: sources.map((x) => ({ id: x.id, title: x.title })), invalidIds },
   );
   const body = await renderWeeklyReport({
     week: inputs.week,
@@ -622,7 +634,7 @@ export async function saveConnectorDraft(opts: {
       telegramCount: 0,
       youtubeCount: 0,
       groundingQueries: [],
-      groundingSources: sources.map((x) => ({ title: `${x.title.slice(0, 200)} (${x.date})`, uri: x.url })),
+      groundingSources: sources.map((x) => ({ title: `[${x.id}] ${x.title.slice(0, 200)} (${x.date})`, uri: x.url })),
       webFacts: [],
       dropReasons: { ...inputs.notes, ...dropped },
     },
@@ -634,4 +646,21 @@ export async function saveConnectorDraft(opts: {
     updatedAt: now,
   });
   return { saved: true, weekStart: week.weekStart, dropped, warnings, rejectedSources, body };
+}
+
+/** 근거로 인정하지 않는 출처 — 개인 블로그·커뮤니티·SNS·동영상(오너 2026-10-10, Opus 가 주식 블로그를 출처로 씀) */
+const LOW_GRADE_HOST_RE =
+  /(^|\.)(tistory\.com|blogspot\.com|wordpress\.com|brunch\.co\.kr|medium\.com|substack\.com|velog\.io|reddit\.com|youtube\.com|youtu\.be|x\.com|twitter\.com|facebook\.com|instagram\.com|threads\.net|dcinside\.com|ppomppu\.co\.kr|clien\.net|fmkorea\.com|theqoo\.net|naver\.me|firebat\.co\.kr)$/i;
+/** 경로에 blog 가 들어가도 기업·주요 매체 공식 블로그는 인정(NVIDIA·Google 블로그 등 1차 발표) */
+const OFFICIAL_BLOG_HOST_RE = /(reuters|bloomberg|cnbc|wsj|ft\.com|nvidia|google|meta|apple|microsoft|federalreserve|imf|worldbank)/i;
+
+function isLowGradeSource(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (LOW_GRADE_HOST_RE.test(u.hostname)) return true;
+    if (/^(blog|m\.blog|cafe|m\.cafe|post)\./i.test(u.hostname)) return true; // blog.naver.com·cafe.daum.net 등
+    return /(^|\/)(stock-)?blogs?(\/|$)/i.test(u.pathname) && !OFFICIAL_BLOG_HOST_RE.test(u.hostname);
+  } catch {
+    return true;
+  }
 }

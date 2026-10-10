@@ -1712,8 +1712,10 @@ ${beforeOutputSection(COMMENT_PROMPT).slice(beforeOutputSection(COMMENT_PROMPT).
 - **issues.reading** 은 (a) 무엇이 일어났고 왜 중요한지(메커니즘) → (b) 다음에 무엇을 볼 것인가 →
   (c) 그에 따른 대응 방안(투자 시사점)을 이어서 한 문단으로 쓴다(오너 지시 2026-10-10 — "무엇을 볼 것인가 다음에
   이어 쓰면 된다"). 200~500자. 방안도 단정하지 말고 조건부로("~라면 ~유리").
-- 웹에서 확인한 사실을 쓰면 그 출처를 sources 에 넣는다({title,url}). sources 가 비어 있으면 입력 data 에 없는
-  수치(%·bp·배·pt·건)가 든 문장은 저장할 때 통째로 버려진다.
+- **출처 번호**: 웹에서 확인한 사실은 sources 에 {title,url,date} 로 넣고, 그 사실을 쓴 **문장 끝에 [번호]**(sources 순번,
+  1부터. 여러 개면 [1,3])를 단다. 서버는 문장 단위로 검사한다 — data 에 없는 수치(%·bp·달러·원·명·억 등)가 든 문장에 유효한
+  번호가 없으면 그 문장을 지우고, 기간 밖·블로그·커뮤니티 출처를 단 문장도 지운다. 번호는 화면에서 지워진다(출처 목록은 검수용 보관).
+  출처는 언론사·정부·중앙은행·통계기관·증권사·기업 공식 발표만 — 개인 블로그·카페·커뮤니티·SNS·유튜브는 쓰지 않는다.
 - calendar 에는 data.codeCalendar(코드가 이미 확정해 싣는 일정)에 **없는 것만** 넣는다 — 같은 행사를 다른 말로
   다시 쓰면 표에 두 번 나간다.
 - **검증(오너 지시 2026-10-10 — "정보에 대한 검증은 철저해야", "일년전에 발표하고 우연히 지금 맞을수도 있기에")**:
@@ -1775,14 +1777,21 @@ export async function assembleConnectorComments(
   sectors: WeeklySectors,
   extras: CommentExtras,
   input: ConnectorComments,
-  /** 날짜 검사를 통과한 웹 출처(제목) — 0건이면 숫자 대조를 그대로 건다 */
-  sourceTitles: string[],
+  /** 날짜·등급 검사를 통과한 웹 출처(본문의 [번호] = sources 순번) / 버린 출처의 번호 */
+  srcs: { valid: { id: number; title: string }[]; invalidIds: number[] },
 ): Promise<{ comments: WeeklyComments; warnings: string[] }> {
   const allMeetings = await getCentralBankMeetings();
   const meetings = allMeetings.filter((m) => m.date >= week.weekStart);
   const payload = buildPayload(snapshot, issues, week, allIssues, sectors, meetings, extras, true);
+  const sourceTitles = srcs.valid.map((x) => x.title);
   const trusted = sourceTitles.length > 0;
-  const { cleaned, reasons } = checkBrokerCitations(input, payload, sourceTitles);
+  // 1) 문장별 출처(오너 2026-10-10): data 에 없는 수치는 그 문장에 유효 출처 번호가 있어야 남는다, 버린 출처를 단 문장은 지운다
+  const cited = applyCitationRules(input, payload, new Set(srcs.valid.map((x) => x.id)), new Set(srcs.invalidIds));
+  if (!trusted) cited.cleaned.calendar = undefined; // 날짜 확인된 출처 없이 지은 일정은 받지 않는다(코드 일정은 그대로)
+  // 2) 증권사 인용·경제 요약의 주식 내용
+  const { cleaned, reasons } = checkBrokerCitations(cited.cleaned, payload, sourceTitles);
+  for (const [k, v] of cited.reasons) reasons.set(k, reasons.has(k) ? `${v} / ${reasons.get(k)}` : v);
+  // 수치 검사는 위 1)이 문장 단위로 끝냈으므로 assembleComments 의 통째 폐기 검사는 건너뛴다(trustGrounded=true)
   const comments = assembleComments({
     payload,
     allMeetings,
@@ -1794,12 +1803,12 @@ export async function assembleConnectorComments(
       policySummary: cleaned.policySummary,
       calendar: cleaned.calendar,
     },
-    macroTrustGrounded: trusted,
+    macroTrustGrounded: true,
     commentParsed: { snapshot: cleaned.snapshot, issues: cleaned.issues, sectors: cleaned.sectors },
-    commentTrustGrounded: trusted,
+    commentTrustGrounded: true,
     dropReasons: new Map(),
     webFacts: [],
-    sectorWebOk: true,
+    sectorWebOk: trusted,
   });
   // 증권사 인용 폐기 사유가 "모델이 생성하지 않음" 같은 일반 사유에 덮이지 않게 마지막에 덮어쓴다
   for (const [k, v] of reasons) comments.dropReasons.set(k, v);
@@ -1819,6 +1828,114 @@ export async function assembleConnectorComments(
  * 날짜 검사를 통과한 웹 출처 제목에 그 증권사가 있어야 한다. 없으면 그 칸(줄 목록은 그 줄)만 버린다.
  */
 const BROKER_RE = /([가-힣A-Za-z]{1,10}(?:투자증권|금융투자|증권))(?!사)/g;
+
+/**
+ * 문장별 출처 검사(오너 2026-10-10 — "정보에 대한 검증은 철저해야"; Opus 시험본에서 출처 목록에 없는 "브렌트유 9월 14%"·"한국 CPI
+ * 2.9%"가 출처 1건만 있어도 통째로 믿는 방식 때문에 통과했다). 단위가 붙은 수치(%·bp·달러·명 등)가 그 주 data 에 없으면 그 문장에
+ * 유효한 출처 번호([n])가 있어야 한다. 버린 출처(기간 밖·블로그)를 단 문장은 수치와 무관하게 지운다. 지우는 단위는 문장.
+ */
+const CLAIM_RE = /(-?\d[\d,]*(?:\.\d+)?)\s*(%p|%|bp|배럴|배|pt|건|달러|원|엔|위안|유로|헤알|만\s?명|명|만|억|조)/g;
+const CITE_RE = /\[(\d+(?:\s*[,，]\s*\d+)*)\]/g;
+const SKIP_KEYS = new Set(["researchCount", "newsCount", "searchInterest", "date", "publishedAt", "startDate", "endDate", "asOf", "url", "pdfUrl", "id"]);
+
+function dataNumbers(payload: CommentPayload): number[] {
+  const out = new Set<number>();
+  const take = (s: string) => {
+    const clean = s.replace(/https?:\/\/\S+/g, "").replace(/\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?/g, "");
+    for (const m of clean.matchAll(/-?\d[\d,]*(?:\.\d+)?/g)) {
+      const n = Number(m[0].replace(/,/g, ""));
+      if (Number.isFinite(n)) out.add(Math.abs(n));
+    }
+  };
+  const walk = (v: unknown, key = ""): void => {
+    if (SKIP_KEYS.has(key)) return;
+    if (typeof v === "number") out.add(Math.abs(v));
+    else if (typeof v === "string") take(v);
+    else if (Array.isArray(v)) v.forEach((x) => walk(x));
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, k);
+  };
+  walk({ ...payload, centralBankMeetings: [] });
+  return [...out];
+}
+
+function applyCitationRules(
+  input: ConnectorComments,
+  payload: CommentPayload,
+  valid: Set<number>,
+  invalid: Set<number>,
+): { cleaned: ConnectorComments; reasons: Map<string, string> } {
+  const allowed = dataNumbers(payload);
+  const inData = (n: number, unit: string) => {
+    const a = Math.abs(n);
+    const tol = unit === "bp" ? 1 : a < 20 ? 0.051 : Math.max(0.5, a * 0.002);
+    return allowed.some((x) => Math.abs(x - a) <= tol);
+  };
+  const sentenceProblem = (s: string): string | null => {
+    const ids = [...s.matchAll(CITE_RE)].flatMap((m) => m[1].split(/[,，]/).map((x) => Number(x.trim())));
+    const bad = ids.filter((id) => invalid.has(id) || !valid.has(id));
+    if (bad.length) return `무효 출처 [${bad.join(",")}] 인용(기간 밖·블로그·없는 번호)`;
+    const cited = ids.length > 0;
+    for (const m of s.replace(CITE_RE, "").matchAll(CLAIM_RE)) {
+      const n = Number(m[1].replace(/,/g, ""));
+      if (!Number.isFinite(n) || inData(n, m[2])) continue;
+      if (!cited) return `출처 번호 없는 수치 "${m[0].trim()}"(그 주 data 에 없음)`;
+    }
+    return null;
+  };
+  const reasons = new Map<string, string>();
+  const clean = (key: string, text: string | undefined): string | undefined => {
+    if (!text) return text;
+    const bad: string[] = [];
+    const lines = text.split(/\r?\n/).map((line) => {
+      // "- 미국 연준(Fed): …" 줄머리는 첫 문장이 지워져도 남긴다
+      const head = /^(\s*-\s*[^:：]{1,20}[:：]\s*)/.exec(line)?.[1] ?? "";
+      const kept = line
+        .slice(head.length)
+        .split(/(?<=[.。])\s+/)
+        .filter((s) => {
+          const r = s.trim() ? sentenceProblem(s) : null;
+          if (r) bad.push(`${s.trim().slice(0, 24)}… — ${r}`);
+          return !r;
+        })
+        .join(" ");
+      return kept.trim() ? head + kept : "";
+    });
+    if (bad.length) reasons.set(key, `문장 폐기: ${bad.join(" / ")}`);
+    return lines.filter((l) => l.trim() && !/^\s*-\s*[^:]{1,20}:\s*$/.test(l)).join("\n").trim() || undefined;
+  };
+  const rec = (prefix: string, obj: Record<string, string> | undefined) => {
+    if (!obj) return obj;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      const t = clean(`${prefix}:${k}`, v);
+      if (t) out[k] = t;
+    }
+    return out;
+  };
+  const issues: ConnectorComments["issues"] = {};
+  for (const [k, v] of Object.entries(input.issues ?? {})) {
+    if (typeof v === "string") {
+      const t = clean(`issue:${k}`, v);
+      if (t) issues[k] = t;
+      continue;
+    }
+    const reading = clean(`issue:${k}`, typeof v?.reading === "string" ? v.reading : undefined);
+    const headline = typeof v?.headline === "string" && !sentenceProblem(v.headline) ? v.headline : undefined;
+    if (reading) issues[k] = { headline, reading };
+  }
+  return {
+    cleaned: {
+      headline: clean("headline", input.headline),
+      economySummary: clean("economySummary", input.economySummary),
+      policySummary: clean("policySummary", input.policySummary),
+      calendar: input.calendar,
+      snapshot: rec("snapshot", input.snapshot),
+      issues,
+      sectors: rec("sector", input.sectors),
+    },
+    reasons,
+  };
+}
 
 /**
  * "5. 경제"에 주식 얘기 금지(오너 지적 2026-10-10 — "경제를 보면 왜 중국에 주식관련 내용을 넣었지?"). 수집 단계가 "중국"
