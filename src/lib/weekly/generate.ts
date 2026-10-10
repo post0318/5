@@ -640,6 +640,14 @@ export async function saveConnectorDraft(opts: {
     },
     model: "Claude (claude.ai 커넥터)",
     origin: "claude-connector",
+    // 앱 자동 초안(Gemini/규칙)은 지우지 않고 보관 — Claude 초안을 다시 저장할 때도 처음 보관본을 유지
+    ...(existing?.origin === "claude-connector"
+      ? existing.autoDraft
+        ? { autoDraft: existing.autoDraft }
+        : {}
+      : existing
+        ? { autoDraft: { body: existing.draftBody, model: existing.model, generatedAt: existing.generatedAt } }
+        : {}),
     usage: { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, costUsd: 0, calls: 0 },
     generatedAt: now,
     publishedAt: null,

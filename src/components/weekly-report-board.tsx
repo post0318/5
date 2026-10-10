@@ -57,6 +57,37 @@ async function downloadWeeklyPdf(id: string): Promise<string | null> {
   }
 }
 
+/**
+ * "Claude로 작성"(오너 지시 2026-10-11 — 버튼을 누르면 진행, 딥리서치 포함, 비용 0). 서버는 claude.ai 를 대신 실행할 수 없어
+ * (그건 유료 API — 보류) 요청문이 채워진 claude.ai 새 대화를 연다. 오너가 리서치를 켜고 보내면 Claude 가 사용자 정의 커넥터
+ * (`/api/mcp`)로 데이터를 받아 쓰고 초안(검토 대기)으로 저장한다 — 구독 안이라 추가 비용 없음. 이 앱은 Anthropic API 를 부르지 않는다.
+ */
+function claudePrompt(weekStart?: string): string {
+  const target = weekStart ? `${weekStart} 주` : "지난주";
+  return [
+    `주간 리포트 커넥터로 ${target} 주간 거시·시황 리포트를 써서 저장해줘.`,
+    `1) get_weekly_data${weekStart ? `(weekStart: ${weekStart})` : ""} 로 데이터와 작성 규칙(guide)을 받아 규칙을 그대로 따른다.`,
+    "2) 그 주(앞뒤 주말 포함)에 나온 사실만 쓰고, 웹에서 확인한 사실은 발행일과 함께 sources 에 넣고 문장 끝에 [번호]를 단다. 국내 사실은 한국어로 따로 찾는다.",
+    "3) save_weekly_draft 를 preview:true 로 먼저 보내 dropped·warnings 를 확인하고 고친 뒤, preview 없이 저장한다.",
+  ].join("\n");
+}
+
+function ClaudeDraftLink({ weekStart }: { weekStart?: string }) {
+  const href = `https://claude.ai/new?q=${encodeURIComponent(claudePrompt(weekStart))}`;
+  return (
+    <Button size="sm" variant="outline" asChild>
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        title="claude.ai 새 대화가 요청문이 채워진 채로 열립니다. 리서치(Research)를 켜고 보내면 Claude 가 커넥터로 초안을 저장합니다(구독 안, 추가 비용 없음)."
+      >
+        Claude로 작성
+      </a>
+    </Button>
+  );
+}
+
 function bodyChars(md: string): number {
   return md
     .split("\n")
@@ -130,9 +161,12 @@ export function WeeklyReportBoard() {
       <Card className="h-fit">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm">주간 리포트</CardTitle>
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => generate.mutate(false)}>
-            {generate.isPending ? "생성 중…" : "초안 생성"}
-          </Button>
+          <div className="flex gap-1">
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => generate.mutate(false)}>
+              {generate.isPending ? "생성 중…" : "초안 생성"}
+            </Button>
+            <ClaudeDraftLink weekStart={doc && doc.status === "draft" ? doc.weekStart : undefined} />
+          </div>
         </CardHeader>
         <CardContent className="space-y-1">
           {list.isLoading && <Skeleton className="h-16" />}
@@ -333,6 +367,32 @@ function ReportView({ doc, busy, onSave, onPublish, onUnpublish, onRegenerate, o
                 <article className="weekly-md max-w-none text-sm leading-relaxed">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.body}</ReactMarkdown>
                 </article>
+              )}
+
+              {/* Claude 커넥터 초안이 덮기 전의 앱 자동 초안(Gemini) — 지우지 않고 보관(오너 2026-10-11) */}
+              {doc.autoDraft && !editing && (
+                <details className="mt-6">
+                  <summary className="text-muted-foreground cursor-pointer text-xs">
+                    앱 자동 초안 보기 ({doc.autoDraft.model} · 생성 {fmtDate(doc.autoDraft.generatedAt)})
+                  </summary>
+                  <div className="mt-2 space-y-2">
+                    {doc.status === "draft" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => {
+                          if (doc.autoDraft) onSave(doc.autoDraft.body);
+                        }}
+                      >
+                        이 초안으로 되돌리기
+                      </Button>
+                    )}
+                    <article className="weekly-md max-w-none rounded-md border p-3 text-sm leading-relaxed">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.autoDraft.body}</ReactMarkdown>
+                    </article>
+                  </div>
+                </details>
               )}
 
               <details className="mt-6">
