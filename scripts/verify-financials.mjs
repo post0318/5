@@ -362,7 +362,7 @@ async function cfFaceConcepts(cik, accn) {
  */
 function vDebtLabel(label, id = "") {
   const t = String(label ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-  const debt = /\b(debt|borrowings?|notes?(?! receivable)|commercial paper|credit (facility|facilities|agreement)|revolv\w*|lines? of credit|loans?(?! receivable)|bonds?|debentures?|overdrafts?|short-term financing|financing obligations?)\b/.test(t);
+  const debt = /\b(debt|borrowings?|notes?(?! receivable)|commercial paper|credit (facility|facilities|agreement)|revolv\w*|lines? of credit|loans?(?! receivable)|bonds?|debentures?|overdrafts?|(short|long)-term financing|financing obligations?|financing issuances?)\b/.test(t);
   if (!debt) return { cat: null, cand: false };
   if (/\b(receivables?|stock|shares?|equity|warrants?|preferred|dividends?|interest|derivative|swap|hedg\w*|guarantee|escrow|restricted|contingent|investments?)\b/.test(t)) return { cat: null, cand: false };
   // 받을 채권(“notes due from parent” — SNDK)·비용·할증(“premiums paid to extinguish debt”, “debt-related costs”)은 차입 흐름 아님(조달 줄의 “net of … costs” 는 제외하고 판정)
@@ -378,7 +378,8 @@ function vDebtLabel(label, id = "") {
   const short = shortW && !longW ? true : longW && !shortW ? false : idShort;
   const t2 = t.replace(/net of [a-z ,-]*(costs?|discounts?|fees?|premiums?)/g, "");
   // 순액 — 양방향 표시만("(repayments)"·"additions/(reductions)"·"change in"·"increase (decrease)"). 끝의 ", net" 하나는 순액 아님(“…long-term debt, net” = 비용 차감)
-  const net = /\(repayments?( of)?\)|\(payments?\)|\(reductions?\)|\(decreases?\)|\/\s*\(|\bchanges? in\b|\bnet (increase|decrease|change|borrowings?|repayments?)\b|increase \(decrease\)|decrease \(increase\)|proceeds from repayments|proceeds from \(?payments for|repayments of proceeds/.test(t2);
+  // 상환 줄 끝의 ", net" 은 순액(“Repayments of commercial paper, net” — 발행·상환 상계, AAPL), 조달 줄 끝의 ", net" 은 비용 차감(META)
+  const net = /\(repayments?( of)?\)|\(payments?\)|\(reductions?\)|\(decreases?\)|\/\s*\(|\bchanges? in\b|\bnet (short-term |long-term )?(increase|decrease|change|borrowings?|repayments?|debt)\b|increase \(decrease\)|decrease \(increase\)|proceeds from repayments|proceeds from \(?payments for|repayments of proceeds|^(repayments?|payments?)\b.*, net$/.test(t2);
   if (net) return short ? { cat: "netS", cand: false } : { cat: null, cand: true };
   if (/^(proceeds|issuance|borrowings?|new borrowings|draws?|additions? (to|of))/.test(t) || /\bproceeds from\b/.test(t) || (/\bborrowings?\b/.test(t) && !/repay|payment|retire|redemp|reduction/.test(t))) return { cat: short ? "issS" : "issL", cand: false };
   if (/^(repayments?|payments?( on| of| for| to)?|principal (payments|repayments)|retirements?|redemptions?|reductions? (in|of|to)|repurchases? of (debt|notes|bonds|senior)|extinguishment|settlement)/.test(t) || /\b(redemptions?|repayments?|retirements?)\b/.test(t)) return { cat: short ? "repS" : "repL", cand: false };
