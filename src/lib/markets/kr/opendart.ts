@@ -465,7 +465,11 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
     const pt = (v: number | null): KrTtmPart[] => (v == null ? [] : [{ v, ...span }]);
     const [netIncome, revenue, opIncome, eps] = [val("netIncome"), val("revenue"), val("opIncome"), val("eps")];
     return {
-      krLtm: krLtmOf((d, sjs) => isValue(rows, d.names, "annual", undefined, d.ids, sjs)),
+      ...(() => {
+        const why: Record<string, string> = {};
+        const k = krLtmOf((d, sjs, key) => { const v = isValue(rows, d.names, "annual", undefined, d.ids, sjs); if (v == null) why[key] = "사업보고서에 그 줄 없음 — LTM 빈칸"; return v; });
+        return { krLtm: k, ...(Object.keys(why).length ? { krLtmReasons: why } : {}) };
+      })(),
       periodLabel: `FY${fy}`,
       lastQuarter: null,
       netIncome,
@@ -570,7 +574,7 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   const cfPrior: Record<string, number | null> = {};
   for (const [k, d] of Object.entries(KR_ANALYSIS_ACCOUNTS).filter(([k]) => ["ocf", "capex", "intangAcq", "intPaid", "divPaid"].includes(k))) {
     const c = isValue(interim.rows, d.names, "cumCur", undefined, d.ids, ["CF"]);
-    if (c == null) { cfPrior[k] = null; continue; }
+    if (c == null) { cfPrior[k] = null; krLtmReasons[k] = "당기 보고서 현금흐름표에 그 줄 없음 — LTM 빈칸"; continue; }
     if (!rcpt) { cfPrior[k] = null; krLtmReasons[k] = "분기 보고서 접수번호 없음 — 정정본 전기 누적(XBRL) 확인 불가"; continue; }
     if (xbrlErr) { cfPrior[k] = null; krLtmReasons[k] = xbrlErr; continue; }
     try {
@@ -589,6 +593,9 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
     const cf = sjs.includes("CF");
     const p = cf ? (cfPrior[key] ?? null) : isValue(interim!.rows, d.names, "cumPrior", undefined, d.ids, sjs);
     if (!cf && p == null && c != null) krLtmReasons[key] ??= "당기 보고서에 전기 누적 열 없음 — LTM 빈칸";
+    // 빈칸이면 항상 사유(감사 10차 ⑦)
+    if (a == null || c == null || p == null)
+      krLtmReasons[key] ??= a == null ? "최근 사업보고서에 그 줄 없음 — LTM 빈칸" : c == null ? "당기 보고서에 그 줄 없음 — LTM 빈칸" : "전기 누적 없음 — LTM 빈칸";
     return a != null && c != null && p != null ? a + c - p : null;
   });
   return {
