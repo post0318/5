@@ -51,24 +51,29 @@ function cacheSet(key: string, ko: string, ok: boolean) {
 }
 
 /**
- * 무료 번역 엔드포인트가 막히면 쉬는 시각 — **원문 언어(경로)별**로 따로 둔다(2026-10-10 운영 — 일본 종목 한 번 갱신에 일본어 제목 90건 안팎을
- * 한 건씩 번역하다 Google 429 를 받았고, 그 쉬기가 프로세스 전체에 걸려 미국·한국 종목의 영문 기사 번역까지 멈췄다). Google 429 는 15분,
- * MyMemory 429·하루 한도 소진은 1시간. 쉬는 동안 그 언어는 그 경로를 부르지 않고 다음 경로로 간다(둘 다 쉬면 원문 제목 그대로 — 실패는
+ * 무료 번역 엔드포인트가 막히면 쉬는 시각 — 원문 언어(경로)별로 둔다(2026-10-10 운영 — 일본 종목 한 번 갱신에 일본어 제목 90건 안팎을
+ * 한 건씩 번역하다 Google 429 를 받았고, 그 쉬기가 하나뿐이라 영문 번역까지 같이 멈췄다). Google 429 는 영문 10분·일본어 30분(pauseGoogle),
+ * MyMemory 429·하루 한도 소진은 그 언어만 1시간. 쉬는 동안 그 언어는 그 경로를 부르지 않고 다음 경로로 간다(둘 다 쉬면 원문 제목 그대로 — 실패는
  * 캐시하지 않으므로 다음 갱신 때 다시 번역된다). 일본 재무 문구 번역(jp/ko.ts)의 쉬기와도 따로다.
  */
 type Lane = "en" | "ja";
 const googlePausedUntil: Record<Lane, number> = { en: 0, ja: 0 };
 const myMemoryPausedUntil: Record<Lane, number> = { en: 0, ja: 0 };
-const GOOGLE_PAUSE_MS = 15 * 60_000;
 const MYMEMORY_PAUSE_MS = 60 * 60_000;
 
 function googlePaused(lane: Lane): boolean {
   return Date.now() < googlePausedUntil[lane];
 }
 
+/**
+ * Google 429 — 한도는 IP 단위라 한 언어가 막히면 다른 언어도 곧 막힌다(2026-10-10 운영: ja 429 직후 en 도 429). 그래서 두 언어를 함께 쉬되
+ * 영문(미국·한국 종목 해외 기사)을 먼저 되살린다 — 영문 10분, 일본어 30분.
+ */
+const GOOGLE_PAUSE_BY_LANE: Record<Lane, number> = { en: 10 * 60_000, ja: 30 * 60_000 };
 function pauseGoogle(lane: Lane) {
-  if (!googlePaused(lane)) console.warn(`[translate] Google 번역 429 — ${lane} 제목 15분 쉼(다른 언어는 계속)`);
-  googlePausedUntil[lane] = Date.now() + GOOGLE_PAUSE_MS;
+  if (!googlePaused(lane)) console.warn(`[translate] Google 번역 429(${lane}) — 영문 10분·일본어 30분 쉼`);
+  const now = Date.now();
+  for (const l of ["en", "ja"] as const) googlePausedUntil[l] = Math.max(googlePausedUntil[l], now + GOOGLE_PAUSE_BY_LANE[l]);
 }
 
 /** gtx 응답(문장 조각 배열)을 한 문자열로 */
@@ -227,6 +232,14 @@ export async function translateChecked(
 
 /** 갱신 1회에 새로 번역하는 제목 상한(앞쪽 = 최신순 N건) — 나머지는 원문으로 두고 다음 갱신 때(캐시에 없는 것만) 이어서 번역한다 */
 const MAX_NEW_TRANSLATIONS = 40;
+/**
+ * 갱신 1회에 보내는 묶음 수 상한과 묶음 사이 간격 — 운영 IP 의 Google 한도가 바닥에 가까우면 묶음을 연달아 보내자마자 두 번째에서 429 가 났다
+ * (2026-10-10 6501 첫 조회). 영문(미국·한국 종목)은 2묶음, 일본어는 1묶음 — 영문이 먼저 번역되게 한도를 남긴다.
+ */
+const MAX_BATCHES: Record<Lane, number> = { en: 2, ja: 1 };
+const BATCH_GAP_MS = 2000;
+/** 묶음 결과 줄 수가 안 맞을 때 낱개로 다시 보내는 건수 상한 */
+const MAX_SINGLE_FALLBACK = 5;
 /** MyMemory 폴백은 한 건씩이라 회당 이만큼만 */
 const MAX_MYMEMORY_FALLBACK = 5;
 
@@ -234,7 +247,8 @@ const MAX_MYMEMORY_FALLBACK = 5;
  * 여러 제목을 시간예산(DEADLINE_MS) 안에서 번역한다(2026-10-10 운영 429 대응으로 다시 짰다):
  *  - 캐시(메모리·DB)에 있는 제목은 그대로 쓰고, 없는 제목 중 앞쪽 MAX_NEW_TRANSLATIONS 건만 새로 번역한다(호출부는 최신순으로 넘긴다).
  *  - 새 제목은 BATCH_MAX_ITEMS·BATCH_MAX_CHARS 단위로 묶어 한 요청에(영문은 왕복검증도 묶음으로). 묶음 결과 줄 수가 안 맞으면 그 묶음만 한 건씩.
- *  - Google 이 막히면(그 언어만 쉼) 몇 건만 MyMemory, 나머지·예산 초과는 원문 그대로.
+ *  - 갱신 1회에 영문 2묶음·일본어 1묶음까지, 묶음 사이 2초. 429 가 나면 두 언어 모두 쉬고(영문 10분·일본어 30분) 같은 갱신에선 더 보내지 않는다.
+ *  - Google 이 막히면 몇 건만 MyMemory, 나머지·예산 초과는 원문 그대로.
  */
 export async function translateTitles<T>(
   items: T[],
@@ -275,13 +289,16 @@ export async function translateTitles<T>(
   }
   if (cur.length) chunks.push(cur);
 
-  for (const chunk of chunks) {
+  let sent = 0;
+  for (const chunk of chunks.slice(0, MAX_BATCHES[lane])) {
+    if (sent > 0) await new Promise((r) => setTimeout(r, BATCH_GAP_MS));
     if (Date.now() >= deadline || googlePaused(lane)) break;
+    sent++;
     let kos = await viaGoogleBatch(chunk.map(clean), sl, "ko", lane);
     if (!kos && !googlePaused(lane)) {
-      // 줄 수가 안 맞는 묶음 — 그 묶음만 한 건씩
+      // 줄 수가 안 맞는 묶음 — 그 묶음 앞쪽 몇 건만 한 건씩(한도가 빠듯해 25건을 낱개로 보내지 않는다)
       kos = [];
-      for (const s of chunk) {
+      for (const s of chunk.slice(0, MAX_SINGLE_FALLBACK)) {
         if (Date.now() >= deadline || googlePaused(lane)) break;
         kos.push(await viaGoogle(clean(s), sl, "ko", lane));
       }
@@ -299,9 +316,10 @@ export async function translateTitles<T>(
     });
   }
 
-  // Google 이 막혔거나 못 한 제목 — 몇 건만 MyMemory(한 건씩)
+  // Google 이 막힌 동안만 몇 건 MyMemory(한 건씩, 하루 한도가 작다). 묶음 상한으로 못 한 제목은 MyMemory 로 메우지 않고 다음 갱신으로.
   let fallback = 0;
   for (const s of todo) {
+    if (!googlePaused(lane)) break;
     if (result.has(s)) continue;
     if (fallback >= MAX_MYMEMORY_FALLBACK || Date.now() >= deadline || Date.now() < myMemoryPausedUntil[lane]) break;
     fallback++;

@@ -1506,11 +1506,10 @@ export async function fetchStockNewsBySide(
     const jaJudged = jaRaw.map((it) => ({ it, v: jaNames ? judgeJapaneseTitle(it.title, it.publisher, jaNames) : { keep: false, reason: "일본어 회사명 없음" } }));
     if (opts?.includeRaw) rawLog.push(...jaJudged.map((d) => ({ side: "overseas" as const, item: d.it, tagged: false, ...d.v })));
     const jaSafe = dedupeJaTitles(jaJudged.filter((d) => d.v.keep).map((d) => d.it));
-    const [domestic, ja, en] = await Promise.all([
-      withTranslatedTitles("ko", domesticSafe),
-      withTranslatedTitles("ja", jaSafe),
-      withTranslatedTitles("en", overseasSafe),
-    ]);
+    // 영문을 먼저 — 무료 번역 한도는 IP 단위라, 일본어 묶음이 한도를 먼저 쓰면 영문(화이트리스트 매체)까지 원문으로 남는다(2026-10-10 운영)
+    const domestic = await withTranslatedTitles("ko", domesticSafe);
+    const en = await withTranslatedTitles("en", overseasSafe);
+    const ja = await withTranslatedTitles("ja", jaSafe);
     return {
       domestic,
       overseas: [...ja, ...en].sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt)),
