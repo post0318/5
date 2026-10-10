@@ -83,7 +83,8 @@ export interface CashFlowDaStructure {
 export function cashFlowDaLines(cal: string, lab: Map<string, string[]>): CashFlowDaStructure | null {
   for (const m of cal.matchAll(/<(?:link:)?calculationLink\b[^>]*xlink:role="([^"]+)"[^>]*>([\s\S]*?)<\/(?:link:)?calculationLink>/g)) {
     const role = m[1].split("/").pop() ?? "";
-    if (!/CASHFLOW/i.test(role) || /Detail|Table|Parenth|Supplement/i.test(role)) continue;
+    // 역할 이름의 하이픈·밑줄 무시(GLW 2024 10-K "statement-consolidated-statements-of-cash-flows" — 못 읽어 그 공시가 빠졌다, 2026-10-10)
+    if (!/CASHFLOW/i.test(role.replace(/[^A-Za-z]/g, "")) || /Detail|Table|Parenth|Supplement/i.test(role)) continue;
     const loc = locs(m[2]);
     const arcs: { from: string; to: string }[] = [];
     for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {
@@ -167,15 +168,20 @@ export function instanceFacts(xml: string, want: (id: string) => boolean): InstF
     ctx.set(m[1], { period: `${s}|${e}`, dims });
   }
   const out: InstFact[] = [];
-  const seen = new Set<string>();
-  for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/\1:\2>/g)) {
+  // 같은 개념·기간·차원 사실이 둘 이상이면 정밀한 값(decimals 큰 쪽, INF 최대) — INTC 10-K 는 본표 7,349(−6)와 주석 문장 "7.3 billion"(−8)을 같은 문맥으로 태깅
+  const seen = new Map<string, { i: number; dec: number }>();
+  // 요소 이름에 하이픈·점 허용(ORCL orcl_ProceedsFromRepaymentsOfShort-TermFinancingRelatedToCapitalExpendituresNet — 못 읽어 차입 줄이 0 이었다, 2026-10-10)
+  for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_.-]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/\1:\2>/g)) {
     const id = `${m[1]}_${m[2]}`;
     if (!want(id) || !/unitRef="[^"]*usd/i.test(m[3])) continue;
     const c = ctx.get(/contextRef="([^"]+)"/.exec(m[3])?.[1] ?? "");
     if (!c) continue;
     const key = `${id}|${c.period}|${c.dims.map((d) => d.join("=")).join(",")}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const dRaw = /decimals="([^"]+)"/.exec(m[3])?.[1] ?? "INF";
+    const dec = dRaw === "INF" ? 99 : Number(dRaw);
+    const prev = seen.get(key);
+    if (prev) { if (dec > prev.dec) { out[prev.i] = { id, period: c.period, dims: c.dims, val: Number(m[4]) }; prev.dec = dec; } continue; }
+    seen.set(key, { i: out.length, dec });
     out.push({ id, period: c.period, dims: c.dims, val: Number(m[4]) });
   }
   return out;
@@ -243,7 +249,8 @@ function durationValues(xml: string, ids: Set<string>): Map<string, Map<string, 
     if (s && e) ctx.set(m[1], `${s}|${e}`);
   }
   const out = new Map<string, Map<string, number>>();
-  for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/\1:\2>/g)) {
+  // 요소 이름에 하이픈·점 허용(ORCL orcl_ProceedsFromRepaymentsOfShort-TermFinancingRelatedToCapitalExpendituresNet — 못 읽어 차입 줄이 0 이었다, 2026-10-10)
+  for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_.-]+)\b([^>]*)>\s*(-?[\d.]+)\s*<\/\1:\2>/g)) {
     const id = `${m[1]}_${m[2]}`;
     if (!ids.has(id)) continue;
     const k = ctx.get(/contextRef="([^"]+)"/.exec(m[3])?.[1] ?? "");

@@ -6,6 +6,7 @@ import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../
 import { entriesOf, firstConcept, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
 import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, pickDa, pickDaPeriod } from "./edgar-ev";
 import { revQuarterLabel } from "./fin-revenue";
+import { DEBT_UNREAD as DEBT_UNREAD_NOTE } from "./edgar-cf-debt";
 import { isFinancialCompany } from "./edgar-financial";
 
 /**
@@ -72,6 +73,10 @@ interface Line {
   wcRest?: boolean;
   /** 감가상각비 — edgar-ev.ts pickDa 규칙(합계 태그 최댓값·무형상각 누락 보정) */
   pickDa?: boolean;
+  /** 표시용 합계 줄 — 같은 블록의 이 줄들(바로 아래 depth+1) 합. 잔여(기타) 계산에는 넣지 않는다(하위 줄이 이미 들어감) */
+  sumOf?: string[];
+  /** 하위 줄의 합계를 자기 개념으로 읽는 줄(차입금 조달·상환 합계 — 본표 판독) — 잔여(기타) 계산에서 하위 줄 대신 이 줄을 쓴다 */
+  total?: boolean;
 }
 
 interface Block {
@@ -109,7 +114,9 @@ export function cfZeroFillGroups(): string[][] {
   return getBlocks(false).slice(1).flatMap((b) => b.lines.filter((l) => l.concepts && !l.plug).map((l) => l.concepts as string[]));
 }
 
-function getBlocks(isFin: boolean): Block[] {
+function getBlocks(isFin: boolean, debtFace = false): Block[] {
+  // 차입금 줄(오너 결정 2026-10-10) — 10-K·10-Q 본표 판독 합성 개념(edgar-cf-wc.ts DEBT_SYN). 본표 판독을 못 한 회사(20-F 등)는 표준 개념 목록
+  const D = (face: string, std: string[]) => (debtFace ? [face] : std);
   return [
   {
     title: "영업활동 현금흐름",
@@ -204,20 +211,28 @@ function getBlocks(isFin: boolean): Block[] {
     lines: [
       { label: "배당금 지급", concepts: ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"], depth: 1, negate: true },
       { label: "자기주식 취득", concepts: ["PaymentsForRepurchaseOfCommonStock"], depth: 1, negate: true },
-      { label: "장기차입금 조달", concepts: ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts"], depth: 1 },
-      // 전환사채 상환도 장기차입금 상환(TSLA 2024~ "Repayments of debt" = RepaymentsOfConvertibleDebt — 옛 태그 중단으로 2025 연간·LTM 이 비었다, 2026-10-02).
-      // firstConcept 는 앞 태그에 값이 없는 결산일만 뒤 태그로 채우므로 다른 태그를 쓰는 회사는 그대로
-      { label: "장기차입금 상환", concepts: ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt", "RepaymentsOfConvertibleDebt", "RepaymentsOfDebtAndCapitalLeaseObligations"], depth: 1, negate: true },
-      {
-        label: "단기차입금 순증감",
-        depth: 1,
-        combine: [
-          ["ProceedsFromRepaymentsOfShortTermDebtMaturingInThreeMonthsOrLess", false],
-          ["ProceedsFromRepaymentsOfShortTermDebtMaturingInMoreThanThreeMonths", false],
-          ["ProceedsFromRepaymentsOfCommercialPaper", false],
-          ["ProceedsFromRepaymentsOfShortTermDebt", false],
-        ],
-      },
+      // 차입금(오너 결정 2026-10-10 — StockAnalysis·야후와 같은 구조): 조달·상환 합계 = 단기 + 장기, 단기 순증감 = 순액으로만 공시한 줄.
+      // 10-K·10-Q 공시 회사는 본표 차입 줄을 성격대로 모두 합한 합성 개념(회사 고유 줄·기업어음·신용한도 포함, 리스 제외 — edgar-cf-wc.ts DEBT_SYN).
+      // 그 밖(20-F)은 표준 개념 목록(2026-10-10 이전 규칙 — MSFT·AMD 개념 포함)
+      debtFace ? { label: "차입금 조달 합계", concepts: ["DebtIssuedTotalFaceDerived"], depth: 1, total: true } : { label: "차입금 조달 합계", depth: 1, sumOf: ["단기차입금 조달", "장기차입금 조달"] },
+      { label: "단기차입금 조달", concepts: D("DebtIssuedShortFaceDerived", ["ProceedsFromShortTermDebt", "ProceedsFromIssuanceOfCommercialPaper", "ProceedsFromLinesOfCredit"]), depth: 2 },
+      { label: "장기차입금 조달", concepts: D("DebtIssuedLongFaceDerived", ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts", "ProceedsFromDebtMaturingInMoreThanThreeMonths"]), depth: 2 },
+      debtFace ? { label: "차입금 상환 합계", concepts: ["DebtRepaidTotalFaceDerived"], depth: 1, negate: true, total: true } : { label: "차입금 상환 합계", depth: 1, sumOf: ["단기차입금 상환", "장기차입금 상환"] },
+      { label: "단기차입금 상환", concepts: D("DebtRepaidShortFaceDerived", ["RepaymentsOfShortTermDebt", "RepaymentsOfCommercialPaper", "RepaymentsOfLinesOfCredit"]), depth: 2, negate: true },
+      // 전환사채 상환도 장기차입금 상환(TSLA 2024~ RepaymentsOfConvertibleDebt, 2026-10-02)
+      { label: "장기차입금 상환", concepts: D("DebtRepaidLongFaceDerived", ["RepaymentsOfLongTermDebt", "RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfDebt", "RepaymentsOfConvertibleDebt", "RepaymentsOfDebtAndCapitalLeaseObligations", "RepaymentsOfDebtMaturingInMoreThanThreeMonths"]), depth: 2, negate: true },
+      debtFace
+        ? { label: "단기차입금 순증감", concepts: ["DebtNetShortFaceDerived"], depth: 1 }
+        : {
+            label: "단기차입금 순증감",
+            depth: 1,
+            combine: [
+              ["ProceedsFromRepaymentsOfShortTermDebtMaturingInThreeMonthsOrLess", false],
+              ["ProceedsFromRepaymentsOfShortTermDebtMaturingInMoreThanThreeMonths", false],
+              ["ProceedsFromRepaymentsOfCommercialPaper", false],
+              ["ProceedsFromRepaymentsOfShortTermDebt", false],
+            ],
+          },
       { label: "기타 재무활동", depth: 1, plug: true },
     ],
   },
@@ -265,7 +280,8 @@ export function buildUsCashFlow(
   sic?: string | null,
 ): FinancialStatement {
   const isFin = isFinancialCompany(facts, sic ?? null);
-  const BLOCKS = getBlocks(isFin);
+  // 차입 줄 판독 자체가 실패(cfDebt)면 표준 개념 목록으로 바꿔 채우지 않는다 — 합성 개념 줄(빈칸) + 사유
+  const BLOCKS = getBlocks(isFin, !!facts.debtFace || unavailableOn(facts, "cfDebt"));
   const opEntries = firstConcept(facts, BLOCKS[0].total.concepts);
 
   let periods: FinancialPeriod[];
@@ -510,7 +526,7 @@ export function buildUsCashFlow(
     // 매핑된 형제 라인(플러그 제외, subtotal 제외) 합 — 플러그 계산용
     const resolved: Record<string, Record<string, number | null>> = {};
     for (const line of block.lines) {
-      if (line.kind === "subtotal" || line.plug || line.wcRest) continue;
+      if (line.kind === "subtotal" || line.plug || line.wcRest || line.sumOf) continue;
       let v: Record<string, number | null>;
       if (line.pickDa) {
         const totals = DA_TOTAL.map((c) => valOf([c]));
@@ -572,6 +588,33 @@ export function buildUsCashFlow(
       resolved[line.label] = v;
     }
 
+    // 표시용 합계 줄(차입금 조달·상환 합계) — 하위 줄이 모두 빈칸이면 빈칸. 하위 줄 하나가 계산 불가 사유(분기 산정 불가·LTM 구성 분기 없음)로 비면
+    // 부분합이라 함께 빈칸(같은 사유), 본표에 줄이 없어 빈 하위 줄은 0 으로 본다
+    for (const line of block.lines) {
+      if (!line.sumOf) continue;
+      const kids = line.sumOf.map((k) => resolved[k] ?? blank());
+      const v: Record<string, number | null> = {};
+      const why: Record<string, string> = {};
+      for (const lbl of labels) {
+        const xs = kids.map((k) => k[lbl]);
+        if (xs.every((x) => x == null)) { v[lbl] = null; continue; }
+        const open = kids.find((k) => k[lbl] == null && (lbl === LTM ? ltmGap(k) || !!ltmWhy.get(k) : !!qWhy.get(k)?.[lbl]));
+        if (open) { v[lbl] = null; const r = lbl === LTM ? (ltmGap(open) ? GAP_NOTE : ltmWhy.get(open)) : qWhy.get(open)?.[lbl]; if (r) why[lbl] = r; continue; }
+        v[lbl] = xs.reduce((t: number, x) => t + (x ?? 0), 0);
+      }
+      if (why[LTM]) ltmWhy.set(v, why[LTM]);
+      const qw = Object.fromEntries(Object.entries(why).filter(([l]) => l !== LTM));
+      if (Object.keys(qw).length) qWhy.set(v, qw);
+      resolved[line.label] = v;
+    }
+
+    /** 합계 줄(total) 바로 아래 하위 줄 — 잔여 계산은 합계 줄로 하므로 제외 */
+    const underTotal = (l: Line): boolean => {
+      if (l.depth !== 2) return false;
+      const i = block.lines.indexOf(l);
+      for (let j = i - 1; j >= 0; j--) if (block.lines[j].depth === 1) return !!block.lines[j].total;
+      return false;
+    };
     let wcVals: Record<string, number | null> | null = null;
     for (const line of block.lines) {
       let values: Record<string, number | null>;
@@ -626,8 +669,8 @@ export function buildUsCashFlow(
           }
           let mapped = 0;
           for (const l of block.lines) {
-            if (l.kind === "subtotal" || l.plug) continue;
-            if (l.depth !== 1) continue; // depth1 형제만
+            if (l.kind === "subtotal" || l.plug || l.sumOf) continue;
+            if (l.depth !== 1) continue; // depth1 형제만(합계 줄 total 포함)
             mapped += resolved[l.label]?.[lbl] ?? 0;
           }
           // depth2 (운전자본 하위)는 subtotal 로 depth1 에 이미 반영 안 됨 → 별도 가산. 회사 공시 운전자본 합계가 있는 칸은 그 합계(하위 줄 대신)
@@ -635,9 +678,9 @@ export function buildUsCashFlow(
           if (hasWc) mapped += wcCo[lbl]!;
           else
             for (const l of block.lines) {
-              if (l.depth === 2 && !l.plug && !l.wcRest) mapped += resolved[l.label]?.[lbl] ?? 0;
+              if (l.depth === 2 && !l.plug && !l.wcRest && !underTotal(l)) mapped += resolved[l.label]?.[lbl] ?? 0;
             }
-          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && !l.wcRest && (l.depth === 1 || (l.depth === 2 && !hasWc)) && (ltmGap(resolved[l.label]) || ltmOpenRecent(l, resolved[l.label])));
+          const gap = lbl === LTM && block.lines.some((l) => l.kind !== "subtotal" && !l.plug && !l.wcRest && !l.sumOf && !underTotal(l) && (l.depth === 1 || (l.depth === 2 && !hasWc)) && (ltmGap(resolved[l.label]) || ltmOpenRecent(l, resolved[l.label])));
           values[lbl] = gap ? null : Math.round(tot - mapped);
           if (gap) ltmWhy.set(values, GAP_NOTE);
         }
@@ -765,6 +808,42 @@ export function buildUsCashFlow(
       const cn: Record<string, string> = { ...(it.cellNotes ?? {}) };
       for (const [k, v] of Object.entries(it.values ?? {})) if (v != null && v !== 0 && !cn[k]) cn[k] = why;
       it.cellNotes = cn;
+    }
+  }
+  // 차입금 줄 칸 사유(edgar-cf-debt.ts) — 판독 실패·분류 교체로 비운 칸에 그 사유. 판독 실패 기간·차입 판독 전체 실패(cfDebt)는 잔여 줄(기타 재무활동)도
+  // 빈칸 — 차입 금액을 떠안지 않게(예전엔 그 해 차입이 기타로 들어갔다, 4a9b30d 전 GLW 2021)
+  {
+    const LINE_C: Record<string, string> = {
+      "단기차입금 조달": "DebtIssuedShortFaceDerived", "장기차입금 조달": "DebtIssuedLongFaceDerived", "차입금 조달 합계": "DebtIssuedTotalFaceDerived",
+      "단기차입금 상환": "DebtRepaidShortFaceDerived", "장기차입금 상환": "DebtRepaidLongFaceDerived", "차입금 상환 합계": "DebtRepaidTotalFaceDerived",
+      "단기차입금 순증감": "DebtNetShortFaceDerived",
+    };
+    const cfOut = unavailableOn(facts, "cfDebt");
+    const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 7 * 864e5;
+    const fyEnd = mode === "quarter" ? null : periods[periods.length - 2]?.endDate ?? null;
+    // LTM 구성 기간의 결산일(사업연도 + 당기 누적 − 전년 동기)
+    const ltmEnds = anchor ? [anchor, shiftYear(anchor, -1), ...(fyEnd ? [fyEnd] : [])] : [];
+    const endsOf = (p: FinancialPeriod) => (p.label === LTM ? ltmEnds : p.endDate ? [p.endDate] : []);
+    const outNote = cfOut ? unavailableNote(facts) ?? "원본 조회 실패" : null;
+    for (const it of items) {
+      const line = it.accountId?.startsWith("cf:재무활동 현금흐름:") ? it.accountId!.slice("cf:재무활동 현금흐름:".length) : null;
+      if (!line) continue;
+      const concept = LINE_C[line];
+      if (concept) {
+        for (const p of periods) {
+          if (cfOut) { it.values[p.label] = null; it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: outNote! }; continue; }
+          if (it.values[p.label] != null) continue;
+          const b = (facts.debtBlanks ?? []).find((x) => x.concept === concept && endsOf(p).some((e) => near(x.end, e)));
+          if (b) it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: b.reason };
+        }
+      } else if (line === "기타 재무활동") {
+        for (const p of periods) {
+          const unread = cfOut || (facts.debtUnreadEnds ?? []).some((e) => endsOf(p).some((x) => near(x, e)));
+          if (!unread) continue;
+          it.values[p.label] = null;
+          it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: cfOut ? outNote! : `${DEBT_UNREAD_NOTE} — 차입 금액을 떠안지 않게 함께 공란` };
+        }
+      }
     }
   }
   // 무배당 = 0(오너 결정 2026-10-02): 그 기간에 배당 공시가 하나도 없으면 배당금 지급 0. 그 밖의 사유 없는 빈 칸은 "본표에 별도 줄 없음"
