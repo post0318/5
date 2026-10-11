@@ -1,0 +1,42 @@
+- [증권사 리서치 파이프라인 현황](research-pipeline-status.md) — 10개 국내 소스 완료, 미국(GlobalMonitor) 대기
+- [본문/목록 검증 원칙](feedback-verify-before-display.md) — 메타데이터 그대로 믿지 말고 본문 확인 후 표시
+- [일관성 있게 공통 적용](feedback-apply-fixes-uniformly.md) — 버그 발견 시 유사 소스 전체에 동일 검증 선적용
+- [재무 검증은 정확 일치](feedback-exact-match-verification.md) — 허용치로 통과 금지, 불일치는 원인 규명까지
+- [시장 순서](project-verification-order.md) — 미국 → 한국 → 일본 → 중국 추가, 한 시장씩, 동시 진행 금지
+- [결함은 모아서 수정 후 1회 검증](feedback-batch-fix-then-verify.md) — 전체 검증·스냅샷·골든셋·심은 오류 시험 모두 지표 닫을 때 1회, 수정 중엔 해당 종목만
+- [1시간 단위 WIP 커밋](feedback-hourly-wip-commit.md) — 검증 통과와 무관하게 매시 wip 브랜치 커밋·푸시, master 금지
+- [개발 서버 주기 재시작](feedback-dev-server-restart.md) — 메모리 빠듯, 긴 검증은 묶음으로 나누고 사이마다 dev 서버 재시작
+- [지표별로 전 차원 닫기](feedback-close-metric-by-metric.md) — 손익→현금흐름→재무상태표 순, 지표 하나를 모든 조합에서 한 번에 닫음, 차원은 스스로 빠짐없이
+- [재무 재구축 결정](project-financial-architecture.md) — 5층·DB 저장형·원공시·태그 정정·외부 단독 이탈, 매출부터
+- [사용량 낭비 금지](feedback-usage-waste.md) — SEC 조회 많은 작업은 순차(429), 반복 조사·재질문·과한 모델·곧 바뀔 코드 감사가 낭비
+- [감사 모델](feedback-audit-with-fable.md) — 반복 재검증·감사는 Opus, 최종 점검 1회만 Fable
+- [재무 작업 일시 중지](project-verification-paused.md) — 매출 닫은 뒤 멈춤, 리서치 후 재개 시 handoff 문서부터
+- [PPT 재구축 원칙](feedback-ppt-template-first.md) — 템플릿 보존·확정 데이터만·LLM 숫자 금지·출력 숫자 자동 대조 후 완료
+- [DB 용량 관리](feedback-db-capacity.md) — 저장 늘리면 예상·실측(scripts/db/size.mjs) 보고, 쌓이는 데이터 TTL 필수, 512MB
+- [단정 보고 금지](feedback-no-false-assurance.md) — 검사 범위·발견·못 본 범위 함께 보고, 심은 오류 검출률 자체 측정, 품질 절차는 묻지 말고 적용
+- [유형 분류 먼저](feedback-triage-first.md) — 종목을 유형별로 갈라 확인된 것은 종결, 문제 종목만 처리해 지표를 닫음. 체계 개선은 막힐 때만
+- [그림자 채우기 금지](feedback-no-shadow-fill.md) — 못 구한 값을 다른 출처·정의·근사로 조용히 대체 금지, 빈칸+사유(승인·표기된 근사만 예외)
+- [한국어만](feedback-korean-only.md) — 사용자 답변은 전부 한국어, 영어 보고 금지(반복 지적)
+- [리서치 분류 인수인계](project-research-classification-handoff.md) — research 워크트리 마지막 커밋·검증/재게시 절차·미결 항목
+- [정의 차이는 줄 단위 분해로만](feedback-definition-diff-needs-decomposition.md) — 외부 구성을 SEC 줄과 맞춰 식 성립 시만 ②, 이름 붙이기 금지
+- [확정 사실로 설명](feedback-use-established-facts.md) — 시간·원인 설명은 인수인계 문서·실측 근거로, 옛 방식 기억 금지
+- [지표 우선순위](project-metric-priority.md) — 영업이익·감가상각비까지가 큰 틀, 미세 미결·정의 항목은 그 뒤 일괄 마무리
+- [Vercel CPU 한도·운영 CPU 금지](project-vercel-cpu-limit.md) — 2026-10 402 정지, 검증은 로컬 전용, 앱 코드 푸시는 모아서
+- [호스팅 구성·과금 0 통제](project-hosting-no-billing.md) — 1호기 운영·2호기 검증+IPO·Vercel 2순위·Cloud Run 종료, SSH 키 서버별(oracle_macro/oracle_verify), 과금 0
+- [10-05~07 실측 예약·보고서](project-cnn-fg-sampling.md) — CNN·다음 선물·KRX 공개 시각, 10-07 07:00 오라클 보고서 읽고 결정 받기(재부팅 금지 기간)
+- [종목뉴스 LLM 은 구글만](feedback-news-llm-google-only.md) — Claude 금지, Gemini 만 허용, 사용과 무관한 반복 과금 구조 금지
+- [비용은 먼저 보고](feedback-report-costs-proactively.md) — 유료 과금은 묻기 전에 보고, 알림은 실제 도착까지 확인
+- [새 항목만 처리](feedback-process-only-new.md) — 주기 수집·판정은 직전 이후 새로 나온 것만, 오너 지시는 즉시 문서화
+- [무료 범위 안에서만](feedback-free-tier-only.md) — 모든 인프라는 무료 한도 안, 만들기 전 합계 확인·보고, 오라클 현재 3코어·20GB/4·24
+- [한국 감사 2차 재개 지점](project-kr-audit2-resume.md) — 10-05 사용량 소진 중단, 앱 3338f95·검증기 wip/kr-audit2, 남은 일 목록
+- [직접 실행](feedback-do-it-yourself.md) — 명령 실행을 오너에게 떠넘기지 말 것, 막히면 확인 받고 내가 다시 실행
+- [외부 키 공유·한도 사고](project-dart-shared-key-limit.md) — 검증·운영 같은 키로 DART 한도 초과해 운영 정지(10-05), DART·ECOS 분리 현황, 남은 공유 키
+- [검증 서버 운영 DB 저장 금지](feedback-verify-no-prod-writes.md) — 2호기 검증 앱도 운영 DB 쓰기 금지, 운영 반영은 병합 때만
+- [10-09 재개 지점](project-resume-20261009.md) — 한국 6차 재감사 대기·미국 검증불가·일본 EV/검증기/한국어화 진행 중, PC 끄면 작업자 멈춤
+- [2호기 메모리 규칙](feedback-verify-server-memory.md) — 앱 서버 1개·검증기 동시 1개, 10-09 스왑 고갈 먹통·강제 재부팅
+- [먼저 확인 후 보고](feedback-check-before-report.md) — 선택지·보고는 확인된 사실만, 물어본 뒤에 확인 금지
+- [저장본 재계산 정책](project-snapshot-rebuild-policy.md) — 판번호 변경 시 전 종목 재계산 유지, 새 값 나올 때까지 옛 값 응답
+- [검증기 실행 전 검사](feedback-verifier-precheck.md) — no-undef 정적 검사·대표 1종목 후 30종목, 공유 verify-dev 앱 파일은 flock 잡고 한 번에 덮어쓰기
+- [Pro 순차 진행](project-plan-pro-sequential.md) — 10-10 Pro 다운그레이드, 병렬 금지, 한국→일본→미국, 10월 말 Max 때 병렬 재개
+- [지적은 즉시 CLAUDE.md 로](feedback-propagate-rules-immediately.md) — 메모리만 적고 미루기 금지, 작업자는 메모리를 못 봄
+- [검증기 재작업 실수 0](feedback-verifier-rework-zero-error.md) — 설계 승인 전 코드 금지, 단계마다 대조·심은 오류·독립 감사, 오너 말 그대로 기록
