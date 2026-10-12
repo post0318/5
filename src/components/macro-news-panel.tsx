@@ -15,15 +15,9 @@ interface NewsResponse {
 const PAGE_SIZE = 5;
 const MAX_PAGES = 6; // 종목뉴스 탭과 동일 — 최대 30건까지 노출
 
-/** 요약 없는 항목(해외뉴스)의 자리 채움 — stock-news.tsx 와 동일한 이유로
- * line-clamp-2 가 계산하는 실제 두 줄 높이에 정확히 맞춘다. */
-const blankTwoLines = (
-  <>
-    {" "}
-    <br />
-    {" "}
-  </>
-);
+/* 국내·해외 가로줄 맞춤(오너 지시 2026-10-11): 한 행의 네 줄(제목·원제·발췌 2줄·매체)
+ * 높이를 모두 고정한다. 예전엔 빈 줄을 공백 문자(" ", " <br/> ")로 채웠는데, 공백만
+ * 있는 줄은 높이가 접혀(해외뉴스는 원제·발췌가 없는 기사가 많다) 좌우 행이 어긋났다. */
 
 function fmtAgo(iso: string): string {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -101,16 +95,16 @@ function NewsColumn({
                   className="group flex min-w-0 flex-1 items-start gap-2"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="group-hover:text-primary line-clamp-1 text-sm leading-snug font-medium">
+                    <div className="group-hover:text-primary h-5 truncate text-sm leading-5 font-medium">
                       {it.titleKo}
                     </div>
-                    <div className="text-muted-foreground mt-0.5 truncate text-xs">
-                      {it.titleKo !== it.title ? it.title : " "}
+                    <div className="text-muted-foreground mt-0.5 h-4 truncate text-xs leading-4">
+                      {it.titleKo !== it.title ? it.title : null}
                     </div>
-                    <p className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-snug">
-                      {it.excerpt ? it.excerpt : blankTwoLines}
+                    <p className="text-muted-foreground mt-1 line-clamp-2 h-8 text-xs leading-4">
+                      {it.excerpt || null}
                     </p>
-                    <div className="text-muted-foreground mt-1 flex items-center gap-x-2 text-xs">
+                    <div className="text-muted-foreground mt-1 flex h-4 items-center gap-x-2 text-xs leading-4">
                       <span>{it.publisher}</span>
                       <span>·</span>
                       <span className="tnum">{fmtAgo(it.publishedAt)}</span>
