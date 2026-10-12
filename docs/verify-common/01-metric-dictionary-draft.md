@@ -99,6 +99,11 @@
 - Q12 미국 CapEx 대체 태그 4종 구성.
 - Q3 일본 현금 범위: 일본 사이트(카부탄·야후재팬·민카부 등) 순현금·EV 정의 확인.
 - Q6 한국 네이버 FY2 추정 EPS 제공 여부 확인 → **오너 재확인**. 일본 추정치 원천 FY2 제공 여부 확인.
+  - 확인 결과(10-12): 네이버(`m.stock.naver.com/api/stock/{코드}/finance/annual`)는 FY1(2026E)만. 네이버 기업분석 데이터는 FnGuide 제공
+    (화면 저작권 문구). FnGuide `wcomp.fnguide.com/CompanyInfo/Consensus` 는 로그인 없이 2026E~2028E·PER(Fwd. 12M) 제공, 2호기(일본 IP)에서도 200.
+    robots `Disallow: /` + "무단 사용·DB화 시 민형사상 책임" 문구. 선택지(FnGuide 예외 / 네이버 FY1 + 연도 표기 / 빈칸) 제시 →
+    **오너 보류(2026-10-12 "고민을 해야겠다 뒤로 다시 확인하자")**.
+- C2(화면 미표시 컨센서스 BPS·PER·PBR·ROE·EV/EBITDA): 계산은 되는데 어느 화면도 안 씀(consensus-panel 은 매출·EPS 만) — **오너 보류(같은 날)**, Q7 도 C2 따라감.
 
 ## 7. 다음
 
