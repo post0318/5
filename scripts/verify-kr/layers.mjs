@@ -570,7 +570,9 @@ function highlightRowsLayer(c) {
       : { rev: ltmExp.revenue, op: ltmExp.opinc, ocf: ltmExp.ocf, capex: ltmExp.capex };
     e.eps = y != null ? (c.dartVint?.[`${col}|희석 EPS`] ? (c.dartVint[`${col}|희석 EPS`].latest ?? null) : epsOwner(y)) : ltmExp.eps;
     // 순이익·EBITDA 도 검증기 기대치(감사 12차 D2 — 앱 하이라이트 값을 기대치로 쓰지 않는다): 순이익 = DART, EBITDA = DART 영업이익 + K3 가 정한 감가상각
-    const ni = y != null ? fromOwner(y, [...IT.ni, ["IS", "CIS"]]) : ltmExp.ni;
+    // 사업연도 순이익 = A층이 DART 로 판독한 연결 순이익(승인 규칙 — 당기순이익 줄이 없으면 지배 + 비지배, 103590 2021·2022) — EPS 와 같은 방식. A층 판독이 없으면 그해 보고서 줄
+    const niA = y != null ? c.dartVint?.[`${col}|당기순이익(연결)`] : null;
+    const ni = y != null ? (niA ? (niA.latest ?? null) : fromOwner(y, [...IT.ni, ["IS", "CIS"]])) : ltmExp.ni;
     const dx = c.daExp?.get(col);
     const eb = e.op === undefined || !dx ? undefined : e.op != null && dx.v != null ? e.op + dx.v : null;
     const capexE = e.capex === undefined ? undefined : e.capex == null ? null : -Math.abs(e.capex);
