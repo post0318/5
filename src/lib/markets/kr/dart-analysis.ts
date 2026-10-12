@@ -37,7 +37,8 @@ export const KR_ANALYSIS_ACCOUNTS = {
   capex: { ids: ["ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"], names: ["유형자산의 취득"] },
   intangAcq: { ids: ["ifrs-full_PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities"], names: ["무형자산의 취득"] },
   intPaid: { ids: ["ifrs-full_InterestPaidClassifiedAsOperatingActivities"], names: ["이자의 지급"] },
-  divPaid: { ids: ["ifrs-full_DividendsPaidClassifiedAsFinancingActivities"], names: ["배당금의지급", "배당금지급"] },
+  // 배당금 지급 = 재무활동 또는 영업활동 분류(IFRS 는 둘 다 허용 — 103590 「배당금지급(영업)」, 오너 결정 2026-10-12 "가": 칸 이름만 다른 같은 돈)
+  divPaid: { ids: ["ifrs-full_DividendsPaidClassifiedAsFinancingActivities", "ifrs-full_DividendsPaidClassifiedAsOperatingActivities"], names: ["배당금의지급", "배당금지급"] },
 };
 const C = KR_ANALYSIS_ACCOUNTS;
 

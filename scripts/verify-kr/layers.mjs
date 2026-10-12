@@ -752,7 +752,7 @@ async function ltmLayer(c) {
     // 부가 흐름(매출총이익·세전이익·법인세·현금흐름) = 그 사업보고서 값(감사 10차 ⑥)
     const XA = { gross: [["ifrs-full_GrossProfit"], ["매출총이익"], ["IS", "CIS"]], pretax: [["ifrs-full_ProfitLossBeforeTax"], ["법인세비용차감전순이익"], ["IS", "CIS"]], tax: [["ifrs-full_IncomeTaxExpenseContinuingOperations", "ifrs-full_IncomeTaxExpenseBenefit"], ["법인세비용"], ["IS", "CIS"]],
       ocf: [["ifrs-full_CashFlowsFromUsedInOperatingActivities"], ["영업활동현금흐름"], ["CF"]], capex: [["ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"], ["유형자산의취득"], ["CF"]],
-      intangAcq: [["ifrs-full_PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities"], ["무형자산의취득"], ["CF"]], intPaid: [["ifrs-full_InterestPaidClassifiedAsOperatingActivities"], ["이자의지급"], ["CF"]], divPaid: [["ifrs-full_DividendsPaidClassifiedAsFinancingActivities"], ["배당금의지급", "배당금지급"], ["CF"]] };
+      intangAcq: [["ifrs-full_PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities"], ["무형자산의취득"], ["CF"]], intPaid: [["ifrs-full_InterestPaidClassifiedAsOperatingActivities"], ["이자의지급"], ["CF"]], divPaid: [["ifrs-full_DividendsPaidClassifiedAsFinancingActivities", "ifrs-full_DividendsPaidClassifiedAsOperatingActivities"], ["배당금의지급", "배당금지급"], ["CF"]] };
     for (const [k, it] of Object.entries(XA)) {
       const v = oneVal(pickRow(cur.rows, it[0], it[1], it[2]), (r) => num(r.thstrm_amount)).v;
       c.ltmExp[k] = v;
@@ -818,7 +818,7 @@ async function ltmLayer(c) {
     capex: [["ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"], ["유형자산의취득"], ["CF"]],
     intangAcq: [["ifrs-full_PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities"], ["무형자산의취득"], ["CF"]],
     intPaid: [["ifrs-full_InterestPaidClassifiedAsOperatingActivities"], ["이자의지급"], ["CF"]],
-    divPaid: [["ifrs-full_DividendsPaidClassifiedAsFinancingActivities"], ["배당금의지급", "배당금지급"], ["CF"]],
+    divPaid: [["ifrs-full_DividendsPaidClassifiedAsFinancingActivities", "ifrs-full_DividendsPaidClassifiedAsOperatingActivities"], ["배당금의지급", "배당금지급"], ["CF"]],
   };
   const kl = tt?.ttm?.krLtm ?? null;
   const why = tt?.ttm?.krLtmReasons ?? {};
