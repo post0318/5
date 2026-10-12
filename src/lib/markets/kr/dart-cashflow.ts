@@ -160,6 +160,23 @@ export function buildKrCashFlow(facts: KrFacts): FinancialStatement {
         : seriesOf(facts, line.ids ?? [], line.names ?? [], "CF");
       resolved[line.label] = applySign(raw, line.sign);
     }
+    // 현금흐름표 출발 줄이 "계속영업이익"인 기간(LS 2025 반기·사업보고서 — 분기마다 출발 줄 이름이 달라 그 분기 당기순이익이 빈칸이었다,
+    // 2026-10-02): 그 줄 값을 쓰고 칸 주석으로 밝힌다(중단영업 제외 금액)
+    const cellNotesByLabel: Record<string, Record<string, string>> = {};
+    if (block.title === "영업활동 현금흐름" && resolved["당기순이익"]) {
+      const cont = seriesOf(facts, ["ifrs-full_ProfitLossFromContinuingOperations"], ["계속영업이익", "계속영업이익(손실)", "계속영업당기순이익"], "CF");
+      const ni = resolved["당기순이익"];
+      // 손익계산서의 같은 기간 계속영업이익(없으면 당기순이익)과 정확히 같을 때만 — 현금흐름표 안의 다른 내역 줄일 수 있다(LS ELECTRIC 2025
+      // 반기 "계속영업이익" 67,257,505,238 은 출발 줄이 아니었다: 손익 계속영업이익과 다르고 1분기보다 작음)
+      const isCont = seriesOf(facts, ["ifrs-full_ProfitLossFromContinuingOperations"], ["계속영업이익", "계속영업당기순이익"], ["IS", "CIS"]);
+      const isNi = seriesOf(facts, ["ifrs-full_ProfitLoss"], ["당기순이익", "분기순이익", "반기순이익"], ["IS", "CIS"]);
+      for (const l of labels)
+        if (ni[l] == null && cont[l] != null && cont[l] === (isCont[l] ?? isNi[l])) {
+          ni[l] = cont[l];
+          (cellNotesByLabel["당기순이익"] ??= {})[l] = "현금흐름표 출발 줄 = 계속영업이익(중단영업 제외)";
+        } else if (ni[l] == null && cont[l] != null)
+          (cellNotesByLabel["당기순이익"] ??= {})[l] = "현금흐름표 출발 줄(계속영업이익)이 손익계산서 같은 기간 값과 다름 — 비움";
+    }
 
     for (const line of block.lines) {
       let values: Record<string, number | null>;
@@ -185,6 +202,7 @@ export function buildKrCashFlow(facts: KrFacts): FinancialStatement {
         isSubtotal: false,
         isHighlight: false,
         values,
+        ...(cellNotesByLabel[line.label] ? { cellNotes: cellNotesByLabel[line.label] } : {}),
       });
     }
     items.push({

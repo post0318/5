@@ -1,0 +1,404 @@
+/**
+ * 검증기 DART 원자료 조회(한국) — 앱 코드와 무관하게 OpenDART 를 직접 부른다.
+ *
+ * 디스크 캐시(cache.mjs) 열쇠 = 그 보고서의 **최신 접수번호**. 회사마다 실행당 1회 정기공시 목록(list.json)을 받아
+ * (사업연도·보고서 코드) → 최신 접수번호를 정하고, 같으면 디스크, 바뀌었으면(정정 공시) 새로 받는다. 목록은 디스크에 6시간 보관(2026-10-10 — 아래 dartList).
+ * XBRL 점검(status 800) 응답은 30분 기록해 두고 그 사이 XBRL 요청을 보내지 않는다(점검 응답 자체는 캐시하지 않음 — 호출부엔 전과 같은 조회 실패).
+ * "013 자료 없음"도 그때의 판본("none" 또는 접수번호)과 함께 캐시 — 다음 실행 때 목록에 보고서가 생기면 판본이 달라져 무효.
+ * 요청은 전부 한 줄로(간격 300ms) — 몰아 보내면 이 PC·서버 연결이 약 1시간 막힌다(실측 2026-10-01).
+ * 조회 실패는 캐시하지 않고 던진다(호출부가 실패·종료코드 1).
+ */
+import { unzipSync, strFromU8 } from "fflate";
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { makeDartQuota, DartStopError } from "../lib/dart-quota.mjs";
+
+const B = "https://opendart.fss.or.kr/api";
+let KEY = null, CACHE = null;
+let chain = Promise.resolve();
+const slot = () => (chain = chain.then(() => new Promise((r) => setTimeout(r, 300))));
+export const dartStats = { requests: 0 };
+// 하루 요청 상한(2026-10-05 사고 — 운영과 같은 키의 한도를 다 써 운영 한국 재무가 멈췄다). DART_DAILY_CAP_VERIFY(기본 3,000)
+let QUOTA = null;
+export function dartQuota() { return QUOTA; }
+export { DartStopError };
+
+export function configureDart({ key, cache, cap }) {
+  KEY = key;
+  CACHE = cache;
+  QUOTA = makeDartQuota({ tool: "verify", cap: cap ?? 3000, dir: new URL("../../reports/.dart-quota/", import.meta.url) });
+}
+
+async function getRaw(url, kind) {
+  if (!KEY) throw new Error("DART_API_KEY 미설정");
+  for (let i = 0; ; i++) {
+    try {
+      await slot();
+      if (!QUOTA) throw new Error("DART 요청 상한 미설정(configureDart 먼저)");
+      QUOTA.take();
+      dartStats.requests++;
+      const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+      if (!r.ok) throw new Error(`DART ${kind} HTTP ${r.status}`);
+      // 020(사용한도 초과)은 그 자리에서 전체 중단 — 본문 앞부분 검사(JSON·XML 모두), 응답은 다시 만들어 돌려준다
+      const buf = await r.arrayBuffer();
+      QUOTA.check(new TextDecoder("utf-8").decode(new Uint8Array(buf).slice(0, 400)));
+      return new Response(buf, { status: r.status, headers: r.headers });
+    } catch (e) {
+      if (e instanceof DartStopError || i >= 2) throw e;
+      await new Promise((res) => setTimeout(res, 2000 * (i + 1)));
+    }
+  }
+}
+
+async function getJson(path, params, kind) {
+  const q = new URLSearchParams({ crtfc_key: KEY ?? "", ...params });
+  const r = await getRaw(`${B}/${path}?${q}`, kind);
+  const j = await r.json();
+  if (j.status === "013") return { status: "013", list: null };
+  if (j.status !== "000") throw new Error(`DART ${kind} ${j.status} ${j.message ?? ""}`.trim());
+  return j;
+}
+
+// ── 정기공시 목록(회사별 — 디스크에 6시간 보관, 오너 지시 2026-10-10 "왜 조회를 계속 요청하나") ──
+// 열쇠 = 회사·조회 시작 연도(조회 범위). 6시간 안이면 디스크 목록을 쓴다 — 그 사이 나온 정정 공시는 실패가 난 종목만 목록을 새로 받아 확인한다
+// (dartListRefresh — 판본이 바뀌었으면 호출부가 그 종목을 새 판본으로 다시 검증, 앱과 판본이 어긋난 것은 실패가 아니라 판본 불일치로 표시)
+const LIST_TTL_MS = 6 * 3600e3;
+const listMemo = new Map();
+const listInfo = new Map(); // corp → { fromDisk, at }
+const RE_NM = /(사업|반기|분기)보고서\s*\((\d{4})\.(\d{2})\)/;
+async function fetchListRows(corp, bgn) {
+  const end = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
+  const rows = [];
+  for (let page = 1; page <= 10; page++) {
+    const j = await getJson("list.json", { corp_code: corp, bgn_de: `${bgn}0101`, end_de: end, pblntf_ty: "A", page_count: "100", page_no: String(page) }, "list.json");
+    if (j.status === "013") break;
+    rows.push(...(j.list ?? []));
+    if (page >= Number(j.total_page ?? 1)) break;
+  }
+  // 필요한 칸만 보관
+  return rows.map((r) => ({ report_nm: r.report_nm, rcept_no: r.rcept_no, rcept_dt: r.rcept_dt }));
+}
+/** 목록을 어디서 받았는지(디스크 보관본이면 그 시각) */
+export function dartListInfo(corp) { return listInfo.get(corp) ?? null; }
+/**
+ * 목록을 새로 받아 보관본과 비교 — 바뀐 보고서(최신 접수번호가 달라진 사업연도·보고서) 목록. 바뀌었으면 이번 실행의 목록도 새 것으로 바꾼다
+ * (그 회사 재무제표 캐시는 판본 = 최신 접수번호라 자연히 새로 받는다). 디스크 보관본이 아니었으면(방금 받음) 요청하지 않고 []
+ */
+export async function dartListRefresh(corp) {
+  const inf = listInfo.get(corp);
+  // 보관본이 30분 안이면 앱 공시 목록(30분 보관)보다 오래되지 않았다 — 다시 받지 않는다(실패가 계속되는 종목이 실행마다 1건씩 쓰지 않게)
+  if (!inf?.fromDisk || !listMemo.has(corp) || Date.now() - inf.at < 30 * 60e3) return [];
+  const old = await listMemo.get(corp);
+  const bgn = new Date().getFullYear() - 8;
+  const rows = await fetchListRows(corp, bgn);
+  if (CACHE) CACHE.put("list", `${corp}_${bgn}`, "v1", { at: Date.now(), rows });
+  const fresh = buildList(rows);
+  listInfo.set(corp, { fromDisk: false, at: Date.now() });
+  const changed = fresh.reports.filter((x) => old.latest(x.year, x.code)?.rcept !== fresh.latest(x.year, x.code)?.rcept && fresh.latest(x.year, x.code)?.rcept === x.rcept);
+  if (changed.length) listMemo.set(corp, Promise.resolve(fresh));
+  return changed;
+}
+/**
+ * 회사의 정기공시 — reports: [{ year, code, month, rcept, nm }] (정정본 포함), latest(year, code) = 최신 접수번호.
+ * code: 11011 사업 · 11012 반기 · 11013 1분기 · 11014 3분기(결산월 기준 3·6·9개월째)
+ */
+export function dartList(corp) {
+  if (!listMemo.has(corp)) listMemo.set(corp, (async () => {
+    const bgn = new Date().getFullYear() - 8;
+    const hit = CACHE ? CACHE.get("list", `${corp}_${bgn}`, "v1") : undefined;
+    let rows;
+    if (hit && Date.now() - hit.at < LIST_TTL_MS) { rows = hit.rows; listInfo.set(corp, { fromDisk: true, at: hit.at }); }
+    else {
+      rows = await fetchListRows(corp, bgn);
+      if (CACHE) CACHE.put("list", `${corp}_${bgn}`, "v1", { at: Date.now(), rows });
+      listInfo.set(corp, { fromDisk: false, at: Date.now() });
+    }
+    return buildList(rows);
+  })());
+  return listMemo.get(corp);
+}
+function buildList(rows) {
+  {
+    const raw = rows.map((r) => ({ m: RE_NM.exec(r.report_nm ?? ""), r })).filter((x) => x.m);
+    // 결산월 = 사업보고서의 월(가장 흔한 값)
+    const am = raw.filter((x) => x.m[1] === "사업").map((x) => Number(x.m[3]));
+    const fyMonth = am.length ? am.sort((a, b) => am.filter((v) => v === b).length - am.filter((v) => v === a).length)[0] : 12;
+    const reports = [];
+    for (const { m, r } of raw) {
+      const yy = Number(m[2]), mm = Number(m[3]);
+      let code = null, year = yy;
+      if (m[1] === "사업") code = "11011";
+      else {
+        const off = (mm - fyMonth + 12) % 12;
+        code = { 3: "11013", 6: "11012", 9: "11014" }[off] ?? null;
+        // 결산월이 12월이 아니면 사업연도 = 결산월 이후 시작 연도 — 12월 결산만 확정 처리, 나머지는 판본 미상(캐시 안 함)
+        if (fyMonth !== 12) code = null;
+      }
+      if (!code) continue;
+      reports.push({ year, code, month: mm, rcept: r.rcept_no, nm: r.report_nm, dt: r.rcept_dt });
+    }
+    const latestMap = new Map();
+    for (const x of reports) {
+      const k = `${x.year}|${x.code}`;
+      if (!latestMap.has(k) || latestMap.get(k).rcept < x.rcept) latestMap.set(k, x);
+    }
+    return {
+      fyMonth,
+      reports,
+      latest: (year, code) => latestMap.get(`${year}|${code}`) ?? null,
+      /**
+       * 기간이 가장 늦은 정기보고서(정정본 접수일이 아니라 보고 기간 기준). 시험 스위치 KR_VERIFY_ASSUME_ANNUAL=1 이면 사업보고서만(3~5월 —
+       * 최신 정기보고서가 사업보고서인 시기를 흉내, 감사 2차 ⑤)
+       */
+      latestPeriod() {
+        const ord = { "11013": 1, "11012": 2, "11014": 3, "11011": 4 };
+        const vs = [...latestMap.values()].filter((x) => process.env.KR_VERIFY_ASSUME_ANNUAL !== "1" || x.code === "11011");
+        return vs.sort((a, b) => b.year - a.year || ord[b.code] - ord[a.code])[0] ?? null;
+      },
+    };
+  }
+}
+
+async function versioned(ns, key, ver, fetcher) {
+  if (ver != null && CACHE) {
+    const hit = CACHE.get(ns, key, ver);
+    if (hit !== undefined) return hit;
+  }
+  const v = await fetcher();
+  if (ver != null && CACHE) CACHE.put(ns, key, ver, v);
+  return v;
+}
+
+/** 전체 재무제표(fnlttSinglAcntAll) — 목록(list) 또는 null(013). 판본 = 그 보고서 최신 접수번호(없으면 "none") */
+export async function dartFnltt(corp, year, reprt, fsDiv) {
+  const L = await dartList(corp);
+  const ver = L.fyMonth === 12 ? (L.latest(year, reprt)?.rcept ?? "none") : null;
+  return versioned("fnltt", `${corp}_${year}_${reprt}_${fsDiv}`, ver, async () => {
+    const j = await getJson("fnlttSinglAcntAll.json", { corp_code: corp, bsns_year: String(year), reprt_code: reprt, fs_div: fsDiv }, `fnltt ${year} ${reprt} ${fsDiv}`);
+    return j.list ?? null;
+  });
+}
+
+/** 배당에 관한 사항(alotMatter) — 목록 또는 null */
+export async function dartAlot(corp, year, reprt = "11011") {
+  const L = await dartList(corp);
+  const ver = L.fyMonth === 12 ? (L.latest(year, reprt)?.rcept ?? "none") : null;
+  return versioned("alot", `${corp}_${year}_${reprt}`, ver, async () => {
+    const j = await getJson("alotMatter.json", { corp_code: corp, bsns_year: String(year), reprt_code: reprt }, `alotMatter ${year}`);
+    return j.list ?? null;
+  });
+}
+
+// ── XBRL 점검(status 800) 기록 — 점검 중엔 같은 응답만 오므로 30분 동안 요청하지 않는다. 점검 해제 확인 스크립트(~/kr-dart-wait.sh, 1시간마다 1건)도
+//    점검을 확인할 때마다 기록(until = 그때 + 30분)을 새로 쓰고, 해제되면 파일을 지운다.
+//    기록 상한(감사 12차 ⑦): at 이 미래(1분 넘게)이거나 until 이 지금 + 30분을 넘거나 until < at 이면 잘못된 기록 — 지우고 무시(요청을 보내 다시 확인)
+const MAINT_FILE = new URL("../../reports/.dart-xbrl-maint.json", import.meta.url);
+const MAINT_TTL_MS = 30 * 60e3;
+function maintUntil() {
+  let j;
+  try { j = JSON.parse(readFileSync(MAINT_FILE, "utf8")); } catch (e) {
+    if (e?.code !== "ENOENT") console.warn(`[dart] XBRL 점검 기록 판독 실패 — 무시: ${e?.message ?? e}`);
+    return null;
+  }
+  const now = Date.now();
+  const at = Number(j?.at), until = j?.until == null ? at + MAINT_TTL_MS : Number(j.until);
+  if (!Number.isFinite(at) || !Number.isFinite(until) || at > now + 60e3 || until > now + MAINT_TTL_MS || until < at) {
+    console.warn(`[dart] XBRL 점검 기록이 상한 밖(at ${j?.at} · until ${j?.until}) — 지우고 무시`);
+    try { unlinkSync(MAINT_FILE); } catch (e) { console.warn(`[dart] XBRL 점검 기록 삭제 실패: ${e?.message ?? e}`); }
+    return null;
+  }
+  return now < until ? until : null;
+}
+const kst = (ms) => new Date(ms + 9 * 3600e3).toISOString().slice(11, 16);
+export const xbrlMaint = { skipped: 0 };
+async function xbrlZip(rcept, reprt) {
+  const until = maintUntil();
+  if (until) { xbrlMaint.skipped++; throw new Error(`DART XBRL 점검(status 800 기록 — ${kst(until)} KST 까지 요청 생략) ${rcept}`); }
+  const r = await getRaw(`${B}/fnlttXbrl.xml?crtfc_key=${KEY}&rcept_no=${rcept}&reprt_code=${reprt}`, `XBRL ${rcept}`);
+  const buf = new Uint8Array(await r.arrayBuffer());
+  if (/<status>800<\/status>/.test(strFromU8(buf.slice(0, 300)))) {
+    const now = Date.now();
+    try { mkdirSync(new URL(".", MAINT_FILE), { recursive: true }); writeFileSync(MAINT_FILE, JSON.stringify({ at: now, until: now + MAINT_TTL_MS, rcept })); }
+    catch (e) { console.warn(`[dart] XBRL 점검 기록 쓰기 실패 — 다음 요청이 다시 확인: ${e?.message ?? e}`); }
+    throw new Error(`DART XBRL 점검(status 800) ${rcept}`);
+  }
+  return buf;
+}
+
+// XBRL 원본은 크다(수 MB) — 필요한 사실만 텍스트(JSON)로 남긴다. 거르는 규칙이 바뀌면 FILTER 판을 올려 옛 캐시를 무효로
+const XBRL_FILTER_VER = "f2";
+const XBRL_KEEP = /Lease|Depreciat|Amorti[sz]|RightofuseAssets|RightOfUseAssets|InvestmentPropert|Impairment/i;
+/** 보고서 XBRL 의 숫자 사실 중 감가상각·리스 관련만 [개념, 컨텍스트, 값]. 판본 = 접수번호(바뀌지 않음) */
+export async function dartXbrlFacts(rcept, reprt) {
+  return versioned("xbrl", `${rcept}_${reprt}`, `${rcept}-${XBRL_FILTER_VER}`, async () => {
+    const buf = await xbrlZip(rcept, reprt);
+    if (buf.length < 100) throw new Error(`DART XBRL ${rcept} 빈 응답(${buf.length}B)`);
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART XBRL ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const n = Object.keys(files).find((x) => x.endsWith(".xbrl"));
+    if (!n) throw new Error(`DART XBRL ${rcept} — zip 안에 .xbrl 없음`);
+    const xml = strFromU8(files[n]);
+    const out = [];
+    for (const m of xml.matchAll(/<([\w-]+):(\w+)\b[^>]*?contextRef="([^"]+)"[^>]*>(-?\d+(?:\.\d+)?)</g))
+      if (XBRL_KEEP.test(m[2]) || /Lease/i.test(m[3])) out.push([`${m[1]}:${m[2]}`, m[3], Number(m[4])]);
+    return out;
+  });
+}
+
+/**
+ * 분기·반기 보고서 XBRL 의 누적 기간 숫자 사실 [개념, 컨텍스트, 값] — 컨텍스트가 당기·전기 누적(CFY/PFY 연도 d FQ|HY|TQ A)이고 축이 없거나 연결/별도 축
+ * 하나뿐인 것만(현금흐름 LTM 전기 누적 = 정정본, 오너 결정 2026-10-10). 앱 xbrl.ts 와 코드를 나누지 않는 검증기 자체 판독. 판본 = 접수번호
+ */
+export async function dartXbrlCum(rcept, reprt) {
+  return versioned("xbrl-cum", `${rcept}_${reprt}`, `${rcept}-c1`, async () => {
+    const buf = await xbrlZip(rcept, reprt);
+    if (buf.length < 100) throw new Error(`DART XBRL ${rcept} 빈 응답(${buf.length}B)`);
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART XBRL ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const n = Object.keys(files).find((x) => x.endsWith(".xbrl"));
+    if (!n) throw new Error(`DART XBRL ${rcept} — zip 안에 .xbrl 없음`);
+    const xml = strFromU8(files[n]);
+    const CTX = /^([CP])FY(\d{4})d(FQ|HY|TQ)A(?:_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_(Consolidated|Separate)Member)?$/;
+    const out = [];
+    for (const m of xml.matchAll(/<([\w-]+):(\w+)\b[^>]*?contextRef="([^"]+)"[^>]*>(-?\d+(?:\.\d+)?)</g)) {
+      const c = CTX.exec(m[3]);
+      if (c) out.push([`${m[1]}:${m[2]}`, m[3], Number(m[4])]);
+    }
+    return out;
+  });
+}
+
+const DOC_FILTER_VER = "d1";
+/** 보고서 원문 중 "리스부채" 가 들어간 문장만(회계정책 — 리스부채를 어느 재무상태표 줄에 표시하는가). 판본 = 접수번호 */
+export async function dartDocLeaseSentences(rcept) {
+  return versioned("doc-lease", rcept, `${rcept}-${DOC_FILTER_VER}`, async () => {
+    const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    // 원문 파일이 없는 판본(DART 014 "파일이 존재하지 않습니다" — [첨부정정]은 첨부만 바꿔 본문이 없다, 001440 2024)은 문장 없음. 다른 상태는 실패
+    const head = strFromU8(buf.slice(0, 300));
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const out = new Set();
+    for (const b of Object.values(files)) {
+      let t = new TextDecoder("utf-8").decode(b);
+      if (/�/.test(t.slice(0, 20000))) t = new TextDecoder("euc-kr").decode(b);
+      t = t.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+      for (const s of t.split(/(?<=[.다])\s/)) if (s.includes("리스부채") && s.length < 400) out.add(s.trim());
+    }
+    return [...out];
+  });
+}
+
+const DOC_CELL_VER = "c2";
+const CELL_UNIT = { 원: 1, 천원: 1e3, 백만원: 1e6, 억원: 1e8 };
+/**
+ * 분기·반기 보고서 원문 주석 표의 태그 칸(리스부채 관련 — ACODE·ACONTEXT 가 달린 <TE>) → [개념, 컨텍스트, 원 단위 값]. 표 단위("(단위 : 천원)")는
+ * 그 표 안 첫 부분, 없으면 표 바로 앞 글자의 마지막 단위 표기. ADECIMAL 이 표 단위와 맞지 않는 칸(0 제외)은 버린다. 판본 = 접수번호
+ */
+export async function dartDocLeaseCells(rcept) {
+  return versioned("doc-lease-cells", rcept, `${rcept}-${DOC_CELL_VER}`, async () => {
+    const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const head = strFromU8(buf.slice(0, 300));
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const strip = (t) => t.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+    const unitIn = (t) => [...strip(t).matchAll(/단위\s*:\s*(천원|백만원|억원|원)/g)].map((m) => m[1]);
+    const out = [];
+    for (const b of Object.values(files)) {
+      let t = new TextDecoder("utf-8").decode(b);
+      if (/�/.test(t.slice(0, 20000))) t = new TextDecoder("euc-kr").decode(b);
+      const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
+      let m;
+      while ((m = re.exec(t))) {
+        const tab = m[0];
+        const u = CELL_UNIT[unitIn(tab.slice(0, 2000))[0] ?? unitIn(t.slice(Math.max(0, m.index - 1500), m.index)).at(-1)];
+        if (!u) continue;
+        for (const c of tab.matchAll(/<TE\s([^>]*)>([^<]*)<\/TE>/g)) {
+          const attr = (n) => new RegExp(`(?:^|\\s)${n}="([^"]*)"`).exec(c[1])?.[1];
+          const code = attr("ACODE"), ctx = attr("ACONTEXT"), dec = attr("ADECIMAL");
+          if (!code || !ctx || !/Lease|LiabilitiesArisingFromFinancingActivities|FinancialLiabilities/.test(code + ctx)) continue;
+          const raw = c[2].replace(/[　\s]/g, "");
+          if (!/^\(?-?[\d,]+\)?$/.test(raw)) continue;
+          const val = Number(raw.replace(/[(),-]/g, "")) * (/^[(-]/.test(raw) ? -1 : 1);
+          if (dec != null && /^-?\d+$/.test(dec) && val !== 0 && 10 ** -Number(dec) !== u) continue;
+          out.push([code, ctx, val * u]);
+        }
+      }
+    }
+    return out;
+  });
+}
+
+/** 기업개황(company.json) — 법인등록번호(jurir_no) 등. 판본 고정(v1, 법인등록번호는 바뀌지 않음) */
+export async function dartCompany(corp) {
+  return versioned("company", corp, "v1", async () => {
+    const j = await getJson("company.json", { corp_code: corp }, `company ${corp}`);
+    return { jurir_no: j.jurir_no ?? null, corp_name: j.corp_name ?? null };
+  });
+}
+
+const DOC_DA_VER = "t5";
+/**
+ * 보고서 원문(사업·분기·반기)의 표 중 감가상각·상각 줄이 있는 표만 — [{ head, unit, scope, section, period, rows: [[셀…]] }].
+ *  · head = 표 바로 앞 글자 마지막 300자, unit = 원 단위 배수(표 안 첫 부분 → 없으면 표 앞 1500자의 마지막 "(단위 : …)")
+ *  · section = 표가 속한 주석 제목(문서 순서로 표 사이 글자에 나온 마지막 "번호. 제목" — 제목이 없는 표는 앞 표의 제목을 잇는다: 당반기 표 뒤의
+ *    전반기 표 등). 감사 3차: 범위·표 종류(성격별·현금흐름)를 이 제목으로 판정한다
+ *  · scope = 연결("con")·별도("sep")·미상(null) — 첨부 문서 종류(연결감사보고서 00761 → con, 감사보고서 00760 → sep) → 본문 목차(<TITLE>)가
+ *    "연결재무제표…"면 con, "재무제표…"면 sep → 주석 제목에 "연결"이 있으면 con(「반기연결현금흐름표」·「비용의 성격별 분류 (연결)」), 제목은 있는데
+ *    "연결"이 없으면 sep(「현금흐름표」). 셋 다 못 정하면 null
+ *  · period = 표 바로 앞(제목 뒤) 기간 표시 — "cur"(당기·당반기·당분기)·"prior"(전기·전반기·전분기)·null
+ *  · rows 의 셀은 COLSPAN 만큼 반복(머리행 열 맞춤용)
+ * 앱 적재 스크립트(populate-kr-da.mjs)와 코드를 나누지 않는 검증기 판독. 판본 = 접수번호
+ */
+export async function dartDocDaTables(rcept) {
+  return versioned("doc-da-tables", rcept, `${rcept}-${DOC_DA_VER}`, async () => {
+    const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const head = strFromU8(buf.slice(0, 300));
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const U = { 원: 1, 천원: 1e3, 백만원: 1e6, 억원: 1e8 };
+    const txt = (t) => t.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;|&cr;|&amp;/g, " ").replace(/\s+/g, " ").trim();
+    const units = (t) => [...txt(t).matchAll(/단위\s*:\s*(천원|백만원|억원|원)/g)].map((m) => U[m[1]]);
+    const out = [];
+    for (const b of Object.values(files)) {
+      let t = new TextDecoder("utf-8").decode(b);
+      if ((t.match(/�/g) ?? []).length > 50) t = new TextDecoder("euc-kr").decode(b);
+      const acode = t.match(/<DOCUMENT-NAME[^>]*ACODE="(\d+)"/)?.[1];
+      const fileScope = acode === "00761" ? "con" : acode === "00760" ? "sep" : null;
+      const titles = [...t.matchAll(/<TITLE[^>]*>([^<]*)<\/TITLE>/g)].map((x) => [x.index, x[1]]);
+      const titleScope = (i) => {
+        const ti = titles.filter(([k]) => k < i).at(-1)?.[1] ?? "";
+        return /연결\s*재무제표/.test(ti) ? "con" : /재무제표/.test(ti) ? "sep" : null;
+      };
+      const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
+      let m, prevEnd = 0, section = null;
+      while ((m = re.exec(t))) {
+        const tab = m[0];
+        // 앞 자료 표(3줄 이상) 뒤부터 이 표까지의 글자 — 제목·단위만 담은 작은 표(DART 는 "당기 (단위 : 천원)"를 따로 작은 표에 넣는다)도 포함
+        const between = txt(t.slice(prevEnd, m.index));
+        if ((tab.match(/<TR/gi) ?? []).length >= 3) prevEnd = m.index + tab.length;
+        // 마지막 "번호. 제목"(번호 뒤 한글로 시작하는 30자) — 없으면 앞 표 제목을 잇는다
+        const hs = [...between.matchAll(/(?:^|\s)(\d{1,2})\.\s*([가-힣][^.]{0,30})/g)];
+        if (hs.length) section = hs.at(-1)[2].trim();
+        if (!/상각/.test(tab)) continue;
+        const rows = [...tab.matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((x) => [...x[0].matchAll(/<T([DHEU])([^>]*)>([\s\S]*?)<\/T[DHEU]>/gi)].flatMap((c) => {
+          const span = Number(c[2].match(/COLSPAN="?(\d+)/i)?.[1] ?? 1);
+          return Array(Math.min(Math.max(span, 1), 20)).fill(txt(c[3]));
+        }));
+        if (!rows.some((row) => /상각/.test(row[0] ?? ""))) continue;
+        const before = t.slice(Math.max(0, m.index - 1500), m.index);
+        const unit = units(tab.slice(0, 2000))[0] ?? units(before).at(-1) ?? null;
+        const tail = between.slice(-40).replace(/\s+/g, "");
+        // "당기 (단위 : 천원)"·"(당기) (단위: 백만원)"·"(1) 당기" — 괄호 허용
+        const period = /(당|금)(반기|분기|기)(말)?\)?(\(단위[^)]*\))?$/.test(tail) ? "cur" : /전(반기|분기|기)(말)?\)?(\(단위[^)]*\))?$/.test(tail) ? "prior" : null;
+        const secScope = section ? (/연결/.test(section) ? "con" : "sep") : null;
+        out.push({ head: txt(before).slice(-300), unit, scope: fileScope ?? titleScope(m.index) ?? secScope, section, period, rows });
+      }
+    }
+    return out;
+  });
+}

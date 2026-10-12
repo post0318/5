@@ -90,6 +90,8 @@ export interface FinancialStatement {
   sourceUrl?: string;
   /** 미국 — 재무 5층 구조(fin) 조립이 완전하지 않은 열(gaps·조립 항등식 불성립, fin-revenue.ts FinColIssue) */
   finIssues?: { col: string; start: string; end: string; v: number | null; gaps: string[]; rev: string[]; other: string[]; unv: string[] }[];
+  /** 조회 실패 경고(한국 — 감가상각 적재본 등). 있으면 일부 값이 폴백·빈칸이다 */
+  warnings?: string[];
 }
 
 export interface CompanyProfile {
@@ -166,6 +168,8 @@ export interface EodQuote {
    * 쓴다(오너 결정 2026-10-02 (나) — 화면마다 조회 시점이 달라 0.01~0.08% 어긋나던 문제). 장 마감 뒤·주말이면 없음
    */
   live?: { price: number; date: string; change: number | null; changePct: number | null } | null;
+  /** 원천 조회 실패로 다른 소스를 쓴 사유(감사 2차 ⑨ — KRX 실패 → Yahoo, 최신 봉 보강 실패) — 호출부가 화면 경고에 싣는다 */
+  warnings?: string[];
 }
 
 /** 트레일링 멀티플 (L3, 자체 계산). */
@@ -199,6 +203,13 @@ export interface TrailingMultiples {
 
 /** TTM(최근 4분기 누적) 플로우 지표. */
 export interface TtmFlows {
+  /**
+   * 한국 LTM 부가 흐름(오너 결정 2026-10-10 — 정정 후 값으로 통일): 최근 사업연도 + 당기 누적 − 당기 보고서 전기 누적(정정본). 매출총이익·세전이익·
+   * 법인세·영업활동 현금흐름·유형/무형자산 취득·이자·배당 지급. LTM 이 사업연도면 그 사업연도 값. 못 구하면 null(대체 없음)
+   */
+  krLtm?: Partial<Record<"gross" | "pretax" | "tax" | "ocf" | "capex" | "intangAcq" | "intPaid" | "divPaid", number | null>>;
+  /** krLtm 항목이 빈칸인 사유(정정본 전기 누적을 확인 못 함 등) — 화면 주석용 */
+  krLtmReasons?: Partial<Record<string, string>>;
   /** 계산 기준 라벨 (예: "FY2025 + 2026 반기 − 2025 반기") */
   periodLabel: string;
   /** 조회 자체가 실패했으면 그 사유 — 모든 값이 null(대체 계산 금지, 화면은 이 사유를 보여준다) */
@@ -259,7 +270,7 @@ export interface TtmFlows {
      * 한국 — LTM 열 EV 브릿지 내역(kr/dart-ev.ts krLtmBalance, 최신 분기말 재무상태표).
      * 하이라이트·재무분석 LTM 열이 이 값을 그대로 쓴다(개요 멀티플과 같은 기준일).
      */
-    evBridge?: { debt: number; lease: number; cash: number; nci: number; plainFinLiab: boolean } | null;
+    evBridge?: { debt: number; lease: number; cash: number; nci: number; plainFinLiab: boolean; leaseUnknown?: string | null; leaseHow?: string | null } | null;
   } | null;
   /** 감가상각비+무형자산상각비 — 최근 사업연도(연간, PER 과 동일 기준) */
   daAnnual?: number | null;
