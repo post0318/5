@@ -103,6 +103,7 @@
     재무분석(edgar-analysis.ts CAPEX_C)엔 있음 — 같은 지표 목록 불일치(결함, 어느 쪽으로 정하든 통일).
   - 남은 확인(클라우드 세션은 SEC·Yahoo·StockAnalysis·DART 접속이 막혀 못 함 — 2호기 또는 네트워크 허용 뒤): ① ProductiveAssets 만 쓰는 미국
     유니버스 회사 수·무형 비중 ② 한국 `무형자산의 취득` 규모(유니버스 30) ③ Yahoo·StockAnalysis·FnGuide·인포맥스 CapEx 에 무형 포함 여부(대표 종목 숫자 대조).
+  - 실측은 2호기에서(오너 2026-10-13) — 작업 지시 `02-q12-q14-measure-task.md`, 결과 `03-q12-q14-measure.md`.
 - Q3 일본 현금 범위: 일본 사이트(카부탄·야후재팬·민카부 등) 순현금·EV 정의 확인.
 - Q6 한국 네이버 FY2 추정 EPS 제공 여부 확인 → **오너 재확인**. 일본 추정치 원천 FY2 제공 여부 확인.
   - 확인 결과(10-12): 네이버(`m.stock.naver.com/api/stock/{코드}/finance/annual`)는 FY1(2026E)만. 네이버 기업분석 데이터는 FnGuide 제공
