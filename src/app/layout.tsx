@@ -48,6 +48,16 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} ${notoKR.variable} h-full antialiased`}
     >
+      <head>
+        {/* `/macro…?embed=top`(2번 글로벌 채권정보의 "거시경제" 링크, 2026-10-14): 앱 셸 맨 위 줄을 숨긴다.
+            그리기 전에 <html data-embed="top"> 을 달아 CSS 로 숨기므로 맨 위 줄이 잠깐 보였다 사라지지 않는다.
+            메뉴를 숨길 뿐 접근을 막지 않는다. 클라이언트 이동 중에는 속성이 그대로 남는다(새로고침 때 다시 판정). */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `if(location.pathname.indexOf("/macro")===0&&new URLSearchParams(location.search).get("embed")==="top")document.documentElement.setAttribute("data-embed","top")`,
+          }}
+        />
+      </head>
       <body className="bg-background text-foreground min-h-full">
         <Providers authEnabled={clerkEnabled} initialAuth={initialAuth}>
           {children}
