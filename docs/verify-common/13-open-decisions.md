@@ -243,6 +243,12 @@
 - **확인한 사실**: `snap-bypass.ts` 는 `kr/verification`·`jp/verification` 에만 있고 앱 3브랜치·master 에는 없다. 10-09 운영 배포에서 「검증 우회·한국 감사 코드 제외」로 **일부러 뺐다**(11 L72, `memory/project-resume-20261009.md` 인용). 검증은 로컬 개발 서버 대상(`CLAUDE.md` L2184~2188), 2호기 검증 서버는 운영 DB 쓰기 금지(`feedback-verify-no-prod-writes`, 10-05). 매일 05:30 운영에서 `fin_sym` 복사(11 L73).
 - **선택지**: (가) 앱 브랜치 세 개에 우회 코드 이식(인증 + 헤더일 때만, 운영 동작 불변) (나) 앱 코드 변경 없이 실행 직전 2호기 로컬 DB 의 대상 문서 삭제 + `FIN_NO_PERSIST=1` (다) 그대로 두고 「앱 판본 불확실」 표시만
 - **추천**: **(나) + 증거 기록**: 실행 전 대상 종목의 저장본 부재, 응답 시각·생성 시각을 증거로 남기고, 어긋나면 그 칸을 「검증불가(앱 판본 불확실)」로 둔다. 05:30 복사 시간대는 피한다. 이유: (가)는 10-09 에 오너가 뺀 코드를 앱 3브랜치에 되돌리는 일이라 오너 결정을 뒤집는 것이고 「설계 승인 전 코드 금지」와 같이 가야 한다; (다)는 사실상 검증이 아니다. (나)의 약점: `api_snap`·`ttm_snap` 쓰기는 막지 못한다(로컬 DB 에만 쓰임), 실행마다 수작업/스크립트 필요. 오너가 (가)를 택하면 그것은 10-09 결정의 변경으로 기록해야 한다.
+- **근거 재확인(2026-10-14, 오너 요청)**
+  - 맞음: `snap-bypass.ts` 는 origin `kr/verification`·`jp/verification` 에만 있고 `master`·`kr/app`·`jp/app`·`us/app`·`us/verification` 에는 없다(git ls-tree). master 는 `x-verify-no-snapshot` 을 모른다.
+  - 맞음: 05:30 `db-sync.sh` 는 보호 컬렉션(`kr_da_staging`·`verify_results`·`verify_state`·`*_staging`)만 빼고 전부 복사 — `fin_sym`·`ttm_snap`·`api_snap` 은 매일 운영 값으로 덮인다.
+  - **고침 — 「10-09 오너 결정으로 뺐다」는 기록으로 확인되지 않는다.** 근거는 커밋 21ea0ba(「배포 브랜치 — view-snap 주석의 검증 우회 언급 제거(master 에 없는 경로)」)와 resume 메모(「deploy/snap-stale 로 master 기준 이식, 검증 우회·한국 감사 코드 제외」)뿐 — 배포를 master 기준으로 잘라 우회 코드가 원래 따라가지 않았다는 기록이지, 오너가 앱에 두지 말라고 정한 기록은 없다. 관련 오너 규칙은 10-11 「시장 브랜치에는 검증기를 두지 않는다(검증기 변경은 `verify/common` 에서만)」(커밋 547f79a) — 앱 쪽 우회 코드(`src/lib/db/snap-bypass.ts`)가 「검증기」에 드는지는 정해지지 않았다. 따라서 (가)는 「10-09 결정 번복」이 아니라 「10-11 규칙의 범위 해석」 문제다.
+  - **더 심함**: master `loadFinSym` 은 엔진판이 다른 `fin_sym` 도 마지막 배치 7일 안이면 그대로 쓴다(오너 승인 10-09, `STALE_ENGINE_MAX_MS`), TTM 은 판번호만 다른 24시간 안 저장본을 쓰고 `anyAge` 경로는 24시간 넘은 것도 쓴다 — 시험 브랜치가 엔진판을 올려도 운영 저장본이 응답될 수 있다.
+  - **(나)의 빈틈 추가**: ① 저장본 삭제 대상은 `fin_sym` 만이 아니라 같은 종목의 `ttm_snap`·`api_snap`(하이라이트)도 ② 실행 중인 verify-dev 프로세스 메모리 캐시(`lookupCache`, globalThis — DB 저장본 10분·조립본 6시간)가 남아 있으면 DB 를 지워도 옛 값이 나온다 → 실행 전 verify-dev 재시작 또는 캐시 TTL 경과 확인이 필요 ③ `FIN_NO_PERSIST` 는 master 에 있고 `fin_sym·fin_stmt·fin_chg` 쓰기만 막는다(`persist` 예외 → `loadFinSym` 이 삼킴), `ttm_snap`·`api_snap` 쓰기는 안 막는다 — 2호기 로컬 DB 에만 쓰이고 다음 05:30 복사로 덮인다.
 
 #### D14. API 에 없는 화면 값(개요 PER(TTM)·추정PER·배당수익률, 일본 개요·유니버스)은 읽는 경로를 만드나?
 - **원래 번호**: 11-M2 (11 L57~61·514)
@@ -271,6 +277,7 @@
 - **확인한 사실**: 검증기 기본값이 자리표시자 `contact@example.com`(`verify-financials.mjs:210`); 앱도 환경변수 `SEC_USER_AGENT` 가 없으면 같은 자리표시자를 쓴다(`src/lib/markets/us/edgar.ts:53`, `src/lib/fin/source/us/sec.ts:23`). SEC 는 실제 연락처가 든 User-Agent 를 요구한다. 운영의 `SEC_USER_AGENT` 값은 2호기에서 확인할 수 없다(운영 접속 금지).
 - **선택지**: (가) 앱 운영과 같은 연락처를 오너가 환경변수로 제공 (나) 검증 전용 별도 연락처 (다) 없으면 실행 거부(설계 이미 이렇게 제안)
 - **추천**: **(가)+(다)** — 값은 오너가 정해 환경변수(`SEC_USER_AGENT`)로 주고, 없으면 검증기는 실행을 거부한다. 이 문서는 어떤 주소도 정하지 않았다.
+- **오너 결정(2026-10-14)**: 연락처 = **post0318@gmail.com**. 2호기 `~/5/.env.local`(verify-dev·검증기·적재 공용)에는 이미 `SEC_USER_AGENT=market-research (personal) post0318@gmail.com` 이 들어 있다(`5-jp`·`5-krdeploy` 도 같음) — 이 값을 기준으로 쓰고, 검증기는 값이 없거나 `example.com` 자리표시자면 실행 거부(다).
 
 #### D18. KRX·EDINET 키도 검증 전용으로 분리하나?
 - **원래 번호**: 10-U6 (10 L414, §3.6 표)
