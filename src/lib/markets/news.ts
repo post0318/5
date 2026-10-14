@@ -1774,6 +1774,8 @@ export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
     return {
       ...r,
       titleKo: s?.titleKo || translated.get(r.url) || r.title,
+      // 목록 둘째 줄 = 요약 첫 문장(4번 브라질 글로벌 뉴스와 같게, 오너 지시 2026-10-14). 요약 전이면 원래 발췌
+      excerpt: s?.bullets[0] ?? r.excerpt,
       summary: s ? (s.bullets.length ? "ready" : "unreadable") : "pending",
     };
   });
