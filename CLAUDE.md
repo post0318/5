@@ -1156,6 +1156,9 @@ npm run lint         # eslint
     민카부(`minkabu.jp/stock/{코드}/analyst_consensus`, 애널리스트 컨센서스·목표주가 — 오너 "민카부 예외로 둔다"). 민카부 robots.txt 는 `/stock/`
     허용, 한국 IP 는 403 이라 일본 서버(오라클)에서만 받는다. 요청은 적게·캐시. 같은 데이터를 주는 유료 대행(anysite 크레딧)은 쓰지 않는다 —
     **"돈은 무료가 기본 철칙"**(오너 2026-10-09).
+    - **검증 대조 허용(오너 2026-10-14, 검증기 공통화 미결 D10)**: 株探(`kabutan.jp`)·みんかぶ 를 **재무 검증 외부 대조**에도 쓴다. 조건 —
+      검증 스크립트 안에서만(앱 배포본·수집기·DB 에 넣지 않음), 한 번 받은 것은 디스크 캐시, 株探은 robots `Crawl-delay: 3` 대로 3초 간격,
+      저장은 판정·차이만(원문 커밋·게시 금지), 일본 서버(2호기)에서만. みんかぶ 는 앱 민카부 카드의 원천이라 컨센서스 칸에서는 독립 소스로 세지 않는다.
   - **예외 6건 (개인용, 오너 명시 승인, 2026-10-10)**: FISCO 企業調査レポート(일본 종목 리서치) — `www.fisco.co.jp/service/report/`
     목록(로그인 불필요, 서버렌더 HTML 한 장에 전 기간)에서 **날짜·회사명·종목코드·PDF 링크만** 수집(`scripts/collect-fisco-research.mjs`,
     source "FISCO", market jp, category 기업, 오라클 타이머 `research-fisco-research` 하루 1회 18:40 KST, 회차당 1요청). robots.txt 는
