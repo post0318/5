@@ -2,12 +2,12 @@
 
 ## 0. 서버 구성 (2026-10-03 오너 결정)
 
-Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 메인으로 쓴다(2026-10-05 기준 — 구글 Cloud Run 종료, Vercel 은 정지 해제 후 재연동 예정). 모두 같은 MongoDB 를 쓴다. 오라클 두 대 합계 3코어·20GB(무료 한도 4코어·24GB 이내, 0원).
+Vercel Hobby 가 Active CPU 한도 초과로 정지된 뒤 오라클 1호기를 메인으로 쓴다(2026-10-05 기준 — 구글 Cloud Run 종료, Vercel 은 정지 해제 후 재연동 예정). 모두 같은 MongoDB 를 쓴다. 오라클 두 대 합계 4코어·24GB — **무료 한도(4코어·24GB)를 꽉 채운 상태**(0원). 서버를 새로 만들거나 어느 한 대라도 키우면 한도를 넘는다(2026-10-15 확인 — 2호기는 인스턴스 정보로 2코어·12GB 실측, 1호기는 오너 확인 「2호기와 동일」).
 
 | 서버 | 역할 | 주소 | 배포 |
 |---|---|---|---|
 | **오라클 1호기** (오사카 ARM A1 2코어·12GB, 161.33.9.115) | **운영(1순위 주소)** — 화면 + 무거운 자동 작업 | https://macro-insights.duckdns.org | `deploy-oracle.yml`: master 푸시(앱 파일) → 서버가 해당 커밋을 받아 직접 빌드(ARM)·재시작 |
-| **오라클 2호기 `macro-verify`** (1코어·8GB·스왑 4GB, 140.83.48.57) | **검증 + IPO 운영(격리)** — `kr/verification` 브랜치 개발 서버(`verify-dev`, localhost:3000, 외부 비공개) + IPO 앱(`ipo@prod` :8000·`ipo@dev` :8001, Caddy 443·8443, ipo-auto.duckdns.org, 사무실·개발 PC IP 만 허용) | 없음(macro) | 수동(`cd ~/5 && git pull`) — 2026-10-04 생성. 운영과 IP·CPU 분리(DART·SEC 요청 제한이 운영에 번지지 않게). 환경변수 `~/5/.env.local`(운영 app.env + `KR_DA_COLLECTION=kr_da_staging`). SSH 키 `~/.ssh/oracle_verify` |
+| **오라클 2호기 `macro-verify`** (오사카 ARM A1 2코어·12GB·스왑 4GB, 140.83.48.57) | **검증 + IPO 운영(격리)** — `kr/verification` 브랜치 개발 서버(`verify-dev`, localhost:3000, 외부 비공개) + IPO 앱(`ipo@prod` :8000·`ipo@dev` :8001, Caddy 443·8443, ipo-auto.duckdns.org, 사무실·개발 PC IP 만 허용) | 없음(macro) | 수동(`cd ~/5 && git pull`) — 2026-10-04 생성. 운영과 IP·CPU 분리(DART·SEC 요청 제한이 운영에 번지지 않게). 환경변수 `~/5/.env.local`(운영 app.env + `KR_DA_COLLECTION=kr_da_staging`). SSH 키 `~/.ssh/oracle_verify` |
 | ~~구글 Cloud Run~~ (`brave-smile-508510-g5`, asia-northeast1) | **종료(2026-10-05 오너 결정)** — 서비스 삭제·배포 워크플로 비활성. 이미지(208MB)는 무료 범위라 보존 | — | `deploy-cloudrun.yml`(비활성) |
 | Vercel | **2순위 주소**. Hobby 한도 초과로 정지(402) 중 — 다음 달 사용량 초기화 때 풀리면 재연동 예정 | https://macroresearch.vercel.app | Git 연동(`vercel.json` ignoreCommand만, crons 는 2026-10-03 제거) |
 
