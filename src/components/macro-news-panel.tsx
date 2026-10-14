@@ -112,8 +112,10 @@ function NewsColumn({
                     <div className="group-hover:text-primary h-5 truncate text-sm leading-5 font-medium">
                       {it.titleKo}
                     </div>
+                    {/* 영문 원제: 해외 시황은 번역된 제목만(4번과 같게, 오너 지시 2026-10-14 — 번역이 안 되면 제목 자체가 영문).
+                        줄은 비워 두어 국내·해외 행 높이를 맞춘다 */}
                     <div className="text-muted-foreground mt-0.5 h-4 truncate text-xs leading-4">
-                      {it.titleKo !== it.title ? it.title : null}
+                      {!onOpen && it.titleKo !== it.title ? it.title : null}
                     </div>
                     <p className="text-muted-foreground mt-1 line-clamp-2 h-8 text-xs leading-4">
                       {it.excerpt || null}

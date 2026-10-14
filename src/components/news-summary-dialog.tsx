@@ -49,7 +49,6 @@ export function NewsSummaryDialog({ item, onClose }: { item: NewsItem | null; on
           <DialogTitle className="text-sm leading-snug">{summary?.titleKo ?? item?.titleKo}</DialogTitle>
           <DialogDescription className="text-[11px]">
             {item?.publisher}
-            {item && item.titleKo !== item.title ? <span className="mt-0.5 block truncate">{item.title}</span> : null}
           </DialogDescription>
         </DialogHeader>
 
