@@ -106,7 +106,7 @@
     (나) 일본 구성요소 합산 가능(「支払利息」 소제목 아래 태그만), JT·デンソー·KDDI·NTT 도 구성요소 있음 → 금융업 제외 187칸 중 152(81%) 채움, 빈칸 35(金融費用만 15·줄 없음 15·US GAAP 5)
     (다) キーエンス·ファナック·東京エレクトロン 차입금·사채 없음(借入金等明細表), 리스는 ファナック·TEL 소액 — 결정대로 빈칸
     (라) 20칸 중 17 판정 — 기준 "분자 영업이익과 같은 범위(계속영업)", HD현대중공업 = 금융비용 주석 값(계약부채 이자 포함), 엘에스일렉트릭 FY2025 = 49,898 + 리스이자 2,298 = 52,196. 미확인 3(한화오션 FY2024·25, LGES FY2024).
-    남은 규칙: 재작성 값(다음 해 보고서 전기) vs 원공시 — 분자 영업이익을 가져오는 보고서와 같게.
+    **결정(10-14, 추천안에 오너 "계속 해라" — 이의 없음)**: 재작성 값(다음 해 보고서 전기) vs 원공시 — 이자비용은 분자 영업이익을 가져오는 보고서와 같은 보고서 값.
 - Q12 미국 CapEx 대체 태그 4종 구성 → **오너 보류(2026-10-13)**, 아래 확인 뒤 재질의.
   - 확인(10-13): `PaymentsToAcquireProductiveAssets` SEC 설명문 = "purchases of and capital improvements on property, plant and equipment
     (capital expenditures), software, and other intangible assets"(ASC 230) — 유형 + 소프트웨어·무형 합계. `PaymentsToAcquireOtherProductiveAssets`·
