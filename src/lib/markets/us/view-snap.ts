@@ -3,6 +3,7 @@ import type { Collection } from "mongodb";
 import { getDb, isDbConfigured } from "@/lib/db";
 import { finChgCol, type FinChgDoc } from "@/lib/db/fin";
 import { ENGINE_VERSION } from "@/lib/fin";
+import { snapshotBypassed } from "@/lib/db/snap-bypass";
 import type { FinancialStatement } from "../types";
 import { fetchUsCompanyFacts, fetchUsSic } from "./edgar";
 import { buildUsBalance } from "./edgar-balance";
@@ -44,8 +45,8 @@ export interface ViewChange { changed: number; newCols: number; baseline: boolea
  * 재무 저장본 옛 엔진판 staleEv)
  */
 export async function recordUsViewChanges(symbol: string): Promise<ViewChange | null> {
-  // 비저장 모드(FIN_NO_PERSIST — fin/store.ts 와 같은 차단)는 기록하지 않는다
-  if (!isDbConfigured() || process.env.FIN_NO_PERSIST) return null;
+  // 비저장 모드(FIN_NO_PERSIST — fin/store.ts 와 같은 차단)·검증 우회 요청은 기록하지 않는다
+  if (!isDbConfigured() || process.env.FIN_NO_PERSIST || (await snapshotBypassed())) return null;
   const sym = symbol.toUpperCase();
   let sicFailed = false;
   const [{ facts }, sic] = await Promise.all([fetchUsCompanyFacts(sym), fetchUsSic(sym).catch(() => { sicFailed = true; return null; })]);

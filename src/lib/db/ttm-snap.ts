@@ -1,6 +1,7 @@
 import "server-only";
 import type { Collection } from "mongodb";
 import { getDb, isDbConfigured } from "./index";
+import { snapshotBypassed } from "./snap-bypass";
 import type { TtmFlows } from "../markets/types";
 import { ENGINE_VERSION } from "../fin";
 
@@ -55,7 +56,7 @@ export async function readTtmSnap(market: string, symbol: string): Promise<TtmFl
  * 2026-10-02 — 배포 직후 다시 채우기가 끝날 때까지 첫 조회가 수십 초, AXP). 계산 규칙이 바뀐 배포면 처음 한 번만 옛 규칙 값이 보일 수 있다
  */
 export async function readTtmSnapAny(market: string, symbol: string, opts: { anyAge?: boolean } = {}): Promise<{ ttm: TtmFlows; current: boolean } | null> {
-  if (!isDbConfigured()) return null;
+  if (!isDbConfigured() || (await snapshotBypassed())) return null;
   const d = await (await col()).findOne({ _id: key(market, symbol) });
   // anyAge — 24시간 넘은 저장본도(재무 저장본이 옛 판이라 새로 계산한 값을 저장할 수 없을 때, 새 값이 나올 때까지 옛 값 — 오너 결정 2026-10-09).
   // seen 만 있는 문서(touchTtmSeen upsert)는 저장본 없음
@@ -126,7 +127,7 @@ async function chgCol(): Promise<Collection<TtmChgDoc>> {
  * 옛 저장본이 있고 값이 바뀌었으면 ttm_chg 에 바뀐 칸을 남긴다(기록 실패는 저장에 영향 없음). 반환 = 바뀐 칸 수(옛 저장본 없으면 null)
  */
 export async function writeTtmSnap(market: string, symbol: string, ttm: TtmFlows, opts: { viewed?: boolean } = {}): Promise<{ changed: number | null; from: string | null } | null> {
-  if (!isDbConfigured() || !isStorableTtm(ttm)) return null;
+  if (!isDbConfigured() || !isStorableTtm(ttm) || (await snapshotBypassed())) return null;
   const now = new Date();
   const v = ttmSnapVersion();
   const store = { ...ttm };
@@ -151,7 +152,7 @@ export async function writeTtmSnap(market: string, symbol: string, ttm: TtmFlows
  * 남겨 배치 대상(listRecentlyViewed)에 들어가게 한다(seen 만 있는 문서는 readTtmSnapAny 가 저장본 없음으로 본다)
  */
 export async function touchTtmSeen(market: string, symbol: string, opts: { upsert?: boolean } = {}): Promise<void> {
-  if (!isDbConfigured()) return;
+  if (!isDbConfigured() || (await snapshotBypassed())) return;
   const now = new Date();
   const c = await col();
   const due = { $or: [{ seen: { $exists: false } }, { seen: { $lt: new Date(now.getTime() - 3_600_000) } }] };
