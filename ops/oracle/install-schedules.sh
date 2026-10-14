@@ -93,6 +93,8 @@ EOF
 unit fin-analyst-forecasts "종목분석: StockAnalysis 애널리스트 투자의견" "/opt/macro/ops/run-script.sh collect-analyst-forecasts.mjs" "*-*-* 10:20:00\n"
 # ③ 종목뉴스 미리 수집 — 10분마다 깨우고 종목별 신선도(한국 장중 10분·미국 장중 30분·장외 1시간)가 지난 것만 받는다(판정은 규칙, 비용 0)
 unit news-stock-news "뉴스: 유니버스 종목뉴스 미리 수집" "/opt/macro/ops/call-cron.sh /api/cron/stock-news 290" "*-*-* *:00/10:00\n"
+# ③ 해외 시황 뉴스 한글 제목·요약 — 30분마다 저장본 없는 기사만 무료 Gemini 키(NEWS_GEMINI_API_KEY, 결제 미연결)로 요약(2026-10-14, 비용 0)
+unit news-macro-summary "뉴스: 해외 시황 한글 제목·요약(무료 Gemini)" "/opt/macro/ops/call-cron.sh /api/cron/news-summary 290" "*-*-* *:07,37:00\n"
 # ③ 인플루언서 네이버 블로그 새 글 — 5분마다 RSS 확인, 새 글만 DB(naver_blog_posts)에 저장(오너 2026-10-05, 오라클에서 직접 DB 쓰기 — 운영 앱 CPU 안 씀)
 unit news-naver-blog "뉴스: 인플루언서 네이버 블로그 새 글 수집" "/opt/macro/ops/run-ts.sh naver-blog-poll.mts" "*-*-* *:00/5:00
 "
@@ -141,8 +143,8 @@ else
 fi
 
 systemctl daemon-reload
-for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/macro-kr-fg.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer "$U"/fin-jp-edinet-index.timer "$U"/fin-precompute.timer; do
+for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/macro-kr-fg.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-macro-summary.timer "$U"/news-naver-blog.timer "$U"/fin-jp-edinet-index.timer "$U"/fin-precompute.timer; do
   systemctl enable --now "$(basename "$t")" >/dev/null
 done
 if [ "$KRDA" = 1 ]; then systemctl enable --now fin-kr-da.timer >/dev/null; fi
-systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|br-ntnf|macro-kr-fg|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog|jp-edinet-index|fin-precompute|fin-kr-da" | sed 's/^/타이머 수: /'
+systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|br-ntnf|macro-kr-fg|analyst-forecasts|weekly-report|news-stock-news|news-macro-summary|news-naver-blog|jp-edinet-index|fin-precompute|fin-kr-da" | sed 's/^/타이머 수: /'
