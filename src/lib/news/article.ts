@@ -145,7 +145,8 @@ export async function fetchArticleText(url: string): Promise<string> {
     });
     if (!res.ok) return "";
     const html = (await res.text()).replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, "");
-    const paras = [...html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
+    // `<p\b` — `<path>`(SVG 아이콘)까지 문단으로 잡으면 메뉴·광고가 한 덩어리로 섞인다(2026-10-14 Yahoo 실측)
+    const paras = [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
       .map((m) => decodeEntities(m[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
       .filter((t) => t.length > 60);
     return paras.join("\n").slice(0, MAX_TEXT);
