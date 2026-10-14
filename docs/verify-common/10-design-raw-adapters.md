@@ -165,6 +165,16 @@ Item 은 **서류(판본)별로** 만든다. 예: 한국 FY2022 영업이익은 
 8. 갱신 주기("바뀌었을 수 있는 것"만): DART 회사 정기공시 목록 6시간, SEC companyfacts·submissions 12시간, EDINET 최근 2일 목록·KRX 오늘 자료는 실행마다. 나머지는 불변이라 다시 묻지 않는다.
 
 **공유 원본 보관소(오너 결정 2026-10-15)** — 앱(2호기 verify-dev·적재 스크립트)과 검증기가 같은 루트를 쓴다. 운영 1호기에는 검증기가 없어 해당 없음(1호기 앱은 자기 캐시).
+
+- **위치(오너 결정 2026-10-15 「고쳐라」)**: 루트 = `/home/ubuntu/raw-store`. 안은 1번 배치 그대로 — `raw-store/us/sec/…`, `raw-store/kr/dart/…`, `raw-store/kr/krx/…`, `raw-store/jp/edinet/…`, 격리는 `raw-store/quarantine/`, 정리 기록은 `raw-store/cache-evictions.jsonl`.
+  - 앱은 `~/5/.env.local` 의 `SEC_CACHE_DIR`·`DART_CACHE_DIR`·`EDINET_CACHE_DIR` 를 이 루트로 바꾸고(C20), 검증기는 같은 루트를 설정 하나(`RAW_STORE_DIR`)로 읽는다. 루트를 코드에 박지 않는다.
+  - 검증기 판독 결과(파생 파일)는 이 루트에 두지 않는다 — 검증기 쪽 `reports/.verify-derived/`(판독기 판별). 앱 파생도 앱 쪽에 둔다.
+  - 5GB 상한(6번)은 **원천마다**(us/sec·kr/dart·jp/edinet 각각) 센다. 공유로 바뀌어도 D15 「저장소마다 5GB, 부족하면 상한을 올림」 그대로.
+- **지금 폴더(10-15 2호기)와 옮기는 순서**: 앱 `~/sec-cache/sec-archives`·`sec-api`·`~/dart-cache`·`~/edinet-cache`, 검증기 `~/sec-cache/verify-archives`·`verify-api`·`~/5/reports/.dart-cache`. 모두 같은 디스크(`/dev/sda1`, 45GB 중 12GB 남음)라 옮기기는 rename 이고 공간이 더 들지 않는다.
+  1. 앱 캐시를 새 배치로 옮긴다(파일마다 10번 형식 검사 + 11번 신원 확인을 통과한 것만, 실패는 `quarantine/`). 색인 `index.jsonl` 을 만든다.
+  2. 검증기 사본 중 같은 열쇠가 루트에 없는 것만 같은 검사 후 옮긴다. 같은 열쇠가 있으면 sha256 비교 — 같으면 사본 삭제, 다르면 사고 기록 + 둘 다 `quarantine/`.
+  3. **복구 불가 판본**(DART fnltt·alot 정정 전, D15)은 옮기기 전 따로 복사본을 떠 두고, 옮긴 뒤 건수·sha256 이 같음을 확인한 다음에만 옛 폴더를 지운다.
+  4. 옛 폴더는 앱·검증기가 새 루트로 한 번씩 정상 실행한 뒤 지운다. 옮긴 건수·크기·격리 건수를 결과에 남긴다.
 9. **대상**: 원본 전부 — 불변 원본(SEC Archives accn, DART 접수번호 원문·XBRL zip, EDINET docID zip, KRX 지난 날짜)과 갱신형 응답(SEC companyfacts·submissions, DART fnltt·alotMatter·목록, EDINET 날짜 목록). 판독 결과·파생 파일은 대상 아님(각자 따로 둔다).
 10. **저장 때 형식 검사(받은 쪽이 한다, 통과한 것만 저장)**: 빈 본문·HTTP 오류·원천 오류 상태 거부(3번), XML 은 끝까지 파싱되는지(잘린 파일 거부), zip 은 CRC 전체 검사, JSON 은 파싱 + 원천별 필수 필드(companyfacts `cik`·`facts`, DART `status`). 거부한 것은 저장하지 않고 실패로 기억한다(3번). 색인에 sha256·크기·받은 쪽(app/verify)·받은 시각을 적는다.
 11. **읽을 때 공시 신원 확인(읽는 쪽이 한다, 검증기는 매번)**: 파일 sha256 = 색인 값, 그리고 파일 **안의** 신원이 요청과 맞는지 — SEC 인스턴스 `dei:EntityCentralIndexKey`·`dei:DocumentType`·`dei:DocumentPeriodEndDate`, companyfacts `cik`, DART XBRL·원문 회사 고유번호·보고서 종류·사업연도(원문 표지), EDINET `edinetCode`·서류 종류·기간. 하나라도 다르면 그 파일을 쓰지 않고 `quarantine/` 로 옮긴 뒤 다시 받는다 + 사고 기록(받은 쪽 코드 결함 신호이므로 결과 파일에 남김). 다시 받아도 다르면 그 칸은 검증불가.
@@ -412,7 +422,7 @@ memory `feedback-verifier-rework-zero-error`: 단계 완료 = 옛 검증기 결�
 | C16 | kr/app `src/lib/markets/kr/dart-analysis.ts:39·41` | 앱 이자 = CF 「이자의 지급」(영업 분류만), 배당성향 분자 = CF 「배당금 지급」 | ① 기준: R-KR6·R-KR8. 앱 수정은 `11` 범위 | Q2·배당 결정 10-14 |
 | C17 | us/app `src/lib/markets/us/edgar-analysis.ts:319~325` vs `edgar-highlights.ts:93` | CapEx 대체 목록 불일치(재무분석만 `PaymentsToAcquireOtherProductiveAssets`) | ① 기준: R-US5(본표 위치 + 라벨). 앱 통일은 `11` 범위 | Q12 결정 ① |
 | C18 | kr/app `scripts/verify-kr/calendar.mjs`(앱 표 문자열 읽기) | 앱 휴장일 표를 읽어 KRX 화면과 대조 | ①은 KRX 화면만. 앱 표 대조는 ② 쪽 점검으로 옮김 | 공통모드 방지(앱 파일 금지) |
-| C20 | 앱 `src/lib/markets/http.ts`(SEC)·`src/lib/markets/kr/dart-cache.ts`·`scripts/lib/dart-disk-cache.mjs`·`src/lib/markets/jp/edinet-store.ts`, 검증기 `~/sec-cache/verify-*`·`reports/.dart-cache` | 앱·검증기가 원본을 따로 받아 따로 보관(SEC 같은 공시 두 벌 7.7GB), 저장 때 형식 검사는 빈 본문·깨진 JSON 까지(`usableBody`) — 잘린 XML·zip CRC 미검사, 읽을 때 신원 확인 없음 | §3.5 공유 원본 보관소 9~14 — 앱 쪽 변경은 `11` 범위(U4) | 오너 결정 2026-10-15 |
+| C20 | 앱 `src/lib/markets/http.ts`(SEC)·`src/lib/markets/kr/dart-cache.ts`·`scripts/lib/dart-disk-cache.mjs`·`src/lib/markets/jp/edinet-store.ts`, 검증기 `~/sec-cache/verify-*`·`reports/.dart-cache` | 앱·검증기가 원본을 따로 받아 따로 보관(SEC 같은 공시 두 벌 7.7GB), 저장 때 형식 검사는 빈 본문·깨진 JSON 까지(`usableBody`) — 잘린 XML·zip CRC 미검사, 읽을 때 신원 확인 없음 | §3.5 공유 원본 보관소 9~14 — 루트 `/home/ubuntu/raw-store`(세 환경변수를 이 루트로), 옮기는 순서 1~4. 앱 쪽 변경은 `11` 범위(U4) | 오너 결정 2026-10-15 |
 | C19 | 검증기 캐시 전반 | 깨진 캐시 파일 삭제(앱 `dart-cache.ts:172~176`, 일본 앱 저장소 `edinet-store.ts:156~158`) | `quarantine/` 로 옮김 | "검증 로직이 지우지 않음" |
 
 참고: 일본 검증기 날짜 목록 실패 처리(`layers.mjs:199` — 실패 날짜가 있으면 hardError)와 EDINET 서류 zip 통째 보관(`edinet.mjs:121`)은 이미 설계와 같다.
