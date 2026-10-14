@@ -1565,6 +1565,14 @@ npm run lint         # eslint
   구독 갱신은 오라클 타이머 `news-youtube-subscribe`(매일 05:00). 예전 GitHub 예약 + cron-job.org 재기동 우회책(실행률 21% 때문)은 폐기 —
   **같은 텔레그램 세션을 두 곳에서 동시에 쓰면 끊기므로** GitHub `telegram-posts.yml` 은 수동 비상용(수신기를 멈춘 뒤에만), cron-job.org 작업은 끈다.
 - **인플루언서 네이버 블로그 = 오라클 5분 수집(2026-10-05)**: 오라클 타이머 `news-naver-blog`(`scripts/run/naver-blog-poll.mts`)가 5분마다 `rss.blog.naver.com` RSS 를 블로그당 1요청으로 확인해 새 글만 `naver_blog_posts`(제목·링크·발행시각, 180일 TTL)에 넣고, 피드 라우트는 DB 만 읽는다(요청 시점 RSS 호출 없음 — 반복 접속 차단 방지). 텔레그램 알림 없음. `--dry` 로 DB 쓰기 없이 파싱 확인.
+- **해외 시황 한글 제목·요약 = 4번과 같은 방식(2026-10-14, 오너 "4번 프로젝트와 동일하게 요약 번역")**: 글로벌 핵심지표 「해외 시황」 30건 중
+  28건이 원문으로 나갔다 — 무료 번역 묶음이 운영 IP 429(영문 10분 쉼, MyMemory 5건만)에 걸리고 응답 캐시 30분. 1호기 타이머 `news-macro-summary`
+  (매시 07·37분, `call-cron.sh /api/cron/news-summary 290`)가 목록(`fetchMacroNewsRaw("us")`, 최신 30건) 중 저장본 없는 기사만 원문을 모아
+  (`lib/news/article.ts` — 4번 이식: 구글 뉴스 링크 해독 → `<p>` 본문 → 못 읽으면 같은 사건 다른 매체 → 그것도 없으면 모델이 링크 직접 읽기)
+  **`NEWS_GEMINI_API_KEY`(결제 미연결 무료 키 — 결제 연결된 `GEMINI_API_KEY` 는 쓰지 않는다)** 로 한글 제목 + 5~8줄 요약을 만들어 `news_summary`
+  (30일 TTL)에 넣는다. 회차당 8건·기사 사이 7초·모든 모델 429 면 중단(다음 회차에 이어서), 키가 없으면 아무것도 부르지 않는다. 목록은 저장된
+  한글 제목을 먼저 쓰고 없는 기사만 무료 번역(번역 대상도 최신 30건으로 먼저 자른다), 해외 시황 기사를 누르면 요약 팝업(`news-summary-dialog.tsx`,
+  `/api/news/summary?url=` 읽기만), Ctrl·가운데 클릭은 원문. 2호기 실측(10-14): 구글 링크 해독 30/30, 원문 본문 7·다른 매체 19·링크 4. 국내 시황은 그대로.
 - `yahoo-finance2` / yfinance / Finnhub·FMP·Polygon 무료 = **개인용 한정.**
   팀/대외 확장 시 인앱 중단 → 딥링크 또는 정식 라이선스 (prd.md §4.3).
 - L1(공식 API)·L3(자체 계산)은 모든 시나리오에서 안전.
