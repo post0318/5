@@ -1,4 +1,5 @@
 import "server-only";
+import { snapshotBypassed } from "@/lib/db/snap-bypass";
 import { ensureIndexed, listJpReports, type JpDocRow } from "@/lib/db/jp-docs";
 import { getJpFinStored, saveJpFin } from "@/lib/db/jp-fin";
 import { addDays, redactEdinet } from "./edinet-store";
@@ -724,11 +725,13 @@ const inflight = new Map<string, Promise<JpFinModel>>();
  * 종목의 조립 결과 — 저장본(엔진판·서명 일치)이 있으면 그대로, 없으면 서류 판독·조립 후 저장. 화면이 손익·재무상태·현금흐름·총괄을 동시에
  * 부르므로 같은 종목 조립은 프로세스 안에서 한 번만 돈다.
  */
-export function getJpFinModel(symbol: string): Promise<JpFinModel> {
-  let p = inflight.get(symbol);
+export async function getJpFinModel(symbol: string): Promise<JpFinModel> {
+  // 검증 우회 요청(db/snap-bypass)은 일반 요청의 조립(저장본일 수 있음)과 묶지 않는다
+  const k = (await snapshotBypassed()) ? `${symbol}#nosnap` : symbol;
+  let p = inflight.get(k);
   if (!p) {
-    p = buildJpFinModel(symbol).finally(() => inflight.delete(symbol));
-    inflight.set(symbol, p);
+    p = buildJpFinModel(symbol).finally(() => inflight.delete(k));
+    inflight.set(k, p);
   }
   return p;
 }
