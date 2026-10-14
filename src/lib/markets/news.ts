@@ -4,6 +4,7 @@ import { fetchJson } from "./http";
 import type { MarketId } from "./types";
 import { translateTitles, type TranslateOptions } from "../news/translate";
 import { fetchGoogleNewsRss, googleNewsUrl } from "../news/googleNews";
+import { getNewsSummaries } from "../db/news-summary";
 import { resolveCorpCode } from "./kr/corpcode";
 import { getEdinetCodeIndex } from "./jp/edinetcode";
 import { JA_COMPANY_ALIASES, JP_ALIAS_SPORTS_RE, JP_SHARED_NAME_CONTEXT, judgeJapaneseTitle, jaNorm, normalizeJaTitleForDedup, type JaNames, KO_PRODUCT_ALIASES, KR_COMPANY_ALIASES, KR_CONTEXT_ALIASES, judgeDomesticTitle, judgeOverseasTitle, koAcronymName, koTitleHit, enTitleHit, shortAliasHit, type ShortAlias, type Verdict } from "./news-rules";
@@ -55,6 +56,8 @@ export interface NewsItem {
   symbol: string;
   /** 기사 일부(발췌) — 국내(네이버 검색 API 요약문)만 제공. 해외는 API 응답에 스니펫이 없어 미제공. */
   excerpt?: string;
+  /** 해외 시황만 — 요약 저장 상태(ready: 팝업에 요약, unreadable: 본문 못 읽음, pending: 아직 없음). 2026-10-14 */
+  summary?: "ready" | "unreadable" | "pending";
 }
 
 const SOURCE_LANG: Record<MarketId, "ko" | "en" | "ja"> = { kr: "ko", us: "en", jp: "ja" };
@@ -1699,12 +1702,13 @@ function filterMacroRelevant(raw: RawNewsItem[], re: RegExp): RawNewsItem[] {
   return filtered.length > 0 || raw.length === 0 ? filtered : raw;
 }
 
-export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
+/**
+ * 거시경제 시황 목록 — 번역 전 최신순 30건. 해외 시황 요약 예약 작업(`/api/cron/news-summary`)도 같은 목록을 쓴다.
+ */
+export async function fetchMacroNewsRaw(region: "kr" | "us"): Promise<RawNewsItem[]> {
   const symbol = "MACRO";
   let raw: RawNewsItem[];
-  let lang: "ko" | "en";
   if (region === "kr") {
-    lang = "ko";
     // 도메인 화이트리스트(KR_PUBLISHER_BY_DOMAIN, 22곳)를 그대로 쓰면 NAVER
     // 검색 결과 15건 중 살아남는 게 topic당 1~4건뿐이라 "국내 시황"란이 거의
     // 비다시피 했다(실측, 2026-09 — 오너 지적: "국내시황은 왜 저리 적은가").
@@ -1724,7 +1728,6 @@ export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
     );
     raw = filterMacroRelevant(results.flat(), MACRO_RELEVANT_KO);
   } else {
-    lang = "en";
     const [yahooResults, google] = await Promise.all([
       Promise.all(
         US_MACRO_TOPICS.map((q) =>
@@ -1752,9 +1755,28 @@ export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
     return true;
   });
   const merged = dedupeByMajorPublisher(deduped);
-  // 거시경제 시황(국내/해외) 헤드라인은 무료 번역만 — LLM 폴백 없음(오너 지시 2026-09-15).
-  const items = await withTranslatedTitles(lang, merged, { llmFallback: false });
-  return items.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)).slice(0, 30);
+  // 최신순 30건만 번역 대상으로(예전엔 후보 전부를 번역한 뒤 30건으로 잘라 무료 번역 한도를 버렸다)
+  return merged.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)).slice(0, 30);
+}
+
+export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
+  const raw = await fetchMacroNewsRaw(region);
+  if (region === "kr") return withTranslatedTitles("ko", raw);
+  // 해외: 요약 예약 작업이 저장한 Gemini 한글 제목을 먼저 쓰고(2026-10-14), 저장본이 없는 기사만 무료 번역 — LLM 폴백 없음(오너 지시 2026-09-15).
+  // 저장본이 있는 기사는 번역 요청을 보내지 않아 무료 번역 한도를 나머지 기사에 쓴다.
+  const saved = await getNewsSummaries(raw.map((r) => r.url));
+  const rest = raw.filter((r) => !saved.get(r.url)?.titleKo);
+  const translated = new Map(
+    (await withTranslatedTitles("en", rest, { llmFallback: false })).map((t) => [t.url, t.titleKo]),
+  );
+  return raw.map((r) => {
+    const s = saved.get(r.url);
+    return {
+      ...r,
+      titleKo: s?.titleKo || translated.get(r.url) || r.title,
+      summary: s ? (s.bullets.length ? "ready" : "unreadable") : "pending",
+    };
+  });
 }
 
 /** 국내(이미 한국어) 언론사인지 — 번역·요약 대상 여부 판정(종목의 상장 시장이 아니라 기사 언론사 기준). */

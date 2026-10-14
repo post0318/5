@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { NewsItem } from "@/lib/markets/news";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { NewsSummaryDialog } from "@/components/news-summary-dialog";
 
 interface NewsResponse {
   items: NewsItem[];
@@ -63,10 +64,13 @@ function NewsColumn({
   title,
   items,
   emptyText,
+  onOpen,
 }: {
   title: string;
   items: NewsItem[];
   emptyText: string;
+  /** 있으면 기사를 누를 때 원문 대신 요약 팝업(해외 시황, 2026-10-14) */
+  onOpen?: (it: NewsItem) => void;
 }) {
   const [page, setPage] = useState(1);
   const pageCount = Math.min(MAX_PAGES, Math.ceil(items.length / PAGE_SIZE)) || 1;
@@ -92,6 +96,16 @@ function NewsColumn({
                   href={it.naverUrl ?? it.url}
                   target="_blank"
                   rel="noreferrer"
+                  onClick={
+                    onOpen
+                      ? (e) => {
+                          // 새 탭 열기(Ctrl·가운데 클릭)는 원문 그대로, 일반 클릭은 요약 팝업
+                          if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+                          e.preventDefault();
+                          onOpen(it);
+                        }
+                      : undefined
+                  }
                   className="group flex min-w-0 flex-1 items-start gap-2"
                 >
                   <div className="min-w-0 flex-1">
@@ -122,6 +136,7 @@ function NewsColumn({
 }
 
 function MacroNewsSide({ title, market }: { title: string; market: "kr" | "us" }) {
+  const [open, setOpen] = useState<NewsItem | null>(null);
   const q = useQuery({
     queryKey: ["news-market", market],
     queryFn: () => apiFetch<NewsResponse>(`/api/news/market?market=${market}`),
@@ -137,11 +152,15 @@ function MacroNewsSide({ title, market }: { title: string; market: "kr" | "us" }
     );
   }
   return (
-    <NewsColumn
-      title={title}
-      items={q.data?.items ?? []}
-      emptyText="관련 뉴스가 없습니다."
-    />
+    <>
+      <NewsColumn
+        title={title}
+        items={q.data?.items ?? []}
+        emptyText="관련 뉴스가 없습니다."
+        onOpen={market === "us" ? setOpen : undefined}
+      />
+      {market === "us" && <NewsSummaryDialog item={open} onClose={() => setOpen(null)} />}
+    </>
   );
 }
 
@@ -158,7 +177,8 @@ export function MacroNewsPanel() {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-muted-foreground/80 text-[11px]">
-          공신력 있는 언론사·최근 1주일 기사만 표시합니다(헤드라인 무료 자동 번역).
+          공신력 있는 언론사·최근 1주일 기사만 표시합니다. 해외 시황은 AI(Gemini) 한글 제목·요약 — 기사를 누르면
+          요약이 열립니다(아직 요약 전인 기사는 무료 자동 번역 제목).
         </p>
         <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2">
           <MacroNewsSide title="국내 시황" market="kr" />
