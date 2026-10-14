@@ -96,6 +96,10 @@
 - 한국 분할 연도 PER(재작성 EPS vs 미보정 종가): 분할 종목 실측.
 - 한국 배당성향 분자: 비지배지분 배당이 섞이는지 원자료 확인.
 - Q2 한·일 손익 이자비용 원천(주석 태그) 존재율.
+  - **실측(10-14, `05-q2-interest-measure.md`, 외부 요청 0)**: 한국 150칸 중 손익 이자비용 태그 95(63%) — FY2021 0 · FY2022 17(전부 다음 해 보고서 전기 칸) · FY2023~25 84 중 78(93%).
+    FY2021·22 사업보고서 XBRL 은 본표만 태깅(주석 태깅은 FY2023 보고서부터). 태그 = `dart:InterestExpenseFinanceExpense` 79 · `ifrs-full:InterestExpense` 16.
+    일본 204칸 중 109(53%), 회사 단위로 갈림 — 21종목 전 칸 있음, CF 조정만 5·구성요소만 6·金融費用만 3·支払利息 줄 없음 3(キーエンス·ファナック·東京エレクトロン)·US GAAP 1·은행 2.
+    현금흐름표 조정 이자비용은 그대로 대체 불가(한국 81쌍 중 실질 차이 17 — 리스 이자 제외 등). 같은 해 후보끼리 범위가 다른 칸 한국 20 → 태그 순서·범위(리스·중단영업·社債利息) 오너 결정 필요.
 - Q12 미국 CapEx 대체 태그 4종 구성 → **오너 보류(2026-10-13)**, 아래 확인 뒤 재질의.
   - 확인(10-13): `PaymentsToAcquireProductiveAssets` SEC 설명문 = "purchases of and capital improvements on property, plant and equipment
     (capital expenditures), software, and other intangible assets"(ASC 230) — 유형 + 소프트웨어·무형 합계. `PaymentsToAcquireOtherProductiveAssets`·
