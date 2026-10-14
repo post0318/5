@@ -1,6 +1,7 @@
 import "server-only";
 import type { Collection } from "mongodb";
 import { getDb } from "./index";
+import { snapshotBypassed } from "./snap-bypass";
 import type { JpFinModel } from "@/lib/markets/jp/statements";
 
 /**
@@ -24,12 +25,15 @@ export async function jpFinCol(): Promise<Collection<JpFinDoc>> {
 
 /** 저장본 — 엔진판·서명이 같을 때만. DB 조회 실패는 던진다 */
 export async function getJpFinStored(id: string, ev: number, sig: string): Promise<JpFinModel | null> {
+  // 검증 요청(db/snap-bypass)은 저장본을 쓰지 않고 이 코드로 조립(오너 결정 2026-10-14 D13)
+  if (await snapshotBypassed()) return null;
   const d = await (await jpFinCol()).findOne({ _id: id, ev, sig }, { projection: { m: 1 } });
   return d?.m ?? null;
 }
 
 /** 저장(교체). 크기 초과는 저장하지 않고 경고. 쓰기 실패는 화면 결과와 무관 — 경고만 남기고 다음 요청이 다시 조립 */
 export async function saveJpFin(id: string, ev: number, sig: string, m: JpFinModel): Promise<void> {
+  if (await snapshotBypassed()) return;
   const size = Buffer.byteLength(JSON.stringify(m));
   if (size > MAX_BYTES) {
     console.warn(`[jp_fin] ${id} 저장 안 함 — ${Math.round(size / 1024)}KB > ${MAX_BYTES / 1024}KB`);
