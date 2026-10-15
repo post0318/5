@@ -22,6 +22,10 @@ export function loadBbg(sym) {
   const f = path.join(DIR, `${sym.toUpperCase()}.json`);
   if (!fs.existsSync(f)) return null;
   const arr = JSON.parse(fs.readFileSync(f, "utf8"));
+  // 스냅샷 시점(파일 수정 시각) — 그 무렵 결산일 열은 아직 실적이 아니라 컨센서스 예상치일 수 있다(2026-10-10 MU: 10-07 스냅샷의 2026-08-31 열 매출 129,858.68 =
+  // 예상치, 실적 133,188 — 10-K 는 10-09 제출). 예상치는 소수 자리가 실적 열보다 많다 → 아래 at() 에서 그 열을 쓰지 않는다
+  const asOf = fs.statSync(f).mtime.toISOString().slice(0, 10);
+  const settled = new Date(Date.parse(asOf) - 100 * 864e5).toISOString().slice(0, 10);
   // 화면 주기 — 열 간격 중앙값 200일 미만이면 분기 화면. 흐름 항목(손익·현금흐름)은 연간 화면만 쓴다(분기 화면의 12-31 열은 4분기 3개월 값 —
   // 연간 열과 날짜가 같아 섞이면 안 된다, 2026-10-01 GEV 분기 손익). 재무상태표(시점 값)는 분기 화면도 쓴다 — LTM 열(최근 분기말) 대조
   const quarterly = (g) => { const t = g.cols.map((c) => Date.parse(iso(c))).sort((a, b) => a - b), d = t.slice(1).map((x, i) => (x - t[i]) / 864e5).sort((a, b) => a - b); return d.length > 0 && d[Math.floor(d.length / 2)] < 200; };
@@ -85,7 +89,11 @@ export function loadBbg(sym) {
         let x = null, v;
         for (const c0 of xs) {
           const col = c0.g.cols.find((c) => dayDiff(iso(c), date) <= 7);
-          if (col != null && c0.r.vals[col] != null) { x = c0; v = c0.r.vals[col]; break; }
+          if (col == null || c0.r.vals[col] == null) continue;
+          // 예상치 열 — 스냅샷 100일 전 이전 결산일 열(확정 실적)의 최대 소수 자리보다 소수 자리가 많으면(EPS 는 제외 — 원래 소수)
+          const dAct = Math.max(0, ...Object.entries(c0.r.vals).filter(([c]) => iso(c) <= settled).map(([, y]) => decimals(y)));
+          if (k !== "eps" && iso(col) > settled && decimals(c0.r.vals[col]) > dAct) continue;
+          x = c0; v = c0.r.vals[col]; break;
         }
         if (!x) continue;
         const isEps = k === "eps";

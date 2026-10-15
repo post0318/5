@@ -27,7 +27,10 @@ async function importOne(src) {
   const out = [];
   for (const f of pdfs) {
     const g = await grid(path.join(dir, f));
-    const kind = ((g.header.match(/구분: (\S+ \S+(?: \S+)?)/) ?? [])[1] ?? "?").replace(/ (원본|정정).*/, "");
+    // 대만 상장 등 일부 종목은 "구분: 가장최근 연결 기준: 연결 데이터 BBG GAAP …" — 연결 기준 표기를 빼고 화면 종류를 읽는다(2026-10-07 TSM, 2330 TT).
+    // "별도 데이터"는 연결이 아니라 그대로 둔다(화면 종류가 "연결 기준:" 으로 남아 조회 대상에서 빠진다)
+    const header = g.header.replace(/구분: (\S+) 연결 기준: 연결 데이터 /, "구분: $1 ");
+    const kind = ((header.match(/구분: (\S+ \S+(?: \S+)?)/) ?? [])[1] ?? "?").replace(/ (원본|정정).*/, "");
     out.push({ file: path.basename(f), kind, template: g.template, cols: g.cols, rows: g.rows });
   }
   fs.mkdirSync(BBG_DIR, { recursive: true });

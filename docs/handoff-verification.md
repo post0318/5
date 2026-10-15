@@ -1,6 +1,85 @@
 # 재무 숫자 작업 인수인계
 
-브랜치: `wip/verification` (master 에 합치면 Vercel 프로덕션 배포 — 오너 지시 전까지 master 푸시 금지).
+브랜치: **`kr/verification`**(2026-10-03~ — 한국 재무 검증 브랜치, 검증 끝난 뒤 master 머지 예정. 옛 `wip/verification` 은 더 쓰지 않음).
+검증은 **오라클 2호기 `macro-verify`**(140.83.48.57, `~/5`, 개발 서버 `verify-dev` localhost:3000)에서 돌린다 — 운영과 IP·CPU 분리, PC 메모리 부족(DEPLOY.md §0).
+검증기는 기본으로 DB 저장본(api_snap·ttm_snap·fin_sym·us_class_facts)을 우회한다(인증된 `x-verify-no-snapshot` — 브랜치 코드로 새로 계산). `--use-snapshots` 로만 끈다.
+
+## 다른 PC(집)에서 이어받기 — 2026-10-09 사무실 PC 세션 종료 시점
+- **PC 는 터미널만.** 작업은 2호기(`ssh -i ~/.ssh/oracle_verify ubuntu@140.83.48.57`, `~/5`, 브랜치 kr/verification, 개발 서버 localhost:3000 = 작업 트리).
+  1호기(운영) `ssh -i ~/.ssh/oracle_macro ubuntu@161.33.9.115` 는 확인용(앱 컨테이너 macro, 포트 8080, 비밀값 /opt/macro/app.env — 출력 금지).
+  키 원본: post0318/ipo_keys/6_.env_261005.zip. 2호기에서 master push 금지(pre-push 훅).
+- **운영 배포 절차**: PC 저장소에서 `git fetch` → `deploy/<이름>` 브랜치를 origin/master 위에 만들고 필요한 커밋만 cherry-pick(kr/verification 에는 master 에 없는
+  한국 감사용 코드 — `getKrDaDocChecked`·`loadKrCapsChecked`·`quote.warnings` 등 — 가 있어 충돌 시 그 부분은 master 쪽을 남긴다) → tsc·lint → 빌드는 2호기 별도 worktree
+  (`git worktree add /home/ubuntu/jpbuild origin/<브랜치>` + `cp -al ~/5/node_modules` — 심볼릭 링크는 Turbopack 이 거부) → 오너 승인 후 `git push origin deploy/<이름>:master`
+  (GitHub Actions "오라클 서버 배포" 자동). master 는 다른 세션도 합치므로 push 전 `git fetch` 로 앞서 있는지 확인(거절되면 rebase).
+- **오너 규칙 요약**: 서버 일은 Claude 가 함(오너는 서버 문맹). 무료가 철칙(유료 API·크레딧 금지). 본표에 없는 줄 = 빈칸("본표에 별도 줄 없음"), 본표 "—" = 0, 무배당 = 0.
+  검증 통과는 양쪽 값 일치 또는 원자료로 확인한 기대 빈칸만. DB(Atlas 512MB) 용량 고려(`run-script.sh db/size.mjs` on 1호기). 대화는 한국어·쉬운 말.
+- **운영 미배포(2호기 kr/verification 에만)**: 민카부 컨센서스 카드 7d17d2c(일본, 9종목 확인), 미국 앱 수정 8f726f3(세전이익 고유 태그·TSM 2022 자사주·10-Q 본표 — = 0·ISRG LTM 배당 0·재무분석 배당 — 배포 후 fin-build·ttm-build 재실행), 검증기 변경 다수(검증기는 배포 대상 아님).
+- **진행 중·대기**: ① 012450 = DART XBRL 내려받기 status 800(시스템 점검, 10-08~) — 2호기 `~/retry-012450.sh` 가 30분마다 확인 후 자동 재검증·latest.json 갱신(로그 /tmp/retry-012450.out, /tmp/kr-012450.log).
+  그 보고서 XBRL 만 캐시에 없음(재무제표·원문 표는 캐시됨). ② 미국 검증불가 32(179→32, 실패 0 — 남은 사유는 아래 줄). ③ 일본 다음 단계: JP 검증기 층(미국 기준), 1·3분기(四半期報告書·TDnet),
+  오너 결정 대기 항목(FY 이름, 도요타·소니 금융사업 EV, SBG 하이브리드 자본, MHI 차입금 범위, 키옥시아 야후 추정치, 9984 vs 9434).
+- 사무실 PC 의 Claude 메모(서버 구성·오너 규칙·일본 현황)는 이 문서와 CLAUDE.md 에 같은 내용이 있다.
+
+## 현재 상태 (2026-10-09) — 다음에 여기서부터
+- **(10-09 밤) 운영 배포 — 미국 앱 수정 + 저장본 옛 판 유지**: master 47ba7f6(898c0cd·20da1b1 반영 — ENGINE 46) 뒤 deploy/snap-stale 21ea0ba(오너 승인, 1호기 AAPL
+  하이라이트·TTM·현금흐름표 200 확인). kr/verification 원본 커밋 37a8fb5·a69dfac·6536059·6b8a73b — master 에 없는 검증 우회(snapshotBypassed)·한국 감사용
+  코드(한국 배당 import·post-deploy kr_da 적재)는 빼고 옮김. 운영에 들어간 것:
+  - **옛 판 유지**(오너 승인 2026-10-09): 엔진판이 바뀌어도 재무 저장본(fin_sym)을 새 저장본이 생길 때까지 그대로 응답(staleEv). 단 마지막 정상 적재(at)·현재 판
+    확인(ck) 중 늦은 쪽이 7일 넘으면 요청 시점 조립. 조회 실패로 문서를 유지한 경로는 at 대신 ft. 스키마판이 다르면 재사용 안 함. TTM 저장본은 판번호만 다르면
+    snapStale 로 그대로, 재무 저장본이 옛 판인 동안은 24시간 넘은 것도 그대로. 요청마다 뒤에서 다시 계산하던 것은 없앰 — 다시 채우기는 배치만.
+    옛 판 재무로 계산한 TTM(staleInputs)·하이라이트(staleFin)는 저장본에 남기지 않고 CDN 60초.
+  - **교체 기록**: 손익·핵심 지표 = fin_chg(기존, 180일). 현금흐름표·재무상태표 칸 = ttm-build 가 fin_view(종목당 1건 약 11KB)와 비교해 fin_chg 에
+    t = "cf.a:줄 id" 로 기록. TTM = ttm_chg(교체 1건 = 문서 1건, 바뀐 칸 최대 40, 30일 TTL). 첫 배치는 기준값만 쌓는다.
+  - **배치**: ttm-build 는 staleInputs 를 "fin 갱신 대기"로 따로 세고(연속 실패 중단 제외), post-deploy.sh 는 엔진판이 바뀐 배포면 systemd-run 으로
+    fin-build → ttm-build 순서(둘 다 oneshot, 2시간 한도). fin-build 로그는 "결손(저장본)"과 "열 표시(IDENTITY·BASIS_SHIFT — 열 단위 메모, 원래 있던 것)"로 나눔.
+  - 10-09 08:11 배포 때 "변경 0"의 원인: ttm-build·fin-build 가 동시에 돌았고, 옛 loadFinSym 이 ttm-build 안에서 저장본을 먼저 새 판으로 바꿨다. 또 NVDA
+    변경은 현금흐름표라 그때는 기록 대상이 아니었다.
+  - **엔진판(ENGINE_VERSION)을 올릴 때**: post-deploy 가 배포 직후 fin-build → ttm-build 를 바로 돌리므로 옛 판 값이 보이는 시간은 배치 시간뿐
+    (10-09 실측 fin-build 약 25분 + ttm-build 약 22분, 합계 50분 안팎). 수동 실행(1호기 `sudo systemctl start fin-fin-build` 뒤 `fin-ttm-build`)은 post-deploy 가 실패했을 때만.
+- **(10-09 저녁) 미국 검증불가 32 → 8, 실패 0**(verify-us-20261009-153155, 47종목 --post 관리자 화면 게시: 통과 39,296 · 공통모드 1,337 · 검증불가 8).
+  앱 커밋 898c0cd·20da1b1 은 운영 배포 완료(master 47ba7f6, 위 항목).
+  898c0cd: WMT 이연법인세 구성 혼합 분기·LTM 빈칸, META 분기 태그 교체 공시별 병합, GEV·VRT 잔여(기타) 줄 LTM 빈칸, BE 주식보상 본표 회사 고유 줄,
+  DAL CAPEX 합계 줄 없는 10-Q = 항공기 + 기타 두 줄 합(오너 결정, 합계 = 두 줄 합 확인은 읽는 공시 창 안 — 2013 은 줄 구성이 달랐다),
+  IBM 2021 감가상각·EBITDA 빈칸 + 사유(오너 결정 — 중단사업분 미공시), AVGO FY2024 매각예정 취득 처분 그룹 = 중단사업 감가상각 0.
+  20da1b1: 투자자산 처분·취득 본표에 회사 고유 줄이 섞인 공시 = 같은 성격 본표 줄 전부 합(NVDA FY2027 10-Q — 취득 LTM 106,946 야후 분기 합과 일치).
+  검증기 2169771(E층 CEG·DELL·GOOG 2021·UBER 2022 해소, LTM 구성 줄 빈칸은 최근 4개 분기 열로 대조, DAL LTM 분기 합 3개월 공시값 우선).
+  남은 8: D층 LTM 구성 줄 합 7(AMD 재무·ASML 영업/투자/재무·DAL 영업·LRCX 투자·MSFT 재무 — 구성 줄 분기 칸이 "사업연도 공시 없음·감가상각 구조 없음" 등이라
+  분기 열로도 대조 불가, 구조적), TSM 블룸버그 회계기준 차 1(유지).
+  2호기 검증기는 `flock /tmp/macro-verify.lock` 으로 감싸 한 번에 1개(10-09 스왑 고갈 재부팅 2회).
+- **(10-09 오후) 미국 검증불가 179 → 32**(verify-us-20261009-075243, 47종목 --post: 통과 39,268 · 공통모드 1,336 · 실패 2 → SPOT 배당 검증기 정규식 결함 고친 뒤
+  SPOT·TSM·ASML 재실행 --post 실패 0). 앱 수정 **8f726f3 — 운영 배포 필요**(세전이익 회사 고유 태그 MCD·ORCL·MRVL, TSM 2022 자기주식, GLW 10-Q "—"=0,
+  ISRG LTM 무배당 0, 재무분석 배당·DPS CAGR = 화면 값). 배포 뒤 fin-build·ttm-build 즉시 재실행 권장. 검증기 42c027a.
+  남은 32: D층 현금흐름 LTM 구성 줄 합 22(구성 줄이 10-Q 본표에 없음 — 구조적), 감가상각 중단사업 미결 2(AVGO 2024·IBM 2021), E층 회사 공시 4(CEG·DELL·GOOG 2021·UBER 2022),
+  TSM 블룸버그 회계기준 차 1, BE LTM 주식보상(본표에 다른 항목과 합친 줄) 1, DAL LTM CAPEX(10-Q 가 항공기·기타 줄로만 — 합계 정의는 오너 결정) 1.
+  재개: `node scripts/verify-financials.mjs --market=us --universe --metric=bscf --cogs-rules=scripts/metrics/cogs-rules.json --concurrency=1 --base=http://localhost:3000 --post`.
+- **운영 반영 완료**(10-09, master 82c811f, 1호기 배포 성공): CAPEX 개념 `PaymentsForCapitalImprovements`(GLW)·현금흐름 0 채움은 10-Q 만,
+  10-K 본표 줄이 있고 "—"면 0(GLW 2023 자사주), 한국 무배당 = 0. 1호기에서 GLW CAPEX·2023 자사주 0·373220 배당 0 확인.
+  배포 방식: PC `deploy/*` 브랜치(master 위 cherry-pick) → 오너 지시 시 `git push origin deploy/…:master`. 2호기에서 master push 금지.
+- **미국 47종목 전체 모드**(`--metric=bscf --cogs-rules=scripts/metrics/cogs-rules.json`, verify-us-20261009-001042): 실패 0 · 통과 39,118 ·
+  공통모드 1,283 · 검증불가 179(10-08 821 → 455 → 179). 남은 것: 검증불가 179, 공통모드 1,283, 외부 불일치 원인 미분해 약 1,300,
+  ③ 오류(판관비 33·영업이익 17·매출원가 7·감가상각 4 — 외부 정의 차이). ISRG 감가상각 차이 = 외부 정의(인포맥스가 해마다 구성 다름) — 앱 수정 없음.
+- **한국**: 실패 = 012450 1건뿐(DART XBRL status 800 시스템 점검 — 외부 사유, 점검 끝나면
+  `node scripts/verify-financials.mjs --market=kr --symbols=012450 --concurrency=1 --base=http://localhost:3000 --post`). 검증불가 5 = 062040 2025 2·3분기
+  (그해 연결 전환 — 이전 분기와 이어지지 않음). 재실행 후 `sudo systemctl start macro-auto-verify.service` 로 /var/lib/macro-verify/latest.json 갱신.
+- 10-08~09 검증기 변경(이 브랜치): 기대 빈칸 = 통과(부호 규칙·상장 전 Yahoo firstTradeDate/KRX·EV 공란 기대·OFS·NCI 줄 없음),
+  CF 활동 합 본표 없는 줄 0, CF 앱 빈칸 본표 판독, linkbase 정규식 접두어 허용(IBM), 외화 원통화 세전·법인세·자산(ASML), LTM BS 10-Q 원본.
+- **일본**: 2호기 브랜치에만 있음(dd54500 재무제표 엔진·b7629c1 하이라이트/재무분석, 일일 수집 TDnet·J-Quants·EDINET 색인). **운영 미배포** — 운영 화면은 옛 구성.
+  배포 전 오너 결정: Atlas 용량(jp_docs·jp_fin 약 27MB+), 1호기 EDINET 캐시 폴더, FY 이름, 도요타·소니 금융사업 EV, SBG 하이브리드 자본 등(메모 japan-status).
+  목표주가: Yahoo(7203.T) 컨센서스로 이미 나옴(7203 평균 3,698엔·19명). 미결: JP 검증기 층, 1·3분기(四半期報告書·TDnet).
+- **일본 운영 배포(10-09, master 16dc3eb)**: dd54500·b7629c1·63ed407 을 master 위로(PC `deploy/jp`, 충돌은 일본 블록만 남김 — 한국 감사용 경고 코드는 master 에 없음) + ops: 1호기 `/opt/macro/edinet-cache`(EDINET_CACHE_DIR, 앱·run-ts 공유), 타이머 `fin-jp-edinet-index`(08:30·20:30, --days=10 --no-samples), 첫 백필 `jp-index-backfill`(--days=1900). CLAUDE.md 크롤링 예외 5건(야후 재팬·민카부, 무료 철칙). **이 브랜치(kr/verification)에는 그 ops·CLAUDE.md 변경이 아직 없다 — master 를 합칠 때 같이 들어옴.** 다음: 민카부 목표주가(일본 IP 에서만 열림), JP 검증기.
+
+## 20-F(외국 회사) LTM 검증기 감사 종료 (2026-10-04, 오너 결정 "14차까지만")
+- 대상: 10-02 저녁(집 PC) 새로 만든 TSM·ASML·SPOT 20-F LTM(야후 분기·6-K 분기 재무제표·변동분 근사·0 규칙·합성 개념)과 그 검증기. 집에서 7~12차 수정까지 했으나 승인 기록이 없어 12차 재감사부터 다시 함.
+- 경과(독립 감사자 Opus, 틀린 값 심기): 12차 8/11 → 13차 20/24 → 14차 14/15. 각 회차 지적을 모아 고침(fb9ebd0·da4fb52·72cf25d·0564193·cce3ef7·e1380f3 등).
+  공통 원칙으로 정리됨 — **LTM 공란·0·근사·6-K·수준 보정 어느 경로든 SEC 개념과 야후 대응은 검증기가 직접 정하고(`secIdsOf`·`YAHOO_LTM_FIXED`·`isCfFixed`·합성 고정 규칙), 앱 기록은 대조 대상으로만.**
+- 감사 중 드러난 실제 앱 결함(수정): 검증 서버가 브랜치 코드가 아니라 10-01 저장본(fin_sym)으로 검증되던 것, DART 연결(CFS) 조회 실패가 별도(OFS)로 조용히 바뀌던 것, KRX 시가총액 조회 실패가 표시 없이 "종가 × 현재 주식수" 근사로 바뀌던 것(이제 공란 + ⚠ 주석), 6-K 조회 실패를 앱이 삼키던 것, SPOT 2025-06-30 유동 리스부채 누락(기준일 열 하나뿐인 주석 표).
+- 재발 방지: `npm run lint` 에 `scripts/lint/no-silent-catch.mjs`(오류 삼키는 catch 금지, `// silent-ok: 이유` 만 허용) — 오너 지적 "조용히 바꾸는 거 저번에 다 정리했는데 또 나왔다고?"(09-26 정리 뒤 10-02 새 코드에서 재발).
+- 최종 기준선(2호기, e1380f3): TSM·ASML·SPOT·AAPL 실패 0·오류 0(SPOT 검증불가 44). 마지막 회차 지적 3건은 고친 뒤 재감사 없이 기준선·심은 오류(N6b 실패 8)로만 확인.
+- **미결(경미, 기록만)**: lint 변형 형태(`.catch(() => null as X)`·`function(){}`·여러 줄 화살표) 미검출 / `secIdsOf` `instHas` 날짜 조건 / `recon-lines.mjs:205`·`verify-financials.mjs:1466` 조회 실패 기록 방식 / 1년 전 6-K 통째 누락 시 주석 표 행은 정당 공란으로 셈(같은 원인으로 다른 8행이 실패해 놓치지는 않음) / `opendart.ts` `loadKrTtmDetail` 전체 catch(lint 범위 밖) / 0 규칙 개념(우선주·비지배지분)은 사업연도말 0 이면 분기말에 값이 생겨도 0 — 설계 한계인지 오너 확인 필요.
+- **주의(한국 검증에서 확인)**: DART·KRX 조회 실패가 이제 화면 오류·공란으로 드러난다(그림자 채우기 금지). DART 요청 한도에 걸리면 한국 화면이 오류를 낸다 — master 머지 전 한국 검증 단계에서 동작 확인.
+- 다음: **한국 재무 검증**(`--market=kr --universe`, DART 는 `--concurrency=1`·간격 300ms).
+
+## (옛 기록) 브랜치 `wip/verification` (master 에 합치면 Vercel 프로덕션 배포 — 오너 지시 전까지 master 푸시 금지).
 
 ## 판관비·연구개발비 검증기 모드 `--metric=sga` (2026-09-28) — docs/metrics/sga.md §7 · verify-us-20260928-110855(+MRVL 111444)
 - `cogs ⊂ opinc ⊂ da ⊂ sga`. A층 = 공시 원본 계산 구조로 판관비·연구개발비 성격 줄 독립 판독(회사별 예외 AMZN·NFLX·KO·DAL 은 검증기 안에 따로 — 공통모드),
