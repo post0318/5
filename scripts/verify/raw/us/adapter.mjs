@@ -27,9 +27,11 @@ export async function runUs(sec, { sym, cik, maxAnnual = 6, maxQuarterly = 5 }) 
     return res;
   }
   const byAccn = new Map(fl.list.map((f) => [f.id, f]));
+  const cfAccns = new Set();
   try {
     const cf = await sec.companyfacts(cik);
     const facts = companyfactsFacts(cf.json, { cik, sym, filingByAccn: byAccn, fetch: { version: cf.version, sha256: cf.sha256 } });
+    for (const f of facts) cfAccns.add(f.filing.id);
     res.rawFacts.push(...facts);
     res.items.push(...chainItems(facts));
   } catch (e) {
@@ -45,6 +47,14 @@ export async function runUs(sec, { sym, cik, maxAnnual = 6, maxQuarterly = 5 }) 
       res.structures.push({ accn: f.id, form: f.form, files: st.files, missing: st.missing, roles: st.roles.map((r) => ({ role: r.role, stmt: r.stmt, lines: r.lines.length })) });
       const inst = await instanceFacts(sec, cik, f.id, { sym, filing: f, structure: st });
       res.rawFacts.push(...inst.facts);
+      // R-US2: companyfacts 에 통째로 없는 정기공시(BE 2분기·XOM CIK 변경·TSM 2025 20-F) — 인스턴스 사실로 개념 사슬 Item 을 만든다
+      if (!cfAccns.has(f.id)) {
+        const plain = inst.facts.filter((x) => !x.scope.dims.length && !x.value.less_precise_duplicate);
+        const extra = chainItems(plain);
+        for (const it of extra) it.flags.source = "instance(companyfacts 누락 — R-US2)";
+        res.items.push(...extra);
+        res.gapFilled = [...(res.gapFilled ?? []), { accn: f.id, form: f.form, items: extra.length }];
+      }
       for (const fn of [capexItems, interestItems, daItems, pretaxFaceItems]) {
         try {
           res.items.push(...fn(inst.facts, f));
