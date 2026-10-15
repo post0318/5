@@ -43,8 +43,11 @@ export async function runJp(ed, { sym, maxAnnual = 6, maxInterim = 2 }) {
       res.rawFacts.push(...r.facts);
       const financialFormat = financialFormatOf(r.facts);
       const usGaap = /US\s*GAAP/i.test(r.dei?.standard ?? "");
-      res.items.push(...chainItems(r.facts), ...cashCfEndItems(r.facts), ...capexItems(r.facts), ...revenueFaceItems(r.facts), ...shareItems(r.facts),
-        ...debtItems(r.facts), ...interestItems(r.facts, { financialFormat, usGaap }));
+      const its = [...chainItems(r.facts), ...cashCfEndItems(r.facts), ...capexItems(r.facts), ...revenueFaceItems(r.facts), ...shareItems(r.facts),
+        ...debtItems(r.facts), ...interestItems(r.facts, { financialFormat, usGaap })];
+      // 연결 우선(§6.2): 연결 본표가 있는 서류의 별도(개별) Item 은 내지 않는다 — 연결 개념이 사슬에 없으면 그 칸은 빠져 보이고(대조 new_blank) 개별 값으로 메우지 않는다
+      const hasCons = r.facts.some((f) => f.scope.consolidation === "consolidated" && f.placement.face && f.placement.stmts.some((s) => s.stmt !== "summary"));
+      res.items.push(...(hasCons ? its.filter((i) => i.scope.consolidation !== "separate") : its));
       if (financialFormat) res.financialFormat = true;
       res.docs = [...(res.docs ?? []), { id: d.id, form: d.form, dei: r.dei, roles: r.roles.length }];
     } catch (e) {

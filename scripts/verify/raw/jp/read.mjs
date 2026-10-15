@@ -142,10 +142,14 @@ export function docFacts(buf, { sym, filing }) {
   };
   const roles = [];
   const face = new Map(); // QName → [{stmt, cons, ...}]
-  for (const r of pre ? parseLinkbase(pre.data.toString("utf8"), "presentation") : []) {
-    const k = roleKind(r.role);
-    if (!k) continue;
-    const tree = presentationTree(r);
+  // 한 표 서식(連結包括利益計算書 하나에 손익까지 — 丸紅 8002): 같은 연결 범위에 손익 역할이 없고 包括利益 역할에 매출·당기순이익 줄이 있으면 그 역할을 손익으로 본다
+  const preRoles = (pre ? parseLinkbase(pre.data.toString("utf8"), "presentation") : []).map((r) => ({ r, k: roleKind(r.role), tree: presentationTree(r) })).filter((x) => x.k);
+  for (const x of preRoles) {
+    if (x.k.stmt !== "ci" || preRoles.some((y) => y.k.stmt === "is" && y.k.cons === x.k.cons)) continue;
+    const names = x.tree.map((t) => idToQName(t.id).split(":").pop());
+    if (names.some((n) => /^(Revenue|NetSales|OperatingRevenue)/.test(n)) && names.some((n) => /^ProfitLoss(IFRS)?$/.test(n))) x.k = { ...x.k, stmt: "is", combined: true };
+  }
+  for (const { r, k, tree } of preRoles) {
     roles.push({ role: r.role.split("/").pop(), ...k, lines: tree.length });
     for (const t of tree) {
       if (/Abstract$|Heading$|Table$|LineItems$|Axis$|Member$/.test(t.id)) continue;

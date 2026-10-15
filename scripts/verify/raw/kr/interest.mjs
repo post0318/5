@@ -116,7 +116,10 @@ export function xbrlInterestFacts(zipBuf, { consolidated = true } = {}) {
     if (!tag || !f.ctx?.start || f.nil) continue;
     const memb = f.ctx.dims.map((d) => d.member);
     const isCons = memb.some((m) => /ConsolidatedMember$/.test(m)) || !memb.some((m) => /SeparateMember$/.test(m));
-    const otherDims = f.ctx.dims.filter((d) => !/ConsolidatedAndSeparateFinancialStatementsAxis/.test(d.axis));
+    // 「보고 금액」 차원(CarryingAmount…Axis = dart:ReportedAmountMember)은 금융원가 주석 표의 기본 칸이다(HD현대중공업 FY2023·24 — 131,890·149,669.
+    // 같은 태그의 차원 없는 칸 128,411·98,006 은 범주별 표). 버리면 범주별 표 값 하나만 남는다
+    const otherDims = f.ctx.dims.filter((d) => !/ConsolidatedAndSeparateFinancialStatementsAxis/.test(d.axis)
+      && !(/CarryingAmountAccumulatedDepreciationAmortisationAndImpairmentAndGrossCarryingAmountAxis$/.test(d.axis) && /ReportedAmountMember$/.test(d.member)));
     if (isCons !== consolidated || otherDims.length) continue;
     out[tag].push({ start: f.ctx.start, end: f.ctx.end, v: f.raw?.replace(/^-/, "") ?? null, decimals: f.decimals, contextRef: f.contextRef });
   }

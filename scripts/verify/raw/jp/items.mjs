@@ -13,7 +13,7 @@ const local = (id) => id.split(":").pop();
 const ok = (f) => f.value.num != null && !f.value.less_precise_duplicate;
 
 export const CHAINS = {
-  revenue: { ids: ["jpigp_cor:RevenueIFRS", "jpigp_cor:NetSalesIFRS", "jpigp_cor:OperatingRevenueIFRS", "jppfs_cor:NetSales", "jppfs_cor:OperatingRevenue1", "jppfs_cor:OperatingRevenue2", "jppfs_cor:Revenue", "jppfs_cor:NetSalesOfCompletedConstructionContracts"], kind: "duration" },
+  revenue: { ids: ["jpigp_cor:RevenueIFRS", "jpigp_cor:Revenue2IFRS", "jpigp_cor:NetSalesIFRS", "jpigp_cor:OperatingRevenueIFRS", "jppfs_cor:NetSales", "jppfs_cor:OperatingRevenue1", "jppfs_cor:OperatingRevenue2", "jppfs_cor:Revenue", "jppfs_cor:NetSalesOfCompletedConstructionContracts", "jppfs_cor:OrdinaryIncomeBNK", "jppfs_cor:OrdinaryIncomeINS", "jppfs_cor:OperatingRevenueSEC"], kind: "duration", part: "D34(금융 서식 = 経常収益·証券 営業収益)" },
   oi: { ids: ["jpigp_cor:OperatingProfitLossIFRS", "jppfs_cor:OperatingIncome"], kind: "duration", part: "P12" },
   ordinary_income: { ids: ["jppfs_cor:OrdinaryIncome"], kind: "duration" },
   pretax: { ids: ["jpigp_cor:ProfitLossBeforeTaxIFRS", "jppfs_cor:IncomeBeforeIncomeTaxes"], kind: "duration" },
@@ -26,7 +26,7 @@ export const CHAINS = {
   equity_parent: { ids: ["jpigp_cor:EquityAttributableToOwnersOfParentIFRS"], kind: "instant", part: "P3①(J-GAAP 은 ④ 가 NetAssets − 비지배 − 新株予約権)" },
   nci_equity: { ids: ["jpigp_cor:NonControllingInterestsIFRS", "jppfs_cor:NonControllingInterests"], kind: "instant", part: "P8" },
   subscription_rights: { ids: ["jppfs_cor:SubscriptionRightsToShares"], kind: "instant" },
-  cash_bs: { ids: ["jpigp_cor:CashAndCashEquivalentsIFRS", "jppfs_cor:CashAndDeposits", "jppfs_cor:CashAndCashEquivalents"], kind: "instant", stmt: "bs" },
+  cash_bs: { ids: ["jpigp_cor:CashAndCashEquivalentsIFRS", "jppfs_cor:CashAndDeposits", "jppfs_cor:CashAndCashEquivalents", "jppfs_cor:CashAndDueFromBanksAssetsBNK"], kind: "instant", stmt: "bs" },
   ocf: { ids: ["jpigp_cor:NetCashProvidedByUsedInOperatingActivitiesIFRS", "jppfs_cor:NetCashProvidedByUsedInOperatingActivities"], kind: "duration", part: "P17" },
   icf: { ids: ["jpigp_cor:NetCashProvidedByUsedInInvestingActivitiesIFRS", "jppfs_cor:NetCashProvidedByUsedInInvestmentActivities"], kind: "duration" },
   fcf_financing: { ids: ["jpigp_cor:NetCashProvidedByUsedInFinancingActivitiesIFRS", "jppfs_cor:NetCashProvidedByUsedInFinancingActivities"], kind: "duration" },
@@ -131,7 +131,7 @@ export function capexItems(facts) {
 
 /** 매출 본표 줄(회사 고유 요소 포함 — 7203 ext:TotalNetRevenuesIFRS). 손익 역할에서 표시 순서 첫 매출성 줄 */
 const REV_NAME = /Revenue|NetSales|OperatingRevenue|Sales$/;
-const REV_LABEL = /売上高|営業収益|売上収益|収益合計|営業収入/;
+const REV_LABEL = /売上高|営業収益|売上収益|収益合計|営業収入|経常収益/;
 export function revenueFaceItems(facts) {
   const is = facts.filter((f) => ok(f) && !f.scope.dims.length && f.period.kind === "duration" && f.placement.face && f.placement.stmts.some((s) => s.stmt === "is"));
   const by = new Map();

@@ -14,6 +14,8 @@
     { "id": "KR-178320-eps-FY2022-ambiguous", "market": "kr", "sym": "178320", "key": "eps_basic_total", "end": "2022-12-31", "months": 12, "filing_year": 2023, "blank_reason": "ambiguous", "src": "T7 서진시스템 FY2022 계속영업 EPS 450 이 전체 태그로(K11) — 후보가 갈려 판독 모호" },
     { "id": "JP-6861-cash-cf-end", "market": "jp", "sym": "6861", "key": "cash_cf_end", "end": "2026-03-20", "kind": "instant", "value": "451269000000", "src": "08 キーエンス 2026-03 CF 기말 451,269 백만엔(BS 596,976·앱 1,493,889 아님)" },
     { "id": "JP-7203-revenue-FY2022", "market": "jp", "sym": "7203", "key": "revenue_face", "end": "2022-03-31", "months": 12, "value": "31379507000000", "src": "옛 일본 검증기 A층 ext:TotalNetRevenuesIFRS(계산 구조 규칙 J-A3)" },
+    { "id": "JP-8002-revenue-FY2024-combined-ci", "market": "jp", "sym": "8002", "key": "revenue", "end": "2024-03-31", "months": 12, "value": "7250515000000", "src": "옛 일본 검증기 A층 jpigp_cor:Revenue2IFRS — 손익·포괄손익 한 표(連結包括利益計算書) 서식, 개별 収益 1,808,965 아님" },
+    { "id": "JP-8306-revenue-FY2024-bank", "market": "jp", "sym": "8306", "key": "revenue", "end": "2024-03-31", "months": 12, "value": "11890350000000", "src": "옛 일본 검증기 A층 OrdinaryIncomeBNK(経常収益, D34) — 지주사 개별 営業収益 809,818 아님" },
     { "id": "JP-7974-capex-mixed", "market": "jp", "sym": "7974", "key": "capex_ppe_line", "end_year": 2025, "months": 12, "present": true, "flags": { "mixed_with_intangible": true }, "src": "03 §6 「有形及び無形固定資産の取得による支出」 합친 줄(J10)" }
   ]
 }

@@ -45,7 +45,7 @@ for (const sym of want) {
     const fy = Number(c.col.slice(2));
     const cands = r.items.filter((i) => keys.includes(i.key) && i.period.fy_key === fy && (i.period.kind === "instant" || (i.period.months >= 11 && i.period.months <= 13)) && ["120", "130"].includes(i.vintage_basis?.form));
     cands.sort((a, b) => (b.vintage_basis.filed_at ?? "").localeCompare(a.vintage_basis.filed_at ?? "") || (a.scope.consolidation === "consolidated" ? -1 : 1));
-    const pick = cands.find((i) => i.scope.consolidation === "consolidated" && i.value != null && String(i.value) === String(c.src)) ?? cands.find((i) => i.scope.consolidation === "consolidated") ?? cands[0] ?? null;
+    const pick = cands.find((i) => i.scope.consolidation === "consolidated" && i.value != null && String(i.value) === String(c.src)) ?? cands.find((i) => i.scope.consolidation === "consolidated") ?? cands.find((i) => i.scope.consolidation === "separate" && !r.items.some((j) => j.scope.consolidation === "consolidated" && j.vintage_basis?.filing === i.vintage_basis?.filing)) ?? null;
     const newV = pick?.value ?? null, oldV = c.src ?? null;
     const status = newV == null && oldV == null ? "both_blank" : newV == null ? "new_blank" : oldV == null ? "old_blank" : Number(newV) === Number(oldV) ? "match" : "diff";
     out.rows.push({ sym, key: keys.join("|"), fy, status, old: oldV, new: newV, newDoc: pick?.vintage_basis?.filing ?? null, newKey: pick?.key ?? null, newRule: pick?.rule ?? null, oldNote: c.note ?? null });
