@@ -124,9 +124,12 @@ export async function runKr(dart, { sym, years = 7, quarters = 5, withInterest =
 /**
  * 리스부채 주석(B16 — 본표에 리스 줄이 없을 때 주석 장부금액) 후보 — 연결·차원 없는 ifrs-full:LeaseLiabilities 시점값. 값이 갈리면 ambiguous(후보 목록).
  * 단위 오류(079550 2024 보고서 천원 숫자를 원 단위로 태깅) 판정은 이웃 보고서 대조가 필요해 ④(값·decimals 를 그대로 남긴다).
+ * 「보고 금액」 차원(CarryingAmount…Axis = dart:ReportedAmountMember)만 붙은 칸도 차원 없는 칸과 같이 본다 — 보관된 사업보고서 216건 중
+ * 리스부채가 그 차원에만 달린 보고서가 있다(이자 DIE 와 같은 결함, 329180).
  */
+const reportedOnly = (dims) => dims.every((d) => /CarryingAmountAccumulatedDepreciationAmortisationAndImpairmentAndGrossCarryingAmountAxis$/.test(d.axis) && /ReportedAmountMember$/.test(d.member));
 function leaseNoteItems(facts, rcept) {
-  const c = facts.filter((f) => f.concept.id === "ifrs-full:LeaseLiabilities" && f.scope.consolidation !== "separate" && !f.scope.dims.length && f.period.kind === "instant" && f.value.num != null && !f.value.less_precise_duplicate);
+  const c = facts.filter((f) => f.concept.id === "ifrs-full:LeaseLiabilities" && f.scope.consolidation !== "separate" && reportedOnly(f.scope.dims) && f.period.kind === "instant" && f.value.num != null && !f.value.less_precise_duplicate);
   const by = new Map();
   for (const f of c) { if (!by.has(f.period.end)) by.set(f.period.end, []); by.get(f.period.end).push(f); }
   const out = [];
