@@ -76,6 +76,8 @@ import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { loadBbg } from "./reference/bbg.mjs";
+import { configureEdinet, edinetStats } from "./verify-jp/edinet.mjs";
+import { configureJpLayers, jpAnnualLayers, jpHalfLayers, jpValueLayers, releaseJpSymbol } from "./verify-jp/layers.mjs";
 import { makeDiskCache } from "./verify-kr/cache.mjs";
 import { configureDart, dartFnltt, dartStats, dartQuota, dartListRefresh, xbrlMaint } from "./verify-kr/dart.mjs";
 import { configureKrx, krxStats } from "./verify-kr/krx.mjs";
@@ -94,7 +96,7 @@ function die(msg) {
   console.error(`오류: ${msg}`);
   process.exit(2);
 }
-const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing", "metric", "cogs-rules", "use-snapshots"]);
+const KNOWN = new Set(["symbols", "universe", "sp500", "limit", "market", "base", "concurrency", "no-external", "post", "missing", "metric", "cogs-rules", "jp-from", "use-snapshots"]);
 // 매출 닫기 모드(revenue.md §8) — 종료코드를 매출 검사 실패·매출 ③ 오류·조회 실패 기준으로. 기본 실행은 종전 그대로
 const METRIC = args.metric == null ? null : String(args.metric).toLowerCase();
 if (METRIC != null && !["revenue", "cogs", "opinc", "da", "sga", "bscf"].includes(METRIC)) die(`--metric 은 revenue·cogs·opinc·da·sga·bscf 중 하나 (받은 값: ${args.metric})`);
@@ -125,7 +127,8 @@ if (args["cogs-rules"] != null) {
 for (const k of Object.keys(args)) if (!KNOWN.has(k)) die(`알 수 없는 옵션 --${k}`);
 if (args.symbols === true) die("--symbols 에 종목을 지정하세요 (예: --symbols=AAPL,WMT)");
 const MARKET = String(args.market ?? "us").toLowerCase();
-if (MARKET !== "us" && MARKET !== "kr") die(`--market 은 us 또는 kr (받은 값: ${args.market})`);
+if (MARKET !== "us" && MARKET !== "kr" && MARKET !== "jp") die(`--market 은 us·kr·jp (받은 값: ${args.market})`);
+if (MARKET === "jp" && METRIC) die("--metric 은 미국 전용(일본은 1차 — A층 연간·B층)");
 const CONCURRENCY = Number(args.concurrency ?? 2);
 if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) die(`--concurrency 는 1 이상의 정수 (받은 값: ${args.concurrency})`);
 if (args.limit != null && !(Number.isInteger(Number(args.limit)) && Number(args.limit) > 0)) die(`--limit 은 양의 정수`);
@@ -354,6 +357,128 @@ async function cfFaceConcepts(cik, accn) {
   return out;
 }
 
+/**
+ * 차입금 줄 성격 — **표시 라벨(_lab.xml)로** 판정한다(앱은 개념 이름 — 검증기는 다른 근거로, 재리뷰 2026-10-10 중간1). 오너 결정(2026-10-10)의 정의:
+ * 단기·장기 조달 / 단기·장기 상환 / 단기 순증감(순액 줄), 기업어음·신용한도·리볼빙·만기 3개월 이하·당좌차월 = 단기, 리스 제외(부채와 한 줄이면 차입),
+ * 비용 지급 줄 제외, 기간 구분 없는·장기 순액 줄은 어느 줄에도 넣지 않음. 차입 단어가 있는데 성격을 못 정한 줄은 null + 후보(검토 목록)
+ * → { cat: "issS"|"issL"|"repS"|"repL"|"netS"|null, cand: boolean }
+ */
+function vDebtLabel(label, id = "") {
+  const t = String(label ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const debt = /\b(debt|borrowings?|notes?(?! receivable)|commercial paper|credit (facility|facilities|agreement)|revolv\w*|lines? of credit|loans?(?! receivable)|bonds?|debentures?|overdrafts?|(short|long)-term financing|financing obligations?|financing issuances?)\b/.test(t);
+  if (!debt) return { cat: null, cand: false };
+  if (/\b(receivables?|stock|shares?|equity|warrants?|preferred|dividends?|interest|derivative|swap|hedg\w*|guarantee|escrow|restricted|contingent|investments?)\b/.test(t)) return { cat: null, cand: false };
+  // 받을 채권(“notes due from parent” — SNDK)·비용·할증(“premiums paid to extinguish debt”, “debt-related costs”)은 차입 흐름 아님(조달 줄의 “net of … costs” 는 제외하고 판정)
+  if (/\bdue from\b/.test(t) || /\b(costs?|premiums?|fees?)\b/.test(t.replace(/net of [a-z ,-]*(costs?|discounts?|fees?|premiums?)/g, ""))) return { cat: null, cand: false };
+  if (/\blease/.test(t) && !/debt|borrow/.test(t)) return { cat: null, cand: false };
+  // 비용 지급 줄("Payments of debt issuance costs") — 조달 줄의 "net of issuance costs" 는 조달
+  if (/^(payments?|paid)\b[^,]*\b(costs?|fees?)\b/.test(t) && !/principal/.test(t)) return { cat: null, cand: false };
+  // 단기·장기 — 라벨이 한쪽만 밝히면 라벨(단기 표시: short-term·기업어음·리볼빙·신용한도·만기 3개월 이하 등 / 장기 표시: long-term·senior·notes·bonds·
+  // term loan·convertible), 섞이거나 없으면(“debt and commercial paper”·“acquisition related debt”) 개념 이름의 기간(회사가 고른 표준 개념)
+  const shortW = /(short-term|short term|commercial paper|revolv|lines? of credit|credit facilit|overdraft|overnight|90 days or less|three months or less)/.test(t);
+  const longW = /(long-term|long term|\bsenior\b|\bnotes\b|\bbonds?\b|debentures?|term loans?|convertible)/.test(t.replace(/short-term notes/g, ""));
+  const idShort = /(Short-?Term|CommercialPaper|LinesOfCredit|LineOfCredit|Revolv|ThreeMonthsOrLess|Overdraft|Overnight)/.test(id);
+  const short = shortW && !longW ? true : longW && !shortW ? false : idShort;
+  const t2 = t.replace(/net of [a-z ,-]*(costs?|discounts?|fees?|premiums?)/g, "");
+  // 순액 — 양방향 표시만("(repayments)"·"additions/(reductions)"·"change in"·"increase (decrease)"). 끝의 ", net" 하나는 순액 아님(“…long-term debt, net” = 비용 차감)
+  // 상환 줄 끝의 ", net" 은 순액(“Repayments of commercial paper, net” — 발행·상환 상계, AAPL), 조달 줄 끝의 ", net" 은 비용 차감(META)
+  const net = /\(repayments?( of)?\)|\(payments?\)|\(reductions?\)|\(decreases?\)|\/\s*\(|\bchanges? in\b|\bnet (short-term |long-term )?(increase|decrease|change|borrowings?|repayments?|debt)\b|increase \(decrease\)|decrease \(increase\)|proceeds from repayments|proceeds from \(?payments for|repayments of proceeds|^(repayments?|payments?)\b.*, net$/.test(t2);
+  if (net) return short ? { cat: "netS", cand: false } : { cat: null, cand: true };
+  if (/^(proceeds|issuance|borrowings?|new borrowings|draws?|additions? (to|of))/.test(t) || /\bproceeds from\b/.test(t) || (/\bborrowings?\b/.test(t) && !/repay|payment|retire|redemp|reduction/.test(t))) return { cat: short ? "issS" : "issL", cand: false };
+  if (/^(repayments?|payments?( on| of| for| to)?|principal (payments|repayments)|retirements?|redemptions?|reductions? (in|of|to)|repurchases? of (debt|notes|bonds|senior)|extinguishment|settlement)/.test(t) || /\b(redemptions?|repayments?|retirements?)\b/.test(t)) return { cat: short ? "repS" : "repL", cand: false };
+  return { cat: null, cand: true };
+}
+/** 공시 한 건의 현금흐름표 재무활동 차입 줄 — 줄 목록 = 표시 구조(_pre.xml)의 재무활동 아래 줄(계산 구조의 소계 줄은 제외), 성격 = 표시 라벨, 부호 = 계산 구조
+ *  가중치(재무활동 합계까지의 곱), 값 = 공시 원본(정밀한 값) → { cats: Map(성격 → [{id, w, label}]), cand: [{id, label}], val(id, s, e), periods } | null */
+const debtFaceCache = new Map();
+async function debtFaceRead(cik, accn) {
+  if (debtFaceCache.has(accn)) return debtFaceCache.get(accn);
+  const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g, "")}`;
+  const names = (await secJson(base + "/index.json")).directory.item.map((x) => x.name);
+  const xsd = names.find((x) => /\.xsd$/i.test(x));
+  const preName = names.find((x) => /_pre\.xml$/i.test(x)) ?? xsd, calName = names.find((x) => /_cal\.xml$/i.test(x)) ?? xsd, labName = names.find((x) => /_lab\.xml$/i.test(x)) ?? xsd;
+  const instName = names.find((x) => /_htm\.xml$/i.test(x));
+  let out = null;
+  if (preName && instName && labName) {
+    const linkTree = (x, link, arc, withW) => {
+      const res = [];
+      for (const m of x.matchAll(new RegExp(`<(?:[\\w-]+:)?${link}\\b[^>]*xlink:role="([^"]+)"[^>]*>([\\s\\S]*?)<\\/(?:[\\w-]+:)?${link}>`, "g"))) {
+        if (!/CASHFLOW/i.test(String(m[1]).replace(/[^A-Za-z]/g, "")) || /Parenth|Detail|Table|Polic|Supplement/i.test(m[1])) continue;
+        const loc = new Map();
+        for (const l of m[2].matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) loc.set(id, h); }
+        const kids = new Map();
+        for (const a of m[2].matchAll(new RegExp(`<(?:[\\w-]+:)?${arc}\\b([^>]*)\\/?>`, "g"))) {
+          const fr = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
+          const w = withW ? Number(/weight="([^"]+)"/.exec(a[1])?.[1] ?? "1") : 1;
+          if (fr && to) kids.set(fr, [...(kids.get(fr) ?? []), [to, w]]);
+        }
+        res.push(kids);
+      }
+      return res;
+    };
+    const pre = linkTree(await secText(`${base}/${preName}`), "presentationLink", "presentationArc", false);
+    const calX = calName ? await secText(`${base}/${calName}`) : "";
+    const cal = calX ? linkTree(calX, "calculationLink", "calculationArc", true) : [];
+    // 계산 구조 — 재무활동 합계에서 각 줄까지의 가중치 곱, 그리고 소계(자식 있는) 줄
+    const wOf = new Map(), calParent = new Set();
+    for (const kids of cal) {
+      const root = [...kids.keys()].find((k) => /_NetCashProvidedByUsedInFinancingActivities(ContinuingOperations)?$/.test(k));
+      if (!root) continue;
+      const walk = (k, wk, d) => { if (d > 6) return; for (const [c, w] of kids.get(k) ?? []) { wOf.set(c, wk * w); if (kids.has(c)) { calParent.add(c); walk(c, wk * w, d + 1); } } };
+      walk(root, 1, 0);
+    }
+    const ids = new Set();
+    for (const kids of pre) {
+      const root = [...kids.keys()].find((k) => /FinancingActivitiesAbstract$/.test(k));
+      if (!root) continue;
+      const walk = (k, d) => { if (d > 6) return; for (const [c] of kids.get(k) ?? []) { if (!/Abstract$/.test(c) && !/_NetCashProvidedByUsedInFinancingActivities/.test(c) && !calParent.has(c)) ids.add(c); walk(c, d + 1); } };
+      walk(root, 0);
+    }
+    if (ids.size) {
+      // 표시 라벨 — terseLabel → label → 그 밖(설명 제외)
+      const lab = await secText(`${base}/${labName}`), loc = new Map(), text = new Map();
+      for (const l of lab.matchAll(/<(?:[\w-]+:)?loc\b([^>]*)\/?>/g)) { const id = /xlink:label="([^"]+)"/.exec(l[1])?.[1], h = /xlink:href="[^"#]*#([^"]+)"/.exec(l[1])?.[1]; if (id && h) loc.set(id, h); }
+      for (const m of lab.matchAll(/<(?:[\w-]+:)?label\b([^>]*)>([^<]*)<\/(?:[\w-]+:)?label>/g)) {
+        const id = /xlink:label="([^"]+)"/.exec(m[1])?.[1], role = /xlink:role="[^"]*\/(\w+)"/.exec(m[1])?.[1] ?? "";
+        if (!id || /documentation/i.test(role)) continue;
+        text.set(id, [...(text.get(id) ?? []), [role, m[2].trim()]]);
+      }
+      const labels = new Map();
+      for (const a of lab.matchAll(/<(?:[\w-]+:)?labelArc\b([^>]*)\/?>/g)) {
+        const f = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? ""), t0 = text.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
+        if (f && t0) labels.set(f, [...(labels.get(f) ?? []), ...t0]);
+      }
+      const pickLabel = (id) => { const ls = labels.get(id) ?? []; return (ls.find(([r]) => /^terseLabel$/i.test(r)) ?? ls.find(([r]) => /^label$/i.test(r)) ?? ls.find(([r]) => !/total/i.test(r)) ?? [])[1] ?? null; };
+      const xml = await secText(`${base}/${instName}`), ctx = parseContexts(xml);
+      const vals = new Map(), prec = new Map(), periods = new Map();
+      for (const m of xml.matchAll(/<([a-z0-9-]+):([A-Za-z0-9_.-]+)\b([^>]*?)contextRef="([^"]+)"([^>]*)>\s*(-?[\d.]+)\s*</g)) {
+        const id = `${m[1]}_${m[2]}`, c0 = ctx.get(m[4]);
+        if (!c0?.start || c0.dims.length) continue;
+        if (/_NetCashProvidedByUsedInFinancingActivities(ContinuingOperations)?$/.test(id)) periods.set(`${c0.start}|${c0.end}`, { start: c0.start, end: c0.end });
+        if (!ids.has(id)) continue;
+        const dRaw = /decimals="([^"]+)"/.exec(`${m[3]} ${m[5]}`)?.[1] ?? "INF", dec = dRaw === "INF" ? 99 : Number(dRaw), k = `${id}|${c0.start}|${c0.end}`;
+        if (!vals.has(k) || dec > prec.get(k)) { vals.set(k, Number(m[6])); prec.set(k, dec); }
+      }
+      const cats = new Map(), cand = [];
+      // 회사 라벨이 없거나(표준 개념 — 라벨 파일에 회사 라벨을 안 싣는 제출 대행사, GLW 2024 10-Q) 라벨로 성격을 못 정하면 개념 이름을 낱말로 풀어 한 번 더
+      // (「Proceeds from other financing arrangements」 = ProceedsFromOtherDebt)
+      const humanize = (id) => id.replace(/^[^_]+_/, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+      for (const id of ids) {
+        const label0 = pickLabel(id);
+        let label = label0 ?? humanize(id), r = vDebtLabel(label, id);
+        if (!r.cat && label0) { const r2 = vDebtLabel(humanize(id), id); if (r2.cat) { r = { ...r2, cand: false }; label = `${label0} ⇒ ${humanize(id)}`; } }
+        if (r.cand) cand.push({ id, label });
+        if (!r.cat) continue;
+        const w = wOf.get(id) ?? (r.cat.startsWith("rep") ? -1 : 1);
+        cats.set(r.cat, [...(cats.get(r.cat) ?? []), { id, w, label }]);
+      }
+      out = { cats, cand, periods: [...periods.values()], val: (id, s, e) => vals.get(`${id}|${s}|${e}`) ?? null, has: (id) => [...vals.keys()].some((k) => k.startsWith(`${id}|`)) };
+    }
+  }
+  debtFaceCache.set(accn, out);
+  return out;
+}
+
 /** 정기공시 손익계산서 본표 표시 구조(_pre.xml, 없으면 .xsd 내장)의 개념 id 집합 — 줄 존재 판정용(2026-10-09, 금융사 원가·판관비 빈칸 확인).
  *  역할 = 이름에 INCOME·OPERATIONS·EARNINGS(포괄손익·세부·표·주석 제외). 읽은 역할이 없으면 null */
 const isFaceCache = new Map();
@@ -544,9 +669,14 @@ const CF_CONCEPT_FIXED = /^(PaymentsTo|PaymentsFor|PaymentsOf|Proceeds|Repayment
 const isCfFixed = (c) => !IS_FLOW_FIXED.has(c) && (CF_CONCEPT_FIXED.test(c) || YAHOO_LTM_FLOW.has(c));
 const EXACT = 1e-9; // 화면 간 동일성 — 같은 모듈을 거치므로 부동소수 오차만
 const sameBase = (a, b, tol) => same(a, b, tol);
+/** 화면 간·재계산 대조의 정확 일치(한국 감사 6·12차 ③ 를 미국에도, 2026-10-11 — 상대 1e-9 가 재무분석 비율 ×(1+5e-10) 을 통과시켰다(AAPL 심은 오류
+ *  유동비율·LTM 매출총이익률·EBITDA 마진)). 둘 다 정수면 완전히 같아야, 소수면 같은 값을 다른 순서로 계산한 부동소수 끝자리(상대 1e-14)만 */
+const SAME_FLOAT = 1e-14;
+const sameNum = (a, b) => (Number.isInteger(a) && Number.isInteger(b) ? a === b : Math.abs(a - b) <= SAME_FLOAT * Math.max(Math.abs(a), Math.abs(b)));
 function same(a, b, tol = EXACT) {
   if (a == null && b == null) return { status: NA, note: "양쪽 빈칸" };
   if (a == null || b == null) return { status: FAIL, note: `한쪽만 빈칸 (${a} vs ${b})` };
+  if (tol <= EXACT) return sameNum(a, b) ? { status: PASS } : { status: FAIL, note: `${a} vs ${b} (차 ${a - b})` };
   const d = Math.abs(a - b) / Math.max(Math.abs(b), 1e-12);
   return d <= tol ? { status: PASS } : { status: FAIL, note: `${a} vs ${b} (차 ${(d * 100).toFixed(4)}%)` };
 }
@@ -557,9 +687,10 @@ function vsSource(app, src, tol, srcNote = "") {
   if (src == null) return { status: NA, note: `원자료 없음${srcNote ? ` (${srcNote})` : ""}`, ...vals };
   if (app == null) return { status: FAIL, note: `원자료 ${src} 있는데 앱 빈칸${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
   // 정확 일치(오너 원칙) — 둘 다 정수(달러·주 단위 원자료와 그 합·차)면 상대 오차 없이 완전히 같아야 한다. 상대 1e-9 는
-  // 4천억 달러에서 약 400달러를 통과시켰다(골든셋 주입 시험 2026-09-26). 환율 곱·주당값 등 소수 계산값만 tol(부동소수 오차) 적용
-  if (tol <= EXACT && Number.isInteger(app) && Number.isInteger(src)) {
-    return app === src
+  // 4천억 달러에서 약 400달러를 통과시켰다(골든셋 주입 시험 2026-09-26).
+  // 소수(주당값·환율 곱)도 정확 일치 — 같은 값을 다른 순서로 계산한 끝자리(상대 1e-14)만(2026-10-11, 예전 상대 1e-9 는 EPS ×(1+5e-10) 를 통과시켰다)
+  if (tol <= EXACT) {
+    return sameNum(app, src)
       ? { status: PASS, ...(srcNote ? { note: srcNote } : {}), ...vals }
       : { status: FAIL, note: `앱 ${app} vs 원자료 ${src} (차 ${app - src})${srcNote ? ` · ${srcNote}` : ""}`, ...vals };
   }
@@ -3828,6 +3959,31 @@ function appFetchWarnings(obj) {
 }
 
 // ── 미국 종목 1개 ─────────────────────────────────────────────────────
+/**
+ * 심은 오류 시험 전용(미국) — US_VERIFY_TEST_MUTATE="종목~응답키~줄 정규식~열 라벨~*배수 또는 =값;…". 앱 응답의 그 칸만 바꿔 검증기가 잡는지 본다
+ * (응답키: hl·an·is·cf·bs·isq… — 재무제표 화면은 줄 이름·accountId, 하이라이트는 행 key·label). 운영 검증에서는 쓰지 않는다
+ */
+function usTestMutate(sym, fetched) {
+  const spec = process.env.US_VERIFY_TEST_MUTATE;
+  if (!spec) return;
+  for (const one of spec.split(";").filter(Boolean)) {
+    const [s0, k, rowRe, col, op] = one.split("~");
+    if (s0 !== sym) continue;
+    const re = new RegExp(rowRe), f = (v) => (v == null ? v : op.startsWith("*") ? v * Number(op.slice(1)) : Number(op.slice(1)));
+    const d = fetched[k];
+    let hit = 0;
+    for (const it of (d?.sections ?? []).flatMap((x) => x.items ?? [])) {
+      if ((re.test(String(it.accountName ?? "")) || re.test(String(it.accountId ?? ""))) && it.values && col in it.values) { it.values[col] = f(it.values[col]); hit++; }
+    }
+    const h0 = d?.highlights;
+    if (h0) {
+      const ix = h0.columns.findIndex((x) => x.label === col);
+      for (const r0 of h0.rows ?? []) if (ix >= 0 && (re.test(String(r0.key)) || re.test(String(r0.label ?? "")))) { r0.values[ix] = f(r0.values[ix]); hit++; }
+    }
+    console.error(`[심은 오류] ${sym} ${k} /${rowRe}/ ${col} ${op} — ${hit}칸`);
+  }
+}
+
 async function verifyUs(sym) {
   const u = `/api/markets/us/${encodeURIComponent(sym)}`;
   const checks = [];
@@ -3859,6 +4015,7 @@ async function verifyUs(sym) {
   })) {
     try { fetched[k] = await getJson(p); } catch (e) { fetched[k] = null; add("응답", `API 응답 ${k}`, "-", { status: FAIL, note: String(e).slice(0, 120) }); }
   }
+  usTestMutate(sym, fetched);
   let row = null;
   try { row = await getJson(`/api/cron/verify-row?market=us&symbol=${encodeURIComponent(sym)}`, 240_000, AUTH); }
   catch (e) { add("응답", "API 응답 verify-row", "-", { status: FAIL, note: String(e).slice(0, 120) }); }
@@ -4476,7 +4633,7 @@ async function verifyUs(sym) {
     { const h0 = hl?.highlights; if (h0) { const cl = h0.columns.map((x) => x.label); for (const r0 of h0.rows ?? []) HLm[r0.key] = Object.fromEntries(cl.map((l, i) => [l, r0.values?.[i] ?? null])); } }
     const iv = (re, k) => { const n0 = Object.keys(IN).find((n) => re.test(n)); return n0 ? IN[n0][k] ?? null : null; };
     const keys = (an.periods ?? []).map((p0) => p0.label);
-    const near = (a, e) => Math.abs(a - e) <= Math.max(1e-9, Math.abs(e) * 1e-9);
+    const near = (a, e) => sameNum(a, e); // 정확 일치(③ — 예전 상대 1e-9)
     for (const k of keys) {
       // 3년 CAGR(연간 열, 3년 전 열이 화면에 있을 때) — 매출액·EPS·주당배당금
       { const i0 = keys.indexOf(k), b3 = i0 >= 3 && k !== "현재/LTM" ? keys[i0 - 3] : null;
@@ -4487,7 +4644,7 @@ async function verifyUs(sym) {
           for (const [nm, f0] of [["매출액", (kk) => ivx(/^매출액/, kk)], ["EPS", (kk) => ivx(/^희석 EPS/, kk)], ["주당배당금", (kk) => hl3("dps", kk)]]) {
             const exp = cg(f0(k), f0(b3)), a = AS[`성장률 (3년 CAGR)|${nm}`]?.[k];
             if (exp == null) continue;
-            add("C", `재무분석 3년 CAGR ${nm} = 재무제표 화면 재계산`, lab(k), a == null ? { status: NA, note: `재무분석 빈칸(화면 재계산 ${exp})` } : Math.abs(a - exp) <= Math.max(1e-9, Math.abs(exp) * 1e-9) ? { status: PASS, note: `${nm} ${b3}→${k} 3년 CAGR` } : { status: FAIL, note: `재무분석 ${a} ≠ 화면 재계산 ${exp}` });
+            add("C", `재무분석 3년 CAGR ${nm} = 재무제표 화면 재계산`, lab(k), a == null ? { status: NA, note: `재무분석 빈칸(화면 재계산 ${exp})` } : sameNum(a, exp) ? { status: PASS, note: `${nm} ${b3}→${k} 3년 CAGR` } : { status: FAIL, note: `재무분석 ${a} ≠ 화면 재계산 ${exp}` });
           }
         }
       }
@@ -5004,7 +5161,7 @@ async function verifyUs(sym) {
         // 않는다(edgar-pershare.ts) → 기준 = 공시값 ÷ Yahoo 분할 배수, 부동소수 오차(상대 1e-9)만. 예전 허용치(0.006 + 0.3%)는
         // 작은 EPS 의 1% 오류·+0.004 오류를 통과시켰다(자체 주입).
         const r = vsSource(x.eps, expected, EXACT, "");
-        const ok = x.eps != null && Math.abs(x.eps - expected) <= EXACT * Math.max(1, Math.abs(expected));
+        const ok = x.eps != null && sameNum(x.eps, expected);
         add("A", "EPS 앱 = SEC 공시 EPS(분할 보정)", c, x.eps == null ? r : ok
           ? { status: PASS, ...(k !== 1 || retagNote(e) || splitNote ? { note: [splitNote, k !== 1 && !splitNote && `분할 보정 ÷${k}(Yahoo 분할 이력)`, retagNote(e)].filter(Boolean).join(" · ") } : {}), app: x.eps, src: expected }
           : { status: FAIL, note: `앱 ${x.eps} vs 공시 ${e.val}${k !== 1 ? ` ÷ 분할 ${k}` : ""} = ${expected}${splitErr ? ` · ${splitErr}` : ""}${retagNote(e) ? ` · ${retagNote(e)}` : ""}`, app: x.eps, src: expected });
@@ -5018,7 +5175,7 @@ async function verifyUs(sym) {
           const expected = (cd.cont + cd.disc) / k;
           const basis = `계속영업 ${cd.cont} + 중단영업 ${cd.disc} 희석 EPS(${cd.filed} 10-K, 총 EPS 태그 없음)${k !== 1 ? ` ÷ 분할 ${k}` : ""}`;
           add("A", "EPS 앱 = SEC 공시 EPS(분할 보정)", c, x.eps == null ? vsSource(null, expected, 0, basis)
-            : Math.abs(x.eps - expected) <= 1e-9 * Math.max(1, Math.abs(expected)) ? { status: PASS, note: basis, app: x.eps, src: expected }
+            : sameNum(x.eps, expected) ? { status: PASS, note: basis, app: x.eps, src: expected }
             : { status: FAIL, note: `앱 ${x.eps} vs ${basis} = ${expected}`, app: x.eps, src: expected });
         }
       } else {
@@ -9328,7 +9485,7 @@ async function verifyUs(sym) {
         if (!H[col]?.date || r.ours == null) return false;
         const e = atEnd(epsP, H[col].date), cd = e ? null : contDiscEps(H[col].date);
         const exp = e ? e.val / splitAdj(e) : cd ? (cd.cont + cd.disc) / splitAdj({ end: H[col].date, filed: cd.filed }) : null;
-        return exp != null && Math.abs(r.ours - exp) <= 1e-9 * Math.max(1, Math.abs(exp));
+        return exp != null && sameNum(r.ours, exp);
       })();
       if (metric === "희석 EPS" && n === "인포맥스" && col !== "LTM" && epsExact && !splitErr
         && checks.some((k) => k.col === col && k.status === PASS && k.name === "EPS 앱 = SEC 공시 EPS(분할 보정)")) {
@@ -11206,6 +11363,48 @@ async function verifyKr(sym) {
   return { sym, checks, review, hardErrors };
 }
 
+// ── 일본 종목 1개(1차 — A층 연간·B층, docs/verify-jp-design.md) ──────────────────────
+// 원자료 = EDINET 원본 XBRL 을 검증기가 직접(scripts/verify-jp/ — 앱 src/lib/markets/jp 와 코드 공유 없음). 디스크 캐시 JP_VERIFY_CACHE_DIR
+// (기본 reports/.edinet-cache — 앱 EDINET_CACHE_DIR 와 따로). 서류 목록은 --jp-from(기본 2021-04-01)부터 오늘까지 날짜별 목록을 훑는다.
+if (MARKET === "jp") {
+  if (!String(env.EDINET_API_KEY ?? "").trim()) die("EDINET_API_KEY 없음 — 일본 검증 중단");
+  configureEdinet({ key: env.EDINET_API_KEY, root: pathResolve(env.JP_VERIFY_CACHE_DIR || "reports/.edinet-cache") });
+  configureJpLayers({ from: args["jp-from"] ? String(args["jp-from"]) : null });
+}
+async function verifyJp(sym) {
+  const u = `/api/markets/jp/${encodeURIComponent(sym)}`;
+  const checks = [];
+  const hardErrors = [];
+  const add = (layer, name, col, r) => checks.push({ layer, name, col, ...r });
+  const app = {};
+  for (const [k, p] of Object.entries({ is: `${u}/financials?view=is&period=annual`, bs: `${u}/financials?view=bs&period=annual`, cf: `${u}/financials?view=cf&period=annual`, hl: `${u}/highlights`, isq: `${u}/financials?view=is&period=quarter`, bsq: `${u}/financials?view=bs&period=quarter`, cfq: `${u}/financials?view=cf&period=quarter`, an: `${u}/financials?view=analysis`, tt: `${u}/ttm` })) {
+    try { app[k] = await getJson(p); } catch (e) { app[k] = null; add("응답", `API 응답 ${k}`, "-", { status: FAIL, note: String(e).slice(0, 120) }); }
+  }
+  if (!app.is) return { sym, checks, review: [], hardErrors };
+  // 시험 스위치(심은 오류 재현 전용) JP_VERIFY_TEST_APP='[{"sym":"7203","view":"is","id":"is:…#0","label":"FY2025","add":1}|{…,"drop":true}|{"sym","hl":"eps","date":"2025-03-31","mul":1.01}]'
+  for (const t of process.env.JP_VERIFY_TEST_APP ? JSON.parse(process.env.JP_VERIFY_TEST_APP) : []) {
+    if (t.sym !== sym) continue;
+    if (t.hl) {
+      const h = app.hl?.highlights; const ci = h?.columns?.findIndex((c) => c.date === t.date && c.kind === "fy"); const r = h?.rows?.find((x) => x.key === t.hl);
+      if (r && ci >= 0 && r.values[ci] != null) r.values[ci] = t.mul != null ? r.values[ci] * t.mul : r.values[ci] + (t.add ?? 0);
+      continue;
+    }
+    for (const s of app[t.view]?.sections ?? []) {
+      if (t.drop) s.items = s.items.filter((it) => it.accountId !== t.id);
+      else for (const it of s.items) if (it.accountId === t.id) it.values[t.label] = t.set !== undefined ? t.set : (it.values[t.label] ?? 0) + (t.add ?? 0);
+    }
+    console.warn(`⚠ 시험 스위치 적용 ${JSON.stringify(t)}`);
+  }
+  const ctx = await jpAnnualLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
+  if (app.isq) await jpHalfLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
+  try {
+    await jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardErrors });
+  } finally {
+    releaseJpSymbol(); // 종목 단위로 판독 결과 해제(메모리)
+  }
+  return { sym, checks, review: [], hardErrors };
+}
+
 // ── 실행 ─────────────────────────────────────────────────────────────
 const syms = await symbolList();
 if (!syms.length) die("검증 대상 0종목");
@@ -11252,7 +11451,7 @@ async function worker() {
     const dq = MARKET === "kr" ? dartQuota()?.stopped : null;
     if (dq) { results.push({ sym: s, error: `${dq.message} — 상한 도달, 남은 종목 검증불가`, checks: [], review: [] }); console.log(`${s.padEnd(7)} 오류: 상한 도달 — 검증불가(${dq.kind})`); continue; }
     try {
-      let r = MARKET === "kr" ? await verifyKr(s) : await verifyUs(s);
+      let r = MARKET === "kr" ? await verifyKr(s) : MARKET === "jp" ? await verifyJp(s) : await verifyUs(s);
       if (MARKET === "kr") r = await krListVersionCheck(s, r);
       results.push(r);
       const f = r.checks.filter((c) => c.status === FAIL).length;
@@ -11440,6 +11639,13 @@ DART·KRX 디스크 캐시 — 적중 ${cs.hit} · 미스 ${cs.miss} · 새로 �
   await closeKrLayers();
 }
 const infraBad = errors.length || badSkips.length || empty.length || missing.length;
+if (MARKET === "jp") {
+  const by = {};
+  for (const c of all) { const k = `${c.layer} ${c.name.replace(/ — (본표|하이라이트)$/, "")}`; const b = (by[k] ??= { pass: 0, fail: 0, unverifiable: 0, common: 0 }); b[c.status] = (b[c.status] ?? 0) + 1; }
+  console.log("\n── 일본 층별 집계 (A = EDINET 원본 XBRL 연간, A반기 = 半期·옛 四半期 第2四半期, B = 결산기, J1 시가총액, J4 LTM, J5 배당, J-OP 영업이익 근사, C 화면 간, D 항등식) ──");
+  for (const [k, b] of Object.entries(by).sort()) console.log(`  ${k.padEnd(40)} 통과 ${b.pass} · 실패 ${b.fail} · 검증불가 ${b.unverifiable} · 공통모드 ${b.common}`);
+  console.log(`EDINET 요청 ${edinetStats.requests} · 디스크 적중 ${edinetStats.hit} · 받은 바이트 ${(edinetStats.bytes / 1024 ** 2).toFixed(1)}MB`);
+}
 // 한국 — 층별 집계와 재실행 필요(감사 2차 ③·④): 게시 전(KRX 자료가 아직 안 나온 거래일)이라 확인 못 한 검사는 검증불가로 남고, 그런 검사가 하나라도
 // 있으면 실패가 없어도 "깨끗한 통과"가 아니다 — 재실행 필요(종료코드 3). 공통모드(적재본과만 맞은 칸 등)는 통과로 세지 않는다
 const rerun = all.filter((c) => c.status === NA && /재실행 필요/.test(c.note ?? ""));
