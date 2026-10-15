@@ -289,7 +289,7 @@
 - **확인한 사실**: 검증기 기본값이 자리표시자 `contact@example.com`(`verify-financials.mjs:210`); 앱도 환경변수 `SEC_USER_AGENT` 가 없으면 같은 자리표시자를 쓴다(`src/lib/markets/us/edgar.ts:53`, `src/lib/fin/source/us/sec.ts:23`). SEC 는 실제 연락처가 든 User-Agent 를 요구한다. 운영의 `SEC_USER_AGENT` 값은 2호기에서 확인할 수 없다(운영 접속 금지).
 - **선택지**: (가) 앱 운영과 같은 연락처를 오너가 환경변수로 제공 (나) 검증 전용 별도 연락처 (다) 없으면 실행 거부(설계 이미 이렇게 제안)
 - **추천**: **(가)+(다)** — 값은 오너가 정해 환경변수(`SEC_USER_AGENT`)로 주고, 없으면 검증기는 실행을 거부한다. 이 문서는 어떤 주소도 정하지 않았다.
-- **오너 결정(2026-10-14)**: 연락처 = **post0318@gmail.com**. 2호기 `~/5/.env.local`(verify-dev·검증기·적재 공용)에는 이미 `SEC_USER_AGENT=market-research (personal) post0318@gmail.com` 이 들어 있다(`5-jp`·`5-krdeploy` 도 같음) — 이 값을 기준으로 쓰고, 검증기는 값이 없거나 `example.com` 자리표시자면 실행 거부(다).
+- **오너 결정(2026-10-14)**: 연락처 = **post0318@gmail.com**. 2호기 `~/5/.env.local`(verify-dev·검증기·적재 공용)에는 이미 `SEC_USER_AGENT=market-research (personal) post0318@gmail.com` 이 들어 있다(`5-jp`·`5-krdeploy`(10-16 `~/wt-app-kr` 로 이름 바꿈) 도 같음) — 이 값을 기준으로 쓰고, 검증기는 값이 없거나 `example.com` 자리표시자면 실행 거부(다).
 
 #### D18. KRX·EDINET 키도 검증 전용으로 분리하나?
 - **원래 번호**: 10-U6 (10 L414, §3.6 표)
