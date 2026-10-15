@@ -1,0 +1,136 @@
+// 원천 받기 시험(가짜 응답 — 외부 요청 없음). 실행: node --test scripts/verify/raw/test/*.test.mjs
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openStore } from "../common/store.mjs";
+import { makeSec, secUserAgent } from "../us/sec.mjs";
+import { makeDart } from "../kr/dart.mjs";
+import { makeEdinet } from "../jp/edinet.mjs";
+import { makeKrx } from "../kr/krx.mjs";
+
+function setup() {
+  const root = mkdtempSync(join(tmpdir(), "raw-src-test-"));
+  return { root, store: openStore({ root, actor: "verify" }), quotaRoot: join(root, "quota") };
+}
+/** 경로 → 응답 함수 표로 가짜 fetch. 호출 기록 남김 */
+function fakeFetch(routes) {
+  const calls = [];
+  const f = async (url, init) => {
+    calls.push(String(url));
+    for (const [re, h] of routes) if (re.test(String(url))) return h(url, init);
+    throw new Error(`연결 막힘: ${url}`);
+  };
+  f.calls = calls;
+  return f;
+}
+const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
+const env = { SEC_USER_AGENT: "test post0318@gmail.com" };
+
+test("SEC: 자리표시자 UA 면 실행 거부(D17)", () => {
+  assert.throws(() => secUserAgent({ SEC_USER_AGENT: "x contact@example.com" }));
+  assert.throws(() => secUserAgent({}));
+  assert.equal(secUserAgent(env), env.SEC_USER_AGENT);
+});
+
+test("SEC companyfacts: 두 번째는 보관본(요청 0), 새로 받기 실패면 옛 사본 안 씀(D16)", async () => {
+  const { store, quotaRoot } = setup();
+  let n = 0;
+  const f = fakeFetch([[/companyfacts/, () => (n++ === 0 ? json({ cik: 320193, facts: { a: 1 } }) : new Response("", { status: 503 }))]]);
+  const t = Date.now();
+  const sec = makeSec({ store, quotaRoot, fetchImpl: f, env });
+  const r1 = await sec.companyfacts("320193");
+  assert.equal(r1.json.cik, 320193);
+  const r2 = await sec.companyfacts("0000320193");
+  assert.equal(r2.fromStore, true);
+  assert.equal(f.calls.length, 1, "두 번째 실행 요청 0");
+  // 12시간 지난 뒤 — 새로 받기 실패(503 재시도 소진) → 옛 사본으로 대신하지 않고 실패
+  const { mutable } = await import("../common/fetchstore.mjs");
+  await assert.rejects(
+    mutable({ store, req: sec.req, market: "us", source: "sec", key: "companyfacts_CIK0000320193", ext: "json", url: "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json", ttlMs: 0, validate: () => ({ ok: true }), now: () => new Date(t + 13 * 3600e3) }),
+    (e) => e.code === "fetch_failed",
+  );
+});
+
+test("SEC companyfacts: 엉뚱한 회사 응답이면 신원 실패", async () => {
+  const { store, quotaRoot } = setup();
+  const f = fakeFetch([[/companyfacts/, () => json({ cik: 789019, facts: {} })]]);
+  const sec = makeSec({ store, quotaRoot, fetchImpl: f, env });
+  await assert.rejects(sec.companyfacts("320193"), (e) => e.name === "IdentityFailed");
+  assert.ok(store.incidents.some((x) => x.kind === "identity_mismatch"));
+});
+
+test("SEC archive: 잘린 XML 은 저장하지 않고 실패", async () => {
+  const { store, quotaRoot } = setup();
+  const f = fakeFetch([[/Archives/, () => new Response('<xbrl><dei:EntityCentralIndexKey>0000320193</dei:EntityCentralIndexKey><a>')]]);
+  const sec = makeSec({ store, quotaRoot, fetchImpl: f, env });
+  await assert.rejects(sec.archive("320193", "0000320193-24-000123", "aapl-20240928_htm.xml"), (e) => e.code === "fetch_failed");
+});
+
+test("DART: 013 은 판본과 함께 저장, 020 은 전체 중단, 하루 상한", async () => {
+  const { store, quotaRoot } = setup();
+  let mode = "013";
+  const f = fakeFetch([[/opendart/, () => (mode === "013" ? json({ status: "013", message: "없음" }) : json({ status: "020", message: "한도" }))]]);
+  const dart = makeDart({ store, quotaRoot, key: "K", fetchImpl: f, cap: 3 });
+  const a = await dart.fnltt("00126380", 2026, "11011", "CFS", null);
+  assert.equal(a.json.status, "013");
+  const b = await dart.fnltt("00126380", 2026, "11011", "CFS", null);
+  assert.equal(b.fromStore, true);
+  mode = "020";
+  await assert.rejects(dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000001"), (e) => e.code === "quota_stop" && e.kind === "020");
+  await assert.rejects(dart.fnltt("00126380", 2024, "11011", "CFS", "20250301000001"), (e) => e.code === "quota_stop", "중단 뒤 요청 없음");
+  assert.equal(f.calls.length, 2);
+  // 상한
+  const s2 = setup();
+  const f2 = fakeFetch([[/opendart/, () => json({ status: "013" })]]);
+  const d2 = makeDart({ store: s2.store, quotaRoot: s2.quotaRoot, key: "K", fetchImpl: f2, cap: 2 });
+  await d2.alot("00126380", 2021, "11011", null);
+  await d2.alot("00126380", 2022, "11011", null);
+  await assert.rejects(d2.alot("00126380", 2023, "11011", null), (e) => e.code === "quota_stop" && e.kind === "cap");
+});
+
+test("DART: 정정 공시(새 접수번호) = 새 판본 추가, 옛 판본 보관·복구 불가 표시", async () => {
+  const { store, quotaRoot } = setup();
+  let rc = "20240312000736";
+  const f = fakeFetch([[/opendart/, () => json({ status: "000", list: [{ corp_code: "00126380", rcept_no: rc, v: rc }] })]]);
+  const dart = makeDart({ store, quotaRoot, key: "K", fetchImpl: f });
+  await dart.fnltt("00126380", 2023, "11011", "CFS", rc);
+  rc = "20240501000099";
+  await dart.fnltt("00126380", 2023, "11011", "CFS", rc);
+  const vs = store.versions({ market: "kr", source: "dart", key: "fnltt_00126380_2023_11011_CFS" });
+  assert.deepEqual(vs.map((v) => v.v), ["20240312000736", "20240501000099"]);
+  assert.ok(vs.every((v) => v.irrecoverable));
+});
+
+test("EDINET: 최근 2일 목록은 저장 안 함, 확정일은 저장, 건수 불일치는 실패", async () => {
+  const { store, quotaRoot } = setup();
+  const lst = (date, n, cnt = n) => json({ metadata: { status: "200", resultset: { count: cnt } }, results: Array.from({ length: n }, () => ({ submitDateTime: `${date} 09:00` })) });
+  const f = fakeFetch([[/date=2026-10-14/, () => lst("2026-10-14", 2)], [/date=2026-10-01/, () => lst("2026-10-01", 3)], [/date=2026-10-02/, () => lst("2026-10-02", 3, 4)]]);
+  const ed = makeEdinet({ store, quotaRoot, key: "K", fetchImpl: f, now: () => new Date("2026-10-15T03:00:00Z") });
+  assert.equal((await ed.dayList("2026-10-14")).final, false);
+  await ed.dayList("2026-10-14");
+  assert.equal(f.calls.filter((u) => u.includes("2026-10-14")).length, 2, "최근 날짜는 매번 받음");
+  await ed.dayList("2026-10-01");
+  assert.equal((await ed.dayList("2026-10-01")).fromStore, true);
+  await assert.rejects(ed.dayList("2026-10-02"), (e) => e.code === "fetch_failed");
+});
+
+test("EDINET 서류: HTTP 200 + JSON 오류는 실패", async () => {
+  const { store, quotaRoot } = setup();
+  const f = fakeFetch([[/documents\/S100ABCD/, () => json({ metadata: { status: "404", message: "Not Found" } })]]);
+  const ed = makeEdinet({ store, quotaRoot, key: "K", fetchImpl: f });
+  await assert.rejects(ed.docZip("S100ABCD"), (e) => e.code === "fetch_failed" && /404/.test(e.message));
+});
+
+test("KRX: 빈 응답·오늘 응답은 저장 안 함, 지난 날짜 행 있는 응답만 저장", async () => {
+  const { store, quotaRoot } = setup();
+  const f = fakeFetch([[/basDd=20261013/, () => json({ OutBlock_1: [{ ISU_CD: "005930" }] })], [/basDd=20261014/, () => json({ OutBlock_1: [] })]]);
+  const krx = makeKrx({ store, quotaRoot, key: "K", fetchImpl: f, now: () => new Date("2026-10-15T03:00:00Z") });
+  assert.equal((await krx.day("stk_bydd_trd", "20261013")).stored, true);
+  assert.equal((await krx.day("stk_bydd_trd", "20261013")).fromStore, true);
+  const e = await krx.day("stk_bydd_trd", "20261014");
+  assert.equal(e.stored, false);
+  assert.equal(e.rows.length, 0);
+  assert.equal(f.calls.length, 2);
+});
