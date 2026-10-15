@@ -125,3 +125,16 @@ test("정리: 상한 넘을 때만, 오래 안 쓴 것부터, 복구 불가 판�
   const r2 = s.evict("kr", "dart");
   assert.equal(r2.evicted, 0);
 });
+
+test("같은 판본 바이트만 다르고 내용이 같으면(SEC 봇 차단 스크립트) 먼저 저장한 것 유지", async () => {
+  const { equivalentFor } = await import("../us/sec.mjs");
+  const root = tmpRoot();
+  const s = openStore({ root, actor: "verify" });
+  const q = { market: "us", source: "sec", key: "1/000000000000000001/a.htm", version: "000000000000000001", ext: "htm", validate: anyOk, equivalent: equivalentFor("htm") };
+  const body = (p) => Buffer.from(`<html><body>숫자 1,234</body><script type="text/javascript"  src="/${p}"></script></html>`);
+  s.put({ ...q, buf: body("AbC/dEf") });
+  const r = s.put({ ...q, buf: body("XyZ/123") });
+  assert.equal(r.dup, true);
+  assert.ok(s.incidents.some((x) => x.kind === "equivalent_bytes"));
+  assert.throws(() => s.put({ ...q, buf: Buffer.from("<html><body>숫자 9,999</body></html>") }), (e) => e.code === "conflict", "본문이 다르면 여전히 충돌");
+});

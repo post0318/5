@@ -36,7 +36,7 @@ export async function immutable(o) {
     const r = await o.req.get(o.url, { headers: o.headers });
     o.inspect?.(r.buf);
     try {
-      o.store.put({ ...q, buf: r.buf, validate: o.validate, irrecoverable: o.irrecoverable, meta: { url: redactUrl(o.url) } });
+      o.store.put({ ...q, buf: r.buf, validate: o.validate, irrecoverable: o.irrecoverable, equivalent: o.equivalent, meta: { url: redactUrl(o.url) } });
     } catch (e) {
       if (e instanceof StoreError && e.code === "format_rejected") throw new FetchFailed(o.source, e.message, { why: e.detail.why });
       throw e;

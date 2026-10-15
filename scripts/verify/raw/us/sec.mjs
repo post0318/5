@@ -64,11 +64,21 @@ export function makeSec({ store, quotaRoot, tool = "verify", fetchImpl, env = pr
       const ext = (file.match(/\.([A-Za-z0-9]+)$/)?.[1] ?? "bin").toLowerCase();
       const r = await immutable({
         ...base, key: `${cikNum(cik)}/${a18}/${file}`, version: a18, ext, url,
-        validate: validatorFor(ext), identity: identityFor({ cik, a18, file, ext }),
+        validate: validatorFor(ext), identity: identityFor({ cik, a18, file, ext }), equivalent: equivalentFor(ext),
       });
       return { buf: r.buf, sha256: r.sha256, fromStore: r.fromStore, url };
     },
   };
+}
+
+/**
+ * SEC 가 HTML 응답 끝에 봇 차단 스크립트(<script type="text/javascript"  src="/임의 경로">)를 붙여 같은 공시 HTML 의 바이트가
+ * 받을 때마다 다르다(실측 2026-10-15: TSM 6-K tsm-revenue20261008.htm 앱 사본과 검증기 사본이 이 한 줄만 다름). 이 줄을 뺀 내용이 같으면 같은 원본.
+ */
+const INJECTED_SCRIPT_RE = /<script type="text\/javascript"\s+src="\/[A-Za-z0-9/_-]+"><\/script>/g;
+export function equivalentFor(ext) {
+  if (ext !== "htm" && ext !== "html") return undefined;
+  return (a, b) => a.toString("latin1").replace(INJECTED_SCRIPT_RE, "") === b.toString("latin1").replace(INJECTED_SCRIPT_RE, "");
 }
 
 function validatorFor(ext) {
@@ -93,8 +103,9 @@ export function identityFor({ cik, a18, file, ext }) {
       if (m) return { ok: Number(m[1]) === Number(cik), got: m[1] };
       const lb = file.match(/^(.*)_(cal|pre|lab|def)\.xml$/);
       if (lb) {
-        const href = s.match(/xlink:href="([^"#]+)\.xsd#/);
-        return { ok: !!href && href[1] === lb[1], got: href?.[1] ?? null };
+        // 회사 스키마 참조(http 로 시작하지 않는 .xsd) — 표준 역할 스키마(xbrl.org) 참조는 건너뛴다
+        const local = [...new Set([...s.matchAll(/xlink:href="([^"#]+)\.xsd#/g)].map((m) => m[1]).filter((h) => !/^https?:/.test(h)))];
+        return { ok: local.includes(lb[1]), got: local.slice(0, 3) };
       }
       return { ok: true, got: "no-identity-marker" };
     }

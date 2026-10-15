@@ -56,7 +56,8 @@ export function makeDart({ store, quotaRoot, key, tool = "verify", cap = Number(
         if (j.status === "013") return { ok: true, got: "013" };
         const row = j.list?.[0];
         const okCorp = row?.corp_code === corp;
-        const okRcept = rcept == null || row?.rcept_no == null || row.rcept_no === rcept;
+        // 판본 = 목록의 최신 접수번호. 재무 숫자를 다시 싣지 않은 정정([첨부정정] 등)이면 행의 접수번호는 원 보고서(더 이른 번호)일 수 있다 — 판본 이하만 허용
+        const okRcept = rcept == null || row?.rcept_no == null || row.rcept_no <= rcept;
         return { ok: okCorp && okRcept, got: { corp: row?.corp_code, rcept: row?.rcept_no } };
       },
     });
@@ -95,7 +96,9 @@ export function makeDart({ store, quotaRoot, key, tool = "verify", cap = Number(
         validate: checkZip, inspect: inspect("fnlttXbrl", true),
         identity: (b) => {
           const names = unzipEntries(b).map((e) => e.name);
-          return { ok: names.length > 0 && names.every((n) => !/^entity\d{8}_/.test(n) || n.startsWith(`entity${corp}_`)) && names.some((n) => n.startsWith(`entity${corp}_`)), got: names.slice(0, 3) };
+          // 항목 이름 = entity{corp}_… 또는 옛 형식 {corp}_…
+          const corps = new Set(names.map((n) => n.match(/^(?:entity)?(\d{8})_/)?.[1]).filter(Boolean));
+          return { ok: corps.size === 1 && corps.has(corp), got: [...corps] };
         },
       });
       return { buf: r.buf, sha256: r.sha256, fromStore: r.fromStore };

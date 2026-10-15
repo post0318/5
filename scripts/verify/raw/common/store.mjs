@@ -162,8 +162,10 @@ export function openStore({ root, actor, capBytes = {}, now = () => new Date() }
         unlinkSync(tmp);
         throw e;
       }
-      const have = sha256(readFileSync(f));
-      if (have === h) {
+      const haveBuf = readFileSync(f);
+      const have = sha256(haveBuf);
+      if (have === h || q.equivalent?.(haveBuf, q.buf)) {
+        if (have !== h) incident("equivalent_bytes", { key: q.key, version: q.version, existing: have, incoming: h, note: "내용 같음(원천이 덧붙인 부분만 다름) — 먼저 저장한 것 유지" });
         unlinkSync(tmp);
         stats.dupSame++;
         if (!putRecord(readIndex(dir), q.version)) appendIndex(dir, record(q, h)); // 앞선 쪽이 색인을 쓰기 전에 끊긴 경우
@@ -254,5 +256,46 @@ export function openStore({ root, actor, capBytes = {}, now = () => new Date() }
     return { source: `${market}/${source}`, bytes, irrecoverableBytes: irr, cap, evicted: n, evictedBytes: nb };
   }
 
-  return { root, actor, get, put, latest, versions, markChecked, evict, quarantine, incident, stats, incidents, dirOf, fileOf };
+  /**
+   * 기존 보관 파일 들여오기(설계 10 §3.5 옮기는 순서 1·2). 같은 디스크라 하드링크 — 원래 파일은 그대로 두어 앱이 계속 쓴다
+   * (옛 폴더는 앱·검증기가 새 루트로 한 번씩 정상 실행한 뒤 지운다 — 순서 4). 형식 검사·신원 확인을 통과한 것만.
+   * @returns {{status:"imported"|"dup"|"rejected"|"conflict", why?:string, path?:string}}
+   */
+  function importFile(q, src) {
+    const buf = readFileSync(src);
+    const v = q.validate(buf);
+    if (!v.ok) return { status: "rejected", why: `형식: ${v.why}` };
+    if (q.identity) {
+      const id = q.identity(buf);
+      if (!id.ok) return { status: "rejected", why: `신원: ${JSON.stringify(id.got)?.slice(0, 120)}` };
+    }
+    const dir = dirOf(q.market, q.source, q.key);
+    mkdirSync(dir, { recursive: true });
+    const f = fileOf(q.market, q.source, q.key, q.version, q.ext);
+    const h = sha256(buf);
+    try {
+      linkSync(src, f);
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      const haveBuf = readFileSync(f);
+      const have = sha256(haveBuf);
+      if (have === h || q.equivalent?.(haveBuf, buf)) {
+        if (have !== h) incident("equivalent_bytes", { key: q.key, version: q.version, existing: have, incoming: h, src, note: "내용 같음(원천이 덧붙인 부분만 다름) — 먼저 저장한 것 유지" });
+        if (!putRecord(readIndex(dir), q.version)) appendIndex(dir, record({ ...q, buf }, h));
+        stats.dupSame++;
+        return { status: "dup", path: f };
+      }
+      const qa = quarantine(f, "import_conflict_existing", { other: h, src });
+      incident("import_conflict", { key: q.key, version: q.version, existing: have, incoming: h, src, quarantined: qa });
+      return { status: "conflict", why: `같은 판본 다른 내용(${src})` };
+    }
+    const idx = readIndex(dir);
+    const prev = [...idx].reverse().find((r) => r.ev === "put" && r.v !== String(q.version));
+    appendIndex(dir, record({ ...q, buf, meta: { ...(q.meta ?? {}), importedFrom: src } }, h));
+    if (prev && q.supersedes !== false) appendIndex(dir, { ev: "superseded", v: prev.v, by_v: String(q.version), at: now().toISOString(), by: actor });
+    stats.put++;
+    return { status: "imported", path: f };
+  }
+
+  return { root, actor, get, put, latest, versions, markChecked, evict, quarantine, incident, importFile, stats, incidents, dirOf, fileOf };
 }
