@@ -148,7 +148,15 @@ export function interestItems(o) {
       continue;
     }
     if (dieVals.length > 1) {
-      out.push(item({ key: "interest_expense_pl", period: p, value: null, blank_reason: BLANK.ambiguous, blank_detail: { DIE: dieVals }, rule: { id: "R-KR6", source: "xbrl" }, vintage_basis: vb }));
+      // DIE 가 여러 표에 달림(HD현대중공업 FY2023 128,411 범주별 표 / 131,890 금융비용 주석) — 원문 금융원가 주석 표 이자 행 값과 같은 하나만
+      const docV = pick && !pick.error ? pick[which] : null;
+      const docCore = pick && !pick.error ? pick[which === "cur" ? "coreCur" : "corePrior"] : null;
+      const hit = dieVals.filter((v) => v === docV || v === docCore);
+      if (hit.length === 1) {
+        out.push(item({ key: "interest_expense_pl", period: p, value: docV ?? hit[0], facts: die.filter((f) => f.v === hit[0]).map((f) => `xbrl|${o.rcept}|DIE|${f.contextRef}`), rule: { id: "R-KR6", source: "xbrl DIE 여럿 → 원문 금융원가 표로 선택", table: pick.title, unit: pick.unit }, vintage_basis: vb, flags: { die_candidates: dieVals, extra_rows: pick.extraRows } }));
+      } else {
+        out.push(item({ key: "interest_expense_pl", period: p, value: null, blank_reason: BLANK.ambiguous, blank_detail: { DIE: dieVals, doc: docV }, rule: { id: "R-KR6", source: "xbrl" }, vintage_basis: vb }));
+      }
       continue;
     }
     // IE 는 원문 금융원가 표 이자 행 값과 같을 때만

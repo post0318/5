@@ -1,0 +1,19 @@
+{
+  "_note": "시험 T1(판독 고정)·T7(알려진 오류 검출에 필요한 사실) — 기대값의 출처는 측정 문서(03·05·06·08)·CLAUDE.md 결정 기록·옛 검증기 결과(독립 판독)이며 ① 출력에서 베끼지 않았다. 원본은 공유 보관소(2호기 /home/ubuntu/raw-store) — 큰 원본은 git 에 넣지 않는다(설계 §7-1).",
+  "cases": [
+    { "id": "US-NVDA-capex-FY2025", "market": "us", "sym": "NVDA", "key": "capex_ppe_line", "end": "2025-01-26", "months": 12, "value": "3236000000", "flags": { "mixed_with_intangible": true }, "src": "03 §2 NVDA FY2025 3,236 (ProductiveAssets, 무형 포함 한 줄)" },
+    { "id": "US-NVDA-capex-FY2024", "market": "us", "sym": "NVDA", "key": "capex_ppe_line", "end": "2024-01-28", "months": 12, "value": "1069000000", "src": "03 §2" },
+    { "id": "US-CAT-capex-FY2025", "market": "us", "sym": "CAT", "key": "capex_ppe_line", "end": "2025-12-31", "months": 12, "value": "2821000000", "src": "03 §2 CAT 4,286 = 2,821 + 임대장비 1,465 — 임대장비 제외" },
+    { "id": "US-AXP-assets-2021-rounded", "market": "us", "sym": "AXP", "key": "assets", "end": "2021-12-31", "kind": "instant", "values_include": ["188548000000"], "rounded_retag_value": "189000000000", "src": "CLAUDE.md 반올림 재태깅(AXP 2021 총자산)" },
+    { "id": "US-ORCL-da-FY2026-precise", "market": "us", "sym": "ORCL", "key": "da_cf_lines", "end": "2026-05-31", "months": 12, "value": "9294000000", "src": "옛 검증기 A층(Depreciation 7,623 + 무형 1,671) — 본문 $7.6 billion 재태깅 제외" },
+    { "id": "US-DELL-eps-cont-disc-FY2022", "market": "us", "sym": "DELL", "key": "eps_basic_cont", "end": "2022-01-28", "months": 12, "present": true, "src": "T7 DELL 기본 EPS 계속 + 중단(A23) — 두 사실이 있어야 ④ 가 합을 만든다" },
+    { "id": "KR-010120-interest-FY2025", "market": "kr", "sym": "010120", "key": "interest_expense_pl", "end": "2025-12-31", "months": 12, "value": "52196000000", "src": "06 엘에스일렉트릭 FY2025 49,898 + 리스이자 2,298" },
+    { "id": "KR-329180-interest-FY2023", "market": "kr", "sym": "329180", "key": "interest_expense_pl", "end": "2023-12-31", "months": 12, "value": "131890000000", "filing_year": 2023, "src": "06 HD현대중공업 FY2023 금융비용 주석 131,890(범주별 128,411 아님)" },
+    { "id": "KR-042660-capex-FY2021-split", "market": "kr", "sym": "042660", "key": "capex_ppe_line", "end": "2021-12-31", "months": 12, "value": "98284827118", "filing_year": 2023, "src": "01 초안 Q12 ② — FY2023 보고서 전전기 유형 98,284,827,118" },
+    { "id": "KR-042660-capex-FY2021-mixed", "market": "kr", "sym": "042660", "key": "capex_ppe_line", "end": "2021-12-31", "months": 12, "value": "100275341991", "filing_year": 2021, "flags": { "mixed_with_intangible": true }, "src": "01 초안 Q12 ② — FY2021 보고서 합친 줄" },
+    { "id": "KR-178320-eps-FY2022-ambiguous", "market": "kr", "sym": "178320", "key": "eps_basic_total", "end": "2022-12-31", "months": 12, "filing_year": 2023, "blank_reason": "ambiguous", "src": "T7 서진시스템 FY2022 계속영업 EPS 450 이 전체 태그로(K11) — 후보가 갈려 판독 모호" },
+    { "id": "JP-6861-cash-cf-end", "market": "jp", "sym": "6861", "key": "cash_cf_end", "end": "2026-03-20", "kind": "instant", "value": "451269000000", "src": "08 キーエンス 2026-03 CF 기말 451,269 백만엔(BS 596,976·앱 1,493,889 아님)" },
+    { "id": "JP-7203-revenue-FY2022", "market": "jp", "sym": "7203", "key": "revenue_face", "end": "2022-03-31", "months": 12, "value": "31379507000000", "src": "옛 일본 검증기 A층 ext:TotalNetRevenuesIFRS(계산 구조 규칙 J-A3)" },
+    { "id": "JP-7974-capex-mixed", "market": "jp", "sym": "7974", "key": "capex_ppe_line", "end_year": 2025, "months": 12, "present": true, "flags": { "mixed_with_intangible": true }, "src": "03 §6 「有形及び無形固定資産の取得による支出」 합친 줄(J10)" }
+  ]
+}
