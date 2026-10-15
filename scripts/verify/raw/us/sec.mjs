@@ -24,9 +24,9 @@ export function secUserAgent(env = process.env) {
 const pad10 = (cik) => String(cik).replace(/^0+/, "").padStart(10, "0");
 const cikNum = (cik) => String(Number(cik));
 
-export function makeSec({ store, quotaRoot, tool = "verify", fetchImpl, env = process.env }) {
+export function makeSec({ store, quotaRoot, tool = "verify", fetchImpl, env = process.env, retry = RETRY.sec }) {
   const ua = secUserAgent(env);
-  const req = makeRequester({ source: "sec", quotaRoot, tool, dailyCap: null, gapMs: 334, retry: RETRY.sec, fetchImpl });
+  const req = makeRequester({ source: "sec", quotaRoot, tool, dailyCap: null, gapMs: 334, retry, fetchImpl });
   const headers = { "user-agent": ua };
   const base = { store, req, market: "us", source: "sec", headers };
 

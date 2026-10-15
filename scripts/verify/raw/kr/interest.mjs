@@ -140,7 +140,11 @@ export function interestItems(o) {
     const ie = xf?.IE.filter((f) => f.start === p.start && f.end === p.end) ?? [];
     const dieVals = [...new Set(die.map((f) => f.v))];
     if (dieVals.length === 1) {
-      out.push(item({ key: "interest_expense_pl", period: p, value: dieVals[0], facts: die.map((f) => `xbrl|${o.rcept}|DIE|${f.contextRef}`), rule: { id: "R-KR6", source: "xbrl", tag: "dart:InterestExpenseFinanceExpense" }, vintage_basis: vb, flags: pick?.cur ? { doc_value: pick[which] } : {} }));
+      // 원문 표 값과 대조(R-KR7 — 판독기가 맞는지 확인하는 신호). 다르면 표시만(값은 XBRL): 표 단위·행 판독 오류 또는 합산 범위 차이
+      const docV = pick && !pick.error ? pick[which] : null;
+      const docCore = pick && !pick.error ? pick[which === "cur" ? "coreCur" : "corePrior"] : null;
+      const flags = docV == null ? {} : { doc_value: docV, doc_xbrl_mismatch: docV !== dieVals[0] && docCore !== dieVals[0] };
+      out.push(item({ key: "interest_expense_pl", period: p, value: dieVals[0], facts: die.map((f) => `xbrl|${o.rcept}|DIE|${f.contextRef}`), rule: { id: "R-KR6", source: "xbrl", tag: "dart:InterestExpenseFinanceExpense" }, vintage_basis: vb, flags }));
       continue;
     }
     if (dieVals.length > 1) {

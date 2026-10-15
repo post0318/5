@@ -4,6 +4,7 @@
  */
 import { chainItems, capexItems, daItems, interestItems, markItemVintage, pretaxFaceItems } from "./items.mjs";
 import { companyfactsFacts, filings, filingStructure, instanceFacts } from "./read.mjs";
+import { sixKDocs, sixKFacts } from "./sixk.mjs";
 
 const PERIODIC = /^(10-K|10-Q|20-F|40-F|10-KT|10-QT)(\/A)?$/;
 
@@ -11,7 +12,7 @@ const PERIODIC = /^(10-K|10-Q|20-F|40-F|10-KT|10-QT)(\/A)?$/;
  * @param {ReturnType<import("./sec.mjs").makeSec>} sec
  * @param {{sym:string, cik:string, maxAnnual?:number, maxQuarterly?:number}} o
  */
-export async function runUs(sec, { sym, cik, maxAnnual = 6, maxQuarterly = 5 }) {
+export async function runUs(sec, { sym, cik, maxAnnual = 6, maxQuarterly = 5, withSixK = true }) {
   const res = { market: "us", sym, cik, filings: [], rawFacts: [], items: [], structures: [], failures: [] };
   const fail = (stage, e, extra = {}) => {
     if (e?.code === "quota_stop") throw e;
@@ -64,6 +65,36 @@ export async function runUs(sec, { sym, cik, maxAnnual = 6, maxQuarterly = 5 }) 
       }
     } catch (e) {
       fail("instance", e, { accn: f.id, form: f.form });
+    }
+  }
+  // R-US7 20-F 회사의 분기 = 6-K 연결재무보고서 — 최근 20-F 본표 줄 라벨로 6-K 문서 글자를 읽는다(최근 20-F 결산일 뒤 13개월 안 6-K)
+  const last20F = annual.find((f) => /^(20-F|40-F)$/.test(f.form));
+  if (last20F && withSixK) {
+    try {
+      const st = res.structures.find((x) => x.accn === last20F.id) ? await filingStructure(sec, cik, last20F.id) : null;
+      const labelsByConcept = new Map();
+      for (const r of st?.roles ?? []) for (const l of r.lines) {
+        if (l.abstract) continue;
+        const ls = (st.labels.get(l.id) ?? []).map((x) => x.text).filter((x) => x && x.length > 3 && x.length < 120);
+        if (ls.length) labelsByConcept.set(l.qname, [...new Set(ls)]);
+      }
+      const since = last20F.period_end ?? last20F.filed_at;
+      const until = new Date(Date.parse(since) + 400 * 864e5).toISOString().slice(0, 10);
+      const sixKs = fl.list.filter((f) => f.form === "6-K" && f.filed_at > since && f.filed_at <= until);
+      const cur = res.rawFacts.find((x) => x.filing.id === last20F.id && /^[A-Z]{3}$/.test(x.value.unit ?? "") && x.value.unit !== "USD")?.value.unit ?? null;
+      for (const f of sixKs) {
+        try {
+          const docs = await sixKDocs(sec, cik, f.id);
+          const r6 = sixKFacts({ labelsByConcept, cik, sym, filing: f, docs, currency: cur });
+          if (r6.facts.length) res.sixK = [...(res.sixK ?? []), { accn: f.id, facts: r6.facts.length, ambiguous: r6.ambiguous.length }];
+          res.rawFacts.push(...r6.facts);
+          if (r6.ambiguous.length) res.failures.push({ stage: "6-K", code: "ambiguous", accn: f.id, message: `라벨·기간 값 갈림 ${r6.ambiguous.length}건`, sample: r6.ambiguous.slice(0, 3) });
+        } catch (e) {
+          fail("6-K", e, { accn: f.id });
+        }
+      }
+    } catch (e) {
+      fail("6-K-labels", e, { accn: last20F.id });
     }
   }
   markItemVintage(res.items);
