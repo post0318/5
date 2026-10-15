@@ -13,7 +13,7 @@ const local = (id) => id.split(":").pop();
 const ok = (f) => f.value.num != null && !f.value.less_precise_duplicate;
 
 export const CHAINS = {
-  revenue: { ids: ["jpigp_cor:RevenueIFRS", "jpigp_cor:Revenue2IFRS", "jpigp_cor:NetSalesIFRS", "jpigp_cor:OperatingRevenueIFRS", "jppfs_cor:NetSales", "jppfs_cor:OperatingRevenue1", "jppfs_cor:OperatingRevenue2", "jppfs_cor:Revenue", "jppfs_cor:NetSalesOfCompletedConstructionContracts", "jppfs_cor:OrdinaryIncomeBNK", "jppfs_cor:OrdinaryIncomeINS", "jppfs_cor:OperatingRevenueSEC"], kind: "duration", part: "D34(금융 서식 = 経常収益·証券 営業収益)" },
+  revenue: { ids: ["jpigp_cor:RevenueIFRS", "jpigp_cor:Revenue2IFRS", "jpigp_cor:NetSalesIFRS", "jpigp_cor:OperatingRevenueIFRS", "jppfs_cor:OperatingRevenue1", "jppfs_cor:OperatingRevenue2", "jppfs_cor:NetSales", "jppfs_cor:Revenue", "jppfs_cor:NetSalesOfCompletedConstructionContracts", "jppfs_cor:OrdinaryIncomeBNK", "jppfs_cor:OrdinaryIncomeINS", "jppfs_cor:OperatingRevenueSEC"], kind: "duration", stmt: "is", part: "D34(금융 서식 = 経常収益·証券 営業収益). 営業収益(합계)을 売上高(구성요소)보다 먼저 — 3382 売上高 8.89조 + その他の営業収入 = 営業収益(감사 10-16 ③-3). 손익계산서 본표 줄만" },
   oi: { ids: ["jpigp_cor:OperatingProfitLossIFRS", "jppfs_cor:OperatingIncome"], kind: "duration", part: "P12" },
   ordinary_income: { ids: ["jppfs_cor:OrdinaryIncome"], kind: "duration" },
   pretax: { ids: ["jpigp_cor:ProfitLossBeforeTaxIFRS", "jppfs_cor:IncomeBeforeIncomeTaxes"], kind: "duration" },
@@ -50,6 +50,8 @@ export function chainItems(facts) {
       for (const f of byConcept.get(id) ?? []) {
         if (f.period.kind !== ch.kind) continue;
         if (ch.stmt && !(f.placement.face && f.placement.stmts.some((s) => s.stmt === ch.stmt))) continue;
+        // 매출: 손익 본표에서 다른 매출 줄의 구성요소(계산 부모가 매출 줄)면 쓰지 않는다 — 6758 NetSalesIFRS 는 ext 합계 SalesAndFinancialServicesRevenueIFRS 아래
+        if (key === "revenue" && f.placement.stmts.some((s) => s.stmt === "is" && s.parent && !/Abstract|Heading/.test(s.parent) && /Revenue|Sales/.test(s.parent.split(/[_:]/).pop()))) continue;
         const k = `${f.filing.id}|${f.scope.consolidation}|${pk(f)}`;
         if (seen.has(k)) continue;
         seen.add(k);
@@ -130,14 +132,14 @@ export function capexItems(facts) {
 }
 
 /** 매출 본표 줄(회사 고유 요소 포함 — 7203 ext:TotalNetRevenuesIFRS). 손익 역할에서 표시 순서 첫 매출성 줄 */
-const REV_NAME = /Revenue|NetSales|OperatingRevenue|Sales$/;
+const REV_NAME = /Revenue|NetSales|OperatingRevenue|Sales$|^OrdinaryIncome(BNK|INS)$/; // 은행·보험 経常収益(D34) — 표준 요소는 서류 라벨 파일에 라벨이 없어 이름으로
 const REV_LABEL = /売上高|営業収益|売上収益|収益合計|営業収入|経常収益/;
 export function revenueFaceItems(facts) {
   const is = facts.filter((f) => ok(f) && !f.scope.dims.length && f.period.kind === "duration" && f.placement.face && f.placement.stmts.some((s) => s.stmt === "is"));
   const by = new Map();
   for (const f of is) {
     const s = f.placement.stmts.find((x) => x.stmt === "is");
-    const lab = s.label ?? f.concept.label ?? "";
+    const lab = s.label || f.concept.label || ""; // 표시 라벨이 빈 문자열이면 요소 라벨로(은행 経常収益 — 감사 10-16 뒤 T4 엄격 대조에서 발견)
     if (!(REV_NAME.test(local(f.concept.id)) || REV_LABEL.test(lab)) || /Cost|原価|Other|その他/.test(local(f.concept.id) + lab)) continue;
     const k = `${f.filing.id}|${f.scope.consolidation}|${pk(f)}`;
     if (!by.has(k)) by.set(k, []);

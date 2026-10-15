@@ -66,8 +66,19 @@ for (const c of cases) {
     && (c.kind === "instant" ? i.period.kind === "instant" : c.months ? i.period.months === c.months : true)
     && (c.filing_year == null || String(i.vintage_basis?.filing ?? "").startsWith(String(c.filing_year + 1))));
   const why = [];
+  // 연결 서류에서 별도(개별) Item 이 새는지(감사 10-16 J1) — scope_absent 사례
+  if (c.scope_absent) {
+    const bad = r.items.filter((i) => i.key === c.key && i.scope?.consolidation === c.scope_absent && (c.end ? i.period.end === c.end : true));
+    if (bad.length) why.push(`${c.scope_absent} Item ${bad.length}건 — ${bad.slice(0, 3).map((i) => i.value).join(",")}`);
+    if (why.length) { fail++; console.log(`실패 ${c.id}: ${why.join(" · ")}`); } else { pass++; console.log(`통과 ${c.id}`); }
+    continue;
+  }
+  // 값 판정은 가장 나중 서류의 Item 으로(「하나라도 같으면 통과」 금지 — 감사 10-16 ③-4). values_include 는 여러 판본 사례용
+  const latestFiled = its.map((i) => i.vintage_basis?.filed_at ?? "").sort().at(-1);
+  const latest = its.filter((i) => (i.vintage_basis?.filed_at ?? "") === latestFiled);
+  if (c.present && !its.some((i) => i.value != null)) why.push(`값 있는 Item 없음 — ${its.map((i) => i.value ?? `빈칸:${i.blank_reason}`).join(",")}`);
   if (!its.length) why.push(`Item 없음(실패 ${r.failures.length}: ${r.failures.slice(0, 2).map((f) => f.stage + " " + f.message).join(" / ").slice(0, 160)})`);
-  if (c.value != null && !its.some((i) => i.value === c.value)) why.push(`값 ${c.value} 없음 — 있는 값 ${[...new Set(its.map((i) => i.value ?? `빈칸:${i.blank_reason}`))].join(", ")}`);
+  if (c.value != null && !(latest.length && latest.every((i) => i.value === c.value))) why.push(`가장 나중 서류 값 ≠ ${c.value} — ${[...new Set(latest.map((i) => i.value ?? `빈칸:${i.blank_reason}`))].join(", ") || "없음"}`);
   if (c.values_include) for (const v of c.values_include) if (!its.some((i) => i.value === v)) why.push(`값 ${v} 없음`);
   if (c.rounded_retag_value && !its.some((i) => i.value === c.rounded_retag_value && i.flags?.rounded_retag_of_first)) why.push(`반올림 재태깅 ${c.rounded_retag_value} 표시 없음`);
   if (c.blank_reason && !its.some((i) => i.value == null && i.blank_reason === c.blank_reason)) why.push(`빈칸 사유 ${c.blank_reason} 없음 — ${its.map((i) => i.value ?? i.blank_reason).join(",")}`);

@@ -4,6 +4,7 @@
  */
 import { capexItems, cashCfEndItems, chainItems, debtItems, financialFormatOf, interestItems, revenueFaceItems, shareItems } from "./items.mjs";
 import { docFacts, edinetCodes, findFilings } from "./read.mjs";
+import { BLANK, item } from "../common/rawfact.mjs";
 
 let codes = null;
 let found = null;
@@ -47,7 +48,16 @@ export async function runJp(ed, { sym, maxAnnual = 6, maxInterim = 2 }) {
         ...debtItems(r.facts), ...interestItems(r.facts, { financialFormat, usGaap })];
       // 연결 우선(§6.2): 연결 본표가 있는 서류의 별도(개별) Item 은 내지 않는다 — 연결 개념이 사슬에 없으면 그 칸은 빠져 보이고(대조 new_blank) 개별 값으로 메우지 않는다
       const hasCons = r.facts.some((f) => f.scope.consolidation === "consolidated" && f.placement.face && f.placement.stmts.some((s) => s.stmt !== "summary"));
-      res.items.push(...(hasCons ? its.filter((i) => i.scope.consolidation !== "separate") : its));
+      const kept = hasCons ? its.filter((i) => i.scope.consolidation !== "separate") : its;
+      // 매출 사슬(표준 요소)이 없는데 본표 매출 줄(회사 고유 요소 — 7203 TotalNetRevenuesIFRS 등)이 있으면 빈칸 + 사유(그냥 비워 두지 않음)
+      const pk = (i) => `${i.scope.consolidation}|${i.period.start}|${i.period.end}`;
+      const chainRev = new Set(kept.filter((i) => i.key === "revenue").map(pk));
+      for (const fr of kept.filter((i) => i.key === "revenue_face" && !chainRev.has(pk(i)))) {
+        kept.push(item({ key: "revenue", period: fr.period, scope: fr.scope, value: null, blank_reason: BLANK.confirmed_absent,
+          blank_detail: { why: "본표 매출 줄이 표준 사슬 요소가 아님(회사 고유 요소 또는 구성요소만 표준) — 본표 매출은 revenue_face", face_concept: fr.rule?.concept ?? null },
+          rule: { id: "R-JP-CHAIN", concept: null }, vintage_basis: fr.vintage_basis }));
+      }
+      res.items.push(...kept);
       if (financialFormat) res.financialFormat = true;
       res.docs = [...(res.docs ?? []), { id: d.id, form: d.form, dei: r.dei, roles: r.roles.length }];
     } catch (e) {

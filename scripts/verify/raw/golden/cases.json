@@ -21,6 +21,10 @@
     { "id": "JP-7203-revenue-FY2022", "market": "jp", "sym": "7203", "key": "revenue_face", "end": "2022-03-31", "months": 12, "value": "31379507000000", "src": "옛 일본 검증기 A층 ext:TotalNetRevenuesIFRS(계산 구조 규칙 J-A3)" },
     { "id": "JP-8002-revenue-FY2024-combined-ci", "market": "jp", "sym": "8002", "key": "revenue", "end": "2024-03-31", "months": 12, "value": "7250515000000", "src": "옛 일본 검증기 A층 jpigp_cor:Revenue2IFRS — 손익·포괄손익 한 표(連結包括利益計算書) 서식, 개별 収益 1,808,965 아님" },
     { "id": "JP-8306-revenue-FY2024-bank", "market": "jp", "sym": "8306", "key": "revenue", "end": "2024-03-31", "months": 12, "value": "11890350000000", "src": "옛 일본 검증기 A층 OrdinaryIncomeBNK(経常収益, D34) — 지주사 개별 営業収益 809,818 아님" },
+    { "id": "JP-8306-no-separate-in-consolidated", "market": "jp", "sym": "8306", "key": "revenue", "scope_absent": "separate", "src": "연결 우선(설계 §6.2) — 지주사 개별 営業収益 809,818 이 연결 서류에서 새던 결함(감사 10-16 J1)" },
+    { "id": "JP-8306-revenue_face-bank-FY2024", "market": "jp", "sym": "8306", "key": "revenue_face", "end": "2024-03-31", "months": 12, "value": "11890350000000", "src": "옛 일본 검증기 A층 OrdinaryIncomeBNK 経常収益(D34) — 표준 요소 라벨이 서류에 없어 빈칸이던 결함" },
+    { "id": "JP-3382-revenue-total-FY2025", "market": "jp", "sym": "3382", "key": "revenue", "end": "2025-02-28", "months": 12, "value": "11972762000000", "src": "セブン&アイ 2025年2月期 有価証券報告書 営業収益 11,972,762百万円(합계 — 売上高 8.89조는 구성요소, 감사 10-16 ③-3. 옛 검증기는 営業総利益로 잡아 기대값으로 못 씀)" },
+    { "id": "JP-6758-revenue-chain-blank-FY2025", "market": "jp", "sym": "6758", "key": "revenue", "end": "2025-03-31", "months": 12, "blank_reason": "confirmed_absent", "src": "ソニー 본표 매출 = 회사 고유 SalesAndFinancialServicesRevenueIFRS(옛 검증기 A층) — 표준 NetSalesIFRS 는 그 구성요소라 사슬에 쓰지 않음" },
     { "id": "JP-7974-capex-mixed", "market": "jp", "sym": "7974", "key": "capex_ppe_line", "end_year": 2025, "months": 12, "present": true, "flags": { "mixed_with_intangible": true }, "src": "03 §6 「有形及び無形固定資産の取得による支出」 합친 줄(J10)" }
   ]
 }
