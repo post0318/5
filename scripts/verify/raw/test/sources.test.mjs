@@ -105,7 +105,7 @@ test("DART: 정정 공시(새 접수번호) = 새 판본 추가, 옛 판본 보�
 
 test("EDINET: 최근 2일 목록은 저장 안 함, 확정일은 저장, 건수 불일치는 실패", async () => {
   const { store, quotaRoot } = setup();
-  const lst = (date, n, cnt = n) => json({ metadata: { status: "200", resultset: { count: cnt } }, results: Array.from({ length: n }, () => ({ submitDateTime: `${date} 09:00` })) });
+  const lst = (date, n, cnt = n) => json({ metadata: { status: "200", parameter: { date, type: "2" }, resultset: { count: cnt } }, results: Array.from({ length: n }, () => ({ submitDateTime: `${date} 09:00` })) });
   const f = fakeFetch([[/date=2026-10-14/, () => lst("2026-10-14", 2)], [/date=2026-10-01/, () => lst("2026-10-01", 3)], [/date=2026-10-02/, () => lst("2026-10-02", 3, 4)]]);
   const ed = makeEdinet({ store, quotaRoot, key: "K", fetchImpl: f, now: () => new Date("2026-10-15T03:00:00Z") });
   assert.equal((await ed.dayList("2026-10-14")).final, false);
@@ -114,6 +114,13 @@ test("EDINET: 최근 2일 목록은 저장 안 함, 확정일은 저장, 건수 
   await ed.dayList("2026-10-01");
   assert.equal((await ed.dayList("2026-10-01")).fromStore, true);
   await assert.rejects(ed.dayList("2026-10-02"), (e) => e.code === "fetch_failed");
+});
+
+test("EDINET 목록: 다른 날짜 응답이면 신원 실패(그 날짜 목록이 아님)", async () => {
+  const { store, quotaRoot } = setup();
+  const f = fakeFetch([[/date=2026-10-01/, () => json({ metadata: { status: "200", parameter: { date: "2026-09-30", type: "2" }, resultset: { count: 0 } }, results: [] })]]);
+  const ed = makeEdinet({ store, quotaRoot, key: "K", fetchImpl: f, now: () => new Date("2026-10-15T03:00:00Z") });
+  await assert.rejects(ed.dayList("2026-10-01"), (e) => e.name === "IdentityFailed");
 });
 
 test("EDINET 서류: HTTP 200 + JSON 오류는 실패", async () => {

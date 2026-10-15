@@ -32,9 +32,10 @@ export function makeEdinet({ store, quotaRoot, key, tool = "verify", cap = Numbe
   /** 날짜 하루 목록 */
   async function dayList(date) {
     const url = `${BASE}/documents.json?date=${date}&type=2&Subscription-Key=${key}`;
+    // 목록 날짜 = 응답 metadata.parameter.date(ファイル日付 — 제출일이 아닌 정정·취하 날짜의 서류도 실린다)
     const identity = (b) => {
-      const rows = JSON.parse(b).results;
-      return { ok: rows.every((r) => !r.submitDateTime || String(r.submitDateTime).startsWith(date)), got: rows[0]?.submitDateTime ?? null };
+      const p = JSON.parse(b).metadata?.parameter ?? {};
+      return { ok: p.date === date && String(p.type) === "2", got: p };
     };
     if (date <= jstDate(now, 2)) {
       const r = await immutable({ ...base, key: `list_${date}`, version: date, ext: "json", url, validate: listOk, identity });

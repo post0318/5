@@ -6,7 +6,7 @@
  * 판본 선택·계산은 하지 않는다(④).
  */
 import { calculationMap, idToQName, parseFacts, parseLabels, parseLinkbase, presentationTree } from "../common/xbrl.mjs";
-import { fyKey, monthsBetween, normNum, rawFact } from "../common/rawfact.mjs";
+import { fyKey, markPrecisionDuplicates, monthsBetween, normNum, rawFact } from "../common/rawfact.mjs";
 
 const pad10 = (cik) => String(cik).replace(/^0+/, "").padStart(10, "0");
 const a18 = (accn) => String(accn).replace(/-/g, "");
@@ -251,30 +251,4 @@ export async function instanceFacts(sec, cik, accn, { sym, filing, structure }) 
   }
   markPrecisionDuplicates(out);
   return { facts: out, structure: st };
-}
-
-/**
- * 같은 개념·문맥·단위 사실이 정밀도만 달리 여러 번(본문 문장 "$7.6 billion" 을 decimals=-8 로 다시 태깅 — ORCL 2026 10-K) —
- * 가장 정밀한 값(decimals 가 가장 큰 값, INF 최고)만 남기고 나머지는 value.less_precise_duplicate 로 표시(지우지 않음).
- * 정밀도까지 같은데 값이 다르면 둘 다 value.inconsistent_duplicate(판독 모호 — Item 은 빈칸 ambiguous).
- */
-export function markPrecisionDuplicates(facts) {
-  const prec = (d) => (d == null ? -Infinity : d === "INF" ? Infinity : Number(d));
-  const groups = new Map();
-  for (const f of facts) {
-    if (f.locator.source !== "instance" || f.value.num == null) continue;
-    const k = `${f.concept.id}|${f.locator.contextRef}|${f.value.unit}`;
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(f);
-  }
-  for (const g of groups.values()) {
-    if (g.length < 2) continue;
-    const top = Math.max(...g.map((f) => prec(f.value.decimals)));
-    const best = g.filter((f) => prec(f.value.decimals) === top);
-    const vals = new Set(best.map((f) => f.value.num));
-    for (const f of g) {
-      if (prec(f.value.decimals) < top) f.value.less_precise_duplicate = true;
-      else if (vals.size > 1) f.value.inconsistent_duplicate = true;
-    }
-  }
 }
