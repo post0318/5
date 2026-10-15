@@ -6,6 +6,8 @@ import { alotItems, capexItems, chainItems, epsItems, stockItems } from "./items
 import { corpMap, fnlttFacts, markVintage, reportIndex, reportPeriods } from "./read.mjs";
 import { interestItems } from "./interest.mjs";
 import { krXbrlFacts } from "./xbrlfacts.mjs";
+import { krEvents } from "./events.mjs";
+import { daDocItems } from "./da.mjs";
 import { BLANK, item } from "../common/rawfact.mjs";
 
 let corpCache = null;
@@ -93,6 +95,10 @@ export async function runKr(dart, { sym, years = 7, quarters = 5, withInterest =
       } catch (e) {
         fail("interest", e, { year: r.year });
       }
+      // R-KR11 감가상각 원문 후보(성격별·현금흐름 조정·투자부동산 변동표)
+      if (docBuf) {
+        try { res.items.push(...daDocItems(docBuf, { rcept: r.latest, year: r.year, code: "11011" })); } catch (e) { fail("da-doc", e, { year: r.year }); }
+      }
     }
   }
   for (const r of [...annual.slice(-3), ...interim.slice(-1)]) {
@@ -102,6 +108,14 @@ export async function runKr(dart, { sym, years = 7, quarters = 5, withInterest =
     } catch (e) {
       fail("stockTotqy", e, { year: r.year, code: r.code });
     }
+  }
+  // R-KR9 주식 사건
+  try {
+    const ev = await krEvents(dart, c.corp, { fromYear: cy - years, annualReports: annual.slice(-3) });
+    res.events = ev.events;
+    for (const f of ev.failures) res.failures.push({ ...f, stage: `events:${f.stage}` });
+  } catch (e) {
+    fail("events", e);
   }
   res.fetchLog = { ...dart.log };
   return res;

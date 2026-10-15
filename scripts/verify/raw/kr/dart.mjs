@@ -88,6 +88,9 @@ export function makeDart({ store, quotaRoot, key, tool = "verify", cap = Number(
       { corp_code: corp, bsns_year: String(year), reprt_code: code }, rcept, corp),
     stockTotqy: (corp, year, code, rcept) => report("stockTotqySttus.json", "stock", [corp, year, code],
       { corp_code: corp, bsns_year: String(year), reprt_code: code }, rcept, corp),
+    /** 증자(감자) 현황 — 분할·병합·무상증자 사건(R-KR9) */
+    irds: (corp, year, code, rcept) => report("irdsSttus.json", "irds", [corp, year, code],
+      { corp_code: corp, bsns_year: String(year), reprt_code: code }, rcept, corp),
     /** XBRL 원본 zip(접수번호, 불변) */
     xbrl: async (rcept, reprtCode, corp) => {
       if (Date.now() < maintUntil) throw new SourceMaintenance("dart", "DART XBRL 점검(800) 30분 안 — 요청 생략");
