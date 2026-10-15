@@ -33,12 +33,14 @@ const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function rowsFor(text, label) {
   const words = label.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   if (words.length < 2 && label.length < 6) return [];
-  const re = new RegExp(`(?:^|[^a-z])${words.map(esc).join("[^a-z0-9]*(?:\\([^)]{0,30}\\)[^a-z0-9]*)?")}(?:[^a-z0-9(—\\-]*\\(notes?[^)]{0,20}\\))?[^a-z0-9(—\\-]*((?:[\\s‖$]*(?:\\(?[\\d,]+(?:\\.\\d+)?\\)?|—|-)(?![\\d,]))+)`, "g");
+  const re = new RegExp(`(?:^|\\n)[ \\t]*(?:\\(?[a-z]\\)\\s*)?${words.map(esc).join("[^a-z0-9]*(?:\\([^)]{0,30}\\)[^a-z0-9]*)?")}(?:[^a-z0-9(—\\-]*\\(notes?[^)]{0,20}\\))?[^a-z0-9(—\\-]*((?:[\\s‖$]*(?:\\(?[\\d,]+(?:\\.\\d+)?\\)?|—|-)(?![\\d,]))+)`, "g");
   const out = [];
   for (const m of text.matchAll(re)) {
     const body = m[1].replace(/^([\s‖$]*)\d{1,2}(?:,\s?\d{1,2})+(?=[\s‖])/, "$1");
     const toks = [...body.matchAll(/\(?[\d,]+(?:\.\d+)?\)?|—|-/g)].map((x) => x[0]).filter((t) => /\d/.test(t) || t === "—" || t === "-");
     if (!toks.length) continue;
+    // 연도 머리 줄(「2026 2025」 — 자본변동표 머리·기간 머리)은 값 줄이 아니다. 표 금액은 천 단위 쉼표를 쓰므로 쉼표 없는 4자리 연도 토큰이 있으면 버린다
+    if (toks.some((t) => /^\(?(19|20)\d\d\)?$/.test(t))) continue;
     out.push({ i: m.index, toks, vals: toks.map((t) => (t === "—" || t === "-" ? "0" : `${t.startsWith("(") ? "-" : ""}${t.replace(/[(),]/g, "")}`)) });
   }
   return out;
@@ -46,12 +48,13 @@ function rowsFor(text, label) {
 function unitAt(text, i) {
   const head = text.slice(Math.max(0, i - 60_000), i);
   const t = head.lastIndexOf("thousands"), mn = head.lastIndexOf("millions");
-  if (t < 0 && mn < 0) { const any = /in (?:\S+ )?(thousands|millions)/.exec(text); return any ? (any[1] === "thousands" ? 3 : 6) : null; }
+  if (t < 0 && mn < 0) return null; // 앞에 단위 표시가 없으면 단위 미확인(문서 다른 곳 단위를 가져오지 않는다 — 감사 10-16 U5)
   return t > mn ? 3 : 6;
 }
 /** 흐름 열 머리(가장 가까운 「months ended … YYYY YYYY」) → { months, years:[y1,y2], ends } */
 function flowHeader(text, i) {
-  const lo = Math.max(0, i - 20_000), win = text.slice(lo, i + 20_000);
+  // 줄 앞 3천 자 안의 머리만(뒤쪽·멀리 있는 머리를 쓰지 않는다 — 감사 10-16 ③-1)
+  const lo = Math.max(0, i - 3_000), win = text.slice(lo, i);
   const hs = [...win.matchAll(/(three|six|nine|twelve|3|6|9|12)[\s-]*months? ended[^0-9]{0,200}?((?:[a-z]{3,9}\.? \d{1,2},?[\s‖]*)+)[^0-9]{0,80}?(20\d\d)[\s‖]+(20\d\d)/g)]
     .sort((a, b) => Math.abs(lo + a.index - i) - Math.abs(lo + b.index - i));
   const h = hs[0];
@@ -59,6 +62,19 @@ function flowHeader(text, i) {
   const w = { three: 3, six: 6, nine: 9, twelve: 12 }[h[1]] ?? Number(h[1]);
   const md = /([a-z]{3})[a-z]*\.? (\d{1,2})/.exec(h[2]);
   return { months: w, md: md ? [MON.indexOf(md[1]), Number(md[2])] : null, years: [Number(h[3]), Number(h[4])] };
+}
+
+/** 본표 구역 — 줄 앞에서 가장 가까운 재무제표 제목(「consolidated statement(s) of …」·「balance sheet」·「notes to the …」).
+ *  bs = 시점 열만, flow = 기간 열만, equity = 자본변동표(열이 구성요소라 건너뜀), notes = 주석(시점·기간 둘 다 머리로 판정), null = 제목 전 */
+const TITLE_RE = /consolidated (?:statements?|balance sheets?)(?: of)? ?(financial position|cash flows?|operations|income|profit or loss|comprehensive income|changes in (?:shareholders'? |stockholders'? )?equity)?|balance sheets?|notes to the [a-z ]{0,60}financial statements/g;
+function regions(text) {
+  const out = [];
+  for (const m of text.matchAll(TITLE_RE)) {
+    const w = m[1] ?? (/notes to/.test(m[0]) ? "notes" : /balance sheet/.test(m[0]) ? "financial position" : null);
+    if (!w) continue;
+    out.push({ i: m.index, kind: /financial position/.test(w) ? "bs" : /changes in/.test(w) ? "equity" : w === "notes" ? "notes" : "flow" });
+  }
+  return out;
 }
 
 /**
@@ -71,36 +87,55 @@ export function sixKFacts(o) {
     const t = d.text;
     if (!/(statements?|balance sheets?) of (cash flows?|financial position|comprehensive income|income|profit or loss)|balance sheets?/.test(t)) continue;
     const hdrs = bsHeaders(t);
+    const regs = regions(t);
+    const claims = new Map(); // 「문서 위치|기간 열쇠」 → Set(개념) — 한 줄을 두 개념이 함께 가져가면(20-F 라벨이 같은 유동·비유동 줄) 둘 다 내지 않는다
+    const pending = [];
     for (const [concept, labels] of o.labelsByConcept) {
       const found = new Map(); // 기간 열쇠 → Set(값)
+      const at = new Map(); // 기간 열쇠 → Set(문서 위치)
+      const claim = (key, pos) => { if (!at.has(key)) at.set(key, new Set()); at.get(key).add(pos); const c = `${pos}|${key}`; if (!claims.has(c)) claims.set(c, new Set()); claims.get(c).add(concept); };
       for (const lab of labels) {
         for (const r of rowsFor(t, lab)) {
           const e = unitAt(t, r.i);
           if (e == null) continue;
+          // 구역(감사 10-16 ③-1 — 현금흐름표 줄이 재무상태표 날짜 머리로 시점값이 됐다): 재무상태표 = 시점만, 손익·현금흐름 = 기간만, 자본변동표 = 건너뜀
+          const reg = regs.filter((g) => g.i < r.i).at(-1)?.kind ?? null;
+          if (reg === "equity") continue;
           // 시점 — 앞에서 가장 가까운 날짜 머리, 값 개수 = 열 수(또는 2배 금액·비율 쌍)
-          const hd = hdrs.filter((h) => h.i < r.i).at(-1);
+          // 날짜 머리는 줄 바로 위(3천 자 안)만 — 멀리 떨어진 재무상태표 머리를 주석·경영진 설명 표 줄에 붙이지 않는다(감사 10-16 ③-1)
+          const hd = hdrs.filter((h) => h.i < r.i && r.i - h.i <= 3_000).at(-1);
           let added = false;
-          if (hd && (r.vals.length === hd.dates.length || r.vals.length === 2 * hd.dates.length)) {
-            const vals = r.vals.length === hd.dates.length ? r.vals : r.vals.filter((_, k) => k % 2 === 0);
-            hd.dates.forEach((dt, k) => { const key = `I|${dt}`; if (!found.has(key)) found.set(key, new Set()); found.get(key).add(scaleInt(normNum(vals[k]), e)); });
+          // 주석 번호 열(「13 | 2,588 | 3,366」) — 값이 열 수보다 하나 많고 첫 토큰이 쉼표 없는 1~2자리 정수면 뺀다
+          const vals0 = (n) => (r.vals.length === n + 1 && /^\d{1,2}$/.test(r.toks[0]) ? r.vals.slice(1) : r.vals);
+          if (reg !== "flow" && hd && (vals0(hd.dates.length).length === hd.dates.length || r.vals.length === 2 * hd.dates.length)) {
+            const v0 = vals0(hd.dates.length);
+            const vals = v0.length === hd.dates.length ? v0 : r.vals.filter((_, k) => k % 2 === 0);
+            hd.dates.forEach((dt, k) => { const key = `I|${dt}`; if (!found.has(key)) found.set(key, new Set()); found.get(key).add(scaleInt(normNum(vals[k]), e)); claim(key, r.i); });
             added = true;
           }
-          if (!added) {
+          if (!added && reg !== "bs") {
             const fh = flowHeader(t, r.i);
-            if (!fh || !fh.md || !(r.vals.length === 2 || r.vals.length === 4)) continue;
-            const pair = r.vals.length === 4 ? r.vals.slice(2) : r.vals;
+            const fv = r.vals.length === 3 || r.vals.length === 5 ? vals0(r.vals.length - 1) : r.vals;
+            if (!fh || !fh.md || !(fv.length === 2 || fv.length === 4)) continue;
+            const pair = fv.length === 4 ? fv.slice(2) : fv;
             fh.years.forEach((y, k) => {
               const end = snap(y, fh.md[0], fh.md[1]);
               const key = `D|${fh.months}|${end}`;
               if (!found.has(key)) found.set(key, new Set());
               found.get(key).add(scaleInt(normNum(pair[k]), e));
+              claim(key, r.i);
             });
           }
         }
       }
+      pending.push({ concept, found, at });
+    }
+    for (const { concept, found, at } of pending) {
       for (const [key, vals] of found) {
         const vs = [...vals].filter((v) => v != null);
         if (vs.length !== 1) { if (vs.length > 1) ambiguous.push({ concept, key, vals: vs, doc: d.name }); continue; }
+        const shared = [...(at.get(key) ?? [])].flatMap((pos) => [...(claims.get(`${pos}|${key}`) ?? [])]).filter((c) => c !== concept);
+        if (shared.length) { ambiguous.push({ concept, key, vals: vs, doc: d.name, sharedRowWith: [...new Set(shared)] }); continue; }
         const [kind, a, b] = key.split("|");
         const end = kind === "I" ? a : b;
         const months = kind === "D" ? Number(a) : null;

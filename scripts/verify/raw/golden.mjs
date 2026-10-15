@@ -17,7 +17,7 @@ const fetchImpl = online ? undefined : async (u) => { throw new Error(`네트워
 const runs = new Map();
 
 async function run(c) {
-  const k = `${c.market}|${c.sym}`;
+  const k = `${c.market}|${c.sym}|${c.sixk ? 1 : 0}`;
   if (runs.has(k)) return runs.get(k);
   let r;
   if (c.market === "us") {
@@ -26,7 +26,7 @@ async function run(c) {
     const sec = makeSec({ store, quotaRoot, env, fetchImpl });
     const tick = await sec.tickers();
     const cik = c.sym === "XOM" ? "34088" : String(Object.values(tick.json).find((x) => x.ticker === c.sym)?.cik_str);
-    r = await runUs(sec, { sym: c.sym, cik, maxAnnual: 6, maxQuarterly: 0, withSixK: false });
+    r = await runUs(sec, { sym: c.sym, cik, maxAnnual: 6, maxQuarterly: 0, withSixK: !!c.sixk });
   } else if (c.market === "kr") {
     const { makeDart } = await import("./kr/dart.mjs");
     const { runKr } = await import("./kr/adapter.mjs");
@@ -51,6 +51,15 @@ for (const c of cases) {
   } catch (e) {
     console.log(`원본 없음/실행 실패 ${c.id}: ${String(e.message).slice(0, 120)}`);
     noSrc++;
+    continue;
+  }
+  if (c.rawfact) {
+    // RawFact 사례(6-K 등 Item 이 없는 판독) — 같은 개념·기간 종류·끝 날짜의 사실이 정확히 하나이고 값이 같아야(absent: 없어야) 통과
+    const fs = r.rawFacts.filter((f) => f.locator?.source === c.rawfact && f.concept.id === c.concept && f.period.kind === c.kind && f.period.end === c.end && (c.months == null || f.period.months === c.months));
+    const why = [];
+    if (c.absent) { if (fs.length) why.push(`있으면 안 되는 사실 ${fs.length}건 — ${fs.map((f) => f.value.num).join(",")}`); }
+    else if (fs.length !== 1 || fs[0].value.num !== c.value) why.push(`사실 ${fs.length}건 — ${fs.map((f) => f.value.num).join(",") || "없음"} (기대 ${c.value})`);
+    if (why.length) { fail++; console.log(`실패 ${c.id}: ${why.join(" · ")}`); } else { pass++; console.log(`통과 ${c.id}`); }
     continue;
   }
   const its = r.items.filter((i) => i.key === c.key && (c.end ? i.period.end === c.end : i.period.fy_key === c.end_year)
