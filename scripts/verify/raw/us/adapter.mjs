@@ -29,12 +29,15 @@ export async function runUs(sec, { sym, cik, maxAnnual = 6, maxQuarterly = 5, wi
   }
   const byAccn = new Map(fl.list.map((f) => [f.id, f]));
   const cfAccns = new Set();
+  const cfCells = new Set(); // companyfacts 가 만든 Item 칸 「서류|키|기간 종류|끝|개월」 — R-US2 칸 단위 보강용
   try {
     const cf = await sec.companyfacts(cik);
     const facts = companyfactsFacts(cf.json, { cik, sym, filingByAccn: byAccn, fetch: { version: cf.version, sha256: cf.sha256 } });
     for (const f of facts) cfAccns.add(f.filing.id);
     res.rawFacts.push(...facts);
-    res.items.push(...chainItems(facts));
+    const cfItems = chainItems(facts);
+    for (const it of cfItems) cfCells.add(`${it.vintage_basis?.filing}|${it.key}|${it.period.kind}|${it.period.end}|${it.period.months ?? ""}`);
+    res.items.push(...cfItems);
   } catch (e) {
     fail("companyfacts", e);
   }
@@ -48,13 +51,14 @@ export async function runUs(sec, { sym, cik, maxAnnual = 6, maxQuarterly = 5, wi
       res.structures.push({ accn: f.id, form: f.form, files: st.files, missing: st.missing, roles: st.roles.map((r) => ({ role: r.role, stmt: r.stmt, lines: r.lines.length })) });
       const inst = await instanceFacts(sec, cik, f.id, { sym, filing: f, structure: st });
       res.rawFacts.push(...inst.facts);
-      // R-US2: companyfacts 에 통째로 없는 정기공시(BE 2분기·XOM CIK 변경·TSM 2025 20-F) — 인스턴스 사실로 개념 사슬 Item 을 만든다
-      if (!cfAccns.has(f.id)) {
+      // R-US2: companyfacts 에 없는 칸(BE 2분기·XOM CIK 변경 — 서류 통째, TSM 2025 20-F — dei 주식수 등 2개만 있고 재무 사실 없음) — 인스턴스 사실로
+      // 개념 사슬 Item 을 만든다. 서류 단위가 아니라 칸 단위(감사 10-16 ③-2: 사실 2개 때문에 「통째로 없음」이 아니라고 보고 보강하지 않았다)
+      {
         const plain = inst.facts.filter((x) => !x.scope.dims.length && !x.value.less_precise_duplicate);
-        const extra = chainItems(plain);
-        for (const it of extra) it.flags.source = "instance(companyfacts 누락 — R-US2)";
+        const extra = chainItems(plain).filter((it) => !cfCells.has(`${it.vintage_basis?.filing}|${it.key}|${it.period.kind}|${it.period.end}|${it.period.months ?? ""}`));
+        for (const it of extra) it.flags.source = cfAccns.has(f.id) ? "instance(companyfacts 칸 누락 — R-US2)" : "instance(companyfacts 서류 누락 — R-US2)";
         res.items.push(...extra);
-        res.gapFilled = [...(res.gapFilled ?? []), { accn: f.id, form: f.form, items: extra.length }];
+        if (extra.length) res.gapFilled = [...(res.gapFilled ?? []), { accn: f.id, form: f.form, items: extra.length, whole: !cfAccns.has(f.id) }];
       }
       for (const fn of [capexItems, interestItems, daItems, pretaxFaceItems]) {
         try {
