@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
  * 2호기 신규·변경 종목 자동 검증(오너 지시 2026-10-06 — "그걸 하기 위해 분리한 거잖아, 진행").
- * 매일 DB 복사(macro-db-sync, 05:30) 뒤 macro-auto-verify.timer(06:00 KST)가 2호기 ~/5(kr/verification) 에서 실행한다.
+ * 매일 DB 복사(macro-db-sync, 05:30) 뒤 macro-auto-verify.timer(06:00 KST)가 2호기 ~/wt-verify(verify/common — 검증기) 에서 실행한다.
+ * 앱 판(오너 결정 2026-10-16 「섞자」): 시작할 때 ops/verify/dev-integrate.sh 로 개발 서버를 일회용 통합본(master + kr/app + jp/app + us/app)으로 다시 띄우고,
+ *  그 판(~/wt-dev/.dev-build.json — 모드·HEAD·브랜치별 커밋)을 결과마다 appBuild 로 기록한다. 실행 내내 /tmp/macro-dev-build.lock 을 잡아(서비스 ExecStart 의 flock)
+ *  도중에 다른 판으로 바뀌지 않게 한다. 배포 승인 직전 검증(그 시장 브랜치 그대로)은 수동: dev-integrate.sh us/app 뒤 verify-financials.mjs.
  *
  * 대상(우선순위 순, 같은 종목은 한 번):
  *  (a) 새 종목 — 유니버스(universe_items 전 계정 합집합, active≠false, 한국·미국)에 있는데 검증 결과(verify_results)가 없음
@@ -56,6 +59,8 @@ const kstDay = (t = Date.now()) => new Date(t + 9 * 3600e3).toISOString().slice(
 const commit = execFileSync("git", ["-C", ROOT, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()
   + (execFileSync("git", ["-C", ROOT, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim() ? "-dirty" : "");
 const branch = execFileSync("git", ["-C", ROOT, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
+const DEV_BUILD_FILE = process.env.DEV_BUILD_FILE || "/home/ubuntu/wt-dev/.dev-build.json";
+let appBuild = null; // 검증한 앱 판 — dev-integrate.sh 가 쓴 파일(검증 직전에 읽는다)
 
 mkdirSync(path.join(OUT, "logs"), { recursive: true });
 const startedAt = new Date().toISOString();
@@ -201,6 +206,10 @@ async function devUp() {
 const done = [];
 let runFailed = 0, budgetStop = false;
 if (!DRY && targets.length) {
+  // 개발 서버 = 일회용 통합본으로 다시 띄움(충돌·기동 실패는 그대로 던짐 — 옛 판으로 검증하지 않는다)
+  execFileSync("bash", [path.join(ROOT, "ops/verify/dev-integrate.sh")], { env: { ...process.env, DEV_BUILD_LOCKED: "1" }, stdio: ["ignore", "inherit", "inherit"], timeout: 30 * 60e3 });
+  appBuild = JSON.parse(readFileSync(DEV_BUILD_FILE, "utf8"));
+  log(`앱 판 ${appBuild.mode} · ${appBuild.head.slice(0, 7)} · ${Object.entries(appBuild.branches).map(([b, c]) => `${b}@${c.slice(0, 7)}`).join(" ")}`);
   if (!(await devUp())) throw new Error("verify-dev(localhost:3000) 응답 없음");
   for (const t of targets) {
     const t0 = Date.now();
@@ -236,7 +245,7 @@ if (!DRY && targets.length) {
     done.push({ key: t.key, reason: t.reason, ok, code: v.code, ...(ok ? {} : { tail: v.tail.slice(-300) }) });
     if (posted) {
       const f = filingNow.get(t.key) ?? t.filing;
-      await stateCol.updateOne({ _id: t.key }, { $set: { market: t.market, symbol: t.symbol, lastRunAt: after.runAt, lastReason: t.reason, lastCode: v.code, commit, ...(f?.id ? { filingId: f.id, filingDate: f.date, filingName: f.name } : {}) } }, { upsert: true });
+      await stateCol.updateOne({ _id: t.key }, { $set: { market: t.market, symbol: t.symbol, lastRunAt: after.runAt, lastReason: t.reason, lastCode: v.code, commit, appBuild, ...(f?.id ? { filingId: f.id, filingDate: f.date, filingName: f.name } : {}) } }, { upsert: true });
     }
   }
 }
@@ -248,7 +257,7 @@ if (!DRY) for (const [key, f] of filingNow) if (f.id && !states.get(key)?.filing
 const usage1 = dartUsage();
 const finishedAt = new Date().toISOString();
 const runSummary = {
-  startedAt, finishedAt, dryRun: DRY, ok: runFailed === 0, commit, branch,
+  startedAt, finishedAt, dryRun: DRY, ok: runFailed === 0, commit, branch, appBuild,
   options: { only: [...ONLY], markets: MARKETS, max: MAX, stale: STALE_N, budget: BUDGET },
   targets: targets.map((t) => ({ key: t.key, reason: t.reason })), done, deferred, runFailed,
   dart: { budget: BUDGET, before: usage0.total, after: usage1.total, used: usage1.total - usage0.total, tools: usage1.tools, app: usage1.app, exceeded: usage1.total > BUDGET },
@@ -262,7 +271,7 @@ if (!DRY) {
     schema: "macro-verify/latest@1",
     generatedAt: finishedAt,
     host: "macro-verify(2호기)",
-    code: { branch, commit },
+    code: { branch, commit, appBuild },
     commit,
     run: { startedAt, finishedAt, ok: runSummary.ok, targets: targets.length, done: done.length, failedRuns: runFailed, deferred: deferred.length, dartUsedToday: usage1.total, dartBudget: BUDGET },
     // 1호기가 운영 /api/cron/verify-results 로 그대로 넣는 원본(--post 가 보내는 VerifyResultDoc 그대로, _id 만 뺌, base = 2호기 표시)

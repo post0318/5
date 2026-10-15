@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 2호기 신규·변경 종목 자동 검증 타이머 설치(멱등). 코드는 ~/5(kr/verification) 의 ops/verify/auto-verify.mjs 를 그대로 쓴다.
+# 2호기 신규·변경 종목 자동 검증 타이머 설치(멱등). 코드는 ~/wt-verify(verify/common — 검증기) 의 ops/verify/auto-verify.mjs 를 그대로 쓴다.
+# 앱 판은 실행할 때마다 ops/verify/dev-integrate.sh 가 ~/wt-dev 에 일회용 통합본으로 만든다(오너 결정 2026-10-16 「섞자」) — 실행 내내 판 잠금을 잡는다.
 #   sudo bash ops/verify/install-auto-verify.sh
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -24,9 +25,9 @@ Requires=mongod.service
 [Service]
 Type=oneshot
 User=ubuntu
-WorkingDirectory=/home/ubuntu/5
+WorkingDirectory=/home/ubuntu/wt-verify
 ExecStartPre=/usr/local/bin/macro-auto-verify-wait
-ExecStart=/usr/bin/node ops/verify/auto-verify.mjs
+ExecStart=/usr/bin/flock /tmp/macro-dev-build.lock /usr/bin/node ops/verify/auto-verify.mjs
 Nice=10
 TimeoutStartSec=6h
 EOF

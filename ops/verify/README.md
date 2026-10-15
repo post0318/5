@@ -60,7 +60,19 @@ mongosh "$MONGO_ADMIN_URI" --quiet --eval 'db.getSiblingDB("restore_test").dropD
 
 ## 신규·변경 종목 자동 검증 (오너 지시 2026-10-06)
 
-`macro-auto-verify.timer`(06:00 KST — DB 복사 뒤, 11:00 KST — KRX 전 거래일 자료 게시 뒤 재실행 회차) → `ops/verify/auto-verify.mjs`(2호기 `~/5` = kr/verification 코드, ubuntu 사용자).
+`macro-auto-verify.timer`(06:00 KST — DB 복사 뒤, 11:00 KST — KRX 전 거래일 자료 게시 뒤 재실행 회차) → `ops/verify/auto-verify.mjs`(2호기 `~/wt-verify` = verify/common 검증기 코드, ubuntu 사용자).
+
+**2호기 폴더·개발 서버(오너 결정 2026-10-16 「섞자」, 옛 브랜치 kr/verification·jp/verification 정리)**:
+| 폴더 | 브랜치 | 용도 |
+|---|---|---|
+| `~/wt-app-kr`·`~/wt-app-jp`·`~/wt-app-us` | kr/app·jp/app·us/app | 시장별 앱 개발(배포는 이 브랜치를 그대로 master 로) |
+| `~/wt-verify` | verify/common | 검증기(세 시장 공통)·이 자동 검증·2호기 ops |
+| `~/wt-dev` | (분리된 HEAD — 커밋 금지) | 개발 서버 verify-dev(127.0.0.1:3000) 가 띄우는 판 |
+
+- 개발 서버 판 = `ops/verify/dev-integrate.sh`: 인자 없으면 **일회용 통합본**(origin/master 에 kr/app·jp/app·us/app 병합 — 평소·자동 검증), `dev-integrate.sh us/app`
+  처럼 주면 **그 시장 브랜치 그대로**(배포 승인 직전 검증). 판은 `~/wt-dev/.dev-build.json`, 자동 검증 결과마다 `appBuild` 로 기록. 시장 브랜치끼리
+  충돌하면 통합하지 않고 끝낸다(종료코드 2 — 시장 브랜치에서 맞춘 뒤 다시). 판을 바꾸는 동안·자동 검증 내내 `/tmp/macro-dev-build.lock`.
+- 통합본에서 고칠 것이 보이면 **그 시장 브랜치에서** 고친다(`~/wt-dev` 에서 커밋하면 다음 실행 때 지워진다).
 설치 `sudo bash ops/verify/install-auto-verify.sh`, 점검 `macro-verify-check`(종료코드 0/1).
 
 - **대상**(우선순위): ⓪ 재실행(마지막 검증 종료코드 3 — KRX 게시 전 등으로 확인 못 한 항목, 06:00 한국 종목은 대개 여기 걸려 11:00 에 다시) ① 새 종목(유니버스에 있는데 검증 결과 없음) ② 새 정기보고서(한국 DART corp 별 정기공시 목록 최신 접수번호,
@@ -80,7 +92,7 @@ mongosh "$MONGO_ADMIN_URI" --quiet --eval 'db.getSiblingDB("restore_test").dropD
   "schema": "macro-verify/latest@1",
   "generatedAt": "2026-10-06T…Z",            // ISO UTC
   "host": "macro-verify(2호기)",
-  "code": { "branch": "kr/verification", "commit": "<40자 해시>" },   // 이번 실행 코드 판본
+  "code": { "branch": "verify/common", "commit": "<40자 해시>", "appBuild": { "mode": "integration", "head": "…", "branches": { "master": "…", "kr/app": "…" } } },   // 검증기 판본 + 검증한 앱 판
   "run": { "startedAt": "…", "finishedAt": "…", "ok": true,          // ok = 실행 실패 0
            "targets": 20, "done": 20, "failedRuns": 0, "deferred": 45,
            "dartUsedToday": 1426, "dartBudget": 5000 },
