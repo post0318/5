@@ -1,0 +1,119 @@
+#!/usr/bin/env node
+/**
+ * 오류를 조용히 삼키는 catch 금지 검사(오너 지적 2026-10-04 — "조용히 바꾸는 거 저번에 다 정리했는데 또 나왔다고?").
+ * 09-26 에 정리한 뒤 10-02 새 20-F·6-K 코드에서 `.catch(() => [])`·내부 catch 가 다시 들어왔다 — 사람 주의가 아니라 lint 로 막는다.
+ *
+ * 대상: 재무 계산·검증 경로(아래 TARGETS). 잡는 형태:
+ *   - `.catch(() => null | [] | "" | '' | {} | ({}) | undefined | 0 | false)` (인자 이름 있어도 같음)
+ *   - 본문이 비었거나(주석만 있어도) `return …;` 하나뿐인 `catch {}` / `catch (e) {}`
+ * 의도된 예외는 같은 줄 또는 바로 윗줄에 `// silent-ok: <이유>` 가 있을 때만 허용(이유 필수).
+ * npm run lint 에 묶여 있다. 실패하면 종료코드 1.
+ */
+import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const TARGETS = [
+  { dir: "scripts", re: /^verify-financials\.mjs$/, deep: false },
+  { dir: "scripts/metrics", re: /\.mjs$/, deep: false },
+  { dir: "src/lib/fin", re: /\.ts$/, deep: true },
+  { dir: "src/lib/markets/us", re: /^edgar.*\.ts$/, deep: false },
+  { dir: "src/lib/markets/kr", re: /^dart.*\.ts$/, deep: false },
+  { dir: "src/app/api/cron/verify-row", re: /\.ts$/, deep: true },
+  // 한국 시가총액(KRX) 경로와 그 호출부(재감사 14차 ③ — fetchKrxCapsOn 이 조회 오류를 삼켜 loadKrCaps 수정이 무효였다)
+  { dir: "src/lib/markets/quote", re: /^krx\.ts$/, deep: false },
+  // 한국 감사 1차(2026-10-05) — 검증기 한국 원자료 모듈, 감가상각 적재본 조회, 한국 어댑터(손익 TTM)
+  { dir: "scripts/verify-kr", re: /\.mjs$/, deep: false },
+  { dir: "src/lib/db", re: /^kr-da\.ts$/, deep: false },
+  // SKHY(DART 연결 ADR) 어댑터 — 감가상각 적재본 조회 실패를 삼키던 곳
+  { dir: "src/lib/markets/kr", re: /^opendart\.ts$/, deep: false },
+  // 한국 감사 2차(2026-10-05) — 유니버스 지표·시세 폴백·라이브 XBRL 감가상각·DART 연결 ADR
+  { dir: "src/lib/markets/kr", re: /^(overview-metrics|xbrl|dart-cache)\.ts$/, deep: false },
+  { dir: "src/lib/markets/quote", re: /^index\.ts$/, deep: false },
+  { dir: "src/lib/markets/us", re: /^dart-adr\.ts$/, deep: false },
+  { dir: "src/app/api/markets/[market]/[symbol]/da", re: /^route\.ts$/, deep: false },
+  // 미국·한국이 섞인 파일은 한국 경로만 — "// no-silent-catch:begin" ~ "// no-silent-catch:end" 구간(구간이 없으면 실패)
+  { dir: "src/app/api/markets/[market]/[symbol]/highlights", re: /^route\.ts$/, deep: false, region: true },
+  { dir: "src/app/api/markets/[market]/[symbol]/financials", re: /^route\.ts$/, deep: false, region: true },
+  { dir: "src/app/api/markets/[market]/[symbol]/ttm", re: /^route\.ts$/, deep: false, region: true },
+  { dir: "src/lib/markets", re: /^consensus\.ts$/, deep: false, region: true },
+];
+function files() {
+  const out = [];
+  const walk = (d, re, deep, region) => {
+    if (!existsSync(d)) return;
+    for (const n of readdirSync(d)) {
+      const p = join(d, n);
+      if (statSync(p).isDirectory()) { if (deep) walk(p, re, deep, region); continue; }
+      if (re.test(n)) out.push({ p, region: !!region });
+    }
+  };
+  for (const t of TARGETS) walk(join(ROOT, t.dir), t.re, t.deep, t.region);
+  return out;
+}
+const ARROW = String.raw`(?:\(\s*[\w$]*\s*(?::\s*\w+)?\s*\)|[\w$]+)\s*=>\s*`;
+const SILENT_VAL = String.raw`(?:new (?:Map|Set)\(\s*\)|null|\[\s*\]|""|''|\{\s*\}|\(\s*\{\s*\}\s*\)|undefined|0|false)`;
+const RE_CATCH_ARROW = new RegExp(String.raw`\.catch\(\s*${ARROW}${SILENT_VAL}\s*\)`, "g");
+// catch 블록: 비었거나 주석만, 또는 빈 값·변수 하나를 돌려주는 return 하나(주석 허용) — 함수 호출을 돌려주는 return(jsonError(e) 등)은 대상 아님
+const RE_CATCH_BLOCK = new RegExp(String.raw`\bcatch\s*(?:\(\s*[\w$]*\s*(?::\s*\w+)?\s*\))?\s*\{((?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*(?:return(?:\s+(?:${SILENT_VAL}|[\w$]+))?\s*;?)?(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*)\}`, "g");
+
+// 호출부 규칙 — 대상 함수(한국 시가총액·시세 KRX 경로)의 실패를 삼키는 호출은 파일 위치와 관계없이 src 전체에서 금지(재감사 14차 ③)
+const CALLEE = /(?:loadKrCaps|fetchKrxCapsOn|fetchKrxCloseOn|fetchKrxEod)\(/g;
+function srcFiles() {
+  const out = [];
+  const walk = (d) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else if (/\.tsx?$/.test(n)) out.push(p); } };
+  walk(join(ROOT, "src"));
+  return out;
+}
+const bad = [];
+for (const f of srcFiles()) {
+  const src = readFileSync(f, "utf8");
+  const lines = src.split("\n");
+  for (const m of src.matchAll(CALLEE)) {
+    // 호출 괄호 끝을 찾아 바로 뒤 .catch(빈 값) 인지
+    let depth = 0, i = m.index + m[0].length - 1;
+    for (; i < src.length; i++) { if (src[i] === "(") depth++; else if (src[i] === ")" && --depth === 0) break; }
+    const tail = src.slice(i + 1, i + 200);
+    const mm = new RegExp(String.raw`^\s*\.catch\(\s*${ARROW}${SILENT_VAL}\s*\)`).exec(tail);
+    if (!mm) continue;
+    const ln = src.slice(0, i).split("\n").length;
+    if (/\/\/\s*silent-ok:\s*\S/.test(lines[ln - 1] ?? "") || /\/\/\s*silent-ok:\s*\S/.test(lines[ln - 2] ?? "")) continue;
+    bad.push(`${relative(ROOT, f).split("\\").join("/")}:${ln}  ${m[0]}… ${mm[0].trim()} (KRX 경로 호출부)`);
+  }
+}
+for (const { p: f, region } of files()) {
+  const src0 = readFileSync(f, "utf8");
+  // 구간 검사 — 구간 밖은 공백으로 바꿔 줄 번호를 유지
+  let src = src0;
+  if (region) {
+    const B = "// no-silent-catch:begin", E = "// no-silent-catch:end";
+    if (!src0.includes(B)) { bad.push(`${relative(ROOT, f).split("\\").join("/")}  검사 구간 표시(${B} … ${E}) 없음`); continue; }
+    let out = "", i = 0;
+    for (;;) {
+      const b = src0.indexOf(B, i);
+      if (b < 0) { out += src0.slice(i).replace(/[^\n]/g, " "); break; }
+      const e = src0.indexOf(E, b);
+      if (e < 0) { bad.push(`${relative(ROOT, f).split("\\").join("/")}  ${B} 뒤 ${E} 없음`); break; }
+      out += src0.slice(i, b).replace(/[^\n]/g, " ") + src0.slice(b, e);
+      i = e;
+    }
+    src = out;
+  }
+  const lines = src.split("\n");
+  const lineOf = (i) => src.slice(0, i).split("\n").length;
+  const ok = (ln) => /\/\/\s*silent-ok:\s*\S/.test(lines[ln - 1] ?? "") || /\/\/\s*silent-ok:\s*\S/.test(lines[ln - 2] ?? "");
+  for (const re of [RE_CATCH_ARROW, RE_CATCH_BLOCK]) {
+    for (const m of src.matchAll(re)) {
+      const ln = lineOf(m.index);
+      if (ok(ln)) continue;
+      bad.push(`${relative(ROOT, f).split("\\").join("/")}:${ln}  ${m[0].replace(/\s+/g, " ").slice(0, 90)}`);
+    }
+  }
+}
+if (bad.length) {
+  console.error(`오류를 조용히 삼키는 catch ${bad.length}곳 — 실패를 기록(경고·오류·종료코드)하거나, 정당하면 같은 줄/윗줄에 "// silent-ok: <이유>":`);
+  for (const b of bad) console.error(`  ${b}`);
+  process.exit(1);
+}
+console.log("no-silent-catch: 통과");

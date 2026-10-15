@@ -2,6 +2,7 @@ import "server-only";
 import { isDbConfigured } from "@/lib/db";
 import { snapshotBypassed } from "@/lib/db/snap-bypass";
 import { getClassAFactsFromDb, saveClassAFactsToDb } from "@/lib/db/us-class-facts";
+import { snapshotBypassed } from "@/lib/db/snap-bypass";
 import type { CompanyFacts } from "./edgar";
 import { fetchClassAFacts, needsClassAFacts, type ClassAFacts } from "./edgar-classfacts";
 import { withFetchScope } from "../fetch-health";

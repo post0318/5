@@ -268,19 +268,29 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       if (latestPeriodic && /^20-F/.test(latestPeriodic) && ticker) {
         const cur = withShares.reportingCurrency ?? "USD";
         const [yq, fx] = await Promise.all([
+          // silent-ok: null 이면 바로 아래 분기에서 경고("… 조회 실패")와 LTM 열 공란으로 처리
           fetchYahooFundamentals(ticker).catch(() => null),
+          // silent-ok: 위와 같음(H.10 조회 실패 경고)
           fxToUsd(cur).catch(() => null),
         ]);
         if (yq && fx) {
           // 회사 6-K 분기 재무제표(연결재무보고서 HTML) — 야후 정의가 SEC 와 다른 항목을 회사 줄로(edgar-6k.ts). 없거나 못 읽으면 null(야후 경로 그대로)
           const per = yahooLtmPeriods(withShares, yq);
-          const sixK = per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(() => null) : null;
+          // 6-K 조회 실패는 경고로 남긴다(재감사 12차 ③ — null 로 삼키면 6-K 값이 조용히 빈칸·야후 근사로 바뀌었다). 경고가 있으면 짧은 캐시
+          let sixKFailed = false;
+          const sixKFail = (e: unknown) => { sixKFailed = true; extraWarnings.push(`회사 6-K 분기 재무제표 조회 실패 — ${fetchFailureReason(e) ?? (e instanceof Error ? e.message : String(e))}`.slice(0, 240)); return null; };
+          const sixK = per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(sixKFail) : null;
           // 이번 보고서에 1년 전 분기말 열이 없으면(SPOT) 1년 전 같은 분기 6-K — 평균 잔액(ROIC 등)의 기초 값
           const shift12 = (d: string) => { const x = new Date(`${d}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); };
           const sixKPrev = per && sixK && !sixK.bsDates.includes(per.yearAgo)
-            ? await sixKStatements(cik, recent, per.yearAgo, shift12(per.E), shift12(per.yearAgo)).catch(() => null)
+            ? await sixKStatements(cik, recent, per.yearAgo, shift12(per.E), shift12(per.yearAgo)).catch(sixKFail)
             : null;
           const r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev);
+          // 6-K 경로를 시도했는데 보고서를 못 찾음(조회 실패 아님) — 검증 전용 사유
+          // 1년 전 분기 6-K 를 찾아야 했는데(이번 보고서에 1년 전 열 없음) 못 찾음 — 검증 전용 사유(조회 실패는 fetchWarnings)
+          if (r.result.source === "yahoo" && per && sixK && !sixK.bsDates.includes(per.yearAgo) && !sixKPrev)
+            r.result.sixKPrevMiss = sixKFailed ? "1년 전 분기 6-K 조회 실패(fetchWarnings 참조)" : `1년 전 분기말 ${per.yearAgo} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음`;
+          if (r.result.source === "yahoo" && !sixK) r.result.sixKMiss = sixKFailed ? "6-K 조회 실패(fetchWarnings 참조)" : per ? `분기말 ${per.last} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음` : "LTM 기간 판정 불가(6-K 조회 안 함)";
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else if (!fx) {
           // H.10 조회 실패 — 사업연도 값을 LTM 으로 대체하지 않고 LTM 열 공란(미고시와 같은 처리)
@@ -344,6 +354,7 @@ export async function fetchUsCompanyFacts(
 async function getSymbolFacts(cik: string, symbol: string, opts: { revenue?: boolean } = {}): Promise<CompanyFacts> {
   const [facts, currentShares, revenue] = await Promise.all([
     getCompanyFacts(cik),
+    // silent-ok: loadUsCurrentShares 는 내부에서 실패를 처리해 거부하지 않는다(실패는 짧은 캐시 — current-shares.ts)
     loadUsCurrentShares(symbol).catch(() => null),
     // 매출 = 재무 5층 구조(src/lib/fin) 매출 지표(fin-revenue.ts). 매출을 안 쓰는 경로는 건너뛴다
     opts.revenue === false ? Promise.resolve(null) : loadUsRevenue(symbol),
@@ -847,9 +858,11 @@ export const usEdgarAdapter: MarketAdapter = {
       const dartAdr = dartAdrOf(symbol);
       if (dartAdr) return (await dartAdrTtm(dartAdr)) ?? failedTtm("TTM 조회 실패 — DART 분기 재무 없음");
       const { cik } = await resolveCik(symbol);
+      let sicFailed = false;
       const [facts0, sic] = await Promise.all([
         getSymbolFacts(cik, symbol),
-        getSubmissions(cik).then((s) => s.sic ?? null).catch(() => null),
+        // SIC 조회 실패 — 금융업 판정을 못 하므로 불완전 결과로 표시(저장 제외). null 로 삼키면 금융사가 일반 회사로 계산됐다
+        getSubmissions(cik).then((s) => s.sic ?? null).catch(() => { sicFailed = true; return null; }),
       ]);
       const [captive, cls] = await Promise.all([
         // 금융 자회사 판별 조회 실패 = "unknown"(금융 자회사 없음으로 단정하지 않음 — EV 미표시)
@@ -869,6 +882,7 @@ export const usEdgarAdapter: MarketAdapter = {
         ...(facts.fetchWarnings ?? []),
         ...(facts.revenue == null ? ["매출(fin) 조립 실패"] : []),
         ...(captive === "unknown" ? ["금융 자회사 판별 조회 실패"] : []),
+        ...(sicFailed ? ["SIC(업종) 조회 실패"] : []),
       ];
       const staleInputs = facts.revenue?.staleEv != null ? [`재무 저장본 엔진판 ${facts.revenue.staleEv}(현재 판과 다름 — 배치 갱신 대기)`] : [];
       return { ...ttm, ...(degraded.length ? { degraded } : {}), ...(staleInputs.length ? { staleInputs } : {}) };

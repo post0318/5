@@ -9,7 +9,7 @@ import { fetchStooqEod } from "../quote/stooq";
 import { fetchKrxCloseOn } from "../quote/krx";
 import { resolveCorpCode } from "../kr/corpcode";
 import { daAndAmortSeries, fetchKrDistributedShares, fetchKrDps, fetchKrFacts, type KrDaInput, type KrFactLine, type KrFacts, type KrPeriod } from "../kr/dart-facts";
-import { loadKrCaps, type KrCaps } from "../kr/dart-ev";
+import { loadKrCapsChecked, type KrCaps } from "../kr/dart-ev";
 import { getKrJurirNo, krOpenDartAdapter, loadKrTtmDetail, type KrTtmPart } from "../kr/opendart";
 import { fetchKrAnnualDps } from "../kr/rights-schedule";
 import { buildKrHighlights } from "../kr/dart-highlights";
@@ -18,7 +18,7 @@ import { buildKrIncome } from "../kr/dart-income";
 import { buildKrBalance } from "../kr/dart-balance";
 import { buildKrCashFlow } from "../kr/dart-cashflow";
 import { buildKrSummary } from "../kr/dart-summary";
-import { getKrDaDoc } from "@/lib/db/kr-da";
+import { getKrDaDocChecked } from "@/lib/db/kr-da";
 
 /**
  * **DART 연결 ADR** — SEC XBRL 재무가 없는 미국 상장 ADR(20-F 미제출)을 본국 DART 재무로 채운다
@@ -265,31 +265,40 @@ async function distributedSharesAt(corpCode: string, date: string | null): Promi
 }
 
 /** 사업연도말 유통주식수(보통주 수) — 연도 → 주식수. 없는 해는 빠진다 */
-async function outstandingByYearEnd(corpCode: string, years: number[]): Promise<Map<number, number>> {
+// 조회 실패는 warn 에 싣는다(감사 2차 ⑨ — 예전엔 그 해 주식수가 사유 없이 빠졌다)
+async function outstandingByYearEnd(corpCode: string, years: number[], warn: string[]): Promise<Map<number, number>> {
   const out = new Map<number, number>();
   await Promise.all(
     years.map(async (y) => {
-      const v = await distributedSharesAt(corpCode, `${y}-12-31`).catch(() => null);
+      const v = await distributedSharesAt(corpCode, `${y}-12-31`).catch((e) => {
+        warn.push(`FY${y} 유통주식수(DART 주식총수) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
+        return null;
+      });
       if (v != null) out.set(y, v);
     }),
   );
   return out;
 }
+const warnTo = (warn: string[], what: string) => (e: unknown) => {
+  warn.push(`${what} 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);
+  return null;
+};
 
 /** getTtm 대응 — 한국 TTM(구성 기간별)·LTM 재무상태표를 USD·ADR 기준으로 */
 export async function dartAdrTtm(spec: Spec): Promise<TtmFlows | null> {
   const { corpCode } = resolveCorpCode("", spec.krCode);
+  const degraded: string[] = [];
   const [detail, fx, dps, dpsTtm] = await Promise.all([
     loadKrTtmDetail(spec.krCode),
     krwFx(),
-    fetchKrDps(corpCode).catch(() => null),
-    getKrJurirNo(spec.krCode).then((c) => fetchKrAnnualDps(c)).catch(() => null),
+    fetchKrDps(corpCode).catch(warnTo(degraded, "DART 배당(사업연도 주당배당금)")),
+    getKrJurirNo(spec.krCode).then((c) => fetchKrAnnualDps(c)).catch(warnTo(degraded, "배당기준일(공공데이터 — LTM 주당배당금)")),
   ]);
   if (!detail) return null;
   const k = spec.sharesPerAdr;
   const t = detail.ttm;
   // BPS 분모 — 자본 기준일의 자사주 제외 유통주식수(시가총액 주식수와 별개, 오너 결정 2026-09-25)
-  const bookCommon = await distributedSharesAt(corpCode, detail.equityEnd).catch(() => null);
+  const bookCommon = await distributedSharesAt(corpCode, detail.equityEnd).catch(warnTo(degraded, "LTM 유통주식수(DART 주식총수 — BPS·시가총액)"));
   // LTM 방식 표기 — 구성 기간이 모두 분기면 분기별 평균 환율 합, 아니면(분기 분해 불가) 구성 기간 평균 환율
   const quarterly = (detail.parts.revenue ?? []).length === 4 && (detail.parts.revenue ?? []).every((p) => (Date.parse(p.end) - Date.parse(p.start)) / 864e5 < 100);
   const s = t.snapshot ?? null;
@@ -339,7 +348,15 @@ export async function dartAdrTtm(spec: Spec): Promise<TtmFlows | null> {
     dpsAnnual: dpsA != null && rA != null ? { dps: dpsA * rA * k, label: `FY${lastDpsYear}` } : null,
     dpsTtm: tt && rT != null ? { dps: tt.dps * rT * k, from: tt.from, to: tt.to } : null,
     ...(tt && rT == null ? { reasons: { dpsTtm: "배당기준일 구간 평균 환율(ECOS) 없음 — 현물 환율로 대신하지 않음" } } : {}),
+    ...(degraded.length ? { degraded } : {}),
   };
+}
+
+// no-silent-catch:begin — 감가상각 적재본 조회(getKrDaDocChecked)를 쓰는 함수들(재무제표 뷰·컨센서스 입력)
+/** 감가상각 적재본 조회 실패 경고를 응답 warnings 에 싣는다(조용히 "주석 미적재" 처럼 보이지 않게 — 한국 라우트와 같은 문구) */
+function withDaWarning(st: FinancialStatement, warning: string | null): FinancialStatement {
+  if (!warning) return st;
+  return { ...st, warnings: [...(st.warnings ?? []), `⚠ ${warning} — 감가상각비·EBITDA 는 DART 공시 현금흐름 줄 또는 빈칸`] };
 }
 
 /** adapter.getFinancials 대응 — 연간은 DART 원본 재무제표(계정명 그대로)를 환산, 분기는 표준화 총괄 */
@@ -348,9 +365,9 @@ export async function dartAdrFinancials(spec: Spec, periodType: "annual" | "quar
   const k = spec.sharesPerAdr;
   if (periodType === "quarter") {
     const { corpCode } = resolveCorpCode("", spec.krCode);
-    const [facts, daDoc] = await Promise.all([fetchKrFacts(corpCode, "quarter"), getKrDaDoc(spec.krCode).catch(() => null)]);
+    const [facts, daR] = await Promise.all([fetchKrFacts(corpCode, "quarter"), getKrDaDocChecked(spec.krCode)]);
     if (!facts) throw new AdapterError("분기 재무제표를 찾을 수 없습니다", { status: 404 });
-    return asUsStatement(buildKrSummary(convertFacts(facts, fx, k), convertDaDoc(daDoc, fx, null)), spec.symbol, spec);
+    return withDaWarning(asUsStatement(buildKrSummary(convertFacts(facts, fx, k), convertDaDoc(daR.doc, fx, null)), spec.symbol, spec), daR.warning);
   }
   const st = await krOpenDartAdapter.getFinancials(spec.krCode, "annual");
   const sections = st.sections.map((sec) => {
@@ -380,55 +397,65 @@ export async function dartAdrDetail(
   period: "annual" | "quarter",
 ): Promise<FinancialStatement> {
   const { corpCode } = resolveCorpCode("", spec.krCode);
-  const [factsKrw, daDoc, fx] = await Promise.all([
+  const [factsKrw, daR, fx] = await Promise.all([
     fetchKrFacts(corpCode, period),
-    view === "is" || view === "summary" ? getKrDaDoc(spec.krCode).catch(() => null) : Promise.resolve(null),
+    view === "is" || view === "summary" ? getKrDaDocChecked(spec.krCode) : Promise.resolve({ doc: null, warning: null }),
     krwFx(),
   ]);
+  const daDoc = daR.doc;
   if (!factsKrw) throw new AdapterError("재무제표를 찾을 수 없습니다", { status: 404 });
   const k = spec.sharesPerAdr;
   const facts = convertFacts(factsKrw, fx, k);
   const da = convertDaDoc(daDoc, fx, period === "annual" ? factsKrw : null);
   const st =
     view === "cf" ? buildKrCashFlow(facts) : view === "is" ? buildKrIncome(facts, da) : view === "bs" ? buildKrBalance(facts) : buildKrSummary(facts, da);
-  return asUsStatement(st, spec.symbol, spec);
+  return withDaWarning(asUsStatement(st, spec.symbol, spec), daR.warning);
 }
+// no-silent-catch:end
 
 /** 하이라이트·재무분석 공통 입력 — 한국 라우트와 같은 원천을 모아 USD·ADR 기준으로 */
 async function loadValuationInputs(spec: Spec, yahoo: string | null) {
   const { corpCode } = resolveCorpCode("", spec.krCode);
   const k = spec.sharesPerAdr;
-  const [factsKrw, dps, barsKrw, ttm, dpsTtm, daDoc, adrQuote, estimatesRaw, fx] = await Promise.all([
+  // 조회 실패는 전부 krxWarn(화면 경고)로(감사 2차 ⑨)
+  const krxWarn: string[] = [];
+  const [factsKrw, dps, barsKrw, ttm, dpsTtm, daR, adrQuote, estimatesRaw, fx] = await Promise.all([
     fetchKrFacts(corpCode, "annual"),
     fetchKrDps(corpCode),
-    fetchStooqEod("kr", spec.krCode, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => [] as QuoteBar[]),
-    dartAdrTtm(spec).catch(() => null),
+    // Stooq 는 연말 종가 보조(없으면 KRX 연말 종가를 따로 조회) — 실패 사유만 남긴다
+    fetchStooqEod("kr", spec.krCode, { from: `${new Date().getFullYear() - 6}-01-01` }).catch((e) => { krxWarn.push(`Stooq 일봉(연말 종가 보조) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return [] as QuoteBar[]; }),
+    dartAdrTtm(spec).catch(warnTo(krxWarn, "LTM(TTM·재무상태표)")),
     getKrJurirNo(spec.krCode)
       .then((crno) => fetchKrAnnualDps(crno))
-      .catch(() => null),
-    getKrDaDoc(spec.krCode).catch(() => null),
+      .catch(warnTo(krxWarn, "배당기준일(공공데이터 — LTM 주당배당금)")),
+    getKrDaDocChecked(spec.krCode),
     // 현재가 = ADR 시세(미국 화면 공통 시세 함수)
-    getEodQuote("us", spec.symbol, { yahooOverride: yahoo }).catch(() => null),
-    fetchYahooEstimates("us", spec.symbol, yahoo).catch(() => null),
+    getEodQuote("us", spec.symbol, { yahooOverride: yahoo }).catch(warnTo(krxWarn, "ADR 현재가(시세)")),
+    fetchYahooEstimates("us", spec.symbol, yahoo).catch(warnTo(krxWarn, "Yahoo 예상치(컨센서스)")),
     krwFx(),
   ]);
   if (!factsKrw) return null;
+  for (const w of ttm?.degraded ?? []) krxWarn.push(w);
+  for (const w of adrQuote?.warnings ?? []) krxWarn.push(`ADR 현재가: ${w}`);
   // 회계연도말 종가 — Stooq 커버리지가 부족하면 KRX 로 개별 조회(한국 라우트와 같다)
+  if (daR.warning) krxWarn.push(`⚠ ${daR.warning} — 감가상각비·EBITDA 는 DART 공시 현금흐름 줄 또는 빈칸`);
+  const daDoc = daR.doc;
   const fyCloseKrw = new Map<number, number>();
   const needYears = factsKrw.periods
     .map((p) => p.year)
     .filter((y) => !barsKrw.some((b) => b.date <= `${y}-12-31` && b.date >= `${y}-11-01` && b.close != null));
   await Promise.all(
     needYears.map(async (y) => {
-      const c = await fetchKrxCloseOn(spec.krCode, `${y}1231`).catch(() => null);
+      const c = await fetchKrxCloseOn(spec.krCode, `${y}1231`).catch((e) => { krxWarn.push(`${y} 연말 종가(KRX) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; });
       if (c != null) fyCloseKrw.set(y, c);
     }),
   );
   const years = factsKrw.periods.map((p) => p.year);
-  const [capsKrw, outstanding] = await Promise.all([
-    loadKrCaps(spec.krCode, years).catch(() => null),
-    outstandingByYearEnd(corpCode, years),
+  const [capsR, outstanding] = await Promise.all([
+    loadKrCapsChecked(spec.krCode, years),
+    outstandingByYearEnd(corpCode, years, krxWarn),
   ]);
+  const capsKrw = capsR.caps;
 
   const facts = convertFacts(factsKrw, fx, k);
   const fyCloseByYear = new Map<number, number>();
@@ -452,7 +479,7 @@ async function loadValuationInputs(spec: Spec, yahoo: string | null) {
     if (r != null) dpsByYear.set(y, v * r * k);
   }
   const estimates = estimatesRaw
-    ? await dartAdrEstimatesToUsd(spec, estimatesRaw, fx).catch(() => null)
+    ? await dartAdrEstimatesToUsd(spec, estimatesRaw, fx).catch(warnTo(krxWarn, "예상치 USD 환산"))
     : null;
   const sharesByYear = new Map<number, number>();
   for (const [y, v] of outstanding) sharesByYear.set(y, v / k);
@@ -461,6 +488,8 @@ async function loadValuationInputs(spec: Spec, yahoo: string | null) {
     fx,
     sharesByYear,
     caps: convertCaps(capsKrw, fx, k, outstanding),
+    capsError: capsR.error,
+    krxWarn,
     bars,
     fyCloseByYear,
     adrShares,
@@ -473,7 +502,8 @@ async function loadValuationInputs(spec: Spec, yahoo: string | null) {
     daDoc: (() => {
       const conv = convertDaDoc(daDoc, fx, factsKrw);
       // 주석 TTM 이 있으면 LTM 감가상각비 = dartAdrTtm 의 구성 기간 환산값(원화 경로와 같은 값의 환산)
-      if (conv && daDoc?.ttmDepreciation != null && ttm?.daTtm != null) Object.assign(conv, { ttmDepreciation: ttm.daTtm, ttmAmortisation: 0 });
+      if (conv && daDoc?.ttmDepreciation != null && ttm?.daTtm != null)
+        Object.assign(conv, { ttmDepreciation: ttm.daTtm, ttmAmortisation: 0, ttmLabel: daDoc.ttmLabel ?? null });
       return conv;
     })(),
     estimates,
@@ -493,6 +523,8 @@ export async function dartAdrHighlights(spec: Spec, yahoo: string | null): Promi
   const hl = buildKrHighlights({
     code: spec.krCode,
     caps: x.caps,
+    capsError: x.capsError,
+    warnings: x.krxWarn,
     facts: x.facts,
     bars: x.bars,
     fyCloseByYear: x.fyCloseByYear,
@@ -553,6 +585,8 @@ export async function dartAdrAnalysis(spec: Spec, yahoo: string | null): Promise
   const st = buildKrAnalysis({
     code: spec.krCode,
     caps: x.caps,
+    capsError: x.capsError,
+    warnings: x.krxWarn,
     facts: x.facts,
     bars: x.bars,
     fyCloseByYear: x.fyCloseByYear,
@@ -567,6 +601,7 @@ export async function dartAdrAnalysis(spec: Spec, yahoo: string | null): Promise
   return asUsStatement(st, spec.symbol, spec);
 }
 
+// no-silent-catch:begin
 /**
  * 컨센서스(consensus.ts) 한국 경로 입력 — 연간 facts·연말 시가총액·감가상각비 주석을 USD·ADR 기준으로.
  * 주식수는 ADR 환산(BPS 분모), 예상치 환산용 통화 정보도 함께.
@@ -574,13 +609,14 @@ export async function dartAdrAnalysis(spec: Spec, yahoo: string | null): Promise
 export async function dartAdrConsensusInputs(spec: Spec, years: number[]) {
   const { corpCode } = resolveCorpCode("", spec.krCode);
   const k = spec.sharesPerAdr;
-  const [factsKrw, daDoc, capsKrw, fx, outstanding] = await Promise.all([
+  const sharesWarn: string[] = [];
+  const [factsKrw, daR, capsR, fx, outstanding] = await Promise.all([
     fetchKrFacts(corpCode, "annual"),
-    getKrDaDoc(spec.krCode).catch(() => null),
-    loadKrCaps(spec.krCode, years).catch(() => null),
+    getKrDaDocChecked(spec.krCode),
+    loadKrCapsChecked(spec.krCode, years),
     krwFx(),
     // BPS 분모·연말 시가총액 — 각 사업연도말 자사주 제외 유통주식수
-    outstandingByYearEnd(corpCode, years),
+    outstandingByYearEnd(corpCode, years, sharesWarn),
   ]);
   if (!factsKrw) return null;
   const bookShares = new Map<number, number>();
@@ -588,11 +624,15 @@ export async function dartAdrConsensusInputs(spec: Spec, years: number[]) {
   return {
     code: spec.krCode,
     facts: convertFacts(factsKrw, fx, k),
-    daDoc: convertDaDoc(daDoc, fx, factsKrw),
-    caps: convertCaps(capsKrw, fx, k, outstanding),
+    daDoc: convertDaDoc(daR.doc, fx, factsKrw),
+    daWarning: daR.warning,
+    caps: convertCaps(capsR.caps, fx, k, outstanding),
+    capsError: capsR.error,
     bookShares,
+    warnings: sharesWarn,
   };
 }
+// no-silent-catch:end
 
 /** Yahoo ADR 예상치 → USD(estimatesToUsd 규칙: 매출 원화 → 현재 환율, EPS 는 이미 ADR 1주당 USD). 현재 환율도 ECOS */
 export async function dartAdrEstimatesToUsd<T extends Parameters<typeof estimatesToUsd>[0]>(

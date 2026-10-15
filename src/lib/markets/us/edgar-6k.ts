@@ -36,6 +36,9 @@ export interface SixKStatements {
   parents: Map<string, Set<string>>;
   /** 본표 밖 표(주석 — 날짜 머리에 기준일·연말이 있는 표). 본표에 따로 없는 줄(SPOT 리스부채 유동분 — 미지급비용 주석 안)용 */
   bsNotes?: { dates: string[]; rows: SixKRow[] }[];
+  /** 기준일 열 하나뿐인 본표 밖 표(연말 열이 없어 SEC 연말 확인 불가 — SPOT 1년 전 분기 리스부채 주석 "Current 68 Non-current 453").
+   *  같은 표의 다른 줄이 이미 확인된 값과 같을 때만 쓴다(edgar-yahoo-quarters 기준 줄 확인) */
+  bsNotes1?: { dates: string[]; rows: SixKRow[] }[];
   /** 슬라이드 글자 형식 — 줄 이름 앞에 구역 머리말이 붙어 나온다("cash flows from investing activities purchase of …"). 끝이 라벨과 같으면 대응 */
   loose?: boolean;
 }
@@ -188,18 +191,21 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
   const cikN = Number(cik);
   const lo = periodEnd, hi = new Date(Date.parse(periodEnd) + 120 * 864e5).toISOString().slice(0, 10);
   const cands: number[] = [];
+  // 조회 실패 기록 — 값을 못 찾고 끝났는데 실패가 있었으면 던진다(재감사 12차 ③: null 로 삼키면 "6-K 없음"과 구분되지 않아 LTM 값이 조용히 사라졌다)
+  const errs: string[] = [];
+  const failed = (what: string) => (e: unknown) => { errs.push(`${what}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160)); return null; };
   for (let i = 0; i < recent.form.length && cands.length < 8; i++) if (recent.form[i] === "6-K" && recent.filingDate[i] > lo && recent.filingDate[i] <= hi) cands.push(i);
   for (const i of cands) {
     const base = `https://www.sec.gov/Archives/edgar/data/${cikN}/${recent.accessionNumber[i].replace(/-/g, "")}`;
-    const idx = await fetchJson<{ directory: { item: { name: string; size: string | number }[] } }>(`${base}/index.json`, OPT).catch(() => null);
+    const idx = await fetchJson<{ directory: { item: { name: string; size: string | number }[] } }>(`${base}/index.json`, OPT).catch(failed(`${recent.accessionNumber[i]} index`));
     const docs = (idx?.directory.item ?? []).filter((x) => /\.htm$/i.test(x.name) && !/-index/i.test(x.name) && Number(x.size) > 15_000).sort((a, b) => Number(b.size) - Number(a.size)).slice(0, 6);
     for (const d of docs) {
-      const html = await fetchText(`${base}/${d.name}`, { ...OPT, timeoutMs: 60_000 }).catch(() => null);
+      const html = await fetchText(`${base}/${d.name}`, { ...OPT, timeoutMs: 60_000 }).catch(failed(`${recent.accessionNumber[i]} ${d.name}`));
       if (!html) continue;
       // 형식 2 — 슬라이드 그림 + 숨은 글자(Workiva, ASML "Financial Statements US GAAP")
       const sl = slideStatements(html, periodEnd, fyEnd, priorEnd);
       if (sl) {
-        const { labels, parents } = await filingLabels(cikN, recent).catch(() => ({ labels: new Map(), parents: new Map() }));
+        const { labels, parents } = await filingLabels(cikN, recent); // 라벨 파일 조회 실패는 그대로 던진다(호출자가 경고로)
         if (!labels.size) return null;
         return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, ...sl, labels, parents, loose: true };
       }
@@ -220,14 +226,17 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       // 주석 번호 열이 있는 표는 값이 하나 많은 줄의 첫 값(번호)을 뺀다
       const fix = (rows: SixKRow[], n: number, noteCol: boolean) =>
         rows.map((r) => ({ ...r, vals: r.vals.length === 2 * n ? r.vals.filter((_, k) => k % 2 === 0) : noteCol && r.vals.length === n + 1 ? r.vals.slice(1) : r.vals })).filter((r) => r.vals.length === n);
-      const { labels, parents } = await filingLabels(cikN, recent).catch(() => ({ labels: new Map(), parents: new Map() }));
+      const { labels, parents } = await filingLabels(cikN, recent); // 라벨 파일 조회 실패는 그대로 던진다(호출자가 경고로)
       if (!labels.size) return null;
       // 본표 밖 표 — 머리(앞 2천 자)에 기준일·연말이 둘 다 있는 표의 줄
       const bsNotes: { dates: string[]; rows: SixKRow[] }[] = [];
+      const bsNotes1: { dates: string[]; rows: SixKRow[] }[] = [];
       for (const t of html.match(/<table\b[\s\S]*?<\/table>/gi) ?? []) {
         const plain = decode(t).toLowerCase();
         const ds = headerDates(plain.slice(0, 2_000), [periodEnd, fyEnd, priorEnd]);
-        if (!ds.includes(periodEnd) || !ds.includes(fyEnd)) continue;
+        // 기준일 열 하나뿐인 표(연말 열 없음)는 따로 — 연말 확인을 못 하므로 기준 줄 확인을 거쳐서만 쓴다(bsNotes1)
+        const single = ds.length === 1 && ds[0] === periodEnd;
+        if (!single && (!ds.includes(periodEnd) || !ds.includes(fyEnd))) continue;
         const rows: SixKRow[] = [];
         for (const tr of t.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? []) {
           const cells = (tr.match(/<t[dh]\b[\s\S]*?<\/t[dh]>/gi) ?? []).map(decode).filter((c) => c !== "" && c !== "$");
@@ -236,11 +245,12 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
           const vals = cells.slice(cells.indexOf(label) + 1).map(parseNum).filter((v): v is number => v != null);
           if (vals.length) rows.push({ label: normLabel(label), vals });
         }
-        bsNotes.push({ dates: ds, rows: fix(rows, ds.length, /\bnote\b/i.test(plain.slice(0, 1_500))) });
+        (single ? bsNotes1 : bsNotes).push({ dates: ds, rows: fix(rows, ds.length, /\bnote\b/i.test(plain.slice(0, 1_500))) });
       }
-      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, 2, cf.noteCol), labels, parents, loose: false, bsNotes };
+      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, 2, cf.noteCol), labels, parents, loose: false, bsNotes, bsNotes1 };
     }
   }
+  if (errs.length) throw new Error(`6-K 분기 재무제표 조회 실패 — ${errs.join(" · ")}`);
   return null;
 }
 
