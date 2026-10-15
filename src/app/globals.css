@@ -175,3 +175,8 @@
 .weekly-md th { background: color-mix(in oklab, var(--muted) 60%, transparent); font-weight: 600; }
 .weekly-md a { text-decoration: underline; }
 .weekly-md hr { margin: 0.75rem 0; }
+
+/* `/macro…?embed=top` — 앱 셸 맨 위 줄(로고·시장 탭·주간 리포트·유니버스 관리·계정·테마) 숨김(2026-10-14). 표시 여부는 layout.tsx head 스크립트가 정한다 */
+html[data-embed="top"] .app-topbar {
+  display: none;
+}
