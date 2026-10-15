@@ -103,19 +103,15 @@ const daysBetween = (a: string, b: string) => {
 /**
  * 주당 배당금 — 보통주 기준.
  *  - annual : 최근 "완결" 회계연도(캘린더연도) 배당기준일 합계
- *  - ttm    : 최근 12개월(366일) 내 배당기준일 합계
+ *  - ttm    : 최근 12개월(기준일 > 1년 전 오늘, KST) 배당기준일 합계 — 같은 기준일은 한 번
  */
 export async function fetchKrAnnualDps(crno: string | null): Promise<{
   annual: { dps: number; year: number } | null;
   ttm: { dps: number; from: string; to: string } | null;
 } | null> {
   if (!isConfigured() || !crno) return null;
-  let rows: Record<string, string>[];
-  try {
-    rows = await fetchTail("GetStocDiviInfoService_V2", "getDiviInfo_V2", crno, 400);
-  } catch {
-    return null;
-  }
+  // 조회 실패는 던진다(감사 1차 ⑨ — 예전엔 null 로 삼켜 LTM 주당배당금이 사유 없이 최근 사업연도 값으로 바뀌었다). 호출부가 경고로 남긴다
+  const rows: Record<string, string>[] = await fetchTail("GetStocDiviInfoService_V2", "getDiviInfo_V2", crno, 400);
 
   const events: { bd: string; amt: number }[] = [];
   for (const r of rows) {
@@ -143,11 +139,13 @@ export async function fetchKrAnnualDps(crno: string | null): Promise<{
     }
   }
 
-  // ttm: 최근 366일
-  const cut = new Date();
-  cut.setDate(cut.getDate() - 366);
-  const lo = cut.toISOString().slice(0, 10).replace(/-/g, "");
-  const t = events.filter((e) => e.bd >= lo);
+  // ttm: 최근 12개월 — 기준일이 "1년 전 오늘" **뒤**(초과)인 것만(감사 2차 ⑦: 예전 366일 이상 창은 2026-10-01 에 2025-09-30·2026-09-30
+  // 분기 배당을 둘 다 넣어 5개 분기가 됐다). 같은 기준일이 두 번 실린 행(정정 등)은 한 번만(뒤 행)
+  const kst = new Date(Date.now() + 9 * 3600e3);
+  const lo = `${kst.getUTCFullYear() - 1}${String(kst.getUTCMonth() + 1).padStart(2, "0")}${String(kst.getUTCDate()).padStart(2, "0")}`;
+  const byDate = new Map<string, { bd: string; amt: number }>();
+  for (const e of events) if (e.bd > lo) byDate.set(e.bd, e);
+  const t = [...byDate.values()].sort((a, b) => a.bd.localeCompare(b.bd));
   const ttm =
     t.length > 0
       ? {

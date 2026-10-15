@@ -25,9 +25,9 @@ import { buildKrSummary } from "@/lib/markets/kr/dart-summary";
 import { buildKrAnalysis } from "@/lib/markets/kr/dart-analysis";
 import { fetchStooqEod } from "@/lib/markets/quote/stooq";
 import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
-import { getKrDaDoc } from "@/lib/db/kr-da";
+import { getKrDaDocChecked } from "@/lib/db/kr-da";
 import { usSharesHint } from "@/lib/markets/us/shares-hint";
-import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
+import { loadKrCapsChecked } from "@/lib/markets/kr/dart-ev";
 import { dartAdrAnalysis, dartAdrDetail, dartAdrOf } from "@/lib/markets/us/dart-adr";
 import { getJpFinModel, jpStatementView } from "@/lib/markets/jp/statements";
 import { getJpAnalysis } from "@/lib/markets/jp/jp-views";
@@ -91,19 +91,30 @@ export async function GET(
       return ok(await koreanizeStatement(jpStatementView(model, sym, v, period)), { headers: NO_CACHE });
     }
 
+    // no-silent-catch:begin — 한국 경로(감사 1차 ⑥⑨: 조회 실패는 경고로 남기고 캐시하지 않는다)
     if (market === "kr" && isDetail) {
       const { corpCode } = resolveCorpCode("", sym);
 
       if (detailView === "analysis") {
-        const [facts, krx, bars, ttm, daDoc, live] = await Promise.all([
+        const krxWarn: string[] = [];
+        const warnOf = (what: string) => (e: unknown) => { krxWarn.push(`${what} 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; };
+        const [facts, krx, bars, ttm, daR, live, quarterFacts] = await Promise.all([
           fetchKrFacts(corpCode, "annual"),
-          fetchKrxEod(sym).catch(() => null),
+          // KRX 일별 시세 조회 실패 — 경고로 남긴다(현재가·시가총액은 공통 시세 함수 우선, KRX 는 상장주식수 등 보조)
+          fetchKrxEod(sym).catch(warnOf("KRX 일별 시세")),
+          // silent-ok: Stooq 는 보조(연말 종가는 KRX 시가총액 응답 종가 → 없으면 KRX 연말 종가를 따로 조회) — 실패해도 값이 바뀌지 않는다
           fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
-          adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
-          getKrDaDoc(sym).catch(() => null),
+          adapter.getTtm?.(sym).catch(warnOf("손익 TTM(분기 보고서)")) ?? Promise.resolve(null),
+          getKrDaDocChecked(sym),
           // 현재가·시가총액은 개요·하이라이트와 같은 시세 함수
-          getEodQuote("kr", sym).catch(() => null),
+          getEodQuote("kr", sym).catch(warnOf("현재가(시세) — LTM 시가총액·주가는 KRX 일별 값")),
+          // LTM 열 — 흐름은 최근 4개 분기 합, 재무상태표는 마지막 분기말(손익 TTM 과 같은 기준, 분기 화면과 같은 캐시)
+          fetchKrFacts(corpCode, "quarter").catch(warnOf("분기 재무제표")),
         ]);
+        const daDoc = daR.doc;
+        if (daR.warning) krxWarn.push(daR.warning);
+        for (const w of ttm?.degraded ?? []) krxWarn.push(w);
+        for (const w of live?.warnings ?? []) krxWarn.push(`현재가: ${w}`);
         if (!facts) return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });
         const fyCloseByYear = new Map<number, number>();
         const needYears = facts.periods
@@ -111,14 +122,16 @@ export async function GET(
           .filter((y) => !bars.some((b) => b.date <= `${y}-12-31` && b.date >= `${y}-11-01` && b.close != null));
         await Promise.all(
           needYears.map(async (y) => {
-            const c = await fetchKrxCloseOn(sym, `${y}1231`).catch(() => null);
+            const c = await fetchKrxCloseOn(sym, `${y}1231`).catch((e) => { krxWarn.push(`${y} 연말 종가(KRX) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; });
             if (c != null) fyCloseByYear.set(y, c);
           }),
         );
-        const caps = await loadKrCaps(sym, facts.periods.map((p) => p.year)).catch(() => null);
+        const capsR = await loadKrCapsChecked(sym, facts.periods.map((p) => p.year));
         const stmt = buildKrAnalysis({
           code: sym,
-          caps,
+          caps: capsR.caps,
+          capsError: capsR.error,
+          warnings: krxWarn,
           facts,
           bars,
           fyCloseByYear,
@@ -127,17 +140,19 @@ export async function GET(
           currentMarketCap: live?.marketCap ?? krx?.marketCap ?? null,
           ttm: ttm ?? null,
           daDoc: daDoc ?? null,
+          quarterFacts: quarterFacts ?? null,
         });
         stmt.symbol = sym;
         return ok(stmt, { headers: NO_CACHE });
       }
 
-      const [facts, daDoc] = await Promise.all([
+      const [facts, daR] = await Promise.all([
         fetchKrFacts(corpCode, period),
-        detailView === "is" || detailView === "summary"
-          ? getKrDaDoc(sym).catch(() => null)
-          : Promise.resolve(null),
+        detailView === "is" || detailView === "summary" || detailView === "bs"
+          ? getKrDaDocChecked(sym)
+          : Promise.resolve({ doc: null, warning: null }),
       ]);
+      const daDoc = daR.doc;
       if (!facts) {
         return Response.json({ error: "재무제표를 찾을 수 없습니다" }, { status: 404 });
       }
@@ -147,11 +162,14 @@ export async function GET(
           : detailView === "is"
             ? buildKrIncome(facts, daDoc)
             : detailView === "bs"
-              ? buildKrBalance(facts)
+              ? buildKrBalance(facts, daDoc)
               : buildKrSummary(facts, daDoc);
       stmt.symbol = sym;
+      // 감가상각 적재본 조회 실패 — 감가상각비·EBITDA 가 공시 줄 폴백·빈칸으로 바뀌었다는 경고(조용한 대체 금지)
+      if (daR.warning) stmt.warnings = [`⚠ ${daR.warning} — 감가상각비·EBITDA 는 DART 공시 현금흐름 줄 또는 빈칸`];
       return ok(stmt, { headers: NO_CACHE });
     }
+    // no-silent-catch:end
 
     // SEC XBRL 이 없는 ADR(SKHY) — 본국 DART 재무를 USD·ADR 기준으로(dart-adr.ts)
     const dartAdr = market === "us" && isDetail ? dartAdrOf(sym) : null;

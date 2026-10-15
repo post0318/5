@@ -55,14 +55,18 @@ export async function getEodQuote(
   symbol: string,
   opts: { from?: string; to?: string; yahooOverride?: string | null } = {},
 ): Promise<EodQuote> {
+  // KRX 실패 → Yahoo·Stooq 폴백 — 사유를 시세 응답 warnings 에 싣는다(감사 2차 ⑨ — 예전엔 조용히 바뀌었다)
+  const fallbackWarn: string[] = [];
   if (market === "kr" && hasKrxKey()) {
     try {
       const krx = await fetchKrxEod(symbol);
       if (krx.bars.length > 0) return await buildKrQuoteWithLatestFill(market, symbol, krx, opts);
-    } catch {
-      // KRX 실패 → 폴백
+      fallbackWarn.push("KRX 시세 없음 — 다른 소스 시세");
+    } catch (e) {
+      fallbackWarn.push(`KRX 시세 조회 실패(${e instanceof Error ? e.message : String(e)}) — 다른 소스 시세`);
     }
   }
+  const withWarn = (q: EodQuote): EodQuote => (fallbackWarn.length ? { ...q, warnings: [...(q.warnings ?? []), ...fallbackWarn.map((w) => `${w}(${q.source})`)] } : q);
 
   let yahooErr: unknown;
   try {
@@ -75,7 +79,7 @@ export async function getEodQuote(
           const done = bars.slice(0, -1);
           const q = buildQuote(market, symbol, done, "Yahoo Finance", { splits });
           const prevClose = q.last;
-          return {
+          return withWarn({
             ...q,
             live: {
               price: lastBar.close,
@@ -83,21 +87,25 @@ export async function getEodQuote(
               change: prevClose != null ? lastBar.close - prevClose : null,
               changePct: prevClose ? ((lastBar.close - prevClose) / prevClose) * 100 : null,
             },
-          };
+          });
         }
       }
-      return buildQuote(market, symbol, bars, "Yahoo Finance", { splits });
+      return withWarn(buildQuote(market, symbol, bars, "Yahoo Finance", { splits }));
     }
   } catch (e) {
     yahooErr = e;
   }
+  let stooqErr: unknown;
   try {
     const bars = await fetchStooqEod(market, symbol, opts);
-    if (bars.length > 0) return buildQuote(market, symbol, bars, "Stooq");
-  } catch {
-    // Stooq 도 실패 — Yahoo 오류를 올린다
+    if (bars.length > 0) return withWarn(buildQuote(market, symbol, bars, "Stooq", {}));
+  } catch (e) {
+    stooqErr = e;
   }
-  throw yahooErr ?? new Error(`시세 없음: ${market}:${symbol}`);
+  // 모두 실패 — Yahoo 오류에 KRX·Stooq 사유를 붙여 던진다
+  const why = [...fallbackWarn, stooqErr ? `Stooq ${stooqErr instanceof Error ? stooqErr.message : String(stooqErr)}` : ""].filter(Boolean).join(" · ");
+  if (yahooErr instanceof Error) throw new Error(`${yahooErr.message}${why ? ` · ${why}` : ""}`, { cause: yahooErr });
+  throw new Error(`시세 없음: ${market}:${symbol}${why ? ` · ${why}` : ""}`);
 }
 
 /**
@@ -160,20 +168,24 @@ async function fetchSupplementBars(
   market: MarketId,
   symbol: string,
   opts: { from?: string; to?: string; yahooOverride?: string | null },
-): Promise<{ bars: QuoteBar[]; source: string } | null> {
+): Promise<{ bars: QuoteBar[]; source: string; warnings: string[] }> {
+  // 실패 사유를 모아 돌려준다(감사 2차 ⑨) — 보강 실패면 KRX 값만 쓰고 사유를 시세 경고로
+  const warnings: string[] = [];
   try {
     const bars = await fetchYahooEod(market, symbol, opts);
-    if (bars.length > 0) return { bars, source: "Yahoo Finance" };
-  } catch {
-    // 다음 소스로
+    if (bars.length > 0) return { bars, source: "Yahoo Finance", warnings };
+    warnings.push("Yahoo 보강 시세 없음");
+  } catch (e) {
+    warnings.push(`Yahoo 보강 시세 조회 실패(${e instanceof Error ? e.message : String(e)})`);
   }
   try {
     const bars = await fetchStooqEod(market, symbol, opts);
-    if (bars.length > 0) return { bars, source: "Stooq" };
-  } catch {
-    // 보강 실패 — KRX 값만 쓴다
+    if (bars.length > 0) return { bars, source: "Stooq", warnings };
+    warnings.push("Stooq 보강 시세 없음");
+  } catch (e) {
+    warnings.push(`Stooq 보강 시세 조회 실패(${e instanceof Error ? e.message : String(e)})`);
   }
-  return null;
+  return { bars: [], source: "", warnings };
 }
 
 /**
@@ -200,12 +212,14 @@ async function buildKrQuoteWithLatestFill(
   }
 
   const supplement = await fetchSupplementBars(market, symbol, opts);
-  const extra = (supplement?.bars ?? []).filter((b) => b.date > krxLastDate && b.date <= expected);
+  const extra = supplement.bars.filter((b) => b.date > krxLastDate && b.date <= expected);
   if (extra.length === 0) {
-    return buildQuote(market, symbol, sortedKrx, "KRX 정보데이터시스템", {
+    const q = buildQuote(market, symbol, sortedKrx, "KRX 정보데이터시스템", {
       sharesOutstanding: krx.listedShares,
       marketCap: krx.marketCap,
     });
+    // 보강 실패면 사유를 남긴다(최신 거래일 종가가 아직 KRX 에 없는데 다른 소스도 못 받음)
+    return supplement.warnings.length ? { ...q, warnings: supplement.warnings.map((w) => `${w} — KRX ${krxLastDate} 종가(최근 거래일 ${expected} 보강 못함)`) } : q;
   }
 
   const merged = [...sortedKrx, ...extra].sort((a, b) => a.date.localeCompare(b.date));
@@ -216,7 +230,7 @@ async function buildKrQuoteWithLatestFill(
     market,
     symbol,
     merged,
-    `KRX 정보데이터시스템 + ${supplement!.source} (최신 종가 보강)`,
+    `KRX 정보데이터시스템 + ${supplement.source} (최신 종가 보강)`,
     { sharesOutstanding: krx.listedShares, marketCap },
   );
 }

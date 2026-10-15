@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatNumber } from "@/lib/format";
 import type { FinancialLineItem, FinancialStatement } from "@/lib/markets/types";
@@ -138,6 +139,16 @@ export function FinancialsTable({
 
   return (
     <div className="space-y-3">
+      {(detail?.warnings?.length ?? 0) > 0 && (
+        <div className="text-muted-foreground space-y-1 text-xs">
+          {detail!.warnings!.map((w, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <TriangleAlert className="size-3 shrink-0" />
+              {w}
+            </div>
+          ))}
+        </div>
+      )}
       {!useDetail && (
         <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
           <span>단위: {statement.unit || "원본"}</span>

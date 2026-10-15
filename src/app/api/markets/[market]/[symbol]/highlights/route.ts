@@ -23,10 +23,10 @@ import { fetchStooqEod } from "@/lib/markets/quote/stooq";
 import { fetchKrxEod, fetchKrxCloseOn } from "@/lib/markets/quote/krx";
 import { fetchKrNaverConsensus } from "@/lib/markets/kr/naver";
 import { fetchKrAnnualDps } from "@/lib/markets/kr/rights-schedule";
-import { getKrDaDoc } from "@/lib/db/kr-da";
+import { getKrDaDocChecked } from "@/lib/db/kr-da";
 import { usSharesHint } from "@/lib/markets/us/shares-hint";
 import { secBasisBars } from "@/lib/markets/us/edgar-shares";
-import { loadKrCaps } from "@/lib/markets/kr/dart-ev";
+import { loadKrCapsChecked } from "@/lib/markets/kr/dart-ev";
 import { dartAdrHighlights, dartAdrOf } from "@/lib/markets/us/dart-adr";
 import { getJpHighlights } from "@/lib/markets/jp/jp-views";
 import { koreanizeNotesDeep } from "@/lib/markets/jp/ko";
@@ -59,23 +59,32 @@ export async function GET(
       return ok({ highlights }, { headers: { "Cache-Control": warned ? "no-store" : "public, s-maxage=3600, stale-while-revalidate=86400" } });
     }
 
+    // no-silent-catch:begin — 한국 경로(감사 1차 ⑥⑨: 조회 실패는 전부 경고로 남기고 캐시하지 않는다)
     if (market === "kr") {
       const { corpCode } = resolveCorpCode("", sym);
-      const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daDoc, live] = await Promise.all([
+      const krxWarn: string[] = [];
+      const warnOf = (what: string) => (e: unknown) => { krxWarn.push(`${what} 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; };
+      const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daR, live] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
         fetchKrDps(corpCode),
-        fetchKrxEod(sym).catch(() => null),
+        // KRX 일별 시세 조회 실패 — 경고로 남긴다(현재가·시가총액은 공통 시세 함수 우선, KRX 는 상장주식수 등 보조)
+        fetchKrxEod(sym).catch(warnOf("KRX 일별 시세")),
+        // silent-ok: Stooq 는 보조(연말 종가는 KRX 시가총액 응답 종가 → 없으면 KRX 연말 종가를 따로 조회) — 실패해도 값이 바뀌지 않고 LTM 날짜만 오늘로
         fetchStooqEod("kr", sym, { from: `${new Date().getFullYear() - 6}-01-01` }).catch(() => []),
-        adapter.getTtm?.(sym).catch(() => null) ?? Promise.resolve(null),
-        fetchKrNaverConsensus(sym).catch(() => null),
+        adapter.getTtm?.(sym).catch(warnOf("손익 TTM(분기 보고서)")) ?? Promise.resolve(null),
+        fetchKrNaverConsensus(sym).catch(warnOf("네이버 컨센서스(예상 열)")),
         getKrJurirNo(sym)
-          .then((crno) => fetchKrAnnualDps(crno))
-          .catch(() => null),
-        getKrDaDoc(sym).catch(() => null),
+          .then((crno) => (crno ? fetchKrAnnualDps(crno) : null))
+          .catch(warnOf("배당기준일(공공데이터) — LTM 주당배당금은 최근 사업연도 값")),
+        getKrDaDocChecked(sym),
         // 현재가·시가총액은 개요(브라우저 멀티플)와 같은 시세 함수 — KRX 일별 전종목은 장
         // 마감 뒤에야 당일분이 나와 하루 늦을 수 있어 LTM 열이 개요와 갈렸다.
-        getEodQuote("kr", sym).catch(() => null),
+        getEodQuote("kr", sym).catch(warnOf("현재가(시세) — LTM 시가총액·주가는 KRX 일별 값")),
       ]);
+      const daDoc = daR.doc;
+      if (daR.warning) krxWarn.push(daR.warning);
+      for (const w of ttm?.degraded ?? []) krxWarn.push(w);
+      for (const w of live?.warnings ?? []) krxWarn.push(`현재가: ${w}`);
       if (!facts) return ok({ highlights: null });
       // 회계연도말 종가 — Stooq 커버리지가 부족하면 KRX 로 개별 조회
       const fyCloseByYear = new Map<number, number>();
@@ -84,15 +93,17 @@ export async function GET(
         .filter((y) => !bars.some((b) => b.date <= `${y}-12-31` && b.date >= `${y}-11-01` && b.close != null));
       await Promise.all(
         needYears.map(async (y) => {
-          const c = await fetchKrxCloseOn(sym, `${y}1231`).catch(() => null);
+          const c = await fetchKrxCloseOn(sym, `${y}1231`).catch((e) => { krxWarn.push(`${y} 연말 종가(KRX) 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; });
           if (c != null) fyCloseByYear.set(y, c);
         }),
       );
       // KRX 연말·현재 보통주·우선주 시가총액 (dart-ev.ts — EV·PBR·PSR 공통)
-      const caps = await loadKrCaps(sym, facts.periods.map((p) => p.year)).catch(() => null);
+      const capsR = await loadKrCapsChecked(sym, facts.periods.map((p) => p.year));
       const highlights = buildKrHighlights({
         code: sym,
-        caps,
+        caps: capsR.caps,
+        capsError: capsR.error,
+        warnings: krxWarn,
         facts,
         bars,
         fyCloseByYear,
@@ -118,9 +129,11 @@ export async function GET(
       });
       return ok(
         { highlights },
-        { headers: { "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400" } },
+        // KRX 조회 실패면 캐시하지 않는다(잠시 뒤 다시 계산)
+        { headers: { "Cache-Control": capsR.error || krxWarn.length ? "no-store" : "public, s-maxage=3600, stale-while-revalidate=86400" } },
       );
     }
+    // no-silent-catch:end
 
     // SEC XBRL 이 없는 ADR(SKHY) — 본국 DART 재무를 USD·ADR 기준으로(dart-adr.ts)
     const dartAdr = dartAdrOf(sym);
