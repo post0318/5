@@ -29,6 +29,7 @@ export function readFinanceCostTables(zipBuf) {
   if (!regs.length) return { status: "no_region", docs: fs.map((f) => f.docName) };
   const byName = new Map(fs.map((f) => [f.name, f]));
   const other = [];
+  const totalOnly = []; // 금융원가 주석 표인데 숫자 줄이 「금융비용(원가)」·합계뿐 — 이자를 따로 적지 않음(D27 interest_not_separated)
   for (const g of regs) {
     const f = byName.get(g.file);
     const x = f.x;
@@ -52,7 +53,13 @@ export function readFinanceCostTables(zipBuf) {
           if (nums.length) parsed.push({ label: "금융원가 계(전액 이자비용)", nums, row: r.join(" | ").slice(0, 160), wholeIsInterest: true });
         }
       }
-      if (!parsed.length) continue;
+      if (!parsed.length) {
+        const numRows = rows.filter((r) => r.slice(1).some((c) => cellNum(c) != null));
+        const t0 = noteTitle(hs, tpos);
+        const isCost = (NOTE_OK.test(t0) && !NOTE_NO.test(t0)) || CTX_OK.test(ctx);
+        if (isCost && numRows.length && numRows.every((r) => /^(금융\s*(비용|원가)(\s*(합\s*계|계))?|합\s*계|계)$/.test(String(r[0]).trim()))) totalOnly.push({ title: t0, rows: numRows.map((r) => r.join(" | ").slice(0, 120)) });
+        continue;
+      }
       const title = noteTitle(hs, tpos);
       const tbad = NOTE_NO.test(title);
       const ok = !CTX_NO.test(ctx) && (CTX_OK.test(ctx) || (NOTE_OK.test(title) && !tbad));
@@ -62,6 +69,7 @@ export function readFinanceCostTables(zipBuf) {
     }
     if (hits.length) return { status: "read", src: g.src, tables: hits, enc: f.enc };
   }
+  if (totalOnly.length) return { status: "total_only", tables: totalOnly.slice(0, 3) };
   return { status: "no_interest_row", other: other.slice(0, 12) };
 }
 
@@ -175,7 +183,9 @@ export function interestItems(o) {
     }
     // 빈칸 — 사유 구분
     let reason = BLANK.parse_failed, detail = {};
-    if (!o.docBuf && !o.xbrlBuf) { reason = BLANK.fetch_failed; detail = { docErr: o.docErr ?? null, xbrlErr: o.xbrlErr ?? null }; }
+    // 원문을 못 받았으면(XBRL 은 있어도 이자 칸이 없을 때) 조회 실패 — 판독 실패가 아니다(감사 10-16 ③-6)
+    if (!o.docBuf && (o.docErr || !o.xbrlBuf)) { reason = BLANK.fetch_failed; detail = { docErr: o.docErr ?? null, xbrlErr: o.xbrlErr ?? null }; }
+    else if (doc?.status === "total_only") { reason = BLANK.confirmed_absent; detail = { why: "interest_not_separated", tables: doc.tables }; }
     else if (doc?.status === "no_interest_row") { reason = BLANK.confirmed_absent; detail = { why: "interest_row_absent", other: doc.other?.map((t) => t.title) }; }
     else if (pick?.error === "no_core_row") { reason = BLANK.confirmed_absent; detail = { why: "interest_not_separated", rows: pick.rows }; }
     else if (pick?.error === "unit_unknown") { reason = BLANK.parse_failed; detail = { why: "unit_unknown", table: pick.title }; }

@@ -15,6 +15,7 @@ import { makeKrMarket } from "../kr/market.mjs";
 import { chainItems } from "../kr/items.mjs";
 import { fnlttFacts, markVintage } from "../kr/read.mjs";
 import { interestItems, readFinanceCostTables, chooseInterest } from "../kr/interest.mjs";
+import { BLANK, BLANK_JUDGE } from "../common/rawfact.mjs";
 
 const setup = () => { const root = mkdtempSync(join(tmpdir(), "t5-")); return { root, store: openStore({ root, actor: "verify" }), quotaRoot: join(root, "quota") }; };
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
@@ -94,7 +95,25 @@ test("표 단위를 천원 → 원으로 바꾸면 XBRL 과 어긋남 표시(doc
   // 원문만 있는 해(FY2021·22)는 판독값 그대로 + 「금융비용 합계만」이면 interest_not_separated
   const onlyTotal = zip([["20220312000001.xml", `<DOCUMENT><DOCUMENT-NAME>사업보고서</DOCUMENT-NAME><TITLE>연결재무제표 주석</TITLE><P>25. 금융비용</P><P>금융비용의 내역</P><P>(단위 : 백만원)</P><TABLE><TR><TD>금융비용</TD><TD>5</TD><TD>4</TD></TR></TABLE></DOCUMENT>`]]);
   const r = interestItems({ rcept: "20220312000001", year: 2021, docBuf: onlyTotal });
-  assert.ok(r.every((i) => i.value == null && ["confirmed_absent", "parse_failed"].includes(i.blank_reason)), JSON.stringify(r.map((i) => [i.blank_reason, i.blank_detail])));
+  assert.ok(r.every((i) => i.value == null && i.blank_reason === "confirmed_absent" && i.blank_detail?.why === "interest_not_separated"), JSON.stringify(r.map((i) => [i.blank_reason, i.blank_detail])));
+});
+
+test("이자 빈칸 사유: 원문 조회 실패는 fetch_failed(XBRL 에 이자 칸이 없어도) — 기대 빈칸으로 바뀌면 안 됨(감사 10-16 K7·③-6)", () => {
+  const xbrlNoInt = zip([["entity00126380_2023-12-31.xbrl", `<xbrli:xbrl xmlns:xbrli="x"><xbrli:context id="CFY2023dFY"><xbrli:entity><xbrli:identifier scheme="s">00126380</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2023-01-01</xbrli:startDate><xbrli:endDate>2023-12-31</xbrli:endDate></xbrli:period></xbrli:context></xbrli:xbrl>`]]);
+  for (const o of [{ docErr: "fetch_failed: 연결 막힘" }, { docErr: "fetch_failed: 연결 막힘", xbrlBuf: xbrlNoInt }, { docErr: "x", xbrlErr: "y" }]) {
+    const r = interestItems({ rcept: "20240312000736", year: 2023, ...o });
+    assert.ok(r.length === 2 && r.every((i) => i.value == null && i.blank_reason === "fetch_failed"), JSON.stringify(r.map((i) => i.blank_reason)));
+  }
+});
+
+test("빈칸 사유 → 판정 연결 표(BLANK_JUDGE): 조회 실패·모호·판독 실패는 검증불가(종료 1), 게시 전은 재실행(3), 확인된 없음만 기대 빈칸(감사 10-16 C8)", () => {
+  assert.deepEqual(BLANK_JUDGE.fetch_failed, { judge: "unverifiable", exit: 1 });
+  assert.deepEqual(BLANK_JUDGE.parse_failed, { judge: "unverifiable", exit: 1 });
+  assert.deepEqual(BLANK_JUDGE.ambiguous, { judge: "unverifiable", exit: 1 });
+  assert.deepEqual(BLANK_JUDGE.quota_stop, { judge: "unverifiable", exit: 1 });
+  assert.deepEqual(BLANK_JUDGE.not_yet_published, { judge: "unverifiable_rerun", exit: 3 });
+  for (const k of ["confirmed_absent", "out_of_scope", "definition_blank"]) assert.equal(BLANK_JUDGE[k].judge, "expected_blank");
+  for (const k of Object.values(BLANK)) assert.ok(BLANK_JUDGE[k], `사유 ${k} 판정 연결 없음`);
 });
 
 test("앱·검증기가 다른 갱신형 판본을 쓰면 판본 id 가 다르다(차이를 판본 탓으로 가를 수 있음)", async () => {
