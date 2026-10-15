@@ -5,6 +5,7 @@ import type { MarketId } from "./types";
 import { translateTitles, type TranslateOptions } from "../news/translate";
 import { fetchGoogleNewsRss, googleNewsUrl } from "../news/googleNews";
 import { getNewsSummaries } from "../db/news-summary";
+import { needsSummary } from "../news/summary";
 import { resolveCorpCode } from "./kr/corpcode";
 import { getEdinetCodeIndex } from "./jp/edinetcode";
 import { JA_COMPANY_ALIASES, JP_ALIAS_SPORTS_RE, JP_SHARED_NAME_CONTEXT, judgeJapaneseTitle, jaNorm, normalizeJaTitleForDedup, type JaNames, KO_PRODUCT_ALIASES, KR_COMPANY_ALIASES, KR_CONTEXT_ALIASES, judgeDomesticTitle, judgeOverseasTitle, koAcronymName, koTitleHit, enTitleHit, shortAliasHit, type ShortAlias, type Verdict } from "./news-rules";
@@ -1765,11 +1766,18 @@ export async function fetchMacroNews(region: "kr" | "us"): Promise<NewsItem[]> {
   // 해외: 요약 예약 작업이 저장한 Gemini 한글 제목을 먼저 쓰고(2026-10-14), 저장본이 없는 기사만 무료 번역 — LLM 폴백 없음(오너 지시 2026-09-15).
   // 저장본이 있는 기사는 번역 요청을 보내지 않아 무료 번역 한도를 나머지 기사에 쓴다.
   const saved = await getNewsSummaries(raw.map((r) => r.url));
-  const rest = raw.filter((r) => !saved.get(r.url)?.titleKo);
+  // 원문도, 같은 사건의 다른 매체 기사도 못 읽어 요약 불가로 확정된 기사(유료벽 블룸버그·로이터 등)는 목록에서 뺀다 —
+  // 눌러도 볼 게 없다(4번 브라질 글로벌 뉴스와 같게, 4번 오너 지시 2026-10-12 · 5번 오너 지적 2026-10-15).
+  // 다른 매체로 대신 요약한 기사는 그대로 두고, 아직 요약 전(또는 옛 지시문 버전)인 기사는 판정 전이라 일단 보인다.
+  const shown = raw.filter((r) => {
+    const s = saved.get(r.url);
+    return !(s && s.bullets.length === 0 && !needsSummary(s));
+  });
+  const rest = shown.filter((r) => !saved.get(r.url)?.titleKo);
   const translated = new Map(
     (await withTranslatedTitles("en", rest, { llmFallback: false })).map((t) => [t.url, t.titleKo]),
   );
-  return raw.map((r) => {
+  return shown.map((r) => {
     const s = saved.get(r.url);
     return {
       ...r,
