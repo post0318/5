@@ -2,6 +2,7 @@
 # 일본 공시 원자료 매일 수집 타이머 설치(멱등) — scripts/jp/collect-daily.mjs(TDnet 결산단신 + J-Quants fins/summary 2년 창).
 # 두 출처 모두 지난 자료가 사라지므로(TDnet 목록 약 31일, J-Quants 무료 창은 날마다 하루씩 밀림) 하루도 거르지 않게 Persistent=true.
 #   sudo bash ops/jp/install-collect.sh
+#   코드 위치 = 2호기 ~/wt-app-jp(jp/app — 2026-10-16 옛 브랜치 kr/verification 의 ~/5 에서 옮김)
 set -euo pipefail
 cat >/etc/systemd/system/macro-jp-collect.service <<UNIT
 [Unit]
@@ -10,7 +11,7 @@ After=network-online.target mongod.service
 [Service]
 Type=oneshot
 User=ubuntu
-WorkingDirectory=/home/ubuntu/5
+WorkingDirectory=/home/ubuntu/wt-app-jp
 ExecStart=/usr/bin/node scripts/jp/collect-daily.mjs --tdnet-days=7 --jq-from=auto
 # EDINET 공시 목록·색인(jp_docs) — 최근 10일(확정 안 된 날·새 날만 실제로 받음, 나머지는 디스크로 건너뜀)
 Environment=NODE_OPTIONS=--conditions=react-server
