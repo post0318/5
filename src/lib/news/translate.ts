@@ -57,23 +57,32 @@ function cacheSet(key: string, ko: string, ok: boolean) {
  * 캐시하지 않으므로 다음 갱신 때 다시 번역된다). 일본 재무 문구 번역(jp/ko.ts)의 쉬기와도 따로다.
  */
 type Lane = "en" | "ja";
-const googlePausedUntil: Record<Lane, number> = { en: 0, ja: 0 };
+/** Google 무료 번역 출입구 — dict: 크롬 「Google 사전」 확장용(clients5), gtx: 구글 번역 웹 내부 주소. 둘 다 공식 API 아님, 키·비용 없음 */
+type GoogleDoor = "dict" | "gtx";
+const googlePausedUntil: Record<GoogleDoor, Record<Lane, number>> = { dict: { en: 0, ja: 0 }, gtx: { en: 0, ja: 0 } };
 const myMemoryPausedUntil: Record<Lane, number> = { en: 0, ja: 0 };
 const MYMEMORY_PAUSE_MS = 60 * 60_000;
 
+function doorPaused(door: GoogleDoor, lane: Lane): boolean {
+  return Date.now() < googlePausedUntil[door][lane];
+}
+/** Google 출입구 둘 다 쉬는 중 — 이때만 MyMemory 로 넘어간다 */
 function googlePaused(lane: Lane): boolean {
-  return Date.now() < googlePausedUntil[lane];
+  return doorPaused("dict", lane) && doorPaused("gtx", lane);
 }
 
 /**
  * Google 429 — 한도는 IP 단위라 한 언어가 막히면 다른 언어도 곧 막힌다(2026-10-10 운영: ja 429 직후 en 도 429). 그래서 두 언어를 함께 쉬되
- * 영문(미국·한국 종목 해외 기사)을 먼저 되살린다 — 영문 10분, 일본어 30분.
+ * 영문(미국·한국 종목 해외 기사)을 먼저 되살린다 — 영문 10분, 일본어 30분. 쉬기는 출입구별로 따로(2026-10-15 운영: gtx 는 1호기 IP 를
+ * 한 건부터 429 로 막는데 dict 는 200).
  */
 const GOOGLE_PAUSE_BY_LANE: Record<Lane, number> = { en: 10 * 60_000, ja: 30 * 60_000 };
-function pauseGoogle(lane: Lane) {
-  if (!googlePaused(lane)) console.warn(`[translate] Google 번역 429(${lane}) — 영문 10분·일본어 30분 쉼`);
+function pauseGoogle(door: GoogleDoor, lane: Lane) {
+  if (!doorPaused(door, lane)) console.warn(`[translate] Google 번역(${door}) 429(${lane}) — 영문 10분·일본어 30분 쉼`);
   const now = Date.now();
-  for (const l of ["en", "ja"] as const) googlePausedUntil[l] = Math.max(googlePausedUntil[l], now + GOOGLE_PAUSE_BY_LANE[l]);
+  for (const l of ["en", "ja"] as const) {
+    googlePausedUntil[door][l] = Math.max(googlePausedUntil[door][l], now + GOOGLE_PAUSE_BY_LANE[l]);
+  }
 }
 
 /** gtx 응답(문장 조각 배열)을 한 문자열로 */
@@ -82,13 +91,45 @@ function joinGtx(data: unknown): string | null {
   return (data[0] as unknown[]).map((seg) => (Array.isArray(seg) ? String(seg[0] ?? "") : "")).join("");
 }
 
+/**
+ * dict 출입구(2026-10-15 오너 승인 — 1호기에서 gtx 가 막혀 Google 을 먼저 이쪽으로). POST 본문에 q 를 여러 개 넣으면 같은 순서의 문자열 배열로
+ * 돌려준다(실측: 3건 → 3건). 개수가 다르거나 형식이 다르면 null(호출부가 gtx 로).
+ */
+async function viaDict(texts: string[], sl: string, tl: string, lane: Lane): Promise<(string | null)[] | null> {
+  if (doorPaused("dict", lane)) return null;
+  try {
+    const res = await fetch(`https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${sl}&tl=${tl}`, {
+      method: "POST",
+      headers: { "user-agent": "Mozilla/5.0", "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: texts.map((t) => "q=" + encodeURIComponent(t)).join("&"),
+      signal: AbortSignal.timeout(REQ_TIMEOUT_MS * 2),
+    });
+    if (res.status === 429) {
+      pauseGoogle("dict", lane);
+      return null;
+    }
+    if (!res.ok) return null;
+    const data: unknown = await res.json();
+    if (!Array.isArray(data) || data.length !== texts.length) return null;
+    // sl=auto 면 [번역, 감지 언어] 쌍으로 온다 — 지금은 언어를 정해 보내지만 둘 다 받는다
+    return data.map((d) => {
+      const v = Array.isArray(d) ? d[0] : d;
+      return typeof v === "string" && v.trim() ? v.trim() : null;
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function viaGoogle(text: string, sl: string, tl: string, lane: Lane): Promise<string | null> {
-  if (googlePaused(lane)) return null;
+  const d = await viaDict([text], sl, tl, lane);
+  if (d?.[0]) return d[0];
+  if (doorPaused("gtx", lane)) return null;
   try {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=` + encodeURIComponent(text);
     const res = await fetch(url, { headers: { "user-agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(REQ_TIMEOUT_MS) });
     if (res.status === 429) {
-      pauseGoogle(lane);
+      pauseGoogle("gtx", lane);
       return null;
     }
     if (!res.ok) return null;
@@ -107,7 +148,9 @@ const BATCH_MAX_CHARS = 1800;
  * 결과 줄 수가 입력과 다르면 null(호출부가 그 묶음만 한 건씩 번역). 요청 수가 제목 수의 1/20 안팎이 된다.
  */
 async function viaGoogleBatch(texts: string[], sl: string, tl: string, lane: Lane): Promise<(string | null)[] | null> {
-  if (googlePaused(lane)) return null;
+  const d = await viaDict(texts, sl, tl, lane);
+  if (d) return d;
+  if (doorPaused("gtx", lane)) return null;
   try {
     const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t`, {
       method: "POST",
@@ -116,7 +159,7 @@ async function viaGoogleBatch(texts: string[], sl: string, tl: string, lane: Lan
       signal: AbortSignal.timeout(REQ_TIMEOUT_MS * 2),
     });
     if (res.status === 429) {
-      pauseGoogle(lane);
+      pauseGoogle("gtx", lane);
       return null;
     }
     if (!res.ok) return null;
