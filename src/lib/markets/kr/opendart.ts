@@ -22,9 +22,10 @@ import {
 import { resolveCorpCode } from "./corpcode";
 import { dartReportJson } from "./dart-cache";
 import { annualSeries, daAndAmortSeries, fetchKrFacts, seriesOf } from "./dart-facts";
-import { buildKrEvResolver, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCaps } from "./dart-ev";
-import { krIsFlows } from "./dart-income";
-import { getKrDaDoc } from "@/lib/db/kr-da";
+import { buildKrEvResolver, isPartialOpsEpsName, krEpsByYear, krLtmBalance, krOpIncomeByYear, loadKrCapsChecked } from "./dart-ev";
+import { KR_ANALYSIS_ACCOUNTS } from "./dart-analysis";
+import { krInterimXbrlCum } from "./xbrl";
+import { getKrDaDocChecked } from "@/lib/db/kr-da";
 
 const HINT =
   "한국(OpenDART) 데이터는 아직 연결되지 않았습니다. " +
@@ -81,18 +82,15 @@ interface CompanyResponse extends DartEnvelope {
 }
 
 /** 종목코드 → 법인등록번호 (금융위 권리일정 API `crno` 파라미터용) */
+/** 조회 실패는 던진다(감사 1차 ⑨ — 예전엔 null 로 삼켜 LTM 주당배당금이 사유 없이 최근 사업연도 값으로 바뀌었다). 번호 형식이 아니면 null */
 export async function getKrJurirNo(symbol: string): Promise<string | null> {
-  try {
-    const entry = await resolveCorpCode(key(), symbol);
-    const res = await fetchJson<CompanyResponse>(
-      `${BASE}/company.json?crtfc_key=${key()}&corp_code=${entry.corpCode}`,
-      { revalidate: 60 * 60 * 24 },
-    );
-    const jn = (res.jurir_no ?? "").replace(/\D/g, "");
-    return jn.length === 13 ? jn : null;
-  } catch {
-    return null;
-  }
+  const entry = await resolveCorpCode(key(), symbol);
+  const res = await fetchJson<CompanyResponse>(
+    `${BASE}/company.json?crtfc_key=${key()}&corp_code=${entry.corpCode}`,
+    { revalidate: 60 * 60 * 24 },
+  );
+  const jn = (res.jurir_no ?? "").replace(/\D/g, "");
+  return jn.length === 13 ? jn : null;
 }
 
 const CORP_CLS_LABEL: Record<string, string> = {
@@ -132,6 +130,7 @@ interface FnlttRow {
   bfefrmtrm_nm?: string;
   bfefrmtrm_amount?: string;
   ord: string;
+  rcept_no?: string;
 }
 interface FnlttResponse extends DartEnvelope {
   list?: FnlttRow[];
@@ -345,13 +344,14 @@ const EPS_PAIRS = [
 // EPS 계정명은 회사·보고서별 편차가 커서 부분일치 허용
 const EPS_LOOSE = /주당(순)?이익/;
 
-/** 손익/포괄손익 계정에서 값 추출. col: 당기누적 | 전기동기누적 | 연간(당기) */
+/** 손익/포괄손익 계정에서 값 추출. col: 당기누적 | 전기동기누적 | 연간(당기). sjs 를 주면 그 재무제표(현금흐름표 "CF" 등)에서 */
 function isValue(
   rows: FnlttRow[],
   names: readonly string[],
   col: "cumCur" | "cumPrior" | "annual",
   loose?: RegExp,
   ids?: readonly string[],
+  sjs: readonly string[] = ["IS", "CIS"],
 ): number | null {
   const set = new Set(names.map(norm));
   const pick = (r: FnlttRow) => {
@@ -362,7 +362,7 @@ function isValue(
   };
   // ID 우선(목록 순서 = 우선순위)
   for (const id of ids ?? []) {
-    const r = rows.find((x) => (x.sj_div === "IS" || x.sj_div === "CIS") && x.account_id === id);
+    const r = rows.find((x) => sjs.includes(x.sj_div) && x.account_id === id);
     if (r) {
       const v = pick(r);
       if (v != null) return v;
@@ -370,7 +370,7 @@ function isValue(
   }
   let looseHit: number | null = null;
   for (const r of rows) {
-    if (r.sj_div !== "IS" && r.sj_div !== "CIS") continue;
+    if (!sjs.includes(r.sj_div)) continue;
     const nm = norm(r.account_nm ?? "");
     if (set.has(nm)) return pick(r);
     if (loose && looseHit == null && loose.test(nm)) looseHit = pick(r);
@@ -383,6 +383,12 @@ function isValue(
  * 합(NAVER 2021: 계속영업 9,887 + 중단영업 99,973). 하이라이트·손익계산서(dart-ev.ts krEpsSeries)와 같은 규칙
  */
 function epsValue(rows: FnlttRow[], col: "cumCur" | "cumPrior" | "annual"): number | null {
+  // 전체 EPS 표준 ID 는 계정명과 관계없이 먼저(감사 1차 2026-10-05 — 006260·010120 반기보고서의 전체 EPS 줄 이름이 "계속영업과 중단영업 희석주당이익"
+  // 이라 아래 이름 걸러내기에 같이 빠져 계속영업 EPS 로 계산됐다: 006260 LTM EPS 15,426 → 15,574)
+  // 우선주 줄에 보통주 EPS 코드를 단 경우는 제외(삼성SDI 2021 원자료 태그 오류). 계속·중단 한쪽 이름 줄에 단 전체 EPS 코드도 제외(373220 2023
+  // 사업보고서 태그 오류 — dart-ev.ts isPartialOpsEpsName, 사업연도·분기 EPS 와 같은 규칙)
+  const byId = isValue(rows.filter((r) => !/우선주/.test(norm(r.account_nm ?? "")) && !isPartialOpsEpsName(r.account_nm ?? "")), [], col, undefined, TTM_IDS.eps);
+  if (byId != null) return byId;
   const plain = rows.filter((r) => !/계속영업|중단영업/.test(norm(r.account_nm ?? "")));
   const total = isValue(plain, TTM_ACCOUNTS.eps, col, EPS_LOOSE, TTM_IDS.eps);
   if (total != null) return total;
@@ -392,6 +398,19 @@ function epsValue(rows: FnlttRow[], col: "cumCur" | "cumPrior" | "annual"): numb
   }
   return null;
 }
+
+/** 한국 LTM 부가 흐름 — 재무분석 계정 정의(KR_ANALYSIS_ACCOUNTS)로 항목마다 val(정의, 재무제표) */
+function krLtmOf(val: (d: { ids: readonly string[]; names: readonly string[] }, sjs: readonly string[], key: string) => number | null): NonNullable<TtmFlows["krLtm"]> {
+  const A = KR_ANALYSIS_ACCOUNTS;
+  const IS = ["IS", "CIS"], CF = ["CF"];
+  return {
+    gross: val(A.gross, IS, "gross"), pretax: val(A.pretax, IS, "pretax"), tax: val(A.tax, IS, "tax"),
+    ocf: val(A.ocf, CF, "ocf"), capex: val(A.capex, CF, "capex"), intangAcq: val(A.intangAcq, CF, "intangAcq"), intPaid: val(A.intPaid, CF, "intPaid"), divPaid: val(A.divPaid, CF, "divPaid"),
+  };
+}
+
+/** 당기 분기·반기 보고서에 전기 누적 열이 없어 LTM 을 비운 사유(fyLast 가 연간값으로 채우지 않게 표시로도 쓴다) */
+const KR_PRIOR_MISSING = "당기 보고서에 전기 누적 열 없음 — 정정본 전기 누적 확인 불가, LTM 빈칸";
 
 const INTERIM_RANK: Record<string, number> = { "11014": 3, "11012": 2, "11013": 1 };
 
@@ -407,7 +426,7 @@ export interface KrTtmPart {
 export type KrTtmParts = Partial<Record<"netIncome" | "revenue" | "opIncome" | "eps" | "daTtm", KrTtmPart[]>>;
 
 /** 손익 TTM + 그 TTM 의 마지막 분기(재무상태표 기준일 — getTtm 스냅샷용). */
-type KrTtmResult = TtmFlows & { lastQuarter: { year: number; quarter: number }; parts: KrTtmParts };
+type KrTtmResult = TtmFlows & { lastQuarter: { year: number; quarter: number } | null; parts: KrTtmParts; reasons: NonNullable<TtmFlows["reasons"]> };
 
 async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   const y = new Date().getFullYear();
@@ -435,6 +454,34 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   }
   if (!interim) return null;
 
+  // 1-1) 사업보고서 Y 가 이미 나왔고 최신 분기보고서가 그 해(Y) 이하면(3~5월 — 사업보고서 뒤, 다음 해 1분기 보고서 전) LTM = FY Y 그대로(감사 3차 2026-10-05:
+  //      예전엔 annual = interim.year − 1 이라 이 시기 005930 LTM 이 "FY2024 + 2025 3분기 − 2024 3분기"(매출 315.56조, 사업보고서 333.61조)였다).
+  //      lastQuarter 없음 → 재무상태표·감가상각도 사업연도 기준(krLtmBalance 연말, daAndAmortSeries 연간)
+  for (const fsDiv of interim.fsDiv === "CFS" ? (["CFS", "OFS"] as const) : (["OFS", "CFS"] as const)) {
+    const rows = await fetchFnlttYear(corpCode, interim.year, "11011", fsDiv);
+    if (!rows || !rows.length) continue;
+    const fy = interim.year;
+    const span = { start: `${fy}-01-01`, end: `${fy}-12-31` };
+    const val = (key: keyof typeof TTM_ACCOUNTS) => (key === "eps" ? epsValue(rows, "annual") : isValue(rows, TTM_ACCOUNTS[key], "annual", undefined, TTM_IDS[key]));
+    const pt = (v: number | null): KrTtmPart[] => (v == null ? [] : [{ v, ...span }]);
+    const [netIncome, revenue, opIncome, eps] = [val("netIncome"), val("revenue"), val("opIncome"), val("eps")];
+    return {
+      ...(() => {
+        const why: Record<string, string> = {};
+        const k = krLtmOf((d, sjs, key) => { const v = isValue(rows, d.names, "annual", undefined, d.ids, sjs); if (v == null) why[key] = "사업보고서에 그 줄 없음 — LTM 빈칸"; return v; });
+        return { krLtm: k, ...(Object.keys(why).length ? { krLtmReasons: why } : {}) };
+      })(),
+      periodLabel: `FY${fy}`,
+      lastQuarter: null,
+      netIncome,
+      revenue,
+      opIncome,
+      eps,
+      parts: { netIncome: pt(netIncome), revenue: pt(revenue), opIncome: pt(opIncome), eps: pt(eps) },
+      reasons: {},
+    };
+  }
+
   // 2) 직전 사업보고서
   let annualRows: FnlttRow[] | null = null;
   let annualYear = 0;
@@ -453,19 +500,7 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   }
   if (!annualRows) return null;
 
-  // 3) 전년 동기 누적이 보고서에 없으면, 전년 동일 보고서를 따로 조회
-  let priorInterimRows: FnlttRow[] | null = null;
-  const needPriorFetch =
-    isValue(interim.rows, TTM_ACCOUNTS.netIncome, "cumPrior", undefined, TTM_IDS.netIncome) == null;
-  if (needPriorFetch) {
-    for (const fsDiv of fsOrder) {
-      const rows = await fetchFnlttYear(corpCode, interim.year - 1, interim.code, fsDiv);
-      if (rows && rows.length) {
-        priorInterimRows = rows;
-        break;
-      }
-    }
-  }
+  // 3) 전년 동기 누적 = 당기 보고서의 전기 열(정정본)만(오너 결정 2026-10-10). 전년 같은 보고서(정정 전)는 쓰지 않는다 — 없으면 빈칸 + 사유
 
   // 구성 기간(외화 환산용) — 연간·당기 누적·전년 동기 누적
   const qMd = { "11013": "03-31", "11012": "06-30", "11014": "09-30" }[interim.code] ?? "12-31";
@@ -473,6 +508,7 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   const curSpan = { start: `${interim.year}-01-01`, end: `${interim.year}-${qMd}` };
   const priorSpan = { start: `${interim.year - 1}-01-01`, end: `${interim.year - 1}-${qMd}` };
 
+  const reasons: NonNullable<TtmFlows["reasons"]> = {};
   const ttm = (key: keyof typeof TTM_ACCOUNTS): { v: number | null; ttm: boolean; parts: KrTtmPart[] } => {
     const names = TTM_ACCOUNTS[key];
     const ids = TTM_IDS[key];
@@ -480,11 +516,18 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
       key === "eps" ? epsValue(rows, col) : isValue(rows, names, col, undefined, ids);
     const annual = get(annualRows!, "annual");
     const cur = get(interim!.rows, "cumCur");
-    let prior = get(interim!.rows, "cumPrior");
-    if (prior == null && priorInterimRows)
-      prior = get(priorInterimRows, "cumCur");
+    const prior = get(interim!.rows, "cumPrior");
     if (annual == null) return { v: null, ttm: false, parts: [] };
-    if (cur == null || prior == null) return { v: annual, ttm: false, parts: [{ v: annual, ...fySpan }] }; // 분기 데이터 부족 → 연간값
+    // 당기 보고서에 전기 누적 열이 없으면 빈칸 + 사유(전년 같은 보고서 값·연간값으로 대신하지 않는다 — 오너 결정 2026-10-10)
+    if (cur != null && prior == null) {
+      reasons[key] = KR_PRIOR_MISSING;
+      return { v: null, ttm: false, parts: [] };
+    }
+    // 분기 데이터 부족 → 연간값. 라벨("FY + 분기 − 분기")과 다른 기간이므로 사유를 남긴다(감사 1차 ⑨ — 조용한 대체 금지)
+    if (cur == null || prior == null) {
+      reasons[key] = `분기 누적 값 없음(${cur == null ? "당기" : "전년 동기"}) — FY${annualYear} 연간값`;
+      return { v: annual, ttm: false, parts: [{ v: annual, ...fySpan }] };
+    }
     return {
       v: annual + cur - prior,
       ttm: true,
@@ -497,12 +540,13 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
   const op = ttm("opIncome");
   const epsR = ttm("eps");
 
-  // EPS 분기데이터가 없으면 TTM 순이익 / (연간 순이익 ÷ 연간 EPS) 로 환산
+  // 당기 보고서에 EPS 당기 누적 자체가 없을 때만 TTM 순이익 / (연간 순이익 ÷ 연간 EPS) 로 환산. 당기 누적은 있고 전기 누적만 없으면
+  // 빈칸 + 사유 그대로(KR_PRIOR_MISSING) — 근사로 채우지 않는다(감사 11차 ①, 오너 결정 2026-10-10 정정본 전기 누적만)
   // 적자여도 EPS 는 음수 그대로 낸다(오너 지시 2026-09-24 — "적자여도 eps 는 나오는 것
   // 아닌가"). PER 등 배수는 소비하는 쪽이 분모 0 이하면 비운다(미국과 같은 부호 규칙).
   let eps = epsR.ttm && epsR.v != null ? epsR.v : null;
   let epsParts: KrTtmPart[] = eps != null ? epsR.parts : [];
-  if (eps == null && ni.ttm && ni.v != null) {
+  if (eps == null && reasons.eps !== KR_PRIOR_MISSING && ni.ttm && ni.v != null) {
     const annualNi = isValue(annualRows!, TTM_ACCOUNTS.netIncome, "annual", undefined, TTM_IDS.netIncome);
     const annualEps = epsValue(annualRows!, "annual");
     // 주식수 환산은 연간 순이익·EPS 부호가 같으면(적자 해 포함) 성립
@@ -511,12 +555,54 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
       if (shares > 0) {
         eps = ni.v / shares; // 반올림하지 않음 — 표시 포맷(버림)에서 처리
         epsParts = ni.parts.map((p) => ({ ...p, v: p.v / shares }));
+        reasons.eps = `분기 EPS 공시 없음 — TTM 순이익 ÷ (FY${annualYear} 순이익 ÷ EPS) 주식수 환산 근사`;
       }
     }
   }
 
   const q = QUARTER_LABEL[interim.code] ?? "분기";
+  // 부가 흐름(매출총이익·세전이익·법인세·현금흐름) — 같은 식, 셋 중 하나라도 없으면 null
+  // 현금흐름표 전기 누적 = 당기 분기·반기 보고서 XBRL 의 전기 칸(정정본, 오너 결정 2026-10-10). XBRL 로 확인 못 한 칸은 빈칸 + 사유(전년 보고서 값으로
+  // 대신하지 않는다 — 정의가 다를 수 있다). XBRL 당기 누적이 재무제표 API 당기 누적과 같아야 같은 줄로 본다
+  const krLtmReasons: Record<string, string> = {};
+  const rcpt = interim.rows.find((r) => r.rcept_no)?.rcept_no ?? null;
+  let xbrlErr: string | null = null;
+  const xbrlCache = new Map<string, { cur: number | null; prior: number | null }>();
+  const xbrlCum = async (ids: readonly string[]) => {
+    const k = ids.join("|");
+    if (!xbrlCache.has(k)) xbrlCache.set(k, await krInterimXbrlCum(rcpt!, interim!.code, interim!.year, ids, interim!.fsDiv));
+    return xbrlCache.get(k)!;
+  };
+  const cfPrior: Record<string, number | null> = {};
+  for (const [k, d] of Object.entries(KR_ANALYSIS_ACCOUNTS).filter(([k]) => ["ocf", "capex", "intangAcq", "intPaid", "divPaid"].includes(k))) {
+    const c = isValue(interim.rows, d.names, "cumCur", undefined, d.ids, ["CF"]);
+    if (c == null) { cfPrior[k] = null; krLtmReasons[k] = "당기 보고서 현금흐름표에 그 줄 없음 — LTM 빈칸"; continue; }
+    if (!rcpt) { cfPrior[k] = null; krLtmReasons[k] = "분기 보고서 접수번호 없음 — 정정본 전기 누적(XBRL) 확인 불가"; continue; }
+    if (xbrlErr) { cfPrior[k] = null; krLtmReasons[k] = xbrlErr; continue; }
+    try {
+      const x = await xbrlCum(d.ids);
+      if (x.cur == null || x.prior == null) { cfPrior[k] = null; krLtmReasons[k] = `분기 보고서 XBRL 에 ${x.cur == null ? "당기" : "전기"} 누적 칸 없음 — LTM 빈칸`; }
+      else if (x.cur !== c) { cfPrior[k] = null; krLtmReasons[k] = `분기 보고서 XBRL 당기 누적 ${x.cur} ≠ 재무제표 ${c} — 같은 줄 확인 불가, LTM 빈칸`; }
+      else cfPrior[k] = x.prior;
+    } catch (e) {
+      xbrlErr = `분기 보고서 XBRL 조회 실패(${e instanceof Error ? e.message : String(e)}) — 정정본 전기 누적 확인 불가, LTM 빈칸`;
+      cfPrior[k] = null; krLtmReasons[k] = xbrlErr;
+    }
+  }
+  const krLtm = krLtmOf((d, sjs, key) => {
+    const a = isValue(annualRows!, d.names, "annual", undefined, d.ids, sjs);
+    const c = isValue(interim!.rows, d.names, "cumCur", undefined, d.ids, sjs);
+    const cf = sjs.includes("CF");
+    const p = cf ? (cfPrior[key] ?? null) : isValue(interim!.rows, d.names, "cumPrior", undefined, d.ids, sjs);
+    if (!cf && p == null && c != null) krLtmReasons[key] ??= "당기 보고서에 전기 누적 열 없음 — LTM 빈칸";
+    // 빈칸이면 항상 사유(감사 10차 ⑦)
+    if (a == null || c == null || p == null)
+      krLtmReasons[key] ??= a == null ? "최근 사업보고서에 그 줄 없음 — LTM 빈칸" : c == null ? "당기 보고서에 그 줄 없음 — LTM 빈칸" : "전기 누적 없음 — LTM 빈칸";
+    return a != null && c != null && p != null ? a + c - p : null;
+  });
   return {
+    krLtm,
+    ...(Object.keys(krLtmReasons).length ? { krLtmReasons } : {}),
     periodLabel: `FY${annualYear} + ${interim.year} ${q} − ${interim.year - 1} ${q}`,
     lastQuarter: { year: interim.year, quarter: INTERIM_RANK[interim.code] },
     netIncome: ni.v,
@@ -524,6 +610,7 @@ async function getKrTtm(corpCode: string): Promise<KrTtmResult | null> {
     opIncome: op.v,
     eps,
     parts: { netIncome: ni.parts, revenue: rev.parts, opIncome: op.parts, eps: epsParts },
+    reasons,
   };
 }
 
@@ -539,43 +626,36 @@ export interface KrTtmDetail {
   equityEnd: string | null;
 }
 
+/**
+ * 조회 실패는 던지거나(손익 TTM·연간 재무 — 호출부가 "TTM 조회 실패" 경고) degraded 에 남긴다(분기 재무·감가상각 적재본 — 감사 1차 ⑥⑨).
+ * 예전엔 전체를 try 블록으로 감싸 실패를 null(TTM 없음)로 바꿨다.
+ */
 export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | null> {
   const entry = await resolveCorpCode(key(), symbol);
-  try {
+  {
     const code = symbol.replace(/\D/g, "").padStart(6, "0").slice(-6);
-    const [ttmRes, facts, quarterFacts, daDoc, caps] = await Promise.all([
+    const degraded: string[] = [];
+    const [ttmRes, facts, quarterFacts, daR, capsR] = await Promise.all([
       getKrTtm(entry.corpCode),
-      fetchKrFacts(entry.corpCode, "annual").catch(() => null),
+      fetchKrFacts(entry.corpCode, "annual"),
       // LTM 재무상태표(최신 분기말) — 분기 재무제표 화면과 같은 캐시(fetchKrFacts)를 공유
-      fetchKrFacts(entry.corpCode, "quarter").catch(() => null),
-      getKrDaDoc(code).catch(() => null),
-      loadKrCaps(code, []).catch(() => null),
+      fetchKrFacts(entry.corpCode, "quarter").catch((e) => { degraded.push(`분기 재무제표 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; }),
+      getKrDaDocChecked(code),
+      loadKrCapsChecked(code, []),
     ]);
+    const daDoc = daR.doc;
+    if (daR.warning) degraded.push(daR.warning);
+    const reasons: NonNullable<TtmFlows["reasons"]> = { ...(ttmRes?.reasons ?? {}) };
     const lastQuarter = ttmRes?.lastQuarter ?? null;
     const flows: TtmFlows | null = ttmRes
-      ? { periodLabel: ttmRes.periodLabel, netIncome: ttmRes.netIncome, revenue: ttmRes.revenue, opIncome: ttmRes.opIncome, eps: ttmRes.eps }
+      ? { periodLabel: ttmRes.periodLabel, netIncome: ttmRes.netIncome, revenue: ttmRes.revenue, opIncome: ttmRes.opIncome, eps: ttmRes.eps, ...(ttmRes.krLtm ? { krLtm: ttmRes.krLtm } : {}), ...(ttmRes.krLtmReasons ? { krLtmReasons: ttmRes.krLtmReasons } : {}) }
       : null;
     const parts: KrTtmParts = { ...(ttmRes?.parts ?? {}) };
     // **LTM = 최근 4개 분기 열 합(매출·영업이익·순이익, 2026-10-02 — 미국과 같은 원칙, 오너 결정 2026-09-28)**: 분기 손익계산서 화면의
     // 4개 열(같은 계정 선택 krIsFlows)이 모두 있으면 그 합. 누적 공식(연간 + 당기 누적 − 전년 동기 누적)은 회사가 전년 동기를 재작성하면
     // 판본이 섞이고(LG화학 2026 반기보고서가 2025 상반기 재작성 → 1.94% 차이) 3개월·누적 값이 따로 반올림돼 ±1백만원 어긋났다
-    if (flows && quarterFacts && lastQuarter) {
-      const want: string[] = [];
-      for (let i = 3; i >= 0; i--) {
-        const idx = lastQuarter.year * 4 + (lastQuarter.quarter - 1) - i;
-        want.push(`${Math.floor(idx / 4)} Q${(idx % 4) + 1}`);
-      }
-      const qp = want.map((l) => quarterFacts.periods.find((p) => p.label === l));
-      if (qp.every(Boolean)) {
-        const f = krIsFlows(quarterFacts);
-        for (const [k, series] of [["revenue", f.revenue], ["opIncome", f.opIncome], ["netIncome", f.netIncome]] as const) {
-          const qs = qp.map((p) => ({ v: series[p!.label], start: `${p!.year}-${String(p!.quarter! * 3 - 2).padStart(2, "0")}-01`, end: p!.endDate }));
-          if (qs.some((q) => q.v == null)) continue;
-          flows[k] = qs.reduce((a, q) => a + q.v!, 0);
-          parts[k] = qs.map((q) => ({ v: q.v!, start: q.start, end: q.end }));
-        }
-      }
-    }
+    // (2026-10-10 오너 결정으로 삭제) 예전 "LTM = 최근 4개 분기 열 합" 덮어쓰기 — 전년 분기를 정정 전 값으로 더해 감가상각 TTM(정정본)과 기준이 갈렸다.
+    // 이제 LTM = 최근 사업연도 + 당기 누적 − 당기 보고서 전기 누적(정정본) 하나(getKrTtm)
     // 구성 기간을 최근 4개 분기로 다시 쪼갠다(외화 환산 LTM = 분기별 평균 환율 합, 오너 결정 2026-09-25 —
     // 인포맥스·Finviz 방식). 분기 재무제표(fetchKrFacts quarter)의 단일분기 값 4개 합이 원화 TTM 과 정확히 같을
     // 때만 바꾼다 — 계정 선택이 달라 합이 안 맞으면 종전 구성 기간(연간·누적)을 그대로 둔다.
@@ -600,17 +680,23 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
         }
       }
     }
-    if (!facts) return flows ? { ttm: flows, parts, bridgeEnd: null, equityEnd: null } : null;
+    if (!facts) return flows ? { ttm: { ...flows, ...(Object.keys(reasons).length ? { reasons } : {}), ...(degraded.length ? { degraded } : {}) }, parts, bridgeEnd: null, equityEnd: null } : null;
     // TTM 항목이 비면(계정 매칭 실패·분기 보고서 없음) 최근 사업연도 값으로 채운다 —
     // getKrTtm 이 분기 데이터가 부족할 때 연간값을 쓰는 것과 같은 의미. 여기서 채워야
     // 하이라이트·재무분석·개요가 같은 값을 쓴다(예전엔 재무분석만 연간값으로 대체해
     // LTM 열이 화면마다 갈렸다, 2026-09-23 가온전선).
     const fyLast = (m: Map<number, number>, k: keyof KrTtmParts) => {
+      // 당기 보고서에 전기 누적이 없어 비운 항목은 연간값으로 채우지 않는다(오너 결정 2026-10-10)
+      if (k !== "daTtm" && reasons[k as keyof typeof reasons] === KR_PRIOR_MISSING) return null;
       const ys = [...m.keys()].sort((a, b) => a - b);
       const y = ys.at(-1);
       if (y == null) return null;
       const v = m.get(y) ?? null;
-      if (v != null) parts[k] = [{ v, start: `${y}-01-01`, end: facts.annualEndByYear.get(y) ?? `${y}-12-31` }];
+      if (v != null) {
+        parts[k] = [{ v, start: `${y}-01-01`, end: facts.annualEndByYear.get(y) ?? `${y}-12-31` }];
+        // 손익 TTM 이 분기 조합인데 이 항목만 연간값 — 사유를 남긴다(감사 1차 ⑨)
+        if (flows?.periodLabel && k !== "daTtm") reasons[k] ??= `TTM 계정 매칭 실패 — FY${y} 연간값`;
+      }
       return v;
     };
     const base: TtmFlows = flows ?? {
@@ -632,11 +718,12 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
     // EV 스냅샷 — 하이라이트·재무분석 LTM 열이 이 값을 그대로 쓴다(dart-ev.ts 단일 기준).
     // 기준일 = 손익 TTM 의 마지막 분기말 재무상태표(오너 결정 2026-09-24, 미국 MRQ 와 같은
     // 원칙). TTM 이 연간값이면 사업연도말. 분기 BS 를 못 구하면 연말값 + 라벨에 표기.
-    const ev = buildKrEvResolver(facts, code);
-    const bal = krLtmBalance(facts, quarterFacts, lastQuarter, code);
+    const ev = buildKrEvResolver(facts, code, daDoc);
+    const bal = krLtmBalance(facts, quarterFacts, lastQuarter, code, daDoc);
     const b = bal.bridge;
     // LTM D&A — 하이라이트와 같은 함수(사업보고서 주석 실측 → 연간 폴백)
-    const da = daAndAmortSeries(facts, daDoc);
+    // 손익 TTM 과 같은 12개월의 감가상각 TTM 만(없으면 빈칸 — 기간 혼재 금지, 2026-10-02)
+    const da = daAndAmortSeries(facts, daDoc, filled.periodLabel);
     if (da.ltm != null) {
       const lastY = [...facts.annualEndByYear.keys()].sort((a, b) => a - b).at(-1);
       const docTtm = daDoc?.ttmDepreciation != null;
@@ -657,7 +744,15 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
       equityEnd: bal.equityEnd,
       ttm: {
         ...filled,
+        ...(Object.keys(reasons).length ? { reasons } : {}),
+        ...(degraded.length ? { degraded } : {}),
         daTtm: da.ltm,
+        // 개요 PER(연간)의 분모 — 하이라이트 최근 사업연도 열과 같은 EPS(krEpsByYear: 희석 → 기본, 전체 EPS 미공시면 계속 + 중단영업 합).
+        // 예전엔 재무제표 표에서 이름 목록으로 골라 다른 값이 잡혔다(009150 9,395 vs 하이라이트 9,345 — 감사 6차 ①)
+        fyEps: (() => {
+          const y = [...facts.annualEndByYear.keys()].sort((a, b) => a - b).at(-1) ?? null;
+          return { eps: y != null ? (krEpsByYear(facts).get(y) ?? null) : null, year: y, note: null };
+        })(),
         snapshot: {
           label: bal.label,
           equity: bal.parentEquity,
@@ -665,14 +760,13 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
           cash: b?.cash ?? null,
           shares: null,
           evNetDebt: b ? b.debt + b.nci - b.cash : null,
-          evBlocker: ev.blocker(),
-          evPreferredMcap: caps?.current?.preferred ?? 0,
+          // KRX 조회 실패면 우선주 시가총액을 모른다 — 0 으로 두지 않고 EV 를 비운다(사유 = 이 문자열)
+          evBlocker: ev.blocker() ?? (capsR.error ? `${capsR.error} — 우선주 시가총액 모름` : null) ?? b?.leaseUnknown ?? null,
+          evPreferredMcap: capsR.caps?.current?.preferred ?? 0,
           evBridge: b,
         },
       },
     };
-  } catch {
-    return null;
   }
 }
 

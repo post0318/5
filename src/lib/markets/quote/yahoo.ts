@@ -238,9 +238,13 @@ export async function fetchYahooEstimates(
   let lastErr: unknown;
   for (const s of candidates) {
     try {
-      qs = await yf().quoteSummary(s, {
-        modules: ["earningsTrend", "earningsHistory", "financialData"],
-      });
+      // 스키마 검증은 끈다 — 추정치가 없는 분기의 실적 이력에 epsEstimate 등이 빠지면 라이브러리가 응답 전체를 버렸다(060370·119850 —
+      // "추정치 조회 실패", 2026-10-02). 아래에서 값마다 숫자인지 확인한다
+      qs = (await yf().quoteSummary(
+        s,
+        { modules: ["earningsTrend", "earningsHistory", "financialData"] },
+        { validateResult: false },
+      )) as QuoteSummaryResult;
       break;
     } catch (err) {
       lastErr = err;

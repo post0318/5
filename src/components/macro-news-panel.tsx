@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { NewsItem } from "@/lib/markets/news";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { NewsSummaryDialog } from "@/components/news-summary-dialog";
 
 interface NewsResponse {
   items: NewsItem[];
@@ -15,15 +16,9 @@ interface NewsResponse {
 const PAGE_SIZE = 5;
 const MAX_PAGES = 6; // 종목뉴스 탭과 동일 — 최대 30건까지 노출
 
-/** 요약 없는 항목(해외뉴스)의 자리 채움 — stock-news.tsx 와 동일한 이유로
- * line-clamp-2 가 계산하는 실제 두 줄 높이에 정확히 맞춘다. */
-const blankTwoLines = (
-  <>
-    {" "}
-    <br />
-    {" "}
-  </>
-);
+/* 국내·해외 가로줄 맞춤(오너 지시 2026-10-11): 한 행의 네 줄(제목·원제·발췌 2줄·매체)
+ * 높이를 모두 고정한다. 예전엔 빈 줄을 공백 문자(" ", " <br/> ")로 채웠는데, 공백만
+ * 있는 줄은 높이가 접혀(해외뉴스는 원제·발췌가 없는 기사가 많다) 좌우 행이 어긋났다. */
 
 function fmtAgo(iso: string): string {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -69,10 +64,13 @@ function NewsColumn({
   title,
   items,
   emptyText,
+  onOpen,
 }: {
   title: string;
   items: NewsItem[];
   emptyText: string;
+  /** 있으면 기사를 누를 때 원문 대신 요약 팝업(해외 시황, 2026-10-14) */
+  onOpen?: (it: NewsItem) => void;
 }) {
   const [page, setPage] = useState(1);
   const pageCount = Math.min(MAX_PAGES, Math.ceil(items.length / PAGE_SIZE)) || 1;
@@ -98,19 +96,31 @@ function NewsColumn({
                   href={it.naverUrl ?? it.url}
                   target="_blank"
                   rel="noreferrer"
+                  onClick={
+                    onOpen
+                      ? (e) => {
+                          // 새 탭 열기(Ctrl·가운데 클릭)는 원문 그대로, 일반 클릭은 요약 팝업
+                          if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+                          e.preventDefault();
+                          onOpen(it);
+                        }
+                      : undefined
+                  }
                   className="group flex min-w-0 flex-1 items-start gap-2"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="group-hover:text-primary line-clamp-1 text-sm leading-snug font-medium">
+                    <div className="group-hover:text-primary h-5 truncate text-sm leading-5 font-medium">
                       {it.titleKo}
                     </div>
-                    <div className="text-muted-foreground mt-0.5 truncate text-xs">
-                      {it.titleKo !== it.title ? it.title : " "}
+                    {/* 영문 원제: 해외 시황은 번역된 제목만(4번과 같게, 오너 지시 2026-10-14 — 번역이 안 되면 제목 자체가 영문).
+                        줄은 비워 두어 국내·해외 행 높이를 맞춘다 */}
+                    <div className="text-muted-foreground mt-0.5 h-4 truncate text-xs leading-4">
+                      {!onOpen && it.titleKo !== it.title ? it.title : null}
                     </div>
-                    <p className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-snug">
-                      {it.excerpt ? it.excerpt : blankTwoLines}
+                    <p className="text-muted-foreground mt-1 line-clamp-2 h-8 text-xs leading-4">
+                      {it.excerpt || null}
                     </p>
-                    <div className="text-muted-foreground mt-1 flex items-center gap-x-2 text-xs">
+                    <div className="text-muted-foreground mt-1 flex h-4 items-center gap-x-2 text-xs leading-4">
                       <span>{it.publisher}</span>
                       <span>·</span>
                       <span className="tnum">{fmtAgo(it.publishedAt)}</span>
@@ -128,6 +138,7 @@ function NewsColumn({
 }
 
 function MacroNewsSide({ title, market }: { title: string; market: "kr" | "us" }) {
+  const [open, setOpen] = useState<NewsItem | null>(null);
   const q = useQuery({
     queryKey: ["news-market", market],
     queryFn: () => apiFetch<NewsResponse>(`/api/news/market?market=${market}`),
@@ -143,11 +154,15 @@ function MacroNewsSide({ title, market }: { title: string; market: "kr" | "us" }
     );
   }
   return (
-    <NewsColumn
-      title={title}
-      items={q.data?.items ?? []}
-      emptyText="관련 뉴스가 없습니다."
-    />
+    <>
+      <NewsColumn
+        title={title}
+        items={q.data?.items ?? []}
+        emptyText="관련 뉴스가 없습니다."
+        onOpen={market === "us" ? setOpen : undefined}
+      />
+      {market === "us" && <NewsSummaryDialog item={open} onClose={() => setOpen(null)} />}
+    </>
   );
 }
 
@@ -164,7 +179,8 @@ export function MacroNewsPanel() {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-muted-foreground/80 text-[11px]">
-          공신력 있는 언론사·최근 1주일 기사만 표시합니다(헤드라인 무료 자동 번역).
+          공신력 있는 언론사·최근 1주일 기사만 표시합니다. 해외 시황은 AI(Gemini) 한글 제목·요약 — 기사를 누르면
+          요약이 열립니다(아직 요약 전인 기사는 무료 자동 번역 제목).
         </p>
         <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2">
           <MacroNewsSide title="국내 시황" market="kr" />

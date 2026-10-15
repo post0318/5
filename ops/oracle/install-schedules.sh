@@ -93,6 +93,8 @@ EOF
 unit fin-analyst-forecasts "종목분석: StockAnalysis 애널리스트 투자의견" "/opt/macro/ops/run-script.sh collect-analyst-forecasts.mjs" "*-*-* 10:20:00\n"
 # ③ 종목뉴스 미리 수집 — 10분마다 깨우고 종목별 신선도(한국 장중 10분·미국 장중 30분·장외 1시간)가 지난 것만 받는다(판정은 규칙, 비용 0)
 unit news-stock-news "뉴스: 유니버스 종목뉴스 미리 수집" "/opt/macro/ops/call-cron.sh /api/cron/stock-news 290" "*-*-* *:00/10:00\n"
+# ③ 해외 시황 뉴스 한글 제목·요약 — 30분마다 저장본 없는 기사만 무료 Gemini 키(NEWS_GEMINI_API_KEY, 결제 미연결)로 요약(2026-10-14, 비용 0)
+unit news-macro-summary "뉴스: 해외 시황 한글 제목·요약(무료 Gemini)" "/opt/macro/ops/call-cron.sh /api/cron/news-summary 290" "*-*-* *:07,37:00\n"
 # ③ 인플루언서 네이버 블로그 새 글 — 5분마다 RSS 확인, 새 글만 DB(naver_blog_posts)에 저장(오너 2026-10-05, 오라클에서 직접 DB 쓰기 — 운영 앱 CPU 안 씀)
 unit news-naver-blog "뉴스: 인플루언서 네이버 블로그 새 글 수집" "/opt/macro/ops/run-ts.sh naver-blog-poll.mts" "*-*-* *:00/5:00
 "
@@ -111,8 +113,38 @@ install -m 755 "$(dirname "$(readlink -f "$0")")/run-precompute.sh" /opt/macro/o
 unit fin-precompute "종목분석: 새 유니버스 종목 미리 계산" "/opt/macro/ops/run-precompute.sh" "*-*-* *:02/5:00
 "
 
+# ④ 종목분석 — 한국 감가상각 적재(운영 kr_da, 증분 — 매일 05:50, 오너 결정 2026-10-05). 운영 kr_da 를 새 적재 규칙으로 쓰므로 **master 에 새 적재 코드가
+#    병합·배포된 뒤에만** 설치한다 — 작업 폴더(/opt/macro/jobs)의 적재 스크립트에 규칙 판본(KR_DA_RULES_VERSION)이 없으면(옛 코드) 건너뛴다.
+#    전체 처리(규칙 판본이 바뀐 배포 직후·--full)는 30종목 1시간 넘게 걸려 제한 시간을 4시간으로
+if grep -q 'KR_DA_RULES_VERSION = "' /opt/macro/jobs/scripts/populate-kr-da.mjs 2>/dev/null; then
+  install -m 755 /opt/macro/jobs/ops/oracle/run-kr-da.sh /opt/macro/ops/run-kr-da.sh
+  printf '[Unit]
+Description=종목분석: 한국 감가상각 적재(운영 kr_da, 증분)
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/opt/macro/ops/run-kr-da.sh
+Nice=10
+TimeoutStartSec=4h
+' > "$U/fin-kr-da.service"
+  printf '[Unit]
+Description=종목분석: 한국 감가상각 적재 예약
+[Timer]
+OnCalendar=*-*-* 05:50:00 Asia/Seoul
+Persistent=true
+[Install]
+WantedBy=timers.target
+' > "$U/fin-kr-da.timer"
+  echo fin-kr-da
+  KRDA=1
+else
+  echo "fin-kr-da 건너뜀 — 작업 폴더 적재 코드가 옛 판(규칙 판본 없음): master 병합·배포 뒤 다시 실행"
+  KRDA=0
+fi
+
 systemctl daemon-reload
-for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/macro-kr-fg.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-naver-blog.timer "$U"/fin-jp-edinet-index.timer "$U"/fin-precompute.timer; do
+for t in "$U"/research-*.timer "$U"/macro-fedwatch-snapshot.timer "$U"/macro-br-ntnf.timer "$U"/macro-kr-fg.timer "$U"/fin-analyst-forecasts.timer "$U"/weekly-report.timer "$U"/news-stock-news.timer "$U"/news-macro-summary.timer "$U"/news-naver-blog.timer "$U"/fin-jp-edinet-index.timer "$U"/fin-precompute.timer; do
   systemctl enable --now "$(basename "$t")" >/dev/null
 done
-systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|br-ntnf|macro-kr-fg|analyst-forecasts|weekly-report|news-stock-news|news-naver-blog|jp-edinet-index|fin-precompute" | sed 's/^/타이머 수: /'
+if [ "$KRDA" = 1 ]; then systemctl enable --now fin-kr-da.timer >/dev/null; fi
+systemctl list-timers --no-pager | grep -cE "research-|fedwatch-snapshot|br-ntnf|macro-kr-fg|analyst-forecasts|weekly-report|news-stock-news|news-macro-summary|news-naver-blog|jp-edinet-index|fin-precompute|fin-kr-da" | sed 's/^/타이머 수: /'

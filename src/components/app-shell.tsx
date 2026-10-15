@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Suspense } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   BarChart3,
   Building2,
@@ -84,7 +85,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             글자는 핵심 내비라 계속 보이고, 그만큼 패딩·간격을 모바일에서만
             좁혀 확보한다 — 실측(390px 기준 합 377px)으로 아이폰SE(375px)
             까지 한 줄에 맞춘다. `sm:` 이상은 기존 값 그대로. */}
-        <div className="mx-auto flex min-h-14 max-w-[1400px] flex-wrap items-center gap-x-1 gap-y-1 px-2 py-2 sm:gap-x-6 sm:px-4">
+        {/* app-topbar: `?embed=top` 이면 globals.css 가 숨긴다(layout.tsx 의 head 스크립트 참고) */}
+        <div className="app-topbar mx-auto flex min-h-14 max-w-[1400px] flex-wrap items-center gap-x-1 gap-y-1 px-2 py-2 sm:gap-x-6 sm:px-4">
           {/* 로고 = 첫 화면(글로벌 핵심지표). 예전 "거시경제" 버튼을 대신한다(오너 지시 2026-10-04 — 매크로 인사이트를 누르면 거시경제와 같게,
               모바일에서도 글자 표시 — 모바일 배치는 오너가 보고 다시 검토). */}
           <Link
@@ -187,24 +189,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {onMacro && (
           <div className="mx-auto max-w-[1400px] overflow-x-auto px-4">
             <div className="flex w-max min-w-full gap-4">
-              {MACRO_SUBNAV.map((s) => {
-                const active = (parts[1] ?? "") === s.seg;
-                return (
-                  <Link
-                    key={s.seg}
-                    href={s.seg ? `/macro/${s.seg}` : "/macro"}
-                    className={cn(
-                      "flex items-center gap-1.5 border-b-2 py-2.5 text-sm transition-colors",
-                      active
-                        ? "border-primary text-foreground"
-                        : "text-muted-foreground hover:text-foreground border-transparent",
-                    )}
-                  >
-                    <s.icon className="size-3.5" />
-                    {s.label}
-                  </Link>
-                );
-              })}
+              {/* 정적 생성 화면이라 쿼리는 Suspense 안에서 읽는다 — 읽기 전에는 쿼리 없는 링크 */}
+              <Suspense fallback={<MacroSubnavLinks active={parts[1] ?? ""} embedTop={false} />}>
+                <MacroSubnavWithQuery active={parts[1] ?? ""} />
+              </Suspense>
             </div>
           </div>
         )}
@@ -212,5 +200,33 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6">{children}</main>
     </div>
+  );
+}
+
+function MacroSubnavWithQuery({ active }: { active: string }) {
+  const embedTop = useSearchParams().get("embed") === "top";
+  return <MacroSubnavLinks active={active} embedTop={embedTop} />;
+}
+
+/** 거시경제 서브 내비 — `?embed=top` 으로 들어왔으면 탭을 옮겨도 계속 붙인다(맨 위 줄이 다시 나타나지 않게) */
+function MacroSubnavLinks({ active, embedTop }: { active: string; embedTop: boolean }) {
+  return (
+    <>
+      {MACRO_SUBNAV.map((s) => (
+        <Link
+          key={s.seg}
+          href={(s.seg ? `/macro/${s.seg}` : "/macro") + (embedTop ? "?embed=top" : "")}
+          className={cn(
+            "flex items-center gap-1.5 border-b-2 py-2.5 text-sm transition-colors",
+            active === s.seg
+              ? "border-primary text-foreground"
+              : "text-muted-foreground hover:text-foreground border-transparent",
+          )}
+        >
+          <s.icon className="size-3.5" />
+          {s.label}
+        </Link>
+      ))}
+    </>
   );
 }

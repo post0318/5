@@ -143,15 +143,18 @@ export async function getStockOverview(
   let multiples: TrailingMultiples | null = null;
   // 미국은 TTM 스냅샷(getTtm)으로만 계산한다 — 재무를 건너뛴 호출(개요 화면 첫 응답)은 TTM 이 없으므로 계산하지 않는다
   // (화면이 TTM 도착 후 같은 함수로 계산 — stock-analysis.tsx). Yahoo 주식수·시가총액으로 미리 채우지 않는다(그림자 채우기 금지)
+  for (const w of quote?.warnings ?? []) warnings.push(`시세: ${w}`);
   // 일본도 같다(jp-ev.ts TTM 스냅샷 — 2026-10-08)
-  const snapOnly = market === "us" || market === "jp";
+  // 한국도 같다(getKrTtm 스냅샷만 — 감사 7차 ②, 2026-10-09)
+  const snapOnly = market === "us" || market === "jp" || market === "kr";
   if (quote && !(snapOnly && !wantAnnual)) {
     // 듀얼클래스(V 등)는 EDGAR·Yahoo 시세에 undimensioned 주식수·시총이 없다 →
     // Yahoo 컨센서스(quoteSummary)의 값으로 폴백 — 미국 외 시장만(미국은 edgar-shares 공통 주식수만)
     const cShares = (consensus as { sharesOutstanding?: number | null } | null)?.sharesOutstanding ?? null;
     const cMktCap = (consensus as { marketCap?: number | null } | null)?.marketCap ?? null;
     const quoteForMultiples =
-      market !== "us" &&
+      // 한국도 Yahoo 컨센서스 주식수·시가총액으로 채우지 않는다(감사 8차 ② — 시세의 KRX 상장주식수만)
+      market !== "us" && market !== "kr" &&
       ((quote.sharesOutstanding == null && cShares != null) ||
         (quote.marketCap == null && cMktCap != null))
         ? {

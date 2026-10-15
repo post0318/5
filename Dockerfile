@@ -27,4 +27,6 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 EXPOSE 8080
-CMD ["node", "server.js"]
+# 응답 헤더 한도 16KB→64KB: Yahoo 기사 등은 헤더가 16KB를 넘어 fetch 가 UND_ERR_HEADERS_OVERFLOW 로 실패한다
+# (해외 시황 요약 원문 수집, 2026-10-14 2호기 실측)
+CMD ["node", "--max-http-header-size=65536", "server.js"]
