@@ -4,6 +4,9 @@
  */
 import { alotItems, capexItems, chainItems, epsItems, stockItems } from "./items.mjs";
 import { corpMap, fnlttFacts, markVintage, reportIndex, reportPeriods } from "./read.mjs";
+import { interestItems } from "./interest.mjs";
+import { krXbrlFacts } from "./xbrlfacts.mjs";
+import { BLANK, item } from "../common/rawfact.mjs";
 
 let corpCache = null;
 
@@ -11,7 +14,7 @@ let corpCache = null;
  * @param {ReturnType<import("./dart.mjs").makeDart>} dart
  * @param {{sym:string, years?:number, quarters?:number, now?:()=>Date}} o
  */
-export async function runKr(dart, { sym, years = 7, quarters = 5, now = () => new Date() }) {
+export async function runKr(dart, { sym, years = 7, quarters = 5, withInterest = true, now = () => new Date() }) {
   const res = { market: "kr", sym, filings: [], rawFacts: [], items: [], failures: [], fsUsed: {} };
   const fail = (stage, e, extra = {}) => {
     if (e?.code === "quota_stop") throw e;
@@ -69,6 +72,29 @@ export async function runKr(dart, { sym, years = 7, quarters = 5, now = () => ne
       fail("alot", e, { year: r.year });
     }
   }
+  // R-KR6 이자비용 — 보고서별(당기·전기). XBRL 주석은 FY2023 보고서부터, 원문은 모든 사업보고서(IE 표 확인·옛 연도 판독)
+  if (withInterest) {
+    for (const r of annual) {
+      let docBuf = null, xbrlBuf = null, docErr = null, xbrlErr = null;
+      try { docBuf = (await dart.document(r.latest)).buf; } catch (e) { if (e?.code === "quota_stop") throw e; docErr = String(e.message).slice(0, 160); }
+      // XBRL 은 2021 사업보고서부터 받아 사실 전부를 RawFact 로(주석 태그는 FY2023 보고서부터 — 이자 Item 은 그 해부터 XBRL 을 쓴다)
+      if (r.year >= 2021) {
+        try { xbrlBuf = (await dart.xbrl(r.latest, "11011", c.corp)).buf; } catch (e) { if (e?.code === "quota_stop") throw e; xbrlErr = String(e.message).slice(0, 160); }
+        if (xbrlBuf) {
+          try {
+            const xf = krXbrlFacts(xbrlBuf, { sym, corp: c.corp, rcept: r.latest });
+            res.rawFacts.push(...xf.facts);
+            res.items.push(...leaseNoteItems(xf.facts, r.latest));
+          } catch (e) { fail("xbrl-facts", e, { year: r.year }); }
+        }
+      }
+      try {
+        res.items.push(...interestItems({ rcept: r.latest, year: r.year, docBuf, xbrlBuf: r.year >= 2023 ? xbrlBuf : null, docErr, xbrlErr }));
+      } catch (e) {
+        fail("interest", e, { year: r.year });
+      }
+    }
+  }
   for (const r of [...annual.slice(-3), ...interim.slice(-1)]) {
     try {
       const s = await dart.stockTotqy(c.corp, r.year, r.code, r.latest);
@@ -79,4 +105,26 @@ export async function runKr(dart, { sym, years = 7, quarters = 5, now = () => ne
   }
   res.fetchLog = { ...dart.log };
   return res;
+}
+
+/**
+ * 리스부채 주석(B16 — 본표에 리스 줄이 없을 때 주석 장부금액) 후보 — 연결·차원 없는 ifrs-full:LeaseLiabilities 시점값. 값이 갈리면 ambiguous(후보 목록).
+ * 단위 오류(079550 2024 보고서 천원 숫자를 원 단위로 태깅) 판정은 이웃 보고서 대조가 필요해 ④(값·decimals 를 그대로 남긴다).
+ */
+function leaseNoteItems(facts, rcept) {
+  const c = facts.filter((f) => f.concept.id === "ifrs-full:LeaseLiabilities" && f.scope.consolidation !== "separate" && !f.scope.dims.length && f.period.kind === "instant" && f.value.num != null && !f.value.less_precise_duplicate);
+  const by = new Map();
+  for (const f of c) { if (!by.has(f.period.end)) by.set(f.period.end, []); by.get(f.period.end).push(f); }
+  const out = [];
+  for (const [end, arr] of by) {
+    const vals = [...new Set(arr.map((f) => f.value.num))];
+    const p = arr[0].period;
+    out.push(item({
+      key: "lease_liabilities_note", period: p, scope: arr[0].scope, value: vals.length === 1 ? vals[0] : null,
+      ...(vals.length === 1 ? {} : { blank_reason: BLANK.ambiguous, blank_detail: { candidates: arr.map((f) => ({ ctx: f.locator.contextRef, v: f.value.num, decimals: f.value.decimals })) } }),
+      facts: arr.map((f) => `dart-xbrl|${rcept}|${f.locator.contextRef}`), rule: { id: "R-KR-LEASE", decimals: [...new Set(arr.map((f) => f.value.decimals))], end },
+      vintage_basis: { filing: rcept, form: "11011" },
+    }));
+  }
+  return out;
 }

@@ -37,7 +37,7 @@ test("앱 데이터 파일·앱 캐시 폴더 경로를 쓰지 않는다(들여�
 
 test("원천 받기는 모두 신원 확인을 넘긴다(immutable/mutable 호출마다 identity)", () => {
   for (const { p, s } of SRC) {
-    if (!/^(us|kr|jp)\//.test(p) || !/(sec|dart|krx|edinet)\.mjs$/.test(p)) continue;
+    if (!/^((us|kr|jp)\/(sec|dart|krx|edinet)|common\/market-global)\.mjs$/.test(p)) continue;
     const calls = [...s.matchAll(/\b(immutable|mutable)\(\{/g)];
     for (const c of calls) {
       // 호출 블록(다음 '});' 까지)에 identity 가 있어야 한다 — 단 KRX 휴장일·일별은 저장 전 형식 검사 + 날짜 판본(내용에 신원 칸 없음)

@@ -2,7 +2,7 @@
  * 일본 어댑터 실행 — 코드 목록 → 서류 찾기(보관된 날짜 목록) → 서류 zip → RawFact·Item.
  * 날짜 목록이 하루라도 없으면(받기 실패·미보관) 그 실행의 모든 종목에 사유를 단다(서류 없음으로 판정하지 않음 — R-JP §6.3).
  */
-import { capexItems, cashCfEndItems, chainItems, revenueFaceItems, shareItems } from "./items.mjs";
+import { capexItems, cashCfEndItems, chainItems, debtItems, financialFormatOf, interestItems, revenueFaceItems, shareItems } from "./items.mjs";
 import { docFacts, edinetCodes, findFilings } from "./read.mjs";
 
 let codes = null;
@@ -41,7 +41,11 @@ export async function runJp(ed, { sym, maxAnnual = 6, maxInterim = 2 }) {
       const z = await ed.docZip(d.id, c.edinetCode);
       const r = docFacts(z.buf, { sym, filing: d });
       res.rawFacts.push(...r.facts);
-      res.items.push(...chainItems(r.facts), ...cashCfEndItems(r.facts), ...capexItems(r.facts), ...revenueFaceItems(r.facts), ...shareItems(r.facts));
+      const financialFormat = financialFormatOf(r.facts);
+      const usGaap = /US\s*GAAP/i.test(r.dei?.standard ?? "");
+      res.items.push(...chainItems(r.facts), ...cashCfEndItems(r.facts), ...capexItems(r.facts), ...revenueFaceItems(r.facts), ...shareItems(r.facts),
+        ...debtItems(r.facts), ...interestItems(r.facts, { financialFormat, usGaap }));
+      if (financialFormat) res.financialFormat = true;
       res.docs = [...(res.docs ?? []), { id: d.id, form: d.form, dei: r.dei, roles: r.roles.length }];
     } catch (e) {
       fail("doc", e, { docID: d.id, form: d.form });

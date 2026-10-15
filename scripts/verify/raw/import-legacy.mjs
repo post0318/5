@@ -142,6 +142,17 @@ function importDart() {
       }
     }
   }
+  // 측정 작업이 받아 둔 원문(~/5/reports/q12-q14/raw/dart-doc/<접수번호>.zip) — DART document.xml 원본 그대로
+  const meas = join(HOME, "5", "reports", "q12-q14", "raw", "dart-doc");
+  if (existsSync(meas)) {
+    for (const n of readdirSync(meas).filter((x) => /^\d{14}\.zip$/.test(x))) {
+      const rc = n.slice(0, 14);
+      doImport(g, {
+        market: "kr", source: "dart", key: `doc_${rc}`, version: rc, ext: "zip", validate: checkZip,
+        identity: (b) => { const names = unzipEntries(b).map((e) => e.name); return { ok: names.length > 0 && names.every((x) => x.startsWith(rc)), got: names.slice(0, 3) }; },
+      }, join(meas, n));
+    }
+  }
   for (const kind of ["xbrl", "doc"]) {
     const d = join(base, kind);
     if (!existsSync(d)) continue;

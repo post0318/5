@@ -90,6 +90,19 @@ function roleKind(uri) {
   if (/Income|ProfitOrLoss|Operations/.test(n)) return { stmt: "is", cons };
   return null;
 }
+function bsSection(chain) {
+  for (const id of chain) {
+    const n = idToQName(id).split(":").pop();
+    if (/^CurrentLiabilities(IFRS)?(Abstract)?$/.test(n)) return "current_liabilities";
+    if (/^(NoncurrentLiabilities|NonCurrentLiabilitiesIFRS|NoncurrentLiabilitiesIFRS)(Abstract)?$/.test(n)) return "noncurrent_liabilities";
+    if (/^CurrentAssets(IFRS)?(Abstract)?$/.test(n)) return "current_assets";
+    if (/^(NoncurrentAssets|NonCurrentAssetsIFRS|NoncurrentAssetsIFRS)(Abstract)?$/.test(n)) return "noncurrent_assets";
+    if (/^Liabilities(IFRS)?(Abstract)?$/.test(n)) return "liabilities";
+    if (/^(NetAssets|EquityIFRS|Equity)(Abstract)?$/.test(n)) return "equity";
+    if (/^Assets(IFRS)?(Abstract)?$/.test(n)) return "assets";
+  }
+  return null;
+}
 function cfSection(chain) {
   for (const id of chain) {
     const n = idToQName(id).split(":").pop();
@@ -144,7 +157,8 @@ export function docFacts(buf, { sym, filing }) {
       face.get(q).push({
         stmt: k.stmt, cons: k.cons, role: r.role.split("/").pop(), order: t.order, depth: t.depth,
         parent: cp?.parent ?? t.parent, calWeight: cp?.weight ?? null, preferredLabel: t.preferredLabel,
-        section: k.stmt === "cf" ? cfSection([...chain, ...[...t.path].reverse()]) : null,
+        section: k.stmt === "cf" ? cfSection([...chain, ...[...t.path].reverse()]) : k.stmt === "bs" ? bsSection([...chain, ...[...t.path].reverse()]) : null,
+        ancestors: [...chain, ...[...t.path].reverse()].map((id) => idToQName(id).split(":").pop()),
         label: (labels.get(t.id) ?? []).find((l) => l.lang === "ja")?.text ?? null,
         parentLabel: t.parent ? (labels.get(t.parent) ?? []).find((l) => l.lang === "ja")?.text ?? null : null,
       });
@@ -166,7 +180,7 @@ export function docFacts(buf, { sym, filing }) {
       entity: { sym, edinetCode: dei.edinetCode },
       filing: { id: filing.id, form: filing.form, filed_at: filing.filed_at, period_end: dei.periodEnd, amends: filing.parent, doc_type: dei.docType },
       concept: { id: f.concept, label: (labels.get(f.concept.replace(":", "_")) ?? []).find((l) => l.lang === "ja")?.text ?? null, standard: /^(jppfs_cor|jpigp_cor|jpcrp_cor|jpdei_cor)$/.test(f.concept.split(":")[0]) },
-      placement: pl.length ? { face: true, stmts: pl.map((p) => ({ stmt: p.stmt, role: p.role, section: p.section, parent: p.parent, calWeight: p.calWeight, order: p.order, depth: p.depth, preferredLabel: p.preferredLabel, label: p.label, parentLabel: p.parentLabel })) } : { face: false },
+      placement: pl.length ? { face: true, stmts: pl.map((p) => ({ stmt: p.stmt, role: p.role, section: p.section, ancestors: p.ancestors, parent: p.parent, calWeight: p.calWeight, order: p.order, depth: p.depth, preferredLabel: p.preferredLabel, label: p.label, parentLabel: p.parentLabel })) } : { face: false },
       period: { kind: isDur ? "duration" : "instant", start: c.start, end, months: isDur ? monthsBetween(c.start, end) : null, fy_key: fyKey("jp", end), fp: dei.periodType, column: f.contextRef },
       scope: { consolidation, attribution: /OwnersOfParent/.test(f.concept) ? "parent" : /NonControlling/.test(f.concept) ? "nci" : "none", ops: /Discontinued/.test(f.concept) ? "discontinued" : /Continuing/.test(f.concept) ? "continuing" : "none", dims },
       value: { raw: f.raw, num: f.nil ? null : normNum(f.raw), unit: f.unit, decimals: f.decimals, sign: null, nil: f.nil },

@@ -177,6 +177,98 @@ export function shareItems(facts) {
   return out;
 }
 
+/**
+ * R-JP6 차입금 본표 줄 — 재무상태표 부채 아래 요소 이름이 차입금 꼴인 줄 중 최상위(차입금 꼴 조상이 없는 줄). 리스 줄은 따로 표시.
+ * 「…AndOtherFinancialLiabilities」 한 줄(三菱重工 — 차입금 + 기타 금융부채)은 결정 D4 로 빈칸(definition_blank).
+ * 본표에 리스 줄이 없는 IFRS 회사의 리스부채(주석 판정 — 재무활동 부채 변동표 산술)는 다음 판(지금은 lease_on_face=false 표시만).
+ */
+const DEBT_ID = /(Borrowing|LoansPayable|Bond|Debt|CommercialPaper|LeaseLiabilit|LeaseObligation|InterestBearingLiabilit|FinancingLiabilit)/;
+const NOT_DEBT_ID = /(Receivable|Asset|InterestPayable|InterestExpense|Derivative|Deposit|Provision|Accrued|Allowance|Abstract|Repurchase|Securities|Tax|Heading|Table|LineItems)/;
+const LEASE_ID = /(LeaseLiabilit|LeaseObligation)/;
+export function debtItems(facts) {
+  const bs = facts.filter((f) => ok(f) && !f.scope.dims.length && f.period.kind === "instant" && f.placement.face
+    && f.placement.stmts.some((s) => s.stmt === "bs" && /liabilities/.test(s.section ?? "")));
+  const by = new Map();
+  for (const f of bs) {
+    const n = local(f.concept.id);
+    if (!DEBT_ID.test(n) || NOT_DEBT_ID.test(n)) continue;
+    const st = f.placement.stmts.find((s) => s.stmt === "bs");
+    if ((st.ancestors ?? []).some((a) => DEBT_ID.test(a) && !NOT_DEBT_ID.test(a) && !/Liabilities(IFRS)?$/.test(a))) continue; // 차입금 꼴 조상 아래면 하위 줄
+    const k = `${f.filing.id}|${f.scope.consolidation}|${f.period.end}`;
+    if (!by.has(k)) by.set(k, new Map());
+    by.get(k).set(f.concept.id, f);
+  }
+  const out = [];
+  for (const m of by.values()) {
+    const ls = [...m.values()];
+    const f = ls[0];
+    const combined = ls.find((x) => /AndOtherFinancialLiabilities/.test(local(x.concept.id)));
+    if (combined) {
+      out.push(item({ key: "debt_face_lines", period: f.period, scope: f.scope, value: null, blank_reason: BLANK.definition_blank, blank_detail: { why: "차입금 + 기타 금융부채 한 줄(D4)", concept: combined.concept.id }, rule: { id: "R-JP6" }, vintage_basis: vb(f) }));
+      continue;
+    }
+    if (ls.some((x) => x.value.inconsistent_duplicate)) {
+      out.push(item({ key: "debt_face_lines", period: f.period, scope: f.scope, value: null, blank_reason: BLANK.ambiguous, rule: { id: "R-JP6" }, vintage_basis: vb(f) }));
+      continue;
+    }
+    const sum = ls.reduce((t, x) => t + BigInt(x.value.num), 0n);
+    out.push(item({
+      key: "debt_face_lines", period: f.period, scope: f.scope, value: String(sum), facts: ls.map(factId),
+      rule: { id: "R-JP6", lines: ls.map((x) => ({ concept: x.concept.id, label: x.placement.stmts.find((s) => s.stmt === "bs")?.label ?? x.concept.label, v: x.value.num })) },
+      vintage_basis: vb(f), flags: { lease_on_face: ls.some((x) => LEASE_ID.test(local(x.concept.id))) },
+    }));
+  }
+  return out;
+}
+
+/**
+ * R-JP8 이자비용(손익 支払利息) — 본표 영업외비용·금융비용 줄의 支払利息(J-GAAP InterestExpensesNOE, IFRS InterestExpensesIFRS)
+ * + 따로 적은 이자 줄(社債利息·CP利息 등) 합. 금융 서식·US GAAP 은 out_of_scope. 본표에 이자 줄이 없는 IFRS 회사(金融費用 주석 구성요소)는
+ * 다음 판 — 지금은 빈칸 parse_failed(not_implemented, 검증불가로 셈).
+ */
+const INT_NAME = /^(InterestExpenses?(NOE|IFRS|FinancialExpensesIFRS)?|InterestOn(Bonds|CommercialPapers?)(NOE)?|InterestExpensesOnBonds|CommercialPaperInterest)/;
+const INT_LABEL = /支払利息|社債利息|コマーシャル・?ペーパー利息|ＣＰ利息|CP利息|未払金利息/;
+export function interestItems(facts, { financialFormat, usGaap }) {
+  const out = [];
+  const is = facts.filter((f) => ok(f) && !f.scope.dims.length && f.period.kind === "duration" && f.placement.face && f.placement.stmts.some((s) => s.stmt === "is"));
+  const by = new Map();
+  for (const f of is) {
+    const n = local(f.concept.id);
+    const lab = f.placement.stmts.find((s) => s.stmt === "is")?.label ?? "";
+    if (/Income|受取/.test(n + lab)) continue;
+    if (!(INT_NAME.test(n) || INT_LABEL.test(lab))) continue;
+    const k = `${f.filing.id}|${f.scope.consolidation}|${pk(f)}`;
+    if (!by.has(k)) by.set(k, new Map());
+    by.get(k).set(f.concept.id, { f, lab });
+  }
+  const periods = new Map();
+  for (const f of is) periods.set(`${f.filing.id}|${f.scope.consolidation}|${pk(f)}`, f);
+  for (const [k, f0] of periods) {
+    if (financialFormat || usGaap) {
+      out.push(item({ key: "interest_expense_pl", period: f0.period, scope: f0.scope, value: null, blank_reason: BLANK.out_of_scope, blank_detail: { why: financialFormat ? "금융 서식(Q2 ④)" : "US GAAP 서류(본표 문단)" }, rule: { id: "R-JP8" }, vintage_basis: vb(f0) }));
+      continue;
+    }
+    const m = by.get(k);
+    if (!m) {
+      out.push(item({ key: "interest_expense_pl", period: f0.period, scope: f0.scope, value: null, blank_reason: BLANK.parse_failed, blank_detail: { why: "not_implemented — 본표에 支払利息 줄 없음(金融費用 주석 구성요소·CF 조정만·줄 없음 판정은 다음 판)" }, rule: { id: "R-JP8" }, vintage_basis: vb(f0) }));
+      continue;
+    }
+    const ls = [...m.values()];
+    const sum = ls.reduce((t, x) => t + BigInt(x.f.value.num.replace(/^-/, "")), 0n); // △ 태깅(ソフトバンク)은 부호 표시만 — 값은 절댓값 합(원 부호는 RawFact)
+    out.push(item({
+      key: "interest_expense_pl", period: f0.period, scope: f0.scope, value: String(sum), facts: ls.map((x) => factId(x.f)),
+      rule: { id: "R-JP8", lines: ls.map((x) => ({ concept: x.f.concept.id, label: x.lab, v: x.f.value.num })) }, vintage_basis: vb(f0),
+      flags: { multiple_lines: ls.length > 1, negative_tagged: ls.some((x) => x.f.value.num.startsWith("-")) },
+    }));
+  }
+  return out;
+}
+
+/** R-JP11 금융 서식 — 손익 요소 이름이 …BNK·…INS·…SEC 로 끝나면 */
+export function financialFormatOf(facts) {
+  return facts.some((f) => /(BNK|INS|SEC)$/.test(local(f.concept.id)) && f.placement.face && f.placement.stmts.some((s) => s.stmt === "is"));
+}
+
 function vb(f) {
   return { filing: f.filing.id, form: f.filing.form, filed_at: f.filing.filed_at, amends: f.filing.amends, doc_type: f.filing.doc_type };
 }
