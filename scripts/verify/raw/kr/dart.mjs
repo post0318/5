@@ -58,7 +58,12 @@ export function makeDart({ store, quotaRoot, key, tool = "verify", cap = Number(
         const okCorp = row?.corp_code === corp;
         // 판본 = 목록의 최신 접수번호. 재무 숫자를 다시 싣지 않은 정정([첨부정정] 등)이면 행의 접수번호는 원 보고서(더 이른 번호)일 수 있다 — 판본 이하만 허용
         const okRcept = rcept == null || row?.rcept_no == null || row.rcept_no <= rcept;
-        return { ok: okCorp && okRcept, got: { corp: row?.corp_code, rcept: row?.rcept_no } };
+        // 사업연도·보고서 종류가 행에 있으면 요청과 같아야(감사 10-16 ③-5 — 회사만 확인하던 것). 모든 행을 본다
+        const rows = j.list ?? [];
+        const okYear = apiParams.bsns_year == null || rows.every((x) => x.bsns_year == null || String(x.bsns_year) === String(apiParams.bsns_year));
+        const okCode = apiParams.reprt_code == null || rows.every((x) => x.reprt_code == null || String(x.reprt_code) === String(apiParams.reprt_code));
+        const okAllCorp = rows.every((x) => x.corp_code == null || x.corp_code === corp);
+        return { ok: okCorp && okAllCorp && okRcept && okYear && okCode, got: { corp: row?.corp_code, rcept: row?.rcept_no, year: row?.bsns_year, code: row?.reprt_code } };
       },
     });
     return { json: JSON.parse(r.buf.toString("utf8")), sha256: r.sha256, fromStore: r.fromStore, version: rcept ?? "none" };

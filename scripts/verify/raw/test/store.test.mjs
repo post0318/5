@@ -138,3 +138,14 @@ test("같은 판본 바이트만 다르고 내용이 같으면(SEC 봇 차단 �
   assert.ok(s.incidents.some((x) => x.kind === "equivalent_bytes"));
   assert.throws(() => s.put({ ...q, buf: Buffer.from("<html><body>숫자 9,999</body></html>") }), (e) => e.code === "conflict", "본문이 다르면 여전히 충돌");
 });
+
+test("zip CRC: 압축은 정상인데 CRC 만 틀리면 형식 실패(감사 10-16 C4 — 변조가 압축 해제에서 먼저 걸려 CRC 줄이 시험되지 않았다)", () => {
+  const good = makeZip([["a.xml", "<a>hello</a>"]]);
+  assert.equal(checkZip(good).ok, true);
+  const bad = Buffer.from(good);
+  // 지역 머리(14)·중앙 디렉터리(16) CRC 를 둘 다 바꾼다 — 압축 자료는 그대로
+  const cdOff = bad.readUInt32LE(bad.length - 22 + 16);
+  bad.writeUInt32LE((bad.readUInt32LE(14) ^ 0xffffffff) >>> 0, 14);
+  bad.writeUInt32LE((bad.readUInt32LE(cdOff + 16) ^ 0xffffffff) >>> 0, cdOff + 16);
+  assert.equal(checkZip(bad).ok, false);
+});

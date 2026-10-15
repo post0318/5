@@ -2,10 +2,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
+import { crc32, deflateRawSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "../common/store.mjs";
-import { makeSec, secUserAgent } from "../us/sec.mjs";
+import { identityFor, makeSec, secUserAgent } from "../us/sec.mjs";
 import { makeDart } from "../kr/dart.mjs";
 import { makeEdinet } from "../jp/edinet.mjs";
 import { makeKrx } from "../kr/krx.mjs";
@@ -140,4 +141,63 @@ test("KRX: 빈 응답·오늘 응답은 저장 안 함, 지난 날짜 행 있는
   assert.equal(e.stored, false);
   assert.equal(e.rows.length, 0);
   assert.equal(f.calls.length, 2);
+});
+
+test("SEC 인스턴스 신원: 같은 회사라도 서류 종류·기간 끝이 다르면 실패(감사 10-16 ③-5)", () => {
+  const inst = (dt, pe) => Buffer.from(`<xbrl><dei:EntityCentralIndexKey contextRef="c">0000320193</dei:EntityCentralIndexKey><dei:DocumentType contextRef="c">${dt}</dei:DocumentType><dei:DocumentPeriodEndDate contextRef="c">${pe}</dei:DocumentPeriodEndDate></xbrl>`);
+  const id = identityFor({ cik: "320193", a18: "000032019325000079", file: "aapl-20250927_htm.xml", ext: "xml", expect: { form: "10-K", periodEnd: "2025-09-27" } });
+  assert.equal(id(inst("10-K", "2025-09-27")).ok, true);
+  assert.equal(id(inst("10-Q", "2025-06-28")).ok, false, "10-Q 인스턴스가 10-K 열쇠로 들어오면 실패");
+  assert.equal(id(inst("10-K", "2024-09-28")).ok, false, "다른 해 10-K 면 실패");
+  assert.equal(id(inst("10-K/A", "2025-09-27")).ok, true, "정정본은 원 종류로");
+  const idOther = identityFor({ cik: "320193", a18: "000032019325000079", file: "x_htm.xml", ext: "xml", expect: { form: "10-K", periodEnd: "2025-09-27" } });
+  assert.equal(idOther(Buffer.from(`<dei:EntityCentralIndexKey>0000789019</dei:EntityCentralIndexKey>`)).ok, false, "다른 회사");
+});
+
+/** 시험용 zip(crcOverride 를 주면 그 CRC 를 적는다 — 압축은 정상, CRC 만 틀린 파일) */
+function makeZip(files, crcOverride = null) {
+  const locals = [], centrals = [];
+  let off = 0;
+  for (const [name, text] of files) {
+    const data = Buffer.from(text), comp = deflateRawSync(data), nb = Buffer.from(name);
+    const crc = crcOverride ?? (crc32(data) >>> 0);
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(8, 8);
+    lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(comp.length, 18); lh.writeUInt32LE(data.length, 22); lh.writeUInt16LE(nb.length, 26);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(8, 10);
+    ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(comp.length, 20); ch.writeUInt32LE(data.length, 24); ch.writeUInt16LE(nb.length, 28); ch.writeUInt32LE(off, 42);
+    locals.push(lh, nb, comp); centrals.push(ch, nb);
+    off += 30 + nb.length + comp.length;
+  }
+  const cd = Buffer.concat(centrals), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(off, 16);
+  return Buffer.concat([...locals, cd, end]);
+}
+
+test("EDINET 서류 신원: 같은 회사라도 서류 종류·연간 기간 끝이 다르면 실패(감사 10-16 ③-5)", async () => {
+  const xb = (kind, pe) => makeZip([[`XBRL/PublicDoc/jpcrp030000-${kind}-001_E02529-000_${pe}_01_2025-06-20.xbrl`, "<xbrli:xbrl/>"]]);
+  const run = async (buf, expect) => {
+    const { store, quotaRoot } = setup();
+    const f = fakeFetch([[/documents\/S100ABCD/, () => new Response(buf, { status: 200 })]]);
+    return makeEdinet({ store, quotaRoot, key: "K", fetchImpl: f }).docZip("S100ABCD", "E02529", expect);
+  };
+  await run(xb("asr", "2025-03-31"), { form: "120", periodEnd: "2025-03-31" });
+  await assert.rejects(run(xb("q2r", "2024-09-30"), { form: "120", periodEnd: "2025-03-31" }), "半期 서류가 有報 열쇠로 오면 실패");
+  await assert.rejects(run(xb("asr", "2024-03-31"), { form: "120", periodEnd: "2025-03-31" }), "다른 해 有報면 실패");
+  await run(xb("q2r", "2025-09-30"), { form: "160", periodEnd: "2026-03-31" }); // 半期 = q2r 허용, 기간 끝은 연간만 확인
+});
+
+test("DART fnltt 신원: 행의 사업연도·보고서 종류가 요청과 다르면 실패(감사 10-16 ③-5)", async () => {
+  const { store, quotaRoot } = setup();
+  const row = (y, c) => ({ rcept_no: "20250301000001", corp_code: "00126380", bsns_year: y, reprt_code: c, account_id: "x", thstrm_amount: "1" });
+  let body = { status: "000", list: [row("2024", "11011")] };
+  const f = fakeFetch([[/opendart/, () => json(body)]]);
+  const dart = makeDart({ store, quotaRoot, key: "K", fetchImpl: f });
+  await assert.rejects(dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000001"), "2024 행이 2025 요청으로 오면 실패");
+  body = { status: "000", list: [row("2025", "11012")] };
+  await assert.rejects(dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000002"), "반기 행이 사업보고서 요청으로 오면 실패");
+  body = { status: "000", list: [row("2025", "11011")] };
+  const ok = await dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000003");
+  assert.equal(ok.json.status, "000");
 });

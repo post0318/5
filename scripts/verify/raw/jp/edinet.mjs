@@ -48,7 +48,9 @@ export function makeEdinet({ store, quotaRoot, key, tool = "verify", cap = Numbe
   }
 
   /** 서류 XBRL zip(type=1) */
-  async function docZip(docID, edinetCode) {
+  /** expect = { form(docTypeCode), periodEnd } — 서류 종류(파일명 asr·ssr·q?r)·기간 끝(파일명 날짜)도 확인(감사 10-16 ③-5, 회사만 보던 것) */
+  const KIND = { 120: /-asr-/, 130: /-asr-/, 140: /-q\dr-/, 150: /-q\dr-/, 160: /-(ssr|q2r)-/, 170: /-(ssr|q2r)-/ }; // 半期 = ssr 또는 q2r(2024 개편 뒤 jpcrp040300-q2r, 실측)
+  async function docZip(docID, edinetCode, expect = null) {
     if (!/^S1[0-9A-Z]{6}$/.test(docID)) throw new Error(`docID 형식 오류: ${docID}`);
     const r = await immutable({
       ...base, key: `doc_${docID}`, version: docID, ext: "zip", url: `${BASE}/documents/${docID}?type=1&Subscription-Key=${key}`,
@@ -67,7 +69,12 @@ export function makeEdinet({ store, quotaRoot, key, tool = "verify", cap = Numbe
       identity: (b) => {
         const names = unzipEntries(b).map((e) => e.name).filter((n) => /PublicDoc\//.test(n));
         if (!edinetCode) return { ok: names.length > 0, got: names.length };
-        return { ok: names.length > 0 && names.some((n) => n.includes(`_${edinetCode}-`)), got: names[0] ?? null };
+        const x = names.filter((n) => /\.xbrl$/.test(n) && n.includes(`_${edinetCode}-`));
+        if (!x.length) return { ok: false, got: names[0] ?? null };
+        if (expect?.form && KIND[expect.form] && !x.some((n) => KIND[expect.form].test(n))) return { ok: false, got: { file: x[0], expectedForm: expect.form } };
+        // 기간 끝은 연간(120·130)만 — 半期 목록의 periodEnd 는 사업연도 끝이라 파일명(반기 끝)과 다르다(실측 117건)
+        if (expect?.periodEnd && ["120", "130"].includes(String(expect.form)) && !x.some((n) => n.includes(`_${expect.periodEnd}_`))) return { ok: false, got: { file: x[0], expectedPeriodEnd: expect.periodEnd } };
+        return { ok: true, got: x[0] };
       },
     });
     return { buf: r.buf, sha256: r.sha256, fromStore: r.fromStore };

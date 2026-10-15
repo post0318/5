@@ -39,7 +39,7 @@ export async function runJp(ed, { sym, maxAnnual = 6, maxInterim = 2 }) {
   const interim = docs.filter((d) => ["140", "150", "160", "170"].includes(d.form)).slice(-maxInterim);
   for (const d of [...annual, ...interim]) {
     try {
-      const z = await ed.docZip(d.id, c.edinetCode);
+      const z = await ed.docZip(d.id, c.edinetCode, { form: d.form, periodEnd: d.period_end });
       const r = docFacts(z.buf, { sym, filing: d });
       res.rawFacts.push(...r.facts);
       const financialFormat = financialFormatOf(r.facts);

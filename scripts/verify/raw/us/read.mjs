@@ -215,7 +215,7 @@ export async function instanceFacts(sec, cik, accn, { sym, filing, structure }) 
   const A = a18(accn);
   const st = structure ?? (await filingStructure(sec, cik, accn));
   if (!st.files.instance) return { facts: [], structure: st, missing: ["instance"] };
-  const got = await sec.archive(cik, A, st.files.instance);
+  const got = await sec.archive(cik, A, st.files.instance, filing ? { form: filing.form, periodEnd: filing.period_end } : null);
   const { facts } = parseFacts(got.buf.toString("utf8"));
   // 본표 줄: QName → [{stmt, role, line}]
   const face = new Map();

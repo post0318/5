@@ -57,14 +57,14 @@ export function makeSec({ store, quotaRoot, tool = "verify", fetchImpl, env = pr
       return { ok: Array.isArray(j.accessionNumber), got: Object.keys(j).slice(0, 5) };
     }, (j) => (Array.isArray(j?.accessionNumber) ? null : "목록 파일 accessionNumber 없음")),
     /** 공시 폴더 안 파일(accn 판본, 영구) */
-    archive: async (cik, accn, file) => {
+    archive: async (cik, accn, file, expect = null) => {
       const a18 = String(accn).replace(/-/g, "");
       if (!/^\d{18}$/.test(a18)) throw new Error(`accn 형식 오류: ${accn}`);
       const url = `${ARCH}${cikNum(cik)}/${a18}/${file}`;
       const ext = (file.match(/\.([A-Za-z0-9]+)$/)?.[1] ?? "bin").toLowerCase();
       const r = await immutable({
         ...base, key: `${cikNum(cik)}/${a18}/${file}`, version: a18, ext, url,
-        validate: validatorFor(ext), identity: identityFor({ cik, a18, file, ext }), equivalent: equivalentFor(ext),
+        validate: validatorFor(ext), identity: identityFor({ cik, a18, file, ext, expect }), equivalent: equivalentFor(ext),
       });
       return { buf: r.buf, sha256: r.sha256, fromStore: r.fromStore, url };
     },
@@ -90,7 +90,11 @@ function validatorFor(ext) {
 
 const CIK_RE = /<dei:EntityCentralIndexKey[^>]*>\s*0*(\d+)\s*</;
 /** 파일 안 신원이 요청과 맞는지 — 맞출 표지가 없는 파일(일반 HTML 첨부)은 형태만 */
-export function identityFor({ cik, a18, file, ext }) {
+const DOCTYPE_RE = /<dei:DocumentType[^>]*>\s*([^<\s]+)\s*</;
+const PEREND_RE = /<dei:DocumentPeriodEndDate[^>]*>\s*(\d{4}-\d{2}-\d{2})\s*</;
+/** expect = { form, periodEnd } — 인스턴스면 서류 종류(dei:DocumentType)·기간 끝(dei:DocumentPeriodEndDate)도 맞아야(감사 10-16 ③-5: 회사만 확인해
+ *  같은 회사 10-Q 인스턴스가 10-K 열쇠로 들어가도 통과했다). 정정(/A)은 원 종류로, 기간 끝은 ±7일(52/53주 결산 표기 차) */
+export function identityFor({ cik, a18, file, ext, expect = null }) {
   return (buf) => {
     if (ext === "json" && /index\.json$/.test(file)) {
       const j = JSON.parse(buf);
@@ -100,7 +104,17 @@ export function identityFor({ cik, a18, file, ext }) {
     if (ext === "xml" || ext === "htm" || ext === "html") {
       const s = buf.toString("utf8", 0, Math.min(buf.length, 4_000_000));
       const m = s.match(CIK_RE);
-      if (m) return { ok: Number(m[1]) === Number(cik), got: m[1] };
+      if (m) {
+        if (Number(m[1]) !== Number(cik)) return { ok: false, got: m[1] };
+        if (expect) {
+          const dt = s.match(DOCTYPE_RE)?.[1] ?? null, pe = s.match(PEREND_RE)?.[1] ?? null;
+          const base = (f) => String(f ?? "").replace(/\/A$/, "");
+          if (expect.form && dt && base(dt) !== base(expect.form)) return { ok: false, got: { cik: m[1], documentType: dt, expected: expect.form } };
+          if (expect.periodEnd && pe && Math.abs(Date.parse(pe) - Date.parse(expect.periodEnd)) > 7 * 864e5) return { ok: false, got: { cik: m[1], periodEnd: pe, expected: expect.periodEnd } };
+          return { ok: true, got: { cik: m[1], documentType: dt, periodEnd: pe } };
+        }
+        return { ok: true, got: m[1] };
+      }
       const lb = file.match(/^(.*)_(cal|pre|lab|def)\.xml$/);
       if (lb) {
         // 회사 스키마 참조(http 로 시작하지 않는 .xsd) — 표준 역할 스키마(xbrl.org) 참조는 건너뛴다
