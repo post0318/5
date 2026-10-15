@@ -8,7 +8,7 @@
 - `origin/jp/verify2` c1bb3d2: 일본 검증기. **JV**로 줄인다. 대상 파일은 `scripts/verify-financials.mjs`(`VF@JV`), `scripts/verify-jp/layers.mjs`(`JL`)이다.
 - `origin/master` 2eca315의 검증기는 KV보다 274줄 짧은 이전 판이다(`git diff --stat`: VF 293+ / 19−). 아래 줄 번호는 KV 기준이다.
 
-2호기에서 확인한 사실(10-14, 읽기만 함): 미국 47종목 결과 `~/5/reports/verify/verify-us-20261011-090005.json`(로그 `/tmp/full-us-1011.log` 4,452줄), 한국 30종목 결과 `verify-kr-20261011-110958.json`과 `verify-kr-20261012-122616.json`, 일본 42종목 결과 `~/5-jp/reports/verify/verify-jp-20261010-104418.json`. 숫자는 §7.1에 있다.
+2호기에서 확인한 사실(10-14, 읽기만 함): 미국 47종목 결과 `~/5/reports/verify/verify-us-20261011-090005.json`(로그 `/tmp/full-us-1011.log` 4,452줄), 한국 30종목 결과 `verify-kr-20261011-110958.json`과 `verify-kr-20261012-122616.json`, 일본 42종목 결과 `~/verify-archive/jp-reports/verify/verify-jp-20261010-104418.json`. 숫자는 §7.1에 있다.
 
 ---
 
@@ -500,7 +500,7 @@ X의 각 소스 s마다 따로 판정한다. 위에서부터 처음 맞는 줄 �
 | 미국 | `~/5/reports/verify/verify-us-20261011-090005.json`(17,567,183B, 로그 `/tmp/full-us-1011.log` — `--metric=sga` 실행) | 47 | pass 41,049 · common 1,146 · unverifiable 8 · fail 230 | 7,450 |
 | 한국 | `~/5/reports/verify/verify-kr-20261011-110958.json` | 30 | pass 17,013 · fail 20 · common 49 | 1,131 |
 | 한국(비교용) | `~/5/reports/verify/verify-kr-20261012-122616.json` | 30 | pass 16,886 · fail 147 · common 49 — 실패 대부분 K6 유니버스 캐시 | 1,131 |
-| 일본 | `~/5-jp/reports/verify/verify-jp-20261010-104418.json` | 42 | pass 71,888 · unverifiable 162 · fail 18 | **0(외부 대조 없음)** |
+| 일본 | `~/verify-archive/jp-reports/verify/verify-jp-20261010-104418.json` | 42 | pass 71,888 · unverifiable 162 · fail 18 | **0(외부 대조 없음)** |
 
 - 미국 로그 요약(3833~4340행): 매출 ① 597 · ② 31 · 정밀도 31 · ③ 0 / 매출원가·매출총이익 ③ 146 · 외부 단독 이탈 72 / 영업이익 ③ 19 · 이탈 87 / 감가상각비 ③ 4 · 이탈 46 / 판관비·연구개발비 ③ 16 · 이탈 103 / 외부 정밀도 부족 431건.
 - 한국 기준 파일 선택: 10-12 파일은 K6(유니버스 캐시) 실패가 섞인 실행이라, 10-11 파일을 주 입력으로 하고 10-12 파일은 비교로 같이 돌린다. **미결 M13**(오너가 말한 「한국 30」이 어느 실행인지).
