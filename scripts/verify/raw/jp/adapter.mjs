@@ -38,6 +38,8 @@ export async function runJp(ed, { sym, maxAnnual = 6, maxInterim = 2 }) {
   const annual = docs.filter((d) => d.form === "120" || d.form === "130").slice(-maxAnnual - 2);
   const interim = docs.filter((d) => ["140", "150", "160", "170"].includes(d.form)).slice(-maxInterim);
   for (const d of [...annual, ...interim]) {
+    // 기간 끝을 모르는 연간 서류(訂正인데 원 서류가 목록 범위 밖)는 신원 확인이 회사·종류까지만 — 숨기지 않고 남긴다
+    if (!d.period_end && ["120", "130"].includes(d.form)) res.identityGaps = [...(res.identityGaps ?? []), { docID: d.id, form: d.form, parent: d.parent, why: "기간 끝 모름 — 기간 확인 못 함" }];
     try {
       const z = await ed.docZip(d.id, c.edinetCode, { form: d.form, periodEnd: d.period_end });
       const r = docFacts(z.buf, { sym, filing: d });
@@ -52,9 +54,12 @@ export async function runJp(ed, { sym, maxAnnual = 6, maxInterim = 2 }) {
       // 매출 사슬(표준 요소)이 없는데 본표 매출 줄(회사 고유 요소 — 7203 TotalNetRevenuesIFRS 등)이 있으면 빈칸 + 사유(그냥 비워 두지 않음)
       const pk = (i) => `${i.scope.consolidation}|${i.period.start}|${i.period.end}`;
       const chainRev = new Set(kept.filter((i) => i.key === "revenue").map(pk));
+      // 사유는 사실대로: 본표 매출 줄이 회사 고유 요소면 기대 빈칸, 표준 요소인데 사슬이 못 집었으면 판독 실패(감사 10-16 2차 ③-7 — 표준 요소를 「회사 고유」로 적었다)
       for (const fr of kept.filter((i) => i.key === "revenue_face" && !chainRev.has(pk(i)))) {
-        kept.push(item({ key: "revenue", period: fr.period, scope: fr.scope, value: null, blank_reason: BLANK.confirmed_absent,
-          blank_detail: { why: "본표 매출 줄이 표준 사슬 요소가 아님(회사 고유 요소 또는 구성요소만 표준) — 본표 매출은 revenue_face", face_concept: fr.rule?.concept ?? null },
+        const fc = fr.rule?.concept ?? null;
+        const std = /^(jppfs_cor|jpigp_cor):/.test(fc ?? "");
+        kept.push(item({ key: "revenue", period: fr.period, scope: fr.scope, value: null, blank_reason: std ? BLANK.parse_failed : BLANK.confirmed_absent,
+          blank_detail: { why: std ? "본표 매출 줄이 표준 요소인데 매출 사슬이 집지 않음(사슬 목록 밖 또는 구성요소 제외 규칙)" : "본표 매출 줄이 회사 고유 요소 — 본표 매출은 revenue_face", face_concept: fc },
           rule: { id: "R-JP-CHAIN", concept: null }, vintage_basis: fr.vintage_basis }));
       }
       res.items.push(...kept);

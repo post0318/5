@@ -142,3 +142,39 @@ export function markPrecisionDuplicates(facts) {
     }
   }
 }
+
+/**
+ * 표시 통화(설계 R-US8) — 서류마다 차원 없는 금액 사실이 가장 많은 ISO 통화를 그 서류의 표시 통화로 보고, 다른 통화 금액 사실에
+ * value.non_presentation_currency, 같은 개념·기간의 표시 통화 사실이 있으면 value.convenience(20-F 「편의 환산」 USD)를 붙인다(지우지 않음).
+ * Item 은 표시 통화 사실만 쓴다(감사 10-16 2차 ③-3 — TSM 20-F 유형자산 취득 2024 가 USD 29,155,400,000 으로 나왔다).
+ * 가장 많은 통화가 둘 이상 같으면 표시 통화를 정하지 않고 value.presentation_currency_unknown.
+ */
+export function markPresentationCurrency(facts) {
+  const MONEY = /^[A-Z]{3}$/;
+  const by = new Map();
+  for (const f of facts) {
+    if (!MONEY.test(f.value.unit ?? "")) continue;
+    const k = f.filing.id;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(f);
+  }
+  for (const fs of by.values()) {
+    const cnt = new Map();
+    for (const f of fs) if (!f.scope.dims.length) cnt.set(f.value.unit, (cnt.get(f.value.unit) ?? 0) + 1);
+    const top = Math.max(0, ...cnt.values());
+    const tops = [...cnt].filter(([, n]) => n === top).map(([u]) => u);
+    if (tops.length !== 1) { for (const f of fs) f.value.presentation_currency_unknown = true; continue; }
+    const pres = tops[0];
+    const presKeys = new Set(fs.filter((f) => f.value.unit === pres).map((f) => `${f.concept.id}|${f.period.start ?? ""}|${f.period.end}|${JSON.stringify(f.scope.dims)}`));
+    for (const f of fs) {
+      f.value.presentation_currency = pres;
+      if (f.value.unit === pres) continue;
+      f.value.non_presentation_currency = true;
+      if (presKeys.has(`${f.concept.id}|${f.period.start ?? ""}|${f.period.end}|${JSON.stringify(f.scope.dims)}`)) f.value.convenience = true;
+    }
+  }
+  return facts;
+}
+
+/** Item 에 쓸 수 있는 금액 사실인가(표시 통화) — 통화가 아닌 단위(주식수·주당)는 그대로 통과 */
+export const presentationOk = (f) => !f.value.non_presentation_currency && !f.value.presentation_currency_unknown;

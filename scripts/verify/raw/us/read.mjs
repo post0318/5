@@ -6,7 +6,7 @@
  * 판본 선택·계산은 하지 않는다(④).
  */
 import { calculationMap, idToQName, parseFacts, parseLabels, parseLinkbase, presentationTree } from "../common/xbrl.mjs";
-import { fyKey, markPrecisionDuplicates, monthsBetween, normNum, rawFact } from "../common/rawfact.mjs";
+import { fyKey, markPrecisionDuplicates, markPresentationCurrency, monthsBetween, normNum, rawFact } from "../common/rawfact.mjs";
 
 const pad10 = (cik) => String(cik).replace(/^0+/, "").padStart(10, "0");
 const a18 = (accn) => String(accn).replace(/-/g, "");
@@ -72,6 +72,7 @@ export function companyfactsFacts(cf, { cik, sym, filingByAccn, fetch }) {
       }
     }
   }
+  markPresentationCurrency(out);
   // 판본 표시
   for (const g of groups.values()) {
     g.sort((a, b) => (a.filing.filed_at ?? "").localeCompare(b.filing.filed_at ?? "") || a.filing.id.localeCompare(b.filing.id));
@@ -115,7 +116,8 @@ function stmtKind(roleUri, names) {
   if (has(/^(NetCashProvidedByUsedIn|CashFlowsFromUsedIn)(Operating|Investing|Financing)Activities/)) return "cf";
   if (has(/^(Assets|LiabilitiesAndStockholdersEquity|EquityAndLiabilities)$/) && has(/^(Liabilities|LiabilitiesAndStockholdersEquity|StockholdersEquity|EquityAndLiabilities|Equity)$/)) return "bs";
   if (has(/^(StockholdersEquity|StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest)$/) && has(/^(StockIssuedDuringPeriod|DividendsCommonStock|TreasuryStock|StockRepurchased)/) && !has(/^Assets$/)) return "eq";
-  if (has(/^(NetIncomeLoss|ProfitLoss)$/) && has(/^(Revenues?|RevenueFromContractWithCustomer|SalesRevenueNet|CostOfRevenue|CostOfSales|OperatingIncomeLoss|ProfitLossFromOperatingActivities|IncomeLossFromContinuingOperationsBeforeIncomeTaxes|ProfitLossBeforeTax|InterestExpense|EarningsPerShare|BasicEarningsLossPerShare)/)) {
+  // 당기순이익 줄 — 지배주주 귀속만 둔 IFRS 손익계산서(SPOT 「ProfitLossAttributableToOwnersOfParent」 — 감사 10-16 2차 ③-5)도
+  if (has(/^(NetIncomeLoss|ProfitLoss|ProfitLossAttributableToOwnersOfParent|NetIncomeLossAvailableToCommonStockholdersBasic)$/) && has(/^(Revenues?|RevenueFromContractWithCustomer|SalesRevenueNet|CostOfRevenue|CostOfSales|OperatingIncomeLoss|ProfitLossFromOperatingActivities|IncomeLossFromContinuingOperationsBeforeIncomeTaxes|ProfitLossBeforeTax|InterestExpense|EarningsPerShare|BasicEarningsLossPerShare)/)) {
     return has(/^(ComprehensiveIncome|OtherComprehensiveIncome)/) && !has(/^(EarningsPerShare|BasicEarningsLossPerShare)/) ? "ci" : "is";
   }
   if (has(/^ComprehensiveIncomeNetOfTax/)) return "ci";
@@ -250,5 +252,6 @@ export async function instanceFacts(sec, cik, accn, { sym, filing, structure }) 
     }));
   }
   markPrecisionDuplicates(out);
+  markPresentationCurrency(out);
   return { facts: out, structure: st };
 }

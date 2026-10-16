@@ -78,10 +78,11 @@ export async function runKr(dart, { sym, years = 7, quarters = 5, withInterest =
   if (withInterest) {
     for (const r of annual) {
       let docBuf = null, xbrlBuf = null, docErr = null, xbrlErr = null;
-      try { docBuf = (await dart.document(r.latest)).buf; } catch (e) { if (e?.code === "quota_stop") throw e; docErr = String(e.message).slice(0, 160); }
+      // 조회 실패는 이자 Item 빈칸 사유뿐 아니라 실행 failures 에도 남긴다(감사 10-16 2차 ③-4 — XBRL·원문 실패가 흔적 없이 리스 주석·감가상각 원문 Item 을 지웠다)
+      try { docBuf = (await dart.document(r.latest)).buf; } catch (e) { fail("document", e, { year: r.year, rcept: r.latest }); docErr = String(e.message).slice(0, 160); }
       // XBRL 은 2021 사업보고서부터 받아 사실 전부를 RawFact 로(주석 태그는 FY2023 보고서부터 — 이자 Item 은 그 해부터 XBRL 을 쓴다)
       if (r.year >= 2021) {
-        try { xbrlBuf = (await dart.xbrl(r.latest, "11011", c.corp)).buf; } catch (e) { if (e?.code === "quota_stop") throw e; xbrlErr = String(e.message).slice(0, 160); }
+        try { xbrlBuf = (await dart.xbrl(r.latest, "11011", c.corp)).buf; } catch (e) { fail("xbrl", e, { year: r.year, rcept: r.latest }); xbrlErr = String(e.message).slice(0, 160); }
         if (xbrlBuf) {
           try {
             const xf = krXbrlFacts(xbrlBuf, { sym, corp: c.corp, rcept: r.latest });

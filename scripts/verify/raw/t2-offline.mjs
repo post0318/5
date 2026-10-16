@@ -27,7 +27,7 @@ async function once() {
   if (args.market === "us") {
     const { makeSec } = await import("./us/sec.mjs");
     const { runUs } = await import("./us/adapter.mjs");
-    const sec = makeSec({ store, quotaRoot, env, fetchImpl: blocked });
+    const sec = makeSec({ store, quotaRoot, env, fetchImpl: blocked, replay: true });
     const tick = await sec.tickers();
     for (const s of syms) {
       const cik = s === "XOM" ? "34088" : String(Object.values(tick.json).find((x) => x.ticker === s)?.cik_str);
@@ -38,7 +38,7 @@ async function once() {
   } else if (args.market === "kr") {
     const { makeDart } = await import("./kr/dart.mjs");
     const { runKr } = await import("./kr/adapter.mjs");
-    const dart = makeDart({ store, quotaRoot, key: env.DART_API_KEY, fetchImpl: blocked });
+    const dart = makeDart({ store, quotaRoot, key: env.DART_API_KEY, fetchImpl: blocked, replay: true });
     for (const s of syms) {
       const r = await runKr(dart, { sym: s, quarters: 0 });
       h.update(stable({ items: r.items, facts: r.rawFacts.length, failures: r.failures }));
@@ -47,8 +47,8 @@ async function once() {
   } else if (args.market === "jp") {
     const { makeEdinet } = await import("./jp/edinet.mjs");
     const { prepareJp, runJp } = await import("./jp/adapter.mjs");
-    const ed = makeEdinet({ store, quotaRoot, key: env.EDINET_API_KEY, fetchImpl: blocked });
-    const to = new Date(Date.now() + 9 * 3600e3 - 2 * 864e5).toISOString().slice(0, 10);
+    const ed = makeEdinet({ store, quotaRoot, key: env.EDINET_API_KEY, fetchImpl: blocked, replay: true });
+    const to = String(args.to ?? "2026-10-14"); // 오프라인 재현 — 목록 끝 날짜 고정
     await prepareJp(ed, { syms, from: String(args.from ?? "2020-04-01"), to });
     for (const s of syms) {
       const r = await runJp(ed, { sym: s });

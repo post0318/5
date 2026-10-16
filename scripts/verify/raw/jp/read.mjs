@@ -72,7 +72,15 @@ export async function findFilings(ed, codes, { from, to }) {
     d = new Date(Date.parse(`${d}T00:00:00Z`) - 864e5).toISOString().slice(0, 10);
   }
   const out = new Map();
-  for (const [k, m] of byCode) out.set(k, [...m.values()].sort((a, b) => (a.filed_at ?? "").localeCompare(b.filed_at ?? "")));
+  for (const [k, m] of byCode) {
+    // 訂正(130·150·170)은 목록 periodEnd 가 비어 있다 — 원 서류(parentDocID)의 기간 끝을 이어 받아 신원 확인에 쓴다(감사 10-16 2차 ③-10: 6501 의 130 6건이 기간 확인을 건너뛰었다)
+    for (const d of m.values()) {
+      if (d.period_end || !d.parent) continue;
+      const p = m.get(d.parent);
+      if (p?.period_end) { d.period_end = p.period_end; d.period_end_from = "parent"; }
+    }
+    out.set(k, [...m.values()].sort((a, b) => (a.filed_at ?? "").localeCompare(b.filed_at ?? "")));
+  }
   return { byCode: out, missingDates };
 }
 

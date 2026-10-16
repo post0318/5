@@ -13,7 +13,7 @@ const local = (id) => id.split(":").pop();
 const ok = (f) => f.value.num != null && !f.value.less_precise_duplicate;
 
 export const CHAINS = {
-  revenue: { ids: ["jpigp_cor:RevenueIFRS", "jpigp_cor:Revenue2IFRS", "jpigp_cor:NetSalesIFRS", "jpigp_cor:OperatingRevenueIFRS", "jppfs_cor:OperatingRevenue1", "jppfs_cor:OperatingRevenue2", "jppfs_cor:NetSales", "jppfs_cor:Revenue", "jppfs_cor:NetSalesOfCompletedConstructionContracts", "jppfs_cor:OrdinaryIncomeBNK", "jppfs_cor:OrdinaryIncomeINS", "jppfs_cor:OperatingRevenueSEC"], kind: "duration", stmt: "is", part: "D34(금융 서식 = 経常収益·証券 営業収益). 営業収益(합계)을 売上高(구성요소)보다 먼저 — 3382 売上高 8.89조 + その他の営業収入 = 営業収益(감사 10-16 ③-3). 손익계산서 본표 줄만" },
+  revenue: { ids: ["jpigp_cor:RevenueIFRS", "jpigp_cor:Revenue2IFRS", "jpigp_cor:NetSalesIFRS", "jpigp_cor:OperatingRevenueIFRS", "jppfs_cor:OperatingRevenue1", "jppfs_cor:OperatingRevenue2", "jppfs_cor:NetSales", "jppfs_cor:Revenue", "jppfs_cor:NetSalesOfCompletedConstructionContracts", "jppfs_cor:OrdinaryIncomeBNK", "jppfs_cor:OrdinaryIncomeINS", "jppfs_cor:OperatingIncomeINS", "jppfs_cor:OperatingRevenueSEC"], pattern: /^jppfs_cor:(?:OperatingRevenue|NetSales|Revenue)[A-Z]{2,4}$/, kind: "duration", stmt: "is", part: "D34(금융 서식 = 経常収益·証券 営業収益). 営業収益(합계)을 売上高(구성요소)보다 먼저 — 3382 売上高 8.89조 + その他の営業収入 = 営業収益(감사 10-16 ③-3). 손익계산서 본표 줄만. 업종 서식 표준 요소(営業収益 RWY 철도·ELE 전기 등 — 이름 끝 업종 기호)는 목록 뒤 pattern(감사 10-16 2차 ③-7: 9020·9022 revenue 가 「회사 고유 요소」 사유로 비었다). 보험 経常収益 = OperatingIncomeINS" },
   oi: { ids: ["jpigp_cor:OperatingProfitLossIFRS", "jppfs_cor:OperatingIncome"], kind: "duration", part: "P12" },
   ordinary_income: { ids: ["jppfs_cor:OrdinaryIncome"], kind: "duration" },
   pretax: { ids: ["jpigp_cor:ProfitLossBeforeTaxIFRS", "jppfs_cor:IncomeBeforeIncomeTaxes"], kind: "duration" },
@@ -46,7 +46,8 @@ export function chainItems(facts) {
   }
   for (const [key, ch] of Object.entries(CHAINS)) {
     const seen = new Set();
-    ch.ids.forEach((id, ci) => {
+    const ids = [...ch.ids, ...(ch.pattern ? [...byConcept.keys()].filter((id) => ch.pattern.test(id) && !ch.ids.includes(id)).sort() : [])];
+    ids.forEach((id, ci) => {
       for (const f of byConcept.get(id) ?? []) {
         if (f.period.kind !== ch.kind) continue;
         if (ch.stmt && !(f.placement.face && f.placement.stmts.some((s) => s.stmt === ch.stmt))) continue;
@@ -274,7 +275,8 @@ export function interestItems(facts, { financialFormat, usGaap }) {
 
 /** R-JP11 금융 서식 — 손익 요소 이름이 …BNK·…INS·…SEC 로 끝나면 */
 export function financialFormatOf(facts) {
-  return facts.some((f) => /(BNK|INS|SEC)$/.test(local(f.concept.id)) && f.placement.face && f.placement.stmts.some((s) => s.stmt === "is"));
+  // J-GAAP 금융 서식 = 요소 이름 끝 업종 기호(BNK·INS·SEC). IFRS 보험사는 jpigp 에 업종 기호가 없어 보험 수익·보험 서비스 결과 줄(회사 고유 요소)로(감사 10-16 2차 ③-7 8766)
+  return facts.some((f) => (/(BNK|INS|SEC)$/.test(local(f.concept.id)) || /^Insurance(Revenue|ServiceResult)IFRS$/.test(local(f.concept.id))) && f.placement.face && f.placement.stmts.some((s) => s.stmt === "is"));
 }
 
 function vb(f) {

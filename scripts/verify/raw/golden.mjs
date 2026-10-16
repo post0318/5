@@ -10,11 +10,13 @@ import { openStore } from "./common/store.mjs";
 
 const online = process.argv.includes("--online");
 const env = loadEnv();
-const cases = JSON.parse(readFileSync(new URL("./golden/cases.json", import.meta.url), "utf8")).cases;
+const only = process.argv.find((a) => a.startsWith("--only="))?.slice(7);
+const cases = JSON.parse(readFileSync(new URL("./golden/cases.json", import.meta.url), "utf8")).cases.filter((c) => !only || new RegExp(only).test(c.id)); // --only=정규식(사례 id) — 심은 오류 시험용
 const store = openStore({ root: env.RAW_STORE_DIR, actor: "verify" });
 const quotaRoot = join(env.RAW_STORE_DIR, online ? "quota" : "quota-t2");
 const fetchImpl = online ? undefined : async (u) => { throw new Error(`네트워크 막음(golden): ${String(u).slice(0, 60)}`); };
 const runs = new Map();
+const JP_TO = "2026-10-14"; // 오프라인 재현용 일본 목록 끝 날짜(보관소에 있는 마지막 날)
 
 async function run(c) {
   const k = `${c.market}|${c.sym}|${c.sixk ? 1 : 0}`;
@@ -23,19 +25,20 @@ async function run(c) {
   if (c.market === "us") {
     const { makeSec } = await import("./us/sec.mjs");
     const { runUs } = await import("./us/adapter.mjs");
-    const sec = makeSec({ store, quotaRoot, env, fetchImpl });
+    const sec = makeSec({ store, quotaRoot, env, fetchImpl, replay: !online });
     const tick = await sec.tickers();
     const cik = c.sym === "XOM" ? "34088" : String(Object.values(tick.json).find((x) => x.ticker === c.sym)?.cik_str);
     r = await runUs(sec, { sym: c.sym, cik, maxAnnual: 6, maxQuarterly: 0, withSixK: !!c.sixk });
   } else if (c.market === "kr") {
     const { makeDart } = await import("./kr/dart.mjs");
     const { runKr } = await import("./kr/adapter.mjs");
-    r = await runKr(makeDart({ store, quotaRoot, key: env.DART_API_KEY, fetchImpl }), { sym: c.sym, quarters: 0 });
+    r = await runKr(makeDart({ store, quotaRoot, key: env.DART_API_KEY, fetchImpl, replay: !online }), { sym: c.sym, quarters: 0 });
   } else {
     const { makeEdinet } = await import("./jp/edinet.mjs");
     const { prepareJp, runJp } = await import("./jp/adapter.mjs");
-    const ed = makeEdinet({ store, quotaRoot, key: env.EDINET_API_KEY, fetchImpl });
-    const to = new Date(Date.now() + 9 * 3600e3 - 2 * 864e5).toISOString().slice(0, 10);
+    const ed = makeEdinet({ store, quotaRoot, key: env.EDINET_API_KEY, fetchImpl, replay: !online });
+    // 목록 끝 날짜를 고정 — 날마다 늘면 오프라인 재현이 깨진다(감사 10-16 2차 ④)
+    const to = online ? new Date(Date.now() + 9 * 3600e3 - 2 * 864e5).toISOString().slice(0, 10) : JP_TO;
     await prepareJp(ed, { syms: [c.sym], from: "2020-04-01", to });
     r = await runJp(ed, { sym: c.sym });
   }
@@ -55,8 +58,16 @@ for (const c of cases) {
   }
   if (c.rawfact) {
     // RawFact 사례(6-K 등 Item 이 없는 판독) — 같은 개념·기간 종류·끝 날짜의 사실이 정확히 하나이고 값이 같아야(absent: 없어야) 통과
-    const fs = r.rawFacts.filter((f) => f.locator?.source === c.rawfact && f.concept.id === c.concept && f.period.kind === c.kind && f.period.end === c.end && (c.months == null || f.period.months === c.months));
+    const fs = r.rawFacts.filter((f) => f.locator?.source === c.rawfact && f.concept.id === c.concept && f.period.kind === c.kind && f.period.end === c.end && (c.months == null || f.period.months === c.months)
+      && (c.accn == null || f.filing.id === c.accn) && (c.value_is == null || f.value.num === c.value_is));
     const why = [];
+    // RawFact 판본 표시(반올림 재태깅 R-US1) — 그 값 사실에 rounded_retag_of_first 가 기대 단위로(감사 10-16 2차 U1)
+    if (c.vintage_rounded != null) {
+      if (!fs.length) why.push(`값 ${c.value_is} 사실 없음`);
+      else if (!fs.every((f) => f.vintage?.rounded_retag_of_first === c.vintage_rounded)) why.push(`반올림 재태깅 표시 ${fs.map((f) => f.vintage?.rounded_retag_of_first ?? "없음").join(",")} ≠ ${c.vintage_rounded}`);
+      if (why.length) { fail++; console.log(`실패 ${c.id}: ${why.join(" · ")}`); } else { pass++; console.log(`통과 ${c.id}`); }
+      continue;
+    }
     if (c.absent) { if (fs.length) why.push(`있으면 안 되는 사실 ${fs.length}건 — ${fs.map((f) => f.value.num).join(",")}`); }
     else if (fs.length !== 1 || fs[0].value.num !== c.value) why.push(`사실 ${fs.length}건 — ${fs.map((f) => f.value.num).join(",") || "없음"} (기대 ${c.value})`);
     if (why.length) { fail++; console.log(`실패 ${c.id}: ${why.join(" · ")}`); } else { pass++; console.log(`통과 ${c.id}`); }
@@ -64,7 +75,8 @@ for (const c of cases) {
   }
   const its = r.items.filter((i) => i.key === c.key && (c.end ? i.period.end === c.end : i.period.fy_key === c.end_year)
     && (c.kind === "instant" ? i.period.kind === "instant" : c.months ? i.period.months === c.months : true)
-    && (c.filing_year == null || String(i.vintage_basis?.filing ?? "").startsWith(String(c.filing_year + 1))));
+    && (c.filing_year == null || String(i.vintage_basis?.filing ?? "").startsWith(String(c.filing_year + 1)))
+    && (c.filing == null || i.vintage_basis?.filing === c.filing)); // filing = 그 서류의 Item 만(편의 환산 USD 는 그해 20-F 에만 있다)
   const why = [];
   // 연결 서류에서 별도(개별) Item 이 새는지(감사 10-16 J1) — scope_absent 사례
   if (c.scope_absent) {

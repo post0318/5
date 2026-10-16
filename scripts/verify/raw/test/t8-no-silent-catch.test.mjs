@@ -17,7 +17,40 @@ function files(d) {
     return /\.mjs$/.test(n) ? [p] : [];
   });
 }
-const RECORD = /\bfail\(|\bthrow\b|failures|failed\.push|note\(|noSrc\+\+|Err\b|err\b|Err =|why =|reason|ok: false|incident|bad\(|code:/;
+// 기록·전달 「동작」만 인정(낱말이 아니라) — 실패 기록 함수 호출·실패 목록 넣기·사유 변수 대입·사고 기록·무조건 다시 던지기.
+// 조건부로만 던지는 줄(「if (e?.code === "quota_stop") throw e;」)은 지우고 본다 — 그 밖의 오류는 삼키기 때문(감사 10-16 2차 K8b:
+// 실패 기록을 그 줄로 바꿔도 「throw」 낱말 때문에 통과했다)
+const RECORD = /\bfail\(|\bfailures\.push\(|\bfailed\.push\(|\bmissingDates\.push\(|\bnote\(|\bincident\(|\bbad\(|\bnoSrc\+\+|\b\w*(?:Err|err)\s*=(?!=)|\bwhy\s*=(?!=)|\bthrow\b/;
+/** 본문에서 조건부 문장(if (…) 문장; / if (…) { … })을 지운다 — 무조건 실행되는 것만 남김 */
+export function unconditional(body) {
+  let out = "", i = 0;
+  while (i < body.length) {
+    const m = /\bif\s*\(/g;
+    m.lastIndex = i;
+    const h = m.exec(body);
+    if (!h) { out += body.slice(i); break; }
+    out += body.slice(i, h.index);
+    let j = h.index + h[0].length, d = 1;
+    while (j < body.length && d) { if (body[j] === "(") d++; else if (body[j] === ")") d--; j++; }
+    while (/\s/.test(body[j] ?? "")) j++;
+    if (body[j] === "{") { let e = 1; j++; while (j < body.length && e) { if (body[j] === "{") e++; else if (body[j] === "}") e--; j++; } }
+    else { while (j < body.length && body[j] !== ";" && body[j] !== "\n") j++; j++; }
+    // else 가지도 조건부
+    const rest = /^\s*else\s*/.exec(body.slice(j));
+    if (rest) { j += rest[0].length; if (body[j] === "{") { let e = 1; j++; while (j < body.length && e) { if (body[j] === "{") e++; else if (body[j] === "}") e--; j++; } } else if (!/^if\b/.test(body.slice(j))) { while (j < body.length && body[j] !== ";" && body[j] !== "\n") j++; j++; } }
+    i = j;
+  }
+  return out;
+}
+
+test("t8 판정기 자체: 조건부로만 던지고 나머지를 삼키는 catch 는 잡는다(심은 K8b)", () => {
+  assert.equal(RECORD.test(unconditional(` if (e?.code === "quota_stop") throw e; `)), false);
+  assert.equal(RECORD.test(unconditional(` if (e?.code === "quota_stop") { throw e; } `)), false);
+  assert.equal(RECORD.test(unconditional(` if (e?.code === "quota_stop") throw e; fail("x", e); `)), true);
+  assert.equal(RECORD.test(unconditional(` if (e?.code === "ENOENT") return {}; throw e; `)), true);
+  assert.equal(RECORD.test(unconditional(` const reason = "x"; return null; `)), false, "낱말(reason)만으로는 기록이 아니다");
+  assert.equal(RECORD.test(unconditional(` x = { code: "a" }; `)), false, "code: 낱말만으로는 기록이 아니다");
+});
 
 test("원자료 어댑터: 조용히 삼키는 catch 없음", () => {
   const bad = [];
@@ -32,7 +65,8 @@ test("원자료 어댑터: 조용히 삼키는 catch 없음", () => {
       const line = src.slice(0, m.index).split("\n").length;
       const near = `${lines[line - 2] ?? ""}\n${lines[line - 1] ?? ""}`;
       if (/silent-ok:\s*\S/.test(near)) continue;
-      if (!body.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "").trim() || !RECORD.test(body)) bad.push(`${f.slice(ROOT.length)}:${line} catch {${body.trim().slice(0, 60)}}`);
+      const code = body.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "");
+      if (!code.trim() || !RECORD.test(unconditional(code))) bad.push(`${f.slice(ROOT.length)}:${line} catch {${body.trim().slice(0, 60)}}`);
     }
     for (const m of src.matchAll(/\.catch\(\s*\(\s*\w*\s*\)\s*=>\s*(null|undefined|\[\]|\{\}|\(\{\}\)|""|0|false)\s*\)/g)) {
       const line = src.slice(0, m.index).split("\n").length;

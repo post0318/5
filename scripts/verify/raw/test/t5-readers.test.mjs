@@ -106,6 +106,15 @@ test("이자 빈칸 사유: 원문 조회 실패는 fetch_failed(XBRL 에 이자
   }
 });
 
+test("이자 빈칸 사유: XBRL 을 쓰는 해(2023~)에 XBRL 조회가 실패하면 원문에 이자 줄이 없어도 fetch_failed(감사 10-16 2차 ③-4 — 010120 이 confirmed_absent 로 바뀌었다)", () => {
+  const onlyTotal = zip([["20240312000736.xml", `<DOCUMENT><DOCUMENT-NAME>사업보고서</DOCUMENT-NAME><TITLE>연결재무제표 주석</TITLE><P>25. 금융비용</P><P>금융비용의 내역</P><P>(단위 : 백만원)</P><TABLE><TR><TD>금융비용</TD><TD>5</TD><TD>4</TD></TR></TABLE></DOCUMENT>`]]);
+  const failed = interestItems({ rcept: "20240312000736", year: 2023, docBuf: onlyTotal, xbrlErr: "fetch_failed: 연결 막힘" });
+  assert.ok(failed.length === 2 && failed.every((i) => i.value == null && i.blank_reason === "fetch_failed"), JSON.stringify(failed.map((i) => i.blank_reason)));
+  // 같은 원문, XBRL 을 쓰지 않는 해(2021)는 원문 판정 그대로
+  const old = interestItems({ rcept: "20220312000001", year: 2021, docBuf: onlyTotal, xbrlErr: "fetch_failed: 연결 막힘" });
+  assert.ok(old.every((i) => i.blank_reason === "confirmed_absent"), JSON.stringify(old.map((i) => i.blank_reason)));
+});
+
 test("빈칸 사유 → 판정 연결 표(BLANK_JUDGE): 조회 실패·모호·판독 실패는 검증불가(종료 1), 게시 전은 재실행(3), 확인된 없음만 기대 빈칸(감사 10-16 C8)", () => {
   assert.deepEqual(BLANK_JUDGE.fetch_failed, { judge: "unverifiable", exit: 1 });
   assert.deepEqual(BLANK_JUDGE.parse_failed, { judge: "unverifiable", exit: 1 });

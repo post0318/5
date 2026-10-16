@@ -150,6 +150,9 @@ test("SEC 인스턴스 신원: 같은 회사라도 서류 종류·기간 끝이 
   assert.equal(id(inst("10-Q", "2025-06-28")).ok, false, "10-Q 인스턴스가 10-K 열쇠로 들어오면 실패");
   assert.equal(id(inst("10-K", "2024-09-28")).ok, false, "다른 해 10-K 면 실패");
   assert.equal(id(inst("10-K/A", "2025-09-27")).ok, true, "정정본은 원 종류로");
+  // 종류만 다르고 기간 끝은 같은 경우 — 기간 확인이 대신 잡지 못하게(감사 10-16 2차 U8: 종류 확인을 꺼도 위 사례는 기간 확인이 잡아 통과했다)
+  assert.equal(id(inst("10-Q", "2025-09-27")).ok, false, "같은 기간 끝의 10-Q 인스턴스가 10-K 열쇠로 오면 실패");
+  assert.equal(id(inst("20-F", "2025-09-27")).ok, false, "같은 기간 끝의 20-F 면 실패");
   const idOther = identityFor({ cik: "320193", a18: "000032019325000079", file: "x_htm.xml", ext: "xml", expect: { form: "10-K", periodEnd: "2025-09-27" } });
   assert.equal(idOther(Buffer.from(`<dei:EntityCentralIndexKey>0000789019</dei:EntityCentralIndexKey>`)).ok, false, "다른 회사");
 });
@@ -185,6 +188,10 @@ test("EDINET 서류 신원: 같은 회사라도 서류 종류·연간 기간 끝
   await run(xb("asr", "2025-03-31"), { form: "120", periodEnd: "2025-03-31" });
   await assert.rejects(run(xb("q2r", "2024-09-30"), { form: "120", periodEnd: "2025-03-31" }), "半期 서류가 有報 열쇠로 오면 실패");
   await assert.rejects(run(xb("asr", "2024-03-31"), { form: "120", periodEnd: "2025-03-31" }), "다른 해 有報면 실패");
+  // 종류만 다른 경우(파일명 날짜는 같음) — 기간 확인이 대신 잡지 못하게(감사 10-16 2차 J9)
+  await assert.rejects(run(xb("q2r", "2025-03-31"), { form: "120", periodEnd: "2025-03-31" }), "같은 날짜의 半期 서류가 有報 열쇠로 오면 실패");
+  await assert.rejects(run(xb("asr", "2025-09-30"), { form: "160", periodEnd: "2026-03-31" }), "有報가 半期 열쇠로 오면 실패");
+  await assert.rejects(run(xb("q1r", "2025-06-30"), { form: "160", periodEnd: "2026-03-31" }), "四半期 1분기가 半期 열쇠로 오면 실패");
   await run(xb("q2r", "2025-09-30"), { form: "160", periodEnd: "2026-03-31" }); // 半期 = q2r 허용, 기간 끝은 연간만 확인
 });
 
@@ -197,6 +204,13 @@ test("DART fnltt 신원: 행의 사업연도·보고서 종류가 요청과 다�
   await assert.rejects(dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000001"), "2024 행이 2025 요청으로 오면 실패");
   body = { status: "000", list: [row("2025", "11012")] };
   await assert.rejects(dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000002"), "반기 행이 사업보고서 요청으로 오면 실패");
+  // 회사 — 첫 행만이 아니라 모든 행(감사 10-16 2차 C6: 첫 행 확인을 꺼도 모든 행 확인이 같은 것을 잡아 시험이 구분하지 못했다 → 한 검사로 합침)
+  body = { status: "000", list: [row("2025", "11011"), { ...row("2025", "11011"), corp_code: "00164779" }] };
+  await assert.rejects(dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000004"), "둘째 행이 다른 회사면 실패");
+  body = { status: "000", list: [{ ...row("2025", "11011"), corp_code: "00164779" }] };
+  await assert.rejects(dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000005"), "첫 행이 다른 회사면 실패");
+  body = { status: "000", list: [{ ...row("2025", "11011"), corp_code: undefined }] };
+  await assert.rejects(dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000006"), "회사 칸이 없으면 실패(확인 불가를 통과로 치지 않음)");
   body = { status: "000", list: [row("2025", "11011")] };
   const ok = await dart.fnltt("00126380", 2025, "11011", "CFS", "20260301000003");
   assert.equal(ok.json.status, "000");

@@ -185,6 +185,9 @@ export function interestItems(o) {
     let reason = BLANK.parse_failed, detail = {};
     // 원문을 못 받았으면(XBRL 은 있어도 이자 칸이 없을 때) 조회 실패 — 판독 실패가 아니다(감사 10-16 ③-6)
     if (!o.docBuf && (o.docErr || !o.xbrlBuf)) { reason = BLANK.fetch_failed; detail = { docErr: o.docErr ?? null, xbrlErr: o.xbrlErr ?? null }; }
+    // XBRL 을 쓰는 해(2023 사업보고서부터)에 XBRL 조회가 실패했으면 원문에 이자 줄이 없어도 「없음 확인」이 아니다 — XBRL 이 답했을 수 있다
+    // (감사 10-16 2차 ③-4: 010120 XBRL 실패 흉내 → 2023·2022 이자가 confirmed_absent, 정상은 42,096·20,415 백만원)
+    else if (o.xbrlErr && o.year >= 2023) { reason = BLANK.fetch_failed; detail = { xbrlErr: o.xbrlErr, docStatus: doc?.status ?? null }; }
     else if (doc?.status === "total_only") { reason = BLANK.confirmed_absent; detail = { why: "interest_not_separated", tables: doc.tables }; }
     else if (doc?.status === "no_interest_row") { reason = BLANK.confirmed_absent; detail = { why: "interest_row_absent", other: doc.other?.map((t) => t.title) }; }
     else if (pick?.error === "no_core_row") { reason = BLANK.confirmed_absent; detail = { why: "interest_not_separated", rows: pick.rows }; }

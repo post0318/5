@@ -6,7 +6,7 @@
  *  (나) 본표 줄 — 인스턴스 + 본표 구조로 줄을 고른다(R-US5 CapEx·R-US6 이자·현금흐름 감가상각 줄). 줄 선택은 태그 이름이 아니라
  *       본표 위치와 회사 라벨, 라벨이 없으면 태그 정의 + label_missing.
  */
-import { item, BLANK } from "../common/rawfact.mjs";
+import { item, BLANK, presentationOk } from "../common/rawfact.mjs";
 
 export const factId = (f) => `${f.locator.source}|${f.filing.id}|${f.concept.id}|${f.value.unit}|${f.period.start ?? ""}|${f.period.end}|${f.locator.contextRef ?? ""}`;
 const periodKey = (f) => `${f.period.kind}|${f.period.start ?? ""}|${f.period.end}`;
@@ -68,7 +68,9 @@ export function chainItems(facts) {
     const seen = new Set(); // 서류|기간
     for (let ci = 0; ci < ch.concepts.length; ci++) {
       for (const f of by.get(ch.concepts[ci]) ?? []) {
-        if (f.period.kind !== ch.kind || !ch.unit.test(f.value.unit ?? "")) continue;
+        if (f.period.kind !== ch.kind || !ch.unit.test(f.value.unit ?? "") || !presentationOk(f)) continue;
+        // 0개월 기간(시작 = 끝 — 배당 선언일·분사일 주식수)은 기간 항목이 아니다(감사 10-16 2차 ③-9 DELL·GEV)
+        if (f.period.kind === "duration" && !(f.period.months > 0)) continue;
         const k = `${f.filing.id}|${periodKey(f)}`;
         if (seen.has(k)) continue;
         seen.add(k);
@@ -76,7 +78,7 @@ export function chainItems(facts) {
           key, period: f.period, scope: f.scope, value: f.value.num, facts: [factId(f)],
           rule: { id: "R-US-CHAIN", part: ch.part ?? null, concept: f.concept.id, chainIndex: ci },
           vintage_basis: { filing: f.filing.id, form: f.filing.form, filed_at: f.filing.filed_at, is_original: f.vintage?.is_original, is_latest: f.vintage?.is_latest },
-          flags: f.vintage?.rounded_retag_of_first ? { rounded_retag_of_first: f.vintage.rounded_retag_of_first } : {},
+          flags: { currency: MONEY.test(f.value.unit ?? "") ? f.value.unit : null, ...(f.vintage?.rounded_retag_of_first ? { rounded_retag_of_first: f.vintage.rounded_retag_of_first } : {}) },
         }));
       }
     }
@@ -114,7 +116,7 @@ export function ppeLine(tag, label, parentLabel) {
 }
 
 export function capexItems(instFacts, filing) {
-  const cf = instFacts.filter((f) => faceIn(f, "cf", "investing") && f.period.kind === "duration" && MONEY.test(f.value.unit ?? ""));
+  const cf = instFacts.filter((f) => faceIn(f, "cf", "investing") && f.period.kind === "duration" && (MONEY.test(f.value.unit ?? "") && presentationOk(f)));
   const byPeriod = groupBy(cf, periodKey);
   const out = [];
   for (const [, fs] of byPeriod) {
@@ -134,10 +136,14 @@ export function capexItems(instFacts, filing) {
       out.push(item({ key: "capex_ppe_line", period: p, value: null, blank_reason: BLANK.confirmed_absent, blank_detail: { investing_lines: rejected }, rule: { id: "R-US5" }, vintage_basis: vb(filing) }));
       continue;
     }
-    // 같은 개념이 문맥 ID 만 달리 두 번(같은 값) — 하나로
+    // 같은 개념이 문맥 ID 만 달리 두 번(같은 값) — 하나로. 통화가 다르면(표시 통화 판정이 빗나가 편의 환산이 섞임) 고르지 않고 모호
     const uniq = new Map();
     for (const l of lines) uniq.set(l.f.concept.id, l);
     const ls = [...uniq.values()];
+    if (new Set(lines.map((l) => l.f.value.unit)).size > 1) {
+      out.push(item({ key: "capex_ppe_line", period: p, value: null, blank_reason: BLANK.ambiguous, blank_detail: { why: "같은 기간 줄 통화가 섞임", units: [...new Set(lines.map((l) => l.f.value.unit))] }, rule: { id: "R-US5" }, vintage_basis: vb(filing) }));
+      continue;
+    }
     if (ls.some((l) => l.f.value.inconsistent_duplicate)) {
       out.push(item({ key: "capex_ppe_line", period: p, value: null, blank_reason: BLANK.ambiguous, blank_detail: { why: "같은 줄 같은 정밀도 다른 값", lines: ls.map((l) => l.f.concept.id) }, rule: { id: "R-US5" }, vintage_basis: vb(filing) }));
       continue;
@@ -156,7 +162,7 @@ export function capexItems(instFacts, filing) {
 /** R-US6 이자비용(손익 발생주의) — 본표 줄 → 주석(차원 없는 같은 개념) */
 const INT_TAGS = ["InterestExpense", "InterestExpenseOnBorrowings", "InterestExpenseNonoperating", "InterestExpenseOperating", "InterestAndDebtExpense", "InterestExpenseNet", "InterestExpenseDebt"];
 export function interestItems(instFacts, filing) {
-  const cands = instFacts.filter((f) => !f.value.less_precise_duplicate && f.period.kind === "duration" && MONEY.test(f.value.unit ?? "") && !f.scope.dims.length && INT_TAGS.includes(local(f.concept.id)) && /^(us-gaap|ifrs-full):/.test(f.concept.id));
+  const cands = instFacts.filter((f) => !f.value.less_precise_duplicate && f.period.kind === "duration" && (MONEY.test(f.value.unit ?? "") && presentationOk(f)) && !f.scope.dims.length && INT_TAGS.includes(local(f.concept.id)) && /^(us-gaap|ifrs-full):/.test(f.concept.id));
   const out = [];
   for (const [, fs] of groupBy(cands, periodKey)) {
     const face = fs.filter((f) => faceIn(f, "is"));
@@ -181,7 +187,7 @@ export function interestItems(instFacts, filing) {
 const PRETAX_NAME = /BeforeIncomeTax/;
 const PRETAX_LABEL = /(income|earnings|profit|loss)[^.]*before[^.]*(provision for |)income tax|pre-?tax (income|earnings|profit)|before taxes/i;
 export function pretaxFaceItems(instFacts, filing) {
-  const isF = instFacts.filter((f) => faceIn(f, "is") && f.period.kind === "duration" && MONEY.test(f.value.unit ?? ""));
+  const isF = instFacts.filter((f) => faceIn(f, "is") && f.period.kind === "duration" && (MONEY.test(f.value.unit ?? "") && presentationOk(f)));
   const out = [];
   for (const [, fs] of groupBy(isF, periodKey)) {
     const uniq = new Map();
@@ -193,6 +199,11 @@ export function pretaxFaceItems(instFacts, filing) {
     }
     const ls = [...uniq.values()];
     if (!ls.length) continue;
+    const units = new Set(fs.filter((f) => uniq.has(f.concept.id)).map((f) => f.value.unit));
+    if (units.size > 1) {
+      out.push(item({ key: "pretax_face_line", period: fs[0].period, value: null, blank_reason: BLANK.ambiguous, blank_detail: { why: "같은 기간 줄 통화가 섞임", units: [...units] }, rule: { id: "R-US-PRETAX" }, vintage_basis: vb(filing) }));
+      continue;
+    }
     for (const { f, lab } of ls) {
       out.push(item({
         key: "pretax_face_line", period: f.period, value: f.value.inconsistent_duplicate ? null : f.value.num,
@@ -214,12 +225,16 @@ const DA_EXCLUDE = /Inventory|AcquisitionCost|DebtIssuance|DebtDiscount|Deferred
 const DA_LABEL_EXCLUDE = /inventory|acquisition cost|debt (issuance|discount)|financing cost|stock[- ]based|share[- ]based|operating lease|right[- ]of[- ]use|contract (cost|acquisition)|incentive|inventory step|pension|premium/i;
 const DA_LABEL_KEEP = /^(depreciation|amortization of (intangible|acquired)|depreciation, amortization)/i;
 export function daItems(instFacts, filing) {
-  const cf = instFacts.filter((f) => faceIn(f, "cf", "operating") && f.period.kind === "duration" && MONEY.test(f.value.unit ?? ""));
+  const cf = instFacts.filter((f) => faceIn(f, "cf", "operating") && f.period.kind === "duration" && (MONEY.test(f.value.unit ?? "") && presentationOk(f)));
   const out = [];
   for (const [, fs] of groupBy(cf, periodKey)) {
     const inc = [], exc = [];
     const uniq = new Map();
     for (const f of fs) uniq.set(f.concept.id, f);
+    if (new Set([...fs].filter((f) => DA_NAME.test(local(f.concept.id))).map((f) => f.value.unit)).size > 1) {
+      out.push(item({ key: "da_cf_lines", period: fs[0].period, value: null, blank_reason: BLANK.ambiguous, blank_detail: { why: "같은 기간 줄 통화가 섞임" }, rule: { id: "R-US-DA" }, vintage_basis: vb(filing) }));
+      continue;
+    }
     for (const f of uniq.values()) {
       const n = local(f.concept.id);
       const lab = lineOf(f, "cf")?.label ?? "";
@@ -244,7 +259,7 @@ export function daItems(instFacts, filing) {
       continue;
     }
     // 중단영업 감가상각(본표 밖 주석 태그 또는 중단영업 차원) — 현금흐름표가 중단영업을 포함하는지 판단할 재료(④)
-    const disc = instFacts.filter((f) => !f.value.less_precise_duplicate && periodKey(f) === periodKey(fs[0]) && MONEY.test(f.value.unit ?? "")
+    const disc = instFacts.filter((f) => !f.value.less_precise_duplicate && periodKey(f) === periodKey(fs[0]) && (MONEY.test(f.value.unit ?? "") && presentationOk(f))
       && (/DepreciationAndAmortizationDiscontinuedOperations|DiscontinuedOperationDepreciation/.test(f.concept.id)
         || (DA_NAME.test(local(f.concept.id)) && f.scope.dims.some((d) => /Discontinued/i.test(`${d.axis} ${d.member}`)))));
     out.push(item({

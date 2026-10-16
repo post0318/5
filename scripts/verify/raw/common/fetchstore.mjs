@@ -51,14 +51,16 @@ export async function immutable(o) {
  * @param {object} o immutable 과 같고 version 대신 ttlMs
  * @param {number} o.ttlMs
  * @param {()=>Date} [o.now]
+ * @param {boolean} [o.replay] 시험 재현 전용(golden·T2·T4 오프라인 — 네트워크를 막은 실행): ttl 과 무관하게 보관된 최신 판본을 쓴다.
+ *   갱신형 원본은 ttl 이 지나면 다시 받아야 해서 몇 시간 뒤엔 오프라인 시험이 「원본 없음」이 됐다(감사 10-16 2차 ④). 실제 검증 실행은 쓰지 않는다
  */
 export async function mutable(o) {
   const now = o.now ?? (() => new Date());
   const base = { market: o.market, source: o.source, key: o.key, ext: o.ext };
   const last = o.store.latest(base);
-  if (last && now().getTime() - Date.parse(last.checkedAt) <= o.ttlMs) {
+  if (last && (o.replay || now().getTime() - Date.parse(last.checkedAt) <= o.ttlMs)) {
     const hit = o.store.get({ ...base, version: last.version, identity: o.identity });
-    if (hit) return { buf: hit.buf, sha256: hit.sha256, version: last.version, fromStore: true, checkedAt: last.checkedAt };
+    if (hit) return { buf: hit.buf, sha256: hit.sha256, version: last.version, fromStore: true, checkedAt: last.checkedAt, replayed: !!o.replay };
   }
   for (let round = 0; round < 2; round++) {
     const r = await o.req.get(o.url, { headers: o.headers });

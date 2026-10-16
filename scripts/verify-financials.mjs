@@ -673,6 +673,17 @@ const sameBase = (a, b, tol) => same(a, b, tol);
  *  유동비율·LTM 매출총이익률·EBITDA 마진)). 둘 다 정수면 완전히 같아야, 소수면 같은 값을 다른 순서로 계산한 부동소수 끝자리(상대 1e-14)만 */
 const SAME_FLOAT = 1e-14;
 const sameNum = (a, b) => (Number.isInteger(a) && Number.isInteger(b) ? a === b : Math.abs(a - b) <= SAME_FLOAT * Math.max(Math.abs(a), Math.abs(b)));
+/**
+ * 성장률(%) 재계산 대조 — (당기 ÷ 전기 − 1) × 100 의 부동소수 표현 차는 비율(≈1) 크기의 끝자리라, 결과(성장률)가 작을수록 상대값이 커진다
+ * (PEP 2024 0.9475783534663594 vs …496, 차 9.9e-15 — 결과 대비 1.04e-14 로 SAME_FLOAT 1e-14 를 넘어 실패, 2026-10-16 자동 검증).
+ * 허용 = 비율 크기 × 8ε × 100(성장률 1% 근처 약 1.8e-13). 심은 오류(× (1 + 5e-10) — 0.95% 에서 4.7e-10)보다 1천 배 이상 작다.
+ */
+function sameGrowth(app, cur, prev) {
+  if (app == null) return { status: FAIL, note: `한쪽만 빈칸 (${app} vs 재계산)` };
+  const yoy = (cur / prev - 1) * 100;
+  const bound = 8 * Number.EPSILON * 100 * Math.max(1, Math.abs(cur / prev));
+  return Math.abs(app - yoy) <= bound ? { status: PASS } : { status: FAIL, note: `${app} vs ${yoy} (차 ${app - yoy}, 표현 차 한도 ${bound.toExponential(2)})` };
+}
 function same(a, b, tol = EXACT) {
   if (a == null && b == null) return { status: NA, note: "양쪽 빈칸" };
   if (a == null || b == null) return { status: FAIL, note: `한쪽만 빈칸 (${a} vs ${b})` };
@@ -5615,10 +5626,9 @@ async function verifyUs(sym) {
       add("C", "매출 하이라이트=총괄", c, same(SM[c] ?? null, x.rev));
       if (C[c]) add("C", "매출 컨센서스 실적=하이라이트", c, same(C[c].revenue ?? null, x.rev));
       if (x.rev != null && prev?.rev) {
-        const yoy = (x.rev / prev.rev - 1) * 100;
-        add("C", "매출 성장률 하이라이트 = 매출 재계산(직전 열 대비)", c, same(x.revYoy, yoy));
-        add("C", "매출 성장률 재무분석 = 매출 재계산(직전 열 대비)", c, same(A[c]?.revYoy ?? null, yoy));
-        if (C[c] && c !== "LTM") add("C", "매출 성장률 컨센서스 = 매출 재계산(직전 연도 대비)", c, same(C[c].revenueYoY ?? null, yoy));
+        add("C", "매출 성장률 하이라이트 = 매출 재계산(직전 열 대비)", c, sameGrowth(x.revYoy, x.rev, prev.rev));
+        add("C", "매출 성장률 재무분석 = 매출 재계산(직전 열 대비)", c, sameGrowth(A[c]?.revYoy ?? null, x.rev, prev.rev));
+        if (C[c] && c !== "LTM") add("C", "매출 성장률 컨센서스 = 매출 재계산(직전 연도 대비)", c, sameGrowth(C[c].revenueYoY ?? null, x.rev, prev.rev));
       }
       if (x.rev) {
         if (x.ni != null) add("C", "순이익률 하이라이트 = 순이익 ÷ 매출", c, same(x.niM, pct(x.ni, x.rev)));
@@ -5668,10 +5678,10 @@ async function verifyUs(sym) {
       }
       if (prior) add("A", name, c0, { status: PASS, note: `전년 ${prior} · ${how}` });
       if (prior) {
-        const yoy = (H[c0].rev / prior - 1) * 100, note = (r) => ({ ...r, note: [r.note, `전년 ${prior} · ${how}`].filter(Boolean).join(" · ") });
-        add("C", "매출 성장률 하이라이트 = 매출 재계산(첫 열 — SEC 전년 대비)", c0, note(same(H[c0].revYoy, yoy)));
-        add("C", "매출 성장률 재무분석 = 매출 재계산(첫 열 — SEC 전년 대비)", c0, note(same(A[c0]?.revYoy ?? null, yoy)));
-        if (C[c0]) add("C", "매출 성장률 컨센서스 = 매출 재계산(첫 열 — SEC 전년 대비)", c0, note(same(C[c0].revenueYoY ?? null, yoy)));
+        const note = (r) => ({ ...r, note: [r.note, `전년 ${prior} · ${how}`].filter(Boolean).join(" · ") });
+        add("C", "매출 성장률 하이라이트 = 매출 재계산(첫 열 — SEC 전년 대비)", c0, note(sameGrowth(H[c0].revYoy, H[c0].rev, prior)));
+        add("C", "매출 성장률 재무분석 = 매출 재계산(첫 열 — SEC 전년 대비)", c0, note(sameGrowth(A[c0]?.revYoy ?? null, H[c0].rev, prior)));
+        if (C[c0]) add("C", "매출 성장률 컨센서스 = 매출 재계산(첫 열 — SEC 전년 대비)", c0, note(sameGrowth(C[c0].revenueYoY ?? null, H[c0].rev, prior)));
       }
     }
     // 개요(연간 = 최근 사업연도, TTM = LTM)·유니버스(LTM 열) — 앱이 실제로 계산한 값(verify-row)

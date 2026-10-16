@@ -24,11 +24,11 @@ export function secUserAgent(env = process.env) {
 const pad10 = (cik) => String(cik).replace(/^0+/, "").padStart(10, "0");
 const cikNum = (cik) => String(Number(cik));
 
-export function makeSec({ store, quotaRoot, tool = "verify", fetchImpl, env = process.env, retry = RETRY.sec }) {
+export function makeSec({ store, quotaRoot, tool = "verify", fetchImpl, env = process.env, retry = RETRY.sec, replay = false }) {
   const ua = secUserAgent(env);
   const req = makeRequester({ source: "sec", quotaRoot, tool, dailyCap: null, gapMs: 334, retry, fetchImpl });
   const headers = { "user-agent": ua };
-  const base = { store, req, market: "us", source: "sec", headers };
+  const base = { store, req, market: "us", source: "sec", headers, replay };
 
   async function json(url, key, identity, require) {
     const r = await mutable({ ...base, key, ext: "json", url, ttlMs: TTL_MS, validate: (b) => checkJson(b, require), identity });

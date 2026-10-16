@@ -16,10 +16,10 @@ const CODELIST = "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/codelist
 const H = 3600e3;
 const jstDate = (now, minusDays = 0) => new Date(now().getTime() + 9 * H - minusDays * 864e5).toISOString().slice(0, 10);
 
-export function makeEdinet({ store, quotaRoot, key, tool = "verify", cap = Number(process.env.EDINET_DAILY_CAP_VERIFY ?? 3000), fetchImpl, now = () => new Date() }) {
+export function makeEdinet({ store, quotaRoot, key, tool = "verify", cap = Number(process.env.EDINET_DAILY_CAP_VERIFY ?? 3000), fetchImpl, now = () => new Date(), replay = false }) {
   if (!key) throw new Error("EDINET_API_KEY 미설정");
   const req = makeRequester({ source: "edinet", quotaRoot, tool, dailyCap: cap, gapMs: Number(process.env.JP_VERIFY_EDINET_GAP_MS ?? 1000), retry: RETRY.edinet, fetchImpl, now });
-  const base = { store, req, market: "jp", source: "edinet" };
+  const base = { store, req, market: "jp", source: "edinet", replay };
 
   const listOk = (b) => checkJson(b, (j) => {
     if (String(j?.metadata?.status) !== "200") return `status ${j?.metadata?.status} ${j?.metadata?.message ?? ""}`;
