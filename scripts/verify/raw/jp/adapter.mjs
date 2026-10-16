@@ -51,17 +51,7 @@ export async function runJp(ed, { sym, maxAnnual = 6, maxInterim = 2 }) {
       // 연결 우선(§6.2): 연결 본표가 있는 서류의 별도(개별) Item 은 내지 않는다 — 연결 개념이 사슬에 없으면 그 칸은 빠져 보이고(대조 new_blank) 개별 값으로 메우지 않는다
       const hasCons = r.facts.some((f) => f.scope.consolidation === "consolidated" && f.placement.face && f.placement.stmts.some((s) => s.stmt !== "summary"));
       const kept = hasCons ? its.filter((i) => i.scope.consolidation !== "separate") : its;
-      // 매출 사슬(표준 요소)이 없는데 본표 매출 줄(회사 고유 요소 — 7203 TotalNetRevenuesIFRS 등)이 있으면 빈칸 + 사유(그냥 비워 두지 않음)
-      const pk = (i) => `${i.scope.consolidation}|${i.period.start}|${i.period.end}`;
-      const chainRev = new Set(kept.filter((i) => i.key === "revenue").map(pk));
-      // 사유는 사실대로: 본표 매출 줄이 회사 고유 요소면 기대 빈칸, 표준 요소인데 사슬이 못 집었으면 판독 실패(감사 10-16 2차 ③-7 — 표준 요소를 「회사 고유」로 적었다)
-      for (const fr of kept.filter((i) => i.key === "revenue_face" && !chainRev.has(pk(i)))) {
-        const fc = fr.rule?.concept ?? null;
-        const std = /^(jppfs_cor|jpigp_cor):/.test(fc ?? "");
-        kept.push(item({ key: "revenue", period: fr.period, scope: fr.scope, value: null, blank_reason: std ? BLANK.parse_failed : BLANK.confirmed_absent,
-          blank_detail: { why: std ? "본표 매출 줄이 표준 요소인데 매출 사슬이 집지 않음(사슬 목록 밖 또는 구성요소 제외 규칙)" : "본표 매출 줄이 회사 고유 요소 — 본표 매출은 revenue_face", face_concept: fc },
-          rule: { id: "R-JP-CHAIN", concept: null }, vintage_basis: fr.vintage_basis }));
-      }
+      kept.push(...revenueBlankItems(kept));
       res.items.push(...kept);
       if (financialFormat) res.financialFormat = true;
       res.docs = [...(res.docs ?? []), { id: d.id, form: d.form, dei: r.dei, roles: r.roles.length }];
@@ -71,4 +61,23 @@ export async function runJp(ed, { sym, maxAnnual = 6, maxInterim = 2 }) {
   }
   res.fetchLog = { ...ed.log };
   return res;
+}
+
+/**
+ * 매출 사슬(표준 요소)이 없는데 본표 매출 줄(revenue_face)이 있는 기간 → 매출 빈칸 + 사유(그냥 비워 두지 않음).
+ * 사유는 사실대로: 본표 매출 줄이 회사 고유 요소(7203 TotalNetRevenuesIFRS 등)면 기대 빈칸, 표준 요소인데 사슬이 못 집었으면 판독 실패
+ * (감사 10-16 2차 ③-7 — 표준 요소를 「회사 고유」로 적었다. 3차 — 시험이 없었다)
+ */
+export function revenueBlankItems(items) {
+  const pk = (i) => `${i.scope.consolidation}|${i.period.start}|${i.period.end}`;
+  const chainRev = new Set(items.filter((i) => i.key === "revenue").map(pk));
+  const out = [];
+  for (const fr of items.filter((i) => i.key === "revenue_face" && !chainRev.has(pk(i)))) {
+    const fc = fr.rule?.concept ?? null;
+    const std = /^(jppfs_cor|jpigp_cor):/.test(fc ?? "");
+    out.push(item({ key: "revenue", period: fr.period, scope: fr.scope, value: null, blank_reason: std ? BLANK.parse_failed : BLANK.confirmed_absent,
+      blank_detail: { why: std ? "본표 매출 줄이 표준 요소인데 매출 사슬이 집지 않음(사슬 목록 밖 또는 구성요소 제외 규칙)" : "본표 매출 줄이 회사 고유 요소 — 본표 매출은 revenue_face", face_concept: fc },
+      rule: { id: "R-JP-CHAIN", concept: null }, vintage_basis: fr.vintage_basis }));
+  }
+  return out;
 }

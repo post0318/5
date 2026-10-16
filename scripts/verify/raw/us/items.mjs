@@ -6,7 +6,7 @@
  *  (나) 본표 줄 — 인스턴스 + 본표 구조로 줄을 고른다(R-US5 CapEx·R-US6 이자·현금흐름 감가상각 줄). 줄 선택은 태그 이름이 아니라
  *       본표 위치와 회사 라벨, 라벨이 없으면 태그 정의 + label_missing.
  */
-import { item, BLANK, presentationOk } from "../common/rawfact.mjs";
+import { item, BLANK, presentationOk, roundedRetagUnit } from "../common/rawfact.mjs";
 
 export const factId = (f) => `${f.locator.source}|${f.filing.id}|${f.concept.id}|${f.value.unit}|${f.period.start ?? ""}|${f.period.end}|${f.locator.contextRef ?? ""}`;
 const periodKey = (f) => `${f.period.kind}|${f.period.start ?? ""}|${f.period.end}`;
@@ -301,9 +301,10 @@ export function markItemVintage(items) {
       it.vintage_basis.item_is_latest = it === arr[arr.length - 1];
       if (it !== first && it.value !== first.value) {
         it.vintage_basis.item_restated = true;
-        const v0 = Number(first.value), v = Number(it.value);
-        // 설계 R-US1 1억·10억·100억(감사 10-16 ③-7 — 1e5~1e10 으로 넓었다)
-        for (const u of [1e8, 1e9, 1e10]) if (Math.abs(v0) >= u && v !== v0 && v === Math.round(v0 / u) * u) { it.flags.rounded_retag_of_first = u; break; }
+        // 설계 R-US1 1억·10억·100억(감사 10-16 ③-7) — RawFact 와 같은 함수(감사 10-16 3차)
+        // 사슬 Item 은 flags.currency(주식수 사슬은 null), 본표 줄 Item(유형자산 취득·세전이익·감가상각)은 늘 금액
+        const u = roundedRetagUnit(first.value, it.value, it.flags && "currency" in it.flags ? !!it.flags.currency : true);
+        if (u) it.flags.rounded_retag_of_first = u;
       }
     }
   }

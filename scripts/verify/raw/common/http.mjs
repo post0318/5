@@ -115,7 +115,7 @@ export function makeRequester({ source, quotaRoot, tool, dailyCap, gapMs, retry,
       try {
         res = await fetchImpl(url, { method, headers, body, signal: AbortSignal.timeout(timeoutMs) });
         if (res.ok) return { status: res.status, headers: res.headers, buf: Buffer.from(await res.arrayBuffer()) };
-      } catch (e) {
+      } catch (e) { // silent-ok: 오류를 err 로 넘겨 바로 아래 retry 판단 → 재시도 또는 FetchFailed 로 던짐
         err = e;
       }
       const wait = retry(attempt, res, err);

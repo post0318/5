@@ -76,6 +76,7 @@ import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { loadBbg } from "./reference/bbg.mjs";
+import { growthMatch } from "./verify/same-growth.mjs";
 import { configureEdinet, edinetStats } from "./verify-jp/edinet.mjs";
 import { configureJpLayers, jpAnnualLayers, jpHalfLayers, jpValueLayers, releaseJpSymbol } from "./verify-jp/layers.mjs";
 import { makeDiskCache } from "./verify-kr/cache.mjs";
@@ -673,16 +674,10 @@ const sameBase = (a, b, tol) => same(a, b, tol);
  *  유동비율·LTM 매출총이익률·EBITDA 마진)). 둘 다 정수면 완전히 같아야, 소수면 같은 값을 다른 순서로 계산한 부동소수 끝자리(상대 1e-14)만 */
 const SAME_FLOAT = 1e-14;
 const sameNum = (a, b) => (Number.isInteger(a) && Number.isInteger(b) ? a === b : Math.abs(a - b) <= SAME_FLOAT * Math.max(Math.abs(a), Math.abs(b)));
-/**
- * 성장률(%) 재계산 대조 — (당기 ÷ 전기 − 1) × 100 의 부동소수 표현 차는 비율(≈1) 크기의 끝자리라, 결과(성장률)가 작을수록 상대값이 커진다
- * (PEP 2024 0.9475783534663594 vs …496, 차 9.9e-15 — 결과 대비 1.04e-14 로 SAME_FLOAT 1e-14 를 넘어 실패, 2026-10-16 자동 검증).
- * 허용 = 비율 크기 × 8ε × 100(성장률 1% 근처 약 1.8e-13). 심은 오류(× (1 + 5e-10) — 0.95% 에서 4.7e-10)보다 1천 배 이상 작다.
- */
+/** 성장률(%) 재계산 대조 — 규칙·한계는 scripts/verify/same-growth.mjs(시험 있음) */
 function sameGrowth(app, cur, prev) {
-  if (app == null) return { status: FAIL, note: `한쪽만 빈칸 (${app} vs 재계산)` };
-  const yoy = (cur / prev - 1) * 100;
-  const bound = 8 * Number.EPSILON * 100 * Math.max(1, Math.abs(cur / prev));
-  return Math.abs(app - yoy) <= bound ? { status: PASS } : { status: FAIL, note: `${app} vs ${yoy} (차 ${app - yoy}, 표현 차 한도 ${bound.toExponential(2)})` };
+  const r = growthMatch(app, cur, prev);
+  return r.ok ? { status: PASS } : { status: FAIL, note: r.note };
 }
 function same(a, b, tol = EXACT) {
   if (a == null && b == null) return { status: NA, note: "양쪽 빈칸" };

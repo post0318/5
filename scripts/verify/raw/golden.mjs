@@ -19,7 +19,7 @@ const runs = new Map();
 const JP_TO = "2026-10-14"; // 오프라인 재현용 일본 목록 끝 날짜(보관소에 있는 마지막 날)
 
 async function run(c) {
-  const k = `${c.market}|${c.sym}|${c.sixk ? 1 : 0}`;
+  const k = `${c.market}|${c.sym}|${c.sixk ? 1 : 0}|${c.inject ?? ""}`;
   if (runs.has(k)) return runs.get(k);
   let r;
   if (c.market === "us") {
@@ -32,7 +32,10 @@ async function run(c) {
   } else if (c.market === "kr") {
     const { makeDart } = await import("./kr/dart.mjs");
     const { runKr } = await import("./kr/adapter.mjs");
-    r = await runKr(makeDart({ store, quotaRoot, key: env.DART_API_KEY, fetchImpl, replay: !online }), { sym: c.sym, quarters: 0 });
+    const dart = makeDart({ store, quotaRoot, key: env.DART_API_KEY, fetchImpl, replay: !online });
+    // inject = 그 조회를 실패로 바꿔 실패가 failures·빈칸 사유로 남는지 본다(감사 10-16 3차 ③-4 — 정적 검사 t8 만으로는 기록을 지워도 통과했다)
+    if (c.inject) dart[c.inject] = async () => { throw Object.assign(new Error(`심은 조회 실패(golden inject ${c.inject})`), { code: "fetch_failed" }); };
+    r = await runKr(dart, { sym: c.sym, quarters: 0 });
   } else {
     const { makeEdinet } = await import("./jp/edinet.mjs");
     const { prepareJp, runJp } = await import("./jp/adapter.mjs");
@@ -61,10 +64,10 @@ for (const c of cases) {
     const fs = r.rawFacts.filter((f) => f.locator?.source === c.rawfact && f.concept.id === c.concept && f.period.kind === c.kind && f.period.end === c.end && (c.months == null || f.period.months === c.months)
       && (c.accn == null || f.filing.id === c.accn) && (c.value_is == null || f.value.num === c.value_is));
     const why = [];
-    // RawFact 판본 표시(반올림 재태깅 R-US1) — 그 값 사실에 rounded_retag_of_first 가 기대 단위로(감사 10-16 2차 U1)
+    // RawFact 판본 표시(반올림 재태깅 R-US1) — 그 값 사실에 rounded_retag_of_first 가 기대 단위로(감사 10-16 2차 U1). 0 = 표시가 없어야(감사 10-16 3차)
     if (c.vintage_rounded != null) {
       if (!fs.length) why.push(`값 ${c.value_is} 사실 없음`);
-      else if (!fs.every((f) => f.vintage?.rounded_retag_of_first === c.vintage_rounded)) why.push(`반올림 재태깅 표시 ${fs.map((f) => f.vintage?.rounded_retag_of_first ?? "없음").join(",")} ≠ ${c.vintage_rounded}`);
+      else if (!fs.every((f) => (f.vintage?.rounded_retag_of_first ?? 0) === c.vintage_rounded)) why.push(`반올림 재태깅 표시 ${fs.map((f) => f.vintage?.rounded_retag_of_first ?? "없음").join(",")} ≠ ${c.vintage_rounded}`);
       if (why.length) { fail++; console.log(`실패 ${c.id}: ${why.join(" · ")}`); } else { pass++; console.log(`통과 ${c.id}`); }
       continue;
     }
@@ -94,8 +97,23 @@ for (const c of cases) {
   if (c.values_include) for (const v of c.values_include) if (!its.some((i) => i.value === v)) why.push(`값 ${v} 없음`);
   if (c.rounded_retag_value && !its.some((i) => i.value === c.rounded_retag_value && i.flags?.rounded_retag_of_first)) why.push(`반올림 재태깅 ${c.rounded_retag_value} 표시 없음`);
   if (c.blank_reason && !its.some((i) => i.value == null && i.blank_reason === c.blank_reason)) why.push(`빈칸 사유 ${c.blank_reason} 없음 — ${its.map((i) => i.value ?? i.blank_reason).join(",")}`);
+  if (c.expect_failure_stage && !r.failures.some((f) => f.stage === c.expect_failure_stage)) why.push(`실행 failures 에 ${c.expect_failure_stage} 없음 — ${[...new Set(r.failures.map((f) => f.stage))].join(",") || "없음"}`);
   if (c.flags) for (const [fk, fv] of Object.entries(c.flags)) if (!its.some((i) => (c.value == null || i.value === c.value) && i.flags?.[fk] === fv)) why.push(`표시 ${fk}=${fv} 없음`);
   if (why.length) { fail++; console.log(`실패 ${c.id}: ${why.join(" · ")}`); } else { pass++; console.log(`통과 ${c.id}`); }
+}
+// 실행 단위 failures(조회·판독 실패) — 사례가 다 통과해도 실행에 실패가 있으면 그 종목 결과는 완전하지 않다(감사 10-16 3차 ⑧).
+// 보관소에 원본이 없는 알려진 실패는 cases.json known_run_failures 에 「단계 + 메시지 앞부분」으로 적고, 그 밖의 실패는 실패로 센다(심은 실패 inject 실행 제외)
+const known = JSON.parse(readFileSync(new URL("./golden/cases.json", import.meta.url), "utf8")).known_run_failures ?? {};
+for (const [k, r] of runs) {
+  if (k.split("|")[3]) continue;
+  const runKey = k.split("|").slice(0, 3).join("|");
+  const allow = known[runKey] ?? [];
+  const extra = r.failures.filter((f) => !allow.some((a) => f.stage === a.stage && String(f.message ?? "").includes(a.message)));
+  const unused = allow.filter((a) => !r.failures.some((f) => f.stage === a.stage && String(f.message ?? "").includes(a.message)));
+  if (extra.length || unused.length) {
+    fail++;
+    console.log(`실패 실행 ${runKey}: 알려지지 않은 failures ${extra.length}건${extra.length ? " — " + extra.slice(0, 5).map((f) => `${f.stage}: ${String(f.message).slice(0, 100)}`).join(" / ") : ""}${unused.length ? ` · 사라진 알려진 실패 ${unused.length}건(목록 갱신 필요)` : ""}`);
+  } else if (r.failures.length) console.log(`실행 ${runKey}: 알려진 failures ${r.failures.length}건(known_run_failures — 원인 확인됨)`);
 }
 console.log(`\n통과 ${pass} · 실패 ${fail} · 원본 없음 ${noSrc}`);
 process.exit(fail || noSrc ? 1 : 0);

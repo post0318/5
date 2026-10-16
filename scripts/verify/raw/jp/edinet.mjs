@@ -61,7 +61,7 @@ export function makeEdinet({ store, quotaRoot, key, tool = "verify", cap = Numbe
         try {
           const m = JSON.parse(buf.toString("utf8")).metadata;
           why = `상태 ${m?.status} ${m?.message ?? ""}`;
-        } catch (e) {
+        } catch (e) { // silent-ok: 사유를 why 에 담아 바로 아래에서 FetchFailed 로 던짐
           why = `zip·JSON 아님(${String(e.message).slice(0, 40)})`;
         }
         throw new FetchFailed("edinet", `EDINET 서류 ${docID} — ${why}`);

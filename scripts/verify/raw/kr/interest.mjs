@@ -165,6 +165,9 @@ export function interestItems(o) {
       const hit = dieVals.filter((v) => v === docV || v === docCore);
       if (hit.length === 1) {
         out.push(item({ key: "interest_expense_pl", period: p, value: docV ?? hit[0], facts: die.filter((f) => f.v === hit[0]).map((f) => `xbrl|${o.rcept}|DIE|${f.contextRef}`), rule: { id: "R-KR6", source: "xbrl DIE 여럿 → 원문 금융원가 표로 선택", table: pick.title, unit: pick.unit }, vintage_basis: vb, flags: { die_candidates: dieVals, extra_rows: pick.extraRows } }));
+      } else if (!o.docBuf && o.docErr) {
+        // 고를 근거(원문 금융원가 표)를 못 받았다 — 모호가 아니라 조회 실패(감사 10-16 3차 ③-7: 329180 2023·2024 보고서)
+        out.push(item({ key: "interest_expense_pl", period: p, value: null, blank_reason: BLANK.fetch_failed, blank_detail: { DIE: dieVals, docErr: o.docErr }, rule: { id: "R-KR6", source: "xbrl" }, vintage_basis: vb }));
       } else {
         out.push(item({ key: "interest_expense_pl", period: p, value: null, blank_reason: BLANK.ambiguous, blank_detail: { DIE: dieVals, doc: docV }, rule: { id: "R-KR6", source: "xbrl" }, vintage_basis: vb }));
       }

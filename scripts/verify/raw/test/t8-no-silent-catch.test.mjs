@@ -17,10 +17,11 @@ function files(d) {
     return /\.mjs$/.test(n) ? [p] : [];
   });
 }
-// 기록·전달 「동작」만 인정(낱말이 아니라) — 실패 기록 함수 호출·실패 목록 넣기·사유 변수 대입·사고 기록·무조건 다시 던지기.
+// 기록·전달 「동작」만 인정(낱말이 아니라) — 실패 기록 함수 호출·실패 목록 넣기·사고 기록·무조건 다시 던지기. 사유 변수 대입(xbrlErr =·why =)은
+// 인정하지 않는다(감사 10-16 3차 ③-4) — 대입한 값을 뒤에서 던지는 곳은 catch 줄에 「// silent-ok: <이유>」.
 // 조건부로만 던지는 줄(「if (e?.code === "quota_stop") throw e;」)은 지우고 본다 — 그 밖의 오류는 삼키기 때문(감사 10-16 2차 K8b:
 // 실패 기록을 그 줄로 바꿔도 「throw」 낱말 때문에 통과했다)
-const RECORD = /\bfail\(|\bfailures\.push\(|\bfailed\.push\(|\bmissingDates\.push\(|\bnote\(|\bincident\(|\bbad\(|\bnoSrc\+\+|\b\w*(?:Err|err)\s*=(?!=)|\bwhy\s*=(?!=)|\bthrow\b/;
+const RECORD = /\bfail\(|\bfailures\.push\(|\bfailed\.push\(|\bmissingDates\.push\(|\bnote\(|\bincident\(|\bbad\(|\bnoSrc\+\+|\bthrow\b/;
 /** 본문에서 조건부 문장(if (…) 문장; / if (…) { … })을 지운다 — 무조건 실행되는 것만 남김 */
 export function unconditional(body) {
   let out = "", i = 0;
@@ -50,6 +51,9 @@ test("t8 판정기 자체: 조건부로만 던지고 나머지를 삼키는 catc
   assert.equal(RECORD.test(unconditional(` if (e?.code === "ENOENT") return {}; throw e; `)), true);
   assert.equal(RECORD.test(unconditional(` const reason = "x"; return null; `)), false, "낱말(reason)만으로는 기록이 아니다");
   assert.equal(RECORD.test(unconditional(` x = { code: "a" }; `)), false, "code: 낱말만으로는 기록이 아니다");
+  // 사유 변수 대입만으로는 기록이 아니다 — kr/adapter XBRL 조회 실패 catch 에서 fail("xbrl") 을 지우고 xbrlErr 대입만 남겨도 통과했다(감사 10-16 3차 ③-4)
+  assert.equal(RECORD.test(unconditional(` xbrlErr = String(e.message).slice(0, 160); `)), false, "xbrlErr = 대입만으로는 기록이 아니다");
+  assert.equal(RECORD.test(unconditional(` why = "x"; `)), false, "why = 대입만으로는 기록이 아니다");
 });
 
 test("원자료 어댑터: 조용히 삼키는 catch 없음", () => {

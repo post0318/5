@@ -6,7 +6,7 @@
  * 판본 선택·계산은 하지 않는다(④).
  */
 import { calculationMap, idToQName, parseFacts, parseLabels, parseLinkbase, presentationTree } from "../common/xbrl.mjs";
-import { fyKey, markPrecisionDuplicates, markPresentationCurrency, monthsBetween, normNum, rawFact } from "../common/rawfact.mjs";
+import { fyKey, markPrecisionDuplicates, markPresentationCurrency, monthsBetween, normNum, rawFact, roundedRetagUnit } from "../common/rawfact.mjs";
 
 const pad10 = (cik) => String(cik).replace(/^0+/, "").padStart(10, "0");
 const a18 = (accn) => String(accn).replace(/-/g, "");
@@ -28,11 +28,6 @@ export async function filings(sec, cik) {
   take(sub.json.filings.recent);
   for (const f of sub.json.filings.files ?? []) take((await sec.submissionsPage(f.name)).json);
   return { list: rows, name: sub.json.name, sic: sub.json.sic, fiscalYearEnd: sub.json.fiscalYearEnd, fetch: { version: sub.version, sha256: sub.sha256 } };
-}
-
-/** 1억·10억·100억 단위 반올림(정수 문자열 비교용) */
-function roundTo(n, unit) {
-  return Math.round(n / unit) * unit;
 }
 
 /**
@@ -79,11 +74,7 @@ export function companyfactsFacts(cf, { cik, sym, filingByAccn, fetch }) {
     const first = g[0], last = g[g.length - 1];
     for (const r of g) {
       const restated = r === first ? "same" : r.value.num === first.value.num ? "same" : "different";
-      let rounded = null;
-      if (r !== first && restated === "different") {
-        const v0 = Number(first.value.num), v = Number(r.value.num);
-        for (const u of [1e8, 1e9, 1e10]) if (Number.isFinite(v0) && v === roundTo(v0, u) && v !== v0) { rounded = u; break; }
-      }
+      const rounded = r !== first && restated === "different" ? roundedRetagUnit(first.value.num, r.value.num, /^[A-Z]{3}$/.test(r.value.unit ?? "")) : null;
       r.vintage = {
         is_original: r === first, is_latest: r === last, restated,
         first_value: first.value.num, versions: g.length,
