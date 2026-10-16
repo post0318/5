@@ -145,11 +145,11 @@ export function markPrecisionDuplicates(facts) {
 
 /**
  * 반올림 재태깅(설계 R-US1) 판정 — RawFact 판본 표시(us/read)와 Item 판본 표시(us/items)가 같은 규칙을 쓴다(감사 10-16 3차 — 두 곳 규칙이 달라
- * RawFact 쪽은 첫 값 절댓값이 5천만 미만이면 나중 값 0 을 「1억 반올림」으로, 개수 단위 개념(NumberOfPositions)도 표시했다).
- * 금액(ISO 통화) 사실만, 첫 값 절댓값이 단위 이상일 때, 나중 값 = 첫 값을 1억·10억·100억 단위로 반올림한 값(≠ 첫 값)이면 그 단위.
+ * RawFact 쪽은 첫 값 절댓값이 5천만 미만이면 나중 값 0 을 「1억 반올림」으로 표시했다 — AXP NumberOfPositions 0 등).
+ * 첫 값 절댓값이 단위 이상일 때, 나중 값 = 첫 값을 1억·10억·100억 단위로 반올림한 값(≠ 첫 값)이면 그 단위. 설계 R-US1 은 금액에 한정하지 않는다
+ * (주식수도 같은 일이 있다 — GLW CommonStockSharesIssued 2017 1,708,000,000 → 1,700,000,000, 앱 dropRoundedRetags 도 주식수 포함).
  */
-export function roundedRetagUnit(first, later, isMoney) {
-  if (!isMoney) return null;
+export function roundedRetagUnit(first, later) {
   const v0 = Number(first), v = Number(later);
   if (!Number.isFinite(v0) || !Number.isFinite(v) || v === v0) return null;
   for (const u of [1e8, 1e9, 1e10]) if (Math.abs(v0) >= u && v === Math.round(v0 / u) * u) return u;

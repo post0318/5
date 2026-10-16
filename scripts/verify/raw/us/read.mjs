@@ -74,7 +74,7 @@ export function companyfactsFacts(cf, { cik, sym, filingByAccn, fetch }) {
     const first = g[0], last = g[g.length - 1];
     for (const r of g) {
       const restated = r === first ? "same" : r.value.num === first.value.num ? "same" : "different";
-      const rounded = r !== first && restated === "different" ? roundedRetagUnit(first.value.num, r.value.num, /^[A-Z]{3}$/.test(r.value.unit ?? "")) : null;
+      const rounded = r !== first && restated === "different" ? roundedRetagUnit(first.value.num, r.value.num) : null;
       r.vintage = {
         is_original: r === first, is_latest: r === last, restated,
         first_value: first.value.num, versions: g.length,

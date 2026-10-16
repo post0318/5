@@ -302,8 +302,7 @@ export function markItemVintage(items) {
       if (it !== first && it.value !== first.value) {
         it.vintage_basis.item_restated = true;
         // 설계 R-US1 1억·10억·100억(감사 10-16 ③-7) — RawFact 와 같은 함수(감사 10-16 3차)
-        // 사슬 Item 은 flags.currency(주식수 사슬은 null), 본표 줄 Item(유형자산 취득·세전이익·감가상각)은 늘 금액
-        const u = roundedRetagUnit(first.value, it.value, it.flags && "currency" in it.flags ? !!it.flags.currency : true);
+        const u = roundedRetagUnit(first.value, it.value);
         if (u) it.flags.rounded_retag_of_first = u;
       }
     }

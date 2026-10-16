@@ -6,15 +6,15 @@ import { chainItems } from "../us/items.mjs";
 import { revenueBlankItems } from "../jp/adapter.mjs";
 import { findFilings } from "../jp/read.mjs";
 
-test("반올림 재태깅 판정(R-US1): 1억·10억·100억만, 금액만, 첫 값이 단위 이상일 때만", () => {
-  assert.equal(roundedRetagUnit("166997000000", "167000000000", true), 1e8, "AXP 2017-06-30 총자산 — 1억 단위");
-  assert.equal(roundedRetagUnit("188548000000", "189000000000", true), 1e9, "AXP 2021 총자산 — 10억 단위");
-  assert.equal(roundedRetagUnit("4130162000", "4130000000", true), null, "1천만 단위는 대상 아님(NVDA FY2014 매출)");
-  assert.equal(roundedRetagUnit("1000000", "0", true), null, "첫 값이 1억 미만이면 0 은 반올림 재태깅 아님");
-  assert.equal(roundedRetagUnit("30000000", "0", true), null, "첫 값 3천만 → 0 도 아님(1억 반올림이면 0 이지만 크기 조건)");
-  assert.equal(roundedRetagUnit("-166997000000", "-167000000000", true), 1e8, "음수도 같은 규칙");
-  assert.equal(roundedRetagUnit("166997000000", "167000000000", false), null, "개수 단위(NumberOfPositions 등)는 대상 아님");
-  assert.equal(roundedRetagUnit("167000000000", "167000000000", true), null, "같은 값은 재태깅 아님");
+test("반올림 재태깅 판정(R-US1): 1억·10억·100억만, 첫 값이 단위 이상일 때만", () => {
+  assert.equal(roundedRetagUnit("166997000000", "167000000000"), 1e8, "AXP 2017-06-30 총자산 — 1억 단위");
+  assert.equal(roundedRetagUnit("188548000000", "189000000000"), 1e9, "AXP 2021 총자산 — 10억 단위");
+  assert.equal(roundedRetagUnit("4130162000", "4130000000"), null, "1천만 단위는 대상 아님(NVDA FY2014 매출)");
+  assert.equal(roundedRetagUnit("1000000", "0"), null, "첫 값이 1억 미만이면 0 은 반올림 재태깅 아님");
+  assert.equal(roundedRetagUnit("30000000", "0"), null, "첫 값 3천만 → 0 도 아님(1억 반올림이면 0 이지만 크기 조건)");
+  assert.equal(roundedRetagUnit("-166997000000", "-167000000000"), 1e8, "음수도 같은 규칙");
+  assert.equal(roundedRetagUnit("1708000000", "1700000000"), 1e8, "주식수도 같은 규칙(GLW 발행주식수 2017)");
+  assert.equal(roundedRetagUnit("167000000000", "167000000000"), null, "같은 값은 재태깅 아님");
 });
 
 const usFact = (o) => ({
