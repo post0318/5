@@ -127,3 +127,20 @@ test("앱·검증기가 다른 갱신형 판본을 쓰면 판본 id 가 다르�
   assert.notEqual(a.version, b.version);
   assert.equal(store.versions({ market: "us", source: "sec", key: "cf" }).length, 2, "옛 판본 보관");
 });
+
+test("일본 이자(R-JP8): 공시 부호 그대로 합, △ 음수 태깅은 음수 합 + 표시, 부호 섞이면 모호(감사 10-16 J7·③-7)", async () => {
+  const { interestItems: jpInterest } = await import("../jp/items.mjs");
+  const fact = (concept, v, label) => ({
+    concept: { id: concept, label: null, standard: true }, value: { num: v, less_precise_duplicate: false },
+    scope: { consolidation: "consolidated", dims: [] }, period: { kind: "duration", start: "2024-04-01", end: "2025-03-31", months: 12 },
+    placement: { face: true, stmts: [{ stmt: "is", label }] }, filing: { id: "S100TEST", form: "120", filed_at: "2025-06-20" }, locator: { contextRef: "CurrentYearDuration" },
+  });
+  const one = (fs) => jpInterest(fs, { financialFormat: false, usGaap: false }).find((i) => i.key === "interest_expense_pl");
+  assert.equal(one([fact("jppfs_cor:InterestExpensesNOE", "100", "支払利息"), fact("jppfs_cor:InterestOnBondsNOE", "20", "社債利息")]).value, "120");
+  const neg = one([fact("jppfs_cor:InterestExpensesNOE", "-100", "支払利息"), fact("jppfs_cor:InterestOnBondsNOE", "-20", "社債利息")]);
+  assert.equal(neg.value, "-120", "절댓값으로 바꾸지 않는다");
+  assert.equal(neg.flags.negative_tagged, true);
+  const mixed = one([fact("jppfs_cor:InterestExpensesNOE", "-100", "支払利息"), fact("jppfs_cor:InterestOnBondsNOE", "20", "社債利息")]);
+  assert.equal(mixed.value, null);
+  assert.equal(mixed.blank_reason, "ambiguous");
+});

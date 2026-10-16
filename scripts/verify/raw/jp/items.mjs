@@ -256,7 +256,13 @@ export function interestItems(facts, { financialFormat, usGaap }) {
       continue;
     }
     const ls = [...m.values()];
-    const sum = ls.reduce((t, x) => t + BigInt(x.f.value.num.replace(/^-/, "")), 0n); // △ 태깅(ソフトバンク)은 부호 표시만 — 값은 절댓값 합(원 부호는 RawFact)
+    // 공시 부호 그대로 합(정규화하지 않음 — 감사 10-16 ③-7). △ 로 음수 태깅한 회사(ソフトバンク)는 음수 합 + negative_tagged, 줄마다 부호가 섞이면 모호
+    const neg = ls.filter((x) => x.f.value.num.startsWith("-")).length;
+    if (neg && neg !== ls.length) {
+      out.push(item({ key: "interest_expense_pl", period: f0.period, scope: f0.scope, value: null, blank_reason: BLANK.ambiguous, blank_detail: { why: "이자 줄 부호가 섞임", lines: ls.map((x) => ({ concept: x.f.concept.id, v: x.f.value.num })) }, rule: { id: "R-JP8" }, vintage_basis: vb(f0) }));
+      continue;
+    }
+    const sum = ls.reduce((t, x) => t + BigInt(x.f.value.num), 0n);
     out.push(item({
       key: "interest_expense_pl", period: f0.period, scope: f0.scope, value: String(sum), facts: ls.map((x) => factId(x.f)),
       rule: { id: "R-JP8", lines: ls.map((x) => ({ concept: x.f.concept.id, label: x.lab, v: x.f.value.num })) }, vintage_basis: vb(f0),

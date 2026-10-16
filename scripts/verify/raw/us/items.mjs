@@ -287,7 +287,8 @@ export function markItemVintage(items) {
       if (it !== first && it.value !== first.value) {
         it.vintage_basis.item_restated = true;
         const v0 = Number(first.value), v = Number(it.value);
-        for (const u of [1e5, 1e6, 1e7, 1e8, 1e9, 1e10]) if (Math.abs(v0) >= u && v === Math.round(v0 / u) * u) { it.flags.rounded_retag_of_first = u; break; }
+        // 설계 R-US1 1억·10억·100억(감사 10-16 ③-7 — 1e5~1e10 으로 넓었다)
+        for (const u of [1e8, 1e9, 1e10]) if (Math.abs(v0) >= u && v !== v0 && v === Math.round(v0 / u) * u) { it.flags.rounded_retag_of_first = u; break; }
       }
     }
   }

@@ -13,7 +13,7 @@ export function docFiles(buf) {
     let x, enc = "utf-8";
     try {
       x = new TextDecoder("utf-8", { fatal: true }).decode(e.data);
-    } catch {
+    } catch { // silent-ok: 인코딩 판정 — 엄격 UTF-8 실패 = EUC-KR 로 다시 읽음(enc 를 결과에 기록)
       // 선언은 utf-8 인데 실제 EUC-KR(옛 원문) — 실패를 삼키지 않고 인코딩을 바꿔 다시 읽는다(결과에 enc 기록)
       x = new TextDecoder("euc-kr").decode(e.data);
       enc = "euc-kr";
@@ -78,11 +78,11 @@ export function headings(x, a, b) {
 }
 export const noteTitle = (hs, pos) => hs.filter(([p]) => p < pos).at(-1)?.[1] ?? "";
 
-/** 표 단위: 표 안 첫 단위 → 없으면 표 앞 텍스트의 마지막 단위(1,500자 → 8,000자 창) */
+/** 표 단위: 표 안 첫 단위 → 없으면 표 앞 1,500자의 마지막 단위(설계 R-KR7 — 8,000자로 넓혀 있던 것을 설계대로, 감사 10-16 ③-7. 한국 4종목 결과 변화 0). 못 찾으면 null(unit_unknown) */
 export function unitAt(x, tpos, tableHtml) {
   const inT = [...text(tableHtml).matchAll(UNIT)][0]?.[1];
   if (inT) return inT.replace(/\s/g, "");
-  const pre = text(x.slice(Math.max(0, tpos - 20000), tpos)).slice(-8000);
+  const pre = text(x.slice(Math.max(0, tpos - 20000), tpos)).slice(-1500);
   const us = [...pre.matchAll(UNIT)];
   return us.length ? us.at(-1)[1].replace(/\s/g, "") : null;
 }

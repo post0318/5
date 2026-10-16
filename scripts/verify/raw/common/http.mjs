@@ -97,7 +97,7 @@ export function makeRequester({ source, quotaRoot, tool, dailyCap, gapMs, retry,
       if (w > 0) await sleep(w);
       last = Date.now();
     });
-    chain = p.catch(() => {});
+    chain = p.catch(() => {}); // silent-ok: 대기열 사슬만 이어 감 — 오류는 바로 아래 await p 가 호출자에게 그대로 던진다
     await p;
   }
 
