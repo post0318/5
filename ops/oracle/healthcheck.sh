@@ -117,6 +117,26 @@ fi
 # 10) 텔레그램 상주 수신기
 check telegram-listener "$(systemctl is-active --quiet macro-telegram-listener && echo 1 || echo 0)" "텔레그램 상주 수신기가 멈췄습니다"
 
+# 4번(브라질) 주요일정 — 2026-10-06 IBGE 인증서 변경으로 경제지표(IPCA·실업률·GDP)가 통째로 빠졌는데 열흘간 아무도 몰랐다
+# (4번은 외부 실패를 빈 목록으로 넘긴다, 오너 지적 2026-10-16 "오류가 났으면 알려줘야"). 일정 창(과거 30일~앞 60일)에는 IPCA 가 매달 있어
+# 경제지표 0건이면 고장. Vercel 캐시 응답이라 4번 서버 계산은 거의 안 든다. 바깥 서비스라 연속 2회(20분) 실패해야 알림(check2).
+BR_URL="${OPS_BR_AGENDA_URL:-https://brazil-world.vercel.app/api/br-agenda}"
+code=$(curl -s -o /tmp/hc-br-agenda.json -m 60 -w '%{http_code}' "$BR_URL" || true)
+br_n=0
+if [ "$code" = 200 ]; then
+  br_n=$(python3 - /tmp/hc-br-agenda.json <<'PY'
+import json, re, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    a = d if isinstance(d, list) else next((v for v in d.values() if isinstance(v, list)), [])
+    print(sum(1 for x in a if re.search(r"IPCA|PNAD|GDP", str(x.get("titleKo", "")))))
+except Exception:
+    print(0)
+PY
+)
+fi
+check2 br-agenda "$([ "$code" = 200 ] && [ "${br_n:-0}" -gt 0 ] && echo 1 || echo 0)" "4번 브라질 주요일정 경제지표 0건(HTTP ${code}) — IBGE 일정 API·인증서 확인(4번 src/lib/server/ibgeFetch.ts)"
+
 # 한국 재무(OpenDART) 동작 — 2026-10-05 검증 작업이 같은 DART 키의 일일 한도를 넘겨 운영 한국 재무가 멈췄는데 아무도 몰랐다(오너 지적).
 # 운영 화면 경로를 그대로 불러 429(한도 초과)·5xx 면 바로 알림. 디스크 캐시 덕에 DART 실제 요청은 30분에 1건 남짓.
 code=$(curl -s -o /tmp/hc-dart.json -m 60 -w '%{http_code}' "http://127.0.0.1:8080/api/markets/kr/005930/financials?period=annual" || echo 000)
