@@ -212,6 +212,9 @@ if (!DRY && targets.length) {
   log(`앱 판 ${appBuild.mode} · ${appBuild.head.slice(0, 7)} · ${Object.entries(appBuild.branches).map(([b, c]) => `${b}@${c.slice(0, 7)}`).join(" ")}`);
   if (!(await devUp())) throw new Error("verify-dev(localhost:3000) 응답 없음");
   for (const t of targets) {
+    // 종목마다 개발 서버 응답 확인 — 10-16 06:04 verify-dev 가 메모리 한도(3GB)로 죽었다 10초 뒤 다시 떴는데, 그 사이 시작한 한국 5종목이
+    // 연결 실패(fetch failed)로 끝났다. 응답이 올 때까지(최대 5분) 기다리고, 끝내 없으면 그 뒤 종목은 돌리지 않는다(던짐)
+    if (!(await devUp())) throw new Error(`verify-dev(localhost:3000) 응답 없음 — ${t.key} 부터 검증 못 함`);
     const t0 = Date.now();
     const before = results.get(t.key)?.runAt ?? null;
     const capEnv = {};
