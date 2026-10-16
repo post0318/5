@@ -15,6 +15,11 @@ test("반올림 재태깅 판정(R-US1): 1억·10억·100억만, 첫 값이 단�
   assert.equal(roundedRetagUnit("-166997000000", "-167000000000"), 1e8, "음수도 같은 규칙");
   assert.equal(roundedRetagUnit("1708000000", "1700000000"), 1e8, "주식수도 같은 규칙(GLW 발행주식수 2017)");
   assert.equal(roundedRetagUnit("167000000000", "167000000000"), null, "같은 값은 재태깅 아님");
+  // 크기 경계(감사 10-16 4차 — 첫 값이 단위의 절반 이상·단위 미만인 사례가 없어 「단위 절반」·「나중 값 기준」으로 바꿔도 통과했다)
+  assert.equal(roundedRetagUnit("-925000000", "-1000000000"), null, "AXP 2009 9개월 매입채무 증감 −925M → −1,000M: 첫 값이 10억 미만");
+  assert.equal(roundedRetagUnit("60000000", "100000000"), null, "첫 값 6천만(1억의 절반 이상) → 1억도 아님");
+  assert.equal(roundedRetagUnit("1000000000", "1000000000"), null);
+  assert.equal(roundedRetagUnit("1040000000", "1000000000"), 1e8, "첫 값이 정확히 단위 이상이면 대상(10.4억 → 10억 = 1억 단위)");
 });
 
 const usFact = (o) => ({
