@@ -166,11 +166,23 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     // 오너 규칙 "본표 줄의 — = 0" — 검증기 A층이 같은 판독으로 확인)
     if (/^10-[KQ]/.test(f.form)) {
       const faceK = cashFlowFace(calXml);
+      // 단, 원본에 그 기간 사실이 차원으로만 있으면(CAT 2025 10-K 차입 줄 — 기계·금융 부문 멤버뿐, companyfacts 엔 차원 없는 값만 실려 빈다) "—" 가 아니다 —
+      // 0 으로 채우지 않는다(감사 2026-10-17: CAT 장기차입금 조달·상환이 전 기간 0, 차입 흐름이 기타 재무활동으로 갔다). 후보가 있을 때만 원본을 읽는다
+      const cand: [string, FactUnitEntry][] = [];
       if (faceK) for (const grp of zeroGroups) {
         const c0 = grp.find((c) => faceK.has(`us-gaap_${c}`));
         if (!c0) continue;
         const has = grp.flatMap((c) => g[c]?.units?.USD ?? []);
-        for (const e of ocf) if (!has.some((x) => x.start === e.start && x.end === e.end)) zeros.push([c0, { ...e, val: 0 }]);
+        for (const e of ocf) if (!has.some((x) => x.start === e.start && x.end === e.end)) cand.push([c0, { ...e, val: 0 }]);
+      }
+      if (cand.length) {
+        // 원본 파일이 없으면 "—" 를 확인할 수 없어 0 으로 채우지 않는다(그 칸은 빈칸)
+        const instN = names.find((n) => /_htm\.xml$/i.test(n));
+        if (instN) {
+          const want = new Set(cand.map(([c]) => `us-gaap_${c}`));
+          const fsx = instanceFacts(await fetchText(`${base}/${instN}`, { headers: H, revalidate: false, timeoutMs: 30_000 }), (id) => want.has(id));
+          for (const [c, e] of cand) if (!fsx.some((x) => x.id === `us-gaap_${c}` && x.period === `${e.start}|${e.end}`)) zeros.push([c, e]);
+        }
       }
     }
     const labs = labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined;
