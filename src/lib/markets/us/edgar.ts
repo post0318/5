@@ -430,6 +430,9 @@ export interface CompanyFacts {
   debtBlanks?: { concept: string; end: string; reason: string }[];
   /** 차입 줄 판독 실패로 비운 기간의 결산일 — 잔여 줄(기타 재무활동)도 그 칸 빈칸 */
   debtUnreadEnds?: string[];
+  /** 현금흐름표 본표 줄인데 그 기간 사실이 차원으로만 있는 칸(edgar-cf-wc.ts — 0 으로 채우지 않음). force = 그 줄 값을 비운다(투자자산 본표 줄 합 —
+   *  표준 개념 대체값이 부분합이 되지 않게). 화면은 그 칸 빈칸 + 사유, 같은 구간 잔여 줄도 빈칸 */
+  cfDimOnly?: { concept: string; start: string; end: string; force?: boolean }[];
   /** 총수익에서 지분법·기타수익을 분리했는지(edgar-revenue-dims.ts) */
   nonopInRevenues?: boolean;
   /** 은행·증권·보험(SIC 6000~6499) — 이자가 본업이라 영업이익 근사에 이자를 더하지 않는다. 리츠·부동산(65xx·67xx)은

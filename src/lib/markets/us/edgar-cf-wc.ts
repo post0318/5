@@ -133,6 +133,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const capexParts: FactUnitEntry[] = [];
   const invFace = new Map<string, FactUnitEntry[]>(CF_INV_FAMILIES.map((f) => [f.derived, []]));
   const zeroGroups = cfZeroFillGroups();
+  const dimOnly: NonNullable<CompanyFacts["cfDimOnly"]> = [];
   for (const f of filingsForDa(recent)) {
     const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
     const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, opt);
@@ -181,7 +182,12 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
         if (instN) {
           const want = new Set(cand.map(([c]) => `us-gaap_${c}`));
           const fsx = instanceFacts(await fetchText(`${base}/${instN}`, { headers: H, revalidate: false, timeoutMs: 30_000 }), (id) => want.has(id));
-          for (const [c, e] of cand) if (!fsx.some((x) => x.id === `us-gaap_${c}` && x.period === `${e.start}|${e.end}`)) zeros.push([c, e]);
+          for (const [c, e] of cand) {
+            const xs = fsx.filter((x) => x.id === `us-gaap_${c}` && x.period === `${e.start}|${e.end}`);
+            // 사실 없음 = "—" → 0. 차원 사실뿐인데 모두 0 이면 합도 0 이라 0(AMD 2020·2021 사업 인수). 0 아닌 차원 사실이 있으면 빈칸 + 사유
+            if (!xs.length || (xs.every((x) => x.dims.length > 0) && xs.every((x) => x.val === 0))) zeros.push([c, e]);
+            else if (xs.every((x) => x.dims.length > 0)) dimOnly.push({ concept: c, start: e.start!, end: e.end });
+          }
         }
       }
     }
@@ -218,6 +224,9 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           for (const e of ocf) {
             const at = (id: string) => fsx.find((x) => x.id === id && x.period === `${e.start}|${e.end}` && x.dims.length === 0);
             if (!custom.some(at)) continue;
+            // 본표 줄인데 차원 없는 값이 없고 0 아닌 차원 값만 있으면 0 으로 더하지 않는다(부분합 금지) — 그 칸 빈칸 + 사유
+            const dimOnlyId = ids.find((id) => !at(id) && fsx.some((x) => x.id === id && x.period === `${e.start}|${e.end}` && x.val !== 0));
+            if (dimOnlyId) { dimOnly.push({ concept: fm.derived, start: e.start!, end: e.end, force: true }); continue; }
             invFace.get(fm.derived)!.push({ ...e, val: ids.reduce((t, id) => t + (at(id)?.val ?? 0), 0) });
           }
       }
@@ -277,7 +286,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     if (!pair.length || pair.some(([a, b]) => a !== b)) capexParts.length = 0;
   }
   const invAny = [...invFace.values()].some((x) => x.length);
-  if (!synth.length && !zeros.length && !sbc.length && !capexParts.length && !invAny) return facts;
+  if (!synth.length && !zeros.length && !sbc.length && !capexParts.length && !invAny && !dimOnly.length) return facts;
   const ng: Record<string, unknown> = { ...g };
   if (synth.length) ng[SYN_WC_CF] = { label: "운전자본 변동(본표 줄 합)", units: { USD: synth } };
   if (sbc.length) ng[SYN_SBC_CF] = { label: "주식보상비용(본표 회사 고유 줄)", units: { USD: sbc } };
@@ -287,5 +296,5 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     const cur = (ng[c] ?? { units: {} }) as { label?: string; units: Record<string, FactUnitEntry[]> };
     ng[c] = { ...cur, units: { ...cur.units, USD: [...(cur.units.USD ?? []), e] } };
   }
-  return { ...facts, facts: { ...facts.facts, "us-gaap": ng as never } };
+  return { ...facts, ...(dimOnly.length ? { cfDimOnly: dimOnly } : {}), facts: { ...facts.facts, "us-gaap": ng as never } };
 }

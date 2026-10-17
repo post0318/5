@@ -6,7 +6,9 @@ import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../
 import { entriesOf, firstConcept, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
 import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, pickDa, pickDaPeriod } from "./edgar-ev";
 import { revQuarterLabel } from "./fin-revenue";
-import { DEBT_UNREAD as DEBT_UNREAD_NOTE } from "./edgar-cf-debt";
+import { DEBT_DIMONLY, DEBT_MIXED as DEBT_MIXED_NOTE, DEBT_UNREAD as DEBT_UNREAD_NOTE } from "./edgar-cf-debt";
+const DEBT_REASONS = new Set([DEBT_UNREAD_NOTE, DEBT_MIXED_NOTE, DEBT_DIMONLY]);
+const CF_DIM_ONLY = "본표 줄이 차원(부문·인수 건 등)으로만 태깅됨 — 차원 없는 값 없음, 차원 합은 이중 태깅 위험이라 쓰지 않음";
 import { isFinancialCompany } from "./edgar-financial";
 
 /**
@@ -839,16 +841,45 @@ export function buildUsCashFlow(
       } else if (line === "기타 재무활동") {
         for (const p of periods) {
           const unread = cfOut || (facts.debtUnreadEnds ?? []).some((e) => endsOf(p).some((x) => near(x, e)));
-          // 잔여 계산이 0 으로 본 1단 차입 줄(조달·상환 합계·단기 순증감)이 사유 있는 빈칸(분류 교체·4분기 산정 불가 등)이면 그 금액을 떠안는다 — 함께 공란
-          // (감사 2026-10-17: MSFT 2026 Q1~Q3 분류 교체로 합계가 비자 기타에 장기차입금 상환 3,000 이 들어갔다)
+          // 잔여 계산이 0 으로 본 1단 차입 줄(조달·상환 합계·단기 순증감)이 차입 판독 사유(분류 교체·판독 불가·차원으로만 태깅)나 9개월 누적이 없어
+          // 4분기를 못 낸 빈칸이면 그 금액을 떠안는다 — 함께 공란(감사 2026-10-17: MSFT 2026 Q1~Q3 분류 교체로 합계가 비자 기타에 장기차입금 상환
+          // 3,000 이 들어갔다). 줄이 원래 없거나 공시를 중단해 빈 칸(LTM 구성 분기 없음·공시 중단·사업연도 공시 없음)은 0 이 맞다 — 재감사: GLW·NVDA LTM
           const blankDebt = items.find((x) => {
             const l = x.accountId?.startsWith("cf:재무활동 현금흐름:") ? x.accountId.slice("cf:재무활동 현금흐름:".length) : "";
-            return x.depth === 1 && !!LINE_C[l] && x.values[p.label] == null && !!x.cellNotes?.[p.label];
+            const n = x.cellNotes?.[p.label];
+            return x.depth === 1 && !!LINE_C[l] && x.values[p.label] == null && !!n && (DEBT_REASONS.has(n) || n === Q4_NO_NINE);
           });
           if (!unread && !blankDebt) continue;
           it.values[p.label] = null;
-          const why = cfOut ? outNote! : unread ? DEBT_UNREAD_NOTE : `${blankDebt!.accountName} 공란(${blankDebt!.cellNotes![p.label]})`;
+          const unreadWhy = (facts.debtBlanks ?? []).find((x) => x.reason !== DEBT_MIXED_NOTE && endsOf(p).some((e) => near(x.end, e)))?.reason ?? DEBT_UNREAD_NOTE;
+          const why = cfOut ? outNote! : unread ? unreadWhy : `${blankDebt!.accountName} 공란(${blankDebt!.cellNotes![p.label]})`;
           it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: cfOut ? why : `${why} — 차입 금액을 떠안지 않게 함께 공란` };
+        }
+      }
+    }
+  }
+  // 본표 줄인데 그 기간 사실이 차원으로만 있는 칸(edgar-cf-wc.ts cfDimOnly — 0 으로 채우지 않음) — 빈칸 + 사유, 같은 구간 잔여(기타) 줄도 그 칸 빈칸
+  // (재감사 2026-10-17: VST 2025 사업 인수 Lotus 1,140 이 인수 건 차원으로만 태깅 — "본표에 별도 줄 없음" 이 붙고 기타 투자활동이 1,140 을 떠안았다)
+  if (facts.cfDimOnly?.length) {
+    const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 7 * 864e5;
+    const fyEnd = mode === "quarter" ? null : periods[periods.length - 2]?.endDate ?? null;
+    const ltmEnds = anchor ? [anchor, shiftYear(anchor, -1), ...(fyEnd ? [fyEnd] : [])] : [];
+    const endsOf = (p: FinancialPeriod) => (p.label === LTM ? ltmEnds : p.endDate ? [p.endDate] : []);
+    for (const b of BLOCKS) {
+      const plug = items.find((x) => x.accountId === `cf:${b.title}:${b.lines.find((l) => l.plug)?.label}`);
+      for (const l of b.lines) {
+        const cs = l.concepts ?? (l.combine ?? []).map(([c]) => c);
+        const it = items.find((x) => x.accountId === `cf:${b.title}:${l.label}`);
+        if (!it || !cs.length) continue;
+        for (const p of periods) {
+          const hit = facts.cfDimOnly.find((d) => cs.includes(d.concept) && endsOf(p).some((e) => near(d.end, e)));
+          if (!hit || (it.values[p.label] != null && !hit.force)) continue;
+          it.values[p.label] = null;
+          it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: CF_DIM_ONLY };
+          if (plug && plug.values[p.label] != null) {
+            plug.values[p.label] = null;
+            plug.cellNotes = { ...(plug.cellNotes ?? {}), [p.label]: `${l.label} 공란(${CF_DIM_ONLY}) — 그 금액을 떠안지 않게 함께 공란` };
+          }
         }
       }
     }
