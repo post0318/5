@@ -157,6 +157,16 @@ PY
   check2 br-agenda-actual "$([ -z "$br_miss" ] && echo 1 || echo 0)" "4번 브라질 주요일정 발표치 공란(발표 3일 경과): ${br_miss} — 중앙은행 SGS·IBGE SIDRA 조회 확인"
 fi
 
+# 4번 뉴스 — 원본(좋은아침뉴스·구글 뉴스·KOBRAS 블로그)에 새 글이 있는데 4번에 없을 때만 알림(오너 2026-10-17 "그래").
+# 원본 세 곳을 부르므로 1시간에 한 번만 돌리고(그 사이엔 직전 판정 유지), 연속 2회(2시간)면 알림. 판정은 br-news-check.py.
+br_last=$(cat "$STATE_DIR/.br-news-last" 2>/dev/null || echo 0)
+if [ $(( $(date +%s) - br_last )) -ge 3300 ]; then
+  date +%s > "$STATE_DIR/.br-news-last"
+  while IFS=$'	' read -r key ok msg; do
+    [ -n "$key" ] && check2 "$key" "$ok" "$msg"
+  done < <(timeout 240 python3 "$(dirname "$(readlink -f "$0")")/br-news-check.py" "${OPS_BR_APP:-https://brazil-world.vercel.app}" 2>/dev/null)
+fi
+
 # 한국 재무(OpenDART) 동작 — 2026-10-05 검증 작업이 같은 DART 키의 일일 한도를 넘겨 운영 한국 재무가 멈췄는데 아무도 몰랐다(오너 지적).
 # 운영 화면 경로를 그대로 불러 429(한도 초과)·5xx 면 바로 알림. 디스크 캐시 덕에 DART 실제 요청은 30분에 1건 남짓.
 code=$(curl -s -o /tmp/hc-dart.json -m 60 -w '%{http_code}' "http://127.0.0.1:8080/api/markets/kr/005930/financials?period=annual" || echo 000)
