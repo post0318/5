@@ -3,7 +3,7 @@ import { fetchJson, fetchText } from "../http";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { RecentFilings } from "./edgar-gapfill";
 import { filingsForDa, instanceFacts } from "./edgar-cf-structure";
-import { CF_INV_FAMILIES, SYN_NI_CF, cfInvStdConcepts, cfZeroFillGroups } from "./edgar-cashflow";
+import { CF_INV_FAMILIES, SYN_DTAX_CF, SYN_NI_CF, cfInvStdConcepts, cfZeroFillGroups } from "./edgar-cashflow";
 
 /**
  * **운전자본 변동 합계 = 현금흐름표 본표의 운전자본 줄 합**(10-K·10-Q 계산 구조, 2026-10-02).
@@ -135,6 +135,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const zeroGroups = cfZeroFillGroups();
   const dimOnly: NonNullable<CompanyFacts["cfDimOnly"]> = [];
   const niFace: FactUnitEntry[] = [];
+  const dtaxFace: FactUnitEntry[] = [];
   const niCons: string[] = [];
   let niRead = false;
   // 기간 → 그 기간 현금흐름표를 실은 가장 최근 공시(제출일) — 투자자산 본표 줄 합은 그 공시에서만(옛 공시의 합이 최신 공시 표준값을 덮지 않게 —
@@ -220,6 +221,13 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           const nil = at("NetIncomeLoss"), nci = at("NetIncomeLossAttributableToNoncontrollingInterest");
           if (cs[0] === "ProfitLoss" && ((nil && nil.val !== v.val) || (nci && nci.val !== 0))) niCons.push(`${e.start}|${e.end}`);
         }
+      // 이연법인세 — 본표에 실린 개념(들)의 이 공시 값 합, 본표에 없으면 0. 본표 개념인데 이 공시 값이 없으면 그 기간은 넣지 않는다(종전 규칙으로도 안 채움 — 빈 값)
+      const dts = (["DeferredIncomeTaxExpenseBenefit", "DeferredIncomeTaxesAndTaxCredits"] as const).filter((c) => faceN.has(`us-gaap_${c}`));
+      for (const e of ocf) {
+        const vs = dts.map((c) => (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === f.filed && x.form === f.form));
+        if (vs.some((x) => !x)) continue;
+        dtaxFace.push({ ...e, val: vs.reduce((t, x) => t + x!.val, 0) });
+      }
     }
     const labs = labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined;
     // 주식보상비용 — 본표에 표준 개념이 없고 표시 라벨이 주식보상비용인 회사 고유 줄(영업활동 계산 구조 안)
@@ -326,6 +334,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const ng: Record<string, unknown> = { ...g };
   if (synth.length) ng[SYN_WC_CF] = { label: "운전자본 변동(본표 줄 합)", units: { USD: synth } };
   if (niRead) ng[SYN_NI_CF] = { label: "현금흐름표 본표 순이익", units: { USD: niFace } };
+  if (niRead) ng[SYN_DTAX_CF] = { label: "현금흐름표 본표 이연법인세", units: { USD: dtaxFace } };
   if (sbc.length) ng[SYN_SBC_CF] = { label: "주식보상비용(본표 회사 고유 줄)", units: { USD: sbc } };
   for (const [k, v] of invFace) if (v.length) ng[k] = { label: "투자자산 본표 줄 합(회사 고유 줄 포함)", units: { USD: v } };
   if (capexParts.length) ng[SYN_CAPEX_PARTS] = { label: "설비투자(항공기 + 기타 유형자산 줄 합)", units: { USD: capexParts } };

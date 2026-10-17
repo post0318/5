@@ -103,9 +103,24 @@ const FIN_PROVISION_LINE: Line = {
  * (edgar-cf-wc.ts, 2026-10-09 NVDA 2027 회계연도 10-Q: 지분증권 취득·처분이 nvda: 태그라 표준 태그만 더하면 LTM 이 부분값·"기타 투자활동"이 떠안았다).
  * 합성 개념이 있는 기간은 표준 구성 개념을 대신한다(SUPERSEDES)
  */
-export const CF_INV_FAMILIES: { derived: string; custom: RegExp; label: string }[] = [
-  { derived: "InvestmentProceedsFaceDerived", label: "투자자산 처분·만기", custom: /^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))\w*(Sale|Maturit|Redemption|Collection)\w*(Securities|Investments?)$/ },
-  { derived: "InvestmentPurchasesFaceDerived", label: "투자자산 취득", custom: /^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)$/ },
+/** 회사 고유 줄 이름 판정 — 옛 규칙(2026-10-09)이 잡던 이름은 그대로, 표기 차이로 놓치던 이름(대소문자 — KO ko_ProceedsfromDisposalsofInvestments·
+ *  ko_PurchasesofInvestments·SBUX·INTC, 처분 Disposal, 동사 없는 MSFT "ProceedsFromInvestments", 꼬리말 TER …SecuritiesDebtAndEquity·PEP …MoreThanThreeMonthsSales)은
+ *  새로 잡되 분류 결정 전 항목(시장가 없는 지분증권·비상장·지분법 — META·MU·UBER)과 투자 아닌 줄(대출·리스·투자용 부동산·투자세액공제 매각 — VST)은 새로 잡지 않는다
+ *  (2026-10-17 감사). 옛 규칙이 잡던 줄의 분류는 바꾸지 않는다 */
+const invName = (old: RegExp, wide: RegExp) => ({
+  test: (n: string) => old.test(n) || (wide.test(n) && !/EquityMethod|NonMarketable|WithoutReadilyDeterminable|TaxCredit|Loan|Lease|RealEstate/i.test(n)),
+});
+export const CF_INV_FAMILIES: { derived: string; custom: { test(n: string): boolean }; label: string }[] = [
+  {
+    derived: "InvestmentProceedsFaceDerived", label: "투자자산 처분·만기",
+    custom: invName(/^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))\w*(Sale|Maturit|Redemption|Collection)\w*(Securities|Investments?)$/,
+      /^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))(?:\w*(Sale|Maturit|Redemption|Collection|Disposal)\w*)?(Securities|Investments?)(MoreThanThreeMonths\w*)?$/i),
+  },
+  {
+    derived: "InvestmentPurchasesFaceDerived", label: "투자자산 취득",
+    custom: invName(/^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)$/,
+      /^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)(DebtAndEquity)?$/i),
+  },
 ];
 /** 그 줄의 표준 구성 개념(합성 개념 제외) */
 export function cfInvStdConcepts(label: string): string[] {
@@ -122,10 +137,23 @@ export function cfZeroFillGroups(): string[][] {
  * 비지배지분 회사(WMT·INTC·GLW 등 — 비지배 몫을 기타 영업활동이 떠안음)에서 본표와 달랐다. edgar-cf-wc.ts 가 공시마다 채운다
  */
 export const SYN_NI_CF = "NetIncomeCashFlowFaceDerived";
+/** 기타 비현금 조정의 이연법인세 = 그 공시 현금흐름표 본표에 실린 이연법인세 개념(들)의 값(edgar-cf-wc.ts) — 본표 DeferredIncomeTaxesAndTaxCredits 와 주석
+ *  DeferredIncomeTaxExpenseBenefit 를 함께 더하던 것(MSFT 2026 14,189 + 14,424, 11종목 61칸 — 감사 2026-10-17). 본표에 없으면 0 */
+export const SYN_DTAX_CF = "DeferredTaxCashFlowFaceDerived";
+const DTAX = ["DeferredIncomeTaxExpenseBenefit", "DeferredIncomeTaxesAndTaxCredits"];
 /** 본표 순이익이 연결 순이익(비지배지분 포함)이고 지배주주 순이익과 다른 기간("시작|종료") — 칸 주석 */
 export const NI_CF_CONSOLIDATED = "연결 순이익(비지배지분 포함) — 현금흐름표 본표 첫 줄";
 
 function getBlocks(isFin: boolean, debtFace = false, niFace = false): Block[] {
+  const otherNc: [string, boolean][] = [
+    ["OtherNoncashIncomeExpense", false],
+    ["OtherOperatingActivitiesCashFlowStatement", false],
+    ...(niFace ? [[SYN_DTAX_CF, false] as [string, boolean]] : DTAX.map((c) => [c, false] as [string, boolean])),
+    ["IncreaseDecreaseInOtherOperatingAssets", true],
+    ["IncreaseDecreaseInOtherOperatingLiabilities", false],
+    ["IncreaseDecreaseInOtherOperatingCapitalNet", true],
+    ["IncreaseDecreaseInOtherReceivables", true],
+  ];
   // 차입금 줄(오너 결정 2026-10-10) — 10-K·10-Q 본표 판독 합성 개념(edgar-cf-wc.ts DEBT_SYN). 본표 판독을 못 한 회사(20-F 등)는 표준 개념 목록
   const D = (face: string, std: string[]) => (debtFace ? [face] : std);
   return [
@@ -150,16 +178,7 @@ function getBlocks(isFin: boolean, debtFace = false, niFace = false): Block[] {
       {
         label: "기타 비현금 조정",
         depth: 1,
-        combine: [
-          ["OtherNoncashIncomeExpense", false],
-          ["OtherOperatingActivitiesCashFlowStatement", false],
-          ["DeferredIncomeTaxExpenseBenefit", false],
-          ["DeferredIncomeTaxesAndTaxCredits", false],
-          ["IncreaseDecreaseInOtherOperatingAssets", true],
-          ["IncreaseDecreaseInOtherOperatingLiabilities", false],
-          ["IncreaseDecreaseInOtherOperatingCapitalNet", true],
-          ["IncreaseDecreaseInOtherReceivables", true],
-        ],
+        combine: otherNc,
       },
       { label: "운전자본 변동", depth: 1, kind: "subtotal" },
       { label: "매출채권 증감", concepts: ["IncreaseDecreaseInAccountsReceivable", "IncreaseDecreaseInReceivables", "IncreaseDecreaseInAccountsAndOtherReceivables"], depth: 2, negate: true },
