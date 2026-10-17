@@ -8,6 +8,7 @@ import { fetchJson } from "../http";
 import { withFetchScope } from "../fetch-health";
 import { blankYahooLtm, withYahooLtm, yahooLtm, yahooLtmPeriods, type YahooLtmResult } from "./edgar-yahoo-quarters";
 import { sixKStatements } from "./edgar-6k";
+import { recentAnnualFilings } from "./edgar-annual-filings";
 import { fetchYahooFundamentals } from "../quote/yahoo";
 import { fxToUsd } from "./edgar-foreign";
 import { consensusDeepLinks, filingsDeepLink, newsDeepLinks } from "../deeplinks";
@@ -33,6 +34,7 @@ import { toAdrBasis, withForeignNormalization } from "./edgar-foreign";
 import { withContentAmortization } from "./edgar-content";
 import { withRevenueDims } from "./edgar-revenue-dims";
 import { withCashFlowWc } from "./edgar-cf-wc";
+import { withCashFlowDebt } from "./edgar-cf-debt";
 import { needsOpIncomeStructure, withIncomeStatementStructure } from "./edgar-is-structure";
 import { withOneOffCharges } from "./edgar-oneoff";
 import { withCustomFacePretax, withFacePretax } from "./edgar-pretax";
@@ -224,10 +226,34 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       // 규칙으로 조용히 대체). 영업이익은 판독 대상 회사(영업이익 태그 없음·의심)만 — 나머지는 공시 태그 그대로
       if (subErr.reason) {
         const reason = `제출 목록 · ${subErr.reason}`;
-        for (const f of ["debt", "da", "oneOff", "yearEndShares", "filings", "cover"] as const) unavailable[f] = { reason };
+        for (const f of ["debt", "da", "oneOff", "yearEndShares", "filings", "cover", "cfDebt"] as const) unavailable[f] = { reason };
         if (needsOpIncomeStructure(raw.facts["us-gaap"] ?? {})) unavailable.opIncome = { reason };
       }
       const filled0 = await step("filings", raw, () => withFilingGapFill(cik, raw, recent));
+      // 본표 판독 공시 범위(감가상각·운전자본·현금흐름 순이익·차입금·콘텐츠 상각·세전이익·손익 구조·일회성비용·재무상태표 차입금): recent(최근 1,000건)에
+      // 10-K 가 4건 미만이면(Form 4 가 많은 META·WMT) 과거 목록 파일의 옛 10-K 를 덧붙인다 — 흐름은 10-K 3건, 재무상태표(10-K 한 건에 연말 2개)는 4건이어야
+      // 화면 5개 사업연도. 20-F·40-F 제출사(10-K 없음)는 건너뜀. 예전엔 범위 밖 연도가 본표 판독 없이 빠져
+      // META FY2021 현금흐름 순이익이 공란·기타 영업활동이 393.7억을 떠안았다(감사 2026-10-17). 조회 실패는 경고(불완전 결과 — 짧은 캐시·저장 안 함)
+      let recentFace = recent;
+      const nK = recent ? recent.form.filter((f) => f === "10-K").length : 0;
+      if (recent && nK >= 1 && nK < 4) {
+        try {
+          const ann = await recentAnnualFilings(cik, recent, 4);
+          const have = new Set(recent.accessionNumber);
+          const add = ann.filter((a) => !have.has(a.accn)).sort((a, b) => b.filed.localeCompare(a.filed));
+          if (add.length)
+            recentFace = {
+              ...recent,
+              accessionNumber: [...recent.accessionNumber, ...add.map((a) => a.accn)],
+              form: [...recent.form, ...add.map((a) => a.form)],
+              filingDate: [...recent.filingDate, ...add.map((a) => a.filed)],
+              primaryDocument: [...recent.primaryDocument, ...add.map((a) => a.doc)],
+              primaryDocDescription: [...recent.primaryDocDescription, ...add.map(() => "")],
+            };
+        } catch (e) {
+          extraWarnings.push(`과거 10-K 목록 조회 실패 — 옛 사업연도 본표 판독 불가 · ${fetchFailureReason(e) ?? (e instanceof Error ? e.message : String(e))}`.slice(0, 240));
+        }
+      }
       // 20-F 현금흐름표 — 옛 공시가 회사 고유 태그로 단 본표 줄을 최신 공시의 표준 개념으로(같은 라벨, TSM 2022 자기주식 취득 — edgar-renamed-lines.ts)
       const filled = await step("filings", filled0, () => withRenamedCfLines(cik, filled0, recent));
       // 외화·IFRS 공시(ASML·TSM·SPOT) → us-gaap·USD(edgar-foreign.ts, 연준 H.10). 환율 조회 실패 시 원본을 쓴다 —
@@ -237,26 +263,28 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
         return filled;
       });
       // 콘텐츠 상각(NFLX 등 미디어) → 감가상각비에 포함(edgar-content.ts, 오너 결정 2026-09-24)
-      const withContent = await step("da", normalized, () => withContentAmortization(cik, normalized, recent, sicN));
+      const withContent = await step("da", normalized, () => withContentAmortization(cik, normalized, recentFace, sicN));
       // 총수익 안의 지분법·기타수익 분리(XOM — 영업이익 태그 없는 회사, edgar-revenue-dims.ts)
       // 세전이익 = 손익계산서 본표 소계(지분법 이익을 법인세 아래에 두는 AMD 형 — edgar-pretax.ts)
-      const withPt0 = await step("opIncome", withContent, () => withFacePretax(cik, withContent, recent));
+      const withPt0 = await step("opIncome", withContent, () => withFacePretax(cik, withContent, recentFace));
       // 본표 세전이익 소계가 회사 고유 태그(MCD·ORCL·MRVL 10-Q) — 공시 원본 값으로 표준 세전이익 기간을 채움(edgar-pretax.ts)
-      const withPt = await step("opIncome", withPt0, () => withCustomFacePretax(cik, withPt0, recent));
-      const withDims = await step("opIncome", withPt, () => withRevenueDims(cik, withPt, recent));
+      const withPt = await step("opIncome", withPt0, () => withCustomFacePretax(cik, withPt0, recentFace));
+      const withDims = await step("opIncome", withPt, () => withRevenueDims(cik, withPt, recentFace));
       // 영업이익 소계가 없는 손익계산서 — 계산 구조로 영업외 항목 분리(DIS·FOXA, edgar-is-structure.ts)
-      const withIs = await step("opIncome", withDims, () => withIncomeStatementStructure(cik, withDims, recent, sicN));
+      const withIs = await step("opIncome", withDims, () => withIncomeStatementStructure(cik, withDims, recentFace, sicN));
       // 손익계산서 별도 줄로 공시된 일회성비용(주석 행, edgar-oneoff.ts)
-      const withOneOff = await step("oneOff", withIs, () => withOneOffCharges(cik, withIs, recent));
+      const withOneOff = await step("oneOff", withIs, () => withOneOffCharges(cik, withIs, recentFace));
       // 총차입금 = 대차대조표 본표 차입금 줄(edgar-bs-structure.ts)
-      const withDebt = await step("debt", withOneOff, () => withBalanceSheetDebt(cik, withOneOff, recent));
+      const withDebt = await step("debt", withOneOff, () => withBalanceSheetDebt(cik, withOneOff, recentFace));
       // 감가상각비 = 현금흐름표 본표 감가상각·상각 줄(edgar-cf-structure.ts). 콘텐츠 상각 판독이 실패했으면(NFLX) 본표 줄로
       // 대신하지 않는다 — 콘텐츠 상각이 빠진 값이 된다
-      const withDa = unavailable.da ? withDebt : await step("da", withDebt, () => withCashFlowDa(cik, withDebt, recent));
+      const withDa = unavailable.da ? withDebt : await step("da", withDebt, () => withCashFlowDa(cik, withDebt, recentFace));
       // 운전자본 변동 합계 = 현금흐름표 본표 운전자본 줄 합(edgar-cf-wc.ts — 분기 요약형 공시 회사의 LTM 운전자본)
-      const withWc = await step("da", withDa, () => withCashFlowWc(cik, withDa, recent));
+      const withWc = await step("da", withDa, () => withCashFlowWc(cik, withDa, recentFace));
+      // 현금흐름표 차입금 줄 = 본표 차입 줄 성격별 합(edgar-cf-debt.ts, 오너 결정 2026-10-10). 판독 실패는 차입 줄만 공란(감가상각·운전자본과 분리)
+      const withDebtCf = await step("cfDebt", withWc, () => withCashFlowDebt(cik, withWc, recentFace));
       // 연말 유통주식수가 자본변동표 차원으로만 있는 회사(WMT·BE·META, edgar-equity-shares.ts)
-      const withShares = await step("yearEndShares", withWc, () => withEquityStatementShares(cik, withWc, recent));
+      const withShares = await step("yearEndShares", withDebtCf, () => withEquityStatementShares(cik, withDebtCf, recent));
       // 20-F 발행사(분기 XBRL 없음) — LTM 열을 Yahoo 분기(원통화) 최근 4개 분기로(edgar-yahoo-quarters.ts, 오너 결정
       // 2026-09-25). 조회 실패 시 SEC 사업연도 유지 + 경고(짧은 캐시), 다른 원천으로 대체하지 않는다.
       let withLtm = withShares;
@@ -265,19 +293,29 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       if (latestPeriodic && /^20-F/.test(latestPeriodic) && ticker) {
         const cur = withShares.reportingCurrency ?? "USD";
         const [yq, fx] = await Promise.all([
+          // silent-ok: null 이면 바로 아래 분기에서 경고("… 조회 실패")와 LTM 열 공란으로 처리
           fetchYahooFundamentals(ticker).catch(() => null),
+          // silent-ok: 위와 같음(H.10 조회 실패 경고)
           fxToUsd(cur).catch(() => null),
         ]);
         if (yq && fx) {
           // 회사 6-K 분기 재무제표(연결재무보고서 HTML) — 야후 정의가 SEC 와 다른 항목을 회사 줄로(edgar-6k.ts). 없거나 못 읽으면 null(야후 경로 그대로)
           const per = yahooLtmPeriods(withShares, yq);
-          const sixK = per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(() => null) : null;
+          // 6-K 조회 실패는 경고로 남긴다(재감사 12차 ③ — null 로 삼키면 6-K 값이 조용히 빈칸·야후 근사로 바뀌었다). 경고가 있으면 짧은 캐시
+          let sixKFailed = false;
+          const sixKFail = (e: unknown) => { sixKFailed = true; extraWarnings.push(`회사 6-K 분기 재무제표 조회 실패 — ${fetchFailureReason(e) ?? (e instanceof Error ? e.message : String(e))}`.slice(0, 240)); return null; };
+          const sixK = per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(sixKFail) : null;
           // 이번 보고서에 1년 전 분기말 열이 없으면(SPOT) 1년 전 같은 분기 6-K — 평균 잔액(ROIC 등)의 기초 값
           const shift12 = (d: string) => { const x = new Date(`${d}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); };
           const sixKPrev = per && sixK && !sixK.bsDates.includes(per.yearAgo)
-            ? await sixKStatements(cik, recent, per.yearAgo, shift12(per.E), shift12(per.yearAgo)).catch(() => null)
+            ? await sixKStatements(cik, recent, per.yearAgo, shift12(per.E), shift12(per.yearAgo)).catch(sixKFail)
             : null;
           const r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev);
+          // 6-K 경로를 시도했는데 보고서를 못 찾음(조회 실패 아님) — 검증 전용 사유
+          // 1년 전 분기 6-K 를 찾아야 했는데(이번 보고서에 1년 전 열 없음) 못 찾음 — 검증 전용 사유(조회 실패는 fetchWarnings)
+          if (r.result.source === "yahoo" && per && sixK && !sixK.bsDates.includes(per.yearAgo) && !sixKPrev)
+            r.result.sixKPrevMiss = sixKFailed ? "1년 전 분기 6-K 조회 실패(fetchWarnings 참조)" : `1년 전 분기말 ${per.yearAgo} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음`;
+          if (r.result.source === "yahoo" && !sixK) r.result.sixKMiss = sixKFailed ? "6-K 조회 실패(fetchWarnings 참조)" : per ? `분기말 ${per.last} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음` : "LTM 기간 판정 불가(6-K 조회 안 함)";
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else if (!fx) {
           // H.10 조회 실패 — 사업연도 값을 LTM 으로 대체하지 않고 LTM 열 공란(미고시와 같은 처리)
@@ -341,6 +379,7 @@ export async function fetchUsCompanyFacts(
 async function getSymbolFacts(cik: string, symbol: string, opts: { revenue?: boolean } = {}): Promise<CompanyFacts> {
   const [facts, currentShares, revenue] = await Promise.all([
     getCompanyFacts(cik),
+    // silent-ok: loadUsCurrentShares 는 내부에서 실패를 처리해 거부하지 않는다(실패는 짧은 캐시 — current-shares.ts)
     loadUsCurrentShares(symbol).catch(() => null),
     // 매출 = 재무 5층 구조(src/lib/fin) 매출 지표(fin-revenue.ts). 매출을 안 쓰는 경로는 건너뛴다
     opts.revenue === false ? Promise.resolve(null) : loadUsRevenue(symbol),
@@ -410,6 +449,19 @@ export interface CompanyFacts {
   daBasisMix?: string[];
   /** 사업연도 감가상각 줄에 중단사업분이 섞였는데 그 금액이 공시되지 않은 기간("시작|종료") — 감가상각비·EBITDA 공란(edgar-cf-structure.ts, 오너 결정 2026-10-09 IBM 2021) */
   daDiscMix?: string[];
+  /** 차입금 줄을 10-K·10-Q 본표 판독으로 만들었는가(edgar-cf-debt.ts) — 아니면(20-F 등) 표준 개념 목록으로 */
+  debtFace?: boolean;
+  /** 차입금 줄 칸이 빈 사유(판독 실패·분류 교체) — edgar-cf-debt.ts */
+  debtBlanks?: { concept: string; end: string; reason: string }[];
+  /** 차입 줄 판독 실패로 비운 기간의 결산일 — 잔여 줄(기타 재무활동)도 그 칸 빈칸 */
+  debtUnreadEnds?: string[];
+  /** 현금흐름표 본표 줄인데 그 기간 사실이 차원으로만 있는 칸(edgar-cf-wc.ts — 0 으로 채우지 않음). force = 그 줄 값을 비운다(투자자산 본표 줄 합 —
+   *  표준 개념 대체값이 부분합이 되지 않게). 화면은 그 칸 빈칸 + 사유, 같은 구간 잔여 줄도 빈칸 */
+  cfDimOnly?: { concept: string; start: string; end: string; force?: boolean }[];
+  /** 현금흐름표 첫 줄 순이익을 본표 판독으로 만들었는가(edgar-cf-wc.ts SYN_NI_CF) — 아니면(20-F 등) 표준 개념 순서 */
+  niFace?: boolean;
+  /** 본표 순이익이 연결 순이익이고 지배주주 순이익과 다른 기간("시작|종료") */
+  niConsolidated?: string[];
   /** 총수익에서 지분법·기타수익을 분리했는지(edgar-revenue-dims.ts) */
   nonopInRevenues?: boolean;
   /** 은행·증권·보험(SIC 6000~6499) — 이자가 본업이라 영업이익 근사에 이자를 더하지 않는다. 리츠·부동산(65xx·67xx)은
@@ -838,9 +890,11 @@ export const usEdgarAdapter: MarketAdapter = {
       const dartAdr = dartAdrOf(symbol);
       if (dartAdr) return (await dartAdrTtm(dartAdr)) ?? failedTtm("TTM 조회 실패 — DART 분기 재무 없음");
       const { cik } = await resolveCik(symbol);
+      let sicFailed = false;
       const [facts0, sic] = await Promise.all([
         getSymbolFacts(cik, symbol),
-        getSubmissions(cik).then((s) => s.sic ?? null).catch(() => null),
+        // SIC 조회 실패 — 금융업 판정을 못 하므로 불완전 결과로 표시(저장 제외). null 로 삼키면 금융사가 일반 회사로 계산됐다
+        getSubmissions(cik).then((s) => s.sic ?? null).catch(() => { sicFailed = true; return null; }),
       ]);
       const [captive, cls] = await Promise.all([
         // 금융 자회사 판별 조회 실패 = "unknown"(금융 자회사 없음으로 단정하지 않음 — EV 미표시)
@@ -860,6 +914,7 @@ export const usEdgarAdapter: MarketAdapter = {
         ...(facts.fetchWarnings ?? []),
         ...(facts.revenue == null ? ["매출(fin) 조립 실패"] : []),
         ...(captive === "unknown" ? ["금융 자회사 판별 조회 실패"] : []),
+        ...(sicFailed ? ["SIC(업종) 조회 실패"] : []),
       ];
       const staleInputs = facts.revenue?.staleEv != null ? [`재무 저장본 엔진판 ${facts.revenue.staleEv}(현재 판과 다름 — 배치 갱신 대기)`] : [];
       return { ...ttm, ...(degraded.length ? { degraded } : {}), ...(staleInputs.length ? { staleInputs } : {}) };
