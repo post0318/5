@@ -238,24 +238,28 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
         }
       }
     }
-    // 투자자산 처분·취득 — 본표에 회사 고유 줄이 섞이면 같은 성격 본표 줄 전부(표준 + 회사 고유) 합. 본표 줄인데 그 기간 값이 없으면 0("—")
+    // 투자자산 처분·취득 = 본표 줄 합 — 본표를 읽은 공시는 언제나(회사 고유 줄이 없어도) 같은 성격 본표 줄 전부(표준 + 회사 고유)를 그 공시 원본 값으로 더하고,
+    // 한 기간 = 그 기간을 실은 가장 최근 공시(latestFiled). 예전엔 회사 고유 줄이 있을 때만 만들고 나머지는 표준 개념 목록을 연간 칸에서 개념별로 더해, 같은
+    // 금액을 본표 줄·주석 태그로 함께 단 공시(CAT AFS 매각)나 태그를 바꾼 회사(META·NFLX 2023 — 2배)·옛 10-K 태그(PEP)가 두 번 들어갔다(8차 감사 2026-10-17,
+    // 운영 판부터 있던 결함). 본표 줄인데 그 기간 값이 없으면 0("—"). 같은 성격 꼴 표준 줄 확장은 증권(…Securities)만 — 지분법·기타 투자(UBER·PLTR)는 종전대로
+    // 기타 투자활동(분류 바꾸지 않음)
     if (faceS) {
       const local = (id: string) => id.replace(/^[^_]+_/, "");
       const fams = CF_INV_FAMILIES.map((fm) => {
         const std = new Set(cfInvStdConcepts(fm.label));
-        // 표준 개념은 그 줄 목록 + 같은 성격 꼴인데 다른 줄이 쓰지 않는 것(DELL PaymentsToAcquireHeldToMaturitySecurities)
-        const ids = [...faceS].filter((id) => (id.startsWith("us-gaap_") ? std.has(local(id)) || (fm.custom.test(local(id)) && !otherLineStd.has(local(id))) : fm.custom.test(local(id))));
-        return { fm, ids, custom: ids.filter((id) => !id.startsWith("us-gaap_")) };
-      }).filter((x) => x.custom.length);
+        const ids = [...faceS].filter((id) => (id.startsWith("us-gaap_")
+          ? std.has(local(id)) || (/Securities$/.test(local(id)) && fm.custom.test(local(id)) && !otherLineStd.has(local(id)))
+          : fm.custom.test(local(id))));
+        return { fm, ids };
+      }).filter((x) => x.ids.length);
       const inst = fams.length ? names.find((n) => /_htm\.xml$/i.test(n)) : null;
       if (inst) {
         const want = new Set(fams.flatMap((x) => x.ids));
         const fsx = instanceFacts(await fetchText(`${base}/${inst}`, { headers: H, revalidate: false, timeoutMs: 30_000 }), (id) => want.has(id));
-        for (const { fm, ids, custom } of fams)
+        for (const { fm, ids } of fams)
           for (const e of ocf) {
-            const at = (id: string) => fsx.find((x) => x.id === id && x.period === `${e.start}|${e.end}` && x.dims.length === 0);
-            if (!custom.some(at)) continue;
             if (latestFiled.get(`${e.start}|${e.end}`) !== f.filed) continue;
+            const at = (id: string) => fsx.find((x) => x.id === id && x.period === `${e.start}|${e.end}` && x.dims.length === 0);
             // 본표 줄인데 차원 없는 값이 없고 0 아닌 차원 값만 있으면 0 으로 더하지 않는다(부분합 금지) — 그 칸 빈칸 + 사유
             const dimOnlyId = ids.find((id) => !at(id) && fsx.some((x) => x.id === id && x.period === `${e.start}|${e.end}` && x.val !== 0));
             if (dimOnlyId) { dimOnly.push({ concept: fm.derived, start: e.start!, end: e.end, force: true }); continue; }
