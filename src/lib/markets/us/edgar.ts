@@ -225,7 +225,7 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       // 규칙으로 조용히 대체). 영업이익은 판독 대상 회사(영업이익 태그 없음·의심)만 — 나머지는 공시 태그 그대로
       if (subErr.reason) {
         const reason = `제출 목록 · ${subErr.reason}`;
-        for (const f of ["debt", "da", "oneOff", "yearEndShares", "filings", "cover"] as const) unavailable[f] = { reason };
+        for (const f of ["debt", "da", "oneOff", "yearEndShares", "filings", "cover", "cfDebt"] as const) unavailable[f] = { reason };
         if (needsOpIncomeStructure(raw.facts["us-gaap"] ?? {})) unavailable.opIncome = { reason };
       }
       const filled0 = await step("filings", raw, () => withFilingGapFill(cik, raw, recent));

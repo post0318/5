@@ -839,9 +839,16 @@ export function buildUsCashFlow(
       } else if (line === "기타 재무활동") {
         for (const p of periods) {
           const unread = cfOut || (facts.debtUnreadEnds ?? []).some((e) => endsOf(p).some((x) => near(x, e)));
-          if (!unread) continue;
+          // 잔여 계산이 0 으로 본 1단 차입 줄(조달·상환 합계·단기 순증감)이 사유 있는 빈칸(분류 교체·4분기 산정 불가 등)이면 그 금액을 떠안는다 — 함께 공란
+          // (감사 2026-10-17: MSFT 2026 Q1~Q3 분류 교체로 합계가 비자 기타에 장기차입금 상환 3,000 이 들어갔다)
+          const blankDebt = items.find((x) => {
+            const l = x.accountId?.startsWith("cf:재무활동 현금흐름:") ? x.accountId.slice("cf:재무활동 현금흐름:".length) : "";
+            return x.depth === 1 && !!LINE_C[l] && x.values[p.label] == null && !!x.cellNotes?.[p.label];
+          });
+          if (!unread && !blankDebt) continue;
           it.values[p.label] = null;
-          it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: cfOut ? outNote! : `${DEBT_UNREAD_NOTE} — 차입 금액을 떠안지 않게 함께 공란` };
+          const why = cfOut ? outNote! : unread ? DEBT_UNREAD_NOTE : `${blankDebt!.accountName} 공란(${blankDebt!.cellNotes![p.label]})`;
+          it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: cfOut ? why : `${why} — 차입 금액을 떠안지 않게 함께 공란` };
         }
       }
     }

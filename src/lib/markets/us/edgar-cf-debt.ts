@@ -14,6 +14,7 @@ import { filingsForDa, instanceFacts } from "./edgar-cf-structure";
  *   어느 줄에도 넣지 않는다 = 기타 재무활동). 단기 = ShortTerm·기업어음·신용한도·리볼빙·만기 3개월 이하·당좌차월, 그 밖 = 장기. 회사 고유 줄도 같은 규칙.
  *   제외: 리스(부채와 한 줄인 "Debt…Lease" 만 차입), 지분·이자·배당·파생·보증, 비용 지급 줄(PaymentsOf…Costs — 조달 줄 이름의 "NetOf…Costs" 는 조달 그대로,
  *   GOOG ProceedsFromDebtNetOfIssuanceCosts).
+ * - 원본에 그 줄 사실이 부문 차원으로만 있으면(차원 없는 값 없음 — CAT) 판독 불가로 그 성격을 비운다(사유 DEBT_DIMONLY, 0 아님).
  * - 금액 = 줄 값 × 계산 구조 가중치(재무활동 합계까지의 곱) — 조달·순증감은 그대로, 상환은 부호를 뒤집어 양수(유출액). 회사 고유 줄의 부호 관례가 거꾸로여도 맞는다.
  * - 단기·장기는 라벨이 한쪽만 밝히면 라벨(「long-term debt」·「commercial paper」 등), 섞이거나 없으면 개념 이름.
  * - 순액 판정은 표시 라벨도 본다 — 양방향 표시("(repayments)"·"additions/(reductions)"·"change in"·"net short-term borrowings")나 상환 줄 끝의
@@ -46,6 +47,7 @@ const dirOf = (c: DebtCat): Dir | null => (c === "issS" || c === "issL" ? "iss" 
 export type DebtBlank = { concept: string; end: string; reason: string };
 export const DEBT_UNREAD = "본표 차입 줄 판독 불가(공시 원본 값 없음)";
 export const DEBT_MIXED = "본표 차입 줄 분류가 직전 10-K 와 달라 사업연도와 섞을 수 없음";
+export const DEBT_DIMONLY = "본표 차입 줄이 부문 차원으로만 태깅됨(차원 없는 값 없음) — 부문 합은 이중 태깅 위험이라 쓰지 않음";
 
 // 금융(Financing)은 차입 뜻이 분명한 꼴만 — 단기 금융(ORCL)·금융 부채(BE FinancingObligations)·금융 약정. NVDA nvda_PaymentForDeferredConsiderationFinancing…
 // (인수 대금 이연 지급)은 차입 아님
@@ -72,8 +74,8 @@ function grossDirByLabel(label: string | null | undefined): "iss" | "rep" | null
 export function isNetLabel(label: string | null | undefined): boolean {
   return !!label && NET_LABEL.test(label.replace(/net of [a-z ,-]*(costs?|discounts?|fees?|premiums?)/gi, ""));
 }
-/** 단기·장기 — 라벨이 한쪽만 밝히면 라벨(회사가 본표에 쓴 말), 섞이거나 없으면 개념 이름. AMD 같은 금액을 10-K 는 ProceedsFromShortTermDebt 개념에
- *  「Proceeds from long-term debt issuance」 라벨로 실었다 — 라벨이 정한다 */
+/** 단기·장기 — 라벨이 한쪽만 밝히면 라벨(회사가 본표에 쓴 말), 섞이거나 없으면 개념 이름. AMD 10-K(FY2022~2025)는 ProceedsFromShortTermDebt 개념에
+ *  기간 표시 없는 라벨(「Proceeds from debt, net of issuance costs」, FY2025 「… debt and commercial paper …」)이라 개념 이름(단기)을 따른다 */
 const SHORT_LABEL = /(short-term|short term|commercial paper|revolv|lines? of credit|credit facilit|overdraft|overnight|90 days or less|three months or less)/i;
 const LONG_LABEL = /(long-term|long term|\bsenior\b|\bnotes\b|\bbonds?\b|debentures?|term loans?|convertible)/i;
 function shortByLabel(label: string | null | undefined): boolean | null {
@@ -168,6 +170,8 @@ interface FilingDebt {
   cats: Set<DebtCat>;
   /** 줄 값을 못 읽은 성격 */
   catUnread: Set<DebtCat>;
+  /** 못 읽은 사유(없으면 DEBT_UNREAD) */
+  catWhy: Map<DebtCat, string>;
   /** 성격 → "시작|종료" → 값(양수 = 조달·상환액, 순증감은 부호 그대로) */
   vals: Map<DebtCat, Map<string, number>>;
 }
@@ -183,7 +187,7 @@ export async function withCashFlowDebt(cik: string, facts: CompanyFacts, recent:
     const periods = FIN_TOTAL.flatMap((c) => g[c]?.units?.USD ?? []).filter((e) => e.start && e.filed === f.filed && e.form === f.form)
       .filter((e, i, a) => a.findIndex((x) => x.start === e.start && x.end === e.end) === i);
     if (!periods.length) continue;
-    const fd: FilingDebt = { accn: f.accn, form: f.form, filed: f.filed, periods, unread: false, cats: new Set(), catUnread: new Set(), vals: new Map() };
+    const fd: FilingDebt = { accn: f.accn, form: f.form, filed: f.filed, periods, unread: false, cats: new Set(), catUnread: new Set(), catWhy: new Map(), vals: new Map() };
     read.push(fd);
     const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
     const names = (await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, opt)).directory.item.map((i) => i.name);
@@ -209,8 +213,14 @@ export async function withCashFlowDebt(cik: string, facts: CompanyFacts, recent:
     const instRead = inst != null;
     const valOf = (id: string, p: FactUnitEntry): number | null =>
       fromCf(id, p) ?? inst?.find((x) => x.id === id && x.period === `${p.start}|${p.end}` && x.dims.length === 0)?.val ?? null;
+    // 원본에 그 기간 사실이 부문 차원으로만 있음(CAT 2025 10-K ProceedsFromDebtMaturingInMoreThanThreeMonths — 기계·금융 부문 멤버뿐) — "—"(0) 아님
+    const dimOnly = (id: string, p: FactUnitEntry) => {
+      const xs = inst?.filter((x) => x.id === id && x.period === `${p.start}|${p.end}`) ?? [];
+      return xs.length > 0 && xs.every((x) => x.dims.length > 0);
+    };
     for (const l of lines) {
       const vs = periods.map((p) => valOf(l.id, p));
+      if (periods.some((p, i) => vs[i] == null && dimOnly(l.id, p))) { fd.catUnread.add(l.cat); fd.catWhy.set(l.cat, DEBT_DIMONLY); continue; }
       // 모든 기간에 값이 없음 — 원본을 읽었으면 그 줄은 전 기간 "—"(= 0), 원본을 못 읽었으면(파일 없음) 판독 실패로 그 성격을 비운다
       if (vs.every((v) => v == null) && !instRead) { fd.catUnread.add(l.cat); continue; }
       const m = fd.vals.get(l.cat) ?? new Map<string, number>();
@@ -286,13 +296,13 @@ export async function withCashFlowDebt(cik: string, facts: CompanyFacts, recent:
       }
       for (const c of CATS) {
         const v = catVal.get(c);
-        if (v === "unread" || v === "mixed") { blanks.push({ concept: DEBT_SYN[c], end: p.end, reason: v === "unread" ? DEBT_UNREAD : DEBT_MIXED }); if (v === "unread") unreadEnds.add(p.end); continue; }
+        if (v === "unread" || v === "mixed") { blanks.push({ concept: DEBT_SYN[c], end: p.end, reason: v === "unread" ? f.catWhy.get(c) ?? DEBT_UNREAD : DEBT_MIXED }); if (v === "unread") unreadEnds.add(p.end); continue; }
         if (v != null) push(DEBT_SYN[c], f, p, v);
       }
       // 합계 — 그 방향 성격 중 판독 실패가 있으면 빈칸, 분류 교체(순액↔총액)면 빈칸. 단기·장기만 교체(mixed)면 원래 줄 값의 합(같은 정의)
       for (const d of ["iss", "rep"] as Dir[]) {
         if (bt.has(d)) { blanks.push({ concept: DEBT_TOTAL_SYN[d], end: p.end, reason: DEBT_MIXED }); continue; }
-        if (DIR[d].some((c) => catVal.get(c) === "unread")) { blanks.push({ concept: DEBT_TOTAL_SYN[d], end: p.end, reason: DEBT_UNREAD }); continue; }
+        { const u = DIR[d].find((c) => catVal.get(c) === "unread"); if (u) { blanks.push({ concept: DEBT_TOTAL_SYN[d], end: p.end, reason: f.catWhy.get(u) ?? DEBT_UNREAD }); continue; } }
         const raw = DIR[d].map((c) => (catVal.get(c) === "mixed" ? (f.vals.get(c)?.get(k) ?? (f.cats.has(c) ? 0 : null)) : (catVal.get(c) as number | null)));
         if (raw.every((x) => x == null)) continue;
         push(DEBT_TOTAL_SYN[d], f, p, raw.reduce((t: number, x) => t + (x ?? 0), 0));
