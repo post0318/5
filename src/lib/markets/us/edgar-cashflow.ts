@@ -103,9 +103,24 @@ const FIN_PROVISION_LINE: Line = {
  * (edgar-cf-wc.ts, 2026-10-09 NVDA 2027 회계연도 10-Q: 지분증권 취득·처분이 nvda: 태그라 표준 태그만 더하면 LTM 이 부분값·"기타 투자활동"이 떠안았다).
  * 합성 개념이 있는 기간은 표준 구성 개념을 대신한다(SUPERSEDES)
  */
-export const CF_INV_FAMILIES: { derived: string; custom: RegExp; label: string }[] = [
-  { derived: "InvestmentProceedsFaceDerived", label: "투자자산 처분·만기", custom: /^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))\w*(Sale|Maturit|Redemption|Collection)\w*(Securities|Investments?)$/ },
-  { derived: "InvestmentPurchasesFaceDerived", label: "투자자산 취득", custom: /^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)$/ },
+/** 회사 고유 줄 이름 판정 — 옛 규칙(2026-10-09)이 잡던 이름은 그대로, 표기 차이로 놓치던 이름(대소문자 — KO ko_ProceedsfromDisposalsofInvestments·
+ *  ko_PurchasesofInvestments·SBUX·INTC, 처분 Disposal, 동사 없는 MSFT "ProceedsFromInvestments", 꼬리말 TER …SecuritiesDebtAndEquity·PEP …MoreThanThreeMonthsSales)은
+ *  새로 잡되 분류 결정 전 항목(시장가 없는 지분증권·비상장·지분법 — META·MU·UBER)과 투자 아닌 줄(대출·리스·투자용 부동산·투자세액공제 매각 — VST)은 새로 잡지 않는다
+ *  (2026-10-17 감사). 옛 규칙이 잡던 줄의 분류는 바꾸지 않는다 */
+const invName = (old: RegExp, wide: RegExp) => ({
+  test: (n: string) => old.test(n) || (wide.test(n) && !/EquityMethod|NonMarketable|WithoutReadilyDeterminable|TaxCredit|Loan|Lease|RealEstate/i.test(n)),
+});
+export const CF_INV_FAMILIES: { derived: string; custom: { test(n: string): boolean }; label: string }[] = [
+  {
+    derived: "InvestmentProceedsFaceDerived", label: "투자자산 처분·만기",
+    custom: invName(/^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))\w*(Sale|Maturit|Redemption|Collection)\w*(Securities|Investments?)$/,
+      /^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))(?:\w*(Sale|Maturit|Redemption|Collection|Disposal)\w*)?(Securities|Investments?)(MoreThanThreeMonths\w*)?$/i),
+  },
+  {
+    derived: "InvestmentPurchasesFaceDerived", label: "투자자산 취득",
+    custom: invName(/^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)$/,
+      /^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)(DebtAndEquity)?$/i),
+  },
 ];
 /** 그 줄의 표준 구성 개념(합성 개념 제외) */
 export function cfInvStdConcepts(label: string): string[] {
@@ -116,7 +131,32 @@ export function cfZeroFillGroups(): string[][] {
   return getBlocks(false).slice(1).flatMap((b) => b.lines.filter((l) => l.concepts && !l.plug).map((l) => l.concepts as string[]));
 }
 
-function getBlocks(isFin: boolean, debtFace = false): Block[] {
+/**
+ * 현금흐름표 첫 줄 순이익 = 그 공시 현금흐름표 본표 계산 구조에 실린 순이익 개념(지배주주 NetIncomeLoss 또는 연결 ProfitLoss — 오너 결정
+ * 2026-10-17 (가)). 예전 "NetIncomeLoss 먼저, 없으면 ProfitLoss" 는 CAT(NetIncomeLoss 2010 에 끊김 — 최근 5년 공란)과 본표가 연결 순이익인
+ * 비지배지분 회사(WMT·INTC·GLW 등 — 비지배 몫을 기타 영업활동이 떠안음)에서 본표와 달랐다. edgar-cf-wc.ts 가 공시마다 채운다
+ */
+export const SYN_NI_CF = "NetIncomeCashFlowFaceDerived";
+/** 기타 비현금 조정(본표 판독 회사) = 그 공시 현금흐름표 본표 비운전자본 줄 중 아래 개념의 값 × 본표 가중치 합(edgar-cf-wc.ts). 운전자본 줄은 운전자본 변동에만 */
+/** 본표 순이익이 연결 순이익(비지배지분 포함)이고 지배주주 순이익과 다른 기간("시작|종료") — 칸 주석 */
+export const NI_CF_CONSOLIDATED = "연결 순이익(비지배지분 포함) — 현금흐름표 본표 첫 줄";
+export const SYN_OTHER_NC_CF = "OtherNoncashCashFlowFaceDerived";
+export const OTHER_NC = ["OtherNoncashIncomeExpense", "OtherOperatingActivitiesCashFlowStatement", "DeferredIncomeTaxExpenseBenefit", "DeferredIncomeTaxesAndTaxCredits"];
+
+function getBlocks(isFin: boolean, debtFace = false, niFace = false): Block[] {
+  // 본표 판독 회사는 합성 개념 하나(본표 가중치 — 운전자본 줄 제외), 아니면(20-F 등) 종전 개념 목록
+  const otherNc: [string, boolean][] = niFace
+    ? [[SYN_OTHER_NC_CF, false]]
+    : [
+        ["OtherNoncashIncomeExpense", false],
+        ["OtherOperatingActivitiesCashFlowStatement", false],
+        ["DeferredIncomeTaxExpenseBenefit", false],
+        ["DeferredIncomeTaxesAndTaxCredits", false],
+        ["IncreaseDecreaseInOtherOperatingAssets", true],
+        ["IncreaseDecreaseInOtherOperatingLiabilities", false],
+        ["IncreaseDecreaseInOtherOperatingCapitalNet", true],
+        ["IncreaseDecreaseInOtherReceivables", true],
+      ];
   // 차입금 줄(오너 결정 2026-10-10) — 10-K·10-Q 본표 판독 합성 개념(edgar-cf-wc.ts DEBT_SYN). 본표 판독을 못 한 회사(20-F 등)는 표준 개념 목록
   const D = (face: string, std: string[]) => (debtFace ? [face] : std);
   return [
@@ -127,7 +167,7 @@ function getBlocks(isFin: boolean, debtFace = false): Block[] {
       concepts: ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
     },
     lines: [
-      { label: "당기순이익", concepts: ["NetIncomeLoss", "ProfitLoss"], depth: 1 },
+      { label: "당기순이익", concepts: niFace ? [SYN_NI_CF] : ["NetIncomeLoss", "ProfitLoss"], depth: 1 },
       {
         label: "감가·무형상각비", // 모바일 한 줄 표시(오너 지시 2026-10-02)
         // 여러 합계 태그를 동시에 다는 회사(MCD: 일부 항목 4.6억 / 전체 22억)가 있어
@@ -141,16 +181,7 @@ function getBlocks(isFin: boolean, debtFace = false): Block[] {
       {
         label: "기타 비현금 조정",
         depth: 1,
-        combine: [
-          ["OtherNoncashIncomeExpense", false],
-          ["OtherOperatingActivitiesCashFlowStatement", false],
-          ["DeferredIncomeTaxExpenseBenefit", false],
-          ["DeferredIncomeTaxesAndTaxCredits", false],
-          ["IncreaseDecreaseInOtherOperatingAssets", true],
-          ["IncreaseDecreaseInOtherOperatingLiabilities", false],
-          ["IncreaseDecreaseInOtherOperatingCapitalNet", true],
-          ["IncreaseDecreaseInOtherReceivables", true],
-        ],
+        combine: otherNc,
       },
       { label: "운전자본 변동", depth: 1, kind: "subtotal" },
       { label: "매출채권 증감", concepts: ["IncreaseDecreaseInAccountsReceivable", "IncreaseDecreaseInReceivables", "IncreaseDecreaseInAccountsAndOtherReceivables"], depth: 2, negate: true },
@@ -283,7 +314,7 @@ export function buildUsCashFlow(
 ): FinancialStatement {
   const isFin = isFinancialCompany(facts, sic ?? null);
   // 차입 줄 판독 자체가 실패(cfDebt)면 표준 개념 목록으로 바꿔 채우지 않는다 — 합성 개념 줄(빈칸) + 사유
-  const BLOCKS = getBlocks(isFin, !!facts.debtFace || unavailableOn(facts, "cfDebt"));
+  const BLOCKS = getBlocks(isFin, !!facts.debtFace || unavailableOn(facts, "cfDebt"), !!facts.niFace);
   const opEntries = firstConcept(facts, BLOCKS[0].total.concepts);
 
   let periods: FinancialPeriod[];
@@ -827,6 +858,7 @@ export function buildUsCashFlow(
     const ltmEnds = anchor ? [anchor, shiftYear(anchor, -1), ...(fyEnd ? [fyEnd] : [])] : [];
     const endsOf = (p: FinancialPeriod) => (p.label === LTM ? ltmEnds : p.endDate ? [p.endDate] : []);
     const outNote = cfOut ? unavailableNote(facts) ?? "원본 조회 실패" : null;
+    const debtFaceOn = !!facts.debtFace && !cfOut;
     for (const it of items) {
       const line = it.accountId?.startsWith("cf:재무활동 현금흐름:") ? it.accountId!.slice("cf:재무활동 현금흐름:".length) : null;
       if (!line) continue;
@@ -835,6 +867,23 @@ export function buildUsCashFlow(
         for (const p of periods) {
           if (cfOut) { it.values[p.label] = null; it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: outNote! }; continue; }
           if (it.values[p.label] != null) continue;
+          // 조달·상환(총액, 음수 없음) 분기 칸이 누적 차를 못 내 빈 경우 — 누적(직전 누적 없음: 당기 누적 / 4분기: 사업연도)이 0 이면 그 분기도 0(확정).
+          // 4차 감사(2026-10-17): GEV 2025 Q3 9개월 누적 조달·상환 0 인데 공란 → 기타 재무활동까지 공란(원래 −46 이 맞음). 순증감 줄은 해당 없음
+          const why0 = it.cellNotes?.[p.label];
+          if (debtFaceOn && mode === "quarter" && p.endDate && line !== "단기차입금 순증감" && (why0 === QUARTER_NO_PREV_YTD || why0 === Q4_NO_NINE)) {
+            const end = p.endDate;
+            const es = (facts.facts["us-gaap"]?.[concept]?.units?.USD ?? []).filter((e) => {
+              if (!e.start || !near(e.end, end)) return false;
+              const days = (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
+              return why0 === Q4_NO_NINE ? days >= 350 && days <= 380 : days > 80 && days <= 380;
+            });
+            if (es.length && es.every((e) => e.val === 0)) {
+              it.values[p.label] = 0;
+              const { [p.label]: _d, ...rest } = it.cellNotes ?? {}; void _d;
+              it.cellNotes = rest;
+              continue;
+            }
+          }
           const b = (facts.debtBlanks ?? []).find((x) => x.concept === concept && endsOf(p).some((e) => near(x.end, e)));
           if (b) it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: b.reason };
         }
@@ -881,9 +930,10 @@ export function buildUsCashFlow(
         periods.forEach((p, pi) => {
           // 분기 화면은 직전 누적(같은 사업연도, 앞 열 결산일)이 차원으로만 있어도 그 분기(누적 차)를 못 낸다
           const prevEnd = mode === "quarter" && pi > 0 ? periods[pi - 1].endDate : null;
-          const sameFy = (d: { start: string }) => !!p.endDate && Date.parse(p.endDate) - Date.parse(d.start) <= 370 * 864e5;
+          const sameFy = (d: { start: string; end: string }) => !!p.endDate && d.end < p.endDate && Date.parse(p.endDate) - Date.parse(d.start) <= 370 * 864e5;
           const hit = facts.cfDimOnly!.find((d) => cs.includes(d.concept) && (endsOf(p).some((e) => near(d.end, e)) || (!!prevEnd && near(d.end, prevEnd) && sameFy(d))));
-          if (!hit || (it.values[p.label] != null && !hit.force && near(hit.end, p.endDate ?? ""))) return;
+          // 값이 있으면(다른 개념·공시된 3개월 값) 그대로 — force(투자자산 본표 줄 합 대체값)만 지운다
+          if (!hit || (it.values[p.label] != null && !hit.force)) return;
           it.values[p.label] = null;
           it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: CF_DIM_ONLY };
           if (plug && plug.values[p.label] != null) {
@@ -892,6 +942,17 @@ export function buildUsCashFlow(
           }
         });
       }
+    }
+  }
+  // 본표 순이익이 연결 순이익(비지배지분 포함)인 칸 — 지배주주 순이익(하이라이트·재무분석)과 다른 값이라 칸 주석으로 밝힌다
+  if (facts.niConsolidated?.length) {
+    const it = items.find((x) => x.accountId === "cf:영업활동 현금흐름:당기순이익");
+    const ends = facts.niConsolidated.map((k) => k.split("|")[1]);
+    const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 7 * 864e5;
+    if (it) for (const p of periods) {
+      if (it.values[p.label] == null || it.cellNotes?.[p.label]) continue;
+      const e = p.label === LTM ? anchor : p.endDate;
+      if (e && ends.some((x) => near(x, e))) it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: NI_CF_CONSOLIDATED };
     }
   }
   // 무배당 = 0(오너 결정 2026-10-02): 그 기간에 배당 공시가 하나도 없으면 배당금 지급 0. 그 밖의 사유 없는 빈 칸은 "본표에 별도 줄 없음"

@@ -50,6 +50,9 @@ function yearEndShares(xml: string, reportDate: string): number | null {
 
 export async function withEquityStatementShares(cik: string, facts: CompanyFacts, recent: RecentFilings | null): Promise<CompanyFacts> {
   if (!recent) return facts;
+  // 10-K 를 내지 않는 회사(20-F·40-F — TSM·ASML·SPOT)는 자본변동표 10-K 판독 대상이 없다 — 과거 목록 조회도 하지 않는다(7차 감사 2026-10-17: TSM 이
+  // 쓸모없는 과거 목록 조회 실패로 결과 전체가 불완전 처리될 수 있었다)
+  if (!recent.form.includes("10-K")) return facts;
   const g = facts.facts["us-gaap"] ?? {};
   // 그 결산일에 차원 없는 유통·발행주식수가 있으면 그 연도는 원본을 받지 않는다(수 MB) — 옛 공시에만 태그가 있는
   // 회사(WMT·BE·META 는 2010년대엔 차원 없이 달았다)도 최근 연도는 대상이 되도록 날짜 단위로 판정
