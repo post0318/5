@@ -136,6 +136,26 @@ PY
 )
 fi
 check2 br-agenda "$([ "$code" = 200 ] && [ "${br_n:-0}" -gt 0 ] && echo 1 || echo 0)" "4번 브라질 주요일정 경제지표 0건(HTTP ${code}) — IBGE 일정 API·인증서 확인(4번 src/lib/server/ibgeFetch.ts)"
+# 발표치 공란 — 발표일이 사흘 넘게 지난 경제지표(IPCA·실업률·GDP·COPOM)의 발표치가 비었으면 알림(오너 2026-10-16 "조건 넣어라").
+# 일정은 나오는데 중앙은행 SGS·IBGE SIDRA 조회만 실패한 경우(10-16 배포 직후 IPCA-15 9/25 칸). 발표 당일엔 통계가 몇 시간 늦게
+# 올라오는 게 정상이라 사흘을 둔다. 응답 자체가 실패면 위 br-agenda 가 잡으므로 여기선 건너뛴다.
+if [ "$code" = 200 ]; then
+  br_miss=$(python3 - /tmp/hc-br-agenda.json <<'PY'
+import json, sys, datetime
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    a = d if isinstance(d, list) else next((v for v in d.values() if isinstance(v, list)), [])
+except Exception:
+    a = []
+sys.stdout.reconfigure(encoding="utf-8")
+cut = (datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=3)).isoformat()
+miss = [f'{x.get("date")} {x.get("titleKo", "")}' for x in a
+        if x.get("category") == "경제지표" and str(x.get("date", "9999")) <= cut and not x.get("actual")]
+print("; ".join(miss))
+PY
+)
+  check2 br-agenda-actual "$([ -z "$br_miss" ] && echo 1 || echo 0)" "4번 브라질 주요일정 발표치 공란(발표 3일 경과): ${br_miss} — 중앙은행 SGS·IBGE SIDRA 조회 확인"
+fi
 
 # 한국 재무(OpenDART) 동작 — 2026-10-05 검증 작업이 같은 DART 키의 일일 한도를 넘겨 운영 한국 재무가 멈췄는데 아무도 몰랐다(오너 지적).
 # 운영 화면 경로를 그대로 불러 429(한도 초과)·5xx 면 바로 알림. 디스크 캐시 덕에 DART 실제 요청은 30분에 1건 남짓.
