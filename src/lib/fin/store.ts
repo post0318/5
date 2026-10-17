@@ -25,6 +25,7 @@ function excOf(mv: MetricValue): FinExc | null {
   if (mv.why?.k === "derived") return { d: mv.why.parts.map((p) => [p.accn, p.sign]) };
   if (mv.why?.k === "fx") return { k: "fx", r: mv.why.rate };
   if (mv.why?.k === "yahoo-q") return { k: "yq", t: mv.why.through };
+  if (mv.why?.k === "sixk") return { k: "6k", t: mv.why.through, s: mv.why.report };
   return null;
 }
 

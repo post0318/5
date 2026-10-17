@@ -11,7 +11,7 @@ import { getDb } from "./index";
 
 /** 열 머리글 [열키, start, end, accn, form, filed, gaps] — 파생 열은 accn null, form "Q4D"|"QD"|"LTM" */
 export type FinColTuple = [string, string, string, string | null, string, string | null, number];
-export type FinExc = { d: [string, 1 | -1][] } | { k: "fx"; r: number } | { k: "yq"; t: string };
+export type FinExc = { d: [string, 1 | -1][] } | { k: "fx"; r: number } | { k: "yq"; t: string } | { k: "6k"; t: string; s: string };
 /**
  * 파생값 입력 1건(architecture.md §2.1·§3.2) — [참조, 부호, 역할, 시장값, asOf 번호, 환율 참조, 환율, 환율 asOf 번호]. 뒤쪽 null 은
  * 잘라 저장. asOf 번호 = FinDer.a 의 위치(같은 조회 시각을 한 번만 저장). 값 = Σ 부호 × 값(참조) × 환율.

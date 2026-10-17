@@ -54,6 +54,17 @@ export function sameInUnit(sec: number, yv: number): boolean {
   return Math.abs(sec - yv) < unit + Math.abs(sec) * 1e-9;
 }
 
+/** 달 말 기준 n 개월 뒤 달 말 */
+export const monthEndAfter = monthEndShift;
+
+/** Yahoo 에 있는 SEC 사업연도(fyEnd) 뒤 연속 분기 중 마지막(1~3개, 없으면 null) — yahooLtmOf 의 분기 판정과 같다 */
+export function yahooLastQuarter(y: { quarterly: YahooFundamentalsRow[] }, fyEnd: string): string | null {
+  const qBy = new Set(y.quarterly.map((r) => r.end));
+  let last: string | null = null;
+  for (let i = 1; i <= 3 && qBy.has(monthEndShift(fyEnd, 3 * i)); i++) last = monthEndShift(fyEnd, 3 * i);
+  return last;
+}
+
 export type YahooLtm =
   | { ok: true; usd: number; start: string; through: string; quarters: string[]; terms: { start: string; end: string; v: number; rate: number }[] }
   | { ok: false; reason: string; fxPending?: true };

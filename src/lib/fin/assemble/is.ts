@@ -560,8 +560,11 @@ async function assembleColumn(
     gaps,
   };
   if (col.yahoo) {
-    const w = reader.yahooWindow(col);
+    const w = await reader.yahooWindow(col);
     if (w) { column.start = w.start; column.end = w.end; }
+    // 야후 다음 분기 6-K 로 만든 LTM 열 — 출처 = 그 6-K(야후 분기 아님)
+    const ah = await reader.aheadSixK(col.yahoo.fyEnd);
+    if (ah) column.src = { accn: ah.st.source.split(" ")[1] ?? null, form: "6-K", filed: null, source: "sec-htm" };
   }
   return {
     col: column, lines, identity: { ok: fails.length === 0, fails, at: failAt, partial: failPartial, terms: failTerms, uncovered },

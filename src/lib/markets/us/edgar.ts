@@ -6,7 +6,13 @@
 
 import { fetchJson } from "../http";
 import { withFetchScope } from "../fetch-health";
-import { blankYahooLtm, withYahooLtm, yahooLtm, yahooLtmPeriods, type YahooLtmResult } from "./edgar-yahoo-quarters";
+import { blankYahooLtm, ltmBaseEnd, withYahooLtm, yahooLtm, yahooLtmPeriods, type YahooLtmResult } from "./edgar-yahoo-quarters";
+
+/** 달 말 기준 n 개월 뒤 달 말 */
+const monthEndAfter = (d: string, n: number) => {
+  const x = new Date(`${d}T00:00:00Z`);
+  return new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + n + 1, 0)).toISOString().slice(0, 10);
+};
 import { sixKStatements } from "./edgar-6k";
 import { fetchYahooFundamentals } from "../quote/yahoo";
 import { fxToUsd } from "./edgar-foreign";
@@ -275,17 +281,37 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
         ]);
         if (yq && fx) {
           // 회사 6-K 분기 재무제표(연결재무보고서 HTML) — 야후 정의가 SEC 와 다른 항목을 회사 줄로(edgar-6k.ts). 없거나 못 읽으면 null(야후 경로 그대로)
-          const per = yahooLtmPeriods(withShares, yq);
+          let per = yahooLtmPeriods(withShares, yq);
+          // 야후 최신 분기 다음 분기의 6-K 연결재무보고서가 이미 나왔으면 LTM 끝 = 그 분기(오너 결정 2026-10-17 「Asml 6k 반영」 — ASML 3분기 6-K 10-14,
+          // 야후 3분기 미게시). 그 분기 6-K 에 재무상태표·현금흐름표·손익계산서가 모두 있을 때만. 조회 실패는 아래 경고로
+          let ahead: string | null = null;
+          let aheadSixK: Awaited<ReturnType<typeof sixKStatements>> = null;
+          {
+            const E0 = per?.E ?? ltmBaseEnd(withShares);
+            const nextQ = E0 ? monthEndAfter(per?.last ?? E0, 3) : null;
+            if (E0 && nextQ && nextQ <= new Date().toISOString().slice(0, 10) && monthEndAfter(E0, 12) > nextQ) {
+              const prior = monthEndAfter(nextQ, -12);
+              const st = await sixKStatements(cik, recent, nextQ, E0, prior).catch((e: unknown) => {
+                extraWarnings.push(`회사 6-K 분기 재무제표 조회 실패(${nextQ}) — ${fetchFailureReason(e) ?? (e instanceof Error ? e.message : String(e))}`.slice(0, 240));
+                return null;
+              });
+              if (st && st.bsDates.includes(nextQ) && st.cfDates.includes(nextQ) && st.isDates?.includes(nextQ)) {
+                ahead = nextQ;
+                aheadSixK = st;
+                per = { E: E0, last: nextQ, yearAgo: prior };
+              }
+            }
+          }
           // 6-K 조회 실패는 경고로 남긴다(재감사 12차 ③ — null 로 삼키면 6-K 값이 조용히 빈칸·야후 근사로 바뀌었다). 경고가 있으면 짧은 캐시
           let sixKFailed = false;
           const sixKFail = (e: unknown) => { sixKFailed = true; extraWarnings.push(`회사 6-K 분기 재무제표 조회 실패 — ${fetchFailureReason(e) ?? (e instanceof Error ? e.message : String(e))}`.slice(0, 240)); return null; };
-          const sixK = per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(sixKFail) : null;
+          const sixK = aheadSixK ?? (per ? await sixKStatements(cik, recent, per.last, per.E, per.yearAgo).catch(sixKFail) : null);
           // 이번 보고서에 1년 전 분기말 열이 없으면(SPOT) 1년 전 같은 분기 6-K — 평균 잔액(ROIC 등)의 기초 값
           const shift12 = (d: string) => { const x = new Date(`${d}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); };
           const sixKPrev = per && sixK && !sixK.bsDates.includes(per.yearAgo)
             ? await sixKStatements(cik, recent, per.yearAgo, shift12(per.E), shift12(per.yearAgo)).catch(sixKFail)
             : null;
-          const r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev);
+          const r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev, ahead);
           // 6-K 경로를 시도했는데 보고서를 못 찾음(조회 실패 아님) — 검증 전용 사유
           // 1년 전 분기 6-K 를 찾아야 했는데(이번 보고서에 1년 전 열 없음) 못 찾음 — 검증 전용 사유(조회 실패는 fetchWarnings)
           if (r.result.source === "yahoo" && per && sixK && !sixK.bsDates.includes(per.yearAgo) && !sixKPrev)
@@ -577,7 +603,9 @@ function buildUsTtm(
   return {
     // 20-F Yahoo 분기 LTM 이면 그 기간으로 표기(EPS 태그는 보강 대상 아님 — LTM EPS 는 순이익 ÷ 주식수)
     periodLabel: yl
-      ? `최근 4개 분기(~${yl.through}) · Yahoo 분기(원통화 ${yl.currency}, 분기 평균 환율 환산)`
+      ? yl.ahead
+        ? `최근 12개월(~${yl.ahead}) · 최근 사업연도 + 회사 6-K 당기 누적 − 전년 동기 누적(원통화 ${yl.currency}, 기간 평균 환율 환산)`
+        : `최근 4개 분기(~${yl.through}) · Yahoo 분기(원통화 ${yl.currency}, 분기 평균 환율 환산)`
       : eps.ttmLabel || opIncome.ttmLabel || "",
     netIncome: ni.value,
     revenue: revenueLtm,

@@ -12,7 +12,8 @@ import { canonical } from "./ifrs";
 import { companyType, filerKind } from "./profile";
 import { adrRatioOf } from "./adr";
 import { calcParents, parseCalculation, parseLabels, parsePresentation, pickIncomeStatement, type StatementShape } from "./linkbase";
-import { YAHOO_FIELD, yahooLtmOf } from "./ltm-yahoo";
+import { YAHOO_FIELD, monthEndAfter, yahooLastQuarter, yahooLtmOf } from "./ltm-yahoo";
+import { sixKStatements, sixKValueOf, type SixKStatements } from "../../markets/us/edgar-6k";
 
 /**
  * 1층 판독 엔진 — 미국(SEC). 판본·기간·분기화·Q4·LTM·IFRS·환율·ADR 을 **여기서만** 정한다(architecture.md §1).
@@ -554,6 +555,34 @@ export class UsReader {
     return { parts: [part(best.y, 1, "6m"), part(best.d, -1, "q2")], note: "역산추정 — 1분기 " + orig.prov.form + " 공시값 " + m(orig.val) };
   }
 
+  /** 사업연도말 → 야후 최신 분기 다음 분기의 6-K(재무상태표·현금흐름표·손익계산서 모두 그 분기를 실은 것만). edgar.ts 의 LTM 기간 판정과 같은 규칙 */
+  private aheadMemo = new Map<string, Promise<{ q: string; prior: string; st: SixKStatements } | null>>();
+  aheadSixK(fyEnd: string): Promise<{ q: string; prior: string; st: SixKStatements } | null> {
+    let p = this.aheadMemo.get(fyEnd);
+    if (!p) {
+      p = (async () => {
+        if (!this.yahoo) return null;
+        const q = monthEndAfter(yahooLastQuarter(this.yahoo, fyEnd) ?? fyEnd, 3);
+        if (q > new Date().toISOString().slice(0, 10) || monthEndAfter(fyEnd, 12) <= q) return null;
+        const prior = monthEndAfter(q, -12);
+        const r = this.sub.recent;
+        const recent = { accessionNumber: r.map((x) => x.accn), form: r.map((x) => x.form), filingDate: r.map((x) => x.filed), primaryDocument: r.map((x) => x.doc), reportDate: r.map((x) => x.reportDate) };
+        let st: SixKStatements | null;
+        try {
+          st = await sixKStatements(this.profile.cik, recent, q, fyEnd, prior);
+        } catch (e) {
+          // 조회 실패 — 결손(짧은 캐시·저장 안 함). 야후 분기 LTM 으로 조용히 넘어가지 않게 경고
+          this.gaps |= Gap.YAHOO;
+          this.warnings.push(`회사 6-K 분기 재무제표 조회 실패(${q}) — ${e instanceof Error ? e.message : String(e)}`.slice(0, 240));
+          return null;
+        }
+        return st && st.bsDates.includes(q) && st.cfDates.includes(q) && st.isDates?.includes(q) ? { q, prior, st } : null;
+      })();
+      this.aheadMemo.set(fyEnd, p);
+    }
+    return p;
+  }
+
   private async yahooValue(qname: string, col: ColumnSpec): Promise<CellValue> {
     const field = YAHOO_FIELD[canonical(qname)];
     if (!field) return { v: null, raw: null, gaps: 0 };
@@ -561,6 +590,32 @@ export class UsReader {
     const fyPart = col.segments[0].parts[0];
     const fyOrig = await this.partValue(qname, fyPart);
     if (fyOrig == null || fyOrig === "gap") return { v: null, raw: null, gaps: 0 };
+    // 야후 최신 분기 다음 분기의 6-K 가 있으면 그 분기까지 — LTM = 사업연도 + 6-K 당기 누적 − 전년 누적(야후 분기와 섞지 않음)
+    const ah = await this.aheadSixK(col.yahoo!.fyEnd);
+    if (ah) {
+      const fy = fyOrig.val;
+      const local = qname.slice(qname.indexOf(":") + 1);
+      // 같은 줄 이름이 일반·부호 반전 라벨 양쪽이면 사업연도 SEC 값과 부호가 같은 쪽만(edgar-yahoo-quarters 와 같은 규칙)
+      const v = sixKValueOf(ah.st, local, "is", (vals) => fy !== 0 && vals.every((x) => x === 0 || Math.sign(x) === Math.sign(fy)));
+      const dts = ah.st.isDates ?? [];
+      const iC = dts.indexOf(ah.q), iP = dts.indexOf(ah.prior);
+      if (!v || iC < 0 || iP < 0) return { v: null, raw: null, gaps: 0, note: `${ah.q} 분기 야후 미게시 · 회사 6-K 손익계산서에 같은 줄 없음` };
+      const E = col.yahoo!.fyEnd, S = col.yahoo!.fyStart, next = new Date(Date.parse(E) + 864e5).toISOString().slice(0, 10);
+      const fx = this.fx;
+      const rF = fx.avg(S, E), rC = fx.avg(next, ah.q), rP = fx.avg(S, ah.prior);
+      if (rF == null || rC == null || rP == null) {
+        const why = fx.why(ah.q);
+        if (why) { this.fxPending.set(col.key, why); return { v: null, raw: null, gaps: Gap.FX }; }
+        return { v: null, raw: null, gaps: Gap.FX };
+      }
+      const asOf = this.yahooAt ?? fx.asOf;
+      const inputs: DerivedInput[] = [
+        { ref: factRef(fyOrig.prov), op: 1, role: "fy", x: { ref: fxAvgRef(fx.cur, S, E), v: rF, asOf: fx.asOf } },
+        { ref: `k:${ah.st.source}|${local}|${ah.q}`, op: 1, role: "ytd", v: v[iC], asOf, x: { ref: fxAvgRef(fx.cur, next, ah.q), v: rC, asOf: fx.asOf } },
+        { ref: `k:${ah.st.source}|${local}|${ah.prior}`, op: -1, role: "ytd-prior", v: v[iP], asOf, x: { ref: fxAvgRef(fx.cur, S, ah.prior), v: rP, asOf: fx.asOf } },
+      ];
+      return { v: fy * rF + v[iC] * rC - v[iP] * rP, raw: null, why: { k: "sixk", through: ah.q, report: ah.st.source }, inputs, gaps: 0 };
+    }
     const r = yahooLtmOf(this.yahoo, field, fyOrig.val, col.yahoo!.fyEnd, this.fx);
     if (!r.ok) {
       if (r.fxPending) { this.fxPending.set(col.key, r.reason); return { v: null, raw: null, gaps: Gap.FX }; }
@@ -577,8 +632,10 @@ export class UsReader {
   }
 
   /** Yahoo LTM 이 성립했을 때의 기간(열 머리글 보정용) */
-  yahooWindow(col: ColumnSpec): { start: string; end: string } | null {
+  async yahooWindow(col: ColumnSpec): Promise<{ start: string; end: string } | null> {
     if (!col.yahoo || !this.yahoo || !this.fx) return null;
+    const ah = await this.aheadSixK(col.yahoo.fyEnd);
+    if (ah) return { start: new Date(Date.parse(ah.prior) + 864e5).toISOString().slice(0, 10), end: ah.q };
     const rev = this.facts("us-gaap:Revenues").concat(this.facts("us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"), this.facts("ifrs-full:Revenue"), this.facts("ifrs-full:RevenueFromContractsWithCustomers"))
       .find((f) => near(f.start, col.yahoo!.fyStart) && near(f.end, col.yahoo!.fyEnd));
     if (!rev) return null;

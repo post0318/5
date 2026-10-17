@@ -118,6 +118,8 @@ export interface MarketInput {
 export type ReadWhy =
   | { k: "fx"; cur: string; rate: number; basis: "avg" | "spot" }
   | { k: "yahoo-q"; through: string }
+  /** 20-F·40-F LTM — 야후 최신 분기 다음 분기의 회사 6-K(사업연도 + 당기 누적 − 전년 누적, 오너 결정 2026-10-17 「Asml 6k 반영」) */
+  | { k: "sixk"; through: string; report: string }
   | { k: "derived"; parts: { accn: string; form: FormType; sign: 1 | -1 }[] };
 
 /** 2층 — 한 열 = 한 공시(또는 명시된 파생). */
