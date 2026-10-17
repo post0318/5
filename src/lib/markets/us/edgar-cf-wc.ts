@@ -210,8 +210,11 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     if (faceN) {
       niRead = true;
       const cs = (["NetIncomeLoss", "ProfitLoss"] as const).filter((c) => faceN.has(`us-gaap_${c}`));
+      // 한 기간 = 그 기간을 실은 가장 최근 공시만(옛 공시 값이 분기 누적 차에 섞이지 않게 — 감사 2026-10-18: 이연법인세 합성값이 최신 공시부터 쌓여 분기 누적에서
+      // 가장 옛 공시 값이 잡혔다, AMD·AXP 2025 Q2)
       if (cs.length === 1)
         for (const e of ocf) {
+          if (latestFiled.get(`${e.start}|${e.end}`) !== f.filed) continue;
           const at = (c: string) => (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === f.filed && x.form === f.form);
           const v = at(cs[0]);
           if (!v) continue;
@@ -221,9 +224,11 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           const nil = at("NetIncomeLoss"), nci = at("NetIncomeLossAttributableToNoncontrollingInterest");
           if (cs[0] === "ProfitLoss" && ((nil && nil.val !== v.val) || (nci && nci.val !== 0))) niCons.push(`${e.start}|${e.end}`);
         }
-      // 이연법인세 — 본표에 실린 개념(들)의 이 공시 값 합, 본표에 없으면 0. 본표 개념인데 이 공시 값이 없으면 그 기간은 넣지 않는다(종전 규칙으로도 안 채움 — 빈 값)
+      // 이연법인세 — 본표에 실린 개념(들)의 이 공시(그 기간 가장 최근 공시) 값 합. 본표에 이연법인세 줄이 없으면 넣지 않는다 — 기타 비현금 조정은 다른 구성 줄로만
+      // (다 없으면 빈칸 "본표에 별도 줄 없음" — 0 을 넣으면 DAL·IBM 분기 칸이 0 이 됐다). 본표 개념인데 이 공시 값이 없으면 그 기간 합성값 없음(옛 공시로 대체 안 함)
       const dts = (["DeferredIncomeTaxExpenseBenefit", "DeferredIncomeTaxesAndTaxCredits"] as const).filter((c) => faceN.has(`us-gaap_${c}`));
-      for (const e of ocf) {
+      if (dts.length) for (const e of ocf) {
+        if (latestFiled.get(`${e.start}|${e.end}`) !== f.filed) continue;
         const vs = dts.map((c) => (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === f.filed && x.form === f.form));
         if (vs.some((x) => !x)) continue;
         dtaxFace.push({ ...e, val: vs.reduce((t, x) => t + x!.val, 0) });
