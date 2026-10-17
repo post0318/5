@@ -3,7 +3,7 @@ import { fetchJson, fetchText } from "../http";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { RecentFilings } from "./edgar-gapfill";
 import { filingsForDa, instanceFacts } from "./edgar-cf-structure";
-import { CF_INV_FAMILIES, SYN_DTAX_CF, SYN_NI_CF, cfInvStdConcepts, cfZeroFillGroups } from "./edgar-cashflow";
+import { CF_INV_FAMILIES, OTHER_NC, SYN_NI_CF, SYN_OTHER_NC_CF, cfInvStdConcepts, cfZeroFillGroups } from "./edgar-cashflow";
 
 /**
  * **운전자본 변동 합계 = 현금흐름표 본표의 운전자본 줄 합**(10-K·10-Q 계산 구조, 2026-10-02).
@@ -135,7 +135,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const zeroGroups = cfZeroFillGroups();
   const dimOnly: NonNullable<CompanyFacts["cfDimOnly"]> = [];
   const niFace: FactUnitEntry[] = [];
-  const dtaxFace: FactUnitEntry[] = [];
+  const ncFace: FactUnitEntry[] = [];
   const niCons: string[] = [];
   let niRead = false;
   // 기간 → 그 기간 현금흐름표를 실은 가장 최근 공시(제출일) — 투자자산 본표 줄 합은 그 공시에서만(옛 공시의 합이 최신 공시 표준값을 덮지 않게 —
@@ -224,15 +224,6 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           const nil = at("NetIncomeLoss"), nci = at("NetIncomeLossAttributableToNoncontrollingInterest");
           if (cs[0] === "ProfitLoss" && ((nil && nil.val !== v.val) || (nci && nci.val !== 0))) niCons.push(`${e.start}|${e.end}`);
         }
-      // 이연법인세 — 본표에 실린 개념(들)의 이 공시(그 기간 가장 최근 공시) 값 합. 본표에 이연법인세 줄이 없으면 넣지 않는다 — 기타 비현금 조정은 다른 구성 줄로만
-      // (다 없으면 빈칸 "본표에 별도 줄 없음" — 0 을 넣으면 DAL·IBM 분기 칸이 0 이 됐다). 본표 개념인데 이 공시 값이 없으면 그 기간 합성값 없음(옛 공시로 대체 안 함)
-      const dts = (["DeferredIncomeTaxExpenseBenefit", "DeferredIncomeTaxesAndTaxCredits"] as const).filter((c) => faceN.has(`us-gaap_${c}`));
-      if (dts.length) for (const e of ocf) {
-        if (latestFiled.get(`${e.start}|${e.end}`) !== f.filed) continue;
-        const vs = dts.map((c) => (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === f.filed && x.form === f.form));
-        if (vs.some((x) => !x)) continue;
-        dtaxFace.push({ ...e, val: vs.reduce((t, x) => t + x!.val, 0) });
-      }
     }
     const labs = labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined;
     // 주식보상비용 — 본표에 표준 개념이 없고 표시 라벨이 주식보상비용인 회사 고유 줄(영업활동 계산 구조 안)
@@ -289,6 +280,20 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
         if (vs.every(Boolean)) capexParts.push({ ...e, val: vs.reduce((t, x) => t + x!.val, 0) });
       }
     const lines = cashFlowWcLines(calXml, labs);
+    // 기타 비현금 조정 = 본표 비운전자본 줄 중 기타 비현금·이연법인세 개념의 그 공시 값 × 본표 가중치 합(한 기간 = 가장 최근 공시). 예전엔 개념 목록을 부호 고정으로
+    // 더하고 운전자본 줄(기타 영업자산·부채·미수금 증감 — 운전자본 변동에도 들어감)까지 넣어, AAPL FY2021 이 451(본표 −4,921: 부호 반대 + 운전자본 3줄 이중)이고 기타
+    // 영업활동이 −5,372 로 떠안았다(감사 2026-10-18 — 이연법인세 본표·주석 이중 합산 MSFT·옛 공시 섞임 CL·부호 반전 규칙 AMD 도 같은 원인). 본표에 해당 줄이 없으면
+    // 넣지 않는다(빈칸 — 다른 비운전자본 줄은 기타 영업활동)
+    if (lines && /^10-[KQ]/.test(f.form)) {
+      const ids = OTHER_NC.filter((c) => lines.other.has(`us-gaap_${c}`));
+      if (ids.length)
+        for (const e of ocf) {
+          if (latestFiled.get(`${e.start}|${e.end}`) !== f.filed) continue;
+          const vs = ids.map((c) => (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === f.filed && x.form === f.form));
+          if (vs.some((x) => !x)) continue;
+          ncFace.push({ ...e, val: ids.reduce((t, c, k) => t + lines.other.get(`us-gaap_${c}`)! * vs[k]!.val, 0) });
+        }
+    }
     if (!lines) continue;
     // ① companyfacts — 운전자본 줄이 모두 표준 개념이고 값이 다 있으면
     const fromCf = (e: FactUnitEntry): number | null => {
@@ -339,7 +344,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const ng: Record<string, unknown> = { ...g };
   if (synth.length) ng[SYN_WC_CF] = { label: "운전자본 변동(본표 줄 합)", units: { USD: synth } };
   if (niRead) ng[SYN_NI_CF] = { label: "현금흐름표 본표 순이익", units: { USD: niFace } };
-  if (niRead) ng[SYN_DTAX_CF] = { label: "현금흐름표 본표 이연법인세", units: { USD: dtaxFace } };
+  if (niRead) ng[SYN_OTHER_NC_CF] = { label: "현금흐름표 본표 기타 비현금 조정(가중치 합)", units: { USD: ncFace } };
   if (sbc.length) ng[SYN_SBC_CF] = { label: "주식보상비용(본표 회사 고유 줄)", units: { USD: sbc } };
   for (const [k, v] of invFace) if (v.length) ng[k] = { label: "투자자산 본표 줄 합(회사 고유 줄 포함)", units: { USD: v } };
   if (capexParts.length) ng[SYN_CAPEX_PARTS] = { label: "설비투자(항공기 + 기타 유형자산 줄 합)", units: { USD: capexParts } };

@@ -137,23 +137,26 @@ export function cfZeroFillGroups(): string[][] {
  * 비지배지분 회사(WMT·INTC·GLW 등 — 비지배 몫을 기타 영업활동이 떠안음)에서 본표와 달랐다. edgar-cf-wc.ts 가 공시마다 채운다
  */
 export const SYN_NI_CF = "NetIncomeCashFlowFaceDerived";
-/** 기타 비현금 조정의 이연법인세 = 그 공시 현금흐름표 본표에 실린 이연법인세 개념(들)의 값(edgar-cf-wc.ts) — 본표 DeferredIncomeTaxesAndTaxCredits 와 주석
- *  DeferredIncomeTaxExpenseBenefit 를 함께 더하던 것(MSFT 2026 14,189 + 14,424, 11종목 61칸 — 감사 2026-10-17). 본표에 없으면 0 */
-export const SYN_DTAX_CF = "DeferredTaxCashFlowFaceDerived";
-const DTAX = ["DeferredIncomeTaxExpenseBenefit", "DeferredIncomeTaxesAndTaxCredits"];
+/** 기타 비현금 조정(본표 판독 회사) = 그 공시 현금흐름표 본표 비운전자본 줄 중 아래 개념의 값 × 본표 가중치 합(edgar-cf-wc.ts). 운전자본 줄은 운전자본 변동에만 */
 /** 본표 순이익이 연결 순이익(비지배지분 포함)이고 지배주주 순이익과 다른 기간("시작|종료") — 칸 주석 */
 export const NI_CF_CONSOLIDATED = "연결 순이익(비지배지분 포함) — 현금흐름표 본표 첫 줄";
+export const SYN_OTHER_NC_CF = "OtherNoncashCashFlowFaceDerived";
+export const OTHER_NC = ["OtherNoncashIncomeExpense", "OtherOperatingActivitiesCashFlowStatement", "DeferredIncomeTaxExpenseBenefit", "DeferredIncomeTaxesAndTaxCredits"];
 
 function getBlocks(isFin: boolean, debtFace = false, niFace = false): Block[] {
-  const otherNc: [string, boolean][] = [
-    ["OtherNoncashIncomeExpense", false],
-    ["OtherOperatingActivitiesCashFlowStatement", false],
-    ...(niFace ? [[SYN_DTAX_CF, false] as [string, boolean]] : DTAX.map((c) => [c, false] as [string, boolean])),
-    ["IncreaseDecreaseInOtherOperatingAssets", true],
-    ["IncreaseDecreaseInOtherOperatingLiabilities", false],
-    ["IncreaseDecreaseInOtherOperatingCapitalNet", true],
-    ["IncreaseDecreaseInOtherReceivables", true],
-  ];
+  // 본표 판독 회사는 합성 개념 하나(본표 가중치 — 운전자본 줄 제외), 아니면(20-F 등) 종전 개념 목록
+  const otherNc: [string, boolean][] = niFace
+    ? [[SYN_OTHER_NC_CF, false]]
+    : [
+        ["OtherNoncashIncomeExpense", false],
+        ["OtherOperatingActivitiesCashFlowStatement", false],
+        ["DeferredIncomeTaxExpenseBenefit", false],
+        ["DeferredIncomeTaxesAndTaxCredits", false],
+        ["IncreaseDecreaseInOtherOperatingAssets", true],
+        ["IncreaseDecreaseInOtherOperatingLiabilities", false],
+        ["IncreaseDecreaseInOtherOperatingCapitalNet", true],
+        ["IncreaseDecreaseInOtherReceivables", true],
+      ];
   // 차입금 줄(오너 결정 2026-10-10) — 10-K·10-Q 본표 판독 합성 개념(edgar-cf-wc.ts DEBT_SYN). 본표 판독을 못 한 회사(20-F 등)는 표준 개념 목록
   const D = (face: string, std: string[]) => (debtFace ? [face] : std);
   return [
