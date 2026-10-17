@@ -827,6 +827,7 @@ export function buildUsCashFlow(
     const ltmEnds = anchor ? [anchor, shiftYear(anchor, -1), ...(fyEnd ? [fyEnd] : [])] : [];
     const endsOf = (p: FinancialPeriod) => (p.label === LTM ? ltmEnds : p.endDate ? [p.endDate] : []);
     const outNote = cfOut ? unavailableNote(facts) ?? "원본 조회 실패" : null;
+    const debtFaceOn = !!facts.debtFace && !cfOut;
     for (const it of items) {
       const line = it.accountId?.startsWith("cf:재무활동 현금흐름:") ? it.accountId!.slice("cf:재무활동 현금흐름:".length) : null;
       if (!line) continue;
@@ -835,6 +836,23 @@ export function buildUsCashFlow(
         for (const p of periods) {
           if (cfOut) { it.values[p.label] = null; it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: outNote! }; continue; }
           if (it.values[p.label] != null) continue;
+          // 조달·상환(총액, 음수 없음) 분기 칸이 누적 차를 못 내 빈 경우 — 누적(직전 누적 없음: 당기 누적 / 4분기: 사업연도)이 0 이면 그 분기도 0(확정).
+          // 4차 감사(2026-10-17): GEV 2025 Q3 9개월 누적 조달·상환 0 인데 공란 → 기타 재무활동까지 공란(원래 −46 이 맞음). 순증감 줄은 해당 없음
+          const why0 = it.cellNotes?.[p.label];
+          if (debtFaceOn && mode === "quarter" && p.endDate && line !== "단기차입금 순증감" && (why0 === QUARTER_NO_PREV_YTD || why0 === Q4_NO_NINE)) {
+            const end = p.endDate;
+            const es = (facts.facts["us-gaap"]?.[concept]?.units?.USD ?? []).filter((e) => {
+              if (!e.start || !near(e.end, end)) return false;
+              const days = (Date.parse(e.end) - Date.parse(e.start)) / 864e5;
+              return why0 === Q4_NO_NINE ? days >= 350 && days <= 380 : days > 80 && days <= 380;
+            });
+            if (es.length && es.every((e) => e.val === 0)) {
+              it.values[p.label] = 0;
+              const { [p.label]: _d, ...rest } = it.cellNotes ?? {}; void _d;
+              it.cellNotes = rest;
+              continue;
+            }
+          }
           const b = (facts.debtBlanks ?? []).find((x) => x.concept === concept && endsOf(p).some((e) => near(x.end, e)));
           if (b) it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: b.reason };
         }
@@ -881,9 +899,10 @@ export function buildUsCashFlow(
         periods.forEach((p, pi) => {
           // 분기 화면은 직전 누적(같은 사업연도, 앞 열 결산일)이 차원으로만 있어도 그 분기(누적 차)를 못 낸다
           const prevEnd = mode === "quarter" && pi > 0 ? periods[pi - 1].endDate : null;
-          const sameFy = (d: { start: string }) => !!p.endDate && Date.parse(p.endDate) - Date.parse(d.start) <= 370 * 864e5;
+          const sameFy = (d: { start: string; end: string }) => !!p.endDate && d.end < p.endDate && Date.parse(p.endDate) - Date.parse(d.start) <= 370 * 864e5;
           const hit = facts.cfDimOnly!.find((d) => cs.includes(d.concept) && (endsOf(p).some((e) => near(d.end, e)) || (!!prevEnd && near(d.end, prevEnd) && sameFy(d))));
-          if (!hit || (it.values[p.label] != null && !hit.force && near(hit.end, p.endDate ?? ""))) return;
+          // 값이 있으면(다른 개념·공시된 3개월 값) 그대로 — force(투자자산 본표 줄 합 대체값)만 지운다
+          if (!hit || (it.values[p.label] != null && !hit.force)) return;
           it.values[p.label] = null;
           it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: CF_DIM_ONLY };
           if (plug && plug.values[p.label] != null) {
