@@ -116,7 +116,16 @@ export function cfZeroFillGroups(): string[][] {
   return getBlocks(false).slice(1).flatMap((b) => b.lines.filter((l) => l.concepts && !l.plug).map((l) => l.concepts as string[]));
 }
 
-function getBlocks(isFin: boolean, debtFace = false): Block[] {
+/**
+ * 현금흐름표 첫 줄 순이익 = 그 공시 현금흐름표 본표 계산 구조에 실린 순이익 개념(지배주주 NetIncomeLoss 또는 연결 ProfitLoss — 오너 결정
+ * 2026-10-17 (가)). 예전 "NetIncomeLoss 먼저, 없으면 ProfitLoss" 는 CAT(NetIncomeLoss 2010 에 끊김 — 최근 5년 공란)과 본표가 연결 순이익인
+ * 비지배지분 회사(WMT·INTC·GLW 등 — 비지배 몫을 기타 영업활동이 떠안음)에서 본표와 달랐다. edgar-cf-wc.ts 가 공시마다 채운다
+ */
+export const SYN_NI_CF = "NetIncomeCashFlowFaceDerived";
+/** 본표 순이익이 연결 순이익(비지배지분 포함)이고 지배주주 순이익과 다른 기간("시작|종료") — 칸 주석 */
+export const NI_CF_CONSOLIDATED = "연결 순이익(비지배지분 포함) — 현금흐름표 본표 첫 줄";
+
+function getBlocks(isFin: boolean, debtFace = false, niFace = false): Block[] {
   // 차입금 줄(오너 결정 2026-10-10) — 10-K·10-Q 본표 판독 합성 개념(edgar-cf-wc.ts DEBT_SYN). 본표 판독을 못 한 회사(20-F 등)는 표준 개념 목록
   const D = (face: string, std: string[]) => (debtFace ? [face] : std);
   return [
@@ -127,7 +136,7 @@ function getBlocks(isFin: boolean, debtFace = false): Block[] {
       concepts: ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
     },
     lines: [
-      { label: "당기순이익", concepts: ["NetIncomeLoss", "ProfitLoss"], depth: 1 },
+      { label: "당기순이익", concepts: niFace ? [SYN_NI_CF] : ["NetIncomeLoss", "ProfitLoss"], depth: 1 },
       {
         label: "감가·무형상각비", // 모바일 한 줄 표시(오너 지시 2026-10-02)
         // 여러 합계 태그를 동시에 다는 회사(MCD: 일부 항목 4.6억 / 전체 22억)가 있어
@@ -283,7 +292,7 @@ export function buildUsCashFlow(
 ): FinancialStatement {
   const isFin = isFinancialCompany(facts, sic ?? null);
   // 차입 줄 판독 자체가 실패(cfDebt)면 표준 개념 목록으로 바꿔 채우지 않는다 — 합성 개념 줄(빈칸) + 사유
-  const BLOCKS = getBlocks(isFin, !!facts.debtFace || unavailableOn(facts, "cfDebt"));
+  const BLOCKS = getBlocks(isFin, !!facts.debtFace || unavailableOn(facts, "cfDebt"), !!facts.niFace);
   const opEntries = firstConcept(facts, BLOCKS[0].total.concepts);
 
   let periods: FinancialPeriod[];
@@ -911,6 +920,17 @@ export function buildUsCashFlow(
           }
         });
       }
+    }
+  }
+  // 본표 순이익이 연결 순이익(비지배지분 포함)인 칸 — 지배주주 순이익(하이라이트·재무분석)과 다른 값이라 칸 주석으로 밝힌다
+  if (facts.niConsolidated?.length) {
+    const it = items.find((x) => x.accountId === "cf:영업활동 현금흐름:당기순이익");
+    const ends = facts.niConsolidated.map((k) => k.split("|")[1]);
+    const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 7 * 864e5;
+    if (it) for (const p of periods) {
+      if (it.values[p.label] == null || it.cellNotes?.[p.label]) continue;
+      const e = p.label === LTM ? anchor : p.endDate;
+      if (e && ends.some((x) => near(x, e))) it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: NI_CF_CONSOLIDATED };
     }
   }
   // 무배당 = 0(오너 결정 2026-10-02): 그 기간에 배당 공시가 하나도 없으면 배당금 지급 0. 그 밖의 사유 없는 빈 칸은 "본표에 별도 줄 없음"

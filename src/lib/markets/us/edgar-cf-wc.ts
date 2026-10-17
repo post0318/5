@@ -3,7 +3,7 @@ import { fetchJson, fetchText } from "../http";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { RecentFilings } from "./edgar-gapfill";
 import { filingsForDa, instanceFacts } from "./edgar-cf-structure";
-import { CF_INV_FAMILIES, cfInvStdConcepts, cfZeroFillGroups } from "./edgar-cashflow";
+import { CF_INV_FAMILIES, SYN_NI_CF, cfInvStdConcepts, cfZeroFillGroups } from "./edgar-cashflow";
 
 /**
  * **운전자본 변동 합계 = 현금흐름표 본표의 운전자본 줄 합**(10-K·10-Q 계산 구조, 2026-10-02).
@@ -134,6 +134,9 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const invFace = new Map<string, FactUnitEntry[]>(CF_INV_FAMILIES.map((f) => [f.derived, []]));
   const zeroGroups = cfZeroFillGroups();
   const dimOnly: NonNullable<CompanyFacts["cfDimOnly"]> = [];
+  const niFace: FactUnitEntry[] = [];
+  const niCons: string[] = [];
+  let niRead = false;
   for (const f of filingsForDa(recent)) {
     const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
     const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, opt);
@@ -190,6 +193,20 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           }
         }
       }
+    }
+    // 현금흐름표 첫 줄 순이익 = 이 공시 본표에 실린 순이익 개념(하나뿐일 때), 값 = 이 공시 companyfacts 값. 둘 다·둘 다 없음이면 이 공시 기간은 빈칸
+    const faceN = /^10-[KQ]/.test(f.form) ? cashFlowFace(calXml) : null;
+    if (faceN) {
+      niRead = true;
+      const cs = (["NetIncomeLoss", "ProfitLoss"] as const).filter((c) => faceN.has(`us-gaap_${c}`));
+      if (cs.length === 1)
+        for (const e of ocf) {
+          const at = (c: string) => (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === f.filed && x.form === f.form);
+          const v = at(cs[0]);
+          if (!v) continue;
+          niFace.push({ ...e, val: v.val });
+          if (cs[0] === "ProfitLoss" && at("NetIncomeLoss")?.val !== v.val) niCons.push(`${e.start}|${e.end}`);
+        }
     }
     const labs = labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined;
     // 주식보상비용 — 본표에 표준 개념이 없고 표시 라벨이 주식보상비용인 회사 고유 줄(영업활동 계산 구조 안)
@@ -286,9 +303,10 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     if (!pair.length || pair.some(([a, b]) => a !== b)) capexParts.length = 0;
   }
   const invAny = [...invFace.values()].some((x) => x.length);
-  if (!synth.length && !zeros.length && !sbc.length && !capexParts.length && !invAny && !dimOnly.length) return facts;
+  if (!synth.length && !zeros.length && !sbc.length && !capexParts.length && !invAny && !dimOnly.length && !niRead) return facts;
   const ng: Record<string, unknown> = { ...g };
   if (synth.length) ng[SYN_WC_CF] = { label: "운전자본 변동(본표 줄 합)", units: { USD: synth } };
+  if (niRead) ng[SYN_NI_CF] = { label: "현금흐름표 본표 순이익", units: { USD: niFace } };
   if (sbc.length) ng[SYN_SBC_CF] = { label: "주식보상비용(본표 회사 고유 줄)", units: { USD: sbc } };
   for (const [k, v] of invFace) if (v.length) ng[k] = { label: "투자자산 본표 줄 합(회사 고유 줄 포함)", units: { USD: v } };
   if (capexParts.length) ng[SYN_CAPEX_PARTS] = { label: "설비투자(항공기 + 기타 유형자산 줄 합)", units: { USD: capexParts } };
@@ -296,5 +314,5 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     const cur = (ng[c] ?? { units: {} }) as { label?: string; units: Record<string, FactUnitEntry[]> };
     ng[c] = { ...cur, units: { ...cur.units, USD: [...(cur.units.USD ?? []), e] } };
   }
-  return { ...facts, ...(dimOnly.length ? { cfDimOnly: dimOnly } : {}), facts: { ...facts.facts, "us-gaap": ng as never } };
+  return { ...facts, ...(dimOnly.length ? { cfDimOnly: dimOnly } : {}), ...(niRead ? { niFace: true } : {}), ...(niCons.length ? { niConsolidated: niCons } : {}), facts: { ...facts.facts, "us-gaap": ng as never } };
 }

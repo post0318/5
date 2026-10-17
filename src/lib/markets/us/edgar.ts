@@ -433,6 +433,10 @@ export interface CompanyFacts {
   /** 현금흐름표 본표 줄인데 그 기간 사실이 차원으로만 있는 칸(edgar-cf-wc.ts — 0 으로 채우지 않음). force = 그 줄 값을 비운다(투자자산 본표 줄 합 —
    *  표준 개념 대체값이 부분합이 되지 않게). 화면은 그 칸 빈칸 + 사유, 같은 구간 잔여 줄도 빈칸 */
   cfDimOnly?: { concept: string; start: string; end: string; force?: boolean }[];
+  /** 현금흐름표 첫 줄 순이익을 본표 판독으로 만들었는가(edgar-cf-wc.ts SYN_NI_CF) — 아니면(20-F 등) 표준 개념 순서 */
+  niFace?: boolean;
+  /** 본표 순이익이 연결 순이익이고 지배주주 순이익과 다른 기간("시작|종료") */
+  niConsolidated?: string[];
   /** 총수익에서 지분법·기타수익을 분리했는지(edgar-revenue-dims.ts) */
   nonopInRevenues?: boolean;
   /** 은행·증권·보험(SIC 6000~6499) — 이자가 본업이라 영업이익 근사에 이자를 더하지 않는다. 리츠·부동산(65xx·67xx)은
