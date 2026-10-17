@@ -253,7 +253,7 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       const { labels, parents } = await filingLabels(cikN, recent); // 라벨 파일 조회 실패는 그대로 던진다(호출자가 경고로)
       if (!labels.size) return null;
       // 손익계산서 — 누적 열(반기·3분기 보고서는 "Six/Nine months" 뒤 두 열, 1분기는 3개월 두 열). 연도 순서는 머리말의 그 두 열 연도로(당기·전기)
-      const isSec = sectionRows(html, /CONSOLIDATED STATEMENTS? OF (?:OPERATIONS|INCOME|PROFIT OR LOSS|COMPREHENSIVE INCOME)/, /(?:revenue|net sales).*(?:net income|net profit|profit for the period)/is, /CONSOLIDATED (?:STATEMENTS? OF (?:COMPREHENSIVE|FINANCIAL POSITION|CHANGES IN|CASH FLOWS?)|BALANCE SHEETS?)/i);
+      const isSec = sectionRows(html, /CONSOLIDATED STATEMENTS? OF (?:OPERATIONS|INCOME|PROFIT OR LOSS|COMPREHENSIVE INCOME)/, /(?:revenue|net sales)[\s\S]*(?:net income|net profit|profit for the period)/i, /CONSOLIDATED (?:STATEMENTS? OF (?:COMPREHENSIVE|FINANCIAL POSITION|CHANGES IN|CASH FLOWS?)|BALANCE SHEETS?)/i);
       let isPart: { is?: SixKRow[]; isDates?: string[] } = {};
       if (isSec) {
         const ytd = /(six|nine) months/.test(isSec.text);
