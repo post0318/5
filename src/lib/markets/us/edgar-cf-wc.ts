@@ -205,7 +205,9 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           const v = at(cs[0]);
           if (!v) continue;
           niFace.push({ ...e, val: v.val });
-          if (cs[0] === "ProfitLoss" && at("NetIncomeLoss")?.val !== v.val) niCons.push(`${e.start}|${e.end}`);
+          // 연결 순이익이고 그 공시의 지배주주 순이익이 따로 있고 값이 다를 때만(AVGO 처럼 NetIncomeLoss 태그 없이 ProfitLoss 만 쓰면 주석 없음)
+          const nil = at("NetIncomeLoss");
+          if (cs[0] === "ProfitLoss" && nil && nil.val !== v.val) niCons.push(`${e.start}|${e.end}`);
         }
     }
     const labs = labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined;
