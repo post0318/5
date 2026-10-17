@@ -3,7 +3,7 @@ import { dividendFreeSince, dividendFreeYear, fillBlankReasons } from "./blank-r
 import { unavailableNote, unavailableOn } from "./sec-unavailable";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
-import { entriesOf, firstConcept, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, type QuarterCol, type QuarterParts } from "./edgar-series";
+import { entriesOf, firstConcept, recentQuarters, singleQuarterParts, fiscalYearOf, ltmAnchor, ltmFlowOf, shiftYear, QUARTER_NO_PREV_YTD, type QuarterCol, type QuarterParts } from "./edgar-series";
 import { DA_BASIS_MIX, daBasisMixed, DA_DEPRECIATION, DA_INTANGIBLE, DA_LTM_NO_STRUCT, DA_QUARTER_NO_STRUCT, DA_TOTAL, daStructConcept, daTtmCell, pickDa, pickDaPeriod } from "./edgar-ev";
 import { revQuarterLabel } from "./fin-revenue";
 import { DEBT_DIMONLY, DEBT_MIXED as DEBT_MIXED_NOTE, DEBT_UNREAD as DEBT_UNREAD_NOTE } from "./edgar-cf-debt";
@@ -847,9 +847,16 @@ export function buildUsCashFlow(
           const blankDebt = items.find((x) => {
             const l = x.accountId?.startsWith("cf:재무활동 현금흐름:") ? x.accountId.slice("cf:재무활동 현금흐름:".length) : "";
             const n = x.cellNotes?.[p.label];
-            return x.depth === 1 && !!LINE_C[l] && x.values[p.label] == null && !!n && (DEBT_REASONS.has(n) || n === Q4_NO_NINE);
+            // 분기 산정 불가 중 당기 누적은 있는 경우(9개월 누적 없음·직전 누적 없음 — 3차 감사: AAPL 2025 Q3 조달 4,481·ORCL 상환 2,070 을 기타가 떠안았다).
+            // "사업연도 공시 없음" 은 그해 그 줄이 아예 없을 때도 붙어(0 이 맞음) 넣지 않는다
+            return x.depth === 1 && !!LINE_C[l] && x.values[p.label] == null && !!n && (DEBT_REASONS.has(n) || n === Q4_NO_NINE || n === QUARTER_NO_PREV_YTD);
           });
-          if (!unread && !blankDebt) continue;
+          if (!unread && !blankDebt) {
+            // 재무활동 합계가 비어 잔여를 못 낸 칸 — 사유
+            if (it.values[p.label] == null && !it.cellNotes?.[p.label] && items.find((x) => x.accountId === "cf:total:재무활동 현금흐름")?.values[p.label] == null)
+              it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: "재무활동 현금흐름 공란 — 잔여 계산 불가" };
+            continue;
+          }
           it.values[p.label] = null;
           const unreadWhy = (facts.debtBlanks ?? []).find((x) => x.reason !== DEBT_MIXED_NOTE && endsOf(p).some((e) => near(x.end, e)))?.reason ?? DEBT_UNREAD_NOTE;
           const why = cfOut ? outNote! : unread ? unreadWhy : `${blankDebt!.accountName} 공란(${blankDebt!.cellNotes![p.label]})`;
@@ -871,16 +878,19 @@ export function buildUsCashFlow(
         const cs = l.concepts ?? (l.combine ?? []).map(([c]) => c);
         const it = items.find((x) => x.accountId === `cf:${b.title}:${l.label}`);
         if (!it || !cs.length) continue;
-        for (const p of periods) {
-          const hit = facts.cfDimOnly.find((d) => cs.includes(d.concept) && endsOf(p).some((e) => near(d.end, e)));
-          if (!hit || (it.values[p.label] != null && !hit.force)) continue;
+        periods.forEach((p, pi) => {
+          // 분기 화면은 직전 누적(같은 사업연도, 앞 열 결산일)이 차원으로만 있어도 그 분기(누적 차)를 못 낸다
+          const prevEnd = mode === "quarter" && pi > 0 ? periods[pi - 1].endDate : null;
+          const sameFy = (d: { start: string }) => !!p.endDate && Date.parse(p.endDate) - Date.parse(d.start) <= 370 * 864e5;
+          const hit = facts.cfDimOnly!.find((d) => cs.includes(d.concept) && (endsOf(p).some((e) => near(d.end, e)) || (!!prevEnd && near(d.end, prevEnd) && sameFy(d))));
+          if (!hit || (it.values[p.label] != null && !hit.force && near(hit.end, p.endDate ?? ""))) return;
           it.values[p.label] = null;
           it.cellNotes = { ...(it.cellNotes ?? {}), [p.label]: CF_DIM_ONLY };
           if (plug && plug.values[p.label] != null) {
             plug.values[p.label] = null;
             plug.cellNotes = { ...(plug.cellNotes ?? {}), [p.label]: `${l.label} 공란(${CF_DIM_ONLY}) — 그 금액을 떠안지 않게 함께 공란` };
           }
-        }
+        });
       }
     }
   }
