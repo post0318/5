@@ -241,14 +241,14 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     // 투자자산 처분·취득 = 본표 줄 합 — 본표를 읽은 공시는 언제나(회사 고유 줄이 없어도) 같은 성격 본표 줄 전부(표준 + 회사 고유)를 그 공시 원본 값으로 더하고,
     // 한 기간 = 그 기간을 실은 가장 최근 공시(latestFiled). 예전엔 회사 고유 줄이 있을 때만 만들고 나머지는 표준 개념 목록을 연간 칸에서 개념별로 더해, 같은
     // 금액을 본표 줄·주석 태그로 함께 단 공시(CAT AFS 매각)나 태그를 바꾼 회사(META·NFLX 2023 — 2배)·옛 10-K 태그(PEP)가 두 번 들어갔다(8차 감사 2026-10-17,
-    // 운영 판부터 있던 결함). 본표 줄인데 그 기간 값이 없으면 0("—"). 같은 성격 꼴 표준 줄 확장은 증권(…Securities)만 — 지분법·기타 투자(UBER·PLTR)는 종전대로
-    // 기타 투자활동(분류 바꾸지 않음)
+    // 운영 판부터 있던 결함). 본표 줄인데 그 기간 값이 없으면 0("—"). 같은 성격 꼴 표준 줄(처분·취득 꼴 — AMD 단기투자 만기 회수, DELL 만기보유증권)은 넣되
+    // 지분법·기타 투자(UBER·PLTR)는 종전대로 기타 투자활동(분류 바꾸지 않음 — 9차 감사: 증권 꼴로만 좁혔더니 AMD 2021·2022 처분이 0)
     if (faceS) {
       const local = (id: string) => id.replace(/^[^_]+_/, "");
       const fams = CF_INV_FAMILIES.map((fm) => {
         const std = new Set(cfInvStdConcepts(fm.label));
         const ids = [...faceS].filter((id) => (id.startsWith("us-gaap_")
-          ? std.has(local(id)) || (/Securities$/.test(local(id)) && fm.custom.test(local(id)) && !otherLineStd.has(local(id)))
+          ? std.has(local(id)) || (fm.custom.test(local(id)) && !/EquityMethod|OtherInvestments/.test(local(id)) && !otherLineStd.has(local(id)))
           : fm.custom.test(local(id))));
         return { fm, ids };
       }).filter((x) => x.ids.length);
