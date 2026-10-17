@@ -230,13 +230,15 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
         if (needsOpIncomeStructure(raw.facts["us-gaap"] ?? {})) unavailable.opIncome = { reason };
       }
       const filled0 = await step("filings", raw, () => withFilingGapFill(cik, raw, recent));
-      // 본표 판독 공시 범위(filingsForDa — 감가상각·운전자본·현금흐름 순이익·차입금·콘텐츠 상각·세전이익): recent(최근 1,000건)에 10-K 가 3건 미만이면
-      // (Form 4 가 많은 META·WMT) 과거 목록 파일의 옛 10-K 를 덧붙인다 — 10-K 3건 = 화면 5개 사업연도. 예전엔 범위 밖 연도가 본표 판독 없이 빠져
+      // 본표 판독 공시 범위(감가상각·운전자본·현금흐름 순이익·차입금·콘텐츠 상각·세전이익·손익 구조·일회성비용·재무상태표 차입금): recent(최근 1,000건)에
+      // 10-K 가 4건 미만이면(Form 4 가 많은 META·WMT) 과거 목록 파일의 옛 10-K 를 덧붙인다 — 흐름은 10-K 3건, 재무상태표(10-K 한 건에 연말 2개)는 4건이어야
+      // 화면 5개 사업연도. 20-F·40-F 제출사(10-K 없음)는 건너뜀. 예전엔 범위 밖 연도가 본표 판독 없이 빠져
       // META FY2021 현금흐름 순이익이 공란·기타 영업활동이 393.7억을 떠안았다(감사 2026-10-17). 조회 실패는 경고(불완전 결과 — 짧은 캐시·저장 안 함)
       let recentFace = recent;
-      if (recent && recent.form.filter((f) => f === "10-K").length < 3) {
+      const nK = recent ? recent.form.filter((f) => f === "10-K").length : 0;
+      if (recent && nK >= 1 && nK < 4) {
         try {
-          const ann = await recentAnnualFilings(cik, recent, 3);
+          const ann = await recentAnnualFilings(cik, recent, 4);
           const have = new Set(recent.accessionNumber);
           const add = ann.filter((a) => !have.has(a.accn)).sort((a, b) => b.filed.localeCompare(a.filed));
           if (add.length)
@@ -264,16 +266,16 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const withContent = await step("da", normalized, () => withContentAmortization(cik, normalized, recentFace, sicN));
       // 총수익 안의 지분법·기타수익 분리(XOM — 영업이익 태그 없는 회사, edgar-revenue-dims.ts)
       // 세전이익 = 손익계산서 본표 소계(지분법 이익을 법인세 아래에 두는 AMD 형 — edgar-pretax.ts)
-      const withPt0 = await step("opIncome", withContent, () => withFacePretax(cik, withContent, recent));
+      const withPt0 = await step("opIncome", withContent, () => withFacePretax(cik, withContent, recentFace));
       // 본표 세전이익 소계가 회사 고유 태그(MCD·ORCL·MRVL 10-Q) — 공시 원본 값으로 표준 세전이익 기간을 채움(edgar-pretax.ts)
       const withPt = await step("opIncome", withPt0, () => withCustomFacePretax(cik, withPt0, recentFace));
-      const withDims = await step("opIncome", withPt, () => withRevenueDims(cik, withPt, recent));
+      const withDims = await step("opIncome", withPt, () => withRevenueDims(cik, withPt, recentFace));
       // 영업이익 소계가 없는 손익계산서 — 계산 구조로 영업외 항목 분리(DIS·FOXA, edgar-is-structure.ts)
-      const withIs = await step("opIncome", withDims, () => withIncomeStatementStructure(cik, withDims, recent, sicN));
+      const withIs = await step("opIncome", withDims, () => withIncomeStatementStructure(cik, withDims, recentFace, sicN));
       // 손익계산서 별도 줄로 공시된 일회성비용(주석 행, edgar-oneoff.ts)
-      const withOneOff = await step("oneOff", withIs, () => withOneOffCharges(cik, withIs, recent));
+      const withOneOff = await step("oneOff", withIs, () => withOneOffCharges(cik, withIs, recentFace));
       // 총차입금 = 대차대조표 본표 차입금 줄(edgar-bs-structure.ts)
-      const withDebt = await step("debt", withOneOff, () => withBalanceSheetDebt(cik, withOneOff, recent));
+      const withDebt = await step("debt", withOneOff, () => withBalanceSheetDebt(cik, withOneOff, recentFace));
       // 감가상각비 = 현금흐름표 본표 감가상각·상각 줄(edgar-cf-structure.ts). 콘텐츠 상각 판독이 실패했으면(NFLX) 본표 줄로
       // 대신하지 않는다 — 콘텐츠 상각이 빠진 값이 된다
       const withDa = unavailable.da ? withDebt : await step("da", withDebt, () => withCashFlowDa(cik, withDebt, recentFace));

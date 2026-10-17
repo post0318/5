@@ -205,9 +205,10 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           const v = at(cs[0]);
           if (!v) continue;
           niFace.push({ ...e, val: v.val });
-          // 연결 순이익이고 그 공시의 지배주주 순이익이 따로 있고 값이 다를 때만(AVGO 처럼 NetIncomeLoss 태그 없이 ProfitLoss 만 쓰면 주석 없음)
-          const nil = at("NetIncomeLoss");
-          if (cs[0] === "ProfitLoss" && nil && nil.val !== v.val) niCons.push(`${e.start}|${e.end}`);
+          // 연결 순이익이고 비지배지분 몫이 있을 때만 — 그 공시의 지배주주 순이익이 따로 있고 값이 다르거나, 비지배지분 순이익이 0 이 아님
+          // (CAT·BE 는 NetIncomeLoss 태그 없이 비지배 순이익만 공시, AVGO 는 둘 다 없음 — 주석 없음. 6차 감사 2026-10-17)
+          const nil = at("NetIncomeLoss"), nci = at("NetIncomeLossAttributableToNoncontrollingInterest");
+          if (cs[0] === "ProfitLoss" && ((nil && nil.val !== v.val) || (nci && nci.val !== 0))) niCons.push(`${e.start}|${e.end}`);
         }
     }
     const labs = labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined;
