@@ -38,7 +38,9 @@ const WC = /^[a-z0-9-]+_IncreaseDecreaseIn/i;
 // 정확히 이 줄 값(VST 2025 −20·2024 38)이었다
 // 지분증권 공정가치 변동(INTC "Gains on equity investments" — us-gaap_IncreaseDecreaseInEquitySecuritiesFvNi)도 운전자본 아님(비현금 평가손익)
 // 이연법인세(ISRG us-gaap_IncreaseDecreaseInDeferredIncomeTaxes — 이름만 증감 꼴)도 운전자본 아님 → 기타 비현금 조정(OTHER_NC)
-const NOT_WC = /_IncreaseDecreaseIn(AssetRetirementObligations|EquitySecuritiesFvNi|DeferredIncomeTaxes)$/;
+// 공정가치 변동 꼴(MRVL mrvl_IncreaseDecreaseInFairValueOfForwardStockPurchaseContract)·세금 수취약정 부채(VRT vrt_IncreaseDecreaseInTaxReceivableAgreement)도
+// 같은 종류(비현금 평가손익·운전자본 밖 부채, 표시 구조에서도 운전자본 묶음 밖 — 감사 2026-10-18)
+const NOT_WC = /_IncreaseDecreaseIn(AssetRetirementObligations|EquitySecuritiesFvNi|DeferredIncomeTaxes|\w*FairValue\w*|TaxReceivableAgreement\w*)$/i;
 // 라벨로 운전자본임을 밝힌 줄(HLT us-gaap_OtherOperatingActivitiesCashFlowStatement "Working capital changes and other")
 const WC_LABEL = /working capital|operating assets and liabilities/i;
 
@@ -154,7 +156,8 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const ncCand: { per: string; filed: string; e: FactUnitEntry; val: number | null; calcGap: boolean }[] = [];
   const niCons: string[] = [];
   let niRead = false;
-  let wcRead = false; // 본표에서 운전자본 줄을 읽은 공시가 하나라도 있음
+  let wcRead = false;
+  const wcMiss: string[] = []; // 본표 운전자본 줄은 읽었으나 합을 못 만든 기간의 종료일 // 본표에서 운전자본 줄을 읽은 공시가 하나라도 있음
   // 기간 → 그 기간 현금흐름표를 실은 가장 최근 공시(제출일) — 투자자산 본표 줄 합은 그 공시에서만(옛 공시의 합이 최신 공시 표준값을 덮지 않게 —
   // 7차 감사 2026-10-17: DELL FY2023 10-K 본표 두 줄 중 한 줄만 더한 256·94 가 FY2024 10-K 의 414·108 을 덮었다)
   const latestFiled = new Map<string, string>();
@@ -165,6 +168,15 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     }
   // 현금흐름표 다른 줄이 쓰는 표준 개념(투자자산 합에 넣으면 이중 합산)
   const otherLineStd = new Set(cfZeroFillGroups().flat());
+  let tenKLabs: Map<string, string[]> | undefined;
+  {
+    const k = filingsForDa(recent).filter((f) => f.form === "10-K").sort((x, y) => (x.filed < y.filed ? 1 : -1))[0];
+    if (k) {
+      const kb = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${k.accn.replace(/-/g, "")}`;
+      const kn = (await fetchJson<{ directory: { item: { name: string }[] } }>(`${kb}/index.json`, opt)).directory.item.map((i) => i.name).find((n) => /_lab\.xml$/i.test(n));
+      if (kn) tenKLabs = labelsOf(await fetchText(`${kb}/${kn}`, opt));
+    }
+  }
   for (const f of filingsForDa(recent)) {
     const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
     const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, opt);
@@ -238,11 +250,20 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           niFace.push({ ...e, val: v.val });
           // 연결 순이익이고 비지배지분 몫이 있을 때만 — 그 공시의 지배주주 순이익이 따로 있고 값이 다르거나, 비지배지분 순이익이 0 이 아님
           // (CAT·BE 는 NetIncomeLoss 태그 없이 비지배 순이익만 공시, AVGO 는 둘 다 없음 — 주석 없음. 6차 감사 2026-10-17)
-          const nil = at("NetIncomeLoss"), nci = at("NetIncomeLossAttributableToNoncontrollingInterest");
-          if (cs[0] === "ProfitLoss" && ((nil && nil.val !== v.val) || (nci && nci.val !== 0))) niCons.push(`${e.start}|${e.end}`);
+          // 지배주주 순이익·비지배 몫 태그가 이 공시에 없으면 그 기간을 실은 다른 공시 값(주석 판정에만 — BE FY2023 10-K 는 2021 NetIncomeLoss 없이 비지배 몫을
+          // Nonredeemable·Redeemable 로 나눠 태깅, 감사 2026-10-18)
+          const anyAt = (c: string) => at(c) ?? (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end);
+          const nil = anyAt("NetIncomeLoss");
+          const nci = ["NetIncomeLossAttributableToNoncontrollingInterest", "NetIncomeLossAttributableToNonredeemableNoncontrollingInterest", "NetIncomeLossAttributableToRedeemableNoncontrollingInterest"]
+            .map(anyAt).filter((x): x is FactUnitEntry => !!x);
+          if (cs[0] === "ProfitLoss" && ((nil && nil.val !== v.val) || nci.some((x) => x.val !== 0))) niCons.push(`${e.start}|${e.end}`);
         }
     }
-    const labs = labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined;
+    // 라벨로 운전자본을 판정하는 개념(WC_LABEL)은 회사 최근 10-K 라벨로 통일 — HLT 는 같은 개념(OtherOperatingActivitiesCashFlowStatement)을 10-Q 에선
+    // "Working capital changes and other", 10-K 에선 "Other" 로 달아 LTM(사업연도 + 누적 차)에 정의가 섞였다(감사 2026-10-18 A)
+    const labs0 = labF ? labelsOf(await fetchText(`${base}/${labF}`, opt)) : undefined;
+    const labs = labs0;
+    const labsWc = labs0 && tenKLabs ? new Map([...labs0, ...tenKLabs]) : labs0;
     // 주식보상비용 — 본표에 표준 개념이 없고 표시 라벨이 주식보상비용인 회사 고유 줄(영업활동 계산 구조 안)
     const faceS = /^10-[KQ]/.test(f.form) ? cashFlowFace(calXml) : null;
     if (faceS && labs && !SBC_STD.some((c) => faceS.has(c))) {
@@ -296,7 +317,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
         const vs = CAPEX_PARTS.map((c) => (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === e.filed));
         if (vs.every(Boolean)) capexParts.push({ ...e, val: vs.reduce((t, x) => t + x!.val, 0) });
       }
-    const lines = cashFlowWcLines(calXml, labs);
+    const lines = cashFlowWcLines(calXml, labsWc);
     if (lines && /^10-[KQ]/.test(f.form)) wcRead = true;
     // 기타 비현금 조정 = 본표 비운전자본 줄 중 기타 비현금·이연법인세 개념의 그 공시 값 × 본표 가중치 합(한 기간 = 가장 최근 공시). 예전엔 개념 목록을 부호 고정으로
     // 더하고 운전자본 줄(기타 영업자산·부채·미수금 증감 — 운전자본 변동에도 들어감)까지 넣어, AAPL FY2021 이 451(본표 −4,921: 부호 반대 + 운전자본 3줄 이중)이고 기타
@@ -317,7 +338,8 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
         // 그 공시가 값을 달았는데 계산 구조에 없는 개념 = 계산 구조 누락(INTC FY2023 10-K: 본표·표시 구조엔 이연법인세 줄이 있으나 계산 구조엔 없음) — 이 공시는 쓰지 않고
         // 그 기간을 실은 다음 최근 공시로(아래 ncCand)
         if (OTHER_NC.some((c) => !ids.includes(c) && cf(c) != null && !lines.wc.has(`us-gaap_${c}`) && preCf?.has(`us-gaap_${c}`))) { ncCand.push({ per, filed: f.filed, e, val: null, calcGap: true }); continue; }
-        if (!ids.length) continue;
+        // 이 공시 본표에 해당 줄이 없음 — 이 기간은 빈칸(옛 공시 값으로 넘어가지 않게 후보로 남김, 감사 2026-10-18 F)
+        if (!ids.length) { ncCand.push({ per, filed: f.filed, e, val: null, calcGap: false }); continue; }
         const vs: (number | null)[] = ids.map(cf);
         if (vs.some((x) => x == null)) {
           if (fsx === undefined) {
@@ -357,7 +379,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     //    GuestLoyaltyProgramMember)이 있으면. 차원 없는 값이 우선, 없으면 그 기간에 값이 하나뿐인 차원 값(본표 줄이 차원으로만 태깅된 경우)
     if (sums.some((v) => v == null)) {
       const inst = names.find((n) => /_htm\.xml$/i.test(n));
-      if (!inst) continue;
+      if (!inst) { ocf.forEach((e, i) => { if (sums[i] == null) wcMiss.push(e.end); }); continue; }
       const xml = await fetchText(`${base}/${inst}`, { headers: H, revalidate: false, timeoutMs: 30_000 });
       const fsx = instanceFacts(xml, (id) => lines.wc.has(id));
       ocf.forEach((e, i) => {
@@ -382,7 +404,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
       });
     }
     // 부호는 IncreaseDecreaseInOperatingCapital 과 같이 증가 = 유출
-    ocf.forEach((e, i) => { if (sums[i] != null) synth.push({ ...e, val: -(sums[i] as number) }); });
+    ocf.forEach((e, i) => { if (sums[i] != null) synth.push({ ...e, val: -(sums[i] as number) }); else wcMiss.push(e.end); });
   }
   // 근거 확인 — 합계·두 줄이 같은 공시·기간에 모두 있는 기간마다 합계 = 두 줄 합(하나라도 어긋나거나 확인 기간이 없으면 만들지 않음).
   // 확인 범위 = 이 함수가 읽는 공시 창(최근 10-K 5건~)에 제출된 값 — 그보다 옛 공시는 줄 구성이 달랐다(DAL 2016 10-K 의 2013: 합계 2,568 = 두 줄 2,521 + 다른 줄)
@@ -414,5 +436,5 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
     const cur = (ng[c] ?? { units: {} }) as { label?: string; units: Record<string, FactUnitEntry[]> };
     ng[c] = { ...cur, units: { ...cur.units, USD: [...(cur.units.USD ?? []), e] } };
   }
-  return { ...facts, ...(dimOnly.length ? { cfDimOnly: dimOnly } : {}), ...(niRead ? { niFace: true } : {}), ...(wcRead ? { wcFace: true } : {}), ...(niCons.length ? { niConsolidated: niCons } : {}), facts: { ...facts.facts, "us-gaap": ng as never } };
+  return { ...facts, ...(dimOnly.length ? { cfDimOnly: dimOnly } : {}), ...(niRead ? { niFace: true } : {}), ...(wcRead ? { wcFace: true } : {}), ...(wcMiss.length ? { cfWcMiss: [...new Set(wcMiss)] } : {}), ...(niCons.length ? { niConsolidated: niCons } : {}), facts: { ...facts.facts, "us-gaap": ng as never } };
 }

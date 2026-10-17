@@ -987,10 +987,15 @@ export function buildUsCashFlow(
         }
       }
     // 운전자본 변동 — 본표 줄 합을 못 만든 칸(공시 원본에 그 기간 줄 값이 빠짐)은 하위 줄로 채우지 않고 사유
-    const wc = facts.wcFace ? items.find((x) => x.accountId === "cf:영업활동 현금흐름:운전자본 변동") : undefined;
+    // 그 기간을 실은 공시가 본표 운전자본 줄은 있는데 값이 빠진 칸만(DAL 10-Q 처럼 본표에 운전자본 줄 자체가 없으면 "본표에 별도 줄 없음" — 감사 2026-10-18 C)
+    const wc = facts.cfWcMiss?.length ? items.find((x) => x.accountId === "cf:영업활동 현금흐름:운전자본 변동") : undefined;
+    const nearW = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 7 * 864e5;
     if (wc)
-      for (const l of present)
-        if (wc.values[l] == null && !wc.cellNotes?.[l]) wc.cellNotes = { ...(wc.cellNotes ?? {}), [l]: "본표 운전자본 줄 합 미확인 — 공시 원본에 그 기간 운전자본 줄 값이 빠짐(하위 줄 일부로 채우지 않음)" };
+      for (const p of periods) {
+        const l = p.label, e = l === LTM ? anchor : p.endDate;
+        if (!present.includes(l) || wc.values[l] != null || wc.cellNotes?.[l] || !e || !facts.cfWcMiss!.some((x) => nearW(x, e))) continue;
+        wc.cellNotes = { ...(wc.cellNotes ?? {}), [l]: "본표 운전자본 줄 합 미확인 — 공시 원본에 그 기간 운전자본 줄 값이 빠짐(하위 줄 일부로 채우지 않음)" };
+      }
     fillBlankReasons(items, present);
   }
   return {
