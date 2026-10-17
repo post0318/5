@@ -137,6 +137,16 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
   const niFace: FactUnitEntry[] = [];
   const niCons: string[] = [];
   let niRead = false;
+  // 기간 → 그 기간 현금흐름표를 실은 가장 최근 공시(제출일) — 투자자산 본표 줄 합은 그 공시에서만(옛 공시의 합이 최신 공시 표준값을 덮지 않게 —
+  // 7차 감사 2026-10-17: DELL FY2023 10-K 본표 두 줄 중 한 줄만 더한 256·94 가 FY2024 10-K 의 414·108 을 덮었다)
+  const latestFiled = new Map<string, string>();
+  for (const f0 of filingsForDa(recent))
+    for (const e of (g.NetCashProvidedByUsedInOperatingActivities?.units?.USD ?? []).filter((x) => x.start && x.filed === f0.filed && x.form === f0.form)) {
+      const k = `${e.start}|${e.end}`;
+      if ((latestFiled.get(k) ?? "") < f0.filed) latestFiled.set(k, f0.filed);
+    }
+  // 현금흐름표 다른 줄이 쓰는 표준 개념(투자자산 합에 넣으면 이중 합산)
+  const otherLineStd = new Set(cfZeroFillGroups().flat());
   for (const f of filingsForDa(recent)) {
     const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${f.accn.replace(/-/g, "")}`;
     const idx = await fetchJson<{ directory: { item: { name: string }[] } }>(`${base}/index.json`, opt);
@@ -233,7 +243,8 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
       const local = (id: string) => id.replace(/^[^_]+_/, "");
       const fams = CF_INV_FAMILIES.map((fm) => {
         const std = new Set(cfInvStdConcepts(fm.label));
-        const ids = [...faceS].filter((id) => (id.startsWith("us-gaap_") ? std.has(local(id)) : fm.custom.test(local(id))));
+        // 표준 개념은 그 줄 목록 + 같은 성격 꼴인데 다른 줄이 쓰지 않는 것(DELL PaymentsToAcquireHeldToMaturitySecurities)
+        const ids = [...faceS].filter((id) => (id.startsWith("us-gaap_") ? std.has(local(id)) || (fm.custom.test(local(id)) && !otherLineStd.has(local(id))) : fm.custom.test(local(id))));
         return { fm, ids, custom: ids.filter((id) => !id.startsWith("us-gaap_")) };
       }).filter((x) => x.custom.length);
       const inst = fams.length ? names.find((n) => /_htm\.xml$/i.test(n)) : null;
@@ -244,6 +255,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           for (const e of ocf) {
             const at = (id: string) => fsx.find((x) => x.id === id && x.period === `${e.start}|${e.end}` && x.dims.length === 0);
             if (!custom.some(at)) continue;
+            if (latestFiled.get(`${e.start}|${e.end}`) !== f.filed) continue;
             // 본표 줄인데 차원 없는 값이 없고 0 아닌 차원 값만 있으면 0 으로 더하지 않는다(부분합 금지) — 그 칸 빈칸 + 사유
             const dimOnlyId = ids.find((id) => !at(id) && fsx.some((x) => x.id === id && x.period === `${e.start}|${e.end}` && x.val !== 0));
             if (dimOnlyId) { dimOnly.push({ concept: fm.derived, start: e.start!, end: e.end, force: true }); continue; }
