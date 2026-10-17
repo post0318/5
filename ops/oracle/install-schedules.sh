@@ -65,10 +65,10 @@ unit research-sharedresearch-research "리서치(일본): sharedresearch-researc
 
 # ② 거시경제 — Fed 금리 확률 일별 스냅샷(06:00)
 unit macro-fedwatch-snapshot "거시경제: Fed 금리 확률 일별 스냅샷(Kalshi)" "/opt/macro/ops/call-cron.sh /api/cron/fedwatch 120" "*-*-* 06:00:00\n"
-# ② 거시경제 — 한국 공포·탐욕 원자료 + 코스피·코스닥 일봉(06:30, 전 영업일분). 예전엔 서버에서 손으로 만든 유닛이라 저장소에 없었다(2026-10-06 편입).
+# ② 거시경제 — 한국 공포·탐욕 원자료 + 코스피·코스닥 일봉(08:20, 전 영업일분). 예전엔 서버에서 손으로 만든 유닛이라 저장소에 없었다(2026-10-06 편입).
 #   KRX OPEN API 가 아직 안 냈으면 앱이 200 + {ok:false, retry:true} 를 준다 → call-cron.sh 가 아래 재시도 타이머(1시간 뒤 1회)를 건다.
 #   재시도 서비스는 CRON_RETRY_TIMER 없이 돌아 또 실패하면 그대로 실패 → healthcheck(job-macro-kr-fg-retry)가 알린다. 휴장일(holiday:true)은 정상.
-# 2026-10-09: 06:30 → 08:20. KRX 전 거래일 시세는 다음 날 07:55~08:00 공개(실측 이슈 #16) — 06:30·재시도 07:30 모두 빈 응답이라 매일 거짓 실패가 났다.
+# 2026-10-09: 06:30 → 08:20. KRX 전 거래일 시세는 다음 날 08:00 정각 공개(실측 이슈 #16 — 07:55 0건, 08:00 942종목) — 06:30·재시도 07:30 모두 빈 응답이라 매일 거짓 실패가 났다.
 unit macro-kr-fg "거시경제: 한국 공포·탐욕 원자료 + 지수 일봉(전 영업일분)" "/usr/bin/env CRON_RETRY_TIMER=macro-kr-fg-retry.timer /opt/macro/ops/call-cron.sh /api/cron/kr-fg 600" "*-*-* 08:20:00\n"
 cat > "$U/macro-kr-fg-retry.service" <<'EOF'
 [Unit]
