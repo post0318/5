@@ -375,7 +375,7 @@ export async function dartDocNumberStreams(rcept) {
   });
 }
 
-const DOC_FINTAB_VER = "ft1";
+const DOC_FINTAB_VER = "ft2";
 /**
  * B16 ②b(2026-10-18) — 보고서 원문 중 금융자산 관련 표의 **원본 HTML 조각** [{ pre, html }] (pre = 표 앞 1,500자 원본 — 단위·제목 판정용).
  * 표를 행·열로 나누는 판독(cashnote.mjs)은 읽을 때 하므로, 판독 규칙을 고쳐도 원문을 다시 받지 않는다. 거르는 낱말에 하나라도 걸린 표만 남긴다
@@ -394,11 +394,26 @@ export async function dartDocFinTables(rcept) {
     for (const b of Object.values(files)) {
       let t = new TextDecoder("utf-8").decode(b);
       if (/\uFFFD/.test(t.slice(0, 20000))) t = new TextDecoder("euc-kr").decode(b);
+      // ft2: 표의 범위(연결 "con"·별도 "sep"·미상 null) — 첨부 문서 종류(연결감사보고서 00761·감사보고서 00760) → 본문 목차(<TITLE>)의 "연결재무제표…"·
+      // "재무제표…" → 표 앞 주석 제목에 "(연결)"이 있으면 con. 064350 2024: 연결 주석 단기금융상품 272,625,444 천원 vs 별도 주석 272,625,445 천원(합계는 같음)
+      const acode = t.match(/<DOCUMENT-NAME[^>]*ACODE="(\d+)"/)?.[1];
+      const fileScope = acode === "00761" ? "con" : acode === "00760" ? "sep" : null;
+      const titles = [...t.matchAll(/<TITLE[^>]*>([^<]*)<\/TITLE>/g)].map((x) => [x.index, x[1]]);
+      // 같은 번호·제목에 "(연결)"이 붙은 쌍둥이 목차가 있는 제목 = 별도 주석(064350 "7. 기타금융자산" ↔ "7. 기타금융자산 (연결)"). 쌍둥이가 없는 번호 제목(「8. 기타 재무에
+      // 관한 사항」 — 본문 사업 부분)은 범위 미상
+      const conTwin = new Set(titles.map(([, x]) => x.replace(/\s+/g, "")).filter((x) => /\(연결\)$/.test(x)).map((x) => x.replace(/\(연결\)$/, "")));
       const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
       let m;
       while ((m = re.exec(t))) {
         if (!KEEP.test(m[0].replace(/<[^>]+>/g, ""))) continue;
-        out.push({ pre: t.slice(Math.max(0, m.index - 1500), m.index), html: m[0] });
+        const pre = t.slice(Math.max(0, m.index - 1500), m.index);
+        const ti = titles.filter(([k]) => k < m.index).at(-1)?.[1] ?? "";
+        // 2025 사업보고서·2026 분기부터 본문 주석은 주석마다 목차가 있고 연결 주석 제목 끝에 "(연결)"이 붙는다("7. 기타금융자산 (연결)") — 그런 문서에서
+        // "(연결)"이 없는 번호 주석 제목은 별도
+        const titleScope = /\(\s*연결\s*\)/.test(ti) ? "con" : /연결\s*재무제표/.test(ti) ? "con" : /재무제표/.test(ti) ? "sep" : /별도/.test(ti) || conTwin.has(ti.replace(/\s+/g, "")) ? "sep" : null;
+        const preText = pre.replace(/<[^>]+>/g, " ");
+        const secScope = /\(\s*연결\s*\)/.test(preText.slice(-600)) ? "con" : null;
+        out.push({ pre, html: m[0], scope: fileScope ?? titleScope ?? secScope });
       }
     }
     return out;

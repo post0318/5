@@ -10,6 +10,7 @@
  *     최신 정기보고서는 정기공시 목록(list.json)으로 정한다(앱 ttm.periodLabel 아님).
  *  K5 주당배당금(사업연도) = DART alotMatter, 배당수익률 = DPS ÷ KRX 연말 종가.
  */
+import { appendFileSync } from "node:fs";
 import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartXbrlCum, dartDocLeaseCells, dartDocDaTables, dartCompany } from "./dart.mjs";
 import { daCandidates, invTableDep } from "./docda.mjs";
 import { dataGoDividends } from "./datago.mjs";
@@ -45,15 +46,17 @@ const kstToday = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 
 
 /** 사업연도 y 재무상태표의 기준 보고서·열 — 그 해 재무상태표 값이 실린 가장 최근 보고서(y+2 전전기 → y+1 전기 → y 당기) */
 /** B16 ②b — 보고서 줄들의 계열 줄 현금성 부분 합(col 열). 하나라도 못 읽으면 { v: null } */
-async function famCashOf(cl, col, rcepts) {
+async function famCashOf(cl, col, rcepts, fsDiv) {
   let v = 0, ok = true;
   const why = [], lines = [];
   for (const r of cl.family) {
     const X = sumCol([r], col);
     if (!X) continue;
-    const fp = await familyCashFromNotes(rcepts, X, nm(r.account_nm));
+    const fp = await familyCashFromNotes(rcepts, X, nm(r.account_nm), undefined, fsDiv);
+    // 진단용(평소엔 쓰지 않음) — 판독 입력을 줄 단위 JSON 으로 남긴다
+    if (process.env.KR_VERIFY_DEBUG_FAM) appendFileSync(process.env.KR_VERIFY_DEBUG_FAM, JSON.stringify({ X, line: nm(r.account_nm), rcepts, fsDiv, v: fp.v }) + "\n");
     why.push(`${nm(r.account_nm)} ${X} → ${fp.v ?? "판독 못 함"}(${fp.how})`);
-    lines.push({ line: nm(r.account_nm), X, v: fp.v, how: fp.how });
+    lines.push({ line: nm(r.account_nm), X, v: fp.v, how: fp.how, range: fp.range ?? null });
     if (fp.v == null) ok = false; else v += fp.v;
   }
   return { v: ok ? v : null, why: why.join(" / "), lines };
@@ -91,6 +94,13 @@ function stagingLineCheck(c, colLabel, items, lines) {
     const it = (items ?? []).find((x, i) => !used.has(i) && x.value === l.X && (used.add(i), true));
     if (!it) { add("K2", name, colLabel, { status: FAIL, note: `검증기 계열 줄 ${l.line} ${l.X} 이 적재본에 없음` }); continue; }
     const app = it.cash ?? 0;
+    // 표 단위로만 나뉜 섞인 묶음 — 참값 범위 밖이면 적재본이 틀린 것(실패), 안이면 원 단위 정밀값이 없어 검증불가(허용치로 통과시키지 않음)
+    if (l.v == null && l.range) {
+      const [lo, hi] = l.range;
+      if (app < lo || app > hi) add("K2", name, colLabel, { status: FAIL, app, note: `${l.line} ${l.X}: 적재본 ${it.cash ?? "제외(null)"} 이 검증기 참값 범위 ${lo}~${hi} 밖 — ${l.how.slice(0, 300)}` });
+      else add("K2", name, colLabel, { status: NA, app, note: `${l.line} ${l.X} — 표 단위 반올림 안(범위 ${lo}~${hi}), 원 단위 정밀값 없음: ${l.how.slice(0, 250)}` });
+      continue;
+    }
     if (l.v == null) { add("K2", name, colLabel, { status: NA, app, note: `${l.line} ${l.X} — 검증기 못 읽음: ${l.how.slice(0, 300)}` }); continue; }
     if (app !== l.v) { add("K2", name, colLabel, { status: FAIL, app, src: l.v, note: `${l.line} ${l.X}: 적재본 ${it.cash ?? "제외(null)"} vs 검증기 ${l.v} (차 ${app - l.v}) — ${l.how.slice(0, 300)}` }); continue; }
     add("K2", name, colLabel, { status: PASS, app, src: l.v, note: `${l.line} ${l.X}${it.cash == null ? " (적재본 제외 = 검증기 0)" : ""} — ${l.how.slice(0, 200)}` });
@@ -411,7 +421,7 @@ export async function krOriginalLayers(ctx) {
     try {
       // 내역은 그 해를 당기·전기로 담은 보고서(y+1 의 전기 열이 재작성 반영이라 먼저, 그다음 y) — 모든 판본, 최신 먼저
       const rcs = [...new Set([y + 1, y].filter((yy) => yy <= new Date().getFullYear()).flatMap((yy) => L.reports.filter((z) => z.year === yy && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept)))];
-      const fam = await famCashOf(cl, own.col, rcs);
+      const fam = await famCashOf(cl, own.col, rcs, src.fsDiv);
       famWhy.push(fam.why);
       if (fam.v == null) famOk = false; else famCash = fam.v;
       const st = await stagingCash(ctx.env, sym);
@@ -838,7 +848,7 @@ async function ltmLayer(c) {
     const pol = policySrc.at(-1);
     const lease = cl.leaseFace.length ? { status: "face" } : pol && pol.fy === lp.year ? pol : { status: "unknown", how: `FY${lp.year} 리스 판정 없음` };
     const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
-    const fam = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === lp.year && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept));
+    const fam = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === lp.year && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept), cur.fsDiv);
     const cash = fam.v == null ? null : (sumCol(cl.cash, "thstrm_amount") ?? 0) + fam.v, nci = sumCol(cl.nci, "thstrm_amount") ?? 0;
     exact("K2", "LTM 총차입금 = DART 사업보고서(B16)", "LTM", LT.debt, expDebt, `${lp.nm}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}`);
     if (cash == null) add("K2", "LTM 현금성자산 = DART 사업보고서(B16)", "LTM", { status: NA, app: LT.cash == null ? null : -LT.cash, note: `②b 계열 줄 판독 못 함 — ${fam.why}` });
@@ -1012,7 +1022,7 @@ async function ltmLayer(c) {
   }
   const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
   exact("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", LT.debt, expDebt, `${lp.nm} ${basis}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}`);
-  const famQ = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === Y && z.code === lp.code).sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept));
+  const famQ = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === Y && z.code === lp.code).sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept), basis);
   {
     const st = await stagingCash(c.env, c.sym);
     const lab = `${Y} Q${q}`;
