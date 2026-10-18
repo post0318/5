@@ -3,6 +3,7 @@ import { fetchJson, fetchText } from "../http";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { RecentFilings } from "./edgar-gapfill";
 import { filingsForDa, instanceFacts } from "./edgar-cf-structure";
+import { preciseRetagValues } from "./edgar-series";
 import { CF_INV_FAMILIES, OTHER_NC, SYN_NI_CF, SYN_OTHER_NC_CF, cfInvStdConcepts, cfZeroFillGroups } from "./edgar-cashflow";
 
 /**
@@ -33,14 +34,17 @@ const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) 
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 const OP_CF_ROOT = /^us-gaap_NetCashProvidedByUsedInOperatingActivities(ContinuingOperations)?$/;
 // 운전자본 줄 — 표준·회사 고유 모두(MCD 10-K "mcd_IncreaseDecreaseInInventoriesPrepaidExpenses…")
-const WC = /^[a-z0-9-]+_IncreaseDecreaseIn/i;
+// 운전자본 줄 = 증감 꼴 개념(오너 결정 2026-10-18 E 2안 — "In" 없는 회사 고유 꼴 포함: BE be_IncreaseDecreaseOnAccruedWarrantyLiability·
+// …FinancingCashFlowsFromFinanceLeases, UBER 2021 uber_IncreaseDecreaseFundsHeldByInsurers — BE 2022~2025 야후 일치, UBER 2021 StockAnalysis 일치)
+const WC = /^[a-z0-9-]+_IncreaseDecrease/i;
 // 운전자본이 아닌 IncreaseDecreaseIn… — 자산복구충당부채(장기부채, VST "Change in asset retirement obligation liability"). 야후와의 연간 차이가
 // 정확히 이 줄 값(VST 2025 −20·2024 38)이었다
 // 지분증권 공정가치 변동(INTC "Gains on equity investments" — us-gaap_IncreaseDecreaseInEquitySecuritiesFvNi)도 운전자본 아님(비현금 평가손익)
 // 이연법인세(ISRG us-gaap_IncreaseDecreaseInDeferredIncomeTaxes — 이름만 증감 꼴)도 운전자본 아님 → 기타 비현금 조정(OTHER_NC)
 // 공정가치 변동 꼴(MRVL mrvl_IncreaseDecreaseInFairValueOfForwardStockPurchaseContract)·세금 수취약정 부채(VRT vrt_IncreaseDecreaseInTaxReceivableAgreement)도
 // 같은 종류(비현금 평가손익·운전자본 밖 부채, 표시 구조에서도 운전자본 묶음 밖 — 감사 2026-10-18)
-const NOT_WC = /_IncreaseDecreaseIn(AssetRetirementObligations|EquitySecuritiesFvNi|DeferredIncomeTaxes|\w*FairValue\w*|TaxReceivableAgreement\w*)$/i;
+// 거래상대방 담보금 증감(CEG us-gaap_IncreaseDecreaseCashCollateralFromCounterparties — 헤지 증거금, 야후도 운전자본 밖)도 제외(오너 결정 2026-10-18 E 2안)
+const NOT_WC = /_IncreaseDecrease(?:In)?(AssetRetirementObligations|EquitySecuritiesFvNi|DeferredIncomeTaxes|\w*FairValue\w*|TaxReceivableAgreement\w*|\w*Collateral\w*)$/i;
 // 라벨로 운전자본임을 밝힌 줄(HLT us-gaap_OtherOperatingActivitiesCashFlowStatement "Working capital changes and other")
 const WC_LABEL = /working capital|operating assets and liabilities/i;
 
@@ -142,6 +146,19 @@ export function cashFlowWcLines(cal: string, labels?: Map<string, string[]>): { 
 export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: RecentFilings | null): Promise<CompanyFacts> {
   if (!recent) return facts;
   const g = facts.facts["us-gaap"] ?? {};
+  // 반올림 재게시를 원 공시 정밀값으로 바꾼 사본(edgar-series.ts preciseRetagValues). "한 기간 = 가장 최근 공시 값 하나"만 남기는 줄(순이익·기타 비현금 조정)은
+  // 뒤의 dropRoundedRetags 가 비교할 옛 공시 항목이 없어 최신 10-K 의 반올림 재게시값이 그대로 남았다(2026-10-18: MCD 2022 순이익 6,177 vs 손익계산서 6,177.4,
+  // MRVL FY2022 −421 vs −421.034). 공시마다 항목을 남기는 운전자본 합(synth)은 뒤 단계가 이미 정밀값으로 고치므로 원본 그대로(여기서 일부 줄만 고치면 합이
+  // 반올림·정밀 섞인 값이 돼 뒤 단계도 못 고친다 — MRVL FY2022 운전자본 662.887 → 663.035 로 시험에서 확인)
+  const gp = preciseRetagValues(facts);
+  /** 이 공시·기간의 개념 값 — 정밀값 사본 기준. 정밀값과 같은 옛 공시 값이 있거나(원래 정밀) 정밀값으로 바뀌었으면 confirmed */
+  const preciseAt = (c: string, e: FactUnitEntry, raw: number): { val: number; changed: boolean; confirmed: boolean } => {
+    const p = (gp[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === e.filed && x.form === e.form && x.fy === e.fy && x.fp === e.fp);
+    const val = p?.val ?? raw;
+    const changed = val !== raw;
+    const confirmed = changed || (g[c]?.units?.USD ?? []).some((x) => x.start === e.start && x.end === e.end && (x.filed ?? "") < (e.filed ?? "") && x.val === raw);
+    return { val, changed, confirmed };
+  };
   const opt = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 30_000 };
   const synth: FactUnitEntry[] = [];
   const zeros: [string, FactUnitEntry][] = [];
@@ -247,7 +264,7 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           const at = (c: string) => (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === f.filed && x.form === f.form);
           const v = at(cs[0]);
           if (!v) continue;
-          niFace.push({ ...e, val: v.val });
+          niFace.push({ ...e, val: preciseAt(cs[0], v, v.val).val });
           // 연결 순이익이고 비지배지분 몫이 있을 때만 — 그 공시의 지배주주 순이익이 따로 있고 값이 다르거나, 비지배지분 순이익이 0 이 아님
           // (CAT·BE 는 NetIncomeLoss 태그 없이 비지배 순이익만 공시, AVGO 는 둘 다 없음 — 주석 없음. 6차 감사 2026-10-17)
           // 지배주주 순이익·비지배 몫 태그가 이 공시에 없으면 그 기간을 실은 다른 공시 값(주석 판정에만 — BE FY2023 10-K 는 2021 NetIncomeLoss 없이 비지배 몫을
@@ -359,7 +376,14 @@ export async function withCashFlowWc(cik: string, facts: CompanyFacts, recent: R
           });
           if (skip) { ncCand.push({ per, filed: f.filed, e, val: null, calcGap: false }); continue; }
         }
-        ncCand.push({ per, filed: f.filed, e, val: ids.reduce((t, c, k) => t + lines.other.get(`us-gaap_${c}`)! * vs[k]!, 0), calcGap: false });
+        // 줄 값을 정밀값으로 — 모든 줄이 정밀값으로 확인될 때만(한 줄이라도 확인 못 하면(새 개념·원본에서 읽은 값) 반올림·정밀이 섞이지 않게 전부 공시 값 그대로)
+        const ps = ids.map((c, k) => {
+          const raw = cf(c);
+          const fe = (g[c]?.units?.USD ?? []).find((x) => x.start === e.start && x.end === e.end && x.filed === f.filed && x.form === f.form);
+          return raw != null && raw === vs[k] && fe ? preciseAt(c, fe, raw) : { val: vs[k]!, changed: false, confirmed: false };
+        });
+        const usePrecise = ps.some((x) => x.changed) && ps.every((x) => x.confirmed);
+        ncCand.push({ per, filed: f.filed, e, val: ids.reduce((t, c, k) => t + lines.other.get(`us-gaap_${c}`)! * (usePrecise ? ps[k].val : vs[k]!), 0), calcGap: false });
       }
     }
     if (!lines) continue;
