@@ -11023,6 +11023,38 @@ async function verifyKr(sym) {
               }
             }
           }
+          // 항등식 지배 + 비지배 = 당기순이익(2026-10-18 — 052690 2024 사업보고서 전전기 열: 당기순이익 17,953,974,302 인데 지배 0·비지배 0, DART 가 값 없는
+          // 칸을 0 으로 채웠다. 기준 보고서 값만 믿던 검증기는 앱의 0 과 같이 통과시켰다). 기준 보고서 귀속 값이 항등식을 못 맞추면 그 값을 기대치로 쓰지
+          // 않고, 그 해를 담은 다른 보고서(Y+2 전전기·Y+1 전기·Y 당기) 중 귀속 줄이 있고 항등식이 서는 보고서의 지배 값 → 그런 보고서가 없고 어느 보고서에도
+          // 0 아닌 비지배 순이익·재무상태표 비지배지분이 없으면 지배 = 당기순이익(승인 규칙) → 그 밖은 빈칸 기대
+          if (name === "당기순이익(지배)" && latest != null && fsDiv === "CFS") {
+            const NCI_IDS = ["ifrs-full_ProfitLossAttributableToNonControllingInterests", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"];
+            const niY = dartYearValue(cur, next, next2, y, ["IS", "CIS"], ["ifrs-full_ProfitLoss"], ["당기순이익", "당기순이익손실"]).latest;
+            const nciY = dartYearValue(cur, next, next2, y, ["IS", "CIS"], NCI_IDS, []).latest;
+            if (niY != null && latest + (nciY ?? 0) !== niY) {
+              let alt = null, nonzeroNci = false;
+              const one = (L0, f, sj, ids0, nm0) => { const vs = dartRows(L0, sj, ids0, nm0).map((r0) => dartNum(r0[f])).filter((v0) => v0 != null); return vs.length && vs.every((v0) => v0 === vs[0]) ? vs[0] : null; };
+              for (const [L0, f] of [[next2, "bfefrmtrm_amount"], [next, "frmtrm_amount"], [cur, "thstrm_amount"]]) {
+                if (!L0) continue;
+                const p0 = one(L0, f, ["IS", "CIS"], ["ifrs-full_ProfitLossAttributableToOwnersOfParent"], []);
+                const n0 = one(L0, f, ["IS", "CIS"], NCI_IDS, []);
+                const t0 = one(L0, f, ["IS", "CIS"], ["ifrs-full_ProfitLoss"], ["당기순이익", "당기순이익손실"]);
+                const b0 = one(L0, f, ["BS"], ["ifrs-full_NoncontrollingInterests"], ["비지배지분"]);
+                if ((n0 != null && n0 !== 0) || (b0 != null && b0 !== 0)) nonzeroNci = true;
+                if (alt == null && p0 != null && t0 != null && p0 + (n0 ?? 0) === t0 && !(p0 === 0 && t0 !== 0)) alt = { v: p0, f };
+              }
+              const was = latest;
+              if (alt) { latest = alt.v; rule = `기준 보고서 귀속 줄이 항등식 불성립(지배 ${was} + 비지배 ${nciY ?? 0} ≠ 당기순이익 ${niY}) → 항등식이 서는 보고서(${alt.f}) 지배 ${alt.v}`; }
+              else if (!nonzeroNci) { latest = niY; rule = `기준 보고서 귀속 줄이 항등식 불성립(지배 ${was} + 비지배 ${nciY ?? 0} ≠ 당기순이익 ${niY}, 값 없는 칸 0) · 어느 보고서에도 비지배지분 없음 → 지배 = 당기순이익(승인 규칙)`; }
+              else { latest = null; rule = `기준 보고서 귀속 줄이 항등식 불성립(지배 ${was} + 비지배 ${nciY ?? 0} ≠ 당기순이익 ${niY}) · 비지배지분 있음 → 지배 정할 수 없음(빈칸 기대)`; }
+            }
+            // 앱 화면 값으로 항등식 — 앱 지배 + DART 비지배(없으면 0) = 앱 당기순이익
+            const appP = isByName("(지배주주 귀속)", k), appN = isByName("당기순이익", k);
+            if (appP != null && appN != null) {
+              const okId = appP + (nciY ?? 0) === appN;
+              add("A", "항등식 지배 + 비지배 = 당기순이익(앱 지배·당기순이익, DART 비지배)", col, { status: okId ? PASS : FAIL, app: appP, src: appN - (nciY ?? 0), note: `앱 지배 ${appP} + DART 비지배 ${nciY ?? 0} ${okId ? "=" : "≠"} 앱 당기순이익 ${appN}` });
+            }
+          }
           // 승인된 규칙(앱 dart-income.ts — 칸 주석 "손익계산서에 당기순이익 줄 없음 — 지배주주 귀속 + 비지배지분 귀속"): DART 에 당기순이익 줄이 없고
           // 지배·비지배 귀속 줄이 둘 다 있으면 합(103590 2021·2022). 검증기가 DART 줄로 따로 계산
           if (name === "당기순이익(연결)" && latest == null) {

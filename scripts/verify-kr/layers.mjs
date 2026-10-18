@@ -331,7 +331,7 @@ export async function krOriginalLayers(ctx) {
     const own = bsOwner(src, y);
     if (!own) { exact("K2", "총차입금 = DART(B16)", col, x.debt, null, "그해 재무상태표 없음"); continue; }
     // 기타(유동)금융자산 성격은 그해 자기 보고서(src.cur)의 분류로 — 값은 기준 보고서(own)
-    const cl = classifyBsRows(own.rows, src.cur ?? own.rows, src.cur && src.cur !== own.rows ? { rows: src.cur, col: own.col } : null);
+    const cl = classifyBsRows(own.rows, src.cur ?? own.rows, src.cur && src.cur !== own.rows ? { rows: src.cur, col: own.col } : null, own.col);
     const faceDebt = sumCol(cl.debt, own.col) ?? 0;
     let lease = { status: "face" }, why = `기준 보고서 ${own.by} ${own.col}${src.fsDiv === "OFS" ? " · 별도" : ""}`;
     if (!cl.leaseFace.length) {
@@ -340,7 +340,9 @@ export async function krOriginalLayers(ctx) {
         // 회계정책 문장은 그 기간 보고서의 모든 판본(정정본은 바뀐 부분만 담기도 한다 — 103590 2022 정정본에 정책 문장 없음)
         const all = (yy) => L.reports.filter((x) => x.year === yy && x.code === "11011").map((x) => x.rcept);
         const namesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => nm(r.account_nm));
-        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf, badLease);
+        // 그 보고서 당기 본표 차입금 줄 값(원) — 리스부채 포함 판정을 원문 숫자로 확인할 때(b16 leaseInsideFaceDebt)
+        const valuesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => sumCol([r], "thstrm_amount"));
+        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf, badLease, valuesOf);
       } catch (e) { err(`리스부채 주석 ${y}`, e); continue; }
       why += ` · 본표 리스부채 줄 없음 → ${lease.status === "added" ? `주석 리스부채 ${lease.amount} 가산` : lease.status === "included" ? "차입금 줄에 포함" : "리스부채 확인 불가"}(${lease.how})`;
       if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });

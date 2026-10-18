@@ -8,7 +8,7 @@
  *  재무상태표 본표에 리스부채 줄이 없으면(오너 결정 2026-10-05) 사업보고서 주석의 리스부채 합계를 더한다 — 단 회사 회계정책 주석이 리스부채를
  *  본표 차입금 줄에 포함해 표시한다고 밝히면(삼성전자 "'유동성장기부채' 또는 '장기차입금'으로 분류") 이미 들어 있으므로 더하지 않는다(leaseNote).
  */
-import { dartXbrlFacts, dartDocLeaseSentences } from "./dart.mjs";
+import { dartXbrlFacts, dartDocLeaseSentences, dartDocNumberStreams } from "./dart.mjs";
 
 const nm = (s) => String(s ?? "").replace(/\s/g, "");
 const isStd = (id) => /^(ifrs-full|dart)_/.test(id ?? "");
@@ -39,10 +39,28 @@ const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기투자자
  *   LTM: 직전 사업보고서 + 분기 보고서 전기말 열(015760 2026 반기), 사업연도: 그해 자기 보고서 + 기준 보고서 열(052690 2021 — 2023 보고서 전전기
  *   "기타유동금융부채" 10,000,000 = 2021 보고서 "유동금융부채" 당기)
  */
-export function classifyBsRows(rows, ownRows = rows, rename = null) {
+export function classifyBsRows(rows, ownRows = rows, rename = null, valCol = null) {
   const bs = (rows ?? []).filter((r) => r.sj_div === "BS");
   const DEP = /^(ifrs-full|dart)_Short[tT]ermDeposits(Not)?ClassifiedAsCashEquivalents$/;
   const depositNamed = new Set((ownRows ?? []).filter((r) => r.sj_div === "BS" && DEP.test(r.account_id ?? "") && thstrm(r) != null).map((r) => nm(r.account_nm)));
+  // 값 보고서가 그 해 자기 보고서의 현금성자산 줄 여럿을 "기타(유동)금융자산" 한 줄로 합쳐 다시 적은 경우(2026-10-18 — 042660 2022: 2024 보고서 전전기
+  // "기타금융자산" 492,254,450,925 = 2022 보고서 "단기금융상품"(단기예치금 ID) 492,238,300,925 + "단기상각후원가측정금융자산" 16,150,000). 자기 보고서 줄 중
+  // 값 보고서에 같은 이름으로 그 열 값이 없는 B16 현금성자산 줄(현금및현금성자산 제외)들의 당기 값 합이 그 줄 값과 정확히 같고 단기예치금 ID 줄이 하나
+  // 이상 들어 있으면 그 줄을 현금성자산으로 본다(이름 일치만 보던 depositNamed 와 따로 — 줄 이름이 바뀐 경우)
+  const regrouped = (r) => {
+    if (!valCol || ownRows === rows) return false;
+    const x = v(r, valCol);
+    if (x == null) return false;
+    const inVal = new Set(bs.filter((b) => v(b, valCol) != null).map((b) => nm(b.account_nm)));
+    const parts = (ownRows ?? []).filter((o) => o.sj_div === "BS" && thstrm(o) != null && !inVal.has(nm(o.account_nm)) && o.account_id !== "ifrs-full_CashAndCashEquivalents" && nm(o.account_nm) !== "현금및현금성자산"
+      && (DEP.test(o.account_id ?? "") || CASH_NAME.test(nm(o.account_nm)) || (isStd(o.account_id) && CASH_STD.test(o.account_id))));
+    if (!parts.length || parts.length > 12) return false;
+    for (let m = 1; m < 1 << parts.length; m++) {
+      const pick = parts.filter((_, i) => m & (1 << i));
+      if (pick.some((o) => DEP.test(o.account_id ?? "")) && pick.reduce((a, o) => a + thstrm(o), 0) === x) return true;
+    }
+    return false;
+  };
   // 표준 차입금 태그여도 이름이 자산(대여금·채권)이면 아님
   const debt = bs.filter((r) => (isStd(r.account_id) ? DEBT_STD.test(r.account_id) && !DEBT_STD_NOT.test(r.account_id) && !/대여|자산|받을|리스채권/.test(nm(r.account_nm)) : DEBT_NAME.test(nm(r.account_nm)) && !DEBT_NAME_NOT.test(nm(r.account_nm))));
   const isLease = (r) => /LeaseLiabilities/.test(r.account_id ?? "") || /리스부채/.test(nm(r.account_nm));
@@ -59,7 +77,7 @@ export function classifyBsRows(rows, ownRows = rows, rename = null) {
     plain,
     // 회사가 같은 줄을 해마다 다른 태그로 달기도 한다(267260·329180 "단기금융자산", 402340 "단기투자자산")
     // 판정 순서: "기타(유동)금융자산" = 그 기간 자기 보고서가 단기예치금 ID 를 달았을 때만 → B16 에 이름이 적힌 항목은 태그와 관계없이 포함 → 그 밖은 표준 태그
-    cash: bs.filter((r) => (/^기타(유동)?금융자산$/.test(nm(r.account_nm)) ? depositNamed.has(nm(r.account_nm)) : CASH_NAME.test(nm(r.account_nm)) || (isStd(r.account_id) && CASH_STD.test(r.account_id)))),
+    cash: bs.filter((r) => (/^기타(유동)?금융자산$/.test(nm(r.account_nm)) ? depositNamed.has(nm(r.account_nm)) || regrouped(r) : CASH_NAME.test(nm(r.account_nm)) || (isStd(r.account_id) && CASH_STD.test(r.account_id)))),
     nci: bs.filter((r) => r.account_id === "ifrs-full_NoncontrollingInterests" || nm(r.account_nm) === "비지배지분"),
     // 금융업 판정(검증기 자체 규칙) — 예수부채·예금부채·보험계약부채·책임준비금·투자계약부채 줄이 있으면 은행·보험·증권. 일반 기업의 "예수금"(원천징수 등)은 아님(삼성전자 실측)
     financial: bs.some((r) => /^(예수부채|고객예수부채|예금부채|보험계약부채|책임준비금|투자계약부채)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? "")),
@@ -141,13 +159,49 @@ export function leaseInDebtLines(sentences) {
 }
 
 /**
+ * 리스부채가 본표 차입금 줄 **금액 안에** 있는가 — 원문 주석 표의 숫자 흐름으로 따로 확인(2026-10-18, 앱 적재 스크립트의 표 줄 판독과 다른 방식).
+ * 회계정책 문장만으로는 모자란다: 298040 "리스부채는 이자부 차입금에 포함" 인데 본표 차입금 802,441 백만원 = 차입금 주석 합계(리스 없음, 리스는
+ * "기타금융부채(리스부채)"), 103590 2022 "'유동성장기부채' 또는 '장기차입금'으로 분류" 인데 차입금 주석 합계 196,807,960천원 = 본표 차입금 합(리스 없음).
+ * 확인 조건: 한 표의 숫자 흐름에서 간격 s(1~4 — 열이 여럿인 표)로 늘어선 숫자 k(≥2)개의 합이 바로 다음 같은 간격 자리 숫자 T 와 **정확히** 같고,
+ * T 앞 글자가 합계(계)이며, 그 k 개 중 하나의 앞 글자에 "리스"가 있고, |T| 가 그 보고서 당기 본표 차입금 줄 하나(또는 차입금 줄 합)를 표 단위로 바꾼
+ * 값과 k/2 단위 안(반올림한 k 개를 더한 소계라서)일 때. 못 찾으면 null
+ */
+export async function leaseInsideFaceDebt(rcepts, faceVals) {
+  const targets = faceVals.filter((x) => x != null && x !== 0);
+  if (!targets.length) return null;
+  targets.push(targets.reduce((a, x) => a + x, 0));
+  for (const rc of rcepts) {
+    for (const { u, toks } of await dartDocNumberStreams(rc)) {
+      for (let q = 2; q < toks.length; q++) {
+        if (!/계\s*$/.test(toks[q].before)) continue;
+        const T = toks[q].v;
+        const face = targets.find((f) => Math.abs(Math.abs(f) / u - Math.abs(T)) <= 5);
+        if (face == null) continue;
+        for (let s = 1; s <= 4; s++) {
+          let sum = 0, lease = null;
+          for (let k = 1; k <= 12 && q - k * s >= 0; k++) {
+            const t = toks[q - k * s];
+            if (/계\s*$/.test(t.before)) break; // 앞 묶음의 합계 자리 — 묶음 경계
+            sum += t.v;
+            if (!lease && /리스/.test(t.before)) lease = t;
+            if (k >= 2 && sum === T && lease && Math.abs(Math.abs(face) / u - Math.abs(T)) <= k / 2)
+              return `원문 ${rc} 주석 표: '${lease.before.slice(-30)}' ${lease.v} 포함 ${k}개 합 = '${toks[q].before.slice(-12)}' ${T}(단위 ${u}원) ≈ 본표 차입금 ${face}원`;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * 본표에 리스부채 줄이 없는 해의 판정 — { status: "included"|"added"|"unknown", amount, how }.
  *  included: 정책 문장이 리스부채를 본표 차입금 줄(이름이 본표 차입금 줄과 맞음)에 포함한다고 밝힘 → 더하지 않음
  *  added: 주석 리스부채 장부금액(후보 두 개 이상 일치) → 총차입금에 더함
  *  unknown: 둘 다 못 정함 → EV 공란이어야 한다
  * report = { rcept, prefix } (그 해 값이 실린 사업보고서와 컨텍스트 접두어)
  */
-export async function leaseNoteFor(reports, basis, faceDebtNamesOf, badReports = new Map()) {
+export async function leaseNoteFor(reports, basis, faceDebtNamesOf, badReports = new Map(), faceDebtValuesOf = null) {
   const tried = [];
   for (const rp of reports) {
     if (!rp) continue;
@@ -160,7 +214,10 @@ export async function leaseNoteFor(reports, basis, faceDebtNamesOf, badReports =
     const hit = names.filter((n) => faceDebtNames.some((f) => f.includes(n) || n.includes(f)));
     const facts = await dartXbrlFacts(rp.rcept, "11011");
     const L = leaseFromFacts(facts, rp.prefix, basis);
-    if (hit.length) return { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rp.rcept})` };
+    // 문장만으로 포함이라 보지 않는다 — 그 보고서 당기 본표 차입금 줄 금액 안에 리스가 있는지 원문 숫자로 확인(못 하면 주석 리스부채를 더한다)
+    const conf = hit.length && faceDebtValuesOf ? await leaseInsideFaceDebt(rp.all?.length ? rp.all : [rp.rcept], await faceDebtValuesOf(rp.fy)) : null;
+    if (hit.length && conf) return { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rp.rcept}) — 금액 확인: ${conf}` };
+    if (hit.length) tried.push(`${rp.rcept}: 회계정책 문장('${hit.join("'·'")}')은 있으나 원문 숫자로 본표 차입금 안의 리스를 확인 못 함`);
     if (L.amount != null) return { status: "added", amount: L.amount, how: `사업보고서 ${rp.rcept} XBRL 주석 ${rp.prefix} — ${L.how}` };
     tried.push(`${rp.rcept}: ${L.how}`);
   }

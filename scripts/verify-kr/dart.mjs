@@ -331,6 +331,50 @@ export async function dartDocLeaseCells(rcept) {
   });
 }
 
+const DOC_NUM_VER = "n3";
+/**
+ * 원문 주석 표마다 숫자 흐름 — [{ u, toks: [{ v, before }] }] (v = 표 단위 그대로의 정수, before = 그 숫자 앞 숫자 사이 글자). 표를 줄·칸으로 나누지 않고
+ * 글자 흐름에서 정수만 뽑는다(앱 적재 스크립트의 줄 판독과 다른 방식 — 리스부채 포함 판정을 따로 하려고, 2026-10-18). 소수·백분율·연도 꼴은 숫자로
+ * 보지 않는다. 판본 = 접수번호
+ */
+export async function dartDocNumberStreams(rcept) {
+  return versioned("doc-nums", rcept, `${rcept}-${DOC_NUM_VER}`, async () => {
+    const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const head = strFromU8(buf.slice(0, 300));
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const strip = (t) => t.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;|&cr;|&amp;/g, " ").replace(/\s+/g, " ");
+    const unitIn = (t) => [...strip(t).matchAll(/단위\s*:\s*(천원|백만원|억원|원)/g)].map((m) => m[1]);
+    const out = [];
+    for (const b of Object.values(files)) {
+      let t = new TextDecoder("utf-8").decode(b);
+      if (/�/.test(t.slice(0, 20000))) t = new TextDecoder("euc-kr").decode(b);
+      const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
+      let m;
+      while ((m = re.exec(t))) {
+        const u = CELL_UNIT[unitIn(m[0].slice(0, 2000))[0] ?? unitIn(t.slice(Math.max(0, m.index - 1500), m.index)).at(-1)];
+        if (!u) continue;
+        const txt = strip(m[0]);
+        const toks = [];
+        let last = 0;
+        // 정수 꼴: 1,234 · (1,234) · -1,234 · 0 — 앞뒤가 숫자·소수점·%·~ 가 아닌 것
+        // 각주 번호((*2)·(주1))·연도·기수(제57기·2025년)는 숫자로 보지 않는다
+        // 홀로 선 "-" 는 빈 칸(0) — 칸 수를 맞춰야 간격 s 로 열을 따라갈 수 있다
+        for (const x of txt.matchAll(/(?<![\d.,~*주제])(\(?-?\d{1,3}(?:,\d{3})+\)?|\(?-?\d+\)?)(?![\d.,%~년기월일호차회])|(?<!\S)(-)(?!\S)/g)) {
+          const raw = x[1] ?? x[2];
+          const n = raw === "-" ? 0 : Number(raw.replace(/[(),-]/g, "")) * (/^[(-]/.test(raw) ? -1 : 1);
+          toks.push({ v: n, before: txt.slice(last, x.index).trim() });
+          last = x.index + raw.length;
+        }
+        if (toks.length >= 3) out.push({ u, toks });
+      }
+    }
+    return out;
+  });
+}
+
 /** 기업개황(company.json) — 법인등록번호(jurir_no) 등. 판본 고정(v1, 법인등록번호는 바뀌지 않음) */
 export async function dartCompany(corp) {
   return versioned("company", corp, "v1", async () => {
