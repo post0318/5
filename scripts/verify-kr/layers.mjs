@@ -186,6 +186,13 @@ export async function krOriginalLayers(ctx) {
   const add0 = ctx.add;
   ctx.add = (layer, name, col, r) => { added.push({ layer, name, col, status: r?.status }); return add0(layer, name, col, r); };
   const { sym, corp, h, H, add, hardErrors, dartYearSource, same } = ctx;
+  // 시험 스위치(심은 오류 재현 전용) KR_VERIFY_TEST_APP_SET="종목:열:칸:값|+더할값,…" — 검증기가 읽은 앱 하이라이트 칸(debt·ev·cash 등)만 바꾼다. 평소엔 쓰지 않는다
+  for (const part of String(process.env.KR_VERIFY_TEST_APP_SET ?? "").split(",").filter(Boolean)) {
+    const [s0, col0, f0, v0] = part.split(":");
+    if (s0 !== sym || !H?.[col0]) continue;
+    H[col0][f0] = v0.startsWith("+") || v0.startsWith("-") ? (H[col0][f0] ?? 0) + Number(v0) : v0 === "null" ? null : Number(v0);
+    console.error(`[심은 오류] ${sym} ${col0}.${f0} = ${H[col0][f0]}`);
+  }
   const fail = (layer, name, col, note) => add(layer, name, col, { status: FAIL, note });
   const err = (what, e) => { const m = `${what}: ${String(e?.message ?? e).slice(0, 120)}`; hardErrors.push(m); add("응답", what, "-", { status: FAIL, note: m }); };
   /** 정확 일치(정수) — 원자료 있고 앱 빈칸·앱만 있고 원자료 빈칸 모두 실패. common = 기대치가 독립 판독이 아니면(적재본 등) 그 사유 — 통과를 공통모드로 */
@@ -408,7 +415,7 @@ export async function krOriginalLayers(ctx) {
         const namesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => nm(r.account_nm));
         // 그 보고서 당기 본표 차입금 줄 값(원) — 리스부채 포함 판정을 원문 숫자로 확인할 때(b16 leaseInsideFaceDebt)
         const valuesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => sumCol([r], "thstrm_amount"));
-        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf, badLease, valuesOf);
+        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf, badLease, valuesOf, faceDebt);
       } catch (e) { err(`리스부채 주석 ${y}`, e); continue; }
       why += ` · 본표 리스부채 줄 없음 → ${lease.status === "added" ? `주석 리스부채 ${lease.amount} 가산` : lease.status === "included" ? "차입금 줄에 포함" : "리스부채 확인 불가"}(${lease.how})`;
       if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
@@ -430,7 +437,10 @@ export async function krOriginalLayers(ctx) {
     } catch (e) { err(`B16 ②b 계열 줄 주석 ${y}`, e); famOk = false; }
     const expCash = famOk ? (sumCol(cl.cash, own.col) ?? 0) + famCash : null;
     const expNci = sumCol(cl.nci, own.col) ?? 0;
-    exact("K2", "총차입금 = DART(B16)", col, x.debt, expDebt, why);
+    // 리스부채를 원문 주석 표(표 단위 값)로 정한 해 — 적재 값이 기대치와 다르고 표 단위 반올림 범위 안이면 검증불가, 밖이면 실패(허용치로 통과시키지 않음)
+    const rgD = lease.status === "added" && lease.range ? [faceDebt + lease.range[0], faceDebt + lease.range[1]] : null;
+    const rexact = (name, app, exp, rg, w) => (rg && app != null && app !== exp && app >= rg[0] && app <= rg[1] ? add("K2", name, col, { status: NA, app, src: exp, note: `원문 주석 표 단위 반올림 범위 ${rg[0]}~${rg[1]} 안 — 원 단위 정밀값 없음 · ${w}` }) : exact("K2", name, col, app, exp, w));
+    rexact("총차입금 = DART(B16)", x.debt, expDebt, rgD, why);
     if (expCash == null) add("K2", "현금성자산 = DART(B16)", col, { status: NA, app: x.cash == null ? null : -x.cash, note: `기타(유동)금융자산 계열 줄 내역을 검증기가 못 읽음 — ${famWhy.join(" / ")}` });
     else exact("K2", "현금성자산 = DART(B16)", col, x.cash == null ? null : -x.cash, expCash, `${cl.cash.map((r) => nm(r.account_nm)).join("+")}${famWhy.length ? ` + ②b ${famWhy.join(" / ")}` : ""}`);
     exact("K2", "비지배지분 = DART", col, x.nci ?? (rowHidden("nci") ? 0 : null), expNci);
@@ -441,7 +451,7 @@ export async function krOriginalLayers(ctx) {
     const blockWhy = evBlockY ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!k || k.common == null ? "KRX 연말 시가총액 없음" : null);
     if (blockWhy) { if (x.ev != null) fail("K2", "EV = KRX + DART(B16)", col, `기대 공란(${blockWhy})인데 앱 EV ${x.ev}`); else add("K2", "EV = KRX + DART(B16)", col, { status: PASS, note: `공란 — ${blockWhy}` }); }
     else if (expCash == null) add("K2", "EV = KRX + DART(B16)", col, { status: NA, app: x.ev, note: "현금성자산 기대치 없음(②b 계열 줄 판독 못 함)" });
-    else exact("K2", "EV = KRX + DART(B16)", col, x.ev, k.common + k.preferred + expDebt + expNci - expCash);
+    else { const ev0 = k.common + k.preferred + expDebt + expNci - expCash; rexact("EV = KRX + DART(B16)", x.ev, ev0, rgD ? [ev0 - expDebt + rgD[0], ev0 - expDebt + rgD[1]] : null, lease.status === "added" ? `리스부채 ${lease.how.slice(0, 200)}` : ""); }
   }
 
   // ── 단위 안전장치(2026-10-05 — 079550 2024 리스부채가 천원 숫자를 원으로 태깅해 앱·검증기가 같은 판독으로 함께 통과했다): 원문·주석 판독값을

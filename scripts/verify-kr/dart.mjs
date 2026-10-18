@@ -420,6 +420,43 @@ export async function dartDocFinTables(rcept) {
   });
 }
 
+const DOC_LEASETAB_VER = "lt1";
+/**
+ * 오너 결정 2026-10-19 — XBRL 리스부채 주석 태그가 없는 해(2021·2022 사업보고서)의 리스부채·차입금 주석 표 **원본 HTML 조각** [{ pre, html, scope }].
+ * 표 글자 또는 표 앞 300자에 "리스부채"·"차입금"이 있는 표만. scope 는 dartDocFinTables 와 같은 규칙(첨부 문서 종류 → 목차 → 「(연결)」). 판본 = 접수번호
+ */
+export async function dartDocLeaseTables(rcept) {
+  return versioned("doc-leasetab", rcept, `${rcept}-${DOC_LEASETAB_VER}`, async () => {
+    const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const head = strFromU8(buf.slice(0, 300));
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const out = [];
+    for (const b of Object.values(files)) {
+      let t = new TextDecoder("utf-8").decode(b);
+      if (/\uFFFD/.test(t.slice(0, 20000))) t = new TextDecoder("euc-kr").decode(b);
+      const acode = t.match(/<DOCUMENT-NAME[^>]*ACODE="(\d+)"/)?.[1];
+      const fileScope = acode === "00761" ? "con" : acode === "00760" ? "sep" : null;
+      const titles = [...t.matchAll(/<TITLE[^>]*>([^<]*)<\/TITLE>/g)].map((x) => [x.index, x[1]]);
+      const conTwin = new Set(titles.map(([, x]) => x.replace(/\s+/g, "")).filter((x) => /\(연결\)$/.test(x)).map((x) => x.replace(/\(연결\)$/, "")));
+      const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
+      let m;
+      while ((m = re.exec(t))) {
+        const pre = t.slice(Math.max(0, m.index - 1500), m.index);
+        const near = pre.replace(/<[^>]+>/g, " ").slice(-300);
+        if (!/리스부채|차입금/.test(m[0].replace(/<[^>]+>/g, "")) && !/리스부채|차입금/.test(near)) continue;
+        const ti = titles.filter(([k]) => k < m.index).at(-1)?.[1] ?? "";
+        const titleScope = /\(\s*연결\s*\)/.test(ti) ? "con" : /연결\s*재무제표/.test(ti) ? "con" : /재무제표/.test(ti) ? "sep" : /별도/.test(ti) || conTwin.has(ti.replace(/\s+/g, "")) ? "sep" : null;
+        const secScope = /\(\s*연결\s*\)/.test(pre.replace(/<[^>]+>/g, " ").slice(-600)) ? "con" : null;
+        out.push({ pre, html: m[0], scope: fileScope ?? titleScope ?? secScope });
+      }
+    }
+    return out;
+  });
+}
+
 /** 기업개황(company.json) — 법인등록번호(jurir_no) 등. 판본 고정(v1, 법인등록번호는 바뀌지 않음) */
 export async function dartCompany(corp) {
   return versioned("company", corp, "v1", async () => {
