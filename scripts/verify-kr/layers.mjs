@@ -415,7 +415,7 @@ export async function krOriginalLayers(ctx) {
         const namesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => nm(r.account_nm));
         // 그 보고서 당기 본표 차입금 줄 값(원) — 리스부채 포함 판정을 원문 숫자로 확인할 때(b16 leaseInsideFaceDebt)
         const valuesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => sumCol([r], "thstrm_amount"));
-        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf, badLease, valuesOf, faceDebt);
+        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf, badLease, valuesOf, cl.debt.map((r) => sumCol([r], own.col)).filter((x) => x));
       } catch (e) { err(`리스부채 주석 ${y}`, e); continue; }
       why += ` · 본표 리스부채 줄 없음 → ${lease.status === "added" ? `주석 리스부채 ${lease.amount} 가산` : lease.status === "included" ? "차입금 줄에 포함" : "리스부채 확인 불가"}(${lease.how})`;
       if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
