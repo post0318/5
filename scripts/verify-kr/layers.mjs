@@ -15,7 +15,7 @@ import { daCandidates, invTableDep } from "./docda.mjs";
 import { dataGoDividends } from "./datago.mjs";
 import { krxCapsOn } from "./krx.mjs";
 import { emptyKind } from "./calendar.mjs";
-import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts } from "./b16.mjs";
+import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts, familyCashPart } from "./b16.mjs";
 
 const COL = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
 const num = (x) => { const t = String(x ?? "").trim(); return t === "" || t === "-" ? null : Number(t.replace(/,/g, "")); };
@@ -43,6 +43,21 @@ function parentEquity(rows, col) {
 const kstToday = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
 
 /** 사업연도 y 재무상태표의 기준 보고서·열 — 그 해 재무상태표 값이 실린 가장 최근 보고서(y+2 전전기 → y+1 전기 → y 당기) */
+/** B16 ②b — 보고서 줄들의 계열 줄 현금성 부분 합(col 열). 하나라도 못 읽으면 { v: null } */
+async function famCashOf(cl, col, rcepts) {
+  let v = 0;
+  const why = [];
+  for (const r of cl.family) {
+    const X = sumCol([r], col);
+    if (!X) continue;
+    const fp = await familyCashPart(rcepts, X);
+    why.push(`${nm(r.account_nm)} ${X} → ${fp.v ?? "판독 못 함"}(${fp.how})`);
+    if (fp.v == null) return { v: null, why: why.join(" / ") };
+    v += fp.v;
+  }
+  return { v, why: why.join(" / ") };
+}
+
 function bsOwner(src, y) {
   for (const [L, by] of [[src.next2, y + 2], [src.next, y + 1], [src.cur, y]]) {
     const col = COL[by - y];
@@ -350,10 +365,24 @@ export async function krOriginalLayers(ctx) {
     const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
     // 안전장치는 앱이 실제로 더한 값(앱 총차입금 − 본표 차입금)으로 — 검증기 판독과 같은 결함을 함께 가져도 잡히게
     if (lease.status === "added" && x.debt != null) leaseByYear.set(y, x.debt - faceDebt);
-    const expCash = sumCol(cl.cash, own.col) ?? 0;
+    // B16 ②b — 기타(유동)금융자산 계열 줄은 주석 내역의 현금성 부분(검증기 원문 판독, 그 해·다음 해·기준 보고서 모든 판본)
+    let famCash = 0, famOk = true;
+    const famWhy = [];
+    for (const r of cl.family) {
+      const X = sumCol([r], own.col);
+      if (!X) continue;
+      try {
+        const rcs = [...new Set([y, y + 1, own.by].filter((yy) => yy <= new Date().getFullYear()).flatMap((yy) => L.reports.filter((z) => z.year === yy && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept)))];
+        const fp = await familyCashPart(rcs, X);
+        famWhy.push(`${nm(r.account_nm)} ${X} → ${fp.v ?? "판독 못 함"}(${fp.how})`);
+        if (fp.v == null) famOk = false; else famCash += fp.v;
+      } catch (e) { err(`B16 ②b 계열 줄 주석 ${y}`, e); famOk = false; }
+    }
+    const expCash = famOk ? (sumCol(cl.cash, own.col) ?? 0) + famCash : null;
     const expNci = sumCol(cl.nci, own.col) ?? 0;
     exact("K2", "총차입금 = DART(B16)", col, x.debt, expDebt, why);
-    exact("K2", "현금성자산 = DART(B16)", col, x.cash == null ? null : -x.cash, expCash, `${cl.cash.map((r) => nm(r.account_nm)).join("+")}`);
+    if (expCash == null) add("K2", "현금성자산 = DART(B16)", col, { status: NA, app: x.cash == null ? null : -x.cash, note: `기타(유동)금융자산 계열 줄 내역을 검증기가 못 읽음 — ${famWhy.join(" / ")}` });
+    else exact("K2", "현금성자산 = DART(B16)", col, x.cash == null ? null : -x.cash, expCash, `${cl.cash.map((r) => nm(r.account_nm)).join("+")}${famWhy.length ? ` + ②b ${famWhy.join(" / ")}` : ""}`);
     exact("K2", "비지배지분 = DART", col, x.nci ?? (rowHidden("nci") ? 0 : null), expNci);
     const k = caps.get(y);
     // 금융업·금융 자회사 판정은 해마다 그해 재무상태표로(감사 3차 ⑥ — 예전엔 최근 사업연도 판정을 전 연도에 썼다). LTM 은 최신 판정(evBlockWhy)
@@ -361,6 +390,7 @@ export async function krOriginalLayers(ctx) {
     const evBlockY = cl.financial ? "금융업(검증기 판정 — 그해 예수부채·보험계약부채 등 줄)" : capY ? `금융 자회사 연결(검증기 판정 — 그해 ${capY})` : null;
     const blockWhy = evBlockY ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!k || k.common == null ? "KRX 연말 시가총액 없음" : null);
     if (blockWhy) { if (x.ev != null) fail("K2", "EV = KRX + DART(B16)", col, `기대 공란(${blockWhy})인데 앱 EV ${x.ev}`); else add("K2", "EV = KRX + DART(B16)", col, { status: PASS, note: `공란 — ${blockWhy}` }); }
+    else if (expCash == null) add("K2", "EV = KRX + DART(B16)", col, { status: NA, app: x.ev, note: "현금성자산 기대치 없음(②b 계열 줄 판독 못 함)" });
     else exact("K2", "EV = KRX + DART(B16)", col, x.ev, k.common + k.preferred + expDebt + expNci - expCash);
   }
 
@@ -769,9 +799,11 @@ async function ltmLayer(c) {
     const pol = policySrc.at(-1);
     const lease = cl.leaseFace.length ? { status: "face" } : pol && pol.fy === lp.year ? pol : { status: "unknown", how: `FY${lp.year} 리스 판정 없음` };
     const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
-    const cash = sumCol(cl.cash, "thstrm_amount") ?? 0, nci = sumCol(cl.nci, "thstrm_amount") ?? 0;
+    const fam = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === lp.year && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept));
+    const cash = fam.v == null ? null : (sumCol(cl.cash, "thstrm_amount") ?? 0) + fam.v, nci = sumCol(cl.nci, "thstrm_amount") ?? 0;
     exact("K2", "LTM 총차입금 = DART 사업보고서(B16)", "LTM", LT.debt, expDebt, `${lp.nm}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}`);
-    exact("K2", "LTM 현금성자산 = DART 사업보고서(B16)", "LTM", LT.cash == null ? null : -LT.cash, cash);
+    if (cash == null) add("K2", "LTM 현금성자산 = DART 사업보고서(B16)", "LTM", { status: NA, app: LT.cash == null ? null : -LT.cash, note: `②b 계열 줄 판독 못 함 — ${fam.why}` });
+    else exact("K2", "LTM 현금성자산 = DART 사업보고서(B16)", "LTM", LT.cash == null ? null : -LT.cash, cash, fam.why);
     exact("K2", "LTM 비지배지분 = DART 사업보고서", "LTM", LT.nci ?? (rowHidden("nci") ? 0 : null), nci);
     const block = evBlockWhy ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!capCur || capCur.common == null ? "KRX 현재 시가총액 없음" : null);
     ltmEvCheck(c, block, expDebt, nci, cash);
@@ -941,10 +973,13 @@ async function ltmLayer(c) {
   }
   const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
   exact("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", LT.debt, expDebt, `${lp.nm} ${basis}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}`);
-  exact("K2", "LTM 현금성자산 = DART 최신 분기(B16)", "LTM", LT.cash == null ? null : -LT.cash, sumCol(cl.cash, "thstrm_amount") ?? 0);
+  const famQ = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === Y && z.code === lp.code).sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept));
+  const cashQ = famQ.v == null ? null : (sumCol(cl.cash, "thstrm_amount") ?? 0) + famQ.v;
+  if (cashQ == null) add("K2", "LTM 현금성자산 = DART 최신 분기(B16)", "LTM", { status: NA, app: LT.cash == null ? null : -LT.cash, note: `②b 계열 줄 판독 못 함 — ${famQ.why}` });
+  else exact("K2", "LTM 현금성자산 = DART 최신 분기(B16)", "LTM", LT.cash == null ? null : -LT.cash, cashQ, famQ.why);
   exact("K2", "LTM 비지배지분 = DART 최신 분기", "LTM", LT.nci ?? (rowHidden("nci") ? 0 : null), sumCol(cl.nci, "thstrm_amount") ?? 0);
   const block = evBlockWhy ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!capCur || capCur.common == null ? "KRX 현재 시가총액 없음" : null);
-  ltmEvCheck(c, block, expDebt, sumCol(cl.nci, "thstrm_amount") ?? 0, sumCol(cl.cash, "thstrm_amount") ?? 0);
+  ltmEvCheck(c, block, expDebt, sumCol(cl.nci, "thstrm_amount") ?? 0, cashQ);
 }
 
 /** 재무분석 LTM 비율 — 매출총이익률·유효세율(분자·분모 모두 검증기 기대치). 분기 경로·사업보고서 시기 경로 공통(감사 11차 ③) */
@@ -969,6 +1004,7 @@ function ltmEvCheck(c, block, expDebt, nci, cash) {
   const { LT, add, fail, exact, ltmPrefOk, ltmPrefPending, consts } = c;
   const { PASS, NA } = consts;
   if (block) { if (LT.ev != null) fail("K2", "LTM EV = KRX + DART(B16)", "LTM", `기대 공란(${block})인데 앱 EV ${LT.ev}`); else add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: PASS, note: `공란 — ${block}` }); return; }
+  if (cash == null) { add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: NA, app: LT.ev, note: "현금성자산 기대치 없음(②b 계열 줄 판독 못 함)" }); return; }
   if (ltmPrefOk == null && LT.ev != null) { add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: NA, app: LT.ev, note: ltmPrefPending ? "우선주 시가총액 확인 불가(KRX 게시 전) — 재실행 필요" : "우선주 시가총액 확인 불가(K1 우선주·시가총액 검사 실패 또는 KRX 현재 조회 실패 — 그 실패가 이미 기록됨)" }); return; }
   exact("K2", "LTM EV = KRX + DART(B16)", "LTM", LT.ev, LT.mc == null ? null : LT.mc + ltmPrefOk + expDebt + nci - cash, "보통주 시가총액은 K1 에서 따로 대조");
 }

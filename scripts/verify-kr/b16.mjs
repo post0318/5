@@ -39,28 +39,14 @@ const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기투자자
  *   LTM: 직전 사업보고서 + 분기 보고서 전기말 열(015760 2026 반기), 사업연도: 그해 자기 보고서 + 기준 보고서 열(052690 2021 — 2023 보고서 전전기
  *   "기타유동금융부채" 10,000,000 = 2021 보고서 "유동금융부채" 당기)
  */
+const FAMILY = /^(기타금융자산|기타유동금융자산|유동금융자산|기타투자자산|유동기타금융자산|기타유동투자자산)$/;
 export function classifyBsRows(rows, ownRows = rows, rename = null, valCol = null) {
+  void ownRows; void valCol;
   const bs = (rows ?? []).filter((r) => r.sj_div === "BS");
   const DEP = /^(ifrs-full|dart)_Short[tT]ermDeposits(Not)?ClassifiedAsCashEquivalents$/;
-  const depositNamed = new Set((ownRows ?? []).filter((r) => r.sj_div === "BS" && DEP.test(r.account_id ?? "") && thstrm(r) != null).map((r) => nm(r.account_nm)));
-  // 값 보고서가 그 해 자기 보고서의 현금성자산 줄 여럿을 "기타(유동)금융자산" 한 줄로 합쳐 다시 적은 경우(2026-10-18 — 042660 2022: 2024 보고서 전전기
-  // "기타금융자산" 492,254,450,925 = 2022 보고서 "단기금융상품"(단기예치금 ID) 492,238,300,925 + "단기상각후원가측정금융자산" 16,150,000). 자기 보고서 줄 중
-  // 값 보고서에 같은 이름으로 그 열 값이 없는 B16 현금성자산 줄(현금및현금성자산 제외)들의 당기 값 합이 그 줄 값과 정확히 같고 단기예치금 ID 줄이 하나
-  // 이상 들어 있으면 그 줄을 현금성자산으로 본다(이름 일치만 보던 depositNamed 와 따로 — 줄 이름이 바뀐 경우)
-  const regrouped = (r) => {
-    if (!valCol || ownRows === rows) return false;
-    const x = v(r, valCol);
-    if (x == null) return false;
-    const inVal = new Set(bs.filter((b) => v(b, valCol) != null).map((b) => nm(b.account_nm)));
-    const parts = (ownRows ?? []).filter((o) => o.sj_div === "BS" && thstrm(o) != null && !inVal.has(nm(o.account_nm)) && o.account_id !== "ifrs-full_CashAndCashEquivalents" && nm(o.account_nm) !== "현금및현금성자산"
-      && (DEP.test(o.account_id ?? "") || CASH_NAME.test(nm(o.account_nm)) || (isStd(o.account_id) && CASH_STD.test(o.account_id))));
-    if (!parts.length || parts.length > 12) return false;
-    for (let m = 1; m < 1 << parts.length; m++) {
-      const pick = parts.filter((_, i) => m & (1 << i));
-      if (pick.some((o) => DEP.test(o.account_id ?? "")) && pick.reduce((a, o) => a + thstrm(o), 0) === x) return true;
-    }
-    return false;
-  };
+  // B16 ②b 계열 줄 — 유동자산 쪽(비유동자산 머리 줄 뒤·비유동 태그 제외)
+  const ncAt = bs.findIndex((r) => r.account_id === "ifrs-full_NoncurrentAssets" || /^비유동자산(합계)?$/.test(nm(r.account_nm)));
+  const isFamily = (r) => FAMILY.test(nm(r.account_nm)) && !/Non-?[cC]urrent/.test(r.account_id ?? "") && (ncAt < 0 || bs.indexOf(r) < ncAt);
   // 표준 차입금 태그여도 이름이 자산(대여금·채권)이면 아님
   const debt = bs.filter((r) => (isStd(r.account_id) ? DEBT_STD.test(r.account_id) && !DEBT_STD_NOT.test(r.account_id) && !/대여|자산|받을|리스채권/.test(nm(r.account_nm)) : DEBT_NAME.test(nm(r.account_nm)) && !DEBT_NAME_NOT.test(nm(r.account_nm))));
   const isLease = (r) => /LeaseLiabilities/.test(r.account_id ?? "") || /리스부채/.test(nm(r.account_nm));
@@ -77,7 +63,9 @@ export function classifyBsRows(rows, ownRows = rows, rename = null, valCol = nul
     plain,
     // 회사가 같은 줄을 해마다 다른 태그로 달기도 한다(267260·329180 "단기금융자산", 402340 "단기투자자산")
     // 판정 순서: "기타(유동)금융자산" = 그 기간 자기 보고서가 단기예치금 ID 를 달았을 때만 → B16 에 이름이 적힌 항목은 태그와 관계없이 포함 → 그 밖은 표준 태그
-    cash: bs.filter((r) => (/^기타(유동)?금융자산$/.test(nm(r.account_nm)) ? depositNamed.has(nm(r.account_nm)) || regrouped(r) : CASH_NAME.test(nm(r.account_nm)) || (isStd(r.account_id) && CASH_STD.test(r.account_id)))),
+    // B16 ②b(오너 결정 2026-10-18): "기타(유동)금융자산" 계열 줄은 cash 에 넣지 않고 family 로 따로 — 주석 내역으로 현금성 부분을 정한다(familyCashPart)
+    cash: bs.filter((r) => !isFamily(r) && !/^기타(유동)?금융자산$/.test(nm(r.account_nm)) && (CASH_NAME.test(nm(r.account_nm)) || (isStd(r.account_id) && CASH_STD.test(r.account_id)))),
+    family: bs.filter(isFamily),
     nci: bs.filter((r) => r.account_id === "ifrs-full_NoncontrollingInterests" || nm(r.account_nm) === "비지배지분"),
     // 금융업 판정(검증기 자체 규칙) — 예수부채·예금부채·보험계약부채·책임준비금·투자계약부채 줄이 있으면 은행·보험·증권. 일반 기업의 "예수금"(원천징수 등)은 아님(삼성전자 실측)
     financial: bs.some((r) => /^(예수부채|고객예수부채|예금부채|보험계약부채|책임준비금|투자계약부채)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? "")),
@@ -291,4 +279,79 @@ export function quarterLeaseFromCells(reports, Y, latestQ, annualAmount, basis) 
     return { amount: best[0][1].cur, how: `분기 보고서 ${r.rcept} 주석 ${best[0][0]} 분기말 ${best[0][1].cur} (${trusted.get(best[0][0])})` };
   }
   return { amount: null, how: notes.join(" / ") || "분기 보고서 없음" };
+}
+
+
+// ── B16 ②b 현금성자산(오너 결정 2026-10-18) — 검증기 판독(앱 적재 스크립트의 표 줄·칸 판독과 다른 방식: 원문 표 숫자 흐름) ──
+// 포함 = 예금성(정기예금·단기금융상품·장단기금융상품·예치금·채무상품·사용제한·동반성장예탁금) + 투자성(펀드·MMF·국공채·채권·특정금전신탁·저축성보험),
+// 제외 = 대여금·보증금·미수금·파생상품·확정계약자산. 말로 쓴 규칙만 보고 다시 적은 목록(앱 정규식을 가져오지 않음)
+const IN_WORDS = ["정기예금", "예금", "예치금", "단기금융상품", "장단기금융상품", "금융상품", "채무상품", "사용제한", "동반성장", "국공채", "국채", "지방채", "채권", "사채", "유가증권", "펀드", "수익증권", "특정금전신탁", "신탁", "저축성보험"];
+const IN_ABBR = /(?<![A-Za-z])(MMF|CMA|CD|RP)(?![A-Za-z])/;
+// 기타포괄손익-공정가치 금융자산 = 지분상품 지정이 대부분 — 제외(규칙 판단, 앱과 같은 판단을 말로 받아 따로 적음)
+const OUT_WORDS = ["대여금", "보증금", "미수", "파생", "확정계약", "선급", "매출채권", "리스채권", "지분", "주식", "출자금", "임차", "수취채권", "대출", "기타포괄손익"];
+function kindOfName(t) {
+  const x = String(t).replace(/\s/g, "");
+  // 흐름(현금흐름표·변동표) 글자가 붙은 숫자는 잔액 내역이 아니다(060370 현금흐름표 "상각후원가측정금융자산의 증가 2,900,000,000")
+  if (/증가|감소|취득|처분|회수|지급|상환|발행/.test(x)) return null;
+  if (OUT_WORDS.some((w) => x.includes(w))) return "out";
+  if (IN_WORDS.some((w) => x.includes(w)) || IN_ABBR.test(x)) return "in";
+  // 세로 내역의 범주 이름(본표에 있으면 B16 이 넣는 항목) — "상각후원가측정금융자산"·"당기손익-공정가치측정금융자산"(앞뒤 유동·단기 허용)
+  if (/^(유동|단기)?(상각후원가(로)?측정(하는)?|당기손익-?공정가치측정)(유동)?금융자산$/.test(x.replace(/^[―\-·ㆍ]+/, "").replace(/^유동금융자산/, ""))) return "cat";
+  return null;
+}
+const lastWords = (before) => String(before).split(/\s{1,}/).slice(-6).join(" ");
+/**
+ * 계열 줄 X(원)의 현금성 부분 — 원문 숫자 흐름에서 T ≈ X/u 인 합계 자리를 찾아 간격 s(1~6)로 앞(또는 뒤) 숫자 k 개 합 = T(정확히)인 묶음, 각 숫자 앞 글자로
+ * 성격을 정한다. 전부 포함 → X, 전부 제외 → 0, 섞임 → 포함 숫자 합 × u. 성격 못 정한 숫자가 있으면 그 묶음은 버린다. 묶음들이 모순되면 null.
+ * 결과 { v, how } 또는 { v: null, how }
+ */
+export async function familyCashPart(rcepts, X) {
+  const got = [];
+  for (const rc of rcepts) {
+    for (const { u, toks } of await dartDocNumberStreams(rc)) {
+      const tgt = X / u;
+      for (let q = 0; q < toks.length; q++) {
+        const T = toks[q].v;
+        if (!(T > 0) || Math.abs(T - tgt) > 6) continue;
+        // 합계 자리 자체가 내용 이름을 단 경우("정기예금 등 10,204")
+        const selfK = kindOfName(lastWords(toks[q].before));
+        if (selfK === "in" && Math.abs(T - tgt) <= 0.5) got.push({ v: X, how: `원문 ${rc}: '${lastWords(toks[q].before)}' ${T}(단위 ${u}) — 줄 전체 포함` });
+        for (const dir of [-1, 1]) for (let s = 1; s <= 6; s++) {
+          let sum = 0;
+          const parts = [];
+          for (let k = 1; k <= 10; k++) {
+            const i = q + dir * k * s;
+            if (i < 0 || i >= toks.length) break;
+            const t = toks[i];
+            const lab = lastWords(t.before);
+            if (/계\s*$/.test(t.before) || (dir < 0 && k === 1 ? false : false)) break;
+            parts.push({ v: t.v, lab });
+            sum += t.v;
+            if (sum === T && k >= 1 && Math.abs(T - tgt) <= k / 2) {
+              const kinds = parts.map((p) => (p.v === 0 ? "zero" : kindOfName(p.lab)));
+              if (kinds.some((x) => x == null)) break;
+              const nz = parts.filter((p, j) => kinds[j] !== "zero");
+              const kz = kinds.filter((x) => x !== "zero");
+              if (!nz.length) break;
+              // 합계와 같은 금액을 범주 이름으로 한 번 더 적은 것뿐이면 내역이 아니다
+              if (nz.length === 1 && kz[0] === "cat") break;
+              const v = kz.every((x) => x !== "out") ? X : kz.every((x) => x === "out") ? 0 : nz.filter((p, j) => kz[j] !== "out").reduce((a, p) => a + p.v, 0) * u;
+              got.push({ v, u, k, how: `원문 ${rc}: ${nz.map((p, j) => `${p.lab.slice(-16)} ${p.v}(${kz[j] === "out" ? "제외" : "포함"})`).join(", ")} = ${T}(단위 ${u})` });
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  if (!got.length) return { v: null, how: `${X} — 검증기가 원문에서 내역을 찾지 못함` };
+  const vs = [...new Set(got.map((g) => g.v))];
+  if (vs.length === 1) return { v: vs[0], how: got[0].how };
+  // 표 단위 반올림만 다른 묶음 — 가장 작은 단위 묶음 값, 다른 값이 그 묶음 단위 × 개수 안
+  const minU = Math.min(...got.map((g) => g.u ?? 1));
+  const fine = [...new Set(got.filter((g) => (g.u ?? 1) === minU).map((g) => g.v))];
+  const first = got.find((g) => (g.u ?? 1) === minU);
+  // 같은 단위 묶음끼리도 내역 반올림만 다르면(064350 2024 272,625,444 vs 445 천원) 규칙대로 그 해 보고서(첫 접수본)의 첫 묶음 값
+  if (got.every((g) => Math.abs(g.v - first.v) <= Math.max(g.u ?? 1, minU) * Math.max(g.k ?? 1, first.k ?? 1))) return { v: first.v, how: `${first.how} (다른 묶음과 반올림 차만)` };
+  return { v: null, how: `검증기 묶음끼리 모순 ${vs.join("·")}` };
 }
