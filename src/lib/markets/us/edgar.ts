@@ -460,6 +460,10 @@ export interface CompanyFacts {
   cfDimOnly?: { concept: string; start: string; end: string; force?: boolean }[];
   /** 현금흐름표 첫 줄 순이익을 본표 판독으로 만들었는가(edgar-cf-wc.ts SYN_NI_CF) — 아니면(20-F 등) 표준 개념 순서 */
   niFace?: boolean;
+  /** 현금흐름표 본표에서 운전자본·비운전자본 줄 구조를 읽은 공시가 있음(edgar-cf-wc.ts) — 운전자본 변동·기타 비현금 조정을 본표 합으로만 */
+  wcFace?: boolean;
+  /** 본표 운전자본 줄은 읽었으나 그 기간 값이 빠져 합을 못 만든 기간의 종료일 — 칸 주석 */
+  cfWcMiss?: string[];
   /** 본표 순이익이 연결 순이익이고 지배주주 순이익과 다른 기간("시작|종료") */
   niConsolidated?: string[];
   /** 총수익에서 지분법·기타수익을 분리했는지(edgar-revenue-dims.ts) */
