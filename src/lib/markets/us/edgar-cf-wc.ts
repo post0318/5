@@ -33,14 +33,17 @@ const UA = process.env.SEC_USER_AGENT ?? "global-market-research (personal use) 
 const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 const OP_CF_ROOT = /^us-gaap_NetCashProvidedByUsedInOperatingActivities(ContinuingOperations)?$/;
 // 운전자본 줄 — 표준·회사 고유 모두(MCD 10-K "mcd_IncreaseDecreaseInInventoriesPrepaidExpenses…")
-const WC = /^[a-z0-9-]+_IncreaseDecreaseIn/i;
+// 운전자본 줄 = 증감 꼴 개념(오너 결정 2026-10-18 E 2안 — "In" 없는 회사 고유 꼴 포함: BE be_IncreaseDecreaseOnAccruedWarrantyLiability·
+// …FinancingCashFlowsFromFinanceLeases, UBER 2021 uber_IncreaseDecreaseFundsHeldByInsurers — BE 2022~2025 야후 일치, UBER 2021 StockAnalysis 일치)
+const WC = /^[a-z0-9-]+_IncreaseDecrease/i;
 // 운전자본이 아닌 IncreaseDecreaseIn… — 자산복구충당부채(장기부채, VST "Change in asset retirement obligation liability"). 야후와의 연간 차이가
 // 정확히 이 줄 값(VST 2025 −20·2024 38)이었다
 // 지분증권 공정가치 변동(INTC "Gains on equity investments" — us-gaap_IncreaseDecreaseInEquitySecuritiesFvNi)도 운전자본 아님(비현금 평가손익)
 // 이연법인세(ISRG us-gaap_IncreaseDecreaseInDeferredIncomeTaxes — 이름만 증감 꼴)도 운전자본 아님 → 기타 비현금 조정(OTHER_NC)
 // 공정가치 변동 꼴(MRVL mrvl_IncreaseDecreaseInFairValueOfForwardStockPurchaseContract)·세금 수취약정 부채(VRT vrt_IncreaseDecreaseInTaxReceivableAgreement)도
 // 같은 종류(비현금 평가손익·운전자본 밖 부채, 표시 구조에서도 운전자본 묶음 밖 — 감사 2026-10-18)
-const NOT_WC = /_IncreaseDecreaseIn(AssetRetirementObligations|EquitySecuritiesFvNi|DeferredIncomeTaxes|\w*FairValue\w*|TaxReceivableAgreement\w*)$/i;
+// 거래상대방 담보금 증감(CEG us-gaap_IncreaseDecreaseCashCollateralFromCounterparties — 헤지 증거금, 야후도 운전자본 밖)도 제외(오너 결정 2026-10-18 E 2안)
+const NOT_WC = /_IncreaseDecrease(?:In)?(AssetRetirementObligations|EquitySecuritiesFvNi|DeferredIncomeTaxes|\w*FairValue\w*|TaxReceivableAgreement\w*|\w*Collateral\w*)$/i;
 // 라벨로 운전자본임을 밝힌 줄(HLT us-gaap_OtherOperatingActivitiesCashFlowStatement "Working capital changes and other")
 const WC_LABEL = /working capital|operating assets and liabilities/i;
 
