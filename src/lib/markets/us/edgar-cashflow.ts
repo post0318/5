@@ -104,22 +104,28 @@ const FIN_PROVISION_LINE: Line = {
  * 합성 개념이 있는 기간은 표준 구성 개념을 대신한다(SUPERSEDES)
  */
 /** 회사 고유 줄 이름 판정 — 옛 규칙(2026-10-09)이 잡던 이름은 그대로, 표기 차이로 놓치던 이름(대소문자 — KO ko_ProceedsfromDisposalsofInvestments·
- *  ko_PurchasesofInvestments·SBUX·INTC, 처분 Disposal, 동사 없는 MSFT "ProceedsFromInvestments", 꼬리말 TER …SecuritiesDebtAndEquity·PEP …MoreThanThreeMonthsSales)은
- *  새로 잡되 분류 결정 전 항목(시장가 없는 지분증권·비상장·지분법 — META·MU·UBER)과 투자 아닌 줄(대출·리스·투자용 부동산·투자세액공제 매각 — VST)은 새로 잡지 않는다
- *  (2026-10-17 감사). 옛 규칙이 잡던 줄의 분류는 바꾸지 않는다 */
-const invName = (old: RegExp, wide: RegExp) => ({
-  test: (n: string) => old.test(n) || (wide.test(n) && !/EquityMethod|NonMarketable|WithoutReadilyDeterminable|TaxCredit|Loan|Lease|RealEstate/i.test(n)),
+ *  ko_PurchasesofInvestments·SBUX·INTC, 처분 Disposal, 동사 없는 MSFT "ProceedsFromInvestments", 꼬리말 TER …SecuritiesDebtAndEquity·PEP …MoreThanThreeMonthsSales)도
+ *  잡는다(2026-10-17 감사). 투자자산 범위(오너 결정 2026-10-18 — 2안 + 원전 해체기금): 기타 투자(us-gaap …OtherInvestments — GOOG·CEG·AMD·V·PLTR·INTC),
+ *  시장가 없는 지분증권·비상장 투자(META·MU·UBER), 원전 해체기금 납입·인출(VST — CEG 는 같은 기금을 기타 투자로 공시)은 투자자산. 지분법 투자(GEV·MCD·TSLA —
+ *  야후는 사업 인수·매각 줄, 블룸버그는 종목마다 다름 — us-gaap 지분법 개념은 edgar-cf-wc.ts 에서 뺌)와 투자 아닌 줄(대출·리스·투자용 부동산·투자세액공제 매각 — VST)은 기타 투자활동.
+ *  근거: 야후·블룸버그·StockAnalysis 가 기타 투자·해체기금을 투자자산에 넣음(CEG·INTC·VST 블룸버그 화면, GOOG·AMD·V·PLTR·META·UBER 야후 대조) */
+// 섞인 줄(유형자산·사업 매각 포함 — nvda_Proceedsfromsaleoflonglivedassetsandinvestments, ko_…BottlingCompaniesAndOtherInvestments, 감사 2026-10-18)도 새로 잡지 않음
+const NOT_INV = /EquityMethod|TaxCredit|Loan|Lease|RealEstate|LongLivedAssets|Companies|Subsidiar/i;
+const invName = (old: RegExp, wide: RegExp, extra: RegExp) => ({
+  test: (n: string) => old.test(n) || ((wide.test(n) || extra.test(n)) && !NOT_INV.test(n)),
 });
 export const CF_INV_FAMILIES: { derived: string; custom: { test(n: string): boolean }; label: string }[] = [
   {
     derived: "InvestmentProceedsFaceDerived", label: "투자자산 처분·만기",
     custom: invName(/^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))\w*(Sale|Maturit|Redemption|Collection)\w*(Securities|Investments?)$/,
-      /^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))(?:\w*(Sale|Maturit|Redemption|Collection|Disposal)\w*)?(Securities|Investments?)(MoreThanThreeMonths\w*)?$/i),
+      /^ProceedsFrom(?!.*(Business|PropertyPlant|ProductiveAsset|Debt|Stock|Issuance))(?:\w*(Sale|Maturit|Redemption|Collection|Disposal)\w*)?(Securities|Investments?)(MoreThanThreeMonths\w*)?$/i,
+      /^(ProceedsFrom\w*EquitySecuritiesWithoutReadilyDeterminableFairValue|ProceedsFromDecommissioningFund)$/i),
   },
   {
     derived: "InvestmentPurchasesFaceDerived", label: "투자자산 취득",
     custom: invName(/^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)$/,
-      /^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)(DebtAndEquity)?$/i),
+      /^(PaymentsToAcquire|PaymentsFor(?!Proceeds)|PurchasesOf|PurchaseOf)(?!.*(Business|PropertyPlant|ProductiveAsset|Intangible))\w*(Securities|Investments?)(DebtAndEquity)?$/i,
+      /^((PaymentsFor|PaymentsToAcquire)\w*EquitySecuritiesWithoutReadilyDeterminableFairValue|PaymentsToInvestInDecommissioningFund)$/i),
   },
 ];
 /** 그 줄의 표준 구성 개념(합성 개념 제외) */
@@ -141,11 +147,11 @@ export const SYN_NI_CF = "NetIncomeCashFlowFaceDerived";
 /** 본표 순이익이 연결 순이익(비지배지분 포함)이고 지배주주 순이익과 다른 기간("시작|종료") — 칸 주석 */
 export const NI_CF_CONSOLIDATED = "연결 순이익(비지배지분 포함) — 현금흐름표 본표 첫 줄";
 export const SYN_OTHER_NC_CF = "OtherNoncashCashFlowFaceDerived";
-export const OTHER_NC = ["OtherNoncashIncomeExpense", "OtherOperatingActivitiesCashFlowStatement", "DeferredIncomeTaxExpenseBenefit", "DeferredIncomeTaxesAndTaxCredits"];
+export const OTHER_NC = ["OtherNoncashIncomeExpense", "OtherOperatingActivitiesCashFlowStatement", "DeferredIncomeTaxExpenseBenefit", "DeferredIncomeTaxesAndTaxCredits", "IncreaseDecreaseInDeferredIncomeTaxes"];
 
-function getBlocks(isFin: boolean, debtFace = false, niFace = false): Block[] {
-  // 본표 판독 회사는 합성 개념 하나(본표 가중치 — 운전자본 줄 제외), 아니면(20-F 등) 종전 개념 목록
-  const otherNc: [string, boolean][] = niFace
+function getBlocks(isFin: boolean, debtFace = false, niFace = false, wcFace = false): Block[] {
+  // 본표 줄 구조를 읽은 회사는 합성 개념 하나(본표 가중치 — 운전자본 줄 제외), 아니면(20-F·계산 구조에 하위 줄이 없는 DAL 등) 종전 개념 목록
+  const otherNc: [string, boolean][] = wcFace
     ? [[SYN_OTHER_NC_CF, false]]
     : [
         ["OtherNoncashIncomeExpense", false],
@@ -314,7 +320,7 @@ export function buildUsCashFlow(
 ): FinancialStatement {
   const isFin = isFinancialCompany(facts, sic ?? null);
   // 차입 줄 판독 자체가 실패(cfDebt)면 표준 개념 목록으로 바꿔 채우지 않는다 — 합성 개념 줄(빈칸) + 사유
-  const BLOCKS = getBlocks(isFin, !!facts.debtFace || unavailableOn(facts, "cfDebt"), !!facts.niFace);
+  const BLOCKS = getBlocks(isFin, !!facts.debtFace || unavailableOn(facts, "cfDebt"), !!facts.niFace, !!facts.wcFace);
   const opEntries = firstConcept(facts, BLOCKS[0].total.concepts);
 
   let periods: FinancialPeriod[];
@@ -659,6 +665,9 @@ export function buildUsCashFlow(
         values = {};
         for (const lbl of labels) {
           if (wcCo[lbl] != null) { values[lbl] = wcCo[lbl]; continue; }
+          // 본표를 읽는 회사(10-K·10-Q)는 운전자본 = 본표 운전자본 줄 합(edgar-cf-wc.ts)만 — 그 합이 없는 칸을 이름 있는 하위 줄 일부로 채우지 않는다
+          // (ORCL 2027 회계연도 1분기: 매출채권 한 줄 −1,009 가 운전자본 칸·LTM −2,954 에 올랐다, 본표 합 13,935)
+          if (facts.wcFace) { values[lbl] = null; continue; }
           let s: number | null = null;
           for (const k of kids) {
             const x = resolved[k.label]?.[lbl];
@@ -976,6 +985,16 @@ export function buildUsCashFlow(
           div.values[p.label] = 0;
           if (why0 && div.cellNotes) { const { [p.label]: _drop, ...rest } = div.cellNotes; void _drop; div.cellNotes = rest; }
         }
+      }
+    // 운전자본 변동 — 본표 줄 합을 못 만든 칸(공시 원본에 그 기간 줄 값이 빠짐)은 하위 줄로 채우지 않고 사유
+    // 그 기간을 실은 공시가 본표 운전자본 줄은 있는데 값이 빠진 칸만(DAL 10-Q 처럼 본표에 운전자본 줄 자체가 없으면 "본표에 별도 줄 없음" — 감사 2026-10-18 C)
+    const wc = facts.cfWcMiss?.length ? items.find((x) => x.accountId === "cf:영업활동 현금흐름:운전자본 변동") : undefined;
+    const nearW = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= 7 * 864e5;
+    if (wc)
+      for (const p of periods) {
+        const l = p.label, e = l === LTM ? anchor : p.endDate;
+        if (!present.includes(l) || wc.values[l] != null || wc.cellNotes?.[l] || !e || !facts.cfWcMiss!.some((x) => nearW(x, e))) continue;
+        wc.cellNotes = { ...(wc.cellNotes ?? {}), [l]: "본표 운전자본 줄 합 미확인 — 공시 원본에 그 기간 운전자본 줄 값이 빠짐(하위 줄 일부로 채우지 않음)" };
       }
     fillBlankReasons(items, present);
   }
