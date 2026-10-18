@@ -15,7 +15,8 @@ import { daCandidates, invTableDep } from "./docda.mjs";
 import { dataGoDividends } from "./datago.mjs";
 import { krxCapsOn } from "./krx.mjs";
 import { emptyKind } from "./calendar.mjs";
-import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts, familyCashPart } from "./b16.mjs";
+import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts } from "./b16.mjs";
+import { familyCashFromNotes } from "./cashnote.mjs";
 
 const COL = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
 const num = (x) => { const t = String(x ?? "").trim(); return t === "" || t === "-" ? null : Number(t.replace(/,/g, "")); };
@@ -45,17 +46,56 @@ const kstToday = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 
 /** 사업연도 y 재무상태표의 기준 보고서·열 — 그 해 재무상태표 값이 실린 가장 최근 보고서(y+2 전전기 → y+1 전기 → y 당기) */
 /** B16 ②b — 보고서 줄들의 계열 줄 현금성 부분 합(col 열). 하나라도 못 읽으면 { v: null } */
 async function famCashOf(cl, col, rcepts) {
-  let v = 0;
-  const why = [];
+  let v = 0, ok = true;
+  const why = [], lines = [];
   for (const r of cl.family) {
     const X = sumCol([r], col);
     if (!X) continue;
-    const fp = await familyCashPart(rcepts, X);
+    const fp = await familyCashFromNotes(rcepts, X, nm(r.account_nm));
     why.push(`${nm(r.account_nm)} ${X} → ${fp.v ?? "판독 못 함"}(${fp.how})`);
-    if (fp.v == null) return { v: null, why: why.join(" / ") };
-    v += fp.v;
+    lines.push({ line: nm(r.account_nm), X, v: fp.v, how: fp.how });
+    if (fp.v == null) ok = false; else v += fp.v;
   }
-  return { v, why: why.join(" / ") };
+  return { v: ok ? v : null, why: why.join(" / "), lines };
+}
+
+/**
+ * 적재본(kr_da_staging·kr_da)의 ②b 계열 줄 판독(cashNote[해] · cashQuarter) — 검증기 판독과 줄마다 정확 대조(2026-10-18). 적재본 cash = null 은 "제외"(0).
+ * 시험 스위치(심은 오류 재현 전용) KR_VERIFY_TEST_CASH_SET="종목:기간:줄이름:값,…" — 기간 = 해(2023) 또는 분기(2026Q2), 값 = 숫자|null. 검증기가 읽은
+ * 적재본 값만 바꾼다(앱 화면 값은 그대로 — 줄 대조가 잡는지 본다). 평소엔 쓰지 않는다
+ */
+const stagingCashP = new Map();
+async function stagingCash(env, sym) {
+  if (!stagingCashP.has(sym)) stagingCashP.set(sym, (async () => {
+    const col = await daCol(env);
+    const d = await col.findOne({ _id: sym }, { projection: { cashNote: 1, cashQuarter: 1 } });
+    if (!d) return null;
+    const out = structuredClone({ cashNote: d.cashNote ?? null, cashQuarter: d.cashQuarter ?? null });
+    for (const part of String(process.env.KR_VERIFY_TEST_CASH_SET ?? "").split(",").filter(Boolean)) {
+      const [s, per, line, val] = part.split(":");
+      if (s !== sym) continue;
+      const items = /Q\d$/.test(per) ? (out.cashQuarter?.label?.replace(/\s/g, "") === per ? out.cashQuarter.items : []) : (out.cashNote?.[per] ?? []);
+      for (const it of items) if (it.line === line) it.cash = val === "null" ? null : Number(val);
+    }
+    return out;
+  })());
+  return stagingCashP.get(sym);
+}
+/** 줄 대조 — items = 적재본 그 기간 줄들, lines = 검증기 famCashOf().lines */
+function stagingLineCheck(c, colLabel, items, lines) {
+  const { add } = c;
+  const { PASS, FAIL, NA } = c.consts;
+  const name = "②b 계열 줄 현금성 = 적재본(줄마다)";
+  const used = new Set();
+  for (const l of lines) {
+    const it = (items ?? []).find((x, i) => !used.has(i) && x.value === l.X && (used.add(i), true));
+    if (!it) { add("K2", name, colLabel, { status: FAIL, note: `검증기 계열 줄 ${l.line} ${l.X} 이 적재본에 없음` }); continue; }
+    const app = it.cash ?? 0;
+    if (l.v == null) { add("K2", name, colLabel, { status: NA, app, note: `${l.line} ${l.X} — 검증기 못 읽음: ${l.how.slice(0, 300)}` }); continue; }
+    if (app !== l.v) { add("K2", name, colLabel, { status: FAIL, app, src: l.v, note: `${l.line} ${l.X}: 적재본 ${it.cash ?? "제외(null)"} vs 검증기 ${l.v} (차 ${app - l.v}) — ${l.how.slice(0, 300)}` }); continue; }
+    add("K2", name, colLabel, { status: PASS, app, src: l.v, note: `${l.line} ${l.X}${it.cash == null ? " (적재본 제외 = 검증기 0)" : ""} — ${l.how.slice(0, 200)}` });
+  }
+  (items ?? []).forEach((x) => { if (!lines.some((l) => l.X === x.value)) add("K2", name, colLabel, { status: FAIL, note: `적재본 계열 줄 ${x.line} ${x.value} 이 검증기 계열 줄(DART 재무상태표)에 없음` }); });
 }
 
 function bsOwner(src, y) {
@@ -368,16 +408,15 @@ export async function krOriginalLayers(ctx) {
     // B16 ②b — 기타(유동)금융자산 계열 줄은 주석 내역의 현금성 부분(검증기 원문 판독, 그 해·다음 해·기준 보고서 모든 판본)
     let famCash = 0, famOk = true;
     const famWhy = [];
-    for (const r of cl.family) {
-      const X = sumCol([r], own.col);
-      if (!X) continue;
-      try {
-        const rcs = [...new Set([y, y + 1, own.by].filter((yy) => yy <= new Date().getFullYear()).flatMap((yy) => L.reports.filter((z) => z.year === yy && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept)))];
-        const fp = await familyCashPart(rcs, X);
-        famWhy.push(`${nm(r.account_nm)} ${X} → ${fp.v ?? "판독 못 함"}(${fp.how})`);
-        if (fp.v == null) famOk = false; else famCash += fp.v;
-      } catch (e) { err(`B16 ②b 계열 줄 주석 ${y}`, e); famOk = false; }
-    }
+    try {
+      // 내역은 그 해를 당기·전기로 담은 보고서(y+1 의 전기 열이 재작성 반영이라 먼저, 그다음 y) — 모든 판본, 최신 먼저
+      const rcs = [...new Set([y + 1, y].filter((yy) => yy <= new Date().getFullYear()).flatMap((yy) => L.reports.filter((z) => z.year === yy && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept)))];
+      const fam = await famCashOf(cl, own.col, rcs);
+      famWhy.push(fam.why);
+      if (fam.v == null) famOk = false; else famCash = fam.v;
+      const st = await stagingCash(ctx.env, sym);
+      if (st && (fam.lines.length || st.cashNote?.[y]?.length)) stagingLineCheck(ctx, col, st.cashNote?.[y] ?? [], fam.lines);
+    } catch (e) { err(`B16 ②b 계열 줄 주석 ${y}`, e); famOk = false; }
     const expCash = famOk ? (sumCol(cl.cash, own.col) ?? 0) + famCash : null;
     const expNci = sumCol(cl.nci, own.col) ?? 0;
     exact("K2", "총차입금 = DART(B16)", col, x.debt, expDebt, why);
@@ -974,6 +1013,11 @@ async function ltmLayer(c) {
   const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
   exact("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", LT.debt, expDebt, `${lp.nm} ${basis}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}`);
   const famQ = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === Y && z.code === lp.code).sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept));
+  {
+    const st = await stagingCash(c.env, c.sym);
+    const lab = `${Y} Q${q}`;
+    if (st && (famQ.lines.length || (st.cashQuarter?.label === lab && st.cashQuarter.items?.length))) stagingLineCheck(c, "LTM", st.cashQuarter?.label === lab ? st.cashQuarter.items : [], famQ.lines);
+  }
   const cashQ = famQ.v == null ? null : (sumCol(cl.cash, "thstrm_amount") ?? 0) + famQ.v;
   if (cashQ == null) add("K2", "LTM 현금성자산 = DART 최신 분기(B16)", "LTM", { status: NA, app: LT.cash == null ? null : -LT.cash, note: `②b 계열 줄 판독 못 함 — ${famQ.why}` });
   else exact("K2", "LTM 현금성자산 = DART 최신 분기(B16)", "LTM", LT.cash == null ? null : -LT.cash, cashQ, famQ.why);

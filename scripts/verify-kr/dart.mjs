@@ -375,6 +375,36 @@ export async function dartDocNumberStreams(rcept) {
   });
 }
 
+const DOC_FINTAB_VER = "ft1";
+/**
+ * B16 ②b(2026-10-18) — 보고서 원문 중 금융자산 관련 표의 **원본 HTML 조각** [{ pre, html }] (pre = 표 앞 1,500자 원본 — 단위·제목 판정용).
+ * 표를 행·열로 나누는 판독(cashnote.mjs)은 읽을 때 하므로, 판독 규칙을 고쳐도 원문을 다시 받지 않는다. 거르는 낱말에 하나라도 걸린 표만 남긴다
+ * (금융자산·금융상품·투자자산·예금·예치·대여금·신탁·채무상품·공정가치). 판본 = 접수번호
+ */
+export async function dartDocFinTables(rcept) {
+  return versioned("doc-fintab", rcept, `${rcept}-${DOC_FINTAB_VER}`, async () => {
+    const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const head = strFromU8(buf.slice(0, 300));
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const KEEP = /금융자산|금융상품|투자자산|예금|예치|대여금|신탁|채무상품|공정가치/;
+    const out = [];
+    for (const b of Object.values(files)) {
+      let t = new TextDecoder("utf-8").decode(b);
+      if (/\uFFFD/.test(t.slice(0, 20000))) t = new TextDecoder("euc-kr").decode(b);
+      const re = /<TABLE[\s\S]*?<\/TABLE>/gi;
+      let m;
+      while ((m = re.exec(t))) {
+        if (!KEEP.test(m[0].replace(/<[^>]+>/g, ""))) continue;
+        out.push({ pre: t.slice(Math.max(0, m.index - 1500), m.index), html: m[0] });
+      }
+    }
+    return out;
+  });
+}
+
 /** 기업개황(company.json) — 법인등록번호(jurir_no) 등. 판본 고정(v1, 법인등록번호는 바뀌지 않음) */
 export async function dartCompany(corp) {
   return versioned("company", corp, "v1", async () => {
