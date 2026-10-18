@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-18.1";
+const KR_DA_RULES_VERSION = "2026-10-18.2";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -1208,6 +1208,263 @@ async function leaseQuarterOf(corp, fy, annual, sep) {
   }
   return { label, status: "unknown", amount: null, how: tried.join(" / ") || `${it.year} ${it.label}보고서 없음` };
 }
+// ── B16 ②b 현금성자산 — "기타(유동)금융자산" 계열 줄의 주석 내역(오너 결정 2026-10-18) ─────────────────────────────────────────────
+//    기타금융자산·기타유동금융자산·유동금융자산·기타투자자산(예금·투자성 내역이 섞인 줄)은 그 해 보고서 주석 내역에서 예금성(정기예금·단기금융상품·
+//    장단기금융상품·예치금·채무상품, 사용제한 예금·동반성장예탁금 포함) + 투자성(펀드·MMF·국공채·채권·특정금전신탁·저축성보험)만 현금성자산에 넣고
+//    대여금·보증금·미수금·파생상품·확정계약자산은 뺀다. 내역을 못 읽거나(000660 — 유동분 내역 미공시) 성격을 못 정하는 내역이 있으면 그 해 그 줄은
+//    제외 + 사유(근사 금지). 앱(dart-ev.ts)은 이 적재본(cashNote·cashQuarter)만 읽는다
+const CASH_FAMILY = /^(기타금융자산|기타유동금융자산|유동금융자산|기타투자자산|유동기타금융자산|기타유동투자자산)$/;
+// 기타포괄손익-공정가치 금융자산은 지분상품 지정이 대부분이라 제외(298040 2021 유동 12백만원 — 판단, 보고에 적음)
+const CASH_EXC = /대여|보증금|미수|파생|확정계약|선급|대출|매출채권|리스채권|지분증권|주식|출자|임차|수취채권|기타채권|미청구|대손|선물환|통화스왑|기타포괄손익/;
+// 영문 약어는 낱말 경계로(대소문자 무시로 "Corporation" 의 rp 가 걸렸다 — 298040 2021)
+const CASH_INC = /예금|예치금|금융상품|채무상품|사용제한|동반성장|국공채|국채|공채|지방채|채권|사채|유가증권|펀드|수익증권|신탁|저축성보험|양도성|환매조건|기업어음|전자단기|(?<![A-Za-z])(MMF|CMA|RP|CD)(?![A-Za-z])/;
+/** 내역이 아니라 측정·기간 구분 열·줄(총장부금액·손상·기초/기말·만기 구간 등) — 이런 이름이 하나라도 있는 묶음은 내역으로 보지 않는다 */
+const NOT_CONTENT = /총장부금액|손상차손|대손충당금|현재가치할인|원본금액|^장부금액|공정가치서열|수준\d|^당기(말)?$|^전기(말)?$|^당(반)?기말?$|제\d+기|^유동$|^비유동$|기초|기말|취득|처분|평가|\d+년|이내|이상|초과|미만|합계|소계/;
+/**
+ * 세로 내역(줄)의 범주 이름 — 본표에 따로 있으면 B16 이 현금성자산으로 넣는 항목(유동 상각후원가·당기손익-공정가치 금융자산)과 같은 이름. 내역 표에서
+ * 대여금·미수금 등과 **다른 줄로** 나뉘어 있을 때만 포함(042660 2022 단기상각후원가측정금융자산 16,150,000, 051600 유동상각후원가측정금융자산 — 국공채).
+ * 열(범주별 표의 열 머리)로 나온 범주는 대여금이 섞인 합이라(052690 상각후원가측정금융자산 열) 이 규칙을 쓰지 않는다
+ */
+const ROW_CATEGORY_INC = /^(유동|단기)?(당기손익-?공정가치측정|상각후원가(로)?측정(하는)?)(유동)?금융자산$/;
+/** 내역 이름 → "inc" | "exc" | null(못 정함). vertical = 세로 내역 줄 */
+function cashKindOf(label, vertical = false) {
+  const t = label.replace(/\s|&cr;/g, "");
+  if (CASH_EXC.test(t)) return "exc";
+  if (CASH_INC.test(t)) return "inc";
+  if (vertical && ROW_CATEGORY_INC.test(t.replace(/^[―\-–·ㆍ]+/, "").replace(/^유동금융자산/, ""))) return "inc";
+  return null;
+}
+/** 금융자산 내역 이름처럼 보이는가(④ 연속 줄 묶음의 줄 이름 조건 — 부채·비용 표의 우연한 합을 막는다) */
+const FIN_ASSET_NAME = /금융|예금|예치|대여|채권|미수|보증금|파생|상품|증권|신탁|펀드|국공채|사채|MMF|확정계약/;
+const isTotalLabel = (t) => /(합\s*계|소\s*계|총\s*계|^계$|\s계$)/.test(t.trim());
+/** 원문 표 → [{ u, rows: [[칸 글자]] }] (표 단위를 못 읽으면 뺀다) */
+function tablesOf(texts) {
+  const out = [];
+  for (const x of texts)
+    for (const m of x.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
+      const inTab = clean(m[0].slice(0, 2000)).match(UNIT_RE)?.[1];
+      const before = [...clean(x.slice(Math.max(0, m.index - 1500), m.index)).matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
+      const u = UNIT[inTab ?? before];
+      if (!u) continue;
+      out.push({ u, rows: [...m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1]).replace(/　/g, "").trim())) });
+    }
+  return out;
+}
+const cellVal = (c) => (c === "-" ? 0 : c == null ? null : numOf(c));
+const cellAt = (row, off) => (off < row.length ? row[row.length - 1 - off] : undefined);
+const rowLabel = (row) => { const i = row.findIndex((c) => cellVal(c) != null); return (i < 0 ? row : row.slice(0, i)).filter(Boolean).join(" "); };
+const rowLastText = (row) => { const i = row.findIndex((c) => cellVal(c) != null); return (i < 0 ? row : row.slice(0, i)).filter(Boolean).at(-1) ?? ""; };
+/** 칸의 열 머리 — 가장 가까운 앞 줄의 같은 자리(오른쪽 기준) 글자 */
+const colHead = (rows, r, off) => { for (let q = r - 1; q >= 0; q -= 1) { const h = cellAt(rows[q], off); if (h != null && h !== "" && cellVal(h) == null) return h; } return null; };
+/**
+ * 원문 표에서 X(원)를 이루는 내역 묶음 — 표 칸을 오른쪽 끝 기준으로 맞춘다(첫 칸이 여러 줄을 묶은 표 — 001440). 꼴:
+ *  ① X 칸 위쪽 줄들(같은 열) ② X 칸 아래쪽 줄들(같은 열 — 009150 "기타유동자산 합계" 뒤 내역) ③ X 칸 같은 줄 왼쪽 칸들(열 머리가 내역 이름 — 006400)
+ *  ④ X 칸이 없는 표의 같은 열 연속 줄들(051600 범주별 표 — 상각후원가 115,650,000 + 단기대여금 + 단기금융상품 = 기타유동금융자산)
+ * 내역 합이 표의 합계 칸과 정확히 같고(①~③), 합계 칸(④는 내역 합) = X 를 표 단위로 바꾼 값(내역 k 개 반올림 범위 k/2 안).
+ * 측정·기간 구분 이름(총장부금액·손상·기초/기말·만기 구간)이 섞인 묶음은 내역이 아니다. 결과 [{ parts: [{label, v}], u, how }]
+ */
+function cashBreakdowns(tables, X) {
+  const out = [];
+  const content = (parts) => parts.length >= 1 && parts.every((p) => p.label && !NOT_CONTENT.test((p.last ?? p.label).replace(/\s/g, "")));
+  for (const { u, rows } of tables) {
+    const target = X / u;
+    const anchors = new Set();
+    for (let r = 0; r < rows.length; r += 1) {
+      for (let off = 0; off < rows[r].length; off += 1) {
+        const T = cellVal(cellAt(rows[r], off));
+        if (T == null || T <= 0 || Math.abs(T - target) > 6) continue;
+        anchors.add(off);
+        const tries = [];
+        for (const dir of [-1, 1]) {
+          const parts = [];
+          for (let q = r + dir; q >= 0 && q < rows.length; q += dir) {
+            const v = cellVal(cellAt(rows[q], off));
+            if (v == null || isTotalLabel(rowLastText(rows[q]))) break;
+            parts.push({ label: rowLabel(rows[q]), last: rowLastText(rows[q]), v, vertical: true });
+          }
+          tries.push([dir < 0 ? "위" : "아래", parts]);
+        }
+        {
+          const parts = [];
+          for (let o = off + 1; o < rows[r].length; o += 1) {
+            const v = cellVal(cellAt(rows[r], o));
+            if (v == null) break;
+            parts.push({ label: colHead(rows, r, o) ?? "", v });
+          }
+          tries.push(["같은 줄", parts]);
+        }
+        // ⑤ X 칸 자체가 성격이 드러난 이름을 가진 경우(042660 2023 "기타금융유동자산(단기금융상품) 124,948", 2025 "정기예금 등 10,204" 백만원)
+        for (const nm of [rowLastText(rows[r]), colHead(rows, r, off) ?? ""])
+          if (nm && Math.abs(T - target) <= 0.5 && cashKindOf(nm) === "inc" && !NOT_CONTENT.test(nm.replace(/\s/g, ""))) out.push({ parts: [{ label: nm, v: T }], u, how: `주석 표 칸 이름 '${nm}' ${T.toLocaleString("en-US")}(단위 ${u}원)` });
+        for (const [kind, parts] of tries) {
+          let sum = 0, hit = false;
+          for (let k = 0; k < parts.length; k += 1) {
+            sum += parts[k].v;
+            if (sum === T && Math.abs(Math.abs(T) - target) <= (k + 1) / 2 && content(parts.slice(0, k + 1))) {
+              out.push({ parts: parts.slice(0, k + 1), u, how: `주석 표 ${kind} 내역 ${k + 1}개 합 ${T.toLocaleString("en-US")}(단위 ${u}원)` });
+              hit = true;
+              break;
+            }
+          }
+          // 이어진 줄로는 안 맞으면 위쪽 줄 중 2~4개 조합(정확히 하나일 때만 — 015760 "기타유동금융자산 2,093,242" = 단기대여금 95,598 + 유동 장단기
+          // 금융상품 1,997,644, 사이에 장기대여금 줄)
+          if (!hit && kind === "위" && parts.length >= 2 && parts.length <= 12) {
+            const subs = [];
+            for (let mk = 1; mk < 1 << parts.length; mk += 1) {
+              const pick = parts.filter((_, i) => mk & (1 << i));
+              if (pick.length < 2 || pick.length > 4) continue;
+              if (pick.reduce((a, x) => a + x.v, 0) === T && Math.abs(T - target) <= pick.length / 2 && content(pick)) subs.push(pick);
+            }
+            if (subs.length === 1) out.push({ parts: subs[0], u, how: `주석 표 위 내역 중 ${subs[0].length}개 조합 합 ${T.toLocaleString("en-US")}(단위 ${u}원)` });
+          }
+        }
+      }
+    }
+    // ④ X 칸이 없는 열 — 연속 줄 2~8개
+    const width = Math.max(0, ...rows.map((r) => r.length));
+    for (let off = 0; off < width && target >= 1000; off += 1) {
+      if (anchors.has(off)) continue;
+      for (let r0 = 0; r0 < rows.length; r0 += 1) {
+        let sum = 0;
+        const parts = [];
+        for (let q = r0; q < rows.length && parts.length < 8; q += 1) {
+          const v = cellVal(cellAt(rows[q], off));
+          if (v == null || isTotalLabel(rowLastText(rows[q])) || !FIN_ASSET_NAME.test(rowLastText(rows[q]))) break;
+          parts.push({ label: rowLabel(rows[q]), last: rowLastText(rows[q]), v, vertical: true });
+          sum += v;
+          if (parts.length >= 2 && (u === 1 ? sum === target : Math.abs(sum - target) <= parts.length / 2) && content(parts)) {
+            out.push({ parts: [...parts], u, how: `주석 표 같은 열 연속 내역 ${parts.length}개 합 ${sum.toLocaleString("en-US")}(단위 ${u}원)` });
+            break;
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+/** 이름으로 성격을 못 정한 내역(예: "당기손익-공정가치측정금융자산") — 같은 금액 칸이 성격이 드러난 이름(줄 이름·열 머리)으로 다른 표에 있으면 그 성격 */
+function kindByAmount(tables, v, u) {
+  const kinds = new Set();
+  if (Math.abs(v) < 1000) return null; // 작은 금액은 우연히 같은 칸이 많다
+  const seen = [];
+  for (const t of tables)
+    for (let r = 0; r < t.rows.length; r += 1)
+      for (let off = 0; off < t.rows[r].length; off += 1) {
+        const c = cellVal(cellAt(t.rows[r], off));
+        if (c == null || c * t.u !== v * u) continue;
+        for (const nm of [rowLastText(t.rows[r]), colHead(t.rows, r, off) ?? ""]) {
+          const k = nm && FIN_ASSET_NAME.test(nm) ? cashKindOf(nm) : null;
+          if (k) { kinds.add(k); seen.push(`${nm}(${k === "inc" ? "포함" : "제외"})`); }
+        }
+      }
+  return kinds.size === 1 ? { kind: [...kinds][0], why: `같은 금액 칸 ${[...new Set(seen)].slice(0, 3).join("·")}` } : null;
+}
+/**
+ * 표들에서 X(원)의 현금성 부분 — { cash, how } (못 정하면 cash null). 내역이 전부 포함이면 X 그대로, 전부 제외면 0, 섞이면 포함 내역 합(표 단위).
+ * 이름으로 성격을 못 정한 내역은 ① 같은 금액 칸의 다른 이름(kindByAmount) ② 그 금액의 내역 표(한 단계 더 — 298040 범주별 표의 상각후원가 금액)
+ */
+function cashPartOfTables(tables, X, line, depth = 0) {
+  const found = [];
+  for (const rc of [...new Set(tables.map((t) => t.rc))]) for (const b of cashBreakdowns(tables.filter((t) => t.rc === rc), X)) found.push({ ...b, rc });
+  if (!found.length) return { cash: null, how: `${line} ${X.toLocaleString("en-US")}원 — 주석 내역을 찾지 못함` };
+  const res = [];
+  for (const f of found) {
+    // 내역 한 줄 = 합계와 같은 금액을 범주 이름으로 다시 적은 것뿐이면(001440 2020 "당기손익-공정가치측정금융자산 33,496") 내역이 아니다 — 이름 자체가 성격을
+    // 밝힐 때만(033100 "상각후원가측정금융자산 장단기금융상품")
+    if (f.parts.filter((p) => p.v !== 0).length === 1 && !cashKindOf(f.parts.find((p) => p.v !== 0).label)) continue;
+    const nz = f.parts.filter((p) => p.v !== 0).map((p) => {
+      const k = cashKindOf(p.label, p.vertical);
+      if (k) return { ...p, k, amt: k === "inc" ? p.v * f.u : 0, why: "" };
+      const b = kindByAmount(tables, p.v, f.u);
+      if (b) return { ...p, k: b.kind, amt: b.kind === "inc" ? p.v * f.u : 0, why: ` — ${b.why}` };
+      if (depth === 0 && Math.abs(p.v) >= 1000) {
+        const sub = cashPartOfTables(tables, p.v * f.u, p.label, 1);
+        if (sub.cash != null) return { ...p, k: sub.cash === 0 ? "exc" : "mix", amt: sub.cash, why: ` — 내역의 내역: ${sub.how}` };
+      }
+      return { ...p, k: null, amt: null, why: "" };
+    });
+    const unk = nz.filter((p) => p.k == null);
+    const tag = (p) => (p.k === "inc" ? "(포함" : p.k === "exc" ? "(제외" : p.k === "mix" ? `(일부 ${p.amt.toLocaleString("en-US")}` : "(성격 미상") + p.why + ")";
+    const desc = nz.map((p) => `${p.label} ${p.v.toLocaleString("en-US")}${tag(p)}`).join(", ");
+    if (unk.length) { res.push({ cash: null, u: f.u, n: f.parts.length, how: `${line} 주석 내역 중 성격을 못 정한 항목(${unk.map((p) => p.label).join("·")}) — ${f.how}: ${desc} (${f.rc}) → 제외` }); continue; }
+    const cash = nz.every((p) => p.k === "inc") ? X : nz.every((p) => p.k === "exc") ? 0 : nz.reduce((a, p) => a + p.amt, 0);
+    res.push({ cash, u: f.u, n: f.parts.length, how: `${line} 주석 내역(${f.rc}) ${f.how}: ${desc}${cash === X ? " → 줄 전체" : ""}` });
+  }
+  if (!res.length) return { cash: null, how: `${line} ${X.toLocaleString("en-US")}원 — 주석 내역을 찾지 못함` };
+  const ok = res.filter((r) => r.cash != null);
+  if (!ok.length) return { cash: null, how: res[0].how };
+  // 가장 작은 단위 표들이 한 값으로 모이고, 다른 표 값은 그 표 단위 반올림 범위(내역 수 × 단위) 안이면 그 값. 같은 단위끼리 내역 반올림만 다르면
+  // (064350 2024 272,625,444 vs 272,625,445 천원) 그 해 보고서(첫 접수본) 첫 표 값
+  const minU = Math.min(...ok.map((r) => r.u));
+  const fine = ok.filter((r) => r.u === minU);
+  const fv = [...new Set(fine.map((r) => r.cash))];
+  const within = (r, v) => Math.abs(r.cash - v) <= r.u * r.n;
+  const pick = fv.length === 1 ? fine[0] : fine.every((r) => within(r, fine[0].cash)) ? fine[0] : null;
+  if (pick && ok.every((r) => within(r, pick.cash))) {
+    const others = res.filter((r) => r !== pick);
+    const spread = Math.max(...ok.map((r) => Math.abs(r.cash - pick.cash)));
+    return { cash: pick.cash, how: `${pick.how}${spread ? ` (다른 표와 반올림 차 최대 ${spread.toLocaleString("en-US")}원 — 가장 작은 단위·첫 표 값)` : ""}${others.some((r) => r.cash == null) ? ` (판독 못 한 표 ${others.filter((r) => r.cash == null).length}개)` : ""}` };
+  }
+  return { cash: null, how: `${line} 주석 표마다 현금성 부분이 다름(${[...new Set(ok.map((r) => r.cash))].join("·")}) → 제외` };
+}
+/** 보고서 원문들에서 X 의 현금성 부분 */
+async function cashPartOf(rcps, X, line) {
+  const tables = [];
+  for (const rc of rcps) for (const t of tablesOf(await docTexts(rc))) tables.push({ ...t, rc });
+  const r = cashPartOfTables(tables, X, line);
+  return r.cash == null && /찾지 못함$/.test(r.how) ? { ...r, how: `${r.how}(${rcps.join("·")}) → 현금성자산에서 제외` } : r;
+}
+/** 유동자산의 "기타(유동)금융자산" 계열 줄 — 비유동자산 머리 줄(NoncurrentAssets·"비유동자산") 뒤 줄은 뺀다(006400 비유동 "기타투자자산") */
+const familyRows = (rows) => {
+  const bs = (rows ?? []).filter((r) => r.sj_div === "BS");
+  const nc = bs.findIndex((r) => r.account_id === "ifrs-full_NoncurrentAssets" || /^비유동자산(합계)?$/.test((r.account_nm ?? "").replace(/\s/g, "")));
+  return bs.filter((r, i) => (nc < 0 || i < nc) && CASH_FAMILY.test((r.account_nm ?? "").replace(/\s/g, "")) && !/Noncurrent|NonCurrent/.test(r.account_id ?? ""));
+};
+/** 사업연도별 cashNote — { "2025": [{ line, value, cash, how }] } */
+async function cashNotes(corp, latest) {
+  const out = {};
+  const rcpsOf = {};
+  const rcps = async (ry) => (rcpsOf[ry] ??= await annualRcps(corp, ry));
+  const bsOf = {};
+  const bs = async (ry) => (ry in bsOf ? bsOf[ry] : (bsOf[ry] = await fnlttBs(corp, ry)));
+  for (let y = latest; y >= latest - 5; y -= 1) {
+    // 값 = 그 해를 담은 가장 최근 보고서(앱 연간 로더와 같은 주인 보고서 규칙)
+    let own = null;
+    for (const [ry, col] of [[y + 2, "bfefrmtrm_amount"], [y + 1, "frmtrm_amount"], [y, "thstrm_amount"]]) {
+      if (ry > latest) continue;
+      const r = await bs(ry);
+      if (r?.rows.some((x) => amt(x[col]) != null)) { own = { ry, col, rows: r.rows }; break; }
+    }
+    if (!own) continue;
+    const lines = familyRows(own.rows).map((x) => ({ line: x.account_nm.replace(/\s/g, ""), value: amt(x[own.col]) })).filter((x) => x.value != null && x.value !== 0);
+    if (!lines.length) continue;
+    const reps = [...new Set([y, y + 1, own.ry].filter((ry) => ry <= latest))];
+    const docs = [];
+    for (const ry of reps) docs.push(...(await rcps(ry)));
+    out[y] = [];
+    for (const l of lines) out[y].push({ ...l, ...(await cashPartOf(docs, l.value, l.line)) });
+  }
+  return out;
+}
+/** 최신 분기·반기 보고서 cashQuarter — { label, items: [{ line, value, cash, how }] } (최신 정기보고서가 사업보고서면 null) */
+async function cashQuarterOf(corp, fy) {
+  const it = await latestInterim(corp, fy);
+  if (!it) return null;
+  const label = `${it.year} Q${it.q}`;
+  await new Promise((r) => setTimeout(r, 400));
+  let rows = null;
+  for (const fs of ["CFS", "OFS"]) {
+    const j = await jget(`${B}/fnlttSinglAcntAll.json?crtfc_key=${DART}&corp_code=${corp}&bsns_year=${it.year}&reprt_code=${it.code}&fs_div=${fs}`);
+    if (j.status === "013") continue;
+    if (j.status !== "000") throw new Error(`fnltt ${it.year} ${it.code} ${fs} ${j.status} ${j.message ?? ""}`);
+    rows = (j.list ?? []).filter((r) => r.sj_div === "BS");
+    break;
+  }
+  const lines = familyRows(rows).map((x) => ({ line: x.account_nm.replace(/\s/g, ""), value: amt(x.thstrm_amount) })).filter((x) => x.value != null && x.value !== 0);
+  const items = [];
+  for (const l of lines) items.push({ ...l, ...(await cashPartOf(it.rcps, l.value, l.line)) });
+  return { label, items };
+}
 async function latestFy(corp) {
   const now = new Date();
   for (const y of [now.getFullYear() - 1, now.getFullYear() - 2]) if ((await annualRcps(corp, y)).length) return y;
@@ -1276,15 +1533,22 @@ for (const sym of symbols) {
   }
   // 리스부채 주석 — 실패하면 적재하지 않는다(앱은 미적재 = EV 공란 + 사유)
   let lease = null;
+  console.log(`  ${sym}: 리스부채·현금성자산 주석`);
   try {
     const ly = await latestFy(corp);
     if (ly) lease = await leaseNotes(corp, ly);
     if (lease) for (const [y, n] of Object.entries(lease.leaseNote)) console.log(`    리스 ${y}: ${n.status}${n.amount != null ? ` ${t(n.amount)}` : ""} — ${n.how}`);
     if (lease?.leasePolicyLatest) console.log(`    리스 분기말: ${lease.leasePolicyLatest.status} — ${lease.leasePolicyLatest.how}`);
     if (lease?.leaseQuarter) console.log(`    리스 ${lease.leaseQuarter.label}: ${lease.leaseQuarter.status}${lease.leaseQuarter.amount != null ? ` ${t(lease.leaseQuarter.amount)}` : ""} — ${lease.leaseQuarter.how}`);
-  } catch (e) { console.log(`    (리스부채 주석 실패: ${e.message})`); failed.push(sym); }
+    if (ly && lease) {
+      lease.cashNote = await cashNotes(corp, ly);
+      lease.cashQuarter = await cashQuarterOf(corp, ly);
+      for (const [y, its] of Object.entries(lease.cashNote)) for (const i of its) console.log(`    현금 ${y} ${i.line} ${i.value} → ${i.cash ?? "제외"} — ${i.how}`);
+      for (const i of lease.cashQuarter?.items ?? []) console.log(`    현금 ${lease.cashQuarter.label} ${i.line} ${i.value} → ${i.cash ?? "제외"} — ${i.how}`);
+    }
+  } catch (e) { console.log(`    (리스부채·현금 주석 실패: ${e.message})`); failed.push(sym); lease = null; }
   if (LEASE_ONLY) {
-    if (lease && !CHECK && !QUOTA.stopped) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, leaseAt: new Date().toISOString() } });
+    if (lease && !CHECK && !QUOTA.stopped) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, cashNote: lease.cashNote, cashQuarter: lease.cashQuarter, leaseAt: new Date().toISOString() } });
     continue;
   }
   let byYear = null;
@@ -1297,7 +1561,7 @@ for (const sym of symbols) {
   if (QUOTA.stopped) { console.log(`  ${sym}: ${QUOTA.stopped.message} — 적재 안 함`); stopAt = sym; break; }
   if (!CHECK) await db.collection(COLL).replaceOne(
     { _id: sym },
-    { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter } : {}), sourceRcepts, rulesVersion: KR_DA_RULES_VERSION, updatedAt: new Date().toISOString() },
+    { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, cashNote: lease.cashNote, cashQuarter: lease.cashQuarter } : {}), sourceRcepts, rulesVersion: KR_DA_RULES_VERSION, updatedAt: new Date().toISOString() },
     { upsert: true },
   );
   const yrs = Object.keys(byYear).map(Number).sort((a, b) => b - a);

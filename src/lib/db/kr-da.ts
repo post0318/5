@@ -40,6 +40,23 @@ export interface KrDaDoc {
    * 쓴다(같은 해 앞 분기 보고서에서 확인된 꼴이면 그것도). label = 앱 분기 라벨("2026 Q2"). 못 정하면 unknown(앱 LTM EV 공란)
    */
   leaseQuarter?: (KrLeaseNote & { label: string }) | null;
+  /**
+   * B16 ②b 현금성자산(오너 결정 2026-10-18) — 사업연도 → "기타(유동)금융자산" 계열 줄마다 주석 내역의 현금성 부분(예금성 + 투자성). 적재 배치가 그 해
+   * 보고서 원문 주석 표에서 만든다. cash null = 내역을 못 읽음(그 줄 제외 + 사유)
+   */
+  cashNote?: Record<string, KrCashItem[]>;
+  /** 같은 판정의 최신 분기·반기 보고서판(label = "2026 Q2") */
+  cashQuarter?: { label: string; items: KrCashItem[] } | null;
+}
+
+export interface KrCashItem {
+  /** 본표 줄 이름(공백 제거) */
+  line: string;
+  /** 본표 줄 값(원) — 앱은 이 값이 줄 값과 정확히 같을 때만 쓴다 */
+  value: number;
+  /** 현금성 부분(원), null = 판독 못 함 */
+  cash: number | null;
+  how: string;
 }
 
 export interface KrLeaseNote {
