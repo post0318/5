@@ -459,7 +459,10 @@ export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFin
   // 내역 미공시(오너 결정 2026-10-18 "미공시는 제외") → 0
   if (!rcepts.length) return { v: 0, how: `${X} — 그 해를 당기·전기로 담은 사업보고서 없음(본표 전전기 열만) → 유동분 내역 미공시 → 제외(0)`, undisclosed: true };
   for (const rc of rcepts) {
-    const tables = (await tablesOf(rc)).map(parseFinTable).filter((T) => !other || T.scope !== other);
+    // 보고서에 원하는 범위의 표가 하나도 없으면(연결 재무제표가 없는 해 — 062040 2024 사업보고서 "연결재무제표 주석 해당 사항이 없습니다") 거르지 않는다
+    const all0 = (await tablesOf(rc)).map(parseFinTable);
+    const want = other === "sep" ? "con" : other === "con" ? "sep" : null;
+    const tables = want && all0.some((T) => T.scope === want) ? all0.filter((T) => T.scope !== other) : all0;
     byRc.push({ rc, tables });
     for (const b of [...tables.flatMap((T) => [...blocksFor(T, X, needCtx), ...groupBlocks(T, X), ...prefixBlocks(T, X)]), ...catCurrentColumns(tables, X)]) {
       const ks = withAdj(b.parts.map((p) => (p.n === 0 ? "zero" : p.fixed ?? kindOf(p.label, p.cell, p.leaf))), b.parts.map((p) => p.pos));
@@ -490,8 +493,10 @@ export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFin
       // 섞인 묶음의 포함 합은 표 단위 값의 합 — 계열 줄 값 X 가 표 단위보다 정밀하면(X 가 단위의 배수가 아님) 그 합은 반올림된 값이라 원 단위로 정확하지
       // 않다. 허용치를 두지 않으므로 이 묶음은 값을 내지 않는다(더 작은 단위 표가 있으면 그쪽이 값을 낸다). 대신 참값이 있을 수 있는 범위(포함 내역 수 × 단위/2)를
       // 남겨, 적재본이 그 범위 밖이면 실패로 잡는다
-      if (!allIn && !allOut && X % b.u !== 0) { rejected.push({ s: `${s0} — 표 단위(${b.u}원)로만 나뉘어 원 단위 정밀값 없음`, kind: "imprecise", lo: inWon - (nIn * b.u) / 2, hi: inWon + (nIn * b.u) / 2 }); continue; }
-      got.push({ v: allIn ? X : allOut ? 0 : inWon, u: b.u, how: s0, rc, np: nz.length });
+      // 섞인 묶음의 포함 합은 주석 표 단위 값의 합 — 원문이 공시한 가장 정밀한 값이라 그대로 기대치로 쓰되(정확 일치), 계열 줄 값 X 가 표 단위보다 정밀하면
+      // 참값이 있을 수 있는 범위(포함 내역 수 × 단위/2)도 남긴다: 적재본이 기대치와 다르고 범위 안이면 검증불가(반올림), 범위 밖이면 실패
+      const imprecise = !allIn && !allOut && X % b.u !== 0;
+      got.push({ v: allIn ? X : allOut ? 0 : inWon, u: b.u, how: imprecise ? `${s0} — 주석 표 단위(${b.u}원) 값, 원 단위 이하 공시 없음` : s0, rc, np: nz.length, range: imprecise ? [inWon - (nIn * b.u) / 2, inWon + (nIn * b.u) / 2] : null });
     }
   }
   if (!got.length) {
@@ -507,7 +512,10 @@ export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFin
     return { v: null, how: head };
   }
   const vs = [...new Set(got.map((g) => g.v))];
-  if (vs.length === 1) return { v: vs[0], how: got[0].how + (got.length > 1 ? ` (같은 값 묶음 ${got.length}개)` : "") };
+  if (vs.length === 1) {
+    const rg = got.filter((g) => g.range).map((g) => g.range);
+    return { v: vs[0], how: got[0].how + (got.length > 1 ? ` (같은 값 묶음 ${got.length}개)` : ""), range: rg.length ? [Math.max(...rg.map((x) => x[0])), Math.min(...rg.map((x) => x[1]))] : null };
+  }
   const minU = Math.min(...got.map((g) => g.u));
   const fine = got.filter((g) => g.u === minU);
   const fv = [...new Set(fine.map((g) => g.v))];

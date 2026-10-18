@@ -102,6 +102,7 @@ function stagingLineCheck(c, colLabel, items, lines) {
       continue;
     }
     if (l.v == null) { add("K2", name, colLabel, { status: NA, app, note: `${l.line} ${l.X} — 검증기 못 읽음: ${l.how.slice(0, 300)}` }); continue; }
+    if (app !== l.v && l.range && app >= l.range[0] && app <= l.range[1]) { add("K2", name, colLabel, { status: NA, app, src: l.v, note: `${l.line} ${l.X}: 적재본 ${app} ≠ 주석 표 단위 값 ${l.v} 이나 반올림 범위 ${l.range[0]}~${l.range[1]} 안 — 원 단위 정밀값 없음: ${l.how.slice(0, 250)}` }); continue; }
     if (app !== l.v) { add("K2", name, colLabel, { status: FAIL, app, src: l.v, note: `${l.line} ${l.X}: 적재본 ${it.cash ?? "제외(null)"} vs 검증기 ${l.v} (차 ${app - l.v}) — ${l.how.slice(0, 300)}` }); continue; }
     add("K2", name, colLabel, { status: PASS, app, src: l.v, note: `${l.line} ${l.X}${it.cash == null ? " (적재본 제외 = 검증기 0)" : ""} — ${l.how.slice(0, 200)}` });
   }
