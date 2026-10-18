@@ -115,7 +115,11 @@ export function kindOfTag(code, ctx) {
 /** 한 칸의 성격 — 이름과 태그 둘 다 정해지면 같아야 한다(다르면 "conflict"). 이름은 가장 안쪽 이름(줄의 마지막 글자 칸·열의 마지막 머리)을 먼저,
  *  못 정하면 이은 이름 전체("유동 금융자산 | 단기대여금" — 묶음 머리가 앞에 붙음) */
 function kindOf(label, cell, leaf) {
-  const a = (leaf ? kindOfLabel(leaf) : null) ?? kindOfLabel(label), b = kindOfTag(cell?.code, cell?.ctx);
+  // 가장 안쪽 이름이 범주(측정 범주 열 — 060370 「7. 기타금융자산」 표의 '범주' 칸 "당기손익공정가치측정금융자산")이거나 못 정하면, 줄의 다른 이름 칸
+  // ('구분' 칸 "파생상품자산")이 성격을 말하는지 본다 — 성격이 범주보다 앞선다
+  const a0 = leaf ? kindOfLabel(leaf) : null;
+  const af = a0 === "cat" || a0 == null ? kindOfLabel(label) : null;
+  const a = af === "in" || af === "out" ? af : a0 ?? af, b = kindOfTag(cell?.code, cell?.ctx);
   if (a === "flow" || a === "adj") return a;
   if (a && b && a !== "cat" && a !== b) return "conflict";
   if (a === "cat" || a == null) return b ?? a;
@@ -472,19 +476,19 @@ export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFin
       b.parts.forEach((p, i) => {
         const k = ks[i];
         if (k === "zero") return;
-        if (k === "in") { inWon += p.n * b.u; nIn++; desc.push(`${clean(p.label).slice(-18)} ${p.n}(포함)`); return; }
-        if (k === "out") { desc.push(`${clean(p.label).slice(-18)} ${p.n}(제외)`); return; }
+        if (k === "in") { inWon += p.n * b.u; nIn++; desc.push(`${clean(p.label).slice(-30)} ${p.n}(포함)`); return; }
+        if (k === "out") { desc.push(`${clean(p.label).slice(-30)} ${p.n}(제외)`); return; }
         // 계열 줄을 세로 내역 줄(또는 본표 줄)로 나눈 범주 줄(유동 상각후원가·FVPL 금융자산)은 ② 가 이름으로 적은 현금성 항목 — 범주 이름만으로 포함(B16 기본
         // 정의, 015760 "유동금융자산" = 유동FVPL + 유동상각후원가 + 유동파생 + 기타금융자산). 가로(범주별 금융상품 표의 열)는 측정 범주일 뿐 줄이 아니라 성격을 따로 찾는다
-        if (k === "cat" && (b.face || b.vert)) { inWon += p.n * b.u; nIn++; desc.push(`${clean(p.label).slice(-18)} ${p.n}(${b.face ? "본표" : "세로 내역"} 범주 줄 — ② 포함)`); return; }
+        if (k === "cat" && (b.face || b.vert)) { inWon += p.n * b.u; nIn++; desc.push(`${clean(p.label).slice(-30)} ${p.n}(${b.face ? "본표" : "세로 내역"} 범주 줄 — ② 포함)`); return; }
         if (k === "cat" || (k == null && FAM.test(clean(p.label)))) {
           const r = resolveCat(tables, p.label, p.n * b.u, b.u, p.leaf);
-          if (r) { inWon += r.v; if (r.v) nIn++; desc.push(`${clean(p.label).slice(-18)} ${p.n}(범주 → ${r.how})`); return; }
+          if (r) { inWon += r.v; if (r.v) nIn++; desc.push(`${clean(p.label).slice(-30)} ${p.n}(범주 → ${r.how})`); return; }
           const r2 = natureByAmount(tables, p.n, b.u);
-          if (r2) { inWon += r2.v; if (r2.v) nIn++; desc.push(`${clean(p.label).slice(-18)} ${p.n}(같은 금액 유동 성격 칸 → ${r2.how})`); return; }
+          if (r2) { inWon += r2.v; if (r2.v) nIn++; desc.push(`${clean(p.label).slice(-30)} ${p.n}(같은 금액 유동 성격 칸 → ${r2.how})`); return; }
           fails.push({ amt: p.n * b.u, u: b.u, label: clean(p.leaf || p.label) });
         } else other0 = true;
-        desc.push(`${clean(p.label).slice(-18)} ${p.n}(${k === "conflict" ? "이름·태그 성격 어긋남" : k === "cat" ? "범주 — 성격 표 못 찾음" : "성격 못 정함"})`);
+        desc.push(`${clean(p.label).slice(-30)} ${p.n}(${k === "conflict" ? "이름·태그 성격 어긋남" : k === "cat" ? "범주 — 성격 표 못 찾음" : "성격 못 정함"})`);
       });
       const s0 = `원문 ${rc} ${b.how}: ${desc.join(", ")} = ${b.total}(단위 ${b.u})`;
       if (fails.length || other0) { rejected.push({ s: s0, kind: other0 ? "other" : "cat", inWon, nIn, u: b.u, fails }); continue; }
