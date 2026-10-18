@@ -56,6 +56,11 @@ export interface KrCashItem {
   value: number;
   /** 현금성 부분(원), null = 판독 못 함 */
   cash: number | null;
+  /**
+   * cash null 의 사유(감사 2026-10-18 — 판독 실패와 내역 미공시를 나눈다): undisclosed = 본표 밖 주석에 그 금액 칸 없음(회사 미공시) · unread = 금액 칸이 있는
+   * 주석 표를 내역으로 못 읽음(판독 실패) · small = 같은 금액 칸이 작은 수로만 있어 판정 못 함 · unknown-kind = 내역 성격 미상 · inconsistent = 표마다 값 다름
+   */
+  reason?: "undisclosed" | "unread" | "small" | "unknown-kind" | "inconsistent";
   how: string;
 }
 

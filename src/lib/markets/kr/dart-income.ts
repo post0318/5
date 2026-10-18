@@ -103,10 +103,11 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
   };
   // DART 가 값 없는 칸을 0 으로 채운 귀속 줄(2026-10-18 — 052690 2024 사업보고서 전전기 열: 당기순이익 17,953,974,302, 지배기업 귀속 0, 비지배 0. 그 해 자기
   // 보고서(2022)에는 귀속 줄 자체가 없다) — 지배 + 비지배 ≠ 당기순이익이고 비지배가 0 이거나 없으면 귀속 줄이 없는 것으로 보고 아래 규칙(비지배지분 없음
-  // 증명 → 지배 = 당기순이익)을 따른다. 비지배가 0 이 아니면(진짜 귀속 값이 있는데 합이 안 맞음) 그대로 둔다
+  // 증명 → 지배 = 당기순이익)을 따른다. 비지배가 0 이 아니면(진짜 귀속 값이 있는데 합이 안 맞음) 그대로 둔다. 지배 귀속도 0 일 때만(감사 2026-10-18 —
+  // 지배 귀속이 0 이 아닌 값이면 "값 없는 칸을 0 으로 채운 것"이 아니라 공시 값이 맞지 않는 것이라 지우지 않는다)
   const zeroFilled = new Set<string>();
   for (const l of labels)
-    if (niParent[l] != null && netIncome[l] != null && (niNci[l] == null || niNci[l] === 0) && niParent[l]! + (niNci[l] ?? 0) !== netIncome[l]) {
+    if (niParent[l] === 0 && netIncome[l] != null && (niNci[l] == null || niNci[l] === 0) && niParent[l]! + (niNci[l] ?? 0) !== netIncome[l]) {
       niParent[l] = null;
       zeroFilled.add(l);
     }

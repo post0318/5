@@ -151,7 +151,8 @@ function makeCashIn(facts: KrFacts, leaseIn: KrLeaseInput | null | undefined, no
       return false;
     }
     if (it.cash == null) {
-      note(`${l.accountName}: ${it.how}`);
+      const why = ({ undisclosed: "주석 내역 미공시", unread: "주석 내역 판독 실패", small: "주석 내역 판정 불가", "unknown-kind": "내역 성격 미상", inconsistent: "주석 표마다 값 다름" } as Record<string, string>)[it.reason ?? ""] ?? "주석 내역 못 읽음";
+      note(`${l.accountName}: [${why} — 현금성자산에서 제외] ${it.how}`);
       return false;
     }
     note(`${l.accountName} 중 현금성 ${it.cash.toLocaleString("en-US")}원: ${it.how}`);
