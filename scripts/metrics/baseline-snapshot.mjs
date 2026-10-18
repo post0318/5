@@ -105,7 +105,7 @@ function loadEnvLocal() {
       const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"\n]*?)"?\s*$/);
       if (m && (env[m[1]] === undefined || env[m[1]] === "")) env[m[1]] = m[2];
     }
-  } catch {
+  } catch { // silent-ok: .env.local 은 선택 파일(없으면 환경변수만)
     /* .env.local 없어도 됨 */
   }
   return env;

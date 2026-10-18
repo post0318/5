@@ -19,7 +19,9 @@ function ltmItems(facts: CompanyFacts) {
   const through = yl?.through, E = ltmBaseEnd(facts);
   // 사업연도 값(SEC 20-F 기준일 E — 잔액은 연말, 흐름은 1년 기간) — 검증기가 SEC 원본에서 직접 읽은 값과 대조(있어야 할 값이 앱에서 사라졌는지, 재감사 7차 E1·E3)
   const fy: Record<string, { v: number; k: "bs" | "cf" }> = {};
-  if (!through || !E) return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: null, through: null, E: null };
+  // fetchWarnings — 재무 조립 중 조회 실패(6-K 포함) 경고. 검증기가 "조회 실패"를 오류로 잡는다(재감사 12차 ③)
+  const fetchWarnings = facts.fetchWarnings ?? [];
+  if (!through || !E) return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: null, sixKMiss: yl?.sixKMiss ?? null, sixKPrevMiss: yl?.sixKPrevMiss ?? null, fetchWarnings, through: null, E: null };
   const yearAgo = (() => { const x = new Date(`${through}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); })();
   const anchor = ltmAnchor(facts);
   const dd = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
@@ -37,6 +39,8 @@ function ltmItems(facts: CompanyFacts) {
         if (e) items.push({ concept: c, at: d, usd: e.val, flow: false, src: e.ltmSrc ?? null, form: e.form, end: e.end });
         // 완결성(재감사 P5) — 사업연도말 값이 있는데 기준일 값이 없는 개념은 공란 목록으로(검증기가 6-K 에 그 줄이 있으면 실패)
         else if (d === through && instantOn(arr, E) != null) gaps.push({ concept: c, kind: "bs", at: d, ids: sourceIdsAt(facts, c, "bs", E), reason: null });
+        // 1년 전 분기말(평균 잔액 기초 값) — 기준일 값은 있는데 1년 전 값이 없는 개념도 공란 목록으로(재감사 13차 ⑦ — 1년 전 6-K 만 실패하면 값이 조용히 빠졌다)
+        else if (d === yearAgo && nearest(arr, through) && instantOn(arr, E) != null) gaps.push({ concept: c, kind: "bs", at: d, ids: sourceIdsAt(facts, c, "bs", E), reason: null });
       }
     }
     if (arr.some((e) => e.start)) {
@@ -47,7 +51,7 @@ function ltmItems(facts: CompanyFacts) {
       else if (hasFy && (isCfConcept(c) || flowSpecOf(c))) gaps.push({ concept: c, kind: "cf", at: through, ids: sourceIdsAt(facts, c, "cf", E), reason: r.reason, flow: flowSpecOf(c), cf: isCfConcept(c) });
     }
   }
-  return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: yl?.sixKSource ?? null, through, E };
+  return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: yl?.sixKSource ?? null, sixKMiss: yl?.sixKMiss ?? null, sixKPrevMiss: yl?.sixKPrevMiss ?? null, fetchWarnings, through, E };
 }
 
 /**
@@ -81,9 +85,11 @@ export async function GET(req: Request) {
     const universe = await computeUniverseRow(market, symbol);
     const overview = await getStockOverview(market, symbol, null, { skipQuarterly: true });
     // 20-F 만 값이 있다(10-K·10-Q 회사는 null)
-    const usFacts = market === "us" ? ((await fetchUsCompanyFacts(symbol).catch(() => null))?.facts ?? null) : null;
+    // companyfacts 조회 실패는 응답에 "조회 실패"로 싣는다(검증기가 오류로 잡음) — null 로 삼키면 20-F LTM 검사가 "목록 없음"으로만 보였다
+    let ltmError: string | null = null;
+    const usFacts = market === "us" ? ((await fetchUsCompanyFacts(symbol).catch((e) => { ltmError = `SEC companyfacts 조회 실패 — ${e instanceof Error ? e.message : String(e)}`; return null; }))?.facts ?? null) : null;
     const ltm = usFacts && yahooLtm(usFacts) ? ltmItems(usFacts) : null;
-    return ok({ universe, overview: { multiples: overview.multiples, warnings: overview.warnings }, ltm });
+    return ok({ universe, overview: { multiples: overview.multiples, warnings: overview.warnings }, ltm, ...(ltmError ? { ltmError } : {}) });
   } catch (e) {
     return jsonError(e);
   }
