@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-05.1";
+const KR_DA_RULES_VERSION = "2026-10-18.1";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -912,22 +912,30 @@ function leaseAmountOf(xml, prefix, sep) {
   }
   return { amount: null, how: Object.keys(cand).length ? `후보 불일치·근거 하나 ${JSON.stringify(cand)}` : "리스부채 주석 태그 없음" };
 }
-/** 원문에서 "리스부채" 가 든 회계정책 문장 → 리스부채를 포함해 표시하는 본표 차입금류 줄 이름들 */
-async function leasePolicyOf(rcpNo) {
+/** 사업보고서 원문 파일들(디코딩한 글) — 접수번호마다 1회. 원문 파일이 없는 판본(DART 014 — [첨부정정], 001440 2024)은 빈 목록, 다른 상태는 실패 */
+const docTextMemo = {};
+async function docTexts(rcpNo) {
+  if (docTextMemo[rcpNo]) return docTextMemo[rcpNo];
   await new Promise((r) => setTimeout(r, 1000));
   const res = await dfetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
   if (!res.ok) throw new Error(`document ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
-  // 원문 파일이 없는 판본(DART 014 — [첨부정정], 001440 2024)은 문장 없음. 다른 상태는 실패
   const head = strFromU8(buf.slice(0, 300));
-  if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
-  const files = unzipSync(buf);
+  if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return (docTextMemo[rcpNo] = []);
+  const out = [];
+  for (const b of Object.values(unzipSync(buf))) {
+    let x = new TextDecoder("utf-8").decode(b);
+    if ((x.match(/�/g) ?? []).length > 50) x = new TextDecoder("euc-kr").decode(b);
+    out.push(x);
+  }
+  return (docTextMemo[rcpNo] = out);
+}
+/** 원문에서 "리스부채" 가 든 회계정책 문장 → 리스부채를 포함해 표시한다고 적은 차입금류 이름들(문장 근거 — 금액 확인은 leaseInFaceTable) */
+async function leasePolicyOf(rcpNo) {
   const Q = "['‘’\"“”]?";
   const re = new RegExp(`리스부채[를는은]?[^.]{0,40}?${Q}([가-힣]*(?:차입금|차입부채|장기부채|사채))${Q}(?:\\s*(?:또는|및|과|와|,)\\s*${Q}([가-힣]*(?:차입금|차입부채|장기부채|사채))${Q})?\\s*(?:에|으로|로)\\s*(?:포함하여\\s*)?(?:분류|표시|포함)`);
   const names = new Set();
-  for (const b of Object.values(files)) {
-    let x = new TextDecoder("utf-8").decode(b);
-    if ((x.match(/�/g) ?? []).length > 50) x = new TextDecoder("euc-kr").decode(b);
+  for (const x of await docTexts(rcpNo)) {
     for (const s of clean(x).split(/(?<=[.다])\s/)) {
       if (!s.includes("리스부채") || s.length >= 400) continue;
       const m = re.exec(s);
@@ -935,6 +943,51 @@ async function leasePolicyOf(rcpNo) {
     }
   }
   return [...names];
+}
+/**
+ * 리스부채가 본표 차입금 줄 **금액 안에** 들어 있는가 — 원문 주석 표로 금액 확인(2026-10-18). 회계정책 문장만으로 "포함"을 판정하던 때
+ * 298040("연결그룹의 리스부채는 이자부 차입금에 포함됩니다" — 개념어, 본표 차입금 802,441 = 차입금 주석 합계로 리스 없음, 리스는 "기타금융부채(리스부채)")·
+ * 103590 2022 보고서("'유동성장기부채' 또는 '장기차입금'으로 분류" 인데 차입금 주석 합계 196,807,960천원 = 본표 차입금 합, 리스 없음)가 리스부채를
+ * 빠뜨렸다. 확인 = 표의 한 묶음(소계·합계 줄 바로 앞 줄들 — 앞 소계·제목 줄에서 끊는다)에 리스 줄이 있고, 묶음 합 = 그 소계(표 단위 그대로 정확히)이며,
+ * 그 소계 = 그 보고서 당기 본표 차입금 줄 하나 또는 차입금 줄 합(본표 원 단위를 표 단위로 바꿔 묶음 줄 수 n 의 반올림 범위 n/2 단위 안 — 178320
+ * 347,612,453천원 = 347,612,452,572원).
+ * 실측: 005930(장기차입금 = 은행차입금 2,806,014 + 리스부채 3,673,503 백만원)·373220(유동성차입금 소계에 유동성리스부채 74,784)·178320(유동성대체 소계에
+ * 장기리스부채 (10,776,841)) 확인, 298040·103590 은 이런 묶음이 없다.
+ */
+function leaseInFaceTable(texts, faceVals) {
+  const targets = faceVals.filter((v) => v != null && v !== 0);
+  if (!targets.length) return null;
+  const all = [...targets, targets.reduce((a, v) => a + v, 0)];
+  const isTotal = (t) => /(^|[^가-힣])(소\s*계|합\s*계|총\s*계|계)\s*$/.test(t) || /^(소계|합계|계|총계)/.test(t.replace(/\s/g, ""));
+  for (const x of texts) {
+    for (const m of x.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
+      const inTab = clean(m[0].slice(0, 2000)).match(UNIT_RE)?.[1];
+      const before = [...clean(x.slice(Math.max(0, m.index - 1500), m.index)).matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
+      const u = UNIT[inTab ?? before];
+      if (!u) continue;
+      let block = [];
+      for (const r of m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)) {
+        const cells = [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1]).replace(/　/g, "").trim());
+        const i = cells.findIndex((c) => numOf(c) != null);
+        const label = (i < 0 ? cells : cells.slice(0, i)).join(" ");
+        if (i < 0) { block = []; continue; } // 제목 줄("장기차입금:")
+        const v = numOf(cells[i]);
+        if (isTotal(label)) {
+          const sum = block.reduce((a, b) => a + b.v, 0);
+          const lease = block.find((b) => /리스/.test(b.label) && b.v !== 0);
+          // 본표(원) ↔ 표(표 단위): 표 소계는 반올림한 줄 n 개의 합이라 본표 값을 표 단위로 바꾼 것과 최대 n/2 단위 다를 수 있다(178320 2023 보고서
+          // 유동성대체 소계 (249,840,128)천원 = 43,162,668 + 196,564,571 + 10,112,889, 본표 249,840,129,127원 — 1.127 단위). 그 범위만
+          const face = all.find((f) => Math.abs(Math.abs(f) / u - Math.abs(v)) <= block.length / 2);
+          if (block.length >= 2 && lease && sum === v && face != null)
+            return `주석 표 '${label}' ${v.toLocaleString("en-US")}(단위 ${u}원) = 리스 줄 '${lease.label}' ${lease.v.toLocaleString("en-US")} 포함 묶음 합 = 본표 차입금 ${face.toLocaleString("en-US")}원`;
+          block = [];
+          continue;
+        }
+        block.push({ label, v });
+      }
+    }
+  }
+  return null;
 }
 async function leaseNotes(corp, latest) {
   const years = [];
@@ -962,7 +1015,20 @@ async function leaseNotes(corp, latest) {
     for (const rc of ry ? rcpMemo[ry] : [rcp]) for (const n of await leasePolicyOf(rc)) out.add(n);
     return (polMemo[rcp] = [...out]);
   };
-  const faceNames = (rows) => rows.filter((x) => /차입|사채|장기부채/.test((x.account_nm ?? "").replace(/\s/g, ""))).map((x) => x.account_nm.replace(/\s/g, ""));
+  const faceDebtRows = (rows) => rows.filter((x) => /차입|사채|장기부채/.test((x.account_nm ?? "").replace(/\s/g, "")) && !/대여|자산/.test(x.account_nm ?? ""));
+  const faceNames = (rows) => faceDebtRows(rows).map((x) => x.account_nm.replace(/\s/g, ""));
+  // 문장이 "포함"이라 해도 금액으로 확인(leaseInFaceTable) — 그 보고서(모든 판본) 원문 주석 표 vs 그 보고서 당기 본표 차입금 줄. 확인 못 하면 포함으로 보지 않는다
+  const confMemo = {};
+  const confirmOf = async (ry, rcp) => {
+    if (rcp in confMemo) return confMemo[rcp];
+    const r = await fnlttBs(corp, ry);
+    const vals = faceDebtRows(r?.rows ?? []).map((x) => amt(x.thstrm_amount));
+    for (const rc of rcpMemo[ry] ?? [rcp]) {
+      const hit = leaseInFaceTable(await docTexts(rc), vals);
+      if (hit) return (confMemo[rcp] = `${hit}(${rc})`);
+    }
+    return (confMemo[rcp] = null);
+  };
   // 단위 오류 보고서(2026-10-05 — 079550 2024 사업보고서가 천원 단위 숫자를 decimals="0" KRW 로 태깅: 리스부채 44,977,895, 전기말 49,524,406. 앞뒤
   // 보고서는 같은 해를 44,977,895,000 · 49,524,406,000 으로 — 태그 꼴 넷이 서로 맞아 꼴 일치 검사로는 못 잡는다). 보고서 R(ry) 가 **양쪽 이웃 보고서와
   // 모두**(R(ry) 전기말 vs R(ry-1) 당기말, R(ry) 당기말 vs R(ry+1) 전기말) 정확히 1000^k 배로 갈리면 그 보고서의 리스부채는 쓰지 않는다. 한쪽만 갈리고
@@ -993,7 +1059,9 @@ async function leaseNotes(corp, latest) {
       if (names.length && !(ry in faceDebtOfReport)) faceDebtOfReport[ry] = faceNames((await fnlttBs(corp, ry))?.rows ?? []);
       const hit = names.filter((n) => (faceDebtOfReport[ry] ?? []).some((f) => f.includes(n) || n.includes(f)));
       const L = leaseAmountOf(await xmlOf(rcp), prefix, sepOf[y]);
-      if (hit.length) { note = { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rcp})` }; break; }
+      const conf = hit.length ? await confirmOf(ry, rcp) : null;
+      if (hit.length && conf) { note = { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rcp}) — 금액 확인: ${conf}` }; break; }
+      if (hit.length) tried.push(`${rcp}: 회계정책 문장('${hit.join("'·'")}')은 있으나 주석 표로 본표 차입금 금액 안의 리스를 확인 못 함 — 주석 리스부채를 더함`);
       if (L.amount != null && (await unitBad(ry))) { tried.push(`${rcp}: 단위 오류 보고서(${unitBad.why[ry]}) — 건너뜀`); continue; }
       if (L.amount != null) { note = { status: "added", amount: L.amount, how: `사업보고서 ${rcp} XBRL 주석 ${prefix} — ${L.how}` }; break; }
       tried.push(`${rcp}: ${L.how}`);
@@ -1007,9 +1075,10 @@ async function leaseNotes(corp, latest) {
     const names = await polOf(latestRcp);
     if (names.length && !(latest in faceDebtOfReport)) faceDebtOfReport[latest] = faceNames((await fnlttBs(corp, latest))?.rows ?? []);
     const hit = names.filter((n) => (faceDebtOfReport[latest] ?? []).some((f) => f.includes(n) || n.includes(f)));
-    leasePolicyLatest = hit.length
-      ? { status: "included", amount: null, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${latestRcp})` }
-      : { status: "unknown", amount: null, how: `최근 사업보고서 ${latestRcp} 회계정책에 차입금 포함 문장 없음` };
+    const conf = hit.length ? await confirmOf(latest, latestRcp) : null;
+    leasePolicyLatest = hit.length && conf
+      ? { status: "included", amount: null, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${latestRcp}) — 금액 확인: ${conf}` }
+      : { status: "unknown", amount: null, how: hit.length ? `최근 사업보고서 ${latestRcp} 회계정책 문장('${hit.join("'·'")}')은 있으나 주석 표로 본표 차입금 금액 안의 리스를 확인 못 함` : `최근 사업보고서 ${latestRcp} 회계정책에 차입금 포함 문장 없음` };
   }
   // 분기말 — 회계정책이 포함이 아니면 최신 분기·반기 보고서 원문 주석(leaseQuarterOf)
   const leaseQuarter = leasePolicyLatest?.status === "unknown" ? await leaseQuarterOf(corp, latest, leaseNote[latest], sepOf[latest]) : null;

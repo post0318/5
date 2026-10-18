@@ -124,15 +124,54 @@ const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기금융자
  */
 const CASH_NAME_EXCLUDE = /^기타(유동)?금융자산$/;
 const DEPOSIT_ID = /^(ifrs-full|dart)_Short[tT]ermDeposits(?:Not)?ClassifiedAsCashEquivalents$/;
+/** 그 기간 값 — 연간 라벨("FY2021")은 전체 6개년 시계열(facts.annual)에서, 그 밖은 표시 기간 값 */
+function valueAt(facts: KrFacts, l: KrFactLine, label: string): number | null {
+  const m = /^FY(\d{4})$/.exec(label);
+  if (m && facts.mode === "annual") return facts.annual.get(l.key)?.get(Number(m[1])) ?? null;
+  return l.byPeriod.get(label) ?? null;
+}
+/** 자기 보고서 기준으로 B16 현금성자산 항목인 줄(현금및현금성자산 제외 — 그 줄은 늘 따로 있다) */
+function ownCashKind(l: KrFactLine, label: string): "deposit" | "cash" | null {
+  const own = [...(l.ownIds?.get(label) ?? [])];
+  if (own.some((id) => DEPOSIT_ID.test(id))) return "deposit";
+  if (own.some((id) => /CashAndCashEquivalents$/.test(id)) || nameOf(l) === "현금및현금성자산") return null;
+  if (own.some((id) => CASH_ID.test(id)) || CASH_NAME.test(nameOf(l))) return "cash";
+  return null;
+}
+/**
+ * 뒤 보고서가 합쳐 다시 적은 줄 — 기타(유동)금융자산 값이 그 기간 **자기 보고서**의 B16 현금성자산 줄들(예치금 ID 줄 하나 이상 포함) 당기 값 합과 정확히
+ * 같고, 그 줄들이 그 기간에 따로 값을 갖지 않으면(이중 계산 없음) 그 줄들을 합친 것으로 본다(2026-10-18 — 042660 2022: 2024 보고서 "기타금융자산"
+ * 492,254,450,925 = 2022 보고서 "단기금융상품"(dart_ShortTermDepositsNotClassifiedAsCashEquivalents) 492,238,300,925 + "단기상각후원가측정금융자산"
+ * 16,150,000; 2021: 2023 보고서 310,692,716,217 = 2021 보고서 단기금융상품). 정확히 성립하는 조합만 — 근사 없음
+ */
+function regroupedOwnCash(facts: KrFacts, bs: KrFactLine[], l: KrFactLine, label: string): boolean {
+  const v = valueAt(facts, l, label);
+  if (v == null) return false;
+  const parts = bs.filter((c) => c !== l && c.ownValues?.get(label) != null && valueAt(facts, c, label) == null && ownCashKind(c, label) != null);
+  if (!parts.length || parts.length > 12) return false;
+  for (let mask = 1; mask < 1 << parts.length; mask++) {
+    const pick = parts.filter((_, i) => mask & (1 << i));
+    if (!pick.some((c) => ownCashKind(c, label) === "deposit")) continue;
+    if (pick.reduce((a, c) => a + c.ownValues!.get(label)!, 0) === v) return true;
+  }
+  return false;
+}
 /** 기간 라벨("FY2021"·"2026 Q2")에서 이 줄이 현금성자산인가 — 기타(유동)금융자산 줄만 기간별로 갈린다 */
-function cashIn(l: KrFactLine, label: string): boolean {
-  if (!CASH_NAME_EXCLUDE.test(nameOf(l))) return true;
-  return [...(l.ownIds?.get(label) ?? [])].some((id) => DEPOSIT_ID.test(id));
+function makeCashIn(facts: KrFacts, bs: KrFactLine[]): (l: KrFactLine, label: string) => boolean {
+  const memo = new Map<string, boolean>();
+  return (l, label) => {
+    if (!CASH_NAME_EXCLUDE.test(nameOf(l))) return true;
+    if ([...(l.ownIds?.get(label) ?? [])].some((id) => DEPOSIT_ID.test(id))) return true;
+    const k = `${l.key}@@${label}`;
+    if (!memo.has(k)) memo.set(k, regroupedOwnCash(facts, bs, l, label));
+    return memo.get(k)!;
+  };
 }
 
 function isCashLine(l: KrFactLine): boolean {
   if (l.sjDiv !== "BS") return false;
-  if (CASH_NAME_EXCLUDE.test(nameOf(l))) return [...(l.ownIds?.values() ?? [])].some((ids) => [...ids].some((id) => DEPOSIT_ID.test(id)));
+  // 기타(유동)금융자산은 기간별로 makeCashIn 이 정한다(자기 보고서 예치금 ID, 또는 자기 보고서 현금성자산 줄들을 합쳐 다시 적은 줄)
+  if (CASH_NAME_EXCLUDE.test(nameOf(l))) return true;
   // B16 에 이름이 적힌 항목(현금및현금성자산·단기금융상품·단기투자자산(증권)·단기금융자산)은 태그와 관계없이 — 회사가 같은 줄을 해마다 다른 태그로
   // 단다(402340 "단기투자자산": 2023 보고서 InvestmentsOtherThan…, 2024~ 포괄 OtherCurrentFinancialAssets)
   if (CASH_NAME.test(nameOf(l))) return true;
@@ -215,7 +254,7 @@ export function krBridgeLines(facts: KrFacts): {
     debt: [...debtLines, ...plainLines],
     lease: debtLines.filter(isLeaseLine),
     cash: bs.filter(isCashLine),
-    cashIn,
+    cashIn: makeCashIn(facts, bs),
     nci: bs.filter((l) => ids(l).some((id) => NCI_ID.test(id)) || NCI_NAME.test(nameOf(l))),
     plainFinLiab: plainLines.length > 0,
   };
