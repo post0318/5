@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-18.3";
+const KR_DA_RULES_VERSION = "2026-10-18.4";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -161,6 +161,11 @@ const numOf = (t) => {
   const v = Number(u.replace(/[(),-]/g, ""));
   return Number.isFinite(v) ? (neg ? -v : v) : null;
 };
+/** ⑤b 머리 하나 근거용 — 예금성·투자성 이름(채권·사채 같은 넓은 낱말은 빼고) / 표 제목 제외 낱말 */
+const DEP_INV = /예금|예치금|(단기|장기|장단기|단장기)금융상품|채무상품|국공채|국채|지방채|펀드|수익증권|신탁|저축성보험|양도성|기업어음|전자단기|(?<![A-Za-z])(MMF|CMA)(?![A-Za-z])/;
+const TITLE_EXC = /채권|채무|부채|특수관계|연체|사채|대여|보증/;
+/** 반올림된 내역 n 개의 합 칸 ↔ 본표 값(표 단위 target) 허용치 — n/2, 단 표 단위 1,000 미만 작은 금액은 0.5(우연 일치 차단). 현금 내역·리스 확인 공통 */
+const sumTol = (target, n) => (Math.abs(target) >= 1000 ? n / 2 : 0.5);
 /**
  * 문서에서 현금흐름 조정 표(감가상각비 줄)를 찾아 [당기, 전기]. mode "nature" 는 성격별 비용 주석 표(계속영업만 — 중단영업이 있는 해에
  * 쓴다: 한화에어로스페이스 2024 현금흐름 조정은 인적분할 사업 상각까지 포함, 회사 주석 "전기 중 인적분할한 … 감가상각비가 포함")
@@ -983,8 +988,9 @@ function leaseInFaceTable(texts, faceVals) {
             const sum = blk.reduce((a, b) => a + b.v, 0);
             const lease = blk.find((b) => /리스/.test(b.label) && b.v !== 0);
             // 본표(원) ↔ 표(표 단위): 표 소계는 반올림한 줄 n 개의 합이라 본표 값을 표 단위로 바꾼 것과 최대 n/2 단위 다를 수 있다(178320 2023 보고서
-            // 유동성대체 소계 (249,840,128)천원 = 43,162,668 + 196,564,571 + 10,112,889, 본표 249,840,129,127원 — 1.127 단위). 그 범위만
-            const face = all.find((f) => Math.abs(Math.abs(f) / u - Math.abs(v)) <= blk.length / 2);
+            // 유동성대체 소계 (249,840,128)천원 = 43,162,668 + 196,564,571 + 10,112,889, 본표 249,840,129,127원 — 1.127 단위). 그 범위만, 표 단위 1,000 미만 금액은
+            // 0.5 만(sumTol — 현금 내역과 같은 규칙)
+            const face = all.find((f) => Math.abs(Math.abs(f) / u - Math.abs(v)) <= sumTol(f / u, blk.length));
             if (blk.length >= 2 && lease && sum === v && face != null)
               return `주석 표 '${label}' ${v.toLocaleString("en-US")}(단위 ${u}원) = 리스 줄 '${lease.label}' ${lease.v.toLocaleString("en-US")} 포함 묶음 합 = 본표 차입금 ${face.toLocaleString("en-US")}원`;
           }
@@ -1260,7 +1266,8 @@ function tablesOf(texts) {
       const before = [...clean(x.slice(Math.max(0, m.index - 1500), m.index)).matchAll(new RegExp(UNIT_RE.source, "g"))].at(-1)?.[1];
       const u = UNIT[inTab ?? before];
       if (!u) continue;
-      out.push({ u, face: /자산\s*총\s*계/.test(clean(m[0])), rows: [...m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1]).replace(/　/g, "").trim())) });
+      // title = 표 바로 앞 글자(주석 제목·"…의 내역 당기 (단위 : 원)") — ⑤b 가 금융자산 내역 표인지 볼 때 쓴다
+      out.push({ u, face: /자산\s*총\s*계/.test(clean(m[0])), title: clean(x.slice(Math.max(0, m.index - 600), m.index)).slice(-160), rows: [...m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)].map((r) => [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1]).replace(/　/g, "").trim())) });
     }
   return out;
 }
@@ -1304,6 +1311,12 @@ const colHeadLeft = (rows, r, idx) => {
   for (let q = r - 1; q >= 0; q -= 1) {
     if (rows[q].some((c) => cellVal(c) != null)) continue;
     if (rows[q].findIndex((c, i) => i > 0 && c) !== lead) continue; // 머리 줄의 첫 글자 칸 = 숫자 줄의 첫 숫자 칸 자리일 때만
+    // 칸 수 확인(재감사 2026-10-18 — 병합 칸 어긋남 방지): 머리 칸 수 = 숫자 칸 수, 또는 하나 적고 그 위 머리 줄의 마지막 칸이 "합계"(합계 열 머리가 위 줄에서
+    // 여러 줄을 묶음 — 052690)일 때만. 그 밖은 쓰지 않는다
+    const nh = rows[q].length - lead, nv = rows[r].length - lead;
+    const upTotal = rows.slice(0, q).some((x) => !x.some((c) => cellVal(c) != null) && /합\s*계/.test(x.filter(Boolean).at(-1) ?? ""));
+    if (!(nh === nv || (nh === nv - 1 && upTotal))) return null;
+    if (idx >= rows[q].length) return null;
     const h = rows[q][idx];
     if (h != null && h !== "") return h;
   }
@@ -1322,7 +1335,7 @@ function cashBreakdowns(tables, X) {
   // 내역 줄 중 하나 이상은 금융자산 내역 이름이어야 한다(감사 2026-10-18 후속 — 373220 2024 X 42 백만원에 특수관계자 채권 표 '기타 15 · 엘지디스플레이 8 · LG화학 19'
   // 가 우연히 맞았다)
   const content = (parts) => parts.length >= 1 && parts.every((p) => p.gk || (p.label && !NOT_CONTENT.test((p.last ?? p.label).replace(/\s/g, "")))) && parts.some((p) => p.gk || (p.v !== 0 && FIN_ASSET_NAME.test(p.label)));
-  for (const { u, rows } of tables) {
+  for (const { u, rows, title } of tables) {
     const target = X / u;
     const anchors = new Set();
     for (let r = 0; r < rows.length; r += 1) {
@@ -1362,8 +1375,12 @@ function cashBreakdowns(tables, X) {
         for (const nm of [rowLastText(rows[r]), colHead(rows, r, off) ?? ""])
           if (nm && Math.abs(T - target) <= 0.5 && cashKindOf(nm) === "inc" && !NOT_CONTENT.test(nm.replace(/\s/g, ""))) out.push({ parts: [{ label: nm, v: T }], u, how: `주석 표 칸 이름 '${nm}' ${T.toLocaleString("en-US")}(단위 ${u}원)` });
         // ⑤b 표 머리의 한 칸짜리 줄(XBRL 축 멤버 — 033100 「상각후원가측정금융자산의 내역」 머리 '단기금융상품', 줄 '상각후원가측정금융자산(유동)')이 성격을
-        // 밝히는 경우. 그런 머리 줄이 정확히 하나이고 X 칸 줄 이름이 제외 성격이 아닐 때만
-        if (Math.abs(T - target) <= 0.5 && cashKindOf(rowLastText(rows[r])) !== "exc") {
+        // 밝히는 경우. 머리 하나만 근거로 삼으므로 좁게(재감사 2026-10-18 — 047810 연체 분석 표 'A.연체되지 않은 채권' 아래 대여금·보증금, 특수관계자 채권·채무
+        // 표, 사채 부채 표가 걸렸다): ① 표 제목이 금융자산·금융상품 내역 표이고 채권·채무·부채·특수관계·연체·사채·대여·보증 낱말이 없음 ② 머리가 예금성·투자성
+        // 이름(DEP_INV, 제외 낱말 없음) ③ X 칸 줄 이름이 금융자산 이름이고 제외 성격 아님 ④ X 칸 열 머리가 제외 성격 아님 ⑤ 그런 머리 줄이 정확히 하나
+        const xr = rowLastText(rows[r]);
+        if (Math.abs(T - target) <= 0.5 && FIN_ASSET_NAME.test(xr) && cashKindOf(xr) !== "exc" && cashKindOf(colHead(rows, r, off) ?? "") !== "exc"
+          && /금융자산|금융상품/.test(title ?? "") && !TITLE_EXC.test(title ?? "")) {
           const heads = [];
           // 표 머리 = 첫 숫자 줄 앞 줄들만(본문 중간의 "채무상품:" 같은 구획 제목 줄은 머리가 아니다 — 001440 2021 보고서)
           for (let q = 0; q < r; q += 1) {
@@ -1373,15 +1390,16 @@ function cashBreakdowns(tables, X) {
             const k = cashKindOf(ne[0]);
             if (k) heads.push([ne[0], k]);
           }
-          if (heads.length === 1 && heads[0][1] === "inc") out.push({ parts: [{ label: heads[0][0], v: T }], u, how: `주석 표 머리 '${heads[0][0]}' 아래 '${rowLastText(rows[r])}' ${T.toLocaleString("en-US")}(단위 ${u}원)` });
+          if (heads.length === 1 && heads[0][1] === "inc" && DEP_INV.test(heads[0][0].replace(/\s|[ㆍ·・]/g, ""))) out.push({ parts: [{ label: heads[0][0], v: T }], u, how: `주석 표 머리 '${heads[0][0]}' 아래 '${rowLastText(rows[r])}' ${T.toLocaleString("en-US")}(단위 ${u}원)` });
         }
         for (const [kind, parts] of tries) {
           let sum = 0, hit = false;
           for (let k = 0; k < parts.length; k += 1) {
             sum += parts[k].v;
-            // 합계 칸 T 는 숫자 하나라 X 를 표 단위로 바꾼 값과 반올림 0.5 이내만(감사 2026-10-18 — 예전 (k+1)/2 허용치로 373220 2024 X 42 백만원에 관계기업
-            // 지분 표 38, 000660 2021 X 30 에 임원 보수 표 31 을 채택했다)
-            if (sum === T && Math.abs(Math.abs(T) - target) <= 0.5 && content(parts.slice(0, k + 1))) {
+            // 합계 칸 T 는 반올림된 내역 k 개의 합이라 본표 값(표 단위)과 k/2 까지 다를 수 있다(047810 2023 0.556 단위·009150 2026 반기 1.664 단위 — 정상).
+            // 다만 표 단위로 1,000 미만인 작은 금액은 우연 일치가 많아 0.5 만(재감사 2026-10-18 — 373220 2024 X 42 백만원에 관계기업 표 38, 000660 2021 X 30 에
+            // 임원 보수 표 31). 리스 쪽 leaseInFaceTable 도 같은 규칙(sumTol)
+            if (sum === T && Math.abs(Math.abs(T) - target) <= sumTol(target, k + 1) && content(parts.slice(0, k + 1))) {
               out.push({ parts: parts.slice(0, k + 1), u, how: `주석 표 ${kind} 내역 ${k + 1}개 합 ${T.toLocaleString("en-US")}(단위 ${u}원)` });
               hit = true;
               break;
@@ -1394,7 +1412,7 @@ function cashBreakdowns(tables, X) {
             for (let mk = 1; mk < 1 << parts.length; mk += 1) {
               const pick = parts.filter((_, i) => mk & (1 << i));
               if (pick.length < 2 || pick.length > 4) continue;
-              if (pick.reduce((a, x) => a + x.v, 0) === T && Math.abs(T - target) <= 0.5 && content(pick)) subs.push(pick);
+              if (pick.reduce((a, x) => a + x.v, 0) === T && Math.abs(T - target) <= sumTol(target, pick.length) && content(pick)) subs.push(pick);
             }
             if (subs.length === 1) out.push({ parts: subs[0], u, how: `주석 표 위 내역 중 ${subs[0].length}개 조합 합 ${T.toLocaleString("en-US")}(단위 ${u}원)` });
           }
@@ -1433,9 +1451,11 @@ function kindByAmount(tables, v, u) {
       for (let off = 0; off < t.rows[r].length; off += 1) {
         const c = cellVal(cellAt(t.rows[r], off));
         if (c == null || Math.abs(c) * t.u !== Math.abs(v) * u) continue; // 부호 무관(순차입금 표의 (단기금융상품) — 006400)
-        for (const nm of [rowLastText(t.rows[r]), colHead(t.rows, r, off) ?? colHeadLeft(t.rows, r, t.rows[r].length - 1 - off) ?? ""]) {
+        const ch = colHead(t.rows, r, off);
+        const left = ch == null ? colHeadLeft(t.rows, r, t.rows[r].length - 1 - off) : null;
+        for (const [nm, tag] of [[rowLastText(t.rows[r]), ""], [ch ?? left ?? "", left ? "·왼쪽 기준 머리" : ""]]) {
           const k = nm && FIN_ASSET_NAME.test(nm) ? cashKindOf(nm) : null;
-          if (k) { kinds.add(k); seen.push(`${nm}(${k === "inc" ? "포함" : "제외"})`); }
+          if (k) { kinds.add(k); seen.push(`${nm}(${k === "inc" ? "포함" : "제외"}${tag})`); }
         }
       }
   return kinds.size === 1 ? { kind: [...kinds][0], why: `같은 금액 칸 ${[...new Set(seen)].slice(0, 3).join("·")}` } : null;
@@ -1490,9 +1510,9 @@ function cashPartOfTables(tables, X, line, depth = 0) {
   return { cash: null, reason: "inconsistent", how: `${line} 주석 표마다 현금성 부분이 다름(${[...new Set(ok.map((r) => r.cash))].join("·")}) → 제외` };
 }
 /**
- * ⑥ 한 보고서 안 서로 다른 주석 표의 "유동" 열 칸 두 개 = X(042660 2024 기타금융자산 46,003,529,174원 = 상각후원가측정금융자산 내역 '정기예금 등' 유동 15,055 +
+ * ⑥(진단 전용 — 포함 근거로 쓰지 않음) 한 보고서 안 서로 다른 주석 표의 "유동" 열 칸 두 개 = X(042660 2024 기타금융자산 46,003,529,174원 = 상각후원가측정금융자산 내역 '정기예금 등' 유동 15,055 +
  * 당기손익-공정가치측정금융자산 내역 '채무상품' 유동 30,949 백만원 — 두 주석에 나뉘어 있다). 두 칸 모두 이름이 포함 성격이고, 합이 X 와 두 칸의 표 단위 반올림
- * 범위((u1 + u2)/2) 안이며, 그런 짝이 그 보고서에서 정확히 하나일 때만 줄 전체 포함. 그 밖은 못 읽음
+ * 범위((u1 + u2)/2) 안이며, 그런 짝이 정확히 하나면 판독 실패 사유에 그 짝을 적는다(값은 제외)
  */
 function crossTablePair(tables, X) {
   const hits = [];
@@ -1507,7 +1527,7 @@ function crossTablePair(tables, X) {
           if (!/유\s*동/.test(head) || /비\s*유\s*동/.test(head)) continue;
           const lab = rowLastText(t.rows[r]);
           const nl = lab.replace(/\s/g, "");
-          if (!lab || isTotalLabel(lab) || NOT_CONTENT.test(nl) || cashKindOf(lab, true) !== "inc") continue;
+          if (!lab || isTotalLabel(lab) || NOT_CONTENT.test(nl) || cashKindOf(lab, true) !== "inc" || /부채|사채|상각|할인/.test(nl + head) || v < 1000) continue;
           cand.set(`${nl}|${v * t.u}`, { label: lab, v, u: t.u, won: v * t.u, nl });
         }
     const cs = [...cand.values()];
@@ -1533,9 +1553,10 @@ function notFound(tables, X, line, depth) {
   const base = `${line} ${X.toLocaleString("en-US")}원 — 주석 내역을 찾지 못함`;
   if (depth === 0) {
     const cp = crossTablePair(tables, X);
+    // 진단만(재감사 2026-10-18 — 당기·전기 열, 별도 감사보고서 칸, 부채 줄이 후보에 섞여 안전하게 좁히지 못해 포함 규칙에서 뺐다. 042660 2024 = 빈칸 + 사유)
     if (cp?.hit) {
       const [a, b] = cp.hit.p;
-      return { cash: X, how: `${line} 주석 내역(${cp.hit.rc}) 서로 다른 주석 표의 유동 칸 두 개 합: ${a.label} ${a.v.toLocaleString("en-US")}(단위 ${a.u}원, 포함) + ${b.label} ${b.v.toLocaleString("en-US")}(단위 ${b.u}원, 포함) → 줄 전체` };
+      return { cash: null, reason: "unread", how: `${base} — 판독 실패(서로 다른 주석 표 칸 두 개의 합으로만 맞음: ${a.label} ${a.v.toLocaleString("en-US")}(단위 ${a.u}원) + ${b.label} ${b.v.toLocaleString("en-US")}(단위 ${b.u}원), ${cp.hit.rc} — 같은 기간·연결 범위를 확인하는 규칙이 없어 제외)` };
     }
   }
   // 그 줄 자체를 다시 적은 칸(범주별 표·신용위험 표의 '기타금융자산' 줄·열)은 내역이 아니라 빼고 본다. 0.5 넘게(3 이내) 다른 칸은 "합계 칸이 반올림 범위 밖"으로 따로
