@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-19.2";
+const KR_DA_RULES_VERSION = "2026-10-19.3";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -969,11 +969,14 @@ async function leasePolicyOf(rcpNo) {
  * 장기리스부채 (10,776,841)) 확인, 298040·103590 은 이런 묶음이 없다.
  */
 /** leaseInFaceTable 의 모든 확인 묶음 — [{ text, face(원), leaseWon(원), u }] (같은 본표 줄·같은 리스 줄 금액은 한 번만) */
-function leaseInFaceTableAll(texts, faceVals) {
+function leaseInFaceTableAll(texts, faceVals, mode = "lease", what = "본표 차입금") {
   const hits = new Map();
   const targets = faceVals.filter((v) => v != null && v !== 0);
   if (!targets.length) return [];
-  const all = [...targets, targets.reduce((a, v) => a + v, 0)];
+  // 본표 줄 하나, 두 줄 합(유동성장기차입부채 + 장기차입부채 — 178320 2021 장기차입부채 표 소계 251,418,463 천원), 전체 합
+  const pairs = [];
+  for (let i = 0; i < targets.length; i += 1) for (let j = i + 1; j < targets.length; j += 1) pairs.push(targets[i] + targets[j]);
+  const all = [...targets, ...pairs, targets.reduce((a, v) => a + v, 0)];
   const isTotal = (t) => /(^|[^가-힣])(소\s*계|합\s*계|총\s*계|계)\s*$/.test(t) || /^(소계|합계|계|총계)/.test(t.replace(/\s/g, ""));
   for (const x of texts) {
     for (const m of x.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
@@ -1002,9 +1005,15 @@ function leaseInFaceTableAll(texts, faceVals) {
             // 유동성대체 소계 (249,840,128)천원 = 43,162,668 + 196,564,571 + 10,112,889, 본표 249,840,129,127원 — 1.127 단위). 그 범위만, 표 단위 1,000 미만 금액은
             // 0.5 만(sumTol — 현금 내역과 같은 규칙)
             const face = all.find((f) => Math.abs(Math.abs(f) / u - Math.abs(v)) <= sumTol(f / u, blk.length));
-            if (blk.length >= 2 && lease && sum === v && face != null) {
+            // mode "nolease" = 리스 줄 없이 합계가 본표 줄과 맞는 묶음(차입금 주석에 리스가 없음을 확인 — 감사 2026-10-19 ⑪)
+            if (mode === "nolease" && blk.length >= 1 && !blk.some((b) => /리스/.test(b.label)) && sum === v && face != null) {
+              const key = `${face}|nolease`;
+              if (!hits.has(key)) hits.set(key, { text: `주석 표 '${label}' ${v.toLocaleString("en-US")}(단위 ${u}원) = 리스 줄 없는 묶음 합 = ${what} ${face.toLocaleString("en-US")}원`, face, leaseWon: 0, u });
+              continue;
+            }
+            if (mode === "lease" && blk.length >= 2 && lease && sum === v && face != null) {
               const key = `${face}|${Math.abs(lease.v) * u}`;
-              if (!hits.has(key)) hits.set(key, { text: `주석 표 '${label}' ${v.toLocaleString("en-US")}(단위 ${u}원) = 리스 줄 '${lease.label}' ${lease.v.toLocaleString("en-US")} 포함 묶음 합 = 본표 차입금 ${face.toLocaleString("en-US")}원`, face, leaseWon: Math.abs(lease.v) * u, u });
+              if (!hits.has(key)) hits.set(key, { text: `주석 표 '${label}' ${v.toLocaleString("en-US")}(단위 ${u}원) = 리스 줄 '${lease.label}' ${lease.v.toLocaleString("en-US")} 포함 묶음 합 = ${what} ${face.toLocaleString("en-US")}원`, face, leaseWon: Math.abs(lease.v) * u, u });
             }
           }
           block = [];
@@ -1032,10 +1041,25 @@ function leaseCellsOf(t, prevPair = null) {
   if (first < 1) return res;
   const width = Math.max(...R.map((row) => row.length));
   const pathOf = (off) => { const p = []; for (let q = 0; q < first; q += 1) { const h = cellAt(R[q], off); if (h && !/단위/.test(h)) p.push(h.replace(/\s/g, "")); } return p; };
-  const titlePer = periodWord([...(t.title ?? "").matchAll(PERIOD_RE_G)].at(-1)?.[0] ?? "");
+  // 제목의 기간 = 첫 기간 낱말(감사 2026-10-19 ⑨ — 「당기 및 전기 중 …」을 마지막 낱말로 전기로 봤다)
+  const titlePer = periodWord([...(t.title ?? "").matchAll(PERIOD_RE_G)][0]?.[0] ?? "");
   const perOfPath = (p) => { const ks = [...new Set(p.map(periodWord).filter(Boolean))]; return ks.length === 1 ? ks[0] : ks.length ? undefined : null; };
-  const isLeaseLabel = (l) => /^(장ㆍ단기|장·단기|장단기)?리스부채(\(\*\d*\))?$/.test((l ?? "").replace(/\s/g, ""));
-  const cols = [...Array(width).keys()].map((off) => ({ off, path: pathOf(off) }));
+  // 리스부채 잔액 줄 이름 — '리스부채'·'장ㆍ단기리스부채'·'(연결)재무상태표에 인식된 리스부채'(006400 만기분석 표 — 할인 전 줄은 아님)
+  const isLeaseLabel = (l) => { const t = (l ?? "").replace(/\s/g, ""); return /^(장ㆍ단기|장·단기|장단기)?리스부채(\(\*\d*\))?$/.test(t) || (/재무상태표(에|상)인식된리스부채(\(\*\d*\))?$/.test(t) && !/할인/.test(t)); };
+  // 변동표의 리스 줄 — 유동성·장기 등으로 나뉜 줄도(298040 재무활동 표 「리스부채」·「유동성 리스부채」 — 합)
+  const isLeaseRow = (l) => /^(유동성?|비유동성?|장기|단기|장ㆍ단기|장·단기|장단기)?리스부채(\((유동성?|비유동)\))?(\(\*\d*\))?$/.test((l ?? "").replace(/\s/g, ""));
+  // 잔액 열이 아닌 열(원리금·만기·할인 전·증감) — '당기말'·'전기말'·'제47(당)기말'은 잔액 열이라 지우지 않는다(감사 ⑥⑦)
+  const notBalanceCol = (h) => /유동|만기|최소|이내|초과|미만|할인|계약상|현금흐름|리스료|원리금|증가|감소|이자|지급|상환/.test(h) || /^(기초|기말)(잔액|금액|장부금액)?$/.test(h);
+  const cols0 = [...Array(width).keys()].map((off) => ({ off, path: pathOf(off) }));
+  // 만기·원리금 열이 있는 표(만기분석·할인 전 리스료)는 장부금액·현재가치 열만 잔액으로 본다(감사 2026-10-19 ⑦ — 「1년미만 | 1년~5년 | 합계」의 합계는 원리금)
+  // 값 열(숫자 칸이 있는 열)의 머리만 본다 — 줄 이름 열 머리 「만기분석 할인되지 않은 계약상 현금흐름」(006400)은 열 성격이 아니다
+  const valueCol = (off) => R.slice(first).some((row) => cellVal(cellAt(row, off)) != null);
+  const maturity = cols0.some((c) => valueCol(c.off) && c.path.some((h) => /만기|이내|초과|미만|할인|계약상|리스료|원리금|\d+년/.test(h)));
+  const cols = maturity ? cols0.map((c) => ({ ...c, bal: c.path.some((h) => /장부금액|현재가치/.test(h)) })) : cols0.map((c) => ({ ...c, bal: true }));
+  // 변동표 근거 — 리스·재무활동 변동표에는 증가·지급·현금흐름 같은 열·줄이 있다. 「기초 | 증감 | 기말」뿐인 표(이연법인세 일시적차이 표와 같은 꼴)는 쓰지 않는다(감사 ⑥ D3)
+  const MOVE_WORD = /증가|감소|지급|상환|이자|현금흐름|취득|신규|비현금|재무|대체|해지|처분/;
+  const moveHead = cols0.some((c) => c.path.some((h) => MOVE_WORD.test(h)));
+  const moveRows = t.rows.slice(first).some((row) => MOVE_WORD.test(rowLastText(row) ?? ""));
   const kiCol = cols.filter((c) => c.path.some((h) => /기초/.test(h) && !/기말/.test(h)));
   const kmCol = cols.filter((c) => c.path.some((h) => /기말/.test(h) && !/기초/.test(h)));
   // 이연법인세 변동표(일시적차이 '리스부채' 줄 — 060370 2022 기초 42,308 · 기말 63,833 천원)·법인세 표는 리스부채 잔액이 아니다
@@ -1048,7 +1072,8 @@ function leaseCellsOf(t, prevPair = null) {
   // 변동표(기초 → 기말) 한 쌍의 기간 — 같은 문서·범위의 바로 앞 변동표 기초 = 이 표 기말이면 이 표는 전기 표(051600 2021 보고서: 전기 변동표 머리도 "당기초·당기말",
   // 제목은 앞 표 숫자 줄). 그 밖은 제목의 기간 낱말, 없으면 당기
   const movement = (b, e, fm, prio) => {
-    const tp = prevPair && prevPair.b === e ? "prev" : titlePer ?? "cur";
+    const hdr = kmCol.length === 1 ? perOfPath(kmCol[0].path) : null;
+    const tp = prevPair && prevPair.b === e ? "prev" : hdr || titlePer || "cur";
     res.pair = { b, e };
     if (e > 0) out.push({ per: tp, v: e, form: `${fm} 기말${tp === "prev" ? "(전기 표)" : ""}`, prio });
     // 기초 칸은 앞 기간 잔액을 옮겨 적은 것이라 같은 표 종류의 기말보다 뒤(052690 2023 보고서 리스부채 변동표 기초 974,722 vs 전기 열 기말 974,721 천원)
@@ -1057,32 +1082,32 @@ function leaseCellsOf(t, prevPair = null) {
   // F4 머리 첫 칸이 '리스부채'인 표의 합계 줄(047810 「리스부채(*) | 당기말 | 전기말」 유동·비유동·합계)
   const headLease = R.slice(0, first).some((row) => isLeaseLabel(row.find((c) => c)));
   // F5 열 머리가 '리스부채'인 세로 변동표(047810 재무활동 부채 표: 열 단기차입금 … 리스부채, 줄 기초 … 기말)
-  const leaseCol = cols.filter((c) => c.path.some((h) => isLeaseLabel(h)));
+  const leaseCol = cols.filter((c) => c.path.some((h) => isLeaseRow(h)));
   let f5b = null, f5e = null;
-  const f1rows = [];
+  const f1rows = [], f3rows = [];
   for (let r = first; r < R.length; r += 1) {
     const lab = rowLastText(t.rows[r]);
     const nl = (lab ?? "").replace(/\s/g, "");
-    if (leaseCol.length === 1 && /^(기초|기말)(잔액|금액|장부금액)?$/.test(nl)) {
-      const v = cellVal(cellAt(R[r], leaseCol[0].off));
+    if (leaseCol.length >= 1 && leaseCol.length <= 3 && /^(기초|기말)(잔액|금액|장부금액)?$/.test(nl)) {
+      const vs = leaseCol.map((c) => cellVal(cellAt(R[r], c.off)));
+      const v = vs.some((x) => x == null) ? null : vs.reduce((a, x) => a + x, 0);
       if (/^기초/.test(nl)) f5b = v; else f5e = v;
     }
     if (headLease && isTotalLabel(lab ?? "")) {
       for (const c of cols) {
         const p = perOfPath(c.path);
-        if (!p || c.path.some((h) => /유동|만기|최소|이내|초과|기초|기말/.test(h))) continue;
+        if (!p || !c.bal || c.path.some(notBalanceCol)) continue;
         const v = cellVal(cellAt(R[r], c.off));
         if (v > 0) out.push({ per: p, v, form: "리스부채 표 합계", prio: 1 });
       }
     }
-    // F1 · F3
+    // F3 가로 변동표 — 리스 줄이 여럿(리스부채·유동성 리스부채)이면 합을 끝에서 한 번에
+    if (isLeaseRow(lab) && kmCol.length === 1 && kiCol.length === 1) {
+      f3rows.push(r);
+      continue;
+    }
+    // F1
     if (isLeaseLabel(lab)) {
-      if (kmCol.length === 1 && kiCol.length === 1) {
-        // 리스부채 전용 변동표(제목에 리스부채) = 순위 2, 재무활동 부채 조정표 등 다른 가로 변동표 = 순위 3(리스 관련 기타 변동이 섞일 수 있다 — 103590 2022 재무활동 표
-        // 기말 915,390 vs 리스부채 변동표 864,147 천원)
-        if (!res.pair) movement(cellVal(cellAt(R[r], kiCol[0].off)), cellVal(cellAt(R[r], kmCol[0].off)), own ? "리스부채 가로 변동표" : "재무활동 부채 변동표", own ? 2 : 3);
-        continue;
-      }
       // F1 은 표 끝에서 한 번에(리스부채 줄이 유동·비유동 구역에 나뉘어 있으면 합 — 001440 「매입채무 및 기타금융부채」 유동 2,148 + 비유동 815 백만원)
       f1rows.push(r);
     }
@@ -1106,10 +1131,11 @@ function leaseCellsOf(t, prevPair = null) {
     }
   }
   // 손익 표(이자비용·금융원가·손익 내역 — 052690 「금융원가에 포함된 이자비용의 내역」 리스부채 39,403 천원)는 잔액이 아니다
-  const pnl = /이자|손익|수익|비용|원가/.test(`${t.title ?? ""} ${(t.pre ?? "").slice(-80)}`);
+  // 제목(표 앞 마지막 문장)만 본다 — 앞 표의 숫자 줄 낱말(「리스 관련 비용 … 합 계」 — 006400)이 섞이지 않게
+  const pnl = /이자|손익|수익|비용|원가/.test((t.title ?? "").split(/\(\d+\)|\d+\)|[①-⑳]/).at(-1) ?? "");
   if (f1rows.length && !res.pair && !pnl) {
     for (const c of cols) {
-      if (c.path.some((h) => /유동|만기|최소|현재가치|이내|초과|기초|기말|증가|감소|이자/.test(h))) continue;
+      if (!c.bal || c.path.some(notBalanceCol)) continue;
       const p = perOfPath(c.path);
       if (!p) continue;
       const vs = f1rows.map((r) => cellVal(cellAt(R[r], c.off)));
@@ -1119,8 +1145,14 @@ function leaseCellsOf(t, prevPair = null) {
       if (v > 0) out.push({ per: p, v, form: f1rows.length > 1 ? `리스부채 줄 ${f1rows.length}개 합` : "리스부채 줄", prio: f1rows.length > 1 ? 2.5 : 1 });
     }
   }
-  if (!res.pair && f5e != null) movement(f5b, f5e, own ? "리스부채 세로 변동표(열)" : "재무활동 부채 변동표(열)", own ? 2 : 3);
-  if (!res.pair && res.f2e != null) movement(res.f2b, res.f2e, "리스부채 세로 변동표", 2);
+  if (f3rows.length && moveHead) {
+    // 리스부채 전용 변동표(제목에 리스부채) = 순위 2, 재무활동 부채 조정표 등 다른 가로 변동표 = 순위 3(리스 관련 기타 변동이 섞일 수 있다 — 103590 2022 재무활동 표
+    // 기말 915,390 vs 리스부채 변동표 864,147 천원)
+    const sumAt = (off) => { const vs = f3rows.map((r) => cellVal(cellAt(R[r], off))); return vs.some((x) => x == null) ? null : vs.reduce((a, x) => a + x, 0); };
+    movement(sumAt(kiCol[0].off), sumAt(kmCol[0].off), (own ? "리스부채 가로 변동표" : "재무활동 부채 변동표") + (f3rows.length > 1 ? `(리스 줄 ${f3rows.length}개 합)` : ""), own ? 2 : 3);
+  }
+  if (!res.pair && f5e != null && moveRows) movement(f5b, f5e, own ? "리스부채 세로 변동표(열)" : "재무활동 부채 변동표(열)", own ? 2 : 3);
+  if (!res.pair && res.f2e != null && moveRows) movement(res.f2b, res.f2e, "리스부채 세로 변동표", 2);
   return res;
 }
 async function leaseNotes(corp, latest) {
@@ -1167,6 +1199,30 @@ async function leaseNotes(corp, latest) {
       if (hs.length) return (confMemo[key] = { text: `${hs[0].text}(${rc}, ${y} 열)`, leaseIn: hs.reduce((a, h) => a + h.leaseWon, 0), tol: hs.reduce((a, h) => a + h.u / 2, 0), rows: hs.map((h) => h.leaseWon) });
     }
     return (confMemo[key] = null);
+  };
+  // ⑪(감사 2026-10-19) 회계정책 문장이 본표 차입금 포함이라 하는데 차입금 주석으로 리스를 확인 못 한 해 — 가산은 ⓐ 리스가 다른 부채 줄(기타금융부채·매입채무 등)의
+  // 주석 묶음 안에 있음을 확인했거나 ⓑ 정책이 가리킨 본표 차입금 줄마다 리스 줄 없는 주석 묶음 합계 = 본표 줄일 때만. 둘 다 아니면 null(가산 안 함 — 이중 계산 위험)
+  const outMemo = {};
+  const outsideOf = async (ry, y, hitNames) => {
+    const key = `${ry}|${y}|${hitNames.join(",")}`;
+    if (key in outMemo) return outMemo[key];
+    const col = ry === y ? "thstrm_amount" : ry === y + 1 ? "frmtrm_amount" : null;
+    const r = col ? await fnlttBs(corp, ry) : null;
+    if (!r) return (outMemo[key] = null);
+    const nm = (x) => (x.account_nm ?? "").replace(/\s/g, "");
+    const other = r.rows.filter((x) => /부채|채무/.test(nm(x)) && !faceDebtRows([x]).length && !/총계|합계|^(유동|비유동)?부채$|리스|충당|법인세|확정급여|이연/.test(nm(x)));
+    const otherVals = other.map((x) => amt(x[col]));
+    const named = faceDebtRows(r.rows).filter((x) => hitNames.some((n) => nm(x).includes(n) || n.includes(nm(x))));
+    for (const rc of rcpMemo[ry] ?? []) {
+      const texts = await docTexts(rc);
+      const a = leaseInFaceTableAll(texts, otherVals, "lease", "본표 다른 부채 줄");
+      if (a.length) return (outMemo[key] = { text: `리스부채는 차입금 밖 — ${a[0].text}(${rc}, ${y} 열)` });
+      if (named.length) {
+        const free = named.map((x) => leaseInFaceTableAll(texts, [amt(x[col])], "nolease", `본표 '${nm(x)}'`)[0]);
+        if (free.every(Boolean)) return (outMemo[key] = { text: `정책이 가리킨 본표 차입금 줄에 리스 없음 — ${free.map((f) => f.text).join("; ")}(${rc}, ${y} 열)` });
+      }
+    }
+    return (outMemo[key] = null);
   };
   // 단위 오류 보고서(2026-10-05 — 079550 2024 사업보고서가 천원 단위 숫자를 decimals="0" KRW 로 태깅: 리스부채 44,977,895, 전기말 49,524,406. 앞뒤
   // 보고서는 같은 해를 44,977,895,000 · 49,524,406,000 으로 — 태그 꼴 넷이 서로 맞아 꼴 일치 검사로는 못 잡는다). 보고서 R(ry) 가 **양쪽 이웃 보고서와
@@ -1227,7 +1283,7 @@ async function leaseNotes(corp, latest) {
   for (const y of years) {
     if (faceLease[y] !== false) continue; // 본표에 리스 줄이 있거나 그해 재무상태표 없음
     const tried = [];
-    let note = null;
+    let note = null, blocked = false, outsideWhy = null;
     for (const [ry, prefix] of [[y, `CFY${y}eFY`], [y + 1, `PFY${y}eFY`]]) {
       if (ry > latest) continue;
       const rcp = await rcpOf(ry);
@@ -1237,25 +1293,37 @@ async function leaseNotes(corp, latest) {
       if (names.length && !(ry in faceDebtOfReport)) faceDebtOfReport[ry] = faceNames((await fnlttBs(corp, ry))?.rows ?? []);
       const hit = names.filter((n) => (faceDebtOfReport[ry] ?? []).some((f) => f.includes(n) || n.includes(f)));
       const L = leaseAmountOf(await xmlOf(rcp), prefix, sepOf[y]);
-      const conf = hit.length ? await confirmOf(ry, rcp, y) : null;
-      if (hit.length && conf) {
-        // "빠진 만큼만 더한다"(오너 결정 1 = A): 회계정책 문장이 포함이라고 하고 주석 차입금 표로 본표 안 리스 줄이 확인되면 포함(더하지 않음), 확인 못 하면 아래에서
-        // 주석 리스부채 전액을 더한다. 확인된 리스 줄 합과 총액의 차이만 더하는 부분 가산은 쓰지 않는다 — 확인 묶음이 본표 줄 하나뿐인 해가 있어(178320 2024
-        // '장기리스부채' 13,162,763 천원만 확인, 다른 본표 줄의 리스는 묶음 합이 안 맞아 미확인) 차이를 "빠진 리스"로 볼 근거가 없다
-        note = { status: "included", amount: L.amount, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rcp}) — 금액 확인: ${conf.text}` };
+      // ⑩(감사 2026-10-19) 회계정책 문장이 없어도 차입금 주석 표에 리스 줄이 있고 그 묶음 합계 = 본표 차입금 줄(또는 두 줄 합)이면 포함(178320 2021 「장기리스부채」)
+      const conf = await confirmOf(ry, rcp, y);
+      if (conf) {
+        // 확인된 리스 줄 합과 총액의 차이만 더하는 부분 가산은 쓰지 않는다 — 확인 묶음이 본표 줄 하나뿐인 해가 있어(178320 2024 '장기리스부채' 13,162,763 천원만 확인)
+        // 차이를 "빠진 리스"로 볼 근거가 없다
+        note = { status: "included", amount: L.amount, how: hit.length ? `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${rcp}) — 금액 확인: ${conf.text}` : `차입금 주석 표에 리스 줄 포함(회계정책 문장 없음, 사업보고서 ${rcp}) — ${conf.text}` };
         break;
       }
-      if (hit.length) tried.push(`${rcp}: 회계정책 문장('${hit.join("'·'")}')은 있으나 주석 표로 본표 차입금 금액 안의 리스를 확인 못 함 — 주석 리스부채를 더함`);
+      let outside = null;
+      if (hit.length) {
+        // 그 해 보고서에서 못 정하면 다음 해 보고서 전기 열로도(103590 2020 — 2021 보고서 「유동기타부채」 주석 묶음에 리스부채)
+        outside = await outsideOf(ry, y, hit);
+        if (!outside && ry === y && y + 1 <= latest) { await rcpsOf(y + 1); outside = await outsideOf(y + 1, y, hit); }
+        if (!outside) {
+          tried.push(`${rcp}: 회계정책 문장('${hit.join("'·'")}')은 본표 차입금 포함이나 주석 표로 확인 못 함 — 이중 계산 위험으로 가산 안 함`);
+          blocked = true;
+          continue;
+        }
+      }
       if (L.amount != null && (await unitBad(ry))) { tried.push(`${rcp}: 단위 오류 보고서(${unitBad.why[ry]}) — 건너뜀`); continue; }
-      if (L.amount != null) { note = { status: "added", amount: L.amount, how: `사업보고서 ${rcp} XBRL 주석 ${prefix} — ${L.how}` }; break; }
+      if (L.amount != null) { note = { status: "added", amount: L.amount, how: `사업보고서 ${rcp} XBRL 주석 ${prefix} — ${L.how}${outside ? ` · ${outside.text}` : ""}` }; break; }
       tried.push(`${rcp}: ${L.how}`);
+      if (outside) outsideWhy = outside.text;
     }
-    // 사업보고서 XBRL 에 리스부채 주석 태그가 없는 해 — 공시 원문 주석 표(오너 결정 1 = A, 2026-10-19)
-    if (!note) {
+    // 사업보고서 XBRL 에 리스부채 주석 태그가 없는 해 — 공시 원문 주석 표(오너 결정 1 = A, 2026-10-19). 회계정책상 포함인데 확인 못 한 해는 가산하지 않는다
+    if (!note && (!blocked || outsideWhy)) {
       const d = await docLeaseOf(y);
-      if (d.amount != null) note = { status: "added", amount: d.amount, how: d.how };
+      if (d.amount != null) note = { status: "added", amount: d.amount, how: `${d.how}${outsideWhy ? ` · ${outsideWhy}` : ""}` };
       else tried.push(d.how);
     }
+    if (note?.status === "added" && blocked && !outsideWhy && !/차입금 밖|리스 없음/.test(note.how)) note = null;
     leaseNote[y] = note ?? { status: "unknown", amount: null, how: tried.join(" / ") || "사업보고서 없음" };
   }
   // 분기말 회계정책 — 최근 사업보고서(포함이 아니면 아래 leaseQuarterOf 가 분기 보고서 원문 주석으로). 본표에 리스 줄이 있으면 필요 없음
@@ -1265,13 +1333,15 @@ async function leaseNotes(corp, latest) {
     const names = await polOf(latestRcp);
     if (names.length && !(latest in faceDebtOfReport)) faceDebtOfReport[latest] = faceNames((await fnlttBs(corp, latest))?.rows ?? []);
     const hit = names.filter((n) => (faceDebtOfReport[latest] ?? []).some((f) => f.includes(n) || n.includes(f)));
-    const conf = hit.length ? await confirmOf(latest, latestRcp, latest) : null;
-    leasePolicyLatest = hit.length && conf
-      ? { status: "included", amount: null, how: `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${latestRcp}) — 금액 확인: ${conf.text}` }
-      : { status: "unknown", amount: null, how: hit.length ? `최근 사업보고서 ${latestRcp} 회계정책 문장('${hit.join("'·'")}')은 있으나 주석 표로 본표 차입금 금액 안의 리스를 확인 못 함` : `최근 사업보고서 ${latestRcp} 회계정책에 차입금 포함 문장 없음` };
+    const conf = await confirmOf(latest, latestRcp, latest);
+    const outside = hit.length && !conf ? await outsideOf(latest, latest, hit) : null;
+    leasePolicyLatest = conf
+      ? { status: "included", amount: null, how: hit.length ? `회계정책 주석: 리스부채를 본표 '${hit.join("'·'")}'에 포함(사업보고서 ${latestRcp}) — 금액 확인: ${conf.text}` : `차입금 주석 표에 리스 줄 포함(회계정책 문장 없음, 사업보고서 ${latestRcp}) — ${conf.text}` }
+      : { status: "unknown", amount: null, blocked: hit.length > 0 && !outside, how: hit.length ? `최근 사업보고서 ${latestRcp} 회계정책 문장('${hit.join("'·'")}')은 본표 차입금 포함이나 주석 표로 확인 못 함${outside ? ` · ${outside.text}` : " — 분기말 리스부채 가산 안 함(이중 계산 위험)"}` : `최근 사업보고서 ${latestRcp} 회계정책에 차입금 포함 문장 없음 · 차입금 주석 표에 리스 줄 없음` };
   }
   // 분기말 — 회계정책이 포함이 아니면 최신 분기·반기 보고서 원문 주석(leaseQuarterOf)
-  const leaseQuarter = leasePolicyLatest?.status === "unknown" ? await leaseQuarterOf(corp, latest, leaseNote[latest], sepOf[latest]) : null;
+  const leaseQuarter = leasePolicyLatest?.status === "unknown" && !leasePolicyLatest.blocked ? await leaseQuarterOf(corp, latest, leaseNote[latest], sepOf[latest]) : null;
+  if (leasePolicyLatest) delete leasePolicyLatest.blocked;
   return { leaseNote, leasePolicyLatest, leaseQuarter };
 }
 // ── 분기말 리스부채(오너 결정 2026-10-05) — 최신 분기·반기 보고서 원문 주석. 분기 보고서 XBRL(fnlttXbrl)엔 주석 사실이 없지만 원문(document.xml)
@@ -1439,10 +1509,20 @@ function scopeIndex(x) {
   if (/연결\s*(감사|검토)보고서/.test(dn)) return () => "con";
   if (/(감사|검토)보고서/.test(dn)) return () => "sep";
   const marks = [];
-  for (const m of x.matchAll(/<TITLE[^>]*>([^<]*)<\/TITLE>/g)) {
-    const t = m[1].replace(/\s+/g, " ").trim();
+  // 정기보고서 본문 단원 표시(AASSOCNOTE "D-0-3-K-…": III 재무에 관한 사항의 K 번째 단원). 2·3 = 연결재무제표·주석, 4·5 = 재무제표·주석, 그 밖 단원(6 배당·8 기타 재무·
+  // IV 경영진단 등)은 범위를 정하지 않는다(감사 2026-10-19 ③ — 「5. 재무제표 주석」 뒤 단원까지 별도로 봤다). 단원 표시가 없는 주석 소제목은 앞 단원을 잇고
+  // 「… (연결)」 소제목만 연결
+  for (const m of x.matchAll(/<TITLE([^>]*)>([^<]*)<\/TITLE>/g)) {
+    const t = m[2].replace(/\s+/g, " ").trim();
+    const code = /AASSOCNOTE="([^"]+)"/.exec(m[1])?.[1];
+    if (code) {
+      const k = /^D-0-3-(\d+)-/.exec(code)?.[1];
+      marks.push([m.index, k === "2" || k === "3" ? "con" : k === "4" || k === "5" ? "sep" : null]);
+      continue;
+    }
     if (/\(연결\)\s*$/.test(t) || /^\d+(-\d+)?\.\s*연결\s*재무제표(\s*주석)?$/.test(t)) marks.push([m.index, "con"]);
     else if (/^\d+(-\d+)?\.\s*재무제표(\s*주석)?$/.test(t)) marks.push([m.index, "sep"]);
+    else if (/^[IVX]+\.\s/.test(t)) marks.push([m.index, null]);
   }
   return (pos) => { let s = null; for (const [i, k] of marks) { if (i > pos) break; s = k; } return s; };
 }
@@ -1612,7 +1692,8 @@ function cashBreakdowns(tables, X, nears = []) {
         }
         // ⑤ X 칸 자체가 성격이 드러난 이름을 가진 경우(042660 2023 "기타금융유동자산(단기금융상품) 124,948", 2025 "정기예금 등 10,204" 백만원)
         for (const nm of [rowLastText(rows[r]), colHead(rows, r, off) ?? ""])
-          if (nm && Math.abs(T - target) <= 0.5 && specificInc(nm) && !NOT_CONTENT.test(nm.replace(/\s/g, ""))) out.push({ parts: [{ label: nm, v: T }], u, how: `주석 표 칸 이름 '${nm}' ${T.toLocaleString("en-US")}(단위 ${u}원)` });
+          // 숫자 칸의 줄 이름이 비유동(「장기금융상품」·「비유동금융자산」 — 사용제한 표)이면 유동 줄 근거가 아니다(감사 2026-10-19 ④)
+          if (nm && Math.abs(T - target) <= 0.5 && specificInc(nm) && !NOT_CONTENT.test(nm.replace(/\s/g, "")) && !nonCurrentName(rowLastText(rows[r]).replace(/\s/g, ""))) out.push({ parts: [{ label: nm, v: T }], u, how: `주석 표 칸 이름 '${nm}' ${T.toLocaleString("en-US")}(단위 ${u}원)` });
         // ⑤b 표 머리의 한 칸짜리 줄(XBRL 축 멤버 — 033100 「상각후원가측정금융자산의 내역」 머리 '단기금융상품', 줄 '상각후원가측정금융자산(유동)')이 성격을
         // 밝히는 경우. 머리 하나만 근거로 삼으므로 좁게(재감사 2026-10-18 — 047810 연체 분석 표 'A.연체되지 않은 채권' 아래 대여금·보증금, 특수관계자 채권·채무
         // 표, 사채 부채 표가 걸렸다): ① 표 제목이 금융자산·금융상품 내역 표이고 채권·채무·부채·특수관계·연체·사채·대여·보증 낱말이 없음 ② 머리가 예금성·투자성
@@ -1620,7 +1701,7 @@ function cashBreakdowns(tables, X, nears = []) {
         const xr = rowLastText(rows[r]);
         // ⑥ X 줄 이름이 변동표 낱말(기초·기말·취득 등 NOT_CONTENT)이 아님(재감사 2026-10-19 — 「수준3 당기손익인식금융자산의 변동내역」 기말 줄) ⑦ 머리가 비유동 이름·지분 섞인
         // 이름 아님(specificInc — 「사용이 제한된 금융자산」 표의 장기금융상품·장기예치금, 「채무상품 및 지분상품」)
-        if (Math.abs(T - target) <= 0.5 && FIN_ASSET_NAME.test(xr) && !NOT_CONTENT.test(xr.replace(/\s/g, "")) && cashKindOf(xr) !== "exc" && cashKindOf(colHead(rows, r, off) ?? "") !== "exc"
+        if (Math.abs(T - target) <= 0.5 && FIN_ASSET_NAME.test(xr) && !NOT_CONTENT.test(xr.replace(/\s/g, "")) && !nonCurrentName(xr.replace(/\s/g, "")) && cashKindOf(xr) !== "exc" && cashKindOf(colHead(rows, r, off) ?? "") !== "exc"
           && /금융자산|금융상품/.test(title ?? "") && !TITLE_EXC.test(title ?? "")) {
           const heads = [];
           // 표 머리 = 첫 숫자 줄 앞 줄들만(본문 중간의 "채무상품:" 같은 구획 제목 줄은 머리가 아니다 — 001440 2021 보고서)
@@ -1668,7 +1749,8 @@ function cashBreakdowns(tables, X, nears = []) {
       if (lead < 0) continue;
       const gv = rows[r].slice(lead).map(cellVal);
       const glab = rowLastText(rows[r]);
-      if (gv.length < 2 || gv.some((v) => v == null) || isTotalLabel(glab) || !FIN_ASSET_NAME.test(glab)) continue;
+      // 머리 줄은 자산(부채·순부채·차입 낱말 없음 — 감사 ② 「이자부 금융상품의 장부금액」 금융자산 = 금융부채 + 순부채 표)
+      if (gv.length < 2 || gv.some((v) => v == null) || isTotalLabel(glab) || !FIN_ASSET_NAME.test(glab) || /부채|차입|순부채/.test(glab)) continue;
       const T = gv.reduce((a, v) => a + v, 0);
       if (T <= 0 || Math.abs(T - target) > sumTol(target, Math.max(1, gv.filter((v) => v !== 0).length))) continue;
       const acc = gv.map(() => 0);
@@ -1680,6 +1762,7 @@ function cashBreakdowns(tables, X, nears = []) {
         const lab = rowLastText(rows[q]);
         if (v2.length !== gv.length || v2.some((v) => v == null) || isTotalLabel(lab)) break;
         v2.forEach((v, i) => (acc[i] += v));
+        if (/부채|차입|순부채|순자산/.test(lab)) { parts.length = 0; break; }
         parts.push({ label: lab, last: lab, v: v2.reduce((a, v) => a + v, 0), vertical: true });
         if (acc.every((a, i) => a === gv[i])) {
           if (parts.length >= 2 && content(parts)) out.push({ parts: [...parts], u, how: `주석 표 묶음 머리 '${glab}' 아래 내역 ${parts.length}개(범주 열 ${gv.length}개마다 합 일치) 합 ${T.toLocaleString("en-US")}(단위 ${u}원)` });
@@ -1915,7 +1998,7 @@ function groupPeriodCols(tables, X, ctx) {
     for (let r = first; r < R.length; r += 1) {
       if (R[r].some((c) => cellVal(c) != null)) continue;
       const glab = t.rows[r].filter(Boolean).join(" ");
-      if (!glab || !FIN_ASSET_NAME.test(glab) || isTotalLabel(glab) || /부채/.test(glab)) continue;
+      if (!glab || !FIN_ASSET_NAME.test(glab) || isTotalLabel(glab) || /부채|차입/.test(glab)) continue;
       const pick = [];
       let cells = 0;
       for (let q = r + 1; q < R.length; q += 1) {
@@ -1926,6 +2009,7 @@ function groupPeriodCols(tables, X, ctx) {
         if (vs.some((v) => v == null)) { pick.length = 0; break; }
         const v = vs.reduce((a, x) => a + x, 0);
         cells += vs.filter((x) => x !== 0).length;
+        if (/부채|차입|순부채|순자산/.test(lab)) { pick.length = 0; break; }
         pick.push({ label: lab, v, u: t.u, won: v * t.u });
       }
       if (pick.length < 2 || !pick.every((c) => FIN_ASSET_NAME.test(c.label) && !NOT_CONTENT.test(c.label.replace(/\s/g, "")))) continue;
@@ -1948,8 +2032,14 @@ function groupPeriodCols(tables, X, ctx) {
 function notFound(tables, X, line, depth, ctx) {
   const base = `${line} ${X.toLocaleString("en-US")}원 — 주석 내역을 찾지 못함`;
   if (depth === 0) {
-    const cc = categoryCurrentCols(tables, X, ctx) ?? groupPeriodCols(tables, X, ctx);
+    // ⑦(범주별 표 유동 열 칸 합)은 우연 일치가 있어(감사 2026-10-19 ① — 값을 흔든 시험 130,112회 중 11회 틀린 값) 포함 근거에서 빼고 판독 실패 사유로만
+    const c7 = categoryCurrentCols(tables, X, ctx);
+    const cc = groupPeriodCols(tables, X, ctx);
     if (cc) return cc.result(tables, line);
+    if (c7) {
+      const r7 = c7.result(tables, line);
+      return { cash: null, reason: "unread", how: `${base} — 판독 실패(${r7.how.replace(/ → 줄 전체$/, "")} — 범주별 표 칸 합으로만 맞아 채택 안 함)` };
+    }
     const cp = crossTablePair(tables, X);
     // 진단만(재감사 2026-10-18 — 당기·전기 열, 별도 감사보고서 칸, 부채 줄이 후보에 섞여 안전하게 좁히지 못해 포함 규칙에서 뺐다. 042660 2024 = 빈칸 + 사유)
     if (cp?.hit) {
