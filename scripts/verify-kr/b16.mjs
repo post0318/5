@@ -278,9 +278,14 @@ export function leaseDocCandidates(entries, want, sepOk = true) {
         if (pairCols.has(c)) continue;
         const p = periodOf(headOf(T, c), tp);
         if (p !== role) continue;
-        const pos = leaseRows(c).filter((r) => r[c].n > 0);
-        if (pos.length === 1 && /^(?:장기|금융)?리스부채$/.test(cl0(leafOf(pos[0])))) push([pos[0][c]], `'${headOf(T, c).slice(0, 14)}' 열 '${leafOf(pos[0])}' 줄`);
-        else if (pos.length === 2) push(pos.map((r) => r[c]), `'${headOf(T, c).slice(0, 14)}' 열 리스부채 두 줄`);
+        // 만기분석 표 안의 할인 전 금액 줄(「할인되지 않은 리스부채」·총리스료·원리금)은 잔액이 아니라 뺀다. 「재무상태표에 인식된 리스부채」·「…장부금액」 줄은
+        // 그 표의 장부금액 합계 — 칸 하나 값으로 따로 센다(006400 2021 만기분석 표 「12월 31일 현재 연결재무상태표에 인식된 리스부채」 38,561,071)
+        const pos = leaseRows(c).filter((r) => r[c].n > 0 && !/할인되지|할인전|총리스|최소|원리금|명목/.test(cl0(leafOf(r))));
+        const tots = pos.filter((r) => /재무상태표|인식된|장부금액/.test(cl0(leafOf(r))));
+        const parts = pos.filter((r) => !tots.includes(r));
+        if (tots.length === 1) push([tots[0][c]], `'${headOf(T, c).slice(0, 14)}' 열 '${leafOf(tots[0]).slice(0, 30)}' 줄`);
+        if (parts.length === 1 && /^(?:장기|금융)?리스부채$/.test(cl0(leafOf(parts[0])))) push([parts[0][c]], `'${headOf(T, c).slice(0, 14)}' 열 '${leafOf(parts[0])}' 줄`);
+        else if (parts.length === 2) push(parts.map((r) => r[c]), `'${headOf(T, c).slice(0, 14)}' 열 리스부채 두 줄`);
         // 리스부채 표(제목이 리스)의 「기말…」 줄·현재가치/장부금액 열 「합계」 줄 — 유동·비유동 줄이 같은 표에 있어도 칸 하나 값으로 따로 센다(062040 2024 보고서
         // 「(2) 리스부채의 변동내역」 전기 기말 880,631 = 유동 479,870 + 비유동 400,761)
         if (preLease) {
