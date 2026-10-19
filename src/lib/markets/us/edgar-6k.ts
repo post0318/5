@@ -344,7 +344,7 @@ async function verifyPrior(st: SixKStatements, cik: string, recent: RecentFiling
    * 표 단위 확인 두 가지(조정자 지시·재감사 2026-10-20) — 둘 다 통과해야 그 표 모든 줄에 이번 보고서의 당기·전기 열을 쓴다(전기 누적 = 회사가 이번
    * 보고서 기준으로 다시 나눈 값, 한국 LTM 정정본 원칙). 이름·묶음이 바뀐 줄도 남는다. 하나라도 안 되면 그 표 전체를 쓰지 않는다(빈칸 + 사유).
    *  (가) 전기 열 = 1년 전 같은 분기 6-K 의 당기 누적
-   *  (나) 당기 열: 3개월·누적 열이 같이 있는 표는 「당기 누적 − 직전 분기 6-K 당기 누적 = 당기 3개월」(표시 자리 반올림 1 허용 — 열 자리 판정용). 1분기 표는 누적 = 3개월 열이라 확인 없음,
+   *  (나) 당기 열: 3개월·누적 열이 같이 있는 표는 「당기 누적 − 직전 분기 6-K 당기 누적 = 당기 3개월」(반올림 범위 판정 — 칸 ± 표시 단위 절반끼리 겹치면 일치, 정확 일치가 0 줄이면 보류). 1분기 표는 누적 = 3개월 열이라 확인 없음,
    *       누적 열만 있는 표(3개월 열 없음 — TSM 현금흐름표)는 열이 둘뿐이라 당기 열이 틀리면 (가)에서 걸린다.
    *  (가)만으로는 두 보고서가 같은 종류로 틀린 경우(둘 다 3개월 열을 누적으로 읽음)와 당기 열만 틀린 경우를 못 잡는다
    */
@@ -368,21 +368,24 @@ async function verifyPrior(st: SixKStatements, cik: string, recent: RecentFiling
     // (나) 당기 누적 열 자리
     const qrows = prevQ?.[sec], qdates = sec === "is" ? prevQ?.isDates : prevQ?.cfDates, kC = qdates?.indexOf(prevQEnd) ?? -1;
     if (!prevQ || !qrows || kC < 0) return { rows: [] as SixKRow[], why: `직전 분기(${prevQEnd}) 6-K ${what}를 못 찾음 — 당기 누적 열 확인 불가` };
-    let c2 = 0, m2 = 0;
+    let c2 = 0, m2 = 0, exact = 0;
     const diff2: string[] = [];
     for (const r of rows) {
       const m = counterpart(r, prevQ, qrows);
       if (!m || r.q3 == null) continue;
       c2++;
-      // 표시 자리 반올림(각 칸을 따로 반올림해 싣는다 — ASML 769.1 − 506.3 = 262.8 vs 3개월 262.9) 만큼만 허용: 마지막 표시 자리 1. 이 등식은 값이
-      // 아니라 열 자리를 가르는 데만 쓴다(틀린 열이면 차이가 이보다 훨씬 크다). 값은 보고서 칸 그대로 쓴다
+      // 반올림 범위 판정(검증기와 같은 원칙 — 허용치 아님): 각 칸은 표시 단위 u 로 반올림해 실린 값이라 참값은 칸 ± u/2. 「누적 − 직전 누적」의
+      // 범위(± u)와 「3개월」 칸 범위(± u/2)가 겹치면 범위 일치, 차가 정확히 0 이면 정확 일치(ASML 769.1 − 506.3 = 262.8 vs 262.9 는 범위 일치).
+      // 이 등식은 열 자리를 가르는 데만 쓴다. 값은 칸 그대로
       const dec = Math.max(...[r.vals[iC], m.vals[kC], r.q3].map((v) => (String(v).split(".")[1] ?? "").length));
-      const d = (r.vals[iC] - m.vals[kC] - r.q3) * 10 ** dec;
-      if (Math.abs(Math.round(d)) <= 1 && st.unit === prevQ.unit) m2++;
-      else diff2.push(r.label);
+      const d = Math.round((r.vals[iC] - m.vals[kC] - r.q3) * 10 ** dec);
+      if (st.unit === prevQ.unit && d === 0) { m2++; exact++; }
+      else if (st.unit === prevQ.unit && Math.abs(d) <= 1.5) m2++;      else diff2.push(r.label);
     }
     if (!tableOk(m2, c2))
-      return { rows: [] as SixKRow[], why: `${what} 당기 누적 열 확인 실패 — 당기 누적 − 직전 분기 6-K(${prevQ.source}) 누적 = 당기 3개월인 줄 ${m2}/${c2}${diff2.length ? `, 다른 줄: ${diff2.slice(0, 6).join(", ")}` : ""}` };
+      return { rows: [] as SixKRow[], why: `${what} 당기 누적 열 확인 실패 — 당기 누적 − 직전 분기 6-K(${prevQ.source}) 누적 = 당기 3개월인 줄 ${m2}/${c2}(정확 ${exact})${diff2.length ? `, 다른 줄: ${diff2.slice(0, 6).join(", ")}` : ""}` };
+    // 전부 반올림 범위로만 맞으면(정확 일치 0) 판정 보류 — 열 자리를 확정할 근거가 약하다
+    if (!exact) return { rows: [] as SixKRow[], why: `${what} 당기 누적 열 판정 보류 — 직전 분기 6-K(${prevQ.source})와 반올림 범위로만 맞음(${m2}/${c2}, 정확 일치 0)` };
     return { rows, why: undefined };
   };
   const cf = check(st.cf, st.cfDates, st.cfMode, "cf", "현금흐름표");
