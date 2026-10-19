@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-19.3";
+const KR_DA_RULES_VERSION = "2026-10-20.1";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -1243,7 +1243,24 @@ async function leaseNotes(corp, latest) {
   const docLeaseMemo = {};
   const docLeaseOf = async (y) => {
     if (y in docLeaseMemo) return docLeaseMemo[y];
-    const want = sepOf[y] ? "sep" : "con";
+    let want = sepOf[y] ? "sep" : "con";
+    // 연결 줄인데 그 해를 담은 사업보고서가 별도뿐인 해(062040 2023 — 2024 사업보고서는 별도만, 2025 연결 보고서 전전기 열 = 별도와 같은 값, 종속기업 2025 설립):
+    // 그 해 연결 자산총계 = 별도 자산총계(원 단위 정확히)일 때만 별도 주석을 같은 실체로 본다
+    let sameEntity = null;
+    if (want === "con") {
+      const rNext = y + 1 <= latest ? await fnlttBs(corp, y + 1) : null;
+      if (rNext?.fs === "OFS") {
+        const total = (rows, col) => amt(rows.find((x) => x.account_id === "ifrs-full_Assets" || /^자산총계$/.test((x.account_nm ?? "").replace(/\s/g, "")))?.[col]);
+        let con = null;
+        for (const [ry2, col] of [[y + 2, "bfefrmtrm_amount"], [y + 1, "frmtrm_amount"], [y, "thstrm_amount"]]) {
+          if (ry2 > latest) continue;
+          const r2 = await fnlttBs(corp, ry2);
+          if (r2?.fs === "CFS" && total(r2.rows, col) != null) { con = total(r2.rows, col); break; }
+        }
+        const sep = total(rNext.rows, "frmtrm_amount");
+        if (con != null && sep != null && con === sep) { want = "sep"; sameEntity = `연결 자산총계 = 별도 자산총계 ${con.toLocaleString("en-US")}원(그 해 사업보고서가 별도뿐)`; }
+      }
+    }
     const seen = []; // { ry, rc, won, u, form }
     for (const [ry, per] of [[y, "cur"], [y + 1, "prev"]]) {
       if (ry > latest) continue;
@@ -1256,7 +1273,9 @@ async function leaseNotes(corp, latest) {
           const k = `${t.file}|${t.scope}`;
           const r0 = leaseCellsOf(t, last[k] ?? null);
           if (r0.pair) last[k] = r0.pair;
-          for (const c of r0.cells) if (c.per === per) seen.push({ ry, rc, won: c.v * t.u, u: t.u, form: c.form, v: c.v, prio: c.prio });
+          // sig = 표 내용 표시(첫 숫자 줄까지) — 같은 주석 표를 본문·감사보고서가 다시 실은 것은 같은 표로 본다
+          const sig = t.rows.slice(0, 4).map((r) => r.join("|")).join("/");
+          for (const c of r0.cells) if (c.per === per) seen.push({ ry, rc, won: c.v * t.u, u: t.u, form: c.form, v: c.v, prio: c.prio, sig });
         }
       }
     }
@@ -1267,13 +1286,18 @@ async function leaseNotes(corp, latest) {
     }
     // 표 종류 순위(리스부채 줄 1 > 리스부채 변동표 2 > 재무활동 부채 조정표 3) — 그 해·다음 해 보고서가 같은 값을 보이는 묶음 중 가장 높은 순위 것만. 원문끼리 1단위
     // 갈리면(103590 2021 리스부채 변동표 기말 1,964,406 vs 재무활동 표 기초·만기분석 합계 1,964,405 천원) 순위로 정한다
-    const supported = groups.filter((g) => new Set(g.items.map((i) => i.ry)).size === 2).map((g) => ({ ...g, prio: Math.min(...g.items.map((i) => i.prio ?? 9)) }));
+    // 그 해 사업보고서가 없는 해(상장 첫 보고서의 전기 — 062040 2023)는 다음 해 보고서 안 서로 다른 주석 표 둘 이상이 같은 값일 때(이웃 보고서 대조 대신)
+    const noOwn = !(await rcpsOf(y)).length;
+    const supported = groups
+      // 서로 다른 칸 둘 이상(다른 표, 또는 같은 변동표의 전기 열 기말·당기 열 기초처럼 다른 칸) — 062040 2023 리스부채 변동표 전기 기말 880,631 = 당기 기초 880,631 천원
+      .filter((g) => new Set(g.items.map((i) => i.ry)).size === 2 || (noOwn && new Set(g.items.map((i) => `${i.sig}|${i.form.replace(/\(전기 표\)/, "")}`)).size >= 2))
+      .map((g) => ({ ...g, prio: Math.min(...g.items.map((i) => i.prio ?? 9)) }));
     const top = supported.length ? Math.min(...supported.map((g) => g.prio)) : null;
     const ok = supported.filter((g) => g.prio === top);
     const others = supported.filter((g) => g.prio !== top);
     const desc = (g) => [...new Map(g.items.map((i) => [`${i.rc}|${i.form}`, `${i.rc} ${i.form} ${i.v.toLocaleString("en-US")}(단위 ${i.u}원)`])).values()].slice(0, 4).join(" = ");
     let r;
-    if (ok.length === 1) r = { amount: ok[0].won, how: `리스부채: 사업보고서 원문 주석 — ${desc(ok[0])} (그 해·다음 해 보고서 같은 값, ${want === "con" ? "연결" : "별도"})${others.length ? ` · 낮은 순위 표 값 ${others.map((g) => `${g.won.toLocaleString("en-US")}(${g.items[0].form})`).join("·")} 은 쓰지 않음` : ""}` };
+    if (ok.length === 1) r = { amount: ok[0].won, how: `리스부채: 사업보고서 원문 주석 — ${desc(ok[0])} (${noOwn ? "그 해 보고서 없음 — 다음 해 보고서 안 서로 다른 칸 같은 값" : "그 해·다음 해 보고서 같은 값"}, ${want === "con" ? "연결" : "별도"}${sameEntity ? ` — ${sameEntity}` : ""})${others.length ? ` · 낮은 순위 표 값 ${others.map((g) => `${g.won.toLocaleString("en-US")}(${g.items[0].form})`).join("·")} 은 쓰지 않음` : ""}` };
     else if (ok.length > 1) r = { amount: null, how: `원문 주석 리스부채 후보가 여럿(${ok.map((g) => g.won.toLocaleString("en-US")).join("·")}원) — 정하지 않음` };
     else r = { amount: null, how: seen.length ? `원문 주석 리스부채가 그 해·다음 해 보고서에서 같은 값으로 확인되지 않음(${[...new Set(seen.map((c) => `${c.rc} ${c.form} ${c.won.toLocaleString("en-US")}`))].slice(0, 3).join(", ")})` : "원문 주석 리스부채 표 없음" };
     return (docLeaseMemo[y] = r);
@@ -1909,9 +1933,13 @@ function crossTablePair(tables, X) {
 function categoryCurrentCols(tables, X, ctx) {
   if (!ctx) return null;
   const want = ctx.fs === "OFS" ? "sep" : "con";
-  const perOf = periodWord;
-  const byRc = new Map();
-  for (const t of tables) {
+  // 좁힌 꼴(재감사 2026-10-19 — 오너 지시로 다시 시도): ① 같은 보고서·같은 범위·그 해 기간 열의 범주별 금융자산 내역 표, 서로 다른 표에서 표마다 정확히 한 칸
+  // ② 칸 = 그 표의 「유동」 열·자산 내역 줄, 이름이 예금성·투자성(specificInc — 채무상품·정기예금 등), 합계·소계·순액·비유동·파생·지분 줄 금지 ③ 같은 금액 칸은 하나로
+  // ④ 칸 2~3, 합이 X 와 표 단위 반올림(칸수/2) 안, 그런 조합이 보고서 안에 정확히 하나(보고서끼리도 같은 조합) ⑤ 본표에 따로 있는 줄과 같은 금액 칸은 뺀다
+  // ⑥ 기존 판독이 실패했을 때만(notFound 에서 부른다)
+  const faceVals = ctx.face ?? [];
+  const byRc = new Map(); // rc → [{ tkey, cells: Map(won → cell) }]
+  for (const [ti, t] of tables.entries()) {
     if (t.face || t.scope !== want || !t.rowsX) continue;
     const per = ctx.period(t.rc);
     if (!per || !/금융자산|금융상품/.test(t.title ?? "") || TITLE_EXC.test(t.title ?? "")) continue;
@@ -1919,42 +1947,58 @@ function categoryCurrentCols(tables, X, ctx) {
     const R = t.rowsX;
     const first = R.findIndex((row) => row.some((c) => cellVal(c) != null));
     if (first < 1) continue;
-    const titlePer = [...(t.title ?? "").matchAll(PERIOD_RE_G)].map((m) => (m[1] === "당" ? "cur" : "prev")).at(-1) ?? null;
+    const titlePer = periodWord([...(t.title ?? "").matchAll(PERIOD_RE_G)][0]?.[0] ?? "");
+    const cells = new Map();
     for (let r = first; r < R.length; r += 1) {
       const lab = rowLastText(t.rows[r]);
-      const nl = lab.replace(/\s/g, "");
-      if (!lab || isTotalLabel(lab) || NOT_CONTENT.test(nl) || !FIN_ASSET_NAME.test(lab) || /부채|사채|상각|할인/.test(nl)) continue;
+      const nl = (lab ?? "").replace(/\s/g, "");
+      if (!lab || isTotalLabel(lab) || NOT_CONTENT.test(nl) || /순액|파생|지분|주식|출자|부채|사채|상각|할인|합계|소계/.test(nl) || nonCurrentName(nl) || !specificInc(lab)) continue;
       const lead = R[r].findIndex((c) => cellVal(c) != null);
       for (let off = 0; off < R[r].length - lead; off += 1) {
         const v = cellVal(cellAt(R[r], off));
         if (!v || v <= 0) continue;
         const path = [];
-        for (let q = 0; q < first; q += 1) { const h = cellAt(R[q], off); if (h) path.push(h); }
+        for (let q = 0; q < first; q += 1) { const h = cellAt(R[q], off); if (h && !/단위/.test(h)) path.push(h); }
         if (!path.some((h) => /유\s*동/.test(h) && !/비\s*유\s*동/.test(h)) || path.some((h) => /비\s*유\s*동/.test(h))) continue;
-        const pp = path.map(perOf).filter(Boolean);
+        const pp = path.map(periodWord).filter(Boolean);
         const cp = pp.length ? (new Set(pp).size === 1 ? pp[0] : null) : titlePer;
         if (cp !== per) continue;
-        const m = byRc.get(t.rc) ?? byRc.set(t.rc, new Map()).get(t.rc);
-        m.set(`${nl}|${v * t.u}`, { label: lab, v, u: t.u, won: v * t.u });
+        const won = v * t.u;
+        if (faceVals.some((f) => f != null && Math.abs(Math.abs(f) - won) <= t.u / 2)) continue;
+        cells.set(won, { label: lab, v, u: t.u, won, tkey: ti });
       }
     }
+    if (!cells.size) continue;
+    const list = byRc.get(t.rc) ?? byRc.set(t.rc, []).get(t.rc);
+    list.push({ ti, cells: [...cells.values()] });
   }
   const found = [];
-  for (const [rc, m] of byRc) {
-    const cs = [...m.values()];
-    if (cs.length < 2 || cs.length > 14) continue;
+  for (const [rc, tbls] of byRc) {
+    // 같은 금액 칸은 표가 달라도 하나(같은 내역을 두 표가 다시 적은 것 — 20240328000773 단기금융상품 100,540 / 금융상품 100,540)
     const sets = new Map();
-    for (let mk = 1; mk < 1 << cs.length; mk += 1) {
-      const pick = cs.filter((_, i) => mk & (1 << i));
-      if (pick.length < 2 || pick.length > 5) continue;
-      if (Math.abs(pick.reduce((a, c) => a + c.won, 0) - X) <= pick.reduce((a, c) => a + c.u, 0) / 2) sets.set(pick.map((c) => c.won).sort((a, b) => a - b).join("+"), pick);
-    }
+    const pickRec = (i, chosen, used) => {
+      if (chosen.length >= 2) {
+        const sum = chosen.reduce((a, c) => a + c.won, 0);
+        if (Math.abs(sum - X) <= chosen.reduce((a, c) => a + c.u, 0) / 2) sets.set(chosen.map((c) => c.won).sort((a, b) => a - b).join("+"), [...chosen]);
+      }
+      if (chosen.length === 3) return;
+      for (let j = i; j < tbls.length; j += 1)
+        for (const c of tbls[j].cells) {
+          if (used.has(c.won)) continue;
+          used.add(c.won);
+          chosen.push(c);
+          pickRec(j + 1, chosen, used);
+          chosen.pop();
+          used.delete(c.won);
+        }
+    };
+    if (tbls.length >= 2) pickRec(0, [], new Set());
     if (sets.size > 1) return null;
     if (sets.size === 1) found.push({ rc, pick: [...sets.values()][0], key: [...sets.keys()][0] });
   }
   if (!found.length || new Set(found.map((f) => f.key)).size !== 1) return null;
   const { rc, pick } = found[0];
-  return { result: (tbls, line) => partsResult(tbls, X, pick, `${line} 주석 내역(${rc}) 범주별 내역 표 유동·같은 기간 열 칸 ${pick.length}개 합`) };
+  return { pick, result: (tbls, line) => partsResult(tbls, X, pick, `${line} 주석 내역(${rc}) 범주별 금융자산 내역 표 ${pick.length}개의 유동·그 해 열 칸(표마다 한 칸) 합`) };
 }
 const PERIOD_RE_G = /(당|전)\)?\s*(반|분)?\s*기/g;
 /** 기간 낱말 → "cur"(당기·당반기·"제 19(당) 기") | "prev"(전기) | null */
@@ -2033,13 +2077,8 @@ function notFound(tables, X, line, depth, ctx) {
   const base = `${line} ${X.toLocaleString("en-US")}원 — 주석 내역을 찾지 못함`;
   if (depth === 0) {
     // ⑦(범주별 표 유동 열 칸 합)은 우연 일치가 있어(감사 2026-10-19 ① — 값을 흔든 시험 130,112회 중 11회 틀린 값) 포함 근거에서 빼고 판독 실패 사유로만
-    const c7 = categoryCurrentCols(tables, X, ctx);
-    const cc = groupPeriodCols(tables, X, ctx);
+    const cc = groupPeriodCols(tables, X, ctx) ?? categoryCurrentCols(tables, X, ctx);
     if (cc) return cc.result(tables, line);
-    if (c7) {
-      const r7 = c7.result(tables, line);
-      return { cash: null, reason: "unread", how: `${base} — 판독 실패(${r7.how.replace(/ → 줄 전체$/, "")} — 범주별 표 칸 합으로만 맞아 채택 안 함)` };
-    }
     const cp = crossTablePair(tables, X);
     // 진단만(재감사 2026-10-18 — 당기·전기 열, 별도 감사보고서 칸, 부채 줄이 후보에 섞여 안전하게 좁히지 못해 포함 규칙에서 뺐다. 042660 2024 = 빈칸 + 사유)
     if (cp?.hit) {
@@ -2108,7 +2147,7 @@ async function cashNotes(corp, latest) {
     const yearOf = {};
     for (const ry of reps) for (const rc of await rcps(ry)) { docs.push(rc); yearOf[rc] = ry; }
     // ⑦ 용 — 줄의 재무제표 범위(연결·별도)와 보고서마다 그 해 열(그 해 보고서 = 당기, 다음 해 보고서 = 전기)
-    const ctx = { fs: own.fs, period: (rc) => (yearOf[rc] === y ? "cur" : yearOf[rc] === y + 1 ? "prev" : null) };
+    const ctx = { fs: own.fs, period: (rc) => (yearOf[rc] === y ? "cur" : yearOf[rc] === y + 1 ? "prev" : null), face: own.rows.filter((x) => x.sj_div === "BS").map((x) => amt(x[own.col])) };
     out[y] = [];
     for (const l of lines) out[y].push({ ...l, ...(await cashPartOf(docs, l.value, l.line, ctx)) });
   }
@@ -2131,7 +2170,7 @@ async function cashQuarterOf(corp, fy) {
   }
   const lines = familyRows(rows).map((x) => ({ line: x.account_nm.replace(/\s/g, ""), value: amt(x.thstrm_amount) })).filter((x) => x.value != null && x.value !== 0);
   const items = [];
-  const ctx = { fs: rowsFs, period: () => "cur" };
+  const ctx = { fs: rowsFs, period: () => "cur", face: (rows ?? []).map((x) => amt(x.thstrm_amount)) };
   for (const l of lines) items.push({ ...l, ...(await cashPartOf(it.rcps, l.value, l.line, ctx)) });
   return { label, items };
 }
@@ -2141,6 +2180,63 @@ async function latestFy(corp) {
   return null;
 }
 const LEASE_ONLY = process.argv.includes("--lease-only");
+/**
+ * 시험 전용(--fuzz7, DB 쓰기 없음) — 계열 줄마다 본표 값 X 를 ±15% 흔들어(0.0005 간격, 1 제외) 범주별 표 유동 열(⑦)·빈 묶음 머리(⑧b) 판독에 넣고
+ * 틀린 값을 채택한 횟수를 센다(감사 2026-10-19 흔든 값 시험과 같은 방식)
+ */
+async function fuzz7(corp, latest, sym) {
+  const st = { tried: 0, acc7: [], acc8b: [], base7: [], base8b: [] };
+  const rcpsOf = {};
+  const rcps = async (ry) => (rcpsOf[ry] ??= await annualRcps(corp, ry));
+  const cases = [];
+  for (let y = latest; y >= latest - 5; y -= 1) {
+    let own = null;
+    for (const [ry, col] of [[y + 2, "bfefrmtrm_amount"], [y + 1, "frmtrm_amount"], [y, "thstrm_amount"]]) {
+      if (ry > latest) continue;
+      const r = await fnlttBs(corp, ry);
+      if (r?.rows.some((x) => amt(x[col]) != null)) { own = { ry, col, rows: r.rows, fs: r.fs }; break; }
+    }
+    if (!own) continue;
+    const lines = familyRows(own.rows).map((x) => ({ line: x.account_nm.replace(/\s/g, ""), value: amt(x[own.col]) })).filter((x) => x.value != null && x.value !== 0);
+    if (!lines.length) continue;
+    const yearOf = {};
+    const docs = [];
+    for (const ry of [...new Set([y, y + 1, own.ry].filter((ry) => ry <= latest))]) for (const rc of await rcps(ry)) { docs.push(rc); yearOf[rc] = ry; }
+    const ctx = { fs: own.fs, period: (rc) => (yearOf[rc] === y ? "cur" : yearOf[rc] === y + 1 ? "prev" : null), face: own.rows.filter((x) => x.sj_div === "BS").map((x) => amt(x[own.col])) };
+    const tables = [];
+    for (const rc of docs) for (const t of tablesOf(await docTexts(rc))) tables.push({ ...t, rc });
+    for (const l of lines) cases.push({ label: `${sym} ${y} ${l.line} ${own.fs}`, X: l.value, tables, ctx });
+  }
+  const it = await latestInterim(corp, latest);
+  if (it) {
+    let rows = null, fs = null;
+    for (const f of ["CFS", "OFS"]) {
+      const j = await jget(`${B}/fnlttSinglAcntAll.json?crtfc_key=${DART}&corp_code=${corp}&bsns_year=${it.year}&reprt_code=${it.code}&fs_div=${f}`);
+      if (j.status === "013") continue;
+      if (j.status !== "000") throw new Error(`fnltt ${j.status}`);
+      rows = (j.list ?? []).filter((r) => r.sj_div === "BS"); fs = f; break;
+    }
+    const lines = familyRows(rows).map((x) => ({ line: x.account_nm.replace(/\s/g, ""), value: amt(x.thstrm_amount) })).filter((x) => x.value != null && x.value !== 0);
+    const tables = [];
+    for (const rc of it.rcps) for (const t of tablesOf(await docTexts(rc))) tables.push({ ...t, rc });
+    const ctx = { fs, period: () => "cur", face: (rows ?? []).map((x) => amt(x.thstrm_amount)) };
+    for (const l of lines) cases.push({ label: `${sym} ${it.year}Q${it.q} ${l.line} ${fs}`, X: l.value, tables, ctx });
+  }
+  for (const c of cases) {
+    if (categoryCurrentCols(c.tables, c.X, c.ctx)) st.base7.push(c.label);
+    if (groupPeriodCols(c.tables, c.X, c.ctx)) st.base8b.push(c.label);
+    for (let k = -300; k <= 300; k += 1) {
+      if (k === 0) continue;
+      const X = Math.round(c.X * (1 + k * 0.0005));
+      st.tried += 1;
+      const r7 = categoryCurrentCols(c.tables, X, c.ctx);
+      if (r7) st.acc7.push(`${c.label} f=${(1 + k * 0.0005).toFixed(4)} :: ${r7.pick.map((p) => `${p.label} ${p.v}`).join(" + ")}`);
+      if (groupPeriodCols(c.tables, X, c.ctx)) st.acc8b.push(`${c.label} f=${(1 + k * 0.0005).toFixed(4)}`);
+    }
+  }
+  return st;
+}
+const FUZZ7 = process.argv.includes("--fuzz7");
 
 /**
  * 감가상각 출처 기준(연결·별도) = 그해 재무제표 기준(감사 1차 2026-10-05 — 060370 2022: 재무제표는 2024 보고서 전전기 열의 연결 재작성값인데
@@ -2184,12 +2280,21 @@ console.log(`대상 ${symbols.length}종목 → ${CHECK ? "(점검 — 쓰기 �
 
 const t = (n) => (n == null ? "-" : (n / 1e12).toFixed(2) + "조");
 let stopAt = null; // 상한·020 으로 멈춘 종목(그 종목부터 미처리)
+const fuzzAll = { tried: 0, acc7: [], acc8b: [], base7: [], base8b: [] };
 const failed = []; // 조회·판독 예외가 난 종목(종료코드 1 — 1호기 배치 실패 감시 job-fin-kr-da 로 잡힌다)
 let skipped = 0;
 for (const sym of symbols) {
   if (QUOTA.stopped) { stopAt = sym; break; }
   const corp = corpOf(sym);
   if (!corp) { console.log(`  ${sym}: corp_code 없음`); failed.push(sym); continue; }
+  if (FUZZ7) {
+    const ly = await latestFy(corp);
+    const st = await fuzz7(corp, ly, sym);
+    fuzzAll.tried += st.tried;
+    fuzzAll.acc7.push(...st.acc7); fuzzAll.acc8b.push(...st.acc8b); fuzzAll.base7.push(...st.base7); fuzzAll.base8b.push(...st.base8b);
+    console.log(`  ${sym}: 흔든 값 ${st.tried}회 · ⑦ 틀린 채택 ${st.acc7.length} · ⑧b 틀린 채택 ${st.acc8b.length} · 원래 값 ⑦ ${st.base7.length} · ⑧b ${st.base8b.length}`);
+    continue;
+  }
   // 증분 — 마지막 적재 때와 정기공시 최신 접수번호·적재 규칙 판본이 같으면 건너뛴다(DART 요청 = list.json 1건). --full 이면 전부 다시
   let sourceRcepts = null;
   try { sourceRcepts = await latestPeriodicRcepts(corp); } catch (e) { console.log(`  ${sym}: 정기공시 목록 실패 — ${e.message}`); failed.push(sym); continue; }
@@ -2243,6 +2348,12 @@ if (QUOTA.stopped) {
   console.log(`
 ${QUOTA.stopped.message} — 상한 도달, 남은 ${left.length}종목 미처리: ${left.join(" ")}`);
   process.exitCode = 1;
+}
+if (FUZZ7) {
+  console.log(`흔든 값 시험 합계 ${fuzzAll.tried}회 · ⑦ 틀린 채택 ${fuzzAll.acc7.length} · ⑧b 틀린 채택 ${fuzzAll.acc8b.length}`);
+  for (const a of [...fuzzAll.acc7, ...fuzzAll.acc8b].slice(0, 40)) console.log(`  틀린 채택: ${a}`);
+  console.log(`원래 값으로 걸린 줄 ⑦: ${fuzzAll.base7.join(" / ") || "없음"}`);
+  console.log(`원래 값으로 걸린 줄 ⑧b: ${fuzzAll.base8b.join(" / ") || "없음"}`);
 }
 const qs = QUOTA.state();
 console.log(`DART 하루 요청(적재) ${qs.count}/${qs.cap} — ${qs.day} KST · 이번 실행 DART 요청 ${DISK.stats.requests}건(목록 ${DISK.stats.listPages}) · 디스크 캐시 ${env.DART_CACHE_DIR ? `적중 ${DISK.stats.hit} · 미스 ${DISK.stats.miss} · 새로 씀 ${DISK.stats.write}` : "꺼짐(DART_CACHE_DIR 없음)"} · 건너뜀(변화 없음) ${skipped}종목${FULL ? "(--full)" : ""}`);
