@@ -218,19 +218,23 @@ const NOT_LEASE_TABLE = /이연법인세|일시적차이|법인세|이자비용|
  *  ③ 표 바로 앞 글이 리스부채 표라고 말하고 항목 이름이 없는 표: 줄 "기말…" 또는 "합계"(현재가치·장부금액 열)
  * 같은 내용 표(본문·감사보고서 중복)는 하나로 센다
  */
-export function leaseDocCandidates(entries, want) {
+export function leaseDocCandidates(entries, want, sepOk = true) {
   const out = [];
   const seen = new Set();
   const headSig = (T) => { const first = T.rows.findIndex((r) => r.some((x) => isNum(x) && x.n !== 0)); return T.rows.slice(0, first < 0 ? 0 : first).map((r) => r.map((c) => cl0(c.t)).join("|")).join("/"); };
   const flat = (T) => T.rows.map((r) => r.map((c) => c.t).join(" ")).join(" ").replace(/\s+/g, "");
   for (const { rc, role, tables } of entries) {
     let ts = tables.map(parseFinTable).filter((T) => T.u);
+    // 원하는 범위(연결) 표가 없는 보고서(그해 연결 재무제표 없음 — 062040 2024 사업보고서)는 별도 표를 쓰되, 그해 연결 본표 = 별도 본표(자산·부채·자본총계)가
+    // 확인된 경우만(sepOk — layers 가 정한다). 확인 못 하면 그 보고서 표를 쓰지 않는다
     if (want && ts.some((T) => T.scope === want)) ts = ts.filter((T) => T.scope !== (want === "con" ? "sep" : "con"));
+    else if (want === "con" && !sepOk) ts = ts.filter((T) => T.scope !== "sep");
     // 표 기간 — 표 앞 "(전기)"·"전기", 또는 바로 앞 표와 머리 꼴이 같고 사이에 다른 글이 없으면 그 짝의 둘째 표 = 전기(051600 2021 당기·전기 리스부채 변동표)
     const capOf = (T) => T.pre.split(/\d{1,3}(?:,\d{3})+\)?/).at(-1).slice(-200);
     const pairPrev = ts.map(() => false);
     const tps = ts.map((T, i) => {
-      if (/\(?전\s*기\)?\s*(?:\(단위[^)]*\))?\s*$/.test(T.pre.slice(-40))) return "prior";
+      // 표 앞 끝이 「(전기)」「전기」「② 전기말」(062040 유동성위험 표 「② 전기말」 장부금액 열)
+      if (/\(?전\s*기\s*말?\)?\s*(?:\(단위[^)]*\))?\s*$/.test(T.pre.slice(-40))) return "prior";
       const P = ts[i - 1];
       // 머리 꼴 = 열 수 + 첫·마지막 머리 칸(가운데 흐름 열 이름은 해마다 다를 수 있다 — 051600 「환율변동」↔「기타」)
       const sig = (X) => { const h = headSig(X).split("/").at(-1)?.split("|") ?? []; return h.length > 1 ? `${h.length}|${h[0]}|${h.at(-1)}` : ""; };
@@ -250,7 +254,8 @@ export function leaseDocCandidates(entries, want) {
       const tp = tps[ti];
       const preLease = /리스/.test(cap);
       const ncol = Math.max(...T.rows.map((r) => r.length));
-      const push = (cells, how) => { if (cells.length) out.push({ won: cells.reduce((a, x) => a + x.n, 0) * T.u, u: T.u, rc, how: `${rc} ${how} ${cells.map((x) => x.n).join("+")}(단위 ${T.u})`, key }); };
+      // k = 더한 칸 수 — 칸 하나(원문에 그 값이 그대로 있음)와 반올림된 칸들의 합을 나눠 판정한다(pickLeaseAmount)
+      const push = (cells, how) => { if (cells.length) out.push({ won: cells.reduce((a, x) => a + x.n, 0) * T.u, u: T.u, k: cells.length, rc, how: `${rc} ${how} ${cells.map((x) => x.n).join("+")}(단위 ${T.u})`, key }); };
       const leaseRows = (c) => T.rows.filter((r) => isNum(r[c]) && LEASE_ROW.test(cl0(leafOf(r))) && !/합계|소계|이자|비용/.test(cl0(leafOf(r))));
       // ①′ 같은 시점 유동·비유동 열 짝
       const byP = new Map();
@@ -276,7 +281,9 @@ export function leaseDocCandidates(entries, want) {
         const pos = leaseRows(c).filter((r) => r[c].n > 0);
         if (pos.length === 1 && /^(?:장기|금융)?리스부채$/.test(cl0(leafOf(pos[0])))) push([pos[0][c]], `'${headOf(T, c).slice(0, 14)}' 열 '${leafOf(pos[0])}' 줄`);
         else if (pos.length === 2) push(pos.map((r) => r[c]), `'${headOf(T, c).slice(0, 14)}' 열 리스부채 두 줄`);
-        else if (!leaseRows(c).length && preLease) {
+        // 리스부채 표(제목이 리스)의 「기말…」 줄·현재가치/장부금액 열 「합계」 줄 — 유동·비유동 줄이 같은 표에 있어도 칸 하나 값으로 따로 센다(062040 2024 보고서
+        // 「(2) 리스부채의 변동내역」 전기 기말 880,631 = 유동 479,870 + 비유동 400,761)
+        if (preLease) {
           const end = T.rows.filter((r) => isNum(r[c]) && (/^기말/.test(cl0(leafOf(r))) || (cl0(leafOf(r)) === "합계" && /현재가치|장부금액/.test(headOf(T, c)))));
           if (end.length === 1) push([end[0][c]], `리스부채 표 '${headOf(T, c).slice(0, 14)}' 열 '${leafOf(end[0])}' 줄`);
         }
@@ -299,24 +306,32 @@ export function pickLeaseAmount(cands) {
   if (!cands.length) return null;
   const sorted = [...cands].sort((a, b) => a.won - b.won);
   const groups = [];
-  for (const x of sorted) { const g = groups.at(-1); if (g && x.won - g.at(-1).won <= Math.max(x.u, g.at(-1).u)) g.push(x); else groups.push([x]); }
+  // 한 무리 = 이웃 값 차가 (더한 칸 수 × 표 단위) 안 — 반올림된 칸 k 개의 합은 k/2 단위씩 벗어날 수 있다
+  for (const x of sorted) { const g = groups.at(-1); if (g && x.won - g.at(-1).won <= Math.max(x.k * x.u, g.at(-1).k * g.at(-1).u)) g.push(x); else groups.push([x]); }
   const score = (g) => new Set(g.map((x) => x.key)).size;
   groups.sort((a, b) => score(b) - score(a));
   if (score(groups[0]) < 2 || (groups[1] && score(groups[1]) >= score(groups[0]))) return { amount: null, how: `원문 주석 리스부채 후보가 모이지 않음 — ${cands.map((x) => x.how).join(" / ").slice(0, 400)}` };
   const g = groups[0];
-  const vals = [...new Set(g.map((x) => x.won))];
-  const counts = vals.map((v) => [v, g.filter((x) => x.won === v).length]).sort((a, b) => b[1] - a[1]);
   const others = groups.slice(1).flat();
-  const how = `원문 주석 표 ${score(g)}개 — ${g.map((x) => x.how).join(" / ").slice(0, 400)}${others.length ? ` (다른 값: ${others.map((x) => x.how).join(" / ").slice(0, 200)})` : ""}`;
-  if (vals.length === 1) return { amount: vals[0], how, range: g.some((x) => x.u > 1) ? [vals[0] - Math.max(...g.map((x) => x.u)) / 2, vals[0] + Math.max(...g.map((x) => x.u)) / 2] : null };
-  const lo = Math.min(...g.map((x) => x.won - x.u / 2)), hi = Math.max(...g.map((x) => x.won + x.u / 2));
-  return { amount: counts[0][0], how: `${how} — 표 단위 반올림 차(값 ${vals.join("·")})`, range: [lo, hi], rounding: true };
+  const how0 = `원문 주석 표 ${score(g)}개 — ${g.map((x) => x.how).join(" / ").slice(0, 400)}${others.length ? ` (다른 값: ${others.map((x) => x.how).join(" / ").slice(0, 200)})` : ""}`;
+  const support = (v, xs) => new Set(xs.filter((x) => x.won === v).map((x) => x.key)).size;
+  // 원문 칸 하나로 있는 값이 우선 — 반올림된 칸들의 합은 그 값과 다를 수 있어 범위로만 쓴다
+  const singles = g.filter((x) => x.k === 1);
+  if (singles.length) {
+    const sv = [...new Set(singles.map((x) => x.won))].sort((a, b) => support(b, singles) - support(a, singles));
+    const u = Math.max(...singles.map((x) => x.u));
+    if (sv.length === 1) return { amount: sv[0], how: `${how0} — 칸 하나 값 ${sv[0]}(합으로 맞춘 값은 범위로만)`, range: u > 1 ? [sv[0] - u / 2, sv[0] + u / 2] : null };
+    return { amount: sv[0], how: `${how0} — 원문 칸 하나 값끼리 갈림(${sv.join("·")}) — 표 단위 반올림 범위`, range: [Math.min(...sv) - u / 2, Math.max(...sv) + u / 2], rounding: true, ambiguous: true };
+  }
+  const vals = [...new Set(g.map((x) => x.won))].sort((a, b) => support(b, g) - support(a, g));
+  const lo = Math.min(...g.map((x) => x.won - (x.k * x.u) / 2)), hi = Math.max(...g.map((x) => x.won + (x.k * x.u) / 2));
+  return { amount: vals[0], how: `${how0} — 칸 하나 값 없음, 반올림 칸 합만(값 ${vals.join("·")})`, range: hi > lo ? [lo, hi] : null, rounding: vals.length > 1, ambiguous: true };
 }
 /**
  * 회계정책상 본표 차입금 포함인 회사 — 원문 차입금 주석에서 본표 차입금 합 F(원)를 합계로 하는 표를 찾아 그 안의 리스부채 금액(없으면 0)을 낸다.
  * 표 조건: 합계 줄(합계·계·총차입금) 값이 F 와 표 단위 5칸 안, 같은 표에 차입금·사채 이름 줄이 2개 이상. 그 열 합계 줄 위의 "리스" 이름 줄 합 = 본표 안 리스부채
  */
-export function leaseInsideFromNote(entries, F0, want) {
+export function leaseInsideFromNote(entries, F0, want, sepOk = true) {
   // F0 = 본표 차입금 줄 값들(원) — 합계 줄은 그 줄들 중 일부의 합과 맞아도 된다(178320 「장기차입부채」 합계 214,220,318 = 본표 장기차입부채 줄)
   const lines = (Array.isArray(F0) ? F0 : [F0]).filter((x) => x);
   if (!lines.length) return null;
@@ -325,7 +340,10 @@ export function leaseInsideFromNote(entries, F0, want) {
   const F = [...targets];
   for (const { rc, tables } of entries) {
     let ts = tables.map(parseFinTable).filter((T) => T.u);
+    // 원하는 범위(연결) 표가 없는 보고서(그해 연결 재무제표 없음 — 062040 2024 사업보고서)는 별도 표를 쓰되, 그해 연결 본표 = 별도 본표(자산·부채·자본총계)가
+    // 확인된 경우만(sepOk — layers 가 정한다). 확인 못 하면 그 보고서 표를 쓰지 않는다
     if (want && ts.some((T) => T.scope === want)) ts = ts.filter((T) => T.scope !== (want === "con" ? "sep" : "con"));
+    else if (want === "con" && !sepOk) ts = ts.filter((T) => T.scope !== "sep");
     for (const T of ts) {
       if (/자본조달|자본관리|순부채/.test(T.pre.slice(-200))) continue; // 자본관리 표의 "총차입금" 한 줄은 내역이 아니다
       const debtRows = T.rows.filter((r) => /차입금|사채/.test(cl0(leafOf(r))) && !/합계|소계|^계$|총차입금/.test(cl0(leafOf(r))));
@@ -355,7 +373,7 @@ export function leaseInsideFromNote(entries, F0, want) {
  *  unknown: 둘 다 못 정함 → EV 공란이어야 한다
  * report = { rcept, prefix } (그 해 값이 실린 사업보고서와 컨텍스트 접두어)
  */
-export async function leaseNoteFor(reports, basis, faceDebtNamesOf, badReports = new Map(), faceDebtValuesOf = null, faceDebtY = null) {
+export async function leaseNoteFor(reports, basis, faceDebtNamesOf, badReports = new Map(), faceDebtValuesOf = null, faceDebtY = null, sepOk = true) {
   const tried = [];
   const want = basis === "OFS" ? "sep" : "con";
   // 원문 주석 표(XBRL 태그가 없는 해·회계정책 확인용) — 보고서마다 한 번만
@@ -387,14 +405,14 @@ export async function leaseNoteFor(reports, basis, faceDebtNamesOf, badReports =
   // 리스부채 합계 — XBRL 주석 태그 → 없으면 원문 주석 표(오너 결정 2026-10-19)
   let total = xbrl;
   if (!total) {
-    const p = pickLeaseAmount(leaseDocCandidates(await docOf(), want));
-    if (p?.amount != null) total = { amount: p.amount, range: p.range ?? null, how: `원문 주석 — ${p.how}` };
+    const p = pickLeaseAmount(leaseDocCandidates(await docOf(), want, sepOk));
+    if (p?.amount != null) total = { amount: p.amount, range: p.range ?? null, ambiguous: !!p.ambiguous, how: `원문 주석 — ${p.how}` };
     else tried.push(p ? p.how : "원문 주석 표에 리스부채 후보 없음");
   }
   if (!total) return { status: "unknown", amount: null, how: tried.join(" / ") || "사업보고서 없음" };
   // 원문 차입금 주석으로 본표 안에 든 리스부채를 확인해 빠진 만큼만 더한다(오너 결정 2026-10-19). 회계정책 문장이 없어도 차입금 주석 표가 리스 줄을 담고
   // 합계가 본표 차입금(줄 일부 합)과 맞으면 포함으로 본다(178320 2021). 회계정책상 포함인데 그런 표를 못 찾으면 공란
-  const ins0 = leaseInsideFromNote(await docOf(), faceDebtY, want);
+  const ins0 = leaseInsideFromNote(await docOf(), faceDebtY, want, sepOk);
   if (!policyHit && ins0?.inside > 0) policyHit = { rc: "차입금 주석", names: ["차입금 주석 표의 리스 줄"] };
   if (policyHit) {
     const ins = ins0;
@@ -402,9 +420,9 @@ export async function leaseNoteFor(reports, basis, faceDebtNamesOf, badReports =
     const add = total.amount - ins.inside;
     if (add === 0) return { status: "included", amount: total.amount, how: `${ins.how} — 리스부채 ${total.amount} 전부 본표 안(${total.how})` };
     if (add < 0) return { status: "unknown", amount: null, how: `${ins.how} — 본표 안 리스(${ins.inside})가 리스부채 합계(${total.amount})보다 큼 / ${total.how}` };
-    return { status: "added", amount: add, range: total.range ? [total.range[0] - ins.inside, total.range[1] - ins.inside] : null, how: `리스부채 ${total.amount} − 본표 안 ${ins.inside} = ${add} 가산(${ins.how}; ${total.how})` };
+    return { status: "added", amount: add, ambiguous: total.ambiguous, range: total.range ? [total.range[0] - ins.inside, total.range[1] - ins.inside] : null, how: `리스부채 ${total.amount} − 본표 안 ${ins.inside} = ${add} 가산(${ins.how}; ${total.how})` };
   }
-  return { status: "added", amount: total.amount, range: total.range ?? null, how: total.how };
+  return { status: "added", amount: total.amount, range: total.range ?? null, ambiguous: total.ambiguous, how: total.how };
 }
 
 // ── 분기말 리스부채(원문 주석 표 태그 칸) ──

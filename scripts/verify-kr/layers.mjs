@@ -46,13 +46,13 @@ const kstToday = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 
 
 /** 사업연도 y 재무상태표의 기준 보고서·열 — 그 해 재무상태표 값이 실린 가장 최근 보고서(y+2 전전기 → y+1 전기 → y 당기) */
 /** B16 ②b — 보고서 줄들의 계열 줄 현금성 부분 합(col 열). 하나라도 못 읽으면 { v: null } */
-async function famCashOf(cl, col, rcepts, fsDiv) {
+async function famCashOf(cl, col, rcepts, fsDiv, sepOk = true) {
   let v = 0, ok = true;
   const why = [], lines = [];
   for (const r of cl.family) {
     const X = sumCol([r], col);
     if (!X) continue;
-    const fp = await familyCashFromNotes(rcepts, X, nm(r.account_nm), undefined, fsDiv);
+    const fp = await familyCashFromNotes(rcepts, X, nm(r.account_nm), undefined, fsDiv, sepOk);
     // 진단용(평소엔 쓰지 않음) — 판독 입력을 줄 단위 JSON 으로 남긴다
     if (process.env.KR_VERIFY_DEBUG_FAM) appendFileSync(process.env.KR_VERIFY_DEBUG_FAM, JSON.stringify({ X, line: nm(r.account_nm), rcepts, fsDiv, v: fp.v }) + "\n");
     why.push(`${nm(r.account_nm)} ${X} → ${fp.v ?? "판독 못 함"}(${fp.how})`);
@@ -406,6 +406,25 @@ export async function krOriginalLayers(ctx) {
     // 기타(유동)금융자산 성격은 그해 자기 보고서(src.cur)의 분류로 — 값은 기준 보고서(own)
     const cl = classifyBsRows(own.rows, src.cur ?? own.rows, src.cur && src.cur !== own.rows ? { rows: src.cur, col: own.col } : null, own.col);
     const faceDebt = sumCol(cl.debt, own.col) ?? 0;
+    // 연결 줄인데 그해 연결 주석이 있는 보고서가 없을 때(062040 2023 — 2025 연결 보고서 전전기 열, 2024 보고서는 별도뿐) 별도 주석을 쓸 근거:
+    // 그해 연결 본표 자산·부채·자본총계 = 별도 본표(그해를 담은 별도 사업보고서) 값. 다르면 별도 주석을 쓰지 않는다
+    let sepOk = true, sepWhy = "";
+    if (src.fsDiv === "CFS" && (!cl.leaseFace.length || cl.family?.length)) {
+      const tot = (rows, c0) => ["ifrs-full_Assets", "ifrs-full_Liabilities", "ifrs-full_Equity"].map((id) => sumCol((rows ?? []).filter((r) => r.sj_div === "BS" && r.account_id === id), c0));
+      const conT = tot(own.rows, own.col);
+      sepOk = false;
+      for (const [fy, c0] of [[y, "thstrm_amount"], [y + 1, "frmtrm_amount"], [y + 2, "bfefrmtrm_amount"]]) {
+        if (fy > new Date().getFullYear()) continue;
+        try {
+          const o = await dartFnltt(corp, fy, "11011", "OFS");
+          const sepT = tot(o, c0);
+          if (sepT.every((x) => x == null)) continue;
+          sepOk = conT.every((x, i) => x != null && x === sepT[i]);
+          sepWhy = `연결 본표 자산·부채·자본총계 ${conT.join("·")} ${sepOk ? "=" : "≠"} 별도(${fy} 사업보고서) ${sepT.join("·")}`;
+          break;
+        } catch (e) { err(`별도 본표 ${fy}`, e); }
+      }
+    }
     let lease = { status: "face" }, why = `기준 보고서 ${own.by} ${own.col}${src.fsDiv === "OFS" ? " · 별도" : ""}`;
     if (!cl.leaseFace.length) {
       try {
@@ -415,9 +434,9 @@ export async function krOriginalLayers(ctx) {
         const namesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => nm(r.account_nm));
         // 그 보고서 당기 본표 차입금 줄 값(원) — 리스부채 포함 판정을 원문 숫자로 확인할 때(b16 leaseInsideFaceDebt)
         const valuesOf = async (fy) => classifyBsRows(await dartFnltt(corp, fy, "11011", src.fsDiv)).debt.map((r) => sumCol([r], "thstrm_amount"));
-        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf, badLease, valuesOf, cl.debt.map((r) => sumCol([r], own.col)).filter((x) => x));
+        lease = await leaseNoteFor([r0 && { rcept: r0.rcept, all: all(y), prefix: `CFY${y}eFY`, fy: y }, r1 && { rcept: r1.rcept, all: all(y + 1), prefix: `PFY${y}eFY`, fy: y + 1 }], src.fsDiv, namesOf, badLease, valuesOf, cl.debt.map((r) => sumCol([r], own.col)).filter((x) => x), sepOk);
       } catch (e) { err(`리스부채 주석 ${y}`, e); continue; }
-      why += ` · 본표 리스부채 줄 없음 → ${lease.status === "added" ? `주석 리스부채 ${lease.amount} 가산` : lease.status === "included" ? "차입금 줄에 포함" : "리스부채 확인 불가"}(${lease.how})`;
+      why += `${sepWhy ? ` · ${sepWhy}` : ""} · 본표 리스부채 줄 없음 → ${lease.status === "added" ? `주석 리스부채 ${lease.amount} 가산` : lease.status === "included" ? "차입금 줄에 포함" : "리스부채 확인 불가"}(${lease.how})`;
       if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
     } else if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
     const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
@@ -429,7 +448,7 @@ export async function krOriginalLayers(ctx) {
     try {
       // 내역은 그 해를 당기·전기로 담은 보고서(y+1 의 전기 열이 재작성 반영이라 먼저, 그다음 y) — 모든 판본, 최신 먼저
       const rcs = [...new Set([y + 1, y].filter((yy) => yy <= new Date().getFullYear()).flatMap((yy) => L.reports.filter((z) => z.year === yy && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept)))];
-      const fam = await famCashOf(cl, own.col, rcs, src.fsDiv);
+      const fam = await famCashOf(cl, own.col, rcs, src.fsDiv, sepOk);
       famWhy.push(fam.why);
       if (fam.v == null) famOk = false; else famCash = fam.v;
       const st = await stagingCash(ctx.env, sym);
@@ -439,7 +458,9 @@ export async function krOriginalLayers(ctx) {
     const expNci = sumCol(cl.nci, own.col) ?? 0;
     // 리스부채를 원문 주석 표(표 단위 값)로 정한 해 — 적재 값이 기대치와 다르고 표 단위 반올림 범위 안이면 검증불가, 밖이면 실패(허용치로 통과시키지 않음)
     const rgD = lease.status === "added" && lease.range ? [faceDebt + lease.range[0], faceDebt + lease.range[1]] : null;
-    const rexact = (name, app, exp, rg, w) => (rg && app != null && app !== exp && app >= rg[0] && app <= rg[1] ? add("K2", name, col, { status: NA, app, src: exp, note: `원문 주석 표 단위 반올림 범위 ${rg[0]}~${rg[1]} 안 — 원 단위 정밀값 없음 · ${w}` }) : exact("K2", name, col, app, exp, w));
+    // 원문 칸 하나 값끼리 갈리거나 반올림 칸 합만 있으면(lease.ambiguous) 기대치와 같아도 검증불가 — 어느 값이 정밀값인지 원문이 정하지 않는다
+    const amb = lease.status === "added" && lease.ambiguous;
+    const rexact = (name, app, exp, rg, w) => (rg && app != null && (app !== exp || amb) && app >= rg[0] && app <= rg[1] ? add("K2", name, col, { status: NA, app, src: exp, note: `원문 주석 표 단위 반올림 범위 ${rg[0]}~${rg[1]} 안 — 원 단위 정밀값 없음 · ${w}` }) : exact("K2", name, col, app, exp, w));
     rexact("총차입금 = DART(B16)", x.debt, expDebt, rgD, why);
     if (expCash == null) add("K2", "현금성자산 = DART(B16)", col, { status: NA, app: x.cash == null ? null : -x.cash, note: `기타(유동)금융자산 계열 줄 내역을 검증기가 못 읽음 — ${famWhy.join(" / ")}` });
     else exact("K2", "현금성자산 = DART(B16)", col, x.cash == null ? null : -x.cash, expCash, `${cl.cash.map((r) => nm(r.account_nm)).join("+")}${famWhy.length ? ` + ②b ${famWhy.join(" / ")}` : ""}`);

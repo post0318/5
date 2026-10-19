@@ -451,7 +451,7 @@ function resolveCat(tables, label0, amt, u0, leaf) {
  * 계열 줄(이름 line, 값 X 원)의 현금성 부분 — rcepts(보고서 접수번호, 앞쪽 우선) 원문 표에서. { v, how } | { v: null, how }
  * 시험용으로 표 목록을 바로 줄 수도 있다(tablesOf: rcept → [{pre, html}])
  */
-export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFinTables, fsDiv = null) {
+export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFinTables, fsDiv = null, sepOk = true) {
   // 계열 줄이 연결 재무상태표 줄이면 별도 주석 표는 쓰지 않는다(그 반대도) — 범위를 모르는 표는 쓴다
   const other = fsDiv === "CFS" ? "sep" : fsDiv === "OFS" ? "con" : null;
   const lineCore = clean(line).replace(/^(유동|기타)+/, "");
@@ -466,7 +466,8 @@ export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFin
     // 보고서에 원하는 범위의 표가 하나도 없으면(연결 재무제표가 없는 해 — 062040 2024 사업보고서 "연결재무제표 주석 해당 사항이 없습니다") 거르지 않는다
     const all0 = (await tablesOf(rc)).map(parseFinTable);
     const want = other === "sep" ? "con" : other === "con" ? "sep" : null;
-    const tables = want && all0.some((T) => T.scope === want) ? all0.filter((T) => T.scope !== other) : all0;
+    // 원하는 범위 표가 없는 보고서는 다른 범위 표를 쓰되, 연결 줄인데 별도 표를 쓰는 경우는 그해 연결 본표 = 별도 본표(자산·부채·자본총계)일 때만(sepOk)
+    const tables = want && all0.some((T) => T.scope === want) ? all0.filter((T) => T.scope !== other) : want === "con" && !sepOk ? all0.filter((T) => T.scope !== "sep") : all0;
     byRc.push({ rc, tables });
     for (const b of [...tables.flatMap((T) => [...blocksFor(T, X, needCtx), ...groupBlocks(T, X), ...prefixBlocks(T, X)]), ...catCurrentColumns(tables, X)]) {
       const ks = withAdj(b.parts.map((p) => (p.n === 0 ? "zero" : p.fixed ?? kindOf(p.label, p.cell, p.leaf))), b.parts.map((p) => p.pos));
