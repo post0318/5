@@ -311,12 +311,13 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           // 야후 3분기 미게시). 그 분기 6-K 에 재무상태표·현금흐름표·손익계산서가 모두 있을 때만. 조회 실패는 아래 경고로
           let ahead: string | null = null;
           let aheadSixK: Awaited<ReturnType<typeof sixKStatements>> = null;
+          let aheadMiss: string | null = null;
           {
             const E0 = per?.E ?? ltmBaseEnd(withShares);
             const nextQ = E0 ? monthEndAfter(per?.last ?? E0, 3) : null;
             if (E0 && nextQ && nextQ <= new Date().toISOString().slice(0, 10) && monthEndAfter(E0, 12) > nextQ) {
               const prior = monthEndAfter(nextQ, -12);
-              const st = await sixKStatements(cik, recent, nextQ, E0, prior).catch((e: unknown) => {
+              const st = await sixKStatements(cik, recent, nextQ, E0, prior, { withIs: true }).catch((e: unknown) => {
                 extraWarnings.push(`회사 6-K 분기 재무제표 조회 실패(${nextQ}) — ${fetchFailureReason(e) ?? (e instanceof Error ? e.message : String(e))}`.slice(0, 240));
                 return null;
               });
@@ -324,7 +325,7 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
                 ahead = nextQ;
                 aheadSixK = st;
                 per = { E: E0, last: nextQ, yearAgo: prior };
-              }
+              } else if (st) aheadMiss = `${nextQ} 분기 6-K(${st.source})를 LTM 끝으로 못 씀 — ${st.isWhy ?? "재무상태표·현금흐름표·손익계산서 중 그 분기 열 없음"}`;
             }
           }
           // 6-K 조회 실패는 경고로 남긴다(재감사 12차 ③ — null 로 삼키면 6-K 값이 조용히 빈칸·야후 근사로 바뀌었다). 경고가 있으면 짧은 캐시
@@ -341,6 +342,7 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           // 1년 전 분기 6-K 를 찾아야 했는데(이번 보고서에 1년 전 열 없음) 못 찾음 — 검증 전용 사유(조회 실패는 fetchWarnings)
           if (r.result.source === "yahoo" && per && sixK && !sixK.bsDates.includes(per.yearAgo) && !sixKPrev)
             r.result.sixKPrevMiss = sixKFailed ? "1년 전 분기 6-K 조회 실패(fetchWarnings 참조)" : `1년 전 분기말 ${per.yearAgo} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음`;
+          if (r.result.source === "yahoo" && aheadMiss) r.result.aheadMiss = aheadMiss;
           if (r.result.source === "yahoo" && !sixK) r.result.sixKMiss = sixKFailed ? "6-K 조회 실패(fetchWarnings 참조)" : per ? `분기말 ${per.last} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음` : "LTM 기간 판정 불가(6-K 조회 안 함)";
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else if (!fx) {

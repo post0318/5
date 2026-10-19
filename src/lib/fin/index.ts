@@ -1,6 +1,6 @@
 import "server-only";
 import { snapshotBypassed } from "@/lib/db/snap-bypass";
-import { latestPeriodicAccn, UsReader } from "./read";
+import { latestPeriodicAccn, ltmBasisNow, UsReader } from "./read";
 import { assembleIncomeStatements } from "./assemble/is";
 import { revenue } from "./metrics/revenue";
 import { cogsGp } from "./metrics/cogs";
@@ -107,6 +107,8 @@ export async function assemble(market: Market, symbol: string, opts: AssembleOpt
     warnings,
     issues,
     latestAccn: reader.latestPeriodic(),
+    // 조립 중 이미 읽은 야후·6-K(메모)로 만든다 — 추가 조회 없음
+    ltmBasis: await reader.ltmBasis(),
     at,
   };
   const id = `${market}:${sym}`;
@@ -204,11 +206,12 @@ export function metricPartsAt(sym: FinSymDoc, metric: "sga" | "rnd"): { id: stri
 
 /**
  * 배치 갱신(architecture.md §5.1, /api/cron/fin-build) — 대상 종목 중 **저장본이 없거나, 엔진판이 다르거나, 저장 후 새 정기공시가
- * 나온** 종목만 조립·저장한다. 호출당 최대 `max` 종목, `deadline`(epoch ms) 이후에는 새 조립을 시작하지 않는다(Vercel 함수 시간).
+ * 나온** 종목만 조립·저장한다. 20-F·40-F 회사는 **LTM 기준(야후 최신 분기·LTM 끝 6-K — fin_sym.lb)이 바뀐** 종목도(새 6-K·야후 새 분기는 정기공시
+ * 접수번호를 바꾸지 않는다 — 독립 감사 2026-10-20 ①). 호출당 최대 `max` 종목, `deadline`(epoch ms) 이후에는 새 조립을 시작하지 않는다(Vercel 함수 시간).
  * 판정 순서: 저장본 없음 → 엔진판 다름 → 새 공시 확인(제출 목록만 — 마지막 확인이 오래된 종목부터). 새 공시가 없으면 확인 시각만 남긴다.
  */
 export interface RefreshResult {
-  built: { symbol: string; why: "missing" | "engine" | "filing"; changed?: number; kept?: boolean; gaps: string[]; cols?: string[]; error?: string }[];
+  built: { symbol: string; why: "missing" | "engine" | "filing" | "ltm"; changed?: number; kept?: boolean; gaps: string[]; cols?: string[]; error?: string }[];
   upToDate: string[];
   /** 제출 목록 조회 실패(latestPeriodicAccn null) — 새 공시 여부를 판정 못해 건너뛴 종목(확인 시각을 남기지 않음, 다음 호출에서 다시) */
   skipped: string[];
@@ -244,7 +247,19 @@ export async function refreshStored(market: Market, symbols: string[], opts: { m
       // 마지막 적재가 LA_NULL_REBUILD_MS 보다 오래됐을 때만 다시 조립
       const stale = m(s)!.la == null ? Date.now() - Math.max(m(s)!.at?.valueOf() ?? 0, m(s)!.ft?.valueOf() ?? 0) > LA_NULL_REBUILD_MS : la !== m(s)!.la;
       if (stale) why = "filing";
-      else {
+      else if (m(s)!.p?.fl && m(s)!.p.fl !== "domestic") {
+        // 20-F·40-F — LTM 기준 열쇠 비교. 저장본에 열쇠가 없으면(조립 때 야후·LTM 열 없음) la 없음과 같이 일정 간격마다만 다시 조립
+        const lb = m(s)!.lb;
+        if (!lb) {
+          if (Date.now() - Math.max(m(s)!.at?.valueOf() ?? 0, m(s)!.ft?.valueOf() ?? 0) > LA_NULL_REBUILD_MS) why = "ltm";
+        } else {
+          // silent-ok: 조회 실패(null)는 바로 아래에서 skipped 로 돌려준다(LTM 기준 그대로로 보지 않음)
+          const now = await ltmBasisNow(s, lb.slice(0, lb.indexOf("|"))).catch(() => null);
+          if (!now) { out.skipped.push(s); continue; }
+          if (now !== lb) why = "ltm";
+        }
+      }
+      if (!why) {
         // silent-ok: 확인 시각 기록(DB 쓰기) 실패는 다음 배치가 다시 확인할 뿐
         await touchChecked(`${market}:${s}`).catch(() => {});
         out.upToDate.push(s);

@@ -32,6 +32,12 @@ export interface SixKStatements {
   /** 손익계산서 누적 열(isDates 순서 — 당기·전기 누적 종료일). 못 읽으면 없음(손익 LTM 은 그 6-K 로 만들지 않음 — 2026-10-17 ASML 6-K 반영) */
   is?: SixKRow[];
   isDates?: string[];
+  /** 손익계산서를 못 쓰거나 일부 줄을 뺀 사유(열 기간 판정 불가·전기 누적 확인 실패 — verifyIs) */
+  isWhy?: string;
+  /** 현금흐름표 줄을 뺀 사유(전기 누적 확인 실패 — verifyPrior) */
+  cfWhy?: string;
+  /** 흐름 표 전기 누적 열을 확인한 1년 전 같은 분기 보고서(출처) */
+  priorChecked?: string;
   /** 개념(접두어 없는 이름, 예 "TradeAndOtherCurrentPayablesToTradeSuppliers") → 정규화 라벨 집합. neg = 부호 반전 라벨(negatedLabel 계열 —
    *  보고서에 음수로 보이는 지급액 등. XBRL 값 = −표시값) */
   labels: Map<string, { pos: Set<string>; neg: Set<string> }>;
@@ -51,10 +57,13 @@ const longDate = (iso: string) => { const [y, m, d] = iso.split("-").map(Number)
 const decode = (s: string) =>
   s.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;|&#xa0;/gi, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;/g, "'").replace(/&#8211;|&#8212;|&ndash;|&mdash;/g, "-")
     .replace(/&[a-z#0-9]+;/gi, " ").replace(/\s+/g, " ").trim();
+/** 라벨에서 지우는 괄호 약어 — 줄 이름의 일부가 아니라 덧붙인 표기만(이름이 같은 다른 줄을 합치지 않게 목록으로 한정) */
+const KNOWN_ABBR_RE = /\s*\((?:R&D|SG&A|G&A|S&M)\)/g;
 /** 라벨 정규화 — 소문자, 주석 번호 "(Note 19)" 제거, 구두점·공백 정리 */
 export const normLabel = (s: string) =>
-  // 괄호 영문 약어 "(R&D)"·"(SG&A)" 는 표기일 뿐이라 뺀다 — ASML 20-F 「Research and development (R&D) costs」 ↔ 6-K 「Research and development costs」
-  s.replace(/\s*\((?:[A-Z][A-Za-z]?&)?[A-Z]{1,5}\)/g, "").toLowerCase().replace(/\((?:notes?|note)[^)]*\)/g, "")
+  // 괄호 영문 약어 중 알려진 비용 줄 약어("(R&D)"·"(SG&A)" 등)만 표기일 뿐이라 뺀다 — ASML 20-F 「Research and development (R&D) costs」 ↔ 6-K
+  // 「Research and development costs」. 예전엔 괄호 대문자 약어를 모두 지워 「(A)」「(USD)」처럼 줄을 가르는 표기까지 사라졌다(독립 감사 2026-10-20 ③)
+  s.replace(KNOWN_ABBR_RE, "").toLowerCase().replace(/\((?:notes?|note)[^)]*\)/g, "")
     // 현금흐름 합계 줄 — 20-F "Net cash used in investing activities" ↔ 분기 "Net cash provided by (used in) investing activities"(같은 개념, 부호만 다른 표현)
     .replace(/^net cash (?:provided by |used in |\(used in\) |provided by \(used in\) )+/, "net cash ")
     .replace(/[^a-z0-9]+/g, " ").trim();
@@ -68,6 +77,22 @@ const parseNum = (s: string): number | null => {
   const v = Number(t.replace(/[(),\s-]/g, ""));
   return Number.isFinite(v) ? (neg ? -v : v) : null;
 };
+
+/**
+ * 표 한 줄의 칸 글자 — 빈 칸·"$" 칸 제외. 괄호 음수가 칸 둘로 나뉜 보고서("(50,051,310" | ")" — TSM 2025 2분기 재무보고서)는 한 칸으로 합친다.
+ * 예전엔 닫는 괄호 칸이 따로 버려져 "(50,051,310" 이 양수로 읽혔다(1년 전 같은 분기 6-K 전기 누적 대조로 발견, 2026-10-20)
+ */
+function rowCells(tr: string): string[] {
+  const raw = (tr.match(/<t[dh]\b[\s\S]*?<\/t[dh]>/gi) ?? []).map(decode).filter((c) => c !== "" && c !== "$");
+  const out: string[] = [];
+  for (let k = 0; k < raw.length; k++) {
+    const c = raw[k];
+    if (c === "(" && /^\$?\s*[\d,]+(?:\.\d+)?$/.test(raw[k + 1] ?? "") && /^\)/.test(raw[k + 2] ?? "")) { out.push(`(${raw[k + 1]})`); k += 2; continue; }
+    if (/^\(\s*\$?\s*[\d,]+(?:\.\d+)?$/.test(c) && /^\)/.test(raw[k + 1] ?? "")) { out.push(`${c})`); k += 1; continue; }
+    out.push(c);
+  }
+  return out;
+}
 
 /** 20-F 라벨 파일 → 개념 이름 → 라벨 집합(label·terse·verbose·negated) */
 type Lb = Map<string, { pos: Set<string>; neg: Set<string> }>;
@@ -102,7 +127,7 @@ async function filingLabels(cik: number, recent: RecentFilings): Promise<{ label
 }
 
 /** 보고서 HTML 안의 한 재무제표 구간(제목 ~ 다음 제목)에서 표의 줄 */
-function sectionRows(html: string, head: RegExp, mustHave: RegExp, end: RegExp): { rows: SixKRow[]; text: string; noteCol: boolean } | null {
+function sectionRows(html: string, head: RegExp, mustHave: RegExp, end: RegExp): { rows: SixKRow[]; text: string; noteCol: boolean; head: string[][] } | null {
   for (let m: RegExpExecArray | null, re = new RegExp(head.source, "gi"); (m = re.exec(html)); ) {
     const rest = html.slice(m.index);
     const e = rest.slice(200).search(end);
@@ -110,17 +135,21 @@ function sectionRows(html: string, head: RegExp, mustHave: RegExp, end: RegExp):
     const plain = decode(sec);
     if (!mustHave.test(plain)) continue; // 목차의 같은 제목은 건너뜀(서식 코드가 길어 구간 전체를 해독해 본다)
     const rows: SixKRow[] = [];
+    // 표 머리 줄(첫 금액 줄 전 — 기간·연도 머리, 주석 번호 "Note" 줄 포함). 손익계산서 열 기간을 머리에서 직접 읽는다(isColumns)
+    const headRows: string[][] = [];
     let parent: string | undefined;
     for (const tr of sec.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? []) {
-      const cells = (tr.match(/<t[dh]\b[\s\S]*?<\/t[dh]>/gi) ?? []).map(decode).filter((c) => c !== "" && c !== "$");
+      const cells = rowCells(tr);
       const label = cells.find((c) => /[A-Za-z]/.test(c));
+      const firstValue = !!label && normLabel(label) !== "note" && cells.slice(cells.indexOf(label) + 1).some((c) => parseNum(c) != null);
+      if (!rows.length && !firstValue && cells.length) headRows.push(cells);
       if (!label) continue;
       const vals = cells.slice(cells.indexOf(label) + 1).map(parseNum).filter((v): v is number => v != null);
       if (vals.length) rows.push({ label: normLabel(label), vals, parent });
       else parent = normLabel(label);
     }
     // 금액 앞 주석 번호 열(SPOT "Note" — 줄마다 "11" 같은 번호, 여러 개면 "7, 8" 이라 숫자로 안 읽힘): 머리에 note 칸이 있으면 표시해 둔다
-    return { rows, text: plain.slice(0, 3_000).toLowerCase(), noteCol: rows.some((r) => r.label === "note") || /\bnote\b/i.test(plain.slice(0, 1_500)) };
+    return { rows, text: plain.slice(0, 3_000).toLowerCase(), noteCol: rows.some((r) => r.label === "note") || /\bnote\b/i.test(plain.slice(0, 1_500)), head: headRows };
   }
   return null;
 }
@@ -160,7 +189,7 @@ function slideRows(text: string, n: number): SixKRow[] {
   }
   return rows.filter((r) => r.vals.length === n);
 }
-function slideStatements(html: string, periodEnd: string, fyEnd: string, priorEnd: string): Omit<SixKStatements, "source" | "labels" | "parents"> | null {
+function slideStatements(html: string, periodEnd: string, fyEnd: string, priorEnd: string, withIs: boolean): Omit<SixKStatements, "source" | "labels" | "parents"> | null {
   const texts = [...html.matchAll(/<FONT[^>]*color:\s*white[^>]*>([\s\S]*?)<\/FONT>/gi)].map((m) =>
     m[1].replace(/<[^>]+>/g, " ").replace(/&#8212;|&mdash;/g, "—").replace(/&#8364;|&euro;/g, "€").replace(/&#8217;|&rsquo;/g, "'").replace(/&amp;/g, "&").replace(/&nbsp;|&#160;/g, " ").replace(/[\r\n\t]/g, " "));
   if (texts.length < 3) return null;
@@ -192,13 +221,57 @@ function slideStatements(html: string, periodEnd: string, fyEnd: string, priorEn
   if (!bs || !cf || unitOf(bs.t) !== unitOf(cf.t)) return null;
   const unit = unitOf(bs.t)!;
   const cfRows = slideRows(cf.t, cf.d.length).map((r) => ({ ...r, vals: cf!.cols.map((k) => r.vals[k]) }));
-  const isPart = is && unitOf(is.t) === unit
+  const isPart = withIs && is && unitOf(is.t) === unit
     ? { is: slideRows(is.t, is.d.length).map((r) => ({ ...r, vals: is!.cols.map((k) => r.vals[k]) })), isDates: is.cols.map((k) => is!.d[k]) }
     : {};
   // 재무상태표가 자산·부채와 자본 두 덩어리 글자로 나뉜 슬라이드 — 날짜 머리가 똑같은 덩어리(같은 단위)를 이어 읽는다(ASML 자본 총계·부채와 자본 총계)
   const sameHead = texts.filter((t) => t !== bs.t && /US GAAP/.test(t) && unitOf(t) === unit && /shareholders|equity|liabilities/i.test(t) && !/operating activities|months ended/i.test(t) && slideDates(t).join("|") === bs.d.join("|"));
   const bsRows = [bs.t, ...sameHead].flatMap((t) => slideRows(t, bs.d.length));
   return { unit, bsDates: bs.d, cfDates: cf.cols.map((k) => cf!.d[k]), bs: bsRows, cf: cfRows, ...isPart, loose: true };
+}
+
+/**
+ * 손익계산서 표 머리에서 열 기간을 직접 읽는다(독립 감사 2026-10-20 ② — 예전엔 "구간 앞 1,500자의 연도 4개"와 누적 열 [2,3] 자리를 가정했다).
+ * 기간 칸("Three/Six/Nine Months Ended …")을 순서대로, 연도 줄(4자리 연도 칸)을 순서대로 읽어 기간 칸 하나가 연도 열 몇 개를 덮는지 정한다
+ * (연도 수 ÷ 기간 수 — 나누어떨어지지 않으면 판정 불가). 당기 누적 = 개월 수가 (사업연도말 → 분기말)이고 연도가 분기말 연도인 열 하나,
+ * 전기 누적 = 같은 개월 수·1년 전 연도인 열 하나. 못 정하면 사유(빈칸 — 자리를 추측하지 않는다).
+ */
+function isColumns(head: string[][], title: string, periodEnd: string, priorEnd: string, fyEnd: string): { cols: [number, number]; n: number } | { why: string } {
+  const months = Math.round((Date.parse(periodEnd) - Date.parse(fyEnd)) / (30.44 * 864e5));
+  if (![3, 6, 9].includes(months)) return { why: `분기말 ${periodEnd} 이 사업연도말 ${fyEnd} 뒤 3·6·9개월이 아님` };
+  const MW: Record<string, number> = { three: 3, six: 6, nine: 9, twelve: 12, "3": 3, "6": 6, "9": 9, "12": 12 };
+  const periodOf = (c: string): number | null => {
+    const m = /\b(three|six|nine|twelve|3|6|9|12)[\s-]+months?\b/i.exec(c);
+    if (m) return MW[m[1].toLowerCase()];
+    if (/\bquarter ended\b/i.test(c)) return 3;
+    if (/\b(?:fiscal )?year ended\b/i.test(c)) return 12;
+    return null;
+  };
+  const yearsIn = (c: string) => [...c.matchAll(/\b((?:19|20)\d{2})\b/g)].map((m) => m[1]);
+  const pCells = head.flat().filter((c) => periodOf(c) != null);
+  const periods = pCells.map((c) => periodOf(c)!);
+  // 연도 줄 = 칸이 모두 연도(주석 번호 머리 "Note" 칸은 무시)인 줄 중 연도가 가장 많은 줄. 없으면 기간 칸마다 연도가 하나씩 든 형식
+  const yRows = head.map((r) => r.filter((c) => !/^note$/i.test(c))).filter((r) => r.length && r.every((c) => /^(?:19|20)\d{2}$/.test(c)));
+  let years = yRows.sort((a, b) => b.length - a.length)[0] ?? [];
+  let span: number;
+  if (years.length) {
+    if (!periods.length) {
+      // 기간 칸이 없는 표 — 1분기 보고서(3개월 열 둘)이고 제목·머리에 "three months" 가 있을 때만
+      if (!(months === 3 && years.length === 2 && /three months/i.test(`${title} ${head.flat().join(" ")}`))) return { why: "손익계산서 머리에 기간(3·6·9개월) 칸 없음" };
+      periods.push(3);
+    }
+    if (years.length % periods.length) return { why: `손익계산서 머리 연도 ${years.length}개가 기간 칸 ${periods.length}개로 나뉘지 않음` };
+    span = years.length / periods.length;
+  } else {
+    years = pCells.map((c) => yearsIn(c)).filter((y) => y.length === 1).map((y) => y[0]);
+    if (!years.length || years.length !== pCells.length) return { why: "손익계산서 머리에 연도 줄 없음" };
+    span = 1;
+  }
+  const colMonths = years.map((_, k) => periods[Math.floor(k / span)]);
+  const pick = (y: string) => { const ks = years.map((yy, k) => (yy === y && colMonths[k] === months ? k : -1)).filter((k) => k >= 0); return ks.length === 1 ? ks[0] : -1; };
+  const iC = pick(periodEnd.slice(0, 4)), iP = pick(priorEnd.slice(0, 4));
+  if (iC < 0 || iP < 0) return { why: `손익계산서 머리에서 ${months}개월 누적 당기·전기 열을 하나씩 못 찾음(머리: ${head.flat().join(" | ").slice(0, 120)})` };
+  return { cols: [iC, iP], n: years.length };
 }
 
 /** 구간 머리말에 나온 날짜(ISO) — 등장 순서(열 순서) */
@@ -210,7 +283,57 @@ function headerDates(text: string, candidates: string[]): string[] {
  * 분기말 periodEnd 의 6-K 연결재무보고서. fyEnd = 최근 사업연도말, priorEnd = 1년 전 같은 분기말(재무상태표 3번째 열·현금흐름 전년 누적).
  * 없거나(보고서 미제출) 재무제표를 읽을 수 없으면(그림 — ASML) null
  */
-export async function sixKStatements(cik: string, recent: RecentFilings | null, periodEnd: string, fyEnd: string, priorEnd: string): Promise<SixKStatements | null> {
+export async function sixKStatements(
+  cik: string, recent: RecentFilings | null, periodEnd: string, fyEnd: string, priorEnd: string,
+  /** withIs — 손익계산서도 읽는다(야후보다 앞선 분기 LTM 용) */
+  opts: { withIs?: boolean } = {},
+): Promise<SixKStatements | null> {
+  const st = await findSixK(cik, recent, periodEnd, fyEnd, priorEnd, !!opts.withIs);
+  return st ? verifyPrior(st, cik, recent, periodEnd, fyEnd, priorEnd) : null;
+}
+
+/** 한 달 말에서 12개월 전 달 말 */
+const back12 = (d: string) => { const x = new Date(`${d}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); };
+
+/**
+ * 흐름 표(손익계산서·현금흐름표) 전기 누적 열 확인 — 1년 전 같은 분기 6-K(SEC 제출 보고서)의 당기 누적 열과 정확히 같은 줄만 남긴다(독립 감사
+ * 2026-10-20 ②: 흐름 표엔 재무상태표의 "연말 열 = SEC" 같은 자리 확인이 없었다). 20-F 회사는 분기 XBRL 이 없어 전년 같은 분기 누적의 SEC 원천은
+ * 그 6-K 뿐이다. 열을 잘못 읽었으면(당기·전기 뒤바뀜·3개월 열) 값이 어긋나 걸러진다. 회사가 전년 값을 재분류한 줄도 빠진다(빈칸 + 사유 — 추측 금지).
+ * 1년 전 보고서를 못 찾거나 그 표를 못 읽으면 그 표 전체를 쓰지 않는다(isWhy·cfWhy). 조회 실패는 그대로 던진다(호출자가 경고로)
+ */
+async function verifyPrior(st: SixKStatements, cik: string, recent: RecentFilings | null, periodEnd: string, fyEnd: string, priorEnd: string): Promise<SixKStatements> {
+  const prev = await findSixK(cik, recent, priorEnd, back12(fyEnd), back12(priorEnd), !!st.isDates);
+  const check = (rows: SixKRow[], dates: string[], prows: SixKRow[] | undefined, pdates: string[] | undefined, what: string) => {
+    const iP = dates.indexOf(priorEnd), jC = pdates?.indexOf(priorEnd) ?? -1;
+    if (!prev) return { rows: [] as SixKRow[], why: `1년 전 같은 분기(${priorEnd}) 6-K 재무제표 없음 — ${what} 전기 누적 열 확인 불가` };
+    if (!prows || jC < 0 || iP < 0) return { rows: [] as SixKRow[], why: `1년 전 같은 분기 6-K(${prev.source}) ${what}를 못 읽음 — 전기 누적 열 확인 불가` };
+    const kept: SixKRow[] = [], dropped: string[] = [];
+    // 슬라이드 글자 형식은 구간 첫 줄 이름 앞에 열 머리(날짜·연도)가 붙는다 — 마지막 연도 뒤만 비교(해마다 날짜가 달라 같은 줄이 갈리지 않게)
+    // 부호 표기만 다른 이름("operating income (loss)" ↔ "operating income", "net (loss)/income" ↔ "net income", "(increase)/decrease" ↔ "increase",
+    // "income tax (expense)/benefit")은 같은 줄로 — 손익 부호에 따라 해마다 붙었다 빠진다. 값이 정확히 같아야 남으므로 이름은 줄을 고르는 데만 쓴다
+    const pair = (t: string) => t.replace(/\bcost\b/g, "costs").replace(/\b(?:costs income|income costs)\b/g, "income costs")
+      .replace(/\b(?:income loss|loss income)\b/g, "income").replace(/\b(?:gain loss|loss gain)\b/g, "gain")
+      .replace(/\b(?:benefit expense|expense benefit)\b/g, "expense").replace(/\b(?:increase decrease|decrease increase)\b/g, "increase")
+      .replace(/^net cash flows (?:(?:from|used in|provided by|generated by) )+/, "net cash flows ");
+    const key = (r: SixKRow, loose?: boolean) => `${pair(loose ? r.label.replace(/^.*\b(?:19|20)\d{2} /, "") : r.label)}|${r.parent ? pair(r.parent) : ""}`;
+    for (const r of rows) {
+      const m = prows.filter((x) => key(x, prev.loose) === key(r, st.loose));
+      if (m.length === 1 && Math.round(m[0].vals[jC] * prev.unit) === Math.round(r.vals[iP] * st.unit)) kept.push(r);
+      else dropped.push(r.label);
+    }
+    return { rows: kept, why: dropped.length ? `${what} 전기 누적이 1년 전 6-K(${prev.source}) 당기 누적과 다른 줄 ${dropped.length}개 제외: ${dropped.slice(0, 6).join(", ")}` : undefined };
+  };
+  const cf = check(st.cf, st.cfDates, prev?.cf, prev?.cfDates, "현금흐름표");
+  const out: SixKStatements = { ...st, cf: cf.rows, ...(cf.why ? { cfWhy: cf.why } : {}), ...(prev ? { priorChecked: prev.source } : {}) };
+  if (st.is && st.isDates) {
+    const is = check(st.is, st.isDates, prev?.is, prev?.isDates, "손익계산서");
+    if (!is.rows.length) return { ...out, is: undefined, isDates: undefined, isWhy: is.why };
+    return { ...out, is: is.rows, ...(is.why ? { isWhy: is.why } : {}) };
+  }
+  return out;
+}
+
+async function findSixK(cik: string, recent: RecentFilings | null, periodEnd: string, fyEnd: string, priorEnd: string, withIs: boolean): Promise<SixKStatements | null> {
   if (!recent) return null;
   const cikN = Number(cik);
   const lo = periodEnd, hi = new Date(Date.parse(periodEnd) + 120 * 864e5).toISOString().slice(0, 10);
@@ -218,7 +341,11 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
   // 조회 실패 기록 — 값을 못 찾고 끝났는데 실패가 있었으면 던진다(재감사 12차 ③: null 로 삼키면 "6-K 없음"과 구분되지 않아 LTM 값이 조용히 사라졌다)
   const errs: string[] = [];
   const failed = (what: string) => (e: unknown) => { errs.push(`${what}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160)); return null; };
-  for (let i = 0; i < recent.form.length && cands.length < 8; i++) if (recent.form[i] === "6-K" && recent.filingDate[i] > lo && recent.filingDate[i] <= hi) cands.push(i);
+  for (let i = 0; i < recent.form.length; i++) if (recent.form[i] === "6-K" && recent.filingDate[i] > lo && recent.filingDate[i] <= hi) cands.push(i);
+  // 분기말에 가까운(먼저 낸) 보고서부터 24건 — 제출 목록은 최신순이라 예전엔 창 끝쪽 8건만 봐서, 6-K 를 자주 내는 회사(TSM 월 매출·이사회·
+  // 월말 공시)는 분기 재무보고서가 창 안에 있어도 밀려나면 못 찾았다(TSM 2025 2분기 재무보고서 = 창 안 6-K 중 먼저 낸 순 9번째). 공시 원본은
+  // 디스크 캐시(http.ts)라 이미 본 보고서는 다시 받지 않는다
+  cands.sort((a, b) => recent.filingDate[a].localeCompare(recent.filingDate[b]) || a - b).splice(24);
   for (const i of cands) {
     const base = `https://www.sec.gov/Archives/edgar/data/${cikN}/${recent.accessionNumber[i].replace(/-/g, "")}`;
     const idx = await fetchJson<{ directory: { item: { name: string; size: string | number }[] } }>(`${base}/index.json`, OPT).catch(failed(`${recent.accessionNumber[i]} index`));
@@ -227,7 +354,7 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       const html = await fetchText(`${base}/${d.name}`, { ...OPT, timeoutMs: 60_000 }).catch(failed(`${recent.accessionNumber[i]} ${d.name}`));
       if (!html) continue;
       // 형식 2 — 슬라이드 그림 + 숨은 글자(Workiva, ASML "Financial Statements US GAAP")
-      const sl = slideStatements(html, periodEnd, fyEnd, priorEnd);
+      const sl = slideStatements(html, periodEnd, fyEnd, priorEnd, withIs);
       if (sl) {
         const { labels, parents } = await filingLabels(cikN, recent); // 라벨 파일 조회 실패는 그대로 던진다(호출자가 경고로)
         if (!labels.size) return null;
@@ -241,29 +368,27 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
       if (!bs || !cf) continue;
       const unit = /in (?:\S+ )?thousands/.test(bs.text) ? 1e3 : /in (?:\S+ )?millions/.test(bs.text) ? 1e6 : 1; // "in € millions"(SPOT)
       const bsDates = headerDates(bs.text, [periodEnd, fyEnd, priorEnd]);
-      // 현금흐름 열 = 당기·전기 누적(종료일 표기는 "june 30" + 연도 열 머리) — 당기 → 전기 순서가 관행. 머리말에 두 연도가 그 순서로 나올 때만
-      const yC = periodEnd.slice(0, 4), yP = priorEnd.slice(0, 4);
-      const iC = cf.text.indexOf(yC), iP = cf.text.indexOf(yP);
-      const cfDates = iC >= 0 && iP >= 0 ? (iC < iP ? [periodEnd, priorEnd] : [priorEnd, periodEnd]) : [];
-      if (bsDates.length < 2 || cfDates.length !== 2) continue;
+      // 현금흐름 열 = 당기·전기 누적 — 표 머리의 기간·연도 칸에서 직접(isColumns, 손익계산서와 같은 규칙). 예전엔 구간 앞 글에서 두 연도가 나온
+      // 순서로 정해 제목 연도가 섞이면 뒤바뀔 수 있었다(독립 감사 2026-10-20 ② — 같은 종류)
+      const cfc = isColumns(cf.head, cf.text.slice(0, 600), periodEnd, priorEnd, fyEnd);
+      if (bsDates.length < 2 || "why" in cfc) continue;
+      const cfDates = [periodEnd, priorEnd];
       // 재무상태표 줄 값: 열마다 [금액, 비율%] 쌍인 보고서(TSM) — 값 개수가 열 수의 2배면 짝수 자리만
       // 주석 번호 열이 있는 표는 값이 하나 많은 줄의 첫 값(번호)을 뺀다
       const fix = (rows: SixKRow[], n: number, noteCol: boolean) =>
         rows.map((r) => ({ ...r, vals: r.vals.length === 2 * n ? r.vals.filter((_, k) => k % 2 === 0) : noteCol && r.vals.length === n + 1 ? r.vals.slice(1) : r.vals })).filter((r) => r.vals.length === n);
       const { labels, parents } = await filingLabels(cikN, recent); // 라벨 파일 조회 실패는 그대로 던진다(호출자가 경고로)
       if (!labels.size) return null;
-      // 손익계산서 — 누적 열(반기·3분기 보고서는 "Six/Nine months" 뒤 두 열, 1분기는 3개월 두 열). 연도 순서는 머리말의 그 두 열 연도로(당기·전기)
-      const isSec = sectionRows(html, /CONSOLIDATED STATEMENTS? OF (?:OPERATIONS|INCOME|PROFIT OR LOSS|COMPREHENSIVE INCOME)/, /(?:revenue|net sales)[\s\S]*(?:net income|net profit|profit for the period)/i, /CONSOLIDATED (?:STATEMENTS? OF (?:COMPREHENSIVE|FINANCIAL POSITION|CHANGES IN|CASH FLOWS?)|BALANCE SHEETS?)/i);
-      let isPart: { is?: SixKRow[]; isDates?: string[] } = {};
+      // 손익계산서(withIs 일 때만) — 열 기간은 표 머리에서 직접 읽는다(isColumns). 못 정하면 손익계산서 없음 + 사유(isWhy)
+      let isPart: { is?: SixKRow[]; isDates?: string[]; isWhy?: string } = {};
+      const isSec = withIs ? sectionRows(html, /CONSOLIDATED STATEMENTS? OF (?:OPERATIONS|INCOME|PROFIT OR LOSS|COMPREHENSIVE INCOME)/, /(?:revenue|net sales)[\s\S]*(?:net (?:\(loss\)\/|loss\/)?income|net (?:\(loss\)|loss)|net profit|profit for the period)/i, /CONSOLIDATED (?:STATEMENTS? OF (?:COMPREHENSIVE|FINANCIAL POSITION|CHANGES IN|CASH FLOWS?)|BALANCE SHEETS?)/i) : null;
+      if (withIs && !isSec) isPart = { isWhy: "6-K 에서 손익계산서 표를 못 찾음" };
       if (isSec) {
-        const ytd = /(six|nine) months/.test(isSec.text);
-        const n = ytd ? 4 : 2, cols = ytd ? [2, 3] : [0, 1];
-        const yrs = [...isSec.text.slice(0, 1_500).matchAll(/\b((?:19|20)\d{2})\b/g)].map((m) => m[1]).slice(0, n);
-        const ys = cols.map((k) => yrs[k]);
-        const dts = ys.map((y0) => (y0 === yC ? periodEnd : y0 === yP ? priorEnd : null));
+        const ic = isColumns(isSec.head, isSec.text.slice(0, 600), periodEnd, priorEnd, fyEnd);
         const isUnit = /in (?:\S+ )?thousands/.test(isSec.text) ? 1e3 : /in (?:\S+ )?millions/.test(isSec.text) ? 1e6 : 1;
-        if (yrs.length === n && dts.every(Boolean) && dts[0] !== dts[1] && isUnit === unit)
-          isPart = { is: fix(isSec.rows, n, isSec.noteCol).map((r) => ({ ...r, vals: cols.map((k) => r.vals[k]) })), isDates: dts as string[] };
+        if ("why" in ic) isPart = { isWhy: ic.why };
+        else if (isUnit !== unit) isPart = { isWhy: "손익계산서 금액 단위가 재무상태표와 다름" };
+        else isPart = { is: fix(isSec.rows, ic.n, isSec.noteCol).map((r) => ({ ...r, vals: ic.cols.map((k) => r.vals[k]) })), isDates: [periodEnd, priorEnd] };
       }
       // 본표 밖 표 — 머리(앞 2천 자)에 기준일·연말이 둘 다 있는 표의 줄
       const bsNotes: { dates: string[]; rows: SixKRow[] }[] = [];
@@ -276,7 +401,7 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
         if (!single && (!ds.includes(periodEnd) || !ds.includes(fyEnd))) continue;
         const rows: SixKRow[] = [];
         for (const tr of t.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? []) {
-          const cells = (tr.match(/<t[dh]\b[\s\S]*?<\/t[dh]>/gi) ?? []).map(decode).filter((c) => c !== "" && c !== "$");
+          const cells = rowCells(tr);
           const label = cells.find((c) => /[A-Za-z]/.test(c));
           if (!label) continue;
           const vals = cells.slice(cells.indexOf(label) + 1).map(parseNum).filter((v): v is number => v != null);
@@ -284,7 +409,7 @@ export async function sixKStatements(cik: string, recent: RecentFilings | null, 
         }
         (single ? bsNotes1 : bsNotes).push({ dates: ds, rows: fix(rows, ds.length, /\bnote\b/i.test(plain.slice(0, 1_500))) });
       }
-      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, 2, cf.noteCol), ...isPart, labels, parents, loose: false, bsNotes, bsNotes1 };
+      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, cfc.n, cf.noteCol).map((r) => ({ ...r, vals: cfc.cols.map((k) => r.vals[k]) })), ...isPart, labels, parents, loose: false, bsNotes, bsNotes1 };
     }
   }
   if (errs.length) throw new Error(`6-K 분기 재무제표 조회 실패 — ${errs.join(" · ")}`);

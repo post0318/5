@@ -556,31 +556,36 @@ export class UsReader {
   }
 
   /** 사업연도말 → 야후 최신 분기 다음 분기의 6-K(재무상태표·현금흐름표·손익계산서 모두 그 분기를 실은 것만). edgar.ts 의 LTM 기간 판정과 같은 규칙 */
-  private aheadMemo = new Map<string, Promise<{ q: string; prior: string; st: SixKStatements } | null>>();
-  aheadSixK(fyEnd: string): Promise<{ q: string; prior: string; st: SixKStatements } | null> {
+  private aheadMemo = new Map<string, Promise<AheadSixK | null>>();
+  aheadSixK(fyEnd: string): Promise<AheadSixK | null> {
     let p = this.aheadMemo.get(fyEnd);
     if (!p) {
       p = (async () => {
         if (!this.yahoo) return null;
-        const q = monthEndAfter(yahooLastQuarter(this.yahoo, fyEnd) ?? fyEnd, 3);
-        if (q > new Date().toISOString().slice(0, 10) || monthEndAfter(fyEnd, 12) <= q) return null;
-        const prior = monthEndAfter(q, -12);
-        const r = this.sub.recent;
-        const recent = { accessionNumber: r.map((x) => x.accn), form: r.map((x) => x.form), filingDate: r.map((x) => x.filed), primaryDocument: r.map((x) => x.doc), reportDate: r.map((x) => x.reportDate) };
-        let st: SixKStatements | null;
         try {
-          st = await sixKStatements(this.profile.cik, recent, q, fyEnd, prior);
+          return await aheadSixKOf(this.profile.cik, this.sub, this.yahoo, fyEnd);
         } catch (e) {
           // 조회 실패 — 결손(짧은 캐시·저장 안 함). 야후 분기 LTM 으로 조용히 넘어가지 않게 경고
           this.gaps |= Gap.YAHOO;
-          this.warnings.push(`회사 6-K 분기 재무제표 조회 실패(${q}) — ${e instanceof Error ? e.message : String(e)}`.slice(0, 240));
+          this.warnings.push(`회사 6-K 분기 재무제표 조회 실패 — ${e instanceof Error ? e.message : String(e)}`.slice(0, 240));
           return null;
         }
-        return st && st.bsDates.includes(q) && st.cfDates.includes(q) && st.isDates?.includes(q) ? { q, prior, st } : null;
       })();
       this.aheadMemo.set(fyEnd, p);
     }
     return p;
+  }
+
+  /**
+   * 20-F·40-F 회사 LTM 기준 열쇠(저장본 fin_sym.lb) — 사업연도말·야후 최신 분기·LTM 끝으로 쓴 6-K. 정기공시 접수번호(la)만으론 6-K·야후 새 분기를
+   * 알 수 없어 저장본이 다음 20-F 까지 옛 LTM 으로 남았다(독립 감사 2026-10-20 ①). 배치(refreshStored)가 ltmBasisNow 와 비교해 다르면 다시 조립한다.
+   * 국내 제출사·LTM 열 없음은 null
+   */
+  async ltmBasis(): Promise<string | null> {
+    if (this.profile.filer === "domestic" || !this.yahoo) return null;
+    const fyEnd = [...this.calendar].reverse().find((y) => y.end)?.end;
+    if (!fyEnd) return null;
+    return ltmBasisKey(fyEnd, this.yahoo, await this.aheadSixK(fyEnd));
   }
 
   private async yahooValue(qname: string, col: ColumnSpec): Promise<CellValue> {
@@ -599,7 +604,7 @@ export class UsReader {
       const v = sixKValueOf(ah.st, local, "is", (vals) => fy !== 0 && vals.every((x) => x === 0 || Math.sign(x) === Math.sign(fy)));
       const dts = ah.st.isDates ?? [];
       const iC = dts.indexOf(ah.q), iP = dts.indexOf(ah.prior);
-      if (!v || iC < 0 || iP < 0) return { v: null, raw: null, gaps: 0, note: `${ah.q} 분기 야후 미게시 · 회사 6-K 손익계산서에 같은 줄 없음` };
+      if (!v || iC < 0 || iP < 0) return { v: null, raw: null, gaps: 0, note: `${ah.q} 분기 야후 미게시 · 회사 6-K 손익계산서에 같은 줄 없음${ah.st.isWhy ? `(${ah.st.isWhy})` : ""}` };
       const E = col.yahoo!.fyEnd, S = col.yahoo!.fyStart, next = new Date(Date.parse(E) + 864e5).toISOString().slice(0, 10);
       const fx = this.fx;
       const rF = fx.avg(S, E), rC = fx.avg(next, ah.q), rP = fx.avg(S, ah.prior);
@@ -704,6 +709,37 @@ function uniq<T extends { start: string; end: string }>(xs: T[]): T[] {
   const m = new Map<string, T>();
   for (const x of xs) m.set(`${x.start}|${x.end}`, x);
   return [...m.values()];
+}
+
+export interface AheadSixK { q: string; prior: string; st: SixKStatements }
+
+/**
+ * 야후 최신 분기 다음 분기의 6-K — 재무상태표·현금흐름표·손익계산서가 모두 그 분기 열을 실은 것만(edgar.ts 의 LTM 기간 판정과 같은 규칙).
+ * 조회 실패는 던진다
+ */
+export async function aheadSixKOf(cik: string, sub: Submissions, yahoo: { quarterly: YahooFundamentalsRow[] }, fyEnd: string): Promise<AheadSixK | null> {
+  const q = monthEndAfter(yahooLastQuarter(yahoo, fyEnd) ?? fyEnd, 3);
+  if (q > new Date().toISOString().slice(0, 10) || monthEndAfter(fyEnd, 12) <= q) return null;
+  const prior = monthEndAfter(q, -12);
+  const r = sub.recent;
+  const recent = { accessionNumber: r.map((x) => x.accn), form: r.map((x) => x.form), filingDate: r.map((x) => x.filed), primaryDocument: r.map((x) => x.doc), reportDate: r.map((x) => x.reportDate) };
+  const st = await sixKStatements(cik, recent, q, fyEnd, prior, { withIs: true });
+  return st && st.bsDates.includes(q) && st.cfDates.includes(q) && st.isDates?.includes(q) ? { q, prior, st } : null;
+}
+
+/** LTM 기준 열쇠 — `사업연도말|y:야후 최신 분기|k:LTM 끝 6-K 출처` */
+export function ltmBasisKey(fyEnd: string, yahoo: { quarterly: YahooFundamentalsRow[] }, ah: AheadSixK | null): string {
+  return `${fyEnd}|y:${yahooLastQuarter(yahoo, fyEnd) ?? "-"}|k:${ah ? ah.st.source : "-"}`;
+}
+
+/**
+ * 지금의 LTM 기준 열쇠(배치 판정용) — 제출 목록·야후 분기·6-K(공시 원본은 디스크 캐시라 새 보고서만 받는다). 사업연도말은 저장본 열쇠의 것
+ * (사업연도가 바뀌면 새 20-F 로 la 가 먼저 바뀐다). 조회 실패는 던진다
+ */
+export async function ltmBasisNow(symbol: string, fyEnd: string): Promise<string> {
+  const { cik } = await resolveCik(symbol);
+  const [sub, yahoo] = await Promise.all([getSubmissions(cik), yahooQuarters(symbol)]);
+  return ltmBasisKey(fyEnd, yahoo, await aheadSixKOf(cik, sub, yahoo, fyEnd));
 }
 
 /** 종목의 가장 최근 정기공시 accn — 제출 목록(submissions)만 읽는다(배치 갱신 판정용, UsReader.latestPeriodic 과 같은 규칙) */

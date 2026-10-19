@@ -30,7 +30,7 @@ export interface TtmSnapDoc {
 const MAX_AGE_MS = 24 * 3_600_000;
 
 /** TTM 계산 규칙 판 — 현재 주식수·LTM·EV 구성 규칙을 고치면 올린다(재무 조립 규칙은 ENGINE_VERSION 이 따로 따라간다) */
-export const TTM_RULES_VERSION = 1;
+export const TTM_RULES_VERSION = 2; // 2: 20-F LTM — 6-K 흐름 표 열 판정·전기 누적 확인, 앞섬 모드에서도 영업이익 태그 없는 회사의 세전이익·이자비용 6-K 채움 금지(2026-10-20)
 
 export function ttmSnapVersion(): string {
   // 배포 환경(Vercel·구글·오라클 — 배포 커밋 변수가 있음)과 로컬을 가른다: 같은 DB 라 로컬이 쓴 저장본을 운영이 읽지 않게.

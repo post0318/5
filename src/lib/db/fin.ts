@@ -46,6 +46,11 @@ export interface FinSymDoc {
   sv: number;
   at: Date;
   la: string | null;
+  /**
+   * 20-F·40-F LTM 기준 열쇠 `사업연도말|y:야후 최신 분기|k:LTM 끝 6-K 출처`(엔진판 48부터, fin/read UsReader.ltmBasis). 배치가 지금 열쇠와 다르면 다시
+   * 조립한다 — 새 6-K·야후 새 분기는 정기공시 접수번호(la)를 바꾸지 않는다(독립 감사 2026-10-20 ①). 국내 제출사·LTM 열 없음은 없음
+   */
+  lb?: string;
   p: { t: string; fl: string; sic: number | null; cur: string; adr: number };
   g: number;
   c: FinColTuple[];

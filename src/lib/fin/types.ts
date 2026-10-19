@@ -279,5 +279,7 @@ export interface FinAssembly {
   issues: { col: string; rev: string[]; other: string[]; unv: string[]; der?: string[] }[];
   /** 가장 최근 정기공시 accn */
   latestAccn: string | null;
+  /** 20-F·40-F LTM 기준 열쇠(UsReader.ltmBasis — 사업연도말·야후 최신 분기·LTM 끝 6-K). 국내 제출사 null */
+  ltmBasis?: string | null;
   at: string;
 }

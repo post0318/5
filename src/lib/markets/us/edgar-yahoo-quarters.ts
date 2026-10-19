@@ -86,8 +86,12 @@ export type YahooLtmResult =
       sixKDetail?: SixKDetail[];
       /** 이번 LTM 에 쓴 6-K 보고서("6-K 접수번호 문서") — 검증 전용 */
       sixKSource?: string;
+      /** 6-K 흐름 표에서 뺀 줄의 사유(손익계산서·현금흐름표 — 열 판정·1년 전 같은 분기 6-K 전기 누적 대조, edgar-6k verifyPrior) — 검증·검수용 */
+      sixKFlowWhy?: string[];
       /** 6-K 경로를 시도했으나 보고서를 못 찾은 사유(조회 실패는 fetchWarnings) — 검증 전용 */
       sixKMiss?: string;
+      /** 야후 다음 분기 6-K 가 있는데 LTM 끝으로 못 쓴 사유(손익계산서 열 판정·전기 누적 확인 실패 등) — 검증·검수용 */
+      aheadMiss?: string;
       /** 1년 전 분기 6-K 를 찾아야 했으나 못 찾은 사유 — 검증 전용 */
       sixKPrevMiss?: string;
       /** LTM EV·순차입금을 같은 기준일로 계산할 수 있는지 */
@@ -447,6 +451,9 @@ export function withYahooLtm(
     const flowKind: "cf" | "is" = it.concepts.some((c) => IS_FLOW_CONCEPTS.has(c)) ? "is" : "cf";
     const flowSixK = (): boolean => {
       if (!sixK || (flowKind === "is" && !ahead) || (!ahead && (it.concepts === PRETAX || it.concepts === INTEREST))) return false;
+      // 영업이익 태그가 없는 회사는 세전이익·이자비용을 합성 영업이익(edgar-ev opIncomeEntries)이 가공한다 — 앞섬 모드에서도 6-K 로 채우지 않는다
+      // (아래 야후 경로의 같은 보호를 fail() 이 이 함수로 건너뛰던 것 — 독립 감사 2026-10-20 ④)
+      if (!opPresent && (it.concepts === PRETAX || it.concepts === INTEREST)) return false;
       const dts = flowKind === "is" ? sixK.isDates ?? [] : sixK.cfDates;
       const iC = dts.indexOf(last), iP = dts.indexOf(priorEnd);
       const curRate = fx.avg(addDay(E, 1), last);
@@ -809,6 +816,7 @@ export function withYahooLtm(
       sixK: sixKFilled,
       sixKDetail,
       sixKSource: sixK?.source,
+      ...(sixK && (sixK.isWhy || sixK.cfWhy) ? { sixKFlowWhy: [sixK.isWhy, sixK.cfWhy].filter((x): x is string => !!x) } : {}),
       evComplete: evMiss.length === 0,
       evReason: evMiss.length ? `LTM EV 미표시(${ahead ? "회사 6-K 분기" : "Yahoo 분기"} LTM) — ${evMiss.join("·")}을(를) ${last} 기준으로 못 채움` : null,
     },

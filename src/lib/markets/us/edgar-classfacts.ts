@@ -331,20 +331,8 @@ export async function instanceUrl(cik: number, accnNoDash: string, primaryDoc: s
   const stem = primaryDoc.replace(/\.html?$/i, "");
   // 최신 파일링: `{stem}_htm.xml`
   const guess = `${base}/${stem}_htm.xml`;
-  // HEAD 도 일시 오류(429·403·5xx·네트워크)는 기록한다 — index.json 폴백이 성공해도 SEC 가 막히고 있다는 신호(fetch-health.ts)
-  if (checkBackoff(guess) === 0) {
-    try {
-      const head = await fetch(guess, { method: "HEAD", headers: SEC_HEADERS });
-      if (head.ok) {
-        noteFetchSuccess(guess);
-        return guess;
-      }
-      noteFetchFailure(guess, head.status);
-    } catch {
-      noteFetchFailure(guess, undefined);
-    }
-  }
-  // index.json 으로 인스턴스 파일 탐색 (구버전 등)
+  // 공시 목록(index.json)을 먼저 본다 — 접수번호 폴더 파일이라 디스크 캐시(http.ts)에 남아 두 번째부터 요청 0. 예전엔 추측 주소를 HEAD 로 매번
+  // 확인해 조립할 때마다 SEC 요청이 1건씩 나갔다(2026-10-20 — 같은 작업 두 번째 실행의 외부 요청 측정에서 발견)
   try {
     const idx = await fetchJson<FilingIndex>(`${base}/index.json`, {
       headers: SEC_HEADERS,
@@ -358,11 +346,25 @@ export async function instanceUrl(cik: number, accnNoDash: string, primaryDoc: s
           !/_(cal|def|lab|pre)\.xml$/i.test(n) &&
           !/^(FilingSummary|MetaLinks|R\d+)\b/i.test(n),
       );
+    if (xmls.includes(`${stem}_htm.xml`)) return guess;
     const htm = xmls.find((n) => /_htm\.xml$/i.test(n));
     const dated = xmls.find((n) => /-\d{8}\.xml$/i.test(n));
     const chosen = htm ?? dated ?? xmls[0];
     return chosen ? `${base}/${chosen}` : null;
   } catch (e) {
+    // 목록 조회 실패 — 추측 주소를 HEAD 로 확인(예전 첫 단계). 일시 오류(429·403·5xx·네트워크)는 기록한다(fetch-health.ts)
+    if (checkBackoff(guess) === 0) {
+      try {
+        const head = await fetch(guess, { method: "HEAD", headers: SEC_HEADERS });
+        if (head.ok) {
+          noteFetchSuccess(guess);
+          return guess;
+        }
+        noteFetchFailure(guess, head.status);
+      } catch {
+        noteFetchFailure(guess, undefined);
+      }
+    }
     // 목록(index.json) 조회 실패는 "인스턴스 없음"이 아니다 — 호출부가 공란·재시도로 처리하도록 올린다(sec-unavailable.ts)
     if (isFetchFailure(e)) throw e;
     return null;
