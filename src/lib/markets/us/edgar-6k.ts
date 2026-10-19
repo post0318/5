@@ -17,7 +17,10 @@ const H = { "user-agent": UA, "accept-encoding": "gzip, deflate" };
 const OPT = { headers: H, revalidate: 60 * 60 * 24, timeoutMs: 45_000 };
 
 /** parent = 바로 위 값 없는 머리 줄(예 "current assets"·"acquisitions of") — 같은 이름 줄(유동·비유동, 취득·처분) 구분용 */
-export interface SixKRow { label: string; vals: number[]; parent?: string }
+/** q3 = 흐름 표의 당기 3개월 열 값(표에 3개월·누적 열이 같이 있을 때 — 당기 누적 열 자리 확인용, verifyPrior) */
+export interface SixKRow { label: string; vals: number[]; parent?: string; q3?: number }
+/** 흐름 표 열 구성 — q1: 1분기(누적 = 3개월 열), q3: 3개월 열과 누적 열이 같이 있음(q3 값 있음), ytd: 누적 열만 */
+export type FlowMode = "q1" | "q3" | "ytd";
 export interface SixKStatements {
   /** 보고서 출처(접수번호/파일) */
   source: string;
@@ -32,6 +35,8 @@ export interface SixKStatements {
   /** 손익계산서 누적 열(isDates 순서 — 당기·전기 누적 종료일). 못 읽으면 없음(손익 LTM 은 그 6-K 로 만들지 않음 — 2026-10-17 ASML 6-K 반영) */
   is?: SixKRow[];
   isDates?: string[];
+  isMode?: FlowMode;
+  cfMode?: FlowMode;
   /** 손익계산서를 못 쓰거나 일부 줄을 뺀 사유(열 기간 판정 불가·전기 누적 확인 실패 — verifyIs) */
   isWhy?: string;
   /** 현금흐름표 줄을 뺀 사유(전기 누적 확인 실패 — verifyPrior) */
@@ -189,6 +194,12 @@ function slideRows(text: string, n: number): SixKRow[] {
   }
   return rows.filter((r) => r.vals.length === n);
 }
+/** 슬라이드 열 4개(3개월 2 + 누적 2)면 당기 3개월 열 = 앞 두 열 중 날짜가 분기말인 것. 1분기(열 2개)는 없음 */
+function slideQ3(d: string[], cols: number[], periodEnd: string): number | null {
+  if (d.length !== 4 || cols.join() !== "2,3") return null;
+  const k = [0, 1].filter((x) => d[x] === periodEnd);
+  return k.length === 1 ? k[0] : null;
+}
 function slideStatements(html: string, periodEnd: string, fyEnd: string, priorEnd: string, withIs: boolean): Omit<SixKStatements, "source" | "labels" | "parents"> | null {
   const texts = [...html.matchAll(/<FONT[^>]*color:\s*white[^>]*>([\s\S]*?)<\/FONT>/gi)].map((m) =>
     m[1].replace(/<[^>]+>/g, " ").replace(/&#8212;|&mdash;/g, "—").replace(/&#8364;|&euro;/g, "€").replace(/&#8217;|&rsquo;/g, "'").replace(/&amp;/g, "&").replace(/&nbsp;|&#160;/g, " ").replace(/[\r\n\t]/g, " "));
@@ -198,36 +209,36 @@ function slideStatements(html: string, periodEnd: string, fyEnd: string, priorEn
   const bsCands = texts.filter((t) => /US GAAP/.test(t) && /total assets/i.test(t) && unitOf(t)).map((t) => ({ t, d: slideDates(t) }))
     .filter((x) => x.d.includes(periodEnd) && x.d.includes(fyEnd)).sort((a, b) => b.d.length - a.d.length);
   // 현금흐름표 — 누적 열
-  let cf: { t: string; d: string[]; cols: number[] } | null = null;
+  let cf: { t: string; d: string[]; cols: number[]; q3: number | null } | null = null;
   for (const t of texts) {
     if (!/US GAAP/.test(t) || !/operating activities/i.test(t) || !/months ended/i.test(t) || !unitOf(t)) continue;
     const d = slideDates(t);
     const cols = d.length === 4 && /(six|nine) months ended/i.test(t) ? [2, 3] : d.length === 2 && !/(six|nine) months ended/i.test(t) ? [0, 1] : null;
     if (!cols || !cols.every((k) => d[k] === periodEnd || d[k] === priorEnd) || d[cols[0]] === d[cols[1]]) continue;
-    cf = { t, d, cols };
+    cf = { t, d, cols, q3: slideQ3(d, cols, periodEnd) };
     break;
   }
   // 손익계산서 — 현금흐름표와 같은 누적 열 규칙(재무상태표·현금흐름표 슬라이드 제외)
-  let is: { t: string; d: string[]; cols: number[] } | null = null;
+  let is: { t: string; d: string[]; cols: number[]; q3: number | null } | null = null;
   for (const t of texts) {
     if (!/US GAAP/.test(t) || !/net income/i.test(t) || !/gross profit|total net sales/i.test(t) || /operating activities|total assets/i.test(t) || !/months ended/i.test(t) || !unitOf(t)) continue;
     const d = slideDates(t);
     const cols = d.length === 4 && /(six|nine) months ended/i.test(t) ? [2, 3] : d.length === 2 && !/(six|nine) months ended/i.test(t) ? [0, 1] : null;
     if (!cols || !cols.every((k) => d[k] === periodEnd || d[k] === priorEnd) || d[cols[0]] === d[cols[1]]) continue;
-    is = { t, d, cols };
+    is = { t, d, cols, q3: slideQ3(d, cols, periodEnd) };
     break;
   }
   const bs = bsCands[0];
   if (!bs || !cf || unitOf(bs.t) !== unitOf(cf.t)) return null;
   const unit = unitOf(bs.t)!;
-  const cfRows = slideRows(cf.t, cf.d.length).map((r) => ({ ...r, vals: cf!.cols.map((k) => r.vals[k]) }));
+  const cfRows = slideRows(cf.t, cf.d.length).map((r) => ({ ...r, vals: cf!.cols.map((k) => r.vals[k]), ...(cf!.q3 != null ? { q3: r.vals[cf!.q3] } : {}) }));
   const isPart = withIs && is && unitOf(is.t) === unit
-    ? { is: slideRows(is.t, is.d.length).map((r) => ({ ...r, vals: is!.cols.map((k) => r.vals[k]) })), isDates: is.cols.map((k) => is!.d[k]) }
+    ? { is: slideRows(is.t, is.d.length).map((r) => ({ ...r, vals: is!.cols.map((k) => r.vals[k]), ...(is!.q3 != null ? { q3: r.vals[is!.q3] } : {}) })), isDates: is.cols.map((k) => is!.d[k]), isMode: (is.q3 != null ? "q3" : "q1") as FlowMode }
     : {};
   // 재무상태표가 자산·부채와 자본 두 덩어리 글자로 나뉜 슬라이드 — 날짜 머리가 똑같은 덩어리(같은 단위)를 이어 읽는다(ASML 자본 총계·부채와 자본 총계)
   const sameHead = texts.filter((t) => t !== bs.t && /US GAAP/.test(t) && unitOf(t) === unit && /shareholders|equity|liabilities/i.test(t) && !/operating activities|months ended/i.test(t) && slideDates(t).join("|") === bs.d.join("|"));
   const bsRows = [bs.t, ...sameHead].flatMap((t) => slideRows(t, bs.d.length));
-  return { unit, bsDates: bs.d, cfDates: cf.cols.map((k) => cf!.d[k]), bs: bsRows, cf: cfRows, ...isPart, loose: true };
+  return { unit, bsDates: bs.d, cfDates: cf.cols.map((k) => cf!.d[k]), bs: bsRows, cf: cfRows, cfMode: cf.q3 != null ? "q3" : "q1", ...isPart, loose: true };
 }
 
 /**
@@ -236,7 +247,7 @@ function slideStatements(html: string, periodEnd: string, fyEnd: string, priorEn
  * (연도 수 ÷ 기간 수 — 나누어떨어지지 않으면 판정 불가). 당기 누적 = 개월 수가 (사업연도말 → 분기말)이고 연도가 분기말 연도인 열 하나,
  * 전기 누적 = 같은 개월 수·1년 전 연도인 열 하나. 못 정하면 사유(빈칸 — 자리를 추측하지 않는다).
  */
-function isColumns(head: string[][], title: string, periodEnd: string, priorEnd: string, fyEnd: string): { cols: [number, number]; n: number } | { why: string } {
+function isColumns(head: string[][], title: string, periodEnd: string, priorEnd: string, fyEnd: string): { cols: [number, number]; n: number; q3: number | null; mode: FlowMode } | { why: string } {
   const months = Math.round((Date.parse(periodEnd) - Date.parse(fyEnd)) / (30.44 * 864e5));
   if (![3, 6, 9].includes(months)) return { why: `분기말 ${periodEnd} 이 사업연도말 ${fyEnd} 뒤 3·6·9개월이 아님` };
   const MW: Record<string, number> = { three: 3, six: 6, nine: 9, twelve: 12, "3": 3, "6": 6, "9": 9, "12": 12 };
@@ -271,7 +282,12 @@ function isColumns(head: string[][], title: string, periodEnd: string, priorEnd:
   const pick = (y: string) => { const ks = years.map((yy, k) => (yy === y && colMonths[k] === months ? k : -1)).filter((k) => k >= 0); return ks.length === 1 ? ks[0] : -1; };
   const iC = pick(periodEnd.slice(0, 4)), iP = pick(priorEnd.slice(0, 4));
   if (iC < 0 || iP < 0) return { why: `손익계산서 머리에서 ${months}개월 누적 당기·전기 열을 하나씩 못 찾음(머리: ${head.flat().join(" | ").slice(0, 120)})` };
-  return { cols: [iC, iP], n: years.length };
+  // 당기 3개월 열(누적 열 자리 확인용) — 1분기는 누적 = 3개월, 3개월 열이 아예 없으면 누적 열만인 표
+  if (months === 3) return { cols: [iC, iP], n: years.length, q3: null, mode: "q1" };
+  const k3 = years.map((yy, k) => (yy === periodEnd.slice(0, 4) && colMonths[k] === 3 ? k : -1)).filter((k) => k >= 0);
+  if (k3.length === 1) return { cols: [iC, iP], n: years.length, q3: k3[0], mode: "q3" };
+  if (!colMonths.includes(3)) return { cols: [iC, iP], n: years.length, q3: null, mode: "ytd" };
+  return { why: `손익·현금흐름 머리에서 당기 3개월 열을 하나로 못 정함(머리: ${head.flat().join(" | ").slice(0, 120)})` };
 }
 
 /** 구간 머리말에 나온 날짜(ISO) — 등장 순서(열 순서) */
@@ -295,46 +311,84 @@ export async function sixKStatements(
 /** 한 달 말에서 12개월 전 달 말 */
 const back12 = (d: string) => { const x = new Date(`${d}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear() - 1, x.getUTCMonth() + 1, 0)).toISOString().slice(0, 10); };
 
+/** 비교할 줄 수 문턱 — 비교 가능 줄의 과반이면서 최소 3줄, 비교 가능 줄이 5줄 미만이면 전부 일치(적은 줄 표의 우연 통과 방지, 재감사 2026-10-20) */
+const tableOk = (matched: number, compared: number) => matched >= 3 && (compared < 5 ? matched === compared : matched * 2 > compared);
+/** 한 달 말에서 3개월 전 달 말 */
+const back3 = (d: string) => { const x = new Date(`${d}T00:00:00Z`); return new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() - 2, 0)).toISOString().slice(0, 10); };
+
 /**
- * 흐름 표(손익계산서·현금흐름표) 전기 누적 열 확인 — 1년 전 같은 분기 6-K(SEC 제출 보고서)의 당기 누적 열로 표 단위 확인(독립 감사
+ * 흐름 표(손익계산서·현금흐름표) 열 확인 — 1년 전 같은 분기 6-K·직전 분기 6-K(SEC 제출 보고서)로 표 단위 확인(독립 감사
  * 2026-10-20 ②: 흐름 표엔 재무상태표의 "연말 열 = SEC" 같은 자리 확인이 없었다). 20-F 회사는 분기 XBRL 이 없어 전년 같은 분기 누적의 SEC 원천은
  * 그 6-K 뿐이다. 열을 잘못 읽었으면(당기·전기 뒤바뀜·3개월 열) 값이 대부분 어긋나 표가 걸러진다. 확인된 표는 줄마다 이번 보고서의 두 열을 쓴다.
  * 1년 전 보고서를 못 찾거나 그 표를 못 읽으면 그 표 전체를 쓰지 않는다(isWhy·cfWhy). 조회 실패는 그대로 던진다(호출자가 경고로)
  */
 async function verifyPrior(st: SixKStatements, cik: string, recent: RecentFilings | null, periodEnd: string, fyEnd: string, priorEnd: string): Promise<SixKStatements> {
-  const prev = await findSixK(cik, recent, priorEnd, back12(fyEnd), back12(priorEnd), !!st.isDates);
-  const check = (rows: SixKRow[], dates: string[], prows: SixKRow[] | undefined, pdates: string[] | undefined, what: string) => {
-    const iP = dates.indexOf(priorEnd), jC = pdates?.indexOf(priorEnd) ?? -1;
+  const withIs = !!st.isDates;
+  const prev = await findSixK(cik, recent, priorEnd, back12(fyEnd), back12(priorEnd), withIs);
+  // 직전 분기 보고서(같은 사업연도) — 당기 누적 열 자리 확인용. 3개월 열이 있는 표(q3)가 있을 때만 받는다
+  const prevQEnd = back3(periodEnd);
+  const needQ = st.cfMode === "q3" || (withIs && st.isMode === "q3");
+  const prevQ = needQ && prevQEnd > fyEnd ? await findSixK(cik, recent, prevQEnd, fyEnd, back12(prevQEnd), withIs) : null;
+  // 슬라이드 글자 형식은 구간 첫 줄 이름 앞에 열 머리(날짜·연도)가 붙는다 — 마지막 연도 뒤만 비교(해마다 날짜가 달라 같은 줄이 갈리지 않게)
+  // 부호 표기만 다른 이름("operating income (loss)" ↔ "operating income", "net (loss)/income" ↔ "net income", "(increase)/decrease" ↔ "increase",
+  // "income tax (expense)/benefit")은 같은 줄로 — 손익 부호에 따라 해마다 붙었다 빠진다
+  const pair = (t: string) => t.replace(/\bcost\b/g, "costs").replace(/\b(?:costs income|income costs)\b/g, "income costs")
+    .replace(/\b(?:income loss|loss income)\b/g, "income").replace(/\b(?:gain loss|loss gain)\b/g, "gain")
+    .replace(/\b(?:benefit expense|expense benefit)\b/g, "expense").replace(/\b(?:increase decrease|decrease increase)\b/g, "increase")
+    .replace(/^net cash flows (?:(?:from|used in|provided by|generated by) )+/, "net cash flows ");
+  // 표 머리 줄(기간·날짜 — "three months ended june 30")이 부모로 잡힌 줄은 부모를 비교하지 않는다(분기마다 날짜가 달라 같은 줄이 갈린다)
+  const headLike = (p: string) => /\bmonths? ended\b|\b(?:year|quarter|weeks?) ended\b|\b(?:19|20)\d{2}\b|\bunaudited\b/.test(p);
+  const key = (r: SixKRow, loose?: boolean) => `${pair(loose ? r.label.replace(/^.*\b(?:19|20)\d{2} /, "") : r.label)}|${r.parent && !headLike(r.parent) ? pair(r.parent) : ""}`;
+  const counterpart = (r: SixKRow, other: SixKStatements, rows: SixKRow[]) => { const m = rows.filter((x) => key(x, other.loose) === key(r, st.loose)); return m.length === 1 ? m[0] : null; };
+  /**
+   * 표 단위 확인 두 가지(조정자 지시·재감사 2026-10-20) — 둘 다 통과해야 그 표 모든 줄에 이번 보고서의 당기·전기 열을 쓴다(전기 누적 = 회사가 이번
+   * 보고서 기준으로 다시 나눈 값, 한국 LTM 정정본 원칙). 이름·묶음이 바뀐 줄도 남는다. 하나라도 안 되면 그 표 전체를 쓰지 않는다(빈칸 + 사유).
+   *  (가) 전기 열 = 1년 전 같은 분기 6-K 의 당기 누적
+   *  (나) 당기 열: 3개월·누적 열이 같이 있는 표는 「당기 누적 − 직전 분기 6-K 당기 누적 = 당기 3개월」(표시 자리 반올림 1 허용 — 열 자리 판정용). 1분기 표는 누적 = 3개월 열이라 확인 없음,
+   *       누적 열만 있는 표(3개월 열 없음 — TSM 현금흐름표)는 열이 둘뿐이라 당기 열이 틀리면 (가)에서 걸린다.
+   *  (가)만으로는 두 보고서가 같은 종류로 틀린 경우(둘 다 3개월 열을 누적으로 읽음)와 당기 열만 틀린 경우를 못 잡는다
+   */
+  const check = (rows: SixKRow[], dates: string[], mode: FlowMode | undefined, sec: "is" | "cf", what: string) => {
+    const iC = dates.indexOf(periodEnd), iP = dates.indexOf(priorEnd);
+    const prows = prev?.[sec], pdates = sec === "is" ? prev?.isDates : prev?.cfDates, jC = pdates?.indexOf(priorEnd) ?? -1;
     if (!prev) return { rows: [] as SixKRow[], why: `1년 전 같은 분기(${priorEnd}) 6-K 재무제표 없음 — ${what} 전기 누적 열 확인 불가` };
-    if (!prows || jC < 0 || iP < 0) return { rows: [] as SixKRow[], why: `1년 전 같은 분기 6-K(${prev.source}) ${what}를 못 읽음 — 전기 누적 열 확인 불가` };
-    // 슬라이드 글자 형식은 구간 첫 줄 이름 앞에 열 머리(날짜·연도)가 붙는다 — 마지막 연도 뒤만 비교(해마다 날짜가 달라 같은 줄이 갈리지 않게)
-    // 부호 표기만 다른 이름("operating income (loss)" ↔ "operating income", "net (loss)/income" ↔ "net income", "(increase)/decrease" ↔ "increase",
-    // "income tax (expense)/benefit")은 같은 줄로 — 손익 부호에 따라 해마다 붙었다 빠진다
-    const pair = (t: string) => t.replace(/\bcost\b/g, "costs").replace(/\b(?:costs income|income costs)\b/g, "income costs")
-      .replace(/\b(?:income loss|loss income)\b/g, "income").replace(/\b(?:gain loss|loss gain)\b/g, "gain")
-      .replace(/\b(?:benefit expense|expense benefit)\b/g, "expense").replace(/\b(?:increase decrease|decrease increase)\b/g, "increase")
-      .replace(/^net cash flows (?:(?:from|used in|provided by|generated by) )+/, "net cash flows ");
-    const key = (r: SixKRow, loose?: boolean) => `${pair(loose ? r.label.replace(/^.*\b(?:19|20)\d{2} /, "") : r.label)}|${r.parent ? pair(r.parent) : ""}`;
-    // 표 단위 확인(조정자 지시 2026-10-20): 1년 전 보고서에 같은 이름 줄이 하나씩 있는 줄 중 전기 열 값이 그 보고서 당기 누적과 정확히 같은 줄이
-    // 3줄 이상이고 과반이면 열 판정이 맞다고 본다 — 그 표의 모든 줄은 이번 보고서의 당기·전기 열을 쓴다(전기 누적 = 회사가 이번 보고서 기준으로
-    // 다시 나눈 값 — 한국 LTM 의 「당기 보고서 전기 누적 열 = 정정본」 원칙과 같음). 이름·묶음이 바뀐 줄(ASML 「repayment on loans」)도 남는다.
-    // 확인이 안 되면 그 표 전체를 쓰지 않는다
+    if (!prows || jC < 0 || iP < 0 || iC < 0) return { rows: [] as SixKRow[], why: `1년 전 같은 분기 6-K(${prev.source}) ${what}를 못 읽음 — 전기 누적 열 확인 불가` };
     let compared = 0, matched = 0;
     const diff: string[] = [];
     for (const r of rows) {
-      const m = prows.filter((x) => key(x, prev.loose) === key(r, st.loose));
-      if (m.length !== 1) continue;
+      const m = counterpart(r, prev, prows);
+      if (!m) continue;
       compared++;
-      if (Math.round(m[0].vals[jC] * prev.unit) === Math.round(r.vals[iP] * st.unit)) matched++;
+      if (Math.round(m.vals[jC] * prev.unit) === Math.round(r.vals[iP] * st.unit)) matched++;
       else diff.push(r.label);
     }
-    if (matched >= 3 && matched * 2 > compared) return { rows, why: undefined };
-    return { rows: [] as SixKRow[], why: `${what} 전기 누적 열 확인 실패 — 1년 전 6-K(${prev.source}) 당기 누적과 같은 줄 ${matched}/${compared}(3줄 이상·과반 필요)${diff.length ? `, 다른 줄: ${diff.slice(0, 6).join(", ")}` : ""}` };
+    if (!tableOk(matched, compared))
+      return { rows: [] as SixKRow[], why: `${what} 전기 누적 열 확인 실패 — 1년 전 6-K(${prev.source}) 당기 누적과 같은 줄 ${matched}/${compared}${diff.length ? `, 다른 줄: ${diff.slice(0, 6).join(", ")}` : ""}` };
+    if (mode !== "q3") return { rows, why: undefined };
+    // (나) 당기 누적 열 자리
+    const qrows = prevQ?.[sec], qdates = sec === "is" ? prevQ?.isDates : prevQ?.cfDates, kC = qdates?.indexOf(prevQEnd) ?? -1;
+    if (!prevQ || !qrows || kC < 0) return { rows: [] as SixKRow[], why: `직전 분기(${prevQEnd}) 6-K ${what}를 못 찾음 — 당기 누적 열 확인 불가` };
+    let c2 = 0, m2 = 0;
+    const diff2: string[] = [];
+    for (const r of rows) {
+      const m = counterpart(r, prevQ, qrows);
+      if (!m || r.q3 == null) continue;
+      c2++;
+      // 표시 자리 반올림(각 칸을 따로 반올림해 싣는다 — ASML 769.1 − 506.3 = 262.8 vs 3개월 262.9) 만큼만 허용: 마지막 표시 자리 1. 이 등식은 값이
+      // 아니라 열 자리를 가르는 데만 쓴다(틀린 열이면 차이가 이보다 훨씬 크다). 값은 보고서 칸 그대로 쓴다
+      const dec = Math.max(...[r.vals[iC], m.vals[kC], r.q3].map((v) => (String(v).split(".")[1] ?? "").length));
+      const d = (r.vals[iC] - m.vals[kC] - r.q3) * 10 ** dec;
+      if (Math.abs(Math.round(d)) <= 1 && st.unit === prevQ.unit) m2++;
+      else diff2.push(r.label);
+    }
+    if (!tableOk(m2, c2))
+      return { rows: [] as SixKRow[], why: `${what} 당기 누적 열 확인 실패 — 당기 누적 − 직전 분기 6-K(${prevQ.source}) 누적 = 당기 3개월인 줄 ${m2}/${c2}${diff2.length ? `, 다른 줄: ${diff2.slice(0, 6).join(", ")}` : ""}` };
+    return { rows, why: undefined };
   };
-  const cf = check(st.cf, st.cfDates, prev?.cf, prev?.cfDates, "현금흐름표");
+  const cf = check(st.cf, st.cfDates, st.cfMode, "cf", "현금흐름표");
   const out: SixKStatements = { ...st, cf: cf.rows, ...(cf.why ? { cfWhy: cf.why } : {}), ...(prev ? { priorChecked: prev.source } : {}) };
   if (st.is && st.isDates) {
-    const is = check(st.is, st.isDates, prev?.is, prev?.isDates, "손익계산서");
+    const is = check(st.is, st.isDates, st.isMode, "is", "손익계산서");
     if (!is.rows.length) return { ...out, is: undefined, isDates: undefined, isWhy: is.why };
     return { ...out, is: is.rows, ...(is.why ? { isWhy: is.why } : {}) };
   }
@@ -388,7 +442,7 @@ async function findSixK(cik: string, recent: RecentFilings | null, periodEnd: st
       const { labels, parents } = await filingLabels(cikN, recent); // 라벨 파일 조회 실패는 그대로 던진다(호출자가 경고로)
       if (!labels.size) return null;
       // 손익계산서(withIs 일 때만) — 열 기간은 표 머리에서 직접 읽는다(isColumns). 못 정하면 손익계산서 없음 + 사유(isWhy)
-      let isPart: { is?: SixKRow[]; isDates?: string[]; isWhy?: string } = {};
+      let isPart: { is?: SixKRow[]; isDates?: string[]; isWhy?: string; isMode?: FlowMode } = {};
       const isSec = withIs ? sectionRows(html, /CONSOLIDATED STATEMENTS? OF (?:OPERATIONS|INCOME|PROFIT OR LOSS|COMPREHENSIVE INCOME)/, /(?:revenue|net sales)[\s\S]*(?:net (?:\(loss\)\/|loss\/)?income|net (?:\(loss\)|loss)|net profit|profit for the period)/i, /CONSOLIDATED (?:STATEMENTS? OF (?:COMPREHENSIVE|FINANCIAL POSITION|CHANGES IN|CASH FLOWS?)|BALANCE SHEETS?)/i) : null;
       if (withIs && !isSec) isPart = { isWhy: "6-K 에서 손익계산서 표를 못 찾음" };
       if (isSec) {
@@ -396,7 +450,7 @@ async function findSixK(cik: string, recent: RecentFilings | null, periodEnd: st
         const isUnit = /in (?:\S+ )?thousands/.test(isSec.text) ? 1e3 : /in (?:\S+ )?millions/.test(isSec.text) ? 1e6 : 1;
         if ("why" in ic) isPart = { isWhy: ic.why };
         else if (isUnit !== unit) isPart = { isWhy: "손익계산서 금액 단위가 재무상태표와 다름" };
-        else isPart = { is: fix(isSec.rows, ic.n, isSec.noteCol).map((r) => ({ ...r, vals: ic.cols.map((k) => r.vals[k]) })), isDates: [periodEnd, priorEnd] };
+        else isPart = { is: fix(isSec.rows, ic.n, isSec.noteCol).map((r) => ({ ...r, vals: ic.cols.map((k) => r.vals[k]), ...(ic.q3 != null ? { q3: r.vals[ic.q3] } : {}) })), isDates: [periodEnd, priorEnd], isMode: ic.mode };
       }
       // 본표 밖 표 — 머리(앞 2천 자)에 기준일·연말이 둘 다 있는 표의 줄
       const bsNotes: { dates: string[]; rows: SixKRow[] }[] = [];
@@ -417,7 +471,7 @@ async function findSixK(cik: string, recent: RecentFilings | null, periodEnd: st
         }
         (single ? bsNotes1 : bsNotes).push({ dates: ds, rows: fix(rows, ds.length, /\bnote\b/i.test(plain.slice(0, 1_500))) });
       }
-      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, cfc.n, cf.noteCol).map((r) => ({ ...r, vals: cfc.cols.map((k) => r.vals[k]) })), ...isPart, labels, parents, loose: false, bsNotes, bsNotes1 };
+      return { source: `6-K ${recent.accessionNumber[i]} ${d.name}`, unit, bsDates, cfDates, bs: fix(bs.rows, bsDates.length, bs.noteCol), cf: fix(cf.rows, cfc.n, cf.noteCol).map((r) => ({ ...r, vals: cfc.cols.map((k) => r.vals[k]), ...(cfc.q3 != null ? { q3: r.vals[cfc.q3] } : {}) })), cfMode: cfc.mode, ...isPart, labels, parents, loose: false, bsNotes, bsNotes1 };
     }
   }
   if (errs.length) throw new Error(`6-K 분기 재무제표 조회 실패 — ${errs.join(" · ")}`);
