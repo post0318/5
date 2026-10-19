@@ -210,6 +210,49 @@ function unitSwitchReposts(gaap: NonNullable<CompanyFacts["facts"]["us-gaap"]>):
   return ng;
 }
 
+/**
+ * **반올림 재게시를 정밀값으로 바꾼 us-gaap(USD)** — dropRoundedRetags 와 같은 판정이되 항목을 버리지 않고 값만 원 공시 정밀값으로 바꾼다.
+ * 공시별 값을 직접 읽는 합성 단계(edgar-cf-wc.ts withCashFlowWc — "한 기간 = 그 기간을 실은 가장 최근 공시")는 dropRoundedRetags 보다 먼저 돌아
+ * 최신 10-K 의 반올림 재게시값을 그대로 가져갔다(2026-10-18 감사: 현금흐름표 첫 줄 순이익 MCD 2022 6,177.4 → 6,177·2023 8,468.8 → 8,469(2025-02 10-K
+ * 백만 단위 재게시), MRVL FY2022 −421.034 → −421(2023-03 10-K) — 손익계산서 순이익은 dropRoundedRetags 뒤라 정밀값). 합성 개념은 기간마다 한 공시 값만
+ * 남아 뒤의 dropRoundedRetags 가 고칠 비교 대상이 없다. 판정: dropRoundedRetags 결과에 같은 공시(제출일·종류·fy·fp)·기간 항목이 남았으면 그 값(작은 단위·
+ * 표기 단위 변경 교체 포함), 버려졌으면 같은 기간 먼저 공시된 값 중 이 값이 그 값의 반올림(1e6~1e10 단위 정확 반올림, 상대 오차 0.5% 이하)인 가장 최근 것. 둘 다 없으면 원래 값
+ */
+export function preciseRetagValues(facts: CompanyFacts): NonNullable<CompanyFacts["facts"]["us-gaap"]> {
+  const raw = facts.facts["us-gaap"] ?? {};
+  const cleaned = dropRoundedRetags(facts).facts["us-gaap"] ?? {};
+  // 버려진 항목(dropRoundedRetags usdRounds — 1e6~1e10 단위 정확 반올림)만 여기로 온다. 상대 오차 0.5% 이하일 때만 정밀값으로 — usdRounds 는 1e8 이상
+  // 단위에서 실제 재작성도 반올림으로 본다(PEP 2025 상반기 기타 영업활동 −269 → 2026 10-Q 재작성 −300 = −269 의 1억 단위 반올림, 같은 공시가 감가상각비
+  // 1,456 → 1,491 도 재작성). 그런 값은 최신 공시 값 그대로 둔다
+  const P = [1e6, 1e8, 1e9, 1e10];
+  const roundingOf = (x: number, y: number) => Math.abs(x - y) <= 0.005 * Math.abs(x) && P.some((p) => y % p !== 0 && roundAway(y, p) === x);
+  const out: NonNullable<CompanyFacts["facts"]["us-gaap"]> = {};
+  for (const [concept, o] of Object.entries(raw)) {
+    const es = o.units?.USD;
+    const cs = cleaned[concept]?.units?.USD;
+    if (!es?.length || !cs || cs === es) { out[concept] = o; continue; }
+    const byPer = new Map<string, FactUnitEntry[]>();
+    for (const c of cs) {
+      const k = `${c.start ?? ""}|${c.end}`;
+      byPer.set(k, [...(byPer.get(k) ?? []), c]);
+    }
+    let changed = false;
+    const fixed = es.map((e) => {
+      const g = byPer.get(`${e.start ?? ""}|${e.end}`) ?? [];
+      const same = g.find((c) => c.filed === e.filed && c.form === e.form && c.fy === e.fy && c.fp === e.fp);
+      const v = same
+        ? same.val
+        : g.filter((c) => (c.filed ?? "") < (e.filed ?? "") && c.val !== e.val && roundingOf(e.val, c.val))
+            .sort((a, b) => (b.filed ?? "").localeCompare(a.filed ?? ""))[0]?.val ?? e.val;
+      if (v === e.val) return e;
+      changed = true;
+      return { ...e, val: v };
+    });
+    out[concept] = changed ? { ...o, units: { ...o.units, USD: fixed } } : o;
+  }
+  return out;
+}
+
 /** 같은 회계기간의 두 값 중 채택할 것 — 최신 종료일, 동률이면 최신 공시(재작성) 우선. */
 function preferNewer(cand: FactUnitEntry, prev: { end: string; filed?: string }): boolean {
   if (cand.end !== prev.end) return cand.end > prev.end;
