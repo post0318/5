@@ -306,6 +306,40 @@ function groupBlocks(T, X) {
 }
 
 /**
+ * 묶음 합계 줄이 묶음 **맨 위**에 있는 표(009150 2026 반기 「5-1. 기타자산 (연결)」: "기타유동자산 합계 | 기타유동자산 합계 | 28,097,813" 아래에 같은 묶음 이름 칸을 단
+ * 유동국공채·유동미수수익·유동예치보증금·유동임차보증금 줄, 이어서 "기타비유동자산 합계" 묶음). 묶음 줄들의 합 = 합계 칸(표 단위로 정확히)일 때만.
+ * 합계 칸과 X 의 맞춤은 내역 수 × 표 단위 안까지 본다(회사가 반올림한 내역을 더해 적은 합계 — 009150: 28,097,813 천원 vs 본표 28,097,811,336원).
+ * 1단위 넘게 벗어난 맞춤(loose)은 결과가 모두 포함(X)·모두 제외(0)일 때만 쓴다 — 섞이면 어느 값인지 정할 수 없다
+ */
+function groupTopBlocks(T, X) {
+  const out = [];
+  if (!T.u) return out;
+  for (let r = 0; r < T.rows.length; r++) {
+    const row = T.rows[r];
+    const lf = clean(rowLeaf(row));
+    const head = clean(row[0]?.t);
+    if (!TOT_END.test(lf) || head !== lf) continue; // 묶음 머리 칸 = 합계 줄 이름
+    for (let c = 1; c < row.length; c++) {
+      const x = row[c];
+      if (typeof x.n !== "number" || Number.isNaN(x.n) || x.span || x.n <= 0) continue;
+      const items = [];
+      for (let rr = r + 1; rr < T.rows.length; rr++) {
+        const rw = T.rows[rr];
+        if (clean(rw[0]?.t) !== head || clean(rowLeaf(rw)) === head) break;
+        const v = rw[c];
+        items.push({ label: rowLabel(rw), leaf: rowLeaf(rw), n: typeof v?.n === "number" && !Number.isNaN(v.n) ? v.n : 0, cell: v, pos: rr });
+      }
+      if (items.length < 2 || items.reduce((a, p) => a + p.n, 0) !== x.n) continue;
+      const nz = items.filter((p) => p.n !== 0).length;
+      const d = Math.abs(x.n * T.u - X);
+      if (d > Math.max(1, nz) * T.u) continue;
+      out.push({ how: `묶음 맨 위 합계 '${rowLeaf(row)}' ${x.n}${d >= T.u ? `(본표와 ${d}원 차 — 내역 반올림 합)` : ""}`, parts: items, u: T.u, total: x.n, vert: true, loose: d >= T.u });
+    }
+  }
+  return out;
+}
+
+/**
  * 한 열짜리 내역 표에 유동·비유동 내역이 섞여 있고 합계는 전체 하나뿐인 경우(062040 2025 「기타금융자산의 공시」: 단기미수금·단기미수수익·단기임차보증금·
  * 장기임차보증금·유동파생상품자산·장기기타보증금 → 기타금융자산 7,173,968 천원). 합계 줄(마지막 줄 — 합계 또는 금융자산 계열 이름) = 나머지 줄 전부의 합이고,
  * 나머지 줄 이름이 모두 "단기·유동"(유동) 또는 "장기·비유동"(비유동)으로 시작할 때, 유동 줄 합이 X 와 줄 수 × 단위/2 안에서 맞으면 그 줄들을 묶음으로 낸다
@@ -469,7 +503,7 @@ export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFin
     // 원하는 범위 표가 없는 보고서는 다른 범위 표를 쓰되, 연결 줄인데 별도 표를 쓰는 경우는 그해 연결 본표 = 별도 본표(자산·부채·자본총계)일 때만(sepOk)
     const tables = want && all0.some((T) => T.scope === want) ? all0.filter((T) => T.scope !== other) : want === "con" && !sepOk ? all0.filter((T) => T.scope !== "sep") : all0;
     byRc.push({ rc, tables });
-    for (const b of [...tables.flatMap((T) => [...blocksFor(T, X, needCtx), ...groupBlocks(T, X), ...prefixBlocks(T, X)]), ...catCurrentColumns(tables, X)]) {
+    for (const b of [...tables.flatMap((T) => [...blocksFor(T, X, needCtx), ...groupBlocks(T, X), ...prefixBlocks(T, X), ...groupTopBlocks(T, X)]), ...catCurrentColumns(tables, X)]) {
       const ks = withAdj(b.parts.map((p) => (p.n === 0 ? "zero" : p.fixed ?? kindOf(p.label, p.cell, p.leaf))), b.parts.map((p) => p.pos));
       const desc = [];
       const fails = [];
@@ -500,6 +534,7 @@ export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFin
       // 남겨, 적재본이 그 범위 밖이면 실패로 잡는다
       // 섞인 묶음의 포함 합은 주석 표 단위 값의 합 — 원문이 공시한 가장 정밀한 값이라 그대로 기대치로 쓰되(정확 일치), 계열 줄 값 X 가 표 단위보다 정밀하면
       // 참값이 있을 수 있는 범위(포함 내역 수 × 단위/2)도 남긴다: 적재본이 기대치와 다르고 범위 안이면 검증불가(반올림), 범위 밖이면 실패
+      if (b.loose && !allIn && !allOut) { rejected.push({ s: `${s0} — 합계 칸이 본표와 1단위 넘게 달라 섞인 값은 정할 수 없음`, kind: "other", fails: [] }); continue; }
       const imprecise = !allIn && !allOut && X % b.u !== 0;
       got.push({ v: allIn ? X : allOut ? 0 : inWon, u: b.u, how: imprecise ? `${s0} — 주석 표 단위(${b.u}원) 값, 원 단위 이하 공시 없음` : s0, rc, np: nz.length, range: imprecise ? [inWon - (nIn * b.u) / 2, inWon + (nIn * b.u) / 2] : null });
     }
