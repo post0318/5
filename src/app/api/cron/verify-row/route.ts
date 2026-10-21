@@ -51,7 +51,7 @@ function ltmItems(facts: CompanyFacts) {
       else if (hasFy && (isCfConcept(c) || flowSpecOf(c))) gaps.push({ concept: c, kind: "cf", at: through, ids: sourceIdsAt(facts, c, "cf", E), reason: r.reason, flow: flowSpecOf(c), cf: isCfConcept(c) });
     }
   }
-  return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: yl?.sixKSource ?? null, sixKMiss: yl?.sixKMiss ?? null, sixKPrevMiss: yl?.sixKPrevMiss ?? null, fetchWarnings, through, E };
+  return { items, gaps, fy, ifrsGroups: ifrsDstGroups(), sixKSource: yl?.sixKSource ?? null, sixKMiss: yl?.sixKMiss ?? null, sixKPrevMiss: yl?.sixKPrevMiss ?? null, evAsOf: yl?.evAsOf ?? null, evAsOfNote: yl?.evAsOfNote ?? null, fetchWarnings, through, E };
 }
 
 /**

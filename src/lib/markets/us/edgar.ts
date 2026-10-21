@@ -6,7 +6,7 @@
 
 import { fetchJson } from "../http";
 import { withFetchScope } from "../fetch-health";
-import { blankYahooLtm, ltmBaseEnd, withYahooLtm, yahooLtm, yahooLtmPeriods, type YahooLtmResult } from "./edgar-yahoo-quarters";
+import { blankYahooLtm, ltmBaseEnd, ltmEvBasis, withYahooLtm, yahooLtm, yahooLtmPeriods, type YahooLtmResult } from "./edgar-yahoo-quarters";
 
 /** 달 말 기준 n 개월 뒤 달 말 */
 const monthEndAfter = (d: string, n: number) => {
@@ -309,6 +309,8 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           let per = yahooLtmPeriods(withShares, yq);
           // 야후 최신 분기 다음 분기의 6-K 연결재무보고서가 이미 나왔으면 LTM 끝 = 그 분기(오너 결정 2026-10-17 「Asml 6k 반영」 — ASML 3분기 6-K 10-14,
           // 야후 3분기 미게시). 그 분기 6-K 에 재무상태표·현금흐름표·손익계산서가 모두 있을 때만. 조회 실패는 아래 경고로
+          // 야후 기준 기간(앞섬 분기 판정 전) — 앞섬 분기에 EV 구성을 못 정할 때 그 분기말 재무상태표를 쓴다(아래 C안)
+          const perYahoo = per;
           let ahead: string | null = null;
           let aheadSixK: Awaited<ReturnType<typeof sixKStatements>> = null;
           let aheadMiss: string | null = null;
@@ -337,8 +339,21 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
           const sixKPrev = per && sixK && !sixK.bsDates.includes(per.yearAgo)
             ? await sixKStatements(cik, recent, per.yearAgo, shift12(per.E), shift12(per.yearAgo)).catch(sixKFail)
             : null;
-          const r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev, ahead);
-          // 6-K 경로를 시도했는데 보고서를 못 찾음(조회 실패 아님) — 검증 전용 사유
+          let r = withYahooLtm(withShares, yq, fx, cur, sixK, sixKPrev, ahead);
+          // EV 구성요소(차입금·현금·우선주·비지배지분)를 LTM 끝 분기말에 다 정할 수 없으면 — 구성이 모두 확정된 마지막 분기말 재무상태표(오너 결정
+          // 2026-10-21 C안). 손익 LTM 은 그대로. 후보: (앞섬 분기면) 야후 최신 분기말 → 최근 사업연도말(20-F). 같은 규칙(야후·6-K·20-F)으로 만든 값만,
+          // 못 정하면 빈칸 + 사유. 최신 분기말 구성이 나중에 확정되면(야후 게시 등) 다음 계산에서 자동으로 그 분기 기준이 된다
+          if (r.result.source === "yahoo" && !r.result.evComplete) {
+            let r2: { facts: CompanyFacts; result: YahooLtmResult } | null = null;
+            if (ahead && perYahoo && perYahoo.last < ahead) {
+              const sk2 = await sixKStatements(cik, recent, perYahoo.last, perYahoo.E, perYahoo.yearAgo).catch(sixKFail);
+              const sk2Prev = sk2 && !sk2.bsDates.includes(perYahoo.yearAgo)
+                ? await sixKStatements(cik, recent, perYahoo.yearAgo, shift12(perYahoo.E), shift12(perYahoo.yearAgo)).catch(sixKFail)
+                : null;
+              r2 = withYahooLtm(withShares, yq, fx, cur, sk2, sk2Prev, null);
+            }
+            r = withEvFallback(r, r2, ltmBaseEnd(withShares));
+          }          // 6-K 경로를 시도했는데 보고서를 못 찾음(조회 실패 아님) — 검증 전용 사유
           // 1년 전 분기 6-K 를 찾아야 했는데(이번 보고서에 1년 전 열 없음) 못 찾음 — 검증 전용 사유(조회 실패는 fetchWarnings)
           if (r.result.source === "yahoo" && per && sixK && !sixK.bsDates.includes(per.yearAgo) && !sixKPrev)
             r.result.sixKPrevMiss = sixKFailed ? "1년 전 분기 6-K 조회 실패(fetchWarnings 참조)" : `1년 전 분기말 ${per.yearAgo} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음`;
@@ -598,18 +613,23 @@ function buildUsTtm(
   const yl = yahooLtm(facts);
   // EV 브릿지 — 하이라이트 LTM 열과 같은 모듈·같은 기준일(자산총계 최근일).
   const evRes = buildEvResolver(facts, evCtx);
-  const evDate = yl ? yl.through : evRes.latestBalanceDate();
-  const balOn = (c: string) => (evDate ? instantOn(entriesOf(facts, c), evDate) : null);
+  // 재무상태표 스냅샷 기준일(자본·부채총계·현금 — PBR 분모) = LTM 재무상태표 기준일. EV 구성(차입금·현금·우선주·비지배지분)은 ltmEvBasis 의 기준일 —
+  // 최신 분기말에 구성을 다 못 정하면 구성이 모두 확정된 마지막 분기말(오너 결정 2026-10-21 C안, 칸 주석 reasons.evAsOf)
+  const balDate = yl ? yl.through : evRes.latestBalanceDate();
+  const evBasis = yl ? ltmEvBasis(yl) : null;
+  const evDate = evBasis ? evBasis.date : balDate;
+  const balOn = (c: string) => (balDate ? instantOn(entriesOf(facts, c), balDate) : null);
   const evBridge0 = evDate ? evRes.bridgeAt(evDate) : null;
-  // Yahoo 분기 LTM: EV 구성요소가 전부 같은 기준일이어야 한다(아니면 비움 — edgar-yahoo-quarters.ts evComplete)
-  const evBridge = evBridge0 && yl && (!yl.evComplete || evBridge0.balanceDate !== yl.through) ? null : evBridge0;
+  // Yahoo 분기 LTM: EV 구성요소가 전부 같은 기준일이어야 한다(아니면 비움 — edgar-yahoo-quarters.ts ltmEvBasis)
+  const evBridge = evBridge0 && evBasis && (!evBasis.ok || evBridge0.balanceDate !== evBasis.date) ? null : evBridge0;
   const evBlocker = evDate ? evRes.blocker(evDate) : null;
   if (!evBridge && !evBlocker)
     reasons.evNetDebt = !evDate
       ? "재무상태표 없음"
-      : evBridge0 && yl
-        ? (yl.evReason ?? "Yahoo 분기 EV 구성요소 불완전")
+      : evBridge0 && evBasis
+        ? (evBasis.why ?? "Yahoo 분기 EV 구성요소 불완전")
         : (evRes.bridgeReason(evDate) ?? "EV 구성요소 없음");
+  if (evBridge && evBasis?.note) reasons.evAsOf = evBasis.note;
   // 개요 멀티플이 하이라이트 LTM 열과 같은 값을 내도록 주식수·순이익·자기자본을
   // 공통 기준으로(edgar-shares·edgar-pershare) — 검증 체계 2층에서 PER·PBR 불일치 발견.
   const shareRes = buildShareResolver(facts, { classFacts: evCtx.classFacts ?? null });
@@ -620,7 +640,7 @@ function buildUsTtm(
   if (ni.value == null) reasons.netIncome = ni.reason ?? "LTM 순이익 없음";
   const le = ltmEpsOf(facts, evShares);
   if (le.value == null) reasons.eps = le.reason ?? "LTM EPS 없음";
-  const eq = evDate ? parentEquityOf(facts, evDate) : { value: null, reason: "재무상태표 없음" };
+  const eq = balDate ? parentEquityOf(facts, balDate) : { value: null, reason: "재무상태표 없음" };
   if (eq.value == null) reasons.equity = eq.reason ?? "자기자본 없음";
   // 최근 사업연도 희석 EPS — 하이라이트·재무분석과 같은 규칙(ADR 은 ADR 1주 기준 facts)
   const niByYear = netIncomeAnnualByYear(facts);
@@ -649,9 +669,9 @@ function buildUsTtm(
     reasons,
     fyEps: fe ? { eps: fe.eps, year: lastFy, note: fe.note } : null,
     snapshot: {
-      label: evDate ?? "",
+      label: balDate ?? "",
       equity: eq.value,
-      // 부채총계·현금 — 같은 기준일(evDate) 값만(표시·감사용, 미국 EV 는 evNetDebt)
+      // 부채총계·현금 — 재무상태표 기준일(balDate) 값만(표시·감사용, 미국 EV 는 evNetDebt)
       liabilities: balOn("Liabilities"),
       cash: balOn("CashAndCashEquivalentsAtCarryingValue"),
       shares: evShares,
@@ -990,3 +1010,51 @@ export const usEdgarAdapter: MarketAdapter = {
     return filingsDeepLink("us", symbol);
   },
 };
+
+/** 한 LTM 계산의 EV 미확정 사유 — 못 채운 구성 + 그 항목의 빈칸 사유 */
+function evMissWhy(res: YahooLtmResult): string {
+  if (res.source !== "yahoo") return res.reason;
+  const miss = (res.evReason ?? "").replace(/^LTM EV 미표시\([^)]*\) — /, "").replace(/을\(를\) \S+ 기준으로 못 채움$/, "");
+  const why = miss.split("·").map((m) => res.blanked.find((b) => b.label === m.replace(/\(.*$/, ""))?.reason?.replace(/^.*?분기 야후 미게시 · /, "")).filter(Boolean);
+  return `${miss || "EV 구성요소"} 미확정${why.length ? `(${why.join(" / ")})` : ""}`;
+}
+
+/**
+ * C안(오너 결정 2026-10-21) — LTM 끝 분기말(r)에 EV 구성을 다 못 정할 때 기준일을 구성이 확정된 마지막 분기말로: r2(야후 최신 분기 LTM — 앞섬 분기일 때)
+ * 가 확정이면 그 분기말 재무상태표 값(기간 없는 값만)을 더해 evAsOf = 그 날짜, 아니면 최근 사업연도말(20-F 재무상태표 — facts 에 이미 있다).
+ * 손익·현금흐름은 r 그대로. 칸 주석(evAsOfNote)에 기준일과 앞 분기말을 못 쓴 사유
+ */
+function withEvFallback(
+  r: { facts: CompanyFacts; result: YahooLtmResult },
+  r2: { facts: CompanyFacts; result: YahooLtmResult } | null,
+  fyEnd: string | null,
+): { facts: CompanyFacts; result: YahooLtmResult } {
+  if (r.result.source !== "yahoo") return r;
+  const tried = [`${r.result.through}${r.result.ahead ? " 6-K" : ""}: ${evMissWhy(r.result)}`];
+  if (r2 && r2.result.source === "yahoo" && r2.result.evComplete && r2.result.through < r.result.through) {
+    const d = r2.result.through;
+    const g1 = (r.facts.facts["us-gaap"] ?? {}) as Record<string, { units: Record<string, FactUnitEntry[]> }>;
+    const g2 = (r2.facts.facts["us-gaap"] ?? {}) as Record<string, { units: Record<string, FactUnitEntry[]> }>;
+    const out = { ...g1 };
+    for (const [c, v] of Object.entries(g2)) {
+      const add = (v.units?.USD ?? []).filter((e) => !e.start && e.end === d && e.form === "YAHOO-Q");
+      const have = g1[c]?.units?.USD ?? [];
+      if (!add.length || have.some((e) => !e.start && e.end === d)) continue;
+      out[c] = { ...(g1[c] ?? {}), units: { ...(g1[c]?.units ?? {}), USD: [...have, ...add] } };
+    }
+    return {
+      facts: { ...r.facts, facts: { ...r.facts.facts, "us-gaap": out } } as CompanyFacts,
+      result: {
+        ...r.result,
+        evAsOf: d,
+        evAsOfNote: `기업가치 구성: ${d} 재무상태표 — ${tried.join(" · ")}`,
+        sixKDetail: [...(r.result.sixKDetail ?? []), ...(r2.result.sixKDetail ?? []).filter((x) => x.at === d && x.kind !== "is" && x.kind !== "cf" && x.kind !== "cfZero")],
+      },
+    };
+  }
+  if (r2) tried.push(`${r2.result.source === "yahoo" ? r2.result.through : "야후 최신 분기"}: ${evMissWhy(r2.result)}`);
+  // 최근 사업연도말 — 20-F 재무상태표(SEC). 그 날짜 EV 구성이 SEC 에서 정해질 때만(아니면 빈칸)
+  if (fyEnd && buildEvResolver(r.facts).bridgeAt(fyEnd))
+    return { ...r, result: { ...r.result, evAsOf: fyEnd, evAsOfNote: `기업가치 구성: ${fyEnd} 재무상태표(20-F) — ${tried.join(" · ")}` } };
+  return { ...r, result: { ...r.result, evReason: `${r.result.evReason ?? "EV 구성요소 불완전"} · 앞 분기말·사업연도말도 확정 불가` } };
+}

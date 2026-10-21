@@ -97,6 +97,13 @@ export type YahooLtmResult =
       /** LTM EV·순차입금을 같은 기준일로 계산할 수 있는지 */
       evComplete: boolean;
       evReason: string | null;
+      /**
+       * 최신 분기말(through)에 EV 구성요소를 다 정할 수 없을 때 — 구성이 모두 확정된 마지막 분기말(오너 결정 2026-10-21 C안, edgar.ts 가 채움).
+       * 그 날짜의 재무상태표 값(야후·6-K·20-F 규칙 그대로)이 facts 에 들어 있다. 손익 LTM 은 through 그대로
+       */
+      evAsOf?: string;
+      /** evAsOf 를 쓴 이유·출처 — 칸 주석 원문 */
+      evAsOfNote?: string;
     }
   | {
       source: "none";
@@ -747,7 +754,17 @@ export function withYahooLtm(
 
   // 총차입금(본표 차입금 줄 합 — edgar-ev resolveDebt 와 같은 값)·비유동 차입금
   const debtE = resolveDebt((c) => on(c, E));
-  const yDebtE = yAt(E, "totalDebt"), yDebtL = yAt(last, "totalDebt");
+  // 야후 총차입금 구성 확인 — 연말에 0 이 아닌 구성 칸(유동 차입금·리스 등)이 분기말에 없으면 그 분기 총차입금은 정의가 다르다(ASML: 야후 분기엔
+  // currentDebt 가 없어 totalDebt = 장기부채뿐 — 2026-06-30 1,984 vs 연말 4,391 백만 EUR 중 유동 1,682). 그때는 야후 값·변동분을 쓰지 않는다(2026-10-21)
+  const DEBT_PARTS = ["currentDebt", "currentDebtAndCapitalLeaseObligation", "otherCurrentBorrowings", "longTermDebt", "longTermDebtAndCapitalLeaseObligation", "capitalLeaseObligations", "currentCapitalLeaseObligation", "longTermCapitalLeaseObligation"];
+  // 단 야후가 그 칸을 사업연도말이 아닌 분기에도 실어 온 회사(SPOT — 교환사채 상환 뒤 currentDebt 가 빠짐)는 빠진 칸 = 0(갚아서 없어짐)으로 본다.
+  // 연말 분기에만 싣는 칸(ASML currentDebt — 분기마다 1,700 백만 EUR 안팎이 있는데 야후에 없음)만 정의 차이
+  const fyMonth = E.slice(5, 7);
+  const quarterlyReported = (k: string) => y.quarterly.some((q) => q.end.slice(5, 7) !== fyMonth && q.values[k] != null);
+  const debtPartsMissing = (d: string) => DEBT_PARTS.filter((k) => (yAt(E, k) ?? 0) !== 0 && yAt(d, k) == null && !quarterlyReported(k));
+  const missL = debtPartsMissing(last);
+  const yDebtE = yAt(E, "totalDebt"), yDebtL = missL.length ? null : yAt(last, "totalDebt");
+  const yDebtAt = (d: string) => (debtPartsMissing(d).length ? null : yAt(d, "totalDebt"));
   let debtOk = false;
   // 6-K 재무상태표로 이미 채움(본표 판독 합성 개념 = 6-K 줄 하나·둘의 합 — 위 "그 밖 재무상태표 줄")
   const debtBy6k = (out[SYN_DEBT_FACE]?.units?.USD ?? []).some((e) => !e.start && e.end === last);
@@ -755,12 +772,13 @@ export function withYahooLtm(
   else if (ahead && debtE) blanked.push({ label: "총차입금", reason: `${AHEAD_MISS(ahead)}(차입금 줄을 6-K 재무상태표에서 정할 수 없음)` });
   else if (!debtE && !yDebtE) debtOk = true; // 차입금 없음
   else if (!debtE || yDebtE == null) blanked.push({ label: "총차입금", reason: debtE ? "Yahoo FY말 값 없음" : "SEC FY말 차입금 없음" });
+  else if (missL.length) blanked.push({ label: "총차입금", reason: `Yahoo ${last} 총차입금에 연말 구성 칸(${missL.join("·")}) 없음 — 연말과 정의가 달라 쓰지 않음` });
   else if (!sameInUnit(debtE.debt / eRate, yDebtE) && yDebtL != null) {
     // 정의가 조금 다름(ASML 0.37%·TSM 0.36%) — SEC 연말 + Yahoo 분기 변동분(오너 결정 2026-10-01 (가))
     debtOk = true;
     const secE = debtE.debt / eRate;
     put(SYN_DEBT_FACE, last, (secE + (yDebtL - yDebtE)) * lastRate, { via: "debtApprox", E });
-    const yPD = yearAgoRate != null ? yAt(yearAgo, "totalDebt") : null;
+    const yPD = yearAgoRate != null ? yDebtAt(yearAgo) : null;
     if (yPD != null) put(SYN_DEBT_FACE, yearAgo, (secE + (yPD - yDebtE)) * yearAgoRate!, { via: "debtApprox", E });
     approx.push({ label: "총차입금", reason: `SEC ${E} ${Math.round(secE).toLocaleString("en-US")} + Yahoo 변동(${Math.round(yDebtE).toLocaleString("en-US")} → ${Math.round(yDebtL).toLocaleString("en-US")}) ${currency}` });
   } else if (!sameInUnit(debtE.debt / eRate, yDebtE))
@@ -769,7 +787,7 @@ export function withYahooLtm(
   else {
     debtOk = true;
     put(SYN_DEBT_FACE, last, yDebtL * lastRate, { via: "yahoo", y: "totalDebt" });
-    const yPD = yearAgoRate != null ? yAt(yearAgo, "totalDebt") : null;
+    const yPD = yearAgoRate != null ? yDebtAt(yearAgo) : null;
     if (yPD != null) put(SYN_DEBT_FACE, yearAgo, yPD * yearAgoRate!, { via: "yahoo", y: "totalDebt" });
     filled.push("총차입금");
     // 비유동 차입금 — 같은 정의일 때만(없으면 LTM 장기차입금 공란)
@@ -821,6 +839,16 @@ export function withYahooLtm(
       evReason: evMiss.length ? `LTM EV 미표시(${ahead ? "회사 6-K 분기" : "Yahoo 분기"} LTM) — ${evMiss.join("·")}을(를) ${last} 기준으로 못 채움` : null,
     },
   };
+}
+
+/**
+ * LTM 기업가치(EV)·순차입금·신용지표의 재무상태표 기준일 — 한 곳 계산(오너 결정 2026-10-21 C안). 하이라이트·재무분석·재무상태표 주석·개요(getTtm)가
+ * 모두 이 값을 쓴다. ok=false 면 LTM EV 구성은 빈칸(why). note 는 기준일이 손익 LTM 끝과 다를 때의 칸 주석
+ */
+export function ltmEvBasis(yl: Extract<YahooLtmResult, { source: "yahoo" }>): { date: string; ok: boolean; note: string | null; why: string | null } {
+  if (yl.evComplete) return { date: yl.through, ok: true, note: null, why: null };
+  if (yl.evAsOf) return { date: yl.evAsOf, ok: true, note: yl.evAsOfNote ?? `기업가치 구성: ${yl.evAsOf} 재무상태표`, why: null };
+  return { date: yl.through, ok: false, note: null, why: yl.evReason ?? "Yahoo 분기 EV 구성요소 불완전" };
 }
 
 /** LTM 열이 Yahoo 분기 기준인 20-F 발행사면 그 결과 */

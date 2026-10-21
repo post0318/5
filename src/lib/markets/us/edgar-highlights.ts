@@ -13,7 +13,7 @@ import { buildUsCashFlow, hasCommonDividendEvidence } from "./edgar-cashflow";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { splitFactorsByYear, fiscalYearOf, ltmAnchor, ltmFlowOf } from "./edgar-series";
-import { yahooLtm } from "./edgar-yahoo-quarters";
+import { ltmEvBasis, yahooLtm } from "./edgar-yahoo-quarters";
 import { revAnnualEnds, revAnnualMap, revAnnualYears, revLtm } from "./fin-revenue";
 import { buildShareResolver } from "./edgar-shares";
 import {
@@ -350,6 +350,8 @@ export function buildUsHighlights(
   // 칸 주석 — 시가총액(주식수 근사·공란 사유), EV 브릿지(구성요소가 그 기준일 공시에 없음)
   const nMktcap: (string | null)[] = Array(nCol).fill(null);
   const nBridge: (string | null)[] = Array(nCol).fill(null);
+  /** EV 구성 기준일이 손익 LTM 끝과 다른 칸의 주석(값이 있을 때 — 20-F C안) */
+  const nEvAsOf: (string | null)[] = Array(nCol).fill(null);
   const nEquity: (string | null)[] = Array(nCol).fill(null);
   const blockers = new Set<EvBlocker>();
   let partialDebt = false;
@@ -386,10 +388,14 @@ export function buildUsHighlights(
     // 금융 자회사 차입금 제외, UP-REIT 파트너 지분 시가 반영).
     const block = evRes.blocker(asOf);
     if (block) blockers.add(block);
-    const b0 = evRes.bridgeAt(asOf);
+    // EV 구성 기준일 — LTM 은 ltmEvBasis(20-F: 최신 분기말에 구성을 다 못 정하면 구성이 확정된 마지막 분기말 — 오너 결정 2026-10-21 C안)
+    const basis = isLtm && yl ? ltmEvBasis(yl) : null;
+    const evAt = basis ? basis.date : asOf;
+    const b0 = evRes.bridgeAt(evAt);
     // Yahoo 분기 LTM: EV 구성요소가 전부 같은 기준일로 채워졌을 때만(아니면 LTM EV·순차입금 공란)
-    const b = b0 && isLtm && yl && (!yl.evComplete || b0.balanceDate !== yl.through) ? null : b0;
-    if (!b && !block) nBridge[i] = b0 && yl ? (yl.evReason ?? "Yahoo 분기 EV 구성요소 불완전") : evRes.bridgeReason(asOf);
+    const b = b0 && basis && (!basis.ok || b0.balanceDate !== basis.date) ? null : b0;
+    if (!b && !block) nBridge[i] = b0 && basis ? (basis.why ?? "Yahoo 분기 EV 구성요소 불완전") : evRes.bridgeReason(evAt);
+    if (b && basis?.note) { nBridge[i] = basis.note; nEvAsOf[i] = basis.note; }
     if (b) {
       cash[i] = b.cash;
       debt[i] = b.debt;
@@ -398,7 +404,7 @@ export function buildUsHighlights(
       if (b.captiveDebtExcluded != null) captiveExcluded = true;
       const opv = evCtx?.opUnits && price != null ? evCtx.opUnits * price : null;
       opUnitValue[i] = opv;
-      ev[i] = evRes.evAt(asOf, mc, price);
+      ev[i] = evRes.evAt(evAt, mc, price);
     } else if (block === "captive-unsplit") {
       const cb = evResConsolidated.bridgeAt(asOf);
       if (cb) {
@@ -586,7 +592,7 @@ export function buildUsHighlights(
     { key: "cash", label: "− 현금·단기투자·장기투자증권", format: "money", values: cash.map((v) => (v == null ? null : -v)), cellNotes: nBridge },
     { key: "debt", label: "+ 차입금", format: "money", values: debt, cellNotes: nBridge },
     { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", values: preferred, cellNotes: nBridge },
-    { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev, cellNotes: inherit(ev, nBridge, nMktcap) },
+    { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev, cellNotes: inherit(ev, nBridge, nMktcap).map((x, i) => x ?? nEvAsOf[i]) },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
     { key: "revenue", label: "매출액", format: "money", values: revenue },
     { key: "revenue_yoy", label: "성장률 % YoY", format: "pct", indent: true, values: seq(revenue, S.revenue) },
@@ -631,7 +637,7 @@ export function buildUsHighlights(
     { key: "per", label: "PER", format: "mult", values: per, cellNotes: labelOrWhy(per, [nEps.map((n, i) => (eps[i] != null ? n : null))], [nEps]) },
     { key: "pbr", label: "PBR", format: "mult", values: pbr, cellNotes: labelOrWhy(pbr, [nMktcap.map((n, i) => (marketCap[i] != null ? n : null))], [nMktcap, nEquity]) },
     { key: "psr", label: "PSR", format: "mult", values: psr, cellNotes: labelOrWhy(psr, [nMktcap.map((n, i) => (marketCap[i] != null ? n : null))], [nMktcap]) },
-    { key: "ev_ebitda", label: "EV/EBITDA", format: "mult", values: evEbitda, cellNotes: inherit(evEbitda, nBridge, nMktcap, nEbitda) },
+    { key: "ev_ebitda", label: "EV/EBITDA", format: "mult", values: evEbitda, cellNotes: inherit(evEbitda, nBridge, nMktcap, nEbitda).map((x, i) => x ?? nEvAsOf[i]) },
   ];
 
   // SEC 원본 조회 실패로 공란이 된 값(대체 계산 없음 — sec-unavailable.ts)

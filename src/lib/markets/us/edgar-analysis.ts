@@ -20,7 +20,7 @@ import {
 } from "./edgar-series";
 import type { ClassAFacts } from "./edgar-classfacts";
 import { buildShareResolver } from "./edgar-shares";
-import { yahooLtm } from "./edgar-yahoo-quarters";
+import { ltmEvBasis, yahooLtm } from "./edgar-yahoo-quarters";
 import {
   ltmEpsOf,
   fyEps,
@@ -169,6 +169,10 @@ export function buildUsAnalysis(
   // LTM 열 잔액 기준일 — 최근 정기공시 재무상태표(20-F Yahoo 분기면 그 분기말)
   const evRes = buildEvResolver(facts, { ...(opts.evCtx ?? {}), isFinancial: isFin });
   const ltmBal = yl?.through ?? evRes.latestBalanceDate() ?? nowIso;
+  // LTM EV 구성(차입금·현금·우선주·비지배지분) 기준일 — 20-F 는 ltmEvBasis(최신 분기말에 구성을 다 못 정하면 확정된 마지막 분기말, 오너 결정 2026-10-21 C안).
+  // 차입금과 짝을 이루는 비율(총차입금/자기자본·총자산)도 이 기준일의 자본·자산을 쓴다
+  const ltmEv = yl ? ltmEvBasis(yl) : null;
+  const ltmEvDate = ltmEv?.date ?? ltmBal;
   /** LTM 에서 이 값을 못 채웠는지(최근 연도엔 있는데 LTM 만 빔) — 0 으로 보고 계산하지 않기 위해(20-F 뿐 아니라 모든 회사) */
   const ltmGap = (x: Record<string, number | null>) =>
     x[LTM] == null && labels.length >= 2 && x[prevLabel] != null;
@@ -456,13 +460,23 @@ export function buildUsAnalysis(
     }
     return o;
   })();
+  /** 차입금과 짝을 이루는 자본·자산 — LTM 은 EV 구성 기준일 값(손익 LTM 끝과 다르면 같은 주석) */
+  const atEvDate = (o: Record<string, number | null>, read: (d: string) => number | null, what: string): Record<string, number | null> => {
+    if (ltmEvDate === ltmBal) return o;
+    const r = { ...o, [LTM]: read(ltmEvDate) };
+    if (r[LTM] == null) note(r, LTM, `${what} — 기업가치 구성 기준일(${ltmEvDate}) 재무상태표에 없음`);
+    else if (ltmEv?.note) note(r, LTM, ltmEv.note);
+    return r;
+  };
+  const equityEv = atEvDate(equity, (d) => parentEquityOf(facts, d).value, "자기자본");
+  const assetsEv = atEvDate(assets, (d) => instantOn(firstConcept(facts, ["Assets"]), d), "자산총계");
   const curAssets = stock(["AssetsCurrent"]);
   const curLiab = stock(["LiabilitiesCurrent"]);
   // 이자부 차입금·현금 — edgar-ev.ts 단일 기준(하이라이트·멀티플·컨센서스와 동일).
   // 예전엔 여기서 LongTermInvestments(UNH·GE 의 보험 투자자산)까지 현금으로 빼
   // EV 가 11~15% 과소했고, 차입금 태그 목록이 짧아 VZ·T 등이 과소했다.
   const balDate = (l: string): string =>
-    l === LTM ? ltmBal : (periods.find((p) => p.label === l)?.endDate ?? "");
+    l === LTM ? ltmEvDate : (periods.find((p) => p.label === l)?.endDate ?? "");
   const evBlockers = new Set<EvBlocker>();
   const bridgeWhy: Record<string, string | null> = {};
   let evPartial = false;
@@ -474,8 +488,8 @@ export function buildUsAnalysis(
       if (blk) evBlockers.add(blk);
       const b0 = evRes.bridgeAt(d);
       // Yahoo 분기 LTM: 차입금·현금 등 EV 구성요소가 같은 기준일로 다 채워졌을 때만(아니면 LTM EV·순차입금 공란)
-      const b = b0 && l === LTM && yl && (!yl.evComplete || b0.balanceDate !== yl.through) ? null : b0;
-      if (!b && !blk) bridgeWhy[l] = b0 && yl ? (yl.evReason ?? "Yahoo 분기 EV 구성요소 불완전") : evRes.bridgeReason(d);
+      const b = b0 && l === LTM && ltmEv && (!ltmEv.ok || b0.balanceDate !== ltmEv.date) ? null : b0;
+      if (!b && !blk) bridgeWhy[l] = b0 && ltmEv && l === LTM ? (ltmEv.why ?? "Yahoo 분기 EV 구성요소 불완전") : evRes.bridgeReason(d);
       if (b?.debtPartial) evPartial = true;
       if (b?.captiveDebtExcluded != null) evCaptive = true;
       return [l, b];
@@ -493,6 +507,8 @@ export function buildUsAnalysis(
     note(debt, l, bridgeWhy[l]);
     note(cash, l, bridgeWhy[l]);
   }
+  // EV 구성 기준일이 LTM 재무상태표와 다르면(C안) 값 옆 주석 — 순차입금·차입금 비율·EV 로 물려준다
+  if (ltmEv?.note && debt[LTM] != null) { note(debt, LTM, ltmEv.note); note(cash, LTM, ltmEv.note); }
   // 신용지표용 총차입금 = 이자부 차입금(금융리스 포함), **운용리스 제외** — EV 와
   // 같은 기준(오너 결정 2026-09-23). 미국 회계기준은 운용리스 부채를 차입금이 아닌
   // 영업부채로 분류하고, 순차입금/EBITDA 는 임차료가 이미 빠진 EBITDA 와 짝이라
@@ -688,8 +704,11 @@ export function buildUsAnalysis(
   for (const l of labels) {
     const d = balDate(l);
     const prevD = l === LTM ? shiftYear(d, -1) : (ends.get(Number(l.slice(0, 4)) - 1) ?? "");
-    const cur = curDebtAt(d);
+    // LTM: EV 구성이 LTM 재무상태표 기준일에 확정됐을 때만(투하자본의 자산·유동부채와 같은 기준일 — 20-F C안이면 비움)
+    const ltmMismatch = l === LTM && !!ltmEv && (!ltmEv.ok || ltmEv.date !== ltmBal);
+    const cur = ltmMismatch ? null : curDebtAt(d);
     const prev = prevD ? curDebtAt(prevD) : null;
+    if (ltmMismatch) { note(curDebtAvg, l, ltmEv!.ok ? `유동 차입금: ${ltmBal} 재무상태표로 정할 수 없음(기업가치 구성은 ${ltmEv!.date})` : (ltmEv!.why ?? "유동 차입금 구분 불가")); continue; }
     // 기초 값이 없으면 기말 값으로 대신하지 않는다(평균이 아님)
     curDebtAvg[l] = cur != null && prev != null ? (cur + prev) / 2 : null;
     if (curDebtAvg[l] == null) note(curDebtAvg, l, cur == null ? (bridgeWhy[l] ?? "유동 차입금 구분 불가") : "평균 잔액 산정 불가(기초 유동 차입금 없음)");
@@ -843,6 +862,7 @@ export function buildUsAnalysis(
     const mc = l === LTM ? curMktcap : mktcap[l];
     evV[l] = bridge[l] ? evRes.evAt(balDate(l), mc, price[l]) : null; // Yahoo 분기 LTM 에서 비운 브릿지는 EV 도 공란
     if (evV[l] == null && !bridge[l]) note(evV, l, bridgeWhy[l]);
+    if (evV[l] != null && l === LTM && ltmEv?.note) note(evV, l, ltmEv.note);
   }
   inheritWhy(evV, mktcap);
   // EBITDA ≤ 0 이면 비운다 — 음수 배수는 의미가 없고, 하이라이트·컨센서스도 같은 규칙
@@ -990,12 +1010,12 @@ export function buildUsAnalysis(
     SP("3"),
     HEAD("레버리지"),
     R("부채비율 (%)", ratio(liabTotal, equity, 100), "pct"),
-    R("총차입금 / 자기자본 (%)", ratio(debtTotal, equity, 100), "pct"),
-    R("총차입금(운용리스 포함) / 자기자본 (%)", ratio(debtWithOpLease, equity, 100), "pct"),
-    R("총차입금 / 총자산 (%)", ratio(debtTotal, assets, 100), "pct"),
-    R("장기차입금 / 자기자본 (%)", ratio(ltDebt, equity, 100), "pct"),
-    R("장기차입금 / 총자산 (%)", ratio(ltDebt, assets, 100), "pct"),
-    R("순차입금 / 자기자본 (%)", ratio(netDebtT, equity, 100), "pct"),
+    R("총차입금 / 자기자본 (%)", ratio(debtTotal, equityEv, 100), "pct"),
+    R("총차입금(운용리스 포함) / 자기자본 (%)", ratio(debtWithOpLease, equityEv, 100), "pct"),
+    R("총차입금 / 총자산 (%)", ratio(debtTotal, assetsEv, 100), "pct"),
+    R("장기차입금 / 자기자본 (%)", ratio(ltDebt, equityEv, 100), "pct"),
+    R("장기차입금 / 총자산 (%)", ratio(ltDebt, assetsEv, 100), "pct"),
+    R("순차입금 / 자기자본 (%)", ratio(netDebtT, equityEv, 100), "pct"),
     R("재무레버리지 정도 (DFL)", dfl, "mult"),
     SP("4"),
     HEAD("재무건전성"),

@@ -221,7 +221,8 @@ export interface TtmFlows {
   /** 응답 전용 — 판번호가 다른 TTM 저장본을 그대로 돌려준 것(db/ttm-snap.ts readTtmSnapAny current=false) */
   snapStale?: boolean;
   /** 값이 null 이거나 근사인 항목의 사유·라벨(미국) — 화면 칸 주석 */
-  reasons?: Partial<Record<"netIncome" | "revenue" | "opIncome" | "eps" | "daTtm" | "equity" | "evNetDebt" | "evShares" | "dpsTtm" | "fyEps", string>>;
+  /** evAsOf — EV 구성 기준일이 손익 LTM 끝과 다를 때의 칸 주석(값이 있을 때도 단다 — 20-F C안, 2026-10-21) */
+  reasons?: Partial<Record<"netIncome" | "revenue" | "opIncome" | "eps" | "daTtm" | "equity" | "evNetDebt" | "evShares" | "dpsTtm" | "fyEps" | "evAsOf", string>>;
   /**
    * 최근 사업연도 희석 EPS(미국 — edgar-pershare.ts fyEps, 20-F ADR 은 ADR 1주 기준). 개요 PER(연간)의 분모 —
    * 재무제표 원 태그 EPS 를 쓰면 ADR·클래스 공시에서 기준이 틀린다.

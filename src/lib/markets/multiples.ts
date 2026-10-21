@@ -175,6 +175,8 @@ function computeUsMultiples(input: MultiplesInput): TrailingMultiples {
   // EBITDA = LTM 영업이익 + LTM 감가상각비 — 둘 중 하나라도 없으면 공란(EV/EBIT 근사 안 함)
   const ebitda = ttm.opIncome != null && ttm.daTtm != null ? ttm.opIncome + ttm.daTtm : null;
   const evEbitda = ev != null && ebitda != null && ebitda > 0 ? ev / ebitda : null;
+  // EV 구성 기준일이 손익 LTM 끝과 다르면(20-F C안) 값 옆 주석
+  if (evEbitda != null && tr.evAsOf) reasons.evEbitda = tr.evAsOf;
   if (evEbitda == null)
     reasons.evEbitda = snap.evBlocker
       ? (EV_BLOCKER_REASON[snap.evBlocker] ?? `EV 미표시(${snap.evBlocker})`)

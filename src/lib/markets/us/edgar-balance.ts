@@ -2,7 +2,7 @@ import "server-only";
 import { fillBlankReasons } from "./blank-reason";
 import { STI_TAGS, SYN_STI_FACE } from "./edgar-bs-structure";
 import { unavailableNote } from "./sec-unavailable";
-import { yahooLtm } from "./edgar-yahoo-quarters";
+import { ltmEvBasis, yahooLtm } from "./edgar-yahoo-quarters";
 import type { CompanyFacts } from "./edgar";
 import type { FinancialStatement, FinancialLineItem, FinancialPeriod } from "../types";
 import {
@@ -618,9 +618,13 @@ export function buildUsBalance(
   const ltDebtN = blank();
   const opLease = blank();
   const bridgeWhy: Record<string, string> = {};
+  /** 값이 있는 칸의 기준일 주석 — EV 구성 기준일이 LTM 재무상태표와 다를 때(20-F C안) */
+  const evAsOfNote: Record<string, string> = {};
   for (const p of periods) {
     const ylE = p.label === LTM ? yahooLtm(facts) : null;
-    const d = p.label === LTM ? (ylE?.through ?? evRes.latestBalanceDate() ?? p.endDate ?? "") : (p.endDate ?? "");
+    // LTM EV 구성 기준일 — ltmEvBasis(20-F: 최신 분기말에 구성을 다 못 정하면 확정된 마지막 분기말, 오너 결정 2026-10-21 C안 — 칸 주석)
+    const basis = ylE ? ltmEvBasis(ylE) : null;
+    const d = p.label === LTM ? (basis?.date ?? evRes.latestBalanceDate() ?? p.endDate ?? "") : (p.endDate ?? "");
     const br = d ? evRes.bridgeAt(d) : null;
     if (!br) {
       const why = d && !evRes.blocker(d) ? evRes.bridgeReason(d) : null;
@@ -628,10 +632,11 @@ export function buildUsBalance(
       continue;
     }
     // Yahoo 분기 LTM: 차입금·현금이 같은 기준일로 다 채워졌을 때만(edgar-yahoo-quarters.ts evComplete)
-    if (ylE && (!ylE.evComplete || br.balanceDate !== ylE.through)) {
-      bridgeWhy[p.label] = ylE.evReason ?? "Yahoo 분기 EV 구성요소 불완전";
+    if (basis && (!basis.ok || br.balanceDate !== basis.date)) {
+      bridgeWhy[p.label] = basis.why ?? "Yahoo 분기 EV 구성요소 불완전";
       continue;
     }
+    if (basis?.note) evAsOfNote[p.label] = basis.note;
     debt[p.label] = br.debt;
     ltDebtN[p.label] = br.debtNoncurrent ?? null;
     netDebt[p.label] = br.debt - br.cash;
@@ -647,8 +652,8 @@ export function buildUsBalance(
     values,
     numberFormat: nf,
     // 차입금·현금이 그 기준일 공시에 없으면 사유(이전 연말 값으로 대신하지 않음)
-    ...(Object.keys(bridgeWhy).some((l) => values[l] == null)
-      ? { cellNotes: Object.fromEntries(Object.entries(bridgeWhy).filter(([l]) => values[l] == null)) }
+    ...(Object.keys(bridgeWhy).some((l) => values[l] == null) || Object.keys(evAsOfNote).some((l) => values[l] != null)
+      ? { cellNotes: { ...Object.fromEntries(Object.entries(bridgeWhy).filter(([l]) => values[l] == null)), ...Object.fromEntries(Object.entries(evAsOfNote).filter(([l]) => values[l] != null)) } }
       : {}),
   });
   items.push(nrow("총차입금", debt));
