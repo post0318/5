@@ -634,7 +634,9 @@ export function buildUsAnalysis(
       if (o[l] != null) continue;
       const be = liabAndEquity[l] ?? assets[l];
       // 포함 자본 태그가 없으면 지배주주 자본 + 비지배지분(비지배지분은 EV 브리지 값 — 태그는 edgar-ev.ts 에서만 고른다)
-      const eAll = eqAll[l] ?? (equity[l] != null ? equity[l]! + (bridge[l]?.nci ?? 0) : null);
+      // LTM 에서 EV 구성 기준일이 재무상태표 기준일과 다르면(20-F C안) 브리지 비지배지분은 다른 날짜 값이라 쓰지 않는다(부채총계 파생 빈칸)
+      const nciOk = !(l === LTM && ltmEvDate !== ltmBal);
+      const eAll = eqAll[l] ?? (equity[l] != null && (nciOk || !bridge[l]?.nci) ? equity[l]! + (bridge[l]?.nci ?? 0) : null);
       const tmp = tmpAll[l] ?? (tmpParent[l] != null || tmpNci[l] != null ? (tmpParent[l] ?? 0) + (tmpNci[l] ?? 0) : 0);
       if (be != null && eAll != null) o[l] = be - eAll - tmp;
     }
