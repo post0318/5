@@ -84,6 +84,8 @@ export type YahooLtmResult =
       sixK?: { label: string; reason: string }[];
       /** 검증 전용(verify-row) — 6-K 로 채운 값 하나하나(검증기가 SEC 20-F·6-K 를 따로 읽어 다시 계산한다) */
       sixKDetail?: SixKDetail[];
+      /** EV 구성요소를 「20-F 연말 + 6-K 변동분」으로 바꾼 칸(야후 분기 값이 6-K 기준이라 20-F 연말과 기준이 섞임 — TSM 비지배지분) — 칸 주석 원문 */
+      basisNotes?: { label: string; concepts: string[]; note: string }[];
       /** 이번 LTM 에 쓴 6-K 보고서("6-K 접수번호 문서") — 검증 전용 */
       sixKSource?: string;
       /** 6-K 흐름 표에서 뺀 줄의 사유(손익계산서·현금흐름표 — 열 판정·1년 전 같은 분기 6-K 전기 누적 대조, edgar-6k verifyPrior) — 검증·검수용 */
@@ -752,6 +754,34 @@ export function withYahooLtm(
     if (extra.length) sixKFilled.push({ label: `재무상태표 그 밖 ${extra.length}개 줄`, reason: `${sixK.source} · ${extra.join(", ")}` });
   }
 
+  // EV 구성요소(비지배지분·우선주·현금 등)를 야후 분기 값으로 채웠는데, 6-K 연말 열이 SEC 연말과 다르고(보고서 기준이 다름) 야후 분기 값이 6-K 분기말 열과
+  // 같으면 — 야후 연말은 20-F, 분기는 6-K 기준이라 기준이 섞인 값이다. 오너 결정 (가)(2026-10-01)대로 SEC 연말 + 같은 기준(6-K)의 변동분(분기말 열 − 연말 열)
+  // (TSM 비지배지분: 6-K 는 대만 금융감독위원회 승인 기준, 20-F 는 IASB 기준 — 2025년 말 41,199.289 vs 41,180.5 백만 TWD, 2026-10-22). 1년 전 분기말과 같은 방식
+  const basisNotes: { label: string; concepts: string[]; note: string }[] = [];
+  if (sixK && sixK.bsDates.includes(E) && sixK.bsDates.includes(last)) {
+    const iE6 = sixK.bsDates.indexOf(E), iL6 = sixK.bsDates.indexOf(last);
+    for (const c of EV_INSTANT) {
+      const arr = out[c]?.units?.USD ?? [];
+      const cur = arr.find((e) => !e.start && e.end === last);
+      const via = (cur as { ltmSrc?: LtmSrc } | undefined)?.ltmSrc?.via;
+      if (!cur || (via !== "yahoo" && via !== "yahooApprox") || on(c, E) == null) continue;
+      const src = Object.keys(ifrsNs).length ? ifrsSourcesOf(c).find((cd) => cd.sum.length === 1 && typeof cd.sum[0] === "string" && ifrsAtE(cd.sum[0], "bs") != null) : null;
+      const raw = src ? sixKValueOf(sixK, src.sum[0] as string, "bs") : !Object.keys(ifrsNs).length ? sixKValueOf(sixK, c, "bs") : null;
+      if (!raw) continue;
+      const sg = src?.sign ?? 1, secE = on(c, E)! / eRate;
+      const r6E = raw[iE6] * sg, r6L = raw[iL6] * sg;
+      if (sameInUnit(secE, r6E) || Math.abs(r6E - secE) > Math.abs(secE) * 0.15) continue; // 같은 기준이거나 대응이 틀림
+      if (!sameInUnit(r6L, cur.val / lastRate)) continue; // 야후 분기 값이 6-K 분기말 열과 다르면 이 경로가 아니다
+      out[c] = { ...out[c], units: { ...out[c].units, USD: arr.filter((e) => e !== cur) } };
+      const ids = src ? [{ id: `ifrs-full_${src.sum[0] as string}`, sign: sg as 1 | -1 }] : [{ id: `us-gaap_${c}`, sign: 1 as const }];
+      putBs(c, last, (secE + (r6L - r6E)) * lastRate, "bsDelta", ids, sixK.source, E);
+      const label = INSTANTS.find((x) => x.concepts.includes(c))?.label ?? c;
+      const note = `${label} ${last} = 20-F ${E} ${Math.round(secE).toLocaleString("en-US")} + 6-K 변동분(${Math.round(r6E).toLocaleString("en-US")} → ${Math.round(r6L).toLocaleString("en-US")}) ${currency} — 6-K 분기 보고서는 대만 금융감독위원회 승인 IFRS, 20-F 는 IASB IFRS 라 연말 값이 다름(야후 분기 값은 6-K 기준)`;
+      basisNotes.push({ label, concepts: [c], note });
+      sixKFilled.push({ label: `${label}(20-F 연말 + 6-K 변동분)`, reason: `${sixK.source} · ${note}` });
+    }
+  }
+
   // 총차입금(본표 차입금 줄 합 — edgar-ev resolveDebt 와 같은 값)·비유동 차입금
   const debtE = resolveDebt((c) => on(c, E));
   // 야후 분기 총차입금이 연말과 같은 정의인지 — 원자료 근거로 판정(2026-10-21·22, 독립 감사 반영). 연말과 정의가 다른 값에 「SEC 연말 + 야후 변동분」을
@@ -884,6 +914,7 @@ export function withYahooLtm(
       sixK: sixKFilled,
       sixKDetail,
       sixKSource: sixK?.source,
+      ...(basisNotes.length ? { basisNotes } : {}),
       ...(sixK && (sixK.isWhy || sixK.cfWhy) ? { sixKFlowWhy: [sixK.isWhy, sixK.cfWhy].filter((x): x is string => !!x) } : {}),
       evComplete: evMiss.length === 0,
       evReason: evMiss.length ? `LTM EV 미표시(${ahead ? "회사 6-K 분기" : "Yahoo 분기"} LTM) — ${evMiss.join("·")}을(를) ${last} 기준으로 못 채움` : null,

@@ -352,6 +352,9 @@ export function buildUsHighlights(
   const nBridge: (string | null)[] = Array(nCol).fill(null);
   /** EV 구성 기준일이 손익 LTM 끝과 다른 칸의 주석(값이 있을 때 — 20-F C안) */
   const nEvAsOf: (string | null)[] = Array(nCol).fill(null);
+  /** 기업가치 구성요소 칸의 기준 차이 주석(20-F 연말 + 6-K 변동분) */
+  const nBasisPref: (string | null)[] = Array(nCol).fill(null);
+  const nBasisCash: (string | null)[] = Array(nCol).fill(null);
   const nEquity: (string | null)[] = Array(nCol).fill(null);
   const blockers = new Set<EvBlocker>();
   let partialDebt = false;
@@ -396,6 +399,12 @@ export function buildUsHighlights(
     const b = b0 && basis && (!basis.ok || b0.balanceDate !== basis.date) ? null : b0;
     if (!b && !block) nBridge[i] = b0 && basis ? (basis.why ?? "Yahoo 분기 EV 구성요소 불완전") : evRes.bridgeReason(evAt);
     if (b && basis?.note) { nBridge[i] = basis.note; nEvAsOf[i] = basis.note; }
+    // 「20-F 연말 + 6-K 변동분」으로 바꾼 구성요소(기준이 다른 분기 값 — TSM 비지배지분) — 그 칸에 산식·기준 차이
+    if (b && isLtm && yl?.basisNotes?.length && (!basis || basis.date === yl.through)) {
+      const pick = (re: RegExp) => yl.basisNotes!.filter((x) => x.concepts.some((c) => re.test(c))).map((x) => x.note).join(" · ") || null;
+      nBasisPref[i] = pick(/Minority|Noncontrolling|Preferred|Partners/);
+      nBasisCash[i] = pick(/Cash|Investment|Securit|Deposit/);
+    }
     if (b) {
       cash[i] = b.cash;
       debt[i] = b.debt;
@@ -589,9 +598,9 @@ export function buildUsHighlights(
     ...(opUnitValue.some((v) => v != null)
       ? [{ key: "opunits", label: "+ 운영 파트너십 지분 (시가)", format: "money" as const, values: opUnitValue }]
       : []),
-    { key: "cash", label: "− 현금·단기투자·장기투자증권", format: "money", values: cash.map((v) => (v == null ? null : -v)), cellNotes: nBridge },
+    { key: "cash", label: "− 현금·단기투자·장기투자증권", format: "money", values: cash.map((v) => (v == null ? null : -v)), cellNotes: nBridge.map((x, i) => [x, nBasisCash[i]].filter(Boolean).join(" · ") || null) },
     { key: "debt", label: "+ 차입금", format: "money", values: debt, cellNotes: nBridge },
-    { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", values: preferred, cellNotes: nBridge },
+    { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", values: preferred, cellNotes: nBridge.map((x, i) => [x, nBasisPref[i]].filter(Boolean).join(" · ") || null) },
     { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: ev, cellNotes: inherit(ev, nBridge, nMktcap).map((x, i) => x ?? nEvAsOf[i]) },
     { key: "sp1", label: "", format: "money", spacer: true, values: blank() },
     { key: "revenue", label: "매출액", format: "money", values: revenue },
