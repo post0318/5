@@ -311,14 +311,21 @@ function groupBlocks(T, X) {
  * 합계 칸과 X 의 맞춤은 내역 수 × 표 단위 안까지 본다(회사가 반올림한 내역을 더해 적은 합계 — 009150: 28,097,813 천원 vs 본표 28,097,811,336원).
  * 1단위 넘게 벗어난 맞춤(loose)은 결과가 모두 포함(X)·모두 제외(0)일 때만 쓴다 — 섞이면 어느 값인지 정할 수 없다
  */
-function groupTopBlocks(T, X) {
+function groupTopBlocks(T, X, face) {
   const out = [];
-  if (!T.u) return out;
+  if (!T.u || !face) return out;
+  const cap = T.pre.slice(-300);
+  if (/현금흐름|비현금|조정|증감|변동/.test(cap)) return out; // 현금흐름 표 묶음(「비현금 항목의 조정 소계」 등)은 잔액 내역이 아니다
+  const sec = [...cap.matchAll(/(?:^|\s)(\d{1,2})(?:-\d{1,2})?\.\s*[가-힣]/g)].at(-1)?.[1];
   for (let r = 0; r < T.rows.length; r++) {
     const row = T.rows[r];
     const lf = clean(rowLeaf(row));
     const head = clean(row[0]?.t);
-    if (!TOT_END.test(lf) || head !== lf) continue; // 묶음 머리 칸 = 합계 줄 이름
+    if (!TOT_END.test(lf) || head !== lf || /현금흐름|비현금|조정/.test(lf)) continue; // 묶음 머리 칸 = 합계 줄 이름
+    // 본표 줄과 묶음의 대응 — 이름(유동·비유동·합계 뗀 것)이 같거나, 본표 줄의 주석 번호에 이 표의 주석 번호가 있어야 한다
+    // (009150 본표 「기타금융자산 (주5,27)」 ↔ 「5-1. 기타자산 (연결)」 표)
+    const byName = grpKey(lf) === face.key, byNote = sec != null && face.notes.has(sec);
+    if (!byName && !byNote) continue;
     for (let c = 1; c < row.length; c++) {
       const x = row[c];
       if (typeof x.n !== "number" || Number.isNaN(x.n) || x.span || x.n <= 0) continue;
@@ -332,11 +339,26 @@ function groupTopBlocks(T, X) {
       if (items.length < 2 || items.reduce((a, p) => a + p.n, 0) !== x.n) continue;
       const nz = items.filter((p) => p.n !== 0).length;
       const d = Math.abs(x.n * T.u - X);
-      if (d > Math.max(1, nz) * T.u) continue;
-      out.push({ how: `묶음 맨 위 합계 '${rowLeaf(row)}' ${x.n}${d >= T.u ? `(본표와 ${d}원 차 — 내역 반올림 합)` : ""}`, parts: items, u: T.u, total: x.n, vert: true, loose: d >= T.u });
+      // 반올림 범위 — 회사가 반올림한 내역 nz 칸을 더해 합계를 적었다면 본표 정밀값과의 차는 nz × 단위/2 를 넘지 못한다. 넘으면 반올림으로 설명되지 않는다
+      const lim = Math.max(1, nz) * T.u / 2;
+      if (d > lim) { if (d <= 3 * lim) out.push({ how: `묶음 맨 위 합계 '${rowLeaf(row)}' ${x.n} — 본표와 ${d}원 차, 반올림 한계 ${lim}원 넘음`, parts: items, u: T.u, total: x.n, vert: true, unexplained: true }); continue; }
+      out.push({ how: `묶음 맨 위 합계 '${rowLeaf(row)}' ${x.n}(${byName ? "이름 대응" : `본표 주석 ${sec}`}${d >= T.u / 2 ? ` · 본표와 ${d}원 차 — 반올림 한계 ${lim}원 안` : ""})`, parts: items, u: T.u, total: x.n, vert: true, loose: d >= T.u / 2 });
     }
   }
   return out;
+}
+const grpKey = (t) => clean(t).replace(/(?:비유동|유동|장기|단기|합계|소계)/g, "");
+/** 본표(재무상태표) 줄의 이름·주석 번호 — 값 X 와 같은 칸이 있는 본표 줄에서. 주석 번호는 이름 칸의 「(주5,27)」 또는 「주석」 열 「5,6,8」 */
+function faceLineOf(tables, X, line) {
+  const notes = new Set();
+  for (const F of tables) {
+    if (!F.u || !/재무상태표/.test(F.pre.slice(-300))) continue;
+    for (const row of F.rows) {
+      if (!row.some((x) => typeof x.n === "number" && !Number.isNaN(x.n) && x.n * F.u === X)) continue;
+      for (const x of row) if (Number.isNaN(x.n)) for (const m of x.t.matchAll(/주\s*([\d,\s]+)\)|^\s*([\d]{1,2}(?:\s*,\s*\d{1,2})*)\s*$/g)) for (const n of (m[1] ?? m[2]).split(/[,\s]+/).filter(Boolean)) notes.add(String(Number(n)));
+    }
+  }
+  return { key: grpKey(line), notes };
 }
 
 /**
@@ -372,6 +394,7 @@ function prefixBlocks(T, X) {
  * 같은 열)의 표 2개 이상에서 유동 열 내역 전부를 더하되, 내역 중 **같은 보고서 재무상태표 본표의 다른 줄과 값이 같은 제외 성격 내역**(유동성통화선도자산
  * 1,003 = 매매목적 통화선도 자산 1,003)만 빼 볼 수 있다. 합이 X 와 내역 수 × 단위/2 안에서 맞는 조합이 정확히 하나일 때만 묶음으로 낸다
  */
+export { groupTopBlocks, faceLineOf };
 export function catCurrentColumns(tables, X) {
   const face = tables.find((T) => T.u && /재무상태표/.test(T.pre.slice(-300)) && T.rows.some((r) => r.some((x) => typeof x.n === "number" && !Number.isNaN(x.n) && x.n * T.u === X)));
   const faceVals = [];
@@ -503,7 +526,9 @@ export async function familyCashFromNotes(rcepts, X, line, tablesOf = dartDocFin
     // 원하는 범위 표가 없는 보고서는 다른 범위 표를 쓰되, 연결 줄인데 별도 표를 쓰는 경우는 그해 연결 본표 = 별도 본표(자산·부채·자본총계)일 때만(sepOk)
     const tables = want && all0.some((T) => T.scope === want) ? all0.filter((T) => T.scope !== other) : want === "con" && !sepOk ? all0.filter((T) => T.scope !== "sep") : all0;
     byRc.push({ rc, tables });
-    for (const b of [...tables.flatMap((T) => [...blocksFor(T, X, needCtx), ...groupBlocks(T, X), ...prefixBlocks(T, X), ...groupTopBlocks(T, X)]), ...catCurrentColumns(tables, X)]) {
+    const face = faceLineOf(tables, X, line);
+    for (const b of [...tables.flatMap((T) => [...blocksFor(T, X, needCtx), ...groupBlocks(T, X), ...prefixBlocks(T, X), ...groupTopBlocks(T, X, face)]), ...catCurrentColumns(tables, X)]) {
+      if (b.unexplained) { rejected.push({ s: `원문 ${rc} ${b.how} — 반올림으로 설명되지 않는 맞춤`, kind: "other", fails: [] }); continue; }
       const ks = withAdj(b.parts.map((p) => (p.n === 0 ? "zero" : p.fixed ?? kindOf(p.label, p.cell, p.leaf))), b.parts.map((p) => p.pos));
       const desc = [];
       const fails = [];
