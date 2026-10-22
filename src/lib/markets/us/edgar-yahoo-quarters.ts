@@ -1,7 +1,7 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { YahooFundamentalsRow } from "../quote/yahoo";
-import { DA_TOTAL, SYN_DA_CF, daAnnualByYear, resolveDebt } from "./edgar-ev";
+import { DA_TOTAL, DEBT_COMPONENT_CONCEPTS, SYN_DA_CF, daAnnualByYear, resolveDebt } from "./edgar-ev";
 import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT } from "./edgar-bs-structure";
 import { fiscalYearOf, instantOn } from "./edgar-series";
 import { ifrsSourcesOf } from "./edgar-foreign";
@@ -754,17 +754,39 @@ export function withYahooLtm(
 
   // 총차입금(본표 차입금 줄 합 — edgar-ev resolveDebt 와 같은 값)·비유동 차입금
   const debtE = resolveDebt((c) => on(c, E));
-  // 야후 총차입금 구성 확인 — 연말에 0 이 아닌 구성 칸(유동 차입금·리스 등)이 분기말에 없으면 그 분기 총차입금은 정의가 다르다(ASML: 야후 분기엔
-  // currentDebt 가 없어 totalDebt = 장기부채뿐 — 2026-06-30 1,984 vs 연말 4,391 백만 EUR 중 유동 1,682). 그때는 야후 값·변동분을 쓰지 않는다(2026-10-21)
-  const DEBT_PARTS = ["currentDebt", "currentDebtAndCapitalLeaseObligation", "otherCurrentBorrowings", "longTermDebt", "longTermDebtAndCapitalLeaseObligation", "capitalLeaseObligations", "currentCapitalLeaseObligation", "longTermCapitalLeaseObligation"];
-  // 단 야후가 그 칸을 사업연도말이 아닌 분기에도 실어 온 회사(SPOT — 교환사채 상환 뒤 currentDebt 가 빠짐)는 빠진 칸 = 0(갚아서 없어짐)으로 본다.
-  // 연말 분기에만 싣는 칸(ASML currentDebt — 분기마다 1,700 백만 EUR 안팎이 있는데 야후에 없음)만 정의 차이
-  const fyMonth = E.slice(5, 7);
-  const quarterlyReported = (k: string) => y.quarterly.some((q) => q.end.slice(5, 7) !== fyMonth && q.values[k] != null);
-  const debtPartsMissing = (d: string) => DEBT_PARTS.filter((k) => (yAt(E, k) ?? 0) !== 0 && yAt(d, k) == null && !quarterlyReported(k));
-  const missL = debtPartsMissing(last);
-  const yDebtE = yAt(E, "totalDebt"), yDebtL = missL.length ? null : yAt(last, "totalDebt");
-  const yDebtAt = (d: string) => (debtPartsMissing(d).length ? null : yAt(d, "totalDebt"));
+  // 야후 분기 총차입금이 연말과 같은 정의인지 — 원자료 근거로 판정(2026-10-21·22, 독립 감사 반영). 연말과 정의가 다른 값에 「SEC 연말 + 야후 변동분」을
+  // 적용하면 그 차이가 그대로 들어간다(ASML 2026-06-30 — 야후 분기엔 유동 차입금이 없어 1,984 = 장기부채뿐, 연말 4,391 중 유동 1,682).
+  //  ① 그 분기말 6-K 구성 줄을 앱이 이미 읽었으면(연말에 0 이 아닌 차입금 구성 개념이 전부 6-K 값) 그 합 = 야후 총차입금일 때만(공시 단위 안).
+  //     SPOT 2025-06-30: 6-K 교환사채 1,929 + 유동 리스 68 + 비유동 리스 453 = 2,450 ≠ 야후 2,382(유동 리스 빠짐) → 쓰지 않음
+  //  ② 6-K 구성 줄이 없으면 야후 칸 구성으로: 연말에 있는 「차입금 + 리스」 합산 칸(유동·비유동)이 그 분기에 없거나, 연말에 리스가 0 이 아닌데 그 분기
+  //     합산 칸 = 리스 뺀 차입금 칸(리스 빠짐 — NVO·TTE·TM·BABA)이면 정의 차이. 합산 칸만 실린 분기(GSK)는 같은 정의로 본다.
+  //     두 합산 칸이 다 있으면 총차입금 = 그 합이어야 한다
+  const sixKAt = (c: string, d: string) => (out[c]?.units?.USD ?? []).find((e) => !e.start && e.end === d && (e as { ltmSrc?: LtmSrc }).ltmSrc?.via === "sixK")?.val ?? null;
+  const debtSameDef = (d: string, rate: number | null): string | null => {
+    const yT = yAt(d, "totalDebt");
+    if (yT == null) return `Yahoo ${d} 총차입금 없음`;
+    const need = DEBT_COMPONENT_CONCEPTS.filter((c) => (on(c, E) ?? 0) !== 0);
+    if (need.length && rate != null && need.every((c) => sixKAt(c, d) != null)) {
+      const s6 = resolveDebt((c) => (DEBT_COMPONENT_CONCEPTS.includes(c) ? sixKAt(c, d) : null));
+      if (s6 && sameInUnit(s6.debt / rate, yT)) return null;
+      return `Yahoo ${d} 총차입금 ${Math.round(yT).toLocaleString("en-US")} ≠ 6-K 차입금 구성 줄 합 ${s6 ? Math.round(s6.debt / rate).toLocaleString("en-US") : "없음"} ${currency}(${need.join("·")}) — 연말과 정의가 달라 쓰지 않음`;
+    }
+    const why: string[] = [];
+    let comb = 0, combN = 0;
+    for (const [cK, plain, lease] of [["currentDebtAndCapitalLeaseObligation", ["currentDebt", "otherCurrentBorrowings"], "currentCapitalLeaseObligation"], ["longTermDebtAndCapitalLeaseObligation", ["longTermDebt"], "longTermCapitalLeaseObligation"]] as const) {
+      const cE = yAt(E, cK), cD = yAt(d, cK);
+      if (cD != null) { comb += cD; combN++; }
+      if ((cE ?? 0) === 0) continue;
+      if (cD == null) { why.push(`${cK} 없음(연말 ${Math.round(cE!).toLocaleString("en-US")})`); continue; }
+      const pD = plain.map((k) => yAt(d, k)).find((v) => v != null) ?? null;
+      if ((yAt(E, lease) ?? 0) !== 0 && yAt(d, lease) == null && pD != null && pD === cD) why.push(`${cK} = 리스 뺀 차입금(연말엔 리스 포함)`);
+    }
+    if (!why.length && combN === 2 && !sameInUnit(comb, yT)) why.push(`총차입금 ${Math.round(yT).toLocaleString("en-US")} ≠ 합산 칸 합 ${Math.round(comb).toLocaleString("en-US")}`);
+    return why.length ? `Yahoo ${d} 총차입금 구성이 연말과 다름(${why.join(" · ")}) — 쓰지 않음` : null;
+  };
+  const missL = debtSameDef(last, lastRate);
+  const yDebtE = yAt(E, "totalDebt"), yDebtL = missL ? null : yAt(last, "totalDebt");
+  const yDebtAt = (d: string) => (debtSameDef(d, yearAgoRate) ? null : yAt(d, "totalDebt"));
   let debtOk = false;
   // 6-K 재무상태표로 이미 채움(본표 판독 합성 개념 = 6-K 줄 하나·둘의 합 — 위 "그 밖 재무상태표 줄")
   const debtBy6k = (out[SYN_DEBT_FACE]?.units?.USD ?? []).some((e) => !e.start && e.end === last);
@@ -772,7 +794,7 @@ export function withYahooLtm(
   else if (ahead && debtE) blanked.push({ label: "총차입금", reason: `${AHEAD_MISS(ahead)}(차입금 줄을 6-K 재무상태표에서 정할 수 없음)` });
   else if (!debtE && !yDebtE) debtOk = true; // 차입금 없음
   else if (!debtE || yDebtE == null) blanked.push({ label: "총차입금", reason: debtE ? "Yahoo FY말 값 없음" : "SEC FY말 차입금 없음" });
-  else if (missL.length) blanked.push({ label: "총차입금", reason: `Yahoo ${last} 총차입금에 연말 구성 칸(${missL.join("·")}) 없음 — 연말과 정의가 달라 쓰지 않음` });
+  else if (missL) blanked.push({ label: "총차입금", reason: missL });
   else if (!sameInUnit(debtE.debt / eRate, yDebtE) && yDebtL != null) {
     // 정의가 조금 다름(ASML 0.37%·TSM 0.36%) — SEC 연말 + Yahoo 분기 변동분(오너 결정 2026-10-01 (가))
     debtOk = true;

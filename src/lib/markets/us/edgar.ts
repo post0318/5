@@ -51,7 +51,10 @@ import { withEquityStatementShares } from "./edgar-equity-shares";
 import { loadUsCurrentShares, type CurrentShares } from "./current-shares";
 import { fyEps, ltmEpsOf, ltmNetIncomeOf, netIncomeAnnualByYear, parentEquityOf } from "./edgar-pershare";
 import { isFinancialCompany } from "./edgar-financial";
-import { loadUsRevenue, revLtm, revQuarterAt, type RevCol, type UsRevenue } from "./fin-revenue";
+import { alignRevenueToLtm, loadUsRevenue, revLtm, revQuarterAt, type RevCol, type UsRevenue } from "./fin-revenue";
+
+/** 20-F 야후·6-K 최근 12개월 끝(재무 조립 최근 12개월 열과 같아야 한다 — alignRevenueToLtm). 그 밖 회사는 null(fin 이 SEC 분기로 같은 규칙) */
+const ltmEndOf = (facts: CompanyFacts): string | null => (facts.ltmQuarterSource?.source === "yahoo" ? facts.ltmQuarterSource.through : null);
 import { loadClassAFactsMarked } from "./class-facts-loader";
 import { dartAdrFinancials, dartAdrOf, dartAdrTtm } from "./dart-adr";
 import type { ClassAFacts } from "./edgar-classfacts";
@@ -434,7 +437,7 @@ async function getSymbolFacts(cik: string, symbol: string, opts: { revenue?: boo
   ]);
   // 20-F ADR(TSM 1:5) — 주식수·주당 값을 ADR 1주 기준으로(edgar-foreign.ts toAdrBasis)
   const adr = toAdrBasis(facts, currentShares?.val);
-  return { ...adr.facts, currentShares, revenue };
+  return { ...adr.facts, currentShares, revenue: await alignRevenueToLtm(symbol, revenue, ltmEndOf(facts)) };
 }
 
 /** SIC 코드 (은행·카드사 등 금융회사 레이아웃 분기 판정용). */
@@ -841,7 +844,8 @@ export const usEdgarAdapter: MarketAdapter = {
     const dartAdr = dartAdrOf(symbol);
     if (dartAdr) return dartAdrFinancials(dartAdr, periodType);
     const { cik } = await resolveCik(symbol);
-    const [facts, revenue] = await Promise.all([getCompanyFacts(cik), loadUsRevenue(symbol)]);
+    const [facts, revenue0] = await Promise.all([getCompanyFacts(cik), loadUsRevenue(symbol)]);
+    const revenue = await alignRevenueToLtm(symbol, revenue0, ltmEndOf(facts));
     const gaap = facts.facts["us-gaap"] ?? {};
 
     // 1) 모든 컨셉에서 기간 집합 수집
@@ -975,7 +979,10 @@ export const usEdgarAdapter: MarketAdapter = {
         ...(captive === "unknown" ? ["금융 자회사 판별 조회 실패"] : []),
         ...(sicFailed ? ["SIC(업종) 조회 실패"] : []),
       ];
-      const staleInputs = facts.revenue?.staleEv != null ? [`재무 저장본 엔진판 ${facts.revenue.staleEv}(현재 판과 다름 — 배치 갱신 대기)`] : [];
+      const staleInputs = [
+        ...(facts.revenue?.staleEv != null ? [`재무 저장본 엔진판 ${facts.revenue.staleEv}(현재 판과 다름 — 배치 갱신 대기)`] : []),
+        ...(facts.revenue?.ltmMismatch ? [facts.revenue.ltmMismatch] : []),
+      ];
       return { ...ttm, ...(degraded.length ? { degraded } : {}), ...(staleInputs.length ? { staleInputs } : {}) };
     } catch (e) {
       return failedTtm(`TTM 조회 실패 — ${e instanceof Error ? e.message : String(e)}`);

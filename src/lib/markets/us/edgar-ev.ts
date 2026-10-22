@@ -57,6 +57,8 @@ const DEBT_TOTAL = [
 ];
 /** 금융리스 — LongTermDebtAndCapitalLeaseObligations 계열을 쓰면 이미 포함. */
 const FIN_LEASE = ["FinanceLeaseLiabilityNoncurrent", "FinanceLeaseLiabilityCurrent"];
+/** resolveDebt 가 읽는 차입금 구성 개념 전부(20-F 분기말 6-K 구성 줄 대조용 — edgar-yahoo-quarters.ts) */
+export const DEBT_COMPONENT_CONCEPTS = [...new Set([...DEBT_NONCURRENT, ...DEBT_CURRENT, ...SHORT_BORROWINGS, ...FIN_LEASE, "LongTermDebt", "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities", "DebtLongtermAndShorttermCombinedAmount", "DebtInstrumentCarryingAmount", "NotesPayable", "LoansPayable"])];
 /** 차입금 태그가 하나라도 있는지 판정용(기준일 폴백). */
 // 단기차입금도 포함 — 장기차입금 없이 단기차입금·금융리스만 공시한 해(GEV 2024 분사 직후)를
 // "차입금 미공시"로 오판해 EV 를 비웠다(검증 2026-09-24). resolveDebt 는 이미 합산한다.

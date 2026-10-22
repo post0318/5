@@ -1,5 +1,5 @@
 import "server-only";
-import { FIN_TYPES, gapNames, loadFinSym, metricAt, metricNoteAt, metricPartsAt, type FinSymDoc } from "@/lib/fin";
+import { FIN_TYPES, gapNames, loadFinSym, loadFinSymFresh, metricAt, metricNoteAt, metricPartsAt, type FinSymDoc } from "@/lib/fin";
 
 /**
  * 미국 매출 — **재무 5층 구조(src/lib/fin)의 매출 지표만** 받아 화면 모듈에 나눠 준다(docs/metrics/revenue.md §3).
@@ -72,6 +72,8 @@ export interface UsRevenue {
   rndParts: FinSubLine[];
   /** 엔진판이 다른 저장본에서 읽은 값이면 그 옛 엔진판(fin loadFinSym staleEv) — TTM 저장본은 이 값이 있으면 저장하지 않는다 */
   staleEv?: number;
+  /** 최근 12개월 기간이 화면(edgar ltmQuarterSource)과 달라 비운 사유(alignRevenueToLtm) */
+  ltmMismatch?: string;
 }
 
 export interface FinColIssue {
@@ -127,6 +129,23 @@ export function revenueFromFinSym(sym: FinSymDoc): UsRevenue {
 export async function loadUsRevenue(symbol: string): Promise<UsRevenue | null> {
   const sym = await loadFinSym("us", symbol).catch(() => null);
   return sym ? revenueFromFinSym(sym) : null;
+}
+
+/**
+ * 최근 12개월 기간 맞추기(독립 감사 2026-10-22 ③) — 20-F 회사는 최근 12개월 끝이 야후 분기·6-K 로 정해지는데(edgar 쪽 ltmQuarterSource), 재무 저장본
+ * (fin_sym)은 배치가 다시 만들기 전까지 옛 기간일 수 있다(새 6-K 뒤·엔진판이 다른 저장본). 그러면 이름표(~2026-09-30 6-K)와 값(6월까지 매출)이 다른
+ * 기간이 된다. 저장본 최근 12개월 끝이 기대 끝과 다르면 요청 시점에 새로 조립하고, 그래도 다르면 최근 12개월 값을 비운다(사유 note)
+ */
+export async function alignRevenueToLtm(symbol: string, rev: UsRevenue | null, expectEnd: string | null): Promise<UsRevenue | null> {
+  if (!rev?.ltm || !expectEnd) return rev;
+  const near = (a: string) => Math.abs(Date.parse(a) - Date.parse(expectEnd)) <= 6 * 86_400_000;
+  if (near(rev.ltm.end)) return rev;
+  const fresh = await loadFinSymFresh("us", symbol);
+  const r2 = fresh ? revenueFromFinSym(fresh) : null;
+  if (r2?.ltm && near(r2.ltm.end)) return r2;
+  const why = `재무 조립 최근 12개월(~${(r2?.ltm ?? rev.ltm).end})이 화면 최근 12개월(~${expectEnd})과 다름 — 빈칸`;
+  const blank = { ...rev.ltm, v: null, cogs: null, gp: null, opinc: null, opex: null, sga: null, rnd: null, cogsNote: why, gpNote: why, opincNote: why, opexNote: why, sgaNote: why, rndNote: why };
+  return { ...rev, ltm: blank, ltmMismatch: why };
 }
 
 /** 사업연도 → 매출(값 있는 해만) */

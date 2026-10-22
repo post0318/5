@@ -185,6 +185,25 @@ export async function loadFinSym(market: Market, symbol: string): Promise<FinSym
   return entry.p;
 }
 
+/**
+ * 저장본을 건너뛰고 이 코드로 새로 조립(요청 시점) — 저장본의 최근 12개월 기간이 화면의 최근 12개월 기간과 다를 때(20-F: 새 6-K·야후 새 분기 뒤
+ * 배치 전, 또는 엔진판이 다른 저장본 — fin-revenue.ts alignRevenueToLtm). 완전한 조립은 loadFinSym 처럼 저장한다(다음 조회부터 저장본). 실패는 null
+ */
+export async function loadFinSymFresh(market: Market, symbol: string): Promise<FinSymDoc | null> {
+  const noSnap = await snapshotBypassed();
+  try {
+    const a = await assemble(market, symbol, { persist: false });
+    const transient = a.gaps & (Gap.FX | Gap.YAHOO | Gap.CF_FETCH | Gap.STALE);
+    // silent-ok: 저장(DB 쓰기) 실패는 조회 결과에 영향 없음 — 다음 조회·배치가 다시 저장
+    if (!transient && !noSnap && isDbConfigured()) await persist({ ...a, gaps: a.readerGaps }, a.stmts).catch(() => {});
+    lookupCache.delete(`${market}:${symbol.toUpperCase()}@${ENGINE_VERSION}${noSnap ? "#nosnap" : ""}`);
+    return toSymDoc(a);
+  } catch (e) {
+    console.warn(`[fin] ${symbol} 새 조립 실패: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
 const METRIC_KEY = { revenue: "rev", cogs: "cogs", gp: "gp", opinc: "opinc", opex: "opex", sga: "sga", rnd: "rnd" } as const;
 export function metricAt(sym: FinSymDoc, metric: keyof typeof METRIC_KEY, colKey: string): number | null {
   const i = sym.c.findIndex((c) => c[0] === colKey);
