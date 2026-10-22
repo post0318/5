@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-22.2";
+const KR_DA_RULES_VERSION = "2026-10-23.1";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -1216,6 +1216,8 @@ function leaseCellsOf(t, prevPair = null) {
   };
   // 문서 구조 주제(tablesOf subj)가 있으면 그것 — 없을 때(가상 표 등)만 앞 글자로
   const subject = t.subj != null && bareTitle ? t.subj : bareTitle ? (/[가-힣]{4,}/.test(lead) ? lead : prevTitle()) : tclause;
+  // 문서 구조로 주제를 못 정한 표(기간 표시뿐이고 앞 표와 이름이 대응하지 않음)는 리스 후보가 아니다
+  if (bareTitle && t.subj === "") return res;
   if (/특수관계|매각예정/.test(subject)) return res;
   // 이연법인세 변동표(일시적차이 '리스부채' 줄 — 060370 2022 기초 42,308 · 기말 63,833 천원)·법인세 표는 리스부채 잔액이 아니다
   if (/이연법인세|법인세|일시적\s*차이/.test(`${t.title ?? ""} ${t.pre ?? ""}`.slice(-160)) || R.slice(0, first).some((row) => row.some((c) => /당기손익|^자본$|이연법인세/.test(c.replace(/\s/g, ""))))) return res;
@@ -1763,7 +1765,7 @@ function tablesOf(texts) {
     // 문서 구조로 정한 표 주제(재감사 2026-10-22 ③): 앞 숫자 표가 끝난 뒤부터 이 표 앞까지의 글(문단·제목 + 「당기 (단위 : 백만원)」 같은 제목용 작은 표)을
     // 이 표의 머리로 본다. 머리의 마지막 번호 매김 뒤가 기간·단위뿐이면 ① 같은 머리 안의 「…다음과 같습니다.」 문장 ② 없으면 앞 숫자 표의 주제를 잇는다
     // (329180 2024 「특수관계자리스거래에 대한 공시 당기」 표 다음 「전기 (단위 : 백만원)」 표, 009150 반기 「금융원가」 표 「전반기」). 글자 수로 자르지 않는다
-    let lastEnd = 0, capBuf = "", prevSubj = "";
+    let lastEnd = 0, capBuf = "", prevSubj = "", prevSig = null;
     for (const m of x.matchAll(/<TABLE[\s\S]*?<\/TABLE>/gi)) {
       const gapText = clean(x.slice(lastEnd, m.index));
       lastEnd = m.index + m[0].length;
@@ -1786,19 +1788,25 @@ function tablesOf(texts) {
           const prevSent = sents.at(-2) ?? "";
           // 표를 여는 문장 — 「다음과·아래와·다음 표와 같습니다/같음/같다」
           const intro = (x) => /(다음|아래)\s*(표\s*)?(와|과)?\s*같\s*(습\s*니\s*다|음|다)/.test(x);
-          // 앞 문장에 손익·특수관계자·매각예정 낱말이 있으면 서술문이라도 앞 표 주제를 잇지 않는다(재감사 2026-10-22 — 「…이자비용을 금융원가로 인식하였습니다.」 뒤 「당기」 표가
-          // 앞 리스 표의 주제를 물려받아 이자비용 줄을 잔액으로 읽었다)
-          const own = (x) => /이자\s*(비용|수익|지급|수취)|손익|수익|비용|원가|특수관계|매각예정/.test(x);
-          // ① 같은 문장 안 번호 매김 앞 제목(「15. 매입채무 및 기타금융부채 (1) 당기」) ② 앞 문장이 표를 여는 문장이거나 손익·특수관계자·매각예정 문장이면 그 문장
-          // ③ 그 밖(같은 주석의 각주 「(*) … 포함되어 있습니다.」 뒤 「전기」 표)은 앞 숫자 표의 주제
-          // 각주(「(*)」「(*1)」「*」「※」「(주1)」「주1)」로 시작) 는 앞 표의 딸린 글 — 손익 낱말(「이자비용 상당액」「이자지급액」)이 있어도 앞 표 주제를 잇는다
-          const footnote = /^\s*(\(\s*\*|\*|※|\(?\s*주\s*\d*\s*\))/.test(prevSent);
-          // 손익 낱말 서술문으로 새 주제를 여는 것은 그 문장이 번호 매긴 새 항목(「(6) 당기 중 리스부채에 대한 이자비용을 금융원가로 인식하였습니다.」)일 때만 —
-          // 번호 없는 설명문(「금액은 이자지급액을 포함하고 …」「당기 중 감소한 대손충당금은 …」)은 앞 표에 딸린 글이라 앞 표 주제를 잇는다
-          const numbered = /\(\d+\)|(^|\s)\d+\)|[①-⑳]|(^|\s)\d+\.\s|(^|\s)[가-하]\.\s/.test(prevSent);
-          subj = lead && !bareSubject(lead) && !/다\.$/.test(lead) ? lead.slice(-200) : !lead && (intro(prevSent) || (own(prevSent) && numbered && !footnote)) ? prevSent.trim().slice(-200) : prevSubj;
+          // ① 같은 문장 안 번호 매김 앞 제목(「15. 매입채무 및 기타금융부채 (1) 당기」) ② 앞 문장이 표를 여는 문장이면 그 문장
+          // ③ 그 밖에는 앞 숫자 표와 줄·열 이름이 대응할 때만 앞 표 주제를 잇는다(재감사 2026-10-23 — 문장 꼴로 가르면 「당기 중 리스부채에 대한 이자비용을
+          //    금융원가로 인식하였습니다.」·각주·「가)」·「-」 머리 같은 빈틈이 계속 남았다). 당기 리스 표 뒤 전기 리스 표는 줄 이름이 같아 잇고, 이자비용·매각예정·
+          //    특수관계자 표는 줄 이름이 달라 잇지 않는다 — 대응이 없으면 주제 없음(리스 후보 아님, leaseCellsOf)
+          const sig = tableSig(m[0]);
+          // ④ 그것도 아니면 표 자신의 머리 칸(첫 숫자 줄 위)에 「리스부채」가 있을 때 그 머리 글(「구분 | 당기말 | 전기말 // 리스부채」·「차입금 | 사채 | 리스 부채」 — 앞 표가
+          //    사용권자산 표라 대응이 없는 리스 표)
+          const hd = tableHead(m[0]);
+          // ②' 이 표 앞 글(앞 숫자 표 뒤부터)에 표를 소개하는 문장(「다음 표는 … 나타내고 있습니다.」)이 있으면 그 문장부터 끝까지(062040 유동성위험 만기표 — 소개 문장 뒤에
+          //     설명 문장이 두 개 더 있다)
+          const ii = sents.slice(0, -1).findLastIndex((x) => intro(x) || /(다음|아래)\s*표[는은]/.test(x));
+          // ④' 줄 이름이 전부 리스부채 줄(유동·비유동 리스부채·합계)인 표는 그 자체로 리스부채 표(XBRL 「| 공시금액 // 유동 리스부채 // 비유동 리스부채 // 합계」)
+          const rl = tableRowLabels(m[0]);
+          const pureLease = rl.length >= 1 && rl.every((x) => /리스\s*부채/.test(x) && !/이자|비용|수익|손익|현금유출|지급|특수관계/.test(x));
+          subj = lead && !bareSubject(lead) && !/다\.$/.test(lead) ? lead.slice(-200) : !lead && intro(prevSent) ? prevSent.trim().slice(-200) : !lead && ii >= 0 ? sents.slice(ii, -1).join(" ").slice(-300) : sigMatch(prevSig, sig) ? prevSubj : /리스\s*부채/.test(hd) ? `${prevSent} ${hd}`.trim().slice(-300) : pureLease ? `${prevSent} ${rl.join(" · ")}`.trim().slice(-300) : "";
+          // (④·④' 은 표 앞 문장을 주제에 붙인다 — 「당기 중 특수관계자 채권채무를 보유…」·「…매각예정으로 분류하였습니다.」 뒤 리스부채 표는 손익·특수관계자·매각예정 거르기에 걸린다)
         } else subj = clause.slice(-200);
         prevSubj = subj;
+        prevSig = tableSig(m[0]);
       }
       // 「전기 (단위 : 원)」처럼 기간 낱말뿐인 제목은 바로 앞 표의 제목을 이어받는다(XBRL 표 — "…의 내역 당기" 다음 표가 "전기"만)
       // 표 앞 글자 — 잘린 자리의 반쪽 태그(「IDTH="600">」 — 000660 특수관계자 표 제목이 기간뿐인 줄 모르게 했다)는 떼고
@@ -2243,6 +2251,48 @@ function categoryCurrentCols(tables, X, ctx) {
   return { pick, result: (tbls, line) => partsResult(tbls, X, pick, `${line} 주석 내역(${rc}) 범주별 금융자산 내역 표 ${pick.length}개의 유동·그 해 열 칸(표마다 한 칸) 합`) };
 }
 // 기간 낱말은 단독 낱말·열 머리 꼴만(재감사 ④ — 「산일전기」의 「전기」, 「당기손익」·「전기설비」는 기간이 아니다): 앞 글자가 한글이 아니고 뒤가 한글이 아니거나 조사·말·초
+/** 표의 줄·열 이름 묶음(숫자 아닌 칸 글자, 띄어쓰기·각주 표시 뺌, 「구분·당기·합계」 같은 흔한 칸 제외) — 앞 표 주제를 이을지 볼 때 */
+const SIG_GENERIC = /^(구분|과목|계정과목|내역|내용|금액|공시금액|장부금액|합계|소계|계|총계|기초|기말|단위.*|(당|전)(반|분)?기(말|초)?|제\d+(\((당|전)\))?(반|분)?기(말|초)?|\d+년|\d+년\d+월\d+일|-)$/;
+function tableSig(html) {
+  const out = new Set();
+  for (const c of html.matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)) {
+    const t = clean(c[1]).replace(/　/g, "").replace(/\(\s*\*\s*\d*\s*\)|\(\s*주\s*\d*\s*\)/g, "").replace(/\s/g, "");
+    if (!t || cellVal(t) != null || SIG_GENERIC.test(t)) continue;
+    out.add(t);
+  }
+  return out;
+}
+/** 표 머리 글 — 첫 숫자 칸이 있는 줄 위 줄들의 글자 */
+function tableHead(html) {
+  const out = [];
+  for (const r of html.matchAll(/<TR[\s\S]*?<\/TR>/gi)) {
+    const cs = [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1]).replace(/　/g, "").trim());
+    if (cs.some((c) => cellVal(c) != null)) break;
+    out.push(cs.filter(Boolean).join(" | "));
+  }
+  return out.filter(Boolean).join(" // ");
+}
+/** 숫자 칸이 있는 줄의 이름(첫 숫자 칸 앞 마지막 글자, 합계·소계 줄 제외) */
+function tableRowLabels(html) {
+  const out = [];
+  for (const r of html.matchAll(/<TR[\s\S]*?<\/TR>/gi)) {
+    const cs = [...r[0].matchAll(/<T[DHEU][^>]*>([\s\S]*?)<\/T[DHEU]>/gi)].map((c) => clean(c[1]).replace(/　/g, "").trim());
+    const i = cs.findIndex((c) => cellVal(c) != null);
+    if (i < 0) continue;
+    const lab = cs.slice(0, i).filter(Boolean).at(-1) ?? "";
+    if (!lab || isTotalLabel(lab)) continue;
+    out.push(lab);
+  }
+  return out;
+}
+/** 두 표의 이름 묶음이 대응하는가 — 작은 쪽 이름의 과반이 다른 쪽에 그대로 있고, 겹치는 이름이 둘 이상(이름이 하나뿐이면 그 하나) */
+function sigMatch(a, b) {
+  if (!a || !b || !a.size || !b.size) return false;
+  let n = 0;
+  for (const x of a) if (b.has(x)) n += 1;
+  const small = Math.min(a.size, b.size);
+  return n * 2 > small && (n >= 2 || small === 1);
+}
 /** 표 머리가 기간·단위·번호뿐인가(「당기」·「- 전반기」·「제 19(당) 기」) */
 const bareSubject = (c) => !(c ?? "").replace(/\(?\s*단위\s*:[^)]*\)?/g, "").replace(/제\s*\d+\s*(\(\s*(당|전)\s*\))?\s*(반|분)?\s*기\s*말?/g, "").replace(/(당|전)\s*(반|분)?\s*기\s*(말|초)?|[\s\-–:.()（）②①③④⑤]/g, "");
 // 기간 낱말(재감사 2026-10-22 새1): 앞 글자가 아니라 뒤 글자로 낱말을 가른다 — 띄어쓰기 빠진 「…조정내용당기 및 전기 중」의 「당기」, 「당기금액·전기금액·당기잔액·당기장부금액·
