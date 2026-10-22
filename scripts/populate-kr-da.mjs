@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-22.1";
+const KR_DA_RULES_VERSION = "2026-10-22.2";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -1784,9 +1784,19 @@ function tablesOf(texts) {
         if (bareSubject(clause)) {
           const lead = parts.slice(0, -1).join(" ").trim();
           const prevSent = sents.at(-2) ?? "";
-          const intro = (x) => /(다음|아래)과\s*같\s*습\s*니\s*다|다음과\s*같다/.test(x);
-          // ① 같은 문장 안 번호 매김 앞 제목(「15. 매입채무 및 기타금융부채 (1) 당기」) ② 앞 문장이 표를 여는 문장(「…다음과 같습니다.① 당기」) ③ 앞 숫자 표의 주제
-          subj = lead && !bareSubject(lead) && !/다\.$/.test(lead) ? lead.slice(-200) : intro(prevSent) && !lead ? prevSent.trim().slice(-200) : prevSubj;
+          // 표를 여는 문장 — 「다음과·아래와·다음 표와 같습니다/같음/같다」
+          const intro = (x) => /(다음|아래)\s*(표\s*)?(와|과)?\s*같\s*(습\s*니\s*다|음|다)/.test(x);
+          // 앞 문장에 손익·특수관계자·매각예정 낱말이 있으면 서술문이라도 앞 표 주제를 잇지 않는다(재감사 2026-10-22 — 「…이자비용을 금융원가로 인식하였습니다.」 뒤 「당기」 표가
+          // 앞 리스 표의 주제를 물려받아 이자비용 줄을 잔액으로 읽었다)
+          const own = (x) => /이자\s*(비용|수익|지급|수취)|손익|수익|비용|원가|특수관계|매각예정/.test(x);
+          // ① 같은 문장 안 번호 매김 앞 제목(「15. 매입채무 및 기타금융부채 (1) 당기」) ② 앞 문장이 표를 여는 문장이거나 손익·특수관계자·매각예정 문장이면 그 문장
+          // ③ 그 밖(같은 주석의 각주 「(*) … 포함되어 있습니다.」 뒤 「전기」 표)은 앞 숫자 표의 주제
+          // 각주(「(*)」「(*1)」「*」「※」「(주1)」「주1)」로 시작) 는 앞 표의 딸린 글 — 손익 낱말(「이자비용 상당액」「이자지급액」)이 있어도 앞 표 주제를 잇는다
+          const footnote = /^\s*(\(\s*\*|\*|※|\(?\s*주\s*\d*\s*\))/.test(prevSent);
+          // 손익 낱말 서술문으로 새 주제를 여는 것은 그 문장이 번호 매긴 새 항목(「(6) 당기 중 리스부채에 대한 이자비용을 금융원가로 인식하였습니다.」)일 때만 —
+          // 번호 없는 설명문(「금액은 이자지급액을 포함하고 …」「당기 중 감소한 대손충당금은 …」)은 앞 표에 딸린 글이라 앞 표 주제를 잇는다
+          const numbered = /\(\d+\)|(^|\s)\d+\)|[①-⑳]|(^|\s)\d+\.\s|(^|\s)[가-하]\.\s/.test(prevSent);
+          subj = lead && !bareSubject(lead) && !/다\.$/.test(lead) ? lead.slice(-200) : !lead && (intro(prevSent) || (own(prevSent) && numbered && !footnote)) ? prevSent.trim().slice(-200) : prevSubj;
         } else subj = clause.slice(-200);
         prevSubj = subj;
       }
@@ -2236,9 +2246,10 @@ function categoryCurrentCols(tables, X, ctx) {
 /** 표 머리가 기간·단위·번호뿐인가(「당기」·「- 전반기」·「제 19(당) 기」) */
 const bareSubject = (c) => !(c ?? "").replace(/\(?\s*단위\s*:[^)]*\)?/g, "").replace(/제\s*\d+\s*(\(\s*(당|전)\s*\))?\s*(반|분)?\s*기\s*말?/g, "").replace(/(당|전)\s*(반|분)?\s*기\s*(말|초)?|[\s\-–:.()（）②①③④⑤]/g, "");
 // 기간 낱말(재감사 2026-10-22 새1): 앞 글자가 아니라 뒤 글자로 낱말을 가른다 — 띄어쓰기 빠진 「…조정내용당기 및 전기 중」의 「당기」, 「당기금액·전기금액·당기잔액·당기장부금액·
-// 당기현재·당기기말·당기합계」 머리도 기간. 「당」 앞이 한글이면 「해당·상당·적당·배당·충당·할당·담당·정당·타당·부당」 낱말은 빼고, 「전」 앞이 한글이면(「산일전기」·
+// 당기현재·당기기말·당기합계」 머리도 기간. 「당」 앞이 한글이면 「해당·상당·적당·배당·충당·할당·담당·타당」 낱말은 빼고(「정·부」는 넣지 않는다 —
+// 「자본조정당기말과 전기말」·「약정당기말」·「여부당기말」의 당기를 놓쳤다, 재감사 2026-10-22), 「전」 앞이 한글이면(「산일전기」·
 // 「일진전기」) 「및·와·과」 뒤만 기간. 「당기손익·당기순이익·전기설비」는 뒤 글자로 빠진다
-const PERIOD_RE_G = /(?:(?<![해상적배충할담정타부])당|(?:^|(?<=[^가-힣]|[및와과]))전)\)?\s*(반|분)?\s*기(?=$|[^가-힣]|[말초와과의에은는중및까부]|금액|잔액|장부|현재|기[말초]|합계)/g;
+const PERIOD_RE_G = /(?:(?<![해상적배충할담타])당|(?:^|(?<=[^가-힣]|[및와과]))전)\)?\s*(반|분)?\s*기(?=$|[^가-힣]|[말초와과의에은는중및까부]|금액|잔액|장부|현재|기[말초]|합계)/g;
 /** 기간 낱말 → "cur"(당기·당반기·"제 19(당) 기") | "prev"(전기) | null */
 const periodWord = (t) => { const m = new RegExp(PERIOD_RE_G.source).exec(t ?? ""); return m ? (m[0][0] === "당" ? "cur" : "prev") : null; };
 /** ⑦·⑧b 공통 — 고른 칸들 [{label, v, u, won}] 의 성격으로 현금성 부분 */
