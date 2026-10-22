@@ -790,11 +790,39 @@ export function withYahooLtm(
   let debtOk = false;
   // 6-K 재무상태표로 이미 채움(본표 판독 합성 개념 = 6-K 줄 하나·둘의 합 — 위 "그 밖 재무상태표 줄")
   const debtBy6k = (out[SYN_DEBT_FACE]?.units?.USD ?? []).some((e) => !e.start && e.end === last);
+  // 차입금 구성 줄 합(오너 결정 (가)의 범위 — 구성 줄이 정해지면 「SEC 연말 + 야후 변동분」 근사보다 먼저, 2026-10-22 TSM·SPOT): 연말에 0 이 아닌 차입금
+  // 구성 개념이 그 분기말에 전부 확정 값(6-K 줄, 또는 연말이 SEC 와 정확히 같아 채운 야후 칸 — 위 재무상태표 규칙)이고, 그 개념들로 계산한 연말 차입금이
+  // SEC 연말 차입금과 같을 때(같은 정의)만. 야후 변동분 근사(yahooApprox)로 채운 줄은 확정 값이 아니다
+  const lineAt = (c: string, d: string) => (out[c]?.units?.USD ?? []).find((e) => !e.start && e.end === d && ["sixK", "yahoo"].includes((e as { ltmSrc?: LtmSrc }).ltmSrc?.via ?? ""))?.val ?? null;
+  const debt6k = (d: string): { debt: number; noncurrent: number | null; parts: string[] } | null => {
+    const need = DEBT_COMPONENT_CONCEPTS.filter((c) => (on(c, E) ?? 0) !== 0);
+    if (!need.length || !debtE || !need.every((c) => lineAt(c, d) != null)) return null;
+    const sE = resolveDebt((c) => (DEBT_COMPONENT_CONCEPTS.includes(c) ? on(c, E) : null));
+    if (!sE || !sameInUnit(sE.debt / eRate, debtE.debt / eRate)) return null;
+    const s6 = resolveDebt((c) => (DEBT_COMPONENT_CONCEPTS.includes(c) ? lineAt(c, d) : null));
+    return s6 ? { debt: s6.debt, noncurrent: s6.noncurrent, parts: need } : null;
+  };
+  const d6L = debtBy6k ? null : debt6k(last);
   if (debtBy6k) { debtOk = true; filled.push("총차입금(6-K)"); }
+  else if (d6L && sixK) {
+    debtOk = true;
+    putBs(SYN_DEBT_FACE, last, d6L.debt, "derived", [], sixK.source, E, d6L.parts);
+    if (d6L.noncurrent != null) putBs(SYN_DEBT_FACE_NONCURRENT, last, d6L.noncurrent, "derived", [], sixK.source, E, d6L.parts);
+    const d6P = debt6k(yearAgo);
+    if (d6P) {
+      putBs(SYN_DEBT_FACE, yearAgo, d6P.debt, "derived", [], sixKPrev && sixKPrev.bsDates.includes(yearAgo) && !sixK.bsDates.includes(yearAgo) ? sixKPrev.source : sixK.source, E, d6P.parts);
+      if (d6P.noncurrent != null) putBs(SYN_DEBT_FACE_NONCURRENT, yearAgo, d6P.noncurrent, "derived", [], sixK.source, E, d6P.parts);
+    }
+    filled.push("총차입금(구성 줄 합)");
+  }
   else if (ahead && debtE) blanked.push({ label: "총차입금", reason: `${AHEAD_MISS(ahead)}(차입금 줄을 6-K 재무상태표에서 정할 수 없음)` });
   else if (!debtE && !yDebtE) debtOk = true; // 차입금 없음
   else if (!debtE || yDebtE == null) blanked.push({ label: "총차입금", reason: debtE ? "Yahoo FY말 값 없음" : "SEC FY말 차입금 없음" });
   else if (missL) blanked.push({ label: "총차입금", reason: missL });
+  // 연말 차이가 SEC 값의 5% 를 넘으면 대응이 틀린 것 — 변동분 근사도 쓰지 않는다(흐름 항목과 같은 문턱, 2026-10-22: NVS SEC 연말 1,920 vs 야후 35,376
+  // 백만 USD 를 그대로 근사해 1년 전 분기말 총차입금이 −819 가 됐다)
+  else if (!sameInUnit(debtE.debt / eRate, yDebtE) && Math.abs(debtE.debt / eRate - yDebtE) > 0.05 * Math.max(1, Math.abs(debtE.debt / eRate)))
+    blanked.push({ label: "총차입금", reason: `Yahoo FY말 ≠ SEC(차이 5% 초과 — 정의 차이) — SEC ${Math.round(debtE.debt / eRate).toLocaleString("en-US")} vs Yahoo ${Math.round(yDebtE).toLocaleString("en-US")} ${currency}` });
   else if (!sameInUnit(debtE.debt / eRate, yDebtE) && yDebtL != null) {
     // 정의가 조금 다름(ASML 0.37%·TSM 0.36%) — SEC 연말 + Yahoo 분기 변동분(오너 결정 2026-10-01 (가))
     debtOk = true;
