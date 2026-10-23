@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-23.1";
+const KR_DA_RULES_VERSION = "2026-10-23.2";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -1796,13 +1796,16 @@ function tablesOf(texts) {
           // ④ 그것도 아니면 표 자신의 머리 칸(첫 숫자 줄 위)에 「리스부채」가 있을 때 그 머리 글(「구분 | 당기말 | 전기말 // 리스부채」·「차입금 | 사채 | 리스 부채」 — 앞 표가
           //    사용권자산 표라 대응이 없는 리스 표)
           const hd = tableHead(m[0]);
+          // ③ 앞: 앞 숫자 표와 이 표 사이 글 중 각주(「(*)」「(*1)」「※」「주1)」로 시작)가 아닌 문장에 손익·특수관계자·매각예정 낱말이 있으면 잇지 않는다
+          // (재감사 2026-10-23 — 「(1) 차입금 및 리스부채의 내역」 표 뒤 「당기 중 발생한 이자비용은 금융원가로 인식하였습니다.」 + 손익 표가 줄 이름이 겹쳐 앞 주제를 이었다)
+          const gapOwn = sents.slice(0, -1).some((x) => !/^\s*(\(\s*\*|\*|※|\(?\s*주\s*\d*\s*\))/.test(x) && /이자\s*(비용|수익|지급|수취)|손익|수익|비용|원가|특수관계|매각예정/.test(x));
           // ②' 이 표 앞 글(앞 숫자 표 뒤부터)에 표를 소개하는 문장(「다음 표는 … 나타내고 있습니다.」)이 있으면 그 문장부터 끝까지(062040 유동성위험 만기표 — 소개 문장 뒤에
           //     설명 문장이 두 개 더 있다)
           const ii = sents.slice(0, -1).findLastIndex((x) => intro(x) || /(다음|아래)\s*표[는은]/.test(x));
           // ④' 줄 이름이 전부 리스부채 줄(유동·비유동 리스부채·합계)인 표는 그 자체로 리스부채 표(XBRL 「| 공시금액 // 유동 리스부채 // 비유동 리스부채 // 합계」)
           const rl = tableRowLabels(m[0]);
           const pureLease = rl.length >= 1 && rl.every((x) => /리스\s*부채/.test(x) && !/이자|비용|수익|손익|현금유출|지급|특수관계/.test(x));
-          subj = lead && !bareSubject(lead) && !/다\.$/.test(lead) ? lead.slice(-200) : !lead && intro(prevSent) ? prevSent.trim().slice(-200) : !lead && ii >= 0 ? sents.slice(ii, -1).join(" ").slice(-300) : sigMatch(prevSig, sig) ? prevSubj : /리스\s*부채/.test(hd) ? `${prevSent} ${hd}`.trim().slice(-300) : pureLease ? `${prevSent} ${rl.join(" · ")}`.trim().slice(-300) : "";
+          subj = lead && !bareSubject(lead) && !/다\.$/.test(lead) ? lead.slice(-200) : !lead && intro(prevSent) ? prevSent.trim().slice(-200) : !lead && ii >= 0 ? sents.slice(ii, -1).join(" ").slice(-300) : sigMatch(prevSig, sig) && !gapOwn ? prevSubj : /리스\s*부채/.test(hd) ? `${prevSent} ${hd}`.trim().slice(-300) : pureLease ? `${prevSent} ${rl.join(" · ")}`.trim().slice(-300) : "";
           // (④·④' 은 표 앞 문장을 주제에 붙인다 — 「당기 중 특수관계자 채권채무를 보유…」·「…매각예정으로 분류하였습니다.」 뒤 리스부채 표는 손익·특수관계자·매각예정 거르기에 걸린다)
         } else subj = clause.slice(-200);
         prevSubj = subj;
