@@ -400,8 +400,9 @@ export function buildUsHighlights(
     if (!b && !block) nBridge[i] = b0 && basis ? (basis.why ?? "Yahoo 분기 EV 구성요소 불완전") : evRes.bridgeReason(evAt);
     if (b && basis?.note) { nBridge[i] = basis.note; nEvAsOf[i] = basis.note; }
     // 「20-F 연말 + 6-K 변동분」으로 바꾼 구성요소(기준이 다른 분기 값 — TSM 비지배지분) — 그 칸에 산식·기준 차이
-    if (b && isLtm && yl?.basisNotes?.length && (!basis || basis.date === yl.through)) {
-      const pick = (re: RegExp) => yl.basisNotes!.filter((x) => x.concepts.some((c) => re.test(c))).map((x) => x.note).join(" · ") || null;
+    if (b && isLtm && yl?.basisNotes?.length) {
+      const at = basis?.date ?? yl.through;
+      const pick = (re: RegExp) => yl.basisNotes!.filter((x) => x.at === at && x.concepts.some((c) => re.test(c))).map((x) => x.note).join(" · ") || null;
       nBasisPref[i] = pick(/Minority|Noncontrolling|Preferred|Partners/);
       nBasisCash[i] = pick(/Cash|Investment|Securit|Deposit/);
     }

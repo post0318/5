@@ -85,7 +85,7 @@ export type YahooLtmResult =
       /** 검증 전용(verify-row) — 6-K 로 채운 값 하나하나(검증기가 SEC 20-F·6-K 를 따로 읽어 다시 계산한다) */
       sixKDetail?: SixKDetail[];
       /** EV 구성요소를 「20-F 연말 + 6-K 변동분」으로 바꾼 칸(야후 분기 값이 6-K 기준이라 20-F 연말과 기준이 섞임 — TSM 비지배지분) — 칸 주석 원문 */
-      basisNotes?: { label: string; concepts: string[]; note: string }[];
+      basisNotes?: { label: string; concepts: string[]; note: string; at: string }[];
       /** 이번 LTM 에 쓴 6-K 보고서("6-K 접수번호 문서") — 검증 전용 */
       sixKSource?: string;
       /** 6-K 흐름 표에서 뺀 줄의 사유(손익계산서·현금흐름표 — 열 판정·1년 전 같은 분기 6-K 전기 누적 대조, edgar-6k verifyPrior) — 검증·검수용 */
@@ -757,7 +757,7 @@ export function withYahooLtm(
   // EV 구성요소(비지배지분·우선주·현금 등)를 야후 분기 값으로 채웠는데, 6-K 연말 열이 SEC 연말과 다르고(보고서 기준이 다름) 야후 분기 값이 6-K 분기말 열과
   // 같으면 — 야후 연말은 20-F, 분기는 6-K 기준이라 기준이 섞인 값이다. 오너 결정 (가)(2026-10-01)대로 SEC 연말 + 같은 기준(6-K)의 변동분(분기말 열 − 연말 열)
   // (TSM 비지배지분: 6-K 는 대만 금융감독위원회 승인 기준, 20-F 는 IASB 기준 — 2025년 말 41,199.289 vs 41,180.5 백만 TWD, 2026-10-22). 1년 전 분기말과 같은 방식
-  const basisNotes: { label: string; concepts: string[]; note: string }[] = [];
+  const basisNotes: { label: string; concepts: string[]; note: string; at: string }[] = [];
   if (sixK && sixK.bsDates.includes(E) && sixK.bsDates.includes(last)) {
     const iE6 = sixK.bsDates.indexOf(E), iL6 = sixK.bsDates.indexOf(last);
     for (const c of EV_INSTANT) {
@@ -776,8 +776,9 @@ export function withYahooLtm(
       const ids = src ? [{ id: `ifrs-full_${src.sum[0] as string}`, sign: sg as 1 | -1 }] : [{ id: `us-gaap_${c}`, sign: 1 as const }];
       putBs(c, last, (secE + (r6L - r6E)) * lastRate, "bsDelta", ids, sixK.source, E);
       const label = INSTANTS.find((x) => x.concepts.includes(c))?.label ?? c;
-      const note = `${label} ${last} = 20-F ${E} ${Math.round(secE).toLocaleString("en-US")} + 6-K 변동분(${Math.round(r6E).toLocaleString("en-US")} → ${Math.round(r6L).toLocaleString("en-US")}) ${currency} — 6-K 분기 보고서는 대만 금융감독위원회 승인 IFRS, 20-F 는 IASB IFRS 라 연말 값이 다름(야후 분기 값은 6-K 기준)`;
-      basisNotes.push({ label, concepts: [c], note });
+      // 회사별 사실만 — 기준(회계 기준 이름)은 원문으로 확인하지 않으므로 적지 않는다(재감사 2026-10-26)
+      const note = `${label} ${last} = 20-F ${E} ${Math.round(secE).toLocaleString("en-US")} + 6-K 변동분(${Math.round(r6E).toLocaleString("en-US")} → ${Math.round(r6L).toLocaleString("en-US")}) ${currency} — 6-K 연말 열(${Math.round(r6E).toLocaleString("en-US")})과 20-F 연말 값(${Math.round(secE).toLocaleString("en-US")})이 다름, 야후 분기 값은 6-K 분기말 열과 같음`;
+      basisNotes.push({ label, concepts: [c], note, at: last });
       sixKFilled.push({ label: `${label}(20-F 연말 + 6-K 변동분)`, reason: `${sixK.source} · ${note}` });
     }
   }

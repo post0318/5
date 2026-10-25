@@ -639,8 +639,9 @@ function buildUsTtm(
         : (evRes.bridgeReason(evDate) ?? "EV 구성요소 없음");
   if (evBridge && evBasis?.note) reasons.evAsOf = evBasis.note;
   // 기업가치 구성요소를 「20-F 연말 + 6-K 변동분」으로 바꾼 칸(기준이 다른 분기 값 — TSM 비지배지분)의 산식·기준 차이
-  if (evBridge && yl?.basisNotes?.length && evBasis?.date === yl.through)
-    reasons.evAsOf = [reasons.evAsOf, ...yl.basisNotes.map((x) => x.note)].filter(Boolean).join(" · ");
+  // 기업가치 구성 기준일(C안이면 앞 분기말)의 것만
+  const bnotes = evBridge && evBasis ? (yl?.basisNotes ?? []).filter((x) => x.at === evBasis.date) : [];
+  if (bnotes.length) reasons.evAsOf = [reasons.evAsOf, ...bnotes.map((x) => x.note)].filter(Boolean).join(" · ");
   // 개요 멀티플이 하이라이트 LTM 열과 같은 값을 내도록 주식수·순이익·자기자본을
   // 공통 기준으로(edgar-shares·edgar-pershare) — 검증 체계 2층에서 PER·PBR 불일치 발견.
   const shareRes = buildShareResolver(facts, { classFacts: evCtx.classFacts ?? null });
@@ -1067,6 +1068,10 @@ function withEvFallback(
         ...r.result,
         evAsOf: d,
         evAsOfNote: `기업가치 구성: ${d} 재무상태표 — ${tried.join(" · ")}`,
+        // 그 분기말 구성요소를 「20-F 연말 + 6-K 변동분」으로 바꾼 칸의 산식 주석도 함께(TSM 비지배지분 — 재감사 2026-10-26)
+        ...(r2.result.source === "yahoo" && r2.result.basisNotes?.some((x) => x.at === d)
+          ? { basisNotes: [...(r.result.basisNotes ?? []), ...r2.result.basisNotes.filter((x) => x.at === d)] }
+          : {}),
         sixKDetail: [...(r.result.sixKDetail ?? []), ...(r2.result.sixKDetail ?? []).filter((x) => x.at === d && x.kind !== "is" && x.kind !== "cf" && x.kind !== "cfZero")],
       },
     };

@@ -136,11 +136,23 @@ export async function loadUsRevenue(symbol: string): Promise<UsRevenue | null> {
  * (fin_sym)은 배치가 다시 만들기 전까지 옛 기간일 수 있다(새 6-K 뒤·엔진판이 다른 저장본). 그러면 이름표(~2026-09-30 6-K)와 값(6월까지 매출)이 다른
  * 기간이 된다. 저장본 최근 12개월 끝이 기대 끝과 다르면 요청 시점에 새로 조립하고, 그래도 다르면 최근 12개월 값을 비운다(사유 note)
  */
+// 새 조립 결과 기억 — 같은 요청(화면 하나가 getSymbolFacts·getFinancials 로 두 번 부름)과 기간이 끝내 안 맞는 종목의 반복 조립을 막는다(재감사 2026-10-26).
+// 열쇠 = 종목·기대 끝·저장본 끝. 30분(맞춘 결과는 저장본에 저장돼 다음 조회부터 이 경로를 타지 않는다)
+const ALIGN_TTL_MS = 30 * 60_000;
+const alignMemo: Map<string, { at: number; p: Promise<FinSymDoc | null> }> = ((globalThis as { __finAlignMemo?: Map<string, { at: number; p: Promise<FinSymDoc | null> }> }).__finAlignMemo ??= new Map());
+
 export async function alignRevenueToLtm(symbol: string, rev: UsRevenue | null, expectEnd: string | null): Promise<UsRevenue | null> {
   if (!rev?.ltm || !expectEnd) return rev;
   const near = (a: string) => Math.abs(Date.parse(a) - Date.parse(expectEnd)) <= 6 * 86_400_000;
   if (near(rev.ltm.end)) return rev;
-  const fresh = await loadFinSymFresh("us", symbol);
+  const mk = `${symbol.toUpperCase()}|${expectEnd}|${rev.ltm.end}`;
+  let hit = alignMemo.get(mk);
+  if (!hit || Date.now() - hit.at > ALIGN_TTL_MS) {
+    hit = { at: Date.now(), p: loadFinSymFresh("us", symbol) };
+    alignMemo.set(mk, hit);
+    console.info(`[fin] ${symbol} 최근 12개월 기간 맞추기 새 조립(저장본 ~${rev.ltm.end}, 화면 ~${expectEnd})`);
+  }
+  const fresh = await hit.p;
   const r2 = fresh ? revenueFromFinSym(fresh) : null;
   if (r2?.ltm && near(r2.ltm.end)) return r2;
   const why = `재무 조립 최근 12개월(~${(r2?.ltm ?? rev.ltm).end})이 화면 최근 12개월(~${expectEnd})과 다름 — 빈칸`;
