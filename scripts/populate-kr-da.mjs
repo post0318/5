@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-23.3";
+const KR_DA_RULES_VERSION = "2026-10-26.1";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -1800,9 +1800,10 @@ function tablesOf(texts) {
           const hd = tableHead(m[0]);
           // ③ 은 「기간 짝」일 때만(재감사 2026-10-23 — 각주 꼴 손익 문장 뒤 같은 「당기」 표가 줄 이름만 겹쳐 이어받았다): 앞 숫자 표 머리에 기간이 하나 있고
           //    이 표 기간이 그 짝(당기 ↔ 전기)이고 줄 이름이 대응할 때. 같은 기간이 반복되거나 앞 표 머리에 기간이 없으면 잇지 않는다
-          // ③ 앞: 앞 숫자 표와 이 표 사이 글 중 각주(「(*)」「(*1)」「※」「주1)」로 시작)가 아닌 문장에 손익·특수관계자·매각예정 낱말이 있으면 잇지 않는다
+          // ③ 앞: 앞 숫자 표와 이 표 사이 글(각주 포함) 어느 문장에든 손익·특수관계자·매각예정 낱말이 있으면 잇지 않는다
           // (재감사 2026-10-23 — 「(1) 차입금 및 리스부채의 내역」 표 뒤 「당기 중 발생한 이자비용은 금융원가로 인식하였습니다.」 + 손익 표가 줄 이름이 겹쳐 앞 주제를 이었다)
-          const gapOwn = sents.slice(0, -1).some((x) => !/^\s*(\(\s*\*|\*|※|\(?\s*주\s*\d*\s*\))/.test(x) && /이자\s*(비용|수익|지급|수취)|손익|수익|비용|원가|특수관계|매각예정/.test(x));
+          // 각주도 예외 없이(재감사 2026-10-26 — 「(*) 당기 중 발생한 이자비용은 …」 각주 뒤 「전기」 표가 기간 짝·줄 이름 대응으로 이어받았다)
+          const gapOwn = sents.slice(0, -1).some((x) => /이자\s*(비용|수익|지급|수취)|손익|수익|비용|원가|특수관계|매각예정/.test(x));
           // ②' 이 표 앞 글(앞 숫자 표 뒤부터)에 표를 소개하는 문장(「다음 표는 … 나타내고 있습니다.」)이 있으면 그 문장부터 끝까지(062040 유동성위험 만기표 — 소개 문장 뒤에
           //     설명 문장이 두 개 더 있다)
           const ii = sents.slice(0, -1).findLastIndex((x) => intro(x) || /(다음|아래)\s*표[는은]/.test(x));
