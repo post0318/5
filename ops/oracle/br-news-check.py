@@ -11,7 +11,7 @@
   KOBRAS 카테고리·제목 = 4번 src/lib/server/kobrasDailyReport.ts
   글로벌 검색어 = 4번 src/lib/server/brazilNews.ts GLOBAL_QUERY
 """
-import json, re, sys, urllib.parse, urllib.request
+import json, os, re, sys, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
@@ -26,7 +26,11 @@ GLOBAL_QUERY = 'Brazil (economy OR politics OR markets OR "central bank" OR Seli
 
 
 def get(url, timeout=30):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    headers = {"User-Agent": UA}
+    # 4번은 사내 한정(로그인 필수, 2026-10-27) — 4번 주소에만 점검 토큰을 붙인다(원본 사이트로 새지 않게)
+    if url.startswith(APP + "/") and os.environ.get("OPS_BR_TOKEN"):
+        headers["X-Ops-Token"] = os.environ["OPS_BR_TOKEN"]
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
 
