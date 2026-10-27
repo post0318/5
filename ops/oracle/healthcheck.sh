@@ -120,8 +120,9 @@ check telegram-listener "$(systemctl is-active --quiet macro-telegram-listener &
 # 4번(브라질) 주요일정 — 2026-10-06 IBGE 인증서 변경으로 경제지표(IPCA·실업률·GDP)가 통째로 빠졌는데 열흘간 아무도 몰랐다
 # (4번은 외부 실패를 빈 목록으로 넘긴다, 오너 지적 2026-10-16 "오류가 났으면 알려줘야"). 일정 창(과거 30일~앞 60일)에는 IPCA 가 매달 있어
 # 경제지표 0건이면 고장. Vercel 캐시 응답이라 4번 서버 계산은 거의 안 든다. 바깥 서비스라 연속 2회(20분) 실패해야 알림(check2).
+# 4번은 사내 한정이라 로그인 없이는 막힌다(2026-10-27) — 점검 토큰 OPS_BR_TOKEN(alert.env, 4번 app.env 의 OPS_READ_TOKEN 과 같은 값)을 붙인다
 BR_URL="${OPS_BR_AGENDA_URL:-https://brazil-world.vercel.app/api/br-agenda}"
-code=$(curl -s -o /tmp/hc-br-agenda.json -m 60 -w '%{http_code}' "$BR_URL" || true)
+code=$(curl -s -o /tmp/hc-br-agenda.json -m 60 -w '%{http_code}' -H "X-Ops-Token: ${OPS_BR_TOKEN:-}" "$BR_URL" || true)
 br_n=0
 if [ "$code" = 200 ]; then
   br_n=$(python3 - /tmp/hc-br-agenda.json <<'PY'
@@ -164,7 +165,7 @@ if [ $(( $(date +%s) - br_last )) -ge 3300 ]; then
   date +%s > "$STATE_DIR/.br-news-last"
   while IFS=$'	' read -r key ok msg; do
     [ -n "$key" ] && check2 "$key" "$ok" "$msg"
-  done < <(timeout 240 python3 "$(dirname "$(readlink -f "$0")")/br-news-check.py" "${OPS_BR_APP:-https://brazil-world.vercel.app}" 2>/dev/null)
+  done < <(OPS_BR_TOKEN="${OPS_BR_TOKEN:-}" timeout 240 python3 "$(dirname "$(readlink -f "$0")")/br-news-check.py" "${OPS_BR_APP:-https://brazil-world.vercel.app}" 2>/dev/null)
 fi
 
 # 한국 재무(OpenDART) 동작 — 2026-10-05 검증 작업이 같은 DART 키의 일일 한도를 넘겨 운영 한국 재무가 멈췄는데 아무도 몰랐다(오너 지적).
