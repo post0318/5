@@ -552,7 +552,7 @@ export function buildKrAnalysis(input: KrAnalysisInput): FinancialStatement {
       (approxYears.length ? ` · ${approxYears.join("·")} 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사` : "") +
       ` · ${krDaSourceNote(daS, years)}` +
       // 본표에 리스부채 줄이 없는 해 — 주석 리스부채 가산·차입금 포함·확인 불가(오너 결정 2026-10-05)
-      [...new Set([...years.map((y) => evRes.bridgeAt(y)), ltmFromSnap ? snap!.evBridge ?? null : null].flatMap((b) => [b?.leaseHow ? `총차입금 리스부채: ${b.leaseHow}` : null, b?.leaseUnknown ? `⚠ ${b.leaseUnknown} — EV 공란` : null]).filter(Boolean))].map((t) => ` · ${t}`).join("") +
+      [...new Set([...years.map((y) => evRes.bridgeAt(y)), ltmFromSnap ? snap!.evBridge ?? null : null].flatMap((b) => [b?.leaseHow ? `총차입금 리스부채: ${b.leaseHow}` : null, b?.leaseUnknown ? `⚠ ${b.leaseUnknown} — EV 공란` : null, b?.cashHow ? `현금성자산(B16 기타금융자산 주석 내역): ${b.cashHow}` : null]).filter(Boolean))].map((t) => ` · ${t}`).join("") +
       (ltmFromSnap ? ` · LTM 차입금·현금·PBR 자본: ${snap!.label} 기준` : " · LTM 재무상태표: 최신 분기 스냅샷 없음 — 연말값") +
       (qInfo.mode === "q"
         ? ` · LTM 흐름 = ${qInfo.last4[0]}~${qInfo.last4[3]} 4개 분기 합, 재무상태표 = ${qInfo.last} 말`

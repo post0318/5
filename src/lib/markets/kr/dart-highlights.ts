@@ -305,7 +305,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
       : `현재/LTM 열 재무상태표: 최신 분기 스냅샷 없음 — FY${lastFy} 연말값`,
   );
   // 본표에 리스부채 줄이 없는 해 — 주석 리스부채 가산·차입금 포함·확인 불가(오너 결정 2026-10-05, dart-ev.ts krLeaseFor)
-  for (const t of new Set(bridge.flatMap((b) => [b?.leaseHow ? `총차입금 리스부채: ${b.leaseHow}` : null, b?.leaseUnknown ? `⚠ ${b.leaseUnknown} — 총차입금은 본표 차입금 줄만, EV·EV/EBITDA 공란` : null])))
+  for (const t of new Set(bridge.flatMap((b) => [b?.leaseHow ? `총차입금 리스부채: ${b.leaseHow}` : null, b?.leaseUnknown ? `⚠ ${b.leaseUnknown} — 총차입금은 본표 차입금 줄만, EV·EV/EBITDA 공란` : null, b?.cashHow ? `현금성자산(B16 기타금융자산 주석 내역): ${b.cashHow}` : null])))
     if (t) notes.push(t);
   // LTM 손익 항목별 대체·근사(분기 자료 부족 → 연간값, EPS 주식수 환산) — 조용한 대체 금지(감사 1차 ⑨)
   const RK: Record<string, string> = { revenue: "매출액", opIncome: "영업이익", netIncome: "순이익", eps: "EPS" };
