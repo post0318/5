@@ -1,7 +1,7 @@
 import "server-only";
 import YahooFinancePkg from "yahoo-finance2";
 import { fetchJson } from "./http";
-import type { MarketId } from "./types";
+import { AdapterError, type MarketId } from "./types";
 import { translateTitles, type TranslateOptions } from "../news/translate";
 import { fetchGoogleNewsRss, googleNewsUrl } from "../news/googleNews";
 import { getNewsSummaries } from "../db/news-summary";
@@ -287,14 +287,15 @@ async function fetchUsJpNews(
   market: MarketId,
   symbol: string,
   query: string,
-  opts?: { cutoffMs?: number; newsCount?: number; requireWhitelist?: boolean },
+  opts?: { cutoffMs?: number; newsCount?: number; requireWhitelist?: boolean; throwOnFail?: boolean },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
   const requireWhitelist = opts?.requireWhitelist ?? true;
   const newsCount = opts?.newsCount ?? 20;
   let res: { news?: RawNews[] };
   try {
     res = await yf().search(query, { newsCount, quotesCount: 0 });
-  } catch {
+  } catch (err) {
+    if (opts?.throwOnFail) throw err;
     return [];
   }
   const cutoff = Date.now() - (opts?.cutoffMs ?? THREE_MONTHS_MS);
@@ -715,12 +716,17 @@ async function fetchKrNewsBySearch(
      * 기사가 많은 종목은 100건이 1~2일치뿐이다(실측 2026-10-05: "마이크론" 100건이 전부 1주일 안).
      */
     maxPages?: number;
+    /** 키가 없거나 첫 페이지 조회가 실패하면 빈 목록 대신 오류를 던진다(거시경제 시황 — 실패를 「기사 없음」으로 감추지 않게) */
+    throwOnFail?: boolean;
   },
 ): Promise<Omit<NewsItem, "titleKo">[]> {
   const requireWhitelist = opts?.requireWhitelist ?? true;
   const keyId = process.env.NAVER_APIHUB_KEY_ID;
   const keySecret = process.env.NAVER_APIHUB_KEY_SECRET;
-  if (!keyId || !keySecret) return [];
+  if (!keyId || !keySecret) {
+    if (opts?.throwOnFail) throw new AdapterError("네이버 검색 키(NAVER_APIHUB_KEY_ID·SECRET)가 없습니다", { status: 503 });
+    return [];
+  }
   const display = opts?.display ?? 20;
   const cutoff = Date.now() - (opts?.cutoffMs ?? THREE_MONTHS_MS);
   const all: NaverNewsItem[] = [];
@@ -734,8 +740,11 @@ async function fetchKrNewsBySearch(
           revalidate: 600,
         },
       );
-    } catch {
-      if (page === 0) return [];
+    } catch (err) {
+      if (page === 0) {
+        if (opts?.throwOnFail) throw err;
+        return [];
+      }
       break;
     }
     const got = res.items ?? [];
@@ -1704,6 +1713,19 @@ function filterMacroRelevant(raw: RawNewsItem[], re: RegExp): RawNewsItem[] {
 }
 
 /**
+ * 거시경제 시황 질의 결과 모으기 — 일부 실패는 로그만 남기고 나머지로 보여 주되, 전부 실패하면 오류를 던진다.
+ * 예전엔 실패를 빈 목록으로 삼켜 「국내 시황」이 「관련 뉴스가 없습니다」로 비거나(30분 캐시) 원인이 로그에도 안 남았다(오너 지적 2026-10-28).
+ */
+function settledOrThrow(label: string, queries: readonly string[], results: PromiseSettledResult<RawNewsItem[]>[]): RawNewsItem[] {
+  const failed = results.flatMap((r, i) => (r.status === "rejected" ? [`${queries[i]}: ${String((r.reason as Error)?.message ?? r.reason)}`] : []));
+  if (failed.length) console.warn(`[macro-news] ${label} 시황 질의 실패 ${failed.length}/${results.length} — ${failed.join(" | ")}`);
+  if (failed.length === results.length) {
+    throw new AdapterError(`${label} 시황 뉴스를 받지 못했습니다(검색 ${results.length}건 모두 실패). 잠시 후 다시 열어 주세요.`, { status: 502 });
+  }
+  return results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+}
+
+/**
  * 거시경제 시황 목록 — 번역 전 최신순 30건. 해외 시황 요약 예약 작업(`/api/cron/news-summary`)도 같은 목록을 쓴다.
  */
 export async function fetchMacroNewsRaw(region: "kr" | "us"): Promise<RawNewsItem[]> {
@@ -1716,7 +1738,7 @@ export async function fetchMacroNewsRaw(region: "kr" | "us"): Promise<RawNewsIte
     // 이미 아래 MARKET_RELEVANT_KO 로 주제 적합성을 따로 거르고 있어(종목뉴스
     // 탭이 화이트리스트 대신 LLM 판정으로 넘어간 것과 같은 이유 — 고정된 소수
     // 도메인 목록보다 신뢰도 낮음) 화이트리스트는 끄고 주제 필터에 맡긴다.
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       KR_MACRO_TOPICS.map((q) =>
         fetchKrNewsBySearch(symbol, q, {
           cutoffMs: ONE_WEEK_MS,
@@ -1724,30 +1746,30 @@ export async function fetchMacroNewsRaw(region: "kr" | "us"): Promise<RawNewsIte
           display: 40,
           requireWhitelist: false,
           requireNaverLink: true,
+          throwOnFail: true,
         }),
       ),
     );
-    raw = filterMacroRelevant(results.flat(), MACRO_RELEVANT_KO);
+    raw = filterMacroRelevant(settledOrThrow("국내", KR_MACRO_TOPICS, results), MACRO_RELEVANT_KO);
   } else {
-    const [yahooResults, google] = await Promise.all([
-      Promise.all(
-        US_MACRO_TOPICS.map((q) =>
-          fetchUsJpNews("us", symbol, q, { cutoffMs: ONE_WEEK_MS, newsCount: 15 }),
-        ),
+    // 질의당 수십 건이 들어오므로 Google 은 매체 화이트리스트를 켠다(Kitco·FXStreet·
+    // 지역지 등 걸러도 CNBC·로이터·WSJ·블룸버그·FT·CNN 만으로 충분히 남음).
+    const results = await Promise.allSettled([
+      ...US_MACRO_TOPICS.map((q) =>
+        fetchUsJpNews("us", symbol, q, { cutoffMs: ONE_WEEK_MS, newsCount: 15, throwOnFail: true }),
       ),
-      // 질의당 수십 건이 들어오므로 여기선 매체 화이트리스트를 켠다(Kitco·FXStreet·
-      // 지역지 등 걸러도 CNBC·로이터·WSJ·블룸버그·FT·CNN 만으로 충분히 남음).
-      Promise.all(
-        US_MACRO_GOOGLE_QUERIES.map((q) =>
-          fetchGoogleOverseasNews("us", symbol, q, {
-            cutoffMs: ONE_WEEK_MS,
-            limit: 40,
-            requireWhitelist: true,
-          }).catch(() => [] as RawNewsItem[]),
-        ),
+      ...US_MACRO_GOOGLE_QUERIES.map((q) =>
+        fetchGoogleOverseasNews("us", symbol, q, {
+          cutoffMs: ONE_WEEK_MS,
+          limit: 40,
+          requireWhitelist: true,
+        }),
       ),
     ]);
-    raw = filterMacroRelevant([...yahooResults.flat(), ...google.flat()], MACRO_RELEVANT_EN);
+    raw = filterMacroRelevant(
+      settledOrThrow("해외", [...US_MACRO_TOPICS, ...US_MACRO_GOOGLE_QUERIES], results),
+      MACRO_RELEVANT_EN,
+    );
   }
   const seenUrls = new Set<string>();
   const deduped = raw.filter((it) => {
