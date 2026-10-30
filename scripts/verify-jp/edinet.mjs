@@ -148,7 +148,7 @@ function csvLine(line) {
 }
 
 let codeList = null;
-/** EDINET 코드 목록 — 証券コード(5자리) → { edinetCode, name, fyEnd("3月31日"), consolidated } */
+/** EDINET 코드 목록 — 証券コード(5자리) → { edinetCode, name, fyEnd("3月31日"), consolidated, industry(提出者業種 — 「保険業」·「銀行業」 등) } */
 export async function edinetCodes() {
   if (codeList) return codeList;
   const f = join(cfg.root, "codelist", `${jstToday()}.zip`);
@@ -167,13 +167,13 @@ export async function edinetCodes() {
   if (head < 0) throw new Error("EDINET 코드 목록 머리줄 없음");
   const h = rows[head];
   const col = (n) => h.indexOf(n);
-  const [cE, cSec, cName, cFy, cCons] = [col("ＥＤＩＮＥＴコード"), col("証券コード"), col("提出者名"), col("決算日"), col("連結の有無")];
+  const [cE, cSec, cName, cFy, cCons, cInd] = [col("ＥＤＩＮＥＴコード"), col("証券コード"), col("提出者名"), col("決算日"), col("連結の有無"), col("提出者業種")];
   if ([cE, cSec, cName, cFy].some((c) => c < 0)) throw new Error("EDINET 코드 목록 칸 이름 변경");
   const bySec = new Map();
   for (const r of rows.slice(head + 1)) {
     const sec = r[cSec];
     if (!sec) continue;
-    bySec.set(sec, { edinetCode: r[cE], name: r[cName], fyEnd: r[cFy], consolidated: cCons >= 0 ? r[cCons] === "有" : null });
+    bySec.set(sec, { edinetCode: r[cE], name: r[cName], fyEnd: r[cFy], consolidated: cCons >= 0 ? r[cCons] === "有" : null, industry: cInd >= 0 ? r[cInd] : null });
   }
   codeList = bySec;
   return bySec;

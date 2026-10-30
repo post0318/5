@@ -651,27 +651,37 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
    * J2 EV 구성요소 — 검증기 독립 판정(j2.mjs: 요소 ID 차입금·현금, 변동표 산술 리스부채)과 하이라이트 총차입금·현금성자산·비지배지분·EV 공란.
    * d = 그 열 재무상태표 출처 서류, D = 기준일. 서류의 당기말·전기말 열만(소니 IFRS 17 전환일 같은 세 번째 열은 변동표 기말이 없다 → 검증불가)
    */
-  const j2 = (label, i, d, D, mcapBlank) => {
+  const j2 = (label, i, d, D, mcapBlank, segDocs) => {
     const which = D === d.ctx.get("CurrentYearInstant")?.instant || D === d.dei.CurrentPeriodEndDateDEI ? "cur" : D === d.ctx.get("Prior1YearInstant")?.instant ? "prior" : null;
     if (!which) return add("J2", "총차입금 = 차입금 요소 + 리스부채", label, { status: NA, note: `${d.row.docID} 의 당기말·전기말 열이 아님(${D})` });
-    const e = evComponents(d, D, which);
+    const e = evComponents(d, D, which, { segDocs, industry: src.code?.industry ?? null });
     const NAME = "총차입금 = 차입금 요소 + 리스부채";
     if (e.debt.blank) cmp("J2", NAME, label, val("debt", i), { blank: e.debt.blank });
     else if (e.debt.v == null) add("J2", NAME, label, { status: NA, note: e.debt.why });
     else cmp("J2", NAME, label, val("debt", i), { v: e.debt.v, how: e.debt.how });
     if (!e.evBlank) {
       const ca = val("cash", i);
-      if (e.cash.v == null) add("J2", "현금성자산 = 현금 요소", label, { status: NA, note: e.cash.why });
-      else cmp("J2", "현금성자산 = 현금 요소", label, ca == null ? null : -ca, { v: e.cash.v, how: e.cash.how });
+      if (e.cash.v == null) add("J2", "현금성자산 = 현금흐름표 기말 잔액", label, { status: NA, note: e.cash.why });
+      else cmp("J2", "현금성자산 = 현금흐름표 기말 잔액", label, ca == null ? null : -ca, { v: e.cash.v, how: e.cash.how });
       // 하이라이트는 비지배지분이 모든 열 0 이면 행을 숨긴다(앱 표시 규칙) — 행 없음 = 0
       if (!row("nci") && e.nci.v === 0) add("J2", "비지배지분 = 원자료", label, { status: PASS, note: `${e.nci.how} · 하이라이트 행 없음(모든 열 0)` });
       else cmp("J2", "비지배지분 = 원자료", label, val("nci", i), e.nci);
     }
     const evA = val("ev", i);
-    if (e.evBlank) cmp("J2", "EV 공란 판정", label, evA, { blank: e.evBlank });
+    const kindNote = e.kind?.bank ?? e.kind?.captive ?? null;
+    // 8766 처럼 보험·은행 업종인데 금융 서식 요소가 없는 회사 — EV 판정은 오너 결정 대기(판정 보류 — 실패로 세지 않는다)
+    if (e.pending && !e.evBlank) add("J2", "EV 공란 판정", label, { status: NA, app: evA, note: `${e.pending} — 앱 EV ${evA == null ? "빈칸" : evA}` });
+    else if (e.evBlank) cmp("J2", "EV 공란 판정", label, evA, { blank: e.evBlank });
     else if (mcapBlank) add("J2", "EV 공란 판정", label, evA == null ? { status: PASS, note: `기대 빈칸 — 시가총액 ${mcapBlank}` } : { status: FAIL, app: evA, note: `시가총액 기대 빈칸(${mcapBlank})인데 EV 값` });
     else if (e.evWhy) add("J2", "EV 공란 판정", label, { status: NA, note: e.evWhy });
-    else add("J2", "EV 공란 판정", label, evA != null ? { status: PASS, app: evA, note: "공란 사유 없음 — 값 있음" } : { status: FAIL, note: "EV 공란 사유가 원자료에 없는데 앱 EV 빈칸" });
+    else add("J2", "EV 공란 판정", label, evA != null ? { status: PASS, app: evA, note: `공란 사유 없음 — 값 있음${kindNote ? ` · ${kindNote}` : ""}` } : { status: FAIL, note: `EV 공란 사유가 원자료에 없는데 앱 EV 빈칸${kindNote ? ` · ${kindNote}` : ""}` });
+    // EV 값 = 앱 시가총액 + 총차입금(원자료 — 은행형 예금 제외·금융 자회사 보유는 제조 부문) + 비지배지분(원자료) − 현금성자산(앱 행 — 현금 정의는 위 현금 검사 몫)
+    if (!e.evBlank && !e.evWhy && !e.pending && !mcapBlank && evA != null && e.debt.v != null && e.nci?.v != null) {
+      const mc = val("mktcap", i), ca = val("cash", i);
+      if (mc == null || ca == null) add("J2", "EV = 시가총액 + 총차입금(원자료) + 비지배(원자료) − 현금", label, { status: NA, note: `앱 ${mc == null ? "시가총액" : "현금성자산"} 빈칸` });
+      else cmp("J2", "EV = 시가총액 + 총차입금(원자료) + 비지배(원자료) − 현금", label, evA, { v: mc + e.debt.v + e.nci.v + ca, how: `시가총액 ${mc} + 총차입금 ${e.debt.v}(${e.debt.how}) + 비지배 ${e.nci.v} − 현금 ${-ca}${kindNote ? ` · ${kindNote}` : ""}` }, null, 1e-12);
+    }
+    return e;
   };
 
   // ── 사업연도 열 ──
@@ -723,7 +733,7 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
       if (e.v != null) kv.opAlt = e.v;
       kv.opAltExp = e;
     }
-    if (kv.colOf.bs) j2(label, i, kv.colOf.bs, per.end, mcapExp?.blank ?? null);
+    if (kv.colOf.bs) kv.j2 = j2(label, i, kv.colOf.bs, per.end, mcapExp?.blank ?? null, src.docs);
     // C·D — 배수·마진·EV 항등식(원자료 분모)
     const rev = kv["매출"]?.v ?? null, ni = kv["순이익(지배)"]?.v ?? null, op = kv["영업이익"]?.v ?? kv.opAlt ?? null;
     const eqP = eqParentOf(kv.colOf.bs, per.end);
@@ -748,7 +758,7 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
     if (row("ev_ebitda")) {
       const eb = val("ebitda", i);
       // EV 공란 자체의 옳고 그름은 J2(EV 구성요소·금융사업 연결 D2) 몫 — 여기서는 기대 빈칸으로 세지 않는다
-      if (ev == null) add("D", "EV/EBITDA = EV ÷ EBITDA", label, val("ev_ebitda", i) == null ? { status: NA, note: "EV 공란 — EV 공란 판정은 J2(미구현·D2 결정 대기)" } : { status: FAIL, app: val("ev_ebitda", i), note: "EV 공란인데 EV/EBITDA 값" });
+      if (ev == null) add("D", "EV/EBITDA = EV ÷ EBITDA", label, val("ev_ebitda", i) == null ? { status: NA, note: "EV 공란 — EV 공란 판정은 J2 몫" } : { status: FAIL, app: val("ev_ebitda", i), note: "EV 공란인데 EV/EBITDA 값" });
       else cmp("D", "EV/EBITDA = EV ÷ EBITDA", label, val("ev_ebitda", i), eb == null || eb <= 0 ? { blank: "EBITDA 없음·≤ 0" } : { v: ev / eb }, null, 1e-9);
     }
     // C — 재무분석 = 하이라이트(같은 사업연도)
@@ -774,7 +784,7 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
   const ltmP = (isv?.periods ?? []).find((p) => p.label === "현재/LTM");
   add("B", "LTM 기준일 = 원자료", "LTM", !ltmP ? { status: FAIL, note: "앱 손익 화면에 현재/LTM 열 없음" } : ltmP.endDate === ltmEnd ? { status: PASS, note: h ? `반기 ${h.row.docID} ${ltmEnd}` : `최근 사업연도 ${ltmEnd}(그 뒤 반기 보고서 없음)` } : { status: FAIL, note: `앱 ${ltmP.endDate} vs 원자료 ${ltmEnd}${h ? `(반기 ${h.row.docID})` : ""}` });
   const kvL = keyVals.get(lastFy.end);
-  if (h ?? kvL?.colOf?.bs) j2("LTM", ltmI, h ?? kvL.colOf.bs, ltmEnd, null);
+  if (h ?? kvL?.colOf?.bs) j2("LTM", ltmI, h ?? kvL.colOf.bs, ltmEnd, null, [...(h ? [h] : []), ...src.docs]);
   const hCur = h ? { start: h.dei.CurrentFiscalYearStartDateDEI, end: h.dei.CurrentPeriodEndDateDEI } : null;
   const hPri = h ? { start: lastFy.start, end: addYears(hCur.end, -1) } : null;
   /** LTM 기대값 — 줄 l(kind): 반기 없음 = 최근 사업연도 열, 반기 있음 = 사업연도 + 당기 반기 − 전년 반기(재무상태표·기말 = 반기말, 기초 = 전년 반기말, 주당 = 빈칸) */
@@ -856,4 +866,81 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
     const ebL = val("ebitda", ltmI), opL = val("opinc", ltmI);
     if (ebL != null && tt.daTtm != null && opL != null) cmp("D", "LTM EBITDA = 영업이익 + 감가상각(TTM)", "LTM", ebL, { v: opL + tt.daTtm });
   }
+}
+
+/** 그 종목 최신 有報(訂正 포함) 목록 행 — X층 외부 캐시 열쇠(새 有報가 나와야 외부 원문을 다시 받는다). 서류 판독 없이 날짜별 목록만 */
+export async function jpLatestAnnualRow(sym) {
+  const code = await resolveTicker(sym);
+  if (!code) return null;
+  const ix = await docIndex();
+  return ix.docs
+    .filter((r) => r.edinetCode === code.edinetCode && (r.docTypeCode === "120" || r.docTypeCode === "130") && (r.withdrawalStatus ?? "0") === "0" && r.xbrlFlag === "1")
+    .sort((a, b) => b.submitDateTime.localeCompare(a.submitDateTime))[0] ?? null;
+}
+
+/**
+ * X층(외부 대조) 칸 목록 — 사업연도 열마다 앱 값(앱 API 응답)과 원자료 식(원인 확인용). ext.mjs judgeCell 이 소스별로 판정한다.
+ * → [{ name, label(표시), ym(YYYY-MM), app, fields: { 소스: 칸 }, causes: [{ test(ext) → 설명|null, appWrong }] }]
+ */
+export async function jpExtCells(sym, app, ctx) {
+  if (!ctx) return [];
+  const { src, fys, keyVals } = ctx;
+  const hl = app.hl?.highlights;
+  const row = (k) => hl?.rows?.find((r) => r.key === k) ?? hl?.valuationRows?.find((r) => r.key === k) ?? null;
+  const lines = { is: appLines(app.is), bs: appLines(app.bs), cf: appLines(app.cf) };
+  const appFy = (app.is?.periods ?? []).filter((p) => /^FY\d{4}$/.test(p.label));
+  let splits = null;
+  // 분할 이력 실패는 J1·A4 층이 조회 실패(hardErrors)로 이미 남긴다 — 여기서는 EPS 원인 식만 빠진다(로그)
+  try { splits = (await yahooDaily(sym)).splits; } catch (e) { console.warn(`${sym} X층 EPS 원인 식 — Yahoo 분할 이력 실패: ${String(e?.message ?? e).slice(0, 80)}`); splits = null; }
+  const cells = [];
+  const close = (a, b) => a != null && b != null && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+  for (const per of fys) {
+    const kv = keyVals.get(per.end);
+    const i = (hl?.columns ?? []).findIndex((c) => c.kind === "fy" && c.date === per.end);
+    const fyLabel = appFy.find((p) => p.endDate === per.end)?.label;
+    if (!kv || !fyLabel) continue;
+    const label = per.end.slice(0, 7);
+    const ym = per.end.slice(0, 7);
+    const hv = (k) => (i >= 0 && row(k) ? (row(k).values?.[i] ?? null) : null);
+    const line = (kind, concept) => { const l = concept ? lines[kind].find((x) => x.kind === kind && x.concept === concept) : null; return l ? (l.values[fyLabel] ?? null) : undefined; };
+    const push = (name, appV, fields, causes = []) => { if (appV !== undefined) cells.push({ name, label, ym, app: appV, fields, causes }); };
+    push("매출", hv("revenue"), { kabutan: "revenue", minkabu: "revenue", yahoojp: "revenue" });
+    push("영업이익", hv("opinc"), { kabutan: "op", minkabu: "op", yahoojp: "op" });
+    // 경상이익(J-GAAP) — IFRS·US 기준 회사는 세 사이트 모두 이 칸에 세전이익을 싣는다(株探 표 주석)
+    if (kv["경상이익"]?.concept) push("경상이익", line("is", kv["경상이익"].concept), { kabutan: "ordinary", minkabu: "ordinary", yahoojp: "ordinary" });
+    else if (kv["세전이익"]?.concept) push("세전이익(외부 経常益 칸)", line("is", kv["세전이익"].concept), { kabutan: "ordinary", minkabu: "ordinary", yahoojp: "ordinary" });
+    push("순이익(지배)", hv("ni"), { kabutan: "ni", minkabu: "ni", yahoojp: "ni" });
+    // EPS — 앱 = 경영지표 희석(없으면 기본). 외부가 기본 EPS 를 싣는 경우는 원자료 기본 EPS(÷ 그 서류 뒤 분할)와 정확히 같을 때만 원인 확인
+    const isDoc = kv.colOf.is;
+    const basic = (() => {
+      if (!isDoc || !splits) return null;
+      for (const t of ["BasicEarningsLossPerShareIFRSSummaryOfBusinessResults", "BasicEarningsLossPerShareSummaryOfBusinessResults"]) {
+        const f = plainValue(isDoc, `jpcrp_cor:${t}`, { start: per.start, end: per.end }) ?? (isDoc.consUsed ? undefined : ncValue(isDoc, `jpcrp_cor:${t}`, { start: per.start, end: per.end }));
+        if (f && !f.conflict && f.v != null) {
+          const at = isDoc.basisAt ?? isDoc.row.submitDateTime.slice(0, 10);
+          const fac = splits.filter((x) => x.date > at).reduce((a, x) => a * x.ratio, 1);
+          return { v: f.v / fac, how: `${isDoc.row.docID} 경영지표 기본 EPS ${f.v}${fac !== 1 ? ` ÷ 분할 ${fac}` : ""}` };
+        }
+      }
+      return null;
+    })();
+    push("EPS", hv("eps"), { kabutan: "eps", minkabu: "eps", yahoojp: "eps" }, basic ? [{ test: (x) => (close(x, basic.v) && !close(hv("eps"), basic.v) ? `외부 = 원자료 기본 EPS(${basic.how}) · 앱 = 희석 EPS` : null) }] : []);
+    push("DPS", hv("dps"), { kabutan: "dps" });
+    push("자산총계", line("bs", kv["자산총계"]?.concept), { kabutan: "assets", minkabu: "assets", yahoojp: "assets" });
+    // 자기자본 — IFRS = 親会社の所有者に帰属する持分, J-GAAP = 株主資本 + その他の包括利益累計額(株探·Yahoo!ファイナンス 「自己資本」). 앱 본표 줄 값으로 만든다
+    const eqApp = src.std === "Japan GAAP"
+      ? (() => { const a = line("bs", "jppfs_cor:ShareholdersEquity"), b = line("bs", "jppfs_cor:ValuationAndTranslationAdjustments"); return a == null ? undefined : a + (b ?? 0); })()
+      : line("bs", "jpigp_cor:EquityAttributableToOwnersOfParentIFRS");
+    push(src.std === "Japan GAAP" ? "자기자본(株主資本 + その他の包括利益累計額, 앱 본표 줄 합)" : "자기자본(지배주주 자본)", eqApp, { kabutan: "equity", yahoojp: "equity" });
+    push("순자산(자본총계)", line("bs", kv["자본총계"]?.concept), { minkabu: "netAssets" });
+    push("영업활동 CF", hv("ocf"), { kabutan: "ocf", minkabu: "ocf", yahoojp: "ocf" });
+    push("투자활동 CF", line("cf", kv["투자활동 CF"]?.concept), { kabutan: "icf", minkabu: "icf", yahoojp: "icf" });
+    push("재무활동 CF", line("cf", kv["재무활동 CF"]?.concept), { kabutan: "fin", minkabu: "fin", yahoojp: "fin" });
+    // 현금 — 株探 現金等残高·みんかぶ 現金期末残高 = 현금흐름표 기말 잔액(08 실측, Q3 재결정). 앱 하이라이트 현금성자산(EV 현금)이 이 정의와 다르면 외부가 원자료와 같을 때 앱 결함
+    const rawCash = kv.j2?.cash?.v ?? null;
+    const hc = hv("cash");
+    push("현금성자산(하이라이트·EV, Q3 정의 = CF 기말 잔액)", hc == null ? null : -hc, { kabutan: "cashEnd", minkabu: "cashEnd" },
+      rawCash != null ? [{ appWrong: true, test: (x) => (x === rawCash && hc != null && -hc !== rawCash ? `외부 = 원자료 현금흐름표 기말 잔액 ${rawCash}(${kv.j2.cash.how}) — 앱 ${-hc} 은 오너 결정 정의(Q3 2026-10-14)와 다름` : null) }] : []);
+  }
+  return cells;
 }

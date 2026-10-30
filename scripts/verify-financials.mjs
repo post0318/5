@@ -78,7 +78,8 @@ import { execFileSync } from "node:child_process";
 import { loadBbg } from "./reference/bbg.mjs";
 import { growthMatch } from "./verify/same-growth.mjs";
 import { configureEdinet, edinetStats } from "./verify-jp/edinet.mjs";
-import { configureJpLayers, jpAnnualLayers, jpHalfLayers, jpValueLayers, releaseJpSymbol } from "./verify-jp/layers.mjs";
+import { configureJpLayers, jpAnnualLayers, jpHalfLayers, jpValueLayers, releaseJpSymbol, jpLatestAnnualRow, jpExtCells } from "./verify-jp/layers.mjs";
+import { configureJpExt, jpExtSources, judgeCell, extStats as jpExtStats } from "./verify-jp/ext.mjs";
 import { makeDiskCache } from "./verify-kr/cache.mjs";
 import { configureDart, dartFnltt, dartStats, dartQuota, dartListRefresh, xbrlMaint } from "./verify-kr/dart.mjs";
 import { configureKrx, krxStats } from "./verify-kr/krx.mjs";
@@ -11375,6 +11376,7 @@ if (MARKET === "jp") {
   if (!String(env.EDINET_API_KEY ?? "").trim()) die("EDINET_API_KEY 없음 — 일본 검증 중단");
   configureEdinet({ key: env.EDINET_API_KEY, root: pathResolve(env.JP_VERIFY_CACHE_DIR || "reports/.edinet-cache") });
   configureJpLayers({ from: args["jp-from"] ? String(args["jp-from"]) : null });
+  configureJpExt({ root: env.JP_VERIFY_EXT_CACHE_DIR ? pathResolve(env.JP_VERIFY_EXT_CACHE_DIR) : null, offline: !!args["ext-offline"] });
 }
 async function verifyJp(sym) {
   const u = `/api/markets/jp/${encodeURIComponent(sym)}`;
@@ -11386,12 +11388,14 @@ async function verifyJp(sym) {
     try { app[k] = await getJson(p); } catch (e) { app[k] = null; add("응답", `API 응답 ${k}`, "-", { status: FAIL, note: String(e).slice(0, 120) }); }
   }
   if (!app.is) return { sym, checks, review: [], hardErrors };
-  // 시험 스위치(심은 오류 재현 전용) JP_VERIFY_TEST_APP='[{"sym":"7203","view":"is","id":"is:…#0","label":"FY2025","add":1}|{…,"drop":true}|{"sym","hl":"eps","date":"2025-03-31","mul":1.01}]'
+  // 시험 스위치(심은 오류 재현 전용) JP_VERIFY_TEST_APP='[{"sym":"7203","view":"is","id":"is:…#0","label":"FY2025","add":1}|{…,"drop":true}|{"sym","hl":"eps","date":"2025-03-31","mul":1.01}|{"sym","hl":"debt","date":…,"set":값}]'
   for (const t of process.env.JP_VERIFY_TEST_APP ? JSON.parse(process.env.JP_VERIFY_TEST_APP) : []) {
     if (t.sym !== sym) continue;
     if (t.hl) {
       const h = app.hl?.highlights; const ci = h?.columns?.findIndex((c) => c.date === t.date && c.kind === "fy"); const r = h?.rows?.find((x) => x.key === t.hl);
-      if (r && ci >= 0 && r.values[ci] != null) r.values[ci] = t.mul != null ? r.values[ci] * t.mul : r.values[ci] + (t.add ?? 0);
+      if (r && ci >= 0 && t.set !== undefined) r.values[ci] = t.set;
+      else if (r && ci >= 0 && r.values[ci] != null) r.values[ci] = t.mul != null ? r.values[ci] * t.mul : r.values[ci] + (t.add ?? 0);
+      console.warn(`⚠ 시험 스위치 적용 ${JSON.stringify(t)}${r && ci >= 0 ? "" : " — 대상 칸 없음"}`);
       continue;
     }
     for (const s of app[t.view]?.sections ?? []) {
@@ -11402,12 +11406,27 @@ async function verifyJp(sym) {
   }
   const ctx = await jpAnnualLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
   if (app.isq) await jpHalfLayers(sym, app, { add, PASS, FAIL, NA, hardErrors });
+  const review = [];
   try {
     await jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardErrors });
+    // X층 외부 대조(株探·みんかぶ·Yahoo!ファイナンス — 오너 결정 D10 (가)·D1·D2, docs/verify-common/11 일본) — --no-external 이면 건너뜀
+    if (EXTERNAL && ctx) {
+      const latest = await jpLatestAnnualRow(sym);
+      if (!latest) hardErrors.push("X층 외부 대조 — 최신 有報 목록 행 없음(캐시 열쇠 못 정함)");
+      else {
+        const srcs = await jpExtSources(sym, latest.docID, latest.submitDateTime.slice(0, 10));
+        for (const [s0, v] of Object.entries(srcs)) if (v.error) { hardErrors.push(`X층 외부 소스 ${v.error}`); review.push({ item: "외부 소스 조회 실패", note: v.error }); }
+        for (const c of await jpExtCells(sym, app, ctx)) {
+          const { check, review: rv } = judgeCell({ ...c, srcs, PASS, FAIL, NA, COMMON });
+          add("X", `외부 대조 ${c.name}`, c.label, check);
+          review.push(rv);
+        }
+      }
+    }
   } finally {
     releaseJpSymbol(); // 종목 단위로 판독 결과 해제(메모리)
   }
-  return { sym, checks, review: [], hardErrors };
+  return { sym, checks, review, hardErrors };
 }
 
 // ── 실행 ─────────────────────────────────────────────────────────────
@@ -11647,9 +11666,16 @@ const infraBad = errors.length || badSkips.length || empty.length || missing.len
 if (MARKET === "jp") {
   const by = {};
   for (const c of all) { const k = `${c.layer} ${c.name.replace(/ — (본표|하이라이트)$/, "")}`; const b = (by[k] ??= { pass: 0, fail: 0, unverifiable: 0, common: 0 }); b[c.status] = (b[c.status] ?? 0) + 1; }
-  console.log("\n── 일본 층별 집계 (A = EDINET 원본 XBRL 연간, A반기 = 半期·옛 四半期 第2四半期, B = 결산기, J1 시가총액, J4 LTM, J5 배당, J-OP 영업이익 근사, C 화면 간, D 항등식) ──");
+  console.log("\n── 일본 층별 집계 (A = EDINET 원본 XBRL 연간, A반기 = 半期·옛 四半期 第2四半期, B = 결산기, J1 시가총액, J2 EV 구성요소, J4 LTM, J5 배당, J-OP 영업이익 근사, C 화면 간, D 항등식, X 외부 대조 = 株探·みんかぶ·Yahoo!ファイナンス) ──");
   for (const [k, b] of Object.entries(by).sort()) console.log(`  ${k.padEnd(40)} 통과 ${b.pass} · 실패 ${b.fail} · 검증불가 ${b.unverifiable} · 공통모드 ${b.common}`);
+  // X 외부 대조 합계 — 칸 상태(통과 = 독립 외부 1곳 이상 일치, D2 일본 1곳)와 소스별 분류(일치·원인확인·불일치·외부단독이탈·정밀도·없음·공통모드)
+  const xs = all.filter((c) => c.layer === "X");
+  const xcls = {};
+  for (const r of results) for (const x of r.review ?? []) for (const [src, cl] of Object.entries(x.jpClass ?? {})) { const b = (xcls[src] ??= {}); b[cl] = (b[cl] ?? 0) + 1; }
+  console.log(`  ${"X 외부 대조(합계)".padEnd(40)} 통과 ${xs.filter((c) => c.status === PASS).length} · 실패 ${xs.filter((c) => c.status === FAIL).length} · 검증불가 ${xs.filter((c) => c.status === NA).length} · 공통모드 ${xs.filter((c) => c.status === COMMON).length}`);
+  for (const [src, b] of Object.entries(xcls)) console.log(`      └ ${src}: ${["일치", "원인확인", "불일치", "외부단독이탈", "정밀도", "없음", "공통모드"].map((k) => `${k === "정밀도" ? "정밀도 부족" : k === "없음" ? "외부 값 없음" : k === "원인확인" ? "식으로 원인 확인" : k === "불일치" ? "원인 미확인 불일치" : k} ${b[k] ?? 0}`).join(" · ")}`);
   console.log(`EDINET 요청 ${edinetStats.requests} · 디스크 적중 ${edinetStats.hit} · 받은 바이트 ${(edinetStats.bytes / 1024 ** 2).toFixed(1)}MB`);
+  console.log(`X층 외부 요청 ${jpExtStats.requests}(${Object.entries(jpExtStats.byHost).map(([h, n]) => `${h} ${n}`).join(" · ") || "없음"}) · 캐시 적중 ${jpExtStats.cacheHit} · 실패 저장 ${jpExtStats.failedStored}${EXTERNAL ? "" : " · 외부 대조 끔(--no-external)"}`);
 }
 // 한국 — 층별 집계와 재실행 필요(감사 2차 ③·④): 게시 전(KRX 자료가 아직 안 나온 거래일)이라 확인 못 한 검사는 검증불가로 남고, 그런 검사가 하나라도
 // 있으면 실패가 없어도 "깨끗한 통과"가 아니다 — 재실행 필요(종료코드 3). 공통모드(적재본과만 맞은 칸 등)는 통과로 세지 않는다

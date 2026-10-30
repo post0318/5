@@ -100,6 +100,8 @@ export function parseDoc(files) {
   const texts = new Map();
   /** 주석 문단 [{ name, t }] */
   const tbs = [];
+  /** 금융 부문 구분 재무상태표 문단 [{ name, t }] (J2) */
+  const segTbs = [];
   const dei = {};
   const re = /<([\w.-]+):([\w.-]+)\b([^>]*?\bcontextRef="[^"]+"[^>]*?)(\/>|>([\s\S]*?)<\/\1:\2>)/g;
   for (const m of inst.matchAll(re)) {
@@ -108,6 +110,12 @@ export function parseDoc(files) {
     const a = m[3];
     const raw = m[5];
     if (p === "jpdei_cor") { if (raw != null && !/</.test(raw)) dei[m[2]] = raw.trim(); continue; }
+    // 금융 부문을 가른 재무상태표(J2 금융 자회사 보유 — 제조 부문 차입금): 経営者による分析 등 본문 문단의 「自動車等セグメントと金融セグメントを区分した連結財政状態計算書」(トヨタ)·
+    // 「金融分野…要約財政状態計算書」(ソニー 옛 연도). 차원 없는 문맥만, 표가 든 문단만 남긴다(메모리)
+    if (raw != null && /TextBlock$/.test(m[2]) && /区分した(要約)?(中間)?連結財政状態計算書|要約(中間)?財政状態計算書/.test(raw) && ctx.get(attr(a, "contextRef"))?.dims.length === 0) {
+      const t = decodeXml(decodeXml(raw).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ")).normalize("NFKC").replace(/\s+/g, " ").trim();
+      if (/金融/.test(t)) segTbs.push({ name: m[2], t });
+    }
     if (raw != null && (raw.includes("<") || /^Notes\w*TextBlock$/.test(m[2]))) {
       // 연결 주석 문단(J2 재무활동 부채 변동표 판독) — 차원 없는 문맥만, 태그 걷고 NFKC(전각 숫자·괄호 → 반각)
       // (메모리 — 리스부채·재무활동 문단만 남긴다)
@@ -160,7 +168,7 @@ export function parseDoc(files) {
   }
   const calc = new Map();
   for (const [uri, arcs] of parseLinkbase(cal, "calculation")) calc.set(uri.split("/").pop(), arcs.filter((a) => a.use !== "prohibited").map((a) => [a.from, a.to, a.w]));
-  return { dei, ctx, facts, texts, tbs, roles, calc };
+  return { dei, ctx, facts, texts, tbs, segTbs, roles, calc };
 }
 
 /** 차원 없는 문맥의 값 — 기간(start~end) 또는 시점(instant). 같은 기간 문맥이 여럿이고 값이 다르면 { conflict } */
