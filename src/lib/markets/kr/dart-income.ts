@@ -101,13 +101,27 @@ export function buildKrIncome(facts: KrFacts, daDoc: KrDaInput | null = null): F
     const p = facts.periods.find((x) => x.label === l);
     return facts.fsDiv === "OFS" || (p != null && (facts.ofsYears ?? []).includes(p.year));
   };
+  // DART 가 값 없는 칸을 0 으로 채운 귀속 줄(2026-10-18 — 052690 2024 사업보고서 전전기 열: 당기순이익 17,953,974,302, 지배기업 귀속 0, 비지배 0. 그 해 자기
+  // 보고서(2022)에는 귀속 줄 자체가 없다) — 지배 + 비지배 ≠ 당기순이익이고 비지배가 0 이거나 없으면 귀속 줄이 없는 것으로 보고 아래 규칙(비지배지분 없음
+  // 증명 → 지배 = 당기순이익)을 따른다. 비지배가 0 이 아니면(진짜 귀속 값이 있는데 합이 안 맞음) 그대로 둔다. 지배 귀속도 0 일 때만(감사 2026-10-18 —
+  // 지배 귀속이 0 이 아닌 값이면 "값 없는 칸을 0 으로 채운 것"이 아니라 공시 값이 맞지 않는 것이라 지우지 않는다)
+  const zeroFilled = new Set<string>();
+  for (const l of labels)
+    if (niParent[l] === 0 && netIncome[l] != null && (niNci[l] == null || niNci[l] === 0) && niParent[l]! + (niNci[l] ?? 0) !== netIncome[l]) {
+      niParent[l] = null;
+      zeroFilled.add(l);
+    }
   for (const l of labels)
     if (ofsLabel(l) && netIncome[l] != null) {
       niParent[l] = null;
       niParentNotes[l] = "별도 재무제표(연결 재무제표 없음) — 지배·비지배 구분 없음, 빈칸";
-    } else if (niParent[l] == null && netIncome[l] != null && niNci[l] == null && !bsNci[l]) {
+    } else if (niParent[l] == null && netIncome[l] != null && (niNci[l] == null || (zeroFilled.has(l) && niNci[l] === 0)) && !bsNci[l]) {
       niParent[l] = netIncome[l];
-      niParentNotes[l] = "비지배지분 없음(손익·재무상태표에 비지배지분 줄 없음) — 당기순이익 = 지배주주 귀속";
+      niParentNotes[l] = zeroFilled.has(l)
+        ? "공시 귀속 줄이 지배 + 비지배 ≠ 당기순이익(값 없는 칸이 0, 비지배 0) — 비지배지분 없음(재무상태표 비지배지분 없음·0) → 당기순이익 = 지배주주 귀속"
+        : "비지배지분 없음(손익·재무상태표에 비지배지분 줄 없음) — 당기순이익 = 지배주주 귀속";
+    } else if (zeroFilled.has(l)) {
+      niParentNotes[l] = "공시 귀속 줄이 지배 + 비지배 ≠ 당기순이익(값 없는 칸이 0) — 재무상태표에 비지배지분이 있어 지배주주 귀속을 정할 수 없음, 빈칸";
     }
   const otherToNi = blank();
   for (const l of labels)

@@ -360,6 +360,7 @@ function convertNs(ns: Ns, cur: string, fx: Rates, pending: Set<string>): Ns {
       const conv: FactUnitEntry[] = [];
       // 분기 합은 LTM 보조값 — 어떤 이유로든 실패하면 없는 것으로(연도·기간 환산 자체는 막지 않는다)
       let qsum: (start: string, end: string) => number | null = () => null;
+      // silent-ok: 계산 예외면 분기 합(LTM 보조값) 없음 → 화면 LTM 공란, 검증기 LTM 기대값(SEC 분기 직접 계산)과 대조에서 실패로 드러난다
       try { qsum = quarterSummer(arr, fx); } catch { /* 분기 분해 불가 */ }
       for (const e of arr) {
         const r = e.start ? fx.avg(e.start, e.end) : fx.at(e.end);

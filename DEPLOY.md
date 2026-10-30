@@ -70,6 +70,7 @@ GitHub 계정·저장소·Actions 가 뚫려도 운영 비밀값과 1호기 관�
 | `fin-analyst-forecasts` | 타이머 | 매일 10:20 | StockAnalysis 애널리스트 투자의견 |
 | `weekly-report` | 타이머 | 월 06:00 | 주간 리포트 초안 |
 | `news-stock-news` | 타이머 | 10분마다 | 유니버스 종목뉴스(신선도 지난 종목만) |
+| `fin-kr-da` | 타이머 | 매일 05:50 + 적재 규칙 판본이 바뀐 배포 직후 | 한국 감가상각 적재(운영 kr_da, 증분 — `ops/oracle/run-kr-da.sh`). master 병합 뒤 `install-schedules.sh` 로 설치 |
 | `fin-precompute` | 타이머 | 5분마다(2·7·12…분) | 새 유니버스 종목 미리 계산 — 대기열 `precompute_queue`(전 계정 처음 담긴 종목만) → 미국 재무 조립·TTM(회차당 10), 한국 감가상각 적재(`fin-kr-da` 설치 뒤, 회차당 5·24시간 30). 정기 재무 배치가 돌면 쉰다(`run-precompute.sh`) |
 
 - 확인: `ssh -i ~/.ssh/oracle_macro ubuntu@161.33.9.115 'systemctl list-timers --no-pager'`, 로그 `sudo journalctl -u <이름>`.
@@ -90,7 +91,7 @@ GitHub 계정·저장소·Actions 가 뚫려도 운영 비밀값과 1호기 관�
 
 | 실행 위치 | 스크립트·타이머 | 점검 |
 |---|---|---|
-| 1호기 | `healthcheck.sh` · `macro-health.timer`(root, `/opt/macro/ops/`, 설정 `alert.env`) | 자체(컨테이너·앱·재시작·HTTPS·인증서·디스크·메모리·재부팅·예약 작업·텔레그램 수신기·한국 재무) + **4번 브라질 주요일정** 경제지표 0건(`br-agenda`, 연속 2회, 2026-10-16 오너 승인) + **2호기**: SSH 포트(`peer-ssh`), 하트비트 30분 초과·읽기 실패(`peer-heartbeat`) |
+| 1호기 | `healthcheck.sh` · `macro-health.timer`(root, `/opt/macro/ops/`, 설정 `alert.env`) | 자체(컨테이너·앱·재시작·HTTPS·인증서·디스크·메모리·재부팅·예약 작업·텔레그램 수신기·한국 재무) + **4번 브라질 주요일정** 경제지표 0건(`br-agenda`)·발표 3일 지난 지표 발표치 공란(`br-agenda-actual`) — 각 연속 2회, 2026-10-16 오너 승인 + **4번 뉴스**(`br-news-*` — 원본에 새 글이 있는데 4번에 없을 때만, 좋은아침뉴스·구글 뉴스·KOBRAS, 1시간마다·연속 2회, `br-news-check.py`, 2026-10-17) + **2호기**: SSH 포트(`peer-ssh`), 하트비트 30분 초과·읽기 실패(`peer-heartbeat`) |
 | 2호기 | `healthcheck-peer.sh` · `macro-peer-health.timer`(root, `/opt/macro-health/`, 설정 `alert.env` — `OPS_TG_*`·`OPS_GH_*` 만) | **1호기**: 운영 `/api/auth/me` 200(`op-https`), 한국 재무 `/api/markets/kr/005930/financials?period=annual` 200(`op-dart-kr`), 인증서 14일(`op-cert-expiry`), SSH 포트(`op-ssh`) + 자체: `verify-dev`·`ipo@prod`·`ipo@dev`(`svc-*`), 검증 DB 복사(`db-sync` — `macro-db-check`, 1회 실패로 알림), 디스크 80%·메모리 10%·재부팅 필요, 끝나면 하트비트 기록 |
 
 - **하트비트**: 2호기 점검이 끝까지 돌면 `/var/lib/macro-health/heartbeat`(644)에 `초 ISO시각 열린알림목록` 한 줄을 쓴다. 1호기가 전용 키
