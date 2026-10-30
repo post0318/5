@@ -6,7 +6,7 @@
 
 import { fetchJson } from "../http";
 import { withFetchScope } from "../fetch-health";
-import { blankYahooLtm, ltmBaseEnd, ltmEvBasis, withYahooLtm, yahooLtm, yahooLtmPeriods, type YahooLtmResult } from "./edgar-yahoo-quarters";
+import { blankYahooLtm, ltmBaseEnd, ltmEvBasis, trimIncompleteYahooQuarters, withYahooLtm, yahooLtm, yahooLtmPeriods, type YahooLtmResult } from "./edgar-yahoo-quarters";
 
 /** 달 말 기준 n 개월 뒤 달 말 */
 const monthEndAfter = (d: string, n: number) => {
@@ -301,13 +301,15 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
       const ticker = sub?.tickers?.[0] ?? null;
       if (latestPeriodic && /^20-F/.test(latestPeriodic) && ticker) {
         const cur = withShares.reportingCurrency ?? "USD";
-        const [yq, fx] = await Promise.all([
+        const [yq0, fx] = await Promise.all([
           // silent-ok: null 이면 바로 아래 분기에서 경고("… 조회 실패")와 LTM 열 공란으로 처리
           fetchYahooFundamentals(ticker).catch(() => null),
           // silent-ok: 위와 같음(H.10 조회 실패 경고)
           fxToUsd(cur).catch(() => null),
         ]);
-        if (yq && fx) {
+        if (yq0 && fx) {
+          // 항목이 덜 실린 뒤쪽 야후 분기는 최근 12개월 끝으로 쓰지 않는다(오너 결정 2026-10-31 나안 — fin 조립도 같은 함수)
+          const yq = trimIncompleteYahooQuarters(yq0);
           // 회사 6-K 분기 재무제표(연결재무보고서 HTML) — 야후 정의가 SEC 와 다른 항목을 회사 줄로(edgar-6k.ts). 없거나 못 읽으면 null(야후 경로 그대로)
           let per = yahooLtmPeriods(withShares, yq);
           // 야후 최신 분기 다음 분기의 6-K 연결재무보고서가 이미 나왔으면 LTM 끝 = 그 분기(오너 결정 2026-10-17 「Asml 6k 반영」 — ASML 3분기 6-K 10-14,
@@ -367,6 +369,7 @@ async function getCompanyFacts(cik: string): Promise<CompanyFacts> {
             r.result.sixKPrevMiss = sixKFailed ? "1년 전 분기 6-K 조회 실패(fetchWarnings 참조)" : `1년 전 분기말 ${per.yearAgo} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음`;
           if (r.result.source === "yahoo" && aheadMiss) r.result.aheadMiss = aheadMiss;
           if (r.result.source === "yahoo" && !sixK) r.result.sixKMiss = sixKFailed ? "6-K 조회 실패(fetchWarnings 참조)" : per ? `분기말 ${per.last} 뒤 120일 안 6-K 에서 재무제표 표를 못 찾음` : "LTM 기간 판정 불가(6-K 조회 안 함)";
+          if (r.result.source === "yahoo" && yq.trimmed?.length) r.result.trimmedQuarters = yq.trimmed;
           withLtm = { ...r.facts, ltmQuarterSource: r.result };
         } else if (!fx) {
           // H.10 조회 실패 — 사업연도 값을 LTM 으로 대체하지 않고 LTM 열 공란(미고시와 같은 처리)

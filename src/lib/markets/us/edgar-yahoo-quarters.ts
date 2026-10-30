@@ -90,6 +90,8 @@ export type YahooLtmResult =
       sixKSource?: string;
       /** 6-K 흐름 표에서 뺀 줄의 사유(손익계산서·현금흐름표 — 열 판정·1년 전 같은 분기 6-K 전기 누적 대조, edgar-6k verifyPrior) — 검증·검수용 */
       sixKFlowWhy?: string[];
+      /** 최근 12개월 끝으로 쓰지 않은 뒤쪽 야후 분기(항목이 덜 실림 — trimIncompleteYahooQuarters) */
+      trimmedQuarters?: { end: string; missing: string[] }[];
       /** 6-K 경로를 시도했으나 보고서를 못 찾은 사유(조회 실패는 fetchWarnings) — 검증 전용 */
       sixKMiss?: string;
       /** 야후 다음 분기 6-K 가 있는데 LTM 끝으로 못 쓴 사유(손익계산서 열 판정·전기 누적 확인 실패 등) — 검증·검수용 */
@@ -263,6 +265,25 @@ export function blankYahooLtm(facts: CompanyFacts, reason: string): { facts: Com
 /**
  * LTM 기간(withYahooLtm 과 같은 판정) — 6-K 분기 보고서를 미리 찾을 때. E = SEC 최근 사업연도말, last = 최신 분기말, yearAgo = 1년 전 분기말
  */
+/**
+ * 최근 12개월 끝으로 쓸 수 없는 뒤쪽 야후 분기를 자른다(오너 결정 2026-10-31 나안 — TSM): 그 분기가 바로 앞 분기에 있던 최근 12개월 항목(손익·현금흐름·
+ * 재무상태표 칸, FLOWS·INSTANTS)을 하나라도 빠뜨리면(손익만 먼저 게시 등) 모든 항목이 갖춰진 마지막 분기에서 끊는다. 잘린 분기는 사유와 함께 돌려준다.
+ * edgar(화면)·fin(재무 조립)이 같은 함수를 써서 최근 12개월 끝이 같다
+ */
+const YAHOO_LTM_KEYS = [...new Set([...FLOWS, ...INSTANTS].flatMap((x) => (Array.isArray(x.y) ? x.y : [x.y])).flatMap((k) => k.split("|")))];
+export function trimIncompleteYahooQuarters<T extends { quarterly: YahooFundamentalsRow[] }>(y: T): T & { trimmed?: { end: string; missing: string[] }[] } {
+  const q = [...y.quarterly].sort((a, b) => a.end.localeCompare(b.end));
+  const trimmed: { end: string; missing: string[] }[] = [];
+  while (q.length >= 2) {
+    const cur = q[q.length - 1].values, prev = q[q.length - 2].values;
+    const missing = YAHOO_LTM_KEYS.filter((k) => prev[k] != null && cur[k] == null);
+    if (!missing.length) break;
+    trimmed.unshift({ end: q[q.length - 1].end, missing });
+    q.pop();
+  }
+  return trimmed.length ? { ...y, quarterly: q, trimmed } : y;
+}
+
 export function yahooLtmPeriods(facts: CompanyFacts, y: { quarterly: YahooFundamentalsRow[] }): { E: string; last: string; yearAgo: string } | null {
   const gaap = (facts.facts["us-gaap"] ?? {}) as Ns;
   const fy = FY_ANCHOR.flatMap((c) => (gaap[c]?.units?.USD ?? []).filter(isAnnualE)).sort((a, b) => b.end.localeCompare(a.end))[0];
@@ -957,6 +978,7 @@ export function yahooLtmLabel(r: YahooLtmResult): string {
     (r.ahead
       ? `LTM 열 = 최근 사업연도 + 회사 6-K 당기 누적 − 전년 동기 누적(원통화 ${r.currency}, 연준 H.10 기간 평균·기말 환율 환산, ~${r.ahead} — 야후 ${r.ahead} 분기 미게시), 6-K 에 없는 항목 공란`
       : `LTM 열 = Yahoo 분기(원통화 ${r.currency}, 연준 H.10 분기 평균·기말 환율 환산, ~${r.through}), 결측 항목 공란`) +
+    (r.trimmedQuarters?.length ? ` · 최근 12개월 끝 = ${r.through} — 야후 ${r.trimmedQuarters.map((t) => t.end).join("·")} 분기는 항목이 덜 실림(${r.trimmedQuarters[0].missing.length}개 칸 없음 — 재무상태표·현금흐름 등), 6-K 재무제표도 없어 모든 항목이 갖춰진 마지막 분기까지` : "") +
     // 화면 각주는 항목 이름만 — 판정 숫자(SEC vs Yahoo 금액)는 칸 주석·검증 결과에(오너 지적 2026-10-02 "주석에 이상한 내용을 잔뜩")
     (r.blanked.length ? ` · 공란 — ${blankGroups(r.blanked)}` : "") +
     (r.approx?.length ? ` · SEC 연말 + Yahoo 분기 변동분: ${r.approx.map((b) => b.label).join(", ")}` : "") +
