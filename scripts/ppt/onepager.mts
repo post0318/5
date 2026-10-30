@@ -37,8 +37,11 @@ export interface OnepagerSettings {
   logo?: { path: string };
   /** 점유율 — 항목별 출처는 내장 엑셀 시트에 보관, 슬라이드에는 하단 출처 한 줄로만. */
   share?: { title: string; source: string; asOf: string; url?: string; items: { name: string; value: number }[] };
-  /** 핵심 사업 칸 — 형식은 오너 샘플 대기(차트·표·짧은 글 자유). 출처(문서·기준 시점)가 반드시 붙는다. */
-  coreBusiness?: { title?: string; items?: { name: string; value?: number; unit?: string }[]; text?: string[]; source: { doc: string; asOf: string; url?: string } };
+  /**
+   * 핵심 사업 칸(오너 2026-10-31, 샘플 기준) = 회사별 제목(20pt) + 그림 한 개(칸 안 비율 유지) + 출처(왼쪽 출처 줄).
+   * 그림 구하는 방법은 결정 전 — 지금은 사람이 올린 그림 파일 경로만 받는다. 출처(문서·기준 시점) 없는 그림은 넣지 않는다.
+   */
+  coreBusiness?: { title: string; image?: { path: string }; source: { doc: string; asOf: string; url?: string } };
 }
 
 interface HlRow { key: string; label: string; values: (number | null)[]; cellNotes?: (string | null)[] }
@@ -63,8 +66,8 @@ const MARKET_INFO: Record<Market, { sourceName: string; units: Unit[]; finSource
 /** 재무표 값 칸 폭(템플릿 2.76cm − 칸 안쪽 여백) · 글자 12pt(오너 2026-10-31). 숫자·콤마 폭은 대체 글꼴 실측보다 넉넉히 0.6em 로 본다. */
 const FIN_CELL_CM = 2.76 - 0.1;
 const FIN_PT = 12;
-/** 하단 출처 한 줄 — 템플릿 #6(왼쪽 아래)을 오른쪽 출처 칸(#7) 끝까지 넓혀 한 줄로(오너 2026-10-31). 8pt, 한글 1em·그 밖 0.55em 근사. */
-const SOURCE_LINE_CM = 28.35 - 1.25 - 0.5;
+/** 하단 출처 줄(오너 2026-10-31 정정): 왼쪽 줄 #6 = 왼쪽 구역(핵심 사업·재무표), 오른쪽 줄 #7 = 오른쪽 구역(점유율·주가). 각 13.3cm·8pt 한 줄. */
+const SOURCE_LINE_CM = 13.3 - 0.5;
 const sourceWidthCm = (s: string) =>
   ([...s].reduce((a, c) => a + (/[가-힣ㄱ-ㅎ一-龥ぁ-ヿ]/.test(c) ? 1 : c === " " ? 0.3 : 0.55), 0) * 8) / 72 * 2.54;
 const numWidthCm = (s: string) => (s.length * 0.6 * FIN_PT) / 72 * 2.54;
@@ -222,7 +225,9 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
   }
 
   const share = settings.share ?? null;
-  const coreBusiness = settings.coreBusiness ?? null;
+  const coreBusiness = settings.coreBusiness
+    ? { ...settings.coreBusiness, image: settings.coreBusiness.image ? { path: home(settings.coreBusiness.image.path) } : undefined }
+    : null;
 
   // 투자포인트: 출처 없는 문장은 넣지 않는다(빈칸 + 사유)
   const points = (settings.points ?? []).filter((p) => {
@@ -231,22 +236,29 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
     return ok;
   });
 
-  // 하단 출처 한 줄(오너 2026-10-31): 쓰인 출처를 중복 없이 모은다. 매체마다 한 번(날짜가 여럿이면 가장 늦은 날짜).
-  const used: { name: string; date: string | null }[] = [{ name: mi.sourceName, date: null }];
-  if (consAsOf) used.push({ name: "Yahoo Finance", date: null });
-  if (price) used.push({ name: "Yahoo Finance", date: null });
-  if (share) used.push({ name: share.source, date: share.asOf });
-  if (coreBusiness) used.push({ name: coreBusiness.source.doc, date: coreBusiness.source.asOf });
-  for (const p of points) for (const s of p.sources) used.push({ name: s.publisher, date: s.publishedAt });
-  const byName = new Map<string, string | null>();
-  for (const u of used) {
-    const prev = byName.get(u.name);
-    byName.set(u.name, prev == null ? u.date : u.date != null && u.date > prev ? u.date : prev);
-  }
-  const withDates = `※ 출처 : ${[...byName].map(([n, d]) => (d ? `${n}(${d})` : n)).join(", ")}`;
-  const noDates = `※ 출처 : ${[...byName.keys()].join(", ")}`;
-  const sourceLine = sourceWidthCm(withDates) <= SOURCE_LINE_CM ? withDates : noDates;
-  if (sourceWidthCm(sourceLine) > SOURCE_LINE_CM) blanks.push({ slot: "하단 출처 줄", reason: `한 줄(8pt)을 넘음 — 매체를 묶어 줄여야 함: ${sourceLine}` });
+  // 하단 출처 줄 두 개 — 각 줄에 그 구역에서 쓰인 출처를 중복 없이(매체마다 한 번, 날짜가 여럿이면 가장 늦은 날짜).
+  // 투자포인트 출처는 샘플에 자리가 없어 일단 왼쪽 줄에 합친다(대안은 보고서 — 오너 결정 대기).
+  type Used = { name: string; date: string | null };
+  const line = (slot: string, used: Used[]) => {
+    const byName = new Map<string, string | null>();
+    for (const u of used) {
+      const prev = byName.get(u.name);
+      byName.set(u.name, prev == null ? u.date : u.date != null && u.date > prev ? u.date : prev);
+    }
+    const withDates = `※ 출처 : ${[...byName].map(([n, d]) => (d ? `${n}(${d})` : n)).join(", ")}`;
+    const noDates = `※ 출처 : ${[...byName.keys()].join(", ")}`;
+    const out = sourceWidthCm(withDates) <= SOURCE_LINE_CM ? withDates : noDates;
+    if (sourceWidthCm(out) > SOURCE_LINE_CM) blanks.push({ slot, reason: `한 줄(8pt)을 넘음 — 매체를 묶어 줄여야 함: ${out}` });
+    return out;
+  };
+  const leftUsed: Used[] = [{ name: mi.sourceName, date: null }, { name: "Yahoo Finance", date: null }];
+  if (coreBusiness?.image) leftUsed.push({ name: coreBusiness.source.doc, date: coreBusiness.source.asOf });
+  for (const p of points) for (const s of p.sources) leftUsed.push({ name: s.publisher, date: s.publishedAt });
+  const rightUsed: Used[] = [];
+  if (share) rightUsed.push({ name: share.source, date: share.asOf });
+  if (price) rightUsed.push({ name: "Yahoo Finance", date: null });
+  const sourceLeft = line("왼쪽 출처 줄", leftUsed);
+  const sourceRight = rightUsed.length ? line("오른쪽 출처 줄", rightUsed) : "";
   const sources = {
     fin: `${mi.finSource}(FY${fy} 실적), Yahoo Finance 컨센서스(예상, ${consAsOf} 기준)`,
     price: price ? `Yahoo Finance 일별 종가(주가·지수, ${priceAsOf})` : null,
@@ -265,14 +277,15 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
     productName: settings.productName ?? null,
     logo: settings.logo?.path ? { path: home(settings.logo.path) } : { reason: "회사별 설정에 로고 없음(로고 서비스 미선정)" },
     fin: { unitHeader: unit.header, unitChanged: unit !== mi.units[0], headers, labels: LABELS, rows },
-    sourceLine,
+    sourceLeft,
+    sourceRight,
     sources,
     price,
     priceReason,
     share,
     shareReason: share ? null : "회사별 설정에 점유율(사업·출처·기준 시점) 없음",
     coreBusiness,
-    coreBusinessReason: coreBusiness ? null : "회사별 설정에 핵심 사업 자료 없음(칸 형식은 오너 샘플 대기)",
+    coreBusinessReason: coreBusiness?.image ? null : "회사별 설정에 핵심 사업 그림 없음(그림 구하는 방법 결정 전 — 사람이 올림)",
     blanks,
     asOf: ymdKst(),
   };
@@ -304,7 +317,7 @@ async function main() {
   writeFileSync(`${stem}.spec.json`, JSON.stringify(spec, null, 2));
   run(py, [resolve(ROOT, "scripts/ppt/onepager_fill.py"), "--template", template, "--spec", `${stem}.spec.json`, "--out", `${stem}.pptx`, "--report", `${stem}.report.json`]);
   // 점검 실패(종료코드 2)여도 렌더링까지 해서 눈으로 볼 수 있게 하고, 마지막에 실패로 끝낸다.
-  const checkStatus = run(py, [resolve(ROOT, "scripts/ppt/onepager_check.py"), "--pptx", `${stem}.pptx`, "--spec", `${stem}.spec.json`, "--report", `${stem}.report.json`], [0, 2]);
+  const checkStatus = run(py, [resolve(ROOT, "scripts/ppt/onepager_check.py"), "--pptx", `${stem}.pptx`, "--spec", `${stem}.spec.json`, "--report", `${stem}.report.json`, "--template", template], [0, 2]);
   if (process.argv.includes("--render")) {
     run("soffice", ["--headless", "--convert-to", "pdf", "--outdir", outDir, `${stem}.pptx`]);
     run("pdftoppm", ["-r", "150", "-png", "-singlefile", `${stem}.pdf`, stem]);

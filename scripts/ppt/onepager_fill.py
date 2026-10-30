@@ -232,13 +232,13 @@ def axis_pair(P: list[float], I: list[float]):
 # ─────────────────────────── 칸별 채우기 ───────────────────────────
 
 
-SZ_SECTION = 1400  # 구역 제목 14pt 굵게(오너 2026-10-31)
-
-
-def section_title(sh, text: str):
-    set_shape_lines(sh, [text], SZ_SECTION)
-    for rpr in sh._element.iter(qn("a:rPr")):
-        rpr.set("b", "1")
+def section_title(sh, text: str, width_cm: float | None = None):
+    """구역 제목 — 템플릿 서식 그대로(20pt, 오너 2026-10-31 정정: 샘플과 같게).
+    템플릿 #12 는 폭 2.39cm·줄바꿈 없음이라 긴 제목이 양옆으로 번진다(LibreOffice 렌더링에서 왼쪽 밖으로 나감) — 폭을 구역 폭으로 넓혀 왼쪽에서 시작하게."""
+    set_shape_lines(sh, [text])
+    if width_cm is not None:
+        sh.width = Emu(round(width_cm * EMU_PER_CM))
+        sh._element.find(qn("p:txBody")).find(qn("a:bodyPr")).set("wrap", "square")
 
 
 def fill_title(slide, spec, rep):
@@ -269,17 +269,18 @@ def fill_overview(slide, spec, rep):
 
 
 def fill_sources(slide, spec, rep):
-    """하단 출처 한 줄(오너 2026-10-31) — 왼쪽 아래 출처 칸 #6 을 오른쪽 출처 칸 #7 끝(28.35cm)까지 넓혀 한 줄로 쓰고 #7 은 지운다.
-    두 칸은 템플릿에서 같은 높이(19.71·19.72cm)의 하단 줄이다. 항목별 출처는 spec.sources·차트 원데이터 시트에만 둔다."""
-    sh = shape_by_id(slide, ID_SRC_FIN)
-    right = shape_by_id(slide, ID_SRC_PRICE)
-    sh.width = Emu(right.left + right.width - sh.left)
-    remove_shape(slide, ID_SRC_PRICE)
-    text = spec["sourceLine"]
-    set_shape_lines(sh, [text], SZ_SOURCE)
-    cap = sh.width / EMU_PER_CM - 0.5
-    w = text_width_cm(text, 8, -60)
-    rep["checks"].append({"item": "하단 출처 한 줄 폭(8pt)", "ok": w <= cap, "detail": f"{w:.1f}cm / {cap:.1f}cm"})
+    """하단 출처 줄 두 개(오너 2026-10-31 정정, 샘플과 같게) — 왼쪽 #6 = 핵심 사업·재무표(+ 투자포인트, 결정 대기), 오른쪽 #7 = 점유율·주가.
+    항목별 출처는 spec.sources·차트 원데이터 시트에만."""
+    for sid, key, label in ((ID_SRC_FIN, "sourceLeft", "왼쪽 출처 줄"), (ID_SRC_PRICE, "sourceRight", "오른쪽 출처 줄")):
+        sh = shape_by_id(slide, sid)
+        text = spec.get(key) or ""
+        if not text:
+            remove_shape(slide, sid)
+            continue
+        set_shape_lines(sh, [text], SZ_SOURCE)
+        cap = sh.width / EMU_PER_CM - 0.5
+        w = text_width_cm(text, 8, -60)
+        rep["checks"].append({"item": f"{label} 한 줄 폭(8pt)", "ok": w <= cap, "detail": f"{w:.1f}cm / {cap:.1f}cm"})
 
 
 def fill_product(slide, spec, rep):
@@ -543,7 +544,7 @@ def fill_share(slide, spec, rep):
         return
     items = share["items"]
     section_title(title, share["title"])
-    w = text_width_cm(share["title"], 14, -110)
+    w = text_width_cm(share["title"], 20, -110)
     rep["checks"].append({"item": "점유율 소제목 폭", "ok": w <= CAP_SUBTITLE_SHARE_CM, "detail": f"{w:.1f}cm / {CAP_SUBTITLE_SHARE_CM:.1f}cm"})
     # 도넛 — 시트를 새로 쓰고(템플릿 엑셀 라벨 오류를 베끼지 않음, 오너 확인) 캐시·참조를 같은 값으로
     sh = shape_by_id(slide, ID_DONUT)
@@ -599,29 +600,42 @@ def fill_share(slide, spec, rep):
     rep["share"] = {"items": items, "legend": [f"{it['name']} {it['value'] * 100:.1f}%" for it in legend]}
 
 
-# ── 핵심 사업 칸 — 형식 미정(오너 2026-10-31: 차트·표·짧은 글 자유, 출처가 명확한 것이 최우선, 샘플 대기) ──
-# 자료 구조만 받는다: coreBusiness = { title, items: [{ name, value?, unit? }], text?: [..], source: { doc, asOf, url? } }.
-# 형식이 정해질 때까지 칸에는 그리지 않고, #21 외부 캡처 그림은 지운 뒤 자리 표시(8pt 회색)만 둔다.
+# ── 핵심 사업 칸(오너 2026-10-31, 샘플 기준): 회사별 제목(20pt) + 그림 한 개(칸 안 비율 유지·가운데) + 출처는 왼쪽 출처 줄 ──
+# 칸 = 템플릿 #21 자리(1.45, 8.26, 12.60×6.42cm — 아래 재무표 15.09 와 0.4cm 띄움). 그림 구하는 방법은 결정 전: 사람이 올린 파일만.
+
+CORE_BOX = (1.45, 8.26, 12.60, 6.42)
+CAP_SUBTITLE_SEG_CM = 12.6  # 제목 칸 폭 = 그림 칸 폭(넘치면 두 줄이 되어 그림과 겹침 — 글을 줄인다)
 
 
 def fill_core_business(slide, spec, rep):
     cb = spec.get("coreBusiness")
     title = shape_by_id(slide, ID_SEG_TITLE)
     pic = shape_by_id(slide, ID_SEG_PIC)
-    x, y, w = pic.left / EMU_PER_CM, pic.top / EMU_PER_CM, pic.width / EMU_PER_CM
+    anchor = pic._element.getprevious()
     remove_shape(slide, ID_SEG_PIC)
-    if not cb:
-        reason = spec.get("coreBusinessReason") or "핵심 사업 자료 없음"
-        section_title(title, "핵심 사업")
-        add_note_box(slide, x, y + 0.1, w, 0.8, f"(빈칸) 핵심 사업: {reason}", "핵심 사업 빈칸 사유")
-        rep["blanks"].append({"slot": "핵심 사업", "reason": reason})
+    bx, by, bw, bh = CORE_BOX
+    if not cb or not (cb.get("image") or {}).get("path"):
+        reason = spec.get("coreBusinessReason") or "핵심 사업 그림 없음"
+        section_title(title, (cb or {}).get("title") or "핵심 사업", 12.6)
+        add_note_box(slide, bx, by + 0.1, bw, 0.8, f"(빈칸) 핵심 사업: {reason}", "핵심 사업 빈칸 사유")
+        rep["blanks"].append({"slot": "핵심 사업 그림", "reason": reason})
         return
     if not (cb.get("source") or {}).get("doc") or not (cb.get("source") or {}).get("asOf"):
-        raise SystemExit("핵심 사업 자료에 출처(문서·기준 시점)가 없음 — 출처 없는 자료는 넣지 않는다")
-    section_title(title, cb.get("title") or "핵심 사업")
-    src = cb["source"]
-    add_note_box(slide, x, y + 0.1, w, 0.8, f"(형식 미정 — 오너 샘플 대기) 자료 {len(cb.get('items') or [])}건 · 출처: {src['doc']}({src['asOf']})", "핵심 사업 자리 표시")
-    rep["blanks"].append({"slot": "핵심 사업", "reason": "칸 형식 미정(오너 샘플 대기) — 자료는 spec.coreBusiness 에 있음"})
+        raise SystemExit("핵심 사업 그림에 출처(문서·기준 시점)가 없음 — 출처 없는 그림은 넣지 않는다")
+    section_title(title, cb["title"], 12.6)
+    wt = text_width_cm(cb["title"], 20, -110)
+    rep["checks"].append({"item": "핵심 사업 제목 폭", "ok": wt <= CAP_SUBTITLE_SEG_CM, "detail": f"{wt:.1f}cm / {CAP_SUBTITLE_SEG_CM:.1f}cm"})
+    path = cb["image"]["path"]
+    with Image.open(path) as im:
+        w_px, h_px = im.size
+    r = w_px / h_px
+    w, h = (bw, bw / r) if r >= bw / bh else (bh * r, bh)
+    x, y = bx + (bw - w) / 2, by + (bh - h) / 2
+    newpic = slide.shapes.add_picture(path, Emu(round(x * EMU_PER_CM)), Emu(round(y * EMU_PER_CM)), Emu(round(w * EMU_PER_CM)), Emu(round(h * EMU_PER_CM)))
+    newpic.name = "핵심 사업 그림"
+    anchor.addnext(newpic._element)
+    rep["coreBusinessBox"] = {"x": x, "y": y, "w": w, "h": h}
+    rep["checks"].append({"item": "핵심 사업 그림 해상도(가로 ≥ 1,200px)", "ok": w_px >= 1200, "detail": f"{w_px}×{h_px}px"})
 
 
 # ─────────────────────────── 실행 ───────────────────────────

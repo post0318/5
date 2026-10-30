@@ -100,6 +100,7 @@ def main() -> None:
     ap.add_argument("--pptx", required=True)
     ap.add_argument("--spec", required=True)
     ap.add_argument("--report", required=True)
+    ap.add_argument("--template", required=True)
     a = ap.parse_args()
     spec = json.loads(Path(a.spec).read_text())
     rep = json.loads(Path(a.report).read_text())
@@ -124,7 +125,20 @@ def main() -> None:
         ok(f"삭제: {what}", sid not in shapes)
     media = [n for n in z.namelist() if n.startswith("ppt/media/")]
     used = set(srels.values())
-    ok("외부 캡처 그림(image7) 파일이 남지 않음", "ppt/media/image7.png" not in z.namelist(), ",".join(media))
+    # 템플릿의 외부 캡처 그림(#21)과 같은 바이트의 파일이 결과물에 남지 않아야 한다(사내 자료 외부 그림 유출 방지). 이름이 아니라 내용으로 본다.
+    import hashlib
+
+    tz = zipfile.ZipFile(a.template)
+    tsl = etree.fromstring(tz.read(slide_part))
+    trels = rels(tz, slide_part)
+    cap_rid = None
+    for el in tsl.find(".//p:spTree", NS):
+        cnv = el.find(".//p:cNvPr", NS)
+        if cnv is not None and cnv.get("id") == "13":
+            cap_rid = el.find(".//a:blip", NS).get(f"{{{NS['r']}}}embed")
+    cap_hash = hashlib.sha1(tz.read(trels[cap_rid])).hexdigest() if cap_rid else None
+    left = [m for m in media if hashlib.sha1(z.read(m)).hexdigest() == cap_hash]
+    ok("템플릿 외부 캡처 그림이 결과물에 남지 않음", cap_hash is not None and not left, ",".join(left))
 
     # 슬라이드 밖으로 나간 개체 없음
     out = []
@@ -142,9 +156,21 @@ def main() -> None:
 
     # 종목명·출처·상품명
     ok("종목명 글", texts(shapes["2"]).strip() == spec["title"], texts(shapes["2"]))
-    ok("하단 출처 한 줄 글", texts(shapes["7"]) == spec["sourceLine"], texts(shapes["7"]))
-    ok("하단 출처 글자 8pt", sizes(shapes["7"]) == {"800"}, str(sizes(shapes["7"])))
-    ok("오른쪽 출처 칸(#7) 지움 — 출처는 한 줄", "54" not in shapes)
+    for sid, key in (("7", "sourceLeft"), ("54", "sourceRight")):
+        if spec.get(key):
+            ok(f"출처 줄 글({key})", texts(shapes[sid]) == spec[key], texts(shapes[sid]))
+            ok(f"출처 줄 8pt({key})", sizes(shapes[sid]) == {"800"}, str(sizes(shapes[sid])))
+    cb = spec.get("coreBusiness") or {}
+    if (cb.get("image") or {}).get("path"):
+        pics = [el for el in tree if el.find(".//p:cNvPr", NS) is not None and el.find(".//p:cNvPr", NS).get("name") == "핵심 사업 그림"]
+        if not pics:
+            ok("핵심 사업 그림 있음", False)
+        else:
+            off = pics[0].find(".//a:off", NS)
+            ext = pics[0].find(".//a:ext", NS)
+            x, y, w, h = (int(off.get("x")) / EMU, int(off.get("y")) / EMU, int(ext.get("cx")) / EMU, int(ext.get("cy")) / EMU)
+            ok("핵심 사업 그림이 칸 안(1.45, 8.26, 12.60×6.42)", x >= 1.449 and y >= 8.259 and x + w <= 14.051 and y + h <= 14.681, f"{x:.2f},{y:.2f} {w:.2f}×{h:.2f}")
+        ok("핵심 사업 출처가 왼쪽 출처 줄에", cb["source"]["doc"] in (spec.get("sourceLeft") or ""))
     if spec.get("productName"):
         ok("상품명 입력값", texts(shapes["25"]) == spec["productName"])
 
