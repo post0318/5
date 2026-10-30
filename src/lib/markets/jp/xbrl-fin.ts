@@ -19,9 +19,10 @@ import { edinetDocZip, edinetTaxonomyText, readEdinetJson, writeEdinetJson } fro
  * 판 4(2026-10-09): 현금흐름표의 시점(instant) 개념에 기초·기말 이름표가 없으면 기말 잔액(第一三共 CashAndCashEquivalentsIfDifferentFromBSBalanceIFRS
  *   "現金及び現金同等物の期末残高" — 기간 값으로 찾아 줄이 통째로 빠졌다).
  * 판 5(2026-10-10): 자기주식 표 회사 이름 NFKC 비교(KDDI 전각), 발행주식수가 보통주 종류 행뿐이면 그 값(オリエンタルランド).
+ * 판 6(2026-10-31): MD&A 「金融○○を除く」 요약 재무상태표의 차입금 줄(seg) — 금융 자회사 보유 회사 EV 의 제조 부문 차입금(오너 결정 2026-10-11).
  */
 
-export const JP_PARSE_VERSION = 5;
+export const JP_PARSE_VERSION = 6;
 
 export type JpStmtKind = "bs" | "is" | "ci" | "cf";
 /** 값 단위 — m 금액(엔), ps 주당(엔/주), sh 주식수, p 비율 */
@@ -76,7 +77,24 @@ export interface JpDocFin {
   shares?: JpDocShares | null;
   /** 리스부채 주석(판 3) — 본표에 리스부채 줄이 없을 때 판정용(leaseNotes) */
   lease?: JpLeaseNote;
+  /** 금융사업 제외 요약 재무상태표(판 6, segDebtTable) — 금융 자회사 보유 회사의 제조 부문 차입금(EV) */
+  seg?: JpSegTable | null;
   warn: string[];
+}
+/**
+ * 경영자 분석(MD&A) 문단의 「금융○○を除く」 요약 재무상태표(소니 「金融分野／金融分野を除くソニー連結／ソニー連結」) — 부채 쪽 차입금 줄만.
+ * 열 = 묶음(groups) × 날짜(D개, 오래된 것부터 — 마지막 = 서류 기말). 값은 엔(표는 백만엔). 확인(연결 묶음 합 = 본표 차입금)은 jp-ev.ts.
+ */
+export interface JpSegTable {
+  tb: string;
+  groups: string[];
+  /** 「…を除く」 묶음 위치 */
+  excl: number;
+  /** 연결 묶음 위치(이름에 「連結」, 제외 묶음 아님) */
+  cons: number;
+  D: number;
+  dateHeads: string[];
+  rows: { label: string; v: number[] }[];
 }
 export interface JpDocShares {
   /** 기준일(당기말·반기말) */
@@ -447,6 +465,7 @@ export async function parseJpDocZip(docID: string, zip: Uint8Array): Promise<JpD
     sum: ex.sum,
     shares: ex.shares,
     lease: ex.lease,
+    seg: ex.seg,
     std: dei("AccountingStandardsDEI"),
     cons: consDei == null ? null : consDei === "true",
     kind: dei("TypeOfCurrentPeriodDEI"),
@@ -486,7 +505,7 @@ const normName = (s: string) => s.normalize("NFKC").replace(/株式会社|㈱|\(
 function parseExtras(
   inst: string,
   filer: string | null,
-): { sum: Record<string, Record<string, number | null>>; shares: JpDocShares | null; lease: JpLeaseNote } {
+): { sum: Record<string, Record<string, number | null>>; shares: JpDocShares | null; lease: JpLeaseNote; seg: JpSegTable | null } {
   const ctx = new Map<string, { pk: string; mem: string[] }>();
   for (const m of inst.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
     const body = m[2];
@@ -569,7 +588,48 @@ function parseExtras(
     const t = decodeXml(decodeXml(m[5]).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ")).normalize("NFKC").replace(/\s+/g, " ");
     if (t.includes("リース負債")) tbs.push({ n: m[2], t });
   }
-  return { sum, shares, lease: leaseNotes(tbs) };
+  let seg: JpSegTable | null = null;
+  for (const m of inst.matchAll(/<jpcrp_cor:(ManagementAnalysis\w*TextBlock)\b([^>]*?\bcontextRef="([^"]+)"[^>]*)>([\s\S]*?)<\/jpcrp_cor:\1>/g)) {
+    const c = ctx.get(m[3]);
+    if (!c || c.mem.length) continue;
+    seg ??= segDebtTable(m[1], decodeXml(m[4]));
+  }
+  return { sum, shares, lease: leaseNotes(tbs), seg };
+}
+
+/** MD&A 요약 재무상태표에서 차입금 줄 — 표 하나에 「を除く」 묶음 머리·연결 묶음 머리·(単位：百万円), 숫자 칸 수 = 묶음 × 날짜인 행만 */
+const SEG_DEBT_RE = /借入|社債|有利子負債|リース負債|リース債務|コマーシャル・?ペーパー/;
+export function segDebtTable(tbName: string, html: string): JpSegTable | null {
+  const cellsOf = (tr: string) =>
+    [...tr.matchAll(/<t[dh]\b[\s\S]*?<\/t[dh]>/g)].map((c) => decodeXml(c[0].replace(/<[^>]+>/g, "")).normalize("NFKC").replace(/\s+/g, " ").trim());
+  for (const tb of html.match(/<table[\s\S]*?<\/table>/g) ?? []) {
+    const rows = (tb.match(/<tr[\s\S]*?<\/tr>/g) ?? []).map(cellsOf);
+    if (!rows.some((r) => r.some((x) => /単位:百万円/.test(x.replace(/\s/g, ""))))) continue;
+    const hi = rows.findIndex((r) => r.some((x) => /^金融\S*を除く/.test(x)));
+    if (hi < 0) continue;
+    const groups = rows[hi].filter((x) => x && !/^科\s*目$/.test(x));
+    const excl = groups.findIndex((x) => /^金融\S*を除く/.test(x));
+    const cons = groups.findIndex((x, i) => i !== excl && /連結$/.test(x));
+    if (excl < 0 || cons < 0 || groups.length < 2) continue;
+    const dateHeads = rows[hi + 1]?.filter((x) => x) ?? [];
+    if (!dateHeads.length || dateHeads.length % groups.length) continue;
+    const D = dateHeads.length / groups.length;
+    let inLiab = false;
+    const out: { label: string; v: number[] }[] = [];
+    for (const r of rows.slice(hi + 2)) {
+      const label = (r[0] ?? "").replace(/\s*\*\d+$/, "");
+      if (/^負\s*債/.test(r.join("").replace(/\s/g, ""))) inLiab = true;
+      if (/流動負債|非流動負債|固定負債/.test(label)) inLiab = true;
+      if (/資本|純資産/.test(label) && !/負債/.test(label)) inLiab = false;
+      const nums = r.slice(1).filter((x) => x !== "");
+      if (!inLiab || !SEG_DEBT_RE.test(label) || nums.length !== groups.length * D) continue;
+      const v = nums.map((x) => (/^[-‐―—－]$/.test(x) ? 0 : (/^[△▲(]/.test(x) ? -1 : 1) * Number(x.replace(/[△▲,()\s]/g, "")) * 1e6));
+      if (v.some((x) => !Number.isFinite(x))) continue;
+      out.push({ label, v });
+    }
+    if (out.length) return { tb: tbName, groups, excl, cons, D, dateHeads, rows: out };
+  }
+  return null;
 }
 
 /** 표 구역 머리(① 流動負債 · ② 非流動負債 — NFKC 뒤 "1 流動負債")로 부분 값 판정 */

@@ -25,7 +25,7 @@ import { AdapterError, type FinancialLineItem, type FinancialPeriod, type Financ
  * 저장: jp_fin(종목당 1건, 엔진판 JP_FIN_ENGINE + 서류 목록 서명) — 서명이 같으면 판독·조립 없이 저장본을 쓴다.
  */
 
-export const JP_FIN_ENGINE = 8; // 2: 연간 열 부가 정보(x — EPS·BPS·DPS·주식수·리스부채 주석, 판독판 2) · 3: 기준이 다른 옛 有報의 주식수·DPS · 4: 리스부채 주석 판독판 3(표시 문장·변동표·두 칸 표, 날짜별) · 5: 訂正 서류 EPS 분할 기준일 = 원 서류 제출일 · 6: 줄 열쇠에 기초·기말 표시 포함, 판독판 4(현금흐름표 시점 개념 = 기말) · 7: 하반기 기초 = 반기 서류 그 개념 시점 값, 판독판 5 · 8: 서류 본표 개념 출현 횟수 밖의 줄(#n) 값 안 꺼냄
+export const JP_FIN_ENGINE = 9; // 9: 하반기 — 사업연도 쪽 개념 회차(반기 서류가 두 번 싣는 줄), 재무상태표 H2 에 有報에만 있는 줄 · 금융사업 연결 EV(오너 결정 2026-10-11) · 2: 연간 열 부가 정보(x — EPS·BPS·DPS·주식수·리스부채 주석, 판독판 2) · 3: 기준이 다른 옛 有報의 주식수·DPS · 4: 리스부채 주석 판독판 3(표시 문장·변동표·두 칸 표, 날짜별) · 5: 訂正 서류 EPS 분할 기준일 = 원 서류 제출일 · 6: 줄 열쇠에 기초·기말 표시 포함, 판독판 4(현금흐름표 시점 개념 = 기말) · 7: 하반기 기초 = 반기 서류 그 개념 시점 값, 판독판 5 · 8: 서류 본표 개념 출현 횟수 밖의 줄(#n) 값 안 꺼냄
 
 const N_FY = 5;
 const N_HALF = 6;
@@ -103,6 +103,11 @@ export interface JpColX {
   lease?: { rows: string[]; sums: Record<string, number[]>; incl: string[]; amt: number | null; how: string | null; why: string | null; doc: string; policyDoc: string | null } | null;
   isDoc?: string | null;
   bsDoc?: string | null;
+  /**
+   * 재무상태표 열과 같은 서류 MD&A 「金融○○を除く」 요약 재무상태표의 이 열 기준일 차입금 줄(xbrl-fin segDebtTable) — 금융 자회사 보유 회사 EV.
+   * 날짜 = 표 날짜 칸의 마지막이 서류 기말, 그 앞이 1년 전 기말(그 밖 날짜 열은 쓰지 않음)
+   */
+  seg?: { doc: string; tb: string; excl: string; cons: string; head: string; rows: { label: string; excl: number; cons: number }[] }[];
 }
 export interface JpFinModel {
   ev: number;
@@ -303,14 +308,16 @@ class Cells {
  * 한 칸 값 — 출처 서류 s 의 본표 kind 에서 줄 l 의 기간 값. 반환 [값, 사유]
  *  bs: 기말 시점, 그 밖: 기간 값(기초·기말 잔액 줄은 시점)
  */
-function cell(s: Src | null, kind: JpStmtKind, l: MLine, start: string, end: string, anyPs = false): [number | null, string | null] {
+function cell(s: Src | null, kind: JpStmtKind, l: MLine, start: string, end: string, anyPs = false, anyOcc = false): [number | null, string | null] {
   if (!s) return [null, NOTE.noStmt];
   const ks = keysOf(s, kind);
   if (!ks) return [null, NOTE.noStmt];
   // anyPs: 개념만 본다(하반기 기초 = 상반기 말 잔액 — 반기 서류의 기말 줄이 다른 개념(…IfDifferentFromBSBalance)이어도 그 개념의 상반기 말 시점 값)
   const has = anyPs ? [undefined, "s", "e"].some((ps) => ks.has(lineKey({ k: l.k, ps: ps as "s" | "e" | undefined }))) : ks.has(lineKey(l));
   if (!has) return [null, NOTE.noLine];
-  if (!anyPs && Number(l.id.slice(l.id.lastIndexOf("#") + 1)) >= occCount(s, kind, l.k)) return [null, NOTE.noLine];
+  // anyOcc: 개념이 본표에 한 번이라도 있으면 그 회차 줄로 본다(하반기 사업연도 쪽 — 반기 서류가 같은 개념을 두 번 싣는 줄(NTT 中間利益 #1 —
+  // 帰属 아래 합계 반복)의 사업연도 값은 같은 개념·같은 기간 사실 하나라 有報가 한 번만 실어도 같은 값)
+  if (!anyPs && !anyOcc && Number(l.id.slice(l.id.lastIndexOf("#") + 1)) >= occCount(s, kind, l.k)) return [null, NOTE.noLine];
   const pk = kind === "bs" || l.ps === "e" ? pkInst(end) : l.ps === "s" ? pkInst(addDays(start, -1)) : pkDur(start, end);
   const raw = s.fin.facts[l.k]?.[pk];
   if (raw == null) return [null, NOTE.noVal];
@@ -530,10 +537,31 @@ function colExtra(c: Col, sorted: Src[], h: Src | null, ownDocs: Src[]): JpColX 
       policyDoc: pol ? policy!.row._id : null,
     };
   };
+  // 후보 = 재무상태표 열 출처 서류 먼저, 다음 그 날짜를 표에 실은 다른 서류(나중 것부터) — jp-ev.ts 가 연결 묶음 합 = 본표 차입금인 첫 후보만 쓴다.
+  // 날짜 칸: 마지막 = 서류 기말, 그 앞 = 전기 말(사업연도 시작 전날), 셋이면 맨 앞 = 전전기 말(소니 「移行日」·「期首」 열 — 전전기 말 잔액)
+  const segOf = (first: Src | null, end: string, pool: Src[]) => {
+    for (const s of [...(first ? [first] : []), ...pool.filter((d) => d !== first)]) {
+      const t = s.fin.seg;
+      if (!t || !s.fin.fyStart) continue;
+      const docEnd = s.fin.perEnd ?? s.fin.fyEnd;
+      const pe = addDays(s.fin.fyStart, -1);
+      const di = end === docEnd ? t.D - 1 : end === pe ? t.D - 2 : end === addYears(pe, -1) ? t.D - 3 : -1;
+      if (di < 0) continue;
+      (x.seg ??= []).push({
+        doc: s.row._id,
+        tb: t.tb,
+        excl: t.groups[t.excl],
+        cons: t.groups[t.cons],
+        head: t.dateHeads[t.excl * t.D + di] ?? "",
+        rows: t.rows.map((r) => ({ label: r.label, excl: r.v[t.excl * t.D + di], cons: r.v[t.cons * t.D + di] })),
+      });
+    }
+  };
   if (c.kind === "LTM" && h) {
     // 반기 보고서 뒤 LTM — 재무상태표·주식수는 반기말. 주당 지표는 jp-ev.ts 가 LTM 순이익 ÷ 주식수로(흐름식 주당 지표 금지)
     shOf(h);
     leaseOf(h, c.end, sorted[0] ?? null);
+    segOf(h, c.end, []);
     x.bsDoc = h.row._id;
     return x;
   }
@@ -572,6 +600,7 @@ function colExtra(c: Col, sorted: Src[], h: Src | null, ownDocs: Src[]): JpColX 
   x.dpsAt = dpsDoc?.at ?? null;
   shOf(own);
   leaseOf(bsS, c.end);
+  segOf(bsS, c.end, sorted);
   return x;
 }
 
@@ -601,8 +630,10 @@ function buildHalf(annual: Src[], halfDocs: Src[], src: string[], dict: Dict): J
   const view: JpFinView = { cols: shown.map((c) => c.p), stmts: {}, notes: [], src };
   if (shown.some((c) => c.kind === "H2")) src.push("H2(하반기) = 사업연도(有価証券報告書) − 상반기(반기 보고서), 재무상태표 H2 = 사업연도 말");
   src.push("1·3분기 열 없음 — EDINET 은 2024년 4월부터 반기·연간만(옛 四半期報告書·TDnet 분기 연결은 다음 단계)");
+  // 재무상태표 H2 = 사업연도 말 — 그 有報 본표에만 있는 줄(セブン&アイ 2025-02 有報 使用権資産 — 반기 서류엔 없음)도 싣는다
+  const h2BsDocs = [...new Set(shown.filter((c) => c.kind === "H2").map((c) => sortedA.find((d) => hasPeriod(d, "bs", pkInst(c.end)))).filter((d): d is Src => !!d))];
   for (const kind of KINDS) {
-    const lines = mergeLines(sortedH, kind);
+    const lines = mergeLines(kind === "bs" ? [...sortedH, ...h2BsDocs] : sortedH, kind);
     if (!lines.length) continue;
     const cells = new Cells(lines.length, shown.length);
     const h1Src = new Map<string, Src | null>();
@@ -647,8 +678,9 @@ function buildHalf(annual: Src[], halfDocs: Src[], src: string[], dict: Dict): J
           cells.note(r, ci, NOTE.perShare);
           return;
         }
-        const [fy, w1] = cell(fs, kind, l, fyStart, c.end);
         const [hv, w2] = cell(hs, kind, l, fyStart, h1End);
+        // 사업연도 쪽 회차 검사는 상반기 서류가 그 회차 줄을 실었을 때만 푼다(상반기 서류에도 없는 회차는 그대로 줄 없음)
+        const [fy, w1] = cell(fs, kind, l, fyStart, c.end, false, w2 == null);
         if (fy == null || hv == null) {
           cells.note(r, ci, w1 === NOTE.noLine || w2 === NOTE.noLine ? NOTE.h2NoLine : (w1 ?? w2 ?? NOTE.noVal));
           return;
