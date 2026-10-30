@@ -44,4 +44,13 @@ if [ -n "$NEW_KRDA" ] && [ "$NEW_KRDA" != "$OLD_KRDA" ] && systemctl list-unit-f
   echo "감가상각 적재 규칙 판본 변경(${OLD_KRDA:-없음} → $NEW_KRDA) — fin-kr-da 1회"
   sudo systemctl start --no-block fin-kr-da.service || true
 fi
+# fin-kr-da 가 아직 설치되지 않은 서버(병합 뒤 손으로 install-schedules.sh 를 돌리는 단계를 빠뜨린 경우 — 2026-10-29 배포 뒤 운영 kr_da 가
+# 10-02 옛 적재본 그대로라 한국 EV 가 전부 공란이었다)면 작업 폴더 적재 코드에 규칙 판본이 있을 때 여기서 설치하고 1회 적재한다.
+# install-schedules.sh 는 다시 돌려도 같은 결과(덮어씀). 실패하면 set -e 로 이 동기화가 실패로 끝난다.
+if [ ! -f /etc/systemd/system/fin-kr-da.service ] && [ -n "$NEW_KRDA" ]; then
+  echo "fin-kr-da 미설치 — install-schedules.sh 실행 뒤 감가상각 적재 1회"
+  sudo bash "$J/ops/oracle/install-schedules.sh"
+  [ -f /etc/systemd/system/fin-kr-da.service ] || { echo "fin-kr-da 설치 실패" >&2; exit 1; }
+  sudo systemctl start --no-block fin-kr-da.service
+fi
 echo "작업 폴더 $(git -C "$J" log --oneline -1)"
