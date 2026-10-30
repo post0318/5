@@ -235,7 +235,7 @@ export function buildKrBalance(facts: KrFacts, lease?: KrLeaseInput | null): Fin
 
   // 총차입금·현금성자산 — dart-ev.ts 단일 기준(하이라이트·재무분석 EV 와 같은 판정). 예전엔
   // 계정명 정규식이라 "유동성장기부채"(삼성전자)·"(유동|비유동)금융부채"(한전)를 놓쳤다.
-  const bridge = krBridgeLines(facts);
+  const bridge = krBridgeLines(facts, lease);
   // 그 기간에 차입금 줄이 없으면 0 — 하이라이트 EV 브릿지(dart-ev.ts `debt.get(year) ?? 0`)와 같은 규칙. 무차입 회사(한전KPS)뿐 아니라
   // 다른 해엔 차입금 줄이 있는 회사의 무차입 연도도(060370 2022 — 하이라이트 0, 이 주석만 빈칸이었다, 2026-10-02).
   // 본표에 리스부채 줄이 없는 기간은 주석 리스부채(오너 결정 2026-10-05 — krDebtByPeriod)
@@ -259,6 +259,8 @@ export function buildKrBalance(facts: KrFacts, lease?: KrLeaseInput | null): Fin
   items.push(nrow("순차입금", netDebt));
   // 순차입금이 음수인 해가 있으면 뜻을 표 아래 주석으로(오너 결정 2026-10-01 (가) — 음수 그대로, FnGuide·블룸버그 관행)
   for (const n of leaseNotes) items.push({ ...nrow(`※ 리스부채 — ${n}`, Object.fromEntries(labels.map((l) => [l, null]))), italic: true });
+  // B16 ②b — 기타(유동)금융자산 계열 줄의 현금성 판정(주석 내역)·제외 사유
+  for (const [l, ns] of bridge.cashNotes) for (const n of ns) items.push({ ...nrow(`※ 현금성자산 — ${l}: ${n}`, Object.fromEntries(labels.map((x) => [x, null]))), italic: true });
   if (labels.some((l) => (netDebt[l] ?? 0) < 0)) items.push({ ...nrow("※ 순차입금 음수 = 순현금(현금성자산이 총차입금보다 많음)", Object.fromEntries(labels.map((l) => [l, null]))), italic: true });
 
   return {

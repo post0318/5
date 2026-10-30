@@ -8,6 +8,7 @@ install -m 755 "$SRC/healthcheck.sh" /opt/macro/ops/healthcheck.sh
 install -m 755 "$SRC/alert-lib.sh" /opt/macro/ops/alert-lib.sh
 install -m 755 "$SRC/research-freshness.sh" /opt/macro/ops/research-freshness.sh
 install -m 755 "$SRC/usage-report.sh" /opt/macro/ops/usage-report.sh
+install -m 755 "$SRC/br-news-check.py" /opt/macro/ops/br-news-check.py
 install -d -m 755 /opt/macro/usage  # 외부 서비스 사용량 장부(src/lib/usage/ledger.mjs) — 앱 컨테이너·배치가 같이 쓴다
 [ -f /opt/macro/ops/alert.env ] || install -m 600 /dev/null /opt/macro/ops/alert.env
 [ -f /opt/macro/ops/freshness-ignore.txt ] || printf '# 신선도 감시에서 뺄 출처 이름(한 줄에 하나, 오너 결정 시) — research-freshness.sh\n' > /opt/macro/ops/freshness-ignore.txt

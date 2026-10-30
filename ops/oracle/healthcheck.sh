@@ -117,6 +117,57 @@ fi
 # 10) 텔레그램 상주 수신기
 check telegram-listener "$(systemctl is-active --quiet macro-telegram-listener && echo 1 || echo 0)" "텔레그램 상주 수신기가 멈췄습니다"
 
+# 4번(브라질) 주요일정 — 2026-10-06 IBGE 인증서 변경으로 경제지표(IPCA·실업률·GDP)가 통째로 빠졌는데 열흘간 아무도 몰랐다
+# (4번은 외부 실패를 빈 목록으로 넘긴다, 오너 지적 2026-10-16 "오류가 났으면 알려줘야"). 일정 창(과거 30일~앞 60일)에는 IPCA 가 매달 있어
+# 경제지표 0건이면 고장. Vercel 캐시 응답이라 4번 서버 계산은 거의 안 든다. 바깥 서비스라 연속 2회(20분) 실패해야 알림(check2).
+# 4번은 사내 한정이라 로그인 없이는 막힌다(2026-10-27) — 점검 토큰 OPS_BR_TOKEN(alert.env, 4번 app.env 의 OPS_READ_TOKEN 과 같은 값)을 붙인다
+BR_URL="${OPS_BR_AGENDA_URL:-https://brazil-world.vercel.app/api/br-agenda}"
+code=$(curl -s -o /tmp/hc-br-agenda.json -m 60 -w '%{http_code}' -H "X-Ops-Token: ${OPS_BR_TOKEN:-}" "$BR_URL" || true)
+br_n=0
+if [ "$code" = 200 ]; then
+  br_n=$(python3 - /tmp/hc-br-agenda.json <<'PY'
+import json, re, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    a = d if isinstance(d, list) else next((v for v in d.values() if isinstance(v, list)), [])
+    print(sum(1 for x in a if re.search(r"IPCA|PNAD|GDP", str(x.get("titleKo", "")))))
+except Exception:
+    print(0)
+PY
+)
+fi
+check2 br-agenda "$([ "$code" = 200 ] && [ "${br_n:-0}" -gt 0 ] && echo 1 || echo 0)" "4번 브라질 주요일정 경제지표 0건(HTTP ${code}) — IBGE 일정 API·인증서 확인(4번 src/lib/server/ibgeFetch.ts)"
+# 발표치 공란 — 발표일이 사흘 넘게 지난 경제지표(IPCA·실업률·GDP·COPOM)의 발표치가 비었으면 알림(오너 2026-10-16 "조건 넣어라").
+# 일정은 나오는데 중앙은행 SGS·IBGE SIDRA 조회만 실패한 경우(10-16 배포 직후 IPCA-15 9/25 칸). 발표 당일엔 통계가 몇 시간 늦게
+# 올라오는 게 정상이라 사흘을 둔다. 응답 자체가 실패면 위 br-agenda 가 잡으므로 여기선 건너뛴다.
+if [ "$code" = 200 ]; then
+  br_miss=$(python3 - /tmp/hc-br-agenda.json <<'PY'
+import json, sys, datetime
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    a = d if isinstance(d, list) else next((v for v in d.values() if isinstance(v, list)), [])
+except Exception:
+    a = []
+sys.stdout.reconfigure(encoding="utf-8")
+cut = (datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=3)).isoformat()
+miss = [f'{x.get("date")} {x.get("titleKo", "")}' for x in a
+        if x.get("category") == "경제지표" and str(x.get("date", "9999")) <= cut and not x.get("actual")]
+print("; ".join(miss))
+PY
+)
+  check2 br-agenda-actual "$([ -z "$br_miss" ] && echo 1 || echo 0)" "4번 브라질 주요일정 발표치 공란(발표 3일 경과): ${br_miss} — 중앙은행 SGS·IBGE SIDRA 조회 확인"
+fi
+
+# 4번 뉴스 — 원본(좋은아침뉴스·구글 뉴스·KOBRAS 블로그)에 새 글이 있는데 4번에 없을 때만 알림(오너 2026-10-17 "그래").
+# 원본 세 곳을 부르므로 1시간에 한 번만 돌리고(그 사이엔 직전 판정 유지), 연속 2회(2시간)면 알림. 판정은 br-news-check.py.
+br_last=$(cat "$STATE_DIR/.br-news-last" 2>/dev/null || echo 0)
+if [ $(( $(date +%s) - br_last )) -ge 3300 ]; then
+  date +%s > "$STATE_DIR/.br-news-last"
+  while IFS=$'	' read -r key ok msg; do
+    [ -n "$key" ] && check2 "$key" "$ok" "$msg"
+  done < <(OPS_BR_TOKEN="${OPS_BR_TOKEN:-}" timeout 240 python3 "$(dirname "$(readlink -f "$0")")/br-news-check.py" "${OPS_BR_APP:-https://brazil-world.vercel.app}" 2>/dev/null)
+fi
+
 # 한국 재무(OpenDART) 동작 — 2026-10-05 검증 작업이 같은 DART 키의 일일 한도를 넘겨 운영 한국 재무가 멈췄는데 아무도 몰랐다(오너 지적).
 # 운영 화면 경로를 그대로 불러 429(한도 초과)·5xx 면 바로 알림. 디스크 캐시 덕에 DART 실제 요청은 30분에 1건 남짓.
 code=$(curl -s -o /tmp/hc-dart.json -m 60 -w '%{http_code}' "http://127.0.0.1:8080/api/markets/kr/005930/financials?period=annual" || echo 000)

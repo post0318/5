@@ -187,7 +187,7 @@ const validJson = (b: Buffer) => {
   try {
     JSON.parse(b.toString("utf8"));
     return true;
-  } catch {
+  } catch { // silent-ok: 형식 검사 — 파싱 실패 = 「깨진 JSON」이라는 판정 결과 자체(호출자가 저장하지 않음)
     return false;
   }
 };

@@ -270,7 +270,7 @@ export interface TtmFlows {
      * 한국 — LTM 열 EV 브릿지 내역(kr/dart-ev.ts krLtmBalance, 최신 분기말 재무상태표).
      * 하이라이트·재무분석 LTM 열이 이 값을 그대로 쓴다(개요 멀티플과 같은 기준일).
      */
-    evBridge?: { debt: number; lease: number; cash: number; nci: number; plainFinLiab: boolean; leaseUnknown?: string | null; leaseHow?: string | null } | null;
+    evBridge?: { debt: number; lease: number; cash: number; nci: number; plainFinLiab: boolean; leaseUnknown?: string | null; leaseHow?: string | null; cashHow?: string | null } | null;
   } | null;
   /** 감가상각비+무형자산상각비 — 최근 사업연도(연간, PER 과 동일 기준) */
   daAnnual?: number | null;
