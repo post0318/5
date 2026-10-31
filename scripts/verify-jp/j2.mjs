@@ -1,7 +1,7 @@
 /**
  * 일본 검증기 J2 — EV 구성요소(총차입금·현금성자산·비지배지분)와 EV 공란 판정을 EDINET 원본으로 따로 정한다(docs/verify-jp-design.md §4 J2).
  * 앱 jp-ev.ts 와 다른 방법(코드 공유 없음 — 앱 코드를 읽지 않는다):
- *  - 차입금 줄 = 재무상태표 **계산 구조**에서 부채 아래 개념 중 **요소 이름**이 차입금 꼴(Borrowing·BorrowedMoney(은행 借用金)·LoansPayable·Bond·Debt·CommercialPaper·CallMoney·
+ *  - 차입금 줄 = 재무상태표 **계산 구조**에서 부채 아래 개념 중 **요소 이름**이 차입금 꼴(Borrowing·BorrowedMoney(은행 借用金)·LoansPayable·Bond·Debt·CommercialPaper·
  *    LeaseLiabilit·LeaseObligation·InterestBearingLiabilit·FinancingLiabilit)인 것의 최상위. 예금(Deposit)·충당금·미지급이자 등은 차입금이 아니다
  *  - 현금성자산 = 현금흐름표 「現金及び現金同等物 期末残高」(오너 Q3 재결정 2026-10-14 — 01-metric-dictionary P9·J8: 定期預金·短期投資·有価証券 제외,
  *    현지 株探 「現金等残高」·みんかぶ 「現金期末残高」와 같은 정의 08). 그 서류 연결 현금흐름표 역할에서 기말(periodEnd) 이름표로 실린 CashAndCashEquivalents… 개념의
@@ -17,7 +17,7 @@
  *        ext:DepositsForBankingBusinessCLIFRS 2,550,998 = PayPay銀行 예금(차입금 아님)
  *      9434 S100YE76 2026-03-31 InterestBearingLiabilities CL 1,956,418 + NCL 4,528,164, ext:DepositsForBankingBusinessCLIFRS 2,556,010(제외)
  *      3382 S100VT7P 2025-02-28 ext:DepositsReceivedInBankingBusiness 813,388(セブン銀行 銀行業における預金 — 제외), jppfs_cor:CallMoneyLiabilitiesBNK 100,000
- *        (コールマネー = 은행 간 단기 이자부 차입 — 차입금 꼴로 넣는다), S100Y4VB 2026-02-28 은 セブン銀行 연결 제외로 예금·コールマネー 값 없음
+ *        (コールマネー = 미국 FederalFundsPurchased 대응 — 미국 규칙처럼 차입금으로 보지 않는다, 리드 지시 2026-10-31·오너 확인 항목), S100Y4VB 2026-02-28 은 セブン銀行 연결 제외로 예금·コールマネー 값 없음
  *      9432 ext:ShortTermDepositsForBankingCLIFRS·9433 ext:ShortTermDepositsForFinancialBusinessCLIFRS 도 예금 — 같은 처리
  *  - 금융 자회사 보유(자산 요소 이름에 FinancialServices — 7203 ext:ReceivablesRelatedToFinancialServices(N)CAIFRS 金融事業に係る債権, 6758 옛 연도
  *    ext:InvestmentsAndAdvancesInTheFinancialServicesSegment(N)CAIFRS 金融分野における投資及び貸付, 7267 ext:ReceivablesFromFinancialServices(N)CAIFRS
@@ -32,15 +32,14 @@
  *      7267 有報 S100YDD9: 금융 부문을 가른 재무상태표 표가 없다. 本文 「生産販売事業の資金調達に伴う…債務残高は1兆2,388億円」(억엔 단위 서술)뿐 — 백만엔 원자료가 아니라
  *        정확 판정 근거가 없어 **EV 공란 + 사유**(그때 총차입금 행 기대값 = 연결 차입금)
  *  - 금융사(손익 본표 BNK·INS·SEC 서식 — 8306·8411·6178·옛 8766, 또는 EDINET 提出者業種 保険業·銀行業·証券業 — 8766 IFRS): 오너 결정 2026-10-31 「가」로
- *    EV 를 미국 규칙으로 채운다 — 총차입금(이자부 차입금만)은 대조, 현금(미국 정의: 현금 + 단기투자 + 채권형 투자증권)은 有価証券 한 줄에 채권·주식이 섞여
- *    원자료로 가를 수 없어 현금·EV 판정 불가(아래 evComponents 주석)
+ *    EV 를 미국 규칙으로 채운다 — 총차입금 = 이자부 차입금만(コールマネー·信託勘定借 제외), 현금 = Q3 정의(현금흐름표 기말 잔액)(아래 evComponents 주석)
  *  - 차입금 개념이 기타 금융부채를 합친 한 줄(…AndOtherFinancialLiabilities — 오너 결정 D4) · 리스부채 판정 불가 → EV 공란·검증불가(종전과 같음).
  */
 import { plainValue } from "./xbrl.mjs";
 
 const local = (k) => k.slice(k.indexOf(":") + 1);
-const DEBT_ID = /(Borrowing|BorrowedMoney|LoansPayable|Bond|Debt|CommercialPaper|CallMoney|LeaseLiabilit|LeaseObligation|InterestBearingLiabilit|FinancingLiabilit)/;
-const NOT_DEBT_ID = /(Receivable|Asset|InterestPayable|InterestExpense|Derivative|Deposit|Provision|Accrued|Allowance|Abstract|Repurchase|Securities|Tax|Heading|Table|LineItems)/;
+const DEBT_ID = /(Borrowing|BorrowedMoney|LoansPayable|Bond|Debt|CommercialPaper|LeaseLiabilit|LeaseObligation|InterestBearingLiabilit|FinancingLiabilit)/;
+const NOT_DEBT_ID = /(FromTrustAccount|Receivable|Asset|InterestPayable|InterestExpense|Derivative|Deposit|Provision|Accrued|Allowance|Abstract|Repurchase|Securities|Tax|Heading|Table|LineItems)/;
 const LEASE_ID = /(LeaseLiabilit|LeaseObligation)/;
 
 /** 재무상태표 계산 구조 — 자식 → 부모 */
@@ -239,15 +238,13 @@ export function evComponents(d, D, which, { segDocs = [], industry = null } = {}
     evWhy: null,
   };
   // 금융사(은행·보험·증권 — BNK·INS·SEC 서식, 또는 EDINET 업종 保険業·銀行業·証券業 — 8766 IFRS 처럼 서식 요소가 없는 회사): 오너 결정 2026-10-31 「가」 —
-  // EV 를 미국 규칙으로 채운다. 총차입금 = 이자부 차입금만(DEBT_ID — 借用金·社債·短期社債·CP·コールマネー·리스. 預金·譲渡性預金·保険契約負債·売現先(Repurchase)·
-  // 債券貸借取引受入担保金·特定取引負債는 차입금 꼴 요소가 아니라 빠진다). 현금 = 미국 정의(현금 + 단기투자 + 채권형 투자증권, 장기투자자산은 빼지 않음)인데
-  // 일본 금융사 본표의 有価証券(SecuritiesAssetsBNK·SecuritiesAssetsINS·IFRS InvestmentSecurities) 한 줄에 채권과 주식이 섞여 있고, 주석 표도 「その他の証券」(외국 채권·
-  // 외국 주식 합계 — 8306 S100YJQO 経営者による分析 有価証券 표)처럼 채권형만 원자료 숫자로 가를 수 없다 → 현금·EV 는 판정 불가(검증불가 + 사유), 총차입금만 대조
+  // EV 를 미국 규칙으로 채운다. 총차입금 = 이자부 차입금만(DEBT_ID — 借用金·社債·短期社債·CP·리스). 預金·譲渡性預金·保険契約負債·売現先(Repurchase)·
+  // 債券貸借取引受入担保金·特定取引負債는 차입금 꼴 요소가 아니라 빠지고, コールマネー(미국 FederalFundsPurchased 에 대응 — 미국 규칙은 차입금으로 보지 않음)와
+  // 信託勘定借(BorrowedMoneyFromTrustAccount — 신탁 계정 자금, 예금 성격)도 뺀다(리드 지시 2026-10-31 — 오너 확인 항목). 현금 = 비금융과 같은 Q3 정의
+  // (현금흐름표 現金及び現金同等物 期末残高 — 일본 EV 현금 기준, 미국 은행도 현금및현금성자산 태그만 — 같은 리드 지시, 오너 확인 항목)
   const finIndustry = /保険業|銀行業|証券、商品先物取引業|証券業/.test(industry ?? "");
   if (financial || finIndustry) {
     r.kind = { fin: `금융사(${financial ? "BNK·INS·SEC 서식" : `EDINET 업종 ${industry}`}) — 미국 규칙 EV(오너 결정 2026-10-31)` };
-    r.cash = { why: "금융사 — 미국 현금 정의의 채권형 투자증권을 원자료 줄로 가를 근거 없음(有価証券 한 줄에 채권·주식 혼재)" };
-    r.evWhy = `${r.kind.fin} — 현금 판정 불가(${r.cash.why})`;
     return r;
   }
   // 금융 자회사 보유 = 금융서비스 자산(…FinancialServices…) 요소에 값. 은행업 예금(…BankingBusiness·…ForBanking·…ForFinancialBusiness 부채)만 있는 회사는 은행형 — EV 채움

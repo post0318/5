@@ -155,19 +155,29 @@ test("J2 금융 자회사 7267: 금융 부문 구분 재무상태표(백만엔) 
   assert.match(e.evBlank ?? "", /제조 부문 차입금 원자료 없음/);
 });
 
-test("J2 금융사(오너 결정 2026-10-31 「가」): 8766 IFRS 보험·8306 BNK 서식 — EV 공란 기대 없음, 총차입금 = 이자부 차입금만(보험계약부채·예금·레포 제외), 현금 판정 불가", async () => {
+test("J2 금융사(오너 결정 2026-10-31 「가」): EV 공란 기대 없음, 총차입금 = 이자부 차입금만(예금·보험계약부채·레포·コールマネー·信託勘定借 제외), 현금 = CF 기말 잔액(Q3)", async () => {
   const d = await doc("S100YLS8");
   const e = evComponents(d, "2026-03-31", "cur", { industry: "保険業" });
   assert.equal(e.evBlank, null);
+  assert.equal(e.evWhy, null);
   assert.ok(e.kind?.fin);
   assert.equal(e.debt.v, (598007 + 128939) * 1e6, "BondsAndBorrowings + LeaseLiabilities — InsuranceContractLiabilities·RepurchaseAgreements 제외");
-  assert.equal(e.cash.v, undefined);
-  assert.match(e.evWhy, /현금 판정 불가/);
+  assert.equal(e.cash.v, 2332406e6, "CashAndCashEquivalentsIFRS 현금흐름표 기말");
   const b = await doc("S100YJQO");
   const eb = evComponents(b, "2026-03-31", "cur", { industry: "銀行業" });
   assert.equal(eb.evBlank, null);
-  // 借用金 9,359,997 + 信託勘定借 2,903,438 + 短期社債 1,217,464 + 社債 15,790,570 + CP 3,421,893 + コールマネー 5,307,704 (預金·譲渡性預金·売現先·債券貸借 제외)
-  assert.equal(eb.debt.v, (9359997 + 2903438 + 1217464 + 15790570 + 3421893 + 5307704) * 1e6, eb.debt.how);
+  // 借用金 9,359,997 + 短期社債 1,217,464 + 社債 15,790,570 + CP 3,421,893 (預金·譲渡性預金·コールマネー 5,307,704·売現先·債券貸借·信託勘定借 2,903,438 제외)
+  assert.equal(eb.debt.v, (9359997 + 1217464 + 15790570 + 3421893) * 1e6, eb.debt.how);
+  assert.ok(eb.cash.v > 0, eb.cash.why);
+  // 심은 오류: 콜머니를 넣은 값은 기대값이 아니다
+  assert.notEqual(eb.debt.v, (9359997 + 1217464 + 15790570 + 3421893 + 5307704) * 1e6);
+});
+
+test("J2 은행형 3382 2025-02: コールマネー 100,000 은 총차입금에서 뺀다", async () => {
+  const d = await doc("S100Y4VB");
+  const e = evComponents(d, "2025-02-28", "prior", {});
+  assert.doesNotMatch(e.debt.how, /CallMoney/);
+  assert.equal(e.debt.v, (172497 + 210000 + 290128 + 180624 + 1244036 + 778068 + 1223438) * 1e6, e.debt.how);
 });
 
 test("J2 현금 = 현금흐름표 기말 잔액(Q3): 7267 CF 5,118,477(재무상태표 5,066,828 아님)", async () => {

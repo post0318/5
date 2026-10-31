@@ -659,12 +659,7 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
     if (e.debt.blank) cmp("J2", NAME, label, val("debt", i), { blank: e.debt.blank });
     else if (e.debt.v == null) add("J2", NAME, label, { status: NA, note: e.debt.why });
     else cmp("J2", NAME, label, val("debt", i), { v: e.debt.v, how: e.debt.how });
-    if (e.kind?.fin) {
-      // 금융사 — 현금은 미국 정의(채권형 투자증권 포함)라 이 줄 이름(CF 기말 잔액)으로 대조하지 않는다. 판정 불가 사유만, 비지배지분은 대조
-      add("J2", "현금성자산 = 현금흐름표 기말 잔액", label, { status: NA, app: val("cash", i), note: e.cash.why });
-      if (!row("nci") && e.nci.v === 0) add("J2", "비지배지분 = 원자료", label, { status: PASS, note: `${e.nci.how} · 하이라이트 행 없음(모든 열 0)` });
-      else cmp("J2", "비지배지분 = 원자료", label, val("nci", i), e.nci);
-    } else if (!e.evBlank) {
+    if (!e.evBlank) {
       const ca = val("cash", i);
       if (e.cash.v == null) add("J2", "현금성자산 = 현금흐름표 기말 잔액", label, { status: NA, note: e.cash.why });
       else cmp("J2", "현금성자산 = 현금흐름표 기말 잔액", label, ca == null ? null : -ca, { v: e.cash.v, how: e.cash.how });
@@ -677,8 +672,6 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
     // 8766 처럼 보험·은행 업종인데 금융 서식 요소가 없는 회사 — EV 판정은 오너 결정 대기(판정 보류 — 실패로 세지 않는다)
     if (e.evBlank) cmp("J2", "EV 공란 판정", label, evA, { blank: e.evBlank });
     else if (mcapBlank) add("J2", "EV 공란 판정", label, evA == null ? { status: PASS, note: `기대 빈칸 — 시가총액 ${mcapBlank}` } : { status: FAIL, app: evA, note: `시가총액 기대 빈칸(${mcapBlank})인데 EV 값` });
-    // 금융사 — EV 는 채워야 한다(오너 결정 2026-10-31). 빈칸이면 실패, 값이 있으면 현금 정의를 원자료로 못 정해 값 판정만 불가
-    else if (e.kind?.fin) add("J2", "EV 공란 판정", label, evA == null ? { status: FAIL, note: `${e.kind.fin} — EV 를 채워야 하는데 앱 EV 빈칸` } : { status: NA, app: evA, note: `값 있음 — 값 대조는 ${e.evWhy}` });
     else if (e.evWhy) add("J2", "EV 공란 판정", label, { status: NA, note: e.evWhy });
     else add("J2", "EV 공란 판정", label, evA != null ? { status: PASS, app: evA, note: `공란 사유 없음 — 값 있음${kindNote ? ` · ${kindNote}` : ""}` } : { status: FAIL, note: `EV 공란 사유가 원자료에 없는데 앱 EV 빈칸${kindNote ? ` · ${kindNote}` : ""}` });
     // EV 값 = 앱 시가총액 + 총차입금(원자료 — 은행형 예금 제외·금융 자회사 보유는 제조 부문) + 비지배지분(원자료) − 현금성자산(앱 행 — 현금 정의는 위 현금 검사 몫)
@@ -959,8 +952,6 @@ export async function jpExtCells(sym, app, ctx) {
     // 현금 — 株探 現金等残高·みんかぶ 現金期末残高 = 현금흐름표 기말 잔액(08 실측, Q3 재결정). 앱 하이라이트 현금성자산(EV 현금)이 이 정의와 다르면 외부가 원자료와 같을 때 앱 결함
     const rawCash = kv.j2?.cash?.v ?? null;
     const hc = hv("cash");
-    // 금융사는 현금이 미국 정의(오너 결정 2026-10-31) — 현지 사이트 CF 기말 잔액과 정의가 달라 이 칸을 대조하지 않는다
-    if (kv.j2?.kind?.fin) continue;
     push("현금성자산(하이라이트·EV, Q3 정의 = CF 기말 잔액)", hc == null ? null : -hc, { kabutan: "cashEnd", minkabu: "cashEnd" },
       rawCash != null ? [{ appWrong: true, test: (x) => (x === rawCash && hc != null && -hc !== rawCash ? `외부 = 원자료 현금흐름표 기말 잔액 ${rawCash}(${kv.j2.cash.how}) — 앱 ${-hc} 은 오너 결정 정의(Q3 2026-10-14)와 다름` : null) }] : []);
   }
