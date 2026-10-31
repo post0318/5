@@ -23,7 +23,7 @@ import type { JpStmtKind } from "./xbrl-fin";
  *    · 차입금과 기타 금융부채가 한 줄(三菱重工)이면 차입금·EV 공란 + 사유(오너 결정 D4).
  *    · 현금성자산 = 유동자산의 現金及び現金同等物(IFRS)·現金及び預金(J-GAAP) + 定期預金·短期投資·有価証券(유동). その他の金融資産 은 제외
  *      (한국 "기타유동금융자산 제외"와 같음).
- *    · EV 미산정: 금융업(은행·보험 서식 — 예금·보험부채가 영업 부채).
+ *    · 금융사(은행·보험·증권 서식): 미국 규칙(오너 결정 2026-10-31) — 이자부 차입금만(예금·보험계약부채·콜머니·레포 제외), 현금 = 현금및현금성자산 줄.
  *    · 금융 자회사 보유(재무상태표에 金融事業に係る債権 등 금융사업 자산 줄): EV 차입금 = 제조(금융 제외) 부문 차입금 — MD&A 「金融○○を除く」
  *      요약 재무상태표(소니), 연결 묶음 합 = 본표 차입금 확인. 그런 숫자가 없으면(도요타·혼다 有報) EV 공란 + 사유(미국 captive-unsplit 와 같음).
  *    · 은행·카드사형(은행업 예금이 연결 부채): 예금 빼고 이자부 차입금만으로 EV(오너 결정 2026-10-11 — 9984·9434·3382).
@@ -96,11 +96,20 @@ const inOpCf = (l: Ln) => ancRe(l, /OperatingActivities/) || /OpeCF(IFRS)?$/.tes
 const inInvCf = (l: Ln) => ancRe(l, /Invest(ing|ment)Activities/) || /InvCF(IFRS)?$/.test(local(l.k));
 
 // 長期債務 은 줄 이름 전체(日立 "償還期長期債務"·"長期債務") — "買掛金及びその他の短期債務"(ユニクロ)·"営業債務以外の短期債務"(伊藤忠) 같은 영업 채무 제외
-// コールマネー(セブン銀行 — 은행 간 단기 차입, 이자부 차입금. 예금과 달리 영업 부채 아님 — 미국 은행·카드사 규칙의 단기 차입금과 같음)
-const DEBT_RE = /借入|社債|有利子負債|リース負債|リース債務|コマーシャル・?ペーパー|借用金|^(償還期)?長期債務$|資金調達に係る債務|^コールマネー$/;
-const DEBT_NOT = /預金|貯金|貸付|債権|資産|デリバティブ|未払|引当|利息|保証|担保/;
+// 금융사(은행·보험·증권·카드)도 같은 줄 규칙 — 미국 은행 규칙(edgar-bs-structure DEBT_CONCEPT: Debt·Borrowing·NotesPayable·CommercialPaper·
+// FinanceLease…)과 같이 차입금·사채·借用金·CP·리스만. 예금·譲渡性預金·保険契約負債·투자계약부채, 콜머니(コールマネー — 미국 FederalFundsPurchased)·
+// 레포(売現先·レポ取引…担保付借入 — 미국 SecuritiesSoldUnderAgreementsToRepurchase)·債券貸借取引受入担保金·信託勘定借·特定取引負債는 차입금 아님
+// (오너 결정 2026-10-31 「가」 — 금융사 EV = 미국 규칙)
+const DEBT_RE = /借入|社債|有利子負債|リース負債|リース債務|コマーシャル・?ペーパー|借用金|^(償還期)?長期債務$|資金調達に係る債務/;
+const DEBT_NOT = /預金|貯金|貸付|債権|資産|デリバティブ|未払|引当|利息|保証|担保|レポ|売現先/;
 const isDebt: Pred = (l) => inLiab(l) && DEBT_RE.test(l.label) && !DEBT_NOT.test(l.label) && !/^(負債|流動負債|非流動負債|固定負債)/.test(l.label);
 const isLease: Pred = (l) => isDebt(l) && /リース負債|リース債務/.test(l.label);
+// 금융사 서식(유동·비유동 구분 없음) 현금 = 현금및현금성자산 줄(IFRS 現金及び現金同等物, 은행 現金預け金 — 미국 은행 CashAndDueFromBanks, 보험
+// 現金及び預貯金). 有価証券·投資有価証券(운용 자산)은 넣지 않는다 — 미국 은행의 매도가능증권(Noncurrent 아님)이 현금 정의 밖인 것과 같음
+const isFinCash: Pred = (l) =>
+  ancRe(l, /^Assets/) &&
+  (byK("jpigp_cor:CashAndCashEquivalentsIFRS", "jppfs_cor:CashAndDueFromBanksAssetsBNK", "jppfs_cor:CashAndDepositsAssetsINS", "jppfs_cor:CashAndDeposits")(l) ||
+    /^(現金及び現金同等物|現金預け金|現金及び預貯金|現金及び預金)$/.test(l.label));
 const isCash: Pred = (l) =>
   inCurAssets(l) &&
   (byK("jpigp_cor:CashAndCashEquivalentsIFRS", "jppfs_cor:CashAndDeposits", "jppfs_cor:CashAndCashEquivalents")(l) ||
@@ -207,6 +216,8 @@ export function jpFundamentals(model: JpFinModel): JpFund {
   // 금융업 서식 = 손익계산서가 은행·보험·증권 요소(…BNK·INS·SEC) — 재무상태표 줄 하나로 판정하지 않는다(セブン&アイ 의 コールマネー
   // CallMoneyLiabilitiesBNK 한 줄 때문에 소매업 전체가 금융 서식으로 잡혔다)
   const financial = is.some((l) => /(BNK|INS|SEC)$/.test(local(l.k)));
+  // 유동·비유동 구분이 없는 재무상태표(IFRS 보험 — 東京海上 2025-03 부터, 은행 서식) — 현금은 isFinCash
+  const hasCurSection = bs.some((l) => /^CurrentAssets/.test(local(l.k)) || /CA(IFRS)?$/.test(local(l.k)));
   const lastFyIdx = view.cols.map((c, i) => (c.label === JP_LTM ? -1 : i)).filter((i) => i >= 0).pop() ?? -1;
   const ltmIdx = view.cols.findIndex((c) => c.label === JP_LTM);
   const ltmIsFy = ltmIdx >= 0 && lastFyIdx >= 0 && view.cols[ltmIdx].endDate === view.cols[lastFyIdx].endDate;
@@ -338,14 +349,14 @@ export function jpFundamentals(model: JpFinModel): JpFund {
     set(f.ap, c, first(bs, [(l) => inCurLiab(l) && /^(営業債務|支払手形|買掛金|仕入債務|電子記録債務)/.test(l.label)], c), NOLINE);
 
     // 차입금·현금 — EV 브릿지
-    const cash = sumTop(bs, isCash, c);
+    const cash = sumTop(bs, isCash, c) ?? (financial || !hasCurSection ? sumTop(bs, isFinCash, c) : null);
     set(f.cash, c, cash, "현금성자산 줄 없음");
     const debt = sumTop(bs, isDebt, c);
     const leaseFace = sumTop(bs, isLease, c);
     let debtV = debt?.v ?? (eqAll ? 0 : null);
     let leaseNote: string | null = null;
     let leaseUnknown: string | null = null;
-    if (ifrs && !financial && !leaseFace && eqAll) {
+    if (ifrs && !leaseFace && eqAll) {
       // 본표에 리스부채 줄 없음(한국 krLeaseFor 와 같은 원칙): ① 차입금 줄에 포함(leaseIncl — 위 판정)이면 그대로 ② 아니면 주석 리스부채
       // 장부금액(xbrl-fin leaseNotes — 표 둘 이상·변동표 사슬로 확인된 값)을 가산 ③ 못 정하면 EV 공란 + 사유
       const xl = x[c].lease;
@@ -387,8 +398,7 @@ export function jpFundamentals(model: JpFinModel): JpFund {
         notes.push("금융 자회사 보유 회사 EV = 시가총액 + 제조(금융 제외) 부문 차입금 + 비지배지분 − 연결 현금(오너 결정 2026-10-11, 미국 CAT 방식) — 총차입금·신용지표는 연결 기준");
       }
     }
-    if (financial) f.netDebtEv.n[c] = "금융업(은행·보험 서식) — EV 미산정";
-    else if (captiveWhy) f.netDebtEv.n[c] = captiveWhy;
+    if (captiveWhy) f.netDebtEv.n[c] = captiveWhy;
     else if (mixedWhy) f.netDebtEv.n[c] = `${mixedWhy} — EV 공란`;
     else if (leaseUnknown) f.netDebtEv.n[c] = `${leaseUnknown} — EV 공란`;
     else if (f.cash.v[c] == null || debtV == null) f.netDebtEv.n[c] = f.cash.v[c] == null ? "현금성자산 없음" : "차입금 없음";
@@ -396,7 +406,11 @@ export function jpFundamentals(model: JpFinModel): JpFund {
       const sg = segUsed!;
       f.netDebtEv.v[c] = mfgDebt + (f.nci.v[c] ?? 0) - f.cash.v[c]!;
       f.netDebtEv.n[c] = `제조 부문 차입금 ${Math.round(mfgDebt / 1e6).toLocaleString("en-US")}백만엔(${sg.doc} MD&A 요약 재무상태표 「${sg.excl}」 ${sg.head} — ${sg.rows.map((r) => r.label).join("·")}, 연결 묶음 합 = 본표 차입금 확인) + 비지배지분 − 연결 현금`;
-    } else f.netDebtEv.v[c] = debtV + (f.nci.v[c] ?? 0) - f.cash.v[c]!;
+    } else {
+      f.netDebtEv.v[c] = debtV + (f.nci.v[c] ?? 0) - f.cash.v[c]!;
+      if (financial)
+        f.netDebtEv.n[c] = `금융사 EV = 미국 규칙(오너 결정 2026-10-31) — 차입금 = ${debt?.parts.map((l) => l.label).join("·") || "차입금 줄 없음(0)"}(예금·보험계약부채·콜머니·레포 등 제외), 현금 = ${cash?.parts.map((l) => l.label).join("·") ?? ""}`;
+    }
 
     // ── 현금흐름표 ──
     set(f.ocf, c, first(cf, [byK("jpigp_cor:NetCashProvidedByUsedInOperatingActivitiesIFRS", "jppfs_cor:NetCashProvidedByUsedInOperatingActivities")], c), NOLINE);
@@ -694,7 +708,7 @@ export function jpTtmFromModel(model: JpFinModel, px: JpPx | null): TtmFlows {
   r("evShares", val.shares.n[c]);
   r("fyEps", fyIdx >= 0 ? val.eps.n[fyIdx] : "사업연도 없음");
   r("dpsTtm", val.dps.n[c]);
-  const blocker = f.financial ? "financial" : f.netDebtEv.v[c] == null && f.netDebtEv.n[c]?.startsWith("금융 자회사 보유") ? "captive-unsplit" : null;
+  const blocker = f.netDebtEv.v[c] == null && f.netDebtEv.n[c]?.startsWith("금융 자회사 보유") ? "captive-unsplit" : null;
   const dpsFy = fyIdx >= 0 ? val.dps.v[fyIdx] : null;
   return {
     periodLabel: f.ltmIsFy ? `${fyCol?.label ?? ""}(그 뒤 반기 보고서 아직 없음)` : `${fyCol?.label ?? ""} + 반기 − 전년 반기(${f.cols[c].end})`,
