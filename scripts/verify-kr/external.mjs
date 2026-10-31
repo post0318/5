@@ -274,10 +274,12 @@ export async function krExternal(ctx) {
             const fc = fg.cashF[ym] != null && fg.stF[ym] != null ? Math.round((fg.cashF[ym] + fg.stF[ym]) * 1e6) * 100 : null;
             return { why: `순부채 차 ${v - nd}원(FnGuide − DART B16) — 원문 주석 숫자에서 못 찾음${fc != null ? ` · FnGuide 현금+단기금융자산 ${fc} vs 검증기 현금성자산 ${cash}(차 ${fc - cash}) · FnGuide 총차입부채(순부채 + 현금성 역산) ${v + fc} vs 검증기 총차입금 ${debt}(차 ${v + fc - debt})` : ""}` };
           }
-          if (hit) return { kind: "eq", why: `FnGuide 순부채 − DART(B16) 순차입금 = ${v - nd}원 = 원문 ${hit.rcept} 주석 '${hit.label}' ${hit.v}(단위 ${hit.u}원)`, label: hit.label, suspect: /파생/.test(hit.label) && v < nd ? `외부(FnGuide)가 파생상품부채('${hit.label.slice(0, 60)}')를 뺀 순부채 — 앱 총차입금이 「(유동|비유동)금융부채」 줄 전체(파생상품부채 포함)를 쓴다` : null };
+          if (hit) return { kind: "eq", why: `FnGuide 순부채 − DART(B16) 순차입금 = ${v - nd}원 = 원문 ${hit.rcept} 주석 '${hit.label}' ${hit.v}(단위 ${hit.u}원)`, label: hit.label, suspect: /파생/.test(hit.label) && !/자산/.test(hit.label) && v < nd ? `외부(FnGuide)가 파생상품부채('${hit.label.slice(0, 60)}')를 뺀 순부채 — 앱 총차입금이 「(유동|비유동)금융부채」 줄 전체(파생상품부채 포함)를 쓴다` : null };
           return null;
         };
-        put("FnGuide", key("순차입금"), nd, fNd, ndCause);
+        // 앱 순차입금 = 앱 총차입금 − 앱 현금성(하이라이트 현금 칸은 음수 표시). 원인 식은 앱 값이 K2 원자료 값과 같을 때만
+        const appNd = x.debt != null && x.cash != null ? x.debt + x.cash : null;
+        put("FnGuide", key("순차입금"), appNd, fNd, async (ours, v) => (nd != null && ours === nd ? ndCause(ours, v) : null));
         put("FnGuide", key("EV"), x.ev, fEv, async (ours, v) => {
           if (mc == null || pf == null || fNd == null || nd == null || nci == null) return null;
           // 앱 쪽도 원자료로 닫혀야 — 앱 EV = KRX 보통주 + 우선주 + DART 총차입금 + 비지배지분 − 현금성자산(K1·K2 원자료 값)
@@ -336,7 +338,7 @@ export async function krExternal(ctx) {
       put("Yahoo", key("총차입금"), x.debt, yr.totalDebt ?? null, async (ours, v) => {
         const hit = await noteHit(y, v - ours, 1000, KW_DEBT);
         if (!hit) return null;
-        return { kind: "eq", why: `야후 − 앱 = ${v - ours}원 = 원문 ${hit.rcept} 주석 '${hit.label}' ${hit.v}(단위 ${hit.u}원)`, label: hit.label, suspect: /파생/.test(hit.label) && v < ours ? `외부가 파생상품부채('${hit.label}')를 뺀 값 — 앱 총차입금이 「(유동|비유동)금융부채」 줄 전체(파생상품부채 포함)를 쓴다` : null };
+        return { kind: "eq", why: `야후 − 앱 = ${v - ours}원 = 원문 ${hit.rcept} 주석 '${hit.label}' ${hit.v}(단위 ${hit.u}원)`, label: hit.label, suspect: /파생/.test(hit.label) && !/자산/.test(hit.label) && v < ours ? `외부가 파생상품부채('${hit.label}')를 뺀 값 — 앱 총차입금이 「(유동|비유동)금융부채」 줄 전체(파생상품부채 포함)를 쓴다` : null };
       });
       put("Yahoo", key("순이익(연결)"), x.ni, yr.netIncomeIncludingNoncontrollingInterests ?? null, vint(col, "순이익(연결)"));
       put("Yahoo", key("순이익(지배)"), IS[col]?.niParent ?? null, yr.netIncomeCommonStockholders ?? yr.netIncome ?? null, vint(col, "순이익(지배)"));
