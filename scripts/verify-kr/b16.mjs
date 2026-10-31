@@ -9,7 +9,7 @@
  *  재무상태표 본표에 리스부채 줄이 없으면(오너 결정 2026-10-05) 사업보고서 주석의 리스부채 합계를 더한다 — 단 회사 회계정책 주석이 리스부채를
  *  본표 차입금 줄에 포함해 표시한다고 밝히면(삼성전자 "'유동성장기부채' 또는 '장기차입금'으로 분류") 이미 들어 있으므로 더하지 않는다(leaseNote).
  */
-import { dartXbrlFacts, dartDocLeaseSentences, dartDocNumberStreams, dartDocLeaseTables } from "./dart.mjs";
+import { dartXbrlFacts, dartDocLeaseSentences, dartDocNumberStreams, dartDocLeaseTables, DartNoFileError, dartDocNoFile } from "./dart.mjs";
 import { parseFinTable } from "./cashnote.mjs";
 
 const nm = (s) => String(s ?? "").replace(/\s/g, "");
@@ -20,15 +20,16 @@ const v = (r, col) => {
 };
 
 // 차입금 개념(표준 ID) — 이름 꼴: …Borrowings / …Bonds… / …Debentures / …LeaseLiabilities / LoansReceived
-const DEBT_STD = /(Borrowings|BondsIssued|Debentures?|LeaseLiabilities|ConvertibleBonds?|ExchangeableBonds?|BondsWithWarrant|PortionOfBonds|LoansReceived)/;
+const DEBT_STD = /(Borrowings|CommercialPapers?Issued|ElectronicShortTermBonds|BondsIssued|Debentures?|LeaseLiabilities|ConvertibleBonds?|ExchangeableBonds?|BondsWithWarrant|PortionOfBonds|LoansReceived)/;
 const DEBT_STD_NOT = /Derivative|Provision|Payable|Receivable|Asset|Interest/;
-const DEBT_NAME = /차입|사채|리스부채|장기부채/;
+const DEBT_NAME = /차입|사채|리스부채|장기부채|기업어음|^CP$|전자단기사채/;
 const DEBT_NAME_NOT = /리스채권|투자|자산|받을|대여|이자|파생|확정계약|충당/;
 const PLAIN = /^(유동|비유동|단기|장기)금융부채$/;
 // 단기 예치금은 회사가 "현금성자산으로 분류" 태그를 달아도 같은 성격(006260 2024 보고서 금융기관예치금 — 다른 해는 NotClassified)
-const CASH_STD = /^(ifrs-full|dart)_(CashAndCashEquivalents|Short[tT]ermDeposits(Not)?ClassifiedAsCashEquivalents|CurrentInvestments|CurrentFinancialAssetsAtAmortisedCost|CurrentFinancialAssetsAtFairValueThroughProfitOrLoss\w*)$/;
+// 금융사(은행·보험·카드)는 "현금 및 예치금"(dart_CashAndDuefromBanks) — 현금 + 예치금(단기금융상품 성격, 오너 결정 2026-10-31 「가」 현금 = 현금및현금성자산 + B16 단기금융상품 성격)
+const CASH_STD = /^(ifrs-full|dart)_(CashAndDuefromBanks|CashAndCashEquivalents|Short[tT]ermDeposits(Not)?ClassifiedAsCashEquivalents|CurrentInvestments|CurrentFinancialAssetsAtAmortisedCost|CurrentFinancialAssetsAtFairValueThroughProfitOrLoss\w*)$/;
 // 이름(표준 코드 없음, 또는 포괄 태그 OtherCurrentFinancialAssets) — 단기금융상품·단기투자자산(단기투자증권)·단기금융자산. "기타(유동)금융자산"은 B16 제외
-const CASH_NAME = /^(현금및현금성자산|단기금융상품|단기투자자산|단기투자증권|단기금융자산|유동상각후원가측정금융자산|상각후원가측정유동금융자산|유동당기손익-?공정가치측정금융자산|당기손익-?공정가치측정유동금융자산)$/;
+const CASH_NAME = /^(현금및예치금|현금및상각후원가측정예치금|현금및현금성자산|단기금융상품|단기투자자산|단기투자증권|단기금융자산|유동상각후원가측정금융자산|상각후원가측정유동금융자산|유동당기손익-?공정가치측정금융자산|당기손익-?공정가치측정유동금융자산)$/;
 
 /**
  * @param rows 값을 읽을 보고서 줄(그 해를 담은 가장 최근 보고서)
@@ -57,8 +58,15 @@ export function classifyBsRows(rows, ownRows = rows, rename = null, valCol = nul
     return was != null && v(was, "thstrm_amount") != null && v(was, "thstrm_amount") === v(r, rename.col);
   };
   const plain = borrow.length ? [] : bs.filter((r) => PLAIN.test(nm(r.account_nm)) || renamedPlain(r));
+  const financial = bs.some((r) => /^(예수부채|고객예수부채|예금부채|보험계약부채|책임준비금|투자계약부채)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? ""));
+  // 금융사 총차입금(오너 결정 2026-10-31 「가」 + 정정): 차입금·사채·CP·리스부채. 본표에 따로 나온 콜머니·RP 매도·신탁계정차·매도유가증권 줄은 뺀다.
+  // "차입부채" 한 줄(콜머니·RP 가 섞임)은 finAggregate 로 표시 — 호출부가 XBRL 내역(finDebtSplit)으로 제외액을 정한다
+  const FIN_EXCL_NAME = /콜머니|환매조건부|RP매도|매도RP|신탁계정|매도유가증권|매도증권/;
+  const debtAll = [...debt, ...plain].filter((r) => !(financial && FIN_EXCL_NAME.test(nm(r.account_nm))));
   return {
-    debt: [...debt, ...plain],
+    debt: debtAll,
+    finExcludedFace: financial ? [...debt, ...plain].filter((r) => FIN_EXCL_NAME.test(nm(r.account_nm))) : [],
+    finAggregate: financial ? debtAll.filter((r) => /^ifrs-full_(OtherBorrowings|LoansReceived|Borrowings)$/.test(r.account_id ?? "") || /^차입부채$/.test(nm(r.account_nm))) : [],
     leaseFace: debt.filter(isLease),
     plain,
     // 회사가 같은 줄을 해마다 다른 태그로 달기도 한다(267260·329180 "단기금융자산", 402340 "단기투자자산")
@@ -68,7 +76,14 @@ export function classifyBsRows(rows, ownRows = rows, rename = null, valCol = nul
     family: bs.filter(isFamily),
     nci: bs.filter((r) => r.account_id === "ifrs-full_NoncontrollingInterests" || nm(r.account_nm) === "비지배지분"),
     // 금융업 판정(검증기 자체 규칙) — 예수부채·예금부채·보험계약부채·책임준비금·투자계약부채 줄이 있으면 은행·보험·증권. 일반 기업의 "예수금"(원천징수 등)은 아님(삼성전자 실측)
-    financial: bs.some((r) => /^(예수부채|고객예수부채|예금부채|보험계약부채|책임준비금|투자계약부채)$/.test(nm(r.account_nm)) || /Deposits(From|Due)Customers|InsuranceContractsIssuedThatAreLiabilities|InsuranceContractLiabilities/.test(r.account_id ?? "")),
+    financial,
+    // 은행(예금 수취 금융사·금융지주) — 검증기 자체 규칙: 예수부채 줄이 부채총계의 절반 이상(105560 63%·055550 62%·086790 65%, 증권 006800 은
+    // 투자자예수금이 든 예수부채 13% — 은행 아님). 오너 결정 2026-10-31 「나」: 은행 EV 가 음수면 공란 + 사유
+    bank: (() => {
+      const dep = bs.filter((r) => /DepositsFromCustomers/.test(r.account_id ?? "") || /^(예수부채|고객예수부채|예금부채)$/.test(nm(r.account_nm)));
+      const tl = bs.find((r) => r.account_id === "ifrs-full_Liabilities");
+      return (col) => { const d = sumCol(dep, col), t = tl ? sumCol([tl], col) : null; return d != null && t ? d / t >= 0.5 : false; };
+    })(),
   };
 }
 
@@ -397,7 +412,12 @@ export async function leaseNoteFor(reports, basis, faceDebtNamesOf, badReports =
     // 정책 문장의 줄 이름은 그 보고서 본표의 차입금 줄과 맞춘다(같은 보고서 — 103590: 2022 보고서 "장기차입금", 2024 보고서는 줄 이름을 바꿨다)
     const faceDebtNames = names.length ? await faceDebtNamesOf(rp.fy) : [];
     const hit = names.filter((n) => faceDebtNames.some((f) => f.includes(n) || n.includes(f)));
-    const facts = await dartXbrlFacts(rp.rcept, "11011");
+    // XBRL 파일이 없는 판본(DART 014 — 2021 금융지주 사업보고서 등)은 주석 태그 후보 없음으로 두고 원문 주석 표로 넘어간다(조회 실패 아님)
+    let facts = [];
+    try { facts = await dartXbrlFacts(rp.rcept, "11011"); }
+    catch (e) { if (!(e instanceof DartNoFileError)) throw e; tried.push(`${rp.rcept}: XBRL 파일 없음(DART 014) — 원문 주석으로`); }
+    const noDoc = (rp.all?.length ? rp.all : [rp.rcept]).filter((rc) => dartDocNoFile(rc));
+    if (noDoc.length) tried.push(`원문 파일 없음(DART 014): ${noDoc.join("·")}`);
     const L = leaseFromFacts(facts, rp.prefix, basis);
     // 문장만으로 포함이라 보지 않는다 — 그 보고서 당기 본표 차입금 줄 금액 안에 리스가 있는지 원문 숫자로 확인(못 하면 주석 리스부채를 더한다)
     const conf = hit.length && faceDebtValuesOf ? await leaseInsideFaceDebt(rp.all?.length ? rp.all : [rp.rcept], await faceDebtValuesOf(rp.fy)) : null;
@@ -501,3 +521,42 @@ export function quarterLeaseFromCells(reports, Y, latestQ, annualAmount, basis) 
 
 
 // B16 ②b(기타(유동)금융자산 계열 줄의 현금성 부분)는 cashnote.mjs — 원문 표를 행·열 격자로 읽는 판독(2026-10-18 다시 짬, 예전 숫자 흐름 familyCashPart 삭제)
+
+// ── 금융사 차입부채 내역(오너 결정 2026-10-31 「가」 + 정정): 본표 "차입부채" 한 줄 = 차입금 + 콜머니 + RP 매도(+ 매출어음 등). 총차입금에는 차입금 부분만 ──
+/** 제외 대상 개념 — 콜머니·환매조건부채권매도(RP)·신탁계정차·매도유가증권 */
+export const FIN_DEBT_EXCL = /CallMoney|Repurchase|TrustAccount|DueToTrust|BorrowingsFromTrust|SecuritiesSold/;
+/**
+ * 보고서 XBRL 내역 사실(dartXbrlDebtFacts)로 본표 차입부채 한 줄(faceVal, 원)을 나눈다. 개념마다 값 하나(같은 값만)인 내역 중 **합이 본표 값과 정확히
+ * 같은 묶음**을 찾고, 그 묶음이 하나로 정해질 때(제외액이 같은 묶음끼리는 같은 판정)만 { excluded, parts, how }. 못 정하면 { excluded: null, how }
+ */
+export function finDebtSplit(facts, prefix, basis, faceVal, faceConcept) {
+  const want = (ctx) => {
+    if (!(ctx === prefix || ctx.startsWith(prefix + "_"))) return false;
+    const rest = ctx.slice(prefix.length);
+    if (basis === "CFS" ? /SeparateMember/.test(rest) : /ConsolidatedMember/.test(rest)) return false;
+    return true;
+  };
+  const by = new Map();
+  for (const [c, ctx, x] of facts ?? []) if (want(ctx)) by.set(c, [...(by.get(c) ?? []), x]);
+  const comps = [];
+  for (const [c, xs] of by) {
+    if (!xs.every((x) => x === xs[0]) || !xs[0]) continue;
+    if (faceConcept && c === faceConcept) continue; // 본표 줄 자신(합계)
+    if (/:BondsIssued$/.test(c)) continue; // 사채는 본표 따로 줄
+    if (xs[0] === faceVal && !FIN_DEBT_EXCL.test(c)) continue; // 같은 합계를 다른 이름으로 단 사실
+    comps.push({ c, v: xs[0], excl: FIN_DEBT_EXCL.test(c) });
+  }
+  if (!comps.length) return { excluded: null, how: `XBRL 내역 사실 없음(${prefix})` };
+  if (comps.length > 14) return { excluded: null, how: `XBRL 내역 후보 ${comps.length}개 — 너무 많아 묶음을 정하지 않음` };
+  const sols = [];
+  for (let m = 1; m < 1 << comps.length; m++) {
+    let s = 0;
+    for (let i = 0; i < comps.length; i++) if (m & (1 << i)) s += comps[i].v;
+    if (s === faceVal) sols.push(comps.filter((_, i) => m & (1 << i)));
+  }
+  if (!sols.length) return { excluded: null, how: `XBRL 내역(${comps.map((x) => `${x.c.split(":")[1].slice(0, 40)} ${x.v}`).join(", ")}) 합이 본표 ${faceVal} 과 맞는 묶음 없음` };
+  const ex = [...new Set(sols.map((S) => S.filter((x) => x.excl).reduce((a, x) => a + x.v, 0)))];
+  if (ex.length !== 1) return { excluded: null, how: `본표와 맞는 내역 묶음 ${sols.length}개 — 제외액이 갈림(${ex.join("·")})` };
+  const S = sols[0];
+  return { excluded: ex[0], parts: S, how: `본표 ${faceVal} = ${S.map((x) => `${x.excl ? "[제외]" : ""}${x.c.split(":")[1].slice(0, 50)} ${x.v}`).join(" + ")}(XBRL ${prefix})` };
+}

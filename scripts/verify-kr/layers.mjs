@@ -11,12 +11,12 @@
  *  K5 주당배당금(사업연도) = DART alotMatter, 배당수익률 = DPS ÷ KRX 연말 종가.
  */
 import { appendFileSync } from "node:fs";
-import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartXbrlCum, dartDocLeaseCells, dartDocDaTables, dartCompany } from "./dart.mjs";
+import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartXbrlCum, dartXbrlDebtFacts, dartDocLeaseCells, dartDocDaTables, dartCompany, DartNoFileError } from "./dart.mjs";
 import { daCandidates, invTableDep } from "./docda.mjs";
 import { dataGoDividends } from "./datago.mjs";
 import { krxCapsOn } from "./krx.mjs";
 import { emptyKind } from "./calendar.mjs";
-import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts } from "./b16.mjs";
+import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts, finDebtSplit } from "./b16.mjs";
 import { familyCashFromNotes } from "./cashnote.mjs";
 
 const COL = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
@@ -179,6 +179,37 @@ export async function closeKrLayers() {
 /**
  * @param ctx { sym, corp, env, h, H, IS, tt, add, hardErrors, dartYearSource, consts: { PASS, FAIL, NA }, same }
  */
+
+/**
+ * 금융사 본표 "차입부채" 줄의 콜머니·RP 등 제외액(오너 결정 2026-10-31 「가」 + 정정). rcept·reprt = 그 기간이 당기인 보고서, prefix = 그 보고서의 기간 말
+ * 컨텍스트(CFY2025eFY · CFY2026eHYA 등), ownVal = 그 보고서 본표의 그 줄 당기 값 — 값 보고서(기준 보고서)의 같은 줄 값과 같을 때만 그 내역을 쓴다.
+ * 결과 { excluded(원) | null, how }
+ */
+/** 금융사 총차입금 기대치를 못 정했을 때의 범위 검사 — [본표 차입 줄 − 차입부채 줄 전부, 본표 차입 줄 전부 + 가산 리스] 밖이면 실패, 안이면 검증불가 */
+function finRangeOf(app, lo, hi, how, { FAIL, NA }) {
+  if (app == null) return { status: FAIL, note: `금융사 총차입금 가능 범위 ${lo}~${hi} 인데 앱 빈칸 — ${how}` };
+  if (app < lo || app > hi) return { status: FAIL, app, note: `앱 ${app} 이 금융사 총차입금 가능 범위 ${lo}~${hi} 밖(예수부채·보험계약부채 등이 섞였을 수 있음) — ${how}` };
+  return { status: NA, app, note: `콜머니·RP 제외액을 못 정함 — 앱 값은 범위 ${lo}~${hi} 안 · ${how}` };
+}
+async function finAggregateExcl(cl, col, rcept, reprt, prefix, basis, ownRows) {
+  if (!cl.finAggregate?.length) return { excluded: 0, how: "" };
+  let facts;
+  try { facts = await dartXbrlDebtFacts(rcept, reprt); }
+  catch (e) { return { excluded: null, how: e instanceof DartNoFileError ? `차입부채 내역 XBRL 파일 없음(DART 014) ${rcept}` : `차입부채 내역 XBRL 조회 실패 ${String(e?.message ?? e).slice(0, 80)}`, fetchErr: !(e instanceof DartNoFileError) }; }
+  let ex = 0; const hows = [];
+  for (const r of cl.finAggregate) {
+    const F = sumCol([r], col);
+    if (!F) continue;
+    const own = (ownRows ?? []).find((o) => o.sj_div === "BS" && o.account_id === r.account_id && nm(o.account_nm) === nm(r.account_nm));
+    const Fo = own ? sumCol([own], "thstrm_amount") : null;
+    if (Fo !== F) return { excluded: null, how: `${nm(r.account_nm)} 값 보고서 ${F} ≠ 그 기간 자기 보고서 ${Fo ?? "없음"} — 내역 보고서와 판본이 달라 나누지 않음` };
+    const sp = finDebtSplit(facts, prefix, basis, F, r.account_id ? r.account_id.replace("_", ":") : null);
+    if (sp.excluded == null) return { excluded: null, how: `${nm(r.account_nm)} ${F}: ${sp.how}` };
+    ex += sp.excluded; hows.push(`${nm(r.account_nm)} ${sp.how}`);
+  }
+  return { excluded: ex, how: hows.join(" / ") };
+}
+
 export async function krOriginalLayers(ctx) {
   const { PASS, FAIL, NA, COMMON } = ctx.consts;
   // 이번 종목에서 남긴 검사 기록(층·열·상태) — 뒤 검사가 앞 검사의 공통모드를 물려받는 데 쓴다(감사 9차 ④). 하위 함수도 ...ctx 로 같은 add 를 쓴다
@@ -194,7 +225,12 @@ export async function krOriginalLayers(ctx) {
     console.error(`[심은 오류] ${sym} ${col0}.${f0} = ${H[col0][f0]}`);
   }
   const fail = (layer, name, col, note) => add(layer, name, col, { status: FAIL, note });
-  const err = (what, e) => { const m = `${what}: ${String(e?.message ?? e).slice(0, 120)}`; hardErrors.push(m); add("응답", what, "-", { status: FAIL, note: m }); };
+  // DART 014(보고서에 파일 없음)는 조회 실패가 아니다 — 그 판정에 쓸 원자료가 공시에 없다는 사실. 검증불가로 남기고(통과로 세지 않음) 종료코드 1 사유로 넣지 않는다
+  const err = (what, e) => {
+    const m = `${what}: ${String(e?.message ?? e).slice(0, 120)}`;
+    if (e instanceof DartNoFileError) { add("응답", what, "-", { status: NA, note: `${m} — 그 원자료로 정하는 검사는 검증불가` }); return; }
+    hardErrors.push(m); add("응답", what, "-", { status: FAIL, note: m });
+  };
   /** 정확 일치(정수) — 원자료 있고 앱 빈칸·앱만 있고 원자료 빈칸 모두 실패. common = 기대치가 독립 판독이 아니면(적재본 등) 그 사유 — 통과를 공통모드로 */
   const cmp = (app, src, why = "", common = null) => {
     if (src == null && app == null) return { status: NA, note: `양쪽 빈칸${why ? ` · ${why}` : ""}` };
@@ -266,8 +302,9 @@ export async function krOriginalLayers(ctx) {
   const latestFyBs = (() => { const y = Math.max(...yearsShown); const s = yearSrc.get(y); return s ? bsOwner(s, y) : null; })();
   const fin = latestFyBs ? classifyBsRows(latestFyBs.rows).financial : false;
   const captive = latestFyBs ? captiveOf(latestFyBs.rows, latestFyBs.col) : null;
-  const evBlockWhy = fin ? "금융업(검증기 판정 — 예수부채·보험계약부채 등 줄)" : captive ? `금융 자회사 연결(검증기 판정 — ${captive})` : null;
-  add("K2", "EV 적용 판정(검증기 자체 — 금융업·금융 자회사)", "-", { status: PASS, note: evBlockWhy ?? "일반 기업 — EV 계산 대상" });
+  // 금융업도 EV 계산 대상(오너 결정 2026-10-31 「가」 — 총차입금 = 차입금·사채·CP·리스, 예수부채·보험계약부채·투자자예수금·콜머니·RP 제외). 공란 기대는 금융 자회사 연결만
+  const evBlockWhy = captive ? `금융 자회사 연결(검증기 판정 — ${captive})` : null;
+  add("K2", "EV 적용 판정(검증기 자체 — 금융업·금융 자회사)", "-", { status: PASS, note: evBlockWhy ?? (fin ? "금융업 — EV 계산 대상(총차입금 금융사 규칙)" : "일반 기업 — EV 계산 대상") });
 
   // ── K1 시가총액 ──
   const approxNote = /근사/.test(notes) && /시가총액/.test(notes);
@@ -387,7 +424,7 @@ export async function krOriginalLayers(ctx) {
   // 주석 리스부채를 쓰는 회사(표시 연도 중 본표에 리스부채 줄이 없는 해가 있음)만 — 나머지는 사업보고서 XBRL 을 받지 않는다(012450·402340 최신 판본엔 XBRL 이 없다, DART 014)
   const needLease = yearsShown.some((y) => { const s0 = yearSrc.get(y), o = s0 ? bsOwner(s0, y) : null; return o && !classifyBsRows(o.rows).leaseFace.length; });
   if (needLease) try {
-    const amt = async (ry, pre, y) => { const r = L.latest(ry, "11011"); return r ? leaseFromFacts(await dartXbrlFacts(r.rcept, "11011"), pre, yearSrc.get(y)?.fsDiv ?? "CFS").amount : null; };
+    const amt = async (ry, pre, y) => { const r = L.latest(ry, "11011"); return r ? leaseFromFacts((await xbrlFactsOrNone(r.rcept, "11011")) ?? [], pre, yearSrc.get(y)?.fsDiv ?? "CFS").amount : null; };
     const off = (a, b) => a > 0 && b > 0 && [1e3, 1e6, 1e9].includes(Math.max(a, b) / Math.min(a, b));
     for (const ry of new Set(yearsShown.flatMap((y) => [y, y + 1]))) {
       const r = L.latest(ry, "11011");
@@ -439,9 +476,13 @@ export async function krOriginalLayers(ctx) {
       why += `${sepWhy ? ` · ${sepWhy}` : ""} · 본표 리스부채 줄 없음 → ${lease.status === "added" ? `주석 리스부채 ${lease.amount} 가산` : lease.status === "included" ? "차입금 줄에 포함" : "리스부채 확인 불가"}(${lease.how})`;
       if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
     } else if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
-    const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
+    // 금융사 차입부채 줄의 콜머니·RP 제외(그해 자기 사업보고서 XBRL 내역). 못 나누면 총차입금·EV 검증불가 + 범위 검사(사채·리스 ≤ 앱 ≤ 본표 차입 줄 전부)
+    const finX = cl.financial ? await finAggregateExcl(cl, own.col, L.latest(y, "11011")?.rcept, "11011", `CFY${y}eFY`, src.fsDiv, src.cur) : { excluded: 0, how: "" };
+    if (finX.fetchErr) err(`금융사 차입부채 내역 ${y}`, new Error(finX.how));
+    const expDebt = finX.excluded == null ? null : faceDebt - finX.excluded + (lease.status === "added" ? lease.amount : 0);
+    if (finX.how) why += ` · 금융사 총차입금(차입금·사채·CP·리스, 콜머니·RP 제외): ${finX.how}`;
     // 안전장치는 앱이 실제로 더한 값(앱 총차입금 − 본표 차입금)으로 — 검증기 판독과 같은 결함을 함께 가져도 잡히게
-    if (lease.status === "added" && x.debt != null) leaseByYear.set(y, x.debt - faceDebt);
+    if (lease.status === "added" && x.debt != null && finX.excluded != null) leaseByYear.set(y, x.debt - (faceDebt - finX.excluded));
     // B16 ②b — 기타(유동)금융자산 계열 줄은 주석 내역의 현금성 부분(검증기 원문 판독, 그 해·다음 해·기준 보고서 모든 판본)
     let famCash = 0, famOk = true;
     const famWhy = [];
@@ -461,17 +502,34 @@ export async function krOriginalLayers(ctx) {
     // 원문 칸 하나 값끼리 갈리거나 반올림 칸 합만 있으면(lease.ambiguous) 기대치와 같아도 검증불가 — 어느 값이 정밀값인지 원문이 정하지 않는다
     const amb = lease.status === "added" && lease.ambiguous;
     const rexact = (name, app, exp, rg, w) => (rg && app != null && (app !== exp || amb) && app >= rg[0] && app <= rg[1] ? add("K2", name, col, { status: NA, app, src: exp, note: `원문 주석 표 단위 반올림 범위 ${rg[0]}~${rg[1]} 안 — 원 단위 정밀값 없음 · ${w}` }) : exact("K2", name, col, app, exp, w));
-    rexact("총차입금 = DART(B16)", x.debt, expDebt, rgD, why);
+    if (expDebt == null) add("K2", "총차입금 = DART(B16)", col, finRangeOf(x.debt, faceDebt - (sumCol(cl.finAggregate, own.col) ?? 0), faceDebt + (lease.status === "added" ? lease.amount : 0), why, { FAIL, NA }));
+    else rexact("총차입금 = DART(B16)", x.debt, expDebt, rgD, why);
     if (expCash == null) add("K2", "현금성자산 = DART(B16)", col, { status: NA, app: x.cash == null ? null : -x.cash, note: `기타(유동)금융자산 계열 줄 내역을 검증기가 못 읽음 — ${famWhy.join(" / ")}` });
     else exact("K2", "현금성자산 = DART(B16)", col, x.cash == null ? null : -x.cash, expCash, `${cl.cash.map((r) => nm(r.account_nm)).join("+")}${famWhy.length ? ` + ②b ${famWhy.join(" / ")}` : ""}`);
     exact("K2", "비지배지분 = DART", col, x.nci ?? (rowHidden("nci") ? 0 : null), expNci);
     const k = caps.get(y);
     // 금융업·금융 자회사 판정은 해마다 그해 재무상태표로(감사 3차 ⑥ — 예전엔 최근 사업연도 판정을 전 연도에 썼다). LTM 은 최신 판정(evBlockWhy)
     const capY = captiveOf(own.rows, own.col);
-    const evBlockY = cl.financial ? "금융업(검증기 판정 — 그해 예수부채·보험계약부채 등 줄)" : capY ? `금융 자회사 연결(검증기 판정 — 그해 ${capY})` : null;
+    // 금융사도 EV 를 채운다(오너 결정 2026-10-31 「가」) — 공란 기대는 금융 자회사 연결만
+    const evBlockY = capY ? `금융 자회사 연결(검증기 판정 — 그해 ${capY})` : null;
     const blockWhy = evBlockY ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!k || k.common == null ? "KRX 연말 시가총액 없음" : null);
     if (blockWhy) { if (x.ev != null) fail("K2", "EV = KRX + DART(B16)", col, `기대 공란(${blockWhy})인데 앱 EV ${x.ev}`); else add("K2", "EV = KRX + DART(B16)", col, { status: PASS, note: `공란 — ${blockWhy}` }); }
     else if (expCash == null) add("K2", "EV = KRX + DART(B16)", col, { status: NA, app: x.ev, note: "현금성자산 기대치 없음(②b 계열 줄 판독 못 함)" });
+    else if (expDebt == null) {
+      // 총차입금을 못 정한 금융사 — 가능 범위로 EV 부호를 본다. 은행이고 범위 위끝도 음수면 공란 기대, 비은행이거나 아래끝이 0 이상이면 값이 있어야
+      const base = k.common + k.preferred + expNci - expCash, lse = lease.status === "added" ? lease.amount : 0;
+      const evLo = base + faceDebt - (sumCol(cl.finAggregate, own.col) ?? 0), evHi = base + faceDebt + lse;
+      const bank = cl.bank(own.col);
+      if (bank && evHi < 0) add("K2", "EV = KRX + DART(B16)", col, x.ev == null ? { status: PASS, note: `공란 — 은행 EV 가능 범위 ${evLo}~${evHi} 전부 음수(오너 결정 2026-10-31 「나」)` } : { status: FAIL, app: x.ev, note: `은행 EV 가능 범위 ${evLo}~${evHi} 전부 음수인데 앱 EV ${x.ev}` });
+      else if (x.ev == null && (!bank || evLo >= 0)) add("K2", "EV = KRX + DART(B16)", col, { status: FAIL, note: `금융사 EV 는 채운다(오너 결정 2026-10-31) — 가능 범위 ${evLo}~${evHi}${bank ? "(은행, 음수 아님)" : ""}인데 앱 EV 빈칸 · ${finX.how}` });
+      else if (x.ev != null && (x.ev < evLo || x.ev > evHi)) add("K2", "EV = KRX + DART(B16)", col, { status: FAIL, app: x.ev, note: `앱 EV ${x.ev} 가 가능 범위 ${evLo}~${evHi} 밖 — ${finX.how}` });
+      else add("K2", "EV = KRX + DART(B16)", col, { status: NA, app: x.ev, note: `총차입금 기대치 못 정함(콜머니·RP 제외액) — 가능 범위 ${evLo}~${evHi} · ${finX.how}` });
+    }
+    else if (cl.bank(own.col) && k.common + k.preferred + expDebt + expNci - expCash < 0) {
+      // 은행 EV 음수 → 공란 + 사유(오너 결정 2026-10-31 「나」)
+      const ev0 = k.common + k.preferred + expDebt + expNci - expCash;
+      add("K2", "EV = KRX + DART(B16)", col, x.ev == null ? { status: PASS, note: `공란 — 은행 EV 음수(검증기 계산 ${ev0}, 오너 결정 2026-10-31 「나」)` } : { status: FAIL, app: x.ev, note: `은행 EV 음수(검증기 ${ev0})면 공란이어야 하는데 앱 EV ${x.ev}` });
+    }
     else { const ev0 = k.common + k.preferred + expDebt + expNci - expCash; rexact("EV = KRX + DART(B16)", x.ev, ev0, rgD ? [ev0 - expDebt + rgD[0], ev0 - expDebt + rgD[1]] : null, lease.status === "added" ? `리스부채 ${lease.how.slice(0, 200)}` : ""); }
   }
 
@@ -879,15 +937,18 @@ async function ltmLayer(c) {
     const faceDebt = sumCol(cl.debt, "thstrm_amount") ?? 0;
     const pol = policySrc.at(-1);
     const lease = cl.leaseFace.length ? { status: "face" } : pol && pol.fy === lp.year ? pol : { status: "unknown", how: `FY${lp.year} 리스 판정 없음` };
-    const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
+    const finX = cl.financial ? await finAggregateExcl(cl, "thstrm_amount", lp.rcept, "11011", `CFY${lp.year}eFY`, cur.fsDiv, cur.rows) : { excluded: 0, how: "" };
+    if (finX.fetchErr) c.err(`금융사 차입부채 내역 LTM`, new Error(finX.how));
+    const expDebt = finX.excluded == null ? null : faceDebt - finX.excluded + (lease.status === "added" ? lease.amount : 0);
     const fam = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === lp.year && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept), cur.fsDiv);
     const cash = fam.v == null ? null : (sumCol(cl.cash, "thstrm_amount") ?? 0) + fam.v, nci = sumCol(cl.nci, "thstrm_amount") ?? 0;
-    exact("K2", "LTM 총차입금 = DART 사업보고서(B16)", "LTM", LT.debt, expDebt, `${lp.nm}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}`);
+    if (expDebt == null) add("K2", "LTM 총차입금 = DART 사업보고서(B16)", "LTM", finRangeOf(LT.debt, faceDebt - sumCol(cl.finAggregate, "thstrm_amount"), faceDebt + (lease.status === "added" ? lease.amount : 0), finX.how, consts));
+    else exact("K2", "LTM 총차입금 = DART 사업보고서(B16)", "LTM", LT.debt, expDebt, `${lp.nm}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}${finX.how ? ` · 금융사: ${finX.how}` : ""}`);
     if (cash == null) add("K2", "LTM 현금성자산 = DART 사업보고서(B16)", "LTM", { status: NA, app: LT.cash == null ? null : -LT.cash, note: `②b 계열 줄 판독 못 함 — ${fam.why}` });
     else exact("K2", "LTM 현금성자산 = DART 사업보고서(B16)", "LTM", LT.cash == null ? null : -LT.cash, cash, fam.why);
     exact("K2", "LTM 비지배지분 = DART 사업보고서", "LTM", LT.nci ?? (rowHidden("nci") ? 0 : null), nci);
     const block = evBlockWhy ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!capCur || capCur.common == null ? "KRX 현재 시가총액 없음" : null);
-    ltmEvCheck(c, block, expDebt, nci, cash);
+    ltmEvCheck(c, block, expDebt, nci, cash, cl.bank("thstrm_amount"));
     return;
   }
   const Y = lp.year, q = { "11013": 1, "11012": 2, "11014": 3 }[lp.code];
@@ -941,7 +1002,7 @@ async function ltmLayer(c) {
   // 현금흐름 전기 누적 = 당기 분기·반기 보고서 XBRL 전기 칸(정정본, 오너 결정 2026-10-10 — 재무제표 API 는 분기 현금흐름 전기 열이 없다). XBRL 로 확인 못 하면
   // 앱은 빈칸 + 사유여야 한다. XBRL 당기 누적 = 재무제표 API 당기 누적일 때만 같은 줄로 본다
   let cum = null, cumErr = null;
-  try { cum = await dartXbrlCum(lp.rcept, lp.code); } catch (e) { cumErr = String(e?.message ?? e).slice(0, 120); }
+  try { cum = await dartXbrlCum(lp.rcept, lp.code); } catch (e) { cumErr = e instanceof DartNoFileError ? `파일 없음(DART 014 — 조회 실패 아님) ${lp.rcept}` : String(e?.message ?? e).slice(0, 120); }
   const QC = { "11013": "FQ", "11012": "HY", "11014": "TQ" }[lp.code];
   const member = cur.fsDiv === "CFS" ? "Consolidated" : "Separate";
   const xCum = (ids, pre) => {
@@ -1052,8 +1113,12 @@ async function ltmLayer(c) {
       }
     } else lease = { status: "unknown", how: `FY${Y - 1} 주석 리스부채 ${pol?.status ?? "없음"} — 분기 보고서 전기말 열 확인 불가` };
   }
-  const expDebt = faceDebt + (lease.status === "added" ? lease.amount : 0);
-  exact("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", LT.debt, expDebt, `${lp.nm} ${basis}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}`);
+  const QP = { "11013": "FQ", "11012": "HY", "11014": "TQ" }[lp.code];
+  const finX = cl.financial ? await finAggregateExcl(cl, "thstrm_amount", lp.rcept, lp.code, `CFY${lp.year}e${QP}A`, basis, cur.rows) : { excluded: 0, how: "" };
+  if (finX.fetchErr) c.err(`금융사 차입부채 내역 LTM 분기`, new Error(finX.how));
+  const expDebt = finX.excluded == null ? null : faceDebt - finX.excluded + (lease.status === "added" ? lease.amount : 0);
+  if (expDebt == null) add("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", finRangeOf(LT.debt, faceDebt - sumCol(cl.finAggregate, "thstrm_amount"), faceDebt + (lease.status === "added" ? lease.amount : 0), finX.how, consts));
+  else exact("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", LT.debt, expDebt, `${lp.nm} ${basis}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}${finX.how ? ` · 금융사: ${finX.how}` : ""}`);
   const famQ = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === Y && z.code === lp.code).sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept), basis);
   {
     const st = await stagingCash(c.env, c.sym);
@@ -1065,7 +1130,7 @@ async function ltmLayer(c) {
   else exact("K2", "LTM 현금성자산 = DART 최신 분기(B16)", "LTM", LT.cash == null ? null : -LT.cash, cashQ, famQ.why);
   exact("K2", "LTM 비지배지분 = DART 최신 분기", "LTM", LT.nci ?? (rowHidden("nci") ? 0 : null), sumCol(cl.nci, "thstrm_amount") ?? 0);
   const block = evBlockWhy ?? (lease.status === "unknown" ? "리스부채 확인 불가 — EV 공란이어야" : null) ?? (!capCur || capCur.common == null ? "KRX 현재 시가총액 없음" : null);
-  ltmEvCheck(c, block, expDebt, sumCol(cl.nci, "thstrm_amount") ?? 0, cashQ);
+  ltmEvCheck(c, block, expDebt, sumCol(cl.nci, "thstrm_amount") ?? 0, cashQ, cl.bank("thstrm_amount"));
 }
 
 /** 재무분석 LTM 비율 — 매출총이익률·유효세율(분자·분모 모두 검증기 기대치). 분기 경로·사업보고서 시기 경로 공통(감사 11차 ③) */
@@ -1086,13 +1151,16 @@ function analysisLtmRatios(c, xExp, revLtm) {
 }
 
 /** LTM EV 대조 — 공란 기대(block)·우선주 미확인(게시 전 — 검증불가, 통과로 세지 않음)·정확 대조 */
-function ltmEvCheck(c, block, expDebt, nci, cash) {
+function ltmEvCheck(c, block, expDebt, nci, cash, bank = false) {
   const { LT, add, fail, exact, ltmPrefOk, ltmPrefPending, consts } = c;
   const { PASS, NA } = consts;
   if (block) { if (LT.ev != null) fail("K2", "LTM EV = KRX + DART(B16)", "LTM", `기대 공란(${block})인데 앱 EV ${LT.ev}`); else add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: PASS, note: `공란 — ${block}` }); return; }
   if (cash == null) { add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: NA, app: LT.ev, note: "현금성자산 기대치 없음(②b 계열 줄 판독 못 함)" }); return; }
+  if (expDebt == null) { add("K2", "LTM EV = KRX + DART(B16)", "LTM", LT.ev == null && bank ? { status: NA, note: "은행 — 총차입금 기대치를 못 정해 EV 부호(음수면 공란, 오너 결정 2026-10-31 「나」)를 확인 못 함" } : LT.ev == null ? { status: consts.FAIL, note: "금융사도 EV 를 채운다(오너 결정 2026-10-31) — 앱 LTM EV 빈칸 · 총차입금 기대치 못 정함" } : { status: NA, app: LT.ev, note: "금융사 총차입금 기대치 못 정함(콜머니·RP 제외액) — EV 검증불가" }); return; }
   if (ltmPrefOk == null && LT.ev != null) { add("K2", "LTM EV = KRX + DART(B16)", "LTM", { status: NA, app: LT.ev, note: ltmPrefPending ? "우선주 시가총액 확인 불가(KRX 게시 전) — 재실행 필요" : "우선주 시가총액 확인 불가(K1 우선주·시가총액 검사 실패 또는 KRX 현재 조회 실패 — 그 실패가 이미 기록됨)" }); return; }
-  exact("K2", "LTM EV = KRX + DART(B16)", "LTM", LT.ev, LT.mc == null ? null : LT.mc + ltmPrefOk + expDebt + nci - cash, "보통주 시가총액은 K1 에서 따로 대조");
+  const ev0 = LT.mc == null ? null : LT.mc + ltmPrefOk + expDebt + nci - cash;
+  if (bank && ev0 != null && ev0 < 0) { add("K2", "LTM EV = KRX + DART(B16)", "LTM", LT.ev == null ? { status: PASS, note: `공란 — 은행 EV 음수(검증기 계산 ${ev0}, 오너 결정 2026-10-31 「나」)` } : { status: consts.FAIL, app: LT.ev, note: `은행 EV 음수(검증기 ${ev0})면 공란이어야 하는데 앱 EV ${LT.ev}` }); return; }
+  exact("K2", "LTM EV = KRX + DART(B16)", "LTM", LT.ev, ev0, "보통주 시가총액은 K1 에서 따로 대조");
 }
 
 /** 분기 값 원천(앱 규칙 문서와 같은 우선순위) — 3개월 = 다음 해 같은 분기 보고서 전년 3개월 → 그 분기 보고서 3개월 → 누적 차, 4분기 = 사업보고서 − 3분기 누적 */
@@ -1334,7 +1402,7 @@ async function docReads(rcepts, basis) {
 /** XBRL 사실 — 그 판본에 XBRL 파일이 없으면(DART 014) null. 다른 실패는 던진다 */
 async function xbrlFactsOrNone(rcept, code) {
   try { return await dartXbrlFacts(rcept, code); }
-  catch (e) { if (/<status>014<\/status>/.test(String(e?.message ?? e))) return null; throw e; }
+  catch (e) { if (e instanceof DartNoFileError) return null; throw e; }
 }
 /** 분기·반기 XBRL 현금흐름 조정 누적 — 컨텍스트 접두어(CFY2026dHYA 등, 끝이 A = 누적)마다 xbrlDa */
 function xbrlCum(facts, cp, y, basis) {

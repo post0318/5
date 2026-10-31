@@ -21,6 +21,18 @@ export const dartStats = { requests: 0 };
 let QUOTA = null;
 export function dartQuota() { return QUOTA; }
 export { DartStopError };
+/**
+ * DART 014 「파일이 존재하지 않습니다」 — 그 보고서(판본)에 원문·XBRL 파일이 **없다**는 응답. 조회 실패(망·점검·형식 오류)와 다르다(2026-10-31 — 예전엔
+ * XBRL 은 "압축 해제 실패" 조회 실패로, 원문은 "해당 문장 없음"과 같은 빈 결과로 섞였다). XBRL 판독은 이 오류를 던지고(호출부가 「파일 없음」으로 기록),
+ * 원문 판독은 빈 결과를 돌려주되 dartDocNoFile(접수번호)로 구분할 수 있다. 014 는 판본(접수번호)에 매인 사실이라 디스크에 기록해 다시 묻지 않는다
+ */
+export class DartNoFileError extends Error {
+  constructor(kind, rcept) { super(`DART ${kind} ${rcept} — 보고서에 파일 없음(DART 014, 조회 실패 아님)`); this.name = "DartNoFileError"; this.rcept = rcept; this.kind = kind; }
+}
+const NOFILE = new Set();
+/** 원문 파일이 없는(DART 014) 접수번호인가 — 원문 판독 함수를 한 번 부른 뒤에만 참이 될 수 있다 */
+export function dartDocNoFile(rcept) { return NOFILE.has(`doc:${rcept}`); }
+const is014 = (buf) => { const head = strFromU8(buf.slice(0, 300)); return /^<\?xml/.test(head) && /<status>014<\/status>/.test(head); };
 
 export function configureDart({ key, cache, cap }) {
   KEY = key;
@@ -215,6 +227,7 @@ async function xbrlZip(rcept, reprt) {
   if (until) { xbrlMaint.skipped++; throw new Error(`DART XBRL 점검(status 800 기록 — ${kst(until)} KST 까지 요청 생략) ${rcept}`); }
   const r = await getRaw(`${B}/fnlttXbrl.xml?crtfc_key=${KEY}&rcept_no=${rcept}&reprt_code=${reprt}`, `XBRL ${rcept}`);
   const buf = new Uint8Array(await r.arrayBuffer());
+  if (is014(buf)) throw new DartNoFileError("XBRL", rcept);
   if (/<status>800<\/status>/.test(strFromU8(buf.slice(0, 300)))) {
     const now = Date.now();
     try { mkdirSync(new URL(".", MAINT_FILE), { recursive: true }); writeFileSync(MAINT_FILE, JSON.stringify({ at: now, until: now + MAINT_TTL_MS, rcept })); }
@@ -229,8 +242,9 @@ const XBRL_FILTER_VER = "f2";
 const XBRL_KEEP = /Lease|Depreciat|Amorti[sz]|RightofuseAssets|RightOfUseAssets|InvestmentPropert|Impairment/i;
 /** 보고서 XBRL 의 숫자 사실 중 감가상각·리스 관련만 [개념, 컨텍스트, 값]. 판본 = 접수번호(바뀌지 않음) */
 export async function dartXbrlFacts(rcept, reprt) {
-  return versioned("xbrl", `${rcept}_${reprt}`, `${rcept}-${XBRL_FILTER_VER}`, async () => {
-    const buf = await xbrlZip(rcept, reprt);
+  const v = await versioned("xbrl", `${rcept}_${reprt}`, `${rcept}-${XBRL_FILTER_VER}`, async () => {
+    let buf;
+    try { buf = await xbrlZip(rcept, reprt); } catch (e) { if (e instanceof DartNoFileError) return { noFile: true }; throw e; }
     if (buf.length < 100) throw new Error(`DART XBRL ${rcept} 빈 응답(${buf.length}B)`);
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART XBRL ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
@@ -242,6 +256,8 @@ export async function dartXbrlFacts(rcept, reprt) {
       if (XBRL_KEEP.test(m[2]) || /Lease/i.test(m[3])) out.push([`${m[1]}:${m[2]}`, m[3], Number(m[4])]);
     return out;
   });
+  if (v?.noFile) { NOFILE.add(`xbrl:${rcept}`); throw new DartNoFileError("XBRL", rcept); }
+  return v;
 }
 
 /**
@@ -249,8 +265,9 @@ export async function dartXbrlFacts(rcept, reprt) {
  * 하나뿐인 것만(현금흐름 LTM 전기 누적 = 정정본, 오너 결정 2026-10-10). 앱 xbrl.ts 와 코드를 나누지 않는 검증기 자체 판독. 판본 = 접수번호
  */
 export async function dartXbrlCum(rcept, reprt) {
-  return versioned("xbrl-cum", `${rcept}_${reprt}`, `${rcept}-c1`, async () => {
-    const buf = await xbrlZip(rcept, reprt);
+  const v = await versioned("xbrl-cum", `${rcept}_${reprt}`, `${rcept}-c1`, async () => {
+    let buf;
+    try { buf = await xbrlZip(rcept, reprt); } catch (e) { if (e instanceof DartNoFileError) return { noFile: true }; throw e; }
     if (buf.length < 100) throw new Error(`DART XBRL ${rcept} 빈 응답(${buf.length}B)`);
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART XBRL ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
@@ -265,17 +282,67 @@ export async function dartXbrlCum(rcept, reprt) {
     }
     return out;
   });
+  if (v?.noFile) { NOFILE.add(`xbrl:${rcept}`); throw new DartNoFileError("XBRL", rcept); }
+  return v;
+}
+
+
+/**
+ * 원문 판독 결과 후처리 — 014 표시({ noFile })면 접수번호를 기록하고 빈 결과. 예전 캐시(014 도 [] 로 저장)는 빈 결과가 014 인지 "해당 내용 없음"인지
+ * 모른다 → 빈 결과가 캐시에서 왔고 판정 기록(docstat)이 없으면 원문을 한 번 다시 받아 014 여부만 확인하고 기록한다(접수번호당 1회)
+ */
+async function docOut(rcept, v) {
+  if (v?.noFile) { NOFILE.add(`doc:${rcept}`); return []; }
+  if (Array.isArray(v) && v.length === 0 && CACHE) {
+    let st = CACHE.get("docstat", rcept, "v1");
+    if (st === undefined) {
+      const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}(014 확인)`);
+      st = is014(new Uint8Array(await r.arrayBuffer())) ? "nofile" : "ok";
+      CACHE.put("docstat", rcept, "v1", st);
+    }
+    if (st === "nofile") NOFILE.add(`doc:${rcept}`);
+  }
+  return v;
+}
+
+/**
+ * 금융사 차입부채 내역(오너 결정 2026-10-31 「가」 + 정정 — 총차입금 = 차입금·사채·CP·리스부채, 콜머니·RP 매도·신탁계정차·매도유가증권 제외).
+ * 재무상태표 본표 "차입부채" 한 줄에 콜머니·환매조건부채권매도가 섞여 있어(105560 2025: 차입금 53,070,565 + 콜머니 4,227,727 + 환매조건부채권매도 등
+ * 13,430,104 = 70,728,396 백만원) 보고서 XBRL 주석의 내역 사실을 따로 읽는다. 기간 말 시점 컨텍스트(… e FY|FQ|HY|TQ …)이고 연결·별도 축과 보고금액 멤버 밖의
+ * 차원이 없는 사실만 [개념, 컨텍스트, 값]. 판본 = 접수번호
+ */
+const XBRL_DEBT_VER = "d1";
+const DEBT_KEEP = /LoansReceived|Borrowings?$|Borrowings(?!InterestRate|ByName)|CallMoney|Repurchase|CommercialPaper|ElectronicShortTerm|ShortTermBonds|BondsIssued$|TrustAccount|DueToTrust|BorrowingsFromTrust|SecuritiesSold|SalesNotes|BillsSold/;
+const DEBT_DROP = /InterestRate|Undiscounted|Nominal|FairValue|Netting|Offsetting|ContinuesToRecognise|Maturity|Discount|Premium|Interest$|Expense|Proceeds|Repayment|Payment|Increase|Decrease|Gain|Loss|RelatedParty/;
+export async function dartXbrlDebtFacts(rcept, reprt) {
+  const v = await versioned("xbrl-debt", `${rcept}_${reprt}`, `${rcept}-${XBRL_DEBT_VER}`, async () => {
+    let buf;
+    try { buf = await xbrlZip(rcept, reprt); } catch (e) { if (e instanceof DartNoFileError) return { noFile: true }; throw e; }
+    if (buf.length < 100) throw new Error(`DART XBRL ${rcept} 빈 응답(${buf.length}B)`);
+    let files;
+    try { files = unzipSync(buf); } catch (e) { throw new Error(`DART XBRL ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
+    const n = Object.keys(files).find((x) => x.endsWith(".xbrl"));
+    if (!n) throw new Error(`DART XBRL ${rcept} — zip 안에 .xbrl 없음`);
+    const xml = strFromU8(files[n]);
+    const CTX = /^([CP]FY\d{4}e(?:FY|FQ|HY|TQ)A?)(_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_(?:Consolidated|Separate)Member)?(_ifrs-full_CarryingAmountAccumulatedDepreciationAmortisationAndImpairmentAndGrossCarryingAmountAxis_dart_ReportedAmountMember)?$/;
+    const out = [];
+    for (const m of xml.matchAll(/<([\w-]+):(\w+)\b[^>]*?contextRef="([^"]+)"[^>]*>(-?\d+(?:\.\d+)?)</g))
+      if (DEBT_KEEP.test(m[2]) && !DEBT_DROP.test(m[2]) && CTX.test(m[3])) out.push([`${m[1]}:${m[2]}`, m[3], Number(m[4])]);
+    return out;
+  });
+  if (v?.noFile) { NOFILE.add(`xbrl:${rcept}`); throw new DartNoFileError("XBRL", rcept); }
+  return v;
 }
 
 const DOC_FILTER_VER = "d1";
 /** 보고서 원문 중 "리스부채" 가 들어간 문장만(회계정책 — 리스부채를 어느 재무상태표 줄에 표시하는가). 판본 = 접수번호 */
 export async function dartDocLeaseSentences(rcept) {
-  return versioned("doc-lease", rcept, `${rcept}-${DOC_FILTER_VER}`, async () => {
+  return docOut(rcept, await versioned("doc-lease", rcept, `${rcept}-${DOC_FILTER_VER}`, async () => {
     const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
     const buf = new Uint8Array(await r.arrayBuffer());
     // 원문 파일이 없는 판본(DART 014 "파일이 존재하지 않습니다" — [첨부정정]은 첨부만 바꿔 본문이 없다, 001440 2024)은 문장 없음. 다른 상태는 실패
     const head = strFromU8(buf.slice(0, 300));
-    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return { noFile: true };
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
     const out = new Set();
@@ -286,7 +353,7 @@ export async function dartDocLeaseSentences(rcept) {
       for (const s of t.split(/(?<=[.다])\s/)) if (s.includes("리스부채") && s.length < 400) out.add(s.trim());
     }
     return [...out];
-  });
+  }));
 }
 
 const DOC_CELL_VER = "c2";
@@ -296,11 +363,11 @@ const CELL_UNIT = { 원: 1, 천원: 1e3, 백만원: 1e6, 억원: 1e8 };
  * 그 표 안 첫 부분, 없으면 표 바로 앞 글자의 마지막 단위 표기. ADECIMAL 이 표 단위와 맞지 않는 칸(0 제외)은 버린다. 판본 = 접수번호
  */
 export async function dartDocLeaseCells(rcept) {
-  return versioned("doc-lease-cells", rcept, `${rcept}-${DOC_CELL_VER}`, async () => {
+  return docOut(rcept, await versioned("doc-lease-cells", rcept, `${rcept}-${DOC_CELL_VER}`, async () => {
     const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
     const buf = new Uint8Array(await r.arrayBuffer());
     const head = strFromU8(buf.slice(0, 300));
-    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return { noFile: true };
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
     const strip = (t) => t.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
@@ -328,7 +395,7 @@ export async function dartDocLeaseCells(rcept) {
       }
     }
     return out;
-  });
+  }));
 }
 
 const DOC_NUM_VER = "n3";
@@ -338,11 +405,11 @@ const DOC_NUM_VER = "n3";
  * 보지 않는다. 판본 = 접수번호
  */
 export async function dartDocNumberStreams(rcept) {
-  return versioned("doc-nums", rcept, `${rcept}-${DOC_NUM_VER}`, async () => {
+  return docOut(rcept, await versioned("doc-nums", rcept, `${rcept}-${DOC_NUM_VER}`, async () => {
     const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
     const buf = new Uint8Array(await r.arrayBuffer());
     const head = strFromU8(buf.slice(0, 300));
-    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return { noFile: true };
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
     const strip = (t) => t.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;|&cr;|&amp;/g, " ").replace(/\s+/g, " ");
@@ -372,7 +439,7 @@ export async function dartDocNumberStreams(rcept) {
       }
     }
     return out;
-  });
+  }));
 }
 
 const DOC_FINTAB_VER = "ft2";
@@ -382,11 +449,11 @@ const DOC_FINTAB_VER = "ft2";
  * (금융자산·금융상품·투자자산·예금·예치·대여금·신탁·채무상품·공정가치). 판본 = 접수번호
  */
 export async function dartDocFinTables(rcept) {
-  return versioned("doc-fintab", rcept, `${rcept}-${DOC_FINTAB_VER}`, async () => {
+  return docOut(rcept, await versioned("doc-fintab", rcept, `${rcept}-${DOC_FINTAB_VER}`, async () => {
     const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
     const buf = new Uint8Array(await r.arrayBuffer());
     const head = strFromU8(buf.slice(0, 300));
-    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return { noFile: true };
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
     const KEEP = /금융자산|금융상품|투자자산|예금|예치|대여금|신탁|채무상품|공정가치/;
@@ -417,7 +484,7 @@ export async function dartDocFinTables(rcept) {
       }
     }
     return out;
-  });
+  }));
 }
 
 const DOC_LEASETAB_VER = "lt1";
@@ -426,11 +493,11 @@ const DOC_LEASETAB_VER = "lt1";
  * 표 글자 또는 표 앞 300자에 "리스부채"·"차입금"이 있는 표만. scope 는 dartDocFinTables 와 같은 규칙(첨부 문서 종류 → 목차 → 「(연결)」). 판본 = 접수번호
  */
 export async function dartDocLeaseTables(rcept) {
-  return versioned("doc-leasetab", rcept, `${rcept}-${DOC_LEASETAB_VER}`, async () => {
+  return docOut(rcept, await versioned("doc-leasetab", rcept, `${rcept}-${DOC_LEASETAB_VER}`, async () => {
     const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
     const buf = new Uint8Array(await r.arrayBuffer());
     const head = strFromU8(buf.slice(0, 300));
-    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return { noFile: true };
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
     const out = [];
@@ -454,7 +521,7 @@ export async function dartDocLeaseTables(rcept) {
       }
     }
     return out;
-  });
+  }));
 }
 
 /** 기업개황(company.json) — 법인등록번호(jurir_no) 등. 판본 고정(v1, 법인등록번호는 바뀌지 않음) */
@@ -479,11 +546,11 @@ const DOC_DA_VER = "t5";
  * 앱 적재 스크립트(populate-kr-da.mjs)와 코드를 나누지 않는 검증기 판독. 판본 = 접수번호
  */
 export async function dartDocDaTables(rcept) {
-  return versioned("doc-da-tables", rcept, `${rcept}-${DOC_DA_VER}`, async () => {
+  return docOut(rcept, await versioned("doc-da-tables", rcept, `${rcept}-${DOC_DA_VER}`, async () => {
     const r = await getRaw(`${B}/document.xml?crtfc_key=${KEY}&rcept_no=${rcept}`, `원문 ${rcept}`);
     const buf = new Uint8Array(await r.arrayBuffer());
     const head = strFromU8(buf.slice(0, 300));
-    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return [];
+    if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return { noFile: true };
     let files;
     try { files = unzipSync(buf); } catch (e) { throw new Error(`DART 원문 ${rcept} 압축 해제 실패 — ${strFromU8(buf.slice(0, 200)).replace(/\s+/g, " ").slice(0, 120)}`, { cause: e }); }
     const U = { 원: 1, 천원: 1e3, 백만원: 1e6, 억원: 1e8 };
@@ -526,5 +593,5 @@ export async function dartDocDaTables(rcept) {
       }
     }
     return out;
-  });
+  }));
 }
