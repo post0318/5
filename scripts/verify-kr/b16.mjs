@@ -560,3 +560,36 @@ export function finDebtSplit(facts, prefix, basis, faceVal, faceConcept) {
   const S = sols[0];
   return { excluded: ex[0], parts: S, how: `본표 ${faceVal} = ${S.map((x) => `${x.excl ? "[제외]" : ""}${x.c.split(":")[1].slice(0, 50)} ${x.v}`).join(" + ")}(XBRL ${prefix})` };
 }
+
+// ── 파생상품부채(오너 정리 2026-10-31 — B16 총차입금 = 차입금·사채·리스부채, 파생상품부채는 차입금 아님) ──
+/**
+ * 본표에 차입금 줄이 없어 "(유동|비유동)금융부채" 줄을 총차입금으로 쓸 때 빼야 할 파생상품부채 후보 — 원문 주석 숫자 흐름에서 **식으로 닫히는 합계만**:
+ * 간격 s(1~4)로 늘어선 숫자 k(≥2)개 — 각 숫자 앞 이름이 비었거나 "파생"을 담고(첫 숫자는 반드시 "파생") — 의 합이 바로 다음 같은 간격 자리의 "합계·계"
+ * 숫자와 정확히 같고, 그 앞 14칸 안 글자에 "부채"가 있을 때 그 합계(원). 015760 2022: 매매목적파생상품 407,246 + 위험회피 파생상품 25,505 = 합계 432,751(백만원)
+ */
+export function derivLiabTotals(streams, plainSum = null) {
+  const out = new Set();
+  for (const { u, toks } of streams ?? []) {
+    // 같은 표 안에 본표 "(유동|비유동)금융부채" 줄 합(표 단위)이 숫자로 있어야 — 그 금융부채의 내역 표라는 근거(다른 표·다른 기간 숫자 배제)
+    if (plainSum != null && !toks.some((t) => Math.abs(t.v) * u === plainSum)) continue;
+    for (let q = 2; q < toks.length; q++) {
+      if (!/(합\s*계|^\s*계)\s*$/.test(toks[q].before.trim())) continue;
+      const T = toks[q].v;
+      if (!T) continue;
+      for (let s = 1; s <= 4; s++) {
+        let sum = 0, ok = true, k = 0, first = null;
+        for (k = 1; k <= 6 && q - k * s >= 0; k++) {
+          const t = toks[q - k * s], b = t.before.trim();
+          if (/(합\s*계|^\s*계)\s*$/.test(b)) { ok = false; break; }
+          if (b && !/파생/.test(b)) { if (k >= 3 && sum === T) break; ok = false; break; }
+          sum += t.v; if (/파생/.test(b)) first = q - k * s;
+          if (k >= 2 && sum === T && first != null) break;
+        }
+        if (!ok || sum !== T || first == null || k < 2) continue;
+        const ctx = toks.slice(Math.max(0, first - 14), first + 1).map((t) => t.before).join(" ");
+        if (/부채/.test(ctx)) out.add(Math.abs(T) * u);
+      }
+    }
+  }
+  return out;
+}

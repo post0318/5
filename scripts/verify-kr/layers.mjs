@@ -11,12 +11,12 @@
  *  K5 주당배당금(사업연도) = DART alotMatter, 배당수익률 = DPS ÷ KRX 연말 종가.
  */
 import { appendFileSync } from "node:fs";
-import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartXbrlCum, dartXbrlDebtFacts, dartDocLeaseCells, dartDocDaTables, dartCompany, DartNoFileError } from "./dart.mjs";
+import { dartList, dartFnltt, dartAlot, dartXbrlFacts, dartXbrlCum, dartXbrlDebtFacts, dartDocNumberStreams, dartDocLeaseCells, dartDocDaTables, dartCompany, DartNoFileError } from "./dart.mjs";
 import { daCandidates, invTableDep } from "./docda.mjs";
 import { dataGoDividends } from "./datago.mjs";
 import { krxCapsOn } from "./krx.mjs";
 import { emptyKind } from "./calendar.mjs";
-import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts, finDebtSplit } from "./b16.mjs";
+import { classifyBsRows, sumCol, leaseNoteFor, quarterLeaseFromCells, leaseFromFacts, finDebtSplit, derivLiabTotals } from "./b16.mjs";
 import { familyCashFromNotes } from "./cashnote.mjs";
 
 const COL = ["thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
@@ -208,6 +208,39 @@ async function finAggregateExcl(cl, col, rcept, reprt, prefix, basis, ownRows) {
     ex += sp.excluded; hows.push(`${nm(r.account_nm)} ${sp.how}`);
   }
   return { excluded: ex, how: hows.join(" / ") };
+}
+
+/**
+ * 총차입금에서 뺄 금액 — ① 금융사 차입부채 줄의 콜머니·RP 등(finAggregateExcl) ② "(유동|비유동)금융부채" 줄을 차입금으로 쓰는 회사의 파생상품부채(오너 정리
+ * 2026-10-31 — B16 총차입금 = 차입금·사채·리스부채, 파생상품부채는 차입금이 아님). ②는 그 기간 보고서(판본 최신 먼저, 원문 있는 것) 주석에서 파생상품부채
+ * 합계가 식으로 닫히는 값(derivLiabTotals)이 **하나**일 때만, 아니면 못 정함. 결과 { excluded | null, how, aggr(줄일 수 있는 줄 합 — 범위 검사용), fetchErr }
+ */
+async function debtExcl(cl, col, rcepts, reprt, prefix, basis, ownRows) {
+  const fx = cl.financial ? await finAggregateExcl(cl, col, rcepts[0], reprt, prefix, basis, ownRows) : { excluded: 0, how: "" };
+  let ex = fx.excluded, how = fx.how ? `금융사 총차입금(차입금·사채·CP·리스, 콜머니·RP 제외): ${fx.how}` : "";
+  let aggr = sumCol(cl.finAggregate ?? [], col) ?? 0;
+  if (cl.plain?.length) {
+    aggr += sumCol(cl.plain, col) ?? 0;
+    let cand = null, rc0 = null;
+    for (const rc of rcepts) { const st = await dartDocNumberStreams(rc); if (st.length) { cand = [...derivLiabTotals(st)]; rc0 = rc; break; } }
+    const plainSum = sumCol(cl.plain, col) ?? 0;
+    const okC = (cand ?? []).filter((v) => v > 0 && v < plainSum);
+    if (okC.length === 1) { if (ex != null) ex += okC[0]; how += `${how ? " · " : ""}「(유동|비유동)금융부채」 줄의 파생상품부채 ${okC[0]} 제외(원문 ${rc0} 주석 — 파생상품 줄 합 = 합계)`; }
+    else { ex = null; how += `${how ? " · " : ""}「(유동|비유동)금융부채」 줄의 파생상품부채를 원문 주석에서 하나로 못 정함(후보 ${cand == null ? "원문 없음" : okC.length ? okC.join("·") : "없음"}${rc0 ? `, ${rc0}` : ""})`; }
+  }
+  return { excluded: ex, how, aggr, fetchErr: fx.fetchErr };
+}
+/**
+ * 금융사(은행·보험·증권·카드) 현금성자산 = 그 회사 회계기준 현금흐름표 기말 「현금및현금성자산」(오너 정리 2026-10-31 — 지급준비예치금 등 사용 제한 예치금은
+ * 현금성 아님, 본표 「현금 및 예치금」 전체가 아님). cands = [[보고서 줄, 열]…] 앞에서부터(값 보고서 → 다음) 첫 값
+ */
+function finCashCf(cands) {
+  for (const [rows, col] of cands) {
+    const r = (rows ?? []).filter((x) => x.sj_div === "CF" && x.account_id === "ifrs-full_CashAndCashEquivalents");
+    const v = r.length === 1 ? num(r[0][col]) : null;
+    if (v != null) return { v, how: `현금흐름표 기말 현금및현금성자산(${col}) ${v}` };
+  }
+  return null;
 }
 
 export async function krOriginalLayers(ctx) {
@@ -477,10 +510,11 @@ export async function krOriginalLayers(ctx) {
       if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
     } else if (y === Math.max(...yearsShown)) policySrc.push({ ...lease, fy: y });
     // 금융사 차입부채 줄의 콜머니·RP 제외(그해 자기 사업보고서 XBRL 내역). 못 나누면 총차입금·EV 검증불가 + 범위 검사(사채·리스 ≤ 앱 ≤ 본표 차입 줄 전부)
-    const finX = cl.financial ? await finAggregateExcl(cl, own.col, L.latest(y, "11011")?.rcept, "11011", `CFY${y}eFY`, src.fsDiv, src.cur) : { excluded: 0, how: "" };
+    const rcY = L.reports.filter((z) => z.year === y && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept);
+    const finX = await debtExcl(cl, own.col, rcY, "11011", `CFY${y}eFY`, src.fsDiv, src.cur);
     if (finX.fetchErr) err(`금융사 차입부채 내역 ${y}`, new Error(finX.how));
     const expDebt = finX.excluded == null ? null : faceDebt - finX.excluded + (lease.status === "added" ? lease.amount : 0);
-    if (finX.how) why += ` · 금융사 총차입금(차입금·사채·CP·리스, 콜머니·RP 제외): ${finX.how}`;
+    if (finX.how) why += ` · ${finX.how}`;
     // 안전장치는 앱이 실제로 더한 값(앱 총차입금 − 본표 차입금)으로 — 검증기 판독과 같은 결함을 함께 가져도 잡히게
     if (lease.status === "added" && x.debt != null && finX.excluded != null) leaseByYear.set(y, x.debt - (faceDebt - finX.excluded));
     // B16 ②b — 기타(유동)금융자산 계열 줄은 주석 내역의 현금성 부분(검증기 원문 판독, 그 해·다음 해·기준 보고서 모든 판본)
@@ -495,17 +529,21 @@ export async function krOriginalLayers(ctx) {
       const st = await stagingCash(ctx.env, sym);
       if (st && (fam.lines.length || st.cashNote?.[y]?.length)) stagingLineCheck(ctx, col, st.cashNote?.[y] ?? [], fam.lines);
     } catch (e) { err(`B16 ②b 계열 줄 주석 ${y}`, e); famOk = false; }
-    const expCash = famOk ? (sumCol(cl.cash, own.col) ?? 0) + famCash : null;
+    // 금융사(금융업 판정 또는 「현금 및 예치금」 줄이 있는 카드·보험)는 현금흐름표 기말 현금및현금성자산(오너 정리 2026-10-31)
+    const finCo = cl.financial || cl.cash.some((r) => r.account_id === "dart_CashAndDuefromBanks");
+    const fcf = finCo ? finCashCf([[own.rows, own.col === "bfefrmtrm_amount" ? "bfefrmtrm_amount" : own.col], [src.next, "frmtrm_amount"], [src.cur, "thstrm_amount"]]) : null;
+    if (finCo) famWhy.push(fcf ? `금융사 — ${fcf.how}` : "금융사 — 현금흐름표 기말 현금및현금성자산 없음");
+    const expCash = finCo ? fcf?.v ?? null : famOk ? (sumCol(cl.cash, own.col) ?? 0) + famCash : null;
     const expNci = sumCol(cl.nci, own.col) ?? 0;
     // 리스부채를 원문 주석 표(표 단위 값)로 정한 해 — 적재 값이 기대치와 다르고 표 단위 반올림 범위 안이면 검증불가, 밖이면 실패(허용치로 통과시키지 않음)
     const rgD = lease.status === "added" && lease.range ? [faceDebt + lease.range[0], faceDebt + lease.range[1]] : null;
     // 원문 칸 하나 값끼리 갈리거나 반올림 칸 합만 있으면(lease.ambiguous) 기대치와 같아도 검증불가 — 어느 값이 정밀값인지 원문이 정하지 않는다
     const amb = lease.status === "added" && lease.ambiguous;
     const rexact = (name, app, exp, rg, w) => (rg && app != null && (app !== exp || amb) && app >= rg[0] && app <= rg[1] ? add("K2", name, col, { status: NA, app, src: exp, note: `원문 주석 표 단위 반올림 범위 ${rg[0]}~${rg[1]} 안 — 원 단위 정밀값 없음 · ${w}` }) : exact("K2", name, col, app, exp, w));
-    if (expDebt == null) add("K2", "총차입금 = DART(B16)", col, finRangeOf(x.debt, faceDebt - (sumCol(cl.finAggregate, own.col) ?? 0), faceDebt + (lease.status === "added" ? lease.amount : 0), why, { FAIL, NA }));
+    if (expDebt == null) add("K2", "총차입금 = DART(B16)", col, finRangeOf(x.debt, faceDebt - finX.aggr, faceDebt + (lease.status === "added" ? lease.amount : 0), why, { FAIL, NA }));
     else rexact("총차입금 = DART(B16)", x.debt, expDebt, rgD, why);
-    if (expCash == null) add("K2", "현금성자산 = DART(B16)", col, { status: NA, app: x.cash == null ? null : -x.cash, note: `기타(유동)금융자산 계열 줄 내역을 검증기가 못 읽음 — ${famWhy.join(" / ")}` });
-    else exact("K2", "현금성자산 = DART(B16)", col, x.cash == null ? null : -x.cash, expCash, `${cl.cash.map((r) => nm(r.account_nm)).join("+")}${famWhy.length ? ` + ②b ${famWhy.join(" / ")}` : ""}`);
+    if (expCash == null) add("K2", "현금성자산 = DART(B16)", col, { status: NA, app: x.cash == null ? null : -x.cash, note: `현금성자산 기대치 없음(②b 계열 줄 판독 못 함·금융사 현금흐름표 줄 없음) — ${famWhy.join(" / ")}` });
+    else exact("K2", "현금성자산 = DART(B16)", col, x.cash == null ? null : -x.cash, expCash, finCo ? famWhy.join(" / ") : `${cl.cash.map((r) => nm(r.account_nm)).join("+")}${famWhy.length ? ` + ②b ${famWhy.join(" / ")}` : ""}`);
     exact("K2", "비지배지분 = DART", col, x.nci ?? (rowHidden("nci") ? 0 : null), expNci);
     const k = caps.get(y);
     // 금융업·금융 자회사 판정은 해마다 그해 재무상태표로(감사 3차 ⑥ — 예전엔 최근 사업연도 판정을 전 연도에 썼다). LTM 은 최신 판정(evBlockWhy)
@@ -518,12 +556,12 @@ export async function krOriginalLayers(ctx) {
     else if (expDebt == null) {
       // 총차입금을 못 정한 금융사 — 가능 범위로 EV 부호를 본다. 은행이고 범위 위끝도 음수면 공란 기대, 비은행이거나 아래끝이 0 이상이면 값이 있어야
       const base = k.common + k.preferred + expNci - expCash, lse = lease.status === "added" ? lease.amount : 0;
-      const evLo = base + faceDebt - (sumCol(cl.finAggregate, own.col) ?? 0), evHi = base + faceDebt + lse;
+      const evLo = base + faceDebt - finX.aggr, evHi = base + faceDebt + lse;
       const bank = cl.bank(own.col);
       if (bank && evHi < 0) add("K2", "EV = KRX + DART(B16)", col, x.ev == null ? { status: PASS, note: `공란 — 은행 EV 가능 범위 ${evLo}~${evHi} 전부 음수(오너 결정 2026-10-31 「나」)` } : { status: FAIL, app: x.ev, note: `은행 EV 가능 범위 ${evLo}~${evHi} 전부 음수인데 앱 EV ${x.ev}` });
-      else if (x.ev == null && (!bank || evLo >= 0)) add("K2", "EV = KRX + DART(B16)", col, { status: FAIL, note: `금융사 EV 는 채운다(오너 결정 2026-10-31) — 가능 범위 ${evLo}~${evHi}${bank ? "(은행, 음수 아님)" : ""}인데 앱 EV 빈칸 · ${finX.how}` });
+      else if (x.ev == null && (!bank || evLo >= 0)) add("K2", "EV = KRX + DART(B16)", col, { status: FAIL, note: `EV 는 채운다(금융사 — 오너 결정 2026-10-31) — 가능 범위 ${evLo}~${evHi}${bank ? "(은행, 음수 아님)" : ""}인데 앱 EV 빈칸 · ${finX.how}` });
       else if (x.ev != null && (x.ev < evLo || x.ev > evHi)) add("K2", "EV = KRX + DART(B16)", col, { status: FAIL, app: x.ev, note: `앱 EV ${x.ev} 가 가능 범위 ${evLo}~${evHi} 밖 — ${finX.how}` });
-      else add("K2", "EV = KRX + DART(B16)", col, { status: NA, app: x.ev, note: `총차입금 기대치 못 정함(콜머니·RP 제외액) — 가능 범위 ${evLo}~${evHi} · ${finX.how}` });
+      else add("K2", "EV = KRX + DART(B16)", col, { status: NA, app: x.ev, note: `총차입금 기대치 못 정함(제외액) — 가능 범위 ${evLo}~${evHi} · ${finX.how}` });
     }
     else if (cl.bank(own.col) && k.common + k.preferred + expDebt + expNci - expCash < 0) {
       // 은행 EV 음수 → 공란 + 사유(오너 결정 2026-10-31 「나」)
@@ -937,13 +975,14 @@ async function ltmLayer(c) {
     const faceDebt = sumCol(cl.debt, "thstrm_amount") ?? 0;
     const pol = policySrc.at(-1);
     const lease = cl.leaseFace.length ? { status: "face" } : pol && pol.fy === lp.year ? pol : { status: "unknown", how: `FY${lp.year} 리스 판정 없음` };
-    const finX = cl.financial ? await finAggregateExcl(cl, "thstrm_amount", lp.rcept, "11011", `CFY${lp.year}eFY`, cur.fsDiv, cur.rows) : { excluded: 0, how: "" };
+    const finX = await debtExcl(cl, "thstrm_amount", L.reports.filter((z) => z.year === lp.year && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept), "11011", `CFY${lp.year}eFY`, cur.fsDiv, cur.rows);
     if (finX.fetchErr) c.err(`금융사 차입부채 내역 LTM`, new Error(finX.how));
     const expDebt = finX.excluded == null ? null : faceDebt - finX.excluded + (lease.status === "added" ? lease.amount : 0);
     const fam = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === lp.year && z.code === "11011").sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept), cur.fsDiv);
-    const cash = fam.v == null ? null : (sumCol(cl.cash, "thstrm_amount") ?? 0) + fam.v, nci = sumCol(cl.nci, "thstrm_amount") ?? 0;
-    if (expDebt == null) add("K2", "LTM 총차입금 = DART 사업보고서(B16)", "LTM", finRangeOf(LT.debt, faceDebt - sumCol(cl.finAggregate, "thstrm_amount"), faceDebt + (lease.status === "added" ? lease.amount : 0), finX.how, consts));
-    else exact("K2", "LTM 총차입금 = DART 사업보고서(B16)", "LTM", LT.debt, expDebt, `${lp.nm}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}${finX.how ? ` · 금융사: ${finX.how}` : ""}`);
+    const finCoL = cl.financial || cl.cash.some((r) => r.account_id === "dart_CashAndDuefromBanks");
+    const cash = finCoL ? finCashCf([[cur.rows, "thstrm_amount"]])?.v ?? null : fam.v == null ? null : (sumCol(cl.cash, "thstrm_amount") ?? 0) + fam.v, nci = sumCol(cl.nci, "thstrm_amount") ?? 0;
+    if (expDebt == null) add("K2", "LTM 총차입금 = DART 사업보고서(B16)", "LTM", finRangeOf(LT.debt, faceDebt - finX.aggr, faceDebt + (lease.status === "added" ? lease.amount : 0), finX.how, consts));
+    else exact("K2", "LTM 총차입금 = DART 사업보고서(B16)", "LTM", LT.debt, expDebt, `${lp.nm}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}${finX.how ? ` · ${finX.how}` : ""}`);
     if (cash == null) add("K2", "LTM 현금성자산 = DART 사업보고서(B16)", "LTM", { status: NA, app: LT.cash == null ? null : -LT.cash, note: `②b 계열 줄 판독 못 함 — ${fam.why}` });
     else exact("K2", "LTM 현금성자산 = DART 사업보고서(B16)", "LTM", LT.cash == null ? null : -LT.cash, cash, fam.why);
     exact("K2", "LTM 비지배지분 = DART 사업보고서", "LTM", LT.nci ?? (rowHidden("nci") ? 0 : null), nci);
@@ -1087,6 +1126,9 @@ async function ltmLayer(c) {
   // LTM 재무상태표(최신 분기말) — 총차입금·현금·비지배지분, EV
   const cl = classifyBsRows(cur.rows, cur.rows, { rows: await R(Y - 1, "11011"), col: "frmtrm_amount" });
   const faceDebt = sumCol(cl.debt, "thstrm_amount") ?? 0;
+  const QP = { "11013": "FQ", "11012": "HY", "11014": "TQ" }[lp.code];
+  const finX = await debtExcl(cl, "thstrm_amount", L.reports.filter((z) => z.year === lp.year && z.code === lp.code).sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept), lp.code, `CFY${lp.year}e${QP}A`, basis, cur.rows);
+  if (finX.fetchErr) c.err(`금융사 차입부채 내역 LTM 분기`, new Error(finX.how));
   // PBR·PSR 기대치(감사 4차 ③) — 지배주주 자본 = 최신 분기말, 매출 = DART 사업연도 + 당기 누적 − 당기 보고서 전기 누적
   if (c.ltmMcOk) c.multExpect("LTM", LT, { mc: LT.mc, price: c.ltmPrice, eq: parentEquity(cur.rows, "thstrm_amount"), rev: { v: revLtm, how: "DART 사업연도 + 누적 − 전기 누적 매출" }, eps: { v: epsLtm, how: "DART 사업연도 + 누적 − 전기 누적 EPS" } });
   let lease = { status: "face" };
@@ -1104,7 +1146,7 @@ async function ltmLayer(c) {
       lease = ql.amount != null ? { status: "added", amount: ql.amount, how: ql.how } : { status: "unknown", how: `분기 보고서 주석 리스부채 확인 불가 — ${ql.how}` };
       // 단위 안전장치 — 분기말 리스부채 vs 최근 사업연도 주석 리스부채(100배 안)
       // 앱이 더한 분기말 리스부채(앱 LTM 총차입금 − 본표 차입금)
-      const appQ = LT.debt != null ? LT.debt - faceDebt : null;
+      const appQ = LT.debt != null && finX.excluded != null ? LT.debt - (faceDebt - finX.excluded) : null;
       if (appQ != null && appQ !== 0) {
         // 절댓값으로 크기 비교, 부호는 그대로 보인다(감사 2차 ⑩ — 음수가 "앱 분기말 -130조" 로만 보였다). 리스부채가 음수면 부호 오류
         const r = Math.max(Math.abs(appQ), Math.abs(pol.amount)) / Math.min(Math.abs(appQ), Math.abs(pol.amount));
@@ -1113,19 +1155,17 @@ async function ltmLayer(c) {
       }
     } else lease = { status: "unknown", how: `FY${Y - 1} 주석 리스부채 ${pol?.status ?? "없음"} — 분기 보고서 전기말 열 확인 불가` };
   }
-  const QP = { "11013": "FQ", "11012": "HY", "11014": "TQ" }[lp.code];
-  const finX = cl.financial ? await finAggregateExcl(cl, "thstrm_amount", lp.rcept, lp.code, `CFY${lp.year}e${QP}A`, basis, cur.rows) : { excluded: 0, how: "" };
-  if (finX.fetchErr) c.err(`금융사 차입부채 내역 LTM 분기`, new Error(finX.how));
   const expDebt = finX.excluded == null ? null : faceDebt - finX.excluded + (lease.status === "added" ? lease.amount : 0);
-  if (expDebt == null) add("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", finRangeOf(LT.debt, faceDebt - sumCol(cl.finAggregate, "thstrm_amount"), faceDebt + (lease.status === "added" ? lease.amount : 0), finX.how, consts));
-  else exact("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", LT.debt, expDebt, `${lp.nm} ${basis}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}${finX.how ? ` · 금융사: ${finX.how}` : ""}`);
+  if (expDebt == null) add("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", finRangeOf(LT.debt, faceDebt - finX.aggr, faceDebt + (lease.status === "added" ? lease.amount : 0), finX.how, consts));
+  else exact("K2", "LTM 총차입금 = DART 최신 분기(B16)", "LTM", LT.debt, expDebt, `${lp.nm} ${basis}${lease.status !== "face" ? ` · 본표 리스부채 줄 없음 → ${lease.how}` : ""}${finX.how ? ` · ${finX.how}` : ""}`);
   const famQ = await famCashOf(cl, "thstrm_amount", L.reports.filter((z) => z.year === Y && z.code === lp.code).sort((a0, b0) => b0.rcept.localeCompare(a0.rcept)).map((z) => z.rcept), basis);
   {
     const st = await stagingCash(c.env, c.sym);
     const lab = `${Y} Q${q}`;
     if (st && (famQ.lines.length || (st.cashQuarter?.label === lab && st.cashQuarter.items?.length))) stagingLineCheck(c, "LTM", st.cashQuarter?.label === lab ? st.cashQuarter.items : [], famQ.lines);
   }
-  const cashQ = famQ.v == null ? null : (sumCol(cl.cash, "thstrm_amount") ?? 0) + famQ.v;
+  const finCoQ = cl.financial || cl.cash.some((r) => r.account_id === "dart_CashAndDuefromBanks");
+  const cashQ = finCoQ ? finCashCf([[cur.rows, "thstrm_amount"]])?.v ?? null : famQ.v == null ? null : (sumCol(cl.cash, "thstrm_amount") ?? 0) + famQ.v;
   if (cashQ == null) add("K2", "LTM 현금성자산 = DART 최신 분기(B16)", "LTM", { status: NA, app: LT.cash == null ? null : -LT.cash, note: `②b 계열 줄 판독 못 함 — ${famQ.why}` });
   else exact("K2", "LTM 현금성자산 = DART 최신 분기(B16)", "LTM", LT.cash == null ? null : -LT.cash, cashQ, famQ.why);
   exact("K2", "LTM 비지배지분 = DART 최신 분기", "LTM", LT.nci ?? (rowHidden("nci") ? 0 : null), sumCol(cl.nci, "thstrm_amount") ?? 0);
