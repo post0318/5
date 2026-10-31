@@ -250,6 +250,9 @@ export async function dartReportJson<T extends { status: string }>(
   return j;
 }
 
+/** DART 「파일 없음」(status 014) 응답인가 */
+const is014 = (b: Buffer): boolean => /^<\?xml[\s\S]{0,300}<status>014<\/status>/.test(b.subarray(0, 400).toString("utf8"));
+
 /** 접수번호로 받는 원본(XBRL zip 등) — 판본 = 접수번호. fetcher 가 돌려준 바이트가 비었거나 너무 작으면 저장 안 함(호출자 검사 그대로) */
 export async function dartRceptBinary(ns: string, rcept: string, fetcher: () => Promise<Uint8Array>): Promise<Uint8Array> {
   const r = root();
@@ -265,9 +268,17 @@ export async function dartRceptBinary(ns: string, rcept: string, fetcher: () => 
     recordUsage("dart", "hit");
     return new Uint8Array(hit);
   }
+  // DART 014(그 접수번호에 파일 없음)도 기억한다 — 접수번호 판본은 바뀌지 않는다(2026-10-31, 적재 스크립트 캐시와 같은 규칙)
+  const none = await readVer(dir, `${safe(rcept)}.014`, is014);
+  if (none) {
+    dartCacheStats.hit++;
+    recordUsage("dart", "hit");
+    return new Uint8Array(none);
+  }
   dartCacheStats.miss++;
   noteDartRequest(`${ns} ${rcept}`);
   const b = await fetcher();
   if (validZip(Buffer.from(b))) await writeVer(dir, `${safe(rcept)}.bin`, Buffer.from(b));
+  else if (is014(Buffer.from(b))) await writeVer(dir, `${safe(rcept)}.014`, Buffer.from(b));
   return b;
 }

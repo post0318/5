@@ -47,7 +47,7 @@ if (COLL === "kr_da" && (env.KR_DA_ALLOW_PROD !== "1" || existsSync(ENV_FILE)))
   throw new Error("운영 컬렉션 kr_da 적재는 운영 1호기 배치(fin-kr-da, ops/oracle/run-kr-da.sh)만 — 검증·로컬에서는 kr_da_staging");
 // 적재 규칙 판본 — 감가상각·TTM·리스 판독 규칙을 바꾸면 올린다. 적재본의 판본이 다르면 증분 모드에서도 그 종목을 다시 처리하고, 1호기 배포 직후 1회 실행된다
 // (post-deploy.sh 가 이 줄을 비교)
-const KR_DA_RULES_VERSION = "2026-10-26.1";
+const KR_DA_RULES_VERSION = "2026-10-31.1";
 const FULL = process.argv.includes("--full");
 const corpMap = JSON.parse(
   readFileSync(new URL("../src/lib/markets/kr/data/corpcodes.json", import.meta.url), "utf8"),
@@ -95,12 +95,20 @@ async function latestPeriodicRcepts(corp) {
   return { annual: max((x) => x.m[1] === "사업"), interim: max((x) => x.m[1] !== "사업") };
 }
 
+/** DART 「파일 없음」(status 014) 응답인가 — zip 대신 짧은 XML 이 온다(금융지주·증권 옛 사업보고서 XBRL, 정정 공시 원문 등) */
+const isDart014 = (buf) => { const h = strFromU8(buf.slice(0, 300)); return /^<\?xml/.test(h) && /<status>014<\/status>/.test(h); };
+/** 014 로 건너뛴 보고서(접수번호 → 종류) — 실행 끝에 한 번 보고 */
+const NOFILE = new Map();
+const noFile = (rcpNo, kind) => { if (!NOFILE.has(`${rcpNo}|${kind}`)) { NOFILE.set(`${rcpNo}|${kind}`, true); console.log(`    (${rcpNo} ${kind} 없음 — DART 014 파일 없음, 다음 보고서로)`); } };
 async function loadXbrl(rcpNo) {
   // DART 는 몰아서 요청하면 이 PC 연결을 약 1시간 막는다(실측 2026-10-01) — XBRL 요청마다 1초 간격
   await new Promise((r) => setTimeout(r, 1000));
   const res = await dfetch(`${B}/fnlttXbrl.xml?crtfc_key=${DART}&rcept_no=${rcpNo}&reprt_code=11011`);
   if (!res.ok) throw new Error(`xbrl ${res.status}`);
-  const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
+  const buf = new Uint8Array(await res.arrayBuffer());
+  // 014(XBRL 파일 없음)는 「그 보고서 XBRL 사실 없음」 — 빈 글로 돌려 호출부가 다음 보고서·원문으로 넘어가게(예전엔 압축 해제 실패로 그 종목 주석 단계 전체를 버렸다 — 105560 등)
+  if (isDart014(buf)) { noFile(rcpNo, "XBRL"); return ""; }
+  const files = unzipSync(buf);
   const name = Object.keys(files).find((n) => n.endsWith(".xbrl"));
   if (!name) throw new Error("xbrl not in zip");
   return strFromU8(files[name]);
@@ -362,7 +370,9 @@ async function docDa(rcpNo) {
   await new Promise((r) => setTimeout(r, 1000));
   const res = await dfetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
   if (!res.ok) throw new Error(`document ${res.status}`);
-  const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
+  const buf0 = new Uint8Array(await res.arrayBuffer());
+  if (isDart014(buf0)) { noFile(rcpNo, "원문"); return null; }
+  const files = unzipSync(buf0);
   const docs = Object.values(files).map((b) => {
     // 인코딩 — 선언은 늘 utf-8 이지만 2021 이전 문서는 실제 EUC-KR(실측). UTF-8 로 읽어 깨진 글자가 많으면 EUC-KR
     let x = new TextDecoder("utf-8").decode(b);
@@ -764,7 +774,9 @@ async function interimDoc(rcpNo) {
   await new Promise((r) => setTimeout(r, 1000));
   const res = await dfetch(`${B}/document.xml?crtfc_key=${DART}&rcept_no=${rcpNo}`);
   if (!res.ok) throw new Error(`document ${res.status}`);
-  const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
+  const buf0 = new Uint8Array(await res.arrayBuffer());
+  if (isDart014(buf0)) { noFile(rcpNo, "분기 원문"); return null; }
+  const files = unzipSync(buf0);
   let nat = null;
   let cf = null;
   for (const b of Object.values(files)) {
@@ -792,7 +804,9 @@ async function interimCf(rcpNo, code, year) {
   if (!res.ok) return null;
   let xml;
   try {
-    const f = unzipSync(new Uint8Array(await res.arrayBuffer()));
+    const b0 = new Uint8Array(await res.arrayBuffer());
+    if (isDart014(b0)) { noFile(rcpNo, "분기 XBRL"); return null; }
+    const f = unzipSync(b0);
     xml = strFromU8(f[Object.keys(f).find((n) => n.endsWith(".xbrl"))]);
   } catch {
     return null;
@@ -935,7 +949,7 @@ async function docTexts(rcpNo) {
   if (!res.ok) throw new Error(`document ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
   const head = strFromU8(buf.slice(0, 300));
-  if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return (docTextMemo[rcpNo] = []);
+  if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) { noFile(rcpNo, "원문"); return (docTextMemo[rcpNo] = []); }
   const out = [];
   for (const b of Object.values(unzipSync(buf))) {
     let x = new TextDecoder("utf-8").decode(b);
@@ -1023,6 +1037,11 @@ function blockIndex(texts) {
         const all = heads.flat().map(gisu).filter((n) => !Number.isNaN(n));
         const mine = heads.map((h) => gisu(h[h.length - 1 - off])).filter((n) => !Number.isNaN(n));
         if (all.length && mine.length) { const mx = Math.max(...all); return mine[0] === mx ? "cur" : mine[0] === mx - 1 ? "prev" : null; }
+        // 날짜만 적은 머리(「2022.12.31 | 2021.12.31」 — 068270 2022 보고서 금융부채 주석)는 큰 해 = 당기, 하나 작은 해 = 전기(기수 머리와 같은 방식, 2026-10-31)
+        const dY = (h) => Number(/(20\d{2})\s*[.\-년]\s*\d{1,2}\s*[.\-월]\s*\d{1,2}/.exec(h ?? "")?.[1] ?? NaN);
+        const allY = heads.flat().map(dY).filter((n) => !Number.isNaN(n));
+        const mineY = heads.map((h) => dY(h[h.length - 1 - off])).filter((n) => !Number.isNaN(n));
+        if (allY.length && mineY.length) { const mx = Math.max(...allY); return mineY[0] === mx ? "cur" : mineY[0] === mx - 1 ? "prev" : null; }
         return titlePer;
       };
       for (const r of m[0].matchAll(/<TR[\s\S]*?<\/TR>/gi)) {
@@ -1067,7 +1086,16 @@ function leaseInFaceTableAll(texts, faceVals, mode = "lease", what = "본표 차
   const core = opts.name ? opts.name.replace(/\s/g, "").replace(/(유동성?|비유동|단기|장기)/g, "") : null;
   // 차입금 확인: 표 주제가 차입금·사채 주석이고 묶음 줄이 모두 차입 성격(차입·사채·리스·어음·은행 등 — 범주별 금융부채 표 합계와의 우연 일치 차단, 흔든 값 시험)
   const DEBT_ROW = /차입|사채|리스|어음|CP|유동성|대체|전환|교환|은행|금고|캐피탈|증권|보험|외화|원화|USD|EUR|JPY|CNY|운영|시설|일반|담보|신용|무역|금융기관|기타/;
-  const topicOk = (bk) => (mode === "lease" && opts.pairs ? /차입금|사채/.test(bk.topic) && bk.blk.every((bb) => DEBT_ROW.test(bb.label)) : core && core.length >= 3 ? bk.topic.includes(core) && (mode !== "nolease" || /차입|사채/.test(bk.topic)) : false);
+  // 본표 차입금이 「(유동|비유동|단기|장기)금융부채」 줄(차입금 전액을 이 이름으로 공시 — GS건설·셀트리온)이면 그 주석(「금융부채 장부금액의 내역」)도 차입금 주석이고,
+  // 묶음 안 「당기손익-공정가치측정 금융부채」 같은 금융부채 줄도 그 본표 줄의 구성이다(2026-10-31)
+  const plainFace = faceVals.length > 0 && faceVals.every((f) => typeof f === "object" && f && /^(유동|비유동|단기|장기)금융부채$/.test((f.name ?? "").replace(/\s/g, "")));
+  const topicRe = plainFace ? /차입금|사채|금융부채/ : /차입금|사채/;
+  const rowOk = (l) => DEBT_ROW.test(l) || (plainFace && /금융부채/.test(l));
+  // 표 주제가 그 본표 줄 이름 자체(「단기금융부채 내역」·「장기금융부채 내역」)면 묶음 줄 성격은 묻지 않는다 — 합계 = 본표 줄이면 그 줄의 구성 전부(GS건설: 파생상품부채·
+  // 금융보증부채·임대보증금까지 단기·장기금융부채에 들어 있다)
+  const faceNames = plainFace ? faceVals.map((f) => f.name.replace(/\s/g, "")) : [];
+  const namedTopic = (bk) => faceNames.some((n) => bk.topic.includes(n));
+  const topicOk = (bk) => (mode === "lease" && opts.pairs ? topicRe.test(bk.topic) && (namedTopic(bk) || bk.blk.every((bb) => rowOk(bb.label))) : core && core.length >= 3 ? bk.topic.includes(core) && (mode !== "nolease" || /차입|사채/.test(bk.topic)) : false);
   // faceVals = 숫자 또는 { v, name }. 두 줄 합은 같은 이름 바탕의 유동·비유동 짝만(유동성장기차입부채 + 장기차입부채 — 178320 2021 장기차입부채 표 소계 251,418,463 천원).
   // 아무 두 줄 합·전체 합은 흔든 값 시험에서 우연 일치가 나와 뺐다(감사 2026-10-19 ⑪)
   const items = faceVals.map((f) => (typeof f === "object" && f ? f : { v: f, name: null })).filter((f) => f.v != null && f.v !== 0);
@@ -1356,7 +1384,13 @@ async function leaseNotes(corp, latest) {
     for (const rc of ry ? rcpMemo[ry] : [rcp]) for (const n of await leasePolicyOf(rc)) out.add(n);
     return (polMemo[rcp] = [...out]);
   };
-  const faceDebtRows = (rows) => rows.filter((x) => /차입|사채|장기부채/.test((x.account_nm ?? "").replace(/\s/g, "")) && !/대여|자산/.test(x.account_nm ?? ""));
+  // 본표 차입금 줄 — 앱(dart-ev.ts)과 같은 범위: 차입·사채·장기부채 이름 줄, 그런 줄이 하나도 없으면 「(유동|비유동|단기|장기)금융부채」(한전·HD현대·GS건설·셀트리온 —
+  // 차입금 전액을 이 이름으로 공시). 예전엔 앞쪽만 봐서 GS건설·셀트리온의 「차입금 주석 합계 = 본표 단기·장기금융부채(리스 포함)」 확인이 안 걸려 리스를 다시 더했다(2026-10-31)
+  const faceDebtRows = (rows) => {
+    const main = rows.filter((x) => /차입|사채|장기부채/.test((x.account_nm ?? "").replace(/\s/g, "")) && !/대여|자산/.test(x.account_nm ?? ""));
+    if (main.length) return main;
+    return rows.filter((x) => x.sj_div !== "IS" && /^(유동|비유동|단기|장기)금융부채$/.test((x.account_nm ?? "").replace(/\s/g, "")));
+  };
   const faceNames = (rows) => faceDebtRows(rows).map((x) => x.account_nm.replace(/\s/g, ""));
   // 문장이 "포함"이라 해도 금액으로 확인(leaseInFaceTable) — 그 보고서(모든 판본) 원문 주석 표 vs 그 보고서 본표 차입금 줄의 **그 해(y) 열**(보고서 ry = y 면
   // 당기 열, ry = y + 1 이면 전기 열 frmtrm_amount — 감사 2026-10-18: 예전엔 늘 당기 열이라 전기 연도를 다음 해 금액으로 확인했다). 확인 못 하면 포함으로 보지 않는다
@@ -1636,7 +1670,7 @@ async function interimDocXml(rcpNo) {
   if (!res.ok) throw new Error(`document ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
   const head = strFromU8(buf.slice(0, 300));
-  if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) return "";
+  if (/^<\?xml/.test(head) && /<status>014<\/status>/.test(head)) { noFile(rcpNo, "분기 원문"); return ""; }
   const files = unzipSync(buf);
   let all = "";
   for (const b of Object.values(files)) {
@@ -2434,6 +2468,107 @@ const familyRows = (rows) => {
   return bs.filter((r, i) => (nc < 0 || i < nc) && CASH_FAMILY.test((r.account_nm ?? "").replace(/\s/g, "")) && !/Noncurrent|NonCurrent/.test(r.account_id ?? ""));
 };
 /** 사업연도별 cashNote — { "2025": [{ line, value, cash, how }] } */
+// ── 금융사 차입부채 구성(오너 결정 2026-10-31 「가」 — 금융사 기업가치 = 미국 규칙) ─────────────────────────────────────────────
+// 총차입금 = 차입부채(차입금)·사채·CP·리스부채. 콜머니·환매조건부채권매도(RP)·신탁계정차·매도유가증권은 빼고, 예수부채·보험계약부채·투자자예수금은 원래 차입금
+// 줄이 아니다. 은행·증권·보험 본표 「차입부채」 한 줄에 콜머니·RP 가 섞여 있어(105560 2025: 일반차입금 53.07조 + RP 등 13.43조 + 콜머니 4.23조 = 70.73조)
+// 그 해 보고서 주석의 구성 표(합계 = 본표 차입부채)에서 뺄 줄을 읽는다. 표를 못 찾으면 unknown(앱은 EV 공란 + 사유)
+const FIN_EXCLUDE_ROW = /콜머니|환매조건|^RP|RP매도|신탁계정|매도유가증권|매도증권|매도파생결합|대주|증권대차|차입증권/;
+// 구성 표는 「차입 종류」로 나눈 표여야 한다 — 「총장부금액 + 이연부대손익」(055550)처럼 측정 구성으로 나눈 표는 콜머니·RP 가 안에 있는지 알 수 없다
+const FIN_TYPE_ROW = /차입|콜머니|환매조건|RP|사채|어음|CP|리스|신탁계정|매도|대주|기업어음|전자단기/;
+/** 금융사 판정 — 본표에 예수부채·보험계약부채·책임준비금·투자자예수금 줄(앱 isFinancialBs 와 같은 줄 이름) */
+const isFinRows = (rows) => rows.some((r) => /^(예수부채|보험계약부채|책임준비금|투자자예수금)$/.test((r.account_nm ?? "").replace(/\s/g, "")));
+/** 본표 차입부채 줄(차입부채·차입금 — 사채·리스 제외) */
+const finBorrowRows = (rows) => rows.filter((r) => /(OtherBorrowings|^ifrs-full_Borrowings$|LoansReceived|ShorttermBorrowings)/.test(r.account_id ?? "") || /^(차입부채|차입금)$/.test((r.account_nm ?? "").replace(/\s/g, "")));
+function finSplitFrom(texts, face, per) {
+  const { byKey } = blockIndex(texts);
+  for (const u of [1, 1e3, 1e6, 1e8]) {
+    const fu = Math.abs(face) / u;
+    if (fu < 1000) continue;
+    for (let d = -2; d <= 2; d += 1)
+      for (const bk of byKey.get(`${u}|${Math.round(fu) + d}`) ?? []) {
+        if (Math.abs(fu - Math.abs(bk.v)) > sumTol(fu, bk.blk.length) || bk.pnlTable || bk.interval || bk.per !== per || !/차입/.test(bk.topic) || bk.blk.length < 2) continue;
+        if (!bk.blk.some((b) => FIN_TYPE_ROW.test(b.label.replace(/\s/g, "")))) continue;
+        const ex = bk.blk.filter((b) => FIN_EXCLUDE_ROW.test(b.label.replace(/\s/g, "")));
+        const won = ex.reduce((a, b) => a + b.v, 0) * u;
+        return { exclude: won, how: `주석 표 '${bk.label}' ${bk.v.toLocaleString("en-US")}(단위 ${u}원) = 본표 차입부채 ${face.toLocaleString("en-US")}원 — 뺀 줄: ${ex.length ? ex.map((b) => `${b.label} ${b.v.toLocaleString("en-US")}`).join(" + ") : "없음"} / 남긴 줄: ${bk.blk.filter((b) => !ex.includes(b)).map((b) => `${b.label} ${b.v.toLocaleString("en-US")}`).join(" + ")}` };
+      }
+  }
+  return null;
+}
+/** 가로 구성 표(006800 「차입금에 대한 세부 정보 공시」 — 열 머리 = 차입금·콜머니·환매조건부채권매도·발행어음·리스 부채·기타 차입금, 한 줄에 항목 값과 맨 끝 합계)에서 같은 판정 */
+function finSplitHorizontal(texts, face, per) {
+  for (const t of tablesOf(texts)) {
+    if (!/차입/.test(`${t.title ?? ""} ${t.subj ?? ""}`)) continue;
+    const tps = [...new Set([...(t.title ?? "").matchAll(PERIOD_RE_G)].map((mm) => periodWord(mm[0])))];
+    if ((tps.length === 1 ? tps[0] : null) !== per) continue;
+    const R = t.rowsX;
+    const first = R.findIndex((row) => row.some((c) => cellVal(c) != null));
+    if (first < 1) continue;
+    for (let r = first; r < R.length; r += 1) {
+      const vals = R[r].map((c, off) => ({ off, v: cellVal(c) })).filter((x) => x.v != null);
+      if (vals.length < 3) continue;
+      const tot = vals.at(-1);
+      if (Math.abs(face / t.u - tot.v) > sumTol(face / t.u, vals.length - 1)) continue;
+      const items = vals.slice(0, -1);
+      if (items.reduce((a, x) => a + x.v, 0) !== tot.v) continue;
+      // 열 이름 = 머리 줄 중 그 칸의 글자(맨 위부터 첫 비어 있지 않은 낱말 — 「범위」·「하위범위」 같은 칸은 건너뜀)
+      const nameOf = (off) => { for (let q = 0; q < first; q += 1) { const h = (R[q][off] ?? "").trim(); if (h && !/^(범위|하위범위|상위범위|범위합계|공시금액|차입금명칭|차입금명칭합계)$/.test(h.replace(/\s/g, ""))) return h; } return ""; };
+      const named = items.map((x) => ({ label: nameOf(x.off), v: x.v }));
+      if (named.some((x) => !x.label) || !named.some((x) => FIN_TYPE_ROW.test(x.label.replace(/\s/g, "")))) continue;
+      const ex = named.filter((x) => FIN_EXCLUDE_ROW.test(x.label.replace(/\s/g, "")));
+      return { exclude: ex.reduce((a, x) => a + x.v, 0) * t.u, how: `주석 가로 표 합계 ${tot.v.toLocaleString("en-US")}(단위 ${t.u}원) = 본표 차입부채 ${face.toLocaleString("en-US")}원 — 뺀 열: ${ex.length ? ex.map((x) => `${x.label} ${x.v.toLocaleString("en-US")}`).join(" + ") : "없음"} / 남긴 열: ${named.filter((x) => !ex.includes(x)).map((x) => `${x.label} ${x.v.toLocaleString("en-US")}`).join(" + ")}` };
+    }
+  }
+  return null;
+}
+/** 사업연도별 { status: "split"|"unknown", face, exclude(원), how } — 금융사가 아니면 null */
+async function finDebtNotes(corp, latest) {
+  const out = {};
+  let fin = false;
+  for (let y = latest; y >= latest - 5; y -= 1) {
+    let done = null;
+    const tried = [];
+    for (const [ry, col, per] of [[y, "thstrm_amount", "cur"], [y + 1, "frmtrm_amount", "prev"]]) {
+      if (ry > latest) continue;
+      const r = await fnlttBs(corp, ry);
+      if (!r) continue;
+      if (isFinRows(r.rows)) fin = true;
+      if (!fin) break;
+      const face = finBorrowRows(r.rows).reduce((a, x) => a + (amt(x[col]) ?? 0), 0);
+      if (!face) { done = { status: "split", face: 0, exclude: 0, how: `본표 차입부채 줄 없음(${ry} 보고서 ${y} 열)` }; break; }
+      for (const rc of await annualRcps(corp, ry)) {
+        const texts = await docTexts(rc);
+        const hit = finSplitFrom(texts, face, per) ?? finSplitHorizontal(texts, face, per);
+        if (hit) { done = { status: "split", face, exclude: hit.exclude, how: `${hit.how} (사업보고서 ${rc}, ${y} 열)` }; break; }
+        tried.push(rc);
+      }
+      if (done) break;
+    }
+    if (!fin) return null;
+    out[y] = done ?? { status: "unknown", face: null, exclude: null, how: `차입부채 구성 주석(합계 = 본표 차입부채) 못 찾음 — ${tried.join("·") || "보고서 없음"}` };
+  }
+  return out;
+}
+/** 최신 분기·반기 보고서의 차입부채 구성(분기말) — { label, status, face, exclude, how } · 금융사 아니면·최신이 사업보고서면 null */
+async function finDebtQuarterOf(corp, fy, sep) {
+  const it = await latestInterim(corp, fy);
+  if (!it) return null;
+  const label = `${it.year} Q${it.q}`;
+  await new Promise((r) => setTimeout(r, 400));
+  const j = await jget(`${B}/fnlttSinglAcntAll.json?crtfc_key=${DART}&corp_code=${corp}&bsns_year=${it.year}&reprt_code=${it.code}&fs_div=${sep ? "OFS" : "CFS"}`);
+  if (j.status !== "000") return { label, status: "unknown", face: null, exclude: null, how: `분기 재무상태표 조회 실패 ${j.status}` };
+  const rows = (j.list ?? []).filter((r) => r.sj_div === "BS");
+  if (!isFinRows(rows)) return null;
+  const face = finBorrowRows(rows).reduce((a, x) => a + (amt(x.thstrm_amount) ?? 0), 0);
+  if (!face) return { label, status: "split", face: 0, exclude: 0, how: "분기 본표 차입부채 줄 없음" };
+  for (const rc of [...it.rcps].reverse()) {
+    const xml = await interimDocXml(rc);
+    if (!xml) continue;
+    const hit = finSplitFrom([xml], face, "cur") ?? finSplitHorizontal([xml], face, "cur");
+    if (hit) return { label, status: "split", face, exclude: hit.exclude, how: `${hit.how} (${it.year} ${it.label}보고서 ${rc})` };
+  }
+  return { label, status: "unknown", face, exclude: null, how: `${it.year} ${it.label}보고서 차입부채 구성 주석(합계 = 본표 차입부채) 못 찾음` };
+}
 async function cashNotes(corp, latest) {
   const out = {};
   const rcpsOf = {};
@@ -2646,6 +2781,8 @@ const fuzzLAll = { lease: 0, other: 0, nolease: 0, accLease: [], accOther: [], a
 const failed = []; // 조회·판독 예외가 난 종목(종료코드 1 — 1호기 배치 실패 감시 job-fin-kr-da 로 잡힌다)
 let skipped = 0;
 for (const sym of symbols) {
+  // 원문 글 메모는 종목마다 비운다(2026-10-31 — 30종목을 한 번에 돌리면 디코딩한 원문이 쌓여 최대 2.49GB, 1GB 제한 컨테이너에서 015760 처리 중 강제 종료됐다)
+  for (const k of Object.keys(docTextMemo)) delete docTextMemo[k];
   if (QUOTA.stopped) { stopAt = sym; break; }
   const corp = corpOf(sym);
   if (!corp) { console.log(`  ${sym}: corp_code 없음`); failed.push(sym); continue; }
@@ -2669,15 +2806,17 @@ for (const sym of symbols) {
   let sourceRcepts = null;
   try { sourceRcepts = await latestPeriodicRcepts(corp); } catch (e) { console.log(`  ${sym}: 정기공시 목록 실패 — ${e.message}`); failed.push(sym); continue; }
   if (!FULL && !LEASE_ONLY) {
-    const prev = await db.collection(COLL).findOne({ _id: sym }, { projection: { sourceRcepts: 1, rulesVersion: 1 } });
-    if (prev?.rulesVersion === KR_DA_RULES_VERSION && prev?.sourceRcepts?.annual === sourceRcepts.annual && prev?.sourceRcepts?.interim === sourceRcepts.interim) {
+    const prev = await db.collection(COLL).findOne({ _id: sym }, { projection: { sourceRcepts: 1, rulesVersion: 1, leaseError: 1 } });
+    if (!prev?.leaseError && prev?.rulesVersion === KR_DA_RULES_VERSION && prev?.sourceRcepts?.annual === sourceRcepts.annual && prev?.sourceRcepts?.interim === sourceRcepts.interim) {
       console.log(`  ${sym}: 변화 없음(사업 ${sourceRcepts.annual ?? "-"} · 반기/분기 ${sourceRcepts.interim ?? "-"} · 규칙 ${KR_DA_RULES_VERSION}) — 건너뜀`);
       skipped += 1;
       continue;
     }
   }
-  // 리스부채 주석 — 실패하면 적재하지 않는다(앱은 미적재 = EV 공란 + 사유)
+  // 리스부채 주석 — 실패하면 적재하지 않는다(앱은 미적재 = EV 공란 + 사유). 실패는 leaseError 로 남겨 다음 증분 실행이 건너뛰지 않고 다시 한다(2026-10-31 —
+  // 운영 015760·047810·062040·079550: 주석 단계가 실패한 채 접수번호·규칙 판본은 적혀 다음 날부터 「변화 없음」으로 건너뛰었다)
   let lease = null;
+  let leaseError = null;
   console.log(`  ${sym}: 리스부채·현금성자산 주석`);
   try {
     const ly = await latestFy(corp);
@@ -2688,12 +2827,16 @@ for (const sym of symbols) {
     if (ly && lease) {
       lease.cashNote = await cashNotes(corp, ly);
       lease.cashQuarter = await cashQuarterOf(corp, ly);
+      lease.finDebt = await finDebtNotes(corp, ly);
+      lease.finDebtQuarter = lease.finDebt ? await finDebtQuarterOf(corp, ly, false) : null;
+      for (const [y, n] of Object.entries(lease.finDebt ?? {})) console.log(`    금융 차입 ${y}: ${n.status}${n.exclude != null ? ` 뺌 ${t(n.exclude)}` : ""} — ${n.how}`);
+      if (lease.finDebtQuarter) console.log(`    금융 차입 ${lease.finDebtQuarter.label}: ${lease.finDebtQuarter.status} — ${lease.finDebtQuarter.how}`);
       for (const [y, its] of Object.entries(lease.cashNote)) for (const i of its) console.log(`    현금 ${y} ${i.line} ${i.value} → ${i.cash ?? "제외"} — ${i.how}`);
       for (const i of lease.cashQuarter?.items ?? []) console.log(`    현금 ${lease.cashQuarter.label} ${i.line} ${i.value} → ${i.cash ?? "제외"} — ${i.how}`);
     }
-  } catch (e) { console.log(`    (리스부채·현금 주석 실패: ${e.message})`); failed.push(sym); lease = null; }
+  } catch (e) { console.log(`    (리스부채·현금 주석 실패: ${e.message})`); failed.push(sym); lease = null; leaseError = e.message; }
   if (LEASE_ONLY) {
-    if (lease && !CHECK && !QUOTA.stopped) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, cashNote: lease.cashNote, cashQuarter: lease.cashQuarter, leaseAt: new Date().toISOString() } });
+    if (lease && !CHECK && !QUOTA.stopped) await db.collection(COLL).updateOne({ _id: sym }, { $set: { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, cashNote: lease.cashNote, cashQuarter: lease.cashQuarter, finDebt: lease.finDebt ?? null, finDebtQuarter: lease.finDebtQuarter ?? null, leaseAt: new Date().toISOString() }, $unset: { leaseError: "" } });
     continue;
   }
   let byYear = null;
@@ -2704,9 +2847,12 @@ for (const sym of symbols) {
   if (ttm) console.log(`    TTM ${ttm.ttmLabel} = ${t(ttm.ttmDepreciation)} (${ttm.ttmSrc})`);
   // 상한·020 으로 중간에 멈춘 종목은 일부 요청이 실패한 결과라 적재하지 않는다
   if (QUOTA.stopped) { console.log(`  ${sym}: ${QUOTA.stopped.message} — 적재 안 함`); stopAt = sym; break; }
+  // 더 새 규칙 판본이 쓴 문서는 옛 코드가 덮어쓰지 않는다(2026-10-31 — 2호기 자동 검증이 옛 작업 폴더 적재 코드로 kr_da_staging 12종목을 옛 규칙으로 덮어썼다)
+  const cur = CHECK ? null : await db.collection(COLL).findOne({ _id: sym }, { projection: { rulesVersion: 1 } });
+  if (cur?.rulesVersion && cur.rulesVersion > KR_DA_RULES_VERSION) { console.log(`  ${sym}: 저장본 규칙 판본 ${cur.rulesVersion} 이 이 코드(${KR_DA_RULES_VERSION})보다 새것 — 덮어쓰지 않음`); continue; }
   if (!CHECK) await db.collection(COLL).replaceOne(
     { _id: sym },
-    { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, cashNote: lease.cashNote, cashQuarter: lease.cashQuarter } : {}), sourceRcepts, rulesVersion: KR_DA_RULES_VERSION, updatedAt: new Date().toISOString() },
+    { _id: sym, byYear, ...(ttm ?? {}), ...(lease ? { leaseNote: lease.leaseNote, leasePolicyLatest: lease.leasePolicyLatest, leaseQuarter: lease.leaseQuarter, cashNote: lease.cashNote, cashQuarter: lease.cashQuarter, finDebt: lease.finDebt ?? null, finDebtQuarter: lease.finDebtQuarter ?? null } : {}), ...(leaseError ? { leaseError } : {}), sourceRcepts, rulesVersion: KR_DA_RULES_VERSION, updatedAt: new Date().toISOString() },
     { upsert: true },
   );
   const yrs = Object.keys(byYear).map(Number).sort((a, b) => b - a);

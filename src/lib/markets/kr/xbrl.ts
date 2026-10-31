@@ -107,6 +107,8 @@ export async function krInterimXbrlCum(
     if (!res.ok) throw new Error(`fnlttXbrl ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   });
+  // DART 014(XBRL 파일 없음 — 금융지주·증권 옛 보고서 등)는 압축 해제 실패가 아니라 「그 보고서 XBRL 없음」
+  if (isDart014(buf)) throw new Error(`분기 보고서 XBRL ${rcpNo} 없음(DART 014 파일 없음)`);
   let files;
   try {
     files = unzipSync(buf);
@@ -134,6 +136,12 @@ export async function krInterimXbrlCum(
   return { cur: read(`CFY${year}d${q}A`), prior: read(`PFY${year - 1}d${q}A`) };
 }
 
+/** DART 「파일 없음」(status 014) 응답 — zip 대신 짧은 XML */
+function isDart014(buf: Uint8Array): boolean {
+  const h = strFromU8(buf.slice(0, 300));
+  return /^<\?xml/.test(h) && /<status>014<\/status>/.test(h);
+}
+
 /** 한 사업보고서(rcpNo)에서 당기·전기 2개년 D&A 추출. */
 async function fromReport(
   rcpNo: string,
@@ -147,6 +155,8 @@ async function fromReport(
     if (!res.ok) throw new Error(`fnlttXbrl ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   });
+  // DART 014(XBRL 파일 없음)는 그 보고서 값 없음 — 빈 결과로 돌려 다음 해 보고서로(호출부 경고 없이 다음으로)
+  if (isDart014(buf)) return {};
   if (buf.length < 100) throw new Error(`xbrl empty (${buf.length}B)`);
   const files = unzipSync(buf);
   const name = Object.keys(files).find((n) => n.endsWith(".xbrl"));

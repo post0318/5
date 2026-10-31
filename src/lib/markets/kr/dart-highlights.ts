@@ -6,7 +6,7 @@ import type {
   HighlightRow,
 } from "../us/edgar-highlights";
 import { type KrFacts, type KrDaInput, annualSeries, daAndAmortSeries, krDaSourceNote } from "./dart-facts";
-import { buildKrEvResolver, KR_EPS_BLANK_NOTE, KR_EPS_SUM_NOTE, krEpsAnnual, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
+import { buildKrEvResolver, isFinancialBs, KR_BANK_NEG_EV_NOTE, krBankNegativeEv, KR_EPS_BLANK_NOTE, KR_EPS_SUM_NOTE, krEpsAnnual, krEpsByYear, krEv, krEvFromBridge, krOpIncomeByYear, krParentEquityByYear, type KrCaps } from "./dart-ev";
 
 /**
  * 한국 재무 하이라이트 (개요) — `edgar-highlights.ts` 미러.
@@ -317,7 +317,12 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   if (approxMcap) notes.push("일부 연도 시가총액: KRX 자료 없음 → 연말 종가 × 현재 상장주식수 근사");
   for (const w of input.warnings ?? []) notes.push(`⚠ ${w}`);
   if (input.capsError) notes.push(`⚠ KRX 시가총액 조회 실패(3번 재시도 후, ${input.capsError}) — 연도 열 시가총액은 근사(연말 종가 × 현재 상장주식수), 우선주 시가총액·EV 는 공란. 저장하지 않으므로 다음 조회 때 다시 계산`);
-  if (evBlocker === "financial") notes.push("금융업 — EV·EV/EBITDA 는 계산하지 않음(예금·보험부채가 영업용 부채)");
+  {
+    const neg = columns.flatMap((c, i) => (c.kind !== "estimate" && krBankNegativeEv(bridge[i], marketCap[i], prefMcap[i]) ? [c.label] : []));
+    if (neg.length) notes.push(`${neg.join("·")}: ${KR_BANK_NEG_EV_NOTE}(은행 — 현금 > 차입금, 오너 결정 2026-10-31 「나」) — EV·EV/EBITDA 공란`);
+  }
+  if (isFinancialBs(facts))
+    notes.push("금융업 EV(오너 결정 2026-10-31, 미국 규칙): 총차입금 = 차입부채·사채·리스부채(콜머니·RP 매도·신탁계정차·매도유가증권 제외 — 주석 구성 표), 예수부채·보험계약부채·투자자예수금 제외. 차입부채 구성을 못 읽은 기간은 EV 공란");
   if (evBlocker === "captive-unsplit")
     notes.push("금융 자회사 연결(할부금융 차입금 미분리) — EV·EV/EBITDA 는 표시하지 않음(최종 기준 결정 전)");
   if (bridge.some((b) => b?.plainFinLiab))

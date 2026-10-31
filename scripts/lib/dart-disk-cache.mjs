@@ -11,7 +11,7 @@
  *    사라진 파일(ENOENT)은 건너뛴다(앱 dart-cache.ts 와 같은 수정, 2026-10-05)
  *  - fnlttSinglAcntAll(종류 fnltt, 열쇠 corp_사업연도_보고서코드_연결별도): 판본 = 그 보고서 최신 접수번호(정기공시 목록), 목록에 없으면 "none".
  *    12월 결산이 아닌 회사는 디스크 캐시 안 씀. 상태 000·013 만 저장
- *  - 접수번호로 받는 원본(fnlttXbrl → 종류 xbrl, document.xml → 종류 doc): 판본 = 접수번호(바뀌지 않음). zip(PK) 만 저장(014 "파일 없음"은 저장 안 함)
+ *  - 접수번호로 받는 원본(fnlttXbrl → 종류 xbrl, document.xml → 종류 doc): 판본 = 접수번호(바뀌지 않음). zip(PK) 저장, 014 "파일 없음"은 `.014` 표시 파일로 따로 저장(같은 접수번호를 다시 묻지 않게 — 2026-10-31)
  *  - 정기공시 목록(list.json)은 캐시하지 않는다 — 회사마다 실행당 1회(정기공시 전체, 최근 9년, 쪽 단위)만 받고 스크립트의 여러 목록 조회(사업연도별·
  *    반기/분기별·증분 판정)는 그 결과를 걸러 돌려준다. 그래서 디스크에 원문이 다 있으면 종목당 DART 요청 = 목록 1건
  * DART_CACHE_DIR 가 없으면 디스크 캐시 없이 받는다(목록 한 번 받기는 그대로).
@@ -158,9 +158,13 @@ export function makeDartDisk({ key, root, maxGb = 2, take, check }) {
       let hit = await readVer(dir, `${safe(rcept)}.bin`);
       if (hit && !(hit.length >= 100 && hit[0] === 0x50 && hit[1] === 0x4b)) { await rm(path.join(dir, `${safe(rcept)}.bin`), { force: true }); stats.deleted++; hit = null; } // 깨진 파일 — 다시 받음
       if (hit) { stats.hit++; return new Response(hit, { status: 200 }); }
+      // DART 014(그 접수번호에 파일 없음)도 기억한다 — 접수번호 판본은 바뀌지 않아 다시 물어도 같다(작업 규칙 「실패·점검 응답도 기억」, 2026-10-31)
+      const none = await readVer(dir, `${safe(rcept)}.014`);
+      if (none) { stats.hit++; return new Response(none, { status: 200 }); }
       stats.miss++;
       const r = await net(url);
       if (r.ok && r.buf.length >= 100 && r.buf[0] === 0x50 && r.buf[1] === 0x4b) await writeVer(dir, `${safe(rcept)}.bin`, Buffer.from(r.buf));
+      else if (r.ok && /^<\?xml[\s\S]{0,300}<status>014<\/status>/.test(Buffer.from(r.buf.slice(0, 400)).toString("utf8"))) await writeVer(dir, `${safe(rcept)}.014`, Buffer.from(r.buf));
       return new Response(r.buf, { status: r.status });
     }
     if (root && ep === "fnlttSinglAcntAll.json") {

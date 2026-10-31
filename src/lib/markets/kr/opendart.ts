@@ -688,10 +688,12 @@ export async function loadKrTtmDetail(symbol: string): Promise<KrTtmDetail | nul
     const fyLast = (m: Map<number, number>, k: keyof KrTtmParts) => {
       // 당기 보고서에 전기 누적이 없어 비운 항목은 연간값으로 채우지 않는다(오너 결정 2026-10-10)
       if (k !== "daTtm" && reasons[k as keyof typeof reasons] === KR_PRIOR_MISSING) return null;
-      const ys = [...m.keys()].sort((a, b) => a - b);
-      const y = ys.at(-1);
+      // 최근 사업연도 값만 — 그 해 값이 없으면 빈칸(예전엔 값이 있는 마지막 해를 썼다: 029780 삼성카드는 2025 사업보고서가 「영업수익」 합계 줄을 없애
+      // 2023~2025 매출이 비었는데 LTM 매출에 2022 값 3.79조가 들어갔다 — 기간이 다른 값으로 채우기, 2026-10-31)
+      const y = [...facts.annualEndByYear.keys()].sort((a, b) => a - b).at(-1);
       if (y == null) return null;
       const v = m.get(y) ?? null;
+      if (v == null && flows?.periodLabel && k !== "daTtm") reasons[k] ??= `TTM 계정 매칭 실패 — FY${y} 연간값도 없음`;
       if (v != null) {
         parts[k] = [{ v, start: `${y}-01-01`, end: facts.annualEndByYear.get(y) ?? `${y}-12-31` }];
         // 손익 TTM 이 분기 조합인데 이 항목만 연간값 — 사유를 남긴다(감사 1차 ⑨)
