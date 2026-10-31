@@ -155,11 +155,14 @@ export async function krExternal(ctx) {
   const noteHit = async (y, delta, prec, kws) => {
     const d = Math.abs(delta);
     const hits = [];
+    // 차가 외부 정밀도보다 작으면 원인 숫자를 찾지 않는다(정밀도 흐트러짐 — 0 같은 숫자에 우연히 걸린다, 001440 2024 −995,639원 = '파생상품' 0)
+    if (!(d >= prec)) return null;
     for (const yy of [y, y + 1]) {
       const D = await docStreams(yy).catch((e) => { errs.push(`원문 ${yy}: ${String(e?.message ?? e).slice(0, 80)}`); return null; });
       if (!D) continue;
       for (const { u, toks } of D.st) for (let i = 0; i < toks.length; i++) {
         const t = toks[i], x = Math.abs(t.v) * u;
+        if (t.v === 0) continue;
         const small = Math.abs(t.v) < 1000; // 유효숫자 4자리 미만은 우연 일치 위험 — 그 숫자 바로 앞 이름이 첫째·둘째 낱말(파생·리스 / 사용권·투자부동산)일 때만
         if (!(Math.abs(x - d) < prec)) continue; // 외부 값의 정밀도(야후 1,000원 끝자리, FnGuide 순부채 백만원) 안에서 같은 숫자
         const names = [];
