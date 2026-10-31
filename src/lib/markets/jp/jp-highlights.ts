@@ -87,7 +87,7 @@ export function buildJpHighlights(f: JpFund, v: JpVal, estimates: JpEstimate[], 
   // EV 브릿지 — 금융사도 같은 줄(오너 결정 2026-10-31 「가」 — 미국 규칙, 미국 은행 하이라이트에도 EV 줄)
   const evBridge: HighlightRow[] = [
     { ...row("cash", "− 현금성자산", "money", cashNeg) },
-    row("debt", f.financial ? "+ 총차입금 (이자부 — 예금·보험부채 제외)" : "+ 총차입금 (리스부채 포함)", "money", f.debt),
+    row("debt", f.financial ? "+ 총차입금 (이자부 — 예금·보험부채 제외)" : "+ 총차입금 (리스부채 포함)", "money", f.debtEv),
     ...(f.nci.v.some((x) => x != null && x !== 0) ? [row("nci", "+ 비지배지분", "money", f.nci)] : []),
     { ...row("ev", "기업가치 (EV)", "money", v.ev), emphasis: true },
   ];

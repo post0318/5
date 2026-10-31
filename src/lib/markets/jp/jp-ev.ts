@@ -194,6 +194,8 @@ export interface JpFund {
   cashLiq: Ser;
   debt: Ser;
   nci: Ser;
+  /** EV 브릿지 총차입금(하이라이트) — 금융 자회사 보유 열은 제조 부문 차입금(미국 edgar-highlights 와 같음), 그 밖은 debt 와 같음 */
+  debtEv: Ser;
   /** 현금·차입금·비지배지분이 모두 있고 EV 를 막는 사유가 없을 때 차입금 + 비지배지분 − 현금, 아니면 null + 사유 */
   netDebtEv: Ser;
   /** 유동 차입금(ROIC 투하자본) */
@@ -248,7 +250,7 @@ export function jpFundamentals(model: JpFinModel): JpFund {
     ltmIsFy,
     rev: S(), op: S(), ordinary: S(), pretax: S(), tax: S(), ni: S(), gross: S(), cogs: S(),
     assets: S(), liab: S(), eqAll: S(), eqParent: S(), curA: S(), curL: S(), retained: S(), ar: S(), inv: S(), ap: S(),
-    cash: S(), cashLiq: S(), debt: S(), nci: S(), netDebtEv: S(), curDebt: S(),
+    cash: S(), cashLiq: S(), debt: S(), debtEv: S(), nci: S(), netDebtEv: S(), curDebt: S(),
     ocf: S(), capex: S(), da: S(), ebitda: S(), intPaid: S(), divPaid: S(),
     x,
     bsPrev: () => null,
@@ -388,6 +390,8 @@ export function jpFundamentals(model: JpFinModel): JpFund {
     if (leaseUnknown) f.debt.n[c] = `${leaseUnknown} — 본표 차입금 줄만`;
     if (leaseNote) f.debt.n[c] = leaseNote;
     if (mixedWhy) f.debt.n[c] = mixedWhy;
+    f.debtEv.v[c] = f.debt.v[c];
+    f.debtEv.n[c] = f.debt.n[c];
     const cd = sumTop(bs, (l) => isDebt(l) && inCurLiab(l), c);
     f.curDebt.v[c] = mixed ? null : (cd?.v ?? (eqAll ? 0 : null));
     if (mixedWhy) f.curDebt.n[c] = mixedWhy;
@@ -421,7 +425,8 @@ export function jpFundamentals(model: JpFinModel): JpFund {
     else if (mfgDebt != null) {
       const sg = segUsed!;
       f.netDebtEv.v[c] = mfgDebt + (f.nci.v[c] ?? 0) - f.cash.v[c]!;
-      f.netDebtEv.n[c] = `제조 부문 차입금 ${Math.round(mfgDebt / 1e6).toLocaleString("en-US")}백만엔(${sg.doc} 부문 요약 재무상태표 「${sg.excl}」 ${sg.head} — ${sg.rows.join("·")}, ${sg.consDebt != null ? "연결 차입금 합 = 본표 차입금" : "(連結)負債合計 = 본표"} 확인) + 비지배지분 − 연결 현금`;
+      f.debtEv.v[c] = mfgDebt;
+      f.debtEv.n[c] = f.netDebtEv.n[c] = `제조 부문 차입금 ${Math.round(mfgDebt / 1e6).toLocaleString("en-US")}백만엔(${sg.doc} 부문 요약 재무상태표 「${sg.excl}」 ${sg.head} — ${sg.rows.join("·")}, ${sg.consDebt != null ? "연결 차입금 합 = 본표 차입금" : "(連結)負債合計 = 본표"} 확인) + 비지배지분 − 연결 현금`;
     } else {
       f.netDebtEv.v[c] = debtV + (f.nci.v[c] ?? 0) - f.cash.v[c]!;
       if (financial)
