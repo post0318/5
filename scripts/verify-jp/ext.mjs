@@ -251,7 +251,9 @@ export function classifyOne(app, x, causes = []) {
   if (x.unit === 1 ? close(app, ext) : app === ext) return { cls: "일치", note: "" };
   for (const c of causes) {
     const why = c.test(ext);
-    if (why) return { cls: c.appWrong ? "불일치" : "원인확인", note: why, appWrong: !!c.appWrong };
+    // c.cls = "정밀도" — 두 원자료 식이 회사 공시의 줄마다 백만엔 반올림 때문에 다른 경우(앱 = 소계 합, 외부 = 다른 줄 묶음의 합)처럼 식을 재현해 같아지면
+    // 정밀도 부족(D1 — 근거로 세지 않음). 그 밖은 원인 확인, appWrong 이면 앱이 결정 정의와 다름(불일치)
+    if (why) return { cls: c.appWrong ? "불일치" : c.cls ?? "원인확인", note: why, appWrong: !!c.appWrong };
   }
   const step = decStep(x);
   if (close(roundAway(app, step), ext)) return { cls: "정밀도", note: `앱 ${app} 를 외부 표기 단위 ${step} 로 반올림해야 같음` };
@@ -312,15 +314,21 @@ export function judgeCell({ name, label, ym: k, app, fields, srcs, causes = [], 
   const common = names.filter((n) => per[n].cls === "공통모드");
   const has = names.filter((n) => per[n].cls !== "없음");
   const nm = (n) => SRC_NAME[n];
-  const desc = (n) => `${nm(n)} ${per[n].ext ?? "－"}${per[n].note ? ` [${per[n].cls === "정밀도" ? "검증불가(외부 정밀도 부족)" : per[n].cls === "원인확인" ? "원인 확인" : per[n].cls === "불일치" && matched.length ? "외부 단독 이탈" : per[n].cls === "불일치" ? "원인 미확인 불일치" : per[n].cls}: ${per[n].note}]` : ""}`;
+  const desc = (n) => `${nm(n)} ${per[n].ext ?? "－"}${per[n].note ? ` [${per[n].cls === "정밀도" ? "검증불가(외부 정밀도 부족)" : per[n].cls === "원인확인" ? "원인 확인" : outlier(n) ? "외부 단독 이탈" : per[n].cls === "불일치" ? "원인 미확인 불일치" : per[n].cls}: ${per[n].note}]` : ""}`;
+  // 앱이 결정 정의와 다름이 식으로 드러난 곳(appWrong)은 다른 곳이 맞아도 실패로 둔다(앱 결함 — 일치 소스는 같은 결함을 공유하는 공통 원천이 아님이 확인돼야 한다)
+  const appWrong = names.filter((n) => per[n].appWrong);
+  // 외부 한 곳이 원자료 식으로 원인 확인되면 같은 칸의 다른 곳 원인 미확인 불일치는 그 소스 혼자의 이탈(외부 단독 이탈 — 리드 지시 2026-10-31, D2 일본 1곳 기준:
+  // 앱 값이 원자료와 맞고(A층), 외부 1곳이 원자료 정의 식과 정확히 맞으면 나머지 한 곳의 어긋남은 그 사이트 문제). 칸은 독립 일치가 아니므로 통과로 세지 않는다
+  const outlier = (n) => per[n].cls === "불일치" && !per[n].appWrong && (matched.length || expl.length);
   let check;
-  if (matched.length) check = { status: PASS, app, note: `독립 외부 ${matched.map(nm).join("·")} 일치(D2 일본 1곳)${bad.length || prec.length || expl.length ? ` · ${names.filter((n) => !matched.includes(n) && per[n].cls !== "없음").map(desc).join(" · ")}` : ""}` };
-  else if (bad.length) check = { status: FAIL, app, note: `외부 불일치 — ${has.map(desc).join(" · ")}` };
+  if (appWrong.length && !matched.length) check = { status: FAIL, app, note: `외부 불일치(앱 정의 결함) — ${has.map(desc).join(" · ")}` };
+  else if (matched.length) check = { status: PASS, app, note: `독립 외부 ${matched.map(nm).join("·")} 일치(D2 일본 1곳)${bad.length || prec.length || expl.length ? ` · ${names.filter((n) => !matched.includes(n) && per[n].cls !== "없음").map(desc).join(" · ")}` : ""}` };
   else if (expl.length) check = { status: NA, app, note: `식으로 원인 확인(독립 일치 아님) — ${has.map(desc).join(" · ")}` };
+  else if (bad.length) check = { status: FAIL, app, note: `외부 불일치 — ${has.map(desc).join(" · ")}` };
   else if (prec.length) check = { status: NA, app, note: `검증불가(외부 정밀도 부족) — ${has.map(desc).join(" · ")}` };
   else if (common.length) check = { status: COMMON, app, note: `공통모드 원천만 일치 — ${common.map(nm).join("·")}` };
   else check = { status: NA, app, note: `외부 값 없음 — ${names.map((n) => `${nm(n)}: ${per[n].note}`).join(" · ")}` };
-  const jpClass = Object.fromEntries(names.map((n) => [nm(n), per[n].cls === "불일치" && matched.length ? "외부단독이탈" : per[n].cls]));
+  const jpClass = Object.fromEntries(names.map((n) => [nm(n), outlier(n) ? "외부단독이탈" : per[n].cls]));
   const off = names.filter((n) => ["불일치", "원인확인", "정밀도"].includes(per[n].cls));
   const review = {
     item: `${label} ${name}`,

@@ -225,6 +225,10 @@ export function evComponents(d, D, which, { segDocs = [], industry = null } = {}
     if (ro.kind !== "cf" || ro.cons !== d.consUsed) continue;
     for (const [k, pl] of ro.pls ?? []) if (pl.includes("e") && /^CashAndCashEquivalents/.test(local(k))) { const f = val(k); if (f && !f.conflict && f.v != null) cfEnd.set(k, f.v); }
   }
+  // 재무상태표 잔액과 다를 때 쓰는 「…IfDifferentFromBSBalance」가 값이 있으면 그것이 현금흐름표 기말 잔액이다(4568 S100TLVV 2024-03: 같은 표에 CashAndCashEquivalentsIFRS
+  // 647,180 은 기초·재무상태표 계상액 줄, IfDifferentFromBSBalance 656,403 이 기말 — 売却目的保有 현금 등 조정 뒤)
+  const diff = [...cfEnd.keys()].filter((k) => /IfDifferentFromBSBalance/.test(k));
+  if (diff.length) for (const k of [...cfEnd.keys()]) if (!diff.includes(k)) cfEnd.delete(k);
   const cashVals = new Set(cfEnd.values());
   const nciK = ["jpigp_cor:NonControllingInterestsIFRS", "jppfs_cor:NonControllingInterests"].find((k) => concepts.has(k));
   const nciF = nciK ? val(nciK) : undefined;
@@ -245,6 +249,10 @@ export function evComponents(d, D, which, { segDocs = [], industry = null } = {}
   const finIndustry = /保険業|銀行業|証券、商品先物取引業|証券業/.test(industry ?? "");
   if (financial || finIndustry) {
     r.kind = { fin: `금융사(${financial ? "BNK·INS·SEC 서식" : `EDINET 업종 ${industry}`}) — 미국 규칙 EV(오너 결정 2026-10-31)` };
+    // 은행(예금 수취 금융사) = 은행 서식(BNK 요소)이면서 부채에 預金·貯金 줄(DepositsLiabilitiesBNK·ext:DepositsLiabilities(ゆうちょ 貯金)) 값이 있는 회사 — 기업가치가 음수면 공란 기대(오너 결정 「나」 2026-10-31)
+    const bnk = [...d.roles.values()].filter((x) => x.kind === "is" && x.cons === d.consUsed).some((x) => [...x.concepts].some((k) => /BNK$/.test(k)));
+    const dep = [...concepts].find((k) => /^(Deposits|Savings)(Liabilities)?(BNK)?$/.test(local(k)) && isLiab(k) && val(k)?.v != null);
+    if (bnk && dep) r.depositBank = `${local(dep)} ${val(dep).v / 1e6}`;
     return r;
   }
   // 금융 자회사 보유 = 금융서비스 자산(…FinancialServices…) 요소에 값. 은행업 예금(…BankingBusiness·…ForBanking·…ForFinancialBusiness 부채)만 있는 회사는 은행형 — EV 채움

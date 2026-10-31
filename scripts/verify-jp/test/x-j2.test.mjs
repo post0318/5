@@ -184,3 +184,55 @@ test("J2 현금 = 현금흐름표 기말 잔액(Q3): 7267 CF 5,118,477(재무상
   const d = await doc("S100YDD9");
   assert.equal(evComponents(d, "2026-03-31", "cur", {}).cash.v, 5118477e6);
 });
+
+// ── 2026-10-31 리드 지시 규칙(외부 단독 이탈·정밀도 식·회계기준 차이) ──
+test("judgeCell: 한 곳이 원자료 식으로 원인 확인되면 다른 곳 불일치는 외부 단독 이탈 — 칸은 검증불가(통과 아님)", () => {
+  const s = srcs({ revenue: amt(90) }, { revenue: amt(77) }, { revenue: undefined });
+  const r = cell(100e6, s, { causes: [{ test: (x) => (x === 90e6 ? "회계기준 차이 — 외부 = 원자료 식" : null) }] });
+  assert.equal(r.check.status, ST.NA);
+  assert.equal(r.review.jpClass["みんかぶ"], "외부단독이탈");
+  assert.equal(r.review.jpClass["株探"], "원인확인");
+});
+
+test("judgeCell: 심은 오류 — 원인 확인되는 곳이 없으면 여전히 실패", () => {
+  const s = srcs({ revenue: amt(90) }, { revenue: amt(77) }, { revenue: undefined });
+  const r = cell(100e6, s, { causes: [{ test: (x) => (x === 91e6 ? "식" : null) }] });
+  assert.equal(r.check.status, ST.FAIL);
+});
+
+test("judgeCell: 줄 합 반올림 식(cls 정밀도)이 재현되면 정밀도 부족 — 식이 안 맞는 2백만엔 차이는 실패", () => {
+  const s = srcs({ revenue: amt(101) }, { revenue: undefined }, { revenue: undefined });
+  const prec = [{ cls: "정밀도", test: (x) => (x === 101e6 ? "외부 = 잎 줄 합(원자료 재현)" : null) }];
+  const ok = cell(100e6, s, { causes: prec });
+  assert.equal(ok.check.status, ST.NA);
+  assert.match(ok.check.note, /정밀도 부족/);
+  const s2 = srcs({ revenue: amt(102) }, { revenue: undefined }, { revenue: undefined });
+  assert.equal(cell(100e6, s2, { causes: prec }).check.status, ST.FAIL, "식이 재현되지 않는 2백만엔 차이");
+});
+
+test("원자료 식 재현: 8306 2024-03 자기자본 — 소계 합 19,587,973 · 잎 줄 합 19,587,974(株探) · 純資産 경로 19,587,975(Yahoo!ファイナンス)", async () => {
+  const { leafSum } = await import("../layers.mjs");
+  const { plainValue } = await import("../xbrl.mjs");
+  const d = await doc("S100W4FB");
+  const D = "2024-03-31";
+  const v = (c) => plainValue(d, c, { instant: D }).v;
+  assert.equal((v("jppfs_cor:ShareholdersEquity") + v("jppfs_cor:ValuationAndTranslationAdjustments")) / 1e6, 19587973);
+  assert.equal((leafSum(d, "jppfs_cor:ShareholdersEquity", D) + leafSum(d, "jppfs_cor:ValuationAndTranslationAdjustments", D)) / 1e6, 19587974);
+  assert.equal((v("jppfs_cor:NetAssets") - v("jppfs_cor:NonControllingInterests")) / 1e6, 19587975);
+});
+
+test("원자료 식 재현: 8001·8002·6501 2026-03 현지 영업이익 = 売上総利益 − 販管費(− 貸倒)", async () => {
+  const { plainValue } = await import("../xbrl.mjs");
+  const P = { start: "2025-04-01", end: "2026-03-31" };
+  const V = async (id, c) => plainValue(await doc(id), c, P).v / 1e6;
+  assert.equal((await V("S100YA6H", "jpigp_cor:GrossProfitIFRS")) - (await V("S100YA6H", "jpigp_cor:SellingGeneralAndAdministrativeExpensesIFRS")) - (await V("S100YA6H", "ext:ProvisionForDoubtfulAccountsOtherGainsLossesIFRS")), 701888);
+  assert.equal((await V("S100YAY4", "jpigp_cor:GrossProfitIFRS")) - (await V("S100YAY4", "jpigp_cor:SellingGeneralAndAdministrativeExpensesIFRS")) - (await V("S100YAY4", "jpigp_cor:ProvisionForDoubtfulAccountsIFRS")), 256670);
+  assert.equal((await V("S100YGBO", "jpigp_cor:GrossProfitIFRS")) - (await V("S100YGBO", "jpigp_cor:SellingGeneralAndAdministrativeExpensesIFRS")), 1199275);
+});
+
+test("J2 은행(예금 수취) 판정: 8306 은 depositBank, 8766 IFRS 보험은 아님", async () => {
+  const b = evComponents(await doc("S100YJQO"), "2026-03-31", "cur", { industry: "銀行業" });
+  assert.match(b.depositBank ?? "", /^DepositsLiabilitiesBNK/);
+  const i = evComponents(await doc("S100YLS8"), "2026-03-31", "cur", { industry: "保険業" });
+  assert.equal(i.depositBank, undefined);
+});
