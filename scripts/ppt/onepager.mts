@@ -10,7 +10,7 @@
  *
  * 실행:
  *   npx tsx --tsconfig tsconfig.json scripts/ppt/onepager.mts --market=kr --symbol=005930 \
- *     [--settings=설정.json] [--base=http://127.0.0.1:3000] [--template=~/ppt/out/template.pptx] [--out-dir=~/ppt/out/onepager] [--render]
+ *     [--settings=설정.json] [--from-db [--env=~/5/.env.local]] [--base=http://127.0.0.1:3000] [--template=~/ppt/out/template.pptx] [--out-dir=~/ppt/out/onepager] [--render]
  * 결과: {outDir}/{market}_{symbol}.pptx · .spec.json · .report.json (· .png 렌더링)
  * 템플릿·결과물은 사내한 자료라 저장소 밖에 둔다.
  */
@@ -276,6 +276,34 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
   };
 }
 
+/**
+ * 공용 회사 설정(DB ppt_company — API·커넥터 채우기가 저장한 점유율·투자포인트)을 생성기 설정 모양으로.
+ * 2호기 검증 DB 를 읽는다(~/5/.env.local, --env= 로 바꿈). 「사람이 고름」 후보(shareCandidates)는 쓰지 않는다.
+ */
+async function settingsFromDb(market: Market, symbol: string): Promise<OnepagerSettings> {
+  process.loadEnvFile(home(arg("env") ?? "~/5/.env.local"));
+  const { getCompany } = await import("@/lib/ppt/store");
+  const doc = await getCompany(market, symbol);
+  const out: OnepagerSettings = {};
+  if (doc?.share) {
+    out.share = {
+      title: `${doc.share.business} 시장 (${doc.share.asOf})`,
+      source: [...new Set(doc.share.sources.map((x) => x.org))].join("·"),
+      asOf: doc.share.asOf,
+      url: doc.share.sources[0]?.url,
+      items: doc.share.rows,
+    };
+  }
+  if (doc?.points?.lines?.length) {
+    out.points = doc.points.lines.map((l) => ({
+      kind: l.kind,
+      text: l.text,
+      sources: l.sources.map((x) => ({ title: x.title, publisher: x.org, publishedAt: x.publishedAt, url: x.url })),
+    }));
+  }
+  return out;
+}
+
 function run(cmd: string, args: string[], allowStatus: number[] = [0]): number {
   const r = spawnSync(cmd, args, { encoding: "utf8" });
   if (r.stdout) process.stdout.write(r.stdout);
@@ -293,7 +321,9 @@ async function main() {
   const template = home(arg("template") ?? "~/ppt/out/template.pptx");
   const outDir = home(arg("out-dir") ?? "~/ppt/out/onepager");
   const settingsPath = arg("settings");
-  const settings: OnepagerSettings = settingsPath ? JSON.parse(readFileSync(home(settingsPath), "utf8")) : {};
+  const fileSettings: OnepagerSettings = settingsPath ? JSON.parse(readFileSync(home(settingsPath), "utf8")) : {};
+  // 파일 설정이 있으면 파일 우선
+  const settings: OnepagerSettings = process.argv.includes("--from-db") ? { ...(await settingsFromDb(market, symbol)), ...fileSettings } : fileSettings;
   const py = existsSync(home("~/ppt/venv/bin/python")) ? home("~/ppt/venv/bin/python") : "python3";
 
   const spec = await buildOnepagerSpec(market, symbol, settings, base);
@@ -304,7 +334,10 @@ async function main() {
   // 점검 실패(종료코드 2)여도 렌더링까지 해서 눈으로 볼 수 있게 하고, 마지막에 실패로 끝낸다.
   const checkStatus = run(py, [resolve(ROOT, "scripts/ppt/onepager_check.py"), "--pptx", `${stem}.pptx`, "--spec", `${stem}.spec.json`, "--report", `${stem}.report.json`, "--template", template], [0, 2]);
   if (process.argv.includes("--render")) {
-    run("soffice", ["--headless", "--convert-to", "pdf", "--outdir", outDir, `${stem}.pptx`]);
+    // 렌더링은 무거운 실행 — 2호기 규칙대로 사용 가능 메모리 2GB 이상 확인 뒤 검증 잠금(/tmp/macro-verify.lock) 안에서
+    const avail = Number(/MemAvailable:\s+(\d+)/.exec(readFileSync("/proc/meminfo", "utf8"))?.[1] ?? 0) / 1024;
+    if (avail < 2048) throw new Error(`사용 가능 메모리 ${Math.round(avail)}MB < 2GB — 렌더링 안 함`);
+    run("flock", ["/tmp/macro-verify.lock", "soffice", "--headless", "--convert-to", "pdf", "--outdir", outDir, `${stem}.pptx`]);
     run("pdftoppm", ["-r", "150", "-png", "-singlefile", `${stem}.pdf`, stem]);
     console.log(`렌더링 ${stem}.png`);
   }
