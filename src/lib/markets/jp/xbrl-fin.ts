@@ -19,10 +19,10 @@ import { edinetDocZip, edinetTaxonomyText, readEdinetJson, writeEdinetJson } fro
  * 판 4(2026-10-09): 현금흐름표의 시점(instant) 개념에 기초·기말 이름표가 없으면 기말 잔액(第一三共 CashAndCashEquivalentsIfDifferentFromBSBalanceIFRS
  *   "現金及び現金同等物の期末残高" — 기간 값으로 찾아 줄이 통째로 빠졌다).
  * 판 5(2026-10-10): 자기주식 표 회사 이름 NFKC 비교(KDDI 전각), 발행주식수가 보통주 종류 행뿐이면 그 값(オリエンタルランド).
- * 판 6(2026-10-31): MD&A 「金融○○を除く」 요약 재무상태표의 차입금 줄(seg) — 금융 자회사 보유 회사 EV 의 제조 부문 차입금(오너 결정 2026-10-11).
+ * 판 6·7(2026-10-31 — 7: 부문 표 두 꼴·날짜별 정리 꼴, 6 의 옛 꼴 캐시 무효): MD&A 「金融○○を除く」 요약 재무상태표의 차입금 줄(seg) — 금융 자회사 보유 회사 EV 의 제조 부문 차입금(오너 결정 2026-10-11).
  */
 
-export const JP_PARSE_VERSION = 6;
+export const JP_PARSE_VERSION = 7;
 
 export type JpStmtKind = "bs" | "is" | "ci" | "cf";
 /** 값 단위 — m 금액(엔), ps 주당(엔/주), sh 주식수, p 비율 */
