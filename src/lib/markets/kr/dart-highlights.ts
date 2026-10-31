@@ -59,6 +59,12 @@ export interface KrHighlightInput {
     estPer: number | null;
     estPbr: number | null;
   } | null;
+  /**
+   * 예상 FY2 열(오너 결정 D26 2026-10-15 + 2026-10-31 보충) — 야후 컨센서스(네이버엔 FY2 없음). fy1 값은 스케일 확인용(O13: 야후 FY1 이 네이버 FY1 과 같은
+   * 자릿수일 때만 FY2 를 쓴다). 조회 실패는 error
+   */
+  yahoo?: { fy1: { year: number | null; revenue: number | null; eps: number | null }; fy2: { year: number | null; revenue: number | null; eps: number | null } } | null;
+  yahooError?: string | null;
 }
 
 /** 네이버 컨센서스는 억원 단위 — 이 파일의 원(KRW) 단위로 환산. */
@@ -94,6 +100,31 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   columns.push({ key: "LTM", label: "현재/LTM", date: ltmDate, kind: "ltm" });
   const estYear = consensus?.estYear && consensus.estYear > lastFy ? consensus.estYear : null;
   if (estYear) columns.push({ key: `FY${estYear}E`, label: `${estYear}Y 예상`, date: `${estYear}-12-31`, kind: "estimate" });
+  // 예상 FY2 열(D26) — FY1(네이버) 다음 해, 값은 야후. 열 이름 「FY2027E」(발표자료가 이 이름으로 찾는다)
+  const fy2Year = estYear ? estYear + 1 : null;
+  const yh = input.yahoo ?? null;
+  const fy2Notes: Record<string, string> = {};
+  let fy2Idx = -1;
+  let yRev: number | null = null, yEps: number | null = null;
+  if (fy2Year) {
+    columns.push({ key: `FY${fy2Year}E`, label: `${fy2Year}Y 예상 (Yahoo)`, date: `${fy2Year}-12-31`, kind: "estimate" });
+    fy2Idx = columns.length - 1;
+    // O13 스케일 확인 — 야후 FY1 값이 네이버 FY1 값의 0.5~2배(같은 자릿수)일 때만 야후 FY2 를 쓴다. 확인 못 하면 빈칸 + 사유(보정해 채우지 않음)
+    const scaleOk = (yv: number | null | undefined, nv: number | null | undefined) => yv != null && nv != null && nv !== 0 && Math.sign(yv) === Math.sign(nv) && Math.abs(yv / nv) >= 0.5 && Math.abs(yv / nv) <= 2;
+    const why = (what: string, yv: number | null | undefined, nv: number | null | undefined) =>
+      input.yahooError ? `야후 조회 실패 — ${input.yahooError}` : !yh ? "야후 추정 없음" : yh.fy2.year !== fy2Year ? `야후 다음 해 추정의 결산 연도(${yh.fy2.year ?? "없음"})가 ${fy2Year} 가 아님` : nv == null ? `${what} 스케일 확인 불가(네이버 FY${estYear} 값 없음)` : yv == null ? `야후 FY${estYear} ${what} 없음 — 스케일 확인 불가` : `야후 FY${estYear} ${what} ${yv.toLocaleString("en-US")} 이 네이버 ${nv.toLocaleString("en-US")} 과 자릿수가 달라(O13) 스케일 확인 안 됨`;
+    const yearOk = !!yh && !input.yahooError && yh.fy2.year === fy2Year && yh.fy1.year === estYear;
+    if (yearOk && scaleOk(yh!.fy1.revenue, fromEokwon(consensus?.estRevenue))) yRev = yh!.fy2.revenue;
+    else fy2Notes.revenue = `빈칸: ${why("매출", yh?.fy1.revenue, fromEokwon(consensus?.estRevenue))}`;
+    if (yearOk && scaleOk(yh!.fy1.eps, consensus?.estEps)) yEps = yh!.fy2.eps;
+    else fy2Notes.eps = `빈칸: ${why("EPS", yh?.fy1.eps, consensus?.estEps)}`;
+    if (yRev == null && !fy2Notes.revenue) fy2Notes.revenue = "빈칸: 야후 다음 해 매출 추정 없음";
+    if (yEps == null && !fy2Notes.eps) fy2Notes.eps = "빈칸: 야후 다음 해 EPS 추정 없음";
+    fy2Notes.opinc = "빈칸: 야후에 영업이익 추정 없음";
+    fy2Notes.ebitda = "빈칸: 야후에 영업이익·EBITDA 추정 없음";
+    fy2Notes.ni = yEps != null && shares != null ? `야후 예상 EPS ${yEps.toLocaleString("en-US")} × 현재 상장주식수 ${shares.toLocaleString("en-US")}(미국·일본 하이라이트와 같은 규칙)` : `빈칸: ${yEps == null ? "야후 예상 EPS 없음" : "현재 상장주식수 없음"}`;
+  }
+  const isFy2 = (i: number) => i === fy2Idx;
 
   const nCol = columns.length;
   const blank = (): (number | null)[] => Array(nCol).fill(null);
@@ -169,13 +200,14 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   // — 예전엔 순이익을 "추정 EPS × 발행주식수"로 역산했는데, 애널리스트 순이익
   // 컨센서스는 EPS 컨센서스와 독립 집계라 두 값이 달라(주식수 가정 차이 등)
   // 역산값이 실제 네이버 순이익 컨센서스와 10%대 오차가 났다.
-  const revenue = columns.map((c) =>
-    c.kind === "ltm" ? (ttm?.revenue ?? null) : c.kind === "estimate" ? fromEokwon(consensus?.estRevenue) : at(aRev, cy(c)),
+  const revenue = columns.map((c, i) =>
+    isFy2(i) ? yRev : c.kind === "ltm" ? (ttm?.revenue ?? null) : c.kind === "estimate" ? fromEokwon(consensus?.estRevenue) : at(aRev, cy(c)),
   );
-  const opInc = columns.map((c) =>
-    c.kind === "ltm" ? (ttm?.opIncome ?? null) : c.kind === "estimate" ? fromEokwon(consensus?.estOpIncome) : at(aOpi, cy(c)),
+  const opInc = columns.map((c, i) =>
+    isFy2(i) ? null : c.kind === "ltm" ? (ttm?.opIncome ?? null) : c.kind === "estimate" ? fromEokwon(consensus?.estOpIncome) : at(aOpi, cy(c)),
   );
-  const netIncome = columns.map((c) => {
+  const netIncome = columns.map((c, i) => {
+    if (isFy2(i)) return yEps != null && shares != null ? yEps * shares : null;
     if (c.kind === "ltm") return ttm?.netIncome ?? null;
     if (c.kind === "estimate") {
       return (
@@ -185,7 +217,8 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
     }
     return at(aNi, cy(c));
   });
-  const eps = columns.map((c) => {
+  const eps = columns.map((c, i) => {
+    if (isFy2(i)) return yEps;
     if (c.kind === "ltm") return ttm?.eps ?? null;
     if (c.kind === "estimate") return consensus?.estEps ?? null;
     return at(aEps, cy(c));
@@ -270,10 +303,12 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   ];
 
   const per = columns.map((c, i) => {
+    if (isFy2(i)) return ratio(currentPrice, eps[i]);
     if (c.kind === "estimate") return consensus?.estPer ?? ratio(priceByCol[i], eps[i]);
     return ratio(priceByCol[i], eps[i]);
   });
   const pbr = columns.map((c, i) => {
+    if (isFy2(i)) return null;
     if (c.kind === "estimate") return consensus?.estPbr ?? null;
     return ratio(marketCap[i], equityCol[i]);
   });
@@ -285,6 +320,23 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
   );
   const evEbitda = columns.map((c, i) => (c.kind === "estimate" ? null : ratio(ev[i], ebitda[i])));
 
+  // 예상 FY2 칸 주석(D26) — 출처·산식·빈칸 사유
+  if (fy2Idx >= 0) {
+    const put = (r: HighlightRow, t: string | undefined) => {
+      if (!t) return;
+      const cn = (r.cellNotes ?? Array(nCol).fill(null)) as (string | null)[];
+      cn[fy2Idx] = t;
+      r.cellNotes = cn;
+    };
+    for (const r of rows) {
+      if (r.key === "revenue") put(r, fy2Notes.revenue ?? "야후 컨센서스(평균)");
+      if (r.key === "opinc" || r.key === "opinc_m") put(r, fy2Notes.opinc);
+      if (r.key === "ebitda" || r.key === "ebitda_m") put(r, fy2Notes.ebitda);
+      if (r.key === "ni") put(r, fy2Notes.ni);
+      if (r.key === "ni_m") put(r, yEps != null && yRev != null ? "야후 예상 EPS × 현재 상장주식수 ÷ 야후 예상 매출" : fy2Notes.ni);
+      if (r.key === "eps") put(r, fy2Notes.eps ?? "야후 컨센서스(평균)");
+    }
+  }
   const valuationRows: HighlightRow[] = [
     { key: "per", label: "PER", format: "mult", values: per },
     { key: "pbr", label: "PBR", format: "mult", values: pbr },
@@ -294,6 +346,7 @@ export function buildKrHighlights(input: KrHighlightInput): FinancialHighlights 
 
   const notes = [
     "실적·재무상태표·현금흐름: OpenDART 전체 재무제표 (연결)",
+    ...(fy2Idx >= 0 ? [`${fy2Year}Y 예상 열: Yahoo 컨센서스(매출·EPS — 네이버에 다음 해 추정 없음, 오너 결정 D26). 순이익 = 야후 예상 EPS × 현재 상장주식수, PER = 현재가 ÷ 예상 EPS, 영업이익·EBITDA 는 야후에 추정이 없어 빈칸`] : []),
     "시가총액: KRX 각 회계연도 마지막 거래일 시가총액(그날의 상장주식수 × 종가)",
     "EV = 보통주 + 우선주 시가총액(우선주 자체 시세) + 총차입금(차입금·사채·리스부채) + 비지배지분 − 현금성자산(현금 + 단기금융상품 + 단기 상각후원가·당기손익 금융자산)",
     "EBITDA = 영업이익 + 감가상각비",

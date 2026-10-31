@@ -64,7 +64,8 @@ export async function GET(
       const { corpCode } = resolveCorpCode("", sym);
       const krxWarn: string[] = [];
       const warnOf = (what: string) => (e: unknown) => { krxWarn.push(`${what} 조회 실패 — ${e instanceof Error ? e.message : String(e)}`); return null; };
-      const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daR, live] = await Promise.all([
+      let yahooError: string | null = null;
+      const [facts, dps, krx, bars, ttm, consensus, dpsTtm, daR, live, yEst] = await Promise.all([
         fetchKrFacts(corpCode, "annual"),
         fetchKrDps(corpCode),
         // KRX 일별 시세 조회 실패 — 경고로 남긴다(현재가·시가총액은 공통 시세 함수 우선, KRX 는 상장주식수 등 보조)
@@ -80,7 +81,11 @@ export async function GET(
         // 현재가·시가총액은 개요(브라우저 멀티플)와 같은 시세 함수 — KRX 일별 전종목은 장
         // 마감 뒤에야 당일분이 나와 하루 늦을 수 있어 LTM 열이 개요와 갈렸다.
         getEodQuote("kr", sym).catch(warnOf("현재가(시세) — LTM 시가총액·주가는 KRX 일별 값")),
+        // 예상 FY2 열(오너 결정 D26) — 야후 컨센서스. 실패는 그 열만 빈칸 + 사유(경고에도 남긴다)
+        fetchYahooEstimates("kr", sym).catch((e: unknown) => { yahooError = e instanceof Error ? e.message : String(e); krxWarn.push(`야후 추정(예상 FY2 열) 조회 실패 — ${yahooError}`); return null; }),
       ]);
+      const yPer = (p: string) => yEst?.periods.find((x) => x.period === p) ?? null;
+      const yOf = (p: string) => { const x = yPer(p); return { year: x?.endDate ? Number(x.endDate.slice(0, 4)) : null, revenue: x?.revenueAvg ?? null, eps: x?.epsAvg ?? null }; };
       const daDoc = daR.doc;
       if (daR.warning) krxWarn.push(daR.warning);
       for (const w of ttm?.degraded ?? []) krxWarn.push(w);
@@ -115,6 +120,8 @@ export async function GET(
         payoutByYear: dps.payoutByYear,
         dpsTtm: dpsTtm?.ttm?.dps ?? null,
         daDoc,
+        yahoo: yEst ? { fy1: yOf("0y"), fy2: yOf("+1y") } : null,
+        yahooError,
         consensus: consensus
           ? {
               estYear: consensus.estYear,
