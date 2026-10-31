@@ -19,10 +19,11 @@ import { edinetDocZip, edinetTaxonomyText, readEdinetJson, writeEdinetJson } fro
  * 판 4(2026-10-09): 현금흐름표의 시점(instant) 개념에 기초·기말 이름표가 없으면 기말 잔액(第一三共 CashAndCashEquivalentsIfDifferentFromBSBalanceIFRS
  *   "現金及び現金同等物の期末残高" — 기간 값으로 찾아 줄이 통째로 빠졌다).
  * 판 5(2026-10-10): 자기주식 표 회사 이름 NFKC 비교(KDDI 전각), 발행주식수가 보통주 종류 행뿐이면 그 값(オリエンタルランド).
+ * 판 8(2026-10-31): 提出会社の経営指標等 주석의 배당 분할 환산 여부(dpsSplitAdj).
  * 판 6·7(2026-10-31 — 7: 부문 표 두 꼴·날짜별 정리 꼴, 6 의 옛 꼴 캐시 무효): MD&A 「金融○○を除く」 요약 재무상태표의 차입금 줄(seg) — 금융 자회사 보유 회사 EV 의 제조 부문 차입금(오너 결정 2026-10-11).
  */
 
-export const JP_PARSE_VERSION = 7;
+export const JP_PARSE_VERSION = 8;
 
 export type JpStmtKind = "bs" | "is" | "ci" | "cf";
 /** 값 단위 — m 금액(엔), ps 주당(엔/주), sh 주식수, p 비율 */
@@ -79,6 +80,11 @@ export interface JpDocFin {
   lease?: JpLeaseNote;
   /** 금융사업 제외 요약 재무상태표(판 6, segDebtTable) — 금융 자회사 보유 회사의 제조 부문 차입금(EV) */
   seg?: JpSegTable | null;
+  /**
+   * 提出会社の経営指標等 주석이 1株当たり配当額을 분할 뒤 기준으로 환산했다고 밝힘(「…株式分割が行われたと仮定して…１株当たり配当額…算出」 — 伊藤忠 2026-03, 판 8).
+   * 아니면 실제 지급 기준(기중 분할 해는 중간·기말 기준이 다름 — 소니·혼다 등 주석 「中間配当額は株式分割前」)
+   */
+  dpsSplitAdj?: boolean;
   warn: string[];
 }
 /**
@@ -469,6 +475,7 @@ export async function parseJpDocZip(docID: string, zip: Uint8Array): Promise<JpD
     shares: ex.shares,
     lease: ex.lease,
     seg: ex.seg,
+    dpsSplitAdj: ex.dpsSplitAdj,
     std: dei("AccountingStandardsDEI"),
     cons: consDei == null ? null : consDei === "true",
     kind: dei("TypeOfCurrentPeriodDEI"),
@@ -508,7 +515,7 @@ const normName = (s: string) => s.normalize("NFKC").replace(/株式会社|㈱|\(
 function parseExtras(
   inst: string,
   filer: string | null,
-): { sum: Record<string, Record<string, number | null>>; shares: JpDocShares | null; lease: JpLeaseNote; seg: JpSegTable | null } {
+): { sum: Record<string, Record<string, number | null>>; shares: JpDocShares | null; lease: JpLeaseNote; seg: JpSegTable | null; dpsSplitAdj: boolean } {
   const ctx = new Map<string, { pk: string; mem: string[] }>();
   for (const m of inst.matchAll(/<(?:xbrli:)?context\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/(?:xbrli:)?context>/g)) {
     const body = m[2];
@@ -591,6 +598,12 @@ function parseExtras(
     const t = decodeXml(decodeXml(m[5]).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ")).normalize("NFKC").replace(/\s+/g, " ");
     if (t.includes("リース負債")) tbs.push({ n: m[2], t });
   }
+  let dpsSplitAdj = false;
+  for (const m of inst.matchAll(/<jpcrp_cor:(BusinessResultsOfReportingCompanyTextBlock)\b[^>]*>([\s\S]*?)<\/jpcrp_cor:\1>/g)) {
+    const t = decodeXml(decodeXml(m[2]).replace(/<[^>]+>/g, "")).normalize("NFKC").replace(/\s+/g, "");
+    // 표 값 자체를 환산했다는 선언문(「…仮定して…1株当たり配当額…算出(算定)しております」)만 — 「仮定した場合…となります」(가정 환산 안내, 任天堂·JR東海)는 아님
+    if (t.split("。").some((x) => /株式分割/.test(x) && /仮定して/.test(x) && /1株当たり配当額/.test(x) && /(算出|算定)して/.test(x) && !/分割前/.test(x))) dpsSplitAdj = true;
+  }
   let seg: JpSegTable | null = null;
   // MD&A(소니·도요타 2025~) → セグメント情報 주석(도요타 2022~2024 — 「自動車等セグメントと金融セグメントを区分した連結財政状態計算書」)
   for (const m of inst.matchAll(/<(jpcrp_cor|jpigp_cor|jppfs_cor):((?:ManagementAnalysis|NotesSegmentInformation)\w*TextBlock)\b([^>]*?\bcontextRef="([^"]+)"[^>]*)>([\s\S]*?)<\/\1:\2>/g)) {
@@ -598,7 +611,7 @@ function parseExtras(
     if (!c || c.mem.length) continue;
     seg ??= segDebtTable(m[2], decodeXml(m[5]));
   }
-  return { sum, shares, lease: leaseNotes(tbs), seg };
+  return { sum, shares, lease: leaseNotes(tbs), seg, dpsSplitAdj };
 }
 
 /** 금융 부문을 가른 요약 재무상태표에서 차입금 줄 — (単位：百万円) 표만. 행 이름 = 차입금 꼴(SEG_DEBT_RE), 부채 구역 안 */

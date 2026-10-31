@@ -682,7 +682,13 @@ export function jpValuation(f: JpFund, px: JpPx | null): JpVal {
       const midRec = addDays(addMonthsIso(start, 6), -1);
       const midSplits = px?.hasSplits ? px.splits.filter((s) => s.date > addDays(midRec, -10) && s.date <= addDays(end, -10)) : [];
       const fMid = midSplits.reduce((a, s) => a * s.ratio, 1);
-      if (fMid !== 1 && xd.dpsInterim == null) {
+      if (fMid !== 1 && xd.dpsSplitAdj) {
+        // 有報 주석이 배당을 분할 뒤 기준으로 환산해 실었다고 밝힘(伊藤忠 2026-03 — 20 + 22 = 42) — 중간 배당을 다시 나누지 않는다
+        v.dps.v[c] = xd.dps / fac;
+        notes.push(`기중 분할(${midSplits.map((s) => `${s.date} 1:${s.ratio}`).join(", ")}) — 有報가 분할 뒤 기준으로 환산해 공시(경영지표 주석)`);
+        if (fac !== 1) notes.push(`공시 ${xd.dps} ÷ ${fac}(결산일 ${end} 기준 → 현재 주식 기준 분할 보정)`);
+        v.dps.n[c] = notes.join(" · ");
+      } else if (fMid !== 1 && xd.dpsInterim == null) {
         v.dps.n[c] = `기중 분할(${midSplits.map((s) => `${s.date} 1:${s.ratio}`).join(", ")}) — 중간 배당 공시가 없어 현재 주식 기준으로 맞출 수 없음`;
       } else {
         // 기말 배당 = 공시 합계 − 중간(공시 값은 소수 둘째 자리까지 — 전 단위로 빼서 부동소수 끝자리 오차를 없앤다)

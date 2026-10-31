@@ -91,6 +91,8 @@ export interface JpColX {
   dpsNil?: 1;
   dpsInterim?: number | null;
   dpsAt?: string | null;
+  /** DPS 서류 주석이 배당을 분할 뒤 기준으로 환산했다고 밝힘(xbrl-fin dpsSplitAdj) */
+  dpsSplitAdj?: boolean;
   sh?: number | null;
   shAt?: string | null;
   shIssued?: number | null;
@@ -594,6 +596,7 @@ function colExtra(c: Col, sorted: Src[], h: Src | null, ownDocs: Src[]): JpColX 
   } else x.dps = null;
   x.dpsInterim = dpsDoc?.fin.sum?.["InterimDividendPaidPerShareSummaryOfBusinessResults"]?.[kNc] ?? null;
   x.dpsAt = dpsDoc?.at ?? null;
+  x.dpsSplitAdj = dpsDoc?.fin.dpsSplitAdj ?? false;
   shOf(own);
   leaseOf(bsS, c.end);
   segOf(bsS, c.end, sorted);
