@@ -155,10 +155,19 @@ test("J2 금융 자회사 7267: 금융 부문 구분 재무상태표(백만엔) 
   assert.match(e.evBlank ?? "", /제조 부문 차입금 원자료 없음/);
 });
 
-test("J2 8766 IFRS 보험(서식 요소 없음): 판정 보류 사유 「오너 결정 대기: 금융업 EV」", async () => {
+test("J2 금융사(오너 결정 2026-10-31 「가」): 8766 IFRS 보험·8306 BNK 서식 — EV 공란 기대 없음, 총차입금 = 이자부 차입금만(보험계약부채·예금·레포 제외), 현금 판정 불가", async () => {
   const d = await doc("S100YLS8");
   const e = evComponents(d, "2026-03-31", "cur", { industry: "保険業" });
-  assert.match(e.pending ?? "", /오너 결정 대기: 금융업 EV/);
+  assert.equal(e.evBlank, null);
+  assert.ok(e.kind?.fin);
+  assert.equal(e.debt.v, (598007 + 128939) * 1e6, "BondsAndBorrowings + LeaseLiabilities — InsuranceContractLiabilities·RepurchaseAgreements 제외");
+  assert.equal(e.cash.v, undefined);
+  assert.match(e.evWhy, /현금 판정 불가/);
+  const b = await doc("S100YJQO");
+  const eb = evComponents(b, "2026-03-31", "cur", { industry: "銀行業" });
+  assert.equal(eb.evBlank, null);
+  // 借用金 9,359,997 + 信託勘定借 2,903,438 + 短期社債 1,217,464 + 社債 15,790,570 + CP 3,421,893 + コールマネー 5,307,704 (預金·譲渡性預金·売現先·債券貸借 제외)
+  assert.equal(eb.debt.v, (9359997 + 2903438 + 1217464 + 15790570 + 3421893 + 5307704) * 1e6, eb.debt.how);
 });
 
 test("J2 현금 = 현금흐름표 기말 잔액(Q3): 7267 CF 5,118,477(재무상태표 5,066,828 아님)", async () => {

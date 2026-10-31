@@ -659,7 +659,12 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
     if (e.debt.blank) cmp("J2", NAME, label, val("debt", i), { blank: e.debt.blank });
     else if (e.debt.v == null) add("J2", NAME, label, { status: NA, note: e.debt.why });
     else cmp("J2", NAME, label, val("debt", i), { v: e.debt.v, how: e.debt.how });
-    if (!e.evBlank) {
+    if (e.kind?.fin) {
+      // 금융사 — 현금은 미국 정의(채권형 투자증권 포함)라 이 줄 이름(CF 기말 잔액)으로 대조하지 않는다. 판정 불가 사유만, 비지배지분은 대조
+      add("J2", "현금성자산 = 현금흐름표 기말 잔액", label, { status: NA, app: val("cash", i), note: e.cash.why });
+      if (!row("nci") && e.nci.v === 0) add("J2", "비지배지분 = 원자료", label, { status: PASS, note: `${e.nci.how} · 하이라이트 행 없음(모든 열 0)` });
+      else cmp("J2", "비지배지분 = 원자료", label, val("nci", i), e.nci);
+    } else if (!e.evBlank) {
       const ca = val("cash", i);
       if (e.cash.v == null) add("J2", "현금성자산 = 현금흐름표 기말 잔액", label, { status: NA, note: e.cash.why });
       else cmp("J2", "현금성자산 = 현금흐름표 기말 잔액", label, ca == null ? null : -ca, { v: e.cash.v, how: e.cash.how });
@@ -668,15 +673,16 @@ export async function jpValueLayers(sym, app, ctx, { add, PASS, FAIL, NA, hardEr
       else cmp("J2", "비지배지분 = 원자료", label, val("nci", i), e.nci);
     }
     const evA = val("ev", i);
-    const kindNote = e.kind?.bank ?? e.kind?.captive ?? null;
+    const kindNote = e.kind?.bank ?? e.kind?.captive ?? e.kind?.fin ?? null;
     // 8766 처럼 보험·은행 업종인데 금융 서식 요소가 없는 회사 — EV 판정은 오너 결정 대기(판정 보류 — 실패로 세지 않는다)
-    if (e.pending && !e.evBlank) add("J2", "EV 공란 판정", label, { status: NA, app: evA, note: `${e.pending} — 앱 EV ${evA == null ? "빈칸" : evA}` });
-    else if (e.evBlank) cmp("J2", "EV 공란 판정", label, evA, { blank: e.evBlank });
+    if (e.evBlank) cmp("J2", "EV 공란 판정", label, evA, { blank: e.evBlank });
     else if (mcapBlank) add("J2", "EV 공란 판정", label, evA == null ? { status: PASS, note: `기대 빈칸 — 시가총액 ${mcapBlank}` } : { status: FAIL, app: evA, note: `시가총액 기대 빈칸(${mcapBlank})인데 EV 값` });
+    // 금융사 — EV 는 채워야 한다(오너 결정 2026-10-31). 빈칸이면 실패, 값이 있으면 현금 정의를 원자료로 못 정해 값 판정만 불가
+    else if (e.kind?.fin) add("J2", "EV 공란 판정", label, evA == null ? { status: FAIL, note: `${e.kind.fin} — EV 를 채워야 하는데 앱 EV 빈칸` } : { status: NA, app: evA, note: `값 있음 — 값 대조는 ${e.evWhy}` });
     else if (e.evWhy) add("J2", "EV 공란 판정", label, { status: NA, note: e.evWhy });
     else add("J2", "EV 공란 판정", label, evA != null ? { status: PASS, app: evA, note: `공란 사유 없음 — 값 있음${kindNote ? ` · ${kindNote}` : ""}` } : { status: FAIL, note: `EV 공란 사유가 원자료에 없는데 앱 EV 빈칸${kindNote ? ` · ${kindNote}` : ""}` });
     // EV 값 = 앱 시가총액 + 총차입금(원자료 — 은행형 예금 제외·금융 자회사 보유는 제조 부문) + 비지배지분(원자료) − 현금성자산(앱 행 — 현금 정의는 위 현금 검사 몫)
-    if (!e.evBlank && !e.evWhy && !e.pending && !mcapBlank && evA != null && e.debt.v != null && e.nci?.v != null) {
+    if (!e.evBlank && !e.evWhy && !mcapBlank && evA != null && e.debt.v != null && e.nci?.v != null) {
       const mc = val("mktcap", i), ca = val("cash", i);
       if (mc == null || ca == null) add("J2", "EV = 시가총액 + 총차입금(원자료) + 비지배(원자료) − 현금", label, { status: NA, note: `앱 ${mc == null ? "시가총액" : "현금성자산"} 빈칸` });
       else cmp("J2", "EV = 시가총액 + 총차입금(원자료) + 비지배(원자료) − 현금", label, evA, { v: mc + e.debt.v + e.nci.v + ca, how: `시가총액 ${mc} + 총차입금 ${e.debt.v}(${e.debt.how}) + 비지배 ${e.nci.v} − 현금 ${-ca}${kindNote ? ` · ${kindNote}` : ""}` }, null, 1e-12);
@@ -924,14 +930,28 @@ export async function jpExtCells(sym, app, ctx) {
       }
       return null;
     })();
-    push("EPS", hv("eps"), { kabutan: "eps", minkabu: "eps", yahoojp: "eps" }, basic ? [{ test: (x) => (close(x, basic.v) && !close(hv("eps"), basic.v) ? `외부 = 원자료 기본 EPS(${basic.how}) · 앱 = 희석 EPS` : null) }] : []);
+    // 외부 표기 소수 자릿수로 기본 EPS 를 반올림(0.5 는 0 에서 먼 쪽)한 값도 같은 식으로 본다(株探 소수 1자리 — 9984 2026-03 기본 873.51 → 873.5). 이때도 독립 일치는 아니다
+    const rnd = (v, x) => { const st = 10 ** -(String(x).split(".")[1]?.length ?? 0); return Math.sign(v) * Math.round(Math.abs(v) / st + 1e-9) * st; };
+    push("EPS", hv("eps"), { kabutan: "eps", minkabu: "eps", yahoojp: "eps" }, basic ? [{ test: (x) => (close(hv("eps"), basic.v) ? null : close(x, basic.v) ? `외부 = 원자료 기본 EPS(${basic.how}) · 앱 = 희석 EPS` : close(x, rnd(basic.v, x)) && !close(x, rnd(hv("eps") ?? NaN, x)) ? `외부 = 원자료 기본 EPS(${basic.how})를 외부 표기 자릿수로 반올림 · 앱 = 희석 EPS` : null) }] : []);
     push("DPS", hv("dps"), { kabutan: "dps" });
     push("자산총계", line("bs", kv["자산총계"]?.concept), { kabutan: "assets", minkabu: "assets", yahoojp: "assets" });
     // 자기자본 — IFRS = 親会社の所有者に帰属する持分, J-GAAP = 株主資本 + その他の包括利益累計額(株探·Yahoo!ファイナンス 「自己資本」). 앱 본표 줄 값으로 만든다
     const eqApp = src.std === "Japan GAAP"
       ? (() => { const a = line("bs", "jppfs_cor:ShareholdersEquity"), b = line("bs", "jppfs_cor:ValuationAndTranslationAdjustments"); return a == null ? undefined : a + (b ?? 0); })()
       : line("bs", "jpigp_cor:EquityAttributableToOwnersOfParentIFRS");
-    push(src.std === "Japan GAAP" ? "자기자본(株主資本 + その他の包括利益累計額, 앱 본표 줄 합)" : "자기자본(지배주주 자본)", eqApp, { kabutan: "equity", yahoojp: "equity" });
+    // J-GAAP 자기자본은 두 길이 있다 — 株主資本 + その他の包括利益累計額(앱 줄 합) 과 純資産 − 新株予約権 − 非支配株主持分. 회사가 백만엔 미만을 줄마다 버려 1 차이가 난다
+    // (6861 2025-03 앱 줄 합 3,108,551 vs 純資産 기준 3,108,552). 외부가 원자료 純資産 − 新株予約権 − 非支配 와 정확히 같을 때만 원인 확인
+    const bsDoc = kv.colOf.bs;
+    const naRaw = (() => {
+      if (src.std !== "Japan GAAP" || !bsDoc) return null;
+      const v = (c) => plainValue(bsDoc, c, { instant: per.end });
+      const na = v("jppfs_cor:NetAssets");
+      if (!na || na.conflict || na.v == null) return null;
+      const sr = v("jppfs_cor:SubscriptionRightsToShares"), nc = v("jppfs_cor:NonControllingInterests");
+      return { v: na.v - (sr?.v ?? 0) - (nc?.v ?? 0), how: `${bsDoc.row.docID} 純資産 ${na.v / 1e6} − 新株予約権 ${(sr?.v ?? 0) / 1e6} − 非支配 ${(nc?.v ?? 0) / 1e6}` };
+    })();
+    push(src.std === "Japan GAAP" ? "자기자본(株主資本 + その他の包括利益累計額, 앱 본표 줄 합)" : "자기자본(지배주주 자본)", eqApp, { kabutan: "equity", yahoojp: "equity" },
+      naRaw ? [{ test: (x) => (x === naRaw.v && eqApp !== naRaw.v ? `외부 = 원자료 ${naRaw.how} = ${naRaw.v / 1e6}(백만엔) · 앱 = 株主資本 + その他の包括利益累計額 줄 합(줄마다 백만엔 미만 버림 차)` : null) }] : []);
     push("순자산(자본총계)", line("bs", kv["자본총계"]?.concept), { minkabu: "netAssets" });
     push("영업활동 CF", hv("ocf"), { kabutan: "ocf", minkabu: "ocf", yahoojp: "ocf" });
     push("투자활동 CF", line("cf", kv["투자활동 CF"]?.concept), { kabutan: "icf", minkabu: "icf", yahoojp: "icf" });
@@ -939,6 +959,8 @@ export async function jpExtCells(sym, app, ctx) {
     // 현금 — 株探 現金等残高·みんかぶ 現金期末残高 = 현금흐름표 기말 잔액(08 실측, Q3 재결정). 앱 하이라이트 현금성자산(EV 현금)이 이 정의와 다르면 외부가 원자료와 같을 때 앱 결함
     const rawCash = kv.j2?.cash?.v ?? null;
     const hc = hv("cash");
+    // 금융사는 현금이 미국 정의(오너 결정 2026-10-31) — 현지 사이트 CF 기말 잔액과 정의가 달라 이 칸을 대조하지 않는다
+    if (kv.j2?.kind?.fin) continue;
     push("현금성자산(하이라이트·EV, Q3 정의 = CF 기말 잔액)", hc == null ? null : -hc, { kabutan: "cashEnd", minkabu: "cashEnd" },
       rawCash != null ? [{ appWrong: true, test: (x) => (x === rawCash && hc != null && -hc !== rawCash ? `외부 = 원자료 현금흐름표 기말 잔액 ${rawCash}(${kv.j2.cash.how}) — 앱 ${-hc} 은 오너 결정 정의(Q3 2026-10-14)와 다름` : null) }] : []);
   }

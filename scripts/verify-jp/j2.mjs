@@ -1,7 +1,7 @@
 /**
  * 일본 검증기 J2 — EV 구성요소(총차입금·현금성자산·비지배지분)와 EV 공란 판정을 EDINET 원본으로 따로 정한다(docs/verify-jp-design.md §4 J2).
  * 앱 jp-ev.ts 와 다른 방법(코드 공유 없음 — 앱 코드를 읽지 않는다):
- *  - 차입금 줄 = 재무상태표 **계산 구조**에서 부채 아래 개념 중 **요소 이름**이 차입금 꼴(Borrowing·LoansPayable·Bond·Debt·CommercialPaper·CallMoney·
+ *  - 차입금 줄 = 재무상태표 **계산 구조**에서 부채 아래 개념 중 **요소 이름**이 차입금 꼴(Borrowing·BorrowedMoney(은행 借用金)·LoansPayable·Bond·Debt·CommercialPaper·CallMoney·
  *    LeaseLiabilit·LeaseObligation·InterestBearingLiabilit·FinancingLiabilit)인 것의 최상위. 예금(Deposit)·충당금·미지급이자 등은 차입금이 아니다
  *  - 현금성자산 = 현금흐름표 「現金及び現金同等物 期末残高」(오너 Q3 재결정 2026-10-14 — 01-metric-dictionary P9·J8: 定期預金·短期投資·有価証券 제외,
  *    현지 株探 「現金等残高」·みんかぶ 「現金期末残高」와 같은 정의 08). 그 서류 연결 현금흐름표 역할에서 기말(periodEnd) 이름표로 실린 CashAndCashEquivalents… 개념의
@@ -31,14 +31,15 @@
  *        短期借入金 2,131,404 + 長期借入債務 2,066,842 = 4,198,246 = XBRL 차입금 줄 합(리스 포함 판정 그대로)이라 줄 범위 확인. 2026-03 은 금융 분리(스핀오프) 뒤라 금융 자회사 아님
  *      7267 有報 S100YDD9: 금융 부문을 가른 재무상태표 표가 없다. 本文 「生産販売事業の資金調達に伴う…債務残高は1兆2,388億円」(억엔 단위 서술)뿐 — 백만엔 원자료가 아니라
  *        정확 판정 근거가 없어 **EV 공란 + 사유**(그때 총차입금 행 기대값 = 연결 차입금)
- *  - 은행·보험 서식(손익계산서 본표 BNK·INS·SEC 요소 — 8306·8411·6178·옛 8766): EV 공란 기대(오너 결정 대기 — 이 규칙은 그대로)
- *  - 보험·은행 업종인데 서식 요소가 없는 회사(EDINET 코드 목록 提出者業種 保険業·銀行業 — 8766 IFRS 전환 뒤): **판정 보류**(검증불가 + 사유 「오너 결정 대기: 금융업 EV」)
+ *  - 금융사(손익 본표 BNK·INS·SEC 서식 — 8306·8411·6178·옛 8766, 또는 EDINET 提出者業種 保険業·銀行業·証券業 — 8766 IFRS): 오너 결정 2026-10-31 「가」로
+ *    EV 를 미국 규칙으로 채운다 — 총차입금(이자부 차입금만)은 대조, 현금(미국 정의: 현금 + 단기투자 + 채권형 투자증권)은 有価証券 한 줄에 채권·주식이 섞여
+ *    원자료로 가를 수 없어 현금·EV 판정 불가(아래 evComponents 주석)
  *  - 차입금 개념이 기타 금융부채를 합친 한 줄(…AndOtherFinancialLiabilities — 오너 결정 D4) · 리스부채 판정 불가 → EV 공란·검증불가(종전과 같음).
  */
 import { plainValue } from "./xbrl.mjs";
 
 const local = (k) => k.slice(k.indexOf(":") + 1);
-const DEBT_ID = /(Borrowing|LoansPayable|Bond|Debt|CommercialPaper|CallMoney|LeaseLiabilit|LeaseObligation|InterestBearingLiabilit|FinancingLiabilit)/;
+const DEBT_ID = /(Borrowing|BorrowedMoney|LoansPayable|Bond|Debt|CommercialPaper|CallMoney|LeaseLiabilit|LeaseObligation|InterestBearingLiabilit|FinancingLiabilit)/;
 const NOT_DEBT_ID = /(Receivable|Asset|InterestPayable|InterestExpense|Derivative|Deposit|Provision|Accrued|Allowance|Abstract|Repurchase|Securities|Tax|Heading|Table|LineItems)/;
 const LEASE_ID = /(LeaseLiabilit|LeaseObligation)/;
 
@@ -237,17 +238,22 @@ export function evComponents(d, D, which, { segDocs = [], industry = null } = {}
     evBlank: null,
     evWhy: null,
   };
-  if (financial) {
-    r.evBlank = "금융업 서식(BNK·INS 요소)";
-    r.debt = { blank: "금융업 서식 — 총차입금 미산정" };
+  // 금융사(은행·보험·증권 — BNK·INS·SEC 서식, 또는 EDINET 업종 保険業·銀行業·証券業 — 8766 IFRS 처럼 서식 요소가 없는 회사): 오너 결정 2026-10-31 「가」 —
+  // EV 를 미국 규칙으로 채운다. 총차입금 = 이자부 차입금만(DEBT_ID — 借用金·社債·短期社債·CP·コールマネー·리스. 預金·譲渡性預金·保険契約負債·売現先(Repurchase)·
+  // 債券貸借取引受入担保金·特定取引負債는 차입금 꼴 요소가 아니라 빠진다). 현금 = 미국 정의(현금 + 단기투자 + 채권형 투자증권, 장기투자자산은 빼지 않음)인데
+  // 일본 금융사 본표의 有価証券(SecuritiesAssetsBNK·SecuritiesAssetsINS·IFRS InvestmentSecurities) 한 줄에 채권과 주식이 섞여 있고, 주석 표도 「その他の証券」(외국 채권·
+  // 외국 주식 합계 — 8306 S100YJQO 経営者による分析 有価証券 표)처럼 채권형만 원자료 숫자로 가를 수 없다 → 현금·EV 는 판정 불가(검증불가 + 사유), 총차입금만 대조
+  const finIndustry = /保険業|銀行業|証券、商品先物取引業|証券業/.test(industry ?? "");
+  if (financial || finIndustry) {
+    r.kind = { fin: `금융사(${financial ? "BNK·INS·SEC 서식" : `EDINET 업종 ${industry}`}) — 미국 규칙 EV(오너 결정 2026-10-31)` };
+    r.cash = { why: "금융사 — 미국 현금 정의의 채권형 투자증권을 원자료 줄로 가를 근거 없음(有価証券 한 줄에 채권·주식 혼재)" };
+    r.evWhy = `${r.kind.fin} — 현금 판정 불가(${r.cash.why})`;
     return r;
   }
   // 금융 자회사 보유 = 금융서비스 자산(…FinancialServices…) 요소에 값. 은행업 예금(…BankingBusiness·…ForBanking·…ForFinancialBusiness 부채)만 있는 회사는 은행형 — EV 채움
   const captive = [...concepts].find((k) => /FinancialServices/.test(local(k)) && /(CA|NCA)IFRS$|Assets?$/.test(local(k)) && val(k)?.v != null);
   const bankDep = [...concepts].find((k) => /Deposit/.test(local(k)) && /BankingBusiness|ForBanking|ForFinancialBusiness/.test(local(k)) && isLiab(k) && val(k)?.v != null);
   if (bankDep) r.kind = { bank: `은행형 — ${local(bankDep)} ${val(bankDep).v / 1e6}(예금 — 차입금 아님, EV 채움)` };
-  // 보험·은행 업종인데 손익 본표에 금융 서식 요소가 없는 회사(8766 IFRS) — 오너 결정 대기(금융업 EV), 판정 보류
-  if (/保険業|銀行業/.test(industry ?? "")) r.pending = `오너 결정 대기: 금융업 EV(EDINET 업종 ${industry} · 손익 본표 금융 서식 요소 없음 — IFRS)`;
   const mixed = top.find((k) => /AndOtherFinancialLiabilit/.test(local(k)));
   if (mixed) {
     r.debt = { blank: `차입금 개념이 기타 금융부채를 합친 한 줄(${local(mixed)} — 오너 결정 D4)` };
