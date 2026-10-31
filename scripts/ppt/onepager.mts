@@ -223,7 +223,7 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
   });
 
   // 하단 출처 줄 두 개 — 각 줄에 그 구역에서 쓰인 출처를 중복 없이(매체마다 한 번, 날짜가 여럿이면 가장 늦은 날짜).
-  // 투자포인트 출처는 샘플에 자리가 없어 일단 왼쪽 줄에 합친다(대안은 보고서 — 오너 결정 대기).
+  // 투자포인트 출처는 슬라이드에 적지 않는다(오너 2026-10-31 발표 4) — 문장별 출처는 spec.points·sources.points 에만(커넥터 검증용).
   type Used = { name: string; date: string | null };
   const line = (slot: string, used: Used[]) => {
     const byName = new Map<string, string | null>();
@@ -239,7 +239,6 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
   };
   const leftUsed: Used[] = [{ name: mi.sourceName, date: null }, ...estUsed.map((n) => ({ name: n, date: null }))];
   if (coreBusiness?.image) leftUsed.push({ name: coreBusiness.source.doc, date: coreBusiness.source.asOf });
-  for (const p of points) for (const s of p.sources) leftUsed.push({ name: s.publisher, date: s.publishedAt });
   const rightUsed: Used[] = [];
   if (share) rightUsed.push({ name: share.source, date: share.asOf });
   if (price) rightUsed.push({ name: "Yahoo Finance", date: null });
