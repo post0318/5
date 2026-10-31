@@ -82,19 +82,22 @@ export interface JpDocFin {
   warn: string[];
 }
 /**
- * 경영자 분석(MD&A) 문단의 「금융○○を除く」 요약 재무상태표(소니 「金融分野／金融分野を除くソニー連結／ソニー連結」) — 부채 쪽 차입금 줄만.
- * 열 = 묶음(groups) × 날짜(D개, 오래된 것부터 — 마지막 = 서류 기말). 값은 엔(표는 백만엔). 확인(연결 묶음 합 = 본표 차입금)은 jp-ev.ts.
+ * 금융 부문을 가른 요약 재무상태표의 차입금(판 6, segDebtTable) — 금융 자회사 보유 회사 EV 의 제조 부문 차입금. 값은 엔(표는 백만엔).
+ * 두 꼴: ① 열 묶음(소니 MD&A 「金融分野／金融分野を除くソニー連結／ソニー連結」 × 날짜) ② 구역(도요타 「（自動車等）…（金融）…（連結）」 행 구역 × 날짜 열 —
+ * MD&A·セグメント情報 주석). 날짜마다 제외(제조) 부문 차입금 줄 합, 확인용 연결 값(①은 연결 묶음 차입금 합, ②는 （連結）負債合計) — 확인은 jp-ev.ts.
  */
 export interface JpSegTable {
   tb: string;
-  groups: string[];
-  /** 「…を除く」 묶음 위치 */
-  excl: number;
-  /** 연결 묶음 위치(이름에 「連結」, 제외 묶음 아님) */
-  cons: number;
-  D: number;
-  dateHeads: string[];
-  rows: { label: string; v: number[] }[];
+  /** 제조 부문 이름(「金融分野を除くソニー連結」·「自動車等」) */
+  excl: string;
+  /** 날짜 칸 머리(오래된 것부터 — ① 마지막 = 서류 기말) */
+  heads: string[];
+  /** 머리에서 읽은 기준일(②) — 없으면 null(①, 서류 기말에서 거꾸로) */
+  dates: (string | null)[];
+  rows: string[];
+  exclDebt: number[];
+  consDebt: (number | null)[];
+  consLiab: (number | null)[];
 }
 export interface JpDocShares {
   /** 기준일(당기말·반기말) */
@@ -589,45 +592,104 @@ function parseExtras(
     if (t.includes("リース負債")) tbs.push({ n: m[2], t });
   }
   let seg: JpSegTable | null = null;
-  for (const m of inst.matchAll(/<jpcrp_cor:(ManagementAnalysis\w*TextBlock)\b([^>]*?\bcontextRef="([^"]+)"[^>]*)>([\s\S]*?)<\/jpcrp_cor:\1>/g)) {
-    const c = ctx.get(m[3]);
+  // MD&A(소니·도요타 2025~) → セグメント情報 주석(도요타 2022~2024 — 「自動車等セグメントと金融セグメントを区分した連結財政状態計算書」)
+  for (const m of inst.matchAll(/<(jpcrp_cor|jpigp_cor|jppfs_cor):((?:ManagementAnalysis|NotesSegmentInformation)\w*TextBlock)\b([^>]*?\bcontextRef="([^"]+)"[^>]*)>([\s\S]*?)<\/\1:\2>/g)) {
+    const c = ctx.get(m[4]);
     if (!c || c.mem.length) continue;
-    seg ??= segDebtTable(m[1], decodeXml(m[4]));
+    seg ??= segDebtTable(m[2], decodeXml(m[5]));
   }
   return { sum, shares, lease: leaseNotes(tbs), seg };
 }
 
-/** MD&A 요약 재무상태표에서 차입금 줄 — 표 하나에 「を除く」 묶음 머리·연결 묶음 머리·(単位：百万円), 숫자 칸 수 = 묶음 × 날짜인 행만 */
+/** 금융 부문을 가른 요약 재무상태표에서 차입금 줄 — (単位：百万円) 표만. 행 이름 = 차입금 꼴(SEG_DEBT_RE), 부채 구역 안 */
 const SEG_DEBT_RE = /借入|社債|有利子負債|リース負債|リース債務|コマーシャル・?ペーパー/;
+const segNum = (x: string) => (/^[-‐―—－]$/.test(x) ? 0 : (/^[△▲(]/.test(x) ? -1 : 1) * Number(x.replace(/[△▲,()\s]/g, "")) * 1e6);
+const jpDate = (x: string): string | null => {
+  const m = /(\d{4})年(\d{1,2})月(\d{1,2})日/.exec(x);
+  return m ? `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}` : null;
+};
 export function segDebtTable(tbName: string, html: string): JpSegTable | null {
   const cellsOf = (tr: string) =>
     [...tr.matchAll(/<t[dh]\b[\s\S]*?<\/t[dh]>/g)].map((c) => decodeXml(c[0].replace(/<[^>]+>/g, "")).normalize("NFKC").replace(/\s+/g, " ").trim());
   for (const tb of html.match(/<table[\s\S]*?<\/table>/g) ?? []) {
     const rows = (tb.match(/<tr[\s\S]*?<\/tr>/g) ?? []).map(cellsOf);
     if (!rows.some((r) => r.some((x) => /単位:百万円/.test(x.replace(/\s/g, ""))))) continue;
+    // ① 열 묶음
     const hi = rows.findIndex((r) => r.some((x) => /^金融\S*を除く/.test(x)));
-    if (hi < 0) continue;
-    const groups = rows[hi].filter((x) => x && !/^科\s*目$/.test(x));
-    const excl = groups.findIndex((x) => /^金融\S*を除く/.test(x));
-    const cons = groups.findIndex((x, i) => i !== excl && /連結$/.test(x));
-    if (excl < 0 || cons < 0 || groups.length < 2) continue;
-    const dateHeads = rows[hi + 1]?.filter((x) => x) ?? [];
-    if (!dateHeads.length || dateHeads.length % groups.length) continue;
-    const D = dateHeads.length / groups.length;
-    let inLiab = false;
-    const out: { label: string; v: number[] }[] = [];
-    for (const r of rows.slice(hi + 2)) {
-      const label = (r[0] ?? "").replace(/\s*\*\d+$/, "");
-      if (/^負\s*債/.test(r.join("").replace(/\s/g, ""))) inLiab = true;
-      if (/流動負債|非流動負債|固定負債/.test(label)) inLiab = true;
-      if (/資本|純資産/.test(label) && !/負債/.test(label)) inLiab = false;
-      const nums = r.slice(1).filter((x) => x !== "");
-      if (!inLiab || !SEG_DEBT_RE.test(label) || nums.length !== groups.length * D) continue;
-      const v = nums.map((x) => (/^[-‐―—－]$/.test(x) ? 0 : (/^[△▲(]/.test(x) ? -1 : 1) * Number(x.replace(/[△▲,()\s]/g, "")) * 1e6));
-      if (v.some((x) => !Number.isFinite(x))) continue;
-      out.push({ label, v });
+    if (hi >= 0) {
+      const groups = rows[hi].filter((x) => x && !/^科\s*目$/.test(x));
+      const excl = groups.findIndex((x) => /^金融\S*を除く/.test(x));
+      const cons = groups.findIndex((x, i) => i !== excl && /連結$/.test(x));
+      const heads = rows[hi + 1]?.filter((x) => x) ?? [];
+      if (excl < 0 || cons < 0 || groups.length < 2 || !heads.length || heads.length % groups.length) continue;
+      const D = heads.length / groups.length;
+      let inLiab = false;
+      const got: { label: string; v: number[] }[] = [];
+      for (const r of rows.slice(hi + 2)) {
+        const label = (r[0] ?? "").replace(/\s*\*\d+$/, "");
+        if (/^負\s*債/.test(r.join("").replace(/\s/g, "")) || /流動負債|非流動負債|固定負債/.test(label)) inLiab = true;
+        if (/資本|純資産/.test(label) && !/負債/.test(label)) inLiab = false;
+        const nums = r.slice(1).filter((x) => x !== "");
+        if (!inLiab || !SEG_DEBT_RE.test(label) || nums.length !== groups.length * D) continue;
+        const v = nums.map(segNum);
+        if (v.every(Number.isFinite)) got.push({ label, v });
+      }
+      if (!got.length) continue;
+      const at = (g: number, d: number) => got.reduce((a, r) => a + r.v[g * D + d], 0);
+      return {
+        tb: tbName,
+        excl: groups[excl],
+        heads: heads.slice(excl * D, excl * D + D),
+        dates: Array(D).fill(null),
+        rows: got.map((r) => r.label),
+        exclDebt: [...Array(D).keys()].map((d) => at(excl, d)),
+        consDebt: [...Array(D).keys()].map((d) => at(cons, d)),
+        consLiab: Array(D).fill(null),
+      };
     }
-    if (out.length) return { tb: tbName, groups, excl, cons, D, dateHeads, rows: out };
+    // ② 구역 — 「（X）」 행이 구역 머리, 첫 비금융 구역 = 제조 부문. 날짜 = 머리 행의 「YYYY年M月D日」(오래된 것부터)
+    const secRow = (r: string[]) => {
+      const m = /^[(（]([^)）]+)[)）]$/.exec(r[0] ?? "");
+      return m && r.slice(1).every((x) => !x) ? m[1] : null;
+    };
+    const dh = rows.findIndex((r) => r.slice(1).some((x) => jpDate(x)) && r.slice(1).every((x) => !x || jpDate(x)));
+    if (dh < 0) continue;
+    const dates = rows[dh].slice(1).filter((x) => x).map(jpDate);
+    const D = dates.length;
+    const secs = rows.map(secRow);
+    const mfg = secs.find((x) => x && !/金融|連結|消去/.test(x));
+    if (!mfg || !secs.some((x) => x && /金融/.test(x))) continue;
+    let cur: string | null = null;
+    let inLiab = false;
+    const got: { label: string; v: number[] }[] = [];
+    let consLiab: number[] | null = null;
+    for (const r of rows.slice(dh + 1)) {
+      const sec = secRow(r);
+      if (sec) {
+        cur = sec;
+        continue;
+      }
+      const label = r[0] ?? "";
+      if (/^負債$/.test(label) || /^(流動|非流動|固定)負債$/.test(label)) inLiab = true;
+      if (/^(資本|純資産)/.test(label)) inLiab = false;
+      const nums = r.slice(1).filter((x) => x !== "");
+      if (nums.length !== D) continue;
+      const v = nums.map(segNum);
+      if (!v.every(Number.isFinite)) continue;
+      if (/^[(（]連結[)）]負債合計$/.test(label)) consLiab = v;
+      else if (cur === mfg && inLiab && SEG_DEBT_RE.test(label)) got.push({ label, v });
+    }
+    if (!got.length || !consLiab) continue;
+    return {
+      tb: tbName,
+      excl: mfg,
+      heads: rows[dh].slice(1).filter((x) => x),
+      dates,
+      rows: got.map((r) => r.label),
+      exclDebt: [...Array(D).keys()].map((d) => got.reduce((a, r) => a + r.v[d], 0)),
+      consDebt: Array(D).fill(null),
+      consLiab,
+    };
   }
   return null;
 }

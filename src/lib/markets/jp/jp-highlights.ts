@@ -83,9 +83,18 @@ export function buildJpHighlights(f: JpFund, v: JpVal, estimates: JpEstimate[], 
   ];
 
   let rows: HighlightRow[];
+  const cashNeg: Ser = { v: f.cash.v.map((x) => (x == null ? null : -x)), n: f.cash.n };
+  // EV 브릿지 — 금융사도 같은 줄(오너 결정 2026-10-31 「가」 — 미국 규칙, 미국 은행 하이라이트에도 EV 줄)
+  const evBridge: HighlightRow[] = [
+    { ...row("cash", "− 현금성자산", "money", cashNeg) },
+    row("debt", f.financial ? "+ 총차입금 (이자부 — 예금·보험부채 제외)" : "+ 총차입금 (리스부채 포함)", "money", f.debt),
+    ...(f.nci.v.some((x) => x != null && x !== 0) ? [row("nci", "+ 비지배지분", "money", f.nci)] : []),
+    { ...row("ev", "기업가치 (EV)", "money", v.ev), emphasis: true },
+  ];
   if (f.financial) {
     rows = [
       mc,
+      ...evBridge,
       spacer("sp0"),
       row("equity", "자기자본 (지배주주)", "money", f.eqParent),
       { ...row("assets", "자산총계", "money", f.assets), emphasis: true },
@@ -103,16 +112,12 @@ export function buildJpHighlights(f: JpFund, v: JpVal, estimates: JpEstimate[], 
       divY,
     ];
   } else {
-    const cashNeg: Ser = { v: f.cash.v.map((x) => (x == null ? null : -x)), n: f.cash.n };
     const ocf = row("ocf", "영업활동 현금흐름", "money", f.ocf);
     const capexNeg: Ser = { v: f.capex.v.map((x) => (x == null ? null : -x)), n: f.capex.n };
     const fcf: Ser = { v: f.ocf.v.map((x, i) => (x != null && f.capex.v[i] != null ? x - f.capex.v[i]! : null)), n: f.ocf.n.map((x, i) => x ?? f.capex.n[i]) };
     rows = [
       mc,
-      { ...row("cash", "− 현금성자산", "money", cashNeg) },
-      row("debt", "+ 총차입금 (리스부채 포함)", "money", f.debt),
-      ...(f.nci.v.some((x) => x != null && x !== 0) ? [row("nci", "+ 비지배지분", "money", f.nci)] : []),
-      { ...row("ev", "기업가치 (EV)", "money", v.ev), emphasis: true },
+      ...evBridge,
       spacer("sp1"),
       rev,
       { ...pct("revenue_yoy", seq(rev.values)), label: "성장률 % YoY" },
@@ -137,9 +142,9 @@ export function buildJpHighlights(f: JpFund, v: JpVal, estimates: JpEstimate[], 
     `실적·재무상태표·현금흐름: EDINET 有価証券報告書·半期報告書 XBRL 본표(${f.std ?? "기준 미상"} · ${f.cons ? "연결" : "개별"}) — 열마다 그 기간을 실은 가장 나중 제출본`,
     "시가총액: 각 결산일(현재/LTM = 현재가) 실제 종가 × 그 날 유통주식수(발행주식수 − 회사 명의 자기주식, 有報 株式の総数等·自己株式等)",
     ...(f.financial
-      ? ["금융업(은행·보험 서식) — 경상수익·경상이익 기준, EV·EBITDA 는 계산하지 않음(예금·보험부채가 영업 부채)"]
+      ? ["금융업(은행·보험 서식) — 경상수익·경상이익 기준, EBITDA 는 계산하지 않음. EV = 미국 규칙(오너 결정 2026-10-31): 이자부 차입금만(예금·보험계약부채·콜머니·레포 제외)"]
       : [
-          "EV = 시가총액 + 총차입금(사채·차입금·CP·리스부채) + 비지배지분 − 현금성자산(現金及び現金同等物·現金及び預金 + 定期預金·短期投資·有価証券)",
+          "EV = 시가총액 + 총차입금(사채·차입금·CP·리스부채) + 비지배지분 − 현금성자산(현금흐름표 現金及び現金同等物 期末残高)",
           "EBITDA = 영업이익 + 감가상각비(현금흐름표 減価償却費·償却費 줄 — 손상이 함께 묶인 줄은 그대로, 따로 있는 減損損失 줄은 제외)",
         ]),
     "EPS = 경영지표 희석 EPS(희석 “－”이면 기본 EPS) · EPS·DPS 는 현재 주식 기준으로 분할 보정(PER·배당수익률은 같은 기준 주가)",

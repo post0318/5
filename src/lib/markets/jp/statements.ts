@@ -107,7 +107,7 @@ export interface JpColX {
    * 재무상태표 열과 같은 서류 MD&A 「金融○○を除く」 요약 재무상태표의 이 열 기준일 차입금 줄(xbrl-fin segDebtTable) — 금융 자회사 보유 회사 EV.
    * 날짜 = 표 날짜 칸의 마지막이 서류 기말, 그 앞이 1년 전 기말(그 밖 날짜 열은 쓰지 않음)
    */
-  seg?: { doc: string; tb: string; excl: string; cons: string; head: string; rows: { label: string; excl: number; cons: number }[] }[];
+  seg?: { doc: string; tb: string; excl: string; head: string; rows: string[]; exclDebt: number; consDebt: number | null; consLiab: number | null }[];
 }
 export interface JpFinModel {
   ev: number;
@@ -545,16 +545,12 @@ function colExtra(c: Col, sorted: Src[], h: Src | null, ownDocs: Src[]): JpColX 
       if (!t || !s.fin.fyStart) continue;
       const docEnd = s.fin.perEnd ?? s.fin.fyEnd;
       const pe = addDays(s.fin.fyStart, -1);
-      const di = end === docEnd ? t.D - 1 : end === pe ? t.D - 2 : end === addYears(pe, -1) ? t.D - 3 : -1;
+      const D = t.heads.length;
+      const di = t.dates.some((d) => d)
+        ? t.dates.indexOf(end)
+        : end === docEnd ? D - 1 : end === pe ? D - 2 : end === addYears(pe, -1) ? D - 3 : -1;
       if (di < 0) continue;
-      (x.seg ??= []).push({
-        doc: s.row._id,
-        tb: t.tb,
-        excl: t.groups[t.excl],
-        cons: t.groups[t.cons],
-        head: t.dateHeads[t.excl * t.D + di] ?? "",
-        rows: t.rows.map((r) => ({ label: r.label, excl: r.v[t.excl * t.D + di], cons: r.v[t.cons * t.D + di] })),
-      });
+      (x.seg ??= []).push({ doc: s.row._id, tb: t.tb, excl: t.excl, head: t.heads[di] ?? "", rows: t.rows, exclDebt: t.exclDebt[di], consDebt: t.consDebt[di], consLiab: t.consLiab[di] });
     }
   };
   if (c.kind === "LTM" && h) {

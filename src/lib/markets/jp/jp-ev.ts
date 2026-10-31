@@ -21,8 +21,8 @@ import type { JpStmtKind } from "./xbrl-fin";
  *      "그 줄에 포함" → 주석 리스부채 장부금액(xbrl-fin leaseNotes — 확인된 값) 가산 → 셋 다 아니면 확인 불가 = EV 공란(한국 krLeaseFor 와 같은
  *      원칙, 그림자 채우기 금지). 반기말(LTM)은 반기 보고서에 금액이 없으면 공란(표시 방법만 최근 有報 것을 따른다). J-GAAP 은 금융리스(リース債務 줄)만.
  *    · 차입금과 기타 금융부채가 한 줄(三菱重工)이면 차입금·EV 공란 + 사유(오너 결정 D4).
- *    · 현금성자산 = 유동자산의 現金及び現金同等物(IFRS)·現金及び預金(J-GAAP) + 定期預金·短期投資·有価証券(유동). その他の金融資産 은 제외
- *      (한국 "기타유동금융자산 제외"와 같음).
+ *    · 현금성자산 = 현금흐름표 現金及び現金同等物 期末残高(Q3 오너 결정 2026-10-14 — 일본 현지 사이트 株探·みんかぶ 의 현금과 같은 값). 재무상태표
+ *      現金及び現金同等物·現金及び預金 + 유동 定期預金·短期投資·有価証券 은 당좌·현금비율용(cashLiq, D35 — EV 현금과 분리).
  *    · 금융사(은행·보험·증권 서식): 미국 규칙(오너 결정 2026-10-31) — 이자부 차입금만(예금·보험계약부채·콜머니·레포 제외), 현금 = 현금및현금성자산 줄.
  *    · 금융 자회사 보유(재무상태표에 金融事業に係る債権 등 금융사업 자산 줄): EV 차입금 = 제조(금융 제외) 부문 차입금 — MD&A 「金融○○を除く」
  *      요약 재무상태표(소니), 연결 묶음 합 = 본표 차입금 확인. 그런 숫자가 없으면(도요타·혼다 有報) EV 공란 + 사유(미국 captive-unsplit 와 같음).
@@ -110,6 +110,8 @@ const isFinCash: Pred = (l) =>
   ancRe(l, /^Assets/) &&
   (byK("jpigp_cor:CashAndCashEquivalentsIFRS", "jppfs_cor:CashAndDueFromBanksAssetsBNK", "jppfs_cor:CashAndDepositsAssetsINS", "jppfs_cor:CashAndDeposits")(l) ||
     /^(現金及び現金同等物|現金預け金|現金及び預貯金|現金及び預金)$/.test(l.label));
+// 현금흐름표 기말 잔액 줄 — 이름표 「…期末残高」(현금및현금성자산·現金同等物)
+const CF_END: Pred = (l) => /期末残高/.test(l.label) && /現金及び現金同等物|現金同等物|現金及び預金/.test(l.label);
 const isCash: Pred = (l) =>
   inCurAssets(l) &&
   (byK("jpigp_cor:CashAndCashEquivalentsIFRS", "jppfs_cor:CashAndDeposits", "jppfs_cor:CashAndCashEquivalents")(l) ||
@@ -186,7 +188,10 @@ export interface JpFund {
   ar: Ser;
   inv: Ser;
   ap: Ser;
+  /** EV·순차입금 현금 = 현금흐름표 現金及び現金同等物 期末残高(Q3 오너 결정 2026-10-14, 사전 P9·J8) */
   cash: Ser;
+  /** 당좌·현금비율용 현금(재무상태표 現金及び現金同等物·現金及び預金 + 유동 定期預金·短期投資·有価証券) — EV 현금과 분리(D35) */
+  cashLiq: Ser;
   debt: Ser;
   nci: Ser;
   /** 현금·차입금·비지배지분이 모두 있고 EV 를 막는 사유가 없을 때 차입금 + 비지배지분 − 현금, 아니면 null + 사유 */
@@ -213,6 +218,11 @@ export function jpFundamentals(model: JpFinModel): JpFund {
   const is = [...linesOf(model, view, "is")];
   const bs = linesOf(model, view, "bs");
   const cf = linesOf(model, view, "cf");
+  const hcf = linesOf(model, model.half, "cf");
+  const halfCfEnd = (end: string) => {
+    const hc = model.half.cols.findIndex((p) => p.endDate === end && p.fiscalQuarter === 2);
+    return hc < 0 ? null : first(hcf, [CF_END], hc);
+  };
   // 금융업 서식 = 손익계산서가 은행·보험·증권 요소(…BNK·INS·SEC) — 재무상태표 줄 하나로 판정하지 않는다(セブン&アイ 의 コールマネー
   // CallMoneyLiabilitiesBNK 한 줄 때문에 소매업 전체가 금융 서식으로 잡혔다)
   const financial = is.some((l) => /(BNK|INS|SEC)$/.test(local(l.k)));
@@ -238,7 +248,7 @@ export function jpFundamentals(model: JpFinModel): JpFund {
     ltmIsFy,
     rev: S(), op: S(), ordinary: S(), pretax: S(), tax: S(), ni: S(), gross: S(), cogs: S(),
     assets: S(), liab: S(), eqAll: S(), eqParent: S(), curA: S(), curL: S(), retained: S(), ar: S(), inv: S(), ap: S(),
-    cash: S(), debt: S(), nci: S(), netDebtEv: S(), curDebt: S(),
+    cash: S(), cashLiq: S(), debt: S(), nci: S(), netDebtEv: S(), curDebt: S(),
     ocf: S(), capex: S(), da: S(), ebitda: S(), intPaid: S(), divPaid: S(),
     x,
     bsPrev: () => null,
@@ -350,7 +360,10 @@ export function jpFundamentals(model: JpFinModel): JpFund {
 
     // 차입금·현금 — EV 브릿지
     const cash = sumTop(bs, isCash, c) ?? (financial || !hasCurSection ? sumTop(bs, isFinCash, c) : null);
-    set(f.cash, c, cash, "현금성자산 줄 없음");
+    set(f.cashLiq, c, cash, "현금성자산 줄 없음");
+    // EV 현금 = 현금흐름표 기말 잔액 줄(Q3). LTM(반기말) 열은 반기 화면의 같은 날짜 열
+    const cfEnd = first(cf, [CF_END], c) ?? (cols[c].kind === "ltm" && !ltmIsFy ? halfCfEnd(cols[c].end) : null);
+    set(f.cash, c, cfEnd, "현금흐름표에 現金及び現金同等物の期末残高 줄 없음");
     const debt = sumTop(bs, isDebt, c);
     const leaseFace = sumTop(bs, isLease, c);
     let debtV = debt?.v ?? (eqAll ? 0 : null);
@@ -386,15 +399,18 @@ export function jpFundamentals(model: JpFinModel): JpFund {
     let segUsed: NonNullable<JpColX["seg"]>[number] | null = null;
     if (captive && !financial) {
       const cands = x[c].seg ?? [];
-      const sg = cands.find((g) => debt != null && g.rows.reduce((a, r) => a + r.cons, 0) === debt.v) ?? cands[0] ?? null;
-      const consSum = sg ? sg.rows.reduce((a, r) => a + r.cons, 0) : null;
-      segUsed = sg;
-      if (!sg) captiveWhy = `금융 자회사 보유(${captive.label}) — 제조 부문 차입금을 나눌 숫자 근거 없음(서류에 금융사업 제외 요약 재무상태표 없음) — EV 공란`;
-      else if (debt == null || consSum !== debt.v)
-        captiveWhy = `금융 자회사 보유(${captive.label}) — ${sg.doc} 요약 재무상태표 「${sg.cons}」 차입금 합 ${consSum == null ? "없음" : Math.round(consSum / 1e6).toLocaleString("en-US")}백만엔 ≠ 본표 차입금 ${debt == null ? "없음" : Math.round(debt.v / 1e6).toLocaleString("en-US")}백만엔 — EV 공란`;
+      // 확인: ① 연결 묶음 차입금 합 = 본표 차입금 줄 합 ② (連結)負債合計 = 본표 負債合計 — 백만엔 정확히(표는 백만엔, 본표는 엔)
+      const okOf = (g: (typeof cands)[number]) =>
+        g.consDebt != null ? debt != null && g.consDebt === debt.v : g.consLiab != null && f.liab.v[c] != null && g.consLiab === f.liab.v[c];
+      const sg = cands.find(okOf) ?? cands[0] ?? null;
+      segUsed = sg && okOf(sg) ? sg : null;
+      const fmt = (v: number | null | undefined) => (v == null ? "없음" : `${Math.round(v / 1e6).toLocaleString("en-US")}백만엔`);
+      if (!sg) captiveWhy = `금융 자회사 보유(${captive.label}) — 제조 부문 차입금을 나눌 숫자 근거 없음(서류에 금융 부문을 가른 요약 재무상태표 없음) — EV 공란`;
+      else if (!segUsed)
+        captiveWhy = `금융 자회사 보유(${captive.label}) — ${sg.doc} 부문 요약 재무상태표의 연결 값(${sg.consDebt != null ? `차입금 ${fmt(sg.consDebt)} vs 본표 ${fmt(debt?.v)}` : `負債合計 ${fmt(sg.consLiab)} vs 본표 ${fmt(f.liab.v[c])}`})이 본표와 달라 범위 확인 불가 — EV 공란`;
       else if (leaseNote && !leaseIncl[c]) captiveWhy = `금융 자회사 보유(${captive.label}) — 리스부채를 주석에서 더한 열이라 제조 부문 범위 확인 불가 — EV 공란`;
       else {
-        mfgDebt = sg.rows.reduce((a, r) => a + r.excl, 0);
+        mfgDebt = segUsed.exclDebt;
         notes.push("금융 자회사 보유 회사 EV = 시가총액 + 제조(금융 제외) 부문 차입금 + 비지배지분 − 연결 현금(오너 결정 2026-10-11, 미국 CAT 방식) — 총차입금·신용지표는 연결 기준");
       }
     }
@@ -405,11 +421,11 @@ export function jpFundamentals(model: JpFinModel): JpFund {
     else if (mfgDebt != null) {
       const sg = segUsed!;
       f.netDebtEv.v[c] = mfgDebt + (f.nci.v[c] ?? 0) - f.cash.v[c]!;
-      f.netDebtEv.n[c] = `제조 부문 차입금 ${Math.round(mfgDebt / 1e6).toLocaleString("en-US")}백만엔(${sg.doc} MD&A 요약 재무상태표 「${sg.excl}」 ${sg.head} — ${sg.rows.map((r) => r.label).join("·")}, 연결 묶음 합 = 본표 차입금 확인) + 비지배지분 − 연결 현금`;
+      f.netDebtEv.n[c] = `제조 부문 차입금 ${Math.round(mfgDebt / 1e6).toLocaleString("en-US")}백만엔(${sg.doc} 부문 요약 재무상태표 「${sg.excl}」 ${sg.head} — ${sg.rows.join("·")}, ${sg.consDebt != null ? "연결 차입금 합 = 본표 차입금" : "(連結)負債合計 = 본표"} 확인) + 비지배지분 − 연결 현금`;
     } else {
       f.netDebtEv.v[c] = debtV + (f.nci.v[c] ?? 0) - f.cash.v[c]!;
       if (financial)
-        f.netDebtEv.n[c] = `금융사 EV = 미국 규칙(오너 결정 2026-10-31) — 차입금 = ${debt?.parts.map((l) => l.label).join("·") || "차입금 줄 없음(0)"}(예금·보험계약부채·콜머니·레포 등 제외), 현금 = ${cash?.parts.map((l) => l.label).join("·") ?? ""}`;
+        f.netDebtEv.n[c] = `금융사 EV = 미국 규칙(오너 결정 2026-10-31) — 차입금 = ${debt?.parts.map((l) => l.label).join("·") || "차입금 줄 없음(0)"}(예금·보험계약부채·콜머니·레포 등 제외), 현금 = 현금흐름표 기말 잔액`;
     }
 
     // ── 현금흐름표 ──

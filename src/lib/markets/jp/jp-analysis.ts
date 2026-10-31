@@ -129,7 +129,7 @@ export function buildJpAnalysis(f: JpFund, v: JpVal, symbol: string, asOfLtm: st
       return 1.2 * (wc[i]! / a) + 1.4 * (f.retained.v[i]! / a) + 3.3 * (f.op.v[i]! / a) + 0.6 * (mc / f.liab.v[i]!) + 1.0 * (f.rev.v[i]! / a);
     });
     // 당좌비율 = (현금성자산 + 매출채권) / 유동부채 — 한국과 같은 범위(현금성자산에 단기투자 포함)
-    const quick = idx.map((i) => (f.curL.v[i] ? ((f.cash.v[i] ?? 0) + (f.ar.v[i] ?? 0)) / f.curL.v[i]! : null));
+    const quick = idx.map((i) => (f.curL.v[i] ? ((f.cashLiq.v[i] ?? 0) + (f.ar.v[i] ?? 0)) / f.curL.v[i]! : null));
     const cogs = S(idx.map((i) => (f.cogs.v[i] != null ? Math.abs(f.cogs.v[i]!) : f.rev.v[i] != null && f.gross.v[i] != null ? Math.abs(f.rev.v[i]! - f.gross.v[i]!) : null)), whyOf(f.cogs));
     const arA = avg("ar");
     const invA = avg("inv");
@@ -182,7 +182,7 @@ export function buildJpAnalysis(f: JpFund, v: JpVal, symbol: string, asOfLtm: st
       HEAD("유동성"),
       R("유동비율", ratio(f.curA, f.curL), "mult", whyOf(f.curA, f.curL)),
       R("당좌비율", quick, "mult", whyOf(f.curL)),
-      R("현금비율", ratio(f.cash, f.curL), "mult", whyOf(f.cash, f.curL)),
+      R("현금비율", ratio(f.cashLiq, f.curL), "mult", whyOf(f.cashLiq, f.curL)),
       R("CFO / 유동부채", ratio(f.ocf, curLA), "mult", whyOf(f.ocf, curLA)),
       SP("4b"),
       HEAD("운전자본"),
