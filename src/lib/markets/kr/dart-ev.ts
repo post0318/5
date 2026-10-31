@@ -19,6 +19,20 @@ export interface KrLeaseInput {
   finDebt?: Record<string, KrFinDebt> | null;
   /** 같은 판정의 최신 분기·반기 보고서판 */
   finDebtQuarter?: (KrFinDebt & { label: string }) | null;
+  /** 「(유동|비유동)금융부채」를 차입금으로 쓰는 회사 — 그 줄 안의 차입금·사채·리스 아닌 금융부채(파생상품부채·금융보증부채·임대보증금 등) 합(적재본) */
+  plainFin?: Record<string, { status: "split" | "unknown"; exclude: number | null; how: string }> | null;
+  plainFinQuarter?: { label: string; status: "split" | "unknown"; exclude: number | null; how: string } | null;
+}
+/** 「(유동|비유동)금융부채」 줄을 차입금으로 쓸 때 뺄 금액(2026-10-31 — 015760 파생상품부채). 못 읽은 기간은 EV 공란 + 사유 */
+export function krPlainFinFor(year: number | null, lease: KrLeaseInput | null | undefined, quarterLabel?: string | null): { sub: number; unknown: string | null; how: string | null } {
+  if (year != null) {
+    const n = lease?.plainFin?.[String(year)];
+    if (n?.status === "split" && n.exclude != null) return { sub: n.exclude, unknown: null, how: n.exclude ? `FY${year} 「금융부채」 줄 중 차입금·사채·리스 아닌 ${n.exclude} 제외(${n.how})` : null };
+    return { sub: 0, unknown: n ? `FY${year} 「금융부채」 줄 구성 확인 불가(${n.how})` : `FY${year} 「금융부채」 줄 구성 주석 미적재`, how: null };
+  }
+  const q = lease?.plainFinQuarter;
+  if (q && q.label === quarterLabel && q.status === "split" && q.exclude != null) return { sub: q.exclude, unknown: null, how: q.exclude ? `분기말 「금융부채」 줄 중 차입금·사채·리스 아닌 ${q.exclude} 제외(${q.how})` : null };
+  return { sub: 0, unknown: q && q.label === quarterLabel ? `${quarterLabel} 「금융부채」 줄 구성 확인 불가(${q.how})` : `${quarterLabel ?? "분기말"} 「금융부채」 줄 구성 주석 미적재`, how: null };
 }
 export interface KrFinDebt {
   status: "split" | "unknown";
@@ -402,15 +416,16 @@ export function buildKrEvResolver(facts: KrFacts, code: string, leaseIn?: KrLeas
       // 본표에 그해 리스부채 줄 값이 없으면 주석 판정(오너 결정 2026-10-05)
       const lz = lease.has(year) ? { add: 0, unknown: null, how: null } : krLeaseFor(year, leaseIn);
       const fd = financial ? krFinDebtFor(year, leaseIn) : { sub: 0, unknown: null, how: null };
+      const pf = L.plainFinLiab && debt.has(year) ? krPlainFinFor(year, leaseIn) : { sub: 0, unknown: null, how: null };
       const cc = cashOrDueFromBanks(cash.get(year), dueBanks.get(year), cfCash.get(year), `FY${year}`);
       return {
-        debt: (debt.get(year) ?? 0) + lz.add - fd.sub,
+        debt: (debt.get(year) ?? 0) + lz.add - fd.sub - pf.sub,
         lease: (lease.get(year) ?? 0) + lz.add,
         cash: cc.cash,
         nci: nci.get(year) ?? 0,
         plainFinLiab: L.plainFinLiab,
-        leaseUnknown: [lz.unknown, fd.unknown, cc.unknown].filter(Boolean).join(" · ") || null,
-        leaseHow: [lz.how, fd.how].filter(Boolean).join(" · ") || null,
+        leaseUnknown: [lz.unknown, fd.unknown, pf.unknown, cc.unknown].filter(Boolean).join(" · ") || null,
+        leaseHow: [lz.how, fd.how, pf.how].filter(Boolean).join(" · ") || null,
         cashHow: [...(L.cashNotes.get(`FY${year}`) ?? []), ...(cc.how ? [cc.how] : [])].join(" / ") || null,
         bank,
       };
@@ -522,6 +537,7 @@ export function krLtmBalance(
   const leaseQ = at(L.lease);
   const lzQ = leaseQ != null ? { add: 0, unknown: null, how: null } : krLeaseFor(null, leaseIn, qLabel);
   const fdQ = isFinancialBs(quarter) ? krFinDebtFor(null, leaseIn, qLabel) : { sub: 0, unknown: null, how: null };
+  const pfQ = L.plainFinLiab && debt != null ? krPlainFinFor(null, leaseIn, qLabel) : { sub: 0, unknown: null, how: null };
   const ccQ = cashOrDueFromBanks(cash, at(dueFromBanksLines(quarter)), at(cfEndCashLines(quarter)), qLabel);
   if (!hasBridge && equity == null) return fallback("재무상태표 계정 없음");
   // 한 쪽만 비면 그 항목만 연말값 — 라벨에 어느 항목인지 적는다
@@ -531,13 +547,13 @@ export function krLtmBalance(
     bridge: hasBridge
       ? {
           // 연간 resolver 와 같은 규칙 — 현금만 있고 차입금 계정이 없으면 무차입(0). 본표에 리스 줄이 없으면 분기 주석 리스부채를 더한다
-          debt: (debt ?? 0) + lzQ.add - fdQ.sub,
+          debt: (debt ?? 0) + lzQ.add - fdQ.sub - pfQ.sub,
           lease: (leaseQ ?? 0) + lzQ.add,
           cash: ccQ.cash,
           nci: at(L.nci) ?? 0,
           plainFinLiab: L.plainFinLiab,
-          leaseUnknown: [lzQ.unknown, fdQ.unknown, ccQ.unknown].filter(Boolean).join(" · ") || null,
-          leaseHow: [lzQ.how, fdQ.how].filter(Boolean).join(" · ") || null,
+          leaseUnknown: [lzQ.unknown, fdQ.unknown, pfQ.unknown, ccQ.unknown].filter(Boolean).join(" · ") || null,
+          leaseHow: [lzQ.how, fdQ.how, pfQ.how].filter(Boolean).join(" · ") || null,
           cashHow: [...(L.cashNotes.get(qLabel) ?? []), ...(ccQ.how ? [ccQ.how] : [])].join(" / ") || null,
           bank: isBankBs(quarter),
         }
