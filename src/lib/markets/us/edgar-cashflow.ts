@@ -93,7 +93,7 @@ interface Block {
  */
 const FIN_PROVISION_LINE: Line = {
   label: "대손충당금",
-  concepts: ["ProvisionForLoanLossesExpensed", "ProvisionForLoanAndLeaseLosses", "ProvisionForLoanLeaseAndOtherLosses"],
+  concepts: ["ProvisionForLoanLeaseAndOtherLosses", "ProvisionForLoanAndLeaseLosses", "ProvisionForLoanLossesExpensed"], // 넓은 개념 먼저(edgar-financial FIN_PROVISION)
   depth: 1,
 };
 

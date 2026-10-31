@@ -22,6 +22,7 @@ import { fiscalYearOf, instantOn, ltmAnchor, ltmFlowOf } from "./edgar-series";
 import {
   fyEps,
   ltmEpsOf,
+  mergeConcepts,
   netIncomeAnnualByYear,
   netIncomeToParentEntries,
   parentEquityOf,
@@ -154,7 +155,7 @@ export function buildUsBankHighlights(
   const S = {
     netRevenue: revSeries,
     noninterestExpense: annualSeries(firstEntries(facts, NONINTEREST_EXPENSE)),
-    provision: annualSeries(firstEntries(facts, PROVISION)),
+    provision: annualSeries(mergeConcepts(facts, PROVISION)),
     // 순이익 행은 지배주주 순이익(손익계산서·재무분석·컨센서스와 같은 값). EPS 는
     // 보통주 귀속 순이익 기준(ltmEps·fyEps) — 은행은 우선주 배당이 커서 둘이 다르다.
     netIncome: [...netIncomeAnnualByYear(facts)]
@@ -164,7 +165,8 @@ export function buildUsBankHighlights(
   };
   const E = {
     noninterestExpense: firstEntries(facts, NONINTEREST_EXPENSE),
-    provision: firstEntries(facts, PROVISION),
+    // 기간마다 목록 앞 개념(손익계산서 줄 = 대출·리스·기타 합계) — 개념 하나만 고르면 그 개념을 끊은 뒤 기간이 비었다(JPM 2022~, 2026-11-01)
+    provision: mergeConcepts(facts, PROVISION),
     netIncome: netIncomeToParentEntries(facts),
     eps: unitEntries(facts, "EarningsPerShareDiluted", "USD/shares"),
   };

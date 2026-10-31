@@ -9,10 +9,14 @@ import type { CompanyFacts } from "./edgar";
 /** 총이자외비용(판관비 성격). */
 export const FIN_NONINTEREST_EXPENSE = ["NoninterestExpense"];
 /** 대손충당금. */
+/**
+ * 넓은 개념 먼저(손익계산서 「충당금」 줄 = 대출·리스·기타 합계, 2026-11-01). 대출분만인 ProvisionForLoanLossesExpensed 를 앞에 두면 두 개념을 다 쓰는
+ * 해에 대출분만 잡혔다(JPM 2021 −9,071 vs 손익계산서 −9,256 백만 달러 — 세전이익과 185 차이). 기간마다 앞 개념, 없으면 다음(mergeConcepts)
+ */
 export const FIN_PROVISION = [
-  "ProvisionForLoanLossesExpensed",
-  "ProvisionForLoanAndLeaseLosses",
   "ProvisionForLoanLeaseAndOtherLosses",
+  "ProvisionForLoanAndLeaseLosses",
+  "ProvisionForLoanLossesExpensed",
 ];
 /** 보통주 귀속 순이익(우선주배당 차감후) — 우선주 없는 회사는 NetIncomeLoss 로 자동 폴백. */
 export const FIN_NET_INCOME = [
