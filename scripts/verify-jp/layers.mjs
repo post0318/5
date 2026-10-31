@@ -1023,6 +1023,18 @@ export async function jpExtCells(sym, app, ctx) {
     push(src.std === "Japan GAAP" ? "자기자본(株主資本 + その他の包括利益累計額, 앱 본표 줄 합)" : "자기자본(지배주주 자본)", eqApp, { kabutan: "equity", yahoojp: "equity" }, [
       { cls: "정밀도", test: (x) => { const m = eqApp != null && x !== eqApp ? eqAlt.find((e) => e.v === x) : null; return m ? `외부 = 원자료 ${m.how} = ${m.v / 1e6}(백만엔) · 앱 = 株主資本 + その他の包括利益累計額 소계 합 — 회사가 줄마다 백만엔 반올림해 묶음마다 합이 다름(두 원자료 식 재현)` : null; } },
       origCause("bs", eqCands, kv.colOf.bs),
+      // 옛 판본이 다른 회계기준(J-GAAP)이면 그 서류의 自己資本 = 純資産 − 新株予約権 − 非支配 (8766 2025-03: IFRS 재작성 앞 J-GAAP 有報 S100VZFR)
+      { test: (x) => {
+        for (const o of vintages) {
+          if (o === kv.colOf.bs || o.dei.AccountingStandardsDEI !== "Japan GAAP") continue;
+          const v = (c) => plainValue(o, c, { instant: per.end })?.v;
+          const na = v("jppfs_cor:NetAssets");
+          if (na == null) continue;
+          const e = na - (v("jppfs_cor:SubscriptionRightsToShares") ?? 0) - (v("jppfs_cor:NonControllingInterests") ?? 0);
+          if (e === x) return `판본·회계기준 차이 — 외부 = 옛 판본 ${o.row.docID}(Japan GAAP) 純資産 − 新株予約権 − 非支配 = ${e / 1e6} · 앱 = 나중 판본 ${kv.colOf.bs?.row.docID}(${kv.colOf.bs?.dei.AccountingStandardsDEI}) 지배주주 자본`;
+        }
+        return null;
+      } },
     ]);
     push("순자산(자본총계)", line("bs", kv["자본총계"]?.concept), { minkabu: "netAssets" }, [origCause("bs", kc("자본총계").ids, kv.colOf.bs)]);
     // 영업활동 CF — 하이라이트 행이 없는 화면(금융 서식)이면 현금흐름표 본표 줄
