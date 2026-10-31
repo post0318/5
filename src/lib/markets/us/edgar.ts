@@ -627,6 +627,7 @@ function buildUsTtm(
       shares: evShares,
       evNetDebt: evBridge ? evBridge.debt + evBridge.preferred + evBridge.nci - evBridge.cash : null,
       evBlocker,
+      evFinancial: !!evCtx.isFinancial,
       evShares,
       evOpNciBook: evBridge?.opUnitNciBook ?? null,
       isReit: evCtx.sic === "6798",

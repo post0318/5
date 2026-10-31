@@ -165,13 +165,16 @@ function computeUsMultiples(input: MultiplesInput): TrailingMultiples {
   const psr = marketCap != null && revenue ? marketCap / revenue : null;
   if (psr == null) reasons.psr = marketCap == null ? reasons.marketCap! : (tr.revenue ?? "LTM 매출 없음");
   // EV = 보통주 시가총액 + (운영 파트너십 지분 시가 − 장부가) + 우선주 시가총액 + 순차입금 브릿지(edgar-ev.ts 단일 기준)
-  const ev =
+  const evRaw =
     snap.evBlocker || snap.evNetDebt == null || marketCap == null || price == null
       ? null
       : marketCap +
         (input.opUnits ? input.opUnits * price - (snap.evOpNciBook ?? 0) : 0) +
         (snap.evPreferredMcap ?? 0) +
         snap.evNetDebt;
+  // 은행·카드사 음수 기업가치 = 공란(오너 결정 2026-10-31, edgar-ev.ts bankEvOrNull 과 같은 규칙)
+  const evNegBank = evRaw != null && evRaw < 0 && !!snap.evFinancial;
+  const ev = evNegBank ? null : evRaw;
   // EBITDA = LTM 영업이익 + LTM 감가상각비 — 둘 중 하나라도 없으면 공란(EV/EBIT 근사 안 함)
   const ebitda = ttm.opIncome != null && ttm.daTtm != null ? ttm.opIncome + ttm.daTtm : null;
   const evEbitda = ev != null && ebitda != null && ebitda > 0 ? ev / ebitda : null;
@@ -180,7 +183,9 @@ function computeUsMultiples(input: MultiplesInput): TrailingMultiples {
       ? (EV_BLOCKER_REASON[snap.evBlocker] ?? `EV 미표시(${snap.evBlocker})`)
       : snap.evNetDebt == null
         ? (tr.evNetDebt ?? "EV 구성요소 없음")
-        : marketCap == null
+        : evNegBank
+          ? "현금이 차입금보다 많아 기업가치 의미 없음"
+          : marketCap == null
           ? reasons.marketCap!
           : ttm.opIncome == null
             ? (tr.opIncome ?? "LTM 영업이익 없음")

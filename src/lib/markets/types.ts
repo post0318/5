@@ -251,6 +251,8 @@ export interface TtmFlows {
     evNetDebt?: number | null;
     /** EV 계산 불가 사유 (있으면 EV/EBITDA 를 비운다) */
     evBlocker?: string | null;
+    /** 은행·카드사(isFinancialCompany) — 기업가치가 음수면 공란(edgar-ev.ts bankEvOrNull) */
+    evFinancial?: boolean;
     /** 시가총액용 보통주 수(edgar-shares.ts 현재 기준) — 하이라이트와 동일 */
     evShares?: number | null;
     /** 리츠(SIC 6798) — 운영 파트너십 지분 반영 대상 */

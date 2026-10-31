@@ -17,7 +17,7 @@
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { QuoteBar } from "../types";
 import { buildShareResolver } from "./edgar-shares";
-import { buildEvResolver } from "./edgar-ev";
+import { BANK_NEG_EV_REASON, bankEvOrNull, buildEvResolver } from "./edgar-ev";
 import { fiscalYearOf, instantOn, ltmAnchor, ltmFlowOf } from "./edgar-series";
 import {
   fyEps,
@@ -292,13 +292,16 @@ export function buildUsBankHighlights(
   const evDebt = bridges.map((b) => (b ? b.debt : null));
   const evCash = bridges.map((b) => (b ? -b.cash : null));
   const evPref = bridges.map((b) => (b ? b.preferred + b.nci : null));
-  const evVal = bridges.map((b, i) => (b && marketCap[i] != null ? marketCap[i]! + b.debt + b.preferred + b.nci - b.cash : null));
+  const evRaw = bridges.map((b, i) => (b && marketCap[i] != null ? marketCap[i]! + b.debt + b.preferred + b.nci - b.cash : null));
+  // 음수면 공란 + 사유(오너 결정 2026-10-31 — edgar-ev.ts bankEvOrNull)
+  const evVal = evRaw.map((v) => bankEvOrNull(v, true));
+  const nEv = evRaw.map((v, i) => (v != null && evVal[i] == null ? BANK_NEG_EV_REASON : null));
   const rows: HighlightRow[] = [
     { key: "mktcap", label: "시가총액", format: "money", values: marketCap, cellNotes: nMktcap },
     { key: "cash", label: "− 현금·단기투자·장기투자증권", format: "money", indent: true, values: evCash },
     { key: "debt", label: "+ 차입금", format: "money", indent: true, values: evDebt },
     { key: "pref_nci", label: "+ 우선주·비지배지분", format: "money", indent: true, values: evPref },
-    { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: evVal },
+    { key: "ev", label: "기업가치 (EV)", format: "money", emphasis: true, values: evVal, cellNotes: nEv },
     { key: "sp0", label: "", format: "money", spacer: true, values: blank() },
     { key: "equity", label: "자기자본 장부가치", format: "money", values: equity, cellNotes: nEquity },
     { key: "deposits", label: "총예금", format: "money", values: deposits, cellNotes: nBal },

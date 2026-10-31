@@ -262,6 +262,15 @@ export interface EvResolver {
 
 // ── 리졸버 ────────────────────────────────────────────────────────────
 
+/**
+ * 은행·카드사(예금 수취 — isFinancialCompany) 기업가치가 음수(현금이 시가총액 + 차입금 + 우선주·비지배지분보다 많음)면 공란(오너 결정 2026-10-31, 세 시장
+ * 공통). 예금은 차입금에 넣지 않아 현금이 크게 남는 해가 있다(RF 2021). 양수면 그대로 표시
+ */
+export const BANK_NEG_EV_REASON = "현금이 차입금보다 많아 기업가치 의미 없음";
+export function bankEvOrNull(ev: number | null, isFinancial: boolean | undefined): number | null {
+  return ev != null && isFinancial && ev < 0 ? null : ev;
+}
+
 export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvResolver {
   const E = (c: string) => entriesOf(facts, c);
   const on = (c: string, d: string) => instantOn(E(c), d);
@@ -428,7 +437,7 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
       const b = bridgeAt(asOf);
       if (!b || commonMarketCap == null) return null;
       const opValue = ctx.opUnits && ctx.opUnits > 0 && price != null ? ctx.opUnits * price : 0;
-      return commonMarketCap + opValue + b.debt + b.preferred + b.nci - b.cash;
+      return bankEvOrNull(commonMarketCap + opValue + b.debt + b.preferred + b.nci - b.cash, ctx.isFinancial);
     },
   };
 }

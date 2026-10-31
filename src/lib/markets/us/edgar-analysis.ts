@@ -41,6 +41,7 @@ import {
   SYN_OP_INCOME,
   type EvBlocker,
   type EvContext,
+  BANK_NEG_EV_REASON,
 } from "./edgar-ev";
 import {
   FIN_NONINTEREST_EXPENSE,
@@ -843,6 +844,8 @@ export function buildUsAnalysis(
     const mc = l === LTM ? curMktcap : mktcap[l];
     evV[l] = bridge[l] ? evRes.evAt(balDate(l), mc, price[l]) : null; // Yahoo 분기 LTM 에서 비운 브릿지는 EV 도 공란
     if (evV[l] == null && !bridge[l]) note(evV, l, bridgeWhy[l]);
+    // 브릿지·시가총액이 있는데 공란 = 은행 음수 기업가치(edgar-ev.ts bankEvOrNull)
+    else if (evV[l] == null && isFin && mc != null) note(evV, l, BANK_NEG_EV_REASON);
   }
   inheritWhy(evV, mktcap);
   // EBITDA ≤ 0 이면 비운다 — 음수 배수는 의미가 없고, 하이라이트·컨센서스도 같은 규칙
