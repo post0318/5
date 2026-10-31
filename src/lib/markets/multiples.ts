@@ -103,6 +103,8 @@ const EV_BLOCKER_REASON: Record<string, string> = {
   "captive-unknown": "금융 자회사 여부 판별 공시 조회 실패 — EV 미표시",
   "debt-untagged": "차입금이 표준 태그로 공시되지 않음 — EV 미표시",
   "source-unavailable": "원본 조회 실패 — 차입금·EV 공란",
+  // 일본 은행(예금 수취 금융사) — 현금이 차입금보다 많아 EV 가 음수(오너 결정 2026-10-31 「나」)
+  "bank-negative-ev": "현금이 차입금보다 많아 기업가치 의미 없음(은행)",
 };
 
 /**

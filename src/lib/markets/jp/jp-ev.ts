@@ -167,6 +167,8 @@ export interface JpFund {
   std: string | null;
   cons: boolean;
   financial: boolean;
+  /** 예금 수취 금융사(은행 — 금융업 서식이면서 부채에 預金·貯金 줄) — EV 가 음수면 공란(오너 결정 2026-10-31 「나」) */
+  bank: boolean;
   cols: JpCol[];
   /** LTM 열이 최근 사업연도와 같은가(그 뒤 반기 보고서 없음) */
   ltmIsFy: boolean;
@@ -229,6 +231,7 @@ export function jpFundamentals(model: JpFinModel): JpFund {
   // CallMoneyLiabilitiesBNK 한 줄 때문에 소매업 전체가 금융 서식으로 잡혔다)
   const financial = is.some((l) => /(BNK|INS|SEC)$/.test(local(l.k)));
   // 유동·비유동 구분이 없는 재무상태표(IFRS 보험 — 東京海上 2025-03 부터, 은행 서식) — 현금은 isFinCash
+  const bank = financial && bs.some((l) => !l.ab && inLiab(l) && /^(預金|貯金)/.test(l.label));
   const hasCurSection = bs.some((l) => /^CurrentAssets/.test(local(l.k)) || /CA(IFRS)?$/.test(local(l.k)));
   const lastFyIdx = view.cols.map((c, i) => (c.label === JP_LTM ? -1 : i)).filter((i) => i >= 0).pop() ?? -1;
   const ltmIdx = view.cols.findIndex((c) => c.label === JP_LTM);
@@ -246,6 +249,7 @@ export function jpFundamentals(model: JpFinModel): JpFund {
     std: model.std,
     cons: model.cons,
     financial,
+    bank,
     cols,
     ltmIsFy,
     rev: S(), op: S(), ordinary: S(), pretax: S(), tax: S(), ni: S(), gross: S(), cogs: S(),
@@ -538,6 +542,13 @@ function barOn(px: JpPx, d: string): QuoteBar | null {
   return best && best.date >= addDays(d, -10) ? best : null;
 }
 /** d 뒤 분할 비율의 곱 — Yahoo 종가(현재 기준) × 이 값 = d 시점 기준 가격 */
+/** 은행 EV 음수 — 공란 사유(오너 결정 2026-10-31 「나」 — 현금이 차입금보다 많으면 기업가치 의미 없음, 양수면 표시. 보험·증권·카드는 채움) */
+export const BANK_NEG_EV = "현금이 차입금보다 많아 기업가치 의미 없음(은행 — 오너 결정 2026-10-31)";
+const addMonthsIso = (d: string, m: number) => {
+  const t = new Date(`${d}T00:00:00Z`);
+  t.setUTCMonth(t.getUTCMonth() + m);
+  return t.toISOString().slice(0, 10);
+};
 const splitsAfter = (px: JpPx, d: string) => px.splits.filter((s) => s.date > d).reduce((a, s) => a * s.ratio, 1);
 const splitsBetween = (px: JpPx, a: string, b: string) => px.splits.filter((s) => s.date > a && s.date <= b);
 
@@ -658,16 +669,31 @@ export function jpValuation(f: JpFund, px: JpPx | null): JpVal {
       const end = f.cols[fi].end;
       const win = px ? px.splits.find((s) => s.date <= end && s.date > addDays(end, -10)) : undefined;
       const xw = f.x[fi];
-      const winOk = win && xw.shIssued && xw.shIssuedFiling && Math.abs(xw.shIssuedFiling / xw.shIssued - win.ratio) < 0.01 * win.ratio;
+      // 기말 직전 권리락 분할이 결산일 뒤 효력인지 = 결산일 발행주식수가 아직 분할 전인지 — 제출일 발행주식수 ÷ 결산일 발행주식수가 분할 비율 쪽(√비율 초과)이면
+      // 분할 전(KDDI 2025-03 1.91 — 그 사이 소각, 브리지스톤 2025-12 1.87). 예전 ±1% 판정은 소각이 끼면 놓쳤다
+      const winOk = win && xw.shIssued && xw.shIssuedFiling && xw.shIssuedFiling / xw.shIssued > Math.sqrt(win.ratio);
       const fac = px?.hasSplits ? splitsAfter(px, end) * (winOk ? win!.ratio : 1) : 1;
-      v.dps.v[c] = xd.dps / fac;
       const notes: string[] = [];
-      if (fac !== 1) notes.push(`공시 ${xd.dps} ÷ ${fac}(결산일 ${end} 기준 → 현재 주식 기준 분할 보정)`);
-      // 기중 분할 — 중간 배당(분할 전)과 기말 배당(분할 후)의 주식 기준이 다르다(공시 합계 그대로, 도요타 2022년 3월기 148 = 120 + 28)
+      // 기중 분할 — 중간 배당(중간 기준일 = 사업연도 시작 + 6개월 − 1일, 분할 전 주식)과 기말 배당(분할 후)의 주식 기준이 다르다. 현재 주식 기준으로
+      // 맞추려면 중간 배당을 그 뒤 기중 분할 비율로 나눠 기말 배당과 더한다(소니 2025년 3월기 50 ÷ 5 + 10 = 20, 2026-10-31 — 예전엔 공시 합계 60 그대로).
+      // 분할 날짜(Yahoo = 권리락일)가 중간 기준일 10일 전 ~ 결산일 10일 전 사이면 중간 배당 뒤 분할로 본다(권리락일은 기준일 2영업일 전 — 기말 쪽 창과 같은 폭).
+      // 중간 배당 공시가 없으면 나눌 수 없어 빈칸(공시 합계로 대신하지 않음)
       const start = addDays(f.cols[fi - 1]?.end ?? addDays(end, -365), 1);
-      const mid = px?.splits.filter((s) => s.date >= start && s.date <= addDays(end, -10)) ?? [];
-      if (mid.length && xd.dpsInterim) notes.push(`기중 분할(${mid.map((s) => `${s.date} 1:${s.ratio}`).join(", ")}) — 중간·기말 배당의 주식 기준이 달라 공시 합계 그대로`);
-      if (notes.length) v.dps.n[c] = notes.join(" · ");
+      const midRec = addDays(addMonthsIso(start, 6), -1);
+      const midSplits = px?.hasSplits ? px.splits.filter((s) => s.date > addDays(midRec, -10) && s.date <= addDays(end, -10)) : [];
+      const fMid = midSplits.reduce((a, s) => a * s.ratio, 1);
+      if (fMid !== 1 && xd.dpsInterim == null) {
+        v.dps.n[c] = `기중 분할(${midSplits.map((s) => `${s.date} 1:${s.ratio}`).join(", ")}) — 중간 배당 공시가 없어 현재 주식 기준으로 맞출 수 없음`;
+      } else {
+        // 기말 배당 = 공시 합계 − 중간(공시 값은 소수 둘째 자리까지 — 전 단위로 빼서 부동소수 끝자리 오차를 없앤다)
+        const yearEnd = fMid !== 1 ? (Math.round(xd.dps * 100) - Math.round(xd.dpsInterim! * 100)) / 100 : 0;
+        const base = fMid !== 1 ? xd.dpsInterim! / fMid + yearEnd : xd.dps;
+        if (fMid !== 1)
+          notes.push(`기중 분할(${midSplits.map((s) => `${s.date} 1:${s.ratio}`).join(", ")}) — 중간 ${xd.dpsInterim} ÷ ${fMid} + 기말 ${yearEnd}(공시 합계 ${xd.dps})`);
+        v.dps.v[c] = base / fac;
+        if (fac !== 1) notes.push(`${fMid !== 1 ? base : `공시 ${xd.dps}`} ÷ ${fac}(결산일 ${end} 기준 → 현재 주식 기준 분할 보정)`);
+        if (notes.length) v.dps.n[c] = notes.join(" · ");
+      }
     }
     if (v.dps.v[c] != null && price) v.divYield.v[c] = (v.dps.v[c]! / price) * 100;
 
@@ -684,7 +710,9 @@ export function jpValuation(f: JpFund, px: JpPx | null): JpVal {
     v.psr.v[c] = pos(v.mcap.v[c], f.rev.v[c]);
     if (v.psr.v[c] == null) v.psr.n[c] = v.mcap.v[c] == null ? v.mcap.n[c] : f.rev.n[c];
     // EV
-    if (f.netDebtEv.v[c] != null && v.mcap.v[c] != null) {
+    if (f.netDebtEv.v[c] != null && v.mcap.v[c] != null && f.bank && v.mcap.v[c]! + f.netDebtEv.v[c]! < 0) {
+      v.ev.n[c] = BANK_NEG_EV;
+    } else if (f.netDebtEv.v[c] != null && v.mcap.v[c] != null) {
       v.ev.v[c] = v.mcap.v[c]! + f.netDebtEv.v[c]!;
       if (f.netDebtEv.n[c]) v.ev.n[c] = f.netDebtEv.n[c]; // 제조 부문 차입금 산식(금융 자회사 보유)
     } else v.ev.n[c] = f.netDebtEv.n[c] ?? v.mcap.n[c];
@@ -729,7 +757,9 @@ export function jpTtmFromModel(model: JpFinModel, px: JpPx | null): TtmFlows {
   r("evShares", val.shares.n[c]);
   r("fyEps", fyIdx >= 0 ? val.eps.n[fyIdx] : "사업연도 없음");
   r("dpsTtm", val.dps.n[c]);
-  const blocker = f.netDebtEv.v[c] == null && f.netDebtEv.n[c]?.startsWith("금융 자회사 보유") ? "captive-unsplit" : null;
+  const bankNeg = f.bank && val.ev.v[c] == null && val.ev.n[c] === BANK_NEG_EV;
+  if (bankNeg) r("evNetDebt", BANK_NEG_EV);
+  const blocker = bankNeg ? "bank-negative-ev" : f.netDebtEv.v[c] == null && f.netDebtEv.n[c]?.startsWith("금융 자회사 보유") ? "captive-unsplit" : null;
   const dpsFy = fyIdx >= 0 ? val.dps.v[fyIdx] : null;
   return {
     periodLabel: f.ltmIsFy ? `${fyCol?.label ?? ""}(그 뒤 반기 보고서 아직 없음)` : `${fyCol?.label ?? ""} + 반기 − 전년 반기(${f.cols[c].end})`,

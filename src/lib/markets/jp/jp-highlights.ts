@@ -110,6 +110,9 @@ export function buildJpHighlights(f: JpFund, v: JpVal, estimates: JpEstimate[], 
       { ...pct("eps_yoy", seq(eps.values)), label: "성장률 % YoY" },
       dps,
       divY,
+      spacer("sp2"),
+      // 영업활동 현금흐름 — 금융사도 본표 줄 그대로(은행은 예금 증감이 들어가 크게 흔들림 — 원본 표현 그대로)
+      row("ocf", "영업활동 현금흐름", "money", f.ocf),
     ];
   } else {
     const ocf = row("ocf", "영업활동 현금흐름", "money", f.ocf);
