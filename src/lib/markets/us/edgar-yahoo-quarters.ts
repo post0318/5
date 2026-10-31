@@ -1,7 +1,7 @@
 import "server-only";
 import type { CompanyFacts, FactUnitEntry } from "./edgar";
 import type { YahooFundamentalsRow } from "../quote/yahoo";
-import { DA_TOTAL, DEBT_COMPONENT_CONCEPTS, SYN_DA_CF, daAnnualByYear, resolveDebt } from "./edgar-ev";
+import { DA_TOTAL, DEBT_COMPONENT_CONCEPTS, EV_BASIS_SUFFIX, SYN_DA_CF, daAnnualByYear, resolveDebt } from "./edgar-ev";
 import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT } from "./edgar-bs-structure";
 import { fiscalYearOf, instantOn } from "./edgar-series";
 import { ifrsSourcesOf } from "./edgar-foreign";
@@ -169,6 +169,9 @@ const FLOWS: { label: string; y: YKey; concepts: string[]; sign?: 1 | -1; da?: t
   { label: "법인세", y: "taxProvision", concepts: ["IncomeTaxExpenseBenefit"] },
   { label: "순이익", y: "netIncome", concepts: ["NetIncomeLoss"] },
   { label: "보통주 귀속 순이익", y: "netIncomeCommonStockholders", concepts: ["NetIncomeLossAvailableToCommonStockholdersBasic"] },
+  // 희석 기준 보통주 귀속 순이익(미국 회계기준 20-F — BABA·PDD·NTES 가 이 개념으로 공시, 최근 12개월 EPS 분자가 먼저 고르는 개념이라 빠지면 최근 12개월 EPS 가
+  // 비었다, 2026-10-31). 야후 칸은 같다 — 연간 경계 확인(야후 연간 = SEC 희석 값)을 통과할 때만 쓰인다
+  { label: "보통주 귀속 순이익(희석)", y: "netIncomeCommonStockholders", concepts: ["NetIncomeLossAvailableToCommonStockholdersDiluted"] },
   { label: "연결 순이익", y: "netIncomeIncludingNoncontrollingInterests", concepts: ["ProfitLoss"] },
   { label: "감가상각비", y: "reconciledDepreciation|depreciationAndAmortization", concepts: [SYN_DA_CF, ...DA_TOTAL], da: true },
   { label: "영업활동현금흐름", y: "operatingCashFlow", concepts: ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"] },
@@ -273,8 +276,10 @@ export function blankYahooLtm(facts: CompanyFacts, reason: string): { facts: Com
  * edgar(화면)·fin(재무 조립)이 같은 함수를 써서 최근 12개월 끝이 같다
  */
 // 0 일 수 있는 칸(그 분기에 차입·상환·배당·자사주·투자 거래가 없거나 잔액이 0 — 야후는 0 을 비우기도 한다)은 「덜 실림」 판정에서 뺀다
-// (NTES 2026-06-30 장기차입금 상환 칸만 없음 — 상환이 없었던 분기를 덜 실림으로 자르지 않게). 손익·운전자본·감가상각·총계 칸이 빠지면 덜 실림(TSM)
-const MAYBE_ZERO_KEYS = new Set(["longTermDebtIssuance", "longTermDebtPayments", "repurchaseOfCapitalStock", "cashDividendsPaid", "purchaseOfIntangibles", "purchaseOfInvestment", "saleOfInvestment", "currentDebt", "longTermDebt", "minorityInterest", "otherShortTermInvestments", "investmentsAndAdvances", "interestPaidCFF", "taxesRefundPaid"]);
+// (NTES 2026-06-30 장기차입금 상환 칸만 없음 — 상환이 없었던 분기를 덜 실림으로 자르지 않게). 이자비용·재무활동 현금흐름·자본금도 0·줄 없음일 수 있다
+// (PDD 2026 2분기 실적 6-K: 이자비용 줄 없음 — 「Interest and investment income, net」 한 줄, 재무활동 현금흐름 「-」, 자본금 18만 위안대). 주식보상·운전자본·
+// 감가상각·총계 칸이 빠지면 덜 실림(TSM 2026-09-30)
+const MAYBE_ZERO_KEYS = new Set(["longTermDebtIssuance", "longTermDebtPayments", "repurchaseOfCapitalStock", "cashDividendsPaid", "purchaseOfIntangibles", "purchaseOfInvestment", "saleOfInvestment", "currentDebt", "longTermDebt", "minorityInterest", "otherShortTermInvestments", "investmentsAndAdvances", "interestPaidCFF", "taxesRefundPaid", "interestExpense", "financingCashFlow", "capitalStock", "additionalPaidInCapital"]);
 const YAHOO_LTM_KEYS = [...new Set([...FLOWS, ...INSTANTS].flatMap((x) => (Array.isArray(x.y) ? x.y : [x.y])).flatMap((k) => k.split("|")))].filter((k) => !MAYBE_ZERO_KEYS.has(k));
 export function trimIncompleteYahooQuarters<T extends { quarterly: YahooFundamentalsRow[]; annual?: YahooFundamentalsRow[] }>(y: T): T & { trimmed?: { end: string; missing: string[] }[] } {
   const q = [...y.quarterly].sort((a, b) => a.end.localeCompare(b.end));
@@ -313,7 +318,7 @@ export function flowSpecOf(c: string): { y: YKey; sign: 1 | -1; da: boolean } | 
 
 /** 현금흐름표 개념인가(검증 전용 공란 목록) */
 // FLOWS 앞 7개(영업이익·이자비용·세전이익·법인세·순이익·보통주 귀속·연결 순이익)는 손익 항목 — 현금흐름 개념이 아니다
-const IS_FLOW_CONCEPTS = new Set(FLOWS.slice(0, 7).flatMap((f) => f.concepts));
+const IS_FLOW_CONCEPTS = new Set(FLOWS.slice(0, 8).flatMap((f) => f.concepts));
 export const isCfConcept = (c: string) => !IS_FLOW_CONCEPTS.has(c) && (CF_CONCEPT.test(c) || FLOWS.some((f) => f.concepts.includes(c)));
 
 /** LTM 의 사업연도말(순이익 개념의 최근 20-F 사업연도말) */
@@ -717,9 +722,12 @@ export function withYahooLtm(
           const secE = on(c, E)! / eRate;
           const sg = src?.sign ?? 1;
           if (raw && Math.abs(raw[iE6] * sg - secE) <= Math.abs(secE) * 0.15) {
-            v = secE + (raw[iY] - raw[iE6]) * sg;
-            det = { kind: "bsDelta", ids: src ? [{ id: `ifrs-full_${src.sum[0] as string}`, sign: sg }] : [{ id: `us-gaap_${c}`, sign: 1 }], report: sixK.source, fyEnd: E };
-            sixKFilled.push({ label: `${INSTANTS.find((x) => x.concepts.includes(c))?.label ?? c} 1년 전 분기말(SEC 연말 + 6-K 변동분)`, reason: `${sixK.source} · ${c}` });
+            // 재무상태표 칸 = 6-K 원값(1년 전 열), 기업가치 구성요소 전용 개념 = SEC 연말 + 6-K 변동분(오너 결정 2026-10-31 다)
+            const ids = src ? [{ id: `ifrs-full_${src.sum[0] as string}`, sign: sg }] : [{ id: `us-gaap_${c}`, sign: 1 as const }];
+            v = raw[iY] * sg;
+            det = { kind: "bs", ids, report: sixK.source, fyEnd: E };
+            putBs(`${c}${EV_BASIS_SUFFIX}`, yearAgo, (secE + (raw[iY] - raw[iE6]) * sg) * yearAgoRate, "bsDelta", ids, sixK.source, E);
+            sixKFilled.push({ label: `${INSTANTS.find((x) => x.concepts.includes(c))?.label ?? c} 1년 전 분기말(재무상태표 6-K 원값 · 기업가치 구성요소 SEC 연말 + 6-K 변동분)`, reason: `${sixK.source} · ${c}` });
           }
         }
         if (v != null && det) putBs(c, yearAgo, v * yearAgoRate, det.kind, det.ids, det.report, det.fyEnd);
@@ -804,9 +812,10 @@ export function withYahooLtm(
       const r6E = raw[iE6] * sg, r6L = raw[iL6] * sg;
       if (sameInUnit(secE, r6E) || Math.abs(r6E - secE) > Math.abs(secE) * 0.15) continue; // 같은 기준이거나 대응이 틀림
       if (!sameInUnit(r6L, cur.val / lastRate)) continue; // 야후 분기 값이 6-K 분기말 열과 다르면 이 경로가 아니다
-      out[c] = { ...out[c], units: { ...out[c].units, USD: arr.filter((e) => e !== cur) } };
+      // 재무상태표 칸(c)은 6-K 원값(야후) 그대로 두고, 기업가치 구성요소 전용 개념에 조정값(오너 결정 2026-10-31 다 — 재무상태표 항등식은 원값으로 맞고,
+      // 조정은 (가) 결정 범위인 기업가치 구성요소에만)
       const ids = src ? [{ id: `ifrs-full_${src.sum[0] as string}`, sign: sg as 1 | -1 }] : [{ id: `us-gaap_${c}`, sign: 1 as const }];
-      putBs(c, last, (secE + (r6L - r6E)) * lastRate, "bsDelta", ids, sixK.source, E);
+      putBs(`${c}${EV_BASIS_SUFFIX}`, last, (secE + (r6L - r6E)) * lastRate, "bsDelta", ids, sixK.source, E);
       const label = INSTANTS.find((x) => x.concepts.includes(c))?.label ?? c;
       // 회사별 사실만 — 기준(회계 기준 이름)은 원문으로 확인하지 않으므로 적지 않는다(재감사 2026-10-26)
       const note = `${label} ${last} = 20-F ${E} ${Math.round(secE).toLocaleString("en-US")} + 6-K 변동분(${Math.round(r6E).toLocaleString("en-US")} → ${Math.round(r6L).toLocaleString("en-US")}) ${currency} — 6-K 연말 열(${Math.round(r6E).toLocaleString("en-US")})과 20-F 연말 값(${Math.round(secE).toLocaleString("en-US")})이 다름, 야후 분기 값은 6-K 분기말 열과 같음`;

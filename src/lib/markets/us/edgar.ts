@@ -37,6 +37,7 @@ import { loadCaptiveDebt } from "./edgar-captive";
 import { buildShareResolver } from "./edgar-shares";
 import { withFilingGapFill } from "./edgar-gapfill";
 import { toAdrBasis, withForeignNormalization } from "./edgar-foreign";
+import { adrRatioFromCover } from "./adr-cover";
 import { withContentAmortization } from "./edgar-content";
 import { withRevenueDims } from "./edgar-revenue-dims";
 import { withCashFlowWc } from "./edgar-cf-wc";
@@ -438,8 +439,12 @@ async function getSymbolFacts(cik: string, symbol: string, opts: { revenue?: boo
     // 매출 = 재무 5층 구조(src/lib/fin) 매출 지표(fin-revenue.ts). 매출을 안 쓰는 경로는 건너뛴다
     opts.revenue === false ? Promise.resolve(null) : loadUsRevenue(symbol),
   ]);
-  // 20-F ADR(TSM 1:5) — 주식수·주당 값을 ADR 1주 기준으로(edgar-foreign.ts toAdrBasis)
-  const adr = toAdrBasis(facts, currentShares?.val);
+  // 20-F ADR(TSM 1:5) — 주식수·주당 값을 ADR 1주 기준으로(edgar-foreign.ts toAdrBasis). 비율은 20-F 표지 문구가 있으면 그 값(adr-cover.ts — BABA 1:8)
+  const sub20 = /^20-F/.test(((facts.facts.dei?.EntityCommonStockSharesOutstanding?.units?.shares ?? []) as FactUnitEntry[]).reduce<FactUnitEntry | null>((b, e) => (!b || e.end > b.end ? e : b), null)?.form ?? "")
+    ? await getSubmissions(cik).catch((e: unknown) => { console.warn(`[edgar] ${symbol} 제출 목록 조회 실패(ADR 비율 표지 확인): ${e instanceof Error ? e.message : String(e)}`); return null; })
+    : null;
+  const coverRatio = sub20 ? await adrRatioFromCover(cik, sub20.filings.recent).catch((e: unknown) => { console.warn(`[edgar] ${symbol} 20-F 표지 ADR 비율 조회 실패: ${e instanceof Error ? e.message : String(e)}`); return null; }) : null;
+  const adr = toAdrBasis(facts, currentShares?.val, coverRatio);
   return { ...adr.facts, currentShares, revenue: await alignRevenueToLtm(symbol, revenue, ltmEndOf(facts)) };
 }
 

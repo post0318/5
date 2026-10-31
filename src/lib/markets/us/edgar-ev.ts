@@ -98,6 +98,8 @@ const PREFERRED = ["PreferredStockValue", "PreferredStockValueOutstanding"];
 /** 파트너십(ET 등)은 우선 지분을 별도 태그로 단다 — 위와 합산. */
 const PREFERRED_UNITS = ["PreferredUnitsPreferredPartnersCapitalAccounts"];
 const NCI = ["MinorityInterest", "PartnersCapitalAttributableToNoncontrollingInterest"];
+/** 기업가치 구성요소 전용 값의 개념 이름 접미어 — 재무상태표 화면에는 쓰지 않는다(edgar-yahoo-quarters.ts 기준 변동분) */
+export const EV_BASIS_SUFFIX = "EvBasisDerived";
 /** UP-REIT 의 운영 파트너십 지분(장부가) — 시가로 대체할 때 NCI 에서 뺀다. */
 const NCI_OP_UNITS = ["MinorityInterestInOperatingPartnerships"];
 
@@ -266,7 +268,9 @@ export interface EvResolver {
 
 export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvResolver {
   const E = (c: string) => entriesOf(facts, c);
-  const on = (c: string, d: string) => instantOn(E(c), d);
+  // 기업가치 구성요소 전용 값(20-F: 「20-F 연말 + 6-K 같은 기준 변동분」 — edgar-yahoo-quarters EV_BASIS_SUFFIX)이 그 날짜에 있으면 그 값. 재무상태표 화면은
+  // 원래 개념(6-K 원값)을 그대로 읽는다(오너 결정 2026-10-31 다 — TSM 비지배지분)
+  const on = (c: string, d: string) => instantOn(E(`${c}${EV_BASIS_SUFFIX}`), d) ?? instantOn(E(c), d);
   const firstOn = (cs: string[], d: string): { c: string; v: number } | null => {
     for (const c of cs) {
       const v = on(c, d);

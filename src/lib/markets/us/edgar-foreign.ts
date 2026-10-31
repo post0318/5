@@ -414,11 +414,20 @@ export async function withForeignNormalization(facts: CompanyFacts): Promise<Com
  * TSM 1 ADR = 보통주 5주: EDGAR 는 보통주 기준이라 ADR 가격과 곱하면 5배가 된다.
  * 비율 = 최근 표지 주식수(보통주) ÷ 현재 ADR 주식수(인포맥스·Yahoo). 1.5배 안이면 1:1.
  */
-export function toAdrBasis(facts: CompanyFacts, adrShares: number | null | undefined): { facts: CompanyFacts; ratio: number } {
-  const dei = (facts.facts.dei?.EntityCommonStockSharesOutstanding?.units?.shares ?? []) as FactUnitEntry[];
-  const last = dei.reduce<FactUnitEntry | null>((b, e) => (!b || e.end > b.end ? e : b), null);
-  if (!last || !adrShares || !/^20-F/.test(last.form ?? "")) return { facts, ratio: 1 };
-  const ratio = last.val / adrShares;
+export function toAdrBasis(facts: CompanyFacts, adrShares: number | null | undefined, coverRatio?: number | null): { facts: CompanyFacts; ratio: number } {
+  let dei = (facts.facts.dei?.EntityCommonStockSharesOutstanding?.units?.shares ?? []) as FactUnitEntry[];
+  let last = dei.reduce<FactUnitEntry | null>((b, e) => (!b || e.end > b.end ? e : b), null);
+  if (!last || !/^20-F/.test(last.form ?? "")) return { facts, ratio: 1 };
+  // 표지 주식수가 같은 날 본표 유통주식수와 1.5배 넘게 다르면 표지 태깅 오류 — 본표 값으로(BABA 2026-03-31 표지 1,858,037,427 vs 본표 18,580,374,278)
+  const bsSh = ((facts.facts["us-gaap"]?.CommonStockSharesOutstanding?.units?.shares ?? []) as FactUnitEntry[]).filter((e) => e.end === last!.end).at(-1);
+  if (bsSh && bsSh.val > 0 && (last.val / bsSh.val > 1.5 || bsSh.val / last.val > 1.5)) {
+    const fixed = { ...last, val: bsSh.val };
+    dei = dei.map((e) => (e === last ? fixed : e));
+    last = fixed;
+    facts = { ...facts, facts: { ...facts.facts, dei: { ...facts.facts.dei, EntityCommonStockSharesOutstanding: { ...facts.facts.dei!.EntityCommonStockSharesOutstanding, units: { shares: dei } } } } } as CompanyFacts;
+  }
+  // 20-F 표지 문구의 ADR 비율이 있으면 그 값(정확), 없으면 표지 보통주 ÷ 현재 ADR 주식수로 역산
+  const ratio = coverRatio ?? (adrShares ? last.val / adrShares : 1);
   if (ratio <= 1.5 && ratio >= 1 / 1.5) return { facts, ratio: 1 };
   const scale = (ns: Ns | undefined): Ns | undefined => {
     if (!ns) return ns;
