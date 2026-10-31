@@ -2,7 +2,7 @@
  * 종목 1페이지 PPT 생성기 — 종목 하나 + 회사별 설정 → 슬라이드 1장 (docs/ppt/00-requirements.md · 01-template-analysis.md).
  *
  * 숫자는 따로 계산하지 않고 앱의 단일 기준 결과를 그대로 받는다(실행 중인 앱 API):
- *   실적 열 = 하이라이트(/highlights — 시장별 단일 기준 함수), 예상(e) 열 = Yahoo 컨센서스(오너 답 3 — FnGuide 안 씀),
+ *   실적 열·예상(e) 열 = 하이라이트(/highlights — 시장별 단일 기준 함수). 예상: 한국 FY1 네이버(에프앤가이드)·FY2 야후, 미국·일본 야후(오너 2026-10-31),
  *   주가·지수 = 앱 시세(/price-chart, Yahoo 일별 종가).
  * 회사별 설정(settings JSON)은 사람·MCP 에이전트가 고르는 것 — 개요·투자 포인트, 점유율(사업·항목·출처·기준 시점),
  * 핵심 사업(내용 + 출처 — 칸 형식은 오너 샘플 대기), 로고 파일, 표시 이름, 상품명. 설정이 없으면 빈칸 + 사유(그림자 채우기 금지).
@@ -52,8 +52,6 @@ interface Highlights {
   valuationRows?: HlRow[];
   source?: string;
 }
-interface ConsRow { fy: number; isEstimate: boolean; revenue: number | null; revenueYoY: number | null; netIncome: number | null; eps: number | null; per: number | null }
-interface Consensus { rows: ConsRow[]; asOf?: string | null }
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 /** 금액 단위 사다리(오너 2026-10-31): 표 크기는 고정, 숫자가 칸에 안 들어가면 글자를 줄이지 않고 다음 단위로(소수 둘째 자리, 버림). */
@@ -104,10 +102,9 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
   const blanks: { slot: string; reason: string }[] = [];
   const enc = encodeURIComponent(symbol);
 
-  const [ov, hlRes, cons] = await Promise.all([
+  const [ov, hlRes] = await Promise.all([
     getJson<{ profile: { name: string } }>(base, `/api/markets/${market}/${enc}/overview`),
     getJson<{ highlights: Highlights }>(base, `/api/markets/${market}/${enc}/highlights`),
-    getJson<Consensus>(base, `/api/markets/${market}/${enc}/consensus`),
   ]);
   const hl = hlRes.highlights;
   const name = settings.displayName ?? ov.profile.name.replace(/\(주\)|㈜/g, "").trim();
@@ -130,37 +127,26 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
     if (v == null) blanks.push({ slot: `재무표 ${fyKey} ${LABELS[k].trim()}`, reason: r?.cellNotes?.[fyIdx] ?? "앱 하이라이트에 값 없음" });
   }
 
-  // 예상(e): Yahoo 컨센서스. 미국·일본 하이라이트의 예상 열이 같은 Yahoo 값(+ 앱 규칙 예상 순이익 = 예상 EPS × 현재 주식수)이라 그것을 쓰고,
-  // 한국 하이라이트 예상 열은 네이버(FnGuide) 값이라 쓰지 않고 컨센서스 API 의 Yahoo 행을 쓴다(순이익 예상은 Yahoo 에 없음 → 빈칸).
-  const consAsOf = cons.asOf ?? ymdKst();
+  // 예상(e): 앱 하이라이트의 예상 열을 그대로(따로 부르지 않음 — 오너 2026-10-31).
+  //   한국 = FY1 네이버(에프앤가이드 값)·FY2 야후(D26 결정), 미국·일본 = Yahoo(예상 순이익은 앱 규칙 예상 EPS × 현재 주식수).
+  //   앱 열이 없거나 칸이 비면 빈칸 + 사유 — PPT 쪽에서 새로 계산하지 않는다.
+  const estSrc = (i: 0 | 1) => (market === "kr" ? (i === 0 ? "네이버(에프앤가이드)" : "Yahoo Finance") : "Yahoo Finance");
+  const estUsed: string[] = [];
   const headers = [`FY${fy}`];
-  for (const ey of [fy + 1, fy + 2]) {
+  for (const [i, ey] of [fy + 1, fy + 2].entries()) {
     headers.push(`FY${ey} (e)`);
-    if (market === "kr") {
-      const c = cons.rows.find((r) => r.isEstimate && r.fy === ey);
-      if (!c) blanks.push({ slot: `재무표 FY${ey}(e) 전체`, reason: "Yahoo 컨센서스에 이 연도 예상 없음" });
-      const vals: Record<RowKey, number | null> = {
-        revenue: c?.revenue ?? null,
-        growth: c?.revenueYoY ?? null,
-        ebitda: null,
-        ebitdaMargin: null,
-        net: c?.netIncome ?? null,
-        netMargin: c?.netIncome != null && c?.revenue ? (c.netIncome / c.revenue) * 100 : null,
-        per: c?.per ?? null,
-      };
-      for (const k of Object.keys(LABELS) as RowKey[]) {
-        raw[k].push(vals[k]);
-        if (c && vals[k] == null) blanks.push({ slot: `재무표 FY${ey}(e) ${LABELS[k].trim()}`, reason: k.startsWith("ebitda") ? "Yahoo 컨센서스에 EBITDA 예상 없음" : "Yahoo 컨센서스에 값 없음" });
-      }
-    } else {
-      const ci = hl.columns.findIndex((c) => c.kind === "estimate" && c.key === `FY${ey}E`);
-      if (ci < 0) blanks.push({ slot: `재무표 FY${ey}(e) 전체`, reason: "Yahoo 컨센서스에 이 연도 예상 없음" });
-      for (const k of Object.keys(LABELS) as RowKey[]) {
-        const r = row(hlMap[k]);
-        const v = ci >= 0 ? (r?.values[ci] ?? null) : null;
-        raw[k].push(v);
-        if (ci >= 0 && v == null) blanks.push({ slot: `재무표 FY${ey}(e) ${LABELS[k].trim()}`, reason: r?.cellNotes?.[ci] ?? (k.startsWith("ebitda") ? "Yahoo 컨센서스에 EBITDA 예상 없음" : "Yahoo 컨센서스에 값 없음") });
-      }
+    const ci = hl.columns.findIndex((c) => c.kind === "estimate" && c.key === `FY${ey}E`);
+    if (ci < 0) {
+      blanks.push({
+        slot: `재무표 FY${ey}(e) 전체`,
+        reason: market === "kr" && i === 1 ? "앱 하이라이트에 한국 FY2(야후) 예상 열이 아직 없음 — D26 결정만 있고 앱 구현 전" : `앱 하이라이트에 FY${ey} 예상 열 없음(${estSrc(i as 0 | 1)})`,
+      });
+    } else estUsed.push(estSrc(i as 0 | 1));
+    for (const k of Object.keys(LABELS) as RowKey[]) {
+      const r = row(hlMap[k]);
+      const v = ci >= 0 ? (r?.values[ci] ?? null) : null;
+      raw[k].push(v);
+      if (ci >= 0 && v == null) blanks.push({ slot: `재무표 FY${ey}(e) ${LABELS[k].trim()}`, reason: r?.cellNotes?.[ci] ?? `앱 하이라이트 예상 열에 값 없음(${estSrc(i as 0 | 1)})` });
     }
   }
   // 단위: 금액 칸이 모두 들어가는 가장 작은 단위
@@ -251,7 +237,7 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
     if (sourceWidthCm(out) > SOURCE_LINE_CM) blanks.push({ slot, reason: `한 줄(8pt)을 넘음 — 매체를 묶어 줄여야 함: ${out}` });
     return out;
   };
-  const leftUsed: Used[] = [{ name: mi.sourceName, date: null }, { name: "Yahoo Finance", date: null }];
+  const leftUsed: Used[] = [{ name: mi.sourceName, date: null }, ...estUsed.map((n) => ({ name: n, date: null }))];
   if (coreBusiness?.image) leftUsed.push({ name: coreBusiness.source.doc, date: coreBusiness.source.asOf });
   for (const p of points) for (const s of p.sources) leftUsed.push({ name: s.publisher, date: s.publishedAt });
   const rightUsed: Used[] = [];
@@ -260,7 +246,7 @@ export async function buildOnepagerSpec(market: Market, symbol: string, settings
   const sourceLeft = line("왼쪽 출처 줄", leftUsed);
   const sourceRight = rightUsed.length ? line("오른쪽 출처 줄", rightUsed) : "";
   const sources = {
-    fin: `${mi.finSource}(FY${fy} 실적), Yahoo Finance 컨센서스(예상, ${consAsOf} 기준)`,
+    fin: `${mi.finSource}(FY${fy} 실적), 예상: ${estUsed.join("·") || "없음"}(앱 하이라이트, ${ymdKst()} 조회)`,
     price: price ? `Yahoo Finance 일별 종가(주가·지수, ${priceAsOf})` : null,
     share: share ? `${share.source}(${share.asOf})${share.url ? ` ${share.url}` : ""}` : null,
     coreBusiness: coreBusiness ? `${coreBusiness.source.doc}(${coreBusiness.source.asOf})` : null,
