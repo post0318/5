@@ -184,11 +184,13 @@ const FLOWS: { label: string; y: YKey; concepts: string[]; sign?: 1 | -1; da?: t
   { label: "재고자산 증감", y: "changeInInventory", concepts: ["IncreaseDecreaseInInventories"], sign: -1 },
   { label: "매입채무 증감", y: "changeInAccountPayable", concepts: ["IncreaseDecreaseInAccountsPayable"] },
   { label: "무형자산 취득", y: "purchaseOfIntangibles", concepts: ["PaymentsToAcquireIntangibleAssets"], sign: -1 },
-  { label: "투자자산 취득", y: "purchaseOfInvestment", concepts: ["PaymentsToAcquireMarketableSecurities", "PaymentsToAcquireInvestments"], sign: -1 },
-  { label: "투자자산 처분·만기", y: "saleOfInvestment", concepts: ["ProceedsFromSaleAndMaturityOfMarketableSecurities"] },
-  { label: "장기차입금 조달", y: "longTermDebtIssuance", concepts: ["ProceedsFromIssuanceOfLongTermDebt"] },
-  { label: "장기차입금 상환", y: "longTermDebtPayments", concepts: ["RepaymentsOfLongTermDebt"], sign: -1 },
-  { label: "환율변동 효과", y: "effectOfExchangeRateChanges", concepts: ["EffectOfExchangeRateOnCashAndCashEquivalents"] },
+  // 미국 회계기준 20-F 의 같은 줄 이름(ASML 단기투자 취득·매도가능증권 만기 등)도 — 연간 경계 확인(야후 연간 = SEC FY)을 통과할 때만 쓰인다(2026-10-31)
+  { label: "투자자산 취득", y: "purchaseOfInvestment", concepts: ["PaymentsToAcquireMarketableSecurities", "PaymentsToAcquireInvestments", "PaymentsToAcquireShortTermInvestments", "PaymentsToAcquireAvailableForSaleSecuritiesDebt"], sign: -1 },
+  { label: "투자자산 처분·만기", y: "saleOfInvestment", concepts: ["ProceedsFromSaleAndMaturityOfMarketableSecurities", "ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities", "ProceedsFromSaleMaturityAndCollectionsOfInvestments"] },
+  { label: "장기차입금 조달", y: "longTermDebtIssuance", concepts: ["ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfDebt"] },
+  { label: "장기차입금 상환", y: "longTermDebtPayments", concepts: ["RepaymentsOfLongTermDebt", "RepaymentsOfDebtAndCapitalLeaseObligations", "RepaymentsOfDebt"], sign: -1 },
+  // 미국 회계기준 20-F(ASML)는 제한현금 포함 개념을 쓴다 — 빠져 있어 6-K 누적 경로로만 가 다른 줄(야후 분기)과 환산 방식이 섞였다(2026-10-31)
+  { label: "환율변동 효과", y: "effectOfExchangeRateChanges", concepts: ["EffectOfExchangeRateOnCashAndCashEquivalents", "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"] },
   // SEC 순증감은 환율효과 반영 후, Yahoo changesInCash 는 반영 전 — 둘을 더한 값(TSM 2024: 615,033.3 + 47,165.9 = 662,199.2)
   { label: "현금 순증감", y: ["changesInCash", "effectOfExchangeRateChanges"], concepts: ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect"] },
   { label: "이자 지급액", y: "interestPaidCFF", concepts: ["InterestPaidNet"], sign: -1 },
@@ -270,12 +272,21 @@ export function blankYahooLtm(facts: CompanyFacts, reason: string): { facts: Com
  * 재무상태표 칸, FLOWS·INSTANTS)을 하나라도 빠뜨리면(손익만 먼저 게시 등) 모든 항목이 갖춰진 마지막 분기에서 끊는다. 잘린 분기는 사유와 함께 돌려준다.
  * edgar(화면)·fin(재무 조립)이 같은 함수를 써서 최근 12개월 끝이 같다
  */
-const YAHOO_LTM_KEYS = [...new Set([...FLOWS, ...INSTANTS].flatMap((x) => (Array.isArray(x.y) ? x.y : [x.y])).flatMap((k) => k.split("|")))];
-export function trimIncompleteYahooQuarters<T extends { quarterly: YahooFundamentalsRow[] }>(y: T): T & { trimmed?: { end: string; missing: string[] }[] } {
+// 0 일 수 있는 칸(그 분기에 차입·상환·배당·자사주·투자 거래가 없거나 잔액이 0 — 야후는 0 을 비우기도 한다)은 「덜 실림」 판정에서 뺀다
+// (NTES 2026-06-30 장기차입금 상환 칸만 없음 — 상환이 없었던 분기를 덜 실림으로 자르지 않게). 손익·운전자본·감가상각·총계 칸이 빠지면 덜 실림(TSM)
+const MAYBE_ZERO_KEYS = new Set(["longTermDebtIssuance", "longTermDebtPayments", "repurchaseOfCapitalStock", "cashDividendsPaid", "purchaseOfIntangibles", "purchaseOfInvestment", "saleOfInvestment", "currentDebt", "longTermDebt", "minorityInterest", "otherShortTermInvestments", "investmentsAndAdvances", "interestPaidCFF", "taxesRefundPaid"]);
+const YAHOO_LTM_KEYS = [...new Set([...FLOWS, ...INSTANTS].flatMap((x) => (Array.isArray(x.y) ? x.y : [x.y])).flatMap((k) => k.split("|")))].filter((k) => !MAYBE_ZERO_KEYS.has(k));
+export function trimIncompleteYahooQuarters<T extends { quarterly: YahooFundamentalsRow[]; annual?: YahooFundamentalsRow[] }>(y: T): T & { trimmed?: { end: string; missing: string[] }[] } {
   const q = [...y.quarterly].sort((a, b) => a.end.localeCompare(b.end));
   const trimmed: { end: string; missing: string[] }[] = [];
+  // 비교 대상 = 바로 앞의 사업연도말이 아닌 분기 — 야후는 사업연도말 분기에만 싣는 칸(리스·유동 차입금 — BABA·NTES·ASML)이 있어 그 분기와 비교하면
+  // 다음 분기가 늘 「덜 실림」으로 잘린다
+  const fyMonths = new Set((y.annual ?? []).map((r) => r.end.slice(5, 7)));
   while (q.length >= 2) {
-    const cur = q[q.length - 1].values, prev = q[q.length - 2].values;
+    const cur = q[q.length - 1].values;
+    const prevRow = [...q.slice(0, -1)].reverse().find((r) => !fyMonths.has(r.end.slice(5, 7)));
+    if (!prevRow) break;
+    const prev = prevRow.values;
     const missing = YAHOO_LTM_KEYS.filter((k) => prev[k] != null && cur[k] == null);
     if (!missing.length) break;
     trimmed.unshift({ end: q[q.length - 1].end, missing });
