@@ -4,7 +4,7 @@ import { annualByYear, entriesOf, fiscalYearOf, ltmAnchor, ltmFlowOf, ltmGapConc
 import { revQuarterAt, type RevCol } from "./fin-revenue";
 import { OPINC_NOTE } from "@/lib/fin";
 import { opUnitsFrom } from "../op-units";
-import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT, SYN_MIXED_LEASE_CURRENT, SYN_MIXED_LEASE_NONCURRENT, SYN_STI_FACE } from "./edgar-bs-structure";
+import { SYN_DEBT_FACE, SYN_DEBT_FACE_NONCURRENT, SYN_DEBT_FACE_OPAQUE, SYN_MIXED_LEASE_CURRENT, SYN_MIXED_LEASE_NONCURRENT, SYN_STI_FACE } from "./edgar-bs-structure";
 import { unavailableOn } from "./sec-unavailable";
 import { SYN_DA_CF } from "./edgar-cf-structure";
 import { SYN_DA_WITH_CONTENT } from "./edgar-content";
@@ -332,7 +332,7 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
     // 차입금(연결 차입금 − 금융 부문 차입금) + 우선주·비지배지분 − 연결 현금. CAT 2021 블룸버그 111,551.5 = 110,789.5 + 37,789 + 32 − 9,254 − 조정액 27,805.
     // (예전 임시 미표시 사유: 연결 EBITDA 에 리스 차량 감가상각이 섞여 GM·포드 EV/EBITDA 가 낮게 나온다 — 블룸버그도 같은 연결 EBITDA 를 쓴다)
     if (unavailableOn(facts, "debt", asOf)) return "source-unavailable";
-    if (!ctx.captive && !debtDateFor(asOf) && hasDebtActivity(asOf)) return "debt-untagged";
+    if (!ctx.captive && !debtDateFor(asOf) && hasDebtActivity(asOf) && on(SYN_DEBT_FACE_OPAQUE, asOf) == null) return "debt-untagged"; // 묶인 본표는 resolve 가 사유를 단다
     return null;
   };
 
@@ -349,6 +349,9 @@ export function buildEvResolver(facts: CompanyFacts, ctx: EvContext = {}): EvRes
 
   /** 그 기준일(±6일)의 브릿지 — 이전 연말 값으로 대신하지 않고 기준일이 섞이지 않게(그림자 채우기 금지, 2026-09-27) */
   const resolve = (asOf: string): { bridge: EvBridge | null; reason: string | null } => {
+    // 차입금이 예금 등과 한 줄로 묶인 IFRS 은행 본표(edgar-bs-structure SYN_DEBT_FACE_OPAQUE) — 0 이나 태그 일부로 채우지 않는다
+    if (on(SYN_DEBT_FACE, asOf) == null && on(SYN_DEBT_FACE_OPAQUE, asOf) != null)
+      return { bridge: null, reason: `본표 차입금이 예금 등 다른 금융부채와 한 줄(상각후원가 금융부채 등)로 묶여 있어 차입금을 정할 수 없음(${asOf})` };
     if (blocker(asOf)) return { bridge: null, reason: null };
     const miss = (what: string) => ({ bridge: null, reason: `분기 공시에 없음(${what} — ${asOf} 재무상태표)` });
     const cp = captivePoint(asOf);

@@ -33,6 +33,8 @@ import { fxToUsd } from "./edgar-foreign";
 
 export const SYN_DEBT_FACE = "DebtFaceDerived";
 export const SYN_DEBT_FACE_NONCURRENT = "DebtFaceNoncurrentDerived";
+/** 본표 차입금을 정할 수 없는 재무상태표 날짜(차입금이 예금 등과 한 줄로 묶인 IFRS 은행 본표 — SAN·BBVA·NWG) — 값 0 은 표시일 뿐, 기업가치는 공란 + 사유 */
+export const SYN_DEBT_FACE_OPAQUE = "DebtFaceOpaqueDerived";
 /** 본표 운용·금융리스 합산 줄에서 차입금에 넣은 금융리스분을 뺀 값(운용리스 몫) — 비유동·유동 */
 export const SYN_MIXED_LEASE_NONCURRENT = "OperatingLeaseNoncurrentMixedFaceDerived";
 export const SYN_MIXED_LEASE_CURRENT = "OperatingLeaseCurrentMixedFaceDerived";
@@ -68,7 +70,12 @@ const NOT_DEBT_LABEL = /operating lease|interest|guarantee|supplier/i;
 // IFRS(20-F — TSM·SPOT): 리스부채는 운용·금융 구분이 없고 리스비용이 EBITDA 밖이라 차입금에 넣는다(한국 IFRS 와 같은 규칙,
 // CLAUDE.md "외화·IFRS 공시"). 본표에 없는 유동 리스부채(TSM·SPOT 은 "미지급비용 및 기타유동부채" 안)는 주석 값으로 더한다
 // (withBalanceSheetDebt 의 IFRS 분기 — 미국 규칙 ② 본표 밖 유동 차입금과 같은 취지)
-const IFRS_DEBT_CONCEPT = /Borrowings|BondsIssued|LeaseLiabilities|Debentures|CommercialPaper|NotesPayable|LoansPayable/;
+// DebtSecurities: 부채 쪽 「발행 채권」(사채·CP — SMFG 20-F 본표 「Debt securities in issue」 16,576,423 백만 엔이 빠졌다, 2026-11-01). 부채 트리만 걷으므로
+// 자산의 보유 채권과 섞이지 않는다
+// 은행 20-F 의 발행 채권·후순위채(HSBC·LYG·BCS·NWG 본표 「Subordinated liabilities」·「Debt securities in issue (at amortised cost)」)도 차입금(2026-11-01)
+const IFRS_DEBT_CONCEPT = /Borrowings|BondsIssued|LeaseLiabilities|Debentures|CommercialPaper|NotesPayable|LoansPayable|^DebtSecurities$|DebtInstrumentsIssued|SubordinatedLiabilities/;
+/** 차입금·예금 등을 한 줄로 묶은 IFRS 본표 줄(SAN·BBVA 「상각후원가 측정 금융부채」) — 본표로 차입금을 가를 수 없다 */
+const IFRS_OPAQUE = /^(FinancialLiabilitiesAtAmortisedCost|OtherFinancialLiabilitiesAtAmortisedCost)$/;
 const IFRS_NOT_DEBT = /Interest|Derivative|FairValue|Warrant/;
 const IFRS_NOTE_LEASE = ["ifrs-full_CurrentLeaseLiabilities", "ifrs-full_NoncurrentLeaseLiabilities"];
 const IFRS_LEASE_TO_GAAP: Record<string, string> = {
@@ -81,7 +88,9 @@ const NOTE_CURRENT_PARTS = ["LongTermDebtCurrent", "ShortTermBorrowings", "Comme
 const NOTE_FIN_LEASE_PARTS = ["FinanceLeaseLiabilityCurrent", "FinanceLeaseLiabilityNoncurrent"];
 
 interface Filing { accn: string; form: string; filed: string; doc: string; report: string }
-interface Face { lines: string[]; current: Set<string>; hasCurrent: boolean; hasLease: boolean; mixed: string[]; mixedCurrent: Set<string>; ifrs: boolean }
+/** 차입금 줄의 부모 합계와 그 자식 줄 전부(가중치) — 「내역」 줄(합계에 이미 든 줄을 같은 합계 아래 또 단 것) 판정용 */
+interface FaceGroup { parent: string; children: { id: string; w: number }[] }
+interface Face { lines: string[]; current: Set<string>; hasCurrent: boolean; hasLease: boolean; mixed: string[]; mixedCurrent: Set<string>; ifrs: boolean; groups: FaceGroup[]; opaque: string[] }
 
 // 계산 구조에 유동부채 소계가 없는 본표(비분류형)에서만 쓰는 이름 판정. "IncludingCurrentMaturities" 는 유동분을 포함한
 // 장기 줄이지 유동 줄이 아니다(CVX — 이름 판정으로 장기차입금 39,781 이 0 이 됐다, 재감사 HIGH)
@@ -121,12 +130,14 @@ export function faceDebtLines(cal: string, lab: Map<string, string>): Face | nul
     const role = m[1].split("/").pop() ?? "";
     if (!/BALANCE|FINANCIALPOSITION|FINANCIALCONDITION/i.test(role) || /Detail|Table|Parenth/i.test(role)) continue;
     const loc = locs(m[2]);
-    const arcs: { from: string; to: string }[] = [];
+    const arcs: { from: string; to: string; w: number }[] = [];
     for (const a of m[2].matchAll(/<(?:link:)?calculationArc\b([^>]*)\/?>/g)) {
       const from = loc.get(/xlink:from="([^"]+)"/.exec(a[1])?.[1] ?? "");
       const to = loc.get(/xlink:to="([^"]+)"/.exec(a[1])?.[1] ?? "");
-      if (from && to) arcs.push({ from, to });
+      const w = Number(/weight="([^"]+)"/.exec(a[1])?.[1] ?? "1");
+      if (from && to) arcs.push({ from, to, w: Number.isFinite(w) ? w : 1 });
     }
+    const parentOf = new Map<string, string>();
     // IFRS 20-F(TSM·SPOT)는 ifrs-full 소계(Liabilities·CurrentLiabilities·NoncurrentLiabilities·EquityAndLiabilities)
     const ifrs = arcs.some((a) => /^ifrs-full_(Current|Noncurrent)?Liabilities$/.test(a.from));
     if (!ifrs && !arcs.some((a) => /^us-gaap_Liabilities(Current|Noncurrent)?$/.test(a.from))) continue;
@@ -134,6 +145,9 @@ export function faceDebtLines(cal: string, lab: Map<string, string>): Face | nul
     const lines: string[] = [];
     const underCurrent = new Set<string>();
     const mixed: string[] = [];
+    const opaque: string[] = [];
+    // 은행 본표(예금 줄이 있음)의 「기타 금융부채」 한 줄은 발행 채권을 담는다(NWG 「Other financial liabilities」 — 발행 채권 포함, 본표엔 후순위채만 따로) — 본표로 못 가른다
+    const bankFace = ifrs && arcs.some((x) => /^ifrs-full_Deposits(From|At)/.test(x.to));
     const seen = new Set<string>();
     const walk = (id: string, depth: number, cur: boolean) => {
       if (depth > 5) return;
@@ -155,7 +169,8 @@ export function faceDebtLines(cal: string, lab: Map<string, string>): Face | nul
             : (DEBT_LABEL.test(lb) && !NOT_DEBT_LABEL.test(lb)) ||
               (ifrs && /\blease liabilit/i.test(lb) && !NOT_DEBT_LABEL.test(lb)) ||
               (!lb && DEBT_CONCEPT.test(concept) && !NOT_DEBT.test(concept));
-        if (debt) lines.push(a.to);
+        if (debt) { lines.push(a.to); parentOf.set(a.to, id); }
+        else if (ifrs && (IFRS_OPAQUE.test(concept) || (bankFace && concept === "OtherFinancialLiabilities")) && !arcs.some((x) => x.from === a.to)) opaque.push(a.to);
         else walk(a.to, depth + 1, cur || a.to === CUR);
       }
     };
@@ -175,6 +190,8 @@ export function faceDebtLines(cal: string, lab: Map<string, string>): Face | nul
       mixed,
       mixedCurrent: new Set(mixed.filter((l) => (classified ? underCurrent.has(l) : isCurrentName(l)))),
       ifrs,
+      opaque,
+      groups: [...new Set(parentOf.values())].map((parent) => ({ parent, children: arcs.filter((x) => x.from === parent).map((x) => ({ id: x.to, w: x.w })) })),
     };
   }
   return null;
@@ -396,6 +413,7 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
     const lab = labels(fl.lab);
     parsed.push({ f, face: fl.cal ? faceDebtLines(fl.cal, lab) : null, instUrl: fl.instUrl, defUrl: fl.defUrl, cal: fl.cal || null, lab });
   }
+  const opaqueDates = new Map<string, FactUnitEntry>();
   const noteIds = [
     ...[...NOTE_CURRENT_TOTAL, ...NOTE_CURRENT_PARTS, "FinanceLeaseLiability", ...NOTE_FIN_LEASE_PARTS].map((c) => `us-gaap_${c}`),
     ...IFRS_NOTE_LEASE,
@@ -406,6 +424,12 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
     const face = p.face ?? parsed.slice(k + 1).find((q) => q.face)?.face ?? null;
     // 본표를 판독했는데 차입금 줄이 하나도 없으면 그 공시의 재무상태표 날짜 차입금 = 0(없음 증명, 2026-10-01 PLTR 2023 — 차입금 없음인데 "차입금 태그 없음"
     // 으로 EV 가 비었다). 그 날짜에 표준 차입금 태그 값이 하나라도 있으면(본표 판독이 줄을 놓친 경우) 0 으로 두지 않는다
+    // 차입금이 다른 부채와 한 줄로 묶인 본표(SAN·BBVA)는 본표로 차입금을 정할 수 없다 — 0 으로 두지도, 일부 줄만 더하지도 않는다(기존 태그 규칙으로)
+    if (p.face?.opaque.length) {
+      for (const c of ["Liabilities", "LiabilitiesAndStockholdersEquity"])
+        for (const e of g[c]?.units?.USD ?? []) if (!e.start && e.filed === p.f.filed && !opaqueDates.has(e.end) && !done.has(e.end)) opaqueDates.set(e.end, { end: e.end, fy: 0, fp: "", form: p.f.form, filed: p.f.filed, val: 0 });
+      continue;
+    }
     if (p.face && !p.face.lines.length) {
       const DEBT_RE = /^(LongTermDebt\w*|ShortTermBorrowings|OtherShortTermBorrowings|CommercialPaper|DebtCurrent|NotesPayable\w*|LoansPayable\w*|LineOfCredit|FinanceLeaseLiability\w*|DebtLongtermAndShorttermCombinedAmount)$/;
       for (const c of ["Liabilities", "LiabilitiesAndStockholdersEquity"])
@@ -433,7 +457,7 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
     let xml: string | null = null;
     if (!cfComplete) {
       xml = await fetchText(p.instUrl, { headers: H, revalidate: false, timeoutMs: 30_000 });
-      inst = instantValues(xml, new Set([...faceIds, ...noteIds]), cur);
+      inst = instantValues(xml, new Set([...faceIds, ...noteIds, ...face.groups.flatMap((g) => [g.parent, ...g.children.map((c) => c.id)])]), cur);
     }
     // 금융리스가 본표 어느 줄에 들어 있는지(아래 ③ — 이미 차입금 줄 안이면 주석 금융리스를 더하지 않는다). 표시 항목은
     // 연차보고서 리스 주석에만 있는 경우가 많아(IBM 10-Q 에 없음) 이 공시에 없으면 가장 가까운 옛 공시(10-K)의 것을 쓴다
@@ -492,10 +516,33 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
         return mapped ? cfVal(mapped, d) : undefined;
       };
       if (!face.lines.some((l) => v(l) !== undefined)) continue;
+      // 「내역」 줄 — 부모 합계의 자식 줄 합이 그 합계보다 정확히 차입금 줄 하나의 값만큼 크면, 그 줄은 다른 자식 줄 안에 이미 든 내역을
+      // 같은 합계 아래 또 단 것이라 뺀다(MUFG 20-F: 부채총계 아래 「Due to trust account and other short-term borrowings」 14,636,254 와 그 안의
+      // 「Other short-term borrowings」 12,859,910 백만 엔이 나란히 — 자식 합 − 부채총계 = 12,859,910, 2026-11-01). 후보가 둘 이상이면 못 정해 그대로
+      const ofWhich = new Set<string>();
+      let groupsOk = true;
+      let checked = 0;
+      for (const gr of face.groups) {
+        const tot = v(gr.parent);
+        if (tot === undefined) continue;
+        checked++;
+        const kids = gr.children.map((c) => ({ ...c, x: v(c.id) }));
+        const excess = kids.reduce((s, c) => s + c.w * (c.x ?? 0), 0) - tot;
+        if (Math.abs(excess) <= Math.abs(tot) * 1e-12) continue;
+        const cand = kids.filter((c) => c.w === 1 && c.x !== undefined && c.x !== 0 && face.lines.includes(c.id) && Math.abs(c.x - excess) <= Math.abs(excess) * 1e-9);
+        if (cand.length === 1) ofWhich.add(cand[0].id);
+        else groupsOk = false;
+      }
+      // 이 공시가 그 날짜 본표를 싣지 않았는데(주석에만 일부 줄) 부채총계만 있는 날짜 — 본표 차입금 줄이 이 공시의 다른 날짜엔 값이 있고 이 날짜엔 없으며
+      // 합계 검산이 안 맞거나 검산할 합계가 없으면 일부 줄만 더한 값이 된다(BCS 2025 20-F 의 2023-12-31: 후순위채 주석값만 → 13,373 vs 2024 20-F 본표 136,000 백만 달러대,
+      // 2026-11-01). 그 날짜는 건너뛰고 그 날짜를 본표로 실은 옛 공시가 정한다
+      const lacks = inst ? face.lines.filter((l) => v(l) === undefined && (inst!.get(l)?.size ?? 0) > 0) : [];
+      if (lacks.length && (!groupsOk || !checked)) continue;
       let sum = 0;
       let nc = 0;
       // 줄 값이 비면 0(본표의 "—")
       for (const l of face.lines) {
+        if (ofWhich.has(l)) continue;
         const x = v(l) ?? 0;
         sum += x;
         if (!face.current.has(l)) nc += x;
@@ -593,15 +640,19 @@ export async function withBalanceSheetDebt(cik: string, facts: CompanyFacts, rec
       sti.push({ end: d, fy: 0, fp: "", form: p.f.form, filed: p.f.filed, val: sum });
     }
   }
-  if (!total.length && !sti.length) return facts;
+  // 본표로 정한 날짜가 있으면 그 값(옛 공시가 다른 본표로 정했어도 최신 공시가 묶인 줄이면 그 날짜는 못 정함 — done 에 없는 날짜만)
+  const opaque = [...opaqueDates.values()].filter((e) => !total.some((t) => t.end === e.end));
+  const opq = opaque.length ? { [SYN_DEBT_FACE_OPAQUE]: { units: { USD: opaque } } } : {};
+  if (!total.length && !sti.length) return opaque.length ? ({ ...facts, facts: { ...facts.facts, "us-gaap": { ...g, ...opq } } } as CompanyFacts) : facts;
   if (!total.length)
-    return { ...facts, facts: { ...facts.facts, "us-gaap": { ...g, [SYN_STI_FACE]: { units: { USD: sti } } } } } as CompanyFacts;
+    return { ...facts, facts: { ...facts.facts, "us-gaap": { ...g, ...opq, [SYN_STI_FACE]: { units: { USD: sti } } } } } as CompanyFacts;
   return {
     ...facts,
     facts: {
       ...facts.facts,
       "us-gaap": {
         ...g,
+        ...opq,
         ...(sti.length ? { [SYN_STI_FACE]: { units: { USD: sti } } } : {}),
         [SYN_DEBT_FACE]: { units: { USD: total } },
         [SYN_DEBT_FACE_NONCURRENT]: { units: { USD: noncurrent } },
